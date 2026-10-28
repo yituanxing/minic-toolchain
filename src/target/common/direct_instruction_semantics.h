@@ -12,6 +12,12 @@ bool minic_multi_direct_record_copy_extent(
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     size_t *bytes);
 
+bool minic_multi_direct_record_load_extent(
+    const MinicC0Program *, const MinicTargetInfo *,
+    const MinicCoreFunction *, const MinicCoreInstruction *,
+    const MinicLP64FramePlan *, MinicCoreValueId *source,
+    size_t *destination_offset, size_t *bytes);
+
 bool minic_multi_direct_parameter_object_location(
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     const MinicLP64ArgumentPlan *incoming_plan,
@@ -132,6 +138,7 @@ bool minic_multi_direct_scalar_store_shape(
 typedef enum MinicDirectMachineFamily {
     MINIC_DIRECT_MACHINE_COMPILER_BARRIER,
     MINIC_DIRECT_MACHINE_RECORD_COPY,
+    MINIC_DIRECT_MACHINE_RECORD_LOAD,
     MINIC_DIRECT_MACHINE_PARAMETER_OBJECT,
     MINIC_DIRECT_MACHINE_MEMORY,
     MINIC_DIRECT_MACHINE_FP,

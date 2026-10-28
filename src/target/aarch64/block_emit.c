@@ -65,6 +65,31 @@ const MinicCoreValueId dst = ins->value.record_copy.destination_address;
             return true;
 }
 
+/* Source lvalue -> owned local record snapshot, retaining each byte
+ * read (including volatile) in source order. The destination is a Core
+ * DataLayout object, not a synthetic pointer SSA value. */
+bool minic_aarch64_emit_record_load(FILE *out,
+    const MinicDirectLP64BlockContext *ctx,
+    const MinicCoreInstruction *ins) {
+    MinicCoreValueId source;
+    size_t dest, bytes, byte;
+    const char *base = ctx->dynamic_frame ? "x19" : "sp";
+    if (!minic_multi_direct_record_load_extent(
+            ctx->program, ctx->target, ctx->fn, ins, ctx->frame_plan,
+            &source, &dest, &bytes) || source > SIZE_MAX / 8U ||
+        fprintf(out, "  ldr x10, [sp, #%zu]\n", (size_t)source * 8U) < 0 ||
+        fprintf(out, "  movz x11, #%zu\n", dest & 65535U) < 0 ||
+        (dest > 65535U &&
+         fprintf(out, "  movk x11, #%zu, lsl #16\n", dest >> 16U) < 0) ||
+        fprintf(out, "  add x11, %s, x11\n", base) < 0)
+        return false;
+    for (byte = 0U; byte < bytes; ++byte)
+        if (fputs("  ldrb w9, [x10], #1\n"
+                  "  strb w9, [x11], #1\n", out) == EOF)
+            return false;
+    return true;
+}
+
 bool minic_aarch64_emit_parameter_object(FILE *out,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     const MinicLP64ArgumentPlan *incoming_plan,
@@ -298,6 +323,8 @@ static bool aarch64_machine_emit_family(
     if (shape == NULL || needs_gp_store == NULL) return false;
     *needs_gp_store = false;
     switch (shape->family) {
+    case MINIC_DIRECT_MACHINE_RECORD_LOAD:
+        return minic_aarch64_emit_record_load(out, ctx, ins);
     case MINIC_DIRECT_MACHINE_RECORD_COPY:
         return minic_aarch64_emit_record_copy(out, program, target, fn, ins);
     case MINIC_DIRECT_MACHINE_PARAMETER_OBJECT:

@@ -75,6 +75,7 @@ on:
       - 'tests/compiler/c0/probe-x86-linux-atomic-binary-cc.sh'
       - 'tests/compiler/c0/probe-x86-linux-tied-bit-scan.sh'
       - 'tests/compiler/c0/probe-x86-linux-abi-carry-xadd.sh'
+      - 'tests/compiler/c0/probe-lp64-core-record-snapshot-qemu.sh'
       - 'tests/compiler/c0/probe-x86-linux-msr-safe-gs-pointer.sh'
       - 'tests/compiler/c0/probe-x86-linux-ordered-tsc.sh'
       - 'tests/compiler/c0/probe-x86-linux-static-record-zero.sh'
@@ -336,6 +337,9 @@ jobs:
           bash tests/compiler/c0/probe-x86-linux-tied-bit-scan.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
           bash tests/compiler/c0/probe-x86-linux-abi-carry-xadd.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
           bash tests/compiler/c0/probe-x86-linux-msr-safe-gs-pointer.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+          for target in aarch64 loongarch64; do
+            MINIC_SOURCE_ONLY=1 bash tests/compiler/c0/probe-lp64-core-record-snapshot-qemu.sh "$target" "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+          done
           # Original Linux ISA family and GNU ABI static object boundary.
           bash tests/compiler/c0/probe-x86-linux-ordered-tsc.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
           bash tests/compiler/c0/probe-x86-linux-static-record-zero.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"

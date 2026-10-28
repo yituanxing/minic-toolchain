@@ -68,6 +68,30 @@ const MinicCoreValueId dst = ins->value.record_copy.destination_address;
             return true;
 }
 
+/* Native LoongArch64 byte transport for the Common typed record
+ * snapshot; +Q/volatile reads are never collapsed to a scalar load. */
+bool minic_loongarch64_emit_record_load(FILE *out,
+    const MinicDirectLP64BlockContext *ctx,
+    const MinicCoreInstruction *ins) {
+    MinicCoreValueId source;
+    size_t dest, bytes, byte;
+    if (!minic_multi_direct_record_load_extent(
+            ctx->program, ctx->target, ctx->fn, ins, ctx->frame_plan,
+            &source, &dest, &bytes) || source > SIZE_MAX / 8U ||
+        !minic_loongarch64_emit_frame_mem(out, "ld.d", "$t2",
+            (size_t)source * 8U, ctx->dynamic_frame) ||
+        fprintf(out, "  li.d $t1, %zu\n  add.d $t1, %s, $t1\n",
+            dest, ctx->dynamic_frame ? "$s0" : "$sp") < 0)
+        return false;
+    for (byte = 0U; byte < bytes; ++byte)
+        if (fputs("  ld.bu $t0, $t2, 0\n"
+                  "  st.b $t0, $t1, 0\n"
+                  "  addi.d $t2, $t2, 1\n"
+                  "  addi.d $t1, $t1, 1\n", out) == EOF)
+            return false;
+    return true;
+}
+
 bool minic_loongarch64_emit_parameter_object(FILE *out,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     const MinicLP64ArgumentPlan *incoming_plan,
@@ -275,6 +299,8 @@ static bool loongarch64_machine_emit_family(
     if (shape == NULL || needs_gp_store == NULL) return false;
     *needs_gp_store = false;
     switch (shape->family) {
+    case MINIC_DIRECT_MACHINE_RECORD_LOAD:
+        return minic_loongarch64_emit_record_load(out, ctx, ins);
     case MINIC_DIRECT_MACHINE_RECORD_COPY:
         return minic_loongarch64_emit_record_copy(
             out, program, target, fn, ins, ctx->dynamic_frame);

@@ -111,6 +111,39 @@ bool minic_multi_direct_record_copy_extent(
     return true;
 }
 
+/* GNU C record value snapshots are private bytewise copies of an
+ * address-backed lvalue. Core owns type/volatility and DataLayout bounds;
+ * native emitters alone own the actual ISA byte operations. */
+bool minic_multi_direct_record_load_extent(
+    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
+    const MinicLP64FramePlan *frame_plan,
+    MinicCoreValueId *source, size_t *object_offset, size_t *bytes) {
+    MinicCoreObjectId dst;
+    MinicType source_pointee, source_unqualified;
+    size_t alignment;
+    if (!program || !target || !fn || !ins || !frame_plan ||
+        !source || !object_offset || !bytes ||
+        ins->kind != MINIC_CORE_INSTRUCTION_RECORD_LOAD ||
+        ins->result != MINIC_CORE_VALUE_INVALID ||
+        !minic_type_is_record(ins->type)) return false;
+    dst = ins->value.record_load.destination_object;
+    *source = ins->value.record_load.source_address;
+    if (dst >= fn->object_count || *source >= fn->value_count ||
+        fn->objects[dst].element_count != 1U ||
+        !minic_type_equal(fn->objects[dst].type, ins->type) ||
+        !minic_type_pointee(fn->values[*source].type, &source_pointee) ||
+        !minic_type_unqualified(source_pointee, &source_unqualified) ||
+        !minic_type_equal(source_unqualified, ins->type) ||
+        ins->value.record_load.is_volatile != minic_type_is_volatile(source_pointee) ||
+        !minic_lp64_frame_plan_object(frame_plan, dst, object_offset) ||
+        !minic_data_layout_type(target->data_layout, program, ins->type,
+                                bytes, &alignment) ||
+        !*bytes || !alignment || *bytes > 2048U)
+        return false;
+    return true;
+}
+
 bool minic_multi_direct_parameter_object_location(
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     const MinicLP64ArgumentPlan *incoming_plan,
@@ -119,6 +152,7 @@ bool minic_multi_direct_parameter_object_location(
     size_t position;
     MinicCoreObjectId obj_id;
     const MinicLP64ArgumentLocation *loc;
+    MinicType object_value_type, parameter_value_type;
     if (fn == NULL || ins == NULL || incoming_plan == NULL ||
         frame_plan == NULL || location == NULL || object_offset == NULL)
         return false;
@@ -131,7 +165,12 @@ bool minic_multi_direct_parameter_object_location(
     loc = &incoming_plan->arguments[position];
     if (ins->result != MINIC_CORE_VALUE_INVALID ||
         obj_id >= fn->object_count ||
-        !minic_type_equal(fn->objects[obj_id].type, fn->parameter_types[position]) ||
+        /* GNU top-level const on a by-value parameter has no ABI effect.
+         * Only remove top-level qualification, preserving nested pointee
+         * and member qualifiers and the exact record identity. */
+        !minic_type_unqualified(fn->objects[obj_id].type, &object_value_type) ||
+        !minic_type_unqualified(fn->parameter_types[position], &parameter_value_type) ||
+        !minic_type_equal(object_value_type, parameter_value_type) ||
         fn->objects[obj_id].element_count != 1U ||
         (loc->kind != MINIC_LP64_ARGUMENT_RECORD &&
          loc->kind != MINIC_LP64_ARGUMENT_INDIRECT_RECORD) ||
@@ -751,6 +790,10 @@ bool minic_multi_direct_machine_instruction_shape(
             ins->value.fixed_register_write.source >= fn->value_count)
             return false;
         shape->family = MINIC_DIRECT_MACHINE_RESIDUAL;
+        return true;
+    }
+    if (ins->kind == MINIC_CORE_INSTRUCTION_RECORD_LOAD) {
+        shape->family = MINIC_DIRECT_MACHINE_RECORD_LOAD;
         return true;
     }
     if (ins->kind == MINIC_CORE_INSTRUCTION_RECORD_COPY) {
