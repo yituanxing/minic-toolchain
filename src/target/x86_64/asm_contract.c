@@ -1,4 +1,5 @@
 #include "target/x86_64/asm_contract.h"
+#include <stdio.h>
 #include <string.h>
 
 /* Target-owned GNU register/constraint admission: no Core lowering state,

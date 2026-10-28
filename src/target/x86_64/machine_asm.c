@@ -211,7 +211,7 @@ static bool emit_linux_atomic_cc(
            fprintf(out,"  lock; %s (%%r11)\n",op)>=0&&
            fputs("  sete %al\n",out)!=EOF&&
            x86_value_load(out,frame,b[1].value,"%r10")&&
-           fputs("  movb %al, (%%r10)\n",out)!=EOF;
+           fputs("  movb %al, (%r10)\n",out)!=EOF;
 }
 
 /* The only owner of this x86 hardware side effect: CMP sets CF, SBB
