@@ -2726,7 +2726,9 @@ static bool emit_symbol_difference(MiniAs *as,
     if((width==4U || width==8U) &&
        (add_type==0U || sub_type==0U) &&
        rhs!=NULL && rhs->defined &&
-       rhs->bind==MINIAS_STB_LOCAL &&
+       /* GNU GAS resolves defined GLOBAL/WEAK anchors to their section
+        * positions for PC64 as well as LOCAL anchors. This binding
+        * behavior is the same on x86-64 and AArch64. */
        rhs->section==stmt->section) {
         MiniAsFixupKind kind=width==4U?
             as->target->dot_relative_fixup:MINIAS_FIXUP_PREL64;

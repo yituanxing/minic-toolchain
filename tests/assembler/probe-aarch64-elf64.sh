@@ -984,6 +984,12 @@ a64_pcrel_base:
     .long external_pcrel_target - .Lpcrel_b
     .long external_pcrel_target - .
     .quad external_pcrel_target - .Lpcrel_b + 11
+.globl global_pcrel_anchor
+global_pcrel_anchor:
+    .quad external_pcrel_target - global_pcrel_anchor
+.weak weak_pcrel_anchor
+weak_pcrel_anchor:
+    .quad external_pcrel_target - weak_pcrel_anchor
 A64_PCREL_DIFF
 "$MINIAS" --target=aarch64 -o "$work/a64-pcrel-mini.o" "$work/a64-pcrel-diff.s"
 "$AARCH64_AS" -o "$work/a64-pcrel-gnu.o" "$work/a64-pcrel-diff.s"
@@ -993,8 +999,14 @@ cmp "$work/a64-pcrel-mini.bin" "$work/a64-pcrel-gnu.bin"
 readelf -Wr "$work/a64-pcrel-mini.o" >"$work/a64-pcrel-mini.rel"
 readelf -Wr "$work/a64-pcrel-gnu.o" >"$work/a64-pcrel-gnu.rel"
 for flavor in mini gnu; do
-    test "$(grep -c 'R_AARCH64_PREL64.*external_pcrel_target' "$work/a64-pcrel-$flavor.rel")" -eq 3
+    test "$(grep -c 'R_AARCH64_PREL64.*external_pcrel_target' "$work/a64-pcrel-$flavor.rel")" -eq 5
     test "$(grep -c 'R_AARCH64_PREL32.*external_pcrel_target' "$work/a64-pcrel-$flavor.rel")" -eq 2
 done
-echo 'MINIAS_COMMON_A64_PCREL64=PASS GNU_DATA_AND_RELOCATION_TYPES'
+for flavor in mini gnu; do
+    readelf -Wr "$work/a64-pcrel-$flavor.o" |
+        awk '$3 ~ /^R_AARCH64_PREL(32|64)$/ {print $1,$3,$5,$6,$7}' |
+        LC_ALL=C sort >"$work/a64-pcrel-$flavor.normalized"
+done
+diff -u "$work/a64-pcrel-gnu.normalized" "$work/a64-pcrel-mini.normalized"
+echo 'MINIAS_COMMON_A64_PCREL64=PASS GNU_DATA_RELOC_TYPE_ADDEND_AND_BINDING'
 echo 'MINIAS_AARCH64_VSLICE=PASS ELF64=1 gnu_bytes=equal relocation_call26_jump26_abs64=1 ld=pass qemu=exit0'

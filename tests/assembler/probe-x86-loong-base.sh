@@ -695,6 +695,12 @@ global_pcrel_base:
     .long external_pcrel_target - .Lpc_second
     .long external_pcrel_target - .
     .quad external_pcrel_target - .Lpc_second + 11
+.globl global_pcrel_anchor
+global_pcrel_anchor:
+    .quad external_pcrel_target - global_pcrel_anchor
+.weak weak_pcrel_anchor
+weak_pcrel_anchor:
+    .quad external_pcrel_target - weak_pcrel_anchor
 X86_PCREL_DIFF
 "$MINIAS" --target=x86_64 -o "$work/x86-pcrel-mini.o" "$work/x86-pcrel-diff.s"
 as --64 -o "$work/x86-pcrel-gnu.o" "$work/x86-pcrel-diff.s"
@@ -704,10 +710,16 @@ cmp "$work/x86-pcrel-mini.bin" "$work/x86-pcrel-gnu.bin"
 readelf -Wr "$work/x86-pcrel-mini.o" >"$work/x86-pcrel-mini.rel"
 readelf -Wr "$work/x86-pcrel-gnu.o" >"$work/x86-pcrel-gnu.rel"
 for flavor in mini gnu; do
-    test "$(grep -c 'R_X86_64_PC64.*external_pcrel_target' "$work/x86-pcrel-$flavor.rel")" -eq 3
+    test "$(grep -c 'R_X86_64_PC64.*external_pcrel_target' "$work/x86-pcrel-$flavor.rel")" -eq 5
     test "$(grep -c 'R_X86_64_PC32.*external_pcrel_target' "$work/x86-pcrel-$flavor.rel")" -eq 2
 done
-echo 'MINIAS_COMMON_X86_PCREL64=PASS GNU_DATA_AND_RELOCATION_TYPES'
+for flavor in mini gnu; do
+    readelf -Wr "$work/x86-pcrel-$flavor.o" |
+        awk '$3 ~ /^R_X86_64_PC(32|64)$/ {print $1,$3,$5,$6,$7}' |
+        LC_ALL=C sort >"$work/x86-pcrel-$flavor.normalized"
+done
+diff -u "$work/x86-pcrel-gnu.normalized" "$work/x86-pcrel-mini.normalized"
+echo 'MINIAS_COMMON_X86_PCREL64=PASS GNU_DATA_RELOC_TYPE_ADDEND_AND_BINDING'
 cat > "$work/la.s" <<'ASM_LA'
 .text
 .globl entry_la
