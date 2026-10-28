@@ -1735,6 +1735,31 @@ static bool parse_set(MiniAs *as, char *args, size_t line) {
         }
     }
 
+    /* GNU .set is mutable, unlike .equ. Evaluate an already-defined
+     * absolute symbol RHS at the *current* statement position, including
+     * self-referential .set counter, counter+1 in .irp/macro expansion.
+     * Preserve relocatable symbol aliases via the existing fallthrough. */
+    {
+        int64_t value;
+        if(evaluate_absolute_expression(as,expression,&value) && value>=0) {
+            alias=minias_get_symbol(as,name,true);
+            if(!alias)return false;
+            if(alias->alias_pending ||
+               (alias->defined &&
+                (alias->section!=MINIAS_SECTION_ABS ||
+                 !alias->mutable_absolute_set))) {
+                minias_set_error(as,"duplicate-symbol:%s:line=%zu",name,line);
+                return false;
+            }
+            alias->defined=true;
+            alias->section=MINIAS_SECTION_ABS;
+            alias->subsection=0U;
+            alias->value=(uint64_t)value;
+            alias->mutable_absolute_set=true;
+            as->has_mutable_absolute_sets=true;
+            return true;
+        }
+    }
     if (minias_parse_symbol_addend(expression, &expr)) {
         target = minias_get_symbol(as, expr.name, true);
         if (target == NULL) {
@@ -2453,12 +2478,36 @@ static bool common_data_has_symbolic_token(const char *p) {
     return false;
 }
 
+/* Recognize only real absolute .set symbols; never rewrite ordinary
+ * relocatable labels or PC-relative expressions into guessed constants. */
+static bool data_references_mutable_set(MiniAs *as,const char *expr) {
+    const char *p=expr;
+    while(*p) {
+        if(*p=='.' || *p=='_' || *p=='$' ||
+           isalpha((unsigned char)*p)) {
+            const char *start=p;
+            size_t len;
+            char name[256];
+            MiniAsSymbol *sym;
+            do {++p;} while(isalnum((unsigned char)*p) ||
+                            *p=='.' || *p=='_' || *p=='$');
+            len=(size_t)(p-start);
+            if(len>=sizeof(name))continue;
+            memcpy(name,start,len);name[len]='\0';
+            sym=minias_get_symbol(as,name,false);
+            if(sym && sym->mutable_absolute_set)return true;
+        }else ++p;
+    }
+    return false;
+}
+
 static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
     uint64_t count = 0U;
     uint64_t bytes;
     unsigned int width = data_width(as, op);
     char *copy = NULL;
     char *cursor;
+    char *snapshot=NULL;
     bool delayed=false;
 
     if (!strcmp(op,".fill")) {
@@ -2561,9 +2610,64 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
         minias_set_error(as, "data-too-large:%s:line=%zu", op, line);
         return false;
     }
-    if (!add_stmt(as, MINIAS_STMT_DATA, op, args, line, (uint32_t)bytes, 1U)) {
-        return false;
+    /*
+     * GNU GAS freezes an absolute .set expression at its data emission
+     * site, not at the last value after macro/.irp expansion. Store only
+     * those parsed constants in the retained DATA statement string.
+     * Leave all relocatable/forward references intact for layout/fixups.
+     */
+    if(width && as->has_mutable_absolute_sets && count) {
+        size_t original_len=strlen(args),capacity;
+        char *walk,*out;
+        bool changed=false;
+        size_t used=0U;
+        if(count>(SIZE_MAX-original_len-1U)/24U) {
+            minias_set_error(as,"set-data-snapshot-overflow");return false;
+        }
+        capacity=original_len+1U+(size_t)count*24U;
+        snapshot=malloc(capacity);
+        copy=minias_strdup(args);
+        if(!snapshot || !copy) {
+            free(snapshot);free(copy);
+            minias_set_error(as,"out-of-memory:set-data-snapshot");return false;
+        }
+        walk=copy;out=snapshot;
+        for(;;) {
+            char *comma=strchr(walk,',');
+            char *token;
+            const char *selected;
+            char numeric[32];
+            size_t part;
+            uint64_t value;
+            if(comma)*comma='\0';
+            token=minias_trim(walk);
+            selected=token;
+            if(data_references_mutable_set(as,token) &&
+               parse_absolute_data_bits(as,token,&value)) {
+                (void)snprintf(numeric,sizeof(numeric),"%llu",
+                               (unsigned long long)value);
+                selected=numeric;
+                changed=true;
+            }
+            part=strlen(selected);
+            if(part>capacity-used-1U) {
+                free(copy);free(snapshot);
+                minias_set_error(as,"set-data-snapshot-overflow");return false;
+            }
+            memcpy(out+used,selected,part);used+=part;
+            if(!comma)break;
+            out[used++]=',';
+            walk=comma+1U;
+        }
+        out[used]='\0';
+        free(copy);copy=NULL;
+        if(!changed){free(snapshot);snapshot=NULL;}
     }
+    if (!add_stmt(as, MINIAS_STMT_DATA, op,
+                  snapshot?snapshot:args, line, (uint32_t)bytes, 1U)) {
+        free(snapshot);return false;
+    }
+    free(snapshot);
     if(delayed) {
         as->stmts[as->stmt_count-1U].deferred_data_size=true;
         as->has_deferred_data=true;

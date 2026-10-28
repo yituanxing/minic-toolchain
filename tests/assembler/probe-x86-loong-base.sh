@@ -701,6 +701,27 @@ readelf -Wr "$work/x86-gnu.o" | awk '$3 ~ /^R_X86_64_/ {print $1,$3,$5,$6,$7}' |
     LC_ALL=C sort >"$work/x86-gnu-kinds.txt"
 diff -u "$work/x86-gnu-kinds.txt" "$work/x86-mini-kinds.txt"
 
+# GNU mutable .set counters used by Linux x86 extable_type_reg
+# must capture the value at each .long, not at the final symbol value.
+cat >"$work/x86-mutable-set.s" <<'X86_MUTABLE_SET'
+.text
+.set .Lregnr, 0
+.long 5 + (.Lregnr << 8)
+.set .Lregnr, .Lregnr+1
+.long 5 + (.Lregnr << 8)
+.set .Lregnr, .Lregnr+1
+.long 5 + (.Lregnr << 8)
+.set .Lregnr, 0
+.long 9 + (.Lregnr << 8)
+.set .Lregnr, .Lregnr+1
+.long 9 + (.Lregnr << 8)
+X86_MUTABLE_SET
+"$MINIAS" --target=x86_64 -o "$work/x86-set-mini.o" "$work/x86-mutable-set.s"
+as --64 -o "$work/x86-set-gnu.o" "$work/x86-mutable-set.s"
+objcopy -j .text -O binary "$work/x86-set-mini.o" "$work/x86-set-mini.bin"
+objcopy -j .text -O binary "$work/x86-set-gnu.o" "$work/x86-set-gnu.bin"
+cmp "$work/x86-set-mini.bin" "$work/x86-set-gnu.bin"
+echo 'MINIAS_COMMON_MUTABLE_SET=PASS GNU_EARLY_DATA_SNAPSHOT'
 # Same-section symbol differences are absolute even for externally
 # visible GLOBAL/WEAK bindings; no x86 ELF64 ADD/SUB relocation exists.
 cat >"$work/x86-defined-diff.s" <<'X86_DEFINED_DIFF'

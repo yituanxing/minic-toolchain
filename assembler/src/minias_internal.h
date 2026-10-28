@@ -63,6 +63,7 @@ typedef struct MiniAsSymbol {
     uint32_t subsection;
     bool defined;
     bool alias_pending;
+    bool mutable_absolute_set; /* GNU .set reassignment, unlike .equ */
     bool explicit_local_binding; /* .local before .comm denotes real BSS */
     size_t alias_target_index;
     int64_t alias_addend;
@@ -297,6 +298,7 @@ typedef struct MiniAs {
     bool c_comment_active;
     bool layout_sensitive; /* conservative full-reparse fallback */
     bool has_deferred_data; /* forward-symbol data-size fragments */
+    bool has_mutable_absolute_sets; /* snapshot mutable .set in data */
     bool expr_dot_override; /* explicit fragment-local dot while evaluating */
     uint64_t expr_dot_value;
     uint32_t target_options;
