@@ -65,6 +65,33 @@ def all_core_function_frontiers(stderr):
     return [dict(kind=m.group(1), index=int(m.group(2)), function=m.group(3))
             for m in CORE_FUNCTION_FAILURE.finditer(stderr)]
 
+# Collect source-to-Core failure context without conflating same-text
+# diagnostics with a proven target-neutral machine root cause.
+CORE_LOWER_TRACE = re.compile(r"^CORE_FAST_TRACE ([^\\r\\n]+)$", re.MULTILINE)
+CORE_TRACE_FIELD = re.compile(r"([a-z_]+)=([A-Za-z0-9_.:-]+)")
+
+def all_core_lower_trace_frontiers(stderr):
+    seen, records = set(), []
+    for match in CORE_LOWER_TRACE.finditer(stderr):
+        fields = dict(CORE_TRACE_FIELD.findall(match.group(1)))
+        function = fields.get("function", "")
+        stage = fields.get("stage", "")
+        reason = fields.get("reason", "")
+        kind = fields.get("kind", "na")
+        status = fields.get("status", "na")
+        if (not re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*", function)
+                or not re.fullmatch(r"[a-z_]+", stage)
+                or not re.fullmatch(r"[a-z_-]+", reason)
+                or not re.fullmatch(r"(?:na|-?[0-9]+)", kind)
+                or not re.fullmatch(r"(?:na|-?[0-9]+)", status)):
+            continue
+        key = (function, stage, reason, kind, status)
+        if key not in seen:
+            seen.add(key)
+            records.append(dict(function=function, stage=stage, reason=reason,
+                                kind=kind, status=status))
+    return records
+
 from pathlib import Path
 def sha(p):
     h=hashlib.sha256()
@@ -116,6 +143,7 @@ def probe(a):
             error_text=p.stderr.decode(errors="replace")
             lines=error_text.splitlines()
             core_frontiers=all_core_function_frontiers(error_text)
+            core_lower_traces=all_core_lower_trace_frontiers(error_text)
             machine_frontiers=all_machine_opcode_frontiers(error_text,a.target)
             backend_frontiers=all_backend_reject_frontiers(error_text,a.target)
             preflight_roots=all_preflight_roots(error_text,a.target)
@@ -129,6 +157,7 @@ def probe(a):
             return dict(index=row["index"],object=obj,status="MINIC_S_PASS" if ok else "MINIC_FAIL",
                         diagnostic=diag,input_sha256=row["sha256"],
                         core_frontiers=core_frontiers,
+                        core_lower_traces=core_lower_traces,
                         machine_frontiers=machine_frontiers,
                         backend_frontiers=backend_frontiers,
                         preflight_roots=preflight_roots,asm_forms=asm_forms,
@@ -136,7 +165,7 @@ def probe(a):
         except subprocess.TimeoutExpired:
             asm.unlink(missing_ok=True)
             return dict(index=row["index"],object=obj,status="MINIC_TIMEOUT",diagnostic="timeout",
-                        core_frontiers=[],machine_frontiers=[],
+                        core_frontiers=[],core_lower_traces=[],machine_frontiers=[],
                         backend_frontiers=[],preflight_roots=[],asm_forms=[],
                         input_sha256=row["sha256"])
     with concurrent.futures.ThreadPoolExecutor(max_workers=a.workers) as executor:

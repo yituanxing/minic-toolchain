@@ -27,6 +27,9 @@ def main():
     # These are genuine post-prune Core failure functions, not an inference
     # from the single first-error diagnostic of the translation unit.
     core_groups = collections.defaultdict(lambda: collections.defaultdict(list))
+    # Source-lowering traces carry per-owner diagnostic evidence, not proof
+    # that identical compiler text has the same architectural root cause.
+    core_trace_groups = collections.defaultdict(lambda: collections.defaultdict(set))
     # Enumerate real AArch64/LoongArch64 unsupported MACHINE instruction kinds.
     # A string saying "M1 unsupported" cannot justify treating all 400+
     # first barriers as a single interchangeable root cause.
@@ -95,6 +98,21 @@ def main():
                     raise SystemExit("THREE_LINUX_CENSUS=FAIL invalid Core frontier identity")
                 core_indices.add(item["index"])
                 core_groups[(item["kind"], item["function"])][target].append(obj)
+            traces = row.get("core_lower_traces", [])
+            if not isinstance(traces, list):
+                raise SystemExit("THREE_LINUX_CENSUS=FAIL invalid Core trace list")
+            for trace in traces:
+                if (not isinstance(trace, dict)
+                        or not re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*",
+                                            str(trace.get("function", "")))
+                        or not re.fullmatch(r"[a-z_]+", str(trace.get("stage", "")))
+                        or not re.fullmatch(r"[a-z_-]+", str(trace.get("reason", "")))
+                        or not re.fullmatch(r"(?:na|-?[0-9]+)", str(trace.get("kind", "")))
+                        or not re.fullmatch(r"(?:na|-?[0-9]+)", str(trace.get("status", "")))):
+                    raise SystemExit("THREE_LINUX_CENSUS=FAIL invalid Core trace")
+                signature = (trace["stage"], trace["reason"],
+                             str(trace["kind"]), str(trace["status"]))
+                core_trace_groups[signature][target].add(obj)
             machine_frontiers = row.get("machine_frontiers", [])
             if not isinstance(machine_frontiers, list):
                 raise SystemExit("THREE_LINUX_CENSUS=FAIL invalid machine trace list")
@@ -177,6 +195,15 @@ def main():
         for (kind, function), owners in core_groups.items()
     ]
     core_frontiers.sort(key=lambda e: (-e["total"], e["kind"], e["function"]))
+    core_trace_frontiers = [
+        dict(stage=stage, reason=reason, kind=kind, status=status,
+             affected_owners=sum(len(objects) for objects in targets.values()),
+             targets={arch: sorted(objects) for arch, objects in targets.items()})
+        for (stage, reason, kind, status), targets in core_trace_groups.items()
+    ]
+    core_trace_frontiers.sort(
+        key=lambda e: (-e["affected_owners"], -len(e["targets"]),
+                       e["stage"], e["reason"], e["kind"], e["status"]))
     machine_kind_frontiers = [
         dict(target=arch,kind=kind,
              total=sum(len(v) for v in functions.values()),
@@ -216,6 +243,7 @@ def main():
         compiler_sha256=next(iter(compilers)),
         targets=totals, diagnostic_groups=diagnostics,
         all_core_function_frontiers=core_frontiers,
+         core_trace_frontiers=core_trace_frontiers,
         machine_kind_frontiers=machine_kind_frontiers,
         backend_reject_frontiers=backend_reject_frontiers,
         preflight_root_frontiers=preflight_root_frontiers,
@@ -229,6 +257,11 @@ def main():
         count = sum(len(item["targets"].get(arch, [])) for item in core_frontiers)
         functions = sum(arch in item["targets"] for item in core_frontiers)
         print(f"THREE_LINUX_ALL_CORE_FRONTIERS target={arch} failures={count} distinct_functions={functions}")
+    for item in core_trace_frontiers[:40]:
+        targets = ",".join(sorted(item["targets"]))
+        print(f"THREE_LINUX_CORE_TRACE stage={item['stage']} reason={item['reason']} "
+              f"kind={item['kind']} status={item['status']} "
+              f"owners={item['affected_owners']} targets={targets}")
     for item in machine_kind_frontiers[:30]:
         print(f"THREE_LINUX_MACHINE_KIND target={item['target']} kind={item['kind']} "
               f"failures={item['total']} functions={item['distinct_functions']} "
@@ -248,6 +281,7 @@ def main():
               f"instances={entry['instances']} owners={len(entry['owners'])}")
     print(f"THREE_LINUX_CENSUS=COMPLETE shards=21 diagnostic_signatures={len(diagnostics)} "
           f"all_core_function_groups={len(core_frontiers)} "
+          f"core_trace_groups={len(core_trace_frontiers)} "
           "ROOT_CAUSE_REVIEW_REQUIRED=1 GNU_AS_link_QEMU=NOT_RUN")
 
 if __name__ == "__main__":
