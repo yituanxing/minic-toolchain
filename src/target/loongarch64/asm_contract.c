@@ -460,7 +460,15 @@ static bool loong_linux_cmpxchg_source(
  * memory/read-write, register-output and scalar-input operands. */
 static unsigned loong_linux_xchg_form(const char *text,size_t length){
     static const char *const forms[]={
-        "amswap_db.w%1,%z2,%0","amswap_db.d%1,%z2,%0"
+        /* arch/loongarch/include/asm/cmpxchg.h __xchg_asm */
+        "amswap_db.w%1,%z2,%0","amswap_db.d%1,%z2,%0",
+        /* arch/loongarch/include/asm/barrier.h __smp_store_mb.
+         * The GNU named form has an unsigned-long scratch and NO explicit
+         * clobber; Core supplies the implicit +ZB memory effect. */
+        "amswap_db.w%[tmp],%[val],%[mem]",
+        "amswap_db.d%[tmp],%[val],%[mem]",
+        /* Checked numeric representation after Core name resolution. */
+        "amswap_db.w%1,%2,%0","amswap_db.d%1,%2,%0"
     };
     char compact[96];size_t n=0U,i;
     if(!text||!length||length>=sizeof(compact))return 0U;
@@ -471,7 +479,7 @@ static unsigned loong_linux_xchg_form(const char *text,size_t length){
         compact[n++]=c;
     }
     compact[n]='\0';
-    for(i=0U;i<2U;++i)
+    for(i=0U;i<sizeof(forms)/sizeof(forms[0]);++i)
         if(strcmp(compact,forms[i])==0)return (unsigned)i+1U;
     return 0U;
 }
@@ -479,15 +487,17 @@ static bool loong_linux_xchg_source(const MinicC0Program *p,
     const MinicInlineAsm *s,MinicTargetInlineAsmContract *c){
     const unsigned form=s?loong_linux_xchg_form(
         s->template_text,s->template_length):0U;
-    const size_t width=form==2U?8U:4U;
+    const size_t width=form&&form%2U==0U?8U:4U;
+    const bool named=form>=3U;
     const MinicExpression *mem,*res,*val;
     if(!p||!s||!c||!form||!s->is_volatile||s->is_goto||
        s->output_count!=2U||s->input_count!=1U||!s->outputs||!s->inputs||
        s->register_clobber_count||s->label_count||
-       s->clobber_count!=1U||!s->has_memory_clobber||
+       s->clobber_count!=(named?0U:1U)||
+       s->has_memory_clobber==named||
        !loong_csr_constraint(&s->outputs[0],"+ZB")||
        !loong_csr_constraint(&s->outputs[1],"=&r")||
-       !loong_csr_constraint(&s->inputs[0],"Jr"))return false;
+       !loong_csr_constraint(&s->inputs[0],named?"r":"Jr"))return false;
     mem=minic_c0_program_expression(p,s->outputs[0].expression);
     res=minic_c0_program_expression(p,s->outputs[1].expression);
     val=minic_c0_program_expression(p,s->inputs[0].expression);
@@ -496,7 +506,7 @@ static bool loong_linux_xchg_source(const MinicC0Program *p,
        res->value_category!=MINIC_VALUE_LVALUE||
        minic_type_is_const(mem->type)||minic_type_is_const(res->type)||
        !loong_linux_cmpxchg_word(mem->type,width)||
-       !loong_linux_cmpxchg_word(res->type,width)||
+       !loong_linux_cmpxchg_word(res->type,named?8U:width)||
        !loong_linux_cmpxchg_word(val->type,width))return false;
     c->operand_count=3U;
     c->kinds[0]=MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
@@ -1310,7 +1320,8 @@ static bool loong_linux_xchg_emit(FILE *out,
     const MinicCoreInlineAsm *info){
     const unsigned form=loong_linux_xchg_form(
         info->template_text,info->template_length);
-    const size_t width=form==2U?8U:4U;
+    const size_t width=form&&form%2U==0U?8U:4U;
+    const bool named=form>=3U;
     const MinicCoreFunction *fn=ctx->fn;
     const MinicCoreStructuredInlineAsmOperand *b=
         ins->value.structured_inline_asm.operands;
@@ -1330,7 +1341,7 @@ static bool loong_linux_xchg_emit(FILE *out,
             return false;
         type=fn->values[b[i].value].type;
         if(i<2U&&!minic_type_pointee(type,&type))return false;
-        if(!loong_linux_cmpxchg_word(type,width))return false;
+        if(!loong_linux_cmpxchg_word(type,i==1U&&named?8U:width))return false;
     }
     return minic_loongarch64_emit_frame_mem(
              out,"ld.d","$t1",(size_t)b[0].value*8U,ctx->dynamic_frame)&&
@@ -1342,7 +1353,7 @@ static bool loong_linux_xchg_emit(FILE *out,
            minic_loongarch64_emit_frame_mem(
              out,"ld.d","$t1",(size_t)b[1].value*8U,ctx->dynamic_frame)&&
            fprintf(out,"  %s $t2, $t1, 0\n",
-                   width==8U?"st.d":"st.w")>=0;
+                   width==8U||named?"st.d":"st.w")>=0;
 }
 
 /* Keep both original GNU memory operands distinct in Core. The LL reads

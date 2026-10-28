@@ -89,6 +89,16 @@ bool minic_aarch64_emit_residual_instruction(
             const size_t asm_id = ins->value.inline_asm_id;
             const MinicCoreInlineAsm *source = asm_id < fn->inline_asm_count
                 ? &fn->inline_asms[asm_id] : NULL;
+            if (minic_aarch64_linux_cap_asm_goto_core(source)) {
+                if (source->goto_target >= fn->block_count ||
+                    !minic_aarch64_emit_linux_cap_asm_goto(
+                        out, source, id, (size_t)source->goto_target))
+                    return minic_multi_direct_machine_reject(
+                        fn, "aarch64", name, "linux_alternative_cap_asm_goto",
+                        reject_block, reject_ins, __LINE__);
+                *needs_writeback = false;
+                return true;
+            }
             if (!minic_aarch64_qualified_opaque_asm(source) ||
                 fwrite(source->template_text, 1U, source->template_length, out) !=
                     source->template_length ||

@@ -80,6 +80,11 @@ on:
       - 'tests/compiler/c0/probe-loong-linux-xchg-qemu.sh'
       - 'tests/compiler/c0/probe-loong-linux-small-xchg-qemu.sh'
       - 'tests/compiler/c0/loong-linux-small-xchg.c'
+      - 'tests/compiler/c0/probe-loong-linux-named-store-mb-qemu.sh'
+      - 'tests/compiler/c0/loong-linux-named-store-mb.c'
+      - 'tests/compiler/c0/aarch64-linux-cap-alternative.c'
+      - 'tests/compiler/c0/probe-aarch64-linux-cap-alternative-qemu.sh'
+      - 'tests/compiler/c0/probe-aarch64-linux-alt-cap-bounds.sh'
       - 'tests/compiler/c0/probe-minic-batch-granularity.sh'
       - 'tools/ci/minic-batch-granularity.py'
       - 'tests/compiler/c0/probe-lp64-indirect-record-abi-qemu.sh'
@@ -371,6 +376,9 @@ jobs:
           MINIC_SOURCE_ONLY=1 bash tests/compiler/c0/probe-loong-linux-cmpxchg-qemu.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
           MINIC_SOURCE_ONLY=1 bash tests/compiler/c0/probe-loong-linux-xchg-qemu.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
           MINIC_SOURCE_ONLY=1 bash tests/compiler/c0/probe-loong-linux-small-xchg-qemu.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+          MINIC_SOURCE_ONLY=1 bash tests/compiler/c0/probe-loong-linux-named-store-mb-qemu.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+          MINIC_SOURCE_ONLY=1 bash tests/compiler/c0/probe-aarch64-linux-cap-alternative-qemu.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+          MINIC_SOURCE_ONLY=1 bash tests/compiler/c0/probe-aarch64-linux-alt-cap-bounds.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
           for target in aarch64 loongarch64; do
             MINIC_SOURCE_ONLY=1 bash tests/compiler/c0/probe-lp64-core-record-snapshot-qemu.sh "$target" "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
             MINIC_SOURCE_ONLY=1 bash tests/compiler/c0/probe-lp64-indirect-record-abi-qemu.sh "$target" "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"

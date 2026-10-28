@@ -3,6 +3,172 @@
 #include "target/common/direct_linux_bug_asm.h"
 #include "frontend/const_eval.h"
 #include <string.h>
+
+/* Linux 6.6 arch/arm64/include/asm/alternative-macros.h.
+ * The original assembler-generated section and paired .orgs are needed for
+ * boot-time feature patching. This is an EXACT, target-owned template gate;
+ * the only variable part is the cpucap number in the .hword field. The
+ * branch must remain an asm-goto edge, not a generic opaque barrier. */
+static const char aarch64_linux_cap_goto_prefix[] =
+    ".if 1 == 1\n"
+    "661:\n\t"
+    "nop\n"
+    "662:\n"
+    ".pushsection .altinstructions,\"a\"\n"
+    " .word 661b - .\n"
+    " .word 663f - .\n"
+    " .hword ";
+static const char aarch64_linux_cap_goto_suffix[] =
+    "\n"
+    " .byte 662b-661b\n"
+    " .byte 664f-663f\n"
+    ".popsection\n"
+    ".subsection 1\n"
+    "663:\n\t"
+    "b\t%l[l_yes]\n"
+    "664:\n\t"
+    ".org\t. - (664b-663b) + (662b-661b)\n\t"
+    ".org\t. - (662b-661b) + (664b-663b)\n\t"
+    ".previous\n"
+    ".endif\n";
+/* alternative_has_cap_likely() uses ALTERNATIVE_CB. Its existing branch
+ * jumps to l_no until alt_cb_patch_nops patches it away. The second PREL32
+ * field is the callback address, not a replacement instruction offset. */
+static const char aarch64_linux_cap_cb_prefix[] =
+    ".if 1 == 1\n"
+    "661:\n\t"
+    "b\t%l[l_no]\n"
+    "662:\n"
+    ".pushsection .altinstructions,\"a\"\n"
+    " .word 661b - .\n"
+    " .word alt_cb_patch_nops- .\n"
+    " .hword (1 << 15) | (";
+static const char aarch64_linux_cap_cb_suffix[] =
+    ")\n"
+    " .byte 662b-661b\n"
+    " .byte 664f-663f\n"
+    ".popsection\n"
+    "663:\n\t"
+    "664:\n\t"
+    ".endif\n";
+
+static bool aarch64_linux_cap_goto_text(const char *s, size_t len,
+                                        bool source_form, bool callback_form) {
+    const char *const expected_prefix = callback_form
+        ? aarch64_linux_cap_cb_prefix : aarch64_linux_cap_goto_prefix;
+    const char *const expected_suffix = callback_form
+        ? aarch64_linux_cap_cb_suffix : aarch64_linux_cap_goto_suffix;
+    const size_t prefix = callback_form
+        ? sizeof(aarch64_linux_cap_cb_prefix) - 1U
+        : sizeof(aarch64_linux_cap_goto_prefix) - 1U;
+    const size_t suffix = callback_form
+        ? sizeof(aarch64_linux_cap_cb_suffix) - 1U
+        : sizeof(aarch64_linux_cap_goto_suffix) - 1U;
+    size_t middle, i;
+    unsigned int cap = 0U;
+    if (s == NULL || len <= prefix + suffix ||
+        memcmp(s, expected_prefix, prefix) != 0 ||
+        memcmp(s + len - suffix, expected_suffix, suffix) != 0)
+        return false;
+    middle = len - prefix - suffix;
+    if (source_form)
+        return middle == sizeof("%[cpucap]") - 1U &&
+               memcmp(s + prefix, "%[cpucap]", middle) == 0;
+    if (middle == 2U && memcmp(s + prefix, "%0", middle) == 0)
+        return true; /* Core deferred-immediate contract, not a guessed cap. */
+    if (middle == 0U || middle > 5U) return false;
+    for (i = 0U; i < middle; ++i) {
+        if (s[prefix + i] < '0' || s[prefix + i] > '9') return false;
+        cap = cap * 10U + (unsigned int)(s[prefix + i] - '0');
+    }
+    return cap < (1U << 15);
+}
+
+bool minic_aarch64_linux_cap_asm_goto_source(const MinicInlineAsm *s) {
+    const bool callback_form = s != NULL &&
+        aarch64_linux_cap_goto_text(s->template_text, s->template_length,
+                                    true, true);
+    return s != NULL && s->is_goto && !s->is_volatile &&
+           s->output_count == 0U && s->input_count == 1U &&
+           s->inputs != NULL && s->label_count == 1U && s->labels != NULL &&
+           s->clobber_count == 0U && !s->has_memory_clobber &&
+           s->register_clobber_count == 0U &&
+           s->inputs[0].access == MINIC_INLINE_ASM_OPERAND_READ_ONLY &&
+           s->inputs[0].constraint_text != NULL &&
+           s->inputs[0].constraint_length == 1U &&
+           s->inputs[0].constraint_text[0] == 'i' &&
+           s->inputs[0].name != NULL &&
+           s->inputs[0].name_length == sizeof("cpucap") - 1U &&
+           memcmp(s->inputs[0].name, "cpucap", sizeof("cpucap") - 1U) == 0 &&
+           s->labels[0].name != NULL &&
+           s->labels[0].name_length ==
+               (callback_form ? sizeof("l_no") - 1U : sizeof("l_yes") - 1U) &&
+           memcmp(s->labels[0].name, callback_form ? "l_no" : "l_yes",
+                  s->labels[0].name_length) == 0 &&
+           (callback_form || aarch64_linux_cap_goto_text(
+               s->template_text, s->template_length, true, false));
+}
+
+bool minic_aarch64_linux_cap_asm_goto_core(const MinicCoreInlineAsm *a) {
+    return a != NULL && a->is_goto && a->is_volatile &&
+           a->goto_target != MINIC_CORE_BLOCK_INVALID &&
+           (aarch64_linux_cap_goto_text(a->template_text,
+                                        a->template_length, false, false) ||
+            aarch64_linux_cap_goto_text(a->template_text,
+                                        a->template_length, false, true));
+}
+
+bool minic_aarch64_emit_linux_cap_asm_goto(
+    FILE *out, const MinicCoreInlineAsm *a, size_t function_id,
+    size_t target_block) {
+    static const char unlikely_goto_token[] = "%l[l_yes]";
+    static const char likely_goto_token[] = "%l[l_no]";
+    const char *const goto_token = a != NULL &&
+        aarch64_linux_cap_goto_text(a->template_text, a->template_length,
+                                    false, true)
+        ? likely_goto_token : unlikely_goto_token;
+    const size_t goto_token_length = a != NULL &&
+        aarch64_linux_cap_goto_text(a->template_text, a->template_length,
+                                    false, true)
+        ? sizeof(likely_goto_token) - 1U
+        : sizeof(unlikely_goto_token) - 1U;
+    static const char imm_token[] = "%0";
+    const bool deferred = a != NULL && a->source_inline_asm_id != SIZE_MAX;
+    size_t i;
+    if (out == NULL || !minic_aarch64_linux_cap_asm_goto_core(a) ||
+        (deferred ? strstr(a->template_text, imm_token) == NULL
+                  : strstr(a->template_text, imm_token) != NULL))
+        return false;
+
+    /* A Core control-flow label is rendered as the real target-owned block
+     * label, so Linux's patched branch lands on the correct C label. */
+    if (deferred &&
+        fprintf(out, "  // MINIC_DEFERRED_ASM_IMMEDIATE requires inline specialization\n"
+                     "  .extern __minic_deferred_asm_immediate_%zu_0\n",
+                a->source_inline_asm_id) < 0)
+        return false;
+    for (i = 0U; i < a->template_length;) {
+        if (i + goto_token_length <= a->template_length &&
+            memcmp(a->template_text + i, goto_token,
+                   goto_token_length) == 0) {
+            if (fprintf(out, ".Lmini_arm_f%zu_b%zu",
+                        function_id, target_block) < 0)
+                return false;
+            i += goto_token_length;
+        } else if (deferred &&
+                   i + sizeof(imm_token) - 1U <= a->template_length &&
+                   memcmp(a->template_text + i, imm_token,
+                          sizeof(imm_token) - 1U) == 0) {
+            if (fprintf(out, "__minic_deferred_asm_immediate_%zu_0",
+                        a->source_inline_asm_id) < 0)
+                return false;
+            i += sizeof(imm_token) - 1U;
+        } else if (fputc((unsigned char)a->template_text[i++], out) == EOF) {
+            return false;
+        }
+    }
+    return fputc('\n', out) != EOF;
+}
 /* Transport contract for every structured GNU asm Core SSA operand.
  * Every register input and lvalue address lives in an eight-byte Core
  * frame slot.  The shared LP64 plan already permits 1 MiB frames and
@@ -29,6 +195,7 @@ bool minic_aarch64_qualified_opaque_asm(const MinicCoreInlineAsm *a) {
     };
     char compact[64];
     size_t i, n = 0U;
+    if (minic_aarch64_linux_cap_asm_goto_core(a)) return true;
     if (minic_multi_direct_linux_bug_asm(
             a, "14470", "14471", "14472", "brk0x800", true))
         return true;
@@ -387,6 +554,10 @@ bool minic_aarch64_requires_qualified_input_asm(const MinicInlineAsm *src) {
     char prefix[64];
     const char *const single[] = {prefix};
     size_t width, fetch, op;
+    /* The exact Linux one-label alternative is a qualified *control-flow*
+     * shape handled by Core's generic asm-goto lowering. Its target-owned
+     * section/ISA contract is checked again at machine admission. */
+    if (minic_aarch64_linux_cap_asm_goto_source(src)) return false;
     if (minic_backend_inline_asm_prefix_matches(
             src, fixed, sizeof(fixed) / sizeof(fixed[0])))
         return true;

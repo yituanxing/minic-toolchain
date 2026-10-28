@@ -52,11 +52,16 @@ on:
       - "tests/compiler/c0/probe-lp64-core-record-snapshot-qemu.sh"
       - "tests/compiler/c0/probe-lp64-packed-integer-record-qemu.sh"
       - "tests/compiler/c0/probe-aarch64-linux-zero-operand-hints.sh"
+      - "tests/compiler/c0/aarch64-linux-cap-alternative.c"
+      - "tests/compiler/c0/probe-aarch64-linux-cap-alternative-qemu.sh"
+      - "tests/compiler/c0/probe-aarch64-linux-alt-cap-bounds.sh"
       - "tests/compiler/c0/probe-loong-linux-zero-operand-dbar.sh"
       - "tests/compiler/c0/probe-loong-linux-cmpxchg-qemu.sh"
       - "tests/compiler/c0/probe-loong-linux-xchg-qemu.sh"
       - "tests/compiler/c0/probe-loong-linux-small-xchg-qemu.sh"
       - "tests/compiler/c0/loong-linux-small-xchg.c"
+      - "tests/compiler/c0/probe-loong-linux-named-store-mb-qemu.sh"
+      - "tests/compiler/c0/loong-linux-named-store-mb.c"
       - "src/target/aarch64/call_emit.c"
       - "src/target/aarch64/integer_emit.c"
       - "src/target/aarch64/residual_emit.c"
@@ -320,6 +325,13 @@ jobs:
         run: |
           set -Eeuo pipefail
           bash tests/compiler/c0/probe-aarch64-linux-zero-operand-hints.sh "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
+      - name: Original arm64 Linux asm goto alternative table, real branch, GNU/QEMU
+        if: matrix.target == 'aarch64'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash tests/compiler/c0/probe-aarch64-linux-cap-alternative-qemu.sh "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
+          bash tests/compiler/c0/probe-aarch64-linux-alt-cap-bounds.sh "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
       - name: Original Linux arm64 acquire-load 1-2-4-8 byte GNU QEMU differential
         if: matrix.target == 'aarch64'
         shell: bash
@@ -655,6 +667,7 @@ jobs:
           set -Eeuo pipefail
           bash tests/compiler/c0/probe-loong-linux-xchg-qemu.sh "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
           bash tests/compiler/c0/probe-loong-linux-small-xchg-qemu.sh "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
+          bash tests/compiler/c0/probe-loong-linux-named-store-mb-qemu.sh "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
       - name: GNU 6.6.143 LoongArch LL-SC cmpxchg three exact hardware contracts
         if: matrix.target == 'loongarch64'
         shell: bash
