@@ -2385,6 +2385,26 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
            (!strcmp(op,"csetm")?0x100U:0U);
         put_reg(&inst->operands[0],rd,wd);
         put_reg(&inst->operands[1],rn,wd);
+    } else if((!strcmp(op,"mvn") || !strcmp(op,"not")) &&
+              args[0]=='v') {
+        /* AdvSIMD MVN/NOT is a two-register 8B/16B operation, not the
+         * scalar GPR MVN (ORN with ZR). Reuse the established two-register
+         * typed encoder used by native ARM crypto register instructions. */
+        char tok[4][384];unsigned n,rd,rn;
+        uint32_t da,sa;
+        if(!split_operands(args,tok,&n) || n!=2U ||
+           !a64_vector_view(tok[0],&rd,&da) ||
+           !a64_vector_view(tok[1],&rn,&sa) || da!=sa ||
+           (da&UINT32_C(0xc00))!=0U) {
+            minias_set_error(as,"bad-aarch64-simd-mvn:%s:line=%zu",
+                             args,stmt->line);
+            free(inst);return false;
+        }
+        inst->opcode=A64_MC_SIMD_CRYPTO;inst->count=2U;
+        inst->encoding=UINT32_C(0x2e205800)|
+                       (da&UINT32_C(0x40000000));
+        put_reg(&inst->operands[0],rd,true);
+        put_reg(&inst->operands[1],rn,true);
     } else if(!strcmp(op,"mvn") &&
               split_two(args,first,sizeof(first),second,sizeof(second))) {
         unsigned rd,rm;bool wide,otherwide,sp;
