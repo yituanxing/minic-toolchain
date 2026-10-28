@@ -2825,3 +2825,29 @@ for target in x86_64 loongarch64; do
  cmp "$work/$target-if-mini.bin" "$work/$target-if-gnu.bin"
 done
 echo 'MINIAS_COMMON_NUMERIC_IF=PASS GNU_x86_and_Loong_bytes'
+
+# GNU GAS named macro arguments with whitespace around '=' must bind
+# through one Common owner, not separate AArch64/TARGET macro grammars.
+cat > "$work/gnu-keyword-whitespace.s" <<'GNU_MACRO_KEYWORDS'
+.data
+.macro generate_vectors indirect:req,mode=0
+.byte \indirect
+.byte \mode
+.endm
+generate_vectors indirect = 1, mode = 2
+generate_vectors mode = 3, indirect = 4
+GNU_MACRO_KEYWORDS
+for target in x86_64 loongarch64; do
+ "$MINIAS" --target="$target" -o "$work/$target-keyword-mini.o" "$work/gnu-keyword-whitespace.s"
+ if [ "$target" = x86_64 ]; then
+  as --64 -o "$work/$target-keyword-gnu.o" "$work/gnu-keyword-whitespace.s"
+  objcopy -j .data -O binary "$work/$target-keyword-mini.o" "$work/$target-keyword-mini.bin"
+  objcopy -j .data -O binary "$work/$target-keyword-gnu.o" "$work/$target-keyword-gnu.bin"
+ else
+  "$LOONGAS" -mabi=lp64d -o "$work/$target-keyword-gnu.o" "$work/gnu-keyword-whitespace.s"
+  "$LOONGCOPY" -j .data -O binary "$work/$target-keyword-mini.o" "$work/$target-keyword-mini.bin"
+  "$LOONGCOPY" -j .data -O binary "$work/$target-keyword-gnu.o" "$work/$target-keyword-gnu.bin"
+ fi
+ cmp "$work/$target-keyword-mini.bin" "$work/$target-keyword-gnu.bin"
+done
+echo 'MINIAS_COMMON_KEYWORD_WHITESPACE=PASS GNU_x86_Loong_data_bytes'

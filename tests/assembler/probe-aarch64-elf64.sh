@@ -2201,3 +2201,55 @@ A64_NUMERIC_IF
 "$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-if-gnu.o" "$work/a64-if-gnu.bin"
 cmp "$work/a64-if-mini.bin" "$work/a64-if-gnu.bin"
 echo 'MINIAS_COMMON_NUMERIC_IF_A64=PASS GNU_preamble_difference'
+
+# GNU ARM64 kernel PMULL/PMULL2 polynomial long and SHA1SU0/SU1
+# reuse typed SIMDCrypto/Logic emitters; strict mismatched lanes reject.
+cat > "$work/a64-kernel-pmull-sha1.s" <<'A64_PMULL_SHA1'
+.arch armv8-a+crypto
+.text
+pmull2 v10.1q,v0.2d,v7.2d
+pmull v11.1q,v1.1d,v6.1d
+sha1su0 v8.4s,v9.4s,v10.4s
+sha1su1 v8.4s,v9.4s
+A64_PMULL_SHA1
+"$MINIAS" --target=aarch64 -o "$work/a64-pmull-sha1-mini.o" "$work/a64-kernel-pmull-sha1.s"
+"$AARCH64_AS" -o "$work/a64-pmull-sha1-gnu.o" "$work/a64-kernel-pmull-sha1.s"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-pmull-sha1-mini.o" "$work/a64-pmull-sha1-mini.bin"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-pmull-sha1-gnu.o" "$work/a64-pmull-sha1-gnu.bin"
+cmp "$work/a64-pmull-sha1-mini.bin" "$work/a64-pmull-sha1-gnu.bin"
+for bad in 'pmull2 v0.1q,v1.1d,v2.2d' \
+           'pmull v0.1q,v1.2d,v2.2d' \
+           'pmull2 v0.2d,v1.2d,v2.2d' \
+           'sha1su0 v0.8h,v1.4s,v2.4s' \
+           'sha1su1 v0.4s,v1.4s,v2.4s'; do
+    printf '.arch armv8-a+crypto\n.text\n%s\n' "$bad" > "$work/a64-poly-sha-bad.s"
+    if "$MINIAS" --target=aarch64 -o "$work/a64-poly-sha-bad.o" "$work/a64-poly-sha-bad.s" >/dev/null 2>&1; then
+        echo "invalid A64 polynomial/SHA lane accepted: $bad" >&2;exit 1
+    fi
+done
+for disabled in 'pmull v0.1q,v1.1d,v2.1d' \
+                'sha1su0 v0.4s,v1.4s,v2.4s'; do
+    printf '.arch armv8-a\n.text\n%s\n' "$disabled" > "$work/a64-poly-sha-disabled.s"
+    if "$MINIAS" --target=aarch64 -o "$work/a64-poly-sha-disabled.o" "$work/a64-poly-sha-disabled.s" >/dev/null 2>&1; then
+        echo "disabled A64 crypto accepted: $disabled" >&2;exit 1
+    fi
+done
+echo 'MINIAS_A64_POLYNOMIAL_SHA1=PASS GNU_four_machine_words_and_7_negatives'
+
+# Original ARM64 generate_vectors keyword invocation has whitespace around
+# '='. GNU GAS accepts and trims it; Common binding must not reject it.
+cat > "$work/a64-keyword-spaces.s" <<'A64_KEYWORD_SPACES'
+.data
+.macro generate_vectors indirect:req,mode=0
+.byte \indirect
+.byte \mode
+.endm
+generate_vectors indirect = 1, mode = 2
+generate_vectors mode = 3, indirect = 4
+A64_KEYWORD_SPACES
+"$MINIAS" --target=aarch64 -o "$work/a64-keyword-mini.o" "$work/a64-keyword-spaces.s"
+"$AARCH64_AS" -o "$work/a64-keyword-gnu.o" "$work/a64-keyword-spaces.s"
+"$AARCH64_OBJCOPY" -j .data -O binary "$work/a64-keyword-mini.o" "$work/a64-keyword-mini.bin"
+"$AARCH64_OBJCOPY" -j .data -O binary "$work/a64-keyword-gnu.o" "$work/a64-keyword-gnu.bin"
+cmp "$work/a64-keyword-mini.bin" "$work/a64-keyword-gnu.bin"
+echo 'MINIAS_COMMON_KEYWORD_WHITESPACE_A64=PASS GNU_named_positional_binding'

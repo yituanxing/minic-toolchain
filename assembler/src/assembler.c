@@ -5311,19 +5311,22 @@ static bool expand_macro_invocation(MiniAs *as,
     for(i=0U;i<supplied;++i) {
         char *token=tokens[i],*equal=strchr(token,'=');
         size_t index;
-        if(equal && equal!=token) {
+        if(equal && equal!=token && equal[1]!='=' &&
+           equal[-1]!='=') {
             bool matched=false;
+            char *key;
             *equal='\0';
+            key=minias_trim(token);
             for(index=0U;index<macro->param_count;++index)
-                if(!strcmp(token,macro->params[index].name)) {
+                if(!strcmp(key,macro->params[index].name)) {
                     matched=true;break;
                 }
             if(!matched || assigned[index]) {
                 minias_set_error(as,"bad-macro-keyword:%s:%s:line=%zu",
-                                 macro->name,token,line);
+                                 macro->name,key,line);
                 free(vararg_buffer);free(copy);return false;
             }
-            values[index]=strip_macro_argument_quotes(equal+1U);
+            values[index]=strip_macro_argument_quotes(minias_trim(equal+1U));
         }else if(has_vararg &&
                  positional>=macro->param_count-1U) {
             const char *item=strip_macro_argument_quotes(token);

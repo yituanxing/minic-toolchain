@@ -412,6 +412,17 @@ static bool parse_a64_single_v(const char *text,unsigned *reg,
 /* GNU vector MOV aliases ORR of the same vector register.
  * Reuse the existing vector arrangement recognizer without loosening
  * LD1/ST1's brace-only register-list grammar. */
+/* SHA/PMULL 128-bit polynomial destination is .1Q, distinct from
+ * ordinary .2D views and from scalar Qn operands. */
+static bool a64_vector_1q(const char *text,unsigned *reg) {
+    char *end;
+    unsigned long value;
+    if(text[0]!='v' || !isdigit((unsigned char)text[1]))return false;
+    errno=0;value=strtoul(text+1U,&end,10);
+    if(errno || value>31UL || strcmp(end,".1q"))return false;
+    *reg=(unsigned)value;return true;
+}
+
 static bool a64_vector_view(const char *text,unsigned *reg,
                             uint32_t *arrange) {
     char wrapped[96];
@@ -2904,6 +2915,42 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         put_reg(&inst->operands[1],rt2,wt);
         put_reg(&inst->operands[2],rn,true);
         put_reg(&inst->operands[3],rs,false);
+    } else if(!strcmp(op,"pmull") || !strcmp(op,"pmull2") ||
+              !strcmp(op,"sha1su0") || !strcmp(op,"sha1su1")) {
+        /* Two ARM64 kernel Crypto instruction families share existing
+         * typed SIMD two-/three-register emitters and strict feature gate. */
+        char tok[4][384];unsigned n,rd,rn,rm=0U;
+        uint32_t sa=0U,ta=0U,da=0U;
+        bool polynomial=!strncmp(op,"pmull",5U);
+        bool pair=!strcmp(op,"pmull2");
+        bool tri=polynomial || !strcmp(op,"sha1su0");
+        bool valid=(as->target_options&A64_FEATURE_CRYPTO)!=0U &&
+            split_operands(args,tok,&n) && n==(tri?3U:2U);
+        if(valid && polynomial) {
+            valid=a64_vector_1q(tok[0],&rd) &&
+                  a64_vector_view(tok[1],&rn,&sa) &&
+                  a64_vector_view(tok[2],&rm,&ta) &&
+                  sa==(pair?UINT32_C(0x40000c00):UINT32_C(0x00000c00)) &&
+                  ta==sa;
+        }else if(valid) {
+            valid=a64_vector_view(tok[0],&rd,&da) &&
+                  a64_vector_view(tok[1],&rn,&sa) &&
+                  da==UINT32_C(0x40000800) && sa==da &&
+                  (!tri || (a64_vector_view(tok[2],&rm,&ta) && ta==da));
+        }
+        if(!valid) {
+            minias_set_error(as,"bad-aarch64-crypto-poly-sha1:%s:line=%zu",
+                             args,stmt->line);free(inst);return false;
+        }
+        inst->opcode=tri?A64_MC_SIMD_LOGIC:A64_MC_SIMD_CRYPTO;
+        inst->count=tri?3U:2U;
+        inst->encoding=polynomial?
+              (pair?UINT32_C(0x4ee0e000):UINT32_C(0x0ee0e000)):
+              !strcmp(op,"sha1su0")?UINT32_C(0x5e003000):
+                                    UINT32_C(0x5e281800);
+        put_reg(&inst->operands[0],rd,true);
+        put_reg(&inst->operands[1],rn,true);
+        if(tri)put_reg(&inst->operands[2],rm,true);
     } else if(!strcmp(op,"sha256su0") || !strcmp(op,"sha256su1") ||
               !strcmp(op,"sha256h") || !strcmp(op,"sha256h2")) {
         /* One typed ARM SHA256 instruction family: H/H2 use scalar Qd,Qn
