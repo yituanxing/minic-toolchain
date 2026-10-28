@@ -4543,9 +4543,11 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
                op[length-1U]==')') {
                 *open='\0';
                 macro=find_macro(as,op);
+                /* Registry lookup needs the temporary NUL, but GNU's
+                 * actual operand starts at the ORIGINAL '(' character. */
+                *open='(';
                 if(macro!=NULL)
                     return expand_macro_invocation(as,macro,open,line);
-                *open='(';
             }
         }
     }
