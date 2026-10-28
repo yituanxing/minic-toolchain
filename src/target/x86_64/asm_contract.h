@@ -13,6 +13,16 @@ bool minic_x86_64_asm_nospec_template(const char *, size_t);
 bool minic_x86_64_asm_percpu_stable_template(const char *, size_t);
 bool minic_x86_64_asm_mulacc_template(const char *, size_t);
 bool minic_x86_64_asm_muldiv_template(const char *, size_t);
+/* Original Linux 6.6.143 x86 LOCK INC/DEC + =@cce output.
+ * SOURCE admission and physical emission use the same exact form enum. */
+typedef enum MinicX86AtomicCC {
+    MINIC_X86_ATOMIC_CC_NONE=0,
+    MINIC_X86_ATOMIC_CC_DEC32,
+    MINIC_X86_ATOMIC_CC_INC32,
+    MINIC_X86_ATOMIC_CC_DEC64,
+    MINIC_X86_ATOMIC_CC_INC64
+} MinicX86AtomicCC;
+MinicX86AtomicCC minic_x86_64_atomic_cc_form(const char *, size_t);
 /* One x86 ISA descriptor distinguishes word and tied-seed Linux BSR/BSF.
  * The GNU output/input contract is target-owned; Common Core sees only
  * scalar/input and address-backed output roles. */

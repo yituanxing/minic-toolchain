@@ -161,6 +161,73 @@ bool minic_x86_64_asm_muldiv_template(const char *text, size_t length) {
     return strcmp(normalized, expected) == 0;
 }
 
+/* The exact original Linux source template includes BOTH a relocatable
+ * .smp_locks entry and GCC's condition-code-ZF pseudo output. Whitespace
+ * is immaterial but instruction suffixes/comments are NOT. Accept the
+ * original source named %[var] or canonical Core numeric %0 only. */
+MinicX86AtomicCC minic_x86_64_atomic_cc_form(const char *text, size_t len) {
+    static const struct { const char *op; MinicX86AtomicCC form; } forms[] = {
+        {"decl", MINIC_X86_ATOMIC_CC_DEC32},
+        {"incl", MINIC_X86_ATOMIC_CC_INC32},
+        {"decq", MINIC_X86_ATOMIC_CC_DEC64},
+        {"incq", MINIC_X86_ATOMIC_CC_INC64}
+    };
+    const char *const prefix =
+        ".pushsection.smp_locks,\"a\".balign4.long671f-..popsection671:lock;";
+    const char *const comment = "/*outputconditioncodee*/";
+    char compact[256], pattern[256];
+    size_t i, j=0U, op;
+    if (!text || len == 0U || len >= sizeof(compact))
+        return MINIC_X86_ATOMIC_CC_NONE;
+    for (i=0U;i<len;++i) {
+        const char c=text[i];
+        if (c==' '||c=='\t'||c=='\n'||c=='\r') continue;
+        if (j+1U>=sizeof(compact)) return MINIC_X86_ATOMIC_CC_NONE;
+        compact[j++]=c;
+    }
+    compact[j]='\0';
+    for (op=0U;op<sizeof(forms)/sizeof(forms[0]);++op) {
+        int n=snprintf(pattern,sizeof(pattern),"%s%s%%[var]%s",
+                       prefix,forms[op].op,comment);
+        if (n>0&&(size_t)n<sizeof(pattern)&&strcmp(compact,pattern)==0)
+            return forms[op].form;
+        n=snprintf(pattern,sizeof(pattern),"%s%s%%0%s",
+                   prefix,forms[op].op,comment);
+        if (n>0&&(size_t)n<sizeof(pattern)&&strcmp(compact,pattern)==0)
+            return forms[op].form;
+    }
+    return MINIC_X86_ATOMIC_CC_NONE;
+}
+static bool x86_linux_atomic_cc_source(
+    const MinicC0Program *program,const MinicInlineAsm *src) {
+    const MinicExpression *mem,*flag;
+    MinicType m,f;
+    const MinicX86AtomicCC form=src ?
+        minic_x86_64_atomic_cc_form(src->template_text,src->template_length):
+        MINIC_X86_ATOMIC_CC_NONE;
+    if (!program||!src||form==MINIC_X86_ATOMIC_CC_NONE||
+        !src->is_volatile||src->is_goto||!src->outputs||
+        src->output_count!=2U||src->input_count!=0U||
+        src->label_count||src->clobber_count!=1U||
+        !src->has_memory_clobber||src->register_clobber_count||
+        !target_constraint_is(&src->outputs[0],"+m")||
+        !target_constraint_is(&src->outputs[1],"=@cce"))
+        return false;
+    mem=minic_c0_program_expression(program,src->outputs[0].expression);
+    flag=minic_c0_program_expression(program,src->outputs[1].expression);
+    if (!mem||!flag||mem->value_category!=MINIC_VALUE_LVALUE||
+        flag->value_category!=MINIC_VALUE_LVALUE||
+        minic_type_is_const(mem->type)||minic_type_is_const(flag->type)||
+        !minic_type_unqualified(mem->type,&m)||
+        !minic_type_unqualified(flag->type,&f)||
+        !minic_type_equal(f,minic_type_bool()))
+        return false;
+    if (form==MINIC_X86_ATOMIC_CC_DEC32||
+        form==MINIC_X86_ATOMIC_CC_INC32)
+        return minic_type_equal(m,minic_type_int());
+    return minic_type_equal(m,minic_type_long())||
+           minic_type_equal(m,minic_type_long_long());
+}
 /* Exact x86 Linux word-sized GNU BSF/BSR spelling. The REP prefix on
  * Linux __ffs is deliberate: it becomes TZCNT where available, and
  * preserves BSF bit-index semantics for nonzero inputs on older CPUs.
@@ -448,6 +515,12 @@ bool minic_x86_64_qualify_inline_asm(
     bool is_mulacc = false, is_muldiv = false;
     size_t i, count;
     if (!contract) return false;
+    if (x86_linux_atomic_cc_source(program, source)) {
+        contract->operand_count=2U;
+        contract->kinds[0]=MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
+        contract->kinds[1]=MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+        return true;
+    }
     if (x86_nospec_source(program, source)) {
         contract->operand_count = 3U;
         contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;

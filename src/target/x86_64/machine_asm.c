@@ -166,6 +166,54 @@ static bool emit_linux_tied_bit_scan(
     return fputs("  movl %eax, (%r11)\n", out) != EOF;
 }
 
+/* Real Linux LOCKed INC/DEC with SMP patch table and hardware ZF.
+ * Core transports two typed addresses and the memory side effect;
+ * only this target emits the instruction and SETE. */
+static bool emit_linux_atomic_cc(
+    FILE *out,const MinicC0Program *program,const MinicTargetInfo *target,
+    const MinicCoreFunction *fn,const MinicX86Frame *frame,
+    const MinicCoreInstruction *ins,const MinicCoreInlineAsm *info) {
+    const MinicCoreStructuredInlineAsmOperand *b=
+        ins->value.structured_inline_asm.operands;
+    const MinicX86AtomicCC form=minic_x86_64_atomic_cc_form(
+        info->template_text,info->template_length);
+    const char *op=form==MINIC_X86_ATOMIC_CC_DEC32?"decl":
+                   form==MINIC_X86_ATOMIC_CC_INC32?"incl":
+                   form==MINIC_X86_ATOMIC_CC_DEC64?"decq":
+                   form==MINIC_X86_ATOMIC_CC_INC64?"incq":NULL;
+    const size_t expected=(form==MINIC_X86_ATOMIC_CC_DEC32||
+                           form==MINIC_X86_ATOMIC_CC_INC32)?4U:8U;
+    MinicType mem,flag;
+    size_t bytes;
+    bool sign;
+    if (!out||!program||!target||!fn||!frame||!b||!info||!op||
+        !info->is_volatile||info->is_goto||!info->has_memory_clobber||
+        info->register_clobber_count||
+        ins->value.structured_inline_asm.operand_count!=2U||
+        b[0].operand_index||b[1].operand_index!=1U||
+        b[0].kind!=MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE||
+        b[1].kind!=MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT||
+        b[0].has_fixed_register_binding||b[1].has_fixed_register_binding||
+        b[0].early_clobber||b[1].early_clobber||
+        b[0].value>=fn->value_count||b[1].value>=fn->value_count||
+        !minic_type_pointee(fn->values[b[0].value].type,&mem)||
+        !minic_type_pointee(fn->values[b[1].value].type,&flag)||
+        !minic_type_equal(flag,minic_type_bool())||
+        !minic_x86_64_scalar_width(program,target,mem,&bytes,&sign)||
+        bytes!=expected)
+        return false;
+    return x86_value_load(out,frame,b[0].value,"%r11")&&
+           fputs("  .pushsection .smp_locks,\"a\"\n"
+                 "  .balign 4\n"
+                 "  .long 671f - .\n"
+                 "  .popsection\n"
+                 "671:\n",out)!=EOF&&
+           fprintf(out,"  lock; %s (%%r11)\n",op)>=0&&
+           fputs("  sete %al\n",out)!=EOF&&
+           x86_value_load(out,frame,b[1].value,"%r10")&&
+           fputs("  movb %al, (%%r10)\n",out)!=EOF;
+}
+
 /* The only owner of this x86 hardware side effect: CMP sets CF, SBB
  * consumes it immediately to create the branchless speculative mask.
  * Core transports typed SSA values, never a pretend boolean mask. */
@@ -359,6 +407,11 @@ bool minic_x86_64_emit_structured_asm(
     bindings = ins->value.structured_inline_asm.operands;
     if (!info->template_text)
         return false;
+    if (minic_x86_64_atomic_cc_form(
+            info->template_text,info->template_length)!=
+        MINIC_X86_ATOMIC_CC_NONE)
+        return emit_linux_atomic_cc(
+            out,program,target,fn,frame,ins,info);
     /* Preserve the pre-existing memory-clobber family (including its
      * valid two-operand dec_mod shape). Only DISJOINT no-clobber,
      * register-output two-operand templates enter the BSF/BSR selector.
