@@ -61,6 +61,14 @@ jobs:
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-deferred-fragment-relax.sh
+      - name: Fixed GNU .org and lexical directives stay in persistent MCLayout
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=riscv \
+            bash tests/assembler/probe-mc-org-lexical-layout.sh
+      - name: GNU RISC-V fixed .org and forward DATA share one layout fixed point
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=riscv \
+            bash tests/assembler/probe-mc-org-data-fixedpoint.sh
       - name: MCExpr data oracle in all A0 and ISA tests
         run: grep -q "MINIAS_MC_EXPR_DIFFERENCE" assembler/src/minias_internal.h
       - name: Verify atomic MCFragment transactions across four CodeEmitters
@@ -160,6 +168,10 @@ jobs:
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=aarch64 \
             bash tests/assembler/probe-cfi-eh-frame.sh
+      - name: GNU AArch64 fixed .org and forward DATA layout
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=aarch64 \
+            bash tests/assembler/probe-mc-org-data-fixedpoint.sh
       - name: Check AArch64 real .debug_frame CIE/FDE against GNU GAS
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=aarch64 \

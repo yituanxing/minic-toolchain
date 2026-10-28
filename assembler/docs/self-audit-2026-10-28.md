@@ -22,6 +22,13 @@
 
 ## 第一轮发现并已修复（小型验收保留独立证据）
 
+### 2026-10-28 MCLayout 位置约束收敛（待 exact-head CI）
+
+- 纯整数表达式 `.org N` 在 parse 时记录绝对 subsection 目标，不再把原始 padding 当成永久的 Fragment 长度；长分支和前向变长 DATA 使前序大小变化时，Common MCLayout 重新计算 padding，超出目标则明确报错，不覆盖已发出数据。
+- `.org .+N`、含符号的 `.org`、依赖符号/位置的 `.if` 与 `.set/.equ` 仍保留保守重解析路径。纯词法 `.ifb/.ifc/.ifdef`、纯数字 `.if/.ifeq`、常量 `.set/.equ` 以及宏清理状态不再无条件触发第二次源码解析。
+- 本地 RISC-V A0、x86 GNU byte 差分、MCLayout Stress、MCExpr ownership/byte/relocation oracle 已通过；新增 x86/RISC-V 长分支 `.org` 正反测试与四架构 GNU forward-DATA `.org` 差分，其他架构与 Linux 9645 份必须以最新提交的 CI 结果为准。
+- 这是对现有 `MiniAsStmt` 的受限语义增强，不表示已经消除所有位置相关源码重解析，也不替代完整 ELF/CFI 与 Linux Image/P1 验收。
+
 1. **目标代码对齐泄漏（P0）**：Common 创建 `.text` 时沿用 RV 的 4-byte 对齐，x86 GNU 默认 1-byte；改为 `TargetInfo.default_exec_alignment`，包括入口、显式 `.text`、`.section .text.*`。
 2. **Section 类型身份（P0）**：通用 `ensure_section` 重复声明时曾直接 OR flags、改 PROGBITS → NOBITS；容易吞掉已经发出的代码。恢复第一次定义的 Type/Flags。更严格的“GNU 对自定义节重复改变属性发错”语义留在后续条目。
 3. **NOBITS 静默丢数据（P0）**：旧 `minias_section_append` 遇 NOBITS 无条件增加 size，非零机器码也被吞掉；现在对非零字节 fail-closed，并把合法零填充走 O(1) checked-size 路径。

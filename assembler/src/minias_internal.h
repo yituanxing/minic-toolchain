@@ -295,6 +295,12 @@ typedef struct MiniAsStmt {
     unsigned char align_fill;
     bool align_has_max_skip;
     uint64_t align_max_skip;
+    /* Parse-site absolute .org is a persistent position constraint, not a
+     * fixed byte count.  MCLayout recomputes its padding after any prior
+     * instruction or DATA Fragment changes size.  Symbol/dot-dependent
+     * .org retains the conservative parser-control fallback. */
+    bool org_target_fixed;
+    uint64_t org_target;
     /* Immutable parse-site state: meaningful bits are defined by Target. */
     struct MiniAsTargetSiteState site;
     /* Common variable-size data fragment resolved after symbol layout. */
@@ -409,7 +415,7 @@ typedef struct MiniAs {
     bool conditional_active;
     /* GNU GAS's quoted-string-aware, multi-line C comment lexical state. */
     bool c_comment_active;
-    bool layout_sensitive; /* conservative full-reparse fallback */
+    bool layout_sensitive; /* position-dependent parser-control fallback */
     bool has_deferred_data; /* forward-symbol data-size fragments */
     bool has_mutable_absolute_sets; /* snapshot mutable .set in data */
     bool expr_dot_override; /* explicit fragment-local dot while evaluating */

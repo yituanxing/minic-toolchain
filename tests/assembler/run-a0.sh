@@ -1730,7 +1730,8 @@ test "$frag_size" = '12' && test "$frag_align" = '0000000000000010' || {
 }
 echo 'MINIAS_FRAGMENT_INPLACE=PASS branch_growth=4 size=12 aligned_offset=16'
 
-# Source with position-dependent .org must keep the full-reparse fallback.
+# A literal .org is a retained absolute MCFragment position constraint:
+# branch growth reduces its padding without re-opening the original source.
 cat >"$work/fragment-org-fallback.s" <<'EOF_FRAG_ORG'
 .text
 .globl fragment_org_fallback
@@ -1743,12 +1744,39 @@ far_org:
 EOF_FRAG_ORG
 MINIAS_TRACE_RELAYOUT=1 "$MINIAS" -o "$work/fragment-org-fallback.o" \
     "$work/fragment-org-fallback.s" 2>"$work/fragment-org-fallback.trace"
-if grep -q 'minias-fragment-relayout:inplace-passes=' \
-    "$work/fragment-org-fallback.trace"; then
-    echo 'MiniAS performed unsafe in-place .org relaxation' >&2
+if ! grep -q 'minias-fragment-relayout:inplace-passes=' \
+    "$work/fragment-org-fallback.trace" ||
+   ! grep -q 'reparse=0' "$work/fragment-org-fallback.trace"; then
+    echo 'MiniAS did not preserve fixed .org during in-place relaxation' >&2
     exit 1
 fi
-echo 'MINIAS_FRAGMENT_REPARSE_GUARD=PASS position_dependent_org=1'
+org_far_value="$(readelf -sW "$work/fragment-org-fallback.o" |
+    awk '$NF == "far_org" { print $2 }')"
+test "$org_far_value" = '00000000000013a8' || {
+    echo "MiniAS fixed .org target drifted: far=$org_far_value" >&2
+    exit 1
+}
+
+# Conversely, an expression depending on the current dot must be evaluated
+# again after branch growth; freezing its initial absolute value is wrong.
+cat >"$work/fragment-org-dot.s" <<'EOF_FRAG_ORG_DOT'
+.text
+.globl fragment_org_dot
+fragment_org_dot:
+    beq a0, a1, far_org_dot
+.org . + 28
+.space 5000
+far_org_dot:
+    ret
+EOF_FRAG_ORG_DOT
+MINIAS_TRACE_RELAYOUT=1 "$MINIAS" -o "$work/fragment-org-dot.o" \
+    "$work/fragment-org-dot.s" 2>"$work/fragment-org-dot.trace"
+if grep -q 'minias-fragment-relayout:inplace-passes=' \
+    "$work/fragment-org-dot.trace"; then
+    echo 'MiniAS incorrectly froze position-dependent .org' >&2
+    exit 1
+fi
+echo 'MINIAS_FRAGMENT_ORG_POLICY=PASS fixed_inplace=1 dot_reparse=1'
 
 
 # One typed-fixup object exercises semantic RISC-V CALL_PLT, PCREL_HI20,

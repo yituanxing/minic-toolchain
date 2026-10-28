@@ -332,7 +332,24 @@ static bool minias_relayout_fragments(MiniAs *as) {
             }
             stmt->offset = sub->size;
             if (stmt->kind == MINIAS_STMT_ALIGN &&
-                strcmp(stmt->op, ".org") != 0) {
+                stmt->org_target_fixed) {
+                uint64_t pad;
+                if (stmt->org_target < sub->size) {
+                    minias_set_error(as,
+                        "org-backwards-after-layout:line=%zu:current=%llu:target=%llu",
+                        stmt->line, (unsigned long long)sub->size,
+                        (unsigned long long)stmt->org_target);
+                    return false;
+                }
+                pad = stmt->org_target - sub->size;
+                if (pad > UINT32_MAX) {
+                    minias_set_error(as,"org-gap-too-large-after-layout:line=%zu",
+                                     stmt->line);
+                    return false;
+                }
+                stmt->size = (uint32_t)pad;
+            } else if (stmt->kind == MINIAS_STMT_ALIGN &&
+                       strcmp(stmt->op, ".org") != 0) {
                 const uint64_t alignment = stmt->align;
                 uint64_t pad;
                 if (alignment == 0U ||
@@ -620,8 +637,15 @@ static bool minias_validate_fragment_layout(MiniAs *as) {
                                  (unsigned long long)stmt->offset);
                 goto done;
             }
-            if(stmt->kind==MINIAS_STMT_ALIGN &&
-               strcmp(stmt->op,".org")!=0) {
+            if(stmt->kind==MINIAS_STMT_ALIGN && stmt->org_target_fixed) {
+                if(stmt->org_target<cursor[sub_index] ||
+                   stmt->org_target-cursor[sub_index]!=stmt->size) {
+                    minias_set_error(as,"fragment-org-target-drift:line=%zu",
+                                     stmt->line);
+                    goto done;
+                }
+            } else if(stmt->kind==MINIAS_STMT_ALIGN &&
+                      strcmp(stmt->op,".org")!=0) {
                 uint64_t alignment=stmt->align,padding;
                 if(alignment==0U || (alignment&(alignment-1U))!=0U) {
                     minias_set_error(as,"invalid-layout-alignment:line=%zu",
@@ -708,8 +732,9 @@ done:
 /* One persistent MCFragment fixed point; Target only owns the branch
  * range predicate and its expansion size. Common owns every label anchor,
  * subsection, deferred DATA fragment and alignment adjustment.
- * Layout-sensitive .if/.org/.set source may change fragment cardinality,
- * so those statements deliberately retain a conservative reparse fallback.
+ * Parse-site fixed .org and lexical conditionals can be re-laid out without
+ * reopening source. Location-dependent .if/.org/.set may change Fragment
+ * cardinality or symbol semantics and retain the conservative fallback.
  */
 bool minias_solve_fragment_layout(MiniAs *as,
                                   size_t **forced_ids, size_t *forced_count,

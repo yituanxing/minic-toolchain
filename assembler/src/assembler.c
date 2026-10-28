@@ -1525,6 +1525,7 @@ static bool parse_set(MiniAs *as, char *args, size_t line) {
 
 static bool handle_org(MiniAs *as, const char *args, size_t line) {
     int64_t evaluated;
+    int64_t lexical_target;
     uint64_t desired;
     uint64_t current;
     uint64_t pad;
@@ -1559,6 +1560,17 @@ static bool handle_org(MiniAs *as, const char *args, size_t line) {
                   (uint32_t)pad,
                   1U)) {
         return false;
+    }
+    /* Only a pure integer expression is independent of later layout.
+     * A .org based on '.', a label or a mutable .set is intentionally not
+     * frozen: those still require re-evaluating parser control flow. */
+    if (minias_eval_i64_expression(args, &lexical_target) &&
+        lexical_target == evaluated) {
+        MiniAsStmt *fragment = &as->stmts[as->stmt_count - 1U];
+        fragment->org_target_fixed = true;
+        fragment->org_target = desired;
+    } else {
+        as->layout_sensitive = true;
     }
     return advance_current_location(as, pad);
 }
@@ -3043,14 +3055,12 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
         bool nonblank=text[3]=='n';
         const char *arg=text+(nonblank?5U:4U);
         while(isspace((unsigned char)*arg))++arg;
-        as->layout_sensitive=true;
         return push_conditional_value(as,nonblank?*arg!='\0':*arg=='\0');
     }
     if ((strncmp(text,".ifeqs",6U)==0 ||
          strncmp(text,".ifnes",6U)==0) &&
         (text[6]=='\0' || isspace((unsigned char)text[6]))) {
         bool unequal=text[3]=='n';
-        as->layout_sensitive=true;
         return push_conditional_strings(as,minias_trim(text+6U),
                                         unequal,true,line);
     }
@@ -3061,7 +3071,6 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
          (text[3]=='n' && text[4]=='c' &&
           (text[5]=='\0' || isspace((unsigned char)text[5]))))) {
         bool unequal=text[3]=='n';
-        as->layout_sensitive=true;
         return push_conditional_strings(as,
                  minias_trim(text+(unequal?5:4)),unequal,false,line);
     }
@@ -3074,7 +3083,6 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
          (text[9]=='\0' || isspace((unsigned char)text[9])))) {
         bool negate=text[3]=='n';
         unsigned width=negate?(text[4]=='o'?9U:7U):6U;
-        as->layout_sensitive=true;
         return push_conditional_defined(as,minias_trim(text+width),
                                         negate,line);
     }
@@ -3088,7 +3096,9 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
             size_t width=strlen(name);
             if(strncmp(text,name,width)==0 &&
                (text[width]=='\0' || isspace((unsigned char)text[width]))) {
-                as->layout_sensitive=true;
+                int64_t literal;
+                if (!minias_eval_i64_expression(text+width,&literal))
+                    as->layout_sensitive=true;
                 return push_conditional_numeric(as,
                            minias_trim(text+width),name,line);
             }
@@ -3096,14 +3106,18 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
     }
     if (strncmp(text, ".if", 3U) == 0 &&
         (text[3] == '\0' || isspace((unsigned char)text[3]))) {
-        /* .if may inspect '.', local symbol values and derived absolute
-         * symbols; only reparsing fully reproduces that control flow. */
-        as->layout_sensitive = true;
+        /* A literal condition is a lexical choice.  Symbol/dot-dependent
+         * control flow can change its emitted Fragment set after layout. */
+        int64_t literal;
+        if (!minias_eval_i64_expression(text+3U,&literal))
+            as->layout_sensitive = true;
         return push_conditional(as, minias_trim(text + 3), line);
     }
     if (strncmp(text, ".elseif", 7U) == 0 &&
         (text[7] == '\0' || isspace((unsigned char)text[7]))) {
-        as->layout_sensitive=true;
+        int64_t literal;
+        if (!minias_eval_i64_expression(text+7U,&literal))
+            as->layout_sensitive=true;
         return elseif_conditional(as,minias_trim(text+7U),line);
     }
     if (strcmp(text, ".else") == 0) {
@@ -3225,7 +3239,9 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
         memcpy(set_args,op,name_len);
         set_args[name_len]=',';
         memcpy(set_args+name_len+1U,rhs,rhs_len+1U);
-        as->layout_sensitive=true;
+        int64_t lexical_value;
+        if (!minias_eval_i64_expression(rhs, &lexical_value))
+            as->layout_sensitive=true;
         ok=parse_set(as,set_args,line);
         free(set_args);
         return ok;
@@ -3245,7 +3261,6 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
             minias_set_error(as,"bad-directive:.purgem:%s:line=%zu",name,line);
             return false;
         }
-        as->layout_sensitive=true;
         for(i=0U;i<as->macro_count;++i)
             if(!strcmp(as->macros[i].name,name)) {
                 release_macro(&as->macros[i]);
@@ -3285,9 +3300,12 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
         }
     }
 
-    if (strcmp(op, ".set") == 0 || strcmp(op, ".equ") == 0 ||
-        strcmp(op, ".org") == 0) {
-        as->layout_sensitive = true;
+    if (strcmp(op, ".set") == 0 || strcmp(op, ".equ") == 0) {
+        const char *comma = strchr(args, ',');
+        int64_t literal;
+        if (comma == NULL || !minias_eval_i64_expression(comma + 1U,
+                                                          &literal))
+            as->layout_sensitive = true;
     }
     /* Space/skip/zero depend on Fragment layout, not parser control flow:
      * the shared MCLayout fixed point resolves dot and forward symbols.
@@ -3486,7 +3504,6 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
                 return false;
             }
             as->altmacro_active=strcmp(op,".altmacro")==0;
-            as->layout_sensitive=true;
             return true;
         }
         if (strcmp(op, ".file") == 0 ||
