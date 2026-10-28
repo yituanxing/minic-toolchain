@@ -25,6 +25,109 @@ void raw32(u32 val, volatile u32 *ptr) {
 void raw64(u64 val, volatile u64 *ptr) {
     asm volatile("str %x0, %1" : : "rZ"(val), "Qo"(*ptr));
 }
+u8 raw_read8(const volatile u8 *addr) {
+    u8 val;
+    asm volatile(
+        ".if 1 == 1\n"
+        "661:\n\t"
+        "ldrb %w0, [%1]\n"
+        "662:\n"
+        ".pushsection .altinstructions,\"a\"\n"
+        " .word 661b - .\n"
+        " .word 663f - .\n"
+        " .hword 91\n"
+        " .byte 662b-661b\n"
+        " .byte 664f-663f\n"
+        ".popsection\n"
+        ".subsection 1\n"
+        "663:\n\t"
+        "ldarb %w0, [%1]\n"
+        "664:\n\t"
+        ".org . - (664b-663b) + (662b-661b)\n\t"
+        ".org . - (662b-661b) + (664b-663b)\n\t"
+        ".previous\n"
+        ".endif\n"
+        : "=r"(val) : "r"(addr));
+    return val;
+}
+
+u16 raw_read16(const volatile u16 *addr) {
+    u16 val;
+    asm volatile(
+        ".if 1 == 1\n"
+        "661:\n\t"
+        "ldrh %w0, [%1]\n"
+        "662:\n"
+        ".pushsection .altinstructions,\"a\"\n"
+        " .word 661b - .\n"
+        " .word 663f - .\n"
+        " .hword 91\n"
+        " .byte 662b-661b\n"
+        " .byte 664f-663f\n"
+        ".popsection\n"
+        ".subsection 1\n"
+        "663:\n\t"
+        "ldarh %w0, [%1]\n"
+        "664:\n\t"
+        ".org . - (664b-663b) + (662b-661b)\n\t"
+        ".org . - (662b-661b) + (664b-663b)\n\t"
+        ".previous\n"
+        ".endif\n"
+        : "=r"(val) : "r"(addr));
+    return val;
+}
+
+u32 raw_read32(const volatile u32 *addr) {
+    u32 val;
+    asm volatile(
+        ".if 1 == 1\n"
+        "661:\n\t"
+        "ldr %w0, [%1]\n"
+        "662:\n"
+        ".pushsection .altinstructions,\"a\"\n"
+        " .word 661b - .\n"
+        " .word 663f - .\n"
+        " .hword 91\n"
+        " .byte 662b-661b\n"
+        " .byte 664f-663f\n"
+        ".popsection\n"
+        ".subsection 1\n"
+        "663:\n\t"
+        "ldar %w0, [%1]\n"
+        "664:\n\t"
+        ".org . - (664b-663b) + (662b-661b)\n\t"
+        ".org . - (662b-661b) + (664b-663b)\n\t"
+        ".previous\n"
+        ".endif\n"
+        : "=r"(val) : "r"(addr));
+    return val;
+}
+
+u64 raw_read64(const volatile u64 *addr) {
+    u64 val;
+    asm volatile(
+        ".if 1 == 1\n"
+        "661:\n\t"
+        "ldr %0, [%1]\n"
+        "662:\n"
+        ".pushsection .altinstructions,\"a\"\n"
+        " .word 661b - .\n"
+        " .word 663f - .\n"
+        " .hword 91\n"
+        " .byte 662b-661b\n"
+        " .byte 664f-663f\n"
+        ".popsection\n"
+        ".subsection 1\n"
+        "663:\n\t"
+        "ldar %0, [%1]\n"
+        "664:\n\t"
+        ".org . - (664b-663b) + (662b-661b)\n\t"
+        ".org . - (662b-661b) + (664b-663b)\n\t"
+        ".previous\n"
+        ".endif\n"
+        : "=r"(val) : "r"(addr));
+    return val;
+}
 void prefetch_read(const void *ptr) {
     asm volatile("prfm pldl1keep, %a0\n" : : "p"(ptr));
 }
@@ -40,15 +143,26 @@ int main(void) {
     raw64(0x8877665544332211ULL, &d);
     prefetch_read((const void *)&b);
     prefetch_write((const void *)&d);
+    if (raw_read8(&b) != b || raw_read16(&h) != h ||
+        raw_read32(&w) != w || raw_read64(&d) != d)
+        return 2;
     return b==0xa5 && h==0xa52c && w==0x87654321U &&
            d==0x8877665544332211ULL ? 42 : 1;
 }
 SRC
 "$gnu" -static -O0 -x c "$work/raw-io.i" -o "$work/gnu.elf"
 "$cc" --target=aarch64-linux -S "$work/raw-io.i" -o "$work/mini.s"
-for ins in 'strb w9, [x10]' 'strh w9, [x10]'            'str w9, [x10]' 'str x9, [x10]' 'prfm pldl1keep, [x9]' 'prfm pstl1keep, [x9]'; do
+for ins in 'strb w9, [x10]' 'strh w9, [x10]'            'str w9, [x10]' 'str x9, [x10]' 'prfm pldl1keep, [x9]' 'prfm pstl1keep, [x9]' \
+           'ldrb w9, [x10]' 'ldrh w9, [x10]' \
+           'ldr w9, [x10]' 'ldr x9, [x10]' \
+           'ldarb w9, [x10]' 'ldarh w9, [x10]' \
+           'ldar w9, [x10]' 'ldar x9, [x10]'; do
     grep -Fq "$ins" "$work/mini.s"
 done
+"$gnu" -c -x assembler "$work/mini.s" -o "$work/mini.o"
+aarch64-linux-gnu-readelf -r "$work/mini.o" > "$work/mini.reloc"
+count=$(grep -c 'R_AARCH64_PREL32' "$work/mini.reloc" || true)
+test "$count" -eq 8 || { echo "raw-read PREL32=$count != 8" >&2; exit 1; }
 "$gnu" -static -O0 -x assembler "$work/mini.s" -o "$work/mini.elf"
 for name in gnu mini; do
     rc=0
@@ -68,17 +182,22 @@ samples={
   "added-clobber": ('"Qo"(*ptr));', '"Qo"(*ptr) : "memory");'),
   "prefetch-extra": ('"prfm pldl1keep, %a0\\n"', '"prfm pldl1keep, %a0; nop\\n"'),
   "prefetch-constraint": ('"p"(ptr));', '"i"(ptr));'),
-  "prefetch-nonvolatile": ('asm volatile("prfm', 'asm("prfm')
+  "prefetch-nonvolatile": ('asm volatile("prfm', 'asm("prfm'),
+  "read-cpucap": ('" .hword 91\\n"', '" .hword 92\\n"'),
+  "read-new-insn": ('"ldarb %w0, [%1]\\n"', '"ldarh %w0, [%1]\\n"'),
+  "read-old-insn": ('"ldrb %w0, [%1]\\n"', '"ldrb %w0, [%1]; nop\\n"'),
+  "read-output": (': "=r"(val)', ': "=m"(val)'),
+  "read-input": (': "=r"(val) : "r"(addr)', ': "=r"(val) : "i"(addr)')
 }
 for name,(old,new) in samples.items():
     if old not in src: raise SystemExit("bad original GNU mutation "+name)
     (dest/("bad-"+name+".i")).write_text(src.replace(old,new,1))
 PY
-for bad in extra-instruction wrong-constraint wrong-width wrong-input            no-volatile added-clobber prefetch-extra prefetch-constraint prefetch-nonvolatile; do
+for bad in extra-instruction wrong-constraint wrong-width wrong-input            no-volatile added-clobber prefetch-extra prefetch-constraint prefetch-nonvolatile read-cpucap read-new-insn read-old-insn read-output read-input; do
     if "$cc" --target=aarch64-linux -S "$work/bad-$bad.i"         -o "$work/bad-$bad.s" >"$work/$bad.out" 2>"$work/$bad.err"; then
         echo "FAIL raw MMIO unsafe mutation accepted: $bad" >&2
         exit 1
     fi
     test ! -e "$work/bad-$bad.s"
 done
-echo 'MINIC_AARCH64_LINUX_RAW_MMIO_GNU_QEMU=PASS store_widths=4 prefetch_hints=2 negative=9 target_hardware=1'
+echo 'MINIC_AARCH64_LINUX_RAW_MMIO_GNU_QEMU=PASS store_widths=4 read_alt_widths=4 prefetch_hints=2 negative=14 cpucap=91 PREL32=8 target_hardware=1'
