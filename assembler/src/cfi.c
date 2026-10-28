@@ -33,7 +33,8 @@ static MiniAsCfiABI minias_cfi_abi(const MiniAs *as) {
 enum {
     CFI_DEF_CFA = 1, CFI_DEF_CFA_OFFSET, CFI_OFFSET, CFI_RESTORE,
     CFI_REMEMBER, CFI_RESTORE_STATE, CFI_NEGATE_RA,
-    CFI_DEF_CFA_REGISTER, CFI_UNDEFINED, CFI_SAME_VALUE
+    CFI_DEF_CFA_REGISTER, CFI_UNDEFINED, CFI_SAME_VALUE,
+    CFI_VAL_OFFSET, CFI_REGISTER, CFI_ESCAPE_BYTE
 };
 
 static bool cfi_grow(void **where, size_t *capacity, size_t count,
@@ -133,6 +134,85 @@ static bool cfi_append(MiniAs *as,unsigned kind,unsigned reg,int64_t value) {
     return true;
 }
 
+/* Common tracks GNU CFA state independently of ISA encodings. A nested
+ * remember/restore is a typed stack snapshot, not an instruction replay;
+ * the newest unmatched remember owns the CFA offset to be restored. */
+static bool cfi_saved_cfa(const MiniAs *as,const MiniAsCfiProc *proc,
+                          int64_t *value,bool *known) {
+    size_t j=proc->first_op+proc->op_count;
+    size_t nested=0U;
+    while(j>proc->first_op) {
+        const MiniAsCfiOp *ev=&as->cfi_ops[--j];
+        if(ev->kind==CFI_RESTORE_STATE)++nested;
+        else if(ev->kind==CFI_REMEMBER) {
+            if(nested==0U) {
+                *value=ev->value;
+                *known=ev->reg!=0U;
+                return true;
+            }
+            --nested;
+        }
+    }
+    return false;
+}
+
+/* GNU .cfi_escape accepts raw DWARF bytes. First validate the whole
+ * sequence; malformed input cannot leave a partially appended event.
+ * Each byte becomes a typed CFI event at the same Fragment position. */
+static bool cfi_escape_directive(MiniAs *as,const char *args,size_t line) {
+    uint8_t *bytes;
+    size_t count=0U,cap=strlen(args),i=0U;
+    const char *p=args;
+    if(cap==0U)goto bad;
+    bytes=malloc(cap);
+    if(!bytes) {
+        minias_set_error(as,"out-of-memory:cfi-escape");
+        return false;
+    }
+    while(*p) {
+        char token[80];
+        size_t n=0U;
+        int64_t value;
+        while(*p==' ' || *p=='\t')++p;
+        while(*p && *p!=',') {
+            if(n+1U>=sizeof(token))goto invalid;
+            token[n++]=*p++;
+        }
+        while(n && (token[n-1U]==' ' || token[n-1U]=='\t'))--n;
+        token[n]='\0';
+        if(!n || !cfi_integer(token,&value) || value<0 || value>255)
+            goto invalid;
+        bytes[count++]=(uint8_t)value;
+        if(*p==',') {
+            ++p;
+            if(!*p)goto invalid;
+        }
+    }
+    /* Reserve all records before the first anchor mutation. */
+    if(count>SIZE_MAX-as->cfi_op_count ||
+       !cfi_grow((void **)&as->cfi_ops,&as->cfi_op_capacity,
+                 as->cfi_op_count+count,sizeof(*as->cfi_ops))) {
+        free(bytes);
+        minias_set_error(as,"out-of-memory:cfi-escape-events");
+        return false;
+    }
+    for(i=0U;i<count;++i) {
+        if(!cfi_append(as,CFI_ESCAPE_BYTE,0U,(int64_t)bytes[i])) {
+            free(bytes);
+            minias_set_error(as,"cfi-escape-anchor:line=%zu",line);
+            return false;
+        }
+    }
+    free(bytes);
+    return true;
+invalid:
+    free(bytes);
+bad:
+    minias_set_error(as,"unsupported-dwarf-cfi:.cfi_escape:%s:line=%zu",
+                     args,line);
+    return false;
+}
+
 bool minias_cfi_directive(MiniAs *as,const char *op,
                           const char *args,size_t line) {
     MiniAsCfiProc *proc;
@@ -180,6 +260,9 @@ bool minias_cfi_directive(MiniAs *as,const char *op,
         proc->end_symbol=SIZE_MAX;
         proc->first_op=as->cfi_op_count;
         proc->simple=strcmp(args,"simple")==0;
+        proc->cfa_known=true;
+        proc->cfa_offset=proc->simple?0:
+                           (int64_t)as->target->cfi_initial_cfa_offset;
         as->cfi_active=true;
         return true;
     }
@@ -202,12 +285,24 @@ bool minias_cfi_directive(MiniAs *as,const char *op,
         proc->end_symbol=anchor;as->cfi_active=false;
         return true;
     }
-    if (!strcmp(op,".cfi_def_cfa") || !strcmp(op,".cfi_offset")) {
-        if (!cfi_two(args,&reg,&value) ||
-            (!strcmp(op,".cfi_def_cfa") && value<0) ||
-            (!strcmp(op,".cfi_offset") &&
-             (value>0 || value%minias_cfi_abi(as).data_align != 0))) goto bad;
-        kind=!strcmp(op,".cfi_def_cfa")?CFI_DEF_CFA:CFI_OFFSET;
+    if(!strcmp(op,".cfi_escape"))
+        return cfi_escape_directive(as,args,line);
+    if (!strcmp(op,".cfi_def_cfa") || !strcmp(op,".cfi_offset") ||
+        !strcmp(op,".cfi_val_offset") || !strcmp(op,".cfi_register")) {
+        bool def=!strcmp(op,".cfi_def_cfa");
+        bool offset=!strcmp(op,".cfi_offset");
+        bool val=!strcmp(op,".cfi_val_offset");
+        if(!cfi_two(args,&reg,&value) || (def && value<0) ||
+           ((offset || val) &&
+            (value>0 || value%minias_cfi_abi(as).data_align!=0)) ||
+           (!def && !offset && !val && (value<0 || value>255)))
+            goto bad;
+        kind=def?CFI_DEF_CFA:offset?CFI_OFFSET:
+             val?CFI_VAL_OFFSET:CFI_REGISTER;
+        if(def) {
+            proc->cfa_offset=value;
+            proc->cfa_known=true;
+        }
     } else if (!strcmp(op,".cfi_def_cfa_offset") ||
                !strcmp(op,".cfi_def_cfa_register") ||
                !strcmp(op,".cfi_restore") ||
@@ -215,20 +310,39 @@ bool minias_cfi_directive(MiniAs *as,const char *op,
                !strcmp(op,".cfi_same_value")) {
         if (!cfi_integer(args,&value) || value<0 ||
             (!strcmp(op,".cfi_def_cfa_offset")?false:value>255))goto bad;
-        if (!strcmp(op,".cfi_def_cfa_offset"))
+        if (!strcmp(op,".cfi_def_cfa_offset")) {
             kind=CFI_DEF_CFA_OFFSET;
+            proc->cfa_offset=value;
+            proc->cfa_known=true;
+        }
         else {
             reg=(unsigned)value;
             kind=!strcmp(op,".cfi_def_cfa_register")?CFI_DEF_CFA_REGISTER:
                  !strcmp(op,".cfi_restore")?CFI_RESTORE:
                  !strcmp(op,".cfi_undefined")?CFI_UNDEFINED:CFI_SAME_VALUE;
         }
-    } else if (!strcmp(op,".cfi_remember_state") && !*args) {
+    } else if(!strcmp(op,".cfi_adjust_cfa_offset")) {
+        int64_t delta;
+        if(!cfi_integer(args,&delta) || !proc->cfa_known ||
+           (delta>0 && proc->cfa_offset>INT64_MAX-delta) ||
+           (delta<0 && proc->cfa_offset<INT64_MIN-delta) ||
+           proc->cfa_offset+delta<0)goto bad;
+        proc->cfa_offset+=delta;
+        value=proc->cfa_offset;
+        kind=CFI_DEF_CFA_OFFSET;
+    } else if(!strcmp(op,".cfi_remember_state") && !*args) {
         kind=CFI_REMEMBER;
+        reg=proc->cfa_known?1U:0U;
+        value=proc->cfa_offset;
         ++proc->state_depth;
-    } else if (!strcmp(op,".cfi_restore_state") && !*args &&
-               proc->state_depth>0U) {
+    } else if(!strcmp(op,".cfi_restore_state") && !*args &&
+              proc->state_depth>0U) {
+        int64_t saved;
+        bool known;
+        if(!cfi_saved_cfa(as,proc,&saved,&known))goto bad;
         kind=CFI_RESTORE_STATE;
+        proc->cfa_offset=saved;
+        proc->cfa_known=known;
         --proc->state_depth;
     } else if (!strcmp(op,".cfi_window_save") && !*args &&
                minias_cfi_abi(as).negate_ra_opcode!=0U) {
@@ -346,6 +460,15 @@ static bool encode_cfi(MiniAs *as,int sec,const MiniAsCfiOp *op) {
             return put8(as,sec,0x07U) && uleb(as,sec,op->reg);
         case CFI_SAME_VALUE:
             return put8(as,sec,0x08U) && uleb(as,sec,op->reg);
+        case CFI_REGISTER:
+            return put8(as,sec,0x09U) && uleb(as,sec,op->reg) &&
+                   uleb(as,sec,(uint64_t)op->value);
+        case CFI_VAL_OFFSET:
+            magnitude=(uint64_t)(op->value/minias_cfi_abi(as).data_align);
+            return put8(as,sec,0x14U) && uleb(as,sec,op->reg) &&
+                   uleb(as,sec,magnitude);
+        case CFI_ESCAPE_BYTE:
+            return put8(as,sec,(uint8_t)op->value);
         default: return false;
     }
 }

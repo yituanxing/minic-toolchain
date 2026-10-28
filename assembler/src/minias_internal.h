@@ -329,6 +329,8 @@ typedef struct MiniAsCfiProc {
     size_t first_op;
     size_t op_count;
     unsigned state_depth;
+    int64_t cfa_offset;
+    bool cfa_known;
     bool simple;        /* GNU .cfi_startproc simple suppresses initial CFA */
     bool signal_frame;  /* GNU .cfi_signal_frame changes CIE augmentation */
 } MiniAsCfiProc;
@@ -610,6 +612,7 @@ typedef struct MiniAsTargetOps {
     unsigned cfi_stack_reg;
     unsigned cfi_address_size;
     unsigned cfi_negate_ra_opcode;
+    unsigned cfi_initial_cfa_offset;
     void (*resolve_cfi_abi)(const MiniAs *, MiniAsCfiABI *);
     /* GNU assembler directive dialect belongs to TargetInfo, not Common. */
     unsigned default_exec_alignment; /* zero: 4; x86 GNU .text has alignment 1 */
