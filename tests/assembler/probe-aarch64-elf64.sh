@@ -1572,7 +1572,7 @@ A64_MOVW_RELOC
 cmp "$work/a64-movw-mini.bin" "$work/a64-movw-gnu.bin"
 for flavor in mini gnu; do
     "$AARCH64_READELF" -Wr "$work/a64-movw-$flavor.o" |
-      awk '$3 ~ /^R_AARCH64_MOVW_UABS_G/ {print $1,$3,$5,$6,$7}' |
+      awk '$3 ~ /^R_AARCH64_MOVW_[US]ABS_G/ {print $1,$3,$5,$6,$7}' |
       LC_ALL=C sort > "$work/a64-movw-$flavor.rels"
     test "$(wc -l < "$work/a64-movw-$flavor.rels")" -eq 12
 done
