@@ -2784,10 +2784,10 @@ echo 'MINIAS_COMMON_ALT_MACRO_INLINE_IFC=PASS GNU_recursive_evaluated_and_lexica
 # offset and RELA fixup lifecycle remain the same Common code as A64.
 cat > "$work/x86-explicit-reloc.s" <<'X64_EXPLICIT'
 .text
-.word 0
-.word 0
+.long 0
+.long 0
 .reloc 0, R_X86_64_PC32, ext_rel+16
-.reloc 2, R_X86_64_PC32, ext_rel+32
+.reloc 4, R_X86_64_PC32, ext_rel+32
 X64_EXPLICIT
 "$MINIAS" --target=x86_64 -o "$work/x86-explicit-reloc-mini.o" "$work/x86-explicit-reloc.s"
 as --64 -o "$work/x86-explicit-reloc-gnu.o" "$work/x86-explicit-reloc.s"
