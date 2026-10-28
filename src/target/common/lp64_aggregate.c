@@ -6,7 +6,9 @@
  * but register numbering, stack assignment and argument emission do not. */
 /* Integer-class LP64 record arguments, shared only as ABI classification.
  * Layout remains target-owned; register placement is ISA-specific.
- * Never claim HFAs, packed/unaligned records, bitfields or vector ABI.
+ * Integer-only packed bit-field aggregates still have INTEGER ABI class:
+ * copy their complete DataLayout bytes through GP eightbytes, never the
+ * individual bit-fields. Reject FP/HFA, vector and unaligned scalar loads.
  * For <=16-byte integral-only aggregates, payload bytes travel as one
  * or two complete integer eightbytes, with the last slot padded to 8. */
 static bool minic_multi_integer_record_members(
@@ -23,8 +25,8 @@ static bool minic_multi_integer_record_members(
         return total <= 8U;
     if (!minic_type_is_record(type)) return false;
     record = minic_c0_program_record(program, type.record_id);
-    if (record == NULL || !record->is_complete || record->is_packed ||
-        record->pack_alignment != 0U || record->field_count == 0U)
+    if (record == NULL || !record->is_complete ||
+        record->field_count == 0U)
         return false;
     for (i = 0U; i < record->field_count; ++i) {
         const MinicRecordField *field = minic_c0_record_field(record, i);
@@ -34,9 +36,12 @@ static bool minic_multi_integer_record_members(
          * struct { unsigned char bytes[12]; } has twelve value bytes, not
          * twelve ABI registers; classify by the enclosing 1-2 eightbytes.
          * Reuse DataLayout's element size and natural member alignment.
-         * Reject flexible/zero length arrays, floats/HFAs, packed members,
-         * bitfields, and storage overflow instead of guessing ABI classes. */
-        if (field == NULL || field->is_packed ||
+         * Reject flexible/zero length arrays, floats/HFAs, and storage
+         * overflow. Packed integer bit-fields are INTEGER class when
+         * DataLayout proves that their bytes belong to this record.
+         * Ordinary fields must remain naturally aligned: native direct
+         * LP64 loads are not yet an unaligned-word access ABI. */
+        if (field == NULL ||
             field->is_flexible_array || field->is_zero_length_array ||
             field->element_count == 0U ||
             (!field->is_array && field->element_count != 1U) ||

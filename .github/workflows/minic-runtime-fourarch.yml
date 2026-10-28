@@ -47,6 +47,7 @@ on:
       - "tests/compiler/c0/probe-aarch64-linux-volatile-mrs.sh"
       - "tests/compiler/c0/probe-direct-lp64-weak-section-qemu.sh"
       - "tests/compiler/c0/probe-lp64-core-record-snapshot-qemu.sh"
+      - "tests/compiler/c0/probe-lp64-packed-integer-record-qemu.sh"
       - "tests/compiler/c0/probe-aarch64-linux-zero-operand-hints.sh"
       - "tests/compiler/c0/probe-loong-linux-zero-operand-dbar.sh"
       - "src/target/aarch64/call_emit.c"
@@ -641,6 +642,12 @@ jobs:
           set -Eeuo pipefail
           bash tests/compiler/c0/probe-loongarch-cpucfg-qemu.sh \
             "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
+      - name: GNU/MiniC bi-directional packed integer bitfield LP64 ABI under QEMU
+        if: matrix.target == 'aarch64' || matrix.target == 'loongarch64'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash tests/compiler/c0/probe-lp64-packed-integer-record-qemu.sh "${{ matrix.target }}" "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
       - name: GNU Linux const record parameters and volatile snapshots on LP64
         if: matrix.target == 'aarch64' || matrix.target == 'loongarch64'
         shell: bash
