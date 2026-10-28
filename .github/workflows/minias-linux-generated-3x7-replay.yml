@@ -1,0 +1,103 @@
+name: MiniAS Genuine Kbuild-Generated Linux 3x7 Replay
+
+# Immutable GNU Linux 6.6.143 producer outputs from SUCCESS run 40658346252.
+# Includes real GNU-created binary .incbin dependencies. No refetching,
+# placeholder data, compiler changes, or cross-target config drift.
+# 21 independent source-to-ELF MiniAS scans; NOT GNU ELF semantic parity.
+on:
+  workflow_dispatch:
+  push:
+    branches: [refactor/minias-target-isa-abi-core]
+    paths:
+      - '.github/workflows/minias-linux-generated-3x7-replay.yml'
+      - 'assembler/src/assembler.c'
+      - 'assembler/src/aarch64_target.c'
+      - 'assembler/src/x86_64_target.c'
+      - 'assembler/src/cfi.c'
+      - 'assembler/src/expression.c'
+      - 'tools/ci/minias-linux-kbuild-seven-v1.py'
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  shard:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minias-generated-3x7]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64, aarch64, loongarch64]
+        shard: [0, 1, 2, 3, 4, 5, 6]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: '40658346252'
+          github-token: ${{ github.token }}
+          name: minias-linux-kbuild-${{ matrix.target }}-shard${{ matrix.shard }}
+          path: build/minias-genuine
+      - name: Prove original GNU Kbuild/config/S/CMD/incbin identity for each shard
+        run: |
+          python3 - '${{ matrix.target }}' '${{ matrix.shard }}' <<'PY_PIN'
+          import importlib.util, pathlib, sys
+          target, shard = sys.argv[1], int(sys.argv[2])
+          expected_config = {
+            "x86_64": "5a50dea34d0a1793c6a8320c15f11b695f1c71fe7b4fbb89bc514f2660ddad65",
+            "aarch64": "f865fdfb8ccaa5aa9580e0d5bea7a48c6382d37224f751c6ec37969bbafe174f",
+            "loongarch64": "457d95d9e03620d3f437dfca63bb93c867c30a92649e8705f36ed66d013441ca"
+          }
+          expected_total={"x86_64":2763,"aarch64":4140,"loongarch64":2742}
+          spec=importlib.util.spec_from_file_location("kbuild","tools/ci/minias-linux-kbuild-seven-v1.py")
+          tool=importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(tool)
+          archive=pathlib.Path(f"build/minias-genuine/shard-{shard}.tar.gz")
+          manifest,digest,selected=tool.checked_shard(archive,target,shard)
+          assert manifest["authentic_incbin_frozen"] is True
+          assert manifest["full_kbuild"] and manifest["build_exit"]==0
+          assert manifest["config_sha256"]==expected_config[target]
+          assert manifest["total"]==expected_total[target]
+          assert len(selected)>0
+          print(f"MINIAS_GENUINE_PRODUCER_PIN=PASS target={target} shard={shard} "
+                f"files={len(selected)} manifest={digest} original_GNU=YES")
+          PY_PIN
+      - name: Build current MiniAS on exact HEAD with warnings as errors
+        run: make -j2 MODE=release CFLAGS=-Werror build/release/bin/minic-as
+      - name: Scan original per-target Linux owners against genuine generated blobs
+        run: |
+          python3 tools/ci/minias-linux-kbuild-seven-v1.py scan \
+            --target '${{ matrix.target }}' --shard '${{ matrix.shard }}' \
+            --archive 'build/minias-genuine/shard-${{ matrix.shard }}.tar.gz' \
+            --minias "$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            --dest 'build/minias-genuine-scan/${{ matrix.target }}-${{ matrix.shard }}'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: minias-genuine-result-${{ matrix.target }}-${{ matrix.shard }}
+          path: build/minias-genuine-scan/${{ matrix.target }}-${{ matrix.shard }}/results.json
+          if-no-files-found: error
+          retention-days: 14
+
+  aggregate:
+    needs: shard
+    if: always() && needs.shard.result == 'success'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: minias-genuine-result-*
+          path: build/minias-genuine-collected
+      - name: Require disjoint exactly 21 full source shards and summarize first blockers
+        run: |
+          python3 tools/ci/minias-linux-kbuild-seven-v1.py aggregate \
+            --results build/minias-genuine-collected \
+            --dest build/minias-genuine-summary.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: minias-genuine-three-target-summary
+          path: build/minias-genuine-summary.json
+          if-no-files-found: error
+          retention-days: 14
