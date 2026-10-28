@@ -1983,6 +1983,20 @@ for bad in 'rep rdtsc' 'repe movq %rax,%rbx' 'rep bad_instruction'; do
   fi
 done
 echo 'MINIAS_X86_REP=PASS GNU_GAS_BYTES rep_repz_repe_repne_repnz canonical_66_REX_prefix'
+# GNU function-like spellings are Common directive lexical forms,
+# not independent target assembler implementations.
+cat > "$work/common-glued.s" <<'COMMON_GLUED'
+.data
+.long(3+4)
+.byte(2)
+.quad(0x11223344)
+COMMON_GLUED
+"$MINIAS" --target=x86_64 -o "$work/glued-mini.o" "$work/common-glued.s"
+as --64 -o "$work/glued-gnu.o" "$work/common-glued.s"
+objcopy -j .data -O binary "$work/glued-mini.o" "$work/glued-mini.bin"
+objcopy -j .data -O binary "$work/glued-gnu.o" "$work/glued-gnu.bin"
+cmp "$work/glued-mini.bin" "$work/glued-gnu.bin"
+echo 'MINIAS_COMMON_GLUED_DATA=PASS GNU_GAS_directive_parenthesized'
 echo 'MINIAS_COMMON_NUMERIC_U64=PASS GNU_GAS_x86_LA64_exact_data_bytes'
 echo 'MINIAS_X86_SEGMENTED_INDIRECT=PASS GNU_AS_text_and_relocations segment_base_index_abs_rip=true indirect_memory_call_jmp=true absolute_symbol32S=true'
 echo 'MINIAS_TWO_TARGET_ORACLE=PASS x86_GNU_bytes=equal loong_GNU_bytes=equal ELF_machine=correct lp64d_v1=0x43 CET_endbr64=1 ALU_imm8_imm32=1 x86_ModRM_SIB_disp=1 x86_test_cmp_alu_memory=1 x86_scaled_index_SIB=1 LA_jr=1 LA_scaled_ptr14=1 LA_imm12_shift_upper20=1 invalid=reject'

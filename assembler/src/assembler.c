@@ -4005,6 +4005,25 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
         args = minias_trim(space + 1);
     } else {
         args = space;
+        /* GNU GAS accepts function-like data directive spelling,
+         * including .inst(EXPR), .long(EXPR), .byte(EXPR), with no
+         * intervening space. Recognize it by the existing Common
+         * width/TargetInfo hook, NOT an AArch64 string special case.
+         * Limit to one fully enclosing pair; malformed directives
+         * remain errors rather than swallowing text. */
+        if(text[0]=='.') {
+            char *open=strchr(text,'(');
+            if(open!=NULL) {
+                char *last=text+strlen(text)-1U;
+                if(last>open && *last==')') {
+                    *open='\0';
+                    if(data_width(as,text)!=0U) {
+                        *last='\0';
+                        args=open+1U;
+                    } else *open='(';
+                }
+            }
+        }
     }
     op = text;
 

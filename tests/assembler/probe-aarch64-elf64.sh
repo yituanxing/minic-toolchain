@@ -113,6 +113,9 @@ external_probe:
     mrs x1, ctr_el0
     mrs x0, CNTVCT_EL0
     mrs x0, SCTLR_EL1
+    // GNU Linux macros emit .inst(<logical expression>) without space.
+    .inst(0xd5200000|((((3)<<19))))
+    .inst((0xd503201f))
     // Native GNU/LLVM checked A64 W-exclusive subword variants.
     ldxrb w2, [x3]
     ldaxrb w2, [x3]
