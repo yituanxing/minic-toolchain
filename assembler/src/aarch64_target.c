@@ -1972,8 +1972,12 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
             code=UINT32_C(0x10000000)|inst->operands[0].reg;
             fixup=MINIAS_FIXUP_A64_ADR_LO21;
             target=minias_get_symbol(as,expr->name,false);
+            /* GNU GAS emits ADR_PREL_LO21 relocations for GLOBAL/WEAK
+             * references even when their definitions reside in .text.
+             * Resolve only non-preemptible section-local symbol targets. */
             if(!target || !target->defined ||
-               target->section!=stmt->section)break;
+               target->section!=stmt->section ||
+               target->bind!=MINIAS_STB_LOCAL)break;
             if(target->value>INT64_MAX || stmt->offset>INT64_MAX ||
                (expr->addend>0 &&
                 (int64_t)target->value>INT64_MAX-expr->addend) ||
