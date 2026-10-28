@@ -1404,7 +1404,11 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             m->operands[0].immediate=width=='w'?3U:2U;
             goto done;
         }
-        if(strcmp(input?from:to,"%dx") ||
+        /* GNU GAS canonicalizes the DX port register as (%dx) in
+         * inline-asm and accepts both %dx and (%dx) spellings. This
+         * is a port operand, not a normal memory address. */
+        if((strcmp(input?from:to,"%dx") &&
+            strcmp(input?from:to,"(%dx)")) ||
            strcmp(input?to:from,acc))goto invalid;
         m->opcode=X64_ZERO;
         m->encoding=width=='w'?UINT32_C(0x66):0U;
@@ -1413,6 +1417,41 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
                      <<(width=='w'?8U:0U);
         m->operands[0].immediate=width=='w'?2U:1U;
         goto done;
+    }
+    /* x87 stack-pop arithmetic family (DE /n, st(0) source).
+     * The target ISA group field is an opcode extension, not a GPR.
+     * Reuse the proven fixed-word instruction fragment; do not let
+     * the generic x86 memory grammar reinterpret %st(N) as an address. */
+    {
+        static const struct {const char *name;unsigned group;} ops[]={
+            {"faddp",0xc0U},{"fmulp",0xc8U},
+            {"fsubp",0xe0U},{"fsubrp",0xe8U},
+            {"fdivp",0xf0U},{"fdivrp",0xf8U}
+        };
+        unsigned k;
+        for(k=0U;k<sizeof(ops)/sizeof(ops[0]);++k) {
+            unsigned reg=1U;
+            if(strcmp(s->op,ops[k].name))continue;
+            if(*s->args) {
+                char st0[X64_OPERAND_CAP],sti[X64_OPERAND_CAP];
+                const char *digits;
+                char *end;
+                unsigned long id;
+                if(!x64_args2(s->args,st0,sti) ||
+                   strcmp(st0,"%st") || strncmp(sti,"%st(",4U))
+                    goto invalid;
+                digits=sti+4U;
+                if(!isdigit((unsigned char)*digits))goto invalid;
+                errno=0;id=strtoul(digits,&end,10);
+                if(errno || id>7UL || strcmp(end,")"))goto invalid;
+                reg=(unsigned)id;
+            }
+            m->opcode=X64_ZERO;
+            m->encoding=UINT32_C(0xde)|
+                        ((uint32_t)(ops[k].group+reg)<<8U);
+            m->operands[0].immediate=2U;
+            goto done;
+        }
     }
     /* Group-3 NOT/NEG and Group-5 INC/DEC, shared typed ModR/M
      * between register and memory forms. No duplicated memory encoder. */
