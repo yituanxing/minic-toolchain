@@ -581,7 +581,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         char *a,*b,*c,*comma1,*comma2;
         unsigned count_reg=0U,source_reg=0U,dest_reg=0U;
         unsigned pp=s->op[1]=='h'?(s->op[2]=='l'?1U:3U):2U;
-        bool wc=false,ws=false,wd=false,ok=false;
+        bool wc=false,source_wide=false,dest_wide=false,ok=false;
         size_t len=strlen(s->op);
         if(!copy){free(m);minias_set_error(as,"out-of-memory:x86-bmi2");return false;}
         comma1=strchr(copy,',');
@@ -590,9 +590,9 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             *comma1='\0';*comma2='\0';
             a=minias_trim(copy);b=minias_trim(comma1+1);c=minias_trim(comma2+1);
             ok=x64_register(a,&count_reg,&wc) &&
-               x64_register(b,&source_reg,&ws) &&
-               x64_register(c,&dest_reg,&wd) && wc==ws && ws==wd &&
-               (len==4U || (len==5U && s->op[4]==(wd?'q':'l')));
+               x64_register(b,&source_reg,&source_wide) &&
+               x64_register(c,&dest_reg,&dest_wide) && wc==source_wide && source_wide==dest_wide &&
+               (len==4U || (len==5U && s->op[4]==(dest_wide?'q':'l')));
         }
         free(copy);
         if(!ok)goto invalid;
@@ -604,7 +604,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         m->operands[1].reg=source_reg;
         m->operands[2].kind=MINIAS_MC_REGISTER;
         m->operands[2].reg=dest_reg;
-        m->operands[2].register_64=wd;
+        m->operands[2].register_64=dest_wide;
         goto done;
     }
     /*
