@@ -23,7 +23,10 @@ bool minic_x86_64_asm_nospec_template(const char *text, size_t len) {
         compact[n++] = ch;
     }
     compact[n] = '\0';
-    return strcmp(compact, exact) == 0;
+    /* Original GNU Linux 6.6.143 barrier.h ends SBB with a semicolon.
+     * Permit exactly one trailing delimiter, not extra machine opcodes. */
+    return strcmp(compact, exact) == 0 ||
+           strcmp(compact, "cmp%1,%2;sbb%0,%0;") == 0;
 }
 
 static bool target_constraint_is(const MinicInlineAsmOperand *op, const char *s) {
