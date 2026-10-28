@@ -37,7 +37,7 @@ jobs:
             bash tests/assembler/probe-rv32i-elf32.sh
       - name: Assert fragment-owned, directive and synthesized relocation offsets
         run: |
-          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \\
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-fragment-fixup-ownership.sh
       - name: GCC C-to-S RV64I base ISA versus inline-asm extension gate
         run: |
