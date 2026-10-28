@@ -94,7 +94,6 @@ int main(void) {
  } return 42;
 }
 EOF
-MINIC_X86_BITOPS_TRACE=1 MINIC_ASM_BATCH_TRACE=1 \
 "$minic" --target=x86_64-linux -S "$work/bitops.i" -o "$work/bitops.s"
 for op in 'lock; btsq' 'lock; btrq' 'lock; orb %r10b' 'lock; andb %r10b' \
           'btq %r10' 'btsq %r10' 'btrq %r10' 'btcq %r10' 'setc %al'; do

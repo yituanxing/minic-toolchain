@@ -1,6 +1,5 @@
 #include "target/x86_64/asm_contract.h"
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
 /* Target-owned GNU register/constraint admission: no Core lowering state,
@@ -342,25 +341,6 @@ static bool x86_linux_bitops_source(
                           form==MINIC_X86_BITOPS_LOCK_AND_BYTE;
     const bool needs_memory_clobber = !byte_rmw ||
                                       form==MINIC_X86_BITOPS_LOCK_OR_BYTE;
-    /* Explicitly opt-in frontier evidence; no speculative acceptance or
-     * additional source/machine contract. Reusable for original frozen GNU
-     * Linux bitops first-barrier replay without global debug noise. */
-    if (src && getenv("MINIC_X86_BITOPS_TRACE"))
-        (void)fprintf(stderr,
-            "X86_BITOPS_SOURCE form=%d outputs=%zu inputs=%zu "
-            "volatile=%d memory=%d clobbers=%zu register_clobbers=%zu "
-            "out=%.*s in=%.*s template=%.*s\n",
-            (int)form, src->output_count, src->input_count,
-            src->is_volatile ? 1 : 0, src->has_memory_clobber ? 1 : 0,
-            src->clobber_count, src->register_clobber_count,
-            src->outputs ? (int)src->outputs[0].constraint_length : 0,
-            src->outputs && src->outputs[0].constraint_text ?
-                src->outputs[0].constraint_text : "",
-            src->inputs ? (int)src->inputs[0].constraint_length : 0,
-            src->inputs && src->inputs[0].constraint_text ?
-                src->inputs[0].constraint_text : "",
-            src->template_text ? (int)src->template_length : 0,
-            src->template_text ? src->template_text : "");
     const MinicInlineAsmOperand *mem,*bit,*flag;
     const MinicExpression *m,*b,*f;
     MinicType mem_type,bit_type,flag_type;
@@ -385,35 +365,19 @@ static bool x86_linux_bitops_source(
     m=minic_c0_program_expression(program,mem->expression);
     b=minic_c0_program_expression(program,bit->expression);
     f=flag?minic_c0_program_expression(program,flag->expression):NULL;
-    if (byte_rmw && getenv("MINIC_X86_BITOPS_TRACE")) {
-        MinicType um, ub;
-        const bool qm = m && minic_type_unqualified(m->type, &um);
-        const bool qb = b && minic_type_unqualified(b->type, &ub);
-        (void)fprintf(stderr,
-            "X86_BITOPS_TYPES mem_present=%d bit_present=%d "
-            "mem_lvalue=%d mem_const=%d mem_volatile=%d "
-            "unqual_mem=%d unqual_bit=%d "
-            "char=%d signed_char=%d unsigned_char=%d "
-            "bit_int=%d bit_unsigned_int=%d\n",
-            m != NULL, b != NULL,
-            m && m->value_category == MINIC_VALUE_LVALUE,
-            m && minic_type_is_const(m->type),
-            m && minic_type_is_volatile(m->type),
-            qm, qb,
-            qm && minic_type_equal(um, minic_type_char()),
-            qm && minic_type_equal(um, minic_type_signed_char()),
-            qm && minic_type_equal(um, minic_type_unsigned_char()),
-            qb && minic_type_equal(ub, minic_type_int()),
-            qb && minic_type_equal(ub, minic_type_unsigned_int()));
-    }
     if(!m||!b||m->value_category!=MINIC_VALUE_LVALUE||
        (desc->writes_memory&&minic_type_is_const(m->type))||
        !minic_type_unqualified(m->type,&mem_type)||
        !minic_type_unqualified(b->type,&bit_type)||
-       (byte_rmw?
-         (!minic_type_equal(mem_type,minic_type_char())&&
-          !minic_type_equal(mem_type,minic_type_signed_char())&&
-          !minic_type_equal(mem_type,minic_type_unsigned_char())):
+       (byte_rmw ?
+         /* GNU Linux WBYTE_ADDR may be volatile char, signed char, or
+          * unsigned char. Char *RANK*, rather than three exact type
+          * constructors, is the true 8-bit C-memory width contract:
+          * the original parsed type can carry extra source qualifiers.
+          * Do not broaden to _Bool or enum or int, or widen to 64-bit. */
+         (!minic_type_is_integer(mem_type) ||
+          mem_type.pointer_depth != 0U ||
+          mem_type.integer_rank != MINIC_INTEGER_RANK_CHAR) :
          (!minic_type_equal(mem_type,minic_type_long())&&
           !minic_type_equal(mem_type,minic_type_unsigned_long())))||
        (byte_rmw?
