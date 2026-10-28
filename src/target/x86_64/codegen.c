@@ -136,7 +136,8 @@ static bool x86_emit_function(FILE *out, const MinicC0Program *program,
             }
         }
         if (!block->has_terminator ||
-            !minic_x86_64_emit_core_terminator(out, &frame, &block->terminator, fn, function_id)) {
+            !minic_x86_64_emit_core_terminator(
+                out, program, target, &frame, &block->terminator, fn, function_id)) {
             char message[256];
             (void)snprintf(message, sizeof(message),
                            "x86-64 Core terminator unsupported: function %s block=%zu kind=%d "

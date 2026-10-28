@@ -844,13 +844,37 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
     }
 }
 
-bool minic_x86_64_emit_core_terminator(FILE *out, const MinicX86Frame *frame,
+bool minic_x86_64_emit_core_terminator(FILE *out,
+                                const MinicC0Program *program,
+                                const MinicTargetInfo *target,
+                                const MinicX86Frame *frame,
                                 const MinicCoreTerminator *term,
                                 const MinicCoreFunction *fn, size_t function_id) {
     if (term == NULL) return false;
     switch (term->kind) {
     case MINIC_CORE_TERMINATOR_RETURN:
-        if (term->return_object != MINIC_CORE_OBJECT_INVALID) return false;
+        if (term->return_object != MINIC_CORE_OBJECT_INVALID) {
+            size_t bytes;
+            if (!program || !target || !frame || !fn ||
+                term->return_value != MINIC_CORE_VALUE_INVALID ||
+                term->return_object >= fn->object_count ||
+                !minic_type_is_record(fn->return_type) ||
+                !minic_type_equal(fn->return_type,
+                    fn->objects[term->return_object].type) ||
+                !x86_object_address(out, frame, term->return_object, "%r11"))
+                return false;
+            if (minic_x86_64_one_gp_record(program, target, fn->return_type, &bytes)) {
+                if (!x86_one_gp_load(out,bytes)) return false;
+            } else if (minic_x86_64_two_gp_record(program, target, fn->return_type)) {
+                if (fputs("  movq 0(%r11), %rax\n"
+                          "  movq 8(%r11), %rdx\n",out)==EOF)return false;
+            } else {
+                /* Unclassified SSE or MEMORY/sret SysV results are rejected;
+                 * never return a record using an invented scalar ABI. */
+                return false;
+            }
+            return fprintf(out,"  jmp .Lmini_x86_f%zu_ret\n",function_id)>=0;
+        }
         if (term->return_value != MINIC_CORE_VALUE_INVALID) {
             if (minic_type_is_long_double(fn->return_type))
                 return x86_x87_load(out, frame, term->return_value) &&
