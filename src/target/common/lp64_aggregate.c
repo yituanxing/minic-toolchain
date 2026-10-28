@@ -1,3 +1,4 @@
+#include "target/common/aggregate_shape.h"
 #include "target/common/lp64_aggregate.h"
 #include <stdint.h>
 
@@ -72,15 +73,16 @@ bool minic_multi_gp_record(const MinicC0Program *program,
                                    const MinicTargetInfo *target,
                                    MinicType type, size_t *bytes,
                                    size_t *eightbytes) {
-    size_t size, align;
+    MinicAggregateStorageShape shape;
     if (bytes == NULL || eightbytes == NULL || !minic_type_is_record(type) ||
         !minic_multi_integer_record_members(program, target, type, 0U) ||
-        !minic_data_layout_type(target->data_layout, program, type,
-                                &size, &align) ||
-        size == 0U || size > 16U || align == 0U || align > 8U)
+        !minic_common_aggregate_storage_shape(
+            program, target->data_layout, type, 8U, &shape) ||
+        shape.bytes == 0U || shape.bytes > 16U ||
+        shape.alignment > 8U)
         return false;
-    *bytes = size;
-    *eightbytes = (size + 7U) / 8U;
+    *bytes = shape.bytes;
+    *eightbytes = shape.words;
     return true;
 }
 
@@ -90,14 +92,15 @@ bool minic_multi_gp_record(const MinicC0Program *program,
 bool minic_multi_indirect_record(const MinicC0Program *program,
                                         const MinicTargetInfo *target,
                                         MinicType type, size_t *bytes) {
-    size_t size, align;
+    MinicAggregateStorageShape shape;
     if (program == NULL || target == NULL || bytes == NULL ||
         !minic_type_is_record(type) ||
-        !minic_data_layout_type(target->data_layout, program, type,
-                                &size, &align) ||
-        size <= 32U || size > 2048U || align == 0U || align > 16U)
+        !minic_common_aggregate_storage_shape(
+            program, target->data_layout, type, 8U, &shape) ||
+        shape.bytes <= 32U || shape.bytes > 2048U ||
+        shape.alignment > 16U)
         return false;
-    *bytes = size;
+    *bytes = shape.bytes;
     return true;
 }
 
@@ -106,7 +109,8 @@ bool minic_multi_fp_return_record(
     MinicType type, size_t *element_count, size_t *element_width) {
     const MinicRecord *record;
     const MinicRecordField *first;
-    size_t total, align, width, i;
+    MinicAggregateStorageShape shape;
+    size_t width, i;
     if (program == NULL || target == NULL || element_count == NULL ||
         element_width == NULL || !minic_type_is_record(type))
         return false;
@@ -124,9 +128,10 @@ bool minic_multi_fp_return_record(
          !minic_type_is_double(first->type)))
         return false;
     width = minic_type_is_float(first->type) ? 4U : 8U;
-    if (!minic_data_layout_type(target->data_layout, program, type,
-                                &total, &align) ||
-        total != width * record->field_count || align != width)
+    if (!minic_common_aggregate_storage_shape(
+            program, target->data_layout, type, 8U, &shape) ||
+        shape.bytes != width * record->field_count ||
+        shape.alignment != width)
         return false;
     for (i = 0U; i < record->field_count; ++i) {
         const MinicRecordField *field = minic_c0_record_field(record, i);

@@ -1,5 +1,6 @@
 #include "target/riscv32/rv32_abi_plan.h"
 #include "target/riscv32/rv32_internal.h"
+#include "target/common/aggregate_shape.h"
 #include "target/common/core_instruction_family.h"
 #include "target/data_layout.h"
 #include <stdint.h>
@@ -43,8 +44,11 @@ static bool rv32_plan_shape(const MinicC0Program *program,
                              MinicType type, Rv32AbiWordLocation *entry) {
     size_t size, align;
     if (minic_type_is_record(type)) {
-        bool layout_ok = minic_data_layout_type(
-            target->data_layout, program, type, &size, &align);
+        MinicAggregateStorageShape shape;
+        bool layout_ok = minic_common_aggregate_storage_shape(
+            program, target->data_layout, type, 4U, &shape);
+        size = layout_ok ? shape.bytes : 0U;
+        align = layout_ok ? shape.alignment : 0U;
         if (getenv("MINIC_RV32_FRAME_TRACE") != NULL)
             (void)fprintf(stderr,
                 "RV32_RECORD_ABI_SHAPE id=%zu layout=%u bytes=%zu align=%zu\n",
@@ -56,7 +60,7 @@ static bool rv32_plan_shape(const MinicC0Program *program,
         entry->record_size = size;
         entry->indirect_record = size > 8U;
         /* GNU empty aggregates occupy no psABI register or stack word. */
-        entry->words = size > 8U ? 1U : (unsigned)((size + 3U) / 4U);
+        entry->words = size > 8U ? 1U : (unsigned)shape.words;
         return true;
     }
     return rv32_scalar_storage_words(function, type, &entry->words);

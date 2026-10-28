@@ -1,3 +1,4 @@
+#include "target/common/aggregate_shape.h"
 #include "target/x86_64/abi.h"
 #include "target/data_layout.h"
 #include <stdint.h>
@@ -50,15 +51,20 @@ bool minic_x86_64_one_gp_record(const MinicC0Program *program,
                               const MinicTargetInfo *target, MinicType type,
                               size_t *record_bytes) {
     const MinicRecord *rec;
+    MinicAggregateStorageShape shape;
     size_t size, align, i;
     if (program == NULL || target == NULL || record_bytes == NULL ||
         !minic_type_is_record(type)) return false;
     rec = minic_c0_program_record(program, type.record_id);
     if (rec == NULL || !rec->is_complete || rec->field_count == 0U ||
         rec->is_packed || rec->pack_alignment != 0U ||
-        !minic_data_layout_type(target->data_layout, program, type, &size, &align) ||
-        (size != 1U && size != 2U && size != 4U && size != 8U) ||
-        align == 0U || align > 8U) return false;
+        !minic_common_aggregate_storage_shape(
+            program, target->data_layout, type, 8U, &shape))
+        return false;
+    size = shape.bytes;
+    align = shape.alignment;
+    if ((size != 1U && size != 2U && size != 4U && size != 8U) ||
+        align > 8U) return false;
     for (i = 0U; i < rec->field_count; ++i) {
         const MinicRecordField *field = minic_c0_record_field(rec, i);
         size_t bytes, field_align, offset;
@@ -86,7 +92,8 @@ bool minic_x86_64_two_gp_record(const MinicC0Program *program,
                               const MinicTargetInfo *target, MinicType type) {
     const MinicRecord *rec;
     const MinicRecordField *a, *b;
-    size_t bytes, align, a_offset, b_offset, a_bytes, b_bytes, ignored;
+    MinicAggregateStorageShape shape;
+    size_t a_offset, b_offset, a_bytes, b_bytes, ignored;
     if (program == NULL || target == NULL || !minic_type_is_record(type))
         return false;
     rec = minic_c0_program_record(program, type.record_id);
@@ -101,12 +108,13 @@ bool minic_x86_64_two_gp_record(const MinicC0Program *program,
         a->is_array || b->is_array ||
         !minic_type_is_pointer(a->type) || !minic_type_is_integer(b->type))
         return false;
-    return minic_data_layout_type(target->data_layout, program, type, &bytes, &align) &&
+    return minic_common_aggregate_storage_shape(
+               program, target->data_layout, type, 8U, &shape) &&
            minic_data_layout_type(target->data_layout, program, a->type, &a_bytes, &ignored) &&
            minic_data_layout_type(target->data_layout, program, b->type, &b_bytes, &ignored) &&
            minic_data_layout_record_field_offset(target->data_layout, program, rec, 0U, &a_offset) &&
            minic_data_layout_record_field_offset(target->data_layout, program, rec, 1U, &b_offset) &&
-           bytes == 16U && align == 8U &&
+           shape.bytes == 16U && shape.alignment == 8U &&
            a_offset == 0U && b_offset == 8U &&
            a_bytes == 8U && b_bytes == 4U;
 }

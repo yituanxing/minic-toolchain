@@ -164,6 +164,7 @@ MINIC_SOURCES := \
 	src/target/common/direct_call_plan.c \
 	src/target/common/direct_instruction_semantics.c \
 	src/target/common/direct_residual_plan.c \
+	src/target/common/aggregate_shape.c \
 	src/target/common/lp64_aggregate.c \
 	src/target/common/lp64_scalar.c \
 	src/target/common/lp64_frame.c \

@@ -55,6 +55,21 @@ lacks src/target/common/core_object_intervals.c 'Allocation or malformed-index f
 has src/target/common/core_spill_layout.c \
   'cached_slot_sizes[value_id] = *slot_size;'
 
+# Four ISA families, five target profiles: one storage-shape owner, distinct
+# physical ABIs. RV32 must never inherit the 8-byte LP64 word policy.
+exists src/target/common/aggregate_shape.h
+exists src/target/common/aggregate_shape.c
+has src/target/common/aggregate_shape.c 'bool minic_common_aggregate_storage_shape('
+has src/target/common/aggregate_shape.c 'bool minic_common_aggregate_integral_tree('
+for consumer in src/target/x86_64/abi.c \
+                src/target/riscv32/rv32_abi_plan.c \
+                src/target/riscv64/abi.c \
+                src/target/common/lp64_aggregate.c; do
+  has "$consumer" 'minic_common_aggregate_storage_shape('
+done
+has src/target/riscv64/abi.c 'minic_common_aggregate_integral_tree('
+lacks src/target/riscv64/abi.c 'minic_riscv64_integer_aggregate_member_type('
+
 # Exhaustive Common Core semantic vocabulary must be used by all five targets.
 exists src/target/common/core_instruction_family.h
 has src/target/common/core_instruction_family.h 'minic_core_instruction_semantic_family('
