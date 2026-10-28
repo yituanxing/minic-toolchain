@@ -250,7 +250,6 @@ typedef struct MiniAsTargetSiteState {
  * relocatable references using the final Fragment/Symbol layout. */
 typedef enum MiniAsMCExprKind {
     MINIAS_MC_EXPR_CONSTANT,
-    MINIAS_MC_EXPR_DEFERRED_ABSOLUTE,
     MINIAS_MC_EXPR_SYMBOL,
     MINIAS_MC_EXPR_SYMBOL_MINUS_DOT,
     MINIAS_MC_EXPR_DOT_MINUS_SYMBOL, /* stable current fragment site - label */
@@ -272,7 +271,6 @@ typedef struct MiniAsMCExpr {
     bool has_rhs;
     size_t lhs_symbol_index;
     size_t rhs_symbol_index;
-    char *deferred_text; /* only for absolute grammar needing final layout */
     bool logical_shift;
 } MiniAsMCExpr;
 

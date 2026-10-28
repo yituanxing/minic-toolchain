@@ -1139,16 +1139,18 @@ bool minias_compile_data_mc(MiniAs *as, MiniAsStmt *stmt,
         MiniAsMCExpr *out=&data->fields[i];
         if(comma)*comma='\0';
         token=minias_trim(walk);
-        /* Symbolic absolute expressions are intentionally recomputed after
-         * layout. Numeric-only constants are frozen as immediates now. */
+        /* Constant evaluation is a parse-site operation. A resolved ABS
+         * .equ/.set has its lexical value now; reparsing it after
+         * relaxation would accidentally observe a later .set mutation.
+         * Only relocatable SymbolIDs and Fragment anchors survive. */
         if(minias_eval_u64_expression(token,&value)) {
             out->kind=MINIAS_MC_EXPR_CONSTANT;
             out->constant=value;
             matched=true;
         } else if(minias_parse_absolute_data_bits(as,token,&value)) {
-            out->kind=MINIAS_MC_EXPR_DEFERRED_ABSOLUTE;
-            out->deferred_text=minias_strdup(token);
-            matched=out->deferred_text!=NULL;
+            out->kind=MINIAS_MC_EXPR_CONSTANT;
+            out->constant=value;
+            matched=true;
         } else if((width==2U || width==4U || width==8U) &&
                   parse_symbol_minus_dot(token,&lhs)) {
             out->kind=MINIAS_MC_EXPR_SYMBOL_MINUS_DOT;
@@ -1182,8 +1184,7 @@ bool minias_compile_data_mc(MiniAs *as, MiniAsStmt *stmt,
             minias_set_error(as,"unsupported-mc-expression:%s:line=%zu",
                              token,stmt->line);
         }
-        if(matched && out->kind!=MINIAS_MC_EXPR_CONSTANT &&
-           out->kind!=MINIAS_MC_EXPR_DEFERRED_ABSOLUTE) {
+        if(matched && out->kind!=MINIAS_MC_EXPR_CONSTANT) {
             MiniAsSymbol *symbol;
             out->lhs_addend=lhs.addend;
             if(out->kind!=MINIAS_MC_EXPR_DOT_MINUS_SYMBOL) {
@@ -1497,18 +1498,6 @@ bool minias_emit_mc_data(MiniAs *as,const MiniAsStmt *stmt) {
         bool literal=x->kind==MINIAS_MC_EXPR_CONSTANT;
         unsigned j;
         unsigned char bytes[8];
-        if(x->kind==MINIAS_MC_EXPR_DEFERRED_ABSOLUTE) {
-            as->expr_dot_override=true;
-            as->expr_dot_value=at;
-            literal=x->deferred_text!=NULL &&
-                    minias_parse_absolute_data_bits(as,x->deferred_text,&value);
-            as->expr_dot_override=false;
-            if(!literal) {
-                minias_set_error(as,"unresolved-mc-absolute:line=%zu",
-                                 stmt->line);
-                return false;
-            }
-        }
         if(x->has_lhs) {
             const MiniAsSymbol *symbol;
             size_t len;
@@ -1626,11 +1615,9 @@ bool minias_emit_mc_data(MiniAs *as,const MiniAsStmt *stmt) {
     return true;
 }
 
-/* MCData has sole ownership of its parsed operands and deferred strings. */
+/* Complete, strictly typed DATA operands have no borrowed source text. */
 void minias_mcdata_destroy(MiniAsMCData *data) {
-    size_t i;
     if(data==NULL)return;
-    for(i=0U;i<data->count;++i)free(data->fields[i].deferred_text);
     free(data->fields);
     free(data);
 }

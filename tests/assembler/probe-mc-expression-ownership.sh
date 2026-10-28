@@ -21,7 +21,11 @@ for old in ('parse_data_integer_bits(', 'static bool checked_mul_absolute_i64(',
             'static bool parse_symbol_minus_dot(',
             'static bool parse_symbol_difference('):
     if old in s: raise SystemExit('obsolete common expression helper: '+old)
+if 'deferred_text' in m or 'MINIAS_MC_EXPR_DEFERRED_ABSOLUTE' in m:
+    raise SystemExit('fixed-width MCExpr retained textual reparse')
+if 'deferred_text' in Path('assembler/src/minias_internal.h').read_text():
+    raise SystemExit('fixed-width MCExpr still stores source strings')
 if 'assembler/src/mc_expr.c' not in mk:
     raise SystemExit('MCExpr not in build')
-print('MINIAS_MCEXPR_MODULE=PASS one_parser=1 one_emitter=1 stable_symbols=1')
+print('MINIAS_MCEXPR_MODULE=PASS one_parser=1 one_emitter=1 immutable_fields=1 stable_symbols=1')
 PY
