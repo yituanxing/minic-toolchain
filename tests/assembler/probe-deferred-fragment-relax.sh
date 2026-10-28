@@ -25,7 +25,9 @@ gap_begin:
     .byte 1,2,3,4,5,6,7
 gap_end:
 SRC
-MINIAS_TRACE_RELAYOUT=1 "$MINIAS" -march=rv64i -mabi=lp64 \
+# An explicit RV64I policy deliberately rejects raw .space in .text;
+# this layout-oracle uses the permissive base-I target profile instead.
+MINIAS_TRACE_RELAYOUT=1 "$MINIAS" --target=riscv \
     -o "$work/mini.o" "$work/relax.s" 2>"$work/trace"
 "$RISCV_AS" -march=rv64i -mabi=lp64 \
     -o "$work/gnu.o" "$work/relax.s"
