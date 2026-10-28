@@ -95,6 +95,44 @@ static bool aarch64_linux_brk_template(const char *text, size_t length) {
 static bool aarch64_linux_brk_value(int64_t value) {
     return value >= 0 && value <= 4095;
 }
+/* Original arm64 Linux 6.6.143 io.h __raw_write{b,w,l,q}: Qo memory
+ * INPUT carries an observable device-store side effect. Match all four
+ * widths with one ISA owner; never turn an unsigned MMIO store into a
+ * compiler barrier, plain C assignment or arbitrary GNU text passthrough.
+ * The Core scalar/memory operand roles are target-independent. */
+typedef struct Aarch64RawIoStore {
+    const char *source;
+    const char *instruction;
+    size_t width;
+} Aarch64RawIoStore;
+static const Aarch64RawIoStore aarch64_raw_io_stores[] = {
+    {"strb%w0,%1", "strb w9, [x10]", 1U},
+    {"strh%w0,%1", "strh w9, [x10]", 2U},
+    {"str%w0,%1",  "str w9, [x10]", 4U},
+    {"str%x0,%1",  "str x9, [x10]", 8U}
+};
+static const Aarch64RawIoStore *aarch64_raw_io_store(
+    const char *text, size_t length) {
+    char compact[64];
+    size_t i, n = 0U;
+    if (!text || !length || length >= sizeof(compact)) return NULL;
+    for (i = 0U; i < length; ++i) {
+        const char c = text[i];
+        if (c == ' ' || c == '\t') continue;
+        /* A second hardware instruction (including LF, CR or ';') is
+         * not a member of this specific Linux MMIO operation family. */
+        if (c == '\r' || c == '\n' || c == ';' ||
+            n + 1U >= sizeof(compact)) return NULL;
+        compact[n++] = c;
+    }
+    compact[n] = '\0';
+    for (i = 0U; i < sizeof(aarch64_raw_io_stores) /
+                         sizeof(aarch64_raw_io_stores[0]); ++i)
+        if (strcmp(aarch64_raw_io_stores[i].source, compact) == 0)
+            return &aarch64_raw_io_stores[i];
+    return NULL;
+}
+
 /* Real Linux arm64 store-release GNU ASM: release ordering is hardware. */
 static size_t aarch64_stlr_width(const char *s, size_t len) {
     static const char *const form[] = {
@@ -155,6 +193,7 @@ static const Aarch64AtomicOperation aarch64_atomic_operations[] = {
 bool minic_aarch64_requires_qualified_input_asm(const MinicInlineAsm *src) {
     static const char *const fixed[] = {
         "brk", "stlrb", "stlrh", "stlr", "msr", "bic", ".if",
+        "strb", "strh", "str",
         /* Original Linux CMPXCHG begins with PRFM and named operands;
          * rejected constraints/modes must not escape into generic Core. */
         "prfm", "prfm", "1:"
@@ -589,6 +628,33 @@ bool minic_aarch64_qualify_inline_asm(
             contract->operand_count = 2U;
             contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
             contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
+            return true;
+        }
+    }
+     /* Real Linux raw MMIO stores: input 0 is rZ integer, input 1 is
+     * volatile Qo memory. Even though GNU declares it as an input, the
+     * physical STR writes memory; the Core role MUST record that effect. */
+    if (program && src && contract && src->is_volatile && !src->is_goto &&
+        src->output_count == 0U && src->input_count == 2U &&
+        src->inputs != NULL && src->clobber_count == 0U &&
+        src->register_clobber_count == 0U && !src->has_memory_clobber &&
+        src->label_count == 0U &&
+        constraint(&src->inputs[0], "rZ") &&
+        constraint(&src->inputs[1], "Qo")) {
+        const Aarch64RawIoStore *store = aarch64_raw_io_store(
+            src->template_text, src->template_length);
+        const MinicExpression *value = minic_c0_program_expression(
+            program, src->inputs[0].expression);
+        const MinicExpression *memory = minic_c0_program_expression(
+            program, src->inputs[1].expression);
+        if (store != NULL && value != NULL && memory != NULL &&
+            memory->value_category == MINIC_VALUE_LVALUE &&
+            !minic_type_is_const(memory->type) &&
+            aarch64_stlr_type(memory->type, store->width) &&
+            aarch64_stlr_type(value->type, store->width)) {
+            contract->operand_count = 2U;
+            contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+            contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
             return true;
         }
     }
@@ -1118,6 +1184,41 @@ bool minic_aarch64_emit_qualified_structured_asm(
             "  ldr x10, [sp, #%zu]\n"
             "  str x9, [x10]\n",
             (size_t)operands[0].value * 8U) >= 0;
+    }
+    if (ins->value.structured_inline_asm.operand_count == 2U &&
+        aarch64_raw_io_store(info->template_text, info->template_length)) {
+        const Aarch64RawIoStore *store = aarch64_raw_io_store(
+            info->template_text, info->template_length);
+        const MinicCoreStructuredInlineAsmOperand *ops =
+            ins->value.structured_inline_asm.operands;
+        MinicType memory_type;
+        if (!store || !info->is_volatile || info->is_goto ||
+            info->register_clobber_count != 0U ||
+            /* Common Core correctly marks a qualified MMIO store's memory
+             * effect, even without a GNU source-level memory clobber. */
+            !info->has_memory_clobber ||
+            ops[0].operand_index != 0U ||
+            ops[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
+            ops[1].operand_index != 1U ||
+            ops[1].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE ||
+            ops[0].has_fixed_register_binding || ops[1].has_fixed_register_binding ||
+            ops[0].early_clobber || ops[1].early_clobber ||
+            ops[0].value >= fn->value_count ||
+            ops[1].value >= fn->value_count ||
+            ops[0].value > 4095U / 8U || ops[1].value > 4095U / 8U ||
+            !minic_type_pointee(fn->values[ops[1].value].type, &memory_type) ||
+            !aarch64_stlr_type(memory_type, store->width) ||
+            !aarch64_stlr_type(fn->values[ops[0].value].type, store->width))
+            return false;
+        /* x9/x10 are AAPCS64 caller-saved. Preserve the actual
+         * 8/16/32/64-bit STR hardware width, never a synthesized C store. */
+        return fprintf(out,
+            "  ldr x9, [sp, #%zu]\n"
+            "  ldr x10, [sp, #%zu]\n"
+            "  %s\n",
+            (size_t)ops[0].value * 8U,
+            (size_t)ops[1].value * 8U,
+            store->instruction) >= 0;
     }
     if (ins->value.structured_inline_asm.operand_count == 2U) {
         b = ins->value.structured_inline_asm.operands;

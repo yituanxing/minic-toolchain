@@ -242,6 +242,13 @@ jobs:
           set -Eeuo pipefail
           bash tests/compiler/c0/probe-rv64i-kbuild-abi.sh \
             "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic"
+      - name: AArch64 original Linux raw MMIO store hardware GNU/QEMU differential
+        if: matrix.target == 'aarch64'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash tests/compiler/c0/probe-aarch64-linux-raw-mmio.sh \
+            "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
       - name: GNU original local fixed-register declarations under real AArch64 QEMU
         if: matrix.target == 'aarch64'
         shell: bash
