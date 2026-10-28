@@ -97,12 +97,17 @@ typedef enum MinicX86AtomicRmw {
     MINIC_X86_ATOMIC_RMW_LOCK_SUB64,
     MINIC_X86_ATOMIC_RMW_LOCK_AND64,
     MINIC_X86_ATOMIC_RMW_LOCK_OR64,
-    MINIC_X86_ATOMIC_RMW_LOCK_XOR64
+    MINIC_X86_ATOMIC_RMW_LOCK_XOR64,
+    MINIC_X86_ATOMIC_RMW_LOCK_INC32,
+    MINIC_X86_ATOMIC_RMW_LOCK_DEC32,
+    MINIC_X86_ATOMIC_RMW_LOCK_INC64,
+    MINIC_X86_ATOMIC_RMW_LOCK_DEC64
 } MinicX86AtomicRmw;
 typedef struct MinicX86AtomicRmwDesc {
     const char *opcode;
     size_t width;
     bool locked;
+    bool unary;
 } MinicX86AtomicRmwDesc;
 MinicX86AtomicRmw minic_x86_64_atomic_rmw_form(const char *,size_t);
 const MinicX86AtomicRmwDesc *minic_x86_64_atomic_rmw_description(

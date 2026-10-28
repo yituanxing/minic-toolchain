@@ -334,26 +334,33 @@ static bool x86_trycas_source(
 }
 
 
-/* Linux's complete width-checked atomic add/sub/and/or/xor family.
- * GNU extends a C signed/unsigned integer carrier over the same 4- or
- * 8-byte raw machine bit pattern. All 10 forms share ONE target ISA table;
- * optional lock/smp-latch is a policy bit, not a second emitter. */
+/* Original Linux 6.6.x x86 atomic RMW: one ISA owner for binary
+ * ADD/SUB/AND/OR/XOR (32/64, SMP/local), unary INC/DEC (32/64), and
+ * the 64-bit =m output + separate m-input form of ADD/SUB/INC/DEC.
+ * The latter is a REAL hardware read/write even though GNU spells the
+ * output write-only; the explicit m-input is an ordering dependency. */
 static const MinicX86AtomicRmwDesc x86_linux_atomic_rmw[] = {
-    {"addl",4U,false}, {"subl",4U,false}, {"andl",4U,false},
-    {"orl",4U,false}, {"xorl",4U,false},
-    {"addq",8U,false}, {"subq",8U,false}, {"andq",8U,false},
-    {"orq",8U,false}, {"xorq",8U,false},
-    {"addl",4U,true}, {"subl",4U,true}, {"andl",4U,true},
-    {"orl",4U,true}, {"xorl",4U,true},
-    {"addq",8U,true}, {"subq",8U,true}, {"andq",8U,true},
-    {"orq",8U,true}, {"xorq",8U,true}
+    {"addl",4U,false,false}, {"subl",4U,false,false},
+    {"andl",4U,false,false}, {"orl",4U,false,false},
+    {"xorl",4U,false,false},
+    {"addq",8U,false,false}, {"subq",8U,false,false},
+    {"andq",8U,false,false}, {"orq",8U,false,false},
+    {"xorq",8U,false,false},
+    {"addl",4U,true,false}, {"subl",4U,true,false},
+    {"andl",4U,true,false}, {"orl",4U,true,false},
+    {"xorl",4U,true,false},
+    {"addq",8U,true,false}, {"subq",8U,true,false},
+    {"andq",8U,true,false}, {"orq",8U,true,false},
+    {"xorq",8U,true,false},
+    {"incl",4U,true,true}, {"decl",4U,true,true},
+    {"incq",8U,true,true}, {"decq",8U,true,true}
 };
 const MinicX86AtomicRmwDesc *minic_x86_64_atomic_rmw_description(
     MinicX86AtomicRmw form) {
     const size_t index=(size_t)form;
-    return (index>0U && index<=sizeof(x86_linux_atomic_rmw)/
-                              sizeof(x86_linux_atomic_rmw[0])) ?
-        &x86_linux_atomic_rmw[index-1U] : NULL;
+    return index>0U &&
+           index<=sizeof(x86_linux_atomic_rmw)/sizeof(x86_linux_atomic_rmw[0])
+        ? &x86_linux_atomic_rmw[index-1U] : NULL;
 }
 MinicX86AtomicRmw minic_x86_64_atomic_rmw_form(const char *text,size_t len) {
     static const char smp[]=
@@ -363,19 +370,22 @@ MinicX86AtomicRmw minic_x86_64_atomic_rmw_form(const char *text,size_t len) {
     if(!text||!len||len>=sizeof(compact))return MINIC_X86_ATOMIC_RMW_NONE;
     for(i=0U;i<len;++i){
         const char c=text[i];
-        if(c==' '||c=='\t'||c=='\r'||c=='\n')continue;
+        if(c==' '||c==9||c==10||c==13)continue;
         if(j+1U>=sizeof(compact))return MINIC_X86_ATOMIC_RMW_NONE;
         compact[j++]=c;
     }
-    compact[j]='\0';
+    compact[j]=0;
     for(k=0U;k<sizeof(x86_linux_atomic_rmw)/
-                    sizeof(x86_linux_atomic_rmw[0]);++k) {
+                    sizeof(x86_linux_atomic_rmw[0]);++k){
         const MinicX86AtomicRmwDesc *d=&x86_linux_atomic_rmw[k];
-        for(variant=0U;variant<2U;++variant) {
-            const int n=snprintf(expected,sizeof(expected),"%s%s%s,%s",
-                d->locked?smp:"",d->opcode,
-                variant?"%[val]":"%1",variant?"%[var]":"%0");
-            if(n>0&&(size_t)n<sizeof(expected)&&
+        for(variant=0U;variant<2U;++variant){
+            const int n=d->unary?
+                snprintf(expected,sizeof(expected),"%s%s%s",
+                    d->locked?smp:"",d->opcode,variant?"%[var]":"%0"):
+                snprintf(expected,sizeof(expected),"%s%s%s,%s",
+                    d->locked?smp:"",d->opcode,
+                    variant?"%[val]":"%1",variant?"%[var]":"%0");
+            if(n>0&&(size_t)n<sizeof(expected) &&
                strcmp(compact,expected)==0)
                 return (MinicX86AtomicRmw)(k+1U);
         }
@@ -385,42 +395,69 @@ MinicX86AtomicRmw minic_x86_64_atomic_rmw_form(const char *text,size_t len) {
 static bool x86_linux_atomic_rmw_source(
     const MinicC0Program *program,const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
-    const MinicX86AtomicRmw form=src ?
+    const MinicX86AtomicRmw form=src?
         minic_x86_64_atomic_rmw_form(src->template_text,src->template_length):
         MINIC_X86_ATOMIC_RMW_NONE;
     const MinicX86AtomicRmwDesc *d=
         minic_x86_64_atomic_rmw_description(form);
-    const MinicExpression *mem,*val;
-    MinicType mt,vt;
+    const MinicExpression *mem,*value=NULL,*dependency=NULL;
+    MinicType mt,vt,dependency_type;
     size_t width;
+    bool legacy,unary;
     if(!program||!src||!contract||!d||!src->is_volatile||src->is_goto||
-       src->output_count!=1U||src->input_count!=1U||
-       !src->outputs||!src->inputs||src->label_count!=0U||
+       src->output_count!=1U||!src->outputs||src->label_count||
        !src->has_memory_clobber||src->clobber_count!=1U||
-       src->register_clobber_count!=0U||
-       !target_constraint_is(&src->outputs[0],"+m")||
-       !(target_constraint_is(&src->inputs[0],"ir")||
-         target_constraint_is(&src->inputs[0],"er")||
-         target_constraint_is(&src->inputs[0],"r")))
+       src->register_clobber_count)return false;
+    unary=d->unary;
+    legacy=target_constraint_is(&src->outputs[0],"=m");
+    if(legacy &&
+       (!d->locked||d->width!=8U||
+        (!unary && strcmp(d->opcode,"addq")!=0 &&
+                   strcmp(d->opcode,"subq")!=0)))return false;
+    if(!legacy && !target_constraint_is(&src->outputs[0],"+m"))
         return false;
+    if(src->input_count!=(unary?0U:1U)+(legacy?1U:0U) ||
+       (src->input_count&&!src->inputs))return false;
+    if(!unary){
+        if(!(target_constraint_is(&src->inputs[0],"ir")||
+             target_constraint_is(&src->inputs[0],"er")||
+             target_constraint_is(&src->inputs[0],"r")))return false;
+        value=minic_c0_program_expression(program,src->inputs[0].expression);
+    }
+    if(legacy){
+        const MinicInlineAsmOperand *op=&src->inputs[unary?0U:1U];
+        if(!target_constraint_is(op,"m"))return false;
+        dependency=minic_c0_program_expression(program,op->expression);
+        if(!dependency||dependency->value_category!=MINIC_VALUE_LVALUE||
+           !minic_type_unqualified(dependency->type,&dependency_type))
+            return false;
+    }
     mem=minic_c0_program_expression(program,src->outputs[0].expression);
-    val=minic_c0_program_expression(program,src->inputs[0].expression);
-    if(!mem||!val||mem->value_category!=MINIC_VALUE_LVALUE||
+    if(!mem||mem->value_category!=MINIC_VALUE_LVALUE||
        minic_type_is_const(mem->type)||
        !minic_type_unqualified(mem->type,&mt)||
-       !minic_type_unqualified(val->type,&vt)||
-       mt.base_kind!=MINIC_TYPE_BASE_INT||vt.base_kind!=MINIC_TYPE_BASE_INT||
-       !minic_type_is_integer(mt)||!minic_type_is_integer(vt)||
-       mt.pointer_depth!=0U||vt.pointer_depth!=0U||
-       mt.integer_rank!=vt.integer_rank)
-        return false;
-    width=(mt.integer_rank==MINIC_INTEGER_RANK_INT)?4U:
-          ((mt.integer_rank==MINIC_INTEGER_RANK_LONG||
-            mt.integer_rank==MINIC_INTEGER_RANK_LONG_LONG)?8U:0U);
+       mt.base_kind!=MINIC_TYPE_BASE_INT||
+       !minic_type_is_integer(mt)||mt.pointer_depth)return false;
+    width=mt.integer_rank==MINIC_INTEGER_RANK_INT?4U:
+          (mt.integer_rank==MINIC_INTEGER_RANK_LONG ||
+           mt.integer_rank==MINIC_INTEGER_RANK_LONG_LONG?8U:0U);
     if(width!=d->width)return false;
-    contract->operand_count=2U;
+    if(value &&
+       (!minic_type_unqualified(value->type,&vt)||
+        vt.base_kind!=MINIC_TYPE_BASE_INT||
+        !minic_type_is_integer(vt)||vt.pointer_depth||
+        vt.integer_rank!=mt.integer_rank))return false;
+    if(legacy &&
+       (dependency_type.base_kind!=MINIC_TYPE_BASE_INT||
+        !minic_type_is_integer(dependency_type)||
+        dependency_type.pointer_depth||
+        dependency_type.integer_rank!=mt.integer_rank))
+        return false;
+    contract->operand_count=1U+(unary?0U:1U)+(legacy?1U:0U);
     contract->kinds[0]=MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
-    contract->kinds[1]=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    if(!unary)contract->kinds[1]=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    if(legacy)contract->kinds[unary?1U:2U]=
+        MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
     return true;
 }
 

@@ -30,6 +30,58 @@ for(int i=0;i<16;++i)for(int j=0;j<16;++j){{
   mini_{n}(&a,v);gnu_{n}(&b,v);
   if(a!=b){{printf("DIFF {n} %d %d\\n",i,j);return 1;}}
 }}""")
+
+# Original x86 atomic64_64.h: add/sub use '=m' output + 'er' value
+# plus an explicit extra 'm' address dependency; inc/dec use '=m'+'m'.
+# Original 32-bit atomic.h unary inc/dec are '+m', no separate input.
+for width,typ in [(32,"int"),(64,"long long")]:
+    for op in ("inc","dec"):
+        n=f"unary_{op}_{width}"
+        mnemonic=op+("l" if width==32 else "q")
+        prefix=('.pushsection .smp_locks,\\\"a\\\"\\n'
+                '.balign 4\\n.long 671f - .\\n'
+                '.popsection\\n671:\\n\\tlock; ')
+        for p in ("mini","gnu"):
+            if width==64:
+                body.append(f'''
+void {p}_{n}({typ} *dst) {{
+    asm volatile("{prefix}{mnemonic} %0"
+                 : "=m"(*dst) : "m"(*dst) : "memory");
+}}''')
+            else:
+                body.append(f'''
+void {p}_{n}({typ} *dst) {{
+    asm volatile("{prefix}{mnemonic} %0"
+                 : "+m"(*dst) : : "memory");
+}}''')
+        prototypes.extend([f"extern void mini_{n}({typ}*);",
+                           f"extern void gnu_{n}({typ}*);"])
+        checks.append(f'''
+for(int i=0;i<16;++i)for(int j=0;j<16;++j){{
+    {typ} a=({typ})(i*8971-j*27),b=a;
+    mini_{n}(&a);gnu_{n}(&b);
+    if(a!=b){{printf("DIFF {n} %d %d\\n",i,j);return 1;}}
+}}''')
+for op in ("add","sub"):
+    n=f"legacy_{op}_64"
+    prefix=('.pushsection .smp_locks,\\\"a\\\"\\n'
+            '.balign 4\\n.long 671f - .\\n'
+            '.popsection\\n671:\\n\\tlock; ')
+    for p in ("mini","gnu"):
+        body.append(f'''
+void {p}_{n}(long long *dst,long long value) {{
+    asm volatile("{prefix}{op}q %1,%0"
+                 : "=m"(*dst) : "er"(value), "m"(*dst) : "memory");
+}}''')
+    prototypes.extend([f"extern void mini_{n}(long long*,long long);",
+                       f"extern void gnu_{n}(long long*,long long);"])
+    checks.append(f'''
+for(int i=0;i<16;++i)for(int j=0;j<16;++j){{
+    long long a=(long long)(i*8971-j*27),b=a,v=(long long)(j*6613-42391);
+    mini_{n}(&a,v);gnu_{n}(&b,v);
+    if(a!=b){{printf("DIFF {n} %d %d\\n",i,j);return 1;}}
+}}''')
+
 src="\n".join(body)
 (w/"both.c").write_text(src)
 (w/"mini.i").write_text(src.replace("gnu_","hidden_gnu_"))
@@ -61,4 +113,4 @@ for bad in bad-extra bad-width;do
   fi
   test ! -e "$w/$bad.s"
 done
-echo 'MINIC_X86_LINUX_ATOMIC_RMW=PASS families=5 widths=2 modes=2 GNU_pairs=5120 negative=2'
+echo 'MINIC_X86_LINUX_ATOMIC_RMW=PASS alu=20 unary=4 legacy64=2 GNU_pairs=6656 negative=2'

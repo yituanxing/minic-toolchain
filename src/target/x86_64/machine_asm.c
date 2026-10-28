@@ -281,9 +281,10 @@ static bool emit_linux_port_io(FILE *out,const MinicC0Program *program,
         d->width==1U?"%al":d->width==2U?"%ax":"%eax")>=0;
 }
 
-/* Single native hardware RMW implementation for all 20 qualified x86 forms.
- * No C-assignment proxy, no raw ASM passthrough, no source-derived opcode
- * escapes target ownership; memory clobber and SMP patch section are real. */
+/* Target-owned atomic RMW hardware effect, including original 64-bit
+ * GNU =m + extra m-input alias form and 32/64 unary INC/DEC.
+ * The target admits complete typed C constraints; Core carries only generic
+ * memory/readwrite, memory/input and scalar/input roles. */
 static bool emit_linux_atomic_rmw(
     FILE *out,const MinicC0Program *program,const MinicTargetInfo *target,
     const MinicCoreFunction *fn,const MinicX86Frame *frame,
@@ -292,39 +293,57 @@ static bool emit_linux_atomic_rmw(
         minic_x86_64_atomic_rmw_form(info->template_text,info->template_length));
     const MinicCoreStructuredInlineAsmOperand *b=
         ins->value.structured_inline_asm.operands;
-    MinicType mt;
-    size_t bytes;
+    const size_t n=ins->value.structured_inline_asm.operand_count;
+    const bool unary=d?d->unary:false;
+    const bool legacy=d && n==1U+(unary?0U:1U)+1U;
+    MinicType mt,dep;
+    size_t bytes,i;
     bool sign;
     if(!out||!program||!target||!fn||!frame||!b||!d||!info||
        !info->is_volatile||info->is_goto||
-       !info->has_memory_clobber||info->register_clobber_count!=0U||
-       ins->value.structured_inline_asm.operand_count!=2U||
-       b[0].operand_index!=0U||b[1].operand_index!=1U||
-       b[0].value>=fn->value_count||b[1].value>=fn->value_count||
-       b[0].has_fixed_register_binding||b[1].has_fixed_register_binding||
-       b[0].early_clobber||b[1].early_clobber||
-       b[0].kind!=MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE||
-       b[1].kind!=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT||
-       !minic_type_pointee(fn->values[b[0].value].type,&mt)||
-       !minic_x86_64_scalar_width(program,target,mt,&bytes,&sign)||
-       bytes!=d->width||
-       !minic_x86_64_scalar_width(
-           program,target,fn->values[b[1].value].type,&bytes,&sign)||
-       bytes!=d->width)
+       !info->has_memory_clobber||info->register_clobber_count||
+       n!=1U+(unary?0U:1U)+(legacy?1U:0U)||
+       (legacy && (!d->locked||d->width!=8U||
+          (!unary&&strcmp(d->opcode,"addq")!=0&&
+                   strcmp(d->opcode,"subq")!=0))))
         return false;
-    if(!x86_value_load(out,frame,b[1].value,"%r10")||
+    for(i=0U;i<n;++i)
+        if(b[i].operand_index!=i||b[i].value>=fn->value_count||
+           b[i].has_fixed_register_binding||b[i].early_clobber||
+           b[i].kind!=(i==0U?
+               MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE:
+               (!unary&&i==1U)?
+                   MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT:
+                   MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT))
+            return false;
+    if(!minic_type_pointee(fn->values[b[0].value].type,&mt)||
+       !minic_x86_64_scalar_width(program,target,mt,&bytes,&sign)||
+       bytes!=d->width)return false;
+    if(!unary &&
+       (!minic_x86_64_scalar_width(program,target,
+            fn->values[b[1].value].type,&bytes,&sign)||
+        bytes!=d->width))
+        return false;
+    if(legacy &&
+       (!minic_type_pointee(fn->values[b[n-1U].value].type,&dep)||
+        !minic_x86_64_scalar_width(program,target,dep,&bytes,&sign)||
+        bytes!=d->width))
+        return false;
+    if((!unary&&!x86_value_load(out,frame,b[1].value,"%r10"))||
        !x86_value_load(out,frame,b[0].value,"%r11"))
         return false;
-    if(d->locked&&
+    if(d->locked &&
        fputs("  .pushsection .smp_locks,\"a\"\n"
              "  .balign 4\n"
              "  .long 671f - .\n"
              "  .popsection\n"
              "671:\n",out)==EOF)
         return false;
+    if(unary)return fprintf(out,"  %s%s (%%r11)\n",
+          d->locked?"lock; ":"",d->opcode)>=0;
     return fprintf(out,"  %s%s %s, (%%r11)\n",
-                   d->locked?"lock; ":"",d->opcode,
-                   d->width==4U?"%r10d":"%r10")>=0;
+          d->locked?"lock; ":"",d->opcode,
+          d->width==4U?"%r10d":"%r10")>=0;
 }
 
 /* Genuine x86 CMPXCHG: use AL/AX/EAX/RAX comparator, return ZF,
