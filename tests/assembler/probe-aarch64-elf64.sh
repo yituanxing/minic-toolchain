@@ -2765,7 +2765,11 @@ for flavor in mini gnu; do
  readelf -Wr "$work/a64-direct-literal-$flavor.o" |
    awk '$3 == "R_AARCH64_LD_PREL_LO19" {print $1,$3,$5,$6,$7}' |
    LC_ALL=C sort > "$work/a64-direct-literal-$flavor.rel"
- test "$(wc -l < "$work/a64-direct-literal-$flavor.rel")" -eq 1
+ if test "$(wc -l < "$work/a64-direct-literal-$flavor.rel")" -ne 1; then
+  echo "direct LDR unexpected $flavor relocation count:" >&2
+  readelf -Wr "$work/a64-direct-literal-$flavor.o" >&2
+  exit 1
+ fi
 done
 diff -u "$work/a64-direct-literal-gnu.rel" "$work/a64-direct-literal-mini.rel"
 printf '.text\nldr x0,.Lfar\n.space 1048580\n.Lfar:\n.word 0\n' > "$work/a64-direct-literal-far.s"
