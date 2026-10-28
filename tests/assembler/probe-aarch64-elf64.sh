@@ -2707,3 +2707,31 @@ for bad in 'smov w0,v2.s[0]' 'smov x0,v2.d[0]'; do
  fi
 done
 echo 'MINIAS_A64_SMOV_GHASH=PASS GNU_signed_lane_5_words_and_2_rejects'
+
+# GNU ARM64 entry.S trampoline aliases are forward section-relative ABS
+# constants: TRAMP_VALIAS + tramp_exit - .entry.tramp.text. They must
+# resolve after true fragment layout without assuming a fake section zero.
+cat > "$work/a64-trampoline-section-set.s" <<'A64_TRAMP_SET'
+.text
+.macro tramp_alias dst,sym
+.set .Ltrampalias\@, -4398082211840 + \sym - .entry.tramp.text
+movz \dst, :abs_g2_s:.Ltrampalias\@
+movk \dst, :abs_g1_nc:.Ltrampalias\@
+movk \dst, :abs_g0_nc:.Ltrampalias\@
+.endm
+tramp_alias x29,tramp_exit
+.pushsection ".entry.tramp.text","ax"
+.space 16
+tramp_exit:
+ret
+.popsection
+A64_TRAMP_SET
+"$MINIAS" --target=aarch64 -o "$work/a64-tramp-set-mini.o" "$work/a64-trampoline-section-set.s"
+"$AARCH64_AS" -o "$work/a64-tramp-set-gnu.o" "$work/a64-trampoline-section-set.s"
+"$AARCH64_READELF" -Ws "$work/a64-tramp-set-mini.o" | grep -Eq 'ABS.*Ltrampalias'
+"$AARCH64_READELF" -Ws "$work/a64-tramp-set-gnu.o" | grep -Eq 'ABS.*Ltrampalias'
+printf '.text\n.set invalid, -4398082211840 + local - .other.section\nlocal: ret\n' >"$work/a64-cross-section-set-bad.s"
+if "$MINIAS" --target=aarch64 -o "$work/a64-cross-section-set-bad.o" "$work/a64-cross-section-set-bad.s" >/dev/null 2>&1; then
+ echo 'wrong-section set subtraction folded without validating section' >&2; exit 1
+fi
+echo 'MINIAS_A64_TRAMP_SECTION_SET=PASS GNU_real_section_base_ALIAS_and_strict_cross_section'
