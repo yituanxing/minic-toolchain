@@ -662,33 +662,30 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
     if(!strncmp(s->op,"shlx",4U) ||
        !strncmp(s->op,"shrx",4U) ||
        !strncmp(s->op,"sarx",4U)) {
-        char *copy=minias_strdup(s->args);
-        char *a,*b,*c,*comma1,*comma2;
+        char first[X64_OPERAND_CAP],rest[X64_OPERAND_CAP];
+        char source[X64_OPERAND_CAP],dest[X64_OPERAND_CAP];
         unsigned count_reg=0U,source_reg=0U,dest_reg=0U;
         unsigned pp=s->op[1]=='h'?(s->op[2]=='l'?1U:3U):2U;
         bool wc=false,source_wide=false,dest_wide=false,ok=false;
         bool memory=false;
         MiniAsMCMemory mem;
         size_t len=strlen(s->op);
-        if(!copy){free(m);minias_set_error(as,"out-of-memory:x86-bmi2");return false;}
-        comma1=strchr(copy,',');
-        comma2=comma1?strchr(comma1+1,','):NULL;
-        if(comma2 && !strchr(comma2+1,',')) {
-            *comma1='\0';*comma2='\0';
-            a=minias_trim(copy);b=minias_trim(comma1+1);c=minias_trim(comma2+1);
-            if(x64_register(a,&count_reg,&wc) &&
-               x64_register(c,&dest_reg,&dest_wide) &&
-               wc==dest_wide &&
-               (len==4U || (len==5U && s->op[4]==(dest_wide?'q':'l')))) {
-                if(x64_register(b,&source_reg,&source_wide))
-                    ok=source_wide==dest_wide;
-                else if(x64_is_mem_candidate(b) &&
-                        x64_parse_base_memory(b,&mem)) {
-                    memory=true;ok=true;
-                }
+        /* GNU third operands may contain SIB commas. Reuse the
+         * original top-level AT&T splitter twice, so the instruction
+         * grammar never mistakes (%r15,%r13,4) for extra operands. */
+        if(x64_args2(s->args,first,rest) &&
+           x64_args2(rest,source,dest) &&
+           x64_register(first,&count_reg,&wc) &&
+           x64_register(dest,&dest_reg,&dest_wide) &&
+           wc==dest_wide &&
+           (len==4U || (len==5U && s->op[4]==(dest_wide?'q':'l')))) {
+            if(x64_register(source,&source_reg,&source_wide))
+                ok=source_wide==dest_wide;
+            else if(x64_is_mem_candidate(source) &&
+                    x64_parse_base_memory(source,&mem)) {
+                memory=true;ok=true;
             }
         }
-        free(copy);
         if(!ok)goto invalid;
         if(memory) {
             /* Keep VEX map/pp in target encoding; reuse the existing
