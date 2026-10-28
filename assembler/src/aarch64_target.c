@@ -3240,7 +3240,11 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         unsigned variant;
         if(!split_operands(args,parts,&n) || (n!=2U && n!=3U) ||
            !parse_a64_reg(parts[0],&rd,&wide,&sp) || sp) {
-            minias_set_error(as,"bad-aarch64-wide-immediate:line=%zu",stmt->line);
+            /* Preserve the real GNU-expanded operand and register
+             * shape in the pinned first-blocker census. Unsupported MOVW
+             * syntax must not be silently normalized or misattributed. */
+            minias_set_error(as,"bad-aarch64-wide-immediate:%s:line=%zu",
+                             args,stmt->line);
             free(inst);return false;
         }
         modifier=a64_movw_relocation(parts[1],&movw_expr,&movw_fixup,
