@@ -2316,6 +2316,38 @@ static bool parse_symbol_difference(const char *text,
     return ok;
 }
 
+/* GNU code-relative data tables use (S1-S2)/4 in .byte/.2byte,
+ * including forward local labels from ARM64 exception tables. This is
+ * Common section arithmetic, not an ISA-specific relocation opcode. */
+static bool parse_symbol_difference_divisor(const char *text,
+        MiniAsSymbolExpr *lhs,MiniAsSymbolExpr *rhs,uint64_t *divisor) {
+    char *copy=minias_strdup(text),*p,*slash=NULL;
+    unsigned depth=0U;
+    bool ok=false;
+    uint64_t n;
+    if(!copy)return false;
+    for(p=copy;*p;++p) {
+        if(*p=='(')++depth;
+        else if(*p==')') {
+            if(!depth)goto done;
+            --depth;
+        }else if(*p=='/' && depth==0U) {
+            if(slash)goto done;
+            slash=p;
+        }
+    }
+    if(depth || !slash)goto done;
+    *slash='\0';
+    if(parse_u64(minias_trim(slash+1U),&n) && n>0U &&
+       n<=(uint64_t)INT64_MAX &&
+       parse_symbol_difference(strip_outer_parens(minias_trim(copy)),
+                               lhs,rhs)) {
+        *divisor=n;ok=true;
+    }
+done:
+    free(copy);return ok;
+}
+
 static char *decode_incbin_path(MiniAs *as,
                                 const char *args,
                                 size_t line) {
@@ -2604,7 +2636,9 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
                                                      &expr,
                                                      &divisor))) ||
                     ((width == 1U || width == 2U || width == 4U || width == 8U) &&
-                     parse_symbol_difference(trimmed, &expr, &rhs_expr));
+                     (parse_symbol_difference(trimmed, &expr, &rhs_expr) ||
+                      parse_symbol_difference_divisor(trimmed,&expr,
+                                                      &rhs_expr,&divisor)));
 
                 if (!supported) {
                     minias_set_error(as,
@@ -2904,6 +2938,36 @@ static bool emit_symbol_difference(MiniAs *as,
                                  rhs_expr->addend);
 }
 
+static bool emit_symbol_difference_divided(MiniAs *as,
+        const MiniAsStmt *stmt,unsigned int width,
+        const MiniAsSymbolExpr *lhs_expr,
+        const MiniAsSymbolExpr *rhs_expr,uint64_t divisor) {
+    MiniAsSymbol *lhs=minias_get_symbol(as,lhs_expr->name,false);
+    MiniAsSymbol *rhs=minias_get_symbol(as,rhs_expr->name,false);
+    int64_t left,right,diff,quotient;
+    unsigned char bytes[8];
+    unsigned i;
+    /* A cross-section difference cannot be divided using an ELF fixup.
+     * Keep the operation fail-closed rather than fabricating a value. */
+    if(!lhs || !rhs || !lhs->defined || !rhs->defined ||
+       lhs->section!=rhs->section ||
+       (lhs->section<0 && lhs->section!=MINIAS_SECTION_ABS) ||
+       lhs->value>(uint64_t)INT64_MAX ||
+       rhs->value>(uint64_t)INT64_MAX ||
+       divisor==0U || divisor>(uint64_t)INT64_MAX ||
+       !checked_add_i64((int64_t)lhs->value,lhs_expr->addend,&left) ||
+       !checked_add_i64((int64_t)rhs->value,rhs_expr->addend,&right) ||
+       !checked_sub_i64(left,right,&diff)) {
+        minias_set_error(as,"unsupported-divided-symbol-pair:line=%zu",
+                         stmt->line);
+        return false;
+    }
+    quotient=diff/(int64_t)divisor;
+    for(i=0U;i<width;++i)
+        bytes[i]=(unsigned char)((uint64_t)quotient>>(8U*i));
+    return minias_section_append(as,stmt->section,bytes,width);
+}
+
 static bool emit_data_stmt(MiniAs *as, const MiniAsStmt *stmt) {
     unsigned int width = data_width(as, stmt->op);
     char *copy;
@@ -3072,6 +3136,14 @@ static bool emit_data_stmt(MiniAs *as, const MiniAsStmt *stmt) {
                                                        divisor)) {
                         free(copy);
                         return false;
+                    }
+                } else if ((width == 1U || width == 2U || width == 4U ||
+                            width == 8U) &&
+                           parse_symbol_difference_divisor(trimmed,&expr,
+                                                           &rhs_expr,&divisor)) {
+                    if(!emit_symbol_difference_divided(as,stmt,width,
+                              &expr,&rhs_expr,divisor)) {
+                        free(copy);return false;
                     }
                 } else if ((width == 1U || width == 2U || width == 4U ||
                             width == 8U) &&
