@@ -437,6 +437,61 @@ static bool emit_linux_prefetchw_alt(
        "  .popsection\n",out)!=EOF;
 }
 
+/* Original Linux ip_fast_csum: preserve carry propagation and early
+ * short-header branch; tied input operands are real Core scalar values.
+ * No arbitrary assembly substitution or source-function special case. */
+static bool emit_ip_fast_csum(FILE *out, const MinicC0Program *p,
+    const MinicTargetInfo *t, const MinicCoreFunction *fn,
+    const MinicX86Frame *frame, const MinicCoreInstruction *ins,
+    const MinicCoreInlineAsm *info) {
+    const MinicCoreStructuredInlineAsmOperand *b =
+        ins->value.structured_inline_asm.operands;
+    MinicType ty; size_t i,width; bool sign;
+    if (!out || !p || !t || !fn || !frame || !ins || !info || !b ||
+        info->is_goto || !info->has_memory_clobber ||
+        info->register_clobber_count ||
+        !minic_x86_64_ip_fast_csum_template(info->template_text,
+            info->template_length) ||
+        ins->value.structured_inline_asm.operand_count!=5U) return false;
+    for(i=0U;i<5U;++i) {
+        if (b[i].operand_index!=i || b[i].value>=fn->value_count ||
+            b[i].has_fixed_register_binding || b[i].early_clobber ||
+            b[i].kind!=(i<3U ?
+                MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT:
+                MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT))return false;
+        ty=fn->values[b[i].value].type;
+        if (i<3U && !minic_type_pointee(ty,&ty))return false;
+        if(!minic_x86_64_scalar_width(p,t,ty,&width,&sign) ||
+           width!=(i==1U || i==3U ? 8U : 4U))return false;
+    }
+    if(!x86_value_load(out,frame,b[3].value,"%r10") ||
+       !x86_value_load(out,frame,b[4].value,"%r11"))return false;
+    if(fputs("  movl (%r10), %r8d\n"
+             "  subl $4, %r11d\n"
+             "  jbe 2f\n"
+             "  addl 4(%r10), %r8d\n"
+             "  adcl 8(%r10), %r8d\n"
+             "  adcl 12(%r10), %r8d\n"
+             "1: adcl 16(%r10), %r8d\n"
+             "  leaq 4(%r10), %r10\n"
+             "  decl %r11d\n"
+             "  jne 1b\n"
+             "  adcl $0, %r8d\n"
+             "  movl %r8d, %r11d\n"
+             "  shrl $16, %r8d\n"
+             "  addw %r11w, %r8w\n"
+             "  adcl $0, %r8d\n"
+             "  notl %r8d\n"
+             "2:\n",out)==EOF)return false;
+    if(!x86_value_load(out,frame,b[0].value,"%rax") ||
+       fputs("  movl %r8d, (%rax)\n",out)==EOF ||
+       !x86_value_load(out,frame,b[1].value,"%rax") ||
+       fputs("  movq %r10, (%rax)\n",out)==EOF ||
+       !x86_value_load(out,frame,b[2].value,"%rax") ||
+       fputs("  movl %r11d, (%rax)\n",out)==EOF)return false;
+    return true;
+}
+
 /* The third GNU input "0" initializes %eax, while ADD and ADC must be
  * adjacent because CF is live. Both operands are real Core scalars. */
 static bool emit_checksum_fold(FILE *out,const MinicC0Program *p,
@@ -1214,6 +1269,9 @@ bool minic_x86_64_emit_structured_asm(
     if (minic_x86_64_add32_carry_template(
             info->template_text,info->template_length))
         return emit_add32_carry(out,program,target,fn,frame,ins,info);
+    if (minic_x86_64_ip_fast_csum_template(
+            info->template_text,info->template_length))
+        return emit_ip_fast_csum(out,program,target,fn,frame,ins,info);
     if (minic_x86_64_checksum_fold_template(
             info->template_text,info->template_length))
         return emit_checksum_fold(out,program,target,fn,frame,ins,info);

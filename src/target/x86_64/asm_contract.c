@@ -491,6 +491,61 @@ static bool x86_linux_msr_source(const MinicC0Program *program,
 }
 
 
+/* Linux checksum_64.h ip_fast_csum: full original add/adc/loop/CF chain.
+ * This machine form changes output pointer and header-length registers too;
+ * it is not the simpler two-input csum_fold contract. */
+bool minic_x86_64_ip_fast_csum_template(const char *text, size_t length) {
+    static const char expected[] =
+        "movl(%1),%0subl$4,%2jbe2faddl4(%1),%0adcl8(%1),%0"
+        "adcl12(%1),%01:adcl16(%1),%0lea4(%1),%1decl%2jne1b"
+        "adcl$0,%0movl%0,%2shrl$16,%0addw%w2,%w0adcl$0,%0notl%02:";
+    char compact[256]; size_t i, n = 0U;
+    if (!text || !length || length >= sizeof(compact)) return false;
+    for (i=0U;i<length;++i) {
+        const char c=text[i];
+        if (c==' ' || c=='\n' || c=='\t' || c=='\r') continue;
+        if (n+1U>=sizeof(compact)) return false;
+        compact[n++]=c;
+    }
+    compact[n]='\0';
+    return strcmp(compact, expected)==0;
+}
+static bool x86_ip_fast_csum_source(const MinicC0Program *p,
+    const MinicInlineAsm *s, MinicTargetInlineAsmContract *ct) {
+    const MinicExpression *expr;
+    MinicType type;
+    size_t i;
+    if (!p || !s || !ct || s->is_volatile || s->is_goto ||
+        !minic_x86_64_ip_fast_csum_template(s->template_text,s->template_length) ||
+        !s->outputs || !s->inputs || s->output_count!=3U ||
+        s->input_count!=2U || !s->has_memory_clobber ||
+        s->clobber_count!=1U || s->register_clobber_count || s->label_count)
+        return false;
+    for(i=0U;i<3U;++i) {
+        if(!c_is(&s->outputs[i],"=r"))return false;
+        expr=minic_c0_program_expression(p,s->outputs[i].expression);
+        if(!expr || expr->value_category!=MINIC_VALUE_LVALUE ||
+            minic_type_is_const(expr->type) ||
+            !minic_type_unqualified(expr->type,&type) ||
+            (i==1U ? !minic_type_is_pointer(type) :
+                (!minic_type_is_integer(type) ||
+                 type.integer_rank!=MINIC_INTEGER_RANK_INT))) return false;
+    }
+    if (!c_is(&s->inputs[0],"1") || !c_is(&s->inputs[1],"2"))return false;
+    for(i=0U;i<2U;++i) {
+        expr=minic_c0_program_expression(p,s->inputs[i].expression);
+        if(!expr || !minic_type_unqualified(expr->type,&type) ||
+           (i==0U ? !minic_type_is_pointer(type) :
+             (!minic_type_is_integer(type) ||
+              type.integer_rank!=MINIC_INTEGER_RANK_INT)))return false;
+    }
+    ct->operand_count=5U;
+    for(i=0U;i<5U;++i)
+        ct->kinds[i]=i<3U ? MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
+                    MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    return true;
+}
+
 /* Original Linux x86 checksum_64.h csum_fold: 32-bit ADD then ADC
  * with a tied initialization operand; the real CF hardware effect is
  * indivisible. This strict ISA contract handles the function family. */
@@ -1932,6 +1987,8 @@ bool minic_x86_64_qualify_inline_asm(
     if (x86_add32_carry_source(program, source, contract))
         return true;
     if (x86_percpu_gs_source(program, source, contract))
+        return true;
+    if (x86_ip_fast_csum_source(program, source, contract))
         return true;
     if (x86_checksum_source(program, source, contract))
         return true;

@@ -8,6 +8,7 @@ unsigned int minic_x86_64_linux_zero_barrier_form(const char *, size_t);
 unsigned int minic_x86_64_linux_counter_form(const char *,size_t);
 unsigned int minic_x86_64_hweight_alternative_form(const char *,size_t);
 unsigned int minic_x86_64_linux_msr_form(const char *,size_t);
+bool minic_x86_64_ip_fast_csum_template(const char *,size_t);
 bool minic_x86_64_checksum_fold_template(const char *,size_t);
 bool minic_x86_64_add32_carry_template(const char *,size_t);
 bool minic_x86_64_linux_percpu_form(const char *,size_t,unsigned int *,size_t *);
