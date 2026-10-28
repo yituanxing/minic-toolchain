@@ -6683,13 +6683,16 @@ bool minias_emit_sections(MiniAs *as) {
             const MiniAsStmt *previous=i!=0U?refs[i-1U].stmt:NULL;
             minias_set_error(as,
                 "internal-offset:%s:line=%zu:expected=%llu:actual=%llu:"
-                "previous=%s:previous_offset=%llu:previous_size=%u",
+                "previous=%s:previous_offset=%llu:previous_size=%u:"
+                "previous_line=%zu:previous_source=%.35s",
                 stmt->op,stmt->line,
                 (unsigned long long)stmt->offset,
                 (unsigned long long)section->size,
                 previous?previous->op:"none",
                 previous?(unsigned long long)previous->offset:0ULL,
-                previous?previous->size:0U);
+                previous?previous->size:0U,
+                previous?previous->line:0U,
+                previous?previous->args:"none");
             free(refs);
             return false;
         }
