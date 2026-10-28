@@ -260,11 +260,13 @@ typedef struct MiniAsTargetSiteState {
  * relocatable references using the final Fragment/Symbol layout. */
 typedef enum MiniAsMCExprKind {
     MINIAS_MC_EXPR_CONSTANT,
+    MINIAS_MC_EXPR_DOT, /* fragment-local location counter, never frozen */
     MINIAS_MC_EXPR_SYMBOL,
     MINIAS_MC_EXPR_SYMBOL_MINUS_DOT,
     MINIAS_MC_EXPR_DOT_MINUS_SYMBOL, /* stable current fragment site - label */
     MINIAS_MC_EXPR_SYMBOL_MINUS_DOT_DIV,
     MINIAS_MC_EXPR_DIFFERENCE,
+    MINIAS_MC_EXPR_DIFFERENCE_MUL, /* scaled absolute symbol distance */
     MINIAS_MC_EXPR_DIFFERENCE_DIV
 } MiniAsMCExprKind;
 
@@ -272,6 +274,7 @@ typedef struct MiniAsMCExpr {
     MiniAsMCExprKind kind;
     uint64_t constant;
     uint64_t divisor;
+    uint64_t multiplier; /* variable DATA positive scale, never an ISA fixup */
     int64_t lhs_addend;
     int64_t rhs_addend;
     /* Stable symbol table indices, never heap copies of symbol names.
@@ -326,6 +329,7 @@ typedef struct MiniAsStmt {
     unsigned char *static_data;
     size_t static_data_size;
     MiniAsMCData *mcdata; /* fixed-width DATA: retained typed expressions */
+    MiniAsMCData *variable_mcdata; /* .fill/.space: retained size operands */
     MiniAsMCInst *mcinst; /* allocated by target parser, freed by core */
 } MiniAsStmt;
 
@@ -510,6 +514,9 @@ bool minias_expr_parse_symbol_absolute_tail(MiniAs *, const char *,
                                             MiniAsSymbolExpr *);
 bool minias_evaluate_absolute_expression(MiniAs *, const char *, int64_t *);
 bool minias_compile_data_mc(MiniAs *, MiniAsStmt *, unsigned);
+bool minias_compile_variable_mc(MiniAs *, MiniAsStmt *);
+bool minias_resolve_variable_mc(MiniAs *, const MiniAsStmt *,
+                               uint64_t *, unsigned *, uint64_t *);
 bool minias_emit_mc_data(MiniAs *, const MiniAsStmt *);
 void minias_mcdata_destroy(MiniAsMCData *);
 bool minias_evaluate_absolute_operand(MiniAs *,const char *,int64_t *);

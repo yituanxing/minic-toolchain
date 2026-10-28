@@ -687,6 +687,7 @@ void minias_destroy(MiniAs *as) {
         free(as->stmts[i].args);
         free(as->stmts[i].static_data);
         minias_mcdata_destroy(as->stmts[i].mcdata);
+        minias_mcdata_destroy(as->stmts[i].variable_mcdata);
         if (as->stmts[i].mcinst != NULL) {
             MiniAsMCInst *mc = as->stmts[i].mcinst;
             size_t k;
@@ -2543,6 +2544,10 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
     }
     if(width!=0U &&
        !minias_compile_data_mc(as,&as->stmts[as->stmt_count-1U],width))
+        return false;
+    if((!strcmp(op,".fill") || !strcmp(op,".space") ||
+        !strcmp(op,".skip") || !strcmp(op,".zero")) &&
+       !minias_compile_variable_mc(as,&as->stmts[as->stmt_count-1U]))
         return false;
     if(delayed) {
         as->stmts[as->stmt_count-1U].deferred_data_size=true;

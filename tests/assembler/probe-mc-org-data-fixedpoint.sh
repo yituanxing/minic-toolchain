@@ -36,6 +36,7 @@ MINIAS_TRACE_RELAYOUT=1 "$MINIAS" "${mini[@]}" \
   -o "$work/mini.o" "$work/layout.s" 2>"$work/trace"
 "${gas[@]}" -o "$work/gnu.o" "$work/layout.s"
 grep -q 'minias-fragment-graph:anchors_built=1.*reparse=0' "$work/trace"
+grep -Eq '^minias-mcexpr-variable:typed=[1-9][0-9]* fallback=0$' "$work/trace"
 for sec in .data .rodata; do
   "${copy[@]}" -j "$sec" -O binary "$work/mini.o" "$work/mini.${sec##.}"
   "${copy[@]}" -j "$sec" -O binary "$work/gnu.o" "$work/gnu.${sec##.}"
@@ -66,6 +67,7 @@ MINIAS_TRACE_RELAYOUT=1 "$MINIAS" "${mini[@]}" \
   -o "$work/sub-mini.o" "$work/subsection.s" 2>"$work/trace"
 "${gas[@]}" -o "$work/sub-gnu.o" "$work/subsection.s"
 grep -q 'minias-fragment-graph:anchors_built=1.*reparse=0' "$work/trace"
+grep -Eq '^minias-mcexpr-variable:typed=[1-9][0-9]* fallback=0$' "$work/trace"
 for sec in .data .rodata; do
   "${copy[@]}" -j "$sec" -O binary "$work/sub-mini.o" "$work/sub-mini.${sec##.}"
   "${copy[@]}" -j "$sec" -O binary "$work/sub-gnu.o" "$work/sub-gnu.${sec##.}"
@@ -98,6 +100,7 @@ MINIAS_TRACE_RELAYOUT=1 "$MINIAS" "${mini[@]}" \
   -o "$work/cross-mini.o" "$work/cross-subsection.s" 2>"$work/trace"
 "${gas[@]}" -o "$work/cross-gnu.o" "$work/cross-subsection.s"
 grep -q 'minias-fragment-graph:anchors_built=1.*reparse=0' "$work/trace"
+grep -Eq '^minias-mcexpr-variable:typed=[1-9][0-9]* fallback=0$' "$work/trace"
 for sec in .data .rodata; do
   "${copy[@]}" -j "$sec" -O binary "$work/cross-mini.o" "$work/cross-mini.${sec##.}"
   "${copy[@]}" -j "$sec" -O binary "$work/cross-gnu.o" "$work/cross-gnu.${sec##.}"

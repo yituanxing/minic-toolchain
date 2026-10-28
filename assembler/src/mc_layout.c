@@ -520,7 +520,21 @@ static bool minias_resolve_deferred_data(MiniAs *as) {
             as->current_subsection=stmt->subsection;
             as->expr_dot_override=true;
             as->expr_dot_value=stmt->offset;
-            if(!strcmp(stmt->op,".fill")) {
+            if(stmt->variable_mcdata!=NULL) {
+                uint64_t repeat=0U,bits=0U;
+                unsigned width=0U;
+                if(!minias_resolve_variable_mc(as,stmt,&repeat,&width,&bits) ||
+                   (width!=0U && repeat>UINT32_MAX/width)) {
+                    minias_set_error(as,"unresolved-typed-variable-data:line=%zu",
+                                     stmt->line);
+                    goto invalid;
+                }
+                n=repeat*width;
+                stmt->variable_repeat=repeat;
+                stmt->variable_element_width=width;
+                stmt->variable_value=bits;
+                stmt->variable_data_resolved=true;
+            }else if(!strcmp(stmt->op,".fill")) {
                 unsigned width=0U;
                 uint64_t repeat=0U,bits=0U;
                 if(!minias_parse_common_fill(as,stmt->args,&repeat,&width,&bits) ||
@@ -914,12 +928,21 @@ bool minias_solve_fragment_layout(MiniAs *as,
     if(diagnostic!=NULL && getenv("MINIAS_TRACE_RELAYOUT")!=NULL) {
         const MiniAsAnchorGraph *g=
             (const MiniAsAnchorGraph *)as->layout_anchor_graph;
+        size_t typed_variable=0U,source_variable=0U,i;
+        for(i=0U;i<as->stmt_count;++i) {
+            if(!as->stmts[i].deferred_data_size)continue;
+            if(as->stmts[i].variable_mcdata!=NULL)++typed_variable;
+            else ++source_variable;
+        }
         if(passes!=0U)
             fprintf(diagnostic,"minias-fragment-relayout:inplace-passes=%zu\n",
                     passes);
         fprintf(diagnostic,
                 "minias-fragment-graph:anchors_built=%u relayouts=%zu branches=%zu reparse=0\n",
                 (unsigned)(g!=NULL),g?g->relayout_count:0U,*forced_count);
+        fprintf(diagnostic,
+                "minias-mcexpr-variable:typed=%zu fallback=%zu\n",
+                typed_variable,source_variable);
     }
     return true;
 }

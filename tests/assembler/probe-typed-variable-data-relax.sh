@@ -41,9 +41,10 @@ MINIAS_TRACE_RELAYOUT=1 "$MINIAS" "${mini[@]}" -o "$work/mini.o" "$work/mc.s" 2>
 "${gas[@]}" -o "$work/gnu.o" "$work/mc.s"
 grep -q 'minias-fragment-relayout:inplace-passes=' "$work/trace"
 grep -q 'minias-fragment-graph:anchors_built=1' "$work/trace"
+grep -Eq '^minias-mcexpr-variable:typed=[1-9][0-9]* fallback=0$' "$work/trace"
 for sec in .text .data; do
     "${copy[@]}" -j "$sec" -O binary "$work/mini.o" "$work/mini.${sec##.}"
     "${copy[@]}" -j "$sec" -O binary "$work/gnu.o" "$work/gnu.${sec##.}"
     cmp "$work/mini.${sec##.}" "$work/gnu.${sec##.}"
 done
-echo "MINIAS_TYPED_VARIABLE_DATA=PASS arch=$ARCH relayout=GNU_exact"
+echo "MINIAS_TYPED_VARIABLE_DATA=PASS arch=$ARCH relayout=GNU_exact semantic_expressions=retained"

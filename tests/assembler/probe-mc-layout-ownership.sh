@@ -17,6 +17,10 @@ for n in ('minias_relayout_fragments','minias_resolve_deferred_data',
         raise SystemExit('old driver layout: '+n)
 for n in ('minias_parse_common_space','minias_parse_common_fill'):
     if n+'(' not in expr:raise SystemExit('DATA grammar missing in MCExpr: '+n)
+for n in ('minias_compile_variable_mc','minias_resolve_variable_mc'):
+    if n+'(' not in expr:raise SystemExit('variable MCExpr owner missing: '+n)
+if 'minias_resolve_variable_mc(' not in layout:
+    raise SystemExit('MCLayout failed to consume retained variable expressions')
 emitter=driver[driver.index('static bool emit_data_stmt('):
                driver.index('static bool parse_numeric_label_id(')]
 if 'minias_parse_common_fill(' in emitter or 'minias_parse_common_space(' in emitter:

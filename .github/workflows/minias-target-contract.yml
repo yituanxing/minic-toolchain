@@ -69,6 +69,10 @@ jobs:
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=riscv \
             bash tests/assembler/probe-mc-org-data-fixedpoint.sh
+      - name: GNU RISC-V retained variable MCExpr and explicit legacy fallback
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=riscv \
+            bash tests/assembler/probe-mcexpr-variable-fixedpoint.sh
       - name: MCExpr data oracle in all A0 and ISA tests
         run: grep -q "MINIAS_MC_EXPR_DIFFERENCE" assembler/src/minias_internal.h
       - name: Verify atomic MCFragment transactions across four CodeEmitters
@@ -172,6 +176,10 @@ jobs:
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=aarch64 \
             bash tests/assembler/probe-mc-org-data-fixedpoint.sh
+      - name: GNU AArch64 retained variable MCExpr fixed point
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=aarch64 \
+            bash tests/assembler/probe-mcexpr-variable-fixedpoint.sh
       - name: Check AArch64 real .debug_frame CIE/FDE against GNU GAS
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=aarch64 \

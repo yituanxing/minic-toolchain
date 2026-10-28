@@ -111,6 +111,12 @@ jobs:
             bash tests/assembler/probe-mc-org-data-fixedpoint.sh
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=loongarch64 \
             bash tests/assembler/probe-mc-org-data-fixedpoint.sh
+      - name: GNU x86 and LoongArch64 variable MCExpr retained semantics
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=x86_64 \
+            bash tests/assembler/probe-mcexpr-variable-fixedpoint.sh
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=loongarch64 \
+            bash tests/assembler/probe-mcexpr-variable-fixedpoint.sh
       - name: GNU AS byte equality, ELF ABI, and ISA error gates
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
