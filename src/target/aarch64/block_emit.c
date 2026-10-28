@@ -112,6 +112,36 @@ const MinicLP64ArgumentLocation *location;
             return true;
 }
 
+/* Return a 1..16 byte integral-class record through x0/x1. Pack only
+ * meaningful payload bytes: never read past the last partial eightbyte.
+ * The frame may exceed scaled LDR's immediate range and dynamic alloca
+ * switches the stable object base from SP to x19. */
+static bool aarch64_return_gp_record(
+    FILE *out, size_t src, size_t bytes, bool dynamic_frame) {
+    size_t chunk, byte;
+    const char *base = dynamic_frame ? "x19" : "sp";
+    if (out == NULL || bytes == 0U || bytes > 16U) return false;
+    for (chunk = 0U; chunk < (bytes + 7U) / 8U; ++chunk) {
+        const size_t count = bytes - chunk * 8U >= 8U ? 8U : bytes - chunk * 8U;
+        if (fprintf(out, "  mov x%zu, xzr\n", chunk) < 0)
+            return false;
+        for (byte = 0U; byte < count; ++byte) {
+            const size_t offset = src + chunk * 8U + byte;
+            if (offset > UINT32_MAX ||
+                fprintf(out, "  movz x11, #%zu\n", offset & 65535U) < 0 ||
+                (offset > 65535U &&
+                 fprintf(out, "  movk x11, #%zu, lsl #16\n",
+                         offset >> 16U) < 0) ||
+                fprintf(out, "  add x11, %s, x11\n"
+                             "  ldrb w9, [x11]\n"
+                             "  orr x%zu, x%zu, x9, lsl #%zu\n",
+                        base, chunk, chunk, byte * 8U) < 0)
+                return false;
+        }
+    }
+    return true;
+}
+
 bool minic_aarch64_emit_terminator(FILE *out,
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreBlock *block,
@@ -120,6 +150,16 @@ bool minic_aarch64_emit_terminator(FILE *out,
     bool dynamic_frame) {
         switch (block->terminator.kind) {
         case MINIC_CORE_TERMINATOR_RETURN:
+            if (minic_type_is_record(fn->return_type)) {
+                size_t src, bytes, slots;
+                const MinicCoreObjectId object_id = block->terminator.return_object;
+                if (object_id >= fn->object_count ||
+                    !minic_multi_gp_record(program, target, fn->return_type,
+                                            &bytes, &slots) ||
+                    !minic_lp64_frame_plan_object(frame_plan, object_id, &src) ||
+                    !aarch64_return_gp_record(out, src, bytes, dynamic_frame))
+                    return false;
+            }
             if (minic_type_is_int128_integer(fn->return_type)) {
                 size_t src;
                 if (!minic_lp64_frame_plan_wide_slot(
@@ -136,6 +176,7 @@ bool minic_aarch64_emit_terminator(FILE *out,
                     return false;
             }
             if ((!minic_type_is_void(fn->return_type) &&
+                 !minic_type_is_record(fn->return_type) &&
                  !minic_type_is_long_double(fn->return_type) &&
                  !minic_type_is_int128_integer(fn->return_type) &&
                  fprintf(out, minic_type_is_double(fn->return_type)

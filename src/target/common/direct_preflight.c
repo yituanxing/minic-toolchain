@@ -2,6 +2,7 @@
 
 #include "target/common/global_emit.h"
 #include "target/common/lp64_scalar.h"
+#include "target/common/lp64_aggregate.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -184,10 +185,21 @@ bool minic_multi_direct_lp64_cfg_preflight(
          * machine-supported return modes and condition widths. */
         switch (term->kind) {
         case MINIC_CORE_TERMINATOR_RETURN:
-            /* Current direct LP64 emitter returns scalar values only.
-             * The canonical Core return verifier also accepts records. */
-            if (term->return_object != MINIC_CORE_OBJECT_INVALID)
+            if (minic_type_is_record(fn->return_type)) {
+                size_t bytes, slots;
+                MinicType object_type;
+                if (!minic_multi_gp_record(program, target, fn->return_type,
+                                            &bytes, &slots) ||
+                    term->return_value != MINIC_CORE_VALUE_INVALID ||
+                    term->return_object >= fn->object_count ||
+                    fn->objects[term->return_object].element_count != 1U ||
+                    !minic_type_unqualified(
+                        fn->objects[term->return_object].type, &object_type) ||
+                    !minic_type_equal(object_type, fn->return_type))
+                    return false;
+            } else if (term->return_object != MINIC_CORE_OBJECT_INVALID) {
                 return false;
+            }
             break;
         case MINIC_CORE_TERMINATOR_INDIRECT_BRANCH:
             break;
