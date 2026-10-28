@@ -1076,6 +1076,28 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             goto done;
         }
     }
+    /* GNU WAITPKG TPAUSE/UMWAIT/UMONITOR use a mandatory legacy
+     * prefix + 0F AE /digit and a typed register r/m operand.
+     * The opcode extension is NOT a source GPR and must never emit
+     * REX.W; allow REX.B for registers 8..15. */
+    if(!strcmp(s->op,"tpause") || !strcmp(s->op,"umwait") ||
+       !strcmp(s->op,"umonitor")) {
+        bool is_monitor=!strcmp(s->op,"umonitor");
+        unsigned wait_reg;
+        bool wait_wide=false;
+        if(!x64_register(s->args,&wait_reg,&wait_wide) ||
+           wait_wide!=is_monitor)goto invalid;
+        m->opcode=X64_UNARY;m->count=1U;
+        m->encoding=UINT32_C(0x8000)|UINT32_C(0xae)|
+            (is_monitor?UINT32_C(0x10000)|UINT32_C(0x600):
+             !strcmp(s->op,"tpause")?
+               UINT32_C(0x2000)|UINT32_C(0x600):
+               UINT32_C(0x20000)|UINT32_C(0x600));
+        m->operands[0].kind=MINIAS_MC_REGISTER;
+        m->operands[0].reg=wait_reg;
+        m->operands[0].register_64=false;
+        goto done;
+    }
     if (!strcmp(s->op,"endbr64") && !*s->args) {
         m->opcode=X64_ENDBR64;m->encoding=UINT32_C(0xfa1e0ff3);
         m->count=0U;goto done;
@@ -1834,14 +1856,17 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
      * REX.W B8+r imm64. Keep ABS64 symbol relocation distinct from the
      * GNU sign-extending C7 /0 imm32 form. */
     if(x64_args2(s->args,src,dst) && src[0]=='$' &&
-       (!strcmp(s->op,"movabsq") || !strcmp(s->op,"movq")) &&
+       (!strcmp(s->op,"movabsq") || !strcmp(s->op,"movabs") ||
+        !strcmp(s->op,"movq")) &&
        x64_register(dst,&rd,&wd) && wd) {
         uint64_t bits;
         MiniAsSymbolExpr expr;
         bool numeric=minias_eval_u64_expression(src+1,&bits);
-        bool symbolic=!numeric && !strcmp(s->op,"movabsq") &&
+        bool symbolic=!numeric &&
+            (!strcmp(s->op,"movabsq") || !strcmp(s->op,"movabs")) &&
             minias_parse_symbol_addend(src+1,&expr);
-        if((numeric && (!strcmp(s->op,"movabsq") ||
+        if((numeric && ((!strcmp(s->op,"movabsq") ||
+                         !strcmp(s->op,"movabs")) ||
            (int64_t)bits<INT32_MIN || (int64_t)bits>INT32_MAX)) ||
            symbolic) {
             m->opcode=X64_MOVABS_IMMREG;m->count=2U;
@@ -2317,7 +2342,8 @@ static bool x64_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
                      (byte && r>=4U && !high);
             *size=2U+(word?1U:0U)+(rex?1U:0U)+
                   ((m->encoding&UINT32_C(0x8000))?1U:0U)+
-                  ((m->encoding&UINT32_C(0x10000))?1U:0U);return true;
+                  ((m->encoding&UINT32_C(0x10000))?1U:0U)+
+                  ((m->encoding&UINT32_C(0x20000))?1U:0U);return true;
         }
         case X64_BSWAP:
             *size=2U+(m->operands[0].register_64 ||
@@ -2572,6 +2598,7 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
         case X64_UNARY:
             r=m->operands[0].reg;
             if(m->encoding&UINT32_C(0x10000))code[n++]=0xf3U;
+            if(m->encoding&UINT32_C(0x20000))code[n++]=0xf2U;
             if(m->encoding&UINT32_C(0x2000))code[n++]=0x66U;
             if(m->operands[0].register_64 || r>=8U ||
                ((m->encoding&UINT32_C(0x1000)) && r>=4U &&

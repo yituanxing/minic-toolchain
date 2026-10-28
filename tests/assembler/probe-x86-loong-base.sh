@@ -2293,6 +2293,92 @@ for bad in 'movq (1+2)(%unknown),%rax' 'movq (foo+bar)(%rax),%rcx' \
 done
 echo 'MINIAS_X86_EXPRESSION_MEMORY=PASS GNU_GAS_bytes_PCREL32_ABS32S_nested_expression'
 
+# GNU Common conditional state machine, including nested .elseif
+# and skipped invalid expressions after earlier branch selection.
+cat > "$work/gnu-elseif.s" <<'GNU_ELSEIF'
+.data
+.if 0
+.byte 0xff
+.elseif 0
+.byte 0xff
+.elseif 1
+.byte 0x11
+.elseif never_defined_symbol
+.byte 0xff
+.else
+.byte 0xff
+.endif
+.if 1
+  .if 0
+  .byte 0xff
+  .elseif 2==2
+  .byte 0x22
+  .else
+  .byte 0xff
+  .endif
+.elseif 0
+.byte 0xff
+.endif
+.if 0
+  .if missing_symbol
+  .byte 0xff
+  .endif
+.elseif 1
+.byte 0x33
+.endif
+GNU_ELSEIF
+for target in x86_64 loongarch64; do
+    "$MINIAS" --target="$target" -o "$work/$target-elseif-mini.o" "$work/gnu-elseif.s"
+    if [ "$target" = x86_64 ]; then
+        as --64 -o "$work/$target-elseif-gnu.o" "$work/gnu-elseif.s"
+        objcopy -j .data -O binary "$work/$target-elseif-mini.o" "$work/$target-elseif-mini.bin"
+        objcopy -j .data -O binary "$work/$target-elseif-gnu.o" "$work/$target-elseif-gnu.bin"
+    else
+        "$LOONGAS" -mabi=lp64d -o "$work/$target-elseif-gnu.o" "$work/gnu-elseif.s"
+        "$LOONGCOPY" -j .data -O binary "$work/$target-elseif-mini.o" "$work/$target-elseif-mini.bin"
+        "$LOONGCOPY" -j .data -O binary "$work/$target-elseif-gnu.o" "$work/$target-elseif-gnu.bin"
+    fi
+    cmp "$work/$target-elseif-mini.bin" "$work/$target-elseif-gnu.bin"
+done
+for bad in '.elseif 1' '.if 1
+.else
+.elseif 1
+.endif'; do
+    printf '.data\n%s\n' "$bad" > "$work/gnu-elseif-bad.s"
+    if "$MINIAS" --target=x86_64 -o "$work/gnu-elseif-bad.o" "$work/gnu-elseif-bad.s" >/dev/null 2>&1; then
+        echo "illegal .elseif accepted" >&2;exit 1
+    fi
+done
+echo 'MINIAS_COMMON_ELSEIF=PASS GNU_x86_Loong_bytes nested_chains_skip_inactive'
+
+cat > "$work/x86-waitpkg-movabs.s" <<'GNU_WAITPKG'
+.text
+tpause %ecx
+tpause %r9d
+umwait %eax
+umwait %r8d
+umonitor %rax
+umonitor %r9
+movabs $0x0101010101010101,%rax
+movabs $0x8000000000000000,%r15
+movabs $external_wait_symbol,%r8
+GNU_WAITPKG
+"$MINIAS" --target=x86_64 -o "$work/waitpkg-mini.o" "$work/x86-waitpkg-movabs.s"
+as --64 -o "$work/waitpkg-gnu.o" "$work/x86-waitpkg-movabs.s"
+objcopy -j .text -O binary "$work/waitpkg-mini.o" "$work/waitpkg-mini.bin"
+objcopy -j .text -O binary "$work/waitpkg-gnu.o" "$work/waitpkg-gnu.bin"
+cmp "$work/waitpkg-mini.bin" "$work/waitpkg-gnu.bin"
+readelf -Wr "$work/waitpkg-mini.o" > "$work/waitpkg-mini-rel.txt"
+readelf -Wr "$work/waitpkg-gnu.o" > "$work/waitpkg-gnu-rel.txt"
+grep -q 'R_X86_64_64.*external_wait_symbol' "$work/waitpkg-mini-rel.txt"
+grep -q 'R_X86_64_64.*external_wait_symbol' "$work/waitpkg-gnu-rel.txt"
+for bad in 'tpause %rax' 'tpause %ax' 'umwait %rcx' 'umonitor %ecx' 'movabs $3,%eax'; do
+    printf '.text\n%s\n' "$bad" > "$work/waitpkg-invalid.s"
+    if "$MINIAS" --target=x86_64 -o "$work/waitpkg-invalid.o" "$work/waitpkg-invalid.s" >/dev/null 2>&1; then
+        echo "bad x86 WAITPKG/MOVABS width accepted: $bad" >&2; exit 1
+    fi
+done
+echo 'MINIAS_X86_WAITPKG_MOVABS=PASS GNU_bytes ABS64 WAITPKG_REX register_widths'
 echo 'MINIAS_COMMON_NUMERIC_U64=PASS GNU_GAS_x86_LA64_exact_data_bytes'
 echo 'MINIAS_X86_SEGMENTED_INDIRECT=PASS GNU_AS_text_and_relocations segment_base_index_abs_rip=true indirect_memory_call_jmp=true absolute_symbol32S=true'
 echo 'MINIAS_TWO_TARGET_ORACLE=PASS x86_GNU_bytes=equal loong_GNU_bytes=equal ELF_machine=correct lp64d_v1=0x43 CET_endbr64=1 ALU_imm8_imm32=1 x86_ModRM_SIB_disp=1 x86_test_cmp_alu_memory=1 x86_scaled_index_SIB=1 LA_jr=1 LA_scaled_ptr14=1 LA_imm12_shift_upper20=1 invalid=reject'

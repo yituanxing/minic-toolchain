@@ -133,6 +133,21 @@ external_probe:
     msr fpcr, x2
     mrs x0, hstr_el2
     msr hstr_el2, x0
+    mrs x2, pmuserenr_el0
+    msr pmuserenr_el0, x1
+    mrs x1, pmccntr_el0
+    msr pmccntr_el0, x1
+    mrs x0, ifsr32_el2
+    msr ifsr32_el2, x1
+    mrs x0, cptr_el2
+    msr cptr_el2, x1
+    mrs x0, dbgauthstatus_el1
+    // NEG/SUB shifted register aliases are real GNU Linux asm.
+    neg x2, x2, asr 2
+    neg x15, x15, lsl 6
+    neg w0, w0, lsl 1
+    negs x4, x0, lsr 2
+    neg x10, x1, lsl 4
     mrs x2, pmselr_el0
     msr pmselr_el0, x2
     mrs x0, dacr32_el2
@@ -808,6 +823,9 @@ for bad in 'add x0, w0, x1' 'cmp x0, #4097' 'ldr x0, [x1, -257]' \
            'mrs x0,s4_3_c1_c0_1' 'msr s0_8_c1_c0_1,x0' \
            'mrs x0,s0_3_c16_c0_1' 'mrs x0,s0_3_c1_c0_8' \
            'mrs x0,s0_3_c1_c0_1oops' \
+           'msr dbgauthstatus_el1,x0' \
+           'neg x0,x1,ror 2' 'neg x0,x1,lsl 64' \
+           'negs w0,w1,asr -1' \
            'mrs w0,pmselr_el0' 'msr dacr32_el2,w0' \
            'tlbi alle1is,x1' 'ld1 {v1.4s},[x0],#8' \
            'st1 {v5.8b},[x0],#16' 'ld1 {v1.4s},[x0],sp' \

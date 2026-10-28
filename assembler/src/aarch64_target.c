@@ -1405,6 +1405,14 @@ static bool a64_system_register(const char *name,uint32_t *mrs,uint32_t *msr) {
         {"par_el1",UINT32_C(0xd5387400),UINT32_C(0xd5187400)},
         {"hcr_el2",UINT32_C(0xd53c1100),UINT32_C(0xd51c1100)},
         {"hstr_el2",UINT32_C(0xd53c1160),UINT32_C(0xd51c1160)},
+        /* Architectural AArch64 GNU/LLVM system register oracles.
+         * Exact operand access class is retained; read-only debug
+         * authentication status deliberately has no MSR encoding. */
+        {"pmuserenr_el0",UINT32_C(0xd53b9e00),UINT32_C(0xd51b9e00)},
+        {"pmccntr_el0",UINT32_C(0xd53b9d00),UINT32_C(0xd51b9d00)},
+        {"ifsr32_el2",UINT32_C(0xd53c5020),UINT32_C(0xd51c5020)},
+        {"cptr_el2",UINT32_C(0xd53c1140),UINT32_C(0xd51c1140)},
+        {"dbgauthstatus_el1",UINT32_C(0xd5307ec0),0U},
         {"pmselr_el0",UINT32_C(0xd53b9ca0),UINT32_C(0xd51b9ca0)},
         {"dacr32_el2",UINT32_C(0xd53c3000),UINT32_C(0xd51c3000)},
         {"fpsr",UINT32_C(0xd53b4420),UINT32_C(0xd51b4420)},
@@ -1653,7 +1661,9 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
             if(!strcmp(op,ops[alu_k].name))break;
         if(alu_k==sizeof(ops)/sizeof(ops[0]) ||
            !split_operands(args,alu_tok,&alu_n) ||
-           alu_n!=(ops[alu_k].unary?2U:3U) ||
+           (ops[alu_k].unary?
+             (alu_n!=2U &&
+              (alu_n!=3U || alu_k>1U)):alu_n!=3U) ||
            !parse_a64_reg(alu_tok[0],&alu_rd,&alu_wide,&alu_sp) ||
            alu_sp) {
             minias_set_error(as,"bad-aarch64-arith-alias:%s:line=%zu",
@@ -1681,6 +1691,15 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         }
         inst->opcode=A64_MC_ARITH_ALIAS;inst->count=3U;
         inst->encoding=ops[alu_k].base;
+        if(ops[alu_k].unary && alu_n==3U) {
+            uint32_t shift_fields;
+            if(!a64_shift_fields(alu_tok[2],alu_wide,false,&shift_fields)) {
+                minias_set_error(as,"bad-aarch64-neg-shift:%s:line=%zu",
+                                 args,stmt->line);
+                free(inst);return false;
+            }
+            inst->encoding|=shift_fields;
+        }
         put_reg(&inst->operands[0],alu_rd,alu_wide);
         put_reg(&inst->operands[1],alu_rn,alu_wide);
         put_reg(&inst->operands[2],alu_rm,alu_mwide);

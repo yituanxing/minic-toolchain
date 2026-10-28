@@ -2174,6 +2174,36 @@ static bool push_conditional_strings(MiniAs *as,const char *args,
     return push_conditional_value(as,unequal?!equal:equal);
 }
 
+/* GAS .elseif shares the same frame as .if/.else. Once an
+ * earlier arm wins, do not evaluate later arms: symbols there need
+ * not exist, and ignored nested branches must not leak statements. */
+static bool elseif_conditional(MiniAs *as,const char *args,size_t line) {
+    MiniAsConditional *conditional;
+    bool condition=false;
+    if(as->conditional_count==0U) {
+        minias_set_error(as,"unmatched-directive:.elseif:line=%zu",line);
+        return false;
+    }
+    conditional=&as->conditionals[as->conditional_count-1U];
+    if(conditional->else_seen) {
+        minias_set_error(as,"elseif-after-else:line=%zu",line);
+        return false;
+    }
+    if(conditional->parent_active && !conditional->condition_true) {
+        if(!evaluate_if_expression(as,args,&condition) &&
+           (!as->target->evaluate_target_if ||
+            !as->target->evaluate_target_if(args,&condition))) {
+            minias_set_error(as,"unsupported-expression:.elseif:%s:line=%zu",
+                             args,line);
+            return false;
+        }
+    }
+    as->conditional_active=conditional->parent_active &&
+                           !conditional->condition_true && condition;
+    conditional->condition_true|=condition;
+    return true;
+}
+
 static bool else_conditional(MiniAs *as, size_t line) {
     MiniAsConditional *conditional;
 
@@ -3969,6 +3999,11 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
          * symbols; only reparsing fully reproduces that control flow. */
         as->layout_sensitive = true;
         return push_conditional(as, minias_trim(text + 3), line);
+    }
+    if (strncmp(text, ".elseif", 7U) == 0 &&
+        (text[7] == '\0' || isspace((unsigned char)text[7]))) {
+        as->layout_sensitive=true;
+        return elseif_conditional(as,minias_trim(text+7U),line);
     }
     if (strcmp(text, ".else") == 0) {
         return else_conditional(as, line);
