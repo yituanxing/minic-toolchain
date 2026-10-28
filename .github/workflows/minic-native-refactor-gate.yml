@@ -62,6 +62,7 @@ on:
       - 'tests/compiler/c0/probe-linux-global-prefix-attributes.sh'
       - 'tests/compiler/c0/probe-x86-linux-bitops.sh'
       - 'tests/compiler/c0/probe-x86-linux-callee-clobber.sh'
+      - 'tests/compiler/c0/probe-x86-linux-percpu-gs.sh'
       - 'tests/compiler/c0/probe-x86-linux-checksum-fold.sh'
       - 'tests/compiler/c0/probe-x86-linux-msr-extable.sh'
       - 'tests/compiler/c0/probe-x86-linux-hweight-alternative.sh'
@@ -260,6 +261,7 @@ jobs:
           bash tests/compiler/c0/probe-linux-global-prefix-attributes.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
           bash tests/compiler/c0/probe-x86-linux-bitops.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
           bash tests/compiler/c0/probe-x86-linux-callee-clobber.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+          bash tests/compiler/c0/probe-x86-linux-percpu-gs.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
           bash tests/compiler/c0/probe-x86-linux-checksum-fold.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
           bash tests/compiler/c0/probe-x86-linux-msr-extable.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
           bash tests/compiler/c0/probe-x86-linux-hweight-alternative.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"

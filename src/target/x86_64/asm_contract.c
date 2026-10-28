@@ -338,6 +338,121 @@ static bool x86_checksum_source(const MinicC0Program *p,
     return true;
 }
 
+
+/* One typed Linux x86 per-CPU GS instruction catalog.
+ * Matches the original arch/x86/include/asm/percpu.h GNU operand modes.
+ * Only the target owns the GS segment and width/ALU instruction names. */
+typedef struct {
+    const char *name;
+    unsigned int op;  /* read=0 write=1 inc=2 dec=3 add=4 sub=5
+                         and=6 or=7 xor=8 */
+    size_t width;
+} MinicX86PerCpuForm;
+static const MinicX86PerCpuForm x86_percpu_forms[]={
+    {"mov",0U,1U},{"mov",0U,2U},{"mov",0U,4U},{"mov",0U,8U},
+    {"mov",1U,1U},{"mov",1U,2U},{"mov",1U,4U},{"mov",1U,8U},
+    {"inc",2U,1U},{"inc",2U,2U},{"inc",2U,4U},{"inc",2U,8U},
+    {"dec",3U,1U},{"dec",3U,2U},{"dec",3U,4U},{"dec",3U,8U},
+    {"add",4U,1U},{"add",4U,2U},{"add",4U,4U},{"add",4U,8U},
+    {"sub",5U,1U},{"sub",5U,2U},{"sub",5U,4U},{"sub",5U,8U},
+    {"and",6U,1U},{"and",6U,2U},{"and",6U,4U},{"and",6U,8U},
+    {"or",7U,1U},{"or",7U,2U},{"or",7U,4U},{"or",7U,8U},
+    {"xor",8U,1U},{"xor",8U,2U},{"xor",8U,4U},{"xor",8U,8U}
+};
+bool minic_x86_64_linux_percpu_form(const char *text,size_t length,
+    unsigned int *op,size_t *width){
+    char compact[128],exact[128];size_t i,j=0U;
+    if(!text||!length||length>=sizeof(compact)||!op||!width)
+        return false;
+    for(i=0U;i<length;++i){
+        const char c=text[i];
+        if(c==' '||c==9||c==10||c==13)continue;
+        if(c==';'||j+1U>=sizeof(compact))return false;
+        compact[j++]=c;
+    }
+    compact[j]=0;
+    for(i=0U;i<sizeof(x86_percpu_forms)/sizeof(x86_percpu_forms[0]);++i){
+        const MinicX86PerCpuForm *f=&x86_percpu_forms[i];
+        const char suffix=f->width==1U?'b':f->width==2U?'w':
+                          f->width==4U?'l':'q';
+        int n;
+        if(f->op==0U)
+            n=snprintf(exact,sizeof(exact),"%s%c%%%%gs:%%1,%%0",
+                       f->name,suffix);
+        else if(f->op==2U||f->op==3U)
+            n=snprintf(exact,sizeof(exact),"%s%c%%%%gs:%%0",
+                       f->name,suffix);
+        else
+            n=snprintf(exact,sizeof(exact),"%s%c%%1,%%%%gs:%%0",
+                       f->name,suffix);
+        if(n>0&&(size_t)n<sizeof(exact)&&strcmp(compact,exact)==0){
+            *op=f->op;*width=f->width;return true;
+        }
+        /* Linux original C source uses named %[var]/%[val].
+         * Numeric templates also arise in exact preprocessed .i.
+         * Check the complete source shape, not an instruction prefix. */
+        if(f->op==0U)
+            n=snprintf(exact,sizeof(exact),
+                       "%s%c%%%%gs:%%[var],%%[val]",f->name,suffix);
+        else if(f->op==2U||f->op==3U)
+            n=snprintf(exact,sizeof(exact),
+                       "%s%c%%%%gs:%%[var]",f->name,suffix);
+        else
+            n=snprintf(exact,sizeof(exact),
+                       "%s%c%%[val],%%%%gs:%%[var]",f->name,suffix);
+        if(n>0&&(size_t)n<sizeof(exact)&&strcmp(compact,exact)==0){
+            *op=f->op;*width=f->width;return true;
+        }
+    }
+    return false;
+}
+static bool x86_percpu_gs_source(const MinicC0Program *program,
+    const MinicInlineAsm *src,MinicTargetInlineAsmContract *contract){
+    unsigned int op;size_t width,i;
+    const MinicExpression *e;
+    if(!program||!src||!contract||src->is_goto||src->label_count||
+       src->clobber_count||src->register_clobber_count||
+       src->has_memory_clobber||
+       !minic_x86_64_linux_percpu_form(
+         src->template_text,src->template_length,&op,&width)||
+       src->output_count!=1U||
+       src->input_count!=((op==2U||op==3U)?0U:1U)||
+       !src->outputs||(src->input_count&&!src->inputs))
+        return false;
+    if(op==0U){
+        if(!c_is(&src->outputs[0],width==1U?"=q":"=r")||
+           !c_is(&src->inputs[0],"m"))return false;
+    }else if(!c_is(&src->outputs[0],"+m")||
+             (src->input_count&&!c_is(&src->inputs[0],
+                width==1U?"qi":width==8U?"re":"ri")))
+        return false;
+    for(i=0U;i<1U+src->input_count;++i){
+        const MinicInlineAsmOperand *a=i==0U?
+            &src->outputs[0]:&src->inputs[0];
+        MinicType ty;
+        e=minic_c0_program_expression(program,a->expression);
+        if(!e||!minic_type_unqualified(e->type,&ty)||
+           ty.base_kind!=MINIC_TYPE_BASE_INT||
+           (width==1U?ty.integer_rank!=MINIC_INTEGER_RANK_CHAR:
+            width==2U?ty.integer_rank!=MINIC_INTEGER_RANK_SHORT:
+            width==4U?ty.integer_rank!=MINIC_INTEGER_RANK_INT:
+                       (ty.integer_rank!=MINIC_INTEGER_RANK_LONG&&
+                        ty.integer_rank!=MINIC_INTEGER_RANK_LONG_LONG))||
+           (i==0U&&(e->value_category!=MINIC_VALUE_LVALUE||
+                     (op==0U&&minic_type_is_const(e->type)))))
+            return false;
+    }
+    contract->operand_count=1U+src->input_count;
+    contract->kinds[0]=op==0U?
+        MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT:
+        MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
+    if(src->input_count)
+        contract->kinds[1]=op==0U?
+            MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT:
+            MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    return true;
+}
+
 static bool x86_nospec_source(const MinicC0Program *program,
                               const MinicInlineAsm *src) {
     const MinicExpression *out, *size, *index;
@@ -1254,6 +1369,8 @@ bool minic_x86_64_qualify_inline_asm(
     bool is_mulacc = false, is_muldiv = false;
     size_t i, count;
     if (!contract) return false;
+    if (x86_percpu_gs_source(program, source, contract))
+        return true;
     if (x86_checksum_source(program, source, contract))
         return true;
     if (x86_linux_msr_source(program, source, contract))

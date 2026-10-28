@@ -240,6 +240,65 @@ static bool emit_linux_bitops(
 
 
 
+
+/* The GS segment base is a real x86 hardware register. Address-backed
+ * Core lvalues carry the per-CPU symbol/field displacement, not ordinary
+ * C values. Use caller-saved RAX/R10/R11, preserve x86 width and flags. */
+static bool emit_linux_percpu_gs(FILE *out,const MinicC0Program *p,
+    const MinicTargetInfo *t,const MinicCoreFunction *fn,
+    const MinicX86Frame *frame,const MinicCoreInstruction *ins,
+    const MinicCoreInlineAsm *info){
+    unsigned int op;size_t bytes,i;bool sign;
+    const MinicCoreStructuredInlineAsmOperand *b=
+        ins->value.structured_inline_asm.operands;
+    MinicType type;
+    static const char *const mnemonics[]={
+       "mov","mov","inc","dec","add","sub","and","or","xor"};
+    char suffix;
+    const char *reg;
+    size_t checked;
+    if(!out||!p||!t||!fn||!frame||!ins||!info||!b||
+       !minic_x86_64_linux_percpu_form(info->template_text,
+           info->template_length,&op,&bytes)||
+       info->is_goto||info->has_memory_clobber||
+       info->register_clobber_count||
+       ins->value.structured_inline_asm.operand_count!=
+          ((op==2U||op==3U)?1U:2U))return false;
+    for(i=0U;i<ins->value.structured_inline_asm.operand_count;++i){
+        const bool memory=(i==0U&&op!=0U)||(i==1U&&op==0U);
+        if(b[i].operand_index!=i||b[i].value>=fn->value_count||
+           b[i].has_fixed_register_binding||b[i].early_clobber||
+           b[i].kind!=(i==0U?
+              (op==0U?MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT:
+                       MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE):
+              (op==0U?MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT:
+                       MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT)))
+            return false;
+        type=fn->values[b[i].value].type;
+        if(memory||(i==0U&&op==0U)){
+            if(!minic_type_pointee(type,&type))return false;
+        }
+        if(!minic_x86_64_scalar_width(p,t,type,&checked,&sign)||checked!=bytes)
+            return false;
+    }
+    suffix=bytes==1U?'b':bytes==2U?'w':bytes==4U?'l':'q';
+    reg=bytes==1U?"%al":bytes==2U?"%ax":
+         bytes==4U?"%eax":"%rax";
+    if(op==0U){
+        return x86_value_load(out,frame,b[1].value,"%r10")&&
+               fprintf(out,"  mov%c %%gs:(%%r10), %s\n",suffix,reg)>=0&&
+               x86_value_load(out,frame,b[0].value,"%r11")&&
+               fprintf(out,"  mov%c %s, (%%r11)\n",suffix,reg)>=0;
+    }
+    if(op!=2U&&op!=3U&&
+       !x86_value_load(out,frame,b[1].value,"%rax"))return false;
+    if(!x86_value_load(out,frame,b[0].value,"%r10"))return false;
+    return (op==2U||op==3U)?
+       fprintf(out,"  %s%c %%gs:(%%r10)\n",mnemonics[op],suffix)>=0:
+       fprintf(out,"  %s%c %s, %%gs:(%%r10)\n",
+               mnemonics[op],suffix,reg)>=0;
+}
+
 /* The third GNU input "0" initializes %eax, while ADD and ADC must be
  * adjacent because CF is live. Both operands are real Core scalars. */
 static bool emit_checksum_fold(FILE *out,const MinicC0Program *p,
@@ -851,6 +910,12 @@ bool minic_x86_64_emit_structured_asm(
     bindings = ins->value.structured_inline_asm.operands;
     if (!info->template_text)
         return false;
+    {
+        unsigned int percpu_op=0U;size_t percpu_width=0U;
+        if (minic_x86_64_linux_percpu_form(info->template_text,
+              info->template_length,&percpu_op,&percpu_width))
+            return emit_linux_percpu_gs(out,program,target,fn,frame,ins,info);
+    }
     if (minic_x86_64_checksum_fold_template(
             info->template_text,info->template_length))
         return emit_checksum_fold(out,program,target,fn,frame,ins,info);

@@ -32,7 +32,7 @@ gcc -O0 -no-pie "$d/main.c" "$d/gnu.o" "$d/mini.o" -o "$d/run"
 result=0;"$d/run" || result=$?
 test "$result" -eq 42
 sed 's/adcl $0xffff,%0/adcl $0xffff,%0; hlt/' "$d/fold.i" >"$d/extra.i"
-sed 's/"0"(x \\& 0xffff0000U)/"r"(x \\& 0xffff0000U)/' "$d/fold.i" >"$d/tie.i"
+sed 's/"0"/"r"/' "$d/fold.i" >"$d/tie.i"
 sed 's/"=r"(sum)/"=a"(sum)/' "$d/fold.i" >"$d/out.i"
 for case in extra tie out;do
  if "$cc" --target=x86_64-linux -S "$d/$case.i" -o "$d/$case.s" >/dev/null 2>&1;then
