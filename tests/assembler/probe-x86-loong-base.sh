@@ -3296,3 +3296,36 @@ objcopy -j .text -O binary "$work/x86-inline-rept-gnu.o" "$work/x86-inline-rept-
 cmp "$work/x86-inline-rept-mini.bin" "$work/x86-inline-rept-gnu.bin"
 test "$(wc -c < "$work/x86-inline-rept-mini.bin")" -eq 4102
 echo 'MINIAS_X86_INLINE_REPT=PASS GNU_512_page_entries_nested_repeat_mutable_set'
+
+
+# Genuine GNU Linux head_64.S uses mutable .set counters in one-symbol
+# relocatable page-table expressions, including 64-bit sign-extended masks.
+# Both initial and second .rept iterations must freeze different ADDENDs.
+cat > "$work/x86-symbol-mutable-quad.s" <<'X86_MUTABLE_RELOC'
+.data
+.globl level1_fixmap_pgt
+level1_fixmap_pgt:
+.quad 0
+pgtno = 0
+.rept 2
+.quad level1_fixmap_pgt + (pgtno << 12) - 0xffffffff80000000 + ((1 << 0)|(1 << 1)|(1 << 2)|(1 << 5))
+pgtno = pgtno + 1
+.endr
+X86_MUTABLE_RELOC
+"$MINIAS" --target=x86_64 -o "$work/x86-symbol-mutable-mini.o" "$work/x86-symbol-mutable-quad.s"
+as --64 -o "$work/x86-symbol-mutable-gnu.o" "$work/x86-symbol-mutable-quad.s"
+objcopy -j .data -O binary "$work/x86-symbol-mutable-mini.o" "$work/x86-symbol-mutable-mini.bin"
+objcopy -j .data -O binary "$work/x86-symbol-mutable-gnu.o" "$work/x86-symbol-mutable-gnu.bin"
+cmp "$work/x86-symbol-mutable-mini.bin" "$work/x86-symbol-mutable-gnu.bin"
+for flavor in mini gnu; do
+ readelf -Wr "$work/x86-symbol-mutable-$flavor.o" |
+    awk '$3 == "R_X86_64_64" {print $1,$3,$5,$6,$7}' |
+    LC_ALL=C sort > "$work/x86-symbol-mutable-$flavor.rel"
+ test "$(wc -l < "$work/x86-symbol-mutable-$flavor.rel")" -eq 2
+done
+diff -u "$work/x86-symbol-mutable-gnu.rel" "$work/x86-symbol-mutable-mini.rel"
+printf '.data\n.quad real_symbol + (missing_counter << 12)\n' > "$work/x86-symbol-mutable-bad.s"
+if "$MINIAS" --target=x86_64 -o "$work/x86-symbol-mutable-bad.o" "$work/x86-symbol-mutable-bad.s" >/dev/null 2>&1; then
+ echo "MiniAS accepted unresolved mutable relocation expression" >&2;exit 1
+fi
+echo 'MINIAS_COMMON_SYMBOL_MUTABLE_QUAD=PASS GNU_bytes_RELA_two_mutable_counters_overflow_and_negative'
