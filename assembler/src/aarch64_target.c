@@ -284,15 +284,11 @@ static bool parse_a64_reg(const char *text, unsigned *number, bool *is64,
 }
 
 static bool parse_signed_number(const char *text, int64_t *out) {
-    char *end;
-    long long value;
-    if (*text == '#') ++text;
-    if (!*text) return false;
-    errno = 0;
-    value = strtoll(text, &end, 0);
-    if (errno || end == text || *end) return false;
-    *out = (int64_t)value;
-    return true;
+    /* The existing Common constant-expression parser already implements
+     * GNU nested arithmetic, shifts and bitwise operators. Do not create
+     * a second numeric parser for AArch64 immediates and memory offsets. */
+    if(*text=='#')++text;
+    return *text!='\0' && minias_eval_i64_expression(text,out);
 }
 
 static void put_reg(MiniAsMCOperand *dst, unsigned number, bool reg64) {
@@ -2557,12 +2553,18 @@ static bool directive(MiniAs *as, const char *op, const char *args,
      * exact declared ISA here; never silently accept a richer architecture. */
     if (strcmp(op, ".arch") == 0) {
         *handled = true;
-        if (strcmp(args, "armv8-a") != 0) {
+        /* These are recognized GNU assembler ISA profiles, not a claim
+         * that every v8.5/crypto instruction is implemented. Unsupported
+         * machine encodings still fail in the typed Target MC parser. */
+        bool v85=!strcmp(args,"armv8.5-a");
+        if(strcmp(args,"armv8-a")!=0 && !v85 &&
+           strcmp(args,"armv8-a+crypto")!=0) {
             minias_set_error(as, "unsupported-aarch64-architecture:%s:line=%zu",
                              args, line);
             return false;
         }
-        as->target_options &= ~A64_FEATURE_LSE;
+        if(v85)as->target_options|=A64_FEATURE_LSE;
+        else as->target_options&=~A64_FEATURE_LSE;
         return true;
     }
     if(!strcmp(op,".arch_extension")) {
@@ -2577,20 +2579,33 @@ static bool directive(MiniAs *as, const char *op, const char *args,
         return true;
     }
     if(!strcmp(op,".inst")) {
-        char entries[4][96];unsigned count,i;
-        uint64_t value;
-        if(!split_operands(args,entries,&count)) {
-            minias_set_error(as,"invalid-aarch64-inst-list:line=%zu",line);
+        /* .inst is a *data-list* directive, not a 4-operand instruction.
+         * Validate every comma-delimited entry without the 4x96 MCInst
+         * operand bound. Common still plans/emits every 32-bit data word;
+         * this target only enforces valid AArch64 word widths. */
+        char *copy=minias_strdup(args),*cursor;
+        if(!copy) {
+            minias_set_error(as,"out-of-memory:aarch64-inst-list");
             return false;
         }
-        for(i=0U;i<count;++i)
-            if(!minias_eval_u64_expression(entries[i],&value) ||
-               value>UINT32_MAX) {
+        cursor=copy;
+        for(;;) {
+            char *comma=strchr(cursor,',');
+            char *word;
+            uint64_t bits;
+            if(comma)*comma='\0';
+            word=minias_trim(cursor);
+            if(!*word || !minias_eval_u64_expression(word,&bits) ||
+               (bits>UINT32_MAX &&
+                (int64_t)bits<INT32_MIN)) {
                 minias_set_error(as,"invalid-aarch64-inst-word:%s:line=%zu",
-                                 entries[i],line);
-                return false;
+                                 word,line);
+                free(copy);return false;
             }
-        /* Common .inst typed raw-data fragment keeps ELF/section ownership. */
+            if(!comma)break;
+            cursor=comma+1U;
+        }
+        free(copy);
         return true;
     }
     if (strcmp(op, ".insn") == 0 || strcmp(op, ".option") == 0) {

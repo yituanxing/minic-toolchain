@@ -368,6 +368,10 @@ external_adr_target:
     prfm pldl1keep, [x3, #16]
     prfm plil2strm, [x4, #24]
     .inst 0xd503201f, 0xd65f03c0
+    // GNU target raw-word list is not limited to four MC operands.
+    .inst 0xd503201f, 0xd503201f, 0xd503201f, 0xd503201f, 0xd503201f, 0xd503201f
+    .inst (0xd500401f | ((0) << 16 | (4) << 5) | ((!!(0)) << 8))
+    .inst (0xd500401f | ((0) << 16 | (4) << 5) | ((!!(9)) << 8))
     .arch_extension nolse
     ldxr w0, [x2]
     ldxr x1, [x2]
@@ -727,6 +731,8 @@ for bad_source in 'ldxr x0, [x1,#4]' 'stxr x0, x1, [x2]' \
                   'dsb #16' 'dsb bogus' 'isb ish' 'isb #16' \
                   'prfm pstl4strm, [x2]' 'prfm pstl1strm, [w2]' \
                   '.inst 0x100000000' \
+                  '.inst 0xd503201f, ' \
+                  '.inst 0xd503201f, 0x100000000' \
                   'cmn x0, #-1' 'cmn w0, #4097' \
                   'and w0, w0, #0xffffffff' 'and w0, w0, #0' \
                   'and w0, w1, #0x100000001' \
@@ -939,6 +945,25 @@ for sect in .text .data; do
 done
 echo 'MINIAS_COMMON_GNU_ALIGN=PASS optional_fill_maxskip=gnu_byte_equal'
 
+# Verify GNU v8.5-a implies native LSE, while v8+crypto resets it.
+# Unimplemented ISA opcodes must still fail independently of .arch syntax.
+cat >"$work/arch-profiles.s" <<'A64_ARCH_PROFILES'
+.arch armv8.5-a
+.text
+.globl profile_entry
+profile_entry:
+    cas x0, x1, [x2]
+    swp x3, x4, [x5]
+.arch armv8-a+crypto
+    nop
+    .inst 0xd503201f, 0xd503201f, 0xd503201f, 0xd503201f, 0xd503201f
+A64_ARCH_PROFILES
+"$MINIAS" --target=aarch64 -o "$work/profile-mini.o" "$work/arch-profiles.s"
+"$AARCH64_AS" -o "$work/profile-gnu.o" "$work/arch-profiles.s"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/profile-mini.o" "$work/profile-mini.bin"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/profile-gnu.o" "$work/profile-gnu.bin"
+cmp "$work/profile-mini.bin" "$work/profile-gnu.bin"
+echo 'MINIAS_AARCH64_PROFILE=PASS GNU_armv8_5_lse_crypto_profile_and_inst_lists'
 # Local symbol differences are absolute even in a different output
 # section. GNU's .byte/.long/.quad are checked from the same source.
 cat >"$work/local-diff.s" <<'A64_DIFF'

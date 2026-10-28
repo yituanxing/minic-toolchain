@@ -94,6 +94,13 @@ static bool parse_addend_unary(MiniAsAddendParser *parser, uint64_t *value) {
         *value = UINT64_C(0) - operand;
         return true;
     }
+    if (*parser->cursor == '!') {
+        uint64_t operand;
+        ++parser->cursor;
+        if(!parse_addend_unary(parser,&operand))return false;
+        *value=operand==0U?1U:0U;
+        return true;
+    }
     if (*parser->cursor == '~') {
         uint64_t operand;
         ++parser->cursor;
