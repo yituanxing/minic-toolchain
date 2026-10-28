@@ -828,17 +828,17 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
        !strcmp(s->op,"bzhil") || !strcmp(s->op,"bzhiq")) {
         char first[X64_OPERAND_CAP],source[X64_OPERAND_CAP];
         char dest[X64_OPERAND_CAP];
-        unsigned r0=0U,r1=0U,rd=0U;
-        bool w0=false,w1=false,wd=false;
+        unsigned r0=0U,r1=0U,bmi_dst=0U;
+        bool w0=false,w1=false,bmi_wide=false;
         bool andn=!strncmp(s->op,"andn",4U);
         size_t name_len=strlen(s->op);
         if(!x64_args3(s->args,first,source,dest) ||
            !x64_register(first,&r0,&w0) ||
            !x64_register(source,&r1,&w1) ||
-           !x64_register(dest,&rd,&wd) ||
-           w0!=wd || w1!=wd ||
+           !x64_register(dest,&bmi_dst,&bmi_wide) ||
+           w0!=bmi_wide || w1!=bmi_wide ||
            !(name_len==(andn?4U:4U) ||
-             (name_len==5U && s->op[4]==(wd?'q':'l'))))goto invalid;
+             (name_len==5U && s->op[4]==(bmi_wide?'q':'l'))))goto invalid;
         m->opcode=X64_BMI2_SHIFT;m->count=3U;
         m->encoding=UINT32_C(0x10000)|
                     ((andn?UINT32_C(0xf2):UINT32_C(0xf5))<<8U);
@@ -847,8 +847,8 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         m->operands[1].kind=MINIAS_MC_REGISTER;
         m->operands[1].reg=andn?r0:r1;
         m->operands[2].kind=MINIAS_MC_REGISTER;
-        m->operands[2].reg=rd;
-        m->operands[2].register_64=wd;
+        m->operands[2].reg=bmi_dst;
+        m->operands[2].register_64=bmi_wide;
         goto done;
     }
     /*
