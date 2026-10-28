@@ -2422,7 +2422,9 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         put_reg(&inst->operands[0],rt,true);
     } else if(!strcmp(op,"msr") &&
               split_two(args,first,sizeof(first),second,sizeof(second)) &&
-              (!strcmp(first,"SPsel") || !strcmp(first,"spsel"))) {
+              (!strcmp(first,"SPsel") || !strcmp(first,"spsel")) &&
+              (second[0]=='#' || second[0]=='-' ||
+               isdigit((unsigned char)second[0]))) {
         int64_t value;
         if(!parse_signed_number(second,&value) || value<0 || value>1) {
             minias_set_error(as,"bad-aarch64-spsel-immediate:%s:line=%zu",
