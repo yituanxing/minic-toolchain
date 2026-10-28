@@ -1631,10 +1631,10 @@ cat >"$work/x86-extra-isa.s" <<'X86_EXTRA_ISA'
 .text
     rdrand %eax
     rdrand %r8
-    rdrandw %ax
+    rdrand %ax
     rdseed %r11d
-    rdseedq %r9
-    rdseedw %cx
+    rdseed %r9
+    rdseed %cx
     movntil %eax,(%rdi)
     movntiq %r8,16(%rbp)
     movnti %r9d,ext_global(%rip)
@@ -1653,9 +1653,9 @@ readelf -Wr "$work/x86-extra-mini.o" > "$work/x86-extra-mini-rel.txt"
 readelf -Wr "$work/x86-extra-gnu.o" > "$work/x86-extra-gnu-rel.txt"
 grep -q 'R_X86_64_PC32.*ext_global - 4' "$work/x86-extra-mini-rel.txt"
 grep -q 'R_X86_64_PC32.*ext_global - 4' "$work/x86-extra-gnu-rel.txt"
-for bad in 'rdrand %al' 'rdseedq %eax' 'movntiq %eax,(%rdi)' \
+for bad in 'rdrand %al' 'rdseedq %eax' 'rdrandq %r8' 'movntiq %eax,(%rdi)' \
            'movnti %rax,%rbx' 'movsbw %al,%rax' 'movzbw %ah,%r8w'; do
-    printf '.text\\n%s\\n' "$bad" > "$work/x86-extra-invalid.s"
+    printf '.text\n%s\n' "$bad" > "$work/x86-extra-invalid.s"
     if "$MINIAS" --target=x86_64 -o "$work/x86-extra-invalid.o" \
         "$work/x86-extra-invalid.s" >/dev/null 2>"$work/x86-extra-invalid.err"; then
         echo "invalid x86 instruction accepted: $bad" >&2

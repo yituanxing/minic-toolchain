@@ -512,10 +512,11 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         size_t len=strlen(s->op);
         unsigned reg;
         bool word=false,wide=false;
-        if(len!=6U && len!=7U)goto invalid;
+        /* GNU GAS infers RDRAND/RDSEED register size; w/l/q suffixed
+         * spellings are not accepted by GNU, even if encodable. */
+        if(len!=6U)goto invalid;
         if(x64_register16(s->args,&reg))word=true;
         else if(!x64_register(s->args,&reg,&wide))goto invalid;
-        if(len==7U && s->op[6]!=(word?'w':wide?'q':'l'))goto invalid;
         m->opcode=X64_UNARY;m->count=1U;
         m->encoding=UINT32_C(0xc7)|
             ((!strncmp(s->op,"rdrand",6U)?6U:7U)<<8U)|
