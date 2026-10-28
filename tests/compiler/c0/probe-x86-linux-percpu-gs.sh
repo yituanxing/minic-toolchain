@@ -71,23 +71,21 @@ for suf,ty,sz in types:
 driver += ['  puts("MINIC_X86_GS_PERCPU_GNU_NATIVE=PASS forms=36");',
            "  return 42;","}"]
 # Distinct local result variable names are in separate blocks.
-txt="\n".join(driver)
-txt=txt.replace("  memory.u64=0x123456789abcdef0ULL;","  {\n  memory.u64=0x123456789abcdef0ULL;",1)
-# Better wrap every case in its own scope, not shared variable namespace.
+# Each generated operation is wrapped in one C scope.
 lines=driver; hdr=lines[:lines.index("int main(void){")+1]
 scoped=[]
 i=len(hdr)
 while i<len(lines) and lines[i].startswith("  union"):scoped.append(lines[i]);i+=1
 # main already declared, collect prelude
 while i<len(lines) and ("syscall" in lines[i]):scoped.append(lines[i]);i+=1
-body=lines[i:-2];cases=[];cur=[]
+body=lines[i:-3];cases=[];cur=[]
 for line in body:
  if line=="  memory.u64=0x123456789abcdef0ULL;":
   if cur:cases.append(cur)
   cur=[line]
  else:cur.append(line)
 if cur:cases.append(cur)
-driver=hdr+scoped+["  {"]+["\n".join(["  {"]+case+["  }"]) for case in cases]+[
+driver=hdr+scoped+["\n".join(["  {"]+case+["  }"]) for case in cases]+[
  '  puts("MINIC_X86_GS_PERCPU_GNU_NATIVE=PASS forms=36");',
  "  return 42;","}"]
 (p/"driver.c").write_text("\n".join(driver)+"\n")
