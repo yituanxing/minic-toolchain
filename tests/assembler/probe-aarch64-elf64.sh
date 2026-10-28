@@ -142,6 +142,32 @@ external_probe:
     mrs x0, cptr_el2
     msr cptr_el2, x1
     mrs x0, dbgauthstatus_el1
+    // Cross-check privileged system register permissions and the
+    // indexed PMU family with native GNU AS exact instruction words.
+    mrs x1, dbgvcr32_el2
+    msr dbgvcr32_el2, x1
+    mrs x0, revidr_el1
+    mrs x1, spsel
+    msr spsel, x1
+    msr oslar_el1, xzr
+    mrs x0, cntkctl_el1
+    msr cntkctl_el1, x1
+    mrs x19, pmceid1_el0
+    mrs x0, sp_el1
+    msr sp_el1, x0
+    mrs x10, oslsr_el1
+    mrs x0, cntv_cval_el0
+    msr cntv_cval_el0, x0
+    mrs x0, pmevtyper0_el0
+    msr pmevtyper15_el0, x1
+    mrs x0, pmevtyper30_el0
+    msr pmevtyper30_el0, x1
+    mrs x0, pmevcntr0_el0
+    msr pmevcntr16_el0, x1
+    mrs x0, pmevcntr30_el0
+    mov x0, #(-1)
+    mov w2, #(-22)
+    mov x3, #(-65536)
     // NEG/SUB shifted register aliases are real GNU Linux asm.
     neg x2, x2, asr 2
     neg x15, x15, lsl 6
@@ -823,6 +849,9 @@ for bad in 'add x0, w0, x1' 'cmp x0, #4097' 'ldr x0, [x1, -257]' \
            'mrs x0,s4_3_c1_c0_1' 'msr s0_8_c1_c0_1,x0' \
            'mrs x0,s0_3_c16_c0_1' 'mrs x0,s0_3_c1_c0_8' \
            'mrs x0,s0_3_c1_c0_1oops' \
+           'mrs x0,oslar_el1' 'msr oslsr_el1,x0' \
+           'msr revidr_el1,x0' 'msr pmceid1_el0,x0' \
+           'mrs x0,pmevtyper31_el0' 'mrs x0,pmevcntr31_el0' \
            'msr dbgauthstatus_el1,x0' \
            'neg x0,x1,ror 2' 'neg x0,x1,lsl 64' \
            'negs w0,w1,asr -1' \

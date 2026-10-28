@@ -5196,6 +5196,13 @@ static int classify_repeat_line(const MiniAs *as, const char *text,
         (trimmed[5] == '\0' || isspace((unsigned char)trimmed[5]))) {
         rest = trimmed + 5;
         kind = MINIAS_REPEAT_REPT;
+    } else if (strncmp(trimmed, ".rep", 4U) == 0 &&
+               (trimmed[4] == '\0' || isspace((unsigned char)trimmed[4]))) {
+        /* GNU .rep is the same text repetition directive as .rept.
+         * Resolve only the lexical alias; Common IRP/repetition owns
+         * balanced nesting, numeric evaluation and source fragments. */
+        rest = trimmed + 4;
+        kind = MINIAS_REPEAT_REPT;
     } else if (strncmp(trimmed, ".irp", 4U) == 0 &&
                (trimmed[4] == '\0' ||
                 isspace((unsigned char)trimmed[4]))) {

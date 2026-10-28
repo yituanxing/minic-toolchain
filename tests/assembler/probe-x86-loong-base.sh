@@ -2379,6 +2379,55 @@ for bad in 'tpause %rax' 'tpause %ax' 'umwait %rcx' 'umonitor %ecx' 'movabs $3,%
     fi
 done
 echo 'MINIAS_X86_WAITPKG_MOVABS=PASS GNU_bytes ABS64 WAITPKG_REX register_widths'
+# GNU .rep is .rept, including nested mixed .rep/.rept.
+# Check actual source expansion on two targets, not a no-op directive.
+cat > "$work/gnu-rep-nested.s" <<'GNU_REP_NESTED'
+.data
+.rep 3
+.byte 0x19
+.rept 2
+.byte 0x27
+.endr
+.endr
+.rept 2
+.rep 2
+.byte 0x3a
+.endr
+.endr
+GNU_REP_NESTED
+for target in x86_64 loongarch64; do
+    "$MINIAS" --target="$target" -o "$work/$target-rep-nested-mini.o" "$work/gnu-rep-nested.s"
+    if [ "$target" = x86_64 ]; then
+        as --64 -o "$work/$target-rep-nested-gnu.o" "$work/gnu-rep-nested.s"
+        objcopy -j .data -O binary "$work/$target-rep-nested-mini.o" "$work/$target-rep-nested-mini.bin"
+        objcopy -j .data -O binary "$work/$target-rep-nested-gnu.o" "$work/$target-rep-nested-gnu.bin"
+    else
+        "$LOONGAS" -mabi=lp64d -o "$work/$target-rep-nested-gnu.o" "$work/gnu-rep-nested.s"
+        "$LOONGCOPY" -j .data -O binary "$work/$target-rep-nested-mini.o" "$work/$target-rep-nested-mini.bin"
+        "$LOONGCOPY" -j .data -O binary "$work/$target-rep-nested-gnu.o" "$work/$target-rep-nested-gnu.bin"
+    fi
+    cmp "$work/$target-rep-nested-mini.bin" "$work/$target-rep-nested-gnu.bin"
+done
+echo 'MINIAS_COMMON_GNU_REP=PASS GNU_AS_x86_Loong_nested_repeat_bytes'
+
+cat > "$work/x86-sysret.s" <<'GNU_SYSRET'
+.text
+sysretl
+sysretq
+sysret
+GNU_SYSRET
+"$MINIAS" --target=x86_64 -o "$work/sysret-mini.o" "$work/x86-sysret.s"
+as --64 -o "$work/sysret-gnu.o" "$work/x86-sysret.s"
+objcopy -j .text -O binary "$work/sysret-mini.o" "$work/sysret-mini.bin"
+objcopy -j .text -O binary "$work/sysret-gnu.o" "$work/sysret-gnu.bin"
+cmp "$work/sysret-mini.bin" "$work/sysret-gnu.bin"
+for bad in 'sysretq %rax' 'sysretl $1'; do
+    printf '.text\n%s\n' "$bad" > "$work/sysret-bad.s"
+    if "$MINIAS" --target=x86_64 -o "$work/sysret-bad.o" "$work/sysret-bad.s" >/dev/null 2>&1; then
+        echo "invalid SYSRET operands accepted: $bad" >&2;exit 1
+    fi
+done
+echo 'MINIAS_X86_SYSRET=PASS GNU_bytes long_mode_32_64_aliases'
 echo 'MINIAS_COMMON_NUMERIC_U64=PASS GNU_GAS_x86_LA64_exact_data_bytes'
 echo 'MINIAS_X86_SEGMENTED_INDIRECT=PASS GNU_AS_text_and_relocations segment_base_index_abs_rip=true indirect_memory_call_jmp=true absolute_symbol32S=true'
 echo 'MINIAS_TWO_TARGET_ORACLE=PASS x86_GNU_bytes=equal loong_GNU_bytes=equal ELF_machine=correct lp64d_v1=0x43 CET_endbr64=1 ALU_imm8_imm32=1 x86_ModRM_SIB_disp=1 x86_test_cmp_alu_memory=1 x86_scaled_index_SIB=1 LA_jr=1 LA_scaled_ptr14=1 LA_imm12_shift_upper20=1 invalid=reject'

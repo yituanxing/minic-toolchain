@@ -1413,6 +1413,15 @@ static bool a64_system_register(const char *name,uint32_t *mrs,uint32_t *msr) {
         {"ifsr32_el2",UINT32_C(0xd53c5020),UINT32_C(0xd51c5020)},
         {"cptr_el2",UINT32_C(0xd53c1140),UINT32_C(0xd51c1140)},
         {"dbgauthstatus_el1",UINT32_C(0xd5307ec0),0U},
+        {"dbgvcr32_el2",UINT32_C(0xd5340700),UINT32_C(0xd5140700)},
+        {"revidr_el1",UINT32_C(0xd53800c0),0U},
+        {"spsel",UINT32_C(0xd5384200),UINT32_C(0xd5184200)},
+        {"oslar_el1",0U,UINT32_C(0xd5101080)},
+        {"oslsr_el1",UINT32_C(0xd5301180),0U},
+        {"cntkctl_el1",UINT32_C(0xd538e100),UINT32_C(0xd518e100)},
+        {"pmceid1_el0",UINT32_C(0xd53b9ce0),0U},
+        {"sp_el1",UINT32_C(0xd53c4100),UINT32_C(0xd51c4100)},
+        {"cntv_cval_el0",UINT32_C(0xd53be340),UINT32_C(0xd51be340)},
         {"pmselr_el0",UINT32_C(0xd53b9ca0),UINT32_C(0xd51b9ca0)},
         {"dacr32_el2",UINT32_C(0xd53c3000),UINT32_C(0xd51c3000)},
         {"fpsr",UINT32_C(0xd53b4420),UINT32_C(0xd51b4420)},
@@ -1480,6 +1489,34 @@ static bool a64_system_register(const char *name,uint32_t *mrs,uint32_t *msr) {
             *msr=UINT32_C(0xd5100000)|family[j].bits|
                  ((uint32_t)index<<8U);
             return true;
+        }
+    }
+    /* PMU event type and counter banks 0..30 are register families,
+     * not 62 unrelated opcodes. Architecture fields CRm/op2 change
+     * linearly with index. GNU/LLVM exact bytes define both bases. */
+    {
+        static const struct {const char *prefix;uint32_t bits;} banks[]={
+            {"pmevtyper",UINT32_C(0xd53bec00)},
+            {"pmevcntr",UINT32_C(0xd53be800)}
+        };
+        char key[64];
+        size_t n=strlen(name),j;
+        if(n<sizeof(key)) {
+            for(j=0U;j<n;++j)key[j]=(char)tolower((unsigned char)name[j]);
+            key[n]='\0';
+            for(j=0U;j<sizeof(banks)/sizeof(banks[0]);++j) {
+                size_t k=strlen(banks[j].prefix);
+                char *end;
+                unsigned long index;
+                if(strncmp(key,banks[j].prefix,k)!=0 ||
+                   !isdigit((unsigned char)key[k]))continue;
+                errno=0;
+                index=strtoul(key+k,&end,10);
+                if(errno || index>30UL || strcmp(end,"_el0"))continue;
+                *mrs=banks[j].bits|((uint32_t)index<<5U);
+                *msr=(*mrs & ~UINT32_C(0x00200000));
+                return true;
+            }
         }
     }
     return a64_numbered_system_register(name,mrs,msr);
@@ -2166,7 +2203,13 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         uint32_t fields=0U;
         unsigned j,limit=reg64?4U:2U,variant=0U,chosen=4U;
         const char *literal=second[0]=='#'?second+1U:second;
+        /* GNU treats both #-1 and #(-1) as signed constants. Reuse
+         * Common's signed expression evaluator; never parse a second
+         * target-specific parenthesis/arithmetic grammar. */
         bool negative=*literal=='-';
+        if(!negative && *literal=='(' &&
+           parse_signed_number(literal,&signed_value) &&
+           signed_value<0)negative=true;
         int64_t signed_value=0;
         if(negative) {
             if(!parse_signed_number(literal,&signed_value) ||

@@ -458,6 +458,9 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         {"vmmcall",{0x0f,0x01,0xd9},3},
         {"iretq",{0x48,0xcf},2},{"iretw",{0x66,0xcf},2},
         {"lretq",{0x48,0xcb},2},{"lret",{0xcb},1},
+        /* GNU long-mode SYSRET aliases differ only by REX.W. */
+        {"sysretq",{0x48,0x0f,0x07},3},
+        {"sysretl",{0x0f,0x07},2},{"sysret",{0x0f,0x07},2},
         {"fwait",{0x9b},1},{"wait",{0x9b},1},
         {"cltd",{0x99},1},{"cwtl",{0x98},1},
         {"stosl",{0xab},1},{"stosq",{0x48,0xab},2},
