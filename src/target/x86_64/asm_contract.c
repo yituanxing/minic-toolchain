@@ -635,6 +635,109 @@ static bool x86_percpu_gs_source(const MinicC0Program *program,
 }
 
 
+/* Kernel this_cpu_ptr: a live register seed combined with the GS-relative
+ * per-CPU displacement, using GNU tied output 0 / memory input 1. Unlike
+ * the 36 direct GS lvalue operations, the output is an ordinary C scalar.
+ * One exact semantic descriptor covers 5 ALU ops x 32/64-bit slots and
+ * optionally their explicit size suffix; no generic GS passthrough. */
+unsigned int minic_x86_64_gs_tied_alu_form(
+    const char *text, size_t length, size_t *width) {
+    static const char *const forms[]={"add","sub","and","or","xor"};
+    char compact[80], expected[80];
+    size_t i, n = 0U, op, w;
+    if (!text || !length || length >= sizeof(compact) || !width)
+        return 0U;
+    for (i = 0U; i < length; ++i) {
+        const char c = text[i];
+        if (c == ' ' || c == '\t') continue;
+        if (c == '\n' || c == '\r' || c == ';' || c == '\0' ||
+            n + 1U >= sizeof(compact))
+            return 0U;
+        compact[n++] = c;
+    }
+    compact[n] = '\0';
+    for (op = 0U; op < 5U; ++op)
+        for (w = 4U; w <= 8U; w += 4U) {
+            const char suffix = w == 4U ? 'l' : 'q';
+            int size = snprintf(expected,sizeof(expected),
+                                "%s%%%%gs:%%1,%%0",forms[op]);
+            if (size > 0 && (size_t)size < sizeof(expected) &&
+                strcmp(compact,expected)==0) {
+                /* Unsuffixed GNU ALU operand width is selected by the
+                 * output register class, validated independently below. */
+                *width=0U;
+                return (unsigned int)(op+1U);
+            }
+            size=snprintf(expected,sizeof(expected),
+                          "%s%c%%%%gs:%%1,%%0",forms[op],suffix);
+            if(size>0&&(size_t)size<sizeof(expected)&&
+               strcmp(compact,expected)==0) {
+                *width=w;
+                return (unsigned int)(op+1U);
+            }
+        }
+    return 0U;
+}
+
+static bool x86_gs_tied_alu_source(
+    const MinicC0Program *program, const MinicInlineAsm *src,
+    MinicTargetInlineAsmContract *contract) {
+    const MinicExpression *output, *mem, *seed;
+    MinicType out_type, mem_type, seed_type;
+    size_t opcode_width=0U, width;
+    unsigned int op;
+    if (program == NULL || src == NULL || contract == NULL ||
+        src->is_goto || src->is_volatile ||
+        src->output_count != 1U || src->input_count != 2U ||
+        src->outputs == NULL || src->inputs == NULL ||
+        src->label_count || src->clobber_count ||
+        src->register_clobber_count || src->has_memory_clobber ||
+        !c_is(&src->outputs[0],"=r") ||
+        !c_is(&src->inputs[0],"m") ||
+        !c_is(&src->inputs[1],"0"))
+        return false;
+    op=minic_x86_64_gs_tied_alu_form(
+        src->template_text, src->template_length, &opcode_width);
+    if (!op) return false;
+    output=minic_c0_program_expression(program,src->outputs[0].expression);
+    mem=minic_c0_program_expression(program,src->inputs[0].expression);
+    seed=minic_c0_program_expression(program,src->inputs[1].expression);
+    if (!output || !mem || !seed ||
+        output->value_category != MINIC_VALUE_LVALUE ||
+        mem->value_category != MINIC_VALUE_LVALUE ||
+        minic_type_is_const(output->type) ||
+        !minic_type_unqualified(output->type,&out_type) ||
+        !minic_type_unqualified(mem->type,&mem_type) ||
+        !minic_type_unqualified(seed->type,&seed_type) ||
+        !minic_type_is_integer(out_type) ||
+        (out_type.integer_rank != MINIC_INTEGER_RANK_INT &&
+         out_type.integer_rank != MINIC_INTEGER_RANK_LONG &&
+         out_type.integer_rank != MINIC_INTEGER_RANK_LONG_LONG))
+        return false;
+    width = out_type.integer_rank==MINIC_INTEGER_RANK_INT ? 4U : 8U;
+    if (opcode_width != 0U && opcode_width != width)
+        return false;
+    if (!minic_type_is_integer(mem_type) ||
+        (width==4U
+          ? mem_type.integer_rank != MINIC_INTEGER_RANK_INT
+          : mem_type.integer_rank != MINIC_INTEGER_RANK_LONG &&
+            mem_type.integer_rank != MINIC_INTEGER_RANK_LONG_LONG))
+        return false;
+    if (minic_type_is_pointer(seed_type)) {
+        if (width != 8U) return false;
+    } else if (!minic_type_is_integer(seed_type) ||
+        (width==4U
+          ? seed_type.integer_rank != MINIC_INTEGER_RANK_INT
+          : seed_type.integer_rank != MINIC_INTEGER_RANK_LONG &&
+            seed_type.integer_rank != MINIC_INTEGER_RANK_LONG_LONG))
+        return false;
+    contract->operand_count=3U;
+    contract->kinds[0]=MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+    contract->kinds[1]=MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
+    contract->kinds[2]=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    return true;
+}
+
 /* Original Linux checksum_64.h add32_with_carry GNU tied "0" input
  * and second register-or-memory operand. Same shared arithmetic effect
  * family as csum_fold, but a DIFFERENT exact GNU constraint contract:
@@ -1600,6 +1703,8 @@ bool minic_x86_64_qualify_inline_asm(
     bool is_mulacc = false, is_muldiv = false;
     size_t i, count;
     if (!contract) return false;
+    if (x86_gs_tied_alu_source(program, source, contract))
+        return true;
     if (x86_linux_zero_barrier_source(source, contract))
         return true;
     if (x86_linux_ip_here_source(program, source, contract))
