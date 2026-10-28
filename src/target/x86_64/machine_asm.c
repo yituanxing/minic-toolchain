@@ -234,6 +234,61 @@ static bool emit_linux_bitops(
            fputs("  movb %al, (%r10)\n",out)!=EOF;
 }
 
+/* Genuine x86 CMPXCHG: use AL/AX/EAX/RAX comparator, return ZF,
+ * update old on failure, and emit SMP patch metadata when locked. */
+static bool emit_linux_trycas(
+    FILE *out,const MinicC0Program *program,const MinicTargetInfo *target,
+    const MinicCoreFunction *fn,const MinicX86Frame *frame,
+    const MinicCoreInstruction *ins,const MinicCoreInlineAsm *info) {
+    const MinicCoreStructuredInlineAsmOperand *b=
+        ins->value.structured_inline_asm.operands;
+    const MinicX86TryCasDesc *d=minic_x86_64_trycas_desc(
+        minic_x86_64_trycas_form(info->template_text,info->template_length));
+    MinicType t;
+    size_t i,width;
+    bool sign;
+    if(!out||!program||!target||!fn||!frame||!info||!b||!d||
+       !info->is_volatile||info->is_goto||!info->has_memory_clobber||
+       info->register_clobber_count||
+       ins->value.structured_inline_asm.operand_count!=4U)
+        return false;
+    for(i=0U;i<4U;++i)
+        if(b[i].operand_index!=i||b[i].value>=fn->value_count||
+           b[i].early_clobber||b[i].has_fixed_register_binding||
+           b[i].kind!=(i==0U?MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT:
+                        i==1U?MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE:
+                        i==2U?MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE:
+                              MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT))
+            return false;
+    for(i=0U;i<3U;++i)
+        if(!minic_type_pointee(fn->values[b[i].value].type,&t)||
+           !minic_x86_64_scalar_width(program,target,t,&width,&sign)||
+           width!=(i==0U?1U:d->width))
+            return false;
+    if(!minic_x86_64_scalar_width(program,target,
+          fn->values[b[3].value].type,&width,&sign)||width!=d->width)
+        return false;
+    if(!x86_value_load(out,frame,b[2].value,"%r11")||
+       fprintf(out,"  %s\n",d->load_old)<0||
+       !x86_value_load(out,frame,b[3].value,"%r10")||
+       !x86_value_load(out,frame,b[1].value,"%r11"))
+        return false;
+    if(d->locked&&
+       fputs("  .pushsection .smp_locks,\"a\"\n"
+             "  .balign 4\n"
+             "  .long 671f - .\n"
+             "  .popsection\n"
+             "671:\n",out)==EOF)
+        return false;
+    return fprintf(out,"  %s%s %s, (%%r11)\n",
+             d->locked?"lock; ":"",d->op,d->new_reg)>=0&&
+           fputs("  sete %r8b\n",out)!=EOF&&
+           x86_value_load(out,frame,b[2].value,"%r11")&&
+           fprintf(out,"  %s\n",d->store_old)>=0&&
+           x86_value_load(out,frame,b[0].value,"%r11")&&
+           fputs("  movb %r8b, (%r11)\n",out)!=EOF;
+}
+
 /* One physical x86 owner for Linux unary and binary locked RMWcc.
  * The original .smp_locks PREL32 entry, hardware locked write and final
  * ZF/SF SETcc all remain machine-verified. No generic Core ISA new case. */
@@ -485,6 +540,9 @@ bool minic_x86_64_emit_structured_asm(
     bindings = ins->value.structured_inline_asm.operands;
     if (!info->template_text)
         return false;
+    if (minic_x86_64_trycas_form(
+            info->template_text,info->template_length)!=MINIC_X86_TRYCAS_NONE)
+        return emit_linux_trycas(out,program,target,fn,frame,ins,info);
     if (minic_x86_64_linux_bitops_form(
             info->template_text,info->template_length)!=
         MINIC_X86_BITOPS_NONE)

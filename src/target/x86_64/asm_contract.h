@@ -42,6 +42,22 @@ typedef struct MinicX86BitopsDesc {
 MinicX86BitopsForm minic_x86_64_linux_bitops_form(const char *, size_t);
 const MinicX86BitopsDesc *minic_x86_64_bitops_description(MinicX86BitopsForm);
 
+/* Linux cmpxchg.h 1/2/4/8-byte true try-CAS, SMP and local.
+ * Same ISA descriptor is used by both GNU C admission and emitter. */
+typedef enum MinicX86TryCas {
+    MINIC_X86_TRYCAS_NONE=0,
+    MINIC_X86_TRYCAS_B_LOCK,MINIC_X86_TRYCAS_W_LOCK,
+    MINIC_X86_TRYCAS_L_LOCK,MINIC_X86_TRYCAS_Q_LOCK,
+    MINIC_X86_TRYCAS_B_LOCAL,MINIC_X86_TRYCAS_W_LOCAL,
+    MINIC_X86_TRYCAS_L_LOCAL,MINIC_X86_TRYCAS_Q_LOCAL
+} MinicX86TryCas;
+typedef struct MinicX86TryCasDesc {
+    const char *op,*new_reg,*load_old,*store_old;
+    size_t width;
+    bool locked;
+} MinicX86TryCasDesc;
+MinicX86TryCas minic_x86_64_trycas_form(const char *,size_t);
+const MinicX86TryCasDesc *minic_x86_64_trycas_desc(MinicX86TryCas);
 /* Original Linux 6.6.143 x86 LOCK INC/DEC + =@cce output.
  * SOURCE admission and physical emission use the same exact form enum. */
 typedef enum MinicX86AtomicCC {

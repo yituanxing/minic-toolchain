@@ -162,6 +162,94 @@ bool minic_x86_64_asm_muldiv_template(const char *text, size_t length) {
     return strcmp(normalized, expected) == 0;
 }
 
+/* Exact original GNU Linux __raw_try_cmpxchg 8-case source.
+ * Linux CC_SET(z) must remain a real hardware flag output, not C logic. */
+static const MinicX86TryCasDesc x86_trycas_forms[] = {
+    {"cmpxchgb","%r10b","movzbl (%r11), %eax","movb %al, (%r11)",1U,true},
+    {"cmpxchgw","%r10w","movzwl (%r11), %eax","movw %ax, (%r11)",2U,true},
+    {"cmpxchgl","%r10d","movl (%r11), %eax","movl %eax, (%r11)",4U,true},
+    {"cmpxchgq","%r10","movq (%r11), %rax","movq %rax, (%r11)",8U,true},
+    {"cmpxchgb","%r10b","movzbl (%r11), %eax","movb %al, (%r11)",1U,false},
+    {"cmpxchgw","%r10w","movzwl (%r11), %eax","movw %ax, (%r11)",2U,false},
+    {"cmpxchgl","%r10d","movl (%r11), %eax","movl %eax, (%r11)",4U,false},
+    {"cmpxchgq","%r10","movq (%r11), %rax","movq %rax, (%r11)",8U,false}
+};
+const MinicX86TryCasDesc *minic_x86_64_trycas_desc(MinicX86TryCas form) {
+    return form>=MINIC_X86_TRYCAS_B_LOCK&&form<=MINIC_X86_TRYCAS_Q_LOCAL ?
+        &x86_trycas_forms[(size_t)form-1U]:NULL;
+}
+MinicX86TryCas minic_x86_64_trycas_form(const char *text,size_t len) {
+    static const char smp[]=
+        ".pushsection.smp_locks,\"a\".balign4.long671f-..popsection671:lock;";
+    char compact[256],expected[256];
+    size_t i,n=0U,mode,variant;
+    if(!text||!len||len>=sizeof(compact))return MINIC_X86_TRYCAS_NONE;
+    for(i=0U;i<len;++i){
+        const char c=text[i];
+        if(c==' '||c=='\t'||c=='\n'||c=='\r')continue;
+        if(n+1U>=sizeof(compact))return MINIC_X86_TRYCAS_NONE;
+        compact[n++]=c;
+    }
+    compact[n]='\0';
+    for(mode=0U;mode<sizeof(x86_trycas_forms)/sizeof(x86_trycas_forms[0]);++mode)
+        for(variant=0U;variant<2U;++variant) {
+            const MinicX86TryCasDesc *d=&x86_trycas_forms[mode];
+            const int written=snprintf(expected,sizeof(expected),
+                "%s%s%s,%s/*outputconditioncodez*/",
+                d->locked?smp:"",d->op,
+                variant?"%3":"%[new]",variant?"%1":"%[ptr]");
+            if(written>0&&(size_t)written<sizeof(expected)&&
+               strcmp(compact,expected)==0)
+                return (MinicX86TryCas)(mode+1U);
+        }
+    return MINIC_X86_TRYCAS_NONE;
+}
+static bool x86_trycas_source(
+    const MinicC0Program *program,const MinicInlineAsm *src,
+    MinicTargetInlineAsmContract *contract) {
+    const MinicX86TryCas form=src ?
+        minic_x86_64_trycas_form(src->template_text,src->template_length):
+        MINIC_X86_TRYCAS_NONE;
+    const MinicX86TryCasDesc *d=minic_x86_64_trycas_desc(form);
+    const MinicExpression *e[4];
+    MinicType t[4];
+    const unsigned int rank=d ?
+        d->width==1U?MINIC_INTEGER_RANK_CHAR:
+        d->width==2U?MINIC_INTEGER_RANK_SHORT:
+        d->width==4U?MINIC_INTEGER_RANK_INT:MINIC_INTEGER_RANK_LONG_LONG:
+        MINIC_INTEGER_RANK_NONE;
+    size_t i;
+    if(!program||!src||!contract||!d||!src->is_volatile||src->is_goto||
+       !src->outputs||!src->inputs||src->output_count!=3U||
+       src->input_count!=1U||src->label_count||!src->has_memory_clobber||
+       src->clobber_count!=1U||src->register_clobber_count||
+       !target_constraint_is(&src->outputs[0],"=@ccz")||
+       !target_constraint_is(&src->outputs[1],"+m")||
+       !target_constraint_is(&src->outputs[2],"+a")||
+       !target_constraint_is(&src->inputs[0],d->width==1U?"q":"r"))
+        return false;
+    for(i=0U;i<4U;++i){
+        const MinicInlineAsmOperand *op=i<3U?
+            &src->outputs[i]:&src->inputs[0];
+        e[i]=minic_c0_program_expression(program,op->expression);
+        if(!e[i]||(i<3U&&(e[i]->value_category!=MINIC_VALUE_LVALUE||
+                             minic_type_is_const(e[i]->type)))||
+           !minic_type_unqualified(e[i]->type,&t[i]))
+            return false;
+    }
+    if(!minic_type_equal(t[0],minic_type_bool())||
+       !minic_type_is_integer(t[1])||t[1].pointer_depth||
+       (unsigned int)t[1].integer_rank!=rank||
+       !minic_type_equal(t[1],t[2])||!minic_type_equal(t[1],t[3]))
+        return false;
+    contract->operand_count=4U;
+    contract->kinds[0]=MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+    contract->kinds[1]=MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
+    contract->kinds[2]=MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE;
+    contract->kinds[3]=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    return true;
+}
+
 /* Target-only descriptor for all 8 GNU Linux atomic RMWcc forms.
  * This is the only source/machine ALU and flag-sign table. */
 static const struct {
@@ -698,6 +786,8 @@ bool minic_x86_64_qualify_inline_asm(
     bool is_mulacc = false, is_muldiv = false;
     size_t i, count;
     if (!contract) return false;
+    if (x86_trycas_source(program, source, contract))
+        return true;
     if (x86_linux_bitops_source(program, source, contract))
         return true;
     if (x86_linux_atomic_cc_source(program, source)) {
