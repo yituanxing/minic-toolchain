@@ -4999,7 +4999,8 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
                                   ".text",
                                   MINIAS_SHT_PROGBITS,
                                   MINIAS_SHF_ALLOC | MINIAS_SHF_EXECINSTR,
-                                  4U);
+                                  as->target->default_exec_alignment != 0U ?
+                                      as->target->default_exec_alignment : 4U);
         }
         if (strcmp(op, ".data") == 0) {
             return switch_section(as,
