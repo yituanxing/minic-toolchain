@@ -2139,6 +2139,10 @@ static bool push_conditional_value(MiniAs *as,bool condition_true) {
 
 static bool push_conditional(MiniAs *as, const char *args, size_t line) {
     bool condition_true;
+    /* False parent: keep the nested conditional frame, but GNU GAS
+     * does not resolve symbols in branches that cannot be reached. */
+    if(!as->conditional_active)
+        return push_conditional_value(as,false);
     if (!evaluate_if_expression(as, args, &condition_true) &&
         (!as->target->evaluate_target_if ||
          !as->target->evaluate_target_if(args, &condition_true))) {
