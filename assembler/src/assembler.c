@@ -3524,7 +3524,7 @@ static bool minias_compile_data_mc(MiniAs *as, MiniAsStmt *stmt) {
                   parse_symbol_difference(token,&lhs,&rhs)) {
             out->kind=MINIAS_MC_EXPR_DIFFERENCE;
             matched=true;
-        } else if((width==4U || width==8U) &&
+        } else if((width==2U || width==4U || width==8U) &&
                   (parse_data_symbol_addend(token,&lhs) ||
                    parse_data_symbol_absolute_tail(as,token,&lhs))) {
             out->kind=MINIAS_MC_EXPR_SYMBOL;
@@ -4080,6 +4080,13 @@ static bool minias_emit_mc_data(MiniAs *as,const MiniAsStmt *stmt) {
                 literal=true;
                 value=sym->value+(uint64_t)lhs.addend;
             } else {
+                /* GNU permits a forward .short absolute .set/.equ symbol,
+                 * but no target-independent ABS16 unresolved reference. */
+                if(data->width!=4U && data->width!=8U) {
+                    minias_set_error(as,"unsupported-symbol-width:%u:line=%zu",
+                                     data->width,stmt->line);
+                    return false;
+                }
                 if(!minias_section_append_zero(as,stmt->section,data->width) ||
                    !minias_add_fixup(as,stmt->section,at,
                           MINIAS_FIXUP_ABS,data->width,lhs.name,lhs.addend))
