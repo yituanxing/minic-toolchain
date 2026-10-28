@@ -1615,6 +1615,64 @@ bool minias_emit_mc_data(MiniAs *as,const MiniAsStmt *stmt) {
     return true;
 }
 
+bool minias_parse_common_space(MiniAs *as,const char *args,uint64_t *count,
+                               uint8_t *fill) {
+    char *copy=minias_strdup(args),*comma;
+    int64_t amount,byte=0;
+    bool ok;
+    if(!copy)return false;
+    comma=strchr(copy,',');
+    if(comma){
+        *comma++='\0';
+        if(strchr(comma,',') ||
+           !minias_evaluate_absolute_expression(as,minias_trim(comma),&byte) ||
+           byte<-128 || byte>255){free(copy);return false;}
+    }
+    ok=minias_evaluate_absolute_expression(as,minias_trim(copy),&amount) &&
+       amount>=0;
+    free(copy);
+    if(!ok)return false;
+    *count=(uint64_t)amount;
+    *fill=(uint8_t)byte;
+    return true;
+}
+
+bool minias_parse_common_fill(MiniAs *as,const char *args,
+                              uint64_t *repeat,unsigned *size,
+                              uint64_t *bits) {
+    char *copy=minias_strdup(args),*cursor,*parts[3]={NULL,NULL,NULL};
+    unsigned i=0U;
+    int64_t n,step=1,value=0;
+    bool ok=false;
+    if(!copy)return false;
+    cursor=copy;
+    for(;;) {
+        char *comma=strchr(cursor,',');
+        if(i>=3U)goto done;
+        if(comma)*comma='\0';
+        parts[i++]=minias_trim(cursor);
+        if(!*parts[i-1U])goto done;
+        if(!comma)break;
+        cursor=comma+1U;
+    }
+    if(!minias_evaluate_absolute_expression(as,parts[0],&n))goto done;
+    /* GNU as treats a negative .fill repetition as zero (it prints a
+     * warning rather than emitting bytes). In relaxed Linux Kbuild x86
+     * forward IDT entries, an already-long jump may exceed its nominal
+     * slot and produces this signed difference. Never cast negative n to
+     * uint64_t or reject an otherwise GNU-valid source statement. */
+    if(n<0)n=0;
+    if(i>1U && (!minias_evaluate_absolute_expression(as,parts[1],&step) ||
+                step<0 || step>8))goto done;
+    if(i>2U && !minias_evaluate_absolute_expression(as,parts[2],&value))goto done;
+    *repeat=(uint64_t)n;
+    *size=(unsigned)step;
+    *bits=(uint64_t)value;
+    ok=true;
+done:
+    free(copy);return ok;
+}
+
 /* Complete, strictly typed DATA operands have no borrowed source text. */
 void minias_mcdata_destroy(MiniAsMCData *data) {
     if(data==NULL)return;

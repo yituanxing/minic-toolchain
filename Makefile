@@ -264,6 +264,7 @@ MINIAS_SOURCES := \
 	assembler/src/riscv_profile.c \
 	assembler/src/expression.c \
 	assembler/src/mc_expr.c \
+	assembler/src/mc_layout.c \
 	assembler/src/riscv_encode.c \
 	assembler/src/string_literal.c \
 	assembler/src/elf_writer.c \

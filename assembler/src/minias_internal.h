@@ -444,6 +444,17 @@ MiniAsSymbol *minias_get_symbol(MiniAs *as, const char *name, bool create);
  * relocatable values or mirroring Core symbol algorithms per backend. */
 /* Unique, target-independent GNU MCExpr grammar and symbolic object
  * evaluation. CFI, directives, and all four Targets use these APIs. */
+/* Common persistent Fragment/Layout subsystem. */
+bool minias_grow_array(void **, size_t *, size_t, size_t);
+MiniAsSubsection *minias_find_subsection(MiniAs *, int, uint32_t);
+MiniAsSubsection *minias_ensure_subsection(MiniAs *, int, uint32_t);
+bool minias_finalize_subsection_layout(MiniAs *);
+bool minias_force_long_branch_for_stmt(const MiniAs *, size_t);
+bool minias_solve_fragment_layout(MiniAs *, size_t **, size_t *, size_t *,
+                                  bool *, FILE *);
+bool minias_parse_common_space(MiniAs *, const char *, uint64_t *, uint8_t *);
+bool minias_parse_common_fill(MiniAs *, const char *, uint64_t *, unsigned *,
+                              uint64_t *);
 bool minias_current_location(MiniAs *, uint64_t *);
 bool minias_parse_u64(const char *, uint64_t *);
 bool minias_checked_add_i64(int64_t, int64_t, int64_t *);

@@ -31,6 +31,8 @@ jobs:
           test -x build/release/bin/minic-as
       - name: Enforce ISA-private fixup and MC emission ownership
         run: bash tests/assembler/probe-mc-target-boundary.sh
+      - name: Enforce one Common MCFragment layout engine and shared variable DATA
+        run: bash tests/assembler/probe-mc-layout-ownership.sh
       - name: Enforce unique Common MCExpr grammar and emission ownership
         run: bash tests/assembler/probe-mc-expression-ownership.sh
       - name: Run complete A0 including ISA/ABI and macro relaxation regressions

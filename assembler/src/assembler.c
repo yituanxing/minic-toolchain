@@ -8,7 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-static bool grow_array(void **ptr, size_t *capacity, size_t elem_size, size_t need) {
+bool minias_grow_array(void **ptr, size_t *capacity, size_t elem_size, size_t need) {
     size_t next;
     void *p;
 
@@ -34,38 +34,6 @@ static bool grow_array(void **ptr, size_t *capacity, size_t elem_size, size_t ne
     return true;
 }
 
-static MiniAsSubsection *find_subsection(MiniAs *as, int section, uint32_t number) {
-    size_t i;
-
-    for (i = 0U; i < as->subsection_count; ++i) {
-        MiniAsSubsection *sub = &as->subsections[i];
-        if (sub->section == section && sub->number == number) {
-            return sub;
-        }
-    }
-    return NULL;
-}
-
-static MiniAsSubsection *ensure_subsection(MiniAs *as, int section, uint32_t number) {
-    MiniAsSubsection *sub = find_subsection(as, section, number);
-
-    if (sub != NULL) {
-        return sub;
-    }
-    if (!grow_array((void **)&as->subsections,
-                    &as->subsection_capacity,
-                    sizeof(*as->subsections),
-                    as->subsection_count + 1U)) {
-        minias_set_error(as, "out-of-memory:subsection");
-        return NULL;
-    }
-    sub = &as->subsections[as->subsection_count++];
-    memset(sub, 0, sizeof(*sub));
-    sub->section = section;
-    sub->number = number;
-    return sub;
-}
-
 bool minias_current_location(MiniAs *as, uint64_t *value) {
     MiniAsSubsection *sub;
 
@@ -74,7 +42,7 @@ bool minias_current_location(MiniAs *as, uint64_t *value) {
         minias_set_error(as, "internal:bad-current-section");
         return false;
     }
-    sub = ensure_subsection(as, as->current_section, as->current_subsection);
+    sub = minias_ensure_subsection(as, as->current_section, as->current_subsection);
     if (sub == NULL) {
         return false;
     }
@@ -84,7 +52,7 @@ bool minias_current_location(MiniAs *as, uint64_t *value) {
 
 static bool advance_current_location(MiniAs *as, uint64_t amount) {
     MiniAsSubsection *sub =
-        ensure_subsection(as, as->current_section, as->current_subsection);
+        minias_ensure_subsection(as, as->current_section, as->current_subsection);
 
     if (sub == NULL) {
         return false;
@@ -96,82 +64,6 @@ static bool advance_current_location(MiniAs *as, uint64_t amount) {
     sub->size += amount;
     return true;
 }
-
-static int compare_subsections(const void *lhs_ptr, const void *rhs_ptr) {
-    const MiniAsSubsection *lhs = lhs_ptr;
-    const MiniAsSubsection *rhs = rhs_ptr;
-
-    if (lhs->section != rhs->section) {
-        return lhs->section < rhs->section ? -1 : 1;
-    }
-    if (lhs->number != rhs->number) {
-        return lhs->number < rhs->number ? -1 : 1;
-    }
-    return 0;
-}
-
-static bool finalize_subsection_layout(MiniAs *as) {
-    size_t i;
-    int active_section = -1;
-    uint64_t cursor = 0U;
-
-    if (as->subsection_count != 0U) {
-        qsort(as->subsections,
-              as->subsection_count,
-              sizeof(*as->subsections),
-              compare_subsections);
-    }
-    for (i = 0U; i < as->section_count; ++i) {
-        as->sections[i].layout_size = 0U;
-    }
-    for (i = 0U; i < as->subsection_count; ++i) {
-        MiniAsSubsection *sub = &as->subsections[i];
-
-        if (sub->section != active_section) {
-            if (active_section >= 0) {
-                as->sections[(size_t)active_section].layout_size = cursor;
-            }
-            active_section = sub->section;
-            cursor = 0U;
-        }
-        sub->base = cursor;
-        if (sub->size > UINT64_MAX - cursor) {
-            minias_set_error(as, "section-layout-overflow");
-            return false;
-        }
-        cursor += sub->size;
-    }
-    if (active_section >= 0) {
-        as->sections[(size_t)active_section].layout_size = cursor;
-    }
-
-    for (i = 0U; i < as->stmt_count; ++i) {
-        MiniAsStmt *stmt = &as->stmts[i];
-        MiniAsSubsection *sub =
-            find_subsection(as, stmt->section, stmt->subsection);
-        if (sub == NULL || stmt->offset > UINT64_MAX - sub->base) {
-            minias_set_error(as, "internal:stmt-subsection-layout");
-            return false;
-        }
-        stmt->offset += sub->base;
-    }
-    for (i = 0U; i < as->symbol_count; ++i) {
-        MiniAsSymbol *symbol = &as->symbols[i];
-        MiniAsSubsection *sub;
-
-        if (!symbol->defined || symbol->section < 0) {
-            continue;
-        }
-        sub = find_subsection(as, symbol->section, symbol->subsection);
-        if (sub == NULL || symbol->value > UINT64_MAX - sub->base) {
-            minias_set_error(as, "internal:symbol-subsection-layout:%s", symbol->name);
-            return false;
-        }
-        symbol->value += sub->base;
-    }
-    return true;
-}
-
 
 static bool resolve_symbol_aliases(MiniAs *as) {
     size_t remaining = 0U;
@@ -345,7 +237,7 @@ int minias_ensure_section(MiniAs *as,
         if (align > sec->align) sec->align = align;
         return found;
     }
-    if (!grow_array((void **)&as->sections,
+    if (!minias_grow_array((void **)&as->sections,
                     &as->section_capacity,
                     sizeof(*as->sections),
                     as->section_count + 1U)) {
@@ -460,7 +352,7 @@ MiniAsSymbol *minias_get_symbol(MiniAs *as, const char *name, bool create) {
             return &as->symbols[index];
         }
     }
-    if (!grow_array((void **)&as->symbols,
+    if (!minias_grow_array((void **)&as->symbols,
                     &as->symbol_capacity,
                     sizeof(*as->symbols),
                     as->symbol_count + 1U)) {
@@ -542,7 +434,7 @@ static bool minias_record_fixup(MiniAs *as,
         strncmp(symbol->name, ".L", 2U) != 0)
         symbol->bind = MINIAS_STB_GLOBAL;
 
-    if (!grow_array((void **)&as->fixups,
+    if (!minias_grow_array((void **)&as->fixups,
                     &as->fixup_capacity,
                     sizeof(*as->fixups),
                     as->fixup_count + 1U)) {
@@ -608,7 +500,7 @@ bool minias_emit_instruction_bytes(MiniAs *as, int section_index,
         return false;
     }
     needed = as->encoded_instruction_size + size;
-    if (!grow_array((void **)&as->encoded_instruction_bytes,
+    if (!minias_grow_array((void **)&as->encoded_instruction_bytes,
                     &as->encoded_instruction_capacity,
                     sizeof(unsigned char), needed)) {
         minias_set_error(as, "out-of-memory:encoded-instruction");
@@ -738,7 +630,7 @@ static void minias_init_for_target(MiniAs *as,
     as->previous_subsection = 0U;
     as->conditional_active = true;
     as->debug_is_stmt = true;
-    (void)ensure_subsection(as, as->current_section, 0U);
+    (void)minias_ensure_subsection(as, as->current_section, 0U);
 }
 
 /* Preserve the historical RISC-V API while the multi-target driver
@@ -840,7 +732,7 @@ static bool add_stmt(MiniAs *as,
                      uint64_t align) {
     MiniAsStmt *st;
 
-    if (!grow_array((void **)&as->stmts,
+    if (!minias_grow_array((void **)&as->stmts,
                     &as->stmt_capacity,
                     sizeof(*as->stmts),
                     as->stmt_count + 1U)) {
@@ -984,7 +876,7 @@ static bool switch_section(MiniAs *as,
         as->current_section = index;
         as->current_subsection = 0U;
     }
-    return ensure_subsection(as, as->current_section, as->current_subsection) != NULL;
+    return minias_ensure_subsection(as, as->current_section, as->current_subsection) != NULL;
 }
 
 /* GAS's implicit section names are family members only at the exact
@@ -1694,7 +1586,7 @@ bool minias_queue_literal(MiniAs *as,const MiniAsSymbolExpr *expression,
         }
     }
     if(as->literal_count==SIZE_MAX ||
-       !grow_array((void **)&as->literals,&as->literal_capacity,
+       !minias_grow_array((void **)&as->literals,&as->literal_capacity,
                    sizeof(*as->literals),as->literal_count+1U)) {
         minias_set_error(as,"out-of-memory:literal-pool");return false;
     }
@@ -1878,7 +1770,7 @@ static bool evaluate_if_expression(MiniAs *as,const char *text,bool *result) {
 
 static bool push_conditional_value(MiniAs *as,bool condition_true) {
     MiniAsConditional *conditional;
-    if (!grow_array((void **)&as->conditionals,
+    if (!minias_grow_array((void **)&as->conditionals,
                     &as->conditional_capacity,
                     sizeof(*as->conditionals),
                     as->conditional_count + 1U)) {
@@ -2138,28 +2030,6 @@ static bool measure_incbin(MiniAs *as,
 /* Shared GAS .skip/.space/.zero expression grammar: evaluate absolute
  * arithmetic and already-resolved local differences via the existing
  * Common parser. Do not fabricate sizes for forward/relocatable symbols. */
-static bool parse_common_space(MiniAs *as,const char *args,uint64_t *count,
-                               uint8_t *fill) {
-    char *copy=minias_strdup(args),*comma;
-    int64_t amount,byte=0;
-    bool ok;
-    if(!copy)return false;
-    comma=strchr(copy,',');
-    if(comma){
-        *comma++='\0';
-        if(strchr(comma,',') ||
-           !minias_evaluate_absolute_expression(as,minias_trim(comma),&byte) ||
-           byte<-128 || byte>255){free(copy);return false;}
-    }
-    ok=minias_evaluate_absolute_expression(as,minias_trim(copy),&amount) &&
-       amount>=0;
-    free(copy);
-    if(!ok)return false;
-    *count=(uint64_t)amount;
-    *fill=(uint8_t)byte;
-    return true;
-}
-
 static bool emit_common_space(MiniAs *as,int section,size_t total,uint8_t fill) {
     unsigned char bytes[256];
     /* GNU ignores .space/.skip/.zero and alignment fill values in NOBITS,
@@ -2207,42 +2077,6 @@ static bool minias_leb_bytes(MiniAs *as,const char *op,const char *text,
 
 /* Repeat a literal little-endian element: GNU .fill repeat[,size[,value]].
  * All targets use Common DATA fragments; no target-specific section writer. */
-static bool parse_common_fill(MiniAs *as,const char *args,
-                              uint64_t *repeat,unsigned *size,
-                              uint64_t *bits) {
-    char *copy=minias_strdup(args),*cursor,*parts[3]={NULL,NULL,NULL};
-    unsigned i=0U;
-    int64_t n,step=1,value=0;
-    bool ok=false;
-    if(!copy)return false;
-    cursor=copy;
-    for(;;) {
-        char *comma=strchr(cursor,',');
-        if(i>=3U)goto done;
-        if(comma)*comma='\0';
-        parts[i++]=minias_trim(cursor);
-        if(!*parts[i-1U])goto done;
-        if(!comma)break;
-        cursor=comma+1U;
-    }
-    if(!minias_evaluate_absolute_expression(as,parts[0],&n))goto done;
-    /* GNU as treats a negative .fill repetition as zero (it prints a
-     * warning rather than emitting bytes). In relaxed Linux Kbuild x86
-     * forward IDT entries, an already-long jump may exceed its nominal
-     * slot and produces this signed difference. Never cast negative n to
-     * uint64_t or reject an otherwise GNU-valid source statement. */
-    if(n<0)n=0;
-    if(i>1U && (!minias_evaluate_absolute_expression(as,parts[1],&step) ||
-                step<0 || step>8))goto done;
-    if(i>2U && !minias_evaluate_absolute_expression(as,parts[2],&value))goto done;
-    *repeat=(uint64_t)n;
-    *size=(unsigned)step;
-    *bits=(uint64_t)value;
-    ok=true;
-done:
-    free(copy);return ok;
-}
-
 /* Size expressions with only numeric tokens are stable first-pass
  * fragments and must not disable the in-place relaxation fast path.
  * Symbolic names, location counter '.' and unresolved numeric syntax
@@ -2371,7 +2205,7 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
         unsigned elem=0U;
         uint64_t repeats=0U,value=0U;
         delayed=common_data_has_symbolic_token(args);
-        if(!parse_common_fill(as,args,&repeats,&elem,&value) ||
+        if(!minias_parse_common_fill(as,args,&repeats,&elem,&value) ||
            (elem!=0U && repeats>UINT32_MAX/elem)) {
             delayed=true;
             /* Forward labels and subsection values have not received
@@ -2408,7 +2242,7 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
                strcmp(op, ".skip") == 0) {
         uint8_t fill=0U;
         delayed=common_data_has_symbolic_token(args);
-        if (!parse_common_space(as,args,&count,&fill)) {
+        if (!minias_parse_common_space(as,args,&count,&fill)) {
             delayed=true;
             /* .skip/.space also permits forward absolute label differences.
              * A zero-length provisional fragment is resolved and verified
@@ -2550,7 +2384,7 @@ static bool emit_data_stmt(MiniAs *as, const MiniAsStmt *stmt) {
         as->expr_dot_override=true;
         as->expr_dot_value=stmt->offset;
         {
-            bool valid=parse_common_fill(as,stmt->args,
+            bool valid=minias_parse_common_fill(as,stmt->args,
                                          &repeat,&width_bytes,&value);
             as->expr_dot_override=false;
             if(!valid || (width_bytes!=0U && repeat>UINT32_MAX/width_bytes) ||
@@ -2651,7 +2485,7 @@ static bool emit_data_stmt(MiniAs *as, const MiniAsStmt *stmt) {
         bool valid;
         as->expr_dot_override=true;
         as->expr_dot_value=stmt->offset;
-        valid=parse_common_space(as,stmt->args,&count,&fill);
+        valid=minias_parse_common_space(as,stmt->args,&count,&fill);
         as->expr_dot_override=false;
         if(!valid || count!=stmt->size) {
             minias_set_error(as,"invalid-space-emit:line=%zu",stmt->line);
@@ -2871,7 +2705,7 @@ oom:
 }
 
 static bool push_section(MiniAs *as, char *args, size_t line) {
-    if (!grow_array((void **)&as->section_stack,
+    if (!minias_grow_array((void **)&as->section_stack,
                     &as->section_stack_capacity,
                     sizeof(*as->section_stack),
                     as->section_stack_count + 1U)) {
@@ -2905,7 +2739,7 @@ static bool pop_section(MiniAs *as, size_t line) {
         as->previous_section = old_current;
         as->previous_subsection = old_subsection;
     }
-    return ensure_subsection(as, as->current_section, as->current_subsection) != NULL;
+    return minias_ensure_subsection(as, as->current_section, as->current_subsection) != NULL;
 }
 
 static bool define_label(MiniAs *as, char *label, size_t line) {
@@ -2982,7 +2816,7 @@ static bool flush_literal_pools(MiniAs *as,size_t line,bool all) {
         if(all) {
             as->current_section=entry->section;
             as->current_subsection=entry->subsection;
-            if(!ensure_subsection(as,as->current_section,as->current_subsection))
+            if(!minias_ensure_subsection(as,as->current_section,as->current_subsection))
                 goto failure;
         }
         written=snprintf(alignment,sizeof(alignment),"%u,0",entry->width);
@@ -3074,7 +2908,7 @@ static bool parse_comm(MiniAs *as, const char *args, size_t line) {
                        (unsigned long long)alignment);
         (void)snprintf(size_buf,sizeof(size_buf),"%llu",
                        (unsigned long long)size);
-        ok=ensure_subsection(as,bss,0U)!=NULL &&
+        ok=minias_ensure_subsection(as,bss,0U)!=NULL &&
            handle_align(as,".balign",align_buf,line) &&
            define_label(as,name,line) &&
            add_data_stmt(as,".zero",size_buf,line);
@@ -3136,270 +2970,6 @@ static bool handle_named_reloc(MiniAs *as,const char *args,size_t line) {
 invalid:
     minias_set_error(as,"bad-directive:.reloc:%s:line=%zu",args,line);
     return false;
-}
-
-/* Statement ordinal is stable across re-layout; macro source lines are not. */
-static bool force_long_branch_for_stmt(const MiniAs *as, size_t statement_id) {
-    size_t i;
-
-    for (i = 0U; i < as->forced_long_branch_count; ++i) {
-        if (as->forced_long_branch_ids[i] == statement_id) {
-            return true;
-        }
-    }
-    return false;
-}
-
-/* Layout iteration owns fragment identity and growth bookkeeping. Only
- * target backends know the instruction's displacement range and expansion. */
-
-/* Persistent fragment layout: parsed statements are the fragments. Re-layout
- * only their offsets and sizes, preserve expanded macro identities, and
- * relocate label/.size anchors without reopening or reparsing the source.
- *
- * Sources containing position-dependent conditionals, .org, .set or .equ
- * retain the conservative reparsing path until these directives acquire
- * typed deferred-expression fragments. */
-static bool minias_relayout_fragments(MiniAs *as) {
-    size_t n = as->stmt_count, nsym = as->symbol_count;
-    size_t *start_head = NULL, *end_head = NULL;
-    size_t *start_next = NULL, *end_next = NULL;
-    size_t i;
-    bool ok = false;
-
-    if (n == SIZE_MAX || n + 1U > SIZE_MAX / sizeof(size_t) ||
-        (nsym != 0U && nsym > SIZE_MAX / sizeof(size_t))) {
-        minias_set_error(as, "fragment-anchor-overflow");
-        return false;
-    }
-    start_head = malloc((n + 1U) * sizeof(size_t));
-    end_head = malloc((n + 1U) * sizeof(size_t));
-    start_next = malloc((nsym == 0U ? 1U : nsym) * sizeof(size_t));
-    end_next = malloc((nsym == 0U ? 1U : nsym) * sizeof(size_t));
-    if (start_head == NULL || end_head == NULL ||
-        start_next == NULL || end_next == NULL) {
-        minias_set_error(as, "out-of-memory:fragment-anchors");
-        goto done;
-    }
-    for (i = 0U; i <= n; ++i) {
-        start_head[i] = SIZE_MAX;
-        end_head[i] = SIZE_MAX;
-    }
-    for (i = 0U; i < as->subsection_count; ++i)
-        as->subsections[i].size = 0U;
-
-    for (i = 0U; i < nsym; ++i) {
-        MiniAsSymbol *sym = &as->symbols[i];
-        if (sym->has_fragment_anchor && sym->defined && sym->section >= 0) {
-            size_t anchor = sym->fragment_anchor;
-            if (anchor > n) {
-                minias_set_error(as, "internal:fragment-symbol-anchor:%s",
-                                 sym->name);
-                goto done;
-            }
-            start_next[i] = start_head[anchor];
-            start_head[anchor] = i;
-        }
-        if (sym->has_size_end_anchor) {
-            size_t anchor = sym->size_end_anchor;
-            if (anchor > n) {
-                minias_set_error(as, "internal:fragment-size-anchor:%s",
-                                 sym->name);
-                goto done;
-            }
-            end_next[i] = end_head[anchor];
-            end_head[anchor] = i;
-        }
-    }
-
-    for (i = 0U; i <= n; ++i) {
-        size_t index;
-        for (index = start_head[i]; index != SIZE_MAX;
-             index = start_next[index]) {
-            MiniAsSymbol *sym = &as->symbols[index];
-            MiniAsSubsection *sub =
-                find_subsection(as, sym->section, sym->subsection);
-            if (sub == NULL) {
-                minias_set_error(as, "internal:fragment-symbol-subsection:%s",
-                                 sym->name);
-                goto done;
-            }
-            sym->value = sub->size;
-        }
-        for (index = end_head[i]; index != SIZE_MAX;
-             index = end_next[index]) {
-            MiniAsSymbol *sym = &as->symbols[index];
-            MiniAsSubsection *sub =
-                find_subsection(as, sym->section, sym->subsection);
-            if (sub == NULL) {
-                minias_set_error(as, "internal:fragment-size-subsection:%s",
-                                 sym->name);
-                goto done;
-            }
-            sym->size_end_value = sub->size;
-        }
-        if (i < n) {
-            MiniAsStmt *stmt = &as->stmts[i];
-            MiniAsSubsection *sub =
-                find_subsection(as, stmt->section, stmt->subsection);
-            if (sub == NULL) {
-                minias_set_error(as, "internal:fragment-subsection");
-                goto done;
-            }
-            stmt->offset = sub->size;
-            if (stmt->kind == MINIAS_STMT_ALIGN &&
-                strcmp(stmt->op, ".org") != 0) {
-                uint64_t align = stmt->align;
-                uint64_t pad;
-                if (align == 0U || (align & (align - 1U)) != 0U) {
-                    minias_set_error(as, "bad-fragment-alignment");
-                    goto done;
-                }
-                pad = (align - (sub->size & (align - 1U))) & (align - 1U);
-                if (stmt->align_has_max_skip && pad > stmt->align_max_skip)
-                    pad = 0U;
-                if (pad > UINT32_MAX) {
-                    minias_set_error(as, "fragment-alignment-overflow");
-                    goto done;
-                }
-                stmt->size = (uint32_t)pad;
-            }
-            if ((uint64_t)stmt->size > UINT64_MAX - sub->size) {
-                minias_set_error(as, "fragment-size-overflow");
-                goto done;
-            }
-            sub->size += stmt->size;
-        }
-    }
-
-    for (i = 0U; i < nsym; ++i) {
-        MiniAsSymbol *sym = &as->symbols[i];
-        if (sym->has_size_end_anchor) {
-            if (!sym->has_fragment_anchor ||
-                sym->size_end_value < sym->value) {
-                minias_set_error(as, "fragment-size-location-mismatch:%s",
-                                 sym->name);
-                goto done;
-            }
-            sym->size = sym->size_end_value - sym->value;
-        }
-    }
-    ok = finalize_subsection_layout(as);
-done:
-    free(start_head);
-    free(end_head);
-    free(start_next);
-    free(end_next);
-    return ok;
-}
-
-/* Resolve Common variable-size fragments with the exact post-subsection
- * symbol addresses.  Re-run shared Fragment/Layout ownership until the
- * sizes stop changing.  This handles GNU forward numeric labels and
- * expressions referencing later subsections without backend-specific
- * preprocessor passes, speculative dummy symbols, or unknown-opcode skips.
- *
- * The parser already has every source symbol at this point.  A reference
- * to a truly undefined label must remain an error, never a zero fill. */
-static bool minias_resolve_deferred_data(MiniAs *as) {
-    size_t pass;
-    int previous_section=as->current_section;
-    uint32_t previous_subsection=as->current_subsection;
-    if(!as->has_deferred_data)return true;
-    /* The original first-pass layout is also provisional: .fill may have
-     * been measured before a forward symbol's section was known. */
-    if(!minias_relayout_fragments(as))return false;
-    for(pass=0U;pass<=as->stmt_count;++pass) {
-        size_t i;
-        bool changed=false;
-        for(i=0U;i<as->stmt_count;++i) {
-            MiniAsStmt *stmt=&as->stmts[i];
-            uint64_t n=0U;
-            if(!stmt->deferred_data_size)continue;
-            as->current_section=stmt->section;
-            as->current_subsection=stmt->subsection;
-            as->expr_dot_override=true;
-            as->expr_dot_value=stmt->offset;
-            if(!strcmp(stmt->op,".fill")) {
-                unsigned width=0U;
-                uint64_t repeat=0U,bits=0U;
-                if(!parse_common_fill(as,stmt->args,&repeat,&width,&bits) ||
-                   (width!=0U && repeat>UINT32_MAX/width)) {
-                    minias_set_error(as,
-                        "unresolved-deferred-fill:%s:line=%zu",
-                        stmt->args,stmt->line);
-                    goto invalid;
-                }
-                n=repeat*width;
-            }else {
-                uint64_t amount=0U;
-                uint8_t fill=0U;
-                if(!parse_common_space(as,stmt->args,&amount,&fill) ||
-                   amount>UINT32_MAX) {
-                    minias_set_error(as,
-                        "unresolved-deferred-space:%s:line=%zu",
-                        stmt->args,stmt->line);
-                    goto invalid;
-                }
-                n=amount;
-            }
-            as->expr_dot_override=false;
-            if(n!=(uint64_t)stmt->size) {
-                stmt->size=(uint32_t)n;
-                changed=true;
-            }
-        }
-        if(!changed) {
-            as->current_section=previous_section;
-            as->current_subsection=previous_subsection;
-            return true;
-        }
-        if(!minias_relayout_fragments(as))goto invalid;
-    }
-    minias_set_error(as,"deferred-fragment-layout-nonconvergent");
-invalid:
-    as->expr_dot_override=false;
-    as->current_section=previous_section;
-    as->current_subsection=previous_subsection;
-    return false;
-}
-
-static bool collect_out_of_range_branches(MiniAs *as,
-                                          size_t **ids,
-                                          size_t *count,
-                                          size_t *capacity,
-                                          bool *added) {
-    size_t i;
-    *added = false;
-    if (as->target->relax_instruction == NULL) return true;
-    for (i = 0U; i < as->stmt_count; ++i) {
-        const MiniAsStmt *stmt = &as->stmts[i];
-        uint32_t expanded = stmt->size;
-        size_t j;
-        bool known = false;
-        if (stmt->kind != MINIAS_STMT_INSN ||
-            !as->target->relax_instruction(as, stmt, &expanded)) {
-            if (as->error[0] != '\0') return false;
-            continue;
-        }
-        if (expanded <= stmt->size) continue;
-        if (as->target->expanded_instruction_size == NULL) {
-            minias_set_error(as, "target-relaxation-size-unavailable:%s",
-                             stmt->op);
-            return false;
-        }
-        for (j = 0U; j < *count; ++j) {
-            if ((*ids)[j] == i) { known = true; break; }
-        }
-        if (known) continue;
-        if (!grow_array((void **)ids, capacity, sizeof(**ids), *count + 1U)) {
-            minias_set_error(as, "out-of-memory:branch-relaxation");
-            return false;
-        }
-        (*ids)[(*count)++] = i;
-        *added = true;
-    }
-    return true;
 }
 
 static MiniAsMacro *find_macro(MiniAs *as, const char *name);
@@ -3869,7 +3439,7 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
             as->current_subsection = as->previous_subsection;
             as->previous_section = swap_section;
             as->previous_subsection = swap_subsection;
-            return ensure_subsection(as,
+            return minias_ensure_subsection(as,
                                      as->current_section,
                                      as->current_subsection) != NULL;
         }
@@ -3884,7 +3454,7 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
                 as->previous_subsection = as->current_subsection;
                 as->current_subsection = (uint32_t)number;
             }
-            return ensure_subsection(as,
+            return minias_ensure_subsection(as,
                                      as->current_section,
                                      as->current_subsection) != NULL;
         }
@@ -3975,7 +3545,7 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
             free(rewritten_args);
             return false;
         }
-        if (force_long_branch_for_stmt(as, statement_id)) {
+        if (minias_force_long_branch_for_stmt(as, statement_id)) {
             uint32_t grown = 0U;
             if (as->target->expanded_instruction_size == NULL ||
                 !as->target->expanded_instruction_size(op, size, &grown) ||
@@ -4376,7 +3946,7 @@ static bool define_macro(MiniAs *as,
         free(copy);
         return false;
     }
-    if (!grow_array((void **)&as->macros,
+    if (!minias_grow_array((void **)&as->macros,
                     &as->macro_capacity,
                     sizeof(*as->macros),
                     as->macro_count + 1U)) {
@@ -4777,7 +4347,7 @@ static bool read_macro_block(MiniAs *as,
                 return true;
             }
         }
-        if (!grow_array((void **)&lines,
+        if (!minias_grow_array((void **)&lines,
                         &capacity,
                         sizeof(*lines),
                         count + 1U)) {
@@ -5383,7 +4953,7 @@ static bool read_repeat_block(MiniAs *as,
                 return true;
             }
         }
-        if (!grow_array((void **)&lines,
+        if (!minias_grow_array((void **)&lines,
                         &capacity,
                         sizeof(*lines),
                         count + 1U)) {
@@ -5436,7 +5006,7 @@ static bool process_inline_repeat_line(MiniAs *as,const char *source,
         int kind;
         if(end!=NULL)*end='\0';
         kind=classify_repeat_line(as,cursor,argument,sizeof(argument),NULL);
-        if(kind<0 || !grow_array((void **)&pieces,&capacity,
+        if(kind<0 || !minias_grow_array((void **)&pieces,&capacity,
                                    sizeof(*pieces),count+1U)) {
             minias_set_error(as,"out-of-memory:inline-repeat-segments");
             ok=false;break;
@@ -5632,7 +5202,7 @@ bool minias_parse_file(MiniAs *as, const char *path) {
     fclose(file);
     if(as->target->supports_literal_pools &&
        !flush_literal_pools(as,line_no,true))return false;
-    if (!finalize_subsection_layout(as)) {
+    if (!minias_finalize_subsection_layout(as)) {
         return false;
     }
     return resolve_symbol_aliases(as);
@@ -5853,83 +5423,12 @@ int minias_assemble_config(const char *input_path,
         }
         as.forced_long_branch_ids = long_branch_ids;
         as.forced_long_branch_count = long_branch_count;
-        parsed = as.error[0] == '\0' && minias_parse_file(&as, input_path);
-        if (parsed && !minias_resolve_deferred_data(&as))parsed=false;
-        if (parsed &&
-            !collect_out_of_range_branches(&as,
-                                           &long_branch_ids,
-                                           &long_branch_count,
-                                           &long_branch_capacity,
-                                           &added_long_branches)) {
-            parsed = false;
-        }
-        if (parsed && added_long_branches && !as.layout_sensitive) {
-            size_t passes = 0U;
-            do {
-                size_t j;
-                for (j = 0U; j < long_branch_count; ++j) {
-                    size_t id = long_branch_ids[j];
-                    MiniAsStmt *fragment;
-                    uint32_t grown;
-                    if (id >= as.stmt_count) {
-                        minias_set_error(&as, "internal:relaxation-fragment-id");
-                        parsed = false;
-                        break;
-                    }
-                    fragment = &as.stmts[id];
-                    grown = fragment->size;
-                    if (as.target->expanded_instruction_size == NULL) {
-                        minias_set_error(&as, "missing-target-fragment-growth:%s",
-                                         fragment->op);
-                        parsed = false;
-                        break;
-                    }
-                    /* Every target reports its OWN initial instruction size:
-                     * RISC-V grows 4->8; x86 grows 2->5/6. Never silently
-                     * assume the common fragment must start at 4 bytes. */
-                    if (as.target->expanded_instruction_size(
-                            fragment->op, fragment->size, &grown)) {
-                        if (grown <= fragment->size) {
-                            minias_set_error(&as, "invalid-target-fragment-growth:%s",
-                                             fragment->op);
-                            parsed = false;
-                            break;
-                        }
-                        fragment->size = grown;
-                    } else {
-                        uint32_t needed = fragment->size;
-                        if (as.target->relax_instruction == NULL ||
-                            !as.target->relax_instruction(&as, fragment, &needed) ||
-                            needed > fragment->size) {
-                            minias_set_error(&as, "unrelaxed-target-fragment:%s",
-                                             fragment->op);
-                            parsed = false;
-                            break;
-                        }
-                    }
-                }
-                if (!parsed || !minias_relayout_fragments(&as) ||
-                    !minias_resolve_deferred_data(&as) ||
-                    !collect_out_of_range_branches(&as, &long_branch_ids,
-                                                    &long_branch_count,
-                                                    &long_branch_capacity,
-                                                    &added_long_branches)) {
-                    parsed = false;
-                    break;
-                }
-                if (++passes > as.stmt_count + 1U) {
-                    minias_set_error(&as, "fragment-relaxation-nonconvergent");
-                    parsed = false;
-                    break;
-                }
-            } while (added_long_branches);
-            if (parsed && diagnostic != NULL &&
-                getenv("MINIAS_TRACE_RELAYOUT") != NULL) {
-                fprintf(diagnostic,
-                        "minias-fragment-relayout:inplace-passes=%zu\n", passes);
-            }
-        }
-        if (parsed && added_long_branches) {
+        parsed = as.error[0] == '\0' && minias_parse_file(&as,input_path);
+        if(parsed && !minias_solve_fragment_layout(
+              &as,&long_branch_ids,&long_branch_count,
+              &long_branch_capacity,&added_long_branches,diagnostic))
+            parsed=false;
+        if(parsed && added_long_branches) {
             minias_destroy(&as);
             continue;
         }
