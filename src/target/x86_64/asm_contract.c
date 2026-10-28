@@ -385,6 +385,27 @@ static bool x86_linux_bitops_source(
     m=minic_c0_program_expression(program,mem->expression);
     b=minic_c0_program_expression(program,bit->expression);
     f=flag?minic_c0_program_expression(program,flag->expression):NULL;
+    if (byte_rmw && getenv("MINIC_X86_BITOPS_TRACE")) {
+        MinicType um, ub;
+        const bool qm = m && minic_type_unqualified(m->type, &um);
+        const bool qb = b && minic_type_unqualified(b->type, &ub);
+        (void)fprintf(stderr,
+            "X86_BITOPS_TYPES mem_present=%d bit_present=%d "
+            "mem_lvalue=%d mem_const=%d mem_volatile=%d "
+            "unqual_mem=%d unqual_bit=%d "
+            "char=%d signed_char=%d unsigned_char=%d "
+            "bit_int=%d bit_unsigned_int=%d\n",
+            m != NULL, b != NULL,
+            m && m->value_category == MINIC_VALUE_LVALUE,
+            m && minic_type_is_const(m->type),
+            m && minic_type_is_volatile(m->type),
+            qm, qb,
+            qm && minic_type_equal(um, minic_type_char()),
+            qm && minic_type_equal(um, minic_type_signed_char()),
+            qm && minic_type_equal(um, minic_type_unsigned_char()),
+            qb && minic_type_equal(ub, minic_type_int()),
+            qb && minic_type_equal(ub, minic_type_unsigned_int()));
+    }
     if(!m||!b||m->value_category!=MINIC_VALUE_LVALUE||
        (desc->writes_memory&&minic_type_is_const(m->type))||
        !minic_type_unqualified(m->type,&mem_type)||
