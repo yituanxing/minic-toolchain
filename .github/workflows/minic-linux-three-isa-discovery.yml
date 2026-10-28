@@ -18,8 +18,11 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: three-linux-i-${{ github.ref }}
-  cancel-in-progress: true
+  # A frozen 21-shard attestation belongs to its exact compiler commit. A
+  # newer concurrent PR push must not erase those already-running receipts.
+  # The explicit trigger-file gate below still limits expensive campaigns.
+  group: three-linux-i-${{ github.ref }}-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: false
 jobs:
   # The PR contains this workflow, so GitHub's PR-wide path filter matches
   # EVERY subsequent compiler-source commit. A tiny exact-HEAD gate restores
