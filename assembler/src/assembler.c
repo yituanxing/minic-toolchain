@@ -1620,7 +1620,17 @@ static bool evaluate_absolute_expression(MiniAs *as,
                                          int64_t *value) {
     MiniAsAbsoluteExpressionParser parser;
     uint64_t dot;
+    uint64_t unsigned_value;
 
+    /* GNU supports full-precision unsigned constants in .set/.equ and
+     * conditional expressions. Resolve purely numeric, final in-range
+     * expressions before the signed symbolic path; never coerce
+     * unresolved symbols or relocations into an absolute value. */
+    if (minias_eval_u64_expression(text, &unsigned_value) &&
+        unsigned_value <= (uint64_t)INT64_MAX) {
+        *value = (int64_t)unsigned_value;
+        return true;
+    }
     if(as->expr_dot_override)dot=as->expr_dot_value;
     else if(!current_location(as,&dot))return false;
     if(dot>(uint64_t)INT64_MAX)return false;
@@ -2024,6 +2034,22 @@ static char *strip_outer_parens(char *text) {
     }
 }
 
+/* GAS permits parentheses around a data relocation symbol, including
+ * nested (symbol+addend) groups. Normalize a private copy only for data
+ * relocation parsing: never mutate the stored statement or bypass the
+ * Common typed Fixup path. The dominant plain-symbol path stays alloc-free. */
+static bool parse_data_symbol_addend(const char *text,
+                                     MiniAsSymbolExpr *expr) {
+    char *copy;
+    bool valid;
+    if(*text!='(')return minias_parse_symbol_addend(text,expr);
+    copy=minias_strdup(text);
+    if(!copy)return false;
+    valid=minias_parse_symbol_addend(strip_outer_parens(copy),expr);
+    free(copy);
+    return valid;
+}
+
 /* GAS conditional expressions share the Common absolute arithmetic and
  * symbol resolver. A separate numeric-only parser rejected macro constants
  * such as .if docfi=0 and prematurely fragmented Linux target assembly.
@@ -2124,45 +2150,26 @@ static bool push_conditional(MiniAs *as, const char *args, size_t line) {
  * quotes, strip paired quote delimiters, then compare exact byte strings.
  * Expansion of macro arguments already happens upstream.  No target
  * ISA-specific conditional parser or new conditional stack is needed. */
+/* GNU GAS .ifc/.ifnc compares trimmed *literal text*: a missing side
+ * is a valid empty string, a quoted comma is still a separator, and a
+ * comma in the second operand belongs to that operand. Macro expansion
+ * happens before this common conditional stack is evaluated. */
 static bool push_conditional_strings(MiniAs *as,const char *args,
                                      bool unequal,size_t line) {
-    char *copy=minias_strdup(args),*lhs,*rhs,*p;
-    char quote='\0';
+    char *copy=minias_strdup(args),*lhs,*rhs,*comma;
     bool equal;
     if(!copy){minias_set_error(as,"out-of-memory:.ifc");return false;}
-    for(p=copy;*p;++p) {
-        if(quote) {
-            if(*p==quote)quote='\0';
-        } else if(*p=='\'' || *p=='"') {
-            quote=*p;
-        } else if(*p==',')break;
+    comma=strchr(copy,',');
+    if(!comma) {
+        minias_set_error(as,"bad-directive:.ifc:line=%zu",line);
+        free(copy);return false;
     }
-    if(quote || !*p)goto invalid;
-    *p++='\0';
+    *comma='\0';
     lhs=minias_trim(copy);
-    rhs=minias_trim(p);
-    if(*lhs=='\0' || *rhs=='\0' || strchr(rhs,','))goto invalid;
-    {
-        char *v[2]={lhs,rhs};
-        unsigned i;
-        for(i=0U;i<2U;++i) {
-            size_t len=strlen(v[i]);
-            if(len>=2U && (v[i][0]=='"' || v[i][0]=='\'') &&
-               v[i][len-1U]==v[i][0]) {
-                v[i][len-1U]='\0';
-                v[i]++;
-            } else if((v[i][0]=='"' || v[i][0]=='\'') ||
-                      (len>0U && (v[i][len-1U]=='"' ||
-                                  v[i][len-1U]=='\'')))goto invalid;
-        }
-        equal=strcmp(v[0],v[1])==0;
-    }
+    rhs=minias_trim(comma+1);
+    equal=strcmp(lhs,rhs)==0;
     free(copy);
     return push_conditional_value(as,unequal?!equal:equal);
-invalid:
-    minias_set_error(as,"bad-directive:.ifc:line=%zu",line);
-    free(copy);
-    return false;
 }
 
 static bool else_conditional(MiniAs *as, size_t line) {
@@ -2674,7 +2681,7 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
                 uint64_t divisor;
                 bool supported =
                     ((width == 2U || width == 4U || width == 8U) &&
-                     minias_parse_symbol_addend(trimmed, &expr)) ||
+                     parse_data_symbol_addend(trimmed, &expr)) ||
                     ((width == 2U || width == 4U || width == 8U) &&
                      (parse_symbol_minus_dot(trimmed, &expr) ||
                       parse_symbol_minus_dot_divisor(trimmed,
@@ -3204,7 +3211,7 @@ static bool emit_data_stmt(MiniAs *as, const MiniAsStmt *stmt) {
                     }
                 } else {
                     if ((width != 4U && width != 8U) ||
-                        !minias_parse_symbol_addend(trimmed, &expr)) {
+                        !parse_data_symbol_addend(trimmed, &expr)) {
                         minias_set_error(as,
                                          "unsupported-expression:%s:%s:line=%zu",
                                          stmt->op,

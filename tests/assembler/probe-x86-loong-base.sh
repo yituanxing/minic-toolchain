@@ -2095,6 +2095,72 @@ for bad in 'shlx %eax,(%rax),%rdi' 'sarx %r9,(%rax),%r9d' \
     fi
 done
 echo 'MINIAS_X86_BMI2_MEM=PASS GNU_VEX_MEM_PCREL_R_X_B_W_VVVV'
+# GNU Common expression, textual .ifc and symbolic data relocation:
+# (1) full-width unsigned constant masked back into a small .set,
+# (2) empty operands, quoted commas and literal quote preservation,
+# (3) nested parentheses around relocatable symbol/addend.
+# Do not delegate expression/layout semantics to individual ISA encoders.
+cat > "$work/common-gas-text-data.s" <<'COMMON_GAS_TEXT'
+.data
+.set high_index, (((0xffff888000000000) >> 39) & 511)
+.quad high_index
+.quad (preempt_schedule_thunk)
+.quad ((preempt_schedule_thunk+16))
+.ifc ,
+.byte 0x11
+.else
+.byte 0xee
+.endif
+.ifnc a,
+.byte 0x22
+.else
+.byte 0xee
+.endif
+.ifc "a,b","a,b"
+.byte 0xee
+.else
+.byte 0x33
+.endif
+.ifc "a",a
+.byte 0xee
+.else
+.byte 0x44
+.endif
+.ifc a,b,c
+.byte 0xee
+.else
+.byte 0x55
+.endif
+COMMON_GAS_TEXT
+for target in x86_64 loongarch64; do
+    "$MINIAS" --target="$target" -o "$work/$target-common-gas-mini.o" "$work/common-gas-text-data.s"
+    if [ "$target" = x86_64 ]; then
+        as --64 -o "$work/$target-common-gas-gnu.o" "$work/common-gas-text-data.s"
+        objcopy -j .data -O binary "$work/$target-common-gas-mini.o" "$work/$target-common-gas-mini.bin"
+        objcopy -j .data -O binary "$work/$target-common-gas-gnu.o" "$work/$target-common-gas-gnu.bin"
+    else
+        "$LOONGAS" -mabi=lp64d -o "$work/$target-common-gas-gnu.o" "$work/common-gas-text-data.s"
+        "$LOONGCOPY" -j .data -O binary "$work/$target-common-gas-mini.o" "$work/$target-common-gas-mini.bin"
+        "$LOONGCOPY" -j .data -O binary "$work/$target-common-gas-gnu.o" "$work/$target-common-gas-gnu.bin"
+    fi
+    cmp "$work/$target-common-gas-mini.bin" "$work/$target-common-gas-gnu.bin"
+done
+readelf -Wr "$work/x86_64-common-gas-mini.o" > "$work/common-gas-mini-rel.txt"
+readelf -Wr "$work/x86_64-common-gas-gnu.o" > "$work/common-gas-gnu-rel.txt"
+test "$(grep -c 'R_X86_64_64.*preempt_schedule_thunk' "$work/common-gas-mini-rel.txt")" -eq 2
+test "$(grep -c 'R_X86_64_64.*preempt_schedule_thunk' "$work/common-gas-gnu-rel.txt")" -eq 2
+grep -q 'preempt_schedule_thunk + 10' "$work/common-gas-mini-rel.txt"
+grep -q 'preempt_schedule_thunk + 10' "$work/common-gas-gnu-rel.txt"
+cat > "$work/common-gas-invalid.s" <<'COMMON_GAS_INVALID'
+.data
+.ifc a
+.byte 1
+.endif
+COMMON_GAS_INVALID
+if "$MINIAS" --target=x86_64 -o "$work/common-gas-invalid.o" "$work/common-gas-invalid.s" >/dev/null 2>&1; then
+    echo 'invalid GNU .ifc without delimiter accepted' >&2; exit 1
+fi
+echo 'MINIAS_COMMON_GAS_TEXT=PASS GNU_x86_LA_bytes .ifc_empty_quoted_comma unsigned_set parenthesized_relocations'
 echo 'MINIAS_COMMON_NUMERIC_U64=PASS GNU_GAS_x86_LA64_exact_data_bytes'
 echo 'MINIAS_X86_SEGMENTED_INDIRECT=PASS GNU_AS_text_and_relocations segment_base_index_abs_rip=true indirect_memory_call_jmp=true absolute_symbol32S=true'
 echo 'MINIAS_TWO_TARGET_ORACLE=PASS x86_GNU_bytes=equal loong_GNU_bytes=equal ELF_machine=correct lp64d_v1=0x43 CET_endbr64=1 ALU_imm8_imm32=1 x86_ModRM_SIB_disp=1 x86_test_cmp_alu_memory=1 x86_scaled_index_SIB=1 LA_jr=1 LA_scaled_ptr14=1 LA_imm12_shift_upper20=1 invalid=reject'
