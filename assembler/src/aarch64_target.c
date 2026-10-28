@@ -313,14 +313,16 @@ enum {
     A64_MC_SIMD_SINGLE,
     A64_MC_SIMD_MOVE,
     A64_MC_SIMD_CRYPTO,
-    A64_MC_SIMD_LOGIC
+    A64_MC_SIMD_LOGIC,
+    A64_MC_SIMD_DUP,
+    A64_MC_SIMD_REV32
 };
 
 /* GNU AArch64 operands split on TOP-LEVEL commas, not commas within
  * [xN,#offset]. Unlike copying a generic tokenizer into every target,
  * this helper is strictly A64 addressing grammar. */
 static bool split_operands(const char *args, char out[4][96], unsigned *n) {
-    unsigned depth = 0U, count = 0U;
+    unsigned depth = 0U, braces = 0U, count = 0U;
     const char *start = args, *p = args;
     for (;;) {
         char ch = *p;
@@ -329,11 +331,16 @@ static bool split_operands(const char *args, char out[4][96], unsigned *n) {
             if (!depth) return false;
             --depth;
         }
-        if ((ch == ',' && depth == 0U) || ch == '\0') {
+        if (ch == '{') ++braces;
+        if (ch == '}') {
+            if (!braces) return false;
+            --braces;
+        }
+        if ((ch == ',' && depth == 0U && braces == 0U) || ch == '\0') {
             size_t len = (size_t)(p - start);
             while (len && isspace((unsigned char)*start)) { ++start; --len; }
             while (len && isspace((unsigned char)start[len - 1U])) --len;
-            if (!len || len >= sizeof(out[0]) || count == 4U || depth)
+            if (!len || len >= sizeof(out[0]) || count == 4U || depth || braces)
                 return false;
             memcpy(out[count], start, len);
             out[count][len] = '\0';
@@ -420,6 +427,90 @@ static bool a64_req_vector_bank(const char *text,unsigned *reg) {
     errno=0;num=strtoul(text+1U,&end,10);
     if(errno || *end!='\0' || num>31UL)return false;
     *reg=(unsigned)num;return true;
+}
+
+/* AArch64 structure LD1/ST1 register lists are either contiguous
+ * vM.T-vN.T ranges or comma-separated contiguous lists, up to four.
+ * Reuse the single-vector arrangement decoder for EACH member; no
+ * parallel vector ISA parser and no implicit register skipping. */
+static bool a64_structure_vlist(const char *text,unsigned *first,
+                                uint32_t *arrange,unsigned *number) {
+    char copy[96],*body,*p,*dash,*comma;
+    unsigned start,last,member=0U;
+    uint32_t flags,each;
+    size_t len=strlen(text);
+    if(len<6U || len>=sizeof(copy) ||
+       text[0]!='{' || text[len-1U]!='}')return false;
+    memcpy(copy,text+1U,len-2U);copy[len-2U]='\0';
+    body=minias_trim(copy);
+    dash=strchr(body,'-');
+    if(dash) {
+        if(strchr(body,',') || strchr(dash+1U,'-'))return false;
+        *dash='\0';
+        if(!a64_vector_view(minias_trim(body),&start,&flags) ||
+           !a64_vector_view(minias_trim(dash+1U),&last,&each) ||
+           flags!=each)return false;
+        member=(last+32U-start)%32U+1U;
+        if(member<2U || member>4U)return false;
+    }else {
+        p=body;start=0U;flags=0U;
+        do {
+            comma=strchr(p,',');
+            if(comma)*comma='\0';
+            if(!a64_vector_view(minias_trim(p),&last,&each) ||
+               member==4U)return false;
+            if(member==0U){start=last;flags=each;}
+            else if(each!=flags || last!=(start+member)%32U)
+                return false;
+            ++member;
+            if(!comma)break;
+            p=comma+1U;
+        }while(*p);
+        if(comma && !*p)return false;
+    }
+    *first=start;*arrange=flags;*number=member;
+    return true;
+}
+
+/* SYS opcode fields are exactly op1,CRn,CRm,op2,Rt.
+ * Unlike ordinary A64 operands this form has FIVE fields; parse here
+ * rather than raising Common's global 4-operand limit or duplicating
+ * the entire instruction tokenizer. */
+static bool a64_sys_fields(const char *args,uint32_t *word,unsigned *rt) {
+    char text[256],tok[5][80];char *start,*end;
+    int64_t numbers[4];unsigned i;
+    bool wide,sp;
+    size_t n=strlen(args);
+    if(n>=sizeof(text))return false;
+    memcpy(text,args,n+1U);
+    start=text;
+    for(i=0U;i<5U;++i) {
+        size_t len;
+        end=strchr(start,',');
+        if((i<4U && !end) || (i==4U && end))return false;
+        if(end)*end='\0';
+        start=minias_trim(start);len=strlen(start);
+        if(len==0U || len>=sizeof(tok[0]))return false;
+        memcpy(tok[i],start,len+1U);
+        if(i==4U)break;
+        start=end+1U;
+    }
+    for(i=0U;i<4U;++i) {
+        const char *v=tok[i];
+        if(i==1U || i==2U){
+            if(*v!='c')return false;
+            ++v;
+        }
+        if(!parse_signed_number(v,&numbers[i]) || numbers[i]<0 ||
+           numbers[i]>(i==0U?7:i==3U?7:15))return false;
+    }
+    if(!parse_a64_reg(tok[4],rt,&wide,&sp) || !wide || sp)return false;
+    *word=UINT32_C(0xd5080000)|
+          ((uint32_t)numbers[0]<<16U)|
+          ((uint32_t)numbers[1]<<12U)|
+          ((uint32_t)numbers[2]<<8U)|
+          ((uint32_t)numbers[3]<<5U);
+    return true;
 }
 
 static bool parse_a64_reg(const char *text, unsigned *number, bool *is64,
@@ -765,13 +856,17 @@ static bool parse_integer_family(MiniAsMCInst *inst,
     if((!strcmp(op,"ld1") || !strcmp(op,"st1")) &&
        (n==2U || n==3U)) {
         uint32_t arrangement;
-        if(!parse_a64_single_v(t[0],&rd,&arrangement) ||
+        unsigned vector_count;
+        static const uint32_t offsets[]={0U,UINT32_C(0x7000),
+             UINT32_C(0xa000),UINT32_C(0x6000),UINT32_C(0x2000)};
+        if(!a64_structure_vlist(t[0],&rd,&arrangement,&vector_count) ||
            !parse_a64_mem(t[1],&base,&imm,&mode) ||
            mode!=0U || imm!=0)return false;
         inst->opcode=A64_MC_SIMD_SINGLE;inst->count=n;
         inst->encoding=arrangement|
-                       (!strcmp(op,"ld1")?UINT32_C(0x0c407000):
-                                          UINT32_C(0x0c007000));
+                       offsets[vector_count]|
+                       (!strcmp(op,"ld1")?UINT32_C(0x0c400000):
+                                          UINT32_C(0x0c000000));
         put_reg(&inst->operands[0],rd,true);
         put_reg(&inst->operands[1],base,true);
         if(n==3U) {
@@ -783,7 +878,9 @@ static bool parse_integer_family(MiniAsMCInst *inst,
              * inside this existing typed SIMD MCInst; no duplicated
              * machine encoder or memory-parser guesswork. */
             if(parse_signed_number(t[2],&increment)) {
-                if(increment!=((arrangement&UINT32_C(0x40000000))?16:8))
+                if(increment!=
+                   (int64_t)(vector_count*
+                      ((arrangement&UINT32_C(0x40000000))?16U:8U)))
                     return false;
                 put_immediate(&inst->operands[2],31);
             } else {
@@ -1511,6 +1608,8 @@ static bool a64_system_register(const char *name,uint32_t *mrs,uint32_t *msr) {
         {"hcr_el2",UINT32_C(0xd53c1100),UINT32_C(0xd51c1100)},
         {"hstr_el2",UINT32_C(0xd53c1160),UINT32_C(0xd51c1160)},
         {"actlr_el1",UINT32_C(0xd5381020),UINT32_C(0xd5181020)},
+        {"id_aa64pfr1_el1",UINT32_C(0xd5380420),0U},
+        {"pmovsclr_el0",UINT32_C(0xd53b9c60),UINT32_C(0xd51b9c60)},
         {"pmcntenset_el0",UINT32_C(0xd53b9c20),UINT32_C(0xd51b9c20)},
         {"pmintenclr_el1",UINT32_C(0xd5389e40),UINT32_C(0xd5189e40)},
         {"pmcr_el0",UINT32_C(0xd53b9c00),UINT32_C(0xd51b9c00)},
@@ -2222,6 +2321,55 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         inst->count=1U;
         inst->encoding=read?mrscode:msrcode;
         put_reg(&inst->operands[0],rt,true);
+    } else if(!strcmp(op,"dup") || !strcmp(op,"rev32")) {
+        char dst[96],source[96];unsigned vd,rn;
+        uint32_t ar;
+        bool wide,sp;
+        if(!split_two(args,dst,sizeof(dst),source,sizeof(source)) ||
+           !a64_vector_view(dst,&vd,&ar)) {
+            minias_set_error(as,"bad-aarch64-simd-lane:%s:line=%zu",
+                             args,stmt->line);
+            free(inst);return false;
+        }
+        if(!strcmp(op,"dup")) {
+            bool d=((ar&UINT32_C(0xc00))==UINT32_C(0xc00));
+            unsigned lane=1U<<((ar&UINT32_C(0xc00))>>10U);
+            if((d && !(ar&UINT32_C(0x40000000))) ||
+               !parse_a64_reg(source,&rn,&wide,&sp) || sp || wide!=d) {
+                minias_set_error(as,"bad-aarch64-dup-source:%s:line=%zu",
+                                 args,stmt->line);
+                free(inst);return false;
+            }
+            inst->opcode=A64_MC_SIMD_DUP;inst->count=2U;
+            inst->encoding=UINT32_C(0x0e000c00)|
+                    (ar&UINT32_C(0x40000000))|(lane<<16U);
+        }else {
+            uint32_t element=ar&UINT32_C(0xc00);
+            uint32_t vdarr;
+            if((element!=0U && element!=UINT32_C(0x400)) ||
+               !a64_vector_view(source,&rn,&vdarr) || vdarr!=ar) {
+                minias_set_error(as,"bad-aarch64-rev32-vector:%s:line=%zu",
+                                 args,stmt->line);
+                free(inst);return false;
+            }
+            inst->opcode=A64_MC_SIMD_REV32;inst->count=2U;
+            inst->encoding=UINT32_C(0x2e200800)|
+                     (ar&UINT32_C(0x40000000))|
+                     (element==UINT32_C(0x400)?
+                              UINT32_C(0x00400000):0U);
+        }
+        put_reg(&inst->operands[0],vd,true);
+        put_reg(&inst->operands[1],rn,true);
+    } else if(!strcmp(op,"sys")) {
+        uint32_t bits;unsigned rt;
+        if(!a64_sys_fields(args,&bits,&rt)) {
+            minias_set_error(as,"bad-aarch64-sys-fields:%s:line=%zu",
+                             args,stmt->line);
+            free(inst);return false;
+        }
+        inst->opcode=A64_MC_SYS_OP;inst->count=1U;
+        inst->encoding=bits;
+        put_reg(&inst->operands[0],rt,true);
     } else if(!strcmp(op,"dmb") || !strcmp(op,"dsb") ||
               !strcmp(op,"isb")) {
         unsigned barrier=15U;
@@ -2906,6 +3054,12 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
             }
             break;
         }
+        case A64_MC_SIMD_DUP:
+        case A64_MC_SIMD_REV32:
+            code=inst->encoding|
+                 (inst->operands[1].reg<<5U)|
+                 inst->operands[0].reg;
+            break;
         case A64_MC_SIMD_LOGIC:
             code=inst->encoding|
                  (inst->operands[2].reg<<16U)|

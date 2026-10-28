@@ -1613,4 +1613,47 @@ GNU_MOVQ_NUMBER
 cmp "$work/a64-movw-number-mini.bin" "$work/a64-movw-number-gnu.bin"
 "$AARCH64_READELF" -Wr "$work/a64-movw-number-mini.o" | grep -q 'There are no relocations'
 echo 'MINIAS_A64_MOVW_NUMERIC=PASS GNU_numeric_signed_MOVN_lane_extraction'
+
+# Real Linux AArch64 crypto and kernel SIMD register families,
+# decoded through shared target arrangement/parser, not copied MC backends.
+cat > "$work/a64-multivector-dup-sys.s" <<'GNU_SIMD_NEW'
+.arch armv8.5-a
+.text
+ld1 {v0.4s-v3.4s}, [x8], #64
+ld1 {v16.2d-v18.2d}, [x8]
+ld1 {v0.16b-v1.16b}, [x8]
+ld1 {v0.16b-v3.16b}, [x8], x9
+ld1 {v1.4s,v2.4s,v3.4s}, [x8]
+st1 {v0.16b-v3.16b}, [x8]
+st1 {v16.2d-v18.2d}, [x8]
+dup v0.4s, w6
+dup v1.4s, w0
+dup v0.16b, w6
+dup v2.2d, x9
+dup v0.8h, w1
+rev32 v0.16b, v0.16b
+rev32 v1.8b, v2.8b
+rev32 v0.8h, v1.8h
+sys 3, c7, c13, 1, x3
+mrs x1, id_aa64pfr1_el1
+msr pmovsclr_el0, x1
+GNU_SIMD_NEW
+"$MINIAS" --target=aarch64 -o "$work/a64-multivector-mini.o" "$work/a64-multivector-dup-sys.s"
+"$AARCH64_AS" -o "$work/a64-multivector-gnu.o" "$work/a64-multivector-dup-sys.s"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-multivector-mini.o" "$work/a64-multivector-mini.bin"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-multivector-gnu.o" "$work/a64-multivector-gnu.bin"
+cmp "$work/a64-multivector-mini.bin" "$work/a64-multivector-gnu.bin"
+for bad in 'ld1 {v0.4s-v4.4s},[x8]' \
+           'ld1 {v0.4s-v3.4s},[x8],#48' \
+           'ld1 {v0.16b,v2.16b},[x8]' \
+           'dup v0.2d,w1' 'dup v1.4s,x3' \
+           'rev32 v0.8b,v1.16b' \
+           'sys 8,c7,c13,1,x3' 'sys 3,c16,c13,1,x3' \
+           'msr id_aa64pfr1_el1,x0'; do
+    printf '.arch armv8.5-a\n.text\n%s\n' "$bad" > "$work/a64-multivector-bad.s"
+    if "$MINIAS" --target=aarch64 -o "$work/a64-multivector-bad.o" "$work/a64-multivector-bad.s" >/dev/null 2>&1; then
+        echo "invalid A64 SIMD/SYS operand accepted: $bad" >&2;exit 1
+    fi
+done
+echo 'MINIAS_A64_SIMD_STRUCTURE_DUP_REV32_SYS=PASS GNU_18_words_N_vector_list_and_arch_fields'
 echo 'MINIAS_AARCH64_VSLICE=PASS ELF64=1 gnu_bytes=equal relocation_call26_jump26_abs64=1 ld=pass qemu=exit0'
