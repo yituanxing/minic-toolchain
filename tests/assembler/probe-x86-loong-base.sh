@@ -3549,6 +3549,11 @@ for flavor in mini gnu; do
    LC_ALL=C sort > "$work/x86-symbol-types-$flavor.txt"
 done
 diff -u "$work/x86-symbol-types-gnu.txt" "$work/x86-symbol-types-mini.txt"
+for flavor in mini gnu; do
+  readelf -h "$work/x86-tls-ifunc-$flavor.o" |
+    grep 'OS/ABI:' | sed -E 's/^[[:space:]]+//' > "$work/x86-tls-osabi-$flavor"
+done
+diff -u "$work/x86-tls-osabi-gnu" "$work/x86-tls-osabi-mini"
 printf '.type invented_symbol,@invented_type\n' > "$work/x86-type-invalid.s"
 if "$MINIAS" --target=x86_64 -o "$work/x86-type-invalid.o" "$work/x86-type-invalid.s" >/dev/null 2>&1; then
  echo 'MiniAS silently converted unknown GNU ELF symbol type to NOTYPE' >&2;exit 1

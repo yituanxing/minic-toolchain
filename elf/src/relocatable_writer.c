@@ -661,7 +661,7 @@ bool minielf_build_relocatable(const MiniElfRelocatableSpec *spec,
     image[EI_CLASS] = spec->elf_class;
     image[EI_DATA] = spec->data_encoding;
     image[EI_VERSION] = EV_CURRENT;
-    image[EI_OSABI] = ELFOSABI_NONE;
+    image[EI_OSABI] = spec->osabi;
     store_u16(image + 16U, spec->data_encoding, ET_REL);
     store_u16(image + 18U, spec->data_encoding, spec->machine);
     store_u32(image + 20U, spec->data_encoding, EV_CURRENT);

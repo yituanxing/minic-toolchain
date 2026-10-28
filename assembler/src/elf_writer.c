@@ -235,6 +235,18 @@ static bool minias_write_elf(MiniAs *as,
     memset(&spec, 0, sizeof(spec));
     spec.elf_class = elf_class;
     spec.data_encoding = ELFDATA2LSB;
+    /* GNU symbol-type and binding extensions require EI_OSABI=GNU so
+     * external readelf/ld classify type 10 as IFUNC and bind 10 UNIQUE,
+     * rather than unknown OS-specific symbol types. Derive from emitted
+     * symbols; ordinary RV/other ELF objects retain System V. */
+    spec.osabi = ELFOSABI_NONE;
+    for (i = 0U; i < output_symbol_count; ++i) {
+        if ((symbols[i].info & 0x0fU) == MINIAS_STT_GNU_IFUNC ||
+            (symbols[i].info >> 4U) == MINIAS_STB_GNU_UNIQUE) {
+            spec.osabi = ELFOSABI_GNU;
+            break;
+        }
+    }
     spec.machine = as->target->elf_machine;
     spec.flags = as->elf_flags;
     spec.sections = sections;

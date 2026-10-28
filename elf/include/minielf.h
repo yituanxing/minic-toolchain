@@ -143,6 +143,7 @@ typedef struct MiniElfWriteRela {
 typedef struct MiniElfRelocatableSpec {
     unsigned char elf_class;
     unsigned char data_encoding;
+    unsigned char osabi; /* GNU IFUNC/UNIQUE require ELFOSABI_GNU */
     uint16_t machine;
     uint32_t flags;
     const MiniElfWriteSection *sections;
