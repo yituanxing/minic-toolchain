@@ -161,6 +161,16 @@
         665
       ]
     },
+    "src/target/common/aggregate_shape.c": {
+      "blob": "9b5f4015ec35087bbc7697f28a957e629476b268",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/common/aggregate_shape.h": {
+      "blob": "36a1a08912eccd912072e61e004501a332f1a49b",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
     "src/target/common/core_block_walk.h": {
       "blob": "30dd44ed6ca87dac76f782b9256b4fe2a428a76d",
       "review_depth": "inventory",
