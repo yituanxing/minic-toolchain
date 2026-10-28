@@ -694,13 +694,13 @@ SRC
             esac
             if [ "$op" = add_return ]; then label=ret; else label=tmp; fi
             cat >> "$work/aarch64-percpu-llsc.i" <<SRC
-$typ percpu_$bits\_$op(void *p,$typ val) {
+$typ percpu_${bits}_${op}(void *p,$typ val) {
     unsigned int loop;
     $typ $label;
     __asm__ __volatile__(
-        "1: ldxr$suffix $w[$label], %[ptr]\\n"
-        " $alu $w[$label], $w[$label], $w[val]\\n"
-        " stxr$suffix %w[loop], $w[$label], %[ptr]\\n"
+        "1: ldxr$suffix $w[$label], %[ptr]\n"
+        " $alu $w[$label], $w[$label], $w[val]\n"
+        " stxr$suffix %w[loop], $w[$label], %[ptr]\n"
         " cbnz %w[loop], 1b"
         : [loop] "=&r"(loop), [$label] "=&r"($label),
           [ptr] "+Q"(*($typ *)p) : [val] "r"(val));
@@ -711,10 +711,10 @@ SRC
         cat >> "$work/aarch64-percpu-llsc.i" <<SRC
 int test_percpu_$bits(void) {
     $typ value=85;
-    $typ a=percpu_$bits\_add(&value,3);
-    $typ b=percpu_$bits\_andnot(&value,8);
-    $typ c=percpu_$bits\_or(&value,3);
-    $typ d=percpu_$bits\_add_return(&value,5);
+    $typ a=percpu_${bits}_add(&value,3);
+    $typ b=percpu_${bits}_andnot(&value,8);
+    $typ c=percpu_${bits}_or(&value,3);
+    $typ d=percpu_${bits}_add_return(&value,5);
     return value==88 && a==88 && b==80 && c==83 && d==88;
 }
 SRC
@@ -752,9 +752,9 @@ SRC
 void bad(unsigned int *p,unsigned int n) {
     unsigned int loop, tmp;
     __asm__ __volatile__(
-        "1: ldxr %w1, %2\\n"
-        " add %w1, %w1, %w3\\n"
-        " stxr %w0, %w1, %2\\n"
+        "1: ldxr %w1, %2\n"
+        " add %w1, %w1, %w3\n"
+        " stxr %w0, %w1, %2\n"
         " cbnz %w0, 1b$tail"
         : "=&r"(loop), "=&r"(tmp), "$memory"(*p) : "$input"(n));
 }
