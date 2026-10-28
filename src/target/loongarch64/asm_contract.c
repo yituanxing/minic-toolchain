@@ -39,7 +39,8 @@ bool minic_loongarch64_requires_qualified_input_asm(const MinicInlineAsm *src) {
         "dbar", "amand_db.w", "amor_db.w", "amxor_db.w", "amadd_db.w",
         "amand_db.d", "amor_db.d", "amxor_db.d", "amadd_db.d",
         "csrrd", "csrxchg", "1:ll.d", "sltu",
-        "movgr2fcsr", "ldx.", "stx.", "amadd.", "amand.", "amor."
+        "movgr2fcsr", "ldx.", "stx.", "amadd.", "amand.", "amor.",
+        "amswap_db.w", "amswap_db.d"
     };
     return minic_backend_inline_asm_prefix_matches(
         src, reserved, sizeof(reserved) / sizeof(reserved[0]));
@@ -449,6 +450,58 @@ static bool loong_linux_cmpxchg_source(
                     MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT);
     }
     contract->operand_count=outputs+inputs;
+    return true;
+}
+
+
+/* Original GNU Linux 6.6.143 __xchg() amswap_db.w/d returns the old
+ * memory value in a GPR and writes a replacement atomically with a
+ * hardware DB fence. Common Core carries the same typed structured
+ * memory/read-write, register-output and scalar-input operands. */
+static unsigned loong_linux_xchg_form(const char *text,size_t length){
+    static const char *const forms[]={
+        "amswap_db.w%1,%z2,%0","amswap_db.d%1,%z2,%0"
+    };
+    char compact[96];size_t n=0U,i;
+    if(!text||!length||length>=sizeof(compact))return 0U;
+    for(i=0U;i<length;++i){
+        const char c=text[i];
+        if(c==' '||c=='\t'||c=='\r'||c=='\n')continue;
+        if(c=='\0'||c==';'||n+1U>=sizeof(compact))return 0U;
+        compact[n++]=c;
+    }
+    compact[n]='\0';
+    for(i=0U;i<2U;++i)
+        if(strcmp(compact,forms[i])==0)return (unsigned)i+1U;
+    return 0U;
+}
+static bool loong_linux_xchg_source(const MinicC0Program *p,
+    const MinicInlineAsm *s,MinicTargetInlineAsmContract *c){
+    const unsigned form=s?loong_linux_xchg_form(
+        s->template_text,s->template_length):0U;
+    const size_t width=form==2U?8U:4U;
+    const MinicExpression *mem,*res,*val;
+    if(!p||!s||!c||!form||!s->is_volatile||s->is_goto||
+       s->output_count!=2U||s->input_count!=1U||!s->outputs||!s->inputs||
+       s->register_clobber_count||s->label_count||
+       s->clobber_count!=1U||!s->has_memory_clobber||
+       !loong_csr_constraint(&s->outputs[0],"+ZB")||
+       !loong_csr_constraint(&s->outputs[1],"=&r")||
+       !loong_csr_constraint(&s->inputs[0],"Jr"))return false;
+    mem=minic_c0_program_expression(p,s->outputs[0].expression);
+    res=minic_c0_program_expression(p,s->outputs[1].expression);
+    val=minic_c0_program_expression(p,s->inputs[0].expression);
+    if(!mem||!res||!val||
+       mem->value_category!=MINIC_VALUE_LVALUE||
+       res->value_category!=MINIC_VALUE_LVALUE||
+       minic_type_is_const(mem->type)||minic_type_is_const(res->type)||
+       !loong_linux_cmpxchg_word(mem->type,width)||
+       !loong_linux_cmpxchg_word(res->type,width)||
+       !loong_linux_cmpxchg_word(val->type,width))return false;
+    c->operand_count=3U;
+    c->kinds[0]=MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
+    c->kinds[1]=MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+    c->kinds[2]=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     return true;
 }
 
@@ -889,6 +942,7 @@ bool minic_loongarch64_qualify_inline_asm(
         loong_percpu_amo_source(program, src, contract))
         return true;
     if (loong_linux_cmpxchg_source(program,src,contract)) return true;
+    if (loong_linux_xchg_source(program,src,contract)) return true;
     if (loong_mask_nospec_source(program, src, contract))
         return true;
     if(loong_pte_source(program,src,contract))
@@ -1196,6 +1250,49 @@ static bool loong_linux_cmpxchg_emit(FILE *out,
     return true;
 }
 
+
+/* Emit original hardware AMDB: old is observable, not optimized away;
+ * the instruction itself enforces GNU Linux DB memory ordering. */
+static bool loong_linux_xchg_emit(FILE *out,
+    const MinicDirectLP64BlockContext *ctx,const MinicCoreInstruction *ins,
+    const MinicCoreInlineAsm *info){
+    const unsigned form=loong_linux_xchg_form(
+        info->template_text,info->template_length);
+    const size_t width=form==2U?8U:4U;
+    const MinicCoreFunction *fn=ctx->fn;
+    const MinicCoreStructuredInlineAsmOperand *b=
+        ins->value.structured_inline_asm.operands;
+    MinicType type;
+    size_t i;
+    if(!out||!ctx||!fn||!info||!form||!info->is_volatile||
+       info->is_goto||!info->has_memory_clobber||
+       info->register_clobber_count||
+       ins->value.structured_inline_asm.operand_count!=3U)return false;
+    for(i=0U;i<3U;++i){
+        if(b[i].operand_index!=i||b[i].value>=fn->value_count||
+           b[i].has_fixed_register_binding||
+           b[i].kind!=(i==0U?
+               MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE:
+               i==1U?MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT:
+                     MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT))
+            return false;
+        type=fn->values[b[i].value].type;
+        if(i<2U&&!minic_type_pointee(type,&type))return false;
+        if(!loong_linux_cmpxchg_word(type,width))return false;
+    }
+    return minic_loongarch64_emit_frame_mem(
+             out,"ld.d","$t1",(size_t)b[0].value*8U,ctx->dynamic_frame)&&
+           minic_loongarch64_emit_frame_mem(
+             out,width==8U?"ld.d":"ld.w","$t0",
+             (size_t)b[2].value*8U,ctx->dynamic_frame)&&
+           fprintf(out,"  amswap_db.%c $t2, $t0, $t1\n",
+                   width==8U?'d':'w')>=0&&
+           minic_loongarch64_emit_frame_mem(
+             out,"ld.d","$t1",(size_t)b[1].value*8U,ctx->dynamic_frame)&&
+           fprintf(out,"  %s $t2, $t1, 0\n",
+                   width==8U?"st.d":"st.w")>=0;
+}
+
 bool minic_loongarch64_emit_qualified_structured_asm(
     FILE *out, const MinicDirectLP64BlockContext *ctx,
     const MinicCoreInstruction *ins) {
@@ -1223,6 +1320,8 @@ bool minic_loongarch64_emit_qualified_structured_asm(
         return loong_percpu_amo_emit(out, ctx, ins, info);
     if (loong_linux_cmpxchg_form(info->template_text,info->template_length))
         return loong_linux_cmpxchg_emit(out,ctx,ins,info);
+    if (loong_linux_xchg_form(info->template_text,info->template_length))
+        return loong_linux_xchg_emit(out,ctx,ins,info);
     if (loong_mask_nospec_form(info->template_text, info->template_length))
         return loong_mask_nospec_emit(out, ctx, ins, info);
     if(loong_pte_form(info->template_text,info->template_length))
