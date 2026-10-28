@@ -3374,3 +3374,16 @@ objcopy -j .text -O binary "$work/x86-subsection-origin-gnu.o" "$work/x86-subsec
 cmp "$work/x86-subsection-origin-mini.bin" "$work/x86-subsection-origin-gnu.bin"
 test "$(wc -c < "$work/x86-subsection-origin-mini.bin")" -eq 5
 echo 'MINIAS_COMMON_SUBSECTION_BOUNDARY_X86=PASS GNU_section0_org_precedes_source_earlier_section1_data'
+
+
+# GNU GAS accepts negative signed repeat, warns, and emits no bytes.
+# This is required for x86 IDT .fill(current desired address - .) when
+# a provisional branch layout crosses a fixed-width slot boundary.
+printf '.text\n.byte 0x90\n.fill -1, 1, 0xcc\n.byte 0xc3\n' > "$work/x86-signed-negative-fill.s"
+"$MINIAS" --target=x86_64 -o "$work/x86-signed-negative-fill-mini.o" "$work/x86-signed-negative-fill.s"
+as --64 -o "$work/x86-signed-negative-fill-gnu.o" "$work/x86-signed-negative-fill.s" 2>"$work/x86-signed-negative-fill-gnu.warn"
+objcopy -j .text -O binary "$work/x86-signed-negative-fill-mini.o" "$work/x86-signed-negative-fill-mini.bin"
+objcopy -j .text -O binary "$work/x86-signed-negative-fill-gnu.o" "$work/x86-signed-negative-fill-gnu.bin"
+cmp "$work/x86-signed-negative-fill-mini.bin" "$work/x86-signed-negative-fill-gnu.bin"
+test "$(wc -c < "$work/x86-signed-negative-fill-mini.bin")" -eq 2
+echo 'MINIAS_COMMON_SIGNED_NEGATIVE_FILL=PASS GNU_equivalent_no_emission'
