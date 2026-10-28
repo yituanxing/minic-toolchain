@@ -557,7 +557,15 @@ bool minic_x86_64_emit_structured_asm(
      * valid two-operand dec_mod shape). Only DISJOINT no-clobber,
      * register-output two-operand templates enter the BSF/BSR selector.
      * This dispatch is by semantic contract, never operand count alone. */
-    if (info->has_memory_clobber)
+    /* An exact source-qualified Linux native_cpuid carries a "memory"
+     * compiler barrier and SIX typed operands, unlike the legacy 8-operand
+     * CPUID. It is NOT a generic memory-clobber matched-ASM instruction.
+     * Preserve this target-only ownership boundary and let the shared
+     * CPUID machine verifier below check all six physical register roles. */
+    if (info->has_memory_clobber &&
+        !(ins->value.structured_inline_asm.operand_count == 6U &&
+          info->template_length == 5U &&
+          memcmp(info->template_text, "cpuid", 5U) == 0))
         return info->is_volatile &&
                emit_memory_clobber_matched(
                    out, program, target, fn, frame, ins, info);
