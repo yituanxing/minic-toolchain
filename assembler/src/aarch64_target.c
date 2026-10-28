@@ -1263,17 +1263,14 @@ static bool a64_system_register(const char *name,uint32_t *mrs,uint32_t *msr) {
         {"id_aa64mmfr1_el1",UINT32_C(0xd5380720),0U},
         {"clidr_el1",UINT32_C(0xd5390020),0U},
         {"ctr_el0",UINT32_C(0xd53b0020),0U},
-        {"dbgbcr0_el1",UINT32_C(0xd53000a0),UINT32_C(0xd51000a0)},
-        {"dbgbvr0_el1",UINT32_C(0xd5300080),UINT32_C(0xd5100080)},
         {"par_el1",UINT32_C(0xd5387400),UINT32_C(0xd5187400)},
         {"hcr_el2",UINT32_C(0xd53c1100),UINT32_C(0xd51c1100)},
         {"isr_el1",UINT32_C(0xd538c100),0U},
         {"spsr_el2",UINT32_C(0xd53c4000),UINT32_C(0xd51c4000)},
-        {"dbgwcr0_el1",UINT32_C(0xd53000e0),UINT32_C(0xd51000e0)},
-        {"dbgwcr14_el1",UINT32_C(0xd5300ee0),UINT32_C(0xd5100ee0)},
-        {"dbgwvr0_el1",UINT32_C(0xd53000c0),UINT32_C(0xd51000c0)},
         {"elr_el2",UINT32_C(0xd53c4020),UINT32_C(0xd51c4020)},
         {"spsr_abt",UINT32_C(0xd53c4320),UINT32_C(0xd51c4320)},
+        {"spsr_und",UINT32_C(0xd53c4340),UINT32_C(0xd51c4340)},
+        {"mdccint_el1",UINT32_C(0xd5300200),UINT32_C(0xd5100200)},
         {"id_aa64pfr0_el1",UINT32_C(0xd5380400),0U},
         {"id_aa64isar0_el1",UINT32_C(0xd5380600),0U},
         {"osdlr_el1",UINT32_C(0xd5301380),UINT32_C(0xd5101380)},
@@ -1298,6 +1295,35 @@ static bool a64_system_register(const char *name,uint32_t *mrs,uint32_t *msr) {
         while(*a && *b && tolower(*a)==tolower(*b)){++a;++b;}
         if(*a==0U && *b==0U) {
             *mrs=table[i].read;*msr=table[i].write;return true;
+        }
+    }
+    /* DBGBVRn/DBGBCRn/DBGWVRn/DBGWCRn (0..15) share a documented
+     * architectural CRm index field. Keep this one family decoder in
+     * Target ISA; remove redundant per-index table entries above.
+     * GNU case-insensitive names are preserved, unknown sysregs fail. */
+    {
+        static const struct {const char *prefix;uint32_t bits;} family[]={
+            {"dbgbvr",UINT32_C(0x80)},{"dbgbcr",UINT32_C(0xa0)},
+            {"dbgwvr",UINT32_C(0xc0)},{"dbgwcr",UINT32_C(0xe0)}
+        };
+        char key[64];
+        size_t n=strlen(name),j;
+        if(n>=sizeof(key))return false;
+        for(j=0U;j<n;++j)key[j]=(char)tolower((unsigned char)name[j]);
+        key[n]='\0';
+        for(j=0U;j<sizeof(family)/sizeof(family[0]);++j) {
+            char *end;
+            unsigned long index;
+            if(strncmp(key,family[j].prefix,6U)!=0 ||
+               !isdigit((unsigned char)key[6]))continue;
+            errno=0;
+            index=strtoul(key+6U,&end,10);
+            if(errno || index>15UL || strcmp(end,"_el1"))continue;
+            *mrs=UINT32_C(0xd5300000)|family[j].bits|
+                 ((uint32_t)index<<8U);
+            *msr=UINT32_C(0xd5100000)|family[j].bits|
+                 ((uint32_t)index<<8U);
+            return true;
         }
     }
     return false;

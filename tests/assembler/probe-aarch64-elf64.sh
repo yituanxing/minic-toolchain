@@ -127,6 +127,17 @@ external_probe:
     msr dbgwcr14_el1, x2
     mrs x0, spsr_abt
     msr spsr_abt, x0
+    // Table-free debug-bank index coding + EL1/banked privilege forms.
+    mrs x0, mdccint_el1
+    msr mdccint_el1, x0
+    mrs x1, spsr_und
+    msr spsr_und, x1
+    mrs x2, dbgwcr13_el1
+    msr dbgwcr13_el1, x2
+    mrs x1, dbgbcr15_el1
+    msr dbgbcr15_el1, x1
+    mrs x2, dbgbvr7_el1
+    mrs x3, dbgwvr15_el1
     eret
     msr tpidrro_el0, x0
     msr daif, xzr
@@ -673,7 +684,9 @@ for bad in 'add x0, w0, x1' 'cmp x0, #4097' 'ldr x0, [x1, -257]' \
            'ldaxrh x2,[x3]' 'ldxrb x2,[x3]' \
            'stlxrh w4,x2,[x3]' 'stxrb x4,w2,[x3]' \
            'stnp x2,x3,[x0,#-520]' 'ldnp x2,x3,[x0],8' \
-           'ldnp x2,w3,[x0]' 'stnp w2,w3,[x0,#254]'; do
+           'ldnp x2,w3,[x0]' 'stnp w2,w3,[x0,#254]' \
+           'mrs x2,dbgwcr16_el1' 'msr dbgbcr99_el1,x1' \
+           'mrs x0,unknown_el1'; do
     printf '.arch armv8-a\n.text\n%s\n' "$bad" >"$work/bad-integer.s"
     if "$MINIAS" --target=aarch64 -o "$work/bad-integer.o" \
          "$work/bad-integer.s" >/dev/null 2>"$work/bad-integer.err"; then
