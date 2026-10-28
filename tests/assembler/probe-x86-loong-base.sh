@@ -117,6 +117,17 @@ entry_x:
     cmpq 8(%r12), %rax
     cmpl %r9d, -8(%rbp)
     # GNU bit-imm with ModR/M register, SIB memory, RIP-relative relocation.
+    # Real GCC imm-to-memory symbolic and dual-relocation instructions.
+    cmpq $apic_physflat, apic(%rip)
+    cmpq $truncate_bdev_range, 72(%rdi)
+    cmpq $shash_no_setkey, -48(%r14)
+    movq $.LC4, x86_pmu(%rip)
+    movq $pt_attr_groups, pt_pmu+40(%rip)
+    movq $pci_mmcfg, raw_pci_ext_ops(%rip)
+    addq $ext_global, 16(%rbx)
+    subq $ext_global+4, 48(%rbp)
+    andq $ext_global, ext_global(%rip)
+    cmpq $ext_global, ext_global+8(%rip)
     # ELF ABS32/ABS32S typed symbol immediates and GNU accumulator.
     cmpq $ip6_output, %rax
     cmpq $init_net, %rbx

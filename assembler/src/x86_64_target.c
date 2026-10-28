@@ -1107,7 +1107,12 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
                 group=groups[i].group;has_group=true;break;
             }
         numeric=minias_eval_u64_expression(src+1,&bits);
-        if(!numeric && !strcmp(s->op,"movq") &&
+        /* One typed ELF sign-ext imm32 operand for C7 MOVQ and all
+         * Group-1 32/64-bit immediate-to-memory instructions. */
+        if(!numeric &&
+           (!strcmp(s->op,"movq") ||
+            (has_group && (s->op[strlen(s->op)-1U]=='q' ||
+                           s->op[strlen(s->op)-1U]=='l'))) &&
            minias_parse_symbol_addend(src+1,&sym))is_sym=true;
         val=(int64_t)bits;
         {
@@ -1146,12 +1151,8 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
                 if(s->op[strlen(s->op)-1U]=='b' &&
                    (val < -128 || val > 255))goto invalid;
                 if(!x64_parse_base_memory(dst,&parsed))goto invalid;
-                /* Two separate symbol expressions in this one instruction
-                 * have not yet passed the GNU dual-relocation oracle. */
-                if(is_sym && parsed.symbol!=NULL) {
-                    free(parsed.symbol);
-                    goto invalid;
-                }
+                /* Keep both expressions typed, for independent GNU PC32
+                 * displacement and 32S immediate ELF relocations. */
                 m->operands[1].memory=malloc(sizeof(parsed));
                 if(!m->operands[1].memory){
                     free(parsed.symbol);
@@ -1180,7 +1181,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
                 }
                 m->encoding=(has_group ?
                     (suffix=='b'?0x80U:
-                     val>=-128 && val<=127?0x83U:0x81U):
+                     (!is_sym && val>=-128 && val<=127)?0x83U:0x81U):
                     (!strcmp(s->op,"movb")?0xc6U:
                      !strcmp(s->op,"testb")?0xf6U:
                      !strncmp(s->op,"test",4U)?0xf7U:0xc7U)) |
@@ -1879,9 +1880,18 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
                     return false;
                 }
                 if(!minias_section_append(as,s->section,code,n))return false;
-                return minias_add_fixup(as,s->section,
+                if(!minias_add_fixup(as,s->section,
                     s->offset+relocation_at,MINIAS_FIXUP_X64_ABS32S,4U,
-                    mem->symbol->name,mem->symbol->addend);
+                    mem->symbol->name,mem->symbol->addend))return false;
+                if(m->opcode==X64_IMM_MEMORY &&
+                   m->operands[2].kind==MINIAS_MC_SYMBOL) {
+                    const MiniAsSymbolExpr *value=m->operands[2].symbol;
+                    if(extra!=4U || !value)return false;
+                    return minias_add_fixup(as,s->section,s->offset+n-4U,
+                         MINIAS_FIXUP_X64_ABS32S,4U,
+                         value->name,value->addend);
+                }
+                return true;
             }
             if(mem->pc_relative && mem->symbol!=NULL) {
                 MiniAsSymbol *sym=minias_get_symbol(as,mem->symbol->name,false);
@@ -1911,10 +1921,19 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
                     for(i=0U;i<extra;++i)
                         code[n++]=(unsigned char)(immediate>>(8U*i));
                     if(!minias_section_append(as,s->section,code,n))return false;
-                    if(local)return true;
-                    return minias_add_fixup(as,s->section,s->offset+relocation_at,
-                        MINIAS_FIXUP_X64_PC32,4U,mem->symbol->name,
-                        mem->symbol->addend-4-(int64_t)extra);
+                    if(!local &&
+                       !minias_add_fixup(as,s->section,s->offset+relocation_at,
+                           MINIAS_FIXUP_X64_PC32,4U,mem->symbol->name,
+                           mem->symbol->addend-4-(int64_t)extra))return false;
+                    if(m->opcode==X64_IMM_MEMORY &&
+                       m->operands[2].kind==MINIAS_MC_SYMBOL) {
+                        const MiniAsSymbolExpr *value=m->operands[2].symbol;
+                        if(extra!=4U || !value)return false;
+                        return minias_add_fixup(as,s->section,s->offset+n-4U,
+                            MINIAS_FIXUP_X64_ABS32S,4U,
+                            value->name,value->addend);
+                    }
+                    return true;
                 }
             }
             for (i=0U;i<bytes;++i)
