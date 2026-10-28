@@ -450,6 +450,14 @@ bool minias_cfi_emit(MiniAs *as) {
             }
             loc=symbol->value;
         }
+        /* GNU x86_64 .eh_frame FDEs end on an absolute 8-byte
+         * section boundary. CIEs still use DWARF32 4-byte padding;
+         * relative-to-FDE padding is insufficient when a simple CIE
+         * occupies 20 bytes, leaving the next FDE at offset 0x14. */
+        if(eh) {
+            while((as->sections[(size_t)section].size&7U)!=0U)
+                if(!put8(as,section,0U))return false;
+        }
         if(!finish_length(as,section,base))return false;
         data=&as->sections[(size_t)section];
     }
