@@ -38,7 +38,10 @@ result=0;qemu-aarch64 "$d/run.elf" || result=$?
 test "$result" -eq 42
 sed 's/msr daifset, #3/msr daifset, #5/' "$d/original.i" >"$d/bad-mask.i"
 sed 's/msr daifclr, #3/msr daifclr, #3; brk #1/' "$d/original.i" >"$d/bad-inject.i"
-sed 's/"msr daifset, #3" : : : "memory"/"msr daifset, #3"/' "$d/original.i" >"$d/bad-clobber.i"
+# The original Linux __daif_local_irq_disable uses a plain volatile ASM
+# without a memory clobber: this is valid and now tested separately.
+# An unrelated hard-register clobber cannot be silently thrown away.
+sed 's/"msr daifset, #3" : : : "memory"/"msr daifset, #3" : : : "x0"/' "$d/original.i" >"$d/bad-clobber.i"
 sed 's/hint #20/hint #21/' "$d/original.i" >"$d/bad-hint.i"
 for bad in bad-mask bad-inject bad-clobber bad-hint;do
  if "$minic" --target=aarch64-linux -S "$d/$bad.i" -o "$d/$bad.s" >/dev/null 2>&1;then

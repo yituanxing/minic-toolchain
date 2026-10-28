@@ -30,7 +30,9 @@ rc=0;qemu-loongarch64 "$d/run.elf" || rc=$?
 test "$rc" -eq 42
 sed 's/dbar 0x700/dbar 0x900/' "$d/dbar.i" >"$d/bad-immediate.i"
 sed 's/dbar 0"/dbar 0; syscall 0"/' "$d/dbar.i" >"$d/bad-extra.i"
-sed 's/"dbar 0" : : : "memory"/"dbar 0"/' "$d/dbar.i" >"$d/bad-clobber.i"
+# Plain volatile DBAR is valid native ISA; a fabricated register clobber
+# is not the same source contract and must still fail closed.
+sed 's/"dbar 0" : : : "memory"/"dbar 0" : : : "a0"/' "$d/dbar.i" >"$d/bad-clobber.i"
 for bad in bad-immediate bad-extra bad-clobber;do
  if "$mini" --target=loongarch64-linux -S "$d/$bad.i" -o "$d/$bad.s" >/dev/null 2>&1;then
   echo "FAIL LoongArch unsafe DBAR $bad accepted" >&2;exit 1
