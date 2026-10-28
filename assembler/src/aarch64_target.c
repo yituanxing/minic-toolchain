@@ -331,7 +331,8 @@ enum {
 /* GNU AArch64 operands split on TOP-LEVEL commas, not commas within
  * [xN,#offset]. Unlike copying a generic tokenizer into every target,
  * this helper is strictly A64 addressing grammar. */
-static bool split_operands(const char *args, char out[4][384], unsigned *n) {
+static bool split_operands_sized(const char *args, char *out[4],
+                                 const size_t capacity[4], unsigned *n) {
     unsigned depth = 0U, braces = 0U, count = 0U;
     const char *start = args, *p = args;
     for (;;) {
@@ -350,7 +351,8 @@ static bool split_operands(const char *args, char out[4][384], unsigned *n) {
             size_t len = (size_t)(p - start);
             while (len && isspace((unsigned char)*start)) { ++start; --len; }
             while (len && isspace((unsigned char)start[len - 1U])) --len;
-            if (!len || len >= sizeof(out[0]) || count == 4U || depth || braces)
+            if (!len || count == 4U || len >= capacity[count] ||
+                depth || braces)
                 return false;
             memcpy(out[count], start, len);
             out[count][len] = '\0';
@@ -363,6 +365,16 @@ static bool split_operands(const char *args, char out[4][384], unsigned *n) {
     }
     *n = count;
     return true;
+}
+
+/* All normal A64 operands still use the fast, bounded stack tokenizer.
+ * The GNU MOVW macro may contain a generated expression longer than 384
+ * bytes. It calls the SAME sized splitter with transient dynamic storage,
+ * not a second source-text parser or an ISA-specific expression rewrite. */
+static bool split_operands(const char *args, char out[4][384], unsigned *n) {
+    char *slots[4]={out[0],out[1],out[2],out[3]};
+    const size_t caps[4]={384U,384U,384U,384U};
+    return split_operands_sized(args,slots,caps,n);
 }
 
 /* SIMD/FP registers are a distinct target ISA register bank. Avoid
@@ -3251,41 +3263,63 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         put_reg(&inst->operands[0],reg,true);
     } else if((!strcmp(op,"movz") || !strcmp(op,"movk") ||
                !strcmp(op,"movn"))) {
-        char parts[4][384];unsigned n,rd,imm16=0U,shift=0U;
+        char parts[4][384];unsigned n=0U,rd,imm16=0U,shift=0U;
+        char *tokens[4]={parts[0],parts[1],parts[2],parts[3]};
+        size_t cap[4]={384U,384U,384U,384U};
+        size_t argument_length=strlen(args),k;
+        char *large=NULL;
+        bool parsed;
         bool wide,sp;
         MiniAsSymbolExpr movw_expr;
         MiniAsFixupKind movw_fixup=MINIAS_FIXUP_NONE;
         bool modifier,constant=false,signed_negative=false;
         uint64_t bits=0U;
         unsigned variant;
-        if(!split_operands(args,parts,&n) || (n!=2U && n!=3U) ||
-           !parse_a64_reg(parts[0],&rd,&wide,&sp) || sp) {
+        if(argument_length>=sizeof(parts[0])) {
+            size_t stride=argument_length+1U;
+            if(stride>SIZE_MAX/4U || stride>(1024U*1024U)) {
+                minias_set_error(as,"aarch64-operand-text-too-large:line=%zu",
+                                 stmt->line);free(inst);return false;
+            }
+            large=malloc(stride*4U);
+            if(!large) {
+                minias_set_error(as,"out-of-memory:aarch64-operand-text");
+                free(large);free(inst);return false;
+            }
+            for(k=0U;k<4U;++k) {
+                tokens[k]=large+k*stride;
+                cap[k]=stride;
+            }
+        }
+        parsed=split_operands_sized(args,tokens,cap,&n);
+        if(!parsed || (n!=2U && n!=3U) ||
+           !parse_a64_reg(tokens[0],&rd,&wide,&sp) || sp) {
             /* Preserve the real GNU-expanded operand and register
              * shape in the pinned first-blocker census. Unsupported MOVW
              * syntax must not be silently normalized or misattributed. */
             minias_set_error(as,"bad-aarch64-wide-immediate:%s:line=%zu",
                              args,stmt->line);
-            free(inst);return false;
+            free(large);free(inst);return false;
         }
-        modifier=a64_movw_relocation(parts[1],&movw_expr,&movw_fixup,
+        modifier=a64_movw_relocation(tokens[1],&movw_expr,&movw_fixup,
                                       &shift,&constant,&bits,&signed_negative);
         if((modifier && (n!=2U || (!wide && shift>=2U))) ||
-           (!modifier && !parse_imm16(parts[1],&imm16))) {
+           (!modifier && !parse_imm16(tokens[1],&imm16))) {
             minias_set_error(as,"bad-aarch64-wide-immediate:%s:line=%zu",
                              args,stmt->line);
-            free(inst);return false;
+            free(large);free(inst);return false;
         }
         if(modifier && constant)
             imm16=(unsigned)((signed_negative?~bits:bits)>>(16U*shift))&
                   UINT32_C(0xffff);
         if(n==3U) {
             int64_t raw_shift;
-            if(strncmp(parts[2],"lsl ",4U)!=0 ||
-               !parse_signed_number(parts[2]+4U,&raw_shift) ||
+            if(strncmp(tokens[2],"lsl ",4U)!=0 ||
+               !parse_signed_number(tokens[2]+4U,&raw_shift) ||
                raw_shift<0 || raw_shift>=(wide?64:32) ||
                (raw_shift%16)!=0) {
                 minias_set_error(as,"bad-aarch64-mov-shift:line=%zu",stmt->line);
-                free(inst);return false;
+                free(large);free(inst);return false;
             }
             shift=(unsigned)raw_shift/16U;
         }
@@ -3300,9 +3334,10 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         if(modifier && !constant) {
             if(!a64_attach_expr(inst,1U,&movw_expr)) {
                 minias_set_error(as,"out-of-memory:a64-movw-reloc");
-                free(inst);return false;
+                free(large);free(inst);return false;
             }
         }else put_immediate(&inst->operands[1],(int64_t)imm16);
+        free(large);
     } else if((!strcmp(op,"yield") || !strcmp(op,"wfe") ||
                !strcmp(op,"wfi") || !strcmp(op,"sev") ||
                !strcmp(op,"sevl")) && !*args) {
