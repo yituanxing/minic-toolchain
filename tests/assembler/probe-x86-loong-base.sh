@@ -1822,6 +1822,24 @@ for bad in 'iretq %rax' 'vmmcall %ecx' 'ldmxcsr %eax' 'stmxcsr %rdx'; do
     fi
 done
 echo 'MINIAS_X86_CONTROL_ORACLE=PASS GNU_BYTES_RELOC IRET_LRET_VMMCALL_MXCSR'
+
+# Real GNU numeric-local backward symbol difference in Common .rept
+# (AArch64 Linux NOPS macro uses precisely this expression family).
+cat > "$work/gnu-local-rept.s" <<'GNU_LOCAL_REPT'
+.text
+661:
+.byte 1,2,3,4
+662:
+.rept (662b - 661b) / 4
+.byte 0x90
+.endr
+GNU_LOCAL_REPT
+"$MINIAS" --target=x86_64 -o "$work/local-rept-mini.o" "$work/gnu-local-rept.s"
+as --64 -o "$work/local-rept-gnu.o" "$work/gnu-local-rept.s"
+objcopy -j .text -O binary "$work/local-rept-mini.o" "$work/local-rept-mini.bin"
+objcopy -j .text -O binary "$work/local-rept-gnu.o" "$work/local-rept-gnu.bin"
+cmp "$work/local-rept-mini.bin" "$work/local-rept-gnu.bin"
+echo 'MINIAS_COMMON_NUMERIC_REPT=PASS GNU_GAS_661b_662b_STABLE_BYTES'
 echo 'MINIAS_COMMON_NUMERIC_U64=PASS GNU_GAS_x86_LA64_exact_data_bytes'
 echo 'MINIAS_X86_SEGMENTED_INDIRECT=PASS GNU_AS_text_and_relocations segment_base_index_abs_rip=true indirect_memory_call_jmp=true absolute_symbol32S=true'
 echo 'MINIAS_TWO_TARGET_ORACLE=PASS x86_GNU_bytes=equal loong_GNU_bytes=equal ELF_machine=correct lp64d_v1=0x43 CET_endbr64=1 ALU_imm8_imm32=1 x86_ModRM_SIB_disp=1 x86_test_cmp_alu_memory=1 x86_scaled_index_SIB=1 LA_jr=1 LA_scaled_ptr14=1 LA_imm12_shift_upper20=1 invalid=reject'
