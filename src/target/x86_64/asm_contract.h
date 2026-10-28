@@ -13,6 +13,31 @@ bool minic_x86_64_asm_nospec_template(const char *, size_t);
 bool minic_x86_64_asm_percpu_stable_template(const char *, size_t);
 bool minic_x86_64_asm_mulacc_template(const char *, size_t);
 bool minic_x86_64_asm_muldiv_template(const char *, size_t);
+/* The one x86 GNU Linux bitops ISA family: native BT/BTS/BTR,
+ * hardware CF output, real 671 SMP lock table and typed Core roles. */
+typedef enum MinicX86BitopsForm {
+    MINIC_X86_BITOPS_NONE = 0,
+    MINIC_X86_BITOPS_TEST,
+    MINIC_X86_BITOPS_TEST_SET,
+    MINIC_X86_BITOPS_TEST_CLEAR,
+    MINIC_X86_BITOPS_TEST_CHANGE,
+    MINIC_X86_BITOPS_SET,
+    MINIC_X86_BITOPS_CLEAR,
+    MINIC_X86_BITOPS_LOCK_SET,
+    MINIC_X86_BITOPS_LOCK_CLEAR,
+    MINIC_X86_BITOPS_LOCK_TEST_SET,
+    MINIC_X86_BITOPS_LOCK_TEST_CLEAR
+} MinicX86BitopsForm;
+typedef struct MinicX86BitopsDesc {
+    const char *opcode;
+    unsigned int is_locked;
+    unsigned int has_flag;
+    unsigned int memory_output;
+    unsigned int writes_memory;
+} MinicX86BitopsDesc;
+MinicX86BitopsForm minic_x86_64_linux_bitops_form(const char *, size_t);
+const MinicX86BitopsDesc *minic_x86_64_bitops_description(MinicX86BitopsForm);
+
 /* Original Linux 6.6.143 x86 LOCK INC/DEC + =@cce output.
  * SOURCE admission and physical emission use the same exact form enum. */
 typedef enum MinicX86AtomicCC {

@@ -166,6 +166,69 @@ static bool emit_linux_tied_bit_scan(
     return fputs("  movl %eax, (%r11)\n", out) != EOF;
 }
 
+/* One x86 hardware bitops emitter owns all source-validated
+ * LOCK/non-LOCK BT/BTS/BTR/BTC, carrier CF and SMP lock patch metadata.
+ * No template text is forwarded to GAS; only safe ISA rows emit machine
+ * opcodes. GNU 'm' inputs can be real memory effects for BTS/BTR/BTC. */
+static bool emit_linux_bitops(
+    FILE *out,const MinicC0Program *program,const MinicTargetInfo *target,
+    const MinicCoreFunction *fn,const MinicX86Frame *frame,
+    const MinicCoreInstruction *ins,const MinicCoreInlineAsm *info) {
+    const MinicX86BitopsForm form=minic_x86_64_linux_bitops_form(
+        info->template_text,info->template_length);
+    const MinicX86BitopsDesc *d=minic_x86_64_bitops_description(form);
+    const MinicCoreStructuredInlineAsmOperand *b=
+        ins->value.structured_inline_asm.operands;
+    const size_t count=ins->value.structured_inline_asm.operand_count;
+    const size_t memindex=d&&d->memory_output?0U:d&&d->has_flag?1U:0U;
+    const size_t bitindex=d&&d->memory_output?2U:d&&d->has_flag?2U:1U;
+    const size_t flagindex=d&&d->has_flag?(d->memory_output?1U:0U):SIZE_MAX;
+    MinicType mem,flag;
+    size_t width,i;
+    bool sign;
+    if(!out||!program||!target||!fn||!frame||!ins||!info||!b||!d||
+       !info->has_memory_clobber||info->register_clobber_count||
+       count!=(d->has_flag?3U:2U)||(d->is_locked&&!info->is_volatile))
+        return false;
+    for(i=0U;i<count;++i)
+        if(b[i].operand_index!=i||b[i].value>=fn->value_count||
+           b[i].early_clobber||b[i].has_fixed_register_binding||
+           b[i].kind!=(i==memindex?
+               (d->writes_memory?
+                    MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE:
+                    MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT):
+               i==flagindex?
+                    MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT:
+                    MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT))
+            return false;
+    if(!minic_type_pointee(fn->values[b[memindex].value].type,&mem)||
+       !minic_x86_64_scalar_width(program,target,mem,&width,&sign)||
+       width!=8U||
+       !minic_x86_64_scalar_width(program,target,
+           fn->values[b[bitindex].value].type,&width,&sign)||width!=8U||
+       (d->has_flag&&
+        (!minic_type_pointee(fn->values[b[flagindex].value].type,&flag)||
+         !minic_type_equal(flag,minic_type_bool()))))
+        return false;
+    if(!x86_value_load(out,frame,b[memindex].value,"%r11")||
+       !x86_value_load(out,frame,b[bitindex].value,"%r10"))
+        return false;
+    if(d->is_locked&&
+       fputs("  .pushsection .smp_locks,\"a\"\n"
+             "  .balign 4\n"
+             "  .long 671f - .\n"
+             "  .popsection\n"
+             "671:\n",out)==EOF)
+        return false;
+    if(fprintf(out,"  %s%s %%r10, (%%r11)\n",
+               d->is_locked?"lock; ":"",d->opcode)<0)
+        return false;
+    if(!d->has_flag)return true;
+    return fputs("  setc %al\n",out)!=EOF&&
+           x86_value_load(out,frame,b[flagindex].value,"%r10")&&
+           fputs("  movb %al, (%r10)\n",out)!=EOF;
+}
+
 /* Real Linux LOCKed INC/DEC with SMP patch table and hardware ZF.
  * Core transports two typed addresses and the memory side effect;
  * only this target emits the instruction and SETE. */
@@ -407,6 +470,11 @@ bool minic_x86_64_emit_structured_asm(
     bindings = ins->value.structured_inline_asm.operands;
     if (!info->template_text)
         return false;
+    if (minic_x86_64_linux_bitops_form(
+            info->template_text,info->template_length)!=
+        MINIC_X86_BITOPS_NONE)
+        return emit_linux_bitops(
+            out,program,target,fn,frame,ins,info);
     if (minic_x86_64_atomic_cc_form(
             info->template_text,info->template_length)!=
         MINIC_X86_ATOMIC_CC_NONE)

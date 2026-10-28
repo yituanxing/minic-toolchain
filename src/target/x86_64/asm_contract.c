@@ -229,6 +229,127 @@ static bool x86_linux_atomic_cc_source(
     return minic_type_equal(m,minic_type_long())||
            minic_type_equal(m,minic_type_long_long());
 }
+/* Original GNU Linux 6.6.143 x86 bitops: exact source templates, not
+ * a generic inline assembly passthrough. The same table is the ONLY
+ * authoritative ISA/memory/flag descriptor used by source and machine.
+ * Names become canonical numeric operands in shared Core. */
+static const struct {
+    const char *literal;
+    const char *canonical;
+    MinicX86BitopsDesc desc;
+} x86_linux_bitops[] = {
+    {"btq%2,%1/*outputconditioncodec*/",
+     "btq%2,%1/*outputconditioncodec*/",
+     {"btq",0,1,0,0}},
+    {"btsq%2,%1/*outputconditioncodec*/",
+     "btsq%2,%1/*outputconditioncodec*/",
+     {"btsq",0,1,0,1}},
+    {"btrq%2,%1/*outputconditioncodec*/",
+     "btrq%2,%1/*outputconditioncodec*/",
+     {"btrq",0,1,0,1}},
+    {"btcq%2,%1/*outputconditioncodec*/",
+     "btcq%2,%1/*outputconditioncodec*/",
+     {"btcq",0,1,0,1}},
+    {"btsq%1,%0","btsq%1,%0",{"btsq",0,0,0,1}},
+    {"btrq%1,%0","btrq%1,%0",{"btrq",0,0,0,1}},
+    {".pushsection.smp_locks,\"a\".balign4.long671f-..popsection671:lock;btsq%1,%0",
+     ".pushsection.smp_locks,\"a\".balign4.long671f-..popsection671:lock;btsq%1,%0",
+     {"btsq",1,0,0,1}},
+    {".pushsection.smp_locks,\"a\".balign4.long671f-..popsection671:lock;btrq%1,%0",
+     ".pushsection.smp_locks,\"a\".balign4.long671f-..popsection671:lock;btrq%1,%0",
+     {"btrq",1,0,0,1}},
+    {".pushsection.smp_locks,\"a\".balign4.long671f-..popsection671:lock;btsq%[val],%[var]/*outputconditioncodec*/",
+     ".pushsection.smp_locks,\"a\".balign4.long671f-..popsection671:lock;btsq%2,%0/*outputconditioncodec*/",
+     {"btsq",1,1,1,1}},
+    {".pushsection.smp_locks,\"a\".balign4.long671f-..popsection671:lock;btrq%[val],%[var]/*outputconditioncodec*/",
+     ".pushsection.smp_locks,\"a\".balign4.long671f-..popsection671:lock;btrq%2,%0/*outputconditioncodec*/",
+     {"btrq",1,1,1,1}}
+};
+MinicX86BitopsForm minic_x86_64_linux_bitops_form(
+    const char *text,size_t length) {
+    char compact[256];
+    size_t i,j=0U;
+    if (!text||!length||length>=sizeof(compact))
+        return MINIC_X86_BITOPS_NONE;
+    for(i=0U;i<length;++i) {
+        const char ch=text[i];
+        if (ch==' '||ch=='\t'||ch=='\n'||ch=='\r')continue;
+        if(j+1U>=sizeof(compact))return MINIC_X86_BITOPS_NONE;
+        compact[j++]=ch;
+    }
+    compact[j]='\0';
+    for(i=0U;i<sizeof(x86_linux_bitops)/sizeof(x86_linux_bitops[0]);++i)
+        if(strcmp(compact,x86_linux_bitops[i].literal)==0||
+           strcmp(compact,x86_linux_bitops[i].canonical)==0)
+            return (MinicX86BitopsForm)(i+1U);
+    return MINIC_X86_BITOPS_NONE;
+}
+const MinicX86BitopsDesc *minic_x86_64_bitops_description(
+    MinicX86BitopsForm form) {
+    const size_t index = (size_t)form;
+    if(index==0U||index>sizeof(x86_linux_bitops)/sizeof(x86_linux_bitops[0]))
+        return NULL;
+    return &x86_linux_bitops[index-1U].desc;
+}
+static bool x86_linux_bitops_source(
+    const MinicC0Program *program,const MinicInlineAsm *src,
+    MinicTargetInlineAsmContract *contract) {
+    const MinicX86BitopsForm form=src ?
+        minic_x86_64_linux_bitops_form(
+            src->template_text,src->template_length):MINIC_X86_BITOPS_NONE;
+    const MinicX86BitopsDesc *desc=minic_x86_64_bitops_description(form);
+    const MinicInlineAsmOperand *mem,*bit,*flag;
+    const MinicExpression *m,*b,*f;
+    MinicType mem_type,bit_type,flag_type;
+    if(!program||!src||!contract||!desc||src->is_goto||
+       src->label_count||src->register_clobber_count||
+       !src->has_memory_clobber||src->clobber_count!=1U||
+       src->output_count!=(desc->has_flag?(desc->memory_output?2U:1U):0U)||
+       src->input_count!=(desc->memory_output?1U:2U)||
+       (src->output_count&&!src->outputs)||!src->inputs||
+       (desc->is_locked&&!src->is_volatile))
+        return false;
+    flag=desc->has_flag?(desc->memory_output?&src->outputs[1]:
+                                         &src->outputs[0]):NULL;
+    mem=desc->memory_output?&src->outputs[0]:&src->inputs[0];
+    bit=desc->memory_output?&src->inputs[0]:&src->inputs[1];
+    if(!target_constraint_is(mem,desc->memory_output?"+m":"m")||
+       !target_constraint_is(bit,"Ir")||
+       (flag&&!target_constraint_is(flag,"=@ccc")))
+        return false;
+    m=minic_c0_program_expression(program,mem->expression);
+    b=minic_c0_program_expression(program,bit->expression);
+    f=flag?minic_c0_program_expression(program,flag->expression):NULL;
+    if(!m||!b||m->value_category!=MINIC_VALUE_LVALUE||
+       (desc->writes_memory&&minic_type_is_const(m->type))||
+       !minic_type_unqualified(m->type,&mem_type)||
+       !minic_type_unqualified(b->type,&bit_type)||
+       (!minic_type_equal(mem_type,minic_type_long())&&
+        !minic_type_equal(mem_type,minic_type_unsigned_long()))||
+       (!minic_type_equal(bit_type,minic_type_long())&&
+        !minic_type_equal(bit_type,minic_type_unsigned_long()))||
+       (flag&&(!f||f->value_category!=MINIC_VALUE_LVALUE||
+          minic_type_is_const(f->type)||
+          !minic_type_unqualified(f->type,&flag_type)||
+          !minic_type_equal(flag_type,minic_type_bool()))))
+        return false;
+    contract->operand_count=src->output_count+src->input_count;
+    if(desc->memory_output) {
+        contract->kinds[0]=MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
+        contract->kinds[1]=MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+        contract->kinds[2]=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    } else if(desc->has_flag) {
+        contract->kinds[0]=MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+        contract->kinds[1]=desc->writes_memory ?
+            MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE :
+            MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
+        contract->kinds[2]=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    } else {
+        contract->kinds[0]=MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
+        contract->kinds[1]=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    }
+    return true;
+}
 /* Exact x86 Linux word-sized GNU BSF/BSR spelling. The REP prefix on
  * Linux __ffs is deliberate: it becomes TZCNT where available, and
  * preserves BSF bit-index semantics for nonzero inputs on older CPUs.
@@ -516,6 +637,8 @@ bool minic_x86_64_qualify_inline_asm(
     bool is_mulacc = false, is_muldiv = false;
     size_t i, count;
     if (!contract) return false;
+    if (x86_linux_bitops_source(program, source, contract))
+        return true;
     if (x86_linux_atomic_cc_source(program, source)) {
         contract->operand_count=2U;
         contract->kinds[0]=MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
