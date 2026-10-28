@@ -7,10 +7,10 @@ set -Eeuo pipefail
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 case "$ARCH" in
-x86_64) mini=(--target=x86_64); gas=(as --64);;
-riscv) mini=(-march=rv64i -mabi=lp64); gas=(riscv64-linux-gnu-as -march=rv64i -mabi=lp64);;
-aarch64) mini=(--target=aarch64); gas=(aarch64-linux-gnu-as);;
-loongarch64) mini=(--target=loongarch64); gas=(loongarch64-linux-gnu-as);;
+x86_64) mini=(--target=x86_64); gas=(as --64); copy=(objcopy);;
+riscv) mini=(-march=rv64i -mabi=lp64); gas=(riscv64-linux-gnu-as -march=rv64i -mabi=lp64); copy=(riscv64-linux-gnu-objcopy);;
+aarch64) mini=(--target=aarch64); gas=(aarch64-linux-gnu-as); copy=(aarch64-linux-gnu-objcopy);;
+loongarch64) mini=(--target=loongarch64); gas=(loongarch64-linux-gnu-as); copy=(loongarch64-linux-gnu-objcopy);;
 *) exit 2;;
 esac
 cat >"$tmp/common.s" <<'SRC'
@@ -29,8 +29,8 @@ local_base:
 SRC
 "$MINIAS" "${mini[@]}" -o "$tmp/mini.o" "$tmp/common.s"
 "${gas[@]}" -o "$tmp/gnu.o" "$tmp/common.s"
-objcopy -j .data -O binary "$tmp/mini.o" "$tmp/mini.bin"
-objcopy -j .data -O binary "$tmp/gnu.o" "$tmp/gnu.bin"
+"${copy[@]}" -j .data -O binary "$tmp/mini.o" "$tmp/mini.bin"
+"${copy[@]}" -j .data -O binary "$tmp/gnu.o" "$tmp/gnu.bin"
 if ! cmp "$tmp/mini.bin" "$tmp/gnu.bin"; then
     echo "$ARCH byte mismatch" >&2
     od -An -tx1 "$tmp/mini.bin" >&2
