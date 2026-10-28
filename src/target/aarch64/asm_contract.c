@@ -118,7 +118,7 @@ static const Aarch64RawIoRead aarch64_raw_io_reads[] = {
 static const Aarch64RawIoRead *aarch64_raw_io_read(
     const char *text, size_t length) {
     static const char middle[] =
-        "662:.pushsection.altinstructions,\\\"a\\\""
+        "662:.pushsection.altinstructions,\"a\""
         ".word661b-..word663f-..hword91"
         ".byte662b-661b.byte664f-663f"
         ".popsection.subsection1663:";
@@ -1293,7 +1293,7 @@ bool minic_aarch64_emit_qualified_structured_asm(
             "  .if 1 == 1\n"
             "661:\n  %s\n"
             "662:\n"
-            "  .pushsection .altinstructions,\\\"a\\\"\n"
+            "  .pushsection .altinstructions,\"a\"\n"
             "  .word 661b - .\n"
             "  .word 663f - .\n"
             "  .hword 91\n"
