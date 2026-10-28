@@ -149,6 +149,14 @@ typedef struct MiniAsSymbolExpr {
     int64_t addend;
 } MiniAsSymbolExpr;
 
+/* A symbol subtraction is only absolute after BOTH final section-local
+ * fragment anchors have been laid out. One shared layout owner computes
+ * this difference, never a target-specific constant-folding shortcut. */
+typedef struct MiniAsSymbolDifference {
+    MiniAsSymbolExpr positive;
+    MiniAsSymbolExpr negative;
+} MiniAsSymbolDifference;
+
 /* MCInst stores target-parsed instruction operands, decoupled from source
  * text. Targets may migrate to it incrementally without changing the
  * common section/symbol/fragment lifecycle. */
@@ -156,6 +164,7 @@ typedef enum MiniAsMCOperandKind {
     MINIAS_MC_REGISTER,
     MINIAS_MC_IMMEDIATE,
     MINIAS_MC_SYMBOL,
+    MINIAS_MC_SYMBOL_DIFFERENCE, /* deferred same-section S1-S2, no ELF RELA */
     MINIAS_MC_MEMORY
 } MiniAsMCOperandKind;
 typedef enum MiniAsMCRegisterClass {
@@ -188,6 +197,7 @@ typedef struct MiniAsMCOperand {
      * source files must not pay 256 bytes per register/immediate operand. */
     union {
         MiniAsSymbolExpr *symbol;
+        MiniAsSymbolDifference *difference;
         MiniAsMCMemory *memory;
     };
 } MiniAsMCOperand;
@@ -398,6 +408,11 @@ bool minias_evaluate_absolute_operand(MiniAs *,const char *,int64_t *);
  * offset). Shared expression owner, no ISA-specific source parsing. */
 bool minias_fold_local_difference_addend(MiniAs *,const char *,
                                         MiniAsSymbolExpr *);
+/* Parsed syntax may name forward symbols; resolve only after final
+ * same-section layout and fail closed on missing/cross-section anchors. */
+bool minias_parse_symbol_difference(const char *,MiniAsSymbolDifference *);
+bool minias_resolve_symbol_difference(MiniAs *,const MiniAsSymbolDifference *,
+                                      int64_t *);
 bool minias_queue_literal(MiniAs *as,const MiniAsSymbolExpr *expression,
                           unsigned width,MiniAsSymbolExpr *pool_label);
 bool minias_add_fixup(MiniAs *as,
