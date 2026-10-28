@@ -1931,13 +1931,27 @@ static bool a64_fold_absolute_pair_address(MiniAs *as,MiniAsStmt *stmt) {
        strcmp(op,"stnp") && strcmp(op,"ldnp") &&
        strcmp(op,"ldpsw"))return true;
     open=strchr(original,'[');
-    if(!open || !(comma=strchr(open,',')) ||
-       !(end=strchr(comma,']')))return true;
-    hash=comma+1U;
-    while(hash<end && isspace((unsigned char)*hash))++hash;
-    if(hash>=end || *hash!='#')return true;
-    ++hash;
-    n=(size_t)(end-hash);
+    if(!open || !(end=strchr(open,']')))return true;
+    comma=strchr(open,',');
+    if(comma && comma<end) {
+        hash=comma+1U;
+        while(hash<end && isspace((unsigned char)*hash))++hash;
+        if(hash>=end || *hash!='#')return true;
+        ++hash;
+        n=(size_t)(end-hash);
+    }else {
+        /* Post-index source: LDP x29,x30,[sp],#.Llocal+.Lextra.
+         * Reuse the same numeric resolution rather than growing a new
+         * instruction decoder or accepting a guessed writeback offset. */
+        comma=strchr(end,',');
+        if(!comma)return true;
+        hash=comma+1U;
+        while(*hash && isspace((unsigned char)*hash))++hash;
+        if(*hash!='#')return true;
+        ++hash;
+        end=original+strlen(original);
+        n=(size_t)(end-hash);
+    }
     if(n==0U || n>=sizeof(expression))return true;
     memcpy(expression,hash,n);
     expression[n]='\0';
@@ -2973,6 +2987,32 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         put_reg(&inst->operands[1],rt2,wt);
         put_reg(&inst->operands[2],rn,true);
         put_reg(&inst->operands[3],rs,false);
+    } else if(!strcmp(op,"tbl") || !strcmp(op,"tbx")) {
+        /* GNU vector table instructions use contiguous 1..4 vector
+         * registers, all Vn.16B; Q controls destination/index 8B/16B.
+         * Reuse a64_structure_vlist (also used by LD1/ST1), then emit
+         * through the existing 3-register SIMD typed encoder. */
+        char tok[4][384];unsigned n,rd,rn,rm,count;
+        uint32_t dstarr,tabarr,indexarr;
+        if(!split_operands(args,tok,&n) || n!=3U ||
+           !a64_vector_view(tok[0],&rd,&dstarr) ||
+           !a64_structure_vlist(tok[1],&rn,&tabarr,&count) ||
+           !a64_vector_view(tok[2],&rm,&indexarr) ||
+           (dstarr!=UINT32_C(0) &&
+            dstarr!=UINT32_C(0x40000000)) ||
+           tabarr!=UINT32_C(0x40000000) ||
+           indexarr!=dstarr || count<1U || count>4U) {
+            minias_set_error(as,"bad-aarch64-table-lookup:%s:line=%zu",
+                             args,stmt->line);free(inst);return false;
+        }
+        inst->opcode=A64_MC_SIMD_LOGIC;inst->count=3U;
+        inst->encoding=UINT32_C(0x0e000000)|
+                      (dstarr&UINT32_C(0x40000000))|
+                      ((count-1U)<<13U)|
+                      (!strcmp(op,"tbx")?UINT32_C(0x1000):0U);
+        put_reg(&inst->operands[0],rd,true);
+        put_reg(&inst->operands[1],rn,true);
+        put_reg(&inst->operands[2],rm,true);
     } else if(!strcmp(op,"pmull") || !strcmp(op,"pmull2") ||
               !strcmp(op,"sha1su0") || !strcmp(op,"sha1su1")) {
         /* Two ARM64 kernel Crypto instruction families share existing
@@ -3009,6 +3049,28 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         put_reg(&inst->operands[0],rd,true);
         put_reg(&inst->operands[1],rn,true);
         if(tri)put_reg(&inst->operands[2],rm,true);
+    } else if(!strcmp(op,"sha1c") || !strcmp(op,"sha1m") ||
+              !strcmp(op,"sha1p")) {
+        /* GNU ARMv8 Crypto SHA1 round operations share a typed
+         * Qd,Sn,Vm.4S encoding; no second SIMD register parser. */
+        char arg[4][384];unsigned n,rd,rn,rm;
+        bool wide;uint32_t shape;
+        if((as->target_options&A64_FEATURE_CRYPTO)==0U ||
+           !split_operands(args,arg,&n) || n!=3U ||
+           !parse_a64_q_reg(arg[0],&rd) ||
+           !a64_scalar_fp_reg(arg[1],&rn,&wide) || wide ||
+           !a64_vector_view(arg[2],&rm,&shape) ||
+           shape!=UINT32_C(0x40000800)) {
+            minias_set_error(as,"bad-aarch64-sha1-round:%s:line=%zu",
+                             args,stmt->line);free(inst);return false;
+        }
+        inst->opcode=A64_MC_SIMD_LOGIC;inst->count=3U;
+        inst->encoding=!strcmp(op,"sha1c")?UINT32_C(0x5e000000):
+                       !strcmp(op,"sha1p")?UINT32_C(0x5e001000):
+                                            UINT32_C(0x5e002000);
+        put_reg(&inst->operands[0],rd,true);
+        put_reg(&inst->operands[1],rn,false);
+        put_reg(&inst->operands[2],rm,true);
     } else if(!strcmp(op,"sha1h")) {
         unsigned rd,rn;
         bool dw,nw;
@@ -3322,7 +3384,8 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         inst->operands[0].immediate = imm;
     } else if (strcmp(op, "b") == 0 || strcmp(op, "bl") == 0) {
         MiniAsSymbolExpr expr;
-        if (!minias_parse_symbol_addend(args, &expr)) {
+        if (!minias_parse_symbol_addend(args, &expr) &&
+            !minias_fold_local_difference_addend(as,args,&expr)) {
             minias_set_error(as, "bad-aarch64-branch-target:%s:line=%zu",
                              args, stmt->line);
             free(inst);

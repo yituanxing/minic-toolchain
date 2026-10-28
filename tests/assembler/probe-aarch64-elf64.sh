@@ -2291,3 +2291,48 @@ if "$MINIAS" --target=aarch64 -o "$work/a64-sha1h-no-crypto.o" "$work/a64-sha1h-
     echo 'SHA1H without crypto extension accepted' >&2;exit 1
 fi
 echo 'MINIAS_A64_SHA1H_MOVI2D_STP_EXPR=PASS GNU_10_words_strict_feature_and_range'
+
+# Additional real GNU KVM/ARM crypto grouped blockers. Byte/RELA
+# equality is required: a source-level accepted directive alone cannot pass.
+cat > "$work/a64-kvm-crypto-round-table.s" <<'A64_KVM_CRYPTO'
+.arch armv8-a+crypto
+.text
+sha1c q12,s7,v4.4s
+sha1p q0,s1,v2.4s
+sha1m q3,s4,v5.4s
+tbl v20.16b,{v0.16b},v17.16b
+tbl v1.8b,{v2.16b},v3.8b
+tbl v1.16b,{v2.16b-v3.16b},v4.16b
+tbx v1.16b,{v2.16b-v3.16b},v4.16b
+.set .Lframe_local_offset, ((7+3)/2)*16
+.set .Lframe_extra,16
+ldp x29,x30,[sp],#.Lframe_local_offset+.Lframe_extra
+.globl test_jump_base
+0: nop
+1: nop
+b test_jump_base + (1b - 0b + (2 * 4))
+A64_KVM_CRYPTO
+"$MINIAS" --target=aarch64 -o "$work/a64-kvmcrypto-mini.o" "$work/a64-kvm-crypto-round-table.s"
+"$AARCH64_AS" -o "$work/a64-kvmcrypto-gnu.o" "$work/a64-kvm-crypto-round-table.s"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-kvmcrypto-mini.o" "$work/a64-kvmcrypto-mini.bin"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-kvmcrypto-gnu.o" "$work/a64-kvmcrypto-gnu.bin"
+cmp "$work/a64-kvmcrypto-mini.bin" "$work/a64-kvmcrypto-gnu.bin"
+for who in mini gnu; do
+ "$AARCH64_READELF" -Wr "$work/a64-kvmcrypto-$who.o" |
+   awk '$3=="R_AARCH64_JUMP26" {print $1,$3,$5,$6,$7}' |
+   sort > "$work/a64-kvmcrypto-$who.txt"
+done
+[ "$(wc -l < "$work/a64-kvmcrypto-mini.txt")" -eq 1 ]
+cmp "$work/a64-kvmcrypto-mini.txt" "$work/a64-kvmcrypto-gnu.txt"
+for bad in 'sha1c s0,s1,v2.4s' 'sha1p q0,d1,v2.4s' \
+           'sha1m q0,s1,v2.8h' \
+           'tbl v0.16b,{v1.8b},v2.16b' \
+           'tbl v0.16b,{v1.16b-v5.16b},v2.16b' \
+           'tbl v0.8b,{v1.16b},v2.16b' \
+           'tbx v0.16b,{v1.16b},v2.8b'; do
+ printf '.arch armv8-a+crypto\n.text\n%s\n' "$bad" > "$work/a64-kvmcrypto-bad.s"
+ if "$MINIAS" --target=aarch64 -o "$work/a64-kvmcrypto-bad.o" "$work/a64-kvmcrypto-bad.s" >/dev/null 2>&1; then
+   echo "invalid A64 crypto/table operand accepted: $bad" >&2;exit 1
+ fi
+done
+echo 'MINIAS_A64_KVM_CRYPTO_TABLE=PASS GNU_machine_RELA_jump_addend_postindex_and_7_negative'

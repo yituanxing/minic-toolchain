@@ -1651,6 +1651,66 @@ bool minias_evaluate_absolute_operand(MiniAs *as,const char *text,
     return text && value && evaluate_absolute_expression(as,text,value);
 }
 
+/* GNU GAS accepts:
+ *   b external + (1b - 0b + (2 * 4))
+ * after Common numeric-label rewriting.  Only the local-label subtraction
+ * is folded: the base symbol remains a typed relocation with an exact
+ * addend, not an inferred displacement or a parallel Target evaluator.
+ * Both labels must ALREADY be defined in the SAME subsection, where
+ * their difference is invariant under later section layout. */
+bool minias_fold_local_difference_addend(MiniAs *as,const char *expression,
+                                         MiniAsSymbolExpr *out) {
+    char *copy=minias_strdup(expression),*plus,*group,*minus,*local_extra;
+    MiniAsSymbolExpr base,left,right;
+    MiniAsSymbol *l,*r;
+    int64_t diff,add=0,final;
+    bool ok=false;
+    size_t n;
+    if(!copy)return false;
+    plus=strchr(copy,'+');
+    if(!plus)goto done;
+    *plus++='\0';
+    if(!minias_parse_symbol_addend(minias_trim(copy),&base))goto done;
+    group=minias_trim(plus);
+    n=strlen(group);
+    if(n<5U || group[0]!='(' || group[n-1U]!=')')goto done;
+    group[n-1U]='\0';
+    group=minias_trim(group+1U);
+    minus=strchr(group,'-');
+    if(!minus)goto done;
+    *minus++='\0';
+    if(!minias_parse_symbol_addend(minias_trim(group),&left) ||
+       left.addend!=0)goto done;
+    local_extra=strchr(minus,'+');
+    if(local_extra) {
+        *local_extra++='\0';
+        if(!evaluate_absolute_expression(as,minias_trim(local_extra),&add))
+            goto done;
+    }
+    if(!minias_parse_symbol_addend(minias_trim(minus),&right) ||
+       right.addend!=0)goto done;
+    l=minias_get_symbol(as,left.name,false);
+    r=minias_get_symbol(as,right.name,false);
+    if(!l || !r || !l->defined || !r->defined ||
+       l->section<0 || l->section!=r->section ||
+       l->subsection!=r->subsection ||
+       l->value>INT64_MAX || r->value>INT64_MAX)goto done;
+    diff=(int64_t)l->value-(int64_t)r->value;
+    if((add>0 && diff>INT64_MAX-add) ||
+       (add<0 && diff<INT64_MIN-add))goto done;
+    diff+=add;
+    if((diff>0 && base.addend>INT64_MAX-diff) ||
+       (diff<0 && base.addend<INT64_MIN-diff))goto done;
+    final=base.addend+diff;
+    *out=base;
+    out->addend=final;
+    as->layout_sensitive=true;
+    ok=true;
+done:
+    free(copy);
+    return ok;
+}
+
 bool minias_parse_absolute_data_bits(MiniAs *as,
                                      const char *text,
                                      uint64_t *value) {
