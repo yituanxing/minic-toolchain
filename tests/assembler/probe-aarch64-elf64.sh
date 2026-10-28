@@ -2569,9 +2569,13 @@ cat > "$work/a64-ghash-irp-mixed.s" <<'GHASH_IRP_MIXED'
 aese \state\().16b, \key\().16b
 aesmc \state\().16b, \state\().16b
 .endm
-.irp key, v12 v13
+K4 .req v12
+K5 .req v13
+.irp key, K4 K5
 enc_round v8, \key
 .endr
+.unreq K4
+.unreq K5
 GHASH_IRP_MIXED
 "$MINIAS" --target=aarch64 -o "$work/a64-ghash-irp-mini.o" "$work/a64-ghash-irp-mixed.s"
 "$AARCH64_AS" -o "$work/a64-ghash-irp-gnu.o" "$work/a64-ghash-irp-mixed.s"
