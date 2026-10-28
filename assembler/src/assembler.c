@@ -6816,6 +6816,15 @@ static int compare_emit_refs(const void *lhs_ptr, const void *rhs_ptr) {
     if (lhs->stmt->offset != rhs->stmt->offset) {
         return lhs->stmt->offset < rhs->stmt->offset ? -1 : 1;
     }
+    /* Equal final offsets occur at subsection boundaries. GNU emits all
+     * zero-size origin/label fragments in subsection 0 BEFORE instructions
+     * in subsection 1 even if the latter appeared earlier in source. A
+     * source-order tiebreak incorrectly wrote a subsection-1 .inst first,
+     * making the preceding .org appear to overlap its four bytes (real
+     * Linux arm64 KVM hyp-entry). Order by output subsection ownership. */
+    if (lhs->stmt->subsection != rhs->stmt->subsection) {
+        return lhs->stmt->subsection < rhs->stmt->subsection ? -1 : 1;
+    }
     if (lhs->order != rhs->order) {
         return lhs->order < rhs->order ? -1 : 1;
     }
