@@ -25,6 +25,35 @@ ARCH = {"x86_64": (62, "x86_64"), "aarch64": (183, "arm64"),
         "loongarch64": (258, "loongarch")}
 LINUX_ARCHIVE_SHA256 = "dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932"
 SHARDS = 7
+# Original Linux .S uses real producer-created files, not placeholders.
+# Freeze their bytes with the same GNU Kbuild provenance as the .s/.cmd.
+INCBIN_LINE = re.compile(rb'(?m)^[ \t]*\.incbin[ \t]+"([^"\r\n]+)"')
+
+
+def original_incbin_inputs(asm: pathlib.Path, out: pathlib.Path) -> list[dict]:
+    deps = []
+    for raw in sorted(set(INCBIN_LINE.findall(asm.read_bytes()))):
+        try:
+            name = raw.decode("utf-8", errors="strict")
+        except UnicodeDecodeError as exc:
+            raise ValueError("non-UTF8 .incbin GNU input") from exc
+        rel = pathlib.PurePosixPath(name)
+        if rel.is_absolute() or ".." in rel.parts or not rel.parts:
+            raise ValueError(f"unsafe original Kbuild .incbin path: {name}")
+        produced = out / pathlib.Path(*rel.parts)
+        if not produced.is_file():
+            # Kbuild also permits source-root relative data; only use the
+            # original published Linux source tree, never dummy bytes.
+            produced = out.parent / "linux-6.6.143" / pathlib.Path(*rel.parts)
+        if not produced.is_file():
+            raise ValueError(f"authentic original Kbuild .incbin missing: {name}")
+        if produced.stat().st_size > 128 * 1024 * 1024:
+            raise ValueError(f"Kbuild .incbin unexpectedly large: {name}")
+        deps.append({"path": name, "sha256": sha(produced),
+                     "size": produced.stat().st_size,
+                     "origin": "build" if (out / pathlib.Path(*rel.parts)).is_file()
+                               else "source"})
+    return deps
 
 
 def sha(path: pathlib.Path) -> str:
@@ -86,12 +115,15 @@ def export(a: argparse.Namespace) -> None:
             mismatches["unrecognized_target_command"] += 1
         rel_s = asm.relative_to(out).as_posix()
         rel_cmd = cmd.relative_to(out).as_posix()
-        records.append({
+        record = {
             "owner": rel.as_posix(),
             "s": rel_s, "cmd": rel_cmd,
             "kind": kind, "s_sha256": sha(asm),
             "cmd_sha256": sha(cmd), "gnu_object_sha256": sha(obj)
-        })
+        }
+        if a.include_incbin:
+            record["incbins"] = original_incbin_inputs(asm, out)
+        records.append(record)
     if not records:
         raise ValueError("no target-linked Kbuild C/.S assembly pairs")
     if len({r["owner"] for r in records}) != len(records):
@@ -107,6 +139,7 @@ def export(a: argparse.Namespace) -> None:
     complete = a.build_exit == 0 and image.is_file() and image.stat().st_size != 0
     identity = {
         "schema": "minias-linux-kbuild-s-seven-v1",
+        "authentic_incbin_frozen": a.include_incbin,
         "linux_version": "6.6.143",
         "linux_archive_sha256": LINUX_ARCHIVE_SHA256,
         "target": a.target, "kbuild_arch": karch,
@@ -132,6 +165,12 @@ def export(a: argparse.Namespace) -> None:
             raise ValueError("too few real objects for seven shards")
         with tarfile.open(dest / f"shard-{shard}.tar.gz", "w:gz",
                           compresslevel=5) as tar:
+            pinned_assets = {}
+            for r in members:
+                for dep in r.get("incbins", []):
+                    previous = pinned_assets.setdefault(dep["path"], dep)
+                    if previous != dep:
+                        raise ValueError("inconsistent original .incbin provenance")
             m = tarfile.TarInfo("manifest.json")
             m.size = len(payload)
             m.mode = 0o644
@@ -143,6 +182,14 @@ def export(a: argparse.Namespace) -> None:
                         raise ValueError("path escape in Kbuild manifest")
                     tar.add(out / pathlib.Path(*rel.parts),
                             arcname=f"{prefix}/{rel.as_posix()}", recursive=False)
+            for asset in pinned_assets.values():
+                rel = pathlib.PurePosixPath(asset["path"])
+                root = out if asset["origin"] == "build" else out.parent / "linux-6.6.143"
+                real = root / pathlib.Path(*rel.parts)
+                if sha(real) != asset["sha256"]:
+                    raise ValueError("generated Kbuild .incbin changed while freezing")
+                tar.add(real, arcname="incbin/" + asset["path"],
+                        recursive=False)
     print(f"MINIAS_LINUX_S_FREEZE target={a.target} total={len(records)} "
           f"C={identity['kind_counts'].get('C', 0)} "
           f"native_S={identity['kind_counts'].get('native_S', 0)} "
@@ -183,6 +230,11 @@ def checked_shard(path: pathlib.Path, target: str, shard: int):
         expected = {"manifest.json"}
         for r in selected:
             expected |= {"asm/" + r["s"], "cmd/" + r["cmd"]}
+            for dep in r.get("incbins", []):
+                rel = pathlib.PurePosixPath(dep["path"])
+                if rel.is_absolute() or ".." in rel.parts:
+                    raise ValueError("unsafe frozen .incbin pathname")
+                expected.add("incbin/" + dep["path"])
         if set(members) != expected:
             raise ValueError("incomplete/extra frozen shard files")
         for r in selected:
@@ -192,6 +244,11 @@ def checked_shard(path: pathlib.Path, target: str, shard: int):
                 value = tar.extractfile(members[prefix + r[field]]).read()
                 if hashlib.sha256(value).hexdigest() != r[hash_field]:
                     raise ValueError("frozen Kbuild input digest mismatch")
+        for r in selected:
+            for dep in r.get("incbins", []):
+                value = tar.extractfile(members["incbin/" + dep["path"]]).read()
+                if len(value) != dep["size"] or hashlib.sha256(value).hexdigest() != dep["sha256"]:
+                    raise ValueError("authentic Kbuild .incbin hash/size mismatch")
         return manifest, hashlib.sha256(manifest_bytes).hexdigest(), selected
 
 
@@ -263,7 +320,7 @@ def first_blocker_context(assembly: bytes, diagnostic: str) -> tuple[int | None,
 def scan(a: argparse.Namespace) -> None:
     p = pathlib.Path(a.archive)
     manifest, manifest_sha, selected = checked_shard(p, a.target, a.shard)
-    destination = pathlib.Path(a.dest)
+    destination = pathlib.Path(a.dest).resolve()
     if destination.exists() and any(destination.iterdir()):
         raise ValueError("refusing previous scan results")
     destination.mkdir(parents=True)
@@ -273,6 +330,15 @@ def scan(a: argparse.Namespace) -> None:
     # Download/extract only one seven-way shard. Kbuild and GCC are NOT rerun.
     with tarfile.open(p) as tar:
         members = safe_tar_members(tar)
+        # Input blobs are original Kbuild producer outputs. Extract once
+        # under a per-shard isolated assembly CWD, never into the repo.
+        for r in selected:
+            for dep in r.get("incbins", []):
+                asset = destination / "inputs" / dep["path"]
+                if not asset.exists():
+                    asset.parent.mkdir(parents=True, exist_ok=True)
+                    asset.write_bytes(tar.extractfile(
+                        members["incbin/" + dep["path"]]).read())
         for index, r in enumerate(manifest["sources"]):
             if index % SHARDS != a.shard: continue
             inp = destination / "inputs" / r["s"]
@@ -292,6 +358,7 @@ def scan(a: argparse.Namespace) -> None:
                 run = subprocess.run(
                     [a.minias, "--target=" + a.target, "-o", str(output), str(inp)],
                     capture_output=True, text=True, timeout=45,
+                    cwd=destination / "inputs",
                     preexec_fn=bound_minias_address_space
                 )
                 rc, diag = run.returncode, (run.stderr or run.stdout).strip()
@@ -440,6 +507,8 @@ def main() -> int:
     exp.add_argument("--compiler", required=True)
     exp.add_argument("--compiler-path", required=True)
     exp.add_argument("--build-exit", type=int, required=True)
+    exp.add_argument("--include-incbin", action="store_true",
+                     help="freeze authentic GNU Kbuild generated .incbin files")
     run = modes.add_parser("scan")
     run.add_argument("--target", choices=ARCH, required=True)
     run.add_argument("--shard", type=int, choices=range(SHARDS), required=True)
