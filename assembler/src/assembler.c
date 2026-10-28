@@ -4098,6 +4098,10 @@ static bool minias_emit_mc_data(MiniAs *as,const MiniAsStmt *stmt) {
             MiniAsSymbol *left=minias_get_symbol(as,lhs.name,false);
             MiniAsSymbol *right=minias_get_symbol(as,rhs.name,false);
             if(x->kind==MINIAS_MC_EXPR_DIFFERENCE &&
+               (as->target->fixup_relocation_type(MINIAS_FIXUP_ADD,
+                                                  data->width)==0U ||
+                as->target->fixup_relocation_type(MINIAS_FIXUP_SUB,
+                                                  data->width)==0U) &&
                left && right && left->defined && right->defined &&
                left->section==right->section &&
                (left->section==MINIAS_SECTION_ABS ||

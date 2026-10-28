@@ -2,6 +2,7 @@
 # Forward variable-sized data fragments and branch relaxation share ONE
 # persistent symbol/layout solver; no source reparse or target-local patches.
 set -Eeuo pipefail
+trap 'echo "DEFERRED_RELAX_FAIL line=$LINENO command=$BASH_COMMAND" >&2; if test -n "${work:-}" && test -f "$work/trace"; then cat "$work/trace" >&2; fi' ERR
 : "${MINIAS:?MiniAS executable required}"
 : "${RISCV_AS:=riscv64-linux-gnu-as}"
 : "${RISCV_OBJCOPY:=riscv64-linux-gnu-objcopy}"
