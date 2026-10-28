@@ -239,6 +239,18 @@ external_probe:
     extr x0, x1, x2, #3
     extr w3, w4, w5, #7
 external_adr_target:
+    // GNU complemented logical, signed pair and trap families.
+    orn x0, x1, x2
+    orn w3, w4, w5, lsr #7
+    eon x6, x7, x8, asr #8
+    eon w9, w10, w11, ror #3
+    mvn x0, x1, lsl #7
+    mvn w2, w3, ror #5
+    ldpsw x0, x1, [x2]
+    ldpsw x3, x4, [x5, #-16]!
+    ldpsw x6, x7, [x8], #12
+    hvc #3
+    smc #7
     // GNU genuine multiply-accumulate register Ra and ASR/ROR forms.
     madd x0, x1, x2, x3
     madd w4, w5, w6, w7
@@ -652,6 +664,15 @@ for bad_source in 'ldxr x0, [x1,#4]' 'stxr x0, x1, [x2]' \
                   'extr w0, w1, w2, #-1' \
                   'extr w0, x1, w2, #1' \
                   'adr w0, integer_matrix' \
+                  'orn x0, x1, #5' \
+                  'eon x0, w1, x2' \
+                  'mvn x0, w1, lsl #2' \
+                  'mvn x0, x1, lsl #64' \
+                  'ldpsw w0, w1, [x2]' \
+                  'ldpsw x0, x1, [x2,#512]' \
+                  'ldpsw x0, x1, [x2],#256' \
+                  'hvc #65536' \
+                  'smc #-1' \
                   'yield #1' \
                   'hint #.Lnever_defined' \
                   '.equ .Lbad_hint,128; hint #.Lbad_hint' \
