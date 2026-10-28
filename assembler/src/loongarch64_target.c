@@ -58,18 +58,10 @@ static bool la_special_reg(const char *s,const char *prefix,
     *reg=(unsigned)val;return true;
 }
 static bool la_split(const char *args,char t[4][192],unsigned *n) {
-    const char *p=args,*start=args;unsigned c=0;
-    for(;;++p) {
-        if(*p!=',' && *p!='\0')continue;
-        size_t length=(size_t)(p-start);
-        while(length && isspace((unsigned char)*start)){++start;--length;}
-        while(length && isspace((unsigned char)start[length-1U]))--length;
-        if(!length || length>=192 || c>=4)return false;
-        memcpy(t[c],start,length);t[c++][length]='\0';
-        if(!*p)break;
-        start=p+1;
-    }
-    *n=c;return true;
+    char *slots[4]={t[0],t[1],t[2],t[3]};
+    const size_t capacity[4]={sizeof(t[0]),sizeof(t[1]),
+                              sizeof(t[2]),sizeof(t[3])};
+    return minias_split_mc_operands(args,slots,capacity,4U,n);
 }
 
 

@@ -521,53 +521,23 @@ static bool decode_lr_sc_mnemonic(const char *op,
     return false;
 }
 
-static size_t split_operands(const char *args, char out[][128], size_t max_out) {
-    size_t count = 0U;
-    size_t pos = 0U;
-    int depth = 0;
-    char quote = '\0';
-    const char *p;
-
-    if (args == NULL || *args == '\0') {
-        return 0U;
+static bool split_operands(const char *args, char out[][128],
+                           size_t max_out, size_t *count) {
+    char *slots[8];
+    size_t capacities[8],i;
+    unsigned parsed=0U;
+    if(count==NULL || max_out==0U || max_out>8U)return false;
+    *count=0U;
+    memset(out,0,max_out*sizeof(out[0]));
+    if(args==NULL || *args=='\0')return true;
+    for(i=0U;i<max_out;++i) {
+        slots[i]=out[i];
+        capacities[i]=sizeof(out[i]);
     }
-    memset(out, 0, max_out * 128U);
-    for (p = args;; ++p) {
-        char ch = *p;
-        bool at_end = ch == '\0';
-
-        if (!at_end && quote != '\0') {
-            if (ch == quote) {
-                quote = '\0';
-            }
-        } else if (!at_end && (ch == '\'' || ch == '"')) {
-            quote = ch;
-        } else if (!at_end && ch == '(') {
-            ++depth;
-        } else if (!at_end && ch == ')') {
-            --depth;
-        }
-        if (at_end || (ch == ',' && depth == 0 && quote == '\0')) {
-            while (pos > 0U &&
-                   (out[count][pos - 1U] == ' ' || out[count][pos - 1U] == '\t')) {
-                --pos;
-            }
-            out[count][pos] = '\0';
-            ++count;
-            pos = 0U;
-            if (at_end || count == max_out) {
-                break;
-            }
-            continue;
-        }
-        if (count < max_out && pos + 1U < 128U) {
-            if (pos == 0U && (ch == ' ' || ch == '\t')) {
-                continue;
-            }
-            out[count][pos++] = ch;
-        }
-    }
-    return count;
+    if(!minias_split_mc_operands(args,slots,capacities,
+                                  (unsigned)max_out,&parsed))return false;
+    *count=parsed;
+    return true;
 }
 
 static uint32_t enc_r(uint32_t opcode,
@@ -738,7 +708,7 @@ static bool parse_raw_insn_directive(const char *args, uint32_t *word) {
     while (*p == ' ' || *p == '\t') {
         ++p;
     }
-    count = split_operands(p, operands, 8U);
+    if(!split_operands(p,operands,8U,&count))return false;
 
     if (format == 'r') {
         if (count != 6U ||
@@ -1448,7 +1418,7 @@ bool minias_riscv_parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
     }
     if (desc == NULL) {
         bool handled;
-        count = split_operands(stmt->args, operands, 8U);
+        if(!split_operands(stmt->args,operands,8U,&count))goto invalid;
         if (!rv_parse_simple_mc(as, stmt, operands, count, &handled) ||
             handled) return as->error[0] == '\0';
         if (!rv_parse_multi_mc(as, stmt, operands, count, &handled) ||
@@ -1465,7 +1435,7 @@ bool minias_riscv_parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
     }
     family = desc->family;
     encoding = desc->base;
-    count = split_operands(stmt->args, operands, 8U);
+    if(!split_operands(stmt->args,operands,8U,&count))goto invalid;
 
     if (family == RV_MC_R || family == RV_MC_I) {
         bool two = strcmp(op,"sext.w") == 0 ||

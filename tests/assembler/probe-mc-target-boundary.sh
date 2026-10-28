@@ -26,8 +26,22 @@ for header in riscv_fixup_kinds.h aarch64_fixup_kinds.h \
 done
 grep -q 'minias_emit_instruction_bytes' assembler/src/assembler.c
 grep -q 'MiniAsTargetSiteState' assembler/src/minias_internal.h
+# LLVM MC-style lexical ownership: balanced operand grouping lives once in
+# Common MC. All four Target parsers consume it, and retain ISA legality.
+test -s assembler/src/mc_lexer.c
+for target in riscv_encode.c aarch64_target.c x86_64_target.c \
+              loongarch64_target.c; do
+    if ! grep -q 'minias_split_mc_operands' "assembler/src/$target"; then
+        echo "Target bypasses shared MC operand lexer: $target" >&2
+        exit 1
+    fi
+done
+if grep -q 'comparator_as' assembler/src/debug_line.c; then
+    echo 'DWARF line comparator has global assembly context' >&2
+    exit 1
+fi
 if grep -Eq '(strict_i_xlen|strict_rv64i|isa_explicit|isa_features|target_attributes|target_option_stack|target_option_depth)' assembler/src/minias_internal.h; then
     echo 'RISC-V profile or option stack leaked into MC Core' >&2
     exit 1
 fi
-echo 'MINIAS_MC_TARGET_BOUNDARY=PASS ISA_fixups=private target_bytes=fragment_owned site=immutable'
+echo 'MINIAS_MC_TARGET_BOUNDARY=PASS ISA_fixups=private target_bytes=fragment_owned site=immutable shared_lexer=4 DWARF_sort=reentrant'

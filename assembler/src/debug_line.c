@@ -224,21 +224,27 @@ static bool set_address(MiniAs *as,int sec,size_t symbol_index,
                MINIAS_FIXUP_ORIGIN_SYNTHETIC_SECTION,sec,at,MINIAS_FIXUP_ABS,address_width,
                             symbol->name,0);
 }
-static const MiniAs *comparator_as;
+/* No file-scope pointer to the assembly being serialized. qsort callbacks
+ * that consult a mutable global would race when two independent MiniAs
+ * contexts emit DWARF concurrently. Snapshot final section coordinates in
+ * an owned sort key, and preserve original event order at equal offsets. */
+typedef struct MiniAsDebugLocOrder {
+    int section;
+    uint64_t offset;
+    size_t ordinal;
+} MiniAsDebugLocOrder;
+
 static int compare_loc(const void *lhs,const void *rhs) {
-    size_t a=*(const size_t *)lhs,b=*(const size_t *)rhs;
-    const MiniAsDebugLoc *x=&comparator_as->debug_locs[a];
-    const MiniAsDebugLoc *y=&comparator_as->debug_locs[b];
-    const MiniAsSymbol *sx=&comparator_as->symbols[x->symbol_index];
-    const MiniAsSymbol *sy=&comparator_as->symbols[y->symbol_index];
-    if(sx->section!=sy->section)return sx->section<sy->section?-1:1;
-    if(sx->value!=sy->value)return sx->value<sy->value?-1:1;
-    return a<b?-1:a>b?1:0;
+    const MiniAsDebugLocOrder *a=lhs,*b=rhs;
+    if(a->section!=b->section)return a->section<b->section?-1:1;
+    if(a->offset!=b->offset)return a->offset<b->offset?-1:1;
+    return a->ordinal<b->ordinal?-1:a->ordinal>b->ordinal?1:0;
 }
 bool minias_debug_emit(MiniAs *as) {
     static const unsigned char lengths[12]=
         {0U,1U,1U,1U,1U,0U,0U,0U,1U,0U,0U,1U};
-    size_t *order=NULL,i,j,begin,header_len_at,header_start;
+    MiniAsDebugLocOrder *order=NULL;
+    size_t i,j,begin,header_len_at,header_start;
     int sec;
     unsigned address_width=as->output_elf32?4U:8U;
     if(as->debug_loc_count==0U)return true;
@@ -247,12 +253,24 @@ bool minias_debug_emit(MiniAs *as) {
             minias_set_error(as,"missing-dwarf-file-index:%zu",i);
             return false;
         }
+    if(as->debug_loc_count>SIZE_MAX/sizeof(*order)) {
+        minias_set_error(as,"dwarf-line-sort-capacity-overflow");return false;
+    }
     order=malloc(as->debug_loc_count*sizeof(*order));
     if(!order)return false;
-    for(i=0U;i<as->debug_loc_count;++i)order[i]=i;
-    comparator_as=as;
+    for(i=0U;i<as->debug_loc_count;++i) {
+        const size_t symbol=as->debug_locs[i].symbol_index;
+        if(symbol>=as->symbol_count || !as->symbols[symbol].defined ||
+           as->symbols[symbol].section<0 ||
+           (size_t)as->symbols[symbol].section>=as->section_count) {
+            minias_set_error(as,"dwarf-line-invalid-anchor:%zu",i);
+            free(order);return false;
+        }
+        order[i].section=as->symbols[symbol].section;
+        order[i].offset=as->symbols[symbol].value;
+        order[i].ordinal=i;
+    }
     qsort(order,as->debug_loc_count,sizeof(*order),compare_loc);
-    comparator_as=NULL;
     sec=minias_ensure_section(as,".debug_line",MINIAS_SHT_PROGBITS,0U,1U);
     if(sec<0){free(order);return false;}
     if(!append_u32(as,sec,0U) || !append_u16(as,sec,4U))goto failed;
@@ -272,7 +290,7 @@ bool minias_debug_emit(MiniAs *as) {
        !patch32(as,sec,header_len_at,
                 as->sections[(size_t)sec].size-header_start))goto failed;
     for(begin=0U;begin<as->debug_loc_count;) {
-        const MiniAsDebugLoc *first=&as->debug_locs[order[begin]];
+        const MiniAsDebugLoc *first=&as->debug_locs[order[begin].ordinal];
         const MiniAsSymbol *first_sym=&as->symbols[first->symbol_index];
         unsigned cur_file=1U,cur_col=0U,cur_isa=0U;
         int64_t cur_line=1;
@@ -282,7 +300,7 @@ bool minias_debug_emit(MiniAs *as) {
         if(source_section<0 || (size_t)source_section>=as->section_count ||
            !set_address(as,sec,first->symbol_index,address_width))goto failed;
         for(j=begin;j<as->debug_loc_count;++j) {
-            const MiniAsDebugLoc *loc=&as->debug_locs[order[j]];
+            const MiniAsDebugLoc *loc=&as->debug_locs[order[j].ordinal];
             const MiniAsSymbol *sym=&as->symbols[loc->symbol_index];
             int64_t line_diff;
             if(sym->section!=source_section)break;

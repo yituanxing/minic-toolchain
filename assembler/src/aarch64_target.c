@@ -196,24 +196,11 @@ static bool a64_movw_relocation(const char *text,MiniAsSymbolExpr *expr,
 
 static bool split_two(const char *args, char *first, size_t cap1,
                       char *second, size_t cap2) {
-    const char *comma = strchr(args, ',');
-    size_t length;
-    if (comma == NULL || strchr(comma + 1, ',') != NULL) return false;
-    length = (size_t)(comma - args);
-    while (length != 0U && isspace((unsigned char)args[length - 1U]))
-        --length;
-    if (length == 0U || length >= cap1) return false;
-    memcpy(first, args, length);
-    first[length] = '\0';
-    args = comma + 1;
-    while (isspace((unsigned char)*args)) ++args;
-    length = strlen(args);
-    while (length != 0U && isspace((unsigned char)args[length - 1U]))
-        --length;
-    if (length == 0U || length >= cap2) return false;
-    memcpy(second, args, length);
-    second[length] = '\0';
-    return true;
+    char *out[2]={first,second};
+    const size_t capacity[2]={cap1,cap2};
+    unsigned count=0U;
+    return minias_split_mc_operands(args,out,capacity,2U,&count) &&
+           count==2U;
 }
 
 /* AArch64 is fixed 4B. Measurement consumes the parsed MCInst just as
@@ -335,38 +322,7 @@ enum {
  * this helper is strictly A64 addressing grammar. */
 static bool split_operands_sized(const char *args, char *out[4],
                                  const size_t capacity[4], unsigned *n) {
-    unsigned depth = 0U, braces = 0U, count = 0U;
-    const char *start = args, *p = args;
-    for (;;) {
-        char ch = *p;
-        if (ch == '[') ++depth;
-        if (ch == ']') {
-            if (!depth) return false;
-            --depth;
-        }
-        if (ch == '{') ++braces;
-        if (ch == '}') {
-            if (!braces) return false;
-            --braces;
-        }
-        if ((ch == ',' && depth == 0U && braces == 0U) || ch == '\0') {
-            size_t len = (size_t)(p - start);
-            while (len && isspace((unsigned char)*start)) { ++start; --len; }
-            while (len && isspace((unsigned char)start[len - 1U])) --len;
-            if (!len || count == 4U || len >= capacity[count] ||
-                depth || braces)
-                return false;
-            memcpy(out[count], start, len);
-            out[count][len] = '\0';
-            ++count;
-            if (ch == '\0') break;
-            start = p + 1;
-        }
-        if (ch == '\0') break;
-        ++p;
-    }
-    *n = count;
-    return true;
+    return minias_split_mc_operands(args,out,capacity,4U,n);
 }
 
 /* All normal A64 operands still use the fast, bounded stack tokenizer.

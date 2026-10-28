@@ -13,6 +13,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: minias-contract-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   native-a0-rv32i:
     name: Native A0, strict RV32I, GNU parity, ELF32 real link
@@ -45,6 +49,10 @@ jobs:
         run: bash tests/assembler/probe-mc-expression-ownership.sh
       - name: Run complete A0 including ISA/ABI and macro relaxation regressions
         run: make MODE=release check-minias-a0
+      - name: GNU RISC-V target-shared MC operand lexer and rejected mismatched groups
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=riscv \
+            bash tests/assembler/probe-mc-operand-lexer.sh
       - name: Run strict RV32I GNU byte oracle and real ELF32/QEMU smoke
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
@@ -148,6 +156,10 @@ jobs:
             binutils-aarch64-linux-gnu qemu-user
       - name: Build MiniAS on exact head
         run: make -j2 MODE=release CFLAGS=-Werror build/release/bin/minic-as
+      - name: GNU AArch64 grouped MC operand tokenizer and invalid nesting
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=aarch64 \
+            bash tests/assembler/probe-mc-operand-lexer.sh
       - name: GNU AArch64 MCExpr data-byte and relocation oracle
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=aarch64 \

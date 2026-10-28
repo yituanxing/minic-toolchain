@@ -151,33 +151,10 @@ static bool x64_system_register(const char *s,unsigned *number,unsigned *kind) {
 }
 static bool x64_args2(const char *args, char a[X64_OPERAND_CAP],
                       char b[X64_OPERAND_CAP]) {
-    /* AT&T memory forms can contain commas inside SIB parentheses.
-     * Split operands once at top-level, not once per comma token. */
-    const char *p, *comma = NULL, *right;
-    unsigned depth = 0U;
-    size_t n, m;
-    for (p=args; *p; ++p) {
-        if (*p=='(') ++depth;
-        else if (*p==')') {
-            if (!depth) return false;
-            --depth;
-        } else if (*p==',' && depth==0U) {
-            if (comma) return false;
-            comma=p;
-        }
-    }
-    if (depth || !comma) return false;
-    n=(size_t)(comma-args);
-    while (n && isspace((unsigned char)args[n-1U])) --n;
-    while (n && isspace((unsigned char)*args)) {++args;--n;}
-    right=comma+1;
-    while (isspace((unsigned char)*right)) ++right;
-    m=strlen(right);
-    while (m && isspace((unsigned char)right[m-1U])) --m;
-    if (!n || !m || n>=X64_OPERAND_CAP || m>=X64_OPERAND_CAP) return false;
-    memcpy(a,args,n);a[n]='\0';
-    memcpy(b,right,m);b[m]='\0';
-    return true;
+    char *out[2]={a,b};
+    const size_t capacity[2]={X64_OPERAND_CAP,X64_OPERAND_CAP};
+    unsigned n=0U;
+    return minias_split_mc_operands(args,out,capacity,2U,&n) && n==2U;
 }
 
 /* Three GNU AT&T operands have two TOP-LEVEL commas, while the middle
@@ -187,33 +164,11 @@ static bool x64_args3(const char *args,
                       char first[X64_OPERAND_CAP],
                       char second[X64_OPERAND_CAP],
                       char third[X64_OPERAND_CAP]) {
-    const char *begin[3],*end[3],*p;
-    unsigned depth=0U,count=0U,k;
     char *out[3]={first,second,third};
-    begin[0]=args;
-    for(p=args;*p;++p) {
-        if(*p=='(')++depth;
-        else if(*p==')') {
-            if(!depth)return false;
-            --depth;
-        } else if(*p==',' && !depth) {
-            if(count>=2U)return false;
-            end[count]=p;
-            begin[++count]=p+1U;
-        }
-    }
-    if(depth || count!=2U)return false;
-    end[2]=p;
-    for(k=0U;k<3U;++k) {
-        const char *lo=begin[k],*hi=end[k];
-        size_t n;
-        while(lo<hi && isspace((unsigned char)*lo))++lo;
-        while(hi>lo && isspace((unsigned char)hi[-1]))--hi;
-        n=(size_t)(hi-lo);
-        if(!n || n>=X64_OPERAND_CAP)return false;
-        memcpy(out[k],lo,n);out[k][n]='\0';
-    }
-    return true;
+    const size_t capacity[3]={X64_OPERAND_CAP,X64_OPERAND_CAP,
+                               X64_OPERAND_CAP};
+    unsigned n=0U;
+    return minias_split_mc_operands(args,out,capacity,3U,&n) && n==3U;
 }
 
 /* GNU AT&T disp(%base[, %index[, scale]]) plus symbol(%rip).

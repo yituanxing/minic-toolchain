@@ -573,6 +573,9 @@ bool minias_section_append_zero(MiniAs *as, int section_index, size_t size);
 void minias_set_error(MiniAs *as, const char *format, ...);
 char *minias_strdup(const char *text);
 char *minias_trim(char *text);
+/* Common balanced lexical grouping, Target-private operand grammar. */
+bool minias_split_mc_operands(const char *,char *const [],const size_t [],
+                              unsigned,unsigned *);
 
 typedef struct MiniAsObjectAttribute {
     const char *name;
