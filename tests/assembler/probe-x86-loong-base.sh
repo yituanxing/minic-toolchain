@@ -1896,6 +1896,34 @@ for bad in 'lzcntl %rax,%eax' 'tzcntq %eax,%rdi' 'lzcntq %eax,(%rsp)'; do
     fi
 done
 echo 'MINIAS_X86_CNT=PASS GNU_BYTES_PCREL LZCNT_TZCNT_32_64'
+
+# GNU code-relative encoding tables with forward same-section S1-S2 / 4.
+# This arithmetic belongs in Common data evaluation, not any Target ISA.
+cat > "$work/gnu-pair-div.s" <<'PAIR_DIV'
+.section .data
+.byte (.Lafter-.Lstart)/4
+.2byte (.Lafter-.Lstart)/4
+.long (.Lafter-.Lstart)/4
+.quad (.Lafter-.Lstart)/4
+.Lstart:
+.byte 0xaa,0xbb,0xcc,0xdd,0xee,0xff,0x11,0x22
+.Lafter:
+.byte (.Lafter-.Lstart)/4
+PAIR_DIV
+for target in x86_64 loongarch64; do
+    "$MINIAS" --target="$target" -o "$work/$target-pair-mini.o" "$work/gnu-pair-div.s"
+    if [ "$target" = x86_64 ]; then
+       as --64 -o "$work/$target-pair-gnu.o" "$work/gnu-pair-div.s"
+       objcopy -j .data -O binary "$work/$target-pair-mini.o" "$work/$target-pair-mini.bin"
+       objcopy -j .data -O binary "$work/$target-pair-gnu.o" "$work/$target-pair-gnu.bin"
+    else
+       "$LOONGAS" -mabi=lp64d -o "$work/$target-pair-gnu.o" "$work/gnu-pair-div.s"
+       "$LOONGCOPY" -j .data -O binary "$work/$target-pair-mini.o" "$work/$target-pair-mini.bin"
+       "$LOONGCOPY" -j .data -O binary "$work/$target-pair-gnu.o" "$work/$target-pair-gnu.bin"
+    fi
+    cmp "$work/$target-pair-mini.bin" "$work/$target-pair-gnu.bin"
+done
+echo 'MINIAS_COMMON_PAIR_DIV=PASS GNU_forward_symbol_difference_div4_8_16_32_64'
 echo 'MINIAS_COMMON_NUMERIC_U64=PASS GNU_GAS_x86_LA64_exact_data_bytes'
 echo 'MINIAS_X86_SEGMENTED_INDIRECT=PASS GNU_AS_text_and_relocations segment_base_index_abs_rip=true indirect_memory_call_jmp=true absolute_symbol32S=true'
 echo 'MINIAS_TWO_TARGET_ORACLE=PASS x86_GNU_bytes=equal loong_GNU_bytes=equal ELF_machine=correct lp64d_v1=0x43 CET_endbr64=1 ALU_imm8_imm32=1 x86_ModRM_SIB_disp=1 x86_test_cmp_alu_memory=1 x86_scaled_index_SIB=1 LA_jr=1 LA_scaled_ptr14=1 LA_imm12_shift_upper20=1 invalid=reject'
