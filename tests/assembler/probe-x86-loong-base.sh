@@ -2031,6 +2031,39 @@ for bad in 'rep bsfq' 'fnstsw %rax' 'cmpxchg16b %rax'; do
     fi
 done
 echo 'MINIAS_X86_GROUPED_SYS=PASS GNU_REP_BSF_BSR_x87_CMPEXCHG16B_PCREL'
+
+# Real GNU SSE/XMM memory widths, 0F38 escape, REX and PC32 relocation.
+cat > "$work/xmm-memory.s" <<'XMM_MEMORY'
+.text
+movntdqa (%rbx), %xmm0
+movntdqa ext_simd(%rip), %xmm9
+movntdq %xmm12, 16(%rsp)
+movdqa 32(%r8), %xmm8
+movdqa %xmm1, 16(%rax)
+movdqu (%r15), %xmm0
+movdqu %xmm15, (%rbp)
+movaps (%rdi), %xmm3
+movaps %xmm4, (%r12)
+movups 16(%r12,%r13,2), %xmm5
+movups %xmm6, ext_movups(%rip)
+XMM_MEMORY
+"$MINIAS" --target=x86_64 -o "$work/xmm-mini.o" "$work/xmm-memory.s"
+as --64 -o "$work/xmm-gnu.o" "$work/xmm-memory.s"
+objcopy -j .text -O binary "$work/xmm-mini.o" "$work/xmm-mini.bin"
+objcopy -j .text -O binary "$work/xmm-gnu.o" "$work/xmm-gnu.bin"
+cmp "$work/xmm-mini.bin" "$work/xmm-gnu.bin"
+readelf -Wr "$work/xmm-mini.o" > "$work/xmm-mini-rel.txt"
+readelf -Wr "$work/xmm-gnu.o" > "$work/xmm-gnu-rel.txt"
+grep -q 'R_X86_64_PC32.*ext_simd - 4' "$work/xmm-mini-rel.txt"
+grep -q 'R_X86_64_PC32.*ext_simd - 4' "$work/xmm-gnu-rel.txt"
+for bad in 'movntdqa %xmm0,(%rbx)' 'movntdq (%rbx),%xmm0' \
+           'movdqa %rax,(%rbx)' 'movups %xmm16,(%rsp)'; do
+    printf '.text\n%s\n' "$bad" > "$work/xmm-invalid.s"
+    if "$MINIAS" --target=x86_64 -o "$work/xmm-invalid.o" "$work/xmm-invalid.s" >/dev/null 2>&1; then
+        echo "invalid XMM memory instruction accepted: $bad" >&2; exit 1
+    fi
+done
+echo 'MINIAS_X86_XMM=PASS GNU_BYTES_PC32 MOVNTDQA_MOVDQA_MOVDQU_MOVAPS_MOVUPS'
 echo 'MINIAS_COMMON_NUMERIC_U64=PASS GNU_GAS_x86_LA64_exact_data_bytes'
 echo 'MINIAS_X86_SEGMENTED_INDIRECT=PASS GNU_AS_text_and_relocations segment_base_index_abs_rip=true indirect_memory_call_jmp=true absolute_symbol32S=true'
 echo 'MINIAS_TWO_TARGET_ORACLE=PASS x86_GNU_bytes=equal loong_GNU_bytes=equal ELF_machine=correct lp64d_v1=0x43 CET_endbr64=1 ALU_imm8_imm32=1 x86_ModRM_SIB_disp=1 x86_test_cmp_alu_memory=1 x86_scaled_index_SIB=1 LA_jr=1 LA_scaled_ptr14=1 LA_imm12_shift_upper20=1 invalid=reject'

@@ -32,6 +32,15 @@ static bool x64_register(const char *text, unsigned *reg, bool *wide) {
 /* Low-byte registers are separate from legacy AH/CH/DH/BH. The latter
  * cannot coexist with any REX-required byte register. */
 /* Source-width-specific registers belong to x86, not Common MCInst. */
+/* XMM register indices remain Target-owned, not fake GPR widths. */
+static bool x64_xmm_register(const char *text,unsigned *reg) {
+    char *end;unsigned long id;
+    if(strncmp(text,"%xmm",4U) || !isdigit((unsigned char)text[4]))return false;
+    errno=0;id=strtoul(text+4U,&end,10);
+    if(errno || *end!='\0' || id>=16UL)return false;
+    *reg=(unsigned)id;return true;
+}
+
 static bool x64_register16(const char *text,unsigned *reg) {
     static const char *const names[16]={
         "ax","cx","dx","bx","sp","bp","si","di",
@@ -605,6 +614,47 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         m->operands[0].register_64=wide;
         m->operands[1].kind=MINIAS_MC_MEMORY;
         goto done;
+    }
+    /* One XMM-memory ISA descriptor family: typed ModR/M, SIB and
+     * Common PC32 fixups; 0F38 map is the sole extra escape flag. */
+    {
+        static const struct {const char *name;uint32_t op;bool store;} vec[]={
+            {"movntdqa",UINT32_C(0x1052a),false},
+            {"movntdq",UINT32_C(0x005e7),true},
+            {"movdqa",UINT32_C(0x0056f),false},
+            {"movdqa",UINT32_C(0x0057f),true},
+            {"movdqu",UINT32_C(0x0216f),false},
+            {"movdqu",UINT32_C(0x0217f),true},
+            {"movaps",UINT32_C(0x00128),false},
+            {"movaps",UINT32_C(0x00129),true},
+            {"movups",UINT32_C(0x00110),false},
+            {"movups",UINT32_C(0x00111),true}
+        };
+        size_t k;
+        for(k=0U;k<sizeof(vec)/sizeof(vec[0]);++k) {
+            MiniAsMCMemory mem;unsigned xmm=0U;
+            const char *memptr,*xmmtext;
+            if(strcmp(s->op,vec[k].name))continue;
+            if(!x64_args2(s->args,src,dst))continue;
+            memptr=vec[k].store?dst:src;
+            xmmtext=vec[k].store?src:dst;
+            if(!x64_xmm_register(xmmtext,&xmm) ||
+               !x64_is_mem_candidate(memptr) ||
+               !x64_parse_base_memory(memptr,&mem))continue;
+            m->operands[1].memory=malloc(sizeof(mem));
+            if(!m->operands[1].memory) {
+                free(mem.symbol);free(m);
+                minias_set_error(as,"out-of-memory:x86-xmm-mem");return false;
+            }
+            *m->operands[1].memory=mem;
+            m->opcode=X64_REG_MEMORY;m->count=2U;
+            m->encoding=vec[k].op;
+            m->operands[0].kind=MINIAS_MC_REGISTER;
+            m->operands[0].reg=xmm;
+            m->operands[0].register_64=false;
+            m->operands[1].kind=MINIAS_MC_MEMORY;
+            goto done;
+        }
     }
     /* BMI2 shifts share a typed three-register VEX target encoding.
      * GNU AT&T order is count, source, destination. The count register is
@@ -2161,6 +2211,7 @@ static bool x64_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
                  base==0xc0U || base==0xc1U?1U:
                   (m->encoding&0x400U)?2U:4U):0U;
             *size=extra+((m->encoding&0x100U)?1U:0U) +
+                   ((m->encoding&0x10000U)?1U:0U) +
                    ((m->encoding&0x2000U)?1U:0U) +
                   ((m->encoding&0x400U)?1U:0U) +
                   (mem->address_space?1U:0U) + (m->operands[0].register_64 ||
@@ -2554,6 +2605,7 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
                     (mem->base>>3U));
             /* Width markers 0x200/0x400 do not imply the 0F escape. */
             if(m->encoding&0x100U)code[n++]=0x0fU;
+            if(m->encoding&0x10000U)code[n++]=0x38U;
             code[n++]=(unsigned char)m->encoding;
             code[n++]=(unsigned char)((((mem->pc_relative || !mem->has_base)?0U:mod)<<6U)|
                 ((r&7U)<<3U)|
