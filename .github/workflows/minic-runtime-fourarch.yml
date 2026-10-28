@@ -556,6 +556,11 @@ jobs:
         run: |
           set -Eeuo pipefail
           bash tests/compiler/c0/probe-loongarch-linux-csr-constants.sh "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
+      - name: LoongArch original Linux FCSR plus indexed per-CPU load/store and AMO GNU hardware differential
+        if: matrix.target == 'loongarch64'
+        run: |
+          set -Eeuo pipefail
+          bash tests/compiler/c0/probe-loongarch-linux-percpu-fpu.sh "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
       - name: Original Linux LoongArch no-operand DBAR real GNU QEMU
         if: matrix.target == 'loongarch64'
         shell: bash

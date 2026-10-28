@@ -146,6 +146,10 @@ jobs:
         run: |
           set -Eeuo pipefail
           MINIC_LOONG_CSR_SOURCE_ONLY=1 bash tests/compiler/c0/probe-loongarch-linux-csr-constants.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+      - name: Original LoongArch Linux per-CPU 15 hardware forms native MiniC
+        run: |
+          set -Eeuo pipefail
+          MINIC_LOONG_PERCPU_SOURCE_ONLY=1 bash tests/compiler/c0/probe-loongarch-linux-percpu-fpu.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
       - name: Common GNU function metadata and inline-asm fail-closed regressions
         shell: bash
         run: |

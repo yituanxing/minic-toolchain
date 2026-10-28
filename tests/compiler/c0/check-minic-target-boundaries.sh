@@ -105,6 +105,13 @@ has src/core/core_lower_calls.c 'minic_const_eval_arithmetic_to_integer('
 has src/target/loongarch64/call_emit.c 'immediate_arg->has_constant_integer'
 lacks src/core/core_lower_calls.c '__builtin_loongarch_csrrd_w'
 
+# Genuine LoongArch C original __percpu_{read,write,add,and,or} and
+# kernel_fpu_begin hardware ISA classified only in native Target owner.
+has src/target/loongarch64/asm_contract.c 'loong_percpu_indexed_source('
+has src/target/loongarch64/asm_contract.c 'loong_percpu_amo_source('
+has src/target/loongarch64/asm_contract.c 'loong_fcsr0_write_source('
+lacks src/core/core_lower_asm_target.c 'movgr2fcsr'
+
 # Four ISA families, five target profiles: one storage-shape owner, distinct
 # physical ABIs. RV32 must never inherit the 8-byte LP64 word policy.
 exists src/target/common/aggregate_shape.h
