@@ -3261,7 +3261,11 @@ reduction_done:;
             /* Signed: W <- B/H, X <- B/H/S. Unsigned: W <- B/H/S,
              * X <- D. Lane imm5's low set bit identifies element width. */
             if(signext) {
-                if(is_x || (!wide && (lane&UINT32_C(4))!=0U))
+                /* imm5 packs the lane index above an element-size bit.
+                 * Testing bit 2 incorrectly rejects valid H lanes with an
+                 * odd index. W accepts B/H; X accepts B/H/S, never D. */
+                if((wide && (lane & UINT32_C(7))==0U) ||
+                   (!wide && (lane & UINT32_C(3))==0U))
                     goto invalid_lane;
             }else if(wide!=is_x)goto invalid_lane;
         }
