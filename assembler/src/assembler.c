@@ -2229,6 +2229,7 @@ static bool parse_symbol_difference(const char *text,
     char *minus;
     char *lhs;
     char *rhs;
+    bool rhs_parenthesized;
     bool ok;
 
     if (text == NULL || lhs_expr == NULL || rhs_expr == NULL) {
@@ -2246,13 +2247,29 @@ static bool parse_symbol_difference(const char *text,
     }
     *minus = '\0';
     lhs = strip_outer_parens(minias_trim(normalized));
-    rhs = strip_outer_parens(minias_trim(minus + 1));
+    rhs = minias_trim(minus + 1);
+    /* GNU expression precedence: A-B+11 means (A-B)+11, whereas
+     * A-(B+11) means A-B-11. Preserve the grouping *before* removing
+     * enclosing parentheses from the right-hand symbol expression. */
+    rhs_parenthesized=rhs[0]=='(' &&
+                       rhs[strlen(rhs)-1U]==')';
+    rhs = strip_outer_parens(rhs);
     if (strcmp(rhs, ".") == 0) {
         free(copy);
         return false;
     }
     ok = minias_parse_symbol_addend(lhs, lhs_expr) &&
          minias_parse_symbol_addend(rhs, rhs_expr);
+    if(ok && !rhs_parenthesized && rhs_expr->addend!=0) {
+        int64_t extra=rhs_expr->addend;
+        if((extra>0 && lhs_expr->addend>INT64_MAX-extra) ||
+           (extra<0 && lhs_expr->addend<INT64_MIN-extra))
+            ok=false;
+        else {
+            lhs_expr->addend+=extra;
+            rhs_expr->addend=0;
+        }
+    }
     free(copy);
     return ok;
 }

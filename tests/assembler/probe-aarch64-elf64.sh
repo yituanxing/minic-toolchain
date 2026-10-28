@@ -990,6 +990,7 @@ global_pcrel_anchor:
 .weak weak_pcrel_anchor
 weak_pcrel_anchor:
     .quad external_pcrel_target - weak_pcrel_anchor
+    .quad external_pcrel_target - (.Lpcrel_b+11)
 A64_PCREL_DIFF
 "$MINIAS" --target=aarch64 -o "$work/a64-pcrel-mini.o" "$work/a64-pcrel-diff.s"
 "$AARCH64_AS" -o "$work/a64-pcrel-gnu.o" "$work/a64-pcrel-diff.s"
@@ -999,7 +1000,7 @@ cmp "$work/a64-pcrel-mini.bin" "$work/a64-pcrel-gnu.bin"
 readelf -Wr "$work/a64-pcrel-mini.o" >"$work/a64-pcrel-mini.rel"
 readelf -Wr "$work/a64-pcrel-gnu.o" >"$work/a64-pcrel-gnu.rel"
 for flavor in mini gnu; do
-    test "$(grep -c 'R_AARCH64_PREL64.*external_pcrel_target' "$work/a64-pcrel-$flavor.rel")" -eq 5
+    test "$(grep -c 'R_AARCH64_PREL64.*external_pcrel_target' "$work/a64-pcrel-$flavor.rel")" -eq 6
     test "$(grep -c 'R_AARCH64_PREL32.*external_pcrel_target' "$work/a64-pcrel-$flavor.rel")" -eq 2
 done
 for flavor in mini gnu; do

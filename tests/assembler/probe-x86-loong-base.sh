@@ -190,6 +190,14 @@ entry_x:
     sal $3, %rax
     shl %cl, %r10
     ror $3, %r8
+    # GNU 0F18 /0..3 and 0FAE /6..7 memory-cache hint family.
+    prefetchnta (%rax)
+    prefetcht0 boot_cpu_data(%rip)
+    prefetcht1 8(%rbx,%rcx,4)
+    prefetcht2 -4(%r8)
+    clflush 16(%rdi)
+    clflushopt 32(%r9)
+    clwb ext_global(%rip)
     # High 8-bit legacy register IDs, including MOV and ALU; no REX.
     movb %al, %dh
     movb %cl, %ah
@@ -701,6 +709,7 @@ global_pcrel_anchor:
 .weak weak_pcrel_anchor
 weak_pcrel_anchor:
     .quad external_pcrel_target - weak_pcrel_anchor
+    .quad external_pcrel_target - (.Lpc_second+11)
 X86_PCREL_DIFF
 "$MINIAS" --target=x86_64 -o "$work/x86-pcrel-mini.o" "$work/x86-pcrel-diff.s"
 as --64 -o "$work/x86-pcrel-gnu.o" "$work/x86-pcrel-diff.s"
@@ -710,7 +719,7 @@ cmp "$work/x86-pcrel-mini.bin" "$work/x86-pcrel-gnu.bin"
 readelf -Wr "$work/x86-pcrel-mini.o" >"$work/x86-pcrel-mini.rel"
 readelf -Wr "$work/x86-pcrel-gnu.o" >"$work/x86-pcrel-gnu.rel"
 for flavor in mini gnu; do
-    test "$(grep -c 'R_X86_64_PC64.*external_pcrel_target' "$work/x86-pcrel-$flavor.rel")" -eq 5
+    test "$(grep -c 'R_X86_64_PC64.*external_pcrel_target' "$work/x86-pcrel-$flavor.rel")" -eq 6
     test "$(grep -c 'R_X86_64_PC32.*external_pcrel_target' "$work/x86-pcrel-$flavor.rel")" -eq 2
 done
 for flavor in mini gnu; do
@@ -994,6 +1003,11 @@ for bad in            'popcntq %eax,%rax' \
            'push %al' \
            'pop %eax' \
            'mov %ah,%r8b' \
+           'prefetcht0 %rax' \
+           'prefetcht1 $1' \
+           'clflush %r8' \
+           'clflushopt $4' \
+           'clwb %rcx' \
            'adcl %rax,%eax' \
            'negb %eax' \
            'negw %eax' \

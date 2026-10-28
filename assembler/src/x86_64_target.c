@@ -455,6 +455,44 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             }
         }
     }
+    /*
+     * GNU prefetch/cache-maintenance family is memory-only. Encode it via
+     * the existing target MC memory ModR/M, SIB, segment and ELF PC32 path.
+     * /n is the opcode extension in the ModR/M reg field (not a GPR).
+     */
+    {
+        static const struct {const char *name;uint32_t opcode;
+                             unsigned extension;bool prefix66;} hints[]={
+            {"prefetchnta",0x18U,0U,false},
+            {"prefetcht0",0x18U,1U,false},
+            {"prefetcht1",0x18U,2U,false},
+            {"prefetcht2",0x18U,3U,false},
+            {"clflush",0xaeU,7U,false},
+            {"clflushopt",0xaeU,7U,true},
+            {"clwb",0xaeU,6U,true}
+        };
+        for(i=0U;i<sizeof(hints)/sizeof(hints[0]);++i) {
+            MiniAsMCMemory mem;
+            if(strcmp(s->op,hints[i].name)!=0)continue;
+            if(!x64_is_mem_candidate(s->args) ||
+               !x64_parse_base_memory(s->args,&mem))goto invalid;
+            m->operands[1].memory=malloc(sizeof(mem));
+            if(!m->operands[1].memory) {
+                free(mem.symbol);free(m);
+                minias_set_error(as,"out-of-memory:x86-prefetch");
+                return false;
+            }
+            *m->operands[1].memory=mem;
+            m->opcode=X64_REG_MEMORY;m->count=2U;
+            m->encoding=UINT32_C(0x100)|hints[i].opcode|
+                        (hints[i].prefix66?UINT32_C(0x400):0U);
+            m->operands[0].kind=MINIAS_MC_REGISTER;
+            m->operands[0].reg=hints[i].extension;
+            m->operands[0].register_64=false;
+            m->operands[1].kind=MINIAS_MC_MEMORY;
+            goto done;
+        }
+    }
     if (!strcmp(s->op,"endbr64") && !*s->args) {
         m->opcode=X64_ENDBR64;m->encoding=UINT32_C(0xfa1e0ff3);
         m->count=0U;goto done;
