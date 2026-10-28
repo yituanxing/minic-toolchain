@@ -1591,43 +1591,28 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
     } else if (!strcmp(op,"mov") &&
                split_two(args,first,sizeof(first),second,sizeof(second)) &&
                parse_register(first,&reg,&reg64) &&
-               (second[0]=='-' ||
-                (second[0]=='#' && second[1]=='-'))) {
-        int64_t value;
-        if(!parse_signed_number(second,&value) ||
-           value>=0 || value<INT64_C(-65536)) {
-            minias_set_error(as,"bad-aarch64-mov-negative:%s:line=%zu",
-                             args,stmt->line);
-            free(inst);return false;
-        }
-        inst->opcode=A64_MC_WIDE_IMM;
-        inst->count=2U;
-        /* GNU canonicalizes W32 #-65536 as MOVZ #0xffff,LSL #16.
-         * MOVN #0xffff is equivalent but the original GCC .s byte oracle
-         * requires exact canonical GAS output, not just equal semantics. */
-        if(!reg64 && value==INT64_C(-65536)) {
-            inst->encoding=4U; /* MOVZ shift 16 */
-            put_immediate(&inst->operands[1],UINT64_C(0xffff));
-        }else {
-            inst->encoding=2U; /* MOVN: NOT(imm16) */
-            put_immediate(&inst->operands[1],
-                          (~(uint64_t)value)&UINT64_C(0xffff));
-        }
-        put_reg(&inst->operands[0],reg,reg64);
-    } else if (!strcmp(op,"mov") &&
-               split_two(args,first,sizeof(first),second,sizeof(second)) &&
-               parse_register(first,&reg,&reg64) &&
-               (second[0]=='#' ||
+               (second[0]=='-' || second[0]=='#' ||
                 isdigit((unsigned char)second[0]))) {
-        /* GNU MOV pseudo on integer constants, one real instruction only.
-         * Prefer MOVZ/MOVN single 16-bit halfword before the logical
-         * bitmask ORR alias. No unbounded expansion or fake instruction. */
+        /* One GNU MOV constant grammar and encoder, including signed
+         * W/X values. Former small-negative special cases belong to the
+         * same MOVZ/MOVN/ORR selection, not a second parser algorithm.
+         * No multi-instruction pseudo expansion is permitted. */
         uint64_t value,mask=reg64?UINT64_MAX:UINT32_MAX;
         uint32_t fields=0U;
         unsigned j,limit=reg64?4U:2U,variant=0U,chosen=4U;
         const char *literal=second[0]=='#'?second+1U:second;
-        if(!minias_eval_u64_expression(literal,&value) ||
-           (!reg64 && (value>>32U)!=0U)) {
+        bool negative=*literal=='-';
+        int64_t signed_value=0;
+        if(negative) {
+            if(!parse_signed_number(literal,&signed_value) ||
+               (!reg64 && signed_value<INT32_MIN)) {
+                minias_set_error(as,"bad-aarch64-mov-negative:%s:line=%zu",
+                                 second,stmt->line);
+                free(inst);return false;
+            }
+            value=((uint64_t)signed_value)&mask;
+        }else if(!minias_eval_u64_expression(literal,&value) ||
+                 (!reg64 && (value>>32U)!=0U)) {
             minias_set_error(as,"bad-aarch64-mov-constant:%s:line=%zu",
                              second,stmt->line);
             free(inst);return false;

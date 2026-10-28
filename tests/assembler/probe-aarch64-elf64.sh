@@ -209,6 +209,14 @@ external_probe:
     bics w3, w4, w5, lsr #7
     bics x6, x7, x8, ror #9
     bic x9, x10, #255
+    // GNU signed MOV constants: one canonical MOVZ/MOVN/logical mask.
+    mov x1, -4398046511104
+    mov w0, -2147483648
+    mov w7, -65536
+    mov w0, -65537
+    mov x2, -281474976710656
+    mov x3, -1
+    mov w4, -1
     // GNU genuine multiply-accumulate register Ra and ASR/ROR forms.
     madd x0, x1, x2, x3
     madd w4, w5, w6, w7
@@ -518,7 +526,7 @@ fi
 # MCInst must be validated while parsing, independent of later emit/ELF.
 for bad_source in 'ldxr x0, [x1,#4]' 'stxr x0, x1, [x2]' \
                   'stlxr w0, w1, [x2,#4]' \
-                  'brk #65536' 'mov w0, -65537' \
+                  'brk #65536' 'mov w0, -4294967296' \
                   'subs x0, w0, x1' 'adds x0, x1, #4097' \
                   'cset sp, eq' 'cinc w0, x1, eq' \
                   'cset x0, bogus' \
@@ -574,6 +582,7 @@ for bad_source in 'ldxr x0, [x1,#4]' 'stxr x0, x1, [x2]' \
                   'ldrsw w0, [x1, x2]' \
                   'str x0, [x1, sp]' \
                   'ldr x0, [w1, x2]' \
+                  'mov w0, -4294967296' \
                   'mov w0, #4294967296' \
                   'mov x0, #0x123456789abcdef0' \
                   'mov x0, #18446744073709551616' \
