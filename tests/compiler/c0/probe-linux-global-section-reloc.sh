@@ -43,6 +43,44 @@ if [[ "${MINIC_SECTION_ONLY:-0}" != 1 ]]; then
     grep -Fq addressable_export "$work/$owner.relocs"
   done
 fi
+# A sparse C pointer initializer must preserve both relocations and its
+# implicit zero tail across the same shared ELF data walker on every target.
+cat > "$work/sparse.i" <<'SRC'
+static int first = 12;
+static int second = 30;
+static int *slots[8] = { &first, 0, &second };
+int main(void) {
+    return slots[0] == &first && slots[1] == 0 &&
+           slots[2] == &second && slots[3] == 0 &&
+           slots[7] == 0 && *slots[0] + *slots[2] == 42 ? 42 : 1;
+}
+SRC
+"$cc" --target="$target-linux" -S "$work/sparse.i" -o "$work/sparse.s"
+test -s "$work/sparse.s"
+if [[ "${MINIC_SECTION_ONLY:-0}" != 1 ]]; then
+  "$gnu" -static -x c "$work/sparse.i" -o "$work/sparse.gnu"
+  "$gnu" -static -x assembler "$work/sparse.s" -o "$work/sparse.minic"
+  case "$target" in
+    x86_64) emulator=() ;;
+    aarch64) emulator=(qemu-aarch64) ;;
+    loongarch64) emulator=(qemu-loongarch64) ;;
+    riscv64) emulator=(qemu-riscv64) ;;
+  esac
+  sparse_exit_42() {
+    local rc
+    if timeout 45s "${emulator[@]}" "$1" > "$1.out" 2>"$1.err"; then
+      rc=0
+    else
+      rc=$?
+    fi
+    test "$rc" -eq 42
+  }
+  sparse_exit_42 "$work/sparse.gnu"
+  sparse_exit_42 "$work/sparse.minic"
+  cmp "$work/sparse.gnu.out" "$work/sparse.minic.out"
+  cmp "$work/sparse.gnu.err" "$work/sparse.minic.err"
+fi
+echo "MINIC_SPARSE_POINTER_ARRAY=PASS target=$target trailing_zero=5 interleaved_reloc=2"
 cat > "$work/inject.i" <<'SRC'
 int __attribute__((section(".evil; nop"))) injected=1;
 SRC

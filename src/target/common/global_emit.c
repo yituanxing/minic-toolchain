@@ -69,7 +69,7 @@ bool minic_multi_emit_relocatable_scalar_array(FILE *out, const MinicC0Program *
                 return false;
             ++relocation_index;
         } else if (i >= obj->initializer_count) {
-            if (fprintf(out, "  .zero %zu\\n", element_bytes) < 0)
+            if (fprintf(out, "  .zero %zu\n", element_bytes) < 0)
                 return false;
         } else if (!(emit_bits != NULL
                         ? emit_bits(out, program, target, arr->element_type, bits)
