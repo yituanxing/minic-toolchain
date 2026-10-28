@@ -17,7 +17,7 @@ for backend in riscv_encode.c x86_64_target.c loongarch64_target.c; do
 done
 # AArch64 executable alignment is a separate Target callback. It may append
 # NOP fill through Common Section ownership; instruction encoder may not.
-grep -q 'return minias_emit_instruction_bytes(as, section, bytes, sizeof(bytes));' \\
+grep -q 'return minias_emit_instruction_bytes(as, section, bytes, sizeof(bytes));' \
     assembler/src/aarch64_target.c
 # Each Target must reserve a separate kind namespace.
 for header in riscv_fixup_kinds.h aarch64_fixup_kinds.h \
