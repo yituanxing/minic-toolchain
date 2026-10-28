@@ -184,9 +184,17 @@ done
 "$MINIC" --target=riscv64-linux -fPIC -S "$work/unsigned.i" \
   -o "$work/pic-driver.s" -funsigned-char
 cmp "$work/pic-cc.s" "$work/pic-driver.s"
-if "$MINIC" --target=x86_64-linux -fPIC -S "$work/signed.i" \
+# Original Linux x86 PIC is now qualified by TargetInfo and independent
+# GNU shared-library/PIE ABI proof (probe-x86-linux-pic.sh). Both frontends
+# must forward identical -fPIC emission, while other ISA profiles reject.
+"$MINIC_CC" --target=x86_64-linux -fPIC -S "$work/signed.i" \
+  -o "$work/x86-pic-cc.s"
+"$MINIC" --target=x86_64-linux -fPIC -S "$work/signed.i" \
+  -o "$work/x86-pic-driver.s"
+cmp "$work/x86-pic-cc.s" "$work/x86-pic-driver.s"
+if "$MINIC" --target=aarch64-linux -fPIC -S "$work/signed.i" \
   -o "$work/bad-pic.s" 2>"$work/bad-pic.err"; then
-  echo 'MINIC_TARGET_ABI_FLAGS=FAIL unqualified PIC' >&2; exit 1
+  echo 'MINIC_TARGET_ABI_FLAGS=FAIL unqualified AArch64 PIC' >&2; exit 1
 fi
 grep -Fq 'PIC lowering is not yet qualified' "$work/bad-pic.err"
 test ! -e "$work/bad-pic.s"
