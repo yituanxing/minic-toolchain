@@ -2649,7 +2649,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         char vreg[96],text[96];unsigned rd;
         uint32_t ar,base;
         int64_t number;
-        unsigned imm;
+        unsigned simd_imm;
         if(!split_two(args,vreg,sizeof(vreg),text,sizeof(text)) ||
            !a64_vector_view(vreg,&rd,&ar) ||
            !parse_signed_number(text,&number) ||
@@ -2672,11 +2672,11 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
                              args,stmt->line);
             free(inst);return false;
         }
-        imm=(unsigned)number;
+        simd_imm=(unsigned)number;
         inst->opcode=A64_MC_SIMD_IMM;inst->count=1U;
         inst->encoding=base|
                       (ar&UINT32_C(0x40000000))|
-                      ((imm>>5U)<<16U)|((imm&31U)<<5U);
+                      ((simd_imm>>5U)<<16U)|((simd_imm&31U)<<5U);
         put_reg(&inst->operands[0],rd,true);
     } else if(!strcmp(op,"ldxp") || !strcmp(op,"ldaxp") ||
               !strcmp(op,"stxp") || !strcmp(op,"stlxp")) {
