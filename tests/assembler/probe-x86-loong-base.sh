@@ -2161,6 +2161,52 @@ if "$MINIAS" --target=x86_64 -o "$work/common-gas-invalid.o" "$work/common-gas-i
     echo 'invalid GNU .ifc without delimiter accepted' >&2; exit 1
 fi
 echo 'MINIAS_COMMON_GAS_TEXT=PASS GNU_x86_LA_bytes .ifc_empty_quoted_comma unsigned_set parenthesized_relocations'
+
+# GNU x86 system selector grammar: register aliases and 66/REX order,
+# plus LAR/LSL selector loads both register and memory forms. Compare
+# exact 0F00/0F02/0F03 bytes and PC32 relocation against real GNU AS.
+cat > "$work/x86-descriptor-isa.s" <<'X86_DESCRIPTOR_ISA'
+.text
+str %ax
+str %eax
+str %rax
+str %r8w
+str %r8d
+ltr %ax
+ltr %rax
+ltr %r9w
+sldt %r8w
+lldt %r8w
+verr %r8w
+verw %r8w
+lsl %ax,%eax
+lsl %rax,%rax
+lsl %r8w,%r9w
+lsl %r8d,%r9d
+lsl (%rax),%r9
+lar %r8w,%r9d
+lar %r8d,%r9d
+lar (%rax),%r9w
+lar ext_selector(%rip),%ecx
+emms
+X86_DESCRIPTOR_ISA
+"$MINIAS" --target=x86_64 -o "$work/descriptor-mini.o" "$work/x86-descriptor-isa.s"
+as --64 -o "$work/descriptor-gnu.o" "$work/x86-descriptor-isa.s"
+objcopy -j .text -O binary "$work/descriptor-mini.o" "$work/descriptor-mini.bin"
+objcopy -j .text -O binary "$work/descriptor-gnu.o" "$work/descriptor-gnu.bin"
+cmp "$work/descriptor-mini.bin" "$work/descriptor-gnu.bin"
+readelf -Wr "$work/descriptor-mini.o" > "$work/descriptor-mini-rel.txt"
+readelf -Wr "$work/descriptor-gnu.o" > "$work/descriptor-gnu-rel.txt"
+grep -q 'R_X86_64_PC32.*ext_selector - 4' "$work/descriptor-mini-rel.txt"
+grep -q 'R_X86_64_PC32.*ext_selector - 4' "$work/descriptor-gnu-rel.txt"
+for bad in 'lsl %eax,%r9w' 'lar %eax,%r9w' \
+           'str %xmm0' 'lsl %xmm1,%rax' 'emms %eax'; do
+  printf '.text\n%s\n' "$bad" >"$work/descriptor-invalid.s"
+  if "$MINIAS" --target=x86_64 -o "$work/descriptor-invalid.o" "$work/descriptor-invalid.s" >/dev/null 2>&1; then
+    echo "invalid descriptor ISA operand accepted: $bad" >&2;exit 1
+  fi
+done
+echo 'MINIAS_X86_DESCRIPTOR=PASS GNU_0F00_0F02_0F03_and_PC32'
 echo 'MINIAS_COMMON_NUMERIC_U64=PASS GNU_GAS_x86_LA64_exact_data_bytes'
 echo 'MINIAS_X86_SEGMENTED_INDIRECT=PASS GNU_AS_text_and_relocations segment_base_index_abs_rip=true indirect_memory_call_jmp=true absolute_symbol32S=true'
 echo 'MINIAS_TWO_TARGET_ORACLE=PASS x86_GNU_bytes=equal loong_GNU_bytes=equal ELF_machine=correct lp64d_v1=0x43 CET_endbr64=1 ALU_imm8_imm32=1 x86_ModRM_SIB_disp=1 x86_test_cmp_alu_memory=1 x86_scaled_index_SIB=1 LA_jr=1 LA_scaled_ptr14=1 LA_imm12_shift_upper20=1 invalid=reject'

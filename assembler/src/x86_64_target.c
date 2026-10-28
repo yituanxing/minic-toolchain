@@ -392,6 +392,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         {"rdmsr",{0x0f,0x32},2},{"wrmsr",{0x0f,0x30},2},
         {"rdpmc",{0x0f,0x33},2},{"fninit",{0xdb,0xe3},2},
         {"fnclex",{0xdb,0xe2},2},
+        {"emms",{0x0f,0x77},2},
         {"xsetbv",{0x0f,0x01,0xd1},3},
         {"xgetbv",{0x0f,0x01,0xd0},3},
         {"vmcall",{0x0f,0x01,0xc1},3},
@@ -794,6 +795,51 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             goto done;
         }
     }
+    /* GNU LAR/LSL descriptor access: 0F02/0F03, target-owned 16-bit
+     * selector source and destination operand-size rule. Both register
+     * and memory sources reuse typed binary/memory MC emitters and
+     * ELF PC32 fixups. REX.W is never emitted for GPR64 aliases. */
+    if(!strcmp(s->op,"lar") || !strcmp(s->op,"lsl")) {
+        unsigned rs=0U,rd=0U;
+        bool srcword=false,dstword=false,srcwide=false,dstwide=false;
+        if(!x64_args2(s->args,src,dst))goto invalid;
+        dstword=x64_register16(dst,&rd);
+        if(!dstword && !x64_register(dst,&rd,&dstwide))goto invalid;
+        srcword=x64_register16(src,&rs);
+        if(!srcword && x64_register(src,&rs,&srcwide)) {
+            if(dstword)goto invalid;
+        } else if(srcword) {
+            /* A 16-bit selector in 32/64-bit destination form is GNU
+             * legal and does not itself request the 66 prefix. */
+        } else if(x64_is_mem_candidate(src)) {
+            MiniAsMCMemory mem;
+            if(!x64_parse_base_memory(src,&mem))goto invalid;
+            m->operands[1].memory=malloc(sizeof(mem));
+            if(!m->operands[1].memory) {
+                free(mem.symbol);free(m);
+                minias_set_error(as,"out-of-memory:x86-lar-lsl");
+                return false;
+            }
+            *m->operands[1].memory=mem;
+            m->opcode=X64_REG_MEMORY;m->count=2U;
+            m->encoding=UINT32_C(0x100)|
+                        (dstword?UINT32_C(0x400):0U)|
+                        (!strcmp(s->op,"lar")?2U:3U);
+            m->operands[0].kind=MINIAS_MC_REGISTER;
+            m->operands[0].reg=rd;
+            m->operands[1].kind=MINIAS_MC_MEMORY;
+            goto done;
+        } else goto invalid;
+        m->opcode=X64_REG_BINARY;m->count=2U;
+        m->encoding=UINT32_C(0x100)|UINT32_C(0x800)|
+                    (dstword?UINT32_C(0x400):0U)|
+                    (!strcmp(s->op,"lar")?2U:3U);
+        m->operands[0].kind=MINIAS_MC_REGISTER;
+        m->operands[0].reg=rs;
+        m->operands[1].kind=MINIAS_MC_REGISTER;
+        m->operands[1].reg=rd;
+        goto done;
+    }
     /* GCC x86 CPU-local descriptor table and invalidation instructions
      * use 0F00/0F01 with a constant /digit ModR/M extension. Reuse the
      * existing relocation-capable memory encoder for all families. */
@@ -820,13 +866,20 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
              * ModR/M mod=11; use the same typed unary MCInst as RDRAND.
              * Long-mode GNU uses 66 for extended 16-bit GPR forms. */
             if(sysmem[i].opcode==0U) {
-                unsigned reg;
-                if(x64_register16(s->args,&reg)) {
+                unsigned reg=0U;
+                bool word=x64_register16(s->args,&reg);
+                bool wide=false;
+                /* GNU accepts AX/EAX/RAX aliases for descriptor r/m16.
+                 * Only SLDT and STR preserve a 66 prefix for explicit
+                 * 16-bit destinations; LLDT/LTR/VERR/VERW never do.
+                 * REX.W is ignored for these opcodes even with RAX. */
+                if(word || x64_register(s->args,&reg,&wide)) {
+                    bool emit66=word && sysmem[i].group<=1U;
                     m->opcode=X64_UNARY;m->count=1U;
                     m->encoding=UINT32_C(0x8000)|
                         (uint32_t)sysmem[i].opcode|
                         ((uint32_t)sysmem[i].group<<8U)|
-                        (reg>=8U?UINT32_C(0x2000):0U);
+                        (emit66?UINT32_C(0x2000):0U);
                     m->operands[0].kind=MINIAS_MC_REGISTER;
                     m->operands[0].reg=reg;
                     goto done;
