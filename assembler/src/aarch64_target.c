@@ -1756,14 +1756,16 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
     } else if((!strcmp(op,"mrs") || !strcmp(op,"msr")) &&
        split_two(args, first, sizeof(first), second, sizeof(second))) {
         unsigned rt;
-        bool wide;
+        bool wide,sp=false;
         uint32_t mrscode=0U,msrcode=0U;
         bool read=!strcmp(op,"mrs");
+        /* Rt=31 is legal XZR for MRS/MSR, unlike SP. Use the
+         * existing target register grammar rather than x0..x30 only. */
         if(read ?
-           (!parse_register(first,&rt,&wide) || !wide ||
+           (!parse_a64_reg(first,&rt,&wide,&sp) || sp || !wide ||
             !a64_system_register(second,&mrscode,&msrcode) ||
             mrscode==0U) :
-           (!parse_register(second,&rt,&wide) || !wide ||
+           (!parse_a64_reg(second,&rt,&wide,&sp) || sp || !wide ||
             !a64_system_register(first,&mrscode,&msrcode) ||
             msrcode==0U)) {
             minias_set_error(as,"bad-aarch64-sysreg:%s:line=%zu",
