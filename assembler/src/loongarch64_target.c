@@ -1528,6 +1528,8 @@ static uint32_t la_reloc(MiniAsFixupKind kind,unsigned width) {
     switch(kind) {
         case MINIAS_FIXUP_ABS:
             return width==8U?2U:1U; /* R_LARCH_64 / R_LARCH_32 */
+        case MINIAS_FIXUP_PREL32:
+            return width==4U?99U:0U; /* R_LARCH_32_PCREL */
         case MINIAS_FIXUP_ADD:
             return width==8U?51U:50U; /* ADD64 / ADD32 */
         case MINIAS_FIXUP_SUB:
@@ -1551,6 +1553,7 @@ static const MiniAsTargetOps ops={
     .measure_mcinst=la_measure,.encode=la_encode,
     .append_code_alignment=la_align,.fixup_relocation_type=la_reloc,
     .validate_output=la_validate,
+    .cfi_implicit_eh_frame=true,
     .cfi_code_align=4U,
     .cfi_data_align=-8,
     .cfi_return_reg=1U,

@@ -79,6 +79,12 @@ jobs:
             bash tests/assembler/probe-cfi-extended-gnu.sh
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=loongarch64 \
             bash tests/assembler/probe-cfi-extended-gnu.sh
+      - name: Real x86 and LoongArch64 implicit EH GNU oracle
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=x86_64 \
+            bash tests/assembler/probe-cfi-eh-frame.sh
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=loongarch64 \
+            bash tests/assembler/probe-cfi-eh-frame.sh
       - name: Verify GNU x86 and LoongArch64 DWARF CIE/FDE semantics
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=x86_64 \

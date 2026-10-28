@@ -58,6 +58,8 @@ static uint32_t riscv_fixup_relocation_type(MiniAsFixupKind kind,
         case MINIAS_FIXUP_ABS:
             return width == 4U ? MINIAS_R_RISCV_32 :
                    width == 8U ? MINIAS_R_RISCV_64 : 0U;
+        case MINIAS_FIXUP_PREL32:
+            return width==4U?57U:0U; /* R_RISCV_32_PCREL */
         case MINIAS_FIXUP_ADD:
             return width == 2U ? MINIAS_R_RISCV_ADD16 :
                    width == 4U ? MINIAS_R_RISCV_ADD32 :
@@ -706,6 +708,7 @@ static const MiniAsTargetOps riscv_ops = {
      * is one byte, stack slots are eight bytes (LP64). Both RV32/64
      * share this Target but DWARF64 address fields are explicitly gated
      * by the generic Output ELF class check. */
+    .cfi_implicit_eh_frame = true,
     .cfi_code_align = 1U,
     .cfi_data_align = -8,
     .cfi_return_reg = 1U,

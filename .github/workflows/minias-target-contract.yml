@@ -73,6 +73,12 @@ jobs:
             bash tests/assembler/probe-cfi-extended-gnu.sh
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=riscv32 \
             bash tests/assembler/probe-cfi-extended-gnu.sh
+      - name: Real RV64/RV32 implicit EH GNU oracle
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=riscv \
+            bash tests/assembler/probe-cfi-eh-frame.sh
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=riscv32 \
+            bash tests/assembler/probe-cfi-eh-frame.sh
       - name: Check real RV64 .debug_frame CIE/FDE against GNU GAS
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=riscv \
@@ -140,6 +146,10 @@ jobs:
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=aarch64 \
             bash tests/assembler/probe-cfi-extended-gnu.sh
+      - name: Real AArch64 implicit EH GNU oracle
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=aarch64 \
+            bash tests/assembler/probe-cfi-eh-frame.sh
       - name: Check AArch64 real .debug_frame CIE/FDE against GNU GAS
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=aarch64 \

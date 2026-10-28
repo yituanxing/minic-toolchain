@@ -3326,16 +3326,13 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
              strncmp(op, ".cfi_", 5U) == 0) ||
             (as->target->cfi_implicit_eh_frame &&
              strncmp(op, ".cfi_", 5U) == 0)) {
-            /* GNU x86 Linux VDSO/entry defaults to real .eh_frame CFI,
-             * whereas the independent .cfi_sections .debug_frame test
-             * keeps the original full-width CIE/FDE representation.
-             * Preserve legacy non-x86 minimal boundary tracking until
-             * each target gains separately validated DWARF semantics. */
+            /* Every enabled backend must emit real .eh_frame records;
+             * silent CFI boundary-only acceptance is not correctness. */
             if (as->target->cfi_implicit_eh_frame &&
                 !as->cfi_debug_frame && !as->cfi_eh_frame &&
                 strcmp(op, ".cfi_sections") != 0)
                 as->cfi_eh_frame = true;
-            return minias_cfi_directive(as, op, args, line);
+            return minias_cfi_directive(as,op,args,line);
         }
         if (!strcmp(op,".file") || !strcmp(op,".loc"))
             return minias_debug_directive(as,op,args,line);

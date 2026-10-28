@@ -25,6 +25,8 @@ static MiniAsCfiABI minias_cfi_abi(const MiniAs *as) {
     abi.stack_reg=as->target->cfi_stack_reg;
     abi.address_size=as->target->cfi_address_size;
     abi.negate_ra_opcode=as->target->cfi_negate_ra_opcode;
+    abi.initial_cfa_offset=as->target->cfi_initial_cfa_offset;
+    abi.initial_ra_saved=as->target->cfi_initial_ra_saved;
     if(as->target->resolve_cfi_abi!=NULL)
         as->target->resolve_cfi_abi(as,&abi);
     return abi;
@@ -344,7 +346,8 @@ bool minias_cfi_directive(MiniAs *as,const char *op,
         proc->cfa_offset=saved;
         proc->cfa_known=known;
         --proc->state_depth;
-    } else if (!strcmp(op,".cfi_window_save") && !*args &&
+    } else if ((!strcmp(op,".cfi_window_save") ||
+                !strcmp(op,".cfi_negate_ra_state")) && !*args &&
                minias_cfi_abi(as).negate_ra_opcode!=0U) {
         kind=CFI_NEGATE_RA;
     } else goto bad;
@@ -474,33 +477,36 @@ static bool encode_cfi(MiniAs *as,int sec,const MiniAsCfiOp *op) {
 }
 
 
-/* One Common x86 SysV .eh_frame CIE. Other targets continue to require
- * independently validated ABI/encoding profiles instead of fake no-ops.
- * GNU GAS's zR CIE uses pcrel/sdata4 (0x1b) FDE initial locations. */
-static bool emit_eh_cie(MiniAs *as,int section,bool simple,bool signal,
+/* GNU DWARF32 zR CIE: one engine for every Target psABI.
+ * Only TargetInfo specifies initial CFA/RA policy and relocation mapping;
+ * CFI bytes, CIE variant reuse and anchored FDEs remain Common-owned. */
+static bool emit_eh_cie(MiniAs *as,int sec,bool simple,bool signal,
                         size_t *cie_begin) {
-    size_t base=as->sections[(size_t)section].size;
-    *cie_begin=base;
-    if(!put32(as,section,0U) || !put32(as,section,0U) ||
-       !put8(as,section,1U) ||
-       !put8(as,section,'z') || !put8(as,section,'R') ||
-       (signal && !put8(as,section,'S')) ||
-       !put8(as,section,0U) ||
-       !uleb(as,section,minias_cfi_abi(as).code_align) ||
-       !sleb(as,section,minias_cfi_abi(as).data_align) ||
-       !put8(as,section,(uint8_t)minias_cfi_abi(as).return_reg) ||
-       !uleb(as,section,1U) || !put8(as,section,0x1bU))return false;
+    MiniAsCfiABI abi=minias_cfi_abi(as);
+    size_t begin=as->sections[(size_t)sec].size;
+    *cie_begin=begin;
+    if(abi.code_align==0U || abi.data_align>=0 ||
+       abi.return_reg>255U || abi.address_size==0U)return false;
+    if(!put32(as,sec,0U) || !put32(as,sec,0U) ||
+       !put8(as,sec,1U) ||
+       !put8(as,sec,'z') || !put8(as,sec,'R') ||
+       (signal && !put8(as,sec,'S')) || !put8(as,sec,0U) ||
+       !uleb(as,sec,abi.code_align) || !sleb(as,sec,abi.data_align) ||
+       !put8(as,sec,(uint8_t)abi.return_reg) ||
+       !uleb(as,sec,1U) || !put8(as,sec,0x1bU))return false;
     if(!simple) {
-        unsigned reg=minias_cfi_abi(as).return_reg;
-        if(reg>=64U || minias_cfi_abi(as).stack_reg!=7U ||
-           minias_cfi_abi(as).data_align!=-8 ||
-           !put8(as,section,0x0cU) ||
-           !uleb(as,section,minias_cfi_abi(as).stack_reg) ||
-           !uleb(as,section,8U) ||
-           !put8(as,section,(uint8_t)(0x80U|reg)) ||
-           !uleb(as,section,1U))return false;
+        if(!put8(as,sec,0x0cU) ||
+           !uleb(as,sec,abi.stack_reg) ||
+           !uleb(as,sec,abi.initial_cfa_offset))return false;
+        if(abi.initial_ra_saved) {
+            unsigned magnitude=(unsigned)(-abi.data_align);
+            if(abi.return_reg>=64U || magnitude==0U ||
+               abi.initial_cfa_offset%magnitude!=0U ||
+               !put8(as,sec,(uint8_t)(0x80U|abi.return_reg)) ||
+               !uleb(as,sec,abi.initial_cfa_offset/magnitude))return false;
+        }
     }
-    return finish_length(as,section,base);
+    return finish_length(as,sec,begin);
 }
 
 bool minias_cfi_emit(MiniAs *as) {
@@ -512,12 +518,15 @@ bool minias_cfi_emit(MiniAs *as) {
     size_t cie_offset[2][2]={{0U,0U},{0U,0U}};
     if((!as->cfi_debug_frame && !eh) || as->cfi_proc_count==0U)
         return true;
-    if(eh && !as->target->cfi_implicit_eh_frame) {
+    if(eh && (!as->target->cfi_implicit_eh_frame ||
+              minias_cfi_abi(as).address_size!=(as->output_elf32?4U:8U) ||
+              as->target->fixup_relocation_type(MINIAS_FIXUP_PREL32,4U)==0U)) {
         minias_set_error(as,"unsupported-target-eh-frame");
         return false;
     }
     section=minias_ensure_section(as,eh?".eh_frame":".debug_frame",
-        MINIAS_SHT_PROGBITS,eh?MINIAS_SHF_ALLOC:0U,8U);
+        MINIAS_SHT_PROGBITS,eh?MINIAS_SHF_ALLOC:0U,
+        eh?minias_cfi_abi(as).address_size:8U);
     if(section<0)return false;
     data=&as->sections[(size_t)section];
     if(!eh) {
@@ -607,7 +616,10 @@ bool minias_cfi_emit(MiniAs *as) {
          * relative-to-FDE padding is insufficient when a simple CIE
          * occupies 20 bytes, leaving the next FDE at offset 0x14. */
         if(eh) {
-            while((as->sections[(size_t)section].size&7U)!=0U)
+            unsigned align=minias_cfi_abi(as).address_size;
+            if(align==0U || (align&(align-1U))!=0U)return false;
+            while((as->sections[(size_t)section].size&
+                   (size_t)(align-1U))!=0U)
                 if(!put8(as,section,0U))return false;
         }
         if(!finish_length(as,section,base))return false;

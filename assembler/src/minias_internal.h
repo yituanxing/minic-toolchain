@@ -556,6 +556,8 @@ typedef struct MiniAsCfiABI {
     unsigned stack_reg;
     unsigned address_size;
     unsigned negate_ra_opcode;
+    unsigned initial_cfa_offset;
+    bool initial_ra_saved;
 } MiniAsCfiABI;
 
 typedef struct MiniAsTargetOps {
@@ -613,6 +615,7 @@ typedef struct MiniAsTargetOps {
     unsigned cfi_address_size;
     unsigned cfi_negate_ra_opcode;
     unsigned cfi_initial_cfa_offset;
+    bool cfi_initial_ra_saved;
     void (*resolve_cfi_abi)(const MiniAs *, MiniAsCfiABI *);
     /* GNU assembler directive dialect belongs to TargetInfo, not Common. */
     unsigned default_exec_alignment; /* zero: 4; x86 GNU .text has alignment 1 */

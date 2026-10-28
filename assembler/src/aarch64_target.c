@@ -4784,6 +4784,7 @@ static const MiniAsTargetOps ops = {
     .dot_relative_fixup = MINIAS_FIXUP_PREL32,
     .inst_directive_width = 4U,
     .supports_literal_pools = true,
+    .cfi_implicit_eh_frame = true,
     .cfi_code_align = 4U,
     .cfi_data_align = -8,
     .cfi_return_reg = 30U,
