@@ -2611,10 +2611,11 @@ static bool parse_symbol_difference(const char *text,
  * including forward local labels from ARM64 exception tables. This is
  * Common section arithmetic, not an ISA-specific relocation opcode. */
 static bool parse_symbol_difference_divisor(const char *text,
-        MiniAsSymbolExpr *lhs,MiniAsSymbolExpr *rhs,uint64_t *divisor) {
-    char *copy=minias_strdup(text),*p,*slash=NULL;
+        MiniAsSymbolExpr *lhs,MiniAsSymbolExpr *rhs,uint64_t *divisor,
+        bool *arithmetic_shift) {
+    char *copy=minias_strdup(text),*p,*operator_at=NULL;
     unsigned depth=0U;
-    bool ok=false;
+    bool ok=false,shift=false;
     uint64_t n;
     if(!copy)return false;
     for(p=copy;*p;++p) {
@@ -2622,18 +2623,30 @@ static bool parse_symbol_difference_divisor(const char *text,
         else if(*p==')') {
             if(!depth)goto done;
             --depth;
-        }else if(*p=='/' && depth==0U) {
-            if(slash)goto done;
-            slash=p;
+        }else if(depth==0U && *p=='/') {
+            if(operator_at)goto done;
+            operator_at=p;
+        }else if(depth==0U && p[0]=='>' && p[1]=='>') {
+            if(operator_at)goto done;
+            operator_at=p;shift=true;++p;
         }
     }
-    if(depth || !slash)goto done;
-    *slash='\0';
-    if(parse_u64(minias_trim(slash+1U),&n) && n>0U &&
-       n<=(uint64_t)INT64_MAX &&
-       parse_symbol_difference(strip_outer_parens(minias_trim(copy)),
+    if(depth || !operator_at)goto done;
+    *operator_at='\0';
+    if(!parse_u64(minias_trim(operator_at+(shift?2U:1U)),&n))
+        goto done;
+    /* Signed >>5 is arithmetic floor division by 32; unlike /32,
+     * negative non-multiples round toward minus infinity. */
+    if(shift) {
+        if(n>=63U)goto done;
+        *divisor=UINT64_C(1)<<n;
+    }else {
+        if(n==0U || n>(uint64_t)INT64_MAX)goto done;
+        *divisor=n;
+    }
+    if(parse_symbol_difference(strip_outer_parens(minias_trim(copy)),
                                lhs,rhs)) {
-        *divisor=n;ok=true;
+        *arithmetic_shift=shift;ok=true;
     }
 done:
     free(copy);return ok;
@@ -2918,6 +2931,7 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
                 const char *trimmed = minias_trim(cursor);
                 MiniAsSymbolExpr rhs_expr;
                 uint64_t divisor;
+                bool arithmetic_shift=false;
                 bool supported =
                     ((width == 2U || width == 4U || width == 8U) &&
                      parse_data_symbol_addend(trimmed, &expr)) ||
@@ -2929,7 +2943,7 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
                     ((width == 1U || width == 2U || width == 4U || width == 8U) &&
                      (parse_symbol_difference(trimmed, &expr, &rhs_expr) ||
                       parse_symbol_difference_divisor(trimmed,&expr,
-                                                      &rhs_expr,&divisor)));
+                              &rhs_expr,&divisor,&arithmetic_shift)));
 
                 if (!supported) {
                     minias_set_error(as,
@@ -3232,7 +3246,8 @@ static bool emit_symbol_difference(MiniAs *as,
 static bool emit_symbol_difference_divided(MiniAs *as,
         const MiniAsStmt *stmt,unsigned int width,
         const MiniAsSymbolExpr *lhs_expr,
-        const MiniAsSymbolExpr *rhs_expr,uint64_t divisor) {
+        const MiniAsSymbolExpr *rhs_expr,uint64_t divisor,
+        bool arithmetic_shift) {
     MiniAsSymbol *lhs=minias_get_symbol(as,lhs_expr->name,false);
     MiniAsSymbol *rhs=minias_get_symbol(as,rhs_expr->name,false);
     int64_t left,right,diff,quotient;
@@ -3254,6 +3269,8 @@ static bool emit_symbol_difference_divided(MiniAs *as,
         return false;
     }
     quotient=diff/(int64_t)divisor;
+    if(arithmetic_shift && diff<0 && diff%(int64_t)divisor!=0)
+        --quotient;
     for(i=0U;i<width;++i)
         bytes[i]=(unsigned char)((uint64_t)quotient>>(8U*i));
     return minias_section_append(as,stmt->section,bytes,width);
@@ -3405,6 +3422,7 @@ static bool emit_data_stmt(MiniAs *as, const MiniAsStmt *stmt) {
             {
                 MiniAsSymbolExpr rhs_expr;
                 uint64_t divisor;
+                bool arithmetic_shift=false;
                 if ((width == 2U || width == 4U || width == 8U) &&
                     parse_symbol_minus_dot(trimmed, &expr)) {
                     if (!emit_symbol_minus_dot(as,
@@ -3431,9 +3449,9 @@ static bool emit_data_stmt(MiniAs *as, const MiniAsStmt *stmt) {
                 } else if ((width == 1U || width == 2U || width == 4U ||
                             width == 8U) &&
                            parse_symbol_difference_divisor(trimmed,&expr,
-                                                           &rhs_expr,&divisor)) {
+                                  &rhs_expr,&divisor,&arithmetic_shift)) {
                     if(!emit_symbol_difference_divided(as,stmt,width,
-                              &expr,&rhs_expr,divisor)) {
+                              &expr,&rhs_expr,divisor,arithmetic_shift)) {
                         free(copy);return false;
                     }
                 } else if ((width == 1U || width == 2U || width == 4U ||

@@ -2877,3 +2877,33 @@ for target in x86_64 loongarch64; do
  cmp "$work/$target-signed-mini.bin" "$work/$target-signed-gnu.bin"
 done
 echo 'MINIAS_COMMON_SIGNED_ABSOLUTE=PASS GNU_x86_Loong_signed_equ_mutable_set'
+
+# Identical 64-bit GNU GAS shifted same-section symbol differences
+# across x86 and Loong, including negative non-multiple floor rounding.
+cat > "$work/gnu-forward-shifted-diff.s" <<'GNU_SHIFT_DIFF'
+.data
+start:
+.byte 1
+.space 32
+.long ((end - start) >> 5)
+.long ((start - end) >> 5)
+end:
+.long ((forward_end-forward_start) >> 5)
+forward_start:
+.space 64
+forward_end:
+GNU_SHIFT_DIFF
+for target in x86_64 loongarch64; do
+ "$MINIAS" --target="$target" -o "$work/$target-diffshift-mini.o" "$work/gnu-forward-shifted-diff.s"
+ if [ "$target" = x86_64 ]; then
+  as --64 -o "$work/$target-diffshift-gnu.o" "$work/gnu-forward-shifted-diff.s"
+  objcopy -j .data -O binary "$work/$target-diffshift-mini.o" "$work/$target-diffshift-mini.bin"
+  objcopy -j .data -O binary "$work/$target-diffshift-gnu.o" "$work/$target-diffshift-gnu.bin"
+ else
+  "$LOONGAS" -mabi=lp64d -o "$work/$target-diffshift-gnu.o" "$work/gnu-forward-shifted-diff.s"
+  "$LOONGCOPY" -j .data -O binary "$work/$target-diffshift-mini.o" "$work/$target-diffshift-mini.bin"
+  "$LOONGCOPY" -j .data -O binary "$work/$target-diffshift-gnu.o" "$work/$target-diffshift-gnu.bin"
+ fi
+ cmp "$work/$target-diffshift-mini.bin" "$work/$target-diffshift-gnu.bin"
+done
+echo 'MINIAS_COMMON_FORWARD_SYMBOL_SHIFT=PASS GNU_x86_Loong_data_bytes'

@@ -2356,3 +2356,26 @@ A64_SIGNED_SYM
 "$AARCH64_OBJCOPY" -j .data -O binary "$work/a64-signed-gnu.o" "$work/a64-signed-gnu.bin"
 cmp "$work/a64-signed-mini.bin" "$work/a64-signed-gnu.bin"
 echo 'MINIAS_COMMON_SIGNED_ABSOLUTE_A64=PASS GNU_mutable_set_equ_bytes'
+
+# GNU kernel kuser32 emits ((__kuser_helper_end - __kuser_helper_start)
+# >> 5). Preserve signed arithmetic right-shift for NEGATIVE differences,
+# not a truncating /32 approximation; symbols may be forward references.
+cat > "$work/a64-forward-shifted-diff.s" <<'A64_SHIFTED_DIFF'
+.data
+__kuser_helper_start:
+.byte 1
+.space 32
+.word ((__kuser_helper_end - __kuser_helper_start) >> 5)
+.word ((__kuser_helper_start - __kuser_helper_end) >> 5)
+__kuser_helper_end:
+.word ((forward_end - forward_start) >> 5)
+forward_start:
+.space 64
+forward_end:
+A64_SHIFTED_DIFF
+"$MINIAS" --target=aarch64 -o "$work/a64-diffshift-mini.o" "$work/a64-forward-shifted-diff.s"
+"$AARCH64_AS" -o "$work/a64-diffshift-gnu.o" "$work/a64-forward-shifted-diff.s"
+"$AARCH64_OBJCOPY" -j .data -O binary "$work/a64-diffshift-mini.o" "$work/a64-diffshift-mini.bin"
+"$AARCH64_OBJCOPY" -j .data -O binary "$work/a64-diffshift-gnu.o" "$work/a64-diffshift-gnu.bin"
+cmp "$work/a64-diffshift-mini.bin" "$work/a64-diffshift-gnu.bin"
+echo 'MINIAS_COMMON_FORWARD_SYMBOL_SHIFT_A64=PASS GNU_32b_forward_negative_floor'
