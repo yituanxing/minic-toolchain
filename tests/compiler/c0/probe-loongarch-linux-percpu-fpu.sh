@@ -80,7 +80,12 @@ void native_kernel_fpu_reset(void) {
  __asm__ __volatile__("movgr2fcsr $fcsr0, %0" : : "r"(0));
 }
 SRC
-"$mini" --target=loongarch64-linux -S "$dir/percpu.i" -o "$dir/mini.s"
+if ! MINIC_CORE_FAILURE_CENSUS=1 MINIC_M1_TRACE=1 MINIC_BACKEND_CENSUS=1 \
+    "$mini" --target=loongarch64-linux -S "$dir/percpu.i" -o "$dir/mini.s" > "$dir/output" 2>&1; then
+    echo "LOONG_PERCPU_FULL_FIXTURE_BACKEND_FRONTIER=FAIL" >&2
+    grep -E 'MINIC_BACKEND_REJECT|MINIC_M8_OPCODE_REJECT|MINIC_CORE_FUNCTION_FAILURE|MINIC_BACKEND_ASM_FORM|error:' "$dir/output" | tail -35 >&2 || :
+    exit 1
+fi
 for op in ldx.b ldx.h ldx.w ldx.d stx.b stx.h stx.w stx.d \
           amadd.w amadd.d amand.w amand.d amor.w amor.d movgr2fcsr; do
   grep -Fq "$op " "$dir/mini.s"
