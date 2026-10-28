@@ -121,7 +121,7 @@ entry_x:
     cmpq $apic_physflat, apic(%rip)
     cmpq $truncate_bdev_range, 72(%rdi)
     cmpq $shash_no_setkey, -48(%r14)
-    movq $.LC4, x86_pmu(%rip)
+    movq $ext_global, x86_pmu(%rip)
     movq $pt_attr_groups, pt_pmu+40(%rip)
     movq $pci_mmcfg, raw_pci_ext_ops(%rip)
     addq $ext_global, 16(%rbx)
