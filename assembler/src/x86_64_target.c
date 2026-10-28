@@ -926,6 +926,61 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             goto done;
         }
     }
+    /* GNU shift/rotate memory forms share Group-2 ModR/M, displacement
+     * parsing and ELF fixup with existing typed Group-1 memory instructions.
+     * Opcode chooses D0/D1 for count 1, D2/D3 for CL and C0/C1 for
+     * imm8; only the target ISA owns size selection and group selector. */
+    {
+        unsigned group,bits;
+        if(x64_shift_descriptor(s->op,&group,&bits)) {
+            const char *operand=NULL;
+            uint64_t shift=1U;
+            bool imm=false,via_cl=false;
+            uint32_t base;
+            MiniAsMCMemory mem;
+            if(x64_args2(s->args,src,dst) &&
+               x64_is_mem_candidate(dst)) {
+                operand=dst;
+                if(!strcmp(src,"%cl"))via_cl=true;
+                else if(*src=='$') {
+                    if(!minias_eval_u64_expression(src+1U,&shift) ||
+                       shift>255U)goto invalid;
+                    imm=true;
+                }else goto invalid;
+            }else if(x64_is_mem_candidate(s->args) &&
+                      x64_parse_base_memory(s->args,&mem)) {
+                operand=s->args;
+                free(mem.symbol);
+            }
+            if(operand && x64_parse_base_memory(operand,&mem)) {
+                base=bits==8U?(via_cl?UINT32_C(0xd2):
+                       (imm && shift!=1U)?UINT32_C(0xc0):UINT32_C(0xd0)):
+                       via_cl?UINT32_C(0xd3):
+                       (imm && shift!=1U)?UINT32_C(0xc1):UINT32_C(0xd1);
+                m->opcode=((base==0xc0U || base==0xc1U)?
+                           X64_IMM_MEMORY:X64_REG_MEMORY);
+                m->count=m->opcode==X64_IMM_MEMORY?3U:2U;
+                m->encoding=base|(bits==16U?0x400U:
+                          bits==8U?0x200U:0U);
+                m->operands[0].kind=MINIAS_MC_REGISTER;
+                m->operands[0].reg=group;
+                m->operands[0].register_64=bits==64U;
+                m->operands[1].kind=MINIAS_MC_MEMORY;
+                m->operands[1].memory=malloc(sizeof(mem));
+                if(!m->operands[1].memory) {
+                    free(mem.symbol);free(m);
+                    minias_set_error(as,"out-of-memory:x86-shift-mem");
+                    return false;
+                }
+                *m->operands[1].memory=mem;
+                if(m->opcode==X64_IMM_MEMORY) {
+                    m->operands[2].kind=MINIAS_MC_IMMEDIATE;
+                    m->operands[2].immediate=shift;
+                }
+                goto done;
+            }
+        }
+    }
     /* Byte ALU variants and sign-extending MOV all remain target local. */
     if(x64_args2(s->args,src,dst)) {
         static const struct {const char *op;uint32_t opcode;} byteop[]={
@@ -1817,7 +1872,8 @@ static bool x64_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
             unsigned base=m->encoding&UINT32_C(0xff);
             unsigned extra=m->opcode==X64_IMM_MEMORY?
                 (base==0x83U || base==0xc6U || base==0x80U ||
-                 base==0xf6U || base==0xbaU || base==0x6bU?1U:
+                 base==0xf6U || base==0xbaU || base==0x6bU ||
+                 base==0xc0U || base==0xc1U?1U:
                   (m->encoding&0x400U)?2U:4U):0U;
             *size=extra+((m->encoding&0x100U)?1U:0U) +
                    ((m->encoding&0x2000U)?1U:0U) +
@@ -2162,7 +2218,8 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
             unsigned base=m->encoding&UINT32_C(0xff);
             unsigned extra=m->opcode==X64_IMM_MEMORY?
                 (base==0x83U || base==0xc6U || base==0x80U ||
-                 base==0xf6U || base==0xbaU || base==0x6bU?1U:
+                 base==0xf6U || base==0xbaU || base==0x6bU ||
+                 base==0xc0U || base==0xc1U?1U:
                   (m->encoding&0x400U)?2U:4U):0U;
             uint32_t immediate=extra?
                 (uint32_t)m->operands[2].immediate:0U;

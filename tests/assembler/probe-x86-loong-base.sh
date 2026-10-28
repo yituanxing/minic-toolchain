@@ -211,6 +211,17 @@ entry_x:
     pop (%rsp)
     pop 32(%rsp)
     push 8(%rbx)
+    # GNU Group-2 memory shifts reuse ISA ModR/M with ELF relocations.
+    sall $3, 8(%rax)
+    salq $5, ext_global(%rip)
+    salw $7, 12(%r10)
+    salb $2, (%rbx)
+    shll %cl, (%rax)
+    shrq %cl, ext_global+16(%rip)
+    sarl $1, -16(%rbp)
+    salq (%r11)
+    rorl $4, 24(%rsp)
+    sarw %cl, (%rdx)
     # GNU Linux >48-character symbol displacements and SHLD/SHRD group.
     movq __tracepoint_x86_fpu_xstate_check_failed+72(%rip), %rbx
     movq __tracepoint_intel_frontbuffer_invalidate+72(%rip), %r8
@@ -1106,6 +1117,10 @@ for bad in            'popcntq %eax,%rax' \
            'inb $256,%al' \
            'outb %al,$256' \
            'outw %eax,$15' \
+           'sall $256,(%rax)' \
+           'salq $1,%eax' \
+           'sarl %eax,(%rbx)' \
+           'shrw %r8b,(%rcx)' \
            'adcl %rax,%eax' \
            'negb %eax' \
            'negw %eax' \
