@@ -2816,3 +2816,26 @@ if "$MINIAS" --target=aarch64 -o "$work/a64-trampoline-invalid.o" "$work/a64-tra
  echo 'cross-section ADD immediate incorrectly folded' >&2;exit 1
 fi
 echo 'MINIAS_A64_COMMON_TRAMPOLINE_DIFF=PASS GNU_3_ALU_label_delta_and_cross_section_fail_closed'
+
+
+# Regression from real Linux arch/arm64/kvm/hyp/hyp-entry.S: the last
+# subsection-0 .org is zero-size at the same absolute address where a
+# source-earlier subsection-1 .inst begins. Stable GNU output order must
+# compare subsection IDs at the boundary, not only lexical source order.
+cat > "$work/a64-subsection-origin.s" <<'A64_SUBSECTION_ORIGIN'
+.text
+.subsection 1
+.inst 0xd503201f
+.subsection 0
+.Lstart:
+.space 4
+1: .org .Lstart + 4
+.org 1b
+A64_SUBSECTION_ORIGIN
+"$MINIAS" --target=aarch64 -o "$work/a64-subsection-origin-mini.o" "$work/a64-subsection-origin.s"
+"$AARCH64_AS" -o "$work/a64-subsection-origin-gnu.o" "$work/a64-subsection-origin.s"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-subsection-origin-mini.o" "$work/a64-subsection-origin-mini.bin"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-subsection-origin-gnu.o" "$work/a64-subsection-origin-gnu.bin"
+cmp "$work/a64-subsection-origin-mini.bin" "$work/a64-subsection-origin-gnu.bin"
+test "$(wc -c < "$work/a64-subsection-origin-mini.bin")" -eq 8
+echo 'MINIAS_COMMON_SUBSECTION_BOUNDARY_A64=PASS GNU_zero_size_org_before_EOF_subsection1_inst'
