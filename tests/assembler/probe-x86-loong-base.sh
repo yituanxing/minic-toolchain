@@ -3253,3 +3253,30 @@ if "$MINIAS" --target=x86_64 -o "$work/x86-cross-delta-bad.o" "$work/x86-cross-d
  echo "cross-section subtraction incorrectly folded to absolute" >&2; exit 1
 fi
 echo 'MINIAS_X86_FORWARD_DELTA=PASS GNU_IMM32_PUSHi_AND_same_section_strict'
+
+# ELF64 may contain a real 32-bit EFI transition stub. GNU emits
+# pushl $16; pushl %ebp; lret without changing the outer ELF machine.
+cat > "$work/x86-efi-code32.s" <<'X86_EFI_CODE32'
+.text
+.globl efi_mixed_mode
+efi_mixed_mode:
+pushq $16
+.code32
+efi_thunk:
+pushl $(2*8)
+pushl %ebp
+lret
+.code64
+ret
+X86_EFI_CODE32
+"$MINIAS" --target=x86_64 -o "$work/x86-efi-code32-mini.o" "$work/x86-efi-code32.s"
+as --64 -o "$work/x86-efi-code32-gnu.o" "$work/x86-efi-code32.s"
+objcopy -j .text -O binary "$work/x86-efi-code32-mini.o" "$work/x86-efi-code32-mini.bin"
+objcopy -j .text -O binary "$work/x86-efi-code32-gnu.o" "$work/x86-efi-code32-gnu.bin"
+cmp "$work/x86-efi-code32-mini.bin" "$work/x86-efi-code32-gnu.bin"
+readelf -h "$work/x86-efi-code32-mini.o" | grep -q 'ELF64'
+printf '.text\n.code32\nmovq %%rax, %%rbx\n' >"$work/x86-efi-code32-invalid.s"
+if "$MINIAS" --target=x86_64 -o "$work/x86-efi-code32-invalid.o" "$work/x86-efi-code32-invalid.s" >/dev/null 2>&1; then
+ echo 'unsupported IA32 long-mode-only encoding accepted' >&2; exit 1
+fi
+echo 'MINIAS_X86_EFI_CODE32=PASS GNU_ELF64_mixed_mode_bytes_and_strict_unsupported'
