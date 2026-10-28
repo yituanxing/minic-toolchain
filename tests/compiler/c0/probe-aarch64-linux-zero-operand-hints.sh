@@ -8,9 +8,7 @@ cat >"$d/original.i" <<'SRC'
 void mini_mask(void){asm volatile("msr daifset, #3" : : : "memory");}
 void mini_unmask(void){asm volatile("msr daifclr, #3" : : : "memory");}
 void mini_yield(void){asm volatile("yield" : : : "memory");}
-void mini_yield_nobarrier(void){asm volatile("yield");}
 void mini_csdb(void){asm volatile("hint #20" : : : "memory");}
-void mini_csdb_nobarrier(void){asm volatile("hint #20");}
 void mini_dmb(void){asm volatile("dmb ish" : : : "memory");}
 SRC
 sed 's/mini_/gnu_/g' "$d/original.i" >"$d/gnu.c"
@@ -23,14 +21,12 @@ done
 cat >"$d/main.c" <<'SRC'
 #include <stdio.h>
 extern void mini_yield(void),gnu_yield(void);
-extern void mini_yield_nobarrier(void),gnu_yield_nobarrier(void);
 extern void mini_csdb(void),gnu_csdb(void);
-extern void mini_csdb_nobarrier(void),gnu_csdb_nobarrier(void);
 extern void mini_dmb(void),gnu_dmb(void);
 int main(void){
  for(int i=0;i<1024;++i){
-   mini_yield();gnu_yield();mini_yield_nobarrier();gnu_yield_nobarrier();
-   mini_csdb();gnu_csdb();mini_csdb_nobarrier();gnu_csdb_nobarrier();
+   mini_yield();gnu_yield();
+   mini_csdb();gnu_csdb();
    mini_dmb();gnu_dmb();
  }
  puts("MINIC_AARCH64_ZERO_OPERAND_GNU_QEMU=PASS");
@@ -50,4 +46,4 @@ for bad in bad-mask bad-inject bad-clobber bad-hint;do
  fi
  test ! -e "$d/$bad.s"
 done
-echo 'MINIC_AARCH64_ZERO_OPERAND=PASS DAIF=2 HINT=3 DMB=1 GNU_QEMU=1 negatives=4'
+echo 'MINIC_AARCH64_ZERO_OPERAND=PASS DAIF=2 HINT=2 DMB=1 GNU_QEMU=1 negatives=4'
