@@ -273,10 +273,20 @@ bool minic_loongarch64_emit_abi_instruction(
                             return false;
                     }
                     if (immediate_index != SIZE_MAX) {
-                        if (immediate_index >= count ||
-                            !loongarch_builtin_immediate_value(
-                                fn, fn->call_arguments[
-                                    begin + immediate_index].value.value_id, &imm) ||
+                        const MinicCoreCallArgument *immediate_arg =
+                            immediate_index < count ?
+                                &fn->call_arguments[begin + immediate_index] : NULL;
+                        /* The C argument was evaluated and scalar-snapshotted
+                         * correctly. Consume the Core source-constant fact
+                         * rather than treating the post-snapshot LOAD as
+                         * an arbitrary GPR CSR index. Exact CSR range remains
+                         * a LoongArch target policy, not a Core restriction. */
+                        if (immediate_arg == NULL ||
+                            immediate_arg->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
+                            !(immediate_arg->has_constant_integer
+                              ? (imm = immediate_arg->constant_integer_bits, true)
+                              : loongarch_builtin_immediate_value(
+                                    fn, immediate_arg->value.value_id, &imm)) ||
                             imm > 16383U)
                             return false;
                     }

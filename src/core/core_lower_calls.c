@@ -620,6 +620,22 @@ static MinicCoreLowerStatus core_prepare_call_argument(
         !minic_type_equal(
             context->function->values[argument->value.value_id].type, type))
         return MINIC_CORE_LOWER_ERROR;
+    /* Preserve one immutable language fact before the ordinary Core
+     * evaluation-order snapshot. Do not let backends infer immediates from
+     * arbitrary LOAD/STORE aliases or skip call side-effect ordering.
+     * No target ISA or CSR identity belongs in this generic call path. */
+    argument->has_constant_integer = false;
+    argument->constant_integer_bits = 0U;
+    if (context->target != NULL && minic_type_is_integer(type)) {
+        MinicConstValue integer;
+        if (minic_const_eval_arithmetic_to_integer(
+                context->body->program, context->target, source,
+                type, &integer) &&
+            minic_type_equal(integer.type, type)) {
+            argument->has_constant_integer = true;
+            argument->constant_integer_bits = integer.bits;
+        }
+    }
     return minic_core_lower_internal_spill_scalar_value(
         context, call->span, type, argument->value.value_id,
         snapshot_object);

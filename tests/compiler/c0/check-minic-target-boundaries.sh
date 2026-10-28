@@ -98,6 +98,13 @@ has src/target/x86_64/asm_contract.c 'x86_linux_raw_cmpxchg_source('
 has src/target/x86_64/machine_asm.c 'emit_linux_raw_cmpxchg('
 lacks src/core/core_lower_asm_target.c 'cmpxchgb'
 
+# The immutable C integer argument fact survives universal Core call
+# argument snapshot. Only LoongArch machine code interprets it as CSR index.
+has src/core/core_ir.h 'has_constant_integer;'
+has src/core/core_lower_calls.c 'minic_const_eval_arithmetic_to_integer('
+has src/target/loongarch64/call_emit.c 'immediate_arg->has_constant_integer'
+lacks src/core/core_lower_calls.c '__builtin_loongarch_csrrd_w'
+
 # Four ISA families, five target profiles: one storage-shape owner, distinct
 # physical ABIs. RV32 must never inherit the 8-byte LP64 word policy.
 exists src/target/common/aggregate_shape.h

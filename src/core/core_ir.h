@@ -240,6 +240,13 @@ typedef struct MinicCoreCallArgument {
         MinicCoreValueId value_id;
         MinicCoreObjectId object_id;
     } value;
+    /* Source-proven C integer constant AFTER parameter conversion.
+     * Scalar argument snapshots may be spilled/reloaded for call ordering,
+     * so recovering this fact from a final LOAD SSA is not reliable.
+     * This fact is ABI/ISA-neutral: each target owns immediate constraints
+     * and whether a call consumes hardware immediates. */
+    bool has_constant_integer;
+    uint64_t constant_integer_bits;
 } MinicCoreCallArgument;
 
 typedef struct MinicCoreInlineAsmRegisterClobber {
