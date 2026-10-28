@@ -657,7 +657,7 @@ for bad_source in 'ldxr x0, [x1,#4]' 'stxr x0, x1, [x2]' \
                   'csel x0, w1, x2, eq' \
                   'csel sp, x1, x2, eq' \
                   'csinc x0, x1, x2, bad' \
-                  'mrs w0, sp_el0' 'msr tpidrro_el0, x0' \
+                  'mrs w0, sp_el0' 'msr clidr_el1, x0' \
                   'mrs x0, fake_el0' 'dmb #16' 'dmb invalid' \
                   'lsl x0, x1, #64' \
                   'lsr w0, w1, #-1' \
