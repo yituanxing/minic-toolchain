@@ -55,13 +55,13 @@ assert mod.all_asm_form_frontiers(
 assert mod.all_machine_opcode_frontiers("no trace","x86_64")==[]
 source_trace=(
     "CORE_FAST_TRACE stage=statement reason=lower-status "
-    "function=ns_ioctl kind=5 status=1 span=92:4 break_target=0\\n"
+    "function=ns_ioctl kind=5 status=1 span=92:4 break_target=0\n"
     "CORE_FAST_TRACE stage=statement reason=lower-status "
-    "function=ns_ioctl kind=5 status=1 span=92:4 break_target=0\\n"
+    "function=ns_ioctl kind=5 status=1 span=92:4 break_target=0\n"
     "CORE_FAST_TRACE stage=statement reason=unsupported-kind "
-    "function=tty_ioctl kind=17 span=1:1\\n"
+    "function=tty_ioctl kind=17 span=1:1\n"
     "CORE_FAST_TRACE stage=statement reason=unsupported-kind "
-    "function=bad.name kind=0\\n"
+    "function=bad.name kind=0\n"
 )
 assert mod.all_core_lower_trace_frontiers(source_trace)==[
     dict(function="ns_ioctl",stage="statement",reason="lower-status",kind="5",status="1"),

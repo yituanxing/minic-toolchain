@@ -67,7 +67,7 @@ def all_core_function_frontiers(stderr):
 
 # Collect source-to-Core failure context without conflating same-text
 # diagnostics with a proven target-neutral machine root cause.
-CORE_LOWER_TRACE = re.compile(r"^CORE_FAST_TRACE ([^\\r\\n]+)$", re.MULTILINE)
+CORE_LOWER_TRACE = re.compile(r"^CORE_FAST_TRACE ([^\r\n]+)$", re.MULTILINE)
 CORE_TRACE_FIELD = re.compile(r"([a-z_]+)=([A-Za-z0-9_.:-]+)")
 
 def all_core_lower_trace_frontiers(stderr):
