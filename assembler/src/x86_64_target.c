@@ -931,8 +931,8 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
              * typed ModR/M group opcode and PC32 ELF relocation. */
             {"faddl",UINT32_C(0xdc),0U},
             {"fmull",UINT32_C(0xdc),1U},
-            {"fsubrl",UINT32_C(0xdc),4U},
-            {"fsubl",UINT32_C(0xdc),5U},
+            {"fsubrl",UINT32_C(0xdc),5U},
+            {"fsubl",UINT32_C(0xdc),4U},
             {"fdivl",UINT32_C(0xdc),6U},
             {"fdivrl",UINT32_C(0xdc),7U},
             {"fstpl",UINT32_C(0xdd),3U},
