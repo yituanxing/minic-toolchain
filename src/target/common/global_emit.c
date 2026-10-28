@@ -3,6 +3,7 @@
 #include <inttypes.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 
 /* Private recursive bitfield helper is needed before its first invocation.
  * It is no longer an exported Common ABI endpoint. */
@@ -203,7 +204,7 @@ bool minic_multi_emit_zero_relocation_global(FILE *out, const MinicC0Program *pr
     size_t cursor = 0U, i, width;
     if (out == NULL || program == NULL || target == NULL || obj == NULL ||
         emit_relocation == NULL ||
-        !obj->is_zero_initialized || obj->initializer_count != 0U ||
+        obj->initializer_count != 0U ||
         obj->relocation_count == 0U ||
         (!minic_type_is_pointer(obj->type) &&
          !minic_type_is_array(obj->type) &&
@@ -896,6 +897,41 @@ bool minic_multi_emit_elf_symbol_visibility(FILE *out, MinicSymbolVisibility vis
            (directive != NULL && fprintf(out, "%s %s\n", directive, name) >= 0);
 }
 
+/* GNU original Linux named object sections are ELF metadata, not ISA ABI.
+ * Disallow arbitrary GAS directives/flags supplied by C attributes. */
+static bool minic_multi_elf_safe_section_name(const char *name) {
+    size_t i;
+    if (name == NULL || name[0] != '.' || name[1] == '\0') return false;
+    for (i = 0U; name[i] != '\0'; ++i) {
+        const char c = name[i];
+        if (i >= 255U ||
+            !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+              (c >= '0' && c <= '9') || c == '_' || c == '.' ||
+              c == '$' || c == '-'))
+            return false;
+    }
+    return true;
+}
+static bool minic_multi_emit_elf_global_section(FILE *out,
+    const MinicGlobalObject *obj, const char *fallback) {
+    if (out == NULL || obj == NULL || fallback == NULL) return false;
+    if (obj->section_name == NULL)
+        return fprintf(out, "%s\n", fallback) >= 0;
+    if (!minic_multi_elf_safe_section_name(obj->section_name))
+        return false;
+    return fprintf(out, ".section %s,\"%s\",@%s\n",
+        obj->section_name, obj->is_read_only ? "a" : "aw",
+        strncmp(obj->section_name, ".bss", 4U) == 0
+            ? "nobits" : "progbits") >= 0;
+}
+static bool minic_multi_emit_elf_global_binding(FILE *out,
+    const MinicGlobalObject *obj) {
+    if (out == NULL || obj == NULL) return false;
+    if (obj->is_internal) return !obj->is_weak;
+    return fprintf(out, "%s %s\n",
+        obj->is_weak ? ".weak" : ".globl", obj->name) >= 0;
+}
+
 bool minic_multi_emit_simple_global(FILE *out, const MinicC0Program *program,
                                const MinicTargetInfo *target,
                                const MinicGlobalObject *obj,
@@ -904,10 +940,8 @@ bool minic_multi_emit_simple_global(FILE *out, const MinicC0Program *program,
     size_t storage_size, align, width, scalar_align, i;
     const char *directive;
     if (obj == NULL || obj->name == NULL || !obj->name[0] ||
-        obj->is_weak ||
         (obj->visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT &&
          minic_multi_elf_visibility_directive(obj->visibility) == NULL) ||
-        obj->section_name != NULL ||
         obj->alias_target != MINIC_GLOBAL_OBJECT_INVALID ||
         !minic_data_layout_global_object(target->data_layout, program, obj,
                                          &storage_size, &align)) return false;
@@ -925,21 +959,22 @@ bool minic_multi_emit_simple_global(FILE *out, const MinicC0Program *program,
         obj->relocation_count == 0U &&
         obj->union_selection_count == 0U) {
         const char *section = obj->is_read_only ? ".section .rodata" : ".bss";
-        return fprintf(out, "%s\n", section) >= 0 &&
-            (obj->is_internal ||
-             fprintf(out, ".globl %s\n", obj->name) >= 0) &&
+        return minic_multi_emit_elf_global_section(out, obj, section) &&
+            minic_multi_emit_elf_global_binding(out, obj) &&
             fprintf(out, "  .balign %zu\n.type %s,@object\n%s:\n"
                          "  .zero %zu\n.size %s,%zu\n",
                     align, obj->name, obj->name, storage_size,
                     obj->name, storage_size) >= 0;
     }
-    if (obj->is_zero_initialized && obj->initializer_count == 0U &&
-        obj->relocation_count != 0U &&
-        (minic_type_is_pointer(obj->type) || minic_type_is_array(obj->type))) {
+    if (obj->initializer_count == 0U && obj->relocation_count != 0U &&
+        (minic_type_is_pointer(obj->type) || minic_type_is_array(obj->type) ||
+         minic_type_is_record(obj->type) ||
+         (minic_type_is_integer(obj->type) &&
+          storage_size == target->data_layout->pointer_size))) {
         const char *const section = obj->is_read_only
             ? ".section .data.rel.ro" : ".data";
-        if (fprintf(out, "%s\n", section) < 0 ||
-            (!obj->is_internal && fprintf(out, ".globl %s\n", obj->name) < 0) ||
+        if (!minic_multi_emit_elf_global_section(out, obj, section) ||
+            !minic_multi_emit_elf_global_binding(out, obj) ||
             fprintf(out, "  .balign %zu\n.type %s,@object\n%s:\n",
                     align, obj->name, obj->name) < 0 ||
             !minic_multi_emit_zero_relocation_global(out, program, target,
@@ -964,9 +999,8 @@ bool minic_multi_emit_simple_global(FILE *out, const MinicC0Program *program,
         if (all_zero) {
             const char *const section = obj->is_read_only
                 ? ".section .rodata" : ".bss";
-            return fprintf(out, "%s\n", section) >= 0 &&
-                (obj->is_internal ||
-                 fprintf(out, ".globl %s\n", obj->name) >= 0) &&
+            return minic_multi_emit_elf_global_section(out, obj, section) &&
+                minic_multi_emit_elf_global_binding(out, obj) &&
                 fprintf(out, "  .balign %zu\n.type %s,@object\n%s:\n"
                              "  .zero %zu\n.size %s,%zu\n",
                         align, obj->name, obj->name,
@@ -979,12 +1013,12 @@ bool minic_multi_emit_simple_global(FILE *out, const MinicC0Program *program,
         const bool recursive = minic_multi_record_initializer_needs_recursive(
             record, obj);
         if (record == NULL) return false;
-        if (fprintf(out, "%s\n", obj->is_read_only
-                        ? (obj->relocation_count != 0U
-                           ? ".section .data.rel.ro" : ".section .rodata")
-                        : ".data") < 0 ||
-            (!obj->is_internal &&
-             fprintf(out, ".globl %s\n", obj->name) < 0) ||
+        if (!minic_multi_emit_elf_global_section(
+                out, obj, obj->is_read_only
+                    ? (obj->relocation_count != 0U
+                       ? ".section .data.rel.ro" : ".section .rodata")
+                    : ".data") ||
+            !minic_multi_emit_elf_global_binding(out, obj) ||
             fprintf(out, "  .balign %zu\n.type %s,@object\n%s:\n",
                     align, obj->name, obj->name) < 0 ||
             !(obj->flexible_array_initializer_count != 0U
@@ -1043,9 +1077,8 @@ bool minic_multi_emit_simple_global(FILE *out, const MinicC0Program *program,
                    ? ".section .data.rel.ro" : ".section .rodata") : ".data";
             if ((obj->initializer_count != 0U &&
                  obj->initializer_values == NULL) ||
-                fprintf(out, "%s\n", section) < 0 ||
-                (!obj->is_internal &&
-                 fprintf(out, ".globl %s\n", obj->name) < 0) ||
+                !minic_multi_emit_elf_global_section(out, obj, section) ||
+                !minic_multi_emit_elf_global_binding(out, obj) ||
                 fprintf(out, "  .balign %zu\n.type %s,@object\n%s:\n",
                         align, obj->name, obj->name) < 0 ||
                 !(array_of_records
@@ -1088,11 +1121,11 @@ bool minic_multi_emit_simple_global(FILE *out, const MinicC0Program *program,
     (void)scalar_align;
     directive = width == 1U ? ".byte" : width == 2U ? ".2byte" :
                 width == 4U ? ".4byte" : ".8byte";
-    if (fprintf(out, "%s\n", obj->is_read_only ? ".section .rodata" :
-                ((obj->is_zero_initialized || obj->is_tentative) &&
-                 obj->initializer_count == 0U ? ".bss" : ".data")) < 0)
-        return false;
-    if (!obj->is_internal && fprintf(out, ".globl %s\n", obj->name) < 0)
+    if (!minic_multi_emit_elf_global_section(
+            out, obj, obj->is_read_only ? ".section .rodata" :
+            ((obj->is_zero_initialized || obj->is_tentative) &&
+             obj->initializer_count == 0U ? ".bss" : ".data")) ||
+        !minic_multi_emit_elf_global_binding(out, obj))
         return false;
     if (fprintf(out, "  .balign %zu\n.type %s,@object\n%s:\n",
                 align, obj->name, obj->name) < 0) return false;
