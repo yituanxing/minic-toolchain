@@ -2846,6 +2846,9 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
               !strcmp(op,"bsl") || !strcmp(op,"bit") ||
               !strcmp(op,"bif") ||
               (!strcmp(op,"add") && args[0]=='v') ||
+              !strcmp(op,"cmeq") || !strcmp(op,"cmgt") ||
+              !strcmp(op,"cmge") || !strcmp(op,"cmhi") ||
+              !strcmp(op,"cmhs") || !strcmp(op,"cmtst") ||
               !strcmp(op,"trn1") || !strcmp(op,"trn2") ||
               !strcmp(op,"uzp1") || !strcmp(op,"uzp2") ||
               !strcmp(op,"zip1") || !strcmp(op,"zip2")) {
@@ -2860,6 +2863,14 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
             {"bit",UINT32_C(0x2ea01c00)},
             {"bif",UINT32_C(0x2ee01c00)},
             {"add",UINT32_C(0x0e208400)},
+            /* Existing typed three-register AdvSIMD emitter owns all six
+             * compare-register opcodes and a single size/Q checker. */
+            {"cmeq",UINT32_C(0x2e208c00)},
+            {"cmgt",UINT32_C(0x0e203400)},
+            {"cmge",UINT32_C(0x0e203c00)},
+            {"cmhi",UINT32_C(0x2e203400)},
+            {"cmhs",UINT32_C(0x2e203c00)},
+            {"cmtst",UINT32_C(0x0e208c00)},
             {"trn1",UINT32_C(0x0e002800)},
             {"trn2",UINT32_C(0x0e006800)},
             {"uzp1",UINT32_C(0x0e001800)},
@@ -2872,7 +2883,10 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
             bool permute=!strcmp(op,"trn1") || !strcmp(op,"trn2") ||
                          !strcmp(op,"uzp1") || !strcmp(op,"uzp2") ||
                          !strcmp(op,"zip1") || !strcmp(op,"zip2");
-            bool sized=permute || !strcmp(op,"add");
+            bool compare=!strcmp(op,"cmeq") || !strcmp(op,"cmgt") ||
+                         !strcmp(op,"cmge") || !strcmp(op,"cmhi") ||
+                         !strcmp(op,"cmhs") || !strcmp(op,"cmtst");
+            bool sized=permute || compare || !strcmp(op,"add");
             if(!a64_vector_view(tok[0],&rd,&da) ||
                !a64_vector_view(tok[1],&rn,&sa) ||
                !a64_vector_view(tok[2],&rm,&ta) ||
