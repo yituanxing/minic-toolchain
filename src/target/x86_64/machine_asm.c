@@ -234,52 +234,62 @@ static bool emit_linux_bitops(
            fputs("  movb %al, (%r10)\n",out)!=EOF;
 }
 
-/* Real Linux LOCKed INC/DEC with SMP patch table and hardware ZF.
- * Core transports two typed addresses and the memory side effect;
- * only this target emits the instruction and SETE. */
+/* One physical x86 owner for Linux unary and binary locked RMWcc.
+ * The original .smp_locks PREL32 entry, hardware locked write and final
+ * ZF/SF SETcc all remain machine-verified. No generic Core ISA new case. */
 static bool emit_linux_atomic_cc(
-    FILE *out,const MinicC0Program *program,const MinicTargetInfo *target,
-    const MinicCoreFunction *fn,const MinicX86Frame *frame,
-    const MinicCoreInstruction *ins,const MinicCoreInlineAsm *info) {
-    const MinicCoreStructuredInlineAsmOperand *b=
+    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, const MinicX86Frame *frame,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
+    const MinicCoreStructuredInlineAsmOperand *b =
         ins->value.structured_inline_asm.operands;
-    const MinicX86AtomicCC form=minic_x86_64_atomic_cc_form(
-        info->template_text,info->template_length);
-    const char *op=form==MINIC_X86_ATOMIC_CC_DEC32?"decl":
-                   form==MINIC_X86_ATOMIC_CC_INC32?"incl":
-                   form==MINIC_X86_ATOMIC_CC_DEC64?"decq":
-                   form==MINIC_X86_ATOMIC_CC_INC64?"incq":NULL;
-    const size_t expected=(form==MINIC_X86_ATOMIC_CC_DEC32||
-                           form==MINIC_X86_ATOMIC_CC_INC32)?4U:8U;
-    MinicType mem,flag;
-    size_t bytes;
+    const MinicX86AtomicCC form = minic_x86_64_atomic_cc_form(
+        info->template_text, info->template_length);
+    const MinicX86AtomicCCDesc *d = minic_x86_64_atomic_cc_description(form);
+    const size_t n = d && d->has_value ? 3U : 2U;
+    MinicType mem, flag;
+    size_t width, i;
     bool sign;
-    if (!out||!program||!target||!fn||!frame||!b||!info||!op||
-        !info->is_volatile||info->is_goto||!info->has_memory_clobber||
-        info->register_clobber_count||
-        ins->value.structured_inline_asm.operand_count!=2U||
-        b[0].operand_index||b[1].operand_index!=1U||
-        b[0].kind!=MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE||
-        b[1].kind!=MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT||
-        b[0].has_fixed_register_binding||b[1].has_fixed_register_binding||
-        b[0].early_clobber||b[1].early_clobber||
-        b[0].value>=fn->value_count||b[1].value>=fn->value_count||
-        !minic_type_pointee(fn->values[b[0].value].type,&mem)||
-        !minic_type_pointee(fn->values[b[1].value].type,&flag)||
-        !minic_type_equal(flag,minic_type_bool())||
-        !minic_x86_64_scalar_width(program,target,mem,&bytes,&sign)||
-        bytes!=expected)
+    if (!out || !program || !target || !fn || !frame || !b || !info ||
+        !d || !info->is_volatile || info->is_goto ||
+        !info->has_memory_clobber || info->register_clobber_count ||
+        ins->value.structured_inline_asm.operand_count != n)
         return false;
-    return x86_value_load(out,frame,b[0].value,"%r11")&&
-           fputs("  .pushsection .smp_locks,\"a\"\n"
-                 "  .balign 4\n"
-                 "  .long 671f - .\n"
-                 "  .popsection\n"
-                 "671:\n",out)!=EOF&&
-           fprintf(out,"  lock; %s (%%r11)\n",op)>=0&&
-           fputs("  sete %al\n",out)!=EOF&&
-           x86_value_load(out,frame,b[1].value,"%r10")&&
-           fputs("  movb %al, (%r10)\n",out)!=EOF;
+    for (i = 0U; i < n; ++i)
+        if (b[i].operand_index != i || b[i].value >= fn->value_count ||
+            b[i].has_fixed_register_binding || b[i].early_clobber ||
+            b[i].kind != (i == 0U ?
+                MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE :
+                i == 1U ? MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
+                          MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT))
+            return false;
+    if (!minic_type_pointee(fn->values[b[0].value].type, &mem) ||
+        !minic_type_pointee(fn->values[b[1].value].type, &flag) ||
+        !minic_type_equal(flag, minic_type_bool()) ||
+        !minic_x86_64_scalar_width(program, target, mem, &width, &sign) ||
+        width != d->width ||
+        (d->has_value &&
+         (!minic_x86_64_scalar_width(
+             program, target, fn->values[b[2].value].type, &width, &sign) ||
+          width != d->width)))
+        return false;
+    if ((d->has_value && !x86_value_load(out, frame, b[2].value, "%r10")) ||
+        !x86_value_load(out, frame, b[0].value, "%r11") ||
+        fputs("  .pushsection .smp_locks,\"a\"\n"
+              "  .balign 4\n"
+              "  .long 671f - .\n"
+              "  .popsection\n"
+              "671:\n", out) == EOF)
+        return false;
+    if (d->has_value) {
+        if (fprintf(out, "  lock; %s %s, (%%r11)\n",
+                d->opcode, d->width == 4U ? "%r10d" : "%r10") < 0)
+            return false;
+    } else if (fprintf(out, "  lock; %s (%%r11)\n", d->opcode) < 0)
+        return false;
+    return fputs(d->flag_sign ? "  sets %al\n" : "  sete %al\n", out) != EOF &&
+           x86_value_load(out, frame, b[1].value, "%r10") &&
+           fputs("  movb %al, (%r10)\n", out) != EOF;
 }
 
 /* The only owner of this x86 hardware side effect: CMP sets CF, SBB

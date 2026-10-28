@@ -49,9 +49,20 @@ typedef enum MinicX86AtomicCC {
     MINIC_X86_ATOMIC_CC_DEC32,
     MINIC_X86_ATOMIC_CC_INC32,
     MINIC_X86_ATOMIC_CC_DEC64,
-    MINIC_X86_ATOMIC_CC_INC64
+    MINIC_X86_ATOMIC_CC_INC64,
+    MINIC_X86_ATOMIC_CC_SUB32_ZERO,
+    MINIC_X86_ATOMIC_CC_ADD32_SIGN,
+    MINIC_X86_ATOMIC_CC_SUB64_ZERO,
+    MINIC_X86_ATOMIC_CC_ADD64_SIGN
 } MinicX86AtomicCC;
+typedef struct MinicX86AtomicCCDesc {
+    const char *opcode;
+    size_t width;
+    bool has_value;
+    bool flag_sign;
+} MinicX86AtomicCCDesc;
 MinicX86AtomicCC minic_x86_64_atomic_cc_form(const char *, size_t);
+const MinicX86AtomicCCDesc *minic_x86_64_atomic_cc_description(MinicX86AtomicCC);
 /* One x86 ISA descriptor distinguishes word and tied-seed Linux BSR/BSF.
  * The GNU output/input contract is target-owned; Common Core sees only
  * scalar/input and address-backed output roles. */

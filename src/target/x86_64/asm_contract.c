@@ -162,72 +162,105 @@ bool minic_x86_64_asm_muldiv_template(const char *text, size_t length) {
     return strcmp(normalized, expected) == 0;
 }
 
-/* The exact original Linux source template includes BOTH a relocatable
- * .smp_locks entry and GCC's condition-code-ZF pseudo output. Whitespace
- * is immaterial but instruction suffixes/comments are NOT. Accept the
- * original source named %[var] or canonical Core numeric %0 only. */
+/* Target-only descriptor for all 8 GNU Linux atomic RMWcc forms.
+ * This is the only source/machine ALU and flag-sign table. */
+static const struct {
+    MinicX86AtomicCCDesc desc;
+    const char *flag;
+} x86_atomic_cc_forms[] = {
+    {{"decl", 4U, false, false}, "e"},
+    {{"incl", 4U, false, false}, "e"},
+    {{"decq", 8U, false, false}, "e"},
+    {{"incq", 8U, false, false}, "e"},
+    {{"subl", 4U, true, false}, "e"},
+    {{"addl", 4U, true, true}, "s"},
+    {{"subq", 8U, true, false}, "e"},
+    {{"addq", 8U, true, true}, "s"}
+};
+const MinicX86AtomicCCDesc *minic_x86_64_atomic_cc_description(
+    MinicX86AtomicCC form) {
+    const size_t id = (size_t)form;
+    return id >= MINIC_X86_ATOMIC_CC_DEC32 &&
+           id <= MINIC_X86_ATOMIC_CC_ADD64_SIGN ?
+        &x86_atomic_cc_forms[id - 1U].desc : NULL;
+}
+/* Exact original GNU SMP patchtable + LOCK + operand + CC_SET text,
+ * whether source-named or numeric after Common inline ASM normalization.
+ * Never forward source ASM or any unrecognized suffix to GAS. */
 MinicX86AtomicCC minic_x86_64_atomic_cc_form(const char *text, size_t len) {
-    static const struct { const char *op; MinicX86AtomicCC form; } forms[] = {
-        {"decl", MINIC_X86_ATOMIC_CC_DEC32},
-        {"incl", MINIC_X86_ATOMIC_CC_INC32},
-        {"decq", MINIC_X86_ATOMIC_CC_DEC64},
-        {"incq", MINIC_X86_ATOMIC_CC_INC64}
-    };
-    const char *const prefix =
+    static const char prefix[] =
         ".pushsection.smp_locks,\"a\".balign4.long671f-..popsection671:lock;";
-    const char *const comment = "/*outputconditioncodee*/";
-    char compact[256], pattern[256];
-    size_t i, j=0U, op;
+    char compact[256], expected[256];
+    size_t i, n = 0U, id, variant;
     if (!text || len == 0U || len >= sizeof(compact))
         return MINIC_X86_ATOMIC_CC_NONE;
-    for (i=0U;i<len;++i) {
-        const char c=text[i];
-        if (c==' '||c=='\t'||c=='\n'||c=='\r') continue;
-        if (j+1U>=sizeof(compact)) return MINIC_X86_ATOMIC_CC_NONE;
-        compact[j++]=c;
+    for (i = 0U; i < len; ++i) {
+        const char c = text[i];
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
+        if (n + 1U >= sizeof(compact)) return MINIC_X86_ATOMIC_CC_NONE;
+        compact[n++] = c;
     }
-    compact[j]='\0';
-    for (op=0U;op<sizeof(forms)/sizeof(forms[0]);++op) {
-        int n=snprintf(pattern,sizeof(pattern),"%s%s%%[var]%s",
-                       prefix,forms[op].op,comment);
-        if (n>0&&(size_t)n<sizeof(pattern)&&strcmp(compact,pattern)==0)
-            return forms[op].form;
-        n=snprintf(pattern,sizeof(pattern),"%s%s%%0%s",
-                   prefix,forms[op].op,comment);
-        if (n>0&&(size_t)n<sizeof(pattern)&&strcmp(compact,pattern)==0)
-            return forms[op].form;
+    compact[n] = '\0';
+    for (id = 0U; id < sizeof(x86_atomic_cc_forms) /
+                       sizeof(x86_atomic_cc_forms[0]); ++id) {
+        const MinicX86AtomicCCDesc *d = &x86_atomic_cc_forms[id].desc;
+        for (variant = 0U; variant < 2U; ++variant) {
+            const char *mem = variant ? "%0" : "%[var]";
+            const char *value = variant ? "%2" : "%[val]";
+            const int written = d->has_value ?
+                snprintf(expected, sizeof(expected),
+                    "%s%s%s,%s/*outputconditioncode%s*/",
+                    prefix, d->opcode, value, mem, x86_atomic_cc_forms[id].flag) :
+                snprintf(expected, sizeof(expected),
+                    "%s%s%s/*outputconditioncode%s*/",
+                    prefix, d->opcode, mem, x86_atomic_cc_forms[id].flag);
+            if (written > 0 && (size_t)written < sizeof(expected) &&
+                strcmp(compact, expected) == 0)
+                return (MinicX86AtomicCC)(id + 1U);
+        }
     }
     return MINIC_X86_ATOMIC_CC_NONE;
 }
 static bool x86_linux_atomic_cc_source(
-    const MinicC0Program *program,const MinicInlineAsm *src) {
-    const MinicExpression *mem,*flag;
-    MinicType m,f;
-    const MinicX86AtomicCC form=src ?
-        minic_x86_64_atomic_cc_form(src->template_text,src->template_length):
+    const MinicC0Program *program, const MinicInlineAsm *src) {
+    const MinicExpression *mem, *flag, *value;
+    MinicType mt, ft, vt;
+    const MinicX86AtomicCC form = src ?
+        minic_x86_64_atomic_cc_form(src->template_text, src->template_length) :
         MINIC_X86_ATOMIC_CC_NONE;
-    if (!program||!src||form==MINIC_X86_ATOMIC_CC_NONE||
-        !src->is_volatile||src->is_goto||!src->outputs||
-        src->output_count!=2U||src->input_count!=0U||
-        src->label_count||src->clobber_count!=1U||
-        !src->has_memory_clobber||src->register_clobber_count||
-        !target_constraint_is(&src->outputs[0],"+m")||
-        !target_constraint_is(&src->outputs[1],"=@cce"))
+    const MinicX86AtomicCCDesc *d =
+        minic_x86_64_atomic_cc_description(form);
+    if (!program || !src || !d || !src->is_volatile || src->is_goto ||
+        !src->outputs || src->output_count != 2U ||
+        src->input_count != (d->has_value ? 1U : 0U) ||
+        (d->has_value && !src->inputs) || src->label_count ||
+        src->clobber_count != 1U || !src->has_memory_clobber ||
+        src->register_clobber_count ||
+        !target_constraint_is(&src->outputs[0], "+m") ||
+        !target_constraint_is(&src->outputs[1],
+                              d->flag_sign ? "=@ccs" : "=@cce") ||
+        (d->has_value && !target_constraint_is(&src->inputs[0], "er")))
         return false;
-    mem=minic_c0_program_expression(program,src->outputs[0].expression);
-    flag=minic_c0_program_expression(program,src->outputs[1].expression);
-    if (!mem||!flag||mem->value_category!=MINIC_VALUE_LVALUE||
-        flag->value_category!=MINIC_VALUE_LVALUE||
-        minic_type_is_const(mem->type)||minic_type_is_const(flag->type)||
-        !minic_type_unqualified(mem->type,&m)||
-        !minic_type_unqualified(flag->type,&f)||
-        !minic_type_equal(f,minic_type_bool()))
+    mem = minic_c0_program_expression(program, src->outputs[0].expression);
+    flag = minic_c0_program_expression(program, src->outputs[1].expression);
+    if (!mem || !flag || mem->value_category != MINIC_VALUE_LVALUE ||
+        flag->value_category != MINIC_VALUE_LVALUE ||
+        minic_type_is_const(mem->type) || minic_type_is_const(flag->type) ||
+        !minic_type_unqualified(mem->type, &mt) ||
+        !minic_type_unqualified(flag->type, &ft) ||
+        !minic_type_equal(ft, minic_type_bool()))
         return false;
-    if (form==MINIC_X86_ATOMIC_CC_DEC32||
-        form==MINIC_X86_ATOMIC_CC_INC32)
-        return minic_type_equal(m,minic_type_int());
-    return minic_type_equal(m,minic_type_long())||
-           minic_type_equal(m,minic_type_long_long());
+    if (d->width == 4U ?
+        !minic_type_equal(mt, minic_type_int()) :
+        (!minic_type_equal(mt, minic_type_long()) &&
+         !minic_type_equal(mt, minic_type_long_long())))
+        return false;
+    if (d->has_value) {
+        value = minic_c0_program_expression(program, src->inputs[0].expression);
+        if (!value || !minic_type_unqualified(value->type, &vt) ||
+            !minic_type_equal(vt, mt)) return false;
+    }
+    return true;
 }
 /* Original GNU Linux 6.6.143 x86 bitops: exact source templates, not
  * a generic inline assembly passthrough. The same table is the ONLY
@@ -663,9 +696,14 @@ bool minic_x86_64_qualify_inline_asm(
     if (x86_linux_bitops_source(program, source, contract))
         return true;
     if (x86_linux_atomic_cc_source(program, source)) {
-        contract->operand_count=2U;
-        contract->kinds[0]=MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
-        contract->kinds[1]=MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+        const MinicX86AtomicCCDesc *d = minic_x86_64_atomic_cc_description(
+            minic_x86_64_atomic_cc_form(
+                source->template_text, source->template_length));
+        contract->operand_count = d && d->has_value ? 3U : 2U;
+        contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
+        contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+        if (contract->operand_count == 3U)
+            contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
         return true;
     }
     if (x86_nospec_source(program, source)) {
