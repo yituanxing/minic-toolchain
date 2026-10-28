@@ -2148,3 +2148,56 @@ if "$MINIAS" --target=aarch64 -o "$work/a64-ltorg-bad.o" "$work/a64-ltorg-bad.s"
     echo "invalid .ltorg argument accepted" >&2;exit 1
 fi
 echo 'MINIAS_A64_GNU_LITERAL_POOL=PASS exact_GNU_text_ABS32_ABS64_reloc_dedup_ltorg_and_eof'
+
+# Grouped ARM64 kernel system registers, immediate SPsel, SIMD REV64 and
+# scalar/vector FP load/store with strict scaled addressing. GNU byte oracle.
+cat > "$work/a64-kernel-sys-rev-fp.s" <<'A64_SYSREVFP'
+.text
+mrs x3,id_aa64isar1_el1
+msr SPsel,#1
+msr SPsel,#0
+rev64 v2.16b,v12.16b
+rev64 v3.8h,v4.8h
+rev64 v5.8b,v6.8b
+rev64 v7.4h,v8.4h
+ldr s7,[x0,#16]
+ldr d1,[x2,#24]
+ldr q3,[x4,#32]
+str s5,[x6,#20]
+str d7,[x8,#40]
+str q9,[x10,#48]
+A64_SYSREVFP
+"$MINIAS" --target=aarch64 -o "$work/a64-sysrev-mini.o" "$work/a64-kernel-sys-rev-fp.s"
+"$AARCH64_AS" -o "$work/a64-sysrev-gnu.o" "$work/a64-kernel-sys-rev-fp.s"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-sysrev-mini.o" "$work/a64-sysrev-mini.bin"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-sysrev-gnu.o" "$work/a64-sysrev-gnu.bin"
+cmp "$work/a64-sysrev-mini.bin" "$work/a64-sysrev-gnu.bin"
+for bad in 'msr SPsel,#2' 'msr SPsel,#-1' \
+           'msr id_aa64isar1_el1,x3' 'rev64 v0.16b,v1.8b' \
+           'rev64 v0.2d,v1.2d' 'ldr s0,[x1,#3]' \
+           'ldr q0,[x1,#65536]' 'str d0,[x1,#-8]' \
+           'str s0,[x1,#16]!'; do
+    printf '.text\n%s\n' "$bad" > "$work/a64-sysrev-invalid.s"
+    if "$MINIAS" --target=aarch64 -o "$work/a64-sysrev-invalid.o" "$work/a64-sysrev-invalid.s" >/dev/null 2>&1; then
+        echo "invalid ARM64 system/reverse/FP memory accepted: $bad" >&2;exit 1
+    fi
+done
+echo 'MINIAS_A64_SYS_REV_FP=PASS GNU_13_words_and_9_negative'
+
+# GNU KVM vector preamble macros compare two already-defined numeric labels.
+cat > "$work/a64-kvm-preamble-if.s" <<'A64_NUMERIC_IF'
+.text
+661: nop
+662: nop
+.if ((662b-661b) != (1 * 4))
+ brk #9
+.else
+ nop
+.endif
+A64_NUMERIC_IF
+"$MINIAS" --target=aarch64 -o "$work/a64-if-mini.o" "$work/a64-kvm-preamble-if.s"
+"$AARCH64_AS" -o "$work/a64-if-gnu.o" "$work/a64-kvm-preamble-if.s"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-if-mini.o" "$work/a64-if-mini.bin"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-if-gnu.o" "$work/a64-if-gnu.bin"
+cmp "$work/a64-if-mini.bin" "$work/a64-if-gnu.bin"
+echo 'MINIAS_COMMON_NUMERIC_IF_A64=PASS GNU_preamble_difference'

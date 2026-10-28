@@ -2187,15 +2187,28 @@ static bool push_conditional_value(MiniAs *as,bool condition_true) {
     return true;
 }
 
+/* Reuse the sole Common numeric-label resolver in GAS conditionals:
+ * backward 661b/662b references have exact fragment-backed values. */
+static bool rewrite_numeric_local_refs(MiniAs *,const char *,
+                                       char **,size_t);
+static bool evaluate_conditional_with_labels(MiniAs *as,const char *args,
+                                              size_t line,bool *selected) {
+    char *expanded=NULL;
+    bool valid;
+    if(!rewrite_numeric_local_refs(as,args,&expanded,line))return false;
+    valid=evaluate_if_expression(as,expanded,selected) ||
+          (as->target->evaluate_target_if &&
+           as->target->evaluate_target_if(expanded,selected));
+    free(expanded);return valid;
+}
+
 static bool push_conditional(MiniAs *as, const char *args, size_t line) {
     bool condition_true;
     /* False parent: keep the nested conditional frame, but GNU GAS
      * does not resolve symbols in branches that cannot be reached. */
     if(!as->conditional_active)
         return push_conditional_value(as,false);
-    if (!evaluate_if_expression(as, args, &condition_true) &&
-        (!as->target->evaluate_target_if ||
-         !as->target->evaluate_target_if(args, &condition_true))) {
+    if (!evaluate_conditional_with_labels(as,args,line,&condition_true)) {
         minias_set_error(as, "unsupported-expression:.if:%s:line=%zu", args, line);
         return false;
     }
@@ -2317,9 +2330,7 @@ static bool elseif_conditional(MiniAs *as,const char *args,size_t line) {
         return false;
     }
     if(conditional->parent_active && !conditional->condition_true) {
-        if(!evaluate_if_expression(as,args,&condition) &&
-           (!as->target->evaluate_target_if ||
-            !as->target->evaluate_target_if(args,&condition))) {
+        if(!evaluate_conditional_with_labels(as,args,line,&condition)) {
             minias_set_error(as,"unsupported-expression:.elseif:%s:line=%zu",
                              args,line);
             return false;

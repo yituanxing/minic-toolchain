@@ -1739,6 +1739,7 @@ static bool a64_system_register(const char *name,uint32_t *mrs,uint32_t *msr) {
         {"mdccint_el1",UINT32_C(0xd5300200),UINT32_C(0xd5100200)},
         {"id_aa64pfr0_el1",UINT32_C(0xd5380400),0U},
         {"id_aa64isar0_el1",UINT32_C(0xd5380600),0U},
+        {"id_aa64isar1_el1",UINT32_C(0xd5380620),0U},
         {"osdlr_el1",UINT32_C(0xd5301380),UINT32_C(0xd5101380)},
         {"contextidr_el1",UINT32_C(0xd538d020),UINT32_C(0xd518d020)},
         {"cpacr_el1",UINT32_C(0xd5381040),UINT32_C(0xd5181040)},
@@ -1926,7 +1927,36 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         minias_set_error(as, "out-of-memory:aarch64-mcinst");
         return false;
     }
-    if(!strcmp(op,"ldr") && strchr(args,'=')!=NULL) {
+    if((!strcmp(op,"ldr") || !strcmp(op,"str")) &&
+       (args[0]=='s' || args[0]=='d' || args[0]=='q')) {
+        /* S/D/Q FP/SIMD unsigned-scaled memory goes through the already
+         * checked typed A64 LDST path; no new emitter or Common ISA. */
+        char tok[4][384];unsigned n,rd,rn,mode,width=0U;
+        bool fp64=false;
+        int64_t off;
+        uint32_t base;
+        if(!split_operands(args,tok,&n) || n!=2U) {
+            minias_set_error(as,"bad-aarch64-fp-memory:%s:line=%zu",
+                             args,stmt->line);free(inst);return false;
+        }
+        if(a64_scalar_fp_reg(tok[0],&rd,&fp64))width=fp64?8U:4U;
+        else if(parse_a64_q_reg(tok[0],&rd))width=16U;
+        if(width==0U || !parse_a64_mem(tok[1],&rn,&off,&mode) ||
+           mode!=0U || off<0 || off%(int64_t)width!=0 ||
+           off/(int64_t)width>4095) {
+            minias_set_error(as,"bad-aarch64-fp-memory:%s:line=%zu",
+                             args,stmt->line);free(inst);return false;
+        }
+        base=width==4U?UINT32_C(0xbd000000):
+             width==8U?UINT32_C(0xfd000000):
+                         UINT32_C(0x3d800000);
+        if(!strcmp(op,"ldr"))base|=UINT32_C(0x00400000);
+        inst->opcode=A64_MC_LDST_SCALED;inst->count=3U;
+        inst->encoding=base;
+        put_reg(&inst->operands[0],rd,true);
+        put_reg(&inst->operands[1],rn,true);
+        put_immediate(&inst->operands[2],off/(int64_t)width);
+    } else if(!strcmp(op,"ldr") && strchr(args,'=')!=NULL) {
         /* GNU LDR Xt/Wt,=symbol: the Target chooses the literal-load
          * encoding; the queued data/ABS relocation remains Common-owned.
          * Numeric pseudo-immediates are deliberately unsupported until
@@ -2392,6 +2422,17 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         put_reg(&inst->operands[0],rt,true);
     } else if(!strcmp(op,"msr") &&
               split_two(args,first,sizeof(first),second,sizeof(second)) &&
+              (!strcmp(first,"SPsel") || !strcmp(first,"spsel"))) {
+        int64_t value;
+        if(!parse_signed_number(second,&value) || value<0 || value>1) {
+            minias_set_error(as,"bad-aarch64-spsel-immediate:%s:line=%zu",
+                             args,stmt->line);free(inst);return false;
+        }
+        inst->opcode=A64_MC_SYSTEM_IMM;inst->count=1U;
+        inst->encoding=UINT32_C(0xd50040bf);
+        put_immediate(&inst->operands[0],value);
+    } else if(!strcmp(op,"msr") &&
+              split_two(args,first,sizeof(first),second,sizeof(second)) &&
               (!strcmp(first,"daifset") || !strcmp(first,"daifclr"))) {
         int64_t daif_immediate;
         if(!parse_signed_number(second,&daif_immediate) ||
@@ -2428,7 +2469,8 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         inst->encoding=read?mrscode:msrcode;
         put_reg(&inst->operands[0],rt,true);
     } else if(!strcmp(op,"dup") ||
-              (!strcmp(op,"rev32") && args[0]=='v')) {
+              ((!strcmp(op,"rev32") || !strcmp(op,"rev64")) &&
+               args[0]=='v')) {
         char dst[96],source[96];unsigned vd,rn;
         uint32_t ar;
         bool wide,sp;
@@ -2453,17 +2495,18 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         }else {
             uint32_t element=ar&UINT32_C(0xc00);
             uint32_t vdarr;
-            if((element!=0U && element!=UINT32_C(0x400)) ||
+            bool rev64=!strcmp(op,"rev64");
+            if((rev64?(element!=0U && element!=UINT32_C(0x400) &&
+                         element!=UINT32_C(0x800)):
+                       (element!=0U && element!=UINT32_C(0x400))) ||
                !a64_vector_view(source,&rn,&vdarr) || vdarr!=ar) {
-                minias_set_error(as,"bad-aarch64-rev32-vector:%s:line=%zu",
-                                 args,stmt->line);
-                free(inst);return false;
+                minias_set_error(as,"bad-aarch64-reverse-vector:%s:line=%zu",
+                                 args,stmt->line);free(inst);return false;
             }
             inst->opcode=A64_MC_SIMD_REV32;inst->count=2U;
-            inst->encoding=UINT32_C(0x2e200800)|
-                     (ar&UINT32_C(0x40000000))|
-                     (element==UINT32_C(0x400)?
-                              UINT32_C(0x00400000):0U);
+            inst->encoding=(rev64?UINT32_C(0x0e200800):
+                                  UINT32_C(0x2e200800))|
+                     (ar&UINT32_C(0x40000000))|(element<<12U);
         }
         put_reg(&inst->operands[0],vd,true);
         put_reg(&inst->operands[1],rn,true);

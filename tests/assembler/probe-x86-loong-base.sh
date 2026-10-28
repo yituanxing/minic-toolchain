@@ -2799,3 +2799,29 @@ done
 [ "$(wc -l < "$work/x86-explicit-reloc-mini.txt")" -eq 2 ]
 cmp "$work/x86-explicit-reloc-mini.txt" "$work/x86-explicit-reloc-gnu.txt"
 echo 'MINIAS_COMMON_NAMED_X86_RELOC=PASS GNU_RELA_offsets_type_symbol_addend'
+
+# Same Common .if numeric-label resolver for x86 and Loong, not A64-only.
+cat > "$work/gnu-numeric-if.s" <<'GNU_NUMERIC_IF'
+.data
+661: .long 0
+662: .long 0
+.if ((662b-661b) != (1 * 4))
+ .byte 0xff
+.else
+ .byte 0x2a
+.endif
+GNU_NUMERIC_IF
+for target in x86_64 loongarch64; do
+ "$MINIAS" --target="$target" -o "$work/$target-if-mini.o" "$work/gnu-numeric-if.s"
+ if [ "$target" = x86_64 ]; then
+  as --64 -o "$work/$target-if-gnu.o" "$work/gnu-numeric-if.s"
+  objcopy -j .data -O binary "$work/$target-if-mini.o" "$work/$target-if-mini.bin"
+  objcopy -j .data -O binary "$work/$target-if-gnu.o" "$work/$target-if-gnu.bin"
+ else
+  "$LOONGAS" -mabi=lp64d -o "$work/$target-if-gnu.o" "$work/gnu-numeric-if.s"
+  "$LOONGCOPY" -j .data -O binary "$work/$target-if-mini.o" "$work/$target-if-mini.bin"
+  "$LOONGCOPY" -j .data -O binary "$work/$target-if-gnu.o" "$work/$target-if-gnu.bin"
+ fi
+ cmp "$work/$target-if-mini.bin" "$work/$target-if-gnu.bin"
+done
+echo 'MINIAS_COMMON_NUMERIC_IF=PASS GNU_x86_and_Loong_bytes'
