@@ -4118,8 +4118,11 @@ static bool minias_emit_mc_data(MiniAs *as,const MiniAsStmt *stmt) {
                 return false;
             }
             literal=true;
-            value=at+(uint64_t)lhs.addend-
-                  (origin->value+(uint64_t)rhs.addend);
+            /* '.' has no SymbolID: its lexical addend lives in MCExpr.
+             * The symbol resolver must not drop it when constructing a
+             * temporary MiniAsSymbolExpr for ordinary symbol operands. */
+            value=at+(uint64_t)x->lhs_addend-
+                  (origin->value+(uint64_t)x->rhs_addend);
         } else if(x->kind==MINIAS_MC_EXPR_DIFFERENCE ||
                   x->kind==MINIAS_MC_EXPR_DIFFERENCE_DIV) {
             MiniAsSymbol *left=x->has_lhs ?
