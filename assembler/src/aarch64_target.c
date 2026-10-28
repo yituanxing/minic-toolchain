@@ -1905,7 +1905,7 @@ static bool a64_parse_lse(MiniAs *as,MiniAsMCInst *inst,
         }
     }
     if(suffix==NULL ||
-       (as->site.mode_bits&A64_FEATURE_LSE)==0U)return false;
+       (as->target_options&A64_FEATURE_LSE)==0U)return false;
     {
         size_t nmod=strlen(suffix);
         /* A64 LSE size is encoded in bits [31:30], separately from
@@ -2612,12 +2612,12 @@ reduction_done:;
                strcmp(requested,sysops[i].name))continue;
             if(sysops[i].needs_rt!=paired)break;
             if(!strcmp(sysops[i].name,"gzva") &&
-               (as->site.mode_bits&A64_FEATURE_MTE)==0U)break;
+               (as->target_options&A64_FEATURE_MTE)==0U)break;
             /* ARMv8.4 range TLBI requires an explicit architectural
              * profile opt-in. It is not available under baseline v8-a. */
             if((!strncmp(sysops[i].name,"rv",2U) ||
                 !strncmp(sysops[i].name,"ripas2",6U)) &&
-               (as->site.mode_bits&A64_FEATURE_TLBI_RANGE)==0U)break;
+               (as->target_options&A64_FEATURE_TLBI_RANGE)==0U)break;
             if(paired && (!parse_a64_reg(operand,&rt,&rt64,&rtsp) ||
                           !rt64 || rtsp))break;
             word=sysops[i].word;found=true;break;
@@ -2736,7 +2736,7 @@ reduction_done:;
               !strcmp(op,"caspl") || !strcmp(op,"caspal")) {
         unsigned rs,rt,rn;
         bool wide;
-        if((as->site.mode_bits&A64_FEATURE_LSE)==0U ||
+        if((as->target_options&A64_FEATURE_LSE)==0U ||
            !a64_casp_fields(args,&rs,&rt,&rn,&wide)){
             minias_set_error(as,"bad-aarch64-casp:%s:line=%zu",
                              args,stmt->line);
@@ -2760,7 +2760,7 @@ reduction_done:;
         int64_t off;
         /* GNU [Xn,#offset] contains a nested comma, so split on A64's
          * top-level operand grammar, NOT the old single-comma split_two. */
-        if((as->site.mode_bits&A64_FEATURE_MTE)==0U ||
+        if((as->target_options&A64_FEATURE_MTE)==0U ||
            !split_operands(args,tok,&n) || n!=2U ||
            !parse_a64_reg(tok[0],&rt,&wide,&sp) || sp || !wide ||
            !parse_a64_mem(tok[1],&rn,&off,&mode) ||
@@ -2780,7 +2780,7 @@ reduction_done:;
         char tok[4][384];unsigned n,rt,rn,mode;
         bool wide,sp;
         int64_t offset;
-        if((as->site.mode_bits&A64_FEATURE_MTE)==0U ||
+        if((as->target_options&A64_FEATURE_MTE)==0U ||
            !split_operands(args,tok,&n) || n!=2U ||
            !parse_a64_reg(tok[0],&rt,&wide,&sp) || sp || !wide ||
            !parse_a64_mem(tok[1],&rn,&offset,&mode) ||
@@ -2932,7 +2932,7 @@ reduction_done:;
         };
         char tok[4][384];unsigned n,rd,rn,rm,k;
         bool wd,wn,wm,sp;
-        if((as->site.mode_bits&A64_FEATURE_CRC)==0U ||
+        if((as->target_options&A64_FEATURE_CRC)==0U ||
            !split_operands(args,tok,&n) || n!=3U ||
            !parse_a64_reg(tok[0],&rd,&wd,&sp) || sp || wd ||
            !parse_a64_reg(tok[1],&rn,&wn,&sp) || sp || wn ||
@@ -2962,7 +2962,7 @@ reduction_done:;
         };
         char tok[4][384];unsigned n,rd,rn,k;
         uint32_t da,sa;
-        if((as->site.mode_bits&A64_FEATURE_CRYPTO)==0U ||
+        if((as->target_options&A64_FEATURE_CRYPTO)==0U ||
            !split_operands(args,tok,&n) || n!=2U ||
            !a64_vector_view(tok[0],&rd,&da) ||
            !a64_vector_view(tok[1],&rn,&sa) ||
@@ -3188,7 +3188,7 @@ reduction_done:;
         bool polynomial=!strncmp(op,"pmull",5U);
         bool pair=!strcmp(op,"pmull2");
         bool tri=polynomial || !strcmp(op,"sha1su0");
-        bool valid=(as->site.mode_bits&A64_FEATURE_CRYPTO)!=0U &&
+        bool valid=(as->target_options&A64_FEATURE_CRYPTO)!=0U &&
             split_operands(args,tok,&n) && n==(tri?3U:2U);
         if(valid && polynomial) {
             /* PMULL/PMULL2 have TWO independently checked element
@@ -3236,7 +3236,7 @@ reduction_done:;
          * Qd,Sn,Vm.4S encoding; no second SIMD register parser. */
         char arg[4][384];unsigned n,rd,rn,rm;
         bool wide;uint32_t shape;
-        if((as->site.mode_bits&A64_FEATURE_CRYPTO)==0U ||
+        if((as->target_options&A64_FEATURE_CRYPTO)==0U ||
            !split_operands(args,arg,&n) || n!=3U ||
            !parse_a64_q_reg(arg[0],&rd) ||
            !a64_scalar_fp_reg(arg[1],&rn,&wide) || wide ||
@@ -3256,7 +3256,7 @@ reduction_done:;
         unsigned rd,rn;
         bool dw,nw;
         char dst[96],src[96];
-        if((as->site.mode_bits&A64_FEATURE_CRYPTO)==0U ||
+        if((as->target_options&A64_FEATURE_CRYPTO)==0U ||
            !split_two(args,dst,sizeof(dst),src,sizeof(src)) ||
            !a64_scalar_fp_reg(dst,&rd,&dw) || dw ||
            !a64_scalar_fp_reg(src,&rn,&nw) || nw) {
@@ -3275,7 +3275,7 @@ reduction_done:;
         char tok[4][384];unsigned n,rd,rn,rm=0U;uint32_t da=0U,sa=0U,ta=0U;
         bool pair=!strcmp(op,"sha256h") || !strcmp(op,"sha256h2");
         bool tri=strcmp(op,"sha256su0")!=0;
-        bool valid=(as->site.mode_bits&A64_FEATURE_CRYPTO)!=0U &&
+        bool valid=(as->target_options&A64_FEATURE_CRYPTO)!=0U &&
                    split_operands(args,tok,&n) && n==(tri?3U:2U);
         if(valid && pair) {
             valid=parse_a64_q_reg(tok[0],&rd) &&
@@ -3351,7 +3351,7 @@ lane_complete:;
          * 16-byte signed-scaled addressing and one typed store emitter. */
         char tok[4][384];unsigned n,rt,rn,mode;
         bool wide,sp;int64_t off;
-        if((as->site.mode_bits&A64_FEATURE_MTE)==0U ||
+        if((as->target_options&A64_FEATURE_MTE)==0U ||
            !split_operands(args,tok,&n) || (n!=2U && n!=3U) ||
            !parse_a64_reg(tok[0],&rt,&wide,&sp) || sp || !wide ||
            !parse_a64_mem(tok[1],&rn,&off,&mode)) {
@@ -4547,7 +4547,7 @@ static bool directive(MiniAs *as, const char *op, const char *args,
     if (strcmp(op, ".arch") == 0) {
         const char *plus=strchr(args,'+');
         size_t base_len=plus?(size_t)(plus-args):strlen(args);
-        uint32_t bits=as->site.mode_bits&
+        uint32_t bits=as->target_options&
                       ~(A64_FEATURE_LSE|A64_FEATURE_TLBI_RANGE|
                         A64_FEATURE_CRC|A64_FEATURE_CRYPTO|A64_FEATURE_MTE);
         bool v85=base_len==strlen("armv8.5-a") &&
@@ -4583,12 +4583,12 @@ static bool directive(MiniAs *as, const char *op, const char *args,
         }
         /* Commit atomically only after ALL feature names were checked:
          * malformed trailing + and unknown extensions never widen ISA. */
-        as->site.mode_bits=bits;
+        as->target_options=bits;
         return true;
     }
     if(!strcmp(op,".arch_extension")) {
         *handled=true;
-        if(!a64_set_isa_feature(&as->site.mode_bits,args)) {
+        if(!a64_set_isa_feature(&as->target_options,args)) {
             minias_set_error(as,"unsupported-aarch64-extension:%s:line=%zu",
                              args,line);
             return false;

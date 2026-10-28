@@ -3369,7 +3369,7 @@ static bool x64_parse_directive(MiniAs *as,const char *op,const char *args,
                          args,line);
         return false;
     }
-    as->site.mode_bits=code32?X64_CODE32:0U;
+    as->target_options=code32?X64_CODE32:0U;
     return true;
 }
 /* GNU GAS treats native register tokens in .if as distinct symbolic
