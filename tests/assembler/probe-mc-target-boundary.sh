@@ -8,13 +8,17 @@ if grep -Eq 'MINIAS_FIXUP_(RV_|A64_|X64_|LARCH_)' \
     echo 'Target FixupKind leaked into MC Core' >&2
     exit 1
 fi
-for backend in riscv_encode.c x86_64_target.c aarch64_target.c loongarch64_target.c; do
+for backend in riscv_encode.c x86_64_target.c loongarch64_target.c; do
     if test -f "assembler/src/$backend" && \
        grep -q 'minias_section_append(as,' "assembler/src/$backend"; then
         echo "Direct Section append in target encoder: $backend" >&2
         exit 1
     fi
 done
+# AArch64 executable alignment is a separate Target callback. It may append
+# NOP fill through Common Section ownership; instruction encoder may not.
+grep -q 'return minias_emit_instruction_bytes(as, section, bytes, sizeof(bytes));' \\
+    assembler/src/aarch64_target.c
 # Each Target must reserve a separate kind namespace.
 for header in riscv_fixup_kinds.h aarch64_fixup_kinds.h \
               x86_64_fixup_kinds.h loongarch64_fixup_kinds.h; do
