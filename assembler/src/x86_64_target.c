@@ -1439,14 +1439,16 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         uint64_t bits;
         unsigned reg;
         bool high=x64_high_register8(dst,&reg);
-        if(!high && !x64_register8(dst,&reg))goto invalid;
-        if(!minias_eval_u64_expression(src+1U,&bits) ||
-           (int64_t)bits<-256 || (int64_t)bits>255)goto invalid;
-        m->opcode=X64_MOV_IMM32;m->count=1U;
-        m->encoding=0x200U|(high?0x800U:0U);
-        m->operands[0].reg=reg;
-        m->operands[0].immediate=(uint8_t)bits;
-        goto done;
+        if(high || x64_register8(dst,&reg)) {
+            if(!minias_eval_u64_expression(src+1U,&bits) ||
+               (int64_t)bits<-256 || (int64_t)bits>255)goto invalid;
+            m->opcode=X64_MOV_IMM32;m->count=1U;
+            m->encoding=0x200U|(high?0x800U:0U);
+            m->operands[0].reg=reg;
+            m->operands[0].immediate=(uint8_t)bits;
+            goto done;
+        }
+        /* MOVB imm8-to-memory stays in the generic C6 /0 path. */
     }
     if (!strcmp(s->op,"movl") && x64_args2(s->args,src,dst) &&
         src[0]=='$' && x64_register(dst,&rd,&wd) && !wd) {
