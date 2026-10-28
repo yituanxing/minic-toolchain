@@ -2525,7 +2525,7 @@ A64_SET_MEMORY
 "$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-setmem-mini.o" "$work/a64-setmem-mini.bin"
 "$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-setmem-gnu.o" "$work/a64-setmem-gnu.bin"
 cmp "$work/a64-setmem-mini.bin" "$work/a64-setmem-gnu.bin"
-for invalid in 'ldr x0,[sp,#.Lframe_local_offset/3]' \
+for invalid in 'ldr x0,[sp,#.Lframe_local_offset*1000]' \
                'ldr s0,[sp,#.Lframe_extra+1]' \
                'str q0,[sp,#-.Lframe_extra]' \
                'ldp x29,x30,[sp],#.Lframe_local_offset*100'; do
