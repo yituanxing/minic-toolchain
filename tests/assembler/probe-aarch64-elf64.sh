@@ -189,6 +189,12 @@ external_probe:
     msr mdccint_el1, x0
     mrs x1, spsr_und
     msr spsr_und, x1
+    mrs x0, fpexc32_el2
+    msr fpexc32_el2, x0
+    mrs x1, spsr_irq
+    msr spsr_irq, x1
+    mrs x2, spsr_fiq
+    msr spsr_fiq, x2
     mrs x2, dbgwcr13_el1
     msr dbgwcr13_el1, x2
     mrs x1, dbgbcr15_el1
@@ -518,6 +524,18 @@ external_adr_target:
     staddl w0, [x2]
     stset x1, [x2]
     stclrl w0, [x2]
+    // Native GNU-checked LSE EOR class, including byte/half release
+    // and returned-register aliases sharing one target MCInst backend.
+    ldeor w0, w1, [x2]
+    ldeoral x2, x3, [x4]
+    ldeorh w0, w1, [x2]
+    ldeorb w0, w1, [x2]
+    steor w0, [x2]
+    steorl w0, [x2]
+    steorh w0, [x2]
+    steorlh w0, [x2]
+    steorb w0, [x2]
+    steorlb w0, [x2]
     // All LSE byte/halfword variants on existing typed MCInst and
     // profile-gated ISA, independently compared with GNU AS below.
     staddlh w1, [x2]
@@ -1132,7 +1150,8 @@ cmp "$work/lse-mini.bin" "$work/lse-gnu.bin"
 # Subword LSE always takes W data registers, regardless of base width;
 # invalid suffix and size must not silently encode a 64-bit RMW.
 for bad in 'staddlh x1,[x2]' 'casalh x1,x3,[x2]' \
-           'ldaddlb w1,x3,[x2]' 'staddalh w1,[x2]'; do
+           'ldaddlb w1,x3,[x2]' 'staddalh w1,[x2]' 'steorlh x1,[x2]' \
+           'ldeorbh x1,x2,[x3]'; do
     printf '.arch armv8-a\n.arch_extension lse\n.text\n%s\n' "$bad" > "$work/lse-subword-invalid.s"
     if "$MINIAS" --target=aarch64 -o "$work/lse-subword-invalid.o" \
          "$work/lse-subword-invalid.s" >/dev/null 2>"$work/lse-subword-invalid.err"; then
@@ -1184,6 +1203,10 @@ profile_entry:
     tlbi rvae1, x9
     tlbi rvale1, x18
     tlbi vale2is, x0
+    tlbi ripas2e1is, x3
+    tlbi ripas2le1is, x3
+    tlbi ripas2e1, x3
+    tlbi ripas2le1, x3
 .arch armv8-a+crypto
     nop
     .inst 0xd503201f, 0xd503201f, 0xd503201f, 0xd503201f, 0xd503201f

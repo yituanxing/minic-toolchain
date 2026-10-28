@@ -1339,6 +1339,9 @@ static bool a64_system_register(const char *name,uint32_t *mrs,uint32_t *msr) {
         {"elr_el2",UINT32_C(0xd53c4020),UINT32_C(0xd51c4020)},
         {"spsr_abt",UINT32_C(0xd53c4320),UINT32_C(0xd51c4320)},
         {"spsr_und",UINT32_C(0xd53c4340),UINT32_C(0xd51c4340)},
+        {"spsr_irq",UINT32_C(0xd53c4300),UINT32_C(0xd51c4300)},
+        {"spsr_fiq",UINT32_C(0xd53c4360),UINT32_C(0xd51c4360)},
+        {"fpexc32_el2",UINT32_C(0xd53c5300),UINT32_C(0xd51c5300)},
         {"mdccint_el1",UINT32_C(0xd5300200),UINT32_C(0xd5100200)},
         {"id_aa64pfr0_el1",UINT32_C(0xd5380400),0U},
         {"id_aa64isar0_el1",UINT32_C(0xd5380600),0U},
@@ -1426,7 +1429,8 @@ static bool a64_parse_lse(MiniAs *as,MiniAsMCInst *inst,
     static const struct {const char *name;unsigned kind;bool store;} ops[]={
         {"cas",0U,false},{"ldadd",1U,false},{"ldclr",2U,false},
         {"ldset",3U,false},{"swp",4U,false},
-        {"stadd",1U,true},{"stclr",2U,true},{"stset",3U,true}
+        {"stadd",1U,true},{"stclr",2U,true},{"stset",3U,true},
+        {"ldeor",5U,false},{"steor",5U,true}
     };
     char tok[4][96];
     unsigned i,n,rs,rt=31U,rn,mode,group=0U;
@@ -1862,6 +1866,10 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
             {"tlbi","alle2is",UINT32_C(0xd50c831f),false},
             {"tlbi","ipas2e1",UINT32_C(0xd50c8420),true},
             {"tlbi","ipas2e1is",UINT32_C(0xd50c8020),true},
+            {"tlbi","ripas2e1is",UINT32_C(0xd50c8040),true},
+            {"tlbi","ripas2le1is",UINT32_C(0xd50c80c0),true},
+            {"tlbi","ripas2e1",UINT32_C(0xd50c8440),true},
+            {"tlbi","ripas2le1",UINT32_C(0xd50c84c0),true},
             {"tlbi","vmalls12e1",UINT32_C(0xd50c87df),false},
             {"tlbi","vmalls12e1is",UINT32_C(0xd50c83df),false},
             {"tlbi","vae2",UINT32_C(0xd50c8720),true},
@@ -1887,7 +1895,8 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
             if(sysops[i].needs_rt!=paired)break;
             /* ARMv8.4 range TLBI requires an explicit architectural
              * profile opt-in. It is not available under baseline v8-a. */
-            if(!strncmp(sysops[i].name,"rv",2U) &&
+            if((!strncmp(sysops[i].name,"rv",2U) ||
+                !strncmp(sysops[i].name,"ripas2",6U)) &&
                (as->target_options&A64_FEATURE_TLBI_RANGE)==0U)break;
             if(paired && (!parse_a64_reg(operand,&rt,&rt64,&rtsp) ||
                           !rt64 || rtsp))break;
@@ -2496,7 +2505,8 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
                 if(release)base|=UINT32_C(0x00400000);
                 base|=kind==2U?UINT32_C(0x1000):
                       kind==3U?UINT32_C(0x3000):
-                      kind==4U?UINT32_C(0x8000):0U;
+                      kind==4U?UINT32_C(0x8000):
+                      kind==5U?UINT32_C(0x2000):0U;
             }
             code=base|(inst->operands[0].reg<<16U)|
                  (inst->operands[2].reg<<5U)|inst->operands[1].reg;
