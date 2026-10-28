@@ -648,12 +648,20 @@ static bool a64_ins_lane(const char *text,unsigned *vd,uint32_t *imm5,
     return true;
 }
 
-static bool a64_scalar_fp_d(const char *text,unsigned *out) {
+/* One target FP scalar register-bank recognizer for S/D GPR transfers,
+ * also reused by earlier D-lane MOV. No Core register-bank ISA leak. */
+static bool a64_scalar_fp_reg(const char *text,unsigned *out,
+                              bool *wide) {
     char *end;unsigned long v;
-    if(text[0]!='d' || !isdigit((unsigned char)text[1]))return false;
+    if((text[0]!='s' && text[0]!='d') ||
+       !isdigit((unsigned char)text[1]))return false;
     errno=0;v=strtoul(text+1U,&end,10);
     if(errno || *end!='\0' || v>31UL)return false;
-    *out=(unsigned)v;return true;
+    *out=(unsigned)v;*wide=text[0]=='d';return true;
+}
+static bool a64_scalar_fp_d(const char *text,unsigned *out) {
+    bool wide;
+    return a64_scalar_fp_reg(text,out,&wide) && wide;
 }
 /* A64 register-indexed memory with typed base/index, extension and scale.
  * This does not change shared Section, MCInst, Fixup or ELF ownership. */
@@ -2468,6 +2476,25 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         put_reg(&inst->operands[0],rs,wide);
         put_reg(&inst->operands[1],rt,wide);
         put_reg(&inst->operands[2],rn,true);
+    } else if(!strcmp(op,"ldg")) {
+        /* Genuine Linux AArch64 MTE LDG: signed scaled imm9 and ordinary
+         * Xn/SP base. Share the typed MTE encoding and ELF code writer. */
+        unsigned rt,rn,mode;bool wide,sp;
+        int64_t off;
+        if((as->target_options&A64_FEATURE_MTE)==0U ||
+           !split_two(args,first,sizeof(first),second,sizeof(second)) ||
+           !parse_a64_reg(first,&rt,&wide,&sp) || sp || !wide ||
+           !parse_a64_mem(second,&rn,&off,&mode) ||
+           mode!=0U || off%16!=0 || off<-4096 || off>4080) {
+            minias_set_error(as,"bad-aarch64-ldg:%s:line=%zu",
+                             args,stmt->line);
+            free(inst);return false;
+        }
+        inst->opcode=A64_MC_MTE_STGM;inst->count=2U;
+        inst->encoding=UINT32_C(0xd9600000)|
+                      (((uint32_t)(off/16)&511U)<<12U);
+        put_reg(&inst->operands[0],rt,true);
+        put_reg(&inst->operands[1],rn,true);
     } else if(!strcmp(op,"stgm") || !strcmp(op,"ldgm")) {
         /* One typed MTE2 register+base family, no second instruction or
          * ELF emitter. GNU/Arm encode LDGM with 0xd9e00000. */
@@ -2504,6 +2531,58 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         inst->encoding=UINT32_C(0x4e001c00)|(imm5<<16U);
         put_reg(&inst->operands[0],vd,true);
         put_reg(&inst->operands[1],rn,wide);
+    } else if(!strcmp(op,"fmov")) {
+        /* Raw bitwise FMOV between GPR and FP S/D banks (both directions).
+         * No software float conversion, and never accept mixed X/S W/D. */
+        char dst[96],source[96];unsigned rd,rn;
+        bool fp_dst,fp_src,fd=false,fs=false,gd=false,gs=false,sp;
+        if(!split_two(args,dst,sizeof(dst),source,sizeof(source))) {
+            minias_set_error(as,"bad-aarch64-fmov:%s:line=%zu",
+                             args,stmt->line);free(inst);return false;
+        }
+        fp_dst=a64_scalar_fp_reg(dst,&rd,&fd);
+        fp_src=a64_scalar_fp_reg(source,&rn,&fs);
+        if(fp_dst==fp_src ||
+           (fp_dst && (!parse_a64_reg(source,&rn,&gs,&sp) || sp ||
+                       fd!=gs)) ||
+           (fp_src && (!parse_a64_reg(dst,&rd,&gd,&sp) || sp ||
+                       fs!=gd))) {
+            minias_set_error(as,"bad-aarch64-fmov:%s:line=%zu",
+                             args,stmt->line);free(inst);return false;
+        }
+        inst->opcode=A64_MC_SIMD_DUP;inst->count=2U;
+        inst->encoding=fp_dst?(fd?UINT32_C(0x9e670000):
+                                     UINT32_C(0x1e270000)):
+                               (fs?UINT32_C(0x9e660000):
+                                     UINT32_C(0x1e260000));
+        put_reg(&inst->operands[0],rd,true);
+        put_reg(&inst->operands[1],rn,true);
+    } else if(!strcmp(op,"ushr")) {
+        /* SIMD USHR immediate uses immh:immb=2*element_bits-shift;
+         * support all B/H/S/D arrangements via the existing Target vector
+         * bank and two-register MC emitter. Never truncate shift ranges. */
+        char tok[4][384];unsigned n,rd,rn,bits;
+        uint32_t da,sa;
+        int64_t shift;
+        if(!split_operands(args,tok,&n) || n!=3U ||
+           !a64_vector_view(tok[0],&rd,&da) ||
+           !a64_vector_view(tok[1],&rn,&sa) || da!=sa ||
+           !parse_signed_number(tok[2],&shift)) {
+            minias_set_error(as,"bad-aarch64-ushr:%s:line=%zu",
+                             args,stmt->line);free(inst);return false;
+        }
+        bits=8U<<((da&UINT32_C(0xc00))>>10U);
+        if(shift<1 || shift>(int64_t)bits ||
+           (bits==64U && (da&UINT32_C(0x40000000))==0U)) {
+            minias_set_error(as,"bad-aarch64-ushr-size:%s:line=%zu",
+                             args,stmt->line);free(inst);return false;
+        }
+        inst->opcode=A64_MC_SIMD_DUP;inst->count=2U;
+        inst->encoding=UINT32_C(0x2f000400)|
+                  (da&UINT32_C(0x40000000))|
+                  ((uint32_t)(2U*bits-(unsigned)shift)<<16U);
+        put_reg(&inst->operands[0],rd,true);
+        put_reg(&inst->operands[1],rn,true);
     } else if(!strcmp(op,"dmb") || !strcmp(op,"dsb") ||
               !strcmp(op,"isb")) {
         unsigned barrier=15U;

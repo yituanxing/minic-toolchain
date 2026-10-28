@@ -1888,3 +1888,46 @@ for bad in 'armv8.5-a+memtag+' 'armv8.5-a+crypto+imaginary' \
     fi
 done
 echo 'MINIAS_A64_ARCH_EXTENSION_COMPOSITION=PASS GNU_bytes_feature_composition_fail_closed'
+
+# Real GNU/Linux arm64 FP-bit transfer, MTE tag read, and AdvSIMD shift
+# first blockers. All bytes checked against independent GNU binutils.
+cat > "$work/a64-linux-fmov-ldg-ushr.s" <<'GNU_A64_LINUX_FMOV_LDG_USHR'
+.arch armv8.5-a+memtag
+.text
+fmov d16,x8
+fmov x9,d12
+fmov s10,w11
+fmov w12,s13
+ldg x4,[x1]
+ldg x2,[sp,#16]
+ldg x5,[x6,#-16]
+ldg xzr,[sp]
+ushr v6.4s,v4.4s,#7
+ushr v0.8h,v1.8h,#3
+ushr v2.2d,v3.2d,#17
+ushr v4.16b,v5.16b,#5
+ushr v7.2s,v8.2s,#2
+GNU_A64_LINUX_FMOV_LDG_USHR
+"$MINIAS" --target=aarch64 -o "$work/a64-fmov-ldg-ushr-mini.o" "$work/a64-linux-fmov-ldg-ushr.s"
+"$AARCH64_AS" -o "$work/a64-fmov-ldg-ushr-gnu.o" "$work/a64-linux-fmov-ldg-ushr.s"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-fmov-ldg-ushr-mini.o" "$work/a64-fmov-ldg-ushr-mini.bin"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-fmov-ldg-ushr-gnu.o" "$work/a64-fmov-ldg-ushr-gnu.bin"
+cmp "$work/a64-fmov-ldg-ushr-mini.bin" "$work/a64-fmov-ldg-ushr-gnu.bin"
+for bad in 'fmov d1,w2' 'fmov s1,x2' 'fmov x0,s0' \
+           'fmov wsp,s0' 'fmov sp,d0' 'fmov d33,x0' \
+           'ldg w0,[x1]' 'ldg x0,[x1,#15]' \
+           'ldg x0,[x1,#4096]' 'ldg x0,[x1,#-4112]' \
+           'ldg x0,[x1,#16]!' \
+           'ushr v0.4s,v1.4s,#0' 'ushr v0.4s,v1.4s,#33' \
+           'ushr v0.4s,v1.4s,#-1' 'ushr v0.4s,v1.8h,#7' \
+           'ushr v0.1d,v1.1d,#32'; do
+    printf '.arch armv8.5-a+memtag\n.text\n%s\n' "$bad" > "$work/a64-fmov-ldg-ushr-bad.s"
+    if "$MINIAS" --target=aarch64 -o "$work/a64-fmov-ldg-ushr-bad.o" "$work/a64-fmov-ldg-ushr-bad.s" >/dev/null 2>&1; then
+        echo "invalid FP/MTE/shift accepted: $bad" >&2;exit 1
+    fi
+done
+printf '.arch armv8-a\n.text\nldg x0,[x1]\n' > "$work/a64-ldg-disabled.s"
+if "$MINIAS" --target=aarch64 -o "$work/a64-ldg-disabled.o" "$work/a64-ldg-disabled.s" >/dev/null 2>&1; then
+    echo "MTE LDG enabled with no ISA feature" >&2;exit 1
+fi
+echo 'MINIAS_A64_FMOV_LDG_USHR=PASS GNU_exact_bytes_and_16_invalid_gates'
