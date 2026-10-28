@@ -1275,7 +1275,8 @@ static bool parse_absolute_primary(MiniAsAbsoluteExpressionParser *parser,
         symbol = minias_get_symbol(parser->as, name, false);
         if (symbol == NULL || !symbol->defined ||
             symbol->section == MINIAS_SECTION_COMMON ||
-            symbol->value > (uint64_t)INT64_MAX) {
+            (symbol->section != MINIAS_SECTION_ABS &&
+             symbol->value > (uint64_t)INT64_MAX)) {
             /* ELF COMMON st_value is alignment, not an arithmetic address.
              * GNU rejects its use in a pre-layout absolute expression. */
             return false;
@@ -1758,9 +1759,12 @@ static bool parse_equ(MiniAs *as, char *args, size_t line) {
     *comma = '\0';
     name = minias_trim(args);
     expression = minias_trim(comma + 1);
+    /* Signed absolute ELF .equ is legal: -1 is stored in uint64_t
+     * symbol storage as two's-complement bits and interpreted as i64 by
+     * Common's signed expression evaluator. Only relocatable values
+     * require section-specific nonnegative address constraints. */
     if (*name == '\0' || *expression == '\0' ||
-        !evaluate_absolute_expression(as, expression, &value) ||
-        value < 0) {
+        !evaluate_absolute_expression(as, expression, &value)) {
         minias_set_error(as,
                          "unsupported-expression:.equ:%s:line=%zu",
                          expression,
@@ -1871,7 +1875,7 @@ static bool parse_set(MiniAs *as, char *args, size_t line) {
      * Preserve relocatable symbol aliases via the existing fallthrough. */
     {
         int64_t value;
-        if(evaluate_absolute_expression(as,expression,&value) && value>=0) {
+        if(evaluate_absolute_expression(as,expression,&value)) {
             alias=minias_get_symbol(as,name,true);
             if(!alias)return false;
             if(alias->alias_pending ||

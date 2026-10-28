@@ -2336,3 +2336,23 @@ for bad in 'sha1c s0,s1,v2.4s' 'sha1p q0,d1,v2.4s' \
  fi
 done
 echo 'MINIAS_A64_KVM_CRYPTO_TABLE=PASS GNU_machine_RELA_jump_addend_postindex_and_7_negative'
+
+# ARM64 Linux AES macro emits GNU signed negative .set and .equ, which
+# must remain representable as ABS ELF symbols and in subsequent data/ISA.
+cat > "$work/a64-common-signed-symbol.s" <<'A64_SIGNED_SYM'
+.data
+.equ saved_negative,-2
+.set mutable_negative,-1
+.byte saved_negative + 3
+.byte mutable_negative + 2
+.set mutable_negative,mutable_negative-2
+.byte mutable_negative + 4
+.text
+movz x0,#0
+A64_SIGNED_SYM
+"$MINIAS" --target=aarch64 -o "$work/a64-signed-mini.o" "$work/a64-common-signed-symbol.s"
+"$AARCH64_AS" -o "$work/a64-signed-gnu.o" "$work/a64-common-signed-symbol.s"
+"$AARCH64_OBJCOPY" -j .data -O binary "$work/a64-signed-mini.o" "$work/a64-signed-mini.bin"
+"$AARCH64_OBJCOPY" -j .data -O binary "$work/a64-signed-gnu.o" "$work/a64-signed-gnu.bin"
+cmp "$work/a64-signed-mini.bin" "$work/a64-signed-gnu.bin"
+echo 'MINIAS_COMMON_SIGNED_ABSOLUTE_A64=PASS GNU_mutable_set_equ_bytes'

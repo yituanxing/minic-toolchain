@@ -2851,3 +2851,29 @@ for target in x86_64 loongarch64; do
  cmp "$work/$target-keyword-mini.bin" "$work/$target-keyword-gnu.bin"
 done
 echo 'MINIAS_COMMON_KEYWORD_WHITESPACE=PASS GNU_x86_Loong_data_bytes'
+
+# GNU signed .equ/-1 and mutable negative .set must be shared Common
+# semantics for ALL target symbol tables and object writers.
+cat > "$work/gnu-signed-absolute.s" <<'GNU_SIGNED_ABSOLUTE'
+.data
+.equ saved_negative,-2
+.set mutable_negative,-1
+.byte saved_negative + 3
+.byte mutable_negative + 2
+.set mutable_negative,mutable_negative-2
+.byte mutable_negative + 4
+GNU_SIGNED_ABSOLUTE
+for target in x86_64 loongarch64; do
+ "$MINIAS" --target="$target" -o "$work/$target-signed-mini.o" "$work/gnu-signed-absolute.s"
+ if [ "$target" = x86_64 ]; then
+  as --64 -o "$work/$target-signed-gnu.o" "$work/gnu-signed-absolute.s"
+  objcopy -j .data -O binary "$work/$target-signed-mini.o" "$work/$target-signed-mini.bin"
+  objcopy -j .data -O binary "$work/$target-signed-gnu.o" "$work/$target-signed-gnu.bin"
+ else
+  "$LOONGAS" -mabi=lp64d -o "$work/$target-signed-gnu.o" "$work/gnu-signed-absolute.s"
+  "$LOONGCOPY" -j .data -O binary "$work/$target-signed-mini.o" "$work/$target-signed-mini.bin"
+  "$LOONGCOPY" -j .data -O binary "$work/$target-signed-gnu.o" "$work/$target-signed-gnu.bin"
+ fi
+ cmp "$work/$target-signed-mini.bin" "$work/$target-signed-gnu.bin"
+done
+echo 'MINIAS_COMMON_SIGNED_ABSOLUTE=PASS GNU_x86_Loong_signed_equ_mutable_set'
