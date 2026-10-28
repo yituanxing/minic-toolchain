@@ -91,6 +91,11 @@ external_probe:
     msr par_el1, x5
     mrs x1, hcr_el2
     msr hcr_el2, x7
+    mrs x1, isr_el1
+    mrs x3, spsr_el2
+    msr spsr_el2, x4
+    mrs x2, dbgwcr0_el1
+    msr dbgwcr0_el1, x6
     mrs x3, vttbr_el2
     msr vttbr_el2, x0
     mrs x1, cnthctl_el2
