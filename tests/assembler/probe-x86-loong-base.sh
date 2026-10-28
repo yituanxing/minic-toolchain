@@ -1840,6 +1840,33 @@ objcopy -j .text -O binary "$work/local-rept-mini.o" "$work/local-rept-mini.bin"
 objcopy -j .text -O binary "$work/local-rept-gnu.o" "$work/local-rept-gnu.bin"
 cmp "$work/local-rept-mini.bin" "$work/local-rept-gnu.bin"
 echo 'MINIAS_COMMON_NUMERIC_REPT=PASS GNU_GAS_661b_662b_STABLE_BYTES'
+
+# Native GNU GAS BMI2 shift VEX bytes: 32/64-bit and all high-register
+# R/X/B/vvvv combinations. Illegal width/arity must fail closed.
+cat > "$work/x86-bmi2.s" <<'BMI2_GNU'
+.text
+shlx %rdx, %rax, %rsi
+shlx %r10, %r8, %r9
+shlxl %edx, %eax, %esi
+shrx %r9, %r12, %r13
+sarxl %ecx, %edx, %ebx
+shrx %ecx, %edx, %eax
+BMI2_GNU
+"$MINIAS" --target=x86_64 -o "$work/bmi2-mini.o" "$work/x86-bmi2.s"
+as --64 -o "$work/bmi2-gnu.o" "$work/x86-bmi2.s"
+objcopy -j .text -O binary "$work/bmi2-mini.o" "$work/bmi2-mini.bin"
+objcopy -j .text -O binary "$work/bmi2-gnu.o" "$work/bmi2-gnu.bin"
+cmp "$work/bmi2-mini.bin" "$work/bmi2-gnu.bin"
+for bad in 'shlx %edx,%rax,%rsi' 'sarx %ax,%rax,%rsi' \
+           'shrx %r9,%r12' 'shlxl %r10,%r8,%r9'; do
+    printf '.text\n%s\n' "$bad" > "$work/bmi2-invalid.s"
+    if "$MINIAS" --target=x86_64 -o "$work/bmi2-invalid.o" \
+        "$work/bmi2-invalid.s" >/dev/null 2>"$work/bmi2-invalid.err"; then
+        echo "invalid x86 BMI2 operand accepted: $bad" >&2
+        exit 1
+    fi
+done
+echo 'MINIAS_X86_BMI2_GNU=PASS VEX_3REG_32_64_ALL_EXTENDED strict_invalid'
 echo 'MINIAS_COMMON_NUMERIC_U64=PASS GNU_GAS_x86_LA64_exact_data_bytes'
 echo 'MINIAS_X86_SEGMENTED_INDIRECT=PASS GNU_AS_text_and_relocations segment_base_index_abs_rip=true indirect_memory_call_jmp=true absolute_symbol32S=true'
 echo 'MINIAS_TWO_TARGET_ORACLE=PASS x86_GNU_bytes=equal loong_GNU_bytes=equal ELF_machine=correct lp64d_v1=0x43 CET_endbr64=1 ALU_imm8_imm32=1 x86_ModRM_SIB_disp=1 x86_test_cmp_alu_memory=1 x86_scaled_index_SIB=1 LA_jr=1 LA_scaled_ptr14=1 LA_imm12_shift_upper20=1 invalid=reject'
