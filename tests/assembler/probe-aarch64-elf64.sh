@@ -157,6 +157,17 @@ external_probe:
     ldrsh w0, [x1, x2]
     ldrsh x0, [x1, x2]
     strh w0, [x1, w2, uxtw #1]
+    // GNU MOV one-instruction wide constant: MOVZ/MOVN/ORR bitmask.
+    mov x0, #4294967295
+    mov x1, #68719476704
+    mov x2, #281474976710656
+    mov x3, #2147483647
+    mov x4, #9223372036854775807
+    mov x5, #65536
+    mov x6, #0xffff0000
+    mov w7, #0xffff0000
+    mov w8, #0xffff
+    mov x12, #0xffffffff00000000
     // One typed UBFM/SBFM/BFM field model, tested W/X + GNU alias semantics.
     ubfx w0, w1, #2, #8
     ubfx x2, x3, #23, #32
@@ -508,6 +519,9 @@ for bad_source in 'ldxr x0, [x1,#4]' 'stxr x0, x1, [x2]' \
                   'ldrsw w0, [x1, x2]' \
                   'str x0, [x1, sp]' \
                   'ldr x0, [w1, x2]' \
+                  'mov w0, #4294967296' \
+                  'mov x0, #0x123456789abcdef0' \
+                  'mov x0, #18446744073709551616' \
                   'yield #1' \
                   'hint #.Lnever_defined' \
                   '.equ .Lbad_hint,128; hint #.Lbad_hint' \

@@ -1430,6 +1430,55 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
                           (~(uint64_t)value)&UINT64_C(0xffff));
         }
         put_reg(&inst->operands[0],reg,reg64);
+    } else if (!strcmp(op,"mov") &&
+               split_two(args,first,sizeof(first),second,sizeof(second)) &&
+               parse_register(first,&reg,&reg64) &&
+               (second[0]=='#' ||
+                isdigit((unsigned char)second[0]))) {
+        /* GNU MOV pseudo on integer constants, one real instruction only.
+         * Prefer MOVZ/MOVN single 16-bit halfword before the logical
+         * bitmask ORR alias. No unbounded expansion or fake instruction. */
+        uint64_t value,mask=reg64?UINT64_MAX:UINT32_MAX;
+        uint32_t fields=0U;
+        unsigned j,limit=reg64?4U:2U,variant=0U,chosen=4U;
+        const char *literal=second[0]=='#'?second+1U:second;
+        if(!minias_eval_u64_expression(literal,&value) ||
+           (!reg64 && (value>>32U)!=0U)) {
+            minias_set_error(as,"bad-aarch64-mov-constant:%s:line=%zu",
+                             second,stmt->line);
+            free(inst);return false;
+        }
+        for(j=0U;j<limit;++j) {
+            uint64_t piece=UINT64_C(0xffff)<<(j*16U);
+            if((value&~piece)==0U) {
+                chosen=j;variant=0U;break;
+            }
+        }
+        if(chosen==4U) {
+            for(j=0U;j<limit;++j) {
+                uint64_t piece=UINT64_C(0xffff)<<(j*16U);
+                if(((~value)&mask&~piece)==0U) {
+                    chosen=j;variant=2U;break;
+                }
+            }
+        }
+        if(chosen!=4U) {
+            inst->opcode=A64_MC_WIDE_IMM;inst->count=2U;
+            inst->encoding=variant|(chosen<<2U);
+            put_reg(&inst->operands[0],reg,reg64);
+            put_immediate(&inst->operands[1],(int64_t)
+                          ((variant?~value:value)>>(chosen*16U)&65535U));
+        }else if(a64_mask_bits(value,reg64,&fields)) {
+            inst->opcode=A64_MC_BITMASK_IMM;inst->count=3U;
+            inst->encoding=UINT32_C(0x32000000);
+            put_reg(&inst->operands[0],reg,reg64);
+            put_reg(&inst->operands[1],31U,reg64);
+            put_immediate(&inst->operands[2],fields);
+        }else {
+            minias_set_error(as,"bad-aarch64-mov-not-single-encoding:%s:line=%zu",
+                             second,stmt->line);
+            free(inst);return false;
+        }
     } else if (strcmp(op, "brk") == 0 && parse_imm16(args,&imm)) {
         inst->opcode=A64_MC_BRK;inst->count=1U;
         put_immediate(&inst->operands[0],(int64_t)imm);
