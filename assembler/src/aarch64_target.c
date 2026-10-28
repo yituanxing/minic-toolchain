@@ -1991,6 +1991,43 @@ static bool a64_fold_absolute_memory_address(MiniAs *as,MiniAsStmt *stmt) {
     return true;
 }
 
+/* GNU ARM64 trampolines materialize a difference of earlier same-subsection
+ * labels as a normal add/sub immediate (e.g. 1b-vector_start+4). The
+ * Common symbol evaluator validates the cancellation, while the existing
+ * target ISA decoder retains register/range/shift validation. */
+static bool a64_fold_local_alu_immediate(MiniAs *as,MiniAsStmt *stmt) {
+    const char *op=stmt->op,*original=stmt->args;
+    const char *hash,*comma;
+    char numeric[32],*out;
+    int64_t value;
+    int written;
+    size_t prefix;
+    if(strcmp(op,"add") && strcmp(op,"sub") &&
+       strcmp(op,"adds") && strcmp(op,"subs") &&
+       strcmp(op,"cmp") && strcmp(op,"cmn"))return true;
+    hash=strchr(original,'#');
+    if(!hash)return true;
+    comma=strchr(hash,',');
+    if(comma)return true; /* LSL #12 remains a separate GNU encoding. */
+    if(!minias_evaluate_same_subsection_difference(as,hash+1U,&value))
+        return true; /* defer genuinely unresolved/relocatable operands */
+    written=snprintf(numeric,sizeof(numeric),"%lld",(long long)value);
+    if(written<0 || (size_t)written>=sizeof(numeric))return false;
+    prefix=(size_t)(hash-original);
+    if(prefix>SIZE_MAX-(size_t)written-2U)return false;
+    out=malloc(prefix+(size_t)written+2U);
+    if(!out) {
+        minias_set_error(as,"out-of-memory:aarch64-fold-alu");
+        return false;
+    }
+    memcpy(out,original,prefix);
+    out[prefix]='#';
+    memcpy(out+prefix+1U,numeric,(size_t)written);
+    out[prefix+1U+(size_t)written]='\0';
+    free(stmt->args);stmt->args=out;
+    return true;
+}
+
 static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
     /* Bind aliases at this precise instruction site; subsequent .unreq
      * or redefining an alias cannot retroactively change prior MCInsts. */
@@ -2003,6 +2040,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         free(stmt->args);stmt->args=expanded;
     }
     if(!a64_fold_absolute_memory_address(as,stmt))return false;
+    if(!a64_fold_local_alu_immediate(as,stmt))return false;
     MiniAsMCInst *inst = calloc(1U, sizeof(*inst) +
                                 4U * sizeof(MiniAsMCOperand));
     unsigned reg, imm;
