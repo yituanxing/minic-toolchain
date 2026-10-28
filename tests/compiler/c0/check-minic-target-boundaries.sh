@@ -130,6 +130,12 @@ has src/target/target_info.c 'x86_64_target.pic_lowering_supported = true;'
 has src/target/target_info.c 'rv64_target.pic_lowering_supported = true;'
 has tools/minic-cc/main.c '!target_info->pic_lowering_supported'
 
+# Original Linux arm64 tlbflush __tlbi and __tlbi_sync_s1ish are
+# kernel ISA hardware, not portable Core memory fences.
+has src/target/aarch64/asm_contract.c 'aarch64_linux_tlbi_source('
+has src/target/aarch64/asm_contract.c 'aarch64_linux_tlbi_emit('
+lacks src/core/core_lower_asm_target.c 'vmalle1is'
+
 # Four ISA families, five target profiles: one storage-shape owner, distinct
 # physical ABIs. RV32 must never inherit the 8-byte LP64 word policy.
 exists src/target/common/aggregate_shape.h

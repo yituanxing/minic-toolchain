@@ -96,7 +96,8 @@ static const char *aarch64_barrier_template(const char *text, size_t len) {
     static const char *const allowed[] = {
         "dmb ish", "dmb ishld", "dmb ishst", "dmb sy",
         "dmb osh", "dmb oshld", "dmb oshst",
-        "dsb sy", "dsb ish", "dsb ishst", "dsb ld", "isb",
+        "dsb sy", "dsb ish", "dsb ishst", "dsb ld",
+        "dsb nsh", "dsb nshst", "isb",
         "msr daifset, #3", "msr daifclr, #3",
         "yield", "hint #20", "sev", "sevl", "wfe", "wfi", "nop"
     };
@@ -911,6 +912,112 @@ static bool aarch64_linux_encoded_sysreg_emit(
            (size_t)op[0].value*8U)>=0;
 }
 
+/* Entire original Linux 6.6.143 arm64 TLBI v8.5 control family.
+ * The original source uses .arch armv8.5-a followed by TLBI and an rZ
+ * GNU register-or-zero operand. This is a KERNEL HARDWARE invalidation,
+ * not a C function call or an ordinary compiler memory fence. Keep all
+ * ten original TLBI opcodes in this ISA target, never generic Core. */
+static unsigned int aarch64_linux_tlbi_form(const char *text,size_t length) {
+    static const char *const names[]={
+        "vale1is",
+        "vale2is",
+        "aside1is",
+        "rvale1is",
+        "vae1is",
+        "rvae1is",
+        "vaale1is",
+        "vaae1is",
+        "vmalle1",
+        "vmalle1is"
+    };
+    char normalized[128],expected[128];
+    size_t i,n=0U;
+    if(!text||!length||length>=sizeof(normalized))return 0U;
+    for(i=0U;i<length;++i){
+        const char ch=text[i];
+        if(ch==' '||ch=='\t'||ch=='\r'||ch=='\n')continue;
+        if(ch=='\0'||n+1U>=sizeof(normalized))return 0U;
+        normalized[n++]=ch;
+    }
+    normalized[n]='\0';
+    for(i=0U;i<sizeof(names)/sizeof(names[0]);++i){
+        const int written=snprintf(expected,sizeof(expected),
+            ".archarmv8.5-atlbi%s%s",names[i],
+            i<8U?",%x0":"");
+        if(written>0&&(size_t)written<sizeof(expected)&&
+           strcmp(normalized,expected)==0)return (unsigned int)i+1U;
+    }
+    return 0U;
+}
+static const char *aarch64_linux_tlbi_mnemonic(unsigned int form) {
+    static const char *const names[]={
+        "vale1is",
+        "vale2is",
+        "aside1is",
+        "rvale1is",
+        "vae1is",
+        "rvae1is",
+        "vaale1is",
+        "vaae1is",
+        "vmalle1",
+        "vmalle1is"
+    };
+    return !form||(size_t)form>sizeof(names)/sizeof(names[0])
+        ? NULL:names[form-1U];
+}
+static bool aarch64_linux_tlbi_source(
+    const MinicC0Program *program,const MinicInlineAsm *src,
+    MinicTargetInlineAsmContract *contract) {
+    const unsigned int form=src?aarch64_linux_tlbi_form(
+        src->template_text,src->template_length):0U;
+    const bool has_address=form>=1U&&form<=8U;
+    const MinicExpression *arg;
+    if(!program||!src||!contract||!form||src->is_goto||
+       src->output_count!=0U||src->input_count!=(has_address?1U:0U)||
+       src->label_count||src->clobber_count||src->register_clobber_count||
+       src->has_memory_clobber||
+       (has_address&&(!src->inputs||!constraint(&src->inputs[0],"rZ"))))
+        return false;
+    if(has_address){
+        arg=minic_c0_program_expression(program,src->inputs[0].expression);
+        if(!arg||!minic_type_is_integer(arg->type)||
+           minic_type_is_int128_integer(arg->type))return false;
+        contract->operand_count=1U;
+        contract->kinds[0]=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    }else contract->operand_count=0U;
+    /* Original GNU asm without output is implicitly volatile even if not
+     * spelled volatile. Hardware TLB invalidation must not be DCE'd. */
+    contract->implicit_memory_effect=true;
+    return true;
+}
+static bool aarch64_linux_tlbi_emit(
+    FILE *out,const MinicDirectLP64BlockContext *ctx,
+    const MinicCoreInstruction *ins,const MinicCoreInlineAsm *info) {
+    const unsigned int form=aarch64_linux_tlbi_form(
+        info->template_text,info->template_length);
+    const MinicCoreFunction *fn=ctx->fn;
+    const MinicCoreStructuredInlineAsmOperand *b=
+        ins->value.structured_inline_asm.operands;
+    const char *mnemonic=aarch64_linux_tlbi_mnemonic(form);
+    if(!out||!ctx||!fn||!info||!mnemonic||ctx->dynamic_frame||
+       info->is_goto||!info->is_volatile||
+       !info->has_memory_clobber||info->register_clobber_count||
+       ins->value.structured_inline_asm.operand_count!=(form<=8U?1U:0U))
+        return false;
+    if(form>8U)
+        return fprintf(out,"  .arch armv8.5-a\n  tlbi %s\n",mnemonic)>=0;
+    if(!b||b[0].operand_index!=0U||b[0].value>=fn->value_count||
+       b[0].value>4095U/8U||b[0].early_clobber||
+       b[0].has_fixed_register_binding||
+       b[0].kind!=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT||
+       !minic_type_is_integer(fn->values[b[0].value].type))return false;
+    return fprintf(out,
+            "  ldr x9, [sp, #%zu]\n"
+            "  .arch armv8.5-a\n"
+            "  tlbi %s, x9\n",
+            (size_t)b[0].value*8U,mnemonic)>=0;
+}
+
 bool minic_aarch64_qualify_inline_asm(
     const MinicC0Program *program, const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
@@ -921,6 +1028,7 @@ bool minic_aarch64_qualify_inline_asm(
         return true;
     if(aarch64_linux_encoded_sysreg_source(program,src,contract))
         return true;
+    if(aarch64_linux_tlbi_source(program,src,contract))return true;
     /* The exact native AArch64 zero-input ISA list is shared by source
      * qualification and emission. The original Linux DAIF helpers use
      * implicit volatile ASM with no explicit memory clobber. Both that
@@ -1468,6 +1576,9 @@ bool minic_aarch64_emit_qualified_structured_asm(
     if (ins->value.structured_inline_asm.inline_asm_id >= fn->inline_asm_count)
         return false;
     info = &fn->inline_asms[ins->value.structured_inline_asm.inline_asm_id];
+    if (aarch64_linux_tlbi_form(
+            info->template_text,info->template_length))
+        return aarch64_linux_tlbi_emit(out,ctx,ins,info);
     if (ins->value.structured_inline_asm.operand_count == 0U) {
         const char *barrier = aarch64_barrier_template(
             info->template_text, info->template_length);
