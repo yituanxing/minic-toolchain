@@ -44,11 +44,17 @@ import re,sys
 arch,a,b=sys.argv[1:]
 def find(path):
     lines=open(path,encoding='utf-8').readlines()
-    return [(int(m.group(1),16),m.group(2),int(m.group(3)))
+    return [(int(m.group(1),16),m.group(2),int(m.group(3),16))
             for line in lines
             if (m:=re.search(
               r'^\s*([0-9a-fA-F]+)\s+[0-9a-fA-F]+\s+(R_[A-Z0-9_]+)'
-              r'\s+[0-9a-fA-F]+\s+external_data\s+\+\s+(\d+)\s*$',line))]
+              r'\s+[0-9a-fA-F]+\s+external_data\s+\+\s+([0-9a-fA-F]+)\s*]
+x,y=map(find,(a,b))
+if len(x)!=1 or len(y)!=1 or x!=y:
+    raise SystemExit(f'{arch} MCExpr relocation mismatch: {x} vs {y}\nMiniAS: '+open(a).read()+'\nGNU: '+open(b).read())
+print(f'MINIAS_MCEXPR_FOUR_ARCH=PASS arch={arch} GNU_bytes=exact GNU_reloc=exact')
+PY
+,line))]
 x,y=map(find,(a,b))
 if len(x)!=1 or len(y)!=1 or x!=y:
     raise SystemExit(f'{arch} MCExpr relocation mismatch: {x} vs {y}')
