@@ -375,6 +375,11 @@
         665
       ]
     },
+    "src/target/common/direct_linux_bug_asm.h": {
+      "blob": "9fa7d0619426f101a55795f5a8dae0eb619ca8e6",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
     "src/target/common/direct_lp64_abi.h": {
       "blob": "4ba6b2e3f7c3d4c3de99e720a9d405177bea92ab",
       "review_depth": "inventory",
