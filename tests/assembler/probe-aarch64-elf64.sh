@@ -218,9 +218,9 @@ external_probe:
     mov x3, -1
     mov w4, -1
     // GNU ADR/SXTB/SXTH/EXTR and unprivileged LDTR/STTR families.
-    adr x0, integer_matrix
+    adr x0, external_probe
     adr x3, external_adr_target
-    adr x4, external_adr_reference
+    adr x4, external_function
     sxtb x0, w1
     sxtb w0, w1
     sxth x2, w3
