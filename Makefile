@@ -377,6 +377,7 @@ RV64_ABI_TEST_SOURCES := \
 	src/frontend/ast_global.c \
 	src/frontend/type.c \
 	src/target/data_layout.c \
+	src/target/common/aggregate_shape.c \
 	src/target/riscv64/abi.c \
 	src/target/riscv64/function_abi_plan.c \
 	tests/target/riscv64/abi_test.c
