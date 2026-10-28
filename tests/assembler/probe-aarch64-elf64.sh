@@ -2651,3 +2651,36 @@ printf '.text\nmovz x0, :abs_g3:(%s)\n' "$long_expression" >"$work/a64-long-movw
 "$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-long-movw-gnu.o" "$work/a64-long-movw-gnu.bin"
 cmp "$work/a64-long-movw-mini.bin" "$work/a64-long-movw-gnu.bin"
 echo 'MINIAS_A64_LONG_MOVW_EXPRESSION=PASS GNU_dynamic_sized_operands_and_byte_parity'
+
+# Horizontal AdvSIMD reduction family is a real ISA operation (GHASH SMINV)
+# with B/H/S destination lane and Q constraints, not a scalar GPR opcode.
+cat > "$work/a64-simd-reduce.s" <<'A64_SIMD_REDUCE'
+.text
+sminv b0,v6.16b
+smaxv b0,v6.16b
+uminv b0,v6.16b
+umaxv b0,v6.16b
+addv b0,v6.16b
+sminv h0,v6.8h
+smaxv h0,v6.8h
+uminv h0,v6.8h
+umaxv h0,v6.8h
+addv h0,v6.8h
+sminv s0,v6.4s
+smaxv s0,v6.4s
+uminv s0,v6.4s
+umaxv s0,v6.4s
+addv s0,v6.4s
+A64_SIMD_REDUCE
+"$MINIAS" --target=aarch64 -o "$work/a64-reduce-mini.o" "$work/a64-simd-reduce.s"
+"$AARCH64_AS" -o "$work/a64-reduce-gnu.o" "$work/a64-simd-reduce.s"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-reduce-mini.o" "$work/a64-reduce-mini.bin"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-reduce-gnu.o" "$work/a64-reduce-gnu.bin"
+cmp "$work/a64-reduce-mini.bin" "$work/a64-reduce-gnu.bin"
+for bad in 'sminv s0,v2.2s' 'uminv b0,v2.8h' 'addv d0,v2.2d'; do
+ printf '.text\n%s\n' "$bad" > "$work/a64-reduce-bad.s"
+ if "$MINIAS" --target=aarch64 -o "$work/a64-reduce-bad.o" "$work/a64-reduce-bad.s" >/dev/null 2>&1; then
+  echo "invalid SIMD reduction accepted: $bad" >&2; exit 1
+ fi
+done
+echo 'MINIAS_A64_VECTOR_REDUCE=PASS GNU_15_words_five_families_3_rejects'
