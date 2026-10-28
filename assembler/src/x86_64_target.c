@@ -2214,6 +2214,8 @@ static uint32_t x64_reloc(MiniAsFixupKind kind,unsigned width) {
     if(kind==MINIAS_FIXUP_X64_ABS64)
         return width==8U?1U:0U; /* R_X86_64_64 */
     if(width!=4U)return 0U;
+    if(kind==MINIAS_FIXUP_PREL64)
+        return width==8U?24U:0U; /* R_X86_64_PC64 */
     if(kind==MINIAS_FIXUP_X64_PC32 || kind==MINIAS_FIXUP_PREL32)
         return 2U;  /* R_X86_64_PC32 */
     if(kind==MINIAS_FIXUP_X64_PLT32)return 4U; /* R_X86_64_PLT32 */

@@ -2560,12 +2560,19 @@ static bool emit_symbol_minus_dot(MiniAs *as,
     /* ELF64 x86 has a direct signed PC32 relocation for S + A - P.
      * Unlike LoongArch ADD/SUB pairs, one semantic fixup is sufficient.
      * A target describes this choice, Common never tests its name. */
-    if (width == 4U &&
-        as->target->dot_relative_fixup != MINIAS_FIXUP_NONE)
-        return minias_section_append_zero(as, stmt->section, width) &&
-               minias_add_fixup(as, stmt->section, relocation_offset,
-                                as->target->dot_relative_fixup, width,
-                                expr->name, expr->addend);
+    {
+        /* Both supported ELF64 targets directly represent S+A-P at
+         * either 32 or 64 bits. The Target reports whether it supports
+         * the semantic relocation; no architecture-name branching here. */
+        MiniAsFixupKind kind=width==4U?
+            as->target->dot_relative_fixup:MINIAS_FIXUP_PREL64;
+        if((width==4U || width==8U) &&
+           kind!=MINIAS_FIXUP_NONE &&
+           as->target->fixup_relocation_type(kind,width)!=0U)
+            return minias_section_append_zero(as,stmt->section,width) &&
+                   minias_add_fixup(as,stmt->section,relocation_offset,
+                                    kind,width,expr->name,expr->addend);
+    }
 
     if (add_type == 0U || sub_type == 0U) {
         minias_set_error(as,
@@ -2687,6 +2694,32 @@ static bool emit_symbol_difference(MiniAs *as,
         return minias_section_append(as, stmt->section, bytes, width);
     }
 
+    /*
+     * GNU GAS ELF64 canonicalizes S1-S2 when S2 is a local anchor in
+     * the same section as the relocation field:
+     *   S1 - S2 + A = S1 - P + (P - S2 + A)
+     * The right side is a single ELF PC32/PC64 fixup, even if S1 is
+     * external or belongs to a different section. This avoids inventing
+     * unsupported ADD/SUB relocation pairs on x86/AArch64. Targets with
+     * genuine paired relocations continue to use their existing path.
+     */
+    if((width==4U || width==8U) &&
+       (add_type==0U || sub_type==0U) &&
+       rhs!=NULL && rhs->defined &&
+       rhs->bind==MINIAS_STB_LOCAL &&
+       rhs->section==stmt->section) {
+        MiniAsFixupKind kind=width==4U?
+            as->target->dot_relative_fixup:MINIAS_FIXUP_PREL64;
+        if(kind!=MINIAS_FIXUP_NONE &&
+           as->target->fixup_relocation_type(kind,width)!=0U) {
+            uint64_t delta=relocation_offset-rhs->value+
+                           (uint64_t)lhs_expr->addend-
+                           (uint64_t)rhs_expr->addend;
+            return minias_section_append_zero(as,stmt->section,width) &&
+                   minias_add_fixup(as,stmt->section,relocation_offset,
+                                    kind,width,lhs_expr->name,(int64_t)delta);
+        }
+    }
     if (add_type == 0U || sub_type == 0U) {
         minias_set_error(as,
                          "unsupported-symbol-difference-width:%u:line=%zu",

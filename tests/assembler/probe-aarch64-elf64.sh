@@ -970,4 +970,31 @@ A64_DIFF
 cmp "$work/diff-mini.bin" "$work/diff-gnu.bin"
 echo 'MINIAS_COMMON_SYMBOL_DIFF=PASS local_cross_section_byte_long_quad=gnu_equal'
 
+# AArch64 PREL64/PREL32 data relocations and local anchor differences
+# use one common S+A-P fixup, not a target-local expression engine.
+cat >"$work/a64-pcrel-diff.s" <<'A64_PCREL_DIFF'
+.arch armv8-a
+.data
+.globl a64_pcrel_base
+a64_pcrel_base:
+.Lpcrel_a:
+    .quad external_pcrel_target - .Lpcrel_a
+    .quad external_pcrel_target - . + 8
+.Lpcrel_b:
+    .long external_pcrel_target - .Lpcrel_b
+    .long external_pcrel_target - .
+    .quad external_pcrel_target - .Lpcrel_b + 11
+A64_PCREL_DIFF
+"$MINIAS" --target=aarch64 -o "$work/a64-pcrel-mini.o" "$work/a64-pcrel-diff.s"
+"$AARCH64_AS" -o "$work/a64-pcrel-gnu.o" "$work/a64-pcrel-diff.s"
+"$AARCH64_OBJCOPY" -j .data -O binary "$work/a64-pcrel-mini.o" "$work/a64-pcrel-mini.bin"
+"$AARCH64_OBJCOPY" -j .data -O binary "$work/a64-pcrel-gnu.o" "$work/a64-pcrel-gnu.bin"
+cmp "$work/a64-pcrel-mini.bin" "$work/a64-pcrel-gnu.bin"
+readelf -Wr "$work/a64-pcrel-mini.o" >"$work/a64-pcrel-mini.rel"
+readelf -Wr "$work/a64-pcrel-gnu.o" >"$work/a64-pcrel-gnu.rel"
+for flavor in mini gnu; do
+    test "$(grep -c 'R_AARCH64_PREL64.*external_pcrel_target' "$work/a64-pcrel-$flavor.rel")" -eq 3
+    test "$(grep -c 'R_AARCH64_PREL32.*external_pcrel_target' "$work/a64-pcrel-$flavor.rel")" -eq 2
+done
+echo 'MINIAS_COMMON_A64_PCREL64=PASS GNU_DATA_AND_RELOCATION_TYPES'
 echo 'MINIAS_AARCH64_VSLICE=PASS ELF64=1 gnu_bytes=equal relocation_call26_jump26_abs64=1 ld=pass qemu=exit0'

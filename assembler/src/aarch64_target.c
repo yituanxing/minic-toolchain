@@ -20,6 +20,7 @@
 enum {
     AARCH64_R_ABS64 = 257U,
     AARCH64_R_ABS32 = 258U,
+    AARCH64_R_PREL64 = 260U,
     AARCH64_R_PREL32 = 261U,
     AARCH64_R_ADR_PREL_LO21 = 274U,
     AARCH64_R_ADR_PREL_PG_HI21 = 275U,
@@ -2622,6 +2623,8 @@ static uint32_t aarch64_fixup_relocation_type(MiniAsFixupKind kind,
                    width == 8U ? AARCH64_R_ABS64 : 0U;
         case MINIAS_FIXUP_PREL32:
             return width == 4U ? AARCH64_R_PREL32 : 0U;
+        case MINIAS_FIXUP_PREL64:
+            return width == 8U ? AARCH64_R_PREL64 : 0U;
         case MINIAS_FIXUP_A64_CALL26:
             return width == 4U ? AARCH64_R_CALL26 : 0U;
         case MINIAS_FIXUP_A64_JUMP26:

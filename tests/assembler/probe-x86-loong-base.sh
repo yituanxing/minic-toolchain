@@ -682,6 +682,32 @@ objcopy -j .data -O binary "$work/x86-defined-gnu.o" "$work/x86-defined-gnu.bin"
 cmp "$work/x86-defined-mini.bin" "$work/x86-defined-gnu.bin"
 readelf -Wr "$work/x86-defined-mini.o" | grep -q 'There are no relocations'
 echo 'MINIAS_COMMON_SAME_SECTION_BINDINGS=PASS GNU_BYTE_EQUAL GLOBAL_WEAK_LOCAL'
+# GNU x86 ELF PC32/PC64 symbol-minus-local-anchor and symbol-minus-dot.
+# Use independent readelf relocation types and byte comparison.
+cat >"$work/x86-pcrel-diff.s" <<'X86_PCREL_DIFF'
+.data
+.globl global_pcrel_base
+global_pcrel_base:
+.Lpc_anchor:
+    .quad external_pcrel_target - .Lpc_anchor
+    .quad external_pcrel_target - . + 8
+.Lpc_second:
+    .long external_pcrel_target - .Lpc_second
+    .long external_pcrel_target - .
+    .quad external_pcrel_target - .Lpc_second + 11
+X86_PCREL_DIFF
+"$MINIAS" --target=x86_64 -o "$work/x86-pcrel-mini.o" "$work/x86-pcrel-diff.s"
+as --64 -o "$work/x86-pcrel-gnu.o" "$work/x86-pcrel-diff.s"
+objcopy -j .data -O binary "$work/x86-pcrel-mini.o" "$work/x86-pcrel-mini.bin"
+objcopy -j .data -O binary "$work/x86-pcrel-gnu.o" "$work/x86-pcrel-gnu.bin"
+cmp "$work/x86-pcrel-mini.bin" "$work/x86-pcrel-gnu.bin"
+readelf -Wr "$work/x86-pcrel-mini.o" >"$work/x86-pcrel-mini.rel"
+readelf -Wr "$work/x86-pcrel-gnu.o" >"$work/x86-pcrel-gnu.rel"
+for flavor in mini gnu; do
+    test "$(grep -c 'R_X86_64_PC64.*external_pcrel_target' "$work/x86-pcrel-$flavor.rel")" -eq 3
+    test "$(grep -c 'R_X86_64_PC32.*external_pcrel_target' "$work/x86-pcrel-$flavor.rel")" -eq 2
+done
+echo 'MINIAS_COMMON_X86_PCREL64=PASS GNU_DATA_AND_RELOCATION_TYPES'
 cat > "$work/la.s" <<'ASM_LA'
 .text
 .globl entry_la
