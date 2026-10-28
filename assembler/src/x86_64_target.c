@@ -345,6 +345,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         {"rdtsc",{0x0f,0x31},2},{"rdtscp",{0x0f,0x01,0xf9},3},
         {"rdmsr",{0x0f,0x32},2},{"wrmsr",{0x0f,0x30},2},
         {"rdpmc",{0x0f,0x33},2},{"fninit",{0xdb,0xe3},2},
+        {"xsetbv",{0x0f,0x01,0xd1},3},
         {"fwait",{0x9b},1},{"wait",{0x9b},1},
         {"cltd",{0x99},1},{"cwtl",{0x98},1},
         {"stosl",{0xab},1},{"stosq",{0x48,0xab},2},
@@ -1431,6 +1432,22 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         m->encoding=(!strcmp(s->op,"pushq") ||
                      !strcmp(s->op,"push"))?0x50U:0x58U;goto done;
     }
+    /* GNU AT&T B0+rb immediate: no REX with AH/CH/DH/BH, but explicit
+     * REX for SPL/BPL/SIL/DIL and extended low bytes. */
+    if(!strcmp(s->op,"movb") && x64_args2(s->args,src,dst) &&
+       src[0]=='$') {
+        uint64_t bits;
+        unsigned reg;
+        bool high=x64_high_register8(dst,&reg);
+        if(!high && !x64_register8(dst,&reg))goto invalid;
+        if(!minias_eval_u64_expression(src+1U,&bits) ||
+           (int64_t)bits<-256 || (int64_t)bits>255)goto invalid;
+        m->opcode=X64_MOV_IMM32;m->count=1U;
+        m->encoding=0x200U|(high?0x800U:0U);
+        m->operands[0].reg=reg;
+        m->operands[0].immediate=(uint8_t)bits;
+        goto done;
+    }
     if (!strcmp(s->op,"movl") && x64_args2(s->args,src,dst) &&
         src[0]=='$' && x64_register(dst,&rd,&wd) && !wd) {
         uint64_t bits;
@@ -2038,7 +2055,13 @@ static bool x64_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
         case X64_STACK: *size=(m->operands[0].reg>=8U)?2U:1U;return true;
         case X64_INDIRECT_REG:
             *size=m->operands[0].reg>=8U?3U:2U;return true;
-        case X64_MOV_IMM32: *size=(m->operands[0].reg>=8U)?6U:5U;return true;
+        case X64_MOV_IMM32:
+            if(m->encoding&0x200U) {
+                unsigned reg=m->operands[0].reg;
+                *size=2U+(reg>=8U ||
+                    (reg>=4U && !(m->encoding&0x800U))?1U:0U);
+            }else *size=m->operands[0].reg>=8U?6U:5U;
+            return true;
         case X64_REG_BINARY:
             *size=((m->encoding&0x2000U)?1U:0U)+
                    ((m->encoding&0x400U)?1U:0U)+
@@ -2558,10 +2581,18 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
         case X64_MOV_IMM32: {
             unsigned i;
             r=m->operands[0].reg;
-            if (r>=8U) code[n++]=0x41;
-            code[n++]=(unsigned char)(0xb8U+(r&7U));
-            for(i=0U;i<4U;++i)
-                code[n++]=(unsigned char)(m->operands[0].immediate>>(8U*i));
+            if(m->encoding&0x200U) {
+                if(r>=8U || (r>=4U && !(m->encoding&0x800U)))
+                    code[n++]=(unsigned char)(0x40U|(r>>3U));
+                code[n++]=(unsigned char)(0xb0U+(r&7U));
+                code[n++]=(unsigned char)m->operands[0].immediate;
+            }else {
+                if(r>=8U)code[n++]=0x41U;
+                code[n++]=(unsigned char)(0xb8U+(r&7U));
+                for(i=0U;i<4U;++i)
+                    code[n++]=(unsigned char)
+                        (m->operands[0].immediate>>(8U*i));
+            }
             break;
         }
         case X64_REG_BINARY:

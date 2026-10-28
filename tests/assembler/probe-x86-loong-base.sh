@@ -241,6 +241,13 @@ entry_x:
     movsq
     outsw
     insw
+    # GNU strict byte immediate B0+rb / legacy high versus REX.
+    movb $1, %al
+    movb $-1, %dl
+    movb $-128, %ah
+    movb $42, %sil
+    movb $72, %r9b
+    xsetbv
     # GNU Linux preprocessor arithmetic in memory displacements and
     # MOVL $immediate expressions: reuse Common evaluator across x86 ISA.
     addb %al, 850(%rbx)
@@ -1162,6 +1169,9 @@ for bad in            'popcntq %eax,%rax' \
            'movq 0/0(%rax), %rdx' \
            'addb %rax, 8(%rbx)' \
            'movl $0x100000000, %eax' \
+           'movb $256,%al' \
+           'movb $1,%rax' \
+           'xsetbv %eax' \
            'adcl %rax,%eax' \
            'negb %eax' \
            'negw %eax' \
