@@ -695,9 +695,15 @@ static bool loong_percpu_amo_emit(
         ins->value.structured_inline_asm.operands;
     MinicType old_type,mem_type;
     size_t i;
+    /* The ORIGINAL GNU source has NO compiler-wide memory clobber, only
+     * the +ZB memory operand. Shared Core deliberately upgrades the ABI-
+     * neutral structured effect to has_memory_clobber=true whenever any
+     * operand is MEMORY_READWRITE. This is semantic memory-effect metadata,
+     * not evidence that source added an extra clobber. Source admission
+     * already rejected an explicit \"memory\" clobber or other mutations. */
     if(!out||!ctx||!fn||!info||form==SIZE_MAX||
        !info->is_volatile||info->is_goto||
-       info->has_memory_clobber||info->register_clobber_count!=0U||
+       !info->has_memory_clobber||info->register_clobber_count!=0U||
        ins->value.structured_inline_asm.operand_count!=3U)
         return false;
     for(i=0U;i<3U;++i)
