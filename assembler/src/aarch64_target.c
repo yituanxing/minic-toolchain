@@ -1151,6 +1151,41 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
     }
     if(a64_parse_lse(as,inst,op,args)) {
         /* LSE grammar is owned by one target decoder. */
+    } else if(!strcmp(op,"madd") || !strcmp(op,"msub") ||
+              !strcmp(op,"umaddl") || !strcmp(op,"smaddl") ||
+              !strcmp(op,"umsubl") || !strcmp(op,"smsubl")) {
+        /* Same target multiply-add machine form as MUL/MULL aliases,
+         * but retaining the real Ra register rather than encoding ZR. */
+        static const struct {const char *name;uint32_t base;bool longop;} tab[]={
+            {"madd",UINT32_C(0x1b000000),false},
+            {"msub",UINT32_C(0x1b008000),false},
+            {"umaddl",UINT32_C(0x9ba00000),true},
+            {"smaddl",UINT32_C(0x9b200000),true},
+            {"umsubl",UINT32_C(0x9ba08000),true},
+            {"smsubl",UINT32_C(0x9b208000),true}
+        };
+        char tok[4][96];unsigned n,rd,rn,rm,ra,k;
+        bool wd,wn,wm,wa,sp;
+        for(k=0U;k<sizeof(tab)/sizeof(tab[0]);++k)
+            if(!strcmp(op,tab[k].name))break;
+        if(k==sizeof(tab)/sizeof(tab[0]) ||
+           !split_operands(args,tok,&n) || n!=4U ||
+           !parse_a64_reg(tok[0],&rd,&wd,&sp) || sp ||
+           !parse_a64_reg(tok[1],&rn,&wn,&sp) || sp ||
+           !parse_a64_reg(tok[2],&rm,&wm,&sp) || sp ||
+           !parse_a64_reg(tok[3],&ra,&wa,&sp) || sp ||
+           (tab[k].longop?(!wd || wn || wm || !wa):
+                          (wd!=wn || wd!=wm || wd!=wa))) {
+            minias_set_error(as,"bad-aarch64-multiply-accumulate:%s:line=%zu",
+                             args,stmt->line);
+            free(inst);return false;
+        }
+        inst->opcode=A64_MC_ARITH_ALIAS;inst->count=4U;
+        inst->encoding=tab[k].base;
+        put_reg(&inst->operands[0],rd,wd);
+        put_reg(&inst->operands[1],rn,wn);
+        put_reg(&inst->operands[2],rm,wm);
+        put_reg(&inst->operands[3],ra,wa);
     } else if(!strcmp(op,"neg") || !strcmp(op,"negs") ||
               !strcmp(op,"ngc") || !strcmp(op,"ngcs") ||
               !strcmp(op,"adc") || !strcmp(op,"adcs") ||
@@ -1260,12 +1295,15 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
                       insertion?((int64_t)reg_bits-lsb)%(int64_t)reg_bits:lsb);
         put_immediate(&inst->operands[3],
                       insertion?width-1:lsb+width-1);
-    } else if(!strcmp(op,"lsl") || !strcmp(op,"lsr")) {
+    } else if(!strcmp(op,"lsl") || !strcmp(op,"lsr") ||
+              !strcmp(op,"asr") || !strcmp(op,"ror")) {
         char tok[4][96];
         unsigned n,rd,rn,rm;
         bool wide,sourcewide,shiftwide,sp;
         int64_t amount;
-        bool right=!strcmp(op,"lsr");
+        unsigned shiftop=!strcmp(op,"lsl")?0U:
+                         !strcmp(op,"lsr")?1U:
+                         !strcmp(op,"asr")?2U:3U;
         if(!split_operands(args,tok,&n) || n!=3U ||
            !parse_a64_reg(tok[0],&rd,&wide,&sp) || sp ||
            !parse_a64_reg(tok[1],&rn,&sourcewide,&sp) || sp ||
@@ -1274,7 +1312,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
             free(inst);return false;
         }
         inst->opcode=A64_MC_SHIFT;inst->count=3U;
-        inst->encoding=right?1U:0U;
+        inst->encoding=shiftop;
         put_reg(&inst->operands[0],rd,wide);
         put_reg(&inst->operands[1],rn,wide);
         if(parse_a64_reg(tok[2],&rm,&shiftwide,&sp)) {
@@ -1737,26 +1775,32 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
             unsigned alu_rm=inst->operands[2].reg;
             code=inst->encoding|
                 (inst->operands[0].register_64?UINT32_C(0x80000000):0U)|
-                (alu_rm<<16U)|(alu_rn<<5U)|alu_rd;
+                (alu_rm<<16U)|(alu_rn<<5U)|alu_rd|
+                (inst->count==4U?(inst->operands[3].reg<<10U):0U);
             break;
         }
         case A64_MC_SHIFT: {
             unsigned rd=inst->operands[0].reg;
             unsigned rn=inst->operands[1].reg;
             bool wide=inst->operands[0].register_64;
-            bool right=(inst->encoding&1U)!=0U;
+            unsigned shiftop=inst->encoding&3U;
             if(inst->encoding&UINT32_C(0x100)) {
                 unsigned rm=inst->operands[2].reg;
-                code=(right?UINT32_C(0x1ac02400):UINT32_C(0x1ac02000))|
-                     (wide?UINT32_C(0x80000000):0U)|
+                uint32_t base=UINT32_C(0x1ac02000)+(shiftop<<10U);
+                code=base|(wide?UINT32_C(0x80000000):0U)|
                      (rm<<16U)|(rn<<5U)|rd;
             }else {
                 unsigned shift=(unsigned)inst->operands[2].immediate;
                 unsigned width=wide?64U:32U;
-                unsigned immr=right?shift:(width-shift)%width;
-                unsigned imms=right?width-1U:width-1U-shift;
-                code=(wide?UINT32_C(0xd3400000):UINT32_C(0x53000000))|
-                     (immr<<16U)|(imms<<10U)|(rn<<5U)|rd;
+                unsigned immr=shiftop==0U?(width-shift)%width:shift;
+                unsigned imms=shiftop==0U?width-1U-shift:width-1U;
+                uint32_t base=shiftop==2U?
+                     (wide?UINT32_C(0x93400000):UINT32_C(0x13000000)):
+                     (wide?UINT32_C(0xd3400000):UINT32_C(0x53000000));
+                if(shiftop==3U)
+                    code=(wide?UINT32_C(0x93c00000):UINT32_C(0x13800000))|
+                         (rn<<16U)|(shift<<10U)|(rn<<5U)|rd;
+                else code=base|(immr<<16U)|(imms<<10U)|(rn<<5U)|rd;
             }
             break;
         }

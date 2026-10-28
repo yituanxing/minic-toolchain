@@ -195,6 +195,20 @@ external_probe:
     ldrsb x0, [x1, #3]
     ldrsh w0, [x1, #2]
     ldrsh x0, [x1, #2]
+    // GNU genuine multiply-accumulate register Ra and ASR/ROR forms.
+    madd x0, x1, x2, x3
+    madd w4, w5, w6, w7
+    msub x8, x9, x10, x11
+    msub w12, w13, w14, w15
+    umaddl x0, w1, w2, x3
+    smaddl x4, w5, w6, x7
+    umsubl x0, w1, w2, x3
+    smsubl x8, w9, w10, x11
+    asr w0, w1, #1
+    asr x0, x1, #1
+    asr x0, x1, x2
+    ror x0, x1, #3
+    ror x0, x1, x2
     // One typed UBFM/SBFM/BFM field model, tested W/X + GNU alias semantics.
     ubfx w0, w1, #2, #8
     ubfx x2, x3, #23, #32
@@ -564,6 +578,14 @@ for bad_source in 'ldxr x0, [x1,#4]' 'stxr x0, x1, [x2]' \
                   'ldursw x0, [x1], #4' \
                   'str w0, [sp], #-257' \
                   'ldr x0, [x1], #256' \
+                  'umaddl x0, x1, w2, x3' \
+                  'smaddl w0, w1, w2, x3' \
+                  'madd x0, x1, w2, x3' \
+                  'msub w0, w1, w2, x3' \
+                  'umsubl x0, w1, w2, w3' \
+                  'asr x0, x1, #64' \
+                  'ror w0, w1, #32' \
+                  'ror x0, w1, x2' \
                   'yield #1' \
                   'hint #.Lnever_defined' \
                   '.equ .Lbad_hint,128; hint #.Lbad_hint' \
