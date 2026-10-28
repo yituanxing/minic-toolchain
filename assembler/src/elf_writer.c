@@ -120,7 +120,7 @@ static bool minias_write_elf(MiniAs *as,
         output->type = input->type;
         output->flags = input->flags;
         output->alignment = input->align == 0U ? 1U : input->align;
-        output->entry_size = 0U;
+        output->entry_size = input->entry_size;
         output->data = input->data;
         output->size = input->size;
     }

@@ -9,6 +9,8 @@
 #define MINIAS_SHF_WRITE 1ULL
 #define MINIAS_SHF_ALLOC 2ULL
 #define MINIAS_SHF_EXECINSTR 4ULL
+#define MINIAS_SHF_MERGE 16ULL
+#define MINIAS_SHF_STRINGS 32ULL
 #define MINIAS_SHT_PROGBITS 1U
 #define MINIAS_SHT_NOTE 7U
 #define MINIAS_SHT_NOBITS 8U
@@ -34,6 +36,7 @@ typedef struct MiniAsSection {
     uint32_t type;
     uint64_t flags;
     uint64_t align;
+    uint64_t entry_size; /* ELF sh_entsize: GNU mergeable constants/strings */
     unsigned char *data;
     size_t size;
     size_t capacity;

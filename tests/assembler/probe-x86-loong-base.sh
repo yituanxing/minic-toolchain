@@ -3436,3 +3436,32 @@ printf '.bss\n.space 17, 0x7f\n.zero 3, 0x11\n.byte 0\n' > "$work/x86-nobits-spa
 as --64 -o "$work/x86-nobits-space-gnu.o" "$work/x86-nobits-space.s" 2>"$work/x86-nobits-space-gnu.warn"
 readelf -SW "$work/x86-nobits-space-mini.o" | grep '.bss' | grep 'NOBITS' | grep '000015'
 echo 'MINIAS_SELF_AUDIT_NOBITS=PASS reject_nonzero_and_relocation_ignore_space_fill'
+
+
+# Audit GNU mergeable string/constant section metadata. It is not enough
+# to emit the right .rodata bytes: link-time duplicate folding requires
+# genuine SHF_MERGE/SHF_STRINGS and sh_entsize.
+cat > "$work/x86-merge-sections.s" <<'X86_MERGE_SECTIONS'
+.section .rodata.str1.1,"aMS",@progbits,1
+.asciz "hello"
+.section .rodata.cst4,"aM",@progbits,4
+.long 0x42
+.section .rodata.str2.2,"aMS",@progbits,2
+.short 0x48,0x0
+X86_MERGE_SECTIONS
+"$MINIAS" --target=x86_64 -o "$work/x86-merge-mini.o" "$work/x86-merge-sections.s"
+as --64 -o "$work/x86-merge-gnu.o" "$work/x86-merge-sections.s"
+for sec in .rodata.str1.1 .rodata.cst4 .rodata.str2.2; do
+  readelf -SW "$work/x86-merge-mini.o" | awk -v n="$sec" '$3==n {print $8,$9,$12}' > "$work/x86-merge-mini-$sec.meta"
+  readelf -SW "$work/x86-merge-gnu.o" | awk -v n="$sec" '$3==n {print $8,$9,$12}' > "$work/x86-merge-gnu-$sec.meta"
+  test -s "$work/x86-merge-mini-$sec.meta"
+  diff -u "$work/x86-merge-gnu-$sec.meta" "$work/x86-merge-mini-$sec.meta"
+  objcopy -j "$sec" -O binary "$work/x86-merge-mini.o" "$work/x86-merge-mini-$sec.bin"
+  objcopy -j "$sec" -O binary "$work/x86-merge-gnu.o" "$work/x86-merge-gnu-$sec.bin"
+  cmp "$work/x86-merge-mini-$sec.bin" "$work/x86-merge-gnu-$sec.bin"
+done
+printf '.section .rodata.str1.1,"aMS",@progbits,0\n.byte 0\n' > "$work/x86-merge-invalid.s"
+if "$MINIAS" --target=x86_64 -o "$work/x86-merge-invalid.o" "$work/x86-merge-invalid.s" >/dev/null 2>&1; then
+ echo 'MiniAS accepted zero SHF_MERGE entry size' >&2;exit 1
+fi
+echo 'MINIAS_SELF_AUDIT_MERGE_SECTIONS=PASS GNU_SHF_MERGE_STRINGS_entsize_exact'

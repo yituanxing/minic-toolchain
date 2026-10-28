@@ -1016,6 +1016,7 @@ static bool parse_section_directive(MiniAs *as, char *args, size_t line) {
     char *name;
     uint64_t flags = 0U;
     uint32_t type = MINIAS_SHT_PROGBITS;
+    uint64_t entry_size=0U;
 
     if (comma != NULL) {
         *comma = '\0';
@@ -1053,6 +1054,10 @@ static bool parse_section_directive(MiniAs *as, char *args, size_t line) {
                     flags |= MINIAS_SHF_WRITE;
                 } else if (*q == 'x') {
                     flags |= MINIAS_SHF_EXECINSTR;
+                } else if (*q == 'M') {
+                    flags |= MINIAS_SHF_MERGE;
+                } else if (*q == 'S') {
+                    flags |= MINIAS_SHF_STRINGS;
                 }
                 ++q;
             }
@@ -1064,6 +1069,17 @@ static bool parse_section_directive(MiniAs *as, char *args, size_t line) {
 
         if (type_separator != NULL) {
             char *kind = minias_trim(type_separator + 1);
+            char *tail=strchr(kind,',');
+            if(tail) {
+                *tail++='\0';
+                if((flags & MINIAS_SHF_MERGE)!=0U &&
+                   (!parse_u64(minias_trim(tail),&entry_size) ||
+                    entry_size==0U)) {
+                    minias_set_error(as,"bad-merge-entry-size:%s:line=%zu",
+                                     name,line);
+                    return false;
+                }
+            }
             if (*kind == '@' || *kind == '%') {
                 ++kind;
             }
@@ -1088,19 +1104,28 @@ static bool parse_section_directive(MiniAs *as, char *args, size_t line) {
             flags = MINIAS_SHF_ALLOC | MINIAS_SHF_WRITE;
         }
     }
+    if ((flags & MINIAS_SHF_MERGE)!=0U && entry_size==0U) {
+        minias_set_error(as,"missing-merge-entry-size:%s:line=%zu",name,line);
+        return false;
+    }
     /*
      * RISC-V instructions in executable input subsections must not be
      * placed at byte alignment.  In particular .text.main may follow
      * odd-length .rodata when MiniLD links section-per-function inputs.
      * The .text directive already uses four-byte instruction alignment.
      */
-    return switch_section(as,
-                          name,
-                          type,
-                          flags,
-                          (flags & MINIAS_SHF_EXECINSTR) != 0U ?
-                              (as->target->default_exec_alignment != 0U ?
-                                   as->target->default_exec_alignment : 4U) : 1U);
+    {
+        int prior=minias_find_section(as,name);
+        bool ok=switch_section(as,name,type,flags,
+                (flags & MINIAS_SHF_EXECINSTR)!=0U ?
+                   (as->target->default_exec_alignment!=0U ?
+                        as->target->default_exec_alignment:4U):1U);
+        /* sh_entsize is a property of the *first* ELF section creation.
+         * Later incompatible .section definitions are ignored by GAS. */
+        if(ok && prior<0 && entry_size!=0U)
+            as->sections[(size_t)as->current_section].entry_size=entry_size;
+        return ok;
+    }
 }
 
 static bool handle_symbol_list(MiniAs *as,
