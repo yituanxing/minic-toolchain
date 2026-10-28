@@ -16,6 +16,7 @@ cat > "$work/cfi.s" <<SRC
 .globl cfi_probe
 cfi_probe:
 .cfi_startproc
+$insn
 .cfi_def_cfa $sp,16
 .cfi_adjust_cfa_offset 16
 .cfi_val_offset $ra,-8
