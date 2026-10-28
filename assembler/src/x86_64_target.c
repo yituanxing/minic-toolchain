@@ -8,6 +8,8 @@
 
 /* A first, fail-closed GNU AT&T SysV x86-64 target. All common expression,
  * symbol, section, fragment, and ELF handling lives outside this file. */
+#define X64_CODE32 UINT32_C(1)
+
 enum { X64_ZERO = 1, X64_REG_BINARY, X64_STACK, X64_MOV_IMM32, X64_ENDBR64, X64_ALU_IMM, X64_REG_MEMORY, X64_BRANCH, X64_IMM_MEMORY, X64_MOVQ_IMMREG, X64_MOVABS_IMMREG, X64_SETCC, X64_BINARY8, X64_MOVSLQ, X64_MOVZX_REG, X64_SHIFT_IMM, X64_TEST8_IMM, X64_PUSH_IMM, X64_CMOV_REG, X64_SHIFT_CL, X64_UNARY, X64_INDIRECT_REG, X64_BSWAP, X64_TEST_IMM_REG, X64_IMUL_IMM, X64_BIT_IMMREG, X64_DOUBLE_SHIFT, X64_SYSTEM_MOVE, X64_BMI2_SHIFT };
 
 static bool x64_register(const char *text, unsigned *reg, bool *wide) {
@@ -584,6 +586,14 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
     MiniAsStmt normalized, *const original=s;
     char suffixed_op[24];
     if (!m) {minias_set_error(as,"out-of-memory:x86_64-mcinst");return false;}
+    /* IA-32 mixed-mode within ELF64. Unvalidated code32 encodings fail
+     * closed; these are the actual GNU EFI thunk PUSH/LRET instructions. */
+    if((s->target_options&X64_CODE32)!=0U &&
+       strcmp(s->op,"pushl") && strcmp(s->op,"lret")) {
+        minias_set_error(as,"unsupported-x86-code32-operand:%s:line=%zu",
+                         s->op,s->line);
+        free(m);return false;
+    }
     /* GNU REP BSF/BSR spell the F3-prefixed BMI bit-scan instructions.
      * Lower the alias via the SAME target-only TZCNT/LZCNT parser and
      * retained MCInst/REX/ModR/M/ELF fixup paths, without another
@@ -1925,8 +1935,9 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
     /* GNU AT&T defaults unsuffixed immediate PUSH to the active 64-bit
      * operand size. Linux head_64.S emits `push $0` in its return path;
      * reuse the single typed PUSH imm8/imm32 encoding and ABS32S fixup. */
-    if((!strcmp(s->op,"pushq") || !strcmp(s->op,"push")) &&
-       s->args[0]=='$') {
+    if((!strcmp(s->op,"pushq") || !strcmp(s->op,"push") ||
+       ((s->target_options&X64_CODE32)!=0U &&
+        !strcmp(s->op,"pushl"))) && s->args[0]=='$') {
         uint64_t bits;
         MiniAsSymbolExpr expr;
         if(!minias_eval_u64_expression(s->args+1,&bits) &&
@@ -1990,11 +2001,16 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         goto done;
     }
     if ((!strcmp(s->op,"pushq") || !strcmp(s->op,"popq") ||
-         !strcmp(s->op,"push") || !strcmp(s->op,"pop")) &&
-        x64_register(s->args,&rs,&ws) && ws) {
+         !strcmp(s->op,"push") || !strcmp(s->op,"pop") ||
+         ((s->target_options&X64_CODE32)!=0U &&
+          !strcmp(s->op,"pushl"))) &&
+        x64_register(s->args,&rs,&ws) &&
+        (ws || ((s->target_options&X64_CODE32)!=0U &&
+                !strcmp(s->op,"pushl") && !ws && rs<8U))) {
         m->opcode=X64_STACK;m->count=1U;m->operands[0].reg=rs;
         m->encoding=(!strcmp(s->op,"pushq") ||
-                     !strcmp(s->op,"push"))?0x50U:0x58U;goto done;
+                     !strcmp(s->op,"push") ||
+                     !strcmp(s->op,"pushl"))?0x50U:0x58U;goto done;
     }
     /* GNU AT&T B0+rb immediate: no REX with AH/CH/DH/BH, but explicit
      * REX for SPL/BPL/SIL/DIL and extended low bytes. */
@@ -3340,18 +3356,19 @@ static uint32_t x64_reloc(MiniAsFixupKind kind,unsigned width) {
     if(kind==MINIAS_FIXUP_X64_ABS32S)return 11U; /* R_X86_64_32S */
     return 0U;
 }
-/* x86-64 Target has fixed long-mode encoding. GNU .code64 is a valid
- * explicit restatement; .code16/.code32 require different target ABI and
- * must remain rejected rather than silently changing mode. */
+/* The GNU EFI thunk switches to IA-32 *within* ELF64.
+ * This is per-statement Target mode, never a driver/Core ELF-class switch. */
 static bool x64_parse_directive(MiniAs *as,const char *op,const char *args,
                                 size_t line,bool *handled) {
-    *handled=!strcmp(op,".code64");
+    bool code32=!strcmp(op,".code32");
+    *handled=code32 || !strcmp(op,".code64");
     if(!*handled)return true;
     if(*args) {
         minias_set_error(as,"unsupported-x86_64-code-mode:%s:line=%zu",
                          args,line);
         return false;
     }
+    as->target_options=code32?X64_CODE32:0U;
     return true;
 }
 /* GNU GAS treats native register tokens in .if as distinct symbolic
