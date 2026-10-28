@@ -105,14 +105,15 @@ if [[ $rc_inverse != 42 ]] ||
     echo "LP64_GP_RECORD_RETURN=FAIL target=$MINIC_RECORD_RETURN_TARGET caller=MiniC callee=GNU rc=$rc_inverse" >&2; exit 1
 fi
 cat >"$tmp/bad.i" <<'SRC'
-struct HFA { double a,b; };
+/* 3-double HFA remains outside the checked 1-2 field FPR family. */
+struct HFA { double a,b,c; };
 struct HFA hfa(double a) {
-    struct HFA x = {a, a+1.0};
+    struct HFA x = {a, a+1.0, a+2.0};
     return x;
 }
 SRC
 if "$MINIC_CC" --target="$MINIC_RECORD_RETURN_TARGET-linux" -S "$tmp/bad.i" -o "$tmp/bad.s" 2>"$tmp/bad.err";then
-  echo "LP64_GP_RECORD_RETURN=FAIL FP/HFA return incorrectly admitted" >&2
+  echo "LP64_GP_RECORD_RETURN=FAIL 3-member HFA return incorrectly admitted" >&2
   exit 1
 fi
 test ! -f "$tmp/bad.s"
