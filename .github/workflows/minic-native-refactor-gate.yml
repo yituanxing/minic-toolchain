@@ -124,6 +124,10 @@ jobs:
           for target in x86_64 aarch64 loongarch64 riscv64 riscv32; do
             MINIC_SECTION_ONLY=1 bash tests/compiler/c0/probe-linux-global-section-reloc.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc" "$target"
           done
+      - name: Original Linux local_t x86 GNU RMW exact hardware and differential runtime
+        run: |
+          set -Eeuo pipefail
+          bash tests/compiler/c0/probe-x86-linux-local-rmw.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
       - name: Common GNU function metadata and inline-asm fail-closed regressions
         shell: bash
         run: |

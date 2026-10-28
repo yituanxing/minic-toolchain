@@ -1097,7 +1097,9 @@ static const MinicX86AtomicRmwDesc x86_linux_atomic_rmw[] = {
     {"andq",8U,true,false}, {"orq",8U,true,false},
     {"xorq",8U,true,false},
     {"incl",4U,true,true}, {"decl",4U,true,true},
-    {"incq",8U,true,true}, {"decq",8U,true,true}
+    {"incq",8U,true,true}, {"decq",8U,true,true},
+    {"incl",4U,false,true}, {"decl",4U,false,true},
+    {"incq",8U,false,true}, {"decq",8U,false,true}
 };
 const MinicX86AtomicRmwDesc *minic_x86_64_atomic_rmw_description(
     MinicX86AtomicRmw form) {
@@ -1150,7 +1152,8 @@ static bool x86_linux_atomic_rmw_source(
     bool legacy,unary;
     if(!program||!src||!contract||!d||!src->is_volatile||src->is_goto||
        src->output_count!=1U||!src->outputs||src->label_count||
-       !src->has_memory_clobber||src->clobber_count!=1U||
+       (src->has_memory_clobber ? src->clobber_count!=1U :
+        (src->clobber_count!=0U || d->locked))||
        src->register_clobber_count)return false;
     unary=d->unary;
     legacy=target_constraint_is(&src->outputs[0],"=m");

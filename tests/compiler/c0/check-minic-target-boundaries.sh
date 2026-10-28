@@ -73,6 +73,11 @@ has src/target/common/global_emit.c 'minic_multi_emit_elf_global_section('
 has src/target/common/global_emit.c 'minic_multi_emit_elf_global_binding('
 has src/target/common/global_emit.c 'minic_multi_elf_safe_section_name('
 
+# Linux local_t plain INC/DEC uses the same x86 target RMW descriptor as SMP.
+has src/target/x86_64/asm_contract.c '{"incq",8U,false,true}'
+has src/target/x86_64/asm_contract.h 'MINIC_X86_ATOMIC_RMW_LOCAL_DEC64'
+lacks src/core/core_lower_asm_target.c 'local_inc'
+
 # Four ISA families, five target profiles: one storage-shape owner, distinct
 # physical ABIs. RV32 must never inherit the 8-byte LP64 word policy.
 exists src/target/common/aggregate_shape.h

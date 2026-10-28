@@ -697,7 +697,8 @@ static bool emit_linux_atomic_rmw(
     bool sign;
     if(!out||!program||!target||!fn||!frame||!b||!d||!info||
        !info->is_volatile||info->is_goto||
-       !info->has_memory_clobber||info->register_clobber_count||
+       (d->locked && !info->has_memory_clobber)||
+       info->register_clobber_count||
        n!=1U+(unary?0U:1U)+(legacy?1U:0U)||
        (legacy && (!d->locked||d->width!=8U||
           (!unary&&strcmp(d->opcode,"addq")!=0&&
