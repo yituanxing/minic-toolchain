@@ -1924,21 +1924,17 @@ static bool a64_parse_lse(MiniAs *as,MiniAsMCInst *inst,
     return true;
 }
 
-/* Pair-address immediates may contain absolute GNU .set expressions,
- * e.g. kernel AES stp [sp,#-.Lframe_local_offset-.Lframe_extra]!.
- * Fold ONLY known absolute values through the shared Core expression
- * grammar; then the existing typed pair-memory decoder still owns
- * signed-imm7 scaling, writeback mode, bounds and register validation. */
-static bool a64_fold_absolute_pair_address(MiniAs *as,MiniAsStmt *stmt) {
-    const char *op=stmt->op;
+/* Shared AArch64 memory operands may contain ABS .set expressions:
+ * pair STP/LDP, integer LDR/STR and SIMD LDR/STR all reuse the one
+ * Common absolute expression evaluator. Fold numeric displacements at
+ * instruction binding time; preserve the downstream ISA-owned signed/
+ * unsigned scaled/unscaled modes and relocation forms unchanged. */
+static bool a64_fold_absolute_memory_address(MiniAs *as,MiniAsStmt *stmt) {
     char *original=stmt->args,*open,*comma,*hash,*end,*out;
     char expression[256],number[32];
     size_t pre,n,tail;
     int64_t value;
     int written;
-    if(strcmp(op,"stp") && strcmp(op,"ldp") &&
-       strcmp(op,"stnp") && strcmp(op,"ldnp") &&
-       strcmp(op,"ldpsw"))return true;
     open=strchr(original,'[');
     if(!open || !(end=strchr(open,']')))return true;
     comma=strchr(open,',');
@@ -1972,7 +1968,7 @@ static bool a64_fold_absolute_pair_address(MiniAs *as,MiniAsStmt *stmt) {
     tail=strlen(end);
     if(pre>SIZE_MAX-(size_t)written-tail-1U)return false;
     out=malloc(pre+(size_t)written+tail+1U);
-    if(!out){minias_set_error(as,"out-of-memory:a64-pair-operand");return false;}
+    if(!out){minias_set_error(as,"out-of-memory:a64-memory-operand");return false;}
     memcpy(out,original,pre);
     memcpy(out+pre,number,(size_t)written);
     memcpy(out+pre+(size_t)written,end,tail+1U);
@@ -1991,7 +1987,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         }
         free(stmt->args);stmt->args=expanded;
     }
-    if(!a64_fold_absolute_pair_address(as,stmt))return false;
+    if(!a64_fold_absolute_memory_address(as,stmt))return false;
     MiniAsMCInst *inst = calloc(1U, sizeof(*inst) +
                                 4U * sizeof(MiniAsMCOperand));
     unsigned reg, imm;
