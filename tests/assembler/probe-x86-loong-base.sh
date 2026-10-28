@@ -3091,3 +3091,29 @@ for marker in 'CIE' 'FDE' 'DW_CFA_def_cfa_offset: 16' 'DW_CFA_offset: r6'; do
 done
 readelf -Wr "$work/x86-cfi-mini.o" | grep -q 'R_X86_64_64'
 echo 'MINIAS_X86_DWARF_CFI=PASS GNU_text_real_debug_frame_CIE_FDE_and_reloc'
+
+# The original Linux x86 unwind-hint macro is called directly as
+# STACK_FRAME_NON_STANDARD(clear_bhb_loop). GNU GAS passes "(symbol)"
+# as one argument rather than parsing it as a target ISA opcode.
+cat > "$work/gnu-parenthesized-macro.s" <<'GNU_MACRO_CALL'
+.data
+.macro stack_probe value
+.byte \value
+.endm
+stack_probe(0x20)
+stack_probe (0x21)
+GNU_MACRO_CALL
+for target in x86_64 loongarch64; do
+ "$MINIAS" --target="$target" -o "$work/$target-macro-call-mini.o" "$work/gnu-parenthesized-macro.s"
+ if [ "$target" = x86_64 ]; then
+  as --64 -o "$work/$target-macro-call-gnu.o" "$work/gnu-parenthesized-macro.s"
+  objcopy -j .data -O binary "$work/$target-macro-call-mini.o" "$work/$target-macro-call-mini.bin"
+  objcopy -j .data -O binary "$work/$target-macro-call-gnu.o" "$work/$target-macro-call-gnu.bin"
+ else
+  "$LOONGAS" -mabi=lp64d -o "$work/$target-macro-call-gnu.o" "$work/gnu-parenthesized-macro.s"
+  "$LOONGCOPY" -j .data -O binary "$work/$target-macro-call-mini.o" "$work/$target-macro-call-mini.bin"
+  "$LOONGCOPY" -j .data -O binary "$work/$target-macro-call-gnu.o" "$work/$target-macro-call-gnu.bin"
+ fi
+ cmp "$work/$target-macro-call-mini.bin" "$work/$target-macro-call-gnu.bin"
+done
+echo 'MINIAS_COMMON_PAREN_MACRO_CALL=PASS GNU_single_argument_parentheses_preserved'
