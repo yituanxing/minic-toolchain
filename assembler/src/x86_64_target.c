@@ -667,6 +667,8 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         unsigned count_reg=0U,source_reg=0U,dest_reg=0U;
         unsigned pp=s->op[1]=='h'?(s->op[2]=='l'?1U:3U):2U;
         bool wc=false,source_wide=false,dest_wide=false,ok=false;
+        bool memory=false;
+        MiniAsMCMemory mem;
         size_t len=strlen(s->op);
         if(!copy){free(m);minias_set_error(as,"out-of-memory:x86-bmi2");return false;}
         comma1=strchr(copy,',');
@@ -674,22 +676,50 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         if(comma2 && !strchr(comma2+1,',')) {
             *comma1='\0';*comma2='\0';
             a=minias_trim(copy);b=minias_trim(comma1+1);c=minias_trim(comma2+1);
-            ok=x64_register(a,&count_reg,&wc) &&
-               x64_register(b,&source_reg,&source_wide) &&
-               x64_register(c,&dest_reg,&dest_wide) && wc==source_wide && source_wide==dest_wide &&
-               (len==4U || (len==5U && s->op[4]==(dest_wide?'q':'l')));
+            if(x64_register(a,&count_reg,&wc) &&
+               x64_register(c,&dest_reg,&dest_wide) &&
+               wc==dest_wide &&
+               (len==4U || (len==5U && s->op[4]==(dest_wide?'q':'l')))) {
+                if(x64_register(b,&source_reg,&source_wide))
+                    ok=source_wide==dest_wide;
+                else if(x64_is_mem_candidate(b) &&
+                        x64_parse_base_memory(b,&mem)) {
+                    memory=true;ok=true;
+                }
+            }
         }
         free(copy);
         if(!ok)goto invalid;
-        m->opcode=X64_BMI2_SHIFT;m->count=3U;
-        m->encoding=pp;
-        m->operands[0].kind=MINIAS_MC_REGISTER;
-        m->operands[0].reg=count_reg;
-        m->operands[1].kind=MINIAS_MC_REGISTER;
-        m->operands[1].reg=source_reg;
-        m->operands[2].kind=MINIAS_MC_REGISTER;
-        m->operands[2].reg=dest_reg;
-        m->operands[2].register_64=dest_wide;
+        if(memory) {
+            /* Keep VEX map/pp in target encoding; reuse the existing
+             * typed memory emitter, ModR/M, SIB and ELF PC32/ABS32S.
+             * operands[0] = destination, [1] = memory, [2] = count. */
+            m->operands[1].memory=malloc(sizeof(mem));
+            if(!m->operands[1].memory) {
+                free(mem.symbol);free(m);
+                minias_set_error(as,"out-of-memory:x86-bmi2-memory");
+                return false;
+            }
+            *m->operands[1].memory=mem;
+            m->opcode=X64_REG_MEMORY;m->count=3U;
+            m->encoding=UINT32_C(0x40000)|pp;
+            m->operands[0].kind=MINIAS_MC_REGISTER;
+            m->operands[0].reg=dest_reg;
+            m->operands[0].register_64=dest_wide;
+            m->operands[1].kind=MINIAS_MC_MEMORY;
+            m->operands[2].kind=MINIAS_MC_REGISTER;
+            m->operands[2].reg=count_reg;
+        } else {
+            m->opcode=X64_BMI2_SHIFT;m->count=3U;
+            m->encoding=pp;
+            m->operands[0].kind=MINIAS_MC_REGISTER;
+            m->operands[0].reg=count_reg;
+            m->operands[1].kind=MINIAS_MC_REGISTER;
+            m->operands[1].reg=source_reg;
+            m->operands[2].kind=MINIAS_MC_REGISTER;
+            m->operands[2].reg=dest_reg;
+            m->operands[2].register_64=dest_wide;
+        }
         goto done;
     }
     /*
@@ -2210,6 +2240,16 @@ static bool x64_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
                  base==0xf6U || base==0xbaU || base==0x6bU ||
                  base==0xc0U || base==0xc1U?1U:
                   (m->encoding&0x400U)?2U:4U):0U;
+            if(m->encoding&UINT32_C(0x40000)) {
+                /* VEX3 + 0F38-F7 opcode + ModR/M, SIB, displacement.
+                 * VEX.W/R/X/B replace REX entirely; count encoded
+                 * through VEX.vvvv. */
+                *size=5U+(mem->address_space?1U:0U)+
+                  ((!mem->pc_relative &&
+                    (!mem->has_base || mem->has_index ||
+                     (mem->base&7U)==4U))?1U:0U)+x64_disp_bytes(mem);
+                return true;
+            }
             *size=extra+((m->encoding&0x100U)?1U:0U) +
                    ((m->encoding&0x10000U)?1U:0U) +
                    ((m->encoding&0x2000U)?1U:0U) +
@@ -2590,23 +2630,35 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
             uint32_t disp=(uint32_t)mem->displacement;
             if(mem->address_space)
                 code[n++]=(unsigned char)(mem->address_space==1U?0x64U:0x65U);
-            if(m->encoding&0x400U)code[n++]=0x66U;
-            if(m->encoding&0x2000U)code[n++]=0xf3U;
             r=m->operands[0].reg;
-            if (m->operands[0].register_64 || r>=8U ||
-                ((m->encoding&0x200U) && r>=4U &&
-                 !(m->encoding&0x800U)) ||
-                mem->base>=8U ||
-                (mem->has_index && mem->index>=8U))
-                code[n++]=(unsigned char)(0x40U |
-                    (m->operands[0].register_64?8U:0U) |
-                    ((r>>3U)<<2U) |
-                    ((mem->has_index?mem->index>>3U:0U)<<1U) |
-                    (mem->base>>3U));
-            /* Width markers 0x200/0x400 do not imply the 0F escape. */
-            if(m->encoding&0x100U)code[n++]=0x0fU;
-            if(m->encoding&0x10000U)code[n++]=0x38U;
-            code[n++]=(unsigned char)m->encoding;
+            if(m->encoding&UINT32_C(0x40000)) {
+                unsigned count=m->operands[2].reg;
+                code[n++]=0xc4U;
+                code[n++]=(unsigned char)((r>=8U?0U:0x80U)|
+                         (!mem->has_index || mem->index<8U?0x40U:0U)|
+                         (!mem->has_base || mem->base<8U?0x20U:0U)|0x02U);
+                code[n++]=(unsigned char)(
+                         (m->operands[0].register_64?0x80U:0U)|
+                         (((~count)&15U)<<3U)|(m->encoding&3U));
+                code[n++]=0xf7U;
+            } else {
+                if(m->encoding&0x400U)code[n++]=0x66U;
+                if(m->encoding&0x2000U)code[n++]=0xf3U;
+                if (m->operands[0].register_64 || r>=8U ||
+                    ((m->encoding&0x200U) && r>=4U &&
+                     !(m->encoding&0x800U)) ||
+                    mem->base>=8U ||
+                    (mem->has_index && mem->index>=8U))
+                    code[n++]=(unsigned char)(0x40U |
+                        (m->operands[0].register_64?8U:0U) |
+                        ((r>>3U)<<2U) |
+                        ((mem->has_index?mem->index>>3U:0U)<<1U) |
+                        (mem->base>>3U));
+                /* Width markers 0x200/0x400 do not imply the 0F escape. */
+                if(m->encoding&0x100U)code[n++]=0x0fU;
+                if(m->encoding&0x10000U)code[n++]=0x38U;
+                code[n++]=(unsigned char)m->encoding;
+            }
             code[n++]=(unsigned char)((((mem->pc_relative || !mem->has_base)?0U:mod)<<6U)|
                 ((r&7U)<<3U)|
                 (mem->pc_relative?5U:

@@ -2064,6 +2064,37 @@ for bad in 'movntdqa %xmm0,(%rbx)' 'movntdq (%rbx),%xmm0' \
     fi
 done
 echo 'MINIAS_X86_XMM=PASS GNU_BYTES_PC32 MOVNTDQA_MOVDQA_MOVDQU_MOVAPS_MOVUPS'
+
+# Real GNU BMI2 memory operand VEX.R/X/B/W/vvvv and PC32 relocation.
+# The exact Linux SHLX/SHRX frontier cases use the same typed memory
+# and fixup path as MOVNTDQA and ordinary x86 ModR/M instructions.
+cat > "$work/x86-bmi2-memory.s" <<'BMI2_MEM_GNU'
+.text
+shlx %rsi, 8(%rsp), %rax
+shlx %r14, -168(%rbp), %r12
+shrx %esi, (%rcx), %eax
+sarx %r9, long_symbol(%rip), %r13
+shlxl %ecx, (%r15,%r13,4), %r8d
+shrxq %rsi, 32(%rax), %rdi
+BMI2_MEM_GNU
+"$MINIAS" --target=x86_64 -o "$work/bmi2m-mini.o" "$work/x86-bmi2-memory.s"
+as --64 -o "$work/bmi2m-gnu.o" "$work/x86-bmi2-memory.s"
+objcopy -j .text -O binary "$work/bmi2m-mini.o" "$work/bmi2m-mini.bin"
+objcopy -j .text -O binary "$work/bmi2m-gnu.o" "$work/bmi2m-gnu.bin"
+cmp "$work/bmi2m-mini.bin" "$work/bmi2m-gnu.bin"
+readelf -Wr "$work/bmi2m-mini.o" > "$work/bmi2m-mini-rel.txt"
+readelf -Wr "$work/bmi2m-gnu.o" > "$work/bmi2m-gnu-rel.txt"
+grep -q 'R_X86_64_PC32.*long_symbol - 4' "$work/bmi2m-mini-rel.txt"
+grep -q 'R_X86_64_PC32.*long_symbol - 4' "$work/bmi2m-gnu-rel.txt"
+for bad in 'shlx %eax,(%rax),%rdi' 'sarx %r9,(%rax),%r9d' \
+           'shrxq %ecx,(%rsp),%rax' 'shlxl %r9,(%rsp),%eax'; do
+    printf '.text\n%s\n' "$bad" >"$work/bmi2m-bad.s"
+    if "$MINIAS" --target=x86_64 -o "$work/bmi2m-bad.o" "$work/bmi2m-bad.s" >/dev/null 2>&1; then
+      echo "GNU-invalid BMI2 mixed-width memory operand accepted: $bad" >&2
+      exit 1
+    fi
+done
+echo 'MINIAS_X86_BMI2_MEM=PASS GNU_VEX_MEM_PCREL_R_X_B_W_VVVV'
 echo 'MINIAS_COMMON_NUMERIC_U64=PASS GNU_GAS_x86_LA64_exact_data_bytes'
 echo 'MINIAS_X86_SEGMENTED_INDIRECT=PASS GNU_AS_text_and_relocations segment_base_index_abs_rip=true indirect_memory_call_jmp=true absolute_symbol32S=true'
 echo 'MINIAS_TWO_TARGET_ORACLE=PASS x86_GNU_bytes=equal loong_GNU_bytes=equal ELF_machine=correct lp64d_v1=0x43 CET_endbr64=1 ALU_imm8_imm32=1 x86_ModRM_SIB_disp=1 x86_test_cmp_alu_memory=1 x86_scaled_index_SIB=1 LA_jr=1 LA_scaled_ptr14=1 LA_imm12_shift_upper20=1 invalid=reject'
