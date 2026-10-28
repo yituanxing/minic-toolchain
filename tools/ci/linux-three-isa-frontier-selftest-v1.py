@@ -34,5 +34,10 @@ assert mod.all_machine_opcode_frontiers(trace,"aarch64")==[
     dict(function="baz",block=3,instruction=7,kind=43)]
 assert mod.all_machine_opcode_frontiers(trace,"loongarch64")==[
     dict(function="bar",block=6,instruction=9,kind=12)]
+assert mod.all_backend_reject_frontiers(
+    "MINIC_BACKEND_REJECT arch=aarch64 function=foo stage=emit "
+    "block=3 instruction=7 kind=43 backend_line=156\n","aarch64")==[
+        dict(function="foo",stage="emit",block=3,instruction=7,
+             kind=43,backend_line=156)]
 assert mod.all_machine_opcode_frontiers("no trace","x86_64")==[]
 print("THREE_LINUX_ALL_FRONTIERS_SELFTEST=PASS three_independent_failures=1 normal_unchanged=1 machine_trace=3")

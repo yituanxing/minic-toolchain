@@ -238,6 +238,68 @@ static bool emit_linux_bitops(
 
 
 
+
+/* Privileged Linux rdmsr/wrmsr with 1:/2: exception fixups. Both GNU
+ * relocation entries are real, with architecture-defined type 9 or 8.
+ * No executing these privileged opcodes in unprivileged regression tests. */
+static bool emit_linux_msr(FILE *out,const MinicC0Program *program,
+    const MinicTargetInfo *target,const MinicCoreFunction *fn,
+    const MinicX86Frame *frame,const MinicCoreInstruction *ins,
+    const MinicCoreInlineAsm *info){
+    const unsigned int form=minic_x86_64_linux_msr_form(
+        info->template_text,info->template_length);
+    const MinicCoreStructuredInlineAsmOperand *ops=
+        ins->value.structured_inline_asm.operands;
+    const size_t outputs=form==1U?2U:0U, count=form==1U?3U:3U;
+    static const char *const input_registers[]={"%rcx","%rax","%rdx"};
+    static const char *const output_registers32[]={"%eax","%edx"};
+    static const char *const output_registers64[]={"%rax","%rdx"};
+    MinicType ty;size_t width,i;bool sign;
+    if(!out||!program||!target||!fn||!frame||!ins||!info||!ops||
+       !form||!info->is_volatile||info->is_goto||
+       info->register_clobber_count||
+       info->has_memory_clobber!=(form==2U)||
+       ins->value.structured_inline_asm.operand_count!=count)return false;
+    for(i=0U;i<count;++i){
+        const bool output=i<outputs;
+        if(ops[i].value>=fn->value_count||ops[i].operand_index!=i||
+           ops[i].has_fixed_register_binding||ops[i].early_clobber||
+           ops[i].kind!=(output?
+               MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT:
+               MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT))return false;
+        if(output){
+            if(!minic_type_pointee(fn->values[ops[i].value].type,&ty)||
+               !minic_x86_64_scalar_width(program,target,ty,&width,&sign)||
+               (width!=4U&&width!=8U))return false;
+        }else if(!minic_x86_64_scalar_width(
+                 program,target,fn->values[ops[i].value].type,
+                 &width,&sign)||width!=4U)return false;
+    }
+    for(i=0U;i<count-outputs;++i)
+        if(!x86_value_load(out,frame,ops[outputs+i].value,
+                           input_registers[form==1U?0U:i]))
+            return false;
+    if(fprintf(out,
+       "1:\n  %s\n2:\n"
+       "  .pushsection \"__ex_table\",\"a\"\n"
+       "  .balign 4\n"
+       "  .long (1b) - .\n"
+       "  .long (2b) - .\n"
+       "  .long %u\n"
+       "  .popsection\n",
+       form==1U?"rdmsr":"wrmsr",form==1U?9U:8U)<0)return false;
+    for(i=0U;i<outputs;++i){
+        if(!minic_type_pointee(fn->values[ops[i].value].type,&ty)||
+           !minic_x86_64_scalar_width(program,target,ty,&width,&sign)||
+           !x86_value_load(out,frame,ops[i].value,"%r11")||
+           fprintf(out,"  %s %s, (%%r11)\n",
+            width==4U?"movl":"movq",
+            width==4U?output_registers32[i]:output_registers64[i])<0)
+           return false;
+    }
+    return true;
+}
+
 /* Linux's software fallback is executable before kernel runtime patches the
  * original CALL with the POPCNT replacement. ELF ALT section stores the
  * correct feature 151 and the two relative relocation expressions. */
@@ -751,6 +813,9 @@ bool minic_x86_64_emit_structured_asm(
     bindings = ins->value.structured_inline_asm.operands;
     if (!info->template_text)
         return false;
+    if (minic_x86_64_linux_msr_form(
+            info->template_text,info->template_length))
+        return emit_linux_msr(out,program,target,fn,frame,ins,info);
     if (minic_x86_64_hweight_alternative_form(
             info->template_text,info->template_length))
         return emit_hweight_alternative(out,program,target,fn,frame,ins,info);

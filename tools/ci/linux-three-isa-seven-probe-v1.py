@@ -7,6 +7,19 @@ import argparse,concurrent.futures,hashlib,json,os,re,subprocess,sys
 # Opt-in complete machine reject kind census, distinct from C diagnostic text.
 # The Direct LP64 residual emitters already print these trace records when
 # MINIC_M1_TRACE=1; gather ALL emitted kind owners with their source TU.
+# General shared Direct LP64 owner rejection includes source stage,
+# opcode kind, and backend line even when the residual M8 selector was
+# never reached. Archive every machine reject, not just M8 default cases.
+BACKEND_REJECT = re.compile(
+    r"^MINIC_BACKEND_REJECT arch=(aarch64|loongarch64) "
+    r"function=([^ ]+) stage=([^ ]+) block=(-?\d+) "
+    r"instruction=(-?\d+) kind=(-?\d+) backend_line=(\d+)$",re.MULTILINE)
+def all_backend_reject_frontiers(stderr,target):
+    return [dict(function=m.group(2),stage=m.group(3),
+                 block=int(m.group(4)),instruction=int(m.group(5)),
+                 kind=int(m.group(6)),backend_line=int(m.group(7)))
+            for m in BACKEND_REJECT.finditer(stderr) if m.group(1)==target]
+
 MACHINE_OPCODE_REJECT = re.compile(
     r"^MINIC_M8_OPCODE_REJECT arch=(aarch64|loongarch64) "
     r"function=([A-Za-z_][A-Za-z_0-9]*) block=(\d+) "
@@ -79,6 +92,7 @@ def probe(a):
             lines=error_text.splitlines()
             core_frontiers=all_core_function_frontiers(error_text)
             machine_frontiers=all_machine_opcode_frontiers(error_text,a.target)
+            backend_frontiers=all_backend_reject_frontiers(error_text,a.target)
             if core_frontiers and ok:
                 raise ValueError("MiniC succeeded despite failed Core functions: "+obj)
             if len({f["index"] for f in core_frontiers}) != len(core_frontiers):
@@ -89,11 +103,13 @@ def probe(a):
                         diagnostic=diag,input_sha256=row["sha256"],
                         core_frontiers=core_frontiers,
                         machine_frontiers=machine_frontiers,
+                        backend_frontiers=backend_frontiers,
                         asm_sha256=sha(asm) if ok else None)
         except subprocess.TimeoutExpired:
             asm.unlink(missing_ok=True)
             return dict(index=row["index"],object=obj,status="MINIC_TIMEOUT",diagnostic="timeout",
                         core_frontiers=[],machine_frontiers=[],
+                        backend_frontiers=[],
                         input_sha256=row["sha256"])
     with concurrent.futures.ThreadPoolExecutor(max_workers=a.workers) as executor:
         data=list(executor.map(process,selected))

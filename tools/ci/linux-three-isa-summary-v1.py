@@ -31,6 +31,7 @@ def main():
     # A string saying "M1 unsupported" cannot justify treating all 400+
     # first barriers as a single interchangeable root cause.
     machine_kinds = collections.defaultdict(lambda: collections.defaultdict(list))
+    backend_stages = collections.defaultdict(lambda: collections.defaultdict(list))
     totals = collections.defaultdict(lambda: dict(total=0, pass_count=0))
     source_state = {}
     for file in reports:
@@ -106,6 +107,20 @@ def main():
                     or type(item.get("instruction")) is not int):
                     raise SystemExit("THREE_LINUX_CENSUS=FAIL invalid machine reject")
                 machine_kinds[(target,item["kind"])][item["function"]].append(obj)
+            backend_frontiers = row.get("backend_frontiers",[])
+            if not isinstance(backend_frontiers,list):
+                raise SystemExit("THREE_LINUX_CENSUS=FAIL backend trace")
+            for item in backend_frontiers:
+                if (not isinstance(item,dict)
+                   or type(item.get("kind")) is not int
+                   or not isinstance(item.get("stage"),str)
+                   or not isinstance(item.get("function"),str)
+                   or not re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*",
+                                       item["function"])
+                   or type(item.get("backend_line")) is not int):
+                    raise SystemExit("THREE_LINUX_CENSUS=FAIL invalid backend owner")
+                backend_stages[(target,item["stage"],item["kind"],
+                                item["backend_line"])][item["function"]].append(obj)
             totals[target]["total"] += 1
             if row.get("status") == "MINIC_S_PASS":
                 if frontiers:
@@ -148,6 +163,14 @@ def main():
         for (arch,kind),functions in machine_kinds.items()
     ]
     machine_kind_frontiers.sort(key=lambda x:(-x["total"],x["target"],x["kind"]))
+    backend_reject_frontiers = [
+        dict(target=arch,stage=stage,kind=kind,backend_line=line,
+             total=sum(len(v) for v in funcs.values()),
+             distinct_functions=len(funcs),
+             owners=sorted({o for vv in funcs.values() for o in vv}))
+        for (arch,stage,kind,line),funcs in backend_stages.items()
+    ]
+    backend_reject_frontiers.sort(key=lambda x:(-x["total"],x["target"],x["stage"]))
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(dict(
         schema="minic-linux-cross-target-diagnostic-census-v2",
@@ -155,7 +178,8 @@ def main():
         compiler_sha256=next(iter(compilers)),
         targets=totals, diagnostic_groups=diagnostics,
         all_core_function_frontiers=core_frontiers,
-        machine_kind_frontiers=machine_kind_frontiers), indent=2) + "\n")
+        machine_kind_frontiers=machine_kind_frontiers,
+        backend_reject_frontiers=backend_reject_frontiers), indent=2) + "\n")
     for arch, count in sorted(totals.items()):
         print(f"THREE_LINUX_MINIC_S target={arch} compiled={count['pass_count']}/{count['total']}")
     for item in diagnostics[:25]:
@@ -169,6 +193,10 @@ def main():
         print(f"THREE_LINUX_MACHINE_KIND target={item['target']} kind={item['kind']} "
               f"failures={item['total']} functions={item['distinct_functions']} "
               f"owners={len(item['owners'])}")
+    for item in backend_reject_frontiers[:40]:
+        print(f"THREE_LINUX_BACKEND_KIND target={item['target']} stage={item['stage']} "
+              f"kind={item['kind']} source_line={item['backend_line']} "
+              f"failures={item['total']} owners={len(item['owners'])}")
     print(f"THREE_LINUX_CENSUS=COMPLETE shards=21 diagnostic_signatures={len(diagnostics)} "
           f"all_core_function_groups={len(core_frontiers)} "
           "ROOT_CAUSE_REVIEW_REQUIRED=1 GNU_AS_link_QEMU=NOT_RUN")

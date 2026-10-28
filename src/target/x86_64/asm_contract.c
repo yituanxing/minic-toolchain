@@ -218,6 +218,76 @@ static bool x86_hweight_source(const MinicC0Program *program,
     return true;
 }
 
+
+/* Original Linux asm/msr.h Linux 6.6 __rdmsr/__wrmsr:
+ * Only the EXACT 1: RDMSR/WRMSR; 2: original GNU exception table
+ * (two PC-relative exception entries, fixup type 9/8) may be executed.
+ * This is privileged machine ISA, never emulated by a plain C load. */
+unsigned int minic_x86_64_linux_msr_form(const char *text,size_t len) {
+    static const char *const exact[]={
+      "1:rdmsr2:.pushsection\"__ex_table\",\"a\".balign4"
+      ".long(1b)-..long(2b)-..long9.popsection",
+      "1:wrmsr2:.pushsection\"__ex_table\",\"a\".balign4"
+      ".long(1b)-..long(2b)-..long8.popsection"
+    };
+    char norm[256];size_t i,n=0U;
+    if(!text||!len||len>=sizeof(norm))return 0U;
+    for(i=0U;i<len;++i){
+       const char c=text[i];
+       if(c==' '||c==9||c==10||c==13)continue;
+       if(n+1U>=sizeof(norm))return 0U;
+       norm[n++]=c;
+    }
+    norm[n]=0;
+    for(i=0U;i<2U;++i)
+        if(strcmp(norm,exact[i])==0)return (unsigned int)i+1U;
+    return 0U;
+}
+static bool x86_linux_msr_source(const MinicC0Program *program,
+    const MinicInlineAsm *src,MinicTargetInlineAsmContract *contract) {
+    const unsigned int form=src?minic_x86_64_linux_msr_form(
+        src->template_text,src->template_length):0U;
+    const MinicExpression *e;MinicType type;
+    size_t i;
+    if(!program||!src||!contract||!form||!src->is_volatile||
+       src->is_goto||src->label_count||
+       src->output_count!=(form==1U?2U:0U)||
+       src->input_count!=(form==1U?1U:3U)||
+       (form==1U&&!src->outputs)||!src->inputs||
+       src->clobber_count!=(form==1U?0U:1U)||
+       src->has_memory_clobber!=(form==2U)||
+       src->register_clobber_count)return false;
+    if(form==1U) {
+        if(!c_is(&src->outputs[0],"=a")||
+           !c_is(&src->outputs[1],"=d")||
+           !c_is(&src->inputs[0],"c"))return false;
+    }else if(!c_is(&src->inputs[0],"c")||
+             !c_is(&src->inputs[1],"a")||
+             !c_is(&src->inputs[2],"d"))return false;
+    for(i=0U;i<src->output_count+src->input_count;++i){
+        const bool output=i<src->output_count;
+        const MinicInlineAsmOperand *op=output?
+            &src->outputs[i]:&src->inputs[i-src->output_count];
+        e=minic_c0_program_expression(program,op->expression);
+        if(!e||!minic_type_unqualified(e->type,&type)||
+           type.base_kind!=MINIC_TYPE_BASE_INT||
+           !minic_type_is_integer(type)||type.pointer_depth||
+           (output&&(e->value_category!=MINIC_VALUE_LVALUE||
+                     minic_type_is_const(e->type)))||
+           (form==1U&&output?
+              (type.integer_rank!=MINIC_INTEGER_RANK_LONG&&
+               type.integer_rank!=MINIC_INTEGER_RANK_INT):
+              type.integer_rank!=MINIC_INTEGER_RANK_INT))
+            return false;
+    }
+    contract->operand_count=src->output_count+src->input_count;
+    for(i=0U;i<contract->operand_count;++i)
+        contract->kinds[i]=i<src->output_count?
+            MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT:
+            MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    return true;
+}
+
 static bool x86_nospec_source(const MinicC0Program *program,
                               const MinicInlineAsm *src) {
     const MinicExpression *out, *size, *index;
@@ -1134,6 +1204,8 @@ bool minic_x86_64_qualify_inline_asm(
     bool is_mulacc = false, is_muldiv = false;
     size_t i, count;
     if (!contract) return false;
+    if (x86_linux_msr_source(program, source, contract))
+        return true;
     if (x86_hweight_source(program, source, contract))
         return true;
     if (x86_counter_source(program, source, contract))
