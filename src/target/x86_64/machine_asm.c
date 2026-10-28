@@ -270,13 +270,13 @@ static bool emit_linux_atomic_rmw(
        !x86_value_load(out,frame,b[0].value,"%r11"))
         return false;
     if(d->locked&&
-       fputs("  .pushsection .smp_locks,\\\"a\\\"\\n"
-             "  .balign 4\\n"
-             "  .long 671f - .\\n"
-             "  .popsection\\n"
-             "671:\\n",out)==EOF)
+       fputs("  .pushsection .smp_locks,\\"a\\"\n"
+             "  .balign 4\n"
+             "  .long 671f - .\n"
+             "  .popsection\n"
+             "671:\n",out)==EOF)
         return false;
-    return fprintf(out,"  %s%s %s, (%%r11)\\n",
+    return fprintf(out,"  %s%s %s, (%%r11)\n",
                    d->locked?"lock; ":"",d->opcode,
                    d->width==4U?"%r10d":"%r10")>=0;
 }

@@ -291,11 +291,11 @@ MinicX86AtomicRmw minic_x86_64_atomic_rmw_form(const char *text,size_t len) {
     if(!text||!len||len>=sizeof(compact))return MINIC_X86_ATOMIC_RMW_NONE;
     for(i=0U;i<len;++i){
         const char c=text[i];
-        if(c==' '||c=='\\t'||c=='\\r'||c=='\\n')continue;
+        if(c==' '||c=='\t'||c=='\r'||c=='\n')continue;
         if(j+1U>=sizeof(compact))return MINIC_X86_ATOMIC_RMW_NONE;
         compact[j++]=c;
     }
-    compact[j]='\\0';
+    compact[j]='\0';
     for(k=0U;k<sizeof(x86_linux_atomic_rmw)/
                     sizeof(x86_linux_atomic_rmw[0]);++k) {
         const MinicX86AtomicRmwDesc *d=&x86_linux_atomic_rmw[k];
