@@ -3465,3 +3465,43 @@ if "$MINIAS" --target=x86_64 -o "$work/x86-merge-invalid.o" "$work/x86-merge-inv
  echo 'MiniAS accepted zero SHF_MERGE entry size' >&2;exit 1
 fi
 echo 'MINIAS_SELF_AUDIT_MERGE_SECTIONS=PASS GNU_SHF_MERGE_STRINGS_entsize_exact'
+
+
+# Code-review-discovered GNU section family semantics: the dot boundary
+# matters. '.bss.hot' is NOBITS; '.bssification' is PROGBITS.
+# '.note.' defaults to NOTE without SHF_ALLOC, whereas .note.GNU-stack is
+# PROGBITS (and no SHF_ALLOC). Also honor commas INSIDE quoted names.
+cat > "$work/x86-section-family-selfaudit.s" <<'X86_SECTION_FAMILY'
+.section .bss.hot
+.zero 7
+.section .bssification
+.byte 0x41
+.section .rodata_extra
+.byte 0x42
+.section .textodd
+.byte 0x43
+.section .note.selfaudit
+.byte 0
+.section .note.GNU-stack
+.byte 0
+.section ".selfaudit,with,commas","a",@progbits
+.byte 0xcc
+X86_SECTION_FAMILY
+"$MINIAS" --target=x86_64 -o "$work/x86-section-family-mini.o" "$work/x86-section-family-selfaudit.s"
+as --64 -o "$work/x86-section-family-gnu.o" "$work/x86-section-family-selfaudit.s"
+for section in .bss.hot .bssification .rodata_extra .textodd .note.selfaudit .note.GNU-stack .selfaudit,with,commas; do
+  readelf -SW "$work/x86-section-family-mini.o" |
+    awk -v name="$section" '$3==name {print $4,$9}' > "$work/x86-section-family-mini-$section.meta"
+  readelf -SW "$work/x86-section-family-gnu.o" |
+    awk -v name="$section" '$3==name {print $4,$9}' > "$work/x86-section-family-gnu-$section.meta"
+  test -s "$work/x86-section-family-mini-$section.meta"
+  diff -u "$work/x86-section-family-gnu-$section.meta" "$work/x86-section-family-mini-$section.meta"
+done
+objcopy -j '.selfaudit,with,commas' -O binary "$work/x86-section-family-mini.o" "$work/x86-section-family-mini.bin"
+objcopy -j '.selfaudit,with,commas' -O binary "$work/x86-section-family-gnu.o" "$work/x86-section-family-gnu.bin"
+cmp "$work/x86-section-family-mini.bin" "$work/x86-section-family-gnu.bin"
+printf '.section ".unterminated,section\n.byte 1\n' > "$work/x86-section-invalid-quote.s"
+if "$MINIAS" --target=x86_64 -o "$work/x86-section-invalid-quote.o" "$work/x86-section-invalid-quote.s" >/dev/null 2>&1; then
+  echo 'MiniAS accepted unterminated section name' >&2;exit 1
+fi
+echo 'MINIAS_SELF_AUDIT_GNU_SECTION_FAMILY=PASS note_stack_nobits_family_and_quoted_comma'
