@@ -40,7 +40,7 @@ fi
 for bad in invalid-register injected wrong-output no-volatile;do
  case "$bad" in
  invalid-register) sed 's/((3) << 19)/((2) << 19)/g' "$d/orig.i" >"$d/bad.i" ;;
- injected) sed 's/\\\\t.purgem/\\\\tnop\\\\n\\\\t.purgem/g' "$d/orig.i" >"$d/bad.i" ;;
+ injected) sed 's/mrs_s %0/mrs_s %0; nop/g' "$d/orig.i" >"$d/bad.i" ;;
  wrong-output) sed 's/"=r"(ret)/"=m"(ret)/g' "$d/orig.i" >"$d/bad.i" ;;
  no-volatile) sed 's/__volatile__//g' "$d/orig.i" >"$d/bad.i" ;;
  esac
