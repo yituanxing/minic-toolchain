@@ -2206,11 +2206,11 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         /* GNU treats both #-1 and #(-1) as signed constants. Reuse
          * Common's signed expression evaluator; never parse a second
          * target-specific parenthesis/arithmetic grammar. */
+        int64_t signed_value=0;
         bool negative=*literal=='-';
         if(!negative && *literal=='(' &&
            parse_signed_number(literal,&signed_value) &&
            signed_value<0)negative=true;
-        int64_t signed_value=0;
         if(negative) {
             if(!parse_signed_number(literal,&signed_value) ||
                (!reg64 && signed_value<INT32_MIN)) {
