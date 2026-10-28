@@ -35,10 +35,13 @@ static bool minic_multi_integer_record_members(
          * Reuse DataLayout's element size and natural member alignment.
          * Reject flexible/zero length arrays, floats/HFAs, packed members,
          * bitfields, and storage overflow instead of guessing ABI classes. */
-        if (field == NULL || field->is_packed || field->is_bit_field ||
+        if (field == NULL || field->is_packed ||
             field->is_flexible_array || field->is_zero_length_array ||
             field->element_count == 0U ||
             (!field->is_array && field->element_count != 1U) ||
+            (field->is_bit_field &&
+             (field->is_array || !minic_type_is_integer(field->type) ||
+              field->element_count != 1U || field->bit_width == 0U)) ||
             !minic_multi_integer_record_members(
                  program, target, field->type, depth + 1U) ||
             !minic_data_layout_type(target->data_layout, program, field->type,
@@ -46,10 +49,20 @@ static bool minic_multi_integer_record_members(
             field_size > SIZE_MAX / field->element_count)
             return false;
         field_size *= field->element_count;
-        if (!minic_data_layout_record_field_offset(
+        /* A named natural C integer bit-field is also carried in the
+         * enclosing INTEGER eightbyte(s). Let DataLayout own bit/byte
+         * placement: a field starting inside a storage unit need not have
+         * a byte offset aligned to its declared base type. The assembly
+         * producer moves the full raw object bytes, preserving GNU packing
+         * and the caller's signed-bitfield interpretation. */
+        if ((field->is_bit_field &&
+             field->bit_width > field_size * 8U) ||
+            !minic_data_layout_record_field_offset(
                  target->data_layout, program, record, i, &offset) ||
-            (field_align != 0U && offset % field_align != 0U) ||
-            offset > total || field_size > total - offset)
+            (!field->is_bit_field && field_align != 0U &&
+             offset % field_align != 0U) ||
+            offset >= total ||
+            (!field->is_bit_field && field_size > total - offset))
             return false;
     }
     return true;
