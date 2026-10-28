@@ -662,13 +662,14 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
             inline_asm->template_length == 0U || !inline_asm->is_volatile) {
             return false;
         }
-        /* Zero-operand structured ASM represents an effect only, never an
-         * SSA value. Its one required memory-clobber effect does not itself
-         * qualify the machine instruction: the target must still re-check
-         * the full exact hardware fence template before emission. */
+        /* GNU volatile zero-operand hardware ASM remains a Core effect
+         * with or without an explicit compiler "memory" clobber. The
+         * latter is source metadata, not permission to erase real DAIF,
+         * DSB, SEV or LoongArch DBAR instructions. Target qualification
+         * has admitted the exact ISA form and MUST re-prove it at machine
+         * emission; Core only verifies effect shape and empty operands. */
         if (instruction->value.structured_inline_asm.operand_count == 0U)
-            return inline_asm->has_memory_clobber &&
-                   inline_asm->register_clobber_count == 0U;
+            return inline_asm->register_clobber_count == 0U;
         for (operand_index = 0U;
              operand_index < instruction->value.structured_inline_asm.operand_count;
              ++operand_index) {
