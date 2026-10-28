@@ -25,4 +25,14 @@ assert actual==[
 assert mod.all_core_function_frontiers("normal single error without census") == []
 assert mod.all_core_function_frontiers(
     "MINIC_CORE_FUNCTION_FAILURE kind=UNSUPPORTED index=-1 function=bad\n") == []
-print("THREE_LINUX_ALL_FRONTIERS_SELFTEST=PASS three_independent_failures=1 normal_unchanged=1")
+trace=(
+    "MINIC_M8_OPCODE_REJECT arch=aarch64 function=foo block=1 instruction=2 kind=43\n"
+    "MINIC_M8_OPCODE_REJECT arch=loongarch64 function=bar block=6 instruction=9 kind=12\n"
+    "MINIC_M8_OPCODE_REJECT arch=aarch64 function=baz block=3 instruction=7 kind=43\n")
+assert mod.all_machine_opcode_frontiers(trace,"aarch64")==[
+    dict(function="foo",block=1,instruction=2,kind=43),
+    dict(function="baz",block=3,instruction=7,kind=43)]
+assert mod.all_machine_opcode_frontiers(trace,"loongarch64")==[
+    dict(function="bar",block=6,instruction=9,kind=12)]
+assert mod.all_machine_opcode_frontiers("no trace","x86_64")==[]
+print("THREE_LINUX_ALL_FRONTIERS_SELFTEST=PASS three_independent_failures=1 normal_unchanged=1 machine_trace=3")

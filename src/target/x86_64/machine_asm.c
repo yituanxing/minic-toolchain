@@ -251,7 +251,7 @@ static bool emit_hweight_alternative(FILE *out,const MinicC0Program *p,
         ins->value.structured_inline_asm.operands;
     MinicType ty;size_t bytes;bool sign;
     if(!out||!p||!t||!fn||!frame||!ins||!info||!b||
-       (w!=4U&&w!=8U)||info->is_volatile||info->is_goto||
+       (w!=4U&&w!=8U)||info->is_goto||
        info->register_clobber_count||info->has_memory_clobber||
        ins->value.structured_inline_asm.operand_count!=2U||
        b[0].operand_index!=0U||b[1].operand_index!=1U||

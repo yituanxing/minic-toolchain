@@ -4,6 +4,20 @@
 Discovery only: a successful .s is NOT GNU assembly/link/QEMU proof.
 """
 import argparse,concurrent.futures,hashlib,json,os,re,subprocess,sys
+# Opt-in complete machine reject kind census, distinct from C diagnostic text.
+# The Direct LP64 residual emitters already print these trace records when
+# MINIC_M1_TRACE=1; gather ALL emitted kind owners with their source TU.
+MACHINE_OPCODE_REJECT = re.compile(
+    r"^MINIC_M8_OPCODE_REJECT arch=(aarch64|loongarch64) "
+    r"function=([A-Za-z_][A-Za-z_0-9]*) block=(\d+) "
+    r"instruction=(\d+) kind=(\d+)$", re.MULTILINE)
+
+def all_machine_opcode_frontiers(stderr, target):
+    return [dict(function=m.group(2), block=int(m.group(3)),
+                 instruction=int(m.group(4)), kind=int(m.group(5)))
+            for m in MACHINE_OPCODE_REJECT.finditer(stderr)
+            if m.group(1)==target]
+
 CORE_FUNCTION_FAILURE = re.compile(
     r"^MINIC_CORE_FUNCTION_FAILURE kind=(UNSUPPORTED|ERROR) index=(\d+) "
     r"function=([A-Za-z_][A-Za-z_0-9]*)$", re.MULTILINE)
@@ -55,6 +69,7 @@ def probe(a):
                 raise ValueError("invalid MiniC replay flags for "+obj)
             env=os.environ.copy()
             env["MINIC_CORE_FAILURE_CENSUS"]="1"
+            env["MINIC_M1_TRACE"]="1"
             p=subprocess.run([str(compiler),"--target="+a.target+"-linux",
                               *row["minic_flags"],"-S",str(file),"-o",str(asm)],
                              capture_output=True,timeout=a.timeout,env=env)
@@ -63,6 +78,7 @@ def probe(a):
             error_text=p.stderr.decode(errors="replace")
             lines=error_text.splitlines()
             core_frontiers=all_core_function_frontiers(error_text)
+            machine_frontiers=all_machine_opcode_frontiers(error_text,a.target)
             if core_frontiers and ok:
                 raise ValueError("MiniC succeeded despite failed Core functions: "+obj)
             if len({f["index"] for f in core_frontiers}) != len(core_frontiers):
@@ -72,11 +88,13 @@ def probe(a):
             return dict(index=row["index"],object=obj,status="MINIC_S_PASS" if ok else "MINIC_FAIL",
                         diagnostic=diag,input_sha256=row["sha256"],
                         core_frontiers=core_frontiers,
+                        machine_frontiers=machine_frontiers,
                         asm_sha256=sha(asm) if ok else None)
         except subprocess.TimeoutExpired:
             asm.unlink(missing_ok=True)
             return dict(index=row["index"],object=obj,status="MINIC_TIMEOUT",diagnostic="timeout",
-                        core_frontiers=[],input_sha256=row["sha256"])
+                        core_frontiers=[],machine_frontiers=[],
+                        input_sha256=row["sha256"])
     with concurrent.futures.ThreadPoolExecutor(max_workers=a.workers) as executor:
         data=list(executor.map(process,selected))
     buckets={}

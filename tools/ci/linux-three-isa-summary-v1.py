@@ -27,6 +27,10 @@ def main():
     # These are genuine post-prune Core failure functions, not an inference
     # from the single first-error diagnostic of the translation unit.
     core_groups = collections.defaultdict(lambda: collections.defaultdict(list))
+    # Enumerate real AArch64/LoongArch64 unsupported MACHINE instruction kinds.
+    # A string saying "M1 unsupported" cannot justify treating all 400+
+    # first barriers as a single interchangeable root cause.
+    machine_kinds = collections.defaultdict(lambda: collections.defaultdict(list))
     totals = collections.defaultdict(lambda: dict(total=0, pass_count=0))
     source_state = {}
     for file in reports:
@@ -88,6 +92,20 @@ def main():
                     raise SystemExit("THREE_LINUX_CENSUS=FAIL invalid Core frontier identity")
                 core_indices.add(item["index"])
                 core_groups[(item["kind"], item["function"])][target].append(obj)
+            machine_frontiers = row.get("machine_frontiers", [])
+            if not isinstance(machine_frontiers, list):
+                raise SystemExit("THREE_LINUX_CENSUS=FAIL invalid machine trace list")
+            for item in machine_frontiers:
+                if (not isinstance(item,dict)
+                    or type(item.get("kind")) is not int
+                    or item["kind"] < 0
+                    or not isinstance(item.get("function"),str)
+                    or not re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*",
+                                        item["function"])
+                    or type(item.get("block")) is not int
+                    or type(item.get("instruction")) is not int):
+                    raise SystemExit("THREE_LINUX_CENSUS=FAIL invalid machine reject")
+                machine_kinds[(target,item["kind"])][item["function"]].append(obj)
             totals[target]["total"] += 1
             if row.get("status") == "MINIC_S_PASS":
                 if frontiers:
@@ -122,13 +140,22 @@ def main():
         for (kind, function), owners in core_groups.items()
     ]
     core_frontiers.sort(key=lambda e: (-e["total"], e["kind"], e["function"]))
+    machine_kind_frontiers = [
+        dict(target=arch,kind=kind,
+             total=sum(len(v) for v in functions.values()),
+             distinct_functions=len(functions),
+             owners=sorted({o for names in functions.values() for o in names}))
+        for (arch,kind),functions in machine_kinds.items()
+    ]
+    machine_kind_frontiers.sort(key=lambda x:(-x["total"],x["target"],x["kind"]))
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(dict(
         schema="minic-linux-cross-target-diagnostic-census-v2",
         verdict="MINIC_S_DISCOVERY_ONLY_NOT_GNU_AS_LINK_OR_QEMU",
         compiler_sha256=next(iter(compilers)),
         targets=totals, diagnostic_groups=diagnostics,
-        all_core_function_frontiers=core_frontiers), indent=2) + "\n")
+        all_core_function_frontiers=core_frontiers,
+        machine_kind_frontiers=machine_kind_frontiers), indent=2) + "\n")
     for arch, count in sorted(totals.items()):
         print(f"THREE_LINUX_MINIC_S target={arch} compiled={count['pass_count']}/{count['total']}")
     for item in diagnostics[:25]:
@@ -138,6 +165,10 @@ def main():
         count = sum(len(item["targets"].get(arch, [])) for item in core_frontiers)
         functions = sum(arch in item["targets"] for item in core_frontiers)
         print(f"THREE_LINUX_ALL_CORE_FRONTIERS target={arch} failures={count} distinct_functions={functions}")
+    for item in machine_kind_frontiers[:30]:
+        print(f"THREE_LINUX_MACHINE_KIND target={item['target']} kind={item['kind']} "
+              f"failures={item['total']} functions={item['distinct_functions']} "
+              f"owners={len(item['owners'])}")
     print(f"THREE_LINUX_CENSUS=COMPLETE shards=21 diagnostic_signatures={len(diagnostics)} "
           f"all_core_function_groups={len(core_frontiers)} "
           "ROOT_CAUSE_REVIEW_REQUIRED=1 GNU_AS_link_QEMU=NOT_RUN")
