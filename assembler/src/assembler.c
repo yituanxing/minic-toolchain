@@ -1997,32 +1997,52 @@ static char *decode_incbin_path(MiniAs *as,
     return path;
 }
 
-static bool measure_incbin(MiniAs *as,
-                           const char *args,
-                           size_t line,
-                           uint64_t *bytes) {
-    char *path = decode_incbin_path(as, args, line);
+/* A source-data Fragment is immutable. Capture .incbin binary bytes
+ * once, before changing the Fragment graph, instead of measuring by ftell
+ * and then reopening the pathname after layout/branch relaxation.
+ * Detect a concurrent source mutation during capture and fail closed. */
+static bool capture_incbin(MiniAs *as,const char *args,size_t line,
+                           unsigned char **data,size_t *size) {
+    char *path=decode_incbin_path(as,args,line);
     FILE *file;
     long end;
-
-    if (path == NULL) {
-        return false;
-    }
-    file = fopen(path, "rb");
-    if (file == NULL) {
-        minias_set_error(as, "incbin-open:%s:line=%zu", path, line);
+    unsigned char *buffer;
+    size_t count,used=0U;
+    if(!path)return false;
+    file=fopen(path,"rb");
+    if(!file) {
+        minias_set_error(as,"incbin-open:%s:line=%zu",path,line);
         free(path);
         return false;
     }
-    if (fseek(file, 0L, SEEK_END) != 0 || (end = ftell(file)) < 0L) {
-        minias_set_error(as, "incbin-size:%s:line=%zu", path, line);
-        fclose(file);
-        free(path);
-        return false;
+    if(fseek(file,0L,SEEK_END)!=0 || (end=ftell(file))<0L ||
+       (uint64_t)end>UINT32_MAX || fseek(file,0L,SEEK_SET)!=0) {
+        minias_set_error(as,"incbin-size:%s:line=%zu",path,line);
+        fclose(file);free(path);return false;
+    }
+    count=(size_t)end;
+    buffer=malloc(count?count:1U);
+    if(!buffer) {
+        minias_set_error(as,"out-of-memory:incbin-snapshot");
+        fclose(file);free(path);return false;
+    }
+    while(used<count) {
+        size_t got=fread(buffer+used,1U,count-used,file);
+        if(got==0U) {
+            minias_set_error(as,"incbin-read:%s:line=%zu",path,line);
+            free(buffer);fclose(file);free(path);return false;
+        }
+        used+=got;
+    }
+    if(fgetc(file)!=EOF || ferror(file)) {
+        minias_set_error(as,"incbin-mutated-during-read:%s:line=%zu",
+                         path,line);
+        free(buffer);fclose(file);free(path);return false;
     }
     fclose(file);
     free(path);
-    *bytes = (uint64_t)end;
+    *data=buffer;
+    *size=count;
     return true;
 }
 
@@ -2210,6 +2230,7 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
     bool has_leb_snapshot=false;
     unsigned char *string_snapshot=NULL;
     size_t string_snapshot_size=0U;
+    bool has_binary_snapshot=false;
 
     if (!strcmp(op,".fill")) {
         unsigned elem=0U;
@@ -2242,9 +2263,10 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
         leb_snapshot_size=len;
         has_leb_snapshot=true;
     } else if (strcmp(op, ".incbin") == 0) {
-        if (!measure_incbin(as, args, line, &bytes)) {
-            return false;
-        }
+        if(!capture_incbin(as,args,line,&string_snapshot,
+                           &string_snapshot_size))return false;
+        bytes=(uint64_t)string_snapshot_size;
+        has_binary_snapshot=true;
     } else if (strcmp(op, ".asciz") == 0 || strcmp(op, ".string") == 0 ||
         strcmp(op, ".ascii") == 0) {
         unsigned char *decoded = NULL;
@@ -2394,7 +2416,7 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
         return false;
     }
     free(snapshot);
-    if(has_leb_snapshot || string_snapshot!=NULL) {
+    if(has_leb_snapshot || has_binary_snapshot || string_snapshot!=NULL) {
         MiniAsStmt *stmt=&as->stmts[as->stmt_count-1U];
         if(has_leb_snapshot) {
             stmt->static_data=malloc(leb_snapshot_size);
@@ -2459,7 +2481,8 @@ static bool emit_data_stmt(MiniAs *as, const MiniAsStmt *stmt) {
        strcmp(stmt->op,".sleb128")==0 ||
        strcmp(stmt->op,".ascii")==0 ||
        strcmp(stmt->op,".asciz")==0 ||
-       strcmp(stmt->op,".string")==0) {
+       strcmp(stmt->op,".string")==0 ||
+       strcmp(stmt->op,".incbin")==0) {
         if(stmt->static_data_size!=stmt->size ||
            (stmt->size!=0U && !stmt->static_data)) {
             minias_set_error(as,"immutable-data-fragment-size:line=%zu",
@@ -2471,58 +2494,6 @@ static bool emit_data_stmt(MiniAs *as, const MiniAsStmt *stmt) {
         return minias_section_append(as,stmt->section,
                                      stmt->static_data,stmt->static_data_size);
     }
-    if (strcmp(stmt->op, ".incbin") == 0) {
-        char *path = decode_incbin_path(as, stmt->args, stmt->line);
-        FILE *file;
-        unsigned char buffer[8192];
-        uint64_t total = 0U;
-
-        if (path == NULL) {
-            return false;
-        }
-        file = fopen(path, "rb");
-        if (file == NULL) {
-            minias_set_error(as, "incbin-open:%s:line=%zu", path, stmt->line);
-            free(path);
-            return false;
-        }
-        for (;;) {
-            size_t count = fread(buffer, 1U, sizeof(buffer), file);
-            if (count != 0U) {
-                if (total > UINT64_MAX - count ||
-                    !minias_section_append(as, stmt->section, buffer, count)) {
-                    fclose(file);
-                    free(path);
-                    return false;
-                }
-                total += count;
-            }
-            if (count < sizeof(buffer)) {
-                if (ferror(file)) {
-                    minias_set_error(as,
-                                     "incbin-read:%s:line=%zu",
-                                     path,
-                                     stmt->line);
-                    fclose(file);
-                    free(path);
-                    return false;
-                }
-                break;
-            }
-        }
-        fclose(file);
-        if (total != stmt->size) {
-            minias_set_error(as,
-                             "incbin-size-changed:%s:line=%zu",
-                             path,
-                             stmt->line);
-            free(path);
-            return false;
-        }
-        free(path);
-        return true;
-    }
-
     if (strcmp(stmt->op, ".zero") == 0 ||
         strcmp(stmt->op, ".space") == 0 ||
         strcmp(stmt->op, ".skip") == 0) {
