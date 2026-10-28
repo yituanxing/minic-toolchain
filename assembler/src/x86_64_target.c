@@ -960,8 +960,12 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
                 m->opcode=((base==0xc0U || base==0xc1U)?
                            X64_IMM_MEMORY:X64_REG_MEMORY);
                 m->count=m->opcode==X64_IMM_MEMORY?3U:2U;
-                m->encoding=base|(bits==16U?0x400U:
-                          bits==8U?0x200U:0U);
+                /* The ModR/M.reg field is a Group-2 /opcode extension,
+                 * never a low-byte GPR. Byte width is already encoded by
+                 * C0/D0/D2; setting 0x200 would synthesize an invalid REX
+                 * prefix whenever the selector (/4 SAL, /5 SHR, /7 SAR)
+                 * happens to be >=4. */
+                m->encoding=base|(bits==16U?0x400U:0U);
                 m->operands[0].kind=MINIAS_MC_REGISTER;
                 m->operands[0].reg=group;
                 m->operands[0].register_64=bits==64U;
