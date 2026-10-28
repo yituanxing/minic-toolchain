@@ -38,6 +38,45 @@ entry_x:
        .endif
     .endif
     nop
+    /* GNU numeric conditionals are Common, not target syntax. */
+    .set __minias_condition_value, 2
+    .ifeq 0
+       nop
+    .else
+       int3
+    .endif
+    .ifne (__minias_condition_value - 1)
+       nop
+    .endif
+    .ifge 0
+       nop
+    .endif
+    .ifgt 7 - 6
+       nop
+    .endif
+    .ifle -1
+       nop
+    .endif
+    .iflt -1
+       nop
+    .endif
+    .ifnotdef __minias_future_label
+       nop
+    .else
+       int3
+    .endif
+    .if 0
+       .ifeq unresolved_unreachable_label
+          int3
+       .endif
+    .else
+       nop
+    .endif
+    .ifgt -7
+       int3
+    .else
+       nop
+    .endif
     /* GCC inline asm condition code comments are no instructions. */
     /* A real multi-line GAS comment:
        next line remains part of the comment. */

@@ -1784,3 +1784,31 @@ for bad in 'sha256su0 v0.8b,v1.8b' 'sha256su1 v0.4s,v1.2d,v2.4s' \
 done
 echo 'MINIAS_A64_SHA2_LANE_MTE=PASS real_GNU_16_instructions'
 echo 'MINIAS_AARCH64_VSLICE=PASS ELF64=1 gnu_bytes=equal relocation_call26_jump26_abs64=1 ld=pass qemu=exit0'
+
+# Linux C-preprocessed EOR is more than 95 chars in a SINGLE operand.
+# Keep one target operand lexer and compare actual GNU machine bytes.
+cat > "$work/a64-linux-eor-ldgm.s" <<'A64_LINUX_EOR_LDGM'
+.arch armv8.5-a+memtag
+.text
+ldgm x4,[x3]
+ldgm xzr,[sp]
+stgm x1,[x2]
+eor w1, w1, #((((1) << 31) | ((0) << 30) | (((0) & 0x3F) << 24) | ((0x8000) & 0xFFFF)) ^ (((1) << 31) | ((0) << 30) | (((0) & 0x3F) << 24) | ((0x7fff) & 0xFFFF)))
+A64_LINUX_EOR_LDGM
+"$MINIAS" --target=aarch64 -o "$work/a64-linux-eor-mini.o" "$work/a64-linux-eor-ldgm.s"
+"$AARCH64_AS" -o "$work/a64-linux-eor-gnu.o" "$work/a64-linux-eor-ldgm.s"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-linux-eor-mini.o" "$work/a64-linux-eor-mini.bin"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-linux-eor-gnu.o" "$work/a64-linux-eor-gnu.bin"
+cmp "$work/a64-linux-eor-mini.bin" "$work/a64-linux-eor-gnu.bin"
+for bad in 'ldgm w4,[x3]' 'ldgm x4,[x3,#16]' \
+           'ldgm x4,[x3]!' 'eor w1,w1,#0'; do
+    printf '.arch armv8.5-a+memtag\n.text\n%s\n' "$bad" > "$work/a64-linux-eor-bad.s"
+    if "$MINIAS" --target=aarch64 -o "$work/a64-linux-eor-bad.o" "$work/a64-linux-eor-bad.s" >/dev/null 2>&1; then
+        echo "invalid MTE/EOR operand accepted: $bad" >&2;exit 1
+    fi
+done
+printf '.arch armv8-a\n.text\nldgm x1,[x2]\n' > "$work/a64-ldgm-disabled.s"
+if "$MINIAS" --target=aarch64 -o "$work/a64-ldgm-disabled.o" "$work/a64-ldgm-disabled.s" >/dev/null 2>&1; then
+    echo "disabled MTE2 accepted" >&2;exit 1
+fi
+echo 'MINIAS_A64_LONG_LOGICAL_LDGM=PASS GNU_byte_parity_and_negative_feature_checks'

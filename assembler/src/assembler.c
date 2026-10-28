@@ -2152,6 +2152,26 @@ static bool push_conditional(MiniAs *as, const char *args, size_t line) {
     return push_conditional_value(as,condition_true);
 }
 
+/* All numeric GNU .if* variants have the same Common conditional frame:
+ * skip unreachable parents without evaluating unresolved expressions. */
+static bool push_conditional_numeric(MiniAs *as,const char *args,
+                                     const char *directive,size_t line) {
+    int64_t value;
+    bool active;
+    if(!as->conditional_active)return push_conditional_value(as,false);
+    if(!evaluate_absolute_expression(as,args,&value)) {
+        minias_set_error(as,"unsupported-expression:%s:%s:line=%zu",
+                         directive,args,line);
+        return false;
+    }
+    active=!strcmp(directive,".ifeq")?value==0:
+           !strcmp(directive,".ifne")?value!=0:
+           !strcmp(directive,".iflt")?value<0:
+           !strcmp(directive,".ifle")?value<=0:
+           !strcmp(directive,".ifgt")?value>0:value>=0;
+    return push_conditional_value(as,active);
+}
+
 /* GNU GAS .ifdef/.ifndef inspect the CURRENT defined symbol table,
  * not relocation references, global declarations or future labels.
  * Share the exact same conditional stack as .if/.ifc/.elseif and do
@@ -4025,16 +4045,34 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
         return push_conditional_strings(as,
                  minias_trim(text+(unequal?5:4)),unequal,line);
     }
-    if ((strncmp(text,".ifdef",6U)==0 ||
-         strncmp(text,".ifndef",7U)==0) &&
-        ((text[3]=='d' && (text[6]=='\0' ||
-                           isspace((unsigned char)text[6]))) ||
-         (text[3]=='n' && (text[7]=='\0' ||
-                           isspace((unsigned char)text[7]))))) {
+    /* GNU .ifnotdef and .ifndef are aliases. */
+    if ((strncmp(text,".ifdef",6U)==0 &&
+         (text[6]=='\0' || isspace((unsigned char)text[6]))) ||
+        (strncmp(text,".ifndef",7U)==0 &&
+         (text[7]=='\0' || isspace((unsigned char)text[7]))) ||
+        (strncmp(text,".ifnotdef",9U)==0 &&
+         (text[9]=='\0' || isspace((unsigned char)text[9])))) {
         bool negate=text[3]=='n';
+        unsigned width=negate?(text[4]=='o'?9U:7U):6U;
         as->layout_sensitive=true;
-        return push_conditional_defined(as,
-               minias_trim(text+(negate?7U:6U)),negate,line);
+        return push_conditional_defined(as,minias_trim(text+width),
+                                        negate,line);
+    }
+    {
+        static const char *const numeric_forms[]={
+            ".ifeq",".ifne",".iflt",".ifle",".ifgt",".ifge"
+        };
+        unsigned i;
+        for(i=0U;i<sizeof(numeric_forms)/sizeof(numeric_forms[0]);++i) {
+            const char *name=numeric_forms[i];
+            size_t width=strlen(name);
+            if(strncmp(text,name,width)==0 &&
+               (text[width]=='\0' || isspace((unsigned char)text[width]))) {
+                as->layout_sensitive=true;
+                return push_conditional_numeric(as,
+                           minias_trim(text+width),name,line);
+            }
+        }
     }
     if (strncmp(text, ".if", 3U) == 0 &&
         (text[3] == '\0' || isspace((unsigned char)text[3]))) {

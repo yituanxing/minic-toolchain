@@ -328,7 +328,7 @@ enum {
 /* GNU AArch64 operands split on TOP-LEVEL commas, not commas within
  * [xN,#offset]. Unlike copying a generic tokenizer into every target,
  * this helper is strictly A64 addressing grammar. */
-static bool split_operands(const char *args, char out[4][96], unsigned *n) {
+static bool split_operands(const char *args, char out[4][384], unsigned *n) {
     unsigned depth = 0U, braces = 0U, count = 0U;
     const char *start = args, *p = args;
     for (;;) {
@@ -599,7 +599,7 @@ static bool parse_a64_mem(const char *text, unsigned *base, int64_t *offset,
  */
 static bool a64_casp_fields(const char *args,unsigned *rs,unsigned *rt,
                              unsigned *rn,bool *wide) {
-    char buffer[384],tokens[4][96],*last;
+    char buffer[384],tokens[4][384],*last;
     unsigned n,r1,r3;
     bool w0,w1,w2,w3,sp;
     int64_t offset;unsigned mode;
@@ -660,7 +660,7 @@ static bool a64_scalar_fp_d(const char *text,unsigned *out) {
 static bool a64_indexed_memory(const char *text,unsigned *base,
                                 unsigned *index,unsigned *option,
                                 bool *scaled,unsigned amount_shift) {
-    char inside[96],tokens[4][96];
+    char inside[96],tokens[4][384];
     unsigned n;
     size_t length=strlen(text),k;
     bool wide,sp;
@@ -780,7 +780,7 @@ static bool a64_mask_bits(uint64_t value,bool wide,uint32_t *enc) {
  * ADRP/GOT, conditional branches, shifts, and relocation fixup bitfields. */
 static bool parse_integer_family(MiniAsMCInst *inst,
                                  const char *op, const char *args) {
-    char t[4][96];
+    char t[4][384];
     unsigned n = 0U, rd, rn, rm, base, mode;
     bool wd, wn, wm, spd, spn, spm;
     int64_t imm;
@@ -1495,7 +1495,7 @@ static bool a64_lo12_expr(const char *text,MiniAsSymbolExpr *expr) {
 
 static bool a64_parse_relocated(MiniAsMCInst *inst,
                                 const char *op,const char *args) {
-    char tok[4][96];
+    char tok[4][384];
     unsigned n,rd,rn,unit=0U;
     bool wd,wn,spd,spn;
     MiniAsSymbolExpr expr;
@@ -1843,7 +1843,7 @@ static bool a64_parse_lse(MiniAs *as,MiniAsMCInst *inst,
         {"stadd",1U,true},{"stclr",2U,true},{"stset",3U,true},
         {"ldeor",5U,false},{"steor",5U,true}
     };
-    char tok[4][96];
+    char tok[4][384];
     unsigned i,n,rs,rt=31U,rn,mode,group=0U;
     unsigned subword=0U;
     bool wide,wr,sp;
@@ -1930,7 +1930,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
             {"umsubl",UINT32_C(0x9ba08000),true},
             {"smsubl",UINT32_C(0x9b208000),true}
         };
-        char tok[4][96];unsigned n,rd,rn,rm,ra,k;
+        char tok[4][384];unsigned n,rd,rn,rm,ra,k;
         bool wd,wn,wm,wa,sp;
         for(k=0U;k<sizeof(tab)/sizeof(tab[0]);++k)
             if(!strcmp(op,tab[k].name))break;
@@ -1982,7 +1982,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
             {"udiv",UINT32_C(0x1ac00800),false,false,false},
             {"sdiv",UINT32_C(0x1ac00c00),false,false,false}
         };
-        char alu_tok[4][96];unsigned alu_n,alu_rd,alu_rn=31U,alu_rm,alu_k;
+        char alu_tok[4][384];unsigned alu_n,alu_rd,alu_rn=31U,alu_rm,alu_k;
         bool alu_wide,alu_nwide=false,alu_mwide,alu_sp;
         for(alu_k=0U;alu_k<sizeof(ops)/sizeof(ops[0]);++alu_k)
             if(!strcmp(op,ops[alu_k].name))break;
@@ -2038,7 +2038,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         /* One ISA-owned UBFM/SBFM/BFM bitfield selector for GNU aliases:
          * extracts use imms=lsb+width-1, insertions wrap immr modulo
          * XLEN and use imms=width-1. No Common parser or ELF fork. */
-        char bit_tok[4][96];
+        char bit_tok[4][384];
         unsigned bit_n,bit_rd,bit_rn,reg_bits;
         bool bit_wide,bit_source_wide,bit_sp;
         int64_t lsb,width;
@@ -2086,7 +2086,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
                       insertion?width-1:lsb+width-1);
     } else if(!strcmp(op,"lsl") || !strcmp(op,"lsr") ||
               !strcmp(op,"asr") || !strcmp(op,"ror")) {
-        char tok[4][96];
+        char tok[4][384];
         unsigned n,rd,rn,rm;
         bool wide,sourcewide,shiftwide,sp;
         int64_t amount;
@@ -2122,7 +2122,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
             put_immediate(&inst->operands[2],amount);
         }
     } else if(!strcmp(op,"extr")) {
-        char extra[4][96];unsigned n,rd,rn,rm;
+        char extra[4][384];unsigned n,rd,rn,rm;
         bool wd,wn,wm,sp;
         int64_t lsb;
         if(!split_operands(args,extra,&n) || n!=4U ||
@@ -2141,7 +2141,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         put_reg(&inst->operands[2],rm,wm);
         put_immediate(&inst->operands[3],lsb);
     } else if(!strcmp(op,"ccmp") || !strcmp(op,"ccmn")) {
-        char tok[4][96];
+        char tok[4][384];
         unsigned n,rn,rm,cc;
         bool wide,otherwide,sp;
         int64_t ccmp_immediate,nzcv;
@@ -2178,7 +2178,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         put_immediate(&inst->operands[3],cc);
     } else if(!strcmp(op,"csel") || !strcmp(op,"csinc") ||
               !strcmp(op,"csinv") || !strcmp(op,"csneg")) {
-        char tok[4][96];
+        char tok[4][384];
         unsigned n,rd,rn,rm,cc,i;
         bool wd,wn,wm,sp;
         static const struct {const char *name;uint32_t base;} select[]={
@@ -2207,7 +2207,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         put_reg(&inst->operands[1],rn,wd);
         put_reg(&inst->operands[2],rm,wd);
     } else if(!strcmp(op,"cneg") || !strcmp(op,"cinv")) {
-        char tok[4][96];unsigned n,rd,rn,cc;
+        char tok[4][384];unsigned n,rd,rn,cc;
         bool wd,wn,sp;
         if(!split_operands(args,tok,&n) || n!=3U ||
            !parse_a64_reg(tok[0],&rd,&wd,&sp) || sp ||
@@ -2229,7 +2229,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         put_reg(&inst->operands[2],rn,wd);
     } else if(!strcmp(op,"cset") || !strcmp(op,"csetm") ||
        !strcmp(op,"cinc")) {
-        char parts[4][96];
+        char parts[4][384];
         unsigned n,rd,rn=31U,cond;
         bool wd,wn=false,sp;
         if(!split_operands(args,parts,&n) ||
@@ -2466,7 +2466,9 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         put_reg(&inst->operands[0],rs,wide);
         put_reg(&inst->operands[1],rt,wide);
         put_reg(&inst->operands[2],rn,true);
-    } else if(!strcmp(op,"stgm")) {
+    } else if(!strcmp(op,"stgm") || !strcmp(op,"ldgm")) {
+        /* One typed MTE2 register+base family, no second instruction or
+         * ELF emitter. GNU/Arm encode LDGM with 0xd9e00000. */
         unsigned rt,rn,mode;
         bool wide,sp;
         int64_t offset;
@@ -2475,12 +2477,13 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
            !parse_a64_reg(first,&rt,&wide,&sp) || sp || !wide ||
            !parse_a64_mem(second,&rn,&offset,&mode) ||
            offset!=0 || mode!=0U) {
-            minias_set_error(as,"bad-aarch64-stgm:%s:line=%zu",
+            minias_set_error(as,"bad-aarch64-mte-tags:%s:line=%zu",
                              args,stmt->line);
             free(inst);return false;
         }
         inst->opcode=A64_MC_MTE_STGM;inst->count=2U;
-        inst->encoding=UINT32_C(0xd9a00000);
+        inst->encoding=!strcmp(op,"ldgm")?
+                       UINT32_C(0xd9e00000):UINT32_C(0xd9a00000);
         put_reg(&inst->operands[0],rt,true);
         put_reg(&inst->operands[1],rn,true);
     } else if(!strcmp(op,"ins")) {
@@ -2536,7 +2539,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
             {"crc32cw",UINT32_C(0x1ac05800),false},
             {"crc32cx",UINT32_C(0x9ac05c00),true}
         };
-        char tok[4][96];unsigned n,rd,rn,rm,k;
+        char tok[4][384];unsigned n,rd,rn,rm,k;
         bool wd,wn,wm,sp;
         if((as->target_options&A64_FEATURE_CRC)==0U ||
            !split_operands(args,tok,&n) || n!=3U ||
@@ -2566,7 +2569,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
             {"aesmc",UINT32_C(0x4e286800)},
             {"aesimc",UINT32_C(0x4e287800)}
         };
-        char tok[4][96];unsigned n,rd,rn,k;
+        char tok[4][384];unsigned n,rd,rn,k;
         uint32_t da,sa;
         if((as->target_options&A64_FEATURE_CRYPTO)==0U ||
            !split_operands(args,tok,&n) || n!=2U ||
@@ -2588,7 +2591,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
               !strcmp(op,"bif") ||
               (!strcmp(op,"add") && args[0]=='v') ||
               !strcmp(op,"trn1") || !strcmp(op,"trn2")) {
-        char tok[4][96];unsigned n,rd,rn,rm,i;
+        char tok[4][384];unsigned n,rd,rn,rm,i;
         uint32_t da,sa,ta;
         static const struct {const char *name;uint32_t base;} table[]={
             {"eor",UINT32_C(0x2e201c00)},
@@ -2634,7 +2637,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
             free(inst);return false;
         }
     } else if(!strcmp(op,"ext")) {
-        char tok[4][96];unsigned n,rd,rn,rm;
+        char tok[4][384];unsigned n,rd,rn,rm;
         uint32_t da,sa,ta;
         int64_t index;
         if(!split_operands(args,tok,&n) || n!=4U ||
@@ -2690,7 +2693,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         put_reg(&inst->operands[0],rd,true);
     } else if(!strcmp(op,"ldxp") || !strcmp(op,"ldaxp") ||
               !strcmp(op,"stxp") || !strcmp(op,"stlxp")) {
-        char tok[4][96];unsigned n,k,rt,rt2,rn,rs=31U;
+        char tok[4][384];unsigned n,k,rt,rt2,rn,rs=31U;
         bool wt,wt2,ws,sp,store=op[0]=='s';
         int64_t off;unsigned mode;
         if(!split_operands(args,tok,&n) ||
@@ -2721,7 +2724,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         put_reg(&inst->operands[2],rn,true);
         put_reg(&inst->operands[3],rs,false);
     } else if(!strcmp(op,"sha256su0") || !strcmp(op,"sha256su1")) {
-        char tok[4][96];unsigned n,rd,rn,rm=0U;uint32_t da,sa,ta=0U;
+        char tok[4][384];unsigned n,rd,rn,rm=0U;uint32_t da,sa,ta=0U;
         bool tri=!strcmp(op,"sha256su1");
         if((as->target_options&A64_FEATURE_CRYPTO)==0U ||
            !split_operands(args,tok,&n) || n!=(tri?3U:2U) ||
@@ -2757,7 +2760,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         put_reg(&inst->operands[0],rd,is_x);
         put_reg(&inst->operands[1],rn,true);
     } else if(!strcmp(op,"stz2g")) {
-        char tok[4][96];unsigned n,rt,rn,mode;
+        char tok[4][384];unsigned n,rt,rn,mode;
         bool wide,sp;int64_t off;
         if((as->target_options&A64_FEATURE_MTE)==0U ||
            !split_operands(args,tok,&n) || (n!=2U && n!=3U) ||
@@ -2792,7 +2795,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         put_reg(&inst->operands[0],reg,true);
     } else if((!strcmp(op,"movz") || !strcmp(op,"movk") ||
                !strcmp(op,"movn"))) {
-        char parts[4][96];unsigned n,rd,imm16=0U,shift=0U;
+        char parts[4][384];unsigned n,rd,imm16=0U,shift=0U;
         bool wide,sp;
         MiniAsSymbolExpr movw_expr;
         MiniAsFixupKind movw_fixup=MINIAS_FIXUP_NONE;
@@ -3035,7 +3038,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         put_reg(&inst->operands[0],reg,reg64);
         inst->operands[1].kind=MINIAS_MC_SYMBOL;
     } else if (!strcmp(op,"tbz") || !strcmp(op,"tbnz")) {
-        char t[4][96];unsigned n,rd;
+        char t[4][384];unsigned n,rd;
         bool wide,sp;
         int64_t bit;
         MiniAsSymbolExpr expr;
