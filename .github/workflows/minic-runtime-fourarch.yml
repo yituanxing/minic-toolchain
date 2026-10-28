@@ -541,6 +541,12 @@ jobs:
         run: |
           set -Eeuo pipefail
           bash tests/compiler/c0/probe-loongarch-linux-nospec.sh "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
+      - name: Original GNU x86 IPv4 carry, SMP LOCK XADD and record ABI
+        if: matrix.target == 'x86_64'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash tests/compiler/c0/probe-x86-linux-abi-carry-xadd.sh "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
       - name: Original GNU x86 Linux ordered TSC and ELF zero-initialized aggregates
         if: matrix.target == 'x86_64'
         shell: bash

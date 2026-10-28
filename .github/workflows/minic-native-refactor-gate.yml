@@ -74,6 +74,7 @@ on:
       - 'tests/compiler/c0/probe-x86-linux-native-cpuid.sh'
       - 'tests/compiler/c0/probe-x86-linux-atomic-binary-cc.sh'
       - 'tests/compiler/c0/probe-x86-linux-tied-bit-scan.sh'
+      - 'tests/compiler/c0/probe-x86-linux-abi-carry-xadd.sh'
       - 'tests/compiler/c0/probe-x86-linux-ordered-tsc.sh'
       - 'tests/compiler/c0/probe-x86-linux-static-record-zero.sh'
       - 'tests/compiler/c0/probe-aarch64-linux-cmpwait.sh'
@@ -332,6 +333,7 @@ jobs:
           bash tests/compiler/c0/probe-x86-linux-native-cpuid.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
           bash tests/compiler/c0/probe-x86-linux-atomic-binary-cc.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
           bash tests/compiler/c0/probe-x86-linux-tied-bit-scan.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+          bash tests/compiler/c0/probe-x86-linux-abi-carry-xadd.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
           # Original Linux ISA family and GNU ABI static object boundary.
           bash tests/compiler/c0/probe-x86-linux-ordered-tsc.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
           bash tests/compiler/c0/probe-x86-linux-static-record-zero.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
