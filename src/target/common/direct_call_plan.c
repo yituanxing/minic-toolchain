@@ -216,6 +216,7 @@ static bool minic_lp64_admit_call(
          * Keep large/FP-class/indirect aggregate returns unsupported. */
         bool small_record_result = false;
         size_t return_record_bytes = 0U, return_record_slots = 0U;
+        size_t fp_elements = 0U, fp_width = 0U;
         if (ins->kind == MINIC_CORE_INSTRUCTION_CALL &&
             minic_type_is_record(ins->type) &&
             ins->value.call.result_object < fn->object_count &&
@@ -223,10 +224,12 @@ static bool minic_lp64_admit_call(
             fn->objects[ins->value.call.result_object].element_count == 1U &&
             minic_type_equal(fn->objects[ins->value.call.result_object].type,
                              ins->type) &&
-            minic_multi_gp_record(program, target, ins->type,
-                                  &return_record_bytes, &return_record_slots) &&
-            return_record_bytes > 0U && return_record_bytes <= 16U &&
-            return_record_slots >= 1U && return_record_slots <= 2U)
+            ((minic_multi_gp_record(program, target, ins->type,
+                                   &return_record_bytes, &return_record_slots) &&
+              return_record_bytes > 0U && return_record_bytes <= 16U &&
+              return_record_slots >= 1U && return_record_slots <= 2U) ||
+             minic_multi_fp_return_record(program, target, ins->type,
+                                           &fp_elements, &fp_width)))
             small_record_result = true;
         if (!small_record_result &&
             ((minic_type_is_void(ins->type)

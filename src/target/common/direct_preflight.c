@@ -186,10 +186,12 @@ bool minic_multi_direct_lp64_cfg_preflight(
         switch (term->kind) {
         case MINIC_CORE_TERMINATOR_RETURN:
             if (minic_type_is_record(fn->return_type)) {
-                size_t bytes, slots;
+                size_t bytes, slots, fp_elements, fp_width;
                 MinicType object_type;
-                if (!minic_multi_gp_record(program, target, fn->return_type,
-                                            &bytes, &slots) ||
+                if ((!minic_multi_gp_record(program, target, fn->return_type,
+                                             &bytes, &slots) &&
+                     !minic_multi_fp_return_record(program, target,
+                         fn->return_type, &fp_elements, &fp_width)) ||
                     term->return_value != MINIC_CORE_VALUE_INVALID ||
                     term->return_object >= fn->object_count ||
                     fn->objects[term->return_object].element_count != 1U ||

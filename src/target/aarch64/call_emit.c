@@ -207,12 +207,30 @@ bool minic_aarch64_emit_abi_instruction(
             if (minic_type_is_record(ins->type)) {
                 const MinicCoreObjectId object_id =
                     ins->value.call.result_object;
-                size_t bytes, slots, dst, chunk;
+                size_t bytes, slots, dst, chunk, fp_elements, fp_width;
                 if (indirect || object_id >= fn->object_count ||
-                    !minic_multi_gp_record(program, target, ins->type,
-                                           &bytes, &slots) ||
-                    bytes == 0U || bytes > 16U || slots > 2U ||
                     !minic_lp64_frame_plan_object(frame_plan, object_id, &dst))
+                    return false;
+                if (minic_multi_fp_return_record(
+                        program, target, ins->type, &fp_elements, &fp_width)) {
+                    for (chunk = 0U; chunk < fp_elements; ++chunk) {
+                        const size_t off = dst + chunk * fp_width;
+                        if (off > UINT32_MAX ||
+                            fprintf(out, "  movz x11, #%zu\n", off & 65535U) < 0 ||
+                            (off > 65535U &&
+                             fprintf(out, "  movk x11, #%zu, lsl #16\n",
+                                     off >> 16U) < 0) ||
+                            fprintf(out, "  add x11, %s, x11\n"
+                                         "  str %c%zu, [x11]\n",
+                                    ctx->dynamic_frame ? "x19" : "sp",
+                                    fp_width == 4U ? 's' : 'd', chunk) < 0)
+                            return false;
+                    }
+                    return true;
+                }
+                if (!minic_multi_gp_record(program, target, ins->type,
+                                            &bytes, &slots) ||
+                    bytes == 0U || bytes > 16U || slots > 2U)
                     return false;
                 for (chunk = 0U; chunk < slots; ++chunk) {
                     const size_t payload = bytes - chunk * 8U >= 8U

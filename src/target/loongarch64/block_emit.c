@@ -148,13 +148,24 @@ bool minic_loongarch64_emit_terminator(FILE *out,
         switch (block->terminator.kind) {
         case MINIC_CORE_TERMINATOR_RETURN:
             if (minic_type_is_record(fn->return_type)) {
-                size_t src, bytes, slots;
+                size_t src, bytes, slots, fp_elements, fp_width, fp;
                 const MinicCoreObjectId object_id = block->terminator.return_object;
                 if (object_id >= fn->object_count ||
-                    !minic_multi_gp_record(program, target, fn->return_type,
-                                            &bytes, &slots) ||
-                    !minic_lp64_frame_plan_object(frame_plan, object_id, &src) ||
-                    !loongarch64_return_gp_record(out, src, bytes, dynamic_frame))
+                    !minic_lp64_frame_plan_object(frame_plan, object_id, &src))
+                    return false;
+                if (minic_multi_fp_return_record(program, target,
+                        fn->return_type, &fp_elements, &fp_width)) {
+                    for (fp = 0U; fp < fp_elements; ++fp)
+                        if (!minic_loongarch64_emit_frame_mem(
+                                out, fp_width == 4U ? "fld.s" : "fld.d",
+                                fp == 0U ? "$fa0" : "$fa1",
+                                src + fp * fp_width, dynamic_frame))
+                            return false;
+                } else if (!minic_multi_gp_record(
+                               program, target, fn->return_type,
+                               &bytes, &slots) ||
+                           !loongarch64_return_gp_record(out, src, bytes,
+                                                         dynamic_frame))
                     return false;
             }
             if (minic_type_is_long_double(fn->return_type) ||

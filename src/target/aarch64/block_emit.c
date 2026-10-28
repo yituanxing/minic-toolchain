@@ -151,13 +151,31 @@ bool minic_aarch64_emit_terminator(FILE *out,
         switch (block->terminator.kind) {
         case MINIC_CORE_TERMINATOR_RETURN:
             if (minic_type_is_record(fn->return_type)) {
-                size_t src, bytes, slots;
+                size_t src, bytes, slots, fp_elements, fp_width, fp;
                 const MinicCoreObjectId object_id = block->terminator.return_object;
                 if (object_id >= fn->object_count ||
-                    !minic_multi_gp_record(program, target, fn->return_type,
-                                            &bytes, &slots) ||
-                    !minic_lp64_frame_plan_object(frame_plan, object_id, &src) ||
-                    !aarch64_return_gp_record(out, src, bytes, dynamic_frame))
+                    !minic_lp64_frame_plan_object(frame_plan, object_id, &src))
+                    return false;
+                if (minic_multi_fp_return_record(program, target,
+                       fn->return_type, &fp_elements, &fp_width)) {
+                    for (fp = 0U; fp < fp_elements; ++fp) {
+                        size_t off = src + fp * fp_width;
+                        if (off > UINT32_MAX ||
+                            fprintf(out, "  movz x11, #%zu\n", off & 65535U) < 0 ||
+                            (off > 65535U &&
+                             fprintf(out, "  movk x11, #%zu, lsl #16\n",
+                                     off >> 16U) < 0) ||
+                            fprintf(out, "  add x11, %s, x11\n"
+                                         "  ldr %c%zu, [x11]\n",
+                                    dynamic_frame ? "x19" : "sp",
+                                    fp_width == 4U ? 's' : 'd', fp) < 0)
+                            return false;
+                    }
+                } else if (!minic_multi_gp_record(
+                               program, target, fn->return_type,
+                               &bytes, &slots) ||
+                           !aarch64_return_gp_record(out, src, bytes,
+                                                      dynamic_frame))
                     return false;
             }
             if (minic_type_is_int128_integer(fn->return_type)) {

@@ -75,3 +75,47 @@ bool minic_multi_indirect_record(const MinicC0Program *program,
     *bytes = size;
     return true;
 }
+
+bool minic_multi_fp_return_record(
+    const MinicC0Program *program, const MinicTargetInfo *target,
+    MinicType type, size_t *element_count, size_t *element_width) {
+    const MinicRecord *record;
+    const MinicRecordField *first;
+    size_t total, align, width, i;
+    if (program == NULL || target == NULL || element_count == NULL ||
+        element_width == NULL || !minic_type_is_record(type))
+        return false;
+    record = minic_c0_program_record(program, type.record_id);
+    if (record == NULL || !record->is_complete || record->is_union ||
+        record->is_packed || record->pack_alignment != 0U ||
+        record->explicit_alignment != 0U ||
+        record->field_count == 0U || record->field_count > 2U)
+        return false;
+    first = minic_c0_record_field(record, 0U);
+    if (first == NULL || first->is_array || first->is_bit_field ||
+        first->is_packed || first->is_flexible_array ||
+        first->element_count != 1U ||
+        (!minic_type_is_float(first->type) &&
+         !minic_type_is_double(first->type)))
+        return false;
+    width = minic_type_is_float(first->type) ? 4U : 8U;
+    if (!minic_data_layout_type(target->data_layout, program, type,
+                                &total, &align) ||
+        total != width * record->field_count || align != width)
+        return false;
+    for (i = 0U; i < record->field_count; ++i) {
+        const MinicRecordField *field = minic_c0_record_field(record, i);
+        size_t offset;
+        if (field == NULL || field->is_array || field->is_packed ||
+            field->is_bit_field || field->is_flexible_array ||
+            field->element_count != 1U ||
+            !minic_type_equal(field->type, first->type) ||
+            !minic_data_layout_record_field_offset(
+                target->data_layout, program, record, i, &offset) ||
+            offset != i * width)
+            return false;
+    }
+    *element_count = record->field_count;
+    *element_width = width;
+    return true;
+}

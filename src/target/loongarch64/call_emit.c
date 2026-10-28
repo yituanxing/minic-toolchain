@@ -313,12 +313,23 @@ bool minic_loongarch64_emit_abi_instruction(
             if (minic_type_is_record(ins->type)) {
                 const MinicCoreObjectId object_id =
                     ins->value.call.result_object;
-                size_t bytes, slots, dst, chunk;
+                size_t bytes, slots, dst, chunk, fp_elements, fp_width;
                 if (indirect || object_id >= fn->object_count ||
-                    !minic_multi_gp_record(program, target, ins->type,
-                                           &bytes, &slots) ||
-                    bytes == 0U || bytes > 16U || slots > 2U ||
                     !minic_lp64_frame_plan_object(frame_plan, object_id, &dst))
+                    return false;
+                if (minic_multi_fp_return_record(
+                        program, target, ins->type, &fp_elements, &fp_width)) {
+                    for (chunk = 0U; chunk < fp_elements; ++chunk) {
+                        const char *reg = chunk == 0U ? "$fa0" : "$fa1";
+                        if (!emit_sp_mem(out, fp_width == 4U ? "fst.s" : "fst.d",
+                                         reg, dst + chunk * fp_width))
+                            return false;
+                    }
+                    return true;
+                }
+                if (!minic_multi_gp_record(program, target, ins->type,
+                                            &bytes, &slots) ||
+                    bytes == 0U || bytes > 16U || slots > 2U)
                     return false;
                 for (chunk = 0U; chunk < slots; ++chunk) {
                     const size_t payload = bytes - chunk * 8U >= 8U

@@ -17,4 +17,11 @@ bool minic_multi_indirect_record(const MinicC0Program *program,
                                  const MinicTargetInfo *target, MinicType type,
                                  size_t *bytes);
 
+/* Strict 1-2 member homogeneous float/double record return shape shared
+ * by AAPCS64 and LP64D. Excludes vectors, arrays, nested/packed records,
+ * unions, bitfields, padded and long-double HFA. Native FPR assignment is
+ * target-local. */
+bool minic_multi_fp_return_record(
+    const MinicC0Program *, const MinicTargetInfo *, MinicType,
+    size_t *element_count, size_t *element_width);
 #endif

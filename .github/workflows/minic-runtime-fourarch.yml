@@ -355,6 +355,15 @@ jobs:
           set -Eeuo pipefail
           bash tests/compiler/c0/probe-x86-compiler-rt-native.sh \
             "$GITHUB_WORKSPACE/build/runtime-verdict/minic/x86_64/libminic-rt.a"
+      - name: Two native FP-register HFA return fields with inverse GNU ABI oracles
+        if: matrix.target == 'aarch64' || matrix.target == 'loongarch64'
+        shell: bash
+        env:
+          MINIC_CC: ${{ github.workspace }}/build/runtime-ci/bin/minic-cc
+          MINIC_FP_RETURN_TARGET: ${{ matrix.target }}
+        run: |
+          set -Eeuo pipefail
+          bash tests/compiler/c0/probe-direct-lp64-fp-record-return.sh
       - name: GNU caller and MiniC caller pairwise LP64 record return ABI
         if: matrix.target == 'aarch64' || matrix.target == 'loongarch64'
         shell: bash
