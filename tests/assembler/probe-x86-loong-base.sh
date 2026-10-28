@@ -3117,3 +3117,28 @@ for target in x86_64 loongarch64; do
  cmp "$work/$target-macro-call-mini.bin" "$work/$target-macro-call-gnu.bin"
 done
 echo 'MINIAS_COMMON_PAREN_MACRO_CALL=PASS GNU_single_argument_parentheses_preserved'
+
+# Actual Linux x86 head_64.S adds a symbol minus the unsigned
+# 0xffffffff80000000 kernel image bias. Parentheses enclose the entire
+# GNU expression, and must not erase its typed ABS32S relocation/addend.
+cat > "$work/x86-gnu-parenthesized-symbol.s" <<'X86_PARENT_SYMBOL'
+.text
+.globl kernel_startup_probe
+kernel_startup_probe:
+addq $(early_top_pgt - 0xffffffff80000000), %rax
+addq $(early_top_pgt + 24), %r8
+ret
+X86_PARENT_SYMBOL
+"$MINIAS" --target=x86_64 -o "$work/x86-parensym-mini.o" "$work/x86-gnu-parenthesized-symbol.s"
+as --64 -o "$work/x86-parensym-gnu.o" "$work/x86-gnu-parenthesized-symbol.s"
+objcopy -j .text -O binary "$work/x86-parensym-mini.o" "$work/x86-parensym-mini.bin"
+objcopy -j .text -O binary "$work/x86-parensym-gnu.o" "$work/x86-parensym-gnu.bin"
+cmp "$work/x86-parensym-mini.bin" "$work/x86-parensym-gnu.bin"
+for flavor in mini gnu; do
+ readelf -Wr "$work/x86-parensym-$flavor.o" |
+   awk '$3=="R_X86_64_32S" {print $1,$3,$5,$6,$7}' |
+   LC_ALL=C sort > "$work/x86-parensym-$flavor.reloc"
+done
+[ "$(wc -l < "$work/x86-parensym-mini.reloc")" -eq 2 ]
+cmp "$work/x86-parensym-mini.reloc" "$work/x86-parensym-gnu.reloc"
+echo 'MINIAS_COMMON_PARENT_SYMBOL=PASS GNU_x86_bytes_reloc_and_full_addend'
