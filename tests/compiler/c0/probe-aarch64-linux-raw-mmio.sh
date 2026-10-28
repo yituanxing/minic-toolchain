@@ -25,6 +25,12 @@ void raw32(u32 val, volatile u32 *ptr) {
 void raw64(u64 val, volatile u64 *ptr) {
     asm volatile("str %x0, %1" : : "rZ"(val), "Qo"(*ptr));
 }
+void prefetch_read(const void *ptr) {
+    asm volatile("prfm pldl1keep, %a0\n" : : "p"(ptr));
+}
+void prefetch_write(const void *ptr) {
+    asm volatile("prfm pstl1keep, %a0\n" : : "p"(ptr));
+}
 int main(void) {
     volatile u8 b=0; volatile u16 h=0; volatile u32 w=0;
     volatile u64 d=0;
@@ -32,13 +38,15 @@ int main(void) {
     raw16(0xa52c, &h);
     raw32(0x87654321U, &w);
     raw64(0x8877665544332211ULL, &d);
+    prefetch_read((const void *)&b);
+    prefetch_write((const void *)&d);
     return b==0xa5 && h==0xa52c && w==0x87654321U &&
            d==0x8877665544332211ULL ? 42 : 1;
 }
 SRC
 "$gnu" -static -O0 -x c "$work/raw-io.i" -o "$work/gnu.elf"
 "$cc" --target=aarch64-linux -S "$work/raw-io.i" -o "$work/mini.s"
-for ins in 'strb w9, [x10]' 'strh w9, [x10]'            'str w9, [x10]' 'str x9, [x10]'; do
+for ins in 'strb w9, [x10]' 'strh w9, [x10]'            'str w9, [x10]' 'str x9, [x10]' 'prfm pldl1keep, [x9]' 'prfm pstl1keep, [x9]'; do
     grep -Fq "$ins" "$work/mini.s"
 done
 "$gnu" -static -O0 -x assembler "$work/mini.s" -o "$work/mini.elf"
@@ -57,17 +65,20 @@ samples={
   "wrong-width": ('"strh %w0, %1"', '"str %w0, %1"'),
   "wrong-input": ('"rZ"(val)', '"i"(val)'),
   "no-volatile": ('asm volatile("strb', 'asm("strb'),
-  "added-clobber": ('"Qo"(*ptr));', '"Qo"(*ptr) : "memory");')
+  "added-clobber": ('"Qo"(*ptr));', '"Qo"(*ptr) : "memory");'),
+  "prefetch-extra": ('"prfm pldl1keep, %a0\\n"', '"prfm pldl1keep, %a0; nop\\n"'),
+  "prefetch-constraint": ('"p"(ptr));', '"i"(ptr));'),
+  "prefetch-nonvolatile": ('asm volatile("prfm', 'asm("prfm')
 }
 for name,(old,new) in samples.items():
     if old not in src: raise SystemExit("bad original GNU mutation "+name)
     (dest/("bad-"+name+".i")).write_text(src.replace(old,new,1))
 PY
-for bad in extra-instruction wrong-constraint wrong-width wrong-input            no-volatile added-clobber; do
+for bad in extra-instruction wrong-constraint wrong-width wrong-input            no-volatile added-clobber prefetch-extra prefetch-constraint prefetch-nonvolatile; do
     if "$cc" --target=aarch64-linux -S "$work/bad-$bad.i"         -o "$work/bad-$bad.s" >"$work/$bad.out" 2>"$work/$bad.err"; then
         echo "FAIL raw MMIO unsafe mutation accepted: $bad" >&2
         exit 1
     fi
     test ! -e "$work/bad-$bad.s"
 done
-echo 'MINIC_AARCH64_LINUX_RAW_MMIO_GNU_QEMU=PASS widths=4 negative=6 target_hardware=1'
+echo 'MINIC_AARCH64_LINUX_RAW_MMIO_GNU_QEMU=PASS store_widths=4 prefetch_hints=2 negative=9 target_hardware=1'

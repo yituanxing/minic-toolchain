@@ -95,6 +95,29 @@ static bool aarch64_linux_brk_template(const char *text, size_t length) {
 static bool aarch64_linux_brk_value(int64_t value) {
     return value >= 0 && value <= 4095;
 }
+/* Both real 6.6.143 arm64 prefetch() and prefetchw() in
+ * processor.h use GNU p and %a0. A trailing newline is source whitespace;
+ * the only safe hardware opcodes are exact PRFM PLDL1KEEP/PSTL1KEEP. */
+static const char *aarch64_linux_prefetch_template(const char *text, size_t length) {
+    char compact[64];
+    size_t i, n = 0U;
+    if (!text || length == 0U || length >= sizeof(compact)) return NULL;
+    for (i = 0U; i < length; ++i) {
+        const char c = text[i];
+        if (c == ' ' || c == '\t' || c == '\n' || c == '\r')
+            continue;
+        if (c == ';' || n + 1U >= sizeof(compact))
+            return NULL;
+        compact[n++] = c;
+    }
+    compact[n] = '\0';
+    if (strcmp(compact, "prfmpldl1keep,%a0") == 0)
+        return "pldl1keep";
+    if (strcmp(compact, "prfmpstl1keep,%a0") == 0)
+        return "pstl1keep";
+    return NULL;
+}
+
 /* Original arm64 Linux 6.6.143 io.h __raw_write{b,w,l,q}: Qo memory
  * INPUT carries an observable device-store side effect. Match all four
  * widths with one ISA owner; never turn an unsigned MMIO store into a
@@ -631,7 +654,26 @@ bool minic_aarch64_qualify_inline_asm(
             return true;
         }
     }
-     /* Real Linux raw MMIO stores: input 0 is rZ integer, input 1 is
+     /* Linux arm64 hardware prefetch is an explicit volatile ISA hint,
+     * transported as a generic Core pointer scalar. No generic PRFM
+     * passthrough or hardcoded function names in Frontend/Core. */
+    if (program && src && contract && src->is_volatile && !src->is_goto &&
+        src->output_count == 0U && src->input_count == 1U &&
+        src->inputs && src->label_count == 0U &&
+        src->clobber_count == 0U && src->register_clobber_count == 0U &&
+        !src->has_memory_clobber &&
+        aarch64_linux_prefetch_template(
+            src->template_text, src->template_length) &&
+        constraint(&src->inputs[0], "p")) {
+        const MinicExpression *arg = minic_c0_program_expression(
+            program, src->inputs[0].expression);
+        if (arg && minic_type_is_pointer(arg->type)) {
+            contract->operand_count = 1U;
+            contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+            return true;
+        }
+    }
+    /* Real Linux raw MMIO stores: input 0 is rZ integer, input 1 is
      * volatile Qo memory. Even though GNU declares it as an input, the
      * physical STR writes memory; the Core role MUST record that effect. */
     if (program && src && contract && src->is_volatile && !src->is_goto &&
@@ -1061,6 +1103,25 @@ bool minic_aarch64_emit_qualified_structured_asm(
         const char *reg = aarch64_linux_mrs_register(
             info->template_text, info->template_length);
         MinicType pointee;
+        if (operand != NULL &&
+            operand[0].kind == MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT &&
+            aarch64_linux_prefetch_template(
+                info->template_text, info->template_length)) {
+            const char *hint = aarch64_linux_prefetch_template(
+                info->template_text, info->template_length);
+            if (!info->is_volatile || info->is_goto ||
+                info->has_memory_clobber || info->register_clobber_count ||
+                operand[0].operand_index != 0U ||
+                operand[0].has_fixed_register_binding || operand[0].early_clobber ||
+                operand[0].value >= fn->value_count ||
+                operand[0].value > 4095U / 8U ||
+                !minic_type_is_pointer(fn->values[operand[0].value].type))
+                return false;
+            return fprintf(out,
+                "  ldr x9, [sp, #%zu]\n"
+                "  prfm %s, [x9]\n",
+                (size_t)operand[0].value * 8U, hint) >= 0;
+        }
         if (operand != NULL &&
             operand[0].kind == MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT &&
             aarch64_daif_msr_template(info->template_text, info->template_length)) {
