@@ -104,6 +104,68 @@ static bool emit_bit_scan_u64(
            fputs("  movq %rax, (%r11)\n", out) != EOF;
 }
 
+/* Kernel fls/variable_ffs use a third GNU tied input ("0"(-1))
+ * with 32-bit BSF/BSR; fls64 uses one +r initialized 32-bit destination
+ * with a 64-bit BSRQ. Respect input zero fallback and REAL flags, never
+ * replace the hardware bit scan with a host C builtin. */
+static bool emit_linux_tied_bit_scan(
+    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, const MinicX86Frame *frame,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
+    const MinicCoreStructuredInlineAsmOperand *b =
+        ins->value.structured_inline_asm.operands;
+    const size_t count = ins->value.structured_inline_asm.operand_count;
+    const MinicX86BitScanForm form = minic_x86_64_asm_bit_scan_form(
+        info->template_text, info->template_length);
+    const bool is64 = form == MINIC_X86_BIT_SCAN_BSR64_READWRITE;
+    const char *mnemonic = form == MINIC_X86_BIT_SCAN_BSF32_TIED ?
+        "  bsfl %r10d, %eax\n" :
+        form == MINIC_X86_BIT_SCAN_BSR32_TIED ?
+        "  bsrl %r10d, %eax\n" : "  bsrq %r10, %rax\n";
+    MinicType output_type;
+    size_t width, i;
+    bool sign;
+    if (!out || !program || !target || !fn || !frame || !info || !b ||
+        (count != 3U && count != 2U) ||
+        (is64 && count != 2U) || (!is64 && count != 3U) ||
+        info->is_goto || info->has_memory_clobber ||
+        info->register_clobber_count || !info->template_text ||
+        (form != MINIC_X86_BIT_SCAN_BSF32_TIED &&
+         form != MINIC_X86_BIT_SCAN_BSR32_TIED &&
+         form != MINIC_X86_BIT_SCAN_BSR64_READWRITE))
+        return false;
+    for (i = 0U; i < count; ++i)
+        if (b[i].operand_index != i || b[i].value >= fn->value_count ||
+            b[i].has_fixed_register_binding || b[i].early_clobber ||
+            b[i].kind != (i == 0U ?
+                (is64 ? MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE :
+                        MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT) :
+                MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT))
+            return false;
+    if (!minic_type_pointee(fn->values[b[0].value].type, &output_type) ||
+        !minic_type_equal(output_type, minic_type_int()) ||
+        !minic_x86_64_scalar_width(program, target, output_type, &width, &sign) ||
+        width != 4U ||
+        !minic_x86_64_scalar_width(
+            program, target, fn->values[b[1].value].type, &width, &sign) ||
+        width != (is64 ? 8U : 4U))
+        return false;
+    if (count == 3U &&
+        (!minic_type_equal(fn->values[b[2].value].type, minic_type_int()) ||
+         !x86_value_load(out, frame, b[2].value, "%rax")))
+        return false;
+    if (is64) {
+        if (!x86_value_load(out, frame, b[0].value, "%r11") ||
+            fputs("  movl (%r11), %eax\n", out) == EOF)
+            return false;
+    }
+    if (!x86_value_load(out, frame, b[1].value, "%r10") ||
+        fputs(mnemonic, out) == EOF ||
+        !x86_value_load(out, frame, b[0].value, "%r11"))
+        return false;
+    return fputs("  movl %eax, (%r11)\n", out) != EOF;
+}
+
 /* The only owner of this x86 hardware side effect: CMP sets CF, SBB
  * consumes it immediately to create the branchless speculative mask.
  * Core transports typed SSA values, never a pretend boolean mask. */
@@ -305,6 +367,19 @@ bool minic_x86_64_emit_structured_asm(
         return info->is_volatile &&
                emit_memory_clobber_matched(
                    out, program, target, fn, frame, ins, info);
+    if ((ins->value.structured_inline_asm.operand_count == 2U ||
+         ins->value.structured_inline_asm.operand_count == 3U) &&
+        (minic_x86_64_asm_bit_scan_form(
+             info->template_text, info->template_length) ==
+             MINIC_X86_BIT_SCAN_BSF32_TIED ||
+         minic_x86_64_asm_bit_scan_form(
+             info->template_text, info->template_length) ==
+             MINIC_X86_BIT_SCAN_BSR32_TIED ||
+         minic_x86_64_asm_bit_scan_form(
+             info->template_text, info->template_length) ==
+             MINIC_X86_BIT_SCAN_BSR64_READWRITE))
+        return emit_linux_tied_bit_scan(
+            out, program, target, fn, frame, ins, info);
     if (ins->value.structured_inline_asm.operand_count == 2U &&
         info->register_clobber_count == 0U) {
         if (minic_x86_64_asm_percpu_stable_template(

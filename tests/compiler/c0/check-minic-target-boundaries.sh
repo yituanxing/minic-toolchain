@@ -102,6 +102,10 @@ has src/frontend/parser_function.c '!minic_type_add_volatile(base_type, &base_ty
 has src/target/target_info.c "name[0] == '%'"
 lacks src/core/core_lower_asm_target.c 'discard.addressable'
 has src/target/x86_64/asm_contract.c '"cmp%1,%2;sbb%0,%0;"'
+has src/target/x86_64/asm_contract.c 'MINIC_X86_BIT_SCAN_BSR32_TIED'
+has src/target/x86_64/asm_contract.c 'MINIC_X86_BIT_SCAN_BSR64_READWRITE'
+has src/target/x86_64/machine_asm.c 'emit_linux_tied_bit_scan'
+lacks src/core/core_lower_asm_target.c 'bsrl'
 lacks src/core/core_lower_asm_target.c 'sbb %0,%0'
 lacks src/target/backend.c 'aarch64_qualified_inputs'
 lacks src/target/backend.c 'loongarch64_qualified_inputs'

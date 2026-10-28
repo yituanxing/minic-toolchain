@@ -165,30 +165,42 @@ bool minic_x86_64_asm_muldiv_template(const char *text, size_t length) {
  * Linux __ffs is deliberate: it becomes TZCNT where available, and
  * preserves BSF bit-index semantics for nonzero inputs on older CPUs.
  * An all-zero input has no defined output; callers must not depend on it. */
+/* Decode complete GNU source/machine bit-scan templates once.
+ * Tied input #2 is materialized explicitly as the pre-BSR destination,
+ * so a zero source is not silently changed to an uninitialized register. */
+MinicX86BitScanForm minic_x86_64_asm_bit_scan_form(
+    const char *text, size_t length) {
+    static const struct { const char *text; MinicX86BitScanForm form; } forms[] = {
+        {"rep;bsf%1,%0", MINIC_X86_BIT_SCAN_BSF64},
+        {"bsr%1,%0", MINIC_X86_BIT_SCAN_BSR64},
+        {"bsfl%1,%0", MINIC_X86_BIT_SCAN_BSF32_TIED},
+        {"bsrl%1,%0", MINIC_X86_BIT_SCAN_BSR32_TIED},
+        {"bsrq%1,%q0", MINIC_X86_BIT_SCAN_BSR64_READWRITE}
+    };
+    char compact[64];
+    size_t i, n = 0U;
+    if (!text || length == 0U || length >= sizeof(compact))
+        return MINIC_X86_BIT_SCAN_NONE;
+    for (i = 0U; i < length; ++i) {
+        const char ch = text[i];
+        if (ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r') continue;
+        if (n + 1U >= sizeof(compact)) return MINIC_X86_BIT_SCAN_NONE;
+        compact[n++] = ch;
+    }
+    compact[n] = '\0';
+    for (i = 0U; i < sizeof(forms) / sizeof(forms[0]); ++i)
+        if (strcmp(compact, forms[i].text) == 0)
+            return forms[i].form;
+    return MINIC_X86_BIT_SCAN_NONE;
+}
 bool minic_x86_64_asm_bit_scan_template(
     const char *text, size_t length, bool *is_reverse) {
-    char normalized[64];
-    size_t i, used = 0U;
-    if (text == NULL || is_reverse == NULL || length >= sizeof(normalized))
+    const MinicX86BitScanForm form = minic_x86_64_asm_bit_scan_form(text, length);
+    if (!is_reverse ||
+        (form != MINIC_X86_BIT_SCAN_BSF64 && form != MINIC_X86_BIT_SCAN_BSR64))
         return false;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\r' || c == '\n')
-            continue;
-        if (used + 1U >= sizeof(normalized))
-            return false;
-        normalized[used++] = c;
-    }
-    normalized[used] = '\0';
-    if (strcmp(normalized, "rep;bsf%1,%0") == 0) {
-        *is_reverse = false;
-        return true;
-    }
-    if (strcmp(normalized, "bsr%1,%0") == 0) {
-        *is_reverse = true;
-        return true;
-    }
-    return false;
+    *is_reverse = form == MINIC_X86_BIT_SCAN_BSR64;
+    return true;
 }
 
 /* The GNU =r + matched-digit family owns only explicit register operands.
@@ -303,7 +315,8 @@ static bool qualified(const MinicC0Program *program,
     static const char *const mul_in[5] = {"0","1","2","a","m"};
     size_t i, n;
     bool generic = false;
-    bool bit_scan = false, reverse = false;
+    bool bit_scan = false;
+    MinicX86BitScanForm bit_form = MINIC_X86_BIT_SCAN_NONE;
     MinicType normalized;
     if (!program || !src || !src->template_text || !src->outputs ||
         !src->inputs || src->is_goto || src->label_count != 0U ||
@@ -345,17 +358,26 @@ static bool qualified(const MinicC0Program *program,
                c_is(&src->inputs[1], "rm") &&
                c_is(&src->inputs[2], "rm")) {
         *is_muldiv = true;
-    } else if (src->output_count == 1U && src->input_count == 1U &&
+    } else if (src->output_count == 1U &&
                !src->is_goto && src->label_count == 0U &&
                !src->has_memory_clobber &&
                src->clobber_count == 0U && src->register_clobber_count == 0U &&
-               minic_x86_64_asm_bit_scan_template(
-                   src->template_text, src->template_length, &reverse) &&
-               c_is(&src->outputs[0], "=r") &&
-               (c_is(&src->inputs[0], "r") || c_is(&src->inputs[0], "rm"))) {
-        /* The Core retains one typed output lvalue and a scalar SSA input.
-         * Both word operands use the target's native 64-bit unsigned long.
-         * Does not admit x86 32-bit BSF or matched third operands. */
+               (bit_form = minic_x86_64_asm_bit_scan_form(
+                   src->template_text, src->template_length)) !=
+                   MINIC_X86_BIT_SCAN_NONE &&
+               (c_is(&src->inputs[0], "r") || c_is(&src->inputs[0], "rm")) &&
+               ((bit_form == MINIC_X86_BIT_SCAN_BSF64 ||
+                 bit_form == MINIC_X86_BIT_SCAN_BSR64) &&
+                    src->input_count == 1U &&
+                    c_is(&src->outputs[0], "=r") ||
+                (bit_form == MINIC_X86_BIT_SCAN_BSF32_TIED ||
+                 bit_form == MINIC_X86_BIT_SCAN_BSR32_TIED) &&
+                    src->input_count == 2U &&
+                    c_is(&src->outputs[0], "=r") &&
+                    c_is(&src->inputs[1], "0") ||
+                bit_form == MINIC_X86_BIT_SCAN_BSR64_READWRITE &&
+                    src->input_count == 1U &&
+                    c_is(&src->outputs[0], "+r"))) {
         bit_scan = true;
     } else if (src->is_volatile && src->has_memory_clobber &&
                src->clobber_count == 1U &&
@@ -387,12 +409,24 @@ static bool qualified(const MinicC0Program *program,
             (*is_mulacc || bit_scan)
                 ? minic_type_unsigned_long() : minic_type_unsigned_int();
         if (!expr || !minic_type_unqualified(expr->type, &normalized) ||
-            (*is_muldiv
+            (bit_scan &&
+             ((bit_form == MINIC_X86_BIT_SCAN_BSF64 ||
+               bit_form == MINIC_X86_BIT_SCAN_BSR64)
+                 ? !minic_type_equal(normalized, minic_type_unsigned_long())
+                 : (i == 0U ||
+                    (i == 2U && src->input_count == 2U))
+                       ? !minic_type_equal(normalized, minic_type_int())
+                       : (bit_form == MINIC_X86_BIT_SCAN_BSR64_READWRITE)
+                           ? (!minic_type_equal(normalized, minic_type_unsigned_long()) &&
+                              !minic_type_equal(normalized, minic_type_unsigned_long_long()))
+                           : (!minic_type_equal(normalized, minic_type_int()) &&
+                              !minic_type_equal(normalized, minic_type_unsigned_int()))) ||
+            (!bit_scan && (*is_muldiv
                 ? (!minic_type_equal(normalized, minic_type_unsigned_long()) &&
                    !minic_type_equal(normalized, minic_type_unsigned_long_long()))
                 : generic ? (!minic_type_is_integer(normalized) &&
                              !minic_type_is_pointer(normalized))
-                          : !minic_type_equal(normalized, target_type)) ||
+                          : !minic_type_equal(normalized, target_type))) ||
             (is_output && (expr->value_category != MINIC_VALUE_LVALUE ||
                            minic_type_is_const(expr->type))) ||
             (*is_mulacc && i == 7U &&
@@ -428,7 +462,11 @@ bool minic_x86_64_qualify_inline_asm(
     contract->operand_count = count;
     for (i = 0U; i < count; ++i)
         contract->kinds[i] = i < source->output_count
-            ? MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT
+            ? (minic_x86_64_asm_bit_scan_form(
+                   source->template_text, source->template_length) ==
+               MINIC_X86_BIT_SCAN_BSR64_READWRITE ?
+                   MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE :
+                   MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT)
             : is_mulacc && i == 7U
                 ? MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT
                 : MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;

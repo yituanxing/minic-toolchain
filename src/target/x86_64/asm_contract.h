@@ -13,6 +13,18 @@ bool minic_x86_64_asm_nospec_template(const char *, size_t);
 bool minic_x86_64_asm_percpu_stable_template(const char *, size_t);
 bool minic_x86_64_asm_mulacc_template(const char *, size_t);
 bool minic_x86_64_asm_muldiv_template(const char *, size_t);
+/* One x86 ISA descriptor distinguishes word and tied-seed Linux BSR/BSF.
+ * The GNU output/input contract is target-owned; Common Core sees only
+ * scalar/input and address-backed output roles. */
+typedef enum MinicX86BitScanForm {
+    MINIC_X86_BIT_SCAN_NONE = 0,
+    MINIC_X86_BIT_SCAN_BSF64,
+    MINIC_X86_BIT_SCAN_BSR64,
+    MINIC_X86_BIT_SCAN_BSF32_TIED,
+    MINIC_X86_BIT_SCAN_BSR32_TIED,
+    MINIC_X86_BIT_SCAN_BSR64_READWRITE
+} MinicX86BitScanForm;
+MinicX86BitScanForm minic_x86_64_asm_bit_scan_form(const char *, size_t);
 /* The Linux __ffs / __fls 64-bit GNU bit-scan family is ISA-owned.
  * No raw arbitrary-template passthrough or global ASM Core opcode. */
 bool minic_x86_64_asm_bit_scan_template(

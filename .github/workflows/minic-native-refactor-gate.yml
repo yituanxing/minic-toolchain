@@ -60,6 +60,7 @@ on:
       - 'tests/compiler/c0/probe-x86-nospec-native.sh'
       - 'tests/compiler/c0/probe-linux-declaration-gates.sh'
       - 'tests/compiler/c0/probe-linux-global-prefix-attributes.sh'
+      - 'tests/compiler/c0/probe-x86-linux-tied-bit-scan.sh'
       - 'tests/compiler/c0/probe-rv64-extended-float-native.sh'
       - 'tests/compiler/c0/probe-rv64-pic-glibc-got.sh'
       - 'tests/compiler/c0/probe-rv64i-strict-isa.sh'
@@ -245,3 +246,4 @@ jobs:
           bash tests/compiler/c0/probe-x86-nospec-native.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
           bash tests/compiler/c0/probe-linux-declaration-gates.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
           bash tests/compiler/c0/probe-linux-global-prefix-attributes.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+          bash tests/compiler/c0/probe-x86-linux-tied-bit-scan.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
