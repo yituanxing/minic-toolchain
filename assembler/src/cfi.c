@@ -424,7 +424,8 @@ bool minias_cfi_emit(MiniAs *as) {
             if(!put32(as,section,0U) ||
                !put32(as,section,(uint32_t)(end->value-begin->value)) ||
                !uleb(as,section,0U) ||
-               !minias_add_fixup(as,section,ptr,MINIAS_FIXUP_PREL32,4U,
+               !minias_add_section_fixup(as,
+               MINIAS_FIXUP_ORIGIN_SYNTHETIC_SECTION,section,ptr,MINIAS_FIXUP_PREL32,4U,
                                  begin->name,0))return false;
         } else {
             if(!put32(as,section,0U) ||
@@ -432,7 +433,8 @@ bool minias_cfi_emit(MiniAs *as) {
             ptr=as->sections[(size_t)section].size;
             if(!put64(as,section,0U) ||
                !put64(as,section,end->value-begin->value) ||
-               !minias_add_fixup(as,section,ptr,MINIAS_FIXUP_ABS,8U,
+               !minias_add_section_fixup(as,
+               MINIAS_FIXUP_ORIGIN_SYNTHETIC_SECTION,section,ptr,MINIAS_FIXUP_ABS,8U,
                                  begin->name,0))return false;
         }
         loc=begin->value;

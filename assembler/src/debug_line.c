@@ -220,7 +220,8 @@ static bool set_address(MiniAs *as,int sec,size_t symbol_index,
     at=as->sections[(size_t)sec].size;
     for(i=0U;i<address_width;++i)
         if(!append_byte(as,sec,0U))return false;
-    return minias_add_fixup(as,sec,at,MINIAS_FIXUP_ABS,address_width,
+    return minias_add_section_fixup(as,
+               MINIAS_FIXUP_ORIGIN_SYNTHETIC_SECTION,sec,at,MINIAS_FIXUP_ABS,address_width,
                             symbol->name,0);
 }
 static const MiniAs *comparator_as;

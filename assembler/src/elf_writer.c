@@ -190,8 +190,31 @@ static bool minias_write_elf(MiniAs *as,
     for (i = 0U; i < as->fixup_count; ++i) {
         MiniAsFixup *input = &as->fixups[i];
         MiniElfWriteRela *output = &relocations[i];
-
+        uint64_t final_offset;
         bool section_reloc=section_symbol_fixup(as,input);
+        if (input->origin == MINIAS_FIXUP_ORIGIN_FRAGMENT) {
+            const MiniAsStmt *owner;
+            if (input->fragment_id >= as->stmt_count) {
+                minias_set_error(as, "invalid-fixup-fragment-id");
+                goto done;
+            }
+            owner = &as->stmts[input->fragment_id];
+            if (owner->section != input->section ||
+                input->fragment_offset > owner->size ||
+                input->width > owner->size - input->fragment_offset ||
+                owner->offset > UINT64_MAX - input->fragment_offset) {
+                minias_set_error(as, "invalid-fixup-fragment-layout:line=%zu",
+                                 owner->line);
+                goto done;
+            }
+            final_offset = owner->offset + input->fragment_offset;
+        } else if (input->origin == MINIAS_FIXUP_ORIGIN_EXPLICIT_SECTION ||
+                   input->origin == MINIAS_FIXUP_ORIGIN_SYNTHETIC_SECTION) {
+            final_offset = input->offset;
+        } else {
+            minias_set_error(as, "invalid-fixup-origin");
+            goto done;
+        }
         if (input->section < 0 ||
             (size_t)input->section >= as->section_count ||
             input->symbol_index >= as->symbol_count ||
@@ -203,14 +226,14 @@ static bool minias_write_elf(MiniAs *as,
          * Check the actual emitted section extent before exposing an ELF
          * relocation; do not allow an out-of-bounds machine-field patch. */
         if (input->width > as->sections[(size_t)input->section].size ||
-            input->offset >
+            final_offset >
             as->sections[(size_t)input->section].size - input->width) {
             minias_set_error(as, "fixup-field-out-of-bounds:kind=%u",
                              (unsigned)input->kind);
             goto done;
         }
         output->target_section = (size_t)input->section;
-        output->offset = input->offset;
+        output->offset = final_offset;
         output->symbol_index = symbol_map[input->symbol_index];
         output->type =
             as->target->fixup_relocation_type(input->kind, input->width);

@@ -149,9 +149,22 @@ typedef enum MiniAsFixupKind {
 
 /* A symbolic machine field adjustment, still independent of ELF's numeric
  * relocation encoding until final object materialization. */
+/* Every machine fixup has exactly one owner. Fragment fixups retain an
+ * intra-fragment offset until final layout; .reloc and synthesized DWARF
+ * relocations are intentionally section-relative, never guessed as an
+ * instruction's fixup. */
+typedef enum MiniAsFixupOrigin {
+    MINIAS_FIXUP_ORIGIN_FRAGMENT = 0,
+    MINIAS_FIXUP_ORIGIN_EXPLICIT_SECTION,
+    MINIAS_FIXUP_ORIGIN_SYNTHETIC_SECTION
+} MiniAsFixupOrigin;
+
 typedef struct MiniAsFixup {
     int section;
-    uint64_t offset;
+    uint64_t offset; /* section-relative ONLY for section-owned fixups */
+    MiniAsFixupOrigin origin;
+    size_t fragment_id; /* stable parsed statement ordinal */
+    uint32_t fragment_offset; /* relative to final fragment start */
     MiniAsFixupKind kind;
     unsigned width;
     size_t symbol_index;
@@ -328,6 +341,11 @@ typedef struct MiniAs {
     MiniAsFixup *fixups;
     size_t fixup_count;
     size_t fixup_capacity;
+    /* Set only while emitting one persistent, numbered MC fragment.
+     * Targets can use legacy append() during migration but never own the
+     * fixup's final section offset. */
+    bool emitting_fragment;
+    size_t emitting_fragment_id;
     MiniAsLiteral *literals;
     size_t literal_count;
     size_t literal_capacity;
@@ -431,6 +449,7 @@ bool minias_resolve_symbol_difference(MiniAs *,const MiniAsSymbolDifference *,
                                       int64_t *);
 bool minias_queue_literal(MiniAs *as,const MiniAsSymbolExpr *expression,
                           unsigned width,MiniAsSymbolExpr *pool_label);
+/* Target and generic data fixups require an active fragment. */
 bool minias_add_fixup(MiniAs *as,
                       int section,
                       uint64_t offset,
@@ -438,6 +457,12 @@ bool minias_add_fixup(MiniAs *as,
                       unsigned width,
                       const char *symbol_name,
                       int64_t addend);
+/* Section-owned relocations are explicit .reloc directives or generated
+ * DWARF records. Never silently fall back here from a Target encoder. */
+bool minias_add_section_fixup(MiniAs *as, MiniAsFixupOrigin origin,
+                             int section, uint64_t offset,
+                             MiniAsFixupKind kind, unsigned width,
+                             const char *symbol_name, int64_t addend);
 /* GNU/C-style binary, decimal, octal, hex and U/L/ULL literal scanner.
  * Exposes the consumed end pointer to both Common and Target grammars. */
 bool minias_parse_number_literal(const char *text, char **end, uint64_t *value);

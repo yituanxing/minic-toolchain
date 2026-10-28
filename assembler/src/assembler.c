@@ -484,16 +484,48 @@ MiniAsSymbol *minias_get_symbol(MiniAs *as, const char *name, bool create) {
     return sym;
 }
 
-bool minias_add_fixup(MiniAs *as,
+static bool minias_record_fixup(MiniAs *as,
                       int section,
                       uint64_t offset,
                       MiniAsFixupKind kind,
                       unsigned width,
                       const char *symbol_name,
-                      int64_t addend) {
+                      int64_t addend,
+                      MiniAsFixupOrigin origin) {
     MiniAsSymbol *symbol;
     MiniAsFixup *fixup;
     size_t symbol_index;
+    uint32_t relative_offset = 0U;
+    size_t fragment_id = SIZE_MAX;
+    if (origin == MINIAS_FIXUP_ORIGIN_FRAGMENT) {
+        const MiniAsStmt *owner;
+        uint64_t delta;
+        if (!as->emitting_fragment ||
+            as->emitting_fragment_id >= as->stmt_count) {
+            minias_set_error(as, "fixup-without-fragment-owner");
+            return false;
+        }
+        fragment_id = as->emitting_fragment_id;
+        owner = &as->stmts[fragment_id];
+        if (owner->section != section || offset < owner->offset) {
+            minias_set_error(as, "fixup-fragment-section-mismatch:line=%zu",
+                             owner->line);
+            return false;
+        }
+        delta = offset - owner->offset;
+        if (delta > UINT32_MAX || delta > owner->size ||
+            width > owner->size - delta) {
+            minias_set_error(as, "fixup-outside-fragment:line=%zu",
+                             owner->line);
+            return false;
+        }
+        relative_offset = (uint32_t)delta;
+    } else if ((origin != MINIAS_FIXUP_ORIGIN_EXPLICIT_SECTION &&
+                origin != MINIAS_FIXUP_ORIGIN_SYNTHETIC_SECTION) ||
+               as->emitting_fragment) {
+        minias_set_error(as, "invalid-section-fixup-owner");
+        return false;
+    }
     /* Verify this semantic fixup can be represented by the selected target.
      * ELF relocation numbers are chosen later by the object writer. */
     if (as->target->fixup_relocation_type(kind, width) == 0U) {
@@ -526,13 +558,32 @@ bool minias_add_fixup(MiniAs *as,
     }
     fixup = &as->fixups[as->fixup_count++];
     fixup->section = section;
-    fixup->offset = offset;
+    fixup->origin = origin;
+    fixup->fragment_id = fragment_id;
+    fixup->fragment_offset = relative_offset;
+    fixup->offset = origin == MINIAS_FIXUP_ORIGIN_FRAGMENT ? 0U : offset;
     fixup->kind = kind;
     fixup->width = width;
     fixup->symbol_index = symbol_index;
     fixup->addend = addend;
     fixup->prefer_section_symbol = false;
     return true;
+}
+
+bool minias_add_fixup(MiniAs *as, int section, uint64_t offset,
+                      MiniAsFixupKind kind, unsigned width,
+                      const char *symbol_name, int64_t addend) {
+    return minias_record_fixup(as, section, offset, kind, width,
+                               symbol_name, addend,
+                               MINIAS_FIXUP_ORIGIN_FRAGMENT);
+}
+
+bool minias_add_section_fixup(MiniAs *as, MiniAsFixupOrigin origin,
+                             int section, uint64_t offset,
+                             MiniAsFixupKind kind, unsigned width,
+                             const char *symbol_name, int64_t addend) {
+    return minias_record_fixup(as, section, offset, kind, width,
+                               symbol_name, addend, origin);
 }
 
 bool minias_section_append(MiniAs *as, int section_index, const void *data, size_t size) {
@@ -4438,8 +4489,10 @@ static bool handle_named_reloc(MiniAs *as,const char *args,size_t line) {
        *symbol!='\0' && !strchr(symbol,',') &&
        evaluate_absolute_expression(as,offset_text,&offset) && offset>=0 &&
        minias_parse_symbol_addend(symbol,&expression);
-    if(ok)ok=minias_add_fixup(as,as->current_section,(uint64_t)offset,
-                              kind,width,expression.name,expression.addend);
+    if(ok)ok=minias_add_section_fixup(as,
+                 MINIAS_FIXUP_ORIGIN_EXPLICIT_SECTION,
+                 as->current_section,(uint64_t)offset,
+                 kind,width,expression.name,expression.addend);
     free(copy);
     if(ok)return true;
 invalid:
@@ -7030,6 +7083,10 @@ bool minias_emit_sections(MiniAs *as) {
                 return false;
             }
         }
+        /* The engine is the owner of every emitted byte and fixup. The
+         * current backend append API is a compatibility bridge only. */
+        as->emitting_fragment = true;
+        as->emitting_fragment_id = refs[i].order;
         if (stmt->kind == MINIAS_STMT_ALIGN) {
             bool exec_align = (section->flags & MINIAS_SHF_EXECINSTR) != 0U &&
                               strcmp(stmt->op, ".org") != 0;
@@ -7071,6 +7128,15 @@ bool minias_emit_sections(MiniAs *as) {
             free(refs);
             return false;
         }
+        if ((uint64_t)section->size != stmt->offset + stmt->size) {
+            minias_set_error(as,
+                "fragment-emitted-size-mismatch:line=%zu:expected=%u:actual=%llu",
+                stmt->line, stmt->size,
+                (unsigned long long)((uint64_t)section->size - stmt->offset));
+            free(refs);
+            return false;
+        }
+        as->emitting_fragment = false;
     }
     free(refs);
 
