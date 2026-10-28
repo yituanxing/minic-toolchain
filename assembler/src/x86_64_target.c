@@ -3450,6 +3450,7 @@ static const MiniAsTargetOps ops={
      * eight-byte stack slots, return address=RIP(16), CFA base=RSP(7).
      * The Common CFI encoder already owns the real .debug_frame FDE. */
     .cfi_implicit_eh_frame=true,
+    .fold_local_abs_relocation_to_section=true,
     .cfi_code_align=1U,
     .cfi_data_align=-8,
     .cfi_return_reg=16U,

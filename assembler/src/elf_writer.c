@@ -9,7 +9,10 @@
  * cross-section reference. No machine-specific ELF logic lives here. */
 static bool section_symbol_fixup(const MiniAs *as,const MiniAsFixup *fixup) {
     const MiniAsSymbol *sym;
-    if(!fixup->prefer_section_symbol || fixup->symbol_index>=as->symbol_count)
+    bool requested=fixup->prefer_section_symbol ||
+        (as->target->fold_local_abs_relocation_to_section &&
+         fixup->kind==MINIAS_FIXUP_ABS);
+    if(!requested || fixup->symbol_index>=as->symbol_count)
         return false;
     sym=&as->symbols[fixup->symbol_index];
     return sym->defined && sym->bind==MINIAS_STB_LOCAL &&

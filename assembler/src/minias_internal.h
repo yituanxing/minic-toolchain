@@ -508,6 +508,9 @@ typedef struct MiniAsTargetOps {
     /* Target-advertised GNU implicit .eh_frame: never infer ISA from
      * numeric ELF e_machine inside Common CFI/layout dispatch. */
     bool cfi_implicit_eh_frame;
+    /* GNU x86 ld canonicalizes cross-section local ABS data relocations
+     * to STT_SECTION + addend. Target policy, Common ELF ownership. */
+    bool fold_local_abs_relocation_to_section;
     /* Target-owned DWARF CFI ABI (zero => not yet available). */
     unsigned cfi_code_align;
     int cfi_data_align;
