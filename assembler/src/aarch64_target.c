@@ -636,7 +636,7 @@ static bool a64_ins_lane(const char *text,unsigned *vd,uint32_t *imm5,
          elem=='d'?3U:4U;
     if(bits==4U || !isdigit((unsigned char)end[3]))return false;
     errno=0;index=strtoul(end+3U,&end,10);
-    if(errno || *end!='['+(']'-'[') || end[1]!='\0' ||
+    if(errno || *end!=']' || end[1]!='\0' ||
        index>=(16UL>>bits))return false;
     *vd=(unsigned)num;
     *imm5=((uint32_t)index<<(bits+1U))|(1U<<bits);
@@ -2443,8 +2443,9 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         inst->opcode=A64_MC_LSE_PAIR;inst->count=3U;
         inst->encoding=(wide?UINT32_C(0x48207c00):
                              UINT32_C(0x08207c00))|
-                       (strchr(op,'a') && !strcmp(op,"caspa") ||
-                        !strcmp(op,"caspal")?UINT32_C(0x00400000):0U)|
+                       ((!strcmp(op,"caspa") ||
+                         !strcmp(op,"caspal"))?
+                         UINT32_C(0x00400000):0U)|
                        (!strcmp(op,"caspl") || !strcmp(op,"caspal")?
                         UINT32_C(0x00008000):0U);
         put_reg(&inst->operands[0],rs,wide);
