@@ -1391,7 +1391,15 @@ static bool parse_static_local_array_declarator(MinicParser *parser,
         return false;
     }
     *out_object_id = MINIC_GLOBAL_OBJECT_INVALID;
-    if (!minic_parser_parse_pointer_declarator(parser, base_type, &declared_type)) {
+    /* GNU Linux static-call metadata uses block-scope static declarators
+     * with USED/SECTION attributes BETWEEN '*' and the object name:
+     * static void * __attribute__((used)) __attribute__((section(...))) key;
+     * The shared static attribute consumer already owns validation, section
+     * placement and conflict checks after the name. Reuse it at this earlier
+     * legal declarator position rather than inventing a parser-only bypass. */
+    if (!minic_parser_parse_pointer_declarator(parser, base_type, &declared_type) ||
+        !minic_parser_parse_gnu_attribute_lists(
+            parser, consume_static_local_interleaved_attribute, attributes)) {
         return false;
     }
     if (minic_type_is_void(declared_type)) {

@@ -853,6 +853,17 @@ bool minic_target_info_local_fixed_register_supported(const MinicTargetInfo *tar
                   (name[1] == '0' || name[1] == '1' || name[1] == '7'))));
     }
     if (target->architecture == MINIC_TARGET_ARCH_X86_64) {
+        /* Linux put_user() binds local hard registers using asm("%""rax"),
+         * asm("%""rdx"), etc. GNU treats the leading '%' as an AT&T
+         * register-name marker, not a distinct hardware register. Normalize
+         * ONLY for target local-declaration admission; the structured ASM
+         * machine owner remains responsible for physical binding, clobbers
+         * and stack ABI. Do not permit a lone '%', special registers, saved
+         * registers, or x86 syntax to leak into the Common Core. */
+        if (name_length > 1U && name[0] == '%') {
+            ++name;
+            --name_length;
+        }
         /* Source GNU local-register variables are not register
          * reservations. Their only guaranteed machine effect is when
          * referenced as qualified GNU extended-ASM operands. Reuse the
