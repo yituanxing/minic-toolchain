@@ -36,6 +36,15 @@ grep -q 'minias-fragment-relayout:inplace-passes=' "$work/trace"
 "$RISCV_OBJCOPY" -j .text -O binary "$work/gnu.o" "$work/gnu.text"
 "$RISCV_OBJCOPY" -j .data -O binary "$work/mini.o" "$work/mini.data"
 "$RISCV_OBJCOPY" -j .data -O binary "$work/gnu.o" "$work/gnu.data"
-cmp "$work/mini.text" "$work/gnu.text"
+if ! cmp "$work/mini.text" "$work/gnu.text"; then
+    echo "MINIAS_DEFERRED_DEBUG mini+GNU symbols" >&2
+    readelf -Ws "$work/mini.o" | grep -E '(far|entry|gap_)' >&2 || true
+    readelf -Ws "$work/gnu.o" | grep -E '(far|entry|gap_)' >&2 || true
+    echo "MINIAS_DEFERRED_DEBUG MiniAS bytes" >&2
+    od -An -tx1 -N48 "$work/mini.text" >&2
+    echo "MINIAS_DEFERRED_DEBUG GNU bytes" >&2
+    od -An -tx1 -N48 "$work/gnu.text" >&2
+    exit 1
+fi
 cmp "$work/mini.data" "$work/gnu.data"
 echo "MINIAS_DEFERRED_FRAGMENT_RELAX=PASS rv64i=GNU_exact source_reparse=0 alignment=recomputed"
