@@ -2638,3 +2638,16 @@ for bad in 'mvn v0.4s,v1.4s' 'not v0.8b,v1.16b'; do
  fi
 done
 echo 'MINIAS_A64_VECTOR_MVN=PASS GNU_4_bytes_family_2_rejects'
+
+# Linux arch/arm64/mm/proc.S materializes long GNU macro expressions in
+# :abs_g3:(...). More than the historical 384-byte target operand slot
+# must reach the SAME Common numeric evaluator and typed MOVW encoder.
+long_expression='0x8000000000000000'
+for i in $(seq 1 110); do long_expression="$long_expression + 0"; done
+printf '.text\nmovz x0, :abs_g3:(%s)\n' "$long_expression" >"$work/a64-long-movw.s"
+"$MINIAS" --target=aarch64 -o "$work/a64-long-movw-mini.o" "$work/a64-long-movw.s"
+"$AARCH64_AS" -o "$work/a64-long-movw-gnu.o" "$work/a64-long-movw.s"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-long-movw-mini.o" "$work/a64-long-movw-mini.bin"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-long-movw-gnu.o" "$work/a64-long-movw-gnu.bin"
+cmp "$work/a64-long-movw-mini.bin" "$work/a64-long-movw-gnu.bin"
+echo 'MINIAS_A64_LONG_MOVW_EXPRESSION=PASS GNU_dynamic_sized_operands_and_byte_parity'
