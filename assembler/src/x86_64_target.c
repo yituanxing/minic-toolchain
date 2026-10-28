@@ -358,6 +358,13 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         {"stosw",{0x66,0xab},2},{"movsb",{0xa4},1},
         {"movsw",{0x66,0xa5},2},
         {"movsl",{0xa5},1},{"movsq",{0x48,0xa5},2},
+        {"stosb",{0xaa},1},
+        {"lodsb",{0xac},1},{"lodsw",{0x66,0xad},2},
+        {"lodsl",{0xad},1},{"lodsq",{0x48,0xad},2},
+        {"scasb",{0xae},1},{"scasw",{0x66,0xaf},2},
+        {"scasl",{0xaf},1},{"scasq",{0x48,0xaf},2},
+        {"cmpsb",{0xa6},1},{"cmpsw",{0x66,0xa7},2},
+        {"cmpsl",{0xa7},1},{"cmpsq",{0x48,0xa7},2},
         {"outsb",{0x6e},1},{"outsw",{0x66,0x6f},2},
         {"outsl",{0x6f},1},{"insb",{0x6c},1},
         {"insw",{0x66,0x6d},2},{"insl",{0x6d},1},{"sfence",{0x0f,0xae,0xf8},3},
@@ -375,10 +382,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         {"repne",{0xf2},1},{"repnz",{0xf2},1},
         {"data16",{0x66},1},{"addr32",{0x67},1},{"rex.W",{0x48},1},
         {"pushf",{0x9c},1},{"pushfq",{0x9c},1},
-        {"popf",{0x9d},1},{"popfq",{0x9d},1},
-        {"rep stosq",{0xf3,0x48,0xab},3},
-        {"rep movsq",{0xf3,0x48,0xa5},3},
-        {"rep stosb",{0xf3,0xaa},2}
+        {"popf",{0x9d},1},{"popfq",{0x9d},1}
     };
     static const struct {const char *op; unsigned opcode; bool wide;} binary[]={
         {"movq",0x89,true}, {"movl",0x89,false},
@@ -817,37 +821,36 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         m->opcode=X64_ENDBR64;m->encoding=UINT32_C(0xfa1e0ff3);
         m->count=0U;goto done;
     }
-    /* GNU GAS spells REP STOSQ/MOVSQ as opcode + operand, not a single
-     * whitespace-bearing mnemonic. The prefix and operation stay one
-     * retained instruction fragment for exact-size section layout. */
-    if(!strcmp(s->op,"rep") || !strcmp(s->op,"repz")) {
-        if(!strcmp(s->args,"stosq")) {
-            m->opcode=X64_ZERO;m->encoding=UINT32_C(0xab48f3);
-            m->operands[0].immediate=3U;goto done;
+    /* All GNU REP/REPE/REPNE string forms use the canonical zero-arg
+     * opcode descriptor; operand-size 66 precedes REP, whereas REX.W
+     * follows REP. No duplicate hard-coded REP STOS/MOVS implementations.
+     * Common retains the entire prefix+opcode as one sized MC fragment. */
+    if(!strcmp(s->op,"rep") || !strcmp(s->op,"repz") ||
+       !strcmp(s->op,"repe") || !strcmp(s->op,"repne") ||
+       !strcmp(s->op,"repnz")) {
+        unsigned char prefix=(!strcmp(s->op,"repne") ||
+                              !strcmp(s->op,"repnz"))?0xf2U:0xf3U;
+        for(i=0U;i<sizeof(zeros)/sizeof(zeros[0]);++i) {
+            const char *name=zeros[i].op;
+            unsigned char bytes[3]={0U,0U,0U};
+            unsigned n=0U,j;
+            if(strcmp(s->args,name))continue;
+            if(strncmp(name,"movs",4U) && strncmp(name,"stos",4U) &&
+               strncmp(name,"scas",4U) && strncmp(name,"cmps",4U) &&
+               strncmp(name,"lods",4U) && strncmp(name,"outs",4U) &&
+               strncmp(name,"ins",3U))break;
+            if(zeros[i].size>2U)break;
+            if(zeros[i].bytes[0]==0x66U)bytes[n++]=0x66U;
+            bytes[n++]=prefix;
+            for(j=bytes[0]==0x66U?1U:0U;j<zeros[i].size;++j)
+                bytes[n++]=zeros[i].bytes[j];
+            m->opcode=X64_ZERO;m->count=0U;
+            m->encoding=(unsigned)bytes[0]|
+                        ((unsigned)bytes[1]<<8U)|
+                        ((unsigned)bytes[2]<<16U);
+            m->operands[0].immediate=n;
+            goto done;
         }
-        if(!strcmp(s->args,"movsq")) {
-            m->opcode=X64_ZERO;m->encoding=UINT32_C(0xa548f3);
-            m->operands[0].immediate=3U;goto done;
-        }
-        if(!strcmp(s->args,"stosb")) {
-            m->opcode=X64_ZERO;m->encoding=UINT32_C(0xaaf3);
-            m->operands[0].immediate=2U;goto done;
-        }
-        if(!strcmp(s->args,"movsb") || !strcmp(s->args,"movsl") ||
-           !strcmp(s->args,"stosl")) {
-            unsigned opcode=!strcmp(s->args,"movsb")?0xa4U:
-                            !strcmp(s->args,"movsl")?0xa5U:0xabU;
-            m->opcode=X64_ZERO;m->encoding=UINT32_C(0xf3)|(opcode<<8U);
-            m->operands[0].immediate=2U;goto done;
-        }
-        if(!strcmp(s->args,"cmpsb") && !strcmp(s->op,"repz")) {
-            m->opcode=X64_ZERO;m->encoding=UINT32_C(0xa6f3);
-            m->operands[0].immediate=2U;goto done;
-        }
-    }
-    if(!strcmp(s->op,"repne") && !strcmp(s->args,"scasb")) {
-        m->opcode=X64_ZERO;m->encoding=UINT32_C(0xaef2);
-        m->operands[0].immediate=2U;goto done;
     }
     for(i=0U;i<sizeof(zeros)/sizeof(zeros[0]);++i) {
         if (!strcmp(s->op,zeros[i].op) && !*s->args) {

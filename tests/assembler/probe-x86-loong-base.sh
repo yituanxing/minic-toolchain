@@ -1947,6 +1947,42 @@ objcopy -j .data -O binary "$work/common-bool-mini.o" "$work/common-bool-mini.bi
 objcopy -j .data -O binary "$work/common-bool-gnu.o" "$work/common-bool-gnu.bin"
 cmp "$work/common-bool-mini.bin" "$work/common-bool-gnu.bin"
 echo 'MINIAS_COMMON_LOGICAL=PASS GNU_GAS_boolean_precedence_AND_OR_NOT_true_is_1'
+
+# GNU AT&T REP family shares exact target string opcode descriptors;
+# verify canonical prefix ordering 66/F3 and F3/REX.W on each form.
+cat > "$work/x86-rep-matrix.s" <<'REP_MATRIX'
+.text
+  rep movsb
+  rep movsw
+  rep movsl
+  rep movsq
+  rep stosb
+  rep stosw
+  rep stosq
+  repe cmpsb
+  repe cmpsw
+  repe cmpsq
+  repne scasb
+  repne scasw
+  repne scasq
+  repnz cmpsw
+  rep outsl
+  rep insb
+  rep lodsq
+REP_MATRIX
+"$MINIAS" --target=x86_64 -o "$work/rep-mini.o" "$work/x86-rep-matrix.s"
+as --64 -o "$work/rep-gnu.o" "$work/x86-rep-matrix.s"
+objcopy -j .text -O binary "$work/rep-mini.o" "$work/rep-mini.bin"
+objcopy -j .text -O binary "$work/rep-gnu.o" "$work/rep-gnu.bin"
+cmp "$work/rep-mini.bin" "$work/rep-gnu.bin"
+for bad in 'rep rdtsc' 'repe movq %rax,%rbx' 'rep bad_instruction'; do
+  printf '.text\n%s\n' "$bad" >"$work/rep-bad.s"
+  if "$MINIAS" --target=x86_64 -o "$work/rep-bad.o" "$work/rep-bad.s" >/dev/null 2>&1; then
+    echo "MiniAS incorrectly accepted REP operand $bad" >&2
+    exit 1
+  fi
+done
+echo 'MINIAS_X86_REP=PASS GNU_GAS_BYTES rep_repz_repe_repne_repnz canonical_66_REX_prefix'
 echo 'MINIAS_COMMON_NUMERIC_U64=PASS GNU_GAS_x86_LA64_exact_data_bytes'
 echo 'MINIAS_X86_SEGMENTED_INDIRECT=PASS GNU_AS_text_and_relocations segment_base_index_abs_rip=true indirect_memory_call_jmp=true absolute_symbol32S=true'
 echo 'MINIAS_TWO_TARGET_ORACLE=PASS x86_GNU_bytes=equal loong_GNU_bytes=equal ELF_machine=correct lp64d_v1=0x43 CET_endbr64=1 ALU_imm8_imm32=1 x86_ModRM_SIB_disp=1 x86_test_cmp_alu_memory=1 x86_scaled_index_SIB=1 LA_jr=1 LA_scaled_ptr14=1 LA_imm12_shift_upper20=1 invalid=reject'
