@@ -173,6 +173,23 @@ entry_x:
     andl $4294967295, %eax
     andl $4294963200, %eax
     andl $4286906367, %edx
+    # GNU AT&T unsuffixed opcode aliases infer width from typed registers.
+    cmp $453, %rdx
+    cmp $7, %ecx
+    cmp %al, %ah
+    mov %rax, %rbx
+    mov %eax, 16(%rbx)
+    mov 8(%rdi), %r9
+    add $9, %r11
+    sub %ecx, %eax
+    and $255, %r8d
+    xor %r10, %r11
+    test %edx, %ecx
+    push %rax
+    pop %r8
+    sal $3, %rax
+    shl %cl, %r10
+    ror $3, %r8
     # High 8-bit legacy register IDs, including MOV and ALU; no REX.
     movb %al, %dh
     movb %cl, %ah
@@ -933,6 +950,12 @@ for bad in            'popcntq %eax,%rax' \
            'movb %ah, 1(%r12)' \
            'movb (%r9), %bh' \
            'addb %ah, (%r8)' \
+           'mov $5,(%rax)' \
+           'cmp %rax,%eax' \
+           'cmp $7,invalid_mem(%rip)' \
+           'push %al' \
+           'pop %eax' \
+           'mov %ah,%r8b' \
            'adcl %rax,%eax' \
            'negb %eax' \
            'negw %eax' \

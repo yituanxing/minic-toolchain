@@ -400,7 +400,61 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
     unsigned i, rs, rd;
     bool ws, wd;
     char src[48],dst[48];
+    MiniAsStmt normalized, *const original=s;
+    char suffixed_op[24];
     if (!m) {minias_set_error(as,"out-of-memory:x86_64-mcinst");return false;}
+    /*
+     * GNU AT&T instruction suffix inference is a target-only grammar rule.
+     * Resolve the W/L/Q/B width from an explicit register operand, then
+     * delegate to the *existing* typed MCInst decoder. Never infer memory
+     * widths without a register: GAS defaults for ambiguous memory forms
+     * are not a safe ISA contract.
+     */
+    {
+        static const char *const inferred[]={
+            "mov","cmp","test","add","sub","adc","sbb",
+            "and","or","xor","push","pop",
+            "shl","sal","shr","sar","rol","ror"
+        };
+        bool alias=false;
+        for(i=0U;i<sizeof(inferred)/sizeof(inferred[0]);++i)
+            if(!strcmp(s->op,inferred[i])){alias=true;break;}
+        if(alias) {
+            char suffix=0;
+            unsigned pass;
+            for(pass=0U;pass<2U && !suffix;++pass) {
+                const char *start=pass==0U?strrchr(s->args,','):s->args;
+                const char *end=pass==0U?NULL:strchr(s->args,',');
+                char operand[48];
+                size_t length;
+                unsigned reg;
+                bool wide=false;
+                if(start && pass==0U)++start;
+                if(!start)start=s->args;
+                while(isspace((unsigned char)*start))++start;
+                length=end && end>=start?(size_t)(end-start):strlen(start);
+                while(length && isspace((unsigned char)start[length-1U]))
+                    --length;
+                if(length==0U || length>=sizeof(operand))continue;
+                memcpy(operand,start,length);operand[length]='\0';
+                if(x64_register(operand,&reg,&wide))
+                    suffix=wide?'q':'l';
+                else if(x64_register16(operand,&reg))suffix='w';
+                else if(x64_register8(operand,&reg) ||
+                        x64_high_register8(operand,&reg))suffix='b';
+            }
+            if(suffix) {
+                size_t length=strlen(s->op);
+                if(length+2U>sizeof(suffixed_op)) {
+                    free(m);return false;
+                }
+                memcpy(suffixed_op,s->op,length);
+                suffixed_op[length]=suffix;
+                suffixed_op[length+1U]='\0';
+                normalized=*s;normalized.op=suffixed_op;s=&normalized;
+            }
+        }
+    }
     if (!strcmp(s->op,"endbr64") && !*s->args) {
         m->opcode=X64_ENDBR64;m->encoding=UINT32_C(0xfa1e0ff3);
         m->count=0U;goto done;
@@ -1477,10 +1531,10 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
     }
 invalid:
     minias_set_error(as,"unsupported-x86_64-operand:%s:%s:line=%zu",
-                     s->op,s->args,s->line);
+                     original->op,original->args,original->line);
     free(m);return false;
 done:
-    s->mcinst=m;return true;
+    original->mcinst=m;return true;
 }
 
 static bool x64_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
