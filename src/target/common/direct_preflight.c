@@ -54,6 +54,34 @@ bool minic_multi_direct_lp64_function_preflight(
         arch == NULL) return false;
     verified = minic_core_function_facts_verified(facts, fn) ||
                minic_core_function_verify(fn);
+    /* Collect the ENTIRE admission error class for each failed function.
+     * This is not a feature gate or permissive fallback: all original
+     * policy checks below stay intact. The 3x7 GNU corpus aggregates
+     * actual typed reasons instead of 60 generic preflight errors. */
+    if (getenv("MINIC_BACKEND_CENSUS") != NULL) {
+        const char *reason=NULL;
+        if(name==NULL||name[0]=='\0')reason="symbol_name";
+        else if(!verified)reason="core_verify";
+        else if(decl->visibility!=MINIC_SYMBOL_VISIBILITY_DEFAULT &&
+                minic_multi_elf_visibility_directive(decl->visibility)==NULL)
+            reason="elf_visibility";
+        else if(decl->alias_target!=MINIC_FUNCTION_INVALID)
+            reason="function_alias";
+        else if(!minic_lp64_valid_return_type(program,target,fn->return_type))
+            reason="return_abi";
+        else if(fn->block_count>2048U)reason="block_cap";
+        else if(!direct_lp64_only_structured_asm(fn))
+            reason="gnu_asm_qualification";
+        else if(fn->parameter_count>16U)reason="parameter_cap";
+        else if(fn->value_count>32768U)reason="value_cap";
+        else if(fn->object_count>8192U)reason="object_cap";
+        if(reason!=NULL)
+            (void)fprintf(stderr,
+                "MINIC_BACKEND_PREFLIGHT_ROOT arch=%s function=%s reason=%s "
+                "blocks=%zu parameters=%zu inline=%zu\n",
+                arch,name!=NULL?name:"<unnamed>",reason,
+                fn->block_count,fn->parameter_count,fn->inline_asm_count);
+    }
     if (name == NULL || name[0] == '\0' ||
         !verified ||
         (decl->visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT &&

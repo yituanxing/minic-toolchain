@@ -32,6 +32,7 @@ def main():
     # first barriers as a single interchangeable root cause.
     machine_kinds = collections.defaultdict(lambda: collections.defaultdict(list))
     backend_stages = collections.defaultdict(lambda: collections.defaultdict(list))
+    preflight_classes = collections.defaultdict(lambda: collections.defaultdict(list))
     totals = collections.defaultdict(lambda: dict(total=0, pass_count=0))
     source_state = {}
     for file in reports:
@@ -121,6 +122,15 @@ def main():
                     raise SystemExit("THREE_LINUX_CENSUS=FAIL invalid backend owner")
                 backend_stages[(target,item["stage"],item["kind"],
                                 item["backend_line"])][item["function"]].append(obj)
+            for item in row.get("preflight_roots",[]):
+                if (not isinstance(item,dict) or
+                    not isinstance(item.get("reason"),str) or
+                    not re.fullmatch("[a-z_]+",item["reason"]) or
+                    not isinstance(item.get("function"),str) or
+                    not re.fullmatch("[A-Za-z_][A-Za-z_0-9]*",
+                                     item["function"])):
+                    raise SystemExit("THREE_LINUX_CENSUS=FAIL invalid preflight root")
+                preflight_classes[(target,item["reason"])][item["function"]].append(obj)
             totals[target]["total"] += 1
             if row.get("status") == "MINIC_S_PASS":
                 if frontiers:
@@ -171,6 +181,14 @@ def main():
         for (arch,stage,kind,line),funcs in backend_stages.items()
     ]
     backend_reject_frontiers.sort(key=lambda x:(-x["total"],x["target"],x["stage"]))
+    preflight_root_frontiers = [
+        dict(target=arch,reason=reason,
+             instances=sum(len(v) for v in funcs.values()),
+             functions=len(funcs),
+             owners=sorted({o for arr in funcs.values() for o in arr}))
+        for (arch,reason),funcs in preflight_classes.items()
+    ]
+    preflight_root_frontiers.sort(key=lambda x:(-x["instances"],x["target"]))
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(dict(
         schema="minic-linux-cross-target-diagnostic-census-v2",
@@ -179,7 +197,8 @@ def main():
         targets=totals, diagnostic_groups=diagnostics,
         all_core_function_frontiers=core_frontiers,
         machine_kind_frontiers=machine_kind_frontiers,
-        backend_reject_frontiers=backend_reject_frontiers), indent=2) + "\n")
+        backend_reject_frontiers=backend_reject_frontiers,
+        preflight_root_frontiers=preflight_root_frontiers), indent=2) + "\n")
     for arch, count in sorted(totals.items()):
         print(f"THREE_LINUX_MINIC_S target={arch} compiled={count['pass_count']}/{count['total']}")
     for item in diagnostics[:25]:
@@ -197,6 +216,10 @@ def main():
         print(f"THREE_LINUX_BACKEND_KIND target={item['target']} stage={item['stage']} "
               f"kind={item['kind']} source_line={item['backend_line']} "
               f"failures={item['total']} owners={len(item['owners'])}")
+    for item in preflight_root_frontiers[:25]:
+        print(f"THREE_LINUX_PREFLIGHT_ROOT target={item['target']} "
+              f"reason={item['reason']} instances={item['instances']} "
+              f"functions={item['functions']} owners={len(item['owners'])}")
     print(f"THREE_LINUX_CENSUS=COMPLETE shards=21 diagnostic_signatures={len(diagnostics)} "
           f"all_core_function_groups={len(core_frontiers)} "
           "ROOT_CAUSE_REVIEW_REQUIRED=1 GNU_AS_link_QEMU=NOT_RUN")

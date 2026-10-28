@@ -252,7 +252,10 @@ static bool emit_checksum_fold(FILE *out,const MinicC0Program *p,
     if(!out||!p||!t||!fn||!frame||!ins||!info||!b||
        !minic_x86_64_checksum_fold_template(
             info->template_text,info->template_length)||
-       info->is_volatile||info->is_goto||info->has_memory_clobber||
+       /* Canonical Core marks every target-qualified ASM effect volatile,
+        * including GNU source nonvolatile outputs. Source eligibility
+        * remains exactly checked by x86_checksum_source. */
+       info->is_goto||info->has_memory_clobber||
        info->register_clobber_count||
        ins->value.structured_inline_asm.operand_count!=3U)return false;
     for(i=0U;i<3U;++i){

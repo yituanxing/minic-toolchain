@@ -39,5 +39,11 @@ assert mod.all_backend_reject_frontiers(
     "block=3 instruction=7 kind=43 backend_line=156\n","aarch64")==[
         dict(function="foo",stage="emit",block=3,instruction=7,
              kind=43,backend_line=156)]
+assert mod.all_preflight_roots(
+    "MINIC_BACKEND_PREFLIGHT_ROOT arch=loongarch64 "
+    "function=alpha reason=gnu_asm_qualification blocks=4 "
+    "parameters=3 inline=2\n","loongarch64")==[
+        dict(function="alpha",reason="gnu_asm_qualification",blocks=4,
+             parameters=3,inline=2)]
 assert mod.all_machine_opcode_frontiers("no trace","x86_64")==[]
 print("THREE_LINUX_ALL_FRONTIERS_SELFTEST=PASS three_independent_failures=1 normal_unchanged=1 machine_trace=3")

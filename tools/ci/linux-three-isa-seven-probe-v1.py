@@ -10,6 +10,17 @@ import argparse,concurrent.futures,hashlib,json,os,re,subprocess,sys
 # General shared Direct LP64 owner rejection includes source stage,
 # opcode kind, and backend line even when the residual M8 selector was
 # never reached. Archive every machine reject, not just M8 default cases.
+PREFLIGHT_ROOT = re.compile(
+    r"^MINIC_BACKEND_PREFLIGHT_ROOT arch=(aarch64|loongarch64) "
+    r"function=([A-Za-z_][A-Za-z_0-9]*) reason=([a-z_]+) "
+    r"blocks=(\d+) parameters=(\d+) inline=(\d+)$",re.MULTILINE)
+def all_preflight_roots(stderr,target):
+    return [dict(function=m.group(2),reason=m.group(3),
+                 blocks=int(m.group(4)),parameters=int(m.group(5)),
+                 inline=int(m.group(6)))
+            for m in PREFLIGHT_ROOT.finditer(stderr)
+            if m.group(1)==target]
+
 BACKEND_REJECT = re.compile(
     r"^MINIC_BACKEND_REJECT arch=(aarch64|loongarch64) "
     r"function=([^ ]+) stage=([^ ]+) block=(-?\d+) "
@@ -83,6 +94,7 @@ def probe(a):
             env=os.environ.copy()
             env["MINIC_CORE_FAILURE_CENSUS"]="1"
             env["MINIC_M1_TRACE"]="1"
+            env["MINIC_BACKEND_CENSUS"]="1"
             p=subprocess.run([str(compiler),"--target="+a.target+"-linux",
                               *row["minic_flags"],"-S",str(file),"-o",str(asm)],
                              capture_output=True,timeout=a.timeout,env=env)
@@ -93,6 +105,7 @@ def probe(a):
             core_frontiers=all_core_function_frontiers(error_text)
             machine_frontiers=all_machine_opcode_frontiers(error_text,a.target)
             backend_frontiers=all_backend_reject_frontiers(error_text,a.target)
+            preflight_roots=all_preflight_roots(error_text,a.target)
             if core_frontiers and ok:
                 raise ValueError("MiniC succeeded despite failed Core functions: "+obj)
             if len({f["index"] for f in core_frontiers}) != len(core_frontiers):
@@ -104,12 +117,13 @@ def probe(a):
                         core_frontiers=core_frontiers,
                         machine_frontiers=machine_frontiers,
                         backend_frontiers=backend_frontiers,
+                        preflight_roots=preflight_roots,
                         asm_sha256=sha(asm) if ok else None)
         except subprocess.TimeoutExpired:
             asm.unlink(missing_ok=True)
             return dict(index=row["index"],object=obj,status="MINIC_TIMEOUT",diagnostic="timeout",
                         core_frontiers=[],machine_frontiers=[],
-                        backend_frontiers=[],
+                        backend_frontiers=[],preflight_roots=[],
                         input_sha256=row["sha256"])
     with concurrent.futures.ThreadPoolExecutor(max_workers=a.workers) as executor:
         data=list(executor.map(process,selected))
