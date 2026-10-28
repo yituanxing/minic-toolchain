@@ -1997,3 +1997,38 @@ for bad in 'ins v0.s[0],v1.d[0]' 'ins v0.b[0],v1.h[0]' \
     fi
 done
 echo 'MINIAS_A64_INS_VECTOR_TO_VECTOR=PASS GNU_8_words_and_6_invalid'
+
+# Genuine GNU recursive altmacro %expression plus label-prefixed .ifc.
+# These are pre-ISA Common behaviors, verified against GNU on both targets.
+cat > "$work/a64-common-altmacro-inline.s" <<'A64_COMMON_ALT'
+.text
+.macro __for from:req,to:req
+.if (\from) == (\to)
+.inst (0xd503201f + (\from * 0))
+.else
+__for %\from, %((\from) + ((\to) - (\from)) / 2)
+__for %((\from) + ((\to) - (\from)) / 2 + 1), %\to
+.endif
+.endm
+.altmacro
+__for 0,7
+.noaltmacro
+.macro local_check pn
+0: .ifc \pn, p64
+nop
+.else
+brk #0
+.endif
+.endm
+local_check p64
+local_check p32
+# Native GNU standalone # comment after preprocessed code
+# AArch64 # immediates inside instructions are NOT comments.
+movz x0,#1
+A64_COMMON_ALT
+"$MINIAS" --target=aarch64 -o "$work/a64-common-alt-mini.o" "$work/a64-common-altmacro-inline.s"
+"$AARCH64_AS" -o "$work/a64-common-alt-gnu.o" "$work/a64-common-altmacro-inline.s"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-common-alt-mini.o" "$work/a64-common-alt-mini.bin"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-common-alt-gnu.o" "$work/a64-common-alt-gnu.bin"
+cmp "$work/a64-common-alt-mini.bin" "$work/a64-common-alt-gnu.bin"
+echo 'MINIAS_COMMON_ALT_MACRO_A64=PASS GNU_recursive_numeric_label_inline_ifc_comment'

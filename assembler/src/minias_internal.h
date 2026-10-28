@@ -307,6 +307,7 @@ typedef struct MiniAs {
     size_t macro_capacity;
     size_t macro_expansion_counter;
     size_t macro_expansion_depth;
+    bool altmacro_active; /* GNU %absolute-expression positional arguments */
     bool conditional_active;
     /* GNU GAS's quoted-string-aware, multi-line C comment lexical state. */
     bool c_comment_active;

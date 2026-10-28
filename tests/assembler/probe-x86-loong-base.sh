@@ -2739,3 +2739,43 @@ echo 'MINIAS_COMMON_IFDEF_IFNDEF=PASS GNU_x86_Loong_defined_symbols'
 echo 'MINIAS_COMMON_NUMERIC_U64=PASS GNU_GAS_x86_LA64_exact_data_bytes'
 echo 'MINIAS_X86_SEGMENTED_INDIRECT=PASS GNU_AS_text_and_relocations segment_base_index_abs_rip=true indirect_memory_call_jmp=true absolute_symbol32S=true'
 echo 'MINIAS_TWO_TARGET_ORACLE=PASS x86_GNU_bytes=equal loong_GNU_bytes=equal ELF_machine=correct lp64d_v1=0x43 CET_endbr64=1 ALU_imm8_imm32=1 x86_ModRM_SIB_disp=1 x86_test_cmp_alu_memory=1 x86_scaled_index_SIB=1 LA_jr=1 LA_scaled_ptr14=1 LA_imm12_shift_upper20=1 invalid=reject'
+
+# Original Linux ARM64 fpsimdmacros GNU ALT macro numeric evaluation
+# and LABEL: .ifc directive use the single Common stack on x86 too.
+cat > "$work/gnu-altmacro-inline-ifc.s" <<'GNU_ALT_INLINE'
+.data
+.macro __for from:req,to:req
+.if (\from) == (\to)
+.byte \from
+.else
+__for %\from, %((\from) + ((\to) - (\from)) / 2)
+__for %((\from) + ((\to) - (\from)) / 2 + 1), %\to
+.endif
+.endm
+.altmacro
+__for 0,7
+.noaltmacro
+.macro test_inline pn
+0: .ifc \pn, p64
+.byte 0x51
+.else
+.byte 0x52
+.endif
+.endm
+test_inline p64
+test_inline p32
+GNU_ALT_INLINE
+for target in x86_64 loongarch64; do
+    "$MINIAS" --target="$target" -o "$work/$target-altinline-mini.o" "$work/gnu-altmacro-inline-ifc.s"
+    if [ "$target" = x86_64 ]; then
+        as --64 -o "$work/$target-altinline-gnu.o" "$work/gnu-altmacro-inline-ifc.s"
+        objcopy -j .data -O binary "$work/$target-altinline-mini.o" "$work/$target-altinline-mini.bin"
+        objcopy -j .data -O binary "$work/$target-altinline-gnu.o" "$work/$target-altinline-gnu.bin"
+    else
+        "$LOONGAS" -mabi=lp64d -o "$work/$target-altinline-gnu.o" "$work/gnu-altmacro-inline-ifc.s"
+        "$LOONGCOPY" -j .data -O binary "$work/$target-altinline-mini.o" "$work/$target-altinline-mini.bin"
+        "$LOONGCOPY" -j .data -O binary "$work/$target-altinline-gnu.o" "$work/$target-altinline-gnu.bin"
+    fi
+    cmp "$work/$target-altinline-mini.bin" "$work/$target-altinline-gnu.bin"
+done
+echo 'MINIAS_COMMON_ALT_MACRO_INLINE_IFC=PASS GNU_recursive_evaluated_and_lexical_labels'

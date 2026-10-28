@@ -4018,6 +4018,7 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
     char *args;
     uint32_t size;
     char reason[160];
+    bool had_leading_label=false;
 
     text = minias_trim(text);
     if (*text == '\0') {
@@ -4032,6 +4033,9 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
      * treat arbitrary #foo or #number as a comment. */
     if (strcmp(text, "#APP") == 0 || strcmp(text, "#NO_APP") == 0 ||
         strcmp(text, "#NOAPP") == 0) return true;
+    /* At column zero after trim, # starts a GNU assembler comment;
+     * this does NOT suppress #immediate in A64 instruction operands. */
+    if(text[0]=='#' && isspace((unsigned char)text[1]))return true;
     if (text[0] == '#' && isspace((unsigned char)text[1])) {
         const char *marker = text + 2;
         while (isspace((unsigned char)*marker)) ++marker;
@@ -4145,6 +4149,7 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
             break;
         }
         *token_end = '\0';
+        had_leading_label=true;
         if (!define_label(as, text, line)) {
             return false;
         }
@@ -4153,6 +4158,10 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
             return true;
         }
     }
+    /* A GNU statement after LABEL: still starts a fresh directive.
+     * Reenter the same shared conditional dispatcher instead of treating
+     * '0: .ifc \arg,x' as an unknown target instruction/directive. */
+    if(had_leading_label)return process_statement(as,text,line);
 
     {
         char *glued=NULL;
@@ -4437,9 +4446,17 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
         if (strcmp(op, ".popsection") == 0) {
             return pop_section(as, line);
         }
+        if (strcmp(op,".altmacro")==0 || strcmp(op,".noaltmacro")==0) {
+            if(*args!='\0') {
+                minias_set_error(as,"bad-directive:%s:line=%zu",op,line);
+                return false;
+            }
+            as->altmacro_active=strcmp(op,".altmacro")==0;
+            as->layout_sensitive=true;
+            return true;
+        }
         if (strcmp(op, ".file") == 0 ||
-            strcmp(op, ".ident") == 0 || strcmp(op, ".altmacro") == 0 ||
-            strcmp(op, ".noaltmacro") == 0 || strcmp(op, ".end") == 0) {
+            strcmp(op, ".ident") == 0 || strcmp(op, ".end") == 0) {
             return true;
         }
         if (strcmp(op, ".align") == 0 || strcmp(op, ".balign") == 0 ||
@@ -5059,6 +5076,7 @@ static bool expand_macro_invocation(MiniAs *as,
                                     size_t line) {
     char *copy = minias_strdup(args);
     char *tokens[64];
+    char evaluated[64][32];
     const char *values[64];
     bool assigned[64]={false};
     char *vararg_buffer=NULL;
@@ -5086,6 +5104,29 @@ static bool expand_macro_invocation(MiniAs *as,
         free(vararg_buffer);
         free(copy);
         return false;
+    }
+    /* GAS .altmacro evaluates %<absolute expression> at MACRO
+     * invocation time. This is required by ARM64 fpsimdmacros.h's
+     * recursive __for %\from, %((\from+\to)/2) generator; treating %0 as
+     * a name changes control flow and silently bypasses generated ISA.
+     * Conversion is bounded on-stack and happens BEFORE argument binding.
+     * Modulo (%) inside a normal expression is never reinterpreted. */
+    if(as->altmacro_active) {
+        for(i=0U;i<supplied;++i) {
+            int64_t value;
+            const char *expression=tokens[i];
+            if(*expression!='%')continue;
+            ++expression;
+            if(!*expression ||
+               !evaluate_absolute_expression(as,expression,&value)) {
+                minias_set_error(as,"bad-altmacro-percent:%s:line=%zu",
+                                 tokens[i],line);
+                free(copy);return false;
+            }
+            (void)snprintf(evaluated[i],sizeof(evaluated[i]),"%lld",
+                           (long long)value);
+            tokens[i]=evaluated[i];
+        }
     }
     if(has_vararg) {
         vararg_buffer=malloc(strlen(args)+1U);
