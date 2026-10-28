@@ -46,7 +46,7 @@ check_status() {
     set -e
     [ "$rc" -eq 42 ]
 }
-for target in aarch64 loongarch64; do
+for target in ${MINIC_COMPUTED_GOTO_TARGET:-aarch64 loongarch64}; do
     case "$target" in
         aarch64) gcc=aarch64-linux-gnu-gcc; qemu=qemu-aarch64 ;;
         loongarch64) gcc=loongarch64-linux-gnu-gcc-13; qemu=qemu-loongarch64 ;;
