@@ -1440,12 +1440,23 @@ static bool parse_absolute_shift(MiniAsAbsoluteExpressionParser *parser,
             return false;
         }
         if (left) {
-            if (result < 0 || result > (INT64_MAX >> (unsigned int)shift)) {
-                return false;
-            }
-            result <<= (unsigned int)shift;
+            /* GNU GAS evaluates signed negative shifts as two's-complement
+             * bit operations. C signed << of a negative value is undefined,
+             * and rejecting it breaks real Linux extable_type_reg words:
+             *   (17 | ((-14) << 16)) + (.Lregnr << 8)
+             * Use the canonical unsigned bit pattern, then interpret as
+             * signed (same convention as the shared numeric evaluator). */
+            uint64_t bits=(uint64_t)result << (unsigned int)shift;
+            result=(int64_t)bits;
         } else {
-            result >>= (unsigned int)shift;
+            /* Avoid implementation-dependent negative signed right shift.
+             * GNU's >> is arithmetic, explicitly preserving sign bits. */
+            unsigned count=(unsigned)shift;
+            if(result<0 && count!=0U) {
+                uint64_t bits=(uint64_t)result;
+                bits=(bits>>count)|(UINT64_MAX<<(64U-count));
+                result=(int64_t)bits;
+            } else result>>=count;
         }
     }
     *value = result;

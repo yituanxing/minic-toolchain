@@ -715,6 +715,9 @@ cat >"$work/x86-mutable-set.s" <<'X86_MUTABLE_SET'
 .long 9 + (.Lregnr << 8)
 .set .Lregnr, .Lregnr+1
 .long 9 + (.Lregnr << 8)
+.long (17 | ((-14) << 16)) + (.Lregnr << 8)
+.set .Lregnr, .Lregnr+1
+.long (17 | ((-14) << 16)) + (.Lregnr << 8)
 X86_MUTABLE_SET
 "$MINIAS" --target=x86_64 -o "$work/x86-set-mini.o" "$work/x86-mutable-set.s"
 as --64 -o "$work/x86-set-gnu.o" "$work/x86-mutable-set.s"
