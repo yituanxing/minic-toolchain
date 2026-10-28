@@ -235,6 +235,52 @@ static bool emit_linux_bitops(
 }
 
 
+
+/* The only 6-way Linux port-I/O emitter: native privileged in/out.
+ * No fake C memory effects and no arbitrary-template passthrough. */
+static bool emit_linux_port_io(FILE *out,const MinicC0Program *program,
+    const MinicTargetInfo *target,const MinicCoreFunction *fn,
+    const MinicX86Frame *frame,const MinicCoreInstruction *ins,
+    const MinicCoreInlineAsm *info){
+    const MinicX86PortIoDesc *d=minic_x86_64_port_io_description(
+        minic_x86_64_port_io_form(info->template_text,info->template_length));
+    const MinicCoreStructuredInlineAsmOperand *b=
+        ins->value.structured_inline_asm.operands;
+    MinicType dt;size_t width;bool sign;
+    if(!out||!program||!target||!fn||!frame||!ins||!info||!b||!d||
+       !info->is_volatile||info->is_goto||
+       info->has_memory_clobber||info->register_clobber_count||
+       ins->value.structured_inline_asm.operand_count!=2U||
+       b[0].operand_index!=0U||b[1].operand_index!=1U||
+       b[0].value>=fn->value_count||b[1].value>=fn->value_count||
+       b[0].has_fixed_register_binding||b[1].has_fixed_register_binding||
+       b[0].early_clobber||b[1].early_clobber||
+       b[0].kind!=(d->is_input?
+           MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT:
+           MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT)||
+       b[1].kind!=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT||
+       !minic_x86_64_scalar_width(program,target,fn->values[b[1].value].type,
+           &width,&sign)||width!=2U)return false;
+    if(d->is_input){
+        if(!minic_type_pointee(fn->values[b[0].value].type,&dt)||
+           !minic_x86_64_scalar_width(program,target,dt,&width,&sign)||
+           width!=d->width||
+           !x86_value_load(out,frame,b[1].value,"%rdx")||
+           fprintf(out,"  %s %%dx, %s\n",d->opcode,
+             d->width==1U?"%al":d->width==2U?"%ax":"%eax")<0||
+           !x86_value_load(out,frame,b[0].value,"%r11"))return false;
+        return fprintf(out,"  mov%s %s, (%%r11)\n",
+            d->width==1U?"b":d->width==2U?"w":"l",
+            d->width==1U?"%al":d->width==2U?"%ax":"%eax")>=0;
+    }
+    if(!minic_x86_64_scalar_width(program,target,fn->values[b[0].value].type,
+           &width,&sign)||width!=d->width||
+       !x86_value_load(out,frame,b[0].value,"%rax")||
+       !x86_value_load(out,frame,b[1].value,"%rdx"))return false;
+    return fprintf(out,"  %s %s, %%dx\n",d->opcode,
+        d->width==1U?"%al":d->width==2U?"%ax":"%eax")>=0;
+}
+
 /* Single native hardware RMW implementation for all 20 qualified x86 forms.
  * No C-assignment proxy, no raw ASM passthrough, no source-derived opcode
  * escapes target ownership; memory clobber and SMP patch section are real. */
@@ -587,6 +633,9 @@ bool minic_x86_64_emit_structured_asm(
     bindings = ins->value.structured_inline_asm.operands;
     if (!info->template_text)
         return false;
+    if (minic_x86_64_port_io_form(
+            info->template_text,info->template_length)!=MINIC_X86_PORT_IO_NONE)
+        return emit_linux_port_io(out,program,target,fn,frame,ins,info);
     if (minic_x86_64_atomic_rmw_form(
             info->template_text,info->template_length)!=MINIC_X86_ATOMIC_RMW_NONE)
         return emit_linux_atomic_rmw(out,program,target,fn,frame,ins,info);

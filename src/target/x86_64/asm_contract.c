@@ -6,7 +6,8 @@
  * no SSA mutation. Additional x86 forms extend this owner, not core_lower. */
 /* Keep the GS per-CPU source reserved, without capturing ordinary MOV. */
 bool minic_x86_64_requires_qualified_input_asm(const MinicInlineAsm *src) {
-    static const char *const reserved[] = {"movq %%gs:", "cmp"};
+    static const char *const reserved[] = {"movq %%gs:", "cmp",
+        "outb ", "outw ", "outl ", "inb ", "inw ", "inl "};
     return minic_backend_inline_asm_prefix_matches(
         src, reserved, sizeof(reserved) / sizeof(reserved[0]));
 }
@@ -204,6 +205,77 @@ MinicX86TryCas minic_x86_64_trycas_form(const char *text,size_t len) {
         }
     return MINIC_X86_TRYCAS_NONE;
 }
+
+/* Original Linux asm/shared/io.h: target-owned 1/2/4 byte privileged port
+ * input and output. Unknown suffixes never flow into the GNU assembler. */
+static const MinicX86PortIoDesc x86_port_io[]={
+    {"outb",1U,false},{"outw",2U,false},{"outl",4U,false},
+    {"inb",1U,true},{"inw",2U,true},{"inl",4U,true}
+};
+const MinicX86PortIoDesc *minic_x86_64_port_io_description(
+    MinicX86PortIo form){
+    const size_t n=(size_t)form;
+    return n>0U&&n<=sizeof(x86_port_io)/sizeof(x86_port_io[0])?
+        &x86_port_io[n-1U]:NULL;
+}
+MinicX86PortIo minic_x86_64_port_io_form(const char *s,size_t len){
+    static const char *const names[]={
+        "outb%b0,%w1","outw%w0,%w1","outl%0,%w1",
+        "inb%w1,%b0","inw%w1,%w0","inl%w1,%0"
+    };
+    char compact[64];size_t i,j=0U;
+    if(!s||!len||len>=sizeof(compact))return MINIC_X86_PORT_IO_NONE;
+    for(i=0U;i<len;++i){
+        const char c=s[i];
+        if(c==' '||c==9||c==10||c==13)continue;
+        if(j+1U>=sizeof(compact))return MINIC_X86_PORT_IO_NONE;
+        compact[j++]=c;
+    }
+    compact[j]=0;
+    for(i=0U;i<sizeof(names)/sizeof(names[0]);++i)
+        if(strcmp(compact,names[i])==0)return (MinicX86PortIo)(i+1U);
+    return MINIC_X86_PORT_IO_NONE;
+}
+static bool x86_port_io_source(const MinicC0Program *program,
+    const MinicInlineAsm *src,MinicTargetInlineAsmContract *contract){
+    const MinicX86PortIo form=src?minic_x86_64_port_io_form(
+        src->template_text,src->template_length):MINIC_X86_PORT_IO_NONE;
+    const MinicX86PortIoDesc *d=minic_x86_64_port_io_description(form);
+    const MinicExpression *data,*port;
+    MinicType dt,pt;
+    if(!program||!src||!contract||!d||!src->is_volatile||src->is_goto||
+       src->clobber_count||src->register_clobber_count||
+       src->has_memory_clobber||src->label_count||
+       src->output_count!=(d->is_input?1U:0U)||
+       src->input_count!=(d->is_input?1U:2U)||
+       !src->inputs||(d->is_input&&!src->outputs))return false;
+    if(d->is_input){
+        if(!target_constraint_is(&src->outputs[0],"=a")||
+           !target_constraint_is(&src->inputs[0],"Nd"))return false;
+        data=minic_c0_program_expression(program,src->outputs[0].expression);
+        port=minic_c0_program_expression(program,src->inputs[0].expression);
+        if(!data||data->value_category!=MINIC_VALUE_LVALUE||
+           minic_type_is_const(data->type))return false;
+    }else{
+        if(!target_constraint_is(&src->inputs[0],"a")||
+           !target_constraint_is(&src->inputs[1],"Nd"))return false;
+        data=minic_c0_program_expression(program,src->inputs[0].expression);
+        port=minic_c0_program_expression(program,src->inputs[1].expression);
+    }
+    if(!data||!port||!minic_type_unqualified(data->type,&dt)||
+       !minic_type_unqualified(port->type,&pt)||
+       !minic_type_equal(pt,minic_type_unsigned_short())||
+       !(d->width==1U?minic_type_equal(dt,minic_type_unsigned_char()):
+         d->width==2U?minic_type_equal(dt,minic_type_unsigned_short()):
+                      minic_type_equal(dt,minic_type_unsigned_int())))return false;
+    contract->operand_count=2U;
+    contract->kinds[0]=d->is_input?
+       MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT:
+       MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->kinds[1]=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    return true;
+}
+
 static bool x86_trycas_source(
     const MinicC0Program *program,const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
@@ -900,6 +972,8 @@ bool minic_x86_64_qualify_inline_asm(
     bool is_mulacc = false, is_muldiv = false;
     size_t i, count;
     if (!contract) return false;
+    if (x86_port_io_source(program, source, contract))
+        return true;
     if (x86_linux_atomic_rmw_source(program, source, contract))
         return true;
     if (x86_trycas_source(program, source, contract))

@@ -59,6 +59,21 @@ typedef struct MinicX86TryCasDesc {
 MinicX86TryCas minic_x86_64_trycas_form(const char *,size_t);
 const MinicX86TryCasDesc *minic_x86_64_trycas_desc(MinicX86TryCas);
 
+
+/* Original Linux privileged x86 port I/O, six exact ISA forms. */
+typedef enum MinicX86PortIo {
+    MINIC_X86_PORT_IO_NONE=0,
+    MINIC_X86_PORT_IO_OUTB,MINIC_X86_PORT_IO_OUTW,MINIC_X86_PORT_IO_OUTL,
+    MINIC_X86_PORT_IO_INB,MINIC_X86_PORT_IO_INW,MINIC_X86_PORT_IO_INL
+} MinicX86PortIo;
+typedef struct MinicX86PortIoDesc {
+    const char *opcode;
+    size_t width;
+    bool is_input;
+} MinicX86PortIoDesc;
+MinicX86PortIo minic_x86_64_port_io_form(const char *,size_t);
+const MinicX86PortIoDesc *minic_x86_64_port_io_description(MinicX86PortIo);
+
 /* Full Linux atomic RMW: hardware add/sub/and/or/xor x 32/64 x SMP/local.
  * Descriptor owns ISA selection, memory effect and stable machine width. */
 typedef enum MinicX86AtomicRmw {
