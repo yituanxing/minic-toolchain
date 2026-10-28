@@ -29,6 +29,8 @@
 5. **GNU 命名节（P0）**：`.bssification` 错判 NOBITS、`.note.*` 错判 PROGBITS/ALLOC、`.note.GNU-stack` 的特别规则、以及被引号包裹的节名内逗号被误当分隔符；全在 Common 处理，而非三份 target 各补一次。
 6. **TLS 与扩展 ELF 符号（P0）**：`.tdata/.tbss` 的 `SHF_TLS`、`@tls_object` 的 STT_TLS、`@gnu_indirect_function` 的 STT_GNU_IFUNC、`@gnu_unique_object` 的 GNU_UNIQUE 绑定、以及 GNU `@common` 实际的 OBJECT+GLOBAL 语义；OSABI 应从最终 symbols 决定，而不默认一律 `ELFOSABI_NONE`。已将上述语义放回 Common ELF 数据和共享 writer。
 7. **CFI target 边界（P1）**：Common 原先用 `elf_machine == 62` 判断“x86 自动 .eh_frame”。改为 target 明示能力开关；尚不等于其他架构的 CFI 已完整实现。
+8. **GNU 构造器节（P0）**：`SHT_INIT_ARRAY/FINI_ARRAY/PREINIT_ARRAY` 曾错误落到 PROGBITS 且 `sh_entsize=0`；现在公共 ELF metadata 依据目标指针宽度写入 4/8，保留生成的 relocation。
+9. **GNU 本地符号数据重定位（P0）**：x86 绝对引用其他节的 local symbol，GNU 在 `.rela.init_array` 中选择 `STT_SECTION + label offset`，旧实现保留符号名。新实现是 target 显式 opt-in、Common ELF 统一 rewrite；RV 基线暂不改变。
 
 此阶段新增正反回归放在 `tests/assembler/probe-x86-loong-base.sh`；成功以对应提交的 exact-head CI 为准，不能用上一个绿色的运行给当前 HEAD 背书。
 
@@ -38,7 +40,7 @@
 |---|---|---|---|
 | P0 | `assembler.c` 对非 x86 `.cfi_startproc/.cfi_endproc` 的保底路径只改变状态，**不生成** unwind CIE/FDE；源文件组装成功不表示回溯正确 | Common CFI/Target psABI | RV/A64/LA 各自完整真实 CFI 样本，检查 `.eh_frame/.debug_frame`、CIE/FDE/RELA 与链接后的展开；在补齐前保留明确的“不足”状态 |
 | P0 | `parse_section_directive` 目前不完整支持 `SHF_GROUP`／`COMDAT`，`elf_writer` 未构造完整 SHT_GROUP 成员关联；这影响链接去重/弱符号场景 | Common Section/ELF，不是三个 target 自己分别修 | 同一 COMDAT 两个目标文件链接只保留一份、GNU SHT_GROUP 结构和成员差分 |
-| P0 | 显式节类型 `@init_array/@fini_array/@preinit_array` 等目前只识别 note/nobits/progbits，未识别的类型可能落到 PROGBITS | Common Section→ELF | 编译器产生的 constructors/destructors，核对 sh_type、sh_entsize、最终执行 |
+| P0 | 其他显式节类型（例如 `@gnu_attributes` 或非标准节）当前仍有落到 PROGBITS 的风险；标准 GNU init/fini/preinit arrays 已补实现 | Common Section→ELF | 后续先识别完整类型表及 fail-closed 不支持类型，验证 GNU flags/sh_type |
 | P1 | unnumbered `.file "xxx"` 在 `debug_line.c` 的 `parse_file` 中直接返回 true；没有完整 `STT_FILE`/CU 元数据语义 | Common Debug | GNU `.file/.loc` 的符号表/DWARF line-table；异于普通可执行字节测试 |
 | P1 | 用户指定自定义节重复改变 flags/type 时，GNU 在某些非保留名称会报错，而当前 `minias_ensure_section` 统一保留首次属性并继续。与“忽略变化”不是普遍等价 | Common Section 校验 | 按保留节家族与自定义节区分 strict 错误；invalid test＋正常 Linux 21 片回归 |
 | P1 | `debug_line.c` 的 `compare_loc` 用全局静态 `comparator_as` 支持 qsort，作为可复用库的并行调用仍有重入风险 | Debug writer | 并发实例隔离/线程检查；保持序列化结果不变化 |
