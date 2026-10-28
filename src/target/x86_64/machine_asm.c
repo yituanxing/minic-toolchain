@@ -278,10 +278,11 @@ static bool emit_hweight_alternative(FILE *out,const MinicC0Program *p,
         "  .popsection\n"
         "  .pushsection .altinstr_replacement,\"ax\"\n"
         "6641:\n"
-        "  popcnt%s %%rdi, %%rax\n"
+        "  popcnt%s %s, %s\n"
         "6651:\n"
         "  .popsection\n",
-        w==4U?"32":"64",w==4U?"l":"q")<0)return false;
+        w==4U?"32":"64",w==4U?"l":"q",
+        w==4U?"%edi":"%rdi",w==4U?"%eax":"%rax")<0)return false;
     return x86_value_load(out,frame,b[0].value,"%r11")&&
            fprintf(out,"  %s %s, (%%r11)\n",
               w==4U?"movl":"movq",w==4U?"%eax":"%rax")>=0;
