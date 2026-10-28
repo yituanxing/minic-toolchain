@@ -1174,6 +1174,51 @@ SRC
     qemu-loongarch64 -L /usr/loongarch64-linux-gnu "$work/dbar-max.elf"
     echo 'MINIC_LOONGARCH64_DBAR_GNU_QEMU=PASS tested=2 rejected=3'
 
+    # The ORIGINAL LoongArch Linux 6.6.143 per-CPU offset register is
+    # file-scope asm("$r21"). A zero-byte volatile +r MUST NOT replace the
+    # later hardware register read with zero, memory or an ordinary C local.
+    # This is common GNU C barrier semantics, while ISA registers are
+    # still exclusively owned by the LoongArch target.
+    cat > "$work/loong-fixed-empty-percpu.i" <<'SRC'
+register unsigned long __my_cpu_offset __asm__("$r21");
+extern int numa_node;
+static inline unsigned long cpu_offset(void) {
+    __asm__ __volatile__("" : "+r"(__my_cpu_offset));
+    return __my_cpu_offset;
+}
+int numa_node_id(void) {
+    unsigned long addr;
+    __asm__ ("" : "=r"(addr) : "0"((unsigned long)&numa_node));
+    return *(int *)(addr + cpu_offset());
+}
+SRC
+    "$cross_cc" -c -x c "$work/loong-fixed-empty-percpu.i" \
+        -o "$work/loong-fixed-empty-percpu.gnu.o"
+    "$MINIC_CC" --target=loongarch64-linux -S \
+        "$work/loong-fixed-empty-percpu.i" \
+        -o "$work/loong-fixed-empty-percpu.minic.s"
+    grep -Fq '$r21' "$work/loong-fixed-empty-percpu.minic.s"
+    "$cross_cc" -c -x assembler "$work/loong-fixed-empty-percpu.minic.s" \
+        -o "$work/loong-fixed-empty-percpu.minic.o"
+    loongarch64-linux-gnu-objdump -dr \
+        "$work/loong-fixed-empty-percpu.minic.o" > \
+        "$work/loong-fixed-empty-percpu.dis"
+    grep -Fq 'r21' "$work/loong-fixed-empty-percpu.dis"
+    cat > "$work/loong-invalid-empty-percpu.i" <<'SRC'
+register unsigned long __my_cpu_offset __asm__("$r21");
+unsigned long unsafe_cpu_offset(void) {
+    __asm__ __volatile__("syscall 0" : "+r"(__my_cpu_offset));
+    return __my_cpu_offset;
+}
+SRC
+    if "$MINIC_CC" --target=loongarch64-linux -S \
+        "$work/loong-invalid-empty-percpu.i" \
+        -o "$work/loong-invalid-empty-percpu.s" >/dev/null 2>&1; then
+        echo 'FAIL LoongArch unqualified nonempty r21 GNU asm admitted' >&2
+        exit 1
+    fi
+    echo 'MINIC_LOONGARCH64_LINUX_PERCPU_R21_EMPTY_GNU_AS=PASS source_exact=1 hardware_read=1 negative=1'
+
     # Original arch/loongarch/include/asm/irqflags.h uses privileged CRMD CSR.
     # GNU and MiniC must generate *real* csrrd/csrxchg machine instructions.
     # Privileged instructions cannot run in QEMU-user: object/GAS comparison

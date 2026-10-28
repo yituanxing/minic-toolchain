@@ -1378,6 +1378,54 @@ MinicCoreLowerStatus core_asm_try_empty_barrier_scalar_forms(
         }
     }
 
+    /* ORIGINAL LoongArch Linux 6.6.143 uses a file-scope hard register
+     * __my_cpu_offset asm("$r21") in empty volatile +r, inside every
+     * this_cpu_ptr/numa_node_id access. The source has no machine opcode,
+     * so it must not be mistaken for an arbitrary register clobber or
+     * discarded with a fake C value. Preserve compiler sequencing while
+     * the following real FIXED_REGISTER_READ still reads live $r21.
+     * Source binding was validated by the target at declaration; recheck
+     * target write ownership and C type here without naming any ISA. */
+    if (!source->is_goto && source->template_text != NULL &&
+        source->template_length == 0U && source->outputs != NULL &&
+        source->output_count == 1U && source->input_count == 0U &&
+        source->label_count == 0U && source->clobber_count == 0U &&
+        source->register_clobber_count == 0U &&
+        !source->has_memory_clobber &&
+        core_inline_asm_constraint_is(&source->outputs[0], "+r") &&
+        source->outputs[0].access == MINIC_INLINE_ASM_OPERAND_READ_WRITE) {
+        const MinicExpression *e = minic_c0_program_expression(
+            context->body->program, source->outputs[0].expression);
+        if (e && e->kind == MINIC_EXPRESSION_FIXED_REGISTER &&
+            e->value_category == MINIC_VALUE_LVALUE &&
+            core_memory_scalar_type(e->type) &&
+            !minic_type_is_const(e->type) && !minic_type_is_volatile(e->type)) {
+            const MinicFixedRegisterBinding *binding =
+                minic_c0_program_fixed_register_binding(
+                    context->body->program,
+                    e->value.fixed_register_binding_id);
+            if (binding && minic_type_equal(binding->type, e->type) &&
+                minic_target_info_fixed_register_supported(
+                    context->target, binding->register_name,
+                    binding->register_name_length) &&
+                minic_target_info_fixed_register_write_supported(
+                    context->target, binding->register_name,
+                    binding->register_name_length)) {
+                *handled = true;
+                if (!source->is_volatile)
+                    return MINIC_CORE_LOWER_OK;
+                (void)memset(&instruction, 0, sizeof(instruction));
+                instruction.kind = MINIC_CORE_INSTRUCTION_COMPILER_BARRIER;
+                instruction.span = statement->span;
+                instruction.type = minic_type_void();
+                instruction.result = MINIC_CORE_VALUE_INVALID;
+                return minic_core_function_append_effect_instruction(
+                    context->function, context->block_id, &instruction)
+                    ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR;
+            }
+        }
+    }
+
     /* Original BPF fentry +r(arg) is a zero-byte read/write asm. Since no
      * target instruction executes, a nonvolatile scalar local is unchanged;
      * only ordinary local C lvalues without physical hardreg bindings can
