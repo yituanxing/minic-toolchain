@@ -2152,6 +2152,34 @@ static bool push_conditional(MiniAs *as, const char *args, size_t line) {
     return push_conditional_value(as,condition_true);
 }
 
+/* GNU GAS .ifdef/.ifndef inspect the CURRENT defined symbol table,
+ * not relocation references, global declarations or future labels.
+ * Share the exact same conditional stack as .if/.ifc/.elseif and do
+ * not create symbol records while checking existence. */
+static bool push_conditional_defined(MiniAs *as,const char *args,
+                                      bool negate,size_t line) {
+    const char *p=args;
+    MiniAsSymbol *symbol;
+    bool defined;
+    if(!as->conditional_active)
+        return push_conditional_value(as,false);
+    if(!(*p=='_' || *p=='.' || *p=='$' ||
+         isalpha((unsigned char)*p))) {
+        minias_set_error(as,"bad-directive:.ifdef:line=%zu",line);
+        return false;
+    }
+    for(++p;*p;++p) {
+        if(!(*p=='_' || *p=='.' || *p=='$' ||
+             isalnum((unsigned char)*p))) {
+            minias_set_error(as,"bad-directive:.ifdef:line=%zu",line);
+            return false;
+        }
+    }
+    symbol=minias_get_symbol(as,args,false);
+    defined=symbol && (symbol->defined || symbol->alias_pending);
+    return push_conditional_value(as,negate?!defined:defined);
+}
+
 /* Shared GAS .ifc/.ifnc conditional text: split on a comma outside
  * quotes, strip paired quote delimiters, then compare exact byte strings.
  * Expansion of macro arguments already happens upstream.  No target
@@ -3996,6 +4024,17 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
         as->layout_sensitive=true;
         return push_conditional_strings(as,
                  minias_trim(text+(unequal?5:4)),unequal,line);
+    }
+    if ((strncmp(text,".ifdef",6U)==0 ||
+         strncmp(text,".ifndef",7U)==0) &&
+        ((text[3]=='d' && (text[6]=='\0' ||
+                           isspace((unsigned char)text[6]))) ||
+         (text[3]=='n' && (text[7]=='\0' ||
+                           isspace((unsigned char)text[7]))))) {
+        bool negate=text[3]=='n';
+        as->layout_sensitive=true;
+        return push_conditional_defined(as,
+               minias_trim(text+(negate?7U:6U)),negate,line);
     }
     if (strncmp(text, ".if", 3U) == 0 &&
         (text[3] == '\0' || isspace((unsigned char)text[3]))) {

@@ -2628,6 +2628,61 @@ for target in x86_64 loongarch64; do
     done
 done
 echo 'MINIAS_COMMON_GNU_LABELED_IRP=PASS GNU_x86_Loong_bytes_and_labels'
+# GNU .ifdef/.ifndef must check only CURRENT defined symbol state,
+# ignore forward references and global declarations, honor inactive
+# parent branches, and share the standard .elseif/.else stack.
+cat > "$work/gnu-defined-conditional.s" <<'GNU_DEFINED_COND'
+.data
+.set defined_equ, 17
+.globl undefined_global
+.ifdef defined_equ
+.byte 17
+.else
+.byte 99
+.endif
+.ifndef undefined_global
+.byte 23
+.endif
+.if 0
+.ifdef never_defined
+.byte 99
+.endif
+.else
+.ifndef never_defined
+.byte 24
+.endif
+.endif
+defined_label:
+.byte 1
+.ifdef defined_label
+.byte 42
+.endif
+.ifndef defined_equ
+.byte 99
+.elseif 1
+.byte 25
+.endif
+GNU_DEFINED_COND
+for target in x86_64 loongarch64; do
+    "$MINIAS" --target="$target" -o "$work/$target-defined-mini.o" "$work/gnu-defined-conditional.s"
+    if [ "$target" = x86_64 ]; then
+        as --64 -o "$work/$target-defined-gnu.o" "$work/gnu-defined-conditional.s"
+        objcopy -j .data -O binary "$work/$target-defined-mini.o" "$work/$target-defined-mini.bin"
+        objcopy -j .data -O binary "$work/$target-defined-gnu.o" "$work/$target-defined-gnu.bin"
+    else
+        "$LOONGAS" -mabi=lp64d -o "$work/$target-defined-gnu.o" "$work/gnu-defined-conditional.s"
+        "$LOONGCOPY" -j .data -O binary "$work/$target-defined-mini.o" "$work/$target-defined-mini.bin"
+        "$LOONGCOPY" -j .data -O binary "$work/$target-defined-gnu.o" "$work/$target-defined-gnu.bin"
+    fi
+    cmp "$work/$target-defined-mini.bin" "$work/$target-defined-gnu.bin"
+done
+for bad in '.ifdef' '.ifndef' '.ifdef a,b' '.ifndef a b'; do
+    printf '.text\n%s\n' "$bad" > "$work/gnu-defined-invalid.s"
+    if "$MINIAS" --target=x86_64 -o "$work/gnu-defined-bad.o" "$work/gnu-defined-invalid.s" >/dev/null 2>&1; then
+       echo "invalid .ifdef/.ifndef operand accepted: $bad" >&2;exit 1
+    fi
+done
+echo 'MINIAS_COMMON_IFDEF_IFNDEF=PASS GNU_x86_Loong_defined_symbols'
 echo 'MINIAS_COMMON_NUMERIC_U64=PASS GNU_GAS_x86_LA64_exact_data_bytes'
 echo 'MINIAS_X86_SEGMENTED_INDIRECT=PASS GNU_AS_text_and_relocations segment_base_index_abs_rip=true indirect_memory_call_jmp=true absolute_symbol32S=true'
 echo 'MINIAS_TWO_TARGET_ORACLE=PASS x86_GNU_bytes=equal loong_GNU_bytes=equal ELF_machine=correct lp64d_v1=0x43 CET_endbr64=1 ALU_imm8_imm32=1 x86_ModRM_SIB_disp=1 x86_test_cmp_alu_memory=1 x86_scaled_index_SIB=1 LA_jr=1 LA_scaled_ptr14=1 LA_imm12_shift_upper20=1 invalid=reject'
