@@ -673,6 +673,101 @@ SRC
     done
     echo 'MINIC_AARCH64_LINUX_UACCESS_BIC_GNU_QEMU=PASS tag_bit=55 negative=4'
 
+
+    # True ORIGINAL 6.6.143 arm64 per-CPU RMW source: 8/16/32/64,
+    # three operations plus add_return = sixteen LL/SC hardware variants.
+    # Separate GNU/GAS and MiniC/GAS QEMU execution proves real atomicity
+    # and exact 1/2/4/8B access widths. No frontend ISA branch or C RMW.
+    : > "$work/aarch64-percpu-llsc.i"
+    for bits in 8 16 32 64; do
+        case "$bits" in
+            8) typ='unsigned char'; suffix=b; w='%w' ;;
+            16) typ='unsigned short'; suffix=h; w='%w' ;;
+            32) typ='unsigned int'; suffix=''; w='%w' ;;
+            64) typ='unsigned long'; suffix=''; w='%' ;;
+        esac
+        for op in add andnot or add_return; do
+            case "$op" in
+                add|add_return) alu=add ;;
+                andnot) alu=bic ;;
+                or) alu=orr ;;
+            esac
+            if [ "$op" = add_return ]; then label=ret; else label=tmp; fi
+            cat >> "$work/aarch64-percpu-llsc.i" <<SRC
+$typ percpu_$bits\_$op(void *p,$typ val) {
+    unsigned int loop;
+    $typ $label;
+    __asm__ __volatile__(
+        "1: ldxr$suffix $w[$label], %[ptr]\\n"
+        " $alu $w[$label], $w[$label], $w[val]\\n"
+        " stxr$suffix %w[loop], $w[$label], %[ptr]\\n"
+        " cbnz %w[loop], 1b"
+        : [loop] "=&r"(loop), [$label] "=&r"($label),
+          [ptr] "+Q"(*($typ *)p) : [val] "r"(val));
+    return $label;
+}
+SRC
+        done
+        cat >> "$work/aarch64-percpu-llsc.i" <<SRC
+int test_percpu_$bits(void) {
+    $typ value=85;
+    $typ a=percpu_$bits\_add(&value,3);
+    $typ b=percpu_$bits\_andnot(&value,8);
+    $typ c=percpu_$bits\_or(&value,3);
+    $typ d=percpu_$bits\_add_return(&value,5);
+    return value==88 && a==88 && b==80 && c==83 && d==88;
+}
+SRC
+    done
+    cat >> "$work/aarch64-percpu-llsc.i" <<'SRC'
+int main(void) {
+    return test_percpu_8() && test_percpu_16() &&
+           test_percpu_32() && test_percpu_64() ? 0 : 1;
+}
+SRC
+    "$cross_cc" -O0 -x c "$work/aarch64-percpu-llsc.i" \
+        -o "$work/aarch64-percpu-llsc.gnu.elf"
+    "$MINIC_CC" --target=aarch64-linux -S "$work/aarch64-percpu-llsc.i" \
+        -o "$work/aarch64-percpu-llsc.minic.s"
+    for opcode in 'ldxrb w9' 'ldxrh w9' 'ldxr w9' 'ldxr x9' \
+                  'stxrb w12' 'stxrh w12' 'stxr w12' \
+                  'add w9' 'bic w9' 'orr w9' \
+                  'strb w9' 'strh w9' 'str w9' 'str x9'; do
+        grep -Fq "$opcode" "$work/aarch64-percpu-llsc.minic.s"
+    done
+    "$cross_cc" -x assembler "$work/aarch64-percpu-llsc.minic.s" \
+        -o "$work/aarch64-percpu-llsc.minic.elf"
+    for flavor in gnu minic; do
+        qemu-aarch64 -L /usr/aarch64-linux-gnu \
+            "$work/aarch64-percpu-llsc.$flavor.elf"
+    done
+    for bad in injected wrong_input wrong_mem; do
+        tail=''; input=r; memory='+Q'
+        case "$bad" in
+            injected) tail='; svc #0' ;;
+            wrong_input) input=i ;;
+            wrong_mem) memory='=Q' ;;
+        esac
+        cat > "$work/aarch64-percpu-bad-$bad.i" <<SRC
+void bad(unsigned int *p,unsigned int n) {
+    unsigned int loop, tmp;
+    __asm__ __volatile__(
+        "1: ldxr %w1, %2\\n"
+        " add %w1, %w1, %w3\\n"
+        " stxr %w0, %w1, %2\\n"
+        " cbnz %w0, 1b$tail"
+        : "=&r"(loop), "=&r"(tmp), "$memory"(*p) : "$input"(n));
+}
+SRC
+        if "$MINIC_CC" --target=aarch64-linux -S \
+            "$work/aarch64-percpu-bad-$bad.i" \
+            -o "$work/aarch64-percpu-bad-$bad.s" >/dev/null 2>&1; then
+            echo "FAIL unqualified AArch64 per-CPU LL/SC accepted: $bad" >&2
+            exit 1
+        fi
+    done
+    echo 'MINIC_AARCH64_LINUX_PERCPU_RMW_GNU_QEMU=PASS variants=16 widths=4 ops=3 return=4 negative=3'
+
     # Original Linux 6.6.143 __kern_my_cpu_offset() from frozen GNU .i.
     # The ALTERNATIVE patch table must survive as an ELF section containing
     # TWO relocation entries. A privileged MRS cannot run in QEMU-user:

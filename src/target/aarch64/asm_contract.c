@@ -157,7 +157,7 @@ bool minic_aarch64_requires_qualified_input_asm(const MinicInlineAsm *src) {
         "brk", "stlrb", "stlrh", "stlr", "msr", "bic", ".if",
         /* Original Linux CMPXCHG begins with PRFM and named operands;
          * rejected constraints/modes must not escape into generic Core. */
-        "prfm", "prfm"
+        "prfm", "prfm", "1:"
     };
     char prefix[64];
     const char *const single[] = {prefix};
@@ -251,6 +251,75 @@ static bool aarch64_atomic_form(const char *text, size_t len, bool fetch,
     }
     return false;
 }
+/* Original GNU Linux 6.6.143 arm64 this_cpu_{add,andnot,or} +
+ * add_return 8/16/32/64 LL/SC. One target-only descriptor table and the
+ * existing Aarch64AtomicOperation ISA catalog, NOT 16 separate engines.
+ * Source names (loop,tmp/ret,ptr,val) and Core numeric forms share one
+ * complete decoder; extra opcodes, wrong status or width are rejected. */
+typedef struct Aarch64PerCpuForm {
+    const Aarch64AtomicOperation *op;
+    size_t width;
+    bool returns_new;
+} Aarch64PerCpuForm;
+static bool aarch64_linux_percpu_rmw_form(
+    const char *text, size_t length, Aarch64PerCpuForm *result) {
+    static const char *const suffix[] = {"b", "h", "", ""};
+    static const size_t widths[] = {1U, 2U, 4U, 8U};
+    char compact[256], expected[256];
+    size_t i, n=0U, width, op_index, ret;
+    if (!text || !length || !result || length>=sizeof(compact)) return false;
+    for(i=0U;i<length;++i) {
+        const char c=text[i];
+        if(c==' '||c=='\t'||c=='\n'||c=='\r')continue;
+        if(n+1U>=sizeof(compact))return false;
+        compact[n++]=c;
+    }
+    compact[n]='\0';
+    for(width=0U;width<4U;++width) {
+        const char *r=width==3U?"%":"%w";
+        const char *n1=width==3U?"%1":"%w1";
+        const char *n3=width==3U?"%3":"%w3";
+        for(op_index=0U;op_index<sizeof(aarch64_atomic_operations)/
+                                 sizeof(aarch64_atomic_operations[0]);++op_index) {
+            const Aarch64AtomicOperation *op=&aarch64_atomic_operations[op_index];
+            if(strcmp(op->name,"add")!=0 && strcmp(op->name,"andnot")!=0 &&
+               strcmp(op->name,"or")!=0)continue;
+            for(ret=0U;ret<2U;++ret) {
+                const char *value_name=ret?"ret":"tmp";
+                int written;
+                if(ret&&strcmp(op->name,"add")!=0)continue;
+                written=snprintf(expected,sizeof(expected),
+                    "1:ldxr%s%s[%s],%%[ptr]"
+                    "%s%s[%s],%s[%s],%s[val]"
+                    "stxr%s%%w[loop],%s[%s],%%[ptr]"
+                    "cbnz%%w[loop],1b",
+                    suffix[width],r,value_name,
+                    op->alu,r,value_name,r,value_name,r,
+                    suffix[width],r,value_name);
+                if(written>0&&(size_t)written<sizeof(expected)&&
+                   strcmp(compact,expected)==0) {
+                    result->op=op;result->width=widths[width];
+                    result->returns_new=ret!=0U;return true;
+                }
+                written=snprintf(expected,sizeof(expected),
+                    "1:ldxr%s%s,%%2"
+                    "%s%s,%s,%s"
+                    "stxr%s%%w0,%s,%%2"
+                    "cbnz%%w0,1b",
+                    suffix[width],n1,
+                    op->alu,n1,n1,n3,
+                    suffix[width],n1);
+                if(written>0&&(size_t)written<sizeof(expected)&&
+                   strcmp(compact,expected)==0) {
+                    result->op=op;result->width=widths[width];
+                    result->returns_new=ret!=0U;return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
 /* Original Linux arch/arm64/include/asm/uaccess.h:
  * __uaccess_mask_ptr() removes bit 55 using a true AArch64 BIC logical
  * immediate. It is not a compiler-only barrier, pointer cast or C AND.
@@ -659,6 +728,41 @@ bool minic_aarch64_qualify_inline_asm(
             return true;
         }
     }
+    /* One source contract for 4 widths × 3 RMW operators and a
+     * fourth add_return family. LL/SC status is u32 while tmp/value/memory
+     * have the REAL 8/16/32/64-bit C width; never conflate those types. */
+    if(program && src && contract && src->is_volatile && !src->is_goto &&
+       src->outputs && src->inputs && src->output_count==3U &&
+       src->input_count==1U && src->label_count==0U &&
+       src->clobber_count==0U && src->register_clobber_count==0U &&
+       !src->has_memory_clobber &&
+       constraint(&src->outputs[0],"=&r") &&
+       constraint(&src->outputs[1],"=&r") &&
+       constraint(&src->outputs[2],"+Q") &&
+       constraint(&src->inputs[0],"r")) {
+        Aarch64PerCpuForm form;
+        bool eligible=aarch64_linux_percpu_rmw_form(
+            src->template_text,src->template_length,&form);
+        for(i=0U;i<4U&&eligible;++i) {
+            const MinicInlineAsmOperand *operand=i<3U?
+                &src->outputs[i]:&src->inputs[0];
+            const MinicExpression *value=minic_c0_program_expression(
+                program,operand->expression);
+            if(!value ||
+               (i<3U&&(value->value_category!=MINIC_VALUE_LVALUE||
+                       minic_type_is_const(value->type))) ||
+               !aarch64_stlr_type(value->type,i==0U?4U:form.width))
+                eligible=false;
+        }
+        if(eligible) {
+            contract->operand_count=4U;
+            contract->kinds[0]=MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+            contract->kinds[1]=MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+            contract->kinds[2]=MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
+            contract->kinds[3]=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+            return true;
+        }
+    }
     if (program && src && contract && src->is_volatile && !src->is_goto &&
         src->output_count == 3U && src->input_count == 1U &&
         src->outputs && src->inputs && src->label_count == 0U &&
@@ -1045,6 +1149,67 @@ bool minic_aarch64_emit_qualified_structured_asm(
                             "  %s\n",
                        (size_t)b[0].value * 8U,
                        (size_t)b[1].value * 8U, op[width]) >= 0;
+    }
+    /* Same C status/tmp/+Q/input roles as our older 4-role atomic
+     * family, but exact original per-CPU templates have no PRFM, no
+     * ordering fence, and support narrow unsigned byte/halfword STXR.
+     * Prefer the complete ISA decoder before any operand-count fallback. */
+    if(ins->value.structured_inline_asm.operand_count==4U) {
+        Aarch64PerCpuForm p;
+        if(aarch64_linux_percpu_rmw_form(
+                info->template_text,info->template_length,&p)) {
+            const MinicCoreStructuredInlineAsmOperand *ops=
+                ins->value.structured_inline_asm.operands;
+            MinicType pointee;
+            const char *suffix=p.width==1U?"b":p.width==2U?"h":"";
+            const char *reg=p.width==8U?"x":"w";
+            const char *store=p.width==1U?"strb w9":
+                              p.width==2U?"strh w9":
+                              p.width==4U?"str w9":"str x9";
+            if(!info->is_volatile||info->is_goto||
+               !info->has_memory_clobber||info->register_clobber_count)
+                return false;
+            for(i=0U;i<4U;++i) {
+                const MinicCoreStructuredInlineAsmOperand *op=&ops[i];
+                if(op->operand_index!=i||op->early_clobber||
+                   op->has_fixed_register_binding||op->value>=fn->value_count||
+                   op->value>4095U/8U||
+                   op->kind!=(i==3U?
+                       MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT:
+                       i==2U?
+                       MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE:
+                       MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT))
+                    return false;
+                if(i<3U) {
+                    if(!minic_type_pointee(fn->values[op->value].type,&pointee)||
+                       !aarch64_stlr_type(pointee,i==0U?4U:p.width))
+                        return false;
+                } else if(!aarch64_stlr_type(
+                    fn->values[op->value].type,p.width))
+                    return false;
+            }
+            /* aarch64 LL/SC status failure retries; status written as u32
+             * and tmp/ret narrowed EXACTLY, not widened to a 64-bit store. */
+            return fprintf(out,
+                "  ldr x10, [sp, #%zu]\n"
+                "  ldr x11, [sp, #%zu]\n"
+                "1:\n"
+                "  ldxr%s %s9, [x10]\n"
+                "  %s %s9, %s9, %s11\n"
+                "  stxr%s w12, %s9, [x10]\n"
+                "  cbnz w12, 1b\n"
+                "  ldr x13, [sp, #%zu]\n"
+                "  %s, [x13]\n"
+                "  ldr x13, [sp, #%zu]\n"
+                "  str w12, [x13]\n",
+                (size_t)ops[2].value*8U,
+                (size_t)ops[3].value*8U,
+                suffix,reg,
+                p.op->alu,reg,reg,reg,
+                suffix,reg,
+                (size_t)ops[1].value*8U,store,
+                (size_t)ops[0].value*8U)>=0;
+        }
     }
     if (ins->value.structured_inline_asm.operand_count == 4U) {
         Aarch64AtomicForm ret;
