@@ -129,8 +129,8 @@ if [[ "${MINIC_SOURCE_ONLY:-0}" != 1 ]];then
  readelf -h "$d/mini.o" | grep -Fq 'AArch64'
  readelf -h "$d/gnu.o" | grep -Fq 'AArch64'
 fi
-sed 's/mrs %0, clidr_el1/mrs %0, invented_el1/' "$d/sysreg.i" > "$d/bad-register.i"
-sed 's/mrs %0, clidr_el1/mrs %0, clidr_el1; brk #1/' "$d/sysreg.i" > "$d/bad-extra-instruction.i"
+sed 's/"clidr_el1"/"invented_el1"/' "$d/sysreg.i" > "$d/bad-register.i"
+sed 's/"clidr_el1"/"clidr_el1; brk #1"/' "$d/sysreg.i" > "$d/bad-extra-instruction.i"
 sed 's/: "=r" (word)/: "=m" (word)/' "$d/sysreg.i" > "$d/bad-constraint.i"
 for bad in bad-register bad-extra-instruction bad-constraint;do
  if "$minic" --target=aarch64-linux -S "$d/$bad.i" -o "$d/$bad.s" >/dev/null 2>&1;then
