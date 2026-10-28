@@ -339,6 +339,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         {"ud2",{0x0f,0x0b},2}, {"hlt",{0xf4},1},
         {"cli",{0xfa},1},{"sti",{0xfb},1},
         {"cld",{0xfc},1},{"std",{0xfd},1},
+        {"clc",{0xf8},1},{"stc",{0xf9},1},{"cmc",{0xf5},1},
         {"stac",{0x0f,0x01,0xcb},3},
         {"clac",{0x0f,0x01,0xca},3},
         {"cpuid",{0x0f,0xa2},2},
@@ -350,6 +351,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         {"cltd",{0x99},1},{"cwtl",{0x98},1},
         {"stosl",{0xab},1},{"stosq",{0x48,0xab},2},
         {"stosw",{0x66,0xab},2},{"movsb",{0xa4},1},
+        {"movsw",{0x66,0xa5},2},
         {"movsl",{0xa5},1},{"movsq",{0x48,0xa5},2},
         {"outsb",{0x6e},1},{"outsw",{0x66,0x6f},2},
         {"outsl",{0x6f},1},{"insb",{0x6c},1},
@@ -396,6 +398,9 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         {"btrl",0x1b3U,false},{"btrq",0x1b3U,true},
         {"btcl",0x1bbU,false},{"btcq",0x1bbU,true},
         {"xaddl",0x1c1U,false},{"xaddq",0x1c1U,true},
+        {"xaddw",0x1c1U,false},{"btsw",0x1abU,false},
+        {"btrw",0x1b3U,false},{"btcw",0x1bbU,false},
+        {"btw",0x1a3U,false},{"cmpxchgw",0x1b1U,false},
         {"cmpxchgl",0x1b1U,false},{"cmpxchgq",0x1b1U,true}
     };
     /* reg/memory opcodes: source register to dest memory and vice versa.
@@ -422,6 +427,10 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         {"btcq",0xbb,0,true},{"btcl",0xbb,0,false},
         {"xaddq",0xc1,0,true},{"xaddl",0xc1,0,false},
         {"cmpxchgq",0xb1,0,true},{"cmpxchgl",0xb1,0,false},
+        {"xaddw",0xc1,0,false},{"cmpxchgw",0xb1,0,false},
+        {"cmpxchgb",0xb0,0,false},{"xaddb",0xc0,0,false},
+        {"btw",0xa3,0,false},{"btsw",0xab,0,false},
+        {"btrw",0xb3,0,false},{"btcw",0xbb,0,false},
         {"popcntq",0,0x1b8U,true},{"popcntl",0,0x1b8U,false},
         {"imulq",0,0x1afU,true},{"imull",0,0x1afU,false},
         /* Existing typed memory ModR/M encoder owns REX/SIB/PC32 for
@@ -466,7 +475,9 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         static const char *const inferred[]={
             "mov","cmp","test","add","sub","adc","sbb",
             "and","or","xor","push","pop",
-            "shl","sal","shr","sar","rol","ror"
+            "shl","sal","shr","sar","rol","ror",
+            "inc","dec","not","neg","mul","imul","div","idiv",
+            "bt","bts","btr","btc","xadd","cmpxchg"
         };
         bool alias=false;
         for(i=0U;i<sizeof(inferred)/sizeof(inferred[0]);++i)
@@ -606,11 +617,29 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             {"invlpg",0x01U,7U},
             {"sldt",0x00U,0U},{"str",0x00U,1U},
             {"lldt",0x00U,2U},{"ltr",0x00U,3U},
-            {"verr",0x00U,4U},{"verw",0x00U,5U}
+            {"verr",0x00U,4U},{"verw",0x00U,5U},
+            {"fxsave",0xaeU,0U},{"fxsaveq",0xaeU,0U},
+            {"fxrstor",0xaeU,1U},{"fxrstorq",0xaeU,1U}
         };
         for(i=0U;i<sizeof(sysmem)/sizeof(sysmem[0]);++i) {
             MiniAsMCMemory mem;
             if(strcmp(s->op,sysmem[i].name)!=0)continue;
+            /* 0F 00 LTR/LLDT/STR/VERR/... also encode a register as
+             * ModR/M mod=11; use the same typed unary MCInst as RDRAND.
+             * Long-mode GNU uses 66 for extended 16-bit GPR forms. */
+            if(sysmem[i].opcode==0U) {
+                unsigned reg;
+                if(x64_register16(s->args,&reg)) {
+                    m->opcode=X64_UNARY;m->count=1U;
+                    m->encoding=UINT32_C(0x8000)|
+                        (uint32_t)sysmem[i].opcode|
+                        ((uint32_t)sysmem[i].group<<8U)|
+                        (reg>=8U?UINT32_C(0x2000):0U);
+                    m->operands[0].kind=MINIAS_MC_REGISTER;
+                    m->operands[0].reg=reg;
+                    goto done;
+                }
+            }
             if(!x64_is_mem_candidate(s->args) ||
                !x64_parse_base_memory(s->args,&mem))goto invalid;
             m->operands[1].memory=malloc(sizeof(mem));
@@ -624,8 +653,30 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             m->encoding=UINT32_C(0x100)|sysmem[i].opcode;
             m->operands[0].kind=MINIAS_MC_REGISTER;
             m->operands[0].reg=sysmem[i].group;
-            m->operands[0].register_64=false;
+            m->operands[0].register_64=
+                !strcmp(s->op,"fxsaveq") || !strcmp(s->op,"fxrstorq");
             m->operands[1].kind=MINIAS_MC_MEMORY;
+            goto done;
+        }
+    }
+    /* FS/GS base accesses use mandatory F3 + 0F AE /0..3 with the
+     * size determined by the GPR; retain x86 target-owned ISA grammar,
+     * and reuse the typed unary register encoder (including REX.W). */
+    {
+        static const char *const names[4]={
+            "rdfsbase","rdgsbase","wrfsbase","wrgsbase"
+        };
+        for(i=0U;i<4U;++i) {
+            unsigned reg;
+            bool wide;
+            if(strcmp(s->op,names[i]))continue;
+            if(!x64_register(s->args,&reg,&wide))goto invalid;
+            m->opcode=X64_UNARY;m->count=1U;
+            m->encoding=UINT32_C(0x10000)|UINT32_C(0x8000)|
+                UINT32_C(0xae)|((uint32_t)i<<8U);
+            m->operands[0].kind=MINIAS_MC_REGISTER;
+            m->operands[0].reg=reg;
+            m->operands[0].register_64=wide;
             goto done;
         }
     }
@@ -1951,7 +2002,8 @@ static bool x64_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
             bool rex=m->operands[0].register_64 || r>=8U ||
                      (byte && r>=4U && !high);
             *size=2U+(word?1U:0U)+(rex?1U:0U)+
-                  ((m->encoding&UINT32_C(0x8000))?1U:0U);return true;
+                  ((m->encoding&UINT32_C(0x8000))?1U:0U)+
+                  ((m->encoding&UINT32_C(0x10000))?1U:0U);return true;
         }
         case X64_BSWAP:
             *size=2U+(m->operands[0].register_64 ||
@@ -2180,6 +2232,7 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
             break;
         case X64_UNARY:
             r=m->operands[0].reg;
+            if(m->encoding&UINT32_C(0x10000))code[n++]=0xf3U;
             if(m->encoding&UINT32_C(0x2000))code[n++]=0x66U;
             if(m->operands[0].register_64 || r>=8U ||
                ((m->encoding&UINT32_C(0x1000)) && r>=4U &&
