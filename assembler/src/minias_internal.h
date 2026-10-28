@@ -409,6 +409,7 @@ MiniAsSymbol *minias_get_symbol(MiniAs *as, const char *name, bool create);
  * Only already-resolved numeric/.set expressions succeed: no guessing
  * relocatable values or mirroring Core symbol algorithms per backend. */
 bool minias_evaluate_absolute_operand(MiniAs *,const char *,int64_t *);
+bool minias_evaluate_same_subsection_difference(MiniAs *,const char *,int64_t *);
 /* Relocatable base + (defined same-subsection label difference + absolute
  * offset). Shared expression owner, no ISA-specific source parsing. */
 bool minias_fold_local_difference_addend(MiniAs *,const char *,
