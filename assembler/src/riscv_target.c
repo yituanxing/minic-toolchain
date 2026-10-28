@@ -694,6 +694,15 @@ static const MiniAsTargetOps riscv_ops = {
     .append_code_alignment = minias_section_append_code_alignment,
     .fixup_relocation_type = riscv_fixup_relocation_type,
     .validate_output = strict_base_i_check_sections,
+    /* RV64 DWARF register numbering: ra=x1, sp=x2; DW_CFA code unit
+     * is one byte, stack slots are eight bytes (LP64). Both RV32/64
+     * share this Target but DWARF64 address fields are explicitly gated
+     * by the generic Output ELF class check. */
+    .cfi_code_align = 1U,
+    .cfi_data_align = -8,
+    .cfi_return_reg = 1U,
+    .cfi_stack_reg = 2U,
+    .cfi_address_size = 8U,
 };
 
 const MiniAsTargetOps *minias_target_riscv(void) { return &riscv_ops; }
