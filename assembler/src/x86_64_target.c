@@ -177,6 +177,42 @@ static bool x64_args2(const char *args, char a[X64_OPERAND_CAP],
     return true;
 }
 
+/* Three GNU AT&T operands have two TOP-LEVEL commas, while the middle
+ * memory operand may itself contain SIB commas. Keep this Target-owned
+ * tokenizer shared by BMI2 and future three-operand x86 ISA families. */
+static bool x64_args3(const char *args,
+                      char first[X64_OPERAND_CAP],
+                      char second[X64_OPERAND_CAP],
+                      char third[X64_OPERAND_CAP]) {
+    const char *begin[3],*end[3],*p;
+    unsigned depth=0U,count=0U,k;
+    char *out[3]={first,second,third};
+    begin[0]=args;
+    for(p=args;*p;++p) {
+        if(*p=='(')++depth;
+        else if(*p==')') {
+            if(!depth)return false;
+            --depth;
+        } else if(*p==',' && !depth) {
+            if(count>=2U)return false;
+            end[count]=p;
+            begin[++count]=p+1U;
+        }
+    }
+    if(depth || count!=2U)return false;
+    end[2]=p;
+    for(k=0U;k<3U;++k) {
+        const char *lo=begin[k],*hi=end[k];
+        size_t n;
+        while(lo<hi && isspace((unsigned char)*lo))++lo;
+        while(hi>lo && isspace((unsigned char)hi[-1]))--hi;
+        n=(size_t)(hi-lo);
+        if(!n || n>=X64_OPERAND_CAP)return false;
+        memcpy(out[k],lo,n);out[k][n]='\0';
+    }
+    return true;
+}
+
 /* GNU AT&T disp(%base[, %index[, scale]]) plus symbol(%rip).
  * SymbolExpr remains typed all the way into the existing common ELF fixup.
  * The PC-relative addressing mode is target-owned (ModR/M rm=101). */
@@ -662,7 +698,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
     if(!strncmp(s->op,"shlx",4U) ||
        !strncmp(s->op,"shrx",4U) ||
        !strncmp(s->op,"sarx",4U)) {
-        char first[X64_OPERAND_CAP],rest[X64_OPERAND_CAP];
+        char first[X64_OPERAND_CAP];
         char source[X64_OPERAND_CAP],dest[X64_OPERAND_CAP];
         unsigned count_reg=0U,source_reg=0U,dest_reg=0U;
         unsigned pp=s->op[1]=='h'?(s->op[2]=='l'?1U:3U):2U;
@@ -673,8 +709,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         /* GNU third operands may contain SIB commas. Reuse the
          * original top-level AT&T splitter twice, so the instruction
          * grammar never mistakes (%r15,%r13,4) for extra operands. */
-        if(x64_args2(s->args,first,rest) &&
-           x64_args2(rest,source,dest) &&
+        if(x64_args3(s->args,first,source,dest) &&
            x64_register(first,&count_reg,&wc) &&
            x64_register(dest,&dest_reg,&dest_wide) &&
            wc==dest_wide &&
