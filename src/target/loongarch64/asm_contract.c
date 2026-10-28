@@ -38,6 +38,27 @@ static bool loongarch64_dbar_template(const char *text, size_t length) {
     return true;
 }
 
+
+/* Original GNU no-operand DBAR is a literal hardware barrier. This is
+ * independent from the existing "dbar %0" I-constraint immediate input.
+ * Avoid treating arbitrary templates or unknown DBAR hints as executable. */
+static const char *loongarch64_literal_dbar(const char *text,size_t length){
+    static const char *const allowed[]={"dbar 0","dbar 0x700"};
+    char norm[48];size_t i,n=0U;
+    if(!text||!length||length>=sizeof(norm))return NULL;
+    for(i=0U;i<length;++i){
+        const char c=text[i];
+        if(c==9||c==10||c==13||c==';')return NULL;
+        if(n+1U>=sizeof(norm))return NULL;
+        norm[n++]=c;
+    }
+    while(n!=0U&&norm[n-1U]==' ')--n;
+    norm[n]=0;
+    for(i=0U;i<sizeof(allowed)/sizeof(allowed[0]);++i)
+        if(strcmp(norm,allowed[i])==0)return allowed[i];
+    return NULL;
+}
+
 /* Typed GNU LoongArch AMO store-only operations from Linux atomic.h.
  * No target-neutral Core opcode is added: the existing structured ASM roles
  * carry the memory address and scalar input, target-owned machine code
@@ -324,6 +345,14 @@ bool minic_loongarch64_qualify_inline_asm(
     MinicTargetInlineAsmContract *contract) {
     const MinicInlineAsmOperand *op;
     const MinicExpression *expr;
+    if(program&&src&&contract&&src->is_volatile&&!src->is_goto&&
+       src->output_count==0U&&src->input_count==0U&&
+       src->clobber_count==1U&&src->has_memory_clobber&&
+       src->register_clobber_count==0U&&src->label_count==0U&&
+       loongarch64_literal_dbar(src->template_text,src->template_length)){
+        contract->operand_count=0U;
+        return true;
+    }
     if(loong_pte_source(program,src,contract))
         return true;
     if (loong_atomic_qualified_source(program, src, contract) ||
@@ -551,6 +580,14 @@ bool minic_loongarch64_emit_qualified_structured_asm(
         ins->value.structured_inline_asm.inline_asm_id >= ctx->fn->inline_asm_count)
         return false;
     info = &ctx->fn->inline_asms[ins->value.structured_inline_asm.inline_asm_id];
+    if(ins->value.structured_inline_asm.operand_count==0U){
+        const char *barrier=loongarch64_literal_dbar(
+            info->template_text,info->template_length);
+        if(!barrier||!info->is_volatile||info->is_goto||
+           !info->has_memory_clobber||info->register_clobber_count)
+            return false;
+        return fprintf(out,"  %s\n",barrier)>=0;
+    }
     if(loong_pte_form(info->template_text,info->template_length))
         return loong_pte_emit(out,ctx,ins,info);
     if (loong_csr_template(info->template_text, info->template_length))

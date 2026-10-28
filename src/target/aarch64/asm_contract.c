@@ -52,7 +52,9 @@ static const char *aarch64_barrier_template(const char *text, size_t len) {
     static const char *const allowed[] = {
         "dmb ish", "dmb ishld", "dmb ishst", "dmb sy",
         "dmb osh", "dmb oshld", "dmb oshst",
-        "dsb sy", "dsb ish", "isb"
+        "dsb sy", "dsb ish", "isb",
+        "msr daifset, #3", "msr daifclr, #3",
+        "yield", "hint #20"
     };
     char normalized[64];
     size_t i, n = 0U;
@@ -691,13 +693,23 @@ bool minic_aarch64_qualify_inline_asm(
     const MinicExpression *expr;
     MinicType plain;
     size_t i;
+    /* Original 6.6 GNU zero-operand ISA: all DMB/DSB/ISB, DAIF IRQ/FIQ
+     * masking and architectural YIELD/CSDB hints use this ONE target
+     * machine catalog. Only YIELD/HINT may omit a compiler memory clobber;
+     * privileged DAIF and ordering fences always require one. */
     if (program && src && contract && src->is_volatile &&
         !src->is_goto && src->output_count == 0U && src->input_count == 0U &&
-        src->clobber_count == 1U && src->register_clobber_count == 0U &&
-        src->has_memory_clobber && src->label_count == 0U &&
-        aarch64_barrier_template(src->template_text, src->template_length)) {
-        contract->operand_count = 0U;
-        return true;
+        src->register_clobber_count == 0U && src->label_count == 0U) {
+        const char *form=aarch64_barrier_template(
+            src->template_text,src->template_length);
+        const bool hint=form &&
+            (strcmp(form,"yield")==0||strcmp(form,"hint #20")==0);
+        if(form && src->clobber_count <= 1U &&
+           src->has_memory_clobber==(src->clobber_count==1U) &&
+           (hint || src->has_memory_clobber)) {
+            contract->operand_count=0U;
+            return true;
+        }
     }
     if (program && src && contract && !src->is_goto &&
         src->output_count == 0U && src->input_count == 1U && src->inputs &&
@@ -1233,8 +1245,12 @@ bool minic_aarch64_emit_qualified_structured_asm(
     if (ins->value.structured_inline_asm.operand_count == 0U) {
         const char *barrier = aarch64_barrier_template(
             info->template_text, info->template_length);
+        const bool hint=barrier &&
+            (strcmp(barrier,"yield")==0||
+             strcmp(barrier,"hint #20")==0);
         if (!barrier || !info->is_volatile || info->is_goto ||
-            !info->has_memory_clobber || info->register_clobber_count != 0U)
+            (!info->has_memory_clobber && !hint) ||
+            info->register_clobber_count != 0U)
             return false;
         return fprintf(out, "  %s\n", barrier) >= 0;
     }
