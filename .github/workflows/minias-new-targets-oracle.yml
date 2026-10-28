@@ -27,7 +27,12 @@ jobs:
         run: make -j2 MODE=release CFLAGS=-Werror build/release/bin/minic-as
       - name: Verify parsed MCExpr final-dot and local symbol offset
         run: |
-          printf '.text\\nbase:\\nnop\\n.long .-base\\n' > /tmp/mc-dot.s
+          cat > /tmp/mc-dot.s <<'SRC_DOT'
+          .text
+          base:
+          nop
+          .long .-base
+          SRC_DOT
           build/release/bin/minic-as --target=x86_64 -o /tmp/mc-dot-mini.o /tmp/mc-dot.s
           as --64 -o /tmp/mc-dot-gnu.o /tmp/mc-dot.s
           cmp <(objcopy -j .text -O binary /tmp/mc-dot-mini.o /dev/stdout) <(objcopy -j .text -O binary /tmp/mc-dot-gnu.o /dev/stdout)
