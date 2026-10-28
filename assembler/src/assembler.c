@@ -619,7 +619,8 @@ bool minias_emit_instruction_bytes(MiniAs *as, int section_index,
         memcpy(as->encoded_instruction_bytes +
                    as->encoded_instruction_size, data, size);
     as->encoded_instruction_size = needed;
-    sec->size += size; /* Virtual cursor for existing target emitters. */
+    /* The CodeEmitter owns bytes until the transaction commits. A Target
+     * never updates a final Section size or cursor while encoding. */
     return true;
 
 }
@@ -3631,54 +3632,21 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
         }
         bytes = count;
     } else {
-        copy = minias_strdup(args);
-        if (copy == NULL) {
-            minias_set_error(as, "out-of-memory:data-measure");
+        /* One Common MCExpr parser validates every fixed-width field.
+         * Measurement only counts fields; parsed semantic expressions are
+         * retained on the stable DATA Fragment for emission. */
+        if(width==0U) {
+            minias_set_error(as,"invalid-fixed-data-width:%s",op);
             return false;
         }
-        cursor = copy;
-        while (cursor != NULL) {
-            char *comma = strchr(cursor, ',');
-            uint64_t value;
-
-            if (comma != NULL) {
-                *comma = '\0';
-            }
-            if (!minias_parse_absolute_data_bits(as, minias_trim(cursor), &value)) {
-                MiniAsSymbolExpr expr;
-                const char *trimmed = minias_trim(cursor);
-                MiniAsSymbolExpr rhs_expr;
-                uint64_t divisor;
-                bool arithmetic_shift=false;
-                bool supported =
-                    ((width == 2U || width == 4U || width == 8U) &&
-                     (parse_data_symbol_addend(trimmed, &expr) ||
-                      parse_data_symbol_absolute_tail(as,trimmed,&expr))) ||
-                    ((width == 2U || width == 4U || width == 8U) &&
-                     (parse_symbol_minus_dot(trimmed, &expr) ||
-                      parse_symbol_minus_dot_divisor(trimmed,
-                                                     &expr,
-                                                     &divisor))) ||
-                    ((width == 1U || width == 2U || width == 4U || width == 8U) &&
-                     (parse_symbol_difference(trimmed, &expr, &rhs_expr) ||
-                      parse_symbol_difference_divisor(trimmed,&expr,
-                              &rhs_expr,&divisor,&arithmetic_shift)));
-
-                if (!supported) {
-                    minias_set_error(as,
-                                     "unsupported-expression:%s:%s:line=%zu",
-                                     op,
-                                     trimmed,
-                                     line);
-                    free(copy);
-                    return false;
-                }
-            }
-            ++count;
-            cursor = comma == NULL ? NULL : comma + 1;
+        count=1U;
+        for(cursor=args;*cursor;++cursor)
+            if(*cursor==',')++count;
+        if(count>UINT32_MAX/width) {
+            minias_set_error(as,"mc-data-count-overflow:line=%zu",line);
+            return false;
         }
-        free(copy);
-        bytes = count * width;
+        bytes=count*width;
     }
 
     if (bytes > UINT32_MAX) {
@@ -7387,7 +7355,10 @@ bool minias_emit_sections(MiniAs *as) {
             free(refs);
             return false;
         }
-        if ((uint64_t)section->size != stmt->offset + stmt->size) {
+        /* DATA and ALIGN append directly, while target instruction bytes
+         * are buffered and checked before a single Section commit. */
+        if (stmt->kind != MINIAS_STMT_INSN &&
+            (uint64_t)section->size != stmt->offset + stmt->size) {
             minias_set_error(as,
                 "fragment-emitted-size-mismatch:line=%zu:expected=%u:actual=%llu",
                 stmt->line, stmt->size,
@@ -7409,7 +7380,6 @@ bool minias_emit_sections(MiniAs *as) {
                 free(refs);
                 return false;
             }
-            section->size = (size_t)stmt->offset; /* Restore real cursor. */
             if (!minias_section_append(as,stmt->section,
                                        as->encoded_instruction_bytes,
                                        as->encoded_instruction_size)) {

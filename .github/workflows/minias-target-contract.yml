@@ -51,6 +51,8 @@ jobs:
             bash tests/assembler/probe-deferred-fragment-relax.sh
       - name: MCExpr data oracle in all A0 and ISA tests
         run: grep -q "MINIAS_MC_EXPR_DIFFERENCE" assembler/src/minias_internal.h
+      - name: Verify atomic MCFragment transactions across four CodeEmitters
+        run: bash tests/assembler/probe-mc-fragment-transaction.sh
       - name: GCC C-to-S RV64I base ISA versus inline-asm extension gate
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
