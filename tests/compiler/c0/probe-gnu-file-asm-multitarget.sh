@@ -1314,6 +1314,60 @@ SRC
     fi
     echo 'MINIC_LOONGARCH64_LINUX_PERCPU_R21_EMPTY_GNU_AS=PASS source_exact=1 hardware_read=1 negative=1'
 
+    # Original GNU Linux pgtable.h PTE buddy bit LL/SC; true GNU and
+    # MiniC cross GAS+QEMU with 0→GLOBAL and preexisting-nonzero branches.
+    cat > "$work/loong-pte.i" <<'SRC'
+typedef struct { unsigned long pte; } pte_t;
+static void set_pte(pte_t *ptep,pte_t value) {
+    *ptep=value;
+    if(value.pte&(1UL<<6)) {
+        pte_t *buddy=(pte_t *)((unsigned long)ptep ^ sizeof(pte_t));
+        unsigned long global=1UL<<6,tmp;
+        __asm__ __volatile__(
+        "1:" "ll.d\t" "%[tmp], %[buddy]\t\t\n"
+        "\tbnez\t%[tmp], 2f\t\t\t\n"
+        "\t or\t%[tmp], %[tmp], %[global]\t\n"
+        "sc.d\t" "%[tmp], %[buddy]\t\t\n"
+        "\tbeqz\t%[tmp], 1b\t\t\t\n"
+        "\tnop\t\t\t\t\t\n"
+        "2:\t\t\t\t\t\t\n"
+        "\tdbar 0x700\t\n"
+        : [buddy] "+m"(buddy->pte),[tmp] "=&r"(tmp)
+        : [global] "r"(global));
+    }
+}
+int main(void) {
+    pte_t pair[2] __attribute__((aligned(16)))={{0UL},{0UL}};
+    set_pte(&pair[0],(pte_t){64UL});
+    if(pair[0].pte!=64UL||pair[1].pte!=64UL)return 1;
+    pair[1].pte=3UL;
+    set_pte(&pair[0],(pte_t){64UL});
+    if(pair[1].pte!=3UL)return 2;
+    return 0;
+}
+SRC
+    "$cross_cc" -O0 -x c "$work/loong-pte.i" \
+        -o "$work/loong-pte.gnu.elf"
+    "$MINIC_CC" --target=loongarch64-linux -S \
+        "$work/loong-pte.i" -o "$work/loong-pte.minic.s"
+    for op in 'll.d $t4' 'sc.d $t4' 'beqz $t4' 'dbar 0x700'; do
+        grep -Fq "$op" "$work/loong-pte.minic.s"
+    done
+    "$cross_cc" -x assembler "$work/loong-pte.minic.s" \
+        -o "$work/loong-pte.minic.elf"
+    for flavor in gnu minic; do
+        qemu-loongarch64 -L /usr/loongarch64-linux-gnu \
+            "$work/loong-pte.$flavor.elf"
+    done
+    sed 's/dbar 0x700/dbar 0x700; syscall 0/' \
+        "$work/loong-pte.i" > "$work/loong-pte-bad.i"
+    if "$MINIC_CC" --target=loongarch64-linux -S \
+        "$work/loong-pte-bad.i" -o "$work/loong-pte-bad.s" \
+        >/dev/null 2>&1; then
+        echo 'FAIL Loong PTE LL/SC injected syscall admitted';exit 1
+    fi
+    echo 'MINIC_LOONGARCH64_LINUX_PTE_LLSC_GNU_QEMU=PASS paths=2 negative=1'
+
     # Original arch/loongarch/include/asm/irqflags.h uses privileged CRMD CSR.
     # GNU and MiniC must generate *real* csrrd/csrxchg machine instructions.
     # Privileged instructions cannot run in QEMU-user: object/GAS comparison

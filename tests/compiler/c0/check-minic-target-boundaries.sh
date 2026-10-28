@@ -23,6 +23,9 @@ for file in \
   exists "$file"
 done
 
+has src/target/loongarch64/asm_contract.c 'loong_pte_form('
+has src/target/loongarch64/asm_contract.c 'loong_pte_emit('
+lacks src/core/core_lower_asm_target.c 'll.d'
 has src/target/common/direct_instruction_semantics.c \
   'minic_multi_direct_machine_instruction_shape('
 has src/target/common/direct_residual_plan.c \

@@ -10,7 +10,7 @@ bool minic_loongarch64_requires_qualified_input_asm(const MinicInlineAsm *src) {
     static const char *const reserved[] = {
         "dbar", "amand_db.w", "amor_db.w", "amxor_db.w", "amadd_db.w",
         "amand_db.d", "amor_db.d", "amxor_db.d", "amadd_db.d",
-        "csrrd", "csrxchg"
+        "csrrd", "csrxchg", "1:ll.d"
     };
     return minic_backend_inline_asm_prefix_matches(
         src, reserved, sizeof(reserved) / sizeof(reserved[0]));
@@ -221,6 +221,59 @@ static bool loong_csr_qualified_source(
         MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     return true;
 }
+
+/* Authentic GNU Linux 6.6.143 LoongArch set_pte global-bit buddy LL/SC.
+ * One exact source/machine ISA template; no Core architecture switches. */
+static bool loong_pte_form(const char *text,size_t len) {
+    static const char named[]=
+        "1:ll.d%[tmp],%[buddy]bnez%[tmp],2for%[tmp],%[tmp],%[global]"
+        "sc.d%[tmp],%[buddy]beqz%[tmp],1bnop2:dbar0x700";
+    static const char numeric[]=
+        "1:ll.d%1,%0bnez%1,2for%1,%1,%2"
+        "sc.d%1,%0beqz%1,1bnop2:dbar0x700";
+    char compact[240];
+    size_t i,n=0U;
+    if(!text||!len||len>=sizeof(compact))return false;
+    for(i=0U;i<len;++i){
+        char ch=text[i];
+        if(ch==' '||ch=='\t'||ch=='\n'||ch=='\r')continue;
+        if(n+1U>=sizeof(compact))return false;
+        compact[n++]=ch;
+    }
+    compact[n]='\0';
+    return strcmp(compact,named)==0||strcmp(compact,numeric)==0;
+}
+static bool loong_pte_source(
+    const MinicC0Program *program,const MinicInlineAsm *src,
+    MinicTargetInlineAsmContract *contract) {
+    const MinicExpression *e[3];
+    MinicType t[3];
+    size_t i;
+    if(!program||!src||!contract||!src->is_volatile||src->is_goto||
+       !src->outputs||!src->inputs||src->output_count!=2U||
+       src->input_count!=1U||src->label_count||src->clobber_count||
+       src->register_clobber_count||src->has_memory_clobber||
+       !loong_pte_form(src->template_text,src->template_length)||
+       !loong_csr_constraint(&src->outputs[0],"+m")||
+       !loong_csr_constraint(&src->outputs[1],"=&r")||
+       !loong_csr_constraint(&src->inputs[0],"r"))
+        return false;
+    for(i=0U;i<3U;++i){
+        const MinicInlineAsmOperand *o=i<2U?
+            &src->outputs[i]:&src->inputs[0];
+        e[i]=minic_c0_program_expression(program,o->expression);
+        if(!e[i]||(i<2U&&(e[i]->value_category!=MINIC_VALUE_LVALUE||
+           minic_type_is_const(e[i]->type)))||
+           !minic_type_unqualified(e[i]->type,&t[i])||
+           !minic_type_equal(t[i],minic_type_unsigned_long()))
+            return false;
+    }
+    contract->operand_count=3U;
+    contract->kinds[0]=MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
+    contract->kinds[1]=MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+    contract->kinds[2]=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    return true;
+}
 /* Linux arch_atomic{,64}_fetch_{and,or,xor,add}_relaxed:
  * GNU +ZB memory RMW, =&r old-value output, r input. The SAME hardware
  * AMO template table owns both store-only ($zero) and fetch old-value forms.
@@ -271,6 +324,8 @@ bool minic_loongarch64_qualify_inline_asm(
     MinicTargetInlineAsmContract *contract) {
     const MinicInlineAsmOperand *op;
     const MinicExpression *expr;
+    if(loong_pte_source(program,src,contract))
+        return true;
     if (loong_atomic_qualified_source(program, src, contract) ||
         loong_atomic_fetch_qualified_source(program, src, contract) ||
         loong_csr_qualified_source(program, src, contract))
@@ -438,6 +493,53 @@ static bool minic_loongarch64_emit_amo_fetch(
                    atom->width == 8U ? "st.d" : "st.w") >= 0;
 }
 
+
+/* Full original Linux LL/SC retry sequence and mandatory dbar 0x700.
+ * Frame helper uses $t3 for large offsets; load all SSA operands BEFORE
+ * loop. $t4 is the real LL/SC scratch and SC success result. */
+static bool loong_pte_emit(
+    FILE *out,const MinicDirectLP64BlockContext *ctx,
+    const MinicCoreInstruction *ins,const MinicCoreInlineAsm *info) {
+    const MinicCoreFunction *fn=ctx->fn;
+    const MinicCoreStructuredInlineAsmOperand *b=
+        ins->value.structured_inline_asm.operands;
+    MinicType type,plain;
+    size_t i;
+    if(!out||!ctx||!fn||!b||!info||!info->is_volatile||info->is_goto||
+       !info->has_memory_clobber||info->register_clobber_count||
+       !loong_pte_form(info->template_text,info->template_length)||
+       ins->value.structured_inline_asm.operand_count!=3U)
+        return false;
+    for(i=0U;i<3U;++i){
+        if(b[i].operand_index!=i||b[i].value>=fn->value_count||
+           b[i].has_fixed_register_binding||b[i].early_clobber||
+           b[i].kind!=(i==0U?
+             MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE:
+             i==1U?MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT:
+                   MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT))
+            return false;
+        type=fn->values[b[i].value].type;
+        if(i<2U&&!minic_type_pointee(type,&type))return false;
+        if(!minic_type_unqualified(type,&plain)||
+           !minic_type_equal(plain,minic_type_unsigned_long()))return false;
+    }
+    return minic_loongarch64_emit_frame_mem(
+             out,"ld.d","$t2",(size_t)b[1].value*8U,ctx->dynamic_frame)&&
+           minic_loongarch64_emit_frame_mem(
+             out,"ld.d","$t0",(size_t)b[2].value*8U,ctx->dynamic_frame)&&
+           minic_loongarch64_emit_frame_mem(
+             out,"ld.d","$t1",(size_t)b[0].value*8U,ctx->dynamic_frame)&&
+           fputs("1:\n"
+                 "  ll.d $t4, $t1, 0\n"
+                 "  bnez $t4, 2f\n"
+                 "  or $t4, $t4, $t0\n"
+                 "  sc.d $t4, $t1, 0\n"
+                 "  beqz $t4, 1b\n"
+                 "  nop\n"
+                 "2:\n"
+                 "  dbar 0x700\n"
+                 "  st.d $t4, $t2, 0\n",out)!=EOF;
+}
 bool minic_loongarch64_emit_qualified_structured_asm(
     FILE *out, const MinicDirectLP64BlockContext *ctx,
     const MinicCoreInstruction *ins) {
@@ -449,6 +551,8 @@ bool minic_loongarch64_emit_qualified_structured_asm(
         ins->value.structured_inline_asm.inline_asm_id >= ctx->fn->inline_asm_count)
         return false;
     info = &ctx->fn->inline_asms[ins->value.structured_inline_asm.inline_asm_id];
+    if(loong_pte_form(info->template_text,info->template_length))
+        return loong_pte_emit(out,ctx,ins,info);
     if (loong_csr_template(info->template_text, info->template_length))
         return minic_loongarch64_emit_csr(out, ctx, ins, info);
     if (ins->value.structured_inline_asm.operand_count == 3U)
