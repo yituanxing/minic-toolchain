@@ -23,7 +23,15 @@ printf '%s
     "$root/tests/compiler/c0/parameter_suffix_informational_attribute.c" \
     -o "$work/parameter-suffix-info.i"
 "$minic" -S "$work/parameter-suffix-info.i" -o "$work/parameter-suffix-info.s"
-grep -F 'add_one:' "$work/parameter-suffix-info.s" >/dev/null
+# add_one is internal and may disappear after the shared inline/reachability
+# pass. Prove the parameter attribute is semantically inert at runtime,
+# without constraining whether the target emits a separate helper symbol.
+minic_cc=$(dirname "$minic")/minic-cc
+"$minic_cc" --target=x86_64-linux -S "$work/parameter-suffix-info.i" \
+    -o "$work/parameter-suffix-info.x86.s"
+"$host_cc" -no-pie "$work/parameter-suffix-info.x86.s" \
+    -o "$work/parameter-suffix-info.x86"
+"$work/parameter-suffix-info.x86"
 
 "$host_cc" -E -P -std=gnu11 -x c \
     "$root/tests/compiler/c0/invalid_parameter_suffix_aligned.c" \

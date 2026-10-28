@@ -36,9 +36,10 @@ test ! -e "$temporary_dir/wrong.s"
 grep -F 'main:' "$temporary_dir/x86-char.s" >/dev/null
 
 # Actual Lua 5.5.0 math.h pressure: glibc declares genuine _Float128
-# functions. The target type is 16/16 IEEE binary128, not x86 long double.
-# Declaration and type queries are supported; backend FP128 calls remain
-# unsupported until actual use and an ABI-verified implementation.
+# functions. Keep the type distinct from long double even when both use
+# IEEE binary128 storage (RV64), or when x86 uses 80-bit long double.
+# Target selection must not regress now that RV64 has real binary128 ABI
+# qualification; mere declaration is not proof that every operation works.
 cat > "$temporary_dir/float128-prototype.i" <<'EOF'
 _Static_assert(sizeof(_Float128) == 16, "binary128 storage must be 16 bytes");
 _Static_assert(_Alignof(_Float128) == 16, "binary128 alignment must be 16");
@@ -49,12 +50,9 @@ int main(void) { return 42; }
 EOF
 "$MINIC_CC" --target=x86_64-linux -S "$temporary_dir/float128-prototype.i" -o "$temporary_dir/float128-x86.s"
 grep -F 'main:' "$temporary_dir/float128-x86.s" >/dev/null
-if "$MINIC_CC" --target=riscv64-linux -S "$temporary_dir/float128-prototype.i" \
-        -o "$temporary_dir/float128-rv.s" 2>"$temporary_dir/float128-rv.err"; then
-    echo "FAIL: RV64 must not silently accept x86 binary128 type" >&2
-    exit 1
-fi
-test ! -e "$temporary_dir/float128-rv.s"
+"$MINIC_CC" --target=riscv64-linux -S "$temporary_dir/float128-prototype.i" \
+    -o "$temporary_dir/float128-rv.s"
+grep -F 'main:' "$temporary_dir/float128-rv.s" >/dev/null
 
 # Real SQLite 3.54.1 glibc <stdlib.h> declares strtof32/strtof64.
 # GCC confirms distinct C identities despite identical object layout;
@@ -80,14 +78,11 @@ EOF
     "$temporary_dir/extended-float-prototypes.i" \
     -o "$temporary_dir/x86-extended-float.s"
 grep -F 'main:' "$temporary_dir/x86-extended-float.s" >/dev/null
-if "$MINIC_CC" --target=riscv64-linux -S \
+"$MINIC_CC" --target=riscv64-linux -S \
     "$temporary_dir/extended-float-prototypes.i" \
-    -o "$temporary_dir/rv-extended-float.s" 2>"$temporary_dir/rv-extended-float.err"; then
-    echo "FAIL: RV64 must not silently accept x86 glibc extended floating types" >&2
-    exit 1
-fi
-test ! -e "$temporary_dir/rv-extended-float.s"
-echo "PASS: x86 extended _Float32/_Float64/_Float32x/_Float64x distinct ABI layouts"
+    -o "$temporary_dir/rv-extended-float.s"
+grep -F 'main:' "$temporary_dir/rv-extended-float.s" >/dev/null
+echo "PASS: x86/RV64 extended floating type identities and target layout"
 
 # C declaration-specifiers can interleave qualifiers and integer keywords.
 cat > "$temporary_dir/mixed-qualifiers.i" <<'EOF'
@@ -114,16 +109,19 @@ grep -F 'movz w9, #42' "$temporary_dir/aarch64.s" >/dev/null
 grep -F 'li.w $t0, 42' "$temporary_dir/loongarch64.s" >/dev/null
 echo "PASS: ARM64 and LoongArch64 emit distinct Core integer-return assembly; target M1"
 
-# New RV32 TargetInfo parses ISA/ABI identity and rejects the dangerous
-# RV64 machine emitter until it is actually XLEN/ILP32 qualified.
-if "$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
-        -S "$temporary_dir/basic.i" -o "$temporary_dir/rv32.s" \
-        2>"$temporary_dir/rv32.err"; then
-    echo "FAIL: RV32 ILP32 must not emit unqualified RV64 code" >&2
+# RV32I/ILP32 now has a real independently qualified ELF32 backend.
+# Check positive ISA selection and distinguish it from the still-invalid
+# RV64 ISA/ABI combination. Never allow a fallback into RV64 machine code.
+"$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
+    -S "$temporary_dir/basic.i" -o "$temporary_dir/rv32.s"
+grep -F 'main:' "$temporary_dir/rv32.s" >/dev/null
+grep -F '.option norvc' "$temporary_dir/rv32.s" >/dev/null
+grep -F 'sw ra,' "$temporary_dir/rv32.s" >/dev/null
+if grep -E '(^|[[:space:]])(sd|ld|addw|subw|mul|div|rem|fadd\.|vsetvli)([[:space:]]|$)' \
+        "$temporary_dir/rv32.s" >/dev/null; then
+    echo "FAIL: strict RV32I emitted an incompatible/non-I instruction" >&2
     exit 1
 fi
-grep -F 'machine/ABI lowering is not yet qualified' "$temporary_dir/rv32.err" >/dev/null
-test ! -e "$temporary_dir/rv32.s"
 if "$MINIC_CC" --target=riscv32-linux -march=rv64i -mabi=lp64 \
         -S "$temporary_dir/basic.i" -o "$temporary_dir/rv32-mixed.s" \
         2>"$temporary_dir/rv32-mixed.err"; then
@@ -132,7 +130,7 @@ if "$MINIC_CC" --target=riscv32-linux -march=rv64i -mabi=lp64 \
 fi
 grep -F 'invalid RISC-V configuration' "$temporary_dir/rv32-mixed.err" >/dev/null
 test ! -e "$temporary_dir/rv32-mixed.s"
-echo 'RV32_TARGET_GATE=PASS model_registered=1 mixed_isa_rejected=1 unsafe_emission_rejected=1'
+echo 'RV32_TARGET_GATE=PASS model_registered=1 strict_rv32i_emitted=1 mixed_isa_rejected=1'
 
 if "$MINIC_CC" --target=unknown-target -S "$temporary_dir/basic.i" \
         -o "$temporary_dir/unknown.s" 2>"$temporary_dir/unknown.err"; then

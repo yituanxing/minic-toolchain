@@ -40,7 +40,20 @@ fi
     -o "$work/call-argument.i"
 MINIC_CORE_IR=strict "$minic" -S "$work/call-argument.i" \
     -o "$work/call-argument.strict.s"
-require_core_conditional_edges "$work/call-argument.strict.s"
+# The call-argument case has a constant false condition. Shared Core is
+# required to retain the selected record-producing CALL and its by-value
+# materialization, but not a dead conditional machine edge.
+test "$(grep -F -c '  call make_word' "$work/call-argument.strict.s")" -eq 1
 grep -F '  call consume_word' "$work/call-argument.strict.s" >/dev/null
 
-printf '%s\n' 'PASS compiler/c0/record_conditional_materialization record-rvalue=conditional producers=address,call sink=assignment,call-argument strict-call-argument=1'
+# Check the actual argument value under the native ABI; a source-level
+# constant-branch fold must not skip make_word or pass the dead {3} arm.
+minic_cc=$(dirname "$minic")/minic-cc
+"$minic_cc" --target=x86_64-linux -S "$work/call-argument.i" \
+    -o "$work/call-argument.x86.s"
+"$host_cc" -no-pie "$work/call-argument.x86.s" \
+    "$root/tests/compiler/c0/record_conditional_consume_stub.c" \
+    -o "$work/call-argument.x86"
+"$work/call-argument.x86"
+
+printf '%s\n' 'PASS compiler/c0/record_conditional_materialization record-rvalue=conditional producers=address,call sink=assignment,call-argument strict-call-argument=1 GNU-native-value=11'
