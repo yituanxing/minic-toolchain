@@ -3108,7 +3108,7 @@ static bool snapshot_mutable_data_tokens(MiniAs *as,const char *input,
             part=(size_t)(p-start);
             if(part<sizeof(name)) {
                 int n;
-                memcpy(name,start,part);name[part]='\\0';
+                memcpy(name,start,part);name[part]='\0';
                 sym=minias_get_symbol(as,name,false);
                 if(sym && sym->defined && sym->mutable_absolute_set &&
                    sym->section==MINIAS_SECTION_ABS) {
@@ -3134,7 +3134,7 @@ static bool snapshot_mutable_data_tokens(MiniAs *as,const char *input,
         memcpy(result+used,chosen?chosen:start,part);
         used+=part;
     }
-    result[used]='\\0';*out=result;return true;
+    result[used]='\0';*out=result;return true;
 }
 
 static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
