@@ -2200,6 +2200,9 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
     char *cursor;
     char *snapshot=NULL;
     bool delayed=false;
+    bool variable_parsed=false;
+    uint64_t variable_repeat=0U,variable_value=0U;
+    unsigned variable_width=0U;
 
     if (!strcmp(op,".fill")) {
         unsigned elem=0U;
@@ -2213,7 +2216,13 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
              * with provisional size 0, never as an ignored directive.
              * Invalid syntax/unresolved symbols are rejected at fixpoint. */
             bytes=0U;
-        }else bytes=repeats*elem;
+        }else {
+            bytes=repeats*elem;
+            variable_parsed=true;
+            variable_repeat=repeats;
+            variable_value=value;
+            variable_width=elem;
+        }
     } else if (strcmp(op,".uleb128")==0 || strcmp(op,".sleb128")==0) {
         unsigned char coded[10];
         size_t len=0U;
@@ -2250,6 +2259,14 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
             count=0U;
         }
         bytes = count;
+        /* The solver revisits all deferred fragments. The parse-site
+         * value below is immutable when no symbolic operands exist. */
+        if(!delayed) {
+            variable_parsed=true;
+            variable_repeat=count;
+            variable_value=fill;
+            variable_width=1U;
+        }
     } else {
         /* One Common MCExpr parser validates every fixed-width field.
          * Measurement only counts fields; parsed semantic expressions are
@@ -2361,6 +2378,13 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
         free(snapshot);return false;
     }
     free(snapshot);
+    if(variable_parsed) {
+        MiniAsStmt *fragment=&as->stmts[as->stmt_count-1U];
+        fragment->variable_data_resolved=true;
+        fragment->variable_repeat=variable_repeat;
+        fragment->variable_value=variable_value;
+        fragment->variable_element_width=variable_width;
+    }
     if(width!=0U &&
        !minias_compile_data_mc(as,&as->stmts[as->stmt_count-1U],width))
         return false;
@@ -2378,21 +2402,20 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
 static bool emit_data_stmt(MiniAs *as, const MiniAsStmt *stmt) {
 
     if(!strcmp(stmt->op,".fill")) {
-        uint64_t repeat,value,i,j;
-        unsigned width_bytes;
+        uint64_t repeat=stmt->variable_repeat;
+        uint64_t value=stmt->variable_value;
+        uint64_t i;
+        unsigned width_bytes=stmt->variable_element_width,j;
         unsigned char element[8];
-        as->expr_dot_override=true;
-        as->expr_dot_value=stmt->offset;
-        {
-            bool valid=minias_parse_common_fill(as,stmt->args,
-                                         &repeat,&width_bytes,&value);
-            as->expr_dot_override=false;
-            if(!valid || (width_bytes!=0U && repeat>UINT32_MAX/width_bytes) ||
-               repeat*width_bytes!=stmt->size) {
-                minias_set_error(as,"fill-layout-changed:line=%zu",stmt->line);
-                return false;
-            }
+        if(!stmt->variable_data_resolved || width_bytes>8U ||
+           (width_bytes!=0U &&
+            (repeat>UINT32_MAX/width_bytes ||
+             repeat*width_bytes!=(uint64_t)stmt->size))) {
+            minias_set_error(as,"invalid-typed-fill-fragment:line=%zu",
+                             stmt->line);
+            return false;
         }
+        if(width_bytes==0U)return stmt->size==0U;
         for(j=0U;j<width_bytes;++j)
             element[j]=(unsigned char)(value>>(8U*j));
         for(i=0U;i<repeat;++i)
@@ -2478,20 +2501,19 @@ static bool emit_data_stmt(MiniAs *as, const MiniAsStmt *stmt) {
         free(decoded);
         return ok;
     }
-    if (strcmp(stmt->op, ".zero") == 0 || strcmp(stmt->op, ".space") == 0 ||
+    if (strcmp(stmt->op, ".zero") == 0 ||
+        strcmp(stmt->op, ".space") == 0 ||
         strcmp(stmt->op, ".skip") == 0) {
-        uint64_t count;
-        uint8_t fill;
-        bool valid;
-        as->expr_dot_override=true;
-        as->expr_dot_value=stmt->offset;
-        valid=minias_parse_common_space(as,stmt->args,&count,&fill);
-        as->expr_dot_override=false;
-        if(!valid || count!=stmt->size) {
-            minias_set_error(as,"invalid-space-emit:line=%zu",stmt->line);
+        if(!stmt->variable_data_resolved ||
+           stmt->variable_element_width!=1U ||
+           stmt->variable_repeat!=(uint64_t)stmt->size ||
+           stmt->variable_value>255U) {
+            minias_set_error(as,"invalid-typed-space-fragment:line=%zu",
+                             stmt->line);
             return false;
         }
-        return emit_common_space(as,stmt->section,stmt->size,fill);
+        return emit_common_space(as,stmt->section,stmt->size,
+                                 (uint8_t)stmt->variable_value);
     }
 
     return minias_emit_mc_data(as,stmt);
@@ -3272,9 +3294,11 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
         strcmp(op, ".org") == 0) {
         as->layout_sensitive = true;
     }
+    /* Space/skip/zero depend on Fragment layout, not parser control flow:
+     * the shared MCLayout fixed point resolves dot and forward symbols.
+     * Dot-dependent alignment grammar remains conservatively reparsed. */
     if ((strcmp(op, ".align") == 0 || strcmp(op, ".balign") == 0 ||
-         strcmp(op, ".p2align") == 0 || strcmp(op, ".space") == 0 ||
-         strcmp(op, ".skip") == 0 || strcmp(op, ".zero") == 0) &&
+         strcmp(op, ".p2align") == 0) &&
         strchr(args, '.') != NULL) {
         as->layout_sensitive = true;
     }

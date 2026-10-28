@@ -67,6 +67,10 @@ jobs:
             bash tests/assembler/probe-cfi-debug-frame.sh
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=loongarch64 \
             bash tests/assembler/probe-cfi-debug-frame.sh
+      - name: GNU x86 long-branch and typed variable DATA oracle
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=x86_64 \
+            bash tests/assembler/probe-typed-variable-data-relax.sh
       - name: GNU AS byte equality, ELF ABI, and ISA error gates
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \

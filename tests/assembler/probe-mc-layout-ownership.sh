@@ -12,9 +12,17 @@ for n in ('minias_solve_fragment_layout','minias_relayout_fragments',
     if n+'(' not in layout:raise SystemExit('missing MCLayout '+n)
 for n in ('minias_relayout_fragments','minias_resolve_deferred_data',
           'collect_out_of_range_branches','minias_finalize_subsection_layout'):
-    if n+'(' in driver:raise SystemExit('old driver layout: '+n)
+    import re
+    if re.search(r'(?:static\\s+)?bool\\s+'+n+r'\\s*\\(',driver):
+        raise SystemExit('old driver layout: '+n)
 for n in ('minias_parse_common_space','minias_parse_common_fill'):
     if n+'(' not in expr:raise SystemExit('DATA grammar missing in MCExpr: '+n)
+emitter=driver[driver.index('static bool emit_data_stmt('):
+               driver.index('static bool parse_numeric_label_id(')]
+if 'minias_parse_common_fill(' in emitter or 'minias_parse_common_space(' in emitter:
+    raise SystemExit('DATA re-parsed on final emission')
+if 'variable_data_resolved' not in emitter:
+    raise SystemExit('not emitting cached typed variable DATA')
 if 'assembler/src/mc_layout.c' not in mk:raise SystemExit('missing MCLayout build')
 if 'minias_solve_fragment_layout(' not in driver:
     raise SystemExit('missing Common layout fixed-point call')

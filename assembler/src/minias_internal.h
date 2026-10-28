@@ -299,6 +299,12 @@ typedef struct MiniAsStmt {
     struct MiniAsTargetSiteState site;
     /* Common variable-size data fragment resolved after symbol layout. */
     bool deferred_data_size;
+    /* Semantic payload for variable DATA fragments. Filled after the
+     * fixed point; emission must never reparse the source string. */
+    bool variable_data_resolved;
+    uint64_t variable_repeat;
+    uint64_t variable_value;
+    unsigned variable_element_width;
     MiniAsMCData *mcdata; /* fixed-width DATA: retained typed expressions */
     MiniAsMCInst *mcinst; /* allocated by target parser, freed by core */
 } MiniAsStmt;

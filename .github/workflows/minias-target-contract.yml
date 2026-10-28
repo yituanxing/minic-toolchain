@@ -77,6 +77,10 @@ jobs:
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=riscv \
             bash tests/assembler/probe-mcexpr-lexical-sets.sh
+      - name: GNU RV64 typed variable DATA and long-branch relayout
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=riscv \
+            bash tests/assembler/probe-typed-variable-data-relax.sh
       - name: GCC C-to-S RV64I base ISA versus inline-asm extension gate
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \

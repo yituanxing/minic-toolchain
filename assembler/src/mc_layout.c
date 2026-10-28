@@ -309,6 +309,10 @@ static bool minias_resolve_deferred_data(MiniAs *as) {
                     goto invalid;
                 }
                 n=repeat*width;
+                stmt->variable_repeat=repeat;
+                stmt->variable_element_width=width;
+                stmt->variable_value=bits;
+                stmt->variable_data_resolved=true;
             }else {
                 uint64_t amount=0U;
                 uint8_t fill=0U;
@@ -320,6 +324,10 @@ static bool minias_resolve_deferred_data(MiniAs *as) {
                     goto invalid;
                 }
                 n=amount;
+                stmt->variable_repeat=amount;
+                stmt->variable_element_width=1U;
+                stmt->variable_value=fill;
+                stmt->variable_data_resolved=true;
             }
             as->expr_dot_override=false;
             if(n!=(uint64_t)stmt->size) {
