@@ -40,6 +40,7 @@ on:
       - "third_party/gcc-riscv-14.2.0/**"
       - "src/target/common/lp64_scalar.c"
       - "src/target/common/direct_call_plan.c"
+      - "tests/compiler/c0/probe-aarch64-linux-pointer-release-acquire.sh"
       - "tests/compiler/c0/probe-aarch64-linux-acquire-load.sh"
       - "tests/compiler/c0/probe-direct-lp64-weak-section-qemu.sh"
       - "src/target/aarch64/call_emit.c"
@@ -257,6 +258,13 @@ jobs:
         run: |
           set -Eeuo pipefail
           bash tests/compiler/c0/probe-aarch64-linux-acquire-load.sh \
+            "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
+      - name: Original Linux RCU pointer release/acquire GNU AArch64 QEMU
+        if: matrix.target == 'aarch64'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash tests/compiler/c0/probe-aarch64-linux-pointer-release-acquire.sh \
             "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
       - name: GNU original local fixed-register declarations under real AArch64 QEMU
         if: matrix.target == 'aarch64'

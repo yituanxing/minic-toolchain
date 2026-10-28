@@ -259,6 +259,18 @@ static bool aarch64_stlr_type(MinicType type, size_t width) {
            (width == 8U && (plain.integer_rank == MINIC_INTEGER_RANK_LONG ||
                             plain.integer_rank == MINIC_INTEGER_RANK_LONG_LONG));
 }
+
+/* AAPCS64 C pointer occupies one 64-bit GPR, including typed volatile
+ * pointer lvalues in original Linux RCU publish/read primitives.
+ * Only a MEMORY address role can be pointer-valued. Scalar ALU and
+ * MMIO value contracts remain integer-only and width checked. */
+static bool aarch64_stlr_memory_type(MinicType type,size_t width){
+    MinicType plain;
+    return aarch64_stlr_type(type,width)||
+        (width==8U&&minic_type_unqualified(type,&plain)&&
+         minic_type_is_pointer(plain));
+}
+
 /* One typed AArch64 ISA descriptor for source qualification AND machine
  * emission. No ordinal op IDs, width thresholds or duplicated ALU tables:
  * new Linux atomics extend this target-owned operation/mode inventory only.
@@ -776,7 +788,7 @@ bool minic_aarch64_qualify_inline_asm(
            mem->value_category==MINIC_VALUE_LVALUE&&
            !minic_type_is_const(dst->type)&&
            aarch64_stlr_type(dst->type,width)&&
-           aarch64_stlr_type(mem->type,width)) {
+           aarch64_stlr_memory_type(mem->type,width)) {
             contract->operand_count=2U;
             contract->kinds[0]=MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
             contract->kinds[1]=MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
@@ -847,7 +859,7 @@ bool minic_aarch64_qualify_inline_asm(
         if (width && dst && value &&
             dst->value_category == MINIC_VALUE_LVALUE &&
             !minic_type_is_const(dst->type) &&
-            aarch64_stlr_type(dst->type, width) &&
+            aarch64_stlr_memory_type(dst->type, width) &&
             aarch64_stlr_type(value->type, width)) {
             contract->operand_count = 2U;
             contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT;
@@ -1482,7 +1494,7 @@ bool minic_aarch64_emit_qualified_structured_asm(
            ops[0].value>4095U/8U||ops[1].value>4095U/8U||
            !minic_type_pointee(fn->values[ops[0].value].type,&dst_ty)||
            !minic_type_pointee(fn->values[ops[1].value].type,&mem_ty)||
-           !aarch64_stlr_type(dst_ty,w)||!aarch64_stlr_type(mem_ty,w))
+           !aarch64_stlr_type(dst_ty,w)||!aarch64_stlr_memory_type(mem_ty,w))
             return false;
         return fprintf(out,
             "  ldr x10, [sp, #%zu]\n"
@@ -1513,7 +1525,7 @@ bool minic_aarch64_emit_qualified_structured_asm(
             b[0].value >= fn->value_count || b[1].value >= fn->value_count ||
             b[0].value > 4095U / 8U || b[1].value > 4095U / 8U ||
             !minic_type_pointee(fn->values[b[0].value].type, &pointee) ||
-            !aarch64_stlr_type(pointee, width) ||
+            !aarch64_stlr_memory_type(pointee, width) ||
             !aarch64_stlr_type(fn->values[b[1].value].type, width))
             return false;
         /* LP64 Core SSA slots SP-relative; x9/x10 are AAPCS64 caller-saved.
