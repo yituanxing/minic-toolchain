@@ -28,6 +28,7 @@ on:
     branches: [refactor/minias-target-isa-abi-core]
     paths:
       - '.github/workflows/minias-linux-pinned-3x7-replay.yml'
+      - 'tools/ci/minias-linux-kbuild-seven-v1.py'
       - 'assembler/src/cfi.c'
       - 'assembler/src/debug_line.c'
       - 'assembler/src/aarch64_target.c'

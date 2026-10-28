@@ -243,6 +243,23 @@ def first_blocker_family(reason: str) -> str:
     return reason.split(":line=", 1)[0][:120]
 
 
+def first_blocker_context(assembly: bytes, diagnostic: str) -> tuple[int | None, list[str]]:
+    """Only preserve bounded ORIGINAL GNU source near the first error.
+
+    Every corpus owner and command are SHA-pinned, and this diagnostic
+    never reclassifies a failing object as assembled or GNU-parity proven.
+    """
+    match = re.search(r":line=(\d+)", diagnostic)
+    if match is None:
+        return None, []
+    line = int(match.group(1))
+    source = assembly.decode("utf-8", errors="replace").splitlines()
+    if line < 1 or line > len(source):
+        return line, []
+    lo, hi = max(1, line - 2), min(len(source), line + 2)
+    return line, [f"{i}:{source[i - 1].strip()[:180]}" for i in range(lo, hi + 1)]
+
+
 def scan(a: argparse.Namespace) -> None:
     p = pathlib.Path(a.archive)
     manifest, manifest_sha, selected = checked_shard(p, a.target, a.shard)
@@ -294,11 +311,16 @@ def scan(a: argparse.Namespace) -> None:
                 first = (diag.splitlines() or ["no-diagnostic"])[0]
                 first = re.sub(r":line=\d+", ":line=N", first)
                 reason = first.replace("minic-as: ", "")[:180]
+            blocker_line, source_excerpt = (
+                first_blocker_context(assembly_bytes, diag)
+                if state == "CANDIDATE_FAIL" else (None, []))
             rows.append({"index": index, "owner": r["owner"], "status": state,
                          "first_blocker": reason,
                          "first_blocker_family": (first_blocker_family(reason)
                                                   if state == "CANDIDATE_FAIL"
                                                   else "-"),
+                         "blocker_line": blocker_line,
+                         "source_excerpt": source_excerpt,
                          "exit_code": rc,
                          "diagnostic": diag[:2000]})
     status = Counter(r["status"] for r in rows)
@@ -386,6 +408,15 @@ def aggregate(a: argparse.Namespace) -> None:
             print(f"MINIAS_LINUX_S_BLOCKER target={target} n={count} cause={cause}")
         for family, count in families.most_common(30):
             print(f"MINIAS_LINUX_S_FAMILY target={target} n={count} cause={family}")
+        for record in rows:
+            if record["status"] != "CANDIDATE_FAIL":
+                continue
+            print(f"MINIAS_LINUX_S_OWNER target={target} "
+                  f"owner={record['owner']} line={record.get('blocker_line')} "
+                  f"root={record['first_blocker']}")
+            for source_line in record.get("source_excerpt", []):
+                print(f"MINIAS_LINUX_S_CONTEXT target={target} "
+                      f"owner={record['owner']} text={source_line}")
         for name, count in mnemonic_counts.most_common(30):
             print(f"MINIAS_LINUX_S_ISA target={target} mnemonic={name} uses={count}")
         for name, count in directive_counts.most_common(15):
