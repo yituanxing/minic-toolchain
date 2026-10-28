@@ -287,6 +287,9 @@ const MinicTargetInfo *minic_target_info_for_architecture(
              * Enable only RETURN level 0.  GCC FRAME builtin and unwinding
              * levels remain unsupported without x29 frame-chain ownership. */
             aarch64_target.call_frame_return_address_level0 = true;
+            /* Level-0 frame address is the current fixed AAPCS64 frame base,
+             * NOT a caller frame-chain unwind (which remains rejected). */
+            aarch64_target.call_frame_frame_address_level0 = true;
         }
         return &aarch64_target;
     }
@@ -310,6 +313,9 @@ const MinicTargetInfo *minic_target_info_for_architecture(
              * whenever it can be clobbered. No level>0 unwind or frame
              * address is implied by this capability. */
             loongarch64_target.call_frame_return_address_level0 = true;
+            /* Original LoongArch Linux stacktrace/process use level-0 SP:
+             * only a stable current frame base, never parent unwinding. */
+            loongarch64_target.call_frame_frame_address_level0 = true;
         }
         return &loongarch64_target;
     }

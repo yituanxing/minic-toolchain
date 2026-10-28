@@ -108,6 +108,15 @@ bool minic_aarch64_emit_residual_instruction(
              * this function replaces live x30, so non-leaf must fetch the
              * ENTRY return PC from its saved slot. Never counterfeit an
              * unwind of another frame. */
+            if (!dynamic_frame &&
+                minic_multi_direct_call_frame_level0_shape(
+                    fn, ins, MINIC_CORE_CALL_FRAME_ADDRESS_FRAME)) {
+                /* The fixed AAPCS64 frame has a stable 16-byte aligned SP.
+                 * The result denotes THIS frame, not x29's caller chain. */
+                if (fputs("  mov x9, sp\n", out) == EOF)
+                    return false;
+                break;
+            }
             if (dynamic_frame ||
                 !minic_multi_direct_call_frame_return_level0_shape(fn, ins) ||
                 (ctx->has_direct_calls &&

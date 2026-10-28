@@ -78,6 +78,11 @@ has src/target/x86_64/asm_contract.c '{"incq",8U,false,true}'
 has src/target/x86_64/asm_contract.h 'MINIC_X86_ATOMIC_RMW_LOCAL_DEC64'
 lacks src/core/core_lower_asm_target.c 'local_inc'
 
+# One shared Core frame-level-0 verifier, two target-owned SP machine forms;
+# level >0 and RISC-V/x86 frame ABI remain unchanged.
+has src/target/aarch64/residual_emit.c 'MINIC_CORE_CALL_FRAME_ADDRESS_FRAME'
+has src/target/loongarch64/residual_emit.c 'MINIC_CORE_CALL_FRAME_ADDRESS_FRAME'
+
 # Four ISA families, five target profiles: one storage-shape owner, distinct
 # physical ABIs. RV32 must never inherit the 8-byte LP64 word policy.
 exists src/target/common/aggregate_shape.h

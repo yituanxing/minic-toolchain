@@ -85,6 +85,15 @@ bool minic_loongarch64_emit_residual_instruction(
              * reads the live entry ra in leaf functions or the ABI-owned
              * saved copy after any CALL. Never return a local stack slot
              * address in place of the real caller's instruction pointer. */
+            if (!dynamic_frame &&
+                minic_multi_direct_call_frame_level0_shape(
+                    fn, ins, MINIC_CORE_CALL_FRAME_ADDRESS_FRAME)) {
+                /* LoongArch fixed frame has a stable SP until the epilogue.
+                 * Preserve ABI frame alignment; do not invent parent FP. */
+                if (fputs("  move $t0, $sp\n", out) == EOF)
+                    return false;
+                break;
+            }
             if (dynamic_frame ||
                 !minic_multi_direct_call_frame_return_level0_shape(fn, ins))
                 return minic_multi_direct_machine_reject(

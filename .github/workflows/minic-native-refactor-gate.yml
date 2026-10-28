@@ -128,6 +128,12 @@ jobs:
         run: |
           set -Eeuo pipefail
           bash tests/compiler/c0/probe-x86-linux-local-rmw.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+      - name: Original Linux level-zero frame builtin two target policy probes
+        run: |
+          set -Eeuo pipefail
+          for target in aarch64 loongarch64; do
+            MINIC_FRAME_SOURCE_ONLY=1 bash tests/compiler/c0/probe-direct-linux-frame-level0.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc" "$target"
+          done
       - name: Common GNU function metadata and inline-asm fail-closed regressions
         shell: bash
         run: |

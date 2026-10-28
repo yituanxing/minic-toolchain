@@ -546,6 +546,11 @@ jobs:
         run: |
           set -Eeuo pipefail
           bash tests/compiler/c0/probe-linux-global-section-reloc.sh "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc" "${{ matrix.target }}"
+      - name: Original Linux level-zero frame builtin GNU QEMU actual stack ABI
+        if: matrix.target == 'aarch64' || matrix.target == 'loongarch64'
+        run: |
+          set -Eeuo pipefail
+          bash tests/compiler/c0/probe-direct-linux-frame-level0.sh "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc" "${{ matrix.target }}"
       - name: Original Linux LoongArch no-operand DBAR real GNU QEMU
         if: matrix.target == 'loongarch64'
         shell: bash
