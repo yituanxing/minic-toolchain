@@ -312,7 +312,9 @@ static bool is_symbol_continue(char ch) {
     return is_symbol_start(ch) || isdigit((unsigned char)ch);
 }
 
-bool minias_parse_symbol_addend(const char *text, MiniAsSymbolExpr *expr) {
+static bool parse_symbol_addend_inner(const char *text,
+                                     MiniAsSymbolExpr *expr,
+                                     unsigned depth) {
     const char *p;
     const char *start;
     size_t length;
@@ -325,6 +327,39 @@ bool minias_parse_symbol_addend(const char *text, MiniAsSymbolExpr *expr) {
     p = text;
     while (*p == ' ' || *p == '\t') {
         ++p;
+    }
+    /* GNU GAS permits an entire symbol+constant expression enclosed in
+     * grouping parentheses. The same semantic Fixup/Addend grammar is
+     * used by every target, notably x86_64 addq $(symbol - 0xff...).
+     * Require that the outside ')' really matches the first '('; do not
+     * strip a grouping used only around one subexpression. */
+    if (*p == '(' && depth < 32U) {
+        size_t n = strlen(p), i;
+        unsigned nested = 0U;
+        bool outer = false;
+        while(n && isspace((unsigned char)p[n-1U])) --n;
+        if(n>=3U && p[n-1U]==')') {
+            for(i=0U;i<n;++i) {
+                if(p[i]=='(')++nested;
+                else if(p[i]==')') {
+                    if(nested==0U)break;
+                    if(--nested==0U) {
+                        outer=i==n-1U;
+                        break;
+                    }
+                }
+            }
+            if(outer) {
+                char *inner=malloc(n-1U);
+                bool ok;
+                if(!inner)return false;
+                memcpy(inner,p+1U,n-2U);
+                inner[n-2U]='\0';
+                ok=parse_symbol_addend_inner(inner,expr,depth+1U);
+                free(inner);
+                return ok;
+            }
+        }
     }
     if (!is_symbol_start(*p)) {
         return false;
@@ -364,4 +399,8 @@ bool minias_parse_symbol_addend(const char *text, MiniAsSymbolExpr *expr) {
     }
     expr->addend = (int64_t)addend_bits;
     return true;
+}
+
+bool minias_parse_symbol_addend(const char *text, MiniAsSymbolExpr *expr) {
+    return parse_symbol_addend_inner(text,expr,0U);
 }
