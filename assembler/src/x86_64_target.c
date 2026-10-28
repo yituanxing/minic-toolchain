@@ -347,6 +347,8 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         {"rdmsr",{0x0f,0x32},2},{"wrmsr",{0x0f,0x30},2},
         {"rdpmc",{0x0f,0x33},2},{"fninit",{0xdb,0xe3},2},
         {"xsetbv",{0x0f,0x01,0xd1},3},
+        {"xgetbv",{0x0f,0x01,0xd0},3},
+        {"vmcall",{0x0f,0x01,0xc1},3},
         {"fwait",{0x9b},1},{"wait",{0x9b},1},
         {"cltd",{0x99},1},{"cwtl",{0x98},1},
         {"stosl",{0xab},1},{"stosq",{0x48,0xab},2},
@@ -477,7 +479,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             "and","or","xor","push","pop",
             "shl","sal","shr","sar","rol","ror",
             "inc","dec","not","neg","mul","imul","div","idiv",
-            "bt","bts","btr","btc","xadd","cmpxchg"
+            "bt","bts","btr","btc","xadd","cmpxchg","shld","shrd"
         };
         bool alias=false;
         for(i=0U;i<sizeof(inferred)/sizeof(inferred[0]);++i)

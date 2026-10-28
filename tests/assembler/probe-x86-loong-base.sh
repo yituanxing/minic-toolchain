@@ -1725,6 +1725,40 @@ for bad in 'dec %ax,%dx' 'rdfsbase %ax' 'wrgsbase %r9w' \
     fi
 done
 echo 'MINIAS_X86_GNU_SYSTEM_UNARY=PASS AS_TEXT_BYTES_RELOC FSGSBASE_FXSAVE_DESCRIPTOR_WIDTH'
+
+# Common numeric-local reference rewriting must include GNU AT&T
+# $1f/$1b immediates, without rewriting digits within foo$1f symbols.
+# Same source, original GAS plus full text bytes and 32S reloc parity.
+cat > "$work/x86-local-immediate.s" <<'LOCAL_IMMEDIATE'
+.text
+  pushq $1f
+  pushq $(3*8)
+  pushq $(5*8+3)
+  movq $1f,%rdi
+  shrd $32,%rdx,%rax
+  xgetbv
+  vmcall
+1:
+  pushq $1b
+  ret
+LOCAL_IMMEDIATE
+"$MINIAS" --target=x86_64 -o "$work/x86-local-mini.o" "$work/x86-local-immediate.s"
+as --64 -o "$work/x86-local-gnu.o" "$work/x86-local-immediate.s"
+objcopy -j .text -O binary "$work/x86-local-mini.o" "$work/x86-local-mini.bin"
+objcopy -j .text -O binary "$work/x86-local-gnu.o" "$work/x86-local-gnu.bin"
+cmp "$work/x86-local-mini.bin" "$work/x86-local-gnu.bin"
+readelf -Wr "$work/x86-local-mini.o" > "$work/x86-local-mini-rel.txt"
+readelf -Wr "$work/x86-local-gnu.o" > "$work/x86-local-gnu-rel.txt"
+test "$(grep -c R_X86_64_32S "$work/x86-local-mini-rel.txt")" -eq 3
+test "$(grep -c R_X86_64_32S "$work/x86-local-gnu-rel.txt")" -eq 3
+for bad in 'pushq $9b' 'xgetbv %rax' 'shrd $32,%eax,%rax'; do
+    printf '.text\n%s\n' "$bad" > "$work/x86-local-invalid.s"
+    if "$MINIAS" --target=x86_64 -o "$work/x86-local-invalid.o" \
+        "$work/x86-local-invalid.s" >/dev/null 2>"$work/x86-local-invalid.err"; then
+        echo "invalid immediate or ISA accepted: $bad" >&2; exit 1
+    fi
+done
+echo 'MINIAS_X86_NUMERIC_IMM=PASS GNU_32S_RELOCS local_forward_backward pushq_arithmetic shrd_xgetbv_vmcall'
 echo 'MINIAS_COMMON_NUMERIC_U64=PASS GNU_GAS_x86_LA64_exact_data_bytes'
 echo 'MINIAS_X86_SEGMENTED_INDIRECT=PASS GNU_AS_text_and_relocations segment_base_index_abs_rip=true indirect_memory_call_jmp=true absolute_symbol32S=true'
 echo 'MINIAS_TWO_TARGET_ORACLE=PASS x86_GNU_bytes=equal loong_GNU_bytes=equal ELF_machine=correct lp64d_v1=0x43 CET_endbr64=1 ALU_imm8_imm32=1 x86_ModRM_SIB_disp=1 x86_test_cmp_alu_memory=1 x86_scaled_index_SIB=1 LA_jr=1 LA_scaled_ptr14=1 LA_imm12_shift_upper20=1 invalid=reject'
