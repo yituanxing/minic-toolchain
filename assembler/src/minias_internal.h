@@ -355,8 +355,6 @@ typedef struct MiniAs {
     uint32_t target_options;
     /* Opaque per-assembly backend parser state, owned and freed by Target. */
     void *target_state;
-    uint32_t target_option_stack[64];
-    size_t target_option_depth;
     bool cfi_active;
     bool cfi_signal_frame;
     bool cfi_debug_frame;

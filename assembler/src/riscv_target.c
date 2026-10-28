@@ -508,19 +508,19 @@ static bool riscv_target_directive(MiniAs *as, const char *op,
     } else if (strcmp(args, "norvc") == 0) {
         as->target_options |= 2U; /* Disable explicit C instructions. */
     } else if (strcmp(args, "push") == 0) {
-        if (as->target_option_depth >=
-            sizeof(as->target_option_stack) /
-                sizeof(as->target_option_stack[0])) {
+        if (MINIAS_RV_STATE(as)->option_depth >=
+            sizeof(MINIAS_RV_STATE(as)->option_stack) /
+                sizeof(MINIAS_RV_STATE(as)->option_stack[0])) {
             minias_set_error(as, "option-stack-overflow:line=%zu", line);
             return false;
         }
-        as->target_option_stack[as->target_option_depth++] = as->target_options;
+        MINIAS_RV_STATE(as)->option_stack[MINIAS_RV_STATE(as)->option_depth++] = as->target_options;
     } else if (strcmp(args, "pop") == 0) {
-        if (as->target_option_depth == 0U) {
+        if (MINIAS_RV_STATE(as)->option_depth == 0U) {
             minias_set_error(as, "option-stack-underflow:line=%zu", line);
             return false;
         }
-        as->target_options = as->target_option_stack[--as->target_option_depth];
+        as->target_options = MINIAS_RV_STATE(as)->option_stack[--MINIAS_RV_STATE(as)->option_depth];
     }
     return true;
 }

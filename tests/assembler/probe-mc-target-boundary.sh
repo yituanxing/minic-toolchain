@@ -26,4 +26,8 @@ for header in riscv_fixup_kinds.h aarch64_fixup_kinds.h \
 done
 grep -q 'minias_emit_instruction_bytes' assembler/src/assembler.c
 grep -q 'MiniAsTargetSiteState' assembler/src/minias_internal.h
+if grep -Eq '(strict_i_xlen|strict_rv64i|isa_explicit|isa_features|target_attributes|target_option_stack|target_option_depth)' assembler/src/minias_internal.h; then
+    echo 'RISC-V profile or option stack leaked into MC Core' >&2
+    exit 1
+fi
 echo 'MINIAS_MC_TARGET_BOUNDARY=PASS ISA_fixups=private target_bytes=fragment_owned site=immutable'

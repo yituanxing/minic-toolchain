@@ -4,6 +4,8 @@
 #include "riscv_fixup_kinds.h"
 
 #include <stdbool.h>
+#include <stdint.h>
+#include <stddef.h>
 
 #define MINIAS_RISCV_OPTION_PIC 1U
 
@@ -17,6 +19,9 @@ typedef struct MiniAsRiscvState {
     uint64_t isa_features;
     unsigned char target_attributes[512];
     size_t target_attributes_size;
+    /* GNU RISC-V .option push/pop is target-local, never shared state. */
+    uint32_t option_stack[64];
+    size_t option_depth;
 } MiniAsRiscvState;
 
 /* Typed target-private accessor; avoids RISC-V downcasts in MC Core. */
