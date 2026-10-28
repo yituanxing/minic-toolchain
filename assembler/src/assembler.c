@@ -1235,7 +1235,14 @@ static bool parse_type(MiniAs *as, char *args, size_t line) {
         symbol->type=MINIAS_STT_TLS;
     } else if(strcmp(kind,"@common")==0 || strcmp(kind,"%common")==0 ||
               strcmp(kind,"STT_COMMON")==0) {
-        symbol->type=MINIAS_STT_COMMON;
+        /* GAS treats @common as STT_OBJECT + GLOBAL binding, not as
+         * an ELF STT_COMMON (5) symbol. This is observable in symtab. */
+        symbol->type=MINIAS_STT_OBJECT;
+        symbol->bind=MINIAS_STB_GLOBAL;
+    } else if(strcmp(kind,"@gnu_unique_object")==0 ||
+              strcmp(kind,"%gnu_unique_object")==0) {
+        symbol->type=MINIAS_STT_OBJECT;
+        symbol->bind=MINIAS_STB_GNU_UNIQUE;
     } else if(strcmp(kind,"@gnu_indirect_function")==0 ||
               strcmp(kind,"%gnu_indirect_function")==0 ||
               strcmp(kind,"STT_GNU_IFUNC")==0) {

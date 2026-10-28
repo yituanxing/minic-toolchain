@@ -3530,6 +3530,8 @@ ifunc_impl: ret
 regular_func: ret
 .type common_typed,@common
 common_typed: ret
+.type unique_typed,@gnu_unique_object
+unique_typed: ret
 X86_TLS_IFUNC
 "$MINIAS" --target=x86_64 -o "$work/x86-tls-ifunc-mini.o" "$work/x86-tls-ifunc-selfaudit.s"
 as --64 -o "$work/x86-tls-ifunc-gnu.o" "$work/x86-tls-ifunc-selfaudit.s"
@@ -3543,7 +3545,7 @@ for section in .tdata .tbss .tdata.explicit .tbss.explicit; do
 done
 for flavor in mini gnu; do
   readelf -Ws "$work/x86-tls-ifunc-$flavor.o" |
-   awk '/tls_implicit|tls_bss|tls_explicit|ifunc_impl|regular_func|common_typed/ {print $4,$5,$8}' |
+   awk '/tls_implicit|tls_bss|tls_explicit|ifunc_impl|regular_func|common_typed|unique_typed/ {print $4,$5,$8}' |
    LC_ALL=C sort > "$work/x86-symbol-types-$flavor.txt"
 done
 diff -u "$work/x86-symbol-types-gnu.txt" "$work/x86-symbol-types-mini.txt"
