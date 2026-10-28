@@ -459,6 +459,11 @@ jobs:
           set -Eeuo pipefail
           sh tests/compiler/c0/probe-four-backend-dynamic-stack.sh \
             aarch64 aarch64-linux-gnu-gcc qemu-aarch64 /usr/aarch64-linux-gnu
+      - name: Original Linux AArch64 sysreg MRS unsigned 64-bit GNU GAS differential
+        if: matrix.target == 'aarch64'
+        run: |
+          set -Eeuo pipefail
+          bash tests/compiler/c0/probe-aarch64-linux-sysreg64.sh "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
       - name: AArch64 Linux NZCV GNU-ASM contract, independent GNU/QEMU oracle
         if: matrix.target == 'aarch64'
         shell: bash

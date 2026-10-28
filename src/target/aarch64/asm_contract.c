@@ -52,6 +52,15 @@ static bool mask_template(const char *text, size_t len) {
     norm[n] = '\0';
     return strcmp(norm, expected) == 0;
 }
+/* The genuine 6.6.143 sysreg.h read_sysreg macro uses u64 (usually
+ * unsigned long long), while local IRQ flags and pointer-sized values
+ * are unsigned long. Both are exactly 64-bit AAPCS64 GP values. Share
+ * one *target-owned* type gate for source and machine qualification. */
+static bool aarch64_linux_sysreg_u64_type(MinicType type) {
+    return minic_type_equal(type, minic_type_unsigned_long()) ||
+           minic_type_equal(type, minic_type_unsigned_long_long());
+}
+
 /* Exact original Linux 6.6.143 MRS register read family. These privileged
  * system registers can be assembled for EL1; do not user-mode QEMU execute
  * them and never turn this into arbitrary template passthrough. */
@@ -1168,7 +1177,7 @@ bool minic_aarch64_qualify_inline_asm(
         if (expr && expr->value_category == MINIC_VALUE_LVALUE &&
             !minic_type_is_const(expr->type) &&
             minic_type_unqualified(expr->type, &plain) &&
-            minic_type_equal(plain, minic_type_unsigned_long())) {
+            aarch64_linux_sysreg_u64_type(plain)) {
             contract->operand_count = 1U;
             contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
             return true;
@@ -1187,7 +1196,7 @@ bool minic_aarch64_qualify_inline_asm(
         constraint(&src->outputs[0], "=r")) {
         expr = minic_c0_program_expression(program, src->outputs[0].expression);
         if (expr && minic_type_unqualified(expr->type, &plain) &&
-            minic_type_equal(plain, minic_type_unsigned_long()) &&
+            aarch64_linux_sysreg_u64_type(plain) &&
             expr->value_category == MINIC_VALUE_LVALUE &&
             !minic_type_is_const(expr->type)) {
             contract->operand_count = 1U;
@@ -1360,7 +1369,7 @@ bool minic_aarch64_emit_qualified_structured_asm(
             operand[0].value >= fn->value_count ||
             operand[0].value > (size_t)4095U / 8U ||
             !minic_type_pointee(fn->values[operand[0].value].type, &pointee) ||
-            !minic_type_equal(pointee, minic_type_unsigned_long()))
+            !aarch64_linux_sysreg_u64_type(pointee))
             return false;
         /* The output SSA operand is an address. The backend reads the real
          * privileged register into an internal GPR and stores the exact LP64

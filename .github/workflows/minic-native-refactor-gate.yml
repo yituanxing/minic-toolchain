@@ -103,6 +103,10 @@ jobs:
             -Isrc -Iinclude tests/compiler/c0/probe-core-semantic-family.c \
             -o "$RUNNER_TEMP/minic-core-semantic-family"
           "$RUNNER_TEMP/minic-core-semantic-family"
+      - name: Exact original Linux AArch64 MRS u64 ABI family and negative target qualification
+        run: |
+          set -Eeuo pipefail
+          MINIC_SYSREG_NATIVE_ONLY=1 bash tests/compiler/c0/probe-aarch64-linux-sysreg64.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
       - name: Strictly compile all MiniC targets without apt or QEMU prerequisites
         shell: bash
         run: |

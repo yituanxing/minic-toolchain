@@ -55,6 +55,12 @@ lacks src/target/common/core_object_intervals.c 'Allocation or malformed-index f
 has src/target/common/core_spill_layout.c \
   'cached_slot_sizes[value_id] = *slot_size;'
 
+# Real GNU ARM64 sysreg output is u64 (unsigned long long); both source
+# admission and actual machine writeback must share ONE target-owned type gate.
+has src/target/aarch64/asm_contract.c 'aarch64_linux_sysreg_u64_type('
+has src/target/aarch64/asm_contract.c '!aarch64_linux_sysreg_u64_type(pointee)'
+lacks src/core/core_lower_asm_target.c 'mrs x9, daif'
+
 # Four ISA families, five target profiles: one storage-shape owner, distinct
 # physical ABIs. RV32 must never inherit the 8-byte LP64 word policy.
 exists src/target/common/aggregate_shape.h
