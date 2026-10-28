@@ -449,6 +449,176 @@ static bool collect_out_of_range_branches(MiniAs *as,
     return true;
 }
 
+/* MCLayout is also the final semantic authority before any target
+ * emits machine bytes. Confirm that subsection concatenation exactly
+ * reproduces every stable Fragment placement and that alignment, DATA
+ * width and end anchors cannot drift between fixed-point and output.
+ *
+ * This is intentionally target-free: a new backend gets the same layout
+ * proof, not a copy of an ISA-specific padding/offset validator.
+ */
+static bool minias_validate_fragment_layout(MiniAs *as) {
+    MiniAsAnchorGraph *graph=(MiniAsAnchorGraph *)as->layout_anchor_graph;
+    uint64_t *cursor=NULL;
+    size_t i;
+    bool ok=false;
+    if(as->subsection_count>SIZE_MAX/sizeof(uint64_t)) {
+        minias_set_error(as,"fragment-validate-capacity-overflow");
+        return false;
+    }
+    cursor=calloc(as->subsection_count?as->subsection_count:1U,
+                  sizeof(*cursor));
+    if(!cursor) {
+        minias_set_error(as,"out-of-memory:validate-fragment-layout");
+        return false;
+    }
+    for(i=0U;i<=as->stmt_count;++i) {
+        size_t k;
+        /* Symbol anchors must be checked before the next Fragment advances
+         * its subsection cursor; this also covers trailing section labels. */
+        if(graph!=NULL) {
+            size_t symbol;
+            for(symbol=graph->start_head[i];symbol!=SIZE_MAX;
+                symbol=graph->start_next[symbol]) {
+                const MiniAsSymbol *sym=&as->symbols[symbol];
+                MiniAsSubsection *sub=minias_find_subsection(
+                    as,sym->section,sym->subsection);
+                size_t sub_index;
+                uint64_t expected;
+                if(!sub) {
+                    minias_set_error(as,"fragment-symbol-subsection-missing:%s",
+                                     sym->name);
+                    goto done;
+                }
+                sub_index=(size_t)(sub-as->subsections);
+                if(cursor[sub_index]>UINT64_MAX-sub->base) {
+                    minias_set_error(as,"fragment-symbol-offset-overflow:%s",
+                                     sym->name);
+                    goto done;
+                }
+                expected=sub->base+cursor[sub_index];
+                if(sym->value!=expected) {
+                    minias_set_error(as,
+                                     "fragment-symbol-anchor-drift:%s:expected=%llu:actual=%llu",
+                                     sym->name,
+                                     (unsigned long long)expected,
+                                     (unsigned long long)sym->value);
+                    goto done;
+                }
+            }
+        }
+        if(i==as->stmt_count)break;
+        {
+            const MiniAsStmt *stmt=&as->stmts[i];
+            MiniAsSubsection *sub=minias_find_subsection(
+                as,stmt->section,stmt->subsection);
+            size_t sub_index;
+            uint64_t expected;
+            if(!sub) {
+                minias_set_error(as,"fragment-subsection-missing:line=%zu",
+                                 stmt->line);
+                goto done;
+            }
+            sub_index=(size_t)(sub-as->subsections);
+            if(cursor[sub_index]>UINT64_MAX-sub->base) {
+                minias_set_error(as,"fragment-offset-overflow:line=%zu",
+                                 stmt->line);
+                goto done;
+            }
+            expected=sub->base+cursor[sub_index];
+            if(expected!=stmt->offset) {
+                minias_set_error(as,
+                                 "fragment-offset-drift:line=%zu:expected=%llu:actual=%llu",
+                                 stmt->line,
+                                 (unsigned long long)expected,
+                                 (unsigned long long)stmt->offset);
+                goto done;
+            }
+            if(stmt->kind==MINIAS_STMT_ALIGN &&
+               strcmp(stmt->op,".org")!=0) {
+                uint64_t alignment=stmt->align,padding;
+                if(alignment==0U || (alignment&(alignment-1U))!=0U) {
+                    minias_set_error(as,"invalid-layout-alignment:line=%zu",
+                                     stmt->line);
+                    goto done;
+                }
+                padding=(alignment-(cursor[sub_index]&(alignment-1U)))&
+                        (alignment-1U);
+                if(stmt->align_has_max_skip &&
+                   padding>stmt->align_max_skip)padding=0U;
+                if(padding!=stmt->size) {
+                    minias_set_error(as,"fragment-alignment-drift:line=%zu",
+                                     stmt->line);
+                    goto done;
+                }
+            }
+            if(stmt->variable_data_resolved &&
+               (strcmp(stmt->op,".fill")==0 ||
+                strcmp(stmt->op,".space")==0 ||
+                strcmp(stmt->op,".skip")==0 ||
+                strcmp(stmt->op,".zero")==0)) {
+                uint64_t count=stmt->variable_repeat;
+                unsigned width=stmt->variable_element_width;
+                if(width>8U || (width!=0U &&
+                   (count>UINT32_MAX/width ||
+                    count*(uint64_t)width!=stmt->size)) ||
+                   (width==0U && stmt->size!=0U)) {
+                    minias_set_error(as,
+                                     "fragment-variable-width-drift:line=%zu",
+                                     stmt->line);
+                    goto done;
+                }
+            }
+            if(stmt->size>UINT64_MAX-cursor[sub_index]) {
+                minias_set_error(as,"fragment-size-overflow:line=%zu",
+                                 stmt->line);
+                goto done;
+            }
+            cursor[sub_index]+=stmt->size;
+        }
+    }
+    for(i=0U;i<as->subsection_count;++i) {
+        const MiniAsSubsection *sub=&as->subsections[i];
+        if(cursor[i]!=sub->size) {
+            minias_set_error(as,
+                             "fragment-subsection-size-drift:section=%d:sub=%u",
+                             sub->section,(unsigned)sub->number);
+            goto done;
+        }
+    }
+    /* Ensure final sections do not overlap/overflow the accumulated
+     * subsections; different source-order subsections are concatenated by
+     * their numeric index, never by the time they were first encountered. */
+    for(i=0U;i<as->section_count;++i) {
+        size_t k;
+        uint64_t end=0U;
+        for(k=0U;k<as->subsection_count;++k) {
+            const MiniAsSubsection *sub=&as->subsections[k];
+            if(sub->section!=(int)i)continue;
+            if(sub->base>end) {
+                minias_set_error(as,"fragment-section-hole:%s",
+                                 as->sections[i].name);
+                goto done;
+            }
+            if(sub->size>UINT64_MAX-sub->base) {
+                minias_set_error(as,"fragment-section-overflow:%s",
+                                 as->sections[i].name);
+                goto done;
+            }
+            if(sub->base+sub->size>end)end=sub->base+sub->size;
+        }
+        if(end!=as->sections[i].layout_size) {
+            minias_set_error(as,"fragment-section-layout-drift:%s",
+                             as->sections[i].name);
+            goto done;
+        }
+    }
+    ok=true;
+done:
+    free(cursor);
+    return ok;
+}
+
 /* One persistent MCFragment fixed point; Target only owns the branch
  * range predicate and its expansion size. Common owns every label anchor,
  * subsection, deferred DATA fragment and alignment adjustment.
@@ -516,6 +686,7 @@ bool minias_solve_fragment_layout(MiniAs *as,
             return false;
         }
     }
+    if(!minias_validate_fragment_layout(as))return false;
     if(diagnostic!=NULL && getenv("MINIAS_TRACE_RELAYOUT")!=NULL) {
         const MiniAsAnchorGraph *g=
             (const MiniAsAnchorGraph *)as->layout_anchor_graph;

@@ -16,6 +16,7 @@ trap 'echo "RELAX_STRESS_FAIL command=$BASH_COMMAND" >&2; test ! -f "$work/trace
         echo 'je branch_exit'
         echo '.space 16,0x90'
     done
+    echo '.size branch_entry,.-branch_entry'
     echo '.subsection 1'
     echo 'branch_exit:'
     echo 'nop'
@@ -26,6 +27,39 @@ as --64 -o "$work/gnu.o" "$work/stress.s"
 objcopy -j .text -O binary "$work/mini.o" "$work/mini.bin"
 objcopy -j .text -O binary "$work/gnu.o" "$work/gnu.bin"
 cmp "$work/mini.bin" "$work/gnu.bin"
+readelf -Ws "$work/mini.o" | grep ' branch_entry
+python3 - "$work/trace" <<'PY'
+import pathlib,re,sys
+s=pathlib.Path(sys.argv[1]).read_text()
+if 'minias-fragment-relayout:inplace-passes=' not in s:
+    raise SystemExit('Expected in-place branch relaxation: '+s)
+m=re.search(r'minias-fragment-graph:anchors_built=1 relayouts=(\d+) branches=(\d+) reparse=0',s)
+if not m or int(m.group(2))<100:
+    raise SystemExit('Expected cached graph and 100+ branch expansions: '+s)
+print('MINIAS_MCLAYOUT_STRESS=PASS branches='+m.group(2)+' relayouts='+m.group(1))
+PY
+ >"$work/mini.symbol"
+readelf -Ws "$work/gnu.o" | grep ' branch_entry
+python3 - "$work/trace" <<'PY'
+import pathlib,re,sys
+s=pathlib.Path(sys.argv[1]).read_text()
+if 'minias-fragment-relayout:inplace-passes=' not in s:
+    raise SystemExit('Expected in-place branch relaxation: '+s)
+m=re.search(r'minias-fragment-graph:anchors_built=1 relayouts=(\d+) branches=(\d+) reparse=0',s)
+if not m or int(m.group(2))<100:
+    raise SystemExit('Expected cached graph and 100+ branch expansions: '+s)
+print('MINIAS_MCLAYOUT_STRESS=PASS branches='+m.group(2)+' relayouts='+m.group(1))
+PY
+ >"$work/gnu.symbol"
+python3 - "$work/mini.symbol" "$work/gnu.symbol" <<'PY_SYMBOL'
+import sys
+def size(path):
+    columns=open(path,encoding="utf-8").read().split()
+    return (int(columns[1],16),int(columns[2]))
+if size(sys.argv[1])!=size(sys.argv[2]):
+    raise SystemExit("MCLayout symbol value/size disagree with GNU")
+print("MINIAS_MCLAYOUT_SYMBOL_SIZE=PASS exact_GNU_value_and_size")
+PY_SYMBOL
 python3 - "$work/trace" <<'PY'
 import pathlib,re,sys
 s=pathlib.Path(sys.argv[1]).read_text()

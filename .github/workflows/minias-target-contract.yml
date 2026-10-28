@@ -31,6 +31,8 @@ jobs:
           test -x build/release/bin/minic-as
       - name: Enforce ISA-private fixup and MC emission ownership
         run: bash tests/assembler/probe-mc-target-boundary.sh
+      - name: Verify MCLayout validates source-ordered fragments and stable anchors
+        run: grep -q "minias_validate_fragment_layout" assembler/src/mc_layout.c
       - name: Stress persistent MCLayout with 160 x86 long-branch expansions
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
