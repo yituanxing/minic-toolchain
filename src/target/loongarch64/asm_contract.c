@@ -501,9 +501,23 @@ static MinicLoongPerCpuIndexedForm loong_percpu_indexed_form(
         compact[n++] = c;
     }
     compact[n] = '\0';
-    for (i = 0U; i < sizeof(words)/sizeof(words[0]); ++i)
-        if (strcmp(compact, words[i]) == 0)
+    /* Shared Core canonicalizes GNU named slots to %0/%1, but the
+     * target must also qualify ORIGINAL named source templates. Both
+     * forms name exactly the same two typed operand roles. */
+    for (i = 0U; i < sizeof(words)/sizeof(words[0]); ++i) {
+        char numeric[48];
+        const bool read = i < 4U;
+        const char *const name = i < 4U ?
+            (i == 0U ? "ldx.b" : i == 1U ? "ldx.h" :
+             i == 2U ? "ldx.w" : "ldx.d") :
+            (i == 4U ? "stx.b" : i == 5U ? "stx.h" :
+             i == 6U ? "stx.w" : "stx.d");
+        if (strcmp(compact, words[i]) == 0) return (MinicLoongPerCpuIndexedForm)(i + 1U);
+        if (snprintf(numeric,sizeof(numeric), "%s%%0,$r21,%%1",name) > 0 &&
+            strcmp(compact,numeric) == 0)
             return (MinicLoongPerCpuIndexedForm)(i + 1U);
+        (void)read;
+    }
     return LOONG_PERCPU_NONE;
 }
 static bool loong_percpu_indexed_source(
@@ -565,7 +579,8 @@ static bool loong_percpu_indexed_emit(
         ins->value.structured_inline_asm.operand_count != 2U) return false;
     for (i = 0U; i < 2U; ++i)
         if (b[i].operand_index != i || b[i].value >= fn->value_count ||
-            b[i].early_clobber || b[i].has_fixed_register_binding ||
+            (b[i].early_clobber && !(read && i == 0U)) ||
+            b[i].has_fixed_register_binding ||
             b[i].kind != (read && i == 0U
                 ? MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT
                 : MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT))
@@ -617,8 +632,13 @@ static size_t loong_percpu_amo_form(const char *text, size_t length) {
         compact[n++]=c;
     }
     compact[n]='\0';
-    for (i=0U;i<sizeof(loong_percpu_amo)/sizeof(loong_percpu_amo[0]);++i)
+    for (i=0U;i<sizeof(loong_percpu_amo)/sizeof(loong_percpu_amo[0]);++i) {
+        char numeric[64];
         if(strcmp(compact,loong_percpu_amo[i].compact)==0)return i;
+        if(snprintf(numeric,sizeof(numeric),"%s%%0,%%2,%%1",
+                    loong_percpu_amo[i].mnemonic)>0 &&
+           strcmp(compact,numeric)==0)return i;
+    }
     return SIZE_MAX;
 }
 static bool loong_percpu_amo_memory_type(MinicType type,size_t width) {
@@ -682,7 +702,8 @@ static bool loong_percpu_amo_emit(
         return false;
     for(i=0U;i<3U;++i)
         if(b[i].operand_index!=i||b[i].value>=fn->value_count||
-           b[i].early_clobber||b[i].has_fixed_register_binding||
+           (b[i].early_clobber && i!=0U)||
+           b[i].has_fixed_register_binding||
            b[i].kind!=(i==0U?MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT:
                         i==1U?MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE:
                               MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT))
