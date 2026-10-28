@@ -7,6 +7,21 @@
 
 #define MINIAS_RISCV_OPTION_PIC 1U
 
+/* TargetContext: RISC-V ISA/ABI/attribute data never belongs to Common.
+ * RV32 and RV64 are profiles of this single Target, not separate assemblers. */
+typedef struct MiniAsRiscvState {
+    bool strict_rv64i;
+    unsigned strict_i_xlen;
+    bool isa_explicit;
+    unsigned target_xlen;
+    uint64_t isa_features;
+    unsigned char target_attributes[512];
+    size_t target_attributes_size;
+} MiniAsRiscvState;
+
+/* Typed target-private accessor; avoids RISC-V downcasts in MC Core. */
+#define MINIAS_RV_STATE(as) ((MiniAsRiscvState *)((as)->target_state))
+
 /* Shared target-owned MC opcode families: used by parser, encoder and
  * relaxation without any mnemonic parsing in the common assembler. */
 enum MiniAsRiscvMCFamily {

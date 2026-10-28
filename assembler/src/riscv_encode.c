@@ -835,7 +835,7 @@ bool minias_riscv_measure_mcinst(MiniAs *as, const MiniAsStmt *stmt,
             uint64_t bits = m->operands[1].immediate;
             const int64_t signed_value = (int64_t)m->operands[2].immediate;
             const bool fits_signed32 = m->encoding != 0U;
-            if (as->target_xlen == 32U) {
+            if (MINIAS_RV_STATE(as)->target_xlen == 32U) {
                 int64_t value, hi, lo;
                 if (!rv32_li_value(bits, &value)) {
                     minias_set_error(as,
@@ -1517,7 +1517,7 @@ bool minias_riscv_parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
                           strcmp(op,"sra")==0);
             if (shift) {
                 int max = ((encoding & 0x7fU) == 0x1bU ||
-                           as->target_xlen == 32U) ? 31 : 63;
+                           MINIAS_RV_STATE(as)->target_xlen == 32U) ? 31 : 63;
                 if (imm < 0 || imm > max) goto invalid;
             } else if ((strcmp(op, "orc.b") != 0) &&
                        (strcmp(op, "rev8") != 0) &&
@@ -1675,7 +1675,7 @@ static bool rv_encode_multi_mc(MiniAs *as, const MiniAsStmt *stmt) {
         int64_t signed_value = (int64_t)m->operands[2].immediate;
         bool fits_signed32 = m->encoding != 0U;
         int rd = (int)m->operands[0].reg;
-        if (as->target_xlen == 32U) {
+        if (MINIAS_RV_STATE(as)->target_xlen == 32U) {
             int64_t rv32_value, hi, lo;
             if (!rv32_li_value(bits, &rv32_value)) {
                 minias_set_error(as, "rv32i-li-overflows-32-bits:line=%zu",

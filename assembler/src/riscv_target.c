@@ -144,8 +144,8 @@ static bool strict_base_i_word(uint32_t w, unsigned xlen) {
 
 static bool strict_base_i_check_sections(MiniAs *as) {
     size_t i;
-    if (as->strict_i_xlen == 0U) return true;
-    if (as->strict_i_xlen != 32U && as->strict_i_xlen != 64U) {
+    if (MINIAS_RV_STATE(as)->strict_i_xlen == 0U) return true;
+    if (MINIAS_RV_STATE(as)->strict_i_xlen != 32U && MINIAS_RV_STATE(as)->strict_i_xlen != 64U) {
         minias_set_error(as, "unsupported-strict-riscv-xlen");
         return false;
     }
@@ -155,17 +155,17 @@ static bool strict_base_i_check_sections(MiniAs *as) {
         if ((section->flags & MINIAS_SHF_EXECINSTR) == 0U) continue;
         if (section->size % 4U != 0U) {
             minias_set_error(as, "rv%ui-unaligned-executable-section:%s",
-                             as->strict_i_xlen, section->name);
+                             MINIAS_RV_STATE(as)->strict_i_xlen, section->name);
             return false;
         }
         for (offset = 0U; offset < section->size; offset += 4U) {
             const unsigned char *p = section->data + offset;
             uint32_t w = (uint32_t)p[0] | ((uint32_t)p[1] << 8U) |
                          ((uint32_t)p[2] << 16U) | ((uint32_t)p[3] << 24U);
-            if (!strict_base_i_word(w, as->strict_i_xlen)) {
+            if (!strict_base_i_word(w, MINIAS_RV_STATE(as)->strict_i_xlen)) {
                 minias_set_error(as,
                                  "rv%ui-unsupported-machine-encoding:%s:offset=%zu:word=%08x",
-                                 as->strict_i_xlen, section->name, offset, (unsigned)w);
+                                 MINIAS_RV_STATE(as)->strict_i_xlen, section->name, offset, (unsigned)w);
                 return false;
             }
         }
@@ -273,7 +273,7 @@ static bool riscv_validate_selected_isa(const MiniAs *as, const char *op,
     uint64_t bits;
     /* Strict base-I retains the exhaustive post-encoding word validator,
      * including its established machine-encoding error diagnostics. */
-    if (!as->isa_explicit || as->strict_i_xlen != 0U) return true;
+    if (!MINIAS_RV_STATE(as)->isa_explicit || MINIAS_RV_STATE(as)->strict_i_xlen != 0U) return true;
     if (strcmp(op, ".insn") == 0) {
         (void)snprintf(reason, cap, "unsupported-isa-escape:.insn");
         return false;
@@ -284,7 +284,7 @@ static bool riscv_validate_selected_isa(const MiniAs *as, const char *op,
         return false;
     }
     if (bits == UINT64_MAX || (bits != 0U &&
-        (as->isa_features & bits) != bits)) {
+        (MINIAS_RV_STATE(as)->isa_features & bits) != bits)) {
         (void)snprintf(reason, cap, "unsupported-isa-feature:%s", op);
         return false;
     }
@@ -296,12 +296,12 @@ static bool riscv_validate_instruction(const MiniAs *as,
     /* Machine feature checks must precede MCInst parsing, but operand
      * decoding and sizing are exclusively the target MCInst hooks. */
     if (!riscv_validate_selected_isa(as, op, reason, cap)) return false;
-    if (as->isa_explicit && as->target_xlen == 32U &&
+    if (MINIAS_RV_STATE(as)->isa_explicit && MINIAS_RV_STATE(as)->target_xlen == 32U &&
         is_rv64_only_opcode(op)) {
         (void)snprintf(reason, cap, "riscv32-unsupported-opcode:%s", op);
         return false;
     }
-    if (as->isa_explicit && (as->isa_features & RISCV_ISA_E) &&
+    if (MINIAS_RV_STATE(as)->isa_explicit && (MINIAS_RV_STATE(as)->isa_features & RISCV_ISA_E) &&
         !rv32e_operands_valid(args)) {
         (void)snprintf(reason, cap, "riscv32e-invalid-register:%s", op);
         return false;
@@ -321,7 +321,7 @@ static bool riscv_validate_common_directive(MiniAs *as, const char *op,
         ".zero", ".space", ".asciz", ".string", ".ascii", ".incbin"
     };
     size_t i;
-    if (!as->strict_rv64i ||
+    if (!MINIAS_RV_STATE(as)->strict_rv64i ||
         (as->sections[(size_t)as->current_section].flags &
          MINIAS_SHF_EXECINSTR) == 0U) return true;
     if (strcmp(op, ".org") == 0) {
@@ -347,8 +347,8 @@ static bool riscv_validate_common_directive(MiniAs *as, const char *op,
  * conflicting/unsupported attributes instead of silently ignoring them. */
 static bool riscv_set_numeric_attribute(MiniAs *as, unsigned tag,
                                         unsigned value, size_t line) {
-    unsigned char *buf = as->target_attributes;
-    size_t n = as->target_attributes_size;
+    unsigned char *buf = MINIAS_RV_STATE(as)->target_attributes;
+    size_t n = MINIAS_RV_STATE(as)->target_attributes_size;
     size_t arch, pos;
     uint32_t subsection_size, file_size;
     unsigned i;
@@ -377,7 +377,7 @@ static bool riscv_set_numeric_attribute(MiniAs *as, unsigned tag,
         if (buf[pos + 1U] != (unsigned char)value) goto conflict;
         return true;
     }
-    if (n + 2U > sizeof(as->target_attributes)) {
+    if (n + 2U > sizeof(MINIAS_RV_STATE(as)->target_attributes)) {
         minias_set_error(as, "riscv-attribute-overflow:line=%zu", line);
         return false;
     }
@@ -398,7 +398,7 @@ static bool riscv_set_numeric_attribute(MiniAs *as, unsigned tag,
         return false;
     }
     n += 2U;
-    as->target_attributes_size = n;
+    MINIAS_RV_STATE(as)->target_attributes_size = n;
     subsection_size = (uint32_t)(n - 1U);
     file_size = (uint32_t)(n - 11U);
     for (i = 0U; i < 4U; ++i) {
@@ -417,8 +417,8 @@ static bool riscv_assemble_attribute(MiniAs *as, const char *args, size_t line) 
     const char *front, *back;
     size_t len;
     unsigned long number;
-    unsigned char *attr = as->target_attributes;
-    size_t n = as->target_attributes_size;
+    unsigned char *attr = MINIAS_RV_STATE(as)->target_attributes;
+    size_t n = MINIAS_RV_STATE(as)->target_attributes_size;
     size_t arch, start, finish;
     if (comma == NULL) goto invalid;
     front = args;
@@ -478,20 +478,20 @@ static bool riscv_target_directive(MiniAs *as, const char *op,
         *handled = true;
         return riscv_assemble_attribute(as, args, line);
     }
-    if (as->strict_rv64i && strcmp(op, ".insn") == 0) {
+    if (MINIAS_RV_STATE(as)->strict_rv64i && strcmp(op, ".insn") == 0) {
         minias_set_error(as, "unsupported-isa-escape:.insn:line=%zu", line);
         return false;
     }
     if (strcmp(op, ".option") != 0) return true;
     *handled = true;
-    if (as->isa_explicit &&
+    if (MINIAS_RV_STATE(as)->isa_explicit &&
         strcmp(args, "pic") != 0 && strcmp(args, "nopic") != 0 &&
         strcmp(args, "push") != 0 && strcmp(args, "pop") != 0 &&
         strcmp(args, "norvc") != 0) {
         minias_set_error(as, "unsupported-isa-option:%s:line=%zu", args, line);
         return false;
     }
-    if (as->strict_rv64i &&
+    if (MINIAS_RV_STATE(as)->strict_rv64i &&
         strcmp(args, "pic") != 0 && strcmp(args, "nopic") != 0 &&
         strcmp(args, "push") != 0 && strcmp(args, "pop") != 0 &&
         strcmp(args, "norvc") != 0 && strcmp(args, "norelax") != 0 &&
@@ -531,11 +531,11 @@ static void riscv_object_attributes(const MiniAs *as, unsigned char elf_class,
                                     MiniAsObjectAttribute *out) {
     (void)elf_class;
     memset(out, 0, sizeof(*out));
-    if (as->target_attributes_size != 0U) {
+    if (MINIAS_RV_STATE(as)->target_attributes_size != 0U) {
         out->name = ".riscv.attributes";
         out->type = UINT32_C(0x70000003);
-        out->data = as->target_attributes;
-        out->size = as->target_attributes_size;
+        out->data = MINIAS_RV_STATE(as)->target_attributes;
+        out->size = MINIAS_RV_STATE(as)->target_attributes_size;
     }
 }
 
@@ -602,17 +602,83 @@ static bool riscv_resolve_profile(const char *march, const char *mabi,
     config->target = minias_target_riscv();
     config->elf32 = profile.elf32;
     config->elf_flags = profile.elf_flags;
-    config->strict_i_xlen = profile.strict_i_xlen;
-    config->isa_explicit = profile.explicit_isa;
-    config->isa_features = profile.features;
-    config->target_attributes_size = profile.arch_attribute_size;
-    memcpy(config->target_attributes, profile.arch_attribute,
-           profile.arch_attribute_size);
+    if (sizeof(profile) > sizeof(config->target_profile)) {
+        (void)snprintf(error, capacity, "riscv-target-profile-overflow");
+        return false;
+    }
+    memcpy(config->target_profile, &profile, sizeof(profile));
+    config->target_profile_size = sizeof(profile);
     return true;
+}
+
+/* An opaque config blob belongs to this target; Common neither interprets
+ * ISA features nor stores RISC-V-specific strict-mode or psABI fields. */
+static bool riscv_init_target_state(MiniAs *as,
+                                    const MiniAsAssemblyConfig *config) {
+    MiniAsRiscvState *state;
+    MiniAsRiscvProfile profile;
+    if (config->target_profile_size != 0U &&
+        config->target_profile_size != sizeof(profile)) {
+        minias_set_error(as, "invalid-riscv-target-profile");
+        return false;
+    }
+    state = calloc(1U, sizeof(*state));
+    if (state == NULL) {
+        minias_set_error(as, "out-of-memory:riscv-target-context");
+        return false;
+    }
+    state->target_xlen = config->elf32 ? 32U : 64U;
+    if (config->target_profile_size != 0U) {
+        memcpy(&profile, config->target_profile, sizeof(profile));
+        if (profile.elf32 != config->elf32 ||
+            profile.arch_attribute_size > sizeof(state->target_attributes)) {
+            free(state);
+            minias_set_error(as, "riscv-target-profile-class-or-attributes");
+            return false;
+        }
+        state->strict_i_xlen = profile.strict_i_xlen;
+        state->isa_explicit = profile.explicit_isa;
+        state->isa_features = profile.features;
+        state->target_attributes_size = profile.arch_attribute_size;
+        memcpy(state->target_attributes, profile.arch_attribute,
+               profile.arch_attribute_size);
+    }
+    state->strict_rv64i = state->strict_i_xlen != 0U || state->isa_explicit;
+    as->target_state = state;
+    return true;
+}
+
+static void riscv_destroy_target_state(MiniAs *as) {
+    free(as->target_state);
+    as->target_state = NULL;
+}
+
+static bool riscv_configure_legacy(MiniAsAssemblyConfig *config,
+                                   unsigned strict_i_xlen) {
+    MiniAsRiscvProfile profile;
+    if (strict_i_xlen != 32U && strict_i_xlen != 64U) return false;
+    if (config->elf32 != (strict_i_xlen == 32U)) return false;
+    memset(&profile, 0, sizeof(profile));
+    profile.elf32 = config->elf32;
+    profile.strict_i_xlen = strict_i_xlen;
+    if (sizeof(profile) > sizeof(config->target_profile)) return false;
+    memcpy(config->target_profile, &profile, sizeof(profile));
+    config->target_profile_size = sizeof(profile);
+    return true;
+}
+
+static void riscv_capture_site_state(const MiniAs *as,
+                                      MiniAsTargetSiteState *site) {
+    site->mode_bits = as->target_options;
+    site->profile_features = MINIAS_RV_STATE(as)->isa_features;
 }
 
 static const MiniAsTargetOps riscv_ops = {
     .comment_prefix = '#',
+    .init_target_state = riscv_init_target_state,
+    .destroy_target_state = riscv_destroy_target_state,
+    .configure_legacy_target = riscv_configure_legacy,
+    .capture_site_state = riscv_capture_site_state,
     .elf_machine = 243U, /* EM_RISCV */
     .parse_target_directive = riscv_target_directive,
     .validate_common_directive = riscv_validate_common_directive,

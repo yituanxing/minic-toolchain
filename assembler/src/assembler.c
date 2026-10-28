@@ -744,7 +744,14 @@ static void minias_init_for_target(MiniAs *as,
 /* Preserve the historical RISC-V API while the multi-target driver
  * initializes directly against its selected TargetInfo. */
 void minias_init(MiniAs *as) {
+    MiniAsAssemblyConfig defaults;
     minias_init_for_target(as,minias_target_riscv());
+    memset(&defaults, 0, sizeof(defaults));
+    defaults.target = as->target;
+    if (as->target->init_target_state != NULL &&
+        !as->target->init_target_state(as, &defaults) &&
+        as->error[0] == '\0')
+        minias_set_error(as, "target-initialization-failed");
 }
 
 /* A purged GNU macro owns exactly the resources freed by assembler exit.
@@ -856,7 +863,9 @@ static bool add_stmt(MiniAs *as,
     st->size = size;
     st->align = align;
     st->site.mode_bits = as->target_options;
-    st->site.profile_features = as->isa_features;
+    st->site.profile_features = 0U;
+    if (as->target->capture_site_state != NULL)
+        as->target->capture_site_state(as, &st->site);
     if (st->op == NULL || st->args == NULL) {
         minias_set_error(as, "out-of-memory:stmt-text");
         return false;
@@ -1250,7 +1259,7 @@ static bool parse_section_directive(MiniAs *as, char *args, size_t line) {
     if(entry_size==0U &&
        (type==MINIAS_SHT_INIT_ARRAY || type==MINIAS_SHT_FINI_ARRAY ||
         type==MINIAS_SHT_PREINIT_ARRAY))
-        entry_size=as->target_xlen==32U?4U:8U;
+        entry_size=as->output_elf32?4U:8U;
     if ((flags & MINIAS_SHF_MERGE)!=0U && entry_size==0U) {
         minias_set_error(as,"missing-merge-entry-size:%s:line=%zu",name,line);
         return false;
@@ -7247,18 +7256,13 @@ int minias_assemble_config(const char *input_path,
 
         minias_init_for_target(&as,config->target);
         as.elf_flags = config->elf_flags;
-        as.strict_rv64i = config->strict_i_xlen != 0U ||
-                          config->isa_explicit;
-        as.strict_i_xlen = config->strict_i_xlen;
-        as.isa_explicit = config->isa_explicit;
-        as.target_xlen = config->elf32 ? 32U : 64U;
-        as.isa_features = config->isa_features;
-        as.target_attributes_size = config->target_attributes_size;
-        if (as.target_attributes_size > sizeof(as.target_attributes)) {
-            minias_set_error(&as, "target-attribute-too-large");
-        } else if (as.target_attributes_size != 0U) {
-            memcpy(as.target_attributes, config->target_attributes,
-                   as.target_attributes_size);
+        as.output_elf32 = config->elf32;
+        if (config->target_profile_size > sizeof(config->target_profile)) {
+            minias_set_error(&as, "invalid-target-profile-size");
+        } else if (as.target->init_target_state != NULL &&
+                   !as.target->init_target_state(&as, config) &&
+                   as.error[0] == '\0') {
+            minias_set_error(&as, "target-initialization-failed");
         }
         as.forced_long_branch_ids = long_branch_ids;
         as.forced_long_branch_count = long_branch_count;
@@ -7372,7 +7376,13 @@ int minias_assemble_with_target(const char *input_path,
     config.target = target;
     config.elf32 = elf32;
     config.elf_flags = elf_flags;
-    config.strict_i_xlen = strict_i_xlen;
+    if (strict_i_xlen != 0U &&
+        (target->configure_legacy_target == NULL ||
+         !target->configure_legacy_target(&config, strict_i_xlen))) {
+        if (diagnostic != NULL)
+            fprintf(diagnostic, "minic-as: unsupported-legacy-target-configuration\n");
+        return 1;
+    }
     return minias_assemble_config(input_path, output_path, &config, diagnostic);
 }
 

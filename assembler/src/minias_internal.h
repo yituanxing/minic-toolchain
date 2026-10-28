@@ -376,13 +376,7 @@ typedef struct MiniAs {
     size_t debug_loc_capacity;
     bool debug_is_stmt;
     uint32_t elf_flags;
-    bool isa_explicit;
-    unsigned target_xlen;
-    uint64_t isa_features;
-    unsigned char target_attributes[512];
-    size_t target_attributes_size;
-    bool strict_rv64i; /* legacy strict directive gating, both XLENs */
-    unsigned strict_i_xlen; /* 0=legacy, 32=RV32I, 64=RV64I */
+    bool output_elf32; /* Common object layout, not target ISA XLEN. */
     const size_t *forced_long_branch_ids;
     size_t forced_long_branch_count;
     int current_section;
@@ -478,7 +472,10 @@ typedef struct MiniAsTargetOps {
     uint16_t elf_machine;
     /* Optional: NULL means all directives go to the common grammar. */
     bool (*parse_target_directive)(MiniAs *, const char *, const char *, size_t, bool *);
-    /* Per-target operand/alias registry lifecycle; Common never inspects it. */
+    /* Fully target-owned ISA/ABI state lifecycle and per-fragment snapshot. */
+    bool (*init_target_state)(MiniAs *, const struct MiniAsAssemblyConfig *);
+    bool (*configure_legacy_target)(struct MiniAsAssemblyConfig *, unsigned);
+    void (*capture_site_state)(const MiniAs *, MiniAsTargetSiteState *);
     void (*destroy_target_state)(MiniAs *);
     bool (*validate_common_directive)(MiniAs *, const char *, size_t);
     /* Optional GNU .if target operand dialect. Common owns the
@@ -543,11 +540,10 @@ typedef struct MiniAsAssemblyConfig {
     const MiniAsTargetOps *target;
     bool elf32;
     uint32_t elf_flags;
-    unsigned strict_i_xlen;
-    bool isa_explicit;
-    uint64_t isa_features;
-    unsigned char target_attributes[512];
-    size_t target_attributes_size;
+    /* Serialized TargetSpec, interpreted only by the owning Target.
+     * A fixed inline buffer avoids caller-owned borrowed pointers. */
+    unsigned char target_profile[1024];
+    size_t target_profile_size;
 } MiniAsAssemblyConfig;
 int minias_assemble_config(const char *, const char *,
                            const MiniAsAssemblyConfig *, FILE *);
