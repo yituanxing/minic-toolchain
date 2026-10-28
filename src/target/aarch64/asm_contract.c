@@ -2,9 +2,39 @@
 #include "target/common/direct_linux_bug_asm.h"
 #include "frontend/const_eval.h"
 #include <string.h>
-bool minic_aarch64_qualified_linux_bug_asm(const MinicCoreInlineAsm *a) {
-    return minic_multi_direct_linux_bug_asm(
-        a, "14470", "14471", "14472", "brk0x800", true);
+/* Real Linux GNU AArch64 has two distinct zero-operand effects:
+ * __bug_table ELF metadata with BRK, and exactly enumerated one-instruction
+ * privileged/ordering ISA. Source/preflight and machine emission use the
+ * SAME qualifier. Never accept arbitrary target text or replace with a
+ * compiler barrier. */
+bool minic_aarch64_qualified_opaque_asm(const MinicCoreInlineAsm *a) {
+    static const char *const allowed[] = {
+        "msrdaifset,#3", "msrdaifclr,#3",
+        "yield", "hint#20", "sev", "sevl", "wfe", "wfi", "nop",
+        "dsbsy", "dsbish", "dsbishst", "dsbld",
+        "dmbish", "dmbishld", "dmbishst", "dmbsy",
+        "dmbosh", "dmboshld", "dmboshst", "isb"
+    };
+    char compact[64];
+    size_t i, n = 0U;
+    if (minic_multi_direct_linux_bug_asm(
+            a, "14470", "14471", "14472", "brk0x800", true))
+        return true;
+    if (a == NULL || a->template_text == NULL || !a->is_volatile ||
+        a->template_length == 0U || a->template_length >= sizeof(compact) ||
+        a->is_goto || a->register_clobber_count != 0U)
+        return false;
+    for (i = 0U; i < a->template_length; ++i) {
+        const char c = a->template_text[i];
+        if (c == ' ' || c == '\t') continue;
+        if (c == '\n' || c == '\r' || c == ';' || c == '\0')
+            return false;
+        compact[n++] = c;
+    }
+    compact[n] = '\0';
+    for (i = 0U; i < sizeof(allowed) / sizeof(allowed[0]); ++i)
+        if (strcmp(compact, allowed[i]) == 0) return true;
+    return false;
 }
 /* Linux 6.6 array_index_mask_nospec: compare two unsigned LP64 words,
  * consume NZCV immediately with SBC, store the all-zero/all-one mask. */

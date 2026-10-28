@@ -89,12 +89,12 @@ bool minic_aarch64_emit_residual_instruction(
             const size_t asm_id = ins->value.inline_asm_id;
             const MinicCoreInlineAsm *source = asm_id < fn->inline_asm_count
                 ? &fn->inline_asms[asm_id] : NULL;
-            if (!minic_aarch64_qualified_linux_bug_asm(source) ||
+            if (!minic_aarch64_qualified_opaque_asm(source) ||
                 fwrite(source->template_text, 1U, source->template_length, out) !=
                     source->template_length ||
                 fputc('\n', out) == EOF)
                 return minic_multi_direct_machine_reject(
-                    fn, "aarch64", name, "linux_metadata_asm",
+                    fn, "aarch64", name, "qualified_opaque_hardware_asm",
                     reject_block, reject_ins, __LINE__);
             *needs_writeback = false;
             return true;

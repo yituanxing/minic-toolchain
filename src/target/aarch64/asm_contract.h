@@ -8,5 +8,5 @@ bool minic_aarch64_qualify_inline_asm(
     const MinicC0Program *, const MinicInlineAsm *, MinicTargetInlineAsmContract *);
 bool minic_aarch64_emit_qualified_structured_asm(
     FILE *, const MinicDirectLP64BlockContext *, const MinicCoreInstruction *);
-bool minic_aarch64_qualified_linux_bug_asm(const MinicCoreInlineAsm *);
+bool minic_aarch64_qualified_opaque_asm(const MinicCoreInlineAsm *);
 #endif

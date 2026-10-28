@@ -14,5 +14,5 @@ bool minic_loongarch64_emit_qualified_structured_asm(
 bool minic_loongarch64_emit_dbar(
     FILE *out, const MinicDirectLP64BlockContext *ctx,
     const MinicCoreInstruction *ins);
-bool minic_loongarch64_qualified_linux_bug_asm(const MinicCoreInlineAsm *);
+bool minic_loongarch64_qualified_opaque_asm(const MinicCoreInlineAsm *);
 #endif

@@ -60,7 +60,7 @@ static bool loongarch64_emit_function(
         minic_multi_indirect_record,
         "@progbits", "@function", "@init_array", "quad",
         loongarch64_emit_prologue, minic_loongarch64_emit_core_blocks,
-        NULL, minic_loongarch64_qualified_linux_bug_asm
+        NULL, minic_loongarch64_qualified_opaque_asm
     };
     return minic_multi_direct_lp64_emit_function(
         out, program, target, decl, fn, facts, storage,

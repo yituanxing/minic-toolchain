@@ -4,9 +4,32 @@
 
 #include <stdio.h>
 #include <string.h>
-bool minic_loongarch64_qualified_linux_bug_asm(const MinicCoreInlineAsm *a) {
-    return minic_multi_direct_linux_bug_asm(
-        a, "10000", "10001", "10002", "break1", false);
+/* Exact LoongArch64 kernel hardware zero-operand source forms.
+ * ISA semantics, unlike compiler barriers, remain target-local. */
+bool minic_loongarch64_qualified_opaque_asm(const MinicCoreInlineAsm *a) {
+    static const char *const allowed[] = {
+        "idle0", "tlbrd", "dbar0", "dbar0x700", "nop"
+    };
+    char compact[64];
+    size_t i, n = 0U;
+    if (minic_multi_direct_linux_bug_asm(
+            a, "10000", "10001", "10002", "break1", false))
+        return true;
+    if (a == NULL || a->template_text == NULL || !a->is_volatile ||
+        a->template_length == 0U || a->template_length >= sizeof(compact) ||
+        a->is_goto || a->register_clobber_count != 0U)
+        return false;
+    for (i = 0U; i < a->template_length; ++i) {
+        const char c = a->template_text[i];
+        if (c == ' ' || c == '\t') continue;
+        if (c == '\n' || c == '\r' || c == ';' || c == '\0')
+            return false;
+        compact[n++] = c;
+    }
+    compact[n] = '\0';
+    for (i = 0U; i < sizeof(allowed) / sizeof(allowed[0]); ++i)
+        if (strcmp(compact, allowed[i]) == 0) return true;
+    return false;
 }
 
 /* Native ISA reservation; rejected CSR/AMO shapes cannot bypass through

@@ -65,7 +65,7 @@ static bool aarch64_emit_function(
         "%progbits", "%function", "%init_array", "xword",
         aarch64_emit_prologue, minic_aarch64_emit_core_blocks,
         minic_aarch64_copy_dynamic_frame_asm,
-        minic_aarch64_qualified_linux_bug_asm
+        minic_aarch64_qualified_opaque_asm
     };
     return minic_multi_direct_lp64_emit_function(
         out, program, target, decl, fn, facts, storage,
