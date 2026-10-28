@@ -81,6 +81,31 @@ if [[ "${MINIC_SECTION_ONLY:-0}" != 1 ]]; then
   cmp "$work/sparse.gnu.err" "$work/sparse.minic.err"
 fi
 echo "MINIC_SPARSE_POINTER_ARRAY=PASS target=$target trailing_zero=5 interleaved_reloc=2"
+# Flat aggregate arrays with pointers need the same implicit-zero-tail
+# handling as scalar pointer arrays.  GNU remains the independent ABI oracle.
+cat > "$work/sparse_records.i" <<'SRC'
+static int first = 12;
+static int second = 30;
+struct Pair { int *ptr; unsigned long count; };
+static struct Pair pairs[5] = { { &first, 4 }, { &second, 3 } };
+int main(void) {
+    return pairs[0].ptr == &first && pairs[1].ptr == &second &&
+           pairs[0].count == 4 && pairs[1].count == 3 &&
+           pairs[2].ptr == 0 && pairs[3].count == 0 &&
+           pairs[4].ptr == 0 && *pairs[0].ptr + *pairs[1].ptr == 42 ? 42 : 1;
+}
+SRC
+"$cc" --target="$target-linux" -S "$work/sparse_records.i" -o "$work/sparse_records.s"
+test -s "$work/sparse_records.s"
+if [[ "${MINIC_SECTION_ONLY:-0}" != 1 ]]; then
+  "$gnu" -static -x c "$work/sparse_records.i" -o "$work/sparse_records.gnu"
+  "$gnu" -static -x assembler "$work/sparse_records.s" -o "$work/sparse_records.minic"
+  sparse_exit_42 "$work/sparse_records.gnu"
+  sparse_exit_42 "$work/sparse_records.minic"
+  cmp "$work/sparse_records.gnu.out" "$work/sparse_records.minic.out"
+  cmp "$work/sparse_records.gnu.err" "$work/sparse_records.minic.err"
+fi
+echo "MINIC_SPARSE_RECORD_ARRAY=PASS target=$target initial_records=2 zero_tail=3 relocations=2"
 cat > "$work/inject.i" <<'SRC'
 int __attribute__((section(".evil; nop"))) injected=1;
 SRC

@@ -106,11 +106,24 @@ static bool minic_multi_emit_flat_record_array(FILE *out, const MinicC0Program *
         record_bytes == 0U || array->element_count > SIZE_MAX / record_bytes ||
         array->element_count * record_bytes != storage_size ||
         record->field_count > SIZE_MAX / array->element_count ||
-        record->field_count * array->element_count != object->initializer_count)
+        object->initializer_count > record->field_count * array->element_count ||
+        object->initializer_count % record->field_count != 0U ||
+        (object->initializer_count != 0U && object->initializer_values == NULL) ||
+        (object->relocation_count != 0U && object->relocations == NULL))
         return false;
     (void)record_align;
     for (element = 0U; element < array->element_count; ++element) {
         size_t cursor = 0U;
+        /* All absent trailing records are C-zero-initialized, including
+         * internal pointer fields and padding.  Do not index an absent
+         * flattened slot; the complete extent still comes from DataLayout.
+         * Any relocation accidentally targeting this tail is rejected by
+         * the final relocation-consumption check below. */
+        if (element >= object->initializer_count / record->field_count) {
+            if (fprintf(out, "  .zero %zu\n", record_bytes) < 0)
+                return false;
+            continue;
+        }
         for (field_index = 0U; field_index < record->field_count; ++field_index) {
             const MinicRecordField *field = minic_c0_record_field(record, field_index);
             const MinicGlobalRelocation *reloc =
@@ -726,9 +739,13 @@ bool minic_multi_emit_record_array_global(
     if (record == NULL || !record->is_complete ||
         record->field_count == 0U || array->element_count == 0U)
         return false;
+    /* The flat walker can serialize fully specified initial records
+     * followed by whole implicit-zero records.  Partial final records and
+     * nested shapes retain the recursive DataLayout owner. */
     flat = !record->is_union &&
            record->field_count <= SIZE_MAX / array->element_count &&
-           record->field_count * array->element_count == object->initializer_count;
+           object->initializer_count <= record->field_count * array->element_count &&
+           object->initializer_count % record->field_count == 0U;
     for (i = 0U; i < record->field_count && flat; ++i) {
         const MinicRecordField *field = minic_c0_record_field(record, i);
         if (field == NULL || field->element_count != 1U ||
