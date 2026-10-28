@@ -857,7 +857,40 @@ SRC
         qemu-aarch64 -L /usr/aarch64-linux-gnu \
             "$work/aarch64-atomic-return.$flavor.elf"
     done
-    echo 'MINIC_AARCH64_LINUX_ATOMIC_RETURN_GNU_QEMU=PASS variants=16 widths=2 operations=2 orderings=4'
+    for bad in wrong_constraint wrong_opcode hidden_svc no_memory wrong_memory; do
+        constraint=Ir; opcode=add; suffix=''; clobber=': "memory"'; memory='+Q'
+        case "$bad" in
+            wrong_constraint) constraint=r ;;
+            wrong_opcode) opcode=sub ;;
+            hidden_svc) suffix='; svc #0' ;;
+            no_memory) clobber='' ;;
+            wrong_memory) memory='=Q' ;;
+        esac
+        cat > "$work/aarch64-atomic-return-bad-$bad.i" <<SRC
+int bad(int *p, int n) {
+    int result; unsigned long retry;
+    __asm__ __volatile__("// atomic_add_return\n"
+        " prfm pstl1strm, %2\n"
+        "1: ldxr %w0, %2\n"
+        " $opcode %w0, %w0, %w3\n"
+        " stlxr %w1, %w0, %2\n"
+        " cbnz %w1, 1b\n"
+        " dmb ish$suffix"
+        : "=&r"(result), "=&r"(retry), "$memory"(*p)
+        : "$constraint"(n) $clobber);
+    return result;
+}
+SRC
+        if "$MINIC_CC" --target=aarch64-linux -S \
+            "$work/aarch64-atomic-return-bad-$bad.i" \
+            -o "$work/aarch64-atomic-return-bad-$bad.s" \
+            >"$work/aarch64-atomic-return-bad-$bad.out" \
+            2>"$work/aarch64-atomic-return-bad-$bad.err"; then
+            echo "FAIL unsafe AArch64 Linux atomic return admitted: $bad" >&2
+            exit 1
+        fi
+    done
+    echo 'MINIC_AARCH64_LINUX_ATOMIC_RETURN_GNU_QEMU=PASS variants=16 widths=2 operations=2 orderings=4 negative=5'
 
     # Original Linux 6.6.143 cmpxchg.h XCHG; 4 widths × 4 memory
     # orderings, old-value semantics and true GNU/GAS/QEMU differential.
