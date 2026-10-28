@@ -117,6 +117,19 @@ entry_x:
     cmpq 8(%r12), %rax
     cmpl %r9d, -8(%rbp)
     # GNU bit-imm with ModR/M register, SIB memory, RIP-relative relocation.
+    # GNU 69/6B IMUL with typed memory source, signed imm8/16/32.
+    imull $1000, 636(%rbx), %r15d
+    imull $125, 16(%rax), %eax
+    imull $1640531527, 4(%r9), %eax
+    imull $1000, pm_test_delay(%rip), %ebx
+    imulq $1000, 8(%rsp), %r13
+    imulq $100, ext_global(%rip), %r12
+    imulw $200, 2(%rax), %r10w
+    rep movsb
+    rep movsl
+    rep stosl
+    repz cmpsb
+    repne scasb
     # Real GCC imm-to-memory symbolic and dual-relocation instructions.
     cmpq $apic_physflat, apic(%rip)
     cmpq $truncate_bdev_range, 72(%rdi)
@@ -896,6 +909,11 @@ for bad in            'popcntq %eax,%rax' \
            'movsbq %ah,%rax' \
            'movswq %eax,%r9' \
            'movsbl %spl,%ah' \
+           'imull $100, %rax, %eax' \
+           'imulq $100, 8(%rax), %r8d' \
+           'imull $100, 8(%rax), %rax' \
+           'imulw $100, 8(%rax), %r8d' \
+           'rep movsq %rax' \
            'adcl %rax,%eax' \
            'negb %eax' \
            'negw %eax' \

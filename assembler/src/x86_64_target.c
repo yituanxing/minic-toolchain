@@ -421,6 +421,21 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             m->opcode=X64_ZERO;m->encoding=UINT32_C(0xaaf3);
             m->operands[0].immediate=2U;goto done;
         }
+        if(!strcmp(s->args,"movsb") || !strcmp(s->args,"movsl") ||
+           !strcmp(s->args,"stosl")) {
+            unsigned opcode=!strcmp(s->args,"movsb")?0xa4U:
+                            !strcmp(s->args,"movsl")?0xa5U:0xabU;
+            m->opcode=X64_ZERO;m->encoding=UINT32_C(0xf3)|(opcode<<8U);
+            m->operands[0].immediate=2U;goto done;
+        }
+        if(!strcmp(s->args,"cmpsb") && !strcmp(s->op,"repz")) {
+            m->opcode=X64_ZERO;m->encoding=UINT32_C(0xa6f3);
+            m->operands[0].immediate=2U;goto done;
+        }
+    }
+    if(!strcmp(s->op,"repne") && !strcmp(s->args,"scasb")) {
+        m->opcode=X64_ZERO;m->encoding=UINT32_C(0xaef2);
+        m->operands[0].immediate=2U;goto done;
     }
     for(i=0U;i<sizeof(zeros)/sizeof(zeros[0]);++i) {
         if (!strcmp(s->op,zeros[i].op) && !*s->args) {
@@ -463,6 +478,35 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
            (int64_t)bits>(word?65535:
                !strcmp(s->op,"imulq")?INT32_MAX:UINT32_MAX))
             goto invalid;
+        /* Three-operand IMUL permits r/m source; share Group-1 target
+         * immediate memory ModR/M/SIB/PC32 encoding with 69/6B opcode. */
+        if(x64_is_mem_candidate(from)) {
+            MiniAsMCMemory mem;
+            bool destwide=false;
+            if(!(word?x64_register16(to,&imul_dst):
+                 x64_register(to,&imul_dst,&destwide) &&
+                 (!strcmp(s->op,"imul") ||
+                  destwide==(!strcmp(s->op,"imulq")))) ||
+               !x64_parse_base_memory(from,&mem))goto invalid;
+            m->operands[1].memory=malloc(sizeof(mem));
+            if(!m->operands[1].memory) {
+                free(mem.symbol);free(m);
+                minias_set_error(as,"out-of-memory:x86-imul-mem");
+                return false;
+            }
+            *m->operands[1].memory=mem;
+            m->opcode=X64_IMM_MEMORY;m->count=3U;
+            m->encoding=((int64_t)bits>=-128 && (int64_t)bits<=127?
+                          UINT32_C(0x6b):UINT32_C(0x69))|
+                         (word?UINT32_C(0x400):0U);
+            m->operands[0].kind=MINIAS_MC_REGISTER;
+            m->operands[0].reg=imul_dst;
+            m->operands[0].register_64=!word && destwide;
+            m->operands[1].kind=MINIAS_MC_MEMORY;
+            m->operands[2].kind=MINIAS_MC_IMMEDIATE;
+            m->operands[2].immediate=bits;
+            goto done;
+        }
         if(word) {
             if(!x64_register16(from,&imul_src) ||
                !x64_register16(to,&imul_dst))goto invalid;
@@ -1518,7 +1562,8 @@ static bool x64_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
             unsigned base=m->encoding&UINT32_C(0xff);
             unsigned extra=m->opcode==X64_IMM_MEMORY?
                 (base==0x83U || base==0xc6U || base==0x80U ||
-                 base==0xf6U || base==0xbaU?1U:(m->encoding&0x400U)?2U:4U):0U;
+                 base==0xf6U || base==0xbaU || base==0x6bU?1U:
+                  (m->encoding&0x400U)?2U:4U):0U;
             *size=extra+((m->encoding&0x100U)?1U:0U) +
                    ((m->encoding&0x2000U)?1U:0U) +
                   ((m->encoding&0x400U)?1U:0U) +
@@ -1830,7 +1875,8 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
             unsigned base=m->encoding&UINT32_C(0xff);
             unsigned extra=m->opcode==X64_IMM_MEMORY?
                 (base==0x83U || base==0xc6U || base==0x80U ||
-                 base==0xf6U || base==0xbaU?1U:(m->encoding&0x400U)?2U:4U):0U;
+                 base==0xf6U || base==0xbaU || base==0x6bU?1U:
+                  (m->encoding&0x400U)?2U:4U):0U;
             uint32_t immediate=extra?
                 (uint32_t)m->operands[2].immediate:0U;
             unsigned low_base=mem->base&7U;
@@ -1888,8 +1934,9 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
                     const MiniAsSymbolExpr *value=m->operands[2].symbol;
                     if(extra!=4U || !value)return false;
                     return minias_add_fixup(as,s->section,s->offset+n-4U,
-                         MINIAS_FIXUP_X64_ABS32S,4U,
-                         value->name,value->addend);
+                         m->operands[0].register_64?
+                             MINIAS_FIXUP_X64_ABS32S:MINIAS_FIXUP_ABS,
+                         4U,value->name,value->addend);
                 }
                 return true;
             }
@@ -1930,8 +1977,9 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
                         const MiniAsSymbolExpr *value=m->operands[2].symbol;
                         if(extra!=4U || !value)return false;
                         return minias_add_fixup(as,s->section,s->offset+n-4U,
-                            MINIAS_FIXUP_X64_ABS32S,4U,
-                            value->name,value->addend);
+                            m->operands[0].register_64?
+                                MINIAS_FIXUP_X64_ABS32S:MINIAS_FIXUP_ABS,
+                            4U,value->name,value->addend);
                     }
                     return true;
                 }
