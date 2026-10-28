@@ -908,19 +908,17 @@ bool minic_target_info_inline_asm_register_clobber_supported(const MinicTargetIn
      * register allocation, clobber and stack-state ABI qualification still
      * happens in the x86 machine owner. In particular RBX, RBP, RSP,
      * R12..R15 and the callee-saved vector registers are NOT admitted.
-     * RBX/EBX are recognized ONLY as GNU C source clobber names: the
-     * downstream Target/physical machine must still reject an executable
-     * instruction unless it explicitly saves/restores callee-preserved RBX.
-     * This allows unused Linux static inline declarations to parse without
-     * asserting that unsupported executable clobbers are implemented.
+     * RBX/EBX are never admitted as local fixed-register bindings.
+     * They may appear in GNU C source clobber syntax only through the
+     * separate, explicitly parse-only predicate below. A real inline ASM
+     * target contract must save/restore RBX if it ever uses that clobber.
      * Preserve the old GNU "dx" spelling of physical RDX. */
     if (target->architecture == MINIC_TARGET_ARCH_X86_64) {
         static const char *const caller_scratch[] = {
             "cc", "dx", "rdx", "edx",
             "rax", "eax", "rcx", "ecx",
             "rsi", "esi", "rdi", "edi",
-            "r8", "r9", "r10", "r11",
-            "ebx", "rbx"
+            "r8", "r9", "r10", "r11"
         };
         size_t j;
         for (j = 0U; j < sizeof(caller_scratch) / sizeof(caller_scratch[0]); ++j)
@@ -961,6 +959,21 @@ bool minic_target_info_inline_asm_register_clobber_supported(const MinicTargetIn
      * fail-closed until their preservation contract is explicit. */
     return name_length == 2U && ((name[0] == 't' && name[1] >= '0' && name[1] <= '6') ||
                                  (name[0] == 'a' && name[1] >= '0' && name[1] <= '7'));
+}
+
+/* GNU syntax and local-fixed-register binding are two different contracts.
+ * Only parse original Linux x86 EBX/RBX clobber NAMES; the fixed-register
+ * binding and physical machine checks must still reject callee-saved RBX.
+ * No target ISA knowledge escapes this TargetInfo boundary. */
+bool minic_target_info_inline_asm_source_clobber_supported(
+    const MinicTargetInfo *target,const char *name,size_t length){
+    if(!target||!name)return false;
+    if(target->architecture==MINIC_TARGET_ARCH_X86_64 &&
+       ((length==3U&&memcmp(name,"ebx",3U)==0)||
+        (length==3U&&memcmp(name,"rbx",3U)==0)))
+        return true;
+    return minic_target_info_inline_asm_register_clobber_supported(
+        target,name,length);
 }
 
 /* GCC LoongArch <larchintrin.h> family: independently checked builtin

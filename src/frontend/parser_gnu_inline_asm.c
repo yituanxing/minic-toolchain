@@ -375,7 +375,7 @@ bool minic_parser_gnu_inline_asm_statement(MinicParser *parser) {
             }
             if (clobber_length == 6U && memcmp(clobber, "memory", 6U) == 0) {
                 has_memory_clobber = true;
-            } else if (!minic_target_info_inline_asm_register_clobber_supported(
+            } else if (!minic_target_info_inline_asm_source_clobber_supported(
                            parser->target_info, clobber, clobber_length)) {
                 /* Fail closed, but identify the actual physical register or
                  * special token. Previously 771 three-ISA Linux failures all
