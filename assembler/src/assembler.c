@@ -3016,7 +3016,13 @@ static bool parse_common_fill(MiniAs *as,const char *args,
         if(!comma)break;
         cursor=comma+1U;
     }
-    if(!evaluate_absolute_expression(as,parts[0],&n) || n<0)goto done;
+    if(!evaluate_absolute_expression(as,parts[0],&n))goto done;
+    /* GNU as treats a negative .fill repetition as zero (it prints a
+     * warning rather than emitting bytes). In relaxed Linux Kbuild x86
+     * forward IDT entries, an already-long jump may exceed its nominal
+     * slot and produces this signed difference. Never cast negative n to
+     * uint64_t or reject an otherwise GNU-valid source statement. */
+    if(n<0)n=0;
     if(i>1U && (!evaluate_absolute_expression(as,parts[1],&step) ||
                 step<0 || step>8))goto done;
     if(i>2U && !evaluate_absolute_expression(as,parts[2],&value))goto done;
