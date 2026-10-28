@@ -237,11 +237,22 @@ static bool x86_trycas_source(
            !minic_type_unqualified(e[i]->type,&t[i]))
             return false;
     }
-    if(!minic_type_equal(t[0],minic_type_bool())||
-       !minic_type_is_integer(t[1])||t[1].pointer_depth||
-       (unsigned int)t[1].integer_rank!=rank||
-       !minic_type_equal(t[1],t[2])||!minic_type_equal(t[1],t[3]))
+    /* Original Linux __raw_try_cmpxchg casts the memory carrier to
+     * volatile u{8,16,32,64}, while __old/__new retain the source
+     * operand's possibly SIGNED C type (e.g. atomic_t.counter is int).
+     * CMPXCHG compares and exchanges bit patterns of an exact width; the
+     * source signedness is not a register/ISA semantic constraint.
+     * Admit only real primitive integer types of the SAME machine rank,
+     * never bool, enum, pointer or widened/narrowed value operands.
+     * This also matches the existing machine emitter's independent width
+     * verification; no raw GNU template fallback is introduced. */
+    if(!minic_type_equal(t[0],minic_type_bool()))
         return false;
+    for(i=1U;i<4U;++i)
+        if(t[i].base_kind!=MINIC_TYPE_BASE_INT||
+           !minic_type_is_integer(t[i])||t[i].pointer_depth!=0U||
+           (unsigned int)t[i].integer_rank!=rank)
+            return false;
     contract->operand_count=4U;
     contract->kinds[0]=MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     contract->kinds[1]=MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;

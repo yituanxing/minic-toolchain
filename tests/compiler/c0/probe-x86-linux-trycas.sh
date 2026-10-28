@@ -136,4 +136,80 @@ objdump -h "$w/try.o" | grep -Fq '.smp_locks'
 sed 's/cmpxchgb/cmpxchgb; cli/' "$w/try.i" >"$w/evil.i"
 if "$minic" --target=x86_64-linux -S "$w/evil.i" -o "$w/evil.s" >/dev/null 2>&1;then
  echo 'FAIL privileged suffix passed x86 trycas';exit 1;fi
-echo 'MINIC_X86_LINUX_TRYCAS=PASS variants=8 GNU_pairs=648 SMP_ELF=1 negative=1'
+# Original Linux atomic_t.counter (signed int) is passed through a
+# volatile unsigned int MMIO/atomic carrier. Exercise ALL 4 byte widths and
+# both SMP/local modes, with separately signed old/new operands. A narrowed
+# or widened physical register operand must remain forbidden.
+python3 - "$w/try.i" "$w/try-mixed.i" <<'PY'
+import pathlib, sys
+src=pathlib.Path(sys.argv[1]).read_text()
+widths=[(8,"unsigned char","signed char"),
+        (16,"unsigned short","short"),
+        (32,"unsigned int","int"),
+        (64,"unsigned long long","long long")]
+out=[]
+for bits, unsigned, signed in widths:
+    for mode in ("lock","local"):
+        start=src.index(f"_Bool mini_try_{bits}_{mode}(")
+        end=src.index("\n}\n",start)+2
+        body=src[start:end]
+        old=f"({unsigned} *p, {unsigned} *expected, {unsigned} newval)"
+        new=f"({unsigned} *p, {signed} *expected, {signed} newval)"
+        if old not in body or f"{unsigned} old=*expected;" not in body:
+            raise SystemExit(f"source fixture drift {bits} {mode}")
+        body=body.replace(f"mini_try_{bits}_{mode}",f"mini_mix_{bits}_{mode}",1)
+        body=body.replace(old,new,1)
+        body=body.replace(f"{unsigned} old=*expected;",f"{signed} old=*expected;",1)
+        out.append(body)
+pathlib.Path(sys.argv[2]).write_text("\n\n".join(out)+"\n")
+PY
+sed 's/mini_mix_/gcc_mix_/g' "$w/try-mixed.i" >"$w/mixed-gnu.c"
+cat >"$w/mixed-main.c" <<'EOF'
+#include <stdio.h>
+#define DIFF(BITS,U,S,MODE) do { \
+  extern _Bool mini_mix_##BITS##_##MODE(U*,S*,S); \
+  extern _Bool gcc_mix_##BITS##_##MODE(U*,S*,S); \
+  int i,j; \
+  for(i=-3;i<9;++i)for(j=-3;j<9;++j){ \
+    U mem_m=(U)i,mem_g=mem_m; S old_m=(S)j,old_g=old_m; \
+    S replacement=(S)(i+j+3); \
+    _Bool mini=mini_mix_##BITS##_##MODE(&mem_m,&old_m,replacement); \
+    _Bool gnu=gcc_mix_##BITS##_##MODE(&mem_g,&old_g,replacement); \
+    if(mini!=gnu||mem_m!=mem_g||old_m!=old_g){ \
+      fprintf(stderr,"TRY_CAS_SIGN_DIFF bits=%d mode=%s i=%d j=%d\\n", \
+              BITS,#MODE,i,j); return 1; \
+    } \
+  } \
+} while(0)
+int main(void) {
+    DIFF(8,unsigned char,signed char,lock);
+    DIFF(8,unsigned char,signed char,local);
+    DIFF(16,unsigned short,short,lock);
+    DIFF(16,unsigned short,short,local);
+    DIFF(32,unsigned int,int,lock);
+    DIFF(32,unsigned int,int,local);
+    DIFF(64,unsigned long long,long long,lock);
+    DIFF(64,unsigned long long,long long,local);
+    return 42;
+}
+EOF
+"$minic" --target=x86_64-linux -S "$w/try-mixed.i" -o "$w/try-mixed.s"
+cc -O0 -no-pie "$w/mixed-main.c" "$w/mixed-gnu.c" \
+    -x assembler "$w/try-mixed.s" -o "$w/mixed-diff"
+set +e
+"$w/mixed-diff"; mixed_rc=$?
+set -e
+test "$mixed_rc" -eq 42 || {
+    echo "FAIL x86 trycas signedness GNU differential $mixed_rc"; exit 1;
+}
+# A 16-bit carrier paired with 32-bit +a/new may not be accepted merely
+# because the memory and value operands have different signedness.
+sed 's/mini_mix_32_lock(unsigned int \*p/mini_mix_32_lock(unsigned short *p/' \
+    "$w/try-mixed.i" >"$w/mixed-invalid.i"
+if "$minic" --target=x86_64-linux -S "$w/mixed-invalid.i" \
+    -o "$w/mixed-invalid.s" >/dev/null 2>&1; then
+    echo "FAIL x86 trycas mismatched machine width accepted"; exit 1
+fi
+test ! -e "$w/mixed-invalid.s"
+
+echo 'MINIC_X86_LINUX_TRYCAS=PASS variants=8 signed_mixed=8 GNU_pairs=1800 SMP_ELF=1 negative=2'
