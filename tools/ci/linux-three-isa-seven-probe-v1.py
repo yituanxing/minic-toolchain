@@ -10,6 +10,19 @@ import argparse,concurrent.futures,hashlib,json,os,re,subprocess,sys
 # General shared Direct LP64 owner rejection includes source stage,
 # opcode kind, and backend line even when the residual M8 selector was
 # never reached. Archive every machine reject, not just M8 default cases.
+ASM_FORM = re.compile(
+    r"^MINIC_BACKEND_ASM_FORM arch=(aarch64|loongarch64) "
+    r"function=([A-Za-z_][A-Za-z_0-9]*) id=(\d+) "
+    r"template_length=(\d+) hash=([0-9a-f]{16}) "
+    r"preview=([A-Za-z_0-9]+) clobbers=(\d+) "
+    r"memory=([01]) goto=([01])$",re.MULTILINE)
+def all_asm_form_frontiers(stderr,target):
+    return [dict(function=m.group(2),id=int(m.group(3)),
+                 template_length=int(m.group(4)),hash=m.group(5),
+                 preview=m.group(6),clobbers=int(m.group(7)),
+                 memory=int(m.group(8)),goto=int(m.group(9)))
+            for m in ASM_FORM.finditer(stderr) if m.group(1)==target]
+
 PREFLIGHT_ROOT = re.compile(
     r"^MINIC_BACKEND_PREFLIGHT_ROOT arch=(aarch64|loongarch64) "
     r"function=([A-Za-z_][A-Za-z_0-9]*) reason=([a-z_]+) "
@@ -106,6 +119,7 @@ def probe(a):
             machine_frontiers=all_machine_opcode_frontiers(error_text,a.target)
             backend_frontiers=all_backend_reject_frontiers(error_text,a.target)
             preflight_roots=all_preflight_roots(error_text,a.target)
+            asm_forms=all_asm_form_frontiers(error_text,a.target)
             if core_frontiers and ok:
                 raise ValueError("MiniC succeeded despite failed Core functions: "+obj)
             if len({f["index"] for f in core_frontiers}) != len(core_frontiers):
@@ -117,13 +131,13 @@ def probe(a):
                         core_frontiers=core_frontiers,
                         machine_frontiers=machine_frontiers,
                         backend_frontiers=backend_frontiers,
-                        preflight_roots=preflight_roots,
+                        preflight_roots=preflight_roots,asm_forms=asm_forms,
                         asm_sha256=sha(asm) if ok else None)
         except subprocess.TimeoutExpired:
             asm.unlink(missing_ok=True)
             return dict(index=row["index"],object=obj,status="MINIC_TIMEOUT",diagnostic="timeout",
                         core_frontiers=[],machine_frontiers=[],
-                        backend_frontiers=[],preflight_roots=[],
+                        backend_frontiers=[],preflight_roots=[],asm_forms=[],
                         input_sha256=row["sha256"])
     with concurrent.futures.ThreadPoolExecutor(max_workers=a.workers) as executor:
         data=list(executor.map(process,selected))

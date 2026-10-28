@@ -42,6 +42,46 @@ static bool direct_lp64_only_structured_asm(const MinicCoreFunction *fn) {
     return count == fn->inline_asm_count;
 }
 
+
+/* Source-form inventory for the entire original Linux 3-ISA GNU corpus.
+ * This never changes qualification or emits any hardware. An opaque
+ * compiler ASM reject otherwise hides 1441 AArch and 504 Loong function
+ * instances behind one undifferentiated "M1 unsupported" message.
+ * Hash the COMPLETE normalized Core template but print a bounded mnemonic
+ * prefix; the per-shard report records EVERY template owner. */
+static void direct_lp64_trace_asm_owners(
+    const MinicCoreFunction *fn,const char *arch,const char *name){
+    size_t i;
+    if(!fn||!arch||!name||getenv("MINIC_BACKEND_CENSUS")==NULL)return;
+    for(i=0U;i<fn->inline_asm_count;++i){
+        const MinicCoreInlineAsm *a=&fn->inline_asms[i];
+        uint64_t hash=UINT64_C(14695981039346656037);
+        char preview[49];size_t p=0U,j;
+        if(!a->template_text)continue;
+        for(j=0U;j<a->template_length;++j){
+            const unsigned char c=(unsigned char)a->template_text[j];
+            hash^=(uint64_t)c;
+            hash*=UINT64_C(1099511628211);
+            if(p<sizeof(preview)-1U){
+                if((c>='a'&&c<='z')||(c>='A'&&c<='Z')||
+                   (c>='0'&&c<='9')||c=='_')
+                    preview[p++]=(char)c;
+                else if(p==0U||preview[p-1U]!='_')
+                    preview[p++]='_';
+            }
+        }
+        preview[p]=0;
+        (void)fprintf(stderr,
+            "MINIC_BACKEND_ASM_FORM arch=%s function=%s id=%zu "
+            "template_length=%zu hash=%016llx preview=%s "
+            "clobbers=%zu memory=%d goto=%d\n",
+            arch,name,i,a->template_length,(unsigned long long)hash,
+            p?preview:"empty",
+            a->register_clobber_count,a->has_memory_clobber?1:0,
+            a->is_goto?1:0);
+    }
+}
+
 /* Both new direct LP64 ISA emitters had byte-equivalent admission policy.
  * Reject unsupported Core shapes before generating partial GNU assembly.
  * Caller owns target ABI, registers, frame and any failure diagnostics. */
@@ -75,6 +115,8 @@ bool minic_multi_direct_lp64_function_preflight(
         else if(fn->parameter_count>16U)reason="parameter_cap";
         else if(fn->value_count>32768U)reason="value_cap";
         else if(fn->object_count>8192U)reason="object_cap";
+        if(reason!=NULL&&strcmp(reason,"gnu_asm_qualification")==0)
+            direct_lp64_trace_asm_owners(fn,arch,name);
         if(reason!=NULL)
             (void)fprintf(stderr,
                 "MINIC_BACKEND_PREFLIGHT_ROOT arch=%s function=%s reason=%s "

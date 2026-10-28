@@ -33,6 +33,7 @@ def main():
     machine_kinds = collections.defaultdict(lambda: collections.defaultdict(list))
     backend_stages = collections.defaultdict(lambda: collections.defaultdict(list))
     preflight_classes = collections.defaultdict(lambda: collections.defaultdict(list))
+    asm_form_classes = collections.defaultdict(lambda: collections.defaultdict(list))
     totals = collections.defaultdict(lambda: dict(total=0, pass_count=0))
     source_state = {}
     for file in reports:
@@ -131,6 +132,17 @@ def main():
                                      item["function"])):
                     raise SystemExit("THREE_LINUX_CENSUS=FAIL invalid preflight root")
                 preflight_classes[(target,item["reason"])][item["function"]].append(obj)
+            for entry in row.get("asm_forms",[]):
+                if (not isinstance(entry,dict) or
+                    not isinstance(entry.get("hash"),str) or
+                    not re.fullmatch(r"[0-9a-f]{16}",entry["hash"]) or
+                    not isinstance(entry.get("preview"),str) or
+                    not re.fullmatch(r"[A-Za-z_0-9]+",entry["preview"]) or
+                    not isinstance(entry.get("function"),str)):
+                    raise SystemExit("THREE_LINUX_CENSUS=FAIL invalid asm form")
+                key=(target,entry["hash"],entry["preview"],
+                     entry["template_length"])
+                asm_form_classes[key][entry["function"]].append(obj)
             totals[target]["total"] += 1
             if row.get("status") == "MINIC_S_PASS":
                 if frontiers:
@@ -189,6 +201,14 @@ def main():
         for (arch,reason),funcs in preflight_classes.items()
     ]
     preflight_root_frontiers.sort(key=lambda x:(-x["instances"],x["target"]))
+    asm_form_frontiers = [
+        dict(target=arch,hash=h,preview=preview,template_length=length,
+             instances=sum(len(v) for v in funcs.values()),
+             functions=len(funcs),
+             owners=sorted({o for xs in funcs.values() for o in xs}))
+        for (arch,h,preview,length),funcs in asm_form_classes.items()
+    ]
+    asm_form_frontiers.sort(key=lambda x:(-x["instances"],x["target"],x["hash"]))
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(dict(
         schema="minic-linux-cross-target-diagnostic-census-v2",
@@ -198,7 +218,8 @@ def main():
         all_core_function_frontiers=core_frontiers,
         machine_kind_frontiers=machine_kind_frontiers,
         backend_reject_frontiers=backend_reject_frontiers,
-        preflight_root_frontiers=preflight_root_frontiers), indent=2) + "\n")
+        preflight_root_frontiers=preflight_root_frontiers,
+        asm_form_frontiers=asm_form_frontiers), indent=2) + "\n")
     for arch, count in sorted(totals.items()):
         print(f"THREE_LINUX_MINIC_S target={arch} compiled={count['pass_count']}/{count['total']}")
     for item in diagnostics[:25]:
@@ -220,6 +241,11 @@ def main():
         print(f"THREE_LINUX_PREFLIGHT_ROOT target={item['target']} "
               f"reason={item['reason']} instances={item['instances']} "
               f"functions={item['functions']} owners={len(item['owners'])}")
+    for entry in asm_form_frontiers[:40]:
+        print(f"THREE_LINUX_ASM_FORM target={entry['target']} "
+              f"hash={entry['hash']} prefix={entry['preview'][:48]} "
+              f"length={entry['template_length']} "
+              f"instances={entry['instances']} owners={len(entry['owners'])}")
     print(f"THREE_LINUX_CENSUS=COMPLETE shards=21 diagnostic_signatures={len(diagnostics)} "
           f"all_core_function_groups={len(core_frontiers)} "
           "ROOT_CAUSE_REVIEW_REQUIRED=1 GNU_AS_link_QEMU=NOT_RUN")

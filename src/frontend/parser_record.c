@@ -257,8 +257,8 @@ static bool apply_record_field_declaration_attributes(MinicParser *parser,
         }
         minic_parser_error(parser,
             "unsupported GNU declaration-head attribute on record field: %.*s",
-            (int)(descriptor != NULL ? descriptor->name_length : 0U),
-            descriptor != NULL ? descriptor->name : "");
+            (int)minic_parser_span_length(attribute->name_span),
+            parser->source + attribute->name_span.begin.offset);
         /* The source attribute stays unsupported: this is a diagnostic
          * enhancement for the full original Linux 3-ISA owner census,
          * not a parse-only bypass of layout or ABI contracts. */

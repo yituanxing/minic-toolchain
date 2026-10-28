@@ -453,6 +453,56 @@ static bool x86_percpu_gs_source(const MinicC0Program *program,
     return true;
 }
 
+
+/* Original Linux checksum_64.h add32_with_carry GNU tied "0" input
+ * and second register-or-memory operand. Same shared arithmetic effect
+ * family as csum_fold, but a DIFFERENT exact GNU constraint contract:
+ *   =r output, 0 initial, rm added; ADD then ADC with live CF. */
+bool minic_x86_64_add32_carry_template(const char *s,size_t len){
+    static const char text[]="addl%2,%0adcl$0,%0";
+    char norm[80];size_t i,n=0U;
+    if(!s||!len||len>=sizeof(norm))return false;
+    for(i=0U;i<len;++i){
+        const char c=s[i];
+        if(c==' '||c==9||c==10||c==13)continue;
+        if(c==';'||n+1U>=sizeof(norm))return false;
+        norm[n++]=c;
+    }
+    norm[n]=0;
+    return strcmp(norm,text)==0;
+}
+static bool x86_add32_carry_source(const MinicC0Program *p,
+    const MinicInlineAsm *s,MinicTargetInlineAsmContract *c){
+    size_t i;
+    if(!p||!s||!c||s->is_volatile||s->is_goto||
+       s->has_memory_clobber||s->label_count||s->clobber_count||
+       s->register_clobber_count||s->output_count!=1U||
+       s->input_count!=2U||!s->outputs||!s->inputs||
+       !minic_x86_64_add32_carry_template(
+            s->template_text,s->template_length)||
+       !c_is(&s->outputs[0],"=r")||
+       !c_is(&s->inputs[0],"0")||!c_is(&s->inputs[1],"rm"))
+        return false;
+    for(i=0U;i<3U;++i){
+        const MinicInlineAsmOperand *op=i==0U?
+            &s->outputs[0]:&s->inputs[i-1U];
+        const MinicExpression *expr=minic_c0_program_expression(
+            p,op->expression);
+        MinicType type;
+        if(!expr||!minic_type_unqualified(expr->type,&type)||
+           type.base_kind!=MINIC_TYPE_BASE_INT||
+           type.integer_rank!=MINIC_INTEGER_RANK_INT||
+           (i==0U&&(expr->value_category!=MINIC_VALUE_LVALUE||
+                     minic_type_is_const(expr->type))))
+            return false;
+    }
+    c->operand_count=3U;
+    c->kinds[0]=MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+    c->kinds[1]=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    c->kinds[2]=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    return true;
+}
+
 static bool x86_nospec_source(const MinicC0Program *program,
                               const MinicInlineAsm *src) {
     const MinicExpression *out, *size, *index;
@@ -1369,6 +1419,8 @@ bool minic_x86_64_qualify_inline_asm(
     bool is_mulacc = false, is_muldiv = false;
     size_t i, count;
     if (!contract) return false;
+    if (x86_add32_carry_source(program, source, contract))
+        return true;
     if (x86_percpu_gs_source(program, source, contract))
         return true;
     if (x86_checksum_source(program, source, contract))

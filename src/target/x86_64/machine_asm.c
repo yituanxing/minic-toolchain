@@ -241,6 +241,43 @@ static bool emit_linux_bitops(
 
 
 
+
+/* True CF carry-out propagation on 32-bit original Linux csum_add:
+ * select GNU rm's register alternative. ALL inputs are materialized
+ * before ADD, so ADC executes immediately with unmodified EFLAGS. */
+static bool emit_add32_carry(FILE *out,const MinicC0Program *p,
+    const MinicTargetInfo *t,const MinicCoreFunction *fn,
+    const MinicX86Frame *frame,const MinicCoreInstruction *ins,
+    const MinicCoreInlineAsm *info){
+    const MinicCoreStructuredInlineAsmOperand *b=
+        ins->value.structured_inline_asm.operands;
+    MinicType ty;size_t bytes,i;bool sign;
+    if(!out||!p||!t||!fn||!frame||!info||!ins||!b||
+       !minic_x86_64_add32_carry_template(
+           info->template_text,info->template_length)||
+       info->is_goto||info->has_memory_clobber||
+       info->register_clobber_count||
+       ins->value.structured_inline_asm.operand_count!=3U)return false;
+    for(i=0U;i<3U;++i){
+        if(b[i].value>=fn->value_count||b[i].operand_index!=i||
+           b[i].has_fixed_register_binding||b[i].early_clobber||
+           b[i].kind!=(i==0U?
+             MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT:
+             MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT))
+            return false;
+        ty=fn->values[b[i].value].type;
+        if(i==0U&&!minic_type_pointee(ty,&ty))return false;
+        if(!minic_x86_64_scalar_width(p,t,ty,&bytes,&sign)||
+           bytes!=4U)return false;
+    }
+    return x86_value_load(out,frame,b[1].value,"%rax")&&
+           x86_value_load(out,frame,b[2].value,"%r10")&&
+           fputs("  addl %r10d, %eax\n"
+                 "  adcl $0, %eax\n",out)!=EOF&&
+           x86_value_load(out,frame,b[0].value,"%r11")&&
+           fputs("  movl %eax, (%r11)\n",out)!=EOF;
+}
+
 /* The GS segment base is a real x86 hardware register. Address-backed
  * Core lvalues carry the per-CPU symbol/field displacement, not ordinary
  * C values. Use caller-saved RAX/R10/R11, preserve x86 width and flags. */
@@ -916,6 +953,9 @@ bool minic_x86_64_emit_structured_asm(
               info->template_length,&percpu_op,&percpu_width))
             return emit_linux_percpu_gs(out,program,target,fn,frame,ins,info);
     }
+    if (minic_x86_64_add32_carry_template(
+            info->template_text,info->template_length))
+        return emit_add32_carry(out,program,target,fn,frame,ins,info);
     if (minic_x86_64_checksum_fold_template(
             info->template_text,info->template_length))
         return emit_checksum_fold(out,program,target,fn,frame,ins,info);
