@@ -229,6 +229,14 @@ jobs:
         run: |
           set -Eeuo pipefail
           bash tests/compiler/c0/probe-gnu-empty-volatile-core-family.sh
+      - name: Original x86 GNU Linux SMP lock barriers and hardware fence six-way native oracle
+        if: matrix.target == 'x86_64'
+        shell: bash
+        env:
+          MINIC_CC: ${{ github.workspace }}/build/runtime-ci/bin/minic-cc
+        run: |
+          set -Eeuo pipefail
+          bash tests/compiler/c0/probe-x86-linux-zero-operand-barrier-gcc-native.sh
       - name: Original GNU Linux _THIS_IP_ x86 RIP-relative LEA and SSA output oracle
         if: matrix.target == 'x86_64'
         shell: bash

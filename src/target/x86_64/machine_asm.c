@@ -947,6 +947,27 @@ bool minic_x86_64_emit_structured_asm(
     bindings = ins->value.structured_inline_asm.operands;
     if (!info->template_text)
         return false;
+    {
+        const unsigned int form = minic_x86_64_linux_zero_barrier_form(
+            info->template_text, info->template_length);
+        if (form != 0U) {
+            static const char *const emit[] = {
+                "  lock; addl $0, -4(%rsp)\n",
+                "  mfence\n", "  lfence\n", "  sfence\n",
+                "  pause\n", "  rep; nop\n"
+            };
+            if (!info->is_volatile || info->is_goto ||
+                ins->value.structured_inline_asm.operand_count != 0U ||
+                (form <= 4U && !info->has_memory_clobber) ||
+                (form == 1U
+                 ? info->register_clobber_count != 1U ||
+                   info->register_clobbers == NULL ||
+                   !clobber_is(&info->register_clobbers[0], "cc")
+                 : info->register_clobber_count != 0U))
+                return false;
+            return fputs(emit[form - 1U], out) != EOF;
+        }
+    }
     if (minic_x86_64_linux_ip_here_template(
             info->template_text, info->template_length)) {
         MinicType pointee;

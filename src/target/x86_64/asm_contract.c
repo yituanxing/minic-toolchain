@@ -221,6 +221,60 @@ static bool clobber_is(const MinicInlineAsmRegisterClobber *op, const char *s) {
 /* Only integer operands of the same real x86 width; never silently
  * convert a user-supplied operand or drop the hardware condition flags. */
 
+/* x86 Linux zero-GNU-operand hardware ordering instruction class.
+ * One ISA descriptor handles source admission and final machine emission:
+ * 1=locked stack read-write barrier; 2/3/4=full/load/store fence;
+ * 5=pause, 6=rep;nop. No unrestricted ASM text is allowed. */
+unsigned int minic_x86_64_linux_zero_barrier_form(
+    const char *text, size_t length) {
+    static const char *const exact[] = {
+        "lock;addl$0,-4(%%rsp)",
+        "mfence", "lfence", "sfence", "pause", "rep;nop"
+    };
+    char compact[64];
+    size_t i, n = 0U;
+    if (text == NULL || length == 0U || length >= sizeof(compact))
+        return 0U;
+    for (i = 0U; i < length; ++i) {
+        const char c = text[i];
+        if (c == ' ' || c == '\t') continue;
+        if (c == '\n' || c == '\r' || c == '\0') return 0U;
+        compact[n++] = c;
+    }
+    compact[n] = '\0';
+    for (i = 0U; i < sizeof(exact) / sizeof(exact[0]); ++i)
+        if (strcmp(exact[i], compact) == 0)
+            return (unsigned int)(i + 1U);
+    return 0U;
+}
+
+static bool x86_linux_zero_barrier_source(
+    const MinicInlineAsm *source, MinicTargetInlineAsmContract *contract) {
+    unsigned int form;
+    bool mem;
+    if (source == NULL || contract == NULL || !source->is_volatile ||
+        source->is_goto || source->input_count != 0U ||
+        source->output_count != 0U || source->label_count != 0U)
+        return false;
+    form = minic_x86_64_linux_zero_barrier_form(
+        source->template_text, source->template_length);
+    if (form == 0U) return false;
+    mem = source->has_memory_clobber;
+    if (form <= 4U && !mem) return false;
+    if (form == 1U) {
+        if (source->clobber_count != 2U ||
+            source->register_clobber_count != 1U ||
+            source->register_clobbers == NULL ||
+            !clobber_is(&source->register_clobbers[0], "cc"))
+            return false;
+    } else if (source->register_clobber_count != 0U ||
+               source->clobber_count != (mem ? 1U : 0U)) {
+        return false;
+    }
+    contract->operand_count = 0U;
+    return true;
+}
+
 /* Complete x86 EDX:EAX counter family, GNU 32/64-bit output carriers. */
 unsigned int minic_x86_64_linux_counter_form(const char *s,size_t len) {
     static const char *const names[]={"rdtsc","rdpmc","rdtscp"};
@@ -1546,6 +1600,8 @@ bool minic_x86_64_qualify_inline_asm(
     bool is_mulacc = false, is_muldiv = false;
     size_t i, count;
     if (!contract) return false;
+    if (x86_linux_zero_barrier_source(source, contract))
+        return true;
     if (x86_linux_ip_here_source(program, source, contract))
         return true;
     if (x86_add32_carry_source(program, source, contract))
