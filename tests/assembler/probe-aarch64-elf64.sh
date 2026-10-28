@@ -99,6 +99,7 @@ external_probe:
     mrs x1, ctr_el0
     mrs x0, CNTVCT_EL0
     mrs x0, SCTLR_EL1
+    eret
     msr tpidrro_el0, x0
     msr daif, xzr
     // Privileged system maintenance, GNU/LLVM verified; not executed.
