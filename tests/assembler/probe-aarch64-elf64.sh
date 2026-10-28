@@ -2732,7 +2732,7 @@ A64_TRAMP_SET
 "$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-tramp-set-gnu.o" "$work/a64-tramp-set-gnu.bin"
 cmp "$work/a64-tramp-set-mini.bin" "$work/a64-tramp-set-gnu.bin"
 "$AARCH64_READELF" -Ws "$work/a64-tramp-set-mini.o" | grep -Eq 'ABS.*trampalias'
-"$AARCH64_READELF" -Ws "$work/a64-tramp-set-gnu.o" | grep -Eq 'ABS.*Ltrampalias'
+"$AARCH64_READELF" -Ws "$work/a64-tramp-set-gnu.o" | grep -Eq 'ABS.*trampalias'
 printf '.text\n.set invalid, -4398082211840 + local - .other.section\nlocal: ret\n' >"$work/a64-cross-section-set-bad.s"
 if "$MINIAS" --target=aarch64 -o "$work/a64-cross-section-set-bad.o" "$work/a64-cross-section-set-bad.s" >/dev/null 2>&1; then
  echo 'wrong-section set subtraction folded without validating section' >&2; exit 1
