@@ -3228,3 +3228,28 @@ objcopy -j .eh_frame -O binary "$work/x86-eh-simple-mini.o" "$work/x86-eh-simple
 objcopy -j .eh_frame -O binary "$work/x86-eh-simple-gnu.o" "$work/x86-eh-simple-gnu.bin"
 cmp "$work/x86-eh-simple-mini.bin" "$work/x86-eh-simple-gnu.bin"
 echo 'MINIAS_X86_EH_SIMPLE=PASS GNU_CIE_suppress_implicit_CFA'
+
+# Authentic relocate_kernel_64.S forward difference: GNU uses imm32
+# even when final same-section delta is 0x73 and fits in imm8.
+cat > "$work/x86-forward-delta.s" <<'X86_FORWARD_DELTA'
+.text
+.globl relocate_kernel
+relocate_kernel:
+addq $(identity_mapped - relocate_kernel), %r8
+push $0
+nop
+.space 112
+identity_mapped:
+ret
+X86_FORWARD_DELTA
+"$MINIAS" --target=x86_64 -o "$work/x86-delta-mini.o" "$work/x86-forward-delta.s"
+as --64 -o "$work/x86-delta-gnu.o" "$work/x86-forward-delta.s"
+objcopy -j .text -O binary "$work/x86-delta-mini.o" "$work/x86-delta-mini.bin"
+objcopy -j .text -O binary "$work/x86-delta-gnu.o" "$work/x86-delta-gnu.bin"
+cmp "$work/x86-delta-mini.bin" "$work/x86-delta-gnu.bin"
+readelf -Wr "$work/x86-delta-mini.o" | grep -q 'There are no relocations'
+printf '.text\na: nop\n.data\nb: .byte 0\n.text\naddq $(b-a), %%r8\n' >"$work/x86-cross-delta-bad.s"
+if "$MINIAS" --target=x86_64 -o "$work/x86-cross-delta-bad.o" "$work/x86-cross-delta-bad.s" >/dev/null 2>&1; then
+ echo "cross-section subtraction incorrectly folded to absolute" >&2; exit 1
+fi
+echo 'MINIAS_X86_FORWARD_DELTA=PASS GNU_IMM32_PUSHi_AND_same_section_strict'
