@@ -5,7 +5,7 @@ Discovery only: a successful .s is NOT GNU assembly/link/QEMU proof.
 """
 import argparse,concurrent.futures,hashlib,json,os,re,subprocess,sys
 CORE_FUNCTION_FAILURE = re.compile(
-    r"^MINIC_CORE_FUNCTION_FAILURE kind=(UNSUPPORTED|ERROR) index=(\\d+) "
+    r"^MINIC_CORE_FUNCTION_FAILURE kind=(UNSUPPORTED|ERROR) index=(\d+) "
     r"function=([A-Za-z_][A-Za-z_0-9]*)$", re.MULTILINE)
 
 def all_core_function_frontiers(stderr):
