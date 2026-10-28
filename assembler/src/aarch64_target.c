@@ -2577,7 +2577,8 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
     } else if(!strcmp(op,"eor") || !strcmp(op,"orr") ||
               !strcmp(op,"and") || !strcmp(op,"bic") ||
               !strcmp(op,"bsl") || !strcmp(op,"bit") ||
-              !strcmp(op,"bif") || !strcmp(op,"add") ||
+              !strcmp(op,"bif") ||
+              (!strcmp(op,"add") && args[0]=='v') ||
               !strcmp(op,"trn1")) {
         char tok[4][96];unsigned n,rd,rn,rm,i;
         uint32_t da,sa,ta;
