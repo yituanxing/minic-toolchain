@@ -1159,6 +1159,45 @@ for bad in 'staddlh x1,[x2]' 'casalh x1,x3,[x2]' \
         exit 1
     fi
 done
+
+# GNU Linux AArch64 :got: and :got_lo12: have distinct semantic ELF
+# relocations (311/312), not ordinary ADRP page+LDR LO12 (275/286).
+# Verify machine bytes AND linker-visible relocation type/name/addend.
+cat > "$work/a64-got-family.s" <<'A64_GOT_FAMILY'
+.arch armv8-a
+.text
+.globl got_entry
+got_entry:
+    adrp x2, :got:__start_notes
+    ldr x2, [x2, #:got_lo12:__start_notes]
+    adrp x9, :got:other_external
+    ldr x9, [x9, #:got_lo12:other_external]
+    adrp x4, ordinary_symbol
+    ldr x4, [x4, #:lo12:ordinary_symbol]
+A64_GOT_FAMILY
+"$MINIAS" --target=aarch64 -o "$work/got-mini.o" "$work/a64-got-family.s"
+"$AARCH64_AS" -o "$work/got-gnu.o" "$work/a64-got-family.s"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/got-mini.o" "$work/got-mini.bin"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/got-gnu.o" "$work/got-gnu.bin"
+cmp "$work/got-mini.bin" "$work/got-gnu.bin"
+"$AARCH64_READELF" -Wr "$work/got-mini.o" > "$work/got-mini-rel.txt"
+"$AARCH64_READELF" -Wr "$work/got-gnu.o" > "$work/got-gnu-rel.txt"
+for rel in R_AARCH64_ADR_GOT_PAGE R_AARCH64_LD64_GOT_LO12_NC \
+           R_AARCH64_ADR_PREL_PG_HI21 R_AARCH64_LDST64_ABS_LO12_NC; do
+    grep -q "$rel" "$work/got-mini-rel.txt"
+    grep -q "$rel" "$work/got-gnu-rel.txt"
+done
+test "$(grep -c 'R_AARCH64_ADR_GOT_PAGE' "$work/got-mini-rel.txt")" -eq 2
+test "$(grep -c 'R_AARCH64_LD64_GOT_LO12_NC' "$work/got-mini-rel.txt")" -eq 2
+for bad in 'adrp w2, :got:ext' 'adrp x2, :got:' \
+           'ldr w0, [x1, #:got_lo12:ext]' \
+           'str x0, [x1, #:got_lo12:ext]'; do
+    printf '.arch armv8-a\n.text\n%s\n' "$bad" > "$work/got-invalid.s"
+    if "$MINIAS" --target=aarch64 -o "$work/got-invalid.o" "$work/got-invalid.s" >/dev/null 2>&1; then
+        echo "invalid A64 GOT form accepted: $bad" >&2; exit 1
+    fi
+done
+echo 'MINIAS_AARCH64_GOT=PASS GNU_BYTES_311_312_and_page_LO12'
 echo 'MINIAS_AARCH64_LSE=PASS GNU_BYTES=equal enabled_gate=1 disabled_gate=1'
 
 

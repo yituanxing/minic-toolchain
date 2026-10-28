@@ -25,6 +25,8 @@ enum {
     AARCH64_R_PREL32 = 261U,
     AARCH64_R_ADR_PREL_LO21 = 274U,
     AARCH64_R_ADR_PREL_PG_HI21 = 275U,
+    AARCH64_R_ADR_GOT_PAGE = 311U,
+    AARCH64_R_LD64_GOT_LO12_NC = 312U,
     AARCH64_R_ADD_ABS_LO12_NC = 277U,
     AARCH64_R_LDST8_ABS_LO12_NC = 278U,
     AARCH64_R_LDST16_ABS_LO12_NC = 284U,
@@ -191,6 +193,7 @@ enum {
     A64_MC_ADRP,
     A64_MC_ADD_LO12,
     A64_MC_LDST_LO12,
+    A64_MC_LDST_GOT_LO12,
     A64_MC_MOV_REG,
     A64_MC_ADD_REG,
     A64_MC_EXT_ALU,
@@ -1214,10 +1217,15 @@ static bool a64_parse_relocated(MiniAsMCInst *inst,
         return true;
     }
     if(!strcmp(op,"adrp") && n==2U &&
-       parse_a64_reg(tok[0],&rd,&wd,&spd) && wd && !spd &&
-       minias_parse_symbol_addend(tok[1],&expr) &&
-       a64_attach_expr(inst,1U,&expr)) {
+       parse_a64_reg(tok[0],&rd,&wd,&spd) && wd && !spd) {
+        /* GNU :got:SYMBOL selects a DIFFERENT ELF relocation from the
+         * default page-relative ADRP. The instruction bytes are equal,
+         * but confusing 275 with 311 would break Linux GOT links. */
+        bool got=strncmp(tok[1],":got:",5U)==0;
+        if(!minias_parse_symbol_addend(got?tok[1]+5U:tok[1],&expr) ||
+           !a64_attach_expr(inst,1U,&expr))return false;
         inst->opcode=A64_MC_ADRP;inst->count=2U;
+        inst->encoding=got?1U:0U;
         put_reg(&inst->operands[0],rd,true);
         return true;
     }
@@ -1246,6 +1254,7 @@ static bool a64_parse_relocated(MiniAsMCInst *inst,
         size_t sz=strlen(tok[1]);
         char inner[96],*comma,*b;
         unsigned regnum;
+        bool got_lo12;
         if(sz<4U || tok[1][0]!='[' || tok[1][sz-1U]!=']' ||
            sz-2U>=sizeof(inner))return false;
         memcpy(inner,tok[1]+1U,sz-2U);inner[sz-2U]='\0';
@@ -1255,9 +1264,14 @@ static bool a64_parse_relocated(MiniAsMCInst *inst,
         if(!parse_a64_reg(minias_trim(inner),&regnum,&wn,&spn) || !wn)
             return false;
         b=minias_trim(comma);
-        if(!a64_lo12_expr(b,&expr) ||
+        if(*b=='#')++b;
+        got_lo12=strncmp(b,":got_lo12:",10U)==0;
+        if(got_lo12 && (strcmp(op,"ldr")!=0 || !wd))return false;
+        if(!(got_lo12?minias_parse_symbol_addend(b+10U,&expr):
+                        a64_lo12_expr(b,&expr)) ||
            !a64_attach_expr(inst,2U,&expr))return false;
         rn=regnum;
+        if(got_lo12)inst->opcode=A64_MC_LDST_GOT_LO12;
     }
     unit=!strcmp(op,"ldrsw")?4U:op[3]=='b'?1U:op[3]=='h'?2U:wd?8U:4U;
     if((unit==1U||unit==2U) && wd) {
@@ -1265,7 +1279,8 @@ static bool a64_parse_relocated(MiniAsMCInst *inst,
         inst->operands[2].symbol=NULL;
         return false;
     }
-    inst->opcode=A64_MC_LDST_LO12;
+    if(inst->opcode!=A64_MC_LDST_GOT_LO12)
+        inst->opcode=A64_MC_LDST_LO12;
     inst->count=3U;
     put_reg(&inst->operands[0],rd,wd);
     put_reg(&inst->operands[1],rn,true);
@@ -2393,7 +2408,8 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
         case A64_MC_ADRP:
             code=UINT32_C(0x90000000)|inst->operands[0].reg;
             expr=inst->operands[1].symbol;
-            fixup=MINIAS_FIXUP_A64_ADRP_HI21;
+            fixup=inst->encoding==1U?MINIAS_FIXUP_A64_ADR_GOT_PAGE:
+                                      MINIAS_FIXUP_A64_ADRP_HI21;
             break;
         case A64_MC_ADD_LO12:
             code=(inst->operands[0].register_64?
@@ -2403,10 +2419,13 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
             fixup=MINIAS_FIXUP_A64_ADD_LO12;
             break;
         case A64_MC_LDST_LO12:
+        case A64_MC_LDST_GOT_LO12:
             code=inst->encoding|(inst->operands[1].reg<<5U)|
                  inst->operands[0].reg;
             expr=inst->operands[2].symbol;
-            fixup=inst->encoding==UINT32_C(0x39400000) ||
+            fixup=inst->opcode==A64_MC_LDST_GOT_LO12?
+                      MINIAS_FIXUP_A64_LD64_GOT_LO12:
+                  inst->encoding==UINT32_C(0x39400000) ||
                   inst->encoding==UINT32_C(0x39000000) ?
                       MINIAS_FIXUP_A64_LDST8_LO12 :
                   inst->encoding==UINT32_C(0x79400000) ||
@@ -2979,6 +2998,10 @@ static uint32_t aarch64_fixup_relocation_type(MiniAsFixupKind kind,
             return width == 4U ? AARCH64_R_ADR_PREL_LO21 : 0U;
         case MINIAS_FIXUP_A64_ADRP_HI21:
             return width == 4U ? AARCH64_R_ADR_PREL_PG_HI21 : 0U;
+        case MINIAS_FIXUP_A64_ADR_GOT_PAGE:
+            return width == 4U ? AARCH64_R_ADR_GOT_PAGE : 0U;
+        case MINIAS_FIXUP_A64_LD64_GOT_LO12:
+            return width == 4U ? AARCH64_R_LD64_GOT_LO12_NC : 0U;
         case MINIAS_FIXUP_A64_ADD_LO12:
             return width == 4U ? AARCH64_R_ADD_ABS_LO12_NC : 0U;
         case MINIAS_FIXUP_A64_LDST8_LO12:
