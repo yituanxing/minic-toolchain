@@ -80,6 +80,12 @@ external_probe:
     msr hpfar_el2, x0
     mrs x2, dbgbcr0_el1
     msr dbgbcr0_el1, x2
+    mrs x3, dbgbvr0_el1
+    msr dbgbvr0_el1, x4
+    mrs x4, par_el1
+    msr par_el1, x5
+    mrs x1, hcr_el2
+    msr hcr_el2, x7
     mrs x3, vttbr_el2
     msr vttbr_el2, x0
     mrs x1, cnthctl_el2
