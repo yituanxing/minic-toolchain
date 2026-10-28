@@ -56,10 +56,9 @@ bool minic_multi_direct_lp64_function_preflight(
                minic_core_function_verify(fn);
     if (name == NULL || name[0] == '\0' ||
         !verified ||
-        decl->is_weak ||
         (decl->visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT &&
          minic_multi_elf_visibility_directive(decl->visibility) == NULL) ||
-        decl->section_name != NULL || decl->alias_target != MINIC_FUNCTION_INVALID ||
+        decl->alias_target != MINIC_FUNCTION_INVALID ||
         !minic_lp64_valid_return_type(program, target, fn->return_type) ||
         fn->block_count > 2048U ||
         !direct_lp64_only_structured_asm(fn) ||

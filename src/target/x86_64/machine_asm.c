@@ -239,6 +239,41 @@ static bool emit_linux_bitops(
 
 
 
+
+/* The third GNU input "0" initializes %eax, while ADD and ADC must be
+ * adjacent because CF is live. Both operands are real Core scalars. */
+static bool emit_checksum_fold(FILE *out,const MinicC0Program *p,
+    const MinicTargetInfo *t,const MinicCoreFunction *fn,
+    const MinicX86Frame *frame,const MinicCoreInstruction *ins,
+    const MinicCoreInlineAsm *info){
+    const MinicCoreStructuredInlineAsmOperand *b=
+        ins->value.structured_inline_asm.operands;
+    MinicType ty;size_t width,i;bool sign;
+    if(!out||!p||!t||!fn||!frame||!ins||!info||!b||
+       !minic_x86_64_checksum_fold_template(
+            info->template_text,info->template_length)||
+       info->is_volatile||info->is_goto||info->has_memory_clobber||
+       info->register_clobber_count||
+       ins->value.structured_inline_asm.operand_count!=3U)return false;
+    for(i=0U;i<3U;++i){
+        if(b[i].operand_index!=i||b[i].value>=fn->value_count||
+           b[i].has_fixed_register_binding||b[i].early_clobber||
+           b[i].kind!=(i==0U?
+             MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT:
+             MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT))return false;
+        ty=fn->values[b[i].value].type;
+        if(i==0U&&!minic_type_pointee(ty,&ty))return false;
+        if(!minic_x86_64_scalar_width(p,t,ty,&width,&sign)||
+           width!=4U)return false;
+    }
+    return x86_value_load(out,frame,b[2].value,"%rax")&&
+           x86_value_load(out,frame,b[1].value,"%r10")&&
+           fputs("  addl %r10d, %eax\n"
+                 "  adcl $0xffff, %eax\n",out)!=EOF&&
+           x86_value_load(out,frame,b[0].value,"%r11")&&
+           fputs("  movl %eax, (%r11)\n",out)!=EOF;
+}
+
 /* Privileged Linux rdmsr/wrmsr with 1:/2: exception fixups. Both GNU
  * relocation entries are real, with architecture-defined type 9 or 8.
  * No executing these privileged opcodes in unprivileged regression tests. */
@@ -813,6 +848,9 @@ bool minic_x86_64_emit_structured_asm(
     bindings = ins->value.structured_inline_asm.operands;
     if (!info->template_text)
         return false;
+    if (minic_x86_64_checksum_fold_template(
+            info->template_text,info->template_length))
+        return emit_checksum_fold(out,program,target,fn,frame,ins,info);
     if (minic_x86_64_linux_msr_form(
             info->template_text,info->template_length))
         return emit_linux_msr(out,program,target,fn,frame,ins,info);

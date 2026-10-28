@@ -61,12 +61,18 @@ static inline bool minic_multi_direct_lp64_emit_function(
         emission = staged;
     }
 
-    if (function_sections) {
+    /* A GNU explicit section overrides compiler-generated function sections. */
+    if (decl->section_name != NULL) {
+        if (fprintf(emission, ".section %s,\"ax\",%s\n",
+                    decl->section_name, config->text_section_type) < 0)
+            goto output_failed;
+    } else if (function_sections) {
         if (fprintf(emission, ".section .text.%s,\"ax\",%s\n",
                     name, config->text_section_type) < 0) goto output_failed;
     } else if (fputs(".text\n", emission) == EOF) goto output_failed;
 
-    if ((!decl->is_internal && fprintf(emission, ".globl %s\n", name) < 0) ||
+    if ((!decl->is_internal &&
+         fprintf(emission, decl->is_weak ? ".weak %s\n" : ".globl %s\n", name) < 0) ||
         (!decl->is_internal &&
          !minic_multi_emit_elf_symbol_visibility(
              emission, decl->visibility, name)) ||

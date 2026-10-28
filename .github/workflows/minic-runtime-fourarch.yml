@@ -41,6 +41,7 @@ on:
       - "src/target/common/lp64_scalar.c"
       - "src/target/common/direct_call_plan.c"
       - "tests/compiler/c0/probe-aarch64-linux-acquire-load.sh"
+      - "tests/compiler/c0/probe-direct-lp64-weak-section-qemu.sh"
       - "src/target/aarch64/call_emit.c"
       - "src/target/aarch64/integer_emit.c"
       - "src/target/aarch64/residual_emit.c"
@@ -410,6 +411,12 @@ jobs:
           set -Eeuo pipefail
           bash tests/compiler/c0/probe-loongarch-cpucfg-qemu.sh \
             "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
+      - name: Original GNU weak and section ELF symbol parity under real LP64 QEMU
+        if: matrix.target == 'aarch64' || matrix.target == 'loongarch64'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash tests/compiler/c0/probe-direct-lp64-weak-section-qemu.sh "${{ matrix.target }}" "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
       - name: QEMU execute upstream runtime with native ABI on new LP64 targets
         if: matrix.target == 'aarch64' || matrix.target == 'loongarch64'
         shell: bash
