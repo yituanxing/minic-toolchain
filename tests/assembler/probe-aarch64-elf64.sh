@@ -168,6 +168,19 @@ external_probe:
     mov w7, #0xffff0000
     mov w8, #0xffff
     mov x12, #0xffffffff00000000
+    // Extended-index arithmetic: GNU SP, UXTW/SXTW/UXTX/SXTX and CMP.
+    add x1, x0, w1, uxtw
+    add x20, x20, w0, sxtw
+    add x0, x1, w2, uxtw #3
+    add x3, x4, x5, sxtx #1
+    add x6, x7, x8, uxtx
+    sub x9, x10, w11, sxtw #2
+    adds x0, x1, w2, sxtw
+    subs x4, x5, w6, uxtw #4
+    cmp x0, w1, uxtw #1
+    cmn x0, w1, sxtw
+    add x0, sp, x1, lsl #3
+    add sp, sp, x2, lsl #1
     // One typed UBFM/SBFM/BFM field model, tested W/X + GNU alias semantics.
     ubfx w0, w1, #2, #8
     ubfx x2, x3, #23, #32
@@ -522,6 +535,14 @@ for bad_source in 'ldxr x0, [x1,#4]' 'stxr x0, x1, [x2]' \
                   'mov w0, #4294967296' \
                   'mov x0, #0x123456789abcdef0' \
                   'mov x0, #18446744073709551616' \
+                  'add x0, x1, w2, uxtw #5' \
+                  'add x0, x1, x2, uxtw' \
+                  'add w0, w1, x2, sxtx' \
+                  'add x0, x1, w2, sxtx' \
+                  'add x0, x1, x2, sxtw' \
+                  'cmp x0, w2, sxtw #5' \
+                  'adds sp, x1, w2, uxtw' \
+                  'sub x0, w1, w2, uxtw' \
                   'yield #1' \
                   'hint #.Lnever_defined' \
                   '.equ .Lbad_hint,128; hint #.Lbad_hint' \

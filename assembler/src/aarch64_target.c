@@ -188,6 +188,7 @@ enum {
     A64_MC_LDST_LO12,
     A64_MC_MOV_REG,
     A64_MC_ADD_REG,
+    A64_MC_EXT_ALU,
     A64_MC_SUB_REG,
     A64_MC_ADDS_REG,
     A64_MC_SUBS_REG,
@@ -401,6 +402,36 @@ static bool a64_shift_fields(const char *text,bool wide,bool allow_ror,
     }
     return false;
 }
+/* A64 extended register option: UXT{B,H,W,X}, SXT{B,H,W,X},
+ * with 0..4 bit scaling. LSL is an UXTX alias only for SP-sensitive
+ * add/sub instruction forms; plain shifted ALU stays the base encoding. */
+static bool a64_extended_fields(const char *text,bool indexwide,
+                                 bool sp_mode,uint32_t *bits) {
+    static const char *const mode[]={
+        "uxtb","uxth","uxtw","uxtx","sxtb","sxth","sxtw","sxtx"
+    };
+    unsigned i,option=0U;
+    const char *arg=NULL;
+    int64_t shift=0;
+    if(sp_mode && indexwide && !strncmp(text,"lsl",3U) &&
+       (!text[3] || isspace((unsigned char)text[3]))) {
+        option=3U;arg=text+3U;
+    }else {
+        for(i=0U;i<8U;++i) {
+            if(!strncmp(text,mode[i],4U) &&
+               (!text[4] || isspace((unsigned char)text[4]))) {
+                option=i;arg=text+4U;break;
+            }
+        }
+        if(!arg)return false;
+    }
+    if(indexwide!=(option==3U || option==7U))return false;
+    while(isspace((unsigned char)*arg))++arg;
+    if(*arg && !parse_signed_number(arg,&shift))return false;
+    if(shift<0 || shift>4)return false;
+    *bits=(option<<13U)|((uint32_t)shift<<10U);
+    return true;
+}
 /* Enumerate exact A64 rotated/replicated logical-immediate bitfields:
  * one Target grammar supports AND/ORR/EOR/ANDS/TST, not Core patches. */
 static bool a64_mask_bits(uint64_t value,bool wide,uint32_t *enc) {
@@ -435,6 +466,44 @@ static bool parse_integer_family(MiniAsMCInst *inst,
     unsigned kind = 0U;
 
     if (!split_operands(args, t, &n)) return false;
+    /* GNU extended ADD/SUB/ADDS/SUBS/CMP/CMN register forms.
+     * This is an AArch64 Target ISA variant, not an alternate Common IR. */
+    if(n==4U || n==3U) {
+        bool cmp=n==3U && (!strcmp(op,"cmp") || !strcmp(op,"cmn"));
+        bool alu=n==4U && (!strcmp(op,"add") || !strcmp(op,"sub") ||
+                            !strcmp(op,"adds") || !strcmp(op,"subs"));
+        if(cmp || alu) {
+            unsigned erd,ern,erm;
+            bool dwide,nwide,mwide,dsp,nsp,msp;
+            uint32_t ext;
+            bool sp_sensitive;
+            if(parse_a64_reg(t[0],&erd,&dwide,&dsp) &&
+               (cmp || parse_a64_reg(t[1],&ern,&nwide,&nsp)) &&
+               parse_a64_reg(t[cmp?1U:2U],&erm,&mwide,&msp) && !msp &&
+               (cmp || dwide==nwide)) {
+                if(cmp) {
+                    ern=erd;nwide=dwide;nsp=dsp;erd=31U;dsp=false;
+                }
+                sp_sensitive=dsp||nsp;
+                if((dwide || !mwide) &&
+                   ((!strcmp(op,"add") || !strcmp(op,"sub")) || !dsp) &&
+                   a64_extended_fields(t[cmp?2U:3U],mwide,
+                                       sp_sensitive,&ext)) {
+                    uint32_t base=!strcmp(op,"add")?UINT32_C(0x0b200000):
+                                  !strcmp(op,"sub")?UINT32_C(0x4b200000):
+                                  !strcmp(op,"adds") || !strcmp(op,"cmn")?
+                                                    UINT32_C(0x2b200000):
+                                                    UINT32_C(0x6b200000);
+                    inst->opcode=A64_MC_EXT_ALU;inst->count=3U;
+                    inst->encoding=base|ext;
+                    put_reg(&inst->operands[0],erd,dwide);
+                    put_reg(&inst->operands[1],ern,nwide);
+                    put_reg(&inst->operands[2],erm,mwide);
+                    return true;
+                }
+            }
+        }
+    }
     /* GNU shifted register arithmetic (4 operands) and compares (3).
      * This extends existing typed instruction families; no new encoder. */
     if(n==4U || n==3U) {
@@ -1886,6 +1955,12 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
                     (rm << 16U) | rd;
             break;
         }
+        case A64_MC_EXT_ALU:
+            code=inst->encoding|
+                 (inst->operands[0].register_64?UINT32_C(0x80000000):0U)|
+                 (inst->operands[2].reg<<16U)|
+                 (inst->operands[1].reg<<5U)|inst->operands[0].reg;
+            break;
         case A64_MC_ADD_REG:
         case A64_MC_SUB_REG:
         case A64_MC_ADDS_REG:
