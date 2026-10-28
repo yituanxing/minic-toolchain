@@ -437,6 +437,8 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         {"btw",0xa3,0,false},{"btsw",0xab,0,false},
         {"btrw",0xb3,0,false},{"btcw",0xbb,0,false},
         {"popcntq",0,0x1b8U,true},{"popcntl",0,0x1b8U,false},
+        {"lzcntq",0,0x1bdU,true},{"lzcntl",0,0x1bdU,false},
+        {"tzcntq",0,0x1bcU,true},{"tzcntl",0,0x1bcU,false},
         {"imulq",0,0x1afU,true},{"imull",0,0x1afU,false},
         /* Existing typed memory ModR/M encoder owns REX/SIB/PC32 for
          * 0F B6/B7 zero-extension and 63 sign-extension. */
@@ -1322,12 +1324,17 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             goto done;
         }
         /* F3 0F B8 /r with existing reversed ModR/M register encoding. */
-        if((!strcmp(s->op,"popcntl") || !strcmp(s->op,"popcntq")) &&
+        if((!strcmp(s->op,"popcntl") || !strcmp(s->op,"popcntq") ||
+            !strcmp(s->op,"lzcntl") || !strcmp(s->op,"lzcntq") ||
+            !strcmp(s->op,"tzcntl") || !strcmp(s->op,"tzcntq")) &&
            x64_register(src,&first,&ws) &&
            x64_register(dst,&second,&wd) && ws==wd &&
-           wd==(!strcmp(s->op,"popcntq"))) {
+           wd==(s->op[strlen(s->op)-1U]=='q')) {
             m->opcode=X64_REG_BINARY;m->count=2U;
-            m->encoding=UINT32_C(0x2000)|UINT32_C(0x900)|UINT32_C(0xb8);
+            m->encoding=UINT32_C(0x2000)|UINT32_C(0x900)|
+                (!strncmp(s->op,"lzcnt",5U)?UINT32_C(0xbd):
+                 !strncmp(s->op,"tzcnt",5U)?UINT32_C(0xbc):
+                 UINT32_C(0xb8));
             m->operands[0].kind=MINIAS_MC_REGISTER;
             m->operands[0].reg=first;
             m->operands[0].register_64=wd;
@@ -1985,7 +1992,9 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         m->encoding=*chosen |
             ((!strncmp(s->op,"bt",2U) || !strncmp(s->op,"xadd",4U) ||
               !strncmp(s->op,"cmpxchg",7U)) ? 0x100U : 0U) |
-            (!strncmp(s->op,"popcnt",6U)?UINT32_C(0x2000):0U) |
+            ((!strncmp(s->op,"popcnt",6U) ||
+               !strncmp(s->op,"lzcnt",5U) ||
+               !strncmp(s->op,"tzcnt",5U))?UINT32_C(0x2000):0U) |
             (reg_bits==8U?0x200U:reg_bits==16U?0x400U:0U)|
             (legacy_high8?0x800U:0U);
         m->operands[0].kind=MINIAS_MC_REGISTER;
