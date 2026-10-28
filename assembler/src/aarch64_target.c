@@ -1655,6 +1655,8 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
             {"tlbi","vale1is",UINT32_C(0xd50883a0),true},
             {"tlbi","vaae1",UINT32_C(0xd5088760),true},
             {"tlbi","vaae1is",UINT32_C(0xd5088360),true},
+            {"tlbi","vaale1",UINT32_C(0xd50887e0),true},
+            {"tlbi","vaale1is",UINT32_C(0xd50883e0),true},
             {"tlbi","aside1",UINT32_C(0xd5088740),true},
             {"tlbi","aside1is",UINT32_C(0xd5088340),true},
             {"tlbi","alle2",UINT32_C(0xd50c871f),false},
