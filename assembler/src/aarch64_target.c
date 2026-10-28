@@ -2517,7 +2517,11 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
                        UINT32_C(0xd9e00000):UINT32_C(0xd9a00000);
         put_reg(&inst->operands[0],rt,true);
         put_reg(&inst->operands[1],rn,true);
-    } else if(!strcmp(op,"ins")) {
+    } else if(!strcmp(op,"ins") ||
+              (!strcmp(op,"mov") && args[0]=='v' &&
+               strchr(args,'[')!=NULL)) {
+        /* GNU MOV Vd.element[lane],Wn/Xn is INS's exact lane encoding,
+         * not the earlier whole-register MOV/ORR alias. */
         unsigned vd,rn;
         uint32_t imm5;
         bool source_x,wide,sp;
@@ -2559,30 +2563,41 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
                                      UINT32_C(0x1e260000));
         put_reg(&inst->operands[0],rd,true);
         put_reg(&inst->operands[1],rn,true);
-    } else if(!strcmp(op,"ushr")) {
-        /* SIMD USHR immediate uses immh:immb=2*element_bits-shift;
-         * support all B/H/S/D arrangements via the existing Target vector
-         * bank and two-register MC emitter. Never truncate shift ranges. */
-        char tok[4][384];unsigned n,rd,rn,bits;
-        uint32_t da,sa;
+    } else if(!strcmp(op,"ushr") || !strcmp(op,"sshr") ||
+              !strcmp(op,"sri") || !strcmp(op,"shl") ||
+              !strcmp(op,"sli")) {
+        /* One AdvSIMD shift-immediate ISA family, not five parsers.
+         * Right shifts use immh:immb=2*element_bits-shift; left shifts
+         * use element_bits+shift. Preserve signed/unsigned and insert
+         * semantics in the target opcode base, not the Common MC layout. */
+        char tok[4][384];unsigned n,rd,rn,bits,encoded_shift;
+        uint32_t da,sa,base;
         int64_t shift;
+        bool right=!strcmp(op,"ushr") || !strcmp(op,"sshr") ||
+                   !strcmp(op,"sri");
         if(!split_operands(args,tok,&n) || n!=3U ||
            !a64_vector_view(tok[0],&rd,&da) ||
            !a64_vector_view(tok[1],&rn,&sa) || da!=sa ||
            !parse_signed_number(tok[2],&shift)) {
-            minias_set_error(as,"bad-aarch64-ushr:%s:line=%zu",
+            minias_set_error(as,"bad-aarch64-simd-shift:%s:line=%zu",
                              args,stmt->line);free(inst);return false;
         }
         bits=8U<<((da&UINT32_C(0xc00))>>10U);
-        if(shift<1 || shift>(int64_t)bits ||
+        if((right?(shift<1 || shift>(int64_t)bits):
+                   (shift<0 || shift>=(int64_t)bits)) ||
            (bits==64U && (da&UINT32_C(0x40000000))==0U)) {
-            minias_set_error(as,"bad-aarch64-ushr-size:%s:line=%zu",
+            minias_set_error(as,"bad-aarch64-simd-shift-range:%s:line=%zu",
                              args,stmt->line);free(inst);return false;
         }
+        encoded_shift=right?2U*bits-(unsigned)shift:bits+(unsigned)shift;
+        base=!strcmp(op,"ushr")?UINT32_C(0x2f000400):
+             !strcmp(op,"sshr")?UINT32_C(0x0f000400):
+             !strcmp(op,"sri") ?UINT32_C(0x2f004400):
+             !strcmp(op,"shl") ?UINT32_C(0x0f005400):
+                                UINT32_C(0x2f005400);
         inst->opcode=A64_MC_SIMD_DUP;inst->count=2U;
-        inst->encoding=UINT32_C(0x2f000400)|
-                  (da&UINT32_C(0x40000000))|
-                  ((uint32_t)(2U*bits-(unsigned)shift)<<16U);
+        inst->encoding=base|(da&UINT32_C(0x40000000))|
+                       (encoded_shift<<16U);
         put_reg(&inst->operands[0],rd,true);
         put_reg(&inst->operands[1],rn,true);
     } else if(!strcmp(op,"dmb") || !strcmp(op,"dsb") ||

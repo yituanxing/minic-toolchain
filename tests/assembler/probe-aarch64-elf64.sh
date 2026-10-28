@@ -1931,3 +1931,41 @@ if "$MINIAS" --target=aarch64 -o "$work/a64-ldg-disabled.o" "$work/a64-ldg-disab
     echo "MTE LDG enabled with no ISA feature" >&2;exit 1
 fi
 echo 'MINIAS_A64_FMOV_LDG_USHR=PASS GNU_exact_bytes_and_16_invalid_gates'
+
+# Next authentic A64 Linux first blockers after USHR: SHL/SLI immediate
+# and GNU MOV lane alias. Qualify a *family* against real GNU AS bytes.
+cat > "$work/a64-linux-shift-lane-family.s" <<'GNU_A64_SHIFT_LANE'
+.text
+ushr v6.4s,v4.4s,#7
+sshr v6.4s,v4.4s,#7
+shl v4.2d,v4.2d,#57
+shl v7.4s,v8.4s,#25
+shl v1.8h,v3.8h,#9
+shl v2.16b,v5.16b,#6
+sli v6.4s,v4.4s,#25
+sli v5.2d,v6.2d,#57
+sli v3.16b,v2.16b,#4
+sri v6.4s,v4.4s,#7
+sri v5.2d,v6.2d,#17
+mov v19.d[0],xzr
+mov v1.d[1],x0
+mov v2.b[3],w1
+mov v5.h[1],w2
+mov v3.s[2],w4
+GNU_A64_SHIFT_LANE
+"$MINIAS" --target=aarch64 -o "$work/a64-linux-shift-mini.o" "$work/a64-linux-shift-lane-family.s"
+"$AARCH64_AS" -o "$work/a64-linux-shift-gnu.o" "$work/a64-linux-shift-lane-family.s"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-linux-shift-mini.o" "$work/a64-linux-shift-mini.bin"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-linux-shift-gnu.o" "$work/a64-linux-shift-gnu.bin"
+cmp "$work/a64-linux-shift-mini.bin" "$work/a64-linux-shift-gnu.bin"
+for bad in 'shl v0.4s,v1.4s,#32' 'shl v0.2d,v1.2d,#64' \
+           'shl v0.4s,v1.4s,#-1' 'sli v0.8h,v1.8h,#16' \
+           'sri v0.4s,v1.4s,#0' 'sshr v0.4s,v1.4s,#33' \
+           'ushr v0.1d,v1.1d,#1' 'shl v0.4s,v1.8h,#1' \
+           'mov v0.s[4],w1' 'mov v0.d[0],w1' 'mov v0.h[0],x1'; do
+    printf '.text\n%s\n' "$bad" > "$work/a64-shift-lane-invalid.s"
+    if "$MINIAS" --target=aarch64 -o "$work/a64-shift-lane-invalid.o" "$work/a64-shift-lane-invalid.s" >/dev/null 2>&1; then
+        echo "invalid A64 SIMD shift/move lane accepted: $bad" >&2;exit 1
+    fi
+done
+echo 'MINIAS_A64_SHIFT_LANE_FAMILY=PASS GNU_16_words_and_11_invalid'
