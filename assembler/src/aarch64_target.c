@@ -3241,24 +3241,45 @@ reduction_done:;
         put_reg(&inst->operands[0],rd,true);
         put_reg(&inst->operands[1],rn,true);
         if(tri)put_reg(&inst->operands[2],rm,true);
-    } else if(!strcmp(op,"umov") ||
+    } else if(!strcmp(op,"umov") || !strcmp(op,"smov") ||
               (!strcmp(op,"mov") && args[0]=='d')) {
+        /* One target-owned lane transfer for UMOV/SMOV and MOV Dn aliases,
+         * with distinct signed-extension width rules and GNU encoding. */
         char dst[96],source[96];unsigned rd,rn;
-        uint32_t lane;bool is_x,wide=false,sp,is_fp=!strcmp(op,"mov");
+        uint32_t lane;
+        bool is_x,wide=false,sp,is_fp=!strcmp(op,"mov");
+        bool signext=!strcmp(op,"smov");
         if(!split_two(args,dst,sizeof(dst),source,sizeof(source)) ||
-           !a64_ins_lane(source,&rn,&lane,&is_x) ||
-           (is_fp?(!a64_scalar_fp_d(dst,&rd) || !is_x):
-                  (!parse_a64_reg(dst,&rd,&wide,&sp) ||
-                   sp || wide!=is_x))) {
-            minias_set_error(as,"bad-aarch64-umov-lane:%s:line=%zu",
+           !a64_ins_lane(source,&rn,&lane,&is_x)) {
+            minias_set_error(as,"bad-aarch64-mov-lane:%s:line=%zu",
                              args,stmt->line);free(inst);return false;
         }
+        if(is_fp) {
+            if(!a64_scalar_fp_d(dst,&rd) || !is_x)goto invalid_lane;
+        }else {
+            if(!parse_a64_reg(dst,&rd,&wide,&sp) || sp)goto invalid_lane;
+            /* Signed: W <- B/H, X <- B/H/S. Unsigned: W <- B/H/S,
+             * X <- D. Lane imm5's low set bit identifies element width. */
+            if(signext) {
+                if(is_x || (!wide && (lane&UINT32_C(4))!=0U))
+                    goto invalid_lane;
+            }else if(wide!=is_x)goto invalid_lane;
+        }
         inst->opcode=A64_MC_SIMD_DUP;inst->count=2U;
-        inst->encoding=(is_fp?UINT32_C(0x5e000400):
+        inst->encoding=(signext?
+                           (wide?UINT32_C(0x4e002c00):
+                                 UINT32_C(0x0e002c00)):
+                         is_fp?UINT32_C(0x5e000400):
                          is_x?UINT32_C(0x4e003c00):
                               UINT32_C(0x0e003c00))|(lane<<16U);
-        put_reg(&inst->operands[0],rd,is_x);
+        put_reg(&inst->operands[0],rd,wide);
         put_reg(&inst->operands[1],rn,true);
+        goto lane_complete;
+invalid_lane:
+        minias_set_error(as,"bad-aarch64-mov-lane:%s:line=%zu",
+                         args,stmt->line);
+        free(inst);return false;
+lane_complete:;
     } else if(!strcmp(op,"stg") || !strcmp(op,"stzg") ||
               !strcmp(op,"st2g") || !strcmp(op,"stz2g")) {
         /* All four ARM MTE tag-store forms share the same checked
