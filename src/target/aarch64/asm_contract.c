@@ -650,13 +650,21 @@ static bool aarch64_linux_xchg_form(
     return false;
 }
 /* Original Linux 6.6.143 __ll_sc__cmpxchg_case_* uses real hardware
- * LDXR/LDAXR + EOR + conditional STXR/STLXR. GNU source contains named
- * %[oldval] etc; Core normalizes them to positional %1 etc. Match BOTH
- * forms to exactly one AArch64 ordering/width contract; no raw passthrough. */
+ * LDXR/LDAXR + EOR + conditional STXR/STLXR.  The narrow 8/16-bit
+ * forms use LDAXRB/H and STLXRB/H and compare the ZERO-EXTENDED old
+ * word with an explicitly truncated unsigned-long source operand.
+ * GNU source contains named %[oldval] etc; Core normalizes them to
+ * positional %1 etc.  Match both for all four C widths and all four
+ * memory orders, never an arbitrary inline ASM suffix or passthrough. */
+static size_t aarch64_linux_cmpxchg_width(unsigned int form) {
+    return form >= 1U && form <= 16U ?
+        (size_t)1U << ((form - 1U) / 4U) : 0U;
+}
 static unsigned int aarch64_linux_cmpxchg_form(
     const char *text, size_t length, bool numeric) {
     static const char *const loads[] = {"ldxr", "ldaxr", "ldxr", "ldxr"};
     static const char *const stores[] = {"stxr", "stxr", "stlxr", "stlxr"};
+    static const char *const suffixes[] = {"b", "h", "", ""};
     char compact[256], expected[256];
     size_t i, n = 0U, word, mode;
     if (!text || !length || length >= sizeof(compact)) return 0U;
@@ -667,29 +675,29 @@ static unsigned int aarch64_linux_cmpxchg_form(
         compact[n++] = c;
     }
     compact[n] = '\0';
-    for (word = 0U; word < 2U; ++word) {
+    for (word = 0U; word < 4U; ++word) {
         const char *mem = numeric ? "%2" : "%[v]";
         const char *oldval = numeric ?
-            (word ? "%1" : "%w1") :
-            (word ? "%[oldval]" : "%w[oldval]");
+            (word == 3U ? "%1" : "%w1") :
+            (word == 3U ? "%[oldval]" : "%w[oldval]");
         const char *tmp = numeric ?
-            (word ? "%0" : "%w0") :
-            (word ? "%[tmp]" : "%w[tmp]");
+            (word == 3U ? "%0" : "%w0") :
+            (word == 3U ? "%[tmp]" : "%w[tmp]");
         const char *status = numeric ? "%w0" : "%w[tmp]";
         const char *old = numeric ?
-            (word ? "%3" : "%w3") :
-            (word ? "%[old]" : "%w[old]");
+            (word == 3U ? "%3" : "%w3") :
+            (word == 3U ? "%[old]" : "%w[old]");
         const char *newval = numeric ?
-            (word ? "%4" : "%w4") :
-            (word ? "%[new]" : "%w[new]");
+            (word == 3U ? "%4" : "%w4") :
+            (word == 3U ? "%[new]" : "%w[new]");
         for (mode = 0U; mode < 4U; ++mode) {
             const int count = snprintf(expected, sizeof(expected),
-                "prfmpstl1strm,%s1:%s%s,%s"
+                "prfmpstl1strm,%s1:%s%s%s,%s"
                 "eor%s,%s,%scbnz%s,2f"
-                "%s%s,%s,%scbnz%s,1b%s2:",
-                mem, loads[mode], oldval, mem,
+                "%s%s%s,%s,%scbnz%s,1b%s2:",
+                mem, loads[mode], suffixes[word], oldval, mem,
                 tmp, oldval, old, tmp,
-                stores[mode], status, newval, mem,
+                stores[mode], suffixes[word], status, newval, mem,
                 status, mode == 3U ? "dmbish" : "");
             if (count > 0 && (size_t)count < sizeof(expected) &&
                 strcmp(compact, expected) == 0)
@@ -1340,7 +1348,7 @@ bool minic_aarch64_qualify_inline_asm(
         constraint(&src->inputs[1], "r")) {
         const unsigned int form = aarch64_linux_cmpxchg_form(
             src->template_text, src->template_length, false);
-        const size_t width = form > 4U ? 8U : 4U;
+        const size_t width = aarch64_linux_cmpxchg_width(form);
         const unsigned int mode = form ? (form - 1U) % 4U : 0U;
         bool accepted = form != 0U &&
             src->clobber_count == (mode == 0U ? 0U : 1U) &&
@@ -2246,8 +2254,12 @@ bool minic_aarch64_emit_qualified_structured_asm(
             ins->value.structured_inline_asm.operands;
         const unsigned int form = aarch64_linux_cmpxchg_form(
             info->template_text, info->template_length, true);
-        const size_t width = form > 4U ? 8U : 4U;
+        const size_t width = aarch64_linux_cmpxchg_width(form);
         const unsigned int mode = (form - 1U) % 4U;
+        const char *const suffix = width == 1U ? "b" : width == 2U ? "h" : "";
+        const char *const old_store = width == 1U ? "strb w9" :
+                                      width == 2U ? "strh w9" :
+                                      width == 4U ? "str w9" : "str x9";
         MinicType pointee;
         if (!info->is_volatile || info->is_goto ||
             !info->has_memory_clobber || info->register_clobber_count)
@@ -2282,29 +2294,29 @@ bool minic_aarch64_emit_qualified_structured_asm(
             "  ldr x12, [sp, #%zu]\n"
             "  prfm pstl1strm, [x10]\n"
             "1:\n"
-            "  %s %s9, [x10]\n"
+            "  %s%s %s9, [x10]\n"
             "  eor %s13, %s9, %s11\n"
             "  cbnz %s13, 2f\n"
-            "  %s w13, %s12, [x10]\n"
+            "  %s%s w13, %s12, [x10]\n"
             "  cbnz w13, 1b\n"
             "%s"
             "2:\n"
             "  ldr x14, [sp, #%zu]\n"
-            "  str %s9, [x14]\n"
+            "  %s, [x14]\n"
             "  ldr x14, [sp, #%zu]\n"
             "  str x13, [x14]\n",
             (size_t)ops[2].value * 8U,
             (size_t)ops[3].value * 8U,
             (size_t)ops[4].value * 8U,
-            ld[mode], width == 8U ? "x" : "w",
+            ld[mode], suffix, width == 8U ? "x" : "w",
             width == 8U ? "x" : "w",
             width == 8U ? "x" : "w",
             width == 8U ? "x" : "w",
             width == 8U ? "x" : "w",
-            st[mode], width == 8U ? "x" : "w",
+            st[mode], suffix, width == 8U ? "x" : "w",
             mode == 3U ? "  dmb ish\n" : "",
             (size_t)ops[1].value * 8U,
-            width == 8U ? "x" : "w",
+            old_store,
             (size_t)ops[0].value * 8U) >= 0;
     }
     if (ins->value.structured_inline_asm.operand_count == 5U) {

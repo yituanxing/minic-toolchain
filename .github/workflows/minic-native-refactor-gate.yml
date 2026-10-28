@@ -78,12 +78,18 @@ on:
       - 'tests/compiler/c0/probe-lp64-core-record-snapshot-qemu.sh'
       - 'tests/compiler/c0/probe-loong-linux-cmpxchg-qemu.sh'
       - 'tests/compiler/c0/probe-loong-linux-xchg-qemu.sh'
+      - 'tests/compiler/c0/probe-loong-linux-small-xchg-qemu.sh'
+      - 'tests/compiler/c0/loong-linux-small-xchg.c'
+      - 'tests/compiler/c0/probe-minic-batch-granularity.sh'
+      - 'tools/ci/minic-batch-granularity.py'
       - 'tests/compiler/c0/probe-lp64-indirect-record-abi-qemu.sh'
       - 'tests/compiler/c0/probe-lp64-packed-integer-record-qemu.sh'
       - 'tests/compiler/c0/probe-x86-linux-msr-safe-gs-pointer.sh'
       - 'tests/compiler/c0/probe-x86-linux-ordered-tsc.sh'
       - 'tests/compiler/c0/probe-x86-linux-static-record-zero.sh'
       - 'tests/compiler/c0/probe-aarch64-linux-cmpwait.sh'
+      - 'tests/compiler/c0/probe-aarch64-linux-narrow-cmpxchg-qemu.sh'
+      - 'tests/compiler/c0/aarch64-linux-narrow-cmpxchg.c'
       - 'tests/compiler/c0/probe-aarch64-linux-sysreg-writes.sh'
       - 'tests/compiler/c0/probe-aarch64-large-structured-asm-spills.sh'
       - 'tests/compiler/c0/probe-aarch64-linux-volatile-mrs.sh'
@@ -103,6 +109,15 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Report implementation/test batch granularity separately from CI metadata
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash tests/compiler/c0/probe-minic-batch-granularity.sh
+          python3 tools/ci/minic-batch-granularity.py \
+            --base HEAD^1 --head HEAD --minimum 800 --maximum 2000
       - name: Check MiniC backend ownership invariants
         shell: bash
         run: |
@@ -346,6 +361,7 @@ jobs:
           bash tests/compiler/c0/probe-x86-linux-msr-safe-gs-pointer.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
           MINIC_SOURCE_ONLY=1 bash tests/compiler/c0/probe-loong-linux-cmpxchg-qemu.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
           MINIC_SOURCE_ONLY=1 bash tests/compiler/c0/probe-loong-linux-xchg-qemu.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+          MINIC_SOURCE_ONLY=1 bash tests/compiler/c0/probe-loong-linux-small-xchg-qemu.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
           for target in aarch64 loongarch64; do
             MINIC_SOURCE_ONLY=1 bash tests/compiler/c0/probe-lp64-core-record-snapshot-qemu.sh "$target" "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
             MINIC_SOURCE_ONLY=1 bash tests/compiler/c0/probe-lp64-indirect-record-abi-qemu.sh "$target" "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
@@ -355,6 +371,7 @@ jobs:
           bash tests/compiler/c0/probe-x86-linux-ordered-tsc.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
           bash tests/compiler/c0/probe-x86-linux-static-record-zero.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
           MINIC_SOURCE_ONLY=1 bash tests/compiler/c0/probe-aarch64-linux-cmpwait.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+          MINIC_SOURCE_ONLY=1 bash tests/compiler/c0/probe-aarch64-linux-narrow-cmpxchg-qemu.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
           MINIC_SOURCE_ONLY=1 bash tests/compiler/c0/probe-aarch64-linux-sysreg-writes.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
           MINIC_SOURCE_ONLY=1 bash tests/compiler/c0/probe-aarch64-large-structured-asm-spills.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
           MINIC_SOURCE_ONLY=1 bash tests/compiler/c0/probe-aarch64-linux-volatile-mrs.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"

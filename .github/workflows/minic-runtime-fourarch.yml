@@ -43,6 +43,8 @@ on:
       - "tests/compiler/c0/probe-aarch64-linux-pointer-release-acquire.sh"
       - "tests/compiler/c0/probe-aarch64-linux-acquire-load.sh"
       - "tests/compiler/c0/probe-aarch64-linux-sysreg-writes.sh"
+      - "tests/compiler/c0/probe-aarch64-linux-narrow-cmpxchg-qemu.sh"
+      - "tests/compiler/c0/aarch64-linux-narrow-cmpxchg.c"
       - "tests/compiler/c0/probe-aarch64-large-structured-asm-spills.sh"
       - "tests/compiler/c0/probe-aarch64-linux-volatile-mrs.sh"
       - "tests/compiler/c0/probe-direct-lp64-weak-section-qemu.sh"
@@ -53,6 +55,8 @@ on:
       - "tests/compiler/c0/probe-loong-linux-zero-operand-dbar.sh"
       - "tests/compiler/c0/probe-loong-linux-cmpxchg-qemu.sh"
       - "tests/compiler/c0/probe-loong-linux-xchg-qemu.sh"
+      - "tests/compiler/c0/probe-loong-linux-small-xchg-qemu.sh"
+      - "tests/compiler/c0/loong-linux-small-xchg.c"
       - "src/target/aarch64/call_emit.c"
       - "src/target/aarch64/integer_emit.c"
       - "src/target/aarch64/residual_emit.c"
@@ -632,6 +636,12 @@ jobs:
         run: |
           set -Eeuo pipefail
           MINIC_TLBI_SOURCE_ONLY=0 bash tests/compiler/c0/probe-aarch64-linux-tlbi-family.sh "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
+      - name: Original GNU Linux AArch64 narrow CMPXCHG exclusive 8/16 GNU QEMU differential
+        if: matrix.target == 'aarch64'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash tests/compiler/c0/probe-aarch64-linux-narrow-cmpxchg-qemu.sh "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
       - name: Original Linux LoongArch no-operand DBAR real GNU QEMU
         if: matrix.target == 'loongarch64'
         shell: bash
@@ -644,6 +654,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           bash tests/compiler/c0/probe-loong-linux-xchg-qemu.sh "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
+          bash tests/compiler/c0/probe-loong-linux-small-xchg-qemu.sh "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
       - name: GNU 6.6.143 LoongArch LL-SC cmpxchg three exact hardware contracts
         if: matrix.target == 'loongarch64'
         shell: bash
