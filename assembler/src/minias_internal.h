@@ -346,6 +346,13 @@ typedef struct MiniAs {
      * fixup's final section offset. */
     bool emitting_fragment;
     size_t emitting_fragment_id;
+    /* Per-instruction encoded-byte result, owned by the MC engine. The
+     * transitional Target append callback writes here; final Section bytes
+     * are committed once, only after the fragment size is checked. */
+    bool capture_instruction_bytes;
+    unsigned char *encoded_instruction_bytes;
+    size_t encoded_instruction_size;
+    size_t encoded_instruction_capacity;
     MiniAsLiteral *literals;
     size_t literal_count;
     size_t literal_capacity;

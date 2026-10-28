@@ -597,6 +597,37 @@ bool minias_section_append(MiniAs *as, int section_index, const void *data, size
         return false;
     }
     sec = &as->sections[(size_t)section_index];
+    if (as->capture_instruction_bytes) {
+        const MiniAsStmt *owner;
+        size_t needed;
+        if (!as->emitting_fragment ||
+            as->emitting_fragment_id >= as->stmt_count) {
+            minias_set_error(as, "instruction-bytes-without-fragment");
+            return false;
+        }
+        owner = &as->stmts[as->emitting_fragment_id];
+        if (owner->kind != MINIAS_STMT_INSN ||
+            owner->section != section_index ||
+            sec->type == MINIAS_SHT_NOBITS ||
+            size > SIZE_MAX - sec->size ||
+            size > SIZE_MAX - as->encoded_instruction_size) {
+            minias_set_error(as, "instruction-emission-section-or-size");
+            return false;
+        }
+        needed = as->encoded_instruction_size + size;
+        if (!grow_array((void **)&as->encoded_instruction_bytes,
+                        &as->encoded_instruction_capacity,
+                        sizeof(unsigned char), needed)) {
+            minias_set_error(as, "out-of-memory:encoded-instruction");
+            return false;
+        }
+        if (size != 0U)
+            memcpy(as->encoded_instruction_bytes +
+                       as->encoded_instruction_size, data, size);
+        as->encoded_instruction_size = needed;
+        sec->size += size; /* Virtual cursor for existing target emitters. */
+        return true;
+    }
     if (sec->type == MINIAS_SHT_NOBITS) {
         const unsigned char *bytes=(const unsigned char *)data;
         size_t i;
@@ -762,6 +793,7 @@ void minias_destroy(MiniAs *as) {
     }
     free(as->stmts);
     free(as->fixups);
+    free(as->encoded_instruction_bytes);
     free(as->literals);
     free(as->subsections);
     free(as->section_stack);
@@ -7087,6 +7119,8 @@ bool minias_emit_sections(MiniAs *as) {
          * current backend append API is a compatibility bridge only. */
         as->emitting_fragment = true;
         as->emitting_fragment_id = refs[i].order;
+        as->capture_instruction_bytes = stmt->kind == MINIAS_STMT_INSN;
+        as->encoded_instruction_size = 0U;
         if (stmt->kind == MINIAS_STMT_ALIGN) {
             bool exec_align = (section->flags & MINIAS_SHF_EXECINSTR) != 0U &&
                               strcmp(stmt->op, ".org") != 0;
@@ -7136,7 +7170,28 @@ bool minias_emit_sections(MiniAs *as) {
             free(refs);
             return false;
         }
+        /* Target-encoded bytes are a complete fragment result: neither
+         * Target nor the parser may commit part of an instruction to the
+         * final Section. All four Targets share this same commit path. */
+        as->capture_instruction_bytes = false;
         as->emitting_fragment = false;
+        if (stmt->kind == MINIAS_STMT_INSN) {
+            if (as->encoded_instruction_size != stmt->size ||
+                stmt->offset > SIZE_MAX) {
+                minias_set_error(as,
+                    "encoded-fragment-size-mismatch:line=%zu:expected=%u:actual=%zu",
+                    stmt->line,stmt->size,as->encoded_instruction_size);
+                free(refs);
+                return false;
+            }
+            section->size = (size_t)stmt->offset; /* Restore real cursor. */
+            if (!minias_section_append(as,stmt->section,
+                                       as->encoded_instruction_bytes,
+                                       as->encoded_instruction_size)) {
+                free(refs);
+                return false;
+            }
+        }
     }
     free(refs);
 
