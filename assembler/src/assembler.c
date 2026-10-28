@@ -172,6 +172,8 @@ static bool finalize_subsection_layout(MiniAs *as) {
     return true;
 }
 
+static bool checked_add_i64(int64_t lhs,int64_t rhs,int64_t *out);
+
 static bool resolve_symbol_aliases(MiniAs *as) {
     size_t remaining = 0U;
     size_t i;
@@ -201,6 +203,31 @@ static bool resolve_symbol_aliases(MiniAs *as) {
                 continue;
             }
             value = target->value;
+            if(alias->alias_section_base!=NULL) {
+                int target_section=minias_find_section(as,alias->alias_section_base);
+                int64_t absolute;
+                /* Section-relative GNU aliases are truly ABS only if
+                 * the referenced label is defined in that exact section.
+                 * The subtraction cancels the section's load address. */
+                if(target_section<0 || target->section!=target_section ||
+                   value>INT64_MAX ||
+                   !checked_add_i64((int64_t)value,
+                                    alias->alias_addend,&absolute)) {
+                    minias_set_error(as,"invalid-section-relative-set:%s:line=%zu",
+                                     alias->name,alias->alias_line);
+                    return false;
+                }
+                alias->defined=true;
+                alias->section=MINIAS_SECTION_ABS;
+                alias->subsection=0U;
+                alias->value=(uint64_t)absolute;
+                alias->type=MINIAS_STT_NOTYPE;
+                free(alias->alias_section_base);
+                alias->alias_section_base=NULL;
+                alias->alias_pending=false;
+                --remaining;progress=true;
+                continue;
+            }
             if (alias->alias_addend >= 0) {
                 uint64_t addend = (uint64_t)alias->alias_addend;
                 if (addend > UINT64_MAX - value) {
@@ -621,6 +648,7 @@ void minias_destroy(MiniAs *as) {
         as->target->destroy_target_state(as);
     for (i = 0U; i < as->symbol_count; ++i) {
         free(as->symbols[i].name);
+        free(as->symbols[i].alias_section_base);
     }
     free(as->symbols);
     free(as->symbol_slots);
@@ -1982,6 +2010,49 @@ static bool parse_set(MiniAs *as, char *args, size_t line) {
         alias->alias_addend = expr.addend;
         alias->alias_line = line;
         return true;
+    }
+
+    /* GNU ARM64 tramp_alias:
+     * .set NAME, TRAMP_VALIAS + tramp_exit - .entry.tramp.text
+     * Section-base subtraction turns a forward section symbol into a
+     * later absolute constant; the macro often runs before tramp_exit is
+     * defined. Preserve a typed pending symbol alias, never fabricate a
+     * section-relative numeric address or ignore the .set directive. */
+    {
+        char *copy=minias_strdup(expression);
+        if(!copy){minias_set_error(as,"out-of-memory:section-set");return false;}
+        char *sum=strchr(copy,'+');
+        char *minus=sum?strrchr(sum+1U,'-'):NULL;
+        MiniAsSymbolExpr base;
+        int64_t number;
+        bool valid=false;
+        if(sum && minus && minus>sum+1U) {
+            *sum++='\0';*minus++='\0';
+            char *section_name=minias_trim(minus);
+            char *target_name=minias_trim(sum);
+            if(*section_name=='.' &&
+               minias_eval_i64_expression(minias_trim(copy),&number) &&
+               minias_parse_symbol_addend(target_name,&base) &&
+               base.addend==0) {
+                MiniAsSymbol *ref=minias_get_symbol(as,base.name,true);
+                if(ref!=NULL) {
+                    size_t ref_index=(size_t)(ref-as->symbols);
+                    MiniAsSymbol *result=minias_get_symbol(as,name,true);
+                    if(result && !result->defined && !result->alias_pending) {
+                        result->alias_section_base=minias_strdup(section_name);
+                        if(result->alias_section_base!=NULL) {
+                            result->alias_pending=true;
+                            result->alias_target_index=ref_index;
+                            result->alias_addend=number;
+                            result->alias_line=line;
+                            valid=true;
+                        }
+                    }
+                }
+            }
+        }
+        free(copy);
+        if(valid)return true;
     }
 
     {
