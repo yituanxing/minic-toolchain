@@ -339,7 +339,8 @@ static bool a64_vector_view(const char *text,unsigned *reg,
 static bool a64_req_vector_bank(const char *text,unsigned *reg) {
     char *end;
     unsigned long num;
-    if(!strchr("vqdsbh",text[0]) || !isdigit((unsigned char)text[1]))
+    if(!text[0] || !strchr("vqdsbh",text[0]) ||
+       !isdigit((unsigned char)text[1]))
         return false;
     errno=0;num=strtoul(text+1U,&end,10);
     if(errno || *end!='\0' || num>31UL)return false;
@@ -2223,7 +2224,8 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         unsigned vd,vn;
         uint32_t da,sa;
         if(!a64_vector_view(first,&vd,&da) ||
-           !a64_vector_view(second,&vn,&sa) || da!=sa) {
+           !a64_vector_view(second,&vn,&sa) || da!=sa ||
+           (da&UINT32_C(0xc00))!=0U) {
             minias_set_error(as,"bad-aarch64-mov-vector:%s:line=%zu",
                              args,stmt->line);
             free(inst);return false;

@@ -65,8 +65,6 @@ external_probe:
     mov SHASH.16b, v1.16b
     mov v3.16b, v1.16b
     mov v2.8b, v5.8b
-    mov v2.4s, v4.4s
-    mov v12.2d, v1.2d
     stp dga, q21, [x2]
     .unreq SHASH
     .unreq dga
@@ -934,7 +932,7 @@ for bad_source in 'ldxr x0, [x1,#4]' 'stxr x0, x1, [x2]' \
                   'lsr w0, w1, x2' \
                   'wx0 .req bogus' \
                   'SHASH .req z32' 'dga .req q33' \
-                  'mov v0.16b,v1.8b' 'mov v0.4s,v1.2s' \
+                  'mov v0.16b,v1.8b' 'mov v0.4s,v1.4s' \
                   'ccmp x0, w1, #1, eq' \
                   'ccmp x0, #32, #1, eq' \
                   'ccmp x0, #-1, #1, eq' \
