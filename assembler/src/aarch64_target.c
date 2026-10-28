@@ -1858,6 +1858,14 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
                              args,stmt->line);
             free(inst);return false;
         }
+    } else if (strcmp(op, "eret") == 0 && *args == '\0') {
+        /* ELR_ELx exception return is a fixed architectural encoding.
+         * Use the existing typed system-immediate emission owner; no
+         * separate machine byte writer or Common ISA special case. */
+        inst->opcode=A64_MC_SYSTEM_IMM;
+        inst->count=1U;
+        inst->encoding=UINT32_C(0xd69f03e0);
+        put_immediate(&inst->operands[0],0);
     } else if (strcmp(op, "nop") == 0 && *args == '\0') {
         inst->opcode = A64_MC_NOP;
     } else if (strcmp(op, "ret") == 0 && *args == '\0') {
