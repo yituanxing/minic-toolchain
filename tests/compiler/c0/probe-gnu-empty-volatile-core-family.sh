@@ -40,9 +40,27 @@ int main(void) {
     return multi_input() == 10 ? 42 : 3;
 }
 SRC
-"$cc" -static -x c "$d/original.i" -o "$d/gnu"
 "$MINIC_CC" --target="$MINIC_EMPTY_TARGET-linux" -S "$d/original.i" -o "$d/mini.s"
-"$cc" -static -x assembler "$d/mini.s" -o "$d/mini"
+if [[ "$MINIC_EMPTY_TARGET" == riscv64 ]]; then
+    # The RV64 CI runner deliberately has no glibc CRT/sysroot. Link the
+    # original GNU C and MiniC objects to one ISA-native Linux exit stub.
+    # This is a genuine end-to-end QEMU run, not a skipped runtime oracle.
+    cat >"$d/start.s" <<'ASM'
+.globl _start
+_start:
+    call main
+    li a7, 93
+    ecall
+ASM
+    "$cc" -c -x c "$d/original.i" -o "$d/gnu.o"
+    "$cc" -c -x assembler "$d/mini.s" -o "$d/mini.o"
+    "$cc" -c -x assembler "$d/start.s" -o "$d/start.o"
+    "$cc" -nostdlib -static -Wl,-e,_start "$d/start.o" "$d/gnu.o" -o "$d/gnu"
+    "$cc" -nostdlib -static -Wl,-e,_start "$d/start.o" "$d/mini.o" -o "$d/mini"
+else
+    "$cc" -static -x c "$d/original.i" -o "$d/gnu"
+    "$cc" -static -x assembler "$d/mini.s" -o "$d/mini"
+fi
 set +e
 timeout 50s "${emulator[@]}" "$d/gnu" >"$d/gnu.stdout" 2>"$d/gnu.stderr"
 original_status=$?
