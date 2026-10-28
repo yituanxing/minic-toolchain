@@ -2684,3 +2684,26 @@ for bad in 'sminv s0,v2.2s' 'uminv b0,v2.8h' 'addv d0,v2.2d'; do
  fi
 done
 echo 'MINIAS_A64_VECTOR_REDUCE=PASS GNU_15_words_five_families_3_rejects'
+
+# Real arm64 GHASH SMOV follows SMINV and moves a vector byte to W0.
+# Verify the full signed lane width family against GNU machine bytes.
+cat > "$work/a64-smov-ghash.s" <<'A64_SMOV_GHASH'
+.text
+smov w0,v0.b[0]
+smov w1,v2.h[3]
+smov x3,v4.s[2]
+smov x5,v6.b[15]
+smov x7,v8.h[7]
+A64_SMOV_GHASH
+"$MINIAS" --target=aarch64 -o "$work/a64-smov-mini.o" "$work/a64-smov-ghash.s"
+"$AARCH64_AS" -o "$work/a64-smov-gnu.o" "$work/a64-smov-ghash.s"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-smov-mini.o" "$work/a64-smov-mini.bin"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-smov-gnu.o" "$work/a64-smov-gnu.bin"
+cmp "$work/a64-smov-mini.bin" "$work/a64-smov-gnu.bin"
+for bad in 'smov w0,v2.s[0]' 'smov x0,v2.d[0]'; do
+ printf '.text\n%s\n' "$bad" >"$work/a64-smov-invalid.s"
+ if "$MINIAS" --target=aarch64 -o "$work/a64-smov-invalid.o" "$work/a64-smov-invalid.s" >/dev/null 2>&1; then
+  echo "invalid signed vector lane accepted: $bad" >&2; exit 1
+ fi
+done
+echo 'MINIAS_A64_SMOV_GHASH=PASS GNU_signed_lane_5_words_and_2_rejects'
