@@ -2583,3 +2583,34 @@ GHASH_IRP_MIXED
 "$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-ghash-irp-gnu.o" "$work/a64-ghash-irp-gnu.bin"
 cmp "$work/a64-ghash-irp-mini.bin" "$work/a64-ghash-irp-gnu.bin"
 echo 'MINIAS_A64_GHASH_IRP_MIXED=PASS GNU_4_AES_words'
+
+# Original arm64 GHASH macro reaches CMEQ only after Common .irp is correct.
+# Encode the full signed/unsigned vector compare-register family in ONE
+# typed Target encoder and verify GNU exact bits for B/H/S/D + Q.
+cat > "$work/a64-vector-comparison.s" <<'A64_VEC_CMP'
+.text
+cmeq v6.16b,v6.16b,v8.16b
+cmeq v0.8b,v1.8b,v2.8b
+cmgt v0.16b,v1.16b,v2.16b
+cmge v0.16b,v1.16b,v2.16b
+cmhi v0.16b,v1.16b,v2.16b
+cmhs v0.16b,v1.16b,v2.16b
+cmtst v0.16b,v1.16b,v2.16b
+cmeq v1.4h,v2.4h,v3.4h
+cmgt v3.4s,v4.4s,v5.4s
+cmge v3.2d,v4.2d,v5.2d
+A64_VEC_CMP
+"$MINIAS" --target=aarch64 -o "$work/a64-veccompare-mini.o" "$work/a64-vector-comparison.s"
+"$AARCH64_AS" -o "$work/a64-veccompare-gnu.o" "$work/a64-vector-comparison.s"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-veccompare-mini.o" "$work/a64-veccompare-mini.bin"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-veccompare-gnu.o" "$work/a64-veccompare-gnu.bin"
+cmp "$work/a64-veccompare-mini.bin" "$work/a64-veccompare-gnu.bin"
+for bad in 'cmeq v0.16b,v1.8b,v2.16b' \
+           'cmgt v0.1d,v1.1d,v2.1d' \
+           'cmhi v0.4s,v1.2s,v2.4s'; do
+ printf '.text\n%s\n' "$bad" > "$work/a64-veccompare-invalid.s"
+ if "$MINIAS" --target=aarch64 -o "$work/a64-veccompare-invalid.o" "$work/a64-veccompare-invalid.s" >/dev/null 2>&1; then
+  echo "invalid A64 vector compare accepted: $bad" >&2; exit 1
+ fi
+done
+echo 'MINIAS_A64_VECTOR_COMPARE=PASS GNU_10_words_six_families_and_3_rejects'
