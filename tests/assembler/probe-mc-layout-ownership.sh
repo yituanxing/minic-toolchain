@@ -13,7 +13,7 @@ for n in ('minias_solve_fragment_layout','minias_relayout_fragments',
 for n in ('minias_relayout_fragments','minias_resolve_deferred_data',
           'collect_out_of_range_branches','minias_finalize_subsection_layout'):
     import re
-    if re.search(r'(?:static\\s+)?bool\\s+'+n+r'\\s*\\(',driver):
+    if re.search(r'(?:static\s+)?bool\s+'+n+r'\s*\(',driver):
         raise SystemExit('old driver layout: '+n)
 for n in ('minias_parse_common_space','minias_parse_common_fill'):
     if n+'(' not in expr:raise SystemExit('DATA grammar missing in MCExpr: '+n)
