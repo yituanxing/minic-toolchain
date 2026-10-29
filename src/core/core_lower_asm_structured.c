@@ -461,12 +461,13 @@ MinicCoreLowerStatus core_asm_try_structured_roles_and_asm_goto(
             source->label_count == 0U || source->label_count > 2U ||
             source->inputs == NULL || source->labels == NULL)
             return MINIC_CORE_LOWER_UNSUPPORTED;
-        for (i = 0U; i < source->input_count; ++i)
+        for (i = 0U; i < source->input_count; ++i) {
             if (!core_inline_asm_immediate_text(
                     context, &source->inputs[i], immediate_buffers[i],
                     sizeof(immediate_buffers[i]), &resolved[i], &lengths[i]) ||
                 !resolved[i] || lengths[i] == 0U || lengths[i] > 128U)
                 return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
         for (i = 0U; i < source->label_count; ++i) {
             status = ensure_statement_block(
                 context, source->labels[i].target_statement, &targets[i]);

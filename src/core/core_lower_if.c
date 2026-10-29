@@ -196,7 +196,23 @@ static void core_local_constants_prepare_if_branch(
     }
     for (index = 0U; index < context->source_function->local_count; ++index) {
         MinicLocalId local_id = context->source_function->local_begin + index;
+        const MinicLocal *local = minic_c0_program_local(
+            context->body->program, local_id);
+        const MinicExpression *condition = minic_c0_program_expression(
+            context->body->program, condition_expression);
         context->local_integer_constants[index] = incoming[index];
+        /* Local IDs cover the entire function, including block-scoped objects
+         * declared after this condition.  An unknown side effect in the
+         * condition cannot possibly escape an object whose lifetime has not
+         * begun.  Poisoning that future object makes subsequent constant
+         * initializers unusable as GNU asm `i` operands.  Zero/unknown spans
+         * are kept conservative for compiler-generated temporaries. */
+        if (local != NULL && condition != NULL &&
+            local->name_span.begin.offset != 0U &&
+            condition->span.end.offset != 0U &&
+            local->name_span.begin.offset >= condition->span.end.offset) {
+            continue;
+        }
         if (incoming[index].escaped ||
             core_expression_may_modify_local(
                 context, condition_expression, local_id, 0U)) {

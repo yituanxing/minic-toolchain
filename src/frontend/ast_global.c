@@ -1073,7 +1073,9 @@ bool minic_c0_global_relocation_slot_type(const MinicC0Program *program,
         return false;
     }
     if (location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_SCALAR) {
-        if (location_index != 0U || !minic_type_is_pointer(object->type)) {
+        if (location_index != 0U ||
+            (!minic_type_is_pointer(object->type) &&
+             !minic_type_is_integer(object->type))) {
             return false;
         }
         *slot_type = object->type;

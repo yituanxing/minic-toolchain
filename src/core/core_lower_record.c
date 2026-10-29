@@ -674,6 +674,7 @@ MinicCoreLowerStatus minic_core_lower_record_copy_statement(MinicCoreLowerContex
     bool record_assignment_value;
     bool record_conditional_value;
     bool record_va_arg_value;
+    bool record_statement_value;
 
     if (context == NULL || context->body == NULL || context->body->program == NULL ||
         context->function == NULL || statement == NULL ||
@@ -692,6 +693,8 @@ MinicCoreLowerStatus minic_core_lower_record_copy_statement(MinicCoreLowerContex
         source != NULL && source->kind == MINIC_EXPRESSION_CONDITIONAL;
     record_va_arg_value =
         source != NULL && source->kind == MINIC_EXPRESSION_BUILTIN_VA_ARG;
+    record_statement_value =
+        source != NULL && source->kind == MINIC_EXPRESSION_STATEMENT;
     if (target == NULL || source == NULL || target->value_category != MINIC_VALUE_LVALUE ||
         !minic_type_is_record(target->type) || !minic_type_is_record(source->type) ||
         target->type.record_id != source->type.record_id ||
@@ -700,7 +703,7 @@ MinicCoreLowerStatus minic_core_lower_record_copy_statement(MinicCoreLowerContex
         !minic_type_equal(target_type, source_type) || !minic_type_is_record(target_type) ||
         (statement->kind == MINIC_STATEMENT_RECORD_COPY && minic_type_is_const(target->type)) ||
         (!direct_record_call && !record_assignment_value && !record_conditional_value &&
-         !record_va_arg_value &&
+         !record_va_arg_value && !record_statement_value &&
          (!minic_c0_record_value_is_copy_source(context->body->program, statement->expression) ||
           !minic_c0_record_value_is_address_backed(
               context->body->program, statement->expression)))) {
@@ -733,7 +736,7 @@ MinicCoreLowerStatus minic_core_lower_record_copy_statement(MinicCoreLowerContex
                 context->function, context->block_id, &instruction, &source_address)) {
             return MINIC_CORE_LOWER_ERROR;
         }
-    } else if (record_conditional_value || record_va_arg_value) {
+    } else if (record_conditional_value || record_va_arg_value || record_statement_value) {
         /* Conditional records and record-valued va_arg are materialized
            aggregate producers, not pre-existing address-backed objects. */
         status = minic_core_lower_internal_record_materialized_address(

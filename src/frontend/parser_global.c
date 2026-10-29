@@ -114,10 +114,7 @@ static bool parse_static_scalar(MinicParser *parser, MinicType type, MinicSource
         return false;
     }
     if (minic_type_is_integer(type)) {
-        uint64_t bits;
-
-        if (!minic_parser_parse_integer_initializer_bits(parser, type, &bits) ||
-            !minic_c0_global_object_add_initializer_bits(parser->program, object_id, bits)) {
+        if (!minic_parser_parse_static_integer_object_initializer(parser, object_id, type)) {
             if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
                 minic_parser_error(parser, "cannot record static integer initializer");
             }
@@ -994,11 +991,8 @@ bool minic_parser_parse_static_zero_declaration_list_after_head(MinicParser *par
                     return false;
                 }
             } else if (minic_type_is_integer(object_type)) {
-                uint64_t bits;
-
-                if (!minic_parser_parse_integer_initializer_bits(parser, object_type, &bits) ||
-                    !minic_c0_global_object_add_initializer_bits(
-                        parser->program, object_id, bits)) {
+                if (!minic_parser_parse_static_integer_object_initializer(
+                        parser, object_id, object_type)) {
                     if (parser->diagnostic != NULL &&
                         parser->diagnostic->message[0] == '\0') {
                         minic_parser_error(

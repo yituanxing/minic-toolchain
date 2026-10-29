@@ -22,8 +22,16 @@ typedef struct MinicStaticPointerInitializer {
     MinicStaticObjectRelocationTarget relocation_target;
 } MinicStaticPointerInitializer;
 
+typedef struct MinicStaticIntegerAddressValue {
+    uint64_t bits;
+    bool has_relocation;
+    bool is_function;
+    MinicFunctionId function_id;
+    MinicStaticObjectRelocationTarget object_target;
+} MinicStaticIntegerAddressValue;
+
 typedef struct MinicStaticArraySlot {
-    uint64_t integer_bits;
+    MinicStaticIntegerAddressValue integer_initializer;
     MinicStaticPointerInitializer pointer_initializer;
 } MinicStaticArraySlot;
 

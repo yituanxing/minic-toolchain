@@ -174,7 +174,7 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
             asm_id < fn->inline_asm_count ? &fn->inline_asms[asm_id] : NULL;
         static const char *const privileged[] = {
             "  cli\n", "  sti\n", "  sti\n  hlt\n", "  hlt\n",
-            "  wbinvd\n", "  swapgs\n"
+            "  wbinvd\n", "  swapgs\n", "  .byte 0x0f, 0x01, 0xe8\n"
         };
         unsigned int form;
         if (a != NULL && a->is_goto) {
@@ -200,9 +200,46 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
              * explicit "memory" clobber. No arbitrary opaque assembler
              * payload may reach this privileged instruction switch. */
             if (!a->is_volatile || (form != 4U && !a->has_memory_clobber) ||
-                a->register_clobber_count != 0U || form > 6U)
+                a->register_clobber_count != 0U || form > 7U)
                 return false;
             return fputs(privileged[form - 1U], out) != EOF;
+        }
+        if (a != NULL && minic_x86_64_linux_amx_tilerelease_form(
+                a->template_text, a->template_length)) {
+            if (!a->is_volatile || a->is_goto || a->has_memory_clobber ||
+                a->register_clobber_count != 0U) return false;
+            return fputs("  .byte 0xc4, 0xe2, 0x78, 0x49, 0xc0\n", out) != EOF;
+        }
+        if (a != NULL && minic_x86_64_linux_x87_fwait_fault_form(
+                a->template_text, a->template_length)) {
+            if (!a->is_volatile || a->is_goto || a->has_memory_clobber ||
+                a->register_clobber_count != 0U) return false;
+            return fputs("1: fwait\n2:\n"
+                         "  .pushsection \"__ex_table\",\"a\"\n"
+                         "  .balign 4\n"
+                         "  .long (1b) - .\n"
+                         "  .long (2b) - .\n"
+                         "  .long 1\n"
+                         "  .popsection\n", out) != EOF;
+        }
+        if (a != NULL && minic_x86_64_linux_weak_wrmsr_fence_form(
+                a->template_text, a->template_length)) {
+            if (!a->is_volatile || a->is_goto || !a->has_memory_clobber ||
+                a->register_clobber_count != 0U) return false;
+            return fputs(
+                "661:\n  mfence\n  lfence\n"
+                "662:\n"
+                "  .skip -(((6651f-6641f)-(662b-661b)) > 0) * "
+                "((6651f-6641f)-(662b-661b)),0x90\n"
+                "663:\n  .pushsection .altinstructions,\"a\"\n"
+                "  .long 661b - .\n"
+                "  .long 6641f - .\n"
+                "  .4byte (((1 << 0) << 16) | ((11*32+27)))\n"
+                "  .byte 663b-661b\n"
+                "  .byte 6651f-6641f\n"
+                "  .popsection\n"
+                "  .pushsection .altinstr_replacement,\"ax\"\n"
+                "6641:\n6651:\n  .popsection\n", out) != EOF;
         }
         if (a != NULL && minic_x86_64_linux_smap_alternative_form(
                 a->template_text, a->template_length))

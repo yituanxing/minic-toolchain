@@ -9,8 +9,16 @@ unsigned int minic_x86_64_linux_gs_testcc_form(const char *, size_t);
 bool minic_x86_64_linux_ip_here_template(const char *, size_t);
 /* Real 10-byte x86-64 GDTR/IDTR descriptor memory operands. */
 unsigned int minic_x86_64_linux_descriptor_table_form(const char *, size_t);
+unsigned int minic_x86_64_linux_task_control_form(const char *, size_t);
+bool minic_x86_64_linux_iret_to_self_form(const char *, size_t);
+bool minic_x86_64_linux_int3_selftest_form(const char *, size_t);
+bool minic_x86_64_linux_pv_indirect_call_form(const char *, size_t);
+bool minic_x86_64_linux_alt_reloc_selftest_form(const char *, size_t);
 bool minic_x86_64_linux_boot_segments_template(const char *, size_t);
 unsigned int minic_x86_64_linux_privileged_zero_form(const char *, size_t);
+bool minic_x86_64_linux_amx_tilerelease_form(const char *, size_t);
+bool minic_x86_64_linux_x87_fwait_fault_form(const char *, size_t);
+bool minic_x86_64_linux_weak_wrmsr_fence_form(const char *, size_t);
 /* Linux three-way CALL patching: exact alternatives/relocations and RSP ABI. */
 bool minic_x86_64_linux_three_call_alternative_form(const char *, size_t);
 /* CR0/2/3/4 reads and CR2/3 writes, including GNU dummy-memory ordering. */
@@ -42,6 +50,16 @@ bool minic_x86_64_linux_rep_stosb_alternative_form(const char *, size_t);
 unsigned int minic_x86_64_linux_fpu_user_frame_form(const char *, size_t);
 /* FXRSTOR/FXRSTORQ protected by Linux type-17 register exception fixup. */
 unsigned int minic_x86_64_linux_fxrstor_safe_form(const char *, size_t);
+/* Kernel FPU state restore, with type-6 exception recovery for faults. */
+unsigned int minic_x86_64_linux_fpu_kernel_restore_form(const char *, size_t);
+/* x87 legacy state prepare: FNCLEX; EMMS; FILD DWORD PTR [state]. */
+bool minic_x86_64_linux_x87_fild_prepare_form(const char *, size_t);
+unsigned int minic_x86_64_linux_mxcsr_form(const char *, size_t);
+size_t minic_x86_64_linux_percpu_xadd_width(const char *, size_t);
+bool minic_x86_64_linux_unwind_context_form(const char *, size_t);
+bool minic_x86_64_linux_task_size_alt_form(const char *, size_t);
+/* Call the hardirq handler on the per-CPU IRQ stack with exact RSP save. */
+unsigned int minic_x86_64_linux_irq_stack_call_form(const char *, size_t);
 unsigned int minic_x86_64_linux_xstate_fault_form(const char *, size_t);
 bool minic_x86_64_linux_xrstor_alternative_form(const char *, size_t);
 bool minic_x86_64_linux_xsave_triple_alternative_form(const char *, size_t);

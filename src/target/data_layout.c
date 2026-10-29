@@ -869,7 +869,9 @@ bool minic_data_layout_global_relocation_offset(const MinicDataLayout *layout,
     (void)object_alignment;
     relocation_width = layout->pointer_size;
     if (relocation->location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_SCALAR) {
-        if (relocation->location_index != 0U || !minic_type_is_pointer(object->type)) {
+        if (relocation->location_index != 0U ||
+            (!minic_type_is_pointer(object->type) &&
+             !minic_type_is_integer(object->type))) {
             return false;
         }
         resolved_offset = 0U;
