@@ -1097,6 +1097,18 @@
       "review_depth": "inventory",
       "ci_touched_in": []
     },
+    "src/target/target_machine_options.c": {
+      "blob": "e53eeeea28ec22b6704a1eb99f340991d9c8193f",
+      "review_depth": "full",
+      "ci_touched_in": [],
+      "note": "2026-10-29 batch18: target-registered ISA/ABI machine option dispatch, separate from the generic CLI; checked against RV32/RV64 positive and negative admission cases."
+    },
+    "src/target/target_machine_options.h": {
+      "blob": "edffce0fb099de3537e0e7ccd167f80b051f8ece",
+      "review_depth": "full",
+      "ci_touched_in": [],
+      "note": "2026-10-29 batch18: complete target-opaque machine option interface reviewed."
+    },
     "src/target/x86_64/abi.c": {
       "blob": "b90720113332b21038d7113450b5bcfc8d6281ef",
       "review_depth": "inventory",
