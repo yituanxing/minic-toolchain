@@ -334,22 +334,16 @@ static bool parse_fence_set(const char *text, uint32_t *mask) {
 }
 
 
-static bool decode_amo_mnemonic(const char *op,
-                                uint32_t *funct5,
-                                uint32_t *width_funct3,
-                                uint32_t *ordering_bits) {
-    char core[64];
+/* AMO and LR/SC share one suffix grammar and one set of ordering bits.
+ * The caller only selects the operation's funct5/operand layout. */
+static bool rv_decode_atomic_suffix(const char *op, char *core, size_t cap,
+                                    uint32_t *width_funct3,
+                                    uint32_t *ordering_bits) {
     size_t n;
-    const char *suffix = NULL;
-
-    if (op == NULL || funct5 == NULL || width_funct3 == NULL ||
-        ordering_bits == NULL) {
-        return false;
-    }
+    if (op == NULL || core == NULL || width_funct3 == NULL ||
+        ordering_bits == NULL) return false;
     n = strlen(op);
-    if (n == 0U || n >= sizeof(core)) {
-        return false;
-    }
+    if (n == 0U || n >= cap) return false;
     memcpy(core, op, n + 1U);
 
     *ordering_bits = 0U;
@@ -365,41 +359,39 @@ static bool decode_amo_mnemonic(const char *op,
     }
 
     n = strlen(core);
-    if (n < 3U || core[n - 2U] != '.') {
+    if (n < 3U || core[n - 2U] != '.' ||
+        (core[n - 1U] != 'w' && core[n - 1U] != 'd'))
         return false;
-    }
-    suffix = core + n - 2U;
-    if (strcmp(suffix, ".w") == 0) {
-        *width_funct3 = 2U;
-    } else if (strcmp(suffix, ".d") == 0) {
-        *width_funct3 = 3U;
-    } else {
-        return false;
-    }
+    *width_funct3 = core[n - 1U] == 'w' ? 2U : 3U;
     core[n - 2U] = '\0';
-
-    if (strcmp(core, "amoadd") == 0) {
-        *funct5 = 0x00U;
-    } else if (strcmp(core, "amoswap") == 0) {
-        *funct5 = 0x01U;
-    } else if (strcmp(core, "amoxor") == 0) {
-        *funct5 = 0x04U;
-    } else if (strcmp(core, "amoor") == 0) {
-        *funct5 = 0x08U;
-    } else if (strcmp(core, "amoand") == 0) {
-        *funct5 = 0x0cU;
-    } else if (strcmp(core, "amomin") == 0) {
-        *funct5 = 0x10U;
-    } else if (strcmp(core, "amomax") == 0) {
-        *funct5 = 0x14U;
-    } else if (strcmp(core, "amominu") == 0) {
-        *funct5 = 0x18U;
-    } else if (strcmp(core, "amomaxu") == 0) {
-        *funct5 = 0x1cU;
-    } else {
-        return false;
-    }
     return true;
+}
+
+static bool decode_amo_mnemonic(const char *op,
+                                uint32_t *funct5,
+                                uint32_t *width_funct3,
+                                uint32_t *ordering_bits) {
+    static const struct {
+        const char *name;
+        uint32_t funct5;
+    } forms[] = {
+        {"amoadd", 0x00U}, {"amoswap", 0x01U},
+        {"amoxor", 0x04U}, {"amoor", 0x08U},
+        {"amoand", 0x0cU}, {"amomin", 0x10U},
+        {"amomax", 0x14U}, {"amominu", 0x18U},
+        {"amomaxu", 0x1cU}
+    };
+    char core[64];
+    size_t i;
+    if (funct5 == NULL ||
+        !rv_decode_atomic_suffix(op,core,sizeof(core),
+                                 width_funct3,ordering_bits))return false;
+    for(i=0U;i<sizeof(forms)/sizeof(forms[0]);++i) {
+        if(strcmp(core,forms[i].name)!=0)continue;
+        *funct5=forms[i].funct5;
+        return true;
+    }
+    return false;
 }
 
 static bool decode_lr_sc_mnemonic(const char *op,
@@ -407,44 +399,9 @@ static bool decode_lr_sc_mnemonic(const char *op,
                                   uint32_t *width_funct3,
                                   uint32_t *ordering_bits) {
     char core[32];
-    size_t n;
-    const char *suffix;
-
-    if (op == NULL || is_lr == NULL || width_funct3 == NULL ||
-        ordering_bits == NULL) {
-        return false;
-    }
-    n = strlen(op);
-    if (n == 0U || n >= sizeof(core)) {
-        return false;
-    }
-    memcpy(core, op, n + 1U);
-
-    *ordering_bits = 0U;
-    if (n > 5U && strcmp(core + n - 5U, ".aqrl") == 0) {
-        core[n - 5U] = '\0';
-        *ordering_bits = (1U << 26U) | (1U << 25U);
-    } else if (n > 3U && strcmp(core + n - 3U, ".aq") == 0) {
-        core[n - 3U] = '\0';
-        *ordering_bits = 1U << 26U;
-    } else if (n > 3U && strcmp(core + n - 3U, ".rl") == 0) {
-        core[n - 3U] = '\0';
-        *ordering_bits = 1U << 25U;
-    }
-
-    n = strlen(core);
-    if (n < 3U || core[n - 2U] != '.') {
-        return false;
-    }
-    suffix = core + n - 2U;
-    if (strcmp(suffix, ".w") == 0) {
-        *width_funct3 = 2U;
-    } else if (strcmp(suffix, ".d") == 0) {
-        *width_funct3 = 3U;
-    } else {
-        return false;
-    }
-    core[n - 2U] = '\0';
+    if (is_lr == NULL ||
+        !rv_decode_atomic_suffix(op,core,sizeof(core),
+                                 width_funct3,ordering_bits))return false;
 
     if (strcmp(core, "lr") == 0) {
         *is_lr = true;
@@ -828,8 +785,7 @@ bool minias_riscv_measure_mcinst(MiniAs *as, const MiniAsStmt *stmt,
             *size = 8U;
             return true;
         case RV_MC_LI: {
-            const MiniAsRiscvLiPlan *plan =
-                minias_riscv_find_li_plan(as, m);
+            const MiniAsRiscvLiPlan *plan = m->target_payload;
             if (plan == NULL) {
                 minias_set_error(as, "internal:riscv-li-plan-missing:line=%zu",
                                  stmt->line);
@@ -918,26 +874,6 @@ static const RvMCDesc *rv_find_mc_descriptor(const char *mnemonic) {
             return &rv_mc_table[index];
     return NULL;
 }
-
-static bool rv_legacy_form_policy(const char *mnemonic,
-                                  uint64_t *required_features,
-                                  bool *rv64_only);
-bool minias_riscv_mc_descriptor_policy(const char *mnemonic,
-                                       uint64_t *required_features,
-                                       bool *rv64_only,
-                                       unsigned *family) {
-    const RvMCDesc *descriptor = rv_find_mc_descriptor(mnemonic);
-    if (descriptor == NULL)
-        return rv_legacy_form_policy(mnemonic, required_features, rv64_only);
-    if (required_features != NULL)
-        *required_features = descriptor->required_features;
-    if (rv64_only != NULL)
-        *rv64_only = descriptor->rv64_only;
-    if (family != NULL)
-        *family = descriptor->family;
-    return true;
-}
-
 
 /* All target instruction families now construct retained MCInst operands.
  * Fixed-width descriptors share the same typed parse/measure/encode path;
@@ -1177,10 +1113,18 @@ static bool rv_parse_multi_mc(MiniAs *as, MiniAsStmt *stmt,
     }
     stmt->mcinst = m;
     if (family == RV_MC_LI) {
-        uint32_t words[16];
-        unsigned count;
-        if (!rv_materialize_li(as, stmt, words, &count) ||
-            !minias_riscv_store_li_plan(as, m, words, count)) {
+        MiniAsRiscvLiPlan *plan = malloc(sizeof(*plan));
+        if (plan == NULL) {
+            minias_set_error(as, "out-of-memory:riscv-li-lowering-plan");
+            stmt->mcinst = NULL;
+            minias_mcinst_destroy(m);
+            return false;
+        }
+        /* The generic MCInst destructor owns the immutable Target payload.
+         * Re-layout never destroys/reparses the plan; source replay creates
+         * a fresh assembly with separately owned MCInst objects. */
+        m->target_payload = plan;
+        if (!rv_materialize_li(as, stmt, plan->words, &plan->count)) {
             stmt->mcinst = NULL;
             minias_mcinst_destroy(m);
             return false;
@@ -1560,19 +1504,19 @@ static const RvParseForm *rv_find_parse_form(const char *op) {
  * form. No disconnected list in the TargetInfo needs to guess whether an
  * alias belongs to A/F/D/V or to RV64. Width suffixes are semantic subforms,
  * validated by each family decoder when the MCInst is constructed. */
-static bool rv_legacy_form_policy(const char *mnemonic,
-                                  uint64_t *required_features,
-                                  bool *rv64_only) {
-    const RvParseForm *form = rv_find_parse_form(mnemonic);
+static void rv_parse_form_policy(const RvParseForm *form,
+                                 const char *mnemonic,
+                                 const MiniAsMCInst *inst,
+                                 uint64_t *required_features,
+                                 bool *rv64_only) {
     uint64_t features;
     bool only64;
-    if (form == NULL) return false;
     features = form->required_features;
     only64 = form->rv64_only;
     if (form->parse == rv_parse_atomic_mc) {
-        const char *width = strstr(mnemonic, ".d");
-        if (width != NULL && (width[2] == '\0' || width[2] == '.'))
-            only64 = true;
+        /* The suffix decoder already chose the actual encoded AMO width.
+         * ISA policy consumes it rather than reparsing .w/.d by string. */
+        only64 = inst != NULL && ((inst->encoding >> 12U) & 7U) == 3U;
     } else if (form->parse == rv_parse_fp_mc) {
         if (strcmp(mnemonic, "fld") == 0 ||
             strcmp(mnemonic, "fsd") == 0 ||
@@ -1588,10 +1532,15 @@ static bool rv_legacy_form_policy(const char *mnemonic,
     }
     if (required_features != NULL) *required_features = features;
     if (rv64_only != NULL) *rv64_only = only64;
-    return true;
 }
 
-static bool rv_parse_mcinst_impl(MiniAs *as, MiniAsStmt *stmt) {
+typedef struct RvParsedIsaPolicy {
+    uint64_t required_features;
+    bool rv64_only;
+} RvParsedIsaPolicy;
+
+static bool rv_parse_mcinst_impl(MiniAs *as, MiniAsStmt *stmt,
+                                  RvParsedIsaPolicy *policy) {
     const RvMCDesc *desc;
     char operands[8][128];
     size_t count;
@@ -1622,10 +1571,14 @@ static bool rv_parse_mcinst_impl(MiniAs *as, MiniAsStmt *stmt) {
                              op, stmt->line);
             return false;
         }
+        rv_parse_form_policy(form, op, stmt->mcinst,
+                             &policy->required_features,&policy->rv64_only);
         return as->error[0] == '\0';
     }
     family = desc->family;
     encoding = desc->base;
+    policy->required_features = desc->required_features;
+    policy->rv64_only = desc->rv64_only;
     if(!split_operands(stmt->args,operands,8U,&count))goto invalid;
 
     if (family == RV_MC_R || family == RV_MC_I) {
@@ -1794,7 +1747,11 @@ static bool rv_parse_mcinst_impl(MiniAs *as, MiniAsStmt *stmt) {
             stmt->mcinst=inst;
         }
         return true;
-    } else return true;
+    } else {
+        minias_set_error(as, "internal:riscv-unhandled-descriptor-family:%u",
+                         family);
+        return false;
+    }
 
     inst=minias_mcinst_alloc(slots);
     if(inst==NULL)goto oom;
@@ -1828,19 +1785,22 @@ oom:
  * original assembly text. EF_RVE=8 also covers -mabi=ilp32e without -march. */
 bool minias_riscv_parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
     const MiniAsRiscvState *state = MINIAS_RV_STATE(as);
+    RvParsedIsaPolicy policy={0U,false};
     const MiniAsMCInst *inst;
     size_t index;
 
-    if (!rv_parse_mcinst_impl(as, stmt)) return false;
-    if (state == NULL ||
-        ((state->isa_features & RISCV_ISA_E) == 0U &&
-         (as->elf_flags & 8U) == 0U)) return true;
+    if (!rv_parse_mcinst_impl(as, stmt, &policy)) return false;
     inst = stmt->mcinst;
-    /* The parse-form registry rejects unknown mnemonics before layout. */
     if (inst == NULL) {
         minias_set_error(as, "internal:riscv-parse-form-without-mcinst");
         return false;
     }
+    if (!minias_riscv_validate_parsed_isa(as, stmt,
+                                          policy.required_features,
+                                          policy.rv64_only)) return false;
+    if (state == NULL ||
+        ((state->isa_features & RISCV_ISA_E) == 0U &&
+         (as->elf_flags & 8U) == 0U)) return true;
     for (index = 0U; index < inst->count; ++index) {
         const MiniAsMCOperand *operand = &inst->operands[index];
         if (operand->kind == MINIAS_MC_REGISTER &&
@@ -1860,8 +1820,7 @@ bool minias_riscv_parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
 static bool rv_encode_multi_mc(MiniAs *as, const MiniAsStmt *stmt) {
     const MiniAsMCInst *m = stmt->mcinst;
     if (m->opcode == RV_MC_LI) {
-        const MiniAsRiscvLiPlan *plan =
-            minias_riscv_find_li_plan(as, m);
+        const MiniAsRiscvLiPlan *plan = m->target_payload;
         unsigned i;
         if (plan == NULL) {
             minias_set_error(as, "internal:riscv-li-plan-missing:line=%zu",

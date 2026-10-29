@@ -55,6 +55,10 @@ jobs:
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-mc-symbol-ref-transaction.sh
+      - name: Four Target instruction lowering ownership and x86 GNU modes
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-mc-target-lowering-ownership.sh
       - name: Validate Common MCOperand nested ownership and error-path lifecycle
         run: bash tests/assembler/probe-mc-operand-lifetime.sh
       - name: RV32E validates parsed GPRs without treating symbols as registers
@@ -69,6 +73,18 @@ jobs:
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-relax-plan-stress.sh
+      - name: GNU x86 and RV64 2048-edge alias DAG retains SymbolID order
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=x86_64 \
+            bash tests/assembler/probe-mc-alias-dag.sh
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=riscv \
+            bash tests/assembler/probe-mc-alias-dag.sh
+      - name: GNU x86 and RV64 SourceFrame replay after forced long branch
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=x86_64 \
+            bash tests/assembler/probe-mc-source-replay-branch.sh
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=riscv \
+            bash tests/assembler/probe-mc-source-replay-branch.sh
       - name: GNU RV64I 160-typed-fragment relaxation stress
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=riscv \

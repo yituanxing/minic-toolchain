@@ -556,14 +556,18 @@ bool minias_parse_symbol_difference(const char *expression,
     return ok;
 }
 
-bool minias_resolve_symbol_difference(MiniAs *as,
-                                      const MiniAsSymbolDifference *pair,
-                                      int64_t *value) {
+/* Stable parser-name identities resolve against actual SymbolIDs only after
+ * final layout.  No conversion back to 256-byte parse DTOs or name-based
+ * second lookup is needed; this is the single checked difference resolver
+ * for all Targets. */
+bool minias_resolve_symbol_difference_ref(MiniAs *as,
+                                          const MiniAsSymbolDifferenceRef *pair,
+                                          int64_t *value) {
     const MiniAsSymbol *positive,*negative;
     int64_t first,second,delta;
     if(!as || !pair || !value)return false;
-    positive=minias_get_symbol(as,pair->positive.name,false);
-    negative=minias_get_symbol(as,pair->negative.name,false);
+    positive=minias_symbol_ref_lookup(as,pair->positive);
+    negative=minias_symbol_ref_lookup(as,pair->negative);
     if(!positive || !negative ||
        !positive->defined || !negative->defined ||
        positive->section<0 || positive->section!=negative->section ||
@@ -1401,14 +1405,15 @@ static bool emit_symbol_minus_dot(MiniAs *as,
                                   const MiniAsStmt *stmt,
                                   unsigned int width,
                                   uint64_t relocation_offset,
-                                  const MiniAsSymbolExpr *expr) {
-    MiniAsSymbol *target = minias_get_symbol(as, expr->name, false);
+                                  size_t symbol_index,
+                                  int64_t addend) {
+    const MiniAsSymbol *target=&as->symbols[symbol_index];
     bool can_add=target_supports_fixup(as,MINIAS_FIXUP_ADD,width);
     bool can_sub=target_supports_fixup(as,MINIAS_FIXUP_SUB,width);
 
-    if (target != NULL && target->defined && target->section == stmt->section) {
+    if (target->defined && target->section == stmt->section) {
         int64_t difference =
-            (int64_t)target->value + expr->addend - (int64_t)relocation_offset;
+            (int64_t)target->value + addend - (int64_t)relocation_offset;
         uint64_t value = (uint64_t)difference;
         unsigned char bytes[8];
         unsigned int i;
@@ -1432,8 +1437,8 @@ static bool emit_symbol_minus_dot(MiniAs *as,
            kind!=MINIAS_FIXUP_NONE &&
            target_supports_fixup(as,kind,width))
             return minias_section_append_zero(as,stmt->section,width) &&
-                   minias_add_fixup(as,stmt->section,relocation_offset,
-                                    kind,width,expr->name,expr->addend);
+                   minias_add_fixup_symbol_id(as,stmt->section,relocation_offset,
+                                              kind,width,symbol_index,addend);
     }
 
     if (!can_add || !can_sub) {
@@ -1464,13 +1469,13 @@ static bool emit_symbol_minus_dot(MiniAs *as,
         anchor->bind = MINIAS_STB_LOCAL;
 
         return minias_section_append_zero(as, stmt->section, width) &&
-               minias_add_fixup(as,
+               minias_add_fixup_symbol_id(as,
                                      stmt->section,
                                      relocation_offset,
                                      MINIAS_FIXUP_ADD,
                                      width,
-                                     expr->name,
-                                     expr->addend) &&
+                                     symbol_index,
+                                     addend) &&
                minias_add_fixup(as,
                                      stmt->section,
                                      relocation_offset,
@@ -1486,9 +1491,10 @@ static bool emit_symbol_minus_dot_divided(
     const MiniAsStmt *stmt,
     unsigned int width,
     uint64_t relocation_offset,
-    const MiniAsSymbolExpr *expr,
+    size_t symbol_index,
+    int64_t addend,
     uint64_t divisor) {
-    MiniAsSymbol *target = minias_get_symbol(as, expr->name, false);
+    const MiniAsSymbol *target = &as->symbols[symbol_index];
     int64_t difference;
     int64_t quotient;
     uint64_t bits;
@@ -1496,19 +1502,19 @@ static bool emit_symbol_minus_dot_divided(
     unsigned int i;
 
     if (divisor == 0U || divisor > (uint64_t)INT64_MAX ||
-        target == NULL || !target->defined ||
+        !target->defined ||
         target->section != stmt->section ||
         target->subsection != stmt->subsection ||
         target->value > (uint64_t)INT64_MAX ||
         relocation_offset > (uint64_t)INT64_MAX) {
         minias_set_error(as,
                          "unsupported-divided-symbol-difference:%s/%llu:line=%zu",
-                         expr->name,
+                         target->name,
                          (unsigned long long)divisor,
                          stmt->line);
         return false;
     }
-    difference = (int64_t)target->value + expr->addend -
+    difference = (int64_t)target->value + addend -
                  (int64_t)relocation_offset;
     quotient = difference / (int64_t)divisor;
     bits = (uint64_t)quotient;
@@ -1522,14 +1528,14 @@ static bool emit_symbol_difference(MiniAs *as,
                                    const MiniAsStmt *stmt,
                                    unsigned int width,
                                    uint64_t relocation_offset,
-                                   const MiniAsSymbolExpr *lhs_expr,
-                                   const MiniAsSymbolExpr *rhs_expr) {
-    MiniAsSymbol *lhs = minias_get_symbol(as, lhs_expr->name, false);
-    MiniAsSymbol *rhs = minias_get_symbol(as, rhs_expr->name, false);
+                                   size_t lhs_index, int64_t lhs_addend,
+                                   size_t rhs_index, int64_t rhs_addend) {
+    const MiniAsSymbol *lhs = &as->symbols[lhs_index];
+    const MiniAsSymbol *rhs = &as->symbols[rhs_index];
     bool can_add=target_supports_fixup(as,MINIAS_FIXUP_ADD,width);
     bool can_sub=target_supports_fixup(as,MINIAS_FIXUP_SUB,width);
 
-    if (lhs != NULL && rhs != NULL && lhs->defined && rhs->defined &&
+    if (lhs->defined && rhs->defined &&
         /* If both names resolve to the same real section, its load
          * address cancels. GNU GAS resolves GLOBAL, WEAK and local names
          * alike, including when the data value belongs to a different
@@ -1542,8 +1548,8 @@ static bool emit_symbol_difference(MiniAs *as,
         (!can_add || !can_sub)) {
         /* Modular arithmetic gives correct low 8/16/32/64 bits and avoids
          * undefined signed overflow for large absolute/forward symbols. */
-        uint64_t value=(lhs->value+(uint64_t)lhs_expr->addend)-
-                       (rhs->value+(uint64_t)rhs_expr->addend);
+        uint64_t value=(lhs->value+(uint64_t)lhs_addend)-
+                       (rhs->value+(uint64_t)rhs_addend);
         unsigned char bytes[8];
         unsigned int i;
 
@@ -1564,7 +1570,7 @@ static bool emit_symbol_difference(MiniAs *as,
      */
     if((width==4U || width==8U) &&
        (!can_add || !can_sub) &&
-       rhs!=NULL && rhs->defined &&
+       rhs->defined &&
        /* GNU GAS resolves defined GLOBAL/WEAK anchors to their section
         * positions for PC64 as well as LOCAL anchors. This binding
         * behavior is the same on x86-64 and AArch64. */
@@ -1574,11 +1580,11 @@ static bool emit_symbol_difference(MiniAs *as,
         if(kind!=MINIAS_FIXUP_NONE &&
            target_supports_fixup(as,kind,width)) {
             uint64_t delta=relocation_offset-rhs->value+
-                           (uint64_t)lhs_expr->addend-
-                           (uint64_t)rhs_expr->addend;
+                           (uint64_t)lhs_addend-
+                           (uint64_t)rhs_addend;
             return minias_section_append_zero(as,stmt->section,width) &&
-                   minias_add_fixup(as,stmt->section,relocation_offset,
-                                    kind,width,lhs_expr->name,(int64_t)delta);
+                   minias_add_fixup_symbol_id(as,stmt->section,relocation_offset,
+                                              kind,width,lhs_index,(int64_t)delta);
         }
     }
     if (!can_add || !can_sub) {
@@ -1589,42 +1595,42 @@ static bool emit_symbol_difference(MiniAs *as,
         return false;
     }
     return minias_section_append_zero(as, stmt->section, width) &&
-           minias_add_fixup(as,
+           minias_add_fixup_symbol_id(as,
                                  stmt->section,
                                  relocation_offset,
                                  MINIAS_FIXUP_ADD,
                                  width,
-                                 lhs_expr->name,
-                                 lhs_expr->addend) &&
-           minias_add_fixup(as,
+                                 lhs_index,
+                                 lhs_addend) &&
+           minias_add_fixup_symbol_id(as,
                                  stmt->section,
                                  relocation_offset,
                                  MINIAS_FIXUP_SUB,
                                  width,
-                                 rhs_expr->name,
-                                 rhs_expr->addend);
+                                 rhs_index,
+                                 rhs_addend);
 }
 
 static bool emit_symbol_difference_divided(MiniAs *as,
         const MiniAsStmt *stmt,unsigned int width,
-        const MiniAsSymbolExpr *lhs_expr,
-        const MiniAsSymbolExpr *rhs_expr,uint64_t divisor,
+        size_t lhs_index,int64_t lhs_addend,
+        size_t rhs_index,int64_t rhs_addend,uint64_t divisor,
         bool arithmetic_shift) {
-    MiniAsSymbol *lhs=minias_get_symbol(as,lhs_expr->name,false);
-    MiniAsSymbol *rhs=minias_get_symbol(as,rhs_expr->name,false);
+    const MiniAsSymbol *lhs=&as->symbols[lhs_index];
+    const MiniAsSymbol *rhs=&as->symbols[rhs_index];
     int64_t left,right,diff,quotient;
     unsigned char bytes[8];
     unsigned i;
     /* A cross-section difference cannot be divided using an ELF fixup.
      * Keep the operation fail-closed rather than fabricating a value. */
-    if(!lhs || !rhs || !lhs->defined || !rhs->defined ||
+    if(!lhs->defined || !rhs->defined ||
        lhs->section!=rhs->section ||
        (lhs->section<0 && lhs->section!=MINIAS_SECTION_ABS) ||
        lhs->value>(uint64_t)INT64_MAX ||
        rhs->value>(uint64_t)INT64_MAX ||
        divisor==0U || divisor>(uint64_t)INT64_MAX ||
-       !minias_checked_add_i64((int64_t)lhs->value,lhs_expr->addend,&left) ||
-       !minias_checked_add_i64((int64_t)rhs->value,rhs_expr->addend,&right) ||
+       !minias_checked_add_i64((int64_t)lhs->value,lhs_addend,&left) ||
+       !minias_checked_add_i64((int64_t)rhs->value,rhs_addend,&right) ||
        !checked_sub_i64(left,right,&diff)) {
         minias_set_error(as,"unsupported-divided-symbol-pair:line=%zu",
                          stmt->line);
@@ -1660,52 +1666,45 @@ bool minias_emit_mc_data(MiniAs *as,const MiniAsStmt *stmt) {
     }
     for(i=0U;i<data->count;++i) {
         const MiniAsMCExpr *x=&data->fields[i];
-        MiniAsSymbolExpr lhs={0},rhs={0};
+        const MiniAsSymbol *lhs=NULL,*rhs=NULL;
+        const bool needs_lhs=x->kind==MINIAS_MC_EXPR_SYMBOL ||
+                             x->kind==MINIAS_MC_EXPR_SYMBOL_MINUS_DOT ||
+                             x->kind==MINIAS_MC_EXPR_SYMBOL_MINUS_DOT_DIV ||
+                             x->kind==MINIAS_MC_EXPR_DIFFERENCE ||
+                             x->kind==MINIAS_MC_EXPR_DIFFERENCE_DIV;
+        const bool needs_rhs=x->kind==MINIAS_MC_EXPR_DOT_MINUS_SYMBOL ||
+                             x->kind==MINIAS_MC_EXPR_DIFFERENCE ||
+                             x->kind==MINIAS_MC_EXPR_DIFFERENCE_DIV;
         uint64_t value=x->constant;
         uint64_t at=(uint64_t)as->sections[(size_t)stmt->section].size;
         bool literal=x->kind==MINIAS_MC_EXPR_CONSTANT;
         unsigned j;
         unsigned char bytes[8];
+        if((needs_lhs && !x->has_lhs) || (needs_rhs && !x->has_rhs)) {
+            minias_set_error(as,"invalid-mc-expression-symbols:line=%zu",
+                             stmt->line);
+            return false;
+        }
         if(x->has_lhs) {
-            const MiniAsSymbol *symbol;
-            size_t len;
             if(x->lhs_symbol_index>=as->symbol_count) {
                 minias_set_error(as,"mc-lhs-symbol-out-of-range:line=%zu",
                                  stmt->line);
                 return false;
             }
-            symbol=&as->symbols[x->lhs_symbol_index];
-            len=strlen(symbol->name);
-            if(len>=sizeof(lhs.name)) {
-                minias_set_error(as,"mc-lhs-symbol-name-too-long");
-                return false;
-            }
-            memcpy(lhs.name,symbol->name,len+1U);
-            lhs.addend=x->lhs_addend;
+            lhs=&as->symbols[x->lhs_symbol_index];
         }
         if(x->has_rhs) {
-            const MiniAsSymbol *symbol;
-            size_t len;
             if(x->rhs_symbol_index>=as->symbol_count) {
                 minias_set_error(as,"mc-rhs-symbol-out-of-range:line=%zu",
                                  stmt->line);
                 return false;
             }
-            symbol=&as->symbols[x->rhs_symbol_index];
-            len=strlen(symbol->name);
-            if(len>=sizeof(rhs.name)) {
-                minias_set_error(as,"mc-rhs-symbol-name-too-long");
-                return false;
-            }
-            memcpy(rhs.name,symbol->name,len+1U);
-            rhs.addend=x->rhs_addend;
+            rhs=&as->symbols[x->rhs_symbol_index];
         }
         if(x->kind==MINIAS_MC_EXPR_SYMBOL) {
-            MiniAsSymbol *sym=x->has_lhs ?
-                &as->symbols[x->lhs_symbol_index] : NULL;
-            if(sym && sym->defined && sym->section==MINIAS_SECTION_ABS) {
+            if(lhs && lhs->defined && lhs->section==MINIAS_SECTION_ABS) {
                 literal=true;
-                value=sym->value+(uint64_t)lhs.addend;
+                value=lhs->value+(uint64_t)x->lhs_addend;
             } else {
                 /* GNU permits a forward .short absolute .set/.equ symbol,
                  * but no target-independent ABS16 unresolved reference. */
@@ -1715,56 +1714,56 @@ bool minias_emit_mc_data(MiniAs *as,const MiniAsStmt *stmt) {
                     return false;
                 }
                 if(!minias_section_append_zero(as,stmt->section,data->width) ||
-                   !minias_add_fixup(as,stmt->section,at,
-                          MINIAS_FIXUP_ABS,data->width,lhs.name,lhs.addend))
+                   !minias_add_fixup_symbol_id(as,stmt->section,at,
+                          MINIAS_FIXUP_ABS,data->width,x->lhs_symbol_index,
+                          x->lhs_addend))
                     return false;
                 continue;
             }
         } else if(x->kind==MINIAS_MC_EXPR_SYMBOL_MINUS_DOT) {
-            if(!emit_symbol_minus_dot(as,stmt,data->width,at,&lhs))return false;
+            if(!emit_symbol_minus_dot(as,stmt,data->width,at,
+                                      x->lhs_symbol_index,
+                                      x->lhs_addend))return false;
             continue;
         } else if(x->kind==MINIAS_MC_EXPR_SYMBOL_MINUS_DOT_DIV) {
             if(!emit_symbol_minus_dot_divided(as,stmt,data->width,at,
-                                              &lhs,x->divisor))return false;
+                                              x->lhs_symbol_index,
+                                              x->lhs_addend,x->divisor))return false;
             continue;
         } else if(x->kind==MINIAS_MC_EXPR_DOT_MINUS_SYMBOL) {
-            MiniAsSymbol *origin=x->has_rhs ?
-                &as->symbols[x->rhs_symbol_index] : NULL;
-            if(origin==NULL || !origin->defined ||
-               origin->section!=stmt->section) {
+            if(rhs==NULL || !rhs->defined || rhs->section!=stmt->section) {
                 minias_set_error(as,"unresolved-mc-dot-difference:line=%zu",
                                  stmt->line);
                 return false;
             }
             literal=true;
-            /* '.' has no SymbolID: its lexical addend lives in MCExpr.
-             * The symbol resolver must not drop it when constructing a
-             * temporary MiniAsSymbolExpr for ordinary symbol operands. */
+            /* '.' has no SymbolID: its lexical addend stays in MCExpr,
+             * while the other term is resolved directly by SymbolID. */
             value=at+(uint64_t)x->lhs_addend-
-                  (origin->value+(uint64_t)x->rhs_addend);
+                  (rhs->value+(uint64_t)x->rhs_addend);
         } else if(x->kind==MINIAS_MC_EXPR_DIFFERENCE ||
                   x->kind==MINIAS_MC_EXPR_DIFFERENCE_DIV) {
-            MiniAsSymbol *left=x->has_lhs ?
-                &as->symbols[x->lhs_symbol_index] : NULL;
-            MiniAsSymbol *right=x->has_rhs ?
-                &as->symbols[x->rhs_symbol_index] : NULL;
             if(x->kind==MINIAS_MC_EXPR_DIFFERENCE &&
                (!target_supports_fixup(as,MINIAS_FIXUP_ADD,data->width) ||
                 !target_supports_fixup(as,MINIAS_FIXUP_SUB,data->width)) &&
-               left && right && left->defined && right->defined &&
-               left->section==right->section &&
-               (left->section==MINIAS_SECTION_ABS ||
-                (left->section>=0 && left->subsection==right->subsection))) {
+               lhs && rhs && lhs->defined && rhs->defined &&
+               lhs->section==rhs->section &&
+               (lhs->section==MINIAS_SECTION_ABS ||
+                (lhs->section>=0 && lhs->subsection==rhs->subsection))) {
                 literal=true;
-                value=(left->value+(uint64_t)lhs.addend)-
-                      (right->value+(uint64_t)rhs.addend);
+                value=(lhs->value+(uint64_t)x->lhs_addend)-
+                      (rhs->value+(uint64_t)x->rhs_addend);
             }else if(x->kind==MINIAS_MC_EXPR_DIFFERENCE_DIV) {
                 if(!emit_symbol_difference_divided(as,stmt,data->width,
-                           &lhs,&rhs,x->divisor,x->logical_shift))return false;
+                           x->lhs_symbol_index,x->lhs_addend,
+                           x->rhs_symbol_index,x->rhs_addend,
+                           x->divisor,x->logical_shift))return false;
                 continue;
             }else {
                 if(!emit_symbol_difference(as,stmt,data->width,at,
-                                           &lhs,&rhs))return false;
+                                           x->lhs_symbol_index,x->lhs_addend,
+                                           x->rhs_symbol_index,x->rhs_addend))
+                    return false;
                 continue;
             }
         }

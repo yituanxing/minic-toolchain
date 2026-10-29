@@ -579,35 +579,13 @@ const MiniAsSymbol *minias_symbol_ref_lookup(const MiniAs *as,
     return &as->symbols[index];
 }
 
-/* Difference arithmetic remains owned by Common.  The old resolver is the
- * sole checked same-section/arithmetic authority until the expression
- * engine itself accepts stable refs, so no ISA duplicates those rules. */
-bool minias_resolve_symbol_difference_ref(MiniAs *as,
-                                          const MiniAsSymbolDifferenceRef *expr,
-                                          int64_t *value) {
-    MiniAsSymbolDifference names={0};
-    const char *positive,*negative;
-    if(as==NULL || expr==NULL || value==NULL ||
-       expr->positive.name_id>=as->symbol_name_count ||
-       expr->negative.name_id>=as->symbol_name_count)return false;
-    positive=as->symbol_names[expr->positive.name_id].name;
-    negative=as->symbol_names[expr->negative.name_id].name;
-    if(positive==NULL || negative==NULL ||
-       strlen(positive)>=sizeof(names.positive.name) ||
-       strlen(negative)>=sizeof(names.negative.name))return false;
-    memcpy(names.positive.name,positive,strlen(positive)+1U);
-    memcpy(names.negative.name,negative,strlen(negative)+1U);
-    names.positive.addend=expr->positive.addend;
-    names.negative.addend=expr->negative.addend;
-    return minias_resolve_symbol_difference(as,&names,value);
-}
-
 static bool minias_record_fixup(MiniAs *as,
                       int section,
                       uint64_t offset,
                       MiniAsFixupKind kind,
                       unsigned width,
                       const char *symbol_name,
+                      size_t existing_symbol_index,
                       int64_t addend,
                       MiniAsFixupOrigin origin) {
     MiniAsSymbol *symbol;
@@ -650,10 +628,24 @@ static bool minias_record_fixup(MiniAs *as,
         as->sections[(size_t)section].type==MINIAS_SHT_NOBITS ||
         (width != 2U && width != 4U && width != 8U) ||
         offset > UINT64_MAX - width) {
-        minias_set_error(as, "invalid-fixup-range:%s", symbol_name);
+        minias_set_error(as, "invalid-fixup-range:%s",
+                         symbol_name != NULL ? symbol_name : "<symbol-id>");
         return false;
     }
-    symbol = minias_get_symbol(as, symbol_name, true);
+    if (existing_symbol_index != SIZE_MAX) {
+        if (existing_symbol_index >= as->symbol_count) {
+            minias_set_error(as, "invalid-fixup-symbol-id:%zu",
+                             existing_symbol_index);
+            return false;
+        }
+        symbol = &as->symbols[existing_symbol_index];
+    } else {
+        if (symbol_name == NULL) {
+            minias_set_error(as, "missing-fixup-symbol");
+            return false;
+        }
+        symbol = minias_get_symbol(as, symbol_name, true);
+    }
     if (symbol == NULL) return false;
     symbol_index = (size_t)(symbol - as->symbols);
     if (!symbol->defined && symbol->bind == MINIAS_STB_LOCAL &&
@@ -686,7 +678,18 @@ bool minias_add_fixup(MiniAs *as, int section, uint64_t offset,
                       MiniAsFixupKind kind, unsigned width,
                       const char *symbol_name, int64_t addend) {
     return minias_record_fixup(as, section, offset, kind, width,
-                               symbol_name, addend,
+                               symbol_name, SIZE_MAX, addend,
+                               MINIAS_FIXUP_ORIGIN_FRAGMENT);
+}
+
+/* Fixed-width MCData already retains an actual SymbolID from its lexical
+ * parse. Preserve that identity through emission, including the shared
+ * undefined-local binding promotion and original Fixup append order. */
+bool minias_add_fixup_symbol_id(MiniAs *as, int section, uint64_t offset,
+                                MiniAsFixupKind kind, unsigned width,
+                                size_t symbol_index, int64_t addend) {
+    return minias_record_fixup(as, section, offset, kind, width,
+                               NULL, symbol_index, addend,
                                MINIAS_FIXUP_ORIGIN_FRAGMENT);
 }
 
@@ -695,7 +698,7 @@ bool minias_add_section_fixup(MiniAs *as, MiniAsFixupOrigin origin,
                              MiniAsFixupKind kind, unsigned width,
                              const char *symbol_name, int64_t addend) {
     return minias_record_fixup(as, section, offset, kind, width,
-                               symbol_name, addend, origin);
+                               symbol_name, SIZE_MAX, addend, origin);
 }
 
 /* Commit a complete Target result after its encoded length has passed the
@@ -777,7 +780,7 @@ static bool minias_commit_encode_result(MiniAs *as, const MiniAsStmt *owner) {
         if (!minias_record_fixup(as, request->section,
                                  owner->offset + request->fragment_offset,
                                  request->kind, request->width,
-                                 name, request->symbol_ref.addend,
+                                 name, SIZE_MAX, request->symbol_ref.addend,
                                  MINIAS_FIXUP_ORIGIN_FRAGMENT))
             return false;
         as->fixups[as->fixup_count - 1U].prefer_section_symbol =
@@ -856,7 +859,10 @@ bool minias_code_alignment_preceded_by_adjacent_data(const MiniAs *as,
     previous=&as->stmts[as->emitting_fragment_id-1U];
     return owner->fragment_kind==MINIAS_FRAGMENT_ALIGNMENT &&
            owner->section==section &&
-           previous->kind==MINIAS_STMT_DATA &&
+           (previous->fragment_kind==MINIAS_FRAGMENT_FIXED_DATA ||
+            previous->fragment_kind==MINIAS_FRAGMENT_FILL ||
+            previous->fragment_kind==MINIAS_FRAGMENT_SPACE ||
+            previous->fragment_kind==MINIAS_FRAGMENT_BYTES) &&
            previous->section==section &&
            previous->subsection==owner->subsection &&
            previous->offset<=UINT64_MAX-previous->size &&
@@ -1076,7 +1082,7 @@ void minias_destroy(MiniAs *as) {
 }
 
 static bool add_stmt(MiniAs *as,
-                     MiniAsStmtKind kind,
+                     MiniAsFragmentKind fragment_kind,
                      const char *op,
                      const char *args,
                      size_t line,
@@ -1093,12 +1099,7 @@ static bool add_stmt(MiniAs *as,
     }
     st = &as->stmts[as->stmt_count];
     memset(st, 0, sizeof(*st));
-    st->kind = kind;
-    st->fragment_kind = kind == MINIAS_STMT_INSN
-                        ? MINIAS_FRAGMENT_INSTRUCTION
-                        : kind == MINIAS_STMT_ALIGN
-                        ? MINIAS_FRAGMENT_ALIGNMENT
-                        : MINIAS_FRAGMENT_FIXED_DATA;
+    st->fragment_kind = fragment_kind;
     st->op = minias_strdup(op);
     st->args = minias_strdup(args == NULL ? "" : args);
     st->line = line;
@@ -1113,8 +1114,6 @@ static bool add_stmt(MiniAs *as,
     }
     st->size = size;
     st->align = align;
-    st->site.mode_bits = as->target_options;
-    st->site.profile_features = 0U;
     if (as->target->capture_site_state != NULL)
         as->target->capture_site_state(as, &st->site);
     if (st->op == NULL || st->args == NULL) {
@@ -1122,7 +1121,7 @@ static bool add_stmt(MiniAs *as,
         return false;
     }
     ++as->stmt_count;
-    if (kind == MINIAS_STMT_INSN &&
+    if (fragment_kind == MINIAS_FRAGMENT_INSTRUCTION &&
         !as->target->parse_mcinst(as, st))
         return false;
     return true;
@@ -2066,7 +2065,7 @@ static bool handle_org_position(MiniAs *as, const char *args,
         return false;
     }
     if (!add_stmt(as,
-                  MINIAS_STMT_ALIGN,
+                  MINIAS_FRAGMENT_ORIGIN,
                   ".org",
                   source_args,
                   line,
@@ -2075,7 +2074,6 @@ static bool handle_org_position(MiniAs *as, const char *args,
         minias_deferred_expr_destroy(deferred);
         return false;
     }
-    as->stmts[as->stmt_count-1U].fragment_kind=MINIAS_FRAGMENT_ORIGIN;
     as->stmts[as->stmt_count - 1U].align_has_fill = has_fill;
     as->stmts[as->stmt_count - 1U].align_fill = fill;
     if(deferred!=NULL) {
@@ -2270,7 +2268,7 @@ static bool handle_align(MiniAs *as,const char *op,char *args,size_t line){
     pad=(alignment-(current&(alignment-1U)))&(alignment-1U);
     if(has_max && pad>max_skip)pad=0U;
     if(pad>UINT32_MAX)return false;
-    if(!add_stmt(as,MINIAS_STMT_ALIGN,op,"",line,(uint32_t)pad,alignment))
+    if(!add_stmt(as,MINIAS_FRAGMENT_ALIGNMENT,op,"",line,(uint32_t)pad,alignment))
         return false;
     stmt=&as->stmts[as->stmt_count-1U];
     stmt->align_has_fill=has_fill;stmt->align_fill=fill;
@@ -3037,13 +3035,12 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
        (fragment_kind==MINIAS_FRAGMENT_FILL ||
         fragment_kind==MINIAS_FRAGMENT_SPACE) &&
        !snapshot_mutable_data_tokens(as,args,&snapshot))return false;
-    if (!add_stmt(as, MINIAS_STMT_DATA, op,
+    if (!add_stmt(as, fragment_kind, op,
                   snapshot?snapshot:args, line, (uint32_t)bytes, 1U)) {
         free(snapshot);
         free(string_snapshot);
         return false;
     }
-    as->stmts[as->stmt_count-1U].fragment_kind=fragment_kind;
     free(snapshot);
     if(has_leb_snapshot || has_binary_snapshot || string_snapshot!=NULL) {
         MiniAsStmt *stmt=&as->stmts[as->stmt_count-1U];
@@ -3481,7 +3478,7 @@ static bool flush_literal_pools(MiniAs *as,size_t line,bool all) {
         if(!minias_current_location(as,&current))goto failure;
         pad=((uint64_t)entry->width-(current&((uint64_t)entry->width-1U)))&
             ((uint64_t)entry->width-1U);
-        if(!add_stmt(as,MINIAS_STMT_ALIGN,".literal_pool_align","",line,
+        if(!add_stmt(as,MINIAS_FRAGMENT_ALIGNMENT,".literal_pool_align","",line,
                      (uint32_t)pad,entry->width))goto failure;
         fragment=&as->stmts[as->stmt_count-1U];
         fragment->align_has_fill=true;
@@ -3494,7 +3491,7 @@ static bool flush_literal_pools(MiniAs *as,size_t line,bool all) {
         /* Literal payload is a standard typed MCExpr+SymbolID. Data bytes
          * and relocation fixups follow exactly the ordinary DATA emitter;
          * the pool cannot depend on another pass over synthetic strings. */
-        if(!add_stmt(as,MINIAS_STMT_DATA,".literal_pool_data","",line,
+        if(!add_stmt(as,MINIAS_FRAGMENT_FIXED_DATA,".literal_pool_data","",line,
                      entry->width,1U))goto failure;
         fragment=&as->stmts[as->stmt_count-1U];
         data=calloc(1U,sizeof(*data));
@@ -4223,7 +4220,7 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
             free(rewritten_args);
             return false;
         }
-        ok = add_stmt(as, MINIAS_STMT_INSN, op, rewritten_args,
+        ok = add_stmt(as, MINIAS_FRAGMENT_INSTRUCTION, op, rewritten_args,
                       line, 0U, 1U);
         if (ok)
             ok = as->target->measure_mcinst(
@@ -5871,7 +5868,8 @@ bool minias_emit_sections(MiniAs *as) {
         as->emitting_fragment_id = refs[i].order;
         as->capture_instruction_bytes =
             stmt->fragment_kind == MINIAS_FRAGMENT_INSTRUCTION || staged_padding;
-        if (stmt->kind == MINIAS_STMT_ALIGN) {
+        if (stmt->fragment_kind == MINIAS_FRAGMENT_ALIGNMENT ||
+            stmt->fragment_kind == MINIAS_FRAGMENT_ORIGIN) {
             bool exec_align = (section->flags & MINIAS_SHF_EXECINSTR) != 0U &&
                               stmt->fragment_kind == MINIAS_FRAGMENT_ALIGNMENT;
             if (!(stmt->align_has_fill
@@ -5889,7 +5887,10 @@ bool minias_emit_sections(MiniAs *as) {
                 free(refs);
                 return false;
             }
-        } else if (stmt->kind == MINIAS_STMT_DATA) {
+        } else if (stmt->fragment_kind == MINIAS_FRAGMENT_FIXED_DATA ||
+                   stmt->fragment_kind == MINIAS_FRAGMENT_FILL ||
+                   stmt->fragment_kind == MINIAS_FRAGMENT_SPACE ||
+                   stmt->fragment_kind == MINIAS_FRAGMENT_BYTES) {
             if (!emit_data_stmt(as, stmt)) {
                 if (as->error[0] == '\0') {
                     minias_set_error(as,
@@ -5912,9 +5913,10 @@ bool minias_emit_sections(MiniAs *as) {
             free(refs);
             return false;
         }
-        /* DATA and ALIGN append directly, while target instruction bytes
-         * are buffered and checked before a single Section commit. */
-        if (stmt->kind != MINIAS_STMT_INSN && !staged_padding &&
+        /* Data and non-executable alignment append directly; instructions
+         * and executable padding commit only after fragment validation. */
+        if (stmt->fragment_kind != MINIAS_FRAGMENT_INSTRUCTION &&
+            !staged_padding &&
             (uint64_t)section->size != stmt->offset + stmt->size) {
             minias_set_error(as,
                 "fragment-emitted-size-mismatch:line=%zu:expected=%u:actual=%llu",
@@ -5926,7 +5928,8 @@ bool minias_emit_sections(MiniAs *as) {
         /* A Target can stage bytes, fixups, synthetic symbols and ELF flags,
          * but only Common may publish the complete, length-checked result. */
         as->capture_instruction_bytes = false;
-        if (stmt->kind == MINIAS_STMT_INSN || staged_padding) {
+        if (stmt->fragment_kind == MINIAS_FRAGMENT_INSTRUCTION ||
+            staged_padding) {
             if (as->active_encode_result->byte_count != stmt->size ||
                 stmt->offset > SIZE_MAX) {
                 minias_set_error(as,
@@ -5976,6 +5979,7 @@ int minias_assemble_config(const char *input_path,
     size_t *long_branch_ids = NULL;
     size_t long_branch_count = 0U;
     size_t long_branch_capacity = 0U;
+    size_t source_reparse_pass = 0U;
     int rc = 1;
 
     for (;;) {
@@ -6001,6 +6005,12 @@ int minias_assemble_config(const char *input_path,
               &long_branch_capacity,&added_long_branches,diagnostic))
             parsed=false;
         if(parsed && added_long_branches) {
+            /* The successful pass prints reparse=0 because it is an in-place
+             * layout trace.  Report the actual exceptional source replay
+             * here, without changing the protected .if/.set semantics. */
+            if (diagnostic != NULL && getenv("MINIAS_TRACE_RELAYOUT") != NULL)
+                fprintf(diagnostic,"minias-source-reparse:pass=%zu\n",
+                        ++source_reparse_pass);
             minias_destroy(&as);
             continue;
         }

@@ -12,7 +12,7 @@ mk=Path('Makefile').read_text()
 owners=('minias_compile_data_mc','minias_emit_mc_data',
         'minias_parse_absolute_data_bits',
         'minias_evaluate_absolute_expression',
-        'minias_resolve_symbol_difference',
+        'minias_resolve_symbol_difference_ref',
         'minias_mcdata_destroy')
 for owner in owners:
     if owner+'(' not in m:
@@ -28,7 +28,8 @@ if 'deferred_text' in m or 'MINIAS_MC_EXPR_DEFERRED_ABSOLUTE' in m:
 if 'deferred_text' in internal:
     raise SystemExit('fixed-width MCExpr still stores source strings')
 for removed in ('minias_evaluate_same_subsection_difference(',
-                'minias_fold_local_difference_addend('):
+                'minias_fold_local_difference_addend(',
+                'minias_resolve_symbol_difference('):
     if removed in m or removed in internal:
         raise SystemExit('unreferenced expression compatibility API survived '+removed)
 if 'MINIAS_EXPRESSION_GRAMMAR_H' not in syntax:

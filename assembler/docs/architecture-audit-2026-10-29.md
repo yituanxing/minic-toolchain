@@ -507,3 +507,115 @@ another symbol-name owner. These paths have now been removed together.
    still construct temporary name DTOs for emission. Move this at the same
    time as the symbol resolver, then examine the separate ELF and DWARF
    consumer boundaries rather than blindly merging utility functions.
+
+## Batch M: single Fragment discriminator and Target-owned ISA state
+
+The next architecture-only integration uses the complete six-agent Batch L
+read-through. It closes actual old/new parallel paths across Common and all
+four Targets. It does not add any requested instruction family or claim a
+full Linux runtime acceptance. Branch and PR remain unchanged; PR #667 stays
+Draft.
+
+### Common contract (no Target-dependent semantics)
+
+- `MiniAsStmtKind` and `stmt.kind` were redundant with the typed retained
+  `MiniAsFragmentKind` and had zero consumers in the four Targets. All
+  creation, validation, layout, emission, and EncodeResult checks now use the
+  single Fragment kind. The source-spelling fields remain only where the
+  source/diagnostic grammar still genuinely needs them.
+- The checked same-section symbol-difference arithmetic is owned once by
+  MCExpr. The new NameId difference interface no longer recreates two
+  temporary 256-byte source-name expressions for a second lookup.
+- MCData held actual Object SymbolIDs but its encoder reconstructed names
+  to rediscover those same symbols. The Common emitter now uses the original
+  SymbolID directly through the same Fixup recorder, preserving lexical
+  `.set` binding, undefined-local promotion, ELF symbol order and relocation
+  provenance. Section-owned `.reloc`/CFI remain distinct on purpose.
+- Generic `target_options`, never-read `profile_features`, dead MCExpr
+  variants/unused multiplier are removed. Every Target owns its mutable ISA
+  state; immutable per-instruction `site.mode_bits` is captured via the
+  existing Target callback. The ELF writer still sees only generic object
+  information, not architecture-specific instruction rules.
+- A real full SourceFrame reparse now reports
+  `minias-source-reparse:pass=N` under `MINIAS_TRACE_RELAYOUT`, so conditional
+  replay cannot silently fall out of the regression suite. The dynamic
+  conditional dependency graph itself is not yet replaced.
+
+### Four independent Target closures
+
+- **RV32/RV64:** removed the entire private LI-plan pointer hash; MCInst's
+  normal Target-owned `target_payload` destructor owns the retained lowering
+  plan. Form parsing now carries typed XLEN/required-feature policy to one
+  post-parse gate; no separate pre-parse mnemonic-feature scan. Unrecognized
+  form families fail closed. AMO/LR/SC share target-private AQ/RL and width
+  suffix decoding. The strict final machine-word check remains as intentional
+  raw-ISA bypass defense, not dead code.
+- **AArch64:** eliminated `A64_MC_MOVZ` as a second route around the typed
+  WIDE_IMM encoding; consolidated named `.reloc` and Fixup-to-ELF mapping
+  under one Target descriptor. `A64TargetState` now owns both `.req` aliases
+  and `.arch/.arch_extension` feature state, without Common bitfields.
+- **LoongArch64:** Bitfield/Bytepick/ALSL/JIRL/MOVE/Prefetch/ADDU16I,
+  branch, PCALA HI/LO and single-word LI forms retain typed operands/forms
+  until encode, instead of constructing the final machine word in the parser.
+  Removed `LA_FORM_MISC`, silent default-GPR bank inference, and opaque
+  `target_payload != NULL` plan type inference. Lowering plans carry a
+  private type/form guard. Independent LSX/LASX and special-register legality
+  stays in its Target.
+- **x86-64:** `.code32/.code64` live in `X64TargetState` and are frozen into
+  the per-fragment site snapshot. Shift/Rotate Group-2 no longer has separate
+  CL-vs-immediate register parse/measure/encode paths; a single Target
+  EncodingPlan computes REX, prefixes, ModR/M and immediate length for all
+  three count dialects and uses the existing memory layout policy.
+
+### Size and regression evidence
+
+- Eleven modified production files: **+810/-744 = 1,554 touched lines**,
+  with 744 deleted lines, including obsolete ownership/encoding paths.
+- Release `-O2 -Werror` full build: **PASS**. Complete `check-minias-a0`:
+  **PASS, 30 objects**. Static target/ownership guards: **PASS**.
+- GNU x86 Group-2 and `.code32/.code64` private-state oracle: 86/86 text
+  bytes, 4 symbols and 2 relocations exact. Existing GNU x86 branch,
+  register/high-byte, memory and SymbolRef tests: **PASS**.
+- Common 1,024-relocation GNU exact parity, four-Target symbol transaction,
+  variable MCExpr fixed point, COMDAT, `.org`, immutable DATA and lexical
+  `.set` checks: **PASS**.
+- LoongArch 140 positive/73 negative cases: **PASS**; entire ELF objects
+  compared byte-for-byte with the preceding Batch L build, including the
+  large scalar/vector sample: **PASS**. Cross-GNU Loong tools unavailable.
+- AArch64 six local probes and five groups of complete ELF old/new
+  comparisons: **PASS**; cross-GNU toolchain unavailable locally.
+- RV LI/ISA profiles/RV32E/attributes/option controls, A0 and SymbolRef:
+  **PASS**; GNU RV cross-oracles that need absent local tools are **NOT RUN**
+  and remain CI-only.
+- New source-replay test: x86 conditional Macro/REPT, dot-dependent `.set`,
+  growing 2-to-6-byte branch and **observed single SourceFrame reparse**,
+  GNU text bytes and symbol value exact: **PASS**.
+- The previously unreferenced 2,048-edge `.set/.equ` alias DAG is now in
+  the x86/RV CI matrix; local x86 GNU symbol values, bytes and cycle/undefined
+  rejection: **PASS**. New four-Target lowering-ownership probe: x86 GNU
+  mixed mode exact; A64 MOVW 5 words, Loong LI 6 words, RV LI 5 words and
+  four malformed cases: **PASS**. RV source replay observed one reparse with
+  an 8-byte branch; remote GNU RV parity remains pending.
+- A remote Batch L CI run did fail at a stale static transaction-script
+  spelling assertion, after its GNU RV32 real-link/QEMU and 38 earlier
+  steps passed. Batch M updates that guard to test the current EncodeResult
+  commit path; treat the pending next exact-head CI as unverified until run.
+
+### Still architectural work, in priority order
+
+1. **P0/P1 conditional SourceGraph:** existing `MiniAsConditional` has only
+   stack booleans; SourceFrame lacks stable expansion-path identity. Layout
+   may reparse the entire input after a growing branch in a symbol-dependent
+   conditional. Replace only with a dependency-aware conditional AST,
+   immutable source-site keys and targeted Fragment/Symbol invalidation.
+2. **P1 Target semantic representation:** AArch64 still rewrites some
+   memory offsets and symbol differences in source strings and has multiple
+   memory parsers. LoongArch needs dynamic operand tokens and a private
+   descriptor index; RV still has link-relax `.option` accepted without
+   modeling R_RISCV_RELAX; x86 has further family-specific measure/encode
+   duplication. Address by complete family, never by combining ISA rules.
+3. **P2 source and object utilities:** physical SourceFrame lines are still
+   eagerly buffered; duplicated Common name-hash implementations have
+   distinct parse-time and ObjectSymbol identities; ELF group/link-order
+   names are valid string-level object semantics and must not be flattened
+   merely because MC instruction operands now use NameIds.

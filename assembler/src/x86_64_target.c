@@ -11,7 +11,19 @@
  * symbol, section, fragment, and ELF handling lives outside this file. */
 #define X64_CODE32 UINT32_C(1)
 
-enum { X64_ZERO = 1, X64_REG_BINARY, X64_STACK, X64_MOV_IMM32, X64_ENDBR64, X64_ALU_IMM, X64_REG_MEMORY, X64_BRANCH, X64_IMM_MEMORY, X64_MOVQ_IMMREG, X64_MOVABS_IMMREG, X64_SETCC, X64_BINARY8, X64_MOVSLQ, X64_MOVZX_REG, X64_SHIFT_IMM, X64_TEST8_IMM, X64_PUSH_IMM, X64_CMOV_REG, X64_SHIFT_CL, X64_UNARY, X64_INDIRECT_REG, X64_BSWAP, X64_TEST_IMM_REG, X64_IMUL_IMM, X64_BIT_IMMREG, X64_DOUBLE_SHIFT, X64_SYSTEM_MOVE, X64_BMI2_SHIFT };
+/* The IA-32 thunk mode is ISA parser state, not a Common assembler option.
+ * Each instruction captures the bits at its lexical site so a later .code64
+ * directive cannot change an earlier MCInst during layout/relaxation. */
+typedef struct X64TargetState {
+    uint32_t code_mode;
+} X64TargetState;
+
+enum { X64_ZERO = 1, X64_REG_BINARY, X64_STACK, X64_MOV_IMM32, X64_ENDBR64, X64_ALU_IMM, X64_REG_MEMORY, X64_BRANCH, X64_IMM_MEMORY, X64_MOVQ_IMMREG, X64_MOVABS_IMMREG, X64_SETCC, X64_BINARY8, X64_MOVSLQ, X64_MOVZX_REG, X64_SHIFT_REGISTER, X64_TEST8_IMM, X64_PUSH_IMM, X64_CMOV_REG, X64_UNARY, X64_INDIRECT_REG, X64_BSWAP, X64_TEST_IMM_REG, X64_IMUL_IMM, X64_BIT_IMMREG, X64_DOUBLE_SHIFT, X64_SYSTEM_MOVE, X64_BMI2_SHIFT };
+
+typedef enum X64ShiftCountForm {
+    X64_SHIFT_COUNT_IMMEDIATE = 0,
+    X64_SHIFT_COUNT_CL = 1
+} X64ShiftCountForm;
 
 /* AT&T addressing is an x86-specific machine operand; neither its ModR/M
  * register rules nor FS/GS selector have meaning in the shared MC model.
@@ -1568,72 +1580,63 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         m->operands[0].register_64=false;
         goto done;
     }
-    /* GNU implicit-count-one shift/rotate now resolves through the SAME
-     * descriptor and machine-length paths as explicit immediate/CL. */
+    /* One Group-2 lowering path for implicit 1, CL and immediate counts,
+     * with either register or memory destination. The subsequent register
+     * plan and existing memory layout own all byte-level decisions; no
+     * second register-shift decoder later in the parse function. */
     {
-        unsigned group,bits;
-        bool legacy_high=false;
-        if(x64_shift_descriptor(s->op,&group,&bits) &&
-           x64_shift_register(s->args,bits,&rd,&legacy_high)) {
-            m->opcode=X64_SHIFT_IMM;m->encoding=group|
-                (bits==8U?0x200U:bits==16U?0x400U:0U)|
-                (legacy_high?0x800U:0U);
-            m->count=2U;
-            m->operands[0].kind=MINIAS_MC_REGISTER;
-            m->operands[0].reg=rd;
-            m->operands[0].register_64=bits==64U;
-            m->operands[1].kind=MINIAS_MC_IMMEDIATE;
-            m->operands[1].immediate=1U;
-            goto done;
-        }
-    }
-    /* GNU shift/rotate memory forms share Group-2 ModR/M, displacement
-     * parsing and ELF fixup with existing typed Group-1 memory instructions.
-     * Opcode chooses D0/D1 for count 1, D2/D3 for CL and C0/C1 for
-     * imm8; only the target ISA owns size selection and group selector. */
-    {
-        unsigned group,bits;
+        unsigned group,bits,reg=0U;
         if(x64_shift_descriptor(s->op,&group,&bits)) {
-            const char *operand=NULL;
-            uint64_t shift=1U;
-            bool imm=false,via_cl=false;
-            uint32_t base;
+            const char *destination=s->args;
+            X64ShiftCountForm count_form=X64_SHIFT_COUNT_IMMEDIATE;
+            uint64_t count=1U;
+            bool legacy_high=false;
             X64Memory mem;
-            if(x64_args2(s->args,src,dst) &&
-               x64_is_mem_candidate(dst)) {
-                operand=dst;
-                if(!strcmp(src,"%cl"))via_cl=true;
+            if(x64_args2(s->args,src,dst)) {
+                destination=dst;
+                if(!strcmp(src,"%cl"))count_form=X64_SHIFT_COUNT_CL;
                 else if(*src=='$') {
-                    if(!minias_eval_u64_expression(src+1U,&shift) ||
-                       (shift>255U && shift<UINT64_MAX-127U))goto invalid;
-                    imm=true;
+                    if(!minias_eval_u64_expression(src+1U,&count) ||
+                       (count>255U && count<UINT64_MAX-127U))goto invalid;
                 }else goto invalid;
-            }else if(x64_is_mem_candidate(s->args)) {
-                operand=s->args;
             }
-            if(operand && x64_parse_base_memory(as,operand,&mem)) {
-                base=bits==8U?(via_cl?UINT32_C(0xd2):
-                       (imm && shift!=1U)?UINT32_C(0xc0):UINT32_C(0xd0)):
-                       via_cl?UINT32_C(0xd3):
-                       (imm && shift!=1U)?UINT32_C(0xc1):UINT32_C(0xd1);
-                m->opcode=((base==0xc0U || base==0xc1U)?
-                           X64_IMM_MEMORY:X64_REG_MEMORY);
-                m->count=m->opcode==X64_IMM_MEMORY?3U:2U;
-                /* The ModR/M.reg field is a Group-2 /opcode extension,
-                 * never a low-byte GPR. Byte width is already encoded by
-                 * C0/D0/D2; setting 0x200 would synthesize an invalid REX
-                 * prefix whenever the selector (/4 SAL, /5 SHR, /7 SAR)
-                 * happens to be >=4. */
-                m->encoding=base|(bits==16U?0x400U:0U);
+            if(x64_shift_register(destination,bits,&reg,&legacy_high)) {
+                m->opcode=X64_SHIFT_REGISTER;
+                m->count=2U;
+                m->target_form=(uint32_t)count_form;
+                m->encoding=group|(bits==8U?0x200U:
+                                   bits==16U?0x400U:0U)|
+                            (legacy_high?0x800U:0U);
+                m->operands[0].kind=MINIAS_MC_REGISTER;
+                m->operands[0].reg=reg;
+                m->operands[0].register_64=bits==64U;
+                m->operands[1].kind=MINIAS_MC_IMMEDIATE;
+                m->operands[1].immediate=count;
+                goto done;
+            }
+            if(!x64_is_mem_candidate(destination) ||
+               !x64_parse_base_memory(as,destination,&mem))goto invalid;
+            {
+                const bool byte=bits==8U;
+                const bool has_imm=count_form!=X64_SHIFT_COUNT_CL && count!=1U;
+                const unsigned opcode=count_form==X64_SHIFT_COUNT_CL?
+                    (byte?0xd2U:0xd3U):has_imm?
+                    (byte?0xc0U:0xc1U):(byte?0xd0U:0xd1U);
+                m->opcode=has_imm?X64_IMM_MEMORY:X64_REG_MEMORY;
+                m->count=has_imm?3U:2U;
+                /* Group-2 /n is an opcode extension, not a GPR.  Setting
+                 * byte-register REX bits here would corrupt selector /4. */
+                m->encoding=opcode|(bits==16U?0x400U:0U);
                 m->operands[0].kind=MINIAS_MC_REGISTER;
                 m->operands[0].reg=group;
                 m->operands[0].register_64=bits==64U;
-                if(!x64_attach_memory_operand(as,m,&mem,"out-of-memory:x86-shift-mem")) {
+                if(!x64_attach_memory_operand(as,m,&mem,
+                        "out-of-memory:x86-shift-mem")) {
                     minias_mcinst_destroy(m);return false;
                 }
-                if(m->opcode==X64_IMM_MEMORY) {
+                if(has_imm) {
                     m->operands[2].kind=MINIAS_MC_IMMEDIATE;
-                    m->operands[2].immediate=shift;
+                    m->operands[2].immediate=count;
                 }
                 goto done;
             }
@@ -1714,29 +1717,6 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             m->operands[1].reg=second;
             m->operands[1].register_64=(s->op[5]=='w')?false:wd;
             goto done;
-        }
-        if(src[0]=='$' || !strcmp(src,"%cl")) {
-            unsigned group,bits;
-            uint64_t count=0U;
-            bool legacy_high=false;
-            if(x64_shift_descriptor(s->op,&group,&bits) &&
-               x64_shift_register(dst,bits,&second,&legacy_high) &&
-               (!strcmp(src,"%cl") ||
-                (minias_eval_u64_expression(src+1,&count) &&
-                 (count<=255U || count>=UINT64_MAX-127U)))) {
-                m->opcode=!strcmp(src,"%cl")?
-                    X64_SHIFT_CL:X64_SHIFT_IMM;
-                m->count=2U;
-                m->encoding=group|(bits==8U?0x200U:
-                                   bits==16U?0x400U:0U)|
-                            (legacy_high?0x800U:0U);
-                m->operands[0].kind=MINIAS_MC_REGISTER;
-                m->operands[0].reg=second;
-                m->operands[0].register_64=bits==64U;
-                m->operands[1].kind=MINIAS_MC_IMMEDIATE;
-                m->operands[1].immediate=count;
-                goto done;
-            }
         }
         if(!strcmp(s->op,"testb") && src[0]=='$') {
             uint64_t bits;
@@ -2582,6 +2562,9 @@ typedef struct X64EncodingPlan {
     bool alu_accumulator;
     unsigned char alu_opcode;
     unsigned char alu_modrm;
+    bool shift_word;
+    unsigned char shift_opcode;
+    unsigned char shift_modrm;
     unsigned immediate_bytes;
     uint32_t instruction_bytes;
     uint32_t immediate_offset;
@@ -2643,12 +2626,24 @@ static X64EncodingPlan x64_encoding_plan(
                 ((m->encoding&UINT32_C(0x1000)) && first>=4U &&
                  !(m->encoding&UINT32_C(0x4000)));
             break;
-        case X64_SHIFT_CL:
-        case X64_SHIFT_IMM:
+        case X64_SHIFT_REGISTER: {
+            const bool byte=(m->encoding&UINT32_C(0x200))!=0U;
+            const bool cl=m->target_form==X64_SHIFT_COUNT_CL;
+            const bool imm=!cl && m->operands[1].immediate!=1U;
             plan.rex=wide || first>=8U ||
                 ((m->encoding&UINT32_C(0x200)) && first>=4U &&
                  !(m->encoding&UINT32_C(0x800)));
+            plan.shift_word=(m->encoding&UINT32_C(0x400))!=0U;
+            plan.shift_opcode=(unsigned char)(cl?(byte?0xd2U:0xd3U):
+                imm?(byte?0xc0U:0xc1U):(byte?0xd0U:0xd1U));
+            plan.shift_modrm=(unsigned char)(0xc0U|
+                ((m->encoding&7U)<<3U)|(first&7U));
+            plan.immediate_bytes=imm?1U:0U;
+            plan.immediate_offset=(plan.shift_word?1U:0U)+
+                (plan.rex?1U:0U)+2U;
+            plan.instruction_bytes=plan.immediate_offset+plan.immediate_bytes;
             break;
+        }
         case X64_MOVZX_REG:
             plan.rex=(!(m->encoding&UINT32_C(0x800)) &&
                       ((m->encoding&0xffU)==0xb6U ||
@@ -2728,17 +2723,11 @@ static bool x64_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
                   (m->operands[0].reg==0U?1U:2U)+
                   ((m->encoding&0x400U)?2U:4U);
             return true;
-        case X64_SHIFT_CL:
-            *size=2U+((m->encoding&0x400U)?1U:0U)+
-                  (plan.rex?1U:0U);
-            return true;
+        case X64_SHIFT_REGISTER:
+            *size=plan.instruction_bytes;return true;
         case X64_MOVZX_REG:
             *size=3U+((m->encoding&0x400U)?1U:0U)+
                   (plan.rex?1U:0U);return true;
-        case X64_SHIFT_IMM:
-            *size=((m->encoding&0x400U)?1U:0U)+
-                  (plan.rex?1U:0U)+
-                  (m->operands[1].immediate==1U?2U:3U);return true;
         case X64_TEST8_IMM:
             *size=m->operands[0].reg==0U?2U:
                   (3U+(plan.rex?1U:0U));return true;
@@ -2988,15 +2977,26 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
                 code[n++]=(unsigned char)(m->operands[1].immediate>>(8U*j));
             break;
         }
-        case X64_SHIFT_CL:
+        case X64_SHIFT_REGISTER: {
+            unsigned i;
             r=m->operands[0].reg;
-            if(m->encoding&0x400U)code[n++]=0x66U;
+            if(m->target_form!=X64_SHIFT_COUNT_IMMEDIATE &&
+               m->target_form!=X64_SHIFT_COUNT_CL) {
+                minias_set_error(as,"invalid-x86-shift-form");return false;
+            }
+            if(plan.shift_word)code[n++]=0x66U;
             if(plan.rex)
                 code[n++]=(unsigned char)(0x40U|
                     (m->operands[0].register_64?8U:0U)|(r>>3U));
-            code[n++]=(m->encoding&0x200U)?0xd2U:0xd3U;
-            code[n++]=(unsigned char)(0xc0U|((m->encoding&7U)<<3U)|(r&7U));
+            code[n++]=plan.shift_opcode;
+            code[n++]=plan.shift_modrm;
+            if(n!=plan.immediate_offset) {
+                minias_set_error(as,"invalid-x86-shift-plan-offset");return false;
+            }
+            for(i=0U;i<plan.immediate_bytes;++i)
+                code[n++]=(unsigned char)(m->operands[1].immediate>>(8U*i));
             break;
+        }
         case X64_MOVZX_REG:
             r=m->operands[0].reg;d=m->operands[1].reg;
             if(m->encoding&0x400U)code[n++]=0x66U;
@@ -3006,19 +3006,6 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
                     ((d>>3U)<<2U)|(r>>3U));
             code[n++]=0x0fU;code[n++]=(unsigned char)(m->encoding&0xffU);
             code[n++]=(unsigned char)(0xc0U|((d&7U)<<3U)|(r&7U));
-            break;
-        case X64_SHIFT_IMM:
-            r=m->operands[0].reg;
-            if(m->encoding&0x400U)code[n++]=0x66U;
-            if(plan.rex)
-                code[n++]=(unsigned char)(0x40U|
-                    (m->operands[0].register_64?8U:0U)|(r>>3U));
-            code[n++]=(m->encoding&0x200U)?
-                (m->operands[1].immediate==1U?0xd0U:0xc0U):
-                (m->operands[1].immediate==1U?0xd1U:0xc1U);
-            code[n++]=(unsigned char)(0xc0U|((m->encoding&7U)<<3U)|(r&7U));
-            if(m->operands[1].immediate!=1U)
-                code[n++]=(unsigned char)m->operands[1].immediate;
             break;
         case X64_TEST8_IMM:
             r=m->operands[0].reg;
@@ -3456,11 +3443,36 @@ static bool x64_supports_fixup(MiniAsFixupKind kind,unsigned width) {
             return false;
     }
 }
+static bool x64_init_target_state(MiniAs *as,
+                                  const MiniAsAssemblyConfig *config) {
+    X64TargetState *state;
+    (void)config;
+    state=calloc(1U,sizeof(*state));
+    if(state==NULL) {
+        minias_set_error(as,"out-of-memory:x86-target-state");
+        return false;
+    }
+    as->target_state=state;
+    return true;
+}
+
+static void x64_capture_site_state(const MiniAs *as,
+                                   MiniAsTargetSiteState *site) {
+    const X64TargetState *state=(const X64TargetState *)as->target_state;
+    site->mode_bits=state==NULL?0U:state->code_mode;
+}
+
+static void x64_destroy_target_state(MiniAs *as) {
+    free(as->target_state);
+    as->target_state=NULL;
+}
+
 /* The GNU EFI thunk switches to IA-32 *within* ELF64.
  * This is per-statement Target mode, never a driver/Core ELF-class switch. */
 static bool x64_parse_directive(MiniAs *as,const char *op,const char *args,
                                 size_t line,bool *handled) {
     bool code32=!strcmp(op,".code32");
+    X64TargetState *state=(X64TargetState *)as->target_state;
     *handled=code32 || !strcmp(op,".code64");
     if(!*handled)return true;
     if(*args) {
@@ -3468,7 +3480,11 @@ static bool x64_parse_directive(MiniAs *as,const char *op,const char *args,
                          args,line);
         return false;
     }
-    as->target_options=code32?X64_CODE32:0U;
+    if(state==NULL) {
+        minias_set_error(as,"missing-x86-target-state");
+        return false;
+    }
+    state->code_mode=code32?X64_CODE32:0U;
     return true;
 }
 /* GNU GAS treats native register tokens in .if as distinct symbolic
@@ -3533,6 +3549,9 @@ static bool x64_named_relocation(const char *name,
 static const MiniAsTargetOps ops={
     .name="x86_64",.comment_prefix='#',.elf_machine=62U,
     .resolve_profile=x64_profile,.parse_mcinst=x64_parse,
+    .init_target_state=x64_init_target_state,
+    .capture_site_state=x64_capture_site_state,
+    .destroy_target_state=x64_destroy_target_state,
     .parse_target_directive=x64_parse_directive,
     .evaluate_target_if=x64_evaluate_target_if,
     .measure_mcinst=x64_measure,.encode=x64_encode,

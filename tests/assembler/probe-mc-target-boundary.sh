@@ -106,6 +106,25 @@ if grep -Eq '(strict_i_xlen|strict_rv64i|isa_explicit|isa_features|target_attrib
     echo 'RISC-V profile or option stack leaked into MC Core' >&2
     exit 1
 fi
+# ISA parser options live in each TargetState and each retained statement's
+# immutable target site snapshot.  A shared mutable target_options bitfield
+# lets an unrelated Target silently inherit one ISA's option semantics.
+# profile_features was an unused second site-state dimension: do not restore
+# it alongside the legitimate target-owned site.mode_bits.
+python3 - <<'PY'
+from pathlib import Path
+import re
+for filename in ('assembler/src/minias_internal.h',
+                 'assembler/src/assembler.c'):
+    source = Path(filename).read_text(encoding='utf-8')
+    cleaned = re.sub(
+        r'/\*[\s\S]*?\*/|//[^\n]*|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'',
+        ' ', source)
+    for legacy in ('target_options', 'profile_features'):
+        if re.search(r'\b' + legacy + r'\b', cleaned):
+            raise SystemExit(f'{filename}: Common still owns {legacy}')
+PY
+grep -q 'uint32_t mode_bits;' assembler/src/minias_internal.h
 # AT&T base/index/SIB/FS/GS is not a cross-ISA MC addressing contract.
 # Memory stays a semantic operand kind, while its data layout and nested
 # allocations are private to the owning Target.

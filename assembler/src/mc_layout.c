@@ -9,11 +9,8 @@
  * hooks give ISA instruction widths and relaxation ranges. */
 
 /* One semantic contract between the source parser, MCLayout and emitter.
- * Statement.kind remains a coarse Target-facing compatibility class, but
- * the discriminated FragmentKind owns all final layout/materialization
- * decisions. This check makes it impossible to silently fall back to
- * interpreting source spelling when a producer forgets its typed payload.
- */
+ * The sole FragmentKind owns all final layout/materialization decisions.
+ * This check rejects incomplete typed payloads before emission. */
 bool minias_validate_fragment_semantics(MiniAs *as) {
     size_t i;
     for(i=0U;i<as->stmt_count;++i) {
@@ -21,38 +18,34 @@ bool minias_validate_fragment_semantics(MiniAs *as) {
         bool valid=false;
         switch(stmt->fragment_kind) {
         case MINIAS_FRAGMENT_INSTRUCTION:
-            valid=stmt->kind==MINIAS_STMT_INSN && stmt->mcinst!=NULL;
+            valid=stmt->mcinst!=NULL;
             break;
         case MINIAS_FRAGMENT_ALIGNMENT:
-            valid=stmt->kind==MINIAS_STMT_ALIGN &&
-                  stmt->org_mode==MINIAS_ORG_SOURCE &&
+            valid=stmt->org_mode==MINIAS_ORG_SOURCE &&
                   stmt->align!=0U &&
                   (stmt->align&(stmt->align-1U))==0U;
             break;
         case MINIAS_FRAGMENT_ORIGIN:
-            valid=stmt->kind==MINIAS_STMT_ALIGN &&
-                  stmt->org_mode!=MINIAS_ORG_SOURCE &&
+            valid=stmt->org_mode!=MINIAS_ORG_SOURCE &&
                   (stmt->org_mode!=MINIAS_ORG_TYPED_EXPR ||
                    stmt->org_expr!=NULL);
             break;
         case MINIAS_FRAGMENT_FIXED_DATA:
-            valid=stmt->kind==MINIAS_STMT_DATA && stmt->mcdata!=NULL;
+            valid=stmt->mcdata!=NULL;
             break;
         case MINIAS_FRAGMENT_FILL:
         case MINIAS_FRAGMENT_SPACE:
-            valid=stmt->kind==MINIAS_STMT_DATA &&
-                  stmt->variable_expr_count!=0U;
+            valid=stmt->variable_expr_count!=0U;
             break;
         case MINIAS_FRAGMENT_BYTES:
-            valid=stmt->kind==MINIAS_STMT_DATA &&
-                  stmt->static_data_size==(size_t)stmt->size &&
+            valid=stmt->static_data_size==(size_t)stmt->size &&
                   (stmt->size==0U || stmt->static_data!=NULL);
             break;
         }
         if(!valid) {
             minias_set_error(as,
-                "invalid-typed-fragment:kind=%u:class=%u:line=%zu",
-                (unsigned)stmt->fragment_kind,(unsigned)stmt->kind,
+                "invalid-typed-fragment:kind=%u:line=%zu",
+                (unsigned)stmt->fragment_kind,
                 stmt->line);
             return false;
         }
@@ -756,7 +749,8 @@ static bool minias_resolve_deferred_data(MiniAs *as) {
 bool minias_query_target_relax_plan(MiniAs *as,const MiniAsStmt *stmt,
                                    MiniAsTargetRelaxPlan *plan) {
     if(as==NULL || stmt==NULL || plan==NULL ||
-       stmt->kind!=MINIAS_STMT_INSN || stmt->mcinst==NULL) {
+       stmt->fragment_kind!=MINIAS_FRAGMENT_INSTRUCTION ||
+       stmt->mcinst==NULL) {
         if(as!=NULL)minias_set_error(as,"invalid-target-relaxation-owner");
         return false;
     }
@@ -799,7 +793,7 @@ static bool collect_out_of_range_branches(MiniAs *as,
         for(j=0U;j<*count;++j) {
             size_t id=(*ids)[j];
             if(id>=as->stmt_count ||
-               as->stmts[id].kind!=MINIAS_STMT_INSN ||
+               as->stmts[id].fragment_kind!=MINIAS_FRAGMENT_INSTRUCTION ||
                as->forced_long_branch_bitmap[id]) {
                 minias_set_error(as,"invalid-forced-fragment-id:%zu",id);
                 return false;
@@ -812,7 +806,7 @@ static bool collect_out_of_range_branches(MiniAs *as,
     for (i = 0U; i < as->stmt_count; ++i) {
         const MiniAsStmt *stmt = &as->stmts[i];
         MiniAsTargetRelaxPlan plan;
-        if(stmt->kind!=MINIAS_STMT_INSN)continue;
+        if(stmt->fragment_kind!=MINIAS_FRAGMENT_INSTRUCTION)continue;
         if(!minias_query_target_relax_plan(as,stmt,&plan))return false;
         if(plan.required_size<=stmt->size)continue;
         if(as->forced_long_branch_bitmap[i])continue;

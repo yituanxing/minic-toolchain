@@ -110,18 +110,9 @@ typedef struct MiniAsSymbol {
     uint64_t size_end_value;
 } MiniAsSymbol;
 
-typedef enum MiniAsStmtKind {
-    MINIAS_STMT_INSN,
-    MINIAS_STMT_ALIGN,
-    MINIAS_STMT_DATA
-} MiniAsStmtKind;
-
-/* The public Target-facing statement class deliberately remains coarse:
- * existing CodeEmitter hooks may distinguish instructions from raw data.
- * Common MCLayout and the Section writer instead dispatch on this complete
- * semantic Fragment discriminator, never the spelling of a GNU directive.
- * A new directive alias must select an existing FragmentKind, rather than
- * teaching relayout and emission another source-name special case. */
+/* The sole persistent Fragment discriminator.  Both Target-facing emission
+ * and Common layout consume this semantic kind, not directive spelling or
+ * a second coarse statement class. */
 typedef enum MiniAsFragmentKind {
     MINIAS_FRAGMENT_INSTRUCTION,
     MINIAS_FRAGMENT_ALIGNMENT,
@@ -316,7 +307,6 @@ typedef struct MiniAsMacro {
  * rather than reading mutable TargetContext during later relaxation. */
 typedef struct MiniAsTargetSiteState {
     uint32_t mode_bits;
-    uint64_t profile_features;
 } MiniAsTargetSiteState;
 
 /* MCExpr owns semantic operands, not source spelling. Compile each fixed-
@@ -324,13 +314,11 @@ typedef struct MiniAsTargetSiteState {
  * relocatable references using the final Fragment/Symbol layout. */
 typedef enum MiniAsMCExprKind {
     MINIAS_MC_EXPR_CONSTANT,
-    MINIAS_MC_EXPR_DOT, /* fragment-local location counter, never frozen */
     MINIAS_MC_EXPR_SYMBOL,
     MINIAS_MC_EXPR_SYMBOL_MINUS_DOT,
     MINIAS_MC_EXPR_DOT_MINUS_SYMBOL, /* stable current fragment site - label */
     MINIAS_MC_EXPR_SYMBOL_MINUS_DOT_DIV,
     MINIAS_MC_EXPR_DIFFERENCE,
-    MINIAS_MC_EXPR_DIFFERENCE_MUL, /* scaled absolute symbol distance */
     MINIAS_MC_EXPR_DIFFERENCE_DIV
 } MiniAsMCExprKind;
 
@@ -338,7 +326,6 @@ typedef struct MiniAsMCExpr {
     MiniAsMCExprKind kind;
     uint64_t constant;
     uint64_t divisor;
-    uint64_t multiplier; /* variable DATA positive scale, never an ISA fixup */
     int64_t lhs_addend;
     int64_t rhs_addend;
     /* Stable symbol table indices, never heap copies of symbol names.
@@ -358,7 +345,6 @@ typedef struct MiniAsMCData {
 } MiniAsMCData;
 
 typedef struct MiniAsStmt {
-    MiniAsStmtKind kind;
     MiniAsFragmentKind fragment_kind;
     char *op;
     char *args;
@@ -539,7 +525,6 @@ typedef struct MiniAs {
     bool has_org_constraints; /* typed position-dependent .org fragments */
     bool has_cross_subsection_size_end; /* retained .size cross-subsection span */
     bool has_mutable_absolute_sets; /* snapshot mutable .set in data */
-    uint32_t target_options;
     /* Opaque per-assembly backend parser state, owned and freed by Target. */
     void *target_state;
     bool cfi_active;
@@ -653,8 +638,6 @@ bool minias_evaluate_absolute_operand(MiniAs *,const char *,int64_t *);
  * same-section layout and fail closed on missing/cross-section anchors. */
 bool minias_parse_symbol_difference(const char *,MiniAsSymbolDifference *);
 bool minias_parse_size_end_addend(const char *,const char *,int64_t *);
-bool minias_resolve_symbol_difference(MiniAs *,const MiniAsSymbolDifference *,
-                                      int64_t *);
 bool minias_queue_literal(MiniAs *as,const MiniAsSymbolExpr *expression,
                           unsigned width,MiniAsSymbolExpr *pool_label);
 /* Target and generic data fixups require an active fragment. */
@@ -665,6 +648,11 @@ bool minias_add_fixup(MiniAs *as,
                       unsigned width,
                       const char *symbol_name,
                       int64_t addend);
+/* Fixed-width retained MCData already has a real, stable SymbolID; do not
+ * serialize it into a temporary name and ask the object table to find it. */
+bool minias_add_fixup_symbol_id(MiniAs *as, int section, uint64_t offset,
+                                MiniAsFixupKind kind, unsigned width,
+                                size_t symbol_index, int64_t addend);
 /* Target instructions and executable alignment produce a single staged
  * EncodeResult; no Target may directly insert into global Fixup/Symbol/ELF
  * arrays while its encoder can still fail. Offsets remain fragment-relative. */

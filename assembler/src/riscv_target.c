@@ -191,67 +191,41 @@ static bool strict_base_i_check_sections(MiniAs *as) {
 
 
 
-/* ISA legality consumes one Target-private descriptor policy: fixed-form
- * instruction metadata and dynamic pseudo/extension parse-form metadata
- * live together in riscv_encode.c. No -march preserves the historical
- * permissive compatibility mode, but it cannot invent an unknown opcode. */
-typedef struct RiscvInstructionPolicy {
-    uint64_t required_features;
-    bool rv64_only;
-} RiscvInstructionPolicy;
-
-static RiscvInstructionPolicy riscv_instruction_policy(const char *op) {
-    RiscvInstructionPolicy policy = {0U, false};
-    (void)minias_riscv_mc_descriptor_policy(op, &policy.required_features,
-                                            &policy.rv64_only, NULL);
-    return policy;
-}
-
-static bool riscv_validate_selected_isa(const MiniAs *as, const char *op,
-                                        const RiscvInstructionPolicy *policy,
-                                        char *reason, size_t cap) {
-    uint64_t bits;
-    /* Strict base-I retains the exhaustive post-encoding word validator,
-     * including its established machine-encoding error diagnostics. */
-    bits = policy->required_features;
+/* One parsed RvMCDesc or Target-private dynamic Form provides the ISA and
+ * XLEN requirements along with the actual MCInst. The Common pre-parse
+ * validate_instruction hook must not re-parse the opcode as a second source
+ * of truth. Strict base-I retains its independent post-encoding raw-word
+ * validator, so no .insn/pseudo/relocation placeholder bypass is possible. */
+bool minias_riscv_validate_parsed_isa(MiniAs *as, const MiniAsStmt *stmt,
+                                      uint64_t required_features,
+                                      bool rv64_only) {
+    const MiniAsRiscvState *state=MINIAS_RV_STATE(as);
+    const char *op=stmt->op;
     /* `.option norvc` is an instruction-site state even in the historical
      * implicit ISA mode. Do not bury the C opcode gate behind explicit
      * -march validation: GNU rejects c.* after norvc in either mode. */
-    if (bits != UINT64_MAX &&
-        ((MINIAS_RV_STATE(as)->options & MINIAS_RISCV_OPTION_NO_RVC) != 0U) &&
-        (bits & RISCV_ISA_C)) {
-        (void)snprintf(reason, cap, "disabled-riscv-compressed:%s", op);
+    if (required_features != UINT64_MAX &&
+        ((stmt->site.mode_bits & MINIAS_RISCV_OPTION_NO_RVC) != 0U) &&
+        (required_features & RISCV_ISA_C)) {
+        minias_set_error(as,"disabled-riscv-compressed:%s:line=%zu",
+                         op,stmt->line);
         return false;
     }
-    if (!MINIAS_RV_STATE(as)->isa_explicit ||
-        MINIAS_RV_STATE(as)->strict_i_xlen != 0U)return true;
-    if (strcmp(op, ".insn") == 0) {
-        (void)snprintf(reason, cap, "unsupported-isa-escape:.insn");
+    /* The .insn directive is rejected by parse_target_directive for explicit
+     * ISA contracts before this instruction is ever parsed. */
+    if (state->isa_explicit && state->strict_i_xlen == 0U &&
+        (required_features == UINT64_MAX ||
+         (required_features != 0U &&
+          (state->isa_features & required_features) != required_features))) {
+        minias_set_error(as,"unsupported-isa-feature:%s:line=%zu",
+                         op,stmt->line);
         return false;
     }
-    if (bits == UINT64_MAX || (bits != 0U &&
-        (MINIAS_RV_STATE(as)->isa_features & bits) != bits)) {
-        (void)snprintf(reason, cap, "unsupported-isa-feature:%s", op);
+    if (state->target_xlen == 32U && rv64_only) {
+        minias_set_error(as,"riscv32-unsupported-opcode:%s:line=%zu",
+                         op,stmt->line);
         return false;
     }
-    return true;
-}
-static bool riscv_validate_instruction(const MiniAs *as,
-                                       const char *op, const char *args,
-                                       char *reason, size_t cap) {
-    const RiscvInstructionPolicy policy = riscv_instruction_policy(op);
-    /* Machine feature checks must precede MCInst parsing, but operand
-     * decoding and sizing are exclusively the target MCInst hooks. */
-    if (!riscv_validate_selected_isa(as, op, &policy, reason, cap)) return false;
-    if (MINIAS_RV_STATE(as)->target_xlen == 32U &&
-        policy.rv64_only) {
-        (void)snprintf(reason, cap, "riscv32-unsupported-opcode:%s", op);
-        return false;
-    }
-    /* RV32E register bounds are checked after MCInst parsing. Raw tokens
-     * such as a6/s2 may name symbols, including branch and LA targets;
-     * only typed GPR operands can be interpreted as hardware registers. */
-    (void)args;
     return true;
 }
 
@@ -658,90 +632,7 @@ static bool riscv_init_target_state(MiniAs *as,
     return true;
 }
 
-/* MCInst is heap-owned and stable even if Common grows/reorders its statement
- * vector. A Target-local table owns the lowering plan, not a second parser or
- * a mutable layout offset. Rehash only copies plans; never the MCInst itself. */
-static size_t riscv_li_plan_bucket(const MiniAsMCInst *inst, size_t mask) {
-    uintptr_t value = (uintptr_t)inst >> 4U;
-    value ^= value >> 17U;
-    value ^= value >> 9U;
-    return (size_t)value & mask;
-}
-
-static bool riscv_li_plan_reserve(MiniAs *as, MiniAsRiscvState *state) {
-    size_t next = state->li_plan_capacity == 0U ? 64U :
-                  state->li_plan_capacity * 2U;
-    MiniAsRiscvLiPlan *slots;
-    size_t i;
-    if (next < state->li_plan_capacity ||
-        next > SIZE_MAX / sizeof(*slots)) {
-        minias_set_error(as, "out-of-memory:riscv-li-plan-capacity");
-        return false;
-    }
-    slots = calloc(next, sizeof(*slots));
-    if (slots == NULL) {
-        minias_set_error(as, "out-of-memory:riscv-li-plan-table");
-        return false;
-    }
-    for (i = 0U; i < state->li_plan_capacity; ++i) {
-        size_t bucket;
-        if (state->li_plans[i].key == NULL) continue;
-        bucket = riscv_li_plan_bucket(state->li_plans[i].key, next - 1U);
-        while (slots[bucket].key != NULL)
-            bucket = (bucket + 1U) & (next - 1U);
-        slots[bucket] = state->li_plans[i];
-    }
-    free(state->li_plans);
-    state->li_plans = slots;
-    state->li_plan_capacity = next;
-    return true;
-}
-
-bool minias_riscv_store_li_plan(MiniAs *as, const MiniAsMCInst *inst,
-                               const uint32_t *words, unsigned count) {
-    MiniAsRiscvState *state = MINIAS_RV_STATE(as);
-    size_t bucket;
-    if (state == NULL || inst == NULL || words == NULL ||
-        count == 0U || count > 16U) {
-        minias_set_error(as, "invalid-riscv-li-lowering-plan");
-        return false;
-    }
-    /* Keep maximum occupancy below 75%, including the new entry. */
-    if (state->li_plan_capacity == 0U ||
-        (state->li_plan_count + 1U) * 4U >=
-        state->li_plan_capacity * 3U) {
-        if (!riscv_li_plan_reserve(as, state)) return false;
-    }
-    bucket = riscv_li_plan_bucket(inst, state->li_plan_capacity - 1U);
-    while (state->li_plans[bucket].key != NULL &&
-           state->li_plans[bucket].key != inst)
-        bucket = (bucket + 1U) & (state->li_plan_capacity - 1U);
-    if (state->li_plans[bucket].key == NULL) ++state->li_plan_count;
-    state->li_plans[bucket].key = inst;
-    state->li_plans[bucket].count = count;
-    memcpy(state->li_plans[bucket].words, words,
-           count * sizeof(*words));
-    return true;
-}
-
-const MiniAsRiscvLiPlan *minias_riscv_find_li_plan(
-    const MiniAs *as, const MiniAsMCInst *inst) {
-    const MiniAsRiscvState *state = MINIAS_RV_STATE(as);
-    size_t bucket;
-    if (state == NULL || inst == NULL || state->li_plan_capacity == 0U)
-        return NULL;
-    bucket = riscv_li_plan_bucket(inst, state->li_plan_capacity - 1U);
-    while (state->li_plans[bucket].key != NULL) {
-        if (state->li_plans[bucket].key == inst)
-            return &state->li_plans[bucket];
-        bucket = (bucket + 1U) & (state->li_plan_capacity - 1U);
-    }
-    return NULL;
-}
-
 static void riscv_destroy_target_state(MiniAs *as) {
-    if (as->target_state != NULL)
-        free(MINIAS_RV_STATE(as)->li_plans);
     free(as->target_state);
     as->target_state = NULL;
 }
@@ -763,7 +654,6 @@ static bool riscv_configure_legacy(MiniAsAssemblyConfig *config,
 static void riscv_capture_site_state(const MiniAs *as,
                                       MiniAsTargetSiteState *site) {
     site->mode_bits = MINIAS_RV_STATE(as)->options;
-    site->profile_features = MINIAS_RV_STATE(as)->isa_features;
 }
 
 static void riscv_resolve_cfi_abi(const MiniAs *as, MiniAsCfiABI *abi) {
@@ -786,7 +676,6 @@ static const MiniAsTargetOps riscv_ops = {
     .object_attributes = riscv_object_attributes,
     .name = "riscv",
     .resolve_profile = riscv_resolve_profile,
-    .validate_instruction = riscv_validate_instruction,
     .parse_mcinst = minias_riscv_parse_mcinst,
     .measure_mcinst = minias_riscv_measure_mcinst,
     .encode = minias_riscv_encode,

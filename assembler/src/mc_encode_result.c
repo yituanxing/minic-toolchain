@@ -34,7 +34,7 @@ bool minias_encode_add_fixup_ref(MiniAs *as,int section,uint64_t offset,
     uint64_t relative;
     if(result==NULL)return false;
     owner=&as->stmts[as->emitting_fragment_id];
-    if(owner->kind!=MINIAS_STMT_INSN ||
+    if(owner->fragment_kind!=MINIAS_FRAGMENT_INSTRUCTION ||
        ref.name_id>=as->symbol_name_count ||
        as->symbol_names[ref.name_id].name==NULL ||
        section!=owner->section || section<0 ||
@@ -85,7 +85,7 @@ bool minias_encode_request_anchor_ref(MiniAs *as,const MiniAsStmt *stmt,
     if(result==NULL)return false;
     if(ref==NULL || stmt==NULL ||
        stmt!=&as->stmts[as->emitting_fragment_id] ||
-       stmt->kind!=MINIAS_STMT_INSN ||
+       stmt->fragment_kind!=MINIAS_FRAGMENT_INSTRUCTION ||
        stmt->section<0 || (size_t)stmt->section>=as->section_count ||
        prefix==NULL || *prefix=='\0' ||
        result->anchor_count>=SIZE_MAX-as->synthetic_anchor_counter) {

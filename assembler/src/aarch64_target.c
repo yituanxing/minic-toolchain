@@ -7,7 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#define A64_FEATURE_LSE UINT32_C(0x10000000) /* target_options feature bit */
+#define A64_FEATURE_LSE UINT32_C(0x10000000) /* Target-owned feature bit */
 #define A64_FEATURE_TLBI_RANGE UINT32_C(0x20000000) /* ARMv8.4 range */
 #define A64_FEATURE_CRC UINT32_C(0x40000000) /* ARM CRC extension */
 #define A64_FEATURE_CRYPTO UINT32_C(0x80000000) /* ARM AES/crypto extension */
@@ -61,8 +61,35 @@ typedef struct A64AliasState {
     struct {char alias[40];char canonical[16];} entries[128];
 } A64AliasState;
 
-static void a64_destroy_aliases(MiniAs *as) {
-    free(as->target_state);
+/* ISA capabilities and parser aliases have one Target-owned lifecycle.
+ * The alias dictionary is allocated only for source files using `.req`,
+ * while every A64 parse site observes the same independent feature state.
+ * Common has no ISA feature bits and never interprets this registry. */
+typedef struct A64TargetState {
+    uint32_t features;
+    A64AliasState *aliases;
+} A64TargetState;
+
+static uint32_t a64_features(const MiniAs *as) {
+    const A64TargetState *st=(const A64TargetState *)as->target_state;
+    return st?st->features:0U;
+}
+
+static bool a64_init_target_state(MiniAs *as,
+                                  const MiniAsAssemblyConfig *config) {
+    A64TargetState *st;
+    (void)config;
+    st=calloc(1U,sizeof(*st));
+    if(!st) {minias_set_error(as,"out-of-memory:aarch64-target-state");return false;}
+    st->features=0U; /* default armv8-a, extensions via Target directives */
+    as->target_state=st;
+    return true;
+}
+
+static void a64_destroy_target_state(MiniAs *as) {
+    A64TargetState *st=(A64TargetState *)as->target_state;
+    if(st)free(st->aliases);
+    free(st);
     as->target_state=NULL;
 }
 
@@ -258,7 +285,6 @@ enum {
     A64_MC_SYS_OP,
     A64_MC_BARRIER,
     A64_MC_RET,
-    A64_MC_MOVZ,
     A64_MC_SVC,
     A64_MC_BRK,
     A64_MC_B,
@@ -1939,7 +1965,7 @@ static bool a64_parse_lse(const A64AliasState *aliases,MiniAs *as,MiniAsMCInst *
         }
     }
     if(suffix==NULL ||
-       (as->target_options&A64_FEATURE_LSE)==0U)return false;
+       (a64_features(as)&A64_FEATURE_LSE)==0U)return false;
     {
         size_t nmod=strlen(suffix);
         /* A64 LSE size is encoded in bits [31:30], separately from
@@ -2186,7 +2212,8 @@ static bool a64_capture_deferred_difference(MiniAs *as,MiniAsStmt *stmt,
 }
 
 static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
-    const A64AliasState *aliases=(const A64AliasState *)as->target_state;
+    const A64TargetState *state=(const A64TargetState *)as->target_state;
+    const A64AliasState *aliases=state?state->aliases:NULL;
     MiniAsSymbolDifference deferred_difference;
     A64DeferredDifferenceUse deferred_use=A64_DEFERRED_NONE;
     /* Alias state belongs to this lexical parse site. Typed register
@@ -2769,12 +2796,12 @@ reduction_done:;
                strcmp(requested,sysops[i].name))continue;
             if(sysops[i].needs_rt!=paired)break;
             if(!strcmp(sysops[i].name,"gzva") &&
-               (as->target_options&A64_FEATURE_MTE)==0U)break;
+               (a64_features(as)&A64_FEATURE_MTE)==0U)break;
             /* ARMv8.4 range TLBI requires an explicit architectural
              * profile opt-in. It is not available under baseline v8-a. */
             if((!strncmp(sysops[i].name,"rv",2U) ||
                 !strncmp(sysops[i].name,"ripas2",6U)) &&
-               (as->target_options&A64_FEATURE_TLBI_RANGE)==0U)break;
+               (a64_features(as)&A64_FEATURE_TLBI_RANGE)==0U)break;
             if(paired && (!parse_a64_reg(aliases,operand,&rt,&rt64,&rtsp) ||
                           !rt64 || rtsp))break;
             word=sysops[i].word;found=true;break;
@@ -2894,7 +2921,7 @@ reduction_done:;
               !strcmp(op,"caspl") || !strcmp(op,"caspal")) {
         unsigned rs,rt,rn;
         bool wide;
-        if((as->target_options&A64_FEATURE_LSE)==0U ||
+        if((a64_features(as)&A64_FEATURE_LSE)==0U ||
            !a64_casp_fields(aliases,args,&rs,&rt,&rn,&wide)){
             minias_set_error(as,"bad-aarch64-casp:%s:line=%zu",
                              args,stmt->line);
@@ -2918,7 +2945,7 @@ reduction_done:;
         int64_t off;
         /* GNU [Xn,#offset] contains a nested comma, so split on A64's
          * top-level operand grammar, NOT the old single-comma split_two. */
-        if((as->target_options&A64_FEATURE_MTE)==0U ||
+        if((a64_features(as)&A64_FEATURE_MTE)==0U ||
            !split_operands(args,tok,&n) || n!=2U ||
            !parse_a64_reg(aliases,tok[0],&rt,&wide,&sp) || sp || !wide ||
            !parse_a64_mem(aliases,tok[1],&rn,&off,&mode) ||
@@ -2938,7 +2965,7 @@ reduction_done:;
         char tok[4][384];unsigned n,rt,rn,mode;
         bool wide,sp;
         int64_t offset;
-        if((as->target_options&A64_FEATURE_MTE)==0U ||
+        if((a64_features(as)&A64_FEATURE_MTE)==0U ||
            !split_operands(args,tok,&n) || n!=2U ||
            !parse_a64_reg(aliases,tok[0],&rt,&wide,&sp) || sp || !wide ||
            !parse_a64_mem(aliases,tok[1],&rn,&offset,&mode) ||
@@ -3096,7 +3123,7 @@ reduction_done:;
         };
         char tok[4][384];unsigned n,rd,rn,rm,k;
         bool wd,wn,wm,sp;
-        if((as->target_options&A64_FEATURE_CRC)==0U ||
+        if((a64_features(as)&A64_FEATURE_CRC)==0U ||
            !split_operands(args,tok,&n) || n!=3U ||
            !parse_a64_reg(aliases,tok[0],&rd,&wd,&sp) || sp || wd ||
            !parse_a64_reg(aliases,tok[1],&rn,&wn,&sp) || sp || wn ||
@@ -3126,7 +3153,7 @@ reduction_done:;
         };
         char tok[4][384];unsigned n,rd,rn,k;
         uint32_t da,sa;
-        if((as->target_options&A64_FEATURE_CRYPTO)==0U ||
+        if((a64_features(as)&A64_FEATURE_CRYPTO)==0U ||
            !split_operands(args,tok,&n) || n!=2U ||
            !a64_vector_view(aliases,tok[0],&rd,&da) ||
            !a64_vector_view(aliases,tok[1],&rn,&sa) ||
@@ -3352,7 +3379,7 @@ reduction_done:;
         bool polynomial=!strncmp(op,"pmull",5U);
         bool pair=!strcmp(op,"pmull2");
         bool tri=polynomial || !strcmp(op,"sha1su0");
-        bool valid=(as->target_options&A64_FEATURE_CRYPTO)!=0U &&
+        bool valid=(a64_features(as)&A64_FEATURE_CRYPTO)!=0U &&
             split_operands(args,tok,&n) && n==(tri?3U:2U);
         if(valid && polynomial) {
             /* PMULL/PMULL2 have TWO independently checked element
@@ -3400,7 +3427,7 @@ reduction_done:;
          * Qd,Sn,Vm.4S encoding; no second SIMD register parser. */
         char arg[4][384];unsigned n,rd,rn,rm;
         bool wide;uint32_t shape;
-        if((as->target_options&A64_FEATURE_CRYPTO)==0U ||
+        if((a64_features(as)&A64_FEATURE_CRYPTO)==0U ||
            !split_operands(args,arg,&n) || n!=3U ||
            !parse_a64_q_reg(aliases,arg[0],&rd) ||
            !a64_scalar_fp_reg(aliases,arg[1],&rn,&wide) || wide ||
@@ -3420,7 +3447,7 @@ reduction_done:;
         unsigned rd,rn;
         bool dw,nw;
         char dst[96],src[96];
-        if((as->target_options&A64_FEATURE_CRYPTO)==0U ||
+        if((a64_features(as)&A64_FEATURE_CRYPTO)==0U ||
            !split_two(args,dst,sizeof(dst),src,sizeof(src)) ||
            !a64_scalar_fp_reg(aliases,dst,&rd,&dw) || dw ||
            !a64_scalar_fp_reg(aliases,src,&rn,&nw) || nw) {
@@ -3439,7 +3466,7 @@ reduction_done:;
         char tok[4][384];unsigned n,rd,rn,rm=0U;uint32_t da=0U,sa=0U,ta=0U;
         bool pair=!strcmp(op,"sha256h") || !strcmp(op,"sha256h2");
         bool tri=strcmp(op,"sha256su0")!=0;
-        bool valid=(as->target_options&A64_FEATURE_CRYPTO)!=0U &&
+        bool valid=(a64_features(as)&A64_FEATURE_CRYPTO)!=0U &&
                    split_operands(args,tok,&n) && n==(tri?3U:2U);
         if(valid && pair) {
             valid=parse_a64_q_reg(aliases,tok[0],&rd) &&
@@ -3521,7 +3548,7 @@ lane_complete:;
          * 16-byte signed-scaled addressing and one typed store emitter. */
         char tok[4][384];unsigned n,rt,rn,mode;
         bool wide,sp;int64_t off;
-        if((as->target_options&A64_FEATURE_MTE)==0U ||
+        if((a64_features(as)&A64_FEATURE_MTE)==0U ||
            !split_operands(args,tok,&n) || (n!=2U && n!=3U) ||
            !parse_a64_reg(aliases,tok[0],&rt,&wide,&sp) || sp || !wide ||
            !parse_a64_mem(aliases,tok[1],&rn,&off,&mode)) {
@@ -3700,8 +3727,12 @@ lane_complete:;
                split_two(args, first, sizeof(first), second, sizeof(second)) &&
                a64_parse_named_gpr(aliases,first, &reg, &reg64) &&
                parse_imm16(second, &imm)) {
-        inst->opcode = A64_MC_MOVZ;
+        /* MOV #imm16 is exactly MOVZ with HW=0. Its explicit spelling
+         * and the wide-immediate MOVZ/MOVK/MOVN grammar now share one
+         * typed form and one machine encoder. */
+        inst->opcode = A64_MC_WIDE_IMM;
         inst->count = 2U;
+        inst->encoding = 0U; /* MOVZ variant, unshifted */
         put_reg(&inst->operands[0],reg,reg64);
         put_immediate(&inst->operands[1],(int64_t)imm);
     } else if (!strcmp(op,"mov") &&
@@ -4237,12 +4268,6 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
             }
             break;
         }
-        case A64_MC_MOVZ:
-            code = (inst->operands[0].register_64 ?
-                    UINT32_C(0xd2800000) : UINT32_C(0x52800000)) |
-                ((uint32_t)inst->operands[1].immediate << 5U) |
-                inst->operands[0].reg;
-            break;
         case A64_MC_BRK:
             code = UINT32_C(0xd4200000) |
                 ((uint32_t)inst->operands[0].immediate<<5U);
@@ -4753,9 +4778,10 @@ static bool a64_set_isa_feature(uint32_t *bits,const char *name) {
 
 static bool directive(MiniAs *as, const char *op, const char *args,
                       size_t line, bool *handled) {
+    A64TargetState *state=(A64TargetState *)as->target_state;
     *handled = false;
     if(strcmp(op,".unreq")==0) {
-        A64AliasState *st=(A64AliasState *)as->target_state;
+        A64AliasState *st=state?state->aliases:NULL;
         unsigned i;
         *handled=true;
         if(!st)return true;
@@ -4789,11 +4815,15 @@ static bool directive(MiniAs *as, const char *op, const char *args,
                                  op,line);
                 return false;
             }
-        st=(A64AliasState *)as->target_state;
+        if(!state) {
+            minias_set_error(as,"missing-aarch64-target-state");
+            return false;
+        }
+        st=state->aliases;
         if(!st) {
             st=calloc(1U,sizeof(*st));
             if(!st){minias_set_error(as,"out-of-memory:aarch64-aliases");return false;}
-            as->target_state=st;
+            state->aliases=st;
         }
         for(i=0U;i<st->count;++i)
             if(!strcmp(st->entries[i].alias,op)) {
@@ -4815,7 +4845,7 @@ static bool directive(MiniAs *as, const char *op, const char *args,
     if (strcmp(op, ".arch") == 0) {
         const char *plus=strchr(args,'+');
         size_t base_len=plus?(size_t)(plus-args):strlen(args);
-        uint32_t bits=as->target_options&
+        uint32_t bits=a64_features(as)&
                       ~(A64_FEATURE_LSE|A64_FEATURE_TLBI_RANGE|
                         A64_FEATURE_CRC|A64_FEATURE_CRYPTO|A64_FEATURE_MTE);
         bool v85=base_len==strlen("armv8.5-a") &&
@@ -4851,16 +4881,26 @@ static bool directive(MiniAs *as, const char *op, const char *args,
         }
         /* Commit atomically only after ALL feature names were checked:
          * malformed trailing + and unknown extensions never widen ISA. */
-        as->target_options=bits;
+        if(!state) {
+            minias_set_error(as,"missing-aarch64-target-state");
+            return false;
+        }
+        state->features=bits;
         return true;
     }
     if(!strcmp(op,".arch_extension")) {
+        uint32_t bits=a64_features(as);
         *handled=true;
-        if(!a64_set_isa_feature(&as->target_options,args)) {
+        if(!a64_set_isa_feature(&bits,args)) {
             minias_set_error(as,"unsupported-aarch64-extension:%s:line=%zu",
                              args,line);
             return false;
         }
+        if(!state) {
+            minias_set_error(as,"missing-aarch64-target-state");
+            return false;
+        }
+        state->features=bits;
         return true;
     }
     if(!strcmp(op,".inst")) {
@@ -4915,42 +4955,43 @@ static bool code_alignment(MiniAs *as, int section, size_t amount) {
     return true;
 }
 
-/* AArch64 ELF relocation forms simultaneously define the semantic fixup
- * capability and the ABI number. Width is explicit: pretending ABS32 and
- * ABS64 are interchangeable caused earlier cross-target policy leaks. */
+/* AArch64 owns ONE relocation descriptor table for target fixup support,
+ * ELF ABI numbering and the accepted named `.reloc` subset.  Width remains
+ * explicit: ABS32 and ABS64 are distinct ABI forms, not interchangeable. */
 static const struct {
     MiniAsFixupKind kind;
     unsigned width;
     uint32_t relocation;
+    const char *named_spelling; /* NULL: not accepted by .reloc name grammar */
 } aarch64_fixup_forms[] = {
-    {MINIAS_FIXUP_ABS, 4U, AARCH64_R_ABS32},
-    {MINIAS_FIXUP_ABS, 8U, AARCH64_R_ABS64},
-    {MINIAS_FIXUP_PREL32, 4U, AARCH64_R_PREL32},
-    {MINIAS_FIXUP_PREL64, 8U, AARCH64_R_PREL64},
-    {MINIAS_FIXUP_A64_CALL26, 4U, AARCH64_R_CALL26},
-    {MINIAS_FIXUP_A64_JUMP26, 4U, AARCH64_R_JUMP26},
-    {MINIAS_FIXUP_A64_CONDBR19, 4U, AARCH64_R_CONDBR19},
-    {MINIAS_FIXUP_A64_LD_PREL_LO19, 4U, AARCH64_R_LD_PREL_LO19},
-    {MINIAS_FIXUP_A64_TSTBR14, 4U, AARCH64_R_TSTBR14},
-    {MINIAS_FIXUP_A64_ADR_LO21, 4U, AARCH64_R_ADR_PREL_LO21},
-    {MINIAS_FIXUP_A64_ADRP_HI21, 4U, AARCH64_R_ADR_PREL_PG_HI21},
-    {MINIAS_FIXUP_A64_ADR_GOT_PAGE, 4U, AARCH64_R_ADR_GOT_PAGE},
-    {MINIAS_FIXUP_A64_LD64_GOT_LO12, 4U, AARCH64_R_LD64_GOT_LO12_NC},
-    {MINIAS_FIXUP_A64_ADD_LO12, 4U, AARCH64_R_ADD_ABS_LO12_NC},
-    {MINIAS_FIXUP_A64_LDST8_LO12, 4U, AARCH64_R_LDST8_ABS_LO12_NC},
-    {MINIAS_FIXUP_A64_LDST16_LO12, 4U, AARCH64_R_LDST16_ABS_LO12_NC},
-    {MINIAS_FIXUP_A64_LDST32_LO12, 4U, AARCH64_R_LDST32_ABS_LO12_NC},
-    {MINIAS_FIXUP_A64_LDST64_LO12, 4U, AARCH64_R_LDST64_ABS_LO12_NC},
-    {MINIAS_FIXUP_A64_MOVW_G0, 4U, AARCH64_R_MOVW_UABS_G0},
-    {MINIAS_FIXUP_A64_MOVW_G0_NC, 4U, AARCH64_R_MOVW_UABS_G0_NC},
-    {MINIAS_FIXUP_A64_MOVW_G1, 4U, AARCH64_R_MOVW_UABS_G1},
-    {MINIAS_FIXUP_A64_MOVW_G1_NC, 4U, AARCH64_R_MOVW_UABS_G1_NC},
-    {MINIAS_FIXUP_A64_MOVW_G2, 4U, AARCH64_R_MOVW_UABS_G2},
-    {MINIAS_FIXUP_A64_MOVW_G2_NC, 4U, AARCH64_R_MOVW_UABS_G2_NC},
-    {MINIAS_FIXUP_A64_MOVW_G3, 4U, AARCH64_R_MOVW_UABS_G3},
-    {MINIAS_FIXUP_A64_MOVW_SG0, 4U, AARCH64_R_MOVW_SABS_G0},
-    {MINIAS_FIXUP_A64_MOVW_SG1, 4U, AARCH64_R_MOVW_SABS_G1},
-    {MINIAS_FIXUP_A64_MOVW_SG2, 4U, AARCH64_R_MOVW_SABS_G2}
+    {MINIAS_FIXUP_ABS, 4U, AARCH64_R_ABS32, "R_AARCH64_ABS32"},
+    {MINIAS_FIXUP_ABS, 8U, AARCH64_R_ABS64, "R_AARCH64_ABS64"},
+    {MINIAS_FIXUP_PREL32, 4U, AARCH64_R_PREL32, "R_AARCH64_PREL32"},
+    {MINIAS_FIXUP_PREL64, 8U, AARCH64_R_PREL64, "R_AARCH64_PREL64"},
+    {MINIAS_FIXUP_A64_CALL26, 4U, AARCH64_R_CALL26, NULL},
+    {MINIAS_FIXUP_A64_JUMP26, 4U, AARCH64_R_JUMP26, NULL},
+    {MINIAS_FIXUP_A64_CONDBR19, 4U, AARCH64_R_CONDBR19, NULL},
+    {MINIAS_FIXUP_A64_LD_PREL_LO19, 4U, AARCH64_R_LD_PREL_LO19, NULL},
+    {MINIAS_FIXUP_A64_TSTBR14, 4U, AARCH64_R_TSTBR14, NULL},
+    {MINIAS_FIXUP_A64_ADR_LO21, 4U, AARCH64_R_ADR_PREL_LO21, NULL},
+    {MINIAS_FIXUP_A64_ADRP_HI21, 4U, AARCH64_R_ADR_PREL_PG_HI21, NULL},
+    {MINIAS_FIXUP_A64_ADR_GOT_PAGE, 4U, AARCH64_R_ADR_GOT_PAGE, NULL},
+    {MINIAS_FIXUP_A64_LD64_GOT_LO12, 4U, AARCH64_R_LD64_GOT_LO12_NC, NULL},
+    {MINIAS_FIXUP_A64_ADD_LO12, 4U, AARCH64_R_ADD_ABS_LO12_NC, NULL},
+    {MINIAS_FIXUP_A64_LDST8_LO12, 4U, AARCH64_R_LDST8_ABS_LO12_NC, NULL},
+    {MINIAS_FIXUP_A64_LDST16_LO12, 4U, AARCH64_R_LDST16_ABS_LO12_NC, NULL},
+    {MINIAS_FIXUP_A64_LDST32_LO12, 4U, AARCH64_R_LDST32_ABS_LO12_NC, NULL},
+    {MINIAS_FIXUP_A64_LDST64_LO12, 4U, AARCH64_R_LDST64_ABS_LO12_NC, NULL},
+    {MINIAS_FIXUP_A64_MOVW_G0, 4U, AARCH64_R_MOVW_UABS_G0, NULL},
+    {MINIAS_FIXUP_A64_MOVW_G0_NC, 4U, AARCH64_R_MOVW_UABS_G0_NC, NULL},
+    {MINIAS_FIXUP_A64_MOVW_G1, 4U, AARCH64_R_MOVW_UABS_G1, NULL},
+    {MINIAS_FIXUP_A64_MOVW_G1_NC, 4U, AARCH64_R_MOVW_UABS_G1_NC, NULL},
+    {MINIAS_FIXUP_A64_MOVW_G2, 4U, AARCH64_R_MOVW_UABS_G2, NULL},
+    {MINIAS_FIXUP_A64_MOVW_G2_NC, 4U, AARCH64_R_MOVW_UABS_G2_NC, NULL},
+    {MINIAS_FIXUP_A64_MOVW_G3, 4U, AARCH64_R_MOVW_UABS_G3, NULL},
+    {MINIAS_FIXUP_A64_MOVW_SG0, 4U, AARCH64_R_MOVW_SABS_G0, NULL},
+    {MINIAS_FIXUP_A64_MOVW_SG1, 4U, AARCH64_R_MOVW_SABS_G1, NULL},
+    {MINIAS_FIXUP_A64_MOVW_SG2, 4U, AARCH64_R_MOVW_SABS_G2, NULL}
 };
 
 static bool aarch64_lookup_fixup_form(MiniAsFixupKind kind, unsigned width,
@@ -5013,20 +5054,13 @@ static bool aarch64_resolve_profile(const char *march, const char *mabi,
 
 static bool a64_named_relocation(const char *name,
                                   MiniAsFixupKind *kind,unsigned *width) {
-    static const struct {
-        const char *name;
-        MiniAsFixupKind kind;
-        unsigned width;
-    } forms[]={
-        {"R_AARCH64_PREL32",MINIAS_FIXUP_PREL32,4U},
-        {"R_AARCH64_PREL64",MINIAS_FIXUP_PREL64,8U},
-        {"R_AARCH64_ABS32",MINIAS_FIXUP_ABS,4U},
-        {"R_AARCH64_ABS64",MINIAS_FIXUP_ABS,8U}
-    };
-    unsigned i;
-    for(i=0U;i<sizeof(forms)/sizeof(forms[0]);++i) {
-        if(!strcmp(name,forms[i].name)) {
-            *kind=forms[i].kind;*width=forms[i].width;
+    size_t i;
+    for(i=0U;i<sizeof(aarch64_fixup_forms)/
+                 sizeof(aarch64_fixup_forms[0]);++i) {
+        if(aarch64_fixup_forms[i].named_spelling!=NULL &&
+           !strcmp(name,aarch64_fixup_forms[i].named_spelling)) {
+            *kind=aarch64_fixup_forms[i].kind;
+            *width=aarch64_fixup_forms[i].width;
             return true;
         }
     }
@@ -5037,7 +5071,8 @@ static const MiniAsTargetOps ops = {
     .comment_prefix = '/', /* //, not #; AArch64 #42 is an immediate. */
     .elf_machine = 183U, /* EM_AARCH64 */
     .parse_target_directive = directive,
-    .destroy_target_state = a64_destroy_aliases,
+    .init_target_state = a64_init_target_state,
+    .destroy_target_state = a64_destroy_target_state,
     .object_attributes = attributes,
     .name = "aarch64",
     .resolve_profile = aarch64_resolve_profile,

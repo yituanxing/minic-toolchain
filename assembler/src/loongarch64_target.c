@@ -75,8 +75,26 @@ typedef enum {
     LA_FORM_MOVE = 0x5400,
     LA_FORM_PREFETCH = 0x5500,
     LA_FORM_ADDU16I = 0x5600,
-    LA_FORM_MISC = 0x6000
+    LA_FORM_PCALA_HI20 = 0x5700,
+    LA_FORM_PCALA_LO12 = 0x5701
 } LaFormKind;
+
+typedef struct {
+    const char *name;
+    uint32_t opcode;
+    unsigned immediate_bits;
+} LaManualPattern;
+static const LaManualPattern la_bitfield_patterns[] = {
+    {"bstrins.w",UINT32_C(0x00600000),5U},
+    {"bstrpick.w",UINT32_C(0x00608000),5U},
+    {"bstrins.d",UINT32_C(0x00800000),6U},
+    {"bstrpick.d",UINT32_C(0x00c00000),6U}
+};
+static const LaManualPattern la_alsl_patterns[] = {
+    {"alsl.w",UINT32_C(0x00040000),2U},
+    {"alsl.wu",UINT32_C(0x00060000),2U},
+    {"alsl.d",UINT32_C(0x002c0000),2U}
+};
 
 static void la_set_register_bank(MiniAsMCOperand *operand,
                                  LaRegisterBank bank) {
@@ -160,23 +178,28 @@ static bool la_symbol_operand(MiniAs *as, MiniAsMCInst *m, unsigned slot,
     return true;
 }
 
+typedef struct {
+    const char *name;
+    unsigned operands;
+    uint32_t opcode;
+    LaMCOpcode kind;
+} LaBranchPattern;
+static const LaBranchPattern la_branch_patterns[]={
+    {"b",1U,UINT32_C(0x50000000),LA_MC_BRANCH26},
+    {"bl",1U,UINT32_C(0x54000000),LA_MC_BRANCH26},
+    {"beqz",2U,UINT32_C(0x40000000),LA_MC_BRANCH21},
+    {"bnez",2U,UINT32_C(0x44000000),LA_MC_BRANCH21},
+    {"beq",3U,UINT32_C(0x58000000),LA_MC_BRANCH16},
+    {"bne",3U,UINT32_C(0x5c000000),LA_MC_BRANCH16},
+    {"blt",3U,UINT32_C(0x60000000),LA_MC_BRANCH16},
+    {"bge",3U,UINT32_C(0x64000000),LA_MC_BRANCH16},
+    {"bltu",3U,UINT32_C(0x68000000),LA_MC_BRANCH16},
+    {"bgeu",3U,UINT32_C(0x6c000000),LA_MC_BRANCH16}
+};
+
 static bool la_branch_instruction(MiniAs *as, MiniAsMCInst *m,
                                   const char *op, char t[4][192],
                                   unsigned count) {
-    struct BranchKind {const char *name;unsigned operands;uint32_t base;
-                       LaMCOpcode opcode;};
-    static const struct BranchKind branches[]={
-        {"b",1U,UINT32_C(0x50000000),LA_MC_BRANCH26},
-        {"bl",1U,UINT32_C(0x54000000),LA_MC_BRANCH26},
-        {"beqz",2U,UINT32_C(0x40000000),LA_MC_BRANCH21},
-        {"bnez",2U,UINT32_C(0x44000000),LA_MC_BRANCH21},
-        {"beq",3U,UINT32_C(0x58000000),LA_MC_BRANCH16},
-        {"bne",3U,UINT32_C(0x5c000000),LA_MC_BRANCH16},
-        {"blt",3U,UINT32_C(0x60000000),LA_MC_BRANCH16},
-        {"bge",3U,UINT32_C(0x64000000),LA_MC_BRANCH16},
-        {"bltu",3U,UINT32_C(0x68000000),LA_MC_BRANCH16},
-        {"bgeu",3U,UINT32_C(0x6c000000),LA_MC_BRANCH16}
-    };
     unsigned i, rj, rd, slot;
     const char *base_op=op;
     bool swap=false;
@@ -201,8 +224,8 @@ static bool la_branch_instruction(MiniAs *as, MiniAsMCInst *m,
     else if(!strcmp(op,"bleu")) {base_op="bgeu";swap=true;}
     else if(!strcmp(op,"bgt")) {base_op="blt";swap=true;}
     else if(!strcmp(op,"ble")) {base_op="bge";swap=true;}
-    for(i=0;i<sizeof(branches)/sizeof(branches[0]);++i) {
-        const struct BranchKind *b=&branches[i];
+    for(i=0;i<sizeof(la_branch_patterns)/sizeof(la_branch_patterns[0]);++i) {
+        const LaBranchPattern *b=&la_branch_patterns[i];
         if(strcmp(base_op,b->name)!=0 || count!=b->operands)continue;
         if (!minias_parse_symbol_addend(t[count-1U],&expr) ||
             (expr.addend&3)!=0)
@@ -213,7 +236,7 @@ static bool la_branch_instruction(MiniAs *as, MiniAsMCInst *m,
         if(swap && count==3U) {unsigned tmp=rj;rj=rd;rd=tmp;}
         slot=count-1U;
         if (!la_symbol_operand(as,m,slot,&expr))return false;
-        m->opcode=(unsigned)b->opcode;
+        m->opcode=(unsigned)b->kind;
         m->target_form=(uint32_t)LA_FORM_BRANCH+(uint32_t)i;
         m->count=count;
         if(count>=2U) {m->operands[0].kind=MINIAS_MC_REGISTER;
@@ -222,13 +245,9 @@ static bool la_branch_instruction(MiniAs *as, MiniAsMCInst *m,
         if(count==3U) {m->operands[1].kind=MINIAS_MC_REGISTER;
                        m->operands[1].reg=rd;
                        la_set_register_bank(&m->operands[1],LA_REG_BANK_GPR);}
-        /* Loong B21: high 5 bits in [4:0], low 16 in [25:10].
-         * B16: 16 bits in [25:10]; B26: high 10 in [9:0]. */
-        m->encoding=b->base |
-            /* GNU LoongArch field layout: rj in bits 9:5; rd in bits
-             * 4:0 (B16). B21 reuses low bits 4:0 for high displacement. */
-            (count>=2U?(rj<<5U):0U) |
-            (count==3U?rd:0U);
+        /* Destination registers are encoded from the retained branch form
+         * during emission, before the displacement is resolved. */
+        m->encoding=b->opcode;
         return true;
     }
     return false;
@@ -307,6 +326,7 @@ static unsigned la_li_d_words(uint64_t bits,unsigned rd,uint32_t out[4]) {
  * Fixups are relative to the emitted word, and refer to retained semantic
  * operands; neither sizing nor emission has to re-lower an instruction. */
 typedef struct {
+    uint32_t tag;
     unsigned count;
     uint32_t words[4];
     unsigned fixup_count;
@@ -317,6 +337,20 @@ typedef struct {
     } fixups[2];
 } LaLoweringPlan;
 
+enum { LA_LOWERING_PLAN_TAG=0x4c41504cU };
+
+static bool la_valid_lowering_plan(const MiniAsMCInst *inst) {
+    const LaLoweringPlan *plan=(const LaLoweringPlan *)inst->target_payload;
+    return plan!=NULL && plan->tag==LA_LOWERING_PLAN_TAG &&
+        plan->count>0U && plan->count<=4U && plan->fixup_count<=2U &&
+        ((inst->opcode==LA_MC_LI32_PAIR &&
+          inst->target_form==LA_FORM_LI_W && plan->fixup_count==0U) ||
+         (inst->opcode==LA_MC_LI64_SEQUENCE &&
+          inst->target_form==LA_FORM_LI_D && plan->fixup_count==0U) ||
+         (inst->opcode==LA_MC_PCREL_PSEUDO &&
+          inst->target_form==LA_FORM_PCREL && plan->fixup_count==2U));
+}
+
 static bool la_attach_lowering_plan(MiniAs *as,MiniAsMCInst *inst,
                                     const LaLoweringPlan *source) {
     LaLoweringPlan *plan=malloc(sizeof(*plan));
@@ -325,6 +359,7 @@ static bool la_attach_lowering_plan(MiniAs *as,MiniAsMCInst *inst,
         return false;
     }
     *plan=*source;
+    plan->tag=LA_LOWERING_PLAN_TAG;
     if(plan->count==0U || plan->count>4U || plan->fixup_count>2U) {
         free(plan);
         minias_set_error(as,"invalid-loongarch-lowering-plan");
@@ -1073,6 +1108,173 @@ static bool la_materialize_table_word(const MiniAsMCInst *m,
     return true;
 }
 
+/* The remaining compact instruction families retain their semantic operands
+ * and a private Form ID. The parser records only an opcode template; this
+ * encoder is the sole owner of field placement for every one-word family. */
+static bool la_materialize_manual_word(const MiniAsMCInst *m,
+                                       uint32_t *word,bool *recognized) {
+    uint32_t form=m->target_form,rd=0U,rj=0U,rk=0U,immediate=0U;
+    int64_t signed_value;
+    *recognized=true;
+    if(form>=LA_FORM_PRIVILEGED && form<LA_FORM_SCALAR) {
+        if(m->count!=0U ||
+           !((form>=LA_FORM_PRIVILEGED &&
+              form<LA_FORM_PRIVILEGED+7U) ||
+             form==LA_FORM_PRIVILEGED+16U ||
+             form==LA_FORM_PRIVILEGED+17U))return false;
+        *word=m->encoding;
+        return true;
+    }
+    if(form>=LA_FORM_BRANCH && form<LA_FORM_LI_D) {
+        size_t index=(size_t)(form-LA_FORM_BRANCH);
+        const LaBranchPattern *branch;
+        if(index>=sizeof(la_branch_patterns)/sizeof(la_branch_patterns[0]))
+            return false;
+        branch=&la_branch_patterns[index];
+        if(m->count!=branch->operands || m->opcode!=(unsigned)branch->kind ||
+           m->operands[m->count-1U].kind!=MINIAS_MC_BOUND_SYMBOL)
+            return false;
+        *word=branch->opcode;
+        if(m->count>=2U) {
+            if(!la_encoded_reg(&m->operands[0],LA_REG_BANK_GPR,&rj))
+                return false;
+            *word|=rj<<5U;
+        }
+        if(m->count==3U) {
+            if(!la_encoded_reg(&m->operands[1],LA_REG_BANK_GPR,&rd))
+                return false;
+            *word|=rd;
+        }
+        return true;
+    }
+    if(form==LA_FORM_LI_W || form==LA_FORM_LI_D) {
+        if(m->count!=2U || m->opcode!=LA_MC_FIXED ||
+           !la_encoded_reg(&m->operands[0],LA_REG_BANK_GPR,&rd) ||
+           m->operands[1].kind!=MINIAS_MC_IMMEDIATE)return false;
+        signed_value=(int64_t)m->operands[1].immediate;
+        if(m->encoding==UINT32_C(0x02800000)) {
+            if(signed_value<-2048 || signed_value>2047)return false;
+            *word=m->encoding|
+                (((uint32_t)signed_value&UINT32_C(0xfff))<<10U)|rd;
+        } else if(m->encoding==UINT32_C(0x14000000)) {
+            if(signed_value<INT32_MIN || signed_value>INT32_MAX ||
+               signed_value%4096!=0)return false;
+            *word=m->encoding|
+                (((uint32_t)(signed_value/4096)&UINT32_C(0xfffff))<<5U)|rd;
+        } else if(form==LA_FORM_LI_W &&
+                  m->encoding==UINT32_C(0x03800000)) {
+            if(signed_value<2048 || signed_value>4095)return false;
+            *word=m->encoding|((uint32_t)signed_value<<10U)|rd;
+        } else return false;
+        return true;
+    }
+    if(form>=LA_FORM_BITFIELD &&
+       form<LA_FORM_BITFIELD+sizeof(la_bitfield_patterns)/
+            sizeof(la_bitfield_patterns[0])) {
+        size_t index=(size_t)(form-LA_FORM_BITFIELD);
+        const LaManualPattern *pattern=&la_bitfield_patterns[index];
+        if(m->count!=4U ||
+           !la_encoded_reg(&m->operands[0],LA_REG_BANK_GPR,&rd) ||
+           !la_encoded_reg(&m->operands[1],LA_REG_BANK_GPR,&rj) ||
+           !la_encoded_imm(&m->operands[2],pattern->immediate_bits,&immediate) ||
+           m->operands[3].kind!=MINIAS_MC_IMMEDIATE ||
+           m->operands[3].immediate>immediate)return false;
+        *word=pattern->opcode|(immediate<<16U)|
+            ((uint32_t)m->operands[3].immediate<<10U)|(rj<<5U)|rd;
+        return true;
+    }
+    if(form==LA_FORM_BYTEPICK || form==LA_FORM_BYTEPICK+1U ||
+       (form>=LA_FORM_ALSL && form<LA_FORM_ALSL+3U)) {
+        uint64_t value;
+        if(m->count!=4U ||
+           !la_encoded_reg(&m->operands[0],LA_REG_BANK_GPR,&rd) ||
+           !la_encoded_reg(&m->operands[1],LA_REG_BANK_GPR,&rj) ||
+           !la_encoded_reg(&m->operands[2],LA_REG_BANK_GPR,&rk) ||
+           m->operands[3].kind!=MINIAS_MC_IMMEDIATE)return false;
+        value=m->operands[3].immediate;
+        if(form==LA_FORM_BYTEPICK || form==LA_FORM_BYTEPICK+1U) {
+            unsigned wide=form==LA_FORM_BYTEPICK+1U;
+            if(value>=(wide?8U:4U))return false;
+            *word=(wide?UINT32_C(0x000c0000):UINT32_C(0x00080000))|
+                ((uint32_t)value<<15U)|(rk<<10U)|(rj<<5U)|rd;
+        } else {
+            size_t index=(size_t)(form-LA_FORM_ALSL);
+            if(value<1U || value>4U)return false;
+            *word=la_alsl_patterns[index].opcode|
+                (((uint32_t)value-1U)<<15U)|(rk<<10U)|(rj<<5U)|rd;
+        }
+        return true;
+    }
+    if(form==LA_FORM_JIRL || form==LA_FORM_JIRL+1U) {
+        if(form==LA_FORM_JIRL) {
+            if(m->count!=1U ||
+               !la_encoded_reg(&m->operands[0],LA_REG_BANK_GPR,&rj))
+                return false;
+            *word=UINT32_C(0x4c000000)|(rj<<5U);
+        } else {
+            if(m->count!=3U ||
+               !la_encoded_reg(&m->operands[0],LA_REG_BANK_GPR,&rd) ||
+               !la_encoded_reg(&m->operands[1],LA_REG_BANK_GPR,&rj) ||
+               m->operands[2].kind!=MINIAS_MC_IMMEDIATE)return false;
+            signed_value=(int64_t)m->operands[2].immediate;
+            if(signed_value<-131072 || signed_value>131068 ||
+               signed_value%4!=0)return false;
+            *word=UINT32_C(0x4c000000)|
+                (((uint32_t)(signed_value/4)&UINT32_C(0xffff))<<10U)|
+                (rj<<5U)|rd;
+        }
+        return true;
+    }
+    if(form==LA_FORM_MOVE || form==LA_FORM_ADDU16I) {
+        if(m->count!=(form==LA_FORM_MOVE?2U:3U) ||
+           !la_encoded_reg(&m->operands[0],LA_REG_BANK_GPR,&rd) ||
+           !la_encoded_reg(&m->operands[1],LA_REG_BANK_GPR,&rj))return false;
+        if(form==LA_FORM_MOVE) {
+            *word=UINT32_C(0x00150000)|(rj<<5U)|rd;
+        } else {
+            if(!la_encoded_imm(&m->operands[2],16U,&immediate))return false;
+            *word=UINT32_C(0x10000000)|(immediate<<10U)|(rj<<5U)|rd;
+        }
+        return true;
+    }
+    if(form==LA_FORM_PREFETCH || form==LA_FORM_PREFETCH+1U) {
+        if(m->count!=3U ||
+           !la_encoded_imm(&m->operands[0],5U,&immediate) ||
+           m->operands[0].immediate>31U ||
+           !la_encoded_reg(&m->operands[1],LA_REG_BANK_GPR,&rj))return false;
+        if(form==LA_FORM_PREFETCH) {
+            uint32_t displacement;
+            if(!la_encoded_imm(&m->operands[2],12U,&displacement))
+                return false;
+            *word=UINT32_C(0x2ac00000)|(displacement<<10U)|
+                (rj<<5U)|immediate;
+        } else {
+            if(!la_encoded_reg(&m->operands[2],LA_REG_BANK_GPR,&rk))
+                return false;
+            *word=UINT32_C(0x382c0000)|(rk<<10U)|
+                (rj<<5U)|immediate;
+        }
+        return true;
+    }
+    if(form==LA_FORM_PCALA_HI20 || form==LA_FORM_PCALA_LO12) {
+        unsigned symbol=form==LA_FORM_PCALA_HI20?1U:2U;
+        if(m->count!=symbol+1U ||
+           m->opcode!=(form==LA_FORM_PCALA_HI20 ?
+                      LA_MC_PCALA_HI20:LA_MC_PCALA_LO12) ||
+           !la_encoded_reg(&m->operands[0],LA_REG_BANK_GPR,&rd) ||
+           m->operands[symbol].kind!=MINIAS_MC_BOUND_SYMBOL)return false;
+        *word=m->encoding|rd;
+        if(form==LA_FORM_PCALA_LO12) {
+            if(!la_encoded_reg(&m->operands[1],LA_REG_BANK_GPR,&rj))
+                return false;
+            *word|=rj<<5U;
+        }
+        return true;
+    }
+    *recognized=false;
+    return true;
+}
+
 static bool la_parse(MiniAs *as,MiniAsStmt *s) {
     MiniAsMCInst *m=minias_mcinst_alloc(4U);
     char t[4][192];unsigned n,i,rd,rj,rk;
@@ -1119,7 +1321,7 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
            !la_symbol_operand(as,m,1U,&expr))goto fail;
         m->opcode=LA_MC_PCREL_PSEUDO;
         m->count=2U;
-        m->encoding=UINT32_C(0x1a000000)|rd;
+        m->encoding=UINT32_C(0x1a000000);
         la_capture_gpr_operand(m,0U,rd);
         if(!la_plan_pcrel(as,m,rd))goto fail;
         goto done;
@@ -1137,8 +1339,7 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
         if(has_value && value>=-2048 && value<=2047) {
             m->target_form=!strcmp(s->op,"li.d") ? LA_FORM_LI_D : LA_FORM_LI_W;
             m->count=2U;
-            m->encoding=UINT32_C(0x02800000) |
-                (((uint32_t)value&UINT32_C(0xfff))<<10U)|rd;
+            m->encoding=UINT32_C(0x02800000);
             la_capture_gpr_operand(m,0U,rd);
             la_capture_imm_operand(m,1U,value);
             goto done;
@@ -1160,10 +1361,8 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
         if(has_value &&
            value%4096==0 && value>=INT32_MIN && value<=INT32_MAX) {
             m->target_form=!strcmp(s->op,"li.d") ? LA_FORM_LI_D : LA_FORM_LI_W;
-            int64_t hi=value/4096;
             m->count=2U;
-            m->encoding=UINT32_C(0x14000000)|
-                (((uint32_t)hi&UINT32_C(0xfffff))<<5U)|rd;
+            m->encoding=UINT32_C(0x14000000);
             la_capture_gpr_operand(m,0U,rd);
             la_capture_imm_operand(m,1U,value);
             goto done;
@@ -1177,8 +1376,7 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
         if(minias_eval_i64_expression(t[1],&v) && v>=2048 && v<=4095) {
             m->target_form=LA_FORM_LI_W;
             m->count=2U;
-            m->encoding=UINT32_C(0x03800000) |
-                ((uint32_t)v<<10U)|rd;
+            m->encoding=UINT32_C(0x03800000);
             la_capture_gpr_operand(m,0U,rd);
             la_capture_imm_operand(m,1U,v);
             goto done;
@@ -1199,23 +1397,15 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
         }
     }
     if(n==4U && la_reg(t[0],&rd) && la_reg(t[1],&rj)) {
-        static const struct {const char *op;uint32_t base;unsigned bits;} bitfield[]={
-            {"bstrins.w",UINT32_C(0x00600000),5U},
-            {"bstrpick.w",UINT32_C(0x00608000),5U},
-            {"bstrins.d",UINT32_C(0x00800000),6U},
-            {"bstrpick.d",UINT32_C(0x00c00000),6U}
-        };
         uint64_t msb,lsb;
         if(minias_eval_u64_expression(t[2],&msb) &&
            minias_eval_u64_expression(t[3],&lsb)) {
-            for(i=0U;i<sizeof(bitfield)/sizeof(bitfield[0]);++i)
-                if(strcmp(s->op,bitfield[i].op)==0 &&
-                   msb<(UINT64_C(1)<<bitfield[i].bits) &&
+            for(i=0U;i<sizeof(la_bitfield_patterns)/sizeof(la_bitfield_patterns[0]);++i)
+                if(strcmp(s->op,la_bitfield_patterns[i].name)==0 &&
+                   msb<(UINT64_C(1)<<la_bitfield_patterns[i].immediate_bits) &&
                    lsb<=msb) {
                     m->count=4U;
-                    m->encoding=bitfield[i].base |
-                        ((uint32_t)msb<<16U)|((uint32_t)lsb<<10U) |
-                        (rj<<5U)|rd;
+                    m->encoding=la_bitfield_patterns[i].opcode;
                     m->target_form=LA_FORM_BITFIELD+(uint32_t)i;
                     la_capture_gpr_operand(m,0U,rd);
                     la_capture_gpr_operand(m,1U,rj);
@@ -1233,8 +1423,7 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
            offset<(wide?8U:4U)) {
             m->count=4U;
             m->target_form=LA_FORM_BYTEPICK+(wide?1U:0U);
-            m->encoding=(wide?UINT32_C(0x000c0000):UINT32_C(0x00080000)) |
-                        ((uint32_t)offset<<15U)|(rk<<10U)|(rj<<5U)|rd;
+            m->encoding=wide?UINT32_C(0x000c0000):UINT32_C(0x00080000);
             la_capture_rrr(m,rd,rj,rk);
             la_capture_imm_operand(m,3U,(int64_t)offset);
             goto done;
@@ -1245,21 +1434,14 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
      * Index/shift-add is a single target-local MCInst, not Common logic. */
     if(n==4U && la_reg(t[0],&rd) && la_reg(t[1],&rj) &&
        la_reg(t[2],&rk)) {
-        static const struct {const char *name;uint32_t base;} alsls[]={
-            {"alsl.w",UINT32_C(0x00040000)},
-            {"alsl.wu",UINT32_C(0x00060000)},
-            {"alsl.d",UINT32_C(0x002c0000)}
-        };
         uint64_t shift;
         if(minias_eval_u64_expression(t[3],&shift) &&
            shift>=1U && shift<=4U) {
-            for(i=0U;i<sizeof(alsls)/sizeof(alsls[0]);++i) {
-                if(strcmp(s->op,alsls[i].name)!=0)continue;
+            for(i=0U;i<sizeof(la_alsl_patterns)/sizeof(la_alsl_patterns[0]);++i) {
+                if(strcmp(s->op,la_alsl_patterns[i].name)!=0)continue;
                 m->count=4U;
                 m->target_form=LA_FORM_ALSL+(uint32_t)i;
-                m->encoding=alsls[i].base |
-                    (((uint32_t)shift-1U)<<15U)|
-                    (rk<<10U)|(rj<<5U)|rd;
+                m->encoding=la_alsl_patterns[i].opcode;
                 la_capture_rrr(m,rd,rj,rk);
                 la_capture_imm_operand(m,3U,(int64_t)shift);
                 goto done;
@@ -1271,7 +1453,7 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
         m->count=1U;
         m->target_form=LA_FORM_JIRL;
         la_capture_gpr_operand(m,0U,rj);
-        m->encoding=UINT32_C(0x4c000000)|(rj<<5U);goto done;
+        m->encoding=UINT32_C(0x4c000000);goto done;
     }
     /* JIRL is a signed 16-bit displacement in 4-byte units. The JR alias
      * above is a canonical zero-link JIRL, not a second instruction family. */
@@ -1283,9 +1465,7 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
             m->count=3U;
             m->target_form=LA_FORM_JIRL+1U;
             la_capture_rri(m,rd,rj,delta);
-            m->encoding=UINT32_C(0x4c000000) |
-                (((uint32_t)(delta/4)&UINT32_C(0xffff))<<10U) |
-                (rj<<5U)|rd;
+            m->encoding=UINT32_C(0x4c000000);
             goto done;
         }
     }
@@ -1295,15 +1475,15 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
            la_reloc_expr(t[1],"%pc_hi20",&expr)) {
             if(!la_symbol_operand(as,m,1U,&expr))goto fail;
             m->opcode=LA_MC_PCALA_HI20;
-            m->count=2U;m->encoding=UINT32_C(0x1a000000)|rd;
+            m->target_form=LA_FORM_PCALA_HI20;
+            m->count=2U;m->encoding=UINT32_C(0x1a000000);
             la_capture_gpr_operand(m,0U,rd);
             goto done;
         }
     }
     if(!strcmp(s->op,"move") && n==2U &&
         la_reg(t[0],&rd) && la_reg(t[1],&rj)) {
-        m->count=2U;m->encoding=UINT32_C(0x00150000) |
-            (rj<<5U)|rd;
+        m->count=2U;m->encoding=UINT32_C(0x00150000);
         m->target_form=LA_FORM_MOVE;
         la_capture_gpr_operand(m,0U,rd);
         la_capture_gpr_operand(m,1U,rj);
@@ -1321,16 +1501,13 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
             m->target_form=LA_FORM_PREFETCH;
             if(!minias_eval_i64_expression(t[2],&displacement) ||
                displacement<-2048 || displacement>2047)goto fail;
-            m->encoding=UINT32_C(0x2ac00000) |
-                (((uint32_t)displacement&UINT32_C(0xfff))<<10U) |
-                (rj<<5U)|(uint32_t)hint;
+            m->encoding=UINT32_C(0x2ac00000);
             m->operands[2].kind=MINIAS_MC_IMMEDIATE;
             m->operands[2].immediate=(uint64_t)displacement;
         }else {
             m->target_form=LA_FORM_PREFETCH+1U;
             if(!la_reg(t[2],&rk))goto fail;
-            m->encoding=UINT32_C(0x382c0000) |
-                (rk<<10U)|(rj<<5U)|(uint32_t)hint;
+            m->encoding=UINT32_C(0x382c0000);
             la_capture_gpr_operand(m,2U,rk);
         }
         m->count=3U;
@@ -1347,9 +1524,7 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
            imm<-32768 || imm>32767)goto fail;
         m->count=3U;
         m->target_form=LA_FORM_ADDU16I;
-        m->encoding=UINT32_C(0x10000000) |
-            (((uint32_t)imm&UINT32_C(0xffff))<<10U) |
-            (rj<<5U)|rd;
+        m->encoding=UINT32_C(0x10000000);
         la_capture_rri(m,rd,rj,imm);
         goto done;
     }
@@ -1362,8 +1537,9 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
            la_reloc_expr(t[2],"%pc_lo12",&expr)) {
             if(!la_symbol_operand(as,m,2U,&expr))goto fail;
             m->opcode=LA_MC_PCALA_LO12;
+            m->target_form=LA_FORM_PCALA_LO12;
             m->count=3U;
-            m->encoding=rule->opcode|(rj<<5U)|rd;
+            m->encoding=rule->opcode;
             la_capture_gpr_operand(m,0U,rd);
             la_capture_gpr_operand(m,1U,rj);
             goto done;
@@ -1379,20 +1555,19 @@ fail:
                      s->op,s->args,s->line);
     minias_mcinst_destroy(m);return false;
 done:
-    /* The parser may pre-encode one fixed machine word, but the form is no
-     * longer absent from the retained MC instruction. Known table families
-     * carry stable Target-private descriptor IDs, while remaining fixed
-     * compatibility forms carry an explicit miscellaneous classification. */
     if(m->target_form==LA_FORM_NONE) {
-        if(m->opcode==LA_MC_PCALA_HI20 ||
-           m->opcode==LA_MC_PCALA_LO12)
-            m->target_form=LA_FORM_PCREL;
-        else m->target_form=LA_FORM_MISC;
+        minias_set_error(as,"missing-loongarch-target-form:line=%zu",s->line);
+        minias_mcinst_destroy(m);
+        return false;
     }
     for(i=0U;i<m->count;++i)
         if(m->operands[i].kind==MINIAS_MC_REGISTER &&
-           m->operands[i].target_reg_bank==LA_REG_BANK_NONE)
-            la_set_register_bank(&m->operands[i],LA_REG_BANK_GPR);
+           m->operands[i].target_reg_bank==LA_REG_BANK_NONE) {
+            minias_set_error(as,"missing-loongarch-register-bank:line=%zu",
+                             s->line);
+            minias_mcinst_destroy(m);
+            return false;
+        }
     s->mcinst=m;return true;
 }
 static bool la_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
@@ -1400,7 +1575,7 @@ static bool la_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
     if(s->mcinst->target_payload!=NULL) {
         const LaLoweringPlan *plan=
             (const LaLoweringPlan *)s->mcinst->target_payload;
-        if(plan->count==0U || plan->count>4U || plan->fixup_count>2U) {
+        if(!la_valid_lowering_plan(s->mcinst)) {
             minias_set_error(as,"invalid-loongarch-lowering-plan");
             return false;
         }
@@ -1423,7 +1598,7 @@ static bool la_encode(MiniAs *as,const MiniAsStmt *s) {
     unsigned i, slot=0U;
     MiniAsFixupKind kind=MINIAS_FIXUP_NONE;
     const MiniAsSymbolRef *expr=NULL;
-    bool table_form=false;
+    bool table_form=false,manual_form=false;
     if(!m){minias_set_error(as,"missing-la-mcinst");return false;}
     code=m->encoding;
     if(m->target_payload!=NULL) {
@@ -1431,8 +1606,7 @@ static bool la_encode(MiniAs *as,const MiniAsStmt *s) {
             (const LaLoweringPlan *)m->target_payload;
         unsigned j,k;
         unsigned char body[16];
-        if(plan==NULL || plan->count==0U || plan->count>4U ||
-           plan->fixup_count>2U || s->size!=4U*plan->count) {
+        if(!la_valid_lowering_plan(m) || s->size!=4U*plan->count) {
             minias_set_error(as,"invalid-la-lowering-layout:line=%zu",s->line);
             return false;
         }
@@ -1461,6 +1635,15 @@ static bool la_encode(MiniAs *as,const MiniAsStmt *s) {
     }
     if(!la_materialize_table_word(m,&code,&table_form)) {
         minias_set_error(as,"invalid-loongarch-typed-form:line=%zu",s->line);
+        return false;
+    }
+    if(!table_form &&
+       !la_materialize_manual_word(m,&code,&manual_form)) {
+        minias_set_error(as,"invalid-loongarch-manual-form:line=%zu",s->line);
+        return false;
+    }
+    if(!table_form && !manual_form) {
+        minias_set_error(as,"missing-loongarch-encoder-form:line=%zu",s->line);
         return false;
     }
     if(table_form && m->opcode!=LA_MC_FIXED) {

@@ -10,13 +10,10 @@
 #define MINIAS_RISCV_OPTION_PIC 1U
 #define MINIAS_RISCV_OPTION_NO_RVC 2U
 
-struct MiniAsMCInst;
-
 /* LI is a parsed, immutable target instruction plan. The MCInst pointer is
- * stable across stmt-vector relocation and layout retries. The Target owns
- * the materialized instruction words until the entire assembly is destroyed. */
+ * stable across stmt-vector relocation and layout retries. MCInst owns the
+ * plan through its normal Target payload destructor, with no extra hash. */
 typedef struct MiniAsRiscvLiPlan {
-    const struct MiniAsMCInst *key;
     unsigned count;
     uint32_t words[16];
 } MiniAsRiscvLiPlan;
@@ -46,9 +43,6 @@ typedef struct MiniAsRiscvState {
     /* GNU RISC-V .option push/pop is target-local, never shared state. */
     uint32_t option_stack[64];
     size_t option_depth;
-    MiniAsRiscvLiPlan *li_plans;
-    size_t li_plan_capacity;
-    size_t li_plan_count;
 } MiniAsRiscvState;
 
 /* Typed target-private accessor; avoids RISC-V downcasts in MC Core. */
@@ -71,13 +65,16 @@ typedef enum MiniAsRiscvSymbolModifier {
     MINIAS_RV_SYM_PLT = 1
 } MiniAsRiscvSymbolModifier;
 
-/* One Target-private instruction descriptor lookup supplies both parser
- * dispatch and ISA/XLEN policy. Unknown/legacy pseudo spellings return
- * false and continue through the Target's explicit compatibility policy. */
-bool minias_riscv_mc_descriptor_policy(const char *mnemonic,
-                                       uint64_t *required_features,
-                                       bool *rv64_only,
-                                       unsigned *family);
+struct MiniAs;
+struct MiniAsStmt;
+
+/* Parser already chose a fixed descriptor or dynamic Target form; validate
+ * its typed feature/XLEN policy once, after MCInst construction. The strict-I
+ * output-word validator is an independent raw-encoding safety net. */
+bool minias_riscv_validate_parsed_isa(struct MiniAs *as,
+                                     const struct MiniAsStmt *stmt,
+                                     uint64_t required_features,
+                                     bool rv64_only);
 
 /* One ephemeral, layout-generation-specific branch resolution.  The result
  * must be recomputed after each Common MCLayout pass: retained MCInst owns
@@ -91,13 +88,6 @@ typedef struct MiniAsRiscvBranchPlan {
     bool long_legal;
     bool jal_legal;
 } MiniAsRiscvBranchPlan;
-struct MiniAs;
-struct MiniAsStmt;
-bool minias_riscv_store_li_plan(struct MiniAs *as,
-                               const struct MiniAsMCInst *inst,
-                               const uint32_t *words, unsigned count);
-const MiniAsRiscvLiPlan *minias_riscv_find_li_plan(
-    const struct MiniAs *as, const struct MiniAsMCInst *inst);
 bool minias_riscv_resolve_branch_plan(struct MiniAs *as,
                                       const struct MiniAsStmt *stmt,
                                       MiniAsRiscvBranchPlan *result);
