@@ -112,7 +112,7 @@ static bool loongarch64_emit_function(
         minic_multi_indirect_record, minic_multi_indirect_record,
         "@progbits", "@function", "@init_array", "quad",
         loongarch64_emit_prologue, minic_loongarch64_emit_core_blocks,
-        NULL, minic_loongarch64_qualified_opaque_asm
+        minic_loongarch64_qualified_opaque_asm
     };
     return minic_multi_direct_lp64_emit_function(
         out, program, target, decl, fn, facts, storage,
@@ -128,7 +128,7 @@ bool minic_loongarch64_write_c0_program_with_core_functions(
         MINIC_TARGET_ARCH_LOONGARCH64, "loongarch64", "LoongArch64",
         ".section .note.GNU-stack,\"\",@progbits\n",
         "@function", "@object",
-        loongarch64_emit_function, NULL
+        loongarch64_emit_function
     };
     return minic_multi_direct_write_program(
         path, program, target, core_functions, core_function_count,

@@ -2469,6 +2469,18 @@ bool minic_parse_c0_program_for_target(const char *path,
     parser.continue_target_statement = MINIC_STATEMENT_INVALID;
     minic_lexer_initialize(&parser.lexer, path, source, length);
 
+    /* Canonical per-TU source cursor identity must predate speculative
+     * Parser snapshots: a probe may read this Program-owned type, but must
+     * never introduce an untracked RecordId/ArrayTypeId of its own. */
+    {
+        MinicType cursor_source_type;
+        if (!minic_parser_materialize_builtin_va_list_source_type(
+                &parser, &cursor_source_type)) {
+            minic_parser_error(&parser, "cannot materialize target va_list source type");
+            return false;
+        }
+    }
+
     success = minic_parser_advance(&parser);
     while (success && parser.current.kind != MINIC_TOKEN_EOF) {
         success = skip_top_level_gnu_extension_markers(&parser);

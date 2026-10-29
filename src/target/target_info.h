@@ -24,6 +24,21 @@ typedef enum MinicVariadicCopyKind {
     MINIC_VARIADIC_COPY_ABI_STATE
 } MinicVariadicCopyKind;
 
+/* Source C object shape is distinct from the machine's mutable cursor
+ * transport. The selected target describes a source type without requiring
+ * Frontend to name an ISA or guess the ABI state from pointer width. */
+typedef enum MinicVaCursorSourceKind {
+    MINIC_VA_CURSOR_SOURCE_LINEAR_POINTER = 1,
+    MINIC_VA_CURSOR_SOURCE_OPAQUE_RECORD,
+    MINIC_VA_CURSOR_SOURCE_OPAQUE_RECORD_ARRAY_ONE
+} MinicVaCursorSourceKind;
+
+typedef struct MinicVaCursorSourceShape {
+    MinicVaCursorSourceKind kind;
+    size_t object_size;
+    size_t object_alignment;
+} MinicVaCursorSourceShape;
+
 typedef enum MinicIntegerLiteralBase {
     MINIC_INTEGER_LITERAL_BASE_BINARY = 2,
     MINIC_INTEGER_LITERAL_BASE_OCTAL = 8,
@@ -44,7 +59,6 @@ typedef struct MinicTargetIntegerModel {
 typedef enum MinicTargetLanguageCapability {
     MINIC_TARGET_LANG_EXTENDED_FLOAT_DECLARATIONS = 1U << 0,
     MINIC_TARGET_LANG_OPAQUE_VECTOR_HEADER_DECLARATIONS = 1U << 1,
-    MINIC_TARGET_LANG_ABI_STATE_VA_LIST_CURSOR = 1U << 2,
     /* Type-only EFI callback ABI marker; does NOT admit actual MS x64 CALL. */
     MINIC_TARGET_LANG_MS_X64_FUNCTION_POINTER_DECLARATIONS = 1U << 3
 } MinicTargetLanguageCapability;
@@ -77,8 +91,8 @@ typedef struct MinicTargetInfo {
     const struct MinicTargetMachineBuiltinPolicy *machine_builtin_policy;
     const struct MinicTargetAliasAbiPolicy *alias_abi_policy;
     const struct MinicTargetSourceLanguagePolicy *source_language_policy;
-    /* C identity of the compiler's va_list proxy. ABI state-copy strategy
-     * is a separate machine/Core contract (variadic_copy_kind below). */
+    /* C source identity and Core's ABI state-copy opcode are independently
+     * described; this policy is only the source object's C storage shape. */
     const struct MinicTargetVaCursorSourceAbiPolicy *va_cursor_source_abi_policy;
     const MinicDataLayout *data_layout;
     const MinicTargetIntegerModel *integer_model;
@@ -173,10 +187,13 @@ bool minic_target_info_function_pointer_calling_convention_declaration_supported
     const MinicTargetInfo *target, MinicFunctionCallingConvention convention);
 bool minic_target_info_function_calling_convention_scalar_call_supported(
     const MinicTargetInfo *target, MinicFunctionCallingConvention convention);
-bool minic_target_info_builtin_va_list_type(const MinicTargetInfo *target,
-                                            MinicType *type);
-bool minic_target_info_variadic_state_copy_type_supported(
-    const MinicTargetInfo *, MinicType);
+bool minic_target_info_va_cursor_source_shape(
+    const MinicTargetInfo *target, MinicVaCursorSourceShape *shape);
+bool minic_target_info_va_cursor_source_type_supported(
+    const MinicTargetInfo *target, const MinicC0Program *program, MinicType type);
+bool minic_target_info_va_cursor_source_operand_supported(
+    const MinicTargetInfo *target, const MinicC0Program *program,
+    MinicType type, bool is_lvalue);
 bool minic_target_info_plain_char_sign(const MinicTargetInfo *target, MinicIntegerSign *sign);
 bool minic_target_info_plain_char_type(const MinicTargetInfo *target, MinicType *type);
 bool minic_target_info_wide_character_type(const MinicTargetInfo *target, MinicType *type);

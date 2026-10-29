@@ -10,8 +10,8 @@
 
 /* The direct LP64 frontend-to-native orchestration is shared once:
  * ELF metadata, verified Common-to-ABI planning, complete BlockContext,
- * optional per-function dynamic-SP rewrite, cleanup/rollback and diagnostics.
- * ABI-specific prologue, machine blocks, and epilogue stay in native hooks. */
+ * cleanup/rollback and diagnostics. ABI-specific prologue, machine blocks,
+ * and epilogue stay in native hooks. Typed frame references own SP offsets. */
 typedef struct MinicDirectLP64FunctionEmitter {
     const char *architecture;
     const MinicDirectLP64AbiPolicy *abi;
@@ -24,8 +24,6 @@ typedef struct MinicDirectLP64FunctionEmitter {
     const char *init_word_directive; /* .quad or .xword */
     bool (*emit_prologue)(FILE *, const MinicDirectLP64BlockContext *);
     bool (*emit_core_blocks)(FILE *, const MinicDirectLP64BlockContext *);
-    /* NULL unless the ISA requires a text rewrite after dynamic alloca. */
-    bool (*rewrite_dynamic_asm)(FILE *dest, FILE *source);
     /* The ISA itself decides which operand-free hardware ASM is safe to
      * admit. Common merely validates one-to-one Core effect ownership. */
     MinicDirectLP64OpaqueAsmQualifier qualify_opaque_asm;
@@ -41,7 +39,6 @@ static inline bool minic_multi_direct_lp64_emit_function(
     MinicDirectLP64FunctionPlan plan = {0};
     MinicDirectLP64BlockContext ctx = {0};
     const char *name;
-    FILE *emission = out, *staged = NULL;
     bool ok = false;
 
     if (config == NULL || config->architecture == NULL ||
@@ -63,28 +60,22 @@ static inline bool minic_multi_direct_lp64_emit_function(
         goto cleanup;
     }
 
-    if (plan.has_dynamic_stack && config->rewrite_dynamic_asm != NULL) {
-        staged = tmpfile();
-        if (staged == NULL) goto cleanup;
-        emission = staged;
-    }
-
     /* A GNU explicit section overrides compiler-generated function sections. */
     if (decl->section_name != NULL) {
-        if (fprintf(emission, ".section %s,\"ax\",%s\n",
+        if (fprintf(out, ".section %s,\"ax\",%s\n",
                     decl->section_name, config->text_section_type) < 0)
             goto output_failed;
     } else if (function_sections) {
-        if (fprintf(emission, ".section .text.%s,\"ax\",%s\n",
+        if (fprintf(out, ".section .text.%s,\"ax\",%s\n",
                     name, config->text_section_type) < 0) goto output_failed;
-    } else if (fputs(".text\n", emission) == EOF) goto output_failed;
+    } else if (fputs(".text\n", out) == EOF) goto output_failed;
 
     if ((!decl->is_internal &&
-         fprintf(emission, decl->is_weak ? ".weak %s\n" : ".globl %s\n", name) < 0) ||
+         fprintf(out, decl->is_weak ? ".weak %s\n" : ".globl %s\n", name) < 0) ||
         (!decl->is_internal &&
          !minic_multi_emit_elf_symbol_visibility(
-             emission, decl->visibility, name)) ||
-        fprintf(emission, ".balign %zu\n.type %s,%s\n%s:\n",
+             out, decl->visibility, name)) ||
+        fprintf(out, ".balign %zu\n.type %s,%s\n%s:\n",
                 decl->explicit_alignment > 4U ? decl->explicit_alignment : 4U,
                 name, config->elf_function_type, name) < 0)
         goto output_failed;
@@ -107,20 +98,16 @@ static inline bool minic_multi_direct_lp64_emit_function(
         .has_indirect_return = plan.has_indirect_return,
         .dynamic_frame = plan.has_dynamic_stack
     };
-    if (!config->emit_prologue(emission, &ctx)) goto cleanup;
-    if (!config->emit_core_blocks(emission, &ctx)) goto cleanup;
+    if (!config->emit_prologue(out, &ctx)) goto cleanup;
+    if (!config->emit_core_blocks(out, &ctx)) goto cleanup;
 
-    if (fprintf(emission, ".size %s,.-%s\n", name, name) < 0 ||
+    if (fprintf(out, ".size %s,.-%s\n", name, name) < 0 ||
         (decl->is_constructor &&
-         fprintf(emission,
+         fprintf(out,
                  ".section .init_array,\"aw\",%s\n.p2align 3\n  .%s %s\n",
                  config->init_array_type, config->init_word_directive, name) < 0))
         goto output_finish_failed;
 
-    if (staged != NULL &&
-        (fflush(staged) != 0 || fseek(staged, 0L, SEEK_SET) != 0 ||
-         !config->rewrite_dynamic_asm(out, staged)))
-        goto cleanup;
     ok = true;
     goto cleanup;
 
@@ -134,8 +121,6 @@ output_finish_failed:
         fn, config->architecture, name, "function_finish",
         SIZE_MAX, SIZE_MAX, __LINE__);
 cleanup:
-    if (staged != NULL && fclose(staged) != 0)
-        ok = false;
     minic_multi_direct_lp64_function_plan_destroy(&plan);
     return ok;
 }

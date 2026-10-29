@@ -1511,8 +1511,10 @@ static bool parse_builtin_va_list_target(MinicParser *parser,
         return false;
     }
     target = minic_c0_program_expression(parser->program, *target_id);
-    if (target == NULL || target->value_category != MINIC_VALUE_LVALUE ||
-        !minic_type_is_pointer(target->type) || minic_type_is_const(target->type)) {
+    if (target == NULL ||
+        !minic_target_info_va_cursor_source_operand_supported(
+            parser->target_info, parser->program, target->type,
+            target->value_category == MINIC_VALUE_LVALUE)) {
         minic_parser_error(parser, "GNU va builtin requires a modifiable va_list lvalue");
         return false;
     }
@@ -1602,12 +1604,16 @@ static bool parse_builtin_va_copy(MinicParser *parser, MinicExpressionId *expres
 
     target = minic_c0_program_expression(parser->program, target_id);
     source = minic_c0_program_expression(parser->program, source_id);
-    if (target == NULL || source == NULL || source->value_category != MINIC_VALUE_LVALUE ||
-        !minic_type_is_pointer(source->type)) {
+    if (target == NULL || source == NULL ||
+        !minic_target_info_va_cursor_source_operand_supported(
+            parser->target_info, parser->program, source->type,
+            source->value_category == MINIC_VALUE_LVALUE)) {
         minic_parser_error(parser, "__builtin_va_copy source must be a va_list lvalue");
         return false;
     }
-    if (!minic_c0_types_compatible(parser->program, target->type, source->type)) {
+    if (parser->target_info->variadic_copy_kind ==
+            MINIC_VARIADIC_COPY_SCALAR_ASSIGNMENT &&
+        !minic_c0_types_compatible(parser->program, target->type, source->type)) {
         minic_parser_error(parser, "__builtin_va_copy source type must match destination type");
         return false;
     }

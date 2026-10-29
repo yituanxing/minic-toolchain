@@ -101,18 +101,6 @@ const MinicTargetSourceLanguagePolicy minic_x86_64_source_language_policy = {
     .gnu_function_attribute_value = x86_source_function_attribute_value,
 };
 
-/* SysV va_list is struct __va_list_tag[1] (24 bytes); the internal cursor
- * is pointer-sized for runtime lowering only. Until the source array type
- * is modeled, sizeof must fail instead of silently reporting eight bytes. */
-static bool x86_va_cursor_sizeof_forbidden(MinicType type) {
-    return minic_type_is_x86_va_list_cursor(type);
-}
-
-static bool x86_va_cursor_state_copy_type(MinicType type) {
-    return minic_type_is_x86_va_list_cursor(type);
-}
-
 const MinicTargetVaCursorSourceAbiPolicy minic_x86_64_va_cursor_source_abi_policy = {
-    .sizeof_proxy_forbidden = x86_va_cursor_sizeof_forbidden,
-    .state_copy_source_type_supported = x86_va_cursor_state_copy_type,
+    .source_shape = {MINIC_VA_CURSOR_SOURCE_OPAQUE_RECORD_ARRAY_ONE, 24U, 8U},
 };

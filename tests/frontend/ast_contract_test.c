@@ -270,8 +270,9 @@ static bool verify_builtin_local(const MinicTargetInfo *target, MinicType type) 
     return valid;
 }
 
-/* The type-role adapter centralizes C shape, while each target descriptor
- * remains authoritative for admitting an ABI/extension declaration. */
+/* The type-role adapter centralizes extended language declarations. The
+ * builtin va_list source identity is now Program-owned and shape-checked by
+ * TargetInfo, rather than a frontend-only scalar base-kind. */
 static int test_builtin_type_target_admission(void) {
     static const MinicTargetArchitecture architectures[] = {
         MINIC_TARGET_ARCH_RISCV32,
@@ -284,27 +285,20 @@ static int test_builtin_type_target_admission(void) {
 
     for (index = 0U; index < sizeof(architectures) / sizeof(architectures[0]); ++index) {
         const MinicTargetInfo *target;
-        MinicType cursor, malformed;
-        bool is_x86, is_aarch64, has_extended_float;
+        MinicType malformed;
+        bool is_aarch64, has_extended_float;
 
         target = minic_target_info_for_architecture(architectures[index]);
-        is_x86 = architectures[index] == MINIC_TARGET_ARCH_X86_64;
         is_aarch64 = architectures[index] == MINIC_TARGET_ARCH_AARCH64;
         has_extended_float = architectures[index] != MINIC_TARGET_ARCH_RISCV32;
-        cursor = minic_type_x86_va_list_cursor();
         malformed = minic_type_float128();
         malformed.integer_rank = MINIC_INTEGER_RANK_INT;
         if (target == NULL || !verify_builtin_local(target, minic_type_float()) ||
             verify_builtin_local(target, minic_type_float128()) != has_extended_float ||
             verify_builtin_local(target, malformed) ||
             verify_builtin_local(target, minic_type_aarch64_header_builtin(
-                                             MINIC_TYPE_BASE_AARCH64_SVE_BOOL)) != is_aarch64 ||
-            verify_builtin_local(target, cursor) != is_x86) {
+                                             MINIC_TYPE_BASE_AARCH64_SVE_BOOL)) != is_aarch64) {
             return 90;
-        }
-        cursor.pointer_depth = 0U;
-        if (verify_builtin_local(target, cursor)) {
-            return 91;
         }
     }
     return 0;

@@ -175,6 +175,19 @@ static bool emit_integer_memory(FILE *out, bool store,
     return fputs("2:\n", out) != EOF;
 }
 
+bool minic_loongarch64_emit_asm_input_scalar(
+    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, MinicCoreValueId address, size_t width) {
+    if (!out || !program || !target || !fn || address >= fn->value_count ||
+        (width != 4U && width != 8U))
+        return false;
+    /* Both native ld.w and byte-gather must extend the word to the same
+     * 64-bit GPR representation; ld.d transports the entire wide carrier. */
+    return emit_integer_memory(out, false, width, width == 4U, false,
+        loong_known_address_alignment(program, target, fn,
+                                      address, 0U) >= width);
+}
+
 
 /* Native memory-effect family. Shared Core semantic checks admit only
  * proven scalar and relaxed atomic shapes and complete 16-byte payloads.

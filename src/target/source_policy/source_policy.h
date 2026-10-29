@@ -54,15 +54,13 @@ typedef struct MinicTargetSourceLanguagePolicy {
         MinicTargetGnuFunctionAttributeKind, const char *, size_t);
 } MinicTargetSourceLanguagePolicy;
 
-/* The frontend's builtin va_list proxy has a C type identity that may not
- * match the ABI state object: x86's pointer-sized runtime proxy represents
- * an array of 24-byte tags and must not answer sizeof as a pointer. AAPCS64
- * instead uses a source void* proxy whose qualified copy predicate gates
- * independent ABI-state duplication. This policy NEVER chooses how bytes
- * are copied, how variadic arguments are accessed, or generic DataLayout. */
+/* The frontend builds one canonical genuine C source type per Program from
+ * this target-owned byte/alignment/category descriptor. The machine's SSA
+ * pointers to mutable ABI state remain separate and are not C type aliases. */
 typedef struct MinicTargetVaCursorSourceAbiPolicy {
-    bool (*sizeof_proxy_forbidden)(MinicType);
-    bool (*state_copy_source_type_supported)(MinicType);
+    /* Data-only canonical C source shape. ABI state-copy and physical cursor
+     * storage remain separate; the frontend builds a normal C record/array. */
+    MinicVaCursorSourceShape source_shape;
 } MinicTargetVaCursorSourceAbiPolicy;
 
 extern const MinicTargetAsmSourcePolicy minic_riscv32_asm_source_policy;

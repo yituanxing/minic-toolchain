@@ -1,7 +1,6 @@
 #include "target/aarch64/codegen.h"
 #include "target/aarch64/block_emit.h"
 #include "target/aarch64/abi.h"
-#include "target/aarch64/asm_legalize.h"
 #include "target/aarch64/asm_contract.h"
 #include "target/aarch64/frame_emit.h"
 #include "target/common/direct_function_emit.h"
@@ -142,7 +141,6 @@ static bool aarch64_emit_function(
         minic_aarch64_indirect_record, minic_aarch64_indirect_record,
         "%progbits", "%function", "%init_array", "xword",
         aarch64_emit_prologue, minic_aarch64_emit_core_blocks,
-        minic_aarch64_copy_dynamic_frame_asm,
         minic_aarch64_qualified_opaque_asm
     };
     return minic_multi_direct_lp64_emit_function(
@@ -159,7 +157,7 @@ bool minic_aarch64_write_c0_program_with_core_functions(
         MINIC_TARGET_ARCH_AARCH64, "aarch64", "AArch64",
         ".section .note.GNU-stack,\"\",%progbits\n",
         "%function", "%object",
-        aarch64_emit_function, minic_aarch64_legalize_large_sp_memory
+        aarch64_emit_function
     };
     return minic_multi_direct_write_program(
         path, program, target, core_functions, core_function_count,

@@ -91,14 +91,18 @@ int main(void) {
         (MinicA64FrameRegister){MINIC_A64_REG_X, 9U},
         free_scratch, true), "ldr x9, [sp, #432]");
 
-    /* Exact hybrid boundary: the old text rewrite is still enabled.
-     * A value stored in x17 MUST NOT be overwritten by its address scratch
-     * even if the scaled A64 STR encoding could reach this displacement. */
+    /* Large live x17 store must materialize the address through x16, never
+     * destroy x17 with an unconditional textual large-SP fixup. This is an
+     * actual AAPCS64 machine-value preservation contract. */
+    stable.outgoing_sp_bytes = 0U;
     output = test_transfer(true, stable,
         (MinicA64FrameRef){MINIC_A64_FRAME_OWNED, 32760U},
         (MinicA64FrameRegister){MINIC_A64_REG_X, 17U},
         free_scratch, true);
     assert(strstr(output, "[sp, #32760]") == NULL);
+    assert(strstr(output, "movz x16, #32760") != NULL);
+    assert(strstr(output, "add x16, sp, x16") != NULL);
+    assert(strstr(output, "movz x17") == NULL);
     expect(output, "str x17, [x16]");
     expect(test_transfer(false, dynamic,
         (MinicA64FrameRef){MINIC_A64_FRAME_OWNED, 4096U},

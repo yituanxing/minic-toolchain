@@ -23,4 +23,11 @@ bool minic_loongarch64_emit_asm_output_store(
     const MinicCoreFunction *fn, MinicCoreValueId address,
     size_t width, const char *value_reg, const char *address_reg,
     const char *scratch_reg);
+
+/* Read a compiler-owned +r ASM lvalue with the ordinary Core scalar
+ * ingress semantics. Must run before loading other live target operands:
+ * the byte-gather fallback uses $t2-$t5 and the address in $t1. */
+bool minic_loongarch64_emit_asm_input_scalar(
+    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, MinicCoreValueId address, size_t width);
 #endif

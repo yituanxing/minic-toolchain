@@ -1512,8 +1512,8 @@ static bool emit_linux_bitops(
     FILE *out,const MinicC0Program *program,const MinicTargetInfo *target,
     const MinicCoreFunction *fn,const MinicX86Frame *frame,
     const MinicCoreInstruction *ins,const MinicCoreInlineAsm *info) {
-    const MinicX86BitopsForm form=minic_x86_64_linux_bitops_form(
-        info->template_text,info->template_length);
+    const MinicX86BitopsForm form =
+        (MinicX86BitopsForm)info->target_machine_form_variant;
     const MinicX86BitopsDesc *d=minic_x86_64_bitops_description(form);
     const MinicCoreStructuredInlineAsmOperand *b=
         ins->value.structured_inline_asm.operands;
@@ -2574,7 +2574,7 @@ static bool emit_linux_port_io(FILE *out,const MinicC0Program *program,
     const MinicX86Frame *frame,const MinicCoreInstruction *ins,
     const MinicCoreInlineAsm *info){
     const MinicX86PortIoDesc *d=minic_x86_64_port_io_description(
-        minic_x86_64_port_io_form(info->template_text,info->template_length));
+        (MinicX86PortIo)info->target_machine_form_variant);
     const MinicCoreStructuredInlineAsmOperand *b=
         ins->value.structured_inline_asm.operands;
     MinicType dt;size_t width;bool sign;
@@ -3332,7 +3332,7 @@ static bool emit_linux_atomic_rmw(
     const MinicCoreFunction *fn,const MinicX86Frame *frame,
     const MinicCoreInstruction *ins,const MinicCoreInlineAsm *info) {
     const MinicX86AtomicRmwDesc *d=minic_x86_64_atomic_rmw_description(
-        minic_x86_64_atomic_rmw_form(info->template_text,info->template_length));
+        (MinicX86AtomicRmw)info->target_machine_form_variant);
     const MinicCoreStructuredInlineAsmOperand *b=
         ins->value.structured_inline_asm.operands;
     const size_t n=ins->value.structured_inline_asm.operand_count;
@@ -3494,7 +3494,7 @@ static bool emit_linux_raw_cmpxchg(
     const MinicCoreFunction *fn, const MinicX86Frame *frame,
     const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
     const MinicX86TryCasDesc *d = minic_x86_64_trycas_desc(
-        minic_x86_64_raw_cmpxchg_form(info->template_text, info->template_length));
+        (MinicX86TryCas)info->target_machine_form_variant);
     const MinicCoreStructuredInlineAsmOperand *b =
         ins->value.structured_inline_asm.operands;
     size_t i, width;
@@ -3555,7 +3555,7 @@ static bool emit_linux_trycas(
     const MinicCoreStructuredInlineAsmOperand *b=
         ins->value.structured_inline_asm.operands;
     const MinicX86TryCasDesc *d=minic_x86_64_trycas_desc(
-        minic_x86_64_trycas_form(info->template_text,info->template_length));
+        (MinicX86TryCas)info->target_machine_form_variant);
     MinicType t;
     size_t i,width;
     bool sign;
@@ -3610,11 +3610,12 @@ static bool emit_linux_atomic_cc(
     const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
     const MinicCoreStructuredInlineAsmOperand *b =
         ins->value.structured_inline_asm.operands;
-    const MinicX86AtomicCC form = minic_x86_64_atomic_cc_form(
-        info->template_text, info->template_length);
+    const MinicX86AtomicCC form = (MinicX86AtomicCC)(
+        info->target_machine_form_variant &
+        ~MINIC_X86_ATOMIC_CC_LOCK_VARIANT);
     const MinicX86AtomicCCDesc *d = minic_x86_64_atomic_cc_description(form);
-    const bool locked = minic_x86_64_atomic_cc_locked_form(
-        info->template_text, info->template_length);
+    const bool locked = (info->target_machine_form_variant &
+                         MINIC_X86_ATOMIC_CC_LOCK_VARIANT) != 0U;
     const size_t n = d && d->has_value ? 3U : 2U;
     MinicType mem, flag;
     size_t width, i;
@@ -5675,6 +5676,18 @@ bool minic_x86_64_emit_structured_asm(
             return emit_linux_mxcsr(out, fn, frame, ins, info);
         case MINIC_X86_MACHINE_ASM_UNWIND_CONTEXT:
             return emit_linux_unwind_context(out, fn, frame, ins, info);
+        case MINIC_X86_MACHINE_ASM_PORT_IO:
+            return emit_linux_port_io(out, program, target, fn, frame, ins, info);
+        case MINIC_X86_MACHINE_ASM_ATOMIC_RMW:
+            return emit_linux_atomic_rmw(out, program, target, fn, frame, ins, info);
+        case MINIC_X86_MACHINE_ASM_RAW_CMPXCHG:
+            return emit_linux_raw_cmpxchg(out, program, target, fn, frame, ins, info);
+        case MINIC_X86_MACHINE_ASM_TRYCAS:
+            return emit_linux_trycas(out, program, target, fn, frame, ins, info);
+        case MINIC_X86_MACHINE_ASM_BITOPS:
+            return emit_linux_bitops(out, program, target, fn, frame, ins, info);
+        case MINIC_X86_MACHINE_ASM_ATOMIC_CC:
+            return emit_linux_atomic_cc(out, program, target, fn, frame, ins, info);
         default:
             return false;
         }
@@ -6240,9 +6253,6 @@ bool minic_x86_64_emit_structured_asm(
     if (minic_x86_64_linux_counter_form(
             info->template_text,info->template_length))
         return emit_x86_counter(out,program,target,fn,frame,ins,info);
-    if (minic_x86_64_port_io_form(
-            info->template_text,info->template_length)!=MINIC_X86_PORT_IO_NONE)
-        return emit_linux_port_io(out,program,target,fn,frame,ins,info);
     {
         const MinicX86GsAtomicPlan atomic = minic_x86_64_gs_atomic_plan(
             info->template_text, info->template_length);
@@ -6302,29 +6312,9 @@ bool minic_x86_64_emit_structured_asm(
     if (minic_x86_64_linux_csum_partial_form(
             info->template_text, info->template_length))
         return emit_linux_csum_partial(out, program, target, fn, frame, ins, info);
-    if (minic_x86_64_atomic_rmw_form(
-            info->template_text,info->template_length)!=MINIC_X86_ATOMIC_RMW_NONE)
-        return emit_linux_atomic_rmw(out,program,target,fn,frame,ins,info);
     if (minic_x86_64_linux_cmpxchg128_form(
             info->template_text, info->template_length))
         return emit_linux_cmpxchg128(out,program,target,fn,frame,ins,info);
-    if (minic_x86_64_raw_cmpxchg_form(
-            info->template_text,info->template_length)!=MINIC_X86_TRYCAS_NONE)
-        return emit_linux_raw_cmpxchg(
-            out,program,target,fn,frame,ins,info);
-    if (minic_x86_64_trycas_form(
-            info->template_text,info->template_length)!=MINIC_X86_TRYCAS_NONE)
-        return emit_linux_trycas(out,program,target,fn,frame,ins,info);
-    if (minic_x86_64_linux_bitops_form(
-            info->template_text,info->template_length)!=
-        MINIC_X86_BITOPS_NONE)
-        return emit_linux_bitops(
-            out,program,target,fn,frame,ins,info);
-    if (minic_x86_64_atomic_cc_form(
-            info->template_text,info->template_length)!=
-        MINIC_X86_ATOMIC_CC_NONE)
-        return emit_linux_atomic_cc(
-            out,program,target,fn,frame,ins,info);
     /* Preserve the pre-existing memory-clobber family (including its
      * valid two-operand dec_mod shape). Only DISJOINT no-clobber,
      * register-output two-operand templates enter the BSF/BSR selector.

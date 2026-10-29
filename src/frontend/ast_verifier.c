@@ -31,8 +31,7 @@ static bool builtin_declaration_type_is_valid(const MinicTargetInfo *target,
     role = minic_type_builtin_declaration_role(type.base_kind);
     if (role == MINIC_BUILTIN_DECLARATION_INVALID ||
         (role != MINIC_BUILTIN_DECLARATION_STANDARD_FLOAT &&
-         !minic_target_info_language_type_supported(target, type.base_kind)) ||
-        (role == MINIC_BUILTIN_DECLARATION_ABI_CURSOR && type.pointer_depth == 0U)) {
+         !minic_target_info_language_type_supported(target, type.base_kind))) {
         return false;
     }
     /* All target header-only identities share the same C type storage shape.
@@ -765,14 +764,18 @@ static bool verify_expression(const MinicC0Program *program,
     case MINIC_EXPRESSION_BUILTIN_VA_START:
     case MINIC_EXPRESSION_BUILTIN_VA_END:
         operand = expression_before(program, expression->value.unary.operand, expression_index);
-        return operand != NULL && operand->value_category == MINIC_VALUE_LVALUE &&
-               minic_type_is_pointer(operand->type) && !minic_type_is_const(operand->type) &&
+        return operand != NULL &&
+               minic_target_info_va_cursor_source_operand_supported(
+                   target, program, operand->type,
+                   operand->value_category == MINIC_VALUE_LVALUE) &&
                expression->value_category == MINIC_VALUE_RVALUE &&
                minic_type_is_void(expression->type);
     case MINIC_EXPRESSION_BUILTIN_VA_ARG:
         operand = expression_before(program, expression->value.unary.operand, expression_index);
-        return operand != NULL && operand->value_category == MINIC_VALUE_LVALUE &&
-               minic_type_is_pointer(operand->type) && !minic_type_is_const(operand->type) &&
+        return operand != NULL &&
+               minic_target_info_va_cursor_source_operand_supported(
+                   target, program, operand->type,
+                   operand->value_category == MINIC_VALUE_LVALUE) &&
                expression->value_category == MINIC_VALUE_RVALUE &&
                (minic_type_is_integer(expression->type) ||
                 minic_type_is_pointer(expression->type) ||
@@ -782,10 +785,15 @@ static bool verify_expression(const MinicC0Program *program,
     case MINIC_EXPRESSION_BUILTIN_VA_COPY:
         left = expression_before(program, expression->value.binary.left, expression_index);
         right = expression_before(program, expression->value.binary.right, expression_index);
-        return left != NULL && right != NULL && left->value_category == MINIC_VALUE_LVALUE &&
-               right->value_category == MINIC_VALUE_LVALUE && minic_type_is_pointer(left->type) &&
-               minic_type_is_pointer(right->type) && !minic_type_is_const(left->type) &&
-               minic_c0_types_compatible(program, left->type, right->type) &&
+        return left != NULL && right != NULL &&
+               minic_target_info_va_cursor_source_operand_supported(
+                   target, program, left->type,
+                   left->value_category == MINIC_VALUE_LVALUE) &&
+               minic_target_info_va_cursor_source_operand_supported(
+                   target, program, right->type,
+                   right->value_category == MINIC_VALUE_LVALUE) &&
+               (target->variadic_copy_kind != MINIC_VARIADIC_COPY_SCALAR_ASSIGNMENT ||
+                minic_c0_types_compatible(program, left->type, right->type)) &&
                expression->value_category == MINIC_VALUE_RVALUE &&
                minic_type_is_void(expression->type);
     case MINIC_EXPRESSION_BUILTIN_UNARY: {
@@ -1455,6 +1463,61 @@ static const char *minic_c0_ast_verify_stage_default_reason(MinicC0AstVerifyStag
     }
 }
 
+/* Program owns one canonical C source cursor type; Target owns only its
+ * required storage shape. Check both before consuming any source type IDs.
+ * Neither Core's runtime pointer proxy nor an unrelated user record may
+ * impersonate the canonical va_list state. */
+static bool verify_builtin_va_list_source_type(
+    const MinicC0Program *program, const MinicTargetInfo *target) {
+    MinicVaCursorSourceShape shape;
+    MinicType source, state;
+    const MinicRecord *record;
+    size_t size, alignment;
+    if (program == NULL || target == NULL ||
+        !minic_target_info_va_cursor_source_shape(target, &shape))
+        return false;
+    if (!program->has_builtin_va_list_source_type)
+        return true; /* Manually constructed standalone AST fixtures. */
+    source = program->builtin_va_list_source_type;
+    state = program->builtin_va_list_state_type;
+    if (!type_is_valid(program, target, source) ||
+        !type_is_valid(program, target, state))
+        return false;
+    if (shape.kind == MINIC_VA_CURSOR_SOURCE_LINEAR_POINTER) {
+        MinicType pointer;
+        return minic_type_pointer_to(minic_type_void(), &pointer) &&
+               minic_type_equal(source, pointer) &&
+               minic_type_equal(state, pointer);
+    }
+    if (!minic_type_is_record(state) || state.record_id >= program->record_count)
+        return false;
+    record = &program->records[state.record_id];
+    if (record->name == NULL || record->name_length != 0U ||
+        !record->is_complete || record->field_count != 1U ||
+        record->fields == NULL || record->fields[0].name == NULL ||
+        record->fields[0].name_length != 0U ||
+        !minic_type_equal(record->fields[0].type, minic_type_unsigned_char()) ||
+        !record->fields[0].is_array ||
+        record->fields[0].element_count != shape.object_size ||
+        record->explicit_alignment != shape.object_alignment ||
+        !minic_data_layout_type(minic_target_info_data_layout(target), program,
+                                state, &size, &alignment) ||
+        size != shape.object_size || alignment != shape.object_alignment)
+        return false;
+    if (shape.kind == MINIC_VA_CURSOR_SOURCE_OPAQUE_RECORD)
+        return minic_type_equal(source, state);
+    if (shape.kind == MINIC_VA_CURSOR_SOURCE_OPAQUE_RECORD_ARRAY_ONE) {
+        const MinicArrayType *array;
+        if (!minic_type_is_array(source))
+            return false;
+        array = minic_c0_program_array_type(program, source.array_type_id);
+        return array != NULL && array->element_count == 1U &&
+               !array->is_zero_length && !array->is_query_materialized &&
+               minic_type_equal(array->element_type, state);
+    }
+    return false;
+}
+
 bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
                                              MinicC0AstForm form,
                                              const MinicTargetInfo *target,
@@ -1487,7 +1550,8 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
     } while (0)
 
     if (target == NULL || (form != MINIC_C0_AST_PARSED && form != MINIC_C0_AST_NORMALIZED) ||
-        !verify_program_storage(program)) {
+        !verify_program_storage(program) ||
+        !verify_builtin_va_list_source_type(program, target)) {
         MINIC_AST_VERIFY_FAIL(minic_c0_ast_verify_stage_default_reason(stage));
     }
 

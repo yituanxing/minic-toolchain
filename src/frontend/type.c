@@ -236,8 +236,6 @@ MinicBuiltinDeclarationRole minic_type_builtin_declaration_role(MinicTypeBaseKin
     case MINIC_TYPE_BASE_AARCH64_SVE_FLOAT64:
     case MINIC_TYPE_BASE_AARCH64_SVE_BOOL:
         return MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE;
-    case MINIC_TYPE_BASE_X86_VA_LIST_CURSOR:
-        return MINIC_BUILTIN_DECLARATION_ABI_CURSOR;
     default:
         return MINIC_BUILTIN_DECLARATION_INVALID;
     }
@@ -250,28 +248,6 @@ MinicType minic_type_aarch64_header_builtin(MinicTypeBaseKind base_kind) {
         MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE)
         return minic_type_void();
     return minic_type_scalar(base_kind);
-}
-
-/* A distinct, pointer-sized runtime proxy. It must never be mistaken for
- * the actual SysV array type in C type-layout queries. */
-MinicType minic_type_x86_va_list_cursor(void) {
-    MinicType result;
-    if (!minic_type_pointer_to(
-            minic_type_scalar(MINIC_TYPE_BASE_X86_VA_LIST_CURSOR), &result))
-        return minic_type_void();
-    return result;
-}
-
-bool minic_type_is_x86_va_list_cursor(MinicType type) {
-    return type.base_kind == MINIC_TYPE_BASE_X86_VA_LIST_CURSOR &&
-           type.pointer_depth == 1U &&
-           type.record_id == MINIC_RECORD_INVALID &&
-           type.array_type_id == MINIC_ARRAY_TYPE_INVALID &&
-           type.function_type_id == MINIC_FUNCTION_TYPE_INVALID &&
-           type.enum_id == MINIC_ENUM_INVALID &&
-           type.integer_sign == MINIC_INTEGER_SIGN_NONE &&
-           type.integer_rank == MINIC_INTEGER_RANK_NONE &&
-           !type.is_plain_char;
 }
 
 MinicType minic_type_function(MinicFunctionTypeId function_type_id) {

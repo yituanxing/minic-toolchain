@@ -214,6 +214,11 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
 MinicCoreLowerStatus minic_core_lower_vararg_scalar(
     MinicCoreLowerContext *context, const MinicExpression *expression,
     MinicCoreValueId *value_id);
+/* Convert the real source va_list object/adjusted array parameter to the
+ * address of the ABI-owned state. No pointer-proxy local is involved. */
+MinicCoreLowerStatus minic_core_lower_abi_va_state_pointer(
+    MinicCoreLowerContext *context, MinicExpressionId operand,
+    MinicCoreValueId *state_pointer);
 MinicCoreLowerStatus minic_core_lower_vararg_statement(
     MinicCoreLowerContext *context, const MinicExpression *expression);
 MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,

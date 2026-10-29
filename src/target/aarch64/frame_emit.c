@@ -20,7 +20,6 @@ static bool a64_resolve(const MinicA64FrameView *view,
     out->saved_entry_frame_sp = false;
     switch (ref.region) {
     case MINIC_A64_FRAME_OWNED:
-    case MINIC_A64_FRAME_ASM_OPERAND:
         out->base = view->dynamic_frame ? "x19" : "sp";
         if (!view->dynamic_frame &&
             !a64_add(ref.byte_offset, view->outgoing_sp_bytes,
@@ -138,11 +137,11 @@ static bool a64_transfer(FILE *out, const MinicA64FrameView *view,
         !a64_resolve(view, ref, &resolved)) return false;
     if (reg.kind == MINIC_A64_REG_W || reg.kind == MINIC_A64_REG_X)
         excluded = UINT32_C(1) << reg.number;
-    /* A64's native scaled immediate accepts 4095 * width bytes, but the
-     * remaining whole-program text legalizer still rewrites every
-     * [sp|x19,#offset] above 4095 bytes. Until ALL frame emitters migrate,
-     * materialize those offsets here to avoid its unadvertised x17 clobber.
-     * This compatibility gate can be removed with the legacy finalizer. */
+    /* Keep one conservative immediate boundary for all frame transfer
+     * widths: large displacements use an explicit, live-mask-checked
+     * scratch register. The legacy whole-program text fixer is retired;
+     * no later pass may silently borrow IP1/x17 from an inline-ASM live
+     * range. Wider native scaled encodings can be enabled separately. */
     if (!resolved.saved_entry_frame_sp &&
         resolved.displacement % width == 0U &&
         resolved.displacement <= 4095U)

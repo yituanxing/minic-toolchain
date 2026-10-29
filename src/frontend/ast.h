@@ -583,6 +583,12 @@ typedef struct MinicGlobalObject {
 } MinicGlobalObject;
 
 typedef struct MinicC0Program {
+    /* One canonical GNU va_list source identity per translation unit.
+     * Target owns its C shape; Program owns the RecordId/ArrayTypeId. Core
+     * consumes these IDs separately from its machine pointer cursor. */
+    bool has_builtin_va_list_source_type;
+    MinicType builtin_va_list_source_type;
+    MinicType builtin_va_list_state_type;
     MinicExpression *expressions;
     size_t expression_count;
     size_t expression_capacity;
@@ -654,6 +660,9 @@ typedef struct MinicC0Program {
 
 void minic_c0_program_initialize(MinicC0Program *program);
 void minic_c0_program_destroy(MinicC0Program *program);
+bool minic_c0_program_va_cursor_source_types(const MinicC0Program *program,
+                                             MinicType *source_type,
+                                             MinicType *state_type);
 void minic_c0_local_initialize(MinicLocal *local);
 
 bool minic_c0_program_add_expression(MinicC0Program *program,

@@ -1007,11 +1007,29 @@ static bool parse_preformed_static_array_definition(MinicParser *parser,
     MinicGlobalObjectId object_id;
 
     if (parser == NULL || !minic_type_is_array(object_type) ||
-        parser->current.kind != MINIC_TOKEN_EQUAL) {
+        (parser->current.kind != MINIC_TOKEN_EQUAL &&
+         parser->current.kind != MINIC_TOKEN_SEMICOLON)) {
         if (parser != NULL) {
-            minic_parser_error(parser, "pre-formed static array definition requires '='");
+            minic_parser_error(parser, "pre-formed static array requires '=' or ';'");
         }
         return false;
+    }
+    if (parser->current.kind == MINIC_TOKEN_SEMICOLON) {
+        /* A typedef may name a complete array, and another declarator may
+         * wrap it in an outer array.  `static T a;` is a valid tentative
+         * zero definition even when T's array descriptor was pre-formed. */
+        if (!minic_c0_type_is_complete_object(parser->program, object_type) ||
+            !global_merge_static_tentative(
+                parser, object_type, name_span,
+                static_object_type_is_read_only(parser->program, object_type),
+                &object_id) ||
+            !minic_parser_global_apply_metadata(
+                parser, object_id, section_name, section_name_length,
+                has_section, explicit_alignment)) {
+            minic_parser_error(parser, "cannot register pre-formed static array zero definition");
+            return false;
+        }
+        return minic_parser_advance(parser);
     }
     array_type = minic_c0_program_array_type(parser->program, object_type.array_type_id);
     if (array_type == NULL || (array_type->element_count == 0U && array_type->is_zero_length)) {
@@ -1112,9 +1130,20 @@ bool minic_parser_parse_static_global_after_head(MinicParser *parser,
         }
     }
     if (minic_type_is_array(element_type)) {
+        MinicType declared_array_type;
+        bool has_outer_array_suffix;
+
+        /* An array typedef supplies the *element* type of any following
+         * declarator suffix: `typedef T Row[1]; static Row rows[2];`
+         * becomes T[2][1], not a malformed pre-formed single array. */
+        if (!minic_parser_parse_array_declarator_suffix(
+                parser, element_type, true,
+                &declared_array_type, &has_outer_array_suffix))
+            return false;
+        (void)has_outer_array_suffix;
         return parse_preformed_static_array_definition(parser,
                                                        declaration_base,
-                                                       element_type,
+                                                       declared_array_type,
                                                        name_span,
                                                        section_name,
                                                        *section_name_length,

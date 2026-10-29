@@ -2,6 +2,8 @@
 #include "target/target_info.h"
 #include "target/backend.h"
 #include "target/riscv/instruction_select.h"
+#include "frontend/parser.h"
+#include "frontend/ast_verifier.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -88,10 +90,8 @@ static int verify_language_admission(void) {
     size_t i;
     for (i = 0U; i < sizeof(names) / sizeof(names[0]); ++i) {
         const MinicTargetInfo *t = minic_target_info_from_name(names[i]);
-        MinicType va_type;
         MinicType vector_type;
         MinicType vector_pointer;
-        bool is_x86 = i == 2U;
         bool is_arm = i == 3U;
         bool has_extended_float = i != 0U;
         bool has_vector;
@@ -101,12 +101,7 @@ static int verify_language_admission(void) {
             minic_target_info_language_type_supported(
                 t, MINIC_TYPE_BASE_FLOAT32X) != has_extended_float ||
             minic_target_info_language_type_supported(
-                t, MINIC_TYPE_BASE_AARCH64_SVE_BOOL) != is_arm ||
-            minic_target_info_language_type_supported(
-                t, MINIC_TYPE_BASE_X86_VA_LIST_CURSOR) != is_x86 ||
-            !minic_target_info_builtin_va_list_type(t, &va_type) ||
-            va_type.pointer_depth != 1U ||
-            (va_type.base_kind == MINIC_TYPE_BASE_X86_VA_LIST_CURSOR) != is_x86) {
+                t, MINIC_TYPE_BASE_AARCH64_SVE_BOOL) != is_arm) {
             (void)fprintf(stderr, "FAIL target language/varargs contract: %s\\n", names[i]);
             return 1;
         }
@@ -146,58 +141,87 @@ static int verify_language_admission(void) {
     return puts("TARGET_LANGUAGE_ADMISSION=PASS five-targets") == EOF ? 1 : 0;
 }
 
-/* Source va_list C identity is independent from Core's variadic-copy kind
- * and from generic sizeof/DataLayout. Canonical target registrations must
- * not accidentally admit a foreign cursor as a native state-copy operand. */
+/* One target-owned C shape and one Program-owned type pair. Repeated
+ * __builtin_va_list names and typedefs must share RecordId/ArrayTypeId;
+ * source objects now use their true layout, not a pointer-sized proxy. */
 static int verify_va_cursor_source_abi(void) {
     static const char *const names[] = {
         "riscv32-linux", "riscv64-linux", "x86_64-linux",
         "aarch64-linux", "loongarch64-linux"
     };
-    MinicC0Program empty_program = {0};
-    MinicType void_pointer, int_pointer, qualified_void, volatile_void;
-    MinicType x86_cursor = minic_type_x86_va_list_cursor();
-    size_t i, bytes;
-    if (!minic_type_pointer_to(minic_type_void(), &void_pointer) ||
-        !minic_type_pointer_to(minic_type_int(), &int_pointer) ||
-        !minic_type_add_const(void_pointer, &qualified_void) ||
-        !minic_type_add_volatile(void_pointer, &volatile_void))
-        return 1;
+    static const char source[] =
+        "typedef __builtin_va_list First;\n"
+        "typedef __builtin_va_list Again;\n"
+        "int forwarded(First a);\n"
+        "int forwarded(Again a);\n"
+        "struct VaBox { int key; First member; };\n";
+    size_t i;
     for (i = 0U; i < sizeof(names) / sizeof(names[0]); ++i) {
         const MinicTargetInfo *t = minic_target_info_from_name(names[i]);
-        MinicTargetInfo copy;
+        MinicC0Program program;
+        MinicVaCursorSourceShape shape;
+        MinicC0AstVerifyFailure failure;
+        MinicDiagnostic diagnostic = {0};
+        MinicType source_type, state_type, pointer_state, void_pointer;
+        size_t bytes, alignment;
         bool x86 = i == 2U;
         bool aarch = i == 3U;
-        bool state_copy = x86 || aarch;
+        bool opaque = x86 || aarch;
+        MinicTargetInfo missing_policy;
+        minic_c0_program_initialize(&program);
         if (t == NULL ||
-            (t->va_cursor_source_abi_policy != NULL) != state_copy ||
-            (t->variadic_copy_kind == MINIC_VARIADIC_COPY_ABI_STATE) != state_copy ||
-            minic_target_info_variadic_state_copy_type_supported(t, x86_cursor) != x86 ||
-            minic_target_info_variadic_state_copy_type_supported(t, void_pointer) != aarch ||
-            minic_target_info_variadic_state_copy_type_supported(t, int_pointer) ||
-            minic_target_info_variadic_state_copy_type_supported(t, qualified_void) ||
-            minic_target_info_variadic_state_copy_type_supported(t, volatile_void) ||
-            !minic_target_info_sizeof_type(t, &empty_program, void_pointer, &bytes) ||
-            bytes != t->data_layout->pointer_size ||
-            minic_target_info_sizeof_type(t, &empty_program, x86_cursor, &bytes)) {
-            (void)fprintf(stderr, "FAIL target va cursor source ABI: %s\n", names[i]);
+            !minic_target_info_va_cursor_source_shape(t, &shape) ||
+            shape.kind != (x86 ? MINIC_VA_CURSOR_SOURCE_OPAQUE_RECORD_ARRAY_ONE :
+                          aarch ? MINIC_VA_CURSOR_SOURCE_OPAQUE_RECORD :
+                                  MINIC_VA_CURSOR_SOURCE_LINEAR_POINTER) ||
+            shape.object_size != (x86 ? 24U : aarch ? 32U : t->data_layout->pointer_size) ||
+            shape.object_alignment != t->data_layout->pointer_alignment ||
+            !minic_parse_c0_program_for_target(names[i], source,
+                                               sizeof(source) - 1U, t,
+                                               &program, &diagnostic) ||
+            !minic_c0_program_va_cursor_source_types(
+                &program, &source_type, &state_type) ||
+            !minic_type_pointer_to(minic_type_void(), &void_pointer) ||
+            !minic_type_pointer_to(state_type, &pointer_state) ||
+            !minic_data_layout_type(t->data_layout, &program, source_type,
+                                    &bytes, &alignment) ||
+            bytes != shape.object_size || alignment != shape.object_alignment ||
+            program.record_count != (opaque ? 2U : 1U) ||
+            program.array_type_count != (x86 ? 1U : 0U) ||
+            program.type_alias_count != 2U ||
+            !minic_type_equal(program.type_aliases[0].type, source_type) ||
+            !minic_type_equal(program.type_aliases[1].type, source_type) ||
+            !minic_target_info_va_cursor_source_operand_supported(
+                t, &program, source_type, true) ||
+            (opaque && minic_target_info_va_cursor_source_operand_supported(
+                t, &program, void_pointer, true)) ||
+            (x86 && !minic_target_info_va_cursor_source_operand_supported(
+                t, &program, pointer_state, false)) ||
+            !minic_c0_program_verify_target_detailed(
+                &program, MINIC_C0_AST_PARSED, t, &failure)) {
+            (void)fprintf(stderr,
+                "FAIL target va cursor C source identity: %s diagnostic=%s records=%zu arrays=%zu\n",
+                names[i], diagnostic.message, program.record_count, program.array_type_count);
+            minic_c0_program_destroy(&program);
             return 1;
         }
-        /* ABI-state copying fails closed without the target's source C
-         * identity policy, even if the scalar copy-kind flag is present. */
-        if (state_copy) {
-            copy = *t;
-            copy.va_cursor_source_abi_policy = NULL;
-            if (minic_target_info_variadic_state_copy_type_supported(
-                    &copy, x86 ? x86_cursor : void_pointer) ||
-                (x86 && minic_target_info_sizeof_type(
-                    &copy, &empty_program, x86_cursor, &bytes))) {
-                (void)fprintf(stderr, "FAIL target va cursor unregistered: %s\n", names[i]);
+        if (opaque) {
+            /* ABI-state targets must never silently revert to an ordinary
+             * void* source cursor when their source policy is missing. */
+            missing_policy = *t;
+            missing_policy.va_cursor_source_abi_policy = NULL;
+            if (minic_target_info_va_cursor_source_shape(
+                    &missing_policy, &shape)) {
+                minic_c0_program_destroy(&program);
+                (void)fprintf(stderr,
+                    "FAIL target va cursor ABI-state missing source policy: %s\n",
+                    names[i]);
                 return 1;
             }
         }
+        minic_c0_program_destroy(&program);
     }
-    return puts("TARGET_VA_CURSOR_SOURCE_ABI=PASS x86_sizeof_fail_closed aarch_void_pointer_state_copy five_targets") == EOF;
+    return puts("TARGET_VA_CURSOR_SOURCE_ABI=PASS x86_array24 aarch_record32 linear_isa3 canonical_tu5 typedef_identity") == EOF;
 }
 
 static int verify_registered_target_catalog(void) {

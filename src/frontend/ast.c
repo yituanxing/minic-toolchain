@@ -57,6 +57,17 @@ void minic_c0_program_initialize(MinicC0Program *program) {
     program->return_expression = MINIC_EXPRESSION_INVALID;
 }
 
+bool minic_c0_program_va_cursor_source_types(const MinicC0Program *program,
+                                             MinicType *source_type,
+                                             MinicType *state_type) {
+    if (program == NULL || !program->has_builtin_va_list_source_type ||
+        source_type == NULL || state_type == NULL)
+        return false;
+    *source_type = program->builtin_va_list_source_type;
+    *state_type = program->builtin_va_list_state_type;
+    return true;
+}
+
 void minic_c0_program_destroy(MinicC0Program *program) {
     size_t index;
 

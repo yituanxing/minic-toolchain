@@ -21,8 +21,18 @@ typedef enum MinicX86MachineAsmForm {
     MINIC_X86_MACHINE_ASM_X87_PROBE,
     MINIC_X86_MACHINE_ASM_PKRU,
     MINIC_X86_MACHINE_ASM_MXCSR,
-    MINIC_X86_MACHINE_ASM_UNWIND_CONTEXT
+    MINIC_X86_MACHINE_ASM_UNWIND_CONTEXT,
+    MINIC_X86_MACHINE_ASM_PORT_IO,
+    MINIC_X86_MACHINE_ASM_ATOMIC_RMW,
+    MINIC_X86_MACHINE_ASM_RAW_CMPXCHG,
+    MINIC_X86_MACHINE_ASM_TRYCAS,
+    MINIC_X86_MACHINE_ASM_BITOPS,
+    MINIC_X86_MACHINE_ASM_ATOMIC_CC
 } MinicX86MachineAsmForm;
+
+/* GNU atomic RMWcc accepts both LOCK/SMP-patch and bare variants with
+ * identical opcodes; preserve the hardware/ELF side effect in FormId data. */
+#define MINIC_X86_ATOMIC_CC_LOCK_VARIANT 0x100U
 /* Verify that an opaque Core form ID still matches its immutable GNU
  * template. The x86 emitter must call this before using form/variant data. */
 bool minic_x86_64_typed_machine_form_matches_template(

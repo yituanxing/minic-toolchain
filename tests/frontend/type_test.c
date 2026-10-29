@@ -26,8 +26,7 @@ static int test_builtin_declaration_roles(void) {
         {MINIC_TYPE_BASE_AARCH64_FLOAT64X2, MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE},
         {MINIC_TYPE_BASE_AARCH64_SVE_FLOAT32, MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE},
         {MINIC_TYPE_BASE_AARCH64_SVE_FLOAT64, MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE},
-        {MINIC_TYPE_BASE_AARCH64_SVE_BOOL, MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE},
-        {MINIC_TYPE_BASE_X86_VA_LIST_CURSOR, MINIC_BUILTIN_DECLARATION_ABI_CURSOR}
+        {MINIC_TYPE_BASE_AARCH64_SVE_BOOL, MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE}
     };
     size_t index;
 
@@ -43,6 +42,9 @@ static int test_builtin_declaration_roles(void) {
         !minic_type_is_void(minic_type_aarch64_header_builtin(MINIC_TYPE_BASE_FLOAT128)) ||
         minic_type_aarch64_header_builtin(MINIC_TYPE_BASE_AARCH64_SVE_BOOL).base_kind !=
             MINIC_TYPE_BASE_AARCH64_SVE_BOOL) {
+        /* __builtin_va_list now materializes a canonical record/array C
+         * type per translation unit, not a special frontend scalar kind.
+         * Its shape and identity are tested by four-target-model-m0. */
         return fail("builtin declaration trait rejects non-vector ISA identity");
     }
     return 0;

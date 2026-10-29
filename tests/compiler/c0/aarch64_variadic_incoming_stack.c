@@ -2,7 +2,9 @@
  * the eighth and ninth unnamed unsigned-long arguments must be fetched from
  * the CALLER's incoming stack, above the callee's x29/x30 frame record. */
 #ifdef MINIC_AARCH64_CURSOR
-typedef void *va_list;
+/* The source AAPCS64 va_list is a 32-byte struct; Core passes its address to
+ * the machine ABI cursor without inventing a pointer-valued C proxy. */
+typedef __builtin_va_list va_list;
 #define va_start(ap, last) __builtin_va_start(ap, last)
 #define va_arg(ap, type) __builtin_va_arg(ap, type)
 #define va_end(ap) __builtin_va_end(ap)

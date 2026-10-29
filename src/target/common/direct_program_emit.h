@@ -30,7 +30,6 @@ typedef struct MinicMultiDirectProgramConfig {
     const char *elf_function_type; /* target GNU AS type spelling, e.g. %function */
     const char *elf_object_type;   /* target GNU AS type spelling, e.g. %object */
     MinicMultiDirectEmitFunction emit_function;
-    bool (*finalize_output)(const char *path); /* optional target-only legalization */
 } MinicMultiDirectProgramConfig;
 
 bool minic_multi_direct_write_program(

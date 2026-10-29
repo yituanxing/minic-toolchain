@@ -222,7 +222,6 @@ static const MinicTargetLanguageDescriptor minic_language_x86_64 = {
             .integer_model = &minic_lp64_signed_char_integer_model,
             .word_integer_rank = MINIC_INTEGER_RANK_LONG,
             .language_type_capabilities = MINIC_TARGET_LANG_EXTENDED_FLOAT_DECLARATIONS |
-                MINIC_TARGET_LANG_ABI_STATE_VA_LIST_CURSOR |
                 MINIC_TARGET_LANG_MS_X64_FUNCTION_POINTER_DECLARATIONS,
             .call_lowering_capabilities = MINIC_TARGET_CALL_MS_X64_FIXED_SCALAR,
             .gnu_sizeof_void_is_one = true,
@@ -410,9 +409,6 @@ bool minic_target_info_language_type_supported(const MinicTargetInfo *target,
     case MINIC_TYPE_BASE_AARCH64_SVE_BOOL:
         required = MINIC_TARGET_LANG_OPAQUE_VECTOR_HEADER_DECLARATIONS;
         break;
-    case MINIC_TYPE_BASE_X86_VA_LIST_CURSOR:
-        required = MINIC_TARGET_LANG_ABI_STATE_VA_LIST_CURSOR;
-        break;
     default:
         return false;
     }
@@ -522,17 +518,72 @@ bool minic_target_info_function_calling_convention_scalar_call_supported(
             MINIC_TARGET_CALL_MS_X64_FIXED_SCALAR) != 0U;
 }
 
-/* Only the x86 SysV cursor has a distinct internal identity today. Other
- * existing targets preserve their canonical sequential void-pointer model. */
-bool minic_target_info_builtin_va_list_type(const MinicTargetInfo *target,
-                                            MinicType *type) {
-    if (type == NULL) return false;
-    if (minic_target_info_language_type_supported(
-            target, MINIC_TYPE_BASE_X86_VA_LIST_CURSOR)) {
-        *type = minic_type_x86_va_list_cursor();
-        return true;
+bool minic_target_info_va_cursor_source_shape(
+    const MinicTargetInfo *target, MinicVaCursorSourceShape *shape) {
+    const MinicTargetVaCursorSourceAbiPolicy *policy;
+    if (target == NULL || target->data_layout == NULL || shape == NULL)
+        return false;
+    policy = target->va_cursor_source_abi_policy;
+    if (policy == NULL) {
+        if (target->variadic_copy_kind != MINIC_VARIADIC_COPY_SCALAR_ASSIGNMENT)
+            return false;
+        /* RV32/RV64/LoongArch retain their established linear C cursor.
+         * Its size comes from the selected DataLayout, including ILP32. */
+        shape->kind = MINIC_VA_CURSOR_SOURCE_LINEAR_POINTER;
+        shape->object_size = target->data_layout->pointer_size;
+        shape->object_alignment = target->data_layout->pointer_alignment;
+    } else {
+        *shape = policy->source_shape;
     }
-    return minic_type_pointer_to(minic_type_void(), type);
+    return (shape->kind == MINIC_VA_CURSOR_SOURCE_LINEAR_POINTER ||
+            shape->kind == MINIC_VA_CURSOR_SOURCE_OPAQUE_RECORD ||
+            shape->kind == MINIC_VA_CURSOR_SOURCE_OPAQUE_RECORD_ARRAY_ONE) &&
+           shape->object_size != 0U && shape->object_alignment != 0U &&
+           (shape->object_alignment & (shape->object_alignment - 1U)) == 0U &&
+           shape->object_size % shape->object_alignment == 0U &&
+           (shape->kind == MINIC_VA_CURSOR_SOURCE_LINEAR_POINTER ||
+            target->variadic_copy_kind == MINIC_VARIADIC_COPY_ABI_STATE);
+}
+
+bool minic_target_info_va_cursor_source_type_supported(
+    const MinicTargetInfo *target, const MinicC0Program *program, MinicType type) {
+    MinicVaCursorSourceShape shape;
+    MinicType source, state, pointer_state;
+    if (target == NULL || program == NULL ||
+        !minic_target_info_va_cursor_source_shape(target, &shape) ||
+        !minic_c0_program_va_cursor_source_types(program, &source, &state))
+        return false;
+    if (shape.kind == MINIC_VA_CURSOR_SOURCE_LINEAR_POINTER)
+        return minic_type_is_pointer(type);
+    if (minic_type_equal(type, source))
+        return true;
+    /* SysV array-to-pointer adjustment of a va_list function parameter, or
+     * the array's first element, is a pointer to the same hidden tag. A
+     * random void* or unrelated record* must not pass this admission gate. */
+    return shape.kind == MINIC_VA_CURSOR_SOURCE_OPAQUE_RECORD_ARRAY_ONE &&
+           minic_type_pointer_to(state, &pointer_state) &&
+           minic_type_equal(type, pointer_state);
+}
+
+bool minic_target_info_va_cursor_source_operand_supported(
+    const MinicTargetInfo *target, const MinicC0Program *program,
+    MinicType type, bool is_lvalue) {
+    MinicVaCursorSourceShape shape;
+    MinicType source, state;
+    if (!minic_target_info_va_cursor_source_shape(target, &shape) ||
+        !minic_c0_program_va_cursor_source_types(program, &source, &state) ||
+        !minic_target_info_va_cursor_source_type_supported(target, program, type) ||
+        minic_type_is_const(type))
+        return false;
+    if (shape.kind == MINIC_VA_CURSOR_SOURCE_LINEAR_POINTER)
+        return is_lvalue;
+    /* A mutable C record/array object needs an addressable lvalue. The
+     * adjusted SysV pointer-to-tag parameter may instead be a pointer
+     * rvalue: that value already denotes the original mutable tag. */
+    if (minic_type_equal(type, source))
+        return is_lvalue && !minic_type_is_volatile(type);
+    return shape.kind == MINIC_VA_CURSOR_SOURCE_OPAQUE_RECORD_ARRAY_ONE &&
+           !minic_type_is_volatile(type);
 }
 
 bool minic_target_info_plain_char_sign(const MinicTargetInfo *target, MinicIntegerSign *sign) {
@@ -613,20 +664,8 @@ bool minic_target_info_sizeof_type(const MinicTargetInfo *target,
     if (target == NULL || program == NULL || size == NULL) {
         return false;
     }
-    /* A target may have an internal pointer-sized proxy whose source C
-     * sizeof does not equal the backing ABI state. Do not let the generic
-     * DataLayout invent that size; all other C types still use DataLayout. */
-    if (minic_type_builtin_declaration_role(type.base_kind) ==
-        MINIC_BUILTIN_DECLARATION_ABI_CURSOR) {
-        /* A foreign or unregistered ABI cursor cannot inherit pointer
-         * layout silently. A target with a complete source representation
-         * may explicitly permit sizes through its own registered policy. */
-        if (!minic_target_info_language_type_supported(target, type.base_kind) ||
-            target->va_cursor_source_abi_policy == NULL ||
-            target->va_cursor_source_abi_policy->sizeof_proxy_forbidden == NULL ||
-            target->va_cursor_source_abi_policy->sizeof_proxy_forbidden(type))
-            return false;
-    }
+    /* Builtin va_list is already an ordinary canonical Program record/array
+     * shape here; no pointer-width exception or target ISA switch is valid. */
     if (minic_type_is_void(type)) {
         if (!target->gnu_sizeof_void_is_one) {
             return false;
@@ -942,16 +981,4 @@ const char *minic_target_info_inline_asm_immediate_constraint_diagnostic(
     return policy != NULL && policy->immediate_diagnostic != NULL
         ? policy->immediate_diagnostic
         : "GNU asm 'I' input requires a signed 12-bit integer constant";
-}
-/* The ABI owns the state-cursor representation; Core never tests an ISA.
- * Other structured cursor ABIs must explicitly implement their own policy. */
-bool minic_target_info_variadic_state_copy_type_supported(
-    const MinicTargetInfo *target, MinicType type) {
-    if (!target || target->variadic_copy_kind != MINIC_VARIADIC_COPY_ABI_STATE)
-        return false;
-    /* Source C cursor identity is target-owned. This does not select the
-     * actual Core state-copy opcode or machine implementation. */
-    return target->va_cursor_source_abi_policy != NULL &&
-           target->va_cursor_source_abi_policy->state_copy_source_type_supported != NULL &&
-           target->va_cursor_source_abi_policy->state_copy_source_type_supported(type);
 }

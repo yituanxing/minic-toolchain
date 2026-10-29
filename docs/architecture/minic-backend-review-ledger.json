@@ -12,7 +12,7 @@
   ],
   "audit_in_progress": "MiniC architecture consolidation: Direct LP64 ABI policies, trusted Core ASM source provenance, x86 physical register banks, and RV64 frame scratch liveness. New source owners are indexed without silently certifying stale blob reviews. Exact-head Linux .i-to-.s, GNU AS, link and QEMU are independent evidence; the four-architecture runtime has three pre-existing failures (x86 typed overflow, AArch64 x8 sret, LoongArch hidden a0).",
   "next_deep_review": [
-    "src/target/aarch64/asm_legalize.c",
+    "src/target/aarch64/frame_emit.c",
     "src/target/loongarch64/frame_emit.c",
     "src/target/x86_64/machine_emit.c",
     "src/target/riscv64/legalize.c",
@@ -37,16 +37,6 @@
     "src/target/aarch64/asm_contract.h": {
       "blob": "226d9f799bc29206ea266ffc6822bf03a7ab2b82",
       "review_depth": "targeted",
-      "ci_touched_in": []
-    },
-    "src/target/aarch64/asm_legalize.c": {
-      "blob": "af0aecfacc2c7ec73db3c8de694a91c7b2ba6bf3",
-      "review_depth": "inventory",
-      "ci_touched_in": []
-    },
-    "src/target/aarch64/asm_legalize.h": {
-      "blob": "62461e302864f703df77af9eeb1e00114a6965d6",
-      "review_depth": "inventory",
       "ci_touched_in": []
     },
     "src/target/aarch64/block_emit.c": {

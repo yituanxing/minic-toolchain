@@ -267,14 +267,11 @@ static MinicCoreLowerStatus lower_abi_cursor_scalar_record_va_arg(
     MinicType record_type, MinicCoreObjectId *object_id) {
     const MinicRecord *record;
     const MinicRecordField *field;
-    const MinicExpression *target;
     MinicCoreInstruction instruction;
-    MinicCoreValueId list_address;
     MinicCoreValueId cursor;
     MinicCoreValueId value;
     MinicCoreValueId record_address;
     MinicCoreValueId field_address;
-    MinicType cursor_type;
     MinicType record_pointer_type;
     MinicType field_pointer_type;
     size_t record_size;
@@ -284,14 +281,9 @@ static MinicCoreLowerStatus lower_abi_cursor_scalar_record_va_arg(
     MinicCoreLowerStatus status;
 
     record = minic_c0_program_record(context->body->program, record_type.record_id);
-    target = minic_c0_program_expression(
-        context->body->program, expression->value.unary.operand);
     if (record == NULL || !record->is_complete || record->is_union ||
         record->field_count != 1U || record->fields == NULL ||
-        target == NULL || target->value_category != MINIC_VALUE_LVALUE ||
-        !minic_type_is_pointer(target->type) || minic_type_is_const(target->type) ||
-        !minic_type_unqualified(target->type, &cursor_type) ||
-        !minic_type_is_pointer(cursor_type))
+        expression->value.unary.operand == MINIC_EXPRESSION_INVALID)
         return MINIC_CORE_LOWER_UNSUPPORTED;
     field = &record->fields[0];
     if (field->is_array || field->is_bit_field || field->is_flexible_array ||
@@ -311,19 +303,9 @@ static MinicCoreLowerStatus lower_abi_cursor_scalar_record_va_arg(
         !minic_type_pointer_to(field->type, &field_pointer_type))
         return MINIC_CORE_LOWER_UNSUPPORTED;
 
-    status = lower_address(context, expression->value.unary.operand, &list_address);
+    status = minic_core_lower_abi_va_state_pointer(
+        context, expression->value.unary.operand, &cursor);
     if (status != MINIC_CORE_LOWER_OK) return status;
-    (void)memset(&instruction, 0, sizeof(instruction));
-    instruction.kind = MINIC_CORE_INSTRUCTION_LOAD;
-    instruction.span = expression->span;
-    instruction.type = cursor_type;
-    instruction.result = MINIC_CORE_VALUE_INVALID;
-    instruction.value.load.address = list_address;
-    instruction.value.load.is_volatile = minic_type_is_volatile(target->type);
-    if (!minic_core_function_append_value_instruction(
-            context->function, context->block_id, &instruction, &cursor))
-        return MINIC_CORE_LOWER_ERROR;
-
     (void)memset(&instruction, 0, sizeof(instruction));
     instruction.kind = MINIC_CORE_INSTRUCTION_VARIADIC_NEXT_SCALAR;
     instruction.span = expression->span;

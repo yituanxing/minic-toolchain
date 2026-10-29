@@ -15,6 +15,17 @@ cc -std=c11 -Wall -Wextra -Werror -I"$repo/src" \
     -o "$scratch/frame-test"
 "$scratch/frame-test"
 
+# There must be one frame-address authority: the typed emitter. Reintroducing
+# either late textual rewrite silently loses scratch-register liveness and
+# can modify Linux's literal hardware ASM after contract qualification.
+if test -e "$repo/src/target/aarch64/asm_legalize.c" ||
+   test -e "$repo/src/target/aarch64/asm_legalize.h" ||
+   grep -Eq 'asm_legalize|copy_dynamic_frame_asm|legalize_large_sp_memory' \
+       "$repo/src/target/aarch64/codegen.c"; then
+    echo 'AARCH64_TYPED_FRAME_SOURCE=FAIL legacy text postpass reachable' >&2
+    exit 1
+fi
+
 # The integer and residual machine families have no remaining implicit
 # Core-owned `sp` slot users. A source-side guard catches regressions even
 # when the old text legalizer accidentally masks the emitted mistake.

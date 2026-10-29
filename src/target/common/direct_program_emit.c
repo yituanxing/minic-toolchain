@@ -12,7 +12,7 @@
 
 /* The complete-output and no-partial-assembly policy used by the two
  * original GNU/QEMU-validated LP64 direct emitters. Keep ISA-specific
- * function instructions, call ABI and optional final legalization private. */
+ * function instructions and call ABI private; typed frames need no text rewrite. */
 static bool minic_multi_direct_fail(MinicDiagnostic *diag, const char *path,
                                     const char *display, const char *why) {
     if (diag != NULL) {
@@ -123,14 +123,6 @@ static bool direct_between(
                out, program, ctx->config->elf_function_type);
 }
 
-static bool direct_finalize(const char *path, const MinicTargetInfo *target,
-                            void *opaque) {
-    const MinicDirectVisitContext *ctx = opaque;
-    (void)target;
-    return ctx->config->finalize_output == NULL ||
-           ctx->config->finalize_output(path);
-}
-
 bool minic_multi_direct_write_program(
     const char *path, const MinicC0Program *program,
     const MinicTargetInfo *target, const MinicCoreFunction *core_functions,
@@ -156,7 +148,7 @@ bool minic_multi_direct_write_program(
         const MinicProgramEmitConfig emit = {
             direct_visit_global, direct_visit_function,
             NULL, direct_between,
-            config->gnu_stack_note, direct_finalize,
+            config->gnu_stack_note, NULL,
             MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS, census
         };
         success = minic_program_emit_write(

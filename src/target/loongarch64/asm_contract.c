@@ -330,11 +330,11 @@ static bool loong_linux_clock_emit(
         if (!minic_loongarch64_emit_frame_mem(
                 out, "ld.d", "$t2", (size_t)b[i].value * 8U,
                 ctx->dynamic_frame) ||
-            fprintf(out, "  %s %s, $t2, 0\n",
-                    (form == LOONG_CLOCK_RDTIME_NUMERIC && i == 1U) ||
-                    form == LOONG_CLOCK_CPU_ID
-                        ? "st.w" : "st.d",
-                    i == 0U ? "$t0" : "$t1") < 0)
+            !minic_loongarch64_emit_asm_output_store(
+                out, ctx->program, ctx->target, fn, b[i].value,
+                (form == LOONG_CLOCK_RDTIME_NUMERIC && i == 1U) ||
+                form == LOONG_CLOCK_CPU_ID ? 4U : 8U,
+                i == 0U ? "$t0" : "$t1", "$t2", "$t3"))
             return false;
     return true;
 }
@@ -816,7 +816,9 @@ static bool loong_linux_cpucfg_emit(
            minic_loongarch64_emit_frame_mem(
                out, "ld.d", "$t2", (size_t)operands[0].value * 8U,
                ctx->dynamic_frame) &&
-           fprintf(out, "  st.w $t0, $t2, 0\n") >= 0;
+           minic_loongarch64_emit_asm_output_store(
+               out, ctx->program, ctx->target, fn, operands[0].value,
+               4U, "$t0", "$t2", "$t3");
 }
 
 /* Authentic GNU Linux 6.6.143 LoongArch set_pte global-bit buddy LL/SC.
@@ -1221,7 +1223,9 @@ static bool loong_mask_nospec_emit(
            minic_loongarch64_emit_frame_mem(
                out, "ld.d", "$t1", (size_t)b[0].value * 8U,
                ctx->dynamic_frame) &&
-           fputs("  st.d $t2, $t1, 0\n", out) != EOF;
+           minic_loongarch64_emit_asm_output_store(
+               out, ctx->program, ctx->target, fn, b[0].value,
+               8U, "$t2", "$t1", "$t3");
 }
 
 /* Original 6.6.143 LoongArch generic per-CPU and FPU-state hardware ASM.
@@ -1482,7 +1486,9 @@ static bool loong_percpu_amo_emit(
                    loong_percpu_amo[form].mnemonic)>=0&&
            minic_loongarch64_emit_frame_mem(
              out,"ld.d","$t1",(size_t)b[0].value*8U,ctx->dynamic_frame)&&
-           fputs("  st.d $t2, $t1, 0\n",out)!=EOF;
+           minic_loongarch64_emit_asm_output_store(
+             out,ctx->program,ctx->target,fn,b[0].value,
+             8U,"$t2","$t1","$t3");
 }
 static bool loong_fcsr0_write_form(const char *text,size_t len){
     static const char exact[]="movgr2fcsr$fcsr0,%0";
@@ -2311,12 +2317,32 @@ static bool loong_linux_uaccess_form(
     return false;
 }
 
+/* The faulting ld/st opcode names the *user memory width*, while the GNU
+ * output/input register may use a wider C carrier (e.g. an unsigned long
+ * for ld.b). The compiler writeback must use that carrier's actual width.
+ * Do not infer this from the target GPR or blindly st.d every =r output. */
+static bool loong_uaccess_scalar_width(MinicType type, size_t *width) {
+    MinicType plain;
+    if (!width || !minic_type_unqualified(type, &plain)) return false;
+    if (minic_type_is_pointer(plain)) { *width = 8U; return true; }
+    if (!minic_type_is_integer(plain)) return false;
+    switch (plain.integer_rank) {
+        case MINIC_INTEGER_RANK_CHAR: *width = 1U; return true;
+        case MINIC_INTEGER_RANK_SHORT: *width = 2U; return true;
+        case MINIC_INTEGER_RANK_INT: *width = 4U; return true;
+        case MINIC_INTEGER_RANK_LONG:
+        case MINIC_INTEGER_RANK_LONG_LONG: *width = 8U; return true;
+        default: return false;
+    }
+}
+
 static bool loong_linux_uaccess_source(
     const MinicC0Program *program, const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
     LoongLinuxUaccess form;
     const MinicExpression *err, *data, *memory;
-    MinicType err_type, data_type;
+    MinicType err_type;
+    size_t data_width, memory_width;
     if (!program || !src || !contract || !src->is_volatile || src->is_goto ||
         src->output_count != 2U || src->input_count != 1U ||
         !src->outputs || !src->inputs || src->label_count != 0U ||
@@ -2342,10 +2368,11 @@ static bool loong_linux_uaccess_source(
         minic_type_is_const(err->type) ||
         (form.load && minic_type_is_const(data->type)) ||
         !minic_type_unqualified(err->type, &err_type) ||
-        !minic_type_unqualified(data->type, &data_type) ||
         !minic_type_equal(err_type, minic_type_int()) ||
-        (!minic_type_is_integer(data_type) &&
-         !(form.width == 8U && minic_type_is_pointer(data_type)))) return false;
+        !loong_uaccess_scalar_width(data->type, &data_width) ||
+        !loong_uaccess_scalar_width(memory->type, &memory_width) ||
+        memory_width != form.width || data_width < form.width ||
+        (minic_type_is_pointer(data->type) && form.width != 8U)) return false;
     contract->operand_count = 3U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE;
     contract->kinds[1] = form.load
@@ -2365,8 +2392,8 @@ static bool loong_linux_uaccess_emit(
     const MinicCoreFunction *fn = ctx->fn;
     const MinicCoreStructuredInlineAsmOperand *b =
         ins->value.structured_inline_asm.operands;
-    MinicType type;
-    size_t i;
+    MinicType err_type, data_type, memory_type;
+    size_t i, data_width, memory_width;
 
     if (!out || !ctx || !fn || !info || !form || !info->is_volatile ||
         info->is_goto || info->register_clobber_count != 0U ||
@@ -2386,12 +2413,22 @@ static bool loong_linux_uaccess_emit(
             b[i].value >= fn->value_count || b[i].early_clobber ||
             b[i].has_fixed_register_binding) return false;
     }
-    if (!minic_type_pointee(fn->values[b[0].value].type, &type) ||
-        !minic_type_equal(type, minic_type_int()) ||
-        !minic_type_pointee(fn->values[b[1].value].type, &type) ||
-        (form->load && !minic_type_is_integer(type)) ||
-        (form->load &&
-         !minic_type_pointee(fn->values[b[2].value].type, &type)))
+    if (!minic_type_pointee(fn->values[b[0].value].type, &err_type) ||
+        !minic_type_equal(err_type, minic_type_int())) return false;
+    if (form->load) {
+        if (!minic_type_pointee(fn->values[b[1].value].type, &data_type) ||
+            !minic_type_pointee(fn->values[b[2].value].type, &memory_type))
+            return false;
+    } else {
+        if (!minic_type_pointee(fn->values[b[1].value].type, &memory_type))
+            return false;
+        data_type = fn->values[b[2].value].type;
+    }
+    if (
+        !loong_uaccess_scalar_width(data_type, &data_width) ||
+        !loong_uaccess_scalar_width(memory_type, &memory_width) ||
+        memory_width != form->width || data_width < form->width ||
+        (minic_type_is_pointer(data_type) && form->width != 8U))
         return false;
 
     /* $t0 (physical r12) is the error register and $t1 (r13) is the
@@ -2400,9 +2437,10 @@ static bool loong_linux_uaccess_emit(
      * selected them. $t4 carries the user address; $t7 the C lvalue
      * address. The shared frame helper handles large and dynamic frames. */
     if (!minic_loongarch64_emit_frame_mem(
-            out, "ld.d", "$t7", (size_t)b[0].value * 8U,
+            out, "ld.d", "$t1", (size_t)b[0].value * 8U,
             ctx->dynamic_frame) ||
-        fputs("  ld.w $t0, $t7, 0\n", out) == EOF ||
+        !minic_loongarch64_emit_asm_input_scalar(
+            out, ctx->program, ctx->target, fn, b[0].value, 4U) ||
         !minic_loongarch64_emit_frame_mem(
             out, "ld.d", "$t4", (size_t)b[form->load ? 2U : 1U].value * 8U,
             ctx->dynamic_frame)) return false;
@@ -2425,12 +2463,16 @@ static bool loong_linux_uaccess_emit(
         !minic_loongarch64_emit_frame_mem(
             out, "ld.d", "$t7", (size_t)b[0].value * 8U,
             ctx->dynamic_frame) ||
-        fputs("  st.w $t0, $t7, 0\n", out) == EOF) return false;
+        !minic_loongarch64_emit_asm_output_store(
+            out, ctx->program, ctx->target, fn, b[0].value,
+            4U, "$t0", "$t7", "$t3")) return false;
     if (form->load &&
         (!minic_loongarch64_emit_frame_mem(
              out, "ld.d", "$t7", (size_t)b[1].value * 8U,
              ctx->dynamic_frame) ||
-         fputs("  st.d $t1, $t7, 0\n", out) == EOF)) return false;
+         !minic_loongarch64_emit_asm_output_store(
+             out, ctx->program, ctx->target, fn, b[1].value,
+             data_width, "$t1", "$t7", "$t3"))) return false;
     return true;
 }
 
@@ -2940,9 +2982,10 @@ static bool loong_linux_frametrace_csr_emit(
         minic_loongarch64_emit_frame_mem(
             out, "ld.d", "$t1", (size_t)b[0].value * 8U,
             ctx->dynamic_frame) &&
-        fprintf(out, "  %s $t0, $t1, 0\n",
-                minic_type_equal(pointee, minic_type_unsigned_long()) ?
-                "st.d" : "st.w") >= 0;
+        minic_loongarch64_emit_asm_output_store(
+            out, ctx->program, ctx->target, fn, b[0].value,
+            minic_type_equal(pointee, minic_type_unsigned_long()) ? 8U : 4U,
+            "$t0", "$t1", "$t3");
 }
 
 /* The exact-template Linux forms whose source and Core contracts share one
@@ -3098,24 +3141,30 @@ static bool minic_loongarch64_emit_csr(
         return false;
     if (form == 2U && (b[1].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
         !loong_csr_word_type(fn->values[b[1].value].type))) return false;
-    /* $t1 carries the saved/restored CRMD bits. For CSR XCHG only the
-     * hardware mask ($t0) selects IE; save former bits back to the C lvalue.
+    /* $t1 carries saved/restored CRMD. Gather the +r C lvalue before
+     * loading the mask into $t0; the byte fallback owns $t2-$t5 scratch.
+     * Then store through the same typed output transport as Core STORE.
      * User-mode QEMU cannot execute privileged CSR operations. */
-    if (!minic_loongarch64_emit_frame_mem(
-            out, "ld.d", "$t2", (size_t)b[0].value * 8U,
-            ctx->dynamic_frame)) return false;
     if (form == 2U &&
         (!minic_loongarch64_emit_frame_mem(
+             out, "ld.d", "$t1", (size_t)b[0].value * 8U,
+             ctx->dynamic_frame) ||
+         !minic_loongarch64_emit_asm_input_scalar(
+             out, ctx->program, ctx->target, fn, b[0].value, width) ||
+         fputs("  move $t1, $t0\n", out) == EOF ||
+         !minic_loongarch64_emit_frame_mem(
              out, "ld.w", "$t0", (size_t)b[1].value * 8U,
              ctx->dynamic_frame) ||
-         fprintf(out, "  %s $t1, $t2, 0\n"
-                      "  csrxchg $t1, $t0, 0\n",
-                 width == 8U ? "ld.d" : "ld.w") < 0))
+         fputs("  csrxchg $t1, $t0, 0\n", out) == EOF))
         return false;
     if (form == 1U && fputs("  csrrd $t1, 0\n", out) == EOF)
         return false;
-    return fprintf(out, "  %s $t1, $t2, 0\n",
-        width == 8U ? "st.d" : "st.w") >= 0;
+    return minic_loongarch64_emit_frame_mem(
+               out, "ld.d", "$t2", (size_t)b[0].value * 8U,
+               ctx->dynamic_frame) &&
+           minic_loongarch64_emit_asm_output_store(
+               out, ctx->program, ctx->target, fn, b[0].value,
+               width, "$t1", "$t2", "$t3");
 }
 /* Result register of LoongArch AMO is the OLD pre-update memory value.
  * No CAS emulation, ordinary Core load/store, or guessed ISA permission. */
@@ -3160,8 +3209,9 @@ static bool minic_loongarch64_emit_amo_fetch(
            minic_loongarch64_emit_frame_mem(
                out, "ld.d", "$t1", (size_t)b[1].value * 8U,
                ctx->dynamic_frame) &&
-           fprintf(out, "  %s $t2, $t1, 0\n",
-                   atom->width == 8U ? "st.d" : "st.w") >= 0;
+           minic_loongarch64_emit_asm_output_store(
+               out, ctx->program, ctx->target, fn, b[1].value,
+               atom->width, "$t2", "$t1", "$t3");
 }
 
 
@@ -3208,8 +3258,10 @@ static bool loong_pte_emit(
                  "  beqz $t4, 1b\n"
                  "  nop\n"
                  "2:\n"
-                 "  dbar 0x700\n"
-                 "  st.d $t4, $t2, 0\n",out)!=EOF;
+                 "  dbar 0x700\n",out)!=EOF&&
+           minic_loongarch64_emit_asm_output_store(
+             out,ctx->program,ctx->target,fn,b[1].value,
+             8U,"$t4","$t2","$t3");
 }
 
 /* The exact Linux LL/SC compare-and-swap register choreography.
@@ -3343,8 +3395,9 @@ static bool loong_linux_xchg_emit(FILE *out,
                    width==8U?'d':'w')>=0&&
            minic_loongarch64_emit_frame_mem(
              out,"ld.d","$t1",(size_t)b[1].value*8U,ctx->dynamic_frame)&&
-           fprintf(out,"  %s $t2, $t1, 0\n",
-                   width==8U||named?"st.d":"st.w")>=0;
+           minic_loongarch64_emit_asm_output_store(
+             out,ctx->program,ctx->target,fn,b[1].value,
+             width==8U||named?8U:4U,"$t2","$t1","$t3");
 }
 
 /* Keep both original GNU memory operands distinct in Core. The LL reads

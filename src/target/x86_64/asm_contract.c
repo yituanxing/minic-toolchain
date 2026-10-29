@@ -45,6 +45,26 @@ bool minic_x86_64_typed_machine_form_matches_template(
     case MINIC_X86_MACHINE_ASM_MXCSR:
         form = minic_x86_64_linux_mxcsr_form(text, length);
         break;
+    case MINIC_X86_MACHINE_ASM_PORT_IO:
+        form = (unsigned int)minic_x86_64_port_io_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_ATOMIC_RMW:
+        form = (unsigned int)minic_x86_64_atomic_rmw_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_RAW_CMPXCHG:
+        form = (unsigned int)minic_x86_64_raw_cmpxchg_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_TRYCAS:
+        form = (unsigned int)minic_x86_64_trycas_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_BITOPS:
+        form = (unsigned int)minic_x86_64_linux_bitops_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_ATOMIC_CC:
+        form = (unsigned int)minic_x86_64_atomic_cc_form(text, length);
+        return form != 0U && variant ==
+            (form | (minic_x86_64_atomic_cc_locked_form(text, length)
+                ? MINIC_X86_ATOMIC_CC_LOCK_VARIANT : 0U));
     case MINIC_X86_MACHINE_ASM_UNWIND_CONTEXT:
         return variant == 0U &&
             minic_x86_64_linux_unwind_context_form(text, length);
@@ -3999,6 +4019,7 @@ static bool x86_linux_raw_cmpxchg_source(
     contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
     contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->kinds[3] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->target_machine_form_variant = (uint32_t)form;
     return true;
 }
 
@@ -4069,6 +4090,7 @@ static bool x86_port_io_source(const MinicC0Program *program,
        MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT:
        MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->kinds[1]=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->target_machine_form_variant=(uint32_t)form;
     return true;
 }
 
@@ -4130,6 +4152,7 @@ static bool x86_trycas_source(
     contract->kinds[1]=MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
     contract->kinds[2]=MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE;
     contract->kinds[3]=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->target_machine_form_variant=(uint32_t)form;
     return true;
 }
 
@@ -4271,6 +4294,7 @@ static bool x86_linux_atomic_rmw_source(
     if(!unary)contract->kinds[1]=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     if(legacy)contract->kinds[unary?1U:2U]=
         MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
+    contract->target_machine_form_variant=(uint32_t)form;
     return true;
 }
 
@@ -5503,7 +5527,8 @@ static bool x86_linux_vdso_cpunode_source(
 }
 
 static bool x86_linux_atomic_cc_source(
-    const MinicC0Program *program, const MinicInlineAsm *src) {
+    const MinicC0Program *program, const MinicInlineAsm *src,
+    MinicTargetInlineAsmContract *contract) {
     const MinicExpression *mem, *flag, *value;
     MinicType mt, ft, vt;
     const MinicX86AtomicCC form = src ?
@@ -5511,7 +5536,7 @@ static bool x86_linux_atomic_cc_source(
         MINIC_X86_ATOMIC_CC_NONE;
     const MinicX86AtomicCCDesc *d =
         minic_x86_64_atomic_cc_description(form);
-    if (!program || !src || !d || !src->is_volatile || src->is_goto ||
+    if (!program || !src || !contract || !d || !src->is_volatile || src->is_goto ||
         !src->outputs || src->output_count != 2U ||
         src->input_count != (d->has_value ? 1U : 0U) ||
         (d->has_value && !src->inputs) || src->label_count ||
@@ -5546,6 +5571,15 @@ static bool x86_linux_atomic_cc_source(
                (minic_type_equal(mt, minic_type_long()) ||
                 minic_type_equal(mt, minic_type_long_long()))))) return false;
     }
+    contract->operand_count = d->has_value ? 3U : 2U;
+    contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
+    contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+    if (d->has_value)
+        contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->target_machine_form_variant = (uint32_t)form |
+        (minic_x86_64_atomic_cc_locked_form(src->template_text,
+                                            src->template_length)
+            ? MINIC_X86_ATOMIC_CC_LOCK_VARIANT : 0U);
     return true;
 }
 /* Original GNU Linux 6.6.143 x86 bitops: exact source templates, not
@@ -5695,6 +5729,7 @@ static bool x86_linux_bitops_source(
         contract->kinds[0]=MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
         contract->kinds[1]=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     }
+    contract->target_machine_form_variant=(uint32_t)form;
     return true;
 }
 /* Exact x86 Linux word-sized GNU BSF/BSR spelling. The REP prefix on
@@ -8768,7 +8803,7 @@ static const MinicX86SourceQualifierEntry minic_x86_source_qualifiers[] = {
     X86_SOURCE(x86_linux_msr_source),
     X86_SOURCE(x86_hweight_source),
     X86_SOURCE(x86_counter_source),
-    X86_SOURCE(x86_port_io_source),
+    X86_SOURCE_TYPED(x86_port_io_source, PORT_IO),
     X86_SOURCE(x86_linux_gs_atomic_source),
     X86_SOURCE(x86_linux_rep_stos_source),
     X86_SOURCE(x86_linux_lowlevel_scalar_source),
@@ -8782,10 +8817,11 @@ static const MinicX86SourceQualifierEntry minic_x86_source_qualifiers[] = {
     X86_SOURCE(x86_linux_vdso_syscall_source),
     X86_SOURCE(x86_linux_vdso_cpunode_source),
     X86_SOURCE(x86_linux_csum_partial_source),
-    X86_SOURCE(x86_linux_atomic_rmw_source),
-    X86_SOURCE(x86_linux_raw_cmpxchg_source),
-    X86_SOURCE(x86_trycas_source),
-    X86_SOURCE(x86_linux_bitops_source),
+    X86_SOURCE_TYPED(x86_linux_atomic_rmw_source, ATOMIC_RMW),
+    X86_SOURCE_TYPED(x86_linux_raw_cmpxchg_source, RAW_CMPXCHG),
+    X86_SOURCE_TYPED(x86_trycas_source, TRYCAS),
+    X86_SOURCE_TYPED(x86_linux_bitops_source, BITOPS),
+    X86_SOURCE_TYPED(x86_linux_atomic_cc_source, ATOMIC_CC),
 };
 #undef X86_SOURCE_TYPED
 #undef X86_SOURCE
@@ -8805,17 +8841,6 @@ bool minic_x86_64_qualify_inline_asm(
                 (uint32_t)minic_x86_source_qualifiers[i].machine_form;
             return true;
         }
-    }
-    if (x86_linux_atomic_cc_source(program, source)) {
-        const MinicX86AtomicCCDesc *d = minic_x86_64_atomic_cc_description(
-            minic_x86_64_atomic_cc_form(
-                source->template_text, source->template_length));
-        contract->operand_count = d && d->has_value ? 3U : 2U;
-        contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
-        contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
-        if (contract->operand_count == 3U)
-            contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
-        return true;
     }
     if (x86_nospec_source(program, source)) {
         contract->operand_count = 3U;

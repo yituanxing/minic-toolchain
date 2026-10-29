@@ -258,6 +258,8 @@ bool minic_parser_parse_alignof_type_value(MinicParser *parser,
                                            int64_t *value,
                                            MinicSourceSpan *span);
 bool minic_parser_token_starts_type_name(const MinicParser *parser, MinicToken token);
+bool minic_parser_materialize_builtin_va_list_source_type(
+    MinicParser *parser, MinicType *type);
 bool minic_parser_token_starts_declaration_specifiers(const MinicParser *parser, MinicToken token);
 bool minic_parser_parse_local_storage_class(MinicParser *parser, bool *is_register_storage);
 bool minic_parser_parse_type_specifiers(MinicParser *parser, MinicType *type);

@@ -36,6 +36,9 @@ sh tests/compiler/c0/probe-loongarch64-packed-scalar-alignment.sh
 sh tests/compiler/c0/probe-loongarch64-syscall-alias-policy.sh
 sh tests/compiler/c0/probe-loongarch64-vararg-int128-pair.sh
 bash tests/compiler/c0/probe-loongarch64-packed-asm-output.sh "$mini"
+bash tests/compiler/c0/probe-loongarch64-packed-asm-result-family.sh "$mini"
+bash tests/compiler/c0/probe-loongarch64-packed-uaccess-output.sh "$mini"
+bash tests/compiler/c0/probe-loongarch64-packed-hardware-asm-results.sh "$mini"
 bash tests/compiler/c0/probe-data-layout-zero-size-reloc.sh
 sh tests/compiler/c0/run-alignof-expression.sh
 sh tests/compiler/c0/run-packed-record-layout.sh
@@ -43,6 +46,8 @@ sh tests/compiler/c0/probe-x86-immediate-qualification.sh
 bash tests/target/run-x86-typed-asm-forms.sh
 bash tests/compiler/c0/probe-x86-typed-mmio-atomic-oracle.sh "$mini"
 bash tests/compiler/c0/probe-x86-typed-machine-qualification-gaps.sh "$mini"
+bash tests/compiler/c0/probe-x86-typed-scalar-families.sh "$mini"
+bash tests/compiler/c0/probe-va-cursor-source-object.sh "$mini"
 sh tests/compiler/c0/probe-x86-sysv-integer-record-tree.sh
 bash tests/compiler/c0/probe-gnu-variadic-restart.sh
 bash tests/compiler/c0/probe-target-gnu-earlyclobber-transport.sh "$mini"

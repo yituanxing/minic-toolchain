@@ -289,9 +289,11 @@ has src/target/common/direct_machine_dispatch.h 'shape.family != MINIC_DIRECT_MA
 exists src/target/common/direct_function_emit.h
 has src/target/common/direct_function_emit.h 'minic_multi_direct_lp64_function_plan_prepare('
 has src/target/common/direct_function_emit.h 'minic_multi_emit_elf_symbol_visibility('
-has src/target/common/direct_function_emit.h 'config->emit_prologue(emission, &ctx)'
-has src/target/common/direct_function_emit.h 'config->emit_core_blocks(emission, &ctx)'
-has src/target/common/direct_function_emit.h 'config->rewrite_dynamic_asm(out, staged)'
+has src/target/common/direct_function_emit.h 'config->emit_prologue(out, &ctx)'
+has src/target/common/direct_function_emit.h 'config->emit_core_blocks(out, &ctx)'
+lacks src/target/common/direct_function_emit.h 'rewrite_dynamic_asm'
+lacks src/target/common/direct_program_emit.h 'finalize_output'
+lacks src/target/aarch64/codegen.c 'asm_legalize'
 for arch in aarch64 loongarch64; do
   file="src/target/$arch/codegen.c"
   has "$file" 'minic_multi_direct_lp64_emit_function('
