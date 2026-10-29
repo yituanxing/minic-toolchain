@@ -74,3 +74,52 @@ for invalid in \
   fi
 done
 echo 'MINIAS_A64_RETAINED_DELTA_NEGATIVE=PASS bounds=3'
+
+# A deferred subtraction tail must belong to the complete expression.
+# The old A64 parser passed end-begin-4 to Common as end-(begin-4),
+# silently changing an 8-4 displacement into 8+4. Cover ALU and branch
+# consumers after a forward .space fixed point, including a mixed -4+5 tail.
+cat >"$work/subtraction-tail.s" <<'A64_SUBTRACTION_TAIL'
+.text
+begin:
+.space span_end-span_begin,0
+end:
+add x0,x0,#end-begin-4
+sub x1,x1,#(end-begin)-4
+cmp x2,#end-begin-4+5
+b target+(end-begin-4)
+target:
+nop
+.section .rodata,"a",@progbits
+span_begin: .byte 1,2,3,4,5,6,7,8
+span_end:
+A64_SUBTRACTION_TAIL
+"$MINIAS" --target=aarch64 -o "$work/subtraction-mini.o" "$work/subtraction-tail.s"
+aarch64-linux-gnu-as -o "$work/subtraction-gnu.o" "$work/subtraction-tail.s"
+for flavor in mini gnu; do
+  aarch64-linux-gnu-objcopy -j .text -O binary \
+    "$work/subtraction-$flavor.o" "$work/subtraction-$flavor.text"
+done
+cmp "$work/subtraction-mini.text" "$work/subtraction-gnu.text"
+test "$(od -An -tx4 -j8 -N4 "$work/subtraction-mini.text" | tr -d '[:space:]')" = "91001000"
+cat >"$work/subtraction-invalid.s" <<'A64_SUBTRACTION_INVALID'
+.text
+begin:
+.space span_end-span_begin,0
+end:
+b target+(end-begin-5)
+target:
+nop
+.section .rodata,"a",@progbits
+span_begin: .byte 1,2,3,4,5,6,7,8
+span_end:
+A64_SUBTRACTION_INVALID
+if "$MINIAS" --target=aarch64 -o "$work/subtraction-invalid-mini.o" \
+  "$work/subtraction-invalid.s" >/dev/null 2>&1; then
+  echo 'MiniAS A64 accepted misaligned deferred branch subtraction' >&2; exit 1
+fi
+if aarch64-linux-gnu-as -o "$work/subtraction-invalid-gnu.o" \
+  "$work/subtraction-invalid.s" >/dev/null 2>&1; then
+  echo 'GNU A64 unexpectedly accepted misaligned deferred branch subtraction' >&2; exit 1
+fi
+echo 'MINIAS_A64_DEFERRED_SUBTRACTION=PASS GNU_bytes=exact ALU=3 branch=1 reject=1'

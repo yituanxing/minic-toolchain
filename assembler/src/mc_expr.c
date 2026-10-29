@@ -111,6 +111,15 @@ static bool checked_sub_i64(int64_t lhs, int64_t rhs, int64_t *out) {
     return true;
 }
 
+/* GNU's 64-bit integer literals and fixed-width DATA use two's-complement
+ * bit patterns.  A uint64_t -> int64_t conversion outside INT64_MAX is
+ * implementation-defined in C; spell out the intended signed value instead
+ * of relying on the host compiler's conversion behavior. */
+static int64_t signed_from_bits(uint64_t bits) {
+    return bits <= (uint64_t)INT64_MAX ? (int64_t)bits :
+           -1 - (int64_t)(UINT64_MAX - bits);
+}
+
 static bool parse_absolute_logical_or(MiniAsAbsoluteExpressionParser *parser,
                                       int64_t *value);
 
@@ -166,7 +175,7 @@ static bool parse_absolute_primary(MiniAsAbsoluteExpressionParser *parser,
         if (symbol->section != MINIAS_SECTION_ABS) {
             parser->only_absolute_symbols = false;
         }
-        *value = (int64_t)symbol->value;
+        *value = signed_from_bits(symbol->value);
         return true;
     }
 
@@ -175,8 +184,7 @@ static bool parse_absolute_primary(MiniAsAbsoluteExpressionParser *parser,
     /* GAS interprets a 64-bit hex mask in arithmetic as a two's-complement
      * value (e.g. subtracting 0xffffffff80000000 adds 0x80000000).
      * Avoid implementation-defined uint64->int64 casts. */
-    *value=number>(uint64_t)INT64_MAX?
-           -(int64_t)(UINT64_MAX-number)-1:(int64_t)number;
+    *value=signed_from_bits(number);
     return true;
 }
 
@@ -324,7 +332,7 @@ static bool parse_absolute_shift(MiniAsAbsoluteExpressionParser *parser,
              * Use the canonical unsigned bit pattern, then interpret as
              * signed (same convention as the shared numeric evaluator). */
             uint64_t bits=(uint64_t)result << (unsigned int)shift;
-            result=(int64_t)bits;
+            result=signed_from_bits(bits);
         } else {
             /* Avoid implementation-dependent negative signed right shift.
              * GNU's >> is arithmetic, explicitly preserving sign bits. */
@@ -332,7 +340,7 @@ static bool parse_absolute_shift(MiniAsAbsoluteExpressionParser *parser,
             if(result<0 && count!=0U) {
                 uint64_t bits=(uint64_t)result;
                 bits=(bits>>count)|(UINT64_MAX<<(64U-count));
-                result=(int64_t)bits;
+                result=signed_from_bits(bits);
             } else result>>=count;
         }
     }
@@ -1042,8 +1050,7 @@ static bool deferred_parse_prefix(DeferredParser *p,size_t *result) {
     if(!minias_parse_number_literal(p->cursor,&end,&number))return false;
     p->cursor=end;--p->depth;
     return deferred_add(p,DEF_LITERAL,0U,0U,0U,
-               number>(uint64_t)INT64_MAX?
-               -(int64_t)(UINT64_MAX-number)-1:(int64_t)number,result);
+               signed_from_bits(number),result);
 }
 
 static bool deferred_parse_binary(DeferredParser *p,unsigned minimum,
@@ -1130,7 +1137,7 @@ bool minias_evaluate_deferred_expr(const MiniAs *as,
             if(!sym->defined || sym->section==MINIAS_SECTION_COMMON ||
                (sym->section!=MINIAS_SECTION_ABS &&
                 sym->value>(uint64_t)INT64_MAX))return false;
-            v=(int64_t)sym->value;
+            v=signed_from_bits(sym->value);
             if(sym->section!=MINIAS_SECTION_ABS) {
                 if(sym->section<0)return false;
                 c=1;section=sym->section;
@@ -1172,7 +1179,7 @@ bool minias_evaluate_deferred_expr(const MiniAs *as,
             else if(l<0 && r>0)
                 bits=(bits>>(unsigned)r)|(UINT64_MAX<<(64U-(unsigned)r));
             else bits>>=(unsigned)r;
-            v=(int64_t)bits;break;
+            v=signed_from_bits(bits);break;
         case DEF_LT:v=l<r?-1:0;break;
         case DEF_LE:v=l<=r?-1:0;break;
         case DEF_GT:v=l>r?-1:0;break;
@@ -1412,9 +1419,9 @@ static bool emit_symbol_minus_dot(MiniAs *as,
     bool can_sub=target_supports_fixup(as,MINIAS_FIXUP_SUB,width);
 
     if (target->defined && target->section == stmt->section) {
-        int64_t difference =
-            (int64_t)target->value + addend - (int64_t)relocation_offset;
-        uint64_t value = (uint64_t)difference;
+        /* Fixed-width DATA is bit-modular, unlike a signed relocation
+         * addend.  This is S+A-P modulo 2^64, with no signed overflow. */
+        uint64_t value = target->value + (uint64_t)addend - relocation_offset;
         unsigned char bytes[8];
         unsigned int i;
 
@@ -1504,9 +1511,7 @@ static bool emit_symbol_minus_dot_divided(
     if (divisor == 0U || divisor > (uint64_t)INT64_MAX ||
         !target->defined ||
         target->section != stmt->section ||
-        target->subsection != stmt->subsection ||
-        target->value > (uint64_t)INT64_MAX ||
-        relocation_offset > (uint64_t)INT64_MAX) {
+        target->subsection != stmt->subsection) {
         minias_set_error(as,
                          "unsupported-divided-symbol-difference:%s/%llu:line=%zu",
                          target->name,
@@ -1514,8 +1519,13 @@ static bool emit_symbol_minus_dot_divided(
                          stmt->line);
         return false;
     }
-    difference = (int64_t)target->value + addend -
-                 (int64_t)relocation_offset;
+    /* GNU GAS performs section-difference arithmetic in a 64-bit modular
+     * value domain BEFORE interpreting a division as signed.  In particular
+     * S+INT64_MAX-P may wrap while the source still assembles.  Computing
+     * this as signed C arithmetic invokes undefined behavior; computing it
+     * with checked int64_t arithmetic would reject legal GNU sources. */
+    difference=signed_from_bits(target->value+(uint64_t)addend-
+                                relocation_offset);
     quotient = difference / (int64_t)divisor;
     bits = (uint64_t)quotient;
     for (i = 0U; i < width; ++i) {
@@ -1579,12 +1589,14 @@ static bool emit_symbol_difference(MiniAs *as,
             as->target->dot_relative_fixup:MINIAS_FIXUP_PREL64;
         if(kind!=MINIAS_FIXUP_NONE &&
            target_supports_fixup(as,kind,width)) {
-            uint64_t delta=relocation_offset-rhs->value+
-                           (uint64_t)lhs_addend-
-                           (uint64_t)rhs_addend;
+            /* GNU RELA addends are signed presentations of modular 64-bit
+             * expression bits.  For example MAX-(-MAX) becomes -2; this
+             * exact value is present in GNU's R_X86_64_PC64 record. */
+            int64_t delta=signed_from_bits(relocation_offset-rhs->value+
+                               (uint64_t)lhs_addend-(uint64_t)rhs_addend);
             return minias_section_append_zero(as,stmt->section,width) &&
                    minias_add_fixup_symbol_id(as,stmt->section,relocation_offset,
-                                              kind,width,lhs_index,(int64_t)delta);
+                                              kind,width,lhs_index,delta);
         }
     }
     if (!can_add || !can_sub) {
@@ -1618,7 +1630,8 @@ static bool emit_symbol_difference_divided(MiniAs *as,
         bool arithmetic_shift) {
     const MiniAsSymbol *lhs=&as->symbols[lhs_index];
     const MiniAsSymbol *rhs=&as->symbols[rhs_index];
-    int64_t left,right,diff,quotient;
+    int64_t diff;
+    uint64_t result_bits;
     unsigned char bytes[8];
     unsigned i;
     /* A cross-section difference cannot be divided using an ELF fixup.
@@ -1626,16 +1639,15 @@ static bool emit_symbol_difference_divided(MiniAs *as,
     if(!lhs->defined || !rhs->defined ||
        lhs->section!=rhs->section ||
        (lhs->section<0 && lhs->section!=MINIAS_SECTION_ABS) ||
-       lhs->value>(uint64_t)INT64_MAX ||
-       rhs->value>(uint64_t)INT64_MAX ||
-       divisor==0U || divisor>(uint64_t)INT64_MAX ||
-       !minias_checked_add_i64((int64_t)lhs->value,lhs_addend,&left) ||
-       !minias_checked_add_i64((int64_t)rhs->value,rhs_addend,&right) ||
-       !checked_sub_i64(left,right,&diff)) {
+       divisor==0U || divisor>(uint64_t)INT64_MAX) {
         minias_set_error(as,"unsupported-divided-symbol-pair:line=%zu",
                          stmt->line);
         return false;
     }
+    /* Preserve GNU's explicit 64-bit two's-complement difference before
+     * either logical shift or signed division; no host signed overflow. */
+    diff=signed_from_bits(lhs->value+(uint64_t)lhs_addend-
+                          rhs->value-(uint64_t)rhs_addend);
     if(arithmetic_shift) {
         uint64_t shifted=(uint64_t)diff/divisor;
         if(width<8U &&
@@ -1645,10 +1657,10 @@ static bool emit_symbol_difference_divided(MiniAs *as,
                              stmt->line);
             return false;
         }
-        quotient=(int64_t)shifted;
-    }else quotient=diff/(int64_t)divisor;
+        result_bits=shifted;
+    }else result_bits=(uint64_t)(diff/(int64_t)divisor);
     for(i=0U;i<width;++i)
-        bytes[i]=(unsigned char)((uint64_t)quotient>>(8U*i));
+        bytes[i]=(unsigned char)(result_bits>>(8U*i));
     return minias_section_append(as,stmt->section,bytes,width);
 }
 

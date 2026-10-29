@@ -20,20 +20,47 @@ static bool riscv_emit_code_alignment(MiniAs *as,
                                      size_t size) {
     static const unsigned char nop32[] = {0x13U, 0x00U, 0x00U, 0x00U};
     static const unsigned char nop16[] = {0x01U, 0x00U};
-    static const unsigned char zeros[16] = {0U};
+    static const unsigned char zero = 0U;
+    const MiniAsRiscvState *state = MINIAS_RV_STATE(as);
+    const MiniAsStmt *owner;
+    bool allow_c;
 
+    if (!as->emitting_fragment || as->emitting_fragment_id >= as->stmt_count ||
+        state == NULL) {
+        minias_set_error(as, "internal:riscv-alignment-site-missing");
+        return false;
+    }
+    owner = &as->stmts[as->emitting_fragment_id];
+    /* GNU GAS treats .option norvc as a source-instruction compression mode.
+     * A prior C16 instruction can still leave a 2-byte gap which code
+     * alignment must fill with C.NOP after switching to norvc.  The ISA
+     * capability and ELF RVC flag are separate from that lexical mode. */
+    allow_c = (!state->isa_explicit ||
+               (state->isa_features & RISCV_ISA_C) != 0U);
+
+    /* GNU GAS riscv_make_nops emits one non-instruction zero byte for odd
+     * alignment, then (if needed) the single C.NOP BEFORE its 32-bit NOPs.
+     * Keeping that ordering also preserves exact .text bytes for 6B gaps. */
     if ((size & 1U) != 0U) {
-        /* A raw byte in .text (e.g. embedded alternatives/data) can leave
-         * an odd-sized alignment gap. No sequence of 16/32-bit RISC-V NOP
-         * encodings fills an odd byte count; retain the previous zero-byte
-         * fill for this non-instruction-shaped case, as GNU as does. */
-        while (size != 0U) {
-            size_t chunk = size > sizeof(zeros) ? sizeof(zeros) : size;
-            if (!minias_emit_instruction_bytes(as, section_index, zeros, chunk))
-                return false;
-            size -= chunk;
+        if (!minias_emit_instruction_bytes(as, section_index, &zero, 1U))
+            return false;
+        --size;
+    }
+    /* No 32-bit-only NOP sequence can represent a two-byte remainder.
+     * An explicit ISA without C must not silently gain a C instruction;
+     * a norvc source mode under a C-capable ISA may still use C.NOP padding
+     * according to GNU GAS's riscv_make_nops policy. */
+    if ((size & 2U) != 0U) {
+        if (!allow_c) {
+            minias_set_error(as,"riscv-alignment-requires-rvc:line=%zu",
+                             owner->line);
+            return false;
         }
-        return true;
+        if (!minias_emit_instruction_bytes(as, section_index,
+                                           nop16, sizeof(nop16)) ||
+            !minias_encode_add_elf_flags(as, 1U)) /* EF_RISCV_RVC */
+            return false;
+        size -= sizeof(nop16);
     }
     while (size >= sizeof(nop32)) {
         if (!minias_emit_instruction_bytes(as, section_index,
@@ -41,10 +68,6 @@ static bool riscv_emit_code_alignment(MiniAs *as,
             return false;
         }
         size -= sizeof(nop32);
-    }
-    if (size == sizeof(nop16)) {
-        return minias_emit_instruction_bytes(as, section_index,
-                                             nop16, sizeof(nop16));
     }
     return true;
 }

@@ -40,6 +40,8 @@ on:
       - 'tests/assembler/probe-x86-shared-condition-opcodes.sh'
       - 'tests/assembler/probe-x86-memory-encoding-layout.sh'
       - 'tests/assembler/probe-x86-register-width-and-high-byte-gnu.sh'
+      - 'tests/assembler/probe-x86-symbol-binding-fixups-gnu.sh'
+      - 'tests/assembler/probe-mcexpr-signed-overflow.sh'
       - 'tests/assembler/elf_semantic_compare.py'
       - 'tests/assembler/probe-x86-loong-base.sh'
       - 'tests/assembler/probe-mc-operand-lexer.sh'
@@ -148,6 +150,11 @@ jobs:
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-x86-memory-encoding-layout.sh
+      - name: GNU x86 same-section symbol binding and one memory Fixup policy
+        run: |
+          command -v as
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-x86-symbol-binding-fixups-gnu.sh
       - name: GNU x86 register width and legacy high-byte constraints
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
@@ -199,6 +206,11 @@ jobs:
             bash tests/assembler/probe-common-mcexpr-four-arch.sh
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=loongarch64 \
             bash tests/assembler/probe-common-mcexpr-four-arch.sh
+      - name: GNU x86 MCExpr signed wrap and ELF RELA addend parity
+        run: |
+          command -v as
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-mcexpr-signed-overflow.sh
       - name: GNU x86-64 and LoongArch64 one-pass INCBIN DATA
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=x86_64 \

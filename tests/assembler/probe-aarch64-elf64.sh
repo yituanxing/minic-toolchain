@@ -2839,3 +2839,75 @@ A64_SUBSECTION_ORIGIN
 cmp "$work/a64-subsection-origin-mini.bin" "$work/a64-subsection-origin-gnu.bin"
 test "$(wc -c < "$work/a64-subsection-origin-mini.bin")" -eq 8
 echo 'MINIAS_COMMON_SUBSECTION_BOUNDARY_A64=PASS GNU_zero_size_org_before_EOF_subsection1_inst'
+
+# The AArch64 TargetSpec -march route and source .arch route MUST share one
+# profile/extension parser.  Test real GNU GAS bytes under command-line-only
+# feature selection (no source .arch), then check source overrides and strict
+# rejection.  The old MiniAS CLI accepted only bare armv8-a although its
+# source parser could select armv8.5-a+memtag+crypto.
+profile_case=0
+while IFS='|' read -r profile instruction; do
+  profile_case=$((profile_case+1))
+  printf '.text\n%s\n' "$instruction" > "$work/a64-profile-$profile_case.s"
+  "$MINIAS" --target=aarch64 "-march=$profile" -mabi=lp64 \
+    -o "$work/a64-profile-$profile_case-mini.o" "$work/a64-profile-$profile_case.s"
+  "$AARCH64_AS" "-march=$profile" \
+    -o "$work/a64-profile-$profile_case-gnu.o" "$work/a64-profile-$profile_case.s"
+  "$AARCH64_OBJCOPY" -j .text -O binary \
+    "$work/a64-profile-$profile_case-mini.o" "$work/a64-profile-$profile_case-mini.bin"
+  "$AARCH64_OBJCOPY" -j .text -O binary \
+    "$work/a64-profile-$profile_case-gnu.o" "$work/a64-profile-$profile_case-gnu.bin"
+  cmp "$work/a64-profile-$profile_case-mini.bin" "$work/a64-profile-$profile_case-gnu.bin"
+done <<'A64_PROFILE_POSITIVE'
+armv8-a+lse|cas w0,w1,[x2]
+armv8-a+crypto|aese v0.16b,v1.16b
+armv8.5-a+memtag|stg x0,[x1]
+armv8.5-a+memtag+crypto|aese v2.16b,v3.16b
+A64_PROFILE_POSITIVE
+test "$profile_case" -eq 4
+
+# A source .arch is a complete profile declaration and deliberately resets
+# a stronger -march from the invocation. .arch_extension then mutates only
+# the current source profile. The two entrypoints must remain orthogonal.
+cat > "$work/a64-profile-source-override.s" <<'A64_PROFILE_OVERRIDE'
+.arch armv8-a
+.arch_extension lse
+.text
+cas w4,w5,[x6]
+.arch armv8.5-a+memtag
+stg x0,[x1]
+A64_PROFILE_OVERRIDE
+"$MINIAS" --target=aarch64 -march=armv8-a+crypto -mabi=lp64 \
+  -o "$work/a64-profile-override-mini.o" "$work/a64-profile-source-override.s"
+"$AARCH64_AS" -march=armv8-a+crypto \
+  -o "$work/a64-profile-override-gnu.o" "$work/a64-profile-source-override.s"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-profile-override-mini.o" \
+  "$work/a64-profile-override-mini.bin"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-profile-override-gnu.o" \
+  "$work/a64-profile-override-gnu.bin"
+cmp "$work/a64-profile-override-mini.bin" "$work/a64-profile-override-gnu.bin"
+
+printf '.arch armv8-a\n.text\ncas w0,w1,[x2]\n' > "$work/a64-profile-reset.s"
+if "$MINIAS" --target=aarch64 -march=armv8-a+lse \
+  -o "$work/a64-profile-reset-mini.o" "$work/a64-profile-reset.s" >/dev/null 2>&1; then
+  echo 'A64 source .arch failed to reset command-line LSE capability' >&2; exit 1
+fi
+if "$AARCH64_AS" -march=armv8-a+lse \
+  -o "$work/a64-profile-reset-gnu.o" "$work/a64-profile-reset.s" >/dev/null 2>&1; then
+  echo 'GNU A64 source .arch reset negative unexpectedly accepted' >&2; exit 1
+fi
+for invalid_profile in 'armv8-a+unknownfeature' 'armv8.5-a+memtag+badfeature'; do
+  if "$MINIAS" --target=aarch64 "-march=$invalid_profile" \
+    -o "$work/a64-profile-invalid-mini.o" "$work/a64-profile-1.s" >/dev/null 2>&1; then
+    echo "MiniAS A64 accepted invalid profile $invalid_profile" >&2; exit 1
+  fi
+  if "$AARCH64_AS" "-march=$invalid_profile" \
+    -o "$work/a64-profile-invalid-gnu.o" "$work/a64-profile-1.s" >/dev/null 2>&1; then
+    echo "GNU A64 unexpectedly accepted invalid profile $invalid_profile" >&2; exit 1
+  fi
+done
+if "$MINIAS" --target=aarch64 -march=armv8-a -mabi=ilp32 \
+  -o "$work/a64-profile-invalid-abi.o" "$work/a64-profile-1.s" >/dev/null 2>&1; then
+  echo 'MiniAS A64 accepted unsupported ILP32 ABI profile' >&2; exit 1
+fi
+echo 'MINIAS_A64_PROFILE_UNIFIED=PASS 4_commandline_GNU 1_source_override 1_source_reset 3_negative'

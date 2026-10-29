@@ -132,6 +132,69 @@ if "$have_gnu"; then
     fi
 fi
 
+# A CSR zimm is an encoded five-bit constant, not an integer register.
+# RV32E must permit zimm=16..31 while continuing to reject x16..x31 in
+# the corresponding CSR register forms. Exercise all three immediate opcodes
+# and both full and zero-destination aliases through the same typed MC path.
+cat >"$work/csr-zimm.s" <<'SRC'
+.text
+csrrwi a0,mstatus,31
+csrrsi a1,mstatus,16
+csrrci a2,mstatus,17
+csrwi mscratch,31
+csrsi mscratch,16
+csrci mscratch,17
+SRC
+"$MINIAS" --target=riscv -march=rv32e_zicsr -mabi=ilp32e \
+    -o "$work/csr-zimm.o" "$work/csr-zimm.s"
+python3 - "$work/csr-zimm.o" <<'PY'
+import re
+import struct
+import subprocess
+import sys
+
+text = subprocess.check_output(['readelf', '-x', '.text', sys.argv[1]], text=True)
+payload = bytearray()
+for line in text.splitlines():
+    match = re.match(r'^\s*0x[0-9a-fA-F]+\s+(.+)$', line)
+    if match:
+        for cell in match.group(1).split():
+            if not re.fullmatch(r'(?:[0-9a-fA-F]{2}){1,4}', cell):
+                break
+            payload.extend(bytes.fromhex(cell))
+expected = bytearray()
+for funct3, rd, zimm, csr in [
+    (5, 10, 31, 0x300), (6, 11, 16, 0x300),
+    (7, 12, 17, 0x300), (5, 0, 31, 0x340),
+    (6, 0, 16, 0x340), (7, 0, 17, 0x340)
+]:
+    expected.extend(struct.pack('<I', 0x73 | (rd << 7) | (funct3 << 12) |
+                                (zimm << 15) | (csr << 20)))
+assert payload == expected, (payload.hex(), expected.hex())
+PY
+for instruction in \
+    'csrwi mscratch,32' \
+    'csrsi mscratch,-1' \
+    'csrrwi a0,mstatus,32' \
+    'csrrci a6,mstatus,31'; do
+    printf '.text\n%s\n' "$instruction" >"$work/csr-zimm-bad.s"
+    if "$MINIAS" --target=riscv -march=rv32e_zicsr -mabi=ilp32e \
+        -o "$work/csr-zimm-bad.o" "$work/csr-zimm-bad.s" \
+        >"$work/csr-zimm-bad.out" 2>"$work/csr-zimm-bad.err"; then
+        echo "RV32E incorrectly accepted CSR immediate/register: $instruction" >&2
+        exit 1
+    fi
+done
+if "$have_gnu" && command -v riscv64-linux-gnu-objcopy >/dev/null; then
+    riscv64-linux-gnu-as -march=rv32e_zicsr -mabi=ilp32e \
+        -o "$work/csr-zimm.gnu.o" "$work/csr-zimm.s"
+    riscv64-linux-gnu-objcopy -O binary --only-section=.text \
+        "$work/csr-zimm.o" "$work/csr-zimm.text"
+    riscv64-linux-gnu-objcopy -O binary --only-section=.text \
+        "$work/csr-zimm.gnu.o" "$work/csr-zimm.gnu.text"
+    cmp "$work/csr-zimm.text" "$work/csr-zimm.gnu.text"
+fi
+
 # Use GNU GAS as byte-level oracle where a RISC-V cross-assembler exists.
 if "$have_gnu" && command -v riscv64-linux-gnu-objcopy >/dev/null; then
     riscv64-linux-gnu-as -march=rv32e -mabi=ilp32e \
@@ -141,7 +204,7 @@ if "$have_gnu" && command -v riscv64-linux-gnu-objcopy >/dev/null; then
     riscv64-linux-gnu-objcopy -O binary --only-section=.text \
         "$work/symbols.gnu.o" "$work/symbols.gnu.text"
     cmp "$work/symbols.text" "$work/symbols.gnu.text"
-    echo 'MINIAS_RV32E_TYPED_REGISTERS=PASS GNU_bytes=equal symbols=3 negatives=10'
+    echo 'MINIAS_RV32E_TYPED_REGISTERS=PASS GNU_bytes=equal symbols=3 negatives=10 csr_zimm=6 csr_zimm_rejected=4'
 else
-    echo 'MINIAS_RV32E_TYPED_REGISTERS=PASS GNU_bytes=SKIP(no-cross-tools) symbols=3 negatives=10'
+    echo 'MINIAS_RV32E_TYPED_REGISTERS=PASS GNU_bytes=SKIP(no-cross-tools) symbols=3 negatives=10 csr_zimm=6 csr_zimm_rejected=4'
 fi

@@ -102,6 +102,147 @@ if "$MINIAS" -march=rv64gc -mabi=lp64d \
 fi
 grep -q 'disabled-riscv-compressed' "$work/invalid.stderr"
 
+# Executable alignment is also a Target-site instruction decision.  A
+# two-byte gap can be filled with C.NOP whenever the ISA supports C, even
+# after .option norvc disabled new source-instruction compression. GNU GAS
+# riscv_make_nops retains this distinction; ELF must advertise actual RVC.
+cat >"$work/alignment-rvc.s" <<'EOF_RV'
+.text
+.option rvc
+c.li a0,1
+.option norelax
+.p2align 3
+lui a0,0x12345
+EOF_RV
+"$MINIAS" -march=rv64gc -mabi=lp64d \
+    -o "$work/alignment-rvc.o" "$work/alignment-rvc.s"
+
+cat >"$work/alignment-norvc.s" <<'EOF_RV'
+.text
+.option rvc
+c.li a0,1
+.option norvc
+.option norelax
+.p2align 3
+lui a0,0x12345
+EOF_RV
+"$MINIAS" -march=rv64gc -mabi=lp64d \
+    -o "$work/alignment-norvc.o" "$work/alignment-norvc.s"
+
+# With no explicit -march, alignment itself may be the only C16 producer.
+# A raw two-byte prefix is legal in legacy assembly; the resulting C.NOP
+# must update ELF e_flags rather than relying on an earlier c.li.
+cat >"$work/alignment-only.s" <<'EOF_RV'
+.text
+.byte 0,0
+.option norelax
+.p2align 3
+lui a0,0x12345
+EOF_RV
+"$MINIAS" -mabi=lp64 -o "$work/alignment-only.o" \
+    "$work/alignment-only.s"
+
+cat >"$work/alignment-odd.s" <<'EOF_RV'
+.text
+.byte 0
+.option norelax
+.p2align 2
+lui a0,0x12345
+EOF_RV
+"$MINIAS" -mabi=lp64 -o "$work/alignment-odd.o" \
+    "$work/alignment-odd.s"
+
+cat >"$work/alignment-gap2.s" <<'EOF_RV'
+.text
+.byte 0,0
+.option norelax
+.p2align 2
+lui a0,0x12345
+EOF_RV
+"$MINIAS" -mabi=lp64 -o "$work/alignment-gap2.o" \
+    "$work/alignment-gap2.s"
+
+cat >"$work/alignment-gap4.s" <<'EOF_RV'
+.text
+.byte 0,0,0,0
+.option norelax
+.p2align 3
+lui a0,0x12345
+EOF_RV
+"$MINIAS" -mabi=lp64 -o "$work/alignment-gap4.o" \
+    "$work/alignment-gap4.s"
+
+for mode in rvc norvc only; do
+    python3 - "$work/alignment-$mode.o" <<'PY'
+import re
+import subprocess
+import sys
+dump = subprocess.check_output(['readelf', '-x', '.text', sys.argv[1]], text=True)
+payload = bytearray()
+for line in dump.splitlines():
+    match = re.match(r'^\s*0x[0-9a-fA-F]+\s+(.+)$', line)
+    if match:
+        for cell in match.group(1).split():
+            if not re.fullmatch(r'(?:[0-9a-fA-F]{2}){1,4}', cell):
+                break
+            payload.extend(bytes.fromhex(cell))
+assert len(payload) == 12 and payload[2:8] == b'\x01\x00\x13\x00\x00\x00', payload.hex()
+PY
+    readelf -h "$work/alignment-$mode.o" | grep -Eq 'Flags:.*RVC'
+done
+python3 - "$work/alignment-odd.o" <<'PY'
+import re
+import subprocess
+import sys
+dump = subprocess.check_output(['readelf', '-x', '.text', sys.argv[1]], text=True)
+payload = bytearray()
+for line in dump.splitlines():
+    match = re.match(r'^\s*0x[0-9a-fA-F]+\s+(.+)$', line)
+    if match:
+        for cell in match.group(1).split():
+            if not re.fullmatch(r'(?:[0-9a-fA-F]{2}){1,4}', cell):
+                break
+            payload.extend(bytes.fromhex(cell))
+assert len(payload) == 8 and payload[:4] == b'\x00\x00\x01\x00', payload.hex()
+PY
+readelf -h "$work/alignment-odd.o" | grep -Eq 'Flags:.*RVC'
+python3 - "$work/alignment-gap2.o" "$work/alignment-gap4.o" <<'PY'
+import re
+import subprocess
+import sys
+def payload(path):
+    dump = subprocess.check_output(['readelf', '-x', '.text', path], text=True)
+    data = bytearray()
+    for line in dump.splitlines():
+        match = re.match(r'^\s*0x[0-9a-fA-F]+\s+(.+)$', line)
+        if match:
+            for cell in match.group(1).split():
+                if not re.fullmatch(r'(?:[0-9a-fA-F]{2}){1,4}', cell):
+                    break
+                data.extend(bytes.fromhex(cell))
+    return bytes(data)
+assert payload(sys.argv[1])[:4] == b'\x00\x00\x01\x00'
+assert payload(sys.argv[2])[:8] == b'\x00\x00\x00\x00\x13\x00\x00\x00'
+PY
+readelf -h "$work/alignment-gap2.o" | grep -Eq 'Flags:.*RVC'
+if readelf -h "$work/alignment-gap4.o" | grep -Eq 'Flags:.*RVC'; then
+    echo 'Four-byte-only NOP alignment falsely advertised RVC' >&2
+    exit 1
+fi
+
+if command -v riscv64-linux-gnu-as >/dev/null 2>&1 &&
+   command -v riscv64-linux-gnu-objcopy >/dev/null 2>&1; then
+    for mode in rvc norvc odd gap2 gap4; do
+        riscv64-linux-gnu-as -march=rv64gc -mabi=lp64d \
+            -o "$work/alignment-$mode.gnu.o" "$work/alignment-$mode.s"
+        riscv64-linux-gnu-objcopy -O binary --only-section=.text \
+            "$work/alignment-$mode.o" "$work/alignment-$mode.text"
+        riscv64-linux-gnu-objcopy -O binary --only-section=.text \
+            "$work/alignment-$mode.gnu.o" "$work/alignment-$mode.gnu.text"
+        cmp "$work/alignment-$mode.text" "$work/alignment-$mode.gnu.text"
+    done
+fi
+
 if command -v riscv64-linux-gnu-as >/dev/null 2>&1; then
     riscv64-linux-gnu-as -march=rv64gc -mabi=lp64d \
         -o "$work/gnu.o" "$work/restored.s"
@@ -134,4 +275,4 @@ PY
 else
     echo 'MINIAS_RV_OPTION_RVC=PASS GNU_NOT_AVAILABLE'
 fi
-echo 'MINIAS_RV_OPTION_RVC profiles=3 blocked=6 compressed_elf_flags=3'
+echo 'MINIAS_RV_OPTION_RVC profiles=3 blocked=6 compressed_elf_flags=8 alignment=2,3,4,6'

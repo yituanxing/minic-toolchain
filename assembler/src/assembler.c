@@ -14,6 +14,9 @@ static bool validate_user_source_private_marker(MiniAs *as,
 static void source_graph_record_condition(MiniAs *as,
                                           MiniAsStableSiteId owner,
                                           bool active);
+static bool source_graph_lookup_forced_branch(MiniAs *as,
+                                              const MiniAsStmt *stmt,
+                                              bool *forced);
 
 bool minias_grow_array(void **ptr, size_t *capacity, size_t elem_size, size_t need) {
     size_t next;
@@ -872,12 +875,35 @@ bool minias_code_alignment_preceded_by_adjacent_data(const MiniAs *as,
            previous->offset+previous->size==owner->offset;
 }
 
+/* This is the one storage-capacity owner for materialized Section data.
+ * Fragment emitters may append a byte sequence, a large repeated fill, or
+ * a fixed-width pattern; they must not re-enter the growth policy once per
+ * source element.  NOBITS is handled by each caller's semantic contract. */
+static bool minias_section_reserve(MiniAs *as,MiniAsSection *sec,size_t need) {
+    size_t next;
+    unsigned char *p;
+    if(need<=sec->capacity)return true;
+    next=sec->capacity==0U?64U:sec->capacity;
+    while(next<need) {
+        if(next>SIZE_MAX/2U) {
+            minias_set_error(as,"section-capacity-overflow:%s",sec->name);
+            return false;
+        }
+        next*=2U;
+    }
+    p=realloc(sec->data,next);
+    if(p==NULL) {
+        minias_set_error(as,"out-of-memory:section-data");
+        return false;
+    }
+    sec->data=p;
+    sec->capacity=next;
+    return true;
+}
+
 bool minias_section_append(MiniAs *as, int section_index, const void *data, size_t size) {
     MiniAsSection *sec;
     size_t need;
-    size_t next;
-    unsigned char *p;
-
     if (section_index < 0 || (size_t)section_index >= as->section_count) {
         minias_set_error(as, "internal:bad-section");
         return false;
@@ -913,22 +939,7 @@ bool minias_section_append(MiniAs *as, int section_index, const void *data, size
         return false;
     }
     need = sec->size + size;
-    if (need > sec->capacity) {
-        next = sec->capacity == 0U ? 64U : sec->capacity;
-        while (next < need) {
-            if (next > SIZE_MAX / 2U) {
-                return false;
-            }
-            next *= 2U;
-        }
-        p = realloc(sec->data, next);
-        if (p == NULL) {
-            minias_set_error(as, "out-of-memory:section-data");
-            return false;
-        }
-        sec->data = p;
-        sec->capacity = next;
-    }
+    if(!minias_section_reserve(as,sec,need))return false;
     if (size != 0U) {
         memcpy(sec->data + sec->size, data, size);
     }
@@ -936,31 +947,43 @@ bool minias_section_append(MiniAs *as, int section_index, const void *data, size
     return true;
 }
 
-bool minias_section_append_zero(MiniAs *as, int section_index, size_t size) {
-    static const unsigned char zeros[64] = {0};
-
-    /* SHT_NOBITS has no payload: a zero-fill is just a checked size
-     * increment, NOT millions of 64-byte copy/validation iterations. */
+/* The same append-size and allocation invariants apply to zero and nonzero
+ * fills.  GNU .space/.skip ignores the nonzero fill in SHT_NOBITS, whereas
+ * a literal DATA/.fill element must not quietly discard nonzero bytes. */
+static bool minias_section_append_fill(MiniAs *as,int section_index,
+                                        size_t size,uint8_t fill,
+                                        bool ignore_nobits_fill) {
+    MiniAsSection *sec;
+    size_t need;
     if(section_index<0 || (size_t)section_index>=as->section_count) {
         minias_set_error(as,"internal:bad-section");return false;
     }
-    if(as->sections[(size_t)section_index].type==MINIAS_SHT_NOBITS) {
-        MiniAsSection *sec=&as->sections[(size_t)section_index];
-        if(size>SIZE_MAX-sec->size) {
-            minias_set_error(as,"section-size-overflow:%s",sec->name);
+    sec=&as->sections[(size_t)section_index];
+    if(as->capture_instruction_bytes) {
+        minias_set_error(as,"target-bypassed-mc-code-emitter");
+        return false;
+    }
+    if(size>SIZE_MAX-sec->size) {
+        minias_set_error(as,"section-size-overflow:%s",sec->name);
+        return false;
+    }
+    if(sec->type==MINIAS_SHT_NOBITS) {
+        if(fill!=0U && !ignore_nobits_fill) {
+            minias_set_error(as,"nobits-nonzero-data:%s",sec->name);
             return false;
         }
         sec->size+=size;
         return true;
     }
-    while (size > 0U) {
-        size_t chunk = size > sizeof(zeros) ? sizeof(zeros) : size;
-        if (!minias_section_append(as, section_index, zeros, chunk)) {
-            return false;
-        }
-        size -= chunk;
-    }
+    need=sec->size+size;
+    if(!minias_section_reserve(as,sec,need))return false;
+    if(size!=0U)memset(sec->data+sec->size,(int)fill,size);
+    sec->size=need;
     return true;
+}
+
+bool minias_section_append_zero(MiniAs *as,int section_index,size_t size) {
+    return minias_section_append_fill(as,section_index,size,0U,false);
 }
 
 static void minias_init_for_target(MiniAs *as,
@@ -2685,17 +2708,54 @@ static bool capture_incbin(MiniAs *as,const char *args,size_t line,
  * arithmetic and already-resolved local differences via the existing
  * Common parser. Do not fabricate sizes for forward/relocatable symbols. */
 static bool emit_common_space(MiniAs *as,int section,size_t total,uint8_t fill) {
-    unsigned char bytes[256];
-    /* GNU ignores .space/.skip/.zero and alignment fill values in NOBITS,
-     * whereas .byte/.fill/.incbin real nonzero bytes must be rejected. */
-    if(as->sections[(size_t)section].type==MINIAS_SHT_NOBITS ||
-       fill==0U)return minias_section_append_zero(as,section,total);
-    memset(bytes,(int)fill,sizeof(bytes));
-    while(total!=0U) {
-        size_t chunk=total<sizeof(bytes)?total:sizeof(bytes);
-        if(!minias_section_append(as,section,bytes,chunk))return false;
-        total-=chunk;
+    /* Unlike raw .fill, GNU ignores nonzero .space/.skip in SHT_NOBITS.
+     * One checked capacity reservation + memset replaces thousands of
+     * 256-byte Section appends for large source-generated padding. */
+    return minias_section_append_fill(as,section,total,fill,true);
+}
+
+static bool emit_common_pattern(MiniAs *as,int section,
+                                const unsigned char *element,
+                                size_t width,size_t repeat) {
+    MiniAsSection *sec;
+    size_t bytes,filled;
+    unsigned char *output;
+    size_t i;
+    if(section<0 || (size_t)section>=as->section_count ||
+       width==0U || width>8U || repeat>SIZE_MAX/width ||
+       as->capture_instruction_bytes) {
+        minias_set_error(as,"invalid-data-pattern");
+        return false;
     }
+    sec=&as->sections[(size_t)section];
+    bytes=width*repeat;
+    if(bytes>SIZE_MAX-sec->size) {
+        minias_set_error(as,"section-size-overflow:%s",sec->name);
+        return false;
+    }
+    if(sec->type==MINIAS_SHT_NOBITS) {
+        for(i=0U;i<width;++i)
+            if(element[i]!=0U) {
+                minias_set_error(as,"nobits-nonzero-data:%s",sec->name);
+                return false;
+            }
+        sec->size+=bytes;
+        return true;
+    }
+    if(!minias_section_reserve(as,sec,sec->size+bytes))return false;
+    if(bytes!=0U) {
+        output=sec->data+sec->size;
+        /* A short seed can be doubled with non-overlapping copies. The
+         * number of memcpy calls is logarithmic rather than O(repeat). */
+        memcpy(output,element,width);
+        filled=width;
+        while(filled<bytes) {
+            size_t chunk=filled<bytes-filled?filled:bytes-filled;
+            memcpy(output+filled,output,chunk);
+            filled+=chunk;
+        }
+    }
+    sec->size+=bytes;
     return true;
 }
 
@@ -3105,7 +3165,6 @@ static bool emit_data_stmt(MiniAs *as, const MiniAsStmt *stmt) {
     case MINIAS_FRAGMENT_FILL: {
         uint64_t repeat=stmt->variable_repeat;
         uint64_t value=stmt->variable_value;
-        uint64_t i;
         unsigned width_bytes=stmt->variable_element_width,j;
         unsigned char element[8];
         if(!stmt->variable_data_resolved || width_bytes>8U ||
@@ -3119,10 +3178,8 @@ static bool emit_data_stmt(MiniAs *as, const MiniAsStmt *stmt) {
         if(width_bytes==0U)return stmt->size==0U;
         for(j=0U;j<width_bytes;++j)
             element[j]=(unsigned char)(value>>(8U*j));
-        for(i=0U;i<repeat;++i)
-            if(!minias_section_append(as,stmt->section,element,width_bytes))
-                return false;
-        return true;
+        return emit_common_pattern(as,stmt->section,element,width_bytes,
+                                   (size_t)repeat);
     }
     case MINIAS_FRAGMENT_BYTES:
         if(stmt->static_data_size!=stmt->size ||
@@ -4233,7 +4290,14 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
             free(rewritten_args);
             return false;
         }
-        if (minias_force_long_branch_for_stmt(as, statement_id)) {
+        bool forced=false;
+        if(!source_graph_lookup_forced_branch(as,
+                                              &as->stmts[statement_id],
+                                              &forced)) {
+            free(rewritten_args);
+            return false;
+        }
+        if (forced) {
             MiniAsTargetRelaxPlan plan;
             /* Forced-long source replay consults the very same retained
              * MCInst alternative plan as the later MCLayout fixed point.
@@ -4297,7 +4361,33 @@ typedef struct MiniAsSourceSiteEntry {
     size_t last_condition_pass;
     MiniAsStableSiteId last_condition_owner;
     bool last_condition_active;
+    /* Zero means that this lexical/expansion site has no forced branch.
+     * The index is stable across complete semantic replays; a pass-local
+     * Fragment ordinal is never persisted in this registry. */
+    size_t forced_branch_index;
 } MiniAsSourceSiteEntry;
+
+/* The source site identifies one expanded instruction, while this retained
+ * shape prevents a branch from being accidentally attached to a different
+ * instruction after a .if/.elseif changes the emitted Fragment topology.
+ * All fields here are semantic parse-time values, never an output offset. */
+typedef struct MiniAsForcedOperandShape {
+    MiniAsMCOperandKind kind;
+    MiniAsMCRegisterClass reg_class;
+    uint16_t target_reg_bank;
+    unsigned reg;
+    bool register_64;
+} MiniAsForcedOperandShape;
+
+typedef struct MiniAsForcedBranchSite {
+    MiniAsStableSiteId source_site;
+    char *op;
+    uint32_t opcode;
+    uint32_t target_form;
+    uint32_t mode_bits;
+    unsigned operand_count;
+    MiniAsForcedOperandShape *operands;
+} MiniAsForcedBranchSite;
 
 typedef struct MiniAsSourceFrame {
     MiniAsSourceFrameKind kind;
@@ -4322,9 +4412,9 @@ struct MiniAsSourceGraph {
     size_t parse_passes;
     size_t conditional_changes;
     size_t ordinal_drifts;
-    MiniAsStableSiteId *forced_sites;
-    size_t forced_site_count;
-    size_t forced_site_capacity;
+    MiniAsForcedBranchSite *forced_branches;
+    size_t forced_branch_count;
+    size_t forced_branch_capacity;
 };
 
 static void destroy_source_lines(MiniAsSourceLine *lines, size_t count);
@@ -4459,48 +4549,222 @@ static void source_graph_record_condition(MiniAs *as,
 }
 
 static void source_graph_destroy(MiniAsSourceGraph *graph) {
+    size_t i;
     if(graph==NULL)return;
     destroy_source_lines(graph->physical.lines,graph->physical.count);
     free(graph->sites);
     free(graph->site_slots);
-    free(graph->forced_sites);
+    for(i=0U;i<graph->forced_branch_count;++i) {
+        free(graph->forced_branches[i].op);
+        free(graph->forced_branches[i].operands);
+    }
+    free(graph->forced_branches);
     memset(graph,0,sizeof(*graph));
 }
 
-/* The old cross-replay long-branch list still owns statement ordinals in
- * E1. The persistent source registry independently checks whether those
- * ordinals refer to the same expanded statement after fresh parsing. A
- * divergent conditional topology is observed, never silently re-keyed. */
-static void source_graph_compare_forced_sites(MiniAs *as) {
-    MiniAsSourceGraph *graph=as->source_graph;
-    size_t i;
-    if(graph==NULL)return;
-    for(i=0U;i<graph->forced_site_count;++i) {
-        size_t id=i<as->forced_long_branch_count ?
-            as->forced_long_branch_ids[i] : SIZE_MAX;
-        if(id>=as->stmt_count ||
-           graph->forced_sites[i]==MINIAS_SITE_NONE ||
-           as->stmts[id].source_site!=graph->forced_sites[i])
-            ++graph->ordinal_drifts;
+static bool source_graph_forced_shape_matches(
+                           const MiniAsForcedBranchSite *saved,
+                           const MiniAsStmt *stmt) {
+    const MiniAsMCInst *inst=stmt->mcinst;
+    unsigned i;
+    if(stmt->fragment_kind!=MINIAS_FRAGMENT_INSTRUCTION || inst==NULL ||
+       stmt->source_site!=saved->source_site ||
+       strcmp(stmt->op,saved->op)!=0 ||
+       inst->opcode!=saved->opcode ||
+       inst->target_form!=saved->target_form ||
+       stmt->site.mode_bits!=saved->mode_bits ||
+       inst->count>inst->capacity ||
+       inst->count!=saved->operand_count)return false;
+    /* Operand spelling is NOT a stable source identity. GNU 1f/1b refs
+     * become private generation names, while macro \@ counters can shift
+     * when an earlier conditional inserts a new macro expansion. The same
+     * lexical SourceSite and typed opcode/form/register classes remain
+     * stable; all symbol values are rebound by the fresh MC parser. */
+    for(i=0U;i<inst->count;++i) {
+        const MiniAsMCOperand *operand=&inst->operands[i];
+        const MiniAsForcedOperandShape *shape=&saved->operands[i];
+        if(operand->kind!=shape->kind ||
+           operand->reg_class!=shape->reg_class ||
+           operand->target_reg_bank!=shape->target_reg_bank ||
+           operand->reg!=shape->reg ||
+           operand->register_64!=shape->register_64)return false;
     }
+    return true;
 }
 
-static bool source_graph_capture_forced_sites(MiniAs *as,
-                                               const size_t *ids,
-                                               size_t count) {
+/* Parse-time branch growth has to consult the lexical identity, NOT the
+ * statement's position in a newly generated vector. A different instruction
+ * at the same site or a reused expansion identity is an error, even when its
+ * current branch size happens to match the previous pass. */
+static bool source_graph_lookup_forced_branch(MiniAs *as,
+                                              const MiniAsStmt *stmt,
+                                              bool *forced) {
+    MiniAsSourceGraph *graph=as->source_graph;
+    size_t encoded;
+    *forced=false;
+    if(graph==NULL)return true;
+    if(stmt->source_site==MINIAS_SITE_NONE ||
+       stmt->source_site>graph->site_count) {
+        minias_set_error(as,"invalid-branch-source-site");
+        return false;
+    }
+    encoded=graph->sites[stmt->source_site-1U].forced_branch_index;
+    if(encoded==0U)return true;
+    if(encoded>graph->forced_branch_count ||
+       !source_graph_forced_shape_matches(&graph->forced_branches[encoded-1U],
+                                         stmt)) {
+        ++graph->ordinal_drifts;
+        minias_set_error(as,"changed-forced-branch-shape:line=%zu",stmt->line);
+        return false;
+    }
+    *forced=true;
+    return true;
+}
+
+/* Rebind every retained source identity to a fresh, pass-local Fragment ID.
+ * One SourceSite may not ambiguously denote multiple machine instructions.
+ * Missing branches (e.g. a changed conditional arm) fail CLOSED rather than
+ * forcing an unrelated instruction that inherited its old ordinal. */
+static bool source_graph_rebind_forced_branches(MiniAs *as,
+                                                size_t **ids,
+                                                size_t *count,
+                                                size_t *capacity) {
+    MiniAsSourceGraph *graph=as->source_graph;
+    size_t *site_to_stmt;
+    size_t i;
+    if(graph==NULL || graph->forced_branch_count==0U) {
+        *count=0U;
+        return true;
+    }
+    if(graph->site_count==SIZE_MAX ||
+       graph->site_count+1U>SIZE_MAX/sizeof(*site_to_stmt)) {
+        minias_set_error(as,"forced-source-index-overflow");
+        return false;
+    }
+    site_to_stmt=calloc(graph->site_count+1U,sizeof(*site_to_stmt));
+    if(site_to_stmt==NULL) {
+        minias_set_error(as,"out-of-memory:forced-source-index");
+        return false;
+    }
+    for(i=0U;i<as->stmt_count;++i) {
+        const MiniAsStmt *stmt=&as->stmts[i];
+        size_t *slot;
+        if(stmt->fragment_kind!=MINIAS_FRAGMENT_INSTRUCTION)continue;
+        if(stmt->source_site==MINIAS_SITE_NONE ||
+           stmt->source_site>graph->site_count) {
+            minias_set_error(as,"invalid-source-instruction-site");
+            free(site_to_stmt);
+            return false;
+        }
+        slot=&site_to_stmt[stmt->source_site];
+        *slot=*slot==0U?i+1U:SIZE_MAX;
+    }
+    if(!minias_grow_array((void **)ids,capacity,sizeof(**ids),
+                          graph->forced_branch_count)) {
+        minias_set_error(as,"out-of-memory:rebound-branch-ids");
+        free(site_to_stmt);
+        return false;
+    }
+    for(i=0U;i<graph->forced_branch_count;++i) {
+        const MiniAsForcedBranchSite *saved=&graph->forced_branches[i];
+        size_t entry=saved->source_site<=graph->site_count ?
+            site_to_stmt[saved->source_site] : 0U;
+        if(entry==0U || entry==SIZE_MAX ||
+           !source_graph_forced_shape_matches(saved,&as->stmts[entry-1U])) {
+            ++graph->ordinal_drifts;
+            minias_set_error(as,"lost-or-ambiguous-forced-source-site:%zu",
+                             (size_t)saved->source_site);
+            free(site_to_stmt);
+            return false;
+        }
+        (*ids)[i]=entry-1U;
+    }
+    free(site_to_stmt);
+    *count=graph->forced_branch_count;
+    return true;
+}
+
+static bool source_graph_capture_forced_branches(MiniAs *as,
+                                                 const size_t *ids,
+                                                 size_t count) {
     MiniAsSourceGraph *graph=as->source_graph;
     size_t i;
     if(graph==NULL)return true;
-    if(!minias_grow_array((void **)&graph->forced_sites,
-                          &graph->forced_site_capacity,
-                          sizeof(*graph->forced_sites),count)) {
-        minias_set_error(as,"out-of-memory:source-branch-sites");
+    if(count<graph->forced_branch_count) {
+        minias_set_error(as,"lost-forced-branch-after-layout");
         return false;
     }
-    for(i=0U;i<count;++i)
-        graph->forced_sites[i]=ids[i]<as->stmt_count ?
-            as->stmts[ids[i]].source_site : MINIAS_SITE_NONE;
-    graph->forced_site_count=count;
+    if(!minias_grow_array((void **)&graph->forced_branches,
+                          &graph->forced_branch_capacity,
+                          sizeof(*graph->forced_branches),count)) {
+        minias_set_error(as,"out-of-memory:forced-source-sites");
+        return false;
+    }
+    for(i=0U;i<count;++i) {
+        const MiniAsStmt *stmt;
+        MiniAsForcedBranchSite *saved;
+        unsigned j;
+        if(ids[i]>=as->stmt_count ||
+           as->stmts[ids[i]].fragment_kind!=MINIAS_FRAGMENT_INSTRUCTION ||
+           as->stmts[ids[i]].mcinst==NULL ||
+           as->stmts[ids[i]].mcinst->count>
+               as->stmts[ids[i]].mcinst->capacity) {
+            minias_set_error(as,"invalid-forced-branch-fragment:%zu",ids[i]);
+            return false;
+        }
+        stmt=&as->stmts[ids[i]];
+        if(stmt->source_site==MINIAS_SITE_NONE ||
+           stmt->source_site>graph->site_count) {
+            minias_set_error(as,"invalid-forced-branch-source-site");
+            return false;
+        }
+        if(i<graph->forced_branch_count) {
+            if(!source_graph_forced_shape_matches(&graph->forced_branches[i],
+                                                  stmt)) {
+                ++graph->ordinal_drifts;
+                minias_set_error(as,"changed-forced-branch-order:line=%zu",
+                                 stmt->line);
+                return false;
+            }
+            continue;
+        }
+        if(graph->sites[stmt->source_site-1U].forced_branch_index!=0U) {
+            ++graph->ordinal_drifts;
+            minias_set_error(as,"ambiguous-forced-branch-source-site:line=%zu",
+                             stmt->line);
+            return false;
+        }
+        saved=&graph->forced_branches[graph->forced_branch_count];
+        memset(saved,0,sizeof(*saved));
+        saved->source_site=stmt->source_site;
+        saved->op=minias_strdup(stmt->op);
+        saved->opcode=stmt->mcinst->opcode;
+        saved->target_form=stmt->mcinst->target_form;
+        saved->mode_bits=stmt->site.mode_bits;
+        saved->operand_count=stmt->mcinst->count;
+        if(saved->operand_count!=0U) {
+            saved->operands=calloc(saved->operand_count,
+                                   sizeof(*saved->operands));
+        }
+        if(saved->op==NULL ||
+           (saved->operand_count!=0U && saved->operands==NULL)) {
+            free(saved->op);free(saved->operands);
+            memset(saved,0,sizeof(*saved));
+            minias_set_error(as,"out-of-memory:forced-branch-shape");
+            return false;
+        }
+        for(j=0U;j<saved->operand_count;++j) {
+            const MiniAsMCOperand *operand=&stmt->mcinst->operands[j];
+            MiniAsForcedOperandShape *shape=&saved->operands[j];
+            shape->kind=operand->kind;
+            shape->reg_class=operand->reg_class;
+            shape->target_reg_bank=operand->target_reg_bank;
+            shape->reg=operand->reg;
+            shape->register_64=operand->register_64;
+        }
+        graph->sites[stmt->source_site-1U].forced_branch_index=
+            ++graph->forced_branch_count;
+    }
     return true;
 }
 
@@ -6340,8 +6604,6 @@ int minias_assemble_config(const char *input_path,
                    as.error[0] == '\0') {
             minias_set_error(&as, "target-initialization-failed");
         }
-        as.forced_long_branch_ids = long_branch_ids;
-        as.forced_long_branch_count = long_branch_count;
         parsed=as.error[0]=='\0';
         if(parsed && !source_loaded) {
             parsed=collect_file_source_frame(&as,input_path,&graph.physical);
@@ -6351,14 +6613,25 @@ int minias_assemble_config(const char *input_path,
             }
         }
         if(parsed)parsed=parse_loaded_source_graph(&as,&graph);
-        if(parsed)source_graph_compare_forced_sites(&as);
+        if(parsed)parsed=source_graph_rebind_forced_branches(
+                &as,&long_branch_ids,&long_branch_count,
+                &long_branch_capacity);
         if(parsed && !minias_solve_fragment_layout(
               &as,&long_branch_ids,&long_branch_count,
               &long_branch_capacity,&added_long_branches,diagnostic))
             parsed=false;
         if(parsed && added_long_branches) {
-            parsed=source_graph_capture_forced_sites(&as,long_branch_ids,
-                                                     long_branch_count);
+            parsed=source_graph_capture_forced_branches(&as,long_branch_ids,
+                                                        long_branch_count);
+        }
+        if(parsed && added_long_branches) {
+            ++source_reparse_pass;
+            /* Even adversarial conditional/macro feedback cannot keep
+             * rebuilding whole semantic states without a finite bound. */
+            if(source_reparse_pass>1024U) {
+                minias_set_error(&as,"source-replay-nonconvergent");
+                parsed=false;
+            }
         }
         if(parsed && added_long_branches) {
             /* The successful pass prints reparse=0 because it is an in-place
@@ -6366,7 +6639,7 @@ int minias_assemble_config(const char *input_path,
              * here, without changing the protected .if/.set semantics. */
             if (diagnostic != NULL && getenv("MINIAS_TRACE_RELAYOUT") != NULL)
                 fprintf(diagnostic,"minias-source-reparse:pass=%zu\n",
-                        ++source_reparse_pass);
+                        source_reparse_pass);
             minias_destroy(&as);
             continue;
         }

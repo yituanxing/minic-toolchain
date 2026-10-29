@@ -12,6 +12,17 @@
 #define A64_FEATURE_CRC UINT32_C(0x40000000) /* ARM CRC extension */
 #define A64_FEATURE_CRYPTO UINT32_C(0x80000000) /* ARM AES/crypto extension */
 #define A64_FEATURE_MTE UINT32_C(0x08000000) /* ARM memtag extension */
+#define A64_KNOWN_FEATURES (A64_FEATURE_LSE|A64_FEATURE_TLBI_RANGE|\
+                            A64_FEATURE_CRC|A64_FEATURE_CRYPTO|A64_FEATURE_MTE)
+
+/* The command-line TargetSpec and GNU .arch directives are two entrypoints
+ * into one AArch64-private ISA profile parser.  The serialized spec is
+ * copied by value into AssemblyConfig, never borrowed from the CLI. */
+enum { A64_ARCH_V8_0 = 80U, A64_ARCH_V8_5 = 85U };
+typedef struct A64ProfileData {
+    uint32_t arch_revision;
+    uint32_t features;
+} A64ProfileData;
 
 /*
  * First non-RISC-V MiniAS vertical slice.
@@ -66,6 +77,7 @@ typedef struct A64AliasState {
  * while every A64 parse site observes the same independent feature state.
  * Common has no ISA feature bits and never interprets this registry. */
 typedef struct A64TargetState {
+    uint32_t arch_revision;
     uint32_t features;
     A64AliasState *aliases;
 } A64TargetState;
@@ -78,12 +90,31 @@ static uint32_t a64_features(const MiniAs *as) {
 static bool a64_init_target_state(MiniAs *as,
                                   const MiniAsAssemblyConfig *config) {
     A64TargetState *st;
-    (void)config;
+    A64ProfileData profile={A64_ARCH_V8_0,0U};
+    if(config && config->target_profile_size!=0U) {
+        if(config->target_profile_size!=sizeof(profile)) {
+            minias_set_error(as,"invalid-aarch64-target-profile-size");
+            return false;
+        }
+        memcpy(&profile,config->target_profile,sizeof(profile));
+        if((profile.arch_revision!=A64_ARCH_V8_0 &&
+            profile.arch_revision!=A64_ARCH_V8_5) ||
+           (profile.features&~A64_KNOWN_FEATURES)!=0U) {
+            minias_set_error(as,"invalid-aarch64-target-profile");
+            return false;
+        }
+    }
     st=calloc(1U,sizeof(*st));
     if(!st) {minias_set_error(as,"out-of-memory:aarch64-target-state");return false;}
-    st->features=0U; /* default armv8-a, extensions via Target directives */
+    st->arch_revision=profile.arch_revision;
+    st->features=profile.features;
     as->target_state=st;
     return true;
+}
+
+static void a64_capture_site_state(const MiniAs *as,
+                                   MiniAsTargetSiteState *site) {
+    site->mode_bits=a64_features(as);
 }
 
 static void a64_destroy_target_state(MiniAs *as) {
@@ -2177,25 +2208,34 @@ typedef struct A64BranchAdjustment {
 static bool a64_parse_deferred_difference(MiniAs *as,const char *source,
                                           MiniAsSymbolDifference *difference) {
     char *copy=minias_strdup(source),*body,*p,*split=NULL;
+    const char *first_subtraction;
     unsigned depth=0U;
     int64_t suffix=0;
     bool ok=false;
     if(!copy)return false;
     body=minias_expr_strip_outer_parens(minias_trim(copy));
+    first_subtraction=strchr(body,'-');
     for(p=body;*p;++p) {
         if(*p=='(')++depth;
         else if(*p==')') {
             if(!depth)goto done;
             --depth;
-        }else if(*p=='+' && depth==0U && strchr(body,'-') &&
-                 p>strchr(body,'-')) {
+        }else if((*p=='+' || *p=='-') && depth==0U &&
+                 first_subtraction && p>first_subtraction) {
+            /* A GNU source suffix is outside the subtraction:
+             * end-start-4 means (end-start)-4, NOT end-(start-4).
+             * Leaving -4 attached to the negative SymbolRef silently
+             * reverses the constant.  Keep only the symbol pair in the
+             * deferred DifferenceRef; Common evaluates this absolute
+             * arithmetic tail once at the lexical site. */
             split=p;break;
         }
     }
     if(split) {
-        *split++='\0';
-        if(!minias_evaluate_absolute_expression(as,minias_trim(split),&suffix))
-            goto done;
+        /* Keep the leading sign AND subsequent + / - operators in the
+         * absolute tail.  -4+5 must evaluate to +1, not -(4+5). */
+        if(!minias_evaluate_absolute_expression(as,split,&suffix))goto done;
+        *split='\0';
     }
     if(!minias_parse_symbol_difference(minias_trim(body),difference))goto done;
     if(!minias_checked_add_i64(difference->positive.addend,suffix,
@@ -4844,6 +4884,42 @@ static bool a64_set_isa_feature(uint32_t *bits,const char *name) {
     return true;
 }
 
+/* GNU -march= and .arch both declare a complete ISA profile. A subsequent
+ * .arch replaces the command-line selection; .arch_extension alone edits
+ * the current profile. Do not keep a second CLI allowlist that rejects an
+ * ISA already supported by the source directive or silently permits a
+ * capability the parser cannot validate. */
+static bool a64_parse_arch_profile(const char *name,A64ProfileData *profile) {
+    const char *plus;
+    size_t base_len;
+    A64ProfileData parsed;
+    if(!name || !*name || !profile)return false;
+    plus=strchr(name,'+');
+    base_len=plus?(size_t)(plus-name):strlen(name);
+    if(base_len==strlen("armv8-a") &&
+       strncmp(name,"armv8-a",base_len)==0) {
+        parsed.arch_revision=A64_ARCH_V8_0;
+        parsed.features=0U;
+    }else if(base_len==strlen("armv8.5-a") &&
+             strncmp(name,"armv8.5-a",base_len)==0) {
+        parsed.arch_revision=A64_ARCH_V8_5;
+        parsed.features=A64_FEATURE_LSE|A64_FEATURE_TLBI_RANGE|
+                        A64_FEATURE_CRC;
+    }else return false;
+    while(plus) {
+        char extension[32];
+        const char *start=plus+1U,*next=strchr(start,'+');
+        size_t len=next?(size_t)(next-start):strlen(start);
+        if(len==0U || len>=sizeof(extension))return false;
+        memcpy(extension,start,len);
+        extension[len]='\0';
+        if(!a64_set_isa_feature(&parsed.features,extension))return false;
+        plus=next;
+    }
+    *profile=parsed;
+    return true;
+}
+
 static bool directive(MiniAs *as, const char *op, const char *args,
                       size_t line, bool *handled) {
     A64TargetState *state=(A64TargetState *)as->target_state;
@@ -4911,41 +4987,12 @@ static bool directive(MiniAs *as, const char *op, const char *args,
     /* GCC emits .arch armv8-a before its first A64 instruction. Verify the
      * exact declared ISA here; never silently accept a richer architecture. */
     if (strcmp(op, ".arch") == 0) {
-        const char *plus=strchr(args,'+');
-        size_t base_len=plus?(size_t)(plus-args):strlen(args);
-        uint32_t bits=a64_features(as)&
-                      ~(A64_FEATURE_LSE|A64_FEATURE_TLBI_RANGE|
-                        A64_FEATURE_CRC|A64_FEATURE_CRYPTO|A64_FEATURE_MTE);
-        bool v85=base_len==strlen("armv8.5-a") &&
-                 strncmp(args,"armv8.5-a",base_len)==0;
-        bool v8=base_len==strlen("armv8-a") &&
-                strncmp(args,"armv8-a",base_len)==0;
+        A64ProfileData profile;
         *handled=true;
-        if(!v85 && !v8) {
+        if(!a64_parse_arch_profile(args,&profile)) {
             minias_set_error(as,"unsupported-aarch64-architecture:%s:line=%zu",
                              args,line);
             return false;
-        }
-        if(v85)bits|=A64_FEATURE_LSE|A64_FEATURE_TLBI_RANGE|
-                     A64_FEATURE_CRC;
-        while(plus) {
-            char name[32];
-            const char *start=plus+1U,*next=strchr(start,'+');
-            size_t width=next?(size_t)(next-start):strlen(start);
-            if(width==0U || width>=sizeof(name)) {
-                minias_set_error(as,
-                                 "unsupported-aarch64-architecture:%s:line=%zu",
-                                 args,line);
-                return false;
-            }
-            memcpy(name,start,width);name[width]='\0';
-            if(!a64_set_isa_feature(&bits,name)) {
-                minias_set_error(as,
-                                 "unsupported-aarch64-architecture:%s:line=%zu",
-                                 args,line);
-                return false;
-            }
-            plus=next;
         }
         /* Commit atomically only after ALL feature names were checked:
          * malformed trailing + and unknown extensions never widen ISA. */
@@ -4953,7 +5000,8 @@ static bool directive(MiniAs *as, const char *op, const char *args,
             minias_set_error(as,"missing-aarch64-target-state");
             return false;
         }
-        state->features=bits;
+        state->arch_revision=profile.arch_revision;
+        state->features=profile.features;
         return true;
     }
     if(!strcmp(op,".arch_extension")) {
@@ -5108,7 +5156,8 @@ static void attributes(const MiniAs *as, unsigned char elf_class,
 static bool aarch64_resolve_profile(const char *march, const char *mabi,
                                     MiniAsAssemblyConfig *config,
                                     char *error, size_t capacity) {
-    if ((march != NULL && strcmp(march, "armv8-a") != 0) ||
+    A64ProfileData profile;
+    if (!a64_parse_arch_profile(march?march:"armv8-a",&profile) ||
         (mabi != NULL && strcmp(mabi, "lp64") != 0)) {
         if (capacity != 0U) {
             (void)snprintf(error, capacity, "unsupported-aarch64-isa-abi");
@@ -5117,6 +5166,8 @@ static bool aarch64_resolve_profile(const char *march, const char *mabi,
     }
     memset(config, 0, sizeof(*config));
     config->target = minias_target_aarch64();
+    memcpy(config->target_profile,&profile,sizeof(profile));
+    config->target_profile_size=sizeof(profile);
     return true;
 }
 
@@ -5140,6 +5191,7 @@ static const MiniAsTargetOps ops = {
     .elf_machine = 183U, /* EM_AARCH64 */
     .parse_target_directive = directive,
     .init_target_state = a64_init_target_state,
+    .capture_site_state = a64_capture_site_state,
     .destroy_target_state = a64_destroy_target_state,
     .object_attributes = attributes,
     .name = "aarch64",

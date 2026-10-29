@@ -63,6 +63,53 @@ for instruction in "${rv32_legal[@]}"; do
     count=$((count + 1))
 done
 
+# Zbb rev8 has two ratified encodings: RV32 uses imm12=0x698,
+# RV64 uses imm12=0x6b8. Both forms have the same mnemonic, so XLEN is a
+# Target encoding decision rather than a source-spelling classification.
+printf '.text\nrev8 a0,a1\n' >"$work/rev8.s"
+for arch in rv32i_zbb rv64i_zbb; do
+    case "$arch" in
+        rv32i_zbb) abi=ilp32 ; expected=0x6985d513 ;;
+        rv64i_zbb) abi=lp64 ; expected=0x6b85d513 ;;
+    esac
+    "$MINIAS" "-march=$arch" "-mabi=$abi" \
+        -o "$work/$arch.o" "$work/rev8.s"
+    python3 - "$work/$arch.o" "$expected" <<'PY'
+import re
+import struct
+import subprocess
+import sys
+dump = subprocess.check_output(['readelf', '-x', '.text', sys.argv[1]], text=True)
+payload = bytearray()
+for line in dump.splitlines():
+    match = re.match(r'^\s*0x[0-9a-fA-F]+\s+(.+)$', line)
+    if match:
+        for cell in match.group(1).split():
+            if not re.fullmatch(r'(?:[0-9a-fA-F]{2}){1,4}', cell):
+                break
+            payload.extend(bytes.fromhex(cell))
+expected = struct.pack('<I', int(sys.argv[2], 0))
+assert payload == expected, (payload.hex(), expected.hex())
+PY
+    if command -v riscv64-linux-gnu-as >/dev/null 2>&1 &&
+       command -v riscv64-linux-gnu-objcopy >/dev/null 2>&1; then
+        riscv64-linux-gnu-as "-march=$arch" "-mabi=$abi" \
+            -o "$work/$arch.gnu.o" "$work/rev8.s"
+        riscv64-linux-gnu-objcopy -O binary --only-section=.text \
+            "$work/$arch.o" "$work/$arch.text"
+        riscv64-linux-gnu-objcopy -O binary --only-section=.text \
+            "$work/$arch.gnu.o" "$work/$arch.gnu.text"
+        cmp "$work/$arch.text" "$work/$arch.gnu.text"
+    fi
+done
+if "$MINIAS" -march=rv32i -mabi=ilp32 -o "$work/rev8-invalid.o" \
+    "$work/rev8.s" >"$work/rev8.out" 2>"$work/rev8.err"; then
+    echo 'RV32I without Zbb accepted rev8' >&2
+    exit 1
+fi
+grep -Eq 'unsupported-isa-feature|rv32i-unsupported-machine-encoding' \
+    "$work/rev8.err"
+
 # Every RV64-only form remains legal on the corresponding RV64G ABI.
 printf '.text\n' >"$work/rv64.s"
 printf '%s\n' "${rv64_only[@]}" >>"$work/rv64.s"
@@ -96,5 +143,5 @@ PY
 else
     echo 'MINIAS_RV32_XLEN_GUARD=PASS GNU_RV64_WORDS_NOT_AVAILABLE'
 fi
-printf 'MINIAS_RV32_XLEN_GUARD cases=%s rv64_legal=%s\n' \
+printf 'MINIAS_RV32_XLEN_GUARD cases=%s rv64_legal=%s rev8_xlen=2 rev8_no_zbb_rejected=1\n' \
        "$count" "${#rv64_only[@]}"

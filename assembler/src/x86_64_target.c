@@ -2160,7 +2160,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         /* One typed ELF sign-ext imm32 operand for C7 MOVQ and all
          * Group-1 32/64-bit immediate-to-memory instructions. */
         if(!numeric &&
-           (!strcmp(s->op,"movq") ||
+           (!strcmp(s->op,"movq") || !strcmp(s->op,"movl") ||
             (has_group && (s->op[strlen(s->op)-1U]=='q' ||
                            s->op[strlen(s->op)-1U]=='l'))) &&
            minias_parse_symbol_addend(src+1,&sym))is_sym=true;
@@ -3007,6 +3007,22 @@ typedef enum X64BranchDistanceKind {
     X64_BRANCH_LOCAL_OVERFLOW
 } X64BranchDistanceKind;
 
+/* Binding is part of the x86 ELF expression policy, not merely a property
+ * of the target's final address. GNU GAS keeps same-section GLOBAL CALL and
+ * RIP-relative references relocatable, and keeps WEAK branches relocatable
+ * as well: their definitions can be preempted by the final link. Ordinary
+ * strong GLOBAL JMP/Jcc retain GNU's same-section short-branch relaxation.
+ * Treat unknown/nonlocal bindings conservatively rather than silently
+ * fixing a potentially preemptible symbol to a private displacement. */
+static bool x64_can_resolve_same_section(const MiniAsSymbol *symbol,
+                                         const MiniAsStmt *stmt,
+                                         bool call_or_rip) {
+    if(symbol==NULL || !symbol->defined || symbol->section!=stmt->section)
+        return false;
+    if(symbol->bind==MINIAS_STB_LOCAL)return true;
+    return symbol->bind==MINIAS_STB_GLOBAL && !call_or_rip;
+}
+
 /* Resolve the final target displacement once for both the MC layout range
  * planner and emitter.  Internal addresses are ELF section offsets, and the
  * target ISA defines the PC base as the byte after the entire instruction.
@@ -3019,7 +3035,7 @@ static X64BranchDistanceKind x64_branch_distance(MiniAs *as,
     const MiniAsSymbolRef *expr=inst->operands[0].bound_symbol;
     const MiniAsSymbol *symbol=minias_symbol_ref_lookup(as,*expr);
     int64_t delta;
-    if(!symbol || !symbol->defined || symbol->section!=stmt->section)
+    if(!x64_can_resolve_same_section(symbol,stmt,inst->encoding==0xe8U))
         return X64_BRANCH_EXTERNAL;
     if(symbol->value>(uint64_t)INT64_MAX ||
        stmt->offset>(uint64_t)INT64_MAX-instruction_width)
@@ -3071,6 +3087,83 @@ static bool x64_adjust_symbol_ref(MiniAs *as,MiniAsSymbolRef input,
     }
     *out=input;
     out->addend+=correction;
+    return true;
+}
+
+/* One memory-displacement policy for every ModR/M form. A RIP-relative
+ * reference to a preemptible same-section symbol must keep its PC32 record;
+ * the displacement is folded only for genuinely local references. */
+static bool x64_resolve_memory_displacement(MiniAs *as,const MiniAsStmt *stmt,
+                                            const X64Memory *mem,
+                                            uint32_t *displacement,
+                                            bool *needs_pc32) {
+    *displacement=(uint32_t)mem->displacement;
+    *needs_pc32=false;
+    if(!mem->has_symbol || !mem->pc_relative)return true;
+    const MiniAsSymbol *symbol=minias_symbol_ref_lookup(as,mem->symbol);
+    int64_t distance;
+    if(!x64_can_resolve_same_section(symbol,stmt,true)) {
+        *displacement=0U;
+        *needs_pc32=true;
+        return true;
+    }
+    if(symbol->value>INT64_MAX || stmt->offset>INT64_MAX ||
+       stmt->offset>(uint64_t)INT64_MAX-(uint64_t)stmt->size) {
+        minias_set_error(as,"x86-rip-address-overflow");
+        return false;
+    }
+    distance=(int64_t)symbol->value-(int64_t)(stmt->offset+stmt->size);
+    if((mem->symbol.addend>0 && distance>INT64_MAX-mem->symbol.addend) ||
+       (mem->symbol.addend<0 && distance<INT64_MIN-mem->symbol.addend)) {
+        minias_set_error(as,"x86-rip-addend-overflow");
+        return false;
+    }
+    distance+=mem->symbol.addend;
+    if(distance<INT32_MIN || distance>INT32_MAX) {
+        minias_set_error(as,"x86-rip-rel32-out-of-range");
+        return false;
+    }
+    *displacement=(uint32_t)distance;
+    return true;
+}
+
+/* A single relocation owner for the three old memory-emission branches:
+ * absolute symbolic displacement, RIP-relative PC32, and symbolic immediate.
+ * The immediate field's ELF signedness is determined solely by its ISA
+ * operand width; it must not change with the addressing mode. */
+static bool x64_emit_memory_fixups(MiniAs *as,const MiniAsStmt *stmt,
+                                   const MiniAsMCInst *inst,
+                                   const X64Memory *mem,
+                                   const X64MemoryLayout *layout,
+                                   bool needs_pc32) {
+    if(mem->has_symbol) {
+        if(mem->pc_relative && needs_pc32) {
+            MiniAsSymbolRef relative;
+            if(!x64_adjust_symbol_ref(as,mem->symbol,
+                    -4-(int64_t)layout->immediate_bytes,&relative) ||
+               !minias_encode_add_fixup_ref(as,stmt->section,
+                    stmt->offset+layout->displacement_offset,
+                    MINIAS_FIXUP_X64_PC32,4U,relative,false))
+                return false;
+        } else if(!mem->pc_relative &&
+                  !minias_encode_add_fixup_ref(as,stmt->section,
+                    stmt->offset+layout->displacement_offset,
+                    MINIAS_FIXUP_X64_ABS32S,4U,mem->symbol,false))
+            return false;
+    }
+    if(inst->opcode==X64_IMM_MEMORY &&
+       inst->operands[2].kind==MINIAS_MC_BOUND_SYMBOL) {
+        if(layout->immediate_bytes!=4U ||
+           inst->operands[2].bound_symbol==NULL) {
+            minias_set_error(as,"invalid-x86-memory-immediate-fixup-width");
+            return false;
+        }
+        return minias_encode_add_fixup_ref(as,stmt->section,
+            stmt->offset+layout->immediate_offset,
+            inst->operands[0].register_64?
+                MINIAS_FIXUP_X64_ABS32S:MINIAS_FIXUP_ABS,
+            4U,*inst->operands[2].bound_symbol,false);
+    }
     return true;
 }
 
@@ -3154,16 +3247,18 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
         case X64_REG_MEMORY: {
             const X64Memory *mem=m->operands[1].memory;
             const X64MemoryLayout layout=plan.memory;
+            bool needs_pc32=false;
+            uint32_t disp=0U;
             if(layout.instruction_bytes>sizeof(code)) {
                 minias_set_error(as,"x86-memory-instruction-exceeds-encoder-capacity");
                 return false;
             }
-            unsigned extra=layout.immediate_bytes;
-            uint32_t immediate=extra?
+            const unsigned extra=layout.immediate_bytes;
+            const uint32_t immediate=extra?
                 (uint32_t)m->operands[2].immediate:0U;
-            unsigned bytes=layout.displacement_bytes;
             unsigned i;
-            uint32_t disp=(uint32_t)mem->displacement;
+            if(!x64_resolve_memory_displacement(as,s,mem,&disp,&needs_pc32))
+                return false;
             memcpy(code,layout.prefix,layout.prefix_bytes);
             n=layout.prefix_bytes;
             code[n++]=layout.opcode;
@@ -3173,82 +3268,7 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
                 minias_set_error(as,"invalid-x86-memory-plan-offset");
                 return false;
             }
-            if(!mem->pc_relative && mem->has_symbol) {
-                for(i=0U;i<4U;++i)code[n++]=0U;
-                for(i=0U;i<extra;++i)
-                    code[n++]=(unsigned char)(immediate>>(8U*i));
-                if(n!=layout.instruction_bytes || n!=s->size) {
-                    minias_set_error(as,"invalid-x86-symbolic-disp32-layout");
-                    return false;
-                }
-                if(!minias_emit_instruction_bytes(as,s->section,code,n))return false;
-                if(!minias_encode_add_fixup_ref(as,s->section,
-                    s->offset+layout.displacement_offset,MINIAS_FIXUP_X64_ABS32S,4U,
-                    mem->symbol,false))return false;
-                if(m->opcode==X64_IMM_MEMORY &&
-                   m->operands[2].kind==MINIAS_MC_BOUND_SYMBOL) {
-                    const MiniAsSymbolRef *value=m->operands[2].bound_symbol;
-                    if(extra!=4U || !value)return false;
-                    return minias_encode_add_fixup_ref(as,s->section,s->offset+layout.immediate_offset,
-                         m->operands[0].register_64?
-                             MINIAS_FIXUP_X64_ABS32S:MINIAS_FIXUP_ABS,
-                         4U,*value,false);
-                }
-                return true;
-            }
-            if(mem->pc_relative && mem->has_symbol) {
-                const MiniAsSymbol *sym=minias_symbol_ref_lookup(as,mem->symbol);
-                bool local=sym!=NULL && sym->defined && sym->section==s->section;
-                if(local) {
-                    int64_t distance;
-                    if(sym->value>INT64_MAX || s->offset>INT64_MAX ||
-                       s->offset>(uint64_t)INT64_MAX-(uint64_t)s->size) {
-                        minias_set_error(as,"x86-rip-address-overflow");return false;
-                    }
-                    distance=(int64_t)sym->value-(int64_t)(s->offset+s->size);
-                    if((mem->symbol.addend>0 &&
-                        distance>INT64_MAX-mem->symbol.addend) ||
-                       (mem->symbol.addend<0 &&
-                        distance<INT64_MIN-mem->symbol.addend)) {
-                        minias_set_error(as,"x86-rip-addend-overflow");return false;
-                    }
-                    distance+=mem->symbol.addend;
-                    if(distance<INT32_MIN || distance>INT32_MAX) {
-                        minias_set_error(as,"x86-rip-rel32-out-of-range");return false;
-                    }
-                    disp=(uint32_t)distance;
-                }
-                {
-                    for(i=0U;i<4U;++i)code[n++]=(unsigned char)(disp>>(8U*i));
-                    for(i=0U;i<extra;++i)
-                        code[n++]=(unsigned char)(immediate>>(8U*i));
-                    if(n!=layout.instruction_bytes || n!=s->size) {
-                        minias_set_error(as,"invalid-x86-rip-memory-layout");
-                        return false;
-                    }
-                    if(!minias_emit_instruction_bytes(as,s->section,code,n))return false;
-                    if(!local) {
-                        MiniAsSymbolRef pc_relative;
-                        if(!x64_adjust_symbol_ref(as,mem->symbol,
-                                -4-(int64_t)extra,&pc_relative) ||
-                           !minias_encode_add_fixup_ref(as,s->section,
-                                s->offset+layout.displacement_offset,
-                                MINIAS_FIXUP_X64_PC32,4U,pc_relative,false))
-                            return false;
-                    }
-                    if(m->opcode==X64_IMM_MEMORY &&
-                       m->operands[2].kind==MINIAS_MC_BOUND_SYMBOL) {
-                        const MiniAsSymbolRef *value=m->operands[2].bound_symbol;
-                        if(extra!=4U || !value)return false;
-                        return minias_encode_add_fixup_ref(as,s->section,s->offset+layout.immediate_offset,
-                            m->operands[0].register_64?
-                                MINIAS_FIXUP_X64_ABS32S:MINIAS_FIXUP_ABS,
-                            4U,*value,false);
-                    }
-                    return true;
-                }
-            }
-            for (i=0U;i<bytes;++i)
+            for (i=0U;i<layout.displacement_bytes;++i)
                 code[n++]=(unsigned char)(disp>>(8U*i));
             for(i=0U;i<extra;++i)
                 code[n++]=(unsigned char)(immediate>>(8U*i));
@@ -3256,18 +3276,8 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
                 minias_set_error(as,"invalid-x86-memory-layout");
                 return false;
             }
-            if(m->opcode==X64_IMM_MEMORY &&
-               m->operands[2].kind==MINIAS_MC_BOUND_SYMBOL) {
-                const MiniAsSymbolRef *imm=m->operands[2].bound_symbol;
-                if(extra!=4U || !imm || n!=s->size) {
-                    minias_set_error(as,"invalid-x86-abs32s-memory-layout");
-                    return false;
-                }
-                if(!minias_emit_instruction_bytes(as,s->section,code,n))return false;
-                return minias_encode_add_fixup_ref(as,s->section,s->offset+layout.immediate_offset,
-                    MINIAS_FIXUP_X64_ABS32S,4U,*imm,false);
-            }
-            break;
+            if(!minias_emit_instruction_bytes(as,s->section,code,n))return false;
+            return x64_emit_memory_fixups(as,s,m,mem,&layout,needs_pc32);
         }
         case X64_MOVABS_IMMREG: {
             const MiniAsMCOperand *value=&m->operands[1];

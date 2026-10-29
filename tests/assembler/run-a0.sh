@@ -983,7 +983,10 @@ align_expr_hex="$(
     readelf -x .text "$work/align-expr.o" |
     awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]+$/ && length($i) % 2 == 0) printf "%s", $i}'
 )"
-test "$align_expr_hex" = "0100000000000000000000000000000002"
+# GNU GAS riscv_make_nops: an odd executable gap emits one zero byte,
+# then one C.NOP (if a 2B remainder exists), followed by 32-bit NOPs.
+# A raw .byte in .text must not force the entire 15B alignment to zero.
+test "$align_expr_hex" = "0100010013000000130000001300000002"
 
 cat >"$work/sext-w.s" <<'EOF'
 .text

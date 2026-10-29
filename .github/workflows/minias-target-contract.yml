@@ -86,6 +86,11 @@ jobs:
             bash tests/assembler/probe-mc-source-replay-branch.sh
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=riscv \
             bash tests/assembler/probe-mc-source-replay-branch.sh
+      - name: Stable SourceSite rebinds branch growth across conditional topology changes
+        run: |
+          command -v as
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-mc-source-stable-rebind.sh
       - name: GNU RV64I 160-typed-fragment relaxation stress
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=riscv \

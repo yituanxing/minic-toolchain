@@ -946,6 +946,15 @@ entry_la:
     li.w $r12, 16384
     li.w $r28, (1 << 14) / 8
     li.w $r13, 0x1020
+    # GNU GAS expands the full signed/unsigned 32-bit LI.W domain, not only
+    # its positive non-4K two-word case.  A former negative oracle wrongly
+    # classified -2049 as an unsupported instruction.
+    li.w $r4, -2049
+    li.w $r5, -4097
+    li.w $r6, -2147483648
+    li.w $r7, 2147483647
+    li.w $r8, 0xffffffff
+    li.w $r9, 0xfffffffffffff7ff
     li.d $r15, 16384
     li.d $r2, ~16383
     # GNU GAS full sign-extension-aware 64-bit LI.D pseudo.
@@ -1445,6 +1454,33 @@ cmp "$work/la-local-mini.bin" "$work/la-local-gnu.bin"
 # machine-level code and defined local labels must still be identical.
 echo 'MINIAS_LARCH_LOCAL_BRANCH_ORACLE=PASS same_section_forward_backward_bytes=equal'
 
+# A same-section WEAK definition is not a fixed local branch destination:
+# a strong linker definition may replace it.  GNU GAS preserves its B16
+# relocation even though it has a provisional source-file address.  Strong
+# same-section branches retain the existing exact-byte, not optional B16
+# relocation-count, acceptance policy.
+cat >"$work/la-weak-branch.s" <<'LA_WEAK_BRANCH'
+.text
+.globl strong_branch_target
+strong_branch_target:
+    beq $a0,$a1,strong_branch_target
+.weak weak_branch_target
+weak_branch_target:
+    bne $a0,$a1,weak_branch_target
+LA_WEAK_BRANCH
+"$MINIAS" --target=loongarch64 -march=loongarch64 -mabi=lp64d \
+   -o "$work/la-weak-branch-mini.o" "$work/la-weak-branch.s"
+"$LOONGAS" -mabi=lp64d -o "$work/la-weak-branch-gnu.o" "$work/la-weak-branch.s"
+for kind in mini gnu; do
+    "$LOONGREADELF" -Wr "$work/la-weak-branch-$kind.o" >"$work/la-weak-branch-$kind.rel"
+    grep -Eq 'R_LARCH_B16[[:space:]]+.*weak_branch_target' \
+        "$work/la-weak-branch-$kind.rel"
+    "$LOONGCOPY" -j .text -O binary "$work/la-weak-branch-$kind.o" \
+        "$work/la-weak-branch-$kind.bin"
+done
+cmp "$work/la-weak-branch-mini.bin" "$work/la-weak-branch-gnu.bin"
+echo 'MINIAS_LARCH_WEAK_BRANCH=PASS GNU_WEAK_B16_RELOCATION_AND_TEXT'
+
 # The exact same original Linux GNU source uses cross-section symbol
 # difference in data tables. Support ADD32/SUB32 and ADD64/SUB64 in the
 # RV-proven common SymbolExpr -> Fixup -> ELF writer (Loong type only).
@@ -1466,7 +1502,8 @@ for reloc in R_LARCH_ADD32 R_LARCH_SUB32 R_LARCH_ADD64 R_LARCH_SUB64; do
 done
 echo 'MINIAS_LARCH_SYMBOL_DIFF=PASS ELF_ADD_SUB_32_64'
 
-for bad in 'li.w $r4, -2049' \
+for bad in 'li.w $r4, 0x100000000' \
+           'li.w $r4, -0x100000001' \
            'cacop 32, $r12, 0' \
            'cacop 0, $r12, -2049' \
            'iocsrrd.d $r13, $f30' \

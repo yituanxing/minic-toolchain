@@ -9,6 +9,15 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* These are retained RISC-V pseudo forms, not instruction word templates.
+ * MCInst.encoding is reserved for actual target encoding bits. */
+enum {
+    RV_PSEUDO_LI_WIDE = 1U,
+    RV_PSEUDO_LI_SIGNED32,
+    RV_PSEUDO_LLA,
+    RV_PSEUDO_LA
+};
+
 static int reg_number(const char *name) {
     static const struct {
         const char *name;
@@ -463,10 +472,15 @@ static bool rv_materialize_li(MiniAs *as, const MiniAsStmt *stmt,
     const MiniAsMCInst *m = stmt->mcinst;
     const uint64_t bits = m->operands[1].immediate;
     const int64_t signed_value = (int64_t)m->operands[2].immediate;
-    const bool fits_signed32 = m->encoding != 0U;
+    const bool fits_signed32 = m->target_form == RV_PSEUDO_LI_SIGNED32;
     const int rd = (int)m->operands[0].reg;
     int64_t hi, lo;
     *count = 0U;
+    if (m->target_form != RV_PSEUDO_LI_SIGNED32 &&
+        m->target_form != RV_PSEUDO_LI_WIDE) {
+        minias_set_error(as, "internal:riscv-li-invalid-form");
+        return false;
+    }
     if (MINIAS_RV_STATE(as)->target_xlen == 32U) {
         int64_t value;
         if (!rv32_li_value(bits, &value)) {
@@ -1075,7 +1089,7 @@ static bool rv_parse_multi_mc(MiniAs *as, MiniAsStmt *stmt,
     if (family == RV_MC_CALL || family == RV_MC_TAIL)
         m->target_form = (uint32_t)modifier;
     if (family == RV_MC_LI) {
-        m->encoding = fits ? 1U : 0U;
+        m->target_form = fits ? RV_PSEUDO_LI_SIGNED32 : RV_PSEUDO_LI_WIDE;
         rv_set_reg(&m->operands[0], rd);
         rv_set_imm(&m->operands[1], (int64_t)bits);
         rv_set_imm(&m->operands[2], signed_value);
@@ -1083,7 +1097,8 @@ static bool rv_parse_multi_mc(MiniAs *as, MiniAsStmt *stmt,
         unsigned symbol_index = family == RV_MC_LA ? 1U : 0U;
         if (family == RV_MC_LA) {
             rv_set_reg(&m->operands[0], rd);
-            m->encoding = strcmp(op, "la") == 0 ? 1U : 0U;
+            m->target_form = strcmp(op, "la") == 0 ?
+                             RV_PSEUDO_LA : RV_PSEUDO_LLA;
         }
         if (!rv_bind_symbol_operand(as, m, symbol_index, &expr)) {
             minias_mcinst_destroy(m);
@@ -1205,51 +1220,77 @@ invalid:
     return false;
 }
 
+enum { RV_CSR_READ, RV_CSR_FULL, RV_CSR_ALIAS };
+typedef struct RvCsrDesc {
+    const char *name;
+    uint8_t funct3;
+    uint8_t shape;
+    bool immediate;
+} RvCsrDesc;
+static const RvCsrDesc rv_csr_forms[] = {
+    {"csrr",   2U, RV_CSR_READ,  false},
+    {"csrrw",  1U, RV_CSR_FULL,  false},
+    {"csrrs",  2U, RV_CSR_FULL,  false},
+    {"csrrc",  3U, RV_CSR_FULL,  false},
+    {"csrrwi", 5U, RV_CSR_FULL,  true},
+    {"csrrsi", 6U, RV_CSR_FULL,  true},
+    {"csrrci", 7U, RV_CSR_FULL,  true},
+    {"csrw",   1U, RV_CSR_ALIAS, false},
+    {"csrs",   2U, RV_CSR_ALIAS, false},
+    {"csrc",   3U, RV_CSR_ALIAS, false},
+    {"csrwi",  5U, RV_CSR_ALIAS, true},
+    {"csrsi",  6U, RV_CSR_ALIAS, true},
+    {"csrci",  7U, RV_CSR_ALIAS, true}
+};
+
+static const RvCsrDesc *rv_find_csr_form(const char *name) {
+    size_t i;
+    for (i = 0U; i < sizeof(rv_csr_forms) / sizeof(rv_csr_forms[0]); ++i)
+        if (strcmp(rv_csr_forms[i].name, name) == 0)
+            return &rv_csr_forms[i];
+    return NULL;
+}
+
 static bool rv_parse_csr_mc(MiniAs *as, MiniAsStmt *stmt,
                             char operands[][128], size_t count,
                             RvParsedIsaPolicy *policy) {
-    const char *name = stmt->op;
+    const RvCsrDesc *form = rv_find_csr_form(stmt->op);
+    const char *source = NULL;
     uint32_t csr, funct3;
     int rd = 0, rs1 = 0;
     int64_t zimm;
-    const char *source;
-    bool csr_read = strcmp(name, "csrr") == 0;
-    bool csr_full = strcmp(name, "csrrw") == 0 ||
-                    strcmp(name, "csrrc") == 0;
-    bool csr_alias = strcmp(name, "csrw") == 0 ||
-                     strcmp(name, "csrs") == 0 ||
-                     strcmp(name, "csrc") == 0;
-    policy->handled = csr_read || csr_full || csr_alias;
-    if (!policy->handled) return true;
+    bool immediate = false;
 
-    if (csr_read) {
+    policy->handled = form != NULL;
+    if (form == NULL) return true;
+    funct3 = form->funct3;
+    if (form->shape == RV_CSR_READ) {
         if (count != 2U || (rd = reg_number(operands[0])) < 0 ||
             !parse_csr(operands[1], &csr)) goto invalid;
-        funct3 = 2U;
-        return rv_mc_word(as, stmt, 0x73U | (funct3 << 12U) |
-                          (csr << 20U), rd, 0, 0);
-    }
-    if (csr_full) {
+    } else if (form->shape == RV_CSR_FULL) {
         if (count != 3U || (rd = reg_number(operands[0])) < 0 ||
             !parse_csr(operands[1], &csr)) goto invalid;
         source = operands[2];
-        funct3 = strcmp(name, "csrrw") == 0 ? 1U : 3U;
     } else {
         if (count != 2U || !parse_csr(operands[0], &csr)) goto invalid;
         source = operands[1];
-        funct3 = strcmp(name, "csrw") == 0 ? 1U :
-                 strcmp(name, "csrs") == 0 ? 2U : 3U;
     }
-    if (parse_i64(source, &zimm)) {
-        if (zimm < 0 || zimm > 31) goto invalid;
-        funct3 |= 4U;
-        rs1 = (int)zimm;
-    } else {
-        rs1 = reg_number(source);
-        if (rs1 < 0) goto invalid;
+    if (source != NULL) {
+        bool numeric = parse_i64(source, &zimm);
+        if (form->immediate || numeric) {
+            if (!numeric || zimm < 0 || zimm > 31)
+                goto invalid;
+            immediate = true;
+            if (!form->immediate) funct3 |= 4U;
+            rs1 = (int)zimm;
+        } else if ((rs1 = reg_number(source)) < 0) goto invalid;
     }
-    return rv_mc_word(as, stmt, 0x73U | (funct3 << 12U) |
-                      (csr << 20U), rd, rs1, 0);
+    if (!rv_mc_word(as, stmt, 0x73U | (funct3 << 12U) |
+                    (csr << 20U), rd, rs1, 0)) return false;
+    /* zimm occupies the same five instruction bits as rs1, but it is NOT
+     * an integer register and must not trip RV32E's x16..x31 restriction. */
+    if (immediate) rv_set_imm(&stmt->mcinst->operands[1], rs1);
+    return true;
 invalid:
     minias_set_error(as, "bad-csr-mcinst:%s:%s:line=%zu",
                      stmt->op, stmt->args, stmt->line);
@@ -1457,12 +1498,6 @@ static const RvParseForm rv_parse_forms[] = {
     RV_EXTENSION("vmv.v.i", rv_parse_vector_mc, RISCV_ISA_V),
     RV_EXTENSION("vsetvli", rv_parse_vector_mc, RISCV_ISA_V),
     RV_EXTENSION("vsetvl", rv_parse_vector_mc, RISCV_ISA_V),
-    RV_EXTENSION("csrr", rv_parse_csr_mc, RISCV_ISA_ZICSR),
-    RV_EXTENSION("csrrw", rv_parse_csr_mc, RISCV_ISA_ZICSR),
-    RV_EXTENSION("csrrc", rv_parse_csr_mc, RISCV_ISA_ZICSR),
-    RV_EXTENSION("csrw", rv_parse_csr_mc, RISCV_ISA_ZICSR),
-    RV_EXTENSION("csrs", rv_parse_csr_mc, RISCV_ISA_ZICSR),
-    RV_EXTENSION("csrc", rv_parse_csr_mc, RISCV_ISA_ZICSR),
     /* These families have widths/ordering or FP rounding modifiers. Their
      * existing decoders validate the COMPLETE suffix, not just the stem. */
     RV_PREFIX("vle", rv_parse_vector_mc, RISCV_ISA_V),
@@ -1479,11 +1514,15 @@ static const RvParseForm rv_parse_forms[] = {
 #undef RV_PREFIX
 
 static const RvParseForm *rv_find_parse_form(const char *op) {
+    static const RvParseForm csr_family = {
+        "<csr>", rv_parse_csr_mc, false, RISCV_ISA_ZICSR, false
+    };
     size_t i;
     for (i = 0U; i < sizeof(rv_parse_forms)/sizeof(rv_parse_forms[0]); ++i)
         if (!rv_parse_forms[i].prefix &&
             strcmp(op, rv_parse_forms[i].spelling) == 0)
             return &rv_parse_forms[i];
+    if (rv_find_csr_form(op) != NULL) return &csr_family;
     for (i = 0U; i < sizeof(rv_parse_forms)/sizeof(rv_parse_forms[0]); ++i)
         if (rv_parse_forms[i].prefix &&
             strncmp(op, rv_parse_forms[i].spelling,
@@ -1542,9 +1581,13 @@ static bool rv_parse_mcinst_impl(MiniAs *as, MiniAsStmt *stmt,
         if (two) {
             rd = reg_number(operands[0]);
             rs1 = reg_number(operands[1]);
-            imm = strcmp(op,"orc.b") == 0 ? 0x287 :
-                  strcmp(op,"rev8") == 0 ? 0x6b8 :
-                  strcmp(op,"ctz") == 0 ? 0x601 : 0;
+            /* Ratified Zbb gives rev8 distinct OP-IMM words for RV32 and
+             * RV64.  Its XLEN is selected by the immutable Target profile,
+             * not inferred from the mnemonic or the host word size. */
+            if (strcmp(op, "rev8") == 0 &&
+                MINIAS_RV_STATE(as)->target_xlen == 32U)
+                encoding = UINT32_C(0x69805013);
+            imm = (int64_t)((encoding >> 20U) & 0xfffU);
             family = RV_MC_I;
         } else if (count == 3U) {
             rd = reg_number(operands[0]);
@@ -1829,8 +1872,13 @@ static bool rv_encode_multi_mc(MiniAs *as, const MiniAsStmt *stmt) {
         target = minias_symbol_ref_lookup(as, *expr);
         /* Linux early boot: NOPIC is default; PIC external la may use a
          * GOT reference only if the source did not request an addend. */
+        if (m->target_form != RV_PSEUDO_LA &&
+            m->target_form != RV_PSEUDO_LLA) {
+            minias_set_error(as, "internal:riscv-la-invalid-form");
+            return false;
+        }
         use_got = (stmt->site.mode_bits & MINIAS_RISCV_OPTION_PIC) != 0U &&
-                  m->encoding != 0U && expr->addend == 0 &&
+                  m->target_form == RV_PSEUDO_LA && expr->addend == 0 &&
                   (target == NULL || !target->defined);
         if(!minias_encode_request_anchor_ref(as,stmt,"pcrel",
                                              &anchor)) {
@@ -1879,6 +1927,9 @@ static bool rv_encode_mcinst(MiniAs *as, const MiniAsStmt *stmt) {
     const MiniAsSymbolRef *expr=NULL;
     if (m->count > 1U && m->operands[1].kind==MINIAS_MC_REGISTER)
         rs1=(int)m->operands[1].reg;
+    else if (m->opcode == RV_MC_WORD && m->count > 1U &&
+             m->operands[1].kind == MINIAS_MC_IMMEDIATE)
+        rs1 = (int)m->operands[1].immediate;
     if (m->count > 2U && m->operands[2].kind==MINIAS_MC_REGISTER)
         rs2=(int)m->operands[2].reg;
     if (m->count > 2U && m->operands[2].kind==MINIAS_MC_IMMEDIATE)

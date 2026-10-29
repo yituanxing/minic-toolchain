@@ -375,19 +375,6 @@ fail:
     return NULL;
 }
 
-/* A source-level statement ordinal survives macro expansion and re-layout. */
-bool minias_force_long_branch_for_stmt(const MiniAs *as, size_t statement_id) {
-    size_t i;
-    if (as->forced_long_branch_bitmap != NULL &&
-        statement_id < as->forced_long_branch_bitmap_size)
-        return as->forced_long_branch_bitmap[statement_id] != 0U;
-    for (i = 0U; i < as->forced_long_branch_count; ++i)
-        if (as->forced_long_branch_ids[i] == statement_id) return true;
-    return false;
-}
-
-
-
 /* Keep signed MCExpr addends in their semantic domain.  Converting a
  * negative displacement to uint64_t before checking is not a range check. */
 static bool add_signed_u64(uint64_t base, int64_t addend, uint64_t *result) {
@@ -801,8 +788,6 @@ static bool collect_out_of_range_branches(MiniAs *as,
             as->forced_long_branch_bitmap[id]=1U;
         }
     }
-    as->forced_long_branch_ids=*ids;
-    as->forced_long_branch_count=*count;
     for (i = 0U; i < as->stmt_count; ++i) {
         const MiniAsStmt *stmt = &as->stmts[i];
         MiniAsTargetRelaxPlan plan;
@@ -816,8 +801,6 @@ static bool collect_out_of_range_branches(MiniAs *as,
         }
         (*ids)[(*count)++] = i;
         as->forced_long_branch_bitmap[i]=1U;
-        as->forced_long_branch_ids=*ids;
-        as->forced_long_branch_count=*count;
         *added=true;
     }
     return true;
