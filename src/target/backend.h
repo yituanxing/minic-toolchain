@@ -44,6 +44,11 @@ typedef bool (*MinicBackendQualifyInlineAsm)(
 /* A target reserves its own input-bearing GNU machine template families.
  * Generic Core knows neither machine opcodes nor physical constraints. */
 typedef bool (*MinicBackendRequiresQualifiedInputAsm)(const MinicInlineAsm *);
+/* An asm-goto may expose multiple real C control-flow destinations while
+ * carrying immediate source operands. Target admission proves its complete
+ * machine form; Core owns only the label blocks and resolved C constants. */
+typedef bool (*MinicBackendQualifyInlineAsmGoto)(
+    const MinicC0Program *, const MinicInlineAsm *);
 typedef struct MinicBackend {
     MinicTargetArchitecture architecture;
     const char *name;
@@ -59,6 +64,7 @@ typedef struct MinicBackend {
      * be qualified by the real machine backend BEFORE generic Core lowering.
      * Raw no-operand GNU source asm remains a separate assembly contract. */
     MinicBackendRequiresQualifiedInputAsm requires_qualified_input_asm;
+    MinicBackendQualifyInlineAsmGoto qualify_inline_asm_goto;
 } MinicBackend;
 
 /* Fail closed on unknown architecture. No default or host fallback. */
@@ -78,6 +84,8 @@ bool minic_backend_inline_asm_prefix_matches(
  * reinterpret a register operand as an immediate or lose machine effects. */
 bool minic_backend_requires_qualified_input_asm(
     const MinicBackend *, const MinicInlineAsm *);
+bool minic_backend_qualify_inline_asm_goto(
+    const MinicBackend *, const MinicC0Program *, const MinicInlineAsm *);
 
 /* Stable driver-facing emission seam. Machine IR can be inserted here. */
 bool minic_backend_emit_assembly(

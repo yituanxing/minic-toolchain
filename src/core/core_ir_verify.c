@@ -541,7 +541,21 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
             return false;
         }
         inline_asm = &function->inline_asms[instruction->value.inline_asm_id];
-        return inline_asm->template_text != NULL && inline_asm->is_volatile;
+        if (!inline_asm->template_text || !inline_asm->is_volatile)
+            return false;
+        if (inline_asm->goto_second_target != MINIC_CORE_BLOCK_INVALID) {
+            size_t i;
+            if (!inline_asm->is_goto ||
+                inline_asm->goto_target >= function->block_count ||
+                inline_asm->goto_second_target >= function->block_count ||
+                inline_asm->goto_target == inline_asm->goto_second_target ||
+                inline_asm->resolved_immediate_count != 3U)
+                return false;
+            for (i = 0U; i < 3U; ++i)
+                if (!inline_asm->resolved_immediates[i] ||
+                    inline_asm->resolved_immediates[i][0] == '\0') return false;
+        }
+        return true;
     }
     case MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INLINE_ASM: {
         const MinicCoreInlineAsm *inline_asm;
@@ -992,6 +1006,12 @@ static bool verify_block(const MinicCoreFunction *function,
     if (!storage_shape_is_valid(
             block->instructions, block->instruction_count, block->instruction_capacity) ||
         !block->has_terminator) {
+        if (getenv("MINIC_CORE_VERIFY_TRACE") != NULL)
+            (void)fprintf(stderr,
+                "CORE_IR_VERIFY_FAIL reason=block-shape function=%s block=%" PRIu32
+                " terminator=%d instructions=%zu capacity=%zu\n",
+                function->name, block_id, block->has_terminator,
+                block->instruction_count, block->instruction_capacity);
         return false;
     }
     if (function->value_count != 0U) {
@@ -1003,6 +1023,11 @@ static bool verify_block(const MinicCoreFunction *function,
 
         instruction_id = block->instructions[index];
         if (instruction_id >= function->instruction_count || instruction_seen[instruction_id]) {
+            if (getenv("MINIC_CORE_VERIFY_TRACE") != NULL)
+                (void)fprintf(stderr,
+                    "CORE_IR_VERIFY_FAIL reason=instruction-ownership function=%s "
+                    "block=%" PRIu32 " instruction=%" PRIu32 "\n",
+                    function->name, block_id, instruction_id);
             return false;
         }
         instruction = &function->instructions[instruction_id];
@@ -1033,7 +1058,15 @@ static bool verify_block(const MinicCoreFunction *function,
         }
         instruction_seen[instruction_id] = true;
     }
-    return terminator_is_valid(function, &block->terminator, available_values);
+    if (!terminator_is_valid(function, &block->terminator, available_values)) {
+        if (getenv("MINIC_CORE_VERIFY_TRACE") != NULL)
+            (void)fprintf(stderr,
+                "CORE_IR_VERIFY_FAIL reason=terminator function=%s "
+                "block=%" PRIu32 " kind=%d\n",
+                function->name, block_id, (int)block->terminator.kind);
+        return false;
+    }
+    return true;
 }
 
 bool minic_core_function_verify(const MinicCoreFunction *function) {

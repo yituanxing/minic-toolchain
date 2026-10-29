@@ -10,12 +10,18 @@ bool minic_x86_64_linux_ip_here_template(const char *, size_t);
 /* Real 10-byte x86-64 GDTR/IDTR descriptor memory operands. */
 unsigned int minic_x86_64_linux_descriptor_table_form(const char *, size_t);
 bool minic_x86_64_linux_boot_segments_template(const char *, size_t);
+unsigned int minic_x86_64_linux_privileged_zero_form(const char *, size_t);
 /* Linux three-way CALL patching: exact alternatives/relocations and RSP ABI. */
 bool minic_x86_64_linux_three_call_alternative_form(const char *, size_t);
 /* CR0/2/3/4 reads and CR2/3 writes, including GNU dummy-memory ordering. */
 unsigned int minic_x86_64_linux_control_register_form(const char *, size_t);
+/* Linux ALTERNATIVE() with an empty baseline and WRMSR replacement. */
+bool minic_x86_64_linux_alternative_wrmsr_form(const char *, size_t);
 unsigned int minic_x86_64_linux_zero_barrier_form(const char *, size_t);
 unsigned int minic_x86_64_linux_counter_form(const char *,size_t);
+/* FXSAVE/FXSAVE64 exact 512-byte aligned architectural memory images. */
+unsigned int minic_x86_64_linux_fxsave_form(const char *, size_t);
+bool minic_x86_64_linux_x87_probe_form(const char *, size_t);
 unsigned int minic_x86_64_hweight_alternative_form(const char *,size_t);
 unsigned int minic_x86_64_linux_msr_form(const char *,size_t);
 bool minic_x86_64_ip_fast_csum_template(const char *,size_t);
@@ -32,6 +38,9 @@ bool minic_x86_64_linux_bug_table_opaque(const char *, size_t);
  * belong to x86. The shared compiler sees only Core operand roles. */
 bool minic_x86_64_qualify_inline_asm(
     const MinicC0Program *, const MinicInlineAsm *, MinicTargetInlineAsmContract *);
+bool minic_x86_64_qualify_inline_asm_goto(
+    const MinicC0Program *, const MinicInlineAsm *);
+bool minic_x86_64_linux_cpu_has_goto_form(const char *, size_t);
 /* Original Linux barrier.h CMP/SBB mask, strictly qualified. */
 bool minic_x86_64_asm_nospec_template(const char *, size_t);
 /* Qualified x86 per-cpu stable GS segment read, exact GNU p input. */

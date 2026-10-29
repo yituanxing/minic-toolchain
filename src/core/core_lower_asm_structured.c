@@ -3,6 +3,7 @@
 #include "frontend/const_eval.h"
 #include "frontend/expression_semantics.h"
 #include "target/data_layout.h"
+#include "target/backend.h"
 
 #include <inttypes.h>
 #include <stdio.h>
@@ -436,6 +437,60 @@ MinicCoreLowerStatus core_asm_try_structured_roles_and_asm_goto(
     *handled = false;
     MinicCoreInlineAsmId inline_asm_id;
     MinicCoreInstruction instruction;
+    /* Multi-label asm-goto is a genuine CFG effect. Targets admit their own
+     * complete machine template, while Core owns the two C label blocks and
+     * resolves every constant `i` operand BEFORE recording the effect.
+     * There is no host-specific assembler passthrough or runtime fallback. */
+    if (minic_backend_qualify_inline_asm_goto(
+            minic_backend_for_target(context->target),
+            context->body->program, source)) {
+        char immediate_buffers[3][MINIC_CORE_IMMEDIATE_TEXT_LIMIT];
+        const char *resolved[3];
+        size_t lengths[3];
+        MinicCoreBlockId targets[2];
+        MinicCoreInlineAsm *stored;
+        MinicCoreInstruction effect;
+        MinicCoreLowerStatus status;
+        size_t i;
+        *handled = true;
+        for (i = 0U; i < 3U; ++i)
+            if (!core_inline_asm_immediate_text(
+                    context, &source->inputs[i], immediate_buffers[i],
+                    sizeof(immediate_buffers[i]), &resolved[i], &lengths[i]) ||
+                !resolved[i] || lengths[i] == 0U || lengths[i] > 128U)
+                return MINIC_CORE_LOWER_UNSUPPORTED;
+        for (i = 0U; i < 2U; ++i) {
+            status = ensure_statement_block(
+                context, source->labels[i].target_statement, &targets[i]);
+            if (status != MINIC_CORE_LOWER_OK) return status;
+        }
+        if (!minic_core_function_add_opaque_inline_asm(
+                context->function, source->template_text,
+                source->template_length, true, false, &inline_asm_id))
+            return MINIC_CORE_LOWER_ERROR;
+        stored = &context->function->inline_asms[inline_asm_id];
+        stored->is_goto = true;
+        stored->source_inline_asm_id = SIZE_MAX;
+        stored->goto_target = targets[0];
+        stored->goto_second_target = targets[1];
+        for (i = 0U; i < 3U; ++i) {
+            char *owned = (char *)malloc(lengths[i] + 1U);
+            if (!owned) return MINIC_CORE_LOWER_ERROR;
+            (void)memcpy(owned, resolved[i], lengths[i]);
+            owned[lengths[i]] = '\0';
+            stored->resolved_immediates[i] = owned;
+            stored->resolved_immediate_count = i + 1U;
+        }
+        (void)memset(&effect, 0, sizeof(effect));
+        effect.kind = MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM;
+        effect.span = statement->span;
+        effect.type = minic_type_void();
+        effect.result = MINIC_CORE_VALUE_INVALID;
+        effect.value.inline_asm_id = inline_asm_id;
+        return minic_core_function_append_effect_instruction(
+            context->function, context->block_id, &effect)
+            ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR;
+    }
     /* M126A_GENERIC_STRUCTURED_ASM: canonical role lowering for register/memory
        extended asm. Preflight is deliberately side-effect free: an asm that
        ultimately belongs to an older/specialized path must not leave partial
@@ -461,6 +516,7 @@ MinicCoreLowerStatus core_asm_try_structured_roles_and_asm_goto(
         size_t output_index;
         size_t input_index;
         bool supported_shape = true;
+        bool implicit_memory_effect = false;
 
         (void)memset(&structured, 0, sizeof(structured));
         structured.kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
@@ -508,6 +564,11 @@ MinicCoreLowerStatus core_asm_try_structured_roles_and_asm_goto(
                         core_inline_asm_constraint_is(operand, "+A"))) {
                 binding->kind = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
                 binding->early_clobber = false;
+                /* The `+m` constraint itself declares an in-place memory
+                 * read/write effect, even without a separate GNU "memory"
+                 * clobber. Preserve that fact in the Core effect summary so
+                 * verification and reordering agree with GNU semantics. */
+                implicit_memory_effect = true;
             } else {
                 supported_shape = false;
                 break;
@@ -625,7 +686,8 @@ MinicCoreLowerStatus core_asm_try_structured_roles_and_asm_goto(
                                                             numeric_template,
                                                             numeric_template_length,
                                                             true,
-                                                            source->has_memory_clobber,
+                                                            source->has_memory_clobber ||
+                                                                implicit_memory_effect,
                                                             &inline_asm_id)) {
                 free(numeric_template);
                 { *handled = true; return MINIC_CORE_LOWER_ERROR; }

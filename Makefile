@@ -1285,7 +1285,12 @@ check-x86_64-busybox-allyes-discovery: $(MINIC_CC_BINARY)
 	  BUSYBOX_ALLYES_REPORT_DIR="$(abspath $(BUILD_DIR))/busybox-allyes-sweep" \
 	  sh tests/external/busybox/probe-x86_64.sh
 
-check-fast: check-target-selection-m0 check-x86_64-m1 check-token-model check-lexer check-type check-record check-type-alias check-ast-contract check-layout check-rv64-abi check-static-functions check-unsigned-declarations check-long-types check-for-loops check-unbounded-for-break check-prefix-decrement-update check-cast-expressions check-unsigned-char-layout check-pointer-subscripts check-pointer-arithmetic check-pointer-object-const check-const-locals check-global-objects check-bitwise-xor check-integer-bit-operations check-pointer-members check-expression-statements check-postfix-subscripts check-compound-xor-assignment $(MINIC_BINARY)
+.PHONY: check-x86-linux-control-state
+check-x86-linux-control-state: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/target/run-linux-x86-control-state.sh
+
+check-fast: check-x86-linux-control-state check-target-selection-m0 check-x86_64-m1 check-token-model check-lexer check-type check-record check-type-alias check-ast-contract check-layout check-rv64-abi check-static-functions check-unsigned-declarations check-long-types check-for-loops check-unbounded-for-break check-prefix-decrement-update check-cast-expressions check-unsigned-char-layout check-pointer-subscripts check-pointer-arithmetic check-pointer-object-const check-const-locals check-global-objects check-bitwise-xor check-integer-bit-operations check-pointer-members check-expression-statements check-postfix-subscripts check-compound-xor-assignment $(MINIC_BINARY)
 	MINIC="$(abspath $(MINIC_BINARY))" \
 	HOST_CC="$(CC)" \
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \

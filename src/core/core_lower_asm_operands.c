@@ -208,6 +208,66 @@ static bool core_inline_asm_specialized_integer(
         return core_inline_asm_specialized_integer(
             context, expression->value.unary.operand, value, depth + 1U);
     }
+    /* Specialization replaces parameters with compile-time integers, but a
+     * GNU `i` operand can still be an expression over those parameters.
+     * Resolve the complete pure expression in Core so the machine target
+     * receives a constant, never a host-assembler expression or an unbound
+     * runtime register.  Reject undefined shifts, division and overflow. */
+    if (expression->kind == MINIC_EXPRESSION_BINARY) {
+        int64_t left, right;
+        if (!core_inline_asm_specialized_integer(
+                context, expression->value.binary.left, &left, depth + 1U) ||
+            !core_inline_asm_specialized_integer(
+                context, expression->value.binary.right, &right, depth + 1U))
+            return false;
+        switch (expression->value.binary.operator_kind) {
+            case MINIC_BINARY_BITWISE_AND: *value = left & right; return true;
+            case MINIC_BINARY_BITWISE_OR: *value = left | right; return true;
+            case MINIC_BINARY_BITWISE_XOR: *value = left ^ right; return true;
+            case MINIC_BINARY_SHIFT_RIGHT:
+                if (left < 0 || right < 0 || right >= 63) return false;
+                *value = left >> (unsigned)right;
+                return true;
+            case MINIC_BINARY_SHIFT_LEFT:
+                if (left < 0 || right < 0 || right >= 63 ||
+                    left > (INT64_MAX >> (unsigned)right)) return false;
+                *value = left << (unsigned)right;
+                return true;
+            case MINIC_BINARY_ADD:
+                if ((right > 0 && left > INT64_MAX - right) ||
+                    (right < 0 && left < INT64_MIN - right)) return false;
+                *value = left + right;
+                return true;
+            case MINIC_BINARY_SUBTRACT:
+                if ((right < 0 && left > INT64_MAX + right) ||
+                    (right > 0 && left < INT64_MIN + right)) return false;
+                *value = left - right;
+                return true;
+            case MINIC_BINARY_MULTIPLY:
+                if (left != 0 && right != 0 &&
+                    (left == INT64_MIN && right == -1)) return false;
+                if (right > 0 &&
+                    (left > INT64_MAX / right || left < INT64_MIN / right))
+                    return false;
+                if (right < -1 &&
+                    (left > INT64_MIN / right || left < INT64_MAX / right))
+                    return false;
+                if (right == -1 && left == INT64_MIN) return false;
+                *value = left * right;
+                return true;
+            case MINIC_BINARY_DIVIDE:
+                if (right == 0 || (left == INT64_MIN && right == -1))
+                    return false;
+                *value = left / right;
+                return true;
+            case MINIC_BINARY_REMAINDER:
+                if (right == 0 || (left == INT64_MIN && right == -1))
+                    return false;
+                *value = left % right;
+                return true;
+            default: return false;
+        }
+    }
     if (expression->kind == MINIC_EXPRESSION_LOCAL) {
         size_t parameter_index;
         const MinicFunction *function = context->source_function;
@@ -313,6 +373,7 @@ static bool core_inline_asm_symbolic_lvalue_address(
         const MinicExpression *base =
             minic_c0_program_expression(program, expression->value.subscript.base);
         const MinicArrayType *array_type = NULL;
+        MinicArrayObjectInfo array_info;
         MinicType element_type;
         size_t element_size;
         size_t element_alignment;
@@ -324,6 +385,7 @@ static bool core_inline_asm_symbolic_lvalue_address(
         if (base == NULL) {
             return false;
         }
+        (void)memset(&array_info, 0, sizeof(array_info));
         if (minic_type_is_pointer(base->type)) {
             if (!minic_type_pointee(base->type, &element_type)) {
                 return false;
@@ -334,13 +396,22 @@ static bool core_inline_asm_symbolic_lvalue_address(
                 symbol,
                 &base_addend,
                 depth + 1U);
-        } else if (minic_type_is_array(base->type)) {
-            array_type = minic_c0_program_array_type(program, base->type.array_type_id);
-            if (array_type == NULL || array_type->element_count == 0U ||
-                array_type->is_zero_length) {
+        } else if (minic_c0_expression_array_object_info(
+                       program, base, &array_info)) {
+            /* Legacy record-member arrays carry their element MinicType
+             * plus array-object metadata, while materialized arrays carry
+             * MINIC_TYPE_BASE_ARRAY. Both have identical C address
+             * semantics. This must mirror ordinary Core subscript lowering
+             * or a symbol+constant inline operand silently loses arrays. */
+            if (array_info.is_zero_length || array_info.is_incomplete)
                 return false;
+            if (array_info.has_materialized_type) {
+                array_type = minic_c0_program_array_type(
+                    program, base->type.array_type_id);
+                if (!array_type || array_type->element_count == 0U)
+                    return false;
             }
-            element_type = array_type->element_type;
+            element_type = array_info.element_type;
             base_ok = core_inline_asm_symbolic_lvalue_address(
                 context,
                 expression->value.subscript.base,
@@ -701,6 +772,22 @@ static const char *core_inline_asm_specialized_symbolic_name(
         if (written < 0 || (size_t)written >= integer_capacity) {
             return false;
         }
+        *text_out = integer_text;
+        *length_out = (size_t)written;
+        return true;
+    }
+    /* Compute expressions such as `1 << (feature & 7)` and `feature >> 3`
+     * after transitive inline specialization. This path is also used by
+     * relocatable-symbol indexing, and never fabricates an unknown value. */
+    if (core_inline_asm_specialized_integer(
+            context, operand->expression, &value, 0U) &&
+        (!core_inline_asm_constraint_is(operand, "rK") ||
+         (value >= 0 && value <= 31)) &&
+        (!core_inline_asm_constraint_is(operand, "I") ||
+         minic_target_info_inline_asm_immediate_constraint_supported(
+             context->target, "I", 1U, value))) {
+        int written = snprintf(integer_text, integer_capacity, "%" PRId64, value);
+        if (written < 0 || (size_t)written >= integer_capacity) return false;
         *text_out = integer_text;
         *length_out = (size_t)written;
         return true;

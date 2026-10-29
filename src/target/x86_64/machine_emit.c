@@ -13,6 +13,95 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Linux _static_cpu_has: the two real C destinations are represented in
+ * Core, and Core has already resolved three `i` expressions into owned
+ * source constants. Target x86 is responsible for physical branching,
+ * PC-relative boot_cpu_data relocation and both ELF patch-table records.
+ * A second C label or an unresolved symbol must NEVER fall into raw asm. */
+static bool emit_linux_cpu_has_asm_goto(
+    FILE *out, const MinicCoreFunction *fn, const MinicCoreInlineAsm *a,
+    size_t function_id) {
+    const char *text, *end;
+    unsigned long long feature, mask;
+    char *parsed;
+    size_t i, base_length;
+    if (!out || !fn || !a || !a->is_goto || !a->is_volatile ||
+        a->has_memory_clobber || a->register_clobber_count != 0U ||
+        a->resolved_immediate_count != 3U ||
+        a->goto_target >= fn->block_count ||
+        a->goto_second_target >= fn->block_count ||
+        a->goto_target == a->goto_second_target ||
+        !minic_x86_64_linux_cpu_has_goto_form(
+            a->template_text, a->template_length) ||
+        !a->resolved_immediates[0] || !a->resolved_immediates[1] ||
+        !a->resolved_immediates[2]) return false;
+    feature = strtoull(a->resolved_immediates[0], &parsed, 10);
+    if (parsed == a->resolved_immediates[0] || *parsed || feature > 65535U)
+        return false;
+    mask = strtoull(a->resolved_immediates[1], &parsed, 10);
+    if (parsed == a->resolved_immediates[1] || *parsed ||
+        mask != (1ULL << (feature & 7ULL))) return false;
+    /* Relocations must identify a *single* compiler-resolved symbol with an
+     * optional decimal addend. No assembler expression, dereference, '@',
+     * semicolon, parentheses or alternate section can enter through %P. */
+    text = a->resolved_immediates[2];
+    base_length = strlen(text);
+    if (base_length == 0U || base_length > 128U ||
+        !((text[0] >= 'a' && text[0] <= 'z') ||
+          (text[0] >= 'A' && text[0] <= 'Z') ||
+          text[0] == '_' || text[0] == '.')) return false;
+    for (i = 1U; i < base_length; ++i) {
+        const char ch = text[i];
+        if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+            (ch >= '0' && ch <= '9') || ch == '_' || ch == '.' || ch == '$')
+            continue;
+        if ((ch == '+' || ch == '-') && i + 1U < base_length) {
+            size_t j;
+            for (j = i + 1U; j < base_length; ++j)
+                if (text[j] < '0' || text[j] > '9') return false;
+            break;
+        }
+        return false;
+    }
+    text = strstr(a->template_text, ".skip ");
+    end = text ? strchr(text, '\n') : NULL;
+    if (!text || !end || end <= text ||
+        fputs("661:\n  jmp 6f\n662:\n", out) == EOF ||
+        fwrite(text, 1U, (size_t)(end - text + 1), out) !=
+            (size_t)(end - text + 1)) return false;
+    return fprintf(out,
+        "663:\n"
+        "  .pushsection .altinstructions,\"a\"\n"
+        "  .long 661b - .\n"
+        "  .long 6641f - .\n"
+        "  .4byte (3*32+21)\n"
+        "  .byte 663b-661b\n"
+        "  .byte 6651f-6641f\n"
+        "  .long 661b - .\n"
+        "  .long 6642f - .\n"
+        "  .4byte %llu\n"
+        "  .byte 663b-661b\n"
+        "  .byte 6652f-6642f\n"
+        "  .popsection\n"
+        "  .pushsection .altinstr_replacement,\"ax\"\n"
+        "6641:\n"
+        "  jmp .Lmini_x86_f%zu_b%u\n"
+        "6651:\n"
+        "6642:\n"
+        "6652:\n"
+        "  .popsection\n"
+        "  .pushsection .altinstr_aux,\"ax\"\n"
+        "6:\n"
+        "  testb $%llu, %s(%%rip)\n"
+        "  jnz .Lmini_x86_f%zu_b%u\n"
+        "  jmp .Lmini_x86_f%zu_b%u\n"
+        "  .popsection\n",
+        feature, function_id, (unsigned)a->goto_second_target,
+        mask, a->resolved_immediates[2],
+        function_id, (unsigned)a->goto_target,
+        function_id, (unsigned)a->goto_second_target) >= 0;
+}
+
 /* Native x86-64 machine stage, cleanly separated from function/TU owner.
  * Native x87, SysV, integer and memory emitters retain their tested
  * register and instruction sequences. */
@@ -35,10 +124,53 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
         const size_t asm_id = ins->value.inline_asm_id;
         const MinicCoreInlineAsm *a = fn != NULL &&
             asm_id < fn->inline_asm_count ? &fn->inline_asms[asm_id] : NULL;
+        static const char *const privileged[] = {
+            "  cli\n", "  sti\n", "  sti\n  hlt\n", "  hlt\n"
+        };
+        unsigned int form;
+        if (a != NULL && a->is_goto) {
+            if (getenv("MINIC_ASM_FRONTIER_TRACE") != NULL &&
+                !minic_x86_64_linux_cpu_has_goto_form(
+                    a->template_text, a->template_length))
+                (void)fprintf(stderr,
+                    "X86_TARGET_ASM_GOTO_FRONTIER function=%s length=%zu "
+                    "second=%u immediate_count=%zu preview=%.90s\n",
+                    fn->name, a->template_length, (unsigned)a->goto_second_target,
+                    a->resolved_immediate_count, a->template_text);
+            return emit_linux_cpu_has_asm_goto(out, fn, a, function_id);
+        }
+        form = a != NULL ? minic_x86_64_linux_privileged_zero_form(
+            a->template_text, a->template_length) : 0U;
+        if (form != 0U) {
+            /* Each source form has no register or C operand and carries an
+             * explicit "memory" clobber. No arbitrary opaque assembler
+             * payload may reach this privileged instruction switch. */
+            if (!a->is_volatile || (form != 4U && !a->has_memory_clobber) ||
+                a->register_clobber_count != 0U || form > 4U)
+                return false;
+            return fputs(privileged[form - 1U], out) != EOF;
+        }
         if (a == NULL || a->is_goto || a->register_clobber_count != 0U ||
             !minic_x86_64_linux_bug_table_opaque(
-                a->template_text, a->template_length))
+                a->template_text, a->template_length)) {
+            if (getenv("MINIC_ASM_FRONTIER_TRACE") != NULL &&
+                a != NULL && a->template_text != NULL) {
+                char preview[81];
+                size_t i, limit = a->template_length;
+                if (limit > sizeof(preview) - 1U) limit = sizeof(preview) - 1U;
+                for (i = 0U; i < limit; ++i) {
+                    const char c = a->template_text[i];
+                    preview[i] = (c == '\n' || c == '\r' || c == '\t') ? ' ' : c;
+                }
+                preview[limit] = '\0';
+                (void)fprintf(stderr,
+                    "X86_TARGET_ASM_FRONTIER function=%s length=%zu "
+                    "goto=%d volatile=%d mem=%d preview=%s\n",
+                    fn->name, a->template_length, a->is_goto,
+                    a->is_volatile, a->has_memory_clobber, preview);
+            }
             return false;
+        }
         return fputs("  ", out) != EOF &&
                fwrite(a->template_text, 1U, a->template_length, out) ==
                    a->template_length &&

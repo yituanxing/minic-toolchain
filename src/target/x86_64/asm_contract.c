@@ -277,6 +277,22 @@ bool minic_x86_64_linux_boot_segments_template(
     return strcmp(compact, expected) == 0;
 }
 
+/* Linux interrupt flag and halted-CPU state transitions. These four exact
+ * zero-operand GNU templates are privileged machine instructions; their
+ * compiler memory sequencing is essential, and the Target must not
+ * reinterpret them as ordinary optimizer barriers or omit the instruction. */
+unsigned int minic_x86_64_linux_privileged_zero_form(
+    const char *text, size_t length) {
+    static const char *const forms[] = {"cli", "sti", "sti; hlt", "hlt"};
+    size_t i;
+    if (!text || length == 0U || length > 32U) return 0U;
+    for (i = 0U; i < sizeof(forms) / sizeof(forms[0]); ++i)
+        if (length == strlen(forms[i]) &&
+            memcmp(text, forms[i], length) == 0)
+            return (unsigned int)(i + 1U);
+    return 0U;
+}
+
 static bool x86_linux_boot_segments_source(
     const MinicC0Program *program, const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
@@ -362,6 +378,97 @@ bool minic_x86_64_linux_three_call_alternative_form(
 }
 #undef X86_ALT_CALL_SKIP
 #undef X86_ALT_CALL_MAX
+
+/* Linux _static_cpu_has: exactly two C goto targets, three immediate
+ * operands, an 8-bit bit test in the auxiliary text section, and two runtime
+ * alternative entries. A token-by-token grammar rejects even one extra
+ * instruction, change of CPU feature metadata or section-order mutation. */
+#define X86_CPU_HAS_MAX \
+    "((6651f-6641f)^(((6651f-6641f)^(6652f-6642f))&-(-((6651f-6641f)<(6652f-6642f)))))"
+#define X86_CPU_HAS_SKIP \
+    ".skip-((" X86_CPU_HAS_MAX "-(662b-661b))>0)*(" \
+    X86_CPU_HAS_MAX "-(662b-661b)),0x90"
+
+bool minic_x86_64_linux_cpu_has_goto_form(
+    const char *text, size_t length) {
+    static const char *const lines[] = {
+        "#ALT:oldinstr2", "661:", "jmp6f", "662:",
+        "#ALT:padding2", X86_CPU_HAS_SKIP, "663:",
+        ".pushsection.altinstructions,\"a\"",
+        ".long661b-.", ".long6641f-.", ".4byte(3*32+21)",
+        ".byte663b-661b", ".byte6651f-6641f",
+        ".long661b-.", ".long6642f-.", ".4byte%c[feature]",
+        ".byte663b-661b", ".byte6652f-6642f",
+        ".popsection", ".pushsection.altinstr_replacement,\"ax\"",
+        "#ALT:replacement1", "6641:", "jmp%l[t_no]", "6651:",
+        "#ALT:replacement2", "6642:", "6652:", ".popsection",
+        ".pushsection.altinstr_aux,\"ax\"", "6:",
+        "testb%[bitnum],%P[cap_byte](%%rip)",
+        "jnz%l[t_yes]", "jmp%l[t_no]", ".popsection"
+    };
+    const size_t count = sizeof(lines) / sizeof(lines[0]);
+    size_t cursor = 0U, line_index = 0U;
+    if (!text || length < 600U || length > 1100U || strlen(text) != length)
+        return false;
+    while (cursor < length) {
+        char compact[500];
+        size_t n = 0U;
+        while (cursor < length && text[cursor] != '\n') {
+            const char ch = text[cursor++];
+            if (ch == ' ' || ch == '\t' || ch == '\r') continue;
+            if (ch == '\0' || n + 1U >= sizeof(compact)) return false;
+            compact[n++] = ch;
+        }
+        if (cursor < length) ++cursor;
+        compact[n] = '\0';
+        if (n == 0U) continue;
+        if (line_index >= count || strcmp(compact, lines[line_index]) != 0)
+            return false;
+        ++line_index;
+    }
+    return line_index == count;
+}
+#undef X86_CPU_HAS_SKIP
+#undef X86_CPU_HAS_MAX
+
+bool minic_x86_64_qualify_inline_asm_goto(
+    const MinicC0Program *program, const MinicInlineAsm *source) {
+    static const char *const names[] = {"feature", "bitnum", "cap_byte"};
+    static const char *const labels[] = {"t_yes", "t_no"};
+    const MinicExpression *expression;
+    size_t i;
+    if (!program || !source || !source->is_goto || source->is_volatile ||
+        !minic_x86_64_linux_cpu_has_goto_form(
+            source->template_text, source->template_length) ||
+        source->output_count != 0U || source->input_count != 3U ||
+        !source->inputs || source->label_count != 2U || !source->labels ||
+        source->clobber_count != 0U || source->register_clobber_count != 0U ||
+        source->has_memory_clobber) return false;
+    for (i = 0U; i < 3U; ++i) {
+        const MinicInlineAsmOperand *input = &source->inputs[i];
+        if (!target_constraint_is(input, "i") ||
+            input->access != MINIC_INLINE_ASM_OPERAND_READ_ONLY ||
+            !input->name || input->name_length != strlen(names[i]) ||
+            memcmp(input->name, names[i], input->name_length) != 0)
+            return false;
+        expression = minic_c0_program_expression(program, input->expression);
+        if (!expression || (i == 2U
+            ? !minic_type_is_pointer(expression->type)
+            : !minic_type_is_integer(expression->type))) return false;
+    }
+    for (i = 0U; i < 2U; ++i) {
+        const MinicInlineAsmLabel *label = &source->labels[i];
+        const MinicStatement *target_statement;
+        if (!label->name || label->name_length != strlen(labels[i]) ||
+            memcmp(label->name, labels[i], label->name_length) != 0 ||
+            label->target_statement == MINIC_STATEMENT_INVALID) return false;
+        target_statement = minic_c0_program_statement(
+            program, label->target_statement);
+        if (!target_statement || target_statement->kind != MINIC_STATEMENT_LABEL)
+            return false;
+    }
+    return true;
+}
 
 static bool x86_linux_three_call_alternative_source(
     const MinicC0Program *program, const MinicInlineAsm *src,
@@ -488,6 +595,82 @@ static bool x86_linux_control_register_source(
         contract->operand_count = 1U;
         contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     }
+    contract->implicit_memory_effect = true;
+    return true;
+}
+
+/* Linux writes MSR values through a static feature alternative. Before the
+ * capability is enabled, the baseline is two NOP bytes; after patching, it
+ * becomes WRMSR with ECX/EAX/EDX holding the caller's exact operands. This
+ * metadata carries an assembler-resolved .skip and the CPU feature bit.
+ * Keep a closed line grammar so no arbitrary .pushsection or machine opcode
+ * can sneak through merely because a template starts with `# ALT`. */
+bool minic_x86_64_linux_alternative_wrmsr_form(
+    const char *text, size_t length) {
+    static const char *const lines[] = {
+        "#ALT:oldnstr", "661:", "662:", "#ALT:padding",
+        ".skip-(((6651f-6641f)-(662b-661b))>0)*((6651f-6641f)-(662b-661b)),0x90",
+        "663:", ".pushsection.altinstructions,\"a\"",
+        ".long661b-.", ".long6641f-.", NULL,
+        ".byte663b-661b", ".byte6651f-6641f",
+        ".popsection", ".pushsection.altinstr_replacement,\"ax\"",
+        "#ALT:replacement1", "6641:", "wrmsr", "6651:", ".popsection"
+    };
+    size_t cursor = 0U, line_index = 0U;
+    const size_t count = sizeof(lines) / sizeof(lines[0]);
+    if (!text || length < 190U || length > 600U || strlen(text) != length)
+        return false;
+    while (cursor < length) {
+        char compact[250];
+        size_t n = 0U;
+        while (cursor < length && text[cursor] != '\n') {
+            const char c = text[cursor++];
+            if (c == ' ' || c == '\t' || c == '\r') continue;
+            if (c == '\0' || n + 1U >= sizeof(compact)) return false;
+            compact[n++] = c;
+        }
+        if (cursor < length) ++cursor;
+        compact[n] = '\0';
+        if (n == 0U) continue;
+        if (line_index >= count) return false;
+        if (lines[line_index]) {
+            if (strcmp(compact, lines[line_index]) != 0) return false;
+        } else if (line_index == 9U) {
+            if (strcmp(compact, ".4byte%c[feature]") != 0 &&
+                strcmp(compact, ".4byte%c3") != 0) return false;
+        } else return false;
+        ++line_index;
+    }
+    return line_index == count;
+}
+
+static bool x86_linux_alternative_wrmsr_source(
+    const MinicC0Program *program, const MinicInlineAsm *src,
+    MinicTargetInlineAsmContract *contract) {
+    const MinicExpression *value;
+    MinicType plain;
+    size_t i;
+    static const char *const constraints[] = {"c", "a", "d", "i"};
+    if (!program || !src || !contract || !src->is_volatile || src->is_goto ||
+        !minic_x86_64_linux_alternative_wrmsr_form(
+            src->template_text, src->template_length) ||
+        src->output_count != 0U || src->input_count != 4U ||
+        !src->inputs || src->label_count != 0U ||
+        !src->has_memory_clobber || src->clobber_count != 1U ||
+        src->register_clobber_count != 0U) return false;
+    for (i = 0U; i < 4U; ++i) {
+        if (!target_constraint_is(&src->inputs[i], constraints[i]))
+            return false;
+        value = minic_c0_program_expression(program, src->inputs[i].expression);
+        if (!value || !minic_type_unqualified(value->type, &plain) ||
+            !minic_type_is_integer(plain)) return false;
+        if (i == 0U && !minic_type_equal(plain, minic_type_unsigned_int()))
+            return false;
+        if ((i == 1U || i == 2U) &&
+            !minic_type_equal(plain, minic_type_unsigned_int())) return false;
+        contract->kinds[i] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    }
+    contract->operand_count = 4U;
     contract->implicit_memory_effect = true;
     return true;
 }
@@ -636,15 +819,15 @@ static bool clobber_is(const MinicInlineAsmRegisterClobber *op, const char *s) {
 /* Only integer operands of the same real x86 width; never silently
  * convert a user-supplied operand or drop the hardware condition flags. */
 
-/* x86 Linux zero-GNU-operand hardware ordering instruction class.
+/* x86 Linux zero-GNU-operand hardware ordering / processor-state class.
  * One ISA descriptor handles source admission and final machine emission:
  * 1=locked stack read-write barrier; 2/3/4=full/load/store fence;
- * 5=pause, 6=rep;nop. No unrestricted ASM text is allowed. */
+ * 5=pause, 6=rep;nop, 7=x87 FNINIT. No unrestricted ASM text is allowed. */
 unsigned int minic_x86_64_linux_zero_barrier_form(
     const char *text, size_t length) {
     static const char *const exact[] = {
         "lock;addl$0,-4(%%rsp)",
-        "mfence", "lfence", "sfence", "pause", "rep;nop"
+        "mfence", "lfence", "sfence", "pause", "rep;nop", "fninit"
     };
     char compact[64];
     size_t i, n = 0U;
@@ -712,7 +895,7 @@ static bool x86_ordered_clock_form(const char *s, size_t len) {
 }
 /* Complete x86 EDX:EAX counter family, GNU 32/64-bit output carriers. */
 unsigned int minic_x86_64_linux_counter_form(const char *s,size_t len) {
-    static const char *const names[]={"rdtsc","rdpmc","rdtscp"};
+    static const char *const names[]={"rdtsc","rdpmc","rdtscp","xgetbv"};
     char buf[32];size_t i,n=0U;
     if (x86_ordered_clock_form(s,len)) return 4U;
     if(!s||!len||len>=sizeof(buf))return 0U;
@@ -723,7 +906,9 @@ unsigned int minic_x86_64_linux_counter_form(const char *s,size_t len) {
         buf[n++]=c;
     }
     buf[n]=0;
-    for(i=0U;i<3U;++i)if(strcmp(buf,names[i])==0)return (unsigned int)i+1U;
+    for(i=0U;i<4U;++i)
+        if(strcmp(buf,names[i])==0)
+            return i==3U?5U:(unsigned int)i+1U;
     return 0U;
 }
 static bool x86_counter_source(const MinicC0Program *p,const MinicInlineAsm *s,
@@ -734,14 +919,15 @@ static bool x86_counter_source(const MinicC0Program *p,const MinicInlineAsm *s,
     MinicType t0,t1,ti;
     if(!p||!s||!ct||!f||!s->is_volatile||s->is_goto||
        !s->outputs||s->output_count!=2U||
-       s->input_count!=(f==2U?1U:0U)||(f==2U&&!s->inputs)||
+       s->input_count!=((f==2U||f==5U)?1U:0U)||
+       ((f==2U||f==5U)&&!s->inputs)||
        s->label_count||s->has_memory_clobber||
        s->clobber_count!=((f==3U||f==4U)?1U:0U)||
        s->register_clobber_count!=((f==3U||f==4U)?1U:0U)||
        ((f==3U||f==4U)&&(!s->register_clobbers||
         !clobber_is(&s->register_clobbers[0],"ecx")))||
        !c_is(&s->outputs[0],"=a")||!c_is(&s->outputs[1],"=d")||
-       (f==2U&&!c_is(&s->inputs[0],"c")))return false;
+       ((f==2U||f==5U)&&!c_is(&s->inputs[0],"c")))return false;
     e0=minic_c0_program_expression(p,s->outputs[0].expression);
     e1=minic_c0_program_expression(p,s->outputs[1].expression);
     if(!e0||!e1||e0->value_category!=MINIC_VALUE_LVALUE||
@@ -754,17 +940,141 @@ static bool x86_counter_source(const MinicC0Program *p,const MinicInlineAsm *s,
        (t0.integer_rank!=MINIC_INTEGER_RANK_INT&&
         t0.integer_rank!=MINIC_INTEGER_RANK_LONG&&
         t0.integer_rank!=MINIC_INTEGER_RANK_LONG_LONG))return false;
-    if(f==2U){
+    if(f==2U||f==5U){
         v=minic_c0_program_expression(p,s->inputs[0].expression);
         if(!v||!minic_type_unqualified(v->type,&ti)||
            ti.base_kind!=MINIC_TYPE_BASE_INT||
            !minic_type_is_integer(ti)||ti.pointer_depth||
            ti.integer_rank!=MINIC_INTEGER_RANK_INT)return false;
     }
-    ct->operand_count=f==2U?3U:2U;
+    ct->operand_count=(f==2U||f==5U)?3U:2U;
     ct->kinds[0]=MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     ct->kinds[1]=MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
-    if(f==2U)ct->kinds[2]=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    if(f==2U||f==5U)
+        ct->kinds[2]=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    return true;
+}
+
+/* XCR0/XSS write is architecturally privileged and requires all three
+ * physical 32-bit input registers. A plain C call or memory store would not
+ * update extended processor state, so keep its effect in the x86 target. */
+static bool x86_xsetbv_source(const MinicC0Program *program,
+                             const MinicInlineAsm *source,
+                             MinicTargetInlineAsmContract *contract) {
+    static const char *const constraints[] = {"a", "d", "c"};
+    size_t i;
+    if (!program || !source || !contract || !source->is_volatile ||
+        source->is_goto || source->template_length != 6U ||
+        memcmp(source->template_text, "xsetbv", 6U) != 0 ||
+        source->output_count != 0U || source->input_count != 3U ||
+        !source->inputs || source->label_count != 0U ||
+        source->clobber_count != 0U || source->has_memory_clobber ||
+        source->register_clobber_count != 0U) return false;
+    for (i = 0U; i < 3U; ++i) {
+        const MinicExpression *expression = minic_c0_program_expression(
+            program, source->inputs[i].expression);
+        MinicType type;
+        if (!target_constraint_is(&source->inputs[i], constraints[i]) ||
+            source->inputs[i].access != MINIC_INLINE_ASM_OPERAND_READ_ONLY ||
+            !expression || !minic_type_unqualified(expression->type, &type) ||
+            !minic_type_is_integer(type) || type.pointer_depth != 0U ||
+            type.integer_rank != MINIC_INTEGER_RANK_INT) return false;
+        contract->kinds[i] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    }
+    contract->operand_count = 3U;
+    return true;
+}
+
+/* FXSAVE uses a 16-byte-aligned, 512-byte architectural memory image.
+ * Linux has both the original 32-bit pointer form (`fxsave %0`) and the
+ * 64-bit pointer form (`fxsaveq %[fx]`). A structured memory output records
+ * exactly which C object is overwritten; no scalar imitation is permitted. */
+unsigned int minic_x86_64_linux_fxsave_form(
+    const char *text, size_t length) {
+    if (!text) return 0U;
+    if (length == 9U && memcmp(text, "fxsave %0", 9U) == 0)
+        return 1U;
+    if (length == 13U && memcmp(text, "fxsaveq %[fx]", 13U) == 0)
+        return 2U;
+    /* Core canonicalizes a named GNU output to its numeric binding. Only
+     * the source qualifier can admit the named form in the first place. */
+    if (length == 10U && memcmp(text, "fxsaveq %0", 10U) == 0)
+        return 2U;
+    return 0U;
+}
+
+static bool x86_fxsave_source(const MinicC0Program *program,
+                             const MinicInlineAsm *source,
+                             MinicTargetInlineAsmContract *contract) {
+    const unsigned int form = source ? minic_x86_64_linux_fxsave_form(
+        source->template_text, source->template_length) : 0U;
+    const MinicExpression *destination;
+    size_t size, alignment;
+    if (!program || !source || !contract || !form ||
+        !source->is_volatile || source->is_goto ||
+        !source->outputs || source->output_count != 1U ||
+        source->input_count != 0U || source->label_count != 0U ||
+        source->has_memory_clobber || source->clobber_count != 0U ||
+        source->register_clobber_count != 0U ||
+        !target_constraint_is(&source->outputs[0], form == 1U ? "+m" : "=m") ||
+        source->outputs[0].access !=
+            (form == 1U ? MINIC_INLINE_ASM_OPERAND_READ_WRITE :
+                          MINIC_INLINE_ASM_OPERAND_WRITE_ONLY)) return false;
+    if (form == 2U &&
+        (!source->outputs[0].name || source->outputs[0].name_length != 2U ||
+         memcmp(source->outputs[0].name, "fx", 2U) != 0)) return false;
+    destination = minic_c0_program_expression(
+        program, source->outputs[0].expression);
+    if (!destination || destination->value_category != MINIC_VALUE_LVALUE ||
+        minic_type_is_const(destination->type) ||
+        !minic_data_layout_type(
+            minic_target_info_data_layout(minic_target_info_for_architecture(
+                MINIC_TARGET_ARCH_X86_64)),
+            program, destination->type, &size, &alignment) ||
+        size < 512U || alignment < 16U) return false;
+    contract->operand_count = 1U;
+    contract->kinds[0] = form == 1U ?
+        MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE :
+        MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT;
+    return true;
+}
+
+/* Early boot probes the x87 execution unit by FNINIT and captures its
+ * 16-bit status/control words in two independent writable C memory objects.
+ * GNU `+m` makes both locations read/write effects, not register outputs. */
+bool minic_x86_64_linux_x87_probe_form(
+    const char *text, size_t length) {
+    static const char expected[] = "fninit ; fnstsw %0 ; fnstcw %1";
+    return text && length == sizeof(expected) - 1U &&
+           memcmp(text, expected, sizeof(expected) - 1U) == 0;
+}
+
+static bool x86_x87_probe_source(const MinicC0Program *program,
+                                 const MinicInlineAsm *source,
+                                 MinicTargetInlineAsmContract *contract) {
+    size_t i;
+    if (!program || !source || !contract || !source->is_volatile ||
+        source->is_goto || !minic_x86_64_linux_x87_probe_form(
+            source->template_text, source->template_length) ||
+        !source->outputs || source->output_count != 2U ||
+        source->input_count != 0U || source->label_count != 0U ||
+        source->has_memory_clobber || source->clobber_count != 0U ||
+        source->register_clobber_count != 0U) return false;
+    for (i = 0U; i < 2U; ++i) {
+        const MinicExpression *destination = minic_c0_program_expression(
+            program, source->outputs[i].expression);
+        MinicType value_type;
+        if (!target_constraint_is(&source->outputs[i], "+m") ||
+            source->outputs[i].access != MINIC_INLINE_ASM_OPERAND_READ_WRITE ||
+            !destination || destination->value_category != MINIC_VALUE_LVALUE ||
+            minic_type_is_const(destination->type) ||
+            !minic_type_unqualified(destination->type, &value_type) ||
+            !minic_type_equal(value_type, minic_type_unsigned_short()))
+            return false;
+        contract->kinds[i] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
+    }
+    contract->operand_count = 2U;
+    contract->implicit_memory_effect = true;
     return true;
 }
 
@@ -2511,6 +2821,14 @@ bool minic_x86_64_qualify_inline_asm(
     bool is_mulacc = false, is_muldiv = false;
     size_t i, count;
     if (!contract) return false;
+    if (x86_x87_probe_source(program, source, contract))
+        return true;
+    if (x86_fxsave_source(program, source, contract))
+        return true;
+    if (x86_xsetbv_source(program, source, contract))
+        return true;
+    if (x86_linux_alternative_wrmsr_source(program, source, contract))
+        return true;
     if (x86_linux_control_register_source(program, source, contract))
         return true;
     if (x86_linux_three_call_alternative_source(program, source, contract))

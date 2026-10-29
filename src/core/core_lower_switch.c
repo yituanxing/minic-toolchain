@@ -1185,19 +1185,26 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
             }
             prune_constant_suffix = safe;
         }
-        if (segment_terminated) {
-            continue;
-        }
-        if (break_index != SIZE_MAX) {
-            fallthrough_target = exit_block;
-        } else if (source_index + 1U < label_count) {
-            fallthrough_target = labels[source_index + 1U].body_block;
-        } else {
-            fallthrough_target = exit_block;
-        }
-        status = minic_core_lower_internal_set_branch(context, context->block_id, statement->span, fallthrough_target);
-        if (status != MINIC_CORE_LOWER_OK) {
-            return status;
+        /* A segment may end in a return/goto on every linear path, yet a
+         * separate C label after an unconditional break is entered by an
+         * earlier function-level goto. Its detached entry MUST still be
+         * lowered even when the preceding case body terminated. In
+         * particular Linux retbleed has `goto do_cmd_auto;` followed by
+         * `break; do_cmd_auto: case AUTO:`. Skipping the reentry would leave
+         * a live branch into an empty, unterminated Core block. */
+        if (!segment_terminated) {
+            if (break_index != SIZE_MAX) {
+                fallthrough_target = exit_block;
+            } else if (source_index + 1U < label_count) {
+                fallthrough_target = labels[source_index + 1U].body_block;
+            } else {
+                fallthrough_target = exit_block;
+            }
+            status = minic_core_lower_internal_set_branch(
+                context, context->block_id, statement->span, fallthrough_target);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
         }
 
         if (reentry_index != SIZE_MAX) {

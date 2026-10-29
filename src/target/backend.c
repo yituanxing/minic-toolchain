@@ -25,29 +25,30 @@ static bool emit_riscv64(const char *output_path, const MinicC0Program *program,
  * More targets can register here without modifying compiler.c or Core IR. */
 /* Reserved source ISA templates are declared in their native target. */
 static const MinicBackend riscv64_backend = {
-    MINIC_TARGET_ARCH_RISCV64, "riscv64", emit_riscv64, NULL, true, NULL
+    MINIC_TARGET_ARCH_RISCV64, "riscv64", emit_riscv64, NULL, true, NULL, NULL
 };
 static const MinicBackend riscv32_backend = {
     MINIC_TARGET_ARCH_RISCV32, "riscv32", minic_riscv32_write_core_program,
-    NULL, true, NULL
+    NULL, true, NULL, NULL
 };
 static const MinicBackend x86_64_backend = {
     MINIC_TARGET_ARCH_X86_64, "x86_64",
     minic_x86_64_write_c0_program_with_core_functions,
     minic_x86_64_qualify_inline_asm, false,
-    minic_x86_64_requires_qualified_input_asm
+    minic_x86_64_requires_qualified_input_asm,
+    minic_x86_64_qualify_inline_asm_goto
 };
 static const MinicBackend aarch64_backend = {
     MINIC_TARGET_ARCH_AARCH64, "aarch64",
     minic_aarch64_write_c0_program_with_core_functions,
     minic_aarch64_qualify_inline_asm, false,
-    minic_aarch64_requires_qualified_input_asm
+    minic_aarch64_requires_qualified_input_asm, NULL
 };
 static const MinicBackend loongarch64_backend = {
     MINIC_TARGET_ARCH_LOONGARCH64, "loongarch64",
     minic_loongarch64_write_c0_program_with_core_functions,
     minic_loongarch64_qualify_inline_asm, false,
-    minic_loongarch64_requires_qualified_input_asm
+    minic_loongarch64_requires_qualified_input_asm, NULL
 };
 
 const MinicBackend *minic_backend_for_target(const MinicTargetInfo *target) {
@@ -109,6 +110,13 @@ bool minic_backend_requires_qualified_input_asm(
     const MinicBackend *backend, const MinicInlineAsm *src) {
     return backend && backend->requires_qualified_input_asm &&
            backend->requires_qualified_input_asm(src);
+}
+
+bool minic_backend_qualify_inline_asm_goto(
+    const MinicBackend *backend, const MinicC0Program *program,
+    const MinicInlineAsm *source) {
+    return backend && backend->qualify_inline_asm_goto &&
+           backend->qualify_inline_asm_goto(program, source);
 }
 
 bool minic_backend_emit_assembly(

@@ -149,6 +149,13 @@ void minic_core_function_destroy(MinicCoreFunction *function) {
         size_t clobber_index;
 
         free(inline_asm->template_text);
+        {
+            size_t resolved_index;
+            for (resolved_index = 0U;
+                 resolved_index < inline_asm->resolved_immediate_count &&
+                     resolved_index < 3U; ++resolved_index)
+                free(inline_asm->resolved_immediates[resolved_index]);
+        }
         for (clobber_index = 0U; clobber_index < inline_asm->register_clobber_count;
              ++clobber_index) {
             free(inline_asm->register_clobbers[clobber_index].name);
@@ -706,6 +713,8 @@ bool minic_core_function_add_opaque_inline_asm(MinicCoreFunction *function,
     stored.template_length = template_length;
     stored.is_volatile = is_volatile;
     stored.has_memory_clobber = has_memory_clobber;
+    stored.goto_target = MINIC_CORE_BLOCK_INVALID;
+    stored.goto_second_target = MINIC_CORE_BLOCK_INVALID;
     function->inline_asms[function->inline_asm_count] = stored;
     *inline_asm_id = (MinicCoreInlineAsmId)function->inline_asm_count;
     function->inline_asm_count += 1U;

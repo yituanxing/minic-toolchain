@@ -271,6 +271,13 @@ typedef struct MinicCoreInlineAsm {
     bool is_goto;
     size_t source_inline_asm_id;
     MinicCoreBlockId goto_target;
+    /* Second CFG destination for a TARGET-qualified multi-label asm-goto.
+     * Existing one-label forms leave this as INVALID. */
+    MinicCoreBlockId goto_second_target;
+    /* Core-resolved GNU `i` values. These are immutable symbolic/integer
+     * constant texts; no machine syntax or relocation policy is stored. */
+    char *resolved_immediates[3];
+    size_t resolved_immediate_count;
 } MinicCoreInlineAsm;
 
 #define MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT 8U
