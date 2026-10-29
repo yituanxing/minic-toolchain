@@ -69,113 +69,135 @@ static bool advance_current_location(MiniAs *as, uint64_t amount) {
     return true;
 }
 
-bool minias_refresh_symbol_aliases(MiniAs *as) {
-    size_t remaining = 0U;
-    size_t i;
+/* SymbolID edges remain retained across every MCFragment relayout. Resolve
+ * one edge only after its target has been normalized in the current pass.
+ * This has no ISA knowledge: section-relative aliases and section-cancelled
+ * absolute aliases share the same dependency graph and overflow contract. */
+static bool resolve_symbol_alias_edge(MiniAs *as, size_t alias_id) {
+    MiniAsSymbol *alias = &as->symbols[alias_id];
+    const MiniAsSymbol *target = &as->symbols[alias->alias_target_index];
+    uint64_t value = target->value;
 
-    for (i = 0U; i < as->symbol_count; ++i) {
-        /* Re-evaluate aliases after every Fragment layout fixed point.
-         * Their final values must follow the target's moving anchor, not
-         * the first successful resolution during source parsing. */
-        if (as->symbols[i].has_alias_dependency) {
-            as->symbols[i].alias_pending=true;
-            ++remaining;
+    if (alias->alias_section_base != NULL) {
+        int target_section = minias_find_section(as, alias->alias_section_base);
+        int64_t absolute;
+        if (target_section < 0 || target->section != target_section ||
+            value > INT64_MAX ||
+            !minias_checked_add_i64((int64_t)value,
+                                     alias->alias_addend, &absolute)) {
+            minias_set_error(as, "invalid-section-relative-set:%s:line=%zu",
+                             alias->name, alias->alias_line);
+            return false;
         }
+        alias->defined = true;
+        alias->section = MINIAS_SECTION_ABS;
+        alias->subsection = 0U;
+        alias->value = (uint64_t)absolute;
+        alias->type = MINIAS_STT_NOTYPE;
+        alias->alias_pending = false;
+        return true;
     }
-    while (remaining != 0U) {
-        bool progress = false;
-
-        for (i = 0U; i < as->symbol_count; ++i) {
-            MiniAsSymbol *alias = &as->symbols[i];
-            MiniAsSymbol *target;
-            uint64_t value;
-
-            if (!alias->alias_pending) {
-                continue;
-            }
-            if (alias->alias_target_index >= as->symbol_count) {
-                minias_set_error(as, "internal:set-target-index:%s", alias->name);
-                return false;
-            }
-            target = &as->symbols[alias->alias_target_index];
-            if (!target->defined || target->alias_pending) {
-                continue;
-            }
-            value = target->value;
-            if(alias->alias_section_base!=NULL) {
-                int target_section=minias_find_section(as,alias->alias_section_base);
-                int64_t absolute;
-                /* Section-relative GNU aliases are truly ABS only if
-                 * the referenced label is defined in that exact section.
-                 * The subtraction cancels the section's load address. */
-                if(target_section<0 || target->section!=target_section ||
-                   value>INT64_MAX ||
-                   !minias_checked_add_i64((int64_t)value,
-                                    alias->alias_addend,&absolute)) {
-                    minias_set_error(as,"invalid-section-relative-set:%s:line=%zu",
-                                     alias->name,alias->alias_line);
-                    return false;
-                }
-                alias->defined=true;
-                alias->section=MINIAS_SECTION_ABS;
-                alias->subsection=0U;
-                alias->value=(uint64_t)absolute;
-                alias->type=MINIAS_STT_NOTYPE;
-                alias->alias_pending=false;
-                --remaining;progress=true;
-                continue;
-            }
-            if (alias->alias_addend >= 0) {
-                uint64_t addend = (uint64_t)alias->alias_addend;
-                if (addend > UINT64_MAX - value) {
-                    minias_set_error(as,
-                                     "set-value-overflow:%s:line=%zu",
-                                     alias->name,
-                                     alias->alias_line);
-                    return false;
-                }
-                value += addend;
-            } else {
-                uint64_t magnitude =
-                    (uint64_t)(-(alias->alias_addend + 1)) + 1U;
-                if (magnitude > value) {
-                    minias_set_error(as,
-                                     "set-value-underflow:%s:line=%zu",
-                                     alias->name,
-                                     alias->alias_line);
-                    return false;
-                }
-                value -= magnitude;
-            }
-            alias->defined = true;
-            alias->section = target->section;
-            alias->subsection = target->subsection;
-            alias->value = value;
-            alias->type = target->type;
-            if (alias->size == 0U) {
-                alias->size = target->size;
-            }
-            alias->alias_pending = false;
-            --remaining;
-            progress = true;
+    if (alias->alias_addend >= 0) {
+        uint64_t addend = (uint64_t)alias->alias_addend;
+        if (addend > UINT64_MAX - value) {
+            minias_set_error(as, "set-value-overflow:%s:line=%zu",
+                             alias->name, alias->alias_line);
+            return false;
         }
-        if (!progress) {
-            for (i = 0U; i < as->symbol_count; ++i) {
-                MiniAsSymbol *alias = &as->symbols[i];
-                if (alias->alias_pending) {
-                    MiniAsSymbol *target =
-                        &as->symbols[alias->alias_target_index];
-                    minias_set_error(as,
-                                     "unresolved-set-target:%s:%s:line=%zu",
-                                     alias->name,
-                                     target->name,
-                                     alias->alias_line);
-                    return false;
-                }
-            }
+        value += addend;
+    } else {
+        uint64_t magnitude = (uint64_t)(-(alias->alias_addend + 1)) + 1U;
+        if (magnitude > value) {
+            minias_set_error(as, "set-value-underflow:%s:line=%zu",
+                             alias->name, alias->alias_line);
+            return false;
         }
+        value -= magnitude;
     }
+    alias->defined = true;
+    alias->section = target->section;
+    alias->subsection = target->subsection;
+    alias->value = value;
+    alias->type = target->type;
+    if (alias->size == 0U) alias->size = target->size;
+    alias->alias_pending = false;
     return true;
+}
+
+/* Iterative topological evaluation, O(symbols + alias edges). The former
+ * repeated full-symbol scan was O(symbols * maximum alias-chain depth) and
+ * ran AGAIN for every branch/deferred-data relayout pass. A 4096-entry GNU
+ * macro alias chain could therefore dominate assembling a whole C file.
+ *
+ * States belong to this evaluation pass, not the parser: each later MC
+ * relayout invalidates every dependent value and evaluates the same graph
+ * against new symbol anchors. The explicit DFS path bounds stack usage and
+ * rejects cycles/undefined targets without recursive C call depth. */
+bool minias_refresh_symbol_aliases(MiniAs *as) {
+    const size_t count = as->symbol_count;
+    unsigned char *state;
+    size_t *path;
+    size_t i;
+    bool result = false;
+
+    if (count == 0U) return true;
+    if (count > SIZE_MAX / sizeof(*path)) {
+        minias_set_error(as, "symbol-alias-graph-capacity-overflow");
+        return false;
+    }
+    state = calloc(count, sizeof(*state));
+    path = malloc(count * sizeof(*path));
+    if (state == NULL || path == NULL) {
+        minias_set_error(as, "out-of-memory:symbol-alias-graph");
+        goto done;
+    }
+    for (i = 0U; i < count; ++i) {
+        if (as->symbols[i].has_alias_dependency)
+            as->symbols[i].alias_pending = true;
+    }
+    for (i = 0U; i < count; ++i) {
+        size_t cursor = i;
+        size_t depth = 0U;
+        if (!as->symbols[i].has_alias_dependency || state[i] == 2U)
+            continue;
+        while (as->symbols[cursor].has_alias_dependency &&
+               state[cursor] != 2U) {
+            const MiniAsSymbol *alias = &as->symbols[cursor];
+            if (alias->alias_target_index >= count) {
+                minias_set_error(as, "internal:set-target-index:%s", alias->name);
+                goto done;
+            }
+            if (state[cursor] == 1U) {
+                minias_set_error(as, "unresolved-set-target:%s:%s:line=%zu",
+                                 alias->name,
+                                 as->symbols[alias->alias_target_index].name,
+                                 alias->alias_line);
+                goto done;
+            }
+            state[cursor] = 1U;
+            path[depth++] = cursor;
+            cursor = alias->alias_target_index;
+        }
+        if (!as->symbols[cursor].defined ||
+            (as->symbols[cursor].has_alias_dependency &&
+             state[cursor] != 2U) || as->symbols[cursor].alias_pending) {
+            const MiniAsSymbol *alias = &as->symbols[path[depth-1U]];
+            minias_set_error(as, "unresolved-set-target:%s:%s:line=%zu",
+                             alias->name, as->symbols[cursor].name,
+                             alias->alias_line);
+            goto done;
+        }
+        while (depth != 0U) {
+            size_t id = path[--depth];
+            if (!resolve_symbol_alias_edge(as, id)) goto done;
+            state[id] = 2U;
+        }
+    }
+    result = true;
+done:
+    free(path);
+    free(state);
+    return result;
 }
 
 char *minias_strdup(const char *text) {
@@ -1359,10 +1381,22 @@ static bool parse_size(MiniAs *as, char *args, size_t line) {
         minias_set_error(as, "unsupported-expression:.size:%s:line=%zu", expr, line);
         return false;
     }
-    if (symbol->section != as->current_section ||
-        symbol->subsection != as->current_subsection) {
+    if (symbol->section != as->current_section) {
         minias_set_error(as, "size-section-mismatch:%s:line=%zu", symbol->name, line);
         return false;
+    }
+    if(symbol->subsection!=as->current_subsection) {
+        /* GAS joins numbered subsections before evaluating symbol sizes.
+         * A span from subsection 0 to subsection 1 cannot be computed from
+         * parse-site LOCAL offsets: capture its end owner and let MCLayout
+         * subtract the two final Section-relative Fragment anchors. */
+        symbol->has_size_end_anchor=true;
+        symbol->size_end_anchor=as->stmt_count;
+        symbol->size_end_subsection=as->current_subsection;
+        symbol->size_end_addend=size_addend;
+        symbol->size=0U;
+        as->has_cross_subsection_size_end=true;
+        return true;
     }
     {
         uint64_t here;
@@ -1377,6 +1411,7 @@ static bool parse_size(MiniAs *as, char *args, size_t line) {
         symbol->size = (uint64_t)end - symbol->value;
         symbol->has_size_end_anchor = true;
         symbol->size_end_anchor = as->stmt_count;
+        symbol->size_end_subsection = as->current_subsection;
         symbol->size_end_addend = size_addend;
     }
     return true;
@@ -1702,13 +1737,20 @@ static bool parse_set(MiniAs *as, char *args, size_t line) {
     }
 }
 
-/* A source-site dot assignment is an MC symbol anchor, not an instruction
- * stream control decision. Both .set and GNU NAME = .+N use this predicate;
- * all other expressions retain the conservative source-reparse policy. */
-static bool is_dot_anchor_expression(const char *expression) {
+/* A single SymbolID +/- a constant is represented as a retained alias
+ * dependency, including forward .equ/.set targets. MCLayout refreshes the
+ * entire dependency chain after every Fragment growth. Reopening the GNU
+ * source for this grammar would discard that stable MC symbol graph and
+ * needlessly re-expand macros and conditional source around a branch.
+ *
+ * More general arithmetic (. - label, A - B, ...) can depend on the
+ * original lexical location and still uses the conservative reparse guard.
+ */
+static bool is_persistent_symbol_assignment(const char *expression) {
     MiniAsSymbolExpr parsed = {0};
-    return minias_parse_symbol_addend(expression, &parsed) &&
-           strcmp(parsed.name, ".") == 0;
+    int64_t literal;
+    return minias_eval_i64_expression(expression, &literal) ||
+           minias_parse_symbol_addend(expression, &parsed);
 }
 
 /* Parse and retain the position constraint separately from its GNU optional
@@ -1721,30 +1763,44 @@ static bool handle_org_position(MiniAs *as, const char *args,
     int64_t lexical_target;
     MiniAsSymbolExpr symbolic = {0};
     MiniAsSymbol *symbol = NULL;
+    MiniAsDeferredExpr *deferred = NULL;
+    bool ready;
     uint64_t desired;
     uint64_t current;
     uint64_t pad;
 
-    if (!minias_evaluate_absolute_expression(as, args, &evaluated) || evaluated < 0) {
+    ready=minias_evaluate_absolute_expression(as,args,&evaluated);
+    if(!ready) {
+        /* A multi-level GNU .set/.equ alias may not have its final value
+         * during lexical parsing. Retain the expression as a SymbolID AST
+         * and let the two-phase MCLayout fixed point resolve it after all
+         * definitions and moving subsection bases are available. Do NOT
+         * treat an unknown symbol as zero or fabricate parser-time bytes. */
+        deferred=minias_compile_deferred_expr(as,args);
+        if(deferred==NULL)return false;
+    } else if(evaluated<0) {
         minias_set_error(as, "unsupported-expression:.org:%s:line=%zu", args, line);
         return false;
     }
-    desired = (uint64_t)evaluated;
+    desired = ready ? (uint64_t)evaluated : 0U;
     if (!minias_current_location(as, &current)) {
+        minias_deferred_expr_destroy(deferred);
         return false;
     }
-    if (desired < current) {
+    if (ready && desired < current) {
         minias_set_error(as,
                          "org-backwards:%s:current=%llu:target=%llu:line=%zu",
                          args,
                          (unsigned long long)current,
                          (unsigned long long)desired,
                          line);
+        minias_deferred_expr_destroy(deferred);
         return false;
     }
-    pad = desired - current;
-    if (pad > UINT32_MAX) {
+    pad = ready ? desired - current : 0U;
+    if (ready && pad > UINT32_MAX) {
         minias_set_error(as, "org-gap-too-large:%s:line=%zu", args, line);
+        minias_deferred_expr_destroy(deferred);
         return false;
     }
     if (!add_stmt(as,
@@ -1754,10 +1810,18 @@ static bool handle_org_position(MiniAs *as, const char *args,
                   line,
                   (uint32_t)pad,
                   1U)) {
+        minias_deferred_expr_destroy(deferred);
         return false;
     }
     as->stmts[as->stmt_count - 1U].align_has_fill = has_fill;
     as->stmts[as->stmt_count - 1U].align_fill = fill;
+    if(deferred!=NULL) {
+        MiniAsStmt *fragment=&as->stmts[as->stmt_count-1U];
+        fragment->org_expr=deferred;
+        fragment->org_mode=MINIAS_ORG_TYPED_EXPR;
+        as->has_org_constraints=true;
+        return true; /* Zero-size placeholder; MCLayout owns its padding. */
+    }
     /* Preserve the GNU expression as a typed position constraint. A source
      * string is kept only for diagnostics or unsupported control grammar. */
     if (minias_eval_i64_expression(args, &lexical_target) &&
@@ -3543,9 +3607,7 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
         memcpy(set_args,op,name_len);
         set_args[name_len]=',';
         memcpy(set_args+name_len+1U,rhs,rhs_len+1U);
-        int64_t lexical_value;
-        if (!minias_eval_i64_expression(rhs, &lexical_value) &&
-            !is_dot_anchor_expression(rhs))
+        if (!is_persistent_symbol_assignment(rhs))
             as->layout_sensitive=true;
         ok=parse_set(as,set_args,line);
         free(set_args);
@@ -3607,11 +3669,8 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
 
     if (strcmp(op, ".set") == 0 || strcmp(op, ".equ") == 0) {
         const char *comma = strchr(args, ',');
-        int64_t literal;
         if (comma == NULL ||
-            (!minias_eval_i64_expression(comma + 1U, &literal) &&
-             !(strcmp(op, ".set") == 0 &&
-               is_dot_anchor_expression(comma + 1U))))
+            !is_persistent_symbol_assignment(comma + 1U))
             as->layout_sensitive = true;
     }
     /* Space/skip/zero depend on Fragment layout, not parser control flow:

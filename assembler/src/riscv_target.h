@@ -17,6 +17,13 @@ typedef struct MiniAsRiscvState {
     bool isa_explicit;
     unsigned target_xlen;
     uint64_t isa_features;
+    /* Semantic source of ELF Tag_File attributes. Serialization is a single
+     * target-owned step, independent of source .attribute directive order. */
+    char arch_attribute_isa[512];
+    bool stack_align_present;
+    unsigned stack_align;
+    bool unaligned_access_present;
+    unsigned unaligned_access;
     unsigned char target_attributes[512];
     size_t target_attributes_size;
     /* GNU RISC-V .option push/pop is target-local, never shared state. */

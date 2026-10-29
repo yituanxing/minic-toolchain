@@ -13,6 +13,29 @@
 
 enum { X64_ZERO = 1, X64_REG_BINARY, X64_STACK, X64_MOV_IMM32, X64_ENDBR64, X64_ALU_IMM, X64_REG_MEMORY, X64_BRANCH, X64_IMM_MEMORY, X64_MOVQ_IMMREG, X64_MOVABS_IMMREG, X64_SETCC, X64_BINARY8, X64_MOVSLQ, X64_MOVZX_REG, X64_SHIFT_IMM, X64_TEST8_IMM, X64_PUSH_IMM, X64_CMOV_REG, X64_SHIFT_CL, X64_UNARY, X64_INDIRECT_REG, X64_BSWAP, X64_TEST_IMM_REG, X64_IMUL_IMM, X64_BIT_IMMREG, X64_DOUBLE_SHIFT, X64_SYSTEM_MOVE, X64_BMI2_SHIFT };
 
+/* AT&T addressing is an x86-specific machine operand; neither its ModR/M
+ * register rules nor FS/GS selector have meaning in the shared MC model.
+ * Common retains an opaque owning pointer and asks this Target to dispose
+ * the nested symbolic displacement when the MCInst's lifetime ends. */
+typedef struct X64Memory {
+    bool has_base;
+    bool pc_relative;
+    unsigned address_space;
+    unsigned base;
+    bool has_index;
+    unsigned index;
+    unsigned scale;
+    int64_t displacement;
+    MiniAsSymbolExpr *symbol;
+} X64Memory;
+
+static void x64_dispose_memory(void *opaque) {
+    X64Memory *memory = opaque;
+    if (memory == NULL) return;
+    free(memory->symbol);
+    free(memory);
+}
+
 static bool x64_register(const char *text, unsigned *reg, bool *wide) {
     static const char *const names64[16] = {
         "rax","rcx","rdx","rbx","rsp","rbp","rsi","rdi",
@@ -231,7 +254,7 @@ static bool x64_symbolic_displacement(const char *raw,
     return false;
 }
 
-static bool x64_parse_base_memory(const char *text, MiniAsMCMemory *out) {
+static bool x64_parse_base_memory(const char *text, X64Memory *out) {
     /* GNU Kbuild emits horizontal space around AT&T displacement operators,
      * parentheses and even register prefix punctuation ("(% rip)").
      * Normalize these within this x86 target addressing grammar; reject
@@ -377,7 +400,7 @@ static bool x64_parse_base_memory(const char *text, MiniAsMCMemory *out) {
     return true;
 }
 
-static unsigned x64_disp_bytes(const MiniAsMCMemory *mem) {
+static unsigned x64_disp_bytes(const X64Memory *mem) {
     /* A symbol forces a 4-byte relocation slot even at a zero addend.
      * Otherwise a base register might choose a zero/disp8 ModR/M mode. */
     if(mem->symbol)return 4U;
@@ -542,6 +565,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
     MiniAsStmt normalized, *const original=s;
     char suffixed_op[24];
     if (!m) {minias_set_error(as,"out-of-memory:x86_64-mcinst");return false;}
+    m->dispose_memory=x64_dispose_memory;
     /* IA-32 mixed-mode within ELF64. Unvalidated code32 encodings fail
      * closed; these are the actual GNU EFI thunk PUSH/LRET instructions. */
     if((s->site.mode_bits&X64_CODE32)!=0U &&
@@ -656,7 +680,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
      * owns REX/SIB/segment and common semantic ELF fixups. */
     if(!strcmp(s->op,"movnti") || !strcmp(s->op,"movntil") ||
        !strcmp(s->op,"movntiq")) {
-        MiniAsMCMemory mem;
+        X64Memory mem;
         unsigned reg;
         bool wide;
         if(!x64_args2(s->args,src,dst) ||
@@ -671,7 +695,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             minias_set_error(as,"out-of-memory:x86-movnti");
             return false;
         }
-        *m->operands[1].memory=mem;
+        *(X64Memory *)m->operands[1].memory=mem;
         m->opcode=X64_REG_MEMORY;m->count=2U;
         m->encoding=UINT32_C(0x100)|UINT32_C(0xc3);
         m->operands[0].kind=MINIAS_MC_REGISTER;
@@ -697,7 +721,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         };
         size_t k;
         for(k=0U;k<sizeof(vec)/sizeof(vec[0]);++k) {
-            MiniAsMCMemory mem;unsigned xmm=0U;
+            X64Memory mem;unsigned xmm=0U;
             const char *memptr,*xmmtext;
             if(strcmp(s->op,vec[k].name))continue;
             if(!x64_args2(s->args,src,dst))continue;
@@ -711,7 +735,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
                 free(mem.symbol);minias_mcinst_destroy(m);
                 minias_set_error(as,"out-of-memory:x86-xmm-mem");return false;
             }
-            *m->operands[1].memory=mem;
+            *(X64Memory *)m->operands[1].memory=mem;
             m->opcode=X64_REG_MEMORY;m->count=2U;
             m->encoding=vec[k].op;
             m->operands[0].kind=MINIAS_MC_REGISTER;
@@ -733,7 +757,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         unsigned pp=s->op[1]=='h'?(s->op[2]=='l'?1U:3U):2U;
         bool wc=false,source_wide=false,dest_wide=false,ok=false;
         bool memory=false;
-        MiniAsMCMemory mem;
+        X64Memory mem;
         size_t len=strlen(s->op);
         /* GNU third operands may contain SIB commas. Reuse the
          * original top-level AT&T splitter twice, so the instruction
@@ -761,7 +785,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
                 minias_set_error(as,"out-of-memory:x86-bmi2-memory");
                 return false;
             }
-            *m->operands[1].memory=mem;
+            *(X64Memory *)m->operands[1].memory=mem;
             m->opcode=X64_REG_MEMORY;m->count=3U;
             m->encoding=UINT32_C(0x40000)|pp;
             m->operands[0].kind=MINIAS_MC_REGISTER;
@@ -836,7 +860,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             {"clwb",0xaeU,6U,true}
         };
         for(i=0U;i<sizeof(hints)/sizeof(hints[0]);++i) {
-            MiniAsMCMemory mem;
+            X64Memory mem;
             if(strcmp(s->op,hints[i].name)!=0)continue;
             if(!x64_is_mem_candidate(s->args) ||
                !x64_parse_base_memory(s->args,&mem))goto invalid;
@@ -846,7 +870,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
                 minias_set_error(as,"out-of-memory:x86-prefetch");
                 return false;
             }
-            *m->operands[1].memory=mem;
+            *(X64Memory *)m->operands[1].memory=mem;
             m->opcode=X64_REG_MEMORY;m->count=2U;
             m->encoding=UINT32_C(0x100)|hints[i].opcode|
                         (hints[i].prefix66?UINT32_C(0x400):0U);
@@ -862,7 +886,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
      * 66/0F38 ModR/M/SIB target path and semantic PC32 relocation.
      * Do not copy the ELF writer or pretend it is a unary opcode. */
     if(!strcmp(s->op,"invpcid")) {
-        MiniAsMCMemory mem;
+        X64Memory mem;
         unsigned destreg;
         bool wide;
         if(!x64_args2(s->args,src,dst) ||
@@ -875,7 +899,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             minias_set_error(as,"out-of-memory:x86-invpcid");
             return false;
         }
-        *m->operands[1].memory=mem;
+        *(X64Memory *)m->operands[1].memory=mem;
         m->opcode=X64_REG_MEMORY;m->count=2U;
         m->encoding=UINT32_C(0x10000)|UINT32_C(0x100)|
                     UINT32_C(0x400)|UINT32_C(0x82);
@@ -906,7 +930,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         };
         unsigned k;
         for(k=0U;k<sizeof(fpmem)/sizeof(fpmem[0]);++k) {
-            MiniAsMCMemory mem;
+            X64Memory mem;
             if(strcmp(s->op,fpmem[k].name))continue;
             if(!x64_is_mem_candidate(s->args) ||
                !x64_parse_base_memory(s->args,&mem))goto invalid;
@@ -916,7 +940,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
                 minias_set_error(as,"out-of-memory:x86-x87-memory");
                 return false;
             }
-            *m->operands[1].memory=mem;
+            *(X64Memory *)m->operands[1].memory=mem;
             m->opcode=X64_REG_MEMORY;m->count=2U;
             m->encoding=fpmem[k].opcode;
             m->operands[0].kind=MINIAS_MC_REGISTER;
@@ -943,7 +967,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             /* A 16-bit selector in 32/64-bit destination form is GNU
              * legal and does not itself request the 66 prefix. */
         } else if(x64_is_mem_candidate(src)) {
-            MiniAsMCMemory mem;
+            X64Memory mem;
             if(!x64_parse_base_memory(src,&mem))goto invalid;
             m->operands[1].memory=malloc(sizeof(mem));
             if(!m->operands[1].memory) {
@@ -951,7 +975,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
                 minias_set_error(as,"out-of-memory:x86-lar-lsl");
                 return false;
             }
-            *m->operands[1].memory=mem;
+            *(X64Memory *)m->operands[1].memory=mem;
             m->opcode=X64_REG_MEMORY;m->count=2U;
             m->encoding=UINT32_C(0x100)|
                         (dstword?UINT32_C(0x400):0U)|
@@ -991,7 +1015,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             {"fnstsw",0xddU,7U}
         };
         for(i=0U;i<sizeof(sysmem)/sizeof(sysmem[0]);++i) {
-            MiniAsMCMemory mem;
+            X64Memory mem;
             if(strcmp(s->op,sysmem[i].name)!=0)continue;
             /* 0F 00 LTR/LLDT/STR/VERR/... also encode a register as
              * ModR/M mod=11; use the same typed unary MCInst as RDRAND.
@@ -1024,7 +1048,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
                 minias_set_error(as,"out-of-memory:x86-system-memory");
                 return false;
             }
-            *m->operands[1].memory=mem;
+            *(X64Memory *)m->operands[1].memory=mem;
             m->opcode=X64_REG_MEMORY;m->count=2U;
             m->encoding=(sysmem[i].opcode==0xd9U ||
                          sysmem[i].opcode==0xddU?0U:UINT32_C(0x100))|
@@ -1136,7 +1160,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
                  * (memory -> seg) share target ModR/M and Common
                  * symbolic relocation machinery with other operands.
                  * Loading CS is architecturally invalid. */
-                MiniAsMCMemory mem;
+                X64Memory mem;
                 if((!sys_source && sys==1U) ||
                    !x64_parse_base_memory(gp,&mem))goto invalid;
                 m->operands[1].memory=malloc(sizeof(mem));
@@ -1145,7 +1169,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
                     minias_set_error(as,"out-of-memory:x86-seg-memory");
                     return false;
                 }
-                *m->operands[1].memory=mem;
+                *(X64Memory *)m->operands[1].memory=mem;
                 m->opcode=X64_REG_MEMORY;m->count=2U;
                 m->encoding=sys_source?UINT32_C(0x8c):UINT32_C(0x8e);
                 m->operands[0].kind=MINIAS_MC_REGISTER;
@@ -1274,7 +1298,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         /* Three-operand IMUL permits r/m source; share Group-1 target
          * immediate memory ModR/M/SIB/PC32 encoding with 69/6B opcode. */
         if(x64_is_mem_candidate(from)) {
-            MiniAsMCMemory mem;
+            X64Memory mem;
             bool destwide=false;
             if(!(word?x64_register16(to,&imul_dst):
                  x64_register(to,&imul_dst,&destwide) &&
@@ -1287,7 +1311,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
                 minias_set_error(as,"out-of-memory:x86-imul-mem");
                 return false;
             }
-            *m->operands[1].memory=mem;
+            *(X64Memory *)m->operands[1].memory=mem;
             m->opcode=X64_IMM_MEMORY;m->count=3U;
             m->encoding=((int64_t)bits>=-128 && (int64_t)bits<=127?
                           UINT32_C(0x6b):UINT32_C(0x69))|
@@ -1325,7 +1349,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
      * ModR/M /0, segment, SIB and ELF PC32 fixup. */
     if(!strncmp(s->op,"set",3U) && x64_is_mem_candidate(s->args)) {
         unsigned cc;
-        MiniAsMCMemory mem;
+        X64Memory mem;
         if(x64_cond_code(s->op+3U,&cc) &&
            x64_parse_base_memory(s->args,&mem)) {
             m->operands[1].memory=malloc(sizeof(mem));
@@ -1334,7 +1358,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
                 minias_set_error(as,"out-of-memory:x86-setcc-mem");
                 return false;
             }
-            *m->operands[1].memory=mem;
+            *(X64Memory *)m->operands[1].memory=mem;
             m->opcode=X64_REG_MEMORY;m->count=2U;
             m->encoding=UINT32_C(0x300)|UINT32_C(0x90)|cc;
             m->operands[0].kind=MINIAS_MC_REGISTER;
@@ -1474,7 +1498,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
                 }
             }
             if(x64_is_mem_candidate(s->args)) {
-                MiniAsMCMemory parsed;
+                X64Memory parsed;
                 if(!x64_parse_base_memory(s->args,&parsed))goto invalid;
                 m->operands[1].memory=malloc(sizeof(parsed));
                 if(!m->operands[1].memory) {
@@ -1482,7 +1506,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
                     minias_set_error(as,"out-of-memory:x86-unary-memory");
                     return false;
                 }
-                *m->operands[1].memory=parsed;
+                *(X64Memory *)m->operands[1].memory=parsed;
                 m->opcode=X64_REG_MEMORY;m->count=2U;
                 m->encoding=unary[i].opcode|
                     (s->op[strlen(s->op)-1U]=='w'?UINT32_C(0x400):0U);
@@ -1511,14 +1535,14 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
      * FF /6 and 8F /0 imply 64-bit width: emitting REX.W is incorrect. */
     if((!strcmp(s->op,"pushq") || !strcmp(s->op,"popq")) &&
        s->args[0]!='$' && x64_is_mem_candidate(s->args)) {
-        MiniAsMCMemory parsed;
+        X64Memory parsed;
         if(!x64_parse_base_memory(s->args,&parsed))goto invalid;
         m->operands[1].memory=malloc(sizeof(parsed));
         if(!m->operands[1].memory) {
             minias_set_error(as,"out-of-memory:x86-stack-memory");
             free(parsed.symbol);minias_mcinst_destroy(m);return false;
         }
-        *m->operands[1].memory=parsed;
+        *(X64Memory *)m->operands[1].memory=parsed;
         m->opcode=X64_REG_MEMORY;m->count=2U;
         m->encoding=!strcmp(s->op,"pushq")?0xffU:0x8fU;
         m->operands[0].kind=MINIAS_MC_REGISTER;
@@ -1555,7 +1579,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             uint64_t shift=1U;
             bool imm=false,via_cl=false;
             uint32_t base;
-            MiniAsMCMemory mem;
+            X64Memory mem;
             if(x64_args2(s->args,src,dst) &&
                x64_is_mem_candidate(dst)) {
                 operand=dst;
@@ -1594,7 +1618,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
                     minias_set_error(as,"out-of-memory:x86-shift-mem");
                     return false;
                 }
-                *m->operands[1].memory=mem;
+                *(X64Memory *)m->operands[1].memory=mem;
                 if(m->opcode==X64_IMM_MEMORY) {
                     m->operands[2].kind=MINIAS_MC_IMMEDIATE;
                     m->operands[2].immediate=shift;
@@ -1935,7 +1959,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
          !strcmp(s->op,"ljmp") || !strcmp(s->op,"ljmpl") ||
          !strcmp(s->op,"lcall") || !strcmp(s->op,"lcalll")) &&
         s->args[0]=='*' && x64_is_mem_candidate(s->args+1)) {
-        MiniAsMCMemory parsed;
+        X64Memory parsed;
         if (!x64_parse_base_memory(s->args+1,&parsed))goto invalid;
         m->operands[1].memory=malloc(sizeof(parsed));
         if (!m->operands[1].memory) {
@@ -1943,7 +1967,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             minias_set_error(as,"out-of-memory:x86-indirect-memory");
             return false;
         }
-        *m->operands[1].memory=parsed;
+        *(X64Memory *)m->operands[1].memory=parsed;
         m->opcode=X64_REG_MEMORY;m->count=2U;
         m->encoding=0xffU;
         m->operands[0].kind=MINIAS_MC_REGISTER;
@@ -2076,7 +2100,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
                 goto done;
             }
             if(x64_is_mem_candidate(dst)) {
-                MiniAsMCMemory mem;
+                X64Memory mem;
                 if(!x64_parse_base_memory(dst,&mem))goto invalid;
                 m->operands[1].memory=malloc(sizeof(mem));
                 if(!m->operands[1].memory) {
@@ -2084,7 +2108,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
                     minias_set_error(as,"out-of-memory:x86-bit-imm");
                     return false;
                 }
-                *m->operands[1].memory=mem;
+                *(X64Memory *)m->operands[1].memory=mem;
                 m->opcode=X64_IMM_MEMORY;m->count=3U;
                 m->encoding=UINT32_C(0x1ba);
                 m->operands[0].kind=MINIAS_MC_REGISTER;
@@ -2164,7 +2188,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
                 !strcmp(s->op,"movb") || !strcmp(s->op,"testq") ||
                 !strcmp(s->op,"testl") || !strcmp(s->op,"testw") ||
                 !strcmp(s->op,"testb"))) {
-                MiniAsMCMemory parsed;
+                X64Memory parsed;
                 if(s->op[strlen(s->op)-1U]=='b' &&
                    (val < -256 || val > 255))goto invalid;
                 if(!x64_parse_base_memory(dst,&parsed))goto invalid;
@@ -2176,7 +2200,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
                     minias_set_error(as,"out-of-memory:x86-imm-memory");
                     minias_mcinst_destroy(m);return false;
                 }
-                *m->operands[1].memory=parsed;
+                *(X64Memory *)m->operands[1].memory=parsed;
                 m->opcode=X64_IMM_MEMORY;m->count=3U;
                 m->operands[0].kind=MINIAS_MC_REGISTER;
                 m->operands[0].reg=has_group?group:0U;
@@ -2372,7 +2396,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
      * encoding, and eventual ELF fixup. No source-string re-splitting. */
     if (x64_args2(s->args,src,dst) &&
         (x64_is_mem_candidate(src) || x64_is_mem_candidate(dst))) {
-        MiniAsMCMemory parsed;
+        X64Memory parsed;
         unsigned r, reg_bits=0U;
         bool wide=false, memory_source, legacy_high8=false;
         bool byte_add_memory_opcode_zero=false;
@@ -2486,7 +2510,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             minias_set_error(as,"out-of-memory:x86_64-mc-memory");
             free(parsed.symbol);minias_mcinst_destroy(m);return false;
         }
-        *m->operands[1].memory=parsed;
+        *(X64Memory *)m->operands[1].memory=parsed;
         m->opcode=X64_REG_MEMORY; m->count=2U;
         /* Target-local encoding flags: 0x100=two-byte opcode,
          * 0x200=low-byte REX mode, 0x400=66 word-size override. */
@@ -2617,7 +2641,7 @@ static bool x64_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
             *size=m->encoding==0xe8U?5U:2U;return true;
         case X64_IMM_MEMORY:
         case X64_REG_MEMORY: {
-            const MiniAsMCMemory *mem=m->operands[1].memory;
+            const X64Memory *mem=m->operands[1].memory;
             unsigned base=m->encoding&UINT32_C(0xff);
             unsigned extra=m->opcode==X64_IMM_MEMORY?
                 (base==0x83U || base==0xc6U || base==0x80U ||
@@ -3025,7 +3049,7 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
         }
         case X64_IMM_MEMORY:
         case X64_REG_MEMORY: {
-            const MiniAsMCMemory *mem=m->operands[1].memory;
+            const X64Memory *mem=m->operands[1].memory;
             unsigned base=m->encoding&UINT32_C(0xff);
             unsigned extra=m->opcode==X64_IMM_MEMORY?
                 (base==0x83U || base==0xc6U || base==0x80U ||

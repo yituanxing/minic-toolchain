@@ -49,4 +49,20 @@ if grep -Eq '(strict_i_xlen|strict_rv64i|isa_explicit|isa_features|target_attrib
     echo 'RISC-V profile or option stack leaked into MC Core' >&2
     exit 1
 fi
-echo 'MINIAS_MC_TARGET_BOUNDARY=PASS ISA_fixups=private target_bytes=fragment_owned site=immutable shared_lexer=4 DWARF_sort=reentrant'
+# AT&T base/index/SIB/FS/GS is not a cross-ISA MC addressing contract.
+# Memory stays a semantic operand kind, while its data layout and nested
+# allocations are private to the owning Target.
+if grep -Eq 'MiniAsMCMemory|has_index|pc_relative|address_space' \
+    assembler/src/minias_internal.h; then
+    echo 'x86 memory addressing representation leaked into MC Core' >&2
+    exit 1
+fi
+if grep -Eq 'MiniAsMCMemory|->memory->' \
+    assembler/src/minias_internal.h assembler/src/mc_operand_semantics.c; then
+    echo 'Common destructor depends on an ISA memory payload' >&2
+    exit 1
+fi
+grep -q 'void (\*dispose_memory)(void \*);' assembler/src/minias_internal.h
+grep -q 'typedef struct X64Memory' assembler/src/x86_64_target.c
+grep -q 'm->dispose_memory=x64_dispose_memory;' assembler/src/x86_64_target.c
+echo 'MINIAS_MC_TARGET_BOUNDARY=PASS ISA_fixups=private target_bytes=fragment_owned site=immutable shared_lexer=4 DWARF_sort=reentrant memory_payload=target_owned'

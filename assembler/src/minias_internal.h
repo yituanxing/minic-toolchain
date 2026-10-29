@@ -103,6 +103,9 @@ typedef struct MiniAsSymbol {
     int64_t fragment_anchor_addend;
     bool has_size_end_anchor;
     size_t size_end_anchor;
+    /* A .size end may be in another numbered subsection of the SAME ELF
+     * Section. Its Fragment owner is independent of the symbol's start. */
+    uint32_t size_end_subsection;
     int64_t size_end_addend; /* .size sym, .-sym+N is a retained end MCExpr */
     uint64_t size_end_value;
 } MiniAsSymbol;
@@ -194,20 +197,10 @@ typedef enum MiniAsMCRegisterClass {
     MINIAS_MC_REG_FPR,
     MINIAS_MC_REG_VECTOR
 } MiniAsMCRegisterClass;
-/* Target-neutral typed base/index/scale/displacement addressing.
- * Symbol expression is optional; relocation details remain target-owned.
- * Store a pointer only for memory operands, not in every integer operand. */
-typedef struct MiniAsMCMemory {
-    bool has_base;
-    bool pc_relative; /* target-specific PC-relative encoding, not implicit ABS */
-    unsigned address_space; /* optional target-owned segment/space selector */
-    unsigned base;
-    bool has_index;
-    unsigned index;
-    unsigned scale;
-    int64_t displacement;
-    MiniAsSymbolExpr *symbol;
-} MiniAsMCMemory;
+/* Memory is a semantic operand category, but its addressing representation is
+ * target-owned.  Common must not impose x86 base/index/scale, segment, or
+ * displacement rules on other ISAs.  The owning Target installs one payload
+ * destructor per instruction; the pointer is otherwise opaque to Common. */
 
 typedef struct MiniAsMCOperand {
     MiniAsMCOperandKind kind;
@@ -220,13 +213,16 @@ typedef struct MiniAsMCOperand {
     union {
         MiniAsSymbolExpr *symbol;
         MiniAsSymbolDifference *difference;
-        MiniAsMCMemory *memory;
+        void *memory;
     };
 } MiniAsMCOperand;
 typedef struct MiniAsMCInst {
     unsigned opcode;
     uint32_t encoding; /* target-owned base machine-bit template */
     unsigned count;
+    /* Disposes the target-private representation of MINIAS_MC_MEMORY.
+     * A NULL callback means the payload has no nested allocations. */
+    void (*dispose_memory)(void *);
     /* Lifetime capacity is independent from successfully parsed operands.
      * A partially parsed instruction still owns initialized slots. */
     unsigned capacity;
@@ -458,6 +454,7 @@ typedef struct MiniAs {
     bool layout_sensitive; /* position-dependent parser-control fallback */
     bool has_deferred_data; /* forward-symbol data-size fragments */
     bool has_org_constraints; /* typed position-dependent .org fragments */
+    bool has_cross_subsection_size_end; /* retained .size cross-subsection span */
     bool has_mutable_absolute_sets; /* snapshot mutable .set in data */
     bool expr_dot_override; /* explicit fragment-local dot while evaluating */
     uint64_t expr_dot_value;

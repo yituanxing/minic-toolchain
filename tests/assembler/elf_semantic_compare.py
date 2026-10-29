@@ -299,7 +299,12 @@ def relocation_counter(elf, section_keys):
     for index, sec in enumerate(elf.iter_sections()):
         if not isinstance(sec, RelocationSection):
             continue
-        target_name = section_name_for_index(elf, int(sec["sh_info"]), section_keys)
+        target_index = int(sec["sh_info"])
+        if target_index <= 0 or target_index >= elf.num_sections():
+            raise ValueError("relocation section has invalid target section index")
+        target_section = elf.get_section(target_index)
+        target_name = section_keys[target_index]
+        target_size = int(target_section["sh_size"])
         symtab = elf.get_section(int(sec["sh_link"]))
         if symtab is None or not hasattr(symtab, "get_symbol"):
             raise ValueError("relocation section missing symbol table")
@@ -309,6 +314,11 @@ def relocation_counter(elf, section_keys):
         for rel in sec.iter_relocations():
             typ = int(rel["r_info_type"])
             offset = int(rel["r_offset"])
+            # A matching pair of malformed relocation tables is not an ELF
+            # equality proof. These checks also cover nonpatching markers,
+            # ADD/SUB fixups, and RELA entries with no known write mask.
+            if offset < 0 or offset > target_size:
+                raise ValueError("relocation offset outside target section")
             addend = int(rel["r_addend"]) if is_rela else 0
             if not is_rela:
                 unknown_width[target_name].append(
@@ -347,6 +357,10 @@ def relocation_counter(elf, section_keys):
             if not is_rela:
                 continue
             if typ in fields:
+                if any(offset + displacement < 0 or
+                       offset + displacement + width > target_size
+                       for displacement, width, _ in fields[typ]):
+                    raise ValueError("relocation field outside target section")
                 masks[target_name].extend(
                     (offset + displacement, width, bitmask)
                     for displacement, width, bitmask in fields[typ])
@@ -356,6 +370,8 @@ def relocation_counter(elf, section_keys):
 
             additive_size = ADDITIVE_RELOC_WIDTHS.get(machine, {}).get(typ)
             if additive_size:
+                if offset + additive_size > target_size:
+                    raise ValueError("additive relocation field outside target section")
                 additive_ranges[target_name].append((offset, offset + additive_size))
 
         # In-place SET/SUB and LoongArch stack-operator relocations are
@@ -400,6 +416,9 @@ def section_metadata(elf, section_keys):
         metadata = {
             "type": kind,
             "flags": flags,
+            # ET_REL normally uses zero-based section addresses. A nonzero
+            # sh_addr is still an ELF input and cannot be silently ignored.
+            "address": int(hdr["sh_addr"]),
             "entsize": int(hdr["sh_entsize"]),
             "size": int(hdr["sh_size"]),
         }
@@ -538,6 +557,16 @@ def counter_to_sorted_list(counter):
 def load_semantics(path):
     with open(path, "rb") as f:
         elf = ELFFile(f)
+        # Program headers, dynamic linking and load addresses need a
+        # separate semantic model. This comparator is exclusively an ET_REL
+        # object oracle; accepting ET_EXEC/ET_DYN here would create false
+        # equality for different loadable programs.
+        if str(elf.header["e_type"]) != "ET_REL":
+            raise ValueError("ELF semantic comparator requires ET_REL objects")
+        if str(elf.header["e_machine"]) not in RELOC_FIELDS_BY_MACHINE:
+            raise ValueError("ELF semantic comparator has no target model")
+        if int(elf.header["e_phnum"]) != 0:
+            raise ValueError("ET_REL object unexpectedly contains program headers")
         section_keys, groups = stable_sections(elf)
         relocs, masks, unknown, order, relax = relocation_counter(elf, section_keys)
         contents, skipped = comparable_contents(elf, section_keys, masks, unknown)
@@ -667,6 +696,9 @@ def main():
     parser.add_argument("reference")
     parser.add_argument("candidate")
     parser.add_argument("--json-out")
+    parser.add_argument("--strict", action="store_true",
+                        help="require exact ABI/relaxation/alignment/mapping parity, "
+                             "not merely linker-compatible semantics")
     args = parser.parse_args()
 
     result = compare_paths(args.reference, args.candidate)
@@ -674,7 +706,7 @@ def main():
     if args.json_out:
         Path(args.json_out).write_text(output + "\n")
     print(output)
-    raise SystemExit(0 if result["equal"] else 1)
+    raise SystemExit(0 if result["strict_equal" if args.strict else "equal"] else 1)
 
 
 if __name__ == "__main__":

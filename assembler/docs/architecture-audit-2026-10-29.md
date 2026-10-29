@@ -122,3 +122,54 @@ triggering unrelated heavy Linux/Objcopy workflows.
 for RV64, x86-64, AArch64 and LoongArch64; 21 pinned shards and strict
 aggregate; canonical MiniObjcopy/Strip regressions. Preserve the PR as Draft
 until the associated commit SHA, test counts and run URLs are recorded.
+
+## Batch G architectural cleanup and remaining decision (2026-10-29)
+
+Review scope: all Common MC/ELF/CLI sources, x86-64, RISC-V RV32/RV64,
+AArch64, LoongArch64, DWARF/CFI, toolchain consumers and the exact-head
+GNU/3x7 gates. Six independent task owners cross-audited the implementation;
+the findings below distinguish *correct* shared policy from accidental
+coupling and must not be read as full Linux object parity.
+
+| Boundary | Batch G implementation | Meaning / next proof |
+|---|---|---|
+| Generic MC operand vs x86 syntax | `MiniAsMCMemory` base/index/scale/segment fields removed from Common; x86 owns `X64Memory`, MCInst holds an opaque target payload plus destructor callback | Four backend parsers do not inherit an x86 address format; check ASAN lifetime, x86 GNU bytes and negative operands |
+| RISC-V ELF attributes | Target stores structured stack-align/arch/unaligned fields, serializes once; no magic offset insertion at bytes 16/18 | RV32/RV64 byte-exact ordering and contradictory attributes; GNU ISA attributes still checked on CI |
+| RISC-V CSR immediates | Target reuses Common constant-expression evaluation; target retains CSR range and ISA feature checks | Remove redundant arithmetic parser, keep target encoding ownership |
+| AArch64 scalar memory | Target-private 9-form / 25-mnemonic table replaces divergent scaled/unscaled/register-indexed/unprivileged logic | Do not share A64 opcode tables with Loong; compare valid machine words and negative addressing forms with GNU |
+| LoongArch LSX/LASX vectors | One LoongArch-specific typed pattern/encoder handles vector classes and immediate bit widths, replaces several copied parsers | LSX VR and LASX XR are distinct ISA register classes; 48 positive and 20 negative probes, GNU differential required |
+| Retained `.set/.equ` aliases | Common resolves SymbolID alias chains by iterative dependency graph with explicit cycle detection instead of rescanning all symbols at each depth/relayout | Prevent quadratic behavior in 2048-element alias chains and unnecessary source reparsing; GNU x86 branch growth must remain exact |
+| ELF symbol population | Object writer builds one liveness plan for local labels, ELF relocs and COMDAT signatures rather than scanning the whole graph for every emitted symbol | 2048 temporary labels + 2048 external relocs + COMDAT GNU exact, with O(N + fixups + groups) population |
+| Debug `.loc` parser | Per-invocation cursor replaces `strtok` process-global state | Independent assembler contexts are no longer coupled through this parser's hidden global cursor |
+| GNU semantic oracle | ET_REL/known-ISA checks, section addresses, relocation site bounds, and `--strict`/`--require-strict` fail-closed modes | No unsupported ELF form can be silently counted as proven GNU equivalence |
+
+**Architecture decision:** RV32/RV64 correctly share a RISC-V Target family
+with separate XLEN/ABI profiles; AArch64 and LoongArch64 correctly remain
+different Target parsers and encoders. Their commonality belongs in generic
+MCExpr/MCFragment/MCLayout/Fixup/ObjectModel interfaces, not a fabricated
+two-Target ABI or opcode translator. The historical 2+2 and x86-shaped
+seams have been substantially reduced in Batch F/G.
+
+**Still genuinely open:**
+
+1. **P0: original GNU Linux `.o` semantic parity.** The 3x7 replay proves
+   9,645 source `.s` inputs can be assembled; it does not compare original
+   Kbuild GNU objects, full image linking, or QEMU boot. Require complete
+   paired `.o` provenance and `run_semantic_oracle.py --require-strict`, then
+   separately GNU `ld` Image and repeated QEMU P0/P1.
+2. **P1: retained conditional-region graph.** Source `.if/.elseif` may add or
+   remove Fragments, and mutable `.set`/`.align` conditions may change their
+   topology. The current bounded source reparse for those dynamic cases is
+   correct fallback until a persistent region dependency graph owns them;
+   do not delete it in the name of reducing a metric.
+3. **P1: multi-instruction Target pseudo lowering.** Parts of the RISC-V
+   expanded pseudo flow remain legacy but proven; migrate incrementally to
+   explicit retained MCInst plans only with GNU/ABI oracles for every site.
+4. **P2: instruction operand MCExpr and complete object/debug parity.** CFI,
+   all reloc payload masks, object section metadata and non-ELF facilities
+   remain target capability boundaries; do not collapse ISA-private policies
+   into Common on the assumption that two targets share an ELF class.
+
+This is the design and local regression inventory for Batch G. Only an
+exact-head CI result tied to its *actual pushed commit* can establish its
+remote Linux/GNU outcome; keep PR #667 Draft while P0 remains open.

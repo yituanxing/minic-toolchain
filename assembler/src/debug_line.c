@@ -31,6 +31,28 @@ static bool debug_unsigned(const char *text,unsigned *out) {
     *out=(unsigned)val;
     return true;
 }
+/* DWARF directive parsing must not depend on strtok's process-global
+ * cursor. Assemblers with independent MiniAs contexts may be driven from
+ * different threads, and the debug-line emitter itself already preserves
+ * that invariant during location sorting. Tokens point into this invocation's
+ * owned scratch buffer and are consumed before the buffer is freed. */
+static char *debug_next_token(char **cursor) {
+    char *start=*cursor;
+    char *end;
+    if(start==NULL)return NULL;
+    while(*start==' ' || *start=='\t')++start;
+    if(*start=='\0') {
+        *cursor=NULL;
+        return NULL;
+    }
+    end=start;
+    while(*end!='\0' && *end!=' ' && *end!='\t')++end;
+    if(*end!='\0') {
+        *end='\0';
+        *cursor=end+1U;
+    }else *cursor=NULL;
+    return start;
+}
 static bool debug_quoted(const char **current,char *out,size_t cap) {
     const char *p=*current;
     size_t n=0U;
@@ -121,39 +143,40 @@ invalid:
 }
 static bool parse_loc(MiniAs *as,const char *args,size_t source_line) {
     char *copy=minias_strdup(args);
+    char *cursor=copy;
     char *part;
     MiniAsDebugLoc loc;
     size_t symbol;
     memset(&loc,0,sizeof(loc));
     if(!copy)return false;
-    part=strtok(copy," \t");
+    part=debug_next_token(&cursor);
     if(!debug_unsigned(part,&loc.file) || loc.file==0U ||
        loc.file>as->debug_file_max ||
        as->debug_files[loc.file]==NULL)goto bad;
-    part=strtok(NULL," \t");
+    part=debug_next_token(&cursor);
     if(!debug_unsigned(part,&loc.line))goto bad;
-    part=strtok(NULL," \t");
+    part=debug_next_token(&cursor);
     if(part && debug_unsigned(part,&loc.column))
-        part=strtok(NULL," \t");
+        part=debug_next_token(&cursor);
     else loc.column=0U;
     loc.is_stmt=as->debug_is_stmt;
     while(part) {
         if(!strcmp(part,"is_stmt")) {
             unsigned val;
-            part=strtok(NULL," \t");
+            part=debug_next_token(&cursor);
             if(!debug_unsigned(part,&val) || val>1U)goto bad;
             loc.is_stmt=val!=0U;
         }else if(!strcmp(part,"basic_block"))loc.flags|=1U;
         else if(!strcmp(part,"prologue_end"))loc.flags|=2U;
         else if(!strcmp(part,"epilogue_begin"))loc.flags|=4U;
         else if(!strcmp(part,"discriminator")) {
-            part=strtok(NULL," \t");
+            part=debug_next_token(&cursor);
             if(!debug_unsigned(part,&loc.discriminator))goto bad;
         }else if(!strcmp(part,"isa")) {
-            part=strtok(NULL," \t");
+            part=debug_next_token(&cursor);
             if(!debug_unsigned(part,&loc.isa))goto bad;
         }else goto bad;
-        part=strtok(NULL," \t");
+        part=debug_next_token(&cursor);
     }
     if(as->current_section<0 ||
        (as->sections[(size_t)as->current_section].flags &

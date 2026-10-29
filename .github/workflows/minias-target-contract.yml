@@ -71,6 +71,11 @@ jobs:
           command -v riscv64-linux-gnu-as
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-rv-typed-li-materialization.sh
+      - name: GNU RISC-V option and ELF architecture attribute semantic state
+        run: |
+          command -v riscv64-linux-gnu-as
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-rv-attribute-semantic-state.sh
       - name: Assert one Common DWARF object model, CFI writer and owned bytecode
         run: bash tests/assembler/probe-cfi-model-ownership.sh
       - name: Enforce one Common MCFragment layout engine and shared variable DATA
@@ -205,6 +210,11 @@ jobs:
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=aarch64 \
             bash tests/assembler/probe-mc-operand-lexer.sh
+      - name: GNU AArch64 scalar load/store encoding table and illegal forms
+        run: |
+          command -v aarch64-linux-gnu-as
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-aarch64-scalar-memory-table.sh
       - name: GNU AArch64 MCExpr data-byte and relocation oracle
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=aarch64 \

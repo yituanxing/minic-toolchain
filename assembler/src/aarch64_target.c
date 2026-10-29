@@ -768,6 +768,154 @@ static bool a64_mask_bits(uint64_t value,bool wide,uint32_t *enc) {
     }
     return false;
 }
+
+/* One AArch64-owned description of the scalar load/store instruction bank.
+ * The source spellings (scaled, forced-unscaled and unprivileged) are distinct
+ * grammar variants of the SAME machine-width and register constraints.  Keep
+ * their opcode bases in one table instead of three diverging decoders.  All
+ * four addressing encodings share these precise A64 bitfield deltas:
+ *   unsigned imm12 -> signed imm9       : -0x01000000
+ *   unsigned imm12 -> register indexed  : -0x00dff800
+ *   unsigned imm12 -> unprivileged imm9  : -0x00fff800
+ * These are target-local ISA properties, not Common MC operand semantics. */
+enum {
+    A64_SCALAR_W=1U,
+    A64_SCALAR_X=2U,
+    A64_SCALAR_DIRECT=0U,
+    A64_SCALAR_FORCE_UNSCALED=1U,
+    A64_SCALAR_UNPRIVILEGED=2U
+};
+typedef struct A64ScalarMemoryForm {
+    unsigned bytes; /* 0: GPR destination determines transfer width */
+    unsigned allowed_registers;
+    unsigned scaled_mc_opcode; /* 0: encode preselected target word */
+    uint32_t scaled_w;
+    uint32_t scaled_x;
+} A64ScalarMemoryForm;
+
+static const A64ScalarMemoryForm a64_scalar_memory_forms[]={
+    {0U,A64_SCALAR_W|A64_SCALAR_X,A64_MC_LDR,
+        UINT32_C(0xb9400000),UINT32_C(0xf9400000)},
+    {0U,A64_SCALAR_W|A64_SCALAR_X,A64_MC_STR,
+        UINT32_C(0xb9000000),UINT32_C(0xf9000000)},
+    {1U,A64_SCALAR_W,A64_MC_LDRB,
+        UINT32_C(0x39400000),0U},
+    {1U,A64_SCALAR_W,A64_MC_STRB,
+        UINT32_C(0x39000000),0U},
+    {2U,A64_SCALAR_W,A64_MC_LDRH,
+        UINT32_C(0x79400000),0U},
+    {2U,A64_SCALAR_W,A64_MC_STRH,
+        UINT32_C(0x79000000),0U},
+    {4U,A64_SCALAR_X,0U,
+        0U,UINT32_C(0xb9800000)},
+    {1U,A64_SCALAR_W|A64_SCALAR_X,0U,
+        UINT32_C(0x39800000),UINT32_C(0x39c00000)},
+    {2U,A64_SCALAR_W|A64_SCALAR_X,0U,
+        UINT32_C(0x79800000),UINT32_C(0x79c00000)}
+};
+
+typedef struct A64ScalarMemorySpelling {
+    const char *mnemonic;
+    unsigned form;
+    unsigned policy;
+} A64ScalarMemorySpelling;
+
+static const A64ScalarMemorySpelling a64_scalar_memory_spellings[]={
+    {"ldr",0U,A64_SCALAR_DIRECT},{"str",1U,A64_SCALAR_DIRECT},
+    {"ldrb",2U,A64_SCALAR_DIRECT},{"strb",3U,A64_SCALAR_DIRECT},
+    {"ldrh",4U,A64_SCALAR_DIRECT},{"strh",5U,A64_SCALAR_DIRECT},
+    {"ldrsw",6U,A64_SCALAR_DIRECT},{"ldrsb",7U,A64_SCALAR_DIRECT},
+    {"ldrsh",8U,A64_SCALAR_DIRECT},
+    {"ldur",0U,A64_SCALAR_FORCE_UNSCALED},
+    {"stur",1U,A64_SCALAR_FORCE_UNSCALED},
+    {"ldurb",2U,A64_SCALAR_FORCE_UNSCALED},
+    {"sturb",3U,A64_SCALAR_FORCE_UNSCALED},
+    {"ldurh",4U,A64_SCALAR_FORCE_UNSCALED},
+    {"sturh",5U,A64_SCALAR_FORCE_UNSCALED},
+    {"ldursw",6U,A64_SCALAR_FORCE_UNSCALED},
+    {"ldursb",7U,A64_SCALAR_FORCE_UNSCALED},
+    {"ldursh",8U,A64_SCALAR_FORCE_UNSCALED},
+    {"ldtr",0U,A64_SCALAR_UNPRIVILEGED},
+    {"sttr",1U,A64_SCALAR_UNPRIVILEGED},
+    {"ldtrb",2U,A64_SCALAR_UNPRIVILEGED},
+    {"sttrb",3U,A64_SCALAR_UNPRIVILEGED},
+    {"ldtrh",4U,A64_SCALAR_UNPRIVILEGED},
+    {"sttrh",5U,A64_SCALAR_UNPRIVILEGED},
+    {"ldtrsw",6U,A64_SCALAR_UNPRIVILEGED}
+};
+
+static const A64ScalarMemoryForm *a64_scalar_memory_form(const char *op,
+                                                          unsigned *policy) {
+    unsigned i;
+    for(i=0U;i<sizeof(a64_scalar_memory_spellings)/
+                     sizeof(a64_scalar_memory_spellings[0]);++i) {
+        if(strcmp(op,a64_scalar_memory_spellings[i].mnemonic)==0) {
+            *policy=a64_scalar_memory_spellings[i].policy;
+            return &a64_scalar_memory_forms[
+                a64_scalar_memory_spellings[i].form];
+        }
+    }
+    return NULL;
+}
+
+static bool a64_parse_scalar_memory(MiniAsMCInst *inst,const char *op,
+                                   char t[4][384],unsigned n) {
+    unsigned policy,rd,base,mode,regbase,index,option,unitshift,unit;
+    bool wide,sp,scaled;
+    int64_t offset;
+    uint32_t base_opcode;
+    const A64ScalarMemoryForm *form=a64_scalar_memory_form(op,&policy);
+    if(!form || (n!=2U && n!=3U) ||
+       (policy!=A64_SCALAR_DIRECT && n!=2U) ||
+       !parse_a64_reg(t[0],&rd,&wide,&sp) || sp ||
+       !(form->allowed_registers & (wide?A64_SCALAR_X:A64_SCALAR_W)))
+        return false;
+    base_opcode=wide?form->scaled_x:form->scaled_w;
+    unit=form->bytes?form->bytes:(wide?8U:4U);
+    unitshift=unit==1U?0U:unit==2U?1U:unit==4U?2U:3U;
+    if(n==2U && policy==A64_SCALAR_DIRECT &&
+       a64_indexed_memory(t[1],&regbase,&index,&option,&scaled,unitshift)) {
+        inst->opcode=A64_MC_LDST_INDEX;inst->count=3U;
+        inst->encoding=(base_opcode-UINT32_C(0x00dff800)) |
+                        (option<<13U) | (scaled?UINT32_C(0x1000):0U);
+        put_reg(&inst->operands[0],rd,wide);
+        put_reg(&inst->operands[1],regbase,true);
+        put_reg(&inst->operands[2],index,option==3U || option==7U);
+        return true;
+    }
+    if(!parse_a64_mem(t[1],&base,&offset,&mode))return false;
+    if(policy==A64_SCALAR_UNPRIVILEGED) {
+        if(mode!=0U || offset<-256 || offset>255)return false;
+        inst->opcode=A64_MC_LDST_UNPRIV;inst->count=3U;
+        inst->encoding=base_opcode-UINT32_C(0x00fff800);
+    }else {
+        if(n==3U) {
+            if(mode!=0U || offset!=0 ||
+               !parse_signed_number(t[2],&offset))return false;
+            mode=2U;
+        }
+        if(policy==A64_SCALAR_FORCE_UNSCALED || mode!=0U ||
+           offset<0 || offset%(int64_t)unit!=0) {
+            if(offset<-256 || offset>255)return false;
+            inst->opcode=A64_MC_LDST_UNSCALED;inst->count=3U;
+            inst->encoding=(base_opcode-UINT32_C(0x01000000)) |
+                            (mode==1U?UINT32_C(0xc00):
+                             mode==2U?UINT32_C(0x400):0U);
+        }else {
+            if(offset/(int64_t)unit>4095)return false;
+            inst->opcode=form->scaled_mc_opcode?
+                         form->scaled_mc_opcode:A64_MC_LDST_SCALED;
+            inst->count=3U;
+            inst->encoding=base_opcode;
+            offset/=(int64_t)unit;
+        }
+    }
+    put_reg(&inst->operands[0],rd,wide);
+    put_reg(&inst->operands[1],base,true);
+    put_immediate(&inst->operands[2],offset);
+    return true;
+}
+
 /* Parsed target-owned instruction family. Complete AArch64 still requires
  * ADRP/GOT, conditional branches, shifts, and relocation fixup bitfields. */
 static bool parse_integer_family(MiniAsMCInst *inst,
@@ -1237,176 +1385,11 @@ static bool parse_integer_family(MiniAsMCInst *inst,
         return true;
     }
 
-    if ((!strcmp(op,"ldr") || !strcmp(op,"str") ||
-         !strcmp(op,"ldrb") || !strcmp(op,"strb") ||
-         !strcmp(op,"ldrh") || !strcmp(op,"strh") ||
-         !strcmp(op,"ldrsw") || !strcmp(op,"ldrsb") ||
-         !strcmp(op,"ldrsh")) && n==2U) {
-        unsigned regbase,index,option,unitshift;
-        bool scaled;
-        bool byte=!strcmp(op,"ldrb") || !strcmp(op,"strb") ||
-                  !strcmp(op,"ldrsb");
-        bool half=!strcmp(op,"ldrh") || !strcmp(op,"strh") ||
-                  !strcmp(op,"ldrsh");
-        bool ldrsw=!strcmp(op,"ldrsw");
-        uint32_t encoding;
-        if(!parse_a64_reg(t[0],&rd,&wd,&spd) || spd ||
-           ((byte || half) && op[3]!='s' && wd) ||
-           (ldrsw && !wd))return false;
-        unitshift=byte?0U:half?1U:(ldrsw || !wd)?2U:3U;
-        if(a64_indexed_memory(t[1],&regbase,&index,&option,&scaled,
-                              unitshift)) {
-            encoding=!strcmp(op,"ldr")?(wd?UINT32_C(0xf8600800):
-                                             UINT32_C(0xb8600800)):
-                     !strcmp(op,"str")?(wd?UINT32_C(0xf8200800):
-                                             UINT32_C(0xb8200800)):
-                     !strcmp(op,"ldrb")?UINT32_C(0x38600800):
-                     !strcmp(op,"strb")?UINT32_C(0x38200800):
-                     !strcmp(op,"ldrh")?UINT32_C(0x78600800):
-                     !strcmp(op,"strh")?UINT32_C(0x78200800):
-                     ldrsw?UINT32_C(0xb8a00800):
-                     !strcmp(op,"ldrsb")?(wd?UINT32_C(0x38a00800):
-                                             UINT32_C(0x38e00800)):
-                                          (wd?UINT32_C(0x78a00800):
-                                             UINT32_C(0x78e00800));
-            inst->opcode=A64_MC_LDST_INDEX;inst->count=3U;
-            inst->encoding=encoding | (option<<13U) |
-                            (scaled?UINT32_C(0x1000):0U);
-            put_reg(&inst->operands[0],rd,wd);
-            put_reg(&inst->operands[1],regbase,true);
-            put_reg(&inst->operands[2],index,option==3U || option==7U);
-            return true;
-        }
-    }
-    /* Signed LDRSW/LDRSB/LDRSH, including signed imm9 writeback and
-     * scaled unsigned imm12. Reuse machine-word and section emitters. */
-    if((!strcmp(op,"ldrsw") || !strcmp(op,"ldrsb") ||
-        !strcmp(op,"ldrsh") || !strcmp(op,"ldursw") ||
-        !strcmp(op,"ldursb") || !strcmp(op,"ldursh")) &&
-       (n==2U || n==3U)) {
-        bool byte=!strcmp(op,"ldrsb") || !strcmp(op,"ldursb");
-        bool half=!strcmp(op,"ldrsh") || !strcmp(op,"ldursh");
-        bool forced=!strncmp(op,"ldur",4U);
-        unsigned unit=byte?1U:half?2U:4U;
-        uint32_t opcodebits;
-        if(!parse_a64_reg(t[0],&rd,&wd,&spd) || spd ||
-           (!byte && !half && !wd) ||
-           !parse_a64_mem(t[1],&base,&imm,&mode))return false;
-        if(n==3U) {
-            if(forced || mode!=0U || imm!=0 ||
-               !parse_signed_number(t[2],&imm))return false;
-            mode=2U;
-        }
-        if(forced || mode!=0U || imm<0 ||
-           imm%(int64_t)unit!=0) {
-            if(imm<-256 || imm>255)return false;
-            inst->opcode=A64_MC_LDST_UNSCALED;
-            opcodebits=byte?(wd?UINT32_C(0x38800000):
-                                UINT32_C(0x38c00000)):
-                       half?(wd?UINT32_C(0x78800000):
-                                UINT32_C(0x78c00000)):
-                            UINT32_C(0xb8800000);
-            inst->encoding=opcodebits|
-                           (mode==1U?UINT32_C(0xc00):
-                            mode==2U?UINT32_C(0x400):0U);
-            put_immediate(&inst->operands[2],imm);
-        }else {
-            if(imm/(int64_t)unit>4095)return false;
-            inst->opcode=A64_MC_LDST_SCALED;
-            opcodebits=byte?(wd?UINT32_C(0x39800000):
-                                UINT32_C(0x39c00000)):
-                       half?(wd?UINT32_C(0x79800000):
-                                UINT32_C(0x79c00000)):
-                            UINT32_C(0xb9800000);
-            inst->encoding=opcodebits;
-            put_immediate(&inst->operands[2],imm/(int64_t)unit);
-        }
-        inst->count=3U;
-        put_reg(&inst->operands[0],rd,wd);
-        put_reg(&inst->operands[1],base,true);
-        return true;
-    }
-    if ((strcmp(op, "ldr") == 0 || strcmp(op, "str") == 0 ||
-         strcmp(op, "ldrb") == 0 || strcmp(op, "strb") == 0 ||
-         strcmp(op, "ldrh") == 0 || strcmp(op, "strh") == 0 ||
-         strcmp(op, "ldur") == 0 || strcmp(op, "stur") == 0 ||
-         strcmp(op, "ldurb") == 0 || strcmp(op, "sturb") == 0 ||
-         strcmp(op, "ldurh") == 0 || strcmp(op, "sturh") == 0) &&
-         (n == 2U || n == 3U)) {
-        unsigned unit;
-        bool explicitly_unscaled=strstr(op,"dur")!=NULL ||
-                                 strstr(op,"tur")!=NULL;
-        bool byte=!strcmp(op,"ldrb") || !strcmp(op,"strb") ||
-                  !strcmp(op,"ldurb") || !strcmp(op,"sturb");
-        bool half=!strcmp(op,"ldrh") || !strcmp(op,"strh") ||
-                  !strcmp(op,"ldurh") || !strcmp(op,"sturh");
-        bool load=op[0]=='l';
-        if (!parse_a64_reg(t[0], &rd, &wd, &spd) || spd ||
-            !parse_a64_mem(t[1], &base, &imm, &mode))
-            return false;
-        if(n==3U) {
-            if(explicitly_unscaled || mode!=0U || imm!=0 ||
-               !parse_signed_number(t[2],&imm))return false;
-            mode=2U;
-        }
-        unit = byte?1U:half?2U:wd?8U:4U;
-        if ((byte || half) && wd) return false;
-        if(explicitly_unscaled || mode!=0U || imm<0 ||
-           imm%(int64_t)unit!=0) {
-            if(imm < -256 || imm > 255)return false;
-            inst->opcode=A64_MC_LDST_UNSCALED;
-            inst->encoding=byte?
-                (load?UINT32_C(0x38400000):UINT32_C(0x38000000)):
-                half?(load?UINT32_C(0x78400000):UINT32_C(0x78000000)):
-                wd?(load?UINT32_C(0xf8400000):UINT32_C(0xf8000000)):
-                    (load?UINT32_C(0xb8400000):UINT32_C(0xb8000000));
-            inst->encoding|=mode==1U?UINT32_C(0xc00):
-                            mode==2U?UINT32_C(0x400):0U;
-            inst->count=3U;
-            put_reg(&inst->operands[0],rd,wd);
-            put_reg(&inst->operands[1],base,true);
-            put_immediate(&inst->operands[2],imm);
-            return true;
-        }
-        if (imm / (int64_t)unit > 4095)return false;
-        inst->opcode = strcmp(op, "ldr") == 0 ? A64_MC_LDR :
-                       strcmp(op, "str") == 0 ? A64_MC_STR :
-                       strcmp(op, "ldrb") == 0 ? A64_MC_LDRB :
-                       strcmp(op, "strb") == 0 ? A64_MC_STRB :
-                       strcmp(op, "ldrh") == 0 ? A64_MC_LDRH : A64_MC_STRH;
-        inst->count = 3U;
-        put_reg(&inst->operands[0], rd, wd);
-        put_reg(&inst->operands[1], base, true);
-        put_immediate(&inst->operands[2], imm / (int64_t)unit);
-        return true;
-    }
-    /* Unprivileged signed imm9 load/store family. LDTR/STTR do not share
-     * the pre/postindex LDUR writeback bit even for identical imm9 ranges. */
-    if((!strcmp(op,"ldtr") || !strcmp(op,"sttr") ||
-        !strcmp(op,"ldtrb") || !strcmp(op,"sttrb") ||
-        !strcmp(op,"ldtrh") || !strcmp(op,"sttrh") ||
-        !strcmp(op,"ldtrsw")) && n==2U) {
-        bool load=op[0]=='l';
-        bool byte=op[4]=='b';
-        bool half=op[4]=='h';
-        bool signedword=!strcmp(op,"ldtrsw");
-        uint32_t opbits;
-        if(!parse_a64_reg(t[0],&rd,&wd,&spd) || spd ||
-           ((byte || half) && wd) || (signedword && !wd) ||
-           !parse_a64_mem(t[1],&base,&imm,&mode) || mode!=0U ||
-           imm<-256 || imm>255)return false;
-        opbits=signedword?UINT32_C(0xb8800800):
-               byte?(load?UINT32_C(0x38400800):UINT32_C(0x38000800)):
-               half?(load?UINT32_C(0x78400800):UINT32_C(0x78000800)):
-               wd?(load?UINT32_C(0xf8400800):UINT32_C(0xf8000800)):
-                  (load?UINT32_C(0xb8400800):UINT32_C(0xb8000800));
-        inst->opcode=A64_MC_LDST_UNPRIV;inst->count=3U;
-        inst->encoding=opbits;
-        put_reg(&inst->operands[0],rd,wd);
-        put_reg(&inst->operands[1],base,true);
-        put_immediate(&inst->operands[2],imm);
-        return true;
-    }
+    /* Scalar memory operands share one target ISA descriptor across
+     * unsigned scaled, pre/post-index, explicitly unscaled and unprivileged
+     * encodings. GNU distinguishes the addressing policy, not the core
+     * register/width grammar; this keeps all forms in sync. */
+    if(a64_parse_scalar_memory(inst,op,t,n))return true;
     if ((!strcmp(op, "stp") || !strcmp(op, "ldp") ||
          !strcmp(op,"ldpsw") || !strcmp(op,"stnp") ||
          !strcmp(op,"ldnp")) && (n == 3U || n == 4U)) {

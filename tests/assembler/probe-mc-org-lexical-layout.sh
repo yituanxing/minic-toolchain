@@ -119,6 +119,38 @@ for anchor in .LANCHOR0 assigned_anchor; do
   test -n "$mini_value" && test "$mini_value" = "$gnu_value"
 done
 
+# A bare SymbolID alias chain is already modeled by persistent MC symbol
+# dependencies. Branch growth must update every alias without reparsing the
+# lexical GNU assignment/.equ/.set source, even when symbols were forward.
+cat >"$work/alias.s" <<SRC
+.text
+.globl entry
+entry:
+  $branch
+  .equ equ_far, far
+  .set set_far, equ_far + 4
+  assignment_far = set_far + 6
+  .rept $repeats
+    $nop
+  .endr
+far:
+  $nop
+  .quad assignment_far - entry
+SRC
+MINIAS_TRACE_RELAYOUT=1 "$MINIAS" "${mini[@]}" \
+  -o "$work/alias-mini.o" "$work/alias.s" 2>"$work/trace"
+"${gas[@]}" -o "$work/alias-gnu.o" "$work/alias.s"
+grep -q 'minias-fragment-relayout:inplace-passes=' "$work/trace"
+grep -q 'minias-fragment-graph:anchors_built=1.*reparse=0' "$work/trace"
+"${copy[@]}" -j .text -O binary "$work/alias-mini.o" "$work/alias-mini.bin"
+"${copy[@]}" -j .text -O binary "$work/alias-gnu.o" "$work/alias-gnu.bin"
+cmp "$work/alias-mini.bin" "$work/alias-gnu.bin"
+for name in equ_far set_far assignment_far; do
+  mini_value=$(readelf -sW "$work/alias-mini.o" | awk -v n="$name" '$NF == n { print $2 }')
+  gnu_value=$(readelf -sW "$work/alias-gnu.o" | awk -v n="$name" '$NF == n { print $2 }')
+  test -n "$mini_value" && test "$mini_value" = "$gnu_value"
+done
+
 # When expansion would cross a frozen .org target, reject it.  Silently
 # overlapping or truncating the Section is never a valid relaxation.
 cat >"$work/backwards.s" <<SRC
@@ -140,4 +172,4 @@ fi
 grep -q 'org-backwards-after-layout' "$work/backwards.err"
 test ! -e "$work/backwards.o"
 
-echo "MINIAS_MC_ORG_LEXICAL_LAYOUT=PASS arch=$ARCH persistent_org=1 dot_org=1 anchored_set=1 bare_assignment=1 fill=3 lexical_parse=1 GNU_exact=1 backwards_rejected=1"
+echo "MINIAS_MC_ORG_LEXICAL_LAYOUT=PASS arch=$ARCH persistent_org=1 dot_org=1 anchored_set=1 bare_assignment=1 alias_chain=3 fill=3 lexical_parse=1 GNU_exact=1 backwards_rejected=1"

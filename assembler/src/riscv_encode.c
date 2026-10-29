@@ -274,60 +274,14 @@ static bool rv32_li_value(uint64_t bits, int64_t *result) {
 }
 
 static bool parse_csr_numeric_expression(const char *text, uint32_t *csr) {
-    const char *cursor = text;
-    char *end = NULL;
-    unsigned long long result;
-
-    while (*cursor == ' ' || *cursor == '\t') {
-        ++cursor;
-    }
-    errno = 0;
-    result = strtoull(cursor, &end, 0);
-    if (errno != 0 || end == cursor) {
+    uint64_t value;
+    /* CSR immediates use the same constant-expression grammar as other
+     * integer operands. The target boundary only checks the 12-bit range;
+     * no independent arithmetic parser or overflow rules live here. */
+    if (!minias_eval_u64_expression(text, &value) || value > 0xfffU)
         return false;
-    }
-    cursor = end;
-
-    for (;;) {
-        char op;
-        unsigned long long term;
-
-        while (*cursor == ' ' || *cursor == '\t') {
-            ++cursor;
-        }
-        if (*cursor == '\0') {
-            if (result > 0xfffULL) {
-                return false;
-            }
-            *csr = (uint32_t)result;
-            return true;
-        }
-        op = *cursor;
-        if (op != '+' && op != '-') {
-            return false;
-        }
-        ++cursor;
-        while (*cursor == ' ' || *cursor == '\t') {
-            ++cursor;
-        }
-        errno = 0;
-        term = strtoull(cursor, &end, 0);
-        if (errno != 0 || end == cursor) {
-            return false;
-        }
-        if (op == '+') {
-            if (term > UINT64_MAX - result) {
-                return false;
-            }
-            result += term;
-        } else {
-            if (term > result) {
-                return false;
-            }
-            result -= term;
-        }
-        cursor = end;
-    }
+    *csr = (uint32_t)value;
+    return true;
 }
 
 static bool parse_csr(const char *text, uint32_t *csr) {

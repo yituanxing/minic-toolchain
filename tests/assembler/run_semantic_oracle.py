@@ -23,6 +23,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--expected", type=int)
     p.add_argument("--native35", action="store_true")
     p.add_argument("--require-equal", action="store_true")
+    p.add_argument("--require-strict", action="store_true",
+                   help="require exact GNU section alignment, RELAX markers "
+                        "and mapping symbols as well as compatible ELF parity")
     return p.parse_args()
 
 
@@ -133,7 +136,14 @@ def main() -> int:
         incomplete = bool(data.get("inconclusive", False))
         other_diff = any(not ok for k, ok in data["dimensions"].items()
                          if k != "known_relocation_widths")
-        classification = ("DIFF" if other_diff else
+        if args.require_strict:
+            for name, strict_key in (("strict_section_alignment", "strict_section_alignment"),
+                                     ("strict_relaxation_markers", "strict_relaxation_markers"),
+                                     ("strict_mapping_symbols", "strict_mapping_symbols")):
+                if not data.get(strict_key, False):
+                    failed_dims.append(name)
+        strict_diff = args.require_strict and not data.get("strict_equal", False)
+        classification = ("DIFF" if other_diff or (strict_diff and not incomplete) else
                           "INCONCLUSIVE" if incomplete else "PASS")
         return {
             "status": classification,
@@ -196,8 +206,10 @@ def main() -> int:
     )
     if infrastructure_failures:
         return 2
-    if args.require_equal and (status["DIFF"] or status["INCONCLUSIVE"] or
-                               status["PASS"] != len(rows)):
+    if (args.require_equal or args.require_strict) and (
+            status["DIFF"] or status["INCONCLUSIVE"] or
+            status["PASS"] != len(rows) or
+            (args.require_strict and strict != len(rows))):
         return 1
     return 0
 

@@ -53,6 +53,30 @@ static int compare_subsections(const void *lhs_ptr, const void *rhs_ptr) {
     return 0;
 }
 
+/* The parser must tolerate arbitrary source-order .subsection switches, so
+ * its lookup is intentionally linear. Once MCLayout canonicalizes the
+ * subsection array it is immutable and sorted (Section, subsection number).
+ * A distinct logarithmic lookup avoids O(symbols * subsections) searches in
+ * every relayout/fixup iteration of large real-world objects. */
+static MiniAsSubsection *find_canonical_subsection(const MiniAs *as,
+                                                   int section,
+                                                   uint32_t number) {
+    size_t lo = 0U, hi = as->subsection_count;
+    while (lo < hi) {
+        size_t mid = lo + (hi-lo)/2U;
+        MiniAsSubsection *sub = &as->subsections[mid];
+        if (sub->section < section ||
+            (sub->section == section && sub->number < number))
+            lo = mid+1U;
+        else hi = mid;
+    }
+    if (lo < as->subsection_count &&
+        as->subsections[lo].section == section &&
+        as->subsections[lo].number == number)
+        return &as->subsections[lo];
+    return NULL;
+}
+
 bool minias_finalize_subsection_layout(MiniAs *as) {
     size_t i;
     int active_section = -1;
@@ -91,7 +115,7 @@ bool minias_finalize_subsection_layout(MiniAs *as) {
     for (i = 0U; i < as->stmt_count; ++i) {
         MiniAsStmt *stmt = &as->stmts[i];
         MiniAsSubsection *sub =
-            minias_find_subsection(as, stmt->section, stmt->subsection);
+            find_canonical_subsection(as, stmt->section, stmt->subsection);
         if (sub == NULL || stmt->offset > UINT64_MAX - sub->base) {
             minias_set_error(as, "internal:stmt-subsection-layout");
             return false;
@@ -109,7 +133,8 @@ bool minias_finalize_subsection_layout(MiniAs *as) {
             symbol->has_alias_dependency) {
             continue;
         }
-        sub = minias_find_subsection(as, symbol->section, symbol->subsection);
+        sub = find_canonical_subsection(as, symbol->section,
+                                        symbol->subsection);
         if (sub == NULL || symbol->value > UINT64_MAX - sub->base) {
             minias_set_error(as, "internal:symbol-subsection-layout:%s", symbol->name);
             return false;
@@ -141,7 +166,13 @@ bool minias_finalize_subsection_layout(MiniAs *as) {
 typedef struct MiniAsAnchorGraph {
     size_t *start_head, *end_head;
     size_t *start_next, *end_next;
-    size_t *statement_subsection, *symbol_subsection;
+    size_t *statement_subsection, *symbol_subsection,*end_subsection;
+    /* Per-pass subsection-local candidate coordinates. Kept separate from
+     * MiniAsSymbol until the entire Fragment pass commits atomically, so
+     * `.org` sees one coherent previous Section-relative symbol snapshot. */
+    uint64_t *start_local, *end_local;
+    uint64_t *candidate_base;
+    uint32_t *org_next_size;
     size_t stmt_count, symbol_count, subsection_count, relayout_count;
 } MiniAsAnchorGraph;
 
@@ -153,6 +184,11 @@ static void free_anchor_graph(MiniAsAnchorGraph *graph) {
     free(graph->end_next);
     free(graph->statement_subsection);
     free(graph->symbol_subsection);
+    free(graph->end_subsection);
+    free(graph->start_local);
+    free(graph->end_local);
+    free(graph->candidate_base);
+    free(graph->org_next_size);
     free(graph);
 }
 
@@ -183,6 +219,7 @@ static MiniAsAnchorGraph *build_anchor_graph(MiniAs *as) {
     }
     if (n == SIZE_MAX || n + 1U > SIZE_MAX / sizeof(size_t) ||
         symbols > SIZE_MAX / sizeof(size_t) ||
+        symbols > SIZE_MAX / sizeof(uint64_t) ||
         subsections > SIZE_MAX / sizeof(size_t)) {
         minias_set_error(as, "fragment-index-capacity-overflow");
         return NULL;
@@ -202,10 +239,21 @@ static MiniAsAnchorGraph *build_anchor_graph(MiniAs *as) {
     graph->statement_subsection = malloc((n ? n : 1U) * sizeof(size_t));
     graph->symbol_subsection =
         malloc((symbols ? symbols : 1U) * sizeof(size_t));
+    graph->end_subsection =
+        malloc((symbols ? symbols : 1U) * sizeof(size_t));
+    graph->start_local = malloc((symbols ? symbols : 1U) * sizeof(uint64_t));
+    graph->end_local = malloc((symbols ? symbols : 1U) * sizeof(uint64_t));
+    graph->candidate_base = malloc((subsections ? subsections : 1U) *
+                                   sizeof(uint64_t));
+    graph->org_next_size = malloc((n ? n : 1U) * sizeof(uint32_t));
     if (graph->start_head == NULL || graph->end_head == NULL ||
         graph->start_next == NULL || graph->end_next == NULL ||
         graph->statement_subsection == NULL ||
-        graph->symbol_subsection == NULL) {
+        graph->symbol_subsection == NULL ||
+        graph->end_subsection == NULL ||
+        graph->start_local == NULL || graph->end_local == NULL ||
+        graph->candidate_base == NULL ||
+        graph->org_next_size == NULL) {
         minias_set_error(as, "out-of-memory:fragment-index-storage");
         goto fail;
     }
@@ -228,7 +276,8 @@ static MiniAsAnchorGraph *build_anchor_graph(MiniAs *as) {
     for (i = 0U; i < n; ++i) {
         const MiniAsStmt *stmt = &as->stmts[i];
         MiniAsSubsection *sub =
-            minias_find_subsection(as, stmt->section, stmt->subsection);
+            find_canonical_subsection(as, stmt->section,
+                                      stmt->subsection);
         if (sub == NULL) {
             minias_set_error(as, "fragment-index-missing-stmt-subsection:%zu",
                              stmt->line);
@@ -239,13 +288,21 @@ static MiniAsAnchorGraph *build_anchor_graph(MiniAs *as) {
     for (i = 0U; i < symbols; ++i) {
         const MiniAsSymbol *sym = &as->symbols[i];
         MiniAsSubsection *sub = NULL;
+        MiniAsSubsection *end_sub = NULL;
         graph->start_next[i] = SIZE_MAX;
         graph->end_next[i] = SIZE_MAX;
         graph->symbol_subsection[i] = SIZE_MAX;
+        graph->end_subsection[i] = SIZE_MAX;
         if (sym->defined && sym->section >= 0)
-            sub = minias_find_subsection(as, sym->section, sym->subsection);
+            sub = find_canonical_subsection(as, sym->section,
+                                            sym->subsection);
         if (sub != NULL)
             graph->symbol_subsection[i] = (size_t)(sub - as->subsections);
+        if (sym->has_size_end_anchor)
+            end_sub = find_canonical_subsection(as, sym->section,
+                                                 sym->size_end_subsection);
+        if (end_sub != NULL)
+            graph->end_subsection[i] = (size_t)(end_sub - as->subsections);
         if (sym->has_fragment_anchor && sym->defined && sym->section >= 0) {
             if (sym->fragment_anchor > n || sub == NULL) {
                 minias_set_error(as, "fragment-index-invalid-start:%s",
@@ -256,7 +313,7 @@ static MiniAsAnchorGraph *build_anchor_graph(MiniAs *as) {
             graph->start_head[sym->fragment_anchor] = i;
         }
         if (sym->has_size_end_anchor) {
-            if (sym->size_end_anchor > n || sub == NULL ||
+            if (sym->size_end_anchor > n || end_sub == NULL ||
                 !sym->has_fragment_anchor) {
                 minias_set_error(as, "fragment-index-invalid-end:%s",
                                  sym->name);
@@ -307,8 +364,7 @@ static bool add_signed_u64(uint64_t base, int64_t addend, uint64_t *result) {
  * relayout an earlier Symbol anchor is subsection-local; after final
  * layout it is section-relative.  Neither case re-reads source text. */
 static bool org_fragment_padding(MiniAs *as, const MiniAsStmt *stmt,
-                                 uint64_t location, bool final_symbols,
-                                 uint32_t *padding) {
+                                 uint64_t location, uint32_t *padding) {
     uint64_t target = 0U;
     uint64_t gap;
     if (stmt->org_mode == MINIAS_ORG_ABSOLUTE) {
@@ -328,7 +384,8 @@ static bool org_fragment_padding(MiniAs *as, const MiniAsStmt *stmt,
             return false;
         }
         symbol = &as->symbols[stmt->org_symbol_index];
-        sub = minias_find_subsection(as,symbol->section,symbol->subsection);
+        sub = find_canonical_subsection(as,symbol->section,
+                                        symbol->subsection);
         if (sub == NULL || !symbol->defined ||
             !symbol->has_fragment_anchor ||
             symbol->section != stmt->section ||
@@ -336,14 +393,9 @@ static bool org_fragment_padding(MiniAs *as, const MiniAsStmt *stmt,
             minias_set_error(as,"org-symbol-owner-invalid:line=%zu",stmt->line);
             return false;
         }
+        /* MCLayout reads only a coherent Section-relative SymbolID snapshot.
+         * New anchor candidates stay private until this pass commits. */
         value = symbol->value;
-        if (!final_symbols) {
-            if (sub->base > UINT64_MAX - value) {
-                minias_set_error(as,"org-symbol-base-overflow:line=%zu",stmt->line);
-                return false;
-            }
-            value += sub->base;
-        }
         if (!add_signed_u64(value,stmt->org_addend,&target)) {
             minias_set_error(as,"org-symbol-addend-overflow:line=%zu",stmt->line);
             return false;
@@ -385,16 +437,16 @@ static bool org_fragment_padding(MiniAs *as, const MiniAsStmt *stmt,
     return true;
 }
 
-/* Persistent Fragment fixed-point: the Target owns alternative instruction
- * widths but cannot mutate Section placement.  Symbol-start, symbol-size
- * end and the statement itself all use the SAME prevalidated subsection
- * index.  This prevents source-order .subsection switches from binding an
- * anchor to a different output Section after a branch expands. */
-static bool minias_relayout_fragments(MiniAs *as, bool *org_changed) {
+/* Rebuild one coherent Section-relative SymbolID snapshot for the CURRENT
+ * Fragment sizes. This pass may recompute native alignment but deliberately
+ * does NOT reevaluate `.org`: every `.org` expression must later observe
+ * symbols and locations from the same completed snapshot, even when a
+ * previous branch expanded or an earlier subsection was resized. */
+static bool minias_scan_fragment_layout(MiniAs *as, bool *placement_changed) {
     MiniAsAnchorGraph *graph = build_anchor_graph(as);
     size_t i;
     if (graph == NULL) return false;
-    if (org_changed != NULL) *org_changed = false;
+    if (placement_changed != NULL) *placement_changed = false;
     ++graph->relayout_count;
     for (i = 0U; i < graph->subsection_count; ++i)
         as->subsections[i].size = 0U;
@@ -408,9 +460,12 @@ static bool minias_relayout_fragments(MiniAs *as, bool *org_changed) {
                 minias_set_error(as, "internal:fragment-start-subsection");
                 return false;
             }
+            /* Jacobi-style relayout: staged subsection-local candidates
+             * cannot mutate the previous Section-relative symbols seen by
+             * expressions and aliases in later statements of this pass. */
             if (!add_signed_u64(as->subsections[subsection].size,
                                 as->symbols[symbol].fragment_anchor_addend,
-                                &as->symbols[symbol].value)) {
+                                &graph->start_local[symbol])) {
                 minias_set_error(as,"fragment-anchor-addend-overflow:%s",
                                  as->symbols[symbol].name);
                 return false;
@@ -418,14 +473,14 @@ static bool minias_relayout_fragments(MiniAs *as, bool *org_changed) {
         }
         for (symbol = graph->end_head[i]; symbol != SIZE_MAX;
              symbol = graph->end_next[symbol]) {
-            const size_t subsection = graph->symbol_subsection[symbol];
+            const size_t subsection = graph->end_subsection[symbol];
             if (subsection >= graph->subsection_count) {
                 minias_set_error(as, "internal:fragment-end-subsection");
                 return false;
             }
             if(!add_signed_u64(as->subsections[subsection].size,
                                as->symbols[symbol].size_end_addend,
-                               &as->symbols[symbol].size_end_value)) {
+                               &graph->end_local[symbol])) {
                 minias_set_error(as,"fragment-size-addend-overflow:%s",
                                  as->symbols[symbol].name);
                 return false;
@@ -447,15 +502,7 @@ static bool minias_relayout_fragments(MiniAs *as, bool *org_changed) {
             }
             stmt->offset = sub->size;
             if (stmt->kind == MINIAS_STMT_ALIGN &&
-                stmt->org_mode != MINIAS_ORG_SOURCE) {
-                uint32_t pad;
-                if (sub->size > UINT64_MAX - sub->base ||
-                    !org_fragment_padding(as,stmt,sub->base+sub->size,
-                                          false,&pad)) return false;
-                if (org_changed != NULL && stmt->size != pad)
-                    *org_changed = true;
-                stmt->size = pad;
-            } else if (stmt->kind == MINIAS_STMT_ALIGN &&
+                stmt->org_mode == MINIAS_ORG_SOURCE &&
                        strcmp(stmt->op, ".org") != 0) {
                 const uint64_t alignment = stmt->align;
                 uint64_t pad;
@@ -472,6 +519,8 @@ static bool minias_relayout_fragments(MiniAs *as, bool *org_changed) {
                     minias_set_error(as, "fragment-alignment-overflow");
                     return false;
                 }
+                if(placement_changed != NULL && stmt->size!=(uint32_t)pad)
+                    *placement_changed=true;
                 stmt->size = (uint32_t)pad;
             }
             if ((uint64_t)stmt->size > UINT64_MAX - sub->size) {
@@ -481,31 +530,20 @@ static bool minias_relayout_fragments(MiniAs *as, bool *org_changed) {
             sub->size += stmt->size;
         }
     }
-    for (i = 0U; i < graph->symbol_count; ++i) {
-        MiniAsSymbol *symbol = &as->symbols[i];
-        if (!symbol->has_size_end_anchor) continue;
-        if (!symbol->has_fragment_anchor ||
-            symbol->size_end_value < symbol->value) {
-            minias_set_error(as, "fragment-size-location-mismatch:%s",
-                             symbol->name);
-            return false;
-        }
-        symbol->size = symbol->size_end_value - symbol->value;
-    }
-    /* This pass used the PREVIOUS subsection bases to solve .org. If an
-     * earlier subsection's DATA grew, the freshly computed base must itself
-     * trigger another pass even when no .org padding changed YET. Otherwise
-     * an apparently stable pass can validate against a different address. */
-    if(org_changed != NULL) {
+    /* Determine final candidate subsection bases BEFORE subtracting the
+     * retained .size start/end anchors. They may belong to two different
+     * numbered subsections of one ELF Section, and local offsets cannot be
+     * subtracted until each has been translated into Section coordinates. */
+    {
         int active_section=-1;
         uint64_t base=0U;
-        for(i=0U;i<as->subsection_count;++i) {
+        for(i=0U;i<graph->subsection_count;++i) {
             const MiniAsSubsection *sub=&as->subsections[i];
             if(sub->section!=active_section) {
                 active_section=sub->section;
                 base=0U;
             }
-            if(sub->base!=base)*org_changed=true;
+            graph->candidate_base[i]=base;
             if(sub->size>UINT64_MAX-base) {
                 minias_set_error(as,"section-layout-overflow");
                 return false;
@@ -513,7 +551,102 @@ static bool minias_relayout_fragments(MiniAs *as, bool *org_changed) {
             base+=sub->size;
         }
     }
+    for (i = 0U; i < graph->symbol_count; ++i) {
+        MiniAsSymbol *symbol = &as->symbols[i];
+        size_t start_idx,end_idx;
+        uint64_t start,end;
+        if (!symbol->has_size_end_anchor) continue;
+        start_idx=graph->symbol_subsection[i];
+        end_idx=graph->end_subsection[i];
+        if (!symbol->has_fragment_anchor ||
+            start_idx>=graph->subsection_count ||
+            end_idx>=graph->subsection_count ||
+            graph->start_local[i]>
+                UINT64_MAX-graph->candidate_base[start_idx] ||
+            graph->end_local[i]>
+                UINT64_MAX-graph->candidate_base[end_idx]) {
+            minias_set_error(as, "fragment-size-location-mismatch:%s",
+                             symbol->name);
+            return false;
+        }
+        start=graph->candidate_base[start_idx]+graph->start_local[i];
+        end=graph->candidate_base[end_idx]+graph->end_local[i];
+        if(end<start) {
+            minias_set_error(as, "fragment-size-location-mismatch:%s",
+                             symbol->name);
+            return false;
+        }
+        symbol->size = end-start;
+    }
+    /* Previous subsection bases may differ when an earlier DATA/branch
+     * grew. The next fixed-point pass must reevaluate every retained `.org`
+     * with the freshly normalized Section-relative symbol snapshot. */
+    if(placement_changed != NULL) {
+        for(i=0U;i<as->subsection_count;++i) {
+            const MiniAsSubsection *sub=&as->subsections[i];
+            if(sub->base!=graph->candidate_base[i])
+                *placement_changed=true;
+        }
+    }
+    /* Commit all staged anchors together. The public finalizer also serves
+     * the parser and expects subsection-local values; it adds the NEW base
+     * once and refreshes every retained SymbolID alias dependency. */
+    for(i=0U;i<graph->symbol_count;++i) {
+        MiniAsSymbol *sym=&as->symbols[i];
+        if(!sym->has_fragment_anchor || !sym->defined ||
+           sym->section<0)continue;
+        sym->value=graph->start_local[i];
+        if(sym->has_size_end_anchor)
+            sym->size_end_value=graph->end_local[i];
+    }
     return minias_finalize_subsection_layout(as);
+}
+
+/* Two-phase persistent MCLayout fixed point:
+ *   (1) rebuild ALL symbol/alias anchors and subsection bases from current
+ *       Fragment widths, including already-expanded target branches;
+ *   (2) evaluate ALL typed .org constraints against that immutable current
+ *       Section-relative snapshot, staging every new padding width;
+ *   (3) commit the padding batch, then rebuild anchors once more.
+ *
+ * No `.org` sees an earlier `.org`'s new padding alongside a later symbol's
+ * old address. In particular `label: .org label+2` stays valid if a branch
+ * before label expands in this iteration: both its location and SymbolID
+ * move together BEFORE the position constraint is inspected. */
+static bool minias_relayout_fragments(MiniAs *as, bool *org_changed) {
+    MiniAsAnchorGraph *graph;
+    size_t i;
+    bool changed=false, placement_changed=false;
+
+    if(!minias_scan_fragment_layout(as,&placement_changed))return false;
+    graph=(MiniAsAnchorGraph *)as->layout_anchor_graph;
+    if(graph==NULL) {
+        minias_set_error(as,"internal:missing-relayout-graph");
+        return false;
+    }
+    for(i=0U;i<graph->stmt_count;++i) {
+        const MiniAsStmt *stmt=&as->stmts[i];
+        if(stmt->kind!=MINIAS_STMT_ALIGN ||
+           stmt->org_mode==MINIAS_ORG_SOURCE)continue;
+        if(!org_fragment_padding(as,stmt,stmt->offset,
+                                 &graph->org_next_size[i]))return false;
+    }
+    for(i=0U;i<graph->stmt_count;++i) {
+        MiniAsStmt *stmt=&as->stmts[i];
+        if(stmt->kind!=MINIAS_STMT_ALIGN ||
+           stmt->org_mode==MINIAS_ORG_SOURCE)continue;
+        if(stmt->size!=graph->org_next_size[i]) {
+            stmt->size=graph->org_next_size[i];
+            changed=true;
+        }
+    }
+    if(changed) {
+        bool resized_placement=false;
+        if(!minias_scan_fragment_layout(as,&resized_placement))return false;
+        placement_changed|=resized_placement;
+    }
+    if(org_changed!=NULL)*org_changed=changed || placement_changed;
+    return true;
 }
 
 
@@ -527,7 +660,8 @@ static bool minias_relayout_fragments(MiniAs *as, bool *org_changed) {
  * to a truly undefined label must remain an error, never a zero fill. */
 static bool minias_resolve_deferred_data(MiniAs *as) {
     size_t pass;
-    if(!as->has_deferred_data && !as->has_org_constraints)return true;
+    if(!as->has_deferred_data && !as->has_org_constraints &&
+       !as->has_cross_subsection_size_end)return true;
     /* .org, .fill and .space share a single fixed point.  A subsection
      * base may change as another numbered subsection grows, so resolving
      * .org only once would produce wrong final section-relative offsets. */
@@ -719,7 +853,7 @@ static bool minias_validate_fragment_layout(MiniAs *as) {
             for(symbol=graph->end_head[i];symbol!=SIZE_MAX;
                 symbol=graph->end_next[symbol]) {
                 const MiniAsSymbol *sym=&as->symbols[symbol];
-                const size_t sub_index=graph->symbol_subsection[symbol];
+                const size_t sub_index=graph->end_subsection[symbol];
                 uint64_t expected;
                 if(sub_index>=as->subsection_count ||
                    cursor[sub_index]>UINT64_MAX-as->subsections[sub_index].base) {
@@ -774,7 +908,7 @@ static bool minias_validate_fragment_layout(MiniAs *as) {
             if(stmt->kind==MINIAS_STMT_ALIGN &&
                stmt->org_mode!=MINIAS_ORG_SOURCE) {
                 uint32_t padding;
-                if (!org_fragment_padding(as,stmt,expected,true,&padding))
+                if (!org_fragment_padding(as,stmt,expected,&padding))
                     goto done;
                 if(padding!=stmt->size) {
                     minias_set_error(as,

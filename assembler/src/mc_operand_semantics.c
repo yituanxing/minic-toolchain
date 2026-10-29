@@ -25,8 +25,10 @@ MiniAsMCInst *minias_mcinst_alloc(unsigned capacity) {
 
 /* Ownership is determined by the *typed kind*, not operand position, source
  * spelling or a target-specific list of heap allocations.  Every pointer in
- * the union is exclusively owned by its parent operand, including nested
- * memory->symbol.  The fallback for pre-migration target constructors uses
+ * the union is exclusively owned by its parent operand.  Common never sees
+ * the internal fields of a Target-owned memory operand, which may have ISA-
+ * specific nested allocations released by its instruction's callback.
+ * The fallback for pre-migration target constructors uses
  * the existing count contract, so old and new Target parsers coexist safely
  * while backend migrations proceed. */
 void minias_mcinst_destroy(MiniAsMCInst *inst) {
@@ -40,8 +42,10 @@ void minias_mcinst_destroy(MiniAsMCInst *inst) {
         } else if (op->kind == MINIAS_MC_SYMBOL_DIFFERENCE) {
             free(op->difference);
         } else if (op->kind == MINIAS_MC_MEMORY && op->memory != NULL) {
-            free(op->memory->symbol);
-            free(op->memory);
+            if (inst->dispose_memory != NULL)
+                inst->dispose_memory(op->memory);
+            else
+                free(op->memory);
         }
     }
     free(inst);

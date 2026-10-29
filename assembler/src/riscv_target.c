@@ -310,75 +310,107 @@ static bool riscv_validate_common_directive(MiniAs *as, const char *op,
 }
 
 
-/* RISC-V attributes are owned by the ISA target, never by generic ELF.
- * Existing explicit -march provides an ELF attribute subsection containing
- * a single Tag_File+Tag_RISCV_arch. GNU GCC emits stack_align (4) and
- * unaligned_access (6); preserve those numeric attributes exactly and reject
- * conflicting/unsupported attributes instead of silently ignoring them. */
-static bool riscv_set_numeric_attribute(MiniAs *as, unsigned tag,
-                                        unsigned value, size_t line) {
-    unsigned char *buf = MINIAS_RV_STATE(as)->target_attributes;
-    size_t n = MINIAS_RV_STATE(as)->target_attributes_size;
-    size_t arch, pos;
-    uint32_t subsection_size, file_size;
+/* The TargetContext stores Tag_File attributes as semantic fields. The ELF
+ * attribute blob is derived from them, never edited in place using offsets
+ * that depend on which source directive happened to come first. GNU emits
+ * stack_align (4) before arch (5), then unaligned_access (6). */
+static void riscv_store_le32(unsigned char *out, uint32_t value) {
     unsigned i;
-    if (value > 127U || n < 18U || buf[0] != 'A' ||
-        memcmp(buf + 5, "riscv", 6U) != 0 || buf[11] != 1U) {
-        minias_set_error(as, "riscv-attribute-layout-unavailable:line=%zu", line);
-        return false;
-    }
-    arch = buf[16] == 4U ? 18U : 16U;
-    if (arch >= n || buf[arch] != 5U) {
-        minias_set_error(as, "riscv-attribute-arch-missing:line=%zu", line);
-        return false;
-    }
-    pos = arch + 1U;
-    while (pos < n && buf[pos] != 0U) ++pos;
-    if (pos >= n) {
-        minias_set_error(as, "riscv-attribute-arch-unterminated:line=%zu", line);
-        return false;
-    }
-    ++pos;
-    if (tag == 4U && buf[16] == 4U) {
-        if (buf[17] != (unsigned char)value) goto conflict;
-        return true;
-    }
-    if (tag == 6U && pos + 2U <= n && buf[pos] == 6U) {
-        if (buf[pos + 1U] != (unsigned char)value) goto conflict;
-        return true;
-    }
-    if (n + 2U > sizeof(MINIAS_RV_STATE(as)->target_attributes)) {
+    for (i = 0U; i != 4U; ++i) out[i] = (unsigned char)(value >> (8U * i));
+}
+
+static bool riscv_rebuild_attributes(MiniAs *as, size_t line) {
+    MiniAsRiscvState *state = MINIAS_RV_STATE(as);
+    const size_t arch_size = strlen(state->arch_attribute_isa) + 1U;
+    const size_t size = 17U + arch_size +
+                        (state->stack_align_present ? 2U : 0U) +
+                        (state->unaligned_access_present ? 2U : 0U);
+    unsigned char *buf = state->target_attributes;
+    size_t at = 16U;
+    if (size > sizeof(state->target_attributes)) {
         minias_set_error(as, "riscv-attribute-overflow:line=%zu", line);
         return false;
     }
+    memset(buf, 0, size);
+    buf[0] = 'A';
+    riscv_store_le32(buf + 1U, (uint32_t)(size - 1U));
+    memcpy(buf + 5U, "riscv", 6U); /* NUL-terminated vendor name */
+    buf[11] = 1U; /* Tag_File */
+    riscv_store_le32(buf + 12U, (uint32_t)(size - 11U));
+    if (state->stack_align_present) {
+        buf[at++] = 4U;
+        buf[at++] = (unsigned char)state->stack_align;
+    }
+    buf[at++] = 5U;
+    memcpy(buf + at, state->arch_attribute_isa, arch_size);
+    at += arch_size;
+    if (state->unaligned_access_present) {
+        buf[at++] = 6U;
+        buf[at++] = (unsigned char)state->unaligned_access;
+    }
+    if (at != size) {
+        minias_set_error(as, "internal:riscv-attribute-layout");
+        return false;
+    }
+    state->target_attributes_size = size;
+    return true;
+}
+
+/* A selected -march initially arrives as the target profile's canonical
+ * Tag_RISCV_arch blob. Decode it once into target semantic state; subsequent
+ * .attribute directives never look at serialized byte offsets again. */
+static bool riscv_import_attribute_arch(MiniAs *as,
+                                         const unsigned char *blob, size_t size) {
+    MiniAsRiscvState *state = MINIAS_RV_STATE(as);
+    size_t arch_len = 0U;
+    if (size < 18U || size > sizeof(state->target_attributes) ||
+        blob[0] != 'A' || memcmp(blob + 5U, "riscv", 6U) != 0 ||
+        blob[11U] != 1U || blob[16U] != 5U) {
+        minias_set_error(as, "invalid-riscv-profile-attribute-layout");
+        return false;
+    }
+    while (17U + arch_len < size && blob[17U + arch_len] != 0U)
+        ++arch_len;
+    if (17U + arch_len + 1U != size ||
+        arch_len + 1U > sizeof(state->arch_attribute_isa)) {
+        minias_set_error(as, "invalid-riscv-profile-arch-attribute");
+        return false;
+    }
+    memcpy(state->arch_attribute_isa, blob + 17U, arch_len + 1U);
+    return riscv_rebuild_attributes(as, 0U);
+}
+
+static bool riscv_set_numeric_attribute(MiniAs *as, unsigned tag,
+                                        unsigned value, size_t line) {
+    MiniAsRiscvState *state = MINIAS_RV_STATE(as);
+    bool *present = NULL;
+    unsigned *stored = NULL;
+    if (value > 127U || state->target_attributes_size == 0U) {
+        minias_set_error(as, "riscv-attribute-layout-unavailable:line=%zu", line);
+        return false;
+    }
     if (tag == 4U) {
-        memmove(buf + 18, buf + 16, n - 16U);
-        buf[16] = 4U;
-        buf[17] = (unsigned char)value;
+        present = &state->stack_align_present;
+        stored = &state->stack_align;
     } else if (tag == 6U) {
-        if (pos != n) {
-            minias_set_error(as, "riscv-attribute-unexpected-tail:line=%zu", line);
-            return false;
-        }
-        buf[n] = 6U;
-        buf[n + 1U] = (unsigned char)value;
+        present = &state->unaligned_access_present;
+        stored = &state->unaligned_access;
     } else {
         minias_set_error(as, "unsupported-riscv-attribute-tag:%u:line=%zu",
                          tag, line);
         return false;
     }
-    n += 2U;
-    MINIAS_RV_STATE(as)->target_attributes_size = n;
-    subsection_size = (uint32_t)(n - 1U);
-    file_size = (uint32_t)(n - 11U);
-    for (i = 0U; i < 4U; ++i) {
-        buf[1U + i] = (unsigned char)(subsection_size >> (8U * i));
-        buf[12U + i] = (unsigned char)(file_size >> (8U * i));
+    if (*present) {
+        if (*stored != value) {
+            minias_set_error(as, "conflicting-riscv-attribute:%u:line=%zu",
+                             tag, line);
+            return false;
+        }
+        return true;
     }
-    return true;
-conflict:
-    minias_set_error(as, "conflicting-riscv-attribute:%u:line=%zu", tag, line);
-    return false;
+    *stored = value;
+    *present = true;
+    return riscv_rebuild_attributes(as, line);
 }
 
 static bool riscv_assemble_attribute(MiniAs *as, const char *args, size_t line) {
@@ -387,9 +419,6 @@ static bool riscv_assemble_attribute(MiniAs *as, const char *args, size_t line) 
     const char *front, *back;
     size_t len;
     unsigned long number;
-    unsigned char *attr = MINIAS_RV_STATE(as)->target_attributes;
-    size_t n = MINIAS_RV_STATE(as)->target_attributes_size;
-    size_t arch, start, finish;
     if (comma == NULL) goto invalid;
     front = args;
     while (isspace((unsigned char)*front)) ++front;
@@ -412,15 +441,8 @@ static bool riscv_assemble_attribute(MiniAs *as, const char *args, size_t line) 
             value[len - 1U] = '\0';
             declared = value + 1;
         }
-        if (n < 18U || attr[0] != 'A') goto invalid;
-        arch = attr[16] == 4U ? 18U : 16U;
-        if (arch >= n || attr[arch] != 5U) goto invalid;
-        start = arch + 1U;
-        finish = start;
-        while (finish < n && attr[finish] != 0U) ++finish;
-        if (finish >= n) goto invalid;
-        if (strlen(declared) != finish - start ||
-            memcmp(attr + start, declared, finish - start) != 0) {
+        if (MINIAS_RV_STATE(as)->target_attributes_size == 0U) goto invalid;
+        if (strcmp(declared, MINIAS_RV_STATE(as)->arch_attribute_isa) != 0) {
             minias_set_error(as, "riscv-attribute-isa-conflict:%s:line=%zu",
                              declared, line);
             return false;
@@ -601,9 +623,15 @@ static bool riscv_init_target_state(MiniAs *as,
         state->strict_i_xlen = profile.strict_i_xlen;
         state->isa_explicit = profile.explicit_isa;
         state->isa_features = profile.features;
-        state->target_attributes_size = profile.arch_attribute_size;
-        memcpy(state->target_attributes, profile.arch_attribute,
-               profile.arch_attribute_size);
+        /* Publish state before calling the target-owned serializer. */
+        as->target_state = state;
+        if (profile.arch_attribute_size != 0U &&
+            !riscv_import_attribute_arch(as, profile.arch_attribute,
+                                          profile.arch_attribute_size)) {
+            free(state);
+            as->target_state = NULL;
+            return false;
+        }
     }
     state->strict_rv64i = state->strict_i_xlen != 0U || state->isa_explicit;
     as->target_state = state;

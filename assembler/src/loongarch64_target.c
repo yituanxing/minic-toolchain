@@ -235,6 +235,213 @@ static unsigned la_li_d_words(uint64_t bits,unsigned rd,uint32_t out[4]) {
     return n;
 }
 
+/* One LoongArch-owned operand grammar for LSX and LASX.  The two vector
+ * extensions have different register classes and opcode tables, but share
+ * their architectural field layouts.  Keeping the format description next
+ * to the opcode makes their signed immediates and lane limits explicit, and
+ * prevents every new instruction from introducing another private parser.
+ * None of these target register classes enter Common MC or another ISA. */
+typedef enum {
+    LA_ARG_GPR, LA_ARG_VR, LA_ARG_XR, LA_ARG_IMM
+} LaOperandClass;
+typedef enum {
+    LA_VECTOR_VVV, LA_VECTOR_XXX,
+    LA_VECTOR_VVI, LA_VECTOR_XXI,
+    LA_VECTOR_GVI, LA_VECTOR_GXI,
+    LA_VECTOR_VGI, LA_VECTOR_XGI,
+    LA_VECTOR_XX, LA_VECTOR_VVVV, LA_VECTOR_XXXX
+} LaVectorShape;
+typedef struct {
+    unsigned count;
+    LaOperandClass classes[4];
+    unsigned shifts[4];
+} LaVectorLayout;
+typedef struct {
+    const char *name;
+    uint32_t opcode;
+    LaVectorShape shape;
+    int64_t immediate_min;
+    int64_t immediate_max;
+    unsigned immediate_bits;
+} LaVectorPattern;
+
+static const LaVectorLayout la_vector_layouts[] = {
+    [LA_VECTOR_VVV]  ={3U,{LA_ARG_VR,LA_ARG_VR,LA_ARG_VR},{0U,5U,10U}},
+    [LA_VECTOR_XXX]  ={3U,{LA_ARG_XR,LA_ARG_XR,LA_ARG_XR},{0U,5U,10U}},
+    [LA_VECTOR_VVI]  ={3U,{LA_ARG_VR,LA_ARG_VR,LA_ARG_IMM},{0U,5U,10U}},
+    [LA_VECTOR_XXI]  ={3U,{LA_ARG_XR,LA_ARG_XR,LA_ARG_IMM},{0U,5U,10U}},
+    [LA_VECTOR_GVI]  ={3U,{LA_ARG_GPR,LA_ARG_VR,LA_ARG_IMM},{0U,5U,10U}},
+    [LA_VECTOR_GXI]  ={3U,{LA_ARG_GPR,LA_ARG_XR,LA_ARG_IMM},{0U,5U,10U}},
+    [LA_VECTOR_VGI]  ={3U,{LA_ARG_VR,LA_ARG_GPR,LA_ARG_IMM},{0U,5U,10U}},
+    [LA_VECTOR_XGI]  ={3U,{LA_ARG_XR,LA_ARG_GPR,LA_ARG_IMM},{0U,5U,10U}},
+    [LA_VECTOR_XX]   ={2U,{LA_ARG_XR,LA_ARG_XR},{0U,5U}},
+    [LA_VECTOR_VVVV] ={4U,{LA_ARG_VR,LA_ARG_VR,LA_ARG_VR,LA_ARG_VR},
+                          {0U,5U,10U,15U}},
+    [LA_VECTOR_XXXX] ={4U,{LA_ARG_XR,LA_ARG_XR,LA_ARG_XR,LA_ARG_XR},
+                          {0U,5U,10U,15U}}
+};
+
+/* Each bound belongs to the concrete instruction, not the format: b/h/w/d
+ * lane counts and shift counts must never be inferred from ISA prefixes. */
+static const LaVectorPattern la_vector_patterns[] = {
+    {"vld",0x2c000000U,LA_VECTOR_VGI,-2048,2047,12U},
+    {"vst",0x2c400000U,LA_VECTOR_VGI,-2048,2047,12U},
+    {"xvld",0x2c800000U,LA_VECTOR_XGI,-2048,2047,12U},
+    {"xvst",0x2cc00000U,LA_VECTOR_XGI,-2048,2047,12U},
+    {"vand.v",0x71260000U,LA_VECTOR_VVV,0,0,0U},
+    {"vor.v",0x71268000U,LA_VECTOR_VVV,0,0,0U},
+    {"vxor.v",0x71270000U,LA_VECTOR_VVV,0,0,0U},
+    {"vnor.v",0x71278000U,LA_VECTOR_VVV,0,0,0U},
+    {"vandn.v",0x71280000U,LA_VECTOR_VVV,0,0,0U},
+    {"vorn.v",0x71288000U,LA_VECTOR_VVV,0,0,0U},
+    {"xvand.v",0x75260000U,LA_VECTOR_XXX,0,0,0U},
+    {"xvor.v",0x75268000U,LA_VECTOR_XXX,0,0,0U},
+    {"xvxor.v",0x75270000U,LA_VECTOR_XXX,0,0,0U},
+    {"xvnor.v",0x75278000U,LA_VECTOR_XXX,0,0,0U},
+    {"xvandn.v",0x75280000U,LA_VECTOR_XXX,0,0,0U},
+    {"xvorn.v",0x75288000U,LA_VECTOR_XXX,0,0,0U},
+    {"vandi.b",0x73d00000U,LA_VECTOR_VVI,0,255,8U},
+    {"vori.b",0x73d40000U,LA_VECTOR_VVI,0,255,8U},
+    {"vxori.b",0x73d80000U,LA_VECTOR_VVI,0,255,8U},
+    {"vnori.b",0x73dc0000U,LA_VECTOR_VVI,0,255,8U},
+    {"xvandi.b",0x77d00000U,LA_VECTOR_XXI,0,255,8U},
+    {"xvori.b",0x77d40000U,LA_VECTOR_XXI,0,255,8U},
+    {"xvxori.b",0x77d80000U,LA_VECTOR_XXI,0,255,8U},
+    {"xvnori.b",0x77dc0000U,LA_VECTOR_XXI,0,255,8U},
+    {"vslti.b",0x72860000U,LA_VECTOR_VVI,-16,15,5U},
+    {"vslti.h",0x72868000U,LA_VECTOR_VVI,-16,15,5U},
+    {"vslti.w",0x72870000U,LA_VECTOR_VVI,-16,15,5U},
+    {"vslti.d",0x72878000U,LA_VECTOR_VVI,-16,15,5U},
+    {"xvslti.b",0x76860000U,LA_VECTOR_XXI,-16,15,5U},
+    {"xvslti.h",0x76868000U,LA_VECTOR_XXI,-16,15,5U},
+    {"xvslti.w",0x76870000U,LA_VECTOR_XXI,-16,15,5U},
+    {"xvslti.d",0x76878000U,LA_VECTOR_XXI,-16,15,5U},
+    {"vslli.b",0x732c2000U,LA_VECTOR_VVI,0,7,3U},
+    {"vslli.h",0x732c4000U,LA_VECTOR_VVI,0,15,4U},
+    {"vslli.w",0x732c8000U,LA_VECTOR_VVI,0,31,5U},
+    {"vslli.d",0x732d0000U,LA_VECTOR_VVI,0,63,6U},
+    {"vsrli.b",0x73302000U,LA_VECTOR_VVI,0,7,3U},
+    {"vsrli.h",0x73304000U,LA_VECTOR_VVI,0,15,4U},
+    {"vsrli.w",0x73308000U,LA_VECTOR_VVI,0,31,5U},
+    {"vsrli.d",0x73310000U,LA_VECTOR_VVI,0,63,6U},
+    {"vsrai.b",0x73342000U,LA_VECTOR_VVI,0,7,3U},
+    {"vsrai.h",0x73344000U,LA_VECTOR_VVI,0,15,4U},
+    {"vsrai.w",0x73348000U,LA_VECTOR_VVI,0,31,5U},
+    {"vsrai.d",0x73350000U,LA_VECTOR_VVI,0,63,6U},
+    {"xvslli.b",0x772c2000U,LA_VECTOR_XXI,0,7,3U},
+    {"xvslli.h",0x772c4000U,LA_VECTOR_XXI,0,15,4U},
+    {"xvslli.w",0x772c8000U,LA_VECTOR_XXI,0,31,5U},
+    {"xvslli.d",0x772d0000U,LA_VECTOR_XXI,0,63,6U},
+    {"xvsrli.b",0x77302000U,LA_VECTOR_XXI,0,7,3U},
+    {"xvsrli.h",0x77304000U,LA_VECTOR_XXI,0,15,4U},
+    {"xvsrli.w",0x77308000U,LA_VECTOR_XXI,0,31,5U},
+    {"xvsrli.d",0x77310000U,LA_VECTOR_XXI,0,63,6U},
+    {"vpickve2gr.b",0x72ef8000U,LA_VECTOR_GVI,0,15,4U},
+    {"vpickve2gr.h",0x72efc000U,LA_VECTOR_GVI,0,7,3U},
+    {"vpickve2gr.w",0x72efe000U,LA_VECTOR_GVI,0,3,2U},
+    {"vpickve2gr.d",0x72eff000U,LA_VECTOR_GVI,0,1,1U},
+    {"vpickve2gr.bu",0x72f38000U,LA_VECTOR_GVI,0,15,4U},
+    {"vpickve2gr.hu",0x72f3c000U,LA_VECTOR_GVI,0,7,3U},
+    {"vpickve2gr.wu",0x72f3e000U,LA_VECTOR_GVI,0,3,2U},
+    {"vpickve2gr.du",0x72f3f000U,LA_VECTOR_GVI,0,1,1U},
+    {"xvpickve2gr.w",0x76efc000U,LA_VECTOR_GXI,0,7,3U},
+    {"xvpickve2gr.d",0x76efe000U,LA_VECTOR_GXI,0,3,2U},
+    {"xvpickve2gr.wu",0x76f3c000U,LA_VECTOR_GXI,0,7,3U},
+    {"xvpickve2gr.du",0x76f3e000U,LA_VECTOR_GXI,0,3,2U},
+    {"vinsgr2vr.b",0x72eb8000U,LA_VECTOR_VGI,0,15,4U},
+    {"vinsgr2vr.h",0x72ebc000U,LA_VECTOR_VGI,0,7,3U},
+    {"vinsgr2vr.w",0x72ebe000U,LA_VECTOR_VGI,0,3,2U},
+    {"vinsgr2vr.d",0x72ebf000U,LA_VECTOR_VGI,0,1,1U},
+    {"xvinsgr2vr.w",0x76ebc000U,LA_VECTOR_XGI,0,7,3U},
+    {"xvinsgr2vr.d",0x76ebe000U,LA_VECTOR_XGI,0,3,2U},
+    {"xvpermi.w",0x77e40000U,LA_VECTOR_XXI,0,255,8U},
+    {"xvpermi.d",0x77e80000U,LA_VECTOR_XXI,0,255,8U},
+    {"xvpermi.q",0x77ec0000U,LA_VECTOR_XXI,0,255,8U},
+    {"xvreplve0.b",0x77070000U,LA_VECTOR_XX,0,0,0U},
+    {"xvreplve0.h",0x77078000U,LA_VECTOR_XX,0,0,0U},
+    {"xvreplve0.w",0x7707c000U,LA_VECTOR_XX,0,0,0U},
+    {"xvreplve0.d",0x7707e000U,LA_VECTOR_XX,0,0,0U},
+    {"xvreplve0.q",0x7707f000U,LA_VECTOR_XX,0,0,0U},
+    {"vshuf.b",0x0d500000U,LA_VECTOR_VVVV,0,0,0U},
+    {"vbitsel.v",0x0d100000U,LA_VECTOR_VVVV,0,0,0U},
+    {"xvshuf.b",0x0d600000U,LA_VECTOR_XXXX,0,0,0U},
+    {"xvbitsel.v",0x0d200000U,LA_VECTOR_XXXX,0,0,0U}
+};
+
+static bool la_parse_vector_pattern(MiniAsMCInst *m,const char *op,
+                                    char args[4][192],unsigned count,
+                                    bool *recognized) {
+    size_t i;
+    *recognized=false;
+    for(i=0U;i<sizeof(la_vector_patterns)/sizeof(la_vector_patterns[0]);++i) {
+        const LaVectorPattern *pattern=&la_vector_patterns[i];
+        const LaVectorLayout *layout=&la_vector_layouts[pattern->shape];
+        uint32_t encoding=pattern->opcode;
+        unsigned arg;
+        if(strcmp(pattern->name,op)!=0)continue;
+        *recognized=true;
+        if(count!=layout->count)return false;
+        for(arg=0U;arg<count;++arg) {
+            LaOperandClass cls=layout->classes[arg];
+            unsigned reg;
+            int64_t value;
+            bool valid=false;
+            if(cls==LA_ARG_GPR)valid=la_reg(args[arg],&reg);
+            else if(cls==LA_ARG_VR)valid=la_special_reg(args[arg],"$vr",31U,&reg);
+            else if(cls==LA_ARG_XR)valid=la_special_reg(args[arg],"$xr",31U,&reg);
+            else {
+                valid=minias_eval_i64_expression(args[arg],&value) &&
+                      value>=pattern->immediate_min &&
+                      value<=pattern->immediate_max;
+            }
+            if(!valid)return false;
+            if(cls==LA_ARG_IMM) {
+                /* Signed operands retain their low encoded bits; the
+                 * descriptor's exact field width and signed bounds are
+                 * both checked before truncation; no max-based guessing. */
+                uint32_t mask;
+                if(pattern->immediate_bits==0U ||
+                   pattern->immediate_bits>12U)return false;
+                mask=(UINT32_C(1)<<pattern->immediate_bits)-1U;
+                encoding|=(((uint32_t)value)&mask)<<layout->shifts[arg];
+                m->operands[arg].kind=MINIAS_MC_IMMEDIATE;
+                m->operands[arg].immediate=(uint64_t)value;
+            } else {
+                encoding|=((uint32_t)reg)<<layout->shifts[arg];
+                m->operands[arg].kind=MINIAS_MC_REGISTER;
+                m->operands[arg].reg=reg;
+            }
+        }
+        m->count=count;
+        m->encoding=encoding;
+        return true;
+    }
+    return false;
+}
+
+/* Populate semantic MC operands even for fixed-width scalar words. The ELF
+ * encoder happens to need only the stored word today, but a target-specific
+ * analysis/verification pass must not have to reparse source text to recover
+ * an instruction's register and signed-immediate operands. */
+static void la_capture_gpr_operand(MiniAsMCInst *m,unsigned slot,unsigned reg) {
+    m->operands[slot].kind=MINIAS_MC_REGISTER;
+    m->operands[slot].reg=reg;
+}
+static void la_capture_imm_operand(MiniAsMCInst *m,unsigned slot,int64_t value) {
+    m->operands[slot].kind=MINIAS_MC_IMMEDIATE;
+    m->operands[slot].immediate=(uint64_t)value;
+}
+static void la_capture_rrr(MiniAsMCInst *m,unsigned rd,unsigned rj,unsigned rk) {
+    la_capture_gpr_operand(m,0U,rd);
+    la_capture_gpr_operand(m,1U,rj);
+    la_capture_gpr_operand(m,2U,rk);
+}
+static void la_capture_rri(MiniAsMCInst *m,unsigned rd,unsigned rj,int64_t imm) {
+    la_capture_gpr_operand(m,0U,rd);
+    la_capture_gpr_operand(m,1U,rj);
+    la_capture_imm_operand(m,2U,imm);
+}
+
 static bool la_parse(MiniAs *as,MiniAsStmt *s) {
     static const struct {const char *name;uint32_t code;} gpr3[]={
         {"add.d",UINT32_C(0x00108000)},{"sub.d",UINT32_C(0x00118000)},
@@ -423,6 +630,13 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
     }
     if(!la_split(s->args,t,&n))goto fail;
     if(la_branch_instruction(as,m,s->op,t,n)) goto done;
+    /* Target-private instruction formats are selected by mnemonic first;
+     * malformed SIMD operands must not fall through into scalar encoders. */
+    {
+        bool vector_mnemonic=false;
+        if(la_parse_vector_pattern(m,s->op,t,n,&vector_mnemonic))goto done;
+        if(vector_mnemonic)goto fail;
+    }
     if(n==2U && !strcmp(s->op,"la.pcrel") && la_reg(t[0],&rd)) {
         MiniAsSymbolExpr expr;
         if(!minias_parse_symbol_addend(t[1],&expr) ||
@@ -542,74 +756,9 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
             goto done;
         }
     }
-    /* GNU LSX/LASX vector loads/stores use a 12-bit signed byte offset,
-     * base GPR rj and independent vector register vd in r0's slot. The
-     * assembler may encode these GNU inline-asm extensions even while the
-     * compiler's active emission subset remains scalar; ISA capabilities
-     * are distinct from generated-code instruction selection. */
-    if(n==3U && la_reg(t[1],&rj)) {
-        static const struct {const char *name,*prefix;uint32_t base;} vec[]={
-            {"vld","$vr",UINT32_C(0x2c000000)},
-            {"vst","$vr",UINT32_C(0x2c400000)},
-            {"xvld","$xr",UINT32_C(0x2c800000)},
-            {"xvst","$xr",UINT32_C(0x2cc00000)}
-        };
-        int64_t off;
-        if(minias_eval_i64_expression(t[2],&off) &&
-           off>=-2048 && off<=2047) {
-            for(i=0U;i<sizeof(vec)/sizeof(vec[0]);++i)
-                if(!strcmp(s->op,vec[i].name) &&
-                   la_special_reg(t[0],vec[i].prefix,31U,&rd)) {
-                    m->count=3U;
-                    m->encoding=vec[i].base |
-                        (((uint32_t)off&UINT32_C(0xfff))<<10U) |
-                        (rj<<5U)|rd;
-                    m->operands[0].kind=MINIAS_MC_REGISTER;
-                    m->operands[0].reg=rd;
-                    m->operands[1].kind=MINIAS_MC_REGISTER;
-                    m->operands[1].reg=rj;
-                    m->operands[2].kind=MINIAS_MC_IMMEDIATE;
-                    m->operands[2].immediate=(uint64_t)off;
-                    goto done;
-                }
-        }
-    }
     /* GNU privileged INVTLB u5, rj, rk, with r0/i0 as operation code.
      * Existing Common MCInst emission and architecture ELF ownership. */
 
-    if(n==3U && la_special_reg(t[0],"$vr",31U,&rd) &&
-       la_special_reg(t[1],"$vr",31U,&rj)) {
-        static const struct {const char *name;uint32_t op;} logical[]={
-            {"vand.v",UINT32_C(0x71260000)},
-            {"vor.v",UINT32_C(0x71268000)},
-            {"vxor.v",UINT32_C(0x71270000)},
-            {"vnor.v",UINT32_C(0x71278000)},
-            {"vandn.v",UINT32_C(0x71280000)},
-            {"vorn.v",UINT32_C(0x71288000)}
-        };
-        static const struct {const char *name;uint32_t op;} masks[]={
-            {"vandi.b",UINT32_C(0x73d00000)},
-            {"vori.b",UINT32_C(0x73d40000)},
-            {"vxori.b",UINT32_C(0x73d80000)},
-            {"vnori.b",UINT32_C(0x73dc0000)}
-        };
-        uint64_t imm;
-        if(la_special_reg(t[2],"$vr",31U,&rk))
-            for(i=0U;i<sizeof(logical)/sizeof(logical[0]);++i)
-                if(!strcmp(s->op,logical[i].name)){
-                    m->count=3U;
-                    m->encoding=logical[i].op|(rk<<10U)|(rj<<5U)|rd;
-                    goto done;
-                }
-        if(minias_eval_u64_expression(t[2],&imm) && imm<=255U)
-            for(i=0U;i<sizeof(masks)/sizeof(masks[0]);++i)
-                if(!strcmp(s->op,masks[i].name)){
-                    m->count=3U;
-                    m->encoding=masks[i].op|((uint32_t)imm<<10U)|
-                        (rj<<5U)|rd;
-                    goto done;
-                }
-    }
     if(n==3U && la_special_reg(t[0],"$f",31U,&rd) &&
        la_reg(t[1],&rj)) {
         static const struct {const char *name;uint32_t op;} fp[]={
@@ -627,244 +776,6 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
                     m->encoding=fp[i].op|
                         (((uint32_t)offset&UINT32_C(0xfff))<<10U)|
                         (rj<<5U)|rd;
-                    goto done;
-                }
-    }
-    /* LSX and LASX share the r0/r5/r10 register encoding but have
-     * distinct architecture opcodes and register classes. The assembler
-     * accepts ISA extensions independently of MiniC's emission subset. */
-    if(n==3U && la_special_reg(t[0],"$xr",31U,&rd) &&
-       la_special_reg(t[1],"$xr",31U,&rj) &&
-       la_special_reg(t[2],"$xr",31U,&rk)) {
-        static const struct {const char *name;uint32_t opcode;} lasx[]={
-            {"xvand.v",UINT32_C(0x75260000)},
-            {"xvor.v",UINT32_C(0x75268000)},
-            {"xvxor.v",UINT32_C(0x75270000)},
-            {"xvnor.v",UINT32_C(0x75278000)},
-            {"xvandn.v",UINT32_C(0x75280000)},
-            {"xvorn.v",UINT32_C(0x75288000)}
-        };
-        for(i=0U;i<sizeof(lasx)/sizeof(lasx[0]);++i)
-            if(!strcmp(s->op,lasx[i].name)) {
-                m->count=3U;
-                m->encoding=lasx[i].opcode|(rk<<10U)|(rj<<5U)|rd;
-                goto done;
-            }
-    }
-    /* Signed LSX compare-immediate u/s5 family, not a GPR comparison. */
-    if(n==3U && la_special_reg(t[0],"$vr",31U,&rd) &&
-       la_special_reg(t[1],"$vr",31U,&rj)) {
-        static const struct {const char *name;uint32_t opcode;} cmp[]={
-            {"vslti.b",UINT32_C(0x72860000)},
-            {"vslti.h",UINT32_C(0x72868000)},
-            {"vslti.w",UINT32_C(0x72870000)},
-            {"vslti.d",UINT32_C(0x72878000)}
-        };
-        static const struct {const char *name;uint32_t opcode;
-                             unsigned max_shift;} vector_shifts[]={
-            {"vslli.b",UINT32_C(0x732c2000),7U},
-            {"vslli.h",UINT32_C(0x732c4000),15U},
-            {"vslli.w",UINT32_C(0x732c8000),31U},
-            {"vslli.d",UINT32_C(0x732d0000),63U},
-            {"vsrli.b",UINT32_C(0x73302000),7U},
-            {"vsrli.h",UINT32_C(0x73304000),15U},
-            {"vsrli.w",UINT32_C(0x73308000),31U},
-            {"vsrli.d",UINT32_C(0x73310000),63U},
-            {"vsrai.b",UINT32_C(0x73342000),7U},
-            {"vsrai.h",UINT32_C(0x73344000),15U},
-            {"vsrai.w",UINT32_C(0x73348000),31U},
-            {"vsrai.d",UINT32_C(0x73350000),63U}
-        };
-        int64_t imm;
-        if(minias_eval_i64_expression(t[2],&imm)) {
-            if(imm>=-16 && imm<=15)
-                for(i=0U;i<sizeof(cmp)/sizeof(cmp[0]);++i)
-                    if(!strcmp(s->op,cmp[i].name)) {
-                        m->count=3U;
-                        m->encoding=cmp[i].opcode|
-                            (((uint32_t)imm&31U)<<10U)|(rj<<5U)|rd;
-                        goto done;
-                    }
-            if(imm>=0)
-                for(i=0U;i<sizeof(vector_shifts)/sizeof(vector_shifts[0]);++i)
-                    if(!strcmp(s->op,vector_shifts[i].name) &&
-                       (uint64_t)imm<=vector_shifts[i].max_shift) {
-                        m->count=3U;
-                        m->encoding=vector_shifts[i].opcode|
-                            ((uint32_t)imm<<10U)|(rj<<5U)|rd;
-                        goto done;
-                    }
-        }
-    }
-    /* LASX signed vector immediate compare: same typed si5/register
-     * field model as LSX but distinct ISA opcodes and XR register class. */
-    if(n==3U && la_special_reg(t[0],"$xr",31U,&rd) &&
-       la_special_reg(t[1],"$xr",31U,&rj)) {
-        static const struct {const char *name;uint32_t base;} cv[]={
-            {"xvslti.b",UINT32_C(0x76860000)},
-            {"xvslti.h",UINT32_C(0x76868000)},
-            {"xvslti.w",UINT32_C(0x76870000)},
-            {"xvslti.d",UINT32_C(0x76878000)}
-        };
-        int64_t imm;
-        if(minias_eval_i64_expression(t[2],&imm) &&
-           imm>=-16 && imm<=15)
-            for(i=0U;i<sizeof(cv)/sizeof(cv[0]);++i)
-                if(!strcmp(s->op,cv[i].name)) {
-                    m->count=3U;
-                    m->encoding=cv[i].base |
-                        (((uint32_t)imm&31U)<<10U)|(rj<<5U)|rd;
-                    goto done;
-                }
-    }
-    /* LASX vector shifts share the LSX typed unsigned count and register
-     * bitfield layout but retain separate ISA encoding and XR register class. */
-    if(n==3U && la_special_reg(t[0],"$xr",31U,&rd) &&
-       la_special_reg(t[1],"$xr",31U,&rj)) {
-        static const struct {const char *name;uint32_t code;unsigned max;} v[]={
-            {"xvslli.b",UINT32_C(0x772c2000),7U},
-            {"xvslli.h",UINT32_C(0x772c4000),15U},
-            {"xvslli.w",UINT32_C(0x772c8000),31U},
-            {"xvslli.d",UINT32_C(0x772d0000),63U},
-            {"xvsrli.b",UINT32_C(0x77302000),7U},
-            {"xvsrli.h",UINT32_C(0x77304000),15U},
-            {"xvsrli.w",UINT32_C(0x77308000),31U},
-            {"xvsrli.d",UINT32_C(0x77310000),63U}
-        };
-        uint64_t amount;
-        if(minias_eval_u64_expression(t[2],&amount))
-            for(i=0U;i<sizeof(v)/sizeof(v[0]);++i)
-                if(!strcmp(s->op,v[i].name) && amount<=v[i].max) {
-                    m->count=3U;
-                    m->encoding=v[i].code|
-                        ((uint32_t)amount<<10U)|(rj<<5U)|rd;
-                    goto done;
-                }
-    }
-    /* LSX lane extract to GPR: r0/v5/u10 immediate, widths set index cap.
-     * The vector register is not a GPR and GNU requires index in range. */
-    if(n==3U && la_reg(t[0],&rd) &&
-       la_special_reg(t[1],"$vr",31U,&rj)) {
-        static const struct {const char *name;uint32_t base;unsigned max;} pick[]={
-            {"vpickve2gr.b",UINT32_C(0x72ef8000),15U},
-            {"vpickve2gr.h",UINT32_C(0x72efc000),7U},
-            {"vpickve2gr.w",UINT32_C(0x72efe000),3U},
-            {"vpickve2gr.d",UINT32_C(0x72eff000),1U},
-            {"vpickve2gr.bu",UINT32_C(0x72f38000),15U},
-            {"vpickve2gr.hu",UINT32_C(0x72f3c000),7U},
-            {"vpickve2gr.wu",UINT32_C(0x72f3e000),3U},
-            {"vpickve2gr.du",UINT32_C(0x72f3f000),1U}
-        };
-        uint64_t lane;
-        if(minias_eval_u64_expression(t[2],&lane))
-            for(i=0U;i<sizeof(pick)/sizeof(pick[0]);++i)
-                if(!strcmp(s->op,pick[i].name) &&
-                   lane<=pick[i].max) {
-                    m->count=3U;
-                    m->encoding=pick[i].base |
-                        ((uint32_t)lane<<10U)|(rj<<5U)|rd;
-                    goto done;
-                }
-    }
-    /* LASX XR-to-GPR lane extraction is the 256-bit variant of LSX
-     * VPICKVE2GR, retaining the same typed lane format with 2x lane count.
-     * No Common ISA knowledge or private fixups required. */
-    if(n==3U && la_reg(t[0],&rd) &&
-       la_special_reg(t[1],"$xr",31U,&rj)) {
-        /* From upstream GNU binutils loongarch-opc.c. LASX XVPICK
-         * exposes W/D lanes only, not the LSX B/H variants; do not infer
-         * opcodes or pseudo-mnemonics from unrelated SIMD encodings. */
-        static const struct {const char *name;uint32_t opcode;unsigned max;} pick[]={
-            {"xvpickve2gr.w", UINT32_C(0x76efc000),7U},
-            {"xvpickve2gr.d", UINT32_C(0x76efe000),3U},
-            {"xvpickve2gr.wu",UINT32_C(0x76f3c000),7U},
-            {"xvpickve2gr.du",UINT32_C(0x76f3e000),3U}
-        };
-        uint64_t lane;
-        if(minias_eval_u64_expression(t[2],&lane))
-            for(i=0U;i<sizeof(pick)/sizeof(pick[0]);++i)
-                if(!strcmp(s->op,pick[i].name) &&
-                   lane<=pick[i].max) {
-                    m->count=3U;
-                    m->encoding=pick[i].opcode|
-                        ((uint32_t)lane<<10U)|(rj<<5U)|rd;
-                    goto done;
-                }
-    }
-    /* LASX XVPERMI W/D/Q all share the existing typed XR/XR/u8
-     * fields, with GNU binutils ISA opcode ownership kept in Target. */
-    if(n==3U && la_special_reg(t[0],"$xr",31U,&rd) &&
-       la_special_reg(t[1],"$xr",31U,&rj)) {
-        static const struct {const char *op;uint32_t opcode;} perms[]={
-            {"xvpermi.w",UINT32_C(0x77e40000)},
-            {"xvpermi.d",UINT32_C(0x77e80000)},
-            {"xvpermi.q",UINT32_C(0x77ec0000)}
-        };
-        uint64_t bits;
-        if(minias_eval_u64_expression(t[2],&bits) && bits<=255U)
-            for(i=0U;i<sizeof(perms)/sizeof(perms[0]);++i)
-                if(!strcmp(s->op,perms[i].op)) {
-                    m->count=3U;
-                    m->encoding=perms[i].opcode|
-                        ((uint32_t)bits<<10U)|(rj<<5U)|rd;
-                    goto done;
-                }
-    }
-    /* GNU LoongArch LASX replicate lane-zero group (XR0/XR5) and LSX
-     * GPR-to-lane injection (V0/R5/u10). No second vector encoder: both
-     * flow through existing target-owned 32-bit typed MCInst words. */
-    if(n==2U && la_special_reg(t[0],"$xr",31U,&rd) &&
-       la_special_reg(t[1],"$xr",31U,&rj)) {
-        static const struct {const char *op;uint32_t code;} repl[]={
-            {"xvreplve0.b",UINT32_C(0x77070000)},
-            {"xvreplve0.h",UINT32_C(0x77078000)},
-            {"xvreplve0.w",UINT32_C(0x7707c000)},
-            {"xvreplve0.d",UINT32_C(0x7707e000)},
-            {"xvreplve0.q",UINT32_C(0x7707f000)}
-        };
-        for(i=0U;i<sizeof(repl)/sizeof(repl[0]);++i)
-            if(!strcmp(s->op,repl[i].op)) {
-                m->count=2U;
-                m->encoding=repl[i].code|(rj<<5U)|rd;
-                goto done;
-            }
-    }
-    if(n==3U && la_special_reg(t[0],"$vr",31U,&rd) &&
-       la_reg(t[1],&rj)) {
-        static const struct {const char *op;uint32_t code;unsigned max;} lanes[]={
-            {"vinsgr2vr.b",UINT32_C(0x72eb8000),15U},
-            {"vinsgr2vr.h",UINT32_C(0x72ebc000),7U},
-            {"vinsgr2vr.w",UINT32_C(0x72ebe000),3U},
-            {"vinsgr2vr.d",UINT32_C(0x72ebf000),1U}
-        };
-        uint64_t lane;
-        if(minias_eval_u64_expression(t[2],&lane))
-            for(i=0U;i<sizeof(lanes)/sizeof(lanes[0]);++i)
-                if(!strcmp(s->op,lanes[i].op) &&
-                   lane<=lanes[i].max) {
-                    m->count=3U;
-                    m->encoding=lanes[i].code|
-                        ((uint32_t)lane<<10U)|(rj<<5U)|rd;
-                    goto done;
-                }
-    }
-    /* GNU LASX XR lane injection: vector x0, scalar r5, lane u10.
-     * Distinct from LSX VR injections, but same existing typed raw
-     * MCInst and common ELF encoder. GNU loongarch-opc.c is authoritative
-     * for both .w/.d opcode words and legal lane ranges. */
-    if(n==3U && la_special_reg(t[0],"$xr",31U,&rd) &&
-       la_reg(t[1],&rj)) {
-        static const struct {const char *name;uint32_t base;unsigned max;} inject[]={
-            {"xvinsgr2vr.w",UINT32_C(0x76ebc000),7U},
-            {"xvinsgr2vr.d",UINT32_C(0x76ebe000),3U}
-        };
-        uint64_t lane;
-        if(minias_eval_u64_expression(t[2],&lane))
-            for(i=0U;i<sizeof(inject)/sizeof(inject[0]);++i)
-                if(!strcmp(s->op,inject[i].name) && lane<=inject[i].max) {
-                    m->count=3U;
-                    m->encoding=inject[i].base|
-                        ((uint32_t)lane<<10U)|(rj<<5U)|rd;
                     goto done;
                 }
     }
@@ -910,25 +821,6 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
         m->count=2U;
         m->encoding=UINT32_C(0x0114d800)|(rj<<5U)|rd;
         goto done;
-    }
-    /* LASX unsigned 8-bit immediate logical family, X-vector separate. */
-    if(n==3U && la_special_reg(t[0],"$xr",31U,&rd) &&
-       la_special_reg(t[1],"$xr",31U,&rj)) {
-        static const struct {const char *name;uint32_t opcode;} masks[]={
-            {"xvandi.b",UINT32_C(0x77d00000)},
-            {"xvori.b",UINT32_C(0x77d40000)},
-            {"xvxori.b",UINT32_C(0x77d80000)},
-            {"xvnori.b",UINT32_C(0x77dc0000)}
-        };
-        uint64_t imm;
-        if(minias_eval_u64_expression(t[2],&imm) && imm<=255U)
-            for(i=0U;i<sizeof(masks)/sizeof(masks[0]);++i)
-                if(!strcmp(s->op,masks[i].name)) {
-                    m->count=3U;
-                    m->encoding=masks[i].opcode |
-                        ((uint32_t)imm<<10U)|(rj<<5U)|rd;
-                    goto done;
-                }
     }
     if(n==3U && !strcmp(s->op,"invtlb") &&
        la_reg(t[1],&rj) && la_reg(t[2],&rk)) {
@@ -986,34 +878,6 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
                     m->operands[0].immediate=v;
                     goto done;
                 }
-        }
-    }
-    /* Genuine four-vector operand format v0/v5/v10/v15; not a
-     * generic three-register shortcut. GNU VSHUF.B and vector BITSEL. */
-    if(n==4U && la_special_reg(t[0],"$vr",31U,&rd) &&
-       la_special_reg(t[1],"$vr",31U,&rj) &&
-       la_special_reg(t[2],"$vr",31U,&rk)) {
-        unsigned fourth;
-        if(la_special_reg(t[3],"$vr",31U,&fourth) &&
-           (!strcmp(s->op,"vshuf.b") || !strcmp(s->op,"vbitsel.v"))) {
-            m->count=4U;
-            m->encoding=(!strcmp(s->op,"vshuf.b") ?
-                        UINT32_C(0x0d500000):UINT32_C(0x0d100000)) |
-                         (fourth<<15U)|(rk<<10U)|(rj<<5U)|rd;
-            goto done;
-        }
-    }
-    if(n==4U && la_special_reg(t[0],"$xr",31U,&rd) &&
-       la_special_reg(t[1],"$xr",31U,&rj) &&
-       la_special_reg(t[2],"$xr",31U,&rk)) {
-        unsigned fourth;
-        if(la_special_reg(t[3],"$xr",31U,&fourth) &&
-           (!strcmp(s->op,"xvshuf.b") || !strcmp(s->op,"xvbitsel.v"))) {
-            m->count=4U;
-            m->encoding=(!strcmp(s->op,"xvshuf.b") ?
-                        UINT32_C(0x0d600000):UINT32_C(0x0d200000)) |
-                         (fourth<<15U)|(rk<<10U)|(rj<<5U)|rd;
-            goto done;
         }
     }
     if(n==4U && la_reg(t[0],&rd) && la_reg(t[1],&rj)) {
@@ -1196,7 +1060,10 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
     if(!strcmp(s->op,"move") && n==2U &&
         la_reg(t[0],&rd) && la_reg(t[1],&rj)) {
         m->count=2U;m->encoding=UINT32_C(0x00150000) |
-            (rj<<5U)|rd;goto done;
+            (rj<<5U)|rd;
+        la_capture_gpr_operand(m,0U,rd);
+        la_capture_gpr_operand(m,1U,rj);
+        goto done;
     }
     /* LoongArch PREFETCH has a u5 cache hint, a base register and either
      * a signed 12-bit displacement or an index register. Both variants
@@ -1276,7 +1143,9 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
         for(i=0U;i<sizeof(gpr3)/sizeof(gpr3[0]);++i)
             if(!strcmp(s->op,gpr3[i].name)) {
                 m->count=3U;m->encoding=gpr3[i].code |
-                    (rk<<10U)|(rj<<5U)|rd;goto done;
+                    (rk<<10U)|(rj<<5U)|rd;
+                la_capture_rrr(m,rd,rj,rk);
+                goto done;
             }
     } else {
         MiniAsSymbolExpr expr;
@@ -1305,7 +1174,9 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
                     if(!strcmp(s->op,imm12[i].name)) {
                         m->count=3U;m->encoding=imm12[i].code |
                             (((uint32_t)val & UINT32_C(0xfff))<<10U) |
-                            (rj<<5U)|rd;goto done;
+                            (rj<<5U)|rd;
+                        la_capture_rri(m,rd,rj,(int64_t)val);
+                        goto done;
                     }
             }
             if (val>=0 && val<=4095L) {
@@ -1314,6 +1185,7 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
                         m->count=3U;
                         m->encoding=unsigned12[i].code |
                             ((uint32_t)val<<10U) | (rj<<5U) | rd;
+                        la_capture_rri(m,rd,rj,(int64_t)val);
                         goto done;
                     }
             }
@@ -1324,6 +1196,7 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
                         m->count=3U;
                         m->encoding=shifts[i].code |
                             ((uint32_t)val<<10U) | (rj<<5U) | rd;
+                        la_capture_rri(m,rd,rj,(int64_t)val);
                         goto done;
                     }
             }
@@ -1332,7 +1205,9 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
                     if(!strcmp(s->op,ptr14[i].name)) {
                         m->count=3U;m->encoding=ptr14[i].code |
                             ((((uint32_t)(val/4L)) & UINT32_C(0x3fff))<<10U) |
-                            (rj<<5U)|rd;goto done;
+                            (rj<<5U)|rd;
+                        la_capture_rri(m,rd,rj,(int64_t)val);
+                        goto done;
                     }
             }
         }

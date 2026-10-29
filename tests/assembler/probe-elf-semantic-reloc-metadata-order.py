@@ -12,6 +12,8 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 import struct
+import subprocess
+import sys
 import tempfile
 
 
@@ -102,6 +104,17 @@ def compare(reference: bytes, candidate: bytes, *, equal: bool,
 def case(label: str, reference: bytes, candidate: bytes, dimension: str):
     compare(reference, candidate, equal=False, failed=dimension)
     print(f"MINIAS_ORACLE_MUTATION=PASS case={label} dimension={dimension}")
+
+
+def reject(label: str, data: bytes, error: str):
+    """Never certify an identically malformed pair of ELF inputs."""
+    try:
+        compare(data, data, equal=True)
+    except ValueError as exc:
+        assert error in str(exc), (label, exc)
+    else:
+        raise AssertionError(f"oracle accepted malformed ELF: {label}")
+    print(f"MINIAS_ORACLE_REJECT=PASS case={label}")
 
 
 def main():
@@ -229,6 +242,48 @@ def main():
     case("elf-osabi", x86, mutate(x86, 7, b"\x03"), "header")
     case("elf-abi-version", x86, mutate(x86, 8, b"\x01"), "header")
     case("elf-entry", x86, mutate(x86, 24, struct.pack("<Q", 1)), "header")
+
+    # ET_REL section addresses are not necessarily an ignored header field.
+    # It is incorrect to equate a nonzero-address section with a zero-based
+    # one even if the payload, alignment, symbol table and relocations match.
+    case("section-sh-addr", x86,
+         mutate(x86, pos["shdr:1"] + 16, struct.pack("<Q", 0x4000)),
+         "section_core")
+
+    reject("et-exec-with-unchecked-load-segments",
+           mutate(x86, 16, struct.pack("<H", 2)), "requires ET_REL")
+    reject("unsupported-machine-without-relocations",
+           mutate(x86, 18, struct.pack("<H", 3)), "no target model")
+    reject("et-rel-with-program-headers",
+           mutate(x86, 56, struct.pack("<H", 1)), "program headers")
+
+    # Bounds must also be checked for nonpatching RELAX markers, ADD/SUB
+    # arithmetic and unknown relocation types. Identical malformed objects
+    # must never become 'equal' through matching relocation counters.
+    for label, machine, typ, offset, message in (
+        ("marker-offset", 243, 51, 9, "offset outside"),
+        ("unknown-reloc-offset", 243, 499, 9, "offset outside"),
+        ("additive-field-overflow", 243, 35, 6, "additive relocation field"),
+        ("replacement-field-overflow", 62, 1, 4, "relocation field"),
+    ):
+        raw, _ = make_elf(machine, relocations=((offset, typ, 0),))
+        reject(label, raw, message)
+
+    # The CLI's default historical compatibility verdict is deliberately
+    # distinct from exact GNU parity. An opt-in strict gate must reject
+    # alignment/RELAX differences even when code remains link-compatible.
+    with tempfile.TemporaryDirectory(prefix="minias-oracle-strict-cli-") as tmp:
+        root = Path(tmp)
+        ref, cand = root / "gnu.o", root / "mini.o"
+        ref.write_bytes(x86)
+        cand.write_bytes(mutate(x86, pos["shdr:1"] + 48,
+                                struct.pack("<Q", 8)))
+        for extra, expected in (([], 0), (["--strict"], 1)):
+            proc = subprocess.run(
+                [sys.executable, str(ORACLE), str(ref), str(cand), *extra],
+                capture_output=True, text=True, check=False)
+            assert proc.returncode == expected, (extra, proc.stdout, proc.stderr)
+    print("MINIAS_ORACLE_STRICT_CLI=PASS compatible=0 strict=1")
     print("MINIAS_ORACLE_RELOC_METADATA_ORDER=PASS")
 
 

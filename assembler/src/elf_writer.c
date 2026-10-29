@@ -20,57 +20,58 @@ static bool section_symbol_fixup(const MiniAs *as,const MiniAsFixup *fixup) {
            sym->section!=fixup->section;
 }
 
-static bool symbol_referenced_by_relocation(const MiniAs *as,
-                                             size_t symbol_index) {
-    size_t i;
+/* Symbol-table membership is an ELF ObjectModel decision, not a Target
+ * encoding decision. Derive it once from the finalized fixup and COMDAT
+ * graph: repeated scans for every local label were quadratic on genuine
+ * compiler-generated Kbuild input with many temporary symbols. A relocation
+ * whose symbol is folded to STT_SECTION does not keep its original .L label
+ * alive, but a SHT_GROUP signature always does. */
+typedef struct MiniAsELFSymbolState {
+    bool referenced_by_relocation;
+    bool group_signature;
+    bool emit;
+} MiniAsELFSymbolState;
 
-    for (i = 0U; i < as->fixup_count; ++i) {
-        if (as->fixups[i].symbol_index == symbol_index &&
-            !section_symbol_fixup(as,&as->fixups[i])) {
-            return true;
+static bool plan_elf_symbols(MiniAs *as,MiniAsELFSymbolState *states,
+                             size_t *emitted_count) {
+    size_t i;
+    size_t count=0U;
+    for(i=0U;i<as->section_count;++i) {
+        const char *signature=as->sections[i].group_signature;
+        const MiniAsSymbol *symbol;
+        if(signature==NULL)continue;
+        symbol=minias_get_symbol(as,signature,false);
+        if(symbol==NULL) {
+            minias_set_error(as,"missing-group-signature:%s",
+                             as->sections[i].name);
+            return false;
         }
+        states[(size_t)(symbol-as->symbols)].group_signature=true;
     }
-    return false;
-}
-
-static bool should_emit_symbol(const MiniAs *as, size_t symbol_index) {
-    const MiniAsSymbol *symbol = &as->symbols[symbol_index];
-
-    /*
-     * GNU as treats .L-prefixed names as temporary local labels: once their
-     * assembly-time role is finished, they are omitted unless a relocation
-     * still needs them. Keep undefined locals visible so invalid input is not
-     * silently accepted.
-     */
-    /* Group signatures participate in SHT_GROUP sh_info even when their
-     * name looks like an ordinary GNU temporary local label. */
-    {
-        size_t k;
-        for (k=0U;k<as->section_count;++k)
-            if(as->sections[k].group_signature!=NULL &&
-               strcmp(as->sections[k].group_signature,symbol->name)==0)
-                return true;
+    for(i=0U;i<as->fixup_count;++i) {
+        const MiniAsFixup *fixup=&as->fixups[i];
+        if(fixup->symbol_index<as->symbol_count &&
+           !section_symbol_fixup(as,fixup))
+            states[fixup->symbol_index].referenced_by_relocation=true;
     }
-    if (symbol->bind == MINIAS_STB_LOCAL &&
-        symbol->defined &&
-        (strncmp(symbol->name, ".L", 2U) == 0 ||
-         minias_is_private_symbol_name(symbol->name)) &&
-        !symbol_referenced_by_relocation(as, symbol_index)) {
-        return false;
-    }
-    return true;
-}
-
-static size_t emitted_symbol_count(const MiniAs *as) {
-    size_t i;
-    size_t count = 0U;
-
-    for (i = 0U; i < as->symbol_count; ++i) {
-        if (should_emit_symbol(as, i)) {
+    for(i=0U;i<as->symbol_count;++i) {
+        const MiniAsSymbol *symbol=&as->symbols[i];
+        const bool temporary=symbol->bind==MINIAS_STB_LOCAL &&
+            symbol->defined &&
+            (strncmp(symbol->name,".L",2U)==0 ||
+             minias_is_private_symbol_name(symbol->name));
+        states[i].emit=!temporary || states[i].group_signature ||
+            states[i].referenced_by_relocation;
+        if(states[i].emit) {
+            if(count==SIZE_MAX) {
+                minias_set_error(as,"too-many-elf-symbols");
+                return false;
+            }
             ++count;
         }
     }
-    return count;
+    *emitted_count=count;
+    return true;
 }
 
 /* GNU's `o' refers to an anchor *symbol*, although the final ELF sh_link
@@ -140,6 +141,7 @@ static bool minias_write_elf(MiniAs *as,
     MiniElfWriteSymbol *symbols = NULL;
     MiniElfWriteRela *relocations = NULL;
     size_t *symbol_map = NULL;
+    MiniAsELFSymbolState *symbol_states = NULL;
     char **private_names = NULL;
     unsigned char *image = NULL;
     size_t image_size = 0U;
@@ -155,10 +157,20 @@ static bool minias_write_elf(MiniAs *as,
     FILE *file = NULL;
     bool ok = false;
 
-    expected_symbol_count = emitted_symbol_count(as);
+    if(as->symbol_count>SIZE_MAX/sizeof(*symbol_states)) {
+        minias_set_error(as,"too-many-elf-symbols");
+        return false;
+    }
+    symbol_states=calloc(as->symbol_count==0U ? 1U : as->symbol_count,
+                         sizeof(*symbol_states));
+    if(symbol_states==NULL) {
+        minias_set_error(as,"out-of-memory:elf-symbol-plan");
+        return false;
+    }
+    if(!plan_elf_symbols(as,symbol_states,&expected_symbol_count))goto done;
     if(as->cu_file_count>SIZE_MAX-expected_symbol_count) {
         minias_set_error(as,"too-many-cu-file-symbols");
-        return false;
+        goto done;
     }
     expected_symbol_count+=as->cu_file_count;
     memset(&attribute, 0, sizeof(attribute));
@@ -168,13 +180,25 @@ static bool minias_write_elf(MiniAs *as,
     emit_attribute = attribute.name != NULL;
     if (emit_attribute && minias_find_section(as, attribute.name) >= 0) {
         minias_set_error(as, "duplicate-target-attribute-section:%s", attribute.name);
-        return false;
+        goto done;
     }
     if (as->section_count == SIZE_MAX) {
         minias_set_error(as, "too-many-elf-sections");
-        return false;
+        goto done;
     }
     section_count = as->section_count + (emit_attribute ? 1U : 0U);
+    /* The ObjectModel contains independently sized vectors. Guard every
+     * multiplication before allocating: an overflowing plain malloc for
+     * symbol_map would otherwise create an undersized ordinal map even
+     * though the surrounding calloc arrays reject their own overflow. */
+    if(section_count>SIZE_MAX/sizeof(*sections) ||
+       expected_symbol_count>SIZE_MAX/sizeof(*symbols) ||
+       as->fixup_count>SIZE_MAX/sizeof(*relocations) ||
+       as->symbol_count>SIZE_MAX/sizeof(*symbol_map) ||
+       as->symbol_count>SIZE_MAX/sizeof(*private_names)) {
+        minias_set_error(as,"elf-object-capacity-overflow");
+        goto done;
+    }
     sections = calloc(section_count == 0U ? 1U : section_count,
                       sizeof(*sections));
     symbols = calloc(expected_symbol_count == 0U ? 1U : expected_symbol_count,
@@ -242,18 +266,11 @@ static bool minias_write_elf(MiniAs *as,
         MiniElfWriteSymbol *output;
         bool local_group_signature=false;
 
-        if (!should_emit_symbol(as, i)) {
+        if (!symbol_states[i].emit) {
             continue;
         }
-        if(input->bind==MINIAS_STB_LOCAL && !input->defined) {
-            size_t j;
-            for(j=0U;j<as->section_count;++j)
-                if(as->sections[j].group_signature!=NULL &&
-                   strcmp(as->sections[j].group_signature,input->name)==0) {
-                    local_group_signature=true;
-                    break;
-                }
-        }
+        local_group_signature=input->bind==MINIAS_STB_LOCAL &&
+            !input->defined && symbol_states[i].group_signature;
         if (input->bind == MINIAS_STB_LOCAL && !input->defined &&
             !local_group_signature) {
             minias_set_error(as,
@@ -455,13 +472,15 @@ static bool minias_write_elf(MiniAs *as,
         minias_set_error(as, "output-open:%s", path);
         goto done;
     }
-    if (fwrite(image, 1U, image_size, file) != image_size ||
-        fclose(file) != 0) {
+    {
+        size_t written=fwrite(image,1U,image_size,file);
+        int close_status=fclose(file);
         file = NULL;
-        minias_set_error(as, "output-write:%s", path);
-        goto done;
+        if(written!=image_size || close_status!=0) {
+            minias_set_error(as,"output-write:%s",path);
+            goto done;
+        }
     }
-    file = NULL;
     ok = true;
 
 done:
@@ -474,6 +493,7 @@ done:
     }
     free(image);
     free(symbol_map);
+    free(symbol_states);
     free(relocations);
     free(symbols);
     free(sections);

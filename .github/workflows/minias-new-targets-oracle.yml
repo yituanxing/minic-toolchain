@@ -16,6 +16,9 @@ on:
       - 'tests/assembler/probe-elf-semantic-comdat-strict.sh'
       - 'tests/assembler/probe-elf-semantic-payload-bitfields.py'
       - 'tests/assembler/probe-elf-semantic-reloc-metadata-order.py'
+      - 'tests/assembler/probe-elf-symbol-plan.sh'
+      - 'tests/assembler/probe-mc-org-snapshot-symmetry.sh'
+      - 'tests/assembler/probe-loong-vector-typed-patterns.sh'
       - 'tests/assembler/probe-link-order-gcc-patchable.sh'
       - 'tests/assembler/probe-miniobjcopy-comdat-rewrite.sh'
       - 'tests/assembler/probe-minias-ci-routing.py'
@@ -86,6 +89,10 @@ jobs:
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-mc-cross-layer-contract.sh
+      - name: GNU x86 ELF symbol-retention plan and relocation owner contracts
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-elf-symbol-plan.sh
       - name: All four Targets retain typed GNU deferred directive fragments
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
@@ -200,6 +207,10 @@ jobs:
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=x86_64 \
             bash tests/assembler/probe-mc-org-lexical-layout.sh
+      - name: GNU x86 coherent subsection .org, branch and size snapshots
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-mc-org-snapshot-symmetry.sh
       - name: GNU x86 and LoongArch64 fixed .org with forward DATA
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=x86_64 \
@@ -225,3 +236,10 @@ jobs:
           LOONGCOPY=loongarch64-linux-gnu-objcopy \
           LOONGREADELF=loongarch64-linux-gnu-readelf \
             bash tests/assembler/probe-x86-loong-base.sh
+      - name: LoongArch64 typed LSX/LASX vector opcode patterns against GNU
+        run: |
+          command -v loongarch64-linux-gnu-as
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+          LOONGAS=loongarch64-linux-gnu-as \
+          LOONGCOPY=loongarch64-linux-gnu-objcopy \
+            bash tests/assembler/probe-loong-vector-typed-patterns.sh
