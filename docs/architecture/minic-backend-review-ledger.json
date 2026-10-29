@@ -10,7 +10,7 @@
     672,
     673
   ],
-  "audit_in_progress": "New LoongArch64 DBAR ISA-owned qualified GNU structured ASM only; GNU AS and QEMU acceptance pending. Exact-head native strict + four-arch runtime must pass, and GNU source ownership ledger tracks new blobs. Do not claim Linux .i→.s progression before an explicit current-head census or whole Image/P1.",
+  "audit_in_progress": "MiniC batch14 architecture consolidation: Direct LP64 ABI policies, trusted Core ASM source provenance, x86 physical register banks, and RV64 frame scratch liveness. New source owners are indexed without silently certifying stale blob reviews. Exact-head Linux .i-to-.s, GNU AS, link and QEMU are independent evidence; the four-architecture runtime has two pre-existing failures.",
   "next_deep_review": [
     "src/target/aarch64/asm_legalize.c",
     "src/target/loongarch64/frame_emit.c",
@@ -639,6 +639,12 @@
       "blob": "04942ab687e9dfd7b8af95e9aaa00c63a0ae74e8",
       "review_depth": "inventory",
       "ci_touched_in": []
+    },
+    "src/target/riscv/frame_address_policy.h": {
+      "blob": "4b2aea027f4e81db70e1c38b8e8b48f5244f1e8b",
+      "review_depth": "targeted",
+      "ci_touched_in": [],
+      "note": "2026-10-29: RV64 frame address, large-displacement scratch selection and live 128-bit half preservation reviewed with a production frame-access regression; no RV32 runtime or cross-ISA assembly certification implied."
     },
     "src/target/riscv/function_symbol.h": {
       "blob": "a5dc789030efa18c0e1a231bfee73d3ad9c78824",
