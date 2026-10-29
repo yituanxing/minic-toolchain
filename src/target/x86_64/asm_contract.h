@@ -37,12 +37,21 @@ unsigned int minic_x86_64_linux_fsgsbase_form(const char *, size_t);
 unsigned int minic_x86_64_linux_segment_register_extable_form(const char *, size_t);
 unsigned int minic_x86_64_linux_kernel_nofault_goto_form(const char *, size_t);
 bool minic_x86_64_linux_rep_movsb_alternative_form(const char *, size_t);
+bool minic_x86_64_linux_rep_stosb_alternative_form(const char *, size_t);
+/* FPU user frame state save/restore with SMAP patching and type-15 fixup. */
+unsigned int minic_x86_64_linux_fpu_user_frame_form(const char *, size_t);
+/* FXRSTOR/FXRSTORQ protected by Linux type-17 register exception fixup. */
+unsigned int minic_x86_64_linux_fxrstor_safe_form(const char *, size_t);
 /* Linux SMAP ALTERNATIVE: empty baseline, STAC/CLAC or flags save/restore. */
 unsigned int minic_x86_64_linux_smap_alternative_form(const char *, size_t);
 /* Linux harden_usercopy speculative barrier ALTERNATIVE, feature 642. */
 bool minic_x86_64_linux_lfence_alternative_form(const char *, size_t);
 /* Linux fast string load with type-20 partial-page zero-pad exception. */
 bool minic_x86_64_linux_load_unaligned_zeropad_form(const char *, size_t);
+/* Linux force_valid_ss LAR selector-rights read with hardware ZF fallback. */
+bool minic_x86_64_linux_lar_selector_form(const char *, size_t);
+/* Linux hardware RNG with real CF flag-output and 64-bit result storage. */
+unsigned int minic_x86_64_linux_random_seed_form(const char *, size_t);
 unsigned int minic_x86_64_linux_zero_barrier_form(const char *, size_t);
 unsigned int minic_x86_64_linux_counter_form(const char *,size_t);
 /* FXSAVE/FXSAVE64 exact 512-byte aligned architectural memory images. */

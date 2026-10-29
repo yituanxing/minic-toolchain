@@ -53,3 +53,13 @@ DEFINE_NOFAULT_PUT(b, u8,  "iq", "b")
 DEFINE_NOFAULT_PUT(w, u16, "ir", "w")
 DEFINE_NOFAULT_PUT(l, u32, "ir", "l")
 DEFINE_NOFAULT_PUT(q, u64, "er", "q")
+
+/* Signal frames store pointer-typed uc_link with the same 8-byte nofault
+ * kernel MOV and exception-table goto branch; it is not an integer lvalue. */
+int linux_nofault_put_ptr(void *p, void *value) {
+    asm goto(NOFAULT_STORE("q")
+        : : "er"(value), "m"(*(struct __large_struct *)p) : : bad);
+    return 0;
+bad:
+    return -14;
+}

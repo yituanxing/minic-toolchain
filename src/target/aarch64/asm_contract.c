@@ -1391,7 +1391,8 @@ static unsigned int aarch64_linux_encoded_sysreg_write_form(
     static const struct { unsigned int op0,op1,crn,crm,op2; } regs[] = {
         {3U,0U,12U,12U,5U}, /* ICC_SRE_EL1 */
         {3U,0U,4U,6U,0U},  /* ICC_PMR_EL1 priority mask */
-        {3U,3U,4U,2U,2U}   /* SVCR: Streaming SVE/SME state control */
+        {3U,3U,4U,2U,2U},  /* SVCR: Streaming SVE/SME state control */
+        {3U,3U,13U,0U,5U} /* TPIDR2_EL0: SME per-task user TLS register */
     };
     char compact[768], expected[768];
     size_t i, used = 0U;
@@ -1449,7 +1450,8 @@ static bool aarch64_linux_encoded_sysreg_write_emit(
     static const unsigned int encodings[] = {
         (3U << 19) | (12U << 12) | (12U << 8) | (5U << 5),
         (3U << 19) | (4U << 12) | (6U << 8),
-        (3U << 19) | (3U << 16) | (4U << 12) | (2U << 8) | (2U << 5)
+        (3U << 19) | (3U << 16) | (4U << 12) | (2U << 8) | (2U << 5),
+        (3U << 19) | (3U << 16) | (13U << 12) | (5U << 5)
     };
     MinicType plain;
     if (!form || form > sizeof(encodings) / sizeof(encodings[0]) ||
@@ -2557,6 +2559,133 @@ static bool aarch64_linux_cache_op_emit(
     return fprintf(out, "  ldr x9, [sp, #%zu]\n  %s, x9\n",
                    (size_t)op->value * 8U, mnemonic) >= 0;
 }
+
+/* User-cache maintenance is the exception-recovering companion of the
+ * ordinary DC/IC API. In the kernel's undef trap emulator, the cache
+ * operation can fault while accessing TTBR0. Its type-2 __ex_table entry
+ * names the C return-status register; silently issuing a bare DC/IC would
+ * turn -EFAULT into an unhandled kernel abort. The source uses precisely
+ * four hardware operations (three CRM cases share DC CIVAC). */
+static const char *aarch64_linux_user_cache_fault_form(
+    const char *text, size_t length) {
+    static const struct { const char *prefix; const char *mnemonic; } forms[] = {
+        {"1:dccivac,%1mov%w0,#02:", "dc civac"},
+        {"1:sys3,c7,c13,1,%1mov%w0,#02:", "sys 3, c7, c13, 1"},
+        {"1:sys3,c7,c12,1,%1mov%w0,#02:", "sys 3, c7, c12, 1"},
+        {"1:icivau,%1mov%w0,#02:", "ic ivau"}
+    };
+    static const char tail[] =
+        ".irpnum,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30"
+        ".equ.L__gpr_num_x\\num,\\num"
+        ".equ.L__gpr_num_w\\num,\\num"
+        ".endr"
+        ".equ.L__gpr_num_xzr,31"
+        ".equ.L__gpr_num_wzr,31"
+        ".pushsection__ex_table,\"a\""
+        ".align2"
+        ".long((1b)-.)"
+        ".long((2b)-.)"
+        ".short(2)"
+        ".short((((.L__gpr_num_%w0)<<0)|((.L__gpr_num_wzr)<<5)))"
+        ".popsection";
+    char compact[1400];
+    size_t i, n = 0U;
+    if (!text || !length || length >= sizeof(compact)) return NULL;
+    for (i = 0U; i < length; ++i) {
+        const char c = text[i];
+        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') continue;
+        if (c == '\0' || n + 1U >= sizeof(compact)) return NULL;
+        compact[n++] = c;
+    }
+    compact[n] = '\0';
+    for (i = 0U; i < sizeof(forms) / sizeof(forms[0]); ++i) {
+        const size_t prefix = strlen(forms[i].prefix), suffix = strlen(tail);
+        if (n == prefix + suffix &&
+            memcmp(compact, forms[i].prefix, prefix) == 0 &&
+            memcmp(compact + prefix, tail, suffix) == 0)
+            return forms[i].mnemonic;
+    }
+    return NULL;
+}
+
+static bool aarch64_linux_user_cache_fault_source(
+    const MinicC0Program *program, const MinicInlineAsm *src,
+    MinicTargetInlineAsmContract *contract) {
+    const MinicExpression *status, *address;
+    MinicType plain;
+    if (!program || !src || !contract || !src->is_volatile || src->is_goto ||
+        src->output_count != 1U || !src->outputs ||
+        src->input_count != 1U || !src->inputs ||
+        src->label_count || src->clobber_count ||
+        src->has_memory_clobber || src->register_clobber_count ||
+        !constraint(&src->outputs[0], "=r") ||
+        !constraint(&src->inputs[0], "r") ||
+        !aarch64_linux_user_cache_fault_form(
+            src->template_text, src->template_length))
+        return false;
+    status = minic_c0_program_expression(program, src->outputs[0].expression);
+    address = minic_c0_program_expression(program, src->inputs[0].expression);
+    if (!status || !address ||
+        status->value_category != MINIC_VALUE_LVALUE ||
+        minic_type_is_const(status->type) ||
+        !minic_type_equal(status->type, minic_type_int()) ||
+        !minic_type_unqualified(address->type, &plain) ||
+        (!minic_type_equal(plain, minic_type_unsigned_long()) &&
+         !minic_type_is_pointer(plain)))
+        return false;
+    contract->operand_count = 2U;
+    contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+    contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->implicit_memory_effect = true;
+    return true;
+}
+
+static bool aarch64_linux_user_cache_fault_emit(
+    FILE *out, const MinicDirectLP64BlockContext *ctx,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
+    const MinicCoreFunction *fn = ctx->fn;
+    const MinicCoreStructuredInlineAsmOperand *op =
+        ins->value.structured_inline_asm.operands;
+    const char *instruction = aarch64_linux_user_cache_fault_form(
+        info->template_text, info->template_length);
+    MinicType type;
+    if (!instruction || !info->is_volatile || info->is_goto ||
+        !info->has_memory_clobber || info->register_clobber_count ||
+        ctx->dynamic_frame ||
+        ins->value.structured_inline_asm.operand_count != 2U || !op ||
+        op[0].operand_index != 0U || op[1].operand_index != 1U ||
+        op[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
+        op[1].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
+        op[0].early_clobber || op[1].early_clobber ||
+        op[0].has_fixed_register_binding || op[1].has_fixed_register_binding ||
+        op[0].value >= fn->value_count || op[1].value >= fn->value_count ||
+        !aarch64_linux_structured_spill_slot_valid(op[0].value) ||
+        !aarch64_linux_structured_spill_slot_valid(op[1].value) ||
+        !minic_type_pointee(fn->values[op[0].value].type, &type) ||
+        !minic_type_equal(type, minic_type_int()) ||
+        !minic_type_unqualified(fn->values[op[1].value].type, &type) ||
+        (!minic_type_equal(type, minic_type_unsigned_long()) &&
+         !minic_type_is_pointer(type)))
+        return false;
+    /* W9 is the actual fault-rewritten result register, encoded as 9 in
+     * type-2's data word. X10 is the cache-operation address operand. */
+    return fprintf(out,
+        "  ldr x10, [sp, #%zu]\n"
+        "1: %s, x10\n"
+        "  mov w9, #0\n"
+        "2:\n"
+        "  .pushsection __ex_table, \"a\"\n"
+        "  .align 2\n"
+        "  .long (1b) - .\n"
+        "  .long (2b) - .\n"
+        "  .short 2\n"
+        "  .short %u\n"
+        "  .popsection\n"
+        "  ldr x11, [sp, #%zu]\n"
+        "  str w9, [x11]\n",
+        (size_t)op[1].value * 8U, instruction,
+        9U | (31U << 5), (size_t)op[0].value * 8U) >= 0;
+}
 bool minic_aarch64_qualify_inline_asm(
     const MinicC0Program *program, const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
@@ -2604,6 +2733,7 @@ bool minic_aarch64_qualify_inline_asm(
     if(aarch64_linux_qcom_return_stack_source(program,src,contract))return true;
     if(aarch64_linux_uaccess_source(program,src,contract))return true;
     if(aarch64_linux_zeropad_source(program,src,contract))return true;
+    if(aarch64_linux_user_cache_fault_source(program,src,contract))return true;
     if(aarch64_linux_cache_op_source(program,src,contract))return true;
     if(aarch64_linux_encoded_sysreg_write_source(program,src,contract))
         return true;
@@ -3292,6 +3422,9 @@ bool minic_aarch64_emit_qualified_structured_asm(
     if (aarch64_linux_zeropad_form(info->template_text,
                                   info->template_length))
         return aarch64_linux_zeropad_emit(out, ctx, ins, info);
+    if (aarch64_linux_user_cache_fault_form(
+            info->template_text, info->template_length))
+        return aarch64_linux_user_cache_fault_emit(out, ctx, ins, info);
     if (aarch64_linux_cache_op_form(info->template_text,
                                    info->template_length))
         return aarch64_linux_cache_op_emit(out, ctx, ins, info);

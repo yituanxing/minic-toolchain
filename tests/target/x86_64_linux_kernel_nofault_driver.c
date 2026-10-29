@@ -12,6 +12,7 @@ extern int linux_nofault_put_b(void *, u8);
 extern int linux_nofault_put_w(void *, u16);
 extern int linux_nofault_put_l(void *, u32);
 extern int linux_nofault_put_q(void *, u64);
+extern int linux_nofault_put_ptr(void *, void *);
 
 int main(void) {
     u64 memory = 0x1122334455667788ULL;
@@ -31,5 +32,10 @@ int main(void) {
         memory != 0x11223344d00dcafeULL) return 7;
     if (linux_nofault_put_q(&memory, 0x123456789abcdef0ULL) ||
         memory != 0x123456789abcdef0ULL) return 8;
+    {
+        void *pointer = 0;
+        if (linux_nofault_put_ptr(&pointer, &memory) || pointer != &memory)
+            return 9;
+    }
     return 0;
 }

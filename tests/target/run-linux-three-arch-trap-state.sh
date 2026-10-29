@@ -13,16 +13,24 @@ trap 'rm -rf -- "$workdir"' EXIT HUP INT TERM
 for record in \
     aarch64:aarch64_linux_cpu_state_and_fault \
     aarch64:aarch64_linux_kernel_nofault \
+    aarch64:aarch64_linux_tpidr2 \
+    aarch64:aarch64_linux_user_cache_fault \
+    aarch64:linux_large_record_transfer \
     loongarch64:loongarch64_linux_trap_state \
-    loongarch64:loongarch64_linux_fpr_transfer
+    loongarch64:loongarch64_linux_fpr_transfer \
+    loongarch64:linux_large_record_transfer
 do
     arch=${record%%:*}
     fixture=${record#*:}
+    output="$workdir/$fixture"
+    if [ "$fixture" = linux_large_record_transfer ]; then
+        output="$workdir/${arch}_$fixture"
+    fi
     "$host_cc" -E -P "$source_root/tests/target/$fixture.c" \
-        -o "$workdir/$fixture.i"
-    "$minic_cc" -S "$workdir/$fixture.i" --target="$arch-linux" \
+        -o "$output.i"
+    "$minic_cc" -S "$output.i" --target="$arch-linux" \
         -fshort-wchar -funsigned-char -fno-PIE \
-        -o "$workdir/$fixture.s"
+        -o "$output.s"
 done
 
 # Kernel-address nofault accesses use ordinary LDR/STR, NOT unprivileged
@@ -50,6 +58,49 @@ do
     if ! grep -Fq "movfr2gr.d \$t0, \$f$reg" "$loong_fpr" ||
        ! grep -Fq "movgr2fr.d \$f$reg, \$t0" "$loong_fpr"; then
         printf 'FAIL: LoongArch 64-bit FPR%s transfer direction absent\n' "$reg" >&2
+        exit 1
+    fi
+done
+
+# AArch64 SME task TLS is a real encoded MSR S3_3_C13_C0_5; missing
+# TPIDR2 formerly stopped the entire arch/arm64/kernel/process.i TU.
+if ! grep -Fq '.inst 0xd51bd0a9' "$workdir/aarch64_linux_tpidr2.s"; then
+    printf 'FAIL: AArch64 encoded TPIDR2_EL0 write missing\n' >&2
+    exit 1
+fi
+cache_fault="$workdir/aarch64_linux_user_cache_fault.s"
+for instruction in 'dc civac, x10' 'sys 3, c7, c13, 1, x10' \
+                   'sys 3, c7, c12, 1, x10' 'ic ivau, x10'
+do
+    if ! grep -Fq "$instruction" "$cache_fault"; then
+        printf 'FAIL: Linux arm64 cache-maintenance fault operation missing %s\n' "$instruction" >&2
+        exit 1
+    fi
+done
+if [ "$(grep -c '  .short 1001$' "$cache_fault")" -ne 4 ] ||
+   [ "$(grep -c '  .short 2$' "$cache_fault")" -ne 4 ]; then
+    printf 'FAIL: arm64 cache-maintenance type-2/status-register exception entries lost\n' >&2
+    exit 1
+fi
+
+# Native long record copies are counted loops, including record snapshots;
+# small records keep the short, direct sequence. Test BOTH LP64 backends.
+arm_record="$workdir/aarch64_linux_large_record_transfer.s"
+for instruction in 'movz x12, #8192' 'ldrb w9, [x11], #1' \
+                   'strb w9, [x10], #1' 'subs x12, x12, #1' 'b.ne 1b'
+do
+    if ! grep -Fq "$instruction" "$arm_record"; then
+        printf 'FAIL: AArch64 large record copy/snapshot loop missing %s\n' "$instruction" >&2
+        exit 1
+    fi
+done
+loong_record="$workdir/loongarch64_linux_large_record_transfer.s"
+for instruction in 'li.d $t3, 8192' 'ld.bu $t0, $t2, 0' \
+                   'st.b $t0, $t1, 0' 'addi.d $t3, $t3, -1' \
+                   'bnez $t3, 1b'
+do
+    if ! grep -Fq "$instruction" "$loong_record"; then
+        printf 'FAIL: LoongArch large record copy/snapshot loop missing %s\n' "$instruction" >&2
         exit 1
     fi
 done
@@ -129,5 +180,19 @@ if "$minic_cc" -S "$workdir/bad_fpr.i" --target=loongarch64-linux \
     printf 'FAIL: LoongArch out-of-range FPR32 transfer admitted\n' >&2
     exit 1
 fi
+sed 's/((13) << 12)/((14) << 12)/g' \
+    "$workdir/aarch64_linux_tpidr2.i" > "$workdir/bad_tpidr2.i"
+if "$minic_cc" -S "$workdir/bad_tpidr2.i" --target=aarch64-linux \
+    -o "$workdir/bad_tpidr2.s" >/dev/null 2>&1; then
+    printf 'FAIL: unknown AArch64 encoded TPIDR2 sysreg admitted\n' >&2
+    exit 1
+fi
+sed 's/"2"/"3"/g' \
+    "$workdir/aarch64_linux_user_cache_fault.i" > "$workdir/bad_cache_fault.i"
+if "$minic_cc" -S "$workdir/bad_cache_fault.i" --target=aarch64-linux \
+    -o "$workdir/bad_cache_fault.s" >/dev/null 2>&1; then
+    printf 'FAIL: invalid cache maintenance exception type-3 admitted\n' >&2
+    exit 1
+fi
 
-printf 'PASS: Linux arm64 TPIDR/AT/PAR and 8 kernel-nofault type-3 fixups; LoongArch IRQ/trap CSR plus F0..F31 bidirectional bit transfers\n'
+printf 'PASS: Linux arm64 TPIDR2/TPIDR/AT/PAR, cache-maintenance type-2 and kernel nofault type-3; LoongArch IRQ/trap CSR/FPR, both LP64 large record loops\n'

@@ -106,7 +106,11 @@ bool minic_multi_direct_record_copy_extent(
         !minic_type_equal(src_unqualified, ins->type) ||
         !minic_data_layout_type(target->data_layout, program, ins->type,
                                 bytes, &alignment) ||
-        alignment == 0U || *bytes > 2048U)
+        /* Kernel task_struct and other compound records are often many
+         * KiB. Native emitters use counted byte loops for large transfers;
+         * this cap bounds the requested runtime copy without imposing the
+         * former 2-KiB single-instruction-source expansion limit. */
+        alignment == 0U || *bytes > (16U * 1024U * 1024U))
         return false;
     return true;
 }
@@ -139,7 +143,7 @@ bool minic_multi_direct_record_load_extent(
         !minic_lp64_frame_plan_object(frame_plan, dst, object_offset) ||
         !minic_data_layout_type(target->data_layout, program, ins->type,
                                 bytes, &alignment) ||
-        !*bytes || !alignment || *bytes > 2048U)
+        !*bytes || !alignment || *bytes > (16U * 1024U * 1024U))
         return false;
     return true;
 }

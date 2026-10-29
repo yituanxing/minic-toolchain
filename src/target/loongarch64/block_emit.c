@@ -59,12 +59,24 @@ const MinicCoreValueId dst = ins->value.record_copy.destination_address;
             if (!emit_sp_mem(out, "ld.d", "$t1", (size_t)dst * 8U) ||
                 !emit_sp_mem(out, "ld.d", "$t2", (size_t)src * 8U))
                 return false;
-            for (size_t byte = 0U; byte < bytes; ++byte)
-                if (fputs("  ld.bu $t0, $t2, 0\n"
+            if (bytes > 64U) {
+                if (fprintf(out, "  li.d $t3, %zu\n", bytes) < 0 ||
+                    fputs("1:\n"
+                          "  ld.bu $t0, $t2, 0\n"
                           "  st.b $t0, $t1, 0\n"
                           "  addi.d $t2, $t2, 1\n"
-                          "  addi.d $t1, $t1, 1\n", out) == EOF)
+                          "  addi.d $t1, $t1, 1\n"
+                          "  addi.d $t3, $t3, -1\n"
+                          "  bnez $t3, 1b\n", out) == EOF)
                     return false;
+            } else {
+                for (size_t byte = 0U; byte < bytes; ++byte)
+                    if (fputs("  ld.bu $t0, $t2, 0\n"
+                              "  st.b $t0, $t1, 0\n"
+                              "  addi.d $t2, $t2, 1\n"
+                              "  addi.d $t1, $t1, 1\n", out) == EOF)
+                        return false;
+            }
             return true;
 }
 
@@ -83,12 +95,24 @@ static bool minic_loongarch64_emit_record_load(FILE *out,
         fprintf(out, "  li.d $t1, %zu\n  add.d $t1, %s, $t1\n",
             dest, ctx->dynamic_frame ? "$s0" : "$sp") < 0)
         return false;
-    for (byte = 0U; byte < bytes; ++byte)
-        if (fputs("  ld.bu $t0, $t2, 0\n"
+    if (bytes > 64U) {
+        if (fprintf(out, "  li.d $t3, %zu\n", bytes) < 0 ||
+            fputs("1:\n"
+                  "  ld.bu $t0, $t2, 0\n"
                   "  st.b $t0, $t1, 0\n"
                   "  addi.d $t2, $t2, 1\n"
-                  "  addi.d $t1, $t1, 1\n", out) == EOF)
+                  "  addi.d $t1, $t1, 1\n"
+                  "  addi.d $t3, $t3, -1\n"
+                  "  bnez $t3, 1b\n", out) == EOF)
             return false;
+    } else {
+        for (byte = 0U; byte < bytes; ++byte)
+            if (fputs("  ld.bu $t0, $t2, 0\n"
+                      "  st.b $t0, $t1, 0\n"
+                      "  addi.d $t2, $t2, 1\n"
+                      "  addi.d $t1, $t1, 1\n", out) == EOF)
+                return false;
+    }
     return true;
 }
 

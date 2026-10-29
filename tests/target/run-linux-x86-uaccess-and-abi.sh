@@ -20,7 +20,12 @@ for fixture in \
     x86_64_linux_kernel_nofault_goto \
     x86_64_linux_smap_rep_alternative \
     x86_64_linux_usercopy_lfence \
-    x86_64_linux_load_unaligned_zeropad
+    x86_64_linux_load_unaligned_zeropad \
+    x86_64_linux_irqentry_state \
+    x86_64_linux_selector_lar \
+    x86_64_linux_rng_flag \
+    x86_64_linux_fpu_userframe \
+    x86_64_linux_fxrstor_safe
 do
     "$host_cc" -E -P "$source_root/tests/target/$fixture.c" \
         -o "$workdir/$fixture.i"
@@ -126,12 +131,13 @@ fi
 
 # Linux x86 uaccess nofault GNU ASM GOTO carries two PREL32 relocations
 # per typed MOV: the fault instruction and its actual C error block.
+# The ninth MOV stores a genuine pointer as Linux signal_64.i does.
 readelf -r "$workdir/x86_64_linux_kernel_nofault_goto.o" > "$workdir/nofault.reloc"
 readelf -x __ex_table "$workdir/x86_64_linux_kernel_nofault_goto.o" > "$workdir/nofault.hex"
 if ! grep -Fq '.rela__ex_table' "$workdir/nofault.reloc" ||
-   [ "$(grep -c 'R_X86_64_PC32' "$workdir/nofault.reloc")" -ne 16 ] ||
-   [ "$(grep -o '03000000' "$workdir/nofault.hex" | wc -l)" -ne 8 ]; then
-    printf 'FAIL: kernel nofault 8 MOV types, C fault label, or PREL32 fixup lost\n' >&2
+   [ "$(grep -c 'R_X86_64_PC32' "$workdir/nofault.reloc")" -ne 18 ] ||
+   [ "$(grep -o '03000000' "$workdir/nofault.hex" | wc -l)" -ne 9 ]; then
+    printf 'FAIL: kernel nofault 8 MOV types plus pointer, C fault label, or PREL32 fixup lost\n' >&2
     exit 1
 fi
 "$host_cc" -no-pie \
@@ -139,7 +145,8 @@ fi
     "$workdir/x86_64_linux_kernel_nofault_goto.o" -o "$workdir/nofault-run"
 "$workdir/nofault-run"
 
-# Four SMAP forms carry feature 308, REP MOVSB FSRM feature 66116;
+# Four SMAP forms carry feature 308, REP MOVSB FSRM feature 66116,
+# and REP STOSB's ERMS fallback feature 65931;
 # none may lose its original alternative replacement or PREL32 metadata.
 readelf -r "$workdir/x86_64_linux_smap_rep_alternative.o" > "$workdir/smap.reloc"
 objcopy --dump-section .altinstructions="$workdir/smap.altbin" \
@@ -148,7 +155,9 @@ smap_features=$(od -An -tx1 -v "$workdir/smap.altbin" | tr -d '[:space:]')
 readelf -x __ex_table "$workdir/x86_64_linux_smap_rep_alternative.o" > "$workdir/smap.extable"
 if [ "$(printf '%s' "$smap_features" | grep -o '34010000' | wc -l)" -ne 4 ] ||
    [ "$(printf '%s' "$smap_features" | grep -o '44020100' | wc -l)" -ne 1 ] ||
+   [ "$(printf '%s' "$smap_features" | grep -o '8b010100' | wc -l)" -ne 1 ] ||
    ! grep -Fq 'rep_movs_alternative' "$workdir/smap.reloc" ||
+   ! grep -Fq 'rep_stos_alternative' "$workdir/smap.reloc" ||
    ! grep -Fq '.rela__ex_table' "$workdir/smap.reloc" ||
    ! grep -Fq '03000000' "$workdir/smap.extable"; then
     printf 'FAIL: SMAP/FSRM alternatives, replacement CALL, or exception metadata lost\n' >&2
@@ -177,6 +186,51 @@ fi
     "$workdir/x86_64_linux_load_unaligned_zeropad.o" \
     -o "$workdir/unaligned-run"
 "$workdir/unaligned-run"
+
+# Linux's anonymous-union irqentry_state_t is one INTEGER eightbyte.
+# Exercise both GNU -> MiniC and MiniC -> GNU returns/calls, not just ELF.
+"$host_cc" -no-pie \
+    "$source_root/tests/target/x86_64_linux_irqentry_driver.c" \
+    "$workdir/x86_64_linux_irqentry_state.o" \
+    -o "$workdir/irqentry-run"
+"$workdir/irqentry-run"
+
+"$host_cc" -no-pie \
+    "$source_root/tests/target/x86_64_linux_selector_lar_driver.c" \
+    "$workdir/x86_64_linux_selector_lar.o" -o "$workdir/lar-run"
+"$workdir/lar-run"
+
+objdump -d "$workdir/x86_64_linux_rng_flag.o" > "$workdir/rng.dump"
+for opcode in rdrand rdseed setb
+do
+    if ! grep -Fq "$opcode" "$workdir/rng.dump"; then
+        printf 'FAIL: x86 CPU random %s or carry-flag output absent\n' "$opcode" >&2
+        exit 1
+    fi
+done
+if [ "$(grep -c '  setc %cl' "$workdir/x86_64_linux_rng_flag.s")" -ne 2 ]; then
+    printf 'FAIL: hardware RNG carry flag was not materialized before output stores\n' >&2
+    exit 1
+fi
+
+readelf -r "$workdir/x86_64_linux_fpu_userframe.o" > "$workdir/fpu.reloc"
+readelf -x __ex_table "$workdir/x86_64_linux_fpu_userframe.o" > "$workdir/fpu.extable"
+objcopy --dump-section .altinstructions="$workdir/fpu.altbin" \
+    "$workdir/x86_64_linux_fpu_userframe.o"
+fpu_features=$(od -An -tx1 -v "$workdir/fpu.altbin" | tr -d '[:space:]')
+if [ "$(printf '%s' "$fpu_features" | grep -o '34010000' | wc -l)" -ne 6 ] ||
+   [ "$(grep -o '0f000000' "$workdir/fpu.extable" | wc -l)" -ne 3 ] ||
+   [ "$(grep -c 'R_X86_64_PC32' "$workdir/fpu.reloc")" -ne 18 ]; then
+    printf 'FAIL: FPU user save/restore SMAP patches or type-15 exception fixups lost\n' >&2
+    exit 1
+fi
+readelf -r "$workdir/x86_64_linux_fxrstor_safe.o" > "$workdir/fxrstor.reloc"
+readelf -x __ex_table "$workdir/x86_64_linux_fxrstor_safe.o" > "$workdir/fxrstor.extable"
+if [ "$(grep -c 'R_X86_64_PC32' "$workdir/fxrstor.reloc")" -ne 2 ] ||
+   ! grep -Fq '1100f2ff' "$workdir/fxrstor.extable"; then
+    printf 'FAIL: FXRSTORQ type-17 EAX error-code relocation/data lost\n' >&2
+    exit 1
+fi
 
 # SysV two-GPR aggregate: GNU caller -> MiniC callee, plus MiniC -> MiniC
 # call. Safe to execute: the fixture has no privileged instructions.
@@ -248,5 +302,33 @@ if "$minic_cc" -S "$workdir/mutated_unaligned.i" --target=x86_64-linux \
     printf 'FAIL: invalid type-21 unaligned load recovery admitted\n' >&2
     exit 1
 fi
+sed 's/lar %\[old_ss\]/lsl %[old_ss]/g' \
+    "$workdir/x86_64_linux_selector_lar.i" > "$workdir/mutated_lar.i"
+if "$minic_cc" -S "$workdir/mutated_lar.i" --target=x86_64-linux \
+    -o "$workdir/mutated_lar.s" >/dev/null 2>&1; then
+    printf 'FAIL: corrupted Linux LAR selector-rights opcode admitted\n' >&2
+    exit 1
+fi
+sed 's/rdrand %\[out\]/rdrandom %[out]/g' \
+    "$workdir/x86_64_linux_rng_flag.i" > "$workdir/mutated_rng.i"
+if "$minic_cc" -S "$workdir/mutated_rng.i" --target=x86_64-linux \
+    -o "$workdir/mutated_rng.s" >/dev/null 2>&1; then
+    printf 'FAIL: invalid RDRAND opcode with CF output admitted\n' >&2
+    exit 1
+fi
+sed 's/"15"/"16"/g' \
+    "$workdir/x86_64_linux_fpu_userframe.i" > "$workdir/mutated_fpu.i"
+if "$minic_cc" -S "$workdir/mutated_fpu.i" --target=x86_64-linux \
+    -o "$workdir/mutated_fpu.s" >/dev/null 2>&1; then
+    printf 'FAIL: invalid FPU exception type-16 admitted\n' >&2
+    exit 1
+fi
+sed 's/-14/-15/g' \
+    "$workdir/x86_64_linux_fxrstor_safe.i" > "$workdir/mutated_fxrstor.i"
+if "$minic_cc" -S "$workdir/mutated_fxrstor.i" --target=x86_64-linux \
+    -o "$workdir/mutated_fxrstor.s" >/dev/null 2>&1; then
+    printf 'FAIL: corrupted FXRSTORQ type-17 error code admitted\n' >&2
+    exit 1
+fi
 
-printf 'PASS: Linux x86 uaccess, kernel nofault C asm-goto, SMAP/FSRM/LFENCE alternatives, type-20 unaligned zero-pad, MDS/WBINVD/SWAPGS, CLFLUSH, DR0/1/2/3/6/7, FSGSBASE, LKGS and segment __ex_table, GS pointer, signed/unsigned 2-GPR ABI runtime\n'
+printf 'PASS: Linux x86 uaccess/FPU type-15 SMAP, nofault pointer asm-goto, LAR/ZF, RNG CF, REP STOS/MOVS/LFENCE, type-20 zero-pad, MDS/WBINVD/SWAPGS, CLFLUSH, DR0/1/2/3/6/7, FSGSBASE, LKGS/segment __ex_table, nested-union/2-GPR SysV GNU runtime\n'

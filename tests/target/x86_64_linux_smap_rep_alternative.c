@@ -51,3 +51,15 @@ unsigned long linux_copy_user_generic(void *to, const void *from,
     linux_clac();
     return len;
 }
+
+extern unsigned long rep_stos_alternative(void *, unsigned long);
+unsigned long linux_clear_user(void *address, unsigned long size) {
+    asm volatile(
+        "1:\n\t"
+        "# ALT: oldnstr\n" "661:\n\t" "rep stosb" "\n662:\n" "# ALT: padding\n" ".skip -(((" "665""1""f-""664""1""f" ")-(" "662b-661b" ")) > 0) * " "((" "665""1""f-""664""1""f" ")-(" "662b-661b" ")),0x90\n" "663" ":\n" ".pushsection .altinstructions,\"a\"\n" " .long 661b - .\n" " .long " "664""1""f - .\n" " .4byte " "(((1 << 0) << 16) | ((12*32+11)))" "\n" " .byte " "663""b-661b" "\n" " .byte " "665""1""f-""664""1""f" "\n" ".popsection\n" ".pushsection .altinstr_replacement, \"ax\"\n" "# ALT: replacement " "1" "\n" "664""1"":\n\t" "call rep_stos_alternative" "\n" "665""1" ":\n" ".popsection\n"
+        "2:\n"
+        " .pushsection \"__ex_table\",\"a\"\n" " .balign 4\n" " .long (" "1b" ") - .\n" " .long (" "2b" ") - .\n" " .long " "3" " \n" " .popsection\n"
+        : "+c"(size), "+D"(address), "+r"(current_stack_pointer)
+        : "a"(0));
+    return size;
+}

@@ -41,23 +41,59 @@ bool minic_x86_64_storage_width(const MinicC0Program *program,
     return minic_x86_64_scalar_width(program, target, type, bytes, sign);
 }
 
-/* SysV AMD64: a non-packed, naturally aligned record consisting solely of
- * integer/pointer fields fits one INTEGER eightbyte when its storage is at
- * most eight bytes. This includes struct in_addr (4B) and GNU transparent
- * sockaddr pointer unions (8B). No SSE, nested, packed or bitfield cases
- * are claimed here; do not guess their ABI classification. We currently
- * materialize only exact 1/2/4/8-byte loads to avoid overreading objects. */
+/* SysV INTEGER classification is transitive through ordinary nested
+ * records and unions. Linux irqentry_state_t is a struct containing an
+ * anonymous union of two _Bool values: both alternatives occupy the same
+ * low INTEGER byte and the complete object returns in AL. No SSE, packed,
+ * array or bit-field forms are accepted by this deliberately bounded
+ * classifier. Recursive depth prevents malformed self-referential records
+ * from consuming an unbounded compilation stack. */
+static bool x86_one_gp_integer_fields(const MinicC0Program *program,
+    const MinicTargetInfo *target, MinicType type, unsigned int depth) {
+    const MinicRecord *rec;
+    MinicType plain;
+    size_t size, alignment, i;
+    if (!minic_type_unqualified(type, &plain)) return false;
+    if (minic_type_is_pointer(plain) || minic_type_is_integer(plain))
+        return true;
+    if (!minic_type_is_record(plain) || depth > 12U) return false;
+    rec = minic_c0_program_record(program, plain.record_id);
+    if (!rec || !rec->is_complete || rec->field_count == 0U ||
+        rec->is_packed || rec->pack_alignment != 0U ||
+        !minic_data_layout_type(target->data_layout, program, plain,
+                                &size, &alignment) ||
+        !size || size > 8U || !alignment || alignment > 8U)
+        return false;
+    for (i = 0U; i < rec->field_count; ++i) {
+        const MinicRecordField *field = minic_c0_record_field(rec, i);
+        size_t bytes, field_align, offset;
+        if (!field || field->is_packed || field->is_array ||
+            field->is_bit_field || field->is_flexible_array ||
+            field->is_zero_length_array || field->element_count != 1U ||
+            !x86_one_gp_integer_fields(program, target, field->type,
+                                       depth + 1U) ||
+            !minic_data_layout_type(target->data_layout, program, field->type,
+                                    &bytes, &field_align) ||
+            !minic_data_layout_record_field_offset(target->data_layout, program,
+                                                    rec, i, &offset) ||
+            !field_align || offset % field_align ||
+            offset > size || bytes > size - offset)
+            return false;
+    }
+    return true;
+}
+
+/* SysV AMD64: non-packed, naturally aligned <=8-byte INTEGER aggregate.
+ * Materialization still restricts loads to exact 1/2/4/8-byte accesses, so
+ * subobjects are never overread while passing to/from GNU compiled code. */
 bool minic_x86_64_one_gp_record(const MinicC0Program *program,
                               const MinicTargetInfo *target, MinicType type,
                               size_t *record_bytes) {
-    const MinicRecord *rec;
     MinicAggregateStorageShape shape;
-    size_t size, align, i;
+    size_t size, align;
     if (program == NULL || target == NULL || record_bytes == NULL ||
         !minic_type_is_record(type)) return false;
-    rec = minic_c0_program_record(program, type.record_id);
-    if (rec == NULL || !rec->is_complete || rec->field_count == 0U ||
-        rec->is_packed || rec->pack_alignment != 0U ||
+    if (!x86_one_gp_integer_fields(program, target, type, 0U) ||
         !minic_common_aggregate_storage_shape(
             program, target->data_layout, type, 8U, &shape))
         return false;
@@ -65,21 +101,6 @@ bool minic_x86_64_one_gp_record(const MinicC0Program *program,
     align = shape.alignment;
     if ((size != 1U && size != 2U && size != 4U && size != 8U) ||
         align > 8U) return false;
-    for (i = 0U; i < rec->field_count; ++i) {
-        const MinicRecordField *field = minic_c0_record_field(rec, i);
-        size_t bytes, field_align, offset;
-        if (field == NULL || field->is_packed || field->is_array ||
-            field->is_bit_field || field->is_flexible_array ||
-            field->is_zero_length_array || field->element_count != 1U ||
-            (!minic_type_is_pointer(field->type) &&
-             !minic_type_is_integer(field->type)) ||
-            !minic_data_layout_type(target->data_layout, program, field->type,
-                                    &bytes, &field_align) ||
-            !minic_data_layout_record_field_offset(target->data_layout, program,
-                                                    rec, i, &offset) ||
-            field_align == 0U || offset % field_align != 0U ||
-            offset > size || bytes > size - offset) return false;
-    }
     *record_bytes = size;
     return true;
 }

@@ -56,12 +56,25 @@ const MinicCoreValueId dst = ins->value.record_copy.destination_address;
                              "  ldr x11, [sp, #%zu]\n",
                         (size_t)dst * 8U, (size_t)src * 8U) < 0)
                 return false;
-            for (size_t byte = 0U; byte < bytes; ++byte)
-                if (fputs("  ldrb w9, [x11]\n"
-                          "  strb w9, [x10]\n"
-                          "  add x11, x11, #1\n"
-                          "  add x10, x10, #1\n", out) == EOF)
+            if (bytes > 64U) {
+                if (fprintf(out, "  movz x12, #%zu\n", bytes & 65535U) < 0 ||
+                    (bytes > 65535U &&
+                     fprintf(out, "  movk x12, #%zu, lsl #16\n",
+                             bytes >> 16U) < 0) ||
+                    fputs("1:\n"
+                          "  ldrb w9, [x11], #1\n"
+                          "  strb w9, [x10], #1\n"
+                          "  subs x12, x12, #1\n"
+                          "  b.ne 1b\n", out) == EOF)
                     return false;
+            } else {
+                for (size_t byte = 0U; byte < bytes; ++byte)
+                    if (fputs("  ldrb w9, [x11]\n"
+                              "  strb w9, [x10]\n"
+                              "  add x11, x11, #1\n"
+                              "  add x10, x10, #1\n", out) == EOF)
+                        return false;
+            }
             return true;
 }
 
@@ -83,10 +96,23 @@ static bool minic_aarch64_emit_record_load(FILE *out,
          fprintf(out, "  movk x11, #%zu, lsl #16\n", dest >> 16U) < 0) ||
         fprintf(out, "  add x11, %s, x11\n", base) < 0)
         return false;
-    for (byte = 0U; byte < bytes; ++byte)
-        if (fputs("  ldrb w9, [x10], #1\n"
-                  "  strb w9, [x11], #1\n", out) == EOF)
+    if (bytes > 64U) {
+        if (fprintf(out, "  movz x12, #%zu\n", bytes & 65535U) < 0 ||
+            (bytes > 65535U &&
+             fprintf(out, "  movk x12, #%zu, lsl #16\n",
+                     bytes >> 16U) < 0) ||
+            fputs("1:\n"
+                  "  ldrb w9, [x10], #1\n"
+                  "  strb w9, [x11], #1\n"
+                  "  subs x12, x12, #1\n"
+                  "  b.ne 1b\n", out) == EOF)
             return false;
+    } else {
+        for (byte = 0U; byte < bytes; ++byte)
+            if (fputs("  ldrb w9, [x10], #1\n"
+                      "  strb w9, [x11], #1\n", out) == EOF)
+                return false;
+    }
     return true;
 }
 
