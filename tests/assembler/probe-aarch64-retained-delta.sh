@@ -45,7 +45,16 @@ for producer in mini gnu; do
   grep -Eq 'R_AARCH64_JUMP26.*external_destination.*\+ 8' \
     "$work/$producer.reloc"
 done
-cmp "$work/mini.text" "$work/gnu.text"
+if ! cmp "$work/mini.text" "$work/gnu.text"; then
+  echo 'AArch64 retained-delta GNU text-byte oracle diverged' >&2
+  for producer in mini gnu; do
+    echo "--- $producer .text bytes ---" >&2
+    od -An -tx1 -w16 "$work/$producer.text" >&2
+    echo "--- $producer relocations ---" >&2
+    readelf -Wr "$work/$producer.o" >&2
+  done
+  exit 1
+fi
 echo 'MINIAS_A64_RETAINED_DELTA=PASS GNU_bytes=equal ADD_SUB_LDR_STR_FP_PAIR_BRANCH=1 external_JUMP26=1'
 
 for invalid in \

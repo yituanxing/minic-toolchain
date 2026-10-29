@@ -663,15 +663,19 @@ static bool a64_parse_address_offset(MiniAs *as,const char *source,
     if(*source=='#')++source;
     while(isspace((unsigned char)*source))++source;
     memset(result,0,sizeof(*result));
-    if(minias_evaluate_absolute_operand(as,source,&value)) {
-        result->kind=A64_OFFSET_CONSTANT;
-        result->constant=value;
+    /* Same-section labels can already have provisional equal offsets before
+     * .space/.fill is finalized.  A syntactic label difference MUST bind as
+     * a deferred pair even if the absolute evaluator currently succeeds;
+     * otherwise forward layout turns a valid #8 into a frozen #0. */
+    if(a64_parse_deferred_difference(as,source,&difference)) {
+        if(!minias_bind_symbol_difference_ref(as,&difference,
+                                               &result->difference))return false;
+        result->kind=A64_OFFSET_DIFFERENCE;
         return true;
     }
-    if(!a64_parse_deferred_difference(as,source,&difference))return false;
-    if(!minias_bind_symbol_difference_ref(as,&difference,&result->difference))
-        return false;
-    result->kind=A64_OFFSET_DIFFERENCE;
+    if(!minias_evaluate_absolute_operand(as,source,&value))return false;
+    result->kind=A64_OFFSET_CONSTANT;
+    result->constant=value;
     return true;
 }
 

@@ -52,7 +52,16 @@ if ((gnu_available)); then
     loongarch64-linux-gnu-objcopy -j .text -O binary \
       "$work/$tool.o" "$work/$tool.bin"
   done
-  cmp "$work/mini.bin" "$work/gnu.bin"
+  if ! cmp "$work/mini.bin" "$work/gnu.bin"; then
+    echo 'LoongArch dynamic source GNU text-byte oracle diverged' >&2
+    for tool in mini gnu; do
+      echo "--- $tool .text bytes ---" >&2
+      od -An -tx1 -w16 "$work/$tool.bin" >&2
+      echo "--- $tool relocations ---" >&2
+      readelf -Wr "$work/$tool.o" >&2
+    done
+    exit 1
+  fi
   python3 - "$work/mini.o" "$work/gnu.o" <<'PY'
 import re
 import subprocess

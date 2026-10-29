@@ -1434,25 +1434,36 @@ static const LaMnemonicEntry *la_find_mnemonic(const MiniAs *as,
     return NULL;
 }
 
-/* LI.W and LI.D share a typed family and one pseudo-lowering entry point;
- * the target-owned plans decide if the word is a direct encoding or a
- * multi-fragment macro. The mnemonic index decides only which width. */
+/* LI.W and LI.D share a typed mnemonic family, but LI.D is ALWAYS
+ * lowered through GNU GAS's exact 12/20/20/12 sign-extension reduction.
+ * Direct LI.W single-word forms retain their established GNU encodings. */
 static bool la_parse_li(MiniAs *as,MiniAsMCInst *m,char *args[4],
                         unsigned count,bool li_d) {
     unsigned rd;
     int64_t value;
     bool has_value;
     if(count!=2U || !la_reg(args[0],&rd))return false;
+    if(li_d) {
+        uint64_t bits;
+        if(!minias_eval_u64_expression(args[1],&bits) ||
+           !la_plan_li_d(as,m,bits,rd))return false;
+        m->opcode=LA_MC_LI64_SEQUENCE;
+        m->count=2U;
+        la_capture_gpr_operand(m,0U,rd);
+        m->operands[1].kind=MINIAS_MC_IMMEDIATE;
+        m->operands[1].immediate=bits;
+        return true;
+    }
     has_value=minias_eval_i64_expression(args[1],&value);
     if(has_value && value>=-2048 && value<=2047) {
-        m->target_form=li_d?LA_FORM_LI_D:LA_FORM_LI_W;
+        m->target_form=LA_FORM_LI_W;
         m->count=2U;
         m->encoding=UINT32_C(0x02800000);
         la_capture_gpr_operand(m,0U,rd);
         la_capture_imm_operand(m,1U,value);
         return true;
     }
-    if(!li_d && has_value && value>=4096 && value<=INT32_MAX &&
+    if(has_value && value>=4096 && value<=INT32_MAX &&
        value%4096!=0) {
         m->opcode=LA_MC_LI32_PAIR;
         m->count=2U;
@@ -1463,7 +1474,7 @@ static bool la_parse_li(MiniAs *as,MiniAsMCInst *m,char *args[4],
     /* Single-word GNU LI.W for 4K multiples is LU12I.W; larger odd
      * constants still go through the explicit multi-word lowering plans. */
     if(has_value && value%4096==0 && value>=INT32_MIN && value<=INT32_MAX) {
-        m->target_form=li_d?LA_FORM_LI_D:LA_FORM_LI_W;
+        m->target_form=LA_FORM_LI_W;
         m->count=2U;
         m->encoding=UINT32_C(0x14000000);
         la_capture_gpr_operand(m,0U,rd);
@@ -1471,26 +1482,13 @@ static bool la_parse_li(MiniAs *as,MiniAsMCInst *m,char *args[4],
         return true;
     }
     /* GNU LI.W 0x800..0xfff is ORI from $zero. */
-    if(!li_d && has_value && value>=2048 && value<=4095) {
+    if(has_value && value>=2048 && value<=4095) {
         m->target_form=LA_FORM_LI_W;
         m->count=2U;
         m->encoding=UINT32_C(0x03800000);
         la_capture_gpr_operand(m,0U,rd);
         la_capture_imm_operand(m,1U,value);
         return true;
-    }
-    if(li_d) {
-        uint64_t bits;
-        /* Exact GNU GAS 12/20/20/12 signed/unsigned LI.D reduction. */
-        if(minias_eval_u64_expression(args[1],&bits)) {
-            if(!la_plan_li_d(as,m,bits,rd))return false;
-            m->opcode=LA_MC_LI64_SEQUENCE;
-            m->count=2U;
-            la_capture_gpr_operand(m,0U,rd);
-            m->operands[1].kind=MINIAS_MC_IMMEDIATE;
-            m->operands[1].immediate=bits;
-            return true;
-        }
     }
     return false;
 }

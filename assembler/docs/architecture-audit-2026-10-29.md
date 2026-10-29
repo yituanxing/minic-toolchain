@@ -705,3 +705,53 @@ full Linux object correctness are independently tracked after this cleanup.
    across a relaxable branch (`bad or irreducible absolute expression`) where
    MiniAS currently accepts it. This is an acceptance-domain discrepancy,
    not a reason to obscure the new SourceGraph architecture regression.
+
+## Batch N exact-head CI findings and corrective follow-up
+
+- First exact-head Batch N commit: `81410a8a`. The x86/Loong GNU Oracle
+  workflow `40876345663` **passed**. Target ISA/ABI workflow `40876345917`
+  **failed**, exposing two independent Target paths, not a build or missing
+  tool failure. Its AArch64 new typed-composite GNU oracle passed; a later
+  existing retained-delta test found a regression. The native job stopped at
+  the new Loong dynamic-token GNU comparison, leaving later checks unrun.
+- **AArch64:** `a64_parse_address_offset` evaluated `post-pre` before binding
+  its actual same-section labels. During a pending forward `.space`, the
+  provisional zero distance was frozen into the new typed Memory payload.
+  The corrective parser binds deferred label differences first and evaluates
+  immediate absolute expressions only afterward. The formerly failing
+  complete-ELF specimen now matches the old proven baseline byte-for-byte;
+  independent strict Release, six A64 probes and sanitizer checks passed.
+- **LoongArch64:** the old `LI.D` small-constant shortcut borrowed `LI.W`
+  `ADDI.W` encoding ahead of the canonical typed 64-bit lowering plan.
+  A GNU exact-byte test of 191-character parenthesized constant 95 exposed
+  `ADDI.W` versus GNU `ORI` at `.text` byte 8. All `LI.D` constants now use
+  one Target-private typed GNU reduction plan; `LI.W` retains its separate
+  valid fast forms. Independent strict build, 140 positive/73 negative cases
+  and prior unrelated complete-ELF fixtures remain green.
+- **CI reporting:** new GNU oracles must all run and aggregate failures,
+  even when the first one fails; `if: !cancelled()` plus a non-silent failure
+  collector avoids masking the next newly exposed issue. This is a failure
+  reporting improvement, not a relaxation of any oracle's pass criteria.
+
+## Following batch — actionable implementation cuts from six-agent audit
+
+1. **Common:** distinguish graph-owned symbol-lexeme versions from per-pass
+   SymbolNameIds; add conditional read sets and SourceRegions while retaining
+   full replay. Separately migrate forced long branches from cross-pass stmt
+   ordinal to stable source-site + MC shape keys and remove the old mapping.
+   Do not conflate pass-local Fragment IDs with cross-pass identity.
+2. **Common emission:** DATA/FILL/SPACE still append directly while MCInst
+   uses an EncodeResult transaction; create a single staged Fragment emission
+   result and delete the old instruction capture/append compatibility bridge
+   only after all four Targets and CFI special ownership are proven.
+3. **RISC-V:** consolidate fixed-opcode operand shapes and dynamic-pseudo
+   semantic IDs into typed Target descriptor records, deleting the remaining
+   mnemonic-string feature/syntax lists. RELAX/ALIGN zero-width reloc markers
+   and per-site RVC alignment are a separate Common+Target ABI project.
+4. **x86-64:** unify three duplicated memory emission/fixup paths and the
+   extended BT/XADD/CMPXCHG ModR/M descriptor tables, then merge scalar
+   immediate plans. Preserve legitimate branch relaxation specialization.
+5. **LoongArch64:** remove dead parse-time `m->encoding` writes where typed
+   encode recomputes the word; give remaining LI.W/PCALA exceptions typed
+   descriptors. Consolidate Target-private FixupSpec and explicit LSX/LASX
+   feature requirements. Do not erase genuine ISA format distinctions.
