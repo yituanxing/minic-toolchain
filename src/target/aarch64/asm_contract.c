@@ -477,6 +477,8 @@ static const char *aarch64_linux_mrs_register(const char *text, size_t len) {
         {"mrs%0,cntfrq_el0", "cntfrq_el0"},
         {"mrs%0,cntpct_el0", "cntpct_el0"},
         {"mrs%0,cntvct_el0", "cntvct_el0"},
+        {"mrs%0,CNTVCT_EL0", "CNTVCT_EL0"}, /* Linux MTE timer read */
+        {"mrs%0,vbar_el1", "vbar_el1"}, /* SDEI exception vector */
         /* Linux arm_pmuv3.h read_pmcr/read_pmccntr/read_pmovsclr,
          * read_pmceid0/1, and PMEVN_SWITCH-expanded read_pmevcntrn /
          * read_pmevtypern.
@@ -830,6 +832,28 @@ static bool aarch64_stlr_type(MinicType type, size_t width) {
            (width == 4U && plain.integer_rank == MINIC_INTEGER_RANK_INT) ||
            (width == 8U && (plain.integer_rank == MINIC_INTEGER_RANK_LONG ||
                             plain.integer_rank == MINIC_INTEGER_RANK_LONG_LONG));
+}
+
+/* smp_load_acquire/smp_store_release on Linux BPF struct-ops state use a
+ * *C enum*, not an int typedef. Resolve its actual underlying integer type
+ * through the corresponding source/Core enum catalogs: accepting every
+ * enum as 32-bit would silently truncate a valid 64-bit C enum. */
+static bool aarch64_stlr_scalar_source(
+    const MinicC0Program *program, MinicType type, size_t width) {
+    MinicType effective;
+    return aarch64_stlr_type(type, width) ||
+        (program && minic_type_is_enum(type) &&
+         minic_c0_type_effective_integer_type(program, type, &effective) &&
+         aarch64_stlr_type(effective, width));
+}
+
+static bool aarch64_stlr_scalar_core(
+    const MinicCoreFunction *fn, MinicType type, size_t width) {
+    MinicType effective;
+    return aarch64_stlr_type(type, width) ||
+        (fn && minic_type_is_enum(type) &&
+         minic_core_function_effective_integer_type(fn, type, &effective) &&
+         aarch64_stlr_type(effective, width));
 }
 
 /* AAPCS64 C pointer occupies one 64-bit GPR, including typed volatile
@@ -2277,6 +2301,17 @@ typedef struct Aarch64LinuxWriteSysreg {
  * template as ICC_SRE_EL1, with distinct encoded register fields. */
 static const Aarch64LinuxWriteSysreg aarch64_linux_write_sysregs[] = {
     {3U,0U,12U,12U,5U}, /* ICC_SRE_EL1 */
+    /* Apple AIC fast-IPI, virtual-timer FIQ and per-core/uncore PMC
+     * hardware controls. Linux 6.6 irq-apple-aic.c encodes each through
+     * the full sysreg.h MSR_S GNU .irp/.equ/.inst macro, never free-form
+     * inline assembler. Keep the six implementation-defined S3 tuples
+     * finite; all unrelated S3_C15 registers continue to fail closed. */
+    {3U,5U,15U,0U,0U}, /* IMP_APL_IPI_RR_LOCAL_EL1 */
+    {3U,5U,15U,0U,1U}, /* IMP_APL_IPI_RR_GLOBAL_EL1 */
+    {3U,5U,15U,1U,1U}, /* IMP_APL_IPI_SR_EL1 */
+    {3U,5U,15U,1U,3U}, /* IMP_APL_VM_TMR_FIQ_ENA_EL2 */
+    {3U,1U,15U,0U,0U}, /* IMP_APL_PMCR0_EL1 */
+    {3U,7U,15U,0U,4U}, /* IMP_APL_UPMCR0_EL1 */
     {3U,0U,4U,6U,0U},  /* ICC_PMR_EL1 */
     {3U,3U,4U,2U,2U},  /* SVCR */
     {3U,0U,1U,2U,4U},  /* SMPRI_EL1: SME priority control */
@@ -3381,12 +3416,15 @@ static unsigned int aarch64_linux_smccc_form(const char *s, size_t n) {
 
 static bool aarch64_linux_fixed_gpr_local_binding(
     const MinicC0Program *program, const MinicExpression *e,
-    unsigned int register_number, bool allow_pointer) {
+    unsigned int register_number, bool allow_pointer,
+    bool allow_const_input) {
     const MinicFixedRegisterBinding *binding;
     const MinicLocal *local;
+    MinicType plain;
     if (!program || !e || e->kind != MINIC_EXPRESSION_LOCAL ||
         e->value_category != MINIC_VALUE_LVALUE ||
-        minic_type_is_const(e->type) || minic_type_is_volatile(e->type))
+        (!allow_const_input && minic_type_is_const(e->type)) ||
+        minic_type_is_volatile(e->type))
         return false;
     local = minic_c0_program_local(program, e->value.local_id);
     binding = minic_c0_program_local_fixed_register_binding(
@@ -3394,17 +3432,21 @@ static bool aarch64_linux_fixed_gpr_local_binding(
     if (!local || !binding || local->is_array ||
         !minic_type_equal(local->type, e->type) ||
         !minic_type_equal(binding->type, e->type) ||
+        !minic_type_unqualified(e->type, &plain) ||
         binding->register_name_length != 2U ||
         (binding->register_name[0] != 'r' &&
          binding->register_name[0] != 'x') ||
         binding->register_name[1] != (char)('0' + register_number))
         return false;
-    return (allow_pointer && minic_type_is_pointer(e->type)) ||
-           (minic_type_is_integer(e->type) &&
-           (minic_type_equal(e->type, minic_type_unsigned_long()) ||
-            minic_type_equal(e->type, minic_type_long()) ||
-            minic_type_equal(e->type, minic_type_unsigned_int()) ||
-            minic_type_equal(e->type, minic_type_int())));
+    return (allow_pointer && minic_type_is_pointer(plain)) ||
+           minic_type_is_enum(plain) ||
+           (minic_type_is_integer(plain) &&
+           (minic_type_equal(plain, minic_type_unsigned_long()) ||
+            minic_type_equal(plain, minic_type_long()) ||
+            minic_type_equal(plain, minic_type_unsigned_long_long()) ||
+            minic_type_equal(plain, minic_type_long_long()) ||
+            minic_type_equal(plain, minic_type_unsigned_int()) ||
+            minic_type_equal(plain, minic_type_int())));
 }
 
 /* Linux 6.6 arch/arm64/include/asm/compiler.h:
@@ -3540,7 +3582,7 @@ static bool aarch64_linux_smccc_source(
             program, op->expression);
         if (!constraint(op, "=r") ||
             !aarch64_linux_fixed_gpr_local_binding(program, e,
-                                                  (unsigned int)i, false) ||
+                                                  (unsigned int)i, false, false) ||
             !minic_type_equal(e->type, minic_type_unsigned_long()))
             return false;
         contract->kinds[i] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
@@ -3551,7 +3593,7 @@ static bool aarch64_linux_smccc_source(
             program, op->expression);
         if (!constraint(op, "r") ||
             !aarch64_linux_fixed_gpr_local_binding(program, e,
-                                                  (unsigned int)i, false))
+                                                  (unsigned int)i, true, true))
             return false;
         contract->kinds[4U + i] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     }
@@ -3577,7 +3619,7 @@ static bool aarch64_linux_smccc_emit(
     for (i = 0U; i < count; ++i) {
         const MinicCoreStructuredInlineAsmOperand *binding = &op[i];
         const MinicCoreFixedRegisterBinding *fixed;
-        MinicType type;
+        MinicType type, value_type, fixed_type;
         const unsigned int number = (unsigned int)(i < 4U ? i : i - 4U);
         if (binding->operand_index != i || binding->value >= fn->value_count ||
             !binding->has_fixed_register_binding ||
@@ -3598,17 +3640,28 @@ static bool aarch64_linux_smccc_emit(
             if (!minic_type_pointee(type, &type) ||
                 !minic_type_equal(type, minic_type_unsigned_long()) ||
                 !minic_type_equal(type, fixed->type)) return false;
-        } else if (!minic_type_equal(type, fixed->type) ||
-                   (!minic_type_is_integer(type) ||
-                    (type.integer_rank != MINIC_INTEGER_RANK_INT &&
-                     type.integer_rank != MINIC_INTEGER_RANK_LONG))) return false;
+        } else if (!minic_type_unqualified(type, &value_type) ||
+                   !minic_type_unqualified(fixed->type, &fixed_type) ||
+                   !minic_type_equal(value_type, fixed_type) ||
+                   !(minic_type_is_pointer(type) ||
+                     minic_type_is_enum(type) ||
+                     (minic_type_is_integer(type) &&
+                      (type.integer_rank == MINIC_INTEGER_RANK_INT ||
+                       type.integer_rank == MINIC_INTEGER_RANK_LONG ||
+                       type.integer_rank == MINIC_INTEGER_RANK_LONG_LONG))))
+            return false;
     }
     /* DirectLP64 stores each scalar operand in an 8-byte SSA spill slot.
      * Use x0..x7 for arguments and x0..x3 for result writes; all other
      * live Core values stay in the frame across the privileged transition. */
-    for (i = 4U; i < count; ++i)
-        if (fprintf(out, "  ldr x%zu, [sp, #%zu]\n",
+    for (i = 4U; i < count; ++i) {
+        const MinicType arg_type = fn->values[op[i].value].type;
+        const bool narrow = minic_type_is_enum(arg_type) ||
+            arg_type.integer_rank == MINIC_INTEGER_RANK_INT;
+        if (fprintf(out, "  ldr %c%zu, [sp, #%zu]\n",
+                    narrow ? 'w' : 'x',
                     i - 4U, (size_t)op[i].value * 8U) < 0) return false;
+    }
     if (fputs(form == 1U ? "  hvc #0\n" : "  smc #0\n", out) == EOF)
         return false;
     for (i = 0U; i < 4U; ++i)
@@ -3651,7 +3704,7 @@ static bool aarch64_linux_svc_source(
         src->register_clobber_count != 0U || !src->has_memory_clobber ||
         !constraint(&src->outputs[0], "=r")) return false;
     ret = minic_c0_program_expression(program, src->outputs[0].expression);
-    if (!aarch64_linux_fixed_gpr_local_binding(program, ret, 0U, false) ||
+    if (!aarch64_linux_fixed_gpr_local_binding(program, ret, 0U, false, false) ||
         !minic_type_equal(ret->type, minic_type_long())) return false;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     for (i = 0U; i < 3U; ++i) {
@@ -3659,7 +3712,7 @@ static bool aarch64_linux_svc_source(
             program, src->inputs[i].expression);
         if (!constraint(&src->inputs[i], "r") ||
             !aarch64_linux_fixed_gpr_local_binding(program, arg,
-                                                   registers[i], true) ||
+                                                   registers[i], true, false) ||
             (i == 2U && !minic_type_equal(arg->type, minic_type_long())))
             return false;
         contract->kinds[i + 1U] =
@@ -4114,7 +4167,8 @@ static bool aarch64_linux_lse_casp128_source(
         if (i >= 3U && !constraint(operand, "r")) return false;
         if ((i < 2U || (i >= 3U && i <= 5U)) &&
             !aarch64_linux_fixed_gpr_local_binding(
-                program, e, (unsigned int)(i < 2U ? i : i - 1U), false))
+                program, e, (unsigned int)(i < 2U ? i : i - 1U),
+                false, false))
             return false;
         contract->kinds[i] = i == 2U
             ? MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE
@@ -5020,18 +5074,36 @@ static const char *aarch64_linux_cache_op_form(
     return NULL;
 }
 
+/* Linux 6.6 drivers/firmware/efi/libstub/arm64.c writes
+ * asm("dc " DCTYPE ", %0" :: "r"(base)) with no GNU outputs or clobbers.
+ * GNU extended asm without outputs is implicitly volatile; the hardware
+ * cache maintenance still occurs. The two DCTYPE alternatives, civac/cvau,
+ * are the only un-clobbered forms admitted by this target contract. */
+static bool aarch64_linux_efi_unclobbered_cache_form(const char *mnemonic) {
+    return mnemonic &&
+        (strcmp(mnemonic, "dc civac") == 0 ||
+         strcmp(mnemonic, "dc cvau") == 0);
+}
+
 static bool aarch64_linux_cache_op_source(
     const MinicC0Program *program, const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
     const MinicExpression *address;
+    const char *mnemonic;
     MinicType plain;
-    if (!program || !src || !contract || !src->is_volatile ||
+    if (!program || !src || !contract ||
         src->is_goto || src->output_count != 0U || src->input_count != 1U ||
-        !src->inputs || src->clobber_count != 1U ||
-        !src->has_memory_clobber || src->register_clobber_count != 0U ||
-        src->label_count != 0U || !constraint(&src->inputs[0], "r") ||
-        !aarch64_linux_cache_op_form(
-            src->template_text, src->template_length)) return false;
+        !src->inputs || src->register_clobber_count != 0U ||
+        src->label_count != 0U || !constraint(&src->inputs[0], "r"))
+        return false;
+    mnemonic = aarch64_linux_cache_op_form(
+        src->template_text, src->template_length);
+    if (!mnemonic ||
+        !((src->is_volatile && src->clobber_count == 1U &&
+           src->has_memory_clobber) ||
+          (src->clobber_count == 0U && !src->has_memory_clobber &&
+           aarch64_linux_efi_unclobbered_cache_form(mnemonic))))
+        return false;
     address = minic_c0_program_expression(program, src->inputs[0].expression);
     if (!address || !minic_type_unqualified(address->type, &plain) ||
         (!minic_type_is_pointer(plain) &&
@@ -5053,8 +5125,11 @@ static bool aarch64_linux_cache_op_emit(
     const char *mnemonic = aarch64_linux_cache_op_form(
         info->template_text, info->template_length);
     MinicType type;
-    if (!mnemonic || !info->is_volatile || info->is_goto ||
-        !info->has_memory_clobber || info->register_clobber_count ||
+    if (!mnemonic || info->is_goto ||
+        !((info->is_volatile && info->has_memory_clobber) ||
+          (!info->has_memory_clobber &&
+           aarch64_linux_efi_unclobbered_cache_form(mnemonic))) ||
+        info->register_clobber_count ||
         ctx->dynamic_frame ||
         ins->value.structured_inline_asm.operand_count != 1U || !op ||
         op->operand_index != 0U ||
@@ -5494,8 +5569,9 @@ bool minic_aarch64_qualify_inline_asm(
         if(width&&dst&&mem&&dst->value_category==MINIC_VALUE_LVALUE&&
            mem->value_category==MINIC_VALUE_LVALUE&&
            !minic_type_is_const(dst->type)&&
-           aarch64_stlr_type(dst->type,width)&&
-           aarch64_stlr_memory_carrier(program,mem->type,width)) {
+           aarch64_stlr_scalar_source(program,dst->type,width)&&
+           (aarch64_stlr_memory_carrier(program,mem->type,width) ||
+            aarch64_stlr_scalar_source(program,mem->type,width))) {
             contract->operand_count=2U;
             contract->kinds[0]=MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
             contract->kinds[1]=MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
@@ -5566,8 +5642,9 @@ bool minic_aarch64_qualify_inline_asm(
         if (width && dst && value &&
             dst->value_category == MINIC_VALUE_LVALUE &&
             !minic_type_is_const(dst->type) &&
-            aarch64_stlr_memory_carrier(program,dst->type,width) &&
-            aarch64_stlr_type(value->type, width)) {
+            (aarch64_stlr_memory_carrier(program,dst->type,width) ||
+             aarch64_stlr_scalar_source(program,dst->type,width)) &&
+            aarch64_stlr_scalar_source(program,value->type, width)) {
             contract->operand_count = 2U;
             contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT;
             contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
@@ -6678,8 +6755,9 @@ bool minic_aarch64_emit_qualified_structured_asm(
            !aarch64_linux_structured_spill_slot_valid(ops[0].value)||!aarch64_linux_structured_spill_slot_valid(ops[1].value)||
            !minic_type_pointee(fn->values[ops[0].value].type,&dst_ty)||
            !minic_type_pointee(fn->values[ops[1].value].type,&mem_ty)||
-           !aarch64_stlr_type(dst_ty,w)||
-           !aarch64_stlr_memory_carrier(ctx->program,mem_ty,w))
+           !aarch64_stlr_scalar_core(fn,dst_ty,w)||
+           !(aarch64_stlr_memory_carrier(ctx->program,mem_ty,w) ||
+             aarch64_stlr_scalar_core(fn,mem_ty,w)))
             return false;
         return fprintf(out,
             "  ldr x10, [sp, #%zu]\n"
@@ -6710,8 +6788,9 @@ bool minic_aarch64_emit_qualified_structured_asm(
             b[0].value >= fn->value_count || b[1].value >= fn->value_count ||
             !aarch64_linux_structured_spill_slot_valid(b[0].value) || !aarch64_linux_structured_spill_slot_valid(b[1].value) ||
             !minic_type_pointee(fn->values[b[0].value].type, &pointee) ||
-            !aarch64_stlr_memory_carrier(ctx->program,pointee,width) ||
-            !aarch64_stlr_type(fn->values[b[1].value].type, width))
+            !(aarch64_stlr_memory_carrier(ctx->program,pointee,width) ||
+              aarch64_stlr_scalar_core(fn,pointee,width)) ||
+            !aarch64_stlr_scalar_core(fn,fn->values[b[1].value].type, width))
             return false;
         /* LP64 Core SSA slots SP-relative; x9/x10 are AAPCS64 caller-saved.
          * STLR/B/H provides release ordering, never a compiler barrier. */

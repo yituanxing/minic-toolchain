@@ -2779,6 +2779,35 @@ static bool parse_static_record_constant(MinicParser *parser,
             return false;
         }
         field = &record->fields[field_index];
+        /* An explicitly empty GNU zero-length-array member consumes braces,
+         * not a phantom element or flattened initializer slots. */
+        if (field->is_zero_length_array) {
+            if (field_index != materialized_field_limit ||
+                (has_designator &&
+                 (designator.depth != 1U || designator.has_array_index)) ||
+                !minic_parser_expect(parser, MINIC_TOKEN_LBRACE,
+                                     "expected '{' for zero-length array initializer"))
+                return false;
+            if (parser->current.kind != MINIC_TOKEN_RBRACE) {
+                minic_parser_error(parser,
+                                   "GNU zero-length array initializer must be empty");
+                return false;
+            }
+            if (!minic_parser_expect(parser, MINIC_TOKEN_RBRACE,
+                                     "expected '}' for zero-length array initializer"))
+                return false;
+            materialized_field_limit += 1U;
+            field_index += 1U;
+            if (parser->current.kind == MINIC_TOKEN_COMMA) {
+                if (!minic_parser_advance(parser)) return false;
+                if (parser->current.kind == MINIC_TOKEN_RBRACE) break;
+            } else if (parser->current.kind != MINIC_TOKEN_RBRACE) {
+                minic_parser_error(parser,
+                                   "expected ',' or '}' after zero-length array initializer");
+                return false;
+            }
+            continue;
+        }
         if (field->is_flexible_array) {
             const MinicGlobalObject *object;
             size_t flexible_element_count;

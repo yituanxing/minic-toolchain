@@ -55,3 +55,50 @@ void minic_smccc_smc_8(unsigned long argument, unsigned long *result) {
     asm volatile("smc\t#0\n" : SMCCC_OUTPUTS : SMCCC_INPUT8 : "memory");
     SMCCC_SAVE(result);
 }
+
+/* The real 6.6 arm64 KVM __arm_smccc_1_1 wrappers bind C pointers and
+ * __u64/phys_addr_t (unsigned long long) directly to argument x1..x7.
+ * LP64 register transfer preserves their full 64-bit representations. */
+void minic_smccc_hvc_pointer(void *guest, unsigned long *result) {
+    register unsigned long r0 asm("r0"), r1 asm("r1");
+    register unsigned long r2 asm("r2"), r3 asm("r3");
+    register unsigned long arg0 asm("r0") = 0xc6000000UL;
+    register void *arg1 asm("r1") = guest;
+    asm volatile("hvc\t#0\n" : SMCCC_OUTPUTS : SMCCC_INPUT2 : "memory");
+    SMCCC_SAVE(result);
+}
+
+void minic_smccc_smc_phys(unsigned long long ipa, void *host,
+                          unsigned long *result) {
+    register unsigned long r0 asm("r0"), r1 asm("r1");
+    register unsigned long r2 asm("r2"), r3 asm("r3");
+    register unsigned long arg0 asm("r0") = 0x84000000UL;
+    register unsigned long long arg1 asm("r1") = ipa;
+    register void *arg2 asm("r2") = host;
+    register unsigned long arg3 asm("r3") = 0U;
+    asm volatile("smc\t#0\n" : SMCCC_OUTPUTS : SMCCC_INPUT4 : "memory");
+    SMCCC_SAVE(result);
+}
+
+enum minic_hyp_vector { MINIC_VECTOR_DIRECT, MINIC_VECTOR_INDIRECT };
+void minic_smccc_hvc_enum(enum minic_hyp_vector slot,
+                         unsigned long *result) {
+    register unsigned long r0 asm("r0"), r1 asm("r1");
+    register unsigned long r2 asm("r2"), r3 asm("r3");
+    register unsigned long arg0 asm("r0") = 0xc6000001UL;
+    register enum minic_hyp_vector arg1 asm("r1") = slot;
+    asm volatile("hvc\t#0\n" : SMCCC_OUTPUTS : SMCCC_INPUT2 : "memory");
+    SMCCC_SAVE(result);
+}
+
+void minic_smccc_hvc_const_ipa(void *mmu, unsigned long long ipa,
+                              unsigned long *result) {
+    register unsigned long r0 asm("r0"), r1 asm("r1");
+    register unsigned long r2 asm("r2"), r3 asm("r3");
+    register unsigned long arg0 asm("r0") = 0xc6000002UL;
+    register void *arg1 asm("r1") = mmu;
+    register const unsigned long long arg2 asm("r2") = ipa;
+    register unsigned int arg3 asm("r3") = 1U;
+    asm volatile("hvc\t#0\n" : SMCCC_OUTPUTS : SMCCC_INPUT4 : "memory");
+    SMCCC_SAVE(result);
+}
