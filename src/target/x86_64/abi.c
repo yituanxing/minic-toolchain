@@ -84,10 +84,11 @@ bool minic_x86_64_one_gp_record(const MinicC0Program *program,
     return true;
 }
 
-/* SQLite's Token is a two-eightbyte INTEGER-class SysV aggregate:
- * one pointer at byte 0, one 32-bit integer at byte 8, size 16.
- * Deliberately do not claim general record ABI classification here.
- * Reject packed/misaligned, floating and nested records until proved. */
+/* SysV AMD64 two-INTEGER-eightbyte records include both SQLite Token
+ * (pointer + u32, padded to 16 bytes) and Linux membuf (pointer + size_t).
+ * Both consume exactly two GP registers or two stack slots. Classify only
+ * this proven two-field layout: never infer that arbitrary 16-byte records
+ * with floating, nested, misaligned or bit-field members have this ABI. */
 bool minic_x86_64_two_gp_record(const MinicC0Program *program,
                               const MinicTargetInfo *target, MinicType type) {
     const MinicRecord *rec;
@@ -116,6 +117,6 @@ bool minic_x86_64_two_gp_record(const MinicC0Program *program,
            minic_data_layout_record_field_offset(target->data_layout, program, rec, 1U, &b_offset) &&
            shape.bytes == 16U && shape.alignment == 8U &&
            a_offset == 0U && b_offset == 8U &&
-           a_bytes == 8U && b_bytes == 4U;
+           a_bytes == 8U && (b_bytes == 4U || b_bytes == 8U);
 }
 

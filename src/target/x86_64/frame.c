@@ -7,6 +7,7 @@
 
 #include <limits.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -14,6 +15,21 @@
  * address arithmetic, 16+ aligned objects or SysV variadic save area. */
 bool minic_x86_64_align(size_t value, size_t alignment, size_t *out) {
     return minic_core_frame_align_up(value, alignment, out);
+}
+
+/* Opt-in physical frame preflight stage trace. The frontend/core diagnosis
+ * has already succeeded when this is reached; separating incoming SysV
+ * placement, outgoing CALL placement, object storage and SSA slot layout
+ * makes a real Linux ABI rejection actionable without relaxing any gate. */
+static bool x86_frame_preflight_reject(
+    const MinicCoreFunction *fn, const char *stage) {
+    if (getenv("MINIC_M1_TRACE") != NULL && fn && stage)
+        (void)fprintf(stderr,
+            "MINIC_X86_FRAME_PREFLIGHT function=%s stage=%s parameters=%zu "
+            "values=%zu objects=%zu\n",
+            fn->name ? fn->name : "?", stage,
+            fn->parameter_count, fn->value_count, fn->object_count);
+    return false;
 }
 
 
@@ -33,16 +49,17 @@ bool minic_x86_64_frame_init_with_storage(const MinicC0Program *program,
     (void)memset(frame, 0, sizeof(*frame));
     frame->semantic_calls = facts->call_index;
     if (!minic_x86_64_plan_incoming_arguments(
-            program, target, fn, &frame->incoming_arguments) ||
-        (facts->call_index != NULL &&
-         !minic_x86_64_outgoing_call_plans_prepare(
-             program, target, fn, facts->call_index,
-             &frame->outgoing_call_plans)))
-        return false;
+            program, target, fn, &frame->incoming_arguments))
+        return x86_frame_preflight_reject(fn, "incoming-sysv");
+    if (facts->call_index != NULL &&
+        !minic_x86_64_outgoing_call_plans_prepare(
+            program, target, fn, facts->call_index,
+            &frame->outgoing_call_plans))
+        return x86_frame_preflight_reject(fn, "outgoing-sysv");
     if (!minic_core_object_storage_plan_acquire(
             program, target->data_layout, fn, storage,
             &frame->object_storage, &frame->borrows_object_storage))
-        return false;
+        return x86_frame_preflight_reject(fn, "object-storage");
     frame->varargs_count = facts->variadic_address_count;
     frame->value_count = fn->value_count;
     frame->object_count = fn->object_count;
@@ -51,7 +68,7 @@ bool minic_x86_64_frame_init_with_storage(const MinicC0Program *program,
     if (!minic_core_value_slots_build(
             fn, MINIC_CORE_VALUE_SLOT_LINEAR, 0U, (size_t)INT32_MAX,
             &frame->value_offsets, &value_bytes))
-        return false;
+        return x86_frame_preflight_reject(fn, "value-slots");
     /* Freeze the entire incoming GP register bank before any Core
      * instruction can use RDX as the high limb of a temporary. Otherwise
      * an early __int128 parameter may destroy a later GP parameter before

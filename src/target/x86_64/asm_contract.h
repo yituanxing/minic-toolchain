@@ -21,6 +21,20 @@ bool minic_x86_64_linux_alternative_wrmsr_form(const char *, size_t);
 unsigned int minic_x86_64_linux_monitor_wait_form(const char *, size_t);
 /* Read the live 16-bit DS/ES segment selector, not the segment base. */
 unsigned int minic_x86_64_linux_segment_read_form(const char *, size_t);
+/* Linux uaccess put-user privileged helper CALL with size-specialized ABI. */
+unsigned int minic_x86_64_linux_put_user_call_form(const char *, size_t);
+/* Checked and nocheck __get_user_N helpers, RAX input/result and RDX value. */
+unsigned int minic_x86_64_linux_get_user_call_form(const char *, size_t);
+/* Linux x86 MWAIT idle CLFLUSH alternatives with feature bit 711. */
+bool minic_x86_64_linux_idle_clflush_alt_form(const char *, size_t, bool);
+/* MDS buffer-clearing VERW selector read, with architectural CC effects. */
+bool minic_x86_64_linux_verw_clear_form(const char *, size_t);
+/* Linux debug register DR0/1/2/3/6/7 physical read/write hardware family. */
+unsigned int minic_x86_64_linux_debug_register_form(const char *, size_t);
+unsigned int minic_x86_64_linux_segment_load_extable_form(const char *, size_t);
+bool minic_x86_64_linux_lkgs_extable_form(const char *, size_t);
+unsigned int minic_x86_64_linux_fsgsbase_form(const char *, size_t);
+unsigned int minic_x86_64_linux_segment_register_extable_form(const char *, size_t);
 unsigned int minic_x86_64_linux_zero_barrier_form(const char *, size_t);
 unsigned int minic_x86_64_linux_counter_form(const char *,size_t);
 /* FXSAVE/FXSAVE64 exact 512-byte aligned architectural memory images. */

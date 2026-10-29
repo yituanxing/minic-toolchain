@@ -277,13 +277,16 @@ bool minic_x86_64_linux_boot_segments_template(
     return strcmp(compact, expected) == 0;
 }
 
-/* Linux interrupt flag and halted-CPU state transitions. These four exact
+/* Linux interrupt flag, halted-CPU state and cache WB/INV transitions. These
+ * six exact
  * zero-operand GNU templates are privileged machine instructions; their
  * compiler memory sequencing is essential, and the Target must not
  * reinterpret them as ordinary optimizer barriers or omit the instruction. */
 unsigned int minic_x86_64_linux_privileged_zero_form(
     const char *text, size_t length) {
-    static const char *const forms[] = {"cli", "sti", "sti; hlt", "hlt"};
+    static const char *const forms[] = {
+        "cli", "sti", "sti; hlt", "hlt", "wbinvd", "swapgs"
+    };
     size_t i;
     if (!text || length == 0U || length > 32U) return 0U;
     for (i = 0U; i < sizeof(forms) / sizeof(forms[0]); ++i)
@@ -1469,7 +1472,8 @@ static bool x86_percpu_gs_source(const MinicC0Program *program,
            /* A GNU per-CPU pointer slot is eight bytes, despite its
             * declared lvalue type not being integer. Other widths
             * and operations retain strict original type qualification. */
-           (!(op==0U && i==1U && width==8U && minic_type_is_pointer(ty)) &&
+           (!(width==8U && minic_type_is_pointer(ty) &&
+              ((op==0U && i==1U) || (op==1U && i==0U))) &&
             (ty.base_kind!=MINIC_TYPE_BASE_INT||
              (width==1U?ty.integer_rank!=MINIC_INTEGER_RANK_CHAR:
               width==2U?ty.integer_rank!=MINIC_INTEGER_RANK_SHORT:
@@ -2877,14 +2881,18 @@ static bool x86_linux_monitor_wait_source(
     return true;
 }
 
-/* copy_thread() snapshots segment selectors from live CPU state. DS/ES
- * are 16-bit architectural registers, even in long mode. A C memory
+/* copy_thread() and ptrace() snapshot segment selectors from live CPU state.
+ * DS/ES/FS/GS are 16-bit architectural registers, even in long mode. A C memory
  * load is not equivalent, and the ordinary fixed-register allocator cannot
- * manufacture their values. Only the original two selector reads, with
- * unsigned-short output and compiler memory ordering, are admitted. */
+ * manufacture their values. Support both the short selector snapshot
+ * (memory ordered) and the Linux four 32-bit zero-extended reads. */
 unsigned int minic_x86_64_linux_segment_read_form(
     const char *text, size_t length) {
-    static const char *const allowed[] = {"mov%%es,%0", "mov%%ds,%0"};
+    static const char *const allowed[] = {
+        "mov%%es,%0", "mov%%ds,%0",
+        "movl%%fs,%0", "movl%%gs,%0", "movl%%ds,%0", "movl%%es,%0",
+        "mov%%ss,%0", "mov%%cs,%0", "mov%%fs,%0", "mov%%gs,%0"
+    };
     char normalized[48];
     size_t i, n = 0U;
     if (!text || !length || length >= sizeof(normalized)) return 0U;
@@ -2907,12 +2915,15 @@ static bool x86_linux_segment_read_source(
     MinicTargetInlineAsmContract *contract) {
     const MinicExpression *dst;
     MinicType plain;
+    const unsigned int form = source ? minic_x86_64_linux_segment_read_form(
+        source->template_text, source->template_length) : 0U;
+    const bool short_selector = form <= 2U || form >= 7U;
     if (!program || !source || !contract || source->is_volatile ||
-        source->is_goto || !minic_x86_64_linux_segment_read_form(
-            source->template_text, source->template_length) ||
+        source->is_goto || !form ||
         source->output_count != 1U || !source->outputs ||
         source->input_count || source->label_count ||
-        source->clobber_count != 1U || !source->has_memory_clobber ||
+        source->clobber_count != (short_selector ? 1U : 0U) ||
+        source->has_memory_clobber != short_selector ||
         source->register_clobber_count ||
         !c_is(&source->outputs[0], "=r"))
         return false;
@@ -2921,10 +2932,686 @@ static bool x86_linux_segment_read_source(
     if (!dst || dst->value_category != MINIC_VALUE_LVALUE ||
         minic_type_is_const(dst->type) ||
         !minic_type_unqualified(dst->type, &plain) ||
-        !minic_type_equal(plain, minic_type_unsigned_short()))
+        !minic_type_equal(plain, short_selector ?
+            minic_type_unsigned_short() : minic_type_unsigned_int()))
         return false;
     contract->operand_count = 1U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+    contract->implicit_memory_effect = true;
+    return true;
+}
+
+/* Linux loadsegment() is not the bare MOV to a segment register: its 1:/2:
+ * fixup record uses exception type 5 and must survive as a three-word
+ * __ex_table entry. Admit exactly that complete GNU spelling (including the
+ * relocation base and exception handler type) for the 16-bit selector ISA. */
+unsigned int minic_x86_64_linux_segment_load_extable_form(
+    const char *text, size_t length) {
+    static const char *const segment_names[] = {
+        "fs", "gs", "ds", "es", "ss"
+    };
+    static const char tail[] =
+        "2:.pushsection\"__ex_table\",\"a\".balign4"
+        ".long(1b)-..long(2b)-..long5.popsection";
+    char compact[180], expected[180];
+    size_t i, n = 0U;
+    if (!text || !length || length >= sizeof(compact)) return 0U;
+    for (i = 0U; i < length; ++i) {
+        const char c = text[i];
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
+        if (c == '\0' || n + 1U >= sizeof(compact)) return 0U;
+        compact[n++] = c;
+    }
+    compact[n] = '\0';
+    for (i = 0U; i < sizeof(segment_names)/sizeof(segment_names[0]); ++i) {
+        int written = snprintf(expected, sizeof(expected),
+            "1:movw%%0,%%%%%s%s", segment_names[i], tail);
+        if (written > 0 && (size_t)written < sizeof(expected) &&
+            strcmp(compact, expected) == 0) return (unsigned int)i + 1U;
+    }
+    return 0U;
+}
+
+static bool x86_linux_segment_load_extable_source(
+    const MinicC0Program *program, const MinicInlineAsm *source,
+    MinicTargetInlineAsmContract *contract) {
+    const MinicExpression *value;
+    MinicType type;
+    if (!program || !source || !contract ||
+        !minic_x86_64_linux_segment_load_extable_form(
+            source->template_text, source->template_length) ||
+        !source->is_volatile || source->is_goto || source->output_count ||
+        source->input_count != 1U || !source->inputs ||
+        source->label_count || source->clobber_count != 1U ||
+        !source->has_memory_clobber || source->register_clobber_count ||
+        !c_is(&source->inputs[0], "rm"))
+        return false;
+    value = minic_c0_program_expression(program, source->inputs[0].expression);
+    if (!value || !minic_type_unqualified(value->type, &type) ||
+        !minic_type_equal(type, minic_type_unsigned_short()))
+        return false;
+    contract->operand_count = 1U;
+    contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->implicit_memory_effect = true;
+    return true;
+}
+
+/* Linux 6.6 LKGS uses the fixed DI-register ISA encoding, with a full
+ * __ex_table type-17 register fixup encoded by its GNU local macro. The
+ * original 731-byte template is recognized whole: a modified macro,
+ * relocated fault site or register number must not silently compile. */
+bool minic_x86_64_linux_lkgs_extable_form(const char *text, size_t length) {
+    static const char original[] =
+        "1:  .byte 0xf2,0x0f,0x00,0xf7 ; "
+        " .pushsection \"__ex_table\",\"a\"\n"
+        " .balign 4\n"
+        " .long (1b) - .\n"
+        " .long (1b) - .\n"
+        ".macro extable_type_reg type:req reg:req\n"
+        ".set .Lfound, 0\n"
+        ".set .Lregnr, 0\n"
+        ".irp rs,rax,rcx,rdx,rbx,rsp,rbp,rsi,rdi,r8,r9,r10,r11,r12,r13,r14,r15\n"
+        ".ifc \\reg, %%\\rs\n"
+        ".set .Lfound, .Lfound+1\n"
+        ".long \\type + (.Lregnr << 8)\n"
+        ".endif\n"
+        ".set .Lregnr, .Lregnr+1\n"
+        ".endr\n"
+        ".set .Lregnr, 0\n"
+        ".irp rs,eax,ecx,edx,ebx,esp,ebp,esi,edi,r8d,r9d,r10d,r11d,r12d,r13d,r14d,r15d\n"
+        ".ifc \\reg, %%\\rs\n"
+        ".set .Lfound, .Lfound+1\n"
+        ".long \\type + (.Lregnr << 8)\n"
+        ".endif\n"
+        ".set .Lregnr, .Lregnr+1\n"
+        ".endr\n"
+        ".if (.Lfound != 1)\n"
+        ".error \"extable_type_reg: bad register argument\"\n"
+        ".endif\n"
+        ".endm\n"
+        "extable_type_reg reg=%k[sel], type=(17 | ((0) << 16)) \n"
+        ".purgem extable_type_reg\n"
+        " .popsection\n";
+    if (!text) return false;
+    if (length == sizeof(original)-1U &&
+        memcmp(text, original, sizeof(original)-1U) == 0)
+        return true;
+    /* Common Core resolves %[sel] to %0 while preserving the GNU %k
+     * 32-bit register view and the rest of the exact exception macro. */
+    if (length == sizeof(original)-5U) {
+        static const char named[] = "%k[sel]";
+        const char *slot = strstr(original, named);
+        size_t prefix;
+        if (!slot) return false;
+        prefix = (size_t)(slot - original);
+        return memcmp(text, original, prefix) == 0 &&
+               memcmp(text + prefix, "%k0", 3U) == 0 &&
+               memcmp(text + prefix + 3U, slot + sizeof(named)-1U,
+                   (sizeof(original)-1U) - prefix - (sizeof(named)-1U)) == 0;
+    }
+    return false;
+}
+
+static bool x86_linux_lkgs_extable_source(
+    const MinicC0Program *program, const MinicInlineAsm *source,
+    MinicTargetInlineAsmContract *contract) {
+    const MinicExpression *selector;
+    MinicType type;
+    if (!program || !source || !contract ||
+        !minic_x86_64_linux_lkgs_extable_form(
+            source->template_text, source->template_length) ||
+        !source->is_volatile || source->is_goto ||
+        source->output_count != 1U || !source->outputs ||
+        source->input_count || source->label_count || source->clobber_count ||
+        source->register_clobber_count || source->has_memory_clobber ||
+        !c_is(&source->outputs[0], "+D"))
+        return false;
+    selector = minic_c0_program_expression(
+        program, source->outputs[0].expression);
+    if (!selector || selector->value_category != MINIC_VALUE_LVALUE ||
+        minic_type_is_const(selector->type) ||
+        !minic_type_unqualified(selector->type, &type) ||
+        !minic_type_equal(type, minic_type_unsigned_short()))
+        return false;
+    contract->operand_count = 1U;
+    contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE;
+    contract->implicit_memory_effect = true;
+    return true;
+}
+
+/* FSGSBASE has four operand-bearing privileged forms; the read and write
+ * halves have opposite C lvalue roles despite sharing a general GPR ISA
+ * encoding. Preserve 64-bit width, memory sequencing and exact mnemonic. */
+unsigned int minic_x86_64_linux_fsgsbase_form(
+    const char *text, size_t length) {
+    static const char *const exact[] = {
+        "rdfsbase%0", "rdgsbase%0", "wrfsbase%0", "wrgsbase%0"
+    };
+    char compact[40];
+    size_t n = 0U, i;
+    if (!text || !length || length >= sizeof(compact)) return 0U;
+    for (i = 0U; i < length; ++i) {
+        const char c = text[i];
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
+        if (c == '\0' || n + 1U >= sizeof(compact)) return 0U;
+        compact[n++] = c;
+    }
+    compact[n] = '\0';
+    for (i = 0U; i < sizeof(exact)/sizeof(exact[0]); ++i)
+        if (strcmp(compact, exact[i]) == 0) return (unsigned int)i + 1U;
+    return 0U;
+}
+
+static bool x86_linux_fsgsbase_source(
+    const MinicC0Program *program, const MinicInlineAsm *source,
+    MinicTargetInlineAsmContract *contract) {
+    const unsigned int form = source ? minic_x86_64_linux_fsgsbase_form(
+        source->template_text, source->template_length) : 0U;
+    const bool reading = form <= 2U;
+    const MinicInlineAsmOperand *operand;
+    const MinicExpression *value;
+    MinicType type;
+    if (!program || !source || !contract || !form ||
+        !source->is_volatile || source->is_goto ||
+        source->output_count != (reading ? 1U : 0U) ||
+        source->input_count != (reading ? 0U : 1U) ||
+        source->label_count || source->clobber_count != 1U ||
+        !source->has_memory_clobber || source->register_clobber_count)
+        return false;
+    operand = reading ? (source->outputs ? &source->outputs[0] : NULL) :
+        (source->inputs ? &source->inputs[0] : NULL);
+    if (!operand || !c_is(operand, reading ? "=r" : "r")) return false;
+    value = minic_c0_program_expression(program, operand->expression);
+    if (!value || (reading && (value->value_category != MINIC_VALUE_LVALUE ||
+                              minic_type_is_const(value->type))) ||
+        !minic_type_unqualified(value->type, &type) ||
+        !minic_type_equal(type, minic_type_unsigned_long()))
+        return false;
+    contract->operand_count = 1U;
+    contract->kinds[0] = reading ?
+        MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
+        MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->implicit_memory_effect = true;
+    return true;
+}
+
+/* The exception-table register helper in Linux loadsegment(ES/DS/SS) is
+ * distinct from the short-selector FS fixup. Its type-17 entry names the
+ * GPR that held the selector so the exception handler can rewrite it.
+ * Check the whole expanded GNU macro, including its register-number table. */
+unsigned int minic_x86_64_linux_segment_register_extable_form(
+    const char *text, size_t length) {
+    static const char body[] =
+        " .pushsection \"__ex_table\",\"a\"\n"
+        " .balign 4\n"
+        " .long (1b) - .\n"
+        " .long (1b) - .\n"
+        ".macro extable_type_reg type:req reg:req\n"
+        ".set .Lfound, 0\n"
+        ".set .Lregnr, 0\n"
+        ".irp rs,rax,rcx,rdx,rbx,rsp,rbp,rsi,rdi,r8,r9,r10,r11,r12,r13,r14,r15\n"
+        ".ifc \\reg, %%\\rs\n"
+        ".set .Lfound, .Lfound+1\n"
+        ".long \\type + (.Lregnr << 8)\n"
+        ".endif\n"
+        ".set .Lregnr, .Lregnr+1\n"
+        ".endr\n"
+        ".set .Lregnr, 0\n"
+        ".irp rs,eax,ecx,edx,ebx,esp,ebp,esi,edi,r8d,r9d,r10d,r11d,r12d,r13d,r14d,r15d\n"
+        ".ifc \\reg, %%\\rs\n"
+        ".set .Lfound, .Lfound+1\n"
+        ".long \\type + (.Lregnr << 8)\n"
+        ".endif\n"
+        ".set .Lregnr, .Lregnr+1\n"
+        ".endr\n"
+        ".if (.Lfound != 1)\n"
+        ".error \"extable_type_reg: bad register argument\"\n"
+        ".endif\n"
+        ".endm\n"
+        "extable_type_reg reg=%k0, type=(17 | ((0) << 16)) \n"
+        ".purgem extable_type_reg\n"
+        " .popsection\n";
+    static const char *const names[] = {"es", "ds", "ss"};
+    char exact[780];
+    size_t i;
+    if (!text || length != 721U) return 0U;
+    for (i = 0U; i < sizeof(names)/sizeof(names[0]); ++i) {
+        const int written = snprintf(exact, sizeof(exact),
+            "\t\t\t\t\t\t\n1:\tmovl %%k0,%%%%%s\t\t\n%s",
+            names[i], body);
+        if (written > 0 && (size_t)written == length &&
+            memcmp(text, exact, length) == 0)
+            return (unsigned int)i + 1U;
+    }
+    return 0U;
+}
+
+static bool x86_linux_segment_register_extable_source(
+    const MinicC0Program *program, const MinicInlineAsm *source,
+    MinicTargetInlineAsmContract *contract) {
+    const MinicExpression *selector;
+    MinicType type;
+    if (!program || !source || !contract ||
+        !minic_x86_64_linux_segment_register_extable_form(
+            source->template_text, source->template_length) ||
+        !source->is_volatile || source->is_goto ||
+        source->output_count != 1U || !source->outputs ||
+        source->input_count || source->label_count ||
+        source->clobber_count != 1U || !source->has_memory_clobber ||
+        source->register_clobber_count ||
+        !c_is(&source->outputs[0], "+r"))
+        return false;
+    selector = minic_c0_program_expression(
+        program, source->outputs[0].expression);
+    if (!selector || selector->value_category != MINIC_VALUE_LVALUE ||
+        minic_type_is_const(selector->type) ||
+        !minic_type_unqualified(selector->type, &type) ||
+        !minic_type_equal(type, minic_type_unsigned_short()))
+        return false;
+    contract->operand_count = 1U;
+    contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE;
+    contract->implicit_memory_effect = true;
+    return true;
+}
+
+/* __put_user_size() is a Linux kernel exception-table-aware helper CALL,
+ * not a C store: its input ABI is RCX=user address, RAX=scalar value,
+ * RSP=current live stack, ECX=error result. The GNU EBX clobber is part of
+ * this private ABI and cannot be dropped just because SysV usually saves
+ * RBX. Match the full source constraint footprint and original named size
+ * placeholder; Core resolves that size to one integer at a call site. */
+unsigned int minic_x86_64_linux_put_user_call_form(
+    const char *text, size_t length) {
+    static const char original[] = "call__put_user_%c[size]";
+    static const char *const lowered[] = {
+        "call__put_user_1", "call__put_user_2",
+        "call__put_user_4", "call__put_user_8"
+    };
+    char normalized[96];
+    size_t i, n = 0U;
+    if (!text || !length || length >= sizeof(normalized)) return 0U;
+    for (i = 0U; i < length; ++i) {
+        const char c = text[i];
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
+        if (c == '\0' || c == ';' || n + 1U >= sizeof(normalized))
+            return 0U;
+        normalized[n++] = c;
+    }
+    normalized[n] = '\0';
+    if (strcmp(normalized, original) == 0) return 0x100U;
+    /* Common Core resolves the named %[size] to a numbered immediate
+     * binding but deliberately leaves GNU %c for the target to encode. */
+    if (strcmp(normalized, "call__put_user_%c4") == 0) return 0x200U;
+    for (i = 0U; i < sizeof(lowered)/sizeof(lowered[0]); ++i)
+        if (strcmp(normalized, lowered[i]) == 0)
+            return (unsigned int)(1U << i);
+    return 0U;
+}
+
+static bool x86_linux_put_user_call_source(
+    const MinicC0Program *program, const MinicInlineAsm *source,
+    MinicTargetInlineAsmContract *contract) {
+    const MinicExpression *error, *stack, *user, *value, *size;
+    const MinicFixedRegisterBinding *binding;
+    MinicType plain;
+    if (!program || !source || !contract || !source->is_volatile ||
+        source->is_goto || minic_x86_64_linux_put_user_call_form(
+            source->template_text, source->template_length) != 0x100U ||
+        source->output_count != 2U || !source->outputs ||
+        source->input_count != 3U || !source->inputs || source->label_count ||
+        source->clobber_count != 1U || source->has_memory_clobber ||
+        source->register_clobber_count != 1U || !source->register_clobbers ||
+        !clobber_is(&source->register_clobbers[0], "ebx") ||
+        !target_constraint_is(&source->outputs[0], "=c") ||
+        !target_constraint_is(&source->outputs[1], "+r") ||
+        !target_constraint_is(&source->inputs[0], "0") ||
+        !target_constraint_is(&source->inputs[1], "r") ||
+        !target_constraint_is(&source->inputs[2], "i") ||
+        !source->inputs[2].name || source->inputs[2].name_length != 4U ||
+        memcmp(source->inputs[2].name, "size", 4U) != 0)
+        return false;
+    error = minic_c0_program_expression(
+        program, source->outputs[0].expression);
+    stack = minic_c0_program_expression(
+        program, source->outputs[1].expression);
+    user = minic_c0_program_expression(
+        program, source->inputs[0].expression);
+    value = minic_c0_program_expression(
+        program, source->inputs[1].expression);
+    size = minic_c0_program_expression(
+        program, source->inputs[2].expression);
+    if (!error || error->value_category != MINIC_VALUE_LVALUE ||
+        minic_type_is_const(error->type) ||
+        !minic_type_unqualified(error->type, &plain) ||
+        !minic_type_equal(plain, minic_type_int()) ||
+        !stack || stack->kind != MINIC_EXPRESSION_FIXED_REGISTER ||
+        !minic_type_is_integer(stack->type) ||
+        !user || !minic_type_is_pointer(user->type) ||
+        !value || !minic_type_is_integer(value->type) ||
+        !size || !minic_type_is_integer(size->type))
+        return false;
+    binding = minic_c0_program_fixed_register_binding(
+        program, stack->value.fixed_register_binding_id);
+    if (!binding || !binding->register_name ||
+        strcmp(binding->register_name, "rsp") != 0)
+        return false;
+    /* The source's explicit RAX binding is material: this private helper
+     * does not use the ordinary System V argument register allocator. */
+    if (value->kind == MINIC_EXPRESSION_FIXED_REGISTER)
+        binding = minic_c0_program_fixed_register_binding(
+            program, value->value.fixed_register_binding_id);
+    else if (value->kind == MINIC_EXPRESSION_LOCAL)
+        binding = minic_c0_program_local_fixed_register_binding(
+            program, value->value.local_id);
+    else
+        return false;
+    if (!binding || !binding->register_name ||
+        (strcmp(binding->register_name, "rax") != 0 &&
+         strcmp(binding->register_name, "%rax") != 0))
+        return false;
+    contract->operand_count = 5U;
+    contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+    contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->kinds[3] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->kinds[4] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->implicit_memory_effect = true;
+    return true;
+}
+
+/* Linux __get_user_size() / __get_user_nocheck_size() are native uaccess
+ * helpers with error in EAX and read value in RDX, opposite to put_user's
+ * RCX pointer convention. RSP remains a live fixed-register tied operand.
+ * The body contains its own exception-table fixup; no plain load may replace
+ * the fault-aware CALL. Preserve the named GNU immediate until Core resolves
+ * the actual width at the call site. */
+unsigned int minic_x86_64_linux_get_user_call_form(
+    const char *text, size_t length) {
+    static const char *const names[] = {
+        "call__get_user_%c[size]",
+        "call__get_user_nocheck_%c[size]",
+        "call__get_user_%c4",
+        "call__get_user_nocheck_%c4"
+    };
+    char compact[96];
+    size_t i, n = 0U;
+    if (!text || !length || length >= sizeof(compact)) return 0U;
+    for (i = 0U; i < length; ++i) {
+        const char c = text[i];
+        if (c == ' ' || c == '\t' || c == '\n' || c == '\r')
+            continue;
+        if (c == '\0' || c == ';' || n + 1U >= sizeof(compact))
+            return 0U;
+        compact[n++] = c;
+    }
+    compact[n] = '\0';
+    for (i = 0U; i < sizeof(names)/sizeof(names[0]); ++i)
+        if (strcmp(compact, names[i]) == 0)
+            return (unsigned int)i + 1U;
+    return 0U;
+}
+
+static bool x86_linux_get_user_call_source(
+    const MinicC0Program *program, const MinicInlineAsm *source,
+    MinicTargetInlineAsmContract *contract) {
+    const unsigned int form = source ? minic_x86_64_linux_get_user_call_form(
+        source->template_text, source->template_length) : 0U;
+    const MinicExpression *error, *value, *stack, *pointer, *size;
+    const MinicFixedRegisterBinding *binding;
+    MinicType plain;
+    if (!program || !source || !contract || (form != 1U && form != 2U) ||
+        !source->is_volatile || source->is_goto ||
+        source->output_count != 3U || !source->outputs ||
+        source->input_count != 2U || !source->inputs ||
+        source->label_count || source->clobber_count ||
+        source->register_clobber_count || source->has_memory_clobber ||
+        !target_constraint_is(&source->outputs[0], "=a") ||
+        !target_constraint_is(&source->outputs[1], "=r") ||
+        !target_constraint_is(&source->outputs[2], "+r") ||
+        !target_constraint_is(&source->inputs[0], "0") ||
+        !target_constraint_is(&source->inputs[1], "i") ||
+        !source->inputs[1].name || source->inputs[1].name_length != 4U ||
+        memcmp(source->inputs[1].name, "size", 4U) != 0)
+        return false;
+    error = minic_c0_program_expression(
+        program, source->outputs[0].expression);
+    value = minic_c0_program_expression(
+        program, source->outputs[1].expression);
+    stack = minic_c0_program_expression(
+        program, source->outputs[2].expression);
+    pointer = minic_c0_program_expression(
+        program, source->inputs[0].expression);
+    size = minic_c0_program_expression(
+        program, source->inputs[1].expression);
+    if (!error || error->value_category != MINIC_VALUE_LVALUE ||
+        minic_type_is_const(error->type) ||
+        !minic_type_unqualified(error->type, &plain) ||
+        !minic_type_equal(plain, minic_type_int()) ||
+        !value || value->value_category != MINIC_VALUE_LVALUE ||
+        minic_type_is_const(value->type) || !minic_type_is_integer(value->type) ||
+        !stack || stack->kind != MINIC_EXPRESSION_FIXED_REGISTER ||
+        !minic_type_is_integer(stack->type) ||
+        !pointer || !minic_type_is_pointer(pointer->type) ||
+        !size || !minic_type_is_integer(size->type))
+        return false;
+    binding = minic_c0_program_fixed_register_binding(
+        program, stack->value.fixed_register_binding_id);
+    if (!binding || !binding->register_name ||
+        strcmp(binding->register_name, "rsp") != 0)
+        return false;
+    if (value->kind == MINIC_EXPRESSION_FIXED_REGISTER)
+        binding = minic_c0_program_fixed_register_binding(
+            program, value->value.fixed_register_binding_id);
+    else if (value->kind == MINIC_EXPRESSION_LOCAL)
+        binding = minic_c0_program_local_fixed_register_binding(
+            program, value->value.local_id);
+    else
+        return false;
+    if (!binding || !binding->register_name ||
+        (strcmp(binding->register_name, "rdx") != 0 &&
+         strcmp(binding->register_name, "%rdx") != 0))
+        return false;
+    contract->operand_count = 5U;
+    contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+    contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+    contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->kinds[3] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->kinds[4] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->implicit_memory_effect = true;
+    return true;
+}
+
+/* Linux x86 idle.c CLFLUSH alternative: the ordinary instruction stream
+ * contains only NOP padding, while .altinstr_replacement holds a CLFLUSH
+ * against a physical RAX pointer. Feature 22*32+7 selects this replacement.
+ * Preserve the EXACT Linux local labels, MAX-length .skip arithmetic,
+ * PREL32 records and instruction-size bytes. This is not a plain prefetch,
+ * and it is not safe to drop the alternative when the feature is absent. */
+bool minic_x86_64_linux_idle_clflush_alt_form(
+    const char *text, size_t length, bool core_numeric) {
+    static const char prefix[] =
+        "#ALT:oldnstr661:662:#ALT:padding"
+        ".skip-(((6651f-6641f)-(662b-661b))>0)*"
+        "((6651f-6641f)-(662b-661b)),0x90"
+        "663:.pushsection.altinstructions,\"a\""
+        ".long661b-..long6641f-..4byte(22*32+(7))"
+        ".byte663b-661b.byte6651f-6641f"
+        ".popsection.pushsection.altinstr_replacement,\"ax\""
+        "#ALT:replacement16641:clflush(";
+    static const char suffix[] = ")6651:.popsection";
+    static const char *const operand[] = {"%[addr]", "%1"};
+    char compact[512];
+    char expected[512];
+    size_t i, n = 0U;
+    const int count = snprintf(expected, sizeof(expected), "%s%s%s",
+        prefix, operand[core_numeric ? 1U : 0U], suffix);
+    if (!text || !length || length >= sizeof(compact) ||
+        count <= 0 || (size_t)count >= sizeof(expected))
+        return false;
+    for (i = 0U; i < length; ++i) {
+        const char c = text[i];
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
+        if (c == '\0' || n + 1U >= sizeof(compact)) return false;
+        compact[n++] = c;
+    }
+    compact[n] = '\0';
+    return strcmp(compact, expected) == 0;
+}
+
+static bool x86_linux_idle_clflush_alt_source(
+    const MinicC0Program *program, const MinicInlineAsm *source,
+    MinicTargetInlineAsmContract *contract) {
+    const MinicExpression *zero, *address;
+    if (!program || !source || !contract || !source->is_volatile ||
+        source->is_goto || source->output_count || source->input_count != 2U ||
+        !source->inputs || source->label_count || source->clobber_count ||
+        source->register_clobber_count || source->has_memory_clobber ||
+        !minic_x86_64_linux_idle_clflush_alt_form(
+            source->template_text, source->template_length, false) ||
+        !target_constraint_is(&source->inputs[0], "i") ||
+        !target_constraint_is(&source->inputs[1], "a") ||
+        !source->inputs[1].name || source->inputs[1].name_length != 4U ||
+        memcmp(source->inputs[1].name, "addr", 4U) != 0)
+        return false;
+    zero = minic_c0_program_expression(
+        program, source->inputs[0].expression);
+    address = minic_c0_program_expression(
+        program, source->inputs[1].expression);
+    if (!zero || zero->kind != MINIC_EXPRESSION_INTEGER ||
+        zero->value.integer_value != 0 ||
+        !address || !minic_type_is_pointer(address->type))
+        return false;
+    contract->operand_count = 2U;
+    contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->implicit_memory_effect = true;
+    return true;
+}
+
+/* Intel MDS/TAA idle mitigation clears CPU internal buffers through VERW.
+ * Its selector is an actual 16-bit memory operand; the instruction has
+ * hardware effects even when the input selector is a compile-time constant.
+ * An arbitrary `m` GNU input is not permission for other privileged opcodes. */
+bool minic_x86_64_linux_verw_clear_form(
+    const char *text, size_t length) {
+    static const char *const forms[] = {"verw%[ds]", "verw%0"};
+    char compact[64];
+    size_t i, n = 0U;
+    if (!text || !length || length >= sizeof(compact)) return false;
+    for (i = 0U; i < length; ++i) {
+        const char c = text[i];
+        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') continue;
+        if (c == '\0' || c == ';' || n + 1U >= sizeof(compact))
+            return false;
+        compact[n++] = c;
+    }
+    compact[n] = '\0';
+    for (i = 0U; i < sizeof(forms)/sizeof(forms[0]); ++i)
+        if (strcmp(compact, forms[i]) == 0) return true;
+    return false;
+}
+
+static bool x86_linux_verw_clear_source(
+    const MinicC0Program *program, const MinicInlineAsm *source,
+    MinicTargetInlineAsmContract *contract) {
+    const MinicExpression *selector;
+    MinicType plain;
+    if (!program || !source || !contract || !source->is_volatile ||
+        source->is_goto || source->output_count || source->input_count != 1U ||
+        !source->inputs || source->label_count || source->clobber_count != 1U ||
+        source->has_memory_clobber || source->register_clobber_count != 1U ||
+        !source->register_clobbers ||
+        !clobber_is(&source->register_clobbers[0], "cc") ||
+        !minic_x86_64_linux_verw_clear_form(
+            source->template_text, source->template_length) ||
+        !target_constraint_is(&source->inputs[0], "m"))
+        return false;
+    selector = minic_c0_program_expression(
+        program, source->inputs[0].expression);
+    if (!selector || selector->value_category != MINIC_VALUE_LVALUE ||
+        !minic_type_unqualified(selector->type, &plain) ||
+        !minic_type_equal(plain, minic_type_unsigned_short()))
+        return false;
+    contract->operand_count = 1U;
+    contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
+    contract->implicit_memory_effect = true;
+    return true;
+}
+
+/* Linux debugreg.h admits DR0/DR1/DR2/DR3/DR6 and DR7 only. DR7 uses
+ * a fake `m(*(u32 *)0x1000)` compiler dependency to block reordering of
+ * the privileged read/write; dereferencing the fake address would be a
+ * kernel fault. Transport that dependency as a memory role in Core and
+ * validate it again in Target, without emitting a load/store at 0x1000. */
+unsigned int minic_x86_64_linux_debug_register_form(
+    const char *text, size_t length) {
+    static const unsigned int names[] = {0U, 1U, 2U, 3U, 6U, 7U};
+    char compact[64];
+    char expected[64];
+    size_t i, n = 0U;
+    if (!text || !length || length >= sizeof(compact)) return 0U;
+    for (i = 0U; i < length; ++i) {
+        const char c = text[i];
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
+        if (c == '\0' || c == ';' || n + 1U >= sizeof(compact))
+            return 0U;
+        compact[n++] = c;
+    }
+    compact[n] = '\0';
+    for (i = 0U; i < 6U; ++i) {
+        int count = snprintf(expected, sizeof(expected),
+            "mov%%%%db%u,%%0", names[i]);
+        if (count > 0 && (size_t)count < sizeof(expected) &&
+            strcmp(compact, expected) == 0) return (unsigned int)i + 1U;
+        count = snprintf(expected, sizeof(expected),
+            "mov%%0,%%%%db%u", names[i]);
+        if (count > 0 && (size_t)count < sizeof(expected) &&
+            strcmp(compact, expected) == 0) return (unsigned int)i + 7U;
+    }
+    return 0U;
+}
+
+static bool x86_linux_debug_register_source(
+    const MinicC0Program *program, const MinicInlineAsm *source,
+    MinicTargetInlineAsmContract *contract) {
+    const unsigned int form = source ? minic_x86_64_linux_debug_register_form(
+        source->template_text, source->template_length) : 0U;
+    const bool read = form >= 1U && form <= 6U;
+    const bool dr7 = form == 6U || form == 12U;
+    const MinicExpression *value, *dummy;
+    MinicType plain;
+    if (!program || !source || !contract || !form || source->is_goto ||
+        source->is_volatile != dr7 || source->output_count != (read ? 1U : 0U) ||
+        source->input_count != (read ? (dr7 ? 1U : 0U) : (dr7 ? 2U : 1U)) ||
+        (read && !source->outputs) ||
+        (source->input_count && !source->inputs) ||
+        source->label_count || source->register_clobber_count ||
+        source->clobber_count || source->has_memory_clobber ||
+        (read ? !target_constraint_is(&source->outputs[0], "=r") :
+                !target_constraint_is(&source->inputs[0], "r")) ||
+        (dr7 && !target_constraint_is(&source->inputs[read ? 0U : 1U], "m")))
+        return false;
+    value = minic_c0_program_expression(program, read ?
+        source->outputs[0].expression : source->inputs[0].expression);
+    if (!value || (read && (value->value_category != MINIC_VALUE_LVALUE ||
+                           minic_type_is_const(value->type))) ||
+        !minic_type_unqualified(value->type, &plain) ||
+        !minic_type_equal(plain, minic_type_unsigned_long()))
+        return false;
+    if (dr7) {
+        dummy = minic_c0_program_expression(
+            program, source->inputs[read ? 0U : 1U].expression);
+        if (!dummy || dummy->value_category != MINIC_VALUE_LVALUE ||
+            !minic_type_unqualified(dummy->type, &plain) ||
+            !minic_type_equal(plain, minic_type_unsigned_int()))
+            return false;
+    }
+    contract->operand_count = dr7 ? 2U : 1U;
+    contract->kinds[0] = read ?
+        MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
+        MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    if (dr7)
+        contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
     contract->implicit_memory_effect = true;
     return true;
 }
@@ -2938,6 +3625,24 @@ bool minic_x86_64_qualify_inline_asm(
     if (x86_linux_monitor_wait_source(program, source, contract))
         return true;
     if (x86_linux_segment_read_source(program, source, contract))
+        return true;
+    if (x86_linux_segment_load_extable_source(program, source, contract))
+        return true;
+    if (x86_linux_lkgs_extable_source(program, source, contract))
+        return true;
+    if (x86_linux_fsgsbase_source(program, source, contract))
+        return true;
+    if (x86_linux_segment_register_extable_source(program, source, contract))
+        return true;
+    if (x86_linux_put_user_call_source(program, source, contract))
+        return true;
+    if (x86_linux_get_user_call_source(program, source, contract))
+        return true;
+    if (x86_linux_idle_clflush_alt_source(program, source, contract))
+        return true;
+    if (x86_linux_verw_clear_source(program, source, contract))
+        return true;
+    if (x86_linux_debug_register_source(program, source, contract))
         return true;
     if (x86_x87_probe_source(program, source, contract))
         return true;

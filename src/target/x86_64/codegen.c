@@ -128,6 +128,31 @@ static bool x86_emit_function(FILE *out, const MinicC0Program *program,
                 !minic_x86_64_emit_core_instruction(out, program, target, fn, &frame,
                                       ins, function_id, id)) {
                 char message[256];
+                if (getenv("MINIC_ASM_FRONTIER_TRACE") && ins &&
+                    ins->kind == MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM &&
+                    ins->value.structured_inline_asm.inline_asm_id <
+                    fn->inline_asm_count) {
+                    const MinicCoreInlineAsm *a = &fn->inline_asms[
+                        ins->value.structured_inline_asm.inline_asm_id];
+                    size_t j;
+                    (void)fprintf(stderr,
+                        "X86_TARGET_STRUCTURED_FRONTIER function=%s "
+                        "asm_length=%zu operands=%zu volatile=%d memory=%d "
+                        "preview=%.120s\n", name, a->template_length,
+                        ins->value.structured_inline_asm.operand_count,
+                        (int)a->is_volatile, (int)a->has_memory_clobber,
+                        a->template_text ? a->template_text : "");
+                    for (j = 0U; j < ins->value.structured_inline_asm.operand_count;
+                         ++j) {
+                        const MinicCoreStructuredInlineAsmOperand *b =
+                            &ins->value.structured_inline_asm.operands[j];
+                        (void)fprintf(stderr,
+                            "X86_TARGET_STRUCTURED_OPERAND index=%zu "
+                            "kind=%d value=%u fixed=%d\n", j,
+                            (int)b->kind, (unsigned)b->value,
+                            (int)b->has_fixed_register_binding);
+                    }
+                }
                 (void)snprintf(message, sizeof(message),
                                "x86-64 Core instruction unsupported: function %s, kind %d",
                                name, id < fn->instruction_count ? (int)fn->instructions[id].kind : -1);

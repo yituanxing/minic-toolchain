@@ -125,7 +125,8 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
         const MinicCoreInlineAsm *a = fn != NULL &&
             asm_id < fn->inline_asm_count ? &fn->inline_asms[asm_id] : NULL;
         static const char *const privileged[] = {
-            "  cli\n", "  sti\n", "  sti\n  hlt\n", "  hlt\n"
+            "  cli\n", "  sti\n", "  sti\n  hlt\n", "  hlt\n",
+            "  wbinvd\n", "  swapgs\n"
         };
         unsigned int form;
         if (a != NULL && a->is_goto) {
@@ -146,7 +147,7 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
              * explicit "memory" clobber. No arbitrary opaque assembler
              * payload may reach this privileged instruction switch. */
             if (!a->is_volatile || (form != 4U && !a->has_memory_clobber) ||
-                a->register_clobber_count != 0U || form > 4U)
+                a->register_clobber_count != 0U || form > 6U)
                 return false;
             return fputs(privileged[form - 1U], out) != EOF;
         }
