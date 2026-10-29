@@ -26,11 +26,14 @@ u64 read_tpidr_el1_u64(void) {
 u64 read_tpidr_el2_u64(void) {
   u64 v; asm("mrs %0, tpidr_el2" : "=r"(v)); return v;
 }
+u64 read_hpfar_el2_u64(void) {
+  u64 v; asm volatile("mrs %0, hpfar_el2" : "=r"(v)); return v;
+}
 SRC
 # MiniC consumes already-preprocessed GNU .i, not raw C #define directives.
 cc -E -P -x c "$work/sysreg.c" -o "$work/sysreg.i"
 "$cc" --target=aarch64-linux -S "$work/sysreg.i" -o "$work/mini.s"
-for reg in daif sp_el0 tpidr_el1 tpidr_el2; do
+for reg in daif sp_el0 tpidr_el1 tpidr_el2 hpfar_el2; do
   grep -Fq "  mrs x9, $reg" "$work/mini.s"
 done
 test "$(grep -Fc '  mrs x9, daif' "$work/mini.s")" -eq 2
@@ -58,9 +61,9 @@ if [[ "${MINIC_SYSREG_NATIVE_ONLY:-0}" != 1 ]]; then
   readelf -h "$work/mini.o" | grep -Fq 'AArch64'
   aarch64-linux-gnu-objdump -d "$work/gnu.o" > "$work/gnu.dis"
   aarch64-linux-gnu-objdump -d "$work/mini.o" > "$work/mini.dis"
-  for reg in daif sp_el0 tpidr_el1 tpidr_el2; do
+  for reg in daif sp_el0 tpidr_el1 tpidr_el2 hpfar_el2; do
     grep -Eiq "mrs[[:space:]]+[^,]+,[[:space:]]+$reg" "$work/gnu.dis"
     grep -Eiq "mrs[[:space:]]+[^,]+,[[:space:]]+$reg" "$work/mini.dis"
   done
 fi
-echo 'AARCH64_LINUX_MRS_U64=PASS original_read_sysreg_u64=1 register_forms=4 negative=5 EL1_user_exec=not_run'
+echo 'AARCH64_LINUX_MRS_U64=PASS original_read_sysreg_u64=1 register_forms=5 including_HPFAR_EL2 negative=5 EL1_user_exec=not_run'

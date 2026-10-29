@@ -133,11 +133,16 @@ bool core_scalar_expression_value_type(const MinicFunctionBodyView *body,
                core_scalar_expression_value_type(body, statement_result, value_type);
     }
     /* M97_CONDITIONAL_SCALAR_VALUE_TYPE: GNU C may preserve top-level
-       qualifiers on a scalar conditional expression whose arms originate as
-       qualified lvalues. Once the conditional is consumed as a scalar value,
-       those top-level qualifiers do not belong to the Core SSA/storage type. */
+       qualifiers on a scalar rvalue projected from a qualified aggregate
+       (including `({ const_record; }).field`) or on a conditional whose arms
+       originate as qualified lvalues. Once consumed as a scalar value, those
+       qualifiers do not belong to the Core SSA/storage type. The actual
+       member load still owns volatile and the address retains its pointee
+       qualifiers. Linux drivers/tee/tee_core.c exercises this in snprintf. */
     if (expression->kind == MINIC_EXPRESSION_CONDITIONAL ||
         expression->kind == MINIC_EXPRESSION_CONVERSION ||
+        (expression->kind == MINIC_EXPRESSION_MEMBER &&
+         expression->value_category == MINIC_VALUE_RVALUE) ||
         (expression->kind == MINIC_EXPRESSION_BINARY &&
          expression->value.binary.operator_kind == MINIC_BINARY_COMMA)) {
         /* A scalar value produced by conditional/conversion/comma evaluation
