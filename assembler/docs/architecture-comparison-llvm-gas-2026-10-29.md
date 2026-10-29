@@ -225,3 +225,112 @@ A GNU cross tool absent locally remains **NOT TESTED**, never PASS.
   comparison **not performed in this audit**.
 - **Documentation-only**: no production fix was applied in this audit.
   Do not represent the above as complete architecture cleanup.
+
+
+## G. Follow-up full-inventory contract audit (2026-10-29, source head e9a53684)
+
+This section is a **separate follow-up** to A01–A12 above, not a new
+claim of six independently executing subagents. The GitHub source at
+`e9a53684ea75c0e713a7a55dcea4142aeac21df2` was fetched for each
+of the same 35 production files. Source inventory counts at this exact
+head total **30,735 lines**: Common source 7,465 (4); MC model 4,265
+(8); RV 3,102 (6); x86 3,630 (2); A64 5,257 (2); LA 2,030 (2);
+CFI/ELF/shared object tools/CLI 4,986 (11). The 35-file repository
+scan included function-level architecture metrics and a targeted manual
+re-read of high-risk producer/consumer call chains; the mechanical scan
+itself does **not** imply 30,735 branches were manually validated.
+
+### G.1 One newly confirmed GNU Section metadata discrepancy
+
+**A13 / P1 / confirmed source-path discrepancy**:
+`assembler/src/assembler.c:1410-1598` parses `S` and sets
+`MINIAS_SHF_STRINGS`, but only parses/assigns `entry_size` when
+`MINIAS_SHF_MERGE` is present. `elf_writer.c:282-305` copies
+`input->entry_size` into the emitted object without supplying a
+default. GNU GAS defines `S`'s `entsize` as default **1** even when
+the `M` flag is absent. GNU host assembler reproduced:
+
+```asm
+.section .rodata.strings_only,"aS",@progbits
+.asciz "hello"
+.section .rodata.merge_strings,"aMS",@progbits,1
+.asciz "world"
+```
+
+Host `as --64` + `readelf -SW` printed `sh_entsize=1` for both
+sections. MiniAS output was **not executed** for this probe in this
+follow-up; the MiniAS control-flow assignment implies the single-S
+section retains zero, pending actual exact-head GNU object comparison.
+
+Fix inside the **whole SectionSpec/SectionKey batch**, not a standalone
+`if (S) entsize=1` patch. Its invariant is that the final effective
+flags, type, entsize, group and unique identity are computed once before
+interning. Also audit `S`-only explicit entsize, `E` and `M`
+combinations, and GNU first-declaration behavior.
+
+### G.2 GNU syntax omissions: classify by severity
+
+Host/current GNU `.section` documentation describes `unique,<number>`,
+`?` inherited grouping, `+` / `-` attribute inheritance, standalone
+`E` entry size, numeric flags/types, and `.attach_to_group`. Current
+MiniAS `handle_section` accepts `a,w,x,M,S,T,G,R,o`; unsupported
+characters fail explicitly, and trailing `unique` is rejected. Most
+are **explicit missing coverage**, not proven wrong-code bugs. Treat
+`unique`, `?` and the `S` default as first-priority actual GNU
+Section identity/semantics deficiencies; prioritize the rest according
+to unmodified compiler-generated sources, avoiding unbounded
+compatibility work.
+
+References:
+- https://www.sourceware.org/binutils/docs/as/Section.html
+- https://llvm.org/doxygen/MCContext_8cpp_source.html
+  (ELF identity quadruple: section name, group, unique ID, linked symbol)
+
+### G.3 Actual cross-layer split vs. legitimate target specificity
+
+| Producer and consumer | Observed invariant | Judgment |
+| --- | --- | --- |
+| `assembler.c:6486-6659` + `mc_encode_result.c` | instruction and executable ALIGN stage bytes/fixups; DATA/FILL/SPACE use `minias_section_append*` directly | **Architecture debt**: one fragment-wide proposal/commit protocol; retain lazy large-fill representation and NOBITS semantics |
+| `aarch64_target.c:2208-2308` + `mc_expr.c` | A64 scans source string for parenthesized `symbol+(symbol2-symbol3)+const` while Common already retains signed MCExpr / bound differences | **Real second grammar**: migrate semantic expression parse to Common, target only decides address/relocation legality |
+| `riscv_target.c:440-496` + `riscv_target.h` | explicit `.option relax` passes strict-ISA whitelist, but target directive body only mutates pic/nopic/rvc/norvc/push/pop | **Semantic silent gap**: must implement true per-site linker relaxation contract with R_RISCV_RELAX/ALIGN or reject unsupported mode |
+| `minias_internal.h:474-590,787-873` | TargetOps callbacks take mutable `MiniAs*` covering parser/symbol/fixup/ELF/CFI state; Target site uses opaque 32-bit mode bits | **Interface debt**, not proof of current overwrite: phase-specific views/sink after emission unifies |
+| `elf_writer.c:504-541` | complete ELF buffer is directly `fopen(path,"wb")`, then fwrite/fclose | **Failure-atomicity gap**: parse/OOM failures do not emit, but disk I/O errors may truncate an existing file; verify temporary-output + atomic replace |
+| `x86_64_target.c` REX/SIB/high GPR, `aarch64_target.c` A64 memory/literal, `riscv_encode.c` XLEN, `loongarch64_target.c` register banks | machine-specific form and fixup bitfield decisions stay Target-local; no target source directly calls `minias_section_append` | **Correct specialization**, do not generalize their machine encoding into Common |
+
+LLVM source references checked:
+- https://raw.githubusercontent.com/llvm/llvm-project/main/llvm/include/llvm/MC/MCObjectStreamer.h:
+  `allocFragSpace`, `appendContents`, `addFixup`, `emitInstruction`;
+- https://raw.githubusercontent.com/llvm/llvm-project/main/llvm/include/llvm/MC/MCAsmBackend.h:
+  `applyFixup`, `fixupNeedsRelaxationAdvanced`,
+  `relaxInstruction`, `relaxAlign`;
+- https://raw.githubusercontent.com/llvm/llvm-project/main/llvm/lib/MC/MCAssembler.cpp:
+  `MCAssembler::relaxInstruction` uses retained MCInst/fixups, rather
+  than replaying source mnemonics for ordinary relaxation;
+- GNU GAS internals and GNU source syntax:
+  https://gnu.googlesource.com/binutils-gdb/+/00d962d155e1cff6ce144f60f81a416e0f9b872e/gas/doc/internals.texi
+  and https://sourceware.org/binutils/docs/as.html.
+
+### G.4 Actual strengths and migration constraints
+
+- **Advantage**: a compact, pluggable four-backend Common MC engine,
+  one explicit Target registry, stable Section/Symbol IDs and site
+  identities, Common-owned relocation bookkeeping, and one shared
+  MiniELF serializer. The earlier 4096-section/8192-subsection GNU
+  stress and four GNU target gates are real evidence of this substrate.
+- **Advantage**: ISA-specific features remain private to Targets, while
+  byte/fixup offset finalization is Common-owned; fail-closed unsupported
+  forms are preferable to unverifiable machine code.
+- **Do not clone** LLVM's all-format object-streamer polymorphism or
+  GAS's mutable global parser state. GAS is the assembler in the GNU
+  toolchain; GCC normally emits assembly and invokes a separate
+  assembler, so compare GCC-generated `.s` input compatibility to GAS,
+  and the MiniAS ownership architecture to LLVM MC.
+- **Release ordering** remains SectionSpec/SectionKey semantic identity
+  (including unique/inherited group/default entsize), then unified
+  Fragment emission, then the RISC-V linker-relax semantic contract,
+  then incremental SourceGraph and demonstrated Target matcher
+  duplication. This is a whole-subsystem migration plan, **not** proof
+  any of these unresolved P0/P1 items were fixed.
+- The latest architecture note changes **documentation only**. No
+  Release/A0/GNU/Image/QEMU success is ascribed to its commit; earlier
+  exact-head green workflows apply only to the recorded earlier SHA.
