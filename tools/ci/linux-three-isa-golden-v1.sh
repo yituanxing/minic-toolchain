@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Original Linux 6.6.143 GNU Kbuild discovery: x86-64/AArch64/LoongArch64
-# ONE reusable script and three target-specific GNU build settings.
+# ONE reusable script and three target-specific upstream GNU defconfigs.
 # Build and C-owner discovery ONLY. Boot, MiniC ownership and P1 are NOT PASS.
 set -Eeuo pipefail
 if (( $# != 2 )); then
@@ -51,15 +51,15 @@ printf '%s\n' \
   "source=linux-6.6.143" "target=$target" "arch=$arch" \
   "gnu_cc=$gcc" "gnu_triplet=$gcc_target" "cross_prefix=$cross" \
   "vendor_defconfig_reference=$config" "build_target=$build_target" "image=$image" \
-  "profile=${MINIC_LINUX_CONFIG_PROFILE:-common}" \
+  "profile=${MINIC_LINUX_CONFIG_PROFILE:-broad}" \
   "verdict=GNU_BUILD_ONLY_NOT_QEMU_CERTIFIED_NOT_MINIC" \
   >"$evidence/build-contract.txt"
 export KBUILD_BUILD_USER=minic KBUILD_BUILD_HOST=minic-ci
 export KBUILD_BUILD_TIMESTAMP='Thu Jan  1 00:00:00 UTC 1970'
-# Use ONE shared feature profile for the cross-ISA first pass. Kconfig
-# necessarily resolves arch-only symbols per target; compare common symbols
-# by their exact effective values instead of requiring identical raw .config.
-profile=${MINIC_LINUX_CONFIG_PROFILE:-common}
+# Default to each target's original upstream defconfig for full-source breadth.
+# The shared allnoconfig feature profile remains available only as an explicit
+# reduced-scope smoke; Kconfig resolves target platform symbols independently.
+profile=${MINIC_LINUX_CONFIG_PROFILE:-broad}
 minimum=1000
 case "$profile" in
   common)

@@ -1,4 +1,4 @@
-name: MiniC Linux three-ISA GNU .i cache and seven-way MiniC census
+name: MiniC Linux three-ISA native defconfig and seven-way MiniC census
 on:
   pull_request:
     # Deliberately opt-in: ordinary compiler fixes reuse the frozen inputs
@@ -145,13 +145,13 @@ jobs:
           path: |
             ${{ runner.temp }}/minic-linux-${{ matrix.target }}/evidence
             ${{ runner.temp }}/minic-linux-${{ matrix.target }}/frozen
-          key: linux66-gnu-i-${{ matrix.target }}-common-v2-${{ hashFiles('tools/ci/linux-three-isa-common.config','tools/ci/linux-three-isa-golden-v1.sh','tools/ci/linux-three-isa-golden-v1.py','tools/ci/linux-three-isa-freeze-i-v1.py','tools/ci/linux-runtime-gcc-full-c-objects-v1.py') }}-${{ steps.gnu-version.outputs.value }}
-      - name: GNU original Linux 6.6.143 Kbuild + GNU -E .i only on cache miss
+          key: linux66-gnu-i-${{ matrix.target }}-broad-v1-${{ hashFiles('tools/ci/linux-three-isa-golden-v1.sh','tools/ci/linux-three-isa-golden-v1.py','tools/ci/linux-three-isa-freeze-i-v1.py','tools/ci/linux-runtime-gcc-full-c-objects-v1.py') }}-${{ steps.gnu-version.outputs.value }}
+      - name: GNU original Linux 6.6.143 native defconfig Kbuild + GNU -E .i
         if: steps.gnu-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
-          MINIC_LINUX_CONFIG_PROFILE=common bash tools/ci/linux-three-isa-golden-v1.sh \
+          MINIC_LINUX_CONFIG_PROFILE=broad bash tools/ci/linux-three-isa-golden-v1.sh \
             "${{ matrix.target }}" "$RUNNER_TEMP/minic-linux-${{ matrix.target }}"
       - name: Verify SHA-bound frozen GNU .i corpus on fresh and cached results
         shell: bash
@@ -166,6 +166,8 @@ jobs:
             --target "${{ matrix.target }}" --gcc "$cc" \
             --evidence "$RUNNER_TEMP/minic-linux-${{ matrix.target }}/evidence" \
             --frozen "$RUNNER_TEMP/minic-linux-${{ matrix.target }}/frozen"
+          python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); assert p["target"]==sys.argv[2] and p["config_profile"]=="broad", p; print("THREE_ISA_NATIVE_DEFCONFIG=PASS target="+p["target"]+" original_C_owners="+str(p["gnu_c_owners"]))' \
+            "$RUNNER_TEMP/minic-linux-${{ matrix.target }}/evidence/discovery.json" "${{ matrix.target }}"
           echo "THREE_ISA_GNU_E_CACHE_HIT=${{ steps.gnu-cache.outputs.cache-hit }}"
       - name: Export immutable GNU .i snapshots to seven MiniC consumers
         uses: actions/upload-artifact@v4
