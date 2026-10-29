@@ -226,6 +226,35 @@ bool minic_loongarch64_emit_integer_instruction(
                     *needs_gp_store = true;
                     return true;
                 }
+                bool wide_left;
+                if (minic_core_integer_overflow_u64_u32_to_i32_shape(
+                        program, target, fn, ins, &wide_left)) {
+                    /* Exact GNU arithmetic: the mathematical sum has up
+                     * to 65 unsigned bits, even though the machine has
+                     * 64-bit GPRs. Include the high carry AND the loss
+                     * of signed-i32 representability after narrowing. */
+                    if (!emit_sp_mem(out, wide_left ? "ld.d" : "ld.w",
+                                     "$t0", (size_t)lhs * 8U) ||
+                        !emit_sp_mem(out, wide_left ? "ld.w" : "ld.d",
+                                     "$t1", (size_t)rhs * 8U) ||
+                        !emit_sp_mem(out, "ld.d", "$t2",
+                                     (size_t)address * 8U) ||
+                        fputs(wide_left
+                              ? "  bstrpick.d $t1, $t1, 31, 0\n"
+                              : "  bstrpick.d $t0, $t0, 31, 0\n", out) == EOF ||
+                        fputs("  move $t3, $t0\n"
+                              "  add.d $t0, $t0, $t1\n"
+                              "  sltu $t3, $t0, $t3\n"
+                              "  add.w $t4, $t0, $zero\n"
+                              "  xor $t5, $t4, $t0\n"
+                              "  sltu $t5, $zero, $t5\n"
+                              "  or $t3, $t3, $t5\n"
+                              "  st.w $t4, $t2, 0\n"
+                              "  move $t0, $t3\n", out) == EOF)
+                        return false;
+                    *needs_gp_store = true;
+                    return true;
+                }
                 bool signed_left;
                 if (!minic_core_integer_overflow_mixed_add_i32_shape(
                         program, target, fn, ins, &signed_left) ||

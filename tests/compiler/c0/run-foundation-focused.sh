@@ -71,6 +71,7 @@ for test_script in \
     run-static-fixed-record-array-zero.sh \
     run-static-multidimensional-array-relocation.sh \
     run-static-integer-floating-const-initializer.sh \
+    run-incomplete-function-pointer-array-lifetime.sh \
     run-static-integer-pointer-cast-comparison.sh \
     run-static-aggregate-array-designators.sh \
     run-prefix-update-expressions.sh \

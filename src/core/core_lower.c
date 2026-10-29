@@ -207,8 +207,9 @@ static MinicCoreLowerStatus lower_parameter_ingress(MinicCoreLowerContext *conte
         }
         if (parameter->is_array || parameter->is_register_storage ||
             !minic_type_unqualified(parameter->type, &parameter_value_type) ||
-            !minic_type_equal(parameter_value_type,
-                              context->source_function->parameter_types[parameter_index])) {
+            !minic_c0_types_compatible(
+                context->body->program, parameter_value_type,
+                context->source_function->parameter_types[parameter_index])) {
             (void)fprintf(stderr,
                           "CORE_M158_INGRESS_DETAIL function=%s parameter=%zu "
                           "volatile=%d array=%d register=%d\n",
@@ -1657,6 +1658,39 @@ MinicCoreLowerStatus minic_core_lower_function_with_index(const MinicFunctionBod
             &lowered, source_function->calling_convention) ||
         !minic_core_function_add_block(&lowered, &block_id)) {
         free(statement_blocks); free(local_integer_constants); free(local_objects); minic_core_function_destroy(&lowered); return MINIC_CORE_LOWER_ERROR;
+    }
+    /* C allows a function prototype and its definition to materialize
+     * distinct but compatible pointer-to-array descriptor identities.
+     * Canonicalize ONLY at the AST -> Core ingress boundary: the Core IR
+     * signature must use the actual definition parameter-local type so its
+     * PARAMETER instruction and STORE remain exactly identical. Preserve
+     * Core verification's strict type identity and discard only the formal
+     * parameter's top-level C qualifiers, as required by function types. */
+    {
+        size_t parameter_index;
+        for (parameter_index = 0U; parameter_index < source_function->parameter_count;
+             ++parameter_index) {
+            const MinicLocal *parameter;
+            MinicType normalized;
+            if (source_function->local_begin >= body->program->local_count ||
+                parameter_index >= body->program->local_count - source_function->local_begin) {
+                free(statement_blocks); free(local_integer_constants); free(local_objects);
+                minic_core_function_destroy(&lowered);
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            parameter = minic_c0_program_local(
+                body->program, source_function->local_begin + parameter_index);
+            if (parameter == NULL ||
+                !minic_type_unqualified(parameter->type, &normalized) ||
+                !minic_c0_types_compatible(
+                    body->program, source_function->parameter_types[parameter_index],
+                    normalized)) {
+                free(statement_blocks); free(local_integer_constants); free(local_objects);
+                minic_core_function_destroy(&lowered);
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            lowered.parameter_types[parameter_index] = normalized;
+        }
     }
     (void)memset(&context, 0, sizeof(context));
     context.body = body;

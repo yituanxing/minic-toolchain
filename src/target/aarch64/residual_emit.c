@@ -79,6 +79,15 @@ bool minic_aarch64_emit_residual_instruction(
                 *needs_writeback = false;
                 return true;
             }
+            if (minic_aarch64_linux_barrier_alternative_opaque(source)) {
+                if (!minic_aarch64_emit_linux_barrier_alternative_opaque(
+                        out, source))
+                    return minic_multi_direct_machine_reject(
+                        fn, "aarch64", name, "linux_kvm_barrier_alternative",
+                        reject_block, reject_ins, __LINE__);
+                *needs_writeback = false;
+                return true;
+            }
             /* Materialize the vetted privileged PSTATE opcode in Target.
              * Do not forward even a whitelisted GNU arithmetic expression
              * to the assembler as an uninspected opaque instruction. */

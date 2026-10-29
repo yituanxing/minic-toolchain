@@ -85,6 +85,26 @@ static bool record_field_starts_parenthesized_pointer_object(const MinicParser *
            probe.current.kind != MINIC_TOKEN_LBRACKET;
 }
 
+static bool record_field_starts_attributed_function_pointer(const MinicParser *parser) {
+    MinicParser probe;
+    MinicParsedAttributeList attributes;
+
+    if (parser == NULL || parser->current.kind != MINIC_TOKEN_LPAREN)
+        return false;
+    probe = *parser;
+    (void)memset(&attributes, 0, sizeof(attributes));
+    if (!minic_parser_advance(&probe) ||
+        !minic_parser_collect_gnu_attribute_lists(&probe, &attributes))
+        return false;
+    /* EFI x86 uses `R *(__attribute__((ms_abi)) *callback)(Args)` inside
+     * anonymous records. The earlier record dispatcher only checked for an
+     * immediate `*` after `(` and routed this spelling to the ordinary
+     * declarator-name parser, mistaking __attribute__ for the field name.
+     * Let the shared function declarator parse and validate the attribute;
+     * the probe does not change any target admission or calling convention. */
+    return attributes.count != 0U && probe.current.kind == MINIC_TOKEN_STAR;
+}
+
 static bool parse_pointer_to_array_field_declarator(MinicParser *parser,
                                                     MinicType base_type,
                                                     MinicSourceSpan *name_span,
@@ -145,6 +165,7 @@ static bool parse_function_pointer_field_declarator(MinicParser *parser,
                                                     MinicSourceSpan *name_span,
                                                     MinicType *field_type) {
     MinicParsedFunctionDeclarator declarator;
+    size_t attribute_index;
 
     if (parser == NULL || name_span == NULL || field_type == NULL ||
         !minic_parser_parse_parenthesized_function_declarator(parser, true, true, &declarator)) {
@@ -153,6 +174,31 @@ static bool parse_function_pointer_field_declarator(MinicParser *parser,
     if (!minic_parser_build_function_declarator_type(
             parser, return_type, &declarator, field_type)) {
         minic_parser_error(parser, "cannot build function pointer field type");
+        return false;
+    }
+    for (attribute_index = 0U; attribute_index < declarator.attributes.count;
+         ++attribute_index) {
+        const MinicParsedAttribute *attribute = &declarator.attributes.values[attribute_index];
+        const MinicAttributeDescriptor *descriptor = attribute->descriptor;
+
+        if (descriptor != NULL && descriptor->kind == MINIC_ATTRIBUTE_MS_ABI &&
+            !attribute->has_arguments &&
+            minic_target_info_function_pointer_calling_convention_declaration_supported(
+                parser->target_info, MINIC_CALLING_CONVENTION_MS_X64) &&
+            minic_c0_program_function_pointer_with_calling_convention(
+                parser->program, *field_type, MINIC_CALLING_CONVENTION_MS_X64, field_type)) {
+            continue;
+        }
+        if (descriptor != NULL &&
+            minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_FUNCTION) &&
+            (descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_INFORMATIONAL ||
+             descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_DIAGNOSTIC ||
+             descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_OPTIMIZATION ||
+             descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_CONTROL_FLOW)) {
+            continue;
+        }
+        minic_parser_error(parser,
+                           "unsupported GNU attribute in function-pointer record declarator");
         return false;
     }
     *name_span = declarator.name_span;
@@ -416,7 +462,8 @@ static bool parse_record_field_declarator(MinicParser *parser,
         if (!minic_parser_advance(&probe)) {
             return false;
         }
-        if (probe.current.kind == MINIC_TOKEN_STAR) {
+        if (probe.current.kind == MINIC_TOKEN_STAR ||
+            record_field_starts_attributed_function_pointer(parser)) {
             if (!parse_function_pointer_field_declarator(
                     parser, field_type, &name_span, &field_type)) {
                 return false;

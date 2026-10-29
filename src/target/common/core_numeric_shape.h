@@ -17,6 +17,13 @@ bool minic_core_integer_overflow_mixed_add_i32_shape(
     const MinicC0Program *, const MinicTargetInfo *,
     const MinicCoreFunction *, const MinicCoreInstruction *,
     bool *signed_left);
+/* GNU add computes the exact unsigned-65-bit mathematical value for
+ * u64 + u32 before storing to an i32 result. UDF's checked allocation
+ * length uses this shape, distinct from mixed signed i32/u64 addition. */
+bool minic_core_integer_overflow_u64_u32_to_i32_shape(
+    const MinicC0Program *, const MinicTargetInfo *,
+    const MinicCoreFunction *, const MinicCoreInstruction *,
+    bool *wide_left);
 /* GNU __builtin_mul_overflow computes the full mathematical product, not
  * the usual C arithmetic-conversion result. Mixed 32-bit operand/result
  * signedness needs a 64-bit product and explicit result-range comparison. */

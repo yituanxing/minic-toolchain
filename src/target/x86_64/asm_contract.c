@@ -197,10 +197,23 @@ static bool x86_linux_testcc_source(
     return true;
 }
 
-/* Keep the GS per-CPU source reserved, without capturing ordinary MOV. */
+static bool x86_linux_compact_asm_equals(
+    const char *text, size_t length, const char *expected);
+
+/* Keep target-owned fixed-register/privileged source reserved; an output-only
+ * asm is not permission for generic Core to bypass its exact GNU =a or
+ * memory role when that target qualifier has rejected the constraints. */
 bool minic_x86_64_requires_qualified_input_asm(const MinicInlineAsm *src) {
     static const char *const reserved[] = {"movq %%gs:", "cmp",
         "outb ", "outw ", "outl ", "inb ", "inw ", "inl ", "lidt", "lgdt"};
+    if (src && src->template_text &&
+        (minic_x86_64_linux_crash_segment_snapshot_form(
+             src->template_text, src->template_length) != 0U ||
+         minic_x86_64_linux_via_xstore_form(
+             src->template_text, src->template_length) ||
+         x86_linux_compact_asm_equals(
+             src->template_text, src->template_length, "movb%1,%%al")))
+        return true;
     return minic_backend_inline_asm_prefix_matches(
         src, reserved, sizeof(reserved) / sizeof(reserved[0]));
 }
@@ -388,6 +401,9 @@ static bool x86_linux_real_mode_far_jump_source(
  * Linux's double-underscore raw helpers intentionally omit it. */
 unsigned int minic_x86_64_linux_mmio_read_form(const char *text, size_t length) {
     if (x86_linux_compact_asm_equals(text, length, "movb%1,%0")) return 1U;
+    /* The x86 PCI MMCONFIG byte reader fixes the destination to AL rather
+     * than referencing GNU output %0; its =a constraint proves this mode. */
+    if (x86_linux_compact_asm_equals(text, length, "movb%1,%%al")) return 1U;
     if (x86_linux_compact_asm_equals(text, length, "movw%1,%0")) return 2U;
     if (x86_linux_compact_asm_equals(text, length, "movl%1,%0")) return 4U;
     if (x86_linux_compact_asm_equals(text, length, "movq%1,%0")) return 8U;
@@ -449,7 +465,10 @@ static bool x86_linux_mmio_read_source(const MinicC0Program *program,
         src->output_count != 1U || src->input_count != 1U || !src->outputs ||
         !src->inputs || src->label_count || src->register_clobber_count ||
         src->clobber_count != (src->has_memory_clobber ? 1U : 0U) ||
-        !target_constraint_is(&src->outputs[0], width == 1U ? "=q" : "=r") ||
+        !target_constraint_is(&src->outputs[0],
+            x86_linux_compact_asm_equals(
+                src->template_text, src->template_length, "movb%1,%%al")
+                ? "=a" : (width == 1U ? "=q" : "=r")) ||
         !target_constraint_is(&src->inputs[0], "m")) return false;
     output = minic_c0_program_expression(program, src->outputs[0].expression);
     memory = minic_c0_program_expression(program, src->inputs[0].expression);
@@ -1244,6 +1263,163 @@ bool minic_x86_64_linux_kaslr_mul_form(const char *text, size_t length) {
     return x86_linux_compact_asm_equals(text, length, "mulq%3");
 }
 
+bool minic_x86_64_linux_muldiv_u64_form(const char *text, size_t length) {
+    return x86_linux_compact_asm_equals(text, length, "mulq%2;divq%3");
+}
+
+static bool x86_linux_is_u64_type(MinicType type) {
+    MinicType unqualified;
+    return minic_type_unqualified(type, &unqualified) &&
+           (minic_type_equal(unqualified, minic_type_unsigned_long()) ||
+            minic_type_equal(unqualified, minic_type_unsigned_long_long()));
+}
+
+/* Linux include/linux/math64.h: mul_u64_u64_div_u64 uses one RAX result,
+ * three genuine input values and the explicit RDX clobber. A 128-bit
+ * intermediate is mandatory: (a * mul) / div cannot be truncated to u64. */
+static bool x86_linux_muldiv_u64_source(
+    const MinicC0Program *program, const MinicInlineAsm *source,
+    MinicTargetInlineAsmContract *contract) {
+    const char *const constraints[] = {"=a", "a", "rm", "rm"};
+    size_t i;
+    if (!program || !source || !contract ||
+        !minic_x86_64_linux_muldiv_u64_form(
+            source->template_text, source->template_length) ||
+        source->is_volatile || source->is_goto || source->label_count ||
+        source->output_count != 1U || source->input_count != 3U ||
+        !source->outputs || !source->inputs || source->has_memory_clobber ||
+        source->clobber_count != 1U || source->register_clobber_count != 1U ||
+        !source->register_clobbers ||
+        source->register_clobbers[0].name_length != 3U ||
+        memcmp(source->register_clobbers[0].name, "rdx", 3U) != 0)
+        return false;
+    for (i = 0U; i < 4U; ++i) {
+        const MinicInlineAsmOperand *op = i == 0U ?
+            &source->outputs[0] : &source->inputs[i - 1U];
+        const MinicExpression *expr;
+        if (!target_constraint_is(op, constraints[i]) ||
+            op->access != (i == 0U ? MINIC_INLINE_ASM_OPERAND_WRITE_ONLY :
+                           MINIC_INLINE_ASM_OPERAND_READ_ONLY)) return false;
+        expr = minic_c0_program_expression(program, op->expression);
+        if (!expr || (i == 0U && expr->value_category != MINIC_VALUE_LVALUE) ||
+            (i == 0U && minic_type_is_const(expr->type)) ||
+            !x86_linux_is_u64_type(expr->type)) return false;
+        contract->kinds[i] = i == 0U ?
+            MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
+            MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    }
+    contract->operand_count = 4U;
+    return true;
+}
+
+/* Linux drivers/char/hw_random/via-rng.c: PadLock's XSTORE instruction
+ * writes through EDI, returns a count in EAX and advances EDX/EDI. The
+ * =m(*addr) alias is not an independent address: the +D output MUST be
+ * the same source pointer lvalue or hardware would update the wrong object. */
+bool minic_x86_64_linux_via_xstore_form(const char *text, size_t length) {
+    return x86_linux_compact_asm_equals(
+        text, length, ".byte0x0F,0xA7,0xC0/*xstore%%edi(addr=%0)*/");
+}
+
+bool minic_x86_64_linux_zstd_p2align_form(const char *text, size_t length) {
+    /* Linux lib/zstd/decompress/zstd_decompress_block.c demands a 64-byte
+     * instruction alignment at an inner loop entry. Whitelist this exact
+     * assembler directive; never transport arbitrary basic-asm text. */
+    return x86_linux_compact_asm_equals(text, length, ".p2align6");
+}
+
+/* 6.6 arch/x86/include/asm/kexec.h crash_setup_regs() stores 16-bit CPU
+ * segment selectors through GNU's fixed EAX output into unsigned long
+ * pt_regs slots. MOVL to EAX must clear the high 32 bits of RAX. */
+unsigned int minic_x86_64_linux_crash_segment_snapshot_form(
+    const char *text, size_t length) {
+    static const char *const selectors[] = {"ss", "cs", "ds", "es", "fs", "gs"};
+    char expected[32];
+    size_t i;
+    for (i = 0U; i < sizeof(selectors)/sizeof(selectors[0]); ++i) {
+        int n = snprintf(expected, sizeof(expected),
+                         "movl%%%%%s,%%%%eax;", selectors[i]);
+        if (n > 0 && (size_t)n < sizeof(expected) &&
+            x86_linux_compact_asm_equals(text, length, expected))
+            return (unsigned int)i + 1U;
+    }
+    return 0U;
+}
+
+static bool x86_linux_crash_segment_snapshot_source(
+    const MinicC0Program *program, const MinicInlineAsm *source,
+    MinicTargetInlineAsmContract *contract) {
+    const MinicExpression *output;
+    MinicType type;
+    if (!program || !source || !contract ||
+        !minic_x86_64_linux_crash_segment_snapshot_form(
+            source->template_text, source->template_length) ||
+        !source->is_volatile || source->is_goto || source->label_count ||
+        source->output_count != 1U || source->input_count || !source->outputs ||
+        source->clobber_count || source->has_memory_clobber ||
+        source->register_clobber_count ||
+        !target_constraint_is(&source->outputs[0], "=a") ||
+        source->outputs[0].access != MINIC_INLINE_ASM_OPERAND_WRITE_ONLY)
+        return false;
+    output = minic_c0_program_expression(program, source->outputs[0].expression);
+    if (!output || output->value_category != MINIC_VALUE_LVALUE ||
+        minic_type_is_const(output->type) ||
+        !minic_type_unqualified(output->type, &type) ||
+        !minic_type_equal(type, minic_type_unsigned_long())) return false;
+    contract->operand_count = 1U;
+    contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+    return true;
+}
+
+static bool x86_linux_via_xstore_source(
+    const MinicC0Program *program, const MinicInlineAsm *source,
+    MinicTargetInlineAsmContract *contract) {
+    const char *const constraints[] = {"=m", "=a", "+d", "+D"};
+    const MinicExpression *expressions[4], *mem_base;
+    MinicType types[4], pointee;
+    size_t i;
+    if (!program || !source || !contract ||
+        !minic_x86_64_linux_via_xstore_form(
+            source->template_text, source->template_length) ||
+        source->is_volatile || source->is_goto || source->label_count ||
+        source->output_count != 4U || source->input_count ||
+        !source->outputs || source->clobber_count ||
+        source->has_memory_clobber || source->register_clobber_count)
+        return false;
+    for (i = 0U; i < 4U; ++i) {
+        const MinicInlineAsmOperand *op = &source->outputs[i];
+        if (!target_constraint_is(op, constraints[i]) ||
+            op->access != (i < 2U ? MINIC_INLINE_ASM_OPERAND_WRITE_ONLY :
+                           MINIC_INLINE_ASM_OPERAND_READ_WRITE)) return false;
+        expressions[i] = minic_c0_program_expression(program, op->expression);
+        if (!expressions[i] ||
+            expressions[i]->value_category != MINIC_VALUE_LVALUE ||
+            minic_type_is_const(expressions[i]->type) ||
+            !minic_type_unqualified(expressions[i]->type, &types[i]))
+            return false;
+    }
+    if (!minic_type_equal(types[0], minic_type_unsigned_int()) ||
+        !minic_type_equal(types[1], minic_type_unsigned_int()) ||
+        !minic_type_equal(types[2], minic_type_unsigned_int()) ||
+        !minic_type_pointee(types[3], &pointee) ||
+        !minic_type_equal(pointee, minic_type_unsigned_int()) ||
+        expressions[0]->kind != MINIC_EXPRESSION_DEREFERENCE ||
+        expressions[3]->kind != MINIC_EXPRESSION_LOCAL)
+        return false;
+    mem_base = minic_c0_program_expression(
+        program, expressions[0]->value.unary.operand);
+    if (!mem_base || mem_base->kind != MINIC_EXPRESSION_LOCAL ||
+        mem_base->value.local_id != expressions[3]->value.local_id)
+        return false;
+    contract->operand_count = 4U;
+    contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT;
+    contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+    contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE;
+    contract->kinds[3] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE;
+    contract->implicit_memory_effect = true;
+    return true;
+}
+
 static bool x86_linux_kaslr_mul_source(
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
@@ -1268,8 +1444,8 @@ static bool x86_linux_kaslr_mul_source(
         expr = minic_c0_program_expression(program, op->expression);
         if (!expr || (i < 2U && expr->value_category != MINIC_VALUE_LVALUE) ||
             (i < 2U && minic_type_is_const(expr->type)) ||
-            !minic_type_unqualified(expr->type, &type) ||
-            !minic_type_equal(type, minic_type_unsigned_long())) return false;
+        !minic_type_unqualified(expr->type, &type) ||
+        !x86_linux_is_u64_type(type)) return false;
         contract->kinds[i] = i < 2U ?
             MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
             MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
@@ -5317,7 +5493,7 @@ static bool x86_linux_segment_read_source(
            * with an unsigned 32-bit fsave->fos lvalue. GAS accepts the
            * 32-bit GPR destination and zero-extends the selector; the C
            * storage width, not the bare assembly mnemonic, owns the store. */
-          (form <= 2U && minic_type_equal(
+          ((form <= 2U || form >= 7U) && minic_type_equal(
               plain, minic_type_unsigned_int()))))
         return false;
     contract->operand_count = 1U;
@@ -7730,6 +7906,12 @@ bool minic_x86_64_qualify_inline_asm(
     if (x86_linux_gen_endbr_source(program, source, contract))
         return true;
     if (x86_linux_kaslr_mul_source(program, source, contract))
+        return true;
+    if (x86_linux_muldiv_u64_source(program, source, contract))
+        return true;
+    if (x86_linux_via_xstore_source(program, source, contract))
+        return true;
+    if (x86_linux_crash_segment_snapshot_source(program, source, contract))
         return true;
     if (x86_linux_task_control_source(program, source, contract))
         return true;

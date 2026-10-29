@@ -19,6 +19,8 @@ prefix = (
     ".inst (0xd5000000|(\\sreg)|(.L__gpr_num_\\rt))\n"
     "\t.endm\n"
 )
+read_prefix = prefix.replace("msr_s, sreg, rt", "mrs_s, rt, sreg").replace(
+    "0xd5000000", "0xd5200000")
 # From kernel arch/arm64/tools/sysreg, arch/arm64/include/asm/sysreg.h.
 regs = [
     ("HFGRTR_EL2",3,4,1,1,4),("HFGWTR_EL2",3,4,1,1,5),
@@ -30,6 +32,9 @@ regs = [
     ("APDAKEYLO_EL1",3,0,2,2,0),("APDAKEYHI_EL1",3,0,2,2,1),
     ("APDBKEYLO_EL1",3,0,2,2,2),("APDBKEYHI_EL1",3,0,2,2,3),
     ("APGAKEYLO_EL1",3,0,2,3,0),("APGAKEYHI_EL1",3,0,2,3,1),
+    # Linux KVM __kvm_skip_instr and kvm_skip_host_instr restore the
+    # architectural SPSR/ELR state through genuine GNU MSR_S macro forms.
+    ("SPSR_EL1",3,0,4,0,0),("ELR_EL1",3,0,4,0,1),
 ]
 with open(sys.argv[1], "w") as out:
     for name, *fields in regs:
@@ -40,11 +45,20 @@ with open(sys.argv[1], "w") as out:
         out.write("void kvm_%s(unsigned long long value) {\n" % name)
         out.write("  __asm__ __volatile__(%s : : \"rZ\"(value));\n" % json.dumps(template))
         out.write("}\n")
+        if name in ("SPSR_EL1", "ELR_EL1"):
+            read_template = (read_prefix + "\tmrs_s %0, " + encoded +
+                             "\n\t.purgem\tmrs_s\n")
+            out.write("unsigned long long read_%s(void) {\n" % name)
+            out.write("  unsigned long long value;\n")
+            out.write("  __asm__ __volatile__(%s : \"=r\"(value));\n" %
+                      json.dumps(read_template))
+            out.write("  return value;\n}\n")
 PY
 "$mini" --target=aarch64-linux -S "$work/kvm.i" -o "$work/kvm.s"
-test "$(grep -Ec '^  \.inst 0xd51[0-9a-f]{5}$' "$work/kvm.s")" -eq 17
-test "$(grep -Fc 'ldr x9, [sp,' "$work/kvm.s")" -ge 17
-echo 'AARCH64_KVM_ENCODED_SYSREG=PASS hypervisor=7 pauth=10 physical_MSR=17'
+test "$(grep -Ec '^  \.inst 0xd51[0-9a-f]{5}$' "$work/kvm.s")" -eq 19
+test "$(grep -Ec '^  \.inst 0xd53[0-9a-f]{5}$' "$work/kvm.s")" -eq 2
+test "$(grep -Fc 'ldr x9, [sp,' "$work/kvm.s")" -ge 19
+echo 'AARCH64_KVM_ENCODED_SYSREG=PASS hypervisor=7 pauth=10 SPSR_EL1+ELR_EL1=2 MSR=19 MRS=2'
 
 if command -v aarch64-linux-gnu-gcc >/dev/null 2>&1; then
   aarch64-linux-gnu-gcc -c -x assembler "$work/kvm.s" -o "$work/kvm.o"

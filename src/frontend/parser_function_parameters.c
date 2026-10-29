@@ -7,14 +7,16 @@
 #include <string.h>
 /* Function signatures, formal parameter grammar and parameter type adjustment. */
 
-bool minic_parser_function_signature_matches(const MinicFunction *function,
+bool minic_parser_function_signature_matches(const MinicC0Program *program,
+                                             const MinicFunction *function,
                                              MinicType return_type,
                                              const MinicType *parameter_types,
                                              size_t parameter_count,
                                              bool is_variadic) {
     size_t parameter_index;
 
-    if (function == NULL || !minic_type_equal(function->return_type, return_type) ||
+    if (program == NULL || function == NULL ||
+        !minic_c0_types_compatible(program, function->return_type, return_type) ||
         function->parameter_count != parameter_count || function->is_variadic != is_variadic) {
         return false;
     }
@@ -22,7 +24,8 @@ bool minic_parser_function_signature_matches(const MinicFunction *function,
         MinicType parameter_type;
 
         if (!minic_type_unqualified(parameter_types[parameter_index], &parameter_type) ||
-            !minic_type_equal(function->parameter_types[parameter_index], parameter_type)) {
+            !minic_c0_types_compatible(program,
+                function->parameter_types[parameter_index], parameter_type)) {
             return false;
         }
     }

@@ -8,17 +8,26 @@ trap 'rm -rf "$d"' EXIT
 cat >"$d/mini.i" <<'EOF'
 void mini_mul(unsigned long x, unsigned long y,
               unsigned long *low, unsigned long *high) {
+    const unsigned long mix_const = y;
     unsigned long random = x, raw;
     asm("mulq %3" : "=a" (random), "=d" (raw)
-                 : "a" (random), "rm" (y));
+                 : "a" (random), "rm" (mix_const));
     *low = random;
     *high = raw;
 }
+unsigned long mini_kaslr_const(unsigned long input) {
+    const unsigned long mix_const = 0x5d6008cbf3848dd3UL;
+    unsigned long raw, random = input;
+    asm("mulq %3" : "=a"(random), "=d"(raw)
+                  : "a"(random), "rm"(mix_const));
+    return random + raw;
+}
 EOF
-sed 's/mini_mul/gnu_mul/g' "$d/mini.i" >"$d/gnu.c"
+sed -e 's/mini_mul/gnu_mul/g' -e 's/mini_kaslr_const/gnu_kaslr_const/g' "$d/mini.i" >"$d/gnu.c"
 cat >"$d/main.c" <<'EOF'
 extern void mini_mul(unsigned long, unsigned long, unsigned long *, unsigned long *);
 extern void gnu_mul(unsigned long, unsigned long, unsigned long *, unsigned long *);
+extern unsigned long mini_kaslr_const(unsigned long), gnu_kaslr_const(unsigned long);
 int main(void) {
     static const unsigned long values[] = {
         0, 1, 2, 0xffffffffffffffffUL, 0x5d6008cbf3848dd3UL,
@@ -32,6 +41,8 @@ int main(void) {
             gnu_mul(values[i], values[j], &gl, &gh);
             if (ml != gl || mh != gh) return 1;
         }
+    for (i = 0; i < sizeof(values)/sizeof(values[0]); ++i)
+        if (mini_kaslr_const(values[i]) != gnu_kaslr_const(values[i])) return 2;
     return 42;
 }
 EOF

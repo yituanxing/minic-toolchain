@@ -934,7 +934,8 @@ static bool parse_block_scope_function_declaration_after_head(
     if (function_id != MINIC_FUNCTION_INVALID) {
         existing_function = minic_c0_program_function(parser->program, function_id);
         if (!minic_parser_function_signature_matches(
-                existing_function, return_type, parameter_types, parameter_count, is_variadic)) {
+                parser->program, existing_function, return_type,
+                parameter_types, parameter_count, is_variadic)) {
             minic_parser_error(parser, "conflicting block-scope function declaration");
             return false;
         }
@@ -1184,7 +1185,8 @@ bool minic_parser_local_decl_extern(MinicParser *parser) {
     if (function_id != MINIC_FUNCTION_INVALID) {
         existing_function = minic_c0_program_function(parser->program, function_id);
         if (!minic_parser_function_signature_matches(
-                existing_function, return_type, parameter_types, parameter_count, is_variadic)) {
+                parser->program, existing_function, return_type,
+                parameter_types, parameter_count, is_variadic)) {
             minic_parser_error(parser, "conflicting block-scope extern function declaration");
             return false;
         }

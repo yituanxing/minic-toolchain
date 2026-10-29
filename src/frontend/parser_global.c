@@ -267,6 +267,34 @@ static bool merge_extern_object_declaration(MinicParser *parser,
     }
 }
 
+/* The first declarator of `extern T (*hooks[])(void);` is built by the
+ * function-declarator parser before this declaration-list transaction starts.
+ * A duplicate declaration keeps the canonical object type; retire the
+ * otherwise ownerless fresh array descriptor just as the suffix parser does
+ * for subsequent declarators. A typedef/shared descriptor must survive. */
+static bool discard_unowned_first_extern_array_candidate(MinicC0Program *program,
+                                                         MinicType declared_type) {
+    size_t index;
+
+    if (program == NULL || !minic_type_is_array(declared_type) ||
+        declared_type.array_type_id + 1U != program->array_type_count) {
+        return true;
+    }
+    for (index = 0U; index < program->type_alias_count; ++index) {
+        if (minic_type_is_array(program->type_aliases[index].type) &&
+            program->type_aliases[index].type.array_type_id == declared_type.array_type_id) {
+            return true;
+        }
+    }
+    for (index = 0U; index < program->global_object_count; ++index) {
+        if (minic_type_is_array(program->global_objects[index].type) &&
+            program->global_objects[index].type.array_type_id == declared_type.array_type_id) {
+            return true;
+        }
+    }
+    return minic_c0_program_discard_last_array_type(program, declared_type);
+}
+
 bool minic_parser_declare_block_scope_extern_object(MinicParser *parser,
                                                     MinicSourceSpan name_span,
                                                     MinicType object_type,
@@ -353,6 +381,7 @@ bool minic_parser_parse_extern_global_after_head(MinicParser *parser,
         MinicGlobalObjectId declarator_alias_target;
         bool object_was_existing;
         bool is_array;
+        bool first_declarator_array;
         MinicType declarator_element_type;
         size_t array_type_begin;
 
@@ -373,6 +402,7 @@ bool minic_parser_parse_extern_global_after_head(MinicParser *parser,
             (void)memcpy(declarator_section_name, section_name, section_name_length + 1U);
         }
 
+        first_declarator_array = first_declarator;
         if (first_declarator) {
             name_span = first_name_span;
             object_type = first_object_type;
@@ -430,6 +460,11 @@ bool minic_parser_parse_extern_global_after_head(MinicParser *parser,
                 return false;
             }
             parser->program->array_type_count = array_type_begin;
+            if (first_declarator_array &&
+                !discard_unowned_first_extern_array_candidate(parser->program, object_type)) {
+                minic_parser_error(parser, "cannot retire merged extern array candidate");
+                return false;
+            }
         } else {
             MinicDeclarationExternalObjectAttributes attributes;
             MinicDeclarationExternalObjectCreateStatus create_status;

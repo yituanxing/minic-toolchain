@@ -192,20 +192,43 @@ static bool parse_parenthesized_function_typedef(MinicParser *parser,
                                                  MinicSourceSpan *name_span,
                                                  MinicType *aliased_type) {
     MinicParsedFunctionDeclarator declarator;
+    size_t attribute_index;
 
     if (parser == NULL || name_span == NULL || aliased_type == NULL ||
         !minic_parser_parse_parenthesized_function_declarator(parser, true, false, &declarator)) {
         return false;
     }
-    if (declarator.attributes.count != 0U) {
-        minic_parser_error(
-            parser,
-            "GNU attributes inside function pointer typedef declarators are not implemented yet");
-        return false;
-    }
     if (!minic_parser_build_function_declarator_type(
             parser, return_type, &declarator, aliased_type)) {
         minic_parser_error(parser, "cannot build function pointer typedef type");
+        return false;
+    }
+    for (attribute_index = 0U; attribute_index < declarator.attributes.count;
+         ++attribute_index) {
+        const MinicParsedAttribute *attribute = &declarator.attributes.values[attribute_index];
+        const MinicAttributeDescriptor *descriptor = attribute->descriptor;
+
+        /* EFI defines callbacks as `typedef R (__attribute__((ms_abi))
+         * *handler_t)(Args)`. Preserve this function-pointer ABI in the
+         * typedef's interned function type, rather than merely consuming the
+         * spelling. TargetInfo remains the authority for supported ABIs. */
+        if (descriptor != NULL && descriptor->kind == MINIC_ATTRIBUTE_MS_ABI &&
+            !attribute->has_arguments &&
+            minic_target_info_function_pointer_calling_convention_declaration_supported(
+                parser->target_info, MINIC_CALLING_CONVENTION_MS_X64) &&
+            minic_c0_program_function_pointer_with_calling_convention(
+                parser->program, *aliased_type, MINIC_CALLING_CONVENTION_MS_X64, aliased_type)) {
+            continue;
+        }
+        if (descriptor != NULL &&
+            minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_FUNCTION) &&
+            (descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_INFORMATIONAL ||
+             descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_DIAGNOSTIC ||
+             descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_OPTIMIZATION ||
+             descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_CONTROL_FLOW)) {
+            continue;
+        }
+        minic_parser_error(parser, "unsupported GNU attribute in function-pointer typedef");
         return false;
     }
     *name_span = declarator.name_span;

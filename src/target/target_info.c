@@ -921,11 +921,14 @@ bool minic_target_info_inline_asm_readwrite_hardreg_supported(
 
 bool minic_target_info_fixed_register_write_supported(
     const MinicTargetInfo *target, const char *name, size_t length) {
-    /* Original LoongArch Linux set_my_cpu_offset() writes only reserved r21.
-     * All other architectural registers are read-only until separately proven. */
+    /* Linux LoongArch relocates its initial thread_info through the reserved
+     * global register asm("$tp") alias. This is a genuine live TP assignment,
+     * not an ordinary ELF symbol store. The independent per-CPU $r21 alias
+     * remains writable. SP and all compiler temporary registers are not. */
     return target != NULL && name != NULL &&
            target->architecture == MINIC_TARGET_ARCH_LOONGARCH64 &&
-           length == 4U && memcmp(name, "$r21", 4U) == 0;
+           ((length == 4U && memcmp(name, "$r21", 4U) == 0) ||
+            (length == 3U && memcmp(name, "$tp", 3U) == 0));
 }
 
 bool minic_target_info_local_fixed_register_supported(const MinicTargetInfo *target,
@@ -969,6 +972,12 @@ bool minic_target_info_local_fixed_register_supported(const MinicTargetInfo *tar
                    target, name, name_length);
     }
     if (target->architecture == MINIC_TARGET_ARCH_AARCH64) {
+        /* Linux 6.6 current_stack_pointer is declared as a fixed `sp`
+         * register alias. The AArch64 machine owner already implements
+         * exactly its READ as `mov x9, sp`; no writes, stack adjustments,
+         * or arbitrary hard-register reservations are implied here. */
+        if (name_length == 2U && memcmp(name, "sp", 2U) == 0)
+            return true;
         /* AAPCS64 x0..x17 are the integer argument and caller-scratch
          * GPR names used by original GNU Linux C (e.g. syscall x8).
          * GNU arm64 SMCCC also spells the same physical register r0..r17
@@ -1076,7 +1085,10 @@ bool minic_target_info_inline_asm_source_clobber_supported(
     if(!target||!name)return false;
     if(target->architecture==MINIC_TARGET_ARCH_X86_64 &&
        ((length==3U&&memcmp(name,"ebx",3U)==0)||
-        (length==3U&&memcmp(name,"rbx",3U)==0)))
+        (length==3U&&memcmp(name,"rbx",3U)==0)||
+        /* GNU x86 also accepts "flags" as the condition-code clobber.
+         * Source parsing alone grants no instruction/emitter permission. */
+        (length==5U&&memcmp(name,"flags",5U)==0)))
         return true;
     return minic_target_info_inline_asm_register_clobber_supported(
         target,name,length);

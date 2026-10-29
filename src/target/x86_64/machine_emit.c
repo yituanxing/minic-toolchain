@@ -309,6 +309,12 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
                 return false;
             return fputs(privileged[form - 1U], out) != EOF;
         }
+        if (a != NULL && minic_x86_64_linux_zstd_p2align_form(
+                a->template_text, a->template_length)) {
+            if (!a->is_volatile || a->is_goto || a->has_memory_clobber ||
+                a->register_clobber_count != 0U) return false;
+            return fputs("  .p2align 6\n", out) != EOF;
+        }
         if (a != NULL && minic_x86_64_linux_amx_tilerelease_form(
                 a->template_text, a->template_length)) {
             if (!a->is_volatile || a->is_goto || a->has_memory_clobber ||

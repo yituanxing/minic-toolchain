@@ -21,6 +21,11 @@ bool minic_aarch64_qualify_inline_asm(
 bool minic_aarch64_emit_qualified_structured_asm(
     FILE *, const MinicDirectLP64BlockContext *, const MinicCoreInstruction *);
 bool minic_aarch64_qualified_opaque_asm(const MinicCoreInlineAsm *);
+/* Exact zero-operand Linux KVM basic-asm alternative with feature metadata. */
+bool minic_aarch64_linux_barrier_alternative_opaque(
+    const MinicCoreInlineAsm *);
+bool minic_aarch64_emit_linux_barrier_alternative_opaque(
+    FILE *, const MinicCoreInlineAsm *);
 /* Bounded GNU .rept N/NOP/.endr from original GICv3 read-ordering erratum. */
 unsigned int minic_aarch64_linux_rept_nop_count(const char *, size_t);
 /* EL1 DAIF mask update with Linux's exact local_daif_mask annotation. */

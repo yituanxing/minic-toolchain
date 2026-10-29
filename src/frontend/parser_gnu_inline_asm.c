@@ -314,6 +314,13 @@ bool minic_parser_gnu_inline_asm_statement(MinicParser *parser) {
         free(template_text);
         return false;
     }
+    /* GNU *basic* asm has only a template, with no colon-separated operand
+     * sections. It is implicitly volatile even when the source omitted the
+     * modifier. Do not extend that inference to nonvolatile GNU *extended*
+     * asm: its operand/clobber contracts retain their original semantics. */
+    if (parser->current.kind == MINIC_TOKEN_RPAREN) {
+        is_volatile = true;
+    }
     if (!minic_c0_program_add_inline_asm(
             parser->program, template_text, template_length, is_volatile, false, &inline_asm_id) ||
         !minic_c0_program_set_inline_asm_goto(parser->program, inline_asm_id, is_goto)) {

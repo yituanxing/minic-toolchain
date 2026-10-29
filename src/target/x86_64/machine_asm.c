@@ -17,6 +17,13 @@ static bool clobber_is(const MinicCoreInlineAsmRegisterClobber *c,
            memcmp(c->name, name, len) == 0;
 }
 
+static bool x86_asm_u64_type(MinicType type) {
+    MinicType plain;
+    return minic_type_unqualified(type, &plain) &&
+           (minic_type_equal(plain, minic_type_unsigned_long()) ||
+            minic_type_equal(plain, minic_type_unsigned_long_long()));
+}
+
 /* Resolve a GNU `i` function-symbol operand exclusively from its Core SSA
  * definition. The target must emit CALL rel32 with a direct ELF relocation,
  * not load a runtime function pointer, invent a C call, or consult the AST. */
@@ -3389,9 +3396,8 @@ static bool emit_linux_segment_read(
         !minic_type_pointee(fn->values[op[0].value].type, &pointee))
         return false;
     wide = minic_type_equal(pointee, minic_type_unsigned_int());
-    if (wide ? (selector > 6U) :
-        !minic_type_equal(pointee, minic_type_unsigned_short()) ||
-        !short_selector)
+    if (!wide && (!minic_type_equal(pointee, minic_type_unsigned_short()) ||
+                  !short_selector))
         return false;
     /* x86-64 has no generic scalar-expression representation for the
      * segment selector register. The 16-bit caller observes exactly two
@@ -5354,6 +5360,111 @@ bool minic_x86_64_emit_structured_asm(
         }
     }
     {
+        if (minic_x86_64_linux_via_xstore_form(
+                info->template_text, info->template_length)) {
+            const MinicCoreStructuredInlineAsmOperand *b = bindings;
+            static const MinicCoreStructuredInlineAsmOperandKind expected[] = {
+                MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT,
+                MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT,
+                MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE,
+                MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE
+            };
+            if (!info->is_volatile || info->is_goto ||
+                !info->has_memory_clobber || info->register_clobber_count ||
+                ins->value.structured_inline_asm.operand_count != 4U)
+                return false;
+            for (i = 0U; i < 4U; ++i) {
+                MinicType output_type, pointee;
+                if (b[i].operand_index != i || b[i].kind != expected[i] ||
+                    b[i].early_clobber || b[i].has_fixed_register_binding ||
+                    b[i].value >= fn->value_count ||
+                    !minic_type_pointee(fn->values[b[i].value].type,
+                                        &output_type)) return false;
+                if (i == 3U) {
+                    if (!minic_type_pointee(output_type, &pointee) ||
+                        !minic_type_equal(pointee, minic_type_unsigned_int()))
+                        return false;
+                } else if (!minic_type_equal(
+                               output_type, minic_type_unsigned_int()))
+                    return false;
+            }
+            /* =m(*addr) is the XSTORE hardware write through the RDI
+             * pointer, not a synthetic C store. The paired +D(addr) is
+             * source-proven to alias that exact memory destination. */
+            return x86_value_load(out, frame, b[2].value, "%r11") &&
+                   fputs("  movl (%r11), %edx\n", out) != EOF &&
+                   x86_value_load(out, frame, b[3].value, "%r11") &&
+                   fputs("  movq (%r11), %rdi\n"
+                         "  .byte 0x0f, 0xa7, 0xc0\n", out) != EOF &&
+                   x86_value_load(out, frame, b[1].value, "%r11") &&
+                   fputs("  movl %eax, (%r11)\n", out) != EOF &&
+                   x86_value_load(out, frame, b[2].value, "%r11") &&
+                   fputs("  movl %edx, (%r11)\n", out) != EOF &&
+                   x86_value_load(out, frame, b[3].value, "%r11") &&
+                   fputs("  movq %rdi, (%r11)\n", out) != EOF;
+        }
+    }
+    {
+        const unsigned int segment =
+            minic_x86_64_linux_crash_segment_snapshot_form(
+                info->template_text, info->template_length);
+        if (segment) {
+            const MinicCoreStructuredInlineAsmOperand *b = bindings;
+            MinicType type;
+            static const char *const names[] = {
+                "%ss", "%cs", "%ds", "%es", "%fs", "%gs"
+            };
+            if (!info->is_volatile || info->is_goto ||
+                info->has_memory_clobber || info->register_clobber_count ||
+                ins->value.structured_inline_asm.operand_count != 1U ||
+                b[0].operand_index != 0U ||
+                b[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
+                b[0].early_clobber || b[0].has_fixed_register_binding ||
+                b[0].value >= fn->value_count ||
+                !minic_type_pointee(fn->values[b[0].value].type, &type) ||
+                !minic_type_equal(type, minic_type_unsigned_long()))
+                return false;
+            return fprintf(out, "  movl %s, %%eax\n", names[segment - 1U]) >= 0 &&
+                   x86_value_load(out, frame, b[0].value, "%r11") &&
+                   fputs("  movq %rax, (%r11)\n", out) != EOF;
+        }
+    }
+    {
+        if (minic_x86_64_linux_muldiv_u64_form(
+                info->template_text, info->template_length)) {
+            const MinicCoreStructuredInlineAsmOperand *b = bindings;
+            if (!info->is_volatile || info->is_goto ||
+                info->has_memory_clobber || info->register_clobber_count != 1U ||
+                !clobber_is(&info->register_clobbers[0], "rdx") ||
+                ins->value.structured_inline_asm.operand_count != 4U)
+                return false;
+            for (i = 0U; i < 4U; ++i) {
+                MinicType type;
+                if (b[i].operand_index != i || b[i].early_clobber ||
+                    b[i].has_fixed_register_binding ||
+                    b[i].kind != (i == 0U ?
+                        MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
+                        MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
+                    b[i].value >= fn->value_count ||
+                    (i == 0U ?
+                        (!minic_type_pointee(fn->values[b[i].value].type,
+                                            &type) || !x86_asm_u64_type(type)) :
+                        !x86_asm_u64_type(fn->values[b[i].value].type)))
+                    return false;
+            }
+            /* Preserve the complete unsigned 128-bit RDX:RAX dividend.
+             * DIVQ consumes that pair and traps on zero/quotient overflow;
+             * never truncate between MULQ and DIVQ or invent div-by-zero
+             * behavior. GNU's rdx clobber declares this implicit output. */
+            return x86_value_load(out, frame, b[1].value, "%rax") &&
+                   x86_value_load(out, frame, b[2].value, "%r10") &&
+                   x86_value_load(out, frame, b[3].value, "%r11") &&
+                   fputs("  mulq %r10\n  divq %r11\n", out) != EOF &&
+                   x86_value_load(out, frame, b[0].value, "%r10") &&
+                   fputs("  movq %rax, (%r10)\n", out) != EOF;
+        }
+    }
+    {
         if (minic_x86_64_linux_kaslr_mul_form(
                 info->template_text, info->template_length)) {
             const MinicCoreStructuredInlineAsmOperand *b = bindings;
@@ -5371,9 +5482,8 @@ bool minic_x86_64_emit_structured_asm(
                     b[i].value >= fn->value_count ||
                     (i < 2U ?
                         (!minic_type_pointee(fn->values[b[i].value].type, &type) ||
-                         !minic_type_equal(type, minic_type_unsigned_long())) :
-                        !minic_type_equal(fn->values[b[i].value].type,
-                                          minic_type_unsigned_long())))
+                         !x86_asm_u64_type(type)) :
+                        !x86_asm_u64_type(fn->values[b[i].value].type)))
                     return false;
             }
             /* RAX*operand yields the 128-bit product in RDX:RAX. Store

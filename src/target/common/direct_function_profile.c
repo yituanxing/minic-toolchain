@@ -38,6 +38,23 @@ MinicDirectLP64ProfileResult minic_multi_direct_lp64_profile_function(
             }
         }
     }
+    /* The incoming ABI classifier is the source of truth for consumed
+     * register/stack slots. One fixed record can occupy two GARs, a fixed
+     * floating argument can occupy an FAR, and a hidden indirect result
+     * consumes the first LoongArch GAR. Counting C parameters as GARs
+     * would position va_start at the wrong byte address. */
+    for (i = 0U; i < fn->parameter_count; ++i) {
+        size_t record_size, record_slots;
+        if (!minic_lp64_valid_parameter_type(program, target, fn->parameter_types[i]) &&
+            !minic_multi_empty_record(program, target, fn->parameter_types[i]) &&
+            !minic_multi_gp_record(program, target, fn->parameter_types[i],
+                                   &record_size, &record_slots) &&
+            !indirect_record(program, target, fn->parameter_types[i], &record_size))
+            return MINIC_DIRECT_LP64_PROFILE_PARAMETER_SHAPE;
+    }
+    if (!minic_lp64_plan_incoming_parameters(
+            program, target, fn, abi, indirect_record, incoming))
+        return MINIC_DIRECT_LP64_PROFILE_PARAMETER_SHAPE;
     if (abi == MINIC_LP64_ABI_AAPCS64) {
         size_t starts = 0U, cursors = 0U;
         for (i = 0U; i < fn->instruction_count; ++i) {
@@ -53,22 +70,39 @@ MinicDirectLP64ProfileResult minic_multi_direct_lp64_profile_function(
             (starts != 0U &&
              (profile->fixed_gp_count > 8U || profile->fixed_fp_count > 8U)))
             return MINIC_DIRECT_LP64_PROFILE_VARIADIC_SHAPE;
-    } else if (profile->variadic_address_count != 0U &&
-               (!decl->is_variadic || profile->variadic_address_count != 1U ||
-                profile->fixed_gp_count > 8U || profile->fixed_fp_count > 8U))
-        return MINIC_DIRECT_LP64_PROFILE_VARIADIC_SHAPE;
-
-    for (i = 0U; i < fn->parameter_count; ++i) {
-        size_t record_size, record_slots;
-        if (!minic_lp64_valid_parameter_type(program, target, fn->parameter_types[i]) &&
-            !minic_multi_empty_record(program, target, fn->parameter_types[i]) &&
-            !minic_multi_gp_record(program, target, fn->parameter_types[i],
-                                   &record_size, &record_slots) &&
-            !indirect_record(program, target, fn->parameter_types[i], &record_size))
-            return MINIC_DIRECT_LP64_PROFILE_PARAMETER_SHAPE;
+    } else if (profile->variadic_address_count != 0U) {
+        size_t starts = 0U, cursors = 0U, consumed_gp = 0U;
+        size_t indirect_bytes = 0U;
+        const bool hidden_indirect_result =
+            minic_type_is_record(fn->return_type) &&
+            indirect_record(program, target, fn->return_type,
+                            &indirect_bytes) && indirect_bytes > 16U;
+        consumed_gp = hidden_indirect_result ? 1U : 0U;
+        for (i = 0U; i < incoming->argument_count; ++i) {
+            const MinicLP64ArgumentLocation *loc = &incoming->arguments[i];
+            if (loc->gp_registers != 0U &&
+                loc->gp_first + loc->gp_registers > consumed_gp)
+                consumed_gp = loc->gp_first + loc->gp_registers;
+        }
+        /* Once fixed parameters spill, the GP register save bank ends at
+         * the entry stack pointer, followed by the caller's contiguous
+         * stack slots. The pointer may legitimately be past all eight GARs. */
+        profile->fixed_gp_count = incoming->stack_slots != 0U
+            ? 8U + incoming->stack_slots : consumed_gp;
+        for (i = 0U; i < fn->instruction_count; ++i) {
+            const MinicCoreInstruction *ins = &fn->instructions[i];
+            if (ins->kind != MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS)
+                continue;
+            ++cursors;
+            if (!ins->value.variadic_address.copy_destination) ++starts;
+        }
+        /* LP64D uses independent scalar pointer cursors, not AAPCS64's
+         * mutable 32-byte va_list state. Multiple GNU va_start executions
+         * are valid and each receives the same ABI starting address.
+         * A Core ABI-state va_copy must never be confused with va_start. */
+        if (!decl->is_variadic || cursors != profile->variadic_address_count ||
+            starts != cursors || starts == 0U)
+            return MINIC_DIRECT_LP64_PROFILE_VARIADIC_SHAPE;
     }
-    if (!minic_lp64_plan_incoming_parameters(
-            program, target, fn, abi, indirect_record, incoming))
-        return MINIC_DIRECT_LP64_PROFILE_PARAMETER_SHAPE;
     return MINIC_DIRECT_LP64_PROFILE_OK;
 }

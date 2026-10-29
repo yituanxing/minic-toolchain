@@ -289,6 +289,19 @@ minic_c0_array_shapes_compatible(const MinicC0Program *program, MinicType left, 
     if (left_array == NULL || right_array == NULL) {
         return false;
     }
+    /* Array bounds are part of structural compatibility, but their element
+     * qualifiers must remain invariant at every nesting level. In particular,
+     * T (*)[4] and const T (*)[4] are incompatible C function parameter
+     * types; the ordinary top-level unqualification in
+     * minic_c0_types_compatible() must not erase this nested distinction. */
+    if (left_array->element_type.base_qualifiers !=
+            right_array->element_type.base_qualifiers ||
+        left_array->element_type.pointer_qualifiers !=
+            right_array->element_type.pointer_qualifiers ||
+        left_array->element_type.pointer_volatile_qualifiers !=
+            right_array->element_type.pointer_volatile_qualifiers) {
+        return false;
+    }
     if (left_array->element_count != right_array->element_count ||
         left_array->is_zero_length != right_array->is_zero_length) {
         /* ISO C compatible-array rule: a bound can be completed by its
@@ -308,6 +321,51 @@ minic_c0_array_shapes_compatible(const MinicC0Program *program, MinicType left, 
     }
     return minic_c0_types_compatible(program, left_array->element_type,
                                     right_array->element_type);
+}
+
+/* Equality of pointers to arrays of scalar/record objects can form the
+ * usual C composite-qualified pointed-to type. This is intentionally
+ * narrower than function signature compatibility (which must preserve
+ * nested element qualifiers), and never crosses an additional pointer or
+ * array level: int (*)[] == const int (*)[] is valid, while int *(*)[] ==
+ * const int *(*)[] is not. */
+static bool minic_c0_array_pointer_qualified_equality_compatible(
+    const MinicC0Program *program, MinicType left, MinicType right) {
+    const MinicArrayType *left_array;
+    const MinicArrayType *right_array;
+    MinicType left_element;
+    MinicType right_element;
+    bool left_incomplete;
+    bool right_incomplete;
+
+    if (program == NULL || !minic_type_is_pointer(left) || !minic_type_is_pointer(right) ||
+        left.base_kind != MINIC_TYPE_BASE_ARRAY || right.base_kind != MINIC_TYPE_BASE_ARRAY ||
+        left.pointer_depth != right.pointer_depth ||
+        left.pointer_qualifiers != right.pointer_qualifiers ||
+        left.pointer_volatile_qualifiers != right.pointer_volatile_qualifiers) {
+        return false;
+    }
+    left_array = minic_c0_program_array_type(program, left.array_type_id);
+    right_array = minic_c0_program_array_type(program, right.array_type_id);
+    if (left_array == NULL || right_array == NULL || left_array->is_zero_length !=
+            right_array->is_zero_length) {
+        return false;
+    }
+    left_incomplete = left_array->element_count == 0U && !left_array->is_zero_length;
+    right_incomplete = right_array->element_count == 0U && !right_array->is_zero_length;
+    if (left_array->element_count != right_array->element_count &&
+        !left_incomplete && !right_incomplete) {
+        return false;
+    }
+    left_element = left_array->element_type;
+    right_element = right_array->element_type;
+    if (minic_type_is_pointer(left_element) || minic_type_is_pointer(right_element) ||
+        minic_type_is_array(left_element) || minic_type_is_array(right_element) ||
+        !minic_type_unqualified(left_element, &left_element) ||
+        !minic_type_unqualified(right_element, &right_element)) {
+        return false;
+    }
+    return minic_type_equal(left_element, right_element);
 }
 
 bool minic_c0_types_compatible(const MinicC0Program *program, MinicType left, MinicType right) {
@@ -1993,7 +2051,9 @@ bool minic_c0_pointer_equality_compatible(const MinicC0Program *program,
         (minic_type_is_pointer(left->type) && minic_type_is_pointer(right->type) &&
          left->type.base_kind == MINIC_TYPE_BASE_ARRAY &&
          right->type.base_kind == MINIC_TYPE_BASE_ARRAY &&
-         minic_c0_types_compatible(program, left->type, right->type)) ||
+         (minic_c0_types_compatible(program, left->type, right->type) ||
+          minic_c0_array_pointer_qualified_equality_compatible(
+              program, left->type, right->type))) ||
         (minic_type_is_pointer(left->type) && minic_type_is_pointer(right->type) &&
          minic_c0_gnu_void_function_pointer_assignment_compatible(left->type, right->type))) {
         return true;

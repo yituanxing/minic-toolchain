@@ -1146,7 +1146,8 @@ static bool record_function_declaration_entity(MinicParser *parser,
     if (function_id != MINIC_FUNCTION_INVALID) {
         existing_function = minic_c0_program_function(parser->program, function_id);
         if (!minic_parser_function_signature_matches(
-                existing_function, return_type, parameter_types, parameter_count, is_variadic) ||
+                parser->program, existing_function, return_type,
+                parameter_types, parameter_count, is_variadic) ||
             (!existing_function->is_internal && is_internal)) {
             minic_parser_error(parser, "conflicting function declaration");
             return false;
@@ -1963,7 +1964,8 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     if (function_id != MINIC_FUNCTION_INVALID) {
         existing_function = minic_c0_program_function(parser->program, function_id);
         if (!minic_parser_function_signature_matches(
-                existing_function, return_type, parameter_types, parameter_count, is_variadic) ||
+                parser->program, existing_function, return_type,
+                parameter_types, parameter_count, is_variadic) ||
             (!existing_function->is_internal && is_internal)) {
             minic_parser_error(parser, "conflicting function declaration");
             return false;

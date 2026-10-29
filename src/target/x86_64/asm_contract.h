@@ -102,6 +102,12 @@ bool minic_x86_64_linux_preempt_gs_dec_form(const char *, size_t);
 bool minic_x86_64_linux_gen_endbr_form(const char *, size_t);
 /* Circular 64x64->128 multiply from arch/x86/lib/kaslr.c. */
 bool minic_x86_64_linux_kaslr_mul_form(const char *, size_t);
+bool minic_x86_64_linux_muldiv_u64_form(const char *, size_t);
+/* VIA PadLock XSTORE four-output (memory, eax, edx, edi) contract. */
+bool minic_x86_64_linux_via_xstore_form(const char *, size_t);
+/* ZSTD basic GNU ASM alignment directive, with no operand side effects. */
+bool minic_x86_64_linux_zstd_p2align_form(const char *, size_t);
+unsigned int minic_x86_64_linux_crash_segment_snapshot_form(const char *, size_t);
 unsigned int minic_x86_64_linux_xstate_fault_form(const char *, size_t);
 bool minic_x86_64_linux_xrstor_alternative_form(const char *, size_t);
 bool minic_x86_64_linux_xsave_triple_alternative_form(const char *, size_t);

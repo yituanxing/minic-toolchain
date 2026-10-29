@@ -392,6 +392,7 @@ bool minic_aarch64_qualified_opaque_asm(const MinicCoreInlineAsm *a) {
     size_t i, n = 0U;
     if (minic_aarch64_linux_jump_label_asm_goto_core(a)) return true;
     if (minic_aarch64_linux_cap_asm_goto_core(a)) return true;
+    if (minic_aarch64_linux_barrier_alternative_opaque(a)) return true;
     if (a != NULL && a->is_volatile && !a->is_goto &&
         a->register_clobber_count == 0U &&
         minic_aarch64_linux_daif_immediate_form(
@@ -918,24 +919,25 @@ static const char *const aarch64_atomic_store[] = {
  * patching, so split it only if EVERY section, relocation and .org token
  * matches Linux's native __ALTERNATIVE_CFG layout and the frozen LSE cap.
  * The two instruction bodies are subsequently checked by typed decoders. */
-static bool aarch64_linux_alt_lse_partition(
-    const char *text, size_t length,
+static bool aarch64_linux_alt_partition(
+    const char *text, size_t length, unsigned int cap,
     char *old_body, size_t old_size,
     char *new_body, size_t new_size) {
     static const char prefix[] = ".if1==1661:";
-    static const char middle[] =
-        "662:.pushsection.altinstructions,\"a\""
-        ".word661b-..word663f-..hword33"
-        ".byte662b-661b.byte664f-663f"
-        ".popsection.subsection1663:";
     static const char suffix[] =
         "664:.org.-(664b-663b)+(662b-661b)"
         ".org.-(662b-661b)+(664b-663b)"
         ".previous.endif";
-    char compact[900];
+    char compact[2200], middle[192];
     const char *boundary, *end;
     size_t i, n = 0U, left, right;
+    const int middle_length = snprintf(middle, sizeof(middle),
+        "662:.pushsection.altinstructions,\"a\""
+        ".word661b-..word663f-..hword%u"
+        ".byte662b-661b.byte664f-663f"
+        ".popsection.subsection1663:", cap);
     if (!text || !length || length >= sizeof(compact) ||
+        middle_length < 1 || (size_t)middle_length >= sizeof(middle) ||
         !old_body || !new_body) return false;
     for (i = 0U; i < length; ++i) {
         const char c = text[i];
@@ -944,7 +946,7 @@ static bool aarch64_linux_alt_lse_partition(
         compact[n++] = c;
     }
     compact[n] = '\0';
-    if (n <= sizeof(prefix) - 1U + sizeof(middle) - 1U +
+    if (n <= sizeof(prefix) - 1U + (size_t)middle_length +
                  sizeof(suffix) - 1U ||
         memcmp(compact, prefix, sizeof(prefix) - 1U) != 0 ||
         memcmp(compact + n - sizeof(suffix) + 1U,
@@ -954,36 +956,46 @@ static bool aarch64_linux_alt_lse_partition(
     if (!boundary) return false;
     end = compact + n - sizeof(suffix) + 1U;
     left = (size_t)(boundary - (compact + sizeof(prefix) - 1U));
-    right = (size_t)(end - (boundary + sizeof(middle) - 1U));
+    right = (size_t)(end - (boundary + (size_t)middle_length));
     if (!left || !right || left >= old_size || right >= new_size)
         return false;
     memcpy(old_body, compact + sizeof(prefix) - 1U, left);
     old_body[left] = '\0';
-    memcpy(new_body, boundary + sizeof(middle) - 1U, right);
+    memcpy(new_body, boundary + (size_t)middle_length, right);
     new_body[right] = '\0';
     return true;
 }
+static bool aarch64_linux_alt_lse_partition(
+    const char *text, size_t length,
+    char *old_body, size_t old_size,
+    char *new_body, size_t new_size) {
+    return aarch64_linux_alt_partition(text, length, 33U,
+                                       old_body, old_size,
+                                       new_body, new_size);
+}
 
-/* The enclosing emitter writes four or five original instructions before
- * calling this helper, then the same number of replacement instructions.
- * All field offsets are PREL32 and Linux's capability is ARM64_HAS_LSE_ATOMICS
- * (33 in its frozen tools/cpucaps list). Keep two .org length guards. */
-static bool aarch64_linux_alt_lse_emit_middle(FILE *out) {
+/* Every complete Linux alternative uses the same two PREL32 patch offsets
+ * and equal-length .org guards. The target-specific replacement may require
+ * an ISA extension (LSE feature 33), or use only base arm64 instructions
+ * (VHE alternate system-register access feature 50). */
+static bool aarch64_linux_alt_emit_middle(
+    FILE *out, unsigned int cap, bool uses_lse) {
+    if (!out || (cap != 33U && cap != 50U)) return false;
     return fprintf(out,
         "662:\n"
         "  .pushsection .altinstructions, \"a\"\n"
         "  .word 661b - .\n"
         "  .word 663f - .\n"
-        "  .hword 33\n"
+        "  .hword %u\n"
         "  .byte 662b - 661b\n"
         "  .byte 664f - 663f\n"
         "  .popsection\n"
         "  .subsection 1\n"
-        "663:\n"
-        "  .arch_extension lse\n") >= 0;
+        "663:\n", cap) >= 0 &&
+        (!uses_lse || fputs("  .arch_extension lse\n", out) != EOF);
 }
 
-static bool aarch64_linux_alt_lse_emit_end(FILE *out) {
+static bool aarch64_linux_alt_emit_end(FILE *out) {
     return fprintf(out,
         "664:\n"
         "  .org . - (664b-663b) + (662b-661b)\n"
@@ -1419,39 +1431,58 @@ static bool aarch64_linux_percpu_write_alternative_template(
     normalized[n] = '\0';
     return strcmp(normalized, expected) == 0;
 }
-/* arm64 erratum 1508412: the zero-operand alternative around PAR_EL1
- * accesses is a true CPU barrier, not a compiler-only memory fence. Linux
- * emits an original NOP and a feature-71 DMB SY replacement. Match the
- * entire GNU source, including both PREL32 offsets and equal-length .org
- * checks; admitting just the inner NOP would discard the runtime patch. */
-static bool aarch64_linux_par_erratum_barrier_template(
+/* Linux 6.6 arm64 KVM barrier alternatives: the feature-71
+ * workaround 1508412 replaces NOP by DMB SY around PAR_EL1; the feature-95
+ * stage-2 page-table update replaces NOP by ISB. Both must retain their
+ * original boot-time CPU patch records, two PREL32 offsets and both GNU
+ * equal-length .org guards. Match the *whole* instruction family, not an
+ * arbitrary replacement sequence or ignored compiler barrier. */
+typedef struct Aarch64LinuxBarrierAlternative {
+    unsigned int cap;
+    const char *new_instruction;
+} Aarch64LinuxBarrierAlternative;
+static const Aarch64LinuxBarrierAlternative aarch64_linux_barrier_alternatives[] = {
+    {71U, "dmbsy"},
+    {95U, "isb"}
+};
+static const Aarch64LinuxBarrierAlternative *aarch64_linux_barrier_alternative(
     const char *text, size_t length) {
-    static const char exact[] =
-        ".if1==1661:nop662:"
-        ".pushsection.altinstructions,\"a\""
-        ".word661b-..word663f-..hword71"
-        ".byte662b-661b.byte664f-663f"
-        ".popsection.subsection1663:dmbsy664:"
-        ".org.-(664b-663b)+(662b-661b)"
-        ".org.-(662b-661b)+(664b-663b)"
-        ".previous.endif";
-    char normalized[512];
-    size_t i, n = 0U;
+    char normalized[512], expected[512];
+    size_t i, n = 0U, k;
     if (!text || !length || length >= sizeof(normalized))
-        return false;
+        return NULL;
     for (i = 0U; i < length; ++i) {
         const char ch = text[i];
         if (ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r')
             continue;
         if (ch == '\0' || n + 1U >= sizeof(normalized))
-            return false;
+            return NULL;
         normalized[n++] = ch;
     }
     normalized[n] = '\0';
-    return strcmp(normalized, exact) == 0;
+    for (k = 0U; k < sizeof(aarch64_linux_barrier_alternatives) /
+                        sizeof(aarch64_linux_barrier_alternatives[0]); ++k) {
+        const Aarch64LinuxBarrierAlternative *form =
+            &aarch64_linux_barrier_alternatives[k];
+        const int count = snprintf(expected, sizeof(expected),
+            ".if1==1661:nop662:"
+            ".pushsection.altinstructions,\"a\""
+            ".word661b-..word663f-..hword%u"
+            ".byte662b-661b.byte664f-663f"
+            ".popsection.subsection1663:%s664:"
+            ".org.-(664b-663b)+(662b-661b)"
+            ".org.-(662b-661b)+(664b-663b)"
+            ".previous.endif",
+            form->cap, form->new_instruction);
+        if (count > 0 && (size_t)count < sizeof(expected) &&
+            strcmp(normalized, expected) == 0) return form;
+    }
+    return NULL;
 }
 
-static bool aarch64_linux_par_erratum_barrier_emit(FILE *out) {
+static bool aarch64_linux_barrier_alternative_emit(
+    FILE *out, const Aarch64LinuxBarrierAlternative *form) {
+    if (!form) return false;
     return out != NULL && fprintf(out,
         "  .if 1 == 1\n"
         "661:\n"
@@ -1460,18 +1491,164 @@ static bool aarch64_linux_par_erratum_barrier_emit(FILE *out) {
         "  .pushsection .altinstructions,\"a\"\n"
         "  .word 661b - .\n"
         "  .word 663f - .\n"
-        "  .hword 71\n"
+        "  .hword %u\n"
         "  .byte 662b - 661b\n"
         "  .byte 664f - 663f\n"
         "  .popsection\n"
         "  .subsection 1\n"
         "663:\n"
-        "  dmb sy\n"
+        "  %s\n"
         "664:\n"
         "  .org . - (664b-663b) + (662b-661b)\n"
         "  .org . - (662b-661b) + (664b-663b)\n"
         "  .previous\n"
-        "  .endif\n") >= 0;
+        "  .endif\n",
+        form->cap,
+        form->cap == 71U ? "dmb sy" : "isb") >= 0;
+}
+bool minic_aarch64_linux_barrier_alternative_opaque(
+    const MinicCoreInlineAsm *a) {
+    return a != NULL && a->is_volatile && !a->is_goto &&
+           a->register_clobber_count == 0U && !a->has_memory_clobber &&
+           aarch64_linux_barrier_alternative(
+               a->template_text, a->template_length) != NULL;
+}
+bool minic_aarch64_emit_linux_barrier_alternative_opaque(
+    FILE *out, const MinicCoreInlineAsm *a) {
+    return minic_aarch64_linux_barrier_alternative_opaque(a) &&
+           aarch64_linux_barrier_alternative_emit(out,
+               aarch64_linux_barrier_alternative(
+                   a->template_text, a->template_length));
+}
+static bool constraint(const MinicInlineAsmOperand *op, const char *word);
+/* Linux 6.6 KVM __translate_far_to_hpfar: AT S1E1R can trap while running
+ * at EL2. The original GNU inline assembly snapshots SPSR_EL2/ELR_EL2,
+ * issues AT, restores the exception state on its fixup path, and emits a
+ * two-PREL32 hyp exception-table record. Exactly this complete sequence is
+ * required: dropping the table or modelling AT as a normal read is unsafe. */
+static bool aarch64_linux_kvm_at_fixup_template(
+    const char *text, size_t length) {
+    static const char exact[] =
+        "mrs%1,spsr_el2mrs%2,elr_el21:ats1e1r,%3"
+        "isbb9f2:msrspsr_el2,%1msrelr_el2,%2mov%w0,%4"
+        "9:.pushsection__kvm_ex_table,\"a\""
+        ".align3.long(1b-.),(2b-.).popsection";
+    char compact[256];
+    size_t i, n = 0U;
+    if (!text || !length || length >= sizeof(compact)) return false;
+    for (i = 0U; i < length; ++i) {
+        const char c = text[i];
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
+        if (c == '\0' || n + 1U >= sizeof(compact)) return false;
+        compact[n++] = c;
+    }
+    compact[n] = '\0';
+    return strcmp(compact, exact) == 0;
+}
+
+static bool aarch64_linux_kvm_at_fixup_source(
+    const MinicC0Program *program, const MinicInlineAsm *src,
+    MinicTargetInlineAsmContract *contract) {
+    static const char *const output_constraint[] = {"+r", "=&r", "=&r"};
+    static const char *const input_constraint[] = {"r", "i"};
+    const MinicTargetInfo *target = minic_target_info_for_architecture(
+        MINIC_TARGET_ARCH_AARCH64);
+    MinicConstValue immediate;
+    size_t i;
+    if (!program || !src || !contract || !src->is_volatile || src->is_goto ||
+        !src->outputs || !src->inputs || src->output_count != 3U ||
+        src->input_count != 2U || src->label_count || src->clobber_count ||
+        src->register_clobber_count || src->has_memory_clobber ||
+        !aarch64_linux_kvm_at_fixup_template(
+            src->template_text, src->template_length)) return false;
+    for (i = 0U; i < 5U; ++i) {
+        const bool output = i < 3U;
+        const MinicInlineAsmOperand *operand = output ?
+            &src->outputs[i] : &src->inputs[i - 3U];
+        const MinicExpression *expr = minic_c0_program_expression(
+            program, operand->expression);
+        MinicType plain;
+        if (!constraint(operand, output ? output_constraint[i] :
+                        input_constraint[i - 3U]) || !expr ||
+            !minic_type_unqualified(expr->type, &plain) ||
+            (output && (expr->value_category != MINIC_VALUE_LVALUE ||
+                        minic_type_is_const(expr->type))) ||
+            (i == 0U || i == 4U ?
+                !aarch64_stlr_type(plain, 4U) :
+                !aarch64_linux_sysreg_u64_type(plain))) return false;
+        contract->kinds[i] = i == 0U ?
+            MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE :
+            output ? MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
+                     MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    }
+    /* The `i` operand in Linux's hyp exception fixup is -EFAULT (-14).
+     * Do not turn any run-time scalar into a GNU compile-time immediate. */
+    if (!target || !minic_const_eval_integer(
+            program, target, src->inputs[1].expression, &immediate) ||
+        (uint32_t)immediate.bits != UINT32_C(0xfffffff2)) return false;
+    contract->operand_count = 5U;
+    contract->implicit_memory_effect = true;
+    return true;
+}
+
+static bool aarch64_linux_kvm_at_fixup_emit(
+    FILE *out, const MinicDirectLP64BlockContext *ctx,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
+    const MinicCoreFunction *fn = ctx->fn;
+    const MinicCoreStructuredInlineAsmOperand *ops =
+        ins->value.structured_inline_asm.operands;
+    size_t i;
+    if (!out || !fn || !ops || !info || ctx->dynamic_frame ||
+        !info->is_volatile || info->is_goto ||
+        !info->has_memory_clobber || info->register_clobber_count ||
+        !aarch64_linux_kvm_at_fixup_template(
+            info->template_text, info->template_length) ||
+        ins->value.structured_inline_asm.operand_count != 5U)
+        return false;
+    for (i = 0U; i < 5U; ++i) {
+        const MinicCoreStructuredInlineAsmOperandKind expected = i == 0U ?
+            MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE :
+            i < 3U ? MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
+                     MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+        MinicType type;
+        if (ops[i].operand_index != i || ops[i].kind != expected ||
+            ops[i].has_fixed_register_binding ||
+            ops[i].value >= fn->value_count ||
+            !aarch64_linux_structured_spill_slot_valid(ops[i].value) ||
+            (i < 3U && !minic_type_pointee(
+                fn->values[ops[i].value].type, &type)) ||
+            (i >= 3U && !minic_type_unqualified(
+                fn->values[ops[i].value].type, &type)) ||
+            (i == 0U || i == 4U ?
+                !aarch64_stlr_type(type, 4U) :
+                !aarch64_linux_sysreg_u64_type(type))) return false;
+    }
+    return fprintf(out,
+        "  ldr x13, [sp, #%zu]\n"
+        "  ldr w9, [x13]\n"
+        "  ldr x14, [sp, #%zu]\n"
+        "  mrs x10, spsr_el2\n"
+        "  mrs x11, elr_el2\n"
+        "1: at s1e1r, x14\n"
+        "  isb\n"
+        "  b 9f\n"
+        "2: msr spsr_el2, x10\n"
+        "  msr elr_el2, x11\n"
+        "  mov w9, #-14\n"
+        "9:\n"
+        "  .pushsection __kvm_ex_table, \"a\"\n"
+        "  .align 3\n"
+        "  .long (1b - .), (2b - .)\n"
+        "  .popsection\n"
+        "  str w9, [x13]\n"
+        "  ldr x12, [sp, #%zu]\n"
+        "  str x10, [x12]\n"
+        "  ldr x12, [sp, #%zu]\n"
+        "  str x11, [x12]\n",
+        (size_t)ops[0].value * 8U,
+        (size_t)ops[3].value * 8U,
+        (size_t)ops[1].value * 8U,
+        (size_t)ops[2].value * 8U) >= 0;
 }
 /* AT S1E1R explicitly requests a stage-1 EL1 address translation and
  * updates PAR_EL1. The operand is a virtual address, not an ordinary load;
@@ -1492,8 +1669,6 @@ static bool aarch64_linux_at_s1e1r_template(
     normalized[n] = '\0';
     return strcmp(normalized, exact) == 0;
 }
-
-static bool constraint(const MinicInlineAsmOperand *op, const char *word);
 
 static bool aarch64_linux_at_s1e1r_source(
     const MinicC0Program *program, const MinicInlineAsm *source,
@@ -1965,6 +2140,128 @@ static bool aarch64_linux_encoded_sysreg_write_emit(
     return fprintf(out, "  ldr x9, [sp, #%zu]\n  .inst 0x%08x\n",
         (size_t)op->value * 8U,
         0xd5000000U | encoding | 9U) >= 0;
+}
+
+/* Linux KVM's VHE feature-50 alternative is an ALTERNATIVE around two full
+ * GNU .irp/.equ/.macro/.inst constructions, not an ordinary read_sysreg_s
+ * instruction. Both arms MUST be emitted: VHE reads/writes SPSR_EL2/ELR_EL2
+ * while non-VHE uses SPSR_EL1/ELR_EL1. Accept only exact architectural
+ * register pairs with identical read/write direction, and preserve the
+ * original capability record. Reuse the single-register GNU decoders. */
+typedef struct Aarch64LinuxVheSysregAlternative {
+    bool is_read;
+    unsigned int old_opcode, new_opcode;
+} Aarch64LinuxVheSysregAlternative;
+static bool aarch64_linux_vhe_sysreg_alternative_form(
+    const char *text, size_t length,
+    Aarch64LinuxVheSysregAlternative *result) {
+    char old_body[768], new_body[768];
+    unsigned int old_opcode, new_opcode, old_write, new_write, field;
+    if (!result || !aarch64_linux_alt_partition(
+            text, length, 50U, old_body, sizeof(old_body),
+            new_body, sizeof(new_body))) return false;
+    old_opcode = aarch64_linux_encoded_sysreg_form(
+        old_body, strlen(old_body));
+    new_opcode = aarch64_linux_encoded_sysreg_form(
+        new_body, strlen(new_body));
+    for (field = 0U; field < 2U; ++field) {
+        const unsigned int common = (3U << 19) | (4U << 12) |
+                                    (field << 5) | 9U;
+        if (old_opcode == (0xd5200000U | (4U << 16) | common) &&
+            new_opcode == (0xd5200000U | common)) {
+            result->is_read = true;
+            result->old_opcode = old_opcode;
+            result->new_opcode = new_opcode;
+            return true;
+        }
+    }
+    old_write = aarch64_linux_encoded_sysreg_write_form(
+        old_body, strlen(old_body));
+    new_write = aarch64_linux_encoded_sysreg_write_form(
+        new_body, strlen(new_body));
+    if (!old_write || !new_write) return false;
+    for (field = 0U; field < 2U; ++field) {
+        const Aarch64LinuxWriteSysreg *old_reg =
+            &aarch64_linux_write_sysregs[old_write - 1U];
+        const Aarch64LinuxWriteSysreg *new_reg =
+            &aarch64_linux_write_sysregs[new_write - 1U];
+        if (old_reg->op0 == 3U && old_reg->op1 == 4U &&
+            old_reg->crn == 4U && old_reg->crm == 0U &&
+            old_reg->op2 == field && new_reg->op0 == 3U &&
+            new_reg->op1 == 0U && new_reg->crn == 4U &&
+            new_reg->crm == 0U && new_reg->op2 == field) {
+            result->is_read = false;
+            result->old_opcode = 0xd5000000U |
+                (3U << 19) | (4U << 16) | (4U << 12) | (field << 5) | 9U;
+            result->new_opcode = 0xd5000000U |
+                (3U << 19) | (4U << 12) | (field << 5) | 9U;
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool aarch64_linux_vhe_sysreg_alternative_source(
+    const MinicC0Program *program, const MinicInlineAsm *src,
+    MinicTargetInlineAsmContract *contract) {
+    Aarch64LinuxVheSysregAlternative form;
+    const MinicInlineAsmOperand *operand;
+    const MinicExpression *value;
+    MinicType plain;
+    if (!program || !src || !contract || !src->is_volatile || src->is_goto ||
+        src->label_count || src->clobber_count || src->register_clobber_count ||
+        src->has_memory_clobber ||
+        !aarch64_linux_vhe_sysreg_alternative_form(
+            src->template_text, src->template_length, &form) ||
+        src->output_count != (form.is_read ? 1U : 0U) ||
+        src->input_count != (form.is_read ? 0U : 1U)) return false;
+    operand = form.is_read ? src->outputs : src->inputs;
+    if (!operand || !constraint(operand, form.is_read ? "=r" : "rZ"))
+        return false;
+    value = minic_c0_program_expression(program, operand->expression);
+    if (!value || (form.is_read &&
+        (value->value_category != MINIC_VALUE_LVALUE ||
+         minic_type_is_const(value->type))) ||
+        !minic_type_unqualified(value->type, &plain) ||
+        !aarch64_linux_sysreg_u64_type(plain)) return false;
+    contract->operand_count = 1U;
+    contract->kinds[0] = form.is_read ?
+        MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
+        MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->implicit_memory_effect = true;
+    return true;
+}
+
+static bool aarch64_linux_vhe_sysreg_alternative_emit(
+    FILE *out, const MinicDirectLP64BlockContext *ctx,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info,
+    const Aarch64LinuxVheSysregAlternative *form) {
+    const MinicCoreFunction *fn = ctx->fn;
+    const MinicCoreStructuredInlineAsmOperand *op =
+        ins->value.structured_inline_asm.operands;
+    MinicType type;
+    if (!out || !fn || !op || !info || !form || ctx->dynamic_frame ||
+        !info->is_volatile || info->is_goto || !info->has_memory_clobber ||
+        info->register_clobber_count ||
+        ins->value.structured_inline_asm.operand_count != 1U ||
+        op->operand_index != 0U || op->has_fixed_register_binding ||
+        op->early_clobber || op->value >= fn->value_count ||
+        !aarch64_linux_structured_spill_slot_valid(op->value) ||
+        op->kind != (form->is_read ?
+            MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
+            MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
+        (form->is_read ?
+            !minic_type_pointee(fn->values[op->value].type, &type) :
+            !minic_type_unqualified(fn->values[op->value].type, &type)) ||
+        !aarch64_linux_sysreg_u64_type(type)) return false;
+    if (fprintf(out, "  ldr %s, [sp, #%zu]\n661:\n  .inst 0x%08x\n",
+                form->is_read ? "x10" : "x9",
+                (size_t)op->value * 8U,
+                form->old_opcode) < 0 ||
+        !aarch64_linux_alt_emit_middle(out, 50U, false) ||
+        fprintf(out, "  .inst 0x%08x\n", form->new_opcode) < 0 ||
+        !aarch64_linux_alt_emit_end(out)) return false;
+    return !form->is_read || fputs("  str x9, [x10]\n", out) != EOF;
 }
 
 /* Entire original Linux 6.6.143 arm64 TLBI v8.5 control family.
@@ -4042,17 +4339,20 @@ bool minic_aarch64_qualify_inline_asm(
     if(aarch64_linux_cache_op_source(program,src,contract))return true;
     if(aarch64_linux_encoded_sysreg_write_source(program,src,contract))
         return true;
+    if(aarch64_linux_vhe_sysreg_alternative_source(program,src,contract))
+        return true;
     if(aarch64_linux_io_dependency_source(program,src,contract))
         return true;
     if(aarch64_linux_encoded_sysreg_source(program,src,contract))
         return true;
     if(aarch64_linux_tlbi_source(program,src,contract))return true;
+    if(aarch64_linux_kvm_at_fixup_source(program,src,contract))return true;
     if(aarch64_linux_at_s1e1r_source(program,src,contract))return true;
     if (src && contract && !src->is_goto && !src->is_volatile &&
         !src->output_count && !src->input_count && !src->label_count &&
         !src->clobber_count && !src->register_clobber_count &&
         !src->has_memory_clobber &&
-        aarch64_linux_par_erratum_barrier_template(
+        aarch64_linux_barrier_alternative(
             src->template_text, src->template_length)) {
         contract->operand_count = 0U;
         contract->implicit_memory_effect = true;
@@ -4798,16 +5098,30 @@ bool minic_aarch64_emit_qualified_structured_asm(
                              true, &lse))
             return aarch64_linux_lse_emit(out, ctx, ins, info, &lse);
     }
+    if (aarch64_linux_kvm_at_fixup_template(
+            info->template_text, info->template_length))
+        return aarch64_linux_kvm_at_fixup_emit(out, ctx, ins, info);
+    {
+        Aarch64LinuxVheSysregAlternative vhe;
+        if (aarch64_linux_vhe_sysreg_alternative_form(
+                info->template_text, info->template_length, &vhe))
+            return aarch64_linux_vhe_sysreg_alternative_emit(
+                out, ctx, ins, info, &vhe);
+    }
     if (aarch64_linux_at_s1e1r_template(
             info->template_text, info->template_length))
         return aarch64_linux_at_s1e1r_emit(out, ctx, ins, info);
-    if (aarch64_linux_par_erratum_barrier_template(
-            info->template_text, info->template_length)) {
-        if (!info->is_volatile || info->is_goto ||
-            !info->has_memory_clobber || info->register_clobber_count ||
-            ins->value.structured_inline_asm.operand_count != 0U)
-            return false;
-        return aarch64_linux_par_erratum_barrier_emit(out);
+    {
+        const Aarch64LinuxBarrierAlternative *alternative =
+            aarch64_linux_barrier_alternative(
+                info->template_text, info->template_length);
+        if (alternative) {
+            if (!info->is_volatile || info->is_goto ||
+                !info->has_memory_clobber || info->register_clobber_count ||
+                ins->value.structured_inline_asm.operand_count != 0U)
+                return false;
+            return aarch64_linux_barrier_alternative_emit(out, alternative);
+        }
     }
     if (aarch64_linux_percpu_write_alternative_template(
             info->template_text, info->template_length))
@@ -5311,7 +5625,7 @@ bool minic_aarch64_emit_qualified_structured_asm(
                             (size_t)ops[3].value * 8U,
                             suffix, reg, p.op->alu, reg, reg, reg,
                             suffix, reg) < 0 ||
-                        !aarch64_linux_alt_lse_emit_middle(out))
+                        !aarch64_linux_alt_emit_middle(out, 33U, true))
                         return false;
                     if (p.returns_new) {
                         if (fprintf(out,
@@ -5324,7 +5638,7 @@ bool minic_aarch64_emit_qualified_structured_asm(
                         "  %s%s %s11, [x10]\n"
                         "  nop\n  nop\n  nop\n",
                         lse_op, suffix, reg) < 0) return false;
-                    if (!aarch64_linux_alt_lse_emit_end(out)) return false;
+                    if (!aarch64_linux_alt_emit_end(out)) return false;
                     return fprintf(out,
                         "  mov w12, #0\n"
                         "  ldr x13, [sp, #%zu]\n"
@@ -5472,7 +5786,7 @@ bool minic_aarch64_emit_qualified_structured_asm(
                         aarch64_xchg_ld[xchg.mode], suffix, reg,
                         aarch64_xchg_st[xchg.mode], suffix, reg,
                         xchg.mode == 3U ? "  dmb ish\n" : "") < 0 ||
-                        !aarch64_linux_alt_lse_emit_middle(out))
+                        !aarch64_linux_alt_emit_middle(out, 33U, true))
                         return false;
                     if (fprintf(out,
                         "  swp%s%s %s11, %s9, [x10]\n"
@@ -5480,7 +5794,7 @@ bool minic_aarch64_emit_qualified_structured_asm(
                         "%s",
                         order[xchg.mode], suffix, reg, reg,
                         xchg.mode == 3U ? "  nop\n" : "") < 0 ||
-                        !aarch64_linux_alt_lse_emit_end(out))
+                        !aarch64_linux_alt_emit_end(out))
                         return false;
                     return fprintf(out,
                         "  mov w12, #0\n"

@@ -159,8 +159,11 @@ bool minic_parser_parse_parenthesized_pointer_to_array_declarator(
     }
     if (!minic_parser_expect(
             parser, MINIC_TOKEN_RPAREN, "expected ')' after parenthesized pointer declarator") ||
+        /* The pointer being declared is a complete object even when its
+         * array pointee has an incomplete outermost bound: T (*name)[].
+         * Only direct incomplete array OBJECT definitions need completion. */
         !minic_parser_parse_array_declarator_suffix(
-            parser, element_type, false, &type, &is_array)) {
+            parser, element_type, true, &type, &is_array)) {
         return false;
     }
     /* `T (*name)` is a valid pointer-to-T object declarator without an array

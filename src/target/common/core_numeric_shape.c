@@ -85,6 +85,50 @@ bool minic_core_integer_overflow_mixed_add_i32_shape(
     return false;
 }
 
+bool minic_core_integer_overflow_u64_u32_to_i32_shape(
+    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
+    bool *wide_left) {
+    MinicCoreValueId left, right, address;
+    MinicType result_type;
+    size_t left_width, right_width, result_width;
+    bool left_sign, right_sign, result_sign;
+    if (!program || !target || !fn || !ins || !wide_left ||
+        ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW ||
+        ins->value.integer_overflow.operator_kind !=
+            MINIC_CORE_INTEGER_OVERFLOW_ADD)
+        return false;
+    left = ins->value.integer_overflow.left;
+    right = ins->value.integer_overflow.right;
+    address = ins->value.integer_overflow.result_address;
+    if (left >= fn->value_count || right >= fn->value_count ||
+        address >= fn->value_count ||
+        !minic_type_pointee(fn->values[address].type, &result_type) ||
+        !minic_type_is_integer(result_type) ||
+        minic_type_is_bool_integer(result_type) ||
+        minic_type_is_const(result_type) ||
+        minic_type_is_volatile(result_type) ||
+        !minic_lp64_scalar_integer_width(program, target, result_type,
+                                         &result_width, &result_sign) ||
+        !minic_lp64_scalar_integer_width(program, target,
+                                         fn->values[left].type,
+                                         &left_width, &left_sign) ||
+        !minic_lp64_scalar_integer_width(program, target,
+                                         fn->values[right].type,
+                                         &right_width, &right_sign) ||
+        result_width != 4U || !result_sign || left_sign || right_sign)
+        return false;
+    if (left_width == 8U && right_width == 4U) {
+        *wide_left = true;
+        return true;
+    }
+    if (left_width == 4U && right_width == 8U) {
+        *wide_left = false;
+        return true;
+    }
+    return false;
+}
+
 bool minic_core_integer_overflow_mixed_multiply_i32_shape(
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,

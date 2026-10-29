@@ -74,6 +74,8 @@ bool minic_declaration_instantiate_incomplete_array_object_type(MinicC0Program *
                                                                 MinicType *object_type) {
     const MinicArrayType *array;
     MinicType element_type;
+    size_t index;
+    bool shared_descriptor;
 
     if (program == NULL || object_type == NULL) {
         return false;
@@ -87,6 +89,32 @@ bool minic_declaration_instantiate_incomplete_array_object_type(MinicC0Program *
         return false;
     }
     if (array->is_zero_length || array->element_count != 0U) {
+        *object_type = declared_type;
+        return true;
+    }
+    /* A fresh `extern T callbacks[]` declarator already owns a new incomplete
+     * descriptor. Cloning it would strand the first descriptor with no AST
+     * semantic owner. Only reusable types (notably `typedef T callbacks[]`)
+     * or descriptors owned by an earlier declaration need an independent
+     * instance before the new object's eventual bound can be completed. */
+    shared_descriptor = false;
+    for (index = 0U; index < program->type_alias_count; ++index) {
+        if (minic_type_is_array(program->type_aliases[index].type) &&
+            program->type_aliases[index].type.array_type_id == declared_type.array_type_id) {
+            shared_descriptor = true;
+            break;
+        }
+    }
+    if (!shared_descriptor) {
+        for (index = 0U; index < program->global_object_count; ++index) {
+            if (minic_type_is_array(program->global_objects[index].type) &&
+                program->global_objects[index].type.array_type_id == declared_type.array_type_id) {
+                shared_descriptor = true;
+                break;
+            }
+        }
+    }
+    if (!shared_descriptor) {
         *object_type = declared_type;
         return true;
     }

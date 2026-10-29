@@ -126,16 +126,25 @@ bool minic_loongarch64_emit_residual_instruction(
         case MINIC_CORE_INSTRUCTION_FIXED_REGISTER_WRITE: {
             const MinicCoreValueId source = ins->value.fixed_register_write.source;
             const MinicCoreFixedRegisterBinding *binding;
+            const char *physical;
             /* Shared semantic verifier proves the ABI binding+SSA. The
-             * target requalifies exact LoongArch hardware state, and writes
-             * the per-CPU register without masquerading as a C store. */
+             * target requalifies exact LoongArch hardware state. Linux
+             * relocation updates the live $tp thread_info pointer; ordinary
+             * per-CPU assignment updates $r21. Neither is a C memory store. */
             if (!minic_multi_direct_fixed_register_write_shape(
                     program, target, fn, ins, &binding) ||
-                binding->register_name_length != 4U ||
-                memcmp(binding->register_name, "$r21", 4U) != 0 ||
-                !minic_type_equal(binding->type, minic_type_unsigned_long()) ||
-                !emit_sp_mem(out, "ld.d", "$t0", (size_t)source * 8U) ||
-                fputs("  move $r21, $t0\n", out) == EOF)
+                !((binding->register_name_length == 4U &&
+                   memcmp(binding->register_name, "$r21", 4U) == 0 &&
+                   minic_type_equal(binding->type, minic_type_unsigned_long())) ||
+                  (binding->register_name_length == 3U &&
+                   memcmp(binding->register_name, "$tp", 3U) == 0 &&
+                   minic_type_is_pointer(binding->type))))
+                return minic_multi_direct_machine_reject(
+                    fn, "loongarch64", name, "fixed_register_write",
+                    reject_block, reject_ins, __LINE__);
+            physical = binding->register_name_length == 3U ? "$tp" : "$r21";
+            if (!emit_sp_mem(out, "ld.d", "$t0", (size_t)source * 8U) ||
+                fprintf(out, "  move %s, $t0\n", physical) < 0)
                 return minic_multi_direct_machine_reject(
                     fn, "loongarch64", name, "fixed_register_write",
                     reject_block, reject_ins, __LINE__);
@@ -362,7 +371,9 @@ bool minic_loongarch64_emit_residual_instruction(
             /* LoongArch LP64D va_list is a scalar byte cursor.  The
              * register bank saved at the top of this frame runs directly
              * into the caller's overflow stack slots at entry SP. */
-            if (va_count != 1U || !minic_type_is_pointer(ins->type) ||
+            if (va_count == 0U ||
+                ins->value.variadic_address.copy_destination ||
+                !minic_type_is_pointer(ins->type) ||
                 ins->result >= fn->value_count ||
                 fprintf(out, "  li.d $t0, %zu\n",
                         ctx->va_base + va_gp * 8U) < 0 ||
