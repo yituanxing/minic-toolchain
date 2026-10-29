@@ -225,3 +225,20 @@ new revision is run.
 6. Original Linux 9,645 GNU input AS coverage is not the same as
    complete original GNU object parity, final Image link or QEMU P1;
    those are separate correctness milestones.
+
+## 9. Source architecture comparison added (documentation-only)
+
+See `architecture-comparison-llvm-gas-2026-10-29.md` for the
+current exact-head 35-file, 30,735-line LLVM MC / GNU GAS comparison,
+ownership map, concrete newly exposed issues, and the next large
+subsystem refactor order. This is not new production-code acceptance.
+High-confidence new cases reproduced on the host GNU x86 assembler:
+ELF section `unique,<number>` identity, and `.section` `?`
+inheritance of COMDAT. RISC-V `.option relax` accepted with no
+per-site semantic change and no R_RISCV_RELAX/ALIGN implementation
+is a confirmed source-level contract gap; GNU cross-oracle is pending.
+
+The 35-file baseline and prior six-domain read are historical coverage
+claims. This comparison reruns whole-inventory/module-boundary scans
+and focused call-chain review; it does not claim separately scheduled
+subagents or an independent fresh line-by-line pass of each file.
