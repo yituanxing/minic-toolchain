@@ -437,29 +437,37 @@ MinicCoreLowerStatus core_asm_try_structured_roles_and_asm_goto(
     *handled = false;
     MinicCoreInlineAsmId inline_asm_id;
     MinicCoreInstruction instruction;
-    /* Multi-label asm-goto is a genuine CFG effect. Targets admit their own
-     * complete machine template, while Core owns the two C label blocks and
-     * resolves every constant `i` operand BEFORE recording the effect.
-     * There is no host-specific assembler passthrough or runtime fallback. */
+    /* Target-qualified asm-goto is a genuine CFG effect. The same path owns
+     * the one-label Linux static-key table and the two-label CPU-feature
+     * alternative. Preserve the complete source template, resolve all `i`
+     * operands into *link-time* text before committing, and transport C
+     * label destinations as Core blocks. Neither form may silently lower
+     * a GNU immediate into a runtime SSA register. */
     if (minic_backend_qualify_inline_asm_goto(
             minic_backend_for_target(context->target),
             context->body->program, source)) {
         char immediate_buffers[3][MINIC_CORE_IMMEDIATE_TEXT_LIMIT];
-        const char *resolved[3];
-        size_t lengths[3];
-        MinicCoreBlockId targets[2];
+        const char *resolved[3] = {NULL, NULL, NULL};
+        size_t lengths[3] = {0U, 0U, 0U};
+        MinicCoreBlockId targets[2] = {
+            MINIC_CORE_BLOCK_INVALID, MINIC_CORE_BLOCK_INVALID
+        };
         MinicCoreInlineAsm *stored;
         MinicCoreInstruction effect;
         MinicCoreLowerStatus status;
         size_t i;
         *handled = true;
-        for (i = 0U; i < 3U; ++i)
+        if (source->input_count == 0U || source->input_count > 3U ||
+            source->label_count == 0U || source->label_count > 2U ||
+            source->inputs == NULL || source->labels == NULL)
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        for (i = 0U; i < source->input_count; ++i)
             if (!core_inline_asm_immediate_text(
                     context, &source->inputs[i], immediate_buffers[i],
                     sizeof(immediate_buffers[i]), &resolved[i], &lengths[i]) ||
                 !resolved[i] || lengths[i] == 0U || lengths[i] > 128U)
                 return MINIC_CORE_LOWER_UNSUPPORTED;
-        for (i = 0U; i < 2U; ++i) {
+        for (i = 0U; i < source->label_count; ++i) {
             status = ensure_statement_block(
                 context, source->labels[i].target_statement, &targets[i]);
             if (status != MINIC_CORE_LOWER_OK) return status;
@@ -473,7 +481,7 @@ MinicCoreLowerStatus core_asm_try_structured_roles_and_asm_goto(
         stored->source_inline_asm_id = SIZE_MAX;
         stored->goto_target = targets[0];
         stored->goto_second_target = targets[1];
-        for (i = 0U; i < 3U; ++i) {
+        for (i = 0U; i < source->input_count; ++i) {
             char *owned = (char *)malloc(lengths[i] + 1U);
             if (!owned) return MINIC_CORE_LOWER_ERROR;
             (void)memcpy(owned, resolved[i], lengths[i]);

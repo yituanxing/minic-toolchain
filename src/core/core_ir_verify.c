@@ -543,17 +543,28 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
         inline_asm = &function->inline_asms[instruction->value.inline_asm_id];
         if (!inline_asm->template_text || !inline_asm->is_volatile)
             return false;
-        if (inline_asm->goto_second_target != MINIC_CORE_BLOCK_INVALID) {
+        /* Link-time symbolic immediates in qualified asm-goto are owned by
+         * Core, regardless of whether the machine template has one or two
+         * C labels. Every recorded slot must be a real, nonempty string;
+         * partial materialization is not a valid target contract. */
+        if (inline_asm->resolved_immediate_count != 0U) {
             size_t i;
+            if (!inline_asm->is_goto ||
+                inline_asm->goto_target >= function->block_count ||
+                inline_asm->resolved_immediate_count > 3U)
+                return false;
+            for (i = 0U; i < inline_asm->resolved_immediate_count; ++i)
+                if (!inline_asm->resolved_immediates[i] ||
+                    inline_asm->resolved_immediates[i][0] == '\0')
+                    return false;
+        }
+        if (inline_asm->goto_second_target != MINIC_CORE_BLOCK_INVALID) {
             if (!inline_asm->is_goto ||
                 inline_asm->goto_target >= function->block_count ||
                 inline_asm->goto_second_target >= function->block_count ||
                 inline_asm->goto_target == inline_asm->goto_second_target ||
                 inline_asm->resolved_immediate_count != 3U)
                 return false;
-            for (i = 0U; i < 3U; ++i)
-                if (!inline_asm->resolved_immediates[i] ||
-                    inline_asm->resolved_immediates[i][0] == '\0') return false;
         }
         return true;
     }

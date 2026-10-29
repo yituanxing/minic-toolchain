@@ -48,3 +48,13 @@ int linux_fxrstor_user(struct linux_fxregs *p) {
         : [err] "=a"(err), [fx] "=m"(*p) : "0"(0), "m"(*p));
     return err;
 }
+
+/* A named *input* memory operand is GNU ordinal %3, not %1 (the output
+ * memory operand). The real Linux fpu/signal.i uses this variant. */
+int linux_fxrstor_named_input(struct linux_fxregs *p) {
+    int err;
+    asm volatile(FPU_USER_FRAME("fxrstorq %[fx]")
+        : [err] "=a"(err), "=m"(*p)
+        : "0"(0), [fx] "m"(*p));
+    return err;
+}

@@ -1229,15 +1229,33 @@ bool core_inline_asm_numeric_template(const MinicInlineAsm *source,
         if (source->template_text[cursor] == '[') {
             size_t name_begin = cursor + 1U;
             size_t name_end = name_begin;
+            bool resolved;
             while (name_end < source->template_length && source->template_text[name_end] != ']') {
                 name_end += 1U;
             }
-            if (name_end >= source->template_length || name_end == name_begin ||
-                !core_inline_asm_named_operand_index(source,
-                                                     source->template_text + name_begin,
-                                                     name_end - name_begin,
-                                                     &operand_index) ||
-                operand_index > 9U) {
+            if (name_end >= source->template_length || name_end == name_begin) {
+                free(normalized);
+                return false;
+            }
+            resolved = core_inline_asm_named_operand_index(
+                source, source->template_text + name_begin,
+                name_end - name_begin, &operand_index);
+            /* GNU asm-goto label placeholders are in the *same* numeric
+             * space as operands but are not scalar inputs. Resolve a named
+             * %l[label] to the label slot, preserving the existing target
+             * PREL32 destination policy. Never accept %l for a mismatched
+             * label name or a non-goto instruction. */
+            if (!resolved && modifier == 'l' && source->is_goto &&
+                source->label_count == 1U && source->labels &&
+                source->labels[0].name &&
+                source->labels[0].name_length == name_end - name_begin &&
+                memcmp(source->labels[0].name,
+                       source->template_text + name_begin,
+                       name_end - name_begin) == 0) {
+                operand_index = source->output_count + source->input_count;
+                resolved = true;
+            }
+            if (!resolved || operand_index > 9U) {
                 free(normalized);
                 return false;
             }

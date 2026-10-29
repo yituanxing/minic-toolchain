@@ -1648,6 +1648,7 @@ static bool emit_linux_segment_read(
     const MinicCoreStructuredInlineAsmOperand *op =
         ins->value.structured_inline_asm.operands;
     MinicType pointee;
+    bool wide;
     static const char *const selector_regs[] = {
         "%es", "%ds", "%fs", "%gs", "%ds", "%es",
         "%ss", "%cs", "%fs", "%gs"
@@ -1660,20 +1661,24 @@ static bool emit_linux_segment_read(
         op[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
         op[0].early_clobber || op[0].has_fixed_register_binding ||
         op[0].value >= fn->value_count ||
-        !minic_type_pointee(fn->values[op[0].value].type, &pointee) ||
-        !minic_type_equal(pointee, short_selector ?
-            minic_type_unsigned_short() : minic_type_unsigned_int()))
+        !minic_type_pointee(fn->values[op[0].value].type, &pointee))
+        return false;
+    wide = minic_type_equal(pointee, minic_type_unsigned_int());
+    if (wide ? (selector > 6U) :
+        !minic_type_equal(pointee, minic_type_unsigned_short()) ||
+        !short_selector)
         return false;
     /* x86-64 has no generic scalar-expression representation for the
-     * segment selector register. Read its low 16 physical bits, then store
-     * exactly 16 bits into the original lvalue; never widen that store. */
+     * segment selector register. The 16-bit caller observes exactly two
+     * bytes; the regset 32-bit caller observes zero-extended EAX. A narrow
+     * store into `fos` would leave the high 16 bits stale. */
     return fprintf(out, "  mov%s %s, %s\n",
-                   short_selector ? "w" : "l",
+                   wide ? "l" : "w",
                    selector_regs[selector - 1U],
-                   short_selector ? "%ax" : "%eax") >= 0 &&
+                   wide ? "%eax" : "%ax") >= 0 &&
         x86_value_load(out, frame, op[0].value, "%r11") &&
-        fputs(short_selector ? "  movw %ax, (%r11)\n" :
-                           "  movl %eax, (%r11)\n", out) != EOF;
+        fputs(wide ? "  movl %eax, (%r11)\n" :
+                     "  movw %ax, (%r11)\n", out) != EOF;
 }
 
 static bool emit_linux_segment_load_extable(
@@ -2278,6 +2283,207 @@ static bool emit_linux_fxrstor_safe(
            fputs("  movl %eax, (%r11)\n", out) != EOF;
 }
 
+/* The opcode is bound to RDI by its actual ModRM byte. Emit that exact byte
+ * sequence after materializing the four GNU inputs in their fixed registers;
+ * EAX becomes zero only after the faultable state transfer completes. */
+static bool emit_linux_xstate_fault(
+    FILE *out, const MinicCoreFunction *fn, const MinicX86Frame *frame,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
+    const unsigned int form = minic_x86_64_linux_xstate_fault_form(
+        info->template_text, info->template_length);
+    static const char *const opcodes[] = {
+        "  .byte 0x48,0x0f,0xae,0x27\n",
+        "  .byte 0x48,0x0f,0xae,0x2f\n",
+        "  .byte 0x48,0x0f,0xc7,0x1f\n",
+        "  .byte 0x48,0x0f,0xc7,0x2f\n"
+    };
+    const MinicCoreStructuredInlineAsmOperand *b =
+        ins->value.structured_inline_asm.operands;
+    static const MinicCoreStructuredInlineAsmOperandKind kinds[] = {
+        MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT,
+        MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT,
+        MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT,
+        MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT,
+        MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT
+    };
+    MinicType type, memory_type;
+    size_t i;
+    if (!out || !fn || !frame || !info || !form ||
+        !info->is_volatile || info->is_goto || !info->has_memory_clobber ||
+        info->register_clobber_count ||
+        ins->value.structured_inline_asm.operand_count != 5U || !b)
+        return false;
+    for (i = 0U; i < 5U; ++i)
+        if (b[i].operand_index != i || b[i].value >= fn->value_count ||
+            b[i].early_clobber || b[i].has_fixed_register_binding ||
+            b[i].kind != kinds[i])
+            return false;
+    if (!minic_type_pointee(fn->values[b[0].value].type, &type) ||
+        !minic_type_equal(type, minic_type_int()) ||
+        !minic_type_is_pointer(fn->values[b[1].value].type) ||
+        !minic_type_pointee(fn->values[b[2].value].type, &memory_type) ||
+        !minic_type_is_record(memory_type) ||
+        !minic_type_is_integer(fn->values[b[3].value].type) ||
+        !minic_type_is_integer(fn->values[b[4].value].type))
+        return false;
+    return x86_value_load(out, frame, b[1].value, "%rdi") &&
+           x86_value_load(out, frame, b[3].value, "%rax") &&
+           x86_value_load(out, frame, b[4].value, "%rdx") &&
+           fputs("1:\n", out) != EOF &&
+           fputs(opcodes[form - 1U], out) != EOF &&
+           fputs("  xorl %eax, %eax\n2:\n"
+                 "  .pushsection \"__ex_table\",\"a\"\n"
+                 "  .balign 4\n"
+                 "  .long (1b) - .\n"
+                 "  .long (2b) - .\n"
+                 "  .long 15\n"
+                 "  .popsection\n", out) != EOF &&
+           x86_value_load(out, frame, b[0].value, "%r11") &&
+           fputs("  movl %eax, (%r11)\n", out) != EOF;
+}
+
+static bool emit_linux_xrstor_alternative(
+    FILE *out, const MinicCoreFunction *fn, const MinicX86Frame *frame,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
+    const MinicCoreStructuredInlineAsmOperand *b =
+        ins->value.structured_inline_asm.operands;
+    static const MinicCoreStructuredInlineAsmOperandKind kinds[] = {
+        MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT,
+        MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT,
+        MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT,
+        MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT
+    };
+    MinicType type;
+    size_t i;
+    if (!out || !fn || !frame || !info ||
+        !minic_x86_64_linux_xrstor_alternative_form(
+            info->template_text, info->template_length) ||
+        !info->is_volatile || info->is_goto || !info->has_memory_clobber ||
+        info->register_clobber_count ||
+        ins->value.structured_inline_asm.operand_count != 4U || !b)
+        return false;
+    for (i = 0U; i < 4U; ++i)
+        if (b[i].operand_index != i || b[i].value >= fn->value_count ||
+            b[i].early_clobber || b[i].has_fixed_register_binding ||
+            b[i].kind != kinds[i])
+            return false;
+    if (!minic_type_is_pointer(fn->values[b[0].value].type) ||
+        !minic_type_pointee(fn->values[b[1].value].type, &type) ||
+        !minic_type_is_record(type) ||
+        !minic_type_is_integer(fn->values[b[2].value].type) ||
+        !minic_type_is_integer(fn->values[b[3].value].type))
+        return false;
+    return x86_value_load(out, frame, b[0].value, "%rdi") &&
+           x86_value_load(out, frame, b[2].value, "%rax") &&
+           x86_value_load(out, frame, b[3].value, "%rdx") &&
+           fputs(
+               "661: .byte 0x48,0x0f,0xae,0x2f\n"
+               "662:\n"
+               "  .skip -(((6651f-6641f)-(662b-661b))>0)*"
+                   "((6651f-6641f)-(662b-661b)),0x90\n"
+               "663:\n"
+               "  .pushsection .altinstructions,\"a\"\n"
+               "  .long 661b - .\n"
+               "  .long 6641f - .\n"
+               "  .4byte (10*32+3)\n"
+               "  .byte 663b-661b\n"
+               "  .byte 6651f-6641f\n"
+               "  .popsection\n"
+               "  .pushsection .altinstr_replacement,\"ax\"\n"
+               "6641: .byte 0x48,0x0f,0xc7,0x1f\n"
+               "6651:\n"
+               "  .popsection\n"
+               "3:\n"
+               "  .pushsection \"__ex_table\",\"a\"\n"
+               "  .balign 4\n"
+               "  .long (661b) - .\n"
+               "  .long (3b) - .\n"
+               "  .long 6\n"
+               "  .popsection\n", out) != EOF;
+}
+
+/* XSAVE64's three feature patches are all four bytes, so the expanded
+ * maximum-length padding expression is zero. Keep all three patch records
+ * and preserve the type-17 error-GPR entry. EAX is selected for the generic
+ * =r output, making the register-number field in the exception data zero. */
+static bool emit_linux_xsave_triple_alternative(
+    FILE *out, const MinicCoreFunction *fn, const MinicX86Frame *frame,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
+    const MinicCoreStructuredInlineAsmOperand *b =
+        ins->value.structured_inline_asm.operands;
+    static const MinicCoreStructuredInlineAsmOperandKind kinds[] = {
+        MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT,
+        MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT,
+        MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT,
+        MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT,
+        MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT
+    };
+    MinicType type, memory_type;
+    size_t i;
+    if (!out || !fn || !frame || !info ||
+        !minic_x86_64_linux_xsave_triple_alternative_form(
+            info->template_text, info->template_length) ||
+        !info->is_volatile || info->is_goto || !info->has_memory_clobber ||
+        info->register_clobber_count ||
+        ins->value.structured_inline_asm.operand_count != 5U || !b)
+        return false;
+    for (i = 0U; i < 5U; ++i)
+        if (b[i].operand_index != i || b[i].value >= fn->value_count ||
+            b[i].early_clobber || b[i].has_fixed_register_binding ||
+            b[i].kind != kinds[i])
+            return false;
+    if (!minic_type_pointee(fn->values[b[0].value].type, &type) ||
+        !minic_type_equal(type, minic_type_int()) ||
+        !minic_type_is_pointer(fn->values[b[1].value].type) ||
+        !minic_type_pointee(fn->values[b[2].value].type, &memory_type) ||
+        !minic_type_is_record(memory_type) ||
+        !minic_type_is_integer(fn->values[b[3].value].type) ||
+        !minic_type_is_integer(fn->values[b[4].value].type))
+        return false;
+    return x86_value_load(out, frame, b[1].value, "%rdi") &&
+           x86_value_load(out, frame, b[3].value, "%rax") &&
+           x86_value_load(out, frame, b[4].value, "%rdx") &&
+           fputs(
+               "661: .byte 0x48,0x0f,0xae,0x27\n"
+               "662:\n"
+               "663:\n"
+               "  .pushsection .altinstructions,\"a\"\n"
+               "  .long 661b - .\n"
+               "  .long 6641f - .\n"
+               "  .4byte (10*32+0)\n"
+               "  .byte 663b-661b\n"
+               "  .byte 6651f-6641f\n"
+               "  .long 661b - .\n"
+               "  .long 6642f - .\n"
+               "  .4byte (10*32+1)\n"
+               "  .byte 663b-661b\n"
+               "  .byte 6652f-6642f\n"
+               "  .long 661b - .\n"
+               "  .long 6643f - .\n"
+               "  .4byte (10*32+3)\n"
+               "  .byte 663b-661b\n"
+               "  .byte 6653f-6643f\n"
+               "  .popsection\n"
+               "  .pushsection .altinstr_replacement,\"ax\"\n"
+               "6641: .byte 0x48,0x0f,0xae,0x37\n"
+               "6651:\n"
+               "6642: .byte 0x48,0x0f,0xc7,0x27\n"
+               "6652:\n"
+               "6643: .byte 0x48,0x0f,0xc7,0x2f\n"
+               "6653:\n"
+               "  .popsection\n"
+               "  xorl %eax, %eax\n"
+               "3:\n"
+               "  .pushsection \"__ex_table\",\"a\"\n"
+               "  .balign 4\n"
+               "  .long (661b) - .\n"
+               "  .long (3b) - .\n"
+               "  .long (17 | ((-14) << 16))\n"
+               "  .popsection\n", out) != EOF &&
+           x86_value_load(out, frame, b[0].value, "%r11") &&
+           fputs("  movl %eax, (%r11)\n", out) != EOF;
+}
+
 /* SMAP is CPU-feature conditional; Linux emits a blank baseline and a
  * replacement-only instruction, including STAC/CLAC and full RFLAGS
  * capture/restore. Keep the replacement in .altinstr_replacement and never
@@ -2365,7 +2571,7 @@ static bool emit_linux_put_user_call(
     size_t i, value_width;
     bool signed_type;
     if (!out || !program || !target || !fn || !frame || !info ||
-        form != 0x200U ||
+        (form != 0x200U && form != 0x800U) ||
         !info->is_volatile || info->is_goto || !info->has_memory_clobber ||
         info->register_clobber_count != 1U || !info->register_clobbers ||
         !clobber_is(&info->register_clobbers[0], "ebx") ||
@@ -2415,7 +2621,8 @@ static bool emit_linux_put_user_call(
     if (fputs("  subq $16, %rsp\n  movq %rbx, (%rsp)\n", out) == EOF ||
         !x86_value_load(out, frame, b[2].value, "%rcx") ||
         !x86_value_load(out, frame, b[3].value, "%rax") ||
-        fprintf(out, "  call __put_user_%u\n", width) < 0 ||
+        fprintf(out, "  call __put_user_%s%u\n",
+                form == 0x800U ? "nocheck_" : "", width) < 0 ||
         fputs("  movq (%rsp), %rbx\n  addq $16, %rsp\n", out) == EOF ||
         !x86_value_load(out, frame, b[0].value, "%r11") ||
         fputs("  movl %ecx, (%r11)\n", out) == EOF)
@@ -2628,6 +2835,114 @@ static bool emit_linux_debug_register(
            fprintf(out, "  movq %%rax, %%db%u\n", physical[index]) >= 0;
 }
 
+/* Linux x86 Protection Keys (PKRU). The kernel's byte literals are exact
+ * three-byte instructions, so the compiler owns the fixed EAX/ECX/EDX
+ * register transfer and the two separate 32-bit outputs. Do not preserve
+ * only EAX for RDPKRU: EDX is an observable GNU output as well, even if a
+ * caller later proves its local dead. The host assembler is just the final
+ * encoder of our already-qualified machine instruction. */
+static bool emit_linux_pkru(
+    FILE *out, const MinicCoreFunction *fn, const MinicX86Frame *frame,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
+    static const char *const instructions[] = {
+        "  .byte 0x0f,0x01,0xee\n", /* RDPKRU */
+        "  .byte 0x0f,0x01,0xef\n"  /* WRPKRU */
+    };
+    static const MinicCoreStructuredInlineAsmOperandKind read_kinds[] = {
+        MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT,
+        MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT,
+        MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT
+    };
+    const unsigned int form = info ? minic_x86_64_linux_pkru_form(
+        info->template_text, info->template_length) : 0U;
+    const bool read = form == 1U;
+    const MinicCoreStructuredInlineAsmOperand *bindings =
+        ins->value.structured_inline_asm.operands;
+    MinicType scalar;
+    size_t i;
+    if (!out || !fn || !frame || !ins || !info || !form ||
+        !info->is_volatile || info->is_goto || info->has_memory_clobber ||
+        info->register_clobber_count != 0U ||
+        ins->value.structured_inline_asm.operand_count != 3U || !bindings)
+        return false;
+    for (i = 0U; i < 3U; ++i) {
+        const MinicCoreStructuredInlineAsmOperand *b = &bindings[i];
+        const bool output = read && i < 2U;
+        if (b->operand_index != i || b->value >= fn->value_count ||
+            b->early_clobber || b->has_fixed_register_binding ||
+            b->kind != (read ? read_kinds[i] :
+                MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT))
+            return false;
+        if (output) {
+            if (!minic_type_pointee(fn->values[b->value].type, &scalar) ||
+                !minic_type_equal(scalar, minic_type_unsigned_int()))
+                return false;
+        } else if (!minic_type_equal(fn->values[b->value].type,
+                                     minic_type_unsigned_int()))
+            return false;
+    }
+    if (read) {
+        return x86_value_load(out, frame, bindings[2].value, "%rcx") &&
+            fputs(instructions[0], out) != EOF &&
+            x86_value_load(out, frame, bindings[0].value, "%r11") &&
+            fputs("  movl %eax, (%r11)\n", out) != EOF &&
+            x86_value_load(out, frame, bindings[1].value, "%r11") &&
+            fputs("  movl %edx, (%r11)\n", out) != EOF;
+    }
+    return x86_value_load(out, frame, bindings[0].value, "%rax") &&
+           x86_value_load(out, frame, bindings[1].value, "%rcx") &&
+           x86_value_load(out, frame, bindings[2].value, "%rdx") &&
+           fputs(instructions[1], out) != EOF;
+}
+
+/* x87 FDIV erratum probe from arch/x86/kernel/fpu/bugs.c. Load all three
+ * source-object addresses before touching the x87 stack: the probe has
+ * deliberately precise FPU state transitions and must not accidentally
+ * use any hidden floating-point C temporary or change FISTP's destination
+ * width. The data objects themselves are ordinary C globals/locals whose
+ * addresses are already established by shared Core memory lowering. */
+static bool emit_linux_fdiv_bug(
+    FILE *out, const MinicCoreFunction *fn, const MinicX86Frame *frame,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
+    static const MinicCoreStructuredInlineAsmOperandKind kinds[] = {
+        MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT,
+        MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT,
+        MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT
+    };
+    const MinicCoreStructuredInlineAsmOperand *b =
+        ins->value.structured_inline_asm.operands;
+    MinicType pointee;
+    size_t i;
+    if (!out || !fn || !frame || !info ||
+        !minic_x86_64_linux_fdiv_bug_form(
+            info->template_text, info->template_length) ||
+        !info->is_volatile || info->is_goto || !info->has_memory_clobber ||
+        info->register_clobber_count ||
+        ins->value.structured_inline_asm.operand_count != 3U || !b)
+        return false;
+    for (i = 0U; i < 3U; ++i) {
+        if (b[i].operand_index != i || b[i].value >= fn->value_count ||
+            b[i].kind != kinds[i] || b[i].early_clobber ||
+            b[i].has_fixed_register_binding ||
+            !minic_type_pointee(fn->values[b[i].value].type, &pointee) ||
+            !minic_type_equal(pointee, i == 0U ?
+                minic_type_int() : minic_type_double()))
+            return false;
+    }
+    return x86_value_load(out, frame, b[0].value, "%r11") &&
+           x86_value_load(out, frame, b[1].value, "%r10") &&
+           x86_value_load(out, frame, b[2].value, "%r9") &&
+           fputs("  fninit\n"
+                 "  fldl (%r10)\n"
+                 "  fdivl (%r9)\n"
+                 "  fmull (%r9)\n"
+                 "  fldl (%r10)\n"
+                 "  fsubp %st, %st(1)\n"
+                 "  fistpl (%r11)\n"
+                 "  fwait\n"
+                 "  fninit\n", out) != EOF;
+}
+
 bool minic_x86_64_emit_structured_asm(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicX86Frame *frame,
@@ -2652,6 +2967,12 @@ bool minic_x86_64_emit_structured_asm(
     bindings = ins->value.structured_inline_asm.operands;
     if (!info->template_text)
         return false;
+    if (minic_x86_64_linux_pkru_form(
+            info->template_text, info->template_length))
+        return emit_linux_pkru(out, fn, frame, ins, info);
+    if (minic_x86_64_linux_fdiv_bug_form(
+            info->template_text, info->template_length))
+        return emit_linux_fdiv_bug(out, fn, frame, ins, info);
     if (minic_x86_64_linux_monitor_wait_form(
             info->template_text, info->template_length))
         return emit_linux_monitor_wait(out, fn, frame, ins, info);
@@ -2683,6 +3004,15 @@ bool minic_x86_64_emit_structured_asm(
     if (minic_x86_64_linux_fxrstor_safe_form(
             info->template_text, info->template_length))
         return emit_linux_fxrstor_safe(out, fn, frame, ins, info);
+    if (minic_x86_64_linux_xstate_fault_form(
+            info->template_text, info->template_length))
+        return emit_linux_xstate_fault(out, fn, frame, ins, info);
+    if (minic_x86_64_linux_xrstor_alternative_form(
+            info->template_text, info->template_length))
+        return emit_linux_xrstor_alternative(out, fn, frame, ins, info);
+    if (minic_x86_64_linux_xsave_triple_alternative_form(
+            info->template_text, info->template_length))
+        return emit_linux_xsave_triple_alternative(out, fn, frame, ins, info);
     if (minic_x86_64_linux_load_unaligned_zeropad_form(
             info->template_text, info->template_length))
         return emit_linux_load_unaligned_zeropad(out, fn, frame, ins, info);

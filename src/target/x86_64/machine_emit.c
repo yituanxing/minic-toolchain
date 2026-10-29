@@ -13,6 +13,71 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Qualified GNU `i` symbolic operands are resolved by Common Core. Every
+ * machine consumer shares this fail-closed relocation validator: a symbol
+ * with an optional signed decimal addend is representable by ELF, whereas
+ * a register, expression, assembler directive or string interpolation is
+ * not. This validation runs before anything is written to the output. */
+static bool x86_asm_symbol_relocation_valid(const char *text) {
+    size_t i, length;
+    if (!text) return false;
+    length = strlen(text);
+    if (length == 0U || length > 128U ||
+        !((text[0] >= 'a' && text[0] <= 'z') ||
+          (text[0] >= 'A' && text[0] <= 'Z') ||
+          text[0] == '_' || text[0] == '.')) return false;
+    for (i = 1U; i < length; ++i) {
+        const char ch = text[i];
+        if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+            (ch >= '0' && ch <= '9') || ch == '_' || ch == '.' || ch == '$')
+            continue;
+        if ((ch == '+' || ch == '-') && i + 1U < length) {
+            size_t j;
+            for (j = i + 1U; j < length; ++j)
+                if (text[j] < '0' || text[j] > '9') return false;
+            break;
+        }
+        return false;
+    }
+    return true;
+}
+
+/* Linux static-key patching needs three genuine *link-time* relocations.
+ * On x86 the patch-site and target use PREL32, and the key/branch-flags
+ * entry uses PREL64. Core's symbolic specialization can resolve the key
+ * even when source asm sees a formal parameter of __always_inline__; the
+ * machine emitter must not guess from a runtime load or a raw GNU string. */
+static bool emit_linux_jump_label_asm_goto(
+    FILE *out, const MinicCoreFunction *fn, const MinicCoreInlineAsm *a,
+    size_t function_id) {
+    unsigned long long flags;
+    char *end;
+    if (!out || !fn || !a || !a->is_goto || !a->is_volatile ||
+        a->has_memory_clobber || a->register_clobber_count != 0U ||
+        a->resolved_immediate_count != 2U ||
+        a->goto_target >= fn->block_count ||
+        a->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
+        !minic_x86_64_linux_jump_label_form(
+            a->template_text, a->template_length) ||
+        !a->resolved_immediates[1] ||
+        !x86_asm_symbol_relocation_valid(a->resolved_immediates[0]))
+        return false;
+    flags = strtoull(a->resolved_immediates[1], &end, 10);
+    if (end == a->resolved_immediates[1] || *end != '\0' || flags > 3ULL)
+        return false;
+    return fprintf(out,
+        "1: jmp .Lmini_x86_f%zu_b%u\n"
+        "  .pushsection __jump_table,\"aw\"\n"
+        "  .balign 8\n"
+        "  .long 1b - .\n"
+        "  .long .Lmini_x86_f%zu_b%u - .\n"
+        "  .quad %s + %llu - .\n"
+        "  .popsection\n",
+        function_id, (unsigned)a->goto_target,
+        function_id, (unsigned)a->goto_target,
+        a->resolved_immediates[0], flags) >= 0;
+}
+
 /* Linux _static_cpu_has: the two real C destinations are represented in
  * Core, and Core has already resolved three `i` expressions into owned
  * source constants. Target x86 is responsible for physical branching,
@@ -24,7 +89,6 @@ static bool emit_linux_cpu_has_asm_goto(
     const char *text, *end;
     unsigned long long feature, mask;
     char *parsed;
-    size_t i, base_length;
     if (!out || !fn || !a || !a->is_goto || !a->is_volatile ||
         a->has_memory_clobber || a->register_clobber_count != 0U ||
         a->resolved_immediate_count != 3U ||
@@ -44,25 +108,8 @@ static bool emit_linux_cpu_has_asm_goto(
     /* Relocations must identify a *single* compiler-resolved symbol with an
      * optional decimal addend. No assembler expression, dereference, '@',
      * semicolon, parentheses or alternate section can enter through %P. */
-    text = a->resolved_immediates[2];
-    base_length = strlen(text);
-    if (base_length == 0U || base_length > 128U ||
-        !((text[0] >= 'a' && text[0] <= 'z') ||
-          (text[0] >= 'A' && text[0] <= 'Z') ||
-          text[0] == '_' || text[0] == '.')) return false;
-    for (i = 1U; i < base_length; ++i) {
-        const char ch = text[i];
-        if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
-            (ch >= '0' && ch <= '9') || ch == '_' || ch == '.' || ch == '$')
-            continue;
-        if ((ch == '+' || ch == '-') && i + 1U < base_length) {
-            size_t j;
-            for (j = i + 1U; j < base_length; ++j)
-                if (text[j] < '0' || text[j] > '9') return false;
-            break;
-        }
+    if (!x86_asm_symbol_relocation_valid(a->resolved_immediates[2]))
         return false;
-    }
     text = strstr(a->template_text, ".skip ");
     end = text ? strchr(text, '\n') : NULL;
     if (!text || !end || end <= text ||
@@ -133,12 +180,17 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
         if (a != NULL && a->is_goto) {
             if (getenv("MINIC_ASM_FRONTIER_TRACE") != NULL &&
                 !minic_x86_64_linux_cpu_has_goto_form(
+                    a->template_text, a->template_length) &&
+                !minic_x86_64_linux_jump_label_form(
                     a->template_text, a->template_length))
                 (void)fprintf(stderr,
                     "X86_TARGET_ASM_GOTO_FRONTIER function=%s length=%zu "
                     "second=%u immediate_count=%zu preview=%.90s\n",
                     fn->name, a->template_length, (unsigned)a->goto_second_target,
                     a->resolved_immediate_count, a->template_text);
+            if (minic_x86_64_linux_jump_label_form(
+                    a->template_text, a->template_length))
+                return emit_linux_jump_label_asm_goto(out, fn, a, function_id);
             return emit_linux_cpu_has_asm_goto(out, fn, a, function_id);
         }
         form = a != NULL ? minic_x86_64_linux_privileged_zero_form(

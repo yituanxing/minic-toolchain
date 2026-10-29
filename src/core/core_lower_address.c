@@ -295,11 +295,32 @@ MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
                    : MINIC_CORE_LOWER_ERROR;
     }
     if (expression->kind == MINIC_EXPRESSION_DEREFERENCE) {
+        const MinicExpression *pointer_expression = minic_c0_program_expression(
+            context->body->program, expression->value.unary.operand);
         MinicCoreValueId pointer_id;
         MinicType expected_pointer;
 
         if (!minic_type_pointer_to(expression->type, &expected_pointer)) {
             return MINIC_CORE_LOWER_ERROR;
+        }
+        /* In an lvalue address context, *&object designates precisely the
+         * original object. Keep this cancellation at the common Core address
+         * owner, so GNU memory constraints (including x87 floating-point
+         * globals), ordinary C address-taking and all ISA backends agree.
+         * Recursing into lower_address of the object retains side effects
+         * of member/subscript address computations and its exact qualifiers;
+         * no value load or runtime pointer SSA is semantically needed. */
+        if (pointer_expression != NULL &&
+            pointer_expression->kind == MINIC_EXPRESSION_ADDRESS_OF &&
+            minic_type_equal(pointer_expression->type, expected_pointer)) {
+            const MinicExpression *object_expression = minic_c0_program_expression(
+                context->body->program,
+                pointer_expression->value.unary.operand);
+            if (object_expression != NULL &&
+                object_expression->value_category == MINIC_VALUE_LVALUE &&
+                minic_type_equal(object_expression->type, expression->type))
+                return lower_address(context,
+                    pointer_expression->value.unary.operand, address_id);
         }
         status = lower_expression(context, expression->value.unary.operand, &pointer_id);
         if (status != MINIC_CORE_LOWER_OK) {

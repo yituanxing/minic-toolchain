@@ -25,7 +25,13 @@ for fixture in \
     x86_64_linux_selector_lar \
     x86_64_linux_rng_flag \
     x86_64_linux_fpu_userframe \
-    x86_64_linux_fxrstor_safe
+    x86_64_linux_fxrstor_safe \
+    x86_64_linux_xstate_fault \
+    x86_64_linux_xstate_alternatives \
+    x86_64_linux_jump_label \
+    x86_64_linux_pkru \
+    x86_64_linux_fdiv_bug \
+    x86_64_linux_ds_regset
 do
     "$host_cc" -E -P "$source_root/tests/target/$fixture.c" \
         -o "$workdir/$fixture.i"
@@ -36,12 +42,47 @@ do
         -o "$workdir/$fixture.o"
 done
 
+objdump -d "$workdir/x86_64_linux_pkru.o" > "$workdir/pkru.dump"
+if ! grep -Eq 'rdpkru' "$workdir/pkru.dump" ||
+   ! grep -Eq 'wrpkru' "$workdir/pkru.dump" ||
+   ! grep -Fq 'movl %edx, (%r11)' "$workdir/x86_64_linux_pkru.s" ||
+   ! grep -Fq 'movl %eax, (%r11)' "$workdir/x86_64_linux_pkru.s"; then
+    printf 'FAIL: x86 Linux PKRU fixed-GPR inputs or dual 32-bit outputs lost\n' >&2
+    exit 1
+fi
+
+objdump -d "$workdir/x86_64_linux_fdiv_bug.o" > "$workdir/fdiv.dump"
+for opcode in fninit fldl fdivl fmull fsubp fistpl; do
+    if ! grep -Fq "$opcode" "$workdir/fdiv.dump"; then
+        printf 'FAIL: x86 Linux FPU FDIV x87 opcode %s was dropped\n' "$opcode" >&2
+        exit 1
+    fi
+done
+if ! grep -Fq 'fwait' "$workdir/x86_64_linux_fdiv_bug.s"; then
+    printf 'FAIL: x86 Linux FPU FDIV FWAIT synchronization was dropped\n' >&2
+    exit 1
+fi
+if ! grep -Fq 'movl %ds, %eax' "$workdir/x86_64_linux_ds_regset.s" ||
+   ! grep -Fq 'movl %eax, (%r11)' "$workdir/x86_64_linux_ds_regset.s" ||
+   ! grep -Fq 'movw %es, %ax' "$workdir/x86_64_linux_ds_regset.s" ||
+   ! grep -Fq 'movw %ax, (%r11)' "$workdir/x86_64_linux_ds_regset.s"; then
+    printf 'FAIL: Linux regset 32-bit DS/16-bit ES selector store was mis-sized\n' >&2
+    exit 1
+fi
+
 readelf -r "$workdir/x86_64_linux_put_user_call.o" > "$workdir/put.reloc"
 readelf -r "$workdir/x86_64_linux_get_user_call.o" > "$workdir/get.reloc"
 for size in 1 2 4 8
 do
     if ! grep -Fq "__put_user_$size" "$workdir/put.reloc"; then
         printf 'FAIL: x86 put_user_%s helper relocation absent\n' "$size" >&2
+        exit 1
+    fi
+done
+for size in 2 4
+do
+    if ! grep -Fq "__put_user_nocheck_$size" "$workdir/put.reloc"; then
+        printf 'FAIL: x86 put_user_nocheck_%s helper relocation absent\n' "$size" >&2
         exit 1
     fi
 done
@@ -218,9 +259,9 @@ readelf -x __ex_table "$workdir/x86_64_linux_fpu_userframe.o" > "$workdir/fpu.ex
 objcopy --dump-section .altinstructions="$workdir/fpu.altbin" \
     "$workdir/x86_64_linux_fpu_userframe.o"
 fpu_features=$(od -An -tx1 -v "$workdir/fpu.altbin" | tr -d '[:space:]')
-if [ "$(printf '%s' "$fpu_features" | grep -o '34010000' | wc -l)" -ne 6 ] ||
-   [ "$(grep -o '0f000000' "$workdir/fpu.extable" | wc -l)" -ne 3 ] ||
-   [ "$(grep -c 'R_X86_64_PC32' "$workdir/fpu.reloc")" -ne 18 ]; then
+if [ "$(printf '%s' "$fpu_features" | grep -o '34010000' | wc -l)" -ne 8 ] ||
+   [ "$(grep -o '0f000000' "$workdir/fpu.extable" | wc -l)" -ne 4 ] ||
+   [ "$(grep -c 'R_X86_64_PC32' "$workdir/fpu.reloc")" -ne 24 ]; then
     printf 'FAIL: FPU user save/restore SMAP patches or type-15 exception fixups lost\n' >&2
     exit 1
 fi
@@ -229,6 +270,48 @@ readelf -x __ex_table "$workdir/x86_64_linux_fxrstor_safe.o" > "$workdir/fxrstor
 if [ "$(grep -c 'R_X86_64_PC32' "$workdir/fxrstor.reloc")" -ne 2 ] ||
    ! grep -Fq '1100f2ff' "$workdir/fxrstor.extable"; then
     printf 'FAIL: FXRSTORQ type-17 EAX error-code relocation/data lost\n' >&2
+    exit 1
+fi
+readelf -r "$workdir/x86_64_linux_xstate_fault.o" > "$workdir/xstate.reloc"
+readelf -x __ex_table "$workdir/x86_64_linux_xstate_fault.o" > "$workdir/xstate.extable"
+objdump -d "$workdir/x86_64_linux_xstate_fault.o" > "$workdir/xstate.dump"
+if [ "$(grep -c 'R_X86_64_PC32' "$workdir/xstate.reloc")" -ne 8 ] ||
+   [ "$(grep -o '0f000000' "$workdir/xstate.extable" | wc -l)" -ne 4 ] ||
+   ! grep -Fq 'xsave64' "$workdir/xstate.dump" ||
+   ! grep -Fq 'xrstor64' "$workdir/xstate.dump" ||
+   ! grep -Fq 'xrstors64' "$workdir/xstate.dump" ||
+   ! grep -Fq 'xsaves64' "$workdir/xstate.dump"; then
+    printf 'FAIL: x86 XSAVE/XRSTOR/XSAVES/XRSTORS type-15 fixed-register exception fixups lost\n' >&2
+    exit 1
+fi
+readelf -r "$workdir/x86_64_linux_xstate_alternatives.o" > "$workdir/xstate-alt.reloc"
+readelf -x __ex_table "$workdir/x86_64_linux_xstate_alternatives.o" > "$workdir/xstate-alt.extable"
+objcopy --dump-section .altinstructions="$workdir/xstate-alt.bin" \
+    "$workdir/x86_64_linux_xstate_alternatives.o"
+objdump -d -j .altinstr_replacement \
+    "$workdir/x86_64_linux_xstate_alternatives.o" > "$workdir/xstate-alt.dump"
+xstate_features=$(od -An -tx1 -v "$workdir/xstate-alt.bin" | tr -d '[:space:]')
+if [ "$(grep -c 'R_X86_64_PC32' "$workdir/xstate-alt.reloc")" -ne 12 ] ||
+   [ "$(printf '%s' "$xstate_features" | grep -o '40010000' | wc -l)" -ne 1 ] ||
+   [ "$(printf '%s' "$xstate_features" | grep -o '41010000' | wc -l)" -ne 1 ] ||
+   [ "$(printf '%s' "$xstate_features" | grep -o '43010000' | wc -l)" -ne 2 ] ||
+   ! grep -Fq '1100f2ff' "$workdir/xstate-alt.extable" ||
+   ! grep -Fq '06000000' "$workdir/xstate-alt.extable"; then
+    printf 'FAIL: XSAVE ALTERNATIVE_3/XSAVES features or type-17/type-6 recovery lost\n' >&2
+    exit 1
+fi
+for opcode in xsaveopt64 xsavec64 xsaves64 xrstors64
+do
+    if ! grep -Fq "$opcode" "$workdir/xstate-alt.dump"; then
+        printf 'FAIL: x86 XSAVE CPU replacement opcode %s absent\n' "$opcode" >&2
+        exit 1
+    fi
+done
+readelf -r "$workdir/x86_64_linux_jump_label.o" > "$workdir/jump.reloc"
+if [ "$(grep -c 'R_X86_64_PC32' "$workdir/jump.reloc")" -ne 6 ] ||
+   [ "$(grep -c 'R_X86_64_PC64' "$workdir/jump.reloc")" -ne 3 ] ||
+   ! grep -Fq '.rela__jump_table' "$workdir/jump.reloc"; then
+    printf 'FAIL: Linux jump_label patch-site/target/key+flags relocation lost\n' >&2
     exit 1
 fi
 
@@ -328,6 +411,27 @@ sed 's/-14/-15/g' \
 if "$minic_cc" -S "$workdir/mutated_fxrstor.i" --target=x86_64-linux \
     -o "$workdir/mutated_fxrstor.s" >/dev/null 2>&1; then
     printf 'FAIL: corrupted FXRSTORQ type-17 error code admitted\n' >&2
+    exit 1
+fi
+sed 's/\.long " "15" " /\.long " "16" " /g' \
+    "$workdir/x86_64_linux_xstate_fault.i" > "$workdir/mutated_xstate.i"
+if "$minic_cc" -S "$workdir/mutated_xstate.i" --target=x86_64-linux \
+    -o "$workdir/mutated_xstate.s" >/dev/null 2>&1; then
+    printf 'FAIL: XSAVE type-16 instead of type-15 accepted\n' >&2
+    exit 1
+fi
+sed 's/(10\*32+ 3)/(10*32+ 2)/g' \
+    "$workdir/x86_64_linux_xstate_alternatives.i" > "$workdir/mutated_xsave_alt.i"
+if "$minic_cc" -S "$workdir/mutated_xsave_alt.i" --target=x86_64-linux \
+    -o "$workdir/mutated_xsave_alt.s" >/dev/null 2>&1; then
+    printf 'FAIL: corrupted XSAVE CPU feature admitted\n' >&2
+    exit 1
+fi
+sed 's/__jump_table/__jump_bad_table/g' \
+    "$workdir/x86_64_linux_jump_label.i" > "$workdir/mutated_jump.i"
+if "$minic_cc" -S "$workdir/mutated_jump.i" --target=x86_64-linux \
+    -o "$workdir/mutated_jump.s" >/dev/null 2>&1; then
+    printf 'FAIL: malformed Linux jump_label patch section accepted\n' >&2
     exit 1
 fi
 

@@ -378,6 +378,13 @@ bool minic_core_function_add_object(MinicCoreFunction *function,
    participate in GLOBAL_ADDRESS while LOAD/STORE still reject void pointees. */
 bool minic_core_ir_global_addressable_type(MinicType type) {
     return minic_type_is_integer(type) || minic_type_is_pointer(type) ||
+           /* Floating globals remain addressable even when their arithmetic
+            * is target-constrained. Linux's x87 probes consume float64
+            * objects through GNU `m` operands without loading a C scalar;
+            * the Core global-address contract must agree with the existing
+            * shared address/aggregate lowering predicate. */
+           minic_type_is_float(type) || minic_type_is_double(type) ||
+           minic_type_is_long_double(type) ||
            minic_type_is_array(type) || minic_type_is_record(type) ||
            minic_type_is_void(type);
 }

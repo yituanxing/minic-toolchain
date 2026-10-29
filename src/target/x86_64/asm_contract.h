@@ -42,6 +42,12 @@ bool minic_x86_64_linux_rep_stosb_alternative_form(const char *, size_t);
 unsigned int minic_x86_64_linux_fpu_user_frame_form(const char *, size_t);
 /* FXRSTOR/FXRSTORQ protected by Linux type-17 register exception fixup. */
 unsigned int minic_x86_64_linux_fxrstor_safe_form(const char *, size_t);
+unsigned int minic_x86_64_linux_xstate_fault_form(const char *, size_t);
+bool minic_x86_64_linux_xrstor_alternative_form(const char *, size_t);
+bool minic_x86_64_linux_xsave_triple_alternative_form(const char *, size_t);
+unsigned int minic_x86_64_linux_pkru_form(const char *, size_t);
+bool minic_x86_64_linux_fdiv_bug_form(const char *, size_t);
+unsigned int minic_x86_64_linux_jump_label_form(const char *, size_t);
 /* Linux SMAP ALTERNATIVE: empty baseline, STAC/CLAC or flags save/restore. */
 unsigned int minic_x86_64_linux_smap_alternative_form(const char *, size_t);
 /* Linux harden_usercopy speculative barrier ALTERNATIVE, feature 642. */

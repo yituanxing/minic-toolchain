@@ -1,6 +1,7 @@
 #include "core/core_lower_asm_internal.h"
 #include "frontend/const_eval.h"
 #include "target/backend.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -20,12 +21,28 @@ MinicCoreLowerStatus core_asm_try_target_register_contract(
     if (!ctx || !ctx->target || !ctx->body || !ctx->body->program ||
         !ctx->function || !statement) return MINIC_CORE_LOWER_OK;
     backend = minic_backend_for_target(ctx->target);
+    /* A fully target-qualified asm goto with GNU `i` inputs must take the
+     * Core source-constant path below, not the earlier scalar-register
+     * contract path. The latter would silently turn a symbolic relocation
+     * into a runtime SSA value (x86 Linux __jump_table's static-key owner).
+     * This precedence is target-independent: backends opt in through the
+     * existing exact-template qualifier, and the goto lowering checks every
+     * immediate before committing any Core effects. */
+    if (source && source->is_goto &&
+        minic_backend_qualify_inline_asm_goto(
+            backend, ctx->body->program, source))
+        return MINIC_CORE_LOWER_OK;
     if (!minic_backend_qualify_inline_asm(
             backend, ctx->body->program, source, &contract))
         return MINIC_CORE_LOWER_OK;
     *handled = true;
-    if (!core_inline_asm_numeric_template(source, &normalized, &length))
+    if (!core_inline_asm_numeric_template(source, &normalized, &length)) {
+        if (getenv("MINIC_ASM_FRONTIER_TRACE") != NULL)
+            (void)fprintf(stderr,
+                "CORE_TARGET_ASM_FAILURE function=%s stage=normalize\n",
+                ctx->source_function ? ctx->source_function->name : "?");
         return MINIC_CORE_LOWER_ERROR;
+    }
     memset(&ins, 0, sizeof(ins));
     ins.kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
     ins.span = statement->span;
@@ -106,6 +123,13 @@ MinicCoreLowerStatus core_asm_try_target_register_contract(
             status = lower_address(ctx, op->expression, &bind->value);
         else status = MINIC_CORE_LOWER_UNSUPPORTED;
         if (status != MINIC_CORE_LOWER_OK) {
+            if (getenv("MINIC_ASM_FRONTIER_TRACE") != NULL)
+                (void)fprintf(stderr,
+                    "CORE_TARGET_ASM_FAILURE function=%s stage=operand "
+                    "index=%zu kind=%d status=%d expr_kind=%d\n",
+                    ctx->source_function ? ctx->source_function->name : "?",
+                    i, (int)bind->kind, (int)status,
+                    source_expression ? (int)source_expression->kind : -1);
             free(normalized);
             return status;
         }
