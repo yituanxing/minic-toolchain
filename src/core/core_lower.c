@@ -546,7 +546,8 @@ static MinicCoreLowerStatus lower_return(MinicCoreLowerContext *context,
                        minic_type_is_record(expression->type)) {
                 status = minic_core_lower_record_conditional_object(
                     context, expression, &terminator.return_object);
-            } else if (expression->kind == MINIC_EXPRESSION_ASSIGNMENT ||
+            } else if (expression->kind == MINIC_EXPRESSION_STATEMENT ||
+                       expression->kind == MINIC_EXPRESSION_ASSIGNMENT ||
                        (expression->kind == MINIC_EXPRESSION_MEMBER &&
                         expression->value_category == MINIC_VALUE_RVALUE &&
                         minic_c0_record_value_is_copy_source(

@@ -1699,7 +1699,13 @@ bool minic_c0_expression_array_object_info(const MinicC0Program *program,
         }
         resolved.element_type = array_type->element_type;
         resolved.element_count = array_type->element_count;
-        resolved.is_incomplete = array_type->element_count == 0U;
+        /* GNU `T objects[0]` is a complete zero-extent array, distinct from
+         * `extern T objects[]`. In particular Linux's __ADDRESSABLE macro
+         * takes `&objects` and needs its pointer-to-array type verified as
+         * zero-sized, not as an incomplete declaration. */
+        resolved.is_zero_length = array_type->is_zero_length;
+        resolved.is_incomplete =
+            array_type->element_count == 0U && !array_type->is_zero_length;
         resolved.has_materialized_type = true;
     } else {
         return false;

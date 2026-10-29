@@ -221,6 +221,12 @@ bool minic_x86_64_requires_qualified_input_asm(const MinicInlineAsm *src) {
              src->template_text, src->template_length) ||
          minic_x86_64_linux_vmware_stealclock_alt_form(
              src->template_text, src->template_length) ||
+         minic_x86_64_linux_pm_trace_form(
+             src->template_text, src->template_length) ||
+         minic_x86_64_linux_crash_gpr_snapshot_form(
+             src->template_text, src->template_length) != 0U ||
+         minic_x86_64_linux_crash_misc_snapshot_form(
+             src->template_text, src->template_length) != 0U ||
          minic_x86_64_linux_vmware_hypercall_form(
              src->template_text, src->template_length) != 0U ||
          minic_x86_64_linux_kexec_load_segments_form(
@@ -270,6 +276,107 @@ static bool x86_linux_compact_asm_equals(const char *text, size_t length,
         ++j;
     }
     return expected[j] == '\0';
+}
+
+/* Exact arch/x86/include/asm/kexec.h crash_setup_regs GPR snapshots. GNU
+ * `=m` stores architectural GPR contents into the addressable pt_regs field;
+ * the Core must not turn the memory operand into an arbitrary register. */
+unsigned int minic_x86_64_linux_crash_gpr_snapshot_form(
+    const char *text, size_t length) {
+    static const char *const registers[] = {
+        "rbx", "rcx", "rdx", "rsi", "rdi", "rbp", "rax", "rsp",
+        "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"
+    };
+    size_t i;
+    for (i = 0U; i < sizeof(registers)/sizeof(registers[0]); ++i) {
+        char exact[40];
+        const int n = snprintf(exact, sizeof(exact),
+                               "movq%%%%%s,%%0", registers[i]);
+        if (n > 0 && (size_t)n < sizeof(exact) &&
+            x86_linux_compact_asm_equals(text, length, exact))
+            return (unsigned int)i + 1U;
+    }
+    return 0U;
+}
+
+/* Form 1 preserves hardware RFLAGS via PUSHFQ/POPQ, including all condition
+ * codes; form 2 records the machine RIP with LEA, never a C pseudo-address. */
+unsigned int minic_x86_64_linux_crash_misc_snapshot_form(
+    const char *text, size_t length) {
+    if (x86_linux_compact_asm_equals(text, length, "pushfq;popq%0")) return 1U;
+    if (x86_linux_compact_asm_equals(text, length, "lea0(%%rip),%0")) return 2U;
+    return 0U;
+}
+
+static bool x86_linux_crash_register_source(
+    const MinicC0Program *program, const MinicInlineAsm *src,
+    MinicTargetInlineAsmContract *contract) {
+    const unsigned int gpr = src ? minic_x86_64_linux_crash_gpr_snapshot_form(
+        src->template_text, src->template_length) : 0U;
+    const unsigned int misc = src ? minic_x86_64_linux_crash_misc_snapshot_form(
+        src->template_text, src->template_length) : 0U;
+    const bool memory_output = gpr != 0U || misc == 1U;
+    const MinicExpression *out;
+    MinicType plain;
+    if (!program || !src || !contract || (!gpr && !misc) ||
+        src->is_goto || src->is_volatile != memory_output ||
+        src->output_count != 1U || src->input_count != 0U || !src->outputs ||
+        src->label_count || src->has_memory_clobber || src->clobber_count ||
+        src->register_clobber_count ||
+        !target_constraint_is(&src->outputs[0], memory_output ? "=m" : "=r"))
+        return false;
+    out = minic_c0_program_expression(program, src->outputs[0].expression);
+    if (!out || out->value_category != MINIC_VALUE_LVALUE ||
+        minic_type_is_const(out->type) ||
+        !minic_type_unqualified(out->type, &plain) ||
+        !minic_type_equal(plain, minic_type_unsigned_long())) return false;
+    contract->operand_count = 1U;
+    contract->kinds[0] = memory_output ?
+        MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT :
+        MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+    return true;
+}
+
+/* arch/x86/include/asm/pm-trace.h: TRACE_RESUME/TRACE_SUSPEND encode an
+ * immutable two-field ELF record in .tracedata, then return its address.
+ * `%c2` is a direct symbol for the preprocessed __FILE__ string literal;
+ * loading that string's pointer at run time is not GNU `i` semantics. */
+bool minic_x86_64_linux_pm_trace_form(const char *text, size_t length) {
+    return x86_linux_compact_asm_equals(text, length,
+        "movq$1f,%0.section.tracedata,\"a\"1:.word%c1.quad%c2.previous");
+}
+
+static bool x86_linux_pm_trace_source(
+    const MinicC0Program *program, const MinicInlineAsm *src,
+    MinicTargetInlineAsmContract *contract) {
+    const MinicExpression *out, *line, *filename;
+    if (!program || !src || !contract ||
+        !minic_x86_64_linux_pm_trace_form(
+            src->template_text, src->template_length) ||
+        !src->is_volatile || src->is_goto || src->output_count != 1U ||
+        src->input_count != 2U || !src->outputs || !src->inputs ||
+        src->label_count || src->has_memory_clobber || src->clobber_count ||
+        src->register_clobber_count ||
+        !target_constraint_is(&src->outputs[0], "=r") ||
+        !target_constraint_is(&src->inputs[0], "i") ||
+        !target_constraint_is(&src->inputs[1], "i")) return false;
+    out = minic_c0_program_expression(program, src->outputs[0].expression);
+    line = minic_c0_program_expression(program, src->inputs[0].expression);
+    filename = minic_c0_program_expression(program, src->inputs[1].expression);
+    if (!out || !line || !filename ||
+        out->value_category != MINIC_VALUE_LVALUE ||
+        minic_type_is_const(out->type) || !minic_type_is_pointer(out->type) ||
+        line->kind != MINIC_EXPRESSION_INTEGER ||
+        !minic_type_is_integer(line->type) ||
+        line->value.integer_value < 0 || line->value.integer_value > 65535 ||
+        !minic_type_is_pointer(filename->type)) return false;
+    contract->operand_count = 3U;
+    contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+    contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    /* The .tracedata record is emitted by GAS at build time, not a run-time
+     * memory read/write. GCC's original template has no memory clobber. */
+    return true;
 }
 
 unsigned int minic_x86_64_linux_task_control_form(const char *text, size_t length) {
@@ -2936,8 +3043,7 @@ unsigned int minic_x86_64_linux_msr_form(const char *text,size_t len) {
       /* mce_rdmsrl: architectural-violation #MC fixup kind 13. */
       "1:rdmsr2:.pushsection\"__ex_table\",\"a\".balign4"
       ".long(1b)-..long(2b)-..long13.popsection",
-      /* Linux 6.6 EX_TYPE_WRMSR_IN_MCE is 12, while
-       * EX_TYPE_RDMSR_IN_MCE is 13: the #MC handlers are not interchangeable. */
+      /* Linux 6.6 EX_TYPE_WRMSR_IN_MCE is 12; RDMSR_IN_MCE is 13. */
       "1:wrmsr2:.pushsection\"__ex_table\",\"a\".balign4"
       ".long(1b)-..long(2b)-..long12.popsection"
     };
@@ -8351,6 +8457,10 @@ bool minic_x86_64_qualify_inline_asm(
     bool is_mulacc = false, is_muldiv = false;
     size_t i, count;
     if (!contract) return false;
+    if (x86_linux_crash_register_source(program, source, contract))
+        return true;
+    if (x86_linux_pm_trace_source(program, source, contract))
+        return true;
     if (x86_linux_vmware_hypercall_source(program, source, contract))
         return true;
     if (x86_linux_vmware_stealclock_alt_source(program, source, contract))

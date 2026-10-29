@@ -1148,8 +1148,12 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
             }
         }
         segment_terminates[source_index] = segment_terminated;
+        /* A direct break appearing after a return-only nested statement is
+         * source-unreachable and must not make the enclosing switch appear
+         * to have a live exit path. A conditional break within the lowered
+         * segment still owns an explicit edge to exit_block. */
         segment_breaks[source_index] =
-            break_index != SIZE_MAX ||
+            (!segment_terminated && break_index != SIZE_MAX) ||
             core_switch_block_has_outer_break(context, &segment, true);
 
         /* Constant entry + proven direct source break/return ends EVERY
@@ -1280,7 +1284,13 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
     }
 
     context->block_id = exit_block;
-    if (all_segments_terminate) {
+    /* Source-level break tokens alone are not proof of a reachable exit:
+     * nested switches can return along every dispatch path, leaving their
+     * trailing `break` syntactically present but dynamically unreachable.
+     * An exit with no Core CFG predecessor is universally unreachable,
+     * independently of case-fallthrough classification. */
+    if (all_segments_terminate ||
+        !minic_core_lower_internal_block_has_predecessor(context->function, exit_block)) {
         MinicCoreTerminator exit_terminator;
 
         (void)memset(&exit_terminator, 0, sizeof(exit_terminator));

@@ -1224,6 +1224,18 @@ bool minic_target_info_machine_builtin_signature(
     return false;
 }
 
+bool minic_target_info_inline_asm_memory_input_constraint_supported(
+    const MinicTargetInfo *target, const char *constraint, size_t constraint_length) {
+    if (target == NULL || constraint == NULL || constraint_length != 1U) {
+        return false;
+    }
+    /* GNU m names a memory operand for all of MiniC's target descriptions.
+     * On AArch64 Q specifically names an address with a single base register
+     * and zero displacement. Other targets give Q unrelated semantics. */
+    return constraint[0] == 'm' ||
+           (target->architecture == MINIC_TARGET_ARCH_AARCH64 && constraint[0] == 'Q');
+}
+
 bool minic_target_info_inline_asm_immediate_constraint_supported(const MinicTargetInfo *target,
                                                                  const char *constraint,
                                                                  size_t constraint_length,

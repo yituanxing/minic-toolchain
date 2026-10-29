@@ -43,6 +43,150 @@ static const char *x86_asm_direct_function_symbol(
     return fn->function_symbols[symbol_id].name;
 }
 
+/* GNU `i` symbolic string operands may carry a target-neutral `&array[0]`
+ * identity GEP. Follow only provably zero-offset pointer arithmetic back to
+ * an owned Core global, never an arbitrary runtime or casted pointer value. */
+static const char *x86_asm_zero_offset_global_symbol(
+    const MinicCoreFunction *fn, MinicCoreValueId value) {
+    unsigned int depth;
+    if (!fn) return NULL;
+    for (depth = 0U; depth < 6U; ++depth) {
+        const MinicCoreInstruction *definition;
+        if (value >= fn->value_count ||
+            fn->values[value].definition >= fn->instruction_count)
+            return NULL;
+        definition = &fn->instructions[fn->values[value].definition];
+        if (definition->result != value) return NULL;
+        if (definition->kind == MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS) {
+            const size_t id = definition->value.global_id;
+            if (id >= fn->global_count || !fn->globals[id].name ||
+                !fn->globals[id].name[0]) return NULL;
+            return fn->globals[id].name;
+        }
+        if (definition->kind == MINIC_CORE_INSTRUCTION_SCALAR_BITCAST) {
+            const MinicCoreValueId operand = definition->value.operand;
+            if (operand >= fn->value_count ||
+                !minic_type_is_pointer(fn->values[value].type) ||
+                !minic_type_is_pointer(fn->values[operand].type))
+                return NULL;
+            value = operand;
+            continue;
+        }
+        if (definition->kind != MINIC_CORE_INSTRUCTION_POINTER_OFFSET ||
+            definition->value.pointer_offset.index >= fn->value_count)
+            return NULL;
+        {
+            const MinicCoreValueId index =
+                definition->value.pointer_offset.index;
+            const MinicCoreInstruction *idx;
+            if (fn->values[index].definition >= fn->instruction_count)
+                return NULL;
+            idx = &fn->instructions[fn->values[index].definition];
+            if (idx->kind != MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT ||
+                idx->result != index || idx->value.integer_value != 0)
+                return NULL;
+        }
+        value = definition->value.pointer_offset.base;
+    }
+    return NULL;
+}
+
+/* GNU Linux arch/x86/include/asm/pm-trace.h TRACE_RESUME records
+ * (u16 source-line, u64 address-of-file-string) in ELF .tracedata. The
+ * assembler resolves `1f` to the emitted record's address and applies a
+ * R_X86_64_64 relocation for __FILE__; a runtime pointer load cannot replace
+ * the required symbolic `i` input. This models the complete GNU template. */
+static bool emit_linux_pm_trace_record(
+    FILE *out, const MinicCoreFunction *fn, const MinicX86Frame *frame,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
+    const MinicCoreStructuredInlineAsmOperand *b =
+        ins->value.structured_inline_asm.operands;
+    const MinicCoreInstruction *line_def;
+    const MinicCoreValueId line_value = b ? b[1].value : 0U;
+    const MinicCoreValueId file_value = b ? b[2].value : 0U;
+    const char *file_symbol;
+    int64_t source_line;
+    if (!out || !fn || !frame || !ins || !info || !b ||
+        !minic_x86_64_linux_pm_trace_form(
+            info->template_text, info->template_length) ||
+        !info->is_volatile || info->is_goto || info->has_memory_clobber ||
+        info->register_clobber_count ||
+        ins->value.structured_inline_asm.operand_count != 3U ||
+        b[0].operand_index != 0U || b[1].operand_index != 1U ||
+        b[2].operand_index != 2U ||
+        b[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
+        b[1].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
+        b[2].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
+        b[0].has_fixed_register_binding ||
+        b[1].has_fixed_register_binding ||
+        b[2].has_fixed_register_binding ||
+        b[0].value >= fn->value_count ||
+        line_value >= fn->value_count || file_value >= fn->value_count ||
+        !minic_type_is_pointer(fn->values[b[0].value].type) ||
+        !minic_type_is_integer(fn->values[line_value].type) ||
+        !minic_type_is_pointer(fn->values[file_value].type) ||
+        fn->values[line_value].definition >= fn->instruction_count ||
+        fn->values[file_value].definition >= fn->instruction_count)
+        return false;
+    line_def = &fn->instructions[fn->values[line_value].definition];
+    file_symbol = x86_asm_zero_offset_global_symbol(fn, file_value);
+    if (line_def->kind != MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT ||
+        line_def->result != line_value ||
+        !file_symbol) return false;
+    source_line = line_def->value.integer_value;
+    if (source_line < 0 || source_line > 65535 ||
+        !file_symbol || !file_symbol[0]) return false;
+    return fputs("  movq $1f, %rax\n"
+                 "  .section .tracedata,\"a\"\n"
+                 "1:\n", out) != EOF &&
+           fprintf(out, "  .word %lld\n  .quad %s\n",
+                   (long long)source_line, file_symbol) >= 0 &&
+           fputs("  .previous\n", out) != EOF &&
+           x86_value_load(out, frame, b[0].value, "%r11") &&
+           fputs("  movq %rax, (%r11)\n", out) != EOF;
+}
+
+/* Exact GNU kexec crash_setup_regs register-memory interface. The address
+ * register must differ from the GPR being snapshotted: in particular GNU
+ * `movq %%r11,%0` must observe R11 *before* address materialization. */
+static bool emit_linux_crash_register_snapshot(
+    FILE *out, const MinicCoreFunction *fn, const MinicX86Frame *frame,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
+    static const char *const gprs[] = {
+        "%rbx", "%rcx", "%rdx", "%rsi", "%rdi", "%rbp", "%rax", "%rsp",
+        "%r8", "%r9", "%r10", "%r11", "%r12", "%r13", "%r14", "%r15"
+    };
+    const MinicCoreStructuredInlineAsmOperand *b =
+        ins->value.structured_inline_asm.operands;
+    const unsigned int gpr = minic_x86_64_linux_crash_gpr_snapshot_form(
+        info->template_text, info->template_length);
+    const unsigned int misc = minic_x86_64_linux_crash_misc_snapshot_form(
+        info->template_text, info->template_length);
+    const bool memory_output = gpr != 0U || misc == 1U;
+    const char *scratch = gpr == 12U ? "%r10" : "%r11";
+    MinicType pointee, plain;
+    if (!out || !fn || !frame || !ins || !info || !b ||
+        (!gpr && !misc) || info->is_goto ||
+        (memory_output && !info->is_volatile) ||
+        info->has_memory_clobber || info->register_clobber_count ||
+        ins->value.structured_inline_asm.operand_count != 1U ||
+        b[0].operand_index != 0U || b[0].early_clobber ||
+        b[0].has_fixed_register_binding || b[0].value >= fn->value_count ||
+        b[0].kind != (memory_output ?
+            MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT :
+            MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT) ||
+        !minic_type_pointee(fn->values[b[0].value].type, &pointee) ||
+        !minic_type_unqualified(pointee, &plain) ||
+        !minic_type_equal(plain, minic_type_unsigned_long()) ||
+        !x86_value_load(out, frame, b[0].value, scratch)) return false;
+    if (gpr)
+        return fprintf(out, "  movq %s, (%s)\n", gprs[gpr - 1U], scratch) >= 0;
+    if (misc == 1U)
+        return fprintf(out, "  pushfq\n  popq (%s)\n", scratch) >= 0;
+    return fputs("  leaq 0(%rip), %rax\n"
+                 "  movq %rax, (%r11)\n", out) != EOF;
+}
+
 /* Linux's task-register operation consumes the *low selector word*. The
  * upper bits of GNU's q-class input must never become the segment selector. */
 static bool emit_linux_task_control(
@@ -5505,6 +5649,14 @@ bool minic_x86_64_emit_structured_asm(
     bindings = ins->value.structured_inline_asm.operands;
     if (!info->template_text)
         return false;
+    if (minic_x86_64_linux_crash_gpr_snapshot_form(
+            info->template_text, info->template_length) ||
+        minic_x86_64_linux_crash_misc_snapshot_form(
+            info->template_text, info->template_length))
+        return emit_linux_crash_register_snapshot(out, fn, frame, ins, info);
+    if (minic_x86_64_linux_pm_trace_form(
+            info->template_text, info->template_length))
+        return emit_linux_pm_trace_record(out, fn, frame, ins, info);
     if (info->template_length == 5U &&
         memcmp(info->template_text, "cpuid", 5U) == 0 &&
         (ins->value.structured_inline_asm.operand_count == 2U ||

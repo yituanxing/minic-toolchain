@@ -9,11 +9,12 @@
  * C assignment and source ASM tied hard-register outputs have distinct
  * permissions. Parser and AST verifier MUST both consume this same rule.
  * TargetInfo owns any target-specific register/constraint description. */
-/* Source-only GNU memory operand admission: the 'm' constraint references
- * an addressable C object, including aggregates. This does NOT authorize
- * emitting any target machine template or clobber pattern. */
+/* Source-only GNU memory operand admission: target-described m/Q grammar
+ * references addressable C objects, including aggregates. This does NOT
+ * authorize emitting any machine template or clobber pattern. */
 bool minic_c0_inline_asm_input_value_supported(
-    const MinicExpression *, const char *constraint, size_t constraint_length);
+    const MinicTargetInfo *, const MinicExpression *,
+    const char *constraint, size_t constraint_length);
 
 bool minic_c0_inline_asm_output_value_supported(
     const MinicC0Program *, const MinicTargetInfo *,

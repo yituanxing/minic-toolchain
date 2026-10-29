@@ -2,20 +2,22 @@
 #include "frontend/const_eval.h"
 
 bool minic_c0_inline_asm_input_value_supported(
-    const MinicExpression *expression, const char *constraint, size_t length) {
-    if (expression == NULL || constraint == NULL || length == 0U)
+    const MinicTargetInfo *target, const MinicExpression *expression,
+    const char *constraint, size_t length) {
+    if (target == NULL || expression == NULL || constraint == NULL || length == 0U)
         return false;
     /* Preserve all previously admitted scalar source operands, independent
      * of actual ISA register allocation. */
     if (minic_type_is_integer(expression->type) ||
         minic_type_is_pointer(expression->type))
         return true;
-    /* GNU "m" denotes an addressable C storage operand. This includes
-     * record/array values (Linux x86 and Loong memcpy fragments) that
-     * must not be forced into an integer register or fabricated as a
-     * pointer value. The Core/machine must later prove the real address,
-     * side effects and instruction template before producing assembly. */
-    return length == 1U && constraint[0] == 'm' &&
+    /* GNU memory constraints denote addressable C storage, not an aggregate
+     * coerced into a GPR. AArch64 Q (base + zero offset) admits Linux's
+     * smp_load_acquire(&union), while x86 Q denotes a register class and
+     * must not gain aggregate permission. Backend still qualifies the
+     * exact instruction, address, side effects and clobber set. */
+    return minic_target_info_inline_asm_memory_input_constraint_supported(
+               target, constraint, length) &&
            expression->value_category == MINIC_VALUE_LVALUE &&
            (minic_type_is_record(expression->type) ||
             minic_type_is_array(expression->type) ||

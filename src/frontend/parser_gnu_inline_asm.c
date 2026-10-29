@@ -150,7 +150,7 @@ static bool parse_gnu_inline_asm_input(MinicParser *parser, MinicInlineAsmId inl
     }
     operand_expression = minic_c0_program_expression(parser->program, operand_id);
     if (!minic_c0_inline_asm_input_value_supported(
-            operand_expression, constraint, constraint_length)) {
+            parser->target_info, operand_expression, constraint, constraint_length)) {
         free(constraint);
         minic_parser_error(parser,
                            "GNU asm input operand currently requires an integer or pointer");

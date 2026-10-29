@@ -329,6 +329,7 @@ MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
             context->body->program, expression->value.unary.operand);
         MinicCoreValueId pointer_id;
         MinicType expected_pointer;
+        MinicType pointer_value_type;
 
         if (!minic_type_pointer_to(expression->type, &expected_pointer)) {
             return MINIC_CORE_LOWER_ERROR;
@@ -356,8 +357,16 @@ MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
+        /* GNU's Xen RING_COPY_RESPONSE uses
+         * `*(volatile typeof(dest))RING_GET_RESPONSE(...)`: `typeof(dest)` is
+         * a pointer and its outer volatile qualifies the pointer VALUE,
+         * not the pointed-to record. A dereference consumes the unqualified
+         * pointer value. Preserve exact pointee qualifiers and shape; strip
+         * only the top-level pointer value cv-qualification here. */
         if (pointer_id >= context->function->value_count ||
-            !minic_type_equal(context->function->values[pointer_id].type, expected_pointer)) {
+            !minic_type_unqualified(context->function->values[pointer_id].type,
+                                    &pointer_value_type) ||
+            !minic_type_equal(pointer_value_type, expected_pointer)) {
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
         *address_id = pointer_id;
@@ -379,6 +388,7 @@ MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
         MinicType pointer_type;
         size_t element_size;
         bool array_base;
+        bool pure_global_element_zero;
 
         base =
             minic_c0_program_expression(context->body->program, expression->value.subscript.base);
@@ -467,10 +477,23 @@ MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
                 return MINIC_CORE_LOWER_ERROR;
             }
         }
-        subscript_status =
-            minic_core_lower_internal_spill_scalar_value(context, base->span, pointer_type, base_value, &base_object);
-        if (subscript_status != MINIC_CORE_LOWER_OK) {
-            return subscript_status;
+        /* An array's static global address plus a literal zero index is a
+         * pure symbolic address. Its Core GLOBAL_ADDRESS provenance must not
+         * be converted into a local STORE/LOAD just to sequence an index
+         * expression that has no effects. In particular this preserves the
+         * linker-visible identity of ordinary C string literals passed to
+         * GNU `i` operands. Dynamic indices and pointer-valued bases retain
+         * the established evaluation-order snapshot contract. */
+        pure_global_element_zero =
+            array_base && base->kind == MINIC_EXPRESSION_GLOBAL_OBJECT &&
+            index->kind == MINIC_EXPRESSION_INTEGER &&
+            index->value.integer_value == 0;
+        if (!pure_global_element_zero) {
+            subscript_status = minic_core_lower_internal_spill_scalar_value(
+                context, base->span, pointer_type, base_value, &base_object);
+            if (subscript_status != MINIC_CORE_LOWER_OK) {
+                return subscript_status;
+            }
         }
         subscript_status =
             lower_expression(context, expression->value.subscript.index, &index_value);
@@ -496,14 +519,16 @@ MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
                 return subscript_status;
             }
         }
-        subscript_status =
-            minic_core_lower_internal_reload_scalar_value(context, base->span, pointer_type, base_object, &base_value);
-        if (subscript_status != MINIC_CORE_LOWER_OK) {
-            (void)fprintf(stderr,
-                          "CORE_SUBSCRIPT_STAGE function=%s stage=reload-base status=%d\n",
-                          context->source_function != NULL ? context->source_function->name : "?",
-                          (int)subscript_status);
-            return subscript_status;
+        if (!pure_global_element_zero) {
+            subscript_status = minic_core_lower_internal_reload_scalar_value(
+                context, base->span, pointer_type, base_object, &base_value);
+            if (subscript_status != MINIC_CORE_LOWER_OK) {
+                (void)fprintf(stderr,
+                              "CORE_SUBSCRIPT_STAGE function=%s stage=reload-base status=%d\n",
+                              context->source_function != NULL ? context->source_function->name : "?",
+                              (int)subscript_status);
+                return subscript_status;
+            }
         }
 
         (void)memset(&offset_instruction, 0, sizeof(offset_instruction));

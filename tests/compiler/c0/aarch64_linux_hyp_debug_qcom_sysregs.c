@@ -27,6 +27,10 @@ WRITE_SYSREG(write_par_el1,3,0,7,4,0)
 WRITE_SYSREG(write_dacr32_el2,3,4,3,0,0)
 WRITE_SYSREG(write_ifsr32_el2,3,4,5,0,1)
 WRITE_SYSREG(write_dbgvcr32_el2,2,4,0,7,0)
+WRITE_SYSREG(write_smpri_el1,3,0,1,2,4)
+WRITE_SYSREG(write_smcr_el1,3,0,1,2,6)
+WRITE_SYSREG(write_smcr_el2,3,4,1,2,6)
+WRITE_SYSREG(write_smcr_el12,3,5,1,2,6)
 
 #define READ_HYP(name,register_name) \
 u64 name(void) { \
@@ -39,6 +43,8 @@ READ_HYP(read_mdccint_el1,mdccint_el1)
 READ_HYP(read_tpidrro_el0,tpidrro_el0)
 READ_HYP(read_sp_el1,sp_el1)
 READ_HYP(read_vmpidr_el2,vmpidr_el2)
+READ_HYP(read_cpacr_el1,CPACR_EL1)
+READ_HYP(read_sctlr_el1,SCTLR_EL1)
 
 /* Linux arch/arm64/include/asm/barrier.h PSB/TSB trace-drain barriers. */
 void hyp_trace_drain(void) {

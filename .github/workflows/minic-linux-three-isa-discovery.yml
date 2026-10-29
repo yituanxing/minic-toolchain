@@ -10,6 +10,7 @@ on:
       - 'tools/ci/linux-three-isa-golden-v1.py'
       - 'tools/ci/linux-three-isa-freeze-i-v1.py'
       - 'tools/ci/linux-three-isa-seven-probe-v1.py'
+      - 'tools/ci/linux-three-isa-focused-inputs-v1.py'
       - 'tools/ci/linux-three-isa-summary-v1.py'
       - 'tools/ci/linux-three-isa-owner-delta-v1.py'
       - 'tools/ci/linux-three-isa-owner-delta-selftest-v1.py'
@@ -65,9 +66,10 @@ jobs:
         run: |
           set -Eeuo pipefail
           bash -n tools/ci/linux-three-isa-golden-v1.sh
-          python3 -m py_compile tools/ci/linux-three-isa-golden-v1.py tools/ci/linux-three-isa-freeze-i-v1.py tools/ci/linux-three-isa-seven-probe-v1.py tools/ci/linux-three-isa-summary-v1.py tools/ci/linux-three-isa-owner-delta-v1.py tools/ci/linux-three-isa-owner-delta-selftest-v1.py
+          python3 -m py_compile tools/ci/linux-three-isa-golden-v1.py tools/ci/linux-three-isa-freeze-i-v1.py tools/ci/linux-three-isa-seven-probe-v1.py tools/ci/linux-three-isa-focused-inputs-v1.py tools/ci/linux-three-isa-summary-v1.py tools/ci/linux-three-isa-owner-delta-v1.py tools/ci/linux-three-isa-owner-delta-selftest-v1.py
           python3 tools/ci/linux-three-isa-frontier-selftest-v1.py
           python3 tools/ci/linux-three-isa-owner-delta-selftest-v1.py
+          python3 tools/ci/linux-three-isa-focused-inputs-v1.py --self-test
           python3 tools/ci/linux-three-isa-golden-v1.py --self-test
           python3 tools/ci/linux-three-isa-freeze-i-v1.py selftest
   minic-producer:
@@ -223,11 +225,26 @@ jobs:
             --frozen "$RUNNER_TEMP/minic-linux-${{ matrix.target }}/frozen" \
             --output "$RUNNER_TEMP/minic-three-scan-${{ matrix.target }}-${{ matrix.shard }}" \
             --workers 2
+      - name: Preserve only SHA-verified failing GNU .i inputs for next-frontier reproduction
+        if: success()
+        # This is a diagnostic convenience, not part of the immutable -S census.
+        # A huge focused corpus or an archive error must never erase 21 valid
+        # per-file compiler reports or prevent the census-summary job.
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/ci/linux-three-isa-focused-inputs-v1.py \
+            --frozen "$RUNNER_TEMP/minic-linux-${{ matrix.target }}/frozen" \
+            --report "$RUNNER_TEMP/minic-three-scan-${{ matrix.target }}-${{ matrix.shard }}/report.json" \
+            --output "$RUNNER_TEMP/minic-three-scan-${{ matrix.target }}-${{ matrix.shard }}/failed-gnu-i"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: three-linux-errors-${{ matrix.target }}-${{ matrix.shard }}-${{ github.event.pull_request.head.sha || github.sha }}
-          path: ${{ runner.temp }}/minic-three-scan-${{ matrix.target }}-${{ matrix.shard }}/report.json
+          path: |
+            ${{ runner.temp }}/minic-three-scan-${{ matrix.target }}-${{ matrix.shard }}/report.json
+            ${{ runner.temp }}/minic-three-scan-${{ matrix.target }}-${{ matrix.shard }}/failed-gnu-i
           retention-days: 14
           if-no-files-found: warn
   census-summary:

@@ -210,6 +210,11 @@ bool minic_target_info_inline_asm_source_clobber_supported(
 bool minic_target_info_inline_asm_register_clobber_supported(const MinicTargetInfo *target,
                                                              const char *name,
                                                              size_t name_length);
+/* Target-owned GNU memory-input operand grammar. AArch64 Q denotes a
+ * base-register-only address while x86 Q is a register constraint.
+ * Passing this check never authorizes emitting a machine ASM template. */
+bool minic_target_info_inline_asm_memory_input_constraint_supported(
+    const MinicTargetInfo *target, const char *constraint, size_t constraint_length);
 bool minic_target_info_inline_asm_immediate_may_defer(const MinicTargetInfo *target);
 const char *minic_target_info_inline_asm_immediate_constraint_diagnostic(
     const MinicTargetInfo *target);
