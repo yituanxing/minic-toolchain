@@ -460,8 +460,9 @@ static bool aarch64_linux_sysreg_u64_type(MinicType type) {
     {"mrs%0,dbgbcr" #n "_el1", "dbgbcr" #n "_el1"}, \
     {"mrs%0,dbgwvr" #n "_el1", "dbgwvr" #n "_el1"}, \
     {"mrs%0,dbgwcr" #n "_el1", "dbgwcr" #n "_el1"}
-#define AARCH64_LINUX_PMEVCNTR_READ_BANK(n) \
-    {"mrs%0,pmevcntr" #n "_el0", "pmevcntr" #n "_el0"}
+#define AARCH64_LINUX_PMU_READ_BANK(n) \
+    {"mrs%0,pmevcntr" #n "_el0", "pmevcntr" #n "_el0"}, \
+    {"mrs%0,pmevtyper" #n "_el0", "pmevtyper" #n "_el0"}
 static const char *aarch64_linux_mrs_register(const char *text, size_t len) {
     char normalized[96];
     size_t i, used = 0U;
@@ -477,7 +478,8 @@ static const char *aarch64_linux_mrs_register(const char *text, size_t len) {
         {"mrs%0,cntpct_el0", "cntpct_el0"},
         {"mrs%0,cntvct_el0", "cntvct_el0"},
         /* Linux arm_pmuv3.h read_pmcr/read_pmccntr/read_pmovsclr,
-         * read_pmceid0/1, and PMEVN_SWITCH-expanded read_pmevcntrn.
+         * read_pmceid0/1, and PMEVN_SWITCH-expanded read_pmevcntrn /
+         * read_pmevtypern.
          * These are architecturally finite registers; the C source
          * constrains the output to GNU "=r" 64-bit GPR. */
         {"mrs%0,pmcr_el0", "pmcr_el0"},
@@ -485,37 +487,37 @@ static const char *aarch64_linux_mrs_register(const char *text, size_t len) {
         {"mrs%0,pmovsclr_el0", "pmovsclr_el0"},
         {"mrs%0,pmceid0_el0", "pmceid0_el0"},
         {"mrs%0,pmceid1_el0", "pmceid1_el0"},
-        AARCH64_LINUX_PMEVCNTR_READ_BANK(0),
-        AARCH64_LINUX_PMEVCNTR_READ_BANK(1),
-        AARCH64_LINUX_PMEVCNTR_READ_BANK(2),
-        AARCH64_LINUX_PMEVCNTR_READ_BANK(3),
-        AARCH64_LINUX_PMEVCNTR_READ_BANK(4),
-        AARCH64_LINUX_PMEVCNTR_READ_BANK(5),
-        AARCH64_LINUX_PMEVCNTR_READ_BANK(6),
-        AARCH64_LINUX_PMEVCNTR_READ_BANK(7),
-        AARCH64_LINUX_PMEVCNTR_READ_BANK(8),
-        AARCH64_LINUX_PMEVCNTR_READ_BANK(9),
-        AARCH64_LINUX_PMEVCNTR_READ_BANK(10),
-        AARCH64_LINUX_PMEVCNTR_READ_BANK(11),
-        AARCH64_LINUX_PMEVCNTR_READ_BANK(12),
-        AARCH64_LINUX_PMEVCNTR_READ_BANK(13),
-        AARCH64_LINUX_PMEVCNTR_READ_BANK(14),
-        AARCH64_LINUX_PMEVCNTR_READ_BANK(15),
-        AARCH64_LINUX_PMEVCNTR_READ_BANK(16),
-        AARCH64_LINUX_PMEVCNTR_READ_BANK(17),
-        AARCH64_LINUX_PMEVCNTR_READ_BANK(18),
-        AARCH64_LINUX_PMEVCNTR_READ_BANK(19),
-        AARCH64_LINUX_PMEVCNTR_READ_BANK(20),
-        AARCH64_LINUX_PMEVCNTR_READ_BANK(21),
-        AARCH64_LINUX_PMEVCNTR_READ_BANK(22),
-        AARCH64_LINUX_PMEVCNTR_READ_BANK(23),
-        AARCH64_LINUX_PMEVCNTR_READ_BANK(24),
-        AARCH64_LINUX_PMEVCNTR_READ_BANK(25),
-        AARCH64_LINUX_PMEVCNTR_READ_BANK(26),
-        AARCH64_LINUX_PMEVCNTR_READ_BANK(27),
-        AARCH64_LINUX_PMEVCNTR_READ_BANK(28),
-        AARCH64_LINUX_PMEVCNTR_READ_BANK(29),
-        AARCH64_LINUX_PMEVCNTR_READ_BANK(30),
+        AARCH64_LINUX_PMU_READ_BANK(0),
+        AARCH64_LINUX_PMU_READ_BANK(1),
+        AARCH64_LINUX_PMU_READ_BANK(2),
+        AARCH64_LINUX_PMU_READ_BANK(3),
+        AARCH64_LINUX_PMU_READ_BANK(4),
+        AARCH64_LINUX_PMU_READ_BANK(5),
+        AARCH64_LINUX_PMU_READ_BANK(6),
+        AARCH64_LINUX_PMU_READ_BANK(7),
+        AARCH64_LINUX_PMU_READ_BANK(8),
+        AARCH64_LINUX_PMU_READ_BANK(9),
+        AARCH64_LINUX_PMU_READ_BANK(10),
+        AARCH64_LINUX_PMU_READ_BANK(11),
+        AARCH64_LINUX_PMU_READ_BANK(12),
+        AARCH64_LINUX_PMU_READ_BANK(13),
+        AARCH64_LINUX_PMU_READ_BANK(14),
+        AARCH64_LINUX_PMU_READ_BANK(15),
+        AARCH64_LINUX_PMU_READ_BANK(16),
+        AARCH64_LINUX_PMU_READ_BANK(17),
+        AARCH64_LINUX_PMU_READ_BANK(18),
+        AARCH64_LINUX_PMU_READ_BANK(19),
+        AARCH64_LINUX_PMU_READ_BANK(20),
+        AARCH64_LINUX_PMU_READ_BANK(21),
+        AARCH64_LINUX_PMU_READ_BANK(22),
+        AARCH64_LINUX_PMU_READ_BANK(23),
+        AARCH64_LINUX_PMU_READ_BANK(24),
+        AARCH64_LINUX_PMU_READ_BANK(25),
+        AARCH64_LINUX_PMU_READ_BANK(26),
+        AARCH64_LINUX_PMU_READ_BANK(27),
+        AARCH64_LINUX_PMU_READ_BANK(28),
+        AARCH64_LINUX_PMU_READ_BANK(29),
+        AARCH64_LINUX_PMU_READ_BANK(30),
         /* Linux hw_breakpoint.h GEN_READ_WB_REG_CASES covers exactly 16
          * slots in each of the four architectural watch/breakpoint banks. */
         AARCH64_LINUX_DEBUG_READ_BANK(0),
@@ -562,6 +564,19 @@ static const char *aarch64_linux_mrs_register(const char *text, size_t len) {
         {"mrs%0,tpidr_el0", "tpidr_el0"},
         {"mrs%0,mdscr_el1", "mdscr_el1"},
         {"mrs%0,ttbr1_el1", "ttbr1_el1"},
+        {"mrs%0,cnthctl_el2", "cnthctl_el2"},
+        {"mrs%0,cpacr_el1", "cpacr_el1"},
+        {"mrs%0,actlr_el1", "actlr_el1"},
+        {"mrs%0,aidr_el1", "aidr_el1"},
+        {"mrs%0,amair_el1", "amair_el1"},
+        {"mrs%0,dbgauthstatus_el1", "dbgauthstatus_el1"},
+        {"mrs%0,elr_el1", "elr_el1"},
+        {"mrs%0,mair_el1", "mair_el1"},
+        {"mrs%0,midr_el1", "midr_el1"},
+        {"mrs%0,revidr_el1", "revidr_el1"},
+        {"mrs%0,s3_0_c15_c0_5", "s3_0_c15_c0_5"},
+        {"mrs%0,spsr_abt", "spsr_abt"},
+        {"mrs%0,ttbr0_el1", "ttbr0_el1"},
         /* Linux tegra194-cpufreq.c: implementation-defined CPU NDIV. */
         {"mrs%0,s3_0_c15_c0_4", "s3_0_c15_c0_4"},
         {"mrs%0,daif", "daif"}
@@ -582,7 +597,7 @@ static const char *aarch64_linux_mrs_register(const char *text, size_t len) {
             return allowed[i].reg;
     return NULL;
 }
-#undef AARCH64_LINUX_PMEVCNTR_READ_BANK
+#undef AARCH64_LINUX_PMU_READ_BANK
 #undef AARCH64_LINUX_DEBUG_READ_BANK
 /* The architectural DMB/DSB/ISB operations are hardware fences; they
  * cannot be silently downgraded into a compiler-only memory clobber.
@@ -3503,7 +3518,7 @@ static bool aarch64_linux_smccc_source(
         !aarch64_linux_smccc_form(src->template_text, src->template_length) ||
         !src->is_volatile || src->is_goto ||
         src->output_count != 4U ||
-        (src->input_count != 1U && src->input_count != 2U) ||
+        src->input_count == 0U || src->input_count > 8U ||
         !src->outputs || !src->inputs || src->label_count != 0U ||
         !src->has_memory_clobber || src->clobber_count != 1U ||
         src->register_clobber_count != 0U) return false;
@@ -3545,7 +3560,7 @@ static bool aarch64_linux_smccc_emit(
     if (!out || !fn || !op || ctx->dynamic_frame || !info ||
         !info->is_volatile || info->is_goto ||
         info->register_clobber_count != 0U ||
-        (form != 1U && form != 2U) || (count != 5U && count != 6U))
+        (form != 1U && form != 2U) || count < 5U || count > 12U)
         return false;
     for (i = 0U; i < count; ++i) {
         const MinicCoreStructuredInlineAsmOperand *binding = &op[i];
@@ -3577,7 +3592,7 @@ static bool aarch64_linux_smccc_emit(
                      type.integer_rank != MINIC_INTEGER_RANK_LONG))) return false;
     }
     /* DirectLP64 stores each scalar operand in an 8-byte SSA spill slot.
-     * Use only x0/x1 for arguments and x0..x3 for result writes; all other
+     * Use x0..x7 for arguments and x0..x3 for result writes; all other
      * live Core values stay in the frame across the privileged transition. */
     for (i = 4U; i < count; ++i)
         if (fprintf(out, "  ldr x%zu, [sp, #%zu]\n",

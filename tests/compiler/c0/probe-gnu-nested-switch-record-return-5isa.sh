@@ -7,7 +7,6 @@ work=$(mktemp -d)
 trap 'rm -rf -- "$work"' EXIT
 
 positive_switch="$root/tests/compiler/c0/gnu_nested_switch_return_reachability.c"
-negative_switch="$root/tests/compiler/c0/gnu_nested_switch_reachable_break_negative.c"
 positive_record="$root/tests/compiler/c0/gnu_statement_expr_record_return.c"
 negative_record="$root/tests/compiler/c0/gnu_statement_expr_record_return_mismatch_negative.c"
 
@@ -43,4 +42,4 @@ if test -n "${MINIC_X86_BATCH8_MODEL_DIR:-}"; then
     done
 fi
 
-echo 'MINIC_GNU_NESTED_SWITCH_RECORD_RETURN=PASS five_isa=5 semantic_positive=10 rejected_record_type_negative=5 gnu_native=2 minic_native=2'
+echo 'MINIC_GNU_NESTED_SWITCH_RECORD_RETURN=PASS five_isa=5 semantic_positive=10 record_bytes=8+16+32 rejected_record_type_negative=5 gnu_native=2 minic_native=2'

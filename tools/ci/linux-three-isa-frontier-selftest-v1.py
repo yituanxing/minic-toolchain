@@ -52,6 +52,20 @@ assert mod.all_aarch64_structured_rejects(structured_reject,"x86_64")==[]
 assert mod.all_aarch64_structured_rejects(
     structured_reject.replace("operand_count=2", "operand_count=-1"),
     "aarch64")==[]
+source_details=(
+    "AST_EXPR_DETAIL index=106973 kind=5 value_category=0 base_kind=7 "
+    "pointer_depth=0 operand=106972 span=42:8 operand_kind=-1\n"
+    "CORE_EXPR_FAIL owner=condition function=tee_session_calc_client_uuid "
+    "status=2 expression=271 kind=8 op=-1 block=5 span=90:3\n"
+)
+assert mod.all_precise_source_traces(
+    source_details,"aarch64","sound/soc/soc-core.o")==source_details.splitlines()
+assert mod.all_precise_source_traces(
+    source_details,"aarch64","drivers/tee/tee_core.o")==source_details.splitlines()
+assert mod.all_precise_source_traces(
+    source_details,"x86_64","sound/soc/soc-core.o")==[]
+assert mod.all_precise_source_traces(
+    source_details,"aarch64","kernel/rcu/update.o")==[]
 load_shape_log=(
     "MINIC_AARCH64_LOAD_SHAPE_REJECT result_base=1 "
     "result_rank=5 result_ptr=0 result_enum=18446744073709551615 "
@@ -127,4 +141,4 @@ assert mod.all_core_asm_frontiers(
     asm_frontier.replace("signature_hash=1111111111111111",
                          "signature_hash=INVALID_HASH")) == [
           mod.all_core_asm_frontiers(asm_frontier)[1]]
-print("THREE_LINUX_ALL_FRONTIERS_SELFTEST=PASS three_independent_failures=1 normal_unchanged=1 machine_trace=3 load_shape_trace=2 structured_reject=1")
+print("THREE_LINUX_ALL_FRONTIERS_SELFTEST=PASS three_independent_failures=1 normal_unchanged=1 machine_trace=3 load_shape_trace=2 structured_reject=1 precise_source_trace=2")

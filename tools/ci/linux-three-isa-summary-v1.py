@@ -37,6 +37,7 @@ def main():
     backend_stages = collections.defaultdict(lambda: collections.defaultdict(list))
     structured_reject_classes = collections.defaultdict(
         lambda: collections.defaultdict(set))
+    precise_source_traces = []
     preflight_classes = collections.defaultdict(lambda: collections.defaultdict(list))
     asm_form_classes = collections.defaultdict(lambda: collections.defaultdict(list))
     core_asm_classes = collections.defaultdict(lambda: collections.defaultdict(set))
@@ -165,6 +166,19 @@ def main():
                              item["operand_count"], item["dynamic_frame"],
                              item["volatile"], item["memory"], item["goto"])
                 structured_reject_classes[signature][item["function"]].add(obj)
+            source_traces = row.get("source_traces", [])
+            if (not isinstance(source_traces, list)
+                    or (source_traces and (target != "aarch64" or obj not in
+                        ("sound/soc/soc-core.o", "drivers/tee/tee_core.o")))):
+                raise SystemExit("THREE_LINUX_CENSUS=FAIL invalid source trace owner")
+            for detail in source_traces:
+                if (not isinstance(detail, str) or len(detail) > 430
+                        or not re.fullmatch(
+                            r"(?:AST_EXPR_DETAIL|CORE_EXPR_FAIL) [ -~]{1,400}",
+                            detail)):
+                    raise SystemExit("THREE_LINUX_CENSUS=FAIL invalid source trace")
+                precise_source_traces.append(
+                    dict(target=target, object=obj, detail=detail))
             for item in row.get("preflight_roots",[]):
                 if (not isinstance(item,dict) or
                     not isinstance(item.get("reason"),str) or
@@ -315,6 +329,7 @@ def main():
         machine_kind_frontiers=machine_kind_frontiers,
         backend_reject_frontiers=backend_reject_frontiers,
         aarch64_structured_rejects=aarch64_structured_rejects,
+        precise_source_traces=precise_source_traces,
         preflight_root_frontiers=preflight_root_frontiers,
         asm_form_frontiers=asm_form_frontiers,
         core_asm_frontiers=core_asm_frontiers), indent=2) + "\n")
@@ -347,6 +362,9 @@ def main():
               f"volatile={item['volatile']} memory={item['memory']} "
               f"goto={item['goto']} functions={item['functions']} "
               f"owners={len(item['owners'])}")
+    for item in precise_source_traces[:40]:
+        print(f"THREE_LINUX_PRECISE_SOURCE_TRACE target={item['target']} "
+              f"object={item['object']} detail={item['detail'][:300]}")
     for item in preflight_root_frontiers[:25]:
         print(f"THREE_LINUX_PREFLIGHT_ROOT target={item['target']} "
               f"reason={item['reason']} instances={item['instances']} "

@@ -105,6 +105,19 @@ def all_core_function_frontiers(stderr):
 CORE_LOWER_TRACE = re.compile(r"^CORE_FAST_TRACE ([^\r\n]+)$", re.MULTILINE)
 CORE_TRACE_FIELD = re.compile(r"([a-z_]+)=([A-Za-z0-9_.:-]+)")
 
+# Restrict expensive source-expression traces to the two broad AArch owners
+# with unresolved AST and Core-expression lowering failures.  Keep the exact
+# diagnostic context in the seven-way evidence, not only the first error.
+SOURCE_TRACE_OWNERS = frozenset((
+    "sound/soc/soc-core.o", "drivers/tee/tee_core.o"))
+SOURCE_TRACE_DETAIL = re.compile(
+    r"^(?:AST_EXPR_DETAIL|CORE_EXPR_FAIL) [^\r\n]{1,400}$", re.MULTILINE)
+
+def all_precise_source_traces(stderr,target,obj):
+    if target != "aarch64" or obj not in SOURCE_TRACE_OWNERS:
+        return []
+    return SOURCE_TRACE_DETAIL.findall(stderr)
+
 # Common Core emits this for rejected qualified operands or when no machine
 # contract admits the source.  Stable signatures retain target-owned syntax
 # differences instead of treating all INLINE_ASM (kind=5) as one fixable root.
@@ -201,6 +214,9 @@ def probe(a):
             env["MINIC_M1_TRACE"]="1"
             env["MINIC_BACKEND_CENSUS"]="1"
             env["MINIC_ASM_FRONTIER_TRACE"]="1"
+            if a.target == "aarch64" and obj in SOURCE_TRACE_OWNERS:
+                env["CORE_FAST_TRACE"]="1"
+                env["MINIC_CORE_EXPR_FAILURE_TRACE"]="1"
             p=subprocess.run([str(compiler),"--target="+a.target+"-linux",
                               *row["minic_flags"],"-S",str(file),"-o",str(asm)],
                              capture_output=True,timeout=a.timeout,env=env)
@@ -214,6 +230,7 @@ def probe(a):
             machine_frontiers=all_machine_opcode_frontiers(error_text,a.target)
             backend_frontiers=all_backend_reject_frontiers(error_text,a.target)
             structured_rejects=all_aarch64_structured_rejects(error_text,a.target)
+            source_traces=all_precise_source_traces(error_text,a.target,obj)
             load_shape_frontiers=all_load_shape_frontiers(error_text,a.target)
             preflight_roots=all_preflight_roots(error_text,a.target)
             asm_forms=all_asm_form_frontiers(error_text,a.target)
@@ -231,6 +248,7 @@ def probe(a):
                         machine_frontiers=machine_frontiers,
                         backend_frontiers=backend_frontiers,
                         structured_rejects=structured_rejects,
+                        source_traces=source_traces,
                         load_shape_frontiers=load_shape_frontiers,
                         preflight_roots=preflight_roots,asm_forms=asm_forms,
                         asm_sha256=sha(asm) if ok else None)
@@ -240,6 +258,7 @@ def probe(a):
                         core_frontiers=[],core_lower_traces=[],machine_frontiers=[],
                         backend_frontiers=[],load_shape_frontiers=[],
                         structured_rejects=[],
+                        source_traces=[],
                         preflight_roots=[],asm_forms=[],asm_frontiers=[],
                         input_sha256=row["sha256"])
     with concurrent.futures.ThreadPoolExecutor(max_workers=a.workers) as executor:
