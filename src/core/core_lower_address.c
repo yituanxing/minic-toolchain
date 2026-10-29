@@ -192,7 +192,8 @@ MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
         if (local == NULL) {
             return MINIC_CORE_LOWER_ERROR;
         }
-        if (local->is_array && local->element_count == 0U) {
+        if (local->is_array && local->element_count == 0U &&
+            !local->is_zero_length_array) {
             const MinicLocal *address_local;
             MinicCoreValueId slot_address;
             MinicType expected_pointer;

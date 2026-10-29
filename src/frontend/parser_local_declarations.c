@@ -299,8 +299,8 @@ static bool parse_local_array_bound_or_vla(MinicParser *parser,
             minic_parser_error(parser, "array bound exceeds target object range");
             return false;
         }
-        if (value <= 0) {
-            minic_parser_error(parser, "array bound must be greater than zero");
+        if (value < 0) {
+            minic_parser_error(parser, "array bound must not be negative");
             return false;
         }
         if ((uint64_t)value > (uint64_t)SIZE_MAX) {
@@ -644,6 +644,9 @@ parse_local_declarator(MinicParser *parser,
             local.type = declared_type;
         }
         local.is_array = true;
+        local.is_zero_length_array = !inferred_array &&
+                                     local.element_count == 0U &&
+                                     runtime_array_bound == MINIC_EXPRESSION_INVALID;
         if (!parse_local_object_attributes(parser, &attributes)) {
             return false;
         }
@@ -1726,15 +1729,42 @@ static bool consume_static_local_interleaved_attribute(MinicParser *parser,
 bool minic_parser_local_decl_static(MinicParser *parser) {
     MinicStaticLocalAttributeContext declaration_attributes;
     MinicType base_type;
+    bool leading_const;
+    bool leading_volatile;
 
     (void)memset(&declaration_attributes, 0, sizeof(declaration_attributes));
     if (parser->current_function == MINIC_FUNCTION_INVALID ||
         !minic_parser_expect(parser, MINIC_TOKEN_KW_STATIC, "expected keyword 'static'") ||
         !minic_parser_parse_gnu_attribute_lists(
-            parser, consume_static_local_interleaved_attribute, &declaration_attributes) ||
-        !minic_parser_parse_type_specifiers(parser, &base_type) ||
+            parser, consume_static_local_interleaved_attribute, &declaration_attributes)) {
+        return false;
+    }
+    /* A declaration-specifier attribute is permitted between qualifiers and
+       its base type: `static const __attribute__((section(...))) ulong x`.
+       Preserve semantic attributes on the local global-object owner. */
+    leading_const = false;
+    leading_volatile = false;
+    while (parser->current.kind == MINIC_TOKEN_KW_CONST ||
+           parser->current.kind == MINIC_TOKEN_KW_VOLATILE) {
+        if (parser->current.kind == MINIC_TOKEN_KW_CONST) {
+            leading_const = true;
+        } else {
+            leading_volatile = true;
+        }
+        if (!minic_parser_advance(parser) ||
+            !minic_parser_parse_gnu_attribute_lists(
+                parser, consume_static_local_interleaved_attribute, &declaration_attributes)) {
+            return false;
+        }
+    }
+    if (!minic_parser_parse_type_specifiers(parser, &base_type) ||
         !minic_parser_parse_gnu_attribute_lists(
             parser, consume_static_local_interleaved_attribute, &declaration_attributes)) {
+        return false;
+    }
+    if ((leading_const && !minic_type_add_const(base_type, &base_type)) ||
+        (leading_volatile && !minic_type_add_volatile(base_type, &base_type))) {
+        minic_parser_error(parser, "cannot qualify static local object type");
         return false;
     }
     for (;;) {

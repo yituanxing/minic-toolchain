@@ -284,9 +284,9 @@ static int verify_riscv_integer_strategy(void) {
 }
 
 /* One typed Core CALL_FRAME_ADDRESS invariant under separate machine ABIs.
- * AArch64 and LoongArch own return-PC and a current fixed-frame SP;
- * SysV x86 owns saved PC and RBP.
- * Unwinding levels>0 remain prohibited for all. */
+ * AArch64 owns a genuine x29 frame record (so caller-level 1 works);
+ * LoongArch owns current fixed SP, while SysV x86 owns RBP.
+ * Levels above the implemented target contract remain prohibited. */
 static int verify_lp64_return_address_level_zero(void) {
     const MinicTargetInfo *aarch =
         minic_target_info_from_name("aarch64-linux");
@@ -301,8 +301,10 @@ static int verify_lp64_return_address_level_zero(void) {
             aarch, MINIC_CALL_FRAME_ADDRESS_RETURN, 1U) ||
         !minic_target_info_call_frame_address_supported(
             aarch, MINIC_CALL_FRAME_ADDRESS_FRAME, 0U) ||
-        minic_target_info_call_frame_address_supported(
+        !minic_target_info_call_frame_address_supported(
             aarch, MINIC_CALL_FRAME_ADDRESS_FRAME, 1U) ||
+        minic_target_info_call_frame_address_supported(
+            aarch, MINIC_CALL_FRAME_ADDRESS_FRAME, 2U) ||
         !minic_target_info_call_frame_address_supported(
             x86, MINIC_CALL_FRAME_ADDRESS_RETURN, 0U) ||
         !minic_target_info_call_frame_address_supported(
@@ -409,15 +411,14 @@ int main(void) {
         (void)fprintf(stderr, "FAIL four independent target identities\n");
         return 1;
     }
-    /* AAPCS64's record cursor cannot be safely copied through the temporary
-     * pointer representation. Reject until an independent ABI state copy is
-     * implemented; x86 remains the only qualified ABI-state copy here. */
+    /* Both AAPCS64 (32-byte tag) and SysV x86 (24-byte tag) now allocate
+     * independent mutable cursor state; RV64/Loong remain scalar cursors. */
     if (arm->variadic_scalar_read_kind != MINIC_VARIADIC_SCALAR_READ_ABI_CURSOR ||
-        arm->variadic_copy_kind != MINIC_VARIADIC_COPY_UNSUPPORTED ||
+        arm->variadic_copy_kind != MINIC_VARIADIC_COPY_ABI_STATE ||
         x86->variadic_copy_kind != MINIC_VARIADIC_COPY_ABI_STATE ||
         rv->variadic_copy_kind != MINIC_VARIADIC_COPY_SCALAR_ASSIGNMENT ||
         loong->variadic_copy_kind != MINIC_VARIADIC_COPY_SCALAR_ASSIGNMENT) {
-        (void)fprintf(stderr, "FAIL AAPCS64 va_copy must fail closed, x86 ABI-state independent\n");
+        (void)fprintf(stderr, "FAIL ABI-state va_copy must own separate mutable tag on AAPCS64 and x86\n");
         return 1;
     }
     if (verify_lp64_return_address_level_zero() != 0 ||

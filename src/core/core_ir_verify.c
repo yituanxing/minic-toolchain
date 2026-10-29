@@ -274,6 +274,10 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
                     MINIC_CORE_CALL_FRAME_ADDRESS_RETURN ||
                 instruction->value.call_frame_address.kind ==
                     MINIC_CORE_CALL_FRAME_ADDRESS_FRAME) &&
+               instruction->value.call_frame_address.level <= 1U &&
+               (instruction->value.call_frame_address.level == 0U ||
+                instruction->value.call_frame_address.kind ==
+                    MINIC_CORE_CALL_FRAME_ADDRESS_FRAME) &&
                minic_type_pointee(instruction->type, &pointee) && minic_type_is_void(pointee);
     }
     /* M123_VARIADIC_ARGUMENT_ADDRESS: Core validates only that the semantic

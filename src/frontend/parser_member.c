@@ -255,8 +255,12 @@ static bool parse_record_rvalue_member(MinicParser *parser,
         return false;
     }
     field = minic_c0_record_field(record, path.field_indices[0]);
-    if (field == NULL || field->is_array || minic_type_is_record(field->type)) {
-        minic_parser_error(parser, "record rvalue member currently requires a scalar field");
+    /* A nested record member of an rvalue record is still an rvalue. Keep
+     * its original aggregate identity so .inner.leaf chains can project
+     * through the one materialized base, without inventing an lvalue. Array
+     * members require independent temporary/decay semantics and stay gated. */
+    if (field == NULL || field->is_array) {
+        minic_parser_error(parser, "record rvalue member currently excludes array fields");
         return false;
     }
     member_type = field->type;

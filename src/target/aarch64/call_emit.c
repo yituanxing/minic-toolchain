@@ -37,15 +37,15 @@ static bool aarch64_emit_incoming_stack_read(FILE *out,
     const MinicDirectLP64BlockContext *ctx, const char *register_name,
     size_t stack_slot) {
     if (!out || !ctx || !register_name ||
-        stack_slot > SIZE_MAX / 8U) return false;
+        stack_slot > (SIZE_MAX - 16U) / 8U) return false;
     if (ctx->saved_entry_sp_offset != SIZE_MAX)
         return fprintf(out, "  ldr x16, [x19, #%zu]\n"
                             "  ldr %s, [x16, #%zu]\n",
                        ctx->saved_entry_sp_offset,
-                       register_name, stack_slot * 8U) >= 0;
-    if (ctx->frame > SIZE_MAX - stack_slot * 8U) return false;
+                       register_name, stack_slot * 8U + 16U) >= 0;
+    if (ctx->frame > SIZE_MAX - stack_slot * 8U - 16U) return false;
     return fprintf(out, "  ldr %s, [sp, #%zu]\n", register_name,
-                   ctx->frame + stack_slot * 8U) >= 0;
+                   ctx->frame + stack_slot * 8U + 16U) >= 0;
 }
 
 /* Outgoing calls and incoming named parameters share the same ABI plan

@@ -285,6 +285,8 @@ typedef struct MinicLocal {
     MinicLocalId dynamic_count_local_id;
     MinicLocalId dynamic_address_local_id;
     bool is_array;
+    /* Explicit GNU `T name[0]`, never an inferred `T name[]` or runtime VLA. */
+    bool is_zero_length_array;
     bool is_register_storage;
 } MinicLocal;
 

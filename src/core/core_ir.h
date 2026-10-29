@@ -335,6 +335,13 @@ typedef struct MinicCoreInstruction {
             MinicCoreValueId result_address;
         } integer_overflow;
         MinicCoreValueId operand;
+        /* An ABI cursor has independently addressable state. va_start
+         * initializes it from the incoming register/stack banks, whereas
+         * va_copy allocates an uninitialized destination which the copy
+         * effect fills before exposing it to source-level consumers. */
+        struct {
+            bool copy_destination;
+        } variadic_address;
         size_t parameter_index;
         size_t fixed_register_binding_id;
         struct {

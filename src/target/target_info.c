@@ -278,20 +278,16 @@ const MinicTargetInfo *minic_target_info_for_architecture(
             aarch64_target.gnu_sizeof_function_is_one = true;
             aarch64_target.variadic_scalar_read_kind = MINIC_VARIADIC_SCALAR_READ_ABI_CURSOR;
             aarch64_target.variadic_linear_slot_bytes = 0U;
-            /* AAPCS64 va_list is a mutable 32-byte ABI-state record, while
-             * MiniC currently models __builtin_va_list as a pointer proxy.
-             * A scalar va_copy merely aliases the same 32-byte cursor and
-             * corrupts independent iteration. Reject this operation until
-             * a distinct AArch64 record-copy/storage contract is proved. */
-            aarch64_target.variadic_copy_kind = MINIC_VARIADIC_COPY_UNSUPPORTED;
-            /* AAPCS64 saves x30 (LR) in the existing frame whenever calls
-             * may overwrite it; otherwise leaf x30 is the live return PC.
-             * Enable only RETURN level 0.  GCC FRAME builtin and unwinding
-             * levels remain unsupported without x29 frame-chain ownership. */
+            /* AAPCS64 carries a mutable 32-byte ABI-state record behind
+             * the frontend's pointer proxy. Core va_copy requests an owned
+             * destination cursor, never a scalar pointer assignment. */
+            aarch64_target.variadic_copy_kind = MINIC_VARIADIC_COPY_ABI_STATE;
+            /* Native AAPCS64 owns the x29 chain [caller-fp, caller-lr]
+             * including leaf and dynamic-stack functions. Return PC level
+             * zero is separately saved as the entry LR. */
             aarch64_target.call_frame_return_address_level0 = true;
-            /* Level-0 frame address is the current fixed AAPCS64 frame base,
-             * NOT a caller frame-chain unwind (which remains rejected). */
             aarch64_target.call_frame_frame_address_level0 = true;
+            aarch64_target.call_frame_frame_address_level1 = true;
         }
         return &aarch64_target;
     }
@@ -779,14 +775,15 @@ bool minic_target_info_integer_literal_type(const MinicTargetInfo *target,
 bool minic_target_info_call_frame_address_supported(const MinicTargetInfo *target,
                                                     MinicCallFrameAddressKind kind,
                                                     unsigned int level) {
-    if (target == NULL || level != 0U) {
+    if (target == NULL || level > 1U) {
         return false;
     }
     switch (kind) {
     case MINIC_CALL_FRAME_ADDRESS_RETURN:
-        return target->call_frame_return_address_level0;
+        return level == 0U && target->call_frame_return_address_level0;
     case MINIC_CALL_FRAME_ADDRESS_FRAME:
-        return target->call_frame_frame_address_level0;
+        return level == 0U ? target->call_frame_frame_address_level0 :
+                             target->call_frame_frame_address_level1;
     }
     return false;
 }
@@ -1194,6 +1191,16 @@ bool minic_target_info_variadic_state_copy_type_supported(
     switch (target->architecture) {
     case MINIC_TARGET_ARCH_X86_64:
         return minic_type_is_x86_va_list_cursor(type);
+    case MINIC_TARGET_ARCH_AARCH64: {
+        MinicType pointee;
+        /* Only MiniC's canonical void* builtin proxy is a qualified
+         * AAPCS64 cursor; an arbitrary source pointer must not acquire
+         * a hidden 32-byte copy ABI by accident. */
+        return minic_type_pointee(type, &pointee) &&
+               minic_type_is_void(pointee) &&
+               !minic_type_is_const(type) &&
+               !minic_type_is_volatile(type);
+    }
     default:
         return false;
     }

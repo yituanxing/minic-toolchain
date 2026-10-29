@@ -1018,13 +1018,105 @@ materialize_static_aggregate_array_action(MinicParser *parser,
     return true;
 }
 
+/* A chained [outer][inner] initializer changes only the selected nested
+ * subobject.  A subsequent designator for the same outer element must retain
+ * the earlier inner elements, rather than letting the array action planner's
+ * normal whole-element last-writer-wins rule discard their relocations. */
+static bool merge_static_chained_array_action(
+    MinicParser *parser, MinicStaticAggregateArrayAction *next,
+    const MinicStaticAggregateArrayAction *previous,
+    size_t first_slot, size_t slot_count) {
+    size_t index;
+    size_t finish;
+    size_t retained_relocations;
+    size_t retained_selections;
+    MinicGlobalRelocation *grown_relocations;
+    MinicGlobalUnionSelection *grown_selections;
+
+    if (parser == NULL || next == NULL || previous == NULL ||
+        previous->value_count != next->value_count ||
+        first_slot > next->value_count || slot_count > next->value_count - first_slot) {
+        minic_parser_error(parser, "chained static array action has inconsistent nested span");
+        return false;
+    }
+    finish = first_slot + slot_count;
+    for (index = 0U; index < next->value_count; ++index) {
+        if (index < first_slot || index >= finish) {
+            next->values[index] = previous->values[index];
+        }
+    }
+    retained_relocations = 0U;
+    for (index = 0U; index < previous->relocation_count; ++index) {
+        const size_t slot = previous->relocations[index].location_index;
+        if (slot < first_slot || slot >= finish) {
+            retained_relocations += 1U;
+        }
+    }
+    if (retained_relocations > SIZE_MAX - next->relocation_count ||
+        next->relocation_count + retained_relocations > SIZE_MAX / sizeof(*grown_relocations)) {
+        minic_parser_error(parser, "chained static array relocation count overflows");
+        return false;
+    }
+    if (retained_relocations != 0U) {
+        grown_relocations = (MinicGlobalRelocation *)realloc(
+            next->relocations,
+            (next->relocation_count + retained_relocations) * sizeof(*grown_relocations));
+        if (grown_relocations == NULL) {
+            minic_parser_error(parser, "out of memory merging chained array relocations");
+            return false;
+        }
+        next->relocations = grown_relocations;
+        for (index = 0U; index < previous->relocation_count; ++index) {
+            const size_t slot = previous->relocations[index].location_index;
+            if (slot < first_slot || slot >= finish) {
+                next->relocations[next->relocation_count++] = previous->relocations[index];
+            }
+        }
+    }
+    retained_selections = 0U;
+    for (index = 0U; index < previous->union_selection_count; ++index) {
+        const size_t slot = previous->union_selections[index].initializer_slot;
+        if (slot < first_slot || slot >= finish) {
+            retained_selections += 1U;
+        }
+    }
+    if (retained_selections > SIZE_MAX - next->union_selection_count ||
+        next->union_selection_count + retained_selections > SIZE_MAX / sizeof(*grown_selections)) {
+        minic_parser_error(parser, "chained static array union selection count overflows");
+        return false;
+    }
+    if (retained_selections != 0U) {
+        grown_selections = (MinicGlobalUnionSelection *)realloc(
+            next->union_selections,
+            (next->union_selection_count + retained_selections) * sizeof(*grown_selections));
+        if (grown_selections == NULL) {
+            minic_parser_error(parser, "out of memory merging chained union selections");
+            return false;
+        }
+        next->union_selections = grown_selections;
+        for (index = 0U; index < previous->union_selection_count; ++index) {
+            const size_t slot = previous->union_selections[index].initializer_slot;
+            if (slot < first_slot || slot >= finish) {
+                next->union_selections[next->union_selection_count++] =
+                    previous->union_selections[index];
+            }
+        }
+    }
+    return true;
+}
+
 static bool append_static_chained_array_designator_value(MinicParser *parser,
                                                          MinicGlobalObjectId object_id,
-                                                         MinicType array_type) {
+                                                         MinicType array_type,
+                                                         size_t *selected_slot,
+                                                         size_t *selected_slot_count) {
     const MinicArrayType *array;
     size_t first;
     size_t last;
     size_t index;
+    size_t element_slots;
+    size_t nested_slot;
+    size_t nested_count;
 
     if (parser == NULL || !minic_type_is_array(array_type) ||
         parser->current.kind != MINIC_TOKEN_LBRACKET) {
@@ -1032,6 +1124,9 @@ static bool append_static_chained_array_designator_value(MinicParser *parser,
     }
     array = minic_c0_program_array_type(parser->program, array_type.array_type_id);
     if (array == NULL || array->element_count == 0U || array->is_zero_length ||
+        selected_slot == NULL || selected_slot_count == NULL ||
+        !minic_c0_global_initializer_slot_count(
+            parser->program, array->element_type, &element_slots) ||
         !minic_parser_parse_array_designator_component(
             parser, array->element_count, false, &first, &last)) {
         return false;
@@ -1039,6 +1134,10 @@ static bool append_static_chained_array_designator_value(MinicParser *parser,
     if (first != last) {
         minic_parser_error(
             parser, "GNU range designators inside chained static arrays are not supported yet");
+        return false;
+    }
+    if (element_slots != 0U && first > SIZE_MAX / element_slots) {
+        minic_parser_error(parser, "chained static array slot index overflows");
         return false;
     }
     for (index = 0U; index < first; ++index) {
@@ -1049,13 +1148,20 @@ static bool append_static_chained_array_designator_value(MinicParser *parser,
     }
     if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
         if (!minic_type_is_array(array->element_type) ||
-            !append_static_chained_array_designator_value(parser, object_id, array->element_type)) {
+            !append_static_chained_array_designator_value(
+                parser, object_id, array->element_type, &nested_slot, &nested_count)) {
             if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
                 minic_parser_error(parser,
                                    "chained array designator requires another array dimension");
             }
             return false;
         }
+        if (nested_slot > SIZE_MAX - first * element_slots) {
+            minic_parser_error(parser, "nested chained static array slot index overflows");
+            return false;
+        }
+        *selected_slot = first * element_slots + nested_slot;
+        *selected_slot_count = nested_count;
     } else {
         if (!minic_parser_expect(
                 parser, MINIC_TOKEN_EQUAL, "expected '=' after chained array designator") ||
@@ -1063,6 +1169,8 @@ static bool append_static_chained_array_designator_value(MinicParser *parser,
                 parser, object_id, array->element_type)) {
             return false;
         }
+        *selected_slot = first * element_slots;
+        *selected_slot_count = element_slots;
     }
     for (index = first + 1U; index < array->element_count; ++index) {
         if (!append_static_constant_zero(parser, object_id, array->element_type)) {
@@ -1110,9 +1218,15 @@ static bool parse_static_forward_array_initializer(MinicParser *parser,
         size_t initializer_begin;
         size_t relocation_begin;
         size_t union_selection_begin;
+        size_t chained_slot;
+        size_t chained_slot_count;
+        size_t outer_first;
         bool chained_designator;
 
         chained_designator = false;
+        chained_slot = 0U;
+        chained_slot_count = 0U;
+        outer_first = 0U;
         if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
             size_t first;
             size_t last;
@@ -1126,6 +1240,7 @@ static bool parse_static_forward_array_initializer(MinicParser *parser,
                 }
                 goto done;
             }
+            outer_first = first;
             if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
                 if (first != last) {
                     minic_parser_error(parser, "outer GNU range designator cannot be chained yet");
@@ -1159,7 +1274,8 @@ static bool parse_static_forward_array_initializer(MinicParser *parser,
         relocation_begin = object->relocation_count;
         union_selection_begin = object->union_selection_count;
         if ((chained_designator
-                 ? !append_static_chained_array_designator_value(parser, object_id, element_type)
+                 ? !append_static_chained_array_designator_value(
+                       parser, object_id, element_type, &chained_slot, &chained_slot_count)
                  : !minic_parser_parse_static_storage_initializer_value(
                        parser, object_id, element_type)) ||
             !capture_static_aggregate_array_action(parser,
@@ -1169,6 +1285,20 @@ static bool parse_static_forward_array_initializer(MinicParser *parser,
                                                    union_selection_begin,
                                                    &actions[action_id])) {
             goto done;
+        }
+        if (chained_designator) {
+            size_t earlier;
+            for (earlier = action_id; earlier != 0U; --earlier) {
+                const MinicArrayInitializerAction *prior = &plan.actions[earlier - 1U];
+                if (prior->first_index <= outer_first && outer_first <= prior->last_index) {
+                    if (!merge_static_chained_array_action(parser, &actions[action_id],
+                                                           &actions[earlier - 1U],
+                                                           chained_slot, chained_slot_count)) {
+                        goto done;
+                    }
+                    break;
+                }
+            }
         }
         if (parser->current.kind == MINIC_TOKEN_COMMA) {
             if (!minic_parser_advance(parser)) {

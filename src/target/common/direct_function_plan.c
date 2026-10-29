@@ -141,6 +141,18 @@ bool minic_multi_direct_lp64_function_plan_prepare(
     plan->saved_entry_sp_offset = plan->frame_alignment > 16U
         ? plan->save_offset + (plan->has_calls ? 8U : 0U) + 8U
         : SIZE_MAX;
+    /* AAPCS64 cursor0 keeps the established 32B tag + 64B GP + 128B FP
+     * region. Each further va_copy/va_start cursor owns another 32B tag,
+     * never sharing the mutable offsets of a preceding va_list. Increase
+     * the final frame (not the incoming save/return offsets), so the extra
+     * tags remain below entry SP and above all existing frame slots. */
+    if (abi == MINIC_LP64_ABI_AAPCS64 && plan->variadic_count > 1U) {
+        const size_t extra_cursors = plan->variadic_count - 1U;
+        if (extra_cursors > MINIC_LARGE_FRAME_MAX / 32U ||
+            plan->frame_size > MINIC_LARGE_FRAME_MAX - extra_cursors * 32U)
+            return false;
+        plan->frame_size += extra_cursors * 32U;
+    }
     plan->failed_stage = NULL;
     return true;
 }

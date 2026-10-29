@@ -26,10 +26,18 @@ static bool aarch64_emit_prologue(
         (ctx->frame_alignment & (ctx->frame_alignment - 1U)) != 0U ||
         ctx->saved_entry_sp_offset == SIZE_MAX))
         goto fail;
-    /* Entry SP is guaranteed only 16B by AAPCS64. Preserve both the
-     * original incoming stack address and callee-owned x19 before changing
-     * SP, then align a stable local frame base with the reserved slack. */
-    if (realigned && fputs("  mov x14, x19\n  mov x15, sp\n", out) == EOF)
+    /* Linux arm64 stack unwinding requires an AAPCS64 frame record even
+     * for leaf functions. The 16B record lives ABOVE all Core-local frame
+     * slots: [x29] is the caller's x29 and [x29+8] its return PC. Preserve
+     * that exact chain while independently aligning the owned local frame.
+     * The saved entry SP for over-aligned locals is the record's SP, not
+     * the raw incoming SP, so the epilogue can pop the record once. */
+    if (realigned && fputs("  mov x14, x19\n", out) == EOF)
+        goto fail;
+    if (fputs("  stp x29, x30, [sp, #-16]!\n"
+              "  mov x29, sp\n", out) == EOF)
+        goto fail;
+    if (realigned && fputs("  mov x15, sp\n", out) == EOF)
         goto fail;
     if (frame != 0U &&
         (fprintf(out, "  movz x12, #%zu\n", frame & 65535U) < 0 ||

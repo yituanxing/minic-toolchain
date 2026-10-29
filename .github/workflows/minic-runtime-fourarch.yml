@@ -18,6 +18,13 @@ on:
       - "tests/compiler/c0/probe-four-backend-dynamic-stack.sh"
       - "tests/compiler/c0/probe-gnu-function-aligned-native.sh"
       - "tests/compiler/c0/gnu_function_aligned.c"
+      - "tests/compiler/c0/probe-record-rvalue-nested-member-native.sh"
+      - "tests/compiler/c0/record_rvalue_nested_member.c"
+      - "tests/compiler/c0/probe-x86-linux-put-user-pointer-gcc-native.sh"
+      - "tests/compiler/c0/x86_linux_put_user_pointer.c"
+      - "tests/compiler/c0/probe-x86-linux-cmpxchg16b-native.sh"
+      - "tests/compiler/c0/x86_linux_cmpxchg16b_atomic.c"
+      - "tests/compiler/c0/x86_linux_cmpxchg16b_alt.c"
       - "tests/compiler/c0/dynamic_stack_wide_spill.c"
       - "tests/compiler/c0/dynamic_stack_wide_spill_helper.c"
       - ".github/workflows/minic-runtime-fourarch.yml"
@@ -108,7 +115,14 @@ on:
       - "tests/compiler/c0/probe-lp64-compiler-rt-qemu.sh"
       - "tests/compiler/c0/probe-four-backend-dynamic-stack.sh"
       - "tests/compiler/c0/probe-gnu-function-aligned-native.sh"
+      - "tests/compiler/c0/probe-record-rvalue-nested-member-native.sh"
+      - "tests/compiler/c0/record_rvalue_nested_member.c"
       - "tests/compiler/c0/gnu_function_aligned.c"
+      - "tests/compiler/c0/probe-x86-linux-put-user-pointer-gcc-native.sh"
+      - "tests/compiler/c0/x86_linux_put_user_pointer.c"
+      - "tests/compiler/c0/probe-x86-linux-cmpxchg16b-native.sh"
+      - "tests/compiler/c0/x86_linux_cmpxchg16b_atomic.c"
+      - "tests/compiler/c0/x86_linux_cmpxchg16b_alt.c"
       - "tests/compiler/c0/dynamic_stack_wide_spill.c"
       - "tests/compiler/c0/dynamic_stack_wide_spill_helper.c"
       - "tests/compiler/c0/probe-runtime-isnan.sh"
@@ -262,6 +276,12 @@ jobs:
           set -Eeuo pipefail
           bash tests/compiler/c0/probe-gnu-function-aligned-native.sh \
             "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc" "${{ matrix.target }}"
+      - name: Nested GNU record-rvalue member snapshot and scalar chains
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash tests/compiler/c0/probe-record-rvalue-nested-member-native.sh \
+            "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc" "${{ matrix.target }}"
       - name: GNU original x86 Linux PREFETCHW CPU ALTERNATIVE native patch-table ELF verification
         if: matrix.target == 'x86_64'
         shell: bash
@@ -270,6 +290,20 @@ jobs:
         run: |
           set -Eeuo pipefail
           bash tests/compiler/c0/probe-x86-linux-prefetchw-alt-gcc-native.sh
+      - name: GNU original x86 Linux put_user pointer RAX and EBX private helper ABI
+        if: matrix.target == 'x86_64'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash tests/compiler/c0/probe-x86-linux-put-user-pointer-gcc-native.sh \
+            "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
+      - name: GNU original Linux x86 CMPXCHG16B atomic CAS and GS ALT relocation ABI
+        if: matrix.target == 'x86_64'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash tests/compiler/c0/probe-x86-linux-cmpxchg16b-native.sh \
+            "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
       - name: Original Linux x86 GS per-CPU tied-seed ALU ten native GNU hardware variants
         if: matrix.target == 'x86_64'
         shell: bash

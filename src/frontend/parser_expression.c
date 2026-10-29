@@ -1,5 +1,6 @@
 #include "frontend/parser_internal.h"
 #include "frontend/expression_semantics.h"
+#include "frontend/parser_runtime_initializer.h"
 
 #include <errno.h>
 #include <limits.h>
@@ -46,9 +47,29 @@ bool minic_parser_finish_value_expression(MinicParser *parser,
                                     MinicExpressionId input_id,
                                     bool decay_array,
                                     MinicExpressionId *expression_id) {
+    const MinicExpression *input;
+
     if (!decay_array) {
         *expression_id = input_id;
         return true;
+    }
+    input = minic_c0_program_expression(parser->program, input_id);
+    if (input != NULL && minic_type_is_function(input->type) &&
+        input->kind == MINIC_EXPRESSION_DEREFERENCE) {
+        const MinicExpression *function_pointer =
+            minic_c0_program_expression(parser->program, input->value.unary.operand);
+        MinicType pointee;
+
+        /* `(*fnptr)` is a function designator.  In value context the C
+           function-to-pointer conversion yields fnptr itself (with all
+           original operand effects preserved), not an unassignable function
+           lvalue. `sizeof` and `typeof` deliberately use no-decay mode. */
+        if (function_pointer != NULL &&
+            minic_type_pointee(function_pointer->type, &pointee) &&
+            minic_type_is_function(pointee)) {
+            *expression_id = input->value.unary.operand;
+            return true;
+        }
     }
     return minic_parser_apply_array_decay(parser, input_id, expression_id);
 }
@@ -767,6 +788,146 @@ static bool parse_scalar_compound_literal(MinicParser *parser,
     return minic_parser_parse_postfix(parser, value_id, expression_id);
 }
 
+/* GCC's `(union U)scalar` extension selects the union member whose declared
+   type matches the scalar.  Materialize its initializer once, as an ordinary
+   record compound literal, so the Core record-copy path preserves the union
+   representation instead of pretending a record is a scalar cast. */
+static bool parse_gnu_scalar_to_union_cast(MinicParser *parser,
+                                           MinicSourcePosition begin,
+                                           MinicType union_type,
+                                           MinicExpressionId operand_id,
+                                           MinicExpressionId *expression_id) {
+    const MinicRecord *record;
+    const MinicRecordField *selected;
+    const MinicExpression *operand;
+    MinicType operand_type;
+    MinicSourceSpan span;
+    MinicLocal local;
+    MinicLocalId local_id;
+    MinicBlockId initializer_block;
+    MinicBlockId parent_block;
+    MinicExpression lvalue;
+    MinicExpression address;
+    MinicExpression member;
+    MinicExpression compound;
+    MinicExpression cast_result;
+    MinicStatement statement;
+    MinicExpressionId lvalue_id;
+    MinicExpressionId address_id;
+    MinicExpressionId member_id;
+    MinicExpressionId compound_id;
+    size_t member_index;
+
+    record = minic_c0_program_record(parser->program, union_type.record_id);
+    operand = minic_c0_program_expression(parser->program, operand_id);
+    if (record == NULL || !record->is_complete || !record->is_union || operand == NULL) {
+        return false;
+    }
+    operand_type = operand->type;
+    span.begin = begin;
+    span.end = operand->span.end;
+    selected = NULL;
+    for (member_index = 0U; member_index < record->field_count; ++member_index) {
+        const MinicRecordField *candidate = &record->fields[member_index];
+        MinicType unqualified_member;
+        MinicType unqualified_operand;
+
+        if (!candidate->is_array && !candidate->is_bit_field &&
+            minic_type_unqualified(candidate->type, &unqualified_member) &&
+            minic_type_unqualified(operand_type, &unqualified_operand) &&
+            minic_c0_types_compatible(parser->program, unqualified_member, unqualified_operand)) {
+            selected = candidate;
+            break;
+        }
+    }
+    if (selected == NULL) {
+        return false;
+    }
+    minic_c0_local_initialize(&local);
+    local.name_span.begin = begin;
+    local.name_span.end = begin;
+    local.type = union_type;
+    local.element_count = 1U;
+    if (!minic_c0_program_add_local(parser->program, &local, &local_id) ||
+        !minic_c0_program_add_block(parser->program, &initializer_block)) {
+        minic_parser_error(parser, "cannot allocate GNU union cast backing object");
+        return false;
+    }
+    (void)memset(&lvalue, 0, sizeof(lvalue));
+    lvalue.kind = MINIC_EXPRESSION_LOCAL;
+    lvalue.span = span;
+    lvalue.type = union_type;
+    lvalue.value_category = MINIC_VALUE_LVALUE;
+    lvalue.value.local_id = local_id;
+    if (!minic_parser_add_expression(parser, &lvalue, &lvalue_id)) {
+        return false;
+    }
+    (void)memset(&address, 0, sizeof(address));
+    address.kind = MINIC_EXPRESSION_ADDRESS_OF;
+    address.span = span;
+    address.value_category = MINIC_VALUE_RVALUE;
+    address.value.unary.operand = lvalue_id;
+    if (!minic_type_pointer_to(union_type, &address.type) ||
+        !minic_parser_add_expression(parser, &address, &address_id)) {
+        minic_parser_error(parser, "cannot take GNU union cast backing address");
+        return false;
+    }
+    (void)memset(&member, 0, sizeof(member));
+    member.kind = MINIC_EXPRESSION_MEMBER;
+    member.span = span;
+    member.type = selected->type;
+    member.value_category = MINIC_VALUE_LVALUE;
+    member.value.member.base = address_id;
+    member.value.member.record_id = union_type.record_id;
+    member.value.member.field_index = member_index;
+    if (!minic_parser_add_expression(parser, &member, &member_id)) {
+        return false;
+    }
+    parent_block = parser->current_block;
+    parser->current_block = initializer_block;
+    if (!minic_parser_statement_assignment_conversion(parser, selected->type, &operand_id) ||
+        !minic_c0_assignment_compatible(parser->program, selected->type, operand_id)) {
+        parser->current_block = parent_block;
+        minic_parser_error(parser, "GNU union cast member type mismatch");
+        return false;
+    }
+    (void)memset(&statement, 0, sizeof(statement));
+    statement.kind = MINIC_STATEMENT_ASSIGN;
+    statement.span = span;
+    statement.target_expression = member_id;
+    statement.expression = operand_id;
+    statement.target_statement = MINIC_STATEMENT_INVALID;
+    statement.cleanup_context = parser->cleanup_context;
+    statement.cleanup_stop_context = MINIC_CLEANUP_CONTEXT_ROOT;
+    statement.then_block = MINIC_BLOCK_INVALID;
+    statement.else_block = MINIC_BLOCK_INVALID;
+    if (!minic_parser_add_statement(parser, &statement)) {
+        parser->current_block = parent_block;
+        return false;
+    }
+    parser->current_block = parent_block;
+    (void)memset(&compound, 0, sizeof(compound));
+    compound.kind = MINIC_EXPRESSION_COMPOUND_LITERAL;
+    compound.span = span;
+    compound.type = union_type;
+    compound.value_category = MINIC_VALUE_LVALUE;
+    compound.value.compound_literal.local_id = local_id;
+    compound.value.compound_literal.initializer_block = initializer_block;
+    if (!minic_parser_add_expression(parser, &compound, &compound_id)) {
+        return false;
+    }
+    /* Unlike a C compound literal, a cast result is never a modifiable
+       lvalue. A same-record typed cast preserves that value category while
+       using the existing aggregate value/copy lowering contract. */
+    (void)memset(&cast_result, 0, sizeof(cast_result));
+    cast_result.kind = MINIC_EXPRESSION_CAST;
+    cast_result.span = span;
+    cast_result.type = union_type;
+    cast_result.value_category = MINIC_VALUE_RVALUE;
+    cast_result.value.unary.operand = compound_id;
+    return minic_parser_add_expression(parser, &cast_result, expression_id);
+}
+
 static bool parse_cast(MinicParser *parser, MinicExpressionId *expression_id) {
     MinicSourcePosition begin;
     MinicExpression expression;
@@ -797,6 +958,11 @@ static bool parse_cast(MinicParser *parser, MinicExpressionId *expression_id) {
     }
 
     operand = minic_c0_program_expression(parser->program, operand_id);
+    if (operand != NULL && minic_type_is_record(target_type) &&
+        !minic_type_is_record(operand->type) &&
+        parse_gnu_scalar_to_union_cast(parser, begin, target_type, operand_id, expression_id)) {
+        return true;
+    }
     if (operand != NULL && same_floating_type(target_type, operand->type)) {
         *expression_id = operand_id;
         return true;

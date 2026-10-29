@@ -449,6 +449,25 @@ static bool minic_multi_emit_recursive_global_value(
         const MinicGlobalRelocation *reloc =
             *relocation_index < object->relocation_count
                 ? &object->relocations[*relocation_index] : NULL;
+        /* GNU Linux embeds 128-bit integer state within nested static
+         * records. The scalar initializer model currently stores one
+         * 64-bit payload per leaf: zero is unambiguous across BOTH 64-bit
+         * halves and can be emitted exactly, whereas a nonzero 128-bit
+         * initializer must await a full-width payload representation.
+         * Never truncate or silently drop a relocation into this slot. */
+        if (minic_type_is_int128_integer(type) && type_size == 16U) {
+            if (*initializer_index >= object->initializer_count ||
+                object->initializer_values == NULL ||
+                object->initializer_values[*initializer_index] != 0U ||
+                (reloc != NULL &&
+                 reloc->location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR &&
+                 reloc->location_index == *initializer_index) ||
+                fprintf(out, "  .zero 16\n") < 0)
+                return false;
+            ++*initializer_index;
+            *emitted_size = 16U;
+            return true;
+        }
         if (*initializer_index >= object->initializer_count ||
             minic_multi_data_directive(type_size) == NULL)
             return false;

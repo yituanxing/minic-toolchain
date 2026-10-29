@@ -62,6 +62,8 @@ typedef struct MinicTargetInfo {
     bool gnu_sizeof_function_is_one;
     bool call_frame_return_address_level0;
     bool call_frame_frame_address_level0;
+    /* Only targets with a persistent caller FP record can unwind level 1. */
+    bool call_frame_frame_address_level1;
     MinicVariadicScalarReadKind variadic_scalar_read_kind;
     size_t variadic_linear_slot_bytes;
     MinicVariadicCopyKind variadic_copy_kind;

@@ -156,21 +156,31 @@ bool minic_aarch64_emit_residual_instruction(
             *needs_writeback = false;
             return minic_aarch64_emit_qualified_structured_asm(out, ctx, ins);
         case MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS: {
-            /* Same typed Core builtin as RV32/RV64, but the AAPCS64
-             * machine owns x30 and the saved-LR frame offset.  A call inside
-             * this function replaces live x30, so non-leaf must fetch the
-             * ENTRY return PC from its saved slot. Never counterfeit an
-             * unwind of another frame. */
-            if (!dynamic_frame &&
-                minic_multi_direct_call_frame_level0_shape(
+            /* Real AAPCS64 frame chain: prologue sets x29 to an owned
+             * [caller-x29,entry-x30] 16B record in every function, including
+             * leaves, dynamic alloca and over-aligned frames. */
+            if (minic_multi_direct_call_frame_level0_shape(
                     fn, ins, MINIC_CORE_CALL_FRAME_ADDRESS_FRAME)) {
-                /* The fixed AAPCS64 frame has a stable 16-byte aligned SP.
-                 * The result denotes THIS frame, not x29's caller chain. */
-                if (fputs("  mov x9, sp\n", out) == EOF)
+                if (fputs("  mov x9, x29\n", out) == EOF)
                     return false;
                 break;
             }
-            if (dynamic_frame ||
+            {
+                MinicType frame_pointee;
+                if (ins->value.call_frame_address.kind ==
+                        MINIC_CORE_CALL_FRAME_ADDRESS_FRAME &&
+                    ins->value.call_frame_address.level == 1U &&
+                    ins->result < fn->value_count &&
+                    minic_type_pointee(ins->type, &frame_pointee) &&
+                    minic_type_is_void(frame_pointee) &&
+                    minic_target_info_call_frame_address_supported(
+                        target, MINIC_CALL_FRAME_ADDRESS_FRAME, 1U)) {
+                    if (fputs("  ldr x9, [x29]\n", out) == EOF)
+                        return false;
+                    break;
+                }
+            }
+            if (
                 !minic_multi_direct_call_frame_return_level0_shape(fn, ins) ||
                 (ctx->has_direct_calls &&
                  (ctx->save_offset > 32760U ||
@@ -179,7 +189,8 @@ bool minic_aarch64_emit_residual_instruction(
                     fn, "aarch64", name, "call_frame_return_address",
                     reject_block, reject_ins, __LINE__);
             if (ctx->has_direct_calls) {
-                if (fprintf(out, "  ldr x9, [sp, #%zu]\n",
+                if (fprintf(out, "  ldr x9, [%s, #%zu]\n",
+                            dynamic_frame ? "x19" : "sp",
                             ctx->save_offset) < 0)
                     return false;
             } else if (fputs("  mov x9, x30\n", out) == EOF) {
@@ -507,22 +518,66 @@ bool minic_aarch64_emit_residual_instruction(
                     reject_stage, reject_block, reject_ins, __LINE__);
             break;
         }
+        case MINIC_CORE_INSTRUCTION_VARIADIC_COPY: {
+            const MinicCoreValueId dest = ins->value.variadic_copy.destination;
+            const MinicCoreValueId src = ins->value.variadic_copy.source;
+            /* AAPCS64 __va_list is 32 bytes: stack/gr_top/vr_top and two
+             * signed 32-bit register offsets. Copy the entire ABI state,
+             * including both mutable offsets, into an independent tag. */
+            if (ins->result != MINIC_CORE_VALUE_INVALID ||
+                !minic_type_is_void(ins->type) ||
+                dest >= fn->value_count || src >= fn->value_count ||
+                !minic_type_is_pointer(fn->values[dest].type) ||
+                !minic_type_equal(fn->values[dest].type, fn->values[src].type) ||
+                fprintf(out, "  ldr x9, [sp, #%zu]\n"
+                             "  ldr x10, [sp, #%zu]\n",
+                        (size_t)dest * 8U, (size_t)src * 8U) < 0 ||
+                fputs("  ldp x11, x12, [x10]\n"
+                      "  ldp x13, x14, [x10, #16]\n"
+                      "  stp x11, x12, [x9]\n"
+                      "  stp x13, x14, [x9, #16]\n", out) == EOF)
+                return minic_multi_direct_machine_reject(fn, "aarch64", name,
+                    reject_stage, reject_block, reject_ins, __LINE__);
+            *needs_writeback = false;
+            return true;
+        }
         case MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS: {
+            size_t seen = 0U, i, cursor_offset;
             const size_t stack_top = frame;
             const size_t gr_top = va_base + 96U;
             const size_t vr_top = va_base + 224U;
-            if (va_count != 1U || !minic_type_is_pointer(ins->type) ||
-                ins->result >= fn->value_count)
+            for (i = 0U; i < ins_id; ++i)
+                if (fn->instructions[i].kind ==
+                    MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS)
+                    ++seen;
+            if (va_count == 0U || seen >= va_count ||
+                !minic_type_is_pointer(ins->type) ||
+                ins->result >= fn->value_count ||
+                (seen != 0U && frame < (va_count - seen) * 32U))
                 return minic_multi_direct_machine_reject(fn, "aarch64", name,
                                            reject_stage, reject_block,
                                            reject_ins, __LINE__);
+            cursor_offset = seen == 0U ? va_base
+                : frame - (va_count - seen) * 32U;
+            if (ins->value.variadic_address.copy_destination) {
+                /* va_copy allocates an uninitialized, private 32B cursor.
+                 * The following Core VARIADIC_COPY copies its whole state. */
+                if (fprintf(out, "  movz x9, #%zu\n", cursor_offset & 65535U) < 0 ||
+                    (cursor_offset > 65535U &&
+                     fprintf(out, "  movk x9, #%zu, lsl #16\n",
+                             cursor_offset >> 16U) < 0) ||
+                    fputs("  add x9, sp, x9\n", out) == EOF)
+                    return minic_multi_direct_machine_reject(fn, "aarch64", name,
+                        reject_stage, reject_block, reject_ins, __LINE__);
+                break;
+            }
             /* Linux AAPCS64 va_list layout:
              * void *__stack, *__gr_top, *__vr_top; int __gr_offs, __vr_offs.
              * The GP and FP save areas are owned by our entry prologue. */
-            if (fprintf(out, "  movz x9, #%zu\n", va_base & 65535U) < 0 ||
-                (va_base > 65535U &&
+            if (fprintf(out, "  movz x9, #%zu\n", cursor_offset & 65535U) < 0 ||
+                (cursor_offset > 65535U &&
                  fprintf(out, "  movk x9, #%zu, lsl #16\n",
-                         va_base >> 16U) < 0) ||
+                         cursor_offset >> 16U) < 0) ||
                 fputs("  add x9, sp, x9\n", out) == EOF)
                 return minic_multi_direct_machine_reject(fn, "aarch64", name,
                                            reject_stage, reject_block,
@@ -554,10 +609,10 @@ bool minic_aarch64_emit_residual_instruction(
                             : "  movn w10, #%zu\n",
                         va_fp == 8U ? 0U : (8U - va_fp) * 16U - 1U) < 0 ||
                 fputs("  str w10, [x9, #28]\n", out) == EOF ||
-                fprintf(out, "  movz x9, #%zu\n", va_base & 65535U) < 0 ||
-                (va_base > 65535U &&
+                fprintf(out, "  movz x9, #%zu\n", cursor_offset & 65535U) < 0 ||
+                (cursor_offset > 65535U &&
                  fprintf(out, "  movk x9, #%zu, lsl #16\n",
-                         va_base >> 16U) < 0) ||
+                         cursor_offset >> 16U) < 0) ||
                 fputs("  add x9, sp, x9\n", out) == EOF)
                 return minic_multi_direct_machine_reject(fn, "aarch64", name,
                                            reject_stage, reject_block,

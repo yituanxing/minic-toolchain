@@ -39,8 +39,8 @@ bool minic_aarch64_emit_lp64_record_chunk_parameter(FILE *out, size_t offset,
          : saved_entry_sp_offset != SIZE_MAX
              ? fprintf(out, "  ldr x16, [x19, #%zu]\n"
                             "  ldr x9, [x16, #%zu]\n",
-                       saved_entry_sp_offset, incoming_offset) < 0
-             : fprintf(out, "  ldr x9, [sp, #%zu]\n", incoming_offset) < 0))
+                       saved_entry_sp_offset, incoming_offset + 16U) < 0
+             : fprintf(out, "  ldr x9, [sp, #%zu]\n", incoming_offset + 16U) < 0))
         return false;
     for (b = 0U; b < bytes; ++b)
         if (fprintf(out, "  strb w9, [x11, #%zu]\n", b) < 0 ||
@@ -156,9 +156,9 @@ const MinicLP64ArgumentLocation *location;
                          ? fprintf(out, "  ldr x16, [x19, #%zu]\n"
                                         "  ldr x10, [x16, #%zu]\n",
                                saved_entry_sp_offset,
-                               location->stack_first * 8U) < 0
+                               location->stack_first * 8U + 16U) < 0
                          : fprintf(out, "  ldr x10, [sp, #%zu]\n",
-                               frame + location->stack_first * 8U) < 0) ||
+                               frame + location->stack_first * 8U + 16U) < 0) ||
                     fprintf(out, "  movz x11, #%zu\n",
                             object_offset & 65535U) < 0 ||
                     (object_offset > 65535U &&
@@ -349,7 +349,8 @@ bool minic_aarch64_emit_terminator(FILE *out,
                   (frame > 65535U &&
                    fprintf(out, "  movk x12, #%zu, lsl #16\n", frame >> 16U) < 0) ||
                   fputs("  add sp, sp, x12\n", out) == EOF)) ||
-                fputs("  ret\n", out) == EOF) return false;
+                fputs("  ldp x29, x30, [sp], #16\n  ret\n", out) == EOF)
+                return false;
             break;
         case MINIC_CORE_TERMINATOR_INDIRECT_BRANCH:
             if (fprintf(out, "  ldr x9, [sp, #%zu]\n  br x9\n",

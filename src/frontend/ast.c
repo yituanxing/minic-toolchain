@@ -1507,7 +1507,8 @@ bool minic_c0_expression_array_object_info(const MinicC0Program *program,
         if (local != NULL && local->is_array) {
             resolved.element_type = expression->type;
             resolved.element_count = local->element_count;
-            resolved.is_incomplete = local->element_count == 0U;
+            resolved.is_zero_length = local->is_zero_length_array;
+            resolved.is_incomplete = local->element_count == 0U && !resolved.is_zero_length;
             if (info != NULL) {
                 *info = resolved;
             }
@@ -1521,7 +1522,10 @@ bool minic_c0_expression_array_object_info(const MinicC0Program *program,
         if (local != NULL && local->is_array) {
             resolved.element_type = expression->type;
             resolved.element_count = local->element_count;
-            resolved.is_incomplete = local->element_count == 0U;
+            /* A parsed `T local[0]` owns a complete GNU zero-sized array.
+               Keep only a not-yet-materialized VLA incomplete here. */
+            resolved.is_zero_length = local->is_zero_length_array;
+            resolved.is_incomplete = local->element_count == 0U && !resolved.is_zero_length;
         } else if (!minic_type_is_array(expression->type)) {
             return false;
         } else {
@@ -1667,6 +1671,23 @@ static bool minic_c0_record_value_is_copy_source_bounded(const MinicC0Program *p
     if (expression->kind == MINIC_EXPRESSION_CALL ||
         expression->kind == MINIC_EXPRESSION_BUILTIN_VA_ARG) {
         return true;
+    }
+    if (expression->kind == MINIC_EXPRESSION_MEMBER) {
+        const MinicExpression *base = minic_c0_program_expression(
+            program, expression->value.member.base);
+        const MinicRecord *record = minic_c0_program_record(
+            program, expression->value.member.record_id);
+        const MinicRecordField *field = minic_c0_record_field(
+            record, expression->value.member.field_index);
+        return expression->value.member.base < expression_id && base != NULL &&
+               base->value_category == MINIC_VALUE_RVALUE &&
+               minic_type_is_record(base->type) &&
+               base->type.record_id == expression->value.member.record_id &&
+               field != NULL && !field->is_array && !field->is_bit_field &&
+               minic_type_is_record(field->type) &&
+               field->type.record_id == expression->type.record_id &&
+               minic_c0_record_value_is_copy_source_bounded(
+                   program, expression->value.member.base, remaining - 1U);
     }
     if (expression->kind == MINIC_EXPRESSION_CAST ||
         expression->kind == MINIC_EXPRESSION_STATEMENT) {

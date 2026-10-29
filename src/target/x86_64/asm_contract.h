@@ -21,6 +21,10 @@ unsigned int minic_x86_64_linux_mmio_write_form(const char *, size_t);
 bool minic_x86_64_linux_mmio_type_matches(MinicType, unsigned int);
 /* Fixed-SI/DI, fixed-CX repeated string I/O with a DX port operand. */
 unsigned int minic_x86_64_linux_rep_string_io_form(const char *, size_t);
+/* Fixed RCX/RDI/RSI kernel iomem MOVSB/MOVSW/REP MOVSL with tied inputs. */
+unsigned int minic_x86_64_linux_iomem_copy_form(const char *, size_t);
+/* Non-temporal memcpy and CLWB alternative with exact Linux machine ABI. */
+unsigned int minic_x86_64_linux_flushcache_copy_form(const char *, size_t);
 /* Atomic register/memory exchange with the GNU +r/+m two-output ABI. */
 unsigned int minic_x86_64_linux_atomic_xchg_form(const char *, size_t);
 unsigned int minic_x86_64_linux_pvclock_scale_form(const char *, size_t);
@@ -37,6 +41,8 @@ unsigned int minic_x86_64_linux_control_register_form(const char *, size_t);
 unsigned int minic_x86_64_linux_tlb_cache_form(const char *, size_t);
 /* Linux ALTERNATIVE() with an empty baseline and WRMSR replacement. */
 bool minic_x86_64_linux_alternative_wrmsr_form(const char *, size_t);
+/* xAPIC MMIO MOV/XCHG and AMD divider-clear exact ELF alternatives. */
+unsigned int minic_x86_64_linux_apic_amd_alt_form(const char *, size_t);
 /* Linux native MONITOR/MWAIT and interrupt-enabling MWAIT byte ISA family. */
 unsigned int minic_x86_64_linux_monitor_wait_form(const char *, size_t);
 /* Read the live 16-bit DS/ES segment selector, not the segment base. */
@@ -47,6 +53,9 @@ unsigned int minic_x86_64_linux_put_user_call_form(const char *, size_t);
 unsigned int minic_x86_64_linux_get_user_call_form(const char *, size_t);
 /* Linux x86 MWAIT idle CLFLUSH alternatives with feature bit 711. */
 bool minic_x86_64_linux_idle_clflush_alt_form(const char *, size_t, bool);
+bool minic_x86_64_linux_pat_clflushopt_form(const char *, size_t);
+/* Exact x86 futex atomic ISA + GNU __ex_table register recovery templates. */
+unsigned int minic_x86_64_linux_futex_extable_form(const char *, size_t);
 /* MDS buffer-clearing VERW selector read, with architectural CC effects. */
 bool minic_x86_64_linux_verw_clear_form(const char *, size_t);
 /* Linux debug register DR0/1/2/3/6/7 physical read/write hardware family. */
@@ -77,6 +86,7 @@ bool minic_x86_64_linux_delay_mul_form(const char *, size_t);
 unsigned int minic_x86_64_linux_delay_wait_form(const char *, size_t);
 bool minic_x86_64_linux_identity_load_form(const char *, size_t);
 bool minic_x86_64_linux_ipv6_checksum_form(const char *, size_t);
+unsigned int minic_x86_64_linux_csum_partial_form(const char *, size_t);
 bool minic_x86_64_linux_unwind_context_form(const char *, size_t);
 bool minic_x86_64_linux_task_size_alt_form(const char *, size_t);
 /* Call the hardirq handler on the per-CPU IRQ stack with exact RSP save. */
@@ -258,6 +268,11 @@ typedef struct MinicX86AtomicCCDesc {
     bool flag_sign;
 } MinicX86AtomicCCDesc;
 MinicX86AtomicCC minic_x86_64_atomic_cc_form(const char *, size_t);
+bool minic_x86_64_atomic_cc_locked_form(const char *, size_t);
+unsigned int minic_x86_64_linux_lock_bitcc_form(const char *, size_t);
+unsigned int minic_x86_64_linux_boot_string_form(const char *, size_t);
+bool minic_x86_64_linux_vdso_syscall_form(const char *, size_t);
+bool minic_x86_64_linux_vdso_cpunode_form(const char *, size_t);
 const MinicX86AtomicCCDesc *minic_x86_64_atomic_cc_description(MinicX86AtomicCC);
 /* One x86 ISA descriptor distinguishes word and tied-seed Linux BSR/BSF.
  * The GNU output/input contract is target-owned; Common Core sees only
@@ -271,6 +286,9 @@ typedef enum MinicX86BitScanForm {
     MINIC_X86_BIT_SCAN_BSR64_READWRITE
 } MinicX86BitScanForm;
 MinicX86BitScanForm minic_x86_64_asm_bit_scan_form(const char *, size_t);
+/* Linux locked CMPXCHG16B with ZF output, and the per-CPU emulator/GS
+ * alternative. Exact original GNU templates and numbered Core forms only. */
+unsigned int minic_x86_64_linux_cmpxchg128_form(const char *, size_t);
 /* The Linux __ffs / __fls 64-bit GNU bit-scan family is ISA-owned.
  * No raw arbitrary-template passthrough or global ASM Core opcode. */
 bool minic_x86_64_asm_bit_scan_template(

@@ -205,28 +205,20 @@ for option in -mcmodel=large -fshort-enums -fwrapv -mtune=generic; do
   fi
   test ! -e "$work/unsupported.s"
 done
-# AAPCS64 va_list is a mutable 32-byte record. MiniC's current pointer
-# proxy must never compile va_copy as an aliasing scalar assignment.
-# This is a negative correctness gate, not evidence of va_copy support.
+# AAPCS64 va_list is mutable 32-byte state. A source parameter and the
+# destination cursor must be independent; emitting the 32-byte copy is
+# target-owned, whereas Core preserves the unaliased cursor operation.
 cat >"$work/aarch64-va-copy.i" <<'EOF'
-int minic_aarch64_va_copy_must_reject(void) {
-  __builtin_va_list source, independent;
+int minic_aarch64_va_copy_accept(__builtin_va_list source) {
+  __builtin_va_list independent;
   __builtin_va_copy(independent, source);
+  __builtin_va_end(independent);
   return 0;
 }
 EOF
-if "$MINIC_CC" --target=aarch64-linux -S "$work/aarch64-va-copy.i" \
-    -o "$work/aarch64-va-copy.s" >"$work/aarch64-va-copy.out" \
-    2>"$work/aarch64-va-copy.err"; then
-  echo 'MINIC_TARGET_ABI_FLAGS=FAIL aarch64-va_copy incorrectly accepted' >&2
-  exit 1
-fi
-# Parsing or Core lowering must reject. The descriptor probe below separately
-# pins the exact AArch64 policy; don't couple this test to diagnostic prose.
-if ! test -s "$work/aarch64-va-copy.err"; then
-  echo 'MINIC_TARGET_ABI_FLAGS=FAIL aarch64-va_copy rejected without diagnostic' >&2
-  exit 1
-fi
-test ! -e "$work/aarch64-va-copy.s"
-echo 'MINIC_AARCH64_VA_COPY=PASS ABI_state_pointer_alias_fail_closed'
+"$MINIC_CC" --target=aarch64-linux -S "$work/aarch64-va-copy.i" \
+    -o "$work/aarch64-va-copy.s"
+grep -Fq 'ldp x11, x12, [x10]' "$work/aarch64-va-copy.s"
+grep -Fq 'stp x13, x14, [x9, #16]' "$work/aarch64-va-copy.s"
+echo 'MINIC_AARCH64_VA_COPY=PASS independent_32byte_ABI_cursor_copy'
 echo 'MINIC_TARGET_ABI_FLAGS=PASS five_targets char_signedness wchar_override target_isolation PIC_fail_closed'

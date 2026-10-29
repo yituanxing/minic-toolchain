@@ -623,7 +623,7 @@ static bool verify_expression(const MinicC0Program *program,
         if (record_rvalue_base) {
             record_type = operand->type;
             if (!minic_c0_record_value_is_copy_source(program, expression->value.member.base) ||
-                field->is_array || minic_type_is_record(field->type) ||
+                field->is_array ||
                 expression->value_category != MINIC_VALUE_RVALUE) {
                 return false;
             }
@@ -1639,7 +1639,11 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
                 minic_type_pointee(address_local->type, &pointee) &&
                 minic_type_equal(pointee, local->type);
         }
-        if ((local->element_count == 0U && !dynamic_vla) ||
+        /* GNU local `T name[0]` is a complete zero-extent object, distinct
+           from a VLA whose runtime bound has not been materialized. */
+        if ((local->element_count == 0U && !dynamic_vla && !local->is_zero_length_array) ||
+            (local->is_zero_length_array &&
+             (!local->is_array || local->element_count != 0U || dynamic_vla)) ||
             !type_is_valid(program, target, local->type) ||
             minic_type_is_function(local->type) ||
             (explicit_alignment != 0U &&

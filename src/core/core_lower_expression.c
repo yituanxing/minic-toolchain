@@ -563,15 +563,18 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
     if (expression->kind == MINIC_EXPRESSION_BUILTIN_VA_ARG)
         return minic_core_lower_vararg_scalar(context, expression, value_id);
 
-    /* M79_CALL_FRAME_RETURN_ADDRESS: keep the semantic builtin in Core rather
-       than lowering it to a target register in the frontend. The first seam
-       is GNU __builtin_return_address(0); deeper levels and frame-address
-       queries remain unsupported until a backend can define them correctly. */
+    /* Keep the semantic builtin in Core. The target's language capability
+     * already gated the source level: returning a parent frame is meaningful
+     * only to an ABI maintaining an actual caller-FP record. Keep a bounded
+     * target-independent Core representation (return 0, frame 0/1). */
     if (expression->kind == MINIC_EXPRESSION_CALL_FRAME_ADDRESS) {
         MinicCoreCallFrameAddressKind core_kind;
         MinicType pointee;
 
-        if (expression->value.call_frame_address.level != 0U ||
+        if (expression->value.call_frame_address.level > 1U ||
+            (expression->value.call_frame_address.level != 0U &&
+             expression->value.call_frame_address.kind !=
+                 MINIC_CALL_FRAME_ADDRESS_FRAME) ||
             !minic_type_pointee(expression->type, &pointee) || !minic_type_is_void(pointee)) {
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
@@ -591,7 +594,8 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         instruction.type = expression->type;
         instruction.result = MINIC_CORE_VALUE_INVALID;
         instruction.value.call_frame_address.kind = core_kind;
-        instruction.value.call_frame_address.level = 0U;
+        instruction.value.call_frame_address.level =
+            expression->value.call_frame_address.level;
         return minic_core_function_append_value_instruction(
                    context->function, context->block_id, &instruction, value_id)
                    ? MINIC_CORE_LOWER_OK

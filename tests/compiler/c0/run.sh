@@ -335,7 +335,7 @@ expect_compile_failure \
     "unsupported pointer arithmetic operands"
 expect_compile_failure \
     invalid_zero_length_array \
-    "array bound must be greater than zero"
+    "array bound must not be negative"
 expect_compile_failure \
     invalid_array_initializer \
     "array initializers are not supported yet"
@@ -497,6 +497,9 @@ MINIC="$minic" \
 HOST_CC="$host_cc" \
 BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
 sh "$root/tests/compiler/c0/run-gnu-zero-length-array.sh"
+
+MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+  sh "$root/tests/compiler/c0/run-linux-gnu-frontend-semantics.sh"
 
 MINIC="$minic" BUILD_DIR="$work/gnu-extern-void-symbol" HOST_CC="$host_cc" sh "$root/tests/compiler/c0/run-gnu-extern-void-symbol.sh"
 

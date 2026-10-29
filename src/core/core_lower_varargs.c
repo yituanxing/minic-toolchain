@@ -262,6 +262,7 @@ MinicCoreLowerStatus minic_core_lower_vararg_statement(
         instruction.span = expression->span;
         instruction.type = value_type;
         instruction.result = MINIC_CORE_VALUE_INVALID;
+        instruction.value.variadic_address.copy_destination = false;
         if (!minic_core_function_append_value_instruction(
                 context->function, context->block_id, &instruction, &cursor_value)) {
             return MINIC_CORE_LOWER_ERROR;
@@ -311,6 +312,7 @@ MinicCoreLowerStatus minic_core_lower_vararg_statement(
             instruction.span = expression->span;
             instruction.type = cursor_type;
             instruction.result = MINIC_CORE_VALUE_INVALID;
+            instruction.value.variadic_address.copy_destination = true;
             if (!minic_core_function_append_value_instruction(
                     context->function, context->block_id, &instruction, &new_cursor))
                 return MINIC_CORE_LOWER_ERROR;

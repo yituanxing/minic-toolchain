@@ -162,12 +162,16 @@ MinicCoreLowerStatus minic_core_lower_internal_local_object(MinicCoreLowerContex
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
     if (local->is_array) {
-        if (local->element_count == 0U ||
+        /* A zero-length GNU local still has an address.  Allocate one
+           addressable backing element as a sentinel; its source-language
+           extent and sizeof remain zero, and no element access is valid. */
+        if ((local->element_count == 0U && !local->is_zero_length_array) ||
             !minic_core_function_add_repeated_object(context->function,
-                                                     local->name_span,
-                                                     local->type,
-                                                     local->element_count,
-                                                     object_id)) {
+                                                    local->name_span,
+                                                    local->type,
+                                                    local->element_count == 0U ? 1U
+                                                                               : local->element_count,
+                                                    object_id)) {
             return MINIC_CORE_LOWER_ERROR;
         }
     } else if (!minic_core_function_add_object(
@@ -539,6 +543,10 @@ static MinicCoreLowerStatus lower_return(MinicCoreLowerContext *context,
                 status = minic_core_lower_record_conditional_object(
                     context, expression, &terminator.return_object);
             } else if (expression->kind == MINIC_EXPRESSION_ASSIGNMENT ||
+                       (expression->kind == MINIC_EXPRESSION_MEMBER &&
+                        expression->value_category == MINIC_VALUE_RVALUE &&
+                        minic_c0_record_value_is_copy_source(
+                            context->body->program, statement->expression)) ||
                        minic_c0_record_value_is_address_backed(
                            context->body->program, statement->expression)) {
                 status = minic_core_lower_record_load_object(

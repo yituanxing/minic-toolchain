@@ -804,6 +804,19 @@ bool minic_multi_direct_machine_instruction_shape(
         shape->family = MINIC_DIRECT_MACHINE_RESIDUAL;
         return true;
     }
+    if (ins->kind == MINIC_CORE_INSTRUCTION_VARIADIC_COPY) {
+        const MinicCoreValueId dst = ins->value.variadic_copy.destination;
+        const MinicCoreValueId src = ins->value.variadic_copy.source;
+        if (ins->result != MINIC_CORE_VALUE_INVALID ||
+            !minic_type_is_void(ins->type) || dst >= fn->value_count ||
+            src >= fn->value_count ||
+            !minic_type_is_pointer(fn->values[dst].type) ||
+            !minic_type_equal(fn->values[dst].type,
+                              fn->values[src].type))
+            return false;
+        shape->family = MINIC_DIRECT_MACHINE_RESIDUAL;
+        return true;
+    }
     if (ins->kind == MINIC_CORE_INSTRUCTION_RECORD_LOAD) {
         shape->family = MINIC_DIRECT_MACHINE_RECORD_LOAD;
         return true;

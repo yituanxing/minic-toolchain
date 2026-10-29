@@ -2575,6 +2575,297 @@ static bool aarch64_linux_cmpxchg128_emit(
         (size_t)ops[3].value * 8U) >= 0;
 }
 
+/* Linux arm64 futex LL/SC exception recovery is part of the atomic
+ * operation. The fault handler must observe both the failed load's and
+ * failed store's PC, with the exact physical error register in the type-2
+ * __ex_table entry. Qualify the complete GNU .irp + fixup templates; no
+ * generic raw-asm pass-through is permitted. Modes 1..5 are SET, ADD,
+ * OR, AND, XOR; mode 6 is compare-exchange with two different fixups. */
+static unsigned int aarch64_linux_futex_form(
+    const char *text, size_t length) {
+    static const char gpr_table[] =
+        ".irpnum,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30"
+        ".equ.L__gpr_num_x\\num,\\num"
+        ".equ.L__gpr_num_w\\num,\\num"
+        ".endr"
+        ".equ.L__gpr_num_xzr,31"
+        ".equ.L__gpr_num_wzr,31";
+    static const char *const operations[] = {
+        "mov%w3,%w5", "add%w3,%w1,%w5", "orr%w3,%w1,%w5",
+        "and%w3,%w1,%w5", "eor%w3,%w1,%w5"
+    };
+    char compact[3500], expected[3500], fixup[2][700];
+    size_t i, n = 0U;
+    unsigned int mode;
+    if (!text || !length || length >= sizeof(compact)) return 0U;
+    for (i = 0U; i < length; ++i) {
+        const char ch = text[i];
+        if (ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r') continue;
+        if (ch == '\0' || n + 1U >= sizeof(compact)) return 0U;
+        compact[n++] = ch;
+    }
+    compact[n] = '\0';
+    for (mode = 1U; mode <= 6U; ++mode) {
+        const bool compare = mode == 6U;
+        int a, written;
+        for (i = 0U; i < 2U; ++i) {
+            a = snprintf(fixup[i], sizeof(fixup[i]),
+                "%s.pushsection__ex_table,\"a\""
+                ".align2"
+                ".long((%ub)-.)"
+                ".long((%ub)-.)"
+                ".short(2)"
+                ".short((((.L__gpr_num_%%w0)<<0)|((.L__gpr_num_wzr)<<5)))"
+                ".popsection",
+                gpr_table, i == 0U ? 1U : 2U, compare ? 4U : 3U);
+            if (a <= 0 || (size_t)a >= sizeof(fixup[i])) return 0U;
+        }
+        if (compare) {
+            written = snprintf(expected, sizeof(expected),
+                "//futex_atomic_cmpxchg_inatomic"
+                "prfmpstl1strm,%%2"
+                "1:ldxr%%w1,%%2"
+                "sub%%w3,%%w1,%%w5"
+                "cbnz%%w3,4f"
+                "2:stlxr%%w3,%%w6,%%2"
+                "cbz%%w3,3f"
+                "sub%%w4,%%w4,%%w3"
+                "cbnz%%w4,1b"
+                "mov%%w0,%%w7"
+                "3:dmbish4:%s%s", fixup[0], fixup[1]);
+        } else {
+            written = snprintf(expected, sizeof(expected),
+                "prfmpstl1strm,%%2"
+                "1:ldxr%%w1,%%2"
+                "%s"
+                "2:stlxr%%w0,%%w3,%%2"
+                "cbz%%w0,3f"
+                "sub%%w4,%%w4,%%w0"
+                "cbnz%%w4,1b"
+                "mov%%w0,%%w6"
+                "3:dmbish%s%s",
+                operations[mode - 1U], fixup[0], fixup[1]);
+        }
+        if (written > 0 && (size_t)written < sizeof(expected) &&
+            strcmp(compact, expected) == 0) return mode;
+    }
+    return 0U;
+}
+
+static bool aarch64_linux_futex_source(
+    const MinicC0Program *program, const MinicInlineAsm *src,
+    MinicTargetInlineAsmContract *contract) {
+    const unsigned int mode = src ? aarch64_linux_futex_form(
+        src->template_text, src->template_length) : 0U;
+    const size_t operand_count = mode == 6U ? 8U : 7U;
+    size_t i;
+    if (!program || !src || !contract || !mode || !src->is_volatile ||
+        src->is_goto || !src->outputs || !src->inputs ||
+        src->output_count != 5U ||
+        src->input_count != operand_count - 5U ||
+        src->label_count != 0U || src->clobber_count != 1U ||
+        !src->has_memory_clobber || src->register_clobber_count != 0U ||
+        !constraint(&src->outputs[0], mode == 6U ? "+r" : "=&r") ||
+        !constraint(&src->outputs[1], "=&r") ||
+        !constraint(&src->outputs[2], "+Q") ||
+        !constraint(&src->outputs[3], "=&r") ||
+        !constraint(&src->outputs[4], "+r")) return false;
+    for (i = 0U; i < operand_count; ++i) {
+        const MinicInlineAsmOperand *operand = i < 5U
+            ? &src->outputs[i] : &src->inputs[i - 5U];
+        const MinicExpression *e = minic_c0_program_expression(
+            program, operand->expression);
+        if (i >= 5U && !constraint(operand,
+                i == operand_count - 1U ? "Ir" : "r")) return false;
+        if (!e || (i < 5U &&
+            (e->value_category != MINIC_VALUE_LVALUE ||
+             minic_type_is_const(e->type))) ||
+            !aarch64_stlr_type(e->type, 4U)) return false;
+    }
+    contract->operand_count = operand_count;
+    for (i = 0U; i < operand_count; ++i)
+        contract->kinds[i] = i == 2U ?
+            MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE :
+            (i == 0U && mode == 6U) || i == 4U ?
+            MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE :
+            i < 5U ? MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
+                     MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->implicit_memory_effect = true;
+    return true;
+}
+
+static bool aarch64_linux_futex_emit(
+    FILE *out, const MinicDirectLP64BlockContext *ctx,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info,
+    unsigned int mode) {
+    const MinicCoreFunction *fn = ctx->fn;
+    const MinicCoreStructuredInlineAsmOperand *ops =
+        ins->value.structured_inline_asm.operands;
+    const size_t count = mode == 6U ? 8U : 7U;
+    static const char *const alu[] = {
+        "mov w12, w14", "add w12, w10, w14", "orr w12, w10, w14",
+        "and w12, w10, w14", "eor w12, w10, w14"
+    };
+    size_t i;
+    if (!out || !fn || !ops || !info || mode < 1U || mode > 6U ||
+        !info->is_volatile || info->is_goto ||
+        !info->has_memory_clobber || info->register_clobber_count != 0U ||
+        ins->value.structured_inline_asm.operand_count != count ||
+        aarch64_linux_futex_form(info->template_text,
+                                 info->template_length) != mode) return false;
+    for (i = 0U; i < count; ++i) {
+        MinicType pointee;
+        const MinicCoreStructuredInlineAsmOperandKind kind = i == 2U ?
+            MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE :
+            (i == 0U && mode == 6U) || i == 4U ?
+            MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE :
+            i < 5U ? MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
+                     MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+        if (ops[i].operand_index != i || ops[i].kind != kind ||
+            ops[i].has_fixed_register_binding ||
+            ops[i].value >= fn->value_count ||
+            !aarch64_linux_structured_spill_slot_valid(ops[i].value))
+            return false;
+        if (i < 5U &&
+            (!minic_type_pointee(fn->values[ops[i].value].type,
+                                 &pointee) ||
+             !aarch64_stlr_type(pointee, 4U))) return false;
+        if (i >= 5U &&
+            !aarch64_stlr_type(fn->values[ops[i].value].type, 4U))
+            return false;
+    }
+    /* w9:error, w10:loaded value, x11:atomic memory, w12:retry status,
+     * w13:loop budget, w14:operation/old, w15:new or EAGAIN, w16:EAGAIN.
+     * A fault handler will write w9 (reg 9) and resume at 4: or 3:. */
+    if (fprintf(out,
+            "  ldr x11, [sp, #%zu]\n"
+            "  ldr x17, [sp, #%zu]\n"
+            "  ldr w13, [x17]\n"
+            "  ldr w14, [sp, #%zu]\n"
+            "  ldr w15, [sp, #%zu]\n",
+            (size_t)ops[2].value * 8U,
+            (size_t)ops[4].value * 8U,
+            (size_t)ops[5].value * 8U,
+            (size_t)ops[6].value * 8U) < 0) return false;
+    if (mode == 6U &&
+        fprintf(out,"  ldr w16, [sp, #%zu]\n",
+                (size_t)ops[7].value * 8U) < 0) return false;
+    if (mode == 6U &&
+        fprintf(out,
+            "  ldr x17, [sp, #%zu]\n"
+            "  ldr w9, [x17]\n",
+            (size_t)ops[0].value * 8U) < 0) return false;
+    if (fprintf(out,
+            "  prfm pstl1strm, [x11]\n"
+            "1: ldxr w10, [x11]\n") < 0) return false;
+    if (mode == 6U) {
+        if (fprintf(out,
+                "  sub w12, w10, w14\n"
+                "  cbnz w12, 4f\n"
+                "2: stlxr w12, w15, [x11]\n"
+                "  cbz w12, 3f\n"
+                "  sub w13, w13, w12\n"
+                "  cbnz w13, 1b\n"
+                "  mov w9, w16\n"
+                "3:\n  dmb ish\n4:\n") < 0) return false;
+    } else if (fprintf(out,
+            "  %s\n"
+            "2: stlxr w9, w12, [x11]\n"
+            "  cbz w9, 3f\n"
+            "  sub w13, w13, w9\n"
+            "  cbnz w13, 1b\n"
+            "  mov w9, w15\n"
+            "3:\n  dmb ish\n",
+            alu[mode - 1U]) < 0) return false;
+    for (i = 0U; i < 2U; ++i)
+        if (fprintf(out,
+                "  .pushsection __ex_table, \"a\"\n"
+                "  .align 2\n"
+                "  .long (%ub - .)\n"
+                "  .long (%ub - .)\n"
+                "  .short 2\n"
+                "  .short ((9 << 0) | (31 << 5))\n"
+                "  .popsection\n",
+                i == 0U ? 1U : 2U,
+                mode == 6U ? 4U : 3U) < 0) return false;
+    for (i = 0U; i < 5U; ++i) {
+        const char *const regs[] = {"w9", "w10", "w11", "w12", "w13"};
+        if (i == 2U) continue;
+        if (fprintf(out,
+                "  ldr x17, [sp, #%zu]\n"
+                "  str %s, [x17]\n",
+                (size_t)ops[i].value * 8U, regs[i]) < 0)
+            return false;
+    }
+    return true;
+}
+
+/* With CONFIG_ARM64_PAN disabled the original kernel's
+ * __uaccess_{enable,disable}_hw_pan() macros enclose their *entire*
+ * alternative sequence in `.if 0 == 1`. GNU AS emits no instruction and
+ * no alternative entry, including the inner `.inst` and sections. Accept
+ * precisely those two complete templates as zero-sized target effects.
+ * A future enabled `.if 1 == 1` must be implemented, never silently elided. */
+static unsigned int aarch64_linux_disabled_hw_pan_form(
+    const char *text, size_t length) {
+    char compact[700], expected[700];
+    size_t i, n = 0U;
+    unsigned int bit;
+    if (!text || !length || length >= sizeof(compact)) return 0U;
+    for (i = 0U; i < length; ++i) {
+        const char ch = text[i];
+        if (ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r') continue;
+        if (ch == '\0' || n + 1U >= sizeof(compact)) return 0U;
+        compact[n++] = ch;
+    }
+    compact[n] = '\0';
+    for (bit = 0U; bit <= 1U; ++bit) {
+        const int written = snprintf(expected, sizeof(expected),
+            ".if0==1"
+            "661:nop662:"
+            ".pushsection.altinstructions,\"a\""
+            ".word661b-."
+            ".word663f-."
+            ".hword38"
+            ".byte662b-661b"
+            ".byte664f-663f"
+            ".popsection"
+            ".subsection1"
+            "663:.inst(0xd500401f|((0)<<16|(4)<<5)|((!!(%u))<<8))"
+            "664:"
+            ".org.-(664b-663b)+(662b-661b)"
+            ".org.-(662b-661b)+(664b-663b)"
+            ".previous"
+            ".endif", bit);
+        if (written > 0 && (size_t)written < sizeof(expected) &&
+            strcmp(compact, expected) == 0) return bit + 1U;
+    }
+    return 0U;
+}
+
+static bool aarch64_linux_disabled_hw_pan_source(
+    const MinicInlineAsm *src, MinicTargetInlineAsmContract *contract) {
+    if (!src || !contract || src->is_volatile || src->is_goto ||
+        src->output_count || src->input_count || src->label_count ||
+        src->clobber_count || src->has_memory_clobber ||
+        src->register_clobber_count ||
+        !aarch64_linux_disabled_hw_pan_form(
+            src->template_text, src->template_length)) return false;
+    contract->operand_count = 0U;
+    return true;
+}
+
+static bool aarch64_linux_disabled_hw_pan_emit(
+    FILE *out, const MinicCoreInstruction *ins,
+    const MinicCoreInlineAsm *info) {
+    if (!out || !ins || !info || info->is_goto ||
+        info->has_memory_clobber || info->register_clobber_count ||
+        ins->value.structured_inline_asm.operand_count ||
+        !aarch64_linux_disabled_hw_pan_form(
+            info->template_text, info->template_length)) return false;
+    return fprintf(out, "  // original GNU .if 0 == 1 PAN alternative: no machine effect\n") >= 0;
+}
+
 /* Linux arch_timer_read_cnt{p,v}ct_el0: feature 19 replaces an ISB+MRS
  * pair with NOP+MRS_S. The replacement reads CNTPOCTSS/CNTVCTSS (op2
  * 5/6), so treating this as an ordinary MRS would silently break the
@@ -3207,6 +3498,8 @@ bool minic_aarch64_qualify_inline_asm(
     if(aarch64_linux_wfxt_source(program,src,contract))return true;
     if(aarch64_linux_atomic_dec_positive_source(program,src,contract))return true;
     if(aarch64_linux_cmpxchg128_source(program,src,contract))return true;
+    if(aarch64_linux_futex_source(program,src,contract))return true;
+    if(aarch64_linux_disabled_hw_pan_source(src,contract))return true;
     if(aarch64_linux_timer_alternative_source(program,src,contract))return true;
     if(aarch64_linux_counter_ordering_source(program,src,contract))return true;
     if(aarch64_linux_rng_sysreg_source(program,src,contract))return true;
@@ -3908,6 +4201,15 @@ bool minic_aarch64_emit_qualified_structured_asm(
             return aarch64_linux_cmpxchg128_emit(out, ctx, ins, info,
                                                   cmpxchg128);
     }
+    {
+        const unsigned int futex = aarch64_linux_futex_form(
+            info->template_text, info->template_length);
+        if (futex != 0U)
+            return aarch64_linux_futex_emit(out, ctx, ins, info, futex);
+    }
+    if (aarch64_linux_disabled_hw_pan_form(info->template_text,
+                                           info->template_length))
+        return aarch64_linux_disabled_hw_pan_emit(out, ins, info);
     {
         const unsigned int wfxt = aarch64_linux_wfxt_form(
             info->template_text, info->template_length);

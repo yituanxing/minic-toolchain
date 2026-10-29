@@ -409,6 +409,36 @@ MinicCoreLowerStatus minic_core_lower_internal_record_materialized_address(
     if (expression == NULL || !minic_type_is_record(expression->type)) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
+    if (expression->kind == MINIC_EXPRESSION_MEMBER &&
+        expression->value_category == MINIC_VALUE_RVALUE) {
+        const MinicExpression *base;
+        const MinicRecord *record;
+        const MinicRecordField *field;
+        MinicCoreValueId base_address;
+
+        base = minic_c0_program_expression(
+            context->body->program, expression->value.member.base);
+        record = minic_c0_program_record(
+            context->body->program, expression->value.member.record_id);
+        field = minic_c0_record_field(record, expression->value.member.field_index);
+        if (base == NULL || field == NULL ||
+            !minic_c0_record_value_is_copy_source(
+                context->body->program, expression->value.member.base) ||
+            base->value_category != MINIC_VALUE_RVALUE ||
+            !minic_type_is_record(base->type) ||
+            base->type.record_id != expression->value.member.record_id ||
+            !minic_type_is_record(field->type) || field->is_array ||
+            field->type.record_id != expression->type.record_id)
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        status = minic_core_lower_internal_record_materialized_address(
+            context, expression->value.member.base, &base_address);
+        if (status != MINIC_CORE_LOWER_OK)
+            return status;
+        return minic_core_lower_internal_append_field_address(
+            context, expression->span, base_address,
+            expression->value.member.record_id,
+            expression->value.member.field_index, expression->type, address_id);
+    }
     if (expression->kind == MINIC_EXPRESSION_CAST) {
         const MinicExpressionId operand_id = expression->value.unary.operand;
         const MinicExpression *operand = minic_c0_program_expression(
@@ -675,6 +705,7 @@ MinicCoreLowerStatus minic_core_lower_record_copy_statement(MinicCoreLowerContex
     bool record_conditional_value;
     bool record_va_arg_value;
     bool record_statement_value;
+    bool record_member_value;
 
     if (context == NULL || context->body == NULL || context->body->program == NULL ||
         context->function == NULL || statement == NULL ||
@@ -695,6 +726,10 @@ MinicCoreLowerStatus minic_core_lower_record_copy_statement(MinicCoreLowerContex
         source != NULL && source->kind == MINIC_EXPRESSION_BUILTIN_VA_ARG;
     record_statement_value =
         source != NULL && source->kind == MINIC_EXPRESSION_STATEMENT;
+    record_member_value =
+        source != NULL && source->kind == MINIC_EXPRESSION_MEMBER &&
+        source->value_category == MINIC_VALUE_RVALUE &&
+        minic_type_is_record(source->type);
     if (target == NULL || source == NULL || target->value_category != MINIC_VALUE_LVALUE ||
         !minic_type_is_record(target->type) || !minic_type_is_record(source->type) ||
         target->type.record_id != source->type.record_id ||
@@ -703,7 +738,7 @@ MinicCoreLowerStatus minic_core_lower_record_copy_statement(MinicCoreLowerContex
         !minic_type_equal(target_type, source_type) || !minic_type_is_record(target_type) ||
         (statement->kind == MINIC_STATEMENT_RECORD_COPY && minic_type_is_const(target->type)) ||
         (!direct_record_call && !record_assignment_value && !record_conditional_value &&
-         !record_va_arg_value && !record_statement_value &&
+         !record_va_arg_value && !record_statement_value && !record_member_value &&
          (!minic_c0_record_value_is_copy_source(context->body->program, statement->expression) ||
           !minic_c0_record_value_is_address_backed(
               context->body->program, statement->expression)))) {
@@ -736,7 +771,8 @@ MinicCoreLowerStatus minic_core_lower_record_copy_statement(MinicCoreLowerContex
                 context->function, context->block_id, &instruction, &source_address)) {
             return MINIC_CORE_LOWER_ERROR;
         }
-    } else if (record_conditional_value || record_va_arg_value || record_statement_value) {
+    } else if (record_conditional_value || record_va_arg_value ||
+               record_statement_value || record_member_value) {
         /* Conditional records and record-valued va_arg are materialized
            aggregate producers, not pre-existing address-backed objects. */
         status = minic_core_lower_internal_record_materialized_address(
@@ -804,7 +840,8 @@ MinicCoreLowerStatus minic_core_lower_try_direct_record_member(
              base->kind == MINIC_EXPRESSION_CONDITIONAL ||
              base->kind == MINIC_EXPRESSION_COMPOUND_LITERAL ||
              base->kind == MINIC_EXPRESSION_CAST ||
-             base->kind == MINIC_EXPRESSION_STATEMENT) &&
+             base->kind == MINIC_EXPRESSION_STATEMENT ||
+             base->kind == MINIC_EXPRESSION_MEMBER) &&
             minic_type_is_record(base->type) &&
             base->type.record_id == expression->value.member.record_id &&
             record != NULL && field != NULL && !field->is_bit_field &&

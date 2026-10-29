@@ -38,9 +38,24 @@ MinicDirectLP64ProfileResult minic_multi_direct_lp64_profile_function(
             }
         }
     }
-    if (profile->variadic_address_count != 0U &&
-        (!decl->is_variadic || profile->variadic_address_count != 1U ||
-         profile->fixed_gp_count > 8U || profile->fixed_fp_count > 8U))
+    if (abi == MINIC_LP64_ABI_AAPCS64) {
+        size_t starts = 0U, cursors = 0U;
+        for (i = 0U; i < fn->instruction_count; ++i) {
+            const MinicCoreInstruction *ins = &fn->instructions[i];
+            if (ins->kind != MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS)
+                continue;
+            ++cursors;
+            if (!ins->value.variadic_address.copy_destination)
+                ++starts;
+        }
+        if (cursors != profile->variadic_address_count || starts > 1U ||
+            (starts != 0U && !decl->is_variadic) ||
+            (starts != 0U &&
+             (profile->fixed_gp_count > 8U || profile->fixed_fp_count > 8U)))
+            return MINIC_DIRECT_LP64_PROFILE_VARIADIC_SHAPE;
+    } else if (profile->variadic_address_count != 0U &&
+               (!decl->is_variadic || profile->variadic_address_count != 1U ||
+                profile->fixed_gp_count > 8U || profile->fixed_fp_count > 8U))
         return MINIC_DIRECT_LP64_PROFILE_VARIADIC_SHAPE;
 
     for (i = 0U; i < fn->parameter_count; ++i) {
