@@ -25,6 +25,10 @@ ARCH = {"x86_64": (62, "x86_64"), "aarch64": (183, "arm64"),
         "loongarch64": (258, "loongarch")}
 LINUX_ARCHIVE_SHA256 = "dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932"
 SHARDS = 7
+# This particular immutable Linux 6.6.143 GNU Kbuild corpus is a separate
+# acceptance contract from the general discovery/inventory mode.
+STRICT_KBUILD_TOTAL = {"x86_64": 2763, "aarch64": 4140,
+                       "loongarch64": 2742}
 # Original Linux .S uses real producer-created files, not placeholders.
 # Freeze their bytes with the same GNU Kbuild provenance as the .s/.cmd.
 INCBIN_LINE = re.compile(rb'(?m)^[ \t]*\.incbin[ \t]+"([^"\r\n]+)"')
@@ -406,6 +410,13 @@ def scan(a: argparse.Namespace) -> None:
           f"infra_error={status['INFRA_ERROR']}", flush=True)
     if status["INFRA_ERROR"]:
         raise ValueError("cannot accept false-success assembler outputs")
+    if a.strict and (status["CANDIDATE_FAIL"] or
+                     status["ASSEMBLED_UNVERIFIED"] != len(selected) or
+                     not manifest["full_kbuild"] or
+                     manifest["total"] != STRICT_KBUILD_TOTAL[a.target]):
+        raise ValueError("strict Linux Kbuild shard failed: " + a.target +
+                         f" shard={a.shard} candidate_fail={status['CANDIDATE_FAIL']}" +
+                         f" full_kbuild={manifest['full_kbuild']}")
 
 
 def aggregate(a: argparse.Namespace) -> None:
@@ -428,6 +439,7 @@ def aggregate(a: argparse.Namespace) -> None:
         if shard in data[t]: raise ValueError("duplicated result shard")
         data[t][shard] = doc
     summary = {}
+    gate_failures = []
     for target, seven in data.items():
         if set(seven) != set(range(SHARDS)):
             raise ValueError("incomplete target seven-shard set")
@@ -459,9 +471,15 @@ def aggregate(a: argparse.Namespace) -> None:
                            for r in rows if r["status"] == "CANDIDATE_FAIL")
         if statuses["INFRA_ERROR"]:
             raise ValueError("infrastructure failure: " + target)
+        complete = (fulls == {True} and total == STRICT_KBUILD_TOTAL[target] and
+                    statuses == {"ASSEMBLED_UNVERIFIED": total})
+        if a.strict and not complete:
+            gate_failures.append(f"{target}: total={total} expected={STRICT_KBUILD_TOTAL[target]} "
+                                 f"full_kbuild={fulls} status={dict(statuses)}")
         summary[target] = {"target": target, "config_sha256": cfgs.pop(),
                            "manifest_sha256": ids.pop(),
                            "full_kbuild": fulls.pop(), "total": total,
+                           "strict_candidate_pass": complete,
                            "status": dict(statuses),
                            "first_blockers": dict(causes.most_common()),
                            "first_blocker_families": dict(families.most_common()),
@@ -495,6 +513,13 @@ def aggregate(a: argparse.Namespace) -> None:
     print(f"MINIAS_LINUX_S_DISCOVERY=COMPLETE targets={len(selected)} "
           f"shards={expected} GNU_ORACLE=NOT_TESTED P1=NOT_TESTED",
           flush=True)
+    if a.strict:
+        if gate_failures:
+            raise ValueError("strict Linux Kbuild candidate gate failed: " +
+                             "; ".join(gate_failures))
+        print(f"MINIAS_LINUX_S_STRICT_GATE=PASS targets={len(selected)} "
+              f"shards={expected} candidates={sum(x['total'] for x in summary.values())} "
+              "GNU_ORACLE=NOT_TESTED P1=NOT_TESTED", flush=True)
 
 
 def main() -> int:
@@ -515,11 +540,15 @@ def main() -> int:
     run.add_argument("--archive", required=True)
     run.add_argument("--minias", required=True)
     run.add_argument("--dest", required=True)
+    run.add_argument("--strict", action="store_true",
+                     help="fail on any candidate error or incomplete pinned Kbuild")
     agg = modes.add_parser("aggregate")
     agg.add_argument("--results", required=True)
     agg.add_argument("--targets",
                      help="Comma-separated target selection; defaults to all three")
     agg.add_argument("--dest", required=True)
+    agg.add_argument("--strict", action="store_true",
+                     help="require every original Linux 6.6.143 owner to assemble")
     a = parser.parse_args()
     try:
         {"export": export, "scan": scan, "aggregate": aggregate}[a.action](a)

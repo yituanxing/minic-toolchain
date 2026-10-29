@@ -156,7 +156,8 @@ static void skip_absolute_expression_space(MiniAsAbsoluteExpressionParser *parse
 }
 
 bool minias_expr_symbol_start(char ch) {
-    return ch == '.' || ch == '$' || ch == '_' || isalpha((unsigned char)ch);
+    return (unsigned char)ch==1U || ch == '.' || ch == '$' ||
+           ch == '_' || isalpha((unsigned char)ch);
 }
 
 bool minias_expr_symbol_continue(char ch) {
@@ -1533,14 +1534,11 @@ static bool emit_symbol_minus_dot(MiniAs *as,
 
     {
         char anchor_name[96];
-        int written;
         MiniAsSymbol *anchor;
 
-        written = snprintf(anchor_name,
-                           sizeof(anchor_name),
-                           ".Lminias_expr_%zu",
-                           ++as->expr_anchor_counter);
-        if (written < 0 || (size_t)written >= sizeof(anchor_name)) {
+        if (!minias_make_private_symbol_name(anchor_name,
+                                              sizeof(anchor_name),
+                                              "expr",++as->expr_anchor_counter)) {
             minias_set_error(as, "expr-anchor-too-long:line=%zu", stmt->line);
             return false;
         }

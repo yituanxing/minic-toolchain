@@ -102,7 +102,11 @@ bool minias_finalize_subsection_layout(MiniAs *as) {
         MiniAsSymbol *symbol = &as->symbols[i];
         MiniAsSubsection *sub;
 
-        if (!symbol->defined || symbol->section < 0) {
+        /* Dependent aliases have no independent subsection offset.  They
+         * are refreshed from their final target after normalization, so
+         * adding a subsection base to their old value would double-count. */
+        if (!symbol->defined || symbol->section < 0 ||
+            symbol->has_alias_dependency) {
             continue;
         }
         sub = minias_find_subsection(as, symbol->section, symbol->subsection);
@@ -125,7 +129,7 @@ bool minias_finalize_subsection_layout(MiniAs *as) {
             symbol->size_end_value = symbol->value + symbol->size;
         }
     }
-    return true;
+    return minias_refresh_symbol_aliases(as);
 }
 
 
@@ -344,6 +348,37 @@ static bool org_fragment_padding(MiniAs *as, const MiniAsStmt *stmt,
             minias_set_error(as,"org-symbol-addend-overflow:line=%zu",stmt->line);
             return false;
         }
+    } else if (stmt->org_mode == MINIAS_ORG_SOURCE &&
+               stmt->org_expression != NULL) {
+        /* Compatibility bridge for fully parenthesized source arithmetic.
+         * Unlike the old one-time padding, this evaluates the retained
+         * position constraint at every Fragment fixed-point iteration.
+         * A future expression-AST batch can replace this single bridge. */
+        const int old_section=as->current_section;
+        const uint32_t old_subsection=as->current_subsection;
+        const bool old_dot_override=as->expr_dot_override;
+        const uint64_t old_dot=as->expr_dot_value;
+        int64_t resolved=0;
+        bool evaluated;
+        if(location>(uint64_t)INT64_MAX) {
+            minias_set_error(as,"org-location-overflow:line=%zu",stmt->line);
+            return false;
+        }
+        as->current_section=stmt->section;
+        as->current_subsection=stmt->subsection;
+        as->expr_dot_override=true;
+        as->expr_dot_value=location;
+        evaluated=minias_evaluate_absolute_expression(as,
+                         stmt->org_expression,&resolved);
+        as->current_section=old_section;
+        as->current_subsection=old_subsection;
+        as->expr_dot_override=old_dot_override;
+        as->expr_dot_value=old_dot;
+        if(!evaluated || resolved<0) {
+            minias_set_error(as,"org-expression-unresolved:line=%zu",stmt->line);
+            return false;
+        }
+        target=(uint64_t)resolved;
     } else {
         minias_set_error(as,"internal:org-untyped:line=%zu",stmt->line);
         return false;
@@ -426,7 +461,8 @@ static bool minias_relayout_fragments(MiniAs *as, bool *org_changed) {
             }
             stmt->offset = sub->size;
             if (stmt->kind == MINIAS_STMT_ALIGN &&
-                stmt->org_mode != MINIAS_ORG_SOURCE) {
+                (stmt->org_mode != MINIAS_ORG_SOURCE ||
+                 stmt->org_expression != NULL)) {
                 uint32_t pad;
                 if (sub->size > UINT64_MAX - sub->base ||
                     !org_fragment_padding(as,stmt,sub->base+sub->size,
@@ -772,7 +808,8 @@ static bool minias_validate_fragment_layout(MiniAs *as) {
                 goto done;
             }
             if(stmt->kind==MINIAS_STMT_ALIGN &&
-               stmt->org_mode!=MINIAS_ORG_SOURCE) {
+               (stmt->org_mode!=MINIAS_ORG_SOURCE ||
+                stmt->org_expression!=NULL)) {
                 uint32_t padding;
                 if (!org_fragment_padding(as,stmt,expected,true,&padding))
                     goto done;

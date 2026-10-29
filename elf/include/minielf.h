@@ -132,6 +132,10 @@ typedef struct MiniElfWriteSymbol {
     uint16_t section_index;
     uint64_t value;
     uint64_t size;
+    /* A default-local COMDAT signature may refer to the SHT_GROUP header
+     * synthesized by this writer, not an input Section.  The final header
+     * index is assigned only after output layout/group collection. */
+    bool group_signature_section;
 } MiniElfWriteSymbol;
 
 typedef struct MiniElfWriteRela {

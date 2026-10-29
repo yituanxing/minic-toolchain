@@ -214,7 +214,7 @@ EOF
 readelf -h "$work/reloc.o" | grep -q 'RISC-V'
 readelf -Wr "$work/reloc.o" >"$work/reloc.txt"
 grep -q 'R_RISCV_PCREL_HI20.*external_object' "$work/reloc.txt"
-grep -q 'R_RISCV_PCREL_LO12_I.*Lminias_pcrel' "$work/reloc.txt"
+grep -q 'R_RISCV_PCREL_LO12_I.*\.Lminias_private_' "$work/reloc.txt"
 grep -q 'R_RISCV_64.*external_object.*+ 8' "$work/reloc.txt"
 grep -q 'R_RISCV_CALL_PLT.*external_func' "$work/reloc.txt"
 if grep -q 'R_RISCV_RELAX' "$work/reloc.txt"; then
@@ -479,9 +479,9 @@ EOF
 "$MINIAS" -o "$work/extern-diff.o" "$work/extern-diff.s"
 readelf -Wr "$work/extern-diff.o" >"$work/extern-diff.txt"
 grep -q 'R_RISCV_ADD64.*external_delta_target' "$work/extern-diff.txt"
-grep -q 'R_RISCV_SUB64.*Lminias_expr' "$work/extern-diff.txt"
+grep -q 'R_RISCV_SUB64.*\.Lminias_private_' "$work/extern-diff.txt"
 grep -q 'R_RISCV_ADD32.*external_delta_target' "$work/extern-diff.txt"
-grep -q 'R_RISCV_SUB32.*Lminias_expr' "$work/extern-diff.txt"
+grep -q 'R_RISCV_SUB32.*\.Lminias_private_' "$work/extern-diff.txt"
 grep -q 'R_RISCV_32.*external_delta_target.*+ 4' "$work/extern-diff.txt"
 
 cat >"$work/jal.s" <<'EOF'
@@ -553,10 +553,10 @@ conditional_alt:
 EOF
 "$MINIAS" -o "$work/conditional-alt.o" "$work/conditional-alt.s"
 readelf -Wr "$work/conditional-alt.o" >"$work/conditional-alt.txt"
-grep -q 'R_RISCV_ADD32.*Lminias_num_888_1' "$work/conditional-alt.txt"
-grep -q 'R_RISCV_SUB32.*Lminias_expr' "$work/conditional-alt.txt"
-grep -q 'R_RISCV_ADD16.*Lminias_num_889_1' "$work/conditional-alt.txt"
-grep -q 'R_RISCV_SUB16.*Lminias_num_888_1' "$work/conditional-alt.txt"
+grep -q 'R_RISCV_ADD32.*\.Lminias_private_' "$work/conditional-alt.txt"
+grep -q 'R_RISCV_SUB32.*\.Lminias_private_' "$work/conditional-alt.txt"
+grep -q 'R_RISCV_ADD16.*\.Lminias_private_' "$work/conditional-alt.txt"
+grep -q 'R_RISCV_SUB16.*\.Lminias_private_' "$work/conditional-alt.txt"
 
 cat >"$work/subsection.s" <<'EOF'
 .text

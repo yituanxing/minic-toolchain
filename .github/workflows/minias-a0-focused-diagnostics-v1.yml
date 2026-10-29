@@ -878,9 +878,10 @@ jobs:
             --output-root "build/minias-semantic-${{ matrix.label }}/oracle" \
             --minias "build/minias-semantic-${{ matrix.label }}-toolchain/bin/minic-as" \
             --oracle tests/assembler/elf_semantic_compare.py \
-            --jobs 4 --expected ${{ matrix.total }}
+            --jobs 4 --expected ${{ matrix.total }} --require-equal
 
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: minias-semantic-${{ matrix.label }}
           path: |
@@ -888,7 +889,7 @@ jobs:
             build/minias-semantic-${{ matrix.label }}/oracle/summary.txt
             build/minias-semantic-${{ matrix.label }}/oracle/semantic/**/*.json
           retention-days: 14
-          if-no-files-found: error
+          if-no-files-found: warn
 
   c149:
     if: (github.event_name == 'workflow_dispatch' || github.event_name == 'push') && inputs.mode == 'semantic'
@@ -970,9 +971,10 @@ jobs:
             --output-root build/minias-semantic-c149-oracle \
             --minias build/minias-semantic-c149-toolchain/bin/minic-as \
             --oracle tests/assembler/elf_semantic_compare.py \
-            --jobs 4 --expected 149
+            --jobs 4 --expected 149 --require-equal
 
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: minias-semantic-c149
           path: |
@@ -980,7 +982,7 @@ jobs:
             build/minias-semantic-c149-oracle/summary.txt
             build/minias-semantic-c149-oracle/semantic/**/*.json
           retention-days: 14
-          if-no-files-found: error
+          if-no-files-found: warn
 
   native35:
     if: (github.event_name == 'workflow_dispatch' || github.event_name == 'push') && inputs.mode == 'semantic'
@@ -1180,9 +1182,10 @@ jobs:
             --minias build/minias-semantic-native35-toolchain/bin/minic-as \
             --oracle tests/assembler/elf_semantic_compare.py \
             --cwd build/minias-semantic-native35-linux-out \
-            --native35 --jobs 4 --expected 35
+            --native35 --jobs 4 --expected 35 --require-equal
 
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: minias-semantic-native35
           path: |
@@ -1192,7 +1195,7 @@ jobs:
             build/minias-semantic-native35-oracle/summary.txt
             build/minias-semantic-native35-oracle/semantic/**/*.json
           retention-days: 14
-          if-no-files-found: error
+          if-no-files-found: warn
 
   aggregate:
     if: always() && (github.event_name == 'workflow_dispatch' || github.event_name == 'push') && inputs.mode == 'semantic'
@@ -1244,6 +1247,7 @@ jobs:
           print(
               f"MINIAS_SEMANTIC_3536_BASELINE selected={total} "
               f"semantic_equal={status['PASS']} semantic_diff={status['DIFF']} "
+              f"inconclusive={status['INCONCLUSIVE']} "
               f"strict_equal={strict} gnu_fail={status['GNU_FAIL']} "
               f"minias_fail={status['MINIAS_FAIL']} oracle_error={status['ORACLE_ERROR']}"
           )
@@ -1255,6 +1259,8 @@ jobs:
               raise SystemExit(f"expected 3536 classified objects, got {total}")
           if status['GNU_FAIL'] or status['MINIAS_FAIL'] or status['ORACLE_ERROR']:
               raise SystemExit("semantic oracle infrastructure failure")
+          if status['PASS'] != 3536 or status['DIFF'] or status['INCONCLUSIVE']:
+              raise SystemExit("strict semantic 3536 acceptance failed")
           PY
 
   linux-single:

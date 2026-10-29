@@ -53,7 +53,8 @@ static bool should_emit_symbol(const MiniAs *as, size_t symbol_index) {
     }
     if (symbol->bind == MINIAS_STB_LOCAL &&
         symbol->defined &&
-        strncmp(symbol->name, ".L", 2U) == 0 &&
+        (strncmp(symbol->name, ".L", 2U) == 0 ||
+         minias_is_private_symbol_name(symbol->name)) &&
         !symbol_referenced_by_relocation(as, symbol_index)) {
         return false;
     }
@@ -79,6 +80,7 @@ static bool minias_write_elf(MiniAs *as,
     MiniElfWriteSymbol *symbols = NULL;
     MiniElfWriteRela *relocations = NULL;
     size_t *symbol_map = NULL;
+    char **private_names = NULL;
     unsigned char *image = NULL;
     size_t image_size = 0U;
     MiniElfWriteError write_error = MINIELF_WRITE_OK;
@@ -89,10 +91,16 @@ static bool minias_write_elf(MiniAs *as,
     MiniAsObjectAttribute attribute;
     bool emit_attribute;
     size_t i;
+    size_t private_suffix=0U;
     FILE *file = NULL;
     bool ok = false;
 
     expected_symbol_count = emitted_symbol_count(as);
+    if(as->cu_file_count>SIZE_MAX-expected_symbol_count) {
+        minias_set_error(as,"too-many-cu-file-symbols");
+        return false;
+    }
+    expected_symbol_count+=as->cu_file_count;
     memset(&attribute, 0, sizeof(attribute));
     if (as->target->object_attributes != NULL) {
         as->target->object_attributes(as, elf_class, &attribute);
@@ -115,13 +123,25 @@ static bool minias_write_elf(MiniAs *as,
                          sizeof(*relocations));
     symbol_map = malloc((as->symbol_count == 0U ? 1U : as->symbol_count) *
                         sizeof(*symbol_map));
+    private_names = calloc(as->symbol_count == 0U ? 1U : as->symbol_count,
+                           sizeof(*private_names));
     if (sections == NULL || symbols == NULL || relocations == NULL ||
-        symbol_map == NULL) {
+        symbol_map == NULL || private_names == NULL) {
         minias_set_error(as, "out-of-memory:elf");
         goto done;
     }
     for (i = 0U; i < as->symbol_count; ++i) {
         symbol_map[i] = SIZE_MAX;
+    }
+
+    /* STT_FILE is a real ELF local symbol with absolute section identity.
+     * Keep it outside the user-label hash and the relocation SymbolID map;
+     * duplicate source filenames must never alias a program label. */
+    for(i=0U;i<as->cu_file_count;++i) {
+        MiniElfWriteSymbol *output=&symbols[output_symbol_count++];
+        output->name=as->cu_files[i];
+        output->info=(unsigned char)((MINIAS_STB_LOCAL<<4U)|MINIAS_STT_FILE);
+        output->section_index=SHN_ABS;
     }
 
     for (i = 0U; i < as->section_count; ++i) {
@@ -152,11 +172,22 @@ static bool minias_write_elf(MiniAs *as,
     for (i = 0U; i < as->symbol_count; ++i) {
         MiniAsSymbol *input = &as->symbols[i];
         MiniElfWriteSymbol *output;
+        bool local_group_signature=false;
 
         if (!should_emit_symbol(as, i)) {
             continue;
         }
-        if (input->bind == MINIAS_STB_LOCAL && !input->defined) {
+        if(input->bind==MINIAS_STB_LOCAL && !input->defined) {
+            size_t j;
+            for(j=0U;j<as->section_count;++j)
+                if(as->sections[j].group_signature!=NULL &&
+                   strcmp(as->sections[j].group_signature,input->name)==0) {
+                    local_group_signature=true;
+                    break;
+                }
+        }
+        if (input->bind == MINIAS_STB_LOCAL && !input->defined &&
+            !local_group_signature) {
             minias_set_error(as,
                              "undefined-local-symbol:%s",
                              input->name);
@@ -168,12 +199,36 @@ static bool minias_write_elf(MiniAs *as,
         }
         symbol_map[i] = output_symbol_count;
         output = &symbols[output_symbol_count++];
-        output->name = input->name;
+        if(minias_is_private_symbol_name(input->name)) {
+            char visible[96];
+            int n;
+            /* Source labels cannot address the private SymbolID; pick an
+             * ELF spelling absent from the full user symbol table. */
+            do {
+                if(private_suffix==SIZE_MAX) {
+                    minias_set_error(as,"private-symbol-name-overflow");
+                    goto done;
+                }
+                n=snprintf(visible,sizeof(visible),
+                           ".Lminias_private_%zu",private_suffix++);
+                if(n<0 || (size_t)n>=sizeof(visible)) {
+                    minias_set_error(as,"private-symbol-name-capacity");
+                    goto done;
+                }
+            }while(minias_get_symbol(as,visible,false)!=NULL);
+            private_names[i]=minias_strdup(visible);
+            if(private_names[i]==NULL) {
+                minias_set_error(as,"out-of-memory:elf-private-symbol");
+                goto done;
+            }
+            output->name=private_names[i];
+        }else output->name=input->name;
         output->info =
             (unsigned char)((input->bind << 4U) | (input->type & 0x0fU));
         output->other = input->visibility;
         if (!input->defined) {
             output->section_index = SHN_UNDEF;
+            output->group_signature_section=local_group_signature;
         } else if (input->section == MINIAS_SECTION_ABS) {
             output->section_index = SHN_ABS;
         } else if (input->section == MINIAS_SECTION_COMMON) {
@@ -335,6 +390,10 @@ static bool minias_write_elf(MiniAs *as,
     ok = true;
 
 done:
+    if(private_names!=NULL) {
+        for(i=0U;i<as->symbol_count;++i)free(private_names[i]);
+    }
+    free(private_names);
     if (file != NULL) {
         (void)fclose(file);
     }

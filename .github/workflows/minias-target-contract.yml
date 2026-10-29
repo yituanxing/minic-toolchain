@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'assembler/**'
+      - 'elf/**'
       - 'tools/minic-as/**'
       - 'tests/assembler/**'
       - 'Makefile'
@@ -35,6 +36,8 @@ jobs:
           test -x build/release/bin/minic-as
       - name: Enforce ISA-private fixup and MC emission ownership
         run: bash tests/assembler/probe-mc-target-boundary.sh
+      - name: Reject false-green immutable Linux seven-shard manifests
+        run: bash tests/assembler/probe-minias-acceptance-gates.sh
       - name: Verify MCLayout validates source-ordered fragments and stable anchors
         run: grep -q "minias_validate_fragment_layout" assembler/src/mc_layout.c
       - name: Stress persistent MCLayout with 160 x86 long-branch expansions
@@ -109,6 +112,12 @@ jobs:
             bash tests/assembler/probe-cfi-eh-frame.sh
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=riscv32 \
             bash tests/assembler/probe-cfi-eh-frame.sh
+      - name: GNU RV32/RV64 dual CFI frame section contract
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=riscv \
+            bash tests/assembler/probe-cfi-dual-frame.sh
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=riscv32 \
+            bash tests/assembler/probe-cfi-dual-frame.sh
       - name: Check real RV64 .debug_frame CIE/FDE against GNU GAS
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=riscv \
@@ -188,6 +197,14 @@ jobs:
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=aarch64 \
             bash tests/assembler/probe-cfi-eh-frame.sh
+      - name: GNU AArch64 dual CFI frame section contract
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=aarch64 \
+            bash tests/assembler/probe-cfi-dual-frame.sh
+      - name: GNU AArch64 late fragment symbol differences in machine operands
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-aarch64-retained-delta.sh
       - name: GNU AArch64 fixed .org and forward DATA layout
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=aarch64 \

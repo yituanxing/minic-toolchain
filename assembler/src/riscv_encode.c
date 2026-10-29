@@ -1738,8 +1738,11 @@ static bool rv_encode_multi_mc(MiniAs *as, const MiniAsStmt *stmt) {
         use_got = (stmt->site.mode_bits & MINIAS_RISCV_OPTION_PIC) != 0U &&
                   m->encoding != 0U && expr->addend == 0 &&
                   (target == NULL || !target->defined);
-        (void)snprintf(name, sizeof(name), ".Lminias_pcrel_%zu",
-                       ++as->pcrel_anchor_counter);
+        if(!minias_make_private_symbol_name(name,sizeof(name),"pcrel",
+                                            ++as->pcrel_anchor_counter)) {
+            minias_set_error(as,"riscv-private-pcrel-symbol-overflow");
+            return false;
+        }
         anchor = minias_get_symbol(as, name, true);
         if (anchor == NULL) return false;
         anchor->defined = true;
@@ -1799,9 +1802,12 @@ static bool rv_encode_mcinst(MiniAs *as, const MiniAsStmt *stmt) {
             minias_set_error(as, "internal:missing-riscv-symbol-fragment");
             return false;
         }
-        (void)snprintf(label, sizeof(label),
-                       load ? ".Lminias_load_%zu" : ".Lminias_store_%zu",
-                       ++as->pcrel_anchor_counter);
+        if(!minias_make_private_symbol_name(
+             label,sizeof(label),load?"load":"store",
+             ++as->pcrel_anchor_counter)) {
+            minias_set_error(as,"riscv-private-memory-symbol-overflow");
+            return false;
+        }
         anchor = minias_get_symbol(as, label, true);
         if (anchor == NULL) return false;
         anchor->defined = true;

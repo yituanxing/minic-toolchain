@@ -94,10 +94,8 @@ bool minias_anchor_here(MiniAs *as, size_t *index) {
     char name[72];
     MiniAsSymbol *sym;
     size_t i;
-    int rc;
-    rc = snprintf(name,sizeof(name),".Lminias_cfi_%zu",
-                  as->cfi_anchor_counter++);
-    if (rc < 0 || (size_t)rc >= sizeof(name)) return false;
+    if(!minias_make_private_symbol_name(name,sizeof(name),"cfi",
+                                        as->cfi_anchor_counter++))return false;
     sym = minias_get_symbol(as,name,true);
     if (sym == NULL || sym->defined) return false;
     *index = (size_t)(sym-as->symbols);
@@ -204,17 +202,46 @@ bad:
     return false;
 }
 
+/* GNU permits the same CFI event stream to be materialized in more than one
+ * unwind section. Keep selection independent of serialization: the immutable
+ * procedure/event anchors are reused by each output writer pass. */
+static bool cfi_section_selection(const char *args,bool *debug,bool *eh) {
+    const char *p=args;
+    *debug=false;
+    *eh=false;
+    for(;;) {
+        const char *begin;
+        size_t len;
+        bool *selected;
+        while(*p==' ' || *p=='\t')++p;
+        begin=p;
+        while(*p && *p!=',' && *p!=' ' && *p!='\t')++p;
+        len=(size_t)(p-begin);
+        if(len==12U && memcmp(begin,".debug_frame",len)==0)
+            selected=debug;
+        else if(len==9U && memcmp(begin,".eh_frame",len)==0)
+            selected=eh;
+        else return false;
+        if(*selected)return false;
+        *selected=true;
+        while(*p==' ' || *p=='\t')++p;
+        if(*p=='\0')return true;
+        if(*p!=',')return false;
+        ++p;
+        if(*p=='\0')return false;
+    }
+}
+
 bool minias_cfi_directive(MiniAs *as,const char *op,
                           const char *args,size_t line) {
     MiniAsCfiProc *proc;
     int64_t value=0;
     unsigned reg=0U, kind=0U;
     if (!strcmp(op,".cfi_sections")) {
-        bool debug=!strcmp(args,".debug_frame");
-        bool eh=!strcmp(args,".eh_frame");
+        bool debug=false,eh=false;
         if (as->cfi_active || as->cfi_proc_count != 0U ||
             (as->cfi_debug_frame || as->cfi_eh_frame) ||
-            (!debug && !eh)) {
+            !cfi_section_selection(args,&debug,&eh)) {
             minias_set_error(as,"unsupported-cfi-sections:%s:line=%zu",args,line);
             return false;
         }
@@ -253,7 +280,7 @@ bool minias_cfi_directive(MiniAs *as,const char *op,
         proc->simple=strcmp(args,"simple")==0;
         proc->cfa_known=true;
         proc->cfa_offset=proc->simple?0:
-                           (int64_t)as->target->cfi_initial_cfa_offset;
+                           (int64_t)minias_cfi_abi(as).initial_cfa_offset;
         as->cfi_active=true;
         return true;
     }

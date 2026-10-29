@@ -9,6 +9,7 @@ on:
       - refactor/minias-target-isa-abi-core
     paths:
       - 'assembler/**'
+      - 'elf/**'
       - 'tools/minic-as/**'
       - 'tests/assembler/**'
       - '.github/workflows/minias-batch-3536.yml'

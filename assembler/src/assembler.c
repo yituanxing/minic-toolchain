@@ -8,6 +8,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+static bool validate_user_source_private_marker(MiniAs *as,
+                                                const char *line,
+                                                size_t source_line);
+
 bool minias_grow_array(void **ptr, size_t *capacity, size_t elem_size, size_t need) {
     size_t next;
     void *p;
@@ -65,12 +69,16 @@ static bool advance_current_location(MiniAs *as, uint64_t amount) {
     return true;
 }
 
-static bool resolve_symbol_aliases(MiniAs *as) {
+bool minias_refresh_symbol_aliases(MiniAs *as) {
     size_t remaining = 0U;
     size_t i;
 
     for (i = 0U; i < as->symbol_count; ++i) {
-        if (as->symbols[i].alias_pending) {
+        /* Re-evaluate aliases after every Fragment layout fixed point.
+         * Their final values must follow the target's moving anchor, not
+         * the first successful resolution during source parsing. */
+        if (as->symbols[i].has_alias_dependency) {
+            as->symbols[i].alias_pending=true;
             ++remaining;
         }
     }
@@ -113,8 +121,6 @@ static bool resolve_symbol_aliases(MiniAs *as) {
                 alias->subsection=0U;
                 alias->value=(uint64_t)absolute;
                 alias->type=MINIAS_STT_NOTYPE;
-                free(alias->alias_section_base);
-                alias->alias_section_base=NULL;
                 alias->alias_pending=false;
                 --remaining;progress=true;
                 continue;
@@ -182,6 +188,26 @@ char *minias_strdup(const char *text) {
     return copy;
 }
 
+bool minias_is_private_symbol_name(const char *name) {
+    return name!=NULL && (unsigned char)name[0]==1U &&
+           strncmp(name+1,"minias_",7U)==0;
+}
+
+bool minias_make_private_symbol_name(char *out,size_t capacity,
+                                     const char *kind,size_t ordinal) {
+    size_t i;
+    int n;
+    if(out==NULL || capacity==0U || kind==NULL || *kind=='\0')return false;
+    for(i=0U;kind[i]!='\0';++i) {
+        if(!((kind[i]>='a' && kind[i]<='z') ||
+             (kind[i]>='A' && kind[i]<='Z') ||
+             (kind[i]>='0' && kind[i]<='9') || kind[i]=='_'))
+            return false;
+    }
+    n=snprintf(out,capacity,"\001minias_%s_%zu",kind,ordinal);
+    return n>0 && (size_t)n<capacity;
+}
+
 char *minias_trim(char *text) {
     char *end;
 
@@ -207,23 +233,34 @@ void minias_set_error(MiniAs *as, const char *format, ...) {
     va_end(ap);
 }
 
-int minias_find_section(const MiniAs *as, const char *name) {
+/* ELF permits multiple sections with the same name when their COMDAT group
+ * signatures differ.  All Fragment/Symbol/Fixup owners retain the immutable
+ * Section index; textual names alone are not section identity. */
+static int minias_find_section_key(const MiniAs *as, const char *name,
+                                   const char *group_signature) {
     size_t i;
 
     for (i = 0U; i < as->section_count; ++i) {
-        if (strcmp(as->sections[i].name, name) == 0) {
+        const char *current=as->sections[i].group_signature;
+        if (strcmp(as->sections[i].name, name) == 0 &&
+            ((current==NULL && group_signature==NULL) ||
+             (current!=NULL && group_signature!=NULL &&
+              strcmp(current,group_signature)==0))) {
             return (int)i;
         }
     }
     return -1;
 }
 
-int minias_ensure_section(MiniAs *as,
-                          const char *name,
-                          uint32_t type,
-                          uint64_t flags,
-                          uint64_t align) {
-    int found = minias_find_section(as, name);
+int minias_find_section(const MiniAs *as, const char *name) {
+    return minias_find_section_key(as,name,NULL);
+}
+
+static int minias_ensure_section_key(MiniAs *as, const char *name,
+                                     const char *group_signature,
+                                     uint32_t type, uint64_t flags,
+                                     uint64_t align) {
+    int found = minias_find_section_key(as, name, group_signature);
     MiniAsSection *sec;
 
     if (found >= 0) {
@@ -251,11 +288,27 @@ int minias_ensure_section(MiniAs *as,
         minias_set_error(as, "out-of-memory:section-name");
         return -1;
     }
+    if (group_signature != NULL) {
+        sec->group_signature = minias_strdup(group_signature);
+        if (sec->group_signature == NULL) {
+            free(sec->name);sec->name=NULL;
+            minias_set_error(as,"out-of-memory:group-signature");
+            return -1;
+        }
+    }
     sec->type = type;
     sec->flags = flags;
     sec->align = align == 0U ? 1U : align;
     ++as->section_count;
     return (int)(as->section_count - 1U);
+}
+
+int minias_ensure_section(MiniAs *as,
+                          const char *name,
+                          uint32_t type,
+                          uint64_t flags,
+                          uint64_t align) {
+    return minias_ensure_section_key(as,name,NULL,type,flags,align);
 }
 
 static size_t symbol_name_hash(const char *name) {
@@ -491,7 +544,13 @@ bool minias_emit_instruction_bytes(MiniAs *as, int section_index,
         return false;
     }
     owner = &as->stmts[as->emitting_fragment_id];
-    if (owner->kind != MINIAS_STMT_INSN ||
+    /* Instruction and executable-padding fragments use the same private
+     * byte transaction.  A Target cannot append alignment NOPs directly to
+     * the final Section, where a failed encoder would leave partial bytes. */
+    if ((owner->kind != MINIAS_STMT_INSN &&
+         !(owner->kind == MINIAS_STMT_ALIGN &&
+           (sec->flags & MINIAS_SHF_EXECINSTR) != 0U &&
+           !owner->align_has_fill && strcmp(owner->op,".org") != 0)) ||
         owner->section != section_index ||
         sec->type == MINIAS_SHT_NOBITS ||
         size > SIZE_MAX - sec->size ||
@@ -528,6 +587,14 @@ bool minias_section_append(MiniAs *as, int section_index, const void *data, size
     }
     sec = &as->sections[(size_t)section_index];
     if (as->capture_instruction_bytes) {
+        /* RISC-V/AArch64 padding callbacks predate the transaction API and
+         * still use section_append.  Treat only the verified ALIGN owner as
+         * a padding sink; instruction encoders remain forbidden to bypass
+         * the Target byte API.  Both paths commit once in emit_sections. */
+        if (as->emitting_fragment &&
+            as->emitting_fragment_id < as->stmt_count &&
+            as->stmts[as->emitting_fragment_id].kind == MINIAS_STMT_ALIGN)
+            return minias_emit_instruction_bytes(as, section_index, data, size);
         minias_set_error(as, "target-bypassed-mc-code-emitter");
         return false;
     }
@@ -685,6 +752,7 @@ void minias_destroy(MiniAs *as) {
     for (i = 0U; i < as->stmt_count; ++i) {
         free(as->stmts[i].op);
         free(as->stmts[i].args);
+        free(as->stmts[i].org_expression);
         free(as->stmts[i].static_data);
         minias_mcdata_destroy(as->stmts[i].mcdata);
         minias_mcdata_destroy(as->stmts[i].variable_mcdata);
@@ -724,6 +792,9 @@ void minias_destroy(MiniAs *as) {
     for (i = 0U; i < as->debug_file_capacity; ++i)
         free(as->debug_files[i]);
     free(as->debug_files);
+    for (i = 0U; i < as->cu_file_count; ++i)
+        free(as->cu_files[i]);
+    free(as->cu_files);
     free(as->debug_locs);
     memset(as, 0, sizeof(*as));
 }
@@ -867,10 +938,12 @@ bool minias_parse_u64(const char *text, uint64_t *out) {
 
 static bool switch_section(MiniAs *as,
                            const char *name,
+                           const char *group_signature,
                            uint32_t type,
                            uint64_t flags,
                            uint64_t align) {
-    int index = minias_ensure_section(as, name, type, flags, align);
+    int index = minias_ensure_section_key(as, name, group_signature,
+                                          type, flags, align);
 
     if (index < 0) {
         return false;
@@ -968,8 +1041,22 @@ static bool parse_section_directive(MiniAs *as, char *args, size_t line) {
                     flags |= MINIAS_SHF_TLS;
                 } else if (*q == 'G') {
                     flags |= MINIAS_SHF_GROUP;
+                } else if (*q == 'R') {
+                    flags |= MINIAS_SHF_GNU_RETAIN;
+                } else {
+                    /* A silently dropped flag can change ELF selection,
+                     * merging, relocation or linker garbage collection.
+                     * GNU's unknown letters are fatal, not advisory. */
+                    minias_set_error(as,"unsupported-section-flag:%c:%s:line=%zu",
+                                     *q,name,line);
+                    return false;
                 }
                 ++q;
+            }
+            if (*q != '"') {
+                minias_set_error(as,"unterminated-section-flags:%s:line=%zu",
+                                 name,line);
+                return false;
             }
             flag_end = q;
             type_separator = strchr(flag_end, ',');
@@ -1068,8 +1155,8 @@ static bool parse_section_directive(MiniAs *as, char *args, size_t line) {
      * The .text directive already uses four-byte instruction alignment.
      */
     {
-        int prior=minias_find_section(as,name);
-        bool ok=switch_section(as,name,type,flags,
+        int prior=minias_find_section_key(as,name,group_signature);
+        bool ok=switch_section(as,name,group_signature,type,flags,
                 (flags & MINIAS_SHF_EXECINSTR)!=0U ?
                    (as->target->default_exec_alignment!=0U ?
                         as->target->default_exec_alignment:4U):1U);
@@ -1078,30 +1165,13 @@ static bool parse_section_directive(MiniAs *as, char *args, size_t line) {
         if(ok && prior<0 && entry_size!=0U)
             as->sections[(size_t)as->current_section].entry_size=entry_size;
         if (ok) {
-            MiniAsSection *sec=&as->sections[(size_t)as->current_section];
-            if (prior>=0 &&
-                ((sec->group_signature==NULL)!=(group_signature==NULL) ||
-                 (group_signature!=NULL &&
-                  strcmp(sec->group_signature,group_signature)!=0))) {
-                minias_set_error(as,"conflicting-section-comdat:%s:line=%zu",
-                                 name,line);
-                return false;
-            }
             if (group_signature!=NULL && prior<0) {
                 MiniAsSymbol *signature;
-                sec->group_signature=minias_strdup(group_signature);
-                if(sec->group_signature==NULL) {
-                    minias_set_error(as,"out-of-memory:group-signature");
-                    return false;
-                }
                 signature=minias_get_symbol(as,group_signature,true);
                 if(signature==NULL)return false;
-                /* An undefined signature is an ordinary global reference,
-                 * not an unresolved local symbol injected by the assembler. */
-                if(!signature->defined &&
-                   !signature->explicit_local_binding &&
-                   signature->bind==MINIAS_STB_LOCAL)
-                    signature->bind=MINIAS_STB_GLOBAL;
+                /* GAS synthesizes an undefined default-local group
+                 * signature as a LOCAL symbol in the new SHT_GROUP section.
+                 * An explicitly .globl signature remains GLOBAL UND. */
             }
         }
         return ok;
@@ -1275,12 +1345,32 @@ static bool parse_size(MiniAs *as, char *args, size_t line) {
     return true;
 }
 
+/* A symbol alias carries a stable SymbolID edge.  The first parse resolves
+ * forward references, and subsequent MCLayout passes refresh values after
+ * branch/data growth.  Do not intern a second symbol under the same name. */
+static bool bind_pending_alias(MiniAs *as,const char *name,size_t target_index,
+                               int64_t addend,size_t line) {
+    MiniAsSymbol *alias=minias_get_symbol(as,name,true);
+    if(alias==NULL)return false;
+    if(alias->defined || alias->alias_pending || alias->has_alias_dependency) {
+        minias_set_error(as,"duplicate-symbol:%s:line=%zu",name,line);
+        return false;
+    }
+    alias->has_alias_dependency=true;
+    alias->alias_pending=true;
+    alias->alias_target_index=target_index;
+    alias->alias_addend=addend;
+    alias->alias_line=line;
+    return true;
+}
+
 static bool parse_equ(MiniAs *as, char *args, size_t line) {
     char *comma = strchr(args, ',');
     char *name;
     char *expression;
     int64_t value;
     MiniAsSymbol *symbol;
+    MiniAsSymbolExpr expr={0};
 
     if (comma == NULL) {
         minias_set_error(as, "bad-directive:.equ:line=%zu", line);
@@ -1293,12 +1383,52 @@ static bool parse_equ(MiniAs *as, char *args, size_t line) {
      * symbol storage as two's-complement bits and interpreted as i64 by
      * Common's signed expression evaluator. Only relocatable values
      * require section-specific nonnegative address constraints. */
-    if (*name == '\0' || *expression == '\0' ||
-        !minias_evaluate_absolute_expression(as, expression, &value)) {
+    if (*name == '\0' || *expression == '\0') {
         minias_set_error(as,
                          "unsupported-expression:.equ:%s:line=%zu",
                          expression,
                          line);
+        return false;
+    }
+    if(minias_parse_symbol_addend(expression,&expr)) {
+        if(strcmp(expr.name,".")==0) {
+            uint64_t here,position;
+            if(!minias_current_location(as,&here) ||
+               (expr.addend>=0 && (uint64_t)expr.addend>UINT64_MAX-here) ||
+               (expr.addend<0 &&
+                (uint64_t)(-(expr.addend+1))+1U>here)) {
+                minias_set_error(as,"equ-location-overflow:line=%zu",line);
+                return false;
+            }
+            position=expr.addend>=0 ? here+(uint64_t)expr.addend :
+                here-((uint64_t)(-(expr.addend+1))+1U);
+            symbol=minias_get_symbol(as,name,true);
+            if(!symbol)return false;
+            if(symbol->defined || symbol->alias_pending) {
+                minias_set_error(as,"duplicate-symbol:%s:line=%zu",name,line);
+                return false;
+            }
+            symbol->defined=true;
+            symbol->section=as->current_section;
+            symbol->subsection=as->current_subsection;
+            symbol->value=position;
+            symbol->has_fragment_anchor=true;
+            symbol->fragment_anchor=as->stmt_count;
+            symbol->fragment_anchor_addend=expr.addend;
+            return true;
+        }
+        {
+            MiniAsSymbol *target=minias_get_symbol(as,expr.name,true);
+            size_t target_index;
+            if(!target)return false;
+            target_index=(size_t)(target-as->symbols);
+            if(!target->defined || target->section!=MINIAS_SECTION_ABS)
+                return bind_pending_alias(as,name,target_index,expr.addend,line);
+        }
+    }
+    if(!minias_evaluate_absolute_expression(as, expression, &value)) {
+        minias_set_error(as,"unsupported-expression:.equ:%s:line=%zu",
+                         expression,line);
         return false;
     }
     symbol = minias_get_symbol(as, name, true);
@@ -1411,6 +1541,18 @@ static bool parse_set(MiniAs *as, char *args, size_t line) {
         }
     }
 
+    /* Section-relative or forward source symbols are relocatable even if
+     * the absolute evaluator can currently return a numeric offset.  Bind
+     * their identity first; only known ABS .set counters are snapshotted. */
+    if (minias_parse_symbol_addend(expression,&expr) &&
+        strcmp(expr.name,".")!=0) {
+        target=minias_get_symbol(as,expr.name,true);
+        if(!target)return false;
+        target_index=(size_t)(target-as->symbols);
+        if(!target->defined || target->section!=MINIAS_SECTION_ABS)
+            return bind_pending_alias(as,name,target_index,expr.addend,line);
+    }
+
     /* GNU .set is mutable, unlike .equ. Evaluate an already-defined
      * absolute symbol RHS at the *current* statement position, including
      * self-referential .set counter, counter+1 in .irp/macro expansion.
@@ -1451,11 +1593,7 @@ static bool parse_set(MiniAs *as, char *args, size_t line) {
             minias_set_error(as, "duplicate-symbol:%s:line=%zu", name, line);
             return false;
         }
-        alias->alias_pending = true;
-        alias->alias_target_index = target_index;
-        alias->alias_addend = expr.addend;
-        alias->alias_line = line;
-        return true;
+        return bind_pending_alias(as,name,target_index,expr.addend,line);
     }
 
     /* GNU ARM64 tramp_alias:
@@ -1488,6 +1626,7 @@ static bool parse_set(MiniAs *as, char *args, size_t line) {
                         result->alias_section_base=minias_strdup(section_name);
                         if(result->alias_section_base!=NULL) {
                             result->alias_pending=true;
+                            result->has_alias_dependency=true;
                             result->alias_target_index=ref_index;
                             result->alias_addend=number;
                             result->alias_line=line;
@@ -1618,7 +1757,17 @@ static bool handle_org_position(MiniAs *as, const char *args,
         fragment->org_addend = symbolic.addend;
         as->has_org_constraints = true;
     } else {
-        as->layout_sensitive = true;
+        /* Complex but already parsed GNU arithmetic still belongs to this
+         * .org Fragment. Keep its exact position expression and recompute
+         * padding after every upstream change; never reuse the parse-time
+         * byte count merely because the grammar was not a simple S+A. */
+        MiniAsStmt *fragment=&as->stmts[as->stmt_count - 1U];
+        fragment->org_expression=minias_strdup(args);
+        if(fragment->org_expression==NULL) {
+            minias_set_error(as,"out-of-memory:org-expression");
+            return false;
+        }
+        as->has_org_constraints=true;
     }
     return advance_current_location(as, pad);
 }
@@ -1690,9 +1839,8 @@ bool minias_queue_literal(MiniAs *as,const MiniAsSymbolExpr *expression,
     entry->section=as->current_section;
     entry->subsection=as->current_subsection;
     entry->width=width;entry->expression=*expression;
-    written=snprintf(entry->label,sizeof(entry->label),
-                     ".Lminias_literal_%zu",as->literal_count);
-    if(written<0 || (size_t)written>=sizeof(entry->label)) {
+    if(!minias_make_private_symbol_name(entry->label,sizeof(entry->label),
+                                        "literal",as->literal_count)) {
         minias_set_error(as,"literal-label-overflow");return false;
     }
     ++as->literal_count;
@@ -2777,11 +2925,15 @@ static bool rewrite_numeric_local_refs(MiniAs *as,
                 } else {
                     generation = as->numeric_label_counts[label_id] + 1U;
                 }
-                written = snprintf(replacement,
-                                   sizeof(replacement),
-                                   ".Lminias_num_%zu_%zu",
-                                   label_id,
-                                   generation);
+                {
+                    char kind[40];
+                    written=snprintf(kind,sizeof(kind),"num_%zu",label_id);
+                    if(written<0 || (size_t)written>=sizeof(kind) ||
+                       !minias_make_private_symbol_name(
+                           replacement,sizeof(replacement),kind,generation))
+                        goto oom;
+                }
+                written=(int)strlen(replacement);
                 if (written < 0 || (size_t)written >= sizeof(replacement) ||
                     !append_rewritten_text(&buffer,
                                            &size,
@@ -2872,14 +3024,15 @@ static bool define_label(MiniAs *as, char *label, size_t line) {
             return false;
         }
         generation = ++as->numeric_label_counts[numeric_id];
-        written = snprintf(canonical,
-                           sizeof(canonical),
-                           ".Lminias_num_%zu_%zu",
-                           numeric_id,
-                           generation);
-        if (written < 0 || (size_t)written >= sizeof(canonical)) {
-            minias_set_error(as, "numeric-label-too-long:line=%zu", line);
-            return false;
+        {
+            char kind[40];
+            written=snprintf(kind,sizeof(kind),"num_%zu",numeric_id);
+            if(written<0 || (size_t)written>=sizeof(kind) ||
+               !minias_make_private_symbol_name(
+                   canonical,sizeof(canonical),kind,generation)) {
+                minias_set_error(as,"numeric-label-too-long:line=%zu",line);
+                return false;
+            }
         }
         label = canonical;
     }
@@ -3442,41 +3595,17 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
         }
         if (!strcmp(op,".file") || !strcmp(op,".loc"))
             return minias_debug_directive(as,op,args,line);
-        /*
-         * Native Linux VDSO sources use only the procedure-boundary CFI
-         * surface at this stage.  Track and validate its state now; actual
-         * .eh_frame byte emission is a later semantic-differential contract.
-         */
-        if (strcmp(op, ".cfi_startproc") == 0) {
-            if (as->cfi_active ||
-                (*args != '\0' && strcmp(args, "simple") != 0)) {
-                minias_set_error(as, "bad-directive:.cfi_startproc:line=%zu", line);
-                return false;
-            }
-            as->cfi_active = true;
-            as->cfi_signal_frame = false;
-            return true;
-        }
-        if (strcmp(op, ".cfi_signal_frame") == 0) {
-            if (!as->cfi_active || *args != '\0') {
-                minias_set_error(as, "bad-directive:.cfi_signal_frame:line=%zu", line);
-                return false;
-            }
-            as->cfi_signal_frame = true;
-            return true;
-        }
-        if (strcmp(op, ".cfi_endproc") == 0) {
-            if (!as->cfi_active || *args != '\0') {
-                minias_set_error(as, "bad-directive:.cfi_endproc:line=%zu", line);
-                return false;
-            }
-            as->cfi_active = false;
-            as->cfi_signal_frame = false;
-            return true;
+        /* Never accept CFI boundaries without a CIE/FDE output plan. A
+         * fifth Target lacking implicit EH must declare .cfi_sections or
+         * explicitly reject the source, not silently lose unwind data. */
+        if (strncmp(op,".cfi_",5U)==0) {
+            minias_set_error(as,"unsupported-target-cfi:%s:line=%zu",op,line);
+            return false;
         }
         if (strcmp(op, ".text") == 0) {
             return switch_section(as,
                                   ".text",
+                                  NULL,
                                   MINIAS_SHT_PROGBITS,
                                   MINIAS_SHF_ALLOC | MINIAS_SHF_EXECINSTR,
                                   as->target->default_exec_alignment != 0U ?
@@ -3485,6 +3614,7 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
         if (strcmp(op, ".data") == 0) {
             return switch_section(as,
                                   ".data",
+                                  NULL,
                                   MINIAS_SHT_PROGBITS,
                                   MINIAS_SHF_ALLOC | MINIAS_SHF_WRITE,
                                   1U);
@@ -3492,6 +3622,7 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
         if (strcmp(op, ".bss") == 0) {
             return switch_section(as,
                                   ".bss",
+                                  NULL,
                                   MINIAS_SHT_NOBITS,
                                   MINIAS_SHF_ALLOC | MINIAS_SHF_WRITE,
                                   1U);
@@ -4443,6 +4574,10 @@ static bool read_macro_block(MiniAs *as,
         size_t len;
 
         ++*line_no;
+        if(!validate_user_source_private_marker(as,linebuf,*line_no)) {
+            destroy_source_lines(lines,count);
+            return false;
+        }
         strip_gnu_c_comments(as,linebuf);
         len = strlen(linebuf);
         if (len == sizeof(linebuf) - 1U && linebuf[len - 1U] != '\n') {
@@ -5048,6 +5183,10 @@ static bool read_repeat_block(MiniAs *as,
         int kind;
 
         ++*line_no;
+        if(!validate_user_source_private_marker(as,linebuf,*line_no)) {
+            destroy_source_lines(lines,count);
+            return false;
+        }
         strip_gnu_c_comments(as,linebuf);
         len = strlen(linebuf);
         if (len == sizeof(linebuf) - 1U && linebuf[len - 1U] != '\n') {
@@ -5147,6 +5286,32 @@ static bool process_inline_repeat_line(MiniAs *as,const char *source,
     return ok;
 }
 
+/* Source text may contain literal binary bytes inside quoted .ascii data,
+ * and .incbin files are never inspected as assembly text.  But the private
+ * SymbolID sigil is forbidden outside quoted strings, even in macro/rept
+ * bodies; only the internal numeric/target rewriter may create one. */
+static bool validate_user_source_private_marker(MiniAs *as,
+                                                const char *line,
+                                                size_t source_line) {
+    char quote='\0';
+    bool escaped=false;
+    const unsigned char *p=(const unsigned char *)line;
+    for(;*p!='\0';++p) {
+        if(escaped) {escaped=false;continue;}
+        if(quote!='\0') {
+            if(*p=='\\')escaped=true;
+            else if(*p==(unsigned char)quote)quote='\0';
+        }else if(*p=='"' || *p=='\'') {
+            quote=(char)*p;
+        }else if(*p==1U) {
+            minias_set_error(as,"private-symbol-marker-in-source:line=%zu",
+                             source_line);
+            return false;
+        }
+    }
+    return true;
+}
+
 bool minias_parse_file(MiniAs *as, const char *path) {
     FILE *file = fopen(path, "r");
     char linebuf[65536];
@@ -5164,6 +5329,10 @@ bool minias_parse_file(MiniAs *as, const char *path) {
         int kind;
 
         ++line_no;
+        if(!validate_user_source_private_marker(as,linebuf,line_no)) {
+            fclose(file);
+            return false;
+        }
         strip_gnu_c_comments(as,linebuf);
         len = strlen(linebuf);
         if (len == sizeof(linebuf) - 1U && linebuf[len - 1U] != '\n') {
@@ -5324,7 +5493,7 @@ bool minias_parse_file(MiniAs *as, const char *path) {
     if (!minias_finalize_subsection_layout(as)) {
         return false;
     }
-    return resolve_symbol_aliases(as);
+    return minias_refresh_symbol_aliases(as);
 }
 
 typedef struct MiniAsEmitRef {
@@ -5380,6 +5549,9 @@ bool minias_emit_sections(MiniAs *as) {
     for (i = 0U; i < as->stmt_count; ++i) {
         MiniAsStmt *stmt = refs[i].stmt;
         MiniAsSection *section = &as->sections[(size_t)stmt->section];
+        const bool staged_padding = stmt->kind == MINIAS_STMT_ALIGN &&
+            (section->flags & MINIAS_SHF_EXECINSTR) != 0U &&
+            strcmp(stmt->op,".org") != 0 && !stmt->align_has_fill;
 
         if ((uint64_t)section->size > stmt->offset) {
             /* The offset invariant must fail CLOSED, but record the
@@ -5414,7 +5586,8 @@ bool minias_emit_sections(MiniAs *as) {
          * current backend append API is a compatibility bridge only. */
         as->emitting_fragment = true;
         as->emitting_fragment_id = refs[i].order;
-        as->capture_instruction_bytes = stmt->kind == MINIAS_STMT_INSN;
+        as->capture_instruction_bytes =
+            stmt->kind == MINIAS_STMT_INSN || staged_padding;
         as->encoded_instruction_size = 0U;
         if (stmt->kind == MINIAS_STMT_ALIGN) {
             bool exec_align = (section->flags & MINIAS_SHF_EXECINSTR) != 0U &&
@@ -5459,7 +5632,7 @@ bool minias_emit_sections(MiniAs *as) {
         }
         /* DATA and ALIGN append directly, while target instruction bytes
          * are buffered and checked before a single Section commit. */
-        if (stmt->kind != MINIAS_STMT_INSN &&
+        if (stmt->kind != MINIAS_STMT_INSN && !staged_padding &&
             (uint64_t)section->size != stmt->offset + stmt->size) {
             minias_set_error(as,
                 "fragment-emitted-size-mismatch:line=%zu:expected=%u:actual=%llu",
@@ -5473,7 +5646,7 @@ bool minias_emit_sections(MiniAs *as) {
          * final Section. All four Targets share this same commit path. */
         as->capture_instruction_bytes = false;
         as->emitting_fragment = false;
-        if (stmt->kind == MINIAS_STMT_INSN) {
+        if (stmt->kind == MINIAS_STMT_INSN || staged_padding) {
             if (as->encoded_instruction_size != stmt->size ||
                 stmt->offset > SIZE_MAX) {
                 minias_set_error(as,

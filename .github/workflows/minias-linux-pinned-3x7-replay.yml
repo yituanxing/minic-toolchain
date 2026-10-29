@@ -31,6 +31,10 @@ on:
   push:
     branches: [refactor/minias-target-isa-abi-core]
     paths:
+      - 'assembler/**'
+      - 'elf/**'
+      - 'tests/assembler/**'
+      - 'Makefile'
       - '.github/workflows/minias-linux-pinned-3x7-replay.yml'
       - 'tools/ci/minias-linux-kbuild-seven-v1.py'
       - 'assembler/src/cfi.c'
@@ -116,10 +120,12 @@ jobs:
       - name: Require all selected 7-way shards, with disjoint architecture pools
         run: |
           python3 tools/ci/minias-linux-kbuild-seven-v1.py aggregate \
+            --strict \
             --targets "${{ contains(github.event.head_commit.message, '[minias-replay-aarch-7]') && 'aarch64' || contains(github.event.head_commit.message, '[minias-replay-loong-7]') && 'loongarch64' || contains(github.event.head_commit.message, '[minias-replay-x86-7]') && 'x86_64' || 'x86_64,aarch64,loongarch64' }}" \
             --results build/minias-linux-replay-collected \
             --dest build/minias-linux-replay-summary.json
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: minias-linux-replay-three-target-summary
           path: build/minias-linux-replay-summary.json

@@ -3,6 +3,7 @@ import argparse
 import collections
 import hashlib
 import json
+import struct
 from pathlib import Path
 
 from elftools.elf.elffile import ELFFile
@@ -12,10 +13,10 @@ IGNORE_SECTION_NAMES = {".symtab", ".strtab", ".shstrtab"}
 R_RISCV_ALIGN = 43
 R_RISCV_RELAX = 51
 
-# Widths are only used to mask bytes that the linker will rewrite. Unknown
-# relocation widths do not become false failures: that section's byte check is
-# reported as skipped while relocation semantics are still compared strictly.
-RELOC_WIDTH = {
+# Widths mask only fields the linker will rewrite. The numeric relocation
+# namespace is machine-specific: a RISC-V type number is not an x86/ARM type.
+# Unrecognized widths make the strict verdict INCONCLUSIVE, never equal.
+RISC_V_RELOC_WIDTH = {
     1: 4, 2: 8,
     16: 4, 17: 4, 18: 8, 19: 8,
     20: 4, 21: 4, 22: 4, 23: 4, 24: 4, 25: 4,
@@ -27,29 +28,99 @@ RELOC_WIDTH = {
     52: 1, 53: 1, 54: 1, 55: 2, 56: 4, 57: 4,
     59: 4, 62: 4, 63: 4, 64: 4, 65: 4,
 }
+RELOC_WIDTH_BY_MACHINE = {
+    "EM_RISCV": RISC_V_RELOC_WIDTH,
+    "EM_X86_64": {1: 8, 2: 4, 3: 4, 4: 4, 9: 4, 10: 4,
+                  11: 4, 12: 2, 13: 2, 14: 1, 15: 1, 24: 8,
+                  25: 8, 26: 4, 27: 8, 28: 8, 32: 4, 33: 8,
+                  34: 4, 35: 4, 36: 8, 41: 4, 42: 4},
+    # Grow these from GNU external oracles, not by guessing a relocation's
+    # field width. All other A64/Loong relocations are explicitly unknown.
+    "EM_AARCH64": {257: 8, 258: 4, 259: 2, 260: 8, 261: 4, 262: 2,
+                   275: 4, 277: 4, 278: 4, 282: 4, 283: 4},
+    "EM_LOONGARCH": {1: 1, 2: 2, 3: 4, 4: 8, 5: 4, 6: 8},
+}
 
 
-def section_name_for_index(elf, idx):
+def section_name_for_index(elf, idx, section_keys):
     if isinstance(idx, int):
         if 0 <= idx < elf.num_sections():
-            return elf.get_section(idx).name
+            return section_keys[idx]
         return f"INDEX:{idx}"
     return str(idx)
 
 
-def symbol_semantic_key(elf, sym):
+def stable_sections(elf):
+    """Give duplicate names distinct identities, including COMDAT groups.
+
+    ELF section indices and .group payload indices differ between assemblers.
+    Group *signatures* and section occurrence are the stable object semantics.
+    No ordinary dict indexed only by `section.name` can represent GNU groups.
+    """
+    group_owners = {}
+    group_info = []
+    signature_occurrence = collections.Counter()
+    endian = "<" if elf.little_endian else ">"
+    for index, section in enumerate(elf.iter_sections()):
+        if str(section["sh_type"]) != "SHT_GROUP":
+            continue
+        raw = section.data()
+        if len(raw) < 4 or len(raw) % 4:
+            raise ValueError("malformed SHT_GROUP member table")
+        words = struct.unpack(endian + "I" * (len(raw) // 4), raw)
+        symbol_table = elf.get_section(int(section["sh_link"]))
+        if symbol_table is None or not hasattr(symbol_table, "get_symbol"):
+            raise ValueError("SHT_GROUP missing signature symtab")
+        signature = symbol_table.get_symbol(int(section["sh_info"])).name
+        ordinal = signature_occurrence[signature]
+        signature_occurrence[signature] += 1
+        owner = (signature, ordinal)
+        group_owners[index] = owner
+        members = []
+        for member in words[1:]:
+            if member <= 0 or member >= elf.num_sections() or member in group_owners:
+                raise ValueError("SHT_GROUP invalid or overlapping member")
+            group_owners[member] = owner
+            members.append(member)
+        group_info.append((owner, words[0], members))
+
+    # Every section receives an identity; duplicate ungrouped names retain a
+    # deterministic occurrence and group members identify their signature.
+    counts = collections.Counter(
+        (sec.name, group_owners.get(idx))
+        for idx, sec in enumerate(elf.iter_sections()))
+    occurrences = collections.Counter()
+    keys = {}
+    for idx, sec in enumerate(elf.iter_sections()):
+        base = (sec.name, group_owners.get(idx))
+        ordinal = occurrences[base]
+        occurrences[base] += 1
+        if counts[base] == 1 and base[1] is None:
+            keys[idx] = sec.name  # Preserve familiar identity for normal ELF.
+        else:
+            keys[idx] = json.dumps([sec.name, base[1], ordinal],
+                                   separators=(",", ":"))
+    groups = []
+    for owner, flags, members in group_info:
+        groups.append({"signature": owner[0], "occurrence": owner[1],
+                       "flags": flags, "members": sorted(keys[i] for i in members)})
+    groups.sort(key=lambda row: json.dumps(row, sort_keys=True))
+    return keys, groups
+
+
+def symbol_semantic_key(elf, sym, section_keys):
     info = sym["st_info"]
     bind = info["bind"]
     typ = info["type"]
     vis = sym["st_other"]["visibility"]
     shndx = sym["st_shndx"]
-    sec = section_name_for_index(elf, shndx)
+    sec = section_name_for_index(elf, shndx, section_keys)
     value = int(sym["st_value"])
     size = int(sym["st_size"])
     name = sym.name or ""
 
     if typ == "STT_FILE":
-        return None
+        return ("FILE", name, sec)
     if bind == "STB_LOCAL" and (name.startswith("$x") or name.startswith("$d")):
         # RISC-V mapping symbols are assembler/disassembler metadata, not
         # link-visible source symbols.
@@ -64,27 +135,29 @@ def symbol_semantic_key(elf, sym):
     return ("NAMED", name, bind, typ, vis, sec, value, size)
 
 
-def symbol_counter(elf):
+def symbol_counter(elf, section_keys):
     out = collections.Counter()
     symtab = elf.get_section_by_name(".symtab")
     if symtab is None:
         return out
     for sym in symtab.iter_symbols():
-        key = symbol_semantic_key(elf, sym)
+        key = symbol_semantic_key(elf, sym, section_keys)
         if key is not None:
             out[key] += 1
     return out
 
 
-def relocation_counter(elf):
+def relocation_counter(elf, section_keys):
     out = collections.Counter()
     masks = collections.defaultdict(list)
     unknown_width = collections.defaultdict(list)
 
+    machine = str(elf.header["e_machine"])
+    widths = RELOC_WIDTH_BY_MACHINE.get(machine, {})
     for sec in elf.iter_sections():
         if not isinstance(sec, RelocationSection):
             continue
-        target_name = section_name_for_index(elf, int(sec["sh_info"]))
+        target_name = section_name_for_index(elf, int(sec["sh_info"]), section_keys)
         symtab = elf.get_section(int(sec["sh_link"]))
         is_rela = sec.is_RELA()
 
@@ -92,11 +165,11 @@ def relocation_counter(elf):
             typ = int(rel["r_info_type"])
             offset = int(rel["r_offset"])
             addend = int(rel["r_addend"]) if is_rela else 0
-            if typ == R_RISCV_RELAX:
+            if machine == "EM_RISCV" and typ == R_RISCV_RELAX:
                 # RELAX is a linker optimization hint, not required for the
                 # unrelaxed object's functional semantics.
                 continue
-            if typ == R_RISCV_ALIGN:
+            if machine == "EM_RISCV" and typ == R_RISCV_ALIGN:
                 # GNU as may reserve relaxable alignment padding and let the
                 # linker delete excess bytes. MiniAS currently commits the
                 # final padding in the object, so ALIGN is optional metadata.
@@ -105,12 +178,12 @@ def relocation_counter(elf):
                 continue
 
             sym = symtab.get_symbol(int(rel["r_info_sym"]))
-            sym_key = symbol_semantic_key(elf, sym)
+            sym_key = symbol_semantic_key(elf, sym, section_keys)
             if sym_key is None:
                 sym_key = ("NONE",)
             out[(target_name, offset, typ, sym_key, addend)] += 1
 
-            width = RELOC_WIDTH.get(typ)
+            width = widths.get(typ)
             if width:
                 masks[target_name].append((offset, offset + width))
             else:
@@ -119,21 +192,22 @@ def relocation_counter(elf):
     return out, masks, unknown_width
 
 
-def section_metadata(elf):
+def section_metadata(elf, section_keys):
     core = {}
     alignment = {}
-    for sec in elf.iter_sections():
+    for index, sec in enumerate(elf.iter_sections()):
         name = sec.name
         if name in IGNORE_SECTION_NAMES or isinstance(sec, RelocationSection):
             continue
         hdr = sec.header
-        core[name] = {
+        key = section_keys[index]
+        core[key] = {
             "type": str(hdr["sh_type"]),
             "flags": int(hdr["sh_flags"]),
             "entsize": int(hdr["sh_entsize"]),
             "size": int(hdr["sh_size"]),
         }
-        alignment[name] = int(hdr["sh_addralign"])
+        alignment[key] = int(hdr["sh_addralign"])
     return core, alignment
 
 
@@ -160,20 +234,21 @@ def masked_bytes(data, ranges):
     return bytes(b)
 
 
-def comparable_contents(elf, masks, unknown_width):
+def comparable_contents(elf, section_keys, masks, unknown_width):
     out = {}
     skipped = {}
-    for sec in elf.iter_sections():
+    for index, sec in enumerate(elf.iter_sections()):
         name = sec.name
         if name in IGNORE_SECTION_NAMES or isinstance(sec, RelocationSection):
             continue
         if str(sec["sh_type"]) != "SHT_PROGBITS":
             continue
-        if unknown_width.get(name):
-            skipped[name] = list(unknown_width[name])
+        key = section_keys[index]
+        if unknown_width.get(key):
+            skipped[key] = list(unknown_width[key])
             continue
-        data = masked_bytes(sec.data(), masks.get(name, []))
-        out[name] = {
+        data = masked_bytes(sec.data(), masks.get(key, []))
+        out[key] = {
             "size": len(data),
             "sha256": hashlib.sha256(data).hexdigest(),
         }
@@ -189,9 +264,10 @@ def counter_to_sorted_list(counter):
 def load_semantics(path):
     with open(path, "rb") as f:
         elf = ELFFile(f)
-        relocs, masks, unknown = relocation_counter(elf)
-        contents, skipped = comparable_contents(elf, masks, unknown)
-        section_core, section_alignment = section_metadata(elf)
+        section_keys, groups = stable_sections(elf)
+        relocs, masks, unknown = relocation_counter(elf, section_keys)
+        contents, skipped = comparable_contents(elf, section_keys, masks, unknown)
+        section_core, section_alignment = section_metadata(elf, section_keys)
         return {
             "header": {
                 "class": int(elf.elfclass),
@@ -202,7 +278,8 @@ def load_semantics(path):
             },
             "section_core": section_core,
             "section_alignment": section_alignment,
-            "symbols": counter_to_sorted_list(symbol_counter(elf)),
+            "groups": groups,
+            "symbols": counter_to_sorted_list(symbol_counter(elf, section_keys)),
             "relocations": counter_to_sorted_list(relocs),
             "contents_masked": contents,
             "content_skipped_unknown_reloc_width": skipped,
@@ -215,12 +292,16 @@ def compare_paths(reference_path, candidate_path):
     dimensions = {
         "header": reference["header"] == candidate["header"],
         "section_core": reference["section_core"] == candidate["section_core"],
+        "groups": reference["groups"] == candidate["groups"],
         "section_alignment_compatible": alignment_compatible(
             reference["section_alignment"], candidate["section_alignment"]
         ),
         "symbols": reference["symbols"] == candidate["symbols"],
         "relocations": reference["relocations"] == candidate["relocations"],
         "contents_masked": reference["contents_masked"] == candidate["contents_masked"],
+        "known_relocation_widths": not (
+            reference["content_skipped_unknown_reloc_width"] or
+            candidate["content_skipped_unknown_reloc_width"]),
     }
     strict_alignment = reference["section_alignment"] == candidate["section_alignment"]
 
@@ -229,6 +310,7 @@ def compare_paths(reference_path, candidate_path):
         "candidate": str(Path(candidate_path)),
         "equal": all(dimensions.values()),
         "strict_equal": all(dimensions.values()) and strict_alignment,
+        "inconclusive": not dimensions["known_relocation_widths"],
         "dimensions": dimensions,
         "strict_section_alignment": strict_alignment,
         "reference_skipped_content": reference["content_skipped_unknown_reloc_width"],
@@ -237,7 +319,8 @@ def compare_paths(reference_path, candidate_path):
     if not result["equal"] or not strict_alignment:
         differences = {}
         for key, equal in dimensions.items():
-            if not equal and key != "section_alignment_compatible":
+            if not equal and key not in ("section_alignment_compatible",
+                                         "known_relocation_widths"):
                 ref_value = reference[key]
                 cand_value = candidate[key]
                 differences[key] = {
@@ -252,13 +335,18 @@ def compare_paths(reference_path, candidate_path):
                 "candidate": candidate["section_alignment"],
                 "compatible": dimensions["section_alignment_compatible"],
             }
+        if not dimensions["known_relocation_widths"]:
+            differences["unknown_relocation_widths"] = {
+                "reference": reference["content_skipped_unknown_reloc_width"],
+                "candidate": candidate["content_skipped_unknown_reloc_width"],
+            }
         result["differences"] = differences
     return result
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Compare RISC-V ELF relocatable objects semantically."
+        description="Compare ELF relocatable objects, including COMDAT identities."
     )
     parser.add_argument("reference")
     parser.add_argument("candidate")

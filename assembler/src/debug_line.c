@@ -53,7 +53,26 @@ static bool parse_file(MiniAs *as,const char *args,size_t line) {
     char first[1024],second[1024];
     char *name;
     size_t len1,len2;
-    if(*p=='"')return true; /* GNU's unnumbered CU-only .file. */
+    if(*p=='"') {
+        /* GNU .file "name.c" contributes an independent LOCAL ABS STT_FILE
+         * entry in .symtab.  It is not a numbered .loc file, and may have
+         * the same spelling as a user-defined symbol or another CU. */
+        if(!debug_quoted(&p,first,sizeof(first)))goto invalid;
+        while(isspace((unsigned char)*p))++p;
+        if(*p!='\0')goto invalid;
+        if(!debug_grow((void **)&as->cu_files,&as->cu_file_capacity,
+                       as->cu_file_count+1U,sizeof(*as->cu_files))) {
+            minias_set_error(as,"out-of-memory:cu-file-symbol");
+            return false;
+        }
+        name=minias_strdup(first);
+        if(!name) {
+            minias_set_error(as,"out-of-memory:cu-file-name");
+            return false;
+        }
+        as->cu_files[as->cu_file_count++]=name;
+        return true;
+    }
     errno=0;index=strtoul(p,&end,10);
     if(errno || end==p || index>8192UL || !isspace((unsigned char)*end))
         goto invalid;

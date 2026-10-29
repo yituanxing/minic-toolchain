@@ -305,7 +305,12 @@ bool minias_eval_i64_expression(const char *text, int64_t *value) {
 }
 
 static bool is_symbol_start(char ch) {
-    return ch == '.' || ch == '$' || ch == '_' || isalpha((unsigned char)ch);
+    /* The only non-source identifier byte is reserved for Common-owned
+     * synthetic SymbolIDs. Input loading rejects it outside quoted data,
+     * so numeric label rewriting can use normal shared MCExpr grammar
+     * without exposing the private namespace to GNU source labels. */
+    return (unsigned char)ch == 1U || ch == '.' || ch == '$' ||
+           ch == '_' || isalpha((unsigned char)ch);
 }
 
 static bool is_symbol_continue(char ch) {

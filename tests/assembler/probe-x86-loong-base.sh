@@ -3195,11 +3195,11 @@ cmp "$work/x86-eh-mini.bin" "$work/x86-eh-gnu.bin"
 # zero value. Require those independent ELF facts before normalization.
 if ! cmp -s "$work/x86-eh-mini.reloc" "$work/x86-eh-gnu.reloc"; then
  readelf -Ws "$work/x86-eh-mini.o" |
-   awk '$8==".Lminias_cfi_0" && $2=="0000000000000000" &&
+   awk '$8~/^\.Lminias_private_[0-9]+$/ && $2=="0000000000000000" &&
         $5=="LOCAL" && $7=="1" { found=1 } END { exit !found }'
  readelf -SW "$work/x86-eh-mini.o" |
    grep -Eq '^[[:space:]]*\[[[:space:]]*1\][[:space:]]+\.text[[:space:]]'
- sed 's/\.Lminias_cfi_0/.text/' "$work/x86-eh-mini.reloc" > "$work/x86-eh-mini-canonical.reloc"
+ sed -E 's/\.Lminias_private_[0-9]+/.text/' "$work/x86-eh-mini.reloc" > "$work/x86-eh-mini-canonical.reloc"
  cmp "$work/x86-eh-mini-canonical.reloc" "$work/x86-eh-gnu.reloc" || {
   diff -u "$work/x86-eh-gnu.reloc" "$work/x86-eh-mini.reloc" >&2 || true
   exit 1

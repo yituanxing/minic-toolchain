@@ -130,8 +130,13 @@ def main() -> int:
             return {"status": "ORACLE_ERROR", "path": rel, "message": str(exc)}
 
         failed_dims = sorted(k for k, ok in data["dimensions"].items() if not ok)
+        incomplete = bool(data.get("inconclusive", False))
+        other_diff = any(not ok for k, ok in data["dimensions"].items()
+                         if k != "known_relocation_widths")
+        classification = ("DIFF" if other_diff else
+                          "INCONCLUSIVE" if incomplete else "PASS")
         return {
-            "status": "PASS" if bool(data["equal"]) else "DIFF",
+            "status": classification,
             "path": rel,
             "strict_equal": bool(data.get("strict_equal", False)),
             "failed_dimensions": failed_dims,
@@ -172,6 +177,7 @@ def main() -> int:
     lines = [
         "MINIAS_SEMANTIC_SUMMARY "
         f"selected={len(rows)} semantic_equal={status['PASS']} semantic_diff={status['DIFF']} "
+        f"inconclusive={status['INCONCLUSIVE']} "
         f"strict_equal={strict} gnu_fail={status['GNU_FAIL']} "
         f"minias_fail={status['MINIAS_FAIL']} oracle_error={status['ORACLE_ERROR']} "
         f"seconds={elapsed:.3f}",
@@ -190,7 +196,8 @@ def main() -> int:
     )
     if infrastructure_failures:
         return 2
-    if args.require_equal and status["DIFF"]:
+    if args.require_equal and (status["DIFF"] or status["INCONCLUSIVE"] or
+                               status["PASS"] != len(rows)):
         return 1
     return 0
 

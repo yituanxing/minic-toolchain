@@ -2275,7 +2275,11 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
                     free(m);return false;
                 }
                 *m->operands[1].difference=diff;
-                as->layout_sensitive=true;
+                /* The typed symbol difference is resolved against finalized
+                 * fragment anchors by X64_ALU_IMM emission. Its instruction
+                 * width is already conservatively fixed by x64_measure, so
+                 * it must not force a whole-source parser replay when an
+                 * unrelated branch grows during layout. */
                 goto done;
             }
         }
@@ -3276,8 +3280,47 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
 }
 
 static bool x64_code_align(MiniAs *as,int section,size_t n) {
-    static const unsigned char nop=0x90;
-    while(n-- != 0U) if (!minias_emit_instruction_bytes(as,section,&nop,1U))return false;
+    /* GNU as x86-64 code alignment uses Intel multi-byte NOPs, not a run
+     * of 0x90 bytes. Keep the exact GNU profile (1..11 bytes) in the Target,
+     * while Common owns the ALIGN fragment and atomically commits its bytes.
+     * Longer gaps are decomposed into 11-byte + remaining legal NOPs. */
+    static const unsigned char nops[11][11]={
+        {0x90},
+        {0x66,0x90},
+        {0x0f,0x1f,0x00},
+        {0x0f,0x1f,0x40,0x00},
+        {0x0f,0x1f,0x44,0x00,0x00},
+        {0x66,0x0f,0x1f,0x44,0x00,0x00},
+        {0x0f,0x1f,0x80,0x00,0x00,0x00,0x00},
+        {0x0f,0x1f,0x84,0x00,0x00,0x00,0x00,0x00},
+        {0x66,0x0f,0x1f,0x84,0x00,0x00,0x00,0x00,0x00},
+        {0x66,0x2e,0x0f,0x1f,0x84,0x00,0x00,0x00,0x00,0x00},
+        {0x66,0x66,0x2e,0x0f,0x1f,0x84,0x00,0x00,0x00,0x00,0x00}
+    };
+    /* GNU GAS leaves a single 0x90 at the beginning of a code-alignment
+     * fragment immediately following a raw DATA fragment, then fills the
+     * remainder with its canonical multi-byte table. This differs from
+     * alignment after a machine INSN (or another ALIGN) and matters to
+     * byte-exact Linux .S comparisons. The current retained statement IDs
+     * let the Target inspect its immediate predecessor without reparsing. */
+    if(n!=0U && as->emitting_fragment && as->emitting_fragment_id!=0U &&
+       as->emitting_fragment_id<as->stmt_count) {
+        const MiniAsStmt *owner=&as->stmts[as->emitting_fragment_id];
+        const MiniAsStmt *previous=&as->stmts[as->emitting_fragment_id-1U];
+        if(previous->kind==MINIAS_STMT_DATA && previous->section==section &&
+           previous->subsection==owner->subsection &&
+           previous->offset<=UINT64_MAX-previous->size &&
+           previous->offset+previous->size==owner->offset) {
+            if(!minias_emit_instruction_bytes(as,section,nops[0],1U))return false;
+            --n;
+        }
+    }
+    while(n!=0U) {
+        size_t width=n>11U?11U:n;
+        if(!minias_emit_instruction_bytes(as,section,nops[width-1U],width))
+            return false;
+        n-=width;
+    }
     return true;
 }
 

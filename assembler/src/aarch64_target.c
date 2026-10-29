@@ -1948,44 +1948,158 @@ static bool a64_fold_absolute_memory_address(MiniAs *as,MiniAsStmt *stmt) {
     return true;
 }
 
-/* GNU ARM64 trampolines materialize a difference of earlier same-subsection
- * labels as a normal add/sub immediate (e.g. 1b-vector_start+4). The
- * Common symbol evaluator validates the cancellation, while the existing
- * target ISA decoder retains register/range/shift validation. */
-static bool a64_fold_local_alu_immediate(MiniAs *as,MiniAsStmt *stmt) {
-    const char *op=stmt->op,*original=stmt->args;
-    const char *hash,*comma;
-    char numeric[32],*out;
-    int64_t value;
-    int written;
-    size_t prefix;
-    if(strcmp(op,"add") && strcmp(op,"sub") &&
-       strcmp(op,"adds") && strcmp(op,"subs") &&
-       strcmp(op,"cmp") && strcmp(op,"cmn"))return true;
-    hash=strchr(original,'#');
-    if(!hash)return true;
-    comma=strchr(hash,',');
-    if(comma)return true; /* LSL #12 remains a separate GNU encoding. */
-    if(!minias_evaluate_same_subsection_difference(as,hash+1U,&value))
-        return true; /* defer genuinely unresolved/relocatable operands */
-    written=snprintf(numeric,sizeof(numeric),"%lld",(long long)value);
-    if(written<0 || (size_t)written>=sizeof(numeric))return false;
-    prefix=(size_t)(hash-original);
-    if(prefix>SIZE_MAX-(size_t)written-2U)return false;
-    out=malloc(prefix+(size_t)written+2U);
-    if(!out) {
-        minias_set_error(as,"out-of-memory:aarch64-fold-alu");
-        return false;
+/* A layout-dependent same-section difference must never be folded at parse
+ * time. A later .space/.fill fixed point can move either anchor, even when
+ * both labels already have an initial offset. Keep the two typed symbol
+ * references in MCInst and resolve them at final emission instead.
+ *
+ * The numeric spelling is only a temporary input to the existing target
+ * register/addressing parser. It is NOT the retained semantic operand. */
+typedef enum A64DeferredDifferenceUse {
+    A64_DEFERRED_NONE,
+    A64_DEFERRED_IMMEDIATE,
+    A64_DEFERRED_BRANCH_ADDEND
+} A64DeferredDifferenceUse;
+
+/* Preserve the symbol pair while freezing only the purely absolute suffix
+ * at its lexical site. For example, '(end-start)+(2*4)' retains end/start
+ * and adds eight to the positive symbol's addend. A later fragment growth
+ * can then change the distance without changing the lexical constant. */
+static bool a64_parse_deferred_difference(MiniAs *as,const char *source,
+                                          MiniAsSymbolDifference *difference) {
+    char *copy=minias_strdup(source),*body,*p,*split=NULL;
+    unsigned depth=0U;
+    int64_t suffix=0;
+    bool ok=false;
+    if(!copy)return false;
+    body=minias_expr_strip_outer_parens(minias_trim(copy));
+    for(p=body;*p;++p) {
+        if(*p=='(')++depth;
+        else if(*p==')') {
+            if(!depth)goto done;
+            --depth;
+        }else if(*p=='+' && depth==0U && strchr(body,'-') &&
+                 p>strchr(body,'-')) {
+            split=p;break;
+        }
     }
+    if(split) {
+        *split++='\0';
+        if(!minias_evaluate_absolute_expression(as,minias_trim(split),&suffix))
+            goto done;
+    }
+    if(!minias_parse_symbol_difference(minias_trim(body),difference))goto done;
+    if(!minias_checked_add_i64(difference->positive.addend,suffix,
+                               &difference->positive.addend))goto done;
+    ok=true;
+done:
+    free(copy);
+    return ok;
+}
+
+static bool a64_replace_argument_range(MiniAs *as,MiniAsStmt *stmt,
+                                       const char *begin,const char *end,
+                                       const char *replacement) {
+    const char *original=stmt->args;
+    size_t prefix=(size_t)(begin-original),suffix=strlen(end);
+    size_t n=strlen(replacement);
+    char *out;
+    if(prefix>SIZE_MAX-suffix-1U || n>SIZE_MAX-prefix-suffix-1U)
+        return false;
+    out=malloc(prefix+n+suffix+1U);
+    if(!out){minias_set_error(as,"out-of-memory:aarch64-deferred-operand");return false;}
     memcpy(out,original,prefix);
-    out[prefix]='#';
-    memcpy(out+prefix+1U,numeric,(size_t)written);
-    out[prefix+1U+(size_t)written]='\0';
+    memcpy(out+prefix,replacement,n);
+    memcpy(out+prefix+n,end,suffix+1U);
     free(stmt->args);stmt->args=out;
     return true;
 }
 
+static bool a64_capture_deferred_difference(MiniAs *as,MiniAsStmt *stmt,
+                                            MiniAsSymbolDifference *difference,
+                                            A64DeferredDifferenceUse *use) {
+    const char *args=stmt->args,*op=stmt->op;
+    const char *begin=NULL,*end=NULL;
+    unsigned condition;
+    bool alu=!strcmp(op,"add") || !strcmp(op,"sub") ||
+             !strcmp(op,"adds") || !strcmp(op,"subs") ||
+             !strcmp(op,"cmp") || !strcmp(op,"cmn");
+    bool memory=!strcmp(op,"ldr") || !strcmp(op,"str") ||
+                !strcmp(op,"ldrb") || !strcmp(op,"strb") ||
+                !strcmp(op,"ldrh") || !strcmp(op,"strh") ||
+                !strcmp(op,"stp") || !strcmp(op,"ldp") ||
+                !strcmp(op,"ldpsw") || !strcmp(op,"stnp") ||
+                !strcmp(op,"ldnp");
+    bool branch=!strcmp(op,"b") || !strcmp(op,"bl") ||
+                !strcmp(op,"cbz") || !strcmp(op,"cbnz") ||
+                !strcmp(op,"tbz") || !strcmp(op,"tbnz") ||
+                a64_branch_condition(op,&condition);
+    *use=A64_DEFERRED_NONE;
+    if(alu) {
+        const char *hash=strchr(args,'#');
+        if(hash && strchr(hash,',')==NULL){begin=hash+1U;end=args+strlen(args);}
+    }else if(memory) {
+        const char *open=strchr(args,'['),*close=open?strchr(open,']'):NULL;
+        const char *hash=open?strchr(open,'#'):NULL;
+        if(hash && close && hash<close){begin=hash+1U;end=close;}
+        else if(close) {
+            hash=strchr(close,'#');
+            if(hash){begin=hash+1U;end=args+strlen(args);}
+        }
+    }
+    if(begin && end && begin<end) {
+        char expression[256];
+        size_t n=(size_t)(end-begin);
+        if(n<sizeof(expression)) {
+            memcpy(expression,begin,n);expression[n]='\0';
+            if(a64_parse_deferred_difference(as,minias_trim(expression),difference)) {
+                if(!a64_replace_argument_range(as,stmt,begin,end,"0"))return false;
+                *use=A64_DEFERRED_IMMEDIATE;
+                return true;
+            }
+        }
+    }
+    /* GNU branch 'b label+(end-begin)' retains the base relocation and the
+     * final section-relative addend independently. This also works for
+     * CBZ/TBZ and conditional branches with a register prefix. */
+    if(branch) {
+        const char *plus;
+        for(plus=strchr(args,'+');plus;plus=strchr(plus+1U,'+')) {
+            const char *open=plus+1U,*close=NULL;
+            unsigned depth=0U;
+            while(isspace((unsigned char)*open))++open;
+            if(*open=='(') {
+                const char *cursor;
+                for(cursor=open;*cursor;++cursor) {
+                    if(*cursor=='(')++depth;
+                    else if(*cursor==')') {
+                        if(!depth)break;
+                        if(--depth==0U){close=cursor;break;}
+                    }
+                }
+            }
+            if(close) {
+                char expression[256];
+                size_t n=(size_t)(close-(open+1U));
+                const char *tail=close+1U;
+                while(isspace((unsigned char)*tail))++tail;
+                if(*tail=='\0' && n<sizeof(expression)) {
+                    memcpy(expression,open+1U,n);expression[n]='\0';
+                    if(a64_parse_deferred_difference(as,minias_trim(expression),difference)) {
+                        if(!a64_replace_argument_range(as,stmt,plus,tail,""))return false;
+                        *use=A64_DEFERRED_BRANCH_ADDEND;
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    return true;
+}
+
 static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
+    MiniAsSymbolDifference deferred_difference;
+    A64DeferredDifferenceUse deferred_use=A64_DEFERRED_NONE;
     /* Bind aliases at this precise instruction site; subsequent .unreq
      * or redefining an alias cannot retroactively change prior MCInsts. */
     if(as->target_state) {
@@ -1996,10 +2110,11 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         }
         free(stmt->args);stmt->args=expanded;
     }
+    if(!a64_capture_deferred_difference(as,stmt,&deferred_difference,
+                                        &deferred_use))return false;
     if(!a64_fold_absolute_memory_address(as,stmt))return false;
-    if(!a64_fold_local_alu_immediate(as,stmt))return false;
     MiniAsMCInst *inst = calloc(1U, sizeof(*inst) +
-                                4U * sizeof(MiniAsMCOperand));
+                                5U * sizeof(MiniAsMCOperand));
     unsigned reg, imm;
     bool reg64;
     char first[80], second[80];
@@ -3573,8 +3688,11 @@ lane_complete:;
         inst->operands[0].immediate = imm;
     } else if (strcmp(op, "b") == 0 || strcmp(op, "bl") == 0) {
         MiniAsSymbolExpr expr;
-        if (!minias_parse_symbol_addend(args, &expr) &&
-            !minias_fold_local_difference_addend(as,args,&expr)) {
+        /* The symbol-difference addend, when present, is held separately
+         * in MCInst until final layout. Never use the old parse-time local
+         * difference folding shortcut: it can freeze a stale displacement
+         * when a forward .space changes the section after parsing. */
+        if (!minias_parse_symbol_addend(args, &expr)) {
             minias_set_error(as, "bad-aarch64-branch-target:%s:line=%zu",
                              args, stmt->line);
             free(inst);
@@ -3666,6 +3784,22 @@ lane_complete:;
     if(0) {
         /* The AArch64 integer/memory family is parsed into typed operands. */
     }
+    if(deferred_use!=A64_DEFERRED_NONE) {
+        MiniAsMCOperand *slot;
+        if(inst->count>=5U) {
+            minias_set_error(as,"aarch64-deferred-operand-capacity");
+            free(inst);return false;
+        }
+        slot=&inst->operands[inst->count];
+        slot->difference=malloc(sizeof(deferred_difference));
+        if(!slot->difference) {
+            minias_set_error(as,"out-of-memory:aarch64-deferred-difference");
+            free(inst);return false;
+        }
+        *slot->difference=deferred_difference;
+        slot->kind=MINIAS_MC_SYMBOL_DIFFERENCE;
+        ++inst->count;
+    }
     stmt->mcinst = inst;
     return true;
 }
@@ -3675,9 +3809,40 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
     uint32_t code;
     MiniAsFixupKind fixup = MINIAS_FIXUP_NONE;
     const MiniAsSymbolExpr *expr = NULL;
+    MiniAsSymbolExpr resolved_branch_expr;
+    int64_t deferred_value=0;
+    bool has_deferred=false;
     if (inst == NULL) {
         minias_set_error(as, "missing-aarch64-mcinst:line=%zu", stmt->line);
         return false;
+    }
+    if(inst->count!=0U &&
+       inst->operands[inst->count-1U].kind==MINIAS_MC_SYMBOL_DIFFERENCE) {
+        has_deferred=true;
+        if(!minias_resolve_symbol_difference(as,
+             inst->operands[inst->count-1U].difference,&deferred_value)) {
+            minias_set_error(as,"unresolved-aarch64-layout-difference:line=%zu",
+                             stmt->line);
+            return false;
+        }
+        switch(inst->opcode) {
+            case A64_MC_ADD_IMM: case A64_MC_SUB_IMM:
+            case A64_MC_ADDS_IMM: case A64_MC_SUBS_IMM:
+            case A64_MC_CMP_IMM: case A64_MC_CMN_IMM:
+            case A64_MC_LDR: case A64_MC_STR:
+            case A64_MC_LDRB: case A64_MC_STRB:
+            case A64_MC_LDRH: case A64_MC_STRH:
+            case A64_MC_LDST_SCALED: case A64_MC_LDST_UNSCALED:
+            case A64_MC_STP: case A64_MC_LDP: case A64_MC_LDPSW:
+            case A64_MC_B: case A64_MC_BL:
+            case A64_MC_BCOND: case A64_MC_CBZ: case A64_MC_CBNZ:
+            case A64_MC_TBZ: case A64_MC_TBNZ:
+                break;
+            default:
+                minias_set_error(as,"unsupported-aarch64-deferred-form:%u",
+                                 inst->opcode);
+                return false;
+        }
     }
     switch (inst->opcode) {
         case A64_MC_LDR_LITERAL: {
@@ -4220,7 +4385,17 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
             bool sf = inst->operands[0].register_64;
             unsigned rd = inst->operands[0].reg;
             unsigned rn = inst->operands[1].reg;
-            unsigned imm = (unsigned)inst->operands[2].immediate;
+            uint64_t resolved_imm=has_deferred?(uint64_t)deferred_value:
+                                            inst->operands[2].immediate;
+            unsigned imm;
+            if(has_deferred && (deferred_value<0 ||
+               (resolved_imm>4095U &&
+                (resolved_imm%4096U!=0U || resolved_imm/4096U>4095U)))) {
+                minias_set_error(as,"aarch64-final-alu-imm-out-of-range:line=%zu",
+                                 stmt->line);
+                return false;
+            }
+            imm=(unsigned)resolved_imm;
             bool shift12=imm>4095U ||
                            (inst->encoding&UINT32_C(0x00400000))!=0U;
             if(imm>4095U)imm>>=12U;
@@ -4246,7 +4421,14 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
         case A64_MC_CMP_IMM:
         case A64_MC_CMN_IMM: {
             bool sf = inst->operands[0].register_64;
-            uint64_t imm=inst->operands[1].immediate;
+            uint64_t imm=has_deferred?(uint64_t)deferred_value:
+                                      inst->operands[1].immediate;
+            if(has_deferred && (deferred_value<0 ||
+               (imm>4095U && (imm%4096U!=0U || imm/4096U>4095U)))) {
+                minias_set_error(as,"aarch64-final-compare-imm-out-of-range:line=%zu",
+                                 stmt->line);
+                return false;
+            }
             bool shift12=imm>4095U;
             if(shift12)imm>>=12U;
             code = (inst->opcode==A64_MC_CMP_IMM ?
@@ -4263,6 +4445,22 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
                  (inst->operands[1].reg<<5U)|inst->operands[0].reg;
             break;
         case A64_MC_LDST_SCALED:
+            if(has_deferred) {
+                uint32_t base=inst->encoding&~UINT32_C(0x00400000);
+                unsigned unit=base==UINT32_C(0xbd000000)?4U:
+                              base==UINT32_C(0xfd000000)?8U:
+                              base==UINT32_C(0x3d800000)?16U:0U;
+                if(unit==0U || deferred_value<0 ||
+                   deferred_value%(int64_t)unit!=0 ||
+                   deferred_value/(int64_t)unit>4095) {
+                    minias_set_error(as,"aarch64-final-fp-memory-offset-out-of-range");
+                    return false;
+                }
+                code=inst->encoding |
+                     ((uint32_t)(deferred_value/(int64_t)unit)<<10U) |
+                     (inst->operands[1].reg<<5U)|inst->operands[0].reg;
+                break;
+            }
             code=inst->encoding|
                  ((uint32_t)inst->operands[2].immediate<<10U)|
                  (inst->operands[1].reg<<5U)|inst->operands[0].reg;
@@ -4275,8 +4473,14 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
                   (uint32_t)inst->operands[0].immediate:inst->operands[0].reg);
             break;
         case A64_MC_LDST_UNSCALED:
+            if(has_deferred &&
+               (deferred_value<-256 || deferred_value>255)) {
+                minias_set_error(as,"aarch64-final-unscaled-offset-out-of-range");
+                return false;
+            }
             code=inst->encoding |
-                (((uint32_t)inst->operands[2].immediate&511U)<<12U) |
+                (((uint32_t)(has_deferred?(uint64_t)deferred_value:
+                                            inst->operands[2].immediate)&511U)<<12U) |
                 (inst->operands[1].reg<<5U)|inst->operands[0].reg;
             break;
         case A64_MC_LDR:
@@ -4293,8 +4497,38 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
                 inst->opcode == A64_MC_STRB ? UINT32_C(0x39000000) :
                 inst->opcode == A64_MC_LDRH ? UINT32_C(0x79400000) :
                                               UINT32_C(0x79000000);
-            code = base | ((uint32_t)inst->operands[2].immediate << 10U) |
-                   (inst->operands[1].reg << 5U) | inst->operands[0].reg;
+            if(has_deferred) {
+                unsigned unit=(inst->opcode==A64_MC_LDRB ||
+                               inst->opcode==A64_MC_STRB)?1U:
+                              (inst->opcode==A64_MC_LDRH ||
+                               inst->opcode==A64_MC_STRH)?2U:sf?8U:4U;
+                if(deferred_value>=0 && deferred_value%(int64_t)unit==0 &&
+                   deferred_value/(int64_t)unit<=4095) {
+                    code=base |
+                         ((uint32_t)(deferred_value/(int64_t)unit)<<10U) |
+                         (inst->operands[1].reg<<5U)|inst->operands[0].reg;
+                }else if(deferred_value>=-256 && deferred_value<=255) {
+                    uint32_t unscaled;
+                    /* Standard A64 LD/ST unscaled encodings replace the
+                     * unsigned-imm12 family, retaining width/load bits. */
+                    unscaled=(inst->opcode==A64_MC_LDR ?
+                              (sf?UINT32_C(0xf8400000):UINT32_C(0xb8400000)):
+                              inst->opcode==A64_MC_STR ?
+                              (sf?UINT32_C(0xf8000000):UINT32_C(0xb8000000)):
+                              inst->opcode==A64_MC_LDRB?UINT32_C(0x38400000):
+                              inst->opcode==A64_MC_STRB?UINT32_C(0x38000000):
+                              inst->opcode==A64_MC_LDRH?UINT32_C(0x78400000):
+                                                       UINT32_C(0x78000000));
+                    code=unscaled |
+                         (((uint32_t)deferred_value&511U)<<12U) |
+                         (inst->operands[1].reg<<5U)|inst->operands[0].reg;
+                }else {
+                    minias_set_error(as,"aarch64-final-memory-offset-out-of-range:line=%zu",
+                                     stmt->line);
+                    return false;
+                }
+            }else code = base | ((uint32_t)inst->operands[2].immediate << 10U) |
+                        (inst->operands[1].reg << 5U) | inst->operands[0].reg;
             break;
         }
         case A64_MC_STP:
@@ -4303,6 +4537,18 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
             bool sf = inst->operands[0].register_64;
             bool qpair=(inst->encoding&UINT32_C(0x100))!=0U;
             unsigned mode=inst->encoding&3U;
+            int64_t pair_imm=(int64_t)inst->operands[3].immediate;
+            if(has_deferred) {
+                unsigned unit=qpair?16U:
+                              inst->opcode==A64_MC_LDPSW?4U:sf?8U:4U;
+                if(deferred_value%(int64_t)unit!=0 ||
+                   deferred_value/(int64_t)unit < -64 ||
+                   deferred_value/(int64_t)unit > 63) {
+                    minias_set_error(as,"aarch64-final-pair-offset-out-of-range");
+                    return false;
+                }
+                pair_imm=deferred_value/(int64_t)unit;
+            }
             uint32_t base = inst->opcode==A64_MC_LDPSW?
                 (inst->encoding==1U?UINT32_C(0x69c00000):
                  inst->encoding==2U?UINT32_C(0x68c00000):
@@ -4327,7 +4573,7 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
             } else if(sf && inst->opcode!=A64_MC_LDPSW)
                 base |= UINT32_C(0x80000000);
             code = base |
-                   (((uint32_t)inst->operands[3].immediate & 127U) << 15U) |
+                   (((uint32_t)pair_imm & 127U) << 15U) |
                    (inst->operands[1].reg << 10U) |
                    (inst->operands[2].reg << 5U) | inst->operands[0].reg;
             break;
@@ -4349,6 +4595,16 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
             bool conditional=cbz||bcond;
             unsigned slot=testbit?2U:cbz?1U:0U;
             expr=inst->operands[slot].symbol;
+            if(has_deferred) {
+                if(!minias_checked_add_i64(expr->addend,deferred_value,
+                                           &resolved_branch_expr.addend)) {
+                    minias_set_error(as,"aarch64-final-branch-addend-overflow");
+                    return false;
+                }
+                memcpy(resolved_branch_expr.name,expr->name,
+                       sizeof(resolved_branch_expr.name));
+                expr=&resolved_branch_expr;
+            }
             if(testbit) {
                 unsigned bit=(unsigned)inst->operands[1].immediate;
                 code=(inst->opcode==A64_MC_TBZ ?

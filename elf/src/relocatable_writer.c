@@ -832,6 +832,7 @@ bool minielf_build_relocatable(const MiniElfRelocatableSpec *spec,
     for (i = 0U; i < spec->symbol_count; ++i) {
         const MiniElfWriteSymbol *symbol = &spec->symbols[i];
         size_t offset;
+        uint16_t symbol_section_index=symbol->section_index;
 
         if (symbol_output_indices[i] == 0U ||
             symbol_output_indices[i] >= symbol_count) {
@@ -840,12 +841,22 @@ bool minielf_build_relocatable(const MiniElfRelocatableSpec *spec,
         }
         offset = (size_t)headers[symtab_index].offset +
                  symbol_output_indices[i] * sym_size;
+        if(symbol->group_signature_section) {
+            size_t group;
+            for(group=0U;group<group_count;++group)
+                if(group_signature_symbols[group]==i)break;
+            if(group==group_count || group_header_indices[group]>UINT16_MAX) {
+                set_error(error_out,MINIELF_WRITE_INVALID_SYMBOL);
+                goto done;
+            }
+            symbol_section_index=(uint16_t)group_header_indices[group];
+        }
         if (!write_symbol(image + offset,
                           spec,
                           symbol_name_offsets[i],
                           symbol->info,
                           symbol->other,
-                          symbol->section_index,
+                          symbol_section_index,
                           symbol->value,
                           symbol->size)) {
             set_error(error_out, MINIELF_WRITE_INVALID_SYMBOL);

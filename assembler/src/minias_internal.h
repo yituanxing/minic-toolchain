@@ -13,6 +13,7 @@
 #define MINIAS_SHF_STRINGS 32ULL
 #define MINIAS_SHF_TLS 1024ULL
 #define MINIAS_SHF_GROUP 512ULL
+#define MINIAS_SHF_GNU_RETAIN (1ULL << 21)
 #define MINIAS_SHT_PROGBITS 1U
 #define MINIAS_SHT_NOTE 7U
 #define MINIAS_SHT_INIT_ARRAY 14U
@@ -27,6 +28,7 @@
 #define MINIAS_STT_NOTYPE 0U
 #define MINIAS_STT_OBJECT 1U
 #define MINIAS_STT_FUNC 2U
+#define MINIAS_STT_FILE 4U
 #define MINIAS_STT_TLS 6U
 #define MINIAS_STT_GNU_IFUNC 10U
 #define MINIAS_STV_DEFAULT 0U
@@ -79,6 +81,9 @@ typedef struct MiniAsSymbol {
     bool mutable_absolute_set; /* GNU .set reassignment, unlike .equ */
     bool explicit_local_binding; /* .local before .comm denotes real BSS */
     size_t alias_target_index;
+    /* A resolved section-relative alias still depends on its target's
+     * Fragment anchor.  Preserve that edge across every MCLayout pass. */
+    bool has_alias_dependency;
     int64_t alias_addend;
     size_t alias_line;
     /* GNU .set CONST + symbol - .section: deferred absolute offset
@@ -311,6 +316,9 @@ typedef struct MiniAsStmt {
     uint64_t align_max_skip;
     /* Common MCLayout owns every captured .org expression, never Target. */
     MiniAsOrgMode org_mode;
+    /* Only the SOURCE compatibility variant needs its retained GNU text;
+     * fixed-form constraints use the typed fields below. */
+    char *org_expression;
     uint64_t org_target;
     size_t org_symbol_index;
     int64_t org_addend;
@@ -452,6 +460,11 @@ typedef struct MiniAs {
     char **debug_files;
     size_t debug_file_capacity;
     size_t debug_file_max;
+    /* Unnumbered GNU .file directives are independent STT_FILE symbols,
+     * not indexed .loc file records nor symbols in the user-name hash. */
+    char **cu_files;
+    size_t cu_file_count;
+    size_t cu_file_capacity;
     MiniAsDebugLoc *debug_locs;
     size_t debug_loc_count;
     size_t debug_loc_capacity;
@@ -498,6 +511,7 @@ bool minias_grow_array(void **, size_t *, size_t, size_t);
 MiniAsSubsection *minias_find_subsection(MiniAs *, int, uint32_t);
 MiniAsSubsection *minias_ensure_subsection(MiniAs *, int, uint32_t);
 bool minias_finalize_subsection_layout(MiniAs *);
+bool minias_refresh_symbol_aliases(MiniAs *);
 bool minias_force_long_branch_for_stmt(const MiniAs *, size_t);
 void minias_layout_destroy(MiniAs *);
 bool minias_solve_fragment_layout(MiniAs *, size_t **, size_t *, size_t *,
@@ -572,6 +586,12 @@ bool minias_section_append(MiniAs *as, int section_index, const void *data, size
 bool minias_section_append_zero(MiniAs *as, int section_index, size_t size);
 void minias_set_error(MiniAs *as, const char *format, ...);
 char *minias_strdup(const char *text);
+/* Synthetic labels use a namespace unavailable to GNU source tokens.
+ * ELF serialization gives them collision-free printable names without
+ * changing their stable internal SymbolIDs. */
+bool minias_make_private_symbol_name(char *out, size_t capacity,
+                                     const char *kind, size_t ordinal);
+bool minias_is_private_symbol_name(const char *name);
 char *minias_trim(char *text);
 /* Common balanced lexical grouping, Target-private operand grammar. */
 bool minias_split_mc_operands(const char *,char *const [],const size_t [],

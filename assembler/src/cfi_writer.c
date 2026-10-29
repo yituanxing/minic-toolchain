@@ -160,15 +160,16 @@ static bool emit_eh_cie(MiniAs *as,int sec,bool simple,bool signal,
     return finish_length(as,sec,begin);
 }
 
-bool minias_cfi_emit(MiniAs *as) {
+/* One serializer invocation per selected output section. In particular,
+ * selecting both .eh_frame and .debug_frame must not mean choosing whichever
+ * boolean happens to be true: they have different CIE pointers and relocation
+ * policies, but share precisely the same finalized CFI event stream. */
+static bool cfi_emit_section(MiniAs *as,bool eh) {
     size_t i;
     int section;
     MiniAsSection *data;
-    bool eh=as->cfi_eh_frame;
     bool cie_known[2][2]={{false,false},{false,false}};
     size_t cie_offset[2][2]={{0U,0U},{0U,0U}};
-    if((!as->cfi_debug_frame && !eh) || as->cfi_proc_count==0U)
-        return true;
     if(eh && (!as->target->cfi_implicit_eh_frame ||
               minias_cfi_abi(as).address_size!=(as->output_elf32?4U:8U) ||
               as->target->fixup_relocation_type(MINIAS_FIXUP_PREL32,4U)==0U)) {
@@ -276,5 +277,12 @@ bool minias_cfi_emit(MiniAs *as) {
         if(!finish_length(as,section,base))return false;
         data=&as->sections[(size_t)section];
     }
+    return true;
+}
+
+bool minias_cfi_emit(MiniAs *as) {
+    if(as->cfi_proc_count==0U)return true;
+    if(as->cfi_eh_frame && !cfi_emit_section(as,true))return false;
+    if(as->cfi_debug_frame && !cfi_emit_section(as,false))return false;
     return true;
 }

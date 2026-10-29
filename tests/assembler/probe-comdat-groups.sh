@@ -46,22 +46,37 @@ readelf -rW "$work/mini.o" | grep -q 'R_X86_64_32'
 cp "$work/mini.o" "$work/mini2.o"
 ld -r "$work/mini.o" "$work/mini2.o" -o "$work/merged.o"
 test "$(readelf -Ws "$work/merged.o" | grep -Ec ' FUNC .* shared$')" -eq 1
-# Fail-closed: repeated section name cannot silently change its group.
-cat >"$work/bad.s" <<'SRC'
+# GNU permits two distinct COMDAT sections with the same ELF section name
+# when their group signatures differ. A Section key cannot be only its name.
+cat >"$work/same-name.s" <<'SRC'
 .section .text.same,"axG",@progbits,first,comdat
-nop
+.long 0x01020304
 .section .text.same,"axG",@progbits,second,comdat
-nop
+.long 0x11223344
 SRC
-if "$MINIAS" --target=x86_64 -o "$work/bad.o" "$work/bad.s" >/dev/null 2>&1; then
-    echo 'MiniAS accepted inconsistent COMDAT membership' >&2
-    exit 1
-fi
-test ! -e "$work/bad.o"
+"$MINIAS" --target=x86_64 -o "$work/same-mini.o" "$work/same-name.s"
+as --64 -o "$work/same-gnu.o" "$work/same-name.s"
+readelf --section-groups "$work/same-mini.o" >"$work/same-mini.groups"
+readelf --section-groups "$work/same-gnu.o" >"$work/same-gnu.groups"
+python3 - "$work/same-mini.groups" "$work/same-gnu.groups" <<'PY_SAME'
+import re, sys
+for path in sys.argv[1:]:
+    text=open(path,encoding='utf-8').read()
+    signatures=re.findall(r'COMDAT group section.*?\[(first|second)\]',text)
+    names=re.findall(r'\[\s*\d+\]\s+(\.text\.same)\s*$',text,re.M)
+    if sorted(signatures)!=['first','second'] or len(names)!=2:
+        raise SystemExit(f'same-name COMDAT identity loss: {path}\n{text}')
+print('MINIAS_COMDAT_DUPLICATE_SECTION=PASS signatures=2 same_name_members=2')
+PY_SAME
 echo 'MINIAS_COMDAT_GROUP_LINK=PASS ld_multiple_objects=deduplicated'
 
 # Exercise the same ObjectModel on genuine ELF32 RV32I, including
 # relocation sections grouped with data, and GNU ld -r COMDAT dedup.
+if ! command -v riscv64-linux-gnu-as >/dev/null ||
+   ! command -v riscv64-linux-gnu-ld >/dev/null; then
+    echo 'MINIAS_COMDAT_ELF32=SKIP(toolchain-unavailable) GNU_RV32_REQUIRED=YES'
+    exit 0
+fi
 cat >"$work/rv32-group.s" <<'SRC_RV'
 .section .text.rv32,"axG",@progbits,rv32_comdat,comdat
 .globl rv32_comdat
