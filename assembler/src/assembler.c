@@ -466,6 +466,142 @@ MiniAsSymbol *minias_get_symbol(MiniAs *as, const char *name, bool create) {
     return sym;
 }
 
+/* Stable parse-time NameIds are intentionally NOT Object SymbolIDs.  A
+ * machine operand may name a forward or external symbol during parsing,
+ * while the historical ELF symbol order is determined later by definitions
+ * and committed fixups.  Interning here may allocate only this name pool;
+ * it must never call minias_get_symbol(...,true). */
+static bool rebuild_symbol_name_index(MiniAs *as,size_t minimum) {
+    size_t capacity=16U,i;
+    size_t *slots;
+    while(capacity<minimum) {
+        if(capacity>SIZE_MAX/2U) {
+            minias_set_error(as,"symbol-name-index-too-large");
+            return false;
+        }
+        capacity*=2U;
+    }
+    slots=calloc(capacity,sizeof(*slots));
+    if(!slots) {
+        minias_set_error(as,"out-of-memory:symbol-name-index");
+        return false;
+    }
+    for(i=0U;i<as->symbol_name_count;++i) {
+        size_t slot=symbol_name_hash(as->symbol_names[i].name)&(capacity-1U);
+        while(slots[slot]!=0U)slot=(slot+1U)&(capacity-1U);
+        slots[slot]=i+1U;
+    }
+    free(as->symbol_name_slots);
+    as->symbol_name_slots=slots;
+    as->symbol_name_slot_capacity=capacity;
+    return true;
+}
+
+bool minias_symbol_name_intern(MiniAs *as,const char *name,
+                               MiniAsSymbolNameId *name_id) {
+    size_t slot,scanned;
+    if(as==NULL || name==NULL || *name=='\0' || name_id==NULL)return false;
+    /* A repeated operand must not trigger a table expansion merely because
+     * the pool is near its load threshold.  Name lookup has no side effect. */
+    if(as->symbol_name_slot_capacity!=0U) {
+        slot=symbol_name_hash(name)&(as->symbol_name_slot_capacity-1U);
+        for(scanned=0U;scanned<as->symbol_name_slot_capacity;++scanned) {
+            size_t encoded=as->symbol_name_slots[slot];
+            if(encoded==0U)break;
+            if(strcmp(as->symbol_names[encoded-1U].name,name)==0) {
+                *name_id=encoded-1U;
+                return true;
+            }
+            slot=(slot+1U)&(as->symbol_name_slot_capacity-1U);
+        }
+    }
+    if(as->symbol_name_count==SIZE_MAX) {
+        minias_set_error(as,"symbol-name-count-overflow");
+        return false;
+    }
+    if(as->symbol_name_slot_capacity==0U ||
+       as->symbol_name_count+1U>=as->symbol_name_slot_capacity/2U) {
+        size_t next=as->symbol_name_slot_capacity==0U?16U:
+                    as->symbol_name_slot_capacity*2U;
+        if(next<as->symbol_name_slot_capacity ||
+           !rebuild_symbol_name_index(as,next))return false;
+    }
+    slot=symbol_name_hash(name)&(as->symbol_name_slot_capacity-1U);
+    for(scanned=0U;scanned<as->symbol_name_slot_capacity;++scanned) {
+        size_t encoded=as->symbol_name_slots[slot];
+        if(encoded==0U)break;
+        slot=(slot+1U)&(as->symbol_name_slot_capacity-1U);
+    }
+    if(scanned==as->symbol_name_slot_capacity ||
+       as->symbol_name_count==SIZE_MAX ||
+       !minias_grow_array((void **)&as->symbol_names,
+                          &as->symbol_name_capacity,
+                          sizeof(*as->symbol_names),
+                          as->symbol_name_count+1U)) {
+        minias_set_error(as,"out-of-memory:symbol-name-pool");
+        return false;
+    }
+    as->symbol_names[as->symbol_name_count].name=minias_strdup(name);
+    if(as->symbol_names[as->symbol_name_count].name==NULL) {
+        minias_set_error(as,"out-of-memory:symbol-name");
+        return false;
+    }
+    *name_id=as->symbol_name_count;
+    as->symbol_name_slots[slot]=++as->symbol_name_count;
+    return true;
+}
+
+bool minias_bind_symbol_ref(MiniAs *as,const MiniAsSymbolExpr *expr,
+                            MiniAsSymbolRef *ref) {
+    MiniAsSymbolNameId name_id;
+    if(expr==NULL || ref==NULL ||
+       !minias_symbol_name_intern(as,expr->name,&name_id))return false;
+    ref->name_id=name_id;
+    ref->addend=expr->addend;
+    return true;
+}
+
+bool minias_bind_symbol_difference_ref(MiniAs *as,
+                                        const MiniAsSymbolDifference *expr,
+                                        MiniAsSymbolDifferenceRef *ref) {
+    if(expr==NULL || ref==NULL)return false;
+    return minias_bind_symbol_ref(as,&expr->positive,&ref->positive) &&
+           minias_bind_symbol_ref(as,&expr->negative,&ref->negative);
+}
+
+const MiniAsSymbol *minias_symbol_ref_lookup(const MiniAs *as,
+                                             MiniAsSymbolRef ref) {
+    size_t slot=0U,index=0U;
+    const char *name;
+    if(as==NULL || ref.name_id>=as->symbol_name_count)return NULL;
+    name=as->symbol_names[ref.name_id].name;
+    if(name==NULL || !find_symbol_slot(as,name,&slot,&index))return NULL;
+    return &as->symbols[index];
+}
+
+/* Difference arithmetic remains owned by Common.  The old resolver is the
+ * sole checked same-section/arithmetic authority until the expression
+ * engine itself accepts stable refs, so no ISA duplicates those rules. */
+bool minias_resolve_symbol_difference_ref(MiniAs *as,
+                                          const MiniAsSymbolDifferenceRef *expr,
+                                          int64_t *value) {
+    MiniAsSymbolDifference names={0};
+    const char *positive,*negative;
+    if(as==NULL || expr==NULL || value==NULL ||
+       expr->positive.name_id>=as->symbol_name_count ||
+       expr->negative.name_id>=as->symbol_name_count)return false;
+    positive=as->symbol_names[expr->positive.name_id].name;
+    negative=as->symbol_names[expr->negative.name_id].name;
+    if(positive==NULL || negative==NULL ||
+       strlen(positive)>=sizeof(names.positive.name) ||
+       strlen(negative)>=sizeof(names.negative.name))return false;
+    memcpy(names.positive.name,positive,strlen(positive)+1U);
+    memcpy(names.negative.name,negative,strlen(negative)+1U);
+    names.positive.addend=expr->positive.addend;
+    names.negative.addend=expr->negative.addend;
+    return minias_resolve_symbol_difference(as,&names,value);
+}
+
 static bool minias_record_fixup(MiniAs *as,
                       int section,
                       uint64_t offset,
@@ -592,11 +728,13 @@ static bool minias_commit_encode_result(MiniAs *as, const MiniAsStmt *owner) {
     }
     for (i = 0U; i < result->anchor_count; ++i) {
         const MiniAsEncodeAnchorRequest *request = &result->anchors[i];
-        if (request->section != owner->section ||
+        const char *name=request->name_id < as->symbol_name_count
+            ? as->symbol_names[request->name_id].name : NULL;
+        if (name==NULL || request->section != owner->section ||
             request->subsection != owner->subsection ||
             request->offset < owner->offset ||
             request->offset - owner->offset > owner->size ||
-            minias_get_symbol(as, request->name, false) != NULL) {
+            minias_get_symbol(as,name,false) != NULL) {
             minias_set_error(as, "invalid-encoded-anchor:line=%zu",
                              owner->line);
             return false;
@@ -606,7 +744,9 @@ static bool minias_commit_encode_result(MiniAs *as, const MiniAsStmt *owner) {
         const MiniAsEncodeFixupRequest *request = &result->fixups[i];
         if (request->section != owner->section ||
             request->fragment_offset > owner->size ||
-            request->width > owner->size - request->fragment_offset) {
+            request->width > owner->size - request->fragment_offset ||
+            request->symbol_ref.name_id >= as->symbol_name_count ||
+            as->symbol_names[request->symbol_ref.name_id].name == NULL) {
             minias_set_error(as, "invalid-encoded-fixup-commit:line=%zu",
                              owner->line);
             return false;
@@ -622,7 +762,8 @@ static bool minias_commit_encode_result(MiniAs *as, const MiniAsStmt *owner) {
     }
     for (i = 0U; i < result->anchor_count; ++i) {
         const MiniAsEncodeAnchorRequest *request = &result->anchors[i];
-        MiniAsSymbol *anchor = minias_get_symbol(as, request->name, true);
+        const char *name=as->symbol_names[request->name_id].name;
+        MiniAsSymbol *anchor = minias_get_symbol(as, name, true);
         if (anchor == NULL) return false;
         anchor->defined = true;
         anchor->section = request->section;
@@ -632,10 +773,11 @@ static bool minias_commit_encode_result(MiniAs *as, const MiniAsStmt *owner) {
     }
     for (i = 0U; i < result->fixup_count; ++i) {
         const MiniAsEncodeFixupRequest *request = &result->fixups[i];
+        const char *name=as->symbol_names[request->symbol_ref.name_id].name;
         if (!minias_record_fixup(as, request->section,
                                  owner->offset + request->fragment_offset,
                                  request->kind, request->width,
-                                 request->symbol_name, request->addend,
+                                 name, request->symbol_ref.addend,
                                  MINIAS_FIXUP_ORIGIN_FRAGMENT))
             return false;
         as->fixups[as->fixup_count - 1U].prefer_section_symbol =
@@ -891,6 +1033,10 @@ void minias_destroy(MiniAs *as) {
     }
     free(as->symbols);
     free(as->symbol_slots);
+    for (i = 0U; i < as->symbol_name_count; ++i)
+        free(as->symbol_names[i].name);
+    free(as->symbol_names);
+    free(as->symbol_name_slots);
     for (i = 0U; i < as->stmt_count; ++i) {
         free(as->stmts[i].op);
         free(as->stmts[i].args);
@@ -2024,19 +2170,21 @@ static bool handle_org(MiniAs *as, const char *args, size_t line) {
 bool minias_queue_literal(MiniAs *as,const MiniAsSymbolExpr *expression,
                           unsigned width,MiniAsSymbolExpr *pool_label) {
     MiniAsLiteral *entry;
+    MiniAsSymbolRef bound;
     size_t i;
     int written;
     if(!as->target->supports_literal_pools || as->current_section<0 ||
        !expression || !pool_label || (width!=4U && width!=8U)) {
         minias_set_error(as,"unsupported-target-literal-pool");return false;
     }
+    if(!minias_bind_symbol_ref(as,expression,&bound))return false;
     for(i=0U;i<as->literal_count;++i) {
         entry=&as->literals[i];
         if(!entry->emitted && entry->section==as->current_section &&
            entry->subsection==as->current_subsection &&
            entry->width==width &&
-           entry->expression.addend==expression->addend &&
-           !strcmp(entry->expression.name,expression->name)) {
+           entry->expression.addend==bound.addend &&
+           entry->expression.name_id==bound.name_id) {
             written=snprintf(pool_label->name,sizeof(pool_label->name),
                              "%s",entry->label);
             if(written<0 || (size_t)written>=sizeof(pool_label->name))
@@ -2053,7 +2201,7 @@ bool minias_queue_literal(MiniAs *as,const MiniAsSymbolExpr *expression,
     memset(entry,0,sizeof(*entry));
     entry->section=as->current_section;
     entry->subsection=as->current_subsection;
-    entry->width=width;entry->expression=*expression;
+    entry->width=width;entry->expression=bound;
     if(!minias_make_private_symbol_name(entry->label,sizeof(entry->label),
                                         "literal",as->literal_count)) {
         minias_set_error(as,"literal-label-overflow");return false;
@@ -3361,7 +3509,13 @@ static bool flush_literal_pools(MiniAs *as,size_t line,bool all) {
             goto failure;
         }
         data->width=entry->width;data->count=1U;
-        target=minias_get_symbol(as,entry->expression.name,true);
+        if(entry->expression.name_id>=as->symbol_name_count ||
+           as->symbol_names[entry->expression.name_id].name==NULL) {
+            minias_set_error(as,"literal-pool-symbol-ref-invalid");
+            minias_mcdata_destroy(data);goto failure;
+        }
+        target=minias_get_symbol(as,
+                     as->symbol_names[entry->expression.name_id].name,true);
         if(target==NULL) {minias_mcdata_destroy(data);goto failure;}
         data->fields[0].kind=MINIAS_MC_EXPR_SYMBOL;
         data->fields[0].has_lhs=true;

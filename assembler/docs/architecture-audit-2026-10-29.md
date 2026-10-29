@@ -435,3 +435,75 @@ PR #667 remain the only development route.
    ELF byte/reloc primitives and DWARF context lifetimes after the MC symbols
    and conditional ownership are stable. Preserve frozen Linux input assets
    and consumer-specific ELF Reader/Writer/Rewrite roles.
+
+## Batch L: one machine-symbol ownership model and transactional references
+
+Architecture-only integration of six independently reviewed work streams on
+the exact Batch K tree. The previous `MiniAsSymbolExpr{name[256]}` in all four
+machine Target operands was not a stable MC identity: parsers duplicated name
+storage, encoders repeated global string searches, and staged Fixups recreated
+another symbol-name owner. These paths have now been removed together.
+
+### Two levels of identity, one point of ELF mutation
+
+1. **Parse-time identity:** Common interns each referenced spelling into an
+   immutable `MiniAsSymbolNameId` pool, independent from `as->symbols[]`.
+   `MiniAsSymbolRef{name_id,addend}` and its difference pair are held directly
+   in Target MCOperands; the x86 nested memory payload holds the same inline
+   value rather than another owned heap string. Targets can ask Common for
+   read-only current binding during branch/layout iteration.
+2. **Encode transaction:** `MiniAsEncodeFixupRequest` carries only a
+   `MiniAsSymbolRef`; a synthetic-anchor request carries only a NameId. An
+   instruction emitter cannot insert global Fixups or synthetic Symbols.
+   Commit materializes anchors and then Fixup symbols with the prior ELF
+   encounter order, including undefined-symbol promotion, `.set`, section
+   folding and private RISC-V PCREL pairing. No actual ELF symbol is inserted
+   merely by encountering an operand in a speculative parse or layout pass.
+3. **Target-local encoding:** x86 branches/RIP operands, AArch64 page/LO12/GOT
+   and deferred differences, RV CALL/TAIL/LA/LOAD/STORE/BRANCH/JAL, and
+   LoongArch branch/LA.PCREL/PC HI-LO forms all use the reference API. Target
+   relocation modifiers and machine encoding legality remain Target-owned.
+4. **Dead API removal:** the old `MINIAS_MC_SYMBOL` and difference operand
+   variants, old `minias_encode_add_fixup(name)` and
+   `minias_encode_request_anchor(name)` entrypoints, mixed name/reference
+   Fixup fields, and duplicate anchor-name ownership are gone. `.reloc` and
+   CFI Section-owned Fixups remain because they are a distinct ownership
+   model, not a compatibility path for instruction emitters.
+
+### Batch size and local evidence
+
+- Ten production `assembler/src` files: **+679/-393, 1,072 touched lines**;
+  this is a cross-layer structural batch, not isolated spelling replacement.
+- One new cross-Target symbol-transaction regression and changed operand
+  lifetime, Target boundary and CI workflow checks.
+- Integrated Release `-O2 -Werror` build: **PASS**; `check-minias-a0`:
+  **PASS, 30 objects**; `git diff --check`: **PASS**.
+- Four-Target DATA matches the GNU x86 57-byte oracle. Host x86 relocation
+  entries match GNU, including 8 relocations, lexical `.set`, weak/global
+  undefined references and local section-symbol folding: **PASS**.
+- RISC-V @plt, GOT/PCREL, private anchors, symbolic LOAD/STORE, local labels,
+  subsection JAL and 1150-NOP growing branch: **PASS**.
+- Four-Target EncodeResult, expression grammar, alias and SourceFrame
+  controls; AArch64 typed alias and x86 GNU memory bytes: **PASS**.
+- Operand-lifetime partial-failure tests: **PASS**, including AddressSanitizer
+  address-only mode; LeakSanitizer remains unsupported here.
+- GNU AArch64/RISC-V/LoongArch cross-oracle, Linux 3x7, complete link and
+  Image/QEMU have **NOT** been run in this batch. Draft PR #667 must not be
+  marked runtime-correct or merged on these local results alone.
+
+### Remaining architectural seams for the next full audit
+
+1. **P1 MCExpr symbol-difference bridge:** Common's new reference resolver
+   still converts two NameIds to temporary spelling DTOs to reuse the checked
+   difference arithmetic in `mc_expr.c`. Extract one underlying checked
+   symbol-pair resolver; do not add a fourth expression-evaluation algorithm.
+2. **P1 dynamic conditional-region ownership:** `.if/.elseif/.set` may still
+   cause whole-source reparse after relaxation. Persistent SourceFrames and
+   typed Fragments are prerequisites, not a completed dependency graph.
+3. **P1 remaining Target plans:** AArch64 memory/form duplication, x86
+   measure/encode families, Loong direct word forms and RV modifiers/feature
+   modes need independent whole-Target audits before deleting code.
+4. **P2 MC/data and ELF/DWARF helpers:** some symbol-ID MC data expressions
+   still construct temporary name DTOs for emission. Move this at the same
+   time as the symbol resolver, then examine the separate ELF and DWARF
+   consumer boundaries rather than blindly merging utility functions.

@@ -1571,13 +1571,13 @@ static bool a64_branch_condition(const char *op,unsigned *condition) {
            a64_condition_code(op+1U,condition);
 }
 
-static bool a64_attach_expr(MiniAsMCInst *inst,unsigned slot,
+static bool a64_attach_expr(MiniAs *as,MiniAsMCInst *inst,unsigned slot,
                             const MiniAsSymbolExpr *expr) {
-    MiniAsSymbolExpr *copy=malloc(sizeof(*copy));
+    MiniAsSymbolRef *copy=malloc(sizeof(*copy));
     if(!copy)return false;
-    *copy=*expr;
-    inst->operands[slot].kind=MINIAS_MC_SYMBOL;
-    inst->operands[slot].symbol=copy;
+    if(!minias_bind_symbol_ref(as,expr,copy)) {free(copy);return false;}
+    inst->operands[slot].kind=MINIAS_MC_BOUND_SYMBOL;
+    inst->operands[slot].bound_symbol=copy;
     return true;
 }
 
@@ -1590,7 +1590,8 @@ static bool a64_lo12_expr(const char *text,MiniAsSymbolExpr *expr) {
            minias_parse_symbol_addend(text+6U,expr);
 }
 
-static bool a64_parse_relocated(const A64AliasState *aliases,MiniAsMCInst *inst,
+static bool a64_parse_relocated(MiniAs *as,const A64AliasState *aliases,
+                                MiniAsMCInst *inst,
                                 const char *op,const char *args) {
     char tok[4][384];
     unsigned n,rd,rn,policy;
@@ -1601,7 +1602,7 @@ static bool a64_parse_relocated(const A64AliasState *aliases,MiniAsMCInst *inst,
     if(!strcmp(op,"adr") && n==2U &&
        parse_a64_reg(aliases,tok[0],&rd,&wd,&spd) && wd && !spd &&
        minias_parse_symbol_addend(tok[1],&expr) &&
-       a64_attach_expr(inst,1U,&expr)) {
+       a64_attach_expr(as,inst,1U,&expr)) {
         inst->opcode=A64_MC_ADR;inst->count=2U;
         put_reg(&inst->operands[0],rd,true);
         return true;
@@ -1613,9 +1614,9 @@ static bool a64_parse_relocated(const A64AliasState *aliases,MiniAsMCInst *inst,
          * but confusing 275 with 311 would break Linux GOT links. */
         bool got=strncmp(tok[1],":got:",5U)==0;
         if(!minias_parse_symbol_addend(got?tok[1]+5U:tok[1],&expr) ||
-           !a64_attach_expr(inst,1U,&expr))return false;
+           !a64_attach_expr(as,inst,1U,&expr))return false;
         inst->opcode=A64_MC_ADRP;inst->count=2U;
-        inst->encoding=got?1U:0U;
+        inst->target_form=got?1U:0U; /* GOT page vs ordinary page */
         put_reg(&inst->operands[0],rd,true);
         return true;
     }
@@ -1624,7 +1625,7 @@ static bool a64_parse_relocated(const A64AliasState *aliases,MiniAsMCInst *inst,
        parse_a64_reg(aliases,tok[1],&rn,&wn,&spn) && wd==wn &&
        !(rd==31U&&!spd) && !(rn==31U&&!spn) &&
        a64_lo12_expr(tok[2],&expr) &&
-       a64_attach_expr(inst,2U,&expr)) {
+       a64_attach_expr(as,inst,2U,&expr)) {
         inst->opcode=A64_MC_ADD_LO12;inst->count=3U;
         put_reg(&inst->operands[0],rd,wd);
         put_reg(&inst->operands[1],rn,wn);
@@ -1653,7 +1654,7 @@ static bool a64_parse_relocated(const A64AliasState *aliases,MiniAsMCInst *inst,
         if(got_lo12 && (strcmp(op,"ldr")!=0 || !wd))return false;
         if(!(got_lo12?minias_parse_symbol_addend(b+10U,&expr):
                         a64_lo12_expr(b,&expr)) ||
-           !a64_attach_expr(inst,2U,&expr))return false;
+           !a64_attach_expr(as,inst,2U,&expr))return false;
         if(got_lo12)inst->opcode=A64_MC_LDST_GOT_LO12;
     }
     if(inst->opcode!=A64_MC_LDST_GOT_LO12)
@@ -1661,6 +1662,7 @@ static bool a64_parse_relocated(const A64AliasState *aliases,MiniAsMCInst *inst,
     inst->count=3U;
     put_reg(&inst->operands[0],rd,wd);
     put_reg(&inst->operands[1],rn,true);
+    inst->target_form=(uint32_t)(memory_form-a64_scalar_memory_forms)+1U;
     inst->encoding=wd?memory_form->scaled_x:memory_form->scaled_w;
     return true;
 }
@@ -2043,7 +2045,7 @@ typedef enum A64DeferredDifferenceUse {
  * instruction arity from its semantic payload.  Target-owned payloads keep
  * that distinction without teaching Common about AArch64's operand syntax. */
 typedef struct A64DeferredOperand {
-    MiniAsSymbolDifference symbols;
+    MiniAsSymbolDifferenceRef symbols;
     A64DeferredDifferenceUse use;
 } A64DeferredOperand;
 
@@ -2250,7 +2252,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
            operands[1][0]!='=' ||
            !minias_parse_symbol_addend(operands[1]+1U,&source) ||
            !minias_queue_literal(as,&source,wide?8U:4U,&pool) ||
-           !a64_attach_expr(inst,1U,&pool)) {
+           !a64_attach_expr(as,inst,1U,&pool)) {
             minias_set_error(as,"bad-aarch64-literal-load:%s:line=%zu",
                              args,stmt->line);
             minias_mcinst_destroy(inst);return false;
@@ -2270,13 +2272,13 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         if(!split_operands(args,operands,&n) || n!=2U ||
            !parse_a64_reg(aliases,operands[0],&rd,&wide,&sp) || sp ||
            !minias_parse_symbol_addend(operands[1],&source) ||
-           !a64_attach_expr(inst,1U,&source)) {
+           !a64_attach_expr(as,inst,1U,&source)) {
             minias_set_error(as,"bad-aarch64-direct-literal:%s:line=%zu",
                              args,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
         inst->opcode=A64_MC_LDR_LITERAL;inst->count=2U;
-        inst->encoding=1U; /* target-local direct vs queued =literal */
+        inst->target_form=1U; /* target-local direct vs queued =literal */
         put_reg(&inst->operands[0],rd,wide);
     } else if(a64_parse_lse(aliases,as,inst,op,args)) {
         /* LSE grammar is owned by one target decoder. */
@@ -3623,12 +3625,11 @@ lane_complete:;
         if(modifier && constant && signed_negative && variant==0U)
             variant=2U;
         inst->opcode=A64_MC_WIDE_IMM;inst->count=2U;
-        inst->encoding=variant|(shift<<2U)|
-                      (modifier && !constant?
-                        ((uint32_t)movw_fixup<<4U):0U);
+        inst->encoding=variant|(shift<<2U);
+        inst->target_form=modifier && !constant?(uint32_t)movw_fixup:0U;
         put_reg(&inst->operands[0],rd,wide);
         if(modifier && !constant) {
-            if(!a64_attach_expr(inst,1U,&movw_expr)) {
+            if(!a64_attach_expr(as,inst,1U,&movw_expr)) {
                 minias_set_error(as,"out-of-memory:a64-movw-reloc");
                 free(large);minias_mcinst_destroy(inst);return false;
             }
@@ -3651,7 +3652,7 @@ lane_complete:;
         if(parse_signed_number(args,&hint) && hint>=0 && hint<=127) {
             put_immediate(&inst->operands[0],hint);
         }else if(minias_parse_symbol_addend(arg,&expr) &&
-                 a64_attach_expr(inst,0U,&expr)) {
+                 a64_attach_expr(as,inst,0U,&expr)) {
             /* GNU Linux BTI macros use hint #.L__bti_targets_c.
              * Keep the exact symbol in MCInst until layout/encode instead
              * of treating an ABS .equ alias as an unsupported opcode. */
@@ -3797,16 +3798,13 @@ lane_complete:;
             minias_mcinst_destroy(inst);
             return false;
         }
-        inst->operands[0].symbol = malloc(sizeof(expr));
-        if (inst->operands[0].symbol == NULL) {
+        if (!a64_attach_expr(as,inst,0U,&expr)) {
             minias_set_error(as, "out-of-memory:aarch64-symbol-mcinst");
             minias_mcinst_destroy(inst);
             return false;
         }
-        *inst->operands[0].symbol = expr;
         inst->opcode = strcmp(op, "bl") == 0 ? A64_MC_BL : A64_MC_B;
         inst->count = 1U;
-        inst->operands[0].kind = MINIAS_MC_SYMBOL;
     } else if (strcmp(op, "cbz") == 0 || strcmp(op, "cbnz") == 0) {
         MiniAsSymbolExpr expr;
         bool is_sp;
@@ -3818,16 +3816,13 @@ lane_complete:;
                              args,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
-        inst->operands[1].symbol=malloc(sizeof(expr));
-        if(!inst->operands[1].symbol) {
+        if(!a64_attach_expr(as,inst,1U,&expr)) {
             minias_set_error(as,"out-of-memory:aarch64-condbranch-symbol");
             minias_mcinst_destroy(inst);return false;
         }
-        *inst->operands[1].symbol=expr;
         inst->opcode=strcmp(op,"cbz")==0?A64_MC_CBZ:A64_MC_CBNZ;
         inst->count=2U;
         put_reg(&inst->operands[0],reg,reg64);
-        inst->operands[1].kind=MINIAS_MC_SYMBOL;
     } else if (!strcmp(op,"tbz") || !strcmp(op,"tbnz")) {
         char t[4][384];unsigned n,rd;
         bool wide,sp;
@@ -3838,7 +3833,7 @@ lane_complete:;
            !parse_signed_number(t[1],&bit) || bit<0 ||
            bit>=(wide?64:32) ||
            !minias_parse_symbol_addend(t[2],&expr) ||
-           (expr.addend&3)!=0 || !a64_attach_expr(inst,2U,&expr)) {
+           (expr.addend&3)!=0 || !a64_attach_expr(as,inst,2U,&expr)) {
             minias_set_error(as,"bad-aarch64-testbranch:%s:line=%zu",
                              args,stmt->line);
             minias_mcinst_destroy(inst);return false;
@@ -3852,14 +3847,14 @@ lane_complete:;
         if(a64_branch_condition(op,&cond)) {
             MiniAsSymbolExpr expr;
             if(!minias_parse_symbol_addend(args,&expr) ||
-               (expr.addend&3)!=0 || !a64_attach_expr(inst,0U,&expr)) {
+               (expr.addend&3)!=0 || !a64_attach_expr(as,inst,0U,&expr)) {
                 minias_set_error(as,"bad-aarch64-conditional:%s:line=%zu",
                                  args,stmt->line);
                 minias_mcinst_destroy(inst);return false;
             }
             inst->opcode=A64_MC_BCOND;inst->count=1U;
             inst->encoding=cond;
-        } else if (a64_parse_relocated(aliases,inst,op,args)) {
+        } else if (a64_parse_relocated(as,aliases,inst,op,args)) {
             /* ADRP/LO12 relocation is typed and target-owned. */
         } else if (parse_integer_family(aliases,inst,op,args)) {
             /* Reuse existing typed register and memory IR. */
@@ -3879,7 +3874,12 @@ lane_complete:;
             minias_set_error(as,"out-of-memory:aarch64-deferred-difference");
             minias_mcinst_destroy(inst);return false;
         }
-        retained->symbols=deferred_difference;
+        if(!minias_bind_symbol_difference_ref(
+               as,&deferred_difference,&retained->symbols)) {
+            free(retained);
+            minias_set_error(as,"out-of-memory:aarch64-deferred-symbol-bind");
+            minias_mcinst_destroy(inst);return false;
+        }
         retained->use=deferred_use;
         inst->target_payload=retained;
         inst->dispose_target_payload=free;
@@ -3892,8 +3892,8 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
     const MiniAsMCInst *inst = stmt->mcinst;
     uint32_t code;
     MiniAsFixupKind fixup = MINIAS_FIXUP_NONE;
-    const MiniAsSymbolExpr *expr = NULL;
-    MiniAsSymbolExpr resolved_branch_expr;
+    const MiniAsSymbolRef *expr = NULL;
+    MiniAsSymbolRef resolved_branch_expr;
     int64_t deferred_value=0;
     bool has_deferred=false;
     if (inst == NULL) {
@@ -3903,7 +3903,7 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
     if(inst->target_payload!=NULL) {
         const A64DeferredOperand *retained=inst->target_payload;
         has_deferred=true;
-        if(!minias_resolve_symbol_difference(as,
+        if(!minias_resolve_symbol_difference_ref(as,
              &retained->symbols,&deferred_value)) {
             minias_set_error(as,"unresolved-aarch64-layout-difference:line=%zu",
                              stmt->line);
@@ -3927,11 +3927,11 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
     }
     switch (inst->opcode) {
         case A64_MC_LDR_LITERAL: {
-            const MiniAsSymbolExpr *literal=inst->operands[1].symbol;
-            MiniAsSymbol *target=literal?
-                minias_get_symbol(as,literal->name,false):NULL;
+            const MiniAsSymbolRef *literal=inst->operands[1].bound_symbol;
+            const MiniAsSymbol *target=literal?
+                minias_symbol_ref_lookup(as,*literal):NULL;
             int64_t displacement;
-            bool direct=inst->encoding==1U;
+            bool direct=inst->target_form==1U;
             if(!literal || (!direct &&
                (!target || !target->defined ||
                 target->section!=stmt->section))) {
@@ -4066,10 +4066,10 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
             break;
         case A64_MC_HINT: {
             uint32_t hint;
-            if(inst->operands[0].kind==MINIAS_MC_SYMBOL) {
-                const MiniAsSymbolExpr *hint_expr=inst->operands[0].symbol;
-                MiniAsSymbol *symbol=hint_expr?
-                    minias_get_symbol(as,hint_expr->name,false):NULL;
+            if(inst->operands[0].kind==MINIAS_MC_BOUND_SYMBOL) {
+                const MiniAsSymbolRef *hint_expr=inst->operands[0].bound_symbol;
+                const MiniAsSymbol *symbol=hint_expr?
+                    minias_symbol_ref_lookup(as,*hint_expr):NULL;
                 int64_t addend=hint_expr?hint_expr->addend:0;
                 if(!symbol || !symbol->defined ||
                    symbol->section!=MINIAS_SECTION_ABS ||
@@ -4102,10 +4102,10 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
         case A64_MC_ADR: {
             const MiniAsSymbol *target;
             int64_t displacement;
-            expr=inst->operands[1].symbol;
+            expr=inst->operands[1].bound_symbol;
             code=UINT32_C(0x10000000)|inst->operands[0].reg;
             fixup=MINIAS_FIXUP_A64_ADR_LO21;
-            target=minias_get_symbol(as,expr->name,false);
+            target=minias_symbol_ref_lookup(as,*expr);
             /* GNU GAS emits ADR_PREL_LO21 relocations for GLOBAL/WEAK
              * references even when their definitions reside in .text.
              * Resolve only non-preemptible section-local symbol targets. */
@@ -4135,34 +4135,41 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
         }
         case A64_MC_ADRP:
             code=UINT32_C(0x90000000)|inst->operands[0].reg;
-            expr=inst->operands[1].symbol;
-            fixup=inst->encoding==1U?MINIAS_FIXUP_A64_ADR_GOT_PAGE:
+            expr=inst->operands[1].bound_symbol;
+            fixup=inst->target_form==1U?MINIAS_FIXUP_A64_ADR_GOT_PAGE:
                                       MINIAS_FIXUP_A64_ADRP_HI21;
             break;
         case A64_MC_ADD_LO12:
             code=(inst->operands[0].register_64?
                   UINT32_C(0x91000000):UINT32_C(0x11000000))|
                  (inst->operands[1].reg<<5U)|inst->operands[0].reg;
-            expr=inst->operands[2].symbol;
+            expr=inst->operands[2].bound_symbol;
             fixup=MINIAS_FIXUP_A64_ADD_LO12;
             break;
         case A64_MC_LDST_LO12:
         case A64_MC_LDST_GOT_LO12:
             code=inst->encoding|(inst->operands[1].reg<<5U)|
                  inst->operands[0].reg;
-            expr=inst->operands[2].symbol;
-            fixup=inst->opcode==A64_MC_LDST_GOT_LO12?
-                      MINIAS_FIXUP_A64_LD64_GOT_LO12:
-                  inst->encoding==UINT32_C(0x39400000) ||
-                  inst->encoding==UINT32_C(0x39000000) ?
-                      MINIAS_FIXUP_A64_LDST8_LO12 :
-                  inst->encoding==UINT32_C(0x79400000) ||
-                  inst->encoding==UINT32_C(0x79000000) ?
-                      MINIAS_FIXUP_A64_LDST16_LO12 :
-                  inst->encoding==UINT32_C(0xf9400000) ||
-                  inst->encoding==UINT32_C(0xf9000000) ?
-                      MINIAS_FIXUP_A64_LDST64_LO12 :
-                      MINIAS_FIXUP_A64_LDST32_LO12;
+            expr=inst->operands[2].bound_symbol;
+            if(inst->opcode==A64_MC_LDST_GOT_LO12)
+                fixup=MINIAS_FIXUP_A64_LD64_GOT_LO12;
+            else {
+                unsigned bytes;
+                const A64ScalarMemoryForm *form;
+                if(inst->target_form==0U ||
+                   inst->target_form>sizeof(a64_scalar_memory_forms)/
+                                      sizeof(a64_scalar_memory_forms[0])) {
+                    minias_set_error(as,"missing-aarch64-lo12-memory-form");
+                    return false;
+                }
+                form=&a64_scalar_memory_forms[inst->target_form-1U];
+                bytes=form->bytes?form->bytes:
+                      (inst->operands[0].register_64?8U:4U);
+                fixup=bytes==1U?MINIAS_FIXUP_A64_LDST8_LO12:
+                      bytes==2U?MINIAS_FIXUP_A64_LDST16_LO12:
+                      bytes==4U?MINIAS_FIXUP_A64_LDST32_LO12:
+                                 MINIAS_FIXUP_A64_LDST64_LO12;
+            }
             break;
         case A64_MC_BR:
         case A64_MC_BLR:
@@ -4175,11 +4182,11 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
             unsigned shift=(inst->encoding>>2U)&3U;
             bool wide=inst->operands[0].register_64;
             uint32_t imm16=(uint32_t)inst->operands[1].immediate;
-            if(inst->operands[1].kind==MINIAS_MC_SYMBOL) {
+            if(inst->operands[1].kind==MINIAS_MC_BOUND_SYMBOL) {
                 const MiniAsSymbol *symbol;
-                MiniAsFixupKind kind=(MiniAsFixupKind)(inst->encoding>>4U);
-                expr=inst->operands[1].symbol;
-                symbol=minias_get_symbol(as,expr->name,false);
+                MiniAsFixupKind kind=(MiniAsFixupKind)inst->target_form;
+                expr=inst->operands[1].bound_symbol;
+                symbol=minias_symbol_ref_lookup(as,*expr);
                 if(symbol && symbol->defined &&
                    symbol->section==MINIAS_SECTION_ABS) {
                     uint64_t bits=symbol->value+(uint64_t)expr->addend;
@@ -4197,14 +4204,14 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
                         if(signed_bits< -bound || signed_bits>=bound) {
                             minias_set_error(as,
                                 "aarch64-movw-absolute-range:%s:line=%zu",
-                                expr->name,stmt->line);
+                                stmt->args,stmt->line);
                             return false;
                         }
                     }else if(checked_unsigned && width<64U &&
                              bits>=(UINT64_C(1)<<width)) {
                         minias_set_error(as,
                             "aarch64-movw-absolute-overflow:%s:line=%zu",
-                            expr->name,stmt->line);
+                            stmt->args,stmt->line);
                         return false;
                     }
                     /* GNU SABS_Gn encodes negative absolute values with
@@ -4645,15 +4652,14 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
                          inst->opcode==A64_MC_TBNZ;
             bool conditional=cbz||bcond;
             unsigned slot=testbit?2U:cbz?1U:0U;
-            expr=inst->operands[slot].symbol;
+            expr=inst->operands[slot].bound_symbol;
             if(has_deferred) {
                 if(!minias_checked_add_i64(expr->addend,deferred_value,
                                            &resolved_branch_expr.addend)) {
                     minias_set_error(as,"aarch64-final-branch-addend-overflow");
                     return false;
                 }
-                memcpy(resolved_branch_expr.name,expr->name,
-                       sizeof(resolved_branch_expr.name));
+                resolved_branch_expr.name_id=expr->name_id;
                 expr=&resolved_branch_expr;
             }
             if(testbit) {
@@ -4677,7 +4683,7 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
                   conditional?MINIAS_FIXUP_A64_CONDBR19:
                   inst->opcode==A64_MC_BL ?
                     MINIAS_FIXUP_A64_CALL26:MINIAS_FIXUP_A64_JUMP26;
-            target = minias_get_symbol(as, expr->name, false);
+            target = minias_symbol_ref_lookup(as,*expr);
             if (target == NULL || !target->defined ||
                 target->section != stmt->section) break;
             if (target->value > INT64_MAX || stmt->offset > INT64_MAX) {
@@ -4720,9 +4726,9 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
     /* Target describes the binding policy without assuming that the last
      * element of Common's global Fixup array belongs to this instruction.
      * Both bytes and the relocation request are committed by the MC engine. */
-    return minias_encode_add_fixup(
+    return minias_encode_add_fixup_ref(
         as,stmt->section,stmt->offset,fixup,4U,
-        expr->name,expr->addend,fixup==MINIAS_FIXUP_A64_LD_PREL_LO19);
+        *expr,fixup==MINIAS_FIXUP_A64_LD_PREL_LO19);
 }
 
 /* GNU AArch64 profiles compose ISA extensions; do not enumerate each

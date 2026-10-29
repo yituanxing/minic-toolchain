@@ -51,6 +51,10 @@ jobs:
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-mc-encode-result.sh
+      - name: Four Target bound SymbolRefs retain GNU object and fixup identity
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-mc-symbol-ref-transaction.sh
       - name: Validate Common MCOperand nested ownership and error-path lifecycle
         run: bash tests/assembler/probe-mc-operand-lifetime.sh
       - name: RV32E validates parsed GPRs without treating symbols as registers

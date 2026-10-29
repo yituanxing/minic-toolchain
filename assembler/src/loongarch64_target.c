@@ -146,14 +146,17 @@ static bool la_reloc_expr(const char *value, const char *modifier,
 
 static bool la_symbol_operand(MiniAs *as, MiniAsMCInst *m, unsigned slot,
                               const MiniAsSymbolExpr *expr) {
-    MiniAsSymbolExpr *copy = malloc(sizeof(*copy));
-    if (!copy) {
+    MiniAsSymbolRef *ref = malloc(sizeof(*ref));
+    if (!ref) {
         minias_set_error(as,"out-of-memory:loongarch-symbol-mcinst");
         return false;
     }
-    *copy=*expr;
-    m->operands[slot].kind=MINIAS_MC_SYMBOL;
-    m->operands[slot].symbol=copy;
+    if(!minias_bind_symbol_ref(as,expr,ref)) {
+        free(ref);
+        return false;
+    }
+    m->operands[slot].kind=MINIAS_MC_BOUND_SYMBOL;
+    m->operands[slot].bound_symbol=ref;
     return true;
 }
 
@@ -1419,7 +1422,7 @@ static bool la_encode(MiniAs *as,const MiniAsStmt *s) {
     uint32_t code;
     unsigned i, slot=0U;
     MiniAsFixupKind kind=MINIAS_FIXUP_NONE;
-    const MiniAsSymbolExpr *expr=NULL;
+    const MiniAsSymbolRef *expr=NULL;
     bool table_form=false;
     if(!m){minias_set_error(as,"missing-la-mcinst");return false;}
     code=m->encoding;
@@ -1441,18 +1444,18 @@ static bool la_encode(MiniAs *as,const MiniAsStmt *s) {
         for(k=0U;k<plan->fixup_count;++k) {
             const unsigned index=plan->fixups[k].symbol_operand;
             const unsigned word_index=plan->fixups[k].word;
-            const MiniAsSymbolExpr *symbol;
+            const MiniAsSymbolRef *symbol;
             if(index>=m->count || word_index>=plan->count ||
-               m->operands[index].kind!=MINIAS_MC_SYMBOL ||
-               m->operands[index].symbol==NULL) {
+               m->operands[index].kind!=MINIAS_MC_BOUND_SYMBOL ||
+               m->operands[index].bound_symbol==NULL) {
                 minias_set_error(as,"invalid-la-lowering-fixup:line=%zu",
                                  s->line);
                 return false;
             }
-            symbol=m->operands[index].symbol;
-            if(!minias_encode_add_fixup(as,s->section,
+            symbol=m->operands[index].bound_symbol;
+            if(!minias_encode_add_fixup_ref(as,s->section,
                  s->offset+word_index*4U,plan->fixups[k].kind,4U,
-                 symbol->name,symbol->addend,false))return false;
+                 *symbol,false))return false;
         }
         return true;
     }
@@ -1475,15 +1478,20 @@ static bool la_encode(MiniAs *as,const MiniAsStmt *s) {
         case LA_MC_BRANCH16:
         case LA_MC_BRANCH21:
         case LA_MC_BRANCH26: {
-            MiniAsSymbol *target;
+            const MiniAsSymbol *target;
             int64_t diff;
             kind=m->opcode==LA_MC_BRANCH16 ?
                  MINIAS_FIXUP_LARCH_B16 :
                  m->opcode==LA_MC_BRANCH21 ?
                  MINIAS_FIXUP_LARCH_B21 : MINIAS_FIXUP_LARCH_B26;
             slot=m->count-1U;
-            expr=m->operands[slot].symbol;
-            target=minias_get_symbol(as,expr->name,false);
+            expr=m->operands[slot].bound_symbol;
+            if(m->operands[slot].kind!=MINIAS_MC_BOUND_SYMBOL ||
+               expr==NULL) {
+                minias_set_error(as,"invalid-loongarch-bound-branch");
+                return false;
+            }
+            target=minias_symbol_ref_lookup(as,*expr);
             if(target != NULL && target->defined &&
                target->section==s->section &&
                target->value<=INT64_MAX && s->offset<=INT64_MAX) {
@@ -1526,9 +1534,14 @@ static bool la_encode(MiniAs *as,const MiniAsStmt *s) {
     if(!minias_emit_instruction_bytes(as,s->section,bytes,sizeof(bytes)))
         return false;
     if(kind==MINIAS_FIXUP_NONE)return true;
-    expr=m->operands[slot].symbol;
-    return minias_encode_add_fixup(as,s->section,s->offset,kind,4U,
-                                   expr->name,expr->addend,false);
+    if(m->operands[slot].kind!=MINIAS_MC_BOUND_SYMBOL ||
+       m->operands[slot].bound_symbol==NULL) {
+        minias_set_error(as,"invalid-loongarch-bound-fixup");
+        return false;
+    }
+    expr=m->operands[slot].bound_symbol;
+    return minias_encode_add_fixup_ref(as,s->section,s->offset,kind,4U,
+                                       *expr,false);
 }
 static bool la_align(MiniAs *as,int section,size_t size) {
     static const unsigned char nop[4]={0x00,0x00,0x40,0x03};

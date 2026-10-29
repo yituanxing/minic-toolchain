@@ -190,6 +190,20 @@ typedef struct MiniAsSymbolExpr {
     int64_t addend;
 } MiniAsSymbolExpr;
 
+/* Parse-time symbol identity is separate from an ELF Object SymbolID.
+ * NameId intern never inserts a MiniAsSymbol or changes its encounter order.
+ * NameId is stable for one MiniAs lifetime and invalid across source replay. */
+typedef size_t MiniAsSymbolNameId;
+#define MINIAS_SYMBOL_NAME_ID_NONE SIZE_MAX
+typedef struct MiniAsSymbolRef {
+    MiniAsSymbolNameId name_id;
+    int64_t addend;
+} MiniAsSymbolRef;
+
+typedef struct MiniAsInternedSymbolName {
+    char *name;
+} MiniAsInternedSymbolName;
+
 /* A symbol subtraction is only absolute after BOTH final section-local
  * fragment anchors have been laid out. One shared layout owner computes
  * this difference, never a target-specific constant-folding shortcut. */
@@ -198,15 +212,20 @@ typedef struct MiniAsSymbolDifference {
     MiniAsSymbolExpr negative;
 } MiniAsSymbolDifference;
 
+typedef struct MiniAsSymbolDifferenceRef {
+    MiniAsSymbolRef positive;
+    MiniAsSymbolRef negative;
+} MiniAsSymbolDifferenceRef;
+
 /* MCInst stores target-parsed instruction operands, decoupled from source
  * text. Targets may migrate to it incrementally without changing the
  * common section/symbol/fragment lifecycle. */
 typedef enum MiniAsMCOperandKind {
     MINIAS_MC_REGISTER,
     MINIAS_MC_IMMEDIATE,
-    MINIAS_MC_SYMBOL,
-    MINIAS_MC_SYMBOL_DIFFERENCE, /* deferred same-section S1-S2, no ELF RELA */
-    MINIAS_MC_MEMORY
+    MINIAS_MC_MEMORY,
+    MINIAS_MC_BOUND_SYMBOL,
+    MINIAS_MC_BOUND_SYMBOL_DIFFERENCE
 } MiniAsMCOperandKind;
 typedef enum MiniAsMCRegisterClass {
     MINIAS_MC_REG_GPR = 0,
@@ -227,11 +246,11 @@ typedef struct MiniAsMCOperand {
     uint16_t target_reg_bank;
     bool register_64;
     uint64_t immediate;
-    /* Symbol names are allocated only for symbol operands. Integer-heavy
-     * source files must not pay 256 bytes per register/immediate operand. */
+    /* Retained symbols are short NameId-based references. Parse-only name
+     * DTOs never survive MCInst construction or enter the ELF symbol list. */
     union {
-        MiniAsSymbolExpr *symbol;
-        MiniAsSymbolDifference *difference;
+        MiniAsSymbolRef *bound_symbol;
+        MiniAsSymbolDifferenceRef *bound_difference;
         void *memory;
     };
 } MiniAsMCOperand;
@@ -275,7 +294,7 @@ typedef struct MiniAsMacroParam {
  * fragments and ABS32/ABS64 ELF relocations; Target owns LDR encoding.
  * Queued references are deduplicated only inside the same pending pool. */
 typedef struct MiniAsLiteral {
-    MiniAsSymbolExpr expression;
+    MiniAsSymbolRef expression;
     char label[64];
     int section;
     uint32_t subsection;
@@ -388,13 +407,12 @@ typedef struct MiniAsEncodeFixupRequest {
     uint32_t fragment_offset;
     MiniAsFixupKind kind;
     unsigned width;
-    char *symbol_name;
-    int64_t addend;
+    MiniAsSymbolRef symbol_ref;
     bool prefer_section_symbol;
 } MiniAsEncodeFixupRequest;
 
 typedef struct MiniAsEncodeAnchorRequest {
-    char *name;
+    MiniAsSymbolNameId name_id;
     int section;
     uint32_t subsection;
     uint64_t offset;
@@ -466,6 +484,11 @@ typedef struct MiniAs {
     size_t symbol_capacity;
     size_t *symbol_slots;
     size_t symbol_slot_capacity;
+    MiniAsInternedSymbolName *symbol_names;
+    size_t symbol_name_count;
+    size_t symbol_name_capacity;
+    size_t *symbol_name_slots;
+    size_t symbol_name_slot_capacity;
     MiniAsStmt *stmts;
     size_t stmt_count;
     size_t stmt_capacity;
@@ -573,6 +596,20 @@ bool minias_write_elf32(MiniAs *as, const char *path);
 int minias_find_section(const MiniAs *as, const char *name);
 int minias_ensure_section(MiniAs *as, const char *name, uint32_t type, uint64_t flags, uint64_t align);
 MiniAsSymbol *minias_get_symbol(MiniAs *as, const char *name, bool create);
+bool minias_symbol_name_intern(MiniAs *as, const char *name,
+                               MiniAsSymbolNameId *name_id);
+bool minias_bind_symbol_ref(MiniAs *as, const MiniAsSymbolExpr *expr,
+                            MiniAsSymbolRef *ref);
+bool minias_bind_symbol_difference_ref(MiniAs *as,
+                                        const MiniAsSymbolDifference *expr,
+                                        MiniAsSymbolDifferenceRef *ref);
+bool minias_resolve_symbol_difference_ref(MiniAs *as,
+                                          const MiniAsSymbolDifferenceRef *expr,
+                                          int64_t *value);
+/* Borrowed; no actual Symbol is created by lookup. Pointer is invalidated
+ * by any subsequent symbol-table allocation; retain NameId across passes. */
+const MiniAsSymbol *minias_symbol_ref_lookup(const MiniAs *as,
+                                             MiniAsSymbolRef ref);
 /* Shared absolute expression evaluator for target-specific operand syntax.
  * Only already-resolved numeric/.set expressions succeed: no guessing
  * relocatable values or mirroring Core symbol algorithms per backend. */
@@ -631,13 +668,13 @@ bool minias_add_fixup(MiniAs *as,
 /* Target instructions and executable alignment produce a single staged
  * EncodeResult; no Target may directly insert into global Fixup/Symbol/ELF
  * arrays while its encoder can still fail. Offsets remain fragment-relative. */
-bool minias_encode_add_fixup(MiniAs *as, int section, uint64_t offset,
-                             MiniAsFixupKind kind, unsigned width,
-                             const char *symbol_name, int64_t addend,
-                             bool prefer_section_symbol);
-bool minias_encode_request_anchor(MiniAs *as, const MiniAsStmt *stmt,
-                                  const char *prefix, char *out,
-                                  size_t capacity);
+bool minias_encode_add_fixup_ref(MiniAs *as, int section, uint64_t offset,
+                                 MiniAsFixupKind kind, unsigned width,
+                                 MiniAsSymbolRef ref,
+                                 bool prefer_section_symbol);
+bool minias_encode_request_anchor_ref(MiniAs *as, const MiniAsStmt *stmt,
+                                      const char *prefix,
+                                      MiniAsSymbolRef *ref);
 bool minias_encode_add_elf_flags(MiniAs *as, uint32_t flags);
 void minias_encode_result_destroy(MiniAsEncodeResult *result);
 /* Section-owned relocations are explicit .reloc directives or generated

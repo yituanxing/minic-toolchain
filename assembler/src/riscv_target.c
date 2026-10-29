@@ -513,14 +513,15 @@ static void riscv_object_attributes(const MiniAs *as, unsigned char elf_class,
 }
 
 /* Resolve one retained Target branch against the CURRENT layout generation.
- * The symbol identity/encoding policy is target-owned; no caller may cache a
- * displacement in MCInst across Common relaxation passes.  Both the branch
- * growth planner and final encoder share the range/alignment decisions. */
+ * Common owns stable parse-time SymbolNameIds and current Object SymbolIDs;
+ * RISC-V owns branch encoding policy and may not cache a displacement in
+ * MCInst across Common relaxation passes. Growth and emission share the
+ * exact same range/alignment decisions. */
 bool minias_riscv_resolve_branch_plan(MiniAs *as,
                                       const MiniAsStmt *stmt,
                                       MiniAsRiscvBranchPlan *result) {
     const MiniAsMCInst *m = stmt->mcinst;
-    const MiniAsSymbolExpr *expr;
+    const MiniAsSymbolRef *expr;
     const MiniAsSymbol *symbol;
     int64_t displacement;
     if (result == NULL || m == NULL ||
@@ -530,12 +531,12 @@ bool minias_riscv_resolve_branch_plan(MiniAs *as,
     }
     memset(result,0,sizeof(*result));
     result->required_size=4U;
-    expr=m->operands[m->opcode==RV_MC_BRANCH?2U:1U].symbol;
+    expr=m->operands[m->opcode==RV_MC_BRANCH?2U:1U].bound_symbol;
     if (expr == NULL) {
         minias_set_error(as,"internal:riscv-branch-plan-symbol");
         return false;
     }
-    symbol=minias_get_symbol(as,expr->name,false);
+    symbol=minias_symbol_ref_lookup(as,*expr);
     if(symbol==NULL || !symbol->defined || symbol->section!=stmt->section ||
        (m->opcode==RV_MC_JAL && symbol->subsection!=stmt->subsection))
         return true;

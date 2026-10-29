@@ -2,13 +2,12 @@
 
 #include <assert.h>
 #include <stdlib.h>
-#include <string.h>
 
 /* Addressing payloads are ISA-private.  This fake Target provides a different
  * opaque memory shape from x86 to ensure Common invokes the registered
  * lifetime hook without ever knowing how memory operands are represented. */
 typedef struct FakeAddress {
-    MiniAsSymbolExpr *symbol;
+    MiniAsSymbolRef *symbol;
     unsigned address_format;
 } FakeAddress;
 
@@ -30,25 +29,26 @@ static void partial_parse_unwind(void) {
     assert(inst->capacity == 6U && inst->count == 0U);
     inst->dispose_memory = dispose_fake_address;
 
-    inst->operands[0].kind = MINIAS_MC_SYMBOL;
-    inst->operands[0].symbol = calloc(1U, sizeof(MiniAsSymbolExpr));
-    assert(inst->operands[0].symbol != NULL);
-    strcpy(inst->operands[0].symbol->name, "global_symbol");
+    inst->operands[0].kind = MINIAS_MC_BOUND_SYMBOL;
+    inst->operands[0].bound_symbol = calloc(1U, sizeof(MiniAsSymbolRef));
+    assert(inst->operands[0].bound_symbol != NULL);
+    inst->operands[0].bound_symbol->name_id = 0U;
 
-    inst->operands[1].kind = MINIAS_MC_SYMBOL_DIFFERENCE;
-    inst->operands[1].difference = calloc(1U, sizeof(MiniAsSymbolDifference));
-    assert(inst->operands[1].difference != NULL);
-    strcpy(inst->operands[1].difference->positive.name, "end");
-    strcpy(inst->operands[1].difference->negative.name, "begin");
+    inst->operands[1].kind = MINIAS_MC_BOUND_SYMBOL_DIFFERENCE;
+    inst->operands[1].bound_difference =
+        calloc(1U, sizeof(MiniAsSymbolDifferenceRef));
+    assert(inst->operands[1].bound_difference != NULL);
+    inst->operands[1].bound_difference->positive.name_id = 1U;
+    inst->operands[1].bound_difference->negative.name_id = 2U;
 
     inst->operands[2].kind = MINIAS_MC_MEMORY;
     inst->operands[2].memory = calloc(1U, sizeof(FakeAddress));
     assert(inst->operands[2].memory != NULL);
     FakeAddress *first = inst->operands[2].memory;
     first->address_format = 42U;
-    first->symbol = calloc(1U, sizeof(MiniAsSymbolExpr));
+    first->symbol = calloc(1U, sizeof(MiniAsSymbolRef));
     assert(first->symbol != NULL);
-    strcpy(first->symbol->name, "pc_relative_global");
+    first->symbol->name_id = 3U;
 
     inst->operands[3].kind = MINIAS_MC_REGISTER;
     inst->operands[3].reg = 31U;
@@ -74,9 +74,9 @@ static void legacy_target_compatibility(void) {
     assert(inst->capacity == 0U);
     inst->count = 3U;
     inst->operands[0].kind = MINIAS_MC_REGISTER;
-    inst->operands[1].kind = MINIAS_MC_SYMBOL;
-    inst->operands[1].symbol = calloc(1U, sizeof(MiniAsSymbolExpr));
-    assert(inst->operands[1].symbol != NULL);
+    inst->operands[1].kind = MINIAS_MC_BOUND_SYMBOL;
+    inst->operands[1].bound_symbol = calloc(1U, sizeof(MiniAsSymbolRef));
+    assert(inst->operands[1].bound_symbol != NULL);
     inst->operands[2].kind = MINIAS_MC_MEMORY;
     inst->operands[2].memory = calloc(1U, sizeof(FakeAddress));
     assert(inst->operands[2].memory != NULL);

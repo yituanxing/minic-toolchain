@@ -37,10 +37,10 @@ void minias_mcinst_destroy(MiniAsMCInst *inst) {
     slots = inst->capacity != 0U ? inst->capacity : inst->count;
     for (i = 0U; i < slots; ++i) {
         MiniAsMCOperand *op = &inst->operands[i];
-        if (op->kind == MINIAS_MC_SYMBOL) {
-            free(op->symbol);
-        } else if (op->kind == MINIAS_MC_SYMBOL_DIFFERENCE) {
-            free(op->difference);
+        if (op->kind == MINIAS_MC_BOUND_SYMBOL) {
+            free(op->bound_symbol);
+        } else if (op->kind == MINIAS_MC_BOUND_SYMBOL_DIFFERENCE) {
+            free(op->bound_difference);
         } else if (op->kind == MINIAS_MC_MEMORY && op->memory != NULL) {
             if (inst->dispose_memory != NULL)
                 inst->dispose_memory(op->memory);

@@ -750,15 +750,17 @@ static bool parse_raw_insn_directive(const char *args, uint32_t *word) {
     return true;
 }
 
-static bool parse_call_target(const char *text, MiniAsSymbolExpr *expr) {
+static bool parse_call_target(const char *text, MiniAsSymbolExpr *expr,
+                              MiniAsRiscvSymbolModifier *modifier) {
     char normalized[256];
     char *plt;
     char *suffix;
     size_t length;
 
-    if (text == NULL || expr == NULL) {
+    if (text == NULL || expr == NULL || modifier == NULL) {
         return false;
     }
+    *modifier = MINIAS_RV_SYM_NONE;
     length = strlen(text);
     if (length >= sizeof(normalized)) {
         return false;
@@ -773,8 +775,34 @@ static bool parse_call_target(const char *text, MiniAsSymbolExpr *expr) {
             return false;
         }
         memmove(plt, suffix, strlen(suffix) + 1U);
+        *modifier = MINIAS_RV_SYM_PLT;
     }
     return minias_parse_symbol_addend(normalized, expr);
+}
+
+/* Retain only a stable parse-time SymbolNameId and addend in MCInst. Common
+ * does not create a real ELF Symbol until a definition or Fixup commit; this
+ * preserves ELF encounter order while layout can resolve current values. */
+static bool rv_bind_symbol_operand(MiniAs *as, MiniAsMCInst *m,
+                                   unsigned index,
+                                   const MiniAsSymbolExpr *parsed) {
+    MiniAsSymbolRef *ref;
+    if (index >= m->capacity) {
+        minias_set_error(as, "internal:riscv-symbol-operand-index");
+        return false;
+    }
+    ref = malloc(sizeof(*ref));
+    if (ref == NULL) {
+        minias_set_error(as, "out-of-memory:riscv-bound-symbol");
+        return false;
+    }
+    if (!minias_bind_symbol_ref(as, parsed, ref)) {
+        free(ref);
+        return false;
+    }
+    m->operands[index].bound_symbol = ref;
+    m->operands[index].kind = MINIAS_MC_BOUND_SYMBOL;
+    return true;
 }
 
 /* Measure the actual persisted target instruction. The layout driver
@@ -1100,6 +1128,7 @@ static bool rv_parse_multi_mc(MiniAs *as, MiniAsStmt *stmt,
     int64_t signed_value = 0;
     int rd = -1;
     unsigned family, slots;
+    MiniAsRiscvSymbolModifier modifier = MINIAS_RV_SYM_NONE;
     *handled = true;
     if (strcmp(op, "li") == 0) {
         if (n != 2U || (rd = reg_number(ops[0])) < 0 ||
@@ -1108,7 +1137,8 @@ static bool rv_parse_multi_mc(MiniAs *as, MiniAsStmt *stmt,
         family = RV_MC_LI;
         slots = 3U;
     } else if (strcmp(op, "call") == 0 || strcmp(op, "tail") == 0) {
-        if (n != 1U || !parse_call_target(ops[0], &expr)) goto invalid;
+        if (n != 1U || !parse_call_target(ops[0], &expr, &modifier))
+            goto invalid;
         family = strcmp(op, "call") == 0 ? RV_MC_CALL : RV_MC_TAIL;
         slots = 1U;
     } else if (strcmp(op, "lla") == 0 || strcmp(op, "la") == 0) {
@@ -1127,6 +1157,8 @@ static bool rv_parse_multi_mc(MiniAs *as, MiniAsStmt *stmt,
     }
     m->opcode = family;
     m->count = slots;
+    if (family == RV_MC_CALL || family == RV_MC_TAIL)
+        m->target_form = (uint32_t)modifier;
     if (family == RV_MC_LI) {
         m->encoding = fits ? 1U : 0U;
         rv_set_reg(&m->operands[0], rd);
@@ -1138,14 +1170,10 @@ static bool rv_parse_multi_mc(MiniAs *as, MiniAsStmt *stmt,
             rv_set_reg(&m->operands[0], rd);
             m->encoding = strcmp(op, "la") == 0 ? 1U : 0U;
         }
-        m->operands[symbol_index].symbol = malloc(sizeof(expr));
-        if (m->operands[symbol_index].symbol == NULL) {
+        if (!rv_bind_symbol_operand(as, m, symbol_index, &expr)) {
             minias_mcinst_destroy(m);
-            minias_set_error(as, "out-of-memory:riscv-multi-symbol");
             return false;
         }
-        *m->operands[symbol_index].symbol = expr;
-        m->operands[symbol_index].kind = MINIAS_MC_SYMBOL;
     }
     stmt->mcinst = m;
     if (family == RV_MC_LI) {
@@ -1691,13 +1719,10 @@ static bool rv_parse_mcinst_impl(MiniAs *as, MiniAsStmt *stmt) {
             inst->count = slots;
             rv_set_reg(&inst->operands[0], rd);
             rv_set_reg(&inst->operands[1], rs1);
-            inst->operands[2].symbol = malloc(sizeof(expr));
-            if (inst->operands[2].symbol == NULL) {
+            if (!rv_bind_symbol_operand(as, inst, 2U, &expr)) {
                 minias_mcinst_destroy(inst);
-                goto oom;
+                return false;
             }
-            *inst->operands[2].symbol = expr;
-            inst->operands[2].kind = MINIAS_MC_SYMBOL;
             stmt->mcinst = inst;
             return true;
         }
@@ -1737,10 +1762,10 @@ static bool rv_parse_mcinst_impl(MiniAs *as, MiniAsStmt *stmt) {
             inst->opcode=family; inst->encoding=encoding; inst->count=slots;
             rv_set_reg(&inst->operands[0],rs1);
             rv_set_reg(&inst->operands[1],rs2);
-            inst->operands[2].symbol=malloc(sizeof(parsed));
-            if(inst->operands[2].symbol==NULL){minias_mcinst_destroy(inst);goto oom;}
-            *inst->operands[2].symbol=parsed;
-            inst->operands[2].kind=MINIAS_MC_SYMBOL;
+            if (!rv_bind_symbol_operand(as, inst, 2U, &parsed)) {
+                minias_mcinst_destroy(inst);
+                return false;
+            }
             stmt->mcinst=inst;
         }
         return true;
@@ -1762,10 +1787,10 @@ static bool rv_parse_mcinst_impl(MiniAs *as, MiniAsStmt *stmt) {
             if(inst==NULL) goto oom;
             inst->opcode=family; inst->encoding=encoding; inst->count=slots;
             rv_set_reg(&inst->operands[0],rd);
-            inst->operands[1].symbol=malloc(sizeof(parsed));
-            if(inst->operands[1].symbol==NULL){minias_mcinst_destroy(inst);goto oom;}
-            *inst->operands[1].symbol=parsed;
-            inst->operands[1].kind=MINIAS_MC_SYMBOL;
+            if (!rv_bind_symbol_operand(as, inst, 1U, &parsed)) {
+                minias_mcinst_destroy(inst);
+                return false;
+            }
             stmt->mcinst=inst;
         }
         return true;
@@ -1854,7 +1879,7 @@ static bool rv_encode_multi_mc(MiniAs *as, const MiniAsStmt *stmt) {
     }
 
     if (m->opcode == RV_MC_CALL || m->opcode == RV_MC_TAIL) {
-        const MiniAsSymbolExpr *expr = m->operands[0].symbol;
+        const MiniAsSymbolRef *expr = m->operands[0].bound_symbol;
         if (expr == NULL) {
             minias_set_error(as, "internal:riscv-call-symbol-missing");
             return false;
@@ -1868,29 +1893,35 @@ static bool rv_encode_multi_mc(MiniAs *as, const MiniAsStmt *stmt) {
                 !append_u32(as, stmt->section,
                             enc_i(0x67U, 0, 0U, 6, 0))) return false;
         }
-        return minias_encode_add_fixup(as, stmt->section, stmt->offset,
-                                MINIAS_FIXUP_RV_CALL_PLT, 4U,
-                                expr->name, expr->addend, false);
+        /* Both CALL and TAIL retain @plt as a Target modifier. Existing
+         * psABI lowering emits CALL_PLT even without an explicit suffix. */
+        if (m->target_form != MINIAS_RV_SYM_NONE &&
+            m->target_form != MINIAS_RV_SYM_PLT) {
+            minias_set_error(as, "internal:riscv-call-modifier");
+            return false;
+        }
+        return minias_encode_add_fixup_ref(as, stmt->section, stmt->offset,
+                                MINIAS_FIXUP_RV_CALL_PLT, 4U, *expr, false);
     }
 
     if (m->opcode == RV_MC_LA) {
-        const MiniAsSymbolExpr *expr = m->operands[1].symbol;
-        MiniAsSymbol *target;
-        char name[96];
+        const MiniAsSymbolRef *expr = m->operands[1].bound_symbol;
+        const MiniAsSymbol *target;
+        MiniAsSymbolRef anchor;
         int rd = (int)m->operands[0].reg;
         bool use_got;
         if (expr == NULL) {
             minias_set_error(as, "internal:riscv-la-symbol-missing");
             return false;
         }
-        target = minias_get_symbol(as, expr->name, false);
+        target = minias_symbol_ref_lookup(as, *expr);
         /* Linux early boot: NOPIC is default; PIC external la may use a
          * GOT reference only if the source did not request an addend. */
         use_got = (stmt->site.mode_bits & MINIAS_RISCV_OPTION_PIC) != 0U &&
                   m->encoding != 0U && expr->addend == 0 &&
                   (target == NULL || !target->defined);
-        if(!minias_encode_request_anchor(as,stmt,"pcrel",
-                                         name,sizeof(name))) {
+        if(!minias_encode_request_anchor_ref(as,stmt,"pcrel",
+                                             &anchor)) {
             minias_set_error(as,"riscv-private-pcrel-symbol-overflow");
             return false;
         }
@@ -1902,12 +1933,13 @@ static bool rv_encode_multi_mc(MiniAs *as, const MiniAsStmt *stmt) {
                             enc_i(0x03U, rd, 3U, rd, 0))) return false;
         } else if (!append_u32(as, stmt->section,
                                enc_i(0x13U, rd, 0U, rd, 0))) return false;
-        return minias_encode_add_fixup(as, stmt->section, stmt->offset,
+        return minias_encode_add_fixup_ref(as, stmt->section, stmt->offset,
                                 use_got ? MINIAS_FIXUP_RV_GOT_HI20 :
                                           MINIAS_FIXUP_RV_PCREL_HI20,
-                                4U, expr->name, expr->addend, false) &&
-               minias_encode_add_fixup(as, stmt->section, stmt->offset + 4U,
-                                MINIAS_FIXUP_RV_PCREL_LO12_I, 4U, name, 0,
+                                4U, *expr, false) &&
+               minias_encode_add_fixup_ref(as, stmt->section,
+                                stmt->offset + 4U,
+                                MINIAS_FIXUP_RV_PCREL_LO12_I, 4U, anchor,
                                 false);
     }
 
@@ -1932,7 +1964,7 @@ static bool rv_encode_mcinst(MiniAs *as, const MiniAsStmt *stmt) {
     int rd=(int)m->operands[0].reg,rs1=0,rs2=0;
     int64_t imm=0;
     uint32_t base=m->encoding,code=0U;
-    MiniAsSymbolExpr const *expr=NULL;
+    const MiniAsSymbolRef *expr=NULL;
     if (m->count > 1U && m->operands[1].kind==MINIAS_MC_REGISTER)
         rs1=(int)m->operands[1].reg;
     if (m->count > 2U && m->operands[2].kind==MINIAS_MC_REGISTER)
@@ -1942,15 +1974,15 @@ static bool rv_encode_mcinst(MiniAs *as, const MiniAsStmt *stmt) {
     if (m->opcode == RV_MC_SYMBOL_LOAD ||
         m->opcode == RV_MC_SYMBOL_STORE) {
         const bool load = m->opcode == RV_MC_SYMBOL_LOAD;
-        const MiniAsSymbolExpr *ref = m->operands[2].symbol;
-        char label[96];
+        const MiniAsSymbolRef *ref = m->operands[2].bound_symbol;
+        MiniAsSymbolRef anchor;
         uint32_t second;
         if (ref == NULL) {
             minias_set_error(as, "internal:missing-riscv-symbol-fragment");
             return false;
         }
-        if(!minias_encode_request_anchor(as,stmt,load?"load":"store",
-                                         label,sizeof(label))) {
+        if(!minias_encode_request_anchor_ref(as,stmt,
+                                             load?"load":"store",&anchor)) {
             minias_set_error(as,"riscv-private-memory-symbol-overflow");
             return false;
         }
@@ -1961,13 +1993,14 @@ static bool rv_encode_mcinst(MiniAs *as, const MiniAsStmt *stmt) {
                         0x17U | ((uint32_t)rs1 << 7U)) ||
             !append_u32(as, stmt->section, second))
             return false;
-        return minias_encode_add_fixup(as, stmt->section, stmt->offset,
-                                MINIAS_FIXUP_RV_PCREL_HI20, 4U,
-                                ref->name, ref->addend, false) &&
-               minias_encode_add_fixup(as, stmt->section, stmt->offset + 4U,
+        return minias_encode_add_fixup_ref(as, stmt->section, stmt->offset,
+                                MINIAS_FIXUP_RV_PCREL_HI20, 4U, *ref,
+                                false) &&
+               minias_encode_add_fixup_ref(as, stmt->section,
+                                stmt->offset + 4U,
                                 load ? MINIAS_FIXUP_RV_PCREL_LO12_I :
                                        MINIAS_FIXUP_RV_PCREL_LO12_S,
-                                4U, label, 0, false);
+                                4U, anchor, false);
     }
     if (m->opcode == RV_MC_WORD)
         code = base | ((uint32_t)rd << 7U) |
@@ -1990,7 +2023,7 @@ static bool rv_encode_mcinst(MiniAs *as, const MiniAsStmt *stmt) {
              (((uint32_t)m->operands[1].immediate&0xfffffU)<<12U);
     else if(m->opcode==RV_MC_BRANCH || m->opcode==RV_MC_JAL) {
         MiniAsRiscvBranchPlan branch;
-        expr=m->operands[m->opcode==RV_MC_BRANCH ? 2U : 1U].symbol;
+        expr=m->operands[m->opcode==RV_MC_BRANCH ? 2U : 1U].bound_symbol;
         if(!minias_riscv_resolve_branch_plan(as,stmt,&branch))return false;
         if(m->opcode==RV_MC_BRANCH && !branch.local){
             minias_set_error(as,"unsupported-relocation:%s:line=%zu",
@@ -2027,8 +2060,8 @@ static bool rv_encode_mcinst(MiniAs *as, const MiniAsStmt *stmt) {
                                     branch.displacement));
         }
         return append_u32(as,stmt->section,enc_j(rd,0)) &&
-               minias_encode_add_fixup(as,stmt->section,stmt->offset,
-                                MINIAS_FIXUP_RV_JAL,4U,expr->name,expr->addend,
+               minias_encode_add_fixup_ref(as,stmt->section,stmt->offset,
+                                MINIAS_FIXUP_RV_JAL,4U,*expr,
                                 false);
     } else {
         minias_set_error(as,"unknown-riscv-mcinst");

@@ -36,6 +36,12 @@ patterns = {
         r'\bas\s*->\s*pcrel_anchor_counter\s*(?:\+\+|--|\+=|-=|=(?!=))',
     'direct synthetic Symbol insertion':
         r'\bminias_get_symbol\s*\(\s*as\s*,[^;]*?,\s*true\s*\)',
+    'Target bypasses Common symbol-reference lookup':
+        r'\bminias_get_symbol\s*\(',
+    'legacy name-based target Fixup request':
+        r'\bminias_encode_add_fixup\s*\(',
+    'legacy symbolic MCOperand representation':
+        r'\bMINIAS_MC_SYMBOL(?:_DIFFERENCE)?\b',
 }
 for name in targets:
     path = Path('assembler/src') / name
@@ -56,10 +62,15 @@ if bad:
                      '\n'.join(bad))
 
 core = Path('assembler/src/minias_internal.h').read_text(encoding='utf-8')
-for api in ('minias_encode_add_fixup', 'minias_encode_request_anchor',
-            'minias_encode_add_elf_flags'):
+for api in ('minias_encode_add_elf_flags', 'minias_encode_add_fixup_ref',
+            'minias_encode_request_anchor_ref', 'minias_bind_symbol_ref',
+            'minias_symbol_ref_lookup'):
     if not re.search(r'\b' + api + r'\s*\(', core):
         raise SystemExit('Missing Common transaction API: ' + api)
+for legacy in ('minias_encode_add_fixup', 'minias_encode_request_anchor',
+               'has_symbol_ref'):
+    if re.search(r'\b' + legacy + r'\b', core):
+        raise SystemExit('Legacy dual-track transaction API remains: ' + legacy)
 print('MINIAS_MC_ENCODE_BOUNDARY=PASS target_mutation=none requests=typed')
 PY
 # Code alignment is a Target-owned NOP policy but still emits through the

@@ -63,6 +63,14 @@ enum MiniAsRiscvMCFamily {
     RV_MC_LI, RV_MC_CALL, RV_MC_TAIL, RV_MC_LA, RV_MC_RAW
 };
 
+/* An ELF relocation has two identities: a stable Common symbol reference,
+ * and a Target-specific expression modifier. @plt belongs only to RISC-V's
+ * CALL/TAIL syntax; it must not be erased when binding the symbol NameId. */
+typedef enum MiniAsRiscvSymbolModifier {
+    MINIAS_RV_SYM_NONE = 0,
+    MINIAS_RV_SYM_PLT = 1
+} MiniAsRiscvSymbolModifier;
+
 /* One Target-private instruction descriptor lookup supplies both parser
  * dispatch and ISA/XLEN policy. Unknown/legacy pseudo spellings return
  * false and continue through the Target's explicit compatibility policy. */
