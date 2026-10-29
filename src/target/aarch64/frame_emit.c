@@ -57,7 +57,7 @@ static unsigned int a64_scratch(MinicA64ScratchPolicy policy,
                                 uint32_t exclusions) {
     uint32_t used = policy.forbidden_gp_mask | exclusions;
     unsigned int preferred = policy.preferred_scratch;
-    if (preferred != 0U && preferred != 16U && preferred != 17U)
+    if (preferred != 0U && (preferred < 9U || preferred > 17U))
         return 0U;
     if (preferred == 0U) preferred = 17U;
     if ((used & (UINT32_C(1) << preferred)) == 0U)

@@ -55,8 +55,15 @@ typedef enum MinicTargetCallCapability {
     MINIC_TARGET_CALL_MS_X64_FIXED_SCALAR = 1U << 0
 } MinicTargetCallCapability;
 
+/* Source-level GNU register/constraint admission is owned by each target.
+ * This opaque policy is intentionally distinct from machine-ASM emission. */
+struct MinicTargetAsmSourcePolicy;
+struct MinicTargetMachineBuiltinPolicy;
+
 typedef struct MinicTargetInfo {
     MinicTargetArchitecture architecture;
+    const struct MinicTargetAsmSourcePolicy *asm_source_policy;
+    const struct MinicTargetMachineBuiltinPolicy *machine_builtin_policy;
     const MinicDataLayout *data_layout;
     const MinicTargetIntegerModel *integer_model;
     MinicType wide_character_type;

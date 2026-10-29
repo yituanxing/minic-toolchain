@@ -1,5 +1,5 @@
 #include "target/target_info.h"
-#include "target/riscv/register_identity.h"
+#include "target/source_policy/source_policy.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -173,6 +173,7 @@ typedef struct MinicTargetLanguageDescriptor {
 
 static const MinicTargetLanguageDescriptor minic_language_riscv32 = {
         .target = {
+            .asm_source_policy = &minic_riscv32_asm_source_policy,
             .integer_model = &minic_ilp32_unsigned_char_integer_model,
             .word_integer_rank = MINIC_INTEGER_RANK_INT,
             .gnu_sizeof_void_is_one = true,
@@ -193,6 +194,7 @@ static const MinicTargetLanguageDescriptor minic_language_riscv32 = {
 };
 static const MinicTargetLanguageDescriptor minic_language_riscv64 = {
         .target = {
+            .asm_source_policy = &minic_riscv64_asm_source_policy,
             .integer_model = &minic_lp64_unsigned_char_integer_model,
             .word_integer_rank = MINIC_INTEGER_RANK_LONG,
             .language_type_capabilities = MINIC_TARGET_LANG_EXTENDED_FLOAT_DECLARATIONS,
@@ -214,6 +216,7 @@ static const MinicTargetLanguageDescriptor minic_language_riscv64 = {
 };
 static const MinicTargetLanguageDescriptor minic_language_x86_64 = {
         .target = {
+            .asm_source_policy = &minic_x86_64_asm_source_policy,
             .integer_model = &minic_lp64_signed_char_integer_model,
             .word_integer_rank = MINIC_INTEGER_RANK_LONG,
             .language_type_capabilities = MINIC_TARGET_LANG_EXTENDED_FLOAT_DECLARATIONS |
@@ -236,6 +239,7 @@ static const MinicTargetLanguageDescriptor minic_language_x86_64 = {
 };
 static const MinicTargetLanguageDescriptor minic_language_aarch64 = {
         .target = {
+            .asm_source_policy = &minic_aarch64_asm_source_policy,
             .integer_model = &minic_lp64_unsigned_char_integer_model,
             .word_integer_rank = MINIC_INTEGER_RANK_LONG,
             .language_type_capabilities = MINIC_TARGET_LANG_EXTENDED_FLOAT_DECLARATIONS |
@@ -258,6 +262,8 @@ static const MinicTargetLanguageDescriptor minic_language_aarch64 = {
 };
 static const MinicTargetLanguageDescriptor minic_language_loongarch64 = {
         .target = {
+            .asm_source_policy = &minic_loongarch64_asm_source_policy,
+            .machine_builtin_policy = &minic_loongarch64_machine_builtin_policy,
             .integer_model = &minic_lp64_signed_char_integer_model,
             .word_integer_rank = MINIC_INTEGER_RANK_LONG,
             .language_type_capabilities = MINIC_TARGET_LANG_EXTENDED_FLOAT_DECLARATIONS,
@@ -872,443 +878,111 @@ bool minic_target_info_call_frame_address_supported(const MinicTargetInfo *targe
     return false;
 }
 
+/* The language boundary is intentionally policy-agnostic: a new target
+ * registers one callback descriptor, without adding target-specific checks to
+ * Frontend, Core, or these GNU source admission functions. Native machine
+ * operand allocation and final emitter qualification are separate contracts. */
+static const MinicTargetAsmSourcePolicy *minic_target_source_policy(
+    const MinicTargetInfo *target) {
+    return target == NULL ? NULL : target->asm_source_policy;
+}
+
 bool minic_target_info_fixed_register_supported(const MinicTargetInfo *target,
                                                 const char *name,
                                                 size_t name_length) {
-    if (target == NULL || name == NULL) return false;
-    /* Linux x86's current_stack_pointer is a read of the LIVE rsp, not
-     * a load from an ELF object and not an alias for rbp. The machine
-     * emitter now owns the matching fixed-register Core instruction.
-     * Do not allow rbp, scratch, or arbitrary SysV registers without
-     * an independent assignment and preservation contract. */
-    if (target->architecture == MINIC_TARGET_ARCH_X86_64)
-        return name_length == 3U && memcmp(name, "rsp", 3U) == 0;
-    /* Original GNU Linux AArch64 also defines current_stack_pointer as a
-     * file-scope register asm("sp").  AArch64 now consumes the same shared
-     * Core fixed-register-read contract as x86, but emits its own SP opcode
-     * and preserves the AAPCS64 frame.  x18/x19 and other GPRs are not
-     * automatically qualified. */
-    if (target->architecture == MINIC_TARGET_ARCH_AARCH64)
-        return name_length == 2U && memcmp(name, "sp", 2U) == 0;
-    /* Original Linux 6.6.143's LoongArch global variables bind TP, SP and
-     * $r21 (per-CPU offset). Kernel ABI reserves r21, so it is safe to READ
-     * these architectural registers as live Core values. Never admit writes
-     * or caller/scratch bindings here. */
-    if (target->architecture == MINIC_TARGET_ARCH_LOONGARCH64)
-        return (name_length == 3U &&
-                (memcmp(name, "$tp", 3U) == 0 ||
-                 memcmp(name, "$sp", 3U) == 0)) ||
-               (name_length == 4U && memcmp(name, "$r21", 4U) == 0);
-    if (target->architecture != MINIC_TARGET_ARCH_RISCV64 &&
-        target->architecture != MINIC_TARGET_ARCH_RISCV32) return false;
-    /* Both RISC-V backends reserve sp/tp architecturally. RV32 shares
-     * the SAME Core fixed-register value semantics as RV64, but has its own
-     * ILP32 machine load/store and frame contract; admit no scratch or ABI
-     * argument register binding without a dedicated target owner.
-     * The current RV64 backend uses most caller/scratch registers internally.
-     * Only the architectural stack/thread registers observed in unchanged Linux
-     * are safe fixed bindings until register allocation becomes target-aware. */
-    return (name_length == 2U && memcmp(name, "tp", 2U) == 0) ||
-           (name_length == 2U && memcmp(name, "sp", 2U) == 0);
+    const MinicTargetAsmSourcePolicy *policy = minic_target_source_policy(target);
+    return policy != NULL && name != NULL && policy->fixed_register_read != NULL &&
+           policy->fixed_register_read(name, name_length);
+}
+
+bool minic_target_info_fixed_register_write_supported(
+    const MinicTargetInfo *target, const char *name, size_t length) {
+    const MinicTargetAsmSourcePolicy *policy = minic_target_source_policy(target);
+    return policy != NULL && name != NULL && policy->fixed_register_write != NULL &&
+           policy->fixed_register_write(name, length);
+}
+
+bool minic_target_info_local_fixed_register_supported(
+    const MinicTargetInfo *target, const char *name, size_t name_length) {
+    const MinicTargetAsmSourcePolicy *policy = minic_target_source_policy(target);
+    return policy != NULL && name != NULL && policy->local_fixed_register != NULL &&
+           policy->local_fixed_register(name, name_length);
 }
 
 bool minic_target_info_inline_asm_readwrite_hardreg_supported(
     const MinicTargetInfo *target, const char *reg, size_t reg_length,
     const char *constraint, size_t length, MinicType operand_type) {
-    /* Original Linux 6.6 x86 current_stack_pointer asm("rsp") is a
-     * GNU extended-asm tied +r operand. C assignment to RSP is NOT
-     * permitted and Core must separately validate the whole machine
-     * template, physical stack effects, registers and clobber set. */
-    return target != NULL && reg != NULL && constraint != NULL &&
-           target->architecture == MINIC_TARGET_ARCH_X86_64 &&
-           reg_length == 3U && memcmp(reg, "rsp", 3U) == 0 &&
-           length == 2U && memcmp(constraint, "+r", 2U) == 0 &&
-           minic_type_equal(operand_type, minic_type_unsigned_long());
+    const MinicTargetAsmSourcePolicy *policy = minic_target_source_policy(target);
+    return policy != NULL && reg != NULL && constraint != NULL &&
+           policy->readwrite_hardreg != NULL &&
+           policy->readwrite_hardreg(reg, reg_length, constraint, length, operand_type);
 }
 
-bool minic_target_info_fixed_register_write_supported(
-    const MinicTargetInfo *target, const char *name, size_t length) {
-    /* Linux LoongArch relocates its initial thread_info through the reserved
-     * global register asm("$tp") alias. This is a genuine live TP assignment,
-     * not an ordinary ELF symbol store. The independent per-CPU $r21 alias
-     * remains writable. SP and all compiler temporary registers are not. */
-    return target != NULL && name != NULL &&
-           target->architecture == MINIC_TARGET_ARCH_LOONGARCH64 &&
-           ((length == 4U && memcmp(name, "$r21", 4U) == 0) ||
-            (length == 3U && memcmp(name, "$tp", 3U) == 0));
+bool minic_target_info_inline_asm_register_clobber_supported(
+    const MinicTargetInfo *target, const char *name, size_t name_length) {
+    const MinicTargetAsmSourcePolicy *policy = minic_target_source_policy(target);
+    return policy != NULL && name != NULL && policy->register_clobber != NULL &&
+           policy->register_clobber(name, name_length);
 }
 
-bool minic_target_info_local_fixed_register_supported(const MinicTargetInfo *target,
-                                                      const char *name,
-                                                      size_t name_length) {
-    if (target == NULL || name == NULL) return false;
-    if (target->architecture == MINIC_TARGET_ARCH_LOONGARCH64) {
-        /* These are the ONLY hard-register local names in the original
-         * 994-file GNU Linux 6.6.143 Kbuild source census. Local bindings
-         * are C object declarations, not unconditional machine operands.
-         * Structured GNU asm must independently qualify the physical
-         * binding/constraint/clobber; the Loong machine emitter currently
-         * rejects unqualified asm instead of silently discarding a binding.
-         * In particular, ordinary t1..t8 scratch locals are NOT admitted. */
-        return (name_length == 2U &&
-                ((name[0] == 't' && name[1] == '0') ||
-                 (name[0] == 'a' &&
-                  (name[1] == '0' || name[1] == '1' || name[1] == '7'))));
-    }
-    if (target->architecture == MINIC_TARGET_ARCH_X86_64) {
-        /* Linux put_user() binds local hard registers using asm("%""rax"),
-         * asm("%""rdx"), etc. GNU treats the leading '%' as an AT&T
-         * register-name marker, not a distinct hardware register. Normalize
-         * ONLY for target local-declaration admission; the structured ASM
-         * machine owner remains responsible for physical binding, clobbers
-         * and stack ABI. Do not permit a lone '%', special registers, saved
-         * registers, or x86 syntax to leak into the Common Core. */
-        if (name_length > 1U && name[0] == '%') {
-            ++name;
-            --name_length;
-        }
-        /* Source GNU local-register variables are not register
-         * reservations. Their only guaranteed machine effect is when
-         * referenced as qualified GNU extended-ASM operands. Reuse the
-         * existing SysV caller-clobber register grammar, excluding cc,
-         * while the x86 machine ASM owner independently checks physical
-         * constraints before emission. Callee-saved registers stay blocked
-         * until the backend explicitly proves save/restore preservation. */
-        return !(name_length == 2U && memcmp(name, "cc", 2U) == 0) &&
-               minic_target_info_inline_asm_register_clobber_supported(
-                   target, name, name_length);
-    }
-    if (target->architecture == MINIC_TARGET_ARCH_AARCH64) {
-        /* Linux 6.6 current_stack_pointer is declared as a fixed `sp`
-         * register alias. The AArch64 machine owner already implements
-         * exactly its READ as `mov x9, sp`; no writes, stack adjustments,
-         * or arbitrary hard-register reservations are implied here. */
-        if (name_length == 2U && memcmp(name, "sp", 2U) == 0)
-            return true;
-        /* Linux arm64 compiler.h binds the PAC-stripping XPACLRI input and
-         * result to the actual link register: register unsigned long
-         * asm("x30").  The AArch64 GNU inline-asm machine contract validates
-         * the complete `hint #7` tied +r form and preserves the entry LR in
-         * the function frame. This is a local operand binding, not permission
-         * for arbitrary C writes to x30 or a global register reservation. */
-        if (name_length == 3U && memcmp(name, "x30", 3U) == 0)
-            return true;
-        /* AAPCS64 x0..x17 are the integer argument and caller-scratch
-         * GPR names used by original GNU Linux C (e.g. syscall x8).
-         * GNU arm64 SMCCC also spells the same physical register r0..r17
-         * in local `register ... asm("r0")` declarations. Admitting a local
-         * variable does NOT reserve that register: the complete structured
-         * SMC/HVC operand and clobber contract must still be proven by the
-         * AArch64 machine owner before emitting the privileged instruction.
-         * Keep platform-reserved x18, stack pointer, and callee-saved
-         * x19..x29 excluded until machine ownership is certified. */
-        unsigned int number;
-        if (name_length < 2U || name_length > 3U ||
-            (name[0] != 'x' && name[0] != 'r') ||
-            name[1] < '0' || name[1] > '9')
-            return false;
-        number = (unsigned int)(name[1] - '0');
-        if (name_length == 3U) {
-            if (name[2] < '0' || name[2] > '9')
-                return false;
-            number = number * 10U + (unsigned int)(name[2] - '0');
-        }
-        return number <= 17U;
-    }
-    if (target->architecture == MINIC_TARGET_ARCH_RISCV64) {
-        unsigned physical_id;
-        /* Only ABI a0..a7 (x10..x17): a local named register never
-         * reserves a machine register. The structured machine owner still
-         * validates each source operand and every clobber independently. */
-        return minic_riscv_gpr_id(name, name_length, &physical_id) &&
-               physical_id >= 10U && physical_id <= 17U;
-    }
-    if (target->architecture != MINIC_TARGET_ARCH_RISCV32) return false;
-    /* RV32 has a separate ILP32 emitter; do not infer its contract from the
-     * RV64 physical-alias support until qualified at the machine boundary. */
-    return name_length == 2U && name[0] == 'a' && name[1] >= '0' && name[1] <= '7';
-}
-
-bool minic_target_info_inline_asm_register_clobber_supported(const MinicTargetInfo *target,
-                                                             const char *name,
-                                                             size_t name_length) {
-    if (target == NULL || name == NULL) return false;
-    /* Syntax-only GNU x86-64 SysV caller-clobber catalog, shared by every
-     * x86 Linux asm statement. Naming a physical register does NOT imply
-     * that the backend may emit the enclosing template: complete operand,
-     * register allocation, clobber and stack-state ABI qualification still
-     * happens in the x86 machine owner. In particular RBX, RBP, RSP,
-     * R12..R15 and the callee-saved vector registers are NOT admitted.
-     * RBX/EBX are never admitted as local fixed-register bindings.
-     * They may appear in GNU C source clobber syntax only through the
-     * separate, explicitly parse-only predicate below. A real inline ASM
-     * target contract must save/restore RBX if it ever uses that clobber.
-     * Preserve the old GNU "dx" spelling of physical RDX. */
-    if (target->architecture == MINIC_TARGET_ARCH_X86_64) {
-        static const char *const caller_scratch[] = {
-            "cc", "dx", "rdx", "edx",
-            "rax", "eax", "rcx", "ecx",
-            "rsi", "esi", "rdi", "edi",
-            "r8", "r9", "r10", "r11"
-        };
-        size_t j;
-        for (j = 0U; j < sizeof(caller_scratch) / sizeof(caller_scratch[0]); ++j)
-            if (strlen(caller_scratch[j]) == name_length &&
-                memcmp(name, caller_scratch[j], name_length) == 0)
-                return true;
-        return false;
-    }
-    if (target->architecture == MINIC_TARGET_ARCH_AARCH64)
-        return name_length == 2U && memcmp(name, "cc", 2U) == 0;
-    /* NZCV flags are only consumed by a fully qualified AArch64 asm shape;
-     * recognizing cc never permits an arbitrary machine instruction. */
-    if (target->architecture == MINIC_TARGET_ARCH_RISCV32) {
-        /* Admission is separate from allocation: an explicit t-register
-         * clobber must be respected by the RV32 source-asm register planner.
-         * RV32 caller-clobber sets match the base RISC-V integer ABI. */
-        return name_length == 2U &&
-               ((name[0] == 'a' && name[1] >= '0' && name[1] <= '7') ||
-                (name[0] == 't' && name[1] >= '0' && name[1] <= '6'));
-    }
-    if (target->architecture == MINIC_TARGET_ARCH_LOONGARCH64) {
-        /* In original Linux GNU LoongArch Kbuild C, "$tN" and "tN"
-         * denote one caller-saved physical scratch register.
-         * Admission of names is distinct from machine asm qualification.
-         * arch/loongarch/kernel/traps.c additionally declares all eight
-         * argument GPRs and callee-saved $s0 in the exact IRQ-stack-switch
-         * inline asm. $s0 is syntax-only here: an actual target opcode
-         * must both save and restore it, and preserve $ra across its BL.
-         * No generic template acquires permission to clobber either. */
-        if (name_length == 3U && name[0] == '$') {
-            ++name;
-            --name_length;
-        }
-        return name_length == 2U &&
-               ((name[0] == 't' && name[1] >= '0' && name[1] <= '8') ||
-                (name[0] == 'a' && name[1] >= '0' && name[1] <= '7') ||
-                (name[0] == 's' && name[1] == '0'));
-    }
-    if (target->architecture != MINIC_TARGET_ARCH_RISCV64) return false;
-    /* TargetConstraint v1 keeps temporary registers available to the current
-     * inline-asm operand allocator while also recognizing the RV64 argument
-     * registers as clobber-only physical registers. The backend never allocates
-     * a0..a7 to GNU asm operands, so declaring them clobbered cannot alias an
-     * allocator-owned operand. Broader saved/special register classes remain
-     * fail-closed until their preservation contract is explicit. */
-    {
-        unsigned physical_id;
-        return minic_riscv_gpr_id(name, name_length, &physical_id) &&
-               minic_riscv_gpr_caller_saved(physical_id);
-    }
-}
-
-    /* GNU syntax and local-fixed-register binding are two different contracts.
- * Only parse original Linux x86 EBX/RBX clobber NAMES; the fixed-register
- * binding and physical machine checks must still reject callee-saved RBX.
- * No target ISA knowledge escapes this TargetInfo boundary. */
 bool minic_target_info_inline_asm_source_clobber_supported(
-    const MinicTargetInfo *target,const char *name,size_t length){
-    if(!target||!name)return false;
-    if(target->architecture==MINIC_TARGET_ARCH_X86_64 &&
-       ((length==3U&&memcmp(name,"ebx",3U)==0)||
-        (length==3U&&memcmp(name,"rbx",3U)==0)||
-        /* GNU x86 also accepts "flags" as the condition-code clobber.
-         * Source parsing alone grants no instruction/emitter permission. */
-        (length==5U&&memcmp(name,"flags",5U)==0)))
-        return true;
-    return minic_target_info_inline_asm_register_clobber_supported(
-        target,name,length);
+    const MinicTargetInfo *target, const char *name, size_t length) {
+    const MinicTargetAsmSourcePolicy *policy = minic_target_source_policy(target);
+    if (policy == NULL || name == NULL) return false;
+    if (policy->source_clobber != NULL)
+        return policy->source_clobber(name, length);
+    return policy->register_clobber != NULL &&
+           policy->register_clobber(name, length);
 }
-
-/* GCC LoongArch <larchintrin.h> family: independently checked builtin
- * signatures, privilege effects and CSR constant operands. This table is
- * description only, NOT an instruction passthrough or a Core ISA branch.
- * There is exactly one semantic registry shared by parsing and emission. */
-typedef enum MinicMachineBuiltinScalar {
-    MINIC_MACHINE_BUILTIN_VOID = 0,
-    MINIC_MACHINE_BUILTIN_CHAR,
-    MINIC_MACHINE_BUILTIN_SHORT,
-    MINIC_MACHINE_BUILTIN_INT,
-    MINIC_MACHINE_BUILTIN_LONG,
-    MINIC_MACHINE_BUILTIN_UCHAR,
-    MINIC_MACHINE_BUILTIN_USHORT,
-    MINIC_MACHINE_BUILTIN_UINT,
-    MINIC_MACHINE_BUILTIN_ULONG
-} MinicMachineBuiltinScalar;
-
-typedef struct MinicMachineBuiltinDesc {
-    const char *suffix;
-    const char *mnemonic;
-    MinicMachineBuiltinScalar result;
-    size_t argc;
-    MinicMachineBuiltinScalar arg[3];
-    size_t immediate_index;
-} MinicMachineBuiltinDesc;
-
-static MinicType minic_machine_builtin_type(const MinicTargetInfo *target,
-                                            MinicMachineBuiltinScalar scalar) {
-    /* Machine builtins are injected as synthetic frontend function
-     * signatures. A plain `char` ABI argument must carry the SELECTED
-     * target's signedness, exactly as a parsed C char declaration does.
-     * minic_type_char() alone has the default unsigned spelling and was
-     * poisoning every LoongArch CRC builtin declaration: the parsed-AST
-     * verifier would reject the entire Linux translation unit before Core. */
-    switch (scalar) {
-    case MINIC_MACHINE_BUILTIN_CHAR: {
-        MinicType type;
-        return minic_target_info_plain_char_type(target, &type)
-            ? type : minic_type_void();
-    }
-    case MINIC_MACHINE_BUILTIN_SHORT: return minic_type_short();
-    case MINIC_MACHINE_BUILTIN_INT: return minic_type_int();
-    case MINIC_MACHINE_BUILTIN_LONG: return minic_type_long();
-    case MINIC_MACHINE_BUILTIN_UCHAR: return minic_type_unsigned_char();
-    case MINIC_MACHINE_BUILTIN_USHORT: return minic_type_unsigned_short();
-    case MINIC_MACHINE_BUILTIN_UINT: return minic_type_unsigned_int();
-    case MINIC_MACHINE_BUILTIN_ULONG: return minic_type_unsigned_long();
-    default: return minic_type_void();
-    }
-}
-
-static const MinicMachineBuiltinDesc minic_loong_machine_builtins[] = {
-    {"cpucfg", "cpucfg", MINIC_MACHINE_BUILTIN_UINT, 1U, {MINIC_MACHINE_BUILTIN_UINT, MINIC_MACHINE_BUILTIN_VOID, MINIC_MACHINE_BUILTIN_VOID}, SIZE_MAX},
-    {"asrtle_d", "asrtle.d", MINIC_MACHINE_BUILTIN_VOID, 2U, {MINIC_MACHINE_BUILTIN_LONG, MINIC_MACHINE_BUILTIN_LONG, MINIC_MACHINE_BUILTIN_VOID}, SIZE_MAX},
-    {"asrtgt_d", "asrtgt.d", MINIC_MACHINE_BUILTIN_VOID, 2U, {MINIC_MACHINE_BUILTIN_LONG, MINIC_MACHINE_BUILTIN_LONG, MINIC_MACHINE_BUILTIN_VOID}, SIZE_MAX},
-    {"crc_w_b_w", "crc.w.b.w", MINIC_MACHINE_BUILTIN_INT, 2U, {MINIC_MACHINE_BUILTIN_CHAR, MINIC_MACHINE_BUILTIN_INT, MINIC_MACHINE_BUILTIN_VOID}, SIZE_MAX},
-    {"crc_w_h_w", "crc.w.h.w", MINIC_MACHINE_BUILTIN_INT, 2U, {MINIC_MACHINE_BUILTIN_SHORT, MINIC_MACHINE_BUILTIN_INT, MINIC_MACHINE_BUILTIN_VOID}, SIZE_MAX},
-    {"crc_w_w_w", "crc.w.w.w", MINIC_MACHINE_BUILTIN_INT, 2U, {MINIC_MACHINE_BUILTIN_INT, MINIC_MACHINE_BUILTIN_INT, MINIC_MACHINE_BUILTIN_VOID}, SIZE_MAX},
-    {"crc_w_d_w", "crc.w.d.w", MINIC_MACHINE_BUILTIN_INT, 2U, {MINIC_MACHINE_BUILTIN_LONG, MINIC_MACHINE_BUILTIN_INT, MINIC_MACHINE_BUILTIN_VOID}, SIZE_MAX},
-    {"crcc_w_b_w", "crcc.w.b.w", MINIC_MACHINE_BUILTIN_INT, 2U, {MINIC_MACHINE_BUILTIN_CHAR, MINIC_MACHINE_BUILTIN_INT, MINIC_MACHINE_BUILTIN_VOID}, SIZE_MAX},
-    {"crcc_w_h_w", "crcc.w.h.w", MINIC_MACHINE_BUILTIN_INT, 2U, {MINIC_MACHINE_BUILTIN_SHORT, MINIC_MACHINE_BUILTIN_INT, MINIC_MACHINE_BUILTIN_VOID}, SIZE_MAX},
-    {"crcc_w_w_w", "crcc.w.w.w", MINIC_MACHINE_BUILTIN_INT, 2U, {MINIC_MACHINE_BUILTIN_INT, MINIC_MACHINE_BUILTIN_INT, MINIC_MACHINE_BUILTIN_VOID}, SIZE_MAX},
-    {"crcc_w_d_w", "crcc.w.d.w", MINIC_MACHINE_BUILTIN_INT, 2U, {MINIC_MACHINE_BUILTIN_LONG, MINIC_MACHINE_BUILTIN_INT, MINIC_MACHINE_BUILTIN_VOID}, SIZE_MAX},
-    {"iocsrrd_b", "iocsrrd.b", MINIC_MACHINE_BUILTIN_UCHAR, 1U, {MINIC_MACHINE_BUILTIN_UINT, MINIC_MACHINE_BUILTIN_VOID, MINIC_MACHINE_BUILTIN_VOID}, SIZE_MAX},
-    {"iocsrrd_h", "iocsrrd.h", MINIC_MACHINE_BUILTIN_USHORT, 1U, {MINIC_MACHINE_BUILTIN_UINT, MINIC_MACHINE_BUILTIN_VOID, MINIC_MACHINE_BUILTIN_VOID}, SIZE_MAX},
-    {"iocsrrd_w", "iocsrrd.w", MINIC_MACHINE_BUILTIN_UINT, 1U, {MINIC_MACHINE_BUILTIN_UINT, MINIC_MACHINE_BUILTIN_VOID, MINIC_MACHINE_BUILTIN_VOID}, SIZE_MAX},
-    {"iocsrrd_d", "iocsrrd.d", MINIC_MACHINE_BUILTIN_ULONG, 1U, {MINIC_MACHINE_BUILTIN_UINT, MINIC_MACHINE_BUILTIN_VOID, MINIC_MACHINE_BUILTIN_VOID}, SIZE_MAX},
-    {"iocsrwr_b", "iocsrwr.b", MINIC_MACHINE_BUILTIN_VOID, 2U, {MINIC_MACHINE_BUILTIN_UCHAR, MINIC_MACHINE_BUILTIN_UINT, MINIC_MACHINE_BUILTIN_VOID}, SIZE_MAX},
-    {"iocsrwr_h", "iocsrwr.h", MINIC_MACHINE_BUILTIN_VOID, 2U, {MINIC_MACHINE_BUILTIN_USHORT, MINIC_MACHINE_BUILTIN_UINT, MINIC_MACHINE_BUILTIN_VOID}, SIZE_MAX},
-    {"iocsrwr_w", "iocsrwr.w", MINIC_MACHINE_BUILTIN_VOID, 2U, {MINIC_MACHINE_BUILTIN_UINT, MINIC_MACHINE_BUILTIN_UINT, MINIC_MACHINE_BUILTIN_VOID}, SIZE_MAX},
-    {"iocsrwr_d", "iocsrwr.d", MINIC_MACHINE_BUILTIN_VOID, 2U, {MINIC_MACHINE_BUILTIN_ULONG, MINIC_MACHINE_BUILTIN_UINT, MINIC_MACHINE_BUILTIN_VOID}, SIZE_MAX},
-    {"csrrd_w", "csrrd", MINIC_MACHINE_BUILTIN_UINT, 1U, {MINIC_MACHINE_BUILTIN_UINT, MINIC_MACHINE_BUILTIN_VOID, MINIC_MACHINE_BUILTIN_VOID}, 0U},
-    {"csrrd_d", "csrrd", MINIC_MACHINE_BUILTIN_ULONG, 1U, {MINIC_MACHINE_BUILTIN_UINT, MINIC_MACHINE_BUILTIN_VOID, MINIC_MACHINE_BUILTIN_VOID}, 0U},
-    {"csrwr_w", "csrwr", MINIC_MACHINE_BUILTIN_UINT, 2U, {MINIC_MACHINE_BUILTIN_UINT, MINIC_MACHINE_BUILTIN_UINT, MINIC_MACHINE_BUILTIN_VOID}, 1U},
-    {"csrwr_d", "csrwr", MINIC_MACHINE_BUILTIN_ULONG, 2U, {MINIC_MACHINE_BUILTIN_ULONG, MINIC_MACHINE_BUILTIN_UINT, MINIC_MACHINE_BUILTIN_VOID}, 1U},
-    {"csrxchg_w", "csrxchg", MINIC_MACHINE_BUILTIN_UINT, 3U, {MINIC_MACHINE_BUILTIN_UINT, MINIC_MACHINE_BUILTIN_UINT, MINIC_MACHINE_BUILTIN_UINT}, 2U},
-    {"csrxchg_d", "csrxchg", MINIC_MACHINE_BUILTIN_ULONG, 3U, {MINIC_MACHINE_BUILTIN_ULONG, MINIC_MACHINE_BUILTIN_ULONG, MINIC_MACHINE_BUILTIN_UINT}, 2U},
-};
 
 bool minic_target_info_machine_builtin_signature(
     const MinicTargetInfo *target, const char *spelling, size_t length,
     char *callee, size_t callee_capacity, MinicType *result,
     MinicType arguments[3], size_t *argument_count,
     const char **mnemonic, size_t *immediate_index) {
-    static const char gnu_prefix[] = "__builtin_loongarch_";
-    static const char internal_prefix[] = "__minic_target_builtin_loongarch_";
-    const MinicMachineBuiltinDesc *descriptor;
-    size_t i, suffix_length, prefix_length;
-    if (target == NULL || target->architecture != MINIC_TARGET_ARCH_LOONGARCH64 ||
-        spelling == NULL || result == NULL || arguments == NULL ||
-        argument_count == NULL || mnemonic == NULL || immediate_index == NULL ||
-        callee == NULL || callee_capacity == 0U ||
-        length <= sizeof(gnu_prefix) - 1U ||
-        memcmp(spelling, gnu_prefix, sizeof(gnu_prefix) - 1U) != 0)
-        return false;
-    suffix_length = length - (sizeof(gnu_prefix) - 1U);
-    prefix_length = sizeof(internal_prefix) - 1U;
-    if (suffix_length > SIZE_MAX - prefix_length ||
-        prefix_length + suffix_length >= callee_capacity)
-        return false;
-    for (i = 0U;
-         i < sizeof(minic_loong_machine_builtins) / sizeof(minic_loong_machine_builtins[0]);
-         ++i) {
-        size_t j;
-        descriptor = &minic_loong_machine_builtins[i];
-        if (strlen(descriptor->suffix) != suffix_length ||
-            memcmp(spelling + sizeof(gnu_prefix) - 1U,
-                   descriptor->suffix, suffix_length) != 0)
-            continue;
-        (void)memcpy(callee, internal_prefix, prefix_length);
-        (void)memcpy(callee + prefix_length, descriptor->suffix, suffix_length);
-        callee[prefix_length + suffix_length] = '\0';
-        *result = minic_machine_builtin_type(target, descriptor->result);
-        for (j = 0U; j < descriptor->argc; ++j)
-            arguments[j] = minic_machine_builtin_type(target, descriptor->arg[j]);
-        *argument_count = descriptor->argc;
-        *mnemonic = descriptor->mnemonic;
-        *immediate_index = descriptor->immediate_index;
-        return true;
-    }
-    return false;
+    const MinicTargetMachineBuiltinPolicy *policy =
+        target == NULL ? NULL : target->machine_builtin_policy;
+    return policy != NULL && policy->signature != NULL &&
+           policy->signature(target, spelling, length, callee, callee_capacity,
+                             result, arguments, argument_count, mnemonic,
+                             immediate_index);
 }
 
 bool minic_target_info_inline_asm_memory_input_constraint_supported(
-    const MinicTargetInfo *target, const char *constraint, size_t constraint_length) {
-    if (target == NULL || constraint == NULL || constraint_length != 1U) {
+    const MinicTargetInfo *target, const char *constraint,
+    size_t constraint_length) {
+    const MinicTargetAsmSourcePolicy *policy = minic_target_source_policy(target);
+    if (policy == NULL || constraint == NULL || constraint_length != 1U)
         return false;
-    }
-    /* GNU m names a memory operand for all of MiniC's target descriptions.
-     * On AArch64 Q specifically names an address with a single base register
-     * and zero displacement. Other targets give Q unrelated semantics. */
+    /* m is universal GNU memory source syntax. ISA-specific alternatives
+     * (for example AArch64 Q) are admitted by the registered target owner. */
     return constraint[0] == 'm' ||
-           (target->architecture == MINIC_TARGET_ARCH_AARCH64 && constraint[0] == 'Q');
+           (policy->memory_input_constraint != NULL &&
+            policy->memory_input_constraint(constraint, constraint_length));
 }
 
-bool minic_target_info_inline_asm_immediate_constraint_supported(const MinicTargetInfo *target,
-                                                                 const char *constraint,
-                                                                 size_t constraint_length,
-                                                                 int64_t value) {
-    if (target == NULL || constraint == NULL || constraint_length != 1U ||
-        constraint[0] != 'I') {
-        return false;
-    }
-    switch (target->architecture) {
-    case MINIC_TARGET_ARCH_RISCV32:
-    case MINIC_TARGET_ARCH_RISCV64:
-    case MINIC_TARGET_ARCH_LOONGARCH64:
-        /* GCC: signed 12-bit immediate. */
-        return value >= -2048 && value <= 2047;
-    case MINIC_TARGET_ARCH_AARCH64:
-        /* AArch64 GCC: add/sub immediate encodes an unsigned imm12,
-         * optionally left-shifted 12. This admits Linux's "brk %0"
-         * operand 0x401 without borrowing RISC-V's signed range.
-         * A positive constraint result is not permission to emit an
-         * arbitrary inline-asm template: the target backend qualifies it. */
-        return (value >= 0 && value <= 4095) ||
-               (value >= 4096 && value <= 0xfff000 &&
-                (value & 4095) == 0);
-    case MINIC_TARGET_ARCH_X86_64:
-        /* GCC config/i386/constraints.md: I is the immediate 0..31
-         * (32-bit shifts), not the signed imm12 of RISC-V/LoongArch.
-         * Parsing an ISA-specific constant does not authorize generating
-         * an unqualified machine ASM template: Core and x86 recheck. */
-        return value >= 0 && value <= 31;
-    default:
-        return false;
-    }
+bool minic_target_info_inline_asm_immediate_constraint_supported(
+    const MinicTargetInfo *target, const char *constraint,
+    size_t constraint_length, int64_t value) {
+    const MinicTargetAsmSourcePolicy *policy = minic_target_source_policy(target);
+    return policy != NULL && constraint != NULL &&
+           policy->immediate_constraint != NULL &&
+           policy->immediate_constraint(constraint, constraint_length, value);
 }
 
-bool minic_target_info_inline_asm_immediate_may_defer(const MinicTargetInfo *target) {
-    /* GNU inline constant operands are often formal-parameter expressions
-     * until __always_inline__ specialization. Neither acceptance nor emitted
-     * ISA is implied here; Core must resolve the immediate or reject. */
-    return target != NULL &&
-           (target->architecture == MINIC_TARGET_ARCH_LOONGARCH64 ||
-            target->architecture == MINIC_TARGET_ARCH_AARCH64 ||
-            target->architecture == MINIC_TARGET_ARCH_X86_64);
+bool minic_target_info_inline_asm_immediate_may_defer(
+    const MinicTargetInfo *target) {
+    const MinicTargetAsmSourcePolicy *policy = minic_target_source_policy(target);
+    return policy != NULL && policy->immediate_may_defer;
 }
 
 const char *minic_target_info_inline_asm_immediate_constraint_diagnostic(
     const MinicTargetInfo *target) {
-    if (target != NULL && target->architecture == MINIC_TARGET_ARCH_AARCH64) {
-        return "GNU asm 'I' input requires an AArch64 unsigned imm12 (optional shift 12)";
-    }
-    if (target != NULL && target->architecture == MINIC_TARGET_ARCH_X86_64) {
-        return "GNU asm 'I' input requires an x86 shift count 0..31";
-    }
-    return "GNU asm 'I' input requires a signed 12-bit integer constant";
+    const MinicTargetAsmSourcePolicy *policy = minic_target_source_policy(target);
+    return policy != NULL && policy->immediate_diagnostic != NULL
+        ? policy->immediate_diagnostic
+        : "GNU asm 'I' input requires a signed 12-bit integer constant";
 }
-
 /* The ABI owns the state-cursor representation; Core never tests an ISA.
  * Other structured cursor ABIs must explicitly implement their own policy. */
 bool minic_target_info_variadic_state_copy_type_supported(

@@ -58,6 +58,13 @@ MINIC_CFLAGS  := -std=c11 $(COMMON_WARNINGS) $(MODE_CFLAGS) $(CFLAGS)
 MINIC_LDFLAGS := $(MODE_LDFLAGS) $(LDFLAGS)
 MINIC_INCLUDES := -Iinclude -Isrc
 
+TARGET_SOURCE_POLICY_SOURCES := \
+	src/target/source_policy/riscv32.c \
+	src/target/source_policy/riscv64.c \
+	src/target/source_policy/x86_64.c \
+	src/target/source_policy/aarch64.c \
+	src/target/source_policy/loongarch64.c
+
 MINIC_SOURCES := \
 	src/compiler/compiler.c \
 	src/compiler/core_function_set.c \
@@ -148,6 +155,7 @@ MINIC_SOURCES := \
 	src/target/target_info.c \
 	src/target/target_catalog.c \
 	src/target/target_machine_options.c \
+	$(TARGET_SOURCE_POLICY_SOURCES) \
 	src/target/backend.c \
 	src/target/backend_core_usage.c \
 	src/target/common/global_emit.c \
@@ -362,6 +370,7 @@ AST_CONTRACT_TEST_SOURCES := \
 	src/target/data_layout.c \
 	src/target/target_info.c \
 	src/target/target_catalog.c \
+	$(TARGET_SOURCE_POLICY_SOURCES) \
 	tests/frontend/ast_contract_test.c
 AST_CONTRACT_TEST_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(AST_CONTRACT_TEST_SOURCES))
 AST_CONTRACT_TEST_BINARY  := $(BUILD_DIR)/tests/frontend/ast-contract-test
@@ -372,6 +381,7 @@ LAYOUT_TEST_SOURCES := \
 	src/target/data_layout.c \
 	src/target/target_info.c \
 	src/target/target_catalog.c \
+	$(TARGET_SOURCE_POLICY_SOURCES) \
 	tests/target/riscv64/layout_test.c
 LAYOUT_TEST_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(LAYOUT_TEST_SOURCES))
 LAYOUT_TEST_BINARY  := $(BUILD_DIR)/tests/target/riscv64/layout-test

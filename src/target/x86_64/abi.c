@@ -15,14 +15,27 @@ static const char *const x86_win64_gp_arguments[] = {
 };
 static const char *const x86_sysv_gp_results[] = {"%rax", "%rdx"};
 static const char *const x86_win64_gp_results[] = {"%rax"};
+static const char *const x86_win64_extra_nonvolatile_gp[] = {"%rdi", "%rsi"};
 
 const MinicX86AbiRegisters *minic_x86_64_abi_registers(
     MinicFunctionCallingConvention convention) {
     static const MinicX86AbiRegisters sysv = {
-        x86_sysv_gp_arguments, 6U, 8U, x86_sysv_gp_results, 2U
+        .gp_arguments = x86_sysv_gp_arguments,
+        .gp_argument_count = 6U,
+        .fp_argument_count = 8U,
+        .gp_results = x86_sysv_gp_results,
+        .gp_result_count = 2U,
     };
     static const MinicX86AbiRegisters win64 = {
-        x86_win64_gp_arguments, 4U, 4U, x86_win64_gp_results, 1U
+        .gp_arguments = x86_win64_gp_arguments,
+        .gp_argument_count = 4U,
+        .fp_argument_count = 4U,
+        .gp_results = x86_win64_gp_results,
+        .gp_result_count = 1U,
+        .extra_nonvolatile_gp = x86_win64_extra_nonvolatile_gp,
+        .extra_nonvolatile_gp_count = 2U,
+        .extra_nonvolatile_xmm_first = 6U,
+        .extra_nonvolatile_xmm_count = 10U,
     };
     switch (convention) {
     case MINIC_CALLING_CONVENTION_DEFAULT: return &sysv;

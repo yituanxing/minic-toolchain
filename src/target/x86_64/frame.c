@@ -11,12 +11,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Exact x86 frame layout, moved out of assembly emission without changing
- * address arithmetic, 16+ aligned objects or SysV variadic save area. */
-bool minic_x86_64_align(size_t value, size_t alignment, size_t *out) {
-    return minic_core_frame_align_up(value, alignment, out);
-}
-
 /* Opt-in physical frame preflight stage trace. The frontend/core diagnosis
  * has already succeeded when this is reached; separating incoming ABI
  * placement, outgoing CALL placement, object storage and SSA slot layout
@@ -87,31 +81,60 @@ bool minic_x86_64_frame_init_with_storage(const MinicC0Program *program,
      * TI parameters. 48 bytes also preserves 16-byte frame alignment. */
     for (i = 0U; i < fn->parameter_count; ++i)
         if (minic_type_is_int128_integer(fn->parameter_types[i])) {
-            if (value_bytes > (size_t)INT32_MAX - 48U)
+            const MinicX86AbiRegisters *abi = minic_x86_64_abi_registers(
+                MINIC_CALLING_CONVENTION_DEFAULT);
+            size_t bank_bytes;
+            if (abi == NULL || abi->gp_argument_count > SIZE_MAX / 8U)
+                return false;
+            bank_bytes = abi->gp_argument_count * 8U;
+            if (bank_bytes > (size_t)INT32_MAX ||
+                value_bytes > (size_t)INT32_MAX - bank_bytes)
                 return false;
             frame->saves_incoming_gp = true;
             frame->incoming_gp_save_offset = value_bytes + 8U;
-            value_bytes += 48U;
+            value_bytes += bank_bytes;
             break;
         }
     if (fn->calling_convention == MINIC_CALLING_CONVENTION_MS_X64) {
+        const MinicX86AbiRegisters *abi = minic_x86_64_abi_registers(
+            MINIC_CALLING_CONVENTION_MS_X64);
+        size_t gp_bytes, xmm_bytes, nonvolatile_bytes;
         /* Win64 extends the SysV nonvolatile bank by RDI/RSI and XMM6..15.
          * Save all ten vector registers: even a body which only emits
          * scalar code can invoke arbitrary SysV callees (where those vector
          * registers are volatile). Reserve the two GP slots first, then
          * ten 16-byte vector slots, preserving Core value ownership. */
-        if (frame->saves_incoming_gp || frame->has_sret ||
-            frame->varargs_count != 0U ||
-            value_bytes > (size_t)INT32_MAX - 176U)
+        if (abi == NULL || abi->extra_nonvolatile_gp == NULL ||
+            abi->extra_nonvolatile_gp_count == 0U ||
+            abi->extra_nonvolatile_gp_count > SIZE_MAX / 8U ||
+            abi->extra_nonvolatile_xmm_count > SIZE_MAX / 16U ||
+            frame->saves_incoming_gp || frame->has_sret ||
+            frame->varargs_count != 0U)
+            return x86_frame_preflight_reject(fn, "ms-x64-nonvolatile");
+        gp_bytes = abi->extra_nonvolatile_gp_count * 8U;
+        xmm_bytes = abi->extra_nonvolatile_xmm_count * 16U;
+        if (gp_bytes > SIZE_MAX - xmm_bytes ||
+            (nonvolatile_bytes = gp_bytes + xmm_bytes) > (size_t)INT32_MAX ||
+            value_bytes > (size_t)INT32_MAX - nonvolatile_bytes)
             return x86_frame_preflight_reject(fn, "ms-x64-nonvolatile");
         frame->ms_nonvolatile_gp_save_offset = value_bytes + 8U;
-        frame->ms_nonvolatile_xmm_save_offset = value_bytes + 32U;
-        value_bytes += 176U;
+        frame->ms_nonvolatile_xmm_save_offset = value_bytes + gp_bytes + 16U;
+        value_bytes += nonvolatile_bytes;
     }
     /* Discover semantic va_start sites from Core. A VA cursor is not an RV64
      * sequential argument pointer under SysV x86-64. */
     if (frame->varargs_count != 0U) {
+        const MinicX86AbiRegisters *abi = minic_x86_64_abi_registers(
+            MINIC_CALLING_CONVENTION_DEFAULT);
         size_t count = 0U, gp_used, fp_used, stack_used;
+        size_t save_gp_bytes, save_fp_bytes, save_bytes;
+        if (abi == NULL || abi->gp_argument_count > SIZE_MAX / 8U ||
+            abi->fp_argument_count > SIZE_MAX / 16U)
+            return false;
+        save_gp_bytes = abi->gp_argument_count * 8U;
+        save_fp_bytes = abi->fp_argument_count * 16U;
+        if (save_gp_bytes > SIZE_MAX - save_fp_bytes) return false;
+        save_bytes = save_gp_bytes + save_fp_bytes;
         if (frame->varargs_count > SIZE_MAX / sizeof(*frame->varargs_results) ||
             (frame->varargs_results = (MinicCoreValueId *)calloc(
                  frame->varargs_count, sizeof(*frame->varargs_results))) == NULL)
@@ -144,15 +167,17 @@ bool minic_x86_64_frame_init_with_storage(const MinicC0Program *program,
         fp_used = frame->incoming_arguments.end.fp_used;
         stack_used = frame->incoming_arguments.end.stack_slots;
         if (stack_used > ((size_t)INT32_MAX - 16U) / 8U ||
-            value_bytes > (size_t)INT32_MAX - 176U ||
-            !minic_x86_64_align(value_bytes + 176U, 16U, &frame->varargs_regsave_offset) ||
+            save_bytes > (size_t)INT32_MAX ||
+            value_bytes > (size_t)INT32_MAX - save_bytes ||
+            !minic_core_frame_align_up(value_bytes + save_bytes, 16U,
+                                       &frame->varargs_regsave_offset) ||
             frame->varargs_count > ((size_t)INT32_MAX -
                                     frame->varargs_regsave_offset) / 24U)
             return false;
         frame->varargs_tag_base_offset = frame->varargs_regsave_offset;
         frame->varargs_fixed_stack_slots = stack_used;
         frame->varargs_gp_offset = (unsigned int)(gp_used * 8U);
-        frame->varargs_fp_offset = (unsigned int)(48U + fp_used * 16U);
+        frame->varargs_fp_offset = (unsigned int)(save_gp_bytes + fp_used * 16U);
     }
     if (fn->object_count != 0U) {
         if (fn->object_count > SIZE_MAX / sizeof(*frame->object_offsets)) return false;
@@ -179,7 +204,7 @@ bool minic_x86_64_frame_init_with_storage(const MinicC0Program *program,
         const size_t alignment = frame->object_storage.objects[i].alignment;
         if (frame->objects_from_aligned_rsp) {
             /* Positive offsets from the aligned %rsp denote object START. */
-            if (!minic_x86_64_align(pos, alignment, &pos) || pos > SIZE_MAX - size)
+            if (!minic_core_frame_align_up(pos, alignment, &pos) || pos > SIZE_MAX - size)
                 return false;
             frame->object_offsets[i] = pos;
             pos += size;
@@ -187,7 +212,7 @@ bool minic_x86_64_frame_init_with_storage(const MinicC0Program *program,
             /* Negative offsets from aligned %rbp denote object START.
              * Align the END of the reserved extent, not its low address. */
             if (pos > SIZE_MAX - size ||
-                !minic_x86_64_align(pos + size, alignment, &pos))
+                !minic_core_frame_align_up(pos + size, alignment, &pos))
                 return false;
             frame->object_offsets[i] = pos;
         }
@@ -204,7 +229,7 @@ bool minic_x86_64_frame_init_with_storage(const MinicC0Program *program,
             return false;
         pos += fixed_bytes + maximum_alignment;
     }
-    return minic_x86_64_align(pos, 16U, &frame->frame_size) &&
+    return minic_core_frame_align_up(pos, 16U, &frame->frame_size) &&
            frame->frame_size <= (size_t)INT32_MAX;
 }
 

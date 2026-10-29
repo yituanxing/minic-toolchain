@@ -6,12 +6,11 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* AAPCS64 IP1 (x17) is reserved for large stack spill addressing.
- * The earlier x12 scratch silently clobbered LIVE target atomic LL/SC
- * status/compare registers during synthetic [sp,#large] rewriting.
- * x17 is not a live operand in the target structured-ASM machine
- * templates; source Core operand slots are stack materialized. */
- /* Original AArch64 large SP access and dynamic stack-base text passes. */
+/* Legacy global text fixup: IP1 (x17) was selected to avoid the old x12
+ * clobber of LL/SC status/compare registers. This is NOT a general liveness
+ * proof: some structured-ASM templates use x17 explicitly, and the pass has
+ * no per-instruction scratch contract. Typed FrameRef must replace every
+ * remaining raw stack producer before this compatibility pass can retire. */
 bool minic_aarch64_legalize_large_sp_memory(const char *path) {
     FILE *input = fopen(path, "rb"), *output, *rewritten;
     char line[512], copy[8192];

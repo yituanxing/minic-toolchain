@@ -189,17 +189,28 @@ static void core_local_constants_prepare_if_branch(
     const MinicCoreLocalIntegerConstant *incoming,
     MinicExpressionId condition_expression) {
     size_t index;
+    unsigned char *modified;
+    const MinicExpression *condition;
+    size_t local_count;
 
     if (context == NULL || context->source_function == NULL ||
         context->local_integer_constants == NULL || incoming == NULL) {
         return;
     }
-    for (index = 0U; index < context->source_function->local_count; ++index) {
+    local_count = context->source_function->local_count;
+    condition = minic_c0_program_expression(
+        context->body->program, condition_expression);
+    /* Collect the full condition once. On OOM treat every currently live
+     * local as potentially changed; no fact can be proved by failed scans. */
+    modified = (unsigned char *)calloc(local_count == 0U ? 1U : local_count,
+                                       sizeof(*modified));
+    if (modified != NULL)
+        core_expression_collect_modified_locals(
+            context, condition_expression, modified, 0U);
+    for (index = 0U; index < local_count; ++index) {
         MinicLocalId local_id = context->source_function->local_begin + index;
         const MinicLocal *local = minic_c0_program_local(
             context->body->program, local_id);
-        const MinicExpression *condition = minic_c0_program_expression(
-            context->body->program, condition_expression);
         context->local_integer_constants[index] = incoming[index];
         /* Local IDs cover the entire function, including block-scoped objects
          * declared after this condition.  An unknown side effect in the
@@ -213,9 +224,7 @@ static void core_local_constants_prepare_if_branch(
             local->name_span.begin.offset >= condition->span.end.offset) {
             continue;
         }
-        if (incoming[index].escaped ||
-            core_expression_may_modify_local(
-                context, condition_expression, local_id, 0U)) {
+        if (incoming[index].escaped || modified == NULL || modified[index] != 0U) {
             context->local_integer_constants[index].known = false;
             /* Structural branch lowering happens before condition lowering.
                Treat a condition that may expose/modify this local as escaped
@@ -224,6 +233,7 @@ static void core_local_constants_prepare_if_branch(
             context->local_integer_constants[index].escaped = true;
         }
     }
+    free(modified);
 }
 
 static void core_local_constants_meet_if_paths(

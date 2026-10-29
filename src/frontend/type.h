@@ -64,6 +64,20 @@ typedef enum MinicTypeBaseKind {
     MINIC_TYPE_BASE_AARCH64_SVE_BOOL
 } MinicTypeBaseKind;
 
+/* Source-language declaration shape only: this neither approves an extension
+ * for a target nor promises an executable machine value/ABI. TargetInfo owns
+ * admission; this centralized compatibility adapter lets the verifier avoid
+ * naming individual target ISA types. */
+typedef enum MinicBuiltinDeclarationRole {
+    MINIC_BUILTIN_DECLARATION_INVALID = 0,
+    MINIC_BUILTIN_DECLARATION_STANDARD_FLOAT,
+    MINIC_BUILTIN_DECLARATION_EXTENDED_FLOAT,
+    MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE,
+    MINIC_BUILTIN_DECLARATION_ABI_CURSOR
+} MinicBuiltinDeclarationRole;
+
+MinicBuiltinDeclarationRole minic_type_builtin_declaration_role(MinicTypeBaseKind kind);
+
 typedef enum MinicIntegerSign {
     MINIC_INTEGER_SIGN_NONE = 0,
     MINIC_INTEGER_SIGN_SIGNED,

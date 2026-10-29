@@ -9,6 +9,45 @@ static int fail(const char *message)
     return 1;
 }
 
+static int test_builtin_declaration_roles(void) {
+    static const struct {
+        MinicTypeBaseKind kind;
+        MinicBuiltinDeclarationRole role;
+    } cases[] = {
+        {MINIC_TYPE_BASE_FLOAT, MINIC_BUILTIN_DECLARATION_STANDARD_FLOAT},
+        {MINIC_TYPE_BASE_DOUBLE, MINIC_BUILTIN_DECLARATION_STANDARD_FLOAT},
+        {MINIC_TYPE_BASE_LONG_DOUBLE, MINIC_BUILTIN_DECLARATION_STANDARD_FLOAT},
+        {MINIC_TYPE_BASE_FLOAT128, MINIC_BUILTIN_DECLARATION_EXTENDED_FLOAT},
+        {MINIC_TYPE_BASE_FLOAT32, MINIC_BUILTIN_DECLARATION_EXTENDED_FLOAT},
+        {MINIC_TYPE_BASE_FLOAT64, MINIC_BUILTIN_DECLARATION_EXTENDED_FLOAT},
+        {MINIC_TYPE_BASE_FLOAT32X, MINIC_BUILTIN_DECLARATION_EXTENDED_FLOAT},
+        {MINIC_TYPE_BASE_FLOAT64X, MINIC_BUILTIN_DECLARATION_EXTENDED_FLOAT},
+        {MINIC_TYPE_BASE_AARCH64_FLOAT32X4, MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE},
+        {MINIC_TYPE_BASE_AARCH64_FLOAT64X2, MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE},
+        {MINIC_TYPE_BASE_AARCH64_SVE_FLOAT32, MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE},
+        {MINIC_TYPE_BASE_AARCH64_SVE_FLOAT64, MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE},
+        {MINIC_TYPE_BASE_AARCH64_SVE_BOOL, MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE},
+        {MINIC_TYPE_BASE_X86_VA_LIST_CURSOR, MINIC_BUILTIN_DECLARATION_ABI_CURSOR}
+    };
+    size_t index;
+
+    for (index = 0U; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+        if (minic_type_builtin_declaration_role(cases[index].kind) != cases[index].role) {
+            return fail("extended C builtin declaration trait classification");
+        }
+    }
+    if (minic_type_builtin_declaration_role(MINIC_TYPE_BASE_VOID) !=
+            MINIC_BUILTIN_DECLARATION_INVALID ||
+        minic_type_builtin_declaration_role(MINIC_TYPE_BASE_INT) !=
+            MINIC_BUILTIN_DECLARATION_INVALID ||
+        !minic_type_is_void(minic_type_aarch64_header_builtin(MINIC_TYPE_BASE_FLOAT128)) ||
+        minic_type_aarch64_header_builtin(MINIC_TYPE_BASE_AARCH64_SVE_BOOL).base_kind !=
+            MINIC_TYPE_BASE_AARCH64_SVE_BOOL) {
+        return fail("builtin declaration trait rejects non-vector ISA identity");
+    }
+    return 0;
+}
+
 int main(void)
 {
     MinicType void_type;
@@ -44,6 +83,10 @@ int main(void)
     MinicType unqualified_type;
     MinicType malformed_type;
     MinicType overflow_type;
+
+    if (test_builtin_declaration_roles() != 0) {
+        return 1;
+    }
 
     void_type = minic_type_void();
     if (!minic_type_is_void(void_type) ||

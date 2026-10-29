@@ -281,7 +281,18 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_assignment(
     MinicExpressionId source_id, MinicSourceSpan span,
     MinicCoreValueId *result_value, bool is_initializer_write, bool *matched);
 
-/* Shared source-effect probe: if and loop CFG both consume this conservative check. */
+/* Single conservative source-effect classification owner. The append-only
+ * batch collector marks modified[local_id - local_begin] for every local in
+ * the active source function. Unknown/unsupported subtrees mark ALL locals;
+ * callers initialize the array to zero and may OR several subtrees. This
+ * permits one AST walk per IF condition / LOOP body, not one per local. */
+void core_expression_collect_modified_locals(
+    const MinicCoreLowerContext *context, MinicExpressionId expression_id,
+    unsigned char *modified, unsigned int depth);
+void core_block_collect_modified_locals(
+    const MinicCoreLowerContext *context, const MinicBlock *block,
+    unsigned char *modified, unsigned int depth);
+/* Scalar diagnostic/proof compatibility queries use the same collector. */
 bool core_expression_may_modify_local(
     const MinicCoreLowerContext *context, MinicExpressionId expression_id,
     MinicLocalId local_id, unsigned int depth);

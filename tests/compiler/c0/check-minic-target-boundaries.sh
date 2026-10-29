@@ -225,7 +225,7 @@ has src/frontend/parser_local_declarations.c 'consume_static_local_interleaved_a
 has src/frontend/parser_function.c 'has_const_qualifier'
 has src/frontend/parser_function.c '!minic_type_add_const(base_type, &base_type)'
 has src/frontend/parser_function.c '!minic_type_add_volatile(base_type, &base_type)'
-has src/target/target_info.c "name[0] == '%'"
+has src/target/source_policy/x86_64.c "name[0] == '%'"
 lacks src/core/core_lower_asm_target.c 'discard.addressable'
 has src/target/x86_64/asm_contract.c '"cmp%1,%2;sbb%0,%0;"'
 has src/target/x86_64/asm_contract.c 'MINIC_X86_BIT_SCAN_BSR32_TIED'

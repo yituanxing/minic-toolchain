@@ -105,6 +105,20 @@ int main(void) {
         (MinicA64FrameRegister){MINIC_A64_REG_Q, 9U},
         (MinicA64ScratchPolicy){UINT32_C(1) << 17U, 0U}, true),
         "ldr q9, [x16]");
+    /* LL/SC templates may have both IP0/IP1 live yet a provably dead x12.
+     * An explicit scratch request must use ONLY that register, and must
+     * reject an overlap with the caller's live-register exclusion mask. */
+    expect(test_transfer(false, dynamic,
+        (MinicA64FrameRef){MINIC_A64_FRAME_OWNED, 32760U},
+        (MinicA64FrameRegister){MINIC_A64_REG_X, 17U},
+        (MinicA64ScratchPolicy){UINT32_C(0x3ee00), 12U}, true),
+        "ldr x17, [x12]");
+    output = test_transfer(false, dynamic,
+        (MinicA64FrameRef){MINIC_A64_FRAME_OWNED, 32760U},
+        (MinicA64FrameRegister){MINIC_A64_REG_X, 17U},
+        (MinicA64ScratchPolicy){UINT32_C(0x3fe00), 12U}, false);
+    assert(*output == '\0');
+    free(output);
     output = test_transfer(false, dynamic,
         (MinicA64FrameRef){MINIC_A64_FRAME_OWNED, 65520U},
         (MinicA64FrameRegister){MINIC_A64_REG_W, 9U},

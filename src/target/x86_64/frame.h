@@ -58,7 +58,6 @@ typedef struct MinicX86Frame {
     unsigned int varargs_fp_offset;
 } MinicX86Frame;
 
-bool minic_x86_64_align(size_t value, size_t alignment, size_t *out);
 bool minic_x86_64_frame_init_with_storage(
     const MinicC0Program *, const MinicTargetInfo *, const MinicCoreFunction *,
     const MinicCoreFunctionFacts *, const MinicCoreObjectStoragePlan *,

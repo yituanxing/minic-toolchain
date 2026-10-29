@@ -30,8 +30,10 @@ int main(void) {
     MinicStatementId statement_ids[2] = {0U, 1U};
     MinicBlock blocks[2];
     MinicC0Program program;
+    MinicFunction source_function;
     MinicFunctionBodyView body;
     MinicCoreLowerContext context;
+    unsigned char changed[3];
 
     (void)memset(expressions, 0, sizeof(expressions));
     (void)memset(statements, 0, sizeof(statements));
@@ -39,6 +41,7 @@ int main(void) {
     (void)memset(&program, 0, sizeof(program));
     (void)memset(&body, 0, sizeof(body));
     (void)memset(&context, 0, sizeof(context));
+    (void)memset(&source_function, 0, sizeof(source_function));
 
     /* index++ inside an assignment's destination address: data[index++]. */
     expressions[0].kind = MINIC_EXPRESSION_LOCAL;
@@ -77,6 +80,17 @@ int main(void) {
     program.block_count = 2U;
     body.program = &program;
     context.body = &body;
+    source_function.local_begin = 1U;
+    source_function.local_count = 3U;
+    context.source_function = &source_function;
+
+    /* The batch summary must agree with the historical scalar oracle for
+     * every local, while inspecting the source expression/block only once. */
+    (void)memset(changed, 0, sizeof(changed));
+    core_expression_collect_modified_locals(&context, 5U, changed, 0U);
+    if (changed[0] != 1U || changed[1] != 0U || changed[2] != 0U) return 7;
+    core_block_collect_modified_locals(&context, &blocks[1], changed, 0U);
+    if (changed[0] != 1U || changed[1] != 0U || changed[2] != 0U) return 8;
 
     if (!core_expression_may_modify_local(&context, 5U, 1U, 0U)) return 1;
     if (core_expression_may_modify_local(&context, 5U, 2U, 0U)) return 2;
@@ -88,5 +102,16 @@ int main(void) {
     statements[1].kind = MINIC_STATEMENT_RETURN;
     statements[1].expression = 4U;
     if (core_block_may_modify_local(&context, &blocks[1], 1U, 0U)) return 6;
+    (void)memset(changed, 0, sizeof(changed));
+    core_block_collect_modified_locals(&context, &blocks[1], changed, 0U);
+    if (changed[0] != 0U || changed[1] != 0U || changed[2] != 0U) return 9;
+    statements[1].kind = MINIC_STATEMENT_INLINE_ASM;
+    (void)memset(changed, 0, sizeof(changed));
+    core_block_collect_modified_locals(&context, &blocks[1], changed, 0U);
+    if (changed[0] != 1U || changed[1] != 1U || changed[2] != 1U) return 10;
+    /* Exhausting the recursive AST budget is conservative for all locals. */
+    (void)memset(changed, 0, sizeof(changed));
+    core_expression_collect_modified_locals(&context, 0U, changed, 65U);
+    if (changed[0] != 1U || changed[1] != 1U || changed[2] != 1U) return 11;
     return 0;
 }

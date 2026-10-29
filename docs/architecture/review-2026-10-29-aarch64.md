@@ -251,3 +251,68 @@ retirement, split the giant ASM source-admission and machine-emission families
 around typed operand descriptors and a per-template scratch exclusion mask;
 prove source-only and AArch64 native runtime per family. No dead-path removal
 is claimed in this batch.
+
+## Fourth machine-ASM family migration: explicit live-register scratch
+
+This batch revisited all 24 AArch64 C/H files against the earlier 24/24
+reading ledger, focusing on the **active** 7,404-line structured-ASM contract,
+both 142-line textual finalizer entry points and the typed frame resolver.
+The GNU Linux 6.6 admission rules remain exact and fail-closed. In particular,
+no instruction-template matcher, privileged system-register gate, alternative
+feature number, `__ex_table` layout, LL/SC retry condition, or memory-ordering
+barrier has been changed.
+
+**Before migration, concrete deletion evidence was insufficient:**
+
+- `codegen.c` still advertises `minic_aarch64_copy_dynamic_frame_asm` to
+  Common's dynamic-function emitter, and
+  `minic_aarch64_legalize_large_sp_memory` as the whole-program finalizer.
+- The ASM contract emitted 122 raw `[sp,#]` source fragments before this
+  round; its exact GCC Linux template handlers remain reachable through
+  `minic_aarch64_emit_qualified_structured_asm` from `residual_emit.c`.
+- The textual large-SP pass assumes implicit x17 scratch but **cannot infer**
+  whether x17 is live. Its old comment that no structured-ASM template uses
+  x17 was disproved by the CMPXCHG128 and futex paths; that comment has been
+  corrected. Neither textual finalizer is proved dead, so neither was removed.
+
+**Migrated as complete machine families:**
+
+- Raw MMIO store, LDAR acquire, STLR release and TBI/uaccess mask operands.
+- Per-CPU LL/SC RMW, LSE `.altinstructions` alternatives, atomics returning
+  previous/new results, XCHG, and scalar CMPXCHG across 1/2/4/8 byte widths.
+- CMPXCHG128 LL/SC and futex retry loops, including their status/result
+  pointer writebacks and exception-table output operands.
+
+All moved Core operand loads use a typed `OWNED` slot and a family-scoped
+`MinicA64ScratchPolicy`: x9–x16 are forbidden while x17 is the temporary
+large-frame address register. Two explicitly audited boundaries need more
+precise lifetime handling:
+
+1. **CMPXCHG128:** after STXP/STLXP (success or branch failure), the old x16
+   replacement value is dead. x16 can then materialize output pointers loaded
+   into x17 while x9/x11 old values and w12 retry status remain live.
+2. **Futex mode 6:** w16 holds the eventual EAGAIN value through the retry
+   loop, so x16 must *not* be reused when x17 fetches the input pointer.
+   x12 is still dead before the exclusive loop initializes it; the frame
+   helper now permits an **explicitly requested** x9–x17 scratch register,
+   checks its forbidden-live mask, and preserves the original x17/x16 default.
+   A positive x12 and forbidden-x12 negative native FrameRef test cover the
+   new API, including large 32-KiB frame offsets.
+
+The final ASM catalog contains **76** raw `[sp,#]` template references (122
+before this batch). They cover still-active privileged sysreg/KVM/EL2,
+structured register bindings, cache-maintenance, exception and other
+machine families requiring separate live-range proof. These 76 are the
+current typed-frame backlog, not known dead code. Finalizer removal is gated
+on reducing this count to zero **and** proving dynamic current-SP versus owned
+frame semantics across exact-head Linux/QEMU tests.
+
+**Validation:** strict standalone C11 `-Werror` checks for `asm_contract`,
+`frame_emit` and the target frame unit test PASS; the whole compiler also
+builds with `CFLAGS=-Werror`. Atomic-alternative matrix, LSE atomic full,
+4-width/4-order narrow CMPXCHG source, hypervisor ticket-spinlock 5-ISA
+admission, LSE alternative and LSE atomic probes pass source-only. The
+typed-frame/indirect-return and large-structured-ASM 45/640 source probes
+remain green. AArch64 GNU assembler and QEMU runtime are unavailable locally;
+the remaining mandatory exact-head native checks (especially futex and
+CMPXCHG128 with >4095-byte spills) are **not claimed as PASS**.

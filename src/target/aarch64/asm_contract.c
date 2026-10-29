@@ -1,9 +1,67 @@
 #include "target/aarch64/asm_contract.h"
+#include "target/aarch64/frame_emit.h"
 #include "target/common/lp64_frame.h"
 #include "target/common/direct_linux_bug_asm.h"
 #include "target/data_layout.h"
 #include "frontend/const_eval.h"
 #include <string.h>
+
+/* The Linux LL/SC, LSE-alternative and raw-MMIO families below allocate
+ * x9..x16 to operand values, retry status and result addresses. x17/IP1 is
+ * deliberately unused by their machine templates and is the sole allowed
+ * large-frame address scratch. The typed frame helper never clobbers NZCV.
+ * Other structured-ASM families have different live sets and must not use
+ * this contract without a separate register audit. */
+static bool aarch64_owned_reg_policy(FILE *out,
+    const MinicDirectLP64BlockContext *ctx, unsigned int reg,
+    MinicCoreValueId id, MinicA64FrameRegisterClass kind,
+    MinicA64ScratchPolicy scratch) {
+    MinicA64FrameView view;
+    const size_t offset = (size_t)id * 8U;
+    if (out == NULL || ctx == NULL || offset / 8U != (size_t)id)
+        return false;
+    view = (MinicA64FrameView){
+        ctx->dynamic_frame, ctx->frame, 0U, ctx->saved_entry_sp_offset
+    };
+    return minic_a64_emit_frame_load(out, &view,
+        minic_a64_owned_slot(offset),
+        (MinicA64FrameRegister){kind, reg}, scratch);
+}
+
+static bool aarch64_atomic_owned_x(FILE *out,
+    const MinicDirectLP64BlockContext *ctx, unsigned int reg,
+    MinicCoreValueId id) {
+    const MinicA64ScratchPolicy scratch = {UINT32_C(0x1fe00), 17U};
+    return aarch64_owned_reg_policy(out, ctx, reg, id,
+        MINIC_A64_REG_X, scratch);
+}
+
+static bool aarch64_atomic_owned_w(FILE *out,
+    const MinicDirectLP64BlockContext *ctx, unsigned int reg,
+    MinicCoreValueId id) {
+    const MinicA64ScratchPolicy scratch = {UINT32_C(0x1fe00), 17U};
+    return aarch64_owned_reg_policy(out, ctx, reg, id,
+        MINIC_A64_REG_W, scratch);
+}
+
+/* At pre-input and post-CASP/LLSC output boundaries x16 is provably dead:
+ * before its replacement input is loaded, or after the exclusive operation.
+ * x9..x15 may carry result/status and remain protected. */
+static bool aarch64_atomic_owned_x17_ip0_scratch(FILE *out,
+    const MinicDirectLP64BlockContext *ctx, MinicCoreValueId id) {
+    const MinicA64ScratchPolicy scratch = {UINT32_C(0x2fe00), 16U};
+    return aarch64_owned_reg_policy(out, ctx, 17U, id,
+        MINIC_A64_REG_X, scratch);
+}
+
+/* Futex mode 6 holds its EAGAIN value in w16 while a second pointer is
+ * fetched into x17. x12 is not live until the exclusive retry begins. */
+static bool aarch64_futex_owned_x17_x12_scratch(FILE *out,
+    const MinicDirectLP64BlockContext *ctx, MinicCoreValueId id) {
+    const MinicA64ScratchPolicy scratch = {UINT32_C(0x3ee00), 12U};
+    return aarch64_owned_reg_policy(out, ctx, 17U, id,
+        MINIC_A64_REG_X, scratch);
+}
 
 /* Original Linux 6.6 arch/arm64/include/asm/jump_label.h.  Both jump
  * sites own one 16-byte __jump_table record: site and C label PREL32,
@@ -4130,12 +4188,12 @@ static bool aarch64_linux_cmpxchg128_emit(
              : i < 4U ? !aarch64_stlr_type(pointee, 8U)
              : !aarch64_stlr_type(type, 8U))) return false;
     }
-    return fprintf(out,
-        "  ldr x10, [sp, #%zu]\n"
-        "  ldr x13, [sp, #%zu]\n"
-        "  ldr x14, [sp, #%zu]\n"
-        "  ldr x15, [sp, #%zu]\n"
-        "  ldr x16, [sp, #%zu]\n"
+    return aarch64_atomic_owned_x(out, ctx, 10U, ops[0].value) &&
+        aarch64_atomic_owned_x(out, ctx, 13U, ops[4].value) &&
+        aarch64_atomic_owned_x(out, ctx, 14U, ops[5].value) &&
+        aarch64_atomic_owned_x(out, ctx, 15U, ops[6].value) &&
+        aarch64_atomic_owned_x(out, ctx, 16U, ops[7].value) &&
+        fprintf(out,
         "  mov w12, wzr\n"
         "  prfm pstl1strm, [x10]\n"
         "1:\n"
@@ -4146,23 +4204,15 @@ static bool aarch64_linux_cmpxchg128_emit(
         "  %s w12, x15, x16, [x10]\n"
         "  cbnz w12, 1b\n"
         "%s"
-        "2:\n"
-        "  ldr x17, [sp, #%zu]\n"
-        "  str x9, [x17]\n"
-        "  ldr x17, [sp, #%zu]\n"
-        "  str x11, [x17]\n"
-        "  ldr x17, [sp, #%zu]\n"
-        "  str w12, [x17]\n",
-        (size_t)ops[0].value * 8U,
-        (size_t)ops[4].value * 8U,
-        (size_t)ops[5].value * 8U,
-        (size_t)ops[6].value * 8U,
-        (size_t)ops[7].value * 8U,
+        "2:\n",
         mode == 1U ? "stxp" : "stlxp",
-        mode == 1U ? "" : "  dmb ish\n",
-        (size_t)ops[1].value * 8U,
-        (size_t)ops[2].value * 8U,
-        (size_t)ops[3].value * 8U) >= 0;
+        mode == 1U ? "" : "  dmb ish\n") >= 0 &&
+        aarch64_atomic_owned_x17_ip0_scratch(out, ctx, ops[1].value) &&
+        fputs("  str x9, [x17]\n", out) != EOF &&
+        aarch64_atomic_owned_x17_ip0_scratch(out, ctx, ops[2].value) &&
+        fputs("  str x11, [x17]\n", out) != EOF &&
+        aarch64_atomic_owned_x17_ip0_scratch(out, ctx, ops[3].value) &&
+        fputs("  str w12, [x17]\n", out) != EOF;
 }
 
 /* Linux 6.6 atomic_lse.h: unlike the LL/SC compare-exchange above, the
@@ -4593,24 +4643,18 @@ static bool aarch64_linux_futex_emit(
     /* w9:error, w10:loaded value, x11:atomic memory, w12:retry status,
      * w13:loop budget, w14:operation/old, w15:new or EAGAIN, w16:EAGAIN.
      * A fault handler will write w9 (reg 9) and resume at 4: or 3:. */
-    if (fprintf(out,
-            "  ldr x11, [sp, #%zu]\n"
-            "  ldr x17, [sp, #%zu]\n"
-            "  ldr w13, [x17]\n"
-            "  ldr w14, [sp, #%zu]\n"
-            "  ldr w15, [sp, #%zu]\n",
-            (size_t)ops[2].value * 8U,
-            (size_t)ops[4].value * 8U,
-            (size_t)ops[5].value * 8U,
-            (size_t)ops[6].value * 8U) < 0) return false;
+    if (!aarch64_atomic_owned_x(out, ctx, 11U, ops[2].value) ||
+        /* x16 is not initialized until the mode-6 fallback load below. */
+        !aarch64_atomic_owned_x17_ip0_scratch(out, ctx, ops[4].value) ||
+        fputs("  ldr w13, [x17]\n", out) == EOF ||
+        aarch64_atomic_owned_w(out, ctx, 14U, ops[5].value) == false ||
+        aarch64_atomic_owned_w(out, ctx, 15U, ops[6].value) == false)
+        return false;
     if (mode == 6U &&
-        fprintf(out,"  ldr w16, [sp, #%zu]\n",
-                (size_t)ops[7].value * 8U) < 0) return false;
+        !aarch64_atomic_owned_w(out, ctx, 16U, ops[7].value)) return false;
     if (mode == 6U &&
-        fprintf(out,
-            "  ldr x17, [sp, #%zu]\n"
-            "  ldr w9, [x17]\n",
-            (size_t)ops[0].value * 8U) < 0) return false;
+        (!aarch64_futex_owned_x17_x12_scratch(out, ctx, ops[0].value) ||
+         fputs("  ldr w9, [x17]\n", out) == EOF)) return false;
     if (fprintf(out,
             "  prfm pstl1strm, [x11]\n"
             "1: ldxr w10, [x11]\n") < 0) return false;
@@ -4647,10 +4691,8 @@ static bool aarch64_linux_futex_emit(
     for (i = 0U; i < 5U; ++i) {
         const char *const regs[] = {"w9", "w10", "w11", "w12", "w13"};
         if (i == 2U) continue;
-        if (fprintf(out,
-                "  ldr x17, [sp, #%zu]\n"
-                "  str %s, [x17]\n",
-                (size_t)ops[i].value * 8U, regs[i]) < 0)
+        if (!aarch64_atomic_owned_x17_ip0_scratch(out, ctx, ops[i].value) ||
+            fprintf(out, "  str %s, [x17]\n", regs[i]) < 0)
             return false;
     }
     return true;
@@ -6779,13 +6821,9 @@ bool minic_aarch64_emit_qualified_structured_asm(
             return false;
         /* x9/x10 are AAPCS64 caller-saved. Preserve the actual
          * 8/16/32/64-bit STR hardware width, never a synthesized C store. */
-        return fprintf(out,
-            "  ldr x9, [sp, #%zu]\n"
-            "  ldr x10, [sp, #%zu]\n"
-            "  %s\n",
-            (size_t)ops[0].value * 8U,
-            (size_t)ops[1].value * 8U,
-            store->instruction) >= 0;
+        return aarch64_atomic_owned_x(out, ctx, 9U, ops[0].value) &&
+               aarch64_atomic_owned_x(out, ctx, 10U, ops[1].value) &&
+               fprintf(out, "  %s\n", store->instruction) >= 0;
     }
 
     /* Original GNU barrier.h acquire load: exact byte/half/word/64-bit
@@ -6817,13 +6855,10 @@ bool minic_aarch64_emit_qualified_structured_asm(
            !(aarch64_stlr_memory_carrier(ctx->program,mem_ty,w) ||
              aarch64_stlr_scalar_core(fn,mem_ty,w)))
             return false;
-        return fprintf(out,
-            "  ldr x10, [sp, #%zu]\n"
-            "  %s\n"
-            "  ldr x11, [sp, #%zu]\n"
-            "  %s, [x11]\n",
-            (size_t)ops[1].value*8U,rd[n],
-            (size_t)ops[0].value*8U,wr[n])>=0;
+        return aarch64_atomic_owned_x(out, ctx, 10U, ops[1].value) &&
+               fprintf(out, "  %s\n", rd[n]) >= 0 &&
+               aarch64_atomic_owned_x(out, ctx, 11U, ops[0].value) &&
+               fprintf(out, "  %s, [x11]\n", wr[n]) >= 0;
     }
 
     if (ins->value.structured_inline_asm.operand_count == 2U) {
@@ -6852,11 +6887,9 @@ bool minic_aarch64_emit_qualified_structured_asm(
             return false;
         /* LP64 Core SSA slots SP-relative; x9/x10 are AAPCS64 caller-saved.
          * STLR/B/H provides release ordering, never a compiler barrier. */
-        return fprintf(out, "  ldr x10, [sp, #%zu]\n"
-                            "  ldr x9, [sp, #%zu]\n"
-                            "  %s\n",
-                       (size_t)b[0].value * 8U,
-                       (size_t)b[1].value * 8U, op[width]) >= 0;
+        return aarch64_atomic_owned_x(out, ctx, 10U, b[0].value) &&
+               aarch64_atomic_owned_x(out, ctx, 9U, b[1].value) &&
+               fprintf(out, "  %s\n", op[width]) >= 0;
     }
     /* Same C status/tmp/+Q/input roles as our older 4-role atomic
      * family, but exact original per-CPU templates have no PRFM, no
@@ -6906,16 +6939,14 @@ bool minic_aarch64_emit_qualified_structured_asm(
                         ? (p.returns_new ? "ldadd" : "stadd")
                         : strcmp(p.op->name, "andnot") == 0
                             ? "stclr" : "stset";
-                    if (fprintf(out,
-                            "  ldr x10, [sp, #%zu]\n"
-                            "  ldr x11, [sp, #%zu]\n"
+                    if (!aarch64_atomic_owned_x(out, ctx, 10U, ops[2].value) ||
+                        !aarch64_atomic_owned_x(out, ctx, 11U, ops[3].value) ||
+                        fprintf(out,
                             "661:\n"
                             "1: ldxr%s %s9, [x10]\n"
                             "  %s %s9, %s9, %s11\n"
                             "  stxr%s w12, %s9, [x10]\n"
                             "  cbnz w12, 1b\n",
-                            (size_t)ops[2].value * 8U,
-                            (size_t)ops[3].value * 8U,
                             suffix, reg, p.op->alu, reg, reg, reg,
                             suffix, reg) < 0 ||
                         !aarch64_linux_alt_emit_middle(out, 33U, true))
@@ -6932,37 +6963,30 @@ bool minic_aarch64_emit_qualified_structured_asm(
                         "  nop\n  nop\n  nop\n",
                         lse_op, suffix, reg) < 0) return false;
                     if (!aarch64_linux_alt_emit_end(out)) return false;
-                    return fprintf(out,
-                        "  mov w12, #0\n"
-                        "  ldr x13, [sp, #%zu]\n"
-                        "  %s, [x13]\n"
-                        "  ldr x13, [sp, #%zu]\n"
-                        "  str w12, [x13]\n",
-                        (size_t)ops[1].value * 8U, store,
-                        (size_t)ops[0].value * 8U) >= 0;
+                    return fputs("  mov w12, #0\n", out) != EOF &&
+                        aarch64_atomic_owned_x(out, ctx, 13U, ops[1].value) &&
+                        fprintf(out, "  %s, [x13]\n", store) >= 0 &&
+                        aarch64_atomic_owned_x(out, ctx, 13U, ops[0].value) &&
+                        fputs("  str w12, [x13]\n", out) != EOF;
                 }
             }
             /* aarch64 LL/SC status failure retries; status written as u32
              * and tmp/ret narrowed EXACTLY, not widened to a 64-bit store. */
-            return fprintf(out,
-                "  ldr x10, [sp, #%zu]\n"
-                "  ldr x11, [sp, #%zu]\n"
+            return aarch64_atomic_owned_x(out, ctx, 10U, ops[2].value) &&
+                aarch64_atomic_owned_x(out, ctx, 11U, ops[3].value) &&
+                fprintf(out,
                 "1:\n"
                 "  ldxr%s %s9, [x10]\n"
                 "  %s %s9, %s9, %s11\n"
                 "  stxr%s w12, %s9, [x10]\n"
-                "  cbnz w12, 1b\n"
-                "  ldr x13, [sp, #%zu]\n"
-                "  %s, [x13]\n"
-                "  ldr x13, [sp, #%zu]\n"
-                "  str w12, [x13]\n",
-                (size_t)ops[2].value*8U,
-                (size_t)ops[3].value*8U,
+                "  cbnz w12, 1b\n",
                 suffix,reg,
                 p.op->alu,reg,reg,reg,
-                suffix,reg,
-                (size_t)ops[1].value*8U,store,
-                (size_t)ops[0].value*8U)>=0;
+                suffix,reg) >= 0 &&
+                aarch64_atomic_owned_x(out, ctx, 13U, ops[1].value) &&
+                fprintf(out, "  %s, [x13]\n", store) >= 0 &&
+                aarch64_atomic_owned_x(out, ctx, 13U, ops[0].value) &&
+                fputs("  str w12, [x13]\n", out) != EOF;
         }
     }
     if (ins->value.structured_inline_asm.operand_count == 4U) {
@@ -6998,28 +7022,24 @@ bool minic_aarch64_emit_qualified_structured_asm(
             /* Register x9 becomes the new, post-RMW value. The memory
              * update is a real exclusive STXR retry, and source memory
              * ordering maps to hardware LDAXR/STLXR plus full DMB ISH. */
-            return fprintf(out,
-                "  ldr x10, [sp, #%zu]\n"
-                "  ldr x11, [sp, #%zu]\n"
+            return aarch64_atomic_owned_x(out, ctx, 10U, ops[2].value) &&
+                aarch64_atomic_owned_x(out, ctx, 11U, ops[3].value) &&
+                fprintf(out,
                 "  prfm pstl1strm, [x10]\n"
                 "1:\n"
                 "  %s %s9, [x10]\n"
                 "  %s %s9, %s9, %s11\n"
                 "  %s w12, %s9, [x10]\n"
                 "  cbnz w12, 1b\n"
-                "%s"
-                "  ldr x13, [sp, #%zu]\n"
-                "  str %s9, [x13]\n"
-                "  ldr x13, [sp, #%zu]\n"
-                "  str x12, [x13]\n",
-                (size_t)ops[2].value * 8U,
-                (size_t)ops[3].value * 8U,
+                "%s",
                 aarch64_atomic_load[ret.mode], reg,
                 ret.op->alu, reg, reg, reg,
                 aarch64_atomic_store[ret.mode], reg,
-                ret.mode == 0U ? "  dmb ish\n" : "",
-                (size_t)ops[0].value * 8U, reg,
-                (size_t)ops[1].value * 8U) >= 0;
+                ret.mode == 0U ? "  dmb ish\n" : "") >= 0 &&
+                aarch64_atomic_owned_x(out, ctx, 13U, ops[0].value) &&
+                fprintf(out, "  str %s9, [x13]\n", reg) >= 0 &&
+                aarch64_atomic_owned_x(out, ctx, 13U, ops[1].value) &&
+                fputs("  str x12, [x13]\n", out) != EOF;
         }
     }
     /* Genuine 1/2/4/8-byte AArch64 XCHG: preserve the exclusive retry
@@ -7065,17 +7085,15 @@ bool minic_aarch64_emit_qualified_structured_asm(
                         info->template_text, info->template_length,
                         old_body, sizeof(old_body),
                         new_body, sizeof(new_body))) {
-                    if (fprintf(out,
-                        "  ldr x10, [sp, #%zu]\n"
-                        "  ldr x11, [sp, #%zu]\n"
+                    if (!aarch64_atomic_owned_x(out, ctx, 10U, ops[2].value) ||
+                        !aarch64_atomic_owned_x(out, ctx, 11U, ops[3].value) ||
+                        fprintf(out,
                         "661:\n"
                         "  prfm pstl1strm, [x10]\n"
                         "1: %sxr%s %s9, [x10]\n"
                         "  %sxr%s w12, %s11, [x10]\n"
                         "  cbnz w12, 1b\n"
                         "%s",
-                        (size_t)ops[2].value * 8U,
-                        (size_t)ops[3].value * 8U,
                         aarch64_xchg_ld[xchg.mode], suffix, reg,
                         aarch64_xchg_st[xchg.mode], suffix, reg,
                         xchg.mode == 3U ? "  dmb ish\n" : "") < 0 ||
@@ -7089,36 +7107,29 @@ bool minic_aarch64_emit_qualified_structured_asm(
                         xchg.mode == 3U ? "  nop\n" : "") < 0 ||
                         !aarch64_linux_alt_emit_end(out))
                         return false;
-                    return fprintf(out,
-                        "  mov w12, #0\n"
-                        "  ldr x13, [sp, #%zu]\n"
-                        "  %s, [x13]\n"
-                        "  ldr x13, [sp, #%zu]\n"
-                        "  str x12, [x13]\n",
-                        (size_t)ops[0].value * 8U, old_store,
-                        (size_t)ops[1].value * 8U) >= 0;
+                    return fputs("  mov w12, #0\n", out) != EOF &&
+                        aarch64_atomic_owned_x(out, ctx, 13U, ops[0].value) &&
+                        fprintf(out, "  %s, [x13]\n", old_store) >= 0 &&
+                        aarch64_atomic_owned_x(out, ctx, 13U, ops[1].value) &&
+                        fputs("  str x12, [x13]\n", out) != EOF;
                 }
             }
-            return fprintf(out,
-                "  ldr x10, [sp, #%zu]\n"
-                "  ldr x11, [sp, #%zu]\n"
+            return aarch64_atomic_owned_x(out, ctx, 10U, ops[2].value) &&
+                aarch64_atomic_owned_x(out, ctx, 11U, ops[3].value) &&
+                fprintf(out,
                 "  prfm pstl1strm, [x10]\n"
                 "1:\n"
                 "  %sxr%s %s9, [x10]\n"
                 "  %sxr%s w12, %s11, [x10]\n"
                 "  cbnz w12, 1b\n"
-                "%s"
-                "  ldr x13, [sp, #%zu]\n"
-                "  %s, [x13]\n"
-                "  ldr x13, [sp, #%zu]\n"
-                "  str x12, [x13]\n",
-                (size_t)ops[2].value * 8U,
-                (size_t)ops[3].value * 8U,
+                "%s",
                 aarch64_xchg_ld[xchg.mode], suffix, reg,
                 aarch64_xchg_st[xchg.mode], suffix, reg,
-                xchg.mode == 3U ? "  dmb ish\n" : "",
-                (size_t)ops[0].value * 8U, old_store,
-                (size_t)ops[1].value * 8U) >= 0;
+                xchg.mode == 3U ? "  dmb ish\n" : "") >= 0 &&
+                aarch64_atomic_owned_x(out, ctx, 13U, ops[0].value) &&
+                fprintf(out, "  %s, [x13]\n", old_store) >= 0 &&
+                aarch64_atomic_owned_x(out, ctx, 13U, ops[1].value) &&
+                fputs("  str x12, [x13]\n", out) != EOF;
         }
     }
     if (ins->value.structured_inline_asm.operand_count == 5U &&
@@ -7164,10 +7175,10 @@ bool minic_aarch64_emit_qualified_structured_asm(
         /* Mismatch returns OLD without writing memory; a matching value
          * may be stored only via STXR, which is retried on hardware failure.
          * x9 old, x11 expected, x12 new, x13 compare / STXR status. */
-        return fprintf(out,
-            "  ldr x10, [sp, #%zu]\n"
-            "  ldr x11, [sp, #%zu]\n"
-            "  ldr x12, [sp, #%zu]\n"
+        return aarch64_atomic_owned_x(out, ctx, 10U, ops[2].value) &&
+            aarch64_atomic_owned_x(out, ctx, 11U, ops[3].value) &&
+            aarch64_atomic_owned_x(out, ctx, 12U, ops[4].value) &&
+            fprintf(out,
             "  prfm pstl1strm, [x10]\n"
             "1:\n"
             "  %s%s %s9, [x10]\n"
@@ -7176,24 +7187,18 @@ bool minic_aarch64_emit_qualified_structured_asm(
             "  %s%s w13, %s12, [x10]\n"
             "  cbnz w13, 1b\n"
             "%s"
-            "2:\n"
-            "  ldr x14, [sp, #%zu]\n"
-            "  %s, [x14]\n"
-            "  ldr x14, [sp, #%zu]\n"
-            "  str x13, [x14]\n",
-            (size_t)ops[2].value * 8U,
-            (size_t)ops[3].value * 8U,
-            (size_t)ops[4].value * 8U,
+            "2:\n",
             ld[mode], suffix, width == 8U ? "x" : "w",
             width == 8U ? "x" : "w",
             width == 8U ? "x" : "w",
             width == 8U ? "x" : "w",
             width == 8U ? "x" : "w",
             st[mode], suffix, width == 8U ? "x" : "w",
-            mode == 3U ? "  dmb ish\n" : "",
-            (size_t)ops[1].value * 8U,
-            old_store,
-            (size_t)ops[0].value * 8U) >= 0;
+            mode == 3U ? "  dmb ish\n" : "") >= 0 &&
+            aarch64_atomic_owned_x(out, ctx, 14U, ops[1].value) &&
+            fprintf(out, "  %s, [x14]\n", old_store) >= 0 &&
+            aarch64_atomic_owned_x(out, ctx, 14U, ops[0].value) &&
+            fputs("  str x13, [x14]\n", out) != EOF;
     }
     if (ins->value.structured_inline_asm.operand_count == 5U) {
         Aarch64AtomicForm atomic;
@@ -7235,33 +7240,28 @@ bool minic_aarch64_emit_qualified_structured_asm(
          * Preserve LDXR old value in x9, compute new in x13, publish through
          * STXR and write C result/temporary locals after successful retry.
          * Acquire/release use hardware LDAXR/STLXR, full uses DMB ISH. */
-        return fprintf(out,
-            "  ldr x10, [sp, #%zu]\n"
-            "  ldr x11, [sp, #%zu]\n"
+        return aarch64_atomic_owned_x(out, ctx, 10U, ops[3].value) &&
+            aarch64_atomic_owned_x(out, ctx, 11U, ops[4].value) &&
+            fprintf(out,
             "  prfm pstl1strm, [x10]\n"
             "1:\n"
             "  %s %s9, [x10]\n"
             "  %s %s13, %s9, %s11\n"
             "  %s w12, %s13, [x10]\n"
             "  cbnz w12, 1b\n"
-            "%s"
-            "  ldr x14, [sp, #%zu]\n"
-            "  str %s9, [x14]\n"
-            "  ldr x14, [sp, #%zu]\n"
-            "  str %s13, [x14]\n"
-            "  ldr x14, [sp, #%zu]\n"
-            "  str x12, [x14]\n",
-            (size_t)ops[3].value * 8U,
-            (size_t)ops[4].value * 8U,
+            "%s",
             aarch64_atomic_load[mode], width == 8U ? "x" : "w",
             atomic.op->alu, width == 8U ? "x" : "w",
             width == 8U ? "x" : "w",
             width == 8U ? "x" : "w",
             aarch64_atomic_store[mode], width == 8U ? "x" : "w",
-            mode == 0U ? "  dmb ish\n" : "",
-            (size_t)ops[0].value * 8U, width == 8U ? "x" : "w",
-            (size_t)ops[1].value * 8U, width == 8U ? "x" : "w",
-            (size_t)ops[2].value * 8U) >= 0;
+            mode == 0U ? "  dmb ish\n" : "") >= 0 &&
+            aarch64_atomic_owned_x(out, ctx, 14U, ops[0].value) &&
+            fprintf(out, "  str %s9, [x14]\n", width == 8U ? "x" : "w") >= 0 &&
+            aarch64_atomic_owned_x(out, ctx, 14U, ops[1].value) &&
+            fprintf(out, "  str %s13, [x14]\n", width == 8U ? "x" : "w") >= 0 &&
+            aarch64_atomic_owned_x(out, ctx, 14U, ops[2].value) &&
+            fputs("  str x12, [x14]\n", out) != EOF;
     }
     if (ins->value.structured_inline_asm.operand_count == 4U) {
         Aarch64AtomicForm atomic;
@@ -7296,30 +7296,25 @@ bool minic_aarch64_emit_qualified_structured_asm(
          * Result and status outputs write their Core address-backed C locals;
          * memory operand is updated by STXR, not a fabricated ordinary store.
          * x9..x13 are AAPCS64 caller-saved scratch; numeric GAS label is local. */
-        return fprintf(out,
-            "  ldr x10, [sp, #%zu]\n"
-            "  ldr x11, [sp, #%zu]\n"
+        return aarch64_atomic_owned_x(out, ctx, 10U, b[2].value) &&
+            aarch64_atomic_owned_x(out, ctx, 11U, b[3].value) &&
+            fprintf(out,
             "  prfm pstl1strm, [x10]\n"
             "1:\n"
             "  ldxr %s9, [x10]\n"
             "  %s %s9, %s9, %s11\n"
             "  stxr w12, %s9, [x10]\n"
-            "  cbnz w12, 1b\n"
-            "  ldr x13, [sp, #%zu]\n"
-            "  str %s9, [x13]\n"
-            "  ldr x13, [sp, #%zu]\n"
-            "  str x12, [x13]\n",
-            (size_t)b[2].value * 8U,
-            (size_t)b[3].value * 8U,
+            "  cbnz w12, 1b\n",
             width == 8U ? "x" : "w",
             atomic.op->alu,
             width == 8U ? "x" : "w",
             width == 8U ? "x" : "w",
             width == 8U ? "x" : "w",
-            width == 8U ? "x" : "w",
-            (size_t)b[0].value * 8U,
-            width == 8U ? "x" : "w",
-            (size_t)b[1].value * 8U) >= 0;
+            width == 8U ? "x" : "w") >= 0 &&
+            aarch64_atomic_owned_x(out, ctx, 13U, b[0].value) &&
+            fprintf(out, "  str %s9, [x13]\n", width == 8U ? "x" : "w") >= 0 &&
+            aarch64_atomic_owned_x(out, ctx, 13U, b[1].value) &&
+            fputs("  str x12, [x13]\n", out) != EOF;
     }
     if (ins->value.structured_inline_asm.operand_count == 3U &&
         aarch64_linux_uaccess_bic_template(
@@ -7355,13 +7350,10 @@ bool minic_aarch64_emit_qualified_structured_asm(
             return false;
         /* Hardware BIC clears the single TBI/sign-extension tag bit 55
          * as GNU specifies. Stack SSA output is a C pointer object. */
-        return fprintf(out,
-            "  ldr x10, [sp, #%zu]\n"
-            "  bic x9, x10, #0x80000000000000\n"
-            "  ldr x11, [sp, #%zu]\n"
-            "  str x9, [x11]\n",
-            (size_t)ops[1].value * 8U,
-            (size_t)ops[0].value * 8U) >= 0;
+        return aarch64_atomic_owned_x(out, ctx, 10U, ops[1].value) &&
+            fputs("  bic x9, x10, #0x80000000000000\n", out) != EOF &&
+            aarch64_atomic_owned_x(out, ctx, 11U, ops[0].value) &&
+            fputs("  str x9, [x11]\n", out) != EOF;
     }
     if (ins->value.structured_inline_asm.operand_count != 3U)
         return false;
@@ -7391,14 +7383,9 @@ bool minic_aarch64_emit_qualified_structured_asm(
      * are caller-saved scratch and all live C values are in existing SSA
      * stack slots. AArch64 NZCV from CMP survives until the following SBC.
      * No direct raw-template passthrough or unsafe physical clobber alias. */
-    return fprintf(out,
-        "  ldr x10, [sp, #%zu]\n"
-        "  ldr x11, [sp, #%zu]\n"
-        "  cmp x10, x11\n"
-        "  sbc x9, xzr, xzr\n"
-        "  ldr x10, [sp, #%zu]\n"
-        "  str x9, [x10]\n",
-        (size_t)b[1].value * 8U,
-        (size_t)b[2].value * 8U,
-        (size_t)b[0].value * 8U) >= 0;
+    return aarch64_atomic_owned_x(out, ctx, 10U, b[1].value) &&
+        aarch64_atomic_owned_x(out, ctx, 11U, b[2].value) &&
+        fputs("  cmp x10, x11\n  sbc x9, xzr, xzr\n", out) != EOF &&
+        aarch64_atomic_owned_x(out, ctx, 10U, b[0].value) &&
+        fputs("  str x9, [x10]\n", out) != EOF;
 }

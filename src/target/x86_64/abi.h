@@ -16,6 +16,13 @@ typedef struct MinicX86AbiRegisters {
     size_t fp_argument_count;
     const char *const *gp_results;
     size_t gp_result_count;
+    /* Registers additionally nonvolatile under this ABI beyond the SysV
+     * callee-saved set. A Win64 definition may call arbitrary SysV code,
+     * so the function prologue must preserve XMM6..15 and RDI/RSI. */
+    const char *const *extra_nonvolatile_gp;
+    size_t extra_nonvolatile_gp_count;
+    size_t extra_nonvolatile_xmm_first;
+    size_t extra_nonvolatile_xmm_count;
 } MinicX86AbiRegisters;
 
 const MinicX86AbiRegisters *minic_x86_64_abi_registers(

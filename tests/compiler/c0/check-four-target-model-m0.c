@@ -456,6 +456,96 @@ static int verify_gnu_asm_immediate_target_contract(void) {
     return 0;
 }
 
+/* Every target source admission policy is independent of the physical ASM
+ * machine emitter. The old single target_info ISA switch used to conflate
+ * GNU parser spelling, hard-register object identity and emitted clobbers. */
+static int verify_target_asm_source_policy(void) {
+    static const char *const names[] = {
+        "riscv32-linux", "riscv64-linux", "x86_64-linux",
+        "aarch64-linux", "loongarch64-linux"
+    };
+    const MinicTargetInfo *rv32 = minic_target_info_from_name(names[0]);
+    const MinicTargetInfo *rv64 = minic_target_info_from_name(names[1]);
+    const MinicTargetInfo *x86 = minic_target_info_from_name(names[2]);
+    const MinicTargetInfo *arm = minic_target_info_from_name(names[3]);
+    const MinicTargetInfo *loong = minic_target_info_from_name(names[4]);
+    MinicTargetInfo unsupported;
+    MinicType result, arguments[3];
+    size_t argument_count, immediate_index, i;
+    const char *mnemonic;
+    char callee[128];
+    unsigned int stage = 0U;
+    if (!rv32 || !rv64 || !x86 || !arm || !loong) return 1;
+    for (i = 0U; i < sizeof(names) / sizeof(names[0]); ++i) {
+        stage = 1U;
+        const MinicTargetInfo *target = minic_target_info_from_name(names[i]);
+        if (!target->asm_source_policy ||
+            !minic_target_info_inline_asm_memory_input_constraint_supported(
+                target, "m", 1U) ||
+            minic_target_info_inline_asm_memory_input_constraint_supported(
+                target, "Q", 1U) != (target == arm)) goto failure;
+    }
+    unsupported = *x86;
+    stage = 2U;
+    unsupported.asm_source_policy = NULL;
+    if (minic_target_info_fixed_register_supported(&unsupported, "rsp", 3U) ||
+        minic_target_info_inline_asm_memory_input_constraint_supported(
+            &unsupported, "m", 1U) ||
+        minic_target_info_inline_asm_source_clobber_supported(
+            &unsupported, "cc", 2U)) goto failure;
+    stage = 3U;
+    if (!minic_target_info_local_fixed_register_supported(x86, "%rax", 4U) ||
+        minic_target_info_local_fixed_register_supported(x86, "%r15", 4U) ||
+        minic_target_info_inline_asm_register_clobber_supported(x86, "rbx", 3U) ||
+        !minic_target_info_inline_asm_source_clobber_supported(x86, "ebx", 3U) ||
+        !minic_target_info_inline_asm_source_clobber_supported(x86, "flags", 5U) ||
+        !minic_target_info_inline_asm_readwrite_hardreg_supported(
+            x86, "rsp", 3U, "+r", 2U, minic_type_unsigned_long()) ||
+        minic_target_info_inline_asm_readwrite_hardreg_supported(
+            x86, "rsp", 3U, "+r", 2U, minic_type_int())) goto failure;
+    stage = 4U;
+    if (!minic_target_info_local_fixed_register_supported(arm, "x30", 3U) ||
+        !minic_target_info_local_fixed_register_supported(arm, "r17", 3U) ||
+        minic_target_info_local_fixed_register_supported(arm, "x18", 3U) ||
+        !minic_target_info_inline_asm_register_clobber_supported(arm, "cc", 2U) ||
+        minic_target_info_fixed_register_write_supported(arm, "sp", 2U))
+        goto failure;
+    stage = 5U;
+    if (!minic_target_info_fixed_register_supported(loong, "$r21", 4U) ||
+        !minic_target_info_fixed_register_write_supported(loong, "$tp", 3U) ||
+        minic_target_info_fixed_register_write_supported(loong, "$sp", 3U) ||
+        !minic_target_info_local_fixed_register_supported(loong, "a7", 2U) ||
+        minic_target_info_local_fixed_register_supported(loong, "t1", 2U) ||
+        !minic_target_info_inline_asm_source_clobber_supported(loong, "$s0", 3U))
+        goto failure;
+    stage = 6U;
+    if (!minic_target_info_local_fixed_register_supported(rv32, "a7", 2U) ||
+        minic_target_info_local_fixed_register_supported(rv32, "x17", 3U) ||
+        !minic_target_info_inline_asm_register_clobber_supported(rv32, "t6", 2U) ||
+        !minic_target_info_local_fixed_register_supported(rv64, "x17", 3U) ||
+        minic_target_info_local_fixed_register_supported(rv64, "x7", 2U))
+        goto failure;
+    stage = 7U;
+    if (!minic_target_info_machine_builtin_signature(loong,
+            "__builtin_loongarch_crc_w_b_w", sizeof("__builtin_loongarch_crc_w_b_w") - 1U,
+            callee, sizeof(callee), &result, arguments, &argument_count,
+            &mnemonic, &immediate_index) ||
+        !minic_type_equal(result, minic_type_int()) ||
+        !minic_type_is_plain_char(arguments[0]) ||
+        !minic_type_is_signed_integer(arguments[0]) ||
+        argument_count != 2U || immediate_index != SIZE_MAX ||
+        strcmp(mnemonic, "crc.w.b.w") != 0 ||
+        minic_target_info_machine_builtin_signature(x86,
+            "__builtin_loongarch_crc_w_b_w", sizeof("__builtin_loongarch_crc_w_b_w") - 1U,
+            callee, sizeof(callee), &result, arguments, &argument_count,
+            &mnemonic, &immediate_index)) goto failure;
+    (void)puts("TARGET_ASM_SOURCE_POLICY=PASS five_independent_targets grammar_vs_machine_fail_closed loong_builtin_owned");
+    return 0;
+failure:
+    (void)fprintf(stderr, "TARGET_ASM_SOURCE_POLICY=FAIL stage=%u\n", stage);
+    return 1;
+}
+
 int main(void) {
     const MinicTargetInfo *rv = minic_default_target_info();
     const MinicTargetInfo *x86 = minic_target_info_from_name("x86_64-linux");
@@ -484,6 +574,7 @@ int main(void) {
     if (verify_lp64_return_address_level_zero() != 0 ||
         verify_fixed_register_target_contract() != 0 ||
         verify_gnu_asm_immediate_target_contract() != 0 ||
+        verify_target_asm_source_policy() != 0 ||
         verify_riscv_integer_strategy() != 0 || verify_registered_target_catalog() != 0 || verify_riscv_profile_catalog() != 0 ||
         verify_lp64("riscv64-linux", MINIC_TARGET_ARCH_RISCV64,
                     MINIC_INTEGER_SIGN_UNSIGNED, MINIC_INTEGER_RANK_INT,

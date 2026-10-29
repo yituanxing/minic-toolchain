@@ -192,6 +192,8 @@ bool minic_loongarch64_qualified_opaque_asm(const MinicCoreInlineAsm *a) {
 
 /* Native ISA reservation; rejected CSR/AMO shapes cannot bypass through
  * generic scalar Core inline assembly. */
+static bool loong_linux_descriptor_template_matches(const MinicInlineAsm *source);
+
 bool minic_loongarch64_requires_qualified_input_asm(const MinicInlineAsm *src) {
     static const char *const reserved[] = {
         "dbar", "cacop", "amand_db.w", "amor_db.w", "amxor_db.w", "amadd_db.w",
@@ -200,8 +202,14 @@ bool minic_loongarch64_requires_qualified_input_asm(const MinicInlineAsm *src) {
         "movgr2fcsr", "ldx.", "stx.", "amadd.", "amand.", "amor.",
         "amswap_db.w", "amswap_db.d", "rdtime.d", "la.pcrel"
     };
+    /* The positive exact-form registry must also reserve its spelling when
+     * constraints fail: otherwise a newly registered hardware form could
+     * escape into generic raw inline assembly if this older prefix list
+     * overlooked its mnemonic. The prefix list still rejects *mutated*
+     * source templates that intentionally do not match an exact form. */
     return minic_backend_inline_asm_prefix_matches(
-        src, reserved, sizeof(reserved) / sizeof(reserved[0]));
+               src, reserved, sizeof(reserved) / sizeof(reserved[0])) ||
+           loong_linux_descriptor_template_matches(src);
 }
 
 /* The original LoongArch Linux clock reader returns two *hardware* values.
@@ -2932,22 +2940,24 @@ static bool loong_linux_frametrace_csr_emit(
                 "st.d" : "st.w") >= 0;
 }
 
+/* The exact-template Linux forms whose source and Core contracts share one
+ * target-local descriptor table are defined below, after their machine
+ * emitters. Keep a forward declaration so source admission consumes that
+ * very same registry rather than reimplementing its selection order. */
+static bool loong_linux_descriptor_qualify(
+    const MinicC0Program *program, const MinicInlineAsm *source,
+    MinicTargetInlineAsmContract *contract);
+
 bool minic_loongarch64_qualify_inline_asm(
     const MinicC0Program *program, const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
     const MinicInlineAsmOperand *op;
     const MinicExpression *expr;
     if (minic_loongarch64_simd_qualify_source(program, src, contract)) return true;
+    if (loong_linux_descriptor_qualify(program, src, contract)) return true;
     if (loong_linux_clock_source(program, src, contract)) return true;
-    if (loong_linux_cacop_source(program, src, contract)) return true;
-    if (loong_linux_vdso_source(program, src, contract)) return true;
     if (loong_linux_irq_switch_source(program, src, contract)) return true;
-    if (loong_linux_frametrace_source(program, src, contract)) return true;
-    if (loong_linux_frametrace_csr_source(program, src, contract)) return true;
-    if (loong_linux_cpucfg_source(program, src, contract)) return true;
-    if (loong_linux_fpr_transfer_source(program, src, contract)) return true;
     if (loong_linux_futex_rmw_source(program, src, contract)) return true;
-    if (loong_linux_futex_cmpxchg_source(program, src, contract)) return true;
     if(program&&src&&contract&&src->is_volatile&&!src->is_goto&&
        src->output_count==0U&&src->input_count==0U&&
        src->clobber_count==1U&&src->has_memory_clobber&&
@@ -2960,16 +2970,7 @@ bool minic_loongarch64_qualify_inline_asm(
         loong_linux_sub_positive_source(program, src, contract) ||
         loong_linux_add_unless_source(program, src, contract) ||
         loong_linux_uaccess_source(program, src, contract) ||
-        loong_fcsr0_write_source(program, src, contract) ||
-        loong_percpu_indexed_source(program, src, contract) ||
         loong_percpu_amo_source(program, src, contract))
-        return true;
-    if (loong_linux_cmpxchg_source(program,src,contract)) return true;
-    if (loong_linux_xchg_source(program,src,contract)) return true;
-    if (loong_linux_xchg_small_source(program,src,contract)) return true;
-    if (loong_mask_nospec_source(program, src, contract))
-        return true;
-    if(loong_pte_source(program,src,contract))
         return true;
     if (loong_atomic_qualified_source(program, src, contract) ||
         loong_atomic_fetch_qualified_source(program, src, contract) ||
@@ -3437,10 +3438,111 @@ static bool loong_linux_cacop_emit(
            fprintf(out, "  cacop %lld, $t0, 0\n", (long long)code) >= 0;
 }
 
+/* Exact Linux instruction-family admission must have the same precedence
+ * and owner as machine emission. These descriptors group only forms with
+ * independent template matching and uniform typed Core emitter signatures.
+ * Forms carrying a parsed instruction payload (clock, AMO, futex RMW, etc.)
+ * remain in the explicitly typed paths below until that payload is stored
+ * by a persistent machine-ASM plan. */
+typedef bool (*LoongLinuxTemplateMatch)(const char *, size_t);
+typedef bool (*LoongLinuxSourceQualify)(
+    const MinicC0Program *, const MinicInlineAsm *, MinicTargetInlineAsmContract *);
+typedef bool (*LoongLinuxStructuredEmit)(
+    FILE *, const MinicDirectLP64BlockContext *,
+    const MinicCoreInstruction *, const MinicCoreInlineAsm *);
+
+typedef struct LoongLinuxStructuredForm {
+    LoongLinuxTemplateMatch matches;
+    LoongLinuxSourceQualify source;
+    LoongLinuxStructuredEmit emit;
+} LoongLinuxStructuredForm;
+
+static bool loong_match_frametrace_csr(const char *text, size_t length) {
+    return loong_linux_frametrace_csr_form(text, length) != UINT32_MAX;
+}
+
+static bool loong_match_fpr_transfer(const char *text, size_t length) {
+    return loong_linux_fpr_transfer_form(text, length) != 0U;
+}
+
+static bool loong_match_percpu_indexed(const char *text, size_t length) {
+    return loong_percpu_indexed_form(text, length) != LOONG_PERCPU_NONE;
+}
+
+static bool loong_match_cmpxchg(const char *text, size_t length) {
+    return loong_linux_cmpxchg_form(text, length) != 0U;
+}
+
+static bool loong_match_xchg(const char *text, size_t length) {
+    return loong_linux_xchg_form(text, length) != 0U;
+}
+
+/* One registry couples source type qualification to exact-template machine
+ * ownership. Crucially, the emitter never interprets unknown text as one of
+ * these families merely because its operand count resembles a known form. */
+static const LoongLinuxStructuredForm loong_linux_structured_forms[] = {
+    {loong_linux_cacop_form, loong_linux_cacop_source, loong_linux_cacop_emit},
+    {loong_linux_vdso_syscall_form, loong_linux_vdso_source, loong_linux_vdso_emit},
+    {loong_linux_frametrace_template, loong_linux_frametrace_source,
+     loong_linux_frametrace_emit},
+    {loong_match_frametrace_csr, loong_linux_frametrace_csr_source,
+     loong_linux_frametrace_csr_emit},
+    {loong_linux_cpucfg_form, loong_linux_cpucfg_source, loong_linux_cpucfg_emit},
+    {loong_match_fpr_transfer, loong_linux_fpr_transfer_source,
+     loong_linux_fpr_transfer_emit},
+    {loong_linux_futex_cmpxchg_form, loong_linux_futex_cmpxchg_source,
+     loong_linux_futex_cmpxchg_emit},
+    {loong_fcsr0_write_form, loong_fcsr0_write_source, loong_fcsr0_write_emit},
+    {loong_match_percpu_indexed, loong_percpu_indexed_source, loong_percpu_indexed_emit},
+    {loong_match_cmpxchg, loong_linux_cmpxchg_source, loong_linux_cmpxchg_emit},
+    {loong_match_xchg, loong_linux_xchg_source, loong_linux_xchg_emit},
+    {loong_linux_xchg_small_form, loong_linux_xchg_small_source,
+     loong_linux_xchg_small_emit},
+    {loong_mask_nospec_form, loong_mask_nospec_source, loong_mask_nospec_emit},
+    {loong_pte_form, loong_pte_source, loong_pte_emit}
+};
+
+static const LoongLinuxStructuredForm *loong_linux_form_for_template(
+    const char *text, size_t length) {
+    size_t i;
+    if (text == NULL) return NULL;
+    for (i = 0U; i < sizeof(loong_linux_structured_forms) /
+                         sizeof(loong_linux_structured_forms[0]); ++i)
+        if (loong_linux_structured_forms[i].matches(text, length))
+            return &loong_linux_structured_forms[i];
+    return NULL;
+}
+
+static bool loong_linux_descriptor_template_matches(const MinicInlineAsm *source) {
+    return source != NULL && loong_linux_form_for_template(
+        source->template_text, source->template_length) != NULL;
+}
+
+static bool loong_linux_descriptor_qualify(
+    const MinicC0Program *program, const MinicInlineAsm *source,
+    MinicTargetInlineAsmContract *contract) {
+    const LoongLinuxStructuredForm *form = source != NULL ?
+        loong_linux_form_for_template(source->template_text, source->template_length) : NULL;
+    return form != NULL && form->source(program, source, contract);
+}
+
+static bool loong_linux_descriptor_emit(
+    FILE *out, const MinicDirectLP64BlockContext *ctx,
+    const MinicCoreInstruction *instruction, const MinicCoreInlineAsm *source,
+    bool *matched) {
+    const LoongLinuxStructuredForm *form;
+    if (matched == NULL || source == NULL || source->template_text == NULL)
+        return false;
+    form = loong_linux_form_for_template(source->template_text, source->template_length);
+    *matched = form != NULL;
+    return form != NULL && form->emit(out, ctx, instruction, source);
+}
+
 bool minic_loongarch64_emit_qualified_structured_asm(
     FILE *out, const MinicDirectLP64BlockContext *ctx,
     const MinicCoreInstruction *ins) {
     const MinicCoreInlineAsm *info;
+    bool matched;
     if (out == NULL || ctx == NULL || ctx->fn == NULL || ins == NULL ||
         ins->kind != MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM ||
         ins->result != MINIC_CORE_VALUE_INVALID ||
@@ -3450,12 +3552,10 @@ bool minic_loongarch64_emit_qualified_structured_asm(
     info = &ctx->fn->inline_asms[ins->value.structured_inline_asm.inline_asm_id];
     if (minic_loongarch64_simd_emit_structured(out, ctx, ins, info))
         return true;
-    if (loong_linux_cpucfg_form(info->template_text, info->template_length))
-        return loong_linux_cpucfg_emit(out, ctx, ins, info);
-    if (loong_linux_cacop_form(info->template_text, info->template_length))
-        return loong_linux_cacop_emit(out, ctx, ins, info);
-    if (loong_linux_vdso_syscall_form(info->template_text, info->template_length))
-        return loong_linux_vdso_emit(out, ctx, ins, info);
+    {
+        const bool emitted = loong_linux_descriptor_emit(out, ctx, ins, info, &matched);
+        if (matched) return emitted;
+    }
     {
         const LoongLinuxClockAsm clock_form = loong_linux_clock_form(
             info->template_text, info->template_length);
@@ -3465,15 +3565,6 @@ bool minic_loongarch64_emit_qualified_structured_asm(
     if (loong_linux_irq_switch_template(
             info->template_text, info->template_length, true))
         return loong_linux_irq_switch_emit(out, ctx, ins, info);
-    if (loong_linux_frametrace_template(
-            info->template_text, info->template_length))
-        return loong_linux_frametrace_emit(out, ctx, ins, info);
-    if (loong_linux_frametrace_csr_form(
-            info->template_text, info->template_length) != UINT32_MAX)
-        return loong_linux_frametrace_csr_emit(out, ctx, ins, info);
-    if (loong_linux_fpr_transfer_form(
-            info->template_text, info->template_length))
-        return loong_linux_fpr_transfer_emit(out, ctx, ins, info);
     {
         const unsigned int invtlb = loong_linux_invtlb_form(
             info->template_text, info->template_length);
@@ -3499,9 +3590,6 @@ bool minic_loongarch64_emit_qualified_structured_asm(
         if (futex != LOONG_FUTEX_NONE)
             return loong_linux_futex_rmw_emit(out, ctx, ins, info, futex);
     }
-    if (loong_linux_futex_cmpxchg_form(info->template_text,
-                                       info->template_length))
-        return loong_linux_futex_cmpxchg_emit(out, ctx, ins, info);
     {
         LoongLinuxUaccess uaccess;
         if (loong_linux_uaccess_form(info->template_text,
@@ -3516,22 +3604,8 @@ bool minic_loongarch64_emit_qualified_structured_asm(
             return false;
         return fprintf(out,"  %s\n",barrier)>=0;
     }
-    if (loong_fcsr0_write_form(info->template_text, info->template_length))
-        return loong_fcsr0_write_emit(out, ctx, ins, info);
-    if (loong_percpu_indexed_form(info->template_text, info->template_length))
-        return loong_percpu_indexed_emit(out, ctx, ins, info);
     if (loong_percpu_amo_form(info->template_text, info->template_length) != SIZE_MAX)
         return loong_percpu_amo_emit(out, ctx, ins, info);
-    if (loong_linux_cmpxchg_form(info->template_text,info->template_length))
-        return loong_linux_cmpxchg_emit(out,ctx,ins,info);
-    if (loong_linux_xchg_form(info->template_text,info->template_length))
-        return loong_linux_xchg_emit(out,ctx,ins,info);
-    if (loong_linux_xchg_small_form(info->template_text,info->template_length))
-        return loong_linux_xchg_small_emit(out,ctx,ins,info);
-    if (loong_mask_nospec_form(info->template_text, info->template_length))
-        return loong_mask_nospec_emit(out, ctx, ins, info);
-    if(loong_pte_form(info->template_text,info->template_length))
-        return loong_pte_emit(out,ctx,ins,info);
     if (loong_csr_template(info->template_text, info->template_length))
         return minic_loongarch64_emit_csr(out, ctx, ins, info);
     if (ins->value.structured_inline_asm.operand_count == 3U)

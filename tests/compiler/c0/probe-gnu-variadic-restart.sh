@@ -23,9 +23,22 @@ done
 # bank itself is immutable and shared. The second restart is not an alias of
 # the first cursor's mutable GP/FP offsets.
 awk '
-    /^  movz x9, #[0-9]+$/ { cursor = $3 }
+    # Typed frame addressing now uses a native ADD immediate for small
+    # cursor slots. Large frames may still materialize the offset into x9
+    # first; both forms must resolve relative to the owned frame anchor.
+    /^  movz x9, #[0-9]+$/ { wide_offset = $3 }
+    /^  movk x9, #[0-9]+, lsl #[0-9]+$/ {
+        wide_offset = wide_offset ":" $3 ":" $5
+    }
+    /^  add x9, (sp|x19), #[0-9]+$/ {
+        cursor = $3 ":" $4
+    }
+    /^  add x9, (sp|x19), x9$/ {
+        cursor = $3 ":" wide_offset
+    }
     /^  str x10, \[x9\]$/ { slots[++count] = cursor }
-    END { if (count != 2 || slots[1] == slots[2]) exit 1 }
+    END { if (count != 2 || slots[1] == slots[2] ||
+              slots[1] == "" || slots[2] == "") exit 1 }
 ' "$work/aarch64-linux.s"
 
 cc -O0 -no-pie "$source" "$driver" -o "$work/gnu-native"

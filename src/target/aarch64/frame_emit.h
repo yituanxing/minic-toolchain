@@ -47,7 +47,9 @@ typedef struct {
     /* Physical GP liveness: bit N forbids clobbering xN. The input/output
      * register of the transfer is protected automatically when GP. */
     uint32_t forbidden_gp_mask;
-    /* 0 chooses x17 then x16; 16/17 require that exact scratch register. */
+    /* 0 chooses x17 then x16. An explicit x9..x17 requests exactly that
+     * caller-saved scratch register; the caller must forbid every live GP
+     * value, including the result/source register protected automatically. */
     unsigned int preferred_scratch;
 } MinicA64ScratchPolicy;
 

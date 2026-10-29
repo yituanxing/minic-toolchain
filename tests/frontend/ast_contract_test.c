@@ -250,6 +250,66 @@ static int test_malformed_contracts(void) {
     return 0;
 }
 
+static bool verify_builtin_local(const MinicTargetInfo *target, MinicType type) {
+    MinicC0Program program;
+    MinicLocal local;
+    MinicLocalId local_id;
+    bool valid;
+
+    minic_c0_program_initialize(&program);
+    minic_c0_local_initialize(&local);
+    local.name_span = test_span(0U);
+    local.type = type;
+    local.element_count = 1U;
+    if (!minic_c0_program_add_local(&program, &local, &local_id)) {
+        minic_c0_program_destroy(&program);
+        return false;
+    }
+    valid = minic_c0_program_verify_target(&program, MINIC_C0_AST_PARSED, target);
+    minic_c0_program_destroy(&program);
+    return valid;
+}
+
+/* The type-role adapter centralizes C shape, while each target descriptor
+ * remains authoritative for admitting an ABI/extension declaration. */
+static int test_builtin_type_target_admission(void) {
+    static const MinicTargetArchitecture architectures[] = {
+        MINIC_TARGET_ARCH_RISCV32,
+        MINIC_TARGET_ARCH_RISCV64,
+        MINIC_TARGET_ARCH_X86_64,
+        MINIC_TARGET_ARCH_AARCH64,
+        MINIC_TARGET_ARCH_LOONGARCH64
+    };
+    size_t index;
+
+    for (index = 0U; index < sizeof(architectures) / sizeof(architectures[0]); ++index) {
+        const MinicTargetInfo *target;
+        MinicType cursor, malformed;
+        bool is_x86, is_aarch64, has_extended_float;
+
+        target = minic_target_info_for_architecture(architectures[index]);
+        is_x86 = architectures[index] == MINIC_TARGET_ARCH_X86_64;
+        is_aarch64 = architectures[index] == MINIC_TARGET_ARCH_AARCH64;
+        has_extended_float = architectures[index] != MINIC_TARGET_ARCH_RISCV32;
+        cursor = minic_type_x86_va_list_cursor();
+        malformed = minic_type_float128();
+        malformed.integer_rank = MINIC_INTEGER_RANK_INT;
+        if (target == NULL || !verify_builtin_local(target, minic_type_float()) ||
+            verify_builtin_local(target, minic_type_float128()) != has_extended_float ||
+            verify_builtin_local(target, malformed) ||
+            verify_builtin_local(target, minic_type_aarch64_header_builtin(
+                                             MINIC_TYPE_BASE_AARCH64_SVE_BOOL)) != is_aarch64 ||
+            verify_builtin_local(target, cursor) != is_x86) {
+            return 90;
+        }
+        cursor.pointer_depth = 0U;
+        if (verify_builtin_local(target, cursor)) {
+            return 91;
+        }
+    }
+    return 0;
+}
+
 static int test_verify_failure_provenance(void) {
     MinicC0AstVerifyFailure failure;
     MinicC0Program program;
@@ -568,6 +628,10 @@ int main(void) {
         return status;
     }
     status = test_malformed_contracts();
+    if (status != 0) {
+        return status;
+    }
+    status = test_builtin_type_target_admission();
     if (status != 0) {
         return status;
     }

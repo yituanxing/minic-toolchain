@@ -84,16 +84,18 @@ static bool x86_emit_function(FILE *out, const MinicC0Program *program,
     if (frame.frame_size != 0U &&
         fprintf(out, "  subq $%zu, %%rsp\n", frame.frame_size) < 0) goto done;
     if (frame.ms_nonvolatile_gp_save_offset != 0U) {
+        const MinicX86AbiRegisters *abi = minic_x86_64_abi_registers(
+            MINIC_CALLING_CONVENTION_MS_X64);
         size_t i;
-        if (fprintf(out,
-                "  movq %%rdi, -%zu(%%rbp)\n"
-                "  movq %%rsi, -%zu(%%rbp)\n",
-                frame.ms_nonvolatile_gp_save_offset,
-                frame.ms_nonvolatile_gp_save_offset + 8U) < 0)
-            goto done;
-        for (i = 0U; i < 10U; ++i)
+        if (abi == NULL || abi->extra_nonvolatile_gp == NULL) goto done;
+        for (i = 0U; i < abi->extra_nonvolatile_gp_count; ++i)
+            if (fprintf(out, "  movq %s, -%zu(%%rbp)\n",
+                        abi->extra_nonvolatile_gp[i],
+                        frame.ms_nonvolatile_gp_save_offset + i * 8U) < 0)
+                goto done;
+        for (i = 0U; i < abi->extra_nonvolatile_xmm_count; ++i)
             if (fprintf(out, "  movdqu %%xmm%zu, -%zu(%%rbp)\n",
-                        i + 6U,
+                        i + abi->extra_nonvolatile_xmm_first,
                         frame.ms_nonvolatile_xmm_save_offset + i * 16U) < 0)
                 goto done;
     }
@@ -127,7 +129,8 @@ static bool x86_emit_function(FILE *out, const MinicC0Program *program,
         }
         for (k = 0U; k < abi->fp_argument_count; ++k) {
             if (fprintf(out, "  movdqu %%xmm%zu, %zu(%%r10)\n",
-                        k, 48U + k * 16U) < 0) goto done;
+                        k, abi->gp_argument_count * 8U + k * 16U) < 0)
+                goto done;
         }
     }
     if (fprintf(out, "  jmp .Lmini_x86_f%zu_b%u\n",
@@ -199,19 +202,21 @@ static bool x86_emit_function(FILE *out, const MinicC0Program *program,
     }
     if (fprintf(out, ".Lmini_x86_f%zu_ret:\n", function_id) < 0) goto done;
     if (frame.ms_nonvolatile_gp_save_offset != 0U) {
+        const MinicX86AbiRegisters *abi = minic_x86_64_abi_registers(
+            MINIC_CALLING_CONVENTION_MS_X64);
         size_t i;
+        if (abi == NULL || abi->extra_nonvolatile_gp == NULL) goto done;
         /* Epilogue must not touch RAX/XMM0: they hold the scalar return. */
-        for (i = 0U; i < 10U; ++i)
+        for (i = 0U; i < abi->extra_nonvolatile_xmm_count; ++i)
             if (fprintf(out, "  movdqu -%zu(%%rbp), %%xmm%zu\n",
                         frame.ms_nonvolatile_xmm_save_offset + i * 16U,
-                        i + 6U) < 0)
+                        i + abi->extra_nonvolatile_xmm_first) < 0)
                 goto done;
-        if (fprintf(out,
-                "  movq -%zu(%%rbp), %%rdi\n"
-                "  movq -%zu(%%rbp), %%rsi\n",
-                frame.ms_nonvolatile_gp_save_offset,
-                frame.ms_nonvolatile_gp_save_offset + 8U) < 0)
-            goto done;
+        for (i = 0U; i < abi->extra_nonvolatile_gp_count; ++i)
+            if (fprintf(out, "  movq -%zu(%%rbp), %s\n",
+                        frame.ms_nonvolatile_gp_save_offset + i * 8U,
+                        abi->extra_nonvolatile_gp[i]) < 0)
+                goto done;
     }
     if (fprintf(out, "  leave\n  ret\n.size %s,.-%s\n", name, name) < 0)
         goto done;

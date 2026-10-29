@@ -24,6 +24,27 @@ static bool pointer_qualifiers_are_valid(MinicType type) {
            (type.pointer_volatile_qualifiers >> type.pointer_depth) == 0U;
 }
 
+static bool builtin_declaration_type_is_valid(const MinicTargetInfo *target,
+                                              MinicType type) {
+    MinicBuiltinDeclarationRole role;
+
+    role = minic_type_builtin_declaration_role(type.base_kind);
+    if (role == MINIC_BUILTIN_DECLARATION_INVALID ||
+        (role != MINIC_BUILTIN_DECLARATION_STANDARD_FLOAT &&
+         !minic_target_info_language_type_supported(target, type.base_kind)) ||
+        (role == MINIC_BUILTIN_DECLARATION_ABI_CURSOR && type.pointer_depth == 0U)) {
+        return false;
+    }
+    /* All target header-only identities share the same C type storage shape.
+     * Recognition is not permission to compute sizeof, use vector registers
+     * or transport an ABI cursor as a scalar argument. */
+    return type.record_id == MINIC_RECORD_INVALID &&
+           type.array_type_id == MINIC_ARRAY_TYPE_INVALID &&
+           type.function_type_id == MINIC_FUNCTION_TYPE_INVALID &&
+           type.integer_sign == MINIC_INTEGER_SIGN_NONE &&
+           type.integer_rank == MINIC_INTEGER_RANK_NONE && !type.is_plain_char;
+}
+
 static bool
 type_is_valid(const MinicC0Program *program, const MinicTargetInfo *target, MinicType type) {
     if (program == NULL ||
@@ -78,56 +99,6 @@ type_is_valid(const MinicC0Program *program, const MinicTargetInfo *target, Mini
                type.integer_sign == MINIC_INTEGER_SIGN_NONE &&
                type.integer_rank == MINIC_INTEGER_RANK_NONE;
     }
-    case MINIC_TYPE_BASE_FLOAT:
-    case MINIC_TYPE_BASE_DOUBLE:
-    case MINIC_TYPE_BASE_LONG_DOUBLE:
-    case MINIC_TYPE_BASE_FLOAT128:
-    case MINIC_TYPE_BASE_FLOAT32:
-    case MINIC_TYPE_BASE_FLOAT64:
-    case MINIC_TYPE_BASE_FLOAT32X:
-    case MINIC_TYPE_BASE_FLOAT64X:
-        if ((type.base_kind == MINIC_TYPE_BASE_FLOAT128 ||
-             type.base_kind == MINIC_TYPE_BASE_FLOAT32 ||
-             type.base_kind == MINIC_TYPE_BASE_FLOAT64 ||
-             type.base_kind == MINIC_TYPE_BASE_FLOAT32X ||
-             type.base_kind == MINIC_TYPE_BASE_FLOAT64X) &&
-            !minic_target_info_language_type_supported(target, type.base_kind)) {
-            /* Preserves distinct glibc extended-FP declaration types on all
-             * four Linux targets. Acceptance is NOT support for executing extended-FP
-             * arithmetic or crossing its ABI boundary. */
-            return false;
-        }
-        return type.record_id == MINIC_RECORD_INVALID &&
-               type.array_type_id == MINIC_ARRAY_TYPE_INVALID &&
-               type.function_type_id == MINIC_FUNCTION_TYPE_INVALID &&
-               type.integer_sign == MINIC_INTEGER_SIGN_NONE &&
-               type.integer_rank == MINIC_INTEGER_RANK_NONE && !type.is_plain_char;
-    case MINIC_TYPE_BASE_AARCH64_FLOAT32X4:
-    case MINIC_TYPE_BASE_AARCH64_FLOAT64X2:
-    case MINIC_TYPE_BASE_AARCH64_SVE_FLOAT32:
-    case MINIC_TYPE_BASE_AARCH64_SVE_FLOAT64:
-    case MINIC_TYPE_BASE_AARCH64_SVE_BOOL:
-        /* Header-level GCC vector builtin identity, not a scalar alias.
-         * Accept C typedef declarations, but do not claim vector ABI,
-         * alignment, sizeof, passing or machine operation support. */
-        return minic_target_info_language_type_supported(target, type.base_kind) &&
-               type.record_id == MINIC_RECORD_INVALID &&
-               type.array_type_id == MINIC_ARRAY_TYPE_INVALID &&
-               type.function_type_id == MINIC_FUNCTION_TYPE_INVALID &&
-               type.integer_sign == MINIC_INTEGER_SIGN_NONE &&
-               type.integer_rank == MINIC_INTEGER_RANK_NONE &&
-               !type.is_plain_char;
-    case MINIC_TYPE_BASE_X86_VA_LIST_CURSOR:
-        /* Builtin va_list is represented internally by a pointer-sized
-         * cursor proxy. Its address can also appear as T** in Core STORE,
-         * so validate each pointer depth, but reject a bare pseudo-scalar. */
-        return minic_target_info_language_type_supported(target, type.base_kind) &&
-               type.pointer_depth >= 1U &&
-               type.record_id == MINIC_RECORD_INVALID &&
-               type.array_type_id == MINIC_ARRAY_TYPE_INVALID &&
-               type.function_type_id == MINIC_FUNCTION_TYPE_INVALID &&
-               type.integer_sign == MINIC_INTEGER_SIGN_NONE &&
-               type.integer_rank == MINIC_INTEGER_RANK_NONE && !type.is_plain_char;
     case MINIC_TYPE_BASE_FUNCTION:
         return type.record_id == MINIC_RECORD_INVALID &&
                type.array_type_id == MINIC_ARRAY_TYPE_INVALID &&
@@ -147,8 +118,9 @@ type_is_valid(const MinicC0Program *program, const MinicTargetInfo *target, Mini
                type.function_type_id == MINIC_FUNCTION_TYPE_INVALID &&
                type.integer_sign == MINIC_INTEGER_SIGN_NONE &&
                type.integer_rank == MINIC_INTEGER_RANK_NONE;
+    default:
+        return builtin_declaration_type_is_valid(target, type);
     }
-    return false;
 }
 
 static bool type_is_top_level_unqualified(MinicType type) {

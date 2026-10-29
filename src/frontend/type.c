@@ -218,11 +218,36 @@ MinicType minic_type_float64x(void) {
     return minic_type_scalar(MINIC_TYPE_BASE_FLOAT64X);
 }
 
+MinicBuiltinDeclarationRole minic_type_builtin_declaration_role(MinicTypeBaseKind kind) {
+    switch (kind) {
+    case MINIC_TYPE_BASE_FLOAT:
+    case MINIC_TYPE_BASE_DOUBLE:
+    case MINIC_TYPE_BASE_LONG_DOUBLE:
+        return MINIC_BUILTIN_DECLARATION_STANDARD_FLOAT;
+    case MINIC_TYPE_BASE_FLOAT128:
+    case MINIC_TYPE_BASE_FLOAT32:
+    case MINIC_TYPE_BASE_FLOAT64:
+    case MINIC_TYPE_BASE_FLOAT32X:
+    case MINIC_TYPE_BASE_FLOAT64X:
+        return MINIC_BUILTIN_DECLARATION_EXTENDED_FLOAT;
+    case MINIC_TYPE_BASE_AARCH64_FLOAT32X4:
+    case MINIC_TYPE_BASE_AARCH64_FLOAT64X2:
+    case MINIC_TYPE_BASE_AARCH64_SVE_FLOAT32:
+    case MINIC_TYPE_BASE_AARCH64_SVE_FLOAT64:
+    case MINIC_TYPE_BASE_AARCH64_SVE_BOOL:
+        return MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE;
+    case MINIC_TYPE_BASE_X86_VA_LIST_CURSOR:
+        return MINIC_BUILTIN_DECLARATION_ABI_CURSOR;
+    default:
+        return MINIC_BUILTIN_DECLARATION_INVALID;
+    }
+}
+
 /* This function recognizes declared ABI builtin identities, but does not
  * assign invented sizes or scalar machine operations to NEON/SVE vectors. */
 MinicType minic_type_aarch64_header_builtin(MinicTypeBaseKind base_kind) {
-    if (base_kind < MINIC_TYPE_BASE_AARCH64_FLOAT32X4 ||
-        base_kind > MINIC_TYPE_BASE_AARCH64_SVE_BOOL)
+    if (minic_type_builtin_declaration_role(base_kind) !=
+        MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE)
         return minic_type_void();
     return minic_type_scalar(base_kind);
 }

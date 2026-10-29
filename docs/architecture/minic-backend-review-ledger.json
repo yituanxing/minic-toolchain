@@ -1076,6 +1076,42 @@
       "review_depth": "inventory",
       "ci_touched_in": []
     },
+    "src/target/source_policy/aarch64.c": {
+      "blob": "85d3e8d83ea29f6f7bb9ff5151eff3543da1a68d",
+      "review_depth": "full",
+      "ci_touched_in": [],
+      "note": "2026-10-29 batch19: AArch64 GNU ASM source admission extracted from TargetInfo; paired source and machine ownership reviewed."
+    },
+    "src/target/source_policy/loongarch64.c": {
+      "blob": "5a3c0de51f74769de2af4976c4d8f1cda165af66",
+      "review_depth": "full",
+      "ci_touched_in": [],
+      "note": "2026-10-29 batch19: LoongArch64 GNU ASM source and machine builtin policies have independent typed callbacks."
+    },
+    "src/target/source_policy/riscv32.c": {
+      "blob": "1f42757b1d87adfc757599c66905d3b57d4ddd5c",
+      "review_depth": "full",
+      "ci_touched_in": [],
+      "note": "2026-10-29 batch19: RV32 strict base-I source ASM constraints reviewed."
+    },
+    "src/target/source_policy/riscv64.c": {
+      "blob": "bf1b26fdf139237d6cf299c97b4c87122f63184f",
+      "review_depth": "full",
+      "ci_touched_in": [],
+      "note": "2026-10-29 batch19: RV64 target-owned GNU ASM source qualifier and immediate policy reviewed."
+    },
+    "src/target/source_policy/source_policy.h": {
+      "blob": "51788d56c938813e385051a042378fb44e2c7f7d",
+      "review_depth": "full",
+      "ci_touched_in": [],
+      "note": "2026-10-29 batch19: typed source ASM policy and separate machine builtin contract."
+    },
+    "src/target/source_policy/x86_64.c": {
+      "blob": "085f722881db9e1cc8342dffb4ff813bdebca22f",
+      "review_depth": "full",
+      "ci_touched_in": [],
+      "note": "2026-10-29 batch19: x86 GNU fixed register, clobber and immediate qualifiers reviewed."
+    },
     "src/target/target_catalog.c": {
       "blob": "d888db09bf59f4e3b5509d28d4decd9dad78827d",
       "review_depth": "inventory",
