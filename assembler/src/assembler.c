@@ -1738,10 +1738,6 @@ static bool parse_section_directive(MiniAs *as, char *args, size_t line) {
         /* GNU note sections are NOT implicitly SHF_ALLOC; only an
          * explicit 'a' allocates .note.* payloads. */
     }
-    /* GNU GAS defaults SHF_STRINGS sh_entsize to one even without M.
-     * Do not mix a Section's ELF metadata with a required merge size. */
-    if(entry_size==0U && (flags&MINIAS_SHF_STRINGS)!=0U &&
-       (flags&MINIAS_SHF_MERGE)==0U)entry_size=1U;
     if(entry_size==0U &&
        (type==MINIAS_SHT_INIT_ARRAY || type==MINIAS_SHT_FINI_ARRAY ||
         type==MINIAS_SHT_PREINIT_ARRAY))

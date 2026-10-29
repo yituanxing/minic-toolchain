@@ -240,33 +240,22 @@ scan included function-level architecture metrics and a targeted manual
 re-read of high-risk producer/consumer call chains; the mechanical scan
 itself does **not** imply 30,735 branches were manually validated.
 
-### G.1 One newly confirmed GNU Section metadata discrepancy
+### G.1 Corrected GNU SHF_STRINGS metadata conclusion (exact object oracle)
 
-**A13 / P1 / confirmed source-path discrepancy**:
-`assembler/src/assembler.c:1410-1598` parses `S` and sets
-`MINIAS_SHF_STRINGS`, but only parses/assigns `entry_size` when
-`MINIAS_SHF_MERGE` is present. `elf_writer.c:282-305` copies
-`input->entry_size` into the emitted object without supplying a
-default. GNU GAS defines `S`'s `entsize` as default **1** even when
-the `M` flag is absent. GNU host assembler reproduced:
+The earlier **A13** audit inference was **wrong**, and must not be used
+as evidence for a code change. For a `"aS"` PROGBITS section **without**
+`M`, GNU GAS emits `sh_entsize=0`. For `"aMS"` with a declared
+entry size of 1, it emits `sh_entsize=1`. The existing MiniAS
+`entry_size=0` behavior for S-only was already correct.
 
-```asm
-.section .rodata.strings_only,"aS",@progbits
-.asciz "hello"
-.section .rodata.merge_strings,"aMS",@progbits,1
-.asciz "world"
-```
-
-Host `as --64` + `readelf -SW` printed `sh_entsize=1` for both
-sections. MiniAS output was **not executed** for this probe in this
-follow-up; the MiniAS control-flow assignment implies the single-S
-section retains zero, pending actual exact-head GNU object comparison.
-
-Fix inside the **whole SectionSpec/SectionKey batch**, not a standalone
-`if (S) entsize=1` patch. Its invariant is that the final effective
-flags, type, entsize, group and unique identity are computed once before
-interning. Also audit `S`-only explicit entsize, `E` and `M`
-combinations, and GNU first-declaration behavior.
+The exact-head GNU 4096-section differential on proposed commit
+`f3dba791`, run **40905294023**, caught the false assumption:
+MiniAS erroneously produced entry_size 1 while GNU produced 0. We
+**reverted the incorrect change** and retained a structural GNU oracle
+which checks the precise S-only bytes, flags and `sh_entsize=0`.
+No such discrepancy should be claimed without independent GNU object
+evidence. Remaining Section identity gaps (`unique`, `?` group
+inheritance) are separate.
 
 ### G.2 GNU syntax omissions: classify by severity
 
@@ -276,7 +265,7 @@ Host/current GNU `.section` documentation describes `unique,<number>`,
 MiniAS `handle_section` accepts `a,w,x,M,S,T,G,R,o`; unsupported
 characters fail explicitly, and trailing `unique` is rejected. Most
 are **explicit missing coverage**, not proven wrong-code bugs. Treat
-`unique`, `?` and the `S` default as first-priority actual GNU
+`unique` and `?` as first-priority actual GNU
 Section identity/semantics deficiencies; prioritize the rest according
 to unmodified compiler-generated sources, avoiding unbounded
 compatibility work.

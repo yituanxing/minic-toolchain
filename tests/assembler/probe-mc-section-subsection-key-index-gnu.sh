@@ -42,7 +42,7 @@ count=4096
     printf '.section .meta.empty,"a",@progbits\n.byte 0x53\n'
     # Repeated declarations preserve the first sh_entsize. A contradictory
     # entsize is a separate MiniAS policy check below: GNU rejects it.
-    # SHF_STRINGS without SHF_MERGE still defaults sh_entsize=1 in GAS.
+    # GNU GAS leaves sh_entsize=0 for S-only (without M), verified in CI.
     printf '.section .rodata.strings_only,"aS",@progbits\n.asciz "hello"\n'
     printf '.section .rodata.merge,"aMS",@progbits,1\n.asciz "a"\n'
     printf '.section .rodata.merge,"aMS",@progbits,1\n.asciz "b"\n'
@@ -115,7 +115,7 @@ if ours != expected:
 
 only_strings = [entry for entry in ours
                 if entry[0] == '.rodata.strings_only']
-if len(only_strings) != 1 or only_strings[0][5] != 1 or \
+if len(only_strings) != 1 or only_strings[0][5] != 0 or \
    only_strings[0][6] != b'hello\0':
     raise SystemExit(f'S-only GNU sh_entsize default mismatch: {only_strings}')
 
