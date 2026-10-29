@@ -123,6 +123,12 @@ typedef struct MiniElfWriteSection {
      * The writer resolves final symbol-table order and SHT_GROUP members. */
     bool has_group;
     size_t group_signature_symbol;
+    /* SHF_LINK_ORDER sh_link is a final ELF section-header index. Keep the
+     * target as an input SectionID until layout; an absent association emits
+     * SHN_UNDEF (0). The explicit presence bit makes zero-initialized specs
+     * safely represent an absent link instead of silently targeting section 0. */
+    bool has_link_order_target;
+    size_t linked_target_section;
 } MiniElfWriteSection;
 
 typedef struct MiniElfWriteSymbol {

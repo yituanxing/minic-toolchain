@@ -73,6 +73,66 @@ static size_t emitted_symbol_count(const MiniAs *as) {
     return count;
 }
 
+/* GNU's `o' refers to an anchor *symbol*, although the final ELF sh_link
+ * holds only the anchor's section-header index.  Resolve after all layout
+ * passes: a forward .LPFE label has no section until its definition, and
+ * an absolute anchor legitimately gives sh_link=0.  A section's name is
+ * also accepted as a reference even if there is no same-named STT_SECTION
+ * symbol (e.g. `.text.foo').  Numeric GAS test-only arguments emit zero. */
+static bool resolve_link_order_target(MiniAs *as, size_t owner,
+                                      size_t *target) {
+    const MiniAsSection *section=&as->sections[owner];
+    const char *reference=section->link_order_reference;
+    const MiniAsSymbol *symbol;
+    uint64_t numeric;
+    size_t i,candidate=SIZE_MAX;
+
+    *target=SIZE_MAX;
+    if(reference==NULL || *reference=='\0')return true;
+    if(minias_parse_u64(reference,&numeric)) {
+        /* GNU as accepts section-index syntax and writes SHN_UNDEF when
+         * no symbolic association is available.  Preserve that behavior
+         * (including a deliberately supplied zero index). */
+        return true;
+    }
+    symbol=minias_get_symbol(as,reference,false);
+    if(symbol!=NULL && symbol->defined) {
+        if(symbol->section==MINIAS_SECTION_ABS)return true;
+        if(symbol->section>=0 &&
+           (size_t)symbol->section<as->section_count) {
+            *target=(size_t)symbol->section;
+            return true;
+        }
+        minias_set_error(as,"invalid-link-order-target:%s:section=%s",
+                         reference,section->name);
+        return false;
+    }
+    /* A section-name reference is valid without defining a homonymous
+     * symbol.  Prefer the owner's COMDAT key if its name is duplicated. */
+    for(i=0U;i<as->section_count;++i) {
+        const MiniAsSection *other=&as->sections[i];
+        if(strcmp(other->name,reference)!=0)continue;
+        if(candidate==SIZE_MAX)candidate=i;
+        else if(section->group_signature!=NULL &&
+                other->group_signature!=NULL &&
+                strcmp(section->group_signature,other->group_signature)==0) {
+            candidate=i;
+            break;
+        } else if(section->group_signature==NULL) {
+            minias_set_error(as,"ambiguous-link-order-section:%s:section=%s",
+                             reference,section->name);
+            return false;
+        }
+    }
+    if(candidate!=SIZE_MAX) {
+        *target=candidate;
+        return true;
+    }
+    minias_set_error(as,"undefined-link-order-reference:%s:section=%s",
+                     reference,section->name);
+    return false;
+}
+
 static bool minias_write_elf(MiniAs *as,
                              const char *path,
                              unsigned char elf_class) {
@@ -152,6 +212,14 @@ static bool minias_write_elf(MiniAs *as,
         output->type = input->type;
         output->has_group = input->group_signature != NULL;
         output->flags = input->flags;
+        if((input->flags & MINIAS_SHF_LINK_ORDER)!=0U) {
+            size_t linked_target=SIZE_MAX;
+            if(!resolve_link_order_target(as,i,&linked_target))goto done;
+            if(linked_target!=SIZE_MAX) {
+                output->has_link_order_target=true;
+                output->linked_target_section=linked_target;
+            }
+        }
         output->alignment = input->align == 0U ? 1U : input->align;
         output->entry_size = input->entry_size;
         output->data = input->data;

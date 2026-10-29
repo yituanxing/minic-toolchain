@@ -57,3 +57,30 @@ assert not result["equal"] and result["inconclusive"], result
 assert not result["dimensions"]["known_relocation_widths"]
 print("MINIAS_ELF_SEMANTIC_UNKNOWN_RELOC=PASS verdict=INCONCLUSIVE")
 PY
+
+# SHF_LINK_ORDER is a section-retention contract, not only a bit in sh_flags.
+# Here all section names, flags, sizes and contents match; just the section
+# associated with .patch changes. A name/flag-only oracle must reject it.
+for linked in one two; do
+    printf '.section .text.one,"ax",@progbits\none: .byte 0x90\n.section .text.two,"ax",@progbits\ntwo: .byte 0x90\n.section .patch,"awo",@progbits,%s\n.quad 0x1122334455667788\n' \
+        "$linked" >"$work/link-$linked.s"
+    as --64 -o "$work/link-$linked.o" "$work/link-$linked.s"
+done
+
+"$PYTHON" - "$repo" "$work" <<'PY'
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(sys.argv[1]) / "tests" / "assembler"))
+from elf_semantic_compare import compare_paths, load_semantics
+
+root = pathlib.Path(sys.argv[2])
+one, two = root / "link-one.o", root / "link-two.o"
+first, second = load_semantics(one), load_semantics(two)
+assert first["section_core"][".patch"]["linked_section"] == ".text.one"
+assert second["section_core"][".patch"]["linked_section"] == ".text.two"
+result = compare_paths(one, two)
+assert not result["equal"] and not result["dimensions"]["section_core"], result
+assert result["dimensions"]["contents_masked"], result
+print("MINIAS_ELF_SEMANTIC_LINK_ORDER=PASS changed_sh_link=detected")
+PY

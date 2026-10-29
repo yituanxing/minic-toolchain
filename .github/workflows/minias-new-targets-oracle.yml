@@ -11,6 +11,7 @@ on:
       - 'tests/assembler/probe-cfi-dual-frame.sh'
       - 'tests/assembler/probe-minias-acceptance-gates.sh'
       - 'tests/assembler/probe-elf-semantic-comdat-strict.sh'
+      - 'tests/assembler/probe-link-order-gcc-patchable.sh'
       - 'tests/assembler/probe-miniobjcopy-comdat-rewrite.sh'
       - 'tests/assembler/probe-x86-loong-base.sh'
       - 'tests/assembler/probe-mc-operand-lexer.sh'
@@ -49,6 +50,10 @@ jobs:
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-mc-cross-layer-contract.sh
+      - name: GNU x86 link-order section identity, RELA and linker GC
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-link-order-gcc-patchable.sh
       - name: Native MiniAS to MiniObjcopy COMDAT member rewrite versus GNU objcopy
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \

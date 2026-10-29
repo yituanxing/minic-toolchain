@@ -1,10 +1,11 @@
 name: MiniAS Immutable Linux 3x7 GNU Kbuild S Replay
 
-# Frozen original Linux 6.6.143 inputs. Discovery, NOT P1/parity.
+# Frozen original Linux 6.6.143 inputs including authentic, producer-hashed
+# Kbuild .incbin payloads. Assembly coverage only, NOT ELF parity or P1.
 # Grouped original Linux re-evaluation after Common GNU parenthesized
 # expressions and macro calls, x86 real CFI, A64 comparison/MVN, and the
-# sized shared A64 operand splitter. No synthetic .incbin inputs in this
-# pinned v1 corpus; genuine generated blobs are produced separately.
+# sized shared A64 operand splitter. The source run 40658346252 exported
+# the genuine generated blobs; its manifest, config and source are immutable.
 # LoongArch focused exact-head seven shards after GNU IOCSR/TLB/CFI/conditional batch.
 # One grouped LoongArch exact-head replay after LSX/LASX vector, FCSR, INVTLB, LI.W and dual-relocation LA.PCREL.
 # Final same-config LoongArch seven-shard census after verified LSX logic/FPR and variable-length GNU LI.W/LI.D ISA families.
@@ -65,19 +66,24 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           repository: ${{ github.repository }}
-          run-id: '40461070882'
+          run-id: '40658346252'
           github-token: ${{ github.token }}
           name: minias-linux-kbuild-${{ matrix.target }}-shard${{ matrix.shard }}
           path: build/minias-frozen
-      - name: Prove original GNU Kbuild target and per-shard S/CMD hashes
+      - name: Prove original GNU Kbuild config and per-shard S/CMD/incbin hashes
         run: |
           python3 - '${{ matrix.target }}' '${{ matrix.shard }}' <<'PY_PIN'
           import importlib.util, pathlib, sys
           target, n = sys.argv[1], int(sys.argv[2])
           hashes = {
-              "x86_64": "9065a6925d9e5081336894e42f7544f9d671efcb5d70eb499a24884988d00ac1",
-              "aarch64": "e2d034013185b214763c9fa42aef3f3eb4e9d96e276f8678717c1f9d675969cf",
-              "loongarch64": "203ed9df2cb4408cd8d0ee48b5de9f2a6444d115e8cdca649cf70995d6fc7017",
+              "x86_64": "1f2214b3d6ca55b67bd52b25805a3fc9aaf4b3738cc610865856a9b971d90897",
+              "aarch64": "37f35a94b93fa92813cccdf105f927ba930605d6759605fbf9921b22555baba7",
+              "loongarch64": "933ded54786245b9756cd3d10e2ebc30c5e63024cc8351b1cc653f313aebfd63",
+          }
+          configs = {
+              "x86_64": "5a50dea34d0a1793c6a8320c15f11b695f1c71fe7b4fbb89bc514f2660ddad65",
+              "aarch64": "f865fdfb8ccaa5aa9580e0d5bea7a48c6382d37224f751c6ec37969bbafe174f",
+              "loongarch64": "457d95d9e03620d3f437dfca63bb93c867c30a92649e8705f36ed66d013441ca",
           }
           spec = importlib.util.spec_from_file_location(
               "kbuild_s", "tools/ci/minias-linux-kbuild-seven-v1.py")
@@ -86,7 +92,10 @@ jobs:
           path = pathlib.Path(f"build/minias-frozen/shard-{n}.tar.gz")
           manifest, digest, selected = tool.checked_shard(path, target, n)
           assert digest == hashes[target], (target, n, digest)
+          assert manifest["config_sha256"] == configs[target], (target, n)
+          assert manifest["authentic_incbin_frozen"] is True
           assert manifest["full_kbuild"] and manifest["build_exit"] == 0
+          assert manifest["total"] == tool.STRICT_KBUILD_TOTAL[target]
           assert len(selected) > 0
           print(f"MINIAS_GNU_SOURCE_PIN=PASS target={target} shard={n} "
                 f"files={len(selected)} manifest={digest} GCC_rebuilt=NO")

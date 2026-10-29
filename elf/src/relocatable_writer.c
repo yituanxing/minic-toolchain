@@ -403,6 +403,12 @@ bool minielf_build_relocatable(const MiniElfRelocatableSpec *spec,
         const MiniElfWriteSection *s=&spec->sections[i];
         relocation_section_indices[i] = SIZE_MAX;
         section_group_indices[i] = SIZE_MAX;
+        if (s->has_link_order_target &&
+            (((s->flags & SHF_LINK_ORDER)==0U) ||
+             s->linked_target_section>=spec->section_count)) {
+            set_error(error_out, MINIELF_WRITE_INVALID_SECTION);
+            goto done;
+        }
         if(!s->has_group)continue;
         if(s->group_signature_symbol>=spec->symbol_count ||
            (s->flags & SHF_GROUP)==0U) {
@@ -602,6 +608,8 @@ bool minielf_build_relocatable(const MiniElfRelocatableSpec *spec,
         headers[i + 1U].name = section_name_offsets[i];
         headers[i + 1U].type = section->type;
         headers[i + 1U].flags = section->flags;
+        if (section->has_link_order_target)
+            headers[i+1U].link=(uint32_t)(section->linked_target_section+1U);
         headers[i + 1U].offset = cursor;
         headers[i + 1U].size = section->size;
         headers[i + 1U].alignment = alignment;

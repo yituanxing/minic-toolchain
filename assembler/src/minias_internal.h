@@ -11,6 +11,7 @@
 #define MINIAS_SHF_EXECINSTR 4ULL
 #define MINIAS_SHF_MERGE 16ULL
 #define MINIAS_SHF_STRINGS 32ULL
+#define MINIAS_SHF_LINK_ORDER 128ULL
 #define MINIAS_SHF_TLS 1024ULL
 #define MINIAS_SHF_GROUP 512ULL
 #define MINIAS_SHF_GNU_RETAIN (1ULL << 21)
@@ -45,6 +46,11 @@ typedef struct MiniAsSection {
     char *name;
     /* GNU ELF SHT_GROUP signature; absent for ordinary Sections. */
     char *group_signature;
+    /* SHF_LINK_ORDER identity is the original referenced *symbol*, not the
+     * resolved SectionID: two distinct patchable-function anchors in one
+     * .text still require two distinct, same-named output sections.  Resolve
+     * this reference after all labels and section groups are finalized. */
+    char *link_order_reference;
     uint32_t type;
     uint64_t flags;
     uint64_t align;

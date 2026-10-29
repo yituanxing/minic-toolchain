@@ -201,12 +201,23 @@ def section_metadata(elf, section_keys):
             continue
         hdr = sec.header
         key = section_keys[index]
-        core[key] = {
+        metadata = {
             "type": str(hdr["sh_type"]),
             "flags": int(hdr["sh_flags"]),
             "entsize": int(hdr["sh_entsize"]),
             "size": int(hdr["sh_size"]),
         }
+        # SHF_LINK_ORDER's sh_link refers to the associated input section,
+        # not to the symbol table like SHT_RELA's sh_link. Compare the
+        # section's semantic identity instead of its layout-dependent ELF
+        # header number; two otherwise identical patch-table sections may
+        # have different retention rules under --gc-sections.
+        if int(hdr["sh_flags"]) & 0x80:
+            linked = int(hdr["sh_link"])
+            if linked < 0 or linked >= elf.num_sections():
+                raise ValueError("SHF_LINK_ORDER section links outside ELF")
+            metadata["linked_section"] = section_keys[linked] if linked else None
+        core[key] = metadata
         alignment[key] = int(hdr["sh_addralign"])
     return core, alignment
 
