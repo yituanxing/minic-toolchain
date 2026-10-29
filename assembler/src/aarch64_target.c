@@ -683,9 +683,6 @@ typedef struct A64Memory {
     unsigned post_register;
 } A64Memory;
 
-static bool a64_parse_deferred_difference(MiniAs *as,const char *source,
-                                          MiniAsSymbolDifference *difference);
-
 static bool a64_parse_address_offset(MiniAs *as,const char *source,
                                       A64OffsetExpr *result) {
     MiniAsSymbolDifference difference;
@@ -698,7 +695,7 @@ static bool a64_parse_address_offset(MiniAs *as,const char *source,
      * .space/.fill is finalized.  A syntactic label difference MUST bind as
      * a deferred pair even if the absolute evaluator currently succeeds;
      * otherwise forward layout turns a valid #8 into a frozen #0. */
-    if(a64_parse_deferred_difference(as,source,&difference)) {
+    if(minias_parse_symbol_difference_absolute_tail(as,source,&difference)) {
         if(!minias_bind_symbol_difference_ref(as,&difference,
                                                &result->difference))return false;
         result->kind=A64_OFFSET_DIFFERENCE;
@@ -1640,7 +1637,7 @@ static bool parse_integer_family(MiniAs *as,const A64AliasState *aliases,MiniAsM
             if((rd==31U&&!spd) || (rn==31U&&!spn) ||
                (numeric?(imm<0 || (imm>4095 &&
                   (imm%4096!=0 || imm/4096>4095))):
-                !a64_parse_deferred_difference(as,t[2][0]=='#'?t[2]+1U:t[2],
+                !minias_parse_symbol_difference_absolute_tail(as,t[2][0]=='#'?t[2]+1U:t[2],
                                                &difference)))return false;
             kind = strcmp(op, "add") == 0 ? A64_MC_ADD_IMM :
                    strcmp(op, "sub") == 0 ? A64_MC_SUB_IMM :
@@ -1685,7 +1682,7 @@ static bool parse_integer_family(MiniAs *as,const A64AliasState *aliases,MiniAsM
             MiniAsSymbolDifference difference;
             bool numeric=parse_signed_number(t[1],&imm);
             bool deferred=!numeric &&
-                a64_parse_deferred_difference(as,t[1][0]=='#'?t[1]+1U:t[1],
+                minias_parse_symbol_difference_absolute_tail(as,t[1][0]=='#'?t[1]+1U:t[1],
                                                &difference);
             if((!numeric && !deferred) ||
                (numeric && (imm==INT64_MIN ||
@@ -2201,51 +2198,6 @@ typedef struct A64BranchAdjustment {
     MiniAsSymbolDifferenceRef difference;
 } A64BranchAdjustment;
 
-/* Preserve the symbol pair while freezing only the purely absolute suffix
- * at its lexical site. For example, '(end-start)+(2*4)' retains end/start
- * and adds eight to the positive symbol's addend. A later fragment growth
- * can then change the distance without changing the lexical constant. */
-static bool a64_parse_deferred_difference(MiniAs *as,const char *source,
-                                          MiniAsSymbolDifference *difference) {
-    char *copy=minias_strdup(source),*body,*p,*split=NULL;
-    const char *first_subtraction;
-    unsigned depth=0U;
-    int64_t suffix=0;
-    bool ok=false;
-    if(!copy)return false;
-    body=minias_expr_strip_outer_parens(minias_trim(copy));
-    first_subtraction=strchr(body,'-');
-    for(p=body;*p;++p) {
-        if(*p=='(')++depth;
-        else if(*p==')') {
-            if(!depth)goto done;
-            --depth;
-        }else if((*p=='+' || *p=='-') && depth==0U &&
-                 first_subtraction && p>first_subtraction) {
-            /* A GNU source suffix is outside the subtraction:
-             * end-start-4 means (end-start)-4, NOT end-(start-4).
-             * Leaving -4 attached to the negative SymbolRef silently
-             * reverses the constant.  Keep only the symbol pair in the
-             * deferred DifferenceRef; Common evaluates this absolute
-             * arithmetic tail once at the lexical site. */
-            split=p;break;
-        }
-    }
-    if(split) {
-        /* Keep the leading sign AND subsequent + / - operators in the
-         * absolute tail.  -4+5 must evaluate to +1, not -(4+5). */
-        if(!minias_evaluate_absolute_expression(as,split,&suffix))goto done;
-        *split='\0';
-    }
-    if(!minias_parse_symbol_difference(minias_trim(body),difference))goto done;
-    if(!minias_checked_add_i64(difference->positive.addend,suffix,
-                               &difference->positive.addend))goto done;
-    ok=true;
-done:
-    free(copy);
-    return ok;
-}
-
 /* Parse a branch base symbol plus an optional parenthesized layout-dependent
  * addend without ever rewriting the source.  The two name refs are retained
  * independently: one names the branch target, the other is an absolute
@@ -2279,7 +2231,7 @@ static bool a64_attach_branch_target(MiniAs *as,MiniAsMCInst *inst,
             if(*tail || expr_size>=sizeof(expression))continue;
             memcpy(expression,open+1U,expr_size);
             expression[expr_size]='\0';
-            if(!a64_parse_deferred_difference(as,minias_trim(expression),
+            if(!minias_parse_symbol_difference_absolute_tail(as,minias_trim(expression),
                                               &difference))continue;
             base_size=(size_t)(plus-source);
             base_text=malloc(base_size+1U);

@@ -544,6 +544,42 @@ bool minias_parse_symbol_difference(const char *expression,
     return ok;
 }
 
+/* One Common parser for a retained section-symbol difference followed by
+ * a GNU absolute arithmetic suffix. A64 branch/memory operands share this
+ * with any future target; neither Target reinterprets '-4' as an addend on
+ * the negative symbol, which would flip its sign. */
+bool minias_parse_symbol_difference_absolute_tail(
+    MiniAs *as,const char *text,MiniAsSymbolDifference *result) {
+    char *copy=minias_strdup(text),*body,*first_minus,*split=NULL;
+    unsigned depth=0U;
+    int64_t tail=0;
+    bool ok=false;
+    if(!copy)return false;
+    body=minias_expr_strip_outer_parens(copy);
+    first_minus=strchr(body,'-');
+    for(char *p=body;*p;++p) {
+        if(*p=='(')++depth;
+        else if(*p==')') {
+            if(depth==0U)goto done;
+            --depth;
+        }else if(depth==0U && first_minus && p>first_minus &&
+                 (*p=='+' || *p=='-')) {
+            split=p;
+            break;
+        }
+    }
+    if(split) {
+        if(!minias_evaluate_absolute_expression(as,split,&tail))goto done;
+        *split='\0';
+    }
+    if(!minias_parse_symbol_difference(body,result))goto done;
+    ok=minias_checked_add_i64(result->positive.addend,tail,
+                              &result->positive.addend);
+done:
+    free(copy);
+    return ok;
+}
+
 /* Stable parser-name identities resolve against actual SymbolIDs only after
  * final layout.  No conversion back to 256-byte parse DTOs or name-based
  * second lookup is needed; this is the single checked difference resolver

@@ -667,6 +667,9 @@ bool minias_evaluate_absolute_operand(MiniAs *,const char *,int64_t *);
 /* Parsed syntax may name forward symbols; resolve only after final
  * same-section layout and fail closed on missing/cross-section anchors. */
 bool minias_parse_symbol_difference(const char *,MiniAsSymbolDifference *);
+/* Shared retained same-section symbol-difference grammar with absolute tail. */
+bool minias_parse_symbol_difference_absolute_tail(
+    MiniAs *,const char *,MiniAsSymbolDifference *);
 bool minias_parse_size_end_addend(const char *,const char *,int64_t *);
 bool minias_queue_literal(MiniAs *as,const MiniAsSymbolExpr *expression,
                           unsigned width,MiniAsSymbolExpr *pool_label);
