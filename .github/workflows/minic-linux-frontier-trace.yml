@@ -1,12 +1,14 @@
 name: MiniC frozen Linux three-ISA focused frontier trace (one-off)
 
-# A one-off diagnostic lane. Editing this file is the *only* automatic trigger;
-# compiler changes and the regular broad 3x7 campaign never start it.
+# A one-off diagnostic lane. Editing the trace workflow or its extraction
+# script is the only automatic trigger; compiler changes and the regular broad
+# 3x7 campaign never start it.
 on:
   push:
     branches: [refactor/minic-target-language-boundary]
     paths:
       - .github/workflows/minic-linux-frontier-trace.yml
+      - tools/ci/minic-linux-frontier-trace-v1.py
 
 permissions:
   actions: read

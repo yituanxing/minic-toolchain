@@ -75,40 +75,77 @@ def classify(target, row):
 
 
 def source_context(path, stderr, *, max_error_sites=3, max_asm_sites=5):
-    """Keep diagnostic location and first asm templates with constraints.
+    """Keep exact GNU -E -P diagnostics and target-failing asm source.
 
-    GNU -E -P strips #line markers, so line numbers are from the frozen .i.
-    If the compiler points to end-of-file, scan early assembler forms as a
-    fallback rather than inventing an AST-to-source location.
+    The first five asm statements in a Linux .i are often unrelated header
+    helpers. In particular, x86's preempt, GS and static-key asm forms occur
+    thousands of lines later. Scan the entire frozen input and select the
+    diagnosed function and precise architecture-specific source markers,
+    with surrounding operand constraints. Never infer an asm template from
+    the lossy CORE_ASM_FRONTIER preview/hash alone.
     """
     source_lines = sorted({int(m.group(1)) for m in LINE_NUMBER.finditer(stderr)})[:max_error_sites]
+    frontier_functions = set(re.findall(
+        r"CORE_ASM_FRONTIER function=([A-Za-z_][A-Za-z_0-9]*)", stderr))
+    frontier_functions = {name for name in frontier_functions
+                          if not name.startswith("__minic_inline_spec_")}
+    target_markers = (
+        ("preempt", re.compile(r"__SCT__preempt_schedule"), 4),
+        ("jump_label", re.compile(r"__jump_table"), 4),
+        ("gs_decrement", re.compile(r"(?:decl|output condition code|=@ccz).*?(?:%%gs|%gs|var)|(?:%%gs|%gs).*?decl"), 5),
+        ("tracedata", re.compile(r"tracedata"), 3),
+        ("endbr", re.compile(r"0xfa1e0ff3|endbr"), 3),
+        ("vmcall", re.compile(r"vmcall"), 3),
+        ("muldiv", re.compile(r"mulq .*%[0-9]"), 3),
+        ("msr", re.compile(r"(?:wrmsr|rdmsr)"), 4),
+        ("retpoline", re.compile(r"retpoline_safe"), 3),
+        ("extable", re.compile(r"__ex_table"), 3),
+    )
+    marker_counts = collections.Counter()
+    function_counts = collections.Counter()
     contexts = []
-    preceding = collections.deque(maxlen=4)
+    preceding = collections.deque(maxlen=9)
     asm_remaining = 0
+    target_remaining = 0
     error_remaining = 0
     asm_count = 0
     with path.open("r", encoding="utf-8", errors="replace") as stream:
         for line_number, line in enumerate(stream, 1):
             error_hit = any(abs(line_number - index) <= 5 for index in source_lines)
             asm_hit = asm_count < max_asm_sites and ASM_SOURCE.search(line) is not None
+            target_hit = False
+            if frontier_functions:
+                for name in frontier_functions:
+                    if function_counts[name] < 2 and re.search(
+                            r"\b" + re.escape(name) + r"\s*\(", line):
+                        function_counts[name] += 1
+                        target_hit = True
+            for marker, pattern, limit in target_markers:
+                if marker_counts[marker] < limit and pattern.search(line):
+                    marker_counts[marker] += 1
+                    target_hit = True
             if asm_hit:
                 asm_count += 1
                 asm_remaining = max(asm_remaining, 7)
+            if target_hit:
+                target_remaining = max(target_remaining, 13)
+            if asm_hit or target_hit:
                 for n, prior in preceding:
                     contexts.append({"line": n, "kind": "asm_before", "text": prior[:1600]})
             if error_hit:
                 error_remaining = max(error_remaining, 1)
-            if error_hit or asm_hit or asm_remaining or error_remaining:
+            if error_hit or asm_hit or asm_remaining or target_hit or target_remaining or error_remaining:
                 contexts.append({"line": line_number,
-                                 "kind": "error" if error_hit else "asm",
+                                 "kind": "error" if error_hit else
+                                         "target_asm" if target_hit or target_remaining else "asm",
                                  "text": line.rstrip("\n")[:2400]})
             if asm_remaining:
                 asm_remaining -= 1
+            if target_remaining:
+                target_remaining -= 1
             if error_remaining:
                 error_remaining -= 1
             preceding.append((line_number, line.rstrip("\n")))
-            if len(contexts) >= 120:
-                break
     # Duplicates occur when several diagnostics point into the same asm form.
     dedup = {(v["line"], v["kind"]): v for v in contexts}
     return list(dedup.values())
