@@ -47,9 +47,42 @@ typedef struct {
     uint32_t features;
     uint32_t abi;
 } LaTargetProfile;
+typedef enum {
+    LA_MN_BRANCH,
+    LA_MN_VECTOR,
+    LA_MN_SPECIAL,
+    LA_MN_SCALAR,
+    LA_MN_BITFIELD,
+    LA_MN_ALSL,
+    LA_MN_PRIVILEGED,
+    LA_MN_LI,
+    LA_MN_PCREL,
+    LA_MN_BYTEPICK,
+    LA_MN_JIRL,
+    LA_MN_MOVE,
+    LA_MN_PREFETCH,
+    LA_MN_ADDU16I
+} LaMnemonicFamily;
+typedef enum {
+    LA_BRANCH_CANONICAL,
+    LA_BRANCH_ZERO_RIGHT,
+    LA_BRANCH_ZERO_LEFT,
+    LA_BRANCH_SWAP
+} LaBranchAlias;
+typedef struct {
+    const char *name;
+    LaMnemonicFamily family;
+    unsigned index;
+    uint32_t required_features;
+    LaBranchAlias branch_alias;
+} LaMnemonicEntry;
 typedef struct {
     uint32_t features;
+    LaMnemonicEntry *mnemonics;
+    size_t mnemonic_count;
 } LaTargetState;
+
+#define LA_COUNT(a) (sizeof(a)/sizeof((a)[0]))
 
 static bool la_has_features(const MiniAs *as,uint32_t required) {
     const LaTargetState *state=(const LaTargetState *)as->target_state;
@@ -138,11 +171,38 @@ static bool la_special_reg(const char *s,const char *prefix,
     if(errno || *end || val>maximum)return false;
     *reg=(unsigned)val;return true;
 }
-static bool la_split(const char *args,char t[4][192],unsigned *n) {
-    char *slots[4]={t[0],t[1],t[2],t[3]};
-    const size_t capacity[4]={sizeof(t[0]),sizeof(t[1]),
-                              sizeof(t[2]),sizeof(t[3])};
-    return minias_split_mc_operands(args,slots,capacity,4U,n);
+typedef struct {
+    char fast[4][192];
+    char *slots[4];
+    char *overflow;
+    unsigned count;
+} LaOperandTokens;
+
+/* Preserve a no-allocation path for the ordinary GCC instruction stream.
+ * Oversized but lexically valid operands get a dynamic Target-owned buffer,
+ * still tokenized by the ONE Common delimiter/quote grammar. Neither route
+ * changes the ISA's four-operand maximum or SymbolExpr's name constraints. */
+static bool la_split(const char *args,LaOperandTokens *tokens) {
+    const size_t fast_capacity[4]={192U,192U,192U,192U};
+    size_t capacities[4];
+    size_t len,per_slot,i;
+    for(i=0U;i<4U;++i)tokens->slots[i]=tokens->fast[i];
+    if(minias_split_mc_operands(args,tokens->slots,fast_capacity,4U,
+                                &tokens->count))return true;
+    len=strlen(args);
+    if(len<192U || len>SIZE_MAX/4U-1U)return false;
+    per_slot=len+1U;
+    tokens->overflow=malloc(per_slot*4U);
+    if(tokens->overflow==NULL)return false;
+    for(i=0U;i<4U;++i) {
+        tokens->slots[i]=tokens->overflow+i*per_slot;
+        capacities[i]=per_slot;
+    }
+    if(minias_split_mc_operands(args,tokens->slots,capacities,4U,
+                                &tokens->count))return true;
+    free(tokens->overflow);
+    tokens->overflow=NULL;
+    return false;
 }
 
 
@@ -198,35 +258,32 @@ static const LaBranchPattern la_branch_patterns[]={
 };
 
 static bool la_branch_instruction(MiniAs *as, MiniAsMCInst *m,
-                                  const char *op, char t[4][192],
-                                  unsigned count) {
-    unsigned i, rj, rd, slot;
-    const char *base_op=op;
-    bool swap=false;
+                                  char *t[4],unsigned count,
+                                  unsigned branch_index,LaBranchAlias alias) {
+    unsigned rj, rd, slot;
+    const LaBranchPattern *b;
+    const bool zero_alias=alias==LA_BRANCH_ZERO_RIGHT ||
+                          alias==LA_BRANCH_ZERO_LEFT;
+    const bool swap=alias==LA_BRANCH_SWAP;
     MiniAsSymbolExpr expr;
     /* GAS pseudo comparisons reuse the existing B16 encoding and its
      * Common RV-style SymbolExpr/ELF fixup. Do not duplicate a branch ISA. */
-    if(count==2U &&
-       (!strcmp(op,"bltz") || !strcmp(op,"bgtz") ||
-        !strcmp(op,"bgez") || !strcmp(op,"blez"))) {
+    if(zero_alias) {
         /* GNU psABI BxxZ aliases share the one existing typed B16,
          * relocation and local-branch encode path, not a second encoder. */
-        bool zero_first=!strcmp(op,"bgtz") || !strcmp(op,"blez");
+        bool zero_first=alias==LA_BRANCH_ZERO_LEFT;
+        if(count!=2U)return false;
         memcpy(t[2],t[1],strlen(t[1])+1U);
         if(zero_first) {
             memcpy(t[1],t[0],strlen(t[0])+1U);
             memcpy(t[0],"$zero",6U);
         } else memcpy(t[1],"$zero",6U);
-        base_op=(!strcmp(op,"bltz") || !strcmp(op,"bgtz"))?"blt":"bge";
         count=3U;
     }
-    if(!strcmp(op,"bgtu")) {base_op="bltu";swap=true;}
-    else if(!strcmp(op,"bleu")) {base_op="bgeu";swap=true;}
-    else if(!strcmp(op,"bgt")) {base_op="blt";swap=true;}
-    else if(!strcmp(op,"ble")) {base_op="bge";swap=true;}
-    for(i=0;i<sizeof(la_branch_patterns)/sizeof(la_branch_patterns[0]);++i) {
-        const LaBranchPattern *b=&la_branch_patterns[i];
-        if(strcmp(base_op,b->name)!=0 || count!=b->operands)continue;
+    if(alias>LA_BRANCH_SWAP)return false;
+    if(branch_index>=LA_COUNT(la_branch_patterns))return false;
+    b=&la_branch_patterns[branch_index];
+    if(count==b->operands) {
         if (!minias_parse_symbol_addend(t[count-1U],&expr) ||
             (expr.addend&3)!=0)
             return false;
@@ -237,7 +294,7 @@ static bool la_branch_instruction(MiniAs *as, MiniAsMCInst *m,
         slot=count-1U;
         if (!la_symbol_operand(as,m,slot,&expr))return false;
         m->opcode=(unsigned)b->kind;
-        m->target_form=(uint32_t)LA_FORM_BRANCH+(uint32_t)i;
+        m->target_form=(uint32_t)LA_FORM_BRANCH+branch_index;
         m->count=count;
         if(count>=2U) {m->operands[0].kind=MINIAS_MC_REGISTER;
                        m->operands[0].reg=rj;
@@ -539,63 +596,46 @@ static const LaVectorPattern la_vector_patterns[] = {
     {"xvbitsel.v",0x0d200000U,LA_VECTOR_XXXX,0,0,0U}
 };
 
-static bool la_parse_vector_pattern(MiniAs *as,MiniAsMCInst *m,const char *op,
-                                    char args[4][192],unsigned count,
-                                    bool *recognized) {
-    size_t i;
-    *recognized=false;
-    for(i=0U;i<sizeof(la_vector_patterns)/sizeof(la_vector_patterns[0]);++i) {
-        const LaVectorPattern *pattern=&la_vector_patterns[i];
-        const LaVectorLayout *layout=&la_vector_layouts[pattern->shape];
-        uint32_t required=0U;
-        unsigned arg;
-        if(strcmp(pattern->name,op)!=0)continue;
-        *recognized=true;
-        if(count!=layout->count)return false;
-        for(arg=0U;arg<layout->count;++arg) {
-            if(layout->classes[arg]==LA_ARG_XR)required|=LA_FEATURE_LASX;
-            if(layout->classes[arg]==LA_ARG_VR)required|=LA_FEATURE_LSX;
+static bool la_parse_vector_pattern(MiniAsMCInst *m,char *args[4],
+                                    unsigned count,unsigned index) {
+    const LaVectorPattern *pattern;
+    const LaVectorLayout *layout;
+    unsigned arg;
+    if(index>=LA_COUNT(la_vector_patterns))return false;
+    pattern=&la_vector_patterns[index];
+    layout=&la_vector_layouts[pattern->shape];
+    if(count!=layout->count)return false;
+    for(arg=0U;arg<count;++arg) {
+        LaOperandClass cls=layout->classes[arg];
+        unsigned reg=0U;
+        int64_t value=0;
+        bool valid=false;
+        if(cls==LA_ARG_GPR)valid=la_reg(args[arg],&reg);
+        else if(cls==LA_ARG_VR)valid=la_special_reg(args[arg],"$vr",31U,&reg);
+        else if(cls==LA_ARG_XR)valid=la_special_reg(args[arg],"$xr",31U,&reg);
+        else {
+            valid=minias_eval_i64_expression(args[arg],&value) &&
+                  value>=pattern->immediate_min &&
+                  value<=pattern->immediate_max;
         }
-        if(!la_has_features(as,required))return false;
-        for(arg=0U;arg<count;++arg) {
-            LaOperandClass cls=layout->classes[arg];
-            /* Keep both operand payloads initialized even for an invalid
-             * descriptor class. The `valid` gate below then rejects the
-             * class before either field can enter a machine encoding. */
-            unsigned reg=0U;
-            int64_t value=0;
-            bool valid=false;
-            if(cls==LA_ARG_GPR)valid=la_reg(args[arg],&reg);
-            else if(cls==LA_ARG_VR)valid=la_special_reg(args[arg],"$vr",31U,&reg);
-            else if(cls==LA_ARG_XR)valid=la_special_reg(args[arg],"$xr",31U,&reg);
-            else {
-                valid=minias_eval_i64_expression(args[arg],&value) &&
-                      value>=pattern->immediate_min &&
-                      value<=pattern->immediate_max;
-            }
-            if(!valid)return false;
-            if(cls==LA_ARG_IMM) {
-                /* Signed operands retain their low encoded bits; the
-                 * descriptor's exact field width and signed bounds are
-                 * both checked before truncation; no max-based guessing. */
-                if(pattern->immediate_bits==0U ||
-                   pattern->immediate_bits>12U)return false;
-                m->operands[arg].kind=MINIAS_MC_IMMEDIATE;
-                m->operands[arg].immediate=(uint64_t)value;
-            } else {
-                m->operands[arg].kind=MINIAS_MC_REGISTER;
-                m->operands[arg].reg=reg;
-                la_set_register_bank(&m->operands[arg],
-                    cls==LA_ARG_GPR ? LA_REG_BANK_GPR :
-                    cls==LA_ARG_VR ? LA_REG_BANK_VR128 : LA_REG_BANK_XR256);
-            }
+        if(!valid)return false;
+        if(cls==LA_ARG_IMM) {
+            if(pattern->immediate_bits==0U ||
+               pattern->immediate_bits>12U)return false;
+            m->operands[arg].kind=MINIAS_MC_IMMEDIATE;
+            m->operands[arg].immediate=(uint64_t)value;
+        } else {
+            m->operands[arg].kind=MINIAS_MC_REGISTER;
+            m->operands[arg].reg=reg;
+            la_set_register_bank(&m->operands[arg],
+                cls==LA_ARG_GPR ? LA_REG_BANK_GPR :
+                cls==LA_ARG_VR ? LA_REG_BANK_VR128 : LA_REG_BANK_XR256);
         }
-        m->count=count;
-        m->target_form=(uint32_t)LA_FORM_VECTOR+(uint32_t)i;
-        m->encoding=pattern->opcode;
-        return true;
     }
-    return false;
+    m->count=count;
+    m->target_form=(uint32_t)LA_FORM_VECTOR+index;
+    m->encoding=pattern->opcode;
+    return true;
 }
 
 /* Populate semantic MC operands even for fixed-width scalar words. The ELF
@@ -672,70 +712,64 @@ static const LaSpecialRegisterPattern la_special_register_patterns[] = {
 #undef LA_FIELDS_2
 #undef LA_FIELDS_3
 
-static bool la_parse_special_register_pattern(MiniAsMCInst *m,const char *op,
-                                               char args[4][192],unsigned count,
-                                               bool *recognized) {
-    size_t i;
-    *recognized=false;
-    for(i=0U;i<sizeof(la_special_register_patterns)/
-                   sizeof(la_special_register_patterns[0]);++i) {
-        const LaSpecialRegisterPattern *rule=&la_special_register_patterns[i];
-        unsigned arg;
-        if(strcmp(rule->name,op)!=0)continue;
-        *recognized=true;
-        if(count!=rule->count)return false;
-        m->encoding=rule->opcode;
-        for(arg=0U;arg<count;++arg) {
-            unsigned reg=0U;
-            int64_t imm=0;
-            bool valid=false, immediate=false;
-            unsigned width=0U;
-            switch(rule->banks[arg]) {
-                case LA_BANK_GPR:valid=la_reg(args[arg],&reg);break;
-                case LA_BANK_FPR:
-                    valid=la_special_reg(args[arg],"$f",31U,&reg);break;
-                case LA_BANK_FCSR:
-                    valid=la_special_reg(args[arg],"$fcsr",3U,&reg);break;
-                case LA_BANK_FCC:
-                    valid=la_special_reg(args[arg],"$fcc",7U,&reg);break;
-                case LA_BANK_SIGNED12:
-                    valid=minias_eval_i64_expression(args[arg],&imm) &&
-                          imm>=-2048 && imm<=2047;
-                    immediate=true;width=12U;
-                    break;
-                case LA_BANK_UNSIGNED5:
-                case LA_BANK_UNSIGNED8:
-                case LA_BANK_UNSIGNED14:
-                case LA_BANK_UNSIGNED15: {
-                    uint64_t uimm;
-                    width=rule->banks[arg]==LA_BANK_UNSIGNED5?5U:
-                          rule->banks[arg]==LA_BANK_UNSIGNED8?8U:
-                          rule->banks[arg]==LA_BANK_UNSIGNED14?14U:15U;
-                    valid=minias_eval_u64_expression(args[arg],&uimm) &&
-                          uimm<(UINT64_C(1)<<width);
-                    if(valid)imm=(int64_t)uimm;
-                    immediate=true;
-                    break;
-                }
-            }
-            if(!valid || (!immediate && reg<rule->min_register[arg]))
-                return false;
-            if(immediate) {
-                la_capture_imm_operand(m,arg,imm);
-            } else {
-                la_capture_gpr_operand(m,arg,reg);
-                la_set_register_bank(&m->operands[arg],
-                    rule->banks[arg]==LA_BANK_FPR ? LA_REG_BANK_FPR :
-                    rule->banks[arg]==LA_BANK_FCSR ? LA_REG_BANK_FCSR :
-                    rule->banks[arg]==LA_BANK_FCC ? LA_REG_BANK_FCC :
-                    LA_REG_BANK_GPR);
+static bool la_parse_special_register_pattern(MiniAsMCInst *m,
+                                               char *args[4],unsigned count,
+                                               unsigned index) {
+    const LaSpecialRegisterPattern *rule;
+    unsigned arg;
+    if(index>=LA_COUNT(la_special_register_patterns))return false;
+    rule=&la_special_register_patterns[index];
+    if(count!=rule->count)return false;
+    m->encoding=rule->opcode;
+    for(arg=0U;arg<count;++arg) {
+        unsigned reg=0U;
+        int64_t imm=0;
+        bool valid=false, immediate=false;
+        unsigned width=0U;
+        switch(rule->banks[arg]) {
+            case LA_BANK_GPR:valid=la_reg(args[arg],&reg);break;
+            case LA_BANK_FPR:
+                valid=la_special_reg(args[arg],"$f",31U,&reg);break;
+            case LA_BANK_FCSR:
+                valid=la_special_reg(args[arg],"$fcsr",3U,&reg);break;
+            case LA_BANK_FCC:
+                valid=la_special_reg(args[arg],"$fcc",7U,&reg);break;
+            case LA_BANK_SIGNED12:
+                valid=minias_eval_i64_expression(args[arg],&imm) &&
+                      imm>=-2048 && imm<=2047;
+                immediate=true;width=12U;
+                break;
+            case LA_BANK_UNSIGNED5:
+            case LA_BANK_UNSIGNED8:
+            case LA_BANK_UNSIGNED14:
+            case LA_BANK_UNSIGNED15: {
+                uint64_t uimm;
+                width=rule->banks[arg]==LA_BANK_UNSIGNED5?5U:
+                      rule->banks[arg]==LA_BANK_UNSIGNED8?8U:
+                      rule->banks[arg]==LA_BANK_UNSIGNED14?14U:15U;
+                valid=minias_eval_u64_expression(args[arg],&uimm) &&
+                      uimm<(UINT64_C(1)<<width);
+                if(valid)imm=(int64_t)uimm;
+                immediate=true;
+                break;
             }
         }
-        m->count=count;
-        m->target_form=(uint32_t)LA_FORM_SPECIAL_REGISTER+(uint32_t)i;
-        return true;
+        if(!valid || (!immediate && reg<rule->min_register[arg]))
+            return false;
+        if(immediate) {
+            la_capture_imm_operand(m,arg,imm);
+        } else {
+            la_capture_gpr_operand(m,arg,reg);
+            la_set_register_bank(&m->operands[arg],
+                rule->banks[arg]==LA_BANK_FPR ? LA_REG_BANK_FPR :
+                rule->banks[arg]==LA_BANK_FCSR ? LA_REG_BANK_FCSR :
+                rule->banks[arg]==LA_BANK_FCC ? LA_REG_BANK_FCC :
+                LA_REG_BANK_GPR);
+        }
     }
-    return false;
+    m->count=count;
+    m->target_form=(uint32_t)LA_FORM_SPECIAL_REGISTER+index;
+    return true;
 }
 
 /* One target-owned scalar grammar.  A scalar opcode is an ISA encoding plus
@@ -904,22 +938,13 @@ static const LaScalarPattern la_scalar_patterns[] = {
     {"amxor_db.d",0x386d8000U,LA_SCALAR_ATOMIC}
 };
 
-static const LaScalarPattern *la_find_scalar_pattern(const char *op) {
-    size_t i;
-    for(i=0U;i<sizeof(la_scalar_patterns)/sizeof(la_scalar_patterns[0]);++i)
-        if(strcmp(la_scalar_patterns[i].name,op)==0)
-            return &la_scalar_patterns[i];
-    return NULL;
-}
-
-static bool la_parse_scalar_pattern(MiniAsMCInst *m,const char *op,
-                                    char args[4][192],unsigned count,
-                                    bool *recognized) {
-    const LaScalarPattern *rule=la_find_scalar_pattern(op);
+static bool la_parse_scalar_pattern(MiniAsMCInst *m,char *args[4],
+                                    unsigned count,unsigned index) {
+    const LaScalarPattern *rule;
     unsigned rd=0U,rj=0U,rk=0U,need;
     int64_t value=0;
-    *recognized=rule!=NULL;
-    if(rule==NULL)return false;
+    if(index>=LA_COUNT(la_scalar_patterns))return false;
+    rule=&la_scalar_patterns[index];
     need=(rule->shape==LA_SCALAR_GPR2 ||
           rule->shape==LA_SCALAR_UPPER20)?2U:3U;
     if(rule->shape==LA_SCALAR_ATOMIC && count==4U) {
@@ -975,8 +1000,7 @@ static bool la_parse_scalar_pattern(MiniAsMCInst *m,const char *op,
         }
     }
     m->count=need;
-    m->target_form=(uint32_t)LA_FORM_SCALAR+
-        (uint32_t)(rule-la_scalar_patterns);
+    m->target_form=(uint32_t)LA_FORM_SCALAR+index;
     return true;
 }
 
@@ -1275,47 +1299,233 @@ static bool la_materialize_manual_word(const MiniAsMCInst *m,
     return true;
 }
 
+/* The index contains identities, never ISA operand/encoding rules. LSX,
+ * LASX, scalar and special-register descriptors remain independently owned;
+ * adding one mnemonic means adding one descriptor, not editing a second
+ * per-family dispatch chain. Branch aliases point to canonical B16 forms. */
+typedef struct {
+    const char *name;
+    LaMnemonicFamily family;
+    unsigned index;
+    LaBranchAlias branch_alias;
+} LaBuiltinMnemonic;
+static const struct {const char *name;uint32_t opcode;} la_privileged[] = {
+    {"tlbclr",UINT32_C(0x06482000)},
+    {"tlbflush",UINT32_C(0x06482400)},
+    {"tlbsrch",UINT32_C(0x06482800)},
+    {"tlbrd",UINT32_C(0x06482c00)},
+    {"tlbwr",UINT32_C(0x06483000)},
+    {"tlbfill",UINT32_C(0x06483400)},
+    {"ertn",UINT32_C(0x06483800)},
+    {"nop",UINT32_C(0x03400000)},
+    {"ret",UINT32_C(0x4c000020)}
+};
+static const LaBuiltinMnemonic la_builtin_mnemonics[]={
+    {"bltz",LA_MN_BRANCH,6U,LA_BRANCH_ZERO_RIGHT},
+    {"bgtz",LA_MN_BRANCH,6U,LA_BRANCH_ZERO_LEFT},
+    {"bgez",LA_MN_BRANCH,7U,LA_BRANCH_ZERO_RIGHT},
+    {"blez",LA_MN_BRANCH,7U,LA_BRANCH_ZERO_LEFT},
+    {"bgt",LA_MN_BRANCH,6U,LA_BRANCH_SWAP},
+    {"ble",LA_MN_BRANCH,7U,LA_BRANCH_SWAP},
+    {"bgtu",LA_MN_BRANCH,8U,LA_BRANCH_SWAP},
+    {"bleu",LA_MN_BRANCH,9U,LA_BRANCH_SWAP},
+    {"li.w",LA_MN_LI,0U,LA_BRANCH_CANONICAL},
+    {"li.d",LA_MN_LI,1U,LA_BRANCH_CANONICAL},
+    {"la.pcrel",LA_MN_PCREL,0U,LA_BRANCH_CANONICAL},
+    {"bytepick.w",LA_MN_BYTEPICK,0U,LA_BRANCH_CANONICAL},
+    {"bytepick.d",LA_MN_BYTEPICK,1U,LA_BRANCH_CANONICAL},
+    {"jr",LA_MN_JIRL,0U,LA_BRANCH_CANONICAL},
+    {"jirl",LA_MN_JIRL,1U,LA_BRANCH_CANONICAL},
+    {"move",LA_MN_MOVE,0U,LA_BRANCH_CANONICAL},
+    {"preld",LA_MN_PREFETCH,0U,LA_BRANCH_CANONICAL},
+    {"preldx",LA_MN_PREFETCH,1U,LA_BRANCH_CANONICAL},
+    {"addu16i.d",LA_MN_ADDU16I,0U,LA_BRANCH_CANONICAL},
+    {"tlbclr",LA_MN_PRIVILEGED,0U,LA_BRANCH_CANONICAL},
+    {"tlbflush",LA_MN_PRIVILEGED,1U,LA_BRANCH_CANONICAL},
+    {"tlbsrch",LA_MN_PRIVILEGED,2U,LA_BRANCH_CANONICAL},
+    {"tlbrd",LA_MN_PRIVILEGED,3U,LA_BRANCH_CANONICAL},
+    {"tlbwr",LA_MN_PRIVILEGED,4U,LA_BRANCH_CANONICAL},
+    {"tlbfill",LA_MN_PRIVILEGED,5U,LA_BRANCH_CANONICAL},
+    {"ertn",LA_MN_PRIVILEGED,6U,LA_BRANCH_CANONICAL},
+    {"nop",LA_MN_PRIVILEGED,7U,LA_BRANCH_CANONICAL},
+    {"ret",LA_MN_PRIVILEGED,8U,LA_BRANCH_CANONICAL}
+};
+
+static int la_compare_mnemonic(const void *lhs,const void *rhs) {
+    const LaMnemonicEntry *a=(const LaMnemonicEntry *)lhs;
+    const LaMnemonicEntry *b=(const LaMnemonicEntry *)rhs;
+    return strcmp(a->name,b->name);
+}
+
+static bool la_build_mnemonic_index(MiniAs *as,LaTargetState *state) {
+    size_t i,j,n=0U;
+    const size_t capacity=LA_COUNT(la_branch_patterns)+
+        LA_COUNT(la_vector_patterns)+LA_COUNT(la_special_register_patterns)+
+        LA_COUNT(la_scalar_patterns)+LA_COUNT(la_bitfield_patterns)+
+        LA_COUNT(la_alsl_patterns)+LA_COUNT(la_builtin_mnemonics);
+    LaMnemonicEntry *entries=calloc(capacity,sizeof(*entries));
+    if(entries==NULL) {
+        minias_set_error(as,"out-of-memory:loongarch-mnemonic-index");
+        return false;
+    }
+    for(i=0U;i<LA_COUNT(la_branch_patterns);++i)
+        entries[n++]=(LaMnemonicEntry){la_branch_patterns[i].name,
+                                      LA_MN_BRANCH,(unsigned)i,0U,
+                                      LA_BRANCH_CANONICAL};
+    for(i=0U;i<LA_COUNT(la_vector_patterns);++i) {
+        const LaVectorPattern *pattern=&la_vector_patterns[i];
+        const LaVectorLayout *layout=&la_vector_layouts[pattern->shape];
+        uint32_t features=0U;
+        for(j=0U;j<layout->count;++j) {
+            if(layout->classes[j]==LA_ARG_XR)features|=LA_FEATURE_LASX;
+            if(layout->classes[j]==LA_ARG_VR)features|=LA_FEATURE_LSX;
+        }
+        entries[n++]=(LaMnemonicEntry){pattern->name,LA_MN_VECTOR,
+                                      (unsigned)i,features,
+                                      LA_BRANCH_CANONICAL};
+    }
+    for(i=0U;i<LA_COUNT(la_special_register_patterns);++i)
+        entries[n++]=(LaMnemonicEntry){la_special_register_patterns[i].name,
+                                      LA_MN_SPECIAL,(unsigned)i,0U,
+                                      LA_BRANCH_CANONICAL};
+    for(i=0U;i<LA_COUNT(la_scalar_patterns);++i)
+        entries[n++]=(LaMnemonicEntry){la_scalar_patterns[i].name,
+                                      LA_MN_SCALAR,(unsigned)i,0U,
+                                      LA_BRANCH_CANONICAL};
+    for(i=0U;i<LA_COUNT(la_bitfield_patterns);++i)
+        entries[n++]=(LaMnemonicEntry){la_bitfield_patterns[i].name,
+                                      LA_MN_BITFIELD,(unsigned)i,0U,
+                                      LA_BRANCH_CANONICAL};
+    for(i=0U;i<LA_COUNT(la_alsl_patterns);++i)
+        entries[n++]=(LaMnemonicEntry){la_alsl_patterns[i].name,
+                                      LA_MN_ALSL,(unsigned)i,0U,
+                                      LA_BRANCH_CANONICAL};
+    for(i=0U;i<LA_COUNT(la_builtin_mnemonics);++i)
+        entries[n++]=(LaMnemonicEntry){la_builtin_mnemonics[i].name,
+                                      la_builtin_mnemonics[i].family,
+                                      la_builtin_mnemonics[i].index,0U,
+                                      la_builtin_mnemonics[i].branch_alias};
+    qsort(entries,n,sizeof(*entries),la_compare_mnemonic);
+    for(i=1U;i<n;++i)
+        if(strcmp(entries[i-1U].name,entries[i].name)==0) {
+            minias_set_error(as,"duplicate-loongarch-mnemonic:%s",
+                             entries[i].name);
+            free(entries);
+            return false;
+        }
+    state->mnemonics=entries;
+    state->mnemonic_count=n;
+    return true;
+}
+
+static const LaMnemonicEntry *la_find_mnemonic(const MiniAs *as,
+                                               const char *name) {
+    const LaTargetState *state=(const LaTargetState *)as->target_state;
+    size_t lo=0U,hi;
+    if(state==NULL || state->mnemonics==NULL)return NULL;
+    hi=state->mnemonic_count;
+    while(lo<hi) {
+        size_t mid=lo+(hi-lo)/2U;
+        int cmp=strcmp(state->mnemonics[mid].name,name);
+        if(cmp==0)return &state->mnemonics[mid];
+        if(cmp<0)lo=mid+1U;
+        else hi=mid;
+    }
+    return NULL;
+}
+
+/* LI.W and LI.D share a typed family and one pseudo-lowering entry point;
+ * the target-owned plans decide if the word is a direct encoding or a
+ * multi-fragment macro. The mnemonic index decides only which width. */
+static bool la_parse_li(MiniAs *as,MiniAsMCInst *m,char *args[4],
+                        unsigned count,bool li_d) {
+    unsigned rd;
+    int64_t value;
+    bool has_value;
+    if(count!=2U || !la_reg(args[0],&rd))return false;
+    has_value=minias_eval_i64_expression(args[1],&value);
+    if(has_value && value>=-2048 && value<=2047) {
+        m->target_form=li_d?LA_FORM_LI_D:LA_FORM_LI_W;
+        m->count=2U;
+        m->encoding=UINT32_C(0x02800000);
+        la_capture_gpr_operand(m,0U,rd);
+        la_capture_imm_operand(m,1U,value);
+        return true;
+    }
+    if(!li_d && has_value && value>=4096 && value<=INT32_MAX &&
+       value%4096!=0) {
+        m->opcode=LA_MC_LI32_PAIR;
+        m->count=2U;
+        la_capture_gpr_operand(m,0U,rd);
+        la_capture_imm_operand(m,1U,value);
+        return la_plan_li_w_pair(as,m,(uint32_t)value,rd);
+    }
+    /* Single-word GNU LI.W for 4K multiples is LU12I.W; larger odd
+     * constants still go through the explicit multi-word lowering plans. */
+    if(has_value && value%4096==0 && value>=INT32_MIN && value<=INT32_MAX) {
+        m->target_form=li_d?LA_FORM_LI_D:LA_FORM_LI_W;
+        m->count=2U;
+        m->encoding=UINT32_C(0x14000000);
+        la_capture_gpr_operand(m,0U,rd);
+        la_capture_imm_operand(m,1U,value);
+        return true;
+    }
+    /* GNU LI.W 0x800..0xfff is ORI from $zero. */
+    if(!li_d && has_value && value>=2048 && value<=4095) {
+        m->target_form=LA_FORM_LI_W;
+        m->count=2U;
+        m->encoding=UINT32_C(0x03800000);
+        la_capture_gpr_operand(m,0U,rd);
+        la_capture_imm_operand(m,1U,value);
+        return true;
+    }
+    if(li_d) {
+        uint64_t bits;
+        /* Exact GNU GAS 12/20/20/12 signed/unsigned LI.D reduction. */
+        if(minias_eval_u64_expression(args[1],&bits)) {
+            if(!la_plan_li_d(as,m,bits,rd))return false;
+            m->opcode=LA_MC_LI64_SEQUENCE;
+            m->count=2U;
+            la_capture_gpr_operand(m,0U,rd);
+            m->operands[1].kind=MINIAS_MC_IMMEDIATE;
+            m->operands[1].immediate=bits;
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool la_parse(MiniAs *as,MiniAsStmt *s) {
     MiniAsMCInst *m=minias_mcinst_alloc(4U);
-    char t[4][192];unsigned n,i,rd,rj,rk;
+    LaOperandTokens tokens={0};
+    char **t=tokens.slots;
+    const LaMnemonicEntry *mnemonic;
+    unsigned n,i,rd,rj,rk;
     if(!m){minias_set_error(as,"out-of-memory:loongarch64-mcinst");return false;}
-    if(!*s->args) {
-        static const struct {const char *name;uint32_t bits;} privileged[]={
-            {"tlbclr",UINT32_C(0x06482000)},
-            {"tlbflush",UINT32_C(0x06482400)},
-            {"tlbsrch",UINT32_C(0x06482800)},
-            {"tlbrd",UINT32_C(0x06482c00)},
-            {"tlbwr",UINT32_C(0x06483000)},
-            {"tlbfill",UINT32_C(0x06483400)},
-            {"ertn",UINT32_C(0x06483800)}
-        };
-        for(i=0U;i<sizeof(privileged)/sizeof(privileged[0]);++i)
-            if(!strcmp(s->op,privileged[i].name)) {
-                m->encoding=privileged[i].bits;
-                m->target_form=(uint32_t)LA_FORM_PRIVILEGED+(uint32_t)i;
-                goto done;
-            }
-        if(!strcmp(s->op,"nop")){
-            m->encoding=UINT32_C(0x03400000);
-            m->target_form=LA_FORM_PRIVILEGED+16U;
-            goto done;
-        }
-        if(!strcmp(s->op,"ret")){
-            m->encoding=UINT32_C(0x4c000020);
-            m->target_form=LA_FORM_PRIVILEGED+17U;
-            goto done;
-        }
+    mnemonic=la_find_mnemonic(as,s->op);
+    if(mnemonic==NULL ||
+       !la_has_features(as,mnemonic->required_features))goto fail;
+    if(mnemonic->family==LA_MN_PRIVILEGED) {
+        i=mnemonic->index;
+        if(*s->args || i>=LA_COUNT(la_privileged))goto fail;
+        m->encoding=la_privileged[i].opcode;
+        m->target_form=(uint32_t)LA_FORM_PRIVILEGED+
+            (uint32_t)(i<7U?i:i+9U);
+        goto done;
     }
-    if(!la_split(s->args,t,&n))goto fail;
-    if(la_branch_instruction(as,m,s->op,t,n)) goto done;
-    /* Target-private instruction formats are selected by mnemonic first;
-     * malformed SIMD operands must not fall through into scalar encoders. */
-    {
-        bool vector_mnemonic=false;
-        if(la_parse_vector_pattern(as,m,s->op,t,n,&vector_mnemonic))goto done;
-        if(vector_mnemonic)goto fail;
+    if(!la_split(s->args,&tokens))goto fail;
+    n=tokens.count;
+    if(mnemonic->family==LA_MN_BRANCH) {
+        if(la_branch_instruction(as,m,t,n,mnemonic->index,
+                                 mnemonic->branch_alias))goto done;
+        goto fail;
     }
-    if(n==2U && !strcmp(s->op,"la.pcrel") && la_reg(t[0],&rd)) {
+    if(mnemonic->family==LA_MN_VECTOR) {
+        if(la_parse_vector_pattern(m,t,n,mnemonic->index))goto done;
+        goto fail;
+    }
+    if(mnemonic->family==LA_MN_PCREL &&
+       n==2U && la_reg(t[0],&rd)) {
         MiniAsSymbolExpr expr;
         if(!minias_parse_symbol_addend(t[1],&expr) ||
            !la_symbol_operand(as,m,1U,&expr))goto fail;
@@ -1326,100 +1536,38 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
         if(!la_plan_pcrel(as,m,rd))goto fail;
         goto done;
     }
-    {
-        bool special_mnemonic=false;
-        if(la_parse_special_register_pattern(m,s->op,t,n,&special_mnemonic))
-            goto done;
-        if(special_mnemonic)goto fail;
+    if(mnemonic->family==LA_MN_PCREL)goto fail;
+    if(mnemonic->family==LA_MN_SPECIAL) {
+        if(la_parse_special_register_pattern(m,t,n,mnemonic->index))goto done;
+        goto fail;
     }
-    if(n==2U && (!strcmp(s->op,"li.w") || !strcmp(s->op,"li.d")) &&
-       la_reg(t[0],&rd)) {
-        int64_t value;
-        const bool has_value=minias_eval_i64_expression(t[1],&value);
-        if(has_value && value>=-2048 && value<=2047) {
-            m->target_form=!strcmp(s->op,"li.d") ? LA_FORM_LI_D : LA_FORM_LI_W;
-            m->count=2U;
-            m->encoding=UINT32_C(0x02800000);
-            la_capture_gpr_operand(m,0U,rd);
-            la_capture_imm_operand(m,1U,value);
-            goto done;
-        }
-        if(!strcmp(s->op,"li.w") &&
-           has_value &&
-           value>=4096 && value<=INT32_MAX &&
-           value%4096!=0) {
-            m->opcode=LA_MC_LI32_PAIR;
-            m->count=2U;
-            la_capture_gpr_operand(m,0U,rd);
-            la_capture_imm_operand(m,1U,value);
-            if(!la_plan_li_w_pair(as,m,(uint32_t)value,rd))goto fail;
-            goto done;
-        }
-        /* Single-word GNU LI.W for exact 4K multiples: LU12I.W.
-         * Other large constants may require a two-instruction sequence;
-         * continue to reject those until variable-size pseudos exist. */
-        if(has_value &&
-           value%4096==0 && value>=INT32_MIN && value<=INT32_MAX) {
-            m->target_form=!strcmp(s->op,"li.d") ? LA_FORM_LI_D : LA_FORM_LI_W;
-            m->count=2U;
-            m->encoding=UINT32_C(0x14000000);
-            la_capture_gpr_operand(m,0U,rd);
-            la_capture_imm_operand(m,1U,value);
-            goto done;
-        }
+    if(mnemonic->family==LA_MN_LI) {
+        if(la_parse_li(as,m,t,n,mnemonic->index==1U))goto done;
+        goto fail;
     }
-    /* GNU LI.W for 0x800..0xfff is a single ORI from $zero. Explicit
-     * 4KB-aligned large values use LU12I.W above; no variable-sized
-     * multi-instruction pseudoinstructions are guessed here. */
-    if(n==2U && !strcmp(s->op,"li.w") && la_reg(t[0],&rd)) {
-        int64_t v;
-        if(minias_eval_i64_expression(t[1],&v) && v>=2048 && v<=4095) {
-            m->target_form=LA_FORM_LI_W;
-            m->count=2U;
-            m->encoding=UINT32_C(0x03800000);
-            la_capture_gpr_operand(m,0U,rd);
-            la_capture_imm_operand(m,1U,v);
-            goto done;
-        }
-    }
-    /* Full signed/unsigned 64-bit LI.D macro expansion uses the exact
-     * GNU GAS 12/20/20/12 sign-extension reduction, not merely a
-     * hard-coded fix for Linux's 0x8000/0x9000 upper bits. */
-    if(n==2U && !strcmp(s->op,"li.d") && la_reg(t[0],&rd)) {
-        uint64_t bits;
-        if(minias_eval_u64_expression(t[1],&bits)) {
-            if(!la_plan_li_d(as,m,bits,rd))goto fail;
-            m->opcode=LA_MC_LI64_SEQUENCE;m->count=2U;
-            la_capture_gpr_operand(m,0U,rd);
-            m->operands[1].kind=MINIAS_MC_IMMEDIATE;
-            m->operands[1].immediate=bits;
-            goto done;
-        }
-    }
-    if(n==4U && la_reg(t[0],&rd) && la_reg(t[1],&rj)) {
+    if(mnemonic->family==LA_MN_BITFIELD) {
+        const LaManualPattern *pattern=&la_bitfield_patterns[mnemonic->index];
         uint64_t msb,lsb;
-        if(minias_eval_u64_expression(t[2],&msb) &&
-           minias_eval_u64_expression(t[3],&lsb)) {
-            for(i=0U;i<sizeof(la_bitfield_patterns)/sizeof(la_bitfield_patterns[0]);++i)
-                if(strcmp(s->op,la_bitfield_patterns[i].name)==0 &&
-                   msb<(UINT64_C(1)<<la_bitfield_patterns[i].immediate_bits) &&
-                   lsb<=msb) {
-                    m->count=4U;
-                    m->encoding=la_bitfield_patterns[i].opcode;
-                    m->target_form=LA_FORM_BITFIELD+(uint32_t)i;
-                    la_capture_gpr_operand(m,0U,rd);
-                    la_capture_gpr_operand(m,1U,rj);
-                    la_capture_imm_operand(m,2U,(int64_t)msb);
-                    la_capture_imm_operand(m,3U,(int64_t)lsb);
-                    goto done;
-                }
+        if(n==4U && la_reg(t[0],&rd) && la_reg(t[1],&rj) &&
+           minias_eval_u64_expression(t[2],&msb) &&
+           minias_eval_u64_expression(t[3],&lsb) &&
+           msb<(UINT64_C(1)<<pattern->immediate_bits) && lsb<=msb) {
+            m->count=4U;
+            m->encoding=pattern->opcode;
+            m->target_form=LA_FORM_BITFIELD+mnemonic->index;
+            la_capture_gpr_operand(m,0U,rd);
+            la_capture_gpr_operand(m,1U,rj);
+            la_capture_imm_operand(m,2U,(int64_t)msb);
+            la_capture_imm_operand(m,3U,(int64_t)lsb);
+            goto done;
         }
+        goto fail;
     }
-    if(n==4U && la_reg(t[0],&rd) && la_reg(t[1],&rj) &&
-       la_reg(t[2],&rk) &&
-       (!strcmp(s->op,"bytepick.w") || !strcmp(s->op,"bytepick.d"))) {
-        uint64_t offset;bool wide=!strcmp(s->op,"bytepick.d");
-        if(minias_eval_u64_expression(t[3],&offset) &&
+    if(mnemonic->family==LA_MN_BYTEPICK) {
+        uint64_t offset;
+        bool wide=mnemonic->index==1U;
+        if(n==4U && la_reg(t[0],&rd) && la_reg(t[1],&rj) &&
+           la_reg(t[2],&rk) && minias_eval_u64_expression(t[3],&offset) &&
            offset<(wide?8U:4U)) {
             m->count=4U;
             m->target_form=LA_FORM_BYTEPICK+(wide?1U:0U);
@@ -1428,28 +1576,28 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
             la_capture_imm_operand(m,3U,(int64_t)offset);
             goto done;
         }
+        goto fail;
     }
     /* GNU LA opcode tables: sa2 lives in bits 16:15 and the source
      * syntax specifies sa2+1 (one through four), not the encoded 0..3.
      * Index/shift-add is a single target-local MCInst, not Common logic. */
-    if(n==4U && la_reg(t[0],&rd) && la_reg(t[1],&rj) &&
-       la_reg(t[2],&rk)) {
+    if(mnemonic->family==LA_MN_ALSL) {
         uint64_t shift;
-        if(minias_eval_u64_expression(t[3],&shift) &&
+        if(n==4U && la_reg(t[0],&rd) && la_reg(t[1],&rj) &&
+           la_reg(t[2],&rk) && minias_eval_u64_expression(t[3],&shift) &&
            shift>=1U && shift<=4U) {
-            for(i=0U;i<sizeof(la_alsl_patterns)/sizeof(la_alsl_patterns[0]);++i) {
-                if(strcmp(s->op,la_alsl_patterns[i].name)!=0)continue;
-                m->count=4U;
-                m->target_form=LA_FORM_ALSL+(uint32_t)i;
-                m->encoding=la_alsl_patterns[i].opcode;
-                la_capture_rrr(m,rd,rj,rk);
-                la_capture_imm_operand(m,3U,(int64_t)shift);
-                goto done;
-            }
+            m->count=4U;
+            m->target_form=LA_FORM_ALSL+mnemonic->index;
+            m->encoding=la_alsl_patterns[mnemonic->index].opcode;
+            la_capture_rrr(m,rd,rj,rk);
+            la_capture_imm_operand(m,3U,(int64_t)shift);
+            goto done;
         }
+        goto fail;
     }
     /* LoongArch jr register == jirl $zero,$reg,0.  No relocation. */
-    if(!strcmp(s->op,"jr") && n==1U && la_reg(t[0],&rj)) {
+    if(mnemonic->family==LA_MN_JIRL && mnemonic->index==0U &&
+       n==1U && la_reg(t[0],&rj)) {
         m->count=1U;
         m->target_form=LA_FORM_JIRL;
         la_capture_gpr_operand(m,0U,rj);
@@ -1457,7 +1605,7 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
     }
     /* JIRL is a signed 16-bit displacement in 4-byte units. The JR alias
      * above is a canonical zero-link JIRL, not a second instruction family. */
-    if(!strcmp(s->op,"jirl") && n==3U &&
+    if(mnemonic->family==LA_MN_JIRL && mnemonic->index==1U && n==3U &&
        la_reg(t[0],&rd) && la_reg(t[1],&rj)) {
         int64_t delta;
         if(minias_eval_i64_expression(t[2],&delta) &&
@@ -1469,19 +1617,8 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
             goto done;
         }
     }
-    if (n==2U && la_reg(t[0],&rd)) {
-        MiniAsSymbolExpr expr;
-        if(strcmp(s->op,"pcalau12i")==0 &&
-           la_reloc_expr(t[1],"%pc_hi20",&expr)) {
-            if(!la_symbol_operand(as,m,1U,&expr))goto fail;
-            m->opcode=LA_MC_PCALA_HI20;
-            m->target_form=LA_FORM_PCALA_HI20;
-            m->count=2U;m->encoding=UINT32_C(0x1a000000);
-            la_capture_gpr_operand(m,0U,rd);
-            goto done;
-        }
-    }
-    if(!strcmp(s->op,"move") && n==2U &&
+    if(mnemonic->family==LA_MN_JIRL)goto fail;
+    if(mnemonic->family==LA_MN_MOVE && n==2U &&
         la_reg(t[0],&rd) && la_reg(t[1],&rj)) {
         m->count=2U;m->encoding=UINT32_C(0x00150000);
         m->target_form=LA_FORM_MOVE;
@@ -1489,15 +1626,16 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
         la_capture_gpr_operand(m,1U,rj);
         goto done;
     }
+    if(mnemonic->family==LA_MN_MOVE)goto fail;
     /* LoongArch PREFETCH has a u5 cache hint, a base register and either
      * a signed 12-bit displacement or an index register. Both variants
      * use the exact GNU opcodes and shared typed MCInst/ELF pipeline. */
-    if(n==3U && (!strcmp(s->op,"preld") || !strcmp(s->op,"preldx"))) {
+    if(mnemonic->family==LA_MN_PREFETCH && n==3U) {
         uint64_t hint;
         int64_t displacement;
         if(!minias_eval_u64_expression(t[0],&hint) || hint>31U ||
            !la_reg(t[1],&rj))goto fail;
-        if(!strcmp(s->op,"preld")) {
+        if(mnemonic->index==0U) {
             m->target_form=LA_FORM_PREFETCH;
             if(!minias_eval_i64_expression(t[2],&displacement) ||
                displacement<-2048 || displacement>2047)goto fail;
@@ -1516,8 +1654,9 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
         la_capture_gpr_operand(m,1U,rj);
         goto done;
     }
+    if(mnemonic->family==LA_MN_PREFETCH)goto fail;
     /* Signed si16 GOT/LDptr address arithmetic, no guessed relocations. */
-    if(n==3U && !strcmp(s->op,"addu16i.d")) {
+    if(mnemonic->family==LA_MN_ADDU16I && n==3U) {
         int64_t imm;
         if(!la_reg(t[0],&rd) || !la_reg(t[1],&rj) ||
            !minias_eval_i64_expression(t[2],&imm) ||
@@ -1528,12 +1667,27 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
         la_capture_rri(m,rd,rj,imm);
         goto done;
     }
-    /* Symbolic PCALA low-part needs a relocation. The same scalar opcode
-     * descriptor supplies the signed 12-bit field and GPR positions. */
-    if(n==3U && la_reg(t[0],&rd) && la_reg(t[1],&rj)) {
-        const LaScalarPattern *rule=la_find_scalar_pattern(s->op);
+    if(mnemonic->family==LA_MN_ADDU16I)goto fail;
+    if(mnemonic->family==LA_MN_SCALAR) {
+        const LaScalarPattern *rule=&la_scalar_patterns[mnemonic->index];
         MiniAsSymbolExpr expr;
-        if(rule!=NULL && rule->shape==LA_SCALAR_IMM12 &&
+        /* The SAME scalar mnemonic may have a PCALA relocation operand
+         * instead of a numeric immediate. The indexed descriptor chooses
+         * the field layout; the modifier chooses the relocation kind. */
+        if(n==2U && rule->shape==LA_SCALAR_UPPER20 &&
+           rule->opcode==UINT32_C(0x1a000000) &&
+           la_reg(t[0],&rd) &&
+           la_reloc_expr(t[1],"%pc_hi20",&expr)) {
+            if(!la_symbol_operand(as,m,1U,&expr))goto fail;
+            m->opcode=LA_MC_PCALA_HI20;
+            m->target_form=LA_FORM_PCALA_HI20;
+            m->count=2U;
+            m->encoding=rule->opcode;
+            la_capture_gpr_operand(m,0U,rd);
+            goto done;
+        }
+        if(n==3U && rule->shape==LA_SCALAR_IMM12 &&
+           la_reg(t[0],&rd) && la_reg(t[1],&rj) &&
            la_reloc_expr(t[2],"%pc_lo12",&expr)) {
             if(!la_symbol_operand(as,m,2U,&expr))goto fail;
             m->opcode=LA_MC_PCALA_LO12;
@@ -1544,19 +1698,18 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
             la_capture_gpr_operand(m,1U,rj);
             goto done;
         }
-    }
-    {
-        bool scalar_mnemonic=false;
-        if(la_parse_scalar_pattern(m,s->op,t,n,&scalar_mnemonic))goto done;
-        if(scalar_mnemonic)goto fail;
+        if(la_parse_scalar_pattern(m,t,n,mnemonic->index))goto done;
+        goto fail;
     }
 fail:
     minias_set_error(as,"unsupported-loongarch64-operands:%s:%s:line=%zu",
                      s->op,s->args,s->line);
+    free(tokens.overflow);
     minias_mcinst_destroy(m);return false;
 done:
     if(m->target_form==LA_FORM_NONE) {
         minias_set_error(as,"missing-loongarch-target-form:line=%zu",s->line);
+        free(tokens.overflow);
         minias_mcinst_destroy(m);
         return false;
     }
@@ -1565,9 +1718,11 @@ done:
            m->operands[i].target_reg_bank==LA_REG_BANK_NONE) {
             minias_set_error(as,"missing-loongarch-register-bank:line=%zu",
                              s->line);
+            free(tokens.overflow);
             minias_mcinst_destroy(m);
             return false;
         }
+    free(tokens.overflow);
     s->mcinst=m;return true;
 }
 static bool la_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
@@ -1783,11 +1938,19 @@ static bool la_init_target_state(MiniAs *as,
         }
         state->features=profile.features;
     }
+    if(!la_build_mnemonic_index(as,state)) {
+        free(state);
+        return false;
+    }
     as->target_state=state;
     return true;
 }
 static void la_destroy_target_state(MiniAs *as) {
-    free(as->target_state);
+    LaTargetState *state=(LaTargetState *)as->target_state;
+    if(state!=NULL) {
+        free(state->mnemonics);
+        free(state);
+    }
     as->target_state=NULL;
 }
 static bool la_validate(MiniAs *as) {

@@ -619,3 +619,89 @@ Draft.
    distinct parse-time and ObjectSymbol identities; ELF group/link-order
    names are valid string-level object semantics and must not be flattened
    merely because MC instruction operands now use NameIds.
+
+## Batch N: SourceGraph and final Target family unification (2026-10-29)
+
+This batch follows the exact-head green Batch M CI, not a passing local-only
+snapshot. It continues **architecture-first** consolidation; GNU-runtime and
+full Linux object correctness are independently tracked after this cleanup.
+
+### Common source identity and ownership
+
+- `SourceGraph` owns one immutable copy of physical input throughout a full
+  source replay, rather than reopening the file for every layout-sensitive
+  pass. Semantic state and `MiniAs` are still recreated each replay. This is
+  an actual read-once source cache, **not** yet incremental semantic parsing.
+- `StableSiteID` interns the complete source position and expansion ancestry:
+  physical line/substatement, macro definition and invocation, nested REPT/
+  IRP iteration, and generated inline source. Full tuple equality resolves
+  hash collisions. Fragments and conditionals retain that identity and
+  cross-pass checks detect identity/conditional drift before output commit.
+- Common removed the unused `TargetOps.validate_instruction` hook; parse and
+  typed lowering remain the actual Target validation boundary. Existing
+  `.set` lexical binding, source ordering, ELF symbol order, numeric labels,
+  GNU macro `\@` counters and conservative full reparse are intentionally
+  retained. Expect roughly 90–105 bytes extra per distinct source site on a
+  64-bit host plus the cached physical input/line storage; this memory cost
+  needs profiling against representative real Linux input.
+
+### Four independent Target families
+
+- **AArch64:** all bracketed memory operands now use one private typed
+  `A64Memory/A64OffsetExpr` with explicit absolute, bound-difference, LO12
+  and GOT forms. Scalar/vector/pair/PRFM/exclusive/LSE/MTE encoders consume
+  the same typed memory record. Removed the old three textual splice/deferred
+  memory functions and obsolete deferred-operand carrier. PC literal loads
+  remain a separate semantic form; ALU/branch composites retain typed bound
+  expressions rather than a zero-immediate source placeholder.
+- **x86-64:** one `RegisterEncodingPlan` measures and emits 19 related
+  register/fixed-instruction families. A private `BinaryFormDescriptor`
+  replaces four partially duplicate MOV/ALU/TEST opcode tables. Validity
+  is explicit, so the legal zero opcode for `addb` is not a sentinel. Register
+  kind and ENDBR64 follow the same plan without relying on `calloc` defaults.
+- **RISC-V:** 30 F/D forms use one typed `RvFpDesc` for register banks,
+  rounding, XLEN, required features and encoding. Removed duplicate feature
+  name checks, parser-pointer-based policy and six floating-point string
+  classification helpers. Strict RV32I/RV64I final word validation remains.
+- **LoongArch64:** private mnemonic-index metadata unifies lookup across
+  branch, scalar, SIMD, special-register and pseudo families without merging
+  their ISA encoders. Branch alias swaps are explicit descriptor data;
+  operands use a stack fast path plus bounded dynamic growth instead of a
+  fixed 192-byte buffer, while keeping four-operand grammar rules.
+
+### Exact integrated evidence and acceptance limit
+
+- Six modified production files: **+1,990/-1,443 = 3,433 touched lines**.
+  Five new architecture regression scripts and one CI workflow extension
+  add cross-GNU gates and prevent falsely silent missing-tool passes.
+- Fresh single-tree Release `-O2 -Werror` plus complete `check-minias-a0`:
+  **PASS (30 objects)**. All five new local architecture probes **PASS**:
+  x86 SourceGraph GNU bytes/symbols exact; RV SourceGraph 1 physical read,
+  1 replay and 0 drift; x86 register plan 14 families and 160 matrix entries
+  plus 4 unsuffixed forms GNU exact; RV FP 15 valid/10 rejected; Loong
+  dynamic operand 191/192/512 bytes; A64 typed memory/composite forms.
+- Eight existing integrated MC boundary/lifetime/transaction/replay tests:
+  **PASS**. Independent A64 ASan/UBSan six probes, Loong 140 positive/73
+  negative and old/new complete-ELF byte comparison: **PASS**.
+- Local RV, Loong and AArch64 GNU cross-assembler comparison is
+  **NOT TESTED** (toolchains unavailable), explicitly deferred to the
+  exact-head CI jobs introduced here. The full 9,645-source Linux assembler
+  acceptance/ELF parity, final GNU link and QEMU P1 are **NOT claimed**.
+
+### Next architecture priorities, then distinct correctness track
+
+1. **P0 SourceGraph dependency model:** capture the mutable lexical symbol
+   generation and conditional read set and identify which Fragments depend
+   on it. Only then replace conservative full reparse with invalidation of
+   affected nodes. Avoid unsafe symbol/ELF order changes for an optimization.
+2. **P1 explicit Target relaxation contracts:** retain per-target immutable
+   layout/extension profiles, settle RISC-V `.option relax` and emitted
+   `R_RISCV_RELAX/ALIGN` marker ownership separately from the current
+   `-mno-relax` path, with an exact GNU-relocation ABI test.
+3. **P1 remaining mixed encoding:** hunt repeated Target measure/encode
+   walks and silent fallback paths across every instruction family. A new
+   architecture must add Target tables/ABI, never Common ISA switch cases.
+4. **Separate correctness debt:** GNU GAS rejects `.rept (localB-localA)/4`
+   across a relaxable branch (`bad or irreducible absolute expression`) where
+   MiniAS currently accepts it. This is an acceptance-domain discrepancy,
+   not a reason to obscure the new SourceGraph architecture regression.

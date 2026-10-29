@@ -11,6 +11,9 @@
 static bool validate_user_source_private_marker(MiniAs *as,
                                                 const char *line,
                                                 size_t source_line);
+static void source_graph_record_condition(MiniAs *as,
+                                          MiniAsStableSiteId owner,
+                                          bool active);
 
 bool minias_grow_array(void **ptr, size_t *capacity, size_t elem_size, size_t need) {
     size_t next;
@@ -1017,6 +1020,7 @@ static void release_macro(MiniAsMacro *macro) {
         free(macro->body[i]);
     free(macro->body);
     free(macro->body_lines);
+    free(macro->body_source_segments);
     memset(macro,0,sizeof(*macro));
 }
 
@@ -1100,6 +1104,7 @@ static bool add_stmt(MiniAs *as,
     st = &as->stmts[as->stmt_count];
     memset(st, 0, sizeof(*st));
     st->fragment_kind = fragment_kind;
+    st->source_site = as->current_source_site;
     st->op = minias_strdup(op);
     st->args = minias_strdup(args == NULL ? "" : args);
     st->line = line;
@@ -2403,7 +2408,10 @@ static bool push_conditional_value(MiniAs *as,bool condition_true) {
     conditional->parent_active = as->conditional_active;
     conditional->condition_true = condition_true;
     conditional->else_seen = false;
+    conditional->source_site = as->current_source_site;
     as->conditional_active = conditional->parent_active && condition_true;
+    source_graph_record_condition(as,conditional->source_site,
+                                  as->conditional_active);
     return true;
 }
 
@@ -2559,6 +2567,8 @@ static bool elseif_conditional(MiniAs *as,const char *args,size_t line) {
     as->conditional_active=conditional->parent_active &&
                            !conditional->condition_true && condition;
     conditional->condition_true|=condition;
+    source_graph_record_condition(as,conditional->source_site,
+                                  as->conditional_active);
     return true;
 }
 
@@ -2577,6 +2587,8 @@ static bool else_conditional(MiniAs *as, size_t line) {
     conditional->else_seen = true;
     as->conditional_active =
         conditional->parent_active && !conditional->condition_true;
+    source_graph_record_condition(as,conditional->source_site,
+                                  as->conditional_active);
     return true;
 }
 
@@ -3707,7 +3719,6 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
     char *op;
     char *args;
     uint32_t size;
-    char reason[160];
     bool had_leading_label=false;
     MiniAsCommonDirectiveKind directive_kind=MINIAS_COMMON_DIRECTIVE_OTHER;
 
@@ -4211,15 +4222,8 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
         bool ok;
         if (!rewrite_numeric_local_refs(as, args, &rewritten_args, line))
             return false;
-        /* ISA/ABI validation precedes the single target operand parse.
-         * Layout asks the parsed instruction for its size only once. */
-        if (as->target->validate_instruction != NULL &&
-            !as->target->validate_instruction(
-                as, op, rewritten_args, reason, sizeof(reason))) {
-            minias_set_error(as, "%s:line=%zu", reason, line);
-            free(rewritten_args);
-            return false;
-        }
+        /* ISA/ABI validation is owned by the target's one typed parser.
+         * The obsolete pre-parse validation callback had no live Target. */
         ok = add_stmt(as, MINIAS_FRAGMENT_INSTRUCTION, op, rewritten_args,
                       line, 0U, 1U);
         if (ok)
@@ -4254,6 +4258,7 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
 typedef struct MiniAsSourceLine {
     char *text;
     size_t line;
+    size_t source_segment;
 } MiniAsSourceLine;
 
 /* The physical file and each expanded source body are processed by the
@@ -4266,12 +4271,238 @@ typedef enum MiniAsSourceFrameKind {
     MINIAS_SOURCE_FRAME_EXPANSION
 } MiniAsSourceFrameKind;
 
+typedef enum MiniAsSourceSiteKind {
+    MINIAS_SOURCE_SITE_LINE = 1,
+    MINIAS_SOURCE_SITE_SEGMENT,
+    MINIAS_SOURCE_SITE_MACRO,
+    MINIAS_SOURCE_SITE_REPT,
+    MINIAS_SOURCE_SITE_IRP,
+    MINIAS_SOURCE_SITE_INLINE_REPEAT
+} MiniAsSourceSiteKind;
+
+/* Full-key equality, not a truncated path hash, defines StableSiteID.
+ * Parent is an already-interned lexical/expansion SiteID; an expansion
+ * child's identity is unaffected by GNU's independently incrementing \@. */
+typedef struct MiniAsSourceSiteKey {
+    MiniAsStableSiteId parent;
+    MiniAsStableSiteId definition;
+    size_t origin_line;
+    size_t origin_segment;
+    size_t iteration;
+    MiniAsSourceSiteKind kind;
+} MiniAsSourceSiteKey;
+
+typedef struct MiniAsSourceSiteEntry {
+    MiniAsSourceSiteKey key;
+    size_t last_condition_pass;
+    MiniAsStableSiteId last_condition_owner;
+    bool last_condition_active;
+} MiniAsSourceSiteEntry;
+
 typedef struct MiniAsSourceFrame {
     MiniAsSourceFrameKind kind;
     MiniAsSourceLine *lines;
     size_t count;
     size_t capacity;
+    MiniAsSourceSiteKind expansion_kind;
+    MiniAsStableSiteId invocation_site;
+    MiniAsStableSiteId definition_site;
+    size_t iteration;
 } MiniAsSourceFrame;
+
+struct MiniAsSourceGraph {
+    MiniAsSourceFrame physical;
+    MiniAsSourceSiteEntry *sites;
+    size_t site_count;
+    size_t site_capacity;
+    size_t *site_slots; /* SiteID, zero for unoccupied */
+    size_t site_slot_capacity;
+    size_t expansion_count;
+    size_t file_reads;
+    size_t parse_passes;
+    size_t conditional_changes;
+    size_t ordinal_drifts;
+    MiniAsStableSiteId *forced_sites;
+    size_t forced_site_count;
+    size_t forced_site_capacity;
+};
+
+static void destroy_source_lines(MiniAsSourceLine *lines, size_t count);
+
+static size_t source_site_hash(MiniAsSourceSiteKey key) {
+    size_t hash=(size_t)UINT64_C(0x9e3779b97f4a7c15);
+    const size_t values[]={key.parent,key.definition,key.origin_line,
+                           key.origin_segment,key.iteration,(size_t)key.kind};
+    size_t i;
+    for(i=0U;i<sizeof(values)/sizeof(values[0]);++i) {
+        size_t item=values[i];
+        item^=item>>15U;
+        item*=((size_t)UINT32_C(0x85ebca6b));
+        item^=item>>13U;
+        hash^=item+(size_t)UINT32_C(0x9e3779b9)+(hash<<6U)+(hash>>2U);
+    }
+    return hash;
+}
+
+static bool source_site_same(MiniAsSourceSiteKey a,
+                             MiniAsSourceSiteKey b) {
+    return a.parent==b.parent && a.definition==b.definition &&
+           a.origin_line==b.origin_line &&
+           a.origin_segment==b.origin_segment &&
+           a.iteration==b.iteration && a.kind==b.kind;
+}
+
+static bool source_graph_rehash(MiniAsSourceGraph *graph,size_t capacity) {
+    size_t *slots=calloc(capacity,sizeof(*slots));
+    size_t i;
+    if(slots==NULL)return false;
+    for(i=0U;i<graph->site_count;++i) {
+        size_t at=source_site_hash(graph->sites[i].key)&(capacity-1U);
+        while(slots[at]!=0U)at=(at+1U)&(capacity-1U);
+        slots[at]=i+1U;
+    }
+    free(graph->site_slots);
+    graph->site_slots=slots;
+    graph->site_slot_capacity=capacity;
+    return true;
+}
+
+static bool source_graph_intern(MiniAs *as,MiniAsSourceSiteKey key,
+                                MiniAsStableSiteId *site_id) {
+    MiniAsSourceGraph *graph=as->source_graph;
+    size_t slot,probes;
+    size_t hashed=source_site_hash(key);
+    if(graph==NULL || site_id==NULL ||
+       key.parent>graph->site_count ||
+       key.definition>graph->site_count ||
+       graph->site_count==SIZE_MAX) {
+        minias_set_error(as,"invalid-source-site-key");return false;
+    }
+    /* Most source-site visits are repeats across complete semantic replays.
+     * Probe first so a pure lookup cannot accidentally trigger a costly
+     * growth/rehash exactly at the half-full threshold. */
+    if(graph->site_slot_capacity!=0U) {
+        slot=hashed&(graph->site_slot_capacity-1U);
+        for(probes=0U;probes<graph->site_slot_capacity;++probes) {
+            size_t id=graph->site_slots[slot];
+            if(id==0U)break;
+            if(source_site_same(graph->sites[id-1U].key,key)) {
+                *site_id=id;
+                return true;
+            }
+            slot=(slot+1U)&(graph->site_slot_capacity-1U);
+        }
+    }
+    if(graph->site_slot_capacity==0U ||
+       graph->site_count+1U>=graph->site_slot_capacity/2U) {
+        size_t next=graph->site_slot_capacity==0U?64U:
+                    graph->site_slot_capacity*2U;
+        if(next<graph->site_slot_capacity ||
+           !source_graph_rehash(graph,next)) {
+            minias_set_error(as,"out-of-memory:source-site-index");
+            return false;
+        }
+    }
+    slot=hashed&(graph->site_slot_capacity-1U);
+    for(probes=0U;probes<graph->site_slot_capacity;++probes) {
+        if(graph->site_slots[slot]==0U)break;
+        slot=(slot+1U)&(graph->site_slot_capacity-1U);
+    }
+    if(probes==graph->site_slot_capacity ||
+       !minias_grow_array((void **)&graph->sites,&graph->site_capacity,
+                          sizeof(*graph->sites),graph->site_count+1U)) {
+        minias_set_error(as,"out-of-memory:source-site");return false;
+    }
+    memset(&graph->sites[graph->site_count],0,sizeof(*graph->sites));
+    graph->sites[graph->site_count].key=key;
+    *site_id=++graph->site_count;
+    graph->site_slots[slot]=*site_id;
+    if(key.kind==MINIAS_SOURCE_SITE_MACRO ||
+       key.kind==MINIAS_SOURCE_SITE_REPT ||
+       key.kind==MINIAS_SOURCE_SITE_IRP ||
+       key.kind==MINIAS_SOURCE_SITE_INLINE_REPEAT)
+        ++graph->expansion_count;
+    return true;
+}
+
+static bool source_graph_line_site(MiniAs *as,
+                                   const MiniAsSourceLine *line,
+                                   size_t segment,
+                                   MiniAsStableSiteId *site_id) {
+    const MiniAsSourceSiteKey key={
+        .parent=as->current_expansion_site,
+        .origin_line=line->line,
+        .origin_segment=line->source_segment,
+        .iteration=segment,
+        .kind=segment==0U ? MINIAS_SOURCE_SITE_LINE :
+                             MINIAS_SOURCE_SITE_SEGMENT
+    };
+    return source_graph_intern(as,key,site_id);
+}
+
+static void source_graph_record_condition(MiniAs *as,
+                                          MiniAsStableSiteId owner,
+                                          bool active) {
+    MiniAsSourceGraph *graph=as->source_graph;
+    MiniAsSourceSiteEntry *entry;
+    if(graph==NULL || as->current_source_site==MINIAS_SITE_NONE ||
+       as->current_source_site>graph->site_count)return;
+    entry=&graph->sites[as->current_source_site-1U];
+    if(entry->last_condition_pass!=0U &&
+       entry->last_condition_pass+1U==graph->parse_passes &&
+       (entry->last_condition_active!=active ||
+        entry->last_condition_owner!=owner))
+        ++graph->conditional_changes;
+    entry->last_condition_pass=graph->parse_passes;
+    entry->last_condition_owner=owner;
+    entry->last_condition_active=active;
+}
+
+static void source_graph_destroy(MiniAsSourceGraph *graph) {
+    if(graph==NULL)return;
+    destroy_source_lines(graph->physical.lines,graph->physical.count);
+    free(graph->sites);
+    free(graph->site_slots);
+    free(graph->forced_sites);
+    memset(graph,0,sizeof(*graph));
+}
+
+/* The old cross-replay long-branch list still owns statement ordinals in
+ * E1. The persistent source registry independently checks whether those
+ * ordinals refer to the same expanded statement after fresh parsing. A
+ * divergent conditional topology is observed, never silently re-keyed. */
+static void source_graph_compare_forced_sites(MiniAs *as) {
+    MiniAsSourceGraph *graph=as->source_graph;
+    size_t i;
+    if(graph==NULL)return;
+    for(i=0U;i<graph->forced_site_count;++i) {
+        size_t id=i<as->forced_long_branch_count ?
+            as->forced_long_branch_ids[i] : SIZE_MAX;
+        if(id>=as->stmt_count ||
+           graph->forced_sites[i]==MINIAS_SITE_NONE ||
+           as->stmts[id].source_site!=graph->forced_sites[i])
+            ++graph->ordinal_drifts;
+    }
+}
+
+static bool source_graph_capture_forced_sites(MiniAs *as,
+                                               const size_t *ids,
+                                               size_t count) {
+    MiniAsSourceGraph *graph=as->source_graph;
+    size_t i;
+    if(graph==NULL)return true;
+    if(!minias_grow_array((void **)&graph->forced_sites,
+                          &graph->forced_site_capacity,
+                          sizeof(*graph->forced_sites),count)) {
+        minias_set_error(as,"out-of-memory:source-branch-sites");
+        return false;
+    }
+    for(i=0U;i<count;++i)
+        graph->forced_sites[i]=ids[i]<as->stmt_count ?
+            as->stmts[ids[i]].source_site : MINIAS_SITE_NONE;
+    graph->forced_site_count=count;
+    return true;
+}
 
 static void destroy_source_lines(MiniAsSourceLine *lines, size_t count);
 static bool valid_irp_parameter_name(const char *name);
@@ -4661,6 +4892,7 @@ static bool define_macro(MiniAs *as,
     }
     macro = &as->macros[as->macro_count];
     memset(macro, 0, sizeof(*macro));
+    macro->definition_site=as->current_source_site;
     macro->name = minias_strdup(tokens[0]);
     if (macro->name == NULL) {
         minias_set_error(as, "out-of-memory:macro-name");
@@ -4727,7 +4959,10 @@ static bool define_macro(MiniAs *as,
     if (count != 0U) {
         macro->body = calloc(count, sizeof(*macro->body));
         macro->body_lines = calloc(count, sizeof(*macro->body_lines));
-        if (macro->body == NULL || macro->body_lines == NULL) {
+        macro->body_source_segments=calloc(count,
+                              sizeof(*macro->body_source_segments));
+        if (macro->body == NULL || macro->body_lines == NULL ||
+            macro->body_source_segments == NULL) {
             minias_set_error(as, "out-of-memory:macro-body");
             free(copy);
             return false;
@@ -4737,6 +4972,7 @@ static bool define_macro(MiniAs *as,
     for (i = 0U; i < count; ++i) {
         macro->body[i] = minias_strdup(lines[i].text);
         macro->body_lines[i] = lines[i].line;
+        macro->body_source_segments[i]=lines[i].source_segment;
         if (macro->body[i] == NULL) {
             minias_set_error(as, "out-of-memory:macro-body-line");
             free(copy);
@@ -4806,6 +5042,9 @@ static bool process_inline_repeat_line(MiniAs *as,const char *source,
  * for nested macro and repetition bodies without making source copies. */
 static bool process_source_frame(MiniAs *as,
                                  const MiniAsSourceFrame *frame) {
+    MiniAsStableSiteId previous_expansion=as->current_expansion_site;
+    MiniAsStableSiteId previous_site=as->current_source_site;
+    bool ok;
     if(frame==NULL ||
        (frame->kind!=MINIAS_SOURCE_FRAME_FILE &&
         frame->kind!=MINIAS_SOURCE_FRAME_EXPANSION) ||
@@ -4813,7 +5052,30 @@ static bool process_source_frame(MiniAs *as,
         minias_set_error(as,"invalid-source-frame");
         return false;
     }
-    return process_source_range(as,frame->lines,0U,frame->count);
+    if(frame->kind==MINIAS_SOURCE_FRAME_EXPANSION) {
+        const MiniAsSourceSiteKey key={
+            .parent=frame->invocation_site,
+            .definition=frame->definition_site,
+            .iteration=frame->iteration,
+            .kind=frame->expansion_kind
+        };
+        if(frame->invocation_site==MINIAS_SITE_NONE ||
+           (frame->expansion_kind!=MINIAS_SOURCE_SITE_MACRO &&
+            frame->expansion_kind!=MINIAS_SOURCE_SITE_REPT &&
+            frame->expansion_kind!=MINIAS_SOURCE_SITE_IRP &&
+            frame->expansion_kind!=MINIAS_SOURCE_SITE_INLINE_REPEAT)) {
+            minias_set_error(as,"invalid-source-expansion-site");
+            return false;
+        }
+        if(!source_graph_intern(as,key,&as->current_expansion_site))
+            return false;
+    }else {
+        as->current_expansion_site=MINIAS_SITE_NONE;
+    }
+    ok=process_source_range(as,frame->lines,0U,frame->count);
+    as->current_expansion_site=previous_expansion;
+    as->current_source_site=previous_site;
+    return ok;
 }
 
 static char *strip_macro_argument_quotes(char *text) {
@@ -5017,13 +5279,17 @@ static bool expand_macro_invocation(MiniAs *as,
         }
         expanded[i].text = current;
         expanded[i].line = macro->body_lines[i];
+        expanded[i].source_segment=macro->body_source_segments[i];
     }
     ++as->macro_expansion_depth;
     {
         const MiniAsSourceFrame frame={
             .kind=MINIAS_SOURCE_FRAME_EXPANSION,
             .lines=expanded,
-            .count=body_count
+            .count=body_count,
+            .expansion_kind=MINIAS_SOURCE_SITE_MACRO,
+            .invocation_site=as->current_source_site,
+            .definition_site=macro->definition_site
         };
         ok=process_source_frame(as,&frame);
     }
@@ -5163,25 +5429,44 @@ static char *find_statement_separator(char *text) {
 static bool process_source_line(MiniAs *as, const char *source, size_t line) {
     char *copy = minias_strdup(source);
     char *cursor;
+    MiniAsStableSiteId source_site=as->current_source_site;
+    size_t segment=0U;
+    bool split;
 
     if (copy == NULL) {
         minias_set_error(as, "out-of-memory:source-line");
         return false;
     }
     strip_comment(copy, as->target);
+    split=find_statement_separator(copy)!=NULL;
     cursor = copy;
     while (cursor != NULL && !as->source_ended) {
         char *semicolon = find_statement_separator(cursor);
+        if(split) {
+            const MiniAsSourceSiteKey key={
+                .parent=source_site,
+                .iteration=segment,
+                .kind=MINIAS_SOURCE_SITE_SEGMENT
+            };
+            if(!source_graph_intern(as,key,&as->current_source_site)) {
+                free(copy);
+                as->current_source_site=source_site;
+                return false;
+            }
+        }
         if (semicolon != NULL) {
             *semicolon = '\0';
         }
         if (!process_statement(as, cursor, line)) {
             free(copy);
+            as->current_source_site=source_site;
             return false;
         }
         cursor = semicolon == NULL ? NULL : semicolon + 1;
+        ++segment;
     }
     free(copy);
+    as->current_source_site=source_site;
     return true;
 }
 
@@ -5343,11 +5628,13 @@ static bool process_irp_block(MiniAs *as,
                               MiniAsSourceLine *lines,
                               size_t count,
                               const char *argument,
-                              size_t line) {
+                              size_t line,
+                              MiniAsStableSiteId invocation_site) {
     char *copy = minias_strdup(argument);
     char *comma;
     char *name;
     char *cursor;
+    size_t iteration=0U;
 
     if (copy == NULL) {
         minias_set_error(as, "out-of-memory:irp-argument");
@@ -5400,6 +5687,7 @@ static bool process_irp_block(MiniAs *as,
         }
         for (i = 0U; i < count; ++i) {
             expanded[i].line = lines[i].line;
+            expanded[i].source_segment=lines[i].source_segment;
             expanded[i].text =
                 substitute_irp_parameter(as, lines[i].text, name, value);
             if (expanded[i].text == NULL) {
@@ -5411,7 +5699,11 @@ static bool process_irp_block(MiniAs *as,
         const MiniAsSourceFrame frame={
             .kind=MINIAS_SOURCE_FRAME_EXPANSION,
             .lines=expanded,
-            .count=count
+            .count=count,
+            .expansion_kind=MINIAS_SOURCE_SITE_IRP,
+            .invocation_site=invocation_site,
+            .definition_site=invocation_site,
+            .iteration=iteration
         };
         if (!process_source_frame(as,&frame)) {
             destroy_source_lines(expanded, count);
@@ -5419,6 +5711,7 @@ static bool process_irp_block(MiniAs *as,
             return false;
         }
         destroy_source_lines(expanded, count);
+        ++iteration;
         if (next == NULL) {
             break;
         }
@@ -5443,6 +5736,7 @@ static bool process_source_range(MiniAs *as,
     size_t i = begin;
 
     while (i < end && !as->source_ended) {
+        MiniAsStableSiteId line_site;
         bool inline_handled=false;
         char macro_argument[1024];
         int macro_kind =
@@ -5452,6 +5746,9 @@ static bool process_source_range(MiniAs *as,
         char argument[256];
         size_t repeat_label_prefix=0U;
         int kind;
+
+        if(!source_graph_line_site(as,&lines[i],0U,&line_site))return false;
+        as->current_source_site=line_site;
 
         /* File and expansion frames must agree on the semicolon-separated
          * GNU inline `.rept/.irp ... .endr` grammar. Dispatch that one
@@ -5582,7 +5879,11 @@ static bool process_source_range(MiniAs *as,
                     const MiniAsSourceFrame body={
                         .kind=MINIAS_SOURCE_FRAME_EXPANSION,
                         .lines=lines+i+1U,
-                        .count=j-i-1U
+                        .count=j-i-1U,
+                        .expansion_kind=MINIAS_SOURCE_SITE_REPT,
+                        .invocation_site=line_site,
+                        .definition_site=line_site,
+                        .iteration=(size_t)iteration
                     };
                     if (!process_source_frame(as,&body)) {
                         return false;
@@ -5592,7 +5893,8 @@ static bool process_source_range(MiniAs *as,
                                           lines + i + 1U,
                                           j - i - 1U,
                                           argument,
-                                          lines[i].line)) {
+                                          lines[i].line,
+                                          line_site)) {
                 return false;
             }
             i = j + 1U;
@@ -5637,6 +5939,7 @@ static bool process_inline_repeat_line(MiniAs *as,const char *source,
         }
         pieces[count].text=cursor;
         pieces[count].line=line;
+        pieces[count].source_segment=count;
         ++count;
         if(kind==MINIAS_REPEAT_REPT || kind==MINIAS_REPEAT_IRP)opener=true;
         if(kind==MINIAS_REPEAT_ENDR)closer=true;
@@ -5646,7 +5949,10 @@ static bool process_inline_repeat_line(MiniAs *as,const char *source,
         const MiniAsSourceFrame frame={
             .kind=MINIAS_SOURCE_FRAME_EXPANSION,
             .lines=pieces,
-            .count=count
+            .count=count,
+            .expansion_kind=MINIAS_SOURCE_SITE_INLINE_REPEAT,
+            .invocation_site=as->current_source_site,
+            .definition_site=as->current_source_site
         };
         *handled=true;
         ok=process_source_frame(as,&frame);
@@ -5689,8 +5995,9 @@ static bool validate_user_source_private_marker(MiniAs *as,
  * The fully retained frame avoids independent streaming collector paths
  * whose treatment of inline semicolons and nested directives could diverge.
  *
- * This is deliberately NOT a replacement for location-dependent .if
- * re-evaluation: the assembly driver still reopens input when necessary. */
+ * The assembly session retains the normalized physical frame across rare
+ * layout-sensitive source replays. Expanded macro/rept/irp bodies still
+ * have their original per-parse lifetime and GNU lexical counters. */
 static bool collect_file_source_frame(MiniAs *as, const char *path,
                                       MiniAsSourceFrame *frame) {
     FILE *file=fopen(path,"r");
@@ -5729,6 +6036,7 @@ static bool collect_file_source_frame(MiniAs *as, const char *path,
             ok=false;break;
         }
         line->line=line_no;
+        line->source_segment=0U;
         ++frame->count;
     }
     if(ok && ferror(file)) {
@@ -5743,12 +6051,19 @@ static bool collect_file_source_frame(MiniAs *as, const char *path,
     return ok;
 }
 
-bool minias_parse_file(MiniAs *as, const char *path) {
-    MiniAsSourceFrame frame={0};
-    bool parsed=collect_file_source_frame(as,path,&frame);
-    if(parsed)
-        parsed=process_source_frame(as,&frame);
-    destroy_source_lines(frame.lines,frame.count);
+static bool parse_loaded_source_graph(MiniAs *as,
+                                       MiniAsSourceGraph *graph) {
+    MiniAsSourceLine eof={0};
+    bool parsed;
+    size_t i;
+    if(as->source_graph!=NULL || graph==NULL ||
+       graph->physical.kind!=MINIAS_SOURCE_FRAME_FILE) {
+        minias_set_error(as,"invalid-source-graph-state");
+        return false;
+    }
+    as->source_graph=graph;
+    ++graph->parse_passes;
+    parsed=process_source_frame(as,&graph->physical);
     if(!parsed)return false;
     if(as->conditional_count!=0U) {
         minias_set_error(as,"unterminated-directive:.if:depth=%zu",
@@ -5759,10 +6074,36 @@ bool minias_parse_file(MiniAs *as, const char *path) {
         minias_set_error(as,"unterminated-directive:.cfi_startproc");
         return false;
     }
+    /* EOF-scheduled literal pools are generated by a real synthetic source
+     * site, just like explicit .ltorg children are owned by their opener. */
+    eof.line=graph->physical.count+1U;
+    if(!source_graph_line_site(as,&eof,0U,&as->current_source_site))
+        return false;
     if(as->target->supports_literal_pools &&
-       !flush_literal_pools(as,frame.count,true))return false;
+       !flush_literal_pools(as,graph->physical.count,true))return false;
+    /* Every emitted Fragment, including EOF literal-pool children, must
+     * retain an actual source/expansion owner before SourceGraph is used
+     * for cross-replay ordinal diagnostics. */
+    for(i=0U;i<as->stmt_count;++i)
+        if(as->stmts[i].source_site==MINIAS_SITE_NONE ||
+           as->stmts[i].source_site>graph->site_count) {
+            minias_set_error(as,"fragment-without-source-site:%zu",i);
+            return false;
+        }
     if(!minias_finalize_subsection_layout(as))return false;
     return minias_refresh_symbol_aliases(as);
+}
+
+bool minias_parse_file(MiniAs *as, const char *path) {
+    MiniAsSourceGraph graph={0};
+    bool parsed=collect_file_source_frame(as,path,&graph.physical);
+    if(parsed) {
+        graph.file_reads=1U;
+        parsed=parse_loaded_source_graph(as,&graph);
+    }
+    as->source_graph=NULL;
+    source_graph_destroy(&graph);
+    return parsed;
 }
 
 typedef struct MiniAsEmitRef {
@@ -5980,6 +6321,8 @@ int minias_assemble_config(const char *input_path,
     size_t long_branch_count = 0U;
     size_t long_branch_capacity = 0U;
     size_t source_reparse_pass = 0U;
+    MiniAsSourceGraph graph={0};
+    bool source_loaded=false;
     int rc = 1;
 
     for (;;) {
@@ -5999,11 +6342,24 @@ int minias_assemble_config(const char *input_path,
         }
         as.forced_long_branch_ids = long_branch_ids;
         as.forced_long_branch_count = long_branch_count;
-        parsed = as.error[0] == '\0' && minias_parse_file(&as,input_path);
+        parsed=as.error[0]=='\0';
+        if(parsed && !source_loaded) {
+            parsed=collect_file_source_frame(&as,input_path,&graph.physical);
+            if(parsed) {
+                source_loaded=true;
+                ++graph.file_reads;
+            }
+        }
+        if(parsed)parsed=parse_loaded_source_graph(&as,&graph);
+        if(parsed)source_graph_compare_forced_sites(&as);
         if(parsed && !minias_solve_fragment_layout(
               &as,&long_branch_ids,&long_branch_count,
               &long_branch_capacity,&added_long_branches,diagnostic))
             parsed=false;
+        if(parsed && added_long_branches) {
+            parsed=source_graph_capture_forced_sites(&as,long_branch_ids,
+                                                     long_branch_count);
+        }
         if(parsed && added_long_branches) {
             /* The successful pass prints reparse=0 because it is an in-place
              * layout trace.  Report the actual exceptional source replay
@@ -6030,6 +6386,13 @@ int minias_assemble_config(const char *input_path,
         minias_destroy(&as);
         break;
     }
+    if(diagnostic!=NULL && getenv("MINIAS_TRACE_RELAYOUT")!=NULL)
+        fprintf(diagnostic,
+                "minias-source-graph:file-reads=%zu sites=%zu expansions=%zu replay-passes=%zu site-drifts=%zu conditional-changes=%zu\n",
+                graph.file_reads,graph.site_count,graph.expansion_count,
+                source_reparse_pass,graph.ordinal_drifts,
+                graph.conditional_changes);
+    source_graph_destroy(&graph);
     free(long_branch_ids);
     return rc;
 }

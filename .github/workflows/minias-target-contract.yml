@@ -38,7 +38,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            binutils-riscv64-linux-gnu gcc-riscv64-linux-gnu qemu-user
+            binutils-riscv64-linux-gnu gcc-riscv64-linux-gnu \
+            binutils-loongarch64-linux-gnu qemu-user
       - name: Build MiniAS from this exact PR head
         run: |
           make -j2 MODE=release CFLAGS=-Werror build/release/bin/minic-as
@@ -59,6 +60,15 @@ jobs:
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-mc-target-lowering-ownership.sh
+      - name: GNU x86 register form plan, high-byte rules and relocation contract
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-x86-register-encoding-plan-gnu.sh
+      - name: GNU LoongArch dynamic operand tokens and PCALA descriptor relocations
+        run: |
+          command -v loongarch64-linux-gnu-as
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-loong-dynamic-token-descriptor.sh
       - name: Validate Common MCOperand nested ownership and error-path lifecycle
         run: bash tests/assembler/probe-mc-operand-lifetime.sh
       - name: RV32E validates parsed GPRs without treating symbols as registers
@@ -85,6 +95,12 @@ jobs:
             bash tests/assembler/probe-mc-source-replay-branch.sh
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=riscv \
             bash tests/assembler/probe-mc-source-replay-branch.sh
+      - name: SourceGraph reads physical input once and replays stable sites
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=x86_64 \
+            bash tests/assembler/probe-mc-source-graph-cache.sh
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=riscv \
+            bash tests/assembler/probe-mc-source-graph-cache.sh
       - name: GNU RV64I 160-typed-fragment relaxation stress
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=riscv \
@@ -95,6 +111,11 @@ jobs:
           command -v riscv64-linux-gnu-as
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-rv-typed-li-materialization.sh
+      - name: GNU RV32F/RV64D typed FP register and rounding operands
+        run: |
+          command -v riscv64-linux-gnu-as
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-rv-typed-fp-operands.sh
       - name: GNU RISC-V option and ELF architecture attribute semantic state
         run: |
           command -v riscv64-linux-gnu-as
@@ -278,6 +299,11 @@ jobs:
           command -v aarch64-linux-gnu-as
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-aarch64-deferred-memory-descriptor.sh
+      - name: GNU AArch64 typed Memory and ALU branch composite deferred operands
+        run: |
+          command -v aarch64-linux-gnu-as
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-aarch64-typed-composite-memory-gnu.sh
       - name: AArch64 scalar lo12 relocations share the typed memory descriptor
         run: |
           command -v aarch64-linux-gnu-as

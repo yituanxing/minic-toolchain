@@ -18,7 +18,7 @@ typedef struct X64TargetState {
     uint32_t code_mode;
 } X64TargetState;
 
-enum { X64_ZERO = 1, X64_REG_BINARY, X64_STACK, X64_MOV_IMM32, X64_ENDBR64, X64_ALU_IMM, X64_REG_MEMORY, X64_BRANCH, X64_IMM_MEMORY, X64_MOVQ_IMMREG, X64_MOVABS_IMMREG, X64_SETCC, X64_BINARY8, X64_MOVSLQ, X64_MOVZX_REG, X64_SHIFT_REGISTER, X64_TEST8_IMM, X64_PUSH_IMM, X64_CMOV_REG, X64_UNARY, X64_INDIRECT_REG, X64_BSWAP, X64_TEST_IMM_REG, X64_IMUL_IMM, X64_BIT_IMMREG, X64_DOUBLE_SHIFT, X64_SYSTEM_MOVE, X64_BMI2_SHIFT };
+enum { X64_ZERO = 1, X64_REG_BINARY, X64_STACK, X64_MOV_IMM32, X64_ALU_IMM, X64_REG_MEMORY, X64_BRANCH, X64_IMM_MEMORY, X64_MOVQ_IMMREG, X64_MOVABS_IMMREG, X64_SETCC, X64_BINARY8, X64_MOVSLQ, X64_MOVZX_REG, X64_SHIFT_REGISTER, X64_TEST8_IMM, X64_PUSH_IMM, X64_CMOV_REG, X64_UNARY, X64_INDIRECT_REG, X64_BSWAP, X64_TEST_IMM_REG, X64_IMUL_IMM, X64_BIT_IMMREG, X64_DOUBLE_SHIFT, X64_SYSTEM_MOVE, X64_BMI2_SHIFT };
 
 typedef enum X64ShiftCountForm {
     X64_SHIFT_COUNT_IMMEDIATE = 0,
@@ -487,25 +487,64 @@ static bool x64_is_mem_candidate(const char *text) {
            (*text && *text!='%' && *text!='$');
 }
 
-/* Group-1 opcode identity belongs to one x86 descriptor regardless of
- * immediate width, register/memory choice, or symbolic expression kind. */
-static bool x64_alu_group(const char *name,unsigned *group) {
-    static const struct {const char *stem;unsigned group;} forms[]={
-        {"add",0U},{"or",1U},{"adc",2U},{"sbb",3U},
-        {"and",4U},{"sub",5U},{"xor",6U},{"cmp",7U}
-    };
+/* One ISA descriptor is the opcode authority for register/register,
+ * register/memory, memory/register and Group-1 immediate forms.  A zero
+ * opcode is VALID (addb %r8b,(%rax) uses 00 /r); availability is an
+ * independent typed fact and never inferred from its numeric encoding. */
+typedef struct X64BinaryFormDescriptor {
+    const char *stem;
+    unsigned rm_destination_opcode;
+    unsigned rm_source_opcode;
+    bool has_rm_destination_opcode;
+    bool has_rm_source_opcode;
+    bool has_immediate_group;
+    unsigned immediate_group;
+} X64BinaryFormDescriptor;
+
+static const X64BinaryFormDescriptor x64_binary_forms[]={
+    {"mov", 0x89U,0x8bU,true,true,false,0U},
+    {"add", 0x01U,0x03U,true,true,true,0U},
+    {"or",  0x09U,0x0bU,true,true,true,1U},
+    {"adc", 0x11U,0x13U,true,true,true,2U},
+    {"sbb", 0x19U,0x1bU,true,true,true,3U},
+    {"and", 0x21U,0x23U,true,true,true,4U},
+    {"sub", 0x29U,0x2bU,true,true,true,5U},
+    {"xor", 0x31U,0x33U,true,true,true,6U},
+    {"cmp", 0x39U,0x3bU,true,true,true,7U},
+    {"test",0x85U,0x85U,true,true,false,0U}
+};
+
+static const X64BinaryFormDescriptor *x64_binary_form(
+    const char *name,unsigned *width) {
     const size_t n=strlen(name);
-    unsigned i;
-    if(n<2U || (name[n-1U]!='b' && name[n-1U]!='w' &&
-                 name[n-1U]!='l' && name[n-1U]!='q'))return false;
-    for(i=0U;i<sizeof(forms)/sizeof(forms[0]);++i) {
-        const size_t len=strlen(forms[i].stem);
-        if(n==len+1U && !strncmp(name,forms[i].stem,len)) {
-            *group=forms[i].group;
-            return true;
-        }
+    size_t i;
+    if(n<2U)return NULL;
+    *width=name[n-1U]=='b'?8U:name[n-1U]=='w'?16U:
+           name[n-1U]=='l'?32U:name[n-1U]=='q'?64U:0U;
+    if(*width==0U)return NULL;
+    for(i=0U;i<sizeof(x64_binary_forms)/sizeof(x64_binary_forms[0]);++i) {
+        const X64BinaryFormDescriptor *form=&x64_binary_forms[i];
+        const size_t stem_length=strlen(form->stem);
+        if(n==stem_length+1U &&
+           strncmp(name,form->stem,stem_length)==0)return form;
     }
-    return false;
+    return NULL;
+}
+
+static unsigned x64_binary_opcode(const X64BinaryFormDescriptor *form,
+                                   bool memory_source,unsigned width) {
+    const unsigned base=memory_source?form->rm_source_opcode:
+                                       form->rm_destination_opcode;
+    return base-(width==8U?1U:0U);
+}
+
+static bool x64_alu_group(const char *name,unsigned *group) {
+    unsigned width;
+    const X64BinaryFormDescriptor *form=x64_binary_form(name,&width);
+    (void)width;
+    if(form==NULL || !form->has_immediate_group)return false;
+    *group=form->immediate_group;
+    return true;
 }
 
 static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
@@ -567,21 +606,6 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         {"popf",{0x9d},1},{"popfq",{0x9d},1}
     };
     static const struct {const char *op; unsigned opcode; bool wide;} binary[]={
-        {"movq",0x89,true}, {"movl",0x89,false},
-        {"addq",0x01,true}, {"addl",0x01,false},
-        {"adcq",0x11,true},{"adcl",0x11,false},
-        {"subq",0x29,true}, {"subl",0x29,false},
-        {"sbbq",0x19,true}, {"sbbl",0x19,false},
-        {"xorq",0x31,true}, {"xorl",0x31,false},
-        {"andq",0x21,true}, {"andl",0x21,false},
-        {"orq",0x09,true},  {"orl",0x09,false},
-        {"cmpq",0x39,true},{"cmpl",0x39,false},
-        {"testq",0x85,true},{"testl",0x85,false},
-        {"movw",0x89,false},{"addw",0x01,false},{"adcw",0x11,false},
-        {"subw",0x29,false},{"sbbw",0x19,false},
-        {"xorw",0x31,false},{"andw",0x21,false},
-        {"orw",0x09,false},{"cmpw",0x39,false},
-        {"testw",0x85,false},
         /* Retain x86 ISA format in the same typed register/ModR/M path.
          * 0x100 marks 0F prefix; operand widths remain x86 Target-only. */
         {"btl",0x1a3U,false},{"btq",0x1a3U,true},
@@ -594,61 +618,44 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         {"btw",0x1a3U,false},{"cmpxchgw",0x1b1U,false},
         {"cmpxchgl",0x1b1U,false},{"cmpxchgq",0x1b1U,true}
     };
-    /* reg/memory opcodes: source register to dest memory and vice versa.
-     * TEST uses a commutative encoding; memory location is always r/m. */
+    /* Extended reg/memory forms beyond the common ALU/MOV/TEST descriptor.
+     * Availability is explicit: an absent direction has no opcode at all. */
     static const struct {
         const char *op; unsigned rm_dest, rm_src; bool wide;
+        bool has_rm_dest,has_rm_src;
     } regmem[] = {
-        {"movq",0x89,0x8b,true},{"movl",0x89,0x8b,false},
-        {"cmpq",0x39,0x3b,true},{"cmpl",0x39,0x3b,false},
-        {"xchgq",0x87,0x87,true},{"xchgl",0x87,0x87,false},
-        {"testq",0x85,0x85,true},{"testl",0x85,0x85,false},
-        {"addq",0x01,0x03,true},{"addl",0x01,0x03,false},
-        {"adcq",0x11,0x13,true},{"adcl",0x11,0x13,false},
-        {"subq",0x29,0x2b,true},{"subl",0x29,0x2b,false},
-        {"sbbq",0x19,0x1b,true},{"sbbl",0x19,0x1b,false},
-        {"andq",0x21,0x23,true},{"andl",0x21,0x23,false},
-        {"orq",0x09,0x0b,true},{"orl",0x09,0x0b,false},
-        {"xorq",0x31,0x33,true},{"xorl",0x31,0x33,false},
-        {"leaq",0,0x8d,true},{"leal",0,0x8d,false},
+        {"xchgq",0x87,0x87,true,true,true},
+        {"xchgl",0x87,0x87,false,true,true},
+        {"leaq",0,0x8d,true,false,true},
+        {"leal",0,0x8d,false,false,true},
         /* 0F xx /r: same typed memory ModR/M machinery. */
-        {"btq",0xa3,0,true},{"btl",0xa3,0,false},
-        {"btsq",0xab,0,true},{"btsl",0xab,0,false},
-        {"btrq",0xb3,0,true},{"btrl",0xb3,0,false},
-        {"btcq",0xbb,0,true},{"btcl",0xbb,0,false},
-        {"xaddq",0xc1,0,true},{"xaddl",0xc1,0,false},
-        {"cmpxchgq",0xb1,0,true},{"cmpxchgl",0xb1,0,false},
-        {"xaddw",0xc1,0,false},{"cmpxchgw",0xb1,0,false},
-        {"cmpxchgb",0xb0,0,false},{"xaddb",0xc0,0,false},
-        {"btw",0xa3,0,false},{"btsw",0xab,0,false},
-        {"btrw",0xb3,0,false},{"btcw",0xbb,0,false},
-        {"popcntq",0,0x1b8U,true},{"popcntl",0,0x1b8U,false},
-        {"lzcntq",0,0x1bdU,true},{"lzcntl",0,0x1bdU,false},
-        {"tzcntq",0,0x1bcU,true},{"tzcntl",0,0x1bcU,false},
-        {"imulq",0,0x1afU,true},{"imull",0,0x1afU,false},
+        {"btq",0xa3,0,true,true,false},{"btl",0xa3,0,false,true,false},
+        {"btsq",0xab,0,true,true,false},{"btsl",0xab,0,false,true,false},
+        {"btrq",0xb3,0,true,true,false},{"btrl",0xb3,0,false,true,false},
+        {"btcq",0xbb,0,true,true,false},{"btcl",0xbb,0,false,true,false},
+        {"xaddq",0xc1,0,true,true,false},{"xaddl",0xc1,0,false,true,false},
+        {"cmpxchgq",0xb1,0,true,true,false},{"cmpxchgl",0xb1,0,false,true,false},
+        {"xaddw",0xc1,0,false,true,false},{"cmpxchgw",0xb1,0,false,true,false},
+        {"cmpxchgb",0xb0,0,false,true,false},{"xaddb",0xc0,0,false,true,false},
+        {"btw",0xa3,0,false,true,false},{"btsw",0xab,0,false,true,false},
+        {"btrw",0xb3,0,false,true,false},{"btcw",0xbb,0,false,true,false},
+        {"popcntq",0,0x1b8U,true,false,true},{"popcntl",0,0x1b8U,false,false,true},
+        {"lzcntq",0,0x1bdU,true,false,true},{"lzcntl",0,0x1bdU,false,false,true},
+        {"tzcntq",0,0x1bcU,true,false,true},{"tzcntl",0,0x1bcU,false,false,true},
+        {"imulq",0,0x1afU,true,false,true},{"imull",0,0x1afU,false,false,true},
         /* Existing typed memory ModR/M encoder owns REX/SIB/PC32 for
          * 0F B6/B7 zero-extension and 63 sign-extension. */
-        {"movzbl",0,0x1b6U,false},{"movzbq",0,0x1b6U,true},
-        {"movzwl",0,0x1b7U,false},{"movzwq",0,0x1b7U,true},
+        {"movzbl",0,0x1b6U,false,false,true},{"movzbq",0,0x1b6U,true,false,true},
+        {"movzwl",0,0x1b7U,false,false,true},{"movzwq",0,0x1b7U,true,false,true},
         /* MOVSX is identical ModR/M ownership; only 0F BE/BF differs. */
-        {"movsbl",0,0x1beU,false},{"movsbq",0,0x1beU,true},
-        {"movsbw",0,0x1beU,false},{"movzbw",0,0x1b6U,false},
-        {"movswl",0,0x1bfU,false},{"movswq",0,0x1bfU,true},
-        {"movslq",0,0x63U,true},
+        {"movsbl",0,0x1beU,false,false,true},{"movsbq",0,0x1beU,true,false,true},
+        {"movsbw",0,0x1beU,false,false,true},{"movzbw",0,0x1b6U,false,false,true},
+        {"movswl",0,0x1bfU,false,false,true},{"movswq",0,0x1bfU,true,false,true},
+        {"movslq",0,0x63U,true,false,true},
         /* Explicit scalar widths, all reuse typed ModR/M, SIB and Fixup. */
-        {"movb",0x88U,0x8aU,false},{"cmpb",0x38U,0x3aU,false},
-        {"testb",0x84U,0x84U,false},{"addb",0x00U,0x02U,false},
-        {"subb",0x28U,0x2aU,false},{"andb",0x20U,0x22U,false},
-        {"adcb",0x10U,0x12U,false},{"sbbb",0x18U,0x1aU,false},
-        {"orb",0x08U,0x0aU,false},{"xorb",0x30U,0x32U,false},
-        {"xchgb",0x86U,0x86U,false},
-        {"movw",0x89U,0x8bU,false},{"cmpw",0x39U,0x3bU,false},
-        {"xchgw",0x87U,0x87U,false},
-        {"testw",0x85U,0x85U,false},{"addw",0x01U,0x03U,false},
-        {"subw",0x29U,0x2bU,false},{"andw",0x21U,0x23U,false},
-        {"adcw",0x11U,0x13U,false},{"sbbw",0x19U,0x1bU,false},
-        {"imulw",0,0x1afU,false},
-        {"orw",0x09U,0x0bU,false},{"xorw",0x31U,0x33U,false}
+        {"xchgb",0x86U,0x86U,false,true,true},
+        {"xchgw",0x87U,0x87U,false,true,true},
+        {"imulw",0,0x1afU,false,false,true},
     };
     MiniAsMCInst *m=minias_mcinst_alloc(3U);
     unsigned i, rs, rd;
@@ -1268,7 +1275,9 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         goto done;
     }
     if (!strcmp(s->op,"endbr64") && !*s->args) {
-        m->opcode=X64_ENDBR64;m->encoding=UINT32_C(0xfa1e0ff3);
+        m->opcode=X64_ZERO;
+        m->target_form=4U;
+        m->encoding=UINT32_C(0xfa1e0ff3);
         m->count=0U;goto done;
     }
     /* All GNU REP/REPE/REPNE string forms use the canonical zero-arg
@@ -1644,11 +1653,6 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
     }
     /* Byte ALU variants and sign-extending MOV all remain target local. */
     if(x64_args2(s->args,src,dst)) {
-        static const struct {const char *op;uint32_t opcode;} byteop[]={
-            {"movb",0x88U},{"addb",0x00U},{"adcb",0x10U},{"sbbb",0x18U},{"orb",0x08U},
-            {"andb",0x20U},{"subb",0x28U},{"xorb",0x30U},
-            {"cmpb",0x38U},{"testb",0x84U}
-        };
         unsigned first,second;
         if(!strncmp(s->op,"cmov",4U)) {
             bool word=x64_register16(src,&first) &&
@@ -1798,14 +1802,17 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             bool srcreg=highsrc||x64_register8(src,&first);
             bool dstreg=highdst||x64_register8(dst,&second);
             if(srcreg && dstreg) {
+                unsigned width=0U;
+                const X64BinaryFormDescriptor *form=
+                    x64_binary_form(s->op,&width);
                 bool rexneeded=first>=8U || second>=8U ||
                                (first>=4U && !highsrc) ||
                                (second>=4U && !highdst);
-                for(i=0U;i<sizeof(byteop)/sizeof(byteop[0]);++i) {
-                    if(strcmp(s->op,byteop[i].op)!=0)continue;
+                if(form && width==8U &&
+                   form->has_rm_destination_opcode) {
                     if((highsrc || highdst) && rexneeded)goto invalid;
                     m->opcode=X64_BINARY8;m->count=2U;
-                    m->encoding=byteop[i].opcode|
+                    m->encoding=x64_binary_opcode(form,false,width)|
                                 (highsrc?UINT32_C(0x1000):0U)|
                                 (highdst?UINT32_C(0x2000):0U);
                     m->operands[0].kind=MINIAS_MC_REGISTER;
@@ -1840,6 +1847,35 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             goto done;
         }
     }
+    /* Plain scalar ALU/MOV/TEST register encodings are governed by the
+     * same descriptor as their memory and immediate counterparts. */
+    {
+        unsigned width=0U;
+        const X64BinaryFormDescriptor *form=x64_binary_form(s->op,&width);
+        if(form && width>=16U && form->has_rm_destination_opcode &&
+           x64_args2(s->args,src,dst)) {
+            bool valid=false;
+            if(width==16U) {
+                valid=x64_register16(src,&rs) && x64_register16(dst,&rd);
+                ws=false;wd=false;
+            }else {
+                valid=x64_register(src,&rs,&ws) &&
+                      x64_register(dst,&rd,&wd) &&
+                      ws==(width==64U) && wd==ws;
+            }
+            if(valid) {
+                m->opcode=X64_REG_BINARY;m->count=2U;
+                m->encoding=x64_binary_opcode(form,false,width)|
+                    (width==16U?UINT32_C(0x400):0U);
+                m->operands[0].kind=MINIAS_MC_REGISTER;
+                m->operands[0].reg=rs;
+                m->operands[0].register_64=width==64U;
+                m->operands[1].kind=MINIAS_MC_REGISTER;
+                m->operands[1].reg=rd;
+                goto done;
+            }
+        }
+    }
     for(i=0U;i<sizeof(binary)/sizeof(binary[0]);++i) {
         size_t name_len=strlen(s->op);
         size_t form_len=strlen(binary[i].op);
@@ -1860,7 +1896,9 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         if(ws!=binary[i].wide || wd!=binary[i].wide)continue;
         m->opcode=X64_REG_BINARY;m->count=2U;
         m->encoding=binary[i].opcode|(is_word?0x400U:0U);
+        m->operands[0].kind=MINIAS_MC_REGISTER;
         m->operands[0].reg=rs;m->operands[1].reg=rd;
+        m->operands[1].kind=MINIAS_MC_REGISTER;
         m->operands[0].register_64=binary[i].wide;
         goto done;
     }
@@ -1961,7 +1999,9 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         x64_register(s->args,&rs,&ws) &&
         (ws || ((s->site.mode_bits&X64_CODE32)!=0U &&
                 !strcmp(s->op,"pushl") && !ws && rs<8U))) {
-        m->opcode=X64_STACK;m->count=1U;m->operands[0].reg=rs;
+        m->opcode=X64_STACK;m->count=1U;
+        m->operands[0].kind=MINIAS_MC_REGISTER;
+        m->operands[0].reg=rs;
         m->encoding=(!strcmp(s->op,"pushq") ||
                      !strcmp(s->op,"push") ||
                      !strcmp(s->op,"pushl"))?0x50U:0x58U;goto done;
@@ -2320,7 +2360,6 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         X64Memory parsed;
         unsigned r, reg_bits=0U;
         bool wide=false, memory_source, legacy_high8=false;
-        bool byte_add_memory_opcode_zero=false;
         const unsigned *chosen = NULL;
         unsigned target_opcode=0U;
         if (x64_register(src,&r,&wide) &&
@@ -2390,6 +2429,16 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             }
             if(op!=0U){target_opcode=op;chosen=&target_opcode;}
         }
+        if(!chosen) {
+            unsigned width=0U;
+            const X64BinaryFormDescriptor *form=x64_binary_form(s->op,&width);
+            if(form && width==reg_bits &&
+               (memory_source?form->has_rm_source_opcode:
+                              form->has_rm_destination_opcode)) {
+                target_opcode=x64_binary_opcode(form,memory_source,width);
+                chosen=&target_opcode;
+            }
+        }
         if(!chosen)for (i=0U;i<sizeof(regmem)/sizeof(regmem[0]);++i) {
             /* GAS accepts unsuffixed mem/reg forms if the register
              * establishes the width. Keep the inference in this x86 ISA
@@ -2414,16 +2463,13 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
                     !strcmp(s->op,"movslq") ||
                     !strcmp(s->op,"imulq") || !strcmp(s->op,"imull") ||
                     !strcmp(s->op,"imulw")) && !memory_source)continue;
+                if(memory_source?!regmem[i].has_rm_src:
+                                 !regmem[i].has_rm_dest)continue;
                 chosen=memory_source?&regmem[i].rm_src:&regmem[i].rm_dest;
-                /* x86 ADD r8,r/m8 opcode 00 is real. A zero descriptor
-                 * normally denotes an unsupported operand direction, but
-                 * must not suppress this genuinely valid instruction. */
-                byte_add_memory_opcode_zero=!memory_source &&
-                    !strcmp(regmem[i].op,"addb");
                 break;
             }
         }
-        if (!chosen || (*chosen==0U && !byte_add_memory_opcode_zero)) {
+        if(!chosen) {
             goto invalid;
         }
         if(!x64_attach_memory_operand(as,m,&parsed,"out-of-memory:x86_64-mc-memory")) {
@@ -2680,67 +2726,257 @@ static X64EncodingPlan x64_encoding_plan(
     return plan;
 }
 
-static bool x64_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
-    const MiniAsMCInst *m=s->mcinst;
-    X64EncodingPlan plan;
-    if (!m) {minias_set_error(as,"missing-x86_64-mcinst");return false;}
-    plan=x64_encoding_plan(m);
+/* A register-only instruction has exactly one wire image, independently of
+ * whether MCLayout is asking its size or the emitter is asking its bytes.
+ * Symbolic operands, PC-relative branches and memory ModR/M remain in their
+ * existing dedicated plans, since those need final layout or FixupRequests.
+ * This target-private value is also the sole authority for prefix ordering,
+ * high-byte REX exclusions, opcode maps and immediate-field width. */
+typedef struct X64RegisterEncodingPlan {
+    unsigned char bytes[16];
+    uint32_t size;
+} X64RegisterEncodingPlan;
+
+static bool x64_register_encoding_plan(const MiniAsMCInst *m,
+                                       X64RegisterEncodingPlan *result) {
+    const X64EncodingPlan plan=x64_encoding_plan(m);
+    unsigned char *code=result->bytes;
+    size_t n=0U;
+    unsigned r,d,i;
     switch(m->opcode) {
-        case X64_ZERO: *size=m->target_form;return true;
-        case X64_BMI2_SHIFT: *size=5U;return true;
-        case X64_SYSTEM_MOVE:
-            *size=2U+((m->encoding&0x100U)?1U:0U)+
-                  ((m->encoding&0x400U)?1U:0U)+
-                  (plan.rex?1U:0U);
-            return true;
-        case X64_DOUBLE_SHIFT:
-            *size=3U+((m->encoding&0x400U)?1U:0U)+
-                  ((m->encoding&0x200U)?1U:0U)+
-                  (plan.rex?1U:0U);
-            return true;
-        case X64_ENDBR64: *size=4U;return true;
-        case X64_SETCC:
-            *size=3U+(plan.rex?1U:0U);return true;
-        case X64_BINARY8:
-            *size=2U+(plan.rex?1U:0U);
-            return true;
-        case X64_MOVSLQ: *size=3U;return true;
-        case X64_CMOV_REG:
-            *size=3U+((m->encoding&UINT32_C(0x400))?1U:0U)+
-                (plan.rex?1U:0U);return true;
-        case X64_UNARY: {
-            bool word=(m->encoding&UINT32_C(0x2000))!=0U;
-            *size=2U+(word?1U:0U)+(plan.rex?1U:0U)+
-                  ((m->encoding&UINT32_C(0x8000))?1U:0U)+
-                  ((m->encoding&UINT32_C(0x10000))?1U:0U)+
-                  ((m->encoding&UINT32_C(0x20000))?1U:0U);return true;
+        case X64_BMI2_SHIFT: {
+            unsigned count=m->operands[0].reg;
+            unsigned base=m->operands[1].reg;
+            unsigned dst=m->operands[2].reg;
+            bool wide=m->operands[2].register_64;
+            code[n++]=0xc4U;
+            code[n++]=(unsigned char)((dst>=8U?0U:0x80U)|
+                          0x40U|(base>=8U?0U:0x20U)|2U);
+            code[n++]=(unsigned char)((wide?0x80U:0U)|
+                          (((~count)&15U)<<3U)|(m->encoding&3U));
+            code[n++]=(unsigned char)((m->encoding&UINT32_C(0x10000))?
+                       (m->encoding>>8U)&UINT32_C(0xff):UINT32_C(0xf7));
+            code[n++]=(unsigned char)(0xc0U|((dst&7U)<<3U)|(base&7U));
+            break;
         }
+        case X64_SYSTEM_MOVE: {
+            unsigned sys=m->operands[0].reg,gpr=m->operands[1].reg;
+            if(m->encoding&0x400U)code[n++]=0x66U;
+            if(plan.rex)
+                code[n++]=(unsigned char)(0x40U|
+                    ((sys>>3U)<<2U)|(gpr>>3U));
+            if(m->encoding&0x100U)code[n++]=0x0fU;
+            code[n++]=(unsigned char)m->encoding;
+            code[n++]=(unsigned char)(0xc0U|
+                ((sys&7U)<<3U)|(gpr&7U));
+            break;
+        }
+        case X64_DOUBLE_SHIFT: {
+            unsigned src=m->operands[0].reg,dst=m->operands[1].reg;
+            if(m->encoding&0x400U)code[n++]=0x66U;
+            if(plan.rex)
+                code[n++]=(unsigned char)(0x40U|
+                    (m->operands[0].register_64?8U:0U)|
+                    ((src>>3U)<<2U)|(dst>>3U));
+            code[n++]=0x0fU;
+            code[n++]=(unsigned char)(m->encoding&0xffU);
+            code[n++]=(unsigned char)(0xc0U|
+                    ((src&7U)<<3U)|(dst&7U));
+            if(m->encoding&0x200U)
+                code[n++]=(unsigned char)m->operands[2].immediate;
+            break;
+        }
+        case X64_ZERO:
+            if(m->target_form>sizeof(result->bytes) ||
+               m->target_form>sizeof(m->encoding))return false;
+            for(i=0U;i<m->target_form;++i)
+                code[n++]=(unsigned char)(m->encoding>>(8U*i));
+            break;
+        case X64_SETCC:
+            r=m->operands[0].reg;
+            if(plan.rex)code[n++]=(unsigned char)(0x40U|(r>>3U));
+            code[n++]=0x0fU;code[n++]=(unsigned char)m->encoding;
+            code[n++]=(unsigned char)(0xc0U|(r&7U));
+            break;
+        case X64_BINARY8:
+            r=m->operands[0].reg;d=m->operands[1].reg;
+            if(plan.rex)
+                code[n++]=(unsigned char)(0x40U|((r>>3U)<<2U)|(d>>3U));
+            code[n++]=(unsigned char)m->encoding;
+            code[n++]=(unsigned char)(0xc0U|((r&7U)<<3U)|(d&7U));
+            break;
+        case X64_MOVSLQ:
+            r=m->operands[0].reg;d=m->operands[1].reg;
+            code[n++]=(unsigned char)(0x48U|((d>>3U)<<2U)|(r>>3U));
+            code[n++]=0x63U;
+            code[n++]=(unsigned char)(0xc0U|((d&7U)<<3U)|(r&7U));
+            break;
+        case X64_CMOV_REG:
+            r=m->operands[0].reg;d=m->operands[1].reg;
+            if(m->encoding&UINT32_C(0x400))code[n++]=0x66U;
+            if(plan.rex)
+                code[n++]=(unsigned char)(0x40U|
+                    (m->operands[0].register_64?8U:0U)|
+                    ((d>>3U)<<2U)|(r>>3U));
+            code[n++]=0x0fU;
+            code[n++]=(unsigned char)(0x40U+(m->encoding&15U));
+            code[n++]=(unsigned char)(0xc0U|((d&7U)<<3U)|(r&7U));
+            break;
+        case X64_UNARY:
+            r=m->operands[0].reg;
+            if(m->encoding&UINT32_C(0x10000))code[n++]=0xf3U;
+            if(m->encoding&UINT32_C(0x20000))code[n++]=0xf2U;
+            if(m->encoding&UINT32_C(0x2000))code[n++]=0x66U;
+            if(plan.rex)
+                code[n++]=(unsigned char)(0x40U|
+                    (m->operands[0].register_64?8U:0U)|(r>>3U));
+            if(m->encoding&UINT32_C(0x8000))code[n++]=0x0fU;
+            code[n++]=(unsigned char)(m->encoding&0xffU);
+            code[n++]=(unsigned char)(0xc0U|
+                (((m->encoding>>8U)&7U)<<3U)|(r&7U));
+            break;
         case X64_BSWAP:
-            *size=2U+(plan.rex?1U:0U);return true;
-        case X64_TEST_IMM_REG:
-            *size=((m->encoding&0x400U)?1U:0U)+
-                  (plan.rex?1U:0U)+
-                  (m->operands[0].reg==0U?1U:2U)+
-                  ((m->encoding&0x400U)?2U:4U);
-            return true;
+            r=m->operands[0].reg;
+            if(plan.rex)
+                code[n++]=(unsigned char)(0x40U|
+                    (m->operands[0].register_64?8U:0U)|(r>>3U));
+            code[n++]=0x0fU;
+            code[n++]=(unsigned char)(0xc8U+(r&7U));
+            break;
+        case X64_TEST_IMM_REG: {
+            unsigned bytes=(m->encoding&0x400U)?2U:4U;
+            r=m->operands[0].reg;
+            if(m->encoding&0x400U)code[n++]=0x66U;
+            if(plan.rex)
+                code[n++]=(unsigned char)(0x40U|
+                    (m->operands[0].register_64?8U:0U)|(r>>3U));
+            if(r==0U)code[n++]=0xa9U;
+            else {
+                code[n++]=0xf7U;
+                code[n++]=(unsigned char)(0xc0U|(r&7U));
+            }
+            for(i=0U;i<bytes;++i)
+                code[n++]=(unsigned char)(m->operands[1].immediate>>(8U*i));
+            break;
+        }
         case X64_SHIFT_REGISTER:
-            *size=plan.instruction_bytes;return true;
+            r=m->operands[0].reg;
+            if(m->target_form!=X64_SHIFT_COUNT_IMMEDIATE &&
+               m->target_form!=X64_SHIFT_COUNT_CL)return false;
+            if(plan.shift_word)code[n++]=0x66U;
+            if(plan.rex)
+                code[n++]=(unsigned char)(0x40U|
+                    (m->operands[0].register_64?8U:0U)|(r>>3U));
+            code[n++]=plan.shift_opcode;
+            code[n++]=plan.shift_modrm;
+            if(n!=plan.immediate_offset)return false;
+            for(i=0U;i<plan.immediate_bytes;++i)
+                code[n++]=(unsigned char)(m->operands[1].immediate>>(8U*i));
+            break;
         case X64_MOVZX_REG:
-            *size=3U+((m->encoding&0x400U)?1U:0U)+
-                  (plan.rex?1U:0U);return true;
+            r=m->operands[0].reg;d=m->operands[1].reg;
+            if(m->encoding&0x400U)code[n++]=0x66U;
+            if(plan.rex)
+                code[n++]=(unsigned char)(0x40U|
+                    (m->operands[1].register_64?8U:0U)|
+                    ((d>>3U)<<2U)|(r>>3U));
+            code[n++]=0x0fU;code[n++]=(unsigned char)(m->encoding&0xffU);
+            code[n++]=(unsigned char)(0xc0U|((d&7U)<<3U)|(r&7U));
+            break;
         case X64_TEST8_IMM:
-            *size=m->operands[0].reg==0U?2U:
-                  (3U+(plan.rex?1U:0U));return true;
+            r=m->operands[0].reg;
+            if(r==0U)code[n++]=0xa8U;
+            else {
+                if(plan.rex)code[n++]=(unsigned char)(0x40U|(r>>3U));
+                code[n++]=0xf6U;
+                code[n++]=(unsigned char)(0xc0U|(r&7U));
+            }
+            code[n++]=(unsigned char)m->operands[1].immediate;
+            break;
         case X64_IMUL_IMM: {
-            bool word=(m->encoding&0x400U)!=0U;
-            *size=(word?1U:0U)+(plan.rex?1U:0U)+2U+
-                  plan.immediate_bytes;
-            return true;
+            unsigned bytes=plan.immediate_bytes;
+            r=m->operands[0].reg;d=m->operands[1].reg;
+            if(m->encoding&0x400U)code[n++]=0x66U;
+            if(plan.rex)
+                code[n++]=(unsigned char)(0x40U|
+                    (m->operands[0].register_64?8U:0U)|
+                    ((d>>3U)<<2U)|(r>>3U));
+            code[n++]=bytes==1U?0x6bU:0x69U;
+            code[n++]=(unsigned char)(0xc0U|((d&7U)<<3U)|(r&7U));
+            for(i=0U;i<bytes;++i)
+                code[n++]=(unsigned char)(m->operands[2].immediate>>(8U*i));
+            break;
         }
         case X64_BIT_IMMREG:
-            *size=4U+((m->encoding&UINT32_C(0x400))?1U:0U)+
-                (plan.rex?1U:0U);
-            return true;
+            r=m->operands[0].reg;
+            if(m->encoding&UINT32_C(0x400))code[n++]=0x66U;
+            if(plan.rex)
+                code[n++]=(unsigned char)(0x40U|
+                    (m->operands[0].register_64?8U:0U)|(r>>3U));
+            code[n++]=0x0fU;code[n++]=0xbaU;
+            code[n++]=(unsigned char)(0xc0U|
+                ((m->encoding&7U)<<3U)|(r&7U));
+            code[n++]=(unsigned char)m->operands[1].immediate;
+            break;
+        case X64_MOV_IMM32:
+            r=m->operands[0].reg;
+            if(m->encoding&0x200U) {
+                if(r>=8U || (r>=4U && !(m->encoding&0x800U)))
+                    code[n++]=(unsigned char)(0x40U|(r>>3U));
+                code[n++]=(unsigned char)(0xb0U+(r&7U));
+                code[n++]=(unsigned char)m->operands[1].immediate;
+            }else {
+                if(m->encoding&UINT32_C(0x400))code[n++]=0x66U;
+                if(r>=8U)code[n++]=0x41U;
+                code[n++]=(unsigned char)(0xb8U+(r&7U));
+                for(i=0U;i<((m->encoding&UINT32_C(0x400))?2U:4U);++i)
+                    code[n++]=(unsigned char)(m->operands[1].immediate>>(8U*i));
+            }
+            break;
+        case X64_REG_BINARY:
+            r=m->operands[0].reg;d=m->operands[1].reg;
+            if(m->encoding&0x400U)code[n++]=0x66U;
+            if(m->encoding&0x2000U)code[n++]=0xf3U;
+            if(plan.rex)
+                code[n++]=(unsigned char)(0x40U|
+                    (m->operands[0].register_64?8U:0U)|
+                    (((m->encoding&0x800U)?d:r)>>3U)<<2U|
+                    (((m->encoding&0x800U)?r:d)>>3U));
+            if(m->encoding&0x100U)code[n++]=0x0fU;
+            code[n++]=(unsigned char)m->encoding;
+            code[n++]=(unsigned char)(0xc0U|
+                ((((m->encoding&0x800U)?d:r)&7U)<<3U)|
+                (((m->encoding&0x800U)?r:d)&7U));
+            break;
+        case X64_STACK:
+            r=m->operands[0].reg;
+            if(r>=8U)code[n++]=0x41U;
+            code[n++]=(unsigned char)(m->encoding+(r&7U));
+            break;
+        case X64_INDIRECT_REG:
+            r=m->operands[0].reg;
+            if(r>=8U)code[n++]=0x41U;
+            code[n++]=0xffU;
+            code[n++]=(unsigned char)(0xc0U|((m->encoding&7U)<<3U)|(r&7U));
+            break;
+        default:return false;
+    }
+    if(n>sizeof(result->bytes))return false;
+    result->size=(uint32_t)n;
+    return true;
+}
+
+static bool x64_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
+    const MiniAsMCInst *m=s->mcinst;
+    X64RegisterEncodingPlan register_plan;
+    X64EncodingPlan plan;
+    if (!m) {minias_set_error(as,"missing-x86_64-mcinst");return false;}
+    if(x64_register_encoding_plan(m,&register_plan)) {
+        *size=register_plan.size;
+        return true;
+    }
+    plan=x64_encoding_plan(m);
+    switch(m->opcode) {
         case X64_PUSH_IMM: *size=1U+plan.immediate_bytes;return true;
         case X64_BRANCH:
             /* Start JMP/Jcc at GNU's shortest encoding; target relaxation
@@ -2754,24 +2990,6 @@ static bool x64_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
         case X64_MOVQ_IMMREG: *size=7U;return true;
         case X64_MOVABS_IMMREG: *size=10U;return true;
         case X64_ALU_IMM: *size=plan.instruction_bytes;return true;
-        case X64_STACK: *size=(m->operands[0].reg>=8U)?2U:1U;return true;
-        case X64_INDIRECT_REG:
-            *size=m->operands[0].reg>=8U?3U:2U;return true;
-        case X64_MOV_IMM32:
-            if(m->encoding&0x200U) {
-                unsigned reg=m->operands[0].reg;
-                *size=2U+(reg>=8U ||
-                    (reg>=4U && !(m->encoding&0x800U))?1U:0U);
-            }else if(m->encoding&UINT32_C(0x400))
-                *size=4U+(m->operands[0].reg>=8U?1U:0U);
-            else *size=m->operands[0].reg>=8U?6U:5U;
-            return true;
-        case X64_REG_BINARY:
-            *size=((m->encoding&0x2000U)?1U:0U)+
-                   ((m->encoding&0x400U)?1U:0U)+
-                  ((m->encoding&0x100U)?1U:0U)+
-                  (plan.rex?3U:2U);
-            return true;
         default: minias_set_error(as,"unknown-x86_64-mcinst");return false;
     }
 }
@@ -2858,192 +3076,15 @@ static bool x64_adjust_symbol_ref(MiniAs *as,MiniAsSymbolRef input,
 
 static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
     const MiniAsMCInst *m=s->mcinst;
+    X64RegisterEncodingPlan register_plan;
     X64EncodingPlan plan;
-    unsigned char code[16];size_t n=0;unsigned r,d;
+    unsigned char code[16];size_t n=0;unsigned r;
     if (!m) {minias_set_error(as,"missing-x86_64-mcinst");return false;}
+    if(x64_register_encoding_plan(m,&register_plan))
+        return minias_emit_instruction_bytes(as,s->section,
+            register_plan.bytes,register_plan.size);
     plan=x64_encoding_plan(m);
     switch(m->opcode) {
-        case X64_BMI2_SHIFT: {
-            unsigned count=m->operands[0].reg;
-            unsigned base=m->operands[1].reg;
-            unsigned dst=m->operands[2].reg;
-            bool wide=m->operands[2].register_64;
-            code[n++]=0xc4U;
-            code[n++]=(unsigned char)((dst>=8U?0U:0x80U)|
-                          0x40U|(base>=8U?0U:0x20U)|2U);
-            code[n++]=(unsigned char)((wide?0x80U:0U)|
-                          (((~count)&15U)<<3U)|(m->encoding&3U));
-            code[n++]=(unsigned char)((m->encoding&UINT32_C(0x10000))?
-                       (m->encoding>>8U)&UINT32_C(0xff):UINT32_C(0xf7));
-            code[n++]=(unsigned char)(0xc0U|((dst&7U)<<3U)|(base&7U));
-            break;
-        }
-        case X64_SYSTEM_MOVE: {
-            unsigned sys=m->operands[0].reg,gpr=m->operands[1].reg;
-            if(m->encoding&0x400U)code[n++]=0x66U;
-            if(plan.rex)
-                code[n++]=(unsigned char)(0x40U|
-                    ((sys>>3U)<<2U)|(gpr>>3U));
-            if(m->encoding&0x100U)code[n++]=0x0fU;
-            code[n++]=(unsigned char)m->encoding;
-            code[n++]=(unsigned char)(0xc0U|
-                ((sys&7U)<<3U)|(gpr&7U));
-            break;
-        }
-        case X64_DOUBLE_SHIFT: {
-            unsigned src_reg=m->operands[0].reg;
-            unsigned dst_reg=m->operands[1].reg;
-            if(m->encoding&0x400U)code[n++]=0x66U;
-            if(plan.rex)
-                code[n++]=(unsigned char)(0x40U|
-                    (m->operands[0].register_64?8U:0U)|
-                    ((src_reg>>3U)<<2U)|(dst_reg>>3U));
-            code[n++]=0x0fU;
-            code[n++]=(unsigned char)(m->encoding&0xffU);
-            code[n++]=(unsigned char)(0xc0U|
-                    ((src_reg&7U)<<3U)|(dst_reg&7U));
-            if(m->encoding&0x200U)
-                code[n++]=(unsigned char)m->operands[2].immediate;
-            break;
-        }
-        case X64_ZERO: {
-            unsigned i;for(i=0U;i<m->target_form;++i)
-                code[n++]=(unsigned char)(m->encoding>>(8U*i));
-            break;
-        }
-        case X64_ENDBR64: {
-            unsigned i;
-            for(i=0U;i<4U;++i)code[n++]=(unsigned char)(m->encoding>>(8U*i));
-            break;
-        }
-        case X64_SETCC:
-            r=m->operands[0].reg;
-            if(plan.rex)
-                code[n++]=(unsigned char)(0x40U|(r>>3U));
-            code[n++]=0x0fU;code[n++]=(unsigned char)m->encoding;
-            code[n++]=(unsigned char)(0xc0U|(r&7U));
-            break;
-        case X64_BINARY8:
-            r=m->operands[0].reg;d=m->operands[1].reg;
-            if(plan.rex)
-                code[n++]=(unsigned char)(0x40U|((r>>3U)<<2U)|(d>>3U));
-            code[n++]=(unsigned char)m->encoding;
-            code[n++]=(unsigned char)(0xc0U|((r&7U)<<3U)|(d&7U));
-            break;
-        case X64_CMOV_REG:
-            r=m->operands[0].reg;d=m->operands[1].reg;
-            if(m->encoding&UINT32_C(0x400))code[n++]=0x66U;
-            if(plan.rex)
-                code[n++]=(unsigned char)(0x40U |
-                    (m->operands[0].register_64?8U:0U) |
-                    ((d>>3U)<<2U)|(r>>3U));
-            code[n++]=0x0fU;code[n++]=(unsigned char)(0x40U+(m->encoding&15U));
-            code[n++]=(unsigned char)(0xc0U|((d&7U)<<3U)|(r&7U));
-            break;
-        case X64_UNARY:
-            r=m->operands[0].reg;
-            if(m->encoding&UINT32_C(0x10000))code[n++]=0xf3U;
-            if(m->encoding&UINT32_C(0x20000))code[n++]=0xf2U;
-            if(m->encoding&UINT32_C(0x2000))code[n++]=0x66U;
-            if(plan.rex)
-                code[n++]=(unsigned char)(0x40U |
-                    (m->operands[0].register_64?8U:0U)|(r>>3U));
-            if(m->encoding&UINT32_C(0x8000))code[n++]=0x0fU;
-            code[n++]=(unsigned char)(m->encoding&0xffU);
-            code[n++]=(unsigned char)(0xc0U|
-                (((m->encoding>>8U)&7U)<<3U)|(r&7U));
-            break;
-        case X64_BSWAP:
-            r=m->operands[0].reg;
-            if(plan.rex)
-                code[n++]=(unsigned char)(0x40U |
-                    (m->operands[0].register_64?8U:0U)|(r>>3U));
-            code[n++]=0x0fU;
-            code[n++]=(unsigned char)(0xc8U+(r&7U));
-            break;
-        case X64_TEST_IMM_REG: {
-            unsigned j,bytes=(m->encoding&0x400U)?2U:4U;
-            r=m->operands[0].reg;
-            if(m->encoding&0x400U)code[n++]=0x66U;
-            if(plan.rex)
-                code[n++]=(unsigned char)(0x40U |
-                    (m->operands[0].register_64?8U:0U)|(r>>3U));
-            if(r==0U)code[n++]=0xa9U;
-            else {
-                code[n++]=0xf7U;
-                code[n++]=(unsigned char)(0xc0U|(r&7U));
-            }
-            for(j=0U;j<bytes;++j)
-                code[n++]=(unsigned char)(m->operands[1].immediate>>(8U*j));
-            break;
-        }
-        case X64_SHIFT_REGISTER: {
-            unsigned i;
-            r=m->operands[0].reg;
-            if(m->target_form!=X64_SHIFT_COUNT_IMMEDIATE &&
-               m->target_form!=X64_SHIFT_COUNT_CL) {
-                minias_set_error(as,"invalid-x86-shift-form");return false;
-            }
-            if(plan.shift_word)code[n++]=0x66U;
-            if(plan.rex)
-                code[n++]=(unsigned char)(0x40U|
-                    (m->operands[0].register_64?8U:0U)|(r>>3U));
-            code[n++]=plan.shift_opcode;
-            code[n++]=plan.shift_modrm;
-            if(n!=plan.immediate_offset) {
-                minias_set_error(as,"invalid-x86-shift-plan-offset");return false;
-            }
-            for(i=0U;i<plan.immediate_bytes;++i)
-                code[n++]=(unsigned char)(m->operands[1].immediate>>(8U*i));
-            break;
-        }
-        case X64_MOVZX_REG:
-            r=m->operands[0].reg;d=m->operands[1].reg;
-            if(m->encoding&0x400U)code[n++]=0x66U;
-            if(plan.rex)
-                code[n++]=(unsigned char)(0x40U|
-                    (m->operands[1].register_64?8U:0U)|
-                    ((d>>3U)<<2U)|(r>>3U));
-            code[n++]=0x0fU;code[n++]=(unsigned char)(m->encoding&0xffU);
-            code[n++]=(unsigned char)(0xc0U|((d&7U)<<3U)|(r&7U));
-            break;
-        case X64_TEST8_IMM:
-            r=m->operands[0].reg;
-            if(r==0U) code[n++]=0xa8U;
-            else {
-                if(plan.rex)
-                    code[n++]=(unsigned char)(0x40U|(r>>3U));
-                code[n++]=0xf6U;
-                code[n++]=(unsigned char)(0xc0U|(r&7U));
-            }
-            code[n++]=(unsigned char)m->operands[1].immediate;
-            break;
-        case X64_IMUL_IMM: {
-            bool word=(m->encoding&0x400U)!=0U;
-            unsigned j,bytes=plan.immediate_bytes;
-            r=m->operands[0].reg;d=m->operands[1].reg;
-            if(word)code[n++]=0x66U;
-            if(plan.rex)
-                code[n++]=(unsigned char)(0x40U |
-                    (m->operands[0].register_64?8U:0U) |
-                    ((d>>3U)<<2U)|(r>>3U));
-            code[n++]=bytes==1U?0x6bU:0x69U;
-            code[n++]=(unsigned char)(0xc0U|((d&7U)<<3U)|(r&7U));
-            for(j=0U;j<bytes;++j)
-                code[n++]=(unsigned char)(m->operands[2].immediate>>(8U*j));
-            break;
-        }
-        case X64_BIT_IMMREG:
-            r=m->operands[0].reg;
-            if(m->encoding&UINT32_C(0x400))code[n++]=0x66U;
-            if(plan.rex)
-                code[n++]=(unsigned char)(0x40U |
-                    (m->operands[0].register_64?8U:0U)|(r>>3U));
-            code[n++]=0x0fU;code[n++]=0xbaU;
-            code[n++]=(unsigned char)(0xc0U|
-                ((m->encoding&7U)<<3U)|(r&7U));
-            code[n++]=(unsigned char)m->operands[1].immediate;
-            break;
         case X64_PUSH_IMM: {
             bool symbol=m->operands[0].kind==MINIAS_MC_BOUND_SYMBOL;
             int32_t imm=symbol?0:(int32_t)(uint32_t)m->operands[0].immediate;
@@ -3060,12 +3101,6 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
             }
             break;
         }
-        case X64_MOVSLQ:
-            r=m->operands[0].reg;d=m->operands[1].reg;
-            code[n++]=(unsigned char)(0x48U|((d>>3U)<<2U)|(r>>3U));
-            code[n++]=0x63U;
-            code[n++]=(unsigned char)(0xc0U|((d&7U)<<3U)|(r&7U));
-            break;
         case X64_BRANCH: {
             const MiniAsSymbolRef *expr=m->operands[0].bound_symbol;
             MiniAsFixupKind kind=MINIAS_FIXUP_X64_PLT32;
@@ -3307,49 +3342,6 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
             }
             break;
         }
-        case X64_INDIRECT_REG:
-            r=m->operands[0].reg;
-            if(r>=8U)code[n++]=0x41U;
-            code[n++]=0xffU;
-            code[n++]=(unsigned char)(0xc0U|((m->encoding&7U)<<3U)|(r&7U));
-            break;
-        case X64_STACK:
-            r=m->operands[0].reg;
-            if (r>=8U) code[n++]=0x41;
-            code[n++]=(unsigned char)(m->encoding+(r&7U));break;
-        case X64_MOV_IMM32: {
-            unsigned i;
-            r=m->operands[0].reg;
-            if(m->encoding&0x200U) {
-                if(r>=8U || (r>=4U && !(m->encoding&0x800U)))
-                    code[n++]=(unsigned char)(0x40U|(r>>3U));
-                code[n++]=(unsigned char)(0xb0U+(r&7U));
-                code[n++]=(unsigned char)m->operands[1].immediate;
-            }else {
-                if(m->encoding&UINT32_C(0x400))code[n++]=0x66U;
-                if(r>=8U)code[n++]=0x41U;
-                code[n++]=(unsigned char)(0xb8U+(r&7U));
-                for(i=0U;i<((m->encoding&UINT32_C(0x400))?2U:4U);++i)
-                    code[n++]=(unsigned char)
-                        (m->operands[1].immediate>>(8U*i));
-            }
-            break;
-        }
-        case X64_REG_BINARY:
-            r=m->operands[0].reg;d=m->operands[1].reg;
-            if(m->encoding&0x400U)code[n++]=0x66U;
-            if(m->encoding&0x2000U)code[n++]=0xf3U;
-            if(plan.rex)
-                code[n++]=(unsigned char)(0x40U |
-                    (m->operands[0].register_64?8U:0U) |
-                    (((m->encoding&0x800U)?d:r)>>3U)<<2U |
-                    (((m->encoding&0x800U)?r:d)>>3U));
-            if(m->encoding&0x100U)code[n++]=0x0fU;
-            code[n++]=(unsigned char)m->encoding;
-            code[n++]=(unsigned char)(0xc0U |
-                ((((m->encoding&0x800U)?d:r)&7U)<<3U) |
-                (((m->encoding&0x800U)?r:d)&7U));
-            break;
         default: minias_set_error(as,"bad-x86_64-mcinst");return false;
     }
     return minias_emit_instruction_bytes(as,s->section,code,n);

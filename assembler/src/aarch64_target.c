@@ -618,6 +618,122 @@ static void put_immediate(MiniAsMCOperand *dst, int64_t value) {
     dst->immediate = (uint64_t)value;
 }
 
+/* AArch64 addressing is a semantic operand, not an accidental grouping of
+ * registers and already-scaled machine immediates.  The shared MC envelope
+ * owns the allocation and never interprets this target-private structure.
+ * Symbol references are inline NameId tokens, not ELF symbol IDs. */
+typedef enum A64OffsetKind {
+    A64_OFFSET_CONSTANT,
+    A64_OFFSET_DIFFERENCE,
+    A64_OFFSET_LO12,
+    A64_OFFSET_GOT_LO12
+} A64OffsetKind;
+typedef struct A64OffsetExpr {
+    A64OffsetKind kind;
+    int64_t constant;
+    MiniAsSymbolDifferenceRef difference;
+    MiniAsSymbolRef symbol;
+} A64OffsetExpr;
+typedef enum A64AddressMode {
+    A64_ADDRESS_OFFSET,
+    A64_ADDRESS_PRE_INDEX,
+    A64_ADDRESS_POST_INDEX,
+    A64_ADDRESS_REGISTER_INDEX
+} A64AddressMode;
+typedef struct A64Memory {
+    unsigned base;
+    A64AddressMode mode;
+    A64OffsetExpr offset;
+    unsigned access_bytes;
+    unsigned index;
+    unsigned extend_option;
+    bool scaled_index;
+    bool post_index_register;
+    unsigned post_register;
+} A64Memory;
+
+static bool a64_parse_deferred_difference(MiniAs *as,const char *source,
+                                          MiniAsSymbolDifference *difference);
+
+static bool a64_parse_address_offset(MiniAs *as,const char *source,
+                                      A64OffsetExpr *result) {
+    MiniAsSymbolDifference difference;
+    int64_t value;
+    while(isspace((unsigned char)*source))++source;
+    if(*source=='#')++source;
+    while(isspace((unsigned char)*source))++source;
+    memset(result,0,sizeof(*result));
+    if(minias_evaluate_absolute_operand(as,source,&value)) {
+        result->kind=A64_OFFSET_CONSTANT;
+        result->constant=value;
+        return true;
+    }
+    if(!a64_parse_deferred_difference(as,source,&difference))return false;
+    if(!minias_bind_symbol_difference_ref(as,&difference,&result->difference))
+        return false;
+    result->kind=A64_OFFSET_DIFFERENCE;
+    return true;
+}
+
+static bool a64_resolve_address_offset(MiniAs *as,const A64Memory *memory,
+                                       int64_t *value) {
+    if(memory->offset.kind==A64_OFFSET_CONSTANT) {
+        *value=memory->offset.constant;
+        return true;
+    }
+    if(memory->offset.kind==A64_OFFSET_DIFFERENCE)
+        return minias_resolve_symbol_difference_ref(
+                   as,&memory->offset.difference,value);
+    return false;
+}
+
+static bool a64_attach_memory(MiniAs *as,MiniAsMCInst *inst,unsigned slot,
+                              const A64Memory *parsed) {
+    A64Memory *owned=malloc(sizeof(*owned));
+    if(!owned) {
+        minias_set_error(as,"out-of-memory:aarch64-memory-operand");
+        return false;
+    }
+    *owned=*parsed;
+    inst->operands[slot].kind=MINIAS_MC_MEMORY;
+    inst->operands[slot].memory=owned;
+    inst->dispose_memory=free;
+    return true;
+}
+
+static bool a64_attach_difference(MiniAs *as,MiniAsMCInst *inst,
+                                  unsigned slot,
+                                  const MiniAsSymbolDifference *difference) {
+    MiniAsSymbolDifferenceRef *owned=malloc(sizeof(*owned));
+    if(!owned) {
+        minias_set_error(as,"out-of-memory:aarch64-difference-operand");
+        return false;
+    }
+    if(!minias_bind_symbol_difference_ref(as,difference,owned)) {
+        free(owned);return false;
+    }
+    inst->operands[slot].kind=MINIAS_MC_BOUND_SYMBOL_DIFFERENCE;
+    inst->operands[slot].bound_difference=owned;
+    return true;
+}
+
+static bool a64_resolve_immediate(MiniAs *as,const MiniAsMCOperand *operand,
+                                  int64_t *value) {
+    if(operand->kind==MINIAS_MC_IMMEDIATE) {
+        *value=(int64_t)operand->immediate;
+        return true;
+    }
+    if(operand->kind==MINIAS_MC_BOUND_SYMBOL_DIFFERENCE)
+        return minias_resolve_symbol_difference_ref(as,
+                   operand->bound_difference,value);
+    return false;
+}
+
+static const A64Memory *a64_memory_at(const MiniAsMCInst *inst,unsigned slot) {
+    return slot<inst->count && inst->operands[slot].kind==MINIAS_MC_MEMORY?
+           (const A64Memory *)inst->operands[slot].memory:NULL;
+}
+
 /* The base and bracket grammar of [Xn, offset] is common to literal,
  * symbolic LO12 and ordinary numeric memory operands.  Keep it target-local
  * and parse the offset's *kind* only in the consuming instruction family;
@@ -656,12 +772,38 @@ static bool a64_memory_components(const A64AliasState *aliases,const char *text,
     return true;
 }
 
-static bool parse_a64_mem(const A64AliasState *aliases,const char *text, unsigned *base, int64_t *offset,
-                          unsigned *mode) {
+/* Bracket and post-index spelling is decoded once, before the consumer
+ * selects an ISA transfer form. An ABS .set is frozen at this lexical site;
+ * a forward same-section difference instead survives until final layout. */
+static bool a64_parse_memory(MiniAs *as,const A64AliasState *aliases,
+                             const char *bracket,const char *post,
+                             A64Memory *memory) {
     char displacement[96];
-    if(!a64_memory_components(aliases,text,base,displacement,mode))return false;
-    *offset=0;
-    return !*displacement || parse_signed_number(displacement,offset);
+    unsigned pre_mode;
+    unsigned postreg;
+    bool wide,sp;
+    memset(memory,0,sizeof(*memory));
+    if(!a64_memory_components(aliases,bracket,&memory->base,
+                              displacement,&pre_mode))return false;
+    memory->mode=pre_mode?A64_ADDRESS_PRE_INDEX:A64_ADDRESS_OFFSET;
+    if(post!=NULL) {
+        if(pre_mode || *displacement)return false;
+        memory->mode=A64_ADDRESS_POST_INDEX;
+        if(parse_a64_reg(aliases,post,&postreg,&wide,&sp) && wide && !sp) {
+            memory->post_index_register=true;
+            memory->post_register=postreg;
+            return true;
+        }
+        return a64_parse_address_offset(as,post,&memory->offset);
+    }
+    return !*displacement ||
+           a64_parse_address_offset(as,displacement,&memory->offset);
+}
+
+static bool a64_is_plain_base(const A64Memory *memory) {
+    return memory->mode==A64_ADDRESS_OFFSET &&
+           memory->offset.kind==A64_OFFSET_CONSTANT &&
+           memory->offset.constant==0;
 }
 
 /* Atomic 128-bit CASP{A,L,AL} GNU operand sequence has 4 GPRs
@@ -669,12 +811,11 @@ static bool parse_a64_mem(const A64AliasState *aliases,const char *text, unsigne
  * register of each consecutive even pair; validate both members here.
  * Reuse the EXISTING four-operand A64 tokenizer after isolating [Rn].
  */
-static bool a64_casp_fields(const A64AliasState *aliases,const char *args,unsigned *rs,unsigned *rt,
-                             unsigned *rn,bool *wide) {
+static bool a64_casp_fields(MiniAs *as,const A64AliasState *aliases,const char *args,unsigned *rs,unsigned *rt,
+                             A64Memory *memory,bool *wide) {
     char buffer[384],tokens[4][384],*last;
     unsigned n,r1,r3;
     bool w0,w1,w2,w3,sp;
-    int64_t offset;unsigned mode;
     size_t len=strlen(args);
     if(len>=sizeof(buffer))return false;
     memcpy(buffer,args,len+1U);
@@ -690,8 +831,8 @@ static bool a64_casp_fields(const A64AliasState *aliases,const char *args,unsign
        (*rs&1U) || (*rt&1U) ||
        *rs>=30U || *rt>=30U ||
        r1!=*rs+1U || r3!=*rt+1U ||
-       !parse_a64_mem(aliases,last,rn,&offset,&mode) ||
-       offset!=0 || mode!=0U)return false;
+       !a64_parse_memory(as,aliases,last,NULL,memory) ||
+       !a64_is_plain_base(memory))return false;
     *wide=w0;return true;
 }
 
@@ -782,6 +923,20 @@ static bool a64_indexed_memory(const A64AliasState *aliases,const char *text,uns
     if(*mode && !parse_signed_number(mode,&amount))return false;
     if(amount!=0 && amount!=(int64_t)amount_shift)return false;
     *scaled=amount!=0;
+    return true;
+}
+
+static bool a64_parse_indexed_address(const A64AliasState *aliases,
+                                      const char *text,unsigned access_bytes,
+                                      A64Memory *memory) {
+    unsigned shift=access_bytes==1U?0U:access_bytes==2U?1U:
+                   access_bytes==4U?2U:3U;
+    memset(memory,0,sizeof(*memory));
+    if(!a64_indexed_memory(aliases,text,&memory->base,&memory->index,
+                           &memory->extend_option,&memory->scaled_index,
+                           shift))return false;
+    memory->mode=A64_ADDRESS_REGISTER_INDEX;
+    memory->access_bytes=access_bytes;
     return true;
 }
 
@@ -877,6 +1032,7 @@ enum {
     A64_SCALAR_FORCE_UNSCALED=1U,
     A64_SCALAR_UNPRIVILEGED=2U
 };
+enum { A64_PAIR_NONTEMPORAL=1U };
 typedef struct A64ScalarMemoryForm {
     unsigned bytes; /* 0: GPR destination determines transfer width */
     unsigned allowed_registers;
@@ -955,9 +1111,10 @@ static const A64ScalarMemoryForm *a64_scalar_memory_form(const char *op,
  * loads/stores, rather than maintaining an independent six-mnemonic encoder
  * with a second set of opcode bases and load/store widths.  A positive
  * displacement takes unsigned-scaled imm12 where possible, otherwise signed
- * unscaled imm9.  The current deferred parser admits the six simple LDR/STR
- * W/X/B/H spellings; other table forms use their own fixed typed paths. */
+ * unscaled imm9.  The memory operand itself retains the symbolic difference;
+ * an explicitly unscaled/unprivileged instruction never enters this chooser. */
 static bool a64_encode_deferred_scalar_memory(const MiniAsMCInst *inst,
+                                               const A64Memory *memory,
                                                int64_t offset,
                                                bool *matched,
                                                uint32_t *word) {
@@ -975,7 +1132,8 @@ static bool a64_encode_deferred_scalar_memory(const MiniAsMCInst *inst,
                          sizeof(a64_scalar_memory_forms[0]))return false;
     form=&a64_scalar_memory_forms[inst->target_form-1U];
     original=wide?form->scaled_x:form->scaled_w;
-    if(inst->encoding!=original)return false;
+    if(inst->encoding!=original || memory->mode!=A64_ADDRESS_OFFSET)
+        return false;
     unit=form->bytes?form->bytes:(wide?8U:4U);
     *matched=true;
     if(offset>=0 && offset%(int64_t)unit==0 &&
@@ -991,12 +1149,13 @@ static bool a64_encode_deferred_scalar_memory(const MiniAsMCInst *inst,
     return false;
 }
 
-static bool a64_parse_scalar_memory(const A64AliasState *aliases,MiniAsMCInst *inst,const char *op,
+static bool a64_parse_scalar_memory(MiniAs *as,const A64AliasState *aliases,MiniAsMCInst *inst,const char *op,
                                    char t[4][384],unsigned n) {
-    unsigned policy,rd,base,mode,regbase,index,option,unitshift,unit;
-    bool wide,sp,scaled;
-    int64_t offset;
+    unsigned policy,rd,unit;
+    bool wide,sp;
+    int64_t offset=0;
     uint32_t base_opcode;
+    A64Memory memory;
     const A64ScalarMemoryForm *form=a64_scalar_memory_form(op,&policy);
     if(!form || (n!=2U && n!=3U) ||
        (policy!=A64_SCALAR_DIRECT && n!=2U) ||
@@ -1007,55 +1166,52 @@ static bool a64_parse_scalar_memory(const A64AliasState *aliases,MiniAsMCInst *i
     /* A64 owns this descriptor index; Common only retains the opaque ID. */
     inst->target_form=(uint32_t)(form-a64_scalar_memory_forms)+1U;
     unit=form->bytes?form->bytes:(wide?8U:4U);
-    unitshift=unit==1U?0U:unit==2U?1U:unit==4U?2U:3U;
     if(n==2U && policy==A64_SCALAR_DIRECT &&
-       a64_indexed_memory(aliases,t[1],&regbase,&index,&option,&scaled,unitshift)) {
-        inst->opcode=A64_MC_LDST_INDEX;inst->count=3U;
-        inst->encoding=(base_opcode-UINT32_C(0x00dff800)) |
-                        (option<<13U) | (scaled?UINT32_C(0x1000):0U);
+       a64_parse_indexed_address(aliases,t[1],unit,&memory)) {
+        inst->opcode=A64_MC_LDST_INDEX;inst->count=2U;
+        inst->encoding=base_opcode;
         put_reg(&inst->operands[0],rd,wide);
-        put_reg(&inst->operands[1],regbase,true);
-        put_reg(&inst->operands[2],index,option==3U || option==7U);
-        return true;
+        return a64_attach_memory(as,inst,1U,&memory);
     }
-    if(!parse_a64_mem(aliases,t[1],&base,&offset,&mode))return false;
+    if(!a64_parse_memory(as,aliases,t[1],n==3U?t[2]:NULL,
+                         &memory))return false;
+    memory.access_bytes=unit;
+    if(memory.post_index_register)return false;
+    if(memory.offset.kind==A64_OFFSET_CONSTANT)
+        offset=memory.offset.constant;
     if(policy==A64_SCALAR_UNPRIVILEGED) {
-        if(mode!=0U || offset<-256 || offset>255)return false;
-        inst->opcode=A64_MC_LDST_UNPRIV;inst->count=3U;
-        inst->encoding=base_opcode-UINT32_C(0x00fff800);
+        if(memory.mode!=A64_ADDRESS_OFFSET ||
+           (memory.offset.kind==A64_OFFSET_CONSTANT &&
+            (offset<-256 || offset>255)))return false;
+        inst->opcode=A64_MC_LDST_UNPRIV;inst->count=2U;
+        inst->encoding=base_opcode;
     }else {
-        if(n==3U) {
-            if(mode!=0U || offset!=0 ||
-               !parse_signed_number(t[2],&offset))return false;
-            mode=2U;
-        }
-        if(policy==A64_SCALAR_FORCE_UNSCALED || mode!=0U ||
-           offset<0 || offset%(int64_t)unit!=0) {
-            if(offset<-256 || offset>255)return false;
-            inst->opcode=A64_MC_LDST_UNSCALED;inst->count=3U;
-            inst->encoding=(base_opcode-UINT32_C(0x01000000)) |
-                            (mode==1U?UINT32_C(0xc00):
-                             mode==2U?UINT32_C(0x400):0U);
-        }else {
-            if(offset/(int64_t)unit>4095)return false;
-            inst->opcode=A64_MC_LDST_SCALED;
-            inst->count=3U;
+        if(policy==A64_SCALAR_FORCE_UNSCALED ||
+           memory.mode!=A64_ADDRESS_OFFSET ||
+           (memory.offset.kind==A64_OFFSET_CONSTANT &&
+            (offset<0 || offset%(int64_t)unit!=0))) {
+            if(memory.offset.kind==A64_OFFSET_CONSTANT &&
+               (offset<-256 || offset>255))return false;
+            inst->opcode=A64_MC_LDST_UNSCALED;inst->count=2U;
             inst->encoding=base_opcode;
-            offset/=(int64_t)unit;
+        }else {
+            if(memory.offset.kind==A64_OFFSET_CONSTANT &&
+               offset/(int64_t)unit>4095)return false;
+            inst->opcode=A64_MC_LDST_SCALED;
+            inst->count=2U;
+            inst->encoding=base_opcode;
         }
     }
     put_reg(&inst->operands[0],rd,wide);
-    put_reg(&inst->operands[1],base,true);
-    put_immediate(&inst->operands[2],offset);
-    return true;
+    return a64_attach_memory(as,inst,1U,&memory);
 }
 
 /* Parsed target-owned instruction family. Complete AArch64 still requires
  * ADRP/GOT, conditional branches, shifts, and relocation fixup bitfields. */
-static bool parse_integer_family(const A64AliasState *aliases,MiniAsMCInst *inst,
+static bool parse_integer_family(MiniAs *as,const A64AliasState *aliases,MiniAsMCInst *inst,
                                  const char *op, const char *args) {
     char t[4][384];
-    unsigned n = 0U, rd, rn, rm, base, mode;
+    unsigned n = 0U, rd, rn, rm;
     bool wd, wn, wm, spd, spn, spm;
     int64_t imm;
     unsigned kind = 0U;
@@ -1201,65 +1357,53 @@ static bool parse_integer_family(const A64AliasState *aliases,MiniAsMCInst *inst
        (n==2U || n==3U)) {
         uint32_t arrangement;
         unsigned vector_count;
+        A64Memory memory;
         static const uint32_t offsets[]={0U,UINT32_C(0x7000),
              UINT32_C(0xa000),UINT32_C(0x6000),UINT32_C(0x2000)};
         if(!a64_structure_vlist(aliases,t[0],&rd,&arrangement,&vector_count) ||
-           !parse_a64_mem(aliases,t[1],&base,&imm,&mode) ||
-           mode!=0U || imm!=0)return false;
-        inst->opcode=A64_MC_SIMD_SINGLE;inst->count=n;
+           !a64_parse_memory(as,aliases,t[1],n==3U?t[2]:NULL,&memory) ||
+           (n==2U?!a64_is_plain_base(&memory):
+             memory.mode!=A64_ADDRESS_POST_INDEX))return false;
+        memory.access_bytes=vector_count*
+            ((arrangement&UINT32_C(0x40000000))?16U:8U);
+        if(n==3U && !memory.post_index_register &&
+           (memory.offset.kind!=A64_OFFSET_CONSTANT ||
+            memory.offset.constant!=(int64_t)memory.access_bytes))return false;
+        inst->opcode=A64_MC_SIMD_SINGLE;inst->count=2U;
         inst->encoding=arrangement|
                        offsets[vector_count]|
                        (!strcmp(op,"ld1")?UINT32_C(0x0c400000):
                                           UINT32_C(0x0c000000));
-        put_reg(&inst->operands[0],rd,true);
-        put_reg(&inst->operands[1],base,true);
-        if(n==3U) {
-            unsigned offset_reg=31U;
-            int64_t increment;
-            bool wide=false,sp=false;
-            /* GNU Q=1 writes back 16 bytes, Q=0 writes back eight.
-             * Keep immediate post-increment and register post-index
-             * inside this existing typed SIMD MCInst; no duplicated
-             * machine encoder or memory-parser guesswork. */
-            if(parse_signed_number(t[2],&increment)) {
-                if(increment!=
-                   (int64_t)(vector_count*
-                      ((arrangement&UINT32_C(0x40000000))?16U:8U)))
-                    return false;
-                put_immediate(&inst->operands[2],31);
-            } else {
-                if(!parse_a64_reg(aliases,t[2],&offset_reg,&wide,&sp) ||
-                   !wide || sp)return false;
-                put_reg(&inst->operands[2],offset_reg,true);
-            }
-            inst->encoding|=UINT32_C(0x00800000);
-        }
-        return true;
+        put_vector(&inst->operands[0],rd);
+        return a64_attach_memory(as,inst,1U,&memory);
     }
     /* Common GNU Linux bit/byte-swap and acquire/release families.
      * All operands are typed once; no instruction-name checks in encode. */
     if ((!strcmp(op,"ldxr") || !strcmp(op,"ldaxr") ||
          !strcmp(op,"ldxrb") || !strcmp(op,"ldaxrb") ||
          !strcmp(op,"ldxrh") || !strcmp(op,"ldaxrh")) && n==2U) {
+        A64Memory memory;
         if(!parse_a64_reg(aliases,t[0],&rd,&wd,&spd) || spd ||
-           !parse_a64_mem(aliases,t[1],&base,&imm,&mode) ||
-           imm!=0 || mode!=0U)return false;
+           !a64_parse_memory(as,aliases,t[1],NULL,&memory) ||
+           !a64_is_plain_base(&memory))return false;
         if((strchr(op,'b') || strchr(op,'h')) && wd)return false;
         inst->opcode=A64_MC_EXCLUSIVE;inst->count=2U;
         inst->encoding=(strncmp(op,"ldax",4U)==0?1U:0U)|
                         (op[strlen(op)-1U]=='b'?0x10U:
                          op[strlen(op)-1U]=='h'?0x20U:0U);
         put_reg(&inst->operands[0],rd,wd);
-        put_reg(&inst->operands[1],base,true);
-        return true;
+        memory.access_bytes=op[strlen(op)-1U]=='b'?1U:
+                            op[strlen(op)-1U]=='h'?2U:wd?8U:4U;
+        return a64_attach_memory(as,inst,1U,&memory);
     }
     if ((!strcmp(op,"stxr") || !strcmp(op,"stlxr") ||
          !strcmp(op,"stxrb") || !strcmp(op,"stlxrb") ||
          !strcmp(op,"stxrh") || !strcmp(op,"stlxrh")) && n==3U) {
+        A64Memory memory;
         if(!parse_a64_reg(aliases,t[0],&rd,&wd,&spd) || wd || spd ||
            !parse_a64_reg(aliases,t[1],&rn,&wn,&spn) || spn ||
-           !parse_a64_mem(aliases,t[2],&base,&imm,&mode) ||
-           imm!=0 || mode!=0U)return false;
+           !a64_parse_memory(as,aliases,t[2],NULL,&memory) ||
+           !a64_is_plain_base(&memory))return false;
         if((op[strlen(op)-1U]=='b' || op[strlen(op)-1U]=='h') && wn)
             return false;
         inst->opcode=A64_MC_EXCLUSIVE;inst->count=3U;
@@ -1268,13 +1412,14 @@ static bool parse_integer_family(const A64AliasState *aliases,MiniAsMCInst *inst
                          op[strlen(op)-1U]=='h'?0x20U:0U);
         put_reg(&inst->operands[0],rd,false);
         put_reg(&inst->operands[1],rn,wn);
-        put_reg(&inst->operands[2],base,true);
-        return true;
+        memory.access_bytes=op[strlen(op)-1U]=='b'?1U:
+                            op[strlen(op)-1U]=='h'?2U:wn?8U:4U;
+        return a64_attach_memory(as,inst,2U,&memory);
     }
     if(!strcmp(op,"prfm") && n==2U) {
-        unsigned hint=0U,unit=0U,index,option;
-        bool scaled;
+        unsigned hint=0U,unit=0U;
         unsigned j;
+        A64Memory memory;
         /* GNU accepts uppercase/lowercase PRFM op names, but the target
          * policy remains strictly enumerated, not fuzzy matching. */
         for(j=0U;t[0][j];++j)t[0][j]=(char)tolower((unsigned char)t[0][j]);
@@ -1297,26 +1442,25 @@ static bool parse_integer_family(const A64AliasState *aliases,MiniAsMCInst *inst
             if(!strcmp(suffix,"strm"))++hint;
             else if(strcmp(suffix,"keep"))return false;
         }
-        if(a64_indexed_memory(aliases,t[1],&base,&index,&option,&scaled,3U)) {
+        if(a64_parse_indexed_address(aliases,t[1],8U,&memory)) {
             /* 0xF8A0_0800 shares the indexed LDST encoder's option and
              * scaled bit fields; hint Rt is an immediate 0..31 rather
              * than a GPR. */
-            inst->opcode=A64_MC_PRFM_REG;inst->count=3U;
-            inst->encoding=UINT32_C(0xf8a00800)|(option<<13U)|
-                          (scaled?UINT32_C(0x1000):0U);
+            inst->opcode=A64_MC_PRFM_REG;inst->count=2U;
+            inst->encoding=UINT32_C(0xf9800000);
             put_immediate(&inst->operands[0],(int64_t)hint);
-            put_reg(&inst->operands[1],base,true);
-            put_reg(&inst->operands[2],index,option==3U || option==7U);
-            return true;
+            return a64_attach_memory(as,inst,1U,&memory);
         }
-        if(!parse_a64_mem(aliases,t[1],&base,&imm,&mode) ||
-           mode!=0U || imm<0 || imm%8!=0 || imm/8>4095)
+        if(!a64_parse_memory(as,aliases,t[1],NULL,&memory) ||
+           memory.mode!=A64_ADDRESS_OFFSET ||
+           (memory.offset.kind==A64_OFFSET_CONSTANT &&
+            (memory.offset.constant<0 || memory.offset.constant%8!=0 ||
+             memory.offset.constant/8>4095)))
             return false;
-        inst->opcode=A64_MC_PRFM;inst->count=3U;
+        memory.access_bytes=8U;
+        inst->opcode=A64_MC_PRFM;inst->count=2U;
         put_immediate(&inst->operands[0],(int64_t)hint);
-        put_reg(&inst->operands[1],base,true);
-        put_immediate(&inst->operands[2],imm/8);
-        return true;
+        return a64_attach_memory(as,inst,1U,&memory);
     }
     /* Short sign/zero extensions lower to the existing typed SBFM/UBFM
      * encoder; GNU's UXT{B,H} always writes Wd (zeroing upper X bits). */
@@ -1370,19 +1514,20 @@ static bool parse_integer_family(const A64AliasState *aliases,MiniAsMCInst *inst
     if((!strcmp(op,"ldar") || !strcmp(op,"stlr") ||
         !strcmp(op,"ldarb") || !strcmp(op,"stlrb") ||
         !strcmp(op,"ldarh") || !strcmp(op,"stlrh")) && n==2U) {
+        A64Memory memory;
         bool load=op[0]=='l';
         bool byte=op[4]=='b';
         bool half=op[4]=='h';
         if(!parse_a64_reg(aliases,t[0],&rd,&wd,&spd) || spd ||
            ((byte || half) && wd) ||
-           !parse_a64_mem(aliases,t[1],&base,&imm,&mode) ||
-           imm!=0 || mode!=0U)return false;
+           !a64_parse_memory(as,aliases,t[1],NULL,&memory) ||
+           !a64_is_plain_base(&memory))return false;
         inst->opcode=A64_MC_ACQUIRE_RELEASE;inst->count=2U;
         inst->encoding=byte?(load?2U:4U):
                        half?(load?3U:5U):(load?1U:0U);
         put_reg(&inst->operands[0],rd,wd);
-        put_reg(&inst->operands[1],base,true);
-        return true;
+        memory.access_bytes=byte?1U:half?2U:wd?8U:4U;
+        return a64_attach_memory(as,inst,1U,&memory);
     }
     if(!strcmp(op,"tst") && n==2U) {
         uint64_t bits;uint32_t fields;
@@ -1453,17 +1598,20 @@ static bool parse_integer_family(const A64AliasState *aliases,MiniAsMCInst *inst
             if(!strcmp(op,"bics"))inst->encoding=UINT32_C(0x60000000);
             else if(!strcmp(op,"orn"))inst->encoding=UINT32_C(0x20000000);
             else if(!strcmp(op,"eon"))inst->encoding=UINT32_C(0x40000000);
-        } else if ((strcmp(op, "add") == 0 || strcmp(op, "sub") == 0 ||
-                    strcmp(op, "adds") == 0 || strcmp(op, "subs") == 0) &&
-                   parse_signed_number(t[2], &imm) &&
-                   imm >= 0 && (imm<=4095 ||
-                   (imm%4096==0 && imm/4096<=4095))) {
-            if ((rd == 31U && !spd) || (rn == 31U && !spn))
-                return false;
+        } else if (strcmp(op, "add") == 0 || strcmp(op, "sub") == 0 ||
+                   strcmp(op, "adds") == 0 || strcmp(op, "subs") == 0) {
+            MiniAsSymbolDifference difference;
+            bool numeric=parse_signed_number(t[2],&imm);
+            if((rd==31U&&!spd) || (rn==31U&&!spn) ||
+               (numeric?(imm<0 || (imm>4095 &&
+                  (imm%4096!=0 || imm/4096>4095))):
+                !a64_parse_deferred_difference(as,t[2][0]=='#'?t[2]+1U:t[2],
+                                               &difference)))return false;
             kind = strcmp(op, "add") == 0 ? A64_MC_ADD_IMM :
                    strcmp(op, "sub") == 0 ? A64_MC_SUB_IMM :
                    strcmp(op, "adds") == 0 ? A64_MC_ADDS_IMM : A64_MC_SUBS_IMM;
-            put_immediate(&inst->operands[2], imm);
+            if(numeric)put_immediate(&inst->operands[2],imm);
+            else if(!a64_attach_difference(as,inst,2U,&difference))return false;
         } else if((!strcmp(op,"and") || !strcmp(op,"orr") ||
                    !strcmp(op,"eor") || !strcmp(op,"ands") ||
                    !strcmp(op,"bic")) &&
@@ -1498,21 +1646,28 @@ static bool parse_integer_family(const A64AliasState *aliases,MiniAsMCInst *inst
             if (wn != wm || spn || spm) return false;
             kind = strcmp(op,"cmp")==0 ? A64_MC_CMP_REG : A64_MC_CMN_REG;
             put_reg(&inst->operands[1], rm, wm);
-        } else if (parse_signed_number(t[1], &imm) &&
-                   imm != INT64_MIN &&
-                   (imm >= 0 || !strcmp(op,"cmp")) &&
-                   (imm < 0 ? -imm : imm) <= INT64_C(4095)*4096 &&
-                   ((imm < 0 ? -imm : imm)<=4095 ||
-                    ((imm < 0 ? -imm : imm)%4096==0))) {
+        } else {
+            MiniAsSymbolDifference difference;
+            bool numeric=parse_signed_number(t[1],&imm);
+            bool deferred=!numeric &&
+                a64_parse_deferred_difference(as,t[1][0]=='#'?t[1]+1U:t[1],
+                                               &difference);
+            if((!numeric && !deferred) ||
+               (numeric && (imm==INT64_MIN ||
+                 (imm<0 && strcmp(op,"cmp")) ||
+                 (imm<0?-imm:imm)>INT64_C(4095)*4096 ||
+                 ((imm<0?-imm:imm)>4095 &&
+                  (imm<0?-imm:imm)%4096!=0))))return false;
             /* GNU accepts the arithmetic negative CMP pseudooperand
              * in Linux AES macros and encodes it using CMN #positive.
              * Keep prior strict rejection of explicitly negative CMN
              * operands: the existing native contract tests that gate. */
-            bool negate=imm<0;
+            bool negate=numeric && imm<0;
             kind=negate?A64_MC_CMN_IMM:
                  !strcmp(op,"cmp")?A64_MC_CMP_IMM:A64_MC_CMN_IMM;
-            put_immediate(&inst->operands[1],negate?-imm:imm);
-        } else return false;
+            if(numeric)put_immediate(&inst->operands[1],negate?-imm:imm);
+            else if(!a64_attach_difference(as,inst,1U,&difference))return false;
+        }
         inst->opcode = kind;
         inst->count = 2U;
         put_reg(&inst->operands[0], rn, wn);
@@ -1523,10 +1678,11 @@ static bool parse_integer_family(const A64AliasState *aliases,MiniAsMCInst *inst
      * unsigned scaled, pre/post-index, explicitly unscaled and unprivileged
      * encodings. GNU distinguishes the addressing policy, not the core
      * register/width grammar; this keeps all forms in sync. */
-    if(a64_parse_scalar_memory(aliases,inst,op,t,n))return true;
+    if(a64_parse_scalar_memory(as,aliases,inst,op,t,n))return true;
     if ((!strcmp(op, "stp") || !strcmp(op, "ldp") ||
          !strcmp(op,"ldpsw") || !strcmp(op,"stnp") ||
          !strcmp(op,"ldnp")) && (n == 3U || n == 4U)) {
+        A64Memory memory;
         bool signed_pair=!strcmp(op,"ldpsw");
         bool nontemporal=!strcmp(op,"stnp") || !strcmp(op,"ldnp");
         bool qpair=parse_a64_q_reg(aliases,t[0],&rd);
@@ -1536,28 +1692,27 @@ static bool parse_integer_family(const A64AliasState *aliases,MiniAsMCInst *inst
         } else if(!parse_a64_reg(aliases,t[0], &rd, &wd, &spd) || spd ||
                   !parse_a64_reg(aliases,t[1], &rn, &wn, &spn) ||
                   spn || wd!=wn)return false;
-        if(!parse_a64_mem(aliases,t[2], &base, &imm, &mode))return false;
+        if(!a64_parse_memory(as,aliases,t[2],n==4U?t[3]:NULL,
+                             &memory) || memory.post_index_register)
+            return false;
         if(signed_pair && !wd)return false;
         /* LDNP/STNP have ONLY signed scaled imm7 offset addressing;
          * pre/post writeback encodings belong to LDP/STP. */
-        if(nontemporal && (n!=3U || mode!=0U))return false;
-        if (n == 4U) {
-            if (mode != 0U || imm != 0 ||
-                !parse_signed_number(t[3], &imm)) return false;
-            mode = 2U;
-        }
-        if (imm % (qpair?16:(signed_pair?4:(wd?8:4))) != 0 ||
-            imm < -(int64_t)(qpair?1024:(signed_pair?256:(wd?512:256))) ||
-            imm > (int64_t)(qpair?1008:(signed_pair?252:(wd?504:252))))
+        if(nontemporal && memory.mode!=A64_ADDRESS_OFFSET)return false;
+        memory.access_bytes=qpair?16U:(signed_pair?4U:(wd?8U:4U));
+        imm=memory.offset.constant;
+        if(memory.offset.kind==A64_OFFSET_CONSTANT &&
+           (imm % (int64_t)memory.access_bytes!=0 ||
+            imm < -(int64_t)memory.access_bytes*64 ||
+            imm > (int64_t)memory.access_bytes*63))
             return false;
         inst->opcode = signed_pair?A64_MC_LDPSW:
                        (!strcmp(op, "stp") || !strcmp(op,"stnp")) ?
                           A64_MC_STP : A64_MC_LDP;
-        /* 3 is Target-only non-temporal pair variant; existing typed
-         * pair MCInst and Common ELF/section machinery are reused. */
-        inst->encoding = (nontemporal?3U:mode) |
-                         (qpair?UINT32_C(0x100):0U);
-        inst->count = 4U;
+        /* Non-temporal is an instruction form, NOT a writeback mode or
+         * encoded displacement. The memory operand retains addressing. */
+        inst->target_form=nontemporal?A64_PAIR_NONTEMPORAL:0U;
+        inst->count = 3U;
         if(qpair) {
             put_q(&inst->operands[0],rd);
             put_q(&inst->operands[1],rn);
@@ -1565,10 +1720,7 @@ static bool parse_integer_family(const A64AliasState *aliases,MiniAsMCInst *inst
             put_reg(&inst->operands[0],rd,wd);
             put_reg(&inst->operands[1],rn,wn);
         }
-        put_reg(&inst->operands[2], base, true);
-        put_immediate(&inst->operands[3],
-                      imm / (qpair?16:(signed_pair?4:(wd?8:4))));
-        return true;
+        return a64_attach_memory(as,inst,2U,&memory);
     }
     return false;
 }
@@ -1672,22 +1824,29 @@ static bool a64_parse_relocated(MiniAs *as,const A64AliasState *aliases,
         char displacement[96],*b=displacement;
         unsigned mode;
         bool got_lo12;
+        A64Memory memory;
         if(!a64_memory_components(aliases,tok[1],&rn,displacement,&mode) ||
            mode!=0U || !*displacement)
             return false;
+        memset(&memory,0,sizeof(memory));
+        memory.base=rn;
+        memory.mode=A64_ADDRESS_OFFSET;
+        memory.access_bytes=memory_form->bytes?memory_form->bytes:
+                            wd?8U:4U;
         if(*b=='#')++b;
         got_lo12=strncmp(b,":got_lo12:",10U)==0;
         if(got_lo12 && (strcmp(op,"ldr")!=0 || !wd))return false;
         if(!(got_lo12?minias_parse_symbol_addend(b+10U,&expr):
                         a64_lo12_expr(b,&expr)) ||
-           !a64_attach_expr(as,inst,2U,&expr))return false;
+           !minias_bind_symbol_ref(as,&expr,&memory.offset.symbol))return false;
+        memory.offset.kind=got_lo12?A64_OFFSET_GOT_LO12:A64_OFFSET_LO12;
         if(got_lo12)inst->opcode=A64_MC_LDST_GOT_LO12;
+        inst->count=2U;
+        put_reg(&inst->operands[0],rd,wd);
+        if(!a64_attach_memory(as,inst,1U,&memory))return false;
     }
     if(inst->opcode!=A64_MC_LDST_GOT_LO12)
         inst->opcode=A64_MC_LDST_LO12;
-    inst->count=3U;
-    put_reg(&inst->operands[0],rd,wd);
-    put_reg(&inst->operands[1],rn,true);
     inst->target_form=(uint32_t)(memory_form-a64_scalar_memory_forms)+1U;
     inst->encoding=wd?memory_form->scaled_x:memory_form->scaled_w;
     return true;
@@ -1952,12 +2111,12 @@ static bool a64_parse_lse(const A64AliasState *aliases,MiniAs *as,MiniAsMCInst *
         {"ldeor",5U,false},{"steor",5U,true}
     };
     char tok[4][384];
-    unsigned i,n,rs,rt=31U,rn,mode,group=0U;
+    unsigned i,n,rs,rt=31U,group=0U;
     unsigned subword=0U;
     bool wide,wr,sp;
-    int64_t off;
     const char *suffix=NULL;
     char modifiers[4];
+    A64Memory memory;
     for(i=0U;i<sizeof(ops)/sizeof(ops[0]);++i) {
         size_t plen=strlen(ops[i].name);
         if(strncmp(op,ops[i].name,plen)==0) {
@@ -1986,8 +2145,8 @@ static bool a64_parse_lse(const A64AliasState *aliases,MiniAs *as,MiniAsMCInst *
        (subword!=0U && wide) ||
        (!ops[group].store &&
         (!parse_a64_reg(aliases,tok[1],&rt,&wr,&sp) || sp || wr!=wide)) ||
-       !parse_a64_mem(aliases,tok[n-1U],&rn,&off,&mode) ||
-       off!=0 || mode!=0U)return false;
+       !a64_parse_memory(as,aliases,tok[n-1U],NULL,&memory) ||
+       !a64_is_plain_base(&memory))return false;
     inst->opcode=A64_MC_LSE;inst->count=3U;
     inst->encoding=ops[group].kind |
       (ops[group].store?0x10U:0U) |
@@ -1996,84 +2155,16 @@ static bool a64_parse_lse(const A64AliasState *aliases,MiniAs *as,MiniAsMCInst *
       (subword==1U?0x80U:subword==2U?0x100U:0U);
     put_reg(&inst->operands[0],rs,wide);
     put_reg(&inst->operands[1],rt,wide);
-    put_reg(&inst->operands[2],rn,true);
-    return true;
+    memory.access_bytes=subword==1U?1U:subword==2U?2U:wide?8U:4U;
+    return a64_attach_memory(as,inst,2U,&memory);
 }
 
-/* Shared AArch64 memory operands may contain ABS .set expressions:
- * pair STP/LDP, integer LDR/STR and SIMD LDR/STR all reuse the one
- * Common absolute expression evaluator. Fold numeric displacements at
- * instruction binding time; preserve the downstream ISA-owned signed/
- * unsigned scaled/unscaled modes and relocation forms unchanged. */
-static bool a64_fold_absolute_memory_address(MiniAs *as,MiniAsStmt *stmt) {
-    char *original=stmt->args,*open,*comma,*hash,*end,*out;
-    char expression[256],number[32];
-    size_t pre,n,tail;
-    int64_t value;
-    int written;
-    open=strchr(original,'[');
-    if(!open || !(end=strchr(open,']')))return true;
-    comma=strchr(open,',');
-    if(comma && comma<end) {
-        hash=comma+1U;
-        while(hash<end && isspace((unsigned char)*hash))++hash;
-        if(hash>=end || *hash!='#')return true;
-        ++hash;
-        n=(size_t)(end-hash);
-    }else {
-        /* Post-index source: LDP x29,x30,[sp],#.Llocal+.Lextra.
-         * Reuse the same numeric resolution rather than growing a new
-         * instruction decoder or accepting a guessed writeback offset. */
-        comma=strchr(end,',');
-        if(!comma)return true;
-        hash=comma+1U;
-        while(*hash && isspace((unsigned char)*hash))++hash;
-        if(*hash!='#')return true;
-        ++hash;
-        end=original+strlen(original);
-        n=(size_t)(end-hash);
-    }
-    if(n==0U || n>=sizeof(expression))return true;
-    memcpy(expression,hash,n);
-    expression[n]='\0';
-    if(!minias_evaluate_absolute_operand(as,minias_trim(expression),&value))
-        return true; /* Preserve fail-closed unresolved source. */
-    written=snprintf(number,sizeof(number),"%lld",(long long)value);
-    if(written<0 || (size_t)written>=sizeof(number))return false;
-    pre=(size_t)(hash-original);
-    tail=strlen(end);
-    if(pre>SIZE_MAX-(size_t)written-tail-1U)return false;
-    out=malloc(pre+(size_t)written+tail+1U);
-    if(!out){minias_set_error(as,"out-of-memory:a64-memory-operand");return false;}
-    memcpy(out,original,pre);
-    memcpy(out+pre,number,(size_t)written);
-    memcpy(out+pre+(size_t)written,end,tail+1U);
-    free(stmt->args);stmt->args=out;
-    return true;
-}
-
-/* A layout-dependent same-section difference must never be folded at parse
- * time. A later .space/.fill fixed point can move either anchor, even when
- * both labels already have an initial offset. Keep the two typed symbol
- * references in MCInst and resolve them at final emission instead.
- *
- * The numeric spelling is only a temporary input to the existing target
- * register/addressing parser. It is NOT the retained semantic operand. */
-typedef enum A64DeferredDifferenceUse {
-    A64_DEFERRED_NONE,
-    A64_DEFERRED_IMMEDIATE,
-    A64_DEFERRED_BRANCH_ADDEND
-} A64DeferredDifferenceUse;
-
-/* This is a layout-time annotation of the whole A64 instruction, not an
- * extra architectural machine operand.  In particular, hiding an expression
- * in operands[count-1] forced every parser/encoder to distinguish actual
- * instruction arity from its semantic payload.  Target-owned payloads keep
- * that distinction without teaching Common about AArch64's operand syntax. */
-typedef struct A64DeferredOperand {
-    MiniAsSymbolDifferenceRef symbols;
-    A64DeferredDifferenceUse use;
-} A64DeferredOperand;
+/* A64's branch relocation can combine a base SymbolRef with a second
+ * section-relative difference.  Only that composite uses target_payload;
+ * ordinary ALU and address differences live in their typed MC operands. */
+typedef struct A64BranchAdjustment {
+    MiniAsSymbolDifferenceRef difference;
+} A64BranchAdjustment;
 
 /* Preserve the symbol pair while freezing only the purely absolute suffix
  * at its lexical site. For example, '(end-start)+(2*4)' retains end/start
@@ -2111,102 +2202,62 @@ done:
     return ok;
 }
 
-static bool a64_replace_argument_range(MiniAs *as,MiniAsStmt *stmt,
-                                       const char *begin,const char *end,
-                                       const char *replacement) {
-    const char *original=stmt->args;
-    size_t prefix=(size_t)(begin-original),suffix=strlen(end);
-    size_t n=strlen(replacement);
-    char *out;
-    if(prefix>SIZE_MAX-suffix-1U || n>SIZE_MAX-prefix-suffix-1U)
-        return false;
-    out=malloc(prefix+n+suffix+1U);
-    if(!out){minias_set_error(as,"out-of-memory:aarch64-deferred-operand");return false;}
-    memcpy(out,original,prefix);
-    memcpy(out+prefix,replacement,n);
-    memcpy(out+prefix+n,end,suffix+1U);
-    free(stmt->args);stmt->args=out;
-    return true;
-}
-
-static bool a64_capture_deferred_difference(MiniAs *as,MiniAsStmt *stmt,
-                                            MiniAsSymbolDifference *difference,
-                                            A64DeferredDifferenceUse *use) {
-    const char *args=stmt->args,*op=stmt->op;
-    const char *begin=NULL,*end=NULL;
-    unsigned condition;
-    bool alu=!strcmp(op,"add") || !strcmp(op,"sub") ||
-             !strcmp(op,"adds") || !strcmp(op,"subs") ||
-             !strcmp(op,"cmp") || !strcmp(op,"cmn");
-    bool memory=!strcmp(op,"ldr") || !strcmp(op,"str") ||
-                !strcmp(op,"ldrb") || !strcmp(op,"strb") ||
-                !strcmp(op,"ldrh") || !strcmp(op,"strh") ||
-                !strcmp(op,"stp") || !strcmp(op,"ldp") ||
-                !strcmp(op,"ldpsw") || !strcmp(op,"stnp") ||
-                !strcmp(op,"ldnp");
-    bool branch=!strcmp(op,"b") || !strcmp(op,"bl") ||
-                !strcmp(op,"cbz") || !strcmp(op,"cbnz") ||
-                !strcmp(op,"tbz") || !strcmp(op,"tbnz") ||
-                a64_branch_condition(op,&condition);
-    *use=A64_DEFERRED_NONE;
-    if(alu) {
-        const char *hash=strchr(args,'#');
-        if(hash && strchr(hash,',')==NULL){begin=hash+1U;end=args+strlen(args);}
-    }else if(memory) {
-        const char *open=strchr(args,'['),*close=open?strchr(open,']'):NULL;
-        const char *hash=open?strchr(open,'#'):NULL;
-        if(hash && close && hash<close){begin=hash+1U;end=close;}
-        else if(close) {
-            hash=strchr(close,'#');
-            if(hash){begin=hash+1U;end=args+strlen(args);}
-        }
-    }
-    if(begin && end && begin<end) {
-        char expression[256];
-        size_t n=(size_t)(end-begin);
-        if(n<sizeof(expression)) {
-            memcpy(expression,begin,n);expression[n]='\0';
-            if(a64_parse_deferred_difference(as,minias_trim(expression),difference)) {
-                if(!a64_replace_argument_range(as,stmt,begin,end,"0"))return false;
-                *use=A64_DEFERRED_IMMEDIATE;
-                return true;
-            }
-        }
-    }
-    /* GNU branch 'b label+(end-begin)' retains the base relocation and the
-     * final section-relative addend independently. This also works for
-     * CBZ/TBZ and conditional branches with a register prefix. */
-    if(branch) {
-        const char *plus;
-        for(plus=strchr(args,'+');plus;plus=strchr(plus+1U,'+')) {
-            const char *open=plus+1U,*close=NULL;
+/* Parse a branch base symbol plus an optional parenthesized layout-dependent
+ * addend without ever rewriting the source.  The two name refs are retained
+ * independently: one names the branch target, the other is an absolute
+ * same-section difference to be added after MCLayout reaches its fixed point. */
+static bool a64_attach_branch_target(MiniAs *as,MiniAsMCInst *inst,
+                                     unsigned slot,const char *source) {
+    MiniAsSymbolExpr base;
+    MiniAsSymbolDifference difference;
+    const char *plus;
+    bool composite=false;
+    if(!minias_parse_symbol_addend(source,&base)) {
+        for(plus=strchr(source,'+');plus;plus=strchr(plus+1U,'+')) {
+            const char *open=plus+1U,*close=NULL,*tail;
+            char expression[256];
+            char *base_text;
+            size_t base_size,expr_size;
             unsigned depth=0U;
             while(isspace((unsigned char)*open))++open;
-            if(*open=='(') {
-                const char *cursor;
-                for(cursor=open;*cursor;++cursor) {
-                    if(*cursor=='(')++depth;
-                    else if(*cursor==')') {
-                        if(!depth)break;
-                        if(--depth==0U){close=cursor;break;}
-                    }
+            if(*open!='(')continue;
+            for(const char *cursor=open;*cursor;++cursor) {
+                if(*cursor=='(')++depth;
+                else if(*cursor==')') {
+                    if(!depth)break;
+                    if(--depth==0U){close=cursor;break;}
                 }
             }
-            if(close) {
-                char expression[256];
-                size_t n=(size_t)(close-(open+1U));
-                const char *tail=close+1U;
-                while(isspace((unsigned char)*tail))++tail;
-                if(*tail=='\0' && n<sizeof(expression)) {
-                    memcpy(expression,open+1U,n);expression[n]='\0';
-                    if(a64_parse_deferred_difference(as,minias_trim(expression),difference)) {
-                        if(!a64_replace_argument_range(as,stmt,plus,tail,""))return false;
-                        *use=A64_DEFERRED_BRANCH_ADDEND;
-                        return true;
-                    }
-                }
-            }
+            if(!close)continue;
+            tail=close+1U;
+            while(isspace((unsigned char)*tail))++tail;
+            expr_size=(size_t)(close-open-1U);
+            if(*tail || expr_size>=sizeof(expression))continue;
+            memcpy(expression,open+1U,expr_size);
+            expression[expr_size]='\0';
+            if(!a64_parse_deferred_difference(as,minias_trim(expression),
+                                              &difference))continue;
+            base_size=(size_t)(plus-source);
+            base_text=malloc(base_size+1U);
+            if(!base_text)return false;
+            memcpy(base_text,source,base_size);
+            base_text[base_size]='\0';
+            composite=minias_parse_symbol_addend(minias_trim(base_text),&base);
+            free(base_text);
+            if(composite)break;
         }
+        if(!composite)return false;
+    }
+    if((base.addend&3)!=0 || !a64_attach_expr(as,inst,slot,&base))return false;
+    if(composite) {
+        A64BranchAdjustment *adjustment=malloc(sizeof(*adjustment));
+        if(!adjustment)return false;
+        if(!minias_bind_symbol_difference_ref(as,&difference,
+                                               &adjustment->difference)) {
+            free(adjustment);return false;
+        }
+        inst->target_payload=adjustment;
+        inst->dispose_target_payload=free;
     }
     return true;
 }
@@ -2214,14 +2265,9 @@ static bool a64_capture_deferred_difference(MiniAs *as,MiniAsStmt *stmt,
 static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
     const A64TargetState *state=(const A64TargetState *)as->target_state;
     const A64AliasState *aliases=state?state->aliases:NULL;
-    MiniAsSymbolDifference deferred_difference;
-    A64DeferredDifferenceUse deferred_use=A64_DEFERRED_NONE;
     /* Alias state belongs to this lexical parse site. Typed register
      * recognizers bind the resolved number/bank into MCInst immediately;
      * later .unreq cannot change any previously parsed instruction. */
-    if(!a64_capture_deferred_difference(as,stmt,&deferred_difference,
-                                        &deferred_use))return false;
-    if(!a64_fold_absolute_memory_address(as,stmt))return false;
     MiniAsMCInst *inst = minias_mcinst_alloc(4U);
     unsigned reg, imm;
     bool reg64;
@@ -2239,9 +2285,9 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         a64_register_prefix(aliases,args)=='q')) {
         /* S/D/Q FP/SIMD unsigned-scaled memory goes through the already
          * checked typed A64 LDST path; no new emitter or Common ISA. */
-        char tok[4][384];unsigned n,rd,rn,mode,width=0U;
+        char tok[4][384];unsigned n,rd,width=0U;
         bool fp64=false;
-        int64_t off;
+        A64Memory memory;
         uint32_t base;
         if(!split_operands(args,tok,&n) || n!=2U) {
             minias_set_error(as,"bad-aarch64-fp-memory:%s:line=%zu",
@@ -2249,9 +2295,13 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         }
         if(a64_scalar_fp_reg(aliases,tok[0],&rd,&fp64))width=fp64?8U:4U;
         else if(parse_a64_q_reg(aliases,tok[0],&rd))width=16U;
-        if(width==0U || !parse_a64_mem(aliases,tok[1],&rn,&off,&mode) ||
-           mode!=0U || off<0 || off%(int64_t)width!=0 ||
-           off/(int64_t)width>4095) {
+        if(width==0U ||
+           !a64_parse_memory(as,aliases,tok[1],NULL,&memory) ||
+           memory.mode!=A64_ADDRESS_OFFSET ||
+           (memory.offset.kind==A64_OFFSET_CONSTANT &&
+            (memory.offset.constant<0 ||
+             memory.offset.constant%(int64_t)width!=0 ||
+             memory.offset.constant/(int64_t)width>4095))) {
             minias_set_error(as,"bad-aarch64-fp-memory:%s:line=%zu",
                              args,stmt->line);minias_mcinst_destroy(inst);return false;
         }
@@ -2259,12 +2309,14 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
              width==8U?UINT32_C(0xfd000000):
                          UINT32_C(0x3d800000);
         if(!strcmp(op,"ldr"))base|=UINT32_C(0x00400000);
-        inst->opcode=A64_MC_LDST_SCALED;inst->count=3U;
+        memory.access_bytes=width;
+        inst->opcode=A64_MC_LDST_SCALED;inst->count=2U;
         inst->encoding=base;
         if(width==16U)put_q(&inst->operands[0],rd);
         else put_fp_scalar(&inst->operands[0],rd,fp64);
-        put_reg(&inst->operands[1],rn,true);
-        put_immediate(&inst->operands[2],off/(int64_t)width);
+        if(!a64_attach_memory(as,inst,1U,&memory)) {
+            minias_mcinst_destroy(inst);return false;
+        }
     } else if(!strcmp(op,"ldr") && strchr(args,'=')!=NULL) {
         /* GNU LDR Xt/Wt,=symbol: the Target chooses the literal-load
          * encoding; the queued data/ABS relocation remains Common-owned.
@@ -2919,10 +2971,11 @@ reduction_done:;
         put_reg(&inst->operands[0],rt,true);
     } else if(!strcmp(op,"casp") || !strcmp(op,"caspa") ||
               !strcmp(op,"caspl") || !strcmp(op,"caspal")) {
-        unsigned rs,rt,rn;
+        unsigned rs,rt;
+        A64Memory memory;
         bool wide;
         if((a64_features(as)&A64_FEATURE_LSE)==0U ||
-           !a64_casp_fields(aliases,args,&rs,&rt,&rn,&wide)){
+           !a64_casp_fields(as,aliases,args,&rs,&rt,&memory,&wide)){
             minias_set_error(as,"bad-aarch64-casp:%s:line=%zu",
                              args,stmt->line);
             minias_mcinst_destroy(inst);return false;
@@ -2937,39 +2990,48 @@ reduction_done:;
                         UINT32_C(0x00008000):0U);
         put_reg(&inst->operands[0],rs,wide);
         put_reg(&inst->operands[1],rt,wide);
-        put_reg(&inst->operands[2],rn,true);
+        memory.access_bytes=wide?16U:8U;
+        if(!a64_attach_memory(as,inst,2U,&memory)) {
+            minias_mcinst_destroy(inst);return false;
+        }
     } else if(!strcmp(op,"ldg")) {
         /* Genuine Linux AArch64 MTE LDG: signed scaled imm9 and ordinary
          * Xn/SP base. Share the typed MTE encoding and ELF code writer. */
-        char tok[4][384];unsigned n,rt,rn,mode;bool wide,sp;
-        int64_t off;
+        char tok[4][384];unsigned n,rt;bool wide,sp;
+        A64Memory memory;
         /* GNU [Xn,#offset] contains a nested comma, so split on A64's
          * top-level operand grammar, NOT the old single-comma split_two. */
         if((a64_features(as)&A64_FEATURE_MTE)==0U ||
            !split_operands(args,tok,&n) || n!=2U ||
            !parse_a64_reg(aliases,tok[0],&rt,&wide,&sp) || sp || !wide ||
-           !parse_a64_mem(aliases,tok[1],&rn,&off,&mode) ||
-           mode!=0U || off%16!=0 || off<-4096 || off>4080) {
+           !a64_parse_memory(as,aliases,tok[1],NULL,&memory) ||
+           memory.mode!=A64_ADDRESS_OFFSET ||
+           (memory.offset.kind==A64_OFFSET_CONSTANT &&
+            (memory.offset.constant%16!=0 ||
+             memory.offset.constant<-4096 ||
+             memory.offset.constant>4080))) {
             minias_set_error(as,"bad-aarch64-ldg:%s:line=%zu",
                              args,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
+        memory.access_bytes=16U;
         inst->opcode=A64_MC_MTE_STGM;inst->count=2U;
-        inst->encoding=UINT32_C(0xd9600000)|
-                      (((uint32_t)(off/16)&511U)<<12U);
+        inst->encoding=UINT32_C(0xd9600000);
         put_reg(&inst->operands[0],rt,true);
-        put_reg(&inst->operands[1],rn,true);
+        if(!a64_attach_memory(as,inst,1U,&memory)) {
+            minias_mcinst_destroy(inst);return false;
+        }
     } else if(!strcmp(op,"stgm") || !strcmp(op,"ldgm")) {
         /* One typed MTE2 register+base family, no second instruction or
          * ELF emitter. GNU/Arm encode LDGM with 0xd9e00000. */
-        char tok[4][384];unsigned n,rt,rn,mode;
+        char tok[4][384];unsigned n,rt;
         bool wide,sp;
-        int64_t offset;
+        A64Memory memory;
         if((a64_features(as)&A64_FEATURE_MTE)==0U ||
            !split_operands(args,tok,&n) || n!=2U ||
            !parse_a64_reg(aliases,tok[0],&rt,&wide,&sp) || sp || !wide ||
-           !parse_a64_mem(aliases,tok[1],&rn,&offset,&mode) ||
-           offset!=0 || mode!=0U) {
+           !a64_parse_memory(as,aliases,tok[1],NULL,&memory) ||
+           !a64_is_plain_base(&memory)) {
             minias_set_error(as,"bad-aarch64-mte-tags:%s:line=%zu",
                              args,stmt->line);
             minias_mcinst_destroy(inst);return false;
@@ -2978,7 +3040,10 @@ reduction_done:;
         inst->encoding=!strcmp(op,"ldgm")?
                        UINT32_C(0xd9e00000):UINT32_C(0xd9a00000);
         put_reg(&inst->operands[0],rt,true);
-        put_reg(&inst->operands[1],rn,true);
+        memory.access_bytes=16U;
+        if(!a64_attach_memory(as,inst,1U,&memory)) {
+            minias_mcinst_destroy(inst);return false;
+        }
     } else if(!strcmp(op,"ins") ||
               (!strcmp(op,"mov") && a64_register_prefix(aliases,args)=='v' &&
                strchr(args,'[')!=NULL)) {
@@ -3235,7 +3300,7 @@ reduction_done:;
             put_vector(&inst->operands[0],rd);
             put_vector(&inst->operands[1],rn);
             put_vector(&inst->operands[2],rm);
-        }else if(parse_integer_family(aliases,inst,op,args)) {
+        }else if(parse_integer_family(as,aliases,inst,op,args)) {
             /* Scalar ALU uses the same already proven Target machinery. */
         }else {
             minias_set_error(as,"bad-aarch64-operands:%s:%s:line=%zu",
@@ -3314,9 +3379,9 @@ reduction_done:;
         put_vector(&inst->operands[0],rd);
     } else if(!strcmp(op,"ldxp") || !strcmp(op,"ldaxp") ||
               !strcmp(op,"stxp") || !strcmp(op,"stlxp")) {
-        char tok[4][384];unsigned n,k,rt,rt2,rn,rs=31U;
+        char tok[4][384];unsigned n,k,rt,rt2,rs=31U;
         bool wt,wt2,ws,sp,store=op[0]=='s';
-        int64_t off;unsigned mode;
+        A64Memory memory;
         if(!split_operands(args,tok,&n) ||
            n!=(store?4U:3U)) {
             minias_set_error(as,"bad-aarch64-exclusive-pair:%s:line=%zu",
@@ -3328,8 +3393,8 @@ reduction_done:;
            !parse_a64_reg(aliases,tok[k],&rt,&wt,&sp) || sp ||
            !parse_a64_reg(aliases,tok[k+1U],&rt2,&wt2,&sp) || sp ||
            wt!=wt2 ||
-           !parse_a64_mem(aliases,tok[k+2U],&rn,&off,&mode) ||
-           off!=0 || mode!=0U) {
+           !a64_parse_memory(as,aliases,tok[k+2U],NULL,&memory) ||
+           !a64_is_plain_base(&memory)) {
             minias_set_error(as,"bad-aarch64-exclusive-pair:%s:line=%zu",
                              args,stmt->line);
             minias_mcinst_destroy(inst);return false;
@@ -3342,8 +3407,11 @@ reduction_done:;
                          UINT32_C(0x8000):0U);
         put_reg(&inst->operands[0],rt,wt);
         put_reg(&inst->operands[1],rt2,wt);
-        put_reg(&inst->operands[2],rn,true);
-        put_reg(&inst->operands[3],rs,false);
+        put_reg(&inst->operands[2],rs,false);
+        memory.access_bytes=wt?16U:8U;
+        if(!a64_attach_memory(as,inst,3U,&memory)) {
+            minias_mcinst_destroy(inst);return false;
+        }
     } else if(!strcmp(op,"tbl") || !strcmp(op,"tbx")) {
         /* GNU vector table instructions use contiguous 1..4 vector
          * registers, all Vn.16B; Q controls destination/index 8B/16B.
@@ -3546,24 +3614,20 @@ lane_complete:;
               !strcmp(op,"st2g") || !strcmp(op,"stz2g")) {
         /* All four ARM MTE tag-store forms share the same checked
          * 16-byte signed-scaled addressing and one typed store emitter. */
-        char tok[4][384];unsigned n,rt,rn,mode;
-        bool wide,sp;int64_t off;
+        char tok[4][384];unsigned n,rt;
+        bool wide,sp;
+        A64Memory memory;
         if((a64_features(as)&A64_FEATURE_MTE)==0U ||
            !split_operands(args,tok,&n) || (n!=2U && n!=3U) ||
            !parse_a64_reg(aliases,tok[0],&rt,&wide,&sp) || sp || !wide ||
-           !parse_a64_mem(aliases,tok[1],&rn,&off,&mode)) {
+           !a64_parse_memory(as,aliases,tok[1],n==3U?tok[2]:NULL,
+                             &memory) || memory.post_index_register) {
             minias_set_error(as,"bad-aarch64-stz2g:%s:line=%zu",
                              args,stmt->line);minias_mcinst_destroy(inst);return false;
         }
-        if(n==3U) {
-            if(mode!=0U || off!=0 ||
-               !parse_signed_number(tok[2],&off)) {
-                minias_set_error(as,"bad-aarch64-stz2g-post:%s:line=%zu",
-                                 args,stmt->line);minias_mcinst_destroy(inst);return false;
-            }
-            mode=2U;
-        }
-        if(off%16!=0 || off<-4096 || off>4080){
+        if(memory.offset.kind==A64_OFFSET_CONSTANT &&
+           (memory.offset.constant%16!=0 ||
+            memory.offset.constant<-4096 || memory.offset.constant>4080)){
             minias_set_error(as,"bad-aarch64-stz2g-offset:%s:line=%zu",
                              args,stmt->line);minias_mcinst_destroy(inst);return false;
         }
@@ -3572,15 +3636,14 @@ lane_complete:;
                           !strcmp(op,"stzg")?UINT32_C(0xd9600000):
                           !strcmp(op,"st2g")?UINT32_C(0xd9a00000):
                                                 UINT32_C(0xd9e00000);
+            memory.access_bytes=16U;
             inst->opcode=A64_MC_MTE_STZ2G;inst->count=2U;
-            inst->encoding=base|
-                           (mode==0U?UINT32_C(0x800):
-                            mode==1U?UINT32_C(0xc00):
-                                     UINT32_C(0x400))|
-                           (((uint32_t)(off/16)&511U)<<12U);
+            inst->encoding=base;
         }
         put_reg(&inst->operands[0],rt,true);
-        put_reg(&inst->operands[1],rn,true);
+        if(!a64_attach_memory(as,inst,1U,&memory)) {
+            minias_mcinst_destroy(inst);return false;
+        }
     } else if((!strcmp(op,"br")||!strcmp(op,"blr")) &&
        a64_parse_named_gpr(aliases,args,&reg,&reg64) && reg64) {
         inst->opcode=!strcmp(op,"br")?A64_MC_BR:A64_MC_BLR;
@@ -3812,43 +3875,25 @@ lane_complete:;
         inst->operands[0].kind = MINIAS_MC_IMMEDIATE;
         inst->operands[0].immediate = imm;
     } else if (strcmp(op, "b") == 0 || strcmp(op, "bl") == 0) {
-        MiniAsSymbolExpr expr;
         /* The symbol-difference addend, when present, is held separately
          * in MCInst until final layout. Never use the old parse-time local
          * difference folding shortcut: it can freeze a stale displacement
          * when a forward .space changes the section after parsing. */
-        if (!minias_parse_symbol_addend(args, &expr)) {
+        if (!a64_attach_branch_target(as,inst,0U,args)) {
             minias_set_error(as, "bad-aarch64-branch-target:%s:line=%zu",
                              args, stmt->line);
-            minias_mcinst_destroy(inst);
-            return false;
-        }
-        if ((expr.addend & 3) != 0) {
-            minias_set_error(as, "bad-aarch64-branch-addend:%s:line=%zu",
-                             args, stmt->line);
-            minias_mcinst_destroy(inst);
-            return false;
-        }
-        if (!a64_attach_expr(as,inst,0U,&expr)) {
-            minias_set_error(as, "out-of-memory:aarch64-symbol-mcinst");
             minias_mcinst_destroy(inst);
             return false;
         }
         inst->opcode = strcmp(op, "bl") == 0 ? A64_MC_BL : A64_MC_B;
         inst->count = 1U;
     } else if (strcmp(op, "cbz") == 0 || strcmp(op, "cbnz") == 0) {
-        MiniAsSymbolExpr expr;
         bool is_sp;
         if (!split_two(args, first, sizeof(first), second, sizeof(second)) ||
             !parse_a64_reg(aliases,first, &reg, &reg64, &is_sp) || is_sp ||
-            !minias_parse_symbol_addend(second, &expr) ||
-            (expr.addend & 3) != 0) {
+            !a64_attach_branch_target(as,inst,1U,second)) {
             minias_set_error(as,"bad-aarch64-condbranch:%s:line=%zu",
                              args,stmt->line);
-            minias_mcinst_destroy(inst);return false;
-        }
-        if(!a64_attach_expr(as,inst,1U,&expr)) {
-            minias_set_error(as,"out-of-memory:aarch64-condbranch-symbol");
             minias_mcinst_destroy(inst);return false;
         }
         inst->opcode=strcmp(op,"cbz")==0?A64_MC_CBZ:A64_MC_CBNZ;
@@ -3858,13 +3903,11 @@ lane_complete:;
         char t[4][384];unsigned n,rd;
         bool wide,sp;
         int64_t bit;
-        MiniAsSymbolExpr expr;
         if(!split_operands(args,t,&n) || n!=3U ||
            !parse_a64_reg(aliases,t[0],&rd,&wide,&sp) || sp ||
            !parse_signed_number(t[1],&bit) || bit<0 ||
            bit>=(wide?64:32) ||
-           !minias_parse_symbol_addend(t[2],&expr) ||
-           (expr.addend&3)!=0 || !a64_attach_expr(as,inst,2U,&expr)) {
+           !a64_attach_branch_target(as,inst,2U,t[2])) {
             minias_set_error(as,"bad-aarch64-testbranch:%s:line=%zu",
                              args,stmt->line);
             minias_mcinst_destroy(inst);return false;
@@ -3876,9 +3919,7 @@ lane_complete:;
     } else {
         unsigned cond;
         if(a64_branch_condition(op,&cond)) {
-            MiniAsSymbolExpr expr;
-            if(!minias_parse_symbol_addend(args,&expr) ||
-               (expr.addend&3)!=0 || !a64_attach_expr(as,inst,0U,&expr)) {
+            if(!a64_attach_branch_target(as,inst,0U,args)) {
                 minias_set_error(as,"bad-aarch64-conditional:%s:line=%zu",
                                  args,stmt->line);
                 minias_mcinst_destroy(inst);return false;
@@ -3887,7 +3928,7 @@ lane_complete:;
             inst->encoding=cond;
         } else if (a64_parse_relocated(as,aliases,inst,op,args)) {
             /* ADRP/LO12 relocation is typed and target-owned. */
-        } else if (parse_integer_family(aliases,inst,op,args)) {
+        } else if (parse_integer_family(as,aliases,inst,op,args)) {
             /* Reuse existing typed register and memory IR. */
         } else {
             minias_set_error(as,"bad-aarch64-operands:%s:%s:line=%zu",
@@ -3899,22 +3940,6 @@ lane_complete:;
      * The AArch64 integer/memory family is parsed into typed operands.
      * No instruction is silently translated through a RISC-V pipeline.
      */
-    if(deferred_use!=A64_DEFERRED_NONE) {
-        A64DeferredOperand *retained=malloc(sizeof(*retained));
-        if(retained==NULL) {
-            minias_set_error(as,"out-of-memory:aarch64-deferred-difference");
-            minias_mcinst_destroy(inst);return false;
-        }
-        if(!minias_bind_symbol_difference_ref(
-               as,&deferred_difference,&retained->symbols)) {
-            free(retained);
-            minias_set_error(as,"out-of-memory:aarch64-deferred-symbol-bind");
-            minias_mcinst_destroy(inst);return false;
-        }
-        retained->use=deferred_use;
-        inst->target_payload=retained;
-        inst->dispose_target_payload=free;
-    }
     stmt->mcinst = inst;
     return true;
 }
@@ -3925,36 +3950,9 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
     MiniAsFixupKind fixup = MINIAS_FIXUP_NONE;
     const MiniAsSymbolRef *expr = NULL;
     MiniAsSymbolRef resolved_branch_expr;
-    int64_t deferred_value=0;
-    bool has_deferred=false;
     if (inst == NULL) {
         minias_set_error(as, "missing-aarch64-mcinst:line=%zu", stmt->line);
         return false;
-    }
-    if(inst->target_payload!=NULL) {
-        const A64DeferredOperand *retained=inst->target_payload;
-        has_deferred=true;
-        if(!minias_resolve_symbol_difference_ref(as,
-             &retained->symbols,&deferred_value)) {
-            minias_set_error(as,"unresolved-aarch64-layout-difference:line=%zu",
-                             stmt->line);
-            return false;
-        }
-        switch(inst->opcode) {
-            case A64_MC_ADD_IMM: case A64_MC_SUB_IMM:
-            case A64_MC_ADDS_IMM: case A64_MC_SUBS_IMM:
-            case A64_MC_CMP_IMM: case A64_MC_CMN_IMM:
-            case A64_MC_LDST_SCALED: case A64_MC_LDST_UNSCALED:
-            case A64_MC_STP: case A64_MC_LDP: case A64_MC_LDPSW:
-            case A64_MC_B: case A64_MC_BL:
-            case A64_MC_BCOND: case A64_MC_CBZ: case A64_MC_CBNZ:
-            case A64_MC_TBZ: case A64_MC_TBNZ:
-                break;
-            default:
-                minias_set_error(as,"unsupported-aarch64-deferred-form:%u",
-                                 inst->opcode);
-                return false;
-        }
     }
     switch (inst->opcode) {
         case A64_MC_LDR_LITERAL: {
@@ -4178,10 +4176,13 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
             fixup=MINIAS_FIXUP_A64_ADD_LO12;
             break;
         case A64_MC_LDST_LO12:
-        case A64_MC_LDST_GOT_LO12:
-            code=inst->encoding|(inst->operands[1].reg<<5U)|
-                 inst->operands[0].reg;
-            expr=inst->operands[2].bound_symbol;
+        case A64_MC_LDST_GOT_LO12: {
+            const A64Memory *memory=a64_memory_at(inst,1U);
+            if(!memory ||
+               (memory->offset.kind!=A64_OFFSET_LO12 &&
+                memory->offset.kind!=A64_OFFSET_GOT_LO12))return false;
+            code=inst->encoding|(memory->base<<5U)|inst->operands[0].reg;
+            expr=&memory->offset.symbol;
             if(inst->opcode==A64_MC_LDST_GOT_LO12)
                 fixup=MINIAS_FIXUP_A64_LD64_GOT_LO12;
             else {
@@ -4202,6 +4203,7 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
                                  MINIAS_FIXUP_A64_LDST64_LO12;
             }
             break;
+        }
         case A64_MC_BR:
         case A64_MC_BLR:
             code=(inst->opcode==A64_MC_BR?
@@ -4281,13 +4283,15 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
             unsigned kind=inst->encoding&3U;
             bool byte=(inst->encoding&0x10U)!=0U;
             bool half=(inst->encoding&0x20U)!=0U;
+            const A64Memory *memory=a64_memory_at(inst,kind<2U?1U:2U);
+            if(!memory)return false;
             if(kind<2U) {
                 bool wide=inst->operands[0].register_64;
                 code=(byte?UINT32_C(0x085f7c00):
                       half?UINT32_C(0x485f7c00):
                       wide?UINT32_C(0xc85f7c00):UINT32_C(0x885f7c00)) |
                      ((kind&1U)?UINT32_C(0x8000):0U) |
-                     (inst->operands[1].reg<<5U) | inst->operands[0].reg;
+                     (memory->base<<5U) | inst->operands[0].reg;
             }else {
                 bool wide=inst->operands[1].register_64;
                 code=(byte?UINT32_C(0x08007c00):
@@ -4295,22 +4299,37 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
                       wide?UINT32_C(0xc8007c00):UINT32_C(0x88007c00)) |
                      ((kind&1U)?UINT32_C(0x8000):0U) |
                      (inst->operands[0].reg<<16U) |
-                     (inst->operands[2].reg<<5U) | inst->operands[1].reg;
+                     (memory->base<<5U) | inst->operands[1].reg;
             }
             break;
         }
-        case A64_MC_LSE_PAIR:
+        case A64_MC_LSE_PAIR: {
+            const A64Memory *memory=a64_memory_at(inst,2U);
+            if(!memory)return false;
             code=inst->encoding|
                  (inst->operands[0].reg<<16U)|
-                 (inst->operands[2].reg<<5U)|
+                 (memory->base<<5U)|
                  inst->operands[1].reg;
             break;
+        }
         case A64_MC_MTE_STZ2G:
-        case A64_MC_MTE_STGM:
+        case A64_MC_MTE_STGM: {
+            const A64Memory *memory=a64_memory_at(inst,1U);
+            int64_t offset;
+            if(!memory || !a64_resolve_address_offset(as,memory,&offset) ||
+               offset%16!=0 || offset<-4096 || offset>4080) {
+                minias_set_error(as,"aarch64-final-mte-memory-offset-out-of-range");
+                return false;
+            }
             code=inst->encoding|
-                 (inst->operands[1].reg<<5U)|
-                 inst->operands[0].reg;
+                 (inst->opcode==A64_MC_MTE_STZ2G?
+                   (memory->mode==A64_ADDRESS_OFFSET?UINT32_C(0x800):
+                    memory->mode==A64_ADDRESS_PRE_INDEX?UINT32_C(0xc00):
+                    UINT32_C(0x400)):0U)|
+                 (((uint32_t)(offset/16)&511U)<<12U)|
+                 (memory->base<<5U)|inst->operands[0].reg;
             break;
+        }
         case A64_MC_SIMD_DUP:
         case A64_MC_SIMD_REV32:
             code=inst->encoding|
@@ -4326,13 +4345,16 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
                  (inst->operands[1].reg<<5U)|
                  inst->operands[0].reg;
             break;
-        case A64_MC_EXCLUSIVE_PAIR:
+        case A64_MC_EXCLUSIVE_PAIR: {
+            const A64Memory *memory=a64_memory_at(inst,3U);
+            if(!memory)return false;
             code=inst->encoding|
-                 (inst->operands[3].reg<<16U)|
+                 (inst->operands[2].reg<<16U)|
                  (inst->operands[1].reg<<10U)|
-                 (inst->operands[2].reg<<5U)|
+                 (memory->base<<5U)|
                  inst->operands[0].reg;
             break;
+        }
         case A64_MC_SIMD_LOGIC:
             code=inst->encoding|
                  (inst->operands[2].reg<<16U)|
@@ -4349,20 +4371,31 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
                  inst->operands[0].reg;
             break;
         }
-        case A64_MC_SIMD_SINGLE:
+        case A64_MC_SIMD_SINGLE: {
+            const A64Memory *memory=a64_memory_at(inst,1U);
+            if(!memory)return false;
             code=inst->encoding|
-                 (inst->count==3U?
-                    ((inst->operands[2].kind==MINIAS_MC_REGISTER?
-                       inst->operands[2].reg:
-                       (unsigned)inst->operands[2].immediate)<<16U):0U)|
-                 (inst->operands[1].reg<<5U)|inst->operands[0].reg;
+                 (memory->mode==A64_ADDRESS_POST_INDEX?
+                    UINT32_C(0x00800000)|
+                    ((memory->post_index_register?
+                       memory->post_register:31U)<<16U):0U)|
+                 (memory->base<<5U)|inst->operands[0].reg;
             break;
-        case A64_MC_PRFM:
+        }
+        case A64_MC_PRFM: {
+            const A64Memory *memory=a64_memory_at(inst,1U);
+            int64_t offset;
+            if(!memory || !a64_resolve_address_offset(as,memory,&offset) ||
+               offset<0 || offset%8!=0 || offset/8>4095) {
+                minias_set_error(as,"aarch64-final-prfm-memory-offset-out-of-range");
+                return false;
+            }
             code=UINT32_C(0xf9800000) |
-                 ((uint32_t)inst->operands[2].immediate<<10U) |
-                 (inst->operands[1].reg<<5U) |
+                 ((uint32_t)(offset/8)<<10U) |
+                 (memory->base<<5U) |
                  (uint32_t)inst->operands[0].immediate;
             break;
+        }
         case A64_MC_LSE: {
             unsigned kind=inst->encoding&15U;
             bool acquire=(inst->encoding&0x20U)!=0U;
@@ -4370,7 +4403,9 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
             bool wide=inst->operands[0].register_64;
             bool byte=(inst->encoding&0x80U)!=0U;
             bool half=(inst->encoding&0x100U)!=0U;
+            const A64Memory *memory=a64_memory_at(inst,2U);
             uint32_t base;
+            if(!memory)return false;
             if(kind==0U) {
                 base=byte?UINT32_C(0x08a07c00):
                      half?UINT32_C(0x48a07c00):
@@ -4389,7 +4424,7 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
                       kind==5U?UINT32_C(0x2000):0U;
             }
             code=base|(inst->operands[0].reg<<16U)|
-                 (inst->operands[2].reg<<5U)|inst->operands[1].reg;
+                 (memory->base<<5U)|inst->operands[1].reg;
             break;
         }
         case A64_MC_BITMASK_IMM: {
@@ -4431,8 +4466,10 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
             break;
         }
         case A64_MC_ACQUIRE_RELEASE: {
+            const A64Memory *memory=a64_memory_at(inst,1U);
             bool wide=inst->operands[0].register_64;
             uint32_t opcode;
+            if(!memory)return false;
             switch(inst->encoding) {
                 case 0U:opcode=wide?UINT32_C(0xc89ffc00):UINT32_C(0x889ffc00);break;
                 case 1U:opcode=wide?UINT32_C(0xc8dffc00):UINT32_C(0x88dffc00);break;
@@ -4442,7 +4479,7 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
                 case 5U:opcode=UINT32_C(0x489ffc00);break;
                 default:minias_set_error(as,"bad-aarch64-acquire-size");return false;
             }
-            code=opcode | (inst->operands[1].reg<<5U) |
+            code=opcode | (memory->base<<5U) |
                  inst->operands[0].reg;
             break;
         }
@@ -4502,12 +4539,14 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
             bool sf = inst->operands[0].register_64;
             unsigned rd = inst->operands[0].reg;
             unsigned rn = inst->operands[1].reg;
-            uint64_t resolved_imm=has_deferred?(uint64_t)deferred_value:
-                                            inst->operands[2].immediate;
+            int64_t value;
+            uint64_t resolved_imm;
             unsigned imm;
-            if(has_deferred && (deferred_value<0 ||
+            if(!a64_resolve_immediate(as,&inst->operands[2],&value))return false;
+            resolved_imm=(uint64_t)value;
+            if(value<0 ||
                (resolved_imm>4095U &&
-                (resolved_imm%4096U!=0U || resolved_imm/4096U>4095U)))) {
+                (resolved_imm%4096U!=0U || resolved_imm/4096U>4095U))) {
                 minias_set_error(as,"aarch64-final-alu-imm-out-of-range:line=%zu",
                                  stmt->line);
                 return false;
@@ -4538,10 +4577,12 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
         case A64_MC_CMP_IMM:
         case A64_MC_CMN_IMM: {
             bool sf = inst->operands[0].register_64;
-            uint64_t imm=has_deferred?(uint64_t)deferred_value:
-                                      inst->operands[1].immediate;
-            if(has_deferred && (deferred_value<0 ||
-               (imm>4095U && (imm%4096U!=0U || imm/4096U>4095U)))) {
+            int64_t value;
+            uint64_t imm;
+            if(!a64_resolve_immediate(as,&inst->operands[1],&value))return false;
+            imm=(uint64_t)value;
+            if(value<0 ||
+               (imm>4095U && (imm%4096U!=0U || imm/4096U>4095U))) {
                 minias_set_error(as,"aarch64-final-compare-imm-out-of-range:line=%zu",
                                  stmt->line);
                 return false;
@@ -4556,19 +4597,32 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
                    (inst->operands[0].reg << 5U);
             break;
         }
-        case A64_MC_LDST_UNPRIV:
-            code=inst->encoding|
-                 (((uint32_t)inst->operands[2].immediate&511U)<<12U)|
-                 (inst->operands[1].reg<<5U)|inst->operands[0].reg;
+        case A64_MC_LDST_UNPRIV: {
+            const A64Memory *memory=a64_memory_at(inst,1U);
+            int64_t offset;
+            if(!memory || !a64_resolve_address_offset(as,memory,&offset) ||
+               offset<-256 || offset>255) {
+                minias_set_error(as,"aarch64-final-unprivileged-offset-out-of-range");
+                return false;
+            }
+            code=(inst->encoding-UINT32_C(0x00fff800))|
+                 (((uint32_t)offset&511U)<<12U)|
+                 (memory->base<<5U)|inst->operands[0].reg;
             break;
-        case A64_MC_LDST_SCALED:
-            if(has_deferred) {
-                /* Scalar memory uses the shared target ISA descriptor;
-                 * floating-point S/D/Q retains its own width bank. */
+        }
+        case A64_MC_LDST_SCALED: {
+            const A64Memory *memory=a64_memory_at(inst,1U);
+            int64_t offset;
+            if(!memory || !a64_resolve_address_offset(as,memory,&offset)) {
+                minias_set_error(as,"aarch64-unresolved-memory-offset");
+                return false;
+            }
+            if(memory->offset.kind==A64_OFFSET_DIFFERENCE &&
+               inst->target_form!=0U) {
                 bool scalar_matched;
-                if(a64_encode_deferred_scalar_memory(inst,deferred_value,
+                if(a64_encode_deferred_scalar_memory(inst,memory,offset,
                                                      &scalar_matched,&code)) {
-                    code|=(inst->operands[1].reg<<5U)|inst->operands[0].reg;
+                    code|=(memory->base<<5U)|inst->operands[0].reg;
                     break;
                 }
                 if(scalar_matched) {
@@ -4577,72 +4631,78 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
                         stmt->line);
                     return false;
                 }
-                uint32_t base=inst->encoding&~UINT32_C(0x00400000);
-                unsigned unit=base==UINT32_C(0xbd000000)?4U:
-                              base==UINT32_C(0xfd000000)?8U:
-                              base==UINT32_C(0x3d800000)?16U:0U;
-                if(unit==0U || deferred_value<0 ||
-                   deferred_value%(int64_t)unit!=0 ||
-                   deferred_value/(int64_t)unit>4095) {
-                    minias_set_error(as,"aarch64-final-fp-memory-offset-out-of-range");
-                    return false;
-                }
-                code=inst->encoding |
-                     ((uint32_t)(deferred_value/(int64_t)unit)<<10U) |
-                     (inst->operands[1].reg<<5U)|inst->operands[0].reg;
-                break;
+            }
+            if(memory->access_bytes==0U || offset<0 ||
+               offset%(int64_t)memory->access_bytes!=0 ||
+               offset/(int64_t)memory->access_bytes>4095) {
+                minias_set_error(as,"aarch64-final-scaled-offset-out-of-range");
+                return false;
             }
             code=inst->encoding|
-                 ((uint32_t)inst->operands[2].immediate<<10U)|
-                 (inst->operands[1].reg<<5U)|inst->operands[0].reg;
+                 ((uint32_t)(offset/(int64_t)memory->access_bytes)<<10U)|
+                 (memory->base<<5U)|inst->operands[0].reg;
             break;
+        }
         case A64_MC_PRFM_REG:
-        case A64_MC_LDST_INDEX:
-            code=inst->encoding|(inst->operands[2].reg<<16U)|
-                 (inst->operands[1].reg<<5U)|
+        case A64_MC_LDST_INDEX: {
+            const A64Memory *memory=a64_memory_at(inst,1U);
+            if(!memory || memory->mode!=A64_ADDRESS_REGISTER_INDEX)return false;
+            code=(inst->opcode==A64_MC_PRFM_REG?
+                   UINT32_C(0xf8a00800):
+                   inst->encoding-UINT32_C(0x00dff800))|
+                 (memory->extend_option<<13U)|
+                 (memory->scaled_index?UINT32_C(0x1000):0U)|
+                 (memory->index<<16U)|(memory->base<<5U)|
                  (inst->opcode==A64_MC_PRFM_REG?
                   (uint32_t)inst->operands[0].immediate:inst->operands[0].reg);
             break;
-        case A64_MC_LDST_UNSCALED:
-            if(has_deferred &&
-               (deferred_value<-256 || deferred_value>255)) {
+        }
+        case A64_MC_LDST_UNSCALED: {
+            const A64Memory *memory=a64_memory_at(inst,1U);
+            int64_t offset;
+            if(!memory || !a64_resolve_address_offset(as,memory,&offset) ||
+               offset<-256 || offset>255) {
                 minias_set_error(as,"aarch64-final-unscaled-offset-out-of-range");
                 return false;
             }
-            code=inst->encoding |
-                (((uint32_t)(has_deferred?(uint64_t)deferred_value:
-                                            inst->operands[2].immediate)&511U)<<12U) |
-                (inst->operands[1].reg<<5U)|inst->operands[0].reg;
+            code=(inst->encoding-UINT32_C(0x01000000))|
+                (memory->mode==A64_ADDRESS_PRE_INDEX?UINT32_C(0xc00):
+                 memory->mode==A64_ADDRESS_POST_INDEX?UINT32_C(0x400):0U)|
+                (((uint32_t)offset&511U)<<12U)|
+                (memory->base<<5U)|inst->operands[0].reg;
             break;
+        }
         case A64_MC_STP:
         case A64_MC_LDP:
         case A64_MC_LDPSW: {
+            const A64Memory *memory=a64_memory_at(inst,2U);
             bool sf = inst->operands[0].register_64;
-            bool qpair=(inst->encoding&UINT32_C(0x100))!=0U;
-            unsigned mode=inst->encoding&3U;
-            int64_t pair_imm=(int64_t)inst->operands[3].immediate;
-            if(has_deferred) {
-                unsigned unit=qpair?16U:
-                              inst->opcode==A64_MC_LDPSW?4U:sf?8U:4U;
-                if(deferred_value%(int64_t)unit!=0 ||
-                   deferred_value/(int64_t)unit < -64 ||
-                   deferred_value/(int64_t)unit > 63) {
-                    minias_set_error(as,"aarch64-final-pair-offset-out-of-range");
-                    return false;
-                }
-                pair_imm=deferred_value/(int64_t)unit;
+            bool qpair=inst->operands[0].target_reg_bank==A64_BANK_SIMD_Q;
+            unsigned mode;
+            int64_t offset,pair_imm;
+            if(!memory || !a64_resolve_address_offset(as,memory,&offset) ||
+               memory->access_bytes==0U ||
+               offset%(int64_t)memory->access_bytes!=0 ||
+               offset/(int64_t)memory->access_bytes < -64 ||
+               offset/(int64_t)memory->access_bytes > 63) {
+                minias_set_error(as,"aarch64-final-pair-offset-out-of-range");
+                return false;
             }
+            pair_imm=offset/(int64_t)memory->access_bytes;
+            mode=inst->target_form==A64_PAIR_NONTEMPORAL?3U:
+                 memory->mode==A64_ADDRESS_PRE_INDEX?1U:
+                 memory->mode==A64_ADDRESS_POST_INDEX?2U:0U;
             uint32_t base = inst->opcode==A64_MC_LDPSW?
-                (inst->encoding==1U?UINT32_C(0x69c00000):
-                 inst->encoding==2U?UINT32_C(0x68c00000):
+                (mode==1U?UINT32_C(0x69c00000):
+                 mode==2U?UINT32_C(0x68c00000):
                                     UINT32_C(0x69400000)):
                 inst->opcode == A64_MC_STP ?
-                (inst->encoding == 1U ? UINT32_C(0x29800000) :
-                 inst->encoding == 2U ? UINT32_C(0x28800000) :
-                 inst->encoding == 3U ? UINT32_C(0x28000000) : UINT32_C(0x29000000)) :
-                (inst->encoding == 1U ? UINT32_C(0x29c00000) :
-                 inst->encoding == 2U ? UINT32_C(0x28c00000) :
-                 inst->encoding == 3U ? UINT32_C(0x28400000) : UINT32_C(0x29400000));
+                (mode == 1U ? UINT32_C(0x29800000) :
+                 mode == 2U ? UINT32_C(0x28800000) :
+                 mode == 3U ? UINT32_C(0x28000000) : UINT32_C(0x29000000)) :
+                (mode == 1U ? UINT32_C(0x29c00000) :
+                 mode == 2U ? UINT32_C(0x28c00000) :
+                 mode == 3U ? UINT32_C(0x28400000) : UINT32_C(0x29400000));
             if(qpair) {
                 /* FP/SIMD 128-bit pair: exact A64 V+opc fields; reuse
                  * the GPR signed imm7/pair and memory operand emitter. */
@@ -4658,7 +4718,7 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
             code = base |
                    (((uint32_t)pair_imm & 127U) << 15U) |
                    (inst->operands[1].reg << 10U) |
-                   (inst->operands[2].reg << 5U) | inst->operands[0].reg;
+                   (memory->base << 5U) | inst->operands[0].reg;
             break;
         }
         case A64_MC_BCOND:
@@ -4678,8 +4738,12 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
             bool conditional=cbz||bcond;
             unsigned slot=testbit?2U:cbz?1U:0U;
             expr=inst->operands[slot].bound_symbol;
-            if(has_deferred) {
-                if(!minias_checked_add_i64(expr->addend,deferred_value,
+            if(inst->target_payload!=NULL) {
+                const A64BranchAdjustment *adjustment=inst->target_payload;
+                int64_t value;
+                if(!minias_resolve_symbol_difference_ref(
+                       as,&adjustment->difference,&value) ||
+                   !minias_checked_add_i64(expr->addend,value,
                                            &resolved_branch_expr.addend)) {
                     minias_set_error(as,"aarch64-final-branch-addend-overflow");
                     return false;

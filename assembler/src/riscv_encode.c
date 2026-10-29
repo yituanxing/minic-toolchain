@@ -105,39 +105,6 @@ static bool parse_fp_rounding_mode(const char *text, uint32_t *mode) {
     return false;
 }
 
-static bool is_fp_binary_single(const char *op) {
-    return strcmp(op, "fadd.s") == 0 || strcmp(op, "fsub.s") == 0 ||
-           strcmp(op, "fmul.s") == 0 || strcmp(op, "fdiv.s") == 0;
-}
-
-static bool is_fp_binary_double(const char *op) {
-    return strcmp(op, "fadd.d") == 0 || strcmp(op, "fsub.d") == 0 ||
-           strcmp(op, "fmul.d") == 0 || strcmp(op, "fdiv.d") == 0;
-}
-
-static bool is_fp_compare_double(const char *op) {
-    return strcmp(op, "feq.d") == 0 || strcmp(op, "flt.d") == 0 ||
-           strcmp(op, "fle.d") == 0;
-}
-
-static bool is_fp_convert(const char *op) {
-    return strcmp(op, "fcvt.d.w") == 0 || strcmp(op, "fcvt.d.wu") == 0 ||
-           strcmp(op, "fcvt.d.l") == 0 || strcmp(op, "fcvt.d.lu") == 0 ||
-           strcmp(op, "fcvt.w.d") == 0 || strcmp(op, "fcvt.wu.d") == 0 ||
-           strcmp(op, "fcvt.l.d") == 0 || strcmp(op, "fcvt.lu.d") == 0 ||
-           strcmp(op, "fcvt.d.s") == 0 || strcmp(op, "fcvt.s.d") == 0;
-}
-
-static bool fp_convert_int_to_double(const char *op) {
-    return strcmp(op, "fcvt.d.w") == 0 || strcmp(op, "fcvt.d.wu") == 0 ||
-           strcmp(op, "fcvt.d.l") == 0 || strcmp(op, "fcvt.d.lu") == 0;
-}
-
-static bool fp_convert_double_to_int(const char *op) {
-    return strcmp(op, "fcvt.w.d") == 0 || strcmp(op, "fcvt.wu.d") == 0 ||
-           strcmp(op, "fcvt.l.d") == 0 || strcmp(op, "fcvt.lu.d") == 0;
-}
-
 static int vector_reg_number(const char *name) {
     char *end = NULL;
     long value;
@@ -918,17 +885,28 @@ static bool rv_mc_vector_word(MiniAs *as, MiniAsStmt *stmt,
     return true;
 }
 
+/* A dynamic form returns its accepted ISA/XLEN contract from the very parse
+ * that selected the machine encoding. The registry supplies the base policy;
+ * parsers specialize it for suffix-dependent widths/FP formats. There is no
+ * second mnemonic decode after an MCInst has been constructed. */
+typedef struct RvParsedIsaPolicy {
+    uint64_t required_features;
+    bool rv64_only;
+    bool handled;
+} RvParsedIsaPolicy;
+
 /* Common integer, supervisor, CSR aliases and compressed instructions share
  * typed MCInst ownership.  Multiword, position-dependent pseudos also retain
  * an instruction; the Target supplies their expansion-size plan. */
 static bool rv_parse_simple_mc(MiniAs *as, MiniAsStmt *stmt,
-                               char ops[][128], size_t n, bool *handled) {
+                               char ops[][128], size_t n,
+                               RvParsedIsaPolicy *policy) {
     const char *op = stmt->op;
     int rd=0,rs1=0,rs2=0;
     int64_t imm=0;
     uint32_t bits=0U,pred=15U,succ=15U;
     char base[128];
-    *handled = true;
+    policy->handled = true;
 
     if (strcmp(op, ".insn") == 0) {
         MiniAsMCInst *m;
@@ -1039,7 +1017,7 @@ static bool rv_parse_simple_mc(MiniAs *as, MiniAsStmt *stmt,
         bits=strcmp(op,"fscsr")==0?0x00301073U:0x00000067U;
         return rv_mc_word(as,stmt,bits,0,rs1,0);
     }
-    *handled=false;
+    policy->handled=false;
     return true;
 invalid:
     minias_set_error(as,"bad-riscv-mcinst:%s:%s:line=%zu",
@@ -1055,7 +1033,8 @@ oom:
  * registers, bit-patterns and symbolic expressions are parsed only once.
  * The serializer must never re-split their original source strings. */
 static bool rv_parse_multi_mc(MiniAs *as, MiniAsStmt *stmt,
-                              char ops[][128], size_t n, bool *handled) {
+                              char ops[][128], size_t n,
+                              RvParsedIsaPolicy *policy) {
     const char *op = stmt->op;
     MiniAsMCInst *m;
     MiniAsSymbolExpr expr;
@@ -1065,7 +1044,7 @@ static bool rv_parse_multi_mc(MiniAs *as, MiniAsStmt *stmt,
     int rd = -1;
     unsigned family, slots;
     MiniAsRiscvSymbolModifier modifier = MINIAS_RV_SYM_NONE;
-    *handled = true;
+    policy->handled = true;
     if (strcmp(op, "li") == 0) {
         if (n != 2U || (rd = reg_number(ops[0])) < 0 ||
             !parse_li_bits(ops[1], &bits, &fits, &signed_value))
@@ -1083,7 +1062,7 @@ static bool rv_parse_multi_mc(MiniAs *as, MiniAsStmt *stmt,
         family = RV_MC_LA;
         slots = 2U;
     } else {
-        *handled = false;
+        policy->handled = false;
         return true;
     }
     m = minias_mcinst_alloc(slots);
@@ -1139,13 +1118,13 @@ invalid:
 
 static bool rv_parse_vector_mc(MiniAs *as, MiniAsStmt *stmt,
                                char operands[][128], size_t count,
-                               bool *handled) {
+                               RvParsedIsaPolicy *policy) {
     bool store;
     uint32_t width;
     int vd, rs1, rs2;
     char base[128];
     int64_t off;
-    *handled = true;
+    policy->handled = true;
     if (decode_vector_unit_stride(stmt->op, &store, &width)) {
         if ((count != 2U && count != 3U) ||
             (count == 3U && strcmp(operands[2], "v0.t") != 0) ||
@@ -1183,7 +1162,7 @@ static bool rv_parse_vector_mc(MiniAs *as, MiniAsStmt *stmt,
         return rv_mc_word(as, stmt, (0x40U << 25U) | (7U << 12U) | 0x57U,
                           vd, rs1, rs2);
     }
-    *handled = false;
+    policy->handled = false;
     return true;
 invalid:
     minias_set_error(as, "bad-vector-mcinst:%s:%s:line=%zu",
@@ -1193,7 +1172,7 @@ invalid:
 
 static bool rv_parse_atomic_mc(MiniAs *as, MiniAsStmt *stmt,
                                char operands[][128], size_t count,
-                               bool *handled) {
+                               RvParsedIsaPolicy *policy) {
     bool lr = false, recognized;
     uint32_t width, ordering, funct5;
     int rd, rs1, rs2;
@@ -1203,8 +1182,10 @@ static bool rv_parse_atomic_mc(MiniAs *as, MiniAsStmt *stmt,
     if (recognized) funct5 = lr ? 2U : 3U;
     else recognized = decode_amo_mnemonic(stmt->op,
                                           &funct5, &width, &ordering);
-    *handled = recognized;
+    policy->handled = recognized;
     if (!recognized) return true;
+    /* One width decoder drives both opcode bits and RV32/RV64 policy. */
+    policy->rv64_only = width == 3U;
     if ((rd = count != 0U ? reg_number(operands[0]) : -1) < 0)
         goto invalid;
     if (lr) {
@@ -1226,7 +1207,7 @@ invalid:
 
 static bool rv_parse_csr_mc(MiniAs *as, MiniAsStmt *stmt,
                             char operands[][128], size_t count,
-                            bool *handled) {
+                            RvParsedIsaPolicy *policy) {
     const char *name = stmt->op;
     uint32_t csr, funct3;
     int rd = 0, rs1 = 0;
@@ -1238,8 +1219,8 @@ static bool rv_parse_csr_mc(MiniAs *as, MiniAsStmt *stmt,
     bool csr_alias = strcmp(name, "csrw") == 0 ||
                      strcmp(name, "csrs") == 0 ||
                      strcmp(name, "csrc") == 0;
-    *handled = csr_read || csr_full || csr_alias;
-    if (!*handled) return true;
+    policy->handled = csr_read || csr_full || csr_alias;
+    if (!policy->handled) return true;
 
     if (csr_read) {
         if (count != 2U || (rd = reg_number(operands[0])) < 0 ||
@@ -1287,101 +1268,89 @@ static bool rv_mc_fp_word(MiniAs *as, MiniAsStmt *stmt,
     return true;
 }
 
+/* One target-owned FP form table is the authority for recognition, encoding,
+ * register classes, D-vs-F ISA feature, XLEN and optional rounding syntax.
+ * Previously each of these dimensions enumerated overlapping mnemonic
+ * lists; a new instruction could parse successfully but carry the wrong ISA
+ * policy.  FPR mask: bit 0=rd, bit 1=rs1, bit 2=rs2. */
+typedef enum RvFpKind {
+    RV_FP_BINARY, RV_FP_SIGN, RV_FP_COMPARE, RV_FP_MOVE,
+    RV_FP_CONVERT, RV_FP_LOAD, RV_FP_STORE
+} RvFpKind;
+
+typedef struct RvFpDesc {
+    const char *name;
+    RvFpKind kind;
+    uint32_t encoding;
+    uint64_t required_features;
+    bool rv64_only;
+    unsigned fpr_mask;
+    unsigned default_rm;
+} RvFpDesc;
+
+#define RVFP(name, kind, encoding, feature, only64, mask, rm) \
+    {name, RV_FP_##kind, encoding, RISCV_ISA_##feature, only64, mask, rm}
+static const RvFpDesc rv_fp_forms[] = {
+    RVFP("fadd.s",BINARY,0x00000053U,F,false,7U,7U),
+    RVFP("fsub.s",BINARY,0x08000053U,F,false,7U,7U),
+    RVFP("fmul.s",BINARY,0x10000053U,F,false,7U,7U),
+    RVFP("fdiv.s",BINARY,0x18000053U,F,false,7U,7U),
+    RVFP("fadd.d",BINARY,0x02000053U,D,false,7U,7U),
+    RVFP("fsub.d",BINARY,0x0a000053U,D,false,7U,7U),
+    RVFP("fmul.d",BINARY,0x12000053U,D,false,7U,7U),
+    RVFP("fdiv.d",BINARY,0x1a000053U,D,false,7U,7U),
+    RVFP("fsgnjn.d",SIGN,0x22001053U,D,false,7U,0U),
+    RVFP("feq.d",COMPARE,0xa2002053U,D,false,6U,0U),
+    RVFP("flt.d",COMPARE,0xa2001053U,D,false,6U,0U),
+    RVFP("fle.d",COMPARE,0xa2000053U,D,false,6U,0U),
+    RVFP("fmv.x.d",MOVE,0xe2000053U,D,true,2U,0U),
+    RVFP("fmv.x.w",MOVE,0xe0000053U,F,false,2U,0U),
+    RVFP("fmv.d.x",MOVE,0xf2000053U,D,true,1U,0U),
+    RVFP("fmv.w.x",MOVE,0xf0000053U,F,false,1U,0U),
+    RVFP("fcvt.d.w",CONVERT,0xd2000053U,D,false,1U,0U),
+    RVFP("fcvt.d.wu",CONVERT,0xd2100053U,D,false,1U,0U),
+    RVFP("fcvt.d.l",CONVERT,0xd2200053U,D,true,1U,7U),
+    RVFP("fcvt.d.lu",CONVERT,0xd2300053U,D,true,1U,7U),
+    RVFP("fcvt.w.d",CONVERT,0xc2000053U,D,false,2U,7U),
+    RVFP("fcvt.wu.d",CONVERT,0xc2100053U,D,false,2U,7U),
+    RVFP("fcvt.l.d",CONVERT,0xc2200053U,D,true,2U,7U),
+    RVFP("fcvt.lu.d",CONVERT,0xc2300053U,D,true,2U,7U),
+    RVFP("fcvt.d.s",CONVERT,0x42000053U,D,false,3U,0U),
+    RVFP("fcvt.s.d",CONVERT,0x40100053U,D,false,3U,7U),
+    RVFP("flw",LOAD,0x00002007U,F,false,1U,0U),
+    RVFP("fld",LOAD,0x00003007U,D,false,1U,0U),
+    RVFP("fsw",STORE,0x00002027U,F,false,1U,0U),
+    RVFP("fsd",STORE,0x00003027U,D,false,1U,0U)
+};
+#undef RVFP
+
+static const RvFpDesc *rv_find_fp_form(const char *op) {
+    size_t i;
+    for (i = 0U; i < sizeof(rv_fp_forms) / sizeof(rv_fp_forms[0]); ++i)
+        if (strcmp(rv_fp_forms[i].name, op) == 0)
+            return &rv_fp_forms[i];
+    return NULL;
+}
+
 static bool rv_parse_fp_mc(MiniAs *as, MiniAsStmt *stmt,
                             char operands[][128], size_t count,
-                            bool *handled) {
-    const char *op = stmt->op;
-    uint32_t base = 0U, rm = 7U;
+                            RvParsedIsaPolicy *policy) {
+    const RvFpDesc *form = rv_find_fp_form(stmt->op);
+    uint32_t base, rm;
     int rd = -1, rs1 = -1, rs2 = 0;
-    unsigned classes = 7U;
     char memory_base[128];
     int64_t offset;
-    bool store;
-    *handled = false;
-
-    if (is_fp_binary_single(op) || is_fp_binary_double(op)) {
-        *handled = true;
-        if (count != 3U && count != 4U) goto invalid;
-        rd = float_reg_number(operands[0]);
-        rs1 = float_reg_number(operands[1]);
-        rs2 = float_reg_number(operands[2]);
-        if (count == 4U && !parse_fp_rounding_mode(operands[3], &rm))
-            goto invalid;
-        if (strcmp(op, "fadd.s") == 0) base = 0x00000053U;
-        else if (strcmp(op, "fsub.s") == 0) base = 0x08000053U;
-        else if (strcmp(op, "fmul.s") == 0) base = 0x10000053U;
-        else if (strcmp(op, "fdiv.s") == 0) base = 0x18000053U;
-        else if (strcmp(op, "fadd.d") == 0) base = 0x02000053U;
-        else if (strcmp(op, "fsub.d") == 0) base = 0x0a000053U;
-        else if (strcmp(op, "fmul.d") == 0) base = 0x12000053U;
-        else base = 0x1a000053U;
-        base |= rm << 12U;
-    } else if (strcmp(op, "fsgnjn.d") == 0) {
-        *handled = true;
-        if (count != 3U) goto invalid;
-        rd = float_reg_number(operands[0]);
-        rs1 = float_reg_number(operands[1]);
-        rs2 = float_reg_number(operands[2]);
-        base = 0x22001053U;
-    } else if (is_fp_compare_double(op)) {
-        *handled = true;
-        if (count != 3U) goto invalid;
-        rd = reg_number(operands[0]);
-        rs1 = float_reg_number(operands[1]);
-        rs2 = float_reg_number(operands[2]);
-        classes = 6U; /* integer result, two FP sources */
-        base = strcmp(op, "feq.d") == 0 ? 0xa2002053U :
-               strcmp(op, "flt.d") == 0 ? 0xa2001053U : 0xa2000053U;
-    } else if (strcmp(op, "fmv.x.d") == 0 ||
-               strcmp(op, "fmv.x.w") == 0) {
-        *handled = true;
-        if (count != 2U) goto invalid;
-        rd = reg_number(operands[0]);
-        rs1 = float_reg_number(operands[1]);
-        classes = 2U;
-        base = strcmp(op, "fmv.x.d") == 0 ? 0xe2000053U : 0xe0000053U;
-    } else if (strcmp(op, "fmv.d.x") == 0 ||
-               strcmp(op, "fmv.w.x") == 0) {
-        *handled = true;
-        if (count != 2U) goto invalid;
-        rd = float_reg_number(operands[0]);
-        rs1 = reg_number(operands[1]);
-        classes = 1U;
-        base = strcmp(op, "fmv.d.x") == 0 ? 0xf2000053U : 0xf0000053U;
-    } else if (is_fp_convert(op)) {
-        *handled = true;
-        if (count != 2U && count != 3U) goto invalid;
-        if (strcmp(op, "fcvt.d.w") == 0) {base=0xd2000053U;rm=0U;}
-        else if (strcmp(op, "fcvt.d.wu") == 0) {base=0xd2100053U;rm=0U;}
-        else if (strcmp(op, "fcvt.d.l") == 0) {base=0xd2200053U;rm=7U;}
-        else if (strcmp(op, "fcvt.d.lu") == 0) {base=0xd2300053U;rm=7U;}
-        else if (strcmp(op, "fcvt.w.d") == 0) {base=0xc2000053U;rm=7U;}
-        else if (strcmp(op, "fcvt.wu.d") == 0) {base=0xc2100053U;rm=7U;}
-        else if (strcmp(op, "fcvt.l.d") == 0) {base=0xc2200053U;rm=7U;}
-        else if (strcmp(op, "fcvt.lu.d") == 0) {base=0xc2300053U;rm=7U;}
-        else if (strcmp(op, "fcvt.d.s") == 0) {base=0x42000053U;rm=0U;}
-        else {base=0x40100053U;rm=7U;}
-        if (count == 3U && !parse_fp_rounding_mode(operands[2], &rm))
-            goto invalid;
-        if (fp_convert_int_to_double(op)) {
-            rd=float_reg_number(operands[0]);
-            rs1=reg_number(operands[1]);
-            classes=1U;
-        } else if (fp_convert_double_to_int(op)) {
-            rd=reg_number(operands[0]);
-            rs1=float_reg_number(operands[1]);
-            classes=2U;
-        } else {
-            rd=float_reg_number(operands[0]);
-            rs1=float_reg_number(operands[1]);
-            classes=3U;
-        }
-        base |= rm << 12U;
-    } else if (strcmp(op, "fld") == 0 || strcmp(op, "flw") == 0 ||
-               strcmp(op, "fsd") == 0 || strcmp(op, "fsw") == 0) {
+    if (form == NULL) {
+        policy->handled = false;
+        return true;
+    }
+    policy->handled = true;
+    policy->required_features = form->required_features;
+    policy->rv64_only = form->rv64_only;
+    base = form->encoding;
+    rm = form->default_rm;
+    if (form->kind == RV_FP_LOAD || form->kind == RV_FP_STORE) {
         MiniAsMCInst *m;
-        *handled=true;
-        store = strcmp(op, "fsd") == 0 || strcmp(op, "fsw") == 0;
         if (count != 2U || (rd = float_reg_number(operands[0])) < 0 ||
             !parse_mem(operands[1], &offset, memory_base) ||
             (rs1 = reg_number(memory_base)) < 0 ||
@@ -1391,10 +1360,8 @@ static bool rv_parse_fp_mc(MiniAs *as, MiniAsStmt *stmt,
             minias_set_error(as,"out-of-memory:riscv-fp-memory");
             return false;
         }
-        m->opcode=store ? RV_MC_STORE : RV_MC_LOAD;
-        m->encoding=(store ? 0x27U : 0x07U) |
-                    ((strcmp(op,"fld")==0 || strcmp(op,"fsd")==0
-                     ? 3U : 2U) << 12U);
+        m->opcode=form->kind == RV_FP_STORE ? RV_MC_STORE : RV_MC_LOAD;
+        m->encoding=base;
         m->count=3U;
         rv_set_reg(&m->operands[0],rd);
         m->operands[0].reg_class=MINIAS_MC_REG_FPR;
@@ -1402,13 +1369,38 @@ static bool rv_parse_fp_mc(MiniAs *as, MiniAsStmt *stmt,
         rv_set_imm(&m->operands[2],offset);
         stmt->mcinst=m;
         return true;
-    } else return true;
+    }
+    if (form->kind == RV_FP_BINARY || form->kind == RV_FP_SIGN ||
+        form->kind == RV_FP_COMPARE) {
+        if (count != 3U &&
+            !(form->kind == RV_FP_BINARY && count == 4U)) goto invalid;
+        rd = (form->fpr_mask & 1U) != 0U ?
+             float_reg_number(operands[0]) : reg_number(operands[0]);
+        rs1 = float_reg_number(operands[1]);
+        rs2 = float_reg_number(operands[2]);
+        if (count == 4U && !parse_fp_rounding_mode(operands[3], &rm))
+            goto invalid;
+        if (form->kind == RV_FP_BINARY) base |= rm << 12U;
+    } else if (form->kind == RV_FP_MOVE || form->kind == RV_FP_CONVERT) {
+        if (count != 2U &&
+            !(form->kind == RV_FP_CONVERT && count == 3U)) goto invalid;
+        rd = (form->fpr_mask & 1U) != 0U ?
+             float_reg_number(operands[0]) : reg_number(operands[0]);
+        rs1 = (form->fpr_mask & 2U) != 0U ?
+              float_reg_number(operands[1]) : reg_number(operands[1]);
+        if (count == 3U && !parse_fp_rounding_mode(operands[2], &rm))
+            goto invalid;
+        if (form->kind == RV_FP_CONVERT) base |= rm << 12U;
+    } else {
+        minias_set_error(as, "internal:unhandled-riscv-fp-descriptor");
+        return false;
+    }
 
     if (rd < 0 || rs1 < 0 || rs2 < 0) goto invalid;
-    return rv_mc_fp_word(as,stmt,base,rd,rs1,rs2,classes);
+    return rv_mc_fp_word(as,stmt,base,rd,rs1,rs2,form->fpr_mask);
 invalid:
     minias_set_error(as,"bad-fp-mcinst:%s:%s:line=%zu",
-                     op,stmt->args,stmt->line);
+                     stmt->op,stmt->args,stmt->line);
     return false;
 }
 
@@ -1418,7 +1410,7 @@ invalid:
  * no successful parse that defers unknown-opcode diagnostics to layout.
  * Exact aliases take precedence over broad extension-family prefixes. */
 typedef bool (*RvFormParser)(MiniAs *, MiniAsStmt *, char [][128], size_t,
-                             bool *);
+                             RvParsedIsaPolicy *);
 typedef struct RvParseForm {
     const char *spelling;
     RvFormParser parse;
@@ -1500,45 +1492,6 @@ static const RvParseForm *rv_find_parse_form(const char *op) {
     return NULL;
 }
 
-/* The parser table is also the feature/XLEN policy source for every dynamic
- * form. No disconnected list in the TargetInfo needs to guess whether an
- * alias belongs to A/F/D/V or to RV64. Width suffixes are semantic subforms,
- * validated by each family decoder when the MCInst is constructed. */
-static void rv_parse_form_policy(const RvParseForm *form,
-                                 const char *mnemonic,
-                                 const MiniAsMCInst *inst,
-                                 uint64_t *required_features,
-                                 bool *rv64_only) {
-    uint64_t features;
-    bool only64;
-    features = form->required_features;
-    only64 = form->rv64_only;
-    if (form->parse == rv_parse_atomic_mc) {
-        /* The suffix decoder already chose the actual encoded AMO width.
-         * ISA policy consumes it rather than reparsing .w/.d by string. */
-        only64 = inst != NULL && ((inst->encoding >> 12U) & 7U) == 3U;
-    } else if (form->parse == rv_parse_fp_mc) {
-        if (strcmp(mnemonic, "fld") == 0 ||
-            strcmp(mnemonic, "fsd") == 0 ||
-            strstr(mnemonic, ".d") != NULL)
-            features = RISCV_ISA_D;
-        if (strcmp(mnemonic, "fmv.x.d") == 0 ||
-            strcmp(mnemonic, "fmv.d.x") == 0 ||
-            strcmp(mnemonic, "fcvt.d.l") == 0 ||
-            strcmp(mnemonic, "fcvt.d.lu") == 0 ||
-            strcmp(mnemonic, "fcvt.l.d") == 0 ||
-            strcmp(mnemonic, "fcvt.lu.d") == 0)
-            only64 = true;
-    }
-    if (required_features != NULL) *required_features = features;
-    if (rv64_only != NULL) *rv64_only = only64;
-}
-
-typedef struct RvParsedIsaPolicy {
-    uint64_t required_features;
-    bool rv64_only;
-} RvParsedIsaPolicy;
-
 static bool rv_parse_mcinst_impl(MiniAs *as, MiniAsStmt *stmt,
                                   RvParsedIsaPolicy *policy) {
     const RvMCDesc *desc;
@@ -1556,7 +1509,6 @@ static bool rv_parse_mcinst_impl(MiniAs *as, MiniAsStmt *stmt,
     desc = rv_find_mc_descriptor(op);
     if (desc == NULL) {
         const RvParseForm *form = rv_find_parse_form(op);
-        bool handled = false;
         bool accepted;
         if (form == NULL) {
             minias_set_error(as, "unsupported-instruction:%s:line=%zu",
@@ -1564,15 +1516,16 @@ static bool rv_parse_mcinst_impl(MiniAs *as, MiniAsStmt *stmt,
             return false;
         }
         if(!split_operands(stmt->args,operands,8U,&count))goto invalid;
-        accepted = form->parse(as, stmt, operands, count, &handled);
+        policy->handled = false;
+        policy->required_features = form->required_features;
+        policy->rv64_only = form->rv64_only;
+        accepted = form->parse(as, stmt, operands, count, policy);
         if (!accepted) return false;
-        if (!handled) {
+        if (!policy->handled) {
             minias_set_error(as, "unsupported-instruction:%s:line=%zu",
                              op, stmt->line);
             return false;
         }
-        rv_parse_form_policy(form, op, stmt->mcinst,
-                             &policy->required_features,&policy->rv64_only);
         return as->error[0] == '\0';
     }
     family = desc->family;
@@ -1785,7 +1738,7 @@ oom:
  * original assembly text. EF_RVE=8 also covers -mabi=ilp32e without -march. */
 bool minias_riscv_parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
     const MiniAsRiscvState *state = MINIAS_RV_STATE(as);
-    RvParsedIsaPolicy policy={0U,false};
+    RvParsedIsaPolicy policy={0};
     const MiniAsMCInst *inst;
     size_t index;
 

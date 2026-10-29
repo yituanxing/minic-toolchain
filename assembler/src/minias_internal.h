@@ -138,6 +138,13 @@ typedef enum MiniAsOrgMode {
  * parser's global current_section or a second copy of the source text. */
 typedef struct MiniAsDeferredExpr MiniAsDeferredExpr;
 
+/* Semantic statement identity is independent of its changing Fragment
+ * ordinal. A SiteID is interned from the complete source/expansion path by
+ * an assembly-session SourceGraph; zero is the absent/root sentinel. */
+typedef size_t MiniAsStableSiteId;
+#define MINIAS_SITE_NONE ((MiniAsStableSiteId)0U)
+typedef struct MiniAsSourceGraph MiniAsSourceGraph;
+
 /* Common fixup kinds describe generic byte-addressed data semantics.
  * Machine-specific kinds are opaque uint32_t values owned by the Target.
  * ELF relocation ID selection happens only after fragment layout. */
@@ -272,6 +279,7 @@ typedef struct MiniAsConditional {
     bool parent_active;
     bool condition_true;
     bool else_seen;
+    MiniAsStableSiteId source_site;
 } MiniAsConditional;
 
 typedef struct MiniAsMacroParam {
@@ -299,7 +307,9 @@ typedef struct MiniAsMacro {
     size_t param_count;
     char **body;
     size_t *body_lines;
+    size_t *body_source_segments;
     size_t body_count;
+    MiniAsStableSiteId definition_site;
 } MiniAsMacro;
 
 /* Common never interprets these bits: only the emitting Target knows their
@@ -346,6 +356,7 @@ typedef struct MiniAsMCData {
 
 typedef struct MiniAsStmt {
     MiniAsFragmentKind fragment_kind;
+    MiniAsStableSiteId source_site;
     char *op;
     char *args;
     size_t line;
@@ -525,6 +536,11 @@ typedef struct MiniAs {
     bool has_org_constraints; /* typed position-dependent .org fragments */
     bool has_cross_subsection_size_end; /* retained .size cross-subsection span */
     bool has_mutable_absolute_sets; /* snapshot mutable .set in data */
+    /* Borrowed per-assemble-config source identities. Object SymbolIDs and
+     * TargetState remain fresh on every conservative source replay. */
+    MiniAsSourceGraph *source_graph;
+    MiniAsStableSiteId current_source_site;
+    MiniAsStableSiteId current_expansion_site;
     /* Opaque per-assembly backend parser state, owned and freed by Target. */
     void *target_state;
     bool cfi_active;
@@ -785,10 +801,6 @@ typedef struct MiniAsTargetOps {
     /* Each target owns ISA/ABI/ELF profile validation; the CLI is target-neutral. */
     bool (*resolve_profile)(const char *, const char *,
                             struct MiniAsAssemblyConfig *, char *, size_t);
-    /* Optional ISA/ABI gate runs before operand parsing and does not
-     * independently decode source instruction operands. */
-    bool (*validate_instruction)(const MiniAs *, const char *, const char *,
-                                 char *, size_t);
     /* Mandatory target instruction path: parse once, measure its retained
      * typed operands, then encode. Core owns fragment address and growth. */
     bool (*parse_mcinst)(MiniAs *, MiniAsStmt *);
