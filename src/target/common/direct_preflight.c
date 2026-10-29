@@ -194,7 +194,8 @@ bool minic_multi_direct_lp64_cfg_preflight(
                 size_t bytes, slots, fp_elements, fp_width;
                 MinicType object_type;
                 size_t indirect_bytes = 0U;
-                if ((!minic_multi_gp_record(program, target, fn->return_type,
+                if ((!minic_multi_empty_record(program, target, fn->return_type) &&
+                     !minic_multi_gp_record(program, target, fn->return_type,
                                              &bytes, &slots) &&
                      !minic_multi_fp_return_record(program, target,
                          fn->return_type, &fp_elements, &fp_width) &&

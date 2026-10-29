@@ -87,6 +87,20 @@ bool minic_aarch64_emit_abi_instruction(
                 if (arg->kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {
                     size_t record_size, slots, object_offset, chunk;
                     const MinicCoreObjectId object_id = arg->value.object_id;
+                    if (object_id >= fn->object_count) return false;
+                    if (location->kind == MINIC_LP64_ARGUMENT_EMPTY_RECORD) {
+                        /* Zero-byte AAPCS64 composite: no argument registers
+                         * or stack slots, and no phantom caller-side load. */
+                        if (location->size_bytes != 0U ||
+                            location->chunks != 0U ||
+                            location->gp_registers != 0U ||
+                            location->fp_registers != 0U ||
+                            location->stack_slots != 0U ||
+                            !minic_multi_empty_record(program, target,
+                                fn->objects[object_id].type))
+                            return false;
+                        continue;
+                    }
                     if (!minic_lp64_frame_plan_object(frame_plan, object_id, &object_offset))
                         return false;
                     if (!minic_multi_gp_record(program, target,
@@ -238,7 +252,12 @@ bool minic_aarch64_emit_abi_instruction(
                 const MinicCoreObjectId object_id =
                     ins->value.call.result_object;
                 size_t bytes, slots, dst, chunk, fp_elements, fp_width;
-                if (indirect || object_id >= fn->object_count ||
+                if (indirect || object_id >= fn->object_count)
+                    return false;
+                if (minic_multi_empty_record(program, target, ins->type))
+                    return minic_multi_empty_record(program, target,
+                        fn->objects[object_id].type);
+                if (
                     !minic_lp64_frame_plan_object(frame_plan, object_id, &dst))
                     return false;
                 if (minic_aarch64_indirect_record(

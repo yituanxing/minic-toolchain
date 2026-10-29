@@ -38,6 +38,14 @@ static bool minic_lp64_plan_types(
         bool by_reference = false;
         loc->gp_first = loc->fp_first = loc->stack_first = SIZE_MAX;
         if (record) {
+            if (minic_multi_empty_record(program, target, type)) {
+                /* GNU C zero-size records do not occupy GARs, FARs, or
+                 * stack slots. Keep the source parameter ordinal intact. */
+                loc->kind = MINIC_LP64_ARGUMENT_EMPTY_RECORD;
+                loc->size_bytes = 0U;
+                loc->chunks = 0U;
+                continue;
+            }
             if (!minic_multi_gp_record(program, target, type, &size, &chunks)) {
                 if (!indirect_record(program, target, type, &size)) return false;
                 by_reference = true;
@@ -242,6 +250,7 @@ static bool minic_lp64_admit_call(
                                    &return_record_bytes, &return_record_slots) &&
               return_record_bytes > 0U && return_record_bytes <= 16U &&
               return_record_slots >= 1U && return_record_slots <= 2U) ||
+             minic_multi_empty_record(program, target, ins->type) ||
              minic_multi_fp_return_record(program, target, ins->type,
                                            &fp_elements, &fp_width) ||
              (indirect_return != NULL &&
@@ -324,19 +333,23 @@ static bool minic_lp64_admit_call(
             if (arg->kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {
                 const MinicCoreObjectId object_id = arg->value.object_id;
                 size_t record_size, record_slots;
+                if (object_id >= fn->object_count ||
+                    fn->objects[object_id].element_count != 1U ||
+                    (j < parameter_count &&
+                     !minic_type_equal(fn->objects[object_id].type,
+                                       parameter_types[j])) ||
+                    (j >= parameter_count && !is_variadic))
+                    return false;
+                if (minic_multi_empty_record(program, target,
+                                             fn->objects[object_id].type))
+                    continue;
                 /* Original BusyBox ipcrm/ipcs pass union semun by
                  * value to variadic semctl(). A single integer-class
                  * eightbyte uses the ordinary GP/overflow integer ABI,
                  * including when the argument is beyond the fixed list.
                  * Larger variadic aggregates and FP/HFA records remain
                  * explicitly unsupported rather than guessed. */
-                if (object_id >= fn->object_count ||
-                    fn->objects[object_id].element_count != 1U ||
-                    (j < parameter_count &&
-                     !minic_type_equal(fn->objects[object_id].type,
-                                       parameter_types[j])) ||
-                    (j >= parameter_count && !is_variadic) ||
-                    (!minic_multi_gp_record(program, target,
+                if ((!minic_multi_gp_record(program, target,
                                             fn->objects[object_id].type,
                                             &record_size, &record_slots) &&
                      (j >= parameter_count ||

@@ -286,14 +286,16 @@ SRC
     for width in 32 64; do
         if [ "$width" = 32 ]; then
             typename='unsigned int'; prefix=''; word0='%w0'; word3='%w3'
+            logic_constraint=Kr
         else
             typename='unsigned long'; prefix='64'; word0='%0'; word3='%3'
+            logic_constraint=Lr
         fi
         for operation in and or xor andnot add sub; do
             case "$operation" in
-                and) opcode=and; input_constraint=Lr ;;
-                or) opcode=orr; input_constraint=Lr ;;
-                xor) opcode=eor; input_constraint=Lr ;;
+                and) opcode=and; input_constraint=$logic_constraint ;;
+                or) opcode=orr; input_constraint=$logic_constraint ;;
+                xor) opcode=eor; input_constraint=$logic_constraint ;;
                 andnot) opcode=bic; input_constraint=r ;;
                 add) opcode=add; input_constraint=Ir ;;
                 sub) opcode=sub; input_constraint=Jr ;;

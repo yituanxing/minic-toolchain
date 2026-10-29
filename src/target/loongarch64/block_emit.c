@@ -125,6 +125,13 @@ const MinicLP64ArgumentLocation *location;
             if (!minic_multi_direct_parameter_object_location(
                     fn, ins, incoming_plan, frame_plan, &location, &object_offset))
                 return false;
+            if (location->kind == MINIC_LP64_ARGUMENT_EMPTY_RECORD) {
+                /* No incoming machine bytes for GNU zero-size aggregates. */
+                return location->size_bytes == 0U && location->chunks == 0U &&
+                       location->gp_registers == 0U &&
+                       location->fp_registers == 0U &&
+                       location->stack_slots == 0U;
+            }
             size = location->size_bytes;
             slots = location->kind == MINIC_LP64_ARGUMENT_RECORD
                 ? location->chunks : 0U;
@@ -235,7 +242,10 @@ bool minic_loongarch64_emit_terminator(FILE *out,
                 if (object_id >= fn->object_count ||
                     !minic_lp64_frame_plan_object(frame_plan, object_id, &src))
                     return false;
-                if (minic_multi_fp_return_record(program, target,
+                if (minic_multi_empty_record(program, target,
+                                             fn->return_type)) {
+                    /* Complete zero-byte record returns have no payload. */
+                } else if (minic_multi_fp_return_record(program, target,
                         fn->return_type, &fp_elements, &fp_width)) {
                     for (fp = 0U; fp < fp_elements; ++fp)
                         if (!minic_loongarch64_emit_frame_mem(

@@ -12,6 +12,9 @@ struct Empty {};
 struct One { unsigned int val[2]; };
 struct Two { unsigned int val[4]; };
 struct Big { unsigned long a, b, c; unsigned char tail[5]; };
+struct RqFlags { unsigned long flags; struct Empty cookie; };
+struct Guard { unsigned long lock; struct RqFlags rf; };
+extern struct Guard gcc_nested(unsigned long);
 extern struct Big gcc_make(long);
 extern int gcc_take(long, long, long, long, long, long, struct Big);
 extern int gcc_empty(struct Empty, long);
@@ -46,6 +49,16 @@ struct Two minic_two(struct Two value) {
     value.val[3] += 4U;
     return value;
 }
+struct Guard minic_nested(unsigned long value) {
+    struct Guard guard;
+    guard.lock = value;
+    guard.rf.flags = value + 7UL;
+    return guard;
+}
+int minic_nested_call(void) {
+    struct Guard guard = gcc_nested(31UL);
+    return guard.lock == 31UL && guard.rf.flags == 38UL;
+}
 int minic_call_gcc(void) {
     struct Big value = gcc_make(11L);
     struct Empty empty;
@@ -63,6 +76,7 @@ int minic_call_gcc(void) {
     two = gcc_two(two);
     if (two.val[0] != 2U || two.val[1] != 4U ||
         two.val[2] != 6U || two.val[3] != 8U) return 5;
+    if (!minic_nested_call()) return 6;
     return 42;
 }
 SOURCE
@@ -71,6 +85,10 @@ struct Empty {};
 struct One { unsigned int val[2]; };
 struct Two { unsigned int val[4]; };
 struct Big { unsigned long a, b, c; unsigned char tail[5]; };
+struct RqFlags { unsigned long flags; struct Empty cookie; };
+struct Guard { unsigned long lock; struct RqFlags rf; };
+extern struct Guard minic_nested(unsigned long);
+extern int minic_nested_call(void);
 extern struct Big minic_make(long);
 extern int minic_take(struct Big, long);
 extern int minic_empty(struct Empty, long);
@@ -96,6 +114,12 @@ struct Two gcc_two(struct Two value) {
     value.val[0] += 1; value.val[1] += 2;
     value.val[2] += 3; value.val[3] += 4; return value;
 }
+struct Guard gcc_nested(unsigned long value) {
+    struct Guard guard;
+    guard.lock = value;
+    guard.rf.flags = value + 7UL;
+    return guard;
+}
 int main(void) {
     struct Big b = minic_make(11L);
     struct Empty empty;
@@ -108,6 +132,11 @@ int main(void) {
     if (one.val[0] != 14U || one.val[1] != 18U ||
         two.val[0] != 2U || two.val[1] != 4U ||
         two.val[2] != 6U || two.val[3] != 8U) return 12;
+    {
+        struct Guard guard = minic_nested(31UL);
+        if (guard.lock != 31UL || guard.rf.flags != 38UL ||
+            !minic_nested_call()) return 13;
+    }
     return minic_call_gcc();
 }
 SOURCE
@@ -124,4 +153,4 @@ if [[ $mini_rc != 42 || $gnu_rc != 42 ]]; then
     echo "X86_RECORD_ARRAY_SRET_ABI=FAIL minic=$mini_rc gnu=$gnu_rc" >&2
     exit 1
 fi
-echo 'X86_RECORD_ARRAY_SRET_ABI=PASS one_gp_array two_gp_array empty_record byvalue_stack hidden_sret direct_call GCC↔MiniC'
+echo 'X86_RECORD_ARRAY_SRET_ABI=PASS one_gp_array two_gp_array empty_record nested_empty_record byvalue_stack hidden_sret direct_call GCC↔MiniC'

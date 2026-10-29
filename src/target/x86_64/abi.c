@@ -57,11 +57,15 @@ static bool x86_one_gp_integer_fields(const MinicC0Program *program,
         return true;
     if (!minic_type_is_record(plain) || depth > 12U) return false;
     rec = minic_c0_program_record(program, plain.record_id);
-    if (!rec || !rec->is_complete || rec->field_count == 0U ||
+    if (!rec || !rec->is_complete ||
         !minic_data_layout_type(target->data_layout, program, plain,
                                 &size, &alignment) ||
-        !size || size > 8U || !alignment || alignment > 8U)
+        size > 8U || !alignment || alignment > 8U)
         return false;
+    /* GNU empty records are ABI NO_CLASS: in particular, rq_flags embeds
+     * `struct pin_cookie {}` inside the two-GP class_rq_lock_irqsave_t.
+     * Their zero bytes must not reject the surrounding INTEGER aggregate. */
+    if (size == 0U) return true;
     for (i = 0U; i < rec->field_count; ++i) {
         const MinicRecordField *field = minic_c0_record_field(rec, i);
         size_t bytes, field_align, offset, bit_offset;
@@ -89,9 +93,13 @@ static bool x86_one_gp_integer_fields(const MinicC0Program *program,
              * GNU `struct { u32 val[2]; }` is INTEGER in RAX, even though
              * its field is not a scalar declarator. Reject any genuinely
              * unaligned element or an array crossing the record boundary. */
-            if (offset % field_align || !bytes ||
-                field->element_count > (size - offset) / bytes)
+            if (offset % field_align ||
+                (bytes && field->element_count > (size - offset) / bytes))
                 return false;
+            if (bytes == 0U) {
+                if (!minic_type_is_record(field->type)) return false;
+                continue;
+            }
             for (element = 0U; element < field->element_count; ++element)
                 if (!x86_one_gp_integer_fields(program, target, field->type,
                                                depth + 1U))
@@ -137,15 +145,16 @@ static bool x86_two_gp_integer_fields(const MinicC0Program *program,
     size_t bytes, align, i;
     if (!minic_type_unqualified(type, &plain) ||
         !minic_data_layout_type(target->data_layout, program, plain,
-                                &bytes, &align) || !bytes || !align ||
+                                &bytes, &align) || !align ||
         bytes > 16U || absolute > 16U - bytes || depth > 12U)
         return false;
     if (minic_type_is_integer(plain) || minic_type_is_pointer(plain))
-        return align <= 8U && absolute % align == 0U;
+        return bytes > 0U && align <= 8U && absolute % align == 0U;
     if (!minic_type_is_record(plain)) return false;
     rec = minic_c0_program_record(program, plain.record_id);
-    if (!rec || !rec->is_complete || !rec->field_count || align > 8U)
+    if (!rec || !rec->is_complete || align > 8U)
         return false;
+    if (bytes == 0U) return true;
     for (i = 0U; i < rec->field_count; ++i) {
         const MinicRecordField *field = minic_c0_record_field(rec, i);
         size_t offset, bit_offset, field_bytes, field_align;
@@ -172,9 +181,13 @@ static bool x86_two_gp_integer_fields(const MinicC0Program *program,
                 return false;
         } else {
             size_t element;
-            if (!field_bytes || field->element_count >
+            if (field_bytes && field->element_count >
                 (bytes - offset) / field_bytes)
                 return false;
+            if (field_bytes == 0U) {
+                if (!minic_type_is_record(field->type)) return false;
+                continue;
+            }
             for (element = 0U; element < field->element_count; ++element)
                 if (!x86_two_gp_integer_fields(program, target, field->type,
                      absolute + offset + element * field_bytes, depth + 1U))

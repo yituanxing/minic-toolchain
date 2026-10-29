@@ -25,6 +25,14 @@ grep -F '.size relocation_records, 16' "$work/static_aggregate_array_designators
 grep -F '  .dword relocation_target' "$work/static_aggregate_array_designators.s" >/dev/null
 grep -F '  .dword .Lminic_string_' "$work/static_aggregate_array_designators.s" >/dev/null
 grep -F '.size atomic_lock_slots, 1024' "$work/static_aggregate_array_designators.s" >/dev/null
+grep -F '.size task_mask, 32' "$work/static_aggregate_array_designators.s" >/dev/null
+
+minic_cc=$(dirname "$minic")/minic-cc
+"$minic_cc" --target=x86_64-linux -S "$work/static_aggregate_array_designators.i" \
+    -o "$work/static_aggregate_array_designators.x86.s"
+"$host_cc" -no-pie "$work/static_aggregate_array_designators.x86.s" \
+    -o "$work/static_aggregate_array_designators.x86"
+"$work/static_aggregate_array_designators.x86"
 
 source="$root/tests/compiler/c0/invalid_static_aggregate_array_backward_designator.c"
 "$host_cc" -E -P -std=gnu11 -x c "$source" -o "$work/backward.i"
@@ -39,4 +47,4 @@ grep -F '  .word 1' "$work/backward.s" >/dev/null
 grep -F '  .word 2' "$work/backward.s" >/dev/null
 
 printf '%s\n' \
-    'PASS compiler/c0/static_aggregate_array_designators inferred-bound=designator-extent nested-field=1 compound-literal=1 relocation-owner=aggregate-scalar union-array=1024 backward=GNU-slot-order range=shared-owner'
+    'PASS compiler/c0/static_aggregate_array_designators inferred-bound=designator-extent nested-field=1 compound-literal=1 relocation-owner=aggregate-scalar union-array=1024 backward=GNU-slot-order range=shared-owner backward-scalar-range=native-x86'

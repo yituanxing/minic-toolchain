@@ -15,6 +15,8 @@ bool minic_aarch64_qualify_inline_asm(
 bool minic_aarch64_emit_qualified_structured_asm(
     FILE *, const MinicDirectLP64BlockContext *, const MinicCoreInstruction *);
 bool minic_aarch64_qualified_opaque_asm(const MinicCoreInlineAsm *);
+/* Bounded GNU .rept N/NOP/.endr from original GICv3 read-ordering erratum. */
+unsigned int minic_aarch64_linux_rept_nop_count(const char *, size_t);
 /* EL1 DAIF mask update with Linux's exact local_daif_mask annotation. */
 unsigned int minic_aarch64_linux_daif_immediate_form(const char *, size_t);
 /* Exact privileged Linux PSTATE immediate encodings from original .inst. */

@@ -71,7 +71,8 @@ bool minic_lp64_valid_return_type(const MinicC0Program *program,
            minic_type_is_long_double(type) ||
            minic_lp64_valid_parameter_type(program, target, type) ||
            (minic_type_is_record(type) &&
-            ((minic_multi_gp_record(program, target, type, &bytes, &slots) &&
+            (minic_multi_empty_record(program, target, type) ||
+             (minic_multi_gp_record(program, target, type, &bytes, &slots) &&
               slots >= 1U && slots <= 2U) ||
              minic_multi_fp_return_record(program, target, type,
                                            &fp_elements, &fp_width)));

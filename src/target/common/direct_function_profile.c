@@ -46,6 +46,7 @@ MinicDirectLP64ProfileResult minic_multi_direct_lp64_profile_function(
     for (i = 0U; i < fn->parameter_count; ++i) {
         size_t record_size, record_slots;
         if (!minic_lp64_valid_parameter_type(program, target, fn->parameter_types[i]) &&
+            !minic_multi_empty_record(program, target, fn->parameter_types[i]) &&
             !minic_multi_gp_record(program, target, fn->parameter_types[i],
                                    &record_size, &record_slots) &&
             !indirect_record(program, target, fn->parameter_types[i], &record_size))

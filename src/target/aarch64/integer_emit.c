@@ -44,6 +44,7 @@ bool minic_aarch64_emit_integer_instruction(
     }
     if (ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_ADD ||
         ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT ||
+        ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY ||
         ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND ||
         ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_XOR ||
         ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR ||
@@ -78,6 +79,16 @@ bool minic_aarch64_emit_integer_instruction(
                 break;
             case MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT:
                 op = "  subs x9, x9, x11\n  sbc x10, x10, x13\n";
+                break;
+            case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY:
+                /* 128-bit product modulo 2^128. The low half is A0*B0;
+                 * high half is umulh(A0,B0) + A0*B1 + A1*B0.
+                 * This bit pattern is correct for signed and unsigned C
+                 * int128 whenever signed multiplication is defined. */
+                op = "  umulh x14, x9, x11\n"
+                     "  madd x14, x9, x13, x14\n"
+                     "  madd x10, x10, x11, x14\n"
+                     "  mul x9, x9, x11\n";
                 break;
             case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND:
                 op = "  and x9, x9, x11\n  and x10, x10, x13\n";

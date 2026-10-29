@@ -103,6 +103,17 @@ bool minic_aarch64_emit_residual_instruction(
              * Do not forward even a whitelisted GNU arithmetic expression
              * to the assembler as an uninspected opaque instruction. */
             if (source != NULL) {
+                const unsigned int repeat = minic_aarch64_linux_rept_nop_count(
+                    source->template_text, source->template_length);
+                if (repeat != 0U) {
+                    unsigned int k;
+                    if (!minic_aarch64_qualified_opaque_asm(source))
+                        return false;
+                    for (k = 0U; k < repeat; ++k)
+                        if (fputs("  nop\n", out) == EOF) return false;
+                    *needs_writeback = false;
+                    return true;
+                }
                 const unsigned int pstate = minic_aarch64_linux_pstate_imm_opcode(
                     source->template_text, source->template_length);
                 if (pstate != 0U) {

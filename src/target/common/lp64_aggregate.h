@@ -13,6 +13,10 @@
 bool minic_multi_gp_record(const MinicC0Program *program,
                            const MinicTargetInfo *target, MinicType type,
                            size_t *bytes, size_t *eightbytes);
+/* GNU C permits complete, zero-byte records. AAPCS64 and LoongArch LP64D
+ * pass them without consuming any argument register or stack slot. */
+bool minic_multi_empty_record(const MinicC0Program *program,
+                              const MinicTargetInfo *target, MinicType type);
 bool minic_multi_indirect_record(const MinicC0Program *program,
                                  const MinicTargetInfo *target, MinicType type,
                                  size_t *bytes);

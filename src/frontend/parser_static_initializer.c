@@ -2011,19 +2011,27 @@ static bool overwrite_static_zero_array_constant(MinicParser *parser,
             if (!minic_parser_parse_array_designator(parser, element_count, false, &first, &last)) {
                 return false;
             }
-            if (first != last) {
-                minic_parser_error(
-                    parser,
-                    "GNU range designators in backward static arrays are not supported yet");
-                return false;
-            }
         } else {
             first = next_index;
             last = first;
         }
-        if (first >= element_count ||
-            (element_slots != 0U && first > (SIZE_MAX - array_base_slot) / element_slots)) {
+        if (first >= element_count || last < first || last >= element_count ||
+            (element_slots != 0U && last > (SIZE_MAX - array_base_slot) / element_slots)) {
             minic_parser_error(parser, "backward static array initializer index is out of range");
+            return false;
+        }
+        /* Repeating a constant scalar is valid for GNU backward range
+         * designators, including ones nested in record compound literals.
+         * Preserve the already-evaluated first initializer (and its optional
+         * symbolic relocation) instead of parsing the source expression for
+         * every element. Aggregate range replication needs a separate slot
+         * / union-selection transaction and remains fail-closed. */
+        if (first != last &&
+            (element_slots != 1U ||
+             (!minic_type_is_integer(element_type) &&
+              !minic_type_is_pointer(element_type)))) {
+            minic_parser_error(parser,
+                               "GNU backward static range requires scalar element type");
             return false;
         }
         element_base_slot = array_base_slot + first * element_slots;
@@ -2031,7 +2039,55 @@ static bool overwrite_static_zero_array_constant(MinicParser *parser,
                 parser, object_id, element_type, element_base_slot)) {
             return false;
         }
-        next_index = first + 1U;
+        if (first != last) {
+            MinicGlobalObject *object;
+            MinicGlobalRelocation original_relocation;
+            uint64_t original_bits;
+            bool has_relocation;
+            size_t relocation_index;
+            size_t selected_index;
+
+            object = &parser->program->global_objects[object_id];
+            if (element_base_slot >= object->initializer_count) {
+                return false;
+            }
+            original_bits = object->initializer_values[element_base_slot];
+            has_relocation = false;
+            (void)memset(&original_relocation, 0, sizeof(original_relocation));
+            for (relocation_index = 0U; relocation_index < object->relocation_count;
+                 ++relocation_index) {
+                const MinicGlobalRelocation *candidate =
+                    &object->relocations[relocation_index];
+                if (candidate->location_kind ==
+                        MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR &&
+                    candidate->location_index == element_base_slot) {
+                    original_relocation = *candidate;
+                    has_relocation = true;
+                    break;
+                }
+            }
+            for (selected_index = first + 1U; selected_index <= last; ++selected_index) {
+                size_t selected_slot = array_base_slot + selected_index;
+
+                if (!minic_c0_global_object_replace_aggregate_initializer_bits(
+                        parser->program, object_id, selected_slot, original_bits)) {
+                    minic_parser_error(parser,
+                                       "cannot replicate backward static range constant");
+                    return false;
+                }
+                if (has_relocation) {
+                    MinicGlobalRelocation cloned = original_relocation;
+                    cloned.location_index = selected_slot;
+                    if (!minic_c0_global_object_add_relocation(
+                            parser->program, object_id, &cloned)) {
+                        minic_parser_error(parser,
+                                           "cannot replicate backward static range relocation");
+                        return false;
+                    }
+                }
+            }
+        }
+        next_index = last + 1U;
         if (parser->current.kind == MINIC_TOKEN_COMMA) {
             if (!minic_parser_advance(parser)) {
                 return false;

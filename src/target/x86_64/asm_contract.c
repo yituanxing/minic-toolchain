@@ -211,7 +211,9 @@ bool minic_x86_64_requires_qualified_input_asm(const MinicInlineAsm *src) {
  * A different struct or width would make the CPU read beyond the operand. */
 unsigned int minic_x86_64_linux_descriptor_table_form(
     const char *text, size_t length) {
-    static const char *const exact[] = {"lidt %0", "lgdt %0", "sgdt %0"};
+    static const char *const exact[] = {
+        "lidt %0", "lgdt %0", "sgdt %0", "sidt %0"
+    };
     size_t i;
     if (!text) return 0U;
     for (i = 0U; i < sizeof(exact) / sizeof(exact[0]); ++i)
@@ -701,7 +703,7 @@ static bool x86_linux_lidt_source(
         src->label_count != 0U || src->clobber_count != 0U ||
         src->register_clobber_count != 0U || src->has_memory_clobber ||
         (minic_x86_64_linux_descriptor_table_form(
-             src->template_text, src->template_length) == 3U
+             src->template_text, src->template_length) >= 3U
              ? (!src->outputs || !target_constraint_is(&src->outputs[0], "=m"))
              : (!src->inputs || !target_constraint_is(&src->inputs[0], "m")))) return false;
     descriptor = minic_c0_program_expression(
@@ -3050,9 +3052,11 @@ static bool x86_linux_local_xadd_source(
 size_t minic_x86_64_linux_percpu_xadd_width(const char *text, size_t length) {
     static const char *const patterns[] = {
         "xaddb%0,%%gs:%1", "xaddw%0,%%gs:%1",
-        "xaddl%0,%%gs:%1", "xaddq%0,%%gs:%1"
+        "xaddl%0,%%gs:%1", "xaddq%0,%%gs:%1",
+        "xaddb%[tmp],%%gs:%[var]", "xaddw%[tmp],%%gs:%[var]",
+        "xaddl%[tmp],%%gs:%[var]", "xaddq%[tmp],%%gs:%[var]"
     };
-    static const size_t widths[] = {1U, 2U, 4U, 8U};
+    static const size_t widths[] = {1U, 2U, 4U, 8U, 1U, 2U, 4U, 8U};
     char compact[80];
     size_t i, n = 0U;
     if (!text || length == 0U || length >= sizeof(compact)) return 0U;
@@ -3076,12 +3080,13 @@ static bool x86_linux_percpu_xadd_source(
     const size_t width = source ? minic_x86_64_linux_percpu_xadd_width(
         source->template_text, source->template_length) : 0U;
     if (!program || !source || !contract || width == 0U ||
-        !source->is_volatile || source->is_goto ||
+        source->is_goto ||
         source->output_count != 2U || !source->outputs ||
         source->input_count || source->label_count ||
-        source->clobber_count || source->register_clobber_count ||
-        source->has_memory_clobber ||
-        !target_constraint_is(&source->outputs[0], "+r") ||
+        source->register_clobber_count ||
+        source->clobber_count != (source->has_memory_clobber ? 1U : 0U) ||
+        !(target_constraint_is(&source->outputs[0], "+r") ||
+          (width == 1U && target_constraint_is(&source->outputs[0], "+q"))) ||
         !target_constraint_is(&source->outputs[1], "+m")) return false;
     reg = minic_c0_program_expression(program, source->outputs[0].expression);
     memory = minic_c0_program_expression(program, source->outputs[1].expression);
@@ -3104,6 +3109,304 @@ static bool x86_linux_percpu_xadd_source(
     contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
     contract->implicit_memory_effect = true;
     return true;
+}
+
+/* GNU __this_cpu_cmpxchg: the +a carrier starts with the expected value;
+ * cmpxchg updates GS-relative memory only on equality and returns the
+ * observed previous memory value in that same carrier. Keep the memory
+ * operand separate from an ordinary C dereference: %gs is architectural. */
+static size_t minic_x86_64_linux_gs_cmpxchg_loop_width(
+    const char *text, size_t length);
+size_t minic_x86_64_linux_gs_cmpxchg_width(const char *text, size_t length) {
+    static const char *const symbolic[] = {
+        "cmpxchgb%[nval],%%gs:%[var]", "cmpxchgw%[nval],%%gs:%[var]",
+        "cmpxchgl%[nval],%%gs:%[var]", "cmpxchgq%[nval],%%gs:%[var]"
+    };
+    static const char *const numeric[] = {
+        "cmpxchgb%2,%%gs:%1", "cmpxchgw%2,%%gs:%1",
+        "cmpxchgl%2,%%gs:%1", "cmpxchgq%2,%%gs:%1"
+    };
+    static const size_t widths[] = {1U, 2U, 4U, 8U};
+    size_t i;
+    for (i = 0U; i < 4U; ++i)
+        if (x86_linux_compact_asm_equals(text, length, symbolic[i]) ||
+            x86_linux_compact_asm_equals(text, length, numeric[i]))
+            return widths[i];
+    return minic_x86_64_linux_gs_cmpxchg_loop_width(text, length);
+}
+
+static size_t minic_x86_64_linux_gs_cmpxchg_loop_width(
+    const char *text, size_t length) {
+    static const char *const opcodes[] = {
+        "cmpxchgb", "cmpxchgw", "cmpxchgl", "cmpxchgq"
+    };
+    size_t i;
+    for (i = 0U; i < 4U; ++i) {
+        char expected[128];
+        int n = snprintf(expected, sizeof(expected),
+            "mov%c%%%%gs:%%[var],%%[oval]1:%s%%[nval],%%%%gs:%%[var]jnz1b",
+            "bwlq"[i], opcodes[i]);
+        if (n > 0 && (size_t)n < sizeof(expected) &&
+            x86_linux_compact_asm_equals(text, length, expected))
+            return (size_t)(1U << i);
+        n = snprintf(expected, sizeof(expected),
+            "mov%c%%%%gs:%%1,%%01:%s%%2,%%%%gs:%%1jnz1b",
+            "bwlq"[i], opcodes[i]);
+        if (n > 0 && (size_t)n < sizeof(expected) &&
+            x86_linux_compact_asm_equals(text, length, expected))
+            return (size_t)(1U << i);
+    }
+    return 0U;
+}
+
+bool minic_x86_64_linux_gs_cmpxchg_loop(const char *text, size_t length) {
+    return minic_x86_64_linux_gs_cmpxchg_loop_width(text, length) != 0U;
+}
+
+static bool x86_linux_gs_cmpxchg_source(
+    const MinicC0Program *program, const MinicInlineAsm *source,
+    MinicTargetInlineAsmContract *contract) {
+    const size_t width = source ? minic_x86_64_linux_gs_cmpxchg_width(
+        source->template_text, source->template_length) : 0U;
+    size_t i;
+    const bool loop = source && minic_x86_64_linux_gs_cmpxchg_loop(
+        source->template_text, source->template_length);
+    if (!program || !source || !contract || !width || source->is_goto ||
+        source->output_count != 2U || source->input_count != 1U ||
+        !source->outputs || !source->inputs || source->label_count ||
+        !source->has_memory_clobber || source->clobber_count != 1U ||
+        source->register_clobber_count ||
+        !target_constraint_is(&source->outputs[0], loop ? "=&a" : "+a") ||
+        !target_constraint_is(&source->outputs[1], "+m") ||
+        !target_constraint_is(&source->inputs[0], width == 1U ? "q" : "r"))
+        return false;
+    for (i = 0U; i < 3U; ++i) {
+        const MinicInlineAsmOperand *operand = i < 2U
+            ? &source->outputs[i] : &source->inputs[0];
+        const MinicExpression *expression = minic_c0_program_expression(
+            program, operand->expression);
+        MinicType unqualified;
+        unsigned int rank;
+        if (!expression || (i < 2U &&
+            (expression->value_category != MINIC_VALUE_LVALUE ||
+             minic_type_is_const(expression->type))) ||
+            !minic_type_unqualified(expression->type, &unqualified) ||
+            !(minic_type_is_integer(unqualified) ||
+              (i == 1U && width == 8U && minic_type_is_pointer(unqualified))) ||
+            (width != 8U && unqualified.base_kind != MINIC_TYPE_BASE_INT))
+            return false;
+        if (width == 8U && i == 1U && minic_type_is_pointer(unqualified))
+            continue;
+        rank = width == 1U ? MINIC_INTEGER_RANK_CHAR :
+               width == 2U ? MINIC_INTEGER_RANK_SHORT :
+               width == 4U ? MINIC_INTEGER_RANK_INT :
+               MINIC_INTEGER_RANK_LONG;
+        if (unqualified.integer_rank != rank &&
+            !(width == 8U && unqualified.integer_rank == MINIC_INTEGER_RANK_LONG_LONG))
+            return false;
+    }
+    contract->operand_count = 3U;
+    contract->kinds[0] = loop
+        ? MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT
+        : MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE;
+    contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
+    contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->implicit_memory_effect = true;
+    return true;
+}
+
+/* Linux memset16/32/64: two early-clobbered fixed register results and
+ * three GNU operands (A, tied D, tied C). A REP string operation mutates
+ * both RDI and RCX, so a cosmetic "rep stos" emission is not sufficient. */
+size_t minic_x86_64_linux_rep_stos_width(const char *text, size_t length) {
+    if (x86_linux_compact_asm_equals(text, length, "repstosw")) return 2U;
+    if (x86_linux_compact_asm_equals(text, length, "repstosl")) return 4U;
+    if (x86_linux_compact_asm_equals(text, length, "repstosq")) return 8U;
+    return 0U;
+}
+
+static bool x86_linux_rep_stos_source(
+    const MinicC0Program *program, const MinicInlineAsm *source,
+    MinicTargetInlineAsmContract *contract) {
+    const size_t width = source ? minic_x86_64_linux_rep_stos_width(
+        source->template_text, source->template_length) : 0U;
+    const MinicExpression *output_count, *output_dest, *value, *dest, *count;
+    MinicType type, pointee;
+    if (!program || !source || !contract || !width ||
+        !source->is_volatile || source->is_goto ||
+        source->output_count != 2U || source->input_count != 3U ||
+        !source->outputs || !source->inputs || source->label_count ||
+        !source->has_memory_clobber || source->clobber_count != 1U ||
+        source->register_clobber_count ||
+        !target_constraint_is(&source->outputs[0], "=&c") ||
+        !target_constraint_is(&source->outputs[1], "=&D") ||
+        !target_constraint_is(&source->inputs[0], "a") ||
+        !target_constraint_is(&source->inputs[1], "1") ||
+        !target_constraint_is(&source->inputs[2], "0")) return false;
+    output_count = minic_c0_program_expression(program, source->outputs[0].expression);
+    output_dest = minic_c0_program_expression(program, source->outputs[1].expression);
+    value = minic_c0_program_expression(program, source->inputs[0].expression);
+    dest = minic_c0_program_expression(program, source->inputs[1].expression);
+    count = minic_c0_program_expression(program, source->inputs[2].expression);
+    if (!output_count || !output_dest || !value || !dest || !count ||
+        output_count->value_category != MINIC_VALUE_LVALUE ||
+        output_dest->value_category != MINIC_VALUE_LVALUE ||
+        minic_type_is_const(output_count->type) ||
+        minic_type_is_const(output_dest->type) ||
+        !minic_type_unqualified(value->type, &type) ||
+        !minic_type_is_integer(type) ||
+        (width == 2U && type.integer_rank != MINIC_INTEGER_RANK_SHORT) ||
+        (width == 4U && type.integer_rank != MINIC_INTEGER_RANK_INT) ||
+        (width == 8U && type.integer_rank != MINIC_INTEGER_RANK_LONG &&
+                         type.integer_rank != MINIC_INTEGER_RANK_LONG_LONG) ||
+        !minic_type_pointee(dest->type, &pointee) ||
+        !minic_type_is_integer(pointee) ||
+        (width == 2U && pointee.integer_rank != MINIC_INTEGER_RANK_SHORT) ||
+        (width == 4U && pointee.integer_rank != MINIC_INTEGER_RANK_INT) ||
+        (width == 8U && pointee.integer_rank != MINIC_INTEGER_RANK_LONG &&
+                         pointee.integer_rank != MINIC_INTEGER_RANK_LONG_LONG) ||
+        !minic_type_is_integer(count->type) ||
+        !minic_type_is_integer(output_count->type) ||
+        !minic_type_is_integer(output_dest->type))
+        return false;
+    contract->operand_count = 5U;
+    contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+    contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+    contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->kinds[3] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->kinds[4] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->implicit_memory_effect = true;
+    return true;
+}
+
+/* One exact x86 target table for independent Linux privileged/atomic and
+ * non-temporal memory forms. Only instruction and GNU operand contracts are
+ * arch-owned; Core continues carrying generic memory/scalar effects. */
+unsigned int minic_x86_64_linux_lowlevel_scalar_form(
+    const char *text, size_t length) {
+    static const char *const exact[] = {
+        "hlt", "lldt%w0", "sldt%0", "mov%0,%%fs",
+        "invpcid%[desc],%[type]", "btcq%1,%0",
+        "movntil%1,%0", "movntiq%1,%0"
+    };
+    size_t i;
+    for (i = 0U; i < sizeof(exact)/sizeof(exact[0]); ++i)
+        if (x86_linux_compact_asm_equals(text, length, exact[i]))
+            return (unsigned int)(i + 1U);
+    if (x86_linux_compact_asm_equals(text, length, "invpcid%0,%1"))
+        return 5U;
+    return 0U;
+}
+
+static bool x86_linux_lowlevel_scalar_source(
+    const MinicC0Program *program, const MinicInlineAsm *source,
+    MinicTargetInlineAsmContract *contract) {
+    const unsigned int form = source ? minic_x86_64_linux_lowlevel_scalar_form(
+        source->template_text, source->template_length) : 0U;
+    const MinicExpression *operand;
+    MinicType plain;
+    if (!program || !source || !contract || !form || source->is_goto ||
+        source->label_count || source->register_clobber_count ||
+        source->clobber_count != (source->has_memory_clobber ? 1U : 0U))
+        return false;
+    if (form == 1U) {
+        if (source->output_count || source->input_count) return false;
+        contract->operand_count = 0U;
+        contract->implicit_memory_effect = source->has_memory_clobber;
+        return true;
+    }
+    if (form == 2U || form == 4U) {
+        if (!source->is_volatile || source->output_count ||
+            source->input_count != 1U || !source->inputs ||
+            !target_constraint_is(&source->inputs[0], form == 2U ? "q" : "rm"))
+            return false;
+        operand = minic_c0_program_expression(
+            program, source->inputs[0].expression);
+        if (!operand || !minic_type_is_integer(operand->type)) return false;
+        contract->operand_count = 1U;
+        contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+        contract->implicit_memory_effect = true;
+        return true;
+    }
+    if (form == 3U) {
+        if (source->output_count != 1U || !source->outputs ||
+            source->input_count ||
+            !target_constraint_is(&source->outputs[0], "=m")) return false;
+        operand = minic_c0_program_expression(
+            program, source->outputs[0].expression);
+        if (!operand || operand->value_category != MINIC_VALUE_LVALUE ||
+            minic_type_is_const(operand->type) ||
+            !minic_type_unqualified(operand->type, &plain) ||
+            plain.integer_rank != MINIC_INTEGER_RANK_SHORT ||
+            !minic_type_is_integer(plain)) return false;
+        contract->operand_count = 1U;
+        contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT;
+        contract->implicit_memory_effect = true;
+        return true;
+    }
+    if (form == 5U) {
+        if (!source->is_volatile || !source->has_memory_clobber ||
+            source->output_count || source->input_count != 2U ||
+            !source->inputs ||
+            !target_constraint_is(&source->inputs[0], "m") ||
+            !target_constraint_is(&source->inputs[1], "r")) return false;
+        operand = minic_c0_program_expression(
+            program, source->inputs[0].expression);
+        if (!operand || operand->value_category != MINIC_VALUE_LVALUE ||
+            !minic_type_is_record(operand->type)) return false;
+        operand = minic_c0_program_expression(
+            program, source->inputs[1].expression);
+        if (!operand || !minic_type_is_integer(operand->type)) return false;
+        contract->operand_count = 2U;
+        contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
+        contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+        contract->implicit_memory_effect = true;
+        return true;
+    }
+    if (form == 6U) {
+        if (!source->is_volatile || !source->has_memory_clobber ||
+            source->output_count || source->input_count != 2U ||
+            !source->inputs ||
+            !target_constraint_is(&source->inputs[0], "m") ||
+            !target_constraint_is(&source->inputs[1], "Ir")) return false;
+        operand = minic_c0_program_expression(
+            program, source->inputs[0].expression);
+        if (!operand || operand->value_category != MINIC_VALUE_LVALUE ||
+            !minic_type_is_integer(operand->type)) return false;
+        operand = minic_c0_program_expression(
+            program, source->inputs[1].expression);
+        if (!operand || !minic_type_is_integer(operand->type)) return false;
+        contract->operand_count = 2U;
+        contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
+        contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+        contract->implicit_memory_effect = true;
+        return true;
+    }
+    if (form == 7U || form == 8U) {
+        if (source->output_count != 1U || source->input_count != 1U ||
+            !source->outputs || !source->inputs ||
+            !target_constraint_is(&source->outputs[0], "=m") ||
+            !target_constraint_is(&source->inputs[0], "r")) return false;
+        operand = minic_c0_program_expression(
+            program, source->outputs[0].expression);
+        if (!operand || operand->value_category != MINIC_VALUE_LVALUE ||
+            minic_type_is_const(operand->type) ||
+            !minic_type_unqualified(operand->type, &plain) ||
+            !minic_type_is_integer(plain) ||
+            (plain.integer_rank != (form == 7U ? MINIC_INTEGER_RANK_INT
+                                                  : MINIC_INTEGER_RANK_LONG) &&
+             !(form == 8U && plain.integer_rank == MINIC_INTEGER_RANK_LONG_LONG)))
+            return false;
+        operand = minic_c0_program_expression(
+            program, source->inputs[0].expression);
+        if (!operand || !minic_type_is_integer(operand->type)) return false;
+        contract->operand_count = 2U;
+        contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT;
+        contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+        contract->implicit_memory_effect = true;
+        return true;
+    }
+    return false;
 }
 
 /* Target-only descriptor for all 8 GNU Linux atomic RMWcc forms.
@@ -5973,6 +6276,12 @@ bool minic_x86_64_qualify_inline_asm(
     if (x86_linux_local_xadd_source(program, source, contract))
         return true;
     if (x86_linux_percpu_xadd_source(program, source, contract))
+        return true;
+    if (x86_linux_gs_cmpxchg_source(program, source, contract))
+        return true;
+    if (x86_linux_rep_stos_source(program, source, contract))
+        return true;
+    if (x86_linux_lowlevel_scalar_source(program, source, contract))
         return true;
     if (x86_linux_atomic_rmw_source(program, source, contract))
         return true;

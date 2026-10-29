@@ -246,6 +246,23 @@ unsigned int minic_aarch64_linux_daif_immediate_form(
     return 0U;
 }
 
+unsigned int minic_aarch64_linux_rept_nop_count(
+    const char *text, size_t length) {
+    char compact[32];
+    size_t i, n = 0U;
+    if (!text || !length || length >= sizeof(compact)) return 0U;
+    for (i = 0U; i < length; ++i) {
+        const char c = text[i];
+        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') continue;
+        if (c == '\0' || c == ';' || n + 1U >= sizeof(compact)) return 0U;
+        compact[n++] = c;
+    }
+    compact[n] = '\0';
+    if (strcmp(compact, ".rept4nop.endr") == 0) return 4U;
+    if (strcmp(compact, ".rept8nop.endr") == 0) return 8U;
+    return 0U;
+}
+
 bool minic_aarch64_qualified_opaque_asm(const MinicCoreInlineAsm *a) {
     static const char *const allowed[] = {
         "msrdaifset,#3", "msrdaifclr,#3",
@@ -268,6 +285,11 @@ bool minic_aarch64_qualified_opaque_asm(const MinicCoreInlineAsm *a) {
             a->template_text, a->template_length) != 0U) return true;
     if (minic_multi_direct_linux_bug_asm(
             a, "14470", "14471", "14472", "brk0x800", true))
+        return true;
+    if (a != NULL && a->is_volatile && !a->is_goto &&
+        a->register_clobber_count == 0U && !a->has_memory_clobber &&
+        minic_aarch64_linux_rept_nop_count(
+            a->template_text, a->template_length) != 0U)
         return true;
     if (a == NULL || a->template_text == NULL || !a->is_volatile ||
         a->template_length == 0U || a->template_length >= sizeof(compact) ||
@@ -587,6 +609,8 @@ static bool aarch64_stlr_type(MinicType type, size_t width) {
 static bool aarch64_stlr_memory_type(MinicType type,size_t width){
     MinicType plain;
     return aarch64_stlr_type(type,width)||
+        (width==1U&&minic_type_unqualified(type,&plain)&&
+         minic_type_is_bool_integer(plain))||
         (width==8U&&minic_type_unqualified(type,&plain)&&
          minic_type_is_pointer(plain));
 }
@@ -1352,6 +1376,34 @@ static bool aarch64_linux_encoded_sysreg_emit(
            (size_t)op[0].value*8U)>=0;
 }
 
+typedef struct Aarch64LinuxWriteSysreg {
+    unsigned int op0, op1, crn, crm, op2;
+} Aarch64LinuxWriteSysreg;
+
+/* Hardware-visible privileged SYS register effects remain an explicit
+ * target ISA catalog. GICv3 ICC_* accesses have the same GNU .irp macro
+ * template as ICC_SRE_EL1, with distinct encoded register fields. */
+static const Aarch64LinuxWriteSysreg aarch64_linux_write_sysregs[] = {
+    {3U,0U,12U,12U,5U}, /* ICC_SRE_EL1 */
+    {3U,0U,4U,6U,0U},  /* ICC_PMR_EL1 */
+    {3U,3U,4U,2U,2U},  /* SVCR */
+    {3U,3U,13U,0U,5U}, /* TPIDR2_EL0 */
+    {3U,0U,12U,11U,1U}, /* ICC_DIR_EL1 */
+    {3U,0U,12U,11U,5U}, /* ICC_SGI1R_EL1 */
+    {3U,0U,12U,12U,1U}, /* ICC_EOIR1_EL1 */
+    {3U,0U,12U,12U,3U}, /* ICC_BPR1_EL1 */
+    {3U,0U,12U,12U,4U}, /* ICC_CTLR_EL1 */
+    {3U,0U,12U,12U,7U}, /* ICC_IGRPEN1_EL1 */
+    {3U,0U,12U,9U,0U}, /* ICC_AP0R0_EL1 */
+    {3U,0U,12U,9U,1U}, /* ICC_AP0R1_EL1 */
+    {3U,0U,12U,9U,2U}, /* ICC_AP0R2_EL1 */
+    {3U,0U,12U,9U,3U}, /* ICC_AP0R3_EL1 */
+    {3U,0U,12U,8U,4U}, /* ICC_AP1R0_EL1, GNU SYS_AP1Rn macro 4|0 */
+    {3U,0U,12U,8U,5U}, /* ICC_AP1R1_EL1, GNU SYS_AP1Rn macro 4|1 */
+    {3U,0U,12U,8U,6U}, /* ICC_AP1R2_EL1, GNU SYS_AP1Rn macro 4|2 */
+    {3U,0U,12U,8U,7U}  /* ICC_AP1R3_EL1, GNU SYS_AP1Rn macro 4|3 */
+};
+
 /* Linux 6.6 arm64 sysreg.h write_sysreg_s() is the WRITE companion to
  * read_sysreg_s() above. Its real source uses .irp, .equ and a GNU macro
  * to assemble a privileged MSR system-register opcode. Unlike a direct
@@ -1371,12 +1423,6 @@ static unsigned int aarch64_linux_encoded_sysreg_write_form(
         ".macromsr_s,sreg,rt"
         ".inst(0xd5000000|(\\sreg)|(.L__gpr_num_\\rt))"
         ".endm";
-    static const struct { unsigned int op0,op1,crn,crm,op2; } regs[] = {
-        {3U,0U,12U,12U,5U}, /* ICC_SRE_EL1 */
-        {3U,0U,4U,6U,0U},  /* ICC_PMR_EL1 priority mask */
-        {3U,3U,4U,2U,2U},  /* SVCR: Streaming SVE/SME state control */
-        {3U,3U,13U,0U,5U} /* TPIDR2_EL0: SME per-task user TLS register */
-    };
     char compact[768], expected[768];
     size_t i, used = 0U;
     if (!text || !length || length >= sizeof(compact)) return 0U;
@@ -1387,12 +1433,20 @@ static unsigned int aarch64_linux_encoded_sysreg_write_form(
         compact[used++] = c;
     }
     compact[used] = '\0';
-    for (i = 0U; i < sizeof(regs)/sizeof(regs[0]); ++i) {
+    for (i = 0U; i < sizeof(aarch64_linux_write_sysregs) /
+                       sizeof(aarch64_linux_write_sysregs[0]); ++i) {
+        const Aarch64LinuxWriteSysreg *reg = &aarch64_linux_write_sysregs[i];
+        char op2_source[24];
+        const int op2_n = reg->crn == 12U && reg->crm == 8U &&
+                          reg->op2 >= 4U && reg->op2 <= 7U
+            ? snprintf(op2_source, sizeof(op2_source), "4|%u", reg->op2 - 4U)
+            : snprintf(op2_source, sizeof(op2_source), "%u", reg->op2);
+        if (op2_n < 1 || (size_t)op2_n >= sizeof(op2_source)) return 0U;
         const int n = snprintf(expected, sizeof(expected),
             "%smsr_s(((%u)<<19)|((%u)<<16)|((%u)<<12)|"
-            "((%u)<<8)|((%u)<<5)),%%x0.purgemmsr_s",
-            prefix, regs[i].op0, regs[i].op1, regs[i].crn,
-            regs[i].crm, regs[i].op2);
+            "((%u)<<8)|((%s)<<5)),%%x0.purgemmsr_s",
+            prefix, reg->op0, reg->op1, reg->crn,
+            reg->crm, op2_source);
         if (n > 0 && (size_t)n < sizeof(expected) &&
             strcmp(compact, expected) == 0)
             return (unsigned int)i + 1U;
@@ -1430,14 +1484,11 @@ static bool aarch64_linux_encoded_sysreg_write_emit(
         ins->value.structured_inline_asm.operands;
     const unsigned int form = aarch64_linux_encoded_sysreg_write_form(
         info->template_text, info->template_length);
-    static const unsigned int encodings[] = {
-        (3U << 19) | (12U << 12) | (12U << 8) | (5U << 5),
-        (3U << 19) | (4U << 12) | (6U << 8),
-        (3U << 19) | (3U << 16) | (4U << 12) | (2U << 8) | (2U << 5),
-        (3U << 19) | (3U << 16) | (13U << 12) | (5U << 5)
-    };
+    const Aarch64LinuxWriteSysreg *reg;
+    unsigned int encoding;
     MinicType plain;
-    if (!form || form > sizeof(encodings) / sizeof(encodings[0]) ||
+    if (!form || form > sizeof(aarch64_linux_write_sysregs) /
+                          sizeof(aarch64_linux_write_sysregs[0]) ||
         !info->is_volatile || info->is_goto ||
         info->has_memory_clobber || info->register_clobber_count ||
         ctx->dynamic_frame ||
@@ -1451,9 +1502,12 @@ static bool aarch64_linux_encoded_sysreg_write_emit(
         (!minic_type_equal(plain, minic_type_unsigned_long()) &&
          !minic_type_equal(plain, minic_type_unsigned_long_long())))
         return false;
+    reg = &aarch64_linux_write_sysregs[form - 1U];
+    encoding = (reg->op0 << 19) | (reg->op1 << 16) |
+               (reg->crn << 12) | (reg->crm << 8) | (reg->op2 << 5);
     return fprintf(out, "  ldr x9, [sp, #%zu]\n  .inst 0x%08x\n",
         (size_t)op->value * 8U,
-        0xd5000000U | encodings[form - 1U] | 9U) >= 0;
+        0xd5000000U | encoding | 9U) >= 0;
 }
 
 /* Entire original Linux 6.6.143 arm64 TLBI v8.5 control family.
@@ -2188,6 +2242,67 @@ static bool aarch64_linux_svc_emit(
                    (size_t)ops[0].value * 8U) >= 0;
 }
 
+/* FEAT_WFxT: original Linux arm64 delay.c uses the generic SYS-register
+ * spelling for the two timeout wait instructions, WFIT and WFET.  Preserve
+ * the precise GNU ISA instruction instead of synthesizing an ordinary WFI
+ * or WFE; the input deadline is a physical 64-bit GPR value. */
+static unsigned int aarch64_linux_wfxt_form(const char *text, size_t length) {
+    static const char *const forms[] = {
+        "msrs0_3_c1_c0_0,%0", "msrs0_3_c1_c0_1,%0"
+    };
+    char compact[64];
+    size_t i,n=0U;
+    if (!text || length==0U || length>=sizeof(compact))return 0U;
+    for (i=0U;i<length;++i) {
+        const char c=text[i];
+        if (c==' '||c=='\t'||c=='\r'||c=='\n')continue;
+        if (c=='\0'||c==';'||n+1U>=sizeof(compact))return 0U;
+        compact[n++]=c;
+    }
+    compact[n]='\0';
+    for(i=0U;i<sizeof(forms)/sizeof(forms[0]);++i)
+        if(strcmp(compact,forms[i])==0)return (unsigned int)i+1U;
+    return 0U;
+}
+static bool aarch64_linux_wfxt_source(
+    const MinicC0Program *program,const MinicInlineAsm *src,
+    MinicTargetInlineAsmContract *contract) {
+    const MinicExpression *value;
+    if (!program||!src||!contract||!src->is_volatile||src->is_goto||
+        !aarch64_linux_wfxt_form(src->template_text,src->template_length)||
+        src->output_count!=0U||src->input_count!=1U||!src->inputs||
+        src->label_count||src->clobber_count!=1U||
+        !src->has_memory_clobber||src->register_clobber_count||
+        !constraint(&src->inputs[0],"r"))return false;
+    value=minic_c0_program_expression(program,src->inputs[0].expression);
+    if(!value||!aarch64_stlr_type(value->type,8U))return false;
+    contract->operand_count=1U;
+    contract->kinds[0]=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->implicit_memory_effect=true;
+    return true;
+}
+static bool aarch64_linux_wfxt_emit(
+    FILE *out,const MinicDirectLP64BlockContext *ctx,
+    const MinicCoreInstruction *ins,const MinicCoreInlineAsm *info,
+    unsigned int form) {
+    const MinicCoreFunction *fn=ctx->fn;
+    const MinicCoreStructuredInlineAsmOperand *op=
+        ins->value.structured_inline_asm.operands;
+    if(!out||!fn||!info||!op||ctx->dynamic_frame||
+       (form!=1U&&form!=2U)||!info->is_volatile||info->is_goto||
+       !info->has_memory_clobber||info->register_clobber_count||
+       ins->value.structured_inline_asm.operand_count!=1U||
+       op[0].operand_index!=0U||
+       op[0].kind!=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT||
+       op[0].value>=fn->value_count||op[0].early_clobber||
+       op[0].has_fixed_register_binding||
+       !aarch64_linux_structured_spill_slot_valid(op[0].value)||
+       !aarch64_stlr_type(fn->values[op[0].value].type,8U))return false;
+    return fprintf(out,"  ldr x9, [sp, #%zu]\n"
+                       "  msr s0_3_c1_c0_%u, x9\n",
+                   (size_t)op[0].value*8U,form-1U)>=0;
+}
+
 /* Linux arch_timer_read_cnt{p,v}ct_el0: feature 19 replaces an ISB+MRS
  * pair with NOP+MRS_S. The replacement reads CNTPOCTSS/CNTVCTSS (op2
  * 5/6), so treating this as an ordinary MRS would silently break the
@@ -2817,6 +2932,7 @@ bool minic_aarch64_qualify_inline_asm(
     }
     if(aarch64_linux_smccc_source(program,src,contract))return true;
     if(aarch64_linux_svc_source(program,src,contract))return true;
+    if(aarch64_linux_wfxt_source(program,src,contract))return true;
     if(aarch64_linux_timer_alternative_source(program,src,contract))return true;
     if(aarch64_linux_counter_ordering_source(program,src,contract))return true;
     if(aarch64_linux_rng_sysreg_source(program,src,contract))return true;
@@ -3508,6 +3624,12 @@ bool minic_aarch64_emit_qualified_structured_asm(
     }
     if (aarch64_linux_svc_form(info->template_text, info->template_length))
         return aarch64_linux_svc_emit(out, ctx, ins, info);
+    {
+        const unsigned int wfxt = aarch64_linux_wfxt_form(
+            info->template_text, info->template_length);
+        if (wfxt != 0U)
+            return aarch64_linux_wfxt_emit(out, ctx, ins, info, wfxt);
+    }
     {
         Aarch64UaccessForm uaccess;
         if (aarch64_linux_uaccess_form(info->template_text,

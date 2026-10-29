@@ -767,29 +767,28 @@ MinicCoreLowerStatus minic_core_lower_record_copy_statement(MinicCoreLowerContex
                : MINIC_CORE_LOWER_ERROR;
 }
 
-/* Direct record-return member projection: record ABI materialization and
- * field address calculation are one source-to-Core aggregate family.
- * This probe never claims ordinary scalar member lvalues. */
+/* Record-rvalue member projection: record ABI/CFG materialization and field
+ * address calculation are one source-to-Core aggregate family. A selected
+ * record-valued conditional or compound literal has the same address-backed
+ * scalar field semantics as a direct record-returning call. Do not claim
+ * ordinary scalar member lvalues or bit-fields. */
 MinicCoreLowerStatus minic_core_lower_try_direct_record_member(
     MinicCoreLowerContext *context, const MinicExpression *expression,
     MinicCoreValueId *value_id, bool *handled) {
-    MinicCoreInstruction instruction;
     if (handled == NULL || context == NULL || expression == NULL || value_id == NULL ||
         context->body == NULL || context->body->program == NULL ||
         context->function == NULL)
         return MINIC_CORE_LOWER_ERROR;
     *handled = false;
-    /* BATCH_R_RECORD_CALL_MEMBER_VALUE: projecting a scalar field from a
-       direct aggregate-returning call consumes the call's existing result
-       object. Form its address, project the field, then load the scalar value.
-       This is a generic aggregate-rvalue projection; indirect aggregate calls
-       and bit-field projections remain fail-closed until their own seams exist. */
+    /* A scalar member projected from a materialized record rvalue must use
+       the record materialization owner. In particular, lowering the `?:`
+       arms before the member access guarantees exactly one arm's initializer
+       effects, then selects its field from the merged private record object. */
     if (expression->kind == MINIC_EXPRESSION_MEMBER &&
         core_memory_scalar_type(expression->type)) {
         const MinicExpression *base;
         const MinicRecord *record;
         const MinicRecordField *field;
-        MinicCoreObjectId result_object;
         MinicCoreValueId base_address;
         MinicCoreValueId field_address;
         MinicCoreLowerStatus status;
@@ -799,31 +798,31 @@ MinicCoreLowerStatus minic_core_lower_try_direct_record_member(
         base = minic_c0_program_expression(context->body->program, expression->value.member.base);
         record = minic_c0_program_record(context->body->program, expression->value.member.record_id);
         field = minic_c0_record_field(record, expression->value.member.field_index);
-        if (base != NULL && base->kind == MINIC_EXPRESSION_CALL &&
-            base->value.call.function_id != MINIC_FUNCTION_INVALID &&
+        if (base != NULL &&
+            ((base->kind == MINIC_EXPRESSION_CALL &&
+              base->value.call.function_id != MINIC_FUNCTION_INVALID) ||
+             base->kind == MINIC_EXPRESSION_CONDITIONAL ||
+             base->kind == MINIC_EXPRESSION_COMPOUND_LITERAL ||
+             base->kind == MINIC_EXPRESSION_CAST ||
+             base->kind == MINIC_EXPRESSION_STATEMENT) &&
             minic_type_is_record(base->type) &&
             base->type.record_id == expression->value.member.record_id &&
             record != NULL && field != NULL && !field->is_bit_field &&
             minic_type_unqualified(expression->type, &value_type) &&
             core_memory_scalar_type(value_type)) {
             *handled = true;
-            status = minic_core_lower_direct_record_call_object(context, base, &result_object);
+            status = minic_core_lower_internal_record_materialized_address(
+                context, expression->value.member.base, &base_address);
             if (status != MINIC_CORE_LOWER_OK) {
                 return status;
             }
             if (!minic_type_pointer_to(base->type, &pointer_type)) {
                 return MINIC_CORE_LOWER_ERROR;
             }
-            (void)memset(&instruction, 0, sizeof(instruction));
-            instruction.kind = MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS;
-            instruction.span = base->span;
-            instruction.type = pointer_type;
-            instruction.result = MINIC_CORE_VALUE_INVALID;
-            instruction.value.object_id = result_object;
-            if (!minic_core_function_append_value_instruction(
-                    context->function, context->block_id, &instruction, &base_address)) {
+            if (base_address >= context->function->value_count ||
+                !minic_type_equal(context->function->values[base_address].type,
+                                  pointer_type))
                 return MINIC_CORE_LOWER_ERROR;
-            }
             status = minic_core_lower_internal_append_field_address(context,
                                           expression->span,
                                           base_address,

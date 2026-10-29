@@ -355,6 +355,9 @@ MINIC="$minic" \
 HOST_CC="$host_cc" \
 BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
 sh "$root/tests/compiler/c0/run-gnu-empty-records.sh"
+MINIC_CC="$(dirname "$minic")/minic-cc" \
+HOST_CC="$host_cc" \
+sh "$root/tests/compiler/c0/probe-lp64-empty-record-call-abi.sh"
 expect_compile_failure \
     invalid_conflicting_const_parameter \
     "conflicting function declaration"

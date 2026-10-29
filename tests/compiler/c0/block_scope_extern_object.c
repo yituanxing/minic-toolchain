@@ -23,3 +23,12 @@ unsigned long after_promotion(void)
 {
     return promoted;
 }
+
+/* Linux arch/loongarch/mm/cache.c declares a weak external object inside
+ * a function. The GNU attribute belongs to the object symbol, not to a
+ * function declaration or to the local block's storage. */
+unsigned long weak_external_address(void)
+{
+    extern char __attribute__((__weak__)) except_vec_cex;
+    return (unsigned long)&except_vec_cex;
+}

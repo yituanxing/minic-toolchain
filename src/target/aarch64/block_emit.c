@@ -117,6 +117,7 @@ static bool minic_aarch64_emit_record_load(FILE *out,
 }
 
 bool minic_aarch64_emit_parameter_object(FILE *out,
+    const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     const MinicLP64ArgumentPlan *incoming_plan,
     const MinicLP64FramePlan *frame_plan, size_t frame) {
@@ -125,6 +126,18 @@ const MinicLP64ArgumentLocation *location;
             if (!minic_multi_direct_parameter_object_location(
                     fn, ins, incoming_plan, frame_plan, &location, &object_offset))
                 return false;
+            /* An AAPCS64 empty C composite consumes no xN/stack argument.
+             * The Core object retains its exact type, with no machine bytes. */
+            if (location->kind == MINIC_LP64_ARGUMENT_EMPTY_RECORD) {
+                const MinicCoreObjectId object_id =
+                    ins->value.parameter_object.object_id;
+                return location->size_bytes == 0U && location->chunks == 0U &&
+                    location->gp_registers == 0U &&
+                    location->fp_registers == 0U &&
+                    location->stack_slots == 0U &&
+                    minic_multi_empty_record(program, target,
+                        fn->objects[object_id].type);
+            }
             size = location->size_bytes;
             slots = location->kind == MINIC_LP64_ARGUMENT_RECORD
                 ? location->chunks : 0U;
@@ -239,10 +252,16 @@ bool minic_aarch64_emit_terminator(FILE *out,
             if (minic_type_is_record(fn->return_type)) {
                 size_t src, bytes, slots, fp_elements, fp_width, fp;
                 const MinicCoreObjectId object_id = block->terminator.return_object;
-                if (object_id >= fn->object_count ||
-                    !minic_lp64_frame_plan_object(frame_plan, object_id, &src))
+                if (object_id >= fn->object_count)
                     return false;
-                if (minic_multi_fp_return_record(program, target,
+                if (minic_multi_empty_record(program, target, fn->return_type)) {
+                    if (!minic_multi_empty_record(program, target,
+                            fn->objects[object_id].type))
+                        return false;
+                } else if (!minic_lp64_frame_plan_object(
+                        frame_plan, object_id, &src))
+                    return false;
+                else if (minic_multi_fp_return_record(program, target,
                        fn->return_type, &fp_elements, &fp_width)) {
                     for (fp = 0U; fp < fp_elements; ++fp) {
                         size_t off = src + fp * fp_width;
@@ -394,7 +413,7 @@ static bool aarch64_machine_emit_family(
     case MINIC_DIRECT_MACHINE_RECORD_COPY:
         return minic_aarch64_emit_record_copy(out, program, target, fn, ins);
     case MINIC_DIRECT_MACHINE_PARAMETER_OBJECT:
-        return minic_aarch64_emit_parameter_object(out, fn, ins,
+        return minic_aarch64_emit_parameter_object(out, program, target, fn, ins,
             ctx->incoming_plan, ctx->frame_plan, ctx->frame);
     case MINIC_DIRECT_MACHINE_MEMORY:
         return minic_aarch64_emit_memory_instruction(

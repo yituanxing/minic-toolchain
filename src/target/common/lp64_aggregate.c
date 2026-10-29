@@ -21,6 +21,13 @@ static bool minic_multi_integer_record_members(
                                 &total, &alignment) ||
         alignment == 0U || alignment > 8U)
         return false;
+    /* Empty GNU records have no ABI payload. Nested empty members do not
+     * invalidate the integer class of their nonempty containing record. */
+    if (total == 0U) {
+        record = minic_type_is_record(type)
+            ? minic_c0_program_record(program, type.record_id) : NULL;
+        return record != NULL && record->is_complete;
+    }
     if (minic_type_is_integer(type) || minic_type_is_pointer(type))
         return total != 0U && total <= 8U;
     if (!minic_type_is_record(type)) return false;
@@ -95,6 +102,19 @@ bool minic_multi_gp_record(const MinicC0Program *program,
     *bytes = shape.bytes;
     *eightbytes = shape.words;
     return true;
+}
+
+bool minic_multi_empty_record(const MinicC0Program *program,
+                              const MinicTargetInfo *target, MinicType type) {
+    const MinicRecord *record;
+    size_t bytes, alignment;
+    if (program == NULL || target == NULL || !minic_type_is_record(type))
+        return false;
+    record = minic_c0_program_record(program, type.record_id);
+    return record != NULL && record->is_complete &&
+        minic_data_layout_type(target->data_layout, program, type,
+                               &bytes, &alignment) &&
+        bytes == 0U && alignment != 0U;
 }
 
 /* LP64D and AAPCS64 pass non-HFA aggregates > 2*GRLEN (16 bytes)

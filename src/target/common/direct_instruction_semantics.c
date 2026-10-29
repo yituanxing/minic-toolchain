@@ -177,7 +177,8 @@ bool minic_multi_direct_parameter_object_location(
         !minic_type_equal(object_value_type, parameter_value_type) ||
         fn->objects[obj_id].element_count != 1U ||
         (loc->kind != MINIC_LP64_ARGUMENT_RECORD &&
-         loc->kind != MINIC_LP64_ARGUMENT_INDIRECT_RECORD) ||
+         loc->kind != MINIC_LP64_ARGUMENT_INDIRECT_RECORD &&
+         loc->kind != MINIC_LP64_ARGUMENT_EMPTY_RECORD) ||
         !minic_lp64_frame_plan_object(frame_plan, obj_id, object_offset))
         return false;
     *location = loc;

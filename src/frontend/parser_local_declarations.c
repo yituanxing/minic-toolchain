@@ -1004,9 +1004,37 @@ bool minic_parser_local_decl_ordinary(MinicParser *parser) {
     return minic_parser_expect(parser, MINIC_TOKEN_SEMICOLON, "expected ';'");
 }
 
+static bool consume_block_scope_extern_head_attribute(MinicParser *parser,
+                                                        const MinicParsedAttribute *attribute,
+                                                        void *opaque_is_weak) {
+    bool *is_weak = (bool *)opaque_is_weak;
+    const MinicAttributeDescriptor *descriptor;
+
+    if (parser == NULL || attribute == NULL || is_weak == NULL ||
+        (descriptor = attribute->descriptor) == NULL) {
+        return false;
+    }
+    /* Before the declarator name the entity may be a function or an object.
+     * GNU weak is legal for both when the declaration has extern linkage;
+     * persist it only after the declarator has resolved the entity kind. */
+    if (descriptor->kind == MINIC_ATTRIBUTE_WEAK && !attribute->has_arguments) {
+        *is_weak = true;
+        return true;
+    }
+    if (descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_INFORMATIONAL ||
+         descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_DIAGNOSTIC ||
+         descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_OPTIMIZATION ||
+         descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_CONTROL_FLOW) {
+        return true;
+    }
+    minic_parser_error(parser, "unsupported block-scope extern declaration-head attribute");
+    return false;
+}
+
 static bool declare_block_scope_extern_object_declarator(MinicParser *parser,
                                                          MinicType base_type,
-                                                         MinicSourceSpan name_span) {
+                                                         MinicSourceSpan name_span,
+                                                         bool is_weak) {
     MinicGlobalObjectId current_scope_object;
     MinicGlobalObjectId existing_id;
     MinicGlobalObjectId object_id;
@@ -1024,6 +1052,10 @@ static bool declare_block_scope_extern_object_declarator(MinicParser *parser,
     (void)is_array;
     if (!minic_parser_declare_block_scope_extern_object(
             parser, name_span, object_type, &object_id)) {
+        return false;
+    }
+    if (is_weak && !minic_c0_global_object_set_weak(parser->program, object_id, true)) {
+        minic_parser_error(parser, "GNU weak requires external object linkage");
         return false;
     }
     /* Redeclaration parsing may materialize temporary array descriptors.
@@ -1054,9 +1086,11 @@ bool minic_parser_local_decl_extern(MinicParser *parser) {
     const MinicFunction *existing_function;
     size_t parameter_count;
     bool is_variadic;
+    bool is_weak;
 
     parameter_count = 0U;
     is_variadic = false;
+    is_weak = false;
     (void)memset(parameter_types, 0, sizeof(parameter_types));
 
     if (!minic_parser_parse_gnu_prefix_function_attributes(parser, false, false) ||
@@ -1068,7 +1102,8 @@ bool minic_parser_local_decl_extern(MinicParser *parser) {
          * remains required for ordinary local definitions, initialized
          * locals, and record-by-value operations. Do not relax that API. */
         !minic_parser_parse_type_name_preserving_incomplete(parser, &return_type) ||
-        !minic_parser_parse_gnu_function_attributes(parser)) {
+        !minic_parser_parse_gnu_attribute_lists(
+            parser, consume_block_scope_extern_head_attribute, &is_weak)) {
         return false;
     }
     if (!minic_parser_parse_direct_declarator_name(parser, &name_span)) {
@@ -1102,7 +1137,8 @@ bool minic_parser_local_decl_extern(MinicParser *parser) {
     } else {
         if (parser->current.kind != MINIC_TOKEN_LPAREN) {
             for (;;) {
-                if (!declare_block_scope_extern_object_declarator(parser, return_type, name_span)) {
+                if (!declare_block_scope_extern_object_declarator(
+                        parser, return_type, name_span, is_weak)) {
                     return false;
                 }
                 if (parser->current.kind != MINIC_TOKEN_COMMA) {
@@ -1155,6 +1191,11 @@ bool minic_parser_local_decl_extern(MinicParser *parser) {
                !minic_c0_program_set_function_internal(parser->program, function_id, false) ||
                !minic_c0_program_set_function_variadic(parser->program, function_id, is_variadic)) {
         minic_parser_error(parser, "out of memory while declaring block-scope extern function");
+        return false;
+    }
+
+    if (is_weak && !minic_c0_program_set_function_weak(parser->program, function_id, true)) {
+        minic_parser_error(parser, "GNU weak requires external function linkage");
         return false;
     }
 
