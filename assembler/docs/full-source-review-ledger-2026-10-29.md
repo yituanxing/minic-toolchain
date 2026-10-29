@@ -163,3 +163,65 @@ batch. Do not promote the newly wired probes to PASS until a run on its actual
 commit SHA has succeeded. Existing unresolved P1 items remain Fragment
 emission transactions, conditional dependency graph, and target-wide form
 deduplication. GNU runtime/Image/QEMU are separate correctness tracks.
+
+## 8. Exact-head Section/Target/Debug correction and next source-audit findings
+
+**Validated source HEAD `02c4eae95c61a80dec0d3f189d94e3bc70db2d9a`**
+
+- MiniAS Target ISA/ABI Contract: run **40892956318**, SUCCESS.
+  Both the RV32/RV64 native strict/A0 real-link job and the AArch64
+  real-LD/QEMU job reported SUCCESS on that exact HEAD.
+- MiniAS x86/Loong GNU Oracle: run **40892956449**, SUCCESS, job
+  **123514355880**. The four newly wired GNU probes are success:
+  **63** x86 typed ModRM forms / **6** negative cases with exact GNU
+  instruction bytes and relocations; **4096** unique Sections,
+  **8192** indexed Subsections and **8192** hot push/pop switches,
+  including distinct COMDAT/LINK_ORDER keys, GNU ELF section payload
+  exact; user-owned/nonempty and synthesized `.debug_line` must not
+  silently concatenate, but empty explicit sections work; LoongArch
+  **5** psABI alias instructions, **9** privileged forms,
+  **2** PCALA relocations, **11** GNU invalid cases and **2**
+  intentionally MiniAS-only unsupported relocation combinations,
+  with exact GNU bytes/relocs for the supported forms.
+- Combined delta relative to `005e9b63` (before this next initialization
+  change): six commits, **six** modified production C/header files,
+  **+318/-115 production lines**; tests, CI and docs are separate.
+  Those patches removed the duplicate x86 register opcode table, mapped
+  LoongArch GPR `$s9` and FPR ABI bank aliases, added complete
+  Section/Subsection indexes, and rejected dual-owner DWARF line tables.
+- The Loong GNU probe itself found a false negative assertion: GNU GAS
+  syntactically accepts some misplaced PCALA modifiers. Preserve MiniAS's
+  fail-closed supported-domain policy, but NEVER report that syntax as
+  a GNU rejection. The revised test names the two populations separately.
+
+**Additional whole-module lifecycle finding:** initial Section creation
+in `minias_init_for_target` ignored allocation errors and attempted
+subsection creation or Target initialization with incomplete Common
+state. Make initialization return a checked result, preserve context
+teardown and prohibit parse/output after a failed init. This extra
+change is NOT covered by the above exact-head results until its own
+new revision is run.
+
+**Open structural debt, explicitly not closed by this batch:**
+
+1. Common Fragment byte ownership is still split: DATA/FILL/SPACE and
+   nonexecutable padding append directly, while instructions/code ALIGN
+   stage and commit EncodeResults. A unified ownership migration must
+   preserve SymbolID/Fixup ordering, CFI and .reloc section fixups,
+   NOBITS semantics, and fail-closed partial objects across all Targets.
+2. SourceGraph keeps immutable physical SourceFrame and stable expansion
+   site IDs but lacks dynamic conditional read sets / semantic
+   dependency graph; full state is reparsed in exception cases.
+3. RISC-V link relaxation R_RISCV_RELAX/ALIGN is a specific ABI policy,
+   not a generic Common instruction option. It is NOT fully supported.
+4. AArch64 has many source-mnemonic `strcmp` families (439 call sites
+   across the target, but not all are duplicates); a data-driven Target
+   form catalog with independent GNU negative/error-path oracles is the
+   right next complete-Target refactor, rather than blindly rewriting
+   individual comparisons.
+5. ELF/CFI and object writer must retain distinct serialization and
+   output-ownership roles even if shared checked grow/ULEB primitives
+   are consolidated.
+6. Original Linux 9,645 GNU input AS coverage is not the same as
+   complete original GNU object parity, final Image link or QEMU P1;
+   those are separate correctness milestones.

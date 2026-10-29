@@ -1065,40 +1065,42 @@ bool minias_section_append_zero(MiniAs *as,int section_index,size_t size) {
     return minias_section_append_fill(as,section_index,size,0U,false);
 }
 
-static void minias_init_for_target(MiniAs *as,
+/* Context construction is one fail-closed transaction. Earlier code
+ * ignored section/subsection allocations, then invoked Target initialization
+ * against a partial Common object. A failed init is destroyed by the caller
+ * without parsing or emitting an output ELF. */
+static bool minias_init_for_target(MiniAs *as,
                                    const MiniAsTargetOps *target) {
-    memset(as, 0, sizeof(*as));
-    as->target = target;
-    (void)minias_ensure_section(as,
-                                ".text",
-                                MINIAS_SHT_PROGBITS,
-                                MINIAS_SHF_ALLOC | MINIAS_SHF_EXECINSTR,
-                                target->default_exec_alignment != 0U ?
-                                    target->default_exec_alignment : 4U);
-    (void)minias_ensure_section(as,
-                                ".data",
-                                MINIAS_SHT_PROGBITS,
-                                MINIAS_SHF_ALLOC | MINIAS_SHF_WRITE,
-                                1U);
-    (void)minias_ensure_section(as,
-                                ".bss",
-                                MINIAS_SHT_NOBITS,
-                                MINIAS_SHF_ALLOC | MINIAS_SHF_WRITE,
-                                1U);
-    as->current_section = minias_find_section(as, ".text");
-    as->current_subsection = 0U;
-    as->previous_section = as->current_section;
-    as->previous_subsection = 0U;
-    as->conditional_active = true;
-    as->debug_is_stmt = true;
-    (void)minias_ensure_subsection(as, as->current_section, 0U);
+    int text;
+    memset(as,0,sizeof(*as));
+    as->target=target;
+    if(target==NULL) {
+        minias_set_error(as,"missing-assembler-target");
+        return false;
+    }
+    text=minias_ensure_section(as,".text",MINIAS_SHT_PROGBITS,
+            MINIAS_SHF_ALLOC|MINIAS_SHF_EXECINSTR,
+            target->default_exec_alignment!=0U ?
+            target->default_exec_alignment:4U);
+    if(text<0 || minias_ensure_section(as,".data",MINIAS_SHT_PROGBITS,
+                     MINIAS_SHF_ALLOC|MINIAS_SHF_WRITE,1U)<0 ||
+       minias_ensure_section(as,".bss",MINIAS_SHT_NOBITS,
+                     MINIAS_SHF_ALLOC|MINIAS_SHF_WRITE,1U)<0)
+        return false;
+    as->current_section=text;
+    as->current_subsection=0U;
+    as->previous_section=text;
+    as->previous_subsection=0U;
+    as->conditional_active=true;
+    as->debug_is_stmt=true;
+    return minias_ensure_subsection(as,text,0U)!=NULL;
 }
 
 /* Preserve the historical RISC-V API while the multi-target driver
  * initializes directly against its selected TargetInfo. */
 void minias_init(MiniAs *as) {
     MiniAsAssemblyConfig defaults;
-    minias_init_for_target(as,minias_target_riscv());
+    if(!minias_init_for_target(as,minias_target_riscv()))return;
     memset(&defaults, 0, sizeof(defaults));
     defaults.target = as->target;
     if (as->target->init_target_state != NULL &&
@@ -6675,17 +6677,17 @@ int minias_assemble_config(const char *input_path,
         bool parsed;
         bool added_long_branches = false;
 
-        minias_init_for_target(&as,config->target);
+        const bool initialized=minias_init_for_target(&as,config->target);
         as.elf_flags = config->elf_flags;
         as.output_elf32 = config->elf32;
         if (config->target_profile_size > sizeof(config->target_profile)) {
             minias_set_error(&as, "invalid-target-profile-size");
-        } else if (as.target->init_target_state != NULL &&
+        } else if (initialized && as.target->init_target_state != NULL &&
                    !as.target->init_target_state(&as, config) &&
                    as.error[0] == '\0') {
             minias_set_error(&as, "target-initialization-failed");
         }
-        parsed=as.error[0]=='\0';
+        parsed=initialized && as.error[0]=='\0';
         if(parsed && !source_loaded) {
             parsed=collect_file_source_frame(&as,input_path,&graph.physical);
             if(parsed) {
