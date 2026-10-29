@@ -171,6 +171,28 @@ static bool la_special_reg(const char *s,const char *prefix,
     if(errno || *end || val>maximum)return false;
     *reg=(unsigned)val;return true;
 }
+
+/* All scalar floating-point instruction families share one psABI FPR
+ * decoder; the retained typed register bank is still FPR. "$faN",
+ * "$ftN", and "$fsN" are canonical ABI names for f0..f7,
+ * f8..f23 and f24..f31 respectively, not additional hardware banks. */
+static bool la_fpr_reg(const char *s,unsigned *reg) {
+    unsigned ordinal;
+    if(la_special_reg(s,"$f",31U,reg))return true;
+    if(la_special_reg(s,"$fa",7U,&ordinal)) {
+        *reg=ordinal;
+        return true;
+    }
+    if(la_special_reg(s,"$ft",15U,&ordinal)) {
+        *reg=8U+ordinal;
+        return true;
+    }
+    if(la_special_reg(s,"$fs",7U,&ordinal)) {
+        *reg=24U+ordinal;
+        return true;
+    }
+    return false;
+}
 typedef struct {
     char fast[4][192];
     char *slots[4];
@@ -733,7 +755,7 @@ static bool la_parse_special_register_pattern(MiniAsMCInst *m,
         switch(rule->banks[arg]) {
             case LA_BANK_GPR:valid=la_reg(args[arg],&reg);break;
             case LA_BANK_FPR:
-                valid=la_special_reg(args[arg],"$f",31U,&reg);break;
+                valid=la_fpr_reg(args[arg],&reg);break;
             case LA_BANK_FCSR:
                 valid=la_special_reg(args[arg],"$fcsr",3U,&reg);break;
             case LA_BANK_FCC:
