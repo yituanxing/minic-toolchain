@@ -1516,6 +1516,200 @@ static bool aarch64_linux_zeropad_emit(
         (size_t)ops[0].value * 8U) >= 0;
 }
 
+/* Linux 6.6 arm64 __get_user/__put_user: the unprivileged LDTR/STTR
+ * instruction and its __ex_table fixup are one indivisible machine effect.
+ * This is not an ordinary load/store: on a fault the exception handler
+ * writes the error register (and, for a load, the destination register).
+ * Validate the complete GNU template including the register-number .irp
+ * table before choosing our own physical scratch registers. */
+typedef struct Aarch64UaccessForm {
+    bool is_load;
+    unsigned int width;
+    const char *mnemonic;
+} Aarch64UaccessForm;
+
+static bool aarch64_linux_uaccess_form(const char *text, size_t length,
+                                      Aarch64UaccessForm *result) {
+    static const struct {
+        const char *prefix;
+        bool load;
+        unsigned int width;
+        const char *mnemonic;
+    } forms[] = {
+        {"1:ldtrb%w1,[%2]2:", true, 1U, "ldtrb w10"},
+        {"1:ldtrh%w1,[%2]2:", true, 2U, "ldtrh w10"},
+        {"1:ldtr%w1,[%2]2:", true, 4U, "ldtr w10"},
+        {"1:ldtr%x1,[%2]2:", true, 8U, "ldtr x10"},
+        {"1:sttrb%w1,[%2]2:", false, 1U, "sttrb w10"},
+        {"1:sttrh%w1,[%2]2:", false, 2U, "sttrh w10"},
+        {"1:sttr%w1,[%2]2:", false, 4U, "sttr w10"},
+        {"1:sttr%x1,[%2]2:", false, 8U, "sttr x10"}
+    };
+    static const char common[] =
+        ".irpnum,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30"
+        ".equ.L__gpr_num_x\\num,\\num"
+        ".equ.L__gpr_num_w\\num,\\num"
+        ".endr"
+        ".equ.L__gpr_num_xzr,31"
+        ".equ.L__gpr_num_wzr,31"
+        ".pushsection__ex_table,\"a\""
+        ".align2"
+        ".long((1b)-.)"
+        ".long((2b)-.)"
+        ".short(2)";
+    static const char load_tail[] =
+        ".short((((.L__gpr_num_%w0)<<0)|((.L__gpr_num_%w1)<<5)))"
+        ".popsection";
+    static const char store_tail[] =
+        ".short((((.L__gpr_num_%w0)<<0)|((.L__gpr_num_wzr)<<5)))"
+        ".popsection";
+    char compact[1400];
+    size_t i, n = 0U;
+
+    if (!text || !length || length >= sizeof(compact) || !result) return false;
+    for (i = 0U; i < length; ++i) {
+        const char c = text[i];
+        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') continue;
+        if (c == '\0' || n + 1U >= sizeof(compact)) return false;
+        compact[n++] = c;
+    }
+    compact[n] = '\0';
+    for (i = 0U; i < sizeof(forms) / sizeof(forms[0]); ++i) {
+        const size_t prefix = strlen(forms[i].prefix);
+        const size_t middle = sizeof(common) - 1U;
+        const char *tail = forms[i].load ? load_tail : store_tail;
+        const size_t suffix = strlen(tail);
+        if (n != prefix + middle + suffix ||
+            memcmp(compact, forms[i].prefix, prefix) != 0 ||
+            memcmp(compact + prefix, common, middle) != 0 ||
+            memcmp(compact + prefix + middle, tail, suffix) != 0)
+            continue;
+        result->is_load = forms[i].load;
+        result->width = forms[i].width;
+        result->mnemonic = forms[i].mnemonic;
+        return true;
+    }
+    return false;
+}
+
+static bool aarch64_linux_uaccess_source(
+    const MinicC0Program *program, const MinicInlineAsm *src,
+    MinicTargetInlineAsmContract *contract) {
+    Aarch64UaccessForm form;
+    const MinicExpression *err, *data, *pointer;
+    MinicType err_type, data_type;
+
+    if (!program || !src || !contract || !src->is_volatile || src->is_goto ||
+        src->output_count != (size_t)(2U - (src->input_count == 2U)) ||
+        (src->output_count != 1U && src->output_count != 2U) ||
+        src->output_count + src->input_count != 3U ||
+        !src->outputs || !src->inputs || src->clobber_count != 0U ||
+        src->register_clobber_count != 0U || src->has_memory_clobber ||
+        src->label_count != 0U ||
+        !aarch64_linux_uaccess_form(src->template_text,
+                                   src->template_length, &form))
+        return false;
+    if (src->output_count != (form.is_load ? 2U : 1U) ||
+        !constraint(&src->outputs[0], "+r") ||
+        !constraint(form.is_load ? &src->outputs[1] : &src->inputs[0],
+                    form.is_load ? "=r" : "rZ") ||
+        !constraint(&src->inputs[form.is_load ? 0U : 1U], "r"))
+        return false;
+    err = minic_c0_program_expression(program, src->outputs[0].expression);
+    data = minic_c0_program_expression(
+        program, form.is_load ? src->outputs[1].expression : src->inputs[0].expression);
+    pointer = minic_c0_program_expression(
+        program, src->inputs[form.is_load ? 0U : 1U].expression);
+    if (!err || !data || !pointer ||
+        err->value_category != MINIC_VALUE_LVALUE ||
+        (form.is_load && data->value_category != MINIC_VALUE_LVALUE) ||
+        minic_type_is_const(err->type) ||
+        (form.is_load && minic_type_is_const(data->type)) ||
+        !minic_type_unqualified(err->type, &err_type) ||
+        !minic_type_unqualified(data->type, &data_type) ||
+        !minic_type_equal(err_type, minic_type_int()) ||
+        (!minic_type_is_integer(data_type) &&
+         !(form.width == 8U && minic_type_is_pointer(data_type))) ||
+        !minic_type_is_pointer(pointer->type))
+        return false;
+    contract->operand_count = 3U;
+    contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE;
+    contract->kinds[1] = form.is_load
+        ? MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT
+        : MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->implicit_memory_effect = true;
+    return true;
+}
+
+static bool aarch64_linux_uaccess_emit(
+    FILE *out, const MinicDirectLP64BlockContext *ctx,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info,
+    const Aarch64UaccessForm *form) {
+    const MinicCoreFunction *fn = ctx->fn;
+    const MinicCoreStructuredInlineAsmOperand *op =
+        ins->value.structured_inline_asm.operands;
+    MinicType err_type, data_type;
+    size_t i;
+
+    if (!out || !fn || !form || !info || !info->is_volatile || info->is_goto ||
+        ctx->dynamic_frame || info->register_clobber_count != 0U ||
+        ins->value.structured_inline_asm.operand_count != 3U ||
+        !aarch64_linux_uaccess_form(info->template_text,
+                                   info->template_length, &(Aarch64UaccessForm){0}))
+        return false;
+    for (i = 0U; i < 3U; ++i) {
+        const MinicCoreStructuredInlineAsmOperandKind kind = i == 0U
+            ? MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE
+            : i == 1U && form->is_load
+                ? MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT
+                : MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+        if (op[i].operand_index != i || op[i].kind != kind ||
+            op[i].value >= fn->value_count || op[i].has_fixed_register_binding ||
+            !aarch64_linux_structured_spill_slot_valid(op[i].value)) return false;
+    }
+    if (!minic_type_pointee(fn->values[op[0].value].type, &err_type) ||
+        !minic_type_equal(err_type, minic_type_int()) ||
+        (form->is_load &&
+         (!minic_type_pointee(fn->values[op[1].value].type, &data_type) ||
+          !minic_type_is_integer(data_type))) ||
+        !minic_type_is_pointer(fn->values[op[2].value].type)) return false;
+
+    /* x9 is the original +r error, x10 the transferred value, x11 the
+     * user pointer, x12 the lvalue address. The fault fixup needs the
+     * physical register indices, so these must agree with the instructions.
+     * DirectLP64 owns the scratch GPRs and their spill boundaries. */
+    if (fprintf(out,
+            "  ldr x12, [sp, #%zu]\n"
+            "  ldr w9, [x12]\n"
+            "  ldr x11, [sp, #%zu]\n",
+            (size_t)op[0].value * 8U,
+            (size_t)op[2].value * 8U) < 0) return false;
+    if (!form->is_load &&
+        fprintf(out, "  ldr x10, [sp, #%zu]\n",
+                (size_t)op[1].value * 8U) < 0) return false;
+    if (fprintf(out,
+            "1: %s, [x11]\n"
+            "2:\n"
+            "  .pushsection __ex_table, \"a\"\n"
+            "  .align 2\n"
+            "  .long (1b - .)\n"
+            "  .long (2b - .)\n"
+            "  .short 2\n"
+            "  .short ((9 << 0) | (%u << 5))\n"
+            "  .popsection\n"
+            "  ldr x12, [sp, #%zu]\n"
+            "  str w9, [x12]\n",
+            form->mnemonic, form->is_load ? 10U : 31U,
+            (size_t)op[0].value * 8U) < 0) return false;
+    if (form->is_load &&
+        fprintf(out,
+                "  ldr x12, [sp, #%zu]\n"
+                "  str x10, [x12]\n",
+                (size_t)op[1].value * 8U) < 0) return false;
+    return true;
+}
+
 /* Linux arm64 cache-maintenance operations are architectural side effects:
  * instruction/data cache to PoU/PoC, not a mere compiler "memory" fence.
  * These opcodes execute at the requested address in the target ISA. Accept
@@ -1638,6 +1832,7 @@ bool minic_aarch64_qualify_inline_asm(
             }
         }
     }
+    if(aarch64_linux_uaccess_source(program,src,contract))return true;
     if(aarch64_linux_zeropad_source(program,src,contract))return true;
     if(aarch64_linux_cache_op_source(program,src,contract))return true;
     if(aarch64_linux_encoded_sysreg_write_source(program,src,contract))
@@ -2200,6 +2395,12 @@ bool minic_aarch64_emit_qualified_structured_asm(
     if (ins->value.structured_inline_asm.inline_asm_id >= fn->inline_asm_count)
         return false;
     info = &fn->inline_asms[ins->value.structured_inline_asm.inline_asm_id];
+    {
+        Aarch64UaccessForm uaccess;
+        if (aarch64_linux_uaccess_form(info->template_text,
+                                      info->template_length, &uaccess))
+            return aarch64_linux_uaccess_emit(out, ctx, ins, info, &uaccess);
+    }
     if (aarch64_linux_zeropad_form(info->template_text,
                                   info->template_length))
         return aarch64_linux_zeropad_emit(out, ctx, ins, info);

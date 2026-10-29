@@ -81,6 +81,62 @@ bool minic_x86_64_linux_bug_table_opaque(const char *text, size_t length) {
 
 /* Target-owned GNU register/constraint admission: no Core lowering state,
  * no SSA mutation. Additional x86 forms extend this owner, not core_lower. */
+static bool target_constraint_is(const MinicInlineAsmOperand *, const char *);
+unsigned int minic_x86_64_linux_testcc_form(const char *text, size_t length) {
+    static const char *const forms[] = {
+        "testb%2,%1/*outputconditioncodenz*/",
+        "testb%2,%1/*outputconditioncodez*/"
+    };
+    char compact[120];
+    size_t i, n = 0U;
+    if (!text || !length || length >= sizeof(compact)) return 0U;
+    for (i = 0U; i < length; ++i) {
+        const char c = text[i];
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
+        if (c == '\0' || n + 1U >= sizeof(compact)) return 0U;
+        compact[n++] = c;
+    }
+    compact[n] = '\0';
+    for (i = 0U; i < sizeof(forms) / sizeof(forms[0]); ++i)
+        if (strcmp(compact, forms[i]) == 0) return (unsigned int)i + 1U;
+    return 0U;
+}
+
+static bool x86_linux_testcc_source(
+    const MinicC0Program *program, const MinicInlineAsm *src,
+    MinicTargetInlineAsmContract *contract) {
+    const unsigned int form = src ? minic_x86_64_linux_testcc_form(
+        src->template_text, src->template_length) : 0U;
+    const MinicExpression *flag, *memory, *mask;
+    MinicType type;
+    if (!program || !src || !contract || !form || !src->is_volatile ||
+        src->is_goto || src->output_count != 1U || src->input_count != 2U ||
+        !src->outputs || !src->inputs || src->label_count ||
+        !src->has_memory_clobber || src->clobber_count != 1U ||
+        src->register_clobber_count ||
+        !target_constraint_is(&src->outputs[0], form == 1U ? "=@ccnz" : "=@ccz") ||
+        !target_constraint_is(&src->inputs[0], "m") ||
+        !target_constraint_is(&src->inputs[1], "i")) return false;
+    flag = minic_c0_program_expression(program, src->outputs[0].expression);
+    memory = minic_c0_program_expression(program, src->inputs[0].expression);
+    mask = minic_c0_program_expression(program, src->inputs[1].expression);
+    if (!flag || !memory || !mask ||
+        flag->value_category != MINIC_VALUE_LVALUE ||
+        memory->value_category != MINIC_VALUE_LVALUE ||
+        minic_type_is_const(flag->type) ||
+        !minic_type_unqualified(flag->type, &type) ||
+        !minic_type_equal(type, minic_type_bool()) ||
+        !minic_type_unqualified(memory->type, &type) ||
+        !minic_type_is_integer(type) ||
+        !minic_type_is_integer(mask->type)) return false;
+    contract->operand_count = 3U;
+    contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+    contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
+    contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->implicit_memory_effect = true;
+    return true;
+}
+
 /* Keep the GS per-CPU source reserved, without capturing ordinary MOV. */
 bool minic_x86_64_requires_qualified_input_asm(const MinicInlineAsm *src) {
     static const char *const reserved[] = {"movq %%gs:", "cmp",
@@ -1142,12 +1198,13 @@ static bool x86_linux_raw_cmpxchg_source(
             (e->value_category != MINIC_VALUE_LVALUE ||
              minic_type_is_const(e->type))) ||
             !minic_type_unqualified(e->type, &type) ||
-            type.base_kind != MINIC_TYPE_BASE_INT ||
-            !minic_type_is_integer(type) || type.pointer_depth != 0U ||
-            (d->width == 8U
-                ? (type.integer_rank != MINIC_INTEGER_RANK_LONG &&
-                   type.integer_rank != MINIC_INTEGER_RANK_LONG_LONG)
-                : (unsigned int)type.integer_rank != rank))
+            (!(d->width == 8U && minic_type_is_pointer(type)) &&
+             (type.base_kind != MINIC_TYPE_BASE_INT ||
+             !minic_type_is_integer(type) || type.pointer_depth != 0U ||
+             (d->width == 8U
+                 ? (type.integer_rank != MINIC_INTEGER_RANK_LONG &&
+                    type.integer_rank != MINIC_INTEGER_RANK_LONG_LONG)
+                 : (unsigned int)type.integer_rank != rank))))
             return false;
     }
     contract->operand_count = 4U;
@@ -1273,9 +1330,13 @@ static bool x86_trycas_source(
     if(!minic_type_equal(t[0],minic_type_bool()))
         return false;
     for(i=1U;i<4U;++i)
-        if(t[i].base_kind!=MINIC_TYPE_BASE_INT||
-           !minic_type_is_integer(t[i])||t[i].pointer_depth!=0U||
-           (unsigned int)t[i].integer_rank!=rank)
+        if (!(d->width == 8U && minic_type_is_pointer(t[i])) &&
+            (t[i].base_kind!=MINIC_TYPE_BASE_INT||
+             !minic_type_is_integer(t[i])||t[i].pointer_depth!=0U||
+             (d->width == 8U
+                 ? (t[i].integer_rank != MINIC_INTEGER_RANK_LONG &&
+                    t[i].integer_rank != MINIC_INTEGER_RANK_LONG_LONG)
+                 : (unsigned int)t[i].integer_rank!=rank)))
             return false;
     contract->operand_count=4U;
     contract->kinds[0]=MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
@@ -2091,6 +2152,8 @@ bool minic_x86_64_qualify_inline_asm(
     bool is_mulacc = false, is_muldiv = false;
     size_t i, count;
     if (!contract) return false;
+    if (x86_linux_testcc_source(program, source, contract))
+        return true;
     if (x86_prefetchw_alt_source(program, source, contract))
         return true;
     if (x86_gs_tied_alu_source(program, source, contract))

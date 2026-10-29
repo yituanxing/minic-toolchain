@@ -1265,6 +1265,35 @@ bool minic_x86_64_emit_structured_asm(
     if (!info->template_text)
         return false;
     {
+        const unsigned int testcc = minic_x86_64_linux_testcc_form(
+            info->template_text, info->template_length);
+        if (testcc != 0U) {
+            const MinicCoreStructuredInlineAsmOperand *b = bindings;
+            MinicType result_type, memory_type;
+            if (!info->is_volatile || info->is_goto ||
+                !info->has_memory_clobber || info->register_clobber_count ||
+                ins->value.structured_inline_asm.operand_count != 3U ||
+                b[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
+                b[1].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT ||
+                b[2].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
+                b[0].operand_index != 0U || b[1].operand_index != 1U ||
+                b[2].operand_index != 2U ||
+                b[0].value >= fn->value_count ||
+                b[1].value >= fn->value_count ||
+                b[2].value >= fn->value_count ||
+                !minic_type_pointee(fn->values[b[0].value].type, &result_type) ||
+                !minic_type_equal(result_type, minic_type_bool()) ||
+                !minic_type_pointee(fn->values[b[1].value].type, &memory_type) ||
+                !minic_type_is_integer(memory_type)) return false;
+            return x86_value_load(out, frame, b[1].value, "%r11") &&
+                   x86_value_load(out, frame, b[2].value, "%r10") &&
+                   fputs("  testb %r10b, (%r11)\n", out) != EOF &&
+                   fputs(testcc == 1U ? "  setnz %al\n" : "  setz %al\n", out) != EOF &&
+                   x86_value_load(out, frame, b[0].value, "%r11") &&
+                   fputs("  movb %al, (%r11)\n", out) != EOF;
+        }
+    }
+    {
         const unsigned int form = minic_x86_64_linux_zero_barrier_form(
             info->template_text, info->template_length);
         if (form != 0U) {

@@ -699,7 +699,17 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
                     (binding->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT &&
                      minic_type_is_const(pointee)) ||
                     !minic_type_unqualified(pointee, &value_type) ||
-                    (!minic_type_is_integer(value_type) && !minic_type_is_pointer(value_type))) {
+                    /* A GNU memory operand denotes an addressable storage
+                     * region, not necessarily a scalar value. Linux's
+                     * __get_user/__put_user uses an intentionally opaque
+                     * struct __large_struct memory carrier. Register roles
+                     * still require a machine scalar; target admission
+                     * determines whether the aggregate memory shape is
+                     * legal for a particular instruction family. */
+                    ((binding->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
+                      binding->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE) &&
+                     !minic_type_is_integer(value_type) &&
+                     !minic_type_is_pointer(value_type))) {
                     return false;
                 }
                 if (binding->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE) {
