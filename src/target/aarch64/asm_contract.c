@@ -486,6 +486,7 @@ static const char *aarch64_linux_mrs_register(const char *text, size_t len) {
          * constrains the output to GNU "=r" 64-bit GPR. */
         {"mrs%0,pmcr_el0", "pmcr_el0"},
         {"mrs%0,pmccntr_el0", "pmccntr_el0"},
+        {"mrs%0,pmccfiltr_el0", "pmccfiltr_el0"},
         {"mrs%0,pmovsclr_el0", "pmovsclr_el0"},
         {"mrs%0,pmceid0_el0", "pmceid0_el0"},
         {"mrs%0,pmceid1_el0", "pmceid1_el0"},
@@ -2239,6 +2240,21 @@ static unsigned int aarch64_linux_encoded_sysreg_form(
     }
     normalized[n]='\0';
     if(n<=prefix_len || memcmp(normalized,prefix,prefix_len)!=0)return 0U;
+    /* Linux 6.6 topology.c AMU core/constant frequency counters use the
+     * actual SYS_AMEVCNTR0{0,1}_EL0 macro, not a flattened numeric tuple.
+     * Preserve the precise CRm=(4+(n>>3)), op2=(n&7) expression and the
+     * entire GNU GPR/.irp/MRS_S preamble; no general constant-expression
+     * assembler passthrough is permitted here. */
+    for(i=0U;i<=1U;++i){
+        count=snprintf(expected,sizeof(expected),
+            "%smrs_s%%0,(((3)<<19)|((3)<<16)|((13)<<12)|"
+            "(((4+((%zu)>>3)))<<8)|((((%zu)&7))<<5))%s",
+            prefix,i,i,suffix);
+        if(count>0&&(size_t)count<sizeof(expected)&&
+           strcmp(normalized,expected)==0)
+            return 0xd5200000U | (3U<<19) | (3U<<16) |
+                   (13U<<12) | (4U<<8) | ((unsigned int)i<<5) | 9U;
+    }
     /* Linux SYS_ZCR_EL2 passes SYS_* through an extra parenthesized macro
      * argument. Accept exactly zero or one complete outer grouping around
      * the five-field tuple; keep the original GNU directive prefix intact. */
