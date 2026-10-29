@@ -20,6 +20,24 @@ require_contains() {
         fail "missing expected machine proof: $1 in $2"
     fi
 }
+function_assembly() {
+    local name=$1
+    awk -v symbol="$name" '
+        $0 == symbol ":" { inside=1 }
+        inside { print }
+        inside && index($0, ".size " symbol ",") == 1 { exit }
+    ' "$work/aarch64.s"
+}
+require_saved_x8_copy_slot() {
+    local name=$1 base=$2 body="$work/${1}.body" saved_slot
+    function_assembly "$name" >"$body"
+    saved_slot=$(sed -nE "s/^  str x8, \\[${base}, #([0-9]+)\\]$/\\1/p" \
+        "$body" | head -n 1)
+    [[ -n "$saved_slot" ]] || fail "$name lacks typed $base frame save of x8"
+    require_contains "^  add x10, ${base}, #${saved_slot}$" "$body"
+    require_contains '^  ldr x10, \[x10\]$' "$body"
+    require_contains '^  strb w9, \[x10\], #1$' "$body"
+}
 require_rejected() {
     local target=$1 source=$2 name=$3
     if "$minic_cc" --target="$target" -S "$source" \
@@ -46,7 +64,7 @@ test -s "$gnu_source" || fail 'missing GNU caller and callee'
     -o "$work/aarch64.s" || fail 'AArch64 indirect-result compilation'
 test -s "$work/aarch64.s" || fail 'AArch64 assembly empty'
 
-for name in minic_three minic_four minic_eighteen minic_nested_three \
+for name in minic_indirect_three minic_three minic_four minic_eighteen minic_nested_three \
             minic_nested_eighteen minic_branch_three minic_ten_arguments \
             minic_nested_record minic_seventeen minic_sixty_four \
             minic_2048 minic_nested_2048 minic_two minic_dynamic_three \
@@ -55,12 +73,18 @@ for name in minic_three minic_four minic_eighteen minic_nested_three \
     require_contains "^${name}:$" "$work/aarch64.s"
 done
 
-# The incoming x8 pointer must be stored in a private frame slot before
-# GNU can clobber it, then reloaded to COPY the actual full object bytes.
-# Counted copy has one branch per record return, not O(record bytes) text.
-require_contains '^  str x8, \[x11\]$' "$work/aarch64.s"
-require_contains '^  ldr x10, \[x10\]$' "$work/aarch64.s"
-require_contains '^  add x8, sp, x8$' "$work/aarch64.s"
+# Machine-semantic proof: x8 is saved in a private owned frame slot and the
+# counted return copy later loads x10 from that EXACT same frame slot. This
+# checks the AAPCS64 ABI invariant across a normal SP frame and a dynamic
+# x19-anchored frame; it does not depend on an old movz/add spelling.
+require_saved_x8_copy_slot minic_three sp
+require_saved_x8_copy_slot minic_dynamic_three x19
+require_saved_x8_copy_slot minic_indirect_three sp
+require_contains '^  blr x16$' "$work/minic_indirect_three.body"
+require_contains '^  add x8, sp, #[0-9]+$' "$work/minic_indirect_three.body"
+require_contains '^  mov sp, x19$' "$work/minic_dynamic_three.body"
+require_contains '^  ldr x19, \[x19, #[0-9]+\]$' "$work/minic_dynamic_three.body"
+require_contains '^  add x8, sp, #[0-9]+$' "$work/aarch64.s"
 require_contains '^  bl gnu_make_three$' "$work/aarch64.s"
 require_contains '^  bl gnu_make_eighteen$' "$work/aarch64.s"
 require_contains '^  bl gnu_tap$' "$work/aarch64.s"
@@ -76,8 +100,7 @@ require_contains '^  movz x12, #64$' "$work/aarch64.s"
 require_contains '^  movz x12, #2048$' "$work/aarch64.s"
 # Alloca moves the stack pointer; the return-object and saved x8 slot must
 # still be addressed relative to the stable AAPCS64 callee-saved x19.
-require_contains '^  add x11, x19, x11$' "$work/aarch64.s"
-require_contains '^  add x10, x19, x10$' "$work/aarch64.s"
+require_contains '^  add x11, x19, #[0-9]+$' "$work/minic_dynamic_three.body"
 
 # LoongArch now has its OWN independently qualified LP64D return policy.
 # The same source is legal there, but its hidden result MUST use $a0, never
@@ -134,19 +157,10 @@ SRC
 "$host_cc" -E -P -x c "$work/overlimit.c" -o "$work/overlimit.i"
 require_rejected aarch64-linux "$work/overlimit.i" aarch64-overlimit
 
-# Only an independently validated direct result_object is implemented. An
-# indirect-call result needs a separate caller-side Core result contract.
-cat >"$work/indirect.c" <<'SRC'
-struct Large { unsigned long words[3]; };
-extern struct Large (*factory)(unsigned long);
-struct Large call_factory(unsigned long x) {
-    return factory(x);
-}
-SRC
-"$host_cc" -E -P -x c "$work/indirect.c" -o "$work/indirect.i"
-require_rejected aarch64-linux "$work/indirect.i" aarch64-indirect-callee
-
-printf '%s\n' 'AAPCS64_SRET_SOURCE=PASS direct_return=19 nested_call=4 independent_x8=1 LP64D_a0=1 return_blocks=2 ABI_negative=4'
+# The indirect large-record return is now admitted only with a typed x8
+# result-object address and x16/blr call; the GNU caller and GNU callee
+# exercise the full mixed ABI when target GCC/QEMU are available below.
+printf '%s\n' 'AAPCS64_SRET_SOURCE=PASS direct_return=20 nested_call=5 independent_x8=1 LP64D_a0=1 return_blocks=2 ABI_negative=3'
 
 if ! command -v "$target_cc" >/dev/null 2>&1 ||
    ! command -v "$target_qemu" >/dev/null 2>&1; then
@@ -184,4 +198,4 @@ fi
 cmp "$work/gnu.out" "$work/mini.out" || fail 'stdout differs'
 cmp "$work/gnu.err" "$work/mini.err" || fail 'stderr differs'
 require_contains 'AAPCS64_INDIRECT_RECORD_RETURN=PASS' "$work/mini.out"
-printf '%s\n' 'AAPCS64_SRET_RUNTIME=PASS GNU_GAS=1 GNU_static_link=1 GNU_QEMU=2 mixed_ABI=2 sizes=17,24,32,40,64,144,2048'
+printf '%s\n' 'AAPCS64_SRET_RUNTIME=PASS GNU_GAS=1 GNU_static_link=1 GNU_QEMU=2 mixed_ABI=3 sizes=17,24,32,40,64,144,2048'

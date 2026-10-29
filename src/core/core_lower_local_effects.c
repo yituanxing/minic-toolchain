@@ -51,7 +51,12 @@ bool core_block_may_modify_local(const MinicCoreLowerContext *context,
                 target_local == local_id) {
                 return true;
             }
+            /* An lvalue's address expression is evaluated as part of the
+             * assignment: a[index++] = value mutates index even though the
+             * direct assignment destination is not that local. */
             if (core_expression_may_modify_local(
+                    context, statement->target_expression, local_id, depth + 1U) ||
+                core_expression_may_modify_local(
                     context, statement->expression, local_id, depth + 1U)) {
                 return true;
             }
@@ -63,6 +68,8 @@ bool core_block_may_modify_local(const MinicCoreLowerContext *context,
                 return true;
             }
             if (core_expression_may_modify_local(
+                    context, statement->target_expression, local_id, depth + 1U) ||
+                core_expression_may_modify_local(
                     context, statement->expression, local_id, depth + 1U)) {
                 return true;
             }
@@ -236,7 +243,13 @@ bool core_expression_may_modify_local(const MinicCoreLowerContext *context,
         block = minic_c0_program_block(
             context->body->program, expression->value.statement_expression.block);
         return block == NULL ||
-               core_block_may_modify_local(context, block, local_id, depth + 1U);
+               core_block_may_modify_local(context, block, local_id, depth + 1U) ||
+               /* The parser detaches the statement-expression tail from its
+                * block. Its value may be x++, x=1, or another effectful tree. */
+               (expression->value.statement_expression.result != MINIC_EXPRESSION_INVALID &&
+                core_expression_may_modify_local(
+                    context, expression->value.statement_expression.result,
+                    local_id, depth + 1U));
     case MINIC_EXPRESSION_BUILTIN_UNARY:
         return core_expression_may_modify_local(
             context, expression->value.builtin_unary.operand, local_id, depth + 1U);

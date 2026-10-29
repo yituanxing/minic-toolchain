@@ -56,15 +56,20 @@ static bool minic_riscv64_function_abi_plan_qualified(
                     return false;
                 }
             } else if (location.value.kind == MINIC_RISCV64_ABI_VALUE_FLOAT) {
-                bool soft = abi_plan->named_parameter_cursor.lp64_soft_float;
+                /* LP64D spills named floating parameters into the normal
+                 * integer argument stream after fa7. LP64 never uses FARs. */
                 bool correct_location =
-                    soft ? (location.floating_register_count == 0U &&
-                            location.integer_register_count +
-                              location.stack_slot_count == 1U)
-                         : (location.floating_register_count == 1U &&
-                            location.floating_register_begin < 8U &&
-                            location.integer_register_count == 0U &&
-                            location.stack_slot_count == 0U);
+                    location.floating_register_count == 1U
+                        ? (!abi_plan->named_parameter_cursor.lp64_soft_float &&
+                           location.floating_register_begin < 8U &&
+                           location.integer_register_count == 0U &&
+                           location.stack_slot_count == 0U)
+                        : (location.floating_register_count == 0U &&
+                           ((location.integer_register_count == 1U &&
+                             location.integer_register_begin < 8U &&
+                             location.stack_slot_count == 0U) ||
+                            (location.integer_register_count == 0U &&
+                             location.stack_slot_count == 1U)));
                 if ((!minic_type_is_float(function->parameter_types[index]) &&
                      !minic_type_is_double(function->parameter_types[index])) ||
                     !correct_location) {

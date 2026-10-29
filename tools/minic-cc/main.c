@@ -33,7 +33,8 @@ int main(int argc, char **argv) {
     MinicIntegerSign plain_char_sign = MINIC_INTEGER_SIGN_NONE;
     MinicTargetInvocation invocation;
     MinicTargetInfo selected_target;
-    const char *target_name = "riscv64-linux";
+    const MinicTargetCatalogEntry *target_entry;
+    const char *target_name;
     const MinicTargetInfo *target_info;
     bool target_given = false;
     const char *march = NULL;
@@ -41,6 +42,9 @@ int main(int argc, char **argv) {
 
     input_path = NULL;
     output_path = NULL;
+    target_entry = minic_target_catalog_default();
+    if (target_entry == NULL) return 2;
+    target_name = target_entry->name;
 
     for (index = 1; index < argc; ++index) {
         if (strcmp(argv[index], "-S") == 0) {
@@ -126,8 +130,10 @@ int main(int argc, char **argv) {
         return 2;
     }
 
+    target_entry = minic_target_catalog_find(target_name);
     target_info = minic_target_info_from_name(target_name);
-    if (target_info == NULL) {
+    if (target_entry == NULL || target_info == NULL ||
+        target_entry->architecture != target_info->architecture) {
         (void)fprintf(stderr, "%s: unsupported target: %s\n", argv[0], target_name);
         return 2;
     }
@@ -149,8 +155,7 @@ int main(int argc, char **argv) {
     selected_target.position_independent = position_independent;
     if (march != NULL || mabi != NULL) {
         char reason[240];
-        if (selected_target.architecture != MINIC_TARGET_ARCH_RISCV64 &&
-            selected_target.architecture != MINIC_TARGET_ARCH_RISCV32) {
+        if (target_entry->isa_family != MINIC_TARGET_ISA_FAMILY_RISCV) {
             (void)fprintf(stderr, "%s: -march/-mabi currently require RISC-V\n", argv[0]);
             return 2;
         }

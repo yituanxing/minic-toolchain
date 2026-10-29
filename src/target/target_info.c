@@ -171,10 +171,8 @@ typedef struct MinicTargetLanguageDescriptor {
     MinicIntegerRank libc_size_rank;
 } MinicTargetLanguageDescriptor;
 
-static const MinicTargetLanguageDescriptor minic_target_language_descriptors[] = {
-    {
+static const MinicTargetLanguageDescriptor minic_language_riscv32 = {
         .target = {
-            .architecture = MINIC_TARGET_ARCH_RISCV32,
             .integer_model = &minic_ilp32_unsigned_char_integer_model,
             .word_integer_rank = MINIC_INTEGER_RANK_INT,
             .gnu_sizeof_void_is_one = true,
@@ -192,10 +190,9 @@ static const MinicTargetLanguageDescriptor minic_target_language_descriptors[] =
         .wide_character_sign = MINIC_INTEGER_SIGN_SIGNED,
         .wide_character_rank = MINIC_INTEGER_RANK_INT,
         .libc_size_rank = MINIC_INTEGER_RANK_INT,
-    },
-    {
+};
+static const MinicTargetLanguageDescriptor minic_language_riscv64 = {
         .target = {
-            .architecture = MINIC_TARGET_ARCH_RISCV64,
             .integer_model = &minic_lp64_unsigned_char_integer_model,
             .word_integer_rank = MINIC_INTEGER_RANK_LONG,
             .language_type_capabilities = MINIC_TARGET_LANG_EXTENDED_FLOAT_DECLARATIONS,
@@ -214,10 +211,9 @@ static const MinicTargetLanguageDescriptor minic_target_language_descriptors[] =
         .wide_character_sign = MINIC_INTEGER_SIGN_SIGNED,
         .wide_character_rank = MINIC_INTEGER_RANK_INT,
         .libc_size_rank = MINIC_INTEGER_RANK_LONG,
-    },
-    {
+};
+static const MinicTargetLanguageDescriptor minic_language_x86_64 = {
         .target = {
-            .architecture = MINIC_TARGET_ARCH_X86_64,
             .integer_model = &minic_lp64_signed_char_integer_model,
             .word_integer_rank = MINIC_INTEGER_RANK_LONG,
             .language_type_capabilities = MINIC_TARGET_LANG_EXTENDED_FLOAT_DECLARATIONS |
@@ -237,10 +233,9 @@ static const MinicTargetLanguageDescriptor minic_target_language_descriptors[] =
         .wide_character_sign = MINIC_INTEGER_SIGN_SIGNED,
         .wide_character_rank = MINIC_INTEGER_RANK_INT,
         .libc_size_rank = MINIC_INTEGER_RANK_LONG,
-    },
-    {
+};
+static const MinicTargetLanguageDescriptor minic_language_aarch64 = {
         .target = {
-            .architecture = MINIC_TARGET_ARCH_AARCH64,
             .integer_model = &minic_lp64_unsigned_char_integer_model,
             .word_integer_rank = MINIC_INTEGER_RANK_LONG,
             .language_type_capabilities = MINIC_TARGET_LANG_EXTENDED_FLOAT_DECLARATIONS |
@@ -260,10 +255,9 @@ static const MinicTargetLanguageDescriptor minic_target_language_descriptors[] =
         .wide_character_sign = MINIC_INTEGER_SIGN_UNSIGNED,
         .wide_character_rank = MINIC_INTEGER_RANK_INT,
         .libc_size_rank = MINIC_INTEGER_RANK_LONG,
-    },
-    {
+};
+static const MinicTargetLanguageDescriptor minic_language_loongarch64 = {
         .target = {
-            .architecture = MINIC_TARGET_ARCH_LOONGARCH64,
             .integer_model = &minic_lp64_signed_char_integer_model,
             .word_integer_rank = MINIC_INTEGER_RANK_LONG,
             .language_type_capabilities = MINIC_TARGET_LANG_EXTENDED_FLOAT_DECLARATIONS,
@@ -280,7 +274,16 @@ static const MinicTargetLanguageDescriptor minic_target_language_descriptors[] =
         .wide_character_sign = MINIC_INTEGER_SIGN_SIGNED,
         .wide_character_rank = MINIC_INTEGER_RANK_INT,
         .libc_size_rank = MINIC_INTEGER_RANK_LONG,
-    },
+};
+
+/* The catalog, language descriptor, and backend indexes are generated from
+ * one registration inventory. Architecture IDs are assigned by the catalog,
+ * never independently copied into the C language/ABI facts above. */
+static const MinicTargetLanguageDescriptor *const minic_target_language_descriptors[] = {
+#define MINIC_TARGET_REGISTRATION(arch, id, spelling, stages, isa) \
+    &minic_language_##id,
+#include "target/target_registration.def"
+#undef MINIC_TARGET_REGISTRATION
 };
 
 const MinicTargetInfo *minic_target_info_for_architecture(
@@ -288,15 +291,20 @@ const MinicTargetInfo *minic_target_info_for_architecture(
     static MinicTargetInfo canonical_targets[
         sizeof(minic_target_language_descriptors) /
         sizeof(minic_target_language_descriptors[0])];
+    const MinicTargetCatalogEntry *catalog;
+    size_t count;
     size_t index;
 
-    for (index = 0U; index < sizeof(minic_target_language_descriptors) /
-                                 sizeof(minic_target_language_descriptors[0]); ++index) {
-        const MinicTargetLanguageDescriptor *descriptor = &minic_target_language_descriptors[index];
+    catalog = minic_target_catalog_all(&count);
+    if (count != sizeof(minic_target_language_descriptors) /
+                 sizeof(minic_target_language_descriptors[0])) return NULL;
+    for (index = 0U; index < count; ++index) {
+        const MinicTargetLanguageDescriptor *descriptor = minic_target_language_descriptors[index];
         MinicTargetInfo *target = &canonical_targets[index];
-        if (descriptor->target.architecture != architecture) continue;
+        if (catalog[index].architecture != architecture) continue;
         if (target->data_layout == NULL) {
             MinicTargetInfo initialized = descriptor->target;
+            initialized.architecture = catalog[index].architecture;
             initialized.data_layout = descriptor->layout();
             if (initialized.data_layout == NULL ||
                 !integer_type_with_rank(descriptor->wide_character_sign,

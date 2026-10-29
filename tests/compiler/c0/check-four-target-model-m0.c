@@ -1,5 +1,6 @@
 /* M0 metadata-only ABI audit. No new target code is emitted here. */
 #include "target/target_info.h"
+#include "target/backend.h"
 #include "target/riscv/instruction_select.h"
 
 #include <stdio.h>
@@ -32,7 +33,8 @@ static int verify_lp64(const char *name,
         (void)fprintf(stderr, "FAIL integer/char/wchar ABI: %s\n", name);
         return 1;
     }
-    if (layout->pointer_size != 8U || layout->pointer_alignment != 8U ||
+    if (!minic_data_layout_is_little_endian(layout) ||
+        layout->pointer_size != 8U || layout->pointer_alignment != 8U ||
         layout->integer_size[MINIC_INTEGER_RANK_INT] != 4U ||
         layout->integer_size[MINIC_INTEGER_RANK_LONG] != 8U ||
         layout->integer_size[MINIC_INTEGER_RANK_INT128] != 16U ||
@@ -53,6 +55,7 @@ static int verify_rv32(void) {
     MinicType v;
     if (t == NULL || t->architecture != MINIC_TARGET_ARCH_RISCV32 ||
         t->riscv_isa.xlen != 32U || t->riscv_isa.abi != MINIC_RISCV_ABI_ILP32 ||
+        !minic_data_layout_is_little_endian(t->data_layout) ||
         t->data_layout->pointer_size != 4U ||
         t->data_layout->pointer_alignment != 4U ||
         t->data_layout->integer_size[MINIC_INTEGER_RANK_LONG] != 4U ||
@@ -145,22 +148,41 @@ static int verify_language_admission(void) {
 
 static int verify_registered_target_catalog(void) {
     const MinicTargetCatalogEntry *targets;
+    const MinicDataLayout unknown_layout = {0};
     size_t i, count;
     unsigned int toolchain_count = 0U;
     targets = minic_target_catalog_all(&count);
     if (targets == NULL || count != 5U ||
-        minic_target_catalog_find("not-a-target") != NULL) return 1;
+        minic_data_layout_is_little_endian(NULL) ||
+        minic_data_layout_is_little_endian(&unknown_layout) ||
+        minic_target_catalog_find("not-a-target") != NULL ||
+        minic_target_catalog_for_architecture((MinicTargetArchitecture)999) != NULL ||
+        minic_target_catalog_default() !=
+            minic_target_catalog_for_architecture(MINIC_TARGET_ARCH_RISCV64))
+        return 1;
     for (i = 0U; i < count; ++i) {
         const MinicTargetCatalogEntry *entry =
             minic_target_catalog_find(targets[i].name);
         const MinicTargetInfo *info =
             minic_target_info_from_name(targets[i].name);
+        const MinicBackend *backend = minic_backend_for_target(info);
+        size_t j;
         if (entry != &targets[i] || info == NULL ||
+            entry != minic_target_catalog_for_architecture(entry->architecture) ||
             info->architecture != entry->architecture ||
+            backend == NULL || backend->emit_program == NULL ||
             info->data_layout == NULL ||
+            (entry->isa_family == MINIC_TARGET_ISA_FAMILY_RISCV) !=
+                (info->riscv_isa.xlen != 0U) ||
             !(entry->product_driver_stages &
               MINIC_TARGET_STAGE_ASSEMBLY_FROM_PREPROCESSED_C))
             return 1;
+        for (j = 0U; j < i; ++j) {
+            const MinicTargetInfo *other =
+                minic_target_info_from_name(targets[j].name);
+            if (other == info || minic_backend_for_target(other) == backend)
+                return 1;
+        }
         if (entry->product_driver_stages &
             MINIC_TARGET_STAGE_STAGED_ASSEMBLER_AND_LINKER) {
             if (entry->architecture != MINIC_TARGET_ARCH_RISCV64)
@@ -169,7 +191,12 @@ static int verify_registered_target_catalog(void) {
         }
     }
     if (toolchain_count != 1U) return 1;
-    return puts("TARGET_CATALOG=PASS five_backends=5 full_staged=rv64_only") == EOF;
+    {
+        MinicTargetInfo unknown = *minic_default_target_info();
+        unknown.architecture = (MinicTargetArchitecture)999;
+        if (minic_backend_for_target(&unknown) != NULL) return 1;
+    }
+    return puts("TARGET_CATALOG=PASS five_backends=5 full_staged=rv64_only single_registration=1") == EOF;
 }
 
 static int verify_riscv_profile_catalog(void) {

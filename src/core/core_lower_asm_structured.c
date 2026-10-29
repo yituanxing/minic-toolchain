@@ -581,6 +581,11 @@ MinicCoreLowerStatus core_asm_try_structured_roles_and_asm_goto(
             binding->early_clobber =
                 operand->constraint_text != NULL &&
                 memchr(operand->constraint_text, '&', operand->constraint_length) != NULL;
+            /* Unlike target-qualified aggregate register outputs, generic
+             * `=&r` / `+&r` also uses the physical GNU constraint directly
+             * for Core register allocation. Preserve both facts separately
+             * so downstream consumers can inspect one uniform source flag. */
+            binding->gnu_early_clobber = binding->early_clobber;
             if (operand->access == MINIC_INLINE_ASM_OPERAND_WRITE_ONLY &&
                 (core_inline_asm_constraint_is(operand, "=r") ||
                  core_inline_asm_constraint_is(operand, "=&r"))) {

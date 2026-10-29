@@ -5,6 +5,7 @@
 #define MINIC_DATA_LAYOUT_MAX_DEPTH 64U
 
 static const MinicDataLayout minic_rv64_data_layout = {
+    .byte_order = MINIC_BYTE_ORDER_LITTLE,
     .pointer_size = 8U,
     .pointer_alignment = 8U,
     .integer_size = {0U, 1U, 1U, 2U, 4U, 8U, 8U, 16U},
@@ -25,6 +26,7 @@ static const MinicDataLayout minic_rv64_data_layout = {
  * Keep this descriptor distinct from the RV64 one. Backends must consult
  * the target descriptor rather than assuming the host word size. */
 static const MinicDataLayout minic_rv32_data_layout = {
+    .byte_order = MINIC_BYTE_ORDER_LITTLE,
     .pointer_size = 4U,
     .pointer_alignment = 4U,
     .integer_size = {0U, 1U, 1U, 2U, 4U, 4U, 8U, 16U},
@@ -46,6 +48,7 @@ const MinicDataLayout *minic_riscv32_linux_data_layout(void) {
  * scalar representation, record ABI classification, or long-double encoding.
  * The backend remains responsible for those target-specific rules. */
 static const MinicDataLayout minic_x86_64_linux_data_layout_value = {
+    .byte_order = MINIC_BYTE_ORDER_LITTLE,
     .pointer_size = 8U,
     .pointer_alignment = 8U,
     .integer_size = {0U, 1U, 1U, 2U, 4U, 8U, 8U, 16U},
@@ -64,6 +67,7 @@ static const MinicDataLayout minic_x86_64_linux_data_layout_value = {
  * Pointer and scalar widths alone DO NOT determine AAPCS64 HFA/HVA ABI.
  * This descriptor only covers C object layout, not call classification. */
 static const MinicDataLayout minic_aarch64_linux_layout = {
+    .byte_order = MINIC_BYTE_ORDER_LITTLE,
     .pointer_size = 8U,
     .pointer_alignment = 8U,
     .integer_size = {0U, 1U, 1U, 2U, 4U, 8U, 8U, 16U},
@@ -79,6 +83,7 @@ static const MinicDataLayout minic_aarch64_linux_layout = {
 /* LoongArch Linux ELF lp64d: a distinct target despite matching LP64
  * scalar sizes. Its register and stack calling rules are NOT RV64's. */
 static const MinicDataLayout minic_loongarch64_linux_layout = {
+    .byte_order = MINIC_BYTE_ORDER_LITTLE,
     .pointer_size = 8U,
     .pointer_alignment = 8U,
     .integer_size = {0U, 1U, 1U, 2U, 4U, 8U, 8U, 16U},
@@ -101,6 +106,10 @@ const MinicDataLayout *minic_loongarch64_linux_data_layout(void) {
 
 const MinicDataLayout *minic_default_data_layout(void) {
     return &minic_rv64_data_layout;
+}
+
+bool minic_data_layout_is_little_endian(const MinicDataLayout *layout) {
+    return layout != NULL && layout->byte_order == MINIC_BYTE_ORDER_LITTLE;
 }
 
 const MinicDataLayout *minic_x86_64_linux_data_layout(void) {
@@ -196,6 +205,21 @@ static bool minic_data_layout_record_depth(const MinicDataLayout *layout,
             size_t alignment_bits;
             size_t field_start_bits;
 
+            /* Keep named bit-field layout attributes in the same semantic
+             * alignment policy as ordinary members. A packed field has a
+             * byte-aligned storage boundary even in an unpacked record;
+             * an explicit aligned(N) can raise that boundary again. */
+            if (field->is_packed) {
+                field_alignment = 1U;
+            }
+            if (field->explicit_alignment != 0U) {
+                if ((field->explicit_alignment & (field->explicit_alignment - 1U)) != 0U) {
+                    return false;
+                }
+                if (field->explicit_alignment > field_alignment) {
+                    field_alignment = field->explicit_alignment;
+                }
+            }
             if (!minic_type_is_integer(field->type) || field->element_count != 1U ||
                 field->is_array || field->is_flexible_array || field->is_zero_length_array ||
                 element_size == 0U || element_size > SIZE_MAX / 8U || field_alignment == 0U ||
@@ -220,7 +244,7 @@ static bool minic_data_layout_record_depth(const MinicDataLayout *layout,
                 storage_bits = field_start_bits;
             } else {
                 field_start_bits = storage_bits;
-                if (pack_alignment != 1U) {
+                if (pack_alignment != 1U || field->explicit_alignment != 0U) {
                     size_t within_boundary;
 
                     within_boundary = field_start_bits % alignment_bits;
@@ -239,7 +263,8 @@ static bool minic_data_layout_record_depth(const MinicDataLayout *layout,
             }
             field_offset = field_start_bits / 8U;
             field_bit_offset = field_start_bits % 8U;
-            if (pack_alignment != 1U && field->name_length != 0U &&
+            if ((pack_alignment != 1U || field->explicit_alignment != 0U) &&
+                field->name_length != 0U &&
                 field->bit_width != 0U && field_alignment > record_alignment) {
                 record_alignment = field_alignment;
             }

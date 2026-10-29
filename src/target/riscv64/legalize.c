@@ -336,6 +336,24 @@ static bool rv64_wide_call_argument_supported(
             8U - location->integer_register_begin;
 }
 
+/* The LP64D named FP stream falls back to GARs/stack once fa0..fa7 are
+ * exhausted. This is also the regular path for LP64 and unnamed double. */
+static bool rv64_scalar_gpr_call_argument_supported(
+    MinicType type, bool fixed,
+    const MinicRiscv64AbiArgumentLocation *location) {
+    if (location == NULL || location->floating_register_count != 0U ||
+        (location->value.kind != MINIC_RISCV64_ABI_VALUE_INTEGER &&
+         !(location->value.kind == MINIC_RISCV64_ABI_VALUE_FLOAT &&
+           (fixed || minic_type_is_double(type)) &&
+           (minic_type_is_float(type) || minic_type_is_double(type)))))
+        return false;
+    return (location->integer_register_count == 1U &&
+            location->integer_register_begin < 8U &&
+            location->stack_slot_count == 0U) ||
+           (location->integer_register_count == 0U &&
+            location->stack_slot_count == 1U);
+}
+
 bool minic_riscv64_core_direct_call_supported(const MinicC0Program *program,
                                        const MinicCoreFunction *function,
                                        const MinicCoreInstruction *instruction,
@@ -478,14 +496,8 @@ bool minic_riscv64_core_direct_call_supported(const MinicC0Program *program,
                     return false;
                 }
             } else {
-                if ((location.value.kind != MINIC_RISCV64_ABI_VALUE_INTEGER &&
-                     !(location.value.kind == MINIC_RISCV64_ABI_VALUE_FLOAT &&
-                       !is_fixed_parameter && minic_type_is_double(argument_type))) ||
-                    !((location.integer_register_count == 1U &&
-                       location.integer_register_begin < 8U &&
-                       location.stack_slot_count == 0U) ||
-                      (location.integer_register_count == 0U &&
-                       location.stack_slot_count == 1U))) {
+                if (!rv64_scalar_gpr_call_argument_supported(
+                        argument_type, is_fixed_parameter, &location)) {
                     return false;
                 }
             }
@@ -644,14 +656,8 @@ bool minic_riscv64_core_indirect_call_supported(const MinicC0Program *program,
                         argument_type, &location))
                     return false;
             } else {
-                if ((location.value.kind != MINIC_RISCV64_ABI_VALUE_INTEGER &&
-                     !(location.value.kind == MINIC_RISCV64_ABI_VALUE_FLOAT &&
-                       !is_fixed_parameter && minic_type_is_double(argument_type))) ||
-                    !((location.integer_register_count == 1U &&
-                       location.integer_register_begin < 8U &&
-                       location.stack_slot_count == 0U) ||
-                      (location.integer_register_count == 0U &&
-                       location.stack_slot_count == 1U))) {
+                if (!rv64_scalar_gpr_call_argument_supported(
+                        argument_type, is_fixed_parameter, &location)) {
                     return false;
                 }
             }

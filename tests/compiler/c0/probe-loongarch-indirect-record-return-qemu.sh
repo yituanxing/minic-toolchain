@@ -67,15 +67,21 @@ contains '^  bl gnu_make_three$' "$work/mini.s"
 contains '^  bl gnu_make_eighteen$' "$work/mini.s"
 contains '^  bl gnu_tap$' "$work/mini.s"
 
-# No indirect Core result_object exists for a call through a function
-# pointer yet. Keep this separate from the now-implemented direct result.
+# The same Core result_object and LoongArch hidden $a0 plan are now used for
+# direct and indirect record-return calls. The old negative gate rejected
+# working code and caused CI to fail even after successful -S emission.
 printf '%s\n' \
   'struct Large { unsigned long words[3]; };' \
   'extern struct Large (*factory)(unsigned long);' \
   'struct Large call_factory(unsigned long x) { return factory(x); }' \
   >"$work/indirect.c"
 "$host_cc" -E -P -x c "$work/indirect.c" -o "$work/indirect.i"
-reject indirect-callee "$work/indirect.i"
+"$minic" --target=loongarch64-linux -S "$work/indirect.i" \
+    -o "$work/indirect.s" || fail 'indirect callee aggregate result rejected'
+contains '^call_factory:$' "$work/indirect.s"
+contains '^  st\.d \$a0, \$(sp|s0|t3),' "$work/indirect.s"
+contains '^  ld\.d \$a0, \$(sp|s0|t3),' "$work/indirect.s"
+contains '^  jirl \$ra, \$t2, 0$' "$work/indirect.s"
 
 # The bounded ABI copy is deliberately 17..2048 bytes. Never silently
 # truncate a 2049-byte result, and never leave a partial .s on rejection.
@@ -86,7 +92,7 @@ printf '%s\n' \
   '}' >"$work/too-large.c"
 "$host_cc" -E -P -x c "$work/too-large.c" -o "$work/too-large.i"
 reject too-large "$work/too-large.i"
-printf '%s\n' 'LOONGARCH64_SRET_SOURCE=PASS hidden_a0=1 explicit_a1=1 dynamic_frame=1 sizes=17..2048 indirect_negative=1 overlimit_negative=1'
+printf '%s\n' 'LOONGARCH64_SRET_SOURCE=PASS hidden_a0=1 explicit_a1=1 dynamic_frame=1 sizes=17..2048 indirect_positive=1 overlimit_negative=1'
 
 if ! command -v "$cross_cc" >/dev/null 2>&1 ||
    ! command -v "$cross_qemu" >/dev/null 2>&1; then

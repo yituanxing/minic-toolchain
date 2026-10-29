@@ -67,9 +67,16 @@ bool minic_riscv64_classify_abi_value_profile(
             result->kind = MINIC_RISCV64_ABI_VALUE_IGNORE;
             return true;
         }
-        if (size <= 16U &&
-            (lp64_soft_float ||
-             minic_common_aggregate_integral_tree(program, type))) {
+        if (size <= 16U) {
+            /* LP64D classifies an aggregate containing FP leaves using
+             * register flattening (faN and sometimes aN), NOT by passing
+             * a pointer. Until the complete mixed FP/GP location model is
+             * implemented, reject that named/return shape rather than
+             * silently emitting a GNU-incompatible indirect argument.
+             * LP64 and unnamed LP64D arguments use the integer convention. */
+            if (!lp64_soft_float &&
+                !minic_common_aggregate_integral_tree(program, type))
+                return false;
             result->kind = MINIC_RISCV64_ABI_VALUE_AGGREGATE;
             result->register_chunks = (size + 7U) / 8U;
             return true;
@@ -206,7 +213,8 @@ bool minic_riscv64_abi_place_argument(const MinicC0Program *program,
         cursor->integer_register_count > MINIC_RISCV64_ABI_ARGUMENT_REGISTER_COUNT ||
         cursor->floating_register_count > MINIC_RISCV64_ABI_ARGUMENT_REGISTER_COUNT ||
         !minic_riscv64_abi_classify_value_profile(
-            program, type, cursor->lp64_soft_float, &result.value) ||
+            program, type, cursor->lp64_soft_float || !is_fixed_parameter,
+            &result.value) ||
         result.value.kind == MINIC_RISCV64_ABI_VALUE_VOID) {
         return false;
     }
@@ -224,10 +232,8 @@ bool minic_riscv64_abi_place_argument(const MinicC0Program *program,
         return true;
     }
     if (!cursor->lp64_soft_float && is_fixed_parameter &&
-        result.value.kind == MINIC_RISCV64_ABI_VALUE_FLOAT) {
-        if (next.floating_register_count >= MINIC_RISCV64_ABI_ARGUMENT_REGISTER_COUNT) {
-            return false;
-        }
+        result.value.kind == MINIC_RISCV64_ABI_VALUE_FLOAT &&
+        next.floating_register_count < MINIC_RISCV64_ABI_ARGUMENT_REGISTER_COUNT) {
         result.floating_register_begin = next.floating_register_count;
         result.floating_register_count = 1U;
         next.floating_register_count += 1U;
@@ -243,8 +249,7 @@ bool minic_riscv64_abi_place_argument(const MinicC0Program *program,
             : 1U;
     /* LP64 requires paired GPRs for 16-byte-aligned unnamed 2*XLEN.
      * Named wide values retain a7/stack0 split; LP64D FP is handled above. */
-    if (next.lp64_soft_float && !is_fixed_parameter &&
-        integer_slots == 2U) {
+    if (!is_fixed_parameter && integer_slots == 2U) {
         size_t size, alignment;
         if (!minic_data_layout_type(minic_default_data_layout(), program, type,
                                     &size, &alignment))

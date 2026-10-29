@@ -105,3 +105,51 @@
 4. `core_ir_dump.c`、`value_uses.c`、`core_ir_verify.c`、`backend_core_usage.c`：以 CI 的 kind 家族 probe 保证未来新增 Core op 后消费链完整。
 
 **审读完成度：** `src/core/` 的 43 个 C/H + `src/target/` 顶层 10 个 C/H，**53/53 全部从头至尾通读**（约 30,255 行）。此为**静态源码覆盖度**，不是 53 个文件的逻辑问题全部关闭，也不是五 ISA 动态回归全绿。表中的 P0/P1 一律先按“静态风险待最小回归证实”管理；除非注明动态复现，不能把风险候选当成已经实验确认。架构整改和跨 ISA 回归仍在并行推进。
+
+## 第二轮：Core CFG facts/effects 实施与未改清单（2026-10-29）
+
+本轮只修改 `src/core/core_lower_if.c`、`src/core/core_lower_local_effects.c`，及新增三个专属测试文件；不修改 Target、前端或其他代理拥有的文件。原有 switch/ternary facts 修复不做语义变更。
+
+| 类型 | 源码与闭环 | 真实证据 / 修复后的语义 | 结论 |
+| --- | --- | --- | --- |
+| P1 源 AST effect summary 漏报 | `src/core/core_lower_local_effects.c:49-74`，`MINIC_STATEMENT_ASSIGN`/`RECORD_COPY`/`RECORD_INITIALIZE` 仅检查直接局部赋值目标及 RHS，遗漏复杂左值的**地址计算**。 | 现在对 `target_expression` 递归，`a[index++] = v`、记录赋值左值地址计算均能将 `index` 标为 may-modify。白盒构造真实 AST 并断言返回值；修复前 scanner 会漏报。 | **静态逻辑缺陷 + AST 单测证实并修复**；未宣称发现独立运行时错误。 |
+| P1 GNU stmt-expression effect summary 漏报 | `src/core/core_lower_local_effects.c:242-252`，此前只扫描 `statement_expression.block`，遗漏 parser 从 block 脱出的结果 `result`。 | 现在同时扫描尾值表达式，因此 `({ ...; x++; })` 中 `x++` 不会被遗漏；无尾表达式继续维持既有判断。AST 白盒单测可在旧逻辑下失败。 | **静态逻辑缺陷 + AST 单测证实并修复**；当前 GNU/MiniC 原生样例旧新皆通过。 |
+| P1 IF 事实域重复实现 | `src/core/core_lower_if.c:229-262` 旧 `core_local_constants_meet_if_paths` 人工合并 `known`、`escaped`、specialization fields，却只从 then 侧复制 `program_zero_checked` 与 `program_zero_stable`。 | 替换成 `minic_core_local_facts_meet`，与 switch/表达式 CFG 共用一个 meet 语义；合并两路时 `program_zero_checked/stable` 均交集化，任一路未知即不保留稳定证明。原单继续路径、零路径仍用原逻辑。 | **代码审计确认的事实域不一致并修复**，独立运行时误编译未复现。 |
+
+验证命令和范围：
+
+1. 新建 `tests/core/core_local_effect_summary_test.c` 直接编译生产 `core_lower_local_effects.c`，覆盖 ASSIGN、RECORD_COPY 与 stmt-expression tail 三个语义入口；`tests/compiler/c0/run-core-local-effect-summary.sh` 自动执行 AST 单测、GNU x86 原生 vs MiniC x86 原生差分、x86_64/RV32/RV64/AArch64/LoongArch64 五目标 `-S`。结果 **PASS**。
+2. 独立新建编译器 `-Werror` 构建 **PASS**。
+3. 既有 `probe-core-expr-branch-local-facts.sh`：**25/25 且五目标 -S**；`run-core-switch-case-fact-isolation.sh`：**x86 GNU/MiniC 9/9**；`run-core-cfg-fold-effectful-conditions.sh`：**两条 effect oracle PASS**。上述是专项回归，不代表七路 Linux 总矩阵和非 x86 动态执行已经验收。
+
+尚未整改，按优先级排序：
+
+1. **P1 证明域/别名 soundness：** `core_lower_bool.c`、`core_lower_const_facts.c` 的两套全函数 zero-bool 稳定证明同 ISA 独立实现，尤其要先补 goto/reentry、inline asm、逃逸及 statement-expression 的反例后才合并；不能直接视作等价。
+2. **P1 Core 效果与值分离：** CFG 条件常量路径已修 P0 `nil(tick())`、`_Bool tick()`，但更多 source-fold shortcut 需审计“值可证明常量”是否等于“表达式求值可省略”，见本报告 NULL-helper/Boolean range 历史问题（其状态以最新 `review-2026-10-29-core-cfg-effects.md` 为准）。
+3. **P2 性能与 ownership：** `core_lower_if.c:187-227` 与 `core_lower_loop.c` 仍对每个 tracked local 遍历源 AST，近似 `O(locals×AST)`；建议未来构造按 block 的 may-write/may-escape 摘要一次并集，避免现在只优化复杂度而弄错保守边界。
+4. **P2 错误路径资源释放：** `core_lower_if.c` 对多份 facts snapshot 的 early-return 仍有泄漏；建议统一 `cleanup:` 并覆盖分配失败/嵌套 block lowering 失败回归，不与本轮 CFG 语义变更混作一个补丁。
+5. **待大矩阵：** 当前是 focused C0/GNU-native + 五目标汇编生成证明；七路 Linux 全文件、非 x86 QEMU、grouped native 12/12 须由 exact-head CI 单独确认。
+
+## 第二轮加急：packed bit-field 越界/未对齐内存访问 P0（动态复现并关闭）
+
+**根因：** `src/target/data_layout.c:255-256` 的字段布局返回 `byte_offset=floor(field_start_bits/8)` 和 `bit_offset=field_start_bits%8`，这里的 byte offset **不是**所声明 `unsigned int` 所需完整 4B 存储区的承诺。旧 `src/core/core_lower_bit_fields.c` 在 read / simple assignment / compound assignment / prefix-postfix update 四条路径固定以声明的 32-bit/64-bit 整数类型进行全宽 `LOAD`/`STORE`；对于 `packed { u8 pad; unsigned lo:5, hi:17, tail:10; }`，record `sizeof=5`，tail 起始 `byte_offset=3`、`bit_offset=6`、`field_bits=10`，实际上只需 2B，但旧 Core 从 `p+3` 构造了 4B load，越过对象终点 2B。Loong 因其 `ld.w` 自然对齐要求还有未对齐访问 fault 风险。
+
+**修复：** `src/core/core_lower_bit_fields.c` 统一新增 storage window 和 typed byte load/store helper：
+
+- `byte_count=(bit_offset+field_width+7)/8`，查询 `minic_data_layout_type(record)` 得实际 `record_size/record_alignment`，先验证字段真实字节区间在记录内；只要 record base 对齐低于 storage 宽度，或 byte offset 不满足原始 storage 对齐，或从字段地址全宽访问越过 record 终点，则改为每个相关字节独立 `unsigned char` LOAD/STORE，并在 Core 无符号 storage 类型中按字节位移 OR 复原值；其余证据充分的路径继续原始单次宽访存，避免无谓降速。
+- 四条入口共享相同内存访问实现，RMW 的掩码、原有 signed bit-field 符号扩展、C compound/prefix/postfix 求值顺序保持不变。`volatile` 的每次窄读/窄写为各 1 次 **byte volatile** 访问，合计数等于字段覆盖的字节数；安全的原全宽访问仍保持一次。未能对齐的 volatile packed 不能同时满足“一次单宽访存”和“不越界/不跨不对齐地址”，故优先 C 语义下的准确覆盖字节，目标 ISA 的更强 bit-field volatile ABI contract 需后续单独判定。
+- 使用新 `minic_data_layout_is_little_endian()` 显式目标布局策略；当前 5 ISA 均标注 LITTLE，未知/大端**拒绝**本 bitfield Core lowering，不在 Core 枚举 ISA。零宽/匿名字段由 DataLayout + frontend 拦截，此 helper 仅用于合法的 named nonzero 字段，不改变其布局逻辑。
+
+**能证明的动态与汇编证据：**
+
+1. 新 `tests/compiler/c0/packed_bitfield_guard_page.c`：mmap 两页、第二页 `PROT_NONE`，5B packed record 放第一页最后 5B，验证 high/tail 读写、后缀与复合运算、signed packed tail 的负数符号扩展及 record base 非自然对齐。**旧编译器** x86 原生二进制运行 `exit=139 / SIGSEGV`，GNU -O0 `exit=0`，**修复后 MiniC** x86 原生 `exit=0`。这是**运行时已复现 P0**，不是仅靠静态分析推测。
+2. `tests/compiler/c0/run-packed-bitfield-guard-page.sh`：同一 GNU-preprocessed source，五 ISA `-S` 全部 PASS，GNU/MiniC x86 原生双 PASS；Loong generated assembly 的 packed read/write `ld.bu` / `st.b` 可见（包括字节 offset 0 但 record alignment 1 的情况）。
+3. 原 `run-packed-bitfield-field-layout.sh` GCC 差分 + 五 ISA `-S` + x86 native return 42 **PASS**；`run-gnu-packed-record-field.sh` PASS；整个 MiniC 工具链使用 `CFLAGS=-Werror` 构建 PASS；`git diff --check` PASS。
+
+**尚不能宣称：** 非 x86 QEMU 真正运行时、七路 Linux 全文件与 grouped native 12/12 尚未在 exact-head CI 验收。Loong/QEMU 目标可继续用该 guard-page 测试配合对应 sysroot 检查。位域 DataLayout 在非自然对齐嵌套 packed aggregate 中的 provenance，以及 volatile bit-field 的具体目标 ABI 访存约定仍应进入后续专业验证。生产代码这轮不触碰 Target machine emission。
+
+### 交叉复核补洞：合法 32-bit 位域跨越 5 字节（本轮继续修复）
+
+- 新复核源 `packed { unsigned first:1; unsigned value:32; }` GCC 接受、`sizeof=5`；旧 Core 只允许 `bit_offset+width <= declared storage_width`，导致整个函数 unsupported，而非正确的 5 字节访问。复核者提供 `tests/compiler/c0/packed_bitfield_cross_word_window.c` 后，Core window helper 在需要时把**存储位操作容器**从 unsigned32 提升为 unsigned64，继续只读写实际 5 字节；C 的 `value_type`、整数提升/有符号位域的 32bit sign extension 仍基于**原类型宽度**，不能被 transport 64bit 错改。
+- 四入口均消费新的可扩容 storage window，signed/unsigned 五字节位域的 read、assign、compound、postfix 全部进入运行时回归。`run-packed-bitfield-cross-word-window.sh`：GNU native **exit0**、MiniC x86 native **exit0**，五目标 `-S` **5/5**，并使用 PROT_NONE guard-page 证明没有第 6 字节的越界访问。
+- **OPEN，明确 fail-closed：** GCC 同样接受 `{ unsigned first:1; unsigned long long value:64; }` 的 9 字节 packed record；其 65 位临时位窗口无法装入当前 Core 上限 64 位无符号 transport。已新增 `tests/compiler/c0/packed_bitfield_cross_word_64_limit.c` 并验证 GCC syntax PASS；MiniC `-S` **非零拒绝**并报告 `Core IR does not yet support function 'read_nine'`。后续应引入 high/low split transport 或小型字节向量 helper，不能把宽度截成 64 并静默发错码。

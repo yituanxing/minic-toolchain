@@ -17,9 +17,16 @@ struct Bits {
 };
 
 extern struct Three gnu_make_three(unsigned long);
+extern struct Three (*gnu_factory)(unsigned long);
 extern struct Eighteen gnu_make_eighteen(unsigned long);
 extern unsigned long gnu_tap(unsigned long);
 extern struct TwoThousandFortyEight gnu_make_2048(unsigned long);
+
+/* The indirect call has its own x8 result buffer, independent of the
+ * incoming x8 pointer that this function must preserve until returning. */
+struct Three minic_indirect_three(unsigned long seed) {
+    return gnu_factory(seed);
+}
 
 struct Three minic_three(unsigned long seed) {
     struct Three result;

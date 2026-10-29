@@ -455,7 +455,8 @@ int main(int argc, char **argv) {
     bool no_defaultlibs = false;
     bool no_stdinc = false;
     bool function_sections = false;
-    const char *target_name = "riscv64-linux";
+    const MinicTargetCatalogEntry *default_target = minic_target_catalog_default();
+    const char *target_name = default_target != NULL ? default_target->name : "";
     const MinicTargetCatalogEntry *target_entry;
     bool target_given = false;
     const char *march = NULL;
@@ -646,7 +647,9 @@ int main(int argc, char **argv) {
                 target_name);
         return 2;
     }
-    if (target_entry->architecture == MINIC_TARGET_ARCH_RISCV64) {
+    if (target_entry->isa_family == MINIC_TARGET_ISA_FAMILY_RISCV &&
+        (target_entry->product_driver_stages &
+         MINIC_TARGET_STAGE_STAGED_ASSEMBLER_AND_LINKER) != 0U) {
     /* Be strict about the whole pipeline: a compiler accepting RV64I but
      * the assembler silently using RV64GC would violate the target contract. */
     if (march != NULL) {

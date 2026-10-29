@@ -18,6 +18,7 @@ struct Bits {
 };
 
 extern struct Three minic_three(unsigned long);
+extern struct Three minic_indirect_three(unsigned long);
 extern struct Four minic_four(unsigned long);
 extern struct Eighteen minic_eighteen(unsigned long);
 extern struct Three minic_nested_three(unsigned long);
@@ -58,6 +59,8 @@ struct Three gnu_make_three(unsigned long seed) {
     result.word[2] = seed + 103UL;
     return result;
 }
+
+struct Three (*gnu_factory)(unsigned long) = gnu_make_three;
 
 struct Eighteen gnu_make_eighteen(unsigned long seed) {
     struct Eighteen result;
@@ -197,6 +200,9 @@ int main(void) {
         bits.high != 3UL * 0x12345UL ||
         bits.tail[0] != 0x12345UL + 101UL ||
         bits.tail[1] != 0x12345UL + 102UL) return 22;
+
+    a = minic_indirect_three(37UL);
+    if (!verify_three(a, 138UL, 139UL, 140UL)) return 23;
 
     puts("AAPCS64_INDIRECT_RECORD_RETURN=PASS sizes=17,24,32,40,64,144,2048"
          " GNU_MiniC_directions=2 nested_BL=1 x8_clobber=1"

@@ -137,3 +137,54 @@ independent GNU syntax checks remain CI gates, **not achieved results**.
    alloca, large frames, record return, variadics, C ABI and Linux ASM.
 
 No compiler/runtime `100%` claim follows from this architecture-only batch.
+
+## Second FrameRef consolidation: prologue and outgoing calls
+
+This follow-up migrates additional **active** producers, keeping the first
+reading ledger and prior migration history above intact.
+
+- `codegen.c` now emits callee-owned x8/indirect-result saves, x19/LR frame
+  state, variadic x0..x7/q0..q7 save areas and the over-aligned saved entry SP
+  through typed `OWNED`/`PHYSICAL_SP` frame references. The intrinsic AAPCS64
+  `stp x29,x30` frame record, stack adjustment and x19 anchoring remain
+  explicit machine operations. We preserve their ordering: pre-anchor saves
+  use physical SP; post-anchor saves use owned x19.
+- `call_emit.c` now carries `outgoing_sp_bytes` in a call-local frame view.
+  Owned SSA/record sources and the hidden x8 result buffer use `OWNED`; stack
+  arguments for scalar, double, quad/long-double, int128, record and indirect
+  arguments use `OUTGOING`. The indirect callee pointer comes from `OWNED`
+  before `blr x16`. This removes call-local `offset + stack_bytes` arithmetic
+  and textual `add xN, sp, xN` rewriting for those paths.
+- `block_emit.c`'s prior typed epilogue remains the single save-slot reader:
+  dynamic stack teardown restores saved SP/x19/LR and only then pops the x29/
+  x30 frame record. No blanket replacement of physical SP instructions.
+- The AArch64 indirect-result oracle now checks **within specific functions**
+  that `str x8,[frame,#S]` and the return-copy's `add x10,frame,#S;
+  ldr x10,[x10]` refer to the **same slot**, on both normal SP and dynamic
+  x19 frames. This replaces obsolete global regexes tied to the old `movz;
+  add x10,x19,x10` spelling without weakening the ABI proof.
+- An indirect record-return through a function pointer now has an explicit
+  `blr x16`/x8 address proof and an additional GNU/MiniC mixed-ABI runtime
+  assertion. This replaced an obsolete *expected rejection* as the compiler
+  now emits the required Core result-object contract. Actual target execution
+  remains gated by available AArch64 GNU/QEMU; no fabricated PASS.
+
+**Retired raw-output dependencies:** prologue variable register saves and
+indirect-result slots; outgoing call owned-slot loads, record addresses,
+stack spill stores and x8 result setup. **Not retired:**
+`minic_aarch64_copy_dynamic_frame_asm` is still called by Common for dynamic
+functions, and `minic_aarch64_legalize_large_sp_memory` is still a program
+finalizer. `asm_contract.c`, `residual_emit.c`, and some integer/structured ASM
+emitters retain many raw SP references, so deleting either legalizer now would
+break active code. Text-based `sub sp`/`add sp` tracking is still needed for
+those legacy call-argument and GNU ASM paths until their scratch/liveness and
+stack-domain contracts are migrated.
+
+**Local verification** (`CFLAGS=-Werror`): compiler build PASS; typed
+FrameRef native unit test PASS; typed production smoke for dynamic alloca,
+two outgoing SP spill slots, large >4095 displacement and record return PASS;
+indirect-result machine-source oracle PASS (three remaining negative ABI
+cases); AArch SMMU dynamic barrier smoke PASS; structured ASM 45/640 update
+source-only smoke PASS. GNU host reference fixture returns its expected code
+42. No `aarch64-linux-gnu-gcc`/QEMU executable is available locally; GNU AArch64
+assembly/link and QEMU mixed-ABI runtime are **SKIP**, pending exact-head CI.

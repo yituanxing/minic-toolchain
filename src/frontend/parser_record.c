@@ -490,8 +490,20 @@ static bool parse_record_field_declarator(MinicParser *parser,
     if (parser->current.kind == MINIC_TOKEN_COLON) {
         size_t bit_width;
 
+        explicit_alignment = declaration_alignment;
+        is_packed = declaration_packed;
+        /* A bit-field is a field declaration too. In particular GNU permits
+         * packed/aligned on the declaration head or after the width; both
+         * must reach DataLayout instead of being discarded by this fast path. */
         if (!parse_record_bit_field_width(parser, field_type, false, &bit_width) ||
-            !minic_c0_record_add_bit_field(parser->program,
+            !parse_typed_record_field_attributes(
+                parser, &field_type, &explicit_alignment, &is_packed) ||
+            !apply_record_field_declaration_attributes(
+                parser, declaration_attributes, &field_type,
+                &explicit_alignment, &is_packed)) {
+            return false;
+        }
+        if (!minic_c0_record_add_bit_field(parser->program,
                                            record_id,
                                            parser->source + name_span.begin.offset,
                                            minic_parser_span_length(name_span),
@@ -502,6 +514,10 @@ static bool parse_record_field_declarator(MinicParser *parser,
             }
             return false;
         }
+        mutable_record = &parser->program->records[record_id];
+        mutable_record->fields[mutable_record->field_count - 1U].explicit_alignment =
+            explicit_alignment;
+        mutable_record->fields[mutable_record->field_count - 1U].is_packed = is_packed;
         return true;
     }
 
@@ -792,26 +808,28 @@ static bool parse_record_field(MinicParser *parser, MinicRecordId record_id) {
     for (;;) {
         if (parser->current.kind == MINIC_TOKEN_COLON) {
             size_t bit_width;
+            MinicType field_type = base_type;
+            MinicRecord *mutable_record;
+            size_t explicit_alignment = declaration_alignment;
+            bool is_packed = declaration_packed;
 
-            if (declaration_attributes.count != 0U) {
-                minic_parser_error(
-                    parser,
-                    "GNU declaration-head attributes on unnamed bit-fields are unsupported");
-                return false;
-            }
-            if (declaration_alignment != 0U || declaration_packed) {
-                minic_parser_error(
-                    parser, "GNU layout attributes on unnamed bit-fields are unsupported");
-                return false;
-            }
-            if (!parse_record_bit_field_width(parser, base_type, true, &bit_width) ||
+            if (!parse_record_bit_field_width(parser, field_type, true, &bit_width) ||
+                !parse_typed_record_field_attributes(
+                    parser, &field_type, &explicit_alignment, &is_packed) ||
+                !apply_record_field_declaration_attributes(
+                    parser, &declaration_attributes, &field_type,
+                    &explicit_alignment, &is_packed) ||
                 !minic_c0_record_add_unnamed_bit_field(
-                    parser->program, record_id, base_type, bit_width)) {
+                    parser->program, record_id, field_type, bit_width)) {
                 if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
                     minic_parser_error(parser, "cannot add unnamed bit-field");
                 }
                 return false;
             }
+            mutable_record = &parser->program->records[record_id];
+            mutable_record->fields[mutable_record->field_count - 1U].explicit_alignment =
+                explicit_alignment;
+            mutable_record->fields[mutable_record->field_count - 1U].is_packed = is_packed;
         } else {
             if (!parse_record_field_declarator(parser,
                                                record_id,

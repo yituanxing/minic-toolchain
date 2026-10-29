@@ -33,6 +33,17 @@ grep -Fq 'str x9, [x10]' "$scratch/real.s"
     -o "$scratch/dynamic.s"
 grep -Fq '  mov x19, sp' "$scratch/dynamic.s"
 grep -Eq '^  (ldr|str) [xw]9, \[x19' "$scratch/dynamic.s"
+# Within an alloca frame, outgoing calls must read Core-owned arguments from
+# the stable x19 frame and write only actual ABI spill slots at live SP.
+awk '
+    /^  sub sp, sp, #16$/ { call=1 }
+    call && /^  ldr x9, \[x19, #[0-9]+\]$/ { owned=1 }
+    call && /^  str x9, \[sp, #0\]$/ { outgoing0=1 }
+    call && /^  str x9, \[sp, #8\]$/ { outgoing1=1 }
+    call && /^  bl dynamic_stack_sum10$/ { invoked=1 }
+    call && /^  add sp, sp, #16$/ { restored=1; exit }
+    END { exit !(call && owned && outgoing0 && outgoing1 && invoked && restored) }
+' "$scratch/dynamic.s"
 cc -E -P -x c \
     "$repo/tests/compiler/c0/aarch64_indirect_record_return_minic.c" \
     -o "$scratch/record.i"
@@ -40,6 +51,10 @@ cc -E -P -x c \
     "$scratch/record.i" -o "$scratch/record.s"
 grep -Eq '^  ldr x30, \[(x19|x17)' "$scratch/record.s"
 grep -Eq '^  (add x11, x19|mov x11, x19)' "$scratch/record.s"
+# A >4 KiB owned frame uses typed scratch materialization, never a silent
+# truncation to an A64 immediate or an x12/x17 string postpass guess.
+grep -Eq '^  movz x17, #[4-9][0-9]{3,}$' "$scratch/record.s"
+grep -Fq '  str x8, [x17]' "$scratch/record.s"
 if command -v aarch64-linux-gnu-gcc >/dev/null 2>&1; then
     aarch64-linux-gnu-gcc -c -x assembler "$scratch/real.s" \
         -o "$scratch/real.o"
@@ -48,4 +63,4 @@ if command -v aarch64-linux-gnu-gcc >/dev/null 2>&1; then
     aarch64-linux-gnu-gcc -c -x assembler "$scratch/record.s" \
         -o "$scratch/record.o"
 fi
-echo 'AARCH64_TYPED_FRAME_PRODUCTION=PASS fp_memory_block_return_dynamic_record_gnu_asm_if_available'
+echo 'AARCH64_TYPED_FRAME_PRODUCTION=PASS fp_memory_block_return_dynamic_owned_outgoing_large_record_gnu_asm_if_available'

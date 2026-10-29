@@ -40,4 +40,8 @@ if "$minic" --target=aarch64-linux -S "$d/unsafe.i" -o "$d/unsafe.s" >/dev/null 
   echo 'AArch64 target accepted wrong hardware ISA template' >&2;exit 1
 fi
 test ! -e "$d/unsafe.s"
-echo 'AARCH64_LARGE_STRUCTURED_ASM=PASS 512_boundary=1 4095_boundary=1 GNU_QEMU_42=2 negatives=1'
+if [[ "${MINIC_SOURCE_ONLY:-0}" == 1 ]]; then
+  echo 'AARCH64_LARGE_STRUCTURED_ASM_SOURCE=PASS 512_boundary=1 4095_boundary=1 negatives=1 GNU_QEMU=SKIP'
+else
+  echo 'AARCH64_LARGE_STRUCTURED_ASM=PASS 512_boundary=1 4095_boundary=1 GNU_QEMU_42=2 negatives=1'
+fi

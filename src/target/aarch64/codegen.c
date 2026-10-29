@@ -3,6 +3,7 @@
 #include "target/aarch64/abi.h"
 #include "target/aarch64/asm_legalize.h"
 #include "target/aarch64/asm_contract.h"
+#include "target/aarch64/frame_emit.h"
 #include "target/common/direct_function_emit.h"
 #include "target/common/direct_program_emit.h"
 #include <stdint.h>
@@ -41,6 +42,10 @@ static bool aarch64_emit_prologue(
     const bool has_calls = ctx->has_direct_calls;
     const bool dynamic_frame = ctx->dynamic_frame;
     const bool realigned = ctx->frame_alignment > 16U;
+    const MinicA64FrameView view = {
+        dynamic_frame, frame, 0U, ctx->saved_entry_sp_offset
+    };
+    const MinicA64ScratchPolicy scratch = {0U, 0U};
     size_t i;
     if (realigned && (!dynamic_frame ||
         ctx->frame_alignment > 256U ||
@@ -72,29 +77,39 @@ static bool aarch64_emit_prologue(
                          "  mov x19, x9\n",
                     ctx->frame_alignment - 1U,
                     ctx->frame_alignment) < 0 ||
-            fprintf(out, "  str x14, [x19, #%zu]\n"
-                         "  str x15, [x19, #%zu]\n",
-                    save_offset + (has_calls ? 8U : 0U),
-                    ctx->saved_entry_sp_offset) < 0 ||
-            (has_calls && fprintf(out, "  str x30, [x19, #%zu]\n",
-                                  save_offset) < 0))
+            !minic_a64_emit_frame_store(out, &view,
+                minic_a64_owned_slot(save_offset + (has_calls ? 8U : 0U)),
+                (MinicA64FrameRegister){MINIC_A64_REG_X, 14U}, scratch) ||
+            !minic_a64_emit_frame_store(out, &view,
+                minic_a64_owned_slot(ctx->saved_entry_sp_offset),
+                (MinicA64FrameRegister){MINIC_A64_REG_X, 15U}, scratch) ||
+            (has_calls && !minic_a64_emit_frame_store(out, &view,
+                minic_a64_owned_slot(save_offset),
+                (MinicA64FrameRegister){MINIC_A64_REG_X, 30U}, scratch)))
             goto fail;
-    } else if (has_calls && fprintf(out, "  str x30, [sp, #%zu]\n",
-                                      save_offset) < 0)
+    } else if (has_calls && !minic_a64_emit_frame_store(out, &view,
+            (MinicA64FrameRef){MINIC_A64_FRAME_PHYSICAL_SP, save_offset},
+            (MinicA64FrameRegister){MINIC_A64_REG_X, 30U}, scratch))
         goto fail;
     /* x19 is the AAPCS64 callee-saved stable frame anchor when alloca
      * moves sp. Call arguments still use the live outgoing sp area. */
     if (dynamic_frame && !realigned &&
-        (fprintf(out, "  str x19, [sp, #%zu]\n",
-                 save_offset + (has_calls ? 8U : 0U)) < 0 ||
+        (!minic_a64_emit_frame_store(out, &view,
+            (MinicA64FrameRef){MINIC_A64_FRAME_PHYSICAL_SP,
+                save_offset + (has_calls ? 8U : 0U)},
+            (MinicA64FrameRegister){MINIC_A64_REG_X, 19U}, scratch) ||
          fputs("  mov x19, sp\n", out) == EOF))
         goto fail;
     if (ctx->va_count != 0U) {
         for (i = 0U; i < 8U; ++i) {
-            if (fprintf(out, "  str x%zu, [sp, #%zu]\n",
-                        i, ctx->va_base + 32U + i * 8U) < 0 ||
-                fprintf(out, "  str q%zu, [sp, #%zu]\n",
-                        i, ctx->va_base + 96U + i * 16U) < 0)
+            if (!minic_a64_emit_frame_store(out, &view,
+                    minic_a64_owned_slot(ctx->va_base + 32U + i * 8U),
+                    (MinicA64FrameRegister){MINIC_A64_REG_X,
+                                            (unsigned int)i}, scratch) ||
+                !minic_a64_emit_frame_store(out, &view,
+                    minic_a64_owned_slot(ctx->va_base + 96U + i * 16U),
+                    (MinicA64FrameRegister){MINIC_A64_REG_Q,
+                                            (unsigned int)i}, scratch))
                 return minic_multi_direct_machine_reject(
                     fn, "aarch64", name, "variadic_save", SIZE_MAX,
                     SIZE_MAX, __LINE__);
@@ -104,10 +119,9 @@ static bool aarch64_emit_prologue(
         const size_t slot = ctx->indirect_return_offset;
         /* AAPCS64 x8 carries the caller-owned result buffer. It is not
          * call-preserved: save it in our own frame before any nested BL. */
-        if (fprintf(out, "  movz x11, #%zu\n", slot & 65535U) < 0 ||
-            (slot > 65535U &&
-             fprintf(out, "  movk x11, #%zu, lsl #16\n", slot >> 16U) < 0) ||
-            fputs("  add x11, sp, x11\n  str x8, [x11]\n", out) == EOF)
+        if (!minic_a64_emit_frame_store(out, &view,
+                minic_a64_owned_slot(slot),
+                (MinicA64FrameRegister){MINIC_A64_REG_X, 8U}, scratch))
             goto fail;
     }
     return true;

@@ -206,6 +206,23 @@ static bool x86_linux_compact_asm_equals(
 bool minic_x86_64_requires_qualified_input_asm(const MinicInlineAsm *src) {
     static const char *const reserved[] = {"movq %%gs:", "cmp",
         "outb ", "outw ", "outl ", "inb ", "inw ", "inl ", "lidt", "lgdt"};
+    size_t i;
+    /* GCC's x86 I is an ISA-specific 0..31 shift count, whereas lowercase
+     * i is a generic compile-time constant. A valid I value is not license
+     * for Core's generic ASM fallback to discard it, even for `nop`.
+     * Also protect multi-alternative constraints such as "Ir". GNU C
+     * constant-range validation is done earlier by the target data model;
+     * this gate enforces the *machine form* ownership after that check. */
+    if (src != NULL && src->inputs != NULL) {
+        for (i = 0U; i < src->input_count; ++i) {
+            const MinicInlineAsmOperand *input = &src->inputs[i];
+
+            if (input->constraint_text != NULL &&
+                memchr(input->constraint_text, 'I', input->constraint_length) != NULL) {
+                return true;
+            }
+        }
+    }
     if (src && src->template_text &&
         (minic_x86_64_linux_crash_segment_snapshot_form(
              src->template_text, src->template_length) != 0U ||

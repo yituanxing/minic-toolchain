@@ -31,6 +31,13 @@ typedef bool (*MinicBackendEmitProgram)(
 typedef struct MinicTargetInlineAsmContract {
     size_t operand_count;
     MinicCoreStructuredInlineAsmOperandKind kinds[MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT];
+    /* GNU physical-register constraint metadata is orthogonal to the Core
+     * address/value transport role. For instance an aggregate `=&r` output
+     * can use a Core MEMORY_OUTPUT address while its machine register must
+     * still be early-clobber. Filled centrally from the accepted source by
+     * minic_backend_qualify_inline_asm; individual ISA recognizers must not
+     * duplicate constraint parsing. */
+    bool gnu_early_clobber[MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT];
     /* Some GNU hardware writes address a scalar pointer register, rather
      * than exposing a GNU +m or +Q operand (Linux arm64 __raw_write*).
      * Preserve the real hardware memory effect in target-neutral Core
@@ -50,8 +57,6 @@ typedef bool (*MinicBackendRequiresQualifiedInputAsm)(const MinicInlineAsm *);
 typedef bool (*MinicBackendQualifyInlineAsmGoto)(
     const MinicC0Program *, const MinicInlineAsm *);
 typedef struct MinicBackend {
-    MinicTargetArchitecture architecture;
-    const char *name;
     /* This is the only Core-to-machine handoff in the compile driver.
      * Today: direct GNU text. Future: lower, optimize and emit Machine IR. */
     MinicBackendEmitProgram emit_program;

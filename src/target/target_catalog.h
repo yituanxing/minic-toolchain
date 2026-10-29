@@ -22,13 +22,25 @@ typedef enum MinicTargetDriverStage {
     MINIC_TARGET_STAGE_STAGED_ASSEMBLER_AND_LINKER = 1U << 1
 } MinicTargetDriverStage;
 
+/* Source ISA selection is separate from machine-code generation features.
+ * A target without an explicit -march/-mabi parser rejects these options;
+ * RISC-V's hardware and MiniC-generated feature sets remain independent. */
+typedef enum MinicTargetIsaFamily {
+    MINIC_TARGET_ISA_FAMILY_NONE = 0,
+    MINIC_TARGET_ISA_FAMILY_RISCV
+} MinicTargetIsaFamily;
+
 typedef struct MinicTargetCatalogEntry {
     MinicTargetArchitecture architecture;
     const char *name;
     unsigned int product_driver_stages;
+    MinicTargetIsaFamily isa_family;
 } MinicTargetCatalogEntry;
 
 const MinicTargetCatalogEntry *minic_target_catalog_find(const char *name);
+const MinicTargetCatalogEntry *minic_target_catalog_for_architecture(
+    MinicTargetArchitecture architecture);
+const MinicTargetCatalogEntry *minic_target_catalog_default(void);
 const MinicTargetCatalogEntry *minic_target_catalog_all(size_t *count);
 
 /* One source of accepted RISC-V ISA/ABI pairs for the standalone driver,

@@ -326,6 +326,12 @@ typedef struct MinicCoreStructuredInlineAsmOperand {
     /* M126A_GENERIC_STRUCTURED_ASM: preserve GCC `&` early-clobber semantics
        as target-neutral scheduling/allocation metadata. */
     bool early_clobber;
+    /* Target-qualified GNU physical-register `&` source constraint. Unlike
+     * `early_clobber` above this describes the native operand assignment,
+     * not Core value/address transport. A target may represent `=&r` as a
+     * Core MEMORY_OUTPUT (aggregate result) while still requiring a distinct
+     * physical register from all live inputs. */
+    bool gnu_early_clobber;
 } MinicCoreStructuredInlineAsmOperand;
 
 typedef struct MinicCoreInstruction {

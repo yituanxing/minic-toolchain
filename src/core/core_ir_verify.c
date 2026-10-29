@@ -721,7 +721,12 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
                      function->fixed_register_binding_count) ||
                 (binding->early_clobber &&
                  binding->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT &&
-                 binding->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE)) {
+                 binding->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE) ||
+                (binding->gnu_early_clobber &&
+                 binding->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT &&
+                 binding->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE &&
+                 binding->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT &&
+                 binding->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE)) {
                 return false;
             }
             used_indices[binding->operand_index] = true;

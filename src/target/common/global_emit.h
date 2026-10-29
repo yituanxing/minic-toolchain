@@ -15,7 +15,7 @@ typedef bool (*MinicMultiRelocEmitter)(FILE *, const MinicC0Program *,
                                        const MinicTargetInfo *,
                                        const MinicGlobalRelocation *, size_t);
 /* Scalar payload spelling belongs to the target; DataLayout and relocation
- * slot traversal remain shared between the four supported architectures. */
+ * slot traversal remain shared across all registered ELF targets. */
 typedef bool (*MinicMultiScalarBitsEmitter)(FILE *, const MinicC0Program *,
                                             const MinicTargetInfo *, MinicType,
                                             uint64_t);
@@ -33,6 +33,7 @@ typedef enum MinicMultiGlobalPayloadKind {
     MINIC_MULTI_GLOBAL_PAYLOAD_ARRAY_RECORD,
     MINIC_MULTI_GLOBAL_PAYLOAD_ARRAY_RECURSIVE,
     MINIC_MULTI_GLOBAL_PAYLOAD_ARRAY_SCALAR_RELOCATIONS,
+    MINIC_MULTI_GLOBAL_PAYLOAD_SCALAR_RELOCATION,
     MINIC_MULTI_GLOBAL_PAYLOAD_SCALAR_BITS
 } MinicMultiGlobalPayloadKind;
 
@@ -50,6 +51,18 @@ typedef struct MinicMultiGlobalEmissionPlan {
 bool minic_multi_global_emission_plan_build(
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicGlobalObject *object, MinicMultiGlobalEmissionPlan *plan);
+
+/* The ABI-neutral payload decision and byte walk are owned here once.
+ * Native targets supply only scalar GAS spelling and relocation expression. */
+bool minic_multi_emit_global_payload(
+    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicGlobalObject *object, const MinicMultiGlobalEmissionPlan *plan,
+    MinicMultiRelocEmitter emit_relocation,
+    MinicMultiScalarBitsEmitter emit_bits);
+bool minic_multi_emit_elf_global_section(
+    FILE *out, const MinicGlobalObject *object, const char *fallback);
+bool minic_multi_emit_elf_global_binding(
+    FILE *out, const MinicGlobalObject *object);
 
 /* Common source-section sanitizer shared by the x86/RV32/RV64 and direct
  * ELF emission paths: no architecture may interpolate raw GAS directives. */

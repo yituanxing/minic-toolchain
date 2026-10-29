@@ -136,11 +136,22 @@ lacks src/core/core_lower_asm_target.c 'mrs_s'
 has src/target/target_info.h 'pic_lowering_supported;'
 has src/target/target_info.c 'minic_target_language_descriptors[]'
 has src/target/target_info.c '.pic_lowering_supported = true,'
-has src/target/target_info.c '.architecture = MINIC_TARGET_ARCH_RISCV32,'
-has src/target/target_info.c '.architecture = MINIC_TARGET_ARCH_RISCV64,'
-has src/target/target_info.c '.architecture = MINIC_TARGET_ARCH_X86_64,'
-has src/target/target_info.c '.architecture = MINIC_TARGET_ARCH_AARCH64,'
-has src/target/target_info.c '.architecture = MINIC_TARGET_ARCH_LOONGARCH64,'
+# Architecture IDs come exclusively from the single registration inventory;
+# TargetInfo supplies each ISA's language/ABI facts without duplicating IDs.
+exists src/target/target_registration.def
+for arch in RISCV32 RISCV64 X86_64 AARCH64 LOONGARCH64; do
+  has src/target/target_registration.def "MINIC_TARGET_ARCH_$arch"
+  lacks src/target/target_info.c ".architecture = MINIC_TARGET_ARCH_$arch,"
+done
+has src/target/target_info.c '#include "target/target_registration.def"'
+has src/target/backend.c '#include "target/target_registration.def"'
+has src/target/target_catalog.c '#include "target/target_registration.def"'
+has src/target/backend.c 'backend != minic_backend_for_target(target)'
+lacks src/target/backend.c 'case MINIC_TARGET_ARCH_'
+lacks tools/minic/main.c 'MINIC_TARGET_ARCH_'
+lacks tools/minic-cc/main.c 'MINIC_TARGET_ARCH_'
+has tools/minic/main.c 'minic_target_catalog_default()'
+has tools/minic-cc/main.c 'minic_target_catalog_default()'
 has tools/minic-cc/main.c '!target_info->pic_lowering_supported'
 
 # Original Linux arm64 tlbflush __tlbi and __tlbi_sync_s1ish are
@@ -615,7 +626,8 @@ if grep -REq 'MINIC_TARGET_ARCH_' src/frontend src/core; then
   fail 'frontend/Core must not add machine architecture switches'
 fi
 for backend in riscv32 riscv64 x86_64 aarch64 loongarch64; do
-  has src/target/backend.c "MINIC_TARGET_ARCH_$(echo "$backend" | tr '[:lower:]' '[:upper:]')"
+  has src/target/backend.c "${backend}_backend ="
+  has src/target/target_registration.def "MINIC_TARGET_ARCH_$(echo "$backend" | tr '[:lower:]' '[:upper:]')"
 done
 
 # Global program traversal is not an AArch64/LoongArch-only subsystem.

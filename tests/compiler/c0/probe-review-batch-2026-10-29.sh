@@ -18,6 +18,17 @@ bash tests/compiler/c0/probe-core-expr-branch-local-facts.sh "$mini"
 sh tests/compiler/c0/run-core-switch-case-fact-isolation.sh
 sh tests/compiler/c0/run-core-rv32-va-record-cursor.sh
 sh tests/compiler/c0/probe-rv32-variadic-record-abi-alignment.sh
+bash tests/compiler/c0/run-packed-bitfield-field-layout.sh "$mini"
+sh tests/compiler/c0/run-packed-bitfield-guard-page.sh
+sh tests/compiler/c0/run-packed-bitfield-cross-word-window.sh
+sh tests/compiler/c0/probe-static-array-redeclaration.sh
+sh tests/compiler/c0/run-core-local-effect-summary.sh
+sh tests/compiler/c0/probe-rv64-hardfloat-ninth-fixed.sh
+sh tests/compiler/c0/probe-rv64-hardfloat-fp-record-reject.sh
+sh tests/compiler/c0/probe-loongarch64-packed-scalar-alignment.sh
+sh tests/compiler/c0/probe-x86-immediate-qualification.sh
+bash tests/compiler/c0/probe-target-gnu-earlyclobber-transport.sh "$mini"
+sh tests/compiler/c0/run-x86-global-plan-abi.sh
 MINIC="$(dirname "$mini")/minic" sh tests/compiler/c0/run-enum-tag-scopes.sh
 MINIC="$(dirname "$mini")/minic" sh tests/compiler/c0/run-tag-namespace-scopes.sh
 sh tests/compiler/c0/probe-external-pointer-array-initializers.sh

@@ -61,6 +61,14 @@ MinicCoreLowerStatus core_asm_try_target_register_contract(
         MinicCoreLowerStatus status;
         bind->operand_index = i;
         bind->kind = contract.kinds[i];
+        bind->gnu_early_clobber = contract.gnu_early_clobber[i];
+        if (getenv("MINIC_GNU_ASM_CONSTRAINT_TRACE") != NULL)
+            (void)fprintf(stderr,
+                "CORE_GNU_ASM_CONSTRAINT function=%s operand=%zu "
+                "kind=%d gnu_early=%d core_early=%d\n",
+                ctx->source_function ? ctx->source_function->name : "?",
+                i, (int)bind->kind, (int)bind->gnu_early_clobber,
+                (int)bind->early_clobber);
         /* A target-qualified GNU register operand may name a local
          * `register T v asm("rN")`. This is an instruction operand's
          * physical placement constraint, not a reservation of the GPR for

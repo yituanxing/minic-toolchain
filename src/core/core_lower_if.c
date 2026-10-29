@@ -232,8 +232,6 @@ static void core_local_constants_meet_if_paths(
     bool then_continues,
     const MinicCoreLocalIntegerConstant *else_facts,
     bool else_continues) {
-    size_t index;
-
     if (context == NULL || context->source_function == NULL ||
         context->local_integer_constants == NULL) {
         return;
@@ -255,27 +253,12 @@ static void core_local_constants_meet_if_paths(
         return;
     }
 
-    for (index = 0U; index < context->source_function->local_count; ++index) {
-        const MinicCoreLocalIntegerConstant *left = &then_facts[index];
-        const MinicCoreLocalIntegerConstant *right = &else_facts[index];
-        MinicCoreLocalIntegerConstant merged = *left;
-        bool same_value =
-            left->known && right->known &&
-            !left->escaped && !right->escaped &&
-            minic_type_equal(left->value.type, right->value.type) &&
-            left->value.bits == right->value.bits;
-
-        merged.escaped = left->escaped || right->escaped;
-        merged.specialization_modified =
-            left->specialization_modified || right->specialization_modified;
-        merged.specialization_known =
-            left->specialization_known && right->specialization_known &&
-            minic_type_equal(left->specialization_value.type,
-                             right->specialization_value.type) &&
-            left->specialization_value.bits == right->specialization_value.bits;
-        merged.known = same_value && !merged.escaped;
-        context->local_integer_constants[index] = merged;
-    }
+    /* A single local-fact lattice meet is shared by IF, expression CFG and
+     * switch. The old IF-specific copy kept program_zero_stable from only
+     * the then path and could resurrect a non-invariant constant at a later
+     * clear_known barrier. The shared meet intersects every proof field. */
+    if (!minic_core_local_facts_meet(context, then_facts, else_facts))
+        minic_core_local_facts_clear_known(context);
 }
 
 /* INLINE_ASM_IF_FACT_BARRIER: a side-effecting GNU asm block must
