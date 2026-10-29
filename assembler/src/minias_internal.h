@@ -597,9 +597,7 @@ typedef struct MiniAs {
     char error[MINIAS_MAX_ERROR];
 } MiniAs;
 
-void minias_init(MiniAs *as);
 void minias_destroy(MiniAs *as);
-bool minias_parse_file(MiniAs *as, const char *path);
 bool minias_emit_sections(MiniAs *as);
 bool minias_write_elf64(MiniAs *as, const char *path);
 bool minias_cfi_directive(MiniAs *as, const char *op,

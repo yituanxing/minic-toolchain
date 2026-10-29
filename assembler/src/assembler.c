@@ -1277,19 +1277,6 @@ static bool minias_init_for_target(MiniAs *as,
     return minias_ensure_subsection(as,text,0U)!=NULL;
 }
 
-/* Preserve the historical RISC-V API while the multi-target driver
- * initializes directly against its selected TargetInfo. */
-void minias_init(MiniAs *as) {
-    MiniAsAssemblyConfig defaults;
-    if(!minias_init_for_target(as,minias_target_riscv()))return;
-    memset(&defaults, 0, sizeof(defaults));
-    defaults.target = as->target;
-    if (as->target->init_target_state != NULL &&
-        !as->target->init_target_state(as, &defaults) &&
-        as->error[0] == '\0')
-        minias_set_error(as, "target-initialization-failed");
-}
-
 /* A purged GNU macro owns exactly the resources freed by assembler exit.
  * Keep a single lifetime owner so later redefinitions never retain stale
  * macro parameter/body pointers in the symbol-independent Common layer. */
@@ -6622,18 +6609,6 @@ static bool parse_loaded_source_graph(MiniAs *as,
         }
     if(!minias_finalize_subsection_layout(as))return false;
     return minias_refresh_symbol_aliases(as);
-}
-
-bool minias_parse_file(MiniAs *as, const char *path) {
-    MiniAsSourceGraph graph={0};
-    bool parsed=collect_file_source_frame(as,path,&graph.physical);
-    if(parsed) {
-        graph.file_reads=1U;
-        parsed=parse_loaded_source_graph(as,&graph);
-    }
-    as->source_graph=NULL;
-    source_graph_destroy(&graph);
-    return parsed;
 }
 
 typedef struct MiniAsEmitRef {

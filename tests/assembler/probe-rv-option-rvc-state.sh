@@ -102,6 +102,25 @@ if "$MINIAS" -march=rv64gc -mabi=lp64d \
 fi
 grep -q 'disabled-riscv-compressed' "$work/invalid.stderr"
 
+# The legacy -march-omitted input must NOT silently accept GNU linker
+# relaxation requests, which require R_RISCV_RELAX/ALIGN marker relocations.
+# Unknown .option dialects must also fail rather than becoming no-ops.
+for option in relax unknown_option; do
+    printf '.text\n.option %s\ncall external_symbol\n' "$option" >"$work/unsupported-option.s"
+    for args in "legacy" "rv64gc"; do
+        options=()
+        if [[ "$args" = rv64gc ]]; then options=(-march=rv64gc -mabi=lp64d); fi
+        if "$MINIAS" "${options[@]}" -o "$work/invalid-option.o" \
+                "$work/unsupported-option.s" >"$work/invalid.stdout" \
+                2>"$work/invalid.stderr"; then
+            echo "unsupported .option $option accepted ($args)" >&2
+            exit 1
+        fi
+        test ! -e "$work/invalid-option.o"
+        grep -q "unsupported-isa-option:$option" "$work/invalid.stderr"
+    done
+done
+
 # Executable alignment is also a Target-site instruction decision.  A
 # two-byte gap can be filled with C.NOP whenever the ISA supports C, even
 # after .option norvc disabled new source-instruction compression. GNU GAS

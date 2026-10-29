@@ -430,69 +430,58 @@ invalid:
     return false;
 }
 
+/* One option-state transition function for both legacy and explicit ISA
+ * modes. Unsupported modifiers are errors, not ignored compatibility input:
+ * in particular GNU .option relax needs R_RISCV_RELAX / R_RISCV_ALIGN
+ * relocation contracts that this Target has not implemented. */
 static bool riscv_target_directive(MiniAs *as, const char *op,
                                    const char *args, size_t line, bool *handled) {
-    *handled = false;
-    if (strcmp(op, ".attribute") == 0) {
-        *handled = true;
-        return riscv_assemble_attribute(as, args, line);
+    MiniAsRiscvState *state=MINIAS_RV_STATE(as);
+    *handled=false;
+    if(strcmp(op,".attribute")==0) {
+        *handled=true;
+        return riscv_assemble_attribute(as,args,line);
     }
-    if (MINIAS_RV_STATE(as)->strict_isa_directives && strcmp(op, ".insn") == 0) {
-        minias_set_error(as, "unsupported-isa-escape:.insn:line=%zu", line);
+    if(state->strict_isa_directives && strcmp(op,".insn")==0) {
+        minias_set_error(as,"unsupported-isa-escape:.insn:line=%zu",line);
         return false;
     }
-    if (strcmp(op, ".option") != 0) return true;
-    *handled = true;
-    /* .option rvc may restore a preceding .option norvc only when the
-     * selected ISA already contains C. It cannot silently add C to a
-     * strict rv32i/rv64i contract. No -march remains GNU-compatible and
-     * permissive, but must still restore the actual per-site mode bit. */
-    if (MINIAS_RV_STATE(as)->isa_explicit &&
-        strcmp(args, "pic") != 0 && strcmp(args, "nopic") != 0 &&
-        strcmp(args, "push") != 0 && strcmp(args, "pop") != 0 &&
-        strcmp(args, "norvc") != 0 && strcmp(args, "norelax") != 0 &&
-        !(strcmp(args, "rvc") == 0 &&
-          (MINIAS_RV_STATE(as)->isa_features & RISCV_ISA_C) != 0U)) {
-        minias_set_error(as, "unsupported-isa-option:%s:line=%zu", args, line);
-        return false;
-    }
-    if (MINIAS_RV_STATE(as)->strict_isa_directives &&
-        strcmp(args, "pic") != 0 && strcmp(args, "nopic") != 0 &&
-        strcmp(args, "push") != 0 && strcmp(args, "pop") != 0 &&
-        strcmp(args, "norvc") != 0 && strcmp(args, "rvc") != 0 &&
-        strcmp(args, "norelax") != 0 &&
-        strcmp(args, "relax") != 0) {
-        minias_set_error(as, "unsupported-isa-option:%s:line=%zu", args, line);
-        return false;
-    }
-    /* PIC/nopic must be captured per statement for correct la expansion.
-     * Legacy non-I arch/rvc/relax modes still require semantic qualification. */
-    if (strcmp(args, "pic") == 0) {
-        MINIAS_RV_STATE(as)->options |= MINIAS_RISCV_OPTION_PIC;
-    } else if (strcmp(args, "nopic") == 0) {
-        MINIAS_RV_STATE(as)->options &= ~(uint32_t)MINIAS_RISCV_OPTION_PIC;
-    } else if (strcmp(args, "norvc") == 0) {
-        MINIAS_RV_STATE(as)->options |= MINIAS_RISCV_OPTION_NO_RVC;
-    } else if (strcmp(args, "rvc") == 0) {
-        MINIAS_RV_STATE(as)->options &= ~(uint32_t)MINIAS_RISCV_OPTION_NO_RVC;
-    } else if (strcmp(args, "push") == 0) {
-        if (MINIAS_RV_STATE(as)->option_depth >=
-            sizeof(MINIAS_RV_STATE(as)->option_stack) /
-                sizeof(MINIAS_RV_STATE(as)->option_stack[0])) {
-            minias_set_error(as, "option-stack-overflow:line=%zu", line);
+    if(strcmp(op,".option")!=0)return true;
+    *handled=true;
+    if(strcmp(args,"pic")==0)
+        state->options|=MINIAS_RISCV_OPTION_PIC;
+    else if(strcmp(args,"nopic")==0)
+        state->options&=~(uint32_t)MINIAS_RISCV_OPTION_PIC;
+    else if(strcmp(args,"norvc")==0)
+        state->options|=MINIAS_RISCV_OPTION_NO_RVC;
+    else if(strcmp(args,"rvc")==0) {
+        /* Restoring C cannot add an extension absent from the ISA. */
+        if(state->isa_explicit && !(state->isa_features&RISCV_ISA_C))
+            goto unsupported;
+        state->options&=~(uint32_t)MINIAS_RISCV_OPTION_NO_RVC;
+    } else if(strcmp(args,"push")==0) {
+        if(state->option_depth>=sizeof(state->option_stack)/
+                                sizeof(state->option_stack[0])) {
+            minias_set_error(as,"option-stack-overflow:line=%zu",line);
             return false;
         }
-        MINIAS_RV_STATE(as)->option_stack[MINIAS_RV_STATE(as)->option_depth++] =
-            MINIAS_RV_STATE(as)->options;
-    } else if (strcmp(args, "pop") == 0) {
-        if (MINIAS_RV_STATE(as)->option_depth == 0U) {
-            minias_set_error(as, "option-stack-underflow:line=%zu", line);
+        state->option_stack[state->option_depth++]=state->options;
+    } else if(strcmp(args,"pop")==0) {
+        if(state->option_depth==0U) {
+            minias_set_error(as,"option-stack-underflow:line=%zu",line);
             return false;
         }
-        MINIAS_RV_STATE(as)->options =
-            MINIAS_RV_STATE(as)->option_stack[--MINIAS_RV_STATE(as)->option_depth];
+        state->options=state->option_stack[--state->option_depth];
+    } else if(strcmp(args,"norelax")!=0) {
+        /* Absence of relaxation markers is a real supported norelax mode.
+         * A positive relax request cannot silently produce nonrelaxable
+         * CALL/HI20/ALIGN relocations. */
+        goto unsupported;
     }
     return true;
+unsupported:
+    minias_set_error(as,"unsupported-isa-option:%s:line=%zu",args,line);
+    return false;
 }
 
 /* A selected ISA supplies Tag_RISCV_arch. No -march leaves legacy
