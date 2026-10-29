@@ -52,9 +52,11 @@ readelf -Wr "$work/mini-privilege-pcala.o" >"$work/mini.reloc"
 grep -q 'R_LARCH_PCALA_HI20' "$work/mini.reloc"
 grep -q 'R_LARCH_PCALA_LO12' "$work/mini.reloc"
 
-# The GNU source tree recognizes these bank aliases and rejects cross-bank
-# and invalid relocation modifiers; reject locally even without GNU tools.
-bad=(
+# GNU requires real register banks/valid operands. MiniAS deliberately
+# narrows its relocation-modifier combinations beyond what some GAS versions
+# syntactically accept; test that supported-domain policy separately instead
+# of reporting a GNU-accepted syntax as a GNU negative.
+gnu_bad=(
   'movgr2fr.d $a0,$a1'
   'movfr2gr.d $a0,$a1'
   'fld.d $s0,$sp,0'
@@ -66,9 +68,15 @@ bad=(
   'tlbclr $a0'
   'ret 1'
   'add.d $a0,$a0,%pc_lo12(external_symbol)'
+)
+# MiniAS supports PCALA_HI20 only in its HI field and PCALA_LO12 only
+# in the matching LO field. GAS accepts some mismatched modifier spellings
+# during assembly without validating the eventual link-time relocation pair.
+mini_only_bad=(
   'pcalau12i $a0,%pc_lo12(external_symbol)'
   'addi.d $a0,$a0,%pc_hi20(external_symbol)'
 )
+bad=("${gnu_bad[@]}" "${mini_only_bad[@]}")
 for i in "${!bad[@]}"; do
   printf '.text\n%s\n' "${bad[$i]}" >"$work/bad$i.s"
   if "$MINIAS" --target=loongarch64 -march=loongarch64 -mabi=lp64d \
@@ -108,7 +116,7 @@ mini,gnu=map(pcala_relocations,sys.argv[1:])
 if mini!=gnu or len(mini)!=2:
     raise SystemExit(f'PCALA relocation mismatch: MiniAS={mini} GNU={gnu}')
 PY
-  for i in "${!bad[@]}"; do
+  for i in "${!gnu_bad[@]}"; do
     if loongarch64-linux-gnu-as -mabi=lp64d -o "$work/gnu-bad$i.o" \
         "$work/bad$i.s" >"$work/gnu-bad$i.out" 2>&1; then
       echo "GNU accepted purported negative: ${bad[$i]}" >&2
@@ -119,4 +127,4 @@ PY
 else
   oracle='NOT_TESTED:explicit_local_no_cross_GNU'
 fi
-echo "MINIAS_LOONG_ALIAS_PRIVILEGE=PASS aliases=5 privileged=9 PCALA=2 negatives=${#bad[@]} GNU_bytes=$oracle GNU_relocations=$oracle no_partial_object=1"
+echo "MINIAS_LOONG_ALIAS_PRIVILEGE=PASS aliases=5 privileged=9 PCALA=2 GNU_negatives=${#gnu_bad[@]} MiniAS_only_negatives=${#mini_only_bad[@]} GNU_bytes=$oracle GNU_relocations=$oracle no_partial_object=1"
