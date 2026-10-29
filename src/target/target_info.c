@@ -251,6 +251,8 @@ const MinicTargetInfo *minic_target_info_for_architecture(
             x86_64_target.libc_size_type = minic_type_unsigned_long();
             x86_64_target.word_integer_rank = MINIC_INTEGER_RANK_LONG;
             x86_64_target.language_type_capabilities = MINIC_TARGET_LANG_EXTENDED_FLOAT_DECLARATIONS | MINIC_TARGET_LANG_ABI_STATE_VA_LIST_CURSOR | MINIC_TARGET_LANG_MS_X64_FUNCTION_POINTER_DECLARATIONS;
+            x86_64_target.call_lowering_capabilities =
+                MINIC_TARGET_CALL_MS_X64_FIXED_SCALAR;
             x86_64_target.gnu_sizeof_void_is_one = true;
             x86_64_target.gnu_sizeof_function_is_one = true;
             x86_64_target.variadic_scalar_read_kind = MINIC_VARIADIC_SCALAR_READ_ABI_CURSOR;
@@ -523,6 +525,17 @@ bool minic_target_info_function_pointer_calling_convention_declaration_supported
     return convention == MINIC_CALLING_CONVENTION_MS_X64 &&
            (target->language_type_capabilities &
             MINIC_TARGET_LANG_MS_X64_FUNCTION_POINTER_DECLARATIONS) != 0U;
+}
+
+bool minic_target_info_function_calling_convention_scalar_call_supported(
+    const MinicTargetInfo *target, MinicFunctionCallingConvention convention) {
+    if (target == NULL || !minic_function_calling_convention_valid(convention))
+        return false;
+    if (convention == MINIC_CALLING_CONVENTION_DEFAULT)
+        return true;
+    return convention == MINIC_CALLING_CONVENTION_MS_X64 &&
+           (target->call_lowering_capabilities &
+            MINIC_TARGET_CALL_MS_X64_FIXED_SCALAR) != 0U;
 }
 
 /* Only the x86 SysV cursor has a distinct internal identity today. Other

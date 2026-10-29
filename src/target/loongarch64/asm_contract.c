@@ -1,4 +1,5 @@
 #include "target/loongarch64/asm_contract.h"
+#include "target/loongarch64/simd_asm.h"
 #include "target/common/direct_linux_bug_asm.h"
 #include "target/loongarch64/frame_emit.h"
 
@@ -139,6 +140,7 @@ bool minic_loongarch64_qualified_opaque_asm(const MinicCoreInlineAsm *a) {
     char compact[64];
     size_t i, n = 0U;
     if (minic_loongarch64_linux_jump_label_asm_goto_core(a)) return true;
+    if (minic_loongarch64_simd_qualify_opaque(a)) return true;
     if (minic_multi_direct_linux_bug_asm(
             a, "10000", "10001", "10002", "break1", false))
         return true;
@@ -2913,6 +2915,7 @@ bool minic_loongarch64_qualify_inline_asm(
     MinicTargetInlineAsmContract *contract) {
     const MinicInlineAsmOperand *op;
     const MinicExpression *expr;
+    if (minic_loongarch64_simd_qualify_source(program, src, contract)) return true;
     if (loong_linux_clock_source(program, src, contract)) return true;
     if (loong_linux_cacop_source(program, src, contract)) return true;
     if (loong_linux_vdso_source(program, src, contract)) return true;
@@ -3423,6 +3426,8 @@ bool minic_loongarch64_emit_qualified_structured_asm(
         ins->value.structured_inline_asm.inline_asm_id >= ctx->fn->inline_asm_count)
         return false;
     info = &ctx->fn->inline_asms[ins->value.structured_inline_asm.inline_asm_id];
+    if (minic_loongarch64_simd_emit_structured(out, ctx, ins, info))
+        return true;
     if (loong_linux_cpucfg_form(info->template_text, info->template_length))
         return loong_linux_cpucfg_emit(out, ctx, ins, info);
     if (loong_linux_cacop_form(info->template_text, info->template_length))

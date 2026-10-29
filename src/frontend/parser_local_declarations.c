@@ -964,7 +964,8 @@ bool minic_parser_local_decl_ordinary(MinicParser *parser) {
 
     (void)memset(&declaration_attributes, 0, sizeof(declaration_attributes));
     declaration_attributes.cleanup_function = MINIC_FUNCTION_INVALID;
-    if (!minic_parser_parse_local_storage_class(parser, &is_register_storage) ||
+    if (!parse_local_object_attributes(parser, &declaration_attributes) ||
+        !minic_parser_parse_local_storage_class(parser, &is_register_storage) ||
         !minic_parser_parse_type_specifiers(parser, &base_type) ||
         !parse_local_object_attributes(parser, &declaration_attributes)) {
         return false;
@@ -1044,12 +1045,16 @@ static bool declare_block_scope_extern_object_declarator(MinicParser *parser,
     MinicType object_type;
     size_t array_type_begin;
     bool is_array;
+    bool declarator_is_weak;
 
     existing_id = minic_parser_find_global_object_entity(parser, name_span);
     array_type_begin = parser->program->array_type_count;
+    declarator_is_weak = is_weak;
     object_type = base_type;
     if (!minic_parser_parse_array_declarator_suffix(
-            parser, object_type, true, &object_type, &is_array)) {
+            parser, object_type, true, &object_type, &is_array) ||
+        !minic_parser_parse_gnu_attribute_lists(
+            parser, consume_block_scope_extern_head_attribute, &declarator_is_weak)) {
         return false;
     }
     (void)is_array;
@@ -1057,7 +1062,8 @@ static bool declare_block_scope_extern_object_declarator(MinicParser *parser,
             parser, name_span, object_type, &object_id)) {
         return false;
     }
-    if (is_weak && !minic_c0_global_object_set_weak(parser->program, object_id, true)) {
+    if (declarator_is_weak &&
+        !minic_c0_global_object_set_weak(parser->program, object_id, true)) {
         minic_parser_error(parser, "GNU weak requires external object linkage");
         return false;
     }

@@ -1987,6 +1987,13 @@ bool minic_c0_pointer_equality_compatible(const MinicC0Program *program,
         return false;
     }
     if (minic_type_pointer_equality_compatible(left->type, right->type) ||
+        /* Distinct declarations of incomplete arrays have independent AST
+         * descriptor IDs, even though pointers to those array objects have
+         * compatible C types. Compare their element/extent shapes, not IDs. */
+        (minic_type_is_pointer(left->type) && minic_type_is_pointer(right->type) &&
+         left->type.base_kind == MINIC_TYPE_BASE_ARRAY &&
+         right->type.base_kind == MINIC_TYPE_BASE_ARRAY &&
+         minic_c0_types_compatible(program, left->type, right->type)) ||
         (minic_type_is_pointer(left->type) && minic_type_is_pointer(right->type) &&
          minic_c0_gnu_void_function_pointer_assignment_compatible(left->type, right->type))) {
         return true;

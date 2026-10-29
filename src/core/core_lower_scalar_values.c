@@ -542,6 +542,7 @@ static MinicCoreLowerStatus append_runtime_scalar_call(
                                         parameter_types,
                                         argument_count,
                                         false,
+                                        MINIC_CALLING_CONVENTION_DEFAULT,
                                         &callee_id) ||
         !minic_core_function_append_call_arguments(
             context->function, arguments, argument_count, &argument_begin)) {

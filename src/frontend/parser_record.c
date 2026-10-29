@@ -53,6 +53,38 @@ static bool record_field_starts_parenthesized_pointer_array(const MinicParser *p
     }
 }
 
+static bool record_field_starts_parenthesized_pointer_object(const MinicParser *parser) {
+    MinicParser probe;
+    size_t pointer_depth;
+    unsigned int pointer_const_qualifiers;
+    unsigned int pointer_volatile_qualifiers;
+
+    if (parser == NULL || parser->current.kind != MINIC_TOKEN_LPAREN)
+        return false;
+    probe = *parser;
+    if (!minic_parser_advance(&probe) || probe.current.kind != MINIC_TOKEN_STAR)
+        return false;
+    pointer_depth = 0U;
+    pointer_const_qualifiers = 0U;
+    pointer_volatile_qualifiers = 0U;
+    while (probe.current.kind == MINIC_TOKEN_STAR) {
+        pointer_depth += 1U;
+        if (!minic_parser_advance(&probe) ||
+            !minic_parser_parse_pointer_qualifier_sequence(
+                &probe, pointer_depth, &pointer_const_qualifiers,
+                &pointer_volatile_qualifiers))
+            return false;
+    }
+    if (probe.current.kind != MINIC_TOKEN_IDENTIFIER ||
+        !minic_parser_advance(&probe) || probe.current.kind != MINIC_TOKEN_RPAREN ||
+        !minic_parser_advance(&probe))
+        return false;
+    /* `(*name)(...)` is a function pointer; `(*name)[N]` is handled by
+     * pointer-to-array. Only the unsuffixed parenthesized pointer is an object. */
+    return probe.current.kind != MINIC_TOKEN_LPAREN &&
+           probe.current.kind != MINIC_TOKEN_LBRACKET;
+}
+
 static bool parse_pointer_to_array_field_declarator(MinicParser *parser,
                                                     MinicType base_type,
                                                     MinicSourceSpan *name_span,
@@ -364,6 +396,17 @@ static bool parse_record_field_declarator(MinicParser *parser,
     if (parser->current.kind == MINIC_TOKEN_LPAREN &&
         record_field_starts_parenthesized_pointer_array(parser)) {
         if (!parse_pointer_to_array_field_declarator(parser, field_type, &name_span, &field_type)) {
+            return false;
+        }
+    } else if (parser->current.kind == MINIC_TOKEN_LPAREN &&
+               record_field_starts_parenthesized_pointer_object(parser)) {
+        bool name_is_array;
+        bool name_array_inferred;
+        size_t name_array_count;
+
+        if (!minic_parser_parse_parenthesized_pointer_to_array_declarator(
+                parser, field_type, &name_span, &field_type, &name_is_array,
+                &name_array_inferred, &name_array_count) || name_is_array) {
             return false;
         }
     } else if (parser->current.kind == MINIC_TOKEN_LPAREN) {

@@ -44,8 +44,18 @@ int main(void) {
     call.value.call.result_object = MINIC_CORE_OBJECT_INVALID;
     if ((rc = demand(minic_core_call_view_build(&fn, &call, &view) &&
                      view.return_form == MINIC_CORE_CALL_RETURN_VALUE &&
+                     view.calling_convention == MINIC_CALLING_CONVENTION_DEFAULT &&
                      minic_core_call_view_argument_type(&fn, &view, 0U, &actual) &&
                      minic_type_equal(actual, scalar), 3)) != 0) return rc;
+    /* Preserve target-neutral ABI identity; no machine convention is chosen
+     * by the Common semantic view. Corrupt IDs must never reach a backend. */
+    callee.calling_convention = MINIC_CALLING_CONVENTION_MS_X64;
+    if (!minic_core_call_view_build(&fn, &call, &view) ||
+        view.calling_convention != MINIC_CALLING_CONVENTION_MS_X64)
+        return 28;
+    callee.calling_convention = (MinicFunctionCallingConvention)99;
+    if (minic_core_call_view_build(&fn, &call, &view)) return 29;
+    callee.calling_convention = MINIC_CALLING_CONVENTION_DEFAULT;
     call.type = minic_type_double();
     if (minic_core_call_view_build(&fn, &call, &view)) return 4;
     call.type = scalar;
@@ -95,6 +105,7 @@ int main(void) {
     signature.return_type = scalar;
     signature.parameter_types = &scalar;
     signature.parameter_count = 1U;
+    signature.calling_convention = MINIC_CALLING_CONVENTION_MS_X64;
     fn.call_signatures = &signature;
     fn.call_signature_count = 1U;
     argument.kind = MINIC_CORE_CALL_ARGUMENT_VALUE;
@@ -108,7 +119,11 @@ int main(void) {
     call.value.indirect_call.argument_count = 1U;
     if ((rc = demand(minic_core_call_view_build(&fn, &call, &view) &&
                      view.signature == &signature &&
+                     view.calling_convention == MINIC_CALLING_CONVENTION_MS_X64 &&
                      view.function_pointer == 1U, 15)) != 0) return rc;
+    signature.calling_convention = (MinicFunctionCallingConvention)99;
+    if (minic_core_call_view_build(&fn, &call, &view)) return 30;
+    signature.calling_convention = MINIC_CALLING_CONVENTION_MS_X64;
     /* The production visitor precomputes each CALL view once in a compact
      * Core instruction ID-sorted index. Exercise sparse IDs and fail-closed
      * corrupt semantic operands outside all psABI-dependent backends. */
@@ -142,12 +157,14 @@ int main(void) {
         }
         cached = minic_core_call_index_find(&index, 1U, &ordinal);
         if (cached == NULL || ordinal != 0U ||
+            cached->calling_convention != MINIC_CALLING_CONVENTION_MS_X64 ||
             cached->function_pointer != 1U) {
             minic_core_call_index_destroy(&index);
             return 16;
         }
         cached = minic_core_call_index_find(&index, 4U, &ordinal);
         if (cached == NULL || ordinal != 1U ||
+            cached->calling_convention != MINIC_CALLING_CONVENTION_DEFAULT ||
             cached->callee != &callee) {
             minic_core_call_index_destroy(&index);
             return 16;

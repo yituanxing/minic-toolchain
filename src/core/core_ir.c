@@ -215,6 +215,17 @@ bool minic_core_function_set_signature(MinicCoreFunction *function,
     return true;
 }
 
+bool minic_core_function_set_calling_convention(
+    MinicCoreFunction *function, MinicFunctionCallingConvention convention) {
+    if (function == NULL || function->name == NULL ||
+        !minic_function_calling_convention_valid(convention) ||
+        (function->calling_convention != MINIC_CALLING_CONVENTION_DEFAULT &&
+         function->calling_convention != convention))
+        return false;
+    function->calling_convention = convention;
+    return true;
+}
+
 bool minic_core_function_add_enum_type(MinicCoreFunction *function,
                                        MinicEnumId enum_id,
                                        MinicType effective_integer_type) {
@@ -496,13 +507,15 @@ static bool callee_signature_equal(const MinicCoreCallee *callee,
                                    MinicType return_type,
                                    const MinicType *parameter_types,
                                    size_t parameter_count,
-                                   bool is_variadic) {
+                                   bool is_variadic,
+                                   MinicFunctionCallingConvention calling_convention) {
     size_t index;
 
     if (callee == NULL || name == NULL || callee->name == NULL ||
         callee->name_length != name_length || memcmp(callee->name, name, name_length) != 0 ||
         !minic_type_equal(callee->return_type, return_type) ||
-        callee->parameter_count != parameter_count || callee->is_variadic != is_variadic) {
+        callee->parameter_count != parameter_count || callee->is_variadic != is_variadic ||
+        callee->calling_convention != calling_convention) {
         return false;
     }
     for (index = 0U; index < parameter_count; ++index) {
@@ -520,6 +533,7 @@ bool minic_core_function_add_callee(MinicCoreFunction *function,
                                     const MinicType *parameter_types,
                                     size_t parameter_count,
                                     bool is_variadic,
+                                    MinicFunctionCallingConvention calling_convention,
                                     MinicCoreCalleeId *callee_id) {
     MinicCoreCallee stored;
     size_t index;
@@ -527,6 +541,7 @@ bool minic_core_function_add_callee(MinicCoreFunction *function,
     if (function == NULL || name == NULL || name_length == 0U || callee_id == NULL ||
         function->callee_count >= (size_t)UINT32_MAX ||
         !minic_core_ir_direct_call_return_type(return_type) ||
+        !minic_function_calling_convention_valid(calling_convention) ||
         (parameter_count != 0U && parameter_types == NULL) ||
         parameter_count > SIZE_MAX / sizeof(*stored.parameter_types)) {
         return false;
@@ -556,7 +571,8 @@ bool minic_core_function_add_callee(MinicCoreFunction *function,
                                         return_type,
                                         parameter_types,
                                         parameter_count,
-                                        is_variadic)) {
+                                        is_variadic,
+                                        calling_convention)) {
                 return false;
             }
             *callee_id = (MinicCoreCalleeId)index;
@@ -583,6 +599,7 @@ bool minic_core_function_add_callee(MinicCoreFunction *function,
     stored.return_type = return_type;
     stored.parameter_count = parameter_count;
     stored.is_variadic = is_variadic;
+    stored.calling_convention = calling_convention;
     if (!grow_array((void **)&function->callees,
                     &function->callee_capacity,
                     function->callee_count,
@@ -604,13 +621,15 @@ static bool call_signature_equal(const MinicCoreCallSignature *signature,
                                  MinicType return_type,
                                  const MinicType *parameter_types,
                                  size_t parameter_count,
-                                 bool is_variadic) {
+                                 bool is_variadic,
+                                 MinicFunctionCallingConvention calling_convention) {
     size_t index;
 
     if (signature == NULL || signature->function_type_id != function_type_id ||
         !minic_type_equal(signature->return_type, return_type) ||
         signature->parameter_count != parameter_count ||
-        signature->is_variadic != is_variadic) {
+        signature->is_variadic != is_variadic ||
+        signature->calling_convention != calling_convention) {
         return false;
     }
     for (index = 0U; index < parameter_count; ++index) {
@@ -628,12 +647,14 @@ bool minic_core_function_add_call_signature(MinicCoreFunction *function,
                                             const MinicType *parameter_types,
                                             size_t parameter_count,
                                             bool is_variadic,
+                                            MinicFunctionCallingConvention calling_convention,
                                             MinicCoreCallSignatureId *signature_id) {
     MinicCoreCallSignature stored;
     size_t index;
 
     if (function == NULL || signature_id == NULL ||
         function_type_id == MINIC_FUNCTION_TYPE_INVALID ||
+        !minic_function_calling_convention_valid(calling_convention) ||
         function->call_signature_count >= (size_t)UINT32_MAX ||
         (!minic_type_is_void(return_type) && !minic_core_ir_call_scalar_type(return_type)) ||
         (parameter_count != 0U && parameter_types == NULL) ||
@@ -651,7 +672,8 @@ bool minic_core_function_add_call_signature(MinicCoreFunction *function,
                                  return_type,
                                  parameter_types,
                                  parameter_count,
-                                 is_variadic)) {
+                                 is_variadic,
+                                 calling_convention)) {
             *signature_id = (MinicCoreCallSignatureId)index;
             return true;
         }
@@ -661,6 +683,7 @@ bool minic_core_function_add_call_signature(MinicCoreFunction *function,
     stored.return_type = return_type;
     stored.parameter_count = parameter_count;
     stored.is_variadic = is_variadic;
+    stored.calling_convention = calling_convention;
     if (parameter_count != 0U) {
         stored.parameter_types =
             (MinicType *)malloc(parameter_count * sizeof(*stored.parameter_types));

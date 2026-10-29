@@ -65,6 +65,8 @@ bool minic_add_inline_integer_specialization(
                                                  source.return_type,
                                                  source.parameter_types,
                                                  source.parameter_count) ||
+        !minic_c0_program_set_function_calling_convention(
+            program, *specialized_id, source.calling_convention) ||
         !minic_c0_program_set_function_internal(program, *specialized_id, true) ||
         !minic_c0_program_set_function_inline(program, *specialized_id, true) ||
         (source.is_noreturn &&

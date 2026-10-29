@@ -211,6 +211,8 @@ typedef struct MinicCoreCallee {
     /* BATCH_D_VARIADIC_DIRECT_CALL: parameter_types is the fixed prefix;
        variadic tail types are the semantic types of VALUE arguments. */
     bool is_variadic;
+    /* Semantic ABI identity; machine register/stack placement is target-owned. */
+    MinicFunctionCallingConvention calling_convention;
 } MinicCoreCallee;
 
 /* M83_FIRST_CLASS_INDIRECT_CALL: Core owns enough static signature data to
@@ -223,6 +225,7 @@ typedef struct MinicCoreCallSignature {
     /* M150_INDIRECT_VARIADIC_CALL_SIGNATURE_OWNER: parameter_types is the
        fixed prefix; variadic tail VALUE arguments carry their own scalar type. */
     bool is_variadic;
+    MinicFunctionCallingConvention calling_convention;
 } MinicCoreCallSignature;
 
 /* M85_RECORD_CALL_ARGUMENT: Core call arguments carry semantic storage form,
@@ -480,6 +483,7 @@ typedef struct MinicCoreFunction {
     MinicType return_type;
     MinicType *parameter_types;
     size_t parameter_count;
+    MinicFunctionCallingConvention calling_convention;
     /* Integer-specialization clones share Semantic statement ids with their
        source. Their executable Core block labels are already function-scoped,
        so do not also export the source-id .Luser_* compatibility aliases. */
@@ -532,6 +536,8 @@ bool minic_core_function_set_signature(MinicCoreFunction *function,
                                        MinicType return_type,
                                        const MinicType *parameter_types,
                                        size_t parameter_count);
+bool minic_core_function_set_calling_convention(
+    MinicCoreFunction *function, MinicFunctionCallingConvention convention);
 bool minic_core_function_add_enum_type(MinicCoreFunction *function,
                                        MinicEnumId enum_id,
                                        MinicType effective_integer_type);
@@ -570,6 +576,7 @@ bool minic_core_function_add_callee(MinicCoreFunction *function,
                                     const MinicType *parameter_types,
                                     size_t parameter_count,
                                     bool is_variadic,
+                                    MinicFunctionCallingConvention calling_convention,
                                     MinicCoreCalleeId *callee_id);
 bool minic_core_function_add_call_signature(MinicCoreFunction *function,
                                             MinicFunctionTypeId function_type_id,
@@ -577,6 +584,7 @@ bool minic_core_function_add_call_signature(MinicCoreFunction *function,
                                             const MinicType *parameter_types,
                                             size_t parameter_count,
                                             bool is_variadic,
+                                            MinicFunctionCallingConvention calling_convention,
                                             MinicCoreCallSignatureId *signature_id);
 bool minic_core_function_add_opaque_inline_asm(MinicCoreFunction *function,
                                                const char *template_text,

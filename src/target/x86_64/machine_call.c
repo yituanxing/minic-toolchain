@@ -17,13 +17,26 @@
 static bool x86_emit_call_arguments_planned(
     FILE *out, const MinicCoreFunction *fn, const MinicX86Frame *frame,
     const MinicCoreCallView *view, const MinicX86ArgumentPlan *plan) {
-    static const char *const gp_regs[] =
+    static const char *const sysv_gp_regs[] =
         {"%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9"};
+    static const char *const ms_x64_gp_regs[] =
+        {"%rcx", "%rdx", "%r8", "%r9"};
+    const char *const *gp_regs;
     size_t i;
     if (out == NULL || fn == NULL || frame == NULL || view == NULL ||
         plan == NULL || plan->argument_count != view->argument_count ||
+        plan->calling_convention != view->calling_convention ||
         (plan->argument_count != 0U && plan->locations == NULL))
         return false;
+    if (plan->calling_convention == MINIC_CALLING_CONVENTION_MS_X64) {
+        if (plan->stack_bytes < 32U || plan->is_variadic)
+            return false;
+        gp_regs = ms_x64_gp_regs;
+    } else if (plan->calling_convention == MINIC_CALLING_CONVENTION_DEFAULT) {
+        gp_regs = sysv_gp_regs;
+    } else {
+        return false;
+    }
     if (plan->stack_bytes != 0U &&
         fprintf(out, "  subq $%zu, %%rsp\n", plan->stack_bytes) < 0)
         return false;
@@ -155,6 +168,9 @@ static bool x86_emit_call_arguments_planned(
                                loc->stack_index * 8U) < 0) return false;
         } else if (loc->kind == MINIC_X86_ARG_INTEGER) {
             if (!loc->on_stack) {
+                if (loc->gp_index >= (plan->calling_convention ==
+                                      MINIC_CALLING_CONVENTION_MS_X64 ? 4U : 6U))
+                    return false;
                 if (fprintf(out, "  movq %%rax, %s\n",
                             gp_regs[loc->gp_index]) < 0) return false;
             } else if (fprintf(out, "  movq %%rax, %zu(%%rsp)\n",

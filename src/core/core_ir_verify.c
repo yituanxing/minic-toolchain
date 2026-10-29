@@ -1100,6 +1100,7 @@ bool minic_core_function_verify(const MinicCoreFunction *function) {
     bool valid;
 
     if (function == NULL || function->name == NULL || function->name_length == 0U ||
+        !minic_function_calling_convention_valid(function->calling_convention) ||
         (function->parameter_count != 0U && function->parameter_types == NULL) ||
         !storage_shape_is_valid(
             function->globals, function->global_count, function->global_capacity) ||
@@ -1147,6 +1148,7 @@ bool minic_core_function_verify(const MinicCoreFunction *function) {
 
         callee = &function->callees[index];
         if (callee->name == NULL || callee->name_length == 0U ||
+            !minic_function_calling_convention_valid(callee->calling_convention) ||
             !minic_core_ir_direct_call_return_type(callee->return_type) ||
             (callee->parameter_count != 0U && callee->parameter_types == NULL)) {
             return false;
@@ -1166,6 +1168,7 @@ bool minic_core_function_verify(const MinicCoreFunction *function) {
 
         signature = &function->call_signatures[index];
         if (signature->function_type_id == MINIC_FUNCTION_TYPE_INVALID ||
+            !minic_function_calling_convention_valid(signature->calling_convention) ||
             (!minic_type_is_void(signature->return_type) &&
              !minic_core_ir_call_scalar_type(signature->return_type)) ||
             (signature->parameter_count != 0U && signature->parameter_types == NULL)) {

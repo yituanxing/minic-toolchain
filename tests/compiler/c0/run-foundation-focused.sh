@@ -35,6 +35,7 @@ for test_script in \
     run-gnu-zero-length-record-arrays.sh \
     run-record-forward-declarations.sh \
     run-record-multi-declarators.sh \
+    run-xgene-parenthesized-pointer-record-field.sh \
     run-record-typedef-array-fields.sh \
     run-volatile-qualifiers.sh \
     run-array-bound-sizeof.sh \
@@ -69,6 +70,7 @@ for test_script in \
     run-static-preformed-array-zero.sh \
     run-static-fixed-record-array-zero.sh \
     run-static-multidimensional-array-relocation.sh \
+    run-static-integer-floating-const-initializer.sh \
     run-static-integer-pointer-cast-comparison.sh \
     run-static-aggregate-array-designators.sh \
     run-prefix-update-expressions.sh \

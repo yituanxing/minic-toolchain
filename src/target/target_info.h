@@ -49,6 +49,12 @@ typedef enum MinicTargetLanguageCapability {
     MINIC_TARGET_LANG_MS_X64_FUNCTION_POINTER_DECLARATIONS = 1U << 3
 } MinicTargetLanguageCapability;
 
+/* Code-generation contracts, kept distinct from declaration-only language
+ * type capabilities. Target backends explicitly implement each flag. */
+typedef enum MinicTargetCallCapability {
+    MINIC_TARGET_CALL_MS_X64_FIXED_SCALAR = 1U << 0
+} MinicTargetCallCapability;
+
 typedef struct MinicTargetInfo {
     MinicTargetArchitecture architecture;
     const MinicDataLayout *data_layout;
@@ -58,6 +64,7 @@ typedef struct MinicTargetInfo {
     MinicType libc_size_type;
     MinicIntegerRank word_integer_rank;
     unsigned int language_type_capabilities;
+    unsigned int call_lowering_capabilities;
     bool gnu_sizeof_void_is_one;
     bool gnu_sizeof_function_is_one;
     bool call_frame_return_address_level0;
@@ -133,6 +140,8 @@ bool minic_target_info_elf_object_is_tu_local(const MinicC0Program *program,
 bool minic_target_info_elf_function_is_tu_local(const MinicC0Program *program,
                                                 const char *symbol);
 bool minic_target_info_function_pointer_calling_convention_declaration_supported(
+    const MinicTargetInfo *target, MinicFunctionCallingConvention convention);
+bool minic_target_info_function_calling_convention_scalar_call_supported(
     const MinicTargetInfo *target, MinicFunctionCallingConvention convention);
 bool minic_target_info_builtin_va_list_type(const MinicTargetInfo *target,
                                             MinicType *type);

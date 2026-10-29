@@ -949,6 +949,16 @@ cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
   -o "$work/core-call-probe"
 "$work/core-call-probe"
 
+# A calling-convention ID is part of both direct and indirect Core call
+# identity. The Common IR carries it without implementing a target ABI;
+# malformed/contradictory IDs fail closed before machine emission.
+cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
+  -ffunction-sections -fdata-sections -Wl,--gc-sections \
+  -Iinclude -Isrc tests/compiler/c0/probe-core-call-convention-intern.c \
+  src/core/core_ir.c src/frontend/type.c \
+  -o "$work/core-call-convention-intern-probe"
+"$work/core-call-convention-intern-probe"
+
 # Real RV32 ILP32 physical access safety. Function-section GC links only
 # the production stack transport helpers, without a GNU cross toolchain.
 # All malformed Core slots and scratch register aliases must fail closed.

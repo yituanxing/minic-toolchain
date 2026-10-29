@@ -1653,6 +1653,8 @@ MinicCoreLowerStatus minic_core_lower_function_with_index(const MinicFunctionBod
                                            source_function->return_type,
                                            source_function->parameter_types,
                                            source_function->parameter_count) ||
+        !minic_core_function_set_calling_convention(
+            &lowered, source_function->calling_convention) ||
         !minic_core_function_add_block(&lowered, &block_id)) {
         free(statement_blocks); free(local_integer_constants); free(local_objects); minic_core_function_destroy(&lowered); return MINIC_CORE_LOWER_ERROR;
     }

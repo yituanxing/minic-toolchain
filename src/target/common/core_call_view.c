@@ -20,6 +20,7 @@ bool minic_core_call_view_build(const MinicCoreFunction *function,
         view.parameter_types = view.callee->parameter_types;
         view.parameter_count = view.callee->parameter_count;
         view.is_variadic = view.callee->is_variadic;
+        view.calling_convention = view.callee->calling_convention;
         begin = instruction->value.call.argument_begin;
         count = instruction->value.call.argument_count;
     } else if (instruction->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL) {
@@ -40,12 +41,14 @@ bool minic_core_call_view_build(const MinicCoreFunction *function,
         view.parameter_types = view.signature->parameter_types;
         view.parameter_count = view.signature->parameter_count;
         view.is_variadic = view.signature->is_variadic;
+        view.calling_convention = view.signature->calling_convention;
         begin = instruction->value.indirect_call.argument_begin;
         count = instruction->value.indirect_call.argument_count;
     } else {
         return false;
     }
-    if (begin > function->call_argument_count ||
+    if (!minic_function_calling_convention_valid(view.calling_convention) ||
+        begin > function->call_argument_count ||
         count > function->call_argument_count - begin ||
         (count != 0U && function->call_arguments == NULL) ||
         (view.parameter_count != 0U && view.parameter_types == NULL) ||

@@ -381,7 +381,7 @@ unsigned int minic_aarch64_linux_rept_nop_count(
 
 bool minic_aarch64_qualified_opaque_asm(const MinicCoreInlineAsm *a) {
     static const char *const allowed[] = {
-        "msrdaifset,#3", "msrdaifclr,#3",
+        "msrdaifset,#3", "msrdaifclr,#3", "msrdaifclr,#8",
         "yield", "hint#6", "hint#20", "sev", "sevl", "wfe", "wfi", "nop",
         "dsbsy", "dsbst", "dsbish", "dsbishst", "dsbld",
         "dmbish", "dmbishld", "dmbishst", "dmbsy",
@@ -473,6 +473,11 @@ static const char *aarch64_linux_mrs_register(const char *text, size_t len) {
         {"mrs%0,par_el1", "par_el1"},
         {"mrs%0,id_aa64mmfr1_el1", "id_aa64mmfr1_el1"},
         {"mrs%0,hcr_el2", "hcr_el2"},
+        /* KVM hyp/switch.h reads/restores these exact EL2 trap/debug
+         * registers using the ordinary read_sysreg() GNU "=r" API. */
+        {"mrs%0,fpexc32_el2", "fpexc32_el2"},
+        {"mrs%0,hstr_el2", "hstr_el2"},
+        {"mrs%0,mdcr_el2", "mdcr_el2"},
         {"mrs%0,tpidr_el0", "tpidr_el0"},
         {"mrs%0,mdscr_el1", "mdscr_el1"},
         {"mrs%0,ttbr1_el1", "ttbr1_el1"},
@@ -503,7 +508,7 @@ static const char *aarch64_barrier_template(const char *text, size_t len) {
         "dmb osh", "dmb oshld", "dmb oshst",
         "dsb sy", "dsb ish", "dsb ishst", "dsb ld", "dsb st",
         "dsb nsh", "dsb nshst", "isb",
-        "msr daifset, #3", "msr daifclr, #3",
+        "msr daifset, #3", "msr daifclr, #3", "msr daifclr, #8",
         "yield", "hint #6", "hint #20", "sev", "sevl", "wfe", "wfi", "nop",
         "ic ialluis"
     };
@@ -1073,7 +1078,7 @@ static bool aarch64_linux_percpu_rmw_form(
             const char *reg;
             const char *value, *memory, *return_value;
             const bool numeric = strstr(old_body, "%2") != NULL;
-            unsigned int returns_new;
+            unsigned int returns_new, nop_style;
             if (!aarch64_linux_percpu_rmw_form(
                     old_body, strlen(old_body), &old)) return false;
             reg = old.width == 8U ? "%" : "%w";
@@ -1084,6 +1089,7 @@ static bool aarch64_linux_percpu_rmw_form(
              * ret, so LSE's replacement must disambiguate whether the
              * source produces a return value. The named source is unique. */
             for (returns_new = 0U; returns_new < 2U; ++returns_new) {
+              for (nop_style = 0U; nop_style < 2U; ++nop_style) {
                 int written;
                 if ((!numeric && old.returns_new != (returns_new != 0U)) ||
                     (returns_new && strcmp(old.op->name, "add") != 0))
@@ -1097,18 +1103,21 @@ static bool aarch64_linux_percpu_rmw_form(
                 else continue;
                 written = returns_new ? snprintf(expected, sizeof(expected),
                     ".arch_extensionlse%s%s%s,%s%s,%s"
-                    "add%s%s,%s%s,%s%snopnop",
+                    "add%s%s,%s%s,%s%s%s",
                     mnemonic, reg, value, reg, return_value, memory,
-                    reg, return_value, reg, return_value, reg, value) :
+                    reg, return_value, reg, return_value, reg, value,
+                    nop_style ? ".rept2nop.endr" : "nopnop") :
                     snprintf(expected, sizeof(expected),
-                    ".arch_extensionlse%s%s%s,%snopnopnop",
-                    mnemonic, reg, value, memory);
+                    ".arch_extensionlse%s%s%s,%s%s",
+                    mnemonic, reg, value, memory,
+                    nop_style ? ".rept3nop.endr" : "nopnopnop");
                 if (written > 0 && (size_t)written < sizeof(expected) &&
                     strcmp(new_body, expected) == 0) {
                     *result = old;
                     result->returns_new = returns_new != 0U;
                     return true;
                 }
+              }
             }
             return false;
         }
@@ -1250,20 +1259,26 @@ static bool aarch64_linux_xchg_form(
         if (aarch64_linux_alt_lse_partition(
                 text, len, old_body, sizeof(old_body),
                 new_body, sizeof(new_body))) {
-            int written;
+            unsigned int nop_style;
             if (!aarch64_linux_xchg_form(
                     old_body, strlen(old_body), &old)) return false;
             width = old.width == 1U ? 0U : old.width == 2U ? 1U :
                     old.width == 4U ? 2U : 3U;
-            written = snprintf(expected, sizeof(expected),
-                ".arch_extensionlseswp%s%s%s,%s,%%2"
-                "nopnopnop%s",
-                order[old.mode], suffix[width], new_reg[width],
-                old_reg[width], old.mode == 3U ? "nop" : "");
-            if (written <= 0 || (size_t)written >= sizeof(expected) ||
-                strcmp(new_body, expected) != 0) return false;
-            *result = old;
-            return true;
+            for (nop_style = 0U; nop_style < 2U; ++nop_style) {
+                const int written = snprintf(expected, sizeof(expected),
+                    ".arch_extensionlseswp%s%s%s,%s,%%2"
+                    "%s%s",
+                    order[old.mode], suffix[width], new_reg[width],
+                    old_reg[width],
+                    nop_style ? ".rept3nop.endr" : "nopnopnop",
+                    old.mode == 3U ? "nop" : "");
+                if (written > 0 && (size_t)written < sizeof(expected) &&
+                    strcmp(new_body, expected) == 0) {
+                    *result = old;
+                    return true;
+                }
+            }
+            return false;
         }
     }
     if (!text || !len || !result || len >= sizeof(compact)) return false;
@@ -1558,7 +1573,7 @@ static const char *aarch64_linux_msr_register(const char *text, size_t len) {
         "cntp_ctl_el0", "cntp_cval_el0", "cntv_ctl_el0",
         "cntv_cval_el0", "tpidr_el0", "tpidrro_el0",
         "tpidr_el2", "hcr_el2", "cptr_el2", "vtcr_el2",
-        "vttbr_el2"
+        "vttbr_el2", "fpexc32_el2", "hstr_el2", "mdcr_el2"
     };
     char compact[96];
     size_t i, n = 0U;
@@ -1771,7 +1786,79 @@ static const Aarch64LinuxWriteSysreg aarch64_linux_write_sysregs[] = {
     {3U,0U,12U,8U,4U}, /* ICC_AP1R0_EL1, GNU SYS_AP1Rn macro 4|0 */
     {3U,0U,12U,8U,5U}, /* ICC_AP1R1_EL1, GNU SYS_AP1Rn macro 4|1 */
     {3U,0U,12U,8U,6U}, /* ICC_AP1R2_EL1, GNU SYS_AP1Rn macro 4|2 */
-    {3U,0U,12U,8U,7U}  /* ICC_AP1R3_EL1, GNU SYS_AP1Rn macro 4|3 */
+    {3U,0U,12U,8U,7U}, /* ICC_AP1R3_EL1, GNU SYS_AP1Rn macro 4|3 */
+    /* Linux 6.6 arch/arm64/tools/sysreg + KVM hyp/switch.h: explicit
+     * hypervisor trap controls. Each exact 5-field instruction encoding
+     * is lowered as privileged MSR, never as a discarded GNU macro. */
+    {3U,4U,1U,1U,4U}, /* HFGRTR_EL2 */
+    {3U,4U,1U,1U,5U}, /* HFGWTR_EL2 */
+    {3U,4U,1U,1U,6U}, /* HFGITR_EL2 */
+    {3U,4U,3U,1U,4U}, /* HDFGRTR_EL2 */
+    {3U,4U,3U,1U,5U}, /* HDFGWTR_EL2 */
+    {3U,4U,1U,2U,2U}, /* HCRX_EL2 */
+    {3U,4U,5U,2U,3U}, /* VSESR_EL2 */
+    /* Linux original KVM PAUTH key save/restore: ten architectural
+     * SYS_AP*KEY*EL1 names, with exact op1/CRn/CRm/op2 pairs. */
+    {3U,0U,2U,1U,0U}, /* APIAKEYLO_EL1 */
+    {3U,0U,2U,1U,1U}, /* APIAKEYHI_EL1 */
+    {3U,0U,2U,1U,2U}, /* APIBKEYLO_EL1 */
+    {3U,0U,2U,1U,3U}, /* APIBKEYHI_EL1 */
+    {3U,0U,2U,2U,0U}, /* APDAKEYLO_EL1 */
+    {3U,0U,2U,2U,1U}, /* APDAKEYHI_EL1 */
+    {3U,0U,2U,2U,2U}, /* APDBKEYLO_EL1 */
+    {3U,0U,2U,2U,3U}, /* APDBKEYHI_EL1 */
+    {3U,0U,2U,3U,0U}, /* APGAKEYLO_EL1 */
+    {3U,0U,2U,3U,1U}, /* APGAKEYHI_EL1 */
+    /* The real Linux 6.6 KVM protected-hyp and VHE sources use these
+     * additional architectural system registers through the same GNU
+     * write_sysreg_s() machinery.  The tuple is the hardware encoding;
+     * these are not template-string or function-name based exceptions.
+     * EL1 control, translation, exception, timer and debug state. */
+    {3U,0U,1U,0U,0U}, /* SCTLR_EL1 */
+    {3U,0U,1U,0U,2U}, /* CPACR_EL1 */
+    {3U,0U,1U,0U,5U}, /* RGSR_EL1 */
+    {3U,0U,1U,0U,6U}, /* GCR_EL1 */
+    {3U,0U,1U,2U,0U}, /* ZCR_EL1 */
+    {3U,0U,1U,2U,1U}, /* TRFCR_EL1 */
+    {3U,0U,12U,1U,1U}, /* DISR_EL1 */
+    {3U,0U,2U,0U,0U}, /* TTBR0_EL1 */
+    {3U,0U,2U,0U,2U}, /* TCR_EL1 */
+    {3U,0U,4U,0U,0U}, /* SPSR_EL1 */
+    {3U,0U,4U,0U,1U}, /* ELR_EL1 */
+    {3U,0U,5U,2U,0U}, /* ESR_EL1 */
+    {3U,0U,5U,6U,0U}, /* TFSR_EL1 */
+    {3U,0U,5U,6U,1U}, /* TFSRE0_EL1 */
+    {3U,0U,9U,9U,0U}, /* PMSCR_EL1 */
+    /* EL2 control, stage-2 translation, virtual GIC and timer registers. */
+    {3U,4U,1U,0U,0U}, /* SCTLR_EL2 */
+    {3U,4U,1U,2U,0U}, /* ZCR_EL2 */
+    {3U,4U,12U,1U,1U}, /* DISR_EL2 */
+    {3U,4U,12U,11U,0U}, /* ICH_HCR_EL2 */
+    {3U,4U,12U,11U,7U}, /* ICH_VMCR_EL2 */
+    {3U,4U,12U,12U,0U}, /* ICH_AP0R0_EL2 */
+    {3U,4U,12U,12U,1U}, /* ICH_AP0R1_EL2 */
+    {3U,4U,12U,12U,2U}, /* ICH_AP0R2_EL2 */
+    {3U,4U,12U,8U,0U}, /* ICH_LR0_EL2 */
+    {3U,4U,12U,8U,1U}, /* ICH_LR1_EL2 */
+    {3U,4U,12U,8U,2U}, /* ICH_LR2_EL2 */
+    {3U,4U,12U,9U,0U}, /* ICH_LR8_EL2 */
+    {3U,4U,12U,9U,1U}, /* ICH_LR9_EL2 */
+    {3U,4U,12U,9U,2U}, /* ICH_LR10_EL2 */
+    {3U,4U,12U,9U,5U}, /* ICH_LR13_EL2 */
+    {3U,4U,14U,0U,6U}, /* CNTVOFF_EL2 */
+    {3U,4U,4U,0U,0U}, /* SPSR_EL2 */
+    {3U,4U,4U,0U,1U}, /* ELR_EL2 */
+    {3U,5U,1U,0U,0U}, /* SCTLR_EL12 */
+    {3U,5U,1U,0U,2U}, /* CPACR_EL12 */
+    {3U,5U,1U,2U,0U}, /* ZCR_EL12 */
+    {3U,5U,14U,2U,2U}, /* EL12 virtualized timer control */
+    {3U,5U,2U,0U,0U}, /* TTBR0_EL12 */
+    {3U,5U,2U,0U,1U}, /* TTBR1_EL12 */
+    {3U,5U,2U,0U,2U}, /* TCR_EL12 */
+    {3U,5U,4U,0U,0U}, /* SPSR_EL12 */
+    {3U,5U,5U,1U,0U}, /* AFSR0_EL12 */
+    {3U,5U,5U,1U,1U}, /* AFSR1_EL12 */
+    {3U,5U,5U,2U,0U}  /* ESR_EL12 */
 };
 
 /* Linux 6.6 arm64 sysreg.h write_sysreg_s() is the WRITE companion to

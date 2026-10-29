@@ -26,6 +26,7 @@ typedef struct MinicFunctionAttributeContext {
     bool is_internal;
     bool is_inline;
     bool is_extern;
+    MinicFunctionCallingConvention *calling_convention;
     char *section_name;
     size_t section_capacity;
     size_t *section_name_length;
@@ -280,6 +281,18 @@ static bool consume_function_attribute(MinicParser *parser,
                            (int)minic_parser_span_length(attribute->name_span),
                            parser->source + attribute->name_span.begin.offset);
         return false;
+    }
+
+    if (descriptor->kind == MINIC_ATTRIBUTE_MS_ABI) {
+        if (context->calling_convention == NULL || attribute->has_arguments ||
+            !minic_target_info_function_calling_convention_scalar_call_supported(
+                parser->target_info, MINIC_CALLING_CONVENTION_MS_X64)) {
+            minic_parser_error(parser,
+                "GNU ms_abi function attribute requires x86-64 scalar ABI support");
+            return false;
+        }
+        *context->calling_convention = MINIC_CALLING_CONVENTION_MS_X64;
+        return true;
     }
 
     if (descriptor->kind == MINIC_ATTRIBUTE_NOCF_CHECK ||
@@ -549,6 +562,7 @@ static bool parse_function_attribute_lists(MinicParser *parser,
     context.is_internal = is_internal;
     context.is_inline = is_inline;
     context.is_extern = false;
+    context.calling_convention = NULL;
     context.section_name = NULL;
     context.section_capacity = 0U;
     context.section_name_length = NULL;
@@ -572,6 +586,7 @@ static bool apply_function_attribute_list(MinicParser *parser,
                                           bool is_inline,
                                           bool is_extern,
                                           bool allow_header_vector_pcs,
+                                          MinicFunctionCallingConvention *calling_convention,
                                           char *section_name,
                                           size_t section_capacity,
                                           size_t *section_name_length,
@@ -595,6 +610,7 @@ static bool apply_function_attribute_list(MinicParser *parser,
     context.is_internal = is_internal;
     context.is_inline = is_inline;
     context.is_extern = is_extern;
+    context.calling_convention = calling_convention;
     context.section_name = section_name;
     context.section_capacity = section_capacity;
     context.section_name_length = section_name_length;
@@ -750,13 +766,16 @@ static bool parse_persistent_function_attributes(MinicParser *parser,
                                                  size_t *explicit_alignment,
                                                  bool *force_emit,
                                                  bool *is_constructor,
-                                                 MinicSourceSpan *alias_symbol_literal) {
+                                                 MinicSourceSpan *alias_symbol_literal,
+                                                 MinicFunctionCallingConvention *calling_convention) {
     MinicFunctionAttributeContext context;
 
     context.allow_gnu_inline = false;
+    context.allow_header_vector_pcs = false;
     context.is_internal = is_internal;
     context.is_inline = false;
     context.is_extern = false;
+    context.calling_convention = calling_convention;
     context.section_name = section_name;
     context.section_capacity = section_capacity;
     context.section_name_length = section_name_length;
@@ -1091,6 +1110,7 @@ static bool record_function_declaration_entity(MinicParser *parser,
                                                const MinicType *parameter_types,
                                                size_t parameter_count,
                                                bool is_variadic,
+                                               MinicFunctionCallingConvention calling_convention,
                                                bool is_internal,
                                                bool is_noreturn,
                                                bool is_weak,
@@ -1114,6 +1134,14 @@ static bool record_function_declaration_entity(MinicParser *parser,
         minic_parser_error(parser, "GNU weak requires external function linkage");
         return false;
     }
+    if (calling_convention == MINIC_CALLING_CONVENTION_MS_X64 &&
+        !minic_parser_calling_convention_fixed_scalar_supported(
+            parser, calling_convention, return_type, parameter_types,
+            parameter_count, is_variadic)) {
+        minic_parser_error(parser,
+            "ms_abi function declaration requires supported fixed scalar signature");
+        return false;
+    }
     function_id = minic_parser_find_function(parser, name_span);
     if (function_id != MINIC_FUNCTION_INVALID) {
         existing_function = minic_c0_program_function(parser->program, function_id);
@@ -1125,6 +1153,13 @@ static bool record_function_declaration_entity(MinicParser *parser,
         }
         if (existing_function->is_internal) {
             is_internal = true;
+        }
+        if (calling_convention == MINIC_CALLING_CONVENTION_DEFAULT)
+            calling_convention = existing_function->calling_convention;
+        else if (existing_function->calling_convention != MINIC_CALLING_CONVENTION_DEFAULT &&
+                 existing_function->calling_convention != calling_convention) {
+            minic_parser_error(parser, "conflicting function calling convention");
+            return false;
         }
     } else {
         if (minic_parser_find_global_object_entity(parser, name_span) !=
@@ -1145,6 +1180,11 @@ static bool record_function_declaration_entity(MinicParser *parser,
             }
             return false;
         }
+    }
+    if (!minic_c0_program_set_function_calling_convention(
+            parser->program, function_id, calling_convention)) {
+        minic_parser_error(parser, "conflicting function calling convention");
+        return false;
     }
     if (is_noreturn &&
         !minic_c0_program_set_function_noreturn(parser->program, function_id, true)) {
@@ -1186,6 +1226,7 @@ static bool finish_function_declaration_entity(MinicParser *parser,
                                                const MinicType *parameter_types,
                                                size_t parameter_count,
                                                bool is_variadic,
+                                               MinicFunctionCallingConvention calling_convention,
                                                bool is_internal,
                                                bool is_noreturn,
                                                bool is_weak,
@@ -1209,6 +1250,7 @@ static bool finish_function_declaration_entity(MinicParser *parser,
                                             parameter_types,
                                             parameter_count,
                                             is_variadic,
+                                            calling_convention,
                                             is_internal,
                                             is_noreturn,
                                             is_weak,
@@ -1273,6 +1315,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     bool is_static_declaration;
     bool is_main;
     bool is_variadic;
+    MinicFunctionCallingConvention calling_convention;
     bool is_weak;
     char assembler_name[256];
     size_t assembler_name_length;
@@ -1302,6 +1345,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     (void)memset(&declarator_attributes, 0, sizeof(declarator_attributes));
     (void)memset(&declaration_prefix, 0, sizeof(declaration_prefix));
     is_variadic = false;
+    calling_convention = MINIC_CALLING_CONVENTION_DEFAULT;
     is_weak = false;
     assembler_name_length = 0U;
     has_assembler_name = false;
@@ -1505,6 +1549,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
         size_t typed_parameter_count;
         size_t parameter_index;
         bool typed_is_variadic;
+        MinicFunctionCallingConvention typed_calling_convention;
         bool declaration_is_weak;
 
         if (parser->current.kind == MINIC_TOKEN_LPAREN) {
@@ -1524,6 +1569,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
         typed_return_type = function_type->return_type;
         typed_parameter_count = function_type->parameter_count;
         typed_is_variadic = function_type->is_variadic;
+        typed_calling_convention = function_type->calling_convention;
         typed_is_variadic = function_type->is_variadic;
         for (parameter_index = 0U; parameter_index < typed_parameter_count; ++parameter_index) {
             typed_parameter_types[parameter_index] =
@@ -1537,6 +1583,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                 is_inline,
                 is_extern_declaration,
                 !is_internal && aarch64_header_vector_return(typed_return_type),
+                &typed_calling_convention,
                 section_name,
                 sizeof(section_name),
                 &section_name_length,
@@ -1588,7 +1635,8 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                     &entity_explicit_alignment,
                     &entity_force_emit,
                     NULL,
-                    NULL)) {
+                    NULL,
+                    &typed_calling_convention)) {
                 return false;
             }
             if (parser->current.kind != MINIC_TOKEN_COMMA &&
@@ -1603,6 +1651,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                                                     typed_parameter_types,
                                                     typed_parameter_count,
                                                     typed_is_variadic,
+                                                    typed_calling_convention,
                                                     is_internal,
                                                     entity_is_noreturn,
                                                     entity_is_weak,
@@ -1850,6 +1899,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
             is_inline,
             is_extern_declaration,
             !is_internal && aarch64_header_vector_return(return_type),
+            &calling_convention,
             section_name,
             sizeof(section_name),
             &section_name_length,
@@ -1906,7 +1956,8 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                                               &object_explicit_alignment,
                                               &force_emit,
                                               &is_constructor,
-                                              &alias_symbol_literal)) {
+                                              &alias_symbol_literal,
+                                              &calling_convention)) {
         return false;
     }
     if (function_id != MINIC_FUNCTION_INVALID) {
@@ -1919,6 +1970,15 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
         }
         if (existing_function->is_internal) {
             is_internal = true;
+        }
+        /* An unannotated redeclaration inherits a previously selected
+         * ABI. An explicit incompatible ABI must never silently replace it. */
+        if (calling_convention == MINIC_CALLING_CONVENTION_DEFAULT)
+            calling_convention = existing_function->calling_convention;
+        else if (existing_function->calling_convention != MINIC_CALLING_CONVENTION_DEFAULT &&
+                 existing_function->calling_convention != calling_convention) {
+            minic_parser_error(parser, "conflicting function calling convention");
+            return false;
         }
     }
 
@@ -1935,6 +1995,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                                                   parameter_types,
                                                   parameter_count,
                                                   is_variadic,
+                                                  calling_convention,
                                                   is_internal,
                                                   is_noreturn,
                                                   is_weak,
@@ -1949,6 +2010,14 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                                                   object_explicit_alignment,
                                                   force_emit,
                                                   alias_symbol_literal);
+    }
+    /* Caller-side Win64 marshalling is implemented; definition ingress,
+     * nonvolatile RDI/RSI/XMM6-15 saves and MS return ABI are separate.
+     * Reject bodies until their complete machine ABI is implemented. */
+    if (calling_convention != MINIC_CALLING_CONVENTION_DEFAULT) {
+        minic_parser_error(parser,
+            "ms_abi function definition requires Microsoft x64 incoming ABI lowering");
+        return false;
     }
     if (alias_symbol_literal.end.offset != 0U) {
         minic_parser_error(parser, "GNU alias applies to declarations, not function definitions");

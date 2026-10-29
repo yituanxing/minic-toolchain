@@ -273,8 +273,11 @@ bool minic_parser_declare_block_scope_extern_object(MinicParser *parser,
                                                     MinicGlobalObjectId *object_id) {
     MinicGlobalObjectId existing_id;
 
-    if (parser == NULL || object_id == NULL || minic_type_is_void(object_type) ||
-        minic_type_is_function(object_type)) {
+    /* GNU linker section boundaries are often declared `extern const void`
+     * inside a function. Such declarations own no storage and only their
+     * addresses can be used. Global-object creation and AST verification
+     * already reject *definitions* of void objects; keep that distinction. */
+    if (parser == NULL || object_id == NULL || minic_type_is_function(object_type)) {
         if (parser != NULL) {
             minic_parser_error(parser, "invalid block-scope extern object type");
         }
@@ -1086,6 +1089,7 @@ static bool parse_preformed_static_array_definition(MinicParser *parser,
                                                     bool has_section,
                                                     size_t explicit_alignment) {
     const MinicArrayType *array_type;
+    MinicType instance_type;
     MinicGlobalObjectId object_id;
 
     if (parser == NULL || !minic_type_is_array(object_type) ||
@@ -1100,11 +1104,13 @@ static bool parse_preformed_static_array_definition(MinicParser *parser,
         minic_parser_error(parser, "invalid pre-formed static array definition type");
         return false;
     }
-    if (!minic_c0_program_add_global_object(
+    if (!minic_declaration_instantiate_incomplete_array_object_type(
+            parser->program, object_type, &instance_type) ||
+        !minic_c0_program_add_global_object(
             parser->program,
             parser->source + name_span.begin.offset,
             minic_parser_span_length(name_span),
-            object_type,
+            instance_type,
             true,
             static_object_type_is_read_only(parser->program, object_type),
             &object_id) ||
@@ -1121,6 +1127,7 @@ static bool parse_preformed_static_array_definition(MinicParser *parser,
         return false;
     }
 
+    object_type = instance_type;
     array_type = minic_c0_program_array_type(parser->program, object_type.array_type_id);
     if (array_type == NULL) {
         minic_parser_error(parser, "invalid pre-formed static array descriptor");

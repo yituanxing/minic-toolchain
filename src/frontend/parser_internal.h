@@ -277,6 +277,10 @@ bool minic_parser_function_signature_matches(const MinicFunction *function,
                                              const MinicType *parameter_types,
                                              size_t parameter_count,
                                              bool is_variadic);
+bool minic_parser_calling_convention_fixed_scalar_supported(
+    const MinicParser *parser, MinicFunctionCallingConvention convention,
+    MinicType return_type, const MinicType *parameter_types,
+    size_t parameter_count, bool is_variadic);
 bool minic_parser_parse_gnu_function_attributes(MinicParser *parser);
 bool minic_parser_parse_gnu_section_attribute(
     MinicParser *parser, char *buffer, size_t capacity, size_t *length, bool *has_section);

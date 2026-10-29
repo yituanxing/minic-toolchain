@@ -65,18 +65,44 @@ preprocess parameter
 "$minic" --target=x86_64-linux -S "$work/parameter.i" \
     -o "$work/parameter.s" || fail 'MiniC rejected parenthesized form'
 
-# CALL through an MS ABI pointer is NOT covered by a declaration-only
-# improvement. All source and target phases must fail closed until the
-# Win64 RCX/RDX/R8/R9 + XMM + 32-byte shadow-space backend is implemented.
+# A supported fixed-scalar MS ABI function-pointer CALL now has a genuine
+# Win64 register/stack plan (including the mandatory 32-byte home area).
 cat >"$work/call.c" <<'SRC'
 typedef long efi_callback_t(long, long);
 struct Table { efi_callback_t __attribute__((ms_abi)) *callback; };
-long bad_sysv_call(struct Table *tab) { return tab->callback(11, 22); }
+long ms_scalar_indirect_call(struct Table *tab) { return tab->callback(11, 22); }
 SRC
 preprocess call
 "$host_cc" -std=gnu11 -Wall -Wextra -Werror -c "$work/call.c" \
     -o "$work/call-gnu.o" || fail 'GNU reference does not accept call form'
-reject x86_64-linux call 'ms_abi indirect call requires Microsoft x64 ABI'
+"$minic" --target=x86_64-linux -S "$work/call.i" -o "$work/call.s" ||
+    fail 'MiniC rejected supported fixed-scalar indirect MS ABI call'
+grep -F 'subq $32, %rsp' "$work/call.s" >/dev/null ||
+    fail 'MS ABI indirect call omitted 32-byte shadow space'
+grep -F 'call *%r11' "$work/call.s" >/dev/null ||
+    fail 'MS ABI indirect call omitted target register'
+
+cat >"$work/direct-declaration.c" <<'SRC'
+extern __attribute__((ms_abi)) long efi_direct(long address);
+long call_efi_direct(void) { return efi_direct(7); }
+SRC
+preprocess direct-declaration
+"$minic" --target=x86_64-linux -S "$work/direct-declaration.i" \
+    -o "$work/direct-declaration.s" ||
+    fail 'MiniC rejected supported MS ABI direct call declaration'
+grep -F 'subq $32, %rsp' "$work/direct-declaration.s" >/dev/null ||
+    fail 'MS ABI direct call omitted 32-byte shadow space'
+
+# MS ABI function *definitions* still require Win64 incoming parameter,
+# nonvolatile-save and return ABI lowering; they remain fail-closed.
+cat >"$work/direct.c" <<'SRC'
+__attribute__((ms_abi)) long efi_direct(long address) { return address + 1; }
+long call_efi_direct(void) { return efi_direct(7); }
+SRC
+preprocess direct
+"$host_cc" -std=gnu11 -Wall -Wextra -Werror -c "$work/direct.c" \
+    -o "$work/direct-gnu.o" || fail 'GNU rejected direct MS ABI source'
+reject x86_64-linux direct 'ms_abi function definition requires Microsoft x64 incoming ABI'
 
 # A pure type declaration using the x86-only ABI attribute may not be
 # treated as a portable pointer on LP64D/AAPCS64 (where it is meaningless).
@@ -89,4 +115,4 @@ for target in aarch64-linux loongarch64-linux; do
     test ! -e "$work/foreign-${target}.s" || fail 'foreign partial output'
 done
 
-printf '%s\n' 'X86_MSABI_FIELD=PASS GNU_decl=2 MiniC_GNU_AS=2 typed_table=1 parenthesized_parameter=1 indirect_call_reject=1 foreign_target_reject=2'
+printf '%s\n' 'X86_MSABI_FIELD=PASS GNU_decl=2 MiniC_GNU_AS=2 typed_table=1 parenthesized_parameter=1 direct_call=1 indirect_call=1 definition_reject=1 foreign_target_reject=2'

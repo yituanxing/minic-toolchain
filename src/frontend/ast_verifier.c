@@ -467,6 +467,7 @@ static bool verify_expression(const MinicC0Program *program,
         function_type = minic_c0_program_function_type(program, pointee.function_type_id);
         if (function_type == NULL || function_type->parameter_count != function->parameter_count ||
             function_type->is_variadic != function->is_variadic ||
+            function_type->calling_convention != function->calling_convention ||
             !minic_type_equal(function_type->return_type, function->return_type)) {
             return false;
         }

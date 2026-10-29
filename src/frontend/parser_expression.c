@@ -380,7 +380,12 @@ static bool parse_function_reference(MinicParser *parser,
                                                      function->parameter_count,
                                                      function->is_variadic,
                                                      &function_type) ||
-        !minic_type_pointer_to(function_type, &expression.type)) {
+        !minic_type_pointer_to(function_type, &expression.type) ||
+        !minic_function_calling_convention_valid(function->calling_convention) ||
+        (function->calling_convention != MINIC_CALLING_CONVENTION_DEFAULT &&
+         !minic_c0_program_function_pointer_with_calling_convention(
+             parser->program, expression.type, function->calling_convention,
+             &expression.type))) {
         minic_parser_error(parser, "cannot form function pointer type");
         return false;
     }
@@ -1057,6 +1062,7 @@ static bool gnu_transparent_union_function_pointer_call_compatible(
     if (want == NULL || have == NULL ||
         want->parameter_count != have->parameter_count ||
         want->is_variadic != have->is_variadic ||
+        want->calling_convention != have->calling_convention ||
         !minic_c0_types_compatible(program, want->return_type, have->return_type))
         return false;
     for (i = 0U; i < want->parameter_count; ++i) {

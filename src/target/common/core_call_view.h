@@ -26,6 +26,7 @@ typedef struct MinicCoreCallView {
     size_t argument_count;
     size_t parameter_count;
     bool is_variadic;
+    MinicFunctionCallingConvention calling_convention;
     MinicCoreCallReturnForm return_form;
 } MinicCoreCallView;
 

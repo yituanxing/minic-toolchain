@@ -29,6 +29,38 @@ bool minic_parser_function_signature_matches(const MinicFunction *function,
     return true;
 }
 
+static bool calling_convention_scalar_type_supported(
+    const MinicParser *parser, MinicType type, bool allow_void) {
+    unsigned int width;
+    if (allow_void && minic_type_is_void(type)) return true;
+    if (minic_type_is_pointer(type) || minic_type_is_float(type) ||
+        minic_type_is_double(type)) return true;
+    return minic_type_is_integer(type) &&
+           !minic_type_is_int128_integer(type) &&
+           minic_target_info_integer_width(
+               parser->target_info, parser->program, type, &width) &&
+           width != 0U && width <= 64U;
+}
+
+bool minic_parser_calling_convention_fixed_scalar_supported(
+    const MinicParser *parser, MinicFunctionCallingConvention convention,
+    MinicType return_type, const MinicType *parameter_types,
+    size_t parameter_count, bool is_variadic) {
+    size_t i;
+    if (parser == NULL || parser->target_info == NULL || is_variadic ||
+        parameter_count > MINIC_MAX_FUNCTION_PARAMETERS ||
+        (parameter_count != 0U && parameter_types == NULL) ||
+        !minic_target_info_function_calling_convention_scalar_call_supported(
+            parser->target_info, convention) ||
+        !calling_convention_scalar_type_supported(parser, return_type, true))
+        return false;
+    for (i = 0U; i < parameter_count; ++i)
+        if (!calling_convention_scalar_type_supported(
+                parser, parameter_types[i], false))
+            return false;
+    return true;
+}
+
 static bool parse_function_pointer_parameter_declarator(MinicParser *parser,
                                                         MinicType return_type,
                                                         MinicSourceSpan *name_span,

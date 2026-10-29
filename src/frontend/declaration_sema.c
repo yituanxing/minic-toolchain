@@ -66,6 +66,34 @@ minic_declaration_materialize_array_suffix(MinicC0Program *program,
     return MINIC_DECLARATION_ARRAY_MATERIALIZE_OK;
 }
 
+/* An incomplete array typedef is a reusable type spelling, not the mutable
+ * descriptor of any one initialized object. Completing one object must not
+ * impose its inferred bound on subsequent declarations using that typedef. */
+bool minic_declaration_instantiate_incomplete_array_object_type(MinicC0Program *program,
+                                                                MinicType declared_type,
+                                                                MinicType *object_type) {
+    const MinicArrayType *array;
+    MinicType element_type;
+
+    if (program == NULL || object_type == NULL) {
+        return false;
+    }
+    if (!minic_type_is_array(declared_type)) {
+        *object_type = declared_type;
+        return true;
+    }
+    array = minic_c0_program_array_type(program, declared_type.array_type_id);
+    if (array == NULL) {
+        return false;
+    }
+    if (array->is_zero_length || array->element_count != 0U) {
+        *object_type = declared_type;
+        return true;
+    }
+    element_type = array->element_type;
+    return minic_c0_program_add_incomplete_array_type(program, element_type, object_type);
+}
+
 /* Declaration Sema owns external object type compatibility and composite-array
  * mutation. Parser-facing helpers may forward here, but must not duplicate these rules. */
 bool minic_declaration_external_object_types_compatible(const MinicC0Program *program,

@@ -1212,6 +1212,138 @@ unsigned int minic_x86_64_linux_preempt_static_call_form(
     return 0U;
 }
 
+/* Derived byte-for-byte from Linux 6.6.143 arch/x86/include/asm/preempt.h:
+ * GEN_UNARY_RMWcc("decl", pcpu_hot.preempt_count, e,
+ *                 __percpu_arg([var])). rmwcc.h adds the hardware flag
+ * output and memory clobber; percpu.h expands __percpu_arg to %%gs:%[var]. */
+bool minic_x86_64_linux_preempt_gs_dec_form(
+    const char *text, size_t length) {
+    return x86_linux_compact_asm_equals(
+        text, length, "decl%%gs:%[var]/*outputconditioncodee*/") ||
+           /* Core rewrites GNU named %[var] references to ordinal %0
+            * before storing a structured template for machine emission. */
+           x86_linux_compact_asm_equals(
+               text, length, "decl%%gs:%0/*outputconditioncodee*/");
+}
+
+/* Linux 6.6.143 arch/x86/include/asm/ibt.h: gen_endbr() emits a
+ * nonvolatile GNU early-clobber register output. Unlike hand-written
+ * instruction bytes, this two-instruction sequence computes a C u32. */
+bool minic_x86_64_linux_gen_endbr_form(
+    const char *text, size_t length) {
+    return x86_linux_compact_asm_equals(
+        text, length, "mov$~0xfa1e0ff3,%[endbr]not%[endbr]") ||
+           x86_linux_compact_asm_equals(
+               text, length, "mov$~0xfa1e0ff3,%0not%0");
+}
+
+/* _ASM_MUL from Linux arch/x86/lib/kaslr.c resolves to mulq on x86_64.
+ * GCC gives the RAX:RDX product as two distinct outputs; source operand
+ * three accepts register or memory, and we always choose a scratch GPR. */
+bool minic_x86_64_linux_kaslr_mul_form(const char *text, size_t length) {
+    return x86_linux_compact_asm_equals(text, length, "mulq%3");
+}
+
+static bool x86_linux_kaslr_mul_source(
+    const MinicC0Program *program, const MinicInlineAsm *source,
+    MinicTargetInlineAsmContract *contract) {
+    const char *const names[] = {"=a", "=d", "a", "rm"};
+    unsigned int i;
+    if (!program || !source || !contract ||
+        !minic_x86_64_linux_kaslr_mul_form(
+            source->template_text, source->template_length) ||
+        source->is_volatile || source->is_goto || source->label_count ||
+        source->output_count != 2U || source->input_count != 2U ||
+        !source->outputs || !source->inputs || source->clobber_count ||
+        source->register_clobber_count || source->has_memory_clobber)
+        return false;
+    for (i = 0U; i < 4U; ++i) {
+        const MinicInlineAsmOperand *op = i < 2U ?
+            &source->outputs[i] : &source->inputs[i - 2U];
+        const MinicExpression *expr;
+        MinicType type;
+        if (!target_constraint_is(op, names[i]) ||
+            op->access != (i < 2U ? MINIC_INLINE_ASM_OPERAND_WRITE_ONLY :
+                        MINIC_INLINE_ASM_OPERAND_READ_ONLY)) return false;
+        expr = minic_c0_program_expression(program, op->expression);
+        if (!expr || (i < 2U && expr->value_category != MINIC_VALUE_LVALUE) ||
+            (i < 2U && minic_type_is_const(expr->type)) ||
+            !minic_type_unqualified(expr->type, &type) ||
+            !minic_type_equal(type, minic_type_unsigned_long())) return false;
+        contract->kinds[i] = i < 2U ?
+            MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
+            MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    }
+    contract->operand_count = 4U;
+    return true;
+}
+
+static bool x86_linux_gen_endbr_source(
+    const MinicC0Program *program, const MinicInlineAsm *source,
+    MinicTargetInlineAsmContract *contract) {
+    const MinicExpression *expression;
+    MinicType type;
+    if (!program || !source || !contract ||
+        !minic_x86_64_linux_gen_endbr_form(
+            source->template_text, source->template_length) ||
+        source->is_volatile || source->is_goto || source->label_count ||
+        source->output_count != 1U || source->input_count != 0U ||
+        !source->outputs || source->clobber_count ||
+        source->register_clobber_count || source->has_memory_clobber ||
+        !target_constraint_is(&source->outputs[0], "=&r") ||
+        source->outputs[0].access != MINIC_INLINE_ASM_OPERAND_WRITE_ONLY ||
+        !source->outputs[0].name || source->outputs[0].name_length != 5U ||
+        memcmp(source->outputs[0].name, "endbr", 5U) != 0)
+        return false;
+    expression = minic_c0_program_expression(
+        program, source->outputs[0].expression);
+    if (!expression || expression->value_category != MINIC_VALUE_LVALUE ||
+        minic_type_is_const(expression->type) ||
+        !minic_type_unqualified(expression->type, &type) ||
+        !minic_type_equal(type, minic_type_unsigned_int())) return false;
+    contract->operand_count = 1U;
+    contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+    return true;
+}
+
+static bool x86_linux_preempt_gs_dec_source(
+    const MinicC0Program *program, const MinicInlineAsm *source,
+    MinicTargetInlineAsmContract *contract) {
+    const MinicExpression *memory, *zero;
+    MinicType mem_type, flag_type;
+    if (!program || !source || !contract ||
+        !minic_x86_64_linux_preempt_gs_dec_form(
+            source->template_text, source->template_length) ||
+        !source->is_volatile || source->is_goto || source->label_count ||
+        source->output_count != 2U || source->input_count ||
+        !source->outputs || !source->has_memory_clobber ||
+        source->clobber_count != 1U || source->register_clobber_count ||
+        !target_constraint_is(&source->outputs[0], "+m") ||
+        !target_constraint_is(&source->outputs[1], "=@cce") ||
+        source->outputs[0].access != MINIC_INLINE_ASM_OPERAND_READ_WRITE ||
+        source->outputs[1].access != MINIC_INLINE_ASM_OPERAND_WRITE_ONLY ||
+        !source->outputs[0].name || source->outputs[0].name_length != 3U ||
+        memcmp(source->outputs[0].name, "var", 3U) != 0)
+        return false;
+    memory = minic_c0_program_expression(
+        program, source->outputs[0].expression);
+    zero = minic_c0_program_expression(
+        program, source->outputs[1].expression);
+    if (!memory || !zero ||
+        memory->value_category != MINIC_VALUE_LVALUE ||
+        zero->value_category != MINIC_VALUE_LVALUE ||
+        minic_type_is_const(memory->type) || minic_type_is_const(zero->type) ||
+        !minic_type_unqualified(memory->type, &mem_type) ||
+        !minic_type_unqualified(zero->type, &flag_type) ||
+        !minic_type_equal(mem_type, minic_type_int()) ||
+        !minic_type_equal(flag_type, minic_type_bool())) return false;
+    contract->operand_count = 2U;
+    contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
+    contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+    contract->implicit_memory_effect = true;
+    return true;
+}
+
 static bool x86_linux_preempt_static_call_source(
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
@@ -7592,6 +7724,12 @@ bool minic_x86_64_qualify_inline_asm(
     if (x86_linux_irq_stack_call_source(program, source, contract))
         return true;
     if (x86_linux_preempt_static_call_source(program, source, contract))
+        return true;
+    if (x86_linux_preempt_gs_dec_source(program, source, contract))
+        return true;
+    if (x86_linux_gen_endbr_source(program, source, contract))
+        return true;
+    if (x86_linux_kaslr_mul_source(program, source, contract))
         return true;
     if (x86_linux_task_control_source(program, source, contract))
         return true;

@@ -160,13 +160,13 @@ bool minic_parser_parse_parenthesized_pointer_to_array_declarator(
     if (!minic_parser_expect(
             parser, MINIC_TOKEN_RPAREN, "expected ')' after parenthesized pointer declarator") ||
         !minic_parser_parse_array_declarator_suffix(
-            parser, element_type, false, &type, &is_array) ||
-        !is_array) {
-        if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
-            minic_parser_error(parser, "parenthesized object pointer requires an array suffix");
-        }
+            parser, element_type, false, &type, &is_array)) {
         return false;
     }
+    /* `T (*name)` is a valid pointer-to-T object declarator without an array
+     * suffix. The same direct-declarator shape followed by `[N]` remains a
+     * pointer-to-array; a following `(P)` is routed to the function-pointer
+     * parser by the caller's lookahead instead. */
     for (level = 0U; level < pointer_depth; ++level) {
         unsigned int bit;
 

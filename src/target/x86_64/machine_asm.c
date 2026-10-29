@@ -5354,6 +5354,90 @@ bool minic_x86_64_emit_structured_asm(
         }
     }
     {
+        if (minic_x86_64_linux_kaslr_mul_form(
+                info->template_text, info->template_length)) {
+            const MinicCoreStructuredInlineAsmOperand *b = bindings;
+            if (!info->is_volatile || info->is_goto ||
+                info->has_memory_clobber || info->register_clobber_count ||
+                ins->value.structured_inline_asm.operand_count != 4U)
+                return false;
+            for (i = 0U; i < 4U; ++i) {
+                MinicType type;
+                if (b[i].operand_index != i || b[i].early_clobber ||
+                    b[i].has_fixed_register_binding ||
+                    b[i].kind != (i < 2U ?
+                        MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
+                        MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
+                    b[i].value >= fn->value_count ||
+                    (i < 2U ?
+                        (!minic_type_pointee(fn->values[b[i].value].type, &type) ||
+                         !minic_type_equal(type, minic_type_unsigned_long())) :
+                        !minic_type_equal(fn->values[b[i].value].type,
+                                          minic_type_unsigned_long())))
+                    return false;
+            }
+            /* RAX*operand yields the 128-bit product in RDX:RAX. Store
+             * both outputs independently; a C-level 64-bit multiply would
+             * silently destroy the high half used by KASLR diffusion. */
+            return x86_value_load(out, frame, b[2].value, "%rax") &&
+                   x86_value_load(out, frame, b[3].value, "%r10") &&
+                   fputs("  mulq %r10\n", out) != EOF &&
+                   x86_value_load(out, frame, b[0].value, "%r11") &&
+                   fputs("  movq %rax, (%r11)\n", out) != EOF &&
+                   x86_value_load(out, frame, b[1].value, "%r11") &&
+                   fputs("  movq %rdx, (%r11)\n", out) != EOF;
+        }
+    }
+    {
+        if (minic_x86_64_linux_gen_endbr_form(
+                info->template_text, info->template_length)) {
+            const MinicCoreStructuredInlineAsmOperand *output = bindings;
+            MinicType type;
+            if (!info->is_volatile || info->is_goto ||
+                info->has_memory_clobber || info->register_clobber_count ||
+                ins->value.structured_inline_asm.operand_count != 1U ||
+                output[0].operand_index != 0U ||
+                output[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
+                output[0].has_fixed_register_binding ||
+                output[0].value >= fn->value_count ||
+                !minic_type_pointee(fn->values[output[0].value].type, &type) ||
+                !minic_type_equal(type, minic_type_unsigned_int()))
+                return false;
+            /* Mirror GNU's two 32-bit operations, preserving the exact
+             * architectural IBT opcode value as an unsigned C result. */
+            return fputs("  movl $0x05e1f00c, %eax\n  notl %eax\n", out) != EOF &&
+                   x86_value_load(out, frame, output[0].value, "%r11") &&
+                   fputs("  movl %eax, (%r11)\n", out) != EOF;
+        }
+    }
+    {
+        if (minic_x86_64_linux_preempt_gs_dec_form(
+                info->template_text, info->template_length)) {
+            const MinicCoreStructuredInlineAsmOperand *b = bindings;
+            MinicType memory_type, flag_type;
+            if (!info->is_volatile || info->is_goto ||
+                !info->has_memory_clobber || info->register_clobber_count ||
+                ins->value.structured_inline_asm.operand_count != 2U ||
+                b[0].operand_index != 0U || b[1].operand_index != 1U ||
+                b[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE ||
+                b[1].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
+                b[0].early_clobber || b[1].early_clobber ||
+                b[0].has_fixed_register_binding || b[1].has_fixed_register_binding ||
+                b[0].value >= fn->value_count || b[1].value >= fn->value_count ||
+                !minic_type_pointee(fn->values[b[0].value].type, &memory_type) ||
+                !minic_type_pointee(fn->values[b[1].value].type, &flag_type) ||
+                !minic_type_equal(memory_type, minic_type_int()) ||
+                !minic_type_equal(flag_type, minic_type_bool())) return false;
+            /* The per-CPU member's symbolic address is an offset from GS,
+             * not an ordinary C object read. Hardware DECL sets ZF for the
+             * second GNU output, which is materialized as one C _Bool byte. */
+            return x86_value_load(out, frame, b[0].value, "%r11") &&
+                   fputs("  decl %gs:(%r11)\n  sete %al\n", out) != EOF &&
+                   x86_value_load(out, frame, b[1].value, "%r10") &&
+                   fputs("  movb %al, (%r10)\n", out) != EOF;
+        }
+    }
+    {
         const unsigned int gs_bit = minic_x86_64_linux_gs_testcc_form(
             info->template_text, info->template_length);
         if (gs_bit != 0U) {

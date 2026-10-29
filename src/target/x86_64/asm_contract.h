@@ -96,6 +96,12 @@ unsigned int minic_x86_64_linux_irq_stack_call_form(const char *, size_t);
 /* Linux CONFIG_PREEMPT_DYNAMIC static-call trampoline with a fixed RSP live
  * GNU +r output. This is a real CALL, not a register-producing expression. */
 unsigned int minic_x86_64_linux_preempt_static_call_form(const char *, size_t);
+/* Linux __preempt_count_dec_and_test: GS-relative decrement + ZF output. */
+bool minic_x86_64_linux_preempt_gs_dec_form(const char *, size_t);
+/* Linux IBT gen_endbr: mov complement / not, named early-clobber u32. */
+bool minic_x86_64_linux_gen_endbr_form(const char *, size_t);
+/* Circular 64x64->128 multiply from arch/x86/lib/kaslr.c. */
+bool minic_x86_64_linux_kaslr_mul_form(const char *, size_t);
 unsigned int minic_x86_64_linux_xstate_fault_form(const char *, size_t);
 bool minic_x86_64_linux_xrstor_alternative_form(const char *, size_t);
 bool minic_x86_64_linux_xsave_triple_alternative_form(const char *, size_t);

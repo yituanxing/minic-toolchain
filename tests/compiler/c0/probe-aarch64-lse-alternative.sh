@@ -16,7 +16,27 @@ static u64 v64;
 void target_barriers(void) {
     asm volatile("dsb st" ::: "memory");
     asm volatile("dsb ld" ::: "memory");
+    asm volatile("dmb oshst" ::: "memory");
     asm volatile("hint #6");
+}
+/* Linux entry-common.c erratum 1463225 manipulates debug sysregs and
+ * clears only the AArch64 DAIF D bit. Preserve exactly that #8 effect. */
+void target_debug_erratum(void) {
+    u64 reg;
+    asm volatile("mrs %0, mdscr_el1" : "=r"(reg));
+    asm volatile("msr mdscr_el1, %x0" :: "rZ"(reg));
+    asm volatile("msr daifclr, #8");
+    asm volatile("isb" ::: "memory");
+}
+/* Genuine 6.6 KVM hyp/switch.h privileged EL2 trap/debug controls. */
+u64 target_hyp_switch(u64 v) {
+    u64 old;
+    asm volatile("mrs %0, fpexc32_el2" : "=r"(old));
+    asm volatile("mrs %0, mdcr_el2" : "=r"(old));
+    asm volatile("msr fpexc32_el2, %x0" :: "rZ"(v));
+    asm volatile("msr hstr_el2, %x0" :: "rZ"(v));
+    asm volatile("msr mdcr_el2, %x0" :: "rZ"(v));
+    return old;
 }
 u32 target_bitrev(u32 x) {
     asm("rbit %w0, %w1" : "=r"(x) : "r"(x));
@@ -42,7 +62,7 @@ u64 alt_xchg_mb_64(u64 x) {
         "\tdmb ish",
         ".arch_extension lse\n"
         "\tswpal\t%3, %0, %2\n"
-        "\tnop\n\tnop\n\tnop\n\tnop")
+        "\t.rept 3\n\tnop\n\t.endr\n\tnop")
         : "=&r"(ret), "=&r"(tmp), "+Q"(v64) : "r"(x) : "memory");
     return ret;
 }
@@ -55,7 +75,7 @@ u32 alt_xchg_relaxed_32(u32 x) {
         "\tcbnz\t%w1, 1b\n",
         ".arch_extension lse\n"
         "\tswp\t%w3, %w0, %2\n"
-        "\tnop\n\tnop\n\tnop")
+        "\t.rept 3\n\tnop\n\t.endr\n")
         : "=&r"(ret), "=&r"(tmp), "+Q"(v32) : "r"(x));
     return ret;
 }
@@ -69,7 +89,7 @@ void alt_percpu_add_64(u64 val) {
         "\tcbnz\t%w[loop], 1b",
         ".arch_extension lse\n"
         "stadd\t%[val], %[ptr]\n"
-        "nop\nnop\nnop")
+        ".rept 3\nnop\n.endr\n")
         : [loop] "=&r"(loop), [tmp] "=&r"(tmp), [ptr] "+Q"(v64)
         : [val] "r"(val));
 }
@@ -83,7 +103,7 @@ u32 alt_percpu_add_return_32(u32 val) {
         ".arch_extension lse\n"
         "ldadd\t%w[val], %w[ret], %[ptr]\n"
         "add\t%w[ret], %w[ret], %w[val]\n"
-        "nop\nnop")
+        ".rept 2\nnop\n.endr\n")
         : [loop] "=&r"(loop), [ret] "=&r"(ret), [ptr] "+Q"(v32)
         : [val] "r"(val));
     return ret;
@@ -95,7 +115,10 @@ for needle in '.hword 33' '.pushsection .altinstructions' \
     'swpal x11, x9, [x10]' 'swp w11, w9, [x10]' \
     'stadd x11, [x10]' 'ldadd w11, w9, [x10]' \
     '.org . - (664b-663b) + (662b-661b)' \
-    'dsb st' 'dsb ld' 'hint #6' 'rbit w9, w9'; do
+    'dsb st' 'dsb ld' 'dmb oshst' 'hint #6' 'rbit w9, w9' \
+    'mrs x9, mdscr_el1' 'msr mdscr_el1, x9' 'msr daifclr, #8' \
+    'mrs x9, fpexc32_el2' 'mrs x9, mdcr_el2' \
+    'msr fpexc32_el2, x9' 'msr hstr_el2, x9' 'msr mdcr_el2, x9'; do
     grep -Fq "$needle" "$d/alternative.s" || {
         echo "AARCH64_ALT_LSE_MISSING=$needle" >&2; exit 1;
     }
@@ -124,4 +147,16 @@ if "$minic" --target=aarch64-linux -S "$d/invalid-dsb.i" \
     echo 'AArch64 opaque ISA gate admitted invalid DSB option' >&2
     exit 1
 fi
-echo 'AARCH64_LSE_ALTERNATIVE=PASS xchg=2 percpu=2 metadata=preserved negatives=4'
+sed 's/msr daifclr, #8/msr daifclr, #7/g' "$d/alternative.i" > "$d/invalid-daif.i"
+if "$minic" --target=aarch64-linux -S "$d/invalid-daif.i" \
+    -o "$d/invalid-daif.s" >/dev/null 2>&1; then
+    echo 'AArch64 privileged DAIF gate admitted unsupported #7 mask' >&2
+    exit 1
+fi
+sed 's/mdcr_el2/alien_el2/g' "$d/alternative.i" > "$d/invalid-sysreg.i"
+if "$minic" --target=aarch64-linux -S "$d/invalid-sysreg.i" \
+    -o "$d/invalid-sysreg.s" >/dev/null 2>&1; then
+    echo 'AArch64 sysreg gate admitted unknown privileged EL2 register' >&2
+    exit 1
+fi
+echo 'AARCH64_LSE_ALTERNATIVE=PASS xchg=2 percpu=2 metadata=preserved negatives=6'

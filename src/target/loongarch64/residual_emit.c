@@ -1,5 +1,6 @@
 #include "target/loongarch64/residual_emit.h"
 #include "target/loongarch64/asm_contract.h"
+#include "target/loongarch64/simd_asm.h"
 #include "target/loongarch64/scalar_normalize.h"
 #include "target/common/direct_residual_plan.h"
 #include "target/common/direct_instruction_semantics.h"
@@ -66,6 +67,14 @@ bool minic_loongarch64_emit_residual_instruction(
                         out, source, id, fn->block_count))
                     return minic_multi_direct_machine_reject(
                         fn, "loongarch64", name, "linux_jump_label_asm_goto",
+                        reject_block, reject_ins, __LINE__);
+                *needs_writeback = false;
+                return true;
+            }
+            if (minic_loongarch64_simd_qualify_opaque(source)) {
+                if (!minic_loongarch64_simd_emit_opaque(out, source))
+                    return minic_multi_direct_machine_reject(
+                        fn, "loongarch64", name, "qualified_simd_asm",
                         reject_block, reject_ins, __LINE__);
                 *needs_writeback = false;
                 return true;

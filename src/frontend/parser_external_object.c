@@ -422,10 +422,17 @@ static bool record_external_tentative_object(MinicParser *parser,
     }
     object_id = minic_parser_find_global_object_entity(parser, name_span);
     if (object_id == MINIC_GLOBAL_OBJECT_INVALID) {
+        MinicType instance_type;
+
+        if (!minic_declaration_instantiate_incomplete_array_object_type(
+                parser->program, object_type, &instance_type)) {
+            minic_parser_error(parser, "cannot instantiate external tentative array type");
+            return false;
+        }
         if (!minic_c0_program_add_tentative_global_object(parser->program,
                                                           parser->source + name_span.begin.offset,
                                                           minic_parser_span_length(name_span),
-                                                          object_type,
+                                                          instance_type,
                                                           false,
                                                           minic_type_is_const(object_type),
                                                           &object_id)) {
@@ -640,6 +647,11 @@ bool minic_parser_external_object_definition(MinicParser *parser,
 
     object_id = minic_parser_find_global_object_entity(parser, name_span);
     if (object_id == MINIC_GLOBAL_OBJECT_INVALID) {
+        if (!minic_declaration_instantiate_incomplete_array_object_type(
+                parser->program, object_type, &object_type)) {
+            minic_parser_error(parser, "cannot instantiate external array definition type");
+            return false;
+        }
         if (!minic_c0_program_add_global_object(parser->program,
                                                 parser->source + name_span.begin.offset,
                                                 minic_parser_span_length(name_span),

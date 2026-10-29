@@ -35,6 +35,8 @@ typedef struct MinicX86ArgumentPlan {
     size_t argument_count, stack_bytes;
     MinicX86ArgCursor end;
     bool is_variadic;
+    /* ABI choice is copied from Core, never inferred from target ISA. */
+    MinicFunctionCallingConvention calling_convention;
 } MinicX86ArgumentPlan;
 /* Sparse SysV outgoing ABI locations, ordered by Common Core CALL ID. */
 typedef struct MinicX86OutgoingCallSite {

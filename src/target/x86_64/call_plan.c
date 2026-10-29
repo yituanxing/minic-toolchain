@@ -123,6 +123,7 @@ bool minic_x86_64_plan_incoming_arguments(
     MinicX86ArgCursor cursor = {0};
     size_t i;
     if (program == NULL || target == NULL || fn == NULL || plan == NULL ||
+        fn->calling_convention != MINIC_CALLING_CONVENTION_DEFAULT ||
         (fn->parameter_count != 0U && fn->parameter_types == NULL) ||
         !x86_sysv_plan_alloc(fn->parameter_count, plan)) return false;
     {
@@ -152,7 +153,53 @@ bool minic_x86_64_plan_outgoing_arguments(
         view->parameter_count > view->argument_count ||
         (view->argument_count != 0U && view->arguments == NULL) ||
         (view->parameter_count != 0U && view->parameter_types == NULL) ||
+        !minic_function_calling_convention_valid(view->calling_convention) ||
         !x86_sysv_plan_alloc(view->argument_count, plan)) return false;
+    plan->calling_convention = view->calling_convention;
+    if (view->calling_convention == MINIC_CALLING_CONVENTION_MS_X64) {
+        /* Win64 consumes one slot per source parameter: GP and XMM registers
+         * have the SAME four positional indices, unlike SysV independent
+         * integer/FP cursors. Every call, including zero-arg, reserves 32B
+         * home space. Slots 4+ occupy the stack above that home space. */
+        if (view->is_variadic || minic_type_is_record(view->return_type) ||
+            minic_type_is_int128_integer(view->return_type) ||
+            minic_type_is_long_double(view->return_type) ||
+            (view->argument_count > ((size_t)INT32_MAX - 47U) / 8U))
+            goto failed;
+        plan->is_variadic = false;
+        for (i = 0U; i < view->argument_count; ++i) {
+            MinicType type;
+            MinicX86ArgLocation *loc = &plan->locations[i];
+            size_t scalar_bytes;
+            bool sign;
+            if (!minic_core_call_view_argument_type(fn, view, i, &type))
+                goto failed;
+            if (i < view->parameter_count)
+                type = view->parameter_types[i];
+            if (minic_type_is_record(type) ||
+                minic_type_is_int128_integer(type) ||
+                minic_type_is_long_double(type))
+                goto failed;
+            loc->gp_index = i;
+            loc->fp_index = i;
+            loc->stack_index = i;
+            loc->on_stack = i >= 4U;
+            if (minic_type_is_float(type) || minic_type_is_double(type)) {
+                loc->kind = MINIC_X86_ARG_SSE;
+            } else if (minic_x86_64_scalar_width(
+                           program, target, type, &scalar_bytes, &sign)) {
+                loc->kind = MINIC_X86_ARG_INTEGER;
+            } else {
+                goto failed;
+            }
+        }
+        if (view->argument_count > 4U)
+            cursor.stack_slots = view->argument_count - 4U;
+        bytes = 32U + cursor.stack_slots * 8U;
+        plan->stack_bytes = (bytes + 15U) & ~(size_t)15U;
+        plan->end = cursor;
+        return true;
+    }
     {
         size_t result_bytes;
         if (view->return_form == MINIC_CORE_CALL_RETURN_OBJECT &&

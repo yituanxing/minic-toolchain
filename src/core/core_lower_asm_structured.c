@@ -465,13 +465,35 @@ MinicCoreLowerStatus core_asm_try_structured_roles_and_asm_goto(
             if (!core_inline_asm_immediate_text(
                     context, &source->inputs[i], immediate_buffers[i],
                     sizeof(immediate_buffers[i]), &resolved[i], &lengths[i]) ||
-                !resolved[i] || lengths[i] == 0U || lengths[i] > 128U)
+                !resolved[i] || lengths[i] == 0U || lengths[i] > 128U) {
+                if (getenv("MINIC_ASM_FRONTIER_TRACE") != NULL)
+                    (void)fprintf(stderr,
+                        "CORE_ASM_GOTO_IMMEDIATE_FAILURE function=%s "
+                        "operand=%zu expression=%zu symbolic=%d integer=%d\n",
+                        context->source_function && context->source_function->name
+                            ? context->source_function->name : "?",
+                        i, (size_t)source->inputs[i].expression,
+                        context->source_function &&
+                            context->source_function->is_integer_specialization &&
+                            context->source_function->specialization_symbolic_known[i] ? 1 : 0,
+                        context->source_function &&
+                            context->source_function->is_integer_specialization &&
+                            context->source_function->specialization_integer_known[i] ? 1 : 0);
                 return MINIC_CORE_LOWER_UNSUPPORTED;
+            }
         }
         for (i = 0U; i < source->label_count; ++i) {
             status = ensure_statement_block(
                 context, source->labels[i].target_statement, &targets[i]);
-            if (status != MINIC_CORE_LOWER_OK) return status;
+            if (status != MINIC_CORE_LOWER_OK) {
+                if (getenv("MINIC_ASM_FRONTIER_TRACE") != NULL)
+                    (void)fprintf(stderr,
+                        "CORE_ASM_GOTO_BLOCK_FAILURE function=%s label=%zu status=%d\n",
+                        context->source_function && context->source_function->name
+                            ? context->source_function->name : "?",
+                        i, (int)status);
+                return status;
+            }
         }
         if (!minic_core_function_add_opaque_inline_asm(
                 context->function, source->template_text,

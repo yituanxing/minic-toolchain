@@ -792,6 +792,7 @@ MinicCoreLowerStatus minic_core_lower_direct_call(MinicCoreLowerContext *context
                                         callee->parameter_types,
                                         callee->parameter_count,
                                         callee->is_variadic,
+                                        callee->calling_convention,
                                         &callee_id) ||
         !minic_core_function_append_call_arguments(
             context->function, arguments, argument_count, &argument_begin)) {
@@ -897,6 +898,7 @@ MinicCoreLowerStatus minic_core_lower_direct_record_call_object(
                                         callee->parameter_types,
                                         callee->parameter_count,
                                         callee->is_variadic,
+                                        callee->calling_convention,
                                         &callee_id) ||
         !minic_core_function_append_call_arguments(
             context->function, arguments, callee->parameter_count, &argument_begin)) {
@@ -1057,6 +1059,7 @@ MinicCoreLowerStatus minic_core_lower_indirect_call(MinicCoreLowerContext *conte
                                                 signature->parameter_types,
                                                 signature->parameter_count,
                                                 signature->is_variadic,
+                                                signature->calling_convention,
                                                 &signature_id) ||
         !minic_core_function_append_call_arguments(
             context->function, arguments, argument_count, &argument_begin)) {
