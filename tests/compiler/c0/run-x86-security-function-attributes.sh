@@ -10,7 +10,7 @@ fixture="$root/tests/compiler/c0/x86_security_function_attributes.c"
 mkdir -p "$work"
 "$host_cc" -E -P -std=gnu11 "$fixture" -o "$work/positive.i"
 "$minic" --target=x86_64-linux -S "$work/positive.i" -o "$work/positive.s"
-for symbol in x86_no_endbr x86_keep_branch x86_bmi2_fallback x86_default_fallback x86_security_probe; do
+for symbol in x86_no_endbr x86_keep_branch x86_bmi2_fallback x86_zstd_bmi2_fallback x86_default_fallback x86_security_probe; do
     grep -F "$symbol:" "$work/positive.s" >/dev/null
 done
 # nocf_check explicitly opts out of ENDBR instrumentation. MiniC has no
@@ -47,4 +47,4 @@ for invalid in \
         "$work/$invalid.err" >/dev/null
 done
 
-printf '%s\n' 'PASS compiler/c0/x86_security_function_attributes positive=4 reject_foreign_targets=4 reject_unsupported_policies=8 backend_ibt_not_claimed=1'
+printf '%s\n' 'PASS compiler/c0/x86_security_function_attributes positive=5 reject_foreign_targets=4 reject_unsupported_policies=8 backend_ibt_not_claimed=1'

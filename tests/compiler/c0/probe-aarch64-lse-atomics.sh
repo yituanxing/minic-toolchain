@@ -54,7 +54,7 @@ u32 lse_cas32(u32 old, u32 updated) {
     return old;
 }
 u64 lse_cas64(u64 old, u64 updated) {
-    asm volatile(".arch_extension lse\n\tcasl\t%[old], %[new], %[v]\n"
+    asm volatile(".arch_extension lse\n\tcasl\t%x[old], %x[new], %[v]\n"
                  : [v] "+Q" (v64), [old] "+r" (old)
                  : [new] "rZ" (updated) : "memory");
     return old;

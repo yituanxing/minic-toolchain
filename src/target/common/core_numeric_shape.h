@@ -17,6 +17,13 @@ bool minic_core_integer_overflow_mixed_add_i32_shape(
     const MinicC0Program *, const MinicTargetInfo *,
     const MinicCoreFunction *, const MinicCoreInstruction *,
     bool *signed_left);
+/* GNU __builtin_mul_overflow computes the full mathematical product, not
+ * the usual C arithmetic-conversion result. Mixed 32-bit operand/result
+ * signedness needs a 64-bit product and explicit result-range comparison. */
+bool minic_core_integer_overflow_mixed_multiply_i32_shape(
+    const MinicC0Program *, const MinicTargetInfo *,
+    const MinicCoreFunction *, const MinicCoreInstruction *,
+    bool *signed_left, bool *signed_right, bool *signed_result);
 bool minic_core_integer_bitscan_shape(
     const MinicC0Program *, const MinicTargetInfo *,
     const MinicCoreFunction *, const MinicCoreInstruction *,

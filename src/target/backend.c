@@ -42,13 +42,15 @@ static const MinicBackend aarch64_backend = {
     MINIC_TARGET_ARCH_AARCH64, "aarch64",
     minic_aarch64_write_c0_program_with_core_functions,
     minic_aarch64_qualify_inline_asm, false,
-    minic_aarch64_requires_qualified_input_asm, NULL
+    minic_aarch64_requires_qualified_input_asm,
+    minic_aarch64_qualify_inline_asm_goto
 };
 static const MinicBackend loongarch64_backend = {
     MINIC_TARGET_ARCH_LOONGARCH64, "loongarch64",
     minic_loongarch64_write_c0_program_with_core_functions,
     minic_loongarch64_qualify_inline_asm, false,
-    minic_loongarch64_requires_qualified_input_asm, NULL
+    minic_loongarch64_requires_qualified_input_asm,
+    minic_loongarch64_qualify_inline_asm_goto
 };
 
 const MinicBackend *minic_backend_for_target(const MinicTargetInfo *target) {

@@ -27,11 +27,20 @@ if [ "$result" -ne 42 ]; then
     exit 1
 fi
 "$cc" -E -P -std=c11 -DMIXED_UNSUPPORTED=1 "$source" -o "$w/unsupported.i"
-for target in x86_64 aarch64 loongarch64; do
+# The x86 machine backend now proves arbitrary-sign 64-bit operands using a
+# full two-limb integer result before conversion to the signed32 target. Its
+# GNU differential, including both signs/operand orders/add/sub/mul, is below.
+# Other target backends have not yet implemented that widening proof and must
+# continue to reject the very same form.
+"$MINIC_CC" --target=x86_64-linux -S "$w/unsupported.i" \
+    -o "$w/signed64-x86_64.s"
+test -s "$w/signed64-x86_64.s"
+for target in aarch64 loongarch64; do
     if "$MINIC_CC" --target="$target-linux" -S "$w/unsupported.i" \
         -o "$w/unsupported-$target.s" >"$w/rejected.out" 2>"$w/rejected.err"; then
         echo "MIXED_OVERFLOW=FAIL unsound signed64 operand admitted target=$target" >&2
         exit 1
     fi
 done
-echo 'MIXED_OVERFLOW=PASS targets=3 10000x2 GNU_native_x86 differential signed32+unsigned64→signed32 fail_closed=3'
+bash "$root/tests/compiler/c0/probe-x86-linux-mixed-overflow.sh" "$MINIC_CC"
+echo 'MIXED_OVERFLOW=PASS targets=3 10000x2 GNU_native_x86 differential signed32+unsigned64→signed32 signed64_x86_proved=1 fail_closed=2'

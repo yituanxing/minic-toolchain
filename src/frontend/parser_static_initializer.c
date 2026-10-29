@@ -3112,11 +3112,9 @@ static bool parse_static_record_array(MinicParser *parser,
     if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
         bool nested_is_array;
 
-        if (inferred_bound) {
-            minic_parser_error(
-                parser, "inferred multi-dimensional static record arrays are not supported yet");
-            return false;
-        }
+        /* The unspecified outer bound belongs to the initializer-list
+         * extent, not to the fully specified inner array element type.
+         * Preserve the inner type, then infer only the outer count below. */
         nested_is_array = false;
         if (!minic_parser_parse_array_declarator_suffix(
                 parser, element_type, false, &nested_element_type, &nested_is_array) ||

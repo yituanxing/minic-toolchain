@@ -463,6 +463,45 @@ static bool emit_linux_iomem_copy(
     return true;
 }
 
+static bool emit_linux_i915_movntdqa(
+    FILE *out, const MinicCoreFunction *fn, const MinicX86Frame *frame,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
+    const unsigned int form = info ? minic_x86_64_linux_i915_movntdqa_form(
+        info->template_text, info->template_length) : 0U;
+    const MinicCoreStructuredInlineAsmOperand *b =
+        ins->value.structured_inline_asm.operands;
+    const bool four = form >= 3U;
+    const char *store = form == 1U || form == 3U ? "movaps" : "movups";
+    size_t i;
+    if (!out || !fn || !frame || !ins || !info || !form ||
+        !info->has_memory_clobber || info->register_clobber_count ||
+        ins->value.structured_inline_asm.operand_count != 2U)
+        return false;
+    for (i = 0U; i < 2U; ++i)
+        if (b[i].operand_index != i || b[i].value >= fn->value_count ||
+            b[i].has_fixed_register_binding || b[i].early_clobber ||
+            b[i].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
+            !minic_type_is_pointer(fn->values[b[i].value].type))
+            return false;
+    if (!x86_value_load(out, frame, b[0].value, "%rax") ||
+        !x86_value_load(out, frame, b[1].value, "%r10"))
+        return false;
+    /* The kernel's kernel_fpu_begin() owns the XMM context. MOVNTDQA is
+     * SSE4.1 and Linux guards the call with X86_FEATURE_XMM4_1; here we
+     * preserve exactly the guarded hardware instruction, not memcpy. */
+    for (i = 0U; i < (four ? 4U : 1U); ++i)
+        if (fprintf(out,
+                    "  movntdqa %zu(%%rax), %%xmm%zu\n",
+                    i * 16U, i) < 0)
+            return false;
+    for (i = 0U; i < (four ? 4U : 1U); ++i)
+        if (fprintf(out,
+                    "  %s %%xmm%zu, %zu(%%r10)\n",
+                    store, i, i * 16U) < 0)
+            return false;
+    return true;
+}
+
 static bool emit_linux_flushcache_copy(
     FILE *out, const MinicCoreFunction *fn, const MinicX86Frame *frame,
     const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
@@ -617,6 +656,36 @@ static bool emit_linux_pvclock_scale(
  * RSP. Each replacement is a genuine five-byte CALL rel32. All feature
  * identifiers and .altinstructions PC-relative metadata are emitted by the
  * target and are independently verified by GNU AS in the Linux fixture. */
+static bool emit_linux_preempt_static_call(
+    FILE *out, const MinicCoreFunction *fn,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
+    const unsigned int form = minic_x86_64_linux_preempt_static_call_form(
+        info->template_text, info->template_length);
+    const MinicCoreStructuredInlineAsmOperand *binding =
+        &ins->value.structured_inline_asm.operands[0];
+    const MinicCoreFixedRegisterBinding *fixed;
+    if (!out || !fn || !ins || !info || !form ||
+        !info->is_volatile || info->is_goto || !info->has_memory_clobber ||
+        info->register_clobber_count ||
+        ins->value.structured_inline_asm.operand_count != 1U ||
+        binding->operand_index != 0U ||
+        binding->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
+        !binding->has_fixed_register_binding || binding->early_clobber ||
+        binding->value >= fn->value_count ||
+        binding->fixed_register_binding_id >= fn->fixed_register_binding_count ||
+        !minic_type_equal(fn->values[binding->value].type,
+                          minic_type_unsigned_long())) return false;
+    fixed = &fn->fixed_register_bindings[binding->fixed_register_binding_id];
+    if (!fixed->register_name || strcmp(fixed->register_name, "rsp") != 0)
+        return false;
+    /* The fixed RSP GNU +r constraint encodes a liveness barrier. A return
+     * from the trampoline restores RSP, so emitting a synthetic read/write
+     * store for this operand would itself corrupt the hardware stack. */
+    return fputs(form == 1U ? "  call __SCT__preempt_schedule\n" :
+                            "  call __SCT__preempt_schedule_notrace\n",
+                 out) != EOF;
+}
+
 static bool emit_linux_irq_stack_call(
     FILE *out, const MinicCoreFunction *fn, const MinicX86Frame *frame,
     const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
@@ -5061,6 +5130,9 @@ bool minic_x86_64_emit_structured_asm(
     if (minic_x86_64_linux_irq_stack_call_form(
             info->template_text, info->template_length))
         return emit_linux_irq_stack_call(out, fn, frame, ins, info);
+    if (minic_x86_64_linux_preempt_static_call_form(
+            info->template_text, info->template_length))
+        return emit_linux_preempt_static_call(out, fn, ins, info);
     if (minic_x86_64_linux_task_control_form(
             info->template_text, info->template_length))
         return emit_linux_task_control(out, fn, frame, ins, info);
@@ -5091,6 +5163,9 @@ bool minic_x86_64_emit_structured_asm(
     if (minic_x86_64_linux_iomem_copy_form(
             info->template_text, info->template_length))
         return emit_linux_iomem_copy(out, fn, frame, ins, info);
+    if (minic_x86_64_linux_i915_movntdqa_form(
+            info->template_text, info->template_length))
+        return emit_linux_i915_movntdqa(out, fn, frame, ins, info);
     if (minic_x86_64_linux_flushcache_copy_form(
             info->template_text, info->template_length))
         return emit_linux_flushcache_copy(out, fn, frame, ins, info);

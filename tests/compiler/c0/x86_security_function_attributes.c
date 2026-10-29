@@ -23,10 +23,13 @@ __attribute__((__indirect_branch__("keep")))
 int x86_keep_branch(int (*callback)(int), int n) { return callback(n); }
 __attribute__((__target__("bmi2")))
 int x86_bmi2_fallback(int n) { return n * 13; }
+/* Zstd's actual Linux 6.6 BMI2_TARGET_ATTRIBUTE, not a synthesized option. */
+__attribute__((__target__("lzcnt,bmi,bmi2")))
+int x86_zstd_bmi2_fallback(int n) { return n * 7; }
 __attribute__((__target__("default")))
 int x86_default_fallback(int n) { return n ^ 13; }
 int x86_security_probe(int n) {
     return x86_keep_branch(x86_no_endbr, n) + x86_bmi2_fallback(n) +
-           x86_default_fallback(n);
+           x86_zstd_bmi2_fallback(n) + x86_default_fallback(n);
 }
 #endif

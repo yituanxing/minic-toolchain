@@ -536,6 +536,124 @@ static bool eval_builtin_unary(const MinicC0Program *program,
     return normalize_bits(program, target, value->type, count, &value->bits);
 }
 
+/* GNU C permits a comparison of two integer-derived pointer constants in a
+ * static integer initializer (for example the Linux trace-event signedness
+ * test `(T *)(-1) < (T *)1`). The addresses contain no linker symbols, and
+ * their comparison is unsigned at the target pointer width. Do not admit
+ * addresses of objects or other pointer expressions into integer consteval. */
+static bool eval_integer_address_pointer_bits(const MinicC0Program *program,
+                                              const MinicTargetInfo *target,
+                                              MinicExpressionId expression_id,
+                                              unsigned int depth,
+                                              uint64_t *bits) {
+    const MinicExpression *expression;
+    const MinicExpression *operand;
+    MinicConstValue integer;
+    size_t pointer_size;
+    unsigned int pointer_width;
+    uint64_t integer_bits;
+
+    if (program == NULL || target == NULL || bits == NULL ||
+        depth > MINIC_CONST_EVAL_MAX_DEPTH) {
+        return false;
+    }
+    expression = minic_c0_program_expression(program, expression_id);
+    if (expression == NULL || !minic_type_is_pointer(expression->type) ||
+        !minic_target_info_sizeof_type(target, program, expression->type, &pointer_size) ||
+        pointer_size == 0U || pointer_size > sizeof(uint64_t)) {
+        return false;
+    }
+    pointer_width = (unsigned int)(pointer_size * (size_t)CHAR_BIT);
+    if (pointer_width == 0U || pointer_width > 64U ||
+        (expression->kind != MINIC_EXPRESSION_CAST &&
+         expression->kind != MINIC_EXPRESSION_CONVERSION &&
+         expression->kind != MINIC_EXPRESSION_BITCAST)) {
+        return false;
+    }
+    operand = minic_c0_program_expression(program, expression->value.unary.operand);
+    if (operand == NULL) {
+        return false;
+    }
+    if (minic_type_is_pointer(operand->type)) {
+        return eval_integer_address_pointer_bits(program,
+                                                 target,
+                                                 expression->value.unary.operand,
+                                                 depth + 1U,
+                                                 bits);
+    }
+    if (!minic_type_is_integer(operand->type) ||
+        !eval_expression(program,
+                         target,
+                         expression->value.unary.operand,
+                         depth + 1U,
+                         &integer)) {
+        return false;
+    }
+    if (integer_type_is_signed(program, integer.type)) {
+        int64_t signed_integer;
+
+        if (!value_signed(program, target, &integer, &signed_integer)) {
+            return false;
+        }
+        integer_bits = (uint64_t)signed_integer;
+    } else if (!normalize_bits(program, target, integer.type, integer.bits, &integer_bits)) {
+        return false;
+    }
+    *bits = integer_bits & width_mask(pointer_width);
+    return true;
+}
+
+static bool eval_integer_address_pointer_compare(const MinicC0Program *program,
+                                                 const MinicTargetInfo *target,
+                                                 const MinicExpression *expression,
+                                                 unsigned int depth,
+                                                 MinicConstValue *value) {
+    const MinicExpression *left;
+    const MinicExpression *right;
+    uint64_t left_bits;
+    uint64_t right_bits;
+    bool comparison;
+
+    if (expression == NULL || expression->kind != MINIC_EXPRESSION_BINARY) {
+        return false;
+    }
+    left = minic_c0_program_expression(program, expression->value.binary.left);
+    right = minic_c0_program_expression(program, expression->value.binary.right);
+    if (left == NULL || right == NULL || !minic_type_is_pointer(left->type) ||
+        !minic_type_is_pointer(right->type) ||
+        !eval_integer_address_pointer_bits(
+            program, target, expression->value.binary.left, depth + 1U, &left_bits) ||
+        !eval_integer_address_pointer_bits(
+            program, target, expression->value.binary.right, depth + 1U, &right_bits)) {
+        return false;
+    }
+    switch (expression->value.binary.operator_kind) {
+    case MINIC_BINARY_EQUAL:
+        comparison = left_bits == right_bits;
+        break;
+    case MINIC_BINARY_NOT_EQUAL:
+        comparison = left_bits != right_bits;
+        break;
+    case MINIC_BINARY_LESS:
+        comparison = left_bits < right_bits;
+        break;
+    case MINIC_BINARY_LESS_EQUAL:
+        comparison = left_bits <= right_bits;
+        break;
+    case MINIC_BINARY_GREATER:
+        comparison = left_bits > right_bits;
+        break;
+    case MINIC_BINARY_GREATER_EQUAL:
+        comparison = left_bits >= right_bits;
+        break;
+    default:
+        return false;
+    }
+    value->type = minic_type_int();
+    value->bits = comparison ? 1U : 0U;
+    return true;
+}
+
 static bool eval_binary(const MinicC0Program *program,
                         const MinicTargetInfo *target,
                         const MinicExpression *expression,
@@ -554,6 +672,9 @@ static bool eval_binary(const MinicC0Program *program,
 
     if (expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT &&
         eval_null_based_pointer_difference(program, target, expression, depth, value)) {
+        return true;
+    }
+    if (eval_integer_address_pointer_compare(program, target, expression, depth, value)) {
         return true;
     }
     if (!eval_expression(program, target, expression->value.binary.left, depth + 1U, &left)) {
@@ -984,15 +1105,36 @@ static bool eval_expression(const MinicC0Program *program,
     case MINIC_EXPRESSION_CONDITIONAL: {
         MinicConstValue condition;
         MinicConstValue selected;
+        const MinicExpression *condition_expression;
+        uint64_t pointer_bits;
         bool truthy;
         MinicExpressionId selected_id;
 
-        if (!eval_expression(
-                program, target, expression->value.conditional.condition, depth + 1U, &condition) ||
-            !value_truthy(program, target, &condition, &truthy)) {
+        condition_expression = minic_c0_program_expression(
+            program, expression->value.conditional.condition);
+        if (condition_expression != NULL &&
+            minic_type_is_pointer(condition_expression->type)) {
+            if (!eval_integer_address_pointer_bits(program,
+                                                   target,
+                                                   expression->value.conditional.condition,
+                                                   depth + 1U,
+                                                   &pointer_bits)) {
+                return false;
+            }
+            truthy = pointer_bits != 0U;
+        } else if (!eval_expression(program,
+                                    target,
+                                    expression->value.conditional.condition,
+                                    depth + 1U,
+                                    &condition) ||
+                   !value_truthy(program, target, &condition, &truthy)) {
             return false;
         }
         if (truthy && expression->value.conditional.uses_condition_value) {
+            if (condition_expression != NULL &&
+                minic_type_is_pointer(condition_expression->type)) {
+                return false;
+            }
             return convert_value(program, target, &condition, expression->type, value);
         }
         selected_id = truthy ? expression->value.conditional.when_true

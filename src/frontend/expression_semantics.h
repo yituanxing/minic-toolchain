@@ -32,6 +32,12 @@ bool minic_c0_conditional_result_type(const MinicC0Program *program,
                                       MinicExpressionId when_true_expression_id,
                                       MinicExpressionId when_false_expression_id,
                                       MinicType *result);
+/* C null pointer constant: an integer constant expression evaluating to 0,
+ * or that expression cast to void*. Target-aware because the constant
+ * evaluator must honor the source integer model and casts. */
+bool minic_c0_expression_is_null_pointer_constant(
+    const MinicC0Program *program, const MinicTargetInfo *target,
+    MinicExpressionId expression_id);
 
 bool minic_c0_pointer_arithmetic_element_size(const MinicC0Program *program,
                                               const MinicDataLayout *layout,

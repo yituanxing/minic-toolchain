@@ -90,6 +90,7 @@ bool minic_parser_token_starts_type_name(const MinicParser *parser, MinicToken t
             return false;
         }
         if (minic_parser_token_is_gnu_typeof(parser, token) ||
+            minic_parser_token_text_equals(parser, token, "__builtin_va_list") ||
             minic_parser_target_header_builtin(parser, token, NULL)) {
             return true;
         }

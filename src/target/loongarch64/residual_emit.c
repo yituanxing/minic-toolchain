@@ -61,6 +61,15 @@ bool minic_loongarch64_emit_residual_instruction(
             const size_t asm_id = ins->value.inline_asm_id;
             const MinicCoreInlineAsm *source = asm_id < fn->inline_asm_count
                 ? &fn->inline_asms[asm_id] : NULL;
+            if (minic_loongarch64_linux_jump_label_asm_goto_core(source)) {
+                if (!minic_loongarch64_emit_linux_jump_label_asm_goto(
+                        out, source, id, fn->block_count))
+                    return minic_multi_direct_machine_reject(
+                        fn, "loongarch64", name, "linux_jump_label_asm_goto",
+                        reject_block, reject_ins, __LINE__);
+                *needs_writeback = false;
+                return true;
+            }
             if (!minic_loongarch64_qualified_opaque_asm(source) ||
                 fwrite(source->template_text, 1U, source->template_length, out) !=
                     source->template_length ||

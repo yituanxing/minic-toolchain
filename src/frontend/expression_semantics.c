@@ -1,4 +1,5 @@
 #include "frontend/expression_semantics.h"
+#include "frontend/const_eval.h"
 
 bool minic_c0_inline_asm_input_value_supported(
     const MinicExpression *expression, const char *constraint, size_t length) {
@@ -125,6 +126,43 @@ static bool conditional_type_only(const MinicC0Program *program,
     return false;
 }
 
+bool minic_c0_expression_is_null_pointer_constant(
+    const MinicC0Program *program, const MinicTargetInfo *target,
+    MinicExpressionId expression_id) {
+    const MinicExpression *expression;
+    MinicType pointee;
+    MinicConstValue constant;
+    bool is_zero;
+
+    if (program == NULL || target == NULL) return false;
+    if (minic_c0_expression_is_null_pointer_constant_v0(program, expression_id))
+        return true;
+    expression = minic_c0_program_expression(program, expression_id);
+    if (expression == NULL) return false;
+
+    /* A void* cast is a null pointer constant only if its operand is an
+     * integer constant expression of value zero. This is the GNU Linux
+     * __is_constexpr(x) trick: (void*)((long)(constant) * 0L) must be
+     * convertible to the other conditional arm's int* before sizeof(*p).
+     * For a runtime x the multiplication is not an ICE, despite always
+     * producing zero at runtime, and the conditional keeps void*. */
+    if (minic_type_is_pointer(expression->type)) {
+        if ((expression->kind != MINIC_EXPRESSION_CAST &&
+             expression->kind != MINIC_EXPRESSION_BITCAST) ||
+            expression->type.pointer_depth != 1U ||
+            !minic_type_pointee(expression->type, &pointee) ||
+            !minic_type_is_void(pointee))
+            return false;
+        expression_id = expression->value.unary.operand;
+        expression = minic_c0_program_expression(program, expression_id);
+        if (expression == NULL) return false;
+    }
+    return minic_type_is_integer(expression->type) &&
+           minic_const_eval_integer(program, target, expression_id, &constant) &&
+           minic_const_value_is_zero(program, target, &constant, &is_zero) &&
+           is_zero;
+}
+
 bool minic_c0_integer_range_representable_in_type(const MinicC0Program *program,
                                                   const MinicTargetInfo *target,
                                                   MinicType source_type,
@@ -172,11 +210,13 @@ bool minic_c0_conditional_result_type(const MinicC0Program *program,
         return false;
     }
     if (minic_type_is_pointer(when_true->type) &&
-        minic_c0_expression_is_null_pointer_constant_v0(program, when_false_expression_id)) {
+        minic_c0_expression_is_null_pointer_constant(
+            program, target, when_false_expression_id)) {
         *result = when_true->type;
         return true;
     }
-    if (minic_c0_expression_is_null_pointer_constant_v0(program, when_true_expression_id) &&
+    if (minic_c0_expression_is_null_pointer_constant(
+            program, target, when_true_expression_id) &&
         minic_type_is_pointer(when_false->type)) {
         *result = when_false->type;
         return true;

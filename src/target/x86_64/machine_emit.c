@@ -152,6 +152,107 @@ static bool emit_linux_cpu_has_asm_goto(
 /* Native x86-64 machine stage, cleanly separated from function/TU owner.
  * Native x87, SysV, integer and memory emitters retain their tested
  * register and instruction sequences. */
+/* GNU overflow builtins calculate in mathematical (unbounded) precision,
+ * then store the truncated value and report whether it fits the *result*
+ * type. Linux overflows_type()/check_mul_overflow() legitimately mix u64,
+ * signed long, u32 and narrower pointer targets. The existing matched-width
+ * fast path cannot handle these; evaluate the complete 128-bit signed value
+ * with real x86 GP arithmetic instead of narrowing inputs prematurely. */
+static bool x86_emit_mixed_integer_overflow(
+    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, const MinicX86Frame *frame,
+    const MinicCoreInstruction *ins) {
+    const MinicCoreValueId lhs = ins->value.integer_overflow.left;
+    const MinicCoreValueId rhs = ins->value.integer_overflow.right;
+    const MinicCoreValueId address = ins->value.integer_overflow.result_address;
+    MinicType result_type;
+    size_t lhs_width, rhs_width, result_width;
+    bool lhs_signed, rhs_signed, result_signed;
+    const char *lhs_extension, *rhs_extension, *result_extension, *store;
+    if (!out || !program || !target || !fn || !frame ||
+        ins->result >= fn->value_count || lhs >= fn->value_count ||
+        rhs >= fn->value_count || address >= fn->value_count ||
+        !minic_type_pointee(fn->values[address].type, &result_type) ||
+        !minic_type_is_integer(result_type) ||
+        minic_type_is_bool_integer(result_type) ||
+        minic_type_is_const(result_type) ||
+        minic_type_is_volatile(result_type) ||
+        !minic_x86_64_scalar_width(program, target, fn->values[lhs].type,
+                                    &lhs_width, &lhs_signed) ||
+        !minic_x86_64_scalar_width(program, target, fn->values[rhs].type,
+                                    &rhs_width, &rhs_signed) ||
+        !minic_x86_64_scalar_width(program, target, result_type,
+                                    &result_width, &result_signed))
+        return false;
+    switch (ins->value.integer_overflow.operator_kind) {
+    case MINIC_CORE_INTEGER_OVERFLOW_ADD:
+    case MINIC_CORE_INTEGER_OVERFLOW_SUBTRACT:
+    case MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY:
+        break;
+    default: return false;
+    }
+    lhs_extension = lhs_width == 1U ? (lhs_signed ? "movsbq %al, %rax" : "movzbl %al, %eax") :
+                    lhs_width == 2U ? (lhs_signed ? "movswq %ax, %rax" : "movzwl %ax, %eax") :
+                    lhs_width == 4U ? (lhs_signed ? "movslq %eax, %rax" : "movl %eax, %eax") : NULL;
+    rhs_extension = rhs_width == 1U ? (rhs_signed ? "movsbq %r10b, %r10" : "movzbl %r10b, %r10d") :
+                    rhs_width == 2U ? (rhs_signed ? "movswq %r10w, %r10" : "movzwl %r10w, %r10d") :
+                    rhs_width == 4U ? (rhs_signed ? "movslq %r10d, %r10" : "movl %r10d, %r10d") : NULL;
+    result_extension = result_width == 1U ?
+        (result_signed ? "movsbq %al, %r11" : "movzbl %al, %r11d") :
+        result_width == 2U ?
+        (result_signed ? "movswq %ax, %r11" : "movzwl %ax, %r11d") :
+        result_width == 4U ?
+        (result_signed ? "movslq %eax, %r11" : "movl %eax, %r11d") :
+        "movq %rax, %r11";
+    store = result_width == 1U ? "movb %al, (%r10)" :
+            result_width == 2U ? "movw %ax, (%r10)" :
+            result_width == 4U ? "movl %eax, (%r10)" : "movq %rax, (%r10)";
+    if (!x86_value_load(out, frame, lhs, "%rax") ||
+        !x86_value_load(out, frame, rhs, "%r10") ||
+        (lhs_extension && fprintf(out, "  %s\n", lhs_extension) < 0) ||
+        (rhs_extension && fprintf(out, "  %s\n", rhs_extension) < 0))
+        return false;
+    if (ins->value.integer_overflow.operator_kind ==
+        MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY) {
+        /* Unsigned MUL produces all 128 product bits. The two sign-limb
+         * corrections convert that to exact two's-complement mixed signed
+         * multiplication (no 64-bit signed-overflow UB in the emitter). */
+        if (fputs("  movq %rax, %r11\n"
+                  "  movq %rax, %r8\n", out) == EOF ||
+            fputs(lhs_signed ? "  sarq $63, %r8\n" : "  xorq %r8, %r8\n", out) == EOF ||
+            fputs("  andq %r10, %r8\n"
+                  "  movq %r10, %r9\n", out) == EOF ||
+            fputs(rhs_signed ? "  sarq $63, %r9\n" : "  xorq %r9, %r9\n", out) == EOF ||
+            fputs("  andq %r11, %r9\n"
+                  "  mulq %r10\n"
+                  "  subq %r8, %rdx\n"
+                  "  subq %r9, %rdx\n"
+                  "  movq %rdx, %r8\n", out) == EOF)
+            return false;
+    } else {
+        if (fputs("  movq %rax, %r8\n", out) == EOF ||
+            fputs(lhs_signed ? "  sarq $63, %r8\n" : "  xorq %r8, %r8\n", out) == EOF ||
+            fputs("  movq %r10, %r9\n", out) == EOF ||
+            fputs(rhs_signed ? "  sarq $63, %r9\n" : "  xorq %r9, %r9\n", out) == EOF ||
+            fputs(ins->value.integer_overflow.operator_kind == MINIC_CORE_INTEGER_OVERFLOW_ADD
+                    ? "  addq %r10, %rax\n  adcq %r9, %r8\n"
+                    : "  subq %r10, %rax\n  sbbq %r9, %r8\n", out) == EOF)
+            return false;
+    }
+    if (!x86_value_load(out, frame, address, "%r10") ||
+        fprintf(out, "  %s\n  %s\n", store, result_extension) < 0 ||
+        fputs("  cmpq %r11, %rax\n"
+              "  setne %r9b\n"
+              "  movq %r11, %r10\n", out) == EOF ||
+        fputs(result_signed ? "  sarq $63, %r10\n" : "  xorq %r10, %r10\n", out) == EOF ||
+        fputs("  cmpq %r10, %r8\n"
+              "  setne %r10b\n"
+              "  orb %r10b, %r9b\n"
+              "  movzbq %r9b, %rax\n", out) == EOF)
+        return false;
+    return x86_value_store(out, frame, ins->result);
+}
+
 bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program,
                                  const MinicTargetInfo *target, const MinicCoreFunction *fn,
                                  const MinicX86Frame *frame, const MinicCoreInstruction *ins,
@@ -816,8 +917,10 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
                 program, target, fn, ins, &width, &signed_result)) {
             bool signed_left;
             if (!minic_core_integer_overflow_mixed_add_i32_shape(
-                    program, target, fn, ins, &signed_left) ||
-                !x86_value_load(out, frame, lhs, "%rax") ||
+                    program, target, fn, ins, &signed_left))
+                return x86_emit_mixed_integer_overflow(
+                    out, program, target, fn, frame, ins);
+            if (!x86_value_load(out, frame, lhs, "%rax") ||
                 !x86_value_load(out, frame, rhs, "%r10"))
                 return false;
             /* GNU generic addition has infinite precision: unsigned64 plus
@@ -1189,8 +1292,8 @@ bool minic_x86_64_emit_core_terminator(FILE *out,
                 term->return_value != MINIC_CORE_VALUE_INVALID ||
                 term->return_object >= fn->object_count ||
                 !minic_type_is_record(fn->return_type) ||
-                !minic_type_equal(fn->return_type,
-                    fn->objects[term->return_object].type) ||
+                !minic_x86_64_record_abi_compatible(
+                    fn->return_type, fn->objects[term->return_object].type) ||
                 !x86_object_address(out, frame, term->return_object, "%r11"))
                 return false;
             if (minic_x86_64_one_gp_record(program, target, fn->return_type, &bytes)) {

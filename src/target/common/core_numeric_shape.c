@@ -85,6 +85,44 @@ bool minic_core_integer_overflow_mixed_add_i32_shape(
     return false;
 }
 
+bool minic_core_integer_overflow_mixed_multiply_i32_shape(
+    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
+    bool *signed_left, bool *signed_right, bool *signed_result) {
+    MinicCoreValueId lhs, rhs, address;
+    MinicType result_type;
+    size_t left_width, right_width, result_width;
+    if (!program || !target || !fn || !ins || !signed_left ||
+        !signed_right || !signed_result ||
+        ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW ||
+        ins->value.integer_overflow.operator_kind !=
+            MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY)
+        return false;
+    lhs = ins->value.integer_overflow.left;
+    rhs = ins->value.integer_overflow.right;
+    address = ins->value.integer_overflow.result_address;
+    if (lhs >= fn->value_count || rhs >= fn->value_count ||
+        address >= fn->value_count ||
+        !minic_type_pointee(fn->values[address].type, &result_type) ||
+        !minic_type_is_integer(result_type) ||
+        minic_type_is_bool_integer(result_type) ||
+        minic_type_is_const(result_type) ||
+        minic_type_is_volatile(result_type) ||
+        !minic_lp64_scalar_integer_width(program, target, result_type,
+                                         &result_width, signed_result) ||
+        !minic_lp64_scalar_integer_width(program, target,
+                                         fn->values[lhs].type,
+                                         &left_width, signed_left) ||
+        !minic_lp64_scalar_integer_width(program, target,
+                                         fn->values[rhs].type,
+                                         &right_width, signed_right) ||
+        left_width != 4U || right_width != 4U || result_width != 4U)
+        return false;
+    /* Common is only classifying an otherwise unsupported mixed ABI shape.
+     * Uniform types are already governed by the original shape validator. */
+    return *signed_left != *signed_right || *signed_left != *signed_result;
+}
+
 /* CLZ/CTZ are defined here for unsigned 8/16/32/64 Core operands.
  * The ISA owns masking or bitfield extraction and exact machine opcodes. */
 bool minic_core_integer_bitscan_shape(

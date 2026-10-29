@@ -286,10 +286,28 @@ minic_c0_array_shapes_compatible(const MinicC0Program *program, MinicType left, 
     }
     left_array = minic_c0_program_array_type(program, left.array_type_id);
     right_array = minic_c0_program_array_type(program, right.array_type_id);
-    return left_array != NULL && right_array != NULL &&
-           left_array->element_count == right_array->element_count &&
-           left_array->is_zero_length == right_array->is_zero_length &&
-           minic_c0_types_compatible(program, left_array->element_type, right_array->element_type);
+    if (left_array == NULL || right_array == NULL) {
+        return false;
+    }
+    if (left_array->element_count != right_array->element_count ||
+        left_array->is_zero_length != right_array->is_zero_length) {
+        /* ISO C compatible-array rule: a bound can be completed by its
+         * counterpart. GNU zero-length arrays are complete extensions and
+         * must not be mistaken for incomplete arrays. Preserve element
+         * qualifiers exactly for this newly admitted pointer conversion. */
+        bool left_incomplete = left_array->element_count == 0U &&
+                               !left_array->is_zero_length;
+        bool right_incomplete = right_array->element_count == 0U &&
+                                !right_array->is_zero_length;
+
+        if (left_array->is_zero_length || right_array->is_zero_length ||
+            (!left_incomplete && !right_incomplete) ||
+            !minic_type_equal(left_array->element_type, right_array->element_type)) {
+            return false;
+        }
+    }
+    return minic_c0_types_compatible(program, left_array->element_type,
+                                    right_array->element_type);
 }
 
 bool minic_c0_types_compatible(const MinicC0Program *program, MinicType left, MinicType right) {
@@ -861,6 +879,7 @@ static void minic_c0_function_initialize_defaults(MinicFunction *function) {
     }
     (void)memset(function, 0, sizeof(*function));
     function->return_type = minic_type_int();
+    function->calling_convention = MINIC_CALLING_CONVENTION_DEFAULT;
     function->alias_target = MINIC_FUNCTION_INVALID;
 }
 
@@ -960,6 +979,21 @@ bool minic_c0_program_set_function_signature(MinicC0Program *program,
     function->parameter_types = private_parameter_types;
     function->return_type = return_type;
     function->parameter_count = parameter_count;
+    return true;
+}
+
+bool minic_c0_program_set_function_calling_convention(
+    MinicC0Program *program, MinicFunctionId function_id,
+    MinicFunctionCallingConvention convention) {
+    MinicFunction *function;
+    if (program == NULL || function_id >= program->function_count ||
+        !minic_function_calling_convention_valid(convention))
+        return false;
+    function = &program->functions[function_id];
+    if (function->calling_convention != MINIC_CALLING_CONVENTION_DEFAULT &&
+        function->calling_convention != convention)
+        return false;
+    function->calling_convention = convention;
     return true;
 }
 

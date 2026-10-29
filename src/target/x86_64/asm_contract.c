@@ -518,6 +518,78 @@ unsigned int minic_x86_64_linux_iomem_copy_form(const char *text, size_t length)
     return 0U;
 }
 
+/* drivers/gpu/drm/i915/i915_memcpy.c: all four real memcpy_from_wc
+ * `movntdqa` blocks. The source explicitly has no XMM clobber constraints;
+ * kernel_fpu_begin() and Linux -mgeneral-regs-only own that environment.
+ * Exact complete multi-instruction matching prevents arbitrary raw ASM. */
+unsigned int minic_x86_64_linux_i915_movntdqa_form(
+    const char *text, size_t length) {
+    static const char *const prefix4 =
+        "movntdqa(%0),%%xmm0"
+        "movntdqa16(%0),%%xmm1"
+        "movntdqa32(%0),%%xmm2"
+        "movntdqa48(%0),%%xmm3";
+    static const char *const aligned4 =
+        "movaps%%xmm0,(%1)"
+        "movaps%%xmm1,16(%1)"
+        "movaps%%xmm2,32(%1)"
+        "movaps%%xmm3,48(%1)";
+    static const char *const unaligned4 =
+        "movups%%xmm0,(%1)"
+        "movups%%xmm1,16(%1)"
+        "movups%%xmm2,32(%1)"
+        "movups%%xmm3,48(%1)";
+    char normalized[512];
+    size_t i, n = 0U;
+    if (!text || !length || length >= sizeof(normalized)) return 0U;
+    for (i = 0U; i < length; ++i) {
+        const char c = text[i];
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
+        if (c == '\0' || n + 1U >= sizeof(normalized)) return 0U;
+        normalized[n++] = c;
+    }
+    normalized[n] = '\0';
+    if (strcmp(normalized, "movntdqa(%0),%%xmm0movaps%%xmm0,(%1)") == 0)
+        return 1U;
+    if (strcmp(normalized, "movntdqa(%0),%%xmm0movups%%xmm0,(%1)") == 0)
+        return 2U;
+    if (n == strlen(prefix4) + strlen(aligned4) &&
+        memcmp(normalized, prefix4, strlen(prefix4)) == 0 &&
+        strcmp(normalized + strlen(prefix4), aligned4) == 0)
+        return 3U;
+    if (n == strlen(prefix4) + strlen(unaligned4) &&
+        memcmp(normalized, prefix4, strlen(prefix4)) == 0 &&
+        strcmp(normalized + strlen(prefix4), unaligned4) == 0)
+        return 4U;
+    return 0U;
+}
+
+static bool x86_linux_i915_movntdqa_source(
+    const MinicC0Program *program, const MinicInlineAsm *source,
+    MinicTargetInlineAsmContract *contract) {
+    const unsigned int form = source ? minic_x86_64_linux_i915_movntdqa_form(
+        source->template_text, source->template_length) : 0U;
+    size_t i;
+    if (!program || !source || !contract || !form || source->is_volatile ||
+        source->is_goto || source->label_count || source->output_count ||
+        !source->inputs || source->input_count != 2U ||
+        !source->has_memory_clobber || source->clobber_count != 1U ||
+        source->register_clobber_count)
+        return false;
+    for (i = 0U; i < 2U; ++i) {
+        const MinicInlineAsmOperand *input = &source->inputs[i];
+        const MinicExpression *value = minic_c0_program_expression(
+            program, input->expression);
+        if (!target_constraint_is(input, "r") || !value ||
+            !minic_type_is_pointer(value->type))
+            return false;
+        contract->kinds[i] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    }
+    contract->operand_count = 2U;
+    contract->implicit_memory_effect = true;
+    return true;
+}
+
 static bool x86_linux_iomem_copy_source(
     const MinicC0Program *program, const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
@@ -1125,6 +1197,59 @@ bool minic_x86_64_linux_cpu_has_goto_form(
 static bool x86_linux_jump_label_source(
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract);
+
+/* Preemption's ASM_CALL_CONSTRAINT is `+r(current_stack_pointer)`, where the
+ * variable is bound to the physical RSP. GNU keeps this binding live across
+ * the call; it is neither a register value to copy back nor a C assignment.
+ * Validate the full two static-call trampolines, the fixed register and the
+ * exact GNU access constraint before admitting a Core effect. */
+unsigned int minic_x86_64_linux_preempt_static_call_form(
+    const char *text, size_t length) {
+    if (x86_linux_compact_asm_equals(
+            text, length, "call__SCT__preempt_schedule")) return 1U;
+    if (x86_linux_compact_asm_equals(
+            text, length, "call__SCT__preempt_schedule_notrace")) return 2U;
+    return 0U;
+}
+
+static bool x86_linux_preempt_static_call_source(
+    const MinicC0Program *program, const MinicInlineAsm *source,
+    MinicTargetInlineAsmContract *contract) {
+    const MinicExpression *stack;
+    const MinicFixedRegisterBinding *fixed;
+    MinicType type;
+    if (!program || !source || !contract ||
+        !minic_x86_64_linux_preempt_static_call_form(
+            source->template_text, source->template_length) ||
+        !source->is_volatile || source->is_goto || source->label_count ||
+        source->output_count != 1U || source->input_count ||
+        !source->outputs || source->clobber_count ||
+        source->register_clobber_count || source->has_memory_clobber ||
+        !target_constraint_is(&source->outputs[0], "+r") ||
+        source->outputs[0].access != MINIC_INLINE_ASM_OPERAND_READ_WRITE)
+        return false;
+    stack = minic_c0_program_expression(program,
+                                        source->outputs[0].expression);
+    /* RSP is deliberately read-only to ordinary C expressions. GNU +r here
+     * expresses CALL-frame liveness, not permission to write the stack
+     * pointer, so the exact fixed RSP register is the sufficient gate. */
+    if (!stack || !minic_type_unqualified(stack->type, &type) ||
+        !minic_type_equal(type, minic_type_unsigned_long())) return false;
+    fixed = stack->kind == MINIC_EXPRESSION_FIXED_REGISTER ?
+        minic_c0_program_fixed_register_binding(
+            program, stack->value.fixed_register_binding_id) :
+        stack->kind == MINIC_EXPRESSION_LOCAL ?
+        minic_c0_program_local_fixed_register_binding(
+            program, stack->value.local_id) : NULL;
+    if (!fixed || !fixed->register_name ||
+        strcmp(fixed->register_name, "rsp") != 0) return false;
+    contract->operand_count = 1U;
+    contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    /* Like an ordinary externally visible call, the trampoline can modify
+     * arbitrary memory even without a GNU `memory` compiler clobber. */
+    contract->implicit_memory_effect = true;
+    return true;
+}
 
 bool minic_x86_64_qualify_inline_asm_goto(
     const MinicC0Program *program, const MinicInlineAsm *source) {
@@ -7466,6 +7591,8 @@ bool minic_x86_64_qualify_inline_asm(
         return true;
     if (x86_linux_irq_stack_call_source(program, source, contract))
         return true;
+    if (x86_linux_preempt_static_call_source(program, source, contract))
+        return true;
     if (x86_linux_task_control_source(program, source, contract))
         return true;
     if (x86_linux_iret_to_self_source(program, source, contract))
@@ -7485,6 +7612,8 @@ bool minic_x86_64_qualify_inline_asm(
     if (x86_linux_rep_string_io_source(program, source, contract))
         return true;
     if (x86_linux_iomem_copy_source(program, source, contract))
+        return true;
+    if (x86_linux_i915_movntdqa_source(program, source, contract))
         return true;
     if (x86_linux_flushcache_copy_source(program, source, contract))
         return true;

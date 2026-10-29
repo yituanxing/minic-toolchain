@@ -8,6 +8,12 @@ bool minic_aarch64_linux_cap_asm_goto_source(const MinicInlineAsm *);
 bool minic_aarch64_linux_cap_asm_goto_core(const MinicCoreInlineAsm *);
 bool minic_aarch64_emit_linux_cap_asm_goto(
     FILE *, const MinicCoreInlineAsm *, size_t, size_t);
+/* Original Linux static-branch __jump_table PREL32/PREL64 relocation. */
+bool minic_aarch64_qualify_inline_asm_goto(
+    const MinicC0Program *, const MinicInlineAsm *);
+bool minic_aarch64_linux_jump_label_asm_goto_core(const MinicCoreInlineAsm *);
+bool minic_aarch64_emit_linux_jump_label_asm_goto(
+    FILE *, const MinicCoreInlineAsm *, size_t, size_t);
 #include "target/common/direct_block_context.h"
 /* Machine-specific template qualification; Core carries operand roles only. */
 bool minic_aarch64_qualify_inline_asm(

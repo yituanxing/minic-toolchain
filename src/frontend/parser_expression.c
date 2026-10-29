@@ -2263,7 +2263,8 @@ static bool normalize_conditional_null_pointer_arm(MinicParser *parser,
         return false;
     }
     if (minic_type_equal(arm->type, result_type) || !minic_type_is_pointer(result_type) ||
-        !minic_c0_expression_is_null_pointer_constant_v0(parser->program, *arm_id)) {
+        !minic_c0_expression_is_null_pointer_constant(
+            parser->program, parser->target_info, *arm_id)) {
         return true;
     }
 
@@ -2957,7 +2958,8 @@ bool minic_parser_parse_null_pointer_constant_expression(MinicParser *parser,
         return false;
     }
     return minic_c0_assignment_compatible(parser->program, target_type, expression_id) &&
-           minic_c0_expression_is_null_pointer_constant_v0(parser->program, expression_id);
+           minic_c0_expression_is_null_pointer_constant(
+               parser->program, parser->target_info, expression_id);
 }
 
 bool minic_parser_parse_full_expression_tail(MinicParser *parser,

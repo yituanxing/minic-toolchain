@@ -309,6 +309,7 @@ static bool parse_fixed_runtime_record_array_initializer(MinicParser *parser,
     while (parser->current.kind != MINIC_TOKEN_RBRACE) {
         size_t action_id;
         size_t target_index;
+        size_t last_index;
 
         if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
             MinicSourceSpan zero_span;
@@ -323,10 +324,6 @@ static bool parse_fixed_runtime_record_array_initializer(MinicParser *parser,
                 goto done;
             }
             zero_span = parser->current.span;
-            if (first != last) {
-                minic_parser_error(parser, "record array range designators require one element");
-                goto done;
-            }
             if (!minic_array_initializer_plan_add_designated(&plan, first, last, &action_id)) {
                 minic_parser_error(parser, "cannot plan runtime record array initializer");
                 goto done;
@@ -348,15 +345,38 @@ static bool parse_fixed_runtime_record_array_initializer(MinicParser *parser,
             }
             target_index = plan.actions[action_id].first_index;
         }
+        last_index = plan.actions[action_id].last_index;
 
         {
-            MinicExpressionId element_id;
+            MinicExpressionId first_element_id;
+            size_t index;
 
             if (!add_array_object_element_lvalue(
-                    parser, base_id, target_index, parser->current.span, &element_id) ||
+                    parser, base_id, target_index, parser->current.span, &first_element_id) ||
                 !parse_runtime_record_array_element_initializer(
-                    parser, element_id, array_info.element_type)) {
+                    parser, first_element_id, array_info.element_type)) {
                 goto done;
+            }
+            /* GNU range initializers evaluate their expression once. Copy
+             * the fully initialized first record to the remaining slots,
+             * preserving side effects and even aggregate rvalue producers. */
+            for (index = target_index + 1U; index <= last_index; ++index) {
+                MinicExpressionId next_element_id;
+                const MinicExpression *first_element;
+                MinicSourceSpan source_span;
+
+                first_element = minic_c0_program_expression(
+                    parser->program, first_element_id);
+                if (first_element == NULL) {
+                    goto done;
+                }
+                source_span = first_element->span;
+                if (!add_array_object_element_lvalue(
+                        parser, base_id, index, source_span, &next_element_id) ||
+                    !minic_parser_statement_record_initialize(
+                        parser, next_element_id, first_element_id, source_span)) {
+                    goto done;
+                }
             }
         }
 

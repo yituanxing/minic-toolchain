@@ -4,6 +4,131 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <stdint.h>
+
+/* Linux 6.6.143 arch/loongarch/include/asm/jump_label.h:
+ * 1:nop (or b %l[l_yes]), then a 16-byte, eight-aligned __jump_table
+ * [site PREL32, target PREL32, key PREL64]. No generic ASM passthrough is
+ * safe: the C label must become a real Core block, and the key operand
+ * must remain an ELF symbolic relocation, never a runtime GPR value. */
+static unsigned int loong_linux_jump_label_form(
+    const char *text, size_t length) {
+    static const char shared[] =
+        ".pushsection__jump_table,\"aw\".align3"
+        ".long1b-.,%l[l_yes]-..quad%0-..popsection";
+    static const char *const prefixes[] = {
+        "1:nop", "1:b%l[l_yes]"
+    };
+    char compact[256];
+    size_t i, n = 0U;
+    if (text == NULL || length == 0U || length >= sizeof(compact))
+        return 0U;
+    for (i = 0U; i < length; ++i) {
+        const char ch = text[i];
+        if (ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n') continue;
+        if (ch == '\0' || n + 1U >= sizeof(compact)) return 0U;
+        compact[n++] = ch;
+    }
+    compact[n] = '\0';
+    for (i = 0U; i < sizeof(prefixes) / sizeof(prefixes[0]); ++i) {
+        const size_t a = strlen(prefixes[i]), b = sizeof(shared) - 1U;
+        if (n == a + b && memcmp(compact, prefixes[i], a) == 0 &&
+            memcmp(compact + a, shared, b) == 0)
+            return (unsigned int)i + 1U;
+    }
+    return 0U;
+}
+
+/* One symbol with an optional decimal offset; no nested expressions,
+ * register names, arbitrary GNU directives or raw textual interpolation. */
+static bool loong_linux_jump_key_relocation(const char *key) {
+    size_t i, length;
+    if (key == NULL) return false;
+    length = strlen(key);
+    if (length == 0U || length > 128U ||
+        !((key[0] >= 'a' && key[0] <= 'z') ||
+          (key[0] >= 'A' && key[0] <= 'Z') ||
+          key[0] == '_' || key[0] == '.')) return false;
+    for (i = 1U; i < length; ++i) {
+        const char ch = key[i];
+        if ((ch >= 'a' && ch <= 'z') ||
+            (ch >= 'A' && ch <= 'Z') ||
+            (ch >= '0' && ch <= '9') ||
+            ch == '_' || ch == '.' || ch == '$') continue;
+        if ((ch == '+' || ch == '-') && i + 1U < length) {
+            for (++i; i < length; ++i)
+                if (key[i] < '0' || key[i] > '9') return false;
+            return true;
+        }
+        return false;
+    }
+    return true;
+}
+
+bool minic_loongarch64_qualify_inline_asm_goto(
+    const MinicC0Program *program, const MinicInlineAsm *source) {
+    const MinicInlineAsmOperand *key;
+    const MinicInlineAsmLabel *label;
+    const MinicExpression *expression;
+    if (!program || !source || !source->is_goto || source->is_volatile ||
+        source->output_count != 0U || source->input_count != 1U ||
+        !source->inputs || source->label_count != 1U || !source->labels ||
+        source->clobber_count != 0U || source->register_clobber_count != 0U ||
+        source->has_memory_clobber ||
+        !loong_linux_jump_label_form(source->template_text,
+                                     source->template_length)) return false;
+    key = &source->inputs[0];
+    label = &source->labels[0];
+    expression = minic_c0_program_expression(program, key->expression);
+    return key->access == MINIC_INLINE_ASM_OPERAND_READ_ONLY &&
+           key->constraint_text != NULL && key->constraint_length == 1U &&
+           key->constraint_text[0] == 'i' &&
+           expression != NULL && minic_type_is_pointer(expression->type) &&
+           label->name != NULL && label->name_length == 5U &&
+           memcmp(label->name, "l_yes", 5U) == 0 &&
+           label->target_statement != MINIC_STATEMENT_INVALID;
+}
+
+bool minic_loongarch64_linux_jump_label_asm_goto_core(
+    const MinicCoreInlineAsm *source) {
+    return source != NULL && source->is_goto && source->is_volatile &&
+           source->goto_target != MINIC_CORE_BLOCK_INVALID &&
+           source->goto_second_target == MINIC_CORE_BLOCK_INVALID &&
+           !source->has_memory_clobber &&
+           source->register_clobber_count == 0U &&
+           source->source_inline_asm_id == SIZE_MAX &&
+           source->resolved_immediate_count == 1U &&
+           loong_linux_jump_key_relocation(source->resolved_immediates[0]) &&
+           loong_linux_jump_label_form(source->template_text,
+                                       source->template_length) != 0U;
+}
+
+bool minic_loongarch64_emit_linux_jump_label_asm_goto(
+    FILE *out, const MinicCoreInlineAsm *source,
+    size_t function_id, size_t function_blocks) {
+    const unsigned int form = source != NULL
+        ? loong_linux_jump_label_form(source->template_text,
+                                      source->template_length) : 0U;
+    if (out == NULL || !form ||
+        !minic_loongarch64_linux_jump_label_asm_goto_core(source) ||
+        source->goto_target >= function_blocks) return false;
+    if (form == 1U) {
+        if (fputs("1: nop\n", out) == EOF) return false;
+    } else if (fprintf(out, "1: b .Lmini_loong_f%zu_b%u\n",
+                       function_id, (unsigned int)source->goto_target) < 0) {
+        return false;
+    }
+    return fprintf(out,
+        "  .pushsection __jump_table,\"aw\"\n"
+        "  .balign 8\n"
+        "  .long 1b - .\n"
+        "  .long .Lmini_loong_f%zu_b%u - .\n"
+        "  .quad %s - .\n"
+        "  .popsection\n",
+        function_id, (unsigned int)source->goto_target,
+        source->resolved_immediates[0]) >= 0;
+}
+
 /* Exact LoongArch64 kernel hardware zero-operand source forms.
  * ISA semantics, unlike compiler barriers, remain target-local. */
 bool minic_loongarch64_qualified_opaque_asm(const MinicCoreInlineAsm *a) {
@@ -13,6 +138,7 @@ bool minic_loongarch64_qualified_opaque_asm(const MinicCoreInlineAsm *a) {
     };
     char compact[64];
     size_t i, n = 0U;
+    if (minic_loongarch64_linux_jump_label_asm_goto_core(a)) return true;
     if (minic_multi_direct_linux_bug_asm(
             a, "10000", "10001", "10002", "break1", false))
         return true;
@@ -575,6 +701,89 @@ static bool loong_csr_qualified_source(
     contract->kinds[contract->operand_count - 1U] =
         MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     return true;
+}
+
+/* lsdc_probe.c reads a hardware CPUCFG register through GNU register operands.
+ * Keep the input register value (rather than substituting a fixed constant),
+ * and explicitly lower the native instruction from typed structured roles. */
+static bool loong_linux_cpucfg_form(const char *text, size_t length) {
+    static const char form[] = "cpucfg%0,%1";
+    char compact[64];
+    size_t i, size = 0U;
+    if (!text || !length || length >= sizeof(compact)) return false;
+    for (i = 0U; i < length; ++i) {
+        const char c = text[i];
+        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') continue;
+        if (c == '\0' || c == ';' || size + 1U >= sizeof(compact))
+            return false;
+        compact[size++] = c;
+    }
+    compact[size] = '\0';
+    return strcmp(compact, form) == 0;
+}
+
+static bool loong_linux_cpucfg_source(
+    const MinicC0Program *program, const MinicInlineAsm *source,
+    MinicTargetInlineAsmContract *contract) {
+    const MinicExpression *output, *index;
+    MinicType plain;
+    if (!program || !source || !contract || !source->is_volatile ||
+        source->is_goto || source->output_count != 1U || !source->outputs ||
+        source->input_count != 1U || !source->inputs ||
+        source->label_count || source->clobber_count ||
+        source->register_clobber_count || source->has_memory_clobber ||
+        !loong_linux_cpucfg_form(
+            source->template_text, source->template_length) ||
+        !loong_csr_constraint(&source->outputs[0], "=&r") ||
+        !loong_csr_constraint(&source->inputs[0], "r"))
+        return false;
+    output = minic_c0_program_expression(
+        program, source->outputs[0].expression);
+    index = minic_c0_program_expression(
+        program, source->inputs[0].expression);
+    if (!output || output->value_category != MINIC_VALUE_LVALUE ||
+        minic_type_is_const(output->type) ||
+        !minic_type_unqualified(output->type, &plain) ||
+        !minic_type_equal(plain, minic_type_unsigned_int()) ||
+        !index || !minic_type_is_integer(index->type)) return false;
+    contract->operand_count = 2U;
+    contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+    contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    return true;
+}
+
+static bool loong_linux_cpucfg_emit(
+    FILE *out, const MinicDirectLP64BlockContext *ctx,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
+    const MinicCoreFunction *fn = ctx->fn;
+    const MinicCoreStructuredInlineAsmOperand *operands =
+        ins->value.structured_inline_asm.operands;
+    MinicType output_type;
+    if (!out || !fn || !ins || !info || !operands || !info->is_volatile ||
+        info->is_goto || info->has_memory_clobber ||
+        info->register_clobber_count ||
+        ins->value.structured_inline_asm.operand_count != 2U ||
+        !loong_linux_cpucfg_form(info->template_text, info->template_length) ||
+        operands[0].operand_index != 0U || operands[1].operand_index != 1U ||
+        operands[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
+        operands[1].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
+        operands[1].early_clobber ||
+        operands[0].has_fixed_register_binding ||
+        operands[1].has_fixed_register_binding ||
+        operands[0].value >= fn->value_count ||
+        operands[1].value >= fn->value_count ||
+        !minic_type_pointee(fn->values[operands[0].value].type, &output_type) ||
+        !minic_type_equal(output_type, minic_type_unsigned_int()) ||
+        !minic_type_is_integer(fn->values[operands[1].value].type))
+        return false;
+    return minic_loongarch64_emit_frame_mem(
+               out, "ld.d", "$t1", (size_t)operands[1].value * 8U,
+               ctx->dynamic_frame) &&
+           fprintf(out, "  cpucfg $t0, $t1\n") >= 0 &&
+           minic_loongarch64_emit_frame_mem(
+               out, "ld.d", "$t2", (size_t)operands[0].value * 8U,
+               ctx->dynamic_frame) &&
+           fprintf(out, "  st.w $t0, $t2, 0\n") >= 0;
 }
 
 /* Authentic GNU Linux 6.6.143 LoongArch set_pte global-bit buddy LL/SC.
@@ -2710,6 +2919,7 @@ bool minic_loongarch64_qualify_inline_asm(
     if (loong_linux_irq_switch_source(program, src, contract)) return true;
     if (loong_linux_frametrace_source(program, src, contract)) return true;
     if (loong_linux_frametrace_csr_source(program, src, contract)) return true;
+    if (loong_linux_cpucfg_source(program, src, contract)) return true;
     if (loong_linux_fpr_transfer_source(program, src, contract)) return true;
     if (loong_linux_futex_rmw_source(program, src, contract)) return true;
     if (loong_linux_futex_cmpxchg_source(program, src, contract)) return true;
@@ -3213,6 +3423,8 @@ bool minic_loongarch64_emit_qualified_structured_asm(
         ins->value.structured_inline_asm.inline_asm_id >= ctx->fn->inline_asm_count)
         return false;
     info = &ctx->fn->inline_asms[ins->value.structured_inline_asm.inline_asm_id];
+    if (loong_linux_cpucfg_form(info->template_text, info->template_length))
+        return loong_linux_cpucfg_emit(out, ctx, ins, info);
     if (loong_linux_cacop_form(info->template_text, info->template_length))
         return loong_linux_cacop_emit(out, ctx, ins, info);
     if (loong_linux_vdso_syscall_form(info->template_text, info->template_length))

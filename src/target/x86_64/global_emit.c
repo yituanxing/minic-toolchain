@@ -164,9 +164,20 @@ bool minic_x86_64_emit_global(FILE *out, const MinicC0Program *program,
     } else if (array_of_records) {
         /* Shared layout owns flattened/recursive initializer slots,
          * including selected nested unions. ELF relocations remain x86. */
-        if (!minic_multi_emit_record_array_global(
-                out, program, target, obj, storage_size,
-                x86_emit_relocation)) return false;
+        const MinicArrayType *outer = minic_c0_program_array_type(
+            program, obj->type.array_type_id);
+        if (!outer) return false;
+        /* The flat record-array helper requires its immediate element to
+         * be a record, not an array. Original Linux AMD IVRS quirks have
+         * `static const struct ivrs_quirk_entry quirks[][3]`: recurse
+         * through the fixed second dimension with exact DataLayout slots. */
+        if (minic_type_is_array(outer->element_type)) {
+            if (!minic_multi_emit_recursive_aggregate_global(
+                    out, program, target, obj, storage_size,
+                    x86_emit_relocation, x86_emit_typed_bits)) return false;
+        } else if (!minic_multi_emit_record_array_global(
+                       out, program, target, obj, storage_size,
+                       x86_emit_relocation)) return false;
     } else if (minic_type_is_array(obj->type) && obj->relocation_count != 0U) {
         const MinicArrayType *outer =
             minic_c0_program_array_type(program, obj->type.array_type_id);

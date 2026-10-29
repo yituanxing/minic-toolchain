@@ -197,6 +197,35 @@ bool minic_loongarch64_emit_integer_instruction(
             bool is_signed;
             if (!minic_core_integer_overflow_shape(
                     program, target, fn, ins, &width, &is_signed)) {
+                bool multiply_signed_left, multiply_signed_right;
+                bool multiply_signed_result;
+                if (minic_core_integer_overflow_mixed_multiply_i32_shape(
+                        program, target, fn, ins,
+                        &multiply_signed_left, &multiply_signed_right,
+                        &multiply_signed_result)) {
+                    /* Each input is exactly 32 bits, possibly signed. Their
+                     * exact mathematical product fits signed 64-bit even
+                     * for INT_MIN * UINT_MAX. Compare to the *destination*
+                     * range, not to ordinary C promotions. */
+                    if (!emit_sp_mem(out, "ld.w", "$t0", (size_t)lhs * 8U) ||
+                        !emit_sp_mem(out, "ld.w", "$t1", (size_t)rhs * 8U) ||
+                        !emit_sp_mem(out, "ld.d", "$t2", (size_t)address * 8U) ||
+                        (!multiply_signed_left &&
+                         fputs("  bstrpick.d $t0, $t0, 31, 0\n", out) == EOF) ||
+                        (!multiply_signed_right &&
+                         fputs("  bstrpick.d $t1, $t1, 31, 0\n", out) == EOF) ||
+                        fputs("  mul.d $t3, $t0, $t1\n"
+                              "  add.w $t0, $t3, $zero\n", out) == EOF ||
+                        fputs(multiply_signed_result
+                                  ? "  xor $t4, $t3, $t0\n"
+                                  : "  srli.d $t4, $t3, 32\n", out) == EOF ||
+                        fputs("  sltu $t4, $zero, $t4\n"
+                              "  st.w $t0, $t2, 0\n"
+                              "  move $t0, $t4\n", out) == EOF)
+                        return false;
+                    *needs_gp_store = true;
+                    return true;
+                }
                 bool signed_left;
                 if (!minic_core_integer_overflow_mixed_add_i32_shape(
                         program, target, fn, ins, &signed_left) ||

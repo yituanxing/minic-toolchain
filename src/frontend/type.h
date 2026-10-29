@@ -14,6 +14,20 @@ typedef size_t MinicEnumId;
 #define MINIC_FUNCTION_TYPE_INVALID ((MinicFunctionTypeId) - 1)
 #define MINIC_ENUM_INVALID ((MinicEnumId) - 1)
 
+/* Target-neutral function ABI identity. A non-default convention changes
+ * function-pointer compatibility and direct/indirect call transport; it does
+ * not prescribe any particular physical register or stack location. */
+typedef enum MinicFunctionCallingConvention {
+    MINIC_CALLING_CONVENTION_DEFAULT = 0,
+    MINIC_CALLING_CONVENTION_MS_X64
+} MinicFunctionCallingConvention;
+
+static inline bool minic_function_calling_convention_valid(
+    MinicFunctionCallingConvention convention) {
+    return convention == MINIC_CALLING_CONVENTION_DEFAULT ||
+           convention == MINIC_CALLING_CONVENTION_MS_X64;
+}
+
 typedef enum MinicTypeBaseKind {
     MINIC_TYPE_BASE_VOID = 0,
     MINIC_TYPE_BASE_INT,

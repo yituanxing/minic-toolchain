@@ -24,12 +24,12 @@ mini_status=$?
 set -e
 test "$gnu_status" -eq 42 || fail "GNU ABI returned $gnu_status"
 test "$mini_status" -eq 42 || fail "MiniC ABI returned $mini_status"
-test "$(rg -c 'call __put_user_' "$work/mini.s")" -eq 2 \
+test "$(grep -c 'call __put_user_' "$work/mini.s")" -eq 2 \
     || fail 'MiniC omitted or invented private x86 helper calls'
-rg -q 'call __put_user_nocheck_8' "$work/mini.s" \
+grep -q 'call __put_user_nocheck_8' "$work/mini.s" \
     || fail 'nocheck helper must retain its exact symbol'
-test "$(rg -c 'movq %rbx, \(%rsp\)' "$work/mini.s")" -eq 2 \
+test "$(grep -Fc 'movq %rbx, (%rsp)' "$work/mini.s")" -eq 2 \
     || fail 'RBX save missing around one of the helper calls'
-test "$(rg -c 'movq \(%rsp\), %rbx' "$work/mini.s")" -eq 2 \
+test "$(grep -Fc 'movq (%rsp), %rbx' "$work/mini.s")" -eq 2 \
     || fail 'RBX restore missing around one of the helper calls'
 printf '%s\n' 'X86_PUT_PTR_NATIVE=PASS GNU_status=42 MiniC_status=42 private_calls=2 pointer_rax=8B rbX_preserved=1'

@@ -407,6 +407,8 @@ typedef struct MinicFunction {
        only borrow this stable storage; the Program releases it. */
     MinicType *parameter_types;
     size_t parameter_count;
+    /* Direct named functions have the same ABI identity as function types. */
+    MinicFunctionCallingConvention calling_convention;
     size_t local_begin;
     size_t local_count;
     MinicBlockId body_block;
@@ -465,15 +467,8 @@ typedef struct MinicArrayType {
     bool is_query_materialized;
 } MinicArrayType;
 
-/* A calling convention changes function POINTER type identity, not the
- * containing record's size or the general-purpose Core call semantics.
- * Target backends must explicitly admit every non-default ABI before any
- * machine call; a type-only declaration can be represented safely. */
-typedef enum MinicFunctionCallingConvention {
-    MINIC_CALLING_CONVENTION_DEFAULT = 0,
-    MINIC_CALLING_CONVENTION_MS_X64
-} MinicFunctionCallingConvention;
-
+/* Function-pointer declarations preserve the ABI identity even when the
+ * target cannot yet lower a call with that convention. */
 typedef struct MinicFunctionType {
     MinicType return_type;
     MinicType parameter_types[MINIC_MAX_FUNCTION_PARAMETERS];
@@ -766,6 +761,11 @@ bool minic_c0_program_set_function_alignment(MinicC0Program *program,
 bool minic_c0_program_set_function_variadic(MinicC0Program *program,
                                             MinicFunctionId function_id,
                                             bool is_variadic);
+/* Set an explicit direct-function ABI. Existing implicit/default ABI users
+ * remain DEFAULT; a previously selected foreign ABI cannot be overwritten. */
+bool minic_c0_program_set_function_calling_convention(
+    MinicC0Program *program, MinicFunctionId function_id,
+    MinicFunctionCallingConvention convention);
 bool minic_c0_program_define_function(MinicC0Program *program,
                                       MinicFunctionId function_id,
                                       size_t local_begin,

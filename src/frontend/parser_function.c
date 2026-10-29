@@ -289,7 +289,10 @@ static bool consume_function_attribute(MinicParser *parser,
         const char *value;
         size_t length;
         static const char *const safe_scalar_targets[] = {
-            "default", "bmi2", "popcnt", "lzcnt"
+            "default", "bmi2", "popcnt", "lzcnt",
+            /* Linux 6.6 Zstd BMI2_TARGET_ATTRIBUTE expands to these three
+             * optional scalar x86 feature names in one GCC target string. */
+            "lzcnt,bmi,bmi2"
         };
         size_t index;
 

@@ -16,8 +16,9 @@ int MIXED_REVERSE(int narrow, unsigned long large, int *out) {
 }
 
 #ifdef MIXED_UNSUPPORTED
-/* Signed 64-bit + signed 32-bit → signed 32-bit needs a separate proof;
- * do not admit it by silently treating either operand as unsigned64. */
+/* Signed 64-bit + signed 32-bit → signed 32-bit requires full-precision
+ * overflow checking, not a cast to unsigned64. x86 proves this separately;
+ * targets without that lowering continue to fail closed. */
 int unsupported_mixed_add(long large, int narrow, int *out) {
     return __builtin_add_overflow(large, narrow, out);
 }

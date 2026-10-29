@@ -49,12 +49,10 @@ printf '%s\n' 'PASS compiler/c0/invalid_runtime_record_array_backward_designator
 "$host_cc" -E -P -std=gnu11 -x c \
     "$root/tests/compiler/c0/invalid_runtime_record_array_range_designator.c" \
     -o "$work/invalid_runtime_record_array_range_designator.i"
-if "$minic" -S "$work/invalid_runtime_record_array_range_designator.i" \
-    -o "$work/invalid_runtime_record_array_range_designator.s" \
-    >"$work/range.stdout" 2>"$work/range.stderr"; then
-    printf '%s\n' 'FAIL compiler/c0/invalid_runtime_record_array_range_designator: unexpectedly succeeded' >&2
-    exit 1
-fi
-grep -F 'record array range designators require one element' \
-    "$work/range.stderr" >/dev/null
-printf '%s\n' 'PASS compiler/c0/invalid_runtime_record_array_range_designator fail-closed=1'
+# This was an intentionally rejected construct before aggregate range-copy
+# semantics were implemented. Its valid GNU C form must now compile.
+"$minic" -S "$work/invalid_runtime_record_array_range_designator.i" \
+    -o "$work/invalid_runtime_record_array_range_designator.s"
+grep -F 'invalid_runtime_record_array_range_designator:' \
+    "$work/invalid_runtime_record_array_range_designator.s" >/dev/null
+printf '%s\n' 'PASS compiler/c0/runtime_record_array_range_designator enabled=1'

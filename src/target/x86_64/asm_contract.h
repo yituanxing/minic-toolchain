@@ -23,6 +23,8 @@ bool minic_x86_64_linux_mmio_type_matches(MinicType, unsigned int);
 unsigned int minic_x86_64_linux_rep_string_io_form(const char *, size_t);
 /* Fixed RCX/RDI/RSI kernel iomem MOVSB/MOVSW/REP MOVSL with tied inputs. */
 unsigned int minic_x86_64_linux_iomem_copy_form(const char *, size_t);
+/* Linux i915 WC/SSE4.1 copy: exact aligned/unaligned 1x and 4x blocks. */
+unsigned int minic_x86_64_linux_i915_movntdqa_form(const char *, size_t);
 /* Non-temporal memcpy and CLWB alternative with exact Linux machine ABI. */
 unsigned int minic_x86_64_linux_flushcache_copy_form(const char *, size_t);
 /* Atomic register/memory exchange with the GNU +r/+m two-output ABI. */
@@ -91,6 +93,9 @@ bool minic_x86_64_linux_unwind_context_form(const char *, size_t);
 bool minic_x86_64_linux_task_size_alt_form(const char *, size_t);
 /* Call the hardirq handler on the per-CPU IRQ stack with exact RSP save. */
 unsigned int minic_x86_64_linux_irq_stack_call_form(const char *, size_t);
+/* Linux CONFIG_PREEMPT_DYNAMIC static-call trampoline with a fixed RSP live
+ * GNU +r output. This is a real CALL, not a register-producing expression. */
+unsigned int minic_x86_64_linux_preempt_static_call_form(const char *, size_t);
 unsigned int minic_x86_64_linux_xstate_fault_form(const char *, size_t);
 bool minic_x86_64_linux_xrstor_alternative_form(const char *, size_t);
 bool minic_x86_64_linux_xsave_triple_alternative_form(const char *, size_t);

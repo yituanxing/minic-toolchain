@@ -1002,42 +1002,36 @@ static bool global_relocation_object_target_type_compatible(const MinicC0Program
     if (program == NULL || !minic_type_is_pointer(slot_type)) {
         return false;
     }
-    if (has_explicit_pointer_cast) {
-        /* The parser has already validated the explicit pointer-to-pointer cast.
-         * Re-check only the normalized type-level legality here; target identity
-         * and member-path validity are still verified independently. */
-        if (minic_type_pointer_to(target_type, &source_pointer_type) &&
-            minic_type_cast_compatible(slot_type, source_pointer_type)) {
-            return true;
-        }
-        if (minic_type_is_array(target_type)) {
-            const MinicArrayType *array_type;
-
-            array_type = minic_c0_program_array_type(program, target_type.array_type_id);
-            if (array_type != NULL &&
-                minic_type_pointer_to(array_type->element_type, &source_pointer_type) &&
-                minic_type_cast_compatible(slot_type, source_pointer_type)) {
-                return true;
-            }
-        }
-    }
-    /* A symbolic object address can denote the object itself (`&object`). */
+    /* A symbolic object address can denote the object itself (`&object`).
+     * The parser has validated explicit casts already; persisted relocation
+     * validation must retain the same type contract. */
     if (minic_type_pointer_to(target_type, &source_pointer_type) &&
-        global_relocation_pointer_target_type_compatible(program, slot_type, source_pointer_type)) {
+        ((has_explicit_pointer_cast &&
+          minic_type_cast_compatible(slot_type, source_pointer_type)) ||
+         global_relocation_pointer_target_type_compatible(
+             program, slot_type, source_pointer_type))) {
         return true;
     }
-    /* Array-to-pointer decay and `&array[0]` have the same symbol/addend as
-     * `&array`, but their C type is pointer-to-element rather than pointer-to-array.
-     * Preserve that semantic alternative in the persisted relocation contract. */
-    if (minic_type_is_array(target_type)) {
+    /* Array subscripting is stored as a byte addend against the *root* array
+     * symbol. For `array[i][j]`, the root can have two or more array layers
+     * while the initializer slot has type pointer-to-scalar. Check each legal
+     * decay level, not just the outermost one. The parser has already checked
+     * the source expression/slot assignment and calculated the byte addend. */
+    while (minic_type_is_array(target_type)) {
         const MinicArrayType *array_type;
 
         array_type = minic_c0_program_array_type(program, target_type.array_type_id);
-        if (array_type != NULL &&
-            minic_type_pointer_to(array_type->element_type, &source_pointer_type) &&
-            global_relocation_pointer_target_type_compatible(program, slot_type, source_pointer_type)) {
+        if (array_type == NULL ||
+            !minic_type_pointer_to(array_type->element_type, &source_pointer_type)) {
+            return false;
+        }
+        if ((has_explicit_pointer_cast &&
+             minic_type_cast_compatible(slot_type, source_pointer_type)) ||
+            global_relocation_pointer_target_type_compatible(
+                program, slot_type, source_pointer_type)) {
             return true;
         }
+        target_type = array_type->element_type;
     }
     return false;
 }

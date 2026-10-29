@@ -4,6 +4,122 @@
 #include "frontend/const_eval.h"
 #include <string.h>
 
+/* Original Linux 6.6 arch/arm64/include/asm/jump_label.h.  Both jump
+ * sites own one 16-byte __jump_table record: site and C label PREL32,
+ * static-key/branch-flags PREL64.  Only the original two templates qualify;
+ * arbitrary source text never reaches the target assembler through this gate. */
+static unsigned int aarch64_linux_jump_label_form(
+    const char *source, size_t length) {
+    static const char shared[] =
+        ".pushsection__jump_table,\"aw\".align3"
+        ".long1b-.,%l[l_yes]-..quad%c0-..popsection";
+    static const char *const prefixes[] = { "1:nop", "1:b%l[l_yes]" };
+    char compact[256];
+    size_t i, n = 0U;
+    if (source == NULL || !length || length >= sizeof(compact)) return 0U;
+    for (i = 0U; i < length; ++i) {
+        char c = source[i];
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
+        if (c == '\0' || n + 1U >= sizeof(compact)) return 0U;
+        compact[n++] = c;
+    }
+    compact[n] = '\0';
+    for (i = 0U; i < sizeof(prefixes) / sizeof(prefixes[0]); ++i) {
+        size_t a = strlen(prefixes[i]), b = sizeof(shared) - 1U;
+        if (n == a + b && memcmp(compact, prefixes[i], a) == 0 &&
+            memcmp(compact + a, shared, b) == 0)
+            return (unsigned int)i + 1U;
+    }
+    return 0U;
+}
+
+static bool aarch64_linux_jump_key_relocation(const char *key) {
+    size_t i, length;
+    if (key == NULL) return false;
+    length = strlen(key);
+    if (length == 0U || length > 128U ||
+        !((key[0] >= 'a' && key[0] <= 'z') ||
+          (key[0] >= 'A' && key[0] <= 'Z') ||
+          key[0] == '_' || key[0] == '.')) return false;
+    for (i = 1U; i < length; ++i) {
+        char c = key[i];
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+            (c >= '0' && c <= '9') || c == '_' || c == '.' || c == '$')
+            continue;
+        if ((c == '+' || c == '-') && i + 1U < length) {
+            for (++i; i < length; ++i)
+                if (key[i] < '0' || key[i] > '9') return false;
+            return true;
+        }
+        return false;
+    }
+    return true;
+}
+
+bool minic_aarch64_qualify_inline_asm_goto(
+    const MinicC0Program *program, const MinicInlineAsm *source) {
+    const MinicInlineAsmOperand *key;
+    const MinicInlineAsmLabel *label;
+    const MinicExpression *expression;
+    if (program == NULL || source == NULL || !source->is_goto ||
+        source->is_volatile || source->output_count != 0U ||
+        source->input_count != 1U || source->inputs == NULL ||
+        source->label_count != 1U || source->labels == NULL ||
+        source->clobber_count != 0U || source->register_clobber_count != 0U ||
+        source->has_memory_clobber ||
+        aarch64_linux_jump_label_form(source->template_text,
+                                      source->template_length) == 0U) return false;
+    key = &source->inputs[0];
+    label = &source->labels[0];
+    expression = minic_c0_program_expression(program, key->expression);
+    return key->access == MINIC_INLINE_ASM_OPERAND_READ_ONLY &&
+           key->constraint_text != NULL && key->constraint_length == 1U &&
+           key->constraint_text[0] == 'i' && expression != NULL &&
+           minic_type_is_pointer(expression->type) &&
+           label->name != NULL && label->name_length == 5U &&
+           memcmp(label->name, "l_yes", 5U) == 0 &&
+           label->target_statement != MINIC_STATEMENT_INVALID;
+}
+
+bool minic_aarch64_linux_jump_label_asm_goto_core(
+    const MinicCoreInlineAsm *source) {
+    return source != NULL && source->is_goto && source->is_volatile &&
+           source->goto_target != MINIC_CORE_BLOCK_INVALID &&
+           source->goto_second_target == MINIC_CORE_BLOCK_INVALID &&
+           !source->has_memory_clobber &&
+           source->register_clobber_count == 0U &&
+           source->source_inline_asm_id == SIZE_MAX &&
+           source->resolved_immediate_count == 1U &&
+           aarch64_linux_jump_key_relocation(source->resolved_immediates[0]) &&
+           aarch64_linux_jump_label_form(source->template_text,
+                                         source->template_length) != 0U;
+}
+
+bool minic_aarch64_emit_linux_jump_label_asm_goto(
+    FILE *out, const MinicCoreInlineAsm *source,
+    size_t function_id, size_t function_blocks) {
+    unsigned int form = source != NULL
+        ? aarch64_linux_jump_label_form(source->template_text,
+                                        source->template_length) : 0U;
+    if (out == NULL || form == 0U ||
+        !minic_aarch64_linux_jump_label_asm_goto_core(source) ||
+        source->goto_target >= function_blocks) return false;
+    if (form == 1U) {
+        if (fputs("1: nop\n", out) == EOF) return false;
+    } else if (fprintf(out, "1: b .Lmini_arm_f%zu_b%u\n",
+                       function_id, (unsigned int)source->goto_target) < 0)
+        return false;
+    return fprintf(out,
+        "  .pushsection __jump_table,\"aw\"\n"
+        "  .balign 8\n"
+        "  .long 1b - .\n"
+        "  .long .Lmini_arm_f%zu_b%u - .\n"
+        "  .quad %s - .\n"
+        "  .popsection\n",
+        function_id, (unsigned int)source->goto_target,
+        source->resolved_immediates[0]) >= 0;
+}
+
 /* Linux 6.6 arch/arm64/include/asm/alternative-macros.h.
  * The original assembler-generated section and paired .orgs are needed for
  * boot-time feature patching. This is an EXACT, target-owned template gate;
@@ -266,14 +382,15 @@ unsigned int minic_aarch64_linux_rept_nop_count(
 bool minic_aarch64_qualified_opaque_asm(const MinicCoreInlineAsm *a) {
     static const char *const allowed[] = {
         "msrdaifset,#3", "msrdaifclr,#3",
-        "yield", "hint#20", "sev", "sevl", "wfe", "wfi", "nop",
-        "dsbsy", "dsbish", "dsbishst", "dsbld",
+        "yield", "hint#6", "hint#20", "sev", "sevl", "wfe", "wfi", "nop",
+        "dsbsy", "dsbst", "dsbish", "dsbishst", "dsbld",
         "dmbish", "dmbishld", "dmbishst", "dmbsy",
         "icialluis",
         "dmbosh", "dmboshld", "dmboshst", "isb"
     };
     char compact[64];
     size_t i, n = 0U;
+    if (minic_aarch64_linux_jump_label_asm_goto_core(a)) return true;
     if (minic_aarch64_linux_cap_asm_goto_core(a)) return true;
     if (a != NULL && a->is_volatile && !a->is_goto &&
         a->register_clobber_count == 0U &&
@@ -384,10 +501,10 @@ static const char *aarch64_barrier_template(const char *text, size_t len) {
     static const char *const allowed[] = {
         "dmb ish", "dmb ishld", "dmb ishst", "dmb sy",
         "dmb osh", "dmb oshld", "dmb oshst",
-        "dsb sy", "dsb ish", "dsb ishst", "dsb ld",
+        "dsb sy", "dsb ish", "dsb ishst", "dsb ld", "dsb st",
         "dsb nsh", "dsb nshst", "isb",
         "msr daifset, #3", "msr daifclr, #3",
-        "yield", "hint #20", "sev", "sevl", "wfe", "wfi", "nop",
+        "yield", "hint #6", "hint #20", "sev", "sevl", "wfe", "wfi", "nop",
         "ic ialluis"
     };
     char normalized[64];
@@ -716,7 +833,9 @@ static bool aarch64_lse_form(const char *text, size_t length,
         }
     }
     for (width = 0U; width < 4U; ++width) {
-        const char *reg = cas_widths[width] == 8U ? "%" : "%w";
+        /* Linux's CAS macro spells 64-bit operands %x[old]/%x[new],
+         * unlike 64-bit LSE fetch/store, whose placeholders are bare. */
+        const char *reg = cas_widths[width] == 8U ? "%x" : "%w";
         for (mode = 0U; mode < 4U; ++mode) {
             const int written = snprintf(expected, sizeof(expected),
                 ".arch_extensionlsecas%s%s%s%s,%s%s,%s",
@@ -747,7 +866,7 @@ bool minic_aarch64_requires_qualified_input_asm(const MinicInlineAsm *src) {
         "strb", "strh", "str",
         /* Original Linux CMPXCHG begins with PRFM and named operands;
          * rejected constraints/modes must not escape into generic Core. */
-        "prfm", "prfm", "1:", ".arch_extension lse"
+        "prfm", "prfm", "1:", ".arch_extension lse", "rbit"
     };
     char prefix[64];
     const char *const single[] = {prefix};
@@ -756,6 +875,11 @@ bool minic_aarch64_requires_qualified_input_asm(const MinicInlineAsm *src) {
      * shape handled by Core's generic asm-goto lowering. Its target-owned
      * section/ISA contract is checked again at machine admission. */
     if (minic_aarch64_linux_cap_asm_goto_source(src)) return false;
+    /* Exact Linux asm-goto table records are not ordinary scalar ASM input.
+     * Core independently re-verifies the complete source/operand contract. */
+    if (src != NULL && src->is_goto &&
+        aarch64_linux_jump_label_form(src->template_text,
+                                      src->template_length) != 0U) return false;
     if (minic_backend_inline_asm_prefix_matches(
             src, fixed, sizeof(fixed) / sizeof(fixed[0])))
         return true;
@@ -783,6 +907,84 @@ static const char *const aarch64_atomic_load[] = {
 static const char *const aarch64_atomic_store[] = {
     "stlxr", "stxr", "stxr", "stlxr"
 };
+
+/* ARM64_LSE_ATOMIC_INSN expands to a two-body ALTERNATIVE, not just an
+ * LL/SC loop. The full metadata is mandatory for late CPU-capability
+ * patching, so split it only if EVERY section, relocation and .org token
+ * matches Linux's native __ALTERNATIVE_CFG layout and the frozen LSE cap.
+ * The two instruction bodies are subsequently checked by typed decoders. */
+static bool aarch64_linux_alt_lse_partition(
+    const char *text, size_t length,
+    char *old_body, size_t old_size,
+    char *new_body, size_t new_size) {
+    static const char prefix[] = ".if1==1661:";
+    static const char middle[] =
+        "662:.pushsection.altinstructions,\"a\""
+        ".word661b-..word663f-..hword33"
+        ".byte662b-661b.byte664f-663f"
+        ".popsection.subsection1663:";
+    static const char suffix[] =
+        "664:.org.-(664b-663b)+(662b-661b)"
+        ".org.-(662b-661b)+(664b-663b)"
+        ".previous.endif";
+    char compact[900];
+    const char *boundary, *end;
+    size_t i, n = 0U, left, right;
+    if (!text || !length || length >= sizeof(compact) ||
+        !old_body || !new_body) return false;
+    for (i = 0U; i < length; ++i) {
+        const char c = text[i];
+        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') continue;
+        if (c == '\0' || n + 1U >= sizeof(compact)) return false;
+        compact[n++] = c;
+    }
+    compact[n] = '\0';
+    if (n <= sizeof(prefix) - 1U + sizeof(middle) - 1U +
+                 sizeof(suffix) - 1U ||
+        memcmp(compact, prefix, sizeof(prefix) - 1U) != 0 ||
+        memcmp(compact + n - sizeof(suffix) + 1U,
+               suffix, sizeof(suffix) - 1U) != 0)
+        return false;
+    boundary = strstr(compact + sizeof(prefix) - 1U, middle);
+    if (!boundary) return false;
+    end = compact + n - sizeof(suffix) + 1U;
+    left = (size_t)(boundary - (compact + sizeof(prefix) - 1U));
+    right = (size_t)(end - (boundary + sizeof(middle) - 1U));
+    if (!left || !right || left >= old_size || right >= new_size)
+        return false;
+    memcpy(old_body, compact + sizeof(prefix) - 1U, left);
+    old_body[left] = '\0';
+    memcpy(new_body, boundary + sizeof(middle) - 1U, right);
+    new_body[right] = '\0';
+    return true;
+}
+
+/* The enclosing emitter writes four or five original instructions before
+ * calling this helper, then the same number of replacement instructions.
+ * All field offsets are PREL32 and Linux's capability is ARM64_HAS_LSE_ATOMICS
+ * (33 in its frozen tools/cpucaps list). Keep two .org length guards. */
+static bool aarch64_linux_alt_lse_emit_middle(FILE *out) {
+    return fprintf(out,
+        "662:\n"
+        "  .pushsection .altinstructions, \"a\"\n"
+        "  .word 661b - .\n"
+        "  .word 663f - .\n"
+        "  .hword 33\n"
+        "  .byte 662b - 661b\n"
+        "  .byte 664f - 663f\n"
+        "  .popsection\n"
+        "  .subsection 1\n"
+        "663:\n"
+        "  .arch_extension lse\n") >= 0;
+}
+
+static bool aarch64_linux_alt_lse_emit_end(FILE *out) {
+    return fprintf(out,
+        "664:\n"
+        "  .org . - (664b-663b) + (662b-661b)\n"
+        "  .org . - (662b-661b) + (664b-663b)\n"
+        "  .previous\n") >= 0;
+}
 
 /* Match the entire original GNU Linux template, not a mnemonic prefix.
  * No partial acceptance, arbitrary replacement opcode or opaque ASM
@@ -861,6 +1063,56 @@ static bool aarch64_linux_percpu_rmw_form(
     static const size_t widths[] = {1U, 2U, 4U, 8U};
     char compact[256], expected[256];
     size_t i, n=0U, width, op_index, ret;
+    {
+        char old_body[256], new_body[256];
+        Aarch64PerCpuForm old;
+        if (aarch64_linux_alt_lse_partition(
+                text, length, old_body, sizeof(old_body),
+                new_body, sizeof(new_body))) {
+            const char *mnemonic;
+            const char *reg;
+            const char *value, *memory, *return_value;
+            const bool numeric = strstr(old_body, "%2") != NULL;
+            unsigned int returns_new;
+            if (!aarch64_linux_percpu_rmw_form(
+                    old_body, strlen(old_body), &old)) return false;
+            reg = old.width == 8U ? "%" : "%w";
+            value = numeric ? "3" : "[val]";
+            memory = numeric ? "%2" : "%[ptr]";
+            return_value = numeric ? "1" : "[ret]";
+            /* The *numeric* old body has the same %1 spelling for tmp and
+             * ret, so LSE's replacement must disambiguate whether the
+             * source produces a return value. The named source is unique. */
+            for (returns_new = 0U; returns_new < 2U; ++returns_new) {
+                int written;
+                if ((!numeric && old.returns_new != (returns_new != 0U)) ||
+                    (returns_new && strcmp(old.op->name, "add") != 0))
+                    continue;
+                if (strcmp(old.op->name, "add") == 0)
+                    mnemonic = returns_new ? "ldadd" : "stadd";
+                else if (strcmp(old.op->name, "andnot") == 0)
+                    mnemonic = "stclr";
+                else if (strcmp(old.op->name, "or") == 0)
+                    mnemonic = "stset";
+                else continue;
+                written = returns_new ? snprintf(expected, sizeof(expected),
+                    ".arch_extensionlse%s%s%s,%s%s,%s"
+                    "add%s%s,%s%s,%s%snopnop",
+                    mnemonic, reg, value, reg, return_value, memory,
+                    reg, return_value, reg, return_value, reg, value) :
+                    snprintf(expected, sizeof(expected),
+                    ".arch_extensionlse%s%s%s,%snopnopnop",
+                    mnemonic, reg, value, memory);
+                if (written > 0 && (size_t)written < sizeof(expected) &&
+                    strcmp(new_body, expected) == 0) {
+                    *result = old;
+                    result->returns_new = returns_new != 0U;
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
     if (!text || !length || !result || length>=sizeof(compact)) return false;
     for(i=0U;i<length;++i) {
         const char c=text[i];
@@ -991,6 +1243,29 @@ static bool aarch64_linux_xchg_form(
     static const char *const new_reg[] = {"%w3", "%w3", "%w3", "%3"};
     char compact[240], expected[240];
     size_t i, n = 0U, width, mode;
+    {
+        static const char *const order[] = {"", "a", "l", "al"};
+        char old_body[256], new_body[256];
+        Aarch64XchgForm old;
+        if (aarch64_linux_alt_lse_partition(
+                text, len, old_body, sizeof(old_body),
+                new_body, sizeof(new_body))) {
+            int written;
+            if (!aarch64_linux_xchg_form(
+                    old_body, strlen(old_body), &old)) return false;
+            width = old.width == 1U ? 0U : old.width == 2U ? 1U :
+                    old.width == 4U ? 2U : 3U;
+            written = snprintf(expected, sizeof(expected),
+                ".arch_extensionlseswp%s%s%s,%s,%%2"
+                "nopnopnop%s",
+                order[old.mode], suffix[width], new_reg[width],
+                old_reg[width], old.mode == 3U ? "nop" : "");
+            if (written <= 0 || (size_t)written >= sizeof(expected) ||
+                strcmp(new_body, expected) != 0) return false;
+            *result = old;
+            return true;
+        }
+    }
     if (!text || !len || !result || len >= sizeof(compact)) return false;
     for (i = 0U; i < len; ++i) {
         const char ch = text[i];
@@ -3548,6 +3823,33 @@ static bool aarch64_linux_user_cache_fault_emit(
         (size_t)op[1].value * 8U, instruction,
         9U | (31U << 5), (size_t)op[0].value * 8U) >= 0;
 }
+static bool aarch64_linux_bitrev_source(
+    const MinicC0Program *program, const MinicInlineAsm *src,
+    MinicTargetInlineAsmContract *contract) {
+    const MinicExpression *dst, *arg;
+    static const char exact[] = "rbit %w0, %w1";
+    if (!program || !src || !contract || src->is_volatile || src->is_goto ||
+        src->template_length != sizeof(exact) - 1U ||
+        memcmp(src->template_text, exact, sizeof(exact) - 1U) != 0 ||
+        !src->outputs || !src->inputs || src->output_count != 1U ||
+        src->input_count != 1U || src->label_count || src->clobber_count ||
+        src->register_clobber_count || src->has_memory_clobber ||
+        !constraint(&src->outputs[0], "=r") ||
+        !constraint(&src->inputs[0], "r"))
+        return false;
+    dst = minic_c0_program_expression(program, src->outputs[0].expression);
+    arg = minic_c0_program_expression(program, src->inputs[0].expression);
+    if (!dst || !arg || dst->value_category != MINIC_VALUE_LVALUE ||
+        minic_type_is_const(dst->type) ||
+        !aarch64_stlr_type(dst->type, 4U) ||
+        !aarch64_stlr_type(arg->type, 4U))
+        return false;
+    contract->operand_count = 2U;
+    contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+    contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    return true;
+}
+
 static bool aarch64_linux_lse_source(
     const MinicC0Program *program, const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
@@ -3634,6 +3936,7 @@ bool minic_aarch64_qualify_inline_asm(
             }
         }
     }
+    if(aarch64_linux_bitrev_source(program,src,contract))return true;
     if(aarch64_linux_lse_source(program,src,contract))return true;
     if(aarch64_linux_smccc_source(program,src,contract))return true;
     if(aarch64_linux_svc_source(program,src,contract))return true;
@@ -4372,6 +4675,36 @@ bool minic_aarch64_emit_qualified_structured_asm(
     if (ins->value.structured_inline_asm.inline_asm_id >= fn->inline_asm_count)
         return false;
     info = &fn->inline_asms[ins->value.structured_inline_asm.inline_asm_id];
+    if (info->template_length == sizeof("rbit %w0, %w1") - 1U &&
+        memcmp(info->template_text, "rbit %w0, %w1",
+               sizeof("rbit %w0, %w1") - 1U) == 0) {
+        const MinicCoreStructuredInlineAsmOperand *op =
+            ins->value.structured_inline_asm.operands;
+        MinicType pointee;
+        if (!info->is_volatile || info->is_goto ||
+            info->register_clobber_count || info->has_memory_clobber ||
+            ins->value.structured_inline_asm.operand_count != 2U ||
+            op[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
+            op[1].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
+            op[0].operand_index != 0U || op[1].operand_index != 1U ||
+            op[0].early_clobber || op[1].early_clobber ||
+            op[0].has_fixed_register_binding ||
+            op[1].has_fixed_register_binding ||
+            op[0].value >= fn->value_count || op[1].value >= fn->value_count ||
+            !aarch64_linux_structured_spill_slot_valid(op[0].value) ||
+            !aarch64_linux_structured_spill_slot_valid(op[1].value) ||
+            !minic_type_pointee(fn->values[op[0].value].type, &pointee) ||
+            !aarch64_stlr_type(pointee, 4U) ||
+            !aarch64_stlr_type(fn->values[op[1].value].type, 4U))
+            return false;
+        return fprintf(out,
+            "  ldr w9, [sp, #%zu]\n"
+            "  rbit w9, w9\n"
+            "  ldr x10, [sp, #%zu]\n"
+            "  str w9, [x10]\n",
+            (size_t)op[1].value * 8U,
+            (size_t)op[0].value * 8U) >= 0;
+    }
     {
         Aarch64LseForm lse;
         if (aarch64_lse_form(info->template_text, info->template_length,
@@ -4869,6 +5202,52 @@ bool minic_aarch64_emit_qualified_structured_asm(
                     fn->values[op->value].type,p.width))
                     return false;
             }
+            {
+                char old_body[256], new_body[256];
+                if (aarch64_linux_alt_lse_partition(
+                        info->template_text, info->template_length,
+                        old_body, sizeof(old_body),
+                        new_body, sizeof(new_body))) {
+                    const char *lse_op = strcmp(p.op->name, "add") == 0
+                        ? (p.returns_new ? "ldadd" : "stadd")
+                        : strcmp(p.op->name, "andnot") == 0
+                            ? "stclr" : "stset";
+                    if (fprintf(out,
+                            "  ldr x10, [sp, #%zu]\n"
+                            "  ldr x11, [sp, #%zu]\n"
+                            "661:\n"
+                            "1: ldxr%s %s9, [x10]\n"
+                            "  %s %s9, %s9, %s11\n"
+                            "  stxr%s w12, %s9, [x10]\n"
+                            "  cbnz w12, 1b\n",
+                            (size_t)ops[2].value * 8U,
+                            (size_t)ops[3].value * 8U,
+                            suffix, reg, p.op->alu, reg, reg, reg,
+                            suffix, reg) < 0 ||
+                        !aarch64_linux_alt_lse_emit_middle(out))
+                        return false;
+                    if (p.returns_new) {
+                        if (fprintf(out,
+                            "  %s%s %s11, %s9, [x10]\n"
+                            "  add %s9, %s9, %s11\n"
+                            "  nop\n  nop\n",
+                            lse_op, suffix, reg, reg, reg, reg, reg) < 0)
+                            return false;
+                    } else if (fprintf(out,
+                        "  %s%s %s11, [x10]\n"
+                        "  nop\n  nop\n  nop\n",
+                        lse_op, suffix, reg) < 0) return false;
+                    if (!aarch64_linux_alt_lse_emit_end(out)) return false;
+                    return fprintf(out,
+                        "  mov w12, #0\n"
+                        "  ldr x13, [sp, #%zu]\n"
+                        "  %s, [x13]\n"
+                        "  ldr x13, [sp, #%zu]\n"
+                        "  str w12, [x13]\n",
+                        (size_t)ops[1].value * 8U, store,
+                        (size_t)ops[0].value * 8U) >= 0;
+                }
+            }
             /* aarch64 LL/SC status failure retries; status written as u32
              * and tmp/ret narrowed EXACTLY, not widened to a 64-bit store. */
             return fprintf(out,
@@ -4984,6 +5363,47 @@ bool minic_aarch64_emit_qualified_structured_asm(
                 } else if (!aarch64_stlr_type(
                     fn->values[op->value].type, xchg.width))
                     return false;
+            }
+            {
+                static const char *const order[] = {"", "a", "l", "al"};
+                char old_body[256], new_body[256];
+                if (aarch64_linux_alt_lse_partition(
+                        info->template_text, info->template_length,
+                        old_body, sizeof(old_body),
+                        new_body, sizeof(new_body))) {
+                    if (fprintf(out,
+                        "  ldr x10, [sp, #%zu]\n"
+                        "  ldr x11, [sp, #%zu]\n"
+                        "661:\n"
+                        "  prfm pstl1strm, [x10]\n"
+                        "1: %sxr%s %s9, [x10]\n"
+                        "  %sxr%s w12, %s11, [x10]\n"
+                        "  cbnz w12, 1b\n"
+                        "%s",
+                        (size_t)ops[2].value * 8U,
+                        (size_t)ops[3].value * 8U,
+                        aarch64_xchg_ld[xchg.mode], suffix, reg,
+                        aarch64_xchg_st[xchg.mode], suffix, reg,
+                        xchg.mode == 3U ? "  dmb ish\n" : "") < 0 ||
+                        !aarch64_linux_alt_lse_emit_middle(out))
+                        return false;
+                    if (fprintf(out,
+                        "  swp%s%s %s11, %s9, [x10]\n"
+                        "  nop\n  nop\n  nop\n"
+                        "%s",
+                        order[xchg.mode], suffix, reg, reg,
+                        xchg.mode == 3U ? "  nop\n" : "") < 0 ||
+                        !aarch64_linux_alt_lse_emit_end(out))
+                        return false;
+                    return fprintf(out,
+                        "  mov w12, #0\n"
+                        "  ldr x13, [sp, #%zu]\n"
+                        "  %s, [x13]\n"
+                        "  ldr x13, [sp, #%zu]\n"
+                        "  str x12, [x13]\n",
+                        (size_t)ops[0].value * 8U, old_store,
+                        (size_t)ops[1].value * 8U) >= 0;
+                }
             }
             return fprintf(out,
                 "  ldr x10, [sp, #%zu]\n"

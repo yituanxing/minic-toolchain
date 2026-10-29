@@ -126,7 +126,8 @@ bool minic_multi_direct_lp64_function_preflight(
         else if(fn->block_count>2048U)reason="block_cap";
         else if(!direct_lp64_only_structured_asm(fn, qualify_opaque_asm))
             reason="gnu_asm_qualification";
-        else if(fn->parameter_count>16U)reason="parameter_cap";
+        else if(fn->parameter_count>MINIC_DIRECT_LP64_MAX_CALL_ARGUMENTS)
+            reason="parameter_cap";
         else if(!minic_lp64_baseline_values_fit_frame(fn->value_count))reason="value_cap";
         else if(fn->object_count>8192U)reason="object_cap";
         if(reason!=NULL&&strcmp(reason,"gnu_asm_qualification")==0)
@@ -147,7 +148,10 @@ bool minic_multi_direct_lp64_function_preflight(
             program, target, fn->return_type, indirect_return) ||
         fn->block_count > 2048U ||
         !direct_lp64_only_structured_asm(fn, qualify_opaque_asm) ||
-        fn->parameter_count > 16U ||
+        /* The shared ABI plan and both target emitters iterate all argument
+         * locations, including the spill region after eight GP registers.
+         * Keep function and call-side capacity at the same proven 64. */
+        fn->parameter_count > MINIC_DIRECT_LP64_MAX_CALL_ARGUMENTS ||
         !minic_lp64_baseline_values_fit_frame(fn->value_count) ||
         fn->object_count > 8192U)
         {
