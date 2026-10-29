@@ -561,6 +561,15 @@ static const char *aarch64_linux_mrs_register(const char *text, size_t len) {
         /* KVM hyp/switch.h reads/restores these exact EL2 trap/debug
          * registers using the ordinary read_sysreg() GNU "=r" API. */
         {"mrs%0,fpexc32_el2", "fpexc32_el2"},
+        {"mrs%0,cptr_el2", "cptr_el2"},
+        {"mrs%0,elr_el2", "elr_el2"},
+        {"mrs%0,dacr32_el2", "dacr32_el2"},
+        {"mrs%0,dbgvcr32_el2", "dbgvcr32_el2"},
+        {"mrs%0,ifsr32_el2", "ifsr32_el2"},
+        {"mrs%0,pmuserenr_el0", "pmuserenr_el0"},
+        {"mrs%0,spsr_fiq", "spsr_fiq"},
+        {"mrs%0,spsr_irq", "spsr_irq"},
+        {"mrs%0,spsr_und", "spsr_und"},
         {"mrs%0,hstr_el2", "hstr_el2"},
         /* KVM nVHE mem_protect.c obtains the true hardware IPA fault
          * address, not the FAR_EL1 alias or a fabricated zero value. */
@@ -1727,22 +1736,27 @@ static bool aarch64_linux_percpu_write_alternative_template(
     normalized[n] = '\0';
     return strcmp(normalized, expected) == 0;
 }
-/* Linux 6.6 arm64 KVM barrier alternatives: the feature-71
- * workaround 1508412 replaces NOP by DMB SY around PAR_EL1. Feature-95
- * stage-2 operations use both NOP->ISB and ISB->NOP depending on the
- * source branch; reversing either direction changes the boot-time barrier.
- * Each must retain the original boot-time CPU patch record, two PREL32 offsets and both GNU
- * equal-length .org guards. Match the *whole* instruction family, not an
- * arbitrary replacement sequence or ignored compiler barrier. */
+/* Linux 6.6 arm64 finite barrier alternatives: feature-71 NOP->DMB SY,
+ * feature-95 both NOP->ISB and ISB->NOP, feature-86 three NOPs->IC IALLU,
+ * DSB NSH, ISB, and feature-42 DSB NSH/ISB->SB/NOP. Their source and
+ * replacement instructions, PREL32 records and two .org guards must survive
+ * intact; these are privileged runtime patches, not compiler barriers. */
 typedef struct Aarch64LinuxBarrierAlternative {
     unsigned int cap;
-    const char *old_instruction;
-    const char *new_instruction;
+    const char *old_compact;
+    const char *new_compact;
+    const char *old_asm;
+    const char *new_asm;
 } Aarch64LinuxBarrierAlternative;
 static const Aarch64LinuxBarrierAlternative aarch64_linux_barrier_alternatives[] = {
-    {71U, "nop", "dmbsy"},
-    {95U, "nop", "isb"},
-    {95U, "isb", "nop"}
+    {71U, "nop", "dmbsy", "nop", "dmb sy"},
+    {95U, "nop", "isb", "nop", "isb"},
+    {95U, "isb", "nop", "isb", "nop"},
+    {86U, "nop;nop;nop", "iciallu;dsbnsh;isb",
+     "nop\n  nop\n  nop", "ic iallu\n  dsb nsh\n  isb"},
+    {42U, "dsbnshisb",
+     ".inst(0xd5000000|(((0)<<19)|((3)<<16)|((3)<<12)|(((0))<<8)|(((7))<<5))|((31)&0x1f))nop",
+     "dsb nsh\n  isb", ".inst 0xd50330ff\n  nop"}
 };
 static const Aarch64LinuxBarrierAlternative *aarch64_linux_barrier_alternative(
     const char *text, size_t length) {
@@ -1772,7 +1786,7 @@ static const Aarch64LinuxBarrierAlternative *aarch64_linux_barrier_alternative(
             ".org.-(664b-663b)+(662b-661b)"
             ".org.-(662b-661b)+(664b-663b)"
             ".previous.endif",
-            form->old_instruction, form->cap, form->new_instruction);
+            form->old_compact, form->cap, form->new_compact);
         if (count > 0 && (size_t)count < sizeof(expected) &&
             strcmp(normalized, expected) == 0) return form;
     }
@@ -1802,10 +1816,8 @@ static bool aarch64_linux_barrier_alternative_emit(
         "  .org . - (662b-661b) + (664b-663b)\n"
         "  .previous\n"
         "  .endif\n",
-        form->old_instruction,
-        form->cap,
-        strcmp(form->new_instruction, "dmbsy") == 0
-            ? "dmb sy" : form->new_instruction) >= 0;
+        form->old_asm,
+        form->cap, form->new_asm) >= 0;
 }
 bool minic_aarch64_linux_barrier_alternative_opaque(
     const MinicCoreInlineAsm *a) {
@@ -2217,7 +2229,7 @@ static unsigned int aarch64_linux_encoded_sysreg_form(
     char normalized[768],expected[768];
     unsigned int op0,op1,crn,crm,op2;
     int parsed=0, count;
-    size_t i,n=0U,prefix_len=sizeof(prefix)-1U;
+    size_t i,n=0U,nesting,prefix_len=sizeof(prefix)-1U;
     if(!text||!length||length>=sizeof(normalized))return 0U;
     for(i=0U;i<length;++i){
         const char ch=text[i];
@@ -2227,24 +2239,34 @@ static unsigned int aarch64_linux_encoded_sysreg_form(
     }
     normalized[n]='\0';
     if(n<=prefix_len || memcmp(normalized,prefix,prefix_len)!=0)return 0U;
-    if(sscanf(normalized+prefix_len,
+    /* Linux SYS_ZCR_EL2 passes SYS_* through an extra parenthesized macro
+     * argument. Accept exactly zero or one complete outer grouping around
+     * the five-field tuple; keep the original GNU directive prefix intact. */
+    for(nesting=0U;nesting<=1U;++nesting){
+        parsed=0;
+        if(sscanf(normalized+prefix_len,
+              nesting ?
+              "mrs_s%%0,((((%u)<<19)|((%u)<<16)|((%u)<<12)|"
+              "((%u)<<8)|((%u)<<5))).purgemmrs_s%n" :
               "mrs_s%%0,(((%u)<<19)|((%u)<<16)|((%u)<<12)|"
               "((%u)<<8)|((%u)<<5)).purgemmrs_s%n",
               &op0,&op1,&crn,&crm,&op2,&parsed)!=5 || parsed<=0 ||
-       normalized[prefix_len+(size_t)parsed]!='\0' ||
-       (op0!=3U && !(op0==2U && op1==4U && crn==0U &&
-                      crm==7U && op2==0U)) ||
-       op1>7U || crn>15U || crm>15U || op2>7U)
-        return 0U;
-    count=snprintf(expected,sizeof(expected),
-          "%smrs_s%%0,(((%u)<<19)|((%u)<<16)|((%u)<<12)|"
-          "((%u)<<8)|((%u)<<5))%s",
-          prefix,op0,op1,crn,crm,op2,suffix);
-    if(count<=0||(size_t)count>=sizeof(expected)||
-       strcmp(normalized,expected)!=0)return 0U;
-    return 0xd5200000U |
-           (op0<<19) | (op1<<16) | (crn<<12) | (crm<<8) | (op2<<5) |
-           9U; /* x9 is the known emitted scratch register */
+           normalized[prefix_len+(size_t)parsed]!='\0' ||
+           (op0!=3U && !(op0==2U && op1==4U && crn==0U &&
+                          crm==7U && op2==0U)) ||
+           op1>7U || crn>15U || crm>15U || op2>7U)
+            continue;
+        count=snprintf(expected,sizeof(expected),
+            "%smrs_s%%0,%s(((%u)<<19)|((%u)<<16)|((%u)<<12)|"
+            "((%u)<<8)|((%u)<<5))%s%s",
+            prefix,nesting?"(":"",op0,op1,crn,crm,op2,
+            nesting?")":"",suffix);
+        if(count>0&&(size_t)count<sizeof(expected)&&
+           strcmp(normalized,expected)==0)
+            return 0xd5200000U | (op0<<19) | (op1<<16) |
+                   (crn<<12) | (crm<<8) | (op2<<5) | 9U;
+    }
+    return 0U;
 }
 static bool aarch64_linux_encoded_sysreg_source(
     const MinicC0Program *program,const MinicInlineAsm *src,
@@ -2441,6 +2463,16 @@ static const Aarch64LinuxWriteSysreg aarch64_linux_write_sysregs[] = {
     {3U,4U,12U,13U,6U}, /* ICH_LR14_EL2 */
     {3U,4U,12U,13U,7U}, /* ICH_LR15_EL2 */
     {3U,4U,14U,0U,6U}, /* CNTVOFF_EL2 */
+    /* KVM arch_timer.c feature-47 VHE traps switch EL0 timer access
+     * between true EL0 S3_3 and EL02 S3_5 aliases. These four pairs
+     * must retain their exact read/write direction and patch metadata. */
+    {3U,3U,14U,2U,1U}, /* CNTP_CTL_EL0 */
+    {3U,5U,14U,2U,1U}, /* CNTP_CTL_EL02 */
+    {3U,3U,14U,2U,2U}, /* CNTP_CVAL_EL0 */
+    {3U,3U,14U,3U,1U}, /* CNTV_CTL_EL0 */
+    {3U,5U,14U,3U,1U}, /* CNTV_CTL_EL02 */
+    {3U,3U,14U,3U,2U}, /* CNTV_CVAL_EL0 */
+    {3U,5U,14U,3U,2U}, /* CNTV_CVAL_EL02 */
     {3U,4U,4U,0U,0U}, /* SPSR_EL2 */
     {3U,4U,4U,0U,1U}, /* ELR_EL2 */
     {3U,5U,1U,0U,0U}, /* SCTLR_EL12 */
@@ -2487,7 +2519,7 @@ static unsigned int aarch64_linux_encoded_sysreg_write_form(
         ".inst(0xd5000000|(\\sreg)|(.L__gpr_num_\\rt))"
         ".endm";
     char compact[768], expected[768];
-    size_t i, used = 0U;
+    size_t i, used = 0U, nesting;
     if (!text || !length || length >= sizeof(compact)) return 0U;
     for (i = 0U; i < length; ++i) {
         const char c = text[i];
@@ -2505,14 +2537,16 @@ static unsigned int aarch64_linux_encoded_sysreg_write_form(
             ? snprintf(op2_source, sizeof(op2_source), "4|%u", reg->op2 - 4U)
             : snprintf(op2_source, sizeof(op2_source), "%u", reg->op2);
         if (op2_n < 1 || (size_t)op2_n >= sizeof(op2_source)) return 0U;
-        const int n = snprintf(expected, sizeof(expected),
-            "%smsr_s(((%u)<<19)|((%u)<<16)|((%u)<<12)|"
-            "((%u)<<8)|((%s)<<5)),%%x0.purgemmsr_s",
-            prefix, reg->op0, reg->op1, reg->crn,
-            reg->crm, op2_source);
-        if (n > 0 && (size_t)n < sizeof(expected) &&
-            strcmp(compact, expected) == 0)
-            return (unsigned int)i + 1U;
+        for (nesting = 0U; nesting <= 1U; ++nesting) {
+            const int n = snprintf(expected, sizeof(expected),
+                "%smsr_s%s(((%u)<<19)|((%u)<<16)|((%u)<<12)|"
+                "((%u)<<8)|((%s)<<5))%s,%%x0.purgemmsr_s",
+                prefix, nesting ? "(" : "", reg->op0, reg->op1,
+                reg->crn, reg->crm, op2_source, nesting ? ")" : "");
+            if (n > 0 && (size_t)n < sizeof(expected) &&
+                strcmp(compact, expected) == 0)
+                return (unsigned int)i + 1U;
+        }
     }
     return 0U;
 }
@@ -2589,12 +2623,20 @@ typedef struct Aarch64LinuxVheSysregAlternative {
  * tuple encodings. This is deliberately not an arbitrary GNU macro bridge. */
 static bool aarch64_linux_vhe_sysreg_pair(
     const Aarch64LinuxWriteSysreg *old_reg,
-    const Aarch64LinuxWriteSysreg *new_reg) {
-    return old_reg && new_reg && old_reg->op0 == 3U &&
-           new_reg->op0 == 3U && old_reg->crn == new_reg->crn &&
-           old_reg->crm == new_reg->crm && old_reg->op2 == new_reg->op2 &&
-           ((old_reg->op1 == 0U && new_reg->op1 == 5U) ||
-            (old_reg->op1 == 4U && new_reg->op1 == 0U));
+    const Aarch64LinuxWriteSysreg *new_reg, unsigned int capability) {
+    if (!old_reg || !new_reg || old_reg->op0 != 3U ||
+        new_reg->op0 != 3U || old_reg->crn != new_reg->crn ||
+        old_reg->crm != new_reg->crm || old_reg->op2 != new_reg->op2)
+        return false;
+    if (capability == 50U)
+        return (old_reg->op1 == 0U && new_reg->op1 == 5U) ||
+               (old_reg->op1 == 4U && new_reg->op1 == 0U);
+    /* Feature 47 is ARM64_HAS_VIRT_HOST_EXTN in arch_timer: S3_3_EL0
+     * uses the S3_5_EL02 alias for CNT{P,V}_{CTL,CVAL} exclusively. */
+    return capability == 47U && old_reg->op1 == 3U &&
+           new_reg->op1 == 5U && old_reg->crn == 14U &&
+           (old_reg->crm == 2U || old_reg->crm == 3U) &&
+           (old_reg->op2 == 1U || old_reg->op2 == 2U);
 }
 static const Aarch64LinuxWriteSysreg *aarch64_linux_known_sysreg_opcode(
     unsigned int opcode) {
@@ -2628,7 +2670,7 @@ static bool aarch64_linux_vhe_sysreg_alternative_form(
         old_reg = aarch64_linux_known_sysreg_opcode(old_opcode);
         new_reg = aarch64_linux_known_sysreg_opcode(new_opcode);
         if (old_opcode && new_opcode &&
-            aarch64_linux_vhe_sysreg_pair(old_reg, new_reg)) {
+            aarch64_linux_vhe_sysreg_pair(old_reg, new_reg, cap)) {
             result->is_read = true;
             result->capability = cap;
             result->old_opcode = old_opcode;
@@ -2642,7 +2684,7 @@ static bool aarch64_linux_vhe_sysreg_alternative_form(
         if (old_write && new_write) {
             old_reg = &aarch64_linux_write_sysregs[old_write - 1U];
             new_reg = &aarch64_linux_write_sysregs[new_write - 1U];
-            if (aarch64_linux_vhe_sysreg_pair(old_reg, new_reg)) {
+            if (aarch64_linux_vhe_sysreg_pair(old_reg, new_reg, cap)) {
                 result->is_read = false;
                 result->capability = cap;
                 result->old_opcode = 0xd5000000U |
@@ -5431,7 +5473,7 @@ bool minic_aarch64_qualify_inline_asm(
     }
     if(aarch64_linux_kvm_at_fixup_source(program,src,contract))return true;
     if(aarch64_linux_at_s1e1r_source(program,src,contract))return true;
-    if (src && contract && !src->is_goto && !src->is_volatile &&
+    if (src && contract && !src->is_goto &&
         !src->output_count && !src->input_count && !src->label_count &&
         !src->clobber_count && !src->register_clobber_count &&
         !src->has_memory_clobber &&

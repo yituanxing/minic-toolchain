@@ -29,11 +29,22 @@ u64 read_tpidr_el2_u64(void) {
 u64 read_hpfar_el2_u64(void) {
   u64 v; asm volatile("mrs %0, hpfar_el2" : "=r"(v)); return v;
 }
+#define READ_KVM_REG(reg) u64 read_##reg##_u64(void) { \
+  u64 v; asm volatile("mrs %0, " #reg : "=r"(v)); return v; }
+READ_KVM_REG(cptr_el2)
+READ_KVM_REG(elr_el2)
+READ_KVM_REG(dacr32_el2)
+READ_KVM_REG(dbgvcr32_el2)
+READ_KVM_REG(ifsr32_el2)
+READ_KVM_REG(pmuserenr_el0)
+READ_KVM_REG(spsr_fiq)
+READ_KVM_REG(spsr_irq)
+READ_KVM_REG(spsr_und)
 SRC
 # MiniC consumes already-preprocessed GNU .i, not raw C #define directives.
 cc -E -P -x c "$work/sysreg.c" -o "$work/sysreg.i"
 "$cc" --target=aarch64-linux -S "$work/sysreg.i" -o "$work/mini.s"
-for reg in daif sp_el0 tpidr_el1 tpidr_el2 hpfar_el2; do
+for reg in daif sp_el0 tpidr_el1 tpidr_el2 hpfar_el2 cptr_el2 elr_el2 dacr32_el2 dbgvcr32_el2 ifsr32_el2 pmuserenr_el0 spsr_fiq spsr_irq spsr_und; do
   grep -Fq "  mrs x9, $reg" "$work/mini.s"
 done
 test "$(grep -Fc '  mrs x9, daif' "$work/mini.s")" -eq 2
@@ -61,9 +72,9 @@ if [[ "${MINIC_SYSREG_NATIVE_ONLY:-0}" != 1 ]]; then
   readelf -h "$work/mini.o" | grep -Fq 'AArch64'
   aarch64-linux-gnu-objdump -d "$work/gnu.o" > "$work/gnu.dis"
   aarch64-linux-gnu-objdump -d "$work/mini.o" > "$work/mini.dis"
-  for reg in daif sp_el0 tpidr_el1 tpidr_el2 hpfar_el2; do
+  for reg in daif sp_el0 tpidr_el1 tpidr_el2 hpfar_el2 cptr_el2 elr_el2 dacr32_el2 dbgvcr32_el2 ifsr32_el2 pmuserenr_el0 spsr_fiq spsr_irq spsr_und; do
     grep -Eiq "mrs[[:space:]]+[^,]+,[[:space:]]+$reg" "$work/gnu.dis"
     grep -Eiq "mrs[[:space:]]+[^,]+,[[:space:]]+$reg" "$work/mini.dis"
   done
 fi
-echo 'AARCH64_LINUX_MRS_U64=PASS original_read_sysreg_u64=1 register_forms=5 including_HPFAR_EL2 negative=5 EL1_user_exec=not_run'
+echo 'AARCH64_LINUX_MRS_U64=PASS original_read_sysreg_u64=1 register_forms=14 including_KVM_EL2 negative=5 EL1_user_exec=not_run'
