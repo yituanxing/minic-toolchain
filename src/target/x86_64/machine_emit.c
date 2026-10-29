@@ -488,27 +488,13 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
         return x86_normalize(out, program, target, ins->type) &&
                x86_value_store(out, frame, ins->result);
     case MINIC_CORE_INSTRUCTION_PARAMETER: {
-        static const char *const sysv_regs[] = {
-            "%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9"};
-        static const char *const ms_x64_regs[] = {
-            "%rcx", "%rdx", "%r8", "%r9"};
-        const char *const *regs;
-        size_t register_limit;
+        const MinicX86AbiRegisters *abi = minic_x86_64_abi_registers(
+            frame->incoming_arguments.calling_convention);
         const bool ms_x64 = frame->incoming_arguments.calling_convention ==
             MINIC_CALLING_CONVENTION_MS_X64;
         size_t position = ins->value.parameter_index;
         const MinicX86ArgLocation *location;
-        if (ms_x64) {
-            regs = ms_x64_regs;
-            register_limit = 4U;
-        } else if (frame->incoming_arguments.calling_convention ==
-                   MINIC_CALLING_CONVENTION_DEFAULT) {
-            regs = sysv_regs;
-            register_limit = 6U;
-        } else {
-            return false;
-        }
-        if (position >= frame->incoming_arguments.argument_count ||
+        if (abi == NULL || position >= frame->incoming_arguments.argument_count ||
             frame->incoming_arguments.locations == NULL)
             return false;
         location = &frame->incoming_arguments.locations[position];
@@ -516,7 +502,7 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
             if (ms_x64 || location->kind != MINIC_X86_ARG_I128_TWO_GP)
                 return false;
             if (!location->on_stack) {
-                if (location->gp_index > 4U ||
+                if (location->gp_index >= abi->gp_argument_count - 1U ||
                     (frame->saves_incoming_gp
                      ? fprintf(out,
                          "  movq -%zu(%%rbp), %%r10\n"
@@ -528,8 +514,8 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
                      : fprintf(out,
                          "  movq %s, %%r10\n"
                          "  movq %s, %%r11\n",
-                         regs[location->gp_index],
-                         regs[location->gp_index + 1U])) < 0)
+                         abi->gp_arguments[location->gp_index],
+                         abi->gp_arguments[location->gp_index + 1U])) < 0)
                     return false;
             } else if (fprintf(out,
                     "  movq %zu(%%rbp), %%r10\n"
@@ -549,7 +535,7 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
         if (minic_type_is_double(ins->type) || minic_type_is_float(ins->type)) {
             if (location->kind != MINIC_X86_ARG_SSE) return false;
             if (!location->on_stack) {
-                if (location->fp_index >= (ms_x64 ? 4U : 8U) ||
+                if (location->fp_index >= abi->fp_argument_count ||
                     fprintf(out, minic_type_is_double(ins->type)
                              ? "  movq %%xmm%zu, %%rax\n"
                              : "  movd %%xmm%zu, %%eax\n",
@@ -561,13 +547,13 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
         } else {
             if (location->kind != MINIC_X86_ARG_INTEGER) return false;
             if (!location->on_stack) {
-                if (location->gp_index >= register_limit ||
+                if (location->gp_index >= abi->gp_argument_count ||
                     (frame->saves_incoming_gp
                      ? fprintf(out, "  movq -%zu(%%rbp), %%rax\n",
                          frame->incoming_gp_save_offset +
                              location->gp_index * 8U)
                      : fprintf(out, "  movq %s, %%rax\n",
-                         regs[location->gp_index])) < 0)
+                         abi->gp_arguments[location->gp_index])) < 0)
                     return false;
             } else if (fprintf(out, "  movq %zu(%%rbp), %%rax\n",
                                16U + location->stack_index * 8U) < 0)
@@ -590,8 +576,8 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
                x86_value_store(out, frame, ins->result);
     }
     case MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT: {
-        static const char *const regs[] = {
-            "%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9"};
+        const MinicX86AbiRegisters *abi = minic_x86_64_abi_registers(
+            MINIC_CALLING_CONVENTION_DEFAULT);
         const size_t position = ins->value.parameter_object.parameter_index;
         const MinicCoreObjectId object = ins->value.parameter_object.object_id;
         const MinicX86ArgLocation *location;
@@ -599,7 +585,7 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
             object < fn->object_count &&
             minic_x86_64_record_abi_compatible(
                 fn->objects[object].type, fn->parameter_types[position]);
-        if (frame->incoming_arguments.calling_convention !=
+        if (abi == NULL || frame->incoming_arguments.calling_convention !=
                 MINIC_CALLING_CONVENTION_DEFAULT ||
             position >= frame->incoming_arguments.argument_count ||
             frame->incoming_arguments.locations == NULL ||
@@ -637,19 +623,22 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
         }
         if (location->kind == MINIC_X86_ARG_RECORD_ONE_GP) {
             if (!location->on_stack) {
+                if (location->gp_index >= abi->gp_argument_count) return false;
                 if (fprintf(out, "  movq %s, %%rax\n",
-                            regs[location->gp_index]) < 0) return false;
+                            abi->gp_arguments[location->gp_index]) < 0) return false;
             } else if (fprintf(out, "  movq %zu(%%rbp), %%rax\n",
                                16U + location->stack_index * 8U) < 0)
                 return false;
             return x86_one_gp_store(out, location->record_bytes);
         }
-        if (!location->on_stack)
+        if (!location->on_stack) {
+            if (location->gp_index >= abi->gp_argument_count - 1U) return false;
             return fprintf(out,
                 "  movq %s, 0(%%r10)\n"
                 "  movq %s, 8(%%r10)\n",
-                regs[location->gp_index],
-                regs[location->gp_index + 1U]) >= 0;
+                abi->gp_arguments[location->gp_index],
+                abi->gp_arguments[location->gp_index + 1U]) >= 0;
+        }
         return fprintf(out,
             "  movq %zu(%%rbp), %%rax\n"
             "  movq %%rax, 0(%%r10)\n"
@@ -1360,8 +1349,13 @@ bool minic_x86_64_emit_core_terminator(FILE *out,
             if (minic_x86_64_one_gp_record(program, target, fn->return_type, &bytes)) {
                 if (!x86_one_gp_load(out,bytes)) return false;
             } else if (minic_x86_64_two_gp_record(program, target, fn->return_type)) {
-                if (fputs("  movq 0(%r11), %rax\n"
-                          "  movq 8(%r11), %rdx\n",out)==EOF)return false;
+                const MinicX86AbiRegisters *abi = minic_x86_64_abi_registers(
+                    MINIC_CALLING_CONVENTION_DEFAULT);
+                if (abi == NULL || abi->gp_result_count < 2U ||
+                    fprintf(out, "  movq 0(%%r11), %s\n"
+                                 "  movq 8(%%r11), %s\n",
+                            abi->gp_results[0], abi->gp_results[1]) < 0)
+                    return false;
             } else if (frame->has_sret && frame->sret_save_offset != 0U &&
                        minic_x86_64_memory_result_record(
                            program, target, fn->return_type, &bytes)) {
@@ -1387,10 +1381,14 @@ bool minic_x86_64_emit_core_terminator(FILE *out,
             if (minic_type_is_long_double(fn->return_type))
                 return x86_x87_load(out, frame, term->return_value) &&
                        fprintf(out, "  jmp .Lmini_x86_f%zu_ret\n", function_id) >= 0;
-            if (minic_type_is_int128_integer(fn->return_type))
-                return x86_i128_load(out, frame, term->return_value,
-                                     "%rax", "%rdx") &&
+            if (minic_type_is_int128_integer(fn->return_type)) {
+                const MinicX86AbiRegisters *abi = minic_x86_64_abi_registers(
+                    MINIC_CALLING_CONVENTION_DEFAULT);
+                return abi != NULL && abi->gp_result_count >= 2U &&
+                       x86_i128_load(out, frame, term->return_value,
+                                     abi->gp_results[0], abi->gp_results[1]) &&
                        fprintf(out, "  jmp .Lmini_x86_f%zu_ret\n", function_id) >= 0;
+            }
             if (!x86_value_load(out, frame, term->return_value, "%rax"))
                 return false;
             if (minic_type_is_double(fn->return_type)) {

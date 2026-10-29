@@ -272,6 +272,12 @@ typedef struct MinicCoreInlineAsm {
        instead of hiding it inside target assembly text. The first supported
        seam is one label plus one deferred immediate input. */
     bool is_goto;
+    /* SIZE_MAX means no source identity was proven at Core ingress.
+     * Non-goto target-qualified structured ASM stores its exact frontend
+     * statement's inline_asm_id, allowing strict target-side revalidation.
+     * Legacy opaque asm-goto also uses a non-SIZE_MAX id to name the
+     * deferred-immediate relocation owner; do not reinterpret those forms
+     * as ordinary structured provenance without migrating that consumer. */
     size_t source_inline_asm_id;
     MinicCoreBlockId goto_target;
     /* Second CFG destination for a TARGET-qualified multi-label asm-goto.

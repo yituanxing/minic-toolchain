@@ -16,7 +16,7 @@ bool minic_multi_direct_lp64_function_plan_prepare(
     const MinicFunction *decl, const MinicCoreFunction *fn,
     const MinicCoreFunctionFacts *facts,
     const MinicCoreObjectStoragePlan *storage,
-    const char *architecture_name, MinicLP64DirectABI abi,
+    const char *architecture_name, const MinicDirectLP64AbiPolicy *abi,
     MinicDirectLP64IndirectRecord indirect_record,
     MinicDirectLP64IndirectRecord indirect_return,
     MinicDirectLP64OpaqueAsmQualifier qualify_opaque_asm,
@@ -32,7 +32,8 @@ bool minic_multi_direct_lp64_function_plan_prepare(
     plan->failed_block = SIZE_MAX;
     plan->failed_instruction = SIZE_MAX;
     if (program == NULL || target == NULL || decl == NULL || fn == NULL || facts == NULL ||
-        architecture_name == NULL || indirect_record == NULL)
+        architecture_name == NULL || indirect_record == NULL ||
+        !minic_direct_lp64_abi_policy_valid(abi))
         return false;
     name = minic_c0_function_symbol_name(decl);
     if (!minic_multi_direct_lp64_function_preflight(
@@ -70,20 +71,22 @@ bool minic_multi_direct_lp64_function_plan_prepare(
                 architecture_name, name, fn->value_count, fn->object_count);
         return false;
     }
-    plan->frame_alignment = plan->frame_plan.max_object_alignment > 16U
-        ? plan->frame_plan.max_object_alignment : 16U;
+    plan->frame_alignment =
+        plan->frame_plan.max_object_alignment > abi->stack_alignment
+            ? plan->frame_plan.max_object_alignment : abi->stack_alignment;
     /* LoongArch's current linear va_list walks directly from the saved GARs
      * into the caller's overflow area. An aligned local-frame gap breaks
      * that contiguity; do not silently give such a function a wrong cursor. */
-    if (plan->frame_alignment > 16U && plan->variadic_count != 0U &&
-        abi == MINIC_LP64_ABI_LOONGARCH64_LP64D) {
+    if (plan->frame_alignment > abi->stack_alignment &&
+        plan->variadic_count != 0U &&
+        abi->variadic_requires_public_stack_alignment) {
         plan->failed_stage = "variadic_frame_realign";
         return false;
     }
     /* A local aligned above the public 16B stack guarantee requires a
      * callee-saved fixed base and a saved unmodified entry SP. This also
      * covers genuinely dynamic stack allocations in the same function. */
-    if (plan->frame_alignment > 16U)
+    if (plan->frame_alignment > abi->stack_alignment)
         plan->has_dynamic_stack = true;
     object_end = plan->frame_plan.object_end;
     plan->failed_stage = "binary128_layout";
@@ -138,7 +141,7 @@ bool minic_multi_direct_lp64_function_plan_prepare(
                 architecture_name, name, plan->frame_size, object_end);
         return false;
     }
-    plan->saved_entry_sp_offset = plan->frame_alignment > 16U
+    plan->saved_entry_sp_offset = plan->frame_alignment > abi->stack_alignment
         ? plan->save_offset + (plan->has_calls ? 8U : 0U) + 8U
         : SIZE_MAX;
     /* AAPCS64 cursor0 keeps the established 32B tag + 64B GP + 128B FP
@@ -146,12 +149,16 @@ bool minic_multi_direct_lp64_function_plan_prepare(
      * never sharing the mutable offsets of a preceding va_list. Increase
      * the final frame (not the incoming save/return offsets), so the extra
      * tags remain below entry SP and above all existing frame slots. */
-    if (abi == MINIC_LP64_ABI_AAPCS64 && plan->variadic_count > 1U) {
+    if (abi->extra_variadic_cursor_bytes != 0U &&
+        plan->variadic_count > 1U) {
         const size_t extra_cursors = plan->variadic_count - 1U;
-        if (extra_cursors > MINIC_LARGE_FRAME_MAX / 32U ||
-            plan->frame_size > MINIC_LARGE_FRAME_MAX - extra_cursors * 32U)
+        if (extra_cursors > MINIC_LARGE_FRAME_MAX /
+                abi->extra_variadic_cursor_bytes ||
+            plan->frame_size > MINIC_LARGE_FRAME_MAX -
+                extra_cursors * abi->extra_variadic_cursor_bytes)
             return false;
-        plan->frame_size += extra_cursors * 32U;
+        plan->frame_size +=
+            extra_cursors * abi->extra_variadic_cursor_bytes;
     }
     plan->failed_stage = NULL;
     return true;

@@ -219,6 +219,14 @@ MinicCoreLowerStatus core_asm_try_target_register_contract(
         stored->is_goto = true;
         stored->goto_target = target_block;
         stored->source_inline_asm_id = SIZE_MAX;
+    } else {
+        /* The target qualifier admitted this exact source statement and the
+         * newly allocated structured Core effect owns its operands.  Retain
+         * that identity for machine emitters which must revalidate the
+         * original source constraint/operand contract.  An asm-goto keeps
+         * its separate deferred-immediate source-id semantics above. */
+        ctx->function->inline_asms[id].source_inline_asm_id =
+            statement->inline_asm_id;
     }
     ins.value.structured_inline_asm.inline_asm_id = id;
     return minic_core_function_append_effect_instruction(

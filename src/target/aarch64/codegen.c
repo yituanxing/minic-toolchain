@@ -8,6 +8,27 @@
 #include <stdint.h>
 #include <stdio.h>
 
+/* AAPCS64's physical placement is a target-owned value. Shared planners
+ * consume this policy without selecting the machine by an architecture enum. */
+static const MinicDirectLP64AbiPolicy aarch64_abi_policy = {
+    .name = "aapcs64",
+    .gp_argument_registers = 8U,
+    .fp_argument_registers = 8U,
+    .stack_slot_bytes = 8U,
+    .stack_alignment = 16U,
+    .indirect_result_argument_registers = 0U, /* dedicated x8 */
+    .record_registers = MINIC_DIRECT_LP64_RECORD_WHOLE_OR_STACK,
+    .wide_registers = MINIC_DIRECT_LP64_WIDE_EVEN_PAIR_OR_STACK,
+    .long_double_in_fp_register = true,
+    .variadic_floating_in_fp_register = true,
+    .variadic_named_double_supported = true,
+    .variadic_cursor = MINIC_DIRECT_LP64_VARIADIC_ABI_STATE,
+    .variadic_save_bytes = 224U, /* 32B tag + 64B GPR + 128B FPR */
+    .variadic_save_alignment = 16U,
+    .extra_variadic_cursor_bytes = 32U,
+    .variadic_requires_public_stack_alignment = false
+};
+
 /* Only native AAPCS64 prologue policy lives here. Symbol metadata,
  * Core-to-ABI planning, dynamic rewrite lifecycle, BlockContext ownership
  * and ELF completion are shared with the other direct LP64 backend. */
@@ -103,7 +124,7 @@ static bool aarch64_emit_function(
     const MinicCoreObjectStoragePlan *storage, size_t id,
     bool function_sections) {
     static const MinicDirectLP64FunctionEmitter emitter = {
-        "aarch64", MINIC_LP64_ABI_AAPCS64,
+        "aarch64", &aarch64_abi_policy,
         minic_aarch64_indirect_record, minic_aarch64_indirect_record,
         "%progbits", "%function", "%init_array", "xword",
         aarch64_emit_prologue, minic_aarch64_emit_core_blocks,

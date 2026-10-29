@@ -746,6 +746,11 @@ bool minic_core_function_add_opaque_inline_asm(MinicCoreFunction *function,
     stored.has_memory_clobber = has_memory_clobber;
     stored.goto_target = MINIC_CORE_BLOCK_INVALID;
     stored.goto_second_target = MINIC_CORE_BLOCK_INVALID;
+    /* Source provenance is opt-in.  In particular zero is a valid AST id,
+     * not proof that this Core effect came from source inline ASM #0.
+     * Opaque asm-goto uses this same field for a deferred-immediate owner;
+     * only an ingress with a verified source identity may populate it. */
+    stored.source_inline_asm_id = SIZE_MAX;
     function->inline_asms[function->inline_asm_count] = stored;
     *inline_asm_id = (MinicCoreInlineAsmId)function->inline_asm_count;
     function->inline_asm_count += 1U;

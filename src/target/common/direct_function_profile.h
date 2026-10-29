@@ -25,7 +25,9 @@ typedef enum MinicDirectLP64ProfileResult {
 MinicDirectLP64ProfileResult minic_multi_direct_lp64_profile_function(
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicFunction *decl, const MinicCoreFunction *fn,
-    const MinicCoreFunctionFacts *facts, MinicLP64DirectABI abi, MinicDirectLP64IndirectRecord indirect_record,
+    const MinicCoreFunctionFacts *facts,
+    const MinicDirectLP64AbiPolicy *abi,
+    MinicDirectLP64IndirectRecord indirect_record,
     MinicLP64ArgumentPlan *incoming, MinicDirectLP64FunctionProfile *profile);
 
 #endif

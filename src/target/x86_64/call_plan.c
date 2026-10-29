@@ -13,9 +13,12 @@
 static bool x86_sysv_place(const MinicC0Program *program,
                           const MinicTargetInfo *target, MinicType type,
                           MinicX86ArgCursor *cursor, MinicX86ArgLocation *loc) {
+    const MinicX86AbiRegisters *abi = minic_x86_64_abi_registers(
+        MINIC_CALLING_CONVENTION_DEFAULT);
     size_t bytes;
     bool sign;
-    if (program == NULL || target == NULL || cursor == NULL || loc == NULL)
+    if (abi == NULL || abi->gp_argument_count < 2U || program == NULL ||
+        target == NULL || cursor == NULL || loc == NULL)
         return false;
     (void)memset(loc, 0, sizeof(*loc));
     loc->gp_index = cursor->gp_used;
@@ -25,11 +28,12 @@ static bool x86_sysv_place(const MinicC0Program *program,
         if (minic_x86_64_one_gp_record(program, target, type, &bytes)) {
             loc->kind = MINIC_X86_ARG_RECORD_ONE_GP;
             loc->record_bytes = bytes;
-            if (cursor->gp_used < 6U) ++cursor->gp_used;
+            if (cursor->gp_used < abi->gp_argument_count) ++cursor->gp_used;
             else { loc->on_stack = true; ++cursor->stack_slots; }
         } else if (minic_x86_64_two_gp_record(program, target, type)) {
             loc->kind = MINIC_X86_ARG_RECORD_TWO_GP;
-            if (cursor->gp_used <= 4U) cursor->gp_used += 2U;
+            if (cursor->gp_used <= abi->gp_argument_count - 2U)
+                cursor->gp_used += 2U;
             else { loc->on_stack = true; cursor->stack_slots += 2U; }
         } else {
             /* SysV AMD64 classifies any aggregate larger than 16 bytes as
@@ -73,7 +77,7 @@ static bool x86_sysv_place(const MinicC0Program *program,
         }
     } else if (minic_type_is_float(type) || minic_type_is_double(type)) {
         loc->kind = MINIC_X86_ARG_SSE;
-        if (cursor->fp_used < 8U) ++cursor->fp_used;
+        if (cursor->fp_used < abi->fp_argument_count) ++cursor->fp_used;
         else { loc->on_stack = true; ++cursor->stack_slots; }
     } else if (minic_type_is_long_double(type)) {
         loc->kind = MINIC_X86_ARG_X87_MEMORY;
@@ -86,7 +90,7 @@ static bool x86_sysv_place(const MinicC0Program *program,
          * eightbyte. Both INTEGER registers are consumed atomically.
          * Stack fallback is 16-byte aligned, unlike ordinary scalars. */
         loc->kind = MINIC_X86_ARG_I128_TWO_GP;
-        if (cursor->gp_used <= 4U) {
+        if (cursor->gp_used <= abi->gp_argument_count - 2U) {
             cursor->gp_used += 2U;
         } else {
             loc->on_stack = true;
@@ -98,7 +102,7 @@ static bool x86_sysv_place(const MinicC0Program *program,
         if (!minic_x86_64_scalar_width(program, target, type, &bytes, &sign))
             return false;
         loc->kind = MINIC_X86_ARG_INTEGER;
-        if (cursor->gp_used < 6U) ++cursor->gp_used;
+        if (cursor->gp_used < abi->gp_argument_count) ++cursor->gp_used;
         else { loc->on_stack = true; ++cursor->stack_slots; }
     }
     return cursor->stack_slots <= (size_t)INT32_MAX / 8U;
@@ -111,9 +115,11 @@ static bool x86_sysv_place(const MinicC0Program *program,
 static bool x86_ms_x64_place(const MinicC0Program *program,
                             const MinicTargetInfo *target, MinicType type,
                             size_t position, MinicX86ArgLocation *loc) {
+    const MinicX86AbiRegisters *abi = minic_x86_64_abi_registers(
+        MINIC_CALLING_CONVENTION_MS_X64);
     size_t bytes;
     bool sign;
-    if (program == NULL || target == NULL || loc == NULL ||
+    if (abi == NULL || program == NULL || target == NULL || loc == NULL ||
         position > ((size_t)INT32_MAX - 16U) / 8U ||
         minic_type_is_record(type) || minic_type_is_int128_integer(type) ||
         minic_type_is_long_double(type)) return false;
@@ -121,7 +127,7 @@ static bool x86_ms_x64_place(const MinicC0Program *program,
     loc->gp_index = position;
     loc->fp_index = position;
     loc->stack_index = position;
-    loc->on_stack = position >= 4U;
+    loc->on_stack = position >= abi->gp_argument_count;
     if (minic_type_is_float(type) || minic_type_is_double(type)) {
         loc->kind = MINIC_X86_ARG_SSE;
         return true;
@@ -166,13 +172,16 @@ bool minic_x86_64_plan_incoming_arguments(
         !x86_sysv_plan_alloc(fn->parameter_count, plan)) return false;
     plan->calling_convention = fn->calling_convention;
     if (fn->calling_convention == MINIC_CALLING_CONVENTION_MS_X64) {
+        const MinicX86AbiRegisters *abi = minic_x86_64_abi_registers(
+            MINIC_CALLING_CONVENTION_MS_X64);
+        if (abi == NULL) goto failed;
         if (!x86_ms_x64_scalar_return(program, target, fn->return_type))
             goto failed;
         for (i = 0U; i < fn->parameter_count; ++i)
             if (!x86_ms_x64_place(program, target, fn->parameter_types[i],
                                   i, &plan->locations[i])) goto failed;
-        if (fn->parameter_count > 4U)
-            cursor.stack_slots = fn->parameter_count - 4U;
+        if (fn->parameter_count > abi->gp_argument_count)
+            cursor.stack_slots = fn->parameter_count - abi->gp_argument_count;
         plan->end = cursor;
         return true;
     }
@@ -207,11 +216,13 @@ bool minic_x86_64_plan_outgoing_arguments(
         !x86_sysv_plan_alloc(view->argument_count, plan)) return false;
     plan->calling_convention = view->calling_convention;
     if (view->calling_convention == MINIC_CALLING_CONVENTION_MS_X64) {
+        const MinicX86AbiRegisters *abi = minic_x86_64_abi_registers(
+            MINIC_CALLING_CONVENTION_MS_X64);
         /* Win64 consumes one slot per source parameter: GP and XMM registers
          * have the SAME four positional indices, unlike SysV independent
          * integer/FP cursors. Every call, including zero-arg, reserves 32B
          * home space. Slots 4+ occupy the stack above that home space. */
-        if (view->is_variadic ||
+        if (abi == NULL || view->is_variadic ||
             !x86_ms_x64_scalar_return(program, target, view->return_type) ||
             (view->argument_count > ((size_t)INT32_MAX - 47U) / 8U))
             goto failed;
@@ -226,8 +237,8 @@ bool minic_x86_64_plan_outgoing_arguments(
                                   &plan->locations[i]))
                 goto failed;
         }
-        if (view->argument_count > 4U)
-            cursor.stack_slots = view->argument_count - 4U;
+        if (view->argument_count > abi->gp_argument_count)
+            cursor.stack_slots = view->argument_count - abi->gp_argument_count;
         bytes = 32U + cursor.stack_slots * 8U;
         plan->stack_bytes = (bytes + 15U) & ~(size_t)15U;
         plan->end = cursor;

@@ -2,106 +2,42 @@
 #include "target/riscv64/codegen_internal.h"
 #include <stdint.h>
 #include <stdio.h>
-#include <string.h>
 
 /* No frame-size recalculation or Core mutation in native addressing. */
-static bool emit_sp_address(FILE *file, const char *destination_register, size_t offset) {
-    if (file == NULL || destination_register == NULL) {
-        return false;
-    }
-    if (offset <= 2047U) {
-        return fprintf(file, "  addi %s, sp, %zu\n", destination_register, offset) >= 0;
-    }
-    return fprintf(file,
-                   "  li t3, %zu\n"
-                   "  add %s, sp, t3\n",
-                   offset,
-                   destination_register) >= 0;
-}
-
-static const char *core_frame_scratch_register(const char *value_register) {
-    return value_register != NULL && strcmp(value_register, "t6") == 0 ? "t5" : "t6";
+static bool emit_frame_word_preserving(
+    FILE *file, const MinicRiscv64CoreFrame *frame, bool store,
+    const char *value_register, const char *protected_register, size_t offset) {
+    MinicRiscvFrameAddressPolicy policy;
+    if (frame == NULL) return false;
+    policy = minic_riscv64_machine_frame_policy(frame->has_dynamic_stack_alloc);
+    return minic_riscv_frame_emit_word_preserving(
+        file, &policy, store, value_register, protected_register, offset);
 }
 
 bool minic_riscv64_frame_emit_address(FILE *file,
                                const MinicRiscv64CoreFrame *frame,
                                const char *destination_register,
                                size_t offset) {
-    const char *scratch;
-
-    if (file == NULL || frame == NULL || destination_register == NULL) {
-        return false;
-    }
-    if (!frame->has_dynamic_stack_alloc) {
-        return emit_sp_address(file, destination_register, offset);
-    }
-    if (offset <= 2047U) {
-        return fprintf(file, "  addi %s, s0, %zu\n", destination_register, offset) >= 0;
-    }
-    scratch = core_frame_scratch_register(destination_register);
-    return fprintf(file,
-                   "  li %s, %zu\n"
-                   "  add %s, s0, %s\n",
-                   scratch,
-                   offset,
-                   destination_register,
-                   scratch) >= 0;
+    MinicRiscvFrameAddressPolicy policy;
+    if (frame == NULL) return false;
+    policy = minic_riscv64_machine_frame_policy(frame->has_dynamic_stack_alloc);
+    return minic_riscv_frame_emit_address(file, &policy, destination_register, offset);
 }
 
 bool minic_riscv64_frame_emit_load64(FILE *file,
                               const MinicRiscv64CoreFrame *frame,
                               const char *destination_register,
                               size_t offset) {
-    const char *scratch;
-
-    if (file == NULL || frame == NULL || destination_register == NULL) {
-        return false;
-    }
-    if (!frame->has_dynamic_stack_alloc) {
-        return minic_riscv64_emit_sp_load64(file, destination_register, offset);
-    }
-    if (offset <= 2047U) {
-        return fprintf(file, "  ld %s, %zu(s0)\n", destination_register, offset) >= 0;
-    }
-    scratch = core_frame_scratch_register(destination_register);
-    return fprintf(file,
-                   "  li %s, %zu\n"
-                   "  add %s, s0, %s\n"
-                   "  ld %s, 0(%s)\n",
-                   scratch,
-                   offset,
-                   scratch,
-                   scratch,
-                   destination_register,
-                   scratch) >= 0;
+    return emit_frame_word_preserving(
+        file, frame, false, destination_register, NULL, offset);
 }
 
 bool minic_riscv64_frame_emit_store64(FILE *file,
                                const MinicRiscv64CoreFrame *frame,
                                const char *source_register,
                                size_t offset) {
-    const char *scratch;
-
-    if (file == NULL || frame == NULL || source_register == NULL) {
-        return false;
-    }
-    if (!frame->has_dynamic_stack_alloc) {
-        return minic_riscv64_emit_sp_store64(file, source_register, offset);
-    }
-    if (offset <= 2047U) {
-        return fprintf(file, "  sd %s, %zu(s0)\n", source_register, offset) >= 0;
-    }
-    scratch = core_frame_scratch_register(source_register);
-    return fprintf(file,
-                   "  li %s, %zu\n"
-                   "  add %s, s0, %s\n"
-                   "  sd %s, 0(%s)\n",
-                   scratch,
-                   offset,
-                   scratch,
-                   scratch,
-                   source_register,
-                   scratch) >= 0;
+    return emit_frame_word_preserving(
+        file, frame, true, source_register, NULL, offset);
 }
 
 bool minic_riscv64_frame_load_value(FILE *file,
@@ -133,10 +69,13 @@ bool minic_riscv64_frame_load_int128(FILE *file,
                                    const char *high_register) {
     size_t offset;
 
+    /* The second half must not destroy an already-loaded first half. This
+     * protects e.g. (t2,t3) against the static-frame t2 scratch path. */
     return low_register != NULL && high_register != NULL &&
            minic_riscv64_core_frame_value_offset(frame, value_id, &offset) && offset <= SIZE_MAX - 8U &&
            minic_riscv64_frame_emit_load64(file, frame, low_register, offset) &&
-           minic_riscv64_frame_emit_load64(file, frame, high_register, offset + 8U);
+           emit_frame_word_preserving(
+               file, frame, false, high_register, low_register, offset + 8U);
 }
 
 bool minic_riscv64_frame_store_int128(FILE *file,
@@ -146,9 +85,12 @@ bool minic_riscv64_frame_store_int128(FILE *file,
                                     const char *high_register) {
     size_t offset;
 
+    /* Both halves are live before the first store; never use the high register
+     * to materialize the low half's address (the t1/t2 case is real). */
     return low_register != NULL && high_register != NULL &&
            minic_riscv64_core_frame_value_offset(frame, value_id, &offset) && offset <= SIZE_MAX - 8U &&
-           minic_riscv64_frame_emit_store64(file, frame, low_register, offset) &&
+           emit_frame_word_preserving(
+               file, frame, true, low_register, high_register, offset) &&
            minic_riscv64_frame_emit_store64(file, frame, high_register, offset + 8U);
 }
 

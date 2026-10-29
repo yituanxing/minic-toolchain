@@ -3,6 +3,33 @@
 #include "target/data_layout.h"
 #include <stdint.h>
 
+/* The SysV INTEGER parameter and return banks have different orderings;
+ * Win64 uses four positional argument registers and one scalar GP return.
+ * Keep this physical mapping independent of all Core instruction families. */
+static const char *const x86_sysv_gp_arguments[] = {
+    "%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9"
+};
+static const char *const x86_win64_gp_arguments[] = {
+    "%rcx", "%rdx", "%r8", "%r9"
+};
+static const char *const x86_sysv_gp_results[] = {"%rax", "%rdx"};
+static const char *const x86_win64_gp_results[] = {"%rax"};
+
+const MinicX86AbiRegisters *minic_x86_64_abi_registers(
+    MinicFunctionCallingConvention convention) {
+    static const MinicX86AbiRegisters sysv = {
+        x86_sysv_gp_arguments, 6U, 8U, x86_sysv_gp_results, 2U
+    };
+    static const MinicX86AbiRegisters win64 = {
+        x86_win64_gp_arguments, 4U, 4U, x86_win64_gp_results, 1U
+    };
+    switch (convention) {
+    case MINIC_CALLING_CONVENTION_DEFAULT: return &sysv;
+    case MINIC_CALLING_CONVENTION_MS_X64: return &win64;
+    default: return NULL;
+    }
+}
+
 /* Extracted SysV AMD64 classifier: integer widths, conservative aggregates
  * and register-bank/stack ingress. The existing rules stay byte-for-byte;
  * target-specific machine emission remains in machine_emit.c and machine_call.c. */

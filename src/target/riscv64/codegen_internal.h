@@ -4,9 +4,24 @@
 #include "frontend/ast.h"
 #include "minic/compiler.h"
 #include "target/data_layout.h"
+#include "target/riscv/frame_address_policy.h"
 
 #include <stddef.h>
 #include <stdio.h>
+
+/* The RV64 frame owns only the physical base and existing scratch liveness.
+ * All large-displacement address, load and store sequences are selected by
+ * one RISC-V machine policy, including a nonaliasing scratch fallback. */
+static inline MinicRiscvFrameAddressPolicy minic_riscv64_machine_frame_policy(
+    bool dynamic_frame) {
+    MinicRiscvFrameAddressPolicy policy = {
+        dynamic_frame ? "s0" : "sp",
+        dynamic_frame ? "t6" : "t2",
+        dynamic_frame ? "t5" : "t6",
+        "ld", "sd"
+    };
+    return policy;
+}
 
 void minic_riscv64_set_diagnostic(MinicDiagnostic *diagnostic,
                                   const char *path,

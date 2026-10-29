@@ -44,14 +44,8 @@ static inline bool minic_riscv64_emit_core_function(FILE *file,
                                                      const MinicCoreFunction *function,
                                                      const char *symbol_name) {
     MinicRiscvFunctionSymbol symbol;
-
-    symbol.symbol_name = symbol_name;
-    symbol.section_name = NULL;
-    symbol.visibility = MINIC_SYMBOL_VISIBILITY_DEFAULT;
-    symbol.is_internal = false;
-    symbol.is_weak = false;
-    symbol.function_sections = false;
-    return minic_riscv64_emit_core_function_with_symbol(file, function, &symbol);
+    return minic_riscv_function_symbol_for_name(symbol_name, &symbol) &&
+           minic_riscv64_emit_core_function_with_symbol(file, function, &symbol);
 }
 
 #endif

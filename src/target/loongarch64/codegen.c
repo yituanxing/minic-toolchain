@@ -8,6 +8,28 @@
 #include <stdint.h>
 #include <stdio.h>
 
+/* LoongArch LP64D is not AAPCS64 with renamed registers: notably the first
+ * GAR holds an indirect result, aggregate pairs may split, and va_list is
+ * a contiguous linear cursor. Keep those choices alongside machine emission. */
+static const MinicDirectLP64AbiPolicy loongarch64_abi_policy = {
+    .name = "loongarch64-lp64d",
+    .gp_argument_registers = 8U,
+    .fp_argument_registers = 8U,
+    .stack_slot_bytes = 8U,
+    .stack_alignment = 16U,
+    .indirect_result_argument_registers = 1U,
+    .record_registers = MINIC_DIRECT_LP64_RECORD_SPLIT_WITH_STACK,
+    .wide_registers = MINIC_DIRECT_LP64_WIDE_SPLIT_WITH_STACK,
+    .long_double_in_fp_register = false,
+    .variadic_floating_in_fp_register = false,
+    .variadic_named_double_supported = false,
+    .variadic_cursor = MINIC_DIRECT_LP64_VARIADIC_LINEAR_GP,
+    .variadic_save_bytes = 64U,
+    .variadic_save_alignment = 8U,
+    .extra_variadic_cursor_bytes = 0U,
+    .variadic_requires_public_stack_alignment = true
+};
+
 /* LoongArch64 owns every LP64D frame/ABI register action. Common code owns
  * the function envelope, checked planning, cleanup and ELF serialization. */
 static bool loongarch64_emit_prologue(
@@ -85,7 +107,7 @@ static bool loongarch64_emit_function(
     const MinicCoreObjectStoragePlan *storage, size_t id,
     bool function_sections) {
     static const MinicDirectLP64FunctionEmitter emitter = {
-        "loongarch64", MINIC_LP64_ABI_LOONGARCH64_LP64D,
+        "loongarch64", &loongarch64_abi_policy,
         minic_multi_indirect_record, minic_multi_indirect_record,
         "@progbits", "@function", "@init_array", "quad",
         loongarch64_emit_prologue, minic_loongarch64_emit_core_blocks,

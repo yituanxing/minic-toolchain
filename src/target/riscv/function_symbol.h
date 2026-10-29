@@ -17,6 +17,18 @@ typedef struct MinicRiscvFunctionSymbol {
     bool function_sections;
 } MinicRiscvFunctionSymbol;
 
+/* A complete symbolic function descriptor has an explicit zero-alignment
+ * default. Standalone Core compatibility entry points cannot leave newly
+ * added symbol metadata uninitialized when they only know a name. */
+static inline bool minic_riscv_function_symbol_for_name(
+    const char *name, MinicRiscvFunctionSymbol *symbol) {
+    if (name == NULL || name[0] == '\0' || symbol == NULL) return false;
+    *symbol = (MinicRiscvFunctionSymbol){0};
+    symbol->symbol_name = name;
+    symbol->visibility = MINIC_SYMBOL_VISIBILITY_DEFAULT;
+    return true;
+}
+
 static inline bool minic_riscv_function_symbol_from_function(const MinicFunction *function,
                                                                MinicRiscvFunctionSymbol *symbol) {
     const char *symbol_name;
@@ -25,16 +37,14 @@ static inline bool minic_riscv_function_symbol_from_function(const MinicFunction
         return false;
     }
     symbol_name = minic_c0_function_symbol_name(function);
-    if (symbol_name == NULL || symbol_name[0] == '\0') {
+    if (!minic_riscv_function_symbol_for_name(symbol_name, symbol)) {
         return false;
     }
-    symbol->symbol_name = symbol_name;
     symbol->section_name = function->section_name;
     symbol->explicit_alignment = function->explicit_alignment;
     symbol->visibility = function->visibility;
     symbol->is_internal = function->is_internal;
     symbol->is_weak = function->is_weak;
-    symbol->function_sections = false;
     return true;
 }
 

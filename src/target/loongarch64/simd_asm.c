@@ -400,11 +400,10 @@ bool minic_loongarch64_simd_emit_opaque(
     return true;
 }
 
-/* Core canonicalizes GNU named operands to positional operands, but does
- * not currently retain a unique frontend inline-ASM id for ordinary
- * structured statements. Match the fully qualified original AST template
- * and its operand effects against the machine-side program instead of
- * trusting an unrelated default-zero source_inline_asm_id. */
+/* Core canonicalizes GNU named operands to positional operands.  A trusted
+ * source id identifies the one original GNU statement; the backend must
+ * still prove that its syntax, operand roles and machine effects match the
+ * lowered Core program.  Never accept a source id as the proof itself. */
 static bool loong_simd_same_machine_effects(
     const LoongSimdProgram *original, const LoongSimdProgram *machine) {
     size_t i, j;
@@ -427,47 +426,45 @@ bool minic_loongarch64_simd_emit_structured(
     const MinicCoreInstruction *ins, const MinicCoreInlineAsm *source) {
     const MinicCoreFunction *fn;
     const MinicCoreStructuredInlineAsmOperand *operands;
+    const MinicInlineAsm *original;
     MinicTargetInlineAsmContract contract = {0};
     LoongSimdProgram parsed, source_parsed;
-    size_t i, candidate_index;
-    bool named = false, matched = false;
+    size_t i;
+    bool named, expected_memory_effect;
     if (!out || !ctx || !(fn = ctx->fn) || !ins || !source ||
         ins->kind != MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM ||
         ins->result != MINIC_CORE_VALUE_INVALID ||
         !minic_type_is_void(ins->type) || !source->is_volatile ||
         source->is_goto || source->register_clobber_count ||
         !ctx->program ||
+        source->source_inline_asm_id == SIZE_MAX ||
+        source->source_inline_asm_id >= ctx->program->inline_asm_count ||
         !loong_simd_parse(source->template_text, source->template_length,
                           &parsed) || parsed.operand_count == 0U ||
         parsed.operand_count != ins->value.structured_inline_asm.operand_count ||
         !(operands = ins->value.structured_inline_asm.operands))
         return false;
-    for (candidate_index = 0U;
-         candidate_index < ctx->program->inline_asm_count;
-         ++candidate_index) {
-        const MinicInlineAsm *candidate = minic_c0_program_inline_asm(
-            ctx->program, candidate_index);
-        MinicTargetInlineAsmContract proof = {0};
-        bool candidate_named;
-        if (!candidate ||
-            !minic_loongarch64_simd_qualify_source(
-                ctx->program, candidate, &proof) ||
-            !loong_simd_parse(candidate->template_text,
-                              candidate->template_length, &source_parsed) ||
-            proof.operand_count != parsed.operand_count ||
-            !loong_simd_same_machine_effects(&source_parsed, &parsed))
-            continue;
-        candidate_named = strstr(candidate->template_text, "%[") != NULL;
-        if (candidate_named && !source->has_memory_clobber) continue;
-        for (i = 0U; i < parsed.operand_count; ++i)
-            if (proof.kinds[i] != operands[i].kind) break;
-        if (i != parsed.operand_count) continue;
-        contract = proof;
-        named = candidate_named;
-        matched = true;
-        break;
+    original = minic_c0_program_inline_asm(
+        ctx->program, source->source_inline_asm_id);
+    if (!original ||
+        !minic_loongarch64_simd_qualify_source(
+            ctx->program, original, &contract) ||
+        !loong_simd_parse(original->template_text,
+                          original->template_length, &source_parsed) ||
+        contract.operand_count != parsed.operand_count ||
+        !loong_simd_same_machine_effects(&source_parsed, &parsed))
+        return false;
+    named = strstr(original->template_text, "%[") != NULL;
+    expected_memory_effect =
+        original->has_memory_clobber || contract.implicit_memory_effect;
+    for (i = 0U; i < parsed.operand_count; ++i) {
+        if (contract.kinds[i] != operands[i].kind) return false;
+        if (contract.kinds[i] ==
+            MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE)
+            expected_memory_effect = true;
     }
-    if (!matched) return false;
+    if (source->has_memory_clobber != expected_memory_effect)
+        return false;
     /* Core marks read/write +m as an implicit memory effect, even though
      * the original GNU source had no literal "memory" clobber. Named r
      * pointer forms carry that explicit source clobber. */

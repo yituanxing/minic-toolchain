@@ -6,6 +6,21 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+/* The one physical register-bank description used by SysV/Win64 argument
+ * planners, incoming parameter materialization and outgoing CALL emission.
+ * The GP result sequence is low/high for SysV INTEGER-class returns; it does
+ * not imply that Win64 accepts the same aggregate or __int128 signatures. */
+typedef struct MinicX86AbiRegisters {
+    const char *const *gp_arguments;
+    size_t gp_argument_count;
+    size_t fp_argument_count;
+    const char *const *gp_results;
+    size_t gp_result_count;
+} MinicX86AbiRegisters;
+
+const MinicX86AbiRegisters *minic_x86_64_abi_registers(
+    MinicFunctionCallingConvention convention);
+
 /* SysV x86-64 target-specific ABI classification. This interface does not
  * assert compatibility with the LP64 strategies used by other targets.
  * Machine instruction selection, stack slots and x87 ops stay private. */

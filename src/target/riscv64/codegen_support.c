@@ -171,27 +171,15 @@ bool minic_riscv64_emit_stack_release(FILE *file, size_t size) {
 }
 
 bool minic_riscv64_emit_sp_store64(FILE *file, const char *register_name, size_t offset) {
-    if (offset <= 2047U) {
-        return fprintf(file, "  sd %s, %zu(sp)\n", register_name, offset) >= 0;
-    }
-    return fprintf(file,
-                   "  li t2, %zu\n"
-                   "  add t2, sp, t2\n"
-                   "  sd %s, 0(t2)\n",
-                   offset,
-                   register_name) >= 0;
+    const MinicRiscvFrameAddressPolicy policy =
+        minic_riscv64_machine_frame_policy(false);
+    return minic_riscv_frame_emit_word(file, &policy, true, register_name, offset);
 }
 
 bool minic_riscv64_emit_sp_load64(FILE *file, const char *register_name, size_t offset) {
-    if (offset <= 2047U) {
-        return fprintf(file, "  ld %s, %zu(sp)\n", register_name, offset) >= 0;
-    }
-    return fprintf(file,
-                   "  li t2, %zu\n"
-                   "  add t2, sp, t2\n"
-                   "  ld %s, 0(t2)\n",
-                   offset,
-                   register_name) >= 0;
+    const MinicRiscvFrameAddressPolicy policy =
+        minic_riscv64_machine_frame_policy(false);
+    return minic_riscv_frame_emit_word(file, &policy, false, register_name, offset);
 }
 
 static bool minic_riscv64_emit_integer_conversion(FILE *file, MinicType type, const char *register_name) {

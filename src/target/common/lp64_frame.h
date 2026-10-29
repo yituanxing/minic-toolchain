@@ -49,7 +49,7 @@ void minic_lp64_frame_plan_destroy(MinicLP64FramePlan *);
 /* Direct LP64 frame finalization; ISA instructions are never emitted here. */
 bool minic_lp64_finalize_direct_frame(
     size_t object_end, bool has_calls, bool dynamic_frame, bool has_varargs,
-    size_t frame_alignment, MinicLP64DirectABI abi,
+    size_t frame_alignment, const MinicDirectLP64AbiPolicy *abi,
     size_t *save_offset, size_t *va_base,
     size_t *frame_size);
 

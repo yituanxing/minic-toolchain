@@ -5,6 +5,7 @@
 #include "target/common/program_visit.h"
 #include "target/common/program_emit.h"
 #include "target/common/elf_alias_emit.h"
+#include "target/common/global_emit.h"
 
 #include "target/data_layout.h"
 #include "target/x86_64/global_emit.h"
@@ -34,7 +35,6 @@ static bool x86_emit_function(FILE *out, const MinicC0Program *program,
                               size_t function_id, bool function_sections, MinicDiagnostic *diag, const char *path) {
     MinicX86Frame frame = {0};
     const char *name = minic_c0_function_symbol_name(declaration);
-    const char *vis;
     size_t block_index;
     MinicCoreBlockWalk walk = {0};
     bool success = false;
@@ -73,11 +73,8 @@ static bool x86_emit_function(FILE *out, const MinicC0Program *program,
     if (!declaration->is_internal) {
         if (fprintf(out, declaration->is_weak ? ".weak %s\n" : ".globl %s\n", name) < 0)
             goto done;
-        vis = declaration->visibility == MINIC_SYMBOL_VISIBILITY_HIDDEN ? ".hidden" :
-              declaration->visibility == MINIC_SYMBOL_VISIBILITY_INTERNAL ? ".internal" :
-              declaration->visibility == MINIC_SYMBOL_VISIBILITY_PROTECTED ? ".protected" : NULL;
-        if (declaration->visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT &&
-            (vis == NULL || fprintf(out, "%s %s\n", vis, name) < 0)) goto done;
+        if (!minic_multi_emit_elf_symbol_visibility(
+                out, declaration->visibility, name)) goto done;
     }
     if ((declaration->explicit_alignment != 0U &&
          fprintf(out, ".balign %zu\n", declaration->explicit_alignment) < 0) ||
@@ -107,25 +104,28 @@ static bool x86_emit_function(FILE *out, const MinicC0Program *program,
         fprintf(out, "  andq $-%zu, %%rsp\n", frame.object_base_alignment) < 0)
         goto done;
     if (frame.saves_incoming_gp) {
-        static const char *const regs[6] = {
-            "%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9"};
+        const MinicX86AbiRegisters *abi = minic_x86_64_abi_registers(
+            MINIC_CALLING_CONVENTION_DEFAULT);
         size_t i;
-        for (i = 0U; i < 6U; ++i)
+        if (abi == NULL) goto done;
+        for (i = 0U; i < abi->gp_argument_count; ++i)
             if (fprintf(out, "  movq %s, -%zu(%%rbp)\n",
-                        regs[i], frame.incoming_gp_save_offset + i * 8U) < 0)
+                        abi->gp_arguments[i],
+                        frame.incoming_gp_save_offset + i * 8U) < 0)
                 goto done;
     }
     if (frame.varargs_count != 0U) {
-        static const char *const gp_registers[] =
-            {"%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9"};
+        const MinicX86AbiRegisters *abi = minic_x86_64_abi_registers(
+            MINIC_CALLING_CONVENTION_DEFAULT);
         size_t k;
+        if (abi == NULL) goto done;
         if (fprintf(out, "  leaq -%zu(%%rbp), %%r10\n",
                     frame.varargs_regsave_offset) < 0) goto done;
-        for (k = 0U; k < 6U; ++k) {
+        for (k = 0U; k < abi->gp_argument_count; ++k) {
             if (fprintf(out, "  movq %s, %zu(%%r10)\n",
-                        gp_registers[k], k * 8U) < 0) goto done;
+                        abi->gp_arguments[k], k * 8U) < 0) goto done;
         }
-        for (k = 0U; k < 8U; ++k) {
+        for (k = 0U; k < abi->fp_argument_count; ++k) {
             if (fprintf(out, "  movdqu %%xmm%zu, %zu(%%r10)\n",
                         k, 48U + k * 16U) < 0) goto done;
         }

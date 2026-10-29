@@ -99,40 +99,52 @@ void minic_lp64_frame_plan_destroy(MinicLP64FramePlan *plan) {
  * Preserve existing ABI-specific bounds, offset and stack alignment. */
 bool minic_lp64_finalize_direct_frame(
     size_t object_end, bool has_calls, bool dynamic_frame, bool has_varargs,
-    size_t frame_alignment, MinicLP64DirectABI abi,
+    size_t frame_alignment, const MinicDirectLP64AbiPolicy *abi,
     size_t *save_offset, size_t *va_base,
     size_t *frame_size) {
     size_t save, required, frame, va = 0U, slack;
     if (save_offset == NULL || frame_size == NULL ||
+        !minic_direct_lp64_abi_policy_valid(abi) ||
         object_end > MINIC_LARGE_FRAME_MAX ||
-        frame_alignment < 16U || frame_alignment > 256U ||
+        frame_alignment < abi->stack_alignment || frame_alignment > 256U ||
         (frame_alignment & (frame_alignment - 1U)) != 0U ||
-        (frame_alignment > 16U && !dynamic_frame) ||
-        (abi != MINIC_LP64_ABI_AAPCS64 &&
-         abi != MINIC_LP64_ABI_LOONGARCH64_LP64D))
+        (frame_alignment > abi->stack_alignment && !dynamic_frame))
         return false;
-    if (!minic_core_frame_align_up(object_end, 8U, &save)) return false;
-    if (abi == MINIC_LP64_ABI_AAPCS64 && has_varargs) {
-        if (va_base == NULL || save > MINIC_LARGE_FRAME_MAX - 240U)
+    if (!minic_core_frame_align_up(object_end,
+                                    abi->stack_slot_bytes, &save)) return false;
+    /* ABI-state cursors own a tag and register-save area below the physical
+     * callee-save entries.  Linear cursors save GPRs at the end of the frame
+     * to remain contiguous with the caller's overflow stack arguments. */
+    if (abi->variadic_cursor == MINIC_DIRECT_LP64_VARIADIC_ABI_STATE &&
+        has_varargs) {
+        if (va_base == NULL ||
+            abi->variadic_save_bytes >
+                MINIC_LARGE_FRAME_MAX - abi->variadic_save_alignment ||
+            save > MINIC_LARGE_FRAME_MAX - abi->variadic_save_bytes -
+                abi->variadic_save_alignment)
             return false;
-        if (!minic_core_frame_align_up(save, 16U, &va)) return false;
-        save = va + 224U;
+        if (!minic_core_frame_align_up(
+                save, abi->variadic_save_alignment, &va)) return false;
+        save = va + abi->variadic_save_bytes;
     }
     required = (has_calls ? 8U : 0U) + (dynamic_frame ? 8U : 0U) +
-               (frame_alignment > 16U ? 8U : 0U);
-    if (abi == MINIC_LP64_ABI_LOONGARCH64_LP64D && has_varargs)
-        required += 64U;
+               (frame_alignment > abi->stack_alignment ? 8U : 0U);
+    if (abi->variadic_cursor == MINIC_DIRECT_LP64_VARIADIC_LINEAR_GP &&
+        has_varargs)
+        required += abi->variadic_save_bytes;
     if (save > MINIC_LARGE_FRAME_MAX - required) return false;
-    if (!minic_core_frame_align_up(save + required, 16U, &frame))
+    if (!minic_core_frame_align_up(
+            save + required, abi->stack_alignment, &frame))
         return false;
     /* Entry SP only guarantees 16B. This slack bounds the upward rounding
      * of the target's aligned fixed-frame base while keeping SP 16B. */
-    slack = frame_alignment - 16U;
+    slack = frame_alignment - abi->stack_alignment;
     if (frame > MINIC_LARGE_FRAME_MAX ||
         slack > MINIC_LARGE_FRAME_MAX - frame) return false;
     *save_offset = save;
-    if (abi == MINIC_LP64_ABI_LOONGARCH64_LP64D && has_varargs)
-        va = frame - 64U;
+    if (abi->variadic_cursor == MINIC_DIRECT_LP64_VARIADIC_LINEAR_GP &&
+        has_varargs)
+        va = frame - abi->variadic_save_bytes;
     if (va_base != NULL) *va_base = va;
     /* Expose the actual SP subtraction, including all alignment slack. */
     *frame_size = frame + slack;

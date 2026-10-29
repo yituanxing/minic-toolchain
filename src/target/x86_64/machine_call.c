@@ -17,25 +17,18 @@
 static bool x86_emit_call_arguments_planned(
     FILE *out, const MinicCoreFunction *fn, const MinicX86Frame *frame,
     const MinicCoreCallView *view, const MinicX86ArgumentPlan *plan) {
-    static const char *const sysv_gp_regs[] =
-        {"%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9"};
-    static const char *const ms_x64_gp_regs[] =
-        {"%rcx", "%rdx", "%r8", "%r9"};
-    const char *const *gp_regs;
+    const MinicX86AbiRegisters *abi;
     size_t i;
     if (out == NULL || fn == NULL || frame == NULL || view == NULL ||
         plan == NULL || plan->argument_count != view->argument_count ||
         plan->calling_convention != view->calling_convention ||
         (plan->argument_count != 0U && plan->locations == NULL))
         return false;
+    abi = minic_x86_64_abi_registers(plan->calling_convention);
+    if (abi == NULL) return false;
     if (plan->calling_convention == MINIC_CALLING_CONVENTION_MS_X64) {
         if (plan->stack_bytes < 32U || plan->is_variadic)
             return false;
-        gp_regs = ms_x64_gp_regs;
-    } else if (plan->calling_convention == MINIC_CALLING_CONVENTION_DEFAULT) {
-        gp_regs = sysv_gp_regs;
-    } else {
-        return false;
     }
     if (plan->stack_bytes != 0U &&
         fprintf(out, "  subq $%zu, %%rsp\n", plan->stack_bytes) < 0)
@@ -69,8 +62,9 @@ static bool x86_emit_call_arguments_planned(
             if (loc->kind == MINIC_X86_ARG_RECORD_ONE_GP) {
                 if (!x86_one_gp_load(out, loc->record_bytes)) return false;
                 if (!loc->on_stack) {
+                    if (loc->gp_index >= abi->gp_argument_count) return false;
                     if (fprintf(out, "  movq %%rax, %s\n",
-                                gp_regs[loc->gp_index]) < 0) return false;
+                                abi->gp_arguments[loc->gp_index]) < 0) return false;
                 } else if (fprintf(out, "  movq %%rax, %zu(%%rsp)\n",
                                    loc->stack_index * 8U) < 0) return false;
                 continue;
@@ -96,11 +90,12 @@ static bool x86_emit_call_arguments_planned(
             }
             if (loc->kind != MINIC_X86_ARG_RECORD_TWO_GP) return false;
             if (!loc->on_stack) {
+                if (loc->gp_index >= abi->gp_argument_count - 1U) return false;
                 if (fprintf(out,
                     "  movq 0(%%r11), %s\n"
                     "  movq 8(%%r11), %s\n",
-                    gp_regs[loc->gp_index],
-                    gp_regs[loc->gp_index + 1U]) < 0)
+                    abi->gp_arguments[loc->gp_index],
+                    abi->gp_arguments[loc->gp_index + 1U]) < 0)
                     return false;
             } else if (fprintf(out,
                     "  movq 0(%%r11), %%rax\n"
@@ -126,11 +121,11 @@ static bool x86_emit_call_arguments_planned(
                                "%r10", "%r11"))
                 return false;
             if (!loc->on_stack) {
-                if (loc->gp_index > 4U ||
+                if (loc->gp_index >= abi->gp_argument_count - 1U ||
                     fprintf(out, "  movq %%r10, %s\n"
                                  "  movq %%r11, %s\n",
-                            gp_regs[loc->gp_index],
-                            gp_regs[loc->gp_index + 1U]) < 0)
+                            abi->gp_arguments[loc->gp_index],
+                            abi->gp_arguments[loc->gp_index + 1U]) < 0)
                     return false;
             } else if (fprintf(out,
                     "  movq %%r10, %zu(%%rsp)\n"
@@ -159,6 +154,7 @@ static bool x86_emit_call_arguments_planned(
             return false;
         if (loc->kind == MINIC_X86_ARG_SSE) {
             if (!loc->on_stack) {
+                if (loc->fp_index >= abi->fp_argument_count) return false;
                 if (fprintf(out, minic_type_is_double(type)
                             ? "  movq %%rax, %%xmm%zu\n"
                             : "  movd %%eax, %%xmm%zu\n",
@@ -168,11 +164,10 @@ static bool x86_emit_call_arguments_planned(
                                loc->stack_index * 8U) < 0) return false;
         } else if (loc->kind == MINIC_X86_ARG_INTEGER) {
             if (!loc->on_stack) {
-                if (loc->gp_index >= (plan->calling_convention ==
-                                      MINIC_CALLING_CONVENTION_MS_X64 ? 4U : 6U))
+                if (loc->gp_index >= abi->gp_argument_count)
                     return false;
                 if (fprintf(out, "  movq %%rax, %s\n",
-                            gp_regs[loc->gp_index]) < 0) return false;
+                            abi->gp_arguments[loc->gp_index]) < 0) return false;
             } else if (fprintf(out, "  movq %%rax, %zu(%%rsp)\n",
                                loc->stack_index * 8U) < 0) return false;
         } else return false;
@@ -215,8 +210,11 @@ static bool x86_emit_call_record_result(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicX86Frame *frame,
     MinicType return_type, MinicCoreObjectId object) {
+    const MinicX86AbiRegisters *abi = minic_x86_64_abi_registers(
+        MINIC_CALLING_CONVENTION_DEFAULT);
     size_t bytes;
-    if (object >= fn->object_count ||
+    if (abi == NULL || abi->gp_result_count < 2U ||
+        object >= fn->object_count ||
         !minic_type_is_record(return_type) ||
         !minic_x86_64_record_abi_compatible(
             fn->objects[object].type, return_type))
@@ -231,8 +229,9 @@ static bool x86_emit_call_record_result(
         return x86_one_gp_store(out, bytes);
     if (minic_x86_64_two_gp_record(program, target, return_type))
         return fprintf(out,
-            "  movq %%rax, 0(%%r10)\n"
-            "  movq %%rdx, 8(%%r10)\n") >= 0;
+            "  movq %s, 0(%%r10)\n"
+            "  movq %s, 8(%%r10)\n",
+            abi->gp_results[0], abi->gp_results[1]) >= 0;
     return false;
 }
 
@@ -267,8 +266,13 @@ static bool x86_emit_call_result(FILE *out, const MinicC0Program *program,
                                  MinicType return_type, MinicCoreValueId result) {
     if (result == MINIC_CORE_VALUE_INVALID)
         return minic_type_is_void(return_type);
-    if (minic_type_is_int128_integer(return_type))
-        return x86_i128_store(out, frame, result, "%rax", "%rdx");
+    if (minic_type_is_int128_integer(return_type)) {
+        const MinicX86AbiRegisters *abi = minic_x86_64_abi_registers(
+            MINIC_CALLING_CONVENTION_DEFAULT);
+        return abi != NULL && abi->gp_result_count >= 2U &&
+            x86_i128_store(out, frame, result,
+                           abi->gp_results[0], abi->gp_results[1]);
+    }
     if (minic_type_is_long_double(return_type))
         return x86_x87_store(out, frame, result);
     if (minic_type_is_double(return_type)) {

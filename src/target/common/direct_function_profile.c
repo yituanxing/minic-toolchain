@@ -11,29 +11,31 @@
 MinicDirectLP64ProfileResult minic_multi_direct_lp64_profile_function(
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicFunction *decl, const MinicCoreFunction *fn,
-    const MinicCoreFunctionFacts *facts, MinicLP64DirectABI abi, MinicDirectLP64IndirectRecord indirect_record,
+    const MinicCoreFunctionFacts *facts,
+    const MinicDirectLP64AbiPolicy *abi,
+    MinicDirectLP64IndirectRecord indirect_record,
     MinicLP64ArgumentPlan *incoming, MinicDirectLP64FunctionProfile *profile) {
     size_t i;
 
     if (program == NULL || target == NULL || decl == NULL || fn == NULL || facts == NULL ||
         incoming == NULL || profile == NULL || indirect_record == NULL ||
-        (abi != MINIC_LP64_ABI_AAPCS64 &&
-         abi != MINIC_LP64_ABI_LOONGARCH64_LP64D))
+        !minic_direct_lp64_abi_policy_valid(abi))
         return MINIC_DIRECT_LP64_PROFILE_PARAMETER_SHAPE;
     (void)memset(profile, 0, sizeof(*profile));
     profile->variadic_address_count = facts->variadic_address_count;
     profile->has_dynamic_stack = facts->uses_dynamic_stack_alloc;
     if (decl->is_variadic) {
         for (i = 0U; i < fn->parameter_count; ++i) {
-            if (abi == MINIC_LP64_ABI_AAPCS64) {
+            if (!abi->variadic_named_double_supported &&
+                minic_type_is_double(fn->parameter_types[i]))
+                return MINIC_DIRECT_LP64_PROFILE_VARIADIC_FIXED_FLOAT;
+            if (abi->variadic_cursor == MINIC_DIRECT_LP64_VARIADIC_ABI_STATE) {
                 if (minic_type_is_double(fn->parameter_types[i]) ||
                     minic_type_is_float(fn->parameter_types[i]))
                     ++profile->fixed_fp_count;
                 else
                     ++profile->fixed_gp_count;
             } else {
-                if (minic_type_is_double(fn->parameter_types[i]))
-                    return MINIC_DIRECT_LP64_PROFILE_VARIADIC_FIXED_FLOAT;
                 ++profile->fixed_gp_count;
             }
         }
@@ -55,7 +57,7 @@ MinicDirectLP64ProfileResult minic_multi_direct_lp64_profile_function(
     if (!minic_lp64_plan_incoming_parameters(
             program, target, fn, abi, indirect_record, incoming))
         return MINIC_DIRECT_LP64_PROFILE_PARAMETER_SHAPE;
-    if (abi == MINIC_LP64_ABI_AAPCS64) {
+    if (abi->variadic_cursor == MINIC_DIRECT_LP64_VARIADIC_ABI_STATE) {
         size_t starts = 0U, cursors = 0U;
         for (i = 0U; i < fn->instruction_count; ++i) {
             const MinicCoreInstruction *ins = &fn->instructions[i];
@@ -74,7 +76,8 @@ MinicDirectLP64ProfileResult minic_multi_direct_lp64_profile_function(
         if (cursors != profile->variadic_address_count ||
             (starts != 0U && !decl->is_variadic) ||
             (starts != 0U &&
-             (profile->fixed_gp_count > 8U || profile->fixed_fp_count > 8U)))
+             (profile->fixed_gp_count > abi->gp_argument_registers ||
+              profile->fixed_fp_count > abi->fp_argument_registers)))
             return MINIC_DIRECT_LP64_PROFILE_VARIADIC_SHAPE;
     } else if (profile->variadic_address_count != 0U) {
         size_t starts = 0U, cursors = 0U, consumed_gp = 0U;
@@ -94,7 +97,7 @@ MinicDirectLP64ProfileResult minic_multi_direct_lp64_profile_function(
          * the entry stack pointer, followed by the caller's contiguous
          * stack slots. The pointer may legitimately be past all eight GARs. */
         profile->fixed_gp_count = incoming->stack_slots != 0U
-            ? 8U + incoming->stack_slots : consumed_gp;
+            ? abi->gp_argument_registers + incoming->stack_slots : consumed_gp;
         for (i = 0U; i < fn->instruction_count; ++i) {
             const MinicCoreInstruction *ins = &fn->instructions[i];
             if (ins->kind != MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS)

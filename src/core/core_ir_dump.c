@@ -475,12 +475,19 @@ static bool dump_instruction(FILE *output,
             return false;
         }
         inline_asm = &function->inline_asms[inline_asm_id];
-        return fprintf(output,
-                       "  asm.structured id=%" PRIu32 " operands=%zu%s%s\n",
-                       inline_asm_id,
-                       instruction->value.structured_inline_asm.operand_count,
-                       inline_asm->is_volatile ? " volatile" : "",
-                       inline_asm->has_memory_clobber ? " memory" : "") >= 0;
+        if (fprintf(output,
+                    "  asm.structured id=%" PRIu32 " operands=%zu%s%s",
+                    inline_asm_id,
+                    instruction->value.structured_inline_asm.operand_count,
+                    inline_asm->is_volatile ? " volatile" : "",
+                    inline_asm->has_memory_clobber ? " memory" : "") < 0)
+            return false;
+        /* Distinguish verified source provenance from Core-only effects in
+         * diagnostics; SIZE_MAX is never a genuine source statement id. */
+        if (inline_asm->source_inline_asm_id != SIZE_MAX &&
+            fprintf(output, " source=%zu", inline_asm->source_inline_asm_id) < 0)
+            return false;
+        return fputc('\n', output) != EOF;
     }
     case MINIC_CORE_INSTRUCTION_COMPILER_BARRIER:
         return fprintf(output, "  compiler.barrier\n") >= 0;

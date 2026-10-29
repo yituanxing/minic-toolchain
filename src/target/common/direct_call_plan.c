@@ -12,21 +12,21 @@
 static bool minic_lp64_plan_types(
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicType *types, size_t count, size_t fixed, bool variadic,
-    MinicLP64DirectABI abi, MinicDirectLP64IndirectRecord indirect_record,
+    const MinicDirectLP64AbiPolicy *abi,
+    MinicDirectLP64IndirectRecord indirect_record,
     bool hidden_indirect_result,
     MinicLP64ArgumentPlan *plan) {
     /* AAPCS64 reserves x8 for the result buffer, outside the argument
      * register stream. LoongArch LP64D instead consumes the FIRST named
      * GAR ($a0). This is ABI placement, never a Core-level parameter. */
-    size_t gp = hidden_indirect_result &&
-        abi == MINIC_LP64_ABI_LOONGARCH64_LP64D ? 1U : 0U;
+    size_t gp = hidden_indirect_result && abi != NULL
+        ? abi->indirect_result_argument_registers : 0U;
     size_t fp = 0U, stack = 0U, j;
     if (program == NULL || target == NULL || plan == NULL ||
+        !minic_direct_lp64_abi_policy_valid(abi) ||
         indirect_record == NULL || count > MINIC_DIRECT_LP64_MAX_CALL_ARGUMENTS ||
         (count != 0U && types == NULL) || fixed > count ||
-        (!variadic && fixed != count) ||
-        (abi != MINIC_LP64_ABI_AAPCS64 &&
-         abi != MINIC_LP64_ABI_LOONGARCH64_LP64D))
+        (!variadic && fixed != count))
         return false;
     (void)memset(plan, 0, sizeof(*plan));
     plan->argument_count = count;
@@ -57,7 +57,7 @@ static bool minic_lp64_plan_types(
         if (record) {
             if (by_reference) {
                 loc->kind = MINIC_LP64_ARGUMENT_INDIRECT_RECORD;
-                if (gp < 8U) {
+                if (gp < abi->gp_argument_registers) {
                     loc->gp_first = gp;
                     loc->gp_registers = 1U;
                 } else {
@@ -66,8 +66,10 @@ static bool minic_lp64_plan_types(
                 }
                 ++gp;
             } else {
-                size_t available = gp < 8U ? 8U - gp : 0U;
-                const size_t used = abi == MINIC_LP64_ABI_AAPCS64
+                size_t available = gp < abi->gp_argument_registers
+                    ? abi->gp_argument_registers - gp : 0U;
+                const size_t used =
+                    abi->record_registers == MINIC_DIRECT_LP64_RECORD_WHOLE_OR_STACK
                     ? (available >= chunks ? chunks : 0U)
                     : (available < chunks ? available : chunks);
                 loc->kind = MINIC_LP64_ARGUMENT_RECORD;
@@ -80,8 +82,8 @@ static bool minic_lp64_plan_types(
                     loc->stack_slots = chunks - used;
                     stack += chunks - used;
                 }
-                gp = abi == MINIC_LP64_ABI_AAPCS64 && used == 0U
-                    ? 8U : gp + used;
+                gp = abi->record_registers == MINIC_DIRECT_LP64_RECORD_WHOLE_OR_STACK &&
+                     used == 0U ? abi->gp_argument_registers : gp + used;
             }
         } else if (minic_type_is_int128_integer(type)) {
             /* TI is an integral 16-byte scalar, not a single GP word.
@@ -90,21 +92,22 @@ static bool minic_lp64_plan_types(
             loc->kind = MINIC_LP64_ARGUMENT_WIDE;
             loc->size_bytes = 16U;
             loc->chunks = 2U;
-            if (abi == MINIC_LP64_ABI_AAPCS64) {
+            if (abi->wide_registers == MINIC_DIRECT_LP64_WIDE_EVEN_PAIR_OR_STACK) {
                 gp = (gp + 1U) & ~(size_t)1U;
-                if (gp <= 6U) {
+                if (gp + 2U <= abi->gp_argument_registers) {
                     loc->gp_first = gp;
                     loc->gp_registers = 2U;
                     gp += 2U;
                 } else {
-                    gp = 8U;
+                    gp = abi->gp_argument_registers;
                     stack += stack & 1U;
                     loc->stack_first = stack;
                     loc->stack_slots = 2U;
                     stack += 2U;
                 }
             } else {
-                const size_t available = gp < 8U ? 8U - gp : 0U;
+                const size_t available = gp < abi->gp_argument_registers
+                    ? abi->gp_argument_registers - gp : 0U;
                 const size_t used = available < 2U ? available : 2U;
                 if (used != 0U) {
                     loc->gp_first = gp;
@@ -119,8 +122,8 @@ static bool minic_lp64_plan_types(
             }
         } else if (minic_type_is_long_double(type)) {
             loc->kind = MINIC_LP64_ARGUMENT_WIDE;
-            if (abi == MINIC_LP64_ABI_AAPCS64) {
-                if (fp < 8U) {
+            if (abi->long_double_in_fp_register) {
+                if (fp < abi->fp_argument_registers) {
                     loc->fp_first = fp;
                     loc->fp_registers = 1U;
                 } else {
@@ -132,8 +135,10 @@ static bool minic_lp64_plan_types(
                 ++fp;
             } else {
                 size_t available, used;
-                if (variadic && j >= fixed && gp < 8U && (gp & 1U)) ++gp;
-                available = gp < 8U ? 8U - gp : 0U;
+                if (variadic && j >= fixed &&
+                    gp < abi->gp_argument_registers && (gp & 1U)) ++gp;
+                available = gp < abi->gp_argument_registers
+                    ? abi->gp_argument_registers - gp : 0U;
                 used = available < 2U ? available : 2U;
                 if (used != 0U) {
                     loc->gp_first = gp;
@@ -147,11 +152,11 @@ static bool minic_lp64_plan_types(
                 gp += used;
             }
         } else if (minic_type_is_double(type) || minic_type_is_float(type)) {
-            const bool use_fp = abi == MINIC_LP64_ABI_AAPCS64 ||
-                ((!variadic || j < fixed) && fp < 8U);
+            const bool use_fp = abi->variadic_floating_in_fp_register ||
+                ((!variadic || j < fixed) && fp < abi->fp_argument_registers);
             if (use_fp) {
                 loc->kind = MINIC_LP64_ARGUMENT_FP;
-                if (fp < 8U) {
+                if (fp < abi->fp_argument_registers) {
                     loc->fp_first = fp;
                     loc->fp_registers = 1U;
                 } else {
@@ -161,7 +166,7 @@ static bool minic_lp64_plan_types(
                 ++fp;
             } else {
                 loc->kind = MINIC_LP64_ARGUMENT_GP;
-                if (gp < 8U) {
+                if (gp < abi->gp_argument_registers) {
                     loc->gp_first = gp;
                     loc->gp_registers = 1U;
                 } else {
@@ -172,7 +177,7 @@ static bool minic_lp64_plan_types(
             }
         } else {
             loc->kind = MINIC_LP64_ARGUMENT_GP;
-            if (gp < 8U) {
+            if (gp < abi->gp_argument_registers) {
                 loc->gp_first = gp;
                 loc->gp_registers = 1U;
             } else {
@@ -183,9 +188,12 @@ static bool minic_lp64_plan_types(
         }
     }
     /* Every call is already capped at 64 arguments, each at most two slots. */
-    if (stack > (SIZE_MAX - 15U) / 8U) return false;
+    if (stack > (SIZE_MAX - (abi->stack_alignment - 1U)) /
+                    abi->stack_slot_bytes) return false;
     plan->stack_slots = stack;
-    plan->stack_bytes = (stack * 8U + 15U) & ~(size_t)15U;
+    plan->stack_bytes = (stack * abi->stack_slot_bytes +
+                         abi->stack_alignment - 1U) &
+                        ~(abi->stack_alignment - 1U);
     return true;
 }
 
@@ -197,14 +205,14 @@ static bool minic_lp64_plan_types(
  * Reuses exactly the same register/stack classifier as outgoing calls. */
 bool minic_lp64_plan_incoming_parameters(
     const MinicC0Program *program, const MinicTargetInfo *target,
-    const MinicCoreFunction *fn, MinicLP64DirectABI abi,
+    const MinicCoreFunction *fn, const MinicDirectLP64AbiPolicy *abi,
     MinicDirectLP64IndirectRecord indirect_record,
     MinicLP64ArgumentPlan *plan) {
     size_t return_bytes = 0U;
     bool hidden_indirect_result;
     if (fn == NULL) return false;
     hidden_indirect_result =
-        abi == MINIC_LP64_ABI_LOONGARCH64_LP64D &&
+        abi != NULL && abi->indirect_result_argument_registers != 0U &&
         minic_type_is_record(fn->return_type) &&
         indirect_record(program, target, fn->return_type, &return_bytes) &&
         return_bytes > 16U;
@@ -401,7 +409,8 @@ static bool minic_lp64_admit_call(
 bool minic_lp64_plan_function_calls(
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreCallIndex *semantic_calls,
-    MinicLP64DirectABI abi, MinicDirectLP64IndirectRecord indirect_record,
+    const MinicDirectLP64AbiPolicy *abi,
+    MinicDirectLP64IndirectRecord indirect_record,
     MinicDirectLP64IndirectRecord indirect_return,
     const char *arch, const char *name, size_t *failed_instruction,
     bool *failed_preflight, bool *has_calls, MinicLP64CallPlanCache *cache) {
@@ -411,7 +420,9 @@ bool minic_lp64_plan_function_calls(
     if (failed_preflight != NULL) *failed_preflight = true;
     if (has_calls != NULL) *has_calls = false;
     if (program == NULL || target == NULL || fn == NULL || cache == NULL ||
-        arch == NULL || name == NULL || failed_instruction == NULL ||
+        arch == NULL || name == NULL ||
+        !minic_direct_lp64_abi_policy_valid(abi) ||
+        failed_instruction == NULL ||
         failed_preflight == NULL || has_calls == NULL ||
         cache->sites != NULL || cache->call_count != 0U ||
         cache->semantic_calls.index != NULL ||
@@ -452,7 +463,7 @@ bool minic_lp64_plan_function_calls(
             goto failed;
         *failed_preflight = false;
         hidden_indirect_result =
-            abi == MINIC_LP64_ABI_LOONGARCH64_LP64D &&
+            abi->indirect_result_argument_registers != 0U &&
             indirect_return != NULL &&
             minic_type_is_record(calls->sites[ordinal].view.return_type) &&
             indirect_return(program, target,

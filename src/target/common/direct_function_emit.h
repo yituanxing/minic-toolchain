@@ -14,7 +14,7 @@
  * ABI-specific prologue, machine blocks, and epilogue stay in native hooks. */
 typedef struct MinicDirectLP64FunctionEmitter {
     const char *architecture;
-    MinicLP64DirectABI abi;
+    const MinicDirectLP64AbiPolicy *abi;
     MinicDirectLP64IndirectRecord indirect_record;
     /* ABI-owned return classifier. NULL preserves the old fail-closed path. */
     MinicDirectLP64IndirectRecord indirect_return;
@@ -45,6 +45,7 @@ static inline bool minic_multi_direct_lp64_emit_function(
     bool ok = false;
 
     if (config == NULL || config->architecture == NULL ||
+        !minic_direct_lp64_abi_policy_valid(config->abi) ||
         config->indirect_record == NULL || config->text_section_type == NULL ||
         config->elf_function_type == NULL || config->init_array_type == NULL ||
         config->init_word_directive == NULL || config->emit_prologue == NULL ||
