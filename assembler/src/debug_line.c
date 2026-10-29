@@ -386,6 +386,14 @@ bool minias_debug_emit(MiniAs *as) {
     qsort(order,as->debug_loc_count,sizeof(*order),compare_loc);
     sec=minias_ensure_section(as,".debug_line",MINIAS_SHT_PROGBITS,0U,1U);
     if(sec<0)goto failed;
+    /* GNU GAS refuses to concatenate a source-owned .debug_line payload
+     * with the synthesized .file/.loc line program: their headers, row
+     * ordering and relocation ownership are independent object producers.
+     * An explicitly selected but empty section is not a conflicting owner. */
+    if(as->sections[(size_t)sec].size!=0U) {
+        minias_set_error(as,"duplicate-dwarf-line-section");
+        goto failed;
+    }
     if(!append_u32(as,sec,0U) || !append_u16(as,sec,4U))goto failed;
     header_len_at=as->sections[(size_t)sec].size;
     if(!append_u32(as,sec,0U))goto failed;
