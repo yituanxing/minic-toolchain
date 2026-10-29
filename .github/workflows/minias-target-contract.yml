@@ -91,6 +91,11 @@ jobs:
           command -v riscv64-linux-gnu-as
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-rv-option-rvc-state.sh
+      - name: GNU RVC compressed nop and ret are frozen at each lexical option site
+        run: |
+          command -v riscv64-linux-gnu-as
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-rv-compressed-pseudo-site-gnu.sh
       - name: RV strict executable instructions reject all Common raw data escapes
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \

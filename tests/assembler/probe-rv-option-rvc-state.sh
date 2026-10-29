@@ -123,8 +123,12 @@ def text_bytes(obj):
                 payload.extend(bytes.fromhex(cell))
     return bytes(payload)
 
-assert text_bytes(sys.argv[1]) == text_bytes(sys.argv[2]), \
-    'RISC-V .option rvc restored bytes differ from GNU as'
+gnu_bytes=text_bytes(sys.argv[1])
+mini_bytes=text_bytes(sys.argv[2])
+if gnu_bytes != mini_bytes:
+    print('GNU rv64gc text:    ',gnu_bytes.hex(' '),file=sys.stderr)
+    print('MiniAS rv64gc text: ',mini_bytes.hex(' '),file=sys.stderr)
+    raise AssertionError('RISC-V .option rvc restored bytes differ from GNU as')
 PY
     echo 'MINIAS_RV_OPTION_RVC=PASS GNU_TEXT_EXACT'
 else

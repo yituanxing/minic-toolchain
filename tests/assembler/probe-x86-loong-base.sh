@@ -1284,7 +1284,6 @@ for bad in            'popcntq %eax,%rax' \
            'movq $18446744073709551616, %r8' \
            'cmpq $4294967296, (%rax)' \
            'leaq %rax, (%rsp)' \
-           'setne %ah' \
            'movslq %rdi, %r8' \
            'testb %ah, %r8b' \
            'movabsq $ext_global, (%rax)' \

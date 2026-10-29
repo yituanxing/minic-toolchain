@@ -998,6 +998,21 @@ static bool rv_parse_simple_mc(MiniAs *as, MiniAsStmt *stmt,
        strcmp(op,"ebreak")==0 || strcmp(op,"wfi")==0 ||
        strcmp(op,"pause")==0 || strcmp(op,"fence.i")==0) {
         if(n!=0U)goto invalid;
+        /* GNU GAS compresses the two canonical pseudo spellings when C is
+         * selected at this lexical site. This belongs to RISC-V's typed
+         * instruction selection, not the Common MC size planner. A later
+         * .option norvc/pop cannot retroactively change this MCInst. */
+        if((!strcmp(op,"nop") || !strcmp(op,"ret")) &&
+           MINIAS_RV_STATE(as)->isa_explicit &&
+           (MINIAS_RV_STATE(as)->isa_features & RISCV_ISA_C)!=0U &&
+           (as->target_options & MINIAS_RISCV_OPTION_NO_RVC)==0U) {
+            MiniAsMCInst *m=minias_mcinst_alloc(0U);
+            if(m==NULL)goto oom;
+            m->opcode=RV_MC_C16;
+            m->encoding=strcmp(op,"ret")==0?0x8082U:0x0001U;
+            stmt->mcinst=m;
+            return true;
+        }
         bits=strcmp(op,"nop")==0?0x00000013U:
              strcmp(op,"ret")==0?0x00008067U:
              strcmp(op,"sret")==0?0x10200073U:
@@ -1768,6 +1783,13 @@ static bool rv_encode_mcinst(MiniAs *as, const MiniAsStmt *stmt) {
     if (m->opcode == RV_MC_LI || m->opcode == RV_MC_CALL ||
         m->opcode == RV_MC_TAIL || m->opcode == RV_MC_LA)
         return rv_encode_multi_mc(as, stmt);
+    if (m->opcode == RV_MC_C16) {
+        /* The selected 16-bit instruction may have no register operands
+         * (c.nop/c.jr), so dispatch before reading operand[0]. */
+        if(!append_u16(as,stmt->section,(uint16_t)m->encoding))return false;
+        as->elf_flags |= 1U; /* ELF psABI EF_RISCV_RVC */
+        return true;
+    }
     int rd=(int)m->operands[0].reg,rs1=0,rs2=0;
     int64_t imm=0,distance;
     uint32_t base=m->encoding,code=0U;
@@ -1779,15 +1801,6 @@ static bool rv_encode_mcinst(MiniAs *as, const MiniAsStmt *stmt) {
         rs2=(int)m->operands[2].reg;
     if (m->count > 2U && m->operands[2].kind==MINIAS_MC_IMMEDIATE)
         imm=(int64_t)m->operands[2].immediate;
-    if (m->opcode == RV_MC_C16) {
-        /* EF_RISCV_RVC is an output-object property, not merely a -march
-         * spelling. Legacy MiniAS accepts C16 without an explicit ISA
-         * profile; advertise the actual compressed instruction in ELF flags
-         * so linkers never see an unmarked RVC-bearing object. */
-        if(!append_u16(as,stmt->section,(uint16_t)base))return false;
-        as->elf_flags |= 1U; /* ELF psABI EF_RISCV_RVC */
-        return true;
-    }
     if (m->opcode == RV_MC_SYMBOL_LOAD ||
         m->opcode == RV_MC_SYMBOL_STORE) {
         const bool load = m->opcode == RV_MC_SYMBOL_LOAD;
