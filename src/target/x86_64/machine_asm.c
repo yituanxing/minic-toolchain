@@ -2200,7 +2200,7 @@ static bool emit_linux_msr(FILE *out,const MinicC0Program *program,
        "  .long %u\n"
        "  .popsection\n",
        (form==1U||form==5U)?"rdmsr":"wrmsr",
-       (form==5U||form==6U)?13U:form==1U?9U:8U)<0)return false;
+       form==5U?13U:form==6U?12U:form==1U?9U:8U)<0)return false;
     for(i=0U;i<outputs;++i){
         if(!minic_type_pointee(fn->values[ops[i].value].type,&ty)||
            !minic_x86_64_scalar_width(program,target,ty,&width,&sign)||

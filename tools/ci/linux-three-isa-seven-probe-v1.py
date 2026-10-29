@@ -44,6 +44,24 @@ def all_backend_reject_frontiers(stderr,target):
                  kind=int(m.group(6)),backend_line=int(m.group(7)))
             for m in BACKEND_REJECT.finditer(stderr) if m.group(1)==target]
 
+# Capture the actual AArch64 GNU ASM shape when a structured backend refuses
+# it.  The Core opcode alone cannot distinguish register constraints,
+# privileged instructions and section/alternative templates.
+AARCH64_STRUCTURED_REJECT = re.compile(
+    r"^MINIC_AARCH64_STRUCTURED_REJECT function=([A-Za-z_][A-Za-z_0-9]*) "
+    r"dynamic_frame=([01]) template_length=(\d+) operand_count=(\d+) "
+    r"volatile=([01]) memory=([01]) goto=([01]) preview=([^\r\n]*)$",
+    re.MULTILINE)
+
+def all_aarch64_structured_rejects(stderr,target):
+    if target != "aarch64":
+        return []
+    return [dict(function=m.group(1),dynamic_frame=int(m.group(2)),
+                 template_length=int(m.group(3)),operand_count=int(m.group(4)),
+                 volatile=int(m.group(5)),memory=int(m.group(6)),
+                 goto=int(m.group(7)),preview=m.group(8))
+            for m in AARCH64_STRUCTURED_REJECT.finditer(stderr)]
+
 # Preserve source and ABI type identities of unsupported AArch64 scalar
 # LOADs. This is diagnostic evidence only and never changes admission.
 AARCH64_LOAD_SHAPE_REJECT = re.compile(
@@ -195,6 +213,7 @@ def probe(a):
             asm_frontiers=all_core_asm_frontiers(error_text)
             machine_frontiers=all_machine_opcode_frontiers(error_text,a.target)
             backend_frontiers=all_backend_reject_frontiers(error_text,a.target)
+            structured_rejects=all_aarch64_structured_rejects(error_text,a.target)
             load_shape_frontiers=all_load_shape_frontiers(error_text,a.target)
             preflight_roots=all_preflight_roots(error_text,a.target)
             asm_forms=all_asm_form_frontiers(error_text,a.target)
@@ -211,6 +230,7 @@ def probe(a):
                         asm_frontiers=asm_frontiers,
                         machine_frontiers=machine_frontiers,
                         backend_frontiers=backend_frontiers,
+                        structured_rejects=structured_rejects,
                         load_shape_frontiers=load_shape_frontiers,
                         preflight_roots=preflight_roots,asm_forms=asm_forms,
                         asm_sha256=sha(asm) if ok else None)
@@ -219,6 +239,7 @@ def probe(a):
             return dict(index=row["index"],object=obj,status="MINIC_TIMEOUT",diagnostic="timeout",
                         core_frontiers=[],core_lower_traces=[],machine_frontiers=[],
                         backend_frontiers=[],load_shape_frontiers=[],
+                        structured_rejects=[],
                         preflight_roots=[],asm_forms=[],asm_frontiers=[],
                         input_sha256=row["sha256"])
     with concurrent.futures.ThreadPoolExecutor(max_workers=a.workers) as executor:

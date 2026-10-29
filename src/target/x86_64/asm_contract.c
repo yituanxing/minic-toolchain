@@ -2936,9 +2936,10 @@ unsigned int minic_x86_64_linux_msr_form(const char *text,size_t len) {
       /* mce_rdmsrl: architectural-violation #MC fixup kind 13. */
       "1:rdmsr2:.pushsection\"__ex_table\",\"a\".balign4"
       ".long(1b)-..long(2b)-..long13.popsection",
-      /* mce_wrmsrl: same #MC exception type, but writes ECX:EAX:EDX. */
+      /* Linux 6.6 EX_TYPE_WRMSR_IN_MCE is 12, while
+       * EX_TYPE_RDMSR_IN_MCE is 13: the #MC handlers are not interchangeable. */
       "1:wrmsr2:.pushsection\"__ex_table\",\"a\".balign4"
-      ".long(1b)-..long(2b)-..long13.popsection"
+      ".long(1b)-..long(2b)-..long12.popsection"
     };
     /* Source named operands are canonicalized to numeric %0 by Core.
      * Exact matching of both representations preserves the hardware and

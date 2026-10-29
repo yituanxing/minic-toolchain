@@ -28,9 +28,9 @@ set +e
 set -e
 test "$gnu_status" -eq 42 || fail "GNU real hardware returned $gnu_status"
 test "$mini_status" -eq 42 || fail "MiniC real hardware returned $mini_status"
-rg -q 'lock; cmpxchg16b \(%r11\)' "$work/atomic.s" \
+grep -Eq 'lock; cmpxchg16b \(%r11\)' "$work/atomic.s" \
     || fail 'locked CAS machine instruction absent'
-rg -q 'sete %r10b' "$work/atomic.s" \
+grep -Eq 'sete %r10b' "$work/atomic.s" \
     || fail 'ZF boolean must be captured immediately'
 
 # ALT record is exactly 14 bytes: two PC-relative offsets, feature 141,
@@ -39,7 +39,7 @@ rg -q 'sete %r10b' "$work/atomic.s" \
 for compiler in gnu mini; do
     obj="$work/$compiler-alt.o"
     readelf -SW "$obj" > "$work/$compiler-sections"
-    rg -q '\.altinstructions' "$work/$compiler-sections" || fail "$compiler ALT section"
+    grep -Eq '\.altinstructions' "$work/$compiler-sections" || fail "$compiler ALT section"
     objcopy --dump-section .altinstructions="$work/$compiler-alt.bin" "$obj"
     test "$(wc -c < "$work/$compiler-alt.bin")" -eq 14 \
         || fail "$compiler ALT record must be 14 bytes"
@@ -54,8 +54,8 @@ for compiler in gnu mini; do
         "$work/$compiler-relocations")
     test "$relocs" -eq 2 || fail "$compiler ALT expected two PC32 relocations, got $relocs"
 done
-rg -q 'call this_cpu_cmpxchg16b_emu' "$work/alt.s" \
+grep -Eq 'call this_cpu_cmpxchg16b_emu' "$work/alt.s" \
     || fail 'old ALT private kernel emulation call absent'
-rg -q 'cmpxchg16b %gs:\(%r11\)' "$work/alt.s" \
+grep -Eq 'cmpxchg16b %gs:\(%r11\)' "$work/alt.s" \
     || fail 'GS replacement exact memory operand absent'
 printf '%s\n' 'X86_CMPXCHG16B=PASS GNU_status=42 MiniC_status=42 locked=real_128bit_atomic ALT_feature=141 ALT_old=8 ALT_new=5 ALT_relocs=2*PC32 ALT_execute=never'

@@ -99,7 +99,8 @@ bool minic_parser_global_zero_definition(MinicParser *parser,
 
 static bool parse_static_declarator_tail(MinicParser *parser, MinicType base_type);
 
-static bool parse_static_scalar(MinicParser *parser, MinicType type, MinicSourceSpan name_span) {
+static bool parse_static_scalar(MinicParser *parser, MinicType declaration_base,
+                                MinicType type, MinicSourceSpan name_span) {
     MinicGlobalObjectId object_id;
     bool braced;
 
@@ -149,7 +150,7 @@ static bool parse_static_scalar(MinicParser *parser, MinicType type, MinicSource
             return false;
         }
     }
-    return parse_static_declarator_tail(parser, type);
+    return parse_static_declarator_tail(parser, declaration_base);
 }
 
 /* A C declaration may define several objects using one base type, including
@@ -201,6 +202,7 @@ static bool parse_static_declarator_tail(MinicParser *parser, MinicType base_typ
     has_section = false;
     (void)memset(section_name, 0, sizeof(section_name));
     return minic_parser_parse_static_global_after_head(parser,
+                                                       base_type,
                                                        object_type,
                                                        name_span,
                                                        section_name,
@@ -586,6 +588,7 @@ bool minic_parser_parse_extern_global(MinicParser *parser) {
 }
 
 static bool parse_static_pointer_array(MinicParser *parser,
+                                       MinicType declaration_base,
                                        MinicType element_type,
                                        MinicSourceSpan name_span,
                                        char *section_name,
@@ -797,17 +800,7 @@ static bool parse_static_pointer_array(MinicParser *parser,
             }
         }
     }
-    {
-        MinicType declaration_base;
-
-        /* Pointer stars are per declarator in C: `char *a[2], *b[2]`
-         * describes two pointer arrays, not a pointer and a double pointer. */
-        if (!minic_type_pointee(element_type, &declaration_base)) {
-            minic_parser_error(parser, "invalid static pointer-array declaration base");
-            return false;
-        }
-        return parse_static_declarator_tail(parser, declaration_base);
-    }
+    return parse_static_declarator_tail(parser, declaration_base);
 }
 
 static bool static_object_type_is_read_only(const MinicC0Program *program, MinicType type) {
@@ -862,6 +855,7 @@ bool minic_parser_global_zero_definition(MinicParser *parser,
 }
 
 static bool parse_static_inferred_integer_array(MinicParser *parser,
+                                                MinicType declaration_base,
                                                 MinicType element_type,
                                                 MinicSourceSpan name_span,
                                                 char *section_name,
@@ -923,10 +917,11 @@ static bool parse_static_inferred_integer_array(MinicParser *parser,
         }
         return false;
     }
-    return parse_static_declarator_tail(parser, element_type);
+    return parse_static_declarator_tail(parser, declaration_base);
 }
 
 static bool parse_static_inferred_char_array(MinicParser *parser,
+                                             MinicType declaration_base,
                                              MinicType element_type,
                                              MinicSourceSpan name_span,
                                              char *section_name,
@@ -987,7 +982,7 @@ static bool parse_static_inferred_char_array(MinicParser *parser,
             "inferred static character array requires a string or braced scalar initializer");
         return false;
     }
-    return parse_static_declarator_tail(parser, element_type);
+    return parse_static_declarator_tail(parser, declaration_base);
 }
 
 bool minic_parser_parse_static_zero_declaration_list_after_head(MinicParser *parser,
@@ -1164,6 +1159,7 @@ bool minic_parser_parse_static_zero_declaration_list_after_head(MinicParser *par
 }
 
 static bool parse_preformed_static_array_definition(MinicParser *parser,
+                                                    MinicType declaration_base,
                                                     MinicType object_type,
                                                     MinicSourceSpan name_span,
                                                     const char *section_name,
@@ -1237,10 +1233,11 @@ static bool parse_preformed_static_array_definition(MinicParser *parser,
                    parser, object_id, object_type)) {
         return false;
     }
-    return parse_static_declarator_tail(parser, object_type);
+    return parse_static_declarator_tail(parser, declaration_base);
 }
 
 bool minic_parser_parse_static_global_after_head(MinicParser *parser,
+                                                 MinicType declaration_base,
                                                  MinicType element_type,
                                                  MinicSourceSpan name_span,
                                                  char *section_name,
@@ -1286,6 +1283,7 @@ bool minic_parser_parse_static_global_after_head(MinicParser *parser,
     }
     if (minic_type_is_array(element_type)) {
         return parse_preformed_static_array_definition(parser,
+                                                       declaration_base,
                                                        element_type,
                                                        name_span,
                                                        section_name,
@@ -1304,10 +1302,11 @@ bool minic_parser_parse_static_global_after_head(MinicParser *parser,
                                    explicit_alignment);
     }
     if (parser->current.kind != MINIC_TOKEN_LBRACKET) {
-        return parse_static_scalar(parser, element_type, name_span);
+        return parse_static_scalar(parser, declaration_base, element_type, name_span);
     }
     if (minic_type_is_pointer(element_type)) {
         return parse_static_pointer_array(parser,
+                                          declaration_base,
                                           element_type,
                                           name_span,
                                           section_name,
@@ -1338,6 +1337,7 @@ bool minic_parser_parse_static_global_after_head(MinicParser *parser,
             if (!incomplete_multidimensional) {
                 if (minic_type_is_char_integer(element_type)) {
                     return parse_static_inferred_char_array(parser,
+                                                            declaration_base,
                                                             element_type,
                                                             name_span,
                                                             section_name,
@@ -1347,6 +1347,7 @@ bool minic_parser_parse_static_global_after_head(MinicParser *parser,
                                                             explicit_alignment);
                 }
                 return parse_static_inferred_integer_array(parser,
+                                                           declaration_base,
                                                            element_type,
                                                            name_span,
                                                            section_name,
@@ -1444,11 +1445,12 @@ bool minic_parser_parse_static_global_after_head(MinicParser *parser,
         }
         return false;
     }
-    return parse_static_declarator_tail(parser, element_type);
+    return parse_static_declarator_tail(parser, declaration_base);
 }
 
 bool minic_parser_parse_static_global(MinicParser *parser) {
     MinicSourceSpan name_span;
+    MinicType declaration_base;
     MinicType object_type;
     MinicGlobalObjectId object_id;
     char section_name[256];
@@ -1462,7 +1464,10 @@ bool minic_parser_parse_static_global(MinicParser *parser) {
     (void)memset(section_name, 0, sizeof(section_name));
     if (parser == NULL ||
         !minic_parser_expect(parser, MINIC_TOKEN_KW_STATIC, "expected keyword 'static'") ||
-        !minic_parser_parse_type_name(parser, &object_type)) {
+        !minic_parser_parse_type_specifiers(parser, &declaration_base) ||
+        !minic_parser_parse_pointer_declarator(parser, declaration_base, &object_type) ||
+        !minic_parser_require_complete_object_type(
+            parser, object_type, "incomplete record type requires pointer declarator")) {
         return false;
     }
     if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
@@ -1474,6 +1479,7 @@ bool minic_parser_parse_static_global(MinicParser *parser) {
         return false;
     }
     if (!minic_parser_parse_static_global_after_head(parser,
+                                                     declaration_base,
                                                      object_type,
                                                      name_span,
                                                      section_name,

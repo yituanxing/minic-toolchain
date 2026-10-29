@@ -35,6 +35,8 @@ def main():
     # first barriers as a single interchangeable root cause.
     machine_kinds = collections.defaultdict(lambda: collections.defaultdict(list))
     backend_stages = collections.defaultdict(lambda: collections.defaultdict(list))
+    structured_reject_classes = collections.defaultdict(
+        lambda: collections.defaultdict(set))
     preflight_classes = collections.defaultdict(lambda: collections.defaultdict(list))
     asm_form_classes = collections.defaultdict(lambda: collections.defaultdict(list))
     core_asm_classes = collections.defaultdict(lambda: collections.defaultdict(set))
@@ -142,6 +144,27 @@ def main():
                     raise SystemExit("THREE_LINUX_CENSUS=FAIL invalid backend owner")
                 backend_stages[(target,item["stage"],item["kind"],
                                 item["backend_line"])][item["function"]].append(obj)
+            structured_rejects = row.get("structured_rejects", [])
+            if not isinstance(structured_rejects, list):
+                raise SystemExit("THREE_LINUX_CENSUS=FAIL structured ASM trace list")
+            for item in structured_rejects:
+                if (target != "aarch64" or not isinstance(item, dict)
+                        or not re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*",
+                                            str(item.get("function", "")))
+                        or not isinstance(item.get("preview"), str)
+                        or len(item["preview"]) > 112
+                        or any(ord(c) < 32 or ord(c) > 126
+                               for c in item["preview"])
+                        or any(type(item.get(field)) is not int
+                               or item[field] < 0 for field in
+                               ("template_length", "operand_count"))
+                        or any(item.get(field) not in (0, 1) for field in
+                               ("dynamic_frame", "volatile", "memory", "goto"))):
+                    raise SystemExit("THREE_LINUX_CENSUS=FAIL invalid AArch64 ASM trace")
+                signature = (item["preview"], item["template_length"],
+                             item["operand_count"], item["dynamic_frame"],
+                             item["volatile"], item["memory"], item["goto"])
+                structured_reject_classes[signature][item["function"]].add(obj)
             for item in row.get("preflight_roots",[]):
                 if (not isinstance(item,dict) or
                     not isinstance(item.get("reason"),str) or
@@ -245,6 +268,16 @@ def main():
         for (arch,stage,kind,line),funcs in backend_stages.items()
     ]
     backend_reject_frontiers.sort(key=lambda x:(-x["total"],x["target"],x["stage"]))
+    aarch64_structured_rejects = [
+        dict(preview=preview,template_length=length,operand_count=operands,
+             dynamic_frame=dynamic,volatile=volatile,memory=memory,goto=goto,
+             functions=len(functions),
+             owners=sorted({o for owners in functions.values() for o in owners}))
+        for (preview,length,operands,dynamic,volatile,memory,goto),functions
+        in structured_reject_classes.items()
+    ]
+    aarch64_structured_rejects.sort(
+        key=lambda x:(-len(x["owners"]),-x["functions"],x["preview"]))
     preflight_root_frontiers = [
         dict(target=arch,reason=reason,
              instances=sum(len(v) for v in funcs.values()),
@@ -281,6 +314,7 @@ def main():
          core_trace_frontiers=core_trace_frontiers,
         machine_kind_frontiers=machine_kind_frontiers,
         backend_reject_frontiers=backend_reject_frontiers,
+        aarch64_structured_rejects=aarch64_structured_rejects,
         preflight_root_frontiers=preflight_root_frontiers,
         asm_form_frontiers=asm_form_frontiers,
         core_asm_frontiers=core_asm_frontiers), indent=2) + "\n")
@@ -306,6 +340,13 @@ def main():
         print(f"THREE_LINUX_BACKEND_KIND target={item['target']} stage={item['stage']} "
               f"kind={item['kind']} source_line={item['backend_line']} "
               f"failures={item['total']} owners={len(item['owners'])}")
+    for item in aarch64_structured_rejects[:40]:
+        print(f"THREE_LINUX_AARCH64_STRUCTURED_REJECT "
+              f"preview={item['preview'][:72]!r} length={item['template_length']} "
+              f"operands={item['operand_count']} dynamic={item['dynamic_frame']} "
+              f"volatile={item['volatile']} memory={item['memory']} "
+              f"goto={item['goto']} functions={item['functions']} "
+              f"owners={len(item['owners'])}")
     for item in preflight_root_frontiers[:25]:
         print(f"THREE_LINUX_PREFLIGHT_ROOT target={item['target']} "
               f"reason={item['reason']} instances={item['instances']} "

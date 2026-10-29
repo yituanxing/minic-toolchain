@@ -486,6 +486,7 @@ bool minic_parser_parse_static_pointer_object_initializer(MinicParser *parser,
                                                           MinicGlobalObjectId object_id,
                                                           MinicType pointer_type);
 bool minic_parser_parse_static_global_after_head(MinicParser *parser,
+                                                 MinicType declaration_base,
                                                  MinicType object_type,
                                                  MinicSourceSpan name_span,
                                                  char *section_name,

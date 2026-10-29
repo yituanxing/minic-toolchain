@@ -492,6 +492,8 @@ static const char *aarch64_linux_mrs_register(const char *text, size_t len) {
         {"mrs%0,tpidr_el0", "tpidr_el0"},
         {"mrs%0,mdscr_el1", "mdscr_el1"},
         {"mrs%0,ttbr1_el1", "ttbr1_el1"},
+        /* Linux tegra194-cpufreq.c: implementation-defined CPU NDIV. */
+        {"mrs%0,s3_0_c15_c0_4", "s3_0_c15_c0_4"},
         {"mrs%0,daif", "daif"}
     };
     if (text == NULL || len >= sizeof(normalized))
@@ -1824,6 +1826,10 @@ static const char *aarch64_linux_msr_register(const char *text, size_t len) {
         compact[n++] = c;
     }
     compact[n] = '\0';
+    /* Tegra194 uses GNU "r" with %0 instead of write_sysreg's rZ/%x0.
+     * This exact SoC register is the sole permitted vendor exception. */
+    if (strcmp(compact, "msrs3_0_c15_c0_4,%0") == 0)
+        return "s3_0_c15_c0_4";
     for (i = 0U; i < sizeof(registers) / sizeof(registers[0]); ++i) {
         const size_t rlen = strlen(registers[i]);
         if (n == rlen + sizeof("msr,%x0") - 1U &&
@@ -5250,7 +5256,11 @@ bool minic_aarch64_qualify_inline_asm(
         src->clobber_count == 0U && src->register_clobber_count == 0U &&
         !src->has_memory_clobber && src->label_count == 0U &&
         aarch64_linux_msr_register(src->template_text, src->template_length) != NULL &&
-        constraint(&src->inputs[0], "rZ")) {
+        (constraint(&src->inputs[0], "rZ") ||
+         (constraint(&src->inputs[0], "r") &&
+          strcmp(aarch64_linux_msr_register(
+                     src->template_text, src->template_length),
+                 "s3_0_c15_c0_4") == 0))) {
         expr = minic_c0_program_expression(program, src->inputs[0].expression);
         if (expr && minic_type_unqualified(expr->type, &plain) &&
             /* The *original* Linux sysreg.h write_sysreg() materializes

@@ -162,9 +162,36 @@ bool minic_aarch64_emit_residual_instruction(
             *needs_writeback = false;
             return true;
         }
-        case MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM:
+        case MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM: {
+            bool accepted;
             *needs_writeback = false;
-            return minic_aarch64_emit_qualified_structured_asm(out, ctx, ins);
+            accepted = minic_aarch64_emit_qualified_structured_asm(out, ctx, ins);
+            if (!accepted && getenv("MINIC_M1_TRACE") != NULL &&
+                ins->value.structured_inline_asm.inline_asm_id <
+                    fn->inline_asm_count) {
+                const MinicCoreInlineAsm *info = &fn->inline_asms[
+                    ins->value.structured_inline_asm.inline_asm_id];
+                char preview[113];
+                size_t i;
+                const size_t limit = info->template_length < sizeof(preview)-1U
+                    ? info->template_length : sizeof(preview)-1U;
+                for (i = 0U; i < limit; ++i) {
+                    const unsigned char ch = (unsigned char)info->template_text[i];
+                    preview[i] = ch == '\n' || ch == '\r' || ch == '\t'
+                        ? ' ' : ch < 32U || ch >= 127U ? '?' : (char)ch;
+                }
+                preview[limit] = '\0';
+                (void)fprintf(stderr,
+                    "MINIC_AARCH64_STRUCTURED_REJECT function=%s dynamic_frame=%d "
+                    "template_length=%zu operand_count=%zu volatile=%d "
+                    "memory=%d goto=%d preview=%s\n",
+                    name, ctx->dynamic_frame ? 1 : 0, info->template_length,
+                    ins->value.structured_inline_asm.operand_count,
+                    info->is_volatile ? 1 : 0, info->has_memory_clobber ? 1 : 0,
+                    info->is_goto ? 1 : 0, preview);
+            }
+            return accepted;
+        }
         case MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS: {
             /* Real AAPCS64 frame chain: prologue sets x29 to an owned
              * [caller-x29,entry-x30] 16B record in every function, including

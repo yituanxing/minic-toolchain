@@ -10,6 +10,7 @@ targets=(x86_64-linux aarch64-linux loongarch64-linux riscv32-linux riscv64-linu
 positive=(
     gnu_static_multidimensional_pointer_arrays
     gnu_static_union_anonymous_record_designator
+    gnu_static_union_anonymous_record_arena_growth
     gnu_local_function_pointer_noreturn_attribute
     gnu_local_nonstring_array_attribute
 )
@@ -55,4 +56,4 @@ for name in "${negative[@]}"; do
     done
 done
 
-echo 'MINIC_GNU_LINUX_FRONTEND_INITIALIZERS=PASS four_source_families=4 five_isa_positive=20 five_isa_negative=20 gnu_native=4 minic_x86_native=4 gnu_negative=4'
+echo 'MINIC_GNU_LINUX_FRONTEND_INITIALIZERS=PASS source_families=5 five_isa_positive=25 five_isa_negative=20 gnu_native=5 minic_x86_native=5 gnu_negative=4 union_arena_stability=1'

@@ -2527,6 +2527,7 @@ static bool parse_static_union_constant(MinicParser *parser,
                                         MinicGlobalObjectId object_id,
                                         const MinicRecord *record) {
     MinicStaticRecordDesignator designator;
+    MinicRecord record_snapshot;
     const MinicRecordField *field;
     MinicRecordId record_id;
     size_t selected_index;
@@ -2541,6 +2542,13 @@ static bool parse_static_union_constant(MinicParser *parser,
         return false;
     }
     record_id = (MinicRecordId)(record - parser->program->records);
+    /* The initializer may contain `sizeof(struct { ... })` or compound
+     * literals introducing anonymous records. Those append to the growable
+     * record arena, invalidating `record` during recursive parsing. As for
+     * ordinary static records, keep a local descriptor with stable field
+     * storage until this union's complete initializer has been consumed. */
+    record_snapshot = *record;
+    record = &record_snapshot;
     union_base_slot = parser->program->global_objects[object_id].initializer_count;
     if (parser->current.kind == MINIC_TOKEN_RBRACE) {
         if (!minic_c0_global_object_select_union_member(
