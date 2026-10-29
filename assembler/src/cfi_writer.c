@@ -88,6 +88,7 @@ static bool advance_cfi(MiniAs *as,int sec,uint64_t from,uint64_t to) {
 }
 static bool encode_cfi(MiniAs *as,int sec,const MiniAsCfiOp *op) {
     uint64_t magnitude;
+    int64_t scaled;
     switch(op->kind) {
         case CFI_DEF_CFA:
             return put8(as,sec,0x0cU) && uleb(as,sec,op->reg) &&
@@ -95,7 +96,15 @@ static bool encode_cfi(MiniAs *as,int sec,const MiniAsCfiOp *op) {
         case CFI_DEF_CFA_OFFSET:
             return put8(as,sec,0x0eU) && uleb(as,sec,(uint64_t)op->value);
         case CFI_OFFSET:
-            magnitude=(uint64_t)(op->value/minias_cfi_abi(as).data_align);
+            scaled=op->value/minias_cfi_abi(as).data_align;
+            /* On every current psABI data_align is negative.  A register
+             * saved above CFA therefore has a negative DWARF factor and
+             * requires the signed extended form; positive offsets are
+             * accepted by GNU GAS and are common in hand-written stubs. */
+            if(scaled<0)
+                return put8(as,sec,0x11U) && uleb(as,sec,op->reg) &&
+                       sleb(as,sec,scaled);
+            magnitude=(uint64_t)scaled;
             if(op->reg<64U)
                 return put8(as,sec,(uint8_t)(0x80U|op->reg)) &&
                        uleb(as,sec,magnitude);
@@ -119,7 +128,11 @@ static bool encode_cfi(MiniAs *as,int sec,const MiniAsCfiOp *op) {
             return put8(as,sec,0x09U) && uleb(as,sec,op->reg) &&
                    uleb(as,sec,(uint64_t)op->value);
         case CFI_VAL_OFFSET:
-            magnitude=(uint64_t)(op->value/minias_cfi_abi(as).data_align);
+            scaled=op->value/minias_cfi_abi(as).data_align;
+            if(scaled<0)
+                return put8(as,sec,0x15U) && uleb(as,sec,op->reg) &&
+                       sleb(as,sec,scaled);
+            magnitude=(uint64_t)scaled;
             return put8(as,sec,0x14U) && uleb(as,sec,op->reg) &&
                    uleb(as,sec,magnitude);
         case CFI_ESCAPE:

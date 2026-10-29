@@ -166,6 +166,9 @@ typedef struct MiniElfRelocatableSpec {
     size_t symbol_count;
     const MiniElfWriteRela *relocations;
     size_t relocation_count;
+    /* Permit relocations against generated STT_SECTION symbols. The writer
+     * emits only sections actually referenced by use_section_symbol fixups,
+     * not an artificial symbol for every input section. */
     bool emit_section_symbols;
 } MiniElfRelocatableSpec;
 

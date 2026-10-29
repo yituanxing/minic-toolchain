@@ -6,7 +6,9 @@
 #include <string.h>
 
 /* Generic ELF STT_SECTION relocation for a target-selected, defined local
- * cross-section reference. No machine-specific ELF logic lives here. */
+ * reference. GNU uses section+addend for eligible absolute relocations even
+ * when source and destination are in the same section. No machine-specific
+ * ELF logic lives here. */
 static bool section_symbol_fixup(const MiniAs *as,const MiniAsFixup *fixup) {
     const MiniAsSymbol *sym;
     bool requested=fixup->prefer_section_symbol ||
@@ -16,8 +18,7 @@ static bool section_symbol_fixup(const MiniAs *as,const MiniAsFixup *fixup) {
         return false;
     sym=&as->symbols[fixup->symbol_index];
     return sym->defined && sym->bind==MINIAS_STB_LOCAL &&
-           sym->section>=0 && (size_t)sym->section<as->section_count &&
-           sym->section!=fixup->section;
+           sym->section>=0 && (size_t)sym->section<as->section_count;
 }
 
 /* Symbol-table membership is an ELF ObjectModel decision, not a Target

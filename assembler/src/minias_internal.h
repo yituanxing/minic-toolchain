@@ -467,7 +467,6 @@ typedef struct MiniAs {
     /* Opaque per-assembly backend parser state, owned and freed by Target. */
     void *target_state;
     bool cfi_active;
-    bool cfi_signal_frame;
     bool cfi_debug_frame;
     bool cfi_eh_frame;
     MiniAsCfiProc *cfi_procs;
@@ -662,6 +661,15 @@ typedef struct MiniAsTargetRelaxPlan {
     uint32_t terminal_size;
 } MiniAsTargetRelaxPlan;
 
+/* Common classifies accepted data-producing source directives exactly once.
+ * Targets may reject an ISA escape in executable sections using this typed
+ * semantic category, never by copying an evolving list of GNU aliases. */
+typedef enum MiniAsCommonDirectiveKind {
+    MINIAS_COMMON_DIRECTIVE_OTHER = 0,
+    MINIAS_COMMON_DIRECTIVE_RAW_DATA,
+    MINIAS_COMMON_DIRECTIVE_ORG
+} MiniAsCommonDirectiveKind;
+
 bool minias_query_target_relax_plan(MiniAs *,const MiniAsStmt *,
                                    MiniAsTargetRelaxPlan *);
 
@@ -677,7 +685,8 @@ typedef struct MiniAsTargetOps {
     bool (*configure_legacy_target)(struct MiniAsAssemblyConfig *, unsigned);
     void (*capture_site_state)(const MiniAs *, MiniAsTargetSiteState *);
     void (*destroy_target_state)(MiniAs *);
-    bool (*validate_common_directive)(MiniAs *, const char *, size_t);
+    bool (*validate_common_directive)(MiniAs *, MiniAsCommonDirectiveKind,
+                                      const char *, size_t);
     /* Optional GNU .if target operand dialect. Common owns the
      * conditional stack and arithmetic, Target only interprets native
      * register-token comparisons that are not integer expressions. */
@@ -711,12 +720,16 @@ typedef struct MiniAsTargetOps {
     bool (*parse_named_relocation)(const char *, MiniAsFixupKind *, unsigned *);
     bool supports_literal_pools; /* .ltorg/.pool only for a checked target */
     MiniAsLiteralPoolOrder literal_pool_order;
+    /* Optional post-emission ISA validation; NULL is a validated no-op.
+     * Strict RISC-V needs this gate, ordinary Targets need not install a
+     * synthetic always-true callback to satisfy Common. */
     bool (*validate_output)(MiniAs *);
     /* Target-advertised GNU implicit .eh_frame: never infer ISA from
      * numeric ELF e_machine inside Common CFI/layout dispatch. */
     bool cfi_implicit_eh_frame;
-    /* GNU x86 ld canonicalizes cross-section local ABS data relocations
-     * to STT_SECTION + addend. Target policy, Common ELF ownership. */
+    /* GNU x86 ld canonicalizes defined local ABS data relocations, including
+     * same-section references, to STT_SECTION + addend. Target policy,
+     * Common ELF ownership. */
     bool fold_local_abs_relocation_to_section;
     /* Target-owned DWARF CFI ABI (zero => not yet available). */
     unsigned cfi_code_align;

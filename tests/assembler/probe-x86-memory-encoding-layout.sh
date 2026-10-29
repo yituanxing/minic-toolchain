@@ -50,8 +50,20 @@ objcopy -j .text -O binary "$work/mini.o" "$work/mini.bin"
 objcopy -j .text -O binary "$work/gnu.o" "$work/gnu.bin"
 cmp "$work/mini.bin" "$work/gnu.bin"
 if python3 -c 'import elftools' >/dev/null 2>&1; then
-    python3 tests/assembler/elf_semantic_compare.py --strict \
-        "$work/gnu.o" "$work/mini.o" >"$work/semantic.json"
+    if ! python3 tests/assembler/elf_semantic_compare.py --strict \
+            "$work/gnu.o" "$work/mini.o" >"$work/semantic.json"; then
+        echo 'GNU x86 memory encoding matched bytes, but strict ELF semantics diverged:' >&2
+        python3 - "$work/semantic.json" <<'PY' >&2
+import json
+import sys
+
+with open(sys.argv[1], encoding='utf-8') as report:
+    verdict = json.load(report)
+print('comparison dimensions:', json.dumps(verdict.get('dimensions', {}), indent=2))
+print('strict differences:', json.dumps(verdict.get('differences', {}), indent=2))
+PY
+        exit 1
+    fi
     semantic='PASS'
 else
     semantic='NOT_TESTED:no_pyelftools'

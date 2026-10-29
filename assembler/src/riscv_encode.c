@@ -1779,8 +1779,15 @@ static bool rv_encode_mcinst(MiniAs *as, const MiniAsStmt *stmt) {
         rs2=(int)m->operands[2].reg;
     if (m->count > 2U && m->operands[2].kind==MINIAS_MC_IMMEDIATE)
         imm=(int64_t)m->operands[2].immediate;
-    if (m->opcode == RV_MC_C16)
-        return append_u16(as,stmt->section,(uint16_t)base);
+    if (m->opcode == RV_MC_C16) {
+        /* EF_RISCV_RVC is an output-object property, not merely a -march
+         * spelling. Legacy MiniAS accepts C16 without an explicit ISA
+         * profile; advertise the actual compressed instruction in ELF flags
+         * so linkers never see an unmarked RVC-bearing object. */
+        if(!append_u16(as,stmt->section,(uint16_t)base))return false;
+        as->elf_flags |= 1U; /* ELF psABI EF_RISCV_RVC */
+        return true;
+    }
     if (m->opcode == RV_MC_SYMBOL_LOAD ||
         m->opcode == RV_MC_SYMBOL_STORE) {
         const bool load = m->opcode == RV_MC_SYMBOL_LOAD;

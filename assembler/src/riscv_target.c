@@ -263,15 +263,20 @@ static bool riscv_validate_selected_isa(const MiniAs *as, const char *op,
     uint64_t bits;
     /* Strict base-I retains the exhaustive post-encoding word validator,
      * including its established machine-encoding error diagnostics. */
-    if (!MINIAS_RV_STATE(as)->isa_explicit || MINIAS_RV_STATE(as)->strict_i_xlen != 0U) return true;
-    if (strcmp(op, ".insn") == 0) {
-        (void)snprintf(reason, cap, "unsupported-isa-escape:.insn");
-        return false;
-    }
     bits = riscv_required_features(op);
-    if (((as->target_options & MINIAS_RISCV_OPTION_NO_RVC) != 0U) &&
+    /* `.option norvc` is an instruction-site state even in the historical
+     * implicit ISA mode. Do not bury the C opcode gate behind explicit
+     * -march validation: GNU rejects c.* after norvc in either mode. */
+    if (bits != UINT64_MAX &&
+        ((as->target_options & MINIAS_RISCV_OPTION_NO_RVC) != 0U) &&
         (bits & RISCV_ISA_C)) {
         (void)snprintf(reason, cap, "disabled-riscv-compressed:%s", op);
+        return false;
+    }
+    if (!MINIAS_RV_STATE(as)->isa_explicit ||
+        MINIAS_RV_STATE(as)->strict_i_xlen != 0U)return true;
+    if (strcmp(op, ".insn") == 0) {
+        (void)snprintf(reason, cap, "unsupported-isa-escape:.insn");
         return false;
     }
     if (bits == UINT64_MAX || (bits != 0U &&
@@ -303,28 +308,21 @@ static bool riscv_validate_instruction(const MiniAs *as,
 /* The common parser must never encode RISC-V ISA escape policy. This
  * backend owns forbidden raw-code directives on an explicit ISA contract.
  * Data outside executable sections remains valid for ELF constants. */
-static bool riscv_validate_common_directive(MiniAs *as, const char *op,
-                                             size_t line) {
-    static const char *const raw_data[] = {
-        ".byte", ".half", ".short", ".2byte", ".word", ".long",
-        ".4byte", ".dword", ".quad", ".8byte",
-        ".zero", ".space", ".asciz", ".string", ".ascii", ".incbin"
-    };
-    size_t i;
+static bool riscv_validate_common_directive(MiniAs *as,
+                                             MiniAsCommonDirectiveKind kind,
+                                             const char *op,size_t line) {
     if (!MINIAS_RV_STATE(as)->strict_isa_directives ||
         (as->sections[(size_t)as->current_section].flags &
          MINIAS_SHF_EXECINSTR) == 0U) return true;
-    if (strcmp(op, ".org") == 0) {
+    if (kind == MINIAS_COMMON_DIRECTIVE_ORG) {
         minias_set_error(as, "unsupported-isa-escape:.org:line=%zu", line);
         return false;
     }
-    for (i = 0U; i < sizeof(raw_data) / sizeof(raw_data[0]); ++i) {
-        if (strcmp(op, raw_data[i]) == 0) {
-            minias_set_error(as,
-                             "unsupported-isa-escape:%s-in-exec:line=%zu",
-                             op, line);
-            return false;
-        }
+    if (kind == MINIAS_COMMON_DIRECTIVE_RAW_DATA) {
+        minias_set_error(as,
+                         "unsupported-isa-escape:%s-in-exec:line=%zu",
+                         op,line);
+        return false;
     }
     return true;
 }
@@ -497,17 +495,24 @@ static bool riscv_target_directive(MiniAs *as, const char *op,
     }
     if (strcmp(op, ".option") != 0) return true;
     *handled = true;
+    /* .option rvc may restore a preceding .option norvc only when the
+     * selected ISA already contains C. It cannot silently add C to a
+     * strict rv32i/rv64i contract. No -march remains GNU-compatible and
+     * permissive, but must still restore the actual per-site mode bit. */
     if (MINIAS_RV_STATE(as)->isa_explicit &&
         strcmp(args, "pic") != 0 && strcmp(args, "nopic") != 0 &&
         strcmp(args, "push") != 0 && strcmp(args, "pop") != 0 &&
-        strcmp(args, "norvc") != 0) {
+        strcmp(args, "norvc") != 0 && strcmp(args, "norelax") != 0 &&
+        !(strcmp(args, "rvc") == 0 &&
+          (MINIAS_RV_STATE(as)->isa_features & RISCV_ISA_C) != 0U)) {
         minias_set_error(as, "unsupported-isa-option:%s:line=%zu", args, line);
         return false;
     }
     if (MINIAS_RV_STATE(as)->strict_isa_directives &&
         strcmp(args, "pic") != 0 && strcmp(args, "nopic") != 0 &&
         strcmp(args, "push") != 0 && strcmp(args, "pop") != 0 &&
-        strcmp(args, "norvc") != 0 && strcmp(args, "norelax") != 0 &&
+        strcmp(args, "norvc") != 0 && strcmp(args, "rvc") != 0 &&
+        strcmp(args, "norelax") != 0 &&
         strcmp(args, "relax") != 0) {
         minias_set_error(as, "unsupported-isa-option:%s:line=%zu", args, line);
         return false;
@@ -520,6 +525,8 @@ static bool riscv_target_directive(MiniAs *as, const char *op,
         as->target_options &= ~(uint32_t)MINIAS_RISCV_OPTION_PIC;
     } else if (strcmp(args, "norvc") == 0) {
         as->target_options |= MINIAS_RISCV_OPTION_NO_RVC;
+    } else if (strcmp(args, "rvc") == 0) {
+        as->target_options &= ~(uint32_t)MINIAS_RISCV_OPTION_NO_RVC;
     } else if (strcmp(args, "push") == 0) {
         if (MINIAS_RV_STATE(as)->option_depth >=
             sizeof(MINIAS_RV_STATE(as)->option_stack) /

@@ -282,10 +282,68 @@ static int compare_loc(const void *lhs,const void *rhs) {
     if(a->offset!=b->offset)return a->offset<b->offset?-1:1;
     return a->ordinal<b->ordinal?-1:a->ordinal>b->ordinal?1:0;
 }
+/* GNU GAS records each directory once and refers to it by a 1-based index
+ * from the file table. Keep the original file paths owned by MiniAs and
+ * derive a transient DWARF table: debug line emission must not mutate
+ * source-level file identities or depend on a particular Target's syntax. */
+typedef struct MiniAsDwarfDirectory {
+    const char *path;
+    size_t length;
+} MiniAsDwarfDirectory;
+typedef struct MiniAsDwarfFile {
+    const char *basename;
+    size_t directory_index;
+} MiniAsDwarfFile;
+
+static void plan_dwarf_files(const MiniAs *as,MiniAsDwarfDirectory *directories,
+                             size_t *directory_count,MiniAsDwarfFile *files,
+                             size_t *slots,size_t slot_count) {
+    size_t i;
+    *directory_count=0U;
+    for(i=1U;i<=as->debug_file_max;++i) {
+        const char *path=as->debug_files[i];
+        const char *slash=strrchr(path,'/');
+        size_t length;
+        size_t j,at;
+        uint64_t hash=UINT64_C(14695981039346656037);
+        if(!slash) {
+            files[i].basename=path;
+            files[i].directory_index=0U;
+            continue;
+        }
+        files[i].basename=slash+1U;
+        /* '/' is a directory in its own right, not the empty path. */
+        length=slash==path?1U:(size_t)(slash-path);
+        for(j=0U;j<length;++j) {
+            hash^=(unsigned char)path[j];
+            hash*=UINT64_C(1099511628211);
+        }
+        at=(size_t)hash&(slot_count-1U);
+        while(slots[at]!=0U) {
+            j=slots[at]-1U;
+            if(directories[j].length==length &&
+               !memcmp(directories[j].path,path,length))break;
+            at=(at+1U)&(slot_count-1U);
+        }
+        if(slots[at]==0U) {
+            j=*directory_count;
+            directories[j].path=path;
+            directories[j].length=length;
+            ++*directory_count;
+            slots[at]=j+1U;
+        }
+        files[i].directory_index=j+1U;
+    }
+}
 bool minias_debug_emit(MiniAs *as) {
     static const unsigned char lengths[12]=
         {0U,1U,1U,1U,1U,0U,0U,0U,1U,0U,0U,1U};
     MiniAsDebugLocOrder *order=NULL;
+    MiniAsDwarfDirectory *directories=NULL;
+    MiniAsDwarfFile *files=NULL;
+    size_t *directory_slots=NULL;
+    size_t directory_count=0U;
+    size_t directory_slot_count=16U;
     size_t i,j,begin,header_len_at,header_start;
     int sec;
     unsigned address_width=as->output_elf32?4U:8U;
@@ -300,13 +358,26 @@ bool minias_debug_emit(MiniAs *as) {
     }
     order=malloc(as->debug_loc_count*sizeof(*order));
     if(!order)return false;
+    if(as->debug_file_max==SIZE_MAX ||
+       as->debug_file_max+1U>SIZE_MAX/sizeof(*files) ||
+       as->debug_file_max>SIZE_MAX/sizeof(*directories))goto failed;
+    while(directory_slot_count<=as->debug_file_max*2U) {
+        if(directory_slot_count>SIZE_MAX/2U)goto failed;
+        directory_slot_count*=2U;
+    }
+    files=calloc(as->debug_file_max+1U,sizeof(*files));
+    directories=malloc(as->debug_file_max*sizeof(*directories));
+    directory_slots=calloc(directory_slot_count,sizeof(*directory_slots));
+    if(!files || !directories || !directory_slots)goto failed;
+    plan_dwarf_files(as,directories,&directory_count,files,
+                     directory_slots,directory_slot_count);
     for(i=0U;i<as->debug_loc_count;++i) {
         const size_t symbol=as->debug_locs[i].symbol_index;
         if(symbol>=as->symbol_count || !as->symbols[symbol].defined ||
            as->symbols[symbol].section<0 ||
            (size_t)as->symbols[symbol].section>=as->section_count) {
             minias_set_error(as,"dwarf-line-invalid-anchor:%zu",i);
-            free(order);return false;
+            goto failed;
         }
         order[i].section=as->symbols[symbol].section;
         order[i].offset=as->symbols[symbol].value;
@@ -314,7 +385,7 @@ bool minias_debug_emit(MiniAs *as) {
     }
     qsort(order,as->debug_loc_count,sizeof(*order),compare_loc);
     sec=minias_ensure_section(as,".debug_line",MINIAS_SHT_PROGBITS,0U,1U);
-    if(sec<0){free(order);return false;}
+    if(sec<0)goto failed;
     if(!append_u32(as,sec,0U) || !append_u16(as,sec,4U))goto failed;
     header_len_at=as->sections[(size_t)sec].size;
     if(!append_u32(as,sec,0U))goto failed;
@@ -322,11 +393,16 @@ bool minias_debug_emit(MiniAs *as) {
     if(!append_byte(as,sec,1U) || !append_byte(as,sec,1U) ||
        !append_byte(as,sec,1U) || !append_byte(as,sec,(uint8_t)-5) ||
        !append_byte(as,sec,14U) || !append_byte(as,sec,13U) ||
-       !minias_section_append(as,sec,lengths,sizeof(lengths)) ||
-       !append_byte(as,sec,0U))goto failed;
+       !minias_section_append(as,sec,lengths,sizeof(lengths)))goto failed;
+    for(i=0U;i<directory_count;++i)
+        if(!minias_section_append(as,sec,directories[i].path,
+                                  directories[i].length) ||
+           !append_byte(as,sec,0U))goto failed;
+    if(!append_byte(as,sec,0U))goto failed;
     for(i=1U;i<=as->debug_file_max;++i)
-        if(!dwarf_string(as,sec,as->debug_files[i]) ||
-           !append_leb(as,sec,0U) || !append_leb(as,sec,0U) ||
+        if(!dwarf_string(as,sec,files[i].basename) ||
+           !append_leb(as,sec,files[i].directory_index) ||
+           !append_leb(as,sec,0U) ||
            !append_leb(as,sec,0U))goto failed;
     if(!append_byte(as,sec,0U) ||
        !patch32(as,sec,header_len_at,
@@ -390,8 +466,8 @@ bool minias_debug_emit(MiniAs *as) {
         begin=j;
     }
     if(!patch32(as,sec,0U,as->sections[(size_t)sec].size-4U))goto failed;
-    free(order);return true;
+    free(directory_slots);free(files);free(directories);free(order);return true;
 failed:
     if(as->error[0]=='\0')minias_set_error(as,"dwarf-line-emission-failed");
-    free(order);return false;
+    free(directory_slots);free(files);free(directories);free(order);return false;
 }

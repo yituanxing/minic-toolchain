@@ -86,6 +86,15 @@ jobs:
           command -v riscv64-linux-gnu-as
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-rv-target-profile-single-source.sh
+      - name: GNU RV32/RV64 .option RVC push pop and ISA feature-state boundaries
+        run: |
+          command -v riscv64-linux-gnu-as
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-rv-option-rvc-state.sh
+      - name: RV strict executable instructions reject all Common raw data escapes
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-rv-exec-directive-completeness.sh
       - name: Assert one Common DWARF object model, CFI writer and owned bytecode
         run: bash tests/assembler/probe-cfi-model-ownership.sh
       - name: Enforce one Common MCFragment layout engine and shared variable DATA
@@ -230,6 +239,11 @@ jobs:
           command -v aarch64-linux-gnu-as
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-aarch64-deferred-memory-descriptor.sh
+      - name: AArch64 scalar lo12 relocations share the typed memory descriptor
+        run: |
+          command -v aarch64-linux-gnu-as
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-aarch64-relocated-scalar-memory-table.sh
       - name: GNU AArch64 MCExpr data-byte and relocation oracle
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=aarch64 \

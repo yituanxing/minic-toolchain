@@ -2039,6 +2039,24 @@ static unsigned int data_width(const MiniAs *as, const char *op) {
     return 0U;
 }
 
+/* Shared directive grammar is the sole source of aliases that can inject
+ * raw bytes into an executable section. The identical category controls
+ * Common dispatch and the Target ISA-escape policy callback. This prevents
+ * future .hword/.skip/.uleb128-style aliases bypassing strict RV profiles. */
+static MiniAsCommonDirectiveKind common_directive_kind(const MiniAs *as,
+                                                        const char *op) {
+    static const char *const raw_data[] = {
+        ".fill", ".zero", ".space", ".skip", ".uleb128", ".sleb128",
+        ".asciz", ".string", ".ascii", ".incbin"
+    };
+    size_t i;
+    if(!strcmp(op,".org"))return MINIAS_COMMON_DIRECTIVE_ORG;
+    if(data_width(as,op)!=0U)return MINIAS_COMMON_DIRECTIVE_RAW_DATA;
+    for(i=0U;i<sizeof(raw_data)/sizeof(raw_data[0]);++i)
+        if(!strcmp(op,raw_data[i]))return MINIAS_COMMON_DIRECTIVE_RAW_DATA;
+    return MINIAS_COMMON_DIRECTIVE_OTHER;
+}
+
 /* GAS conditional expressions share the Common absolute arithmetic and
  * symbol resolver. A separate numeric-only parser rejected macro constants
  * such as .if docfi=0 and prematurely fragmented Linux target assembly.
@@ -3417,6 +3435,7 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
     uint32_t size;
     char reason[160];
     bool had_leading_label=false;
+    MiniAsCommonDirectiveKind directive_kind=MINIAS_COMMON_DIRECTIVE_OTHER;
 
     text = minias_trim(text);
     if (*text == '\0') {
@@ -3715,8 +3734,10 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
         if (handled) return true;
     }
     if (op[0] == '.') {
+        directive_kind=common_directive_kind(as,op);
         if (as->target->validate_common_directive != NULL &&
-            !as->target->validate_common_directive(as, op, line))
+            !as->target->validate_common_directive(as,directive_kind,
+                                                   op,line))
             return false;
     }
     if (op[0] == '.' && strcmp(op, ".insn") != 0) {
@@ -3878,7 +3899,7 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
             strcmp(op, ".p2align") == 0) {
             return handle_align(as, op, args, line);
         }
-        if (strcmp(op, ".org") == 0) {
+        if (directive_kind == MINIAS_COMMON_DIRECTIVE_ORG) {
             char *rewritten_args = NULL;
             bool ok;
 
@@ -3892,13 +3913,7 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
             free(rewritten_args);
             return ok;
         }
-        if (data_width(as, op) != 0U || strcmp(op, ".fill") == 0 ||
-            strcmp(op, ".zero") == 0 ||
-            strcmp(op, ".space") == 0 || strcmp(op, ".skip") == 0 ||
-            strcmp(op, ".uleb128") == 0 || strcmp(op, ".sleb128") == 0 ||
-            strcmp(op, ".asciz") == 0 ||
-            strcmp(op, ".string") == 0 || strcmp(op, ".ascii") == 0 ||
-            strcmp(op, ".incbin") == 0) {
+        if (directive_kind == MINIAS_COMMON_DIRECTIVE_RAW_DATA) {
             char *rewritten_args = NULL;
             bool ok;
 
@@ -5183,6 +5198,16 @@ static bool process_source_range(MiniAs *as,
         size_t repeat_label_prefix=0U;
         int kind;
 
+        /* GAS does not lex .macro/.rept/.irp at all in an inactive .if
+         * branch. Only nested conditionals can reactivate parsing. In
+         * particular, an unterminated .macro and unmatched .endm/.endr in
+         * skipped text are harmless source, not collector syntax. */
+        if(!as->conditional_active) {
+            if(!process_source_line(as,lines[i].text,lines[i].line))return false;
+            ++i;
+            continue;
+        }
+
         if (macro_kind < 0) {
             minias_set_error(as, "out-of-memory:macro-classify");
             return false;
@@ -5226,9 +5251,7 @@ static bool process_source_range(MiniAs *as,
                               macro_argument,
                               lines + i + 1U,
                               j - i - 1U,
-                              lines[i].line)) {
-                return false;
-            }
+                              lines[i].line))return false;
             i = j + 1U;
             continue;
         }
@@ -5500,6 +5523,16 @@ bool minias_parse_file(MiniAs *as, const char *path) {
                 fclose(file);return false;
             }
             if(consumed)continue;
+        }
+
+        /* An inactive conditional is not a macro/repetition parsing
+         * context; parse only .if/.elseif/.else/.endif until reactivated.
+         * This also keeps skipped unmatched collector end markers inert. */
+        if(!as->conditional_active) {
+            if(!process_source_line(as,linebuf,line_no)) {
+                fclose(file);return false;
+            }
+            continue;
         }
 
         {
@@ -5879,7 +5912,8 @@ int minias_assemble_config(const char *input_path,
         }
         if (parsed && as.error[0] == '\0' &&
             minias_emit_sections(&as) &&
-            as.target->validate_output(&as) &&
+            (as.target->validate_output == NULL ||
+             as.target->validate_output(&as)) &&
             (config->elf32 ? minias_write_elf32(&as, output_path)
                    : minias_write_elf64(&as, output_path))) {
             rc = 0;

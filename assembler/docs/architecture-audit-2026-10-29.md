@@ -224,3 +224,62 @@ Count production-code changes from `assembler/src` additions **and**
 deletions separately from scripts, docs and workflows. Run `-Werror`, A0,
 GNU x86/ELF/CFI regression and remote RISC-V/A64/Loong GNU contracts on the
 new head; only then record exact run IDs and final pass/fail status.
+
+## Batch I: ELF symbol liveness, typed Common directive ownership, and target audit
+
+This batch follows the first Batch H remote exact-head replay. That baseline
+passed the 21-shard immutable original GNU Kbuild `.s` gate and the fast
+Target, MiniC, and Objcopy/Strip gates, but failed a new **strict ELF oracle**
+for x86 memory forms because MiniAS emitted three unnecessary `STT_SECTION`
+symbols. That is a genuine object-model divergence even though all 27
+instruction encodings and relocation dimensions were equal. Never suppress
+`symbols` globally in the strict comparator to make this test green.
+
+| Layer | Verified defect / architectural seam | Batch I remedy and local oracle |
+|---|---|---|
+| Shared ELF | `minielf` generated an `STT_SECTION` for every section, whether a relocation used it or not; same-section ABS relocations referenced named locals where GNU uses a section symbol plus addend | Sparse, relocation-demand-driven section-symbol plan and GNU strict object comparison of four cases; x86 27-form instruction **and object** oracle now exact |
+| Common conditional parser | Inactive `.if` still defined `.macro` and evaluated `.rept`, including nested expanded source frames | Skip inert syntax without side effects; GNU x86 lexical/bytes oracle |
+| Common↔RV directive classification | RV maintained its own copy of Common DATA directive spellings, letting `.hword/.value/.xword/.skip/.fill/.uleb128/.sleb128` escape executable-section ISA restrictions | Common classifies RAW_DATA/ORG/OTHER once and supplies semantic kind to Target callback; 88 raw executable rejects and 22 legal DATA cases |
+| RISC-V ISA state | `.option rvc` could not recover from `norvc`; explicit C profiles rejected valid toggles; legacy `norvc` skipped C opcode validation; legacy C16 emitted with `EF_RISCV_RVC=0` | Target-owned RVC state and ISA gates; actual C16 emission marks the output object RVC-capable; `.option` push/pop and three ELF flag probes; unproved GNU cross cases remain remote-gated |
+| AArch64 Target | Plain scalar memory, deferred memory and `:lo12:` memory relocation paths each interpreted bracket/base/width and opcode policy | One A64-private memory operand parser and typed opcode descriptor, 10 relocation forms/8 rejects plus previous scalar/deferred coverage |
+| LoongArch64 Target | FCSR/FCC, scalar FP, LSX/LASX and system/cache instructions had repeated, sometimes incorrectly GPR-classified parser branches | Target-private typed bank/shape descriptors for 23 instruction families, 44 positives/36 negatives; remote GNU bytes pending |
+| x86-64 Target | 16-bit CMOV family incomplete; high-byte shift operands rejected; MOVSX/MOVZX high-byte source could read uninitialized `wd`; shift-memory operand was parsed twice | 37 GNU byte-exact instructions/10 invalid operands, shared high-byte and width constraints |
+| CFI | Positive CFA save offsets rejected; `.cfi_rel_offset` unsupported | GNU `*_sf` signed DWARF CFI opcodes and CFA-relative save semantics, exact EH/debug CFI event streams, 3 invalid cases |
+| Debug lines | `.file 1 "/dir/file.c"` serialized as a full-path filename and no directory table, unlike GNU | Target-neutral directory deduplication and 1-based file table indices; x86 GNU raw `.debug_line` table entries exact; byte identity still not established because GNU defaults to v3 and MiniAS currently emits v4 |
+| Common storage | Unused `MiniAs.cfi_signal_frame` state coexisted with actively used `MiniAsCfiProc.signal_frame` | Delete dead global field; retain procedure-local state |
+
+The new test scripts are registered in the existing **two** fast Target/GNU
+workflows. Local combined `-Werror` build, MiniAS A0 30/30, x86 GNU object and
+byte oracles, ELF/CFI probes, RV32/RV64 state and executable-data guards,
+A64/Loong machine-word/negative tests all pass. **A64/Loong/RV GNU cross
+comparisons remain `NOT_TESTED` locally** and must pass on the pushed exact
+commit in CI; previous head results cannot certify this batch.
+
+### Explicit next architectural work, not superficial file movement
+
+1. **P0 provenance preservation:** canonical Linux 3×7 consumes 21 pinned
+   original GNU Kbuild inputs from GitHub Actions producer run
+   `40658346252`. Its 21 source artifacts total **279.74 MiB** and the
+   earliest expires at **2026-11-27 08:49:40 UTC**. Preserve all 21 shard
+   tarballs and three producer-evidence artifacts with SHA-256 in an immutable
+   release/archive, verify exact content, change the reader, and re-run all
+   21 shards before retiring the ephemeral fixed run ID. This migration is
+   separate from ordinary dead-CI deletion and must not change any input.
+2. **P1 Target register-bank retention:** Common `reg_class` only distinguishes
+   GPR/FPR/VECTOR. Loong VR128/XR256/FCSR/FCC, x86 high-8/REX constraints,
+   and A64 SIMD need a **Target-private bank ID retained on the MC operand**.
+   Keep Common ISA-neutral; do not invent an AArch64+Loong shared backend.
+   Add the field and prove four Target producer/consumer paths before turning
+   missing bank into a hard error. Existing `reg_class` still drives RV32E.
+3. **P1 typed deferred expressions and Target→Common reverse edges:** A64
+   still rewrites temporary operand strings for deferred differences; x86
+   alignment still walks Common `stmts`/fragment offsets. Introduce owned
+   MC expression payloads and immutable layout callbacks, not copied parsers.
+4. **P1 complete DWARF/CFI ABI:** `.cfi_def_cfa %rsp,8` needs a Target-private
+   register-name-to-DWARF-number interface; `.cfi_personality/.cfi_lsda`
+   need proper augmentation; `.debug_line` GNU v3-v4/default state and row
+   byte scheduling still diverge though source directory semantics now agree.
+5. **P2 workflow cleanup:** retain original GNU producer and all original
+   Kbuild evidence; archive only proven-obsolete diagnostics after a
+   source-hash preserving migration. Do not delete entire legacy workflows
+   merely because a newer seven-shard gate exists.

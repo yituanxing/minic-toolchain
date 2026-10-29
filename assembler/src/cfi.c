@@ -311,13 +311,21 @@ bool minias_cfi_directive(MiniAs *as,const char *op,
     if(!strcmp(op,".cfi_escape"))
         return cfi_escape_directive(as,args,line);
     if (!strcmp(op,".cfi_def_cfa") || !strcmp(op,".cfi_offset") ||
+        !strcmp(op,".cfi_rel_offset") ||
         !strcmp(op,".cfi_val_offset") || !strcmp(op,".cfi_register")) {
         bool def=!strcmp(op,".cfi_def_cfa");
-        bool offset=!strcmp(op,".cfi_offset");
+        bool rel=!strcmp(op,".cfi_rel_offset");
+        bool offset=rel || !strcmp(op,".cfi_offset");
         bool val=!strcmp(op,".cfi_val_offset");
         if(!cfi_two(args,&reg,&value) || (def && value<0) ||
-           ((offset || val) &&
-            (value>0 || value%minias_cfi_abi(as).data_align!=0)) ||
+           (rel && (!proc->cfa_known ||
+                    value<INT64_MIN+proc->cfa_offset)))goto bad;
+        /* GNU .cfi_rel_offset is relative to the current CFA base
+         * register; convert it to an actual CFA-relative save before the
+         * ordinary signed/unsigned DW_CFA_offset encoding decision. */
+        if(rel)value-=proc->cfa_offset;
+        if(((offset || val) &&
+            value%minias_cfi_abi(as).data_align!=0) ||
            (!def && !offset && !val &&
             (value<0 || (uint64_t)value>UINT_MAX)))
             goto bad;

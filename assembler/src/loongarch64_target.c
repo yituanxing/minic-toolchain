@@ -443,6 +443,121 @@ static void la_capture_rri(MiniAsMCInst *m,unsigned rd,unsigned rj,int64_t imm) 
     la_capture_imm_operand(m,2U,imm);
 }
 
+/* FPR, FCC and FCSR are three different target register banks; CSR, TLB and
+ * immediate-bearing system opcodes also have target-private operand grammar.
+ * One descriptor keeps the ISA bank, range and bit placement inseparable from
+ * the opcode. Common MC still owns only the generic typed operand lifecycle.
+ * FCC/FCSR bank identity is validated here until Common has a generic way of
+ * describing condition/control registers without encoding one ISA into it. */
+typedef enum {
+    LA_BANK_GPR, LA_BANK_FPR, LA_BANK_FCSR, LA_BANK_FCC,
+    LA_BANK_SIGNED12, LA_BANK_UNSIGNED5, LA_BANK_UNSIGNED8,
+    LA_BANK_UNSIGNED14, LA_BANK_UNSIGNED15
+} LaRegisterOperandBank;
+typedef struct {
+    const char *name;
+    uint32_t opcode;
+    unsigned count;
+    LaRegisterOperandBank banks[3];
+    unsigned shifts[3];
+    unsigned min_register[3];
+} LaSpecialRegisterPattern;
+
+#define LA_FIELDS_2  {0U,5U},{0U}
+#define LA_FIELDS_3  {0U,5U,10U},{0U}
+static const LaSpecialRegisterPattern la_special_register_patterns[] = {
+    {"movgr2fr.d",0x0114a800U,2U,{LA_BANK_FPR,LA_BANK_GPR},LA_FIELDS_2},
+    {"movgr2fr.w",0x0114a400U,2U,{LA_BANK_FPR,LA_BANK_GPR},LA_FIELDS_2},
+    {"movfr2gr.d",0x0114b800U,2U,{LA_BANK_GPR,LA_BANK_FPR},LA_FIELDS_2},
+    {"movfcsr2gr",0x0114c800U,2U,{LA_BANK_GPR,LA_BANK_FCSR},LA_FIELDS_2},
+    {"movgr2fcsr",0x0114c000U,2U,{LA_BANK_FCSR,LA_BANK_GPR},LA_FIELDS_2},
+    {"movcf2gr",0x0114dc00U,2U,{LA_BANK_GPR,LA_BANK_FCC},LA_FIELDS_2},
+    {"movgr2cf",0x0114d800U,2U,{LA_BANK_FCC,LA_BANK_GPR},LA_FIELDS_2},
+    {"fld.s",0x2b000000U,3U,{LA_BANK_FPR,LA_BANK_GPR,LA_BANK_SIGNED12},LA_FIELDS_3},
+    {"fst.s",0x2b400000U,3U,{LA_BANK_FPR,LA_BANK_GPR,LA_BANK_SIGNED12},LA_FIELDS_3},
+    {"fld.d",0x2b800000U,3U,{LA_BANK_FPR,LA_BANK_GPR,LA_BANK_SIGNED12},LA_FIELDS_3},
+    {"fst.d",0x2bc00000U,3U,{LA_BANK_FPR,LA_BANK_GPR,LA_BANK_SIGNED12},LA_FIELDS_3},
+    {"lddir",0x06400000U,3U,{LA_BANK_GPR,LA_BANK_GPR,LA_BANK_UNSIGNED8},LA_FIELDS_3},
+    {"ldpte",0x06440000U,2U,{LA_BANK_GPR,LA_BANK_UNSIGNED8},{5U,10U},{0U}},
+    {"invtlb",0x06498000U,3U,{LA_BANK_UNSIGNED5,LA_BANK_GPR,LA_BANK_GPR},LA_FIELDS_3},
+    {"cacop",0x06000000U,3U,{LA_BANK_UNSIGNED5,LA_BANK_GPR,LA_BANK_SIGNED12},LA_FIELDS_3},
+    {"csrrd",0x04000000U,2U,{LA_BANK_GPR,LA_BANK_UNSIGNED14},{0U,10U},{0U}},
+    {"csrwr",0x04000020U,2U,{LA_BANK_GPR,LA_BANK_UNSIGNED14},{0U,10U},{0U}},
+    {"csrxchg",0x04000000U,3U,{LA_BANK_GPR,LA_BANK_GPR,LA_BANK_UNSIGNED14},{0U,5U,10U},{0U,2U}},
+    {"break",0x002a0000U,1U,{LA_BANK_UNSIGNED15},{0U},{0U}},
+    {"syscall",0x002b0000U,1U,{LA_BANK_UNSIGNED15},{0U},{0U}},
+    {"dbar",0x38720000U,1U,{LA_BANK_UNSIGNED15},{0U},{0U}},
+    {"ibar",0x38728000U,1U,{LA_BANK_UNSIGNED15},{0U},{0U}},
+    {"idle",0x06488000U,1U,{LA_BANK_UNSIGNED15},{0U},{0U}}
+};
+#undef LA_FIELDS_2
+#undef LA_FIELDS_3
+
+static bool la_parse_special_register_pattern(MiniAsMCInst *m,const char *op,
+                                               char args[4][192],unsigned count,
+                                               bool *recognized) {
+    size_t i;
+    *recognized=false;
+    for(i=0U;i<sizeof(la_special_register_patterns)/
+                   sizeof(la_special_register_patterns[0]);++i) {
+        const LaSpecialRegisterPattern *rule=&la_special_register_patterns[i];
+        unsigned arg;
+        if(strcmp(rule->name,op)!=0)continue;
+        *recognized=true;
+        if(count!=rule->count)return false;
+        m->encoding=rule->opcode;
+        for(arg=0U;arg<count;++arg) {
+            unsigned reg=0U;
+            int64_t imm=0;
+            bool valid=false, immediate=false;
+            unsigned width=0U;
+            switch(rule->banks[arg]) {
+                case LA_BANK_GPR:valid=la_reg(args[arg],&reg);break;
+                case LA_BANK_FPR:
+                    valid=la_special_reg(args[arg],"$f",31U,&reg);break;
+                case LA_BANK_FCSR:
+                    valid=la_special_reg(args[arg],"$fcsr",3U,&reg);break;
+                case LA_BANK_FCC:
+                    valid=la_special_reg(args[arg],"$fcc",7U,&reg);break;
+                case LA_BANK_SIGNED12:
+                    valid=minias_eval_i64_expression(args[arg],&imm) &&
+                          imm>=-2048 && imm<=2047;
+                    immediate=true;width=12U;
+                    break;
+                case LA_BANK_UNSIGNED5:
+                case LA_BANK_UNSIGNED8:
+                case LA_BANK_UNSIGNED14:
+                case LA_BANK_UNSIGNED15: {
+                    uint64_t uimm;
+                    width=rule->banks[arg]==LA_BANK_UNSIGNED5?5U:
+                          rule->banks[arg]==LA_BANK_UNSIGNED8?8U:
+                          rule->banks[arg]==LA_BANK_UNSIGNED14?14U:15U;
+                    valid=minias_eval_u64_expression(args[arg],&uimm) &&
+                          uimm<(UINT64_C(1)<<width);
+                    if(valid)imm=(int64_t)uimm;
+                    immediate=true;
+                    break;
+                }
+            }
+            if(!valid || (!immediate && reg<rule->min_register[arg]))
+                return false;
+            if(immediate) {
+                const uint32_t mask=(UINT32_C(1)<<width)-1U;
+                m->encoding|=(((uint32_t)imm)&mask)<<rule->shifts[arg];
+                la_capture_imm_operand(m,arg,imm);
+            } else {
+                m->encoding|=((uint32_t)reg)<<rule->shifts[arg];
+                la_capture_gpr_operand(m,arg,reg);
+                if(rule->banks[arg]==LA_BANK_FPR)
+                    m->operands[arg].reg_class=MINIAS_MC_REG_FPR;
+            }
+        }
+        m->count=count;
+        return true;
+    }
+    return false;
+}
+
 /* One target-owned scalar grammar.  A scalar opcode is an ISA encoding plus
  * an operand form, not another control-flow arm in the assembler's parser.
  * Keep this local to LoongArch; neither Common MC nor AArch64 should know
@@ -735,46 +850,11 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
         m->operands[0].reg=rd;
         goto done;
     }
-    if(n==2U && la_special_reg(t[0],"$f",31U,&rd) &&
-       la_reg(t[1],&rj) &&
-       (!strcmp(s->op,"movgr2fr.d") || !strcmp(s->op,"movgr2fr.w"))) {
-        m->count=2U;
-        m->encoding=(!strcmp(s->op,"movgr2fr.d") ?
-                    UINT32_C(0x0114a800):UINT32_C(0x0114a400)) |
-                    (rj<<5U)|rd;
-        m->operands[0].kind=MINIAS_MC_REGISTER;
-        m->operands[0].reg=rd;
-        m->operands[0].reg_class=MINIAS_MC_REG_FPR;
-        m->operands[1].kind=MINIAS_MC_REGISTER;
-        m->operands[1].reg=rj;
-        goto done;
-    }
-    if(n==2U && !strcmp(s->op,"movfcsr2gr") &&
-       la_reg(t[0],&rd) &&
-       la_special_reg(t[1],"$fcsr",3U,&rj)) {
-        m->count=2U;
-        m->encoding=UINT32_C(0x0114c800)|(rj<<5U)|rd;
-        m->operands[0].kind=MINIAS_MC_REGISTER;
-        m->operands[0].reg=rd;
-        m->operands[1].kind=MINIAS_MC_REGISTER;
-        m->operands[1].reg=rj;
-        goto done;
-    }
-    if(n==2U && !strcmp(s->op,"movgr2fcsr") &&
-       la_special_reg(t[0],"$fcsr",3U,&rd) && la_reg(t[1],&rj)) {
-        m->count=2U;m->encoding=UINT32_C(0x0114c000)|(rj<<5U)|rd;
-        la_capture_gpr_operand(m,0U,rd);
-        la_capture_gpr_operand(m,1U,rj);
-        goto done;
-    }
-    if(n==2U && !strcmp(s->op,"movfr2gr.d") &&
-       la_reg(t[0],&rd) &&
-       la_special_reg(t[1],"$f",31U,&rj)) {
-        m->count=2U;m->encoding=UINT32_C(0x0114b800)|(rj<<5U)|rd;
-        la_capture_gpr_operand(m,0U,rd);
-        la_capture_gpr_operand(m,1U,rj);
-        m->operands[1].reg_class=MINIAS_MC_REG_FPR;
-        goto done;
+    {
+        bool special_mnemonic=false;
+        if(la_parse_special_register_pattern(m,s->op,t,n,&special_mnemonic))
+            goto done;
+        if(special_mnemonic)goto fail;
     }
     if(n==2U && (!strcmp(s->op,"li.w") || !strcmp(s->op,"li.d")) &&
        la_reg(t[0],&rd)) {
@@ -846,137 +926,6 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
             m->operands[1].kind=MINIAS_MC_IMMEDIATE;
             m->operands[1].immediate=bits;
             goto done;
-        }
-    }
-    /* GNU privileged INVTLB u5, rj, rk, with r0/i0 as operation code.
-     * Existing Common MCInst emission and architecture ELF ownership. */
-
-    if(n==3U && la_special_reg(t[0],"$f",31U,&rd) &&
-       la_reg(t[1],&rj)) {
-        static const struct {const char *name;uint32_t op;} fp[]={
-            {"fld.s",UINT32_C(0x2b000000)},
-            {"fst.s",UINT32_C(0x2b400000)},
-            {"fld.d",UINT32_C(0x2b800000)},
-            {"fst.d",UINT32_C(0x2bc00000)}
-        };
-        int64_t offset;
-        if(minias_eval_i64_expression(t[2],&offset) &&
-           offset>=-2048 && offset<=2047)
-            for(i=0U;i<sizeof(fp)/sizeof(fp[0]);++i)
-                if(!strcmp(s->op,fp[i].name)){
-                    m->count=3U;
-                    m->encoding=fp[i].op|
-                        (((uint32_t)offset&UINT32_C(0xfff))<<10U)|
-                        (rj<<5U)|rd;
-                    la_capture_rri(m,rd,rj,offset);
-                    m->operands[0].reg_class=MINIAS_MC_REG_FPR;
-                    goto done;
-                }
-    }
-    /* GNU privileged LDDIR page-table walk uses target u10:8.
-     * Malformed levels are rejected before MCInst emission. */
-    if(n==3U && !strcmp(s->op,"lddir") &&
-       la_reg(t[0],&rd) && la_reg(t[1],&rj)) {
-        uint64_t level;
-        if(minias_eval_u64_expression(t[2],&level) && level<=255U) {
-            m->count=3U;
-            m->encoding=UINT32_C(0x06400000)|
-                ((uint32_t)level<<10U)|(rj<<5U)|rd;
-            la_capture_rri(m,rd,rj,(int64_t)level);
-            goto done;
-        }
-    }
-    /* GNU privileged software-walk LDPTE (r5, u10:8) is the paired
-     * page-table instruction to LDDIR. Both use target-owned exact
-     * instruction encoding and share the existing raw MC emitter. */
-    if(n==2U && !strcmp(s->op,"ldpte") && la_reg(t[0],&rj)) {
-        uint64_t level;
-        if(minias_eval_u64_expression(t[1],&level) && level<=255U) {
-            m->count=2U;
-            m->encoding=UINT32_C(0x06440000)|
-                        ((uint32_t)level<<10U)|(rj<<5U);
-            la_capture_gpr_operand(m,0U,rj);
-            la_capture_imm_operand(m,1U,(int64_t)level);
-            goto done;
-        }
-    }
-    /* FCC-to-GPR: condition register is u3 in r5, GPR is r0. */
-    if(n==2U && !strcmp(s->op,"movcf2gr") &&
-       la_reg(t[0],&rd) &&
-       la_special_reg(t[1],"$fcc",7U,&rj)) {
-        m->count=2U;
-        m->encoding=UINT32_C(0x0114dc00)|(rj<<5U)|rd;
-        m->operands[0].kind=MINIAS_MC_REGISTER;
-        m->operands[0].reg=rd;
-        m->operands[1].kind=MINIAS_MC_REGISTER;
-        m->operands[1].reg=rj;
-        goto done;
-    }
-    if(n==2U && !strcmp(s->op,"movgr2cf") &&
-       la_special_reg(t[0],"$fcc",7U,&rd) &&
-       la_reg(t[1],&rj)) {
-        m->count=2U;
-        m->encoding=UINT32_C(0x0114d800)|(rj<<5U)|rd;
-        la_capture_gpr_operand(m,0U,rd);
-        la_capture_gpr_operand(m,1U,rj);
-        goto done;
-    }
-    if(n==3U && !strcmp(s->op,"invtlb") &&
-       la_reg(t[1],&rj) && la_reg(t[2],&rk)) {
-        uint64_t operation;
-        if(minias_eval_u64_expression(t[0],&operation) && operation<=31U) {
-            m->count=3U;
-            m->encoding=UINT32_C(0x06498000) |
-                        (rk<<10U)|(rj<<5U)|(uint32_t)operation;
-            m->operands[0].kind=MINIAS_MC_IMMEDIATE;
-            m->operands[0].immediate=operation;
-            m->operands[1].kind=MINIAS_MC_REGISTER;
-            m->operands[1].reg=rj;
-            m->operands[2].kind=MINIAS_MC_REGISTER;
-            m->operands[2].reg=rk;
-            goto done;
-        }
-    }
-    /* CACOP is a u5 operation plus GPR base and signed si12 offset.
-     * The system opcode is described entirely by target-specific bits,
-     * leaving ELF/data/fragment ownership in Common. */
-    if(n==3U && !strcmp(s->op,"cacop") && la_reg(t[1],&rj)) {
-        uint64_t operation;int64_t offset;
-        if(minias_eval_u64_expression(t[0],&operation) &&
-           operation<=31U &&
-           minias_eval_i64_expression(t[2],&offset) &&
-           offset>=-2048 && offset<=2047) {
-            m->count=3U;
-            m->encoding=UINT32_C(0x06000000)|
-                (((uint32_t)offset&UINT32_C(0xfff))<<10U)|
-                (rj<<5U)|(uint32_t)operation;
-            m->operands[0].kind=MINIAS_MC_IMMEDIATE;
-            m->operands[0].immediate=operation;
-            m->operands[1].kind=MINIAS_MC_REGISTER;
-            m->operands[1].reg=rj;
-            m->operands[2].kind=MINIAS_MC_IMMEDIATE;
-            m->operands[2].immediate=(uint64_t)offset;
-            goto done;
-        }
-    }
-    /* All four are GNU LA64 unsigned-15-bit immediate instructions. */
-    if(n==1U) {
-        static const struct {const char *op;uint32_t word;} direct[]={
-            {"break",UINT32_C(0x002a0000)},
-            {"syscall",UINT32_C(0x002b0000)},
-            {"dbar",UINT32_C(0x38720000)},
-            {"ibar",UINT32_C(0x38728000)},
-            {"idle",UINT32_C(0x06488000)}
-        };
-        uint64_t v;
-        if(minias_eval_u64_expression(t[0],&v) && v<=32767U) {
-            for(i=0U;i<sizeof(direct)/sizeof(direct[0]);++i)
-                if(strcmp(s->op,direct[i].op)==0) {
-                    m->count=1U;m->encoding=direct[i].word|(uint32_t)v;
-                    m->operands[0].kind=MINIAS_MC_IMMEDIATE;
-                    m->operands[0].immediate=v;
-                    goto done;
-                }
         }
     }
     if(n==4U && la_reg(t[0],&rd) && la_reg(t[1],&rj)) {
@@ -1091,39 +1040,6 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
             m->count=2U;m->encoding=UINT32_C(0x1a000000)|rd;
             m->operands[0].kind=MINIAS_MC_REGISTER;
             m->operands[0].reg=rd;
-            goto done;
-        }
-    }
-    /* Privileged CSR opcodes, validated exact 14-bit immediate.
-     * CSRWR and CSRXCHG are not regular GPR instruction families. */
-    if(n==2U && la_reg(t[0],&rd) &&
-       (!strcmp(s->op,"csrrd") || !strcmp(s->op,"csrwr"))) {
-        uint64_t csr;
-        if(minias_eval_u64_expression(t[1],&csr) && csr<=16383U) {
-            m->count=2U;
-            m->encoding=(!strcmp(s->op,"csrrd")?
-                         UINT32_C(0x04000000):UINT32_C(0x04000020))|
-                        ((uint32_t)csr<<10U)|rd;
-            m->operands[0].kind=MINIAS_MC_REGISTER;
-            m->operands[0].reg=rd;
-            m->operands[1].kind=MINIAS_MC_IMMEDIATE;
-            m->operands[1].immediate=csr;
-            goto done;
-        }
-    }
-    if(n==3U && !strcmp(s->op,"csrxchg") &&
-       la_reg(t[0],&rd) && la_reg(t[1],&rj) && rj>=2U) {
-        uint64_t csr;
-        if(minias_eval_u64_expression(t[2],&csr) && csr<=16383U) {
-            m->count=3U;
-            m->encoding=UINT32_C(0x04000000)|
-                ((uint32_t)csr<<10U)|(rj<<5U)|rd;
-            m->operands[0].kind=MINIAS_MC_REGISTER;
-            m->operands[0].reg=rd;
-            m->operands[1].kind=MINIAS_MC_REGISTER;
-            m->operands[1].reg=rj;
-            m->operands[2].kind=MINIAS_MC_IMMEDIATE;
-            m->operands[2].immediate=csr;
             goto done;
         }
     }

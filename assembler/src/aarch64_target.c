@@ -534,10 +534,12 @@ static void put_immediate(MiniAsMCOperand *dst, int64_t value) {
     dst->immediate = (uint64_t)value;
 }
 
-/* Only unsigned-scaled load/store forms; do not alias negative offsets,
- * register-indexed modes or other A64 memory encodings silently. */
-static bool parse_a64_mem(const char *text, unsigned *base, int64_t *offset,
-                          unsigned *mode) {
+/* The base and bracket grammar of [Xn, offset] is common to literal,
+ * symbolic LO12 and ordinary numeric memory operands.  Keep it target-local
+ * and parse the offset's *kind* only in the consuming instruction family;
+ * a general-number parser must not reject a valid :lo12: relocation. */
+static bool a64_memory_components(const char *text,unsigned *base,
+                                  char offset[96],unsigned *mode) {
     char inside[96], *comma, *regtext;
     size_t size = strlen(text);
     bool is64, issp;
@@ -559,15 +561,23 @@ static bool parse_a64_mem(const char *text, unsigned *base, int64_t *offset,
         regtext[--size] = '\0';
     if (!parse_a64_reg(regtext, base, &is64, &issp) || !is64)
         return false;
-    *offset = 0;
+    offset[0] = '\0';
     if (comma) {
         while (isspace((unsigned char)*comma)) ++comma;
         size = strlen(comma);
         while (size && isspace((unsigned char)comma[size - 1U]))
             comma[--size] = '\0';
-        if (!parse_signed_number(comma, offset)) return false;
+        memcpy(offset,comma,size+1U);
     }
     return true;
+}
+
+static bool parse_a64_mem(const char *text, unsigned *base, int64_t *offset,
+                          unsigned *mode) {
+    char displacement[96];
+    if(!a64_memory_components(text,base,displacement,mode))return false;
+    *offset=0;
+    return !*displacement || parse_signed_number(displacement,offset);
 }
 
 /* Atomic 128-bit CASP{A,L,AL} GNU operand sequence has 4 GPRs
@@ -784,27 +794,28 @@ typedef struct A64ScalarMemoryForm {
     unsigned allowed_registers;
     uint32_t scaled_w;
     uint32_t scaled_x;
+    bool supports_lo12_relocation;
 } A64ScalarMemoryForm;
 
 static const A64ScalarMemoryForm a64_scalar_memory_forms[]={
     {0U,A64_SCALAR_W|A64_SCALAR_X,
-        UINT32_C(0xb9400000),UINT32_C(0xf9400000)},
+        UINT32_C(0xb9400000),UINT32_C(0xf9400000),true},
     {0U,A64_SCALAR_W|A64_SCALAR_X,
-        UINT32_C(0xb9000000),UINT32_C(0xf9000000)},
+        UINT32_C(0xb9000000),UINT32_C(0xf9000000),true},
     {1U,A64_SCALAR_W,
-        UINT32_C(0x39400000),0U},
+        UINT32_C(0x39400000),0U,true},
     {1U,A64_SCALAR_W,
-        UINT32_C(0x39000000),0U},
+        UINT32_C(0x39000000),0U,true},
     {2U,A64_SCALAR_W,
-        UINT32_C(0x79400000),0U},
+        UINT32_C(0x79400000),0U,true},
     {2U,A64_SCALAR_W,
-        UINT32_C(0x79000000),0U},
+        UINT32_C(0x79000000),0U,true},
     {4U,A64_SCALAR_X,
-        0U,UINT32_C(0xb9800000)},
+        0U,UINT32_C(0xb9800000),true},
     {1U,A64_SCALAR_W|A64_SCALAR_X,
-        UINT32_C(0x39c00000),UINT32_C(0x39800000)},
+        UINT32_C(0x39c00000),UINT32_C(0x39800000),false},
     {2U,A64_SCALAR_W|A64_SCALAR_X,
-        UINT32_C(0x79c00000),UINT32_C(0x79800000)}
+        UINT32_C(0x79c00000),UINT32_C(0x79800000),false}
 };
 
 typedef struct A64ScalarMemorySpelling {
@@ -1508,9 +1519,10 @@ static bool a64_lo12_expr(const char *text,MiniAsSymbolExpr *expr) {
 static bool a64_parse_relocated(MiniAsMCInst *inst,
                                 const char *op,const char *args) {
     char tok[4][384];
-    unsigned n,rd,rn,unit=0U;
+    unsigned n,rd,rn,policy;
     bool wd,wn,spd,spn;
     MiniAsSymbolExpr expr;
+    const A64ScalarMemoryForm *memory_form;
     if(!split_operands(args,tok,&n))return false;
     if(!strcmp(op,"adr") && n==2U &&
        parse_a64_reg(tok[0],&rd,&wd,&spd) && wd && !spd &&
@@ -1546,57 +1558,36 @@ static bool a64_parse_relocated(MiniAsMCInst *inst,
     }
     if(n!=2U || !parse_a64_reg(tok[0],&rd,&wd,&spd) || spd)
         return false;
-    if(strcmp(op,"ldr")!=0 && strcmp(op,"str")!=0 &&
-       strcmp(op,"ldrb")!=0 && strcmp(op,"strb")!=0 &&
-       strcmp(op,"ldrh")!=0 && strcmp(op,"strh")!=0 &&
-       strcmp(op,"ldrsw")!=0)
-        return false;
-    /* LDRSW is an X-only destination, despite its 32-bit source
-     * relocation scale. Never permit GNU-invalid Wd here. */
-    if(!strcmp(op,"ldrsw") && !wd)return false;
+    /* The ordinary and symbolic paths must not maintain competing
+     * width, transfer size and opcode tables.  In particular, LDRSW's
+     * signed 32-bit load into Xd has a 4-byte relocation unit.  The
+     * spelling policy ensures LDUR/LDTR forms never accept :lo12:. */
+    memory_form=a64_scalar_memory_form(op,&policy);
+    if(!memory_form || policy!=A64_SCALAR_DIRECT ||
+       !memory_form->supports_lo12_relocation ||
+       !(memory_form->allowed_registers &
+         (wd?A64_SCALAR_X:A64_SCALAR_W)))return false;
     {
-        size_t sz=strlen(tok[1]);
-        char inner[96],*comma,*b;
-        unsigned regnum;
+        char displacement[96],*b=displacement;
+        unsigned mode;
         bool got_lo12;
-        if(sz<4U || tok[1][0]!='[' || tok[1][sz-1U]!=']' ||
-           sz-2U>=sizeof(inner))return false;
-        memcpy(inner,tok[1]+1U,sz-2U);inner[sz-2U]='\0';
-        comma=strchr(inner,',');
-        if(!comma)return false;
-        *comma++='\0';
-        if(!parse_a64_reg(minias_trim(inner),&regnum,&wn,&spn) || !wn)
+        if(!a64_memory_components(tok[1],&rn,displacement,&mode) ||
+           mode!=0U || !*displacement)
             return false;
-        b=minias_trim(comma);
         if(*b=='#')++b;
         got_lo12=strncmp(b,":got_lo12:",10U)==0;
         if(got_lo12 && (strcmp(op,"ldr")!=0 || !wd))return false;
         if(!(got_lo12?minias_parse_symbol_addend(b+10U,&expr):
                         a64_lo12_expr(b,&expr)) ||
            !a64_attach_expr(inst,2U,&expr))return false;
-        rn=regnum;
         if(got_lo12)inst->opcode=A64_MC_LDST_GOT_LO12;
-    }
-    unit=!strcmp(op,"ldrsw")?4U:op[3]=='b'?1U:op[3]=='h'?2U:wd?8U:4U;
-    if((unit==1U||unit==2U) && wd) {
-        free(inst->operands[2].symbol);
-        inst->operands[2].symbol=NULL;
-        return false;
     }
     if(inst->opcode!=A64_MC_LDST_GOT_LO12)
         inst->opcode=A64_MC_LDST_LO12;
     inst->count=3U;
     put_reg(&inst->operands[0],rd,wd);
     put_reg(&inst->operands[1],rn,true);
-    inst->encoding=!strcmp(op,"ldrsw")?UINT32_C(0xb9800000):
-        strcmp(op,"ldr")==0 ?
-        (wd?UINT32_C(0xf9400000):UINT32_C(0xb9400000)):
-        strcmp(op,"str")==0 ?
-        (wd?UINT32_C(0xf9000000):UINT32_C(0xb9000000)):
-        strcmp(op,"ldrb")==0?UINT32_C(0x39400000):
-        strcmp(op,"strb")==0?UINT32_C(0x39000000):
-        strcmp(op,"ldrh")==0?UINT32_C(0x79400000):
-                              UINT32_C(0x79000000);
+    inst->encoding=wd?memory_form->scaled_x:memory_form->scaled_w;
     return true;
 }
 

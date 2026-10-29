@@ -11,11 +11,14 @@ on:
       - 'tests/assembler/probe-mc-cross-layer-contract.sh'
       - 'tests/assembler/probe-common-ident-gnu.sh'
       - 'tests/assembler/probe-common-source-end-gnu.sh'
+      - 'tests/assembler/probe-common-skipped-macro-repeat-gnu.sh'
       - 'tests/assembler/probe-mc-owned-deferred-directives.sh'
       - 'tests/assembler/probe-cfi-debug-frame.sh'
       - 'tests/assembler/probe-cfi-dual-frame.sh'
       - 'tests/assembler/probe-cfi-wide-registers.sh'
       - 'tests/assembler/probe-cfi-initial-state-gnu.sh'
+      - 'tests/assembler/probe-cfi-signed-save-offsets-gnu.sh'
+      - 'tests/assembler/probe-debug-line-directory-gnu.sh'
       - 'tests/assembler/probe-minias-acceptance-gates.sh'
       - 'tests/assembler/probe-elf-semantic-comdat-strict.sh'
       - 'tests/assembler/probe-elf-semantic-payload-bitfields.py'
@@ -23,9 +26,11 @@ on:
       - 'tests/assembler/probe-elf-semantic-reserved-names.py'
       - 'tests/assembler/probe-elf-symbol-plan.sh'
       - 'tests/assembler/probe-elf-link-order-index.sh'
+      - 'tests/assembler/probe-elf-live-section-symbols.sh'
       - 'tests/assembler/probe-mc-org-snapshot-symmetry.sh'
       - 'tests/assembler/probe-loong-vector-typed-patterns.sh'
       - 'tests/assembler/probe-loong-scalar-opcode-shapes.sh'
+      - 'tests/assembler/probe-loong-register-bank-patterns.sh'
       - 'tests/assembler/probe-link-order-gcc-patchable.sh'
       - 'tests/assembler/probe-miniobjcopy-comdat-rewrite.sh'
       - 'tests/assembler/probe-minias-ci-routing.py'
@@ -34,6 +39,7 @@ on:
       - 'tests/assembler/probe-x86-typed-branch-growth.sh'
       - 'tests/assembler/probe-x86-shared-condition-opcodes.sh'
       - 'tests/assembler/probe-x86-memory-encoding-layout.sh'
+      - 'tests/assembler/probe-x86-register-width-and-high-byte-gnu.sh'
       - 'tests/assembler/elf_semantic_compare.py'
       - 'tests/assembler/probe-x86-loong-base.sh'
       - 'tests/assembler/probe-mc-operand-lexer.sh'
@@ -108,10 +114,18 @@ jobs:
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-common-source-end-gnu.sh
+      - name: GNU x86 skipped conditional macro and repeat blocks do not mutate parser state
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-common-skipped-macro-repeat-gnu.sh
       - name: GNU x86 ELF symbol-retention plan and relocation owner contracts
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-elf-symbol-plan.sh
+      - name: GNU x86 ELF Section symbols exist only when live relocations require them
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-elf-live-section-symbols.sh
       - name: All four Targets retain typed GNU deferred directive fragments
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
@@ -134,6 +148,10 @@ jobs:
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-x86-memory-encoding-layout.sh
+      - name: GNU x86 register width and legacy high-byte constraints
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-x86-register-width-and-high-byte-gnu.sh
       - name: GNU x86 link-order section identity, RELA and linker GC
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
@@ -161,6 +179,14 @@ jobs:
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-cfi-initial-state-gnu.sh
+      - name: GNU x86 CFI signed saved offsets and relative CFA offsets
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-cfi-signed-save-offsets-gnu.sh
+      - name: GNU x86 DWARF directory and file table references
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-debug-line-directory-gnu.sh
       - name: GNU x86-64 grouped MC operand tokenizer and negative grammar
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=x86_64 \
@@ -290,3 +316,10 @@ jobs:
           LOONGAS=loongarch64-linux-gnu-as \
           LOONGCOPY=loongarch64-linux-gnu-objcopy \
             bash tests/assembler/probe-loong-scalar-opcode-shapes.sh
+      - name: LoongArch64 FCSR FCC GPR FPR LSX LASX register-bank identity versus GNU
+        run: |
+          command -v loongarch64-linux-gnu-as
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+          LOONGAS=loongarch64-linux-gnu-as \
+          LOONGCOPY=loongarch64-linux-gnu-objcopy \
+            bash tests/assembler/probe-loong-register-bank-patterns.sh
