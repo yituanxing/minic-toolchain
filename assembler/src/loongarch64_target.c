@@ -146,7 +146,7 @@ static bool la_reg(const char *s,unsigned *r) {
         {"a4",8U},{"a5",9U},{"a6",10U},{"a7",11U},
         {"t0",12U},{"t1",13U},{"t2",14U},{"t3",15U},
         {"t4",16U},{"t5",17U},{"t6",18U},{"t7",19U},
-        {"t8",20U},{"u0",21U},{"fp",22U}
+        {"t8",20U},{"u0",21U},{"fp",22U},{"s9",22U}
     };
     unsigned i;char *end;unsigned long val;
     if(*s!='$')return false;
