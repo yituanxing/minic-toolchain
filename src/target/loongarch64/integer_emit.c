@@ -196,8 +196,35 @@ bool minic_loongarch64_emit_integer_instruction(
             size_t width;
             bool is_signed;
             if (!minic_core_integer_overflow_shape(
-                    program, target, fn, ins, &width, &is_signed))
-                return false;
+                    program, target, fn, ins, &width, &is_signed)) {
+                bool signed_left;
+                if (!minic_core_integer_overflow_mixed_add_i32_shape(
+                        program, target, fn, ins, &signed_left) ||
+                    !emit_sp_mem(out, "ld.d", "$t0", (size_t)lhs * 8U) ||
+                    !emit_sp_mem(out, "ld.d", "$t1", (size_t)rhs * 8U) ||
+                    !emit_sp_mem(out, "ld.d", "$t2", (size_t)address * 8U) ||
+                    fputs(signed_left
+                          ? "  add.w $t0, $t0, $zero\n"
+                            "  srai.d $t3, $t0, 63\n"
+                          : "  add.w $t1, $t1, $zero\n"
+                            "  srai.d $t3, $t1, 63\n", out) == EOF ||
+                    fputs("  move $t4, $t0\n"
+                          "  add.d $t0, $t0, $t1\n"
+                          "  sltu $t5, $t0, $t4\n"
+                          "  add.d $t3, $t3, $t5\n"
+                          "  add.w $t4, $t0, $zero\n"
+                          "  xor $t5, $t4, $t0\n"
+                          "  sltu $t5, $zero, $t5\n"
+                          "  srai.d $t4, $t4, 63\n"
+                          "  xor $t3, $t3, $t4\n"
+                          "  sltu $t3, $zero, $t3\n"
+                          "  or $t3, $t3, $t5\n"
+                          "  st.w $t0, $t2, 0\n"
+                          "  move $t0, $t3\n", out) == EOF)
+                    return false;
+                *needs_gp_store = true;
+                return true;
+            }
             const int op = ins->value.integer_overflow.operator_kind;
             const bool wide = width == 8U;
             if (!emit_sp_mem(out, wide ? "ld.d" : "ld.w",

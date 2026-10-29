@@ -80,7 +80,8 @@ bool minic_aarch64_copy_dynamic_frame_asm(FILE *out, FILE *input) {
         unsigned int rd, rn;
         size_t value;
         if (strchr(line, '\n') == NULL && !feof(input)) return false;
-        if (strcmp(line, "  mov x19, sp\n") == 0) {
+        if (strcmp(line, "  mov x19, sp\n") == 0 ||
+            strcmp(line, "  mov x19, x9\n") == 0) {
             anchored = true;
         } else if (strcmp(line, "  mov sp, x19\n") == 0) {
             /* Epilogue must load the saved x19 from the restored SP.

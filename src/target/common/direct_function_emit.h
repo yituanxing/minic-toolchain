@@ -83,7 +83,8 @@ static inline bool minic_multi_direct_lp64_emit_function(
         (!decl->is_internal &&
          !minic_multi_emit_elf_symbol_visibility(
              emission, decl->visibility, name)) ||
-        fprintf(emission, ".p2align 2\n.type %s,%s\n%s:\n",
+        fprintf(emission, ".balign %zu\n.type %s,%s\n%s:\n",
+                decl->explicit_alignment > 4U ? decl->explicit_alignment : 4U,
                 name, config->elf_function_type, name) < 0)
         goto output_failed;
 
@@ -93,6 +94,8 @@ static inline bool minic_multi_direct_lp64_emit_function(
         .incoming_plan = &plan.incoming_plan,
         .outgoing_calls = &plan.outgoing_calls,
         .name = name, .id = id, .frame = plan.frame_size,
+        .frame_alignment = plan.frame_alignment,
+        .saved_entry_sp_offset = plan.saved_entry_sp_offset,
         .save_offset = plan.save_offset,
         .indirect_return_offset = plan.indirect_return_offset,
         .va_base = plan.variadic_save_base,

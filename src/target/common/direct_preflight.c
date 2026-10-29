@@ -3,6 +3,7 @@
 #include "target/common/global_emit.h"
 #include "target/common/lp64_scalar.h"
 #include "target/common/lp64_aggregate.h"
+#include "target/common/lp64_frame.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -126,7 +127,7 @@ bool minic_multi_direct_lp64_function_preflight(
         else if(!direct_lp64_only_structured_asm(fn, qualify_opaque_asm))
             reason="gnu_asm_qualification";
         else if(fn->parameter_count>16U)reason="parameter_cap";
-        else if(fn->value_count>32768U)reason="value_cap";
+        else if(!minic_lp64_baseline_values_fit_frame(fn->value_count))reason="value_cap";
         else if(fn->object_count>8192U)reason="object_cap";
         if(reason!=NULL&&strcmp(reason,"gnu_asm_qualification")==0)
             direct_lp64_trace_asm_owners(fn,arch,name);
@@ -147,7 +148,8 @@ bool minic_multi_direct_lp64_function_preflight(
         fn->block_count > 2048U ||
         !direct_lp64_only_structured_asm(fn, qualify_opaque_asm) ||
         fn->parameter_count > 16U ||
-        fn->value_count > 32768U || fn->object_count > 8192U)
+        !minic_lp64_baseline_values_fit_frame(fn->value_count) ||
+        fn->object_count > 8192U)
         {
             if (getenv("MINIC_BACKEND_CENSUS") != NULL)
                 (void)fprintf(stderr,

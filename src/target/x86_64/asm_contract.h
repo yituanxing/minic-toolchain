@@ -72,6 +72,11 @@ size_t minic_x86_64_linux_gs_cmpxchg_width(const char *, size_t);
 bool minic_x86_64_linux_gs_cmpxchg_loop(const char *, size_t);
 size_t minic_x86_64_linux_rep_stos_width(const char *, size_t);
 unsigned int minic_x86_64_linux_lowlevel_scalar_form(const char *, size_t);
+unsigned int minic_x86_64_linux_boot_flags_form(const char *, size_t);
+bool minic_x86_64_linux_delay_mul_form(const char *, size_t);
+unsigned int minic_x86_64_linux_delay_wait_form(const char *, size_t);
+bool minic_x86_64_linux_identity_load_form(const char *, size_t);
+bool minic_x86_64_linux_ipv6_checksum_form(const char *, size_t);
 bool minic_x86_64_linux_unwind_context_form(const char *, size_t);
 bool minic_x86_64_linux_task_size_alt_form(const char *, size_t);
 /* Call the hardirq handler on the per-CPU IRQ stack with exact RSP save. */

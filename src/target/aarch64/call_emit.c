@@ -30,6 +30,24 @@ static bool emit_lp64_record_chunk_argument(FILE *out, size_t offset,
         : fprintf(out, "  str x9, [sp, #%zu]\n", stack_slot * 8U) >= 0;
 }
 
+/* Stacked incoming arguments belong to the original entry SP, not the
+ * optionally realigned local frame. Use the saved entry address whenever
+ * an over-aligned C object forced x19 to become the stable frame base. */
+static bool aarch64_emit_incoming_stack_read(FILE *out,
+    const MinicDirectLP64BlockContext *ctx, const char *register_name,
+    size_t stack_slot) {
+    if (!out || !ctx || !register_name ||
+        stack_slot > SIZE_MAX / 8U) return false;
+    if (ctx->saved_entry_sp_offset != SIZE_MAX)
+        return fprintf(out, "  ldr x16, [x19, #%zu]\n"
+                            "  ldr %s, [x16, #%zu]\n",
+                       ctx->saved_entry_sp_offset,
+                       register_name, stack_slot * 8U) >= 0;
+    if (ctx->frame > SIZE_MAX - stack_slot * 8U) return false;
+    return fprintf(out, "  ldr %s, [sp, #%zu]\n", register_name,
+                   ctx->frame + stack_slot * 8U) >= 0;
+}
+
 /* Outgoing calls and incoming named parameters share the same ABI plan
  * contracts, but native moves, stack adjustments, floating register
  * assignments and record chunk transport remain ISA-owned. */
@@ -42,7 +60,6 @@ bool minic_aarch64_emit_abi_instruction(
     const MinicCoreFunction *fn;
     const MinicLP64FramePlan *frame_plan;
     const MinicLP64ArgumentPlan *incoming_plan;
-    size_t frame;
     if (out == NULL || ctx == NULL || ctx->program == NULL ||
         ctx->target == NULL || ctx->fn == NULL || ctx->frame_plan == NULL ||
         ctx->incoming_plan == NULL || ctx->outgoing_calls == NULL ||
@@ -54,7 +71,6 @@ bool minic_aarch64_emit_abi_instruction(
     fn = ctx->fn;
     frame_plan = ctx->frame_plan;
     incoming_plan = ctx->incoming_plan;
-    frame = ctx->frame;
     *needs_gp_store = false;
     switch (ins->kind) {
         case MINIC_CORE_INSTRUCTION_CALL:
@@ -288,7 +304,8 @@ bool minic_aarch64_emit_abi_instruction(
                     const size_t payload = bytes - chunk * 8U >= 8U
                         ? 8U : bytes - chunk * 8U;
                     if (!minic_aarch64_emit_lp64_record_chunk_parameter(out,
-                            dst + chunk * 8U, payload, true, chunk, 0U))
+                            dst + chunk * 8U, payload, true, chunk, 0U,
+                            SIZE_MAX))
                         return false;
                 }
                 return true;
@@ -343,12 +360,13 @@ bool minic_aarch64_emit_abi_instruction(
                         if (fprintf(out, "  str x%zu, [sp, #%zu]\n",
                                     location->gp_first + limb, dst + limb * 8U) < 0)
                             return false;
-                    } else if (location->gp_registers == 0U &&
-                               fprintf(out, "  ldr x9, [sp, #%zu]\n"
-                                            "  str x9, [sp, #%zu]\n",
-                                       frame + (location->stack_first + limb) * 8U,
-                                       dst + limb * 8U) < 0)
-                        return false;
+                    } else if (location->gp_registers == 0U) {
+                        if (!aarch64_emit_incoming_stack_read(out, ctx, "x9",
+                                location->stack_first + limb) ||
+                            fprintf(out, "  str x9, [sp, #%zu]\n",
+                                    dst + limb * 8U) < 0)
+                            return false;
+                    }
                     else if (location->gp_registers != 0U)
                         return false;
                 }
@@ -363,9 +381,9 @@ bool minic_aarch64_emit_abi_instruction(
                                 location->fp_first, dst) < 0)
                         return false;
                 } else {
-                    if (fprintf(out, "  ldr q9, [sp, #%zu]\n"
-                                     "  str q9, [sp, #%zu]\n",
-                                frame + location->stack_first * 8U, dst) < 0)
+                    if (!aarch64_emit_incoming_stack_read(out, ctx, "q9",
+                            location->stack_first) ||
+                        fprintf(out, "  str q9, [sp, #%zu]\n", dst) < 0)
                         return false;
                 }
                 return true;
@@ -378,12 +396,13 @@ bool minic_aarch64_emit_abi_instruction(
                                               : "  str d%zu, [sp, #%zu]\n",
                                 location->fp_first, offset) < 0)
                         return false;
-                } else if (fprintf(out, is_float
-                                     ? "  ldr s9, [sp, #%zu]\n"
-                                       "  str s9, [sp, #%zu]\n"
-                                     : "  ldr d9, [sp, #%zu]\n"
-                                       "  str d9, [sp, #%zu]\n",
-                                   frame + location->stack_first * 8U, offset) < 0)
+                } else if (!aarch64_emit_incoming_stack_read(
+                               out, ctx, is_float ? "s9" : "d9",
+                               location->stack_first) ||
+                           fprintf(out, is_float
+                                      ? "  str s9, [sp, #%zu]\n"
+                                      : "  str d9, [sp, #%zu]\n",
+                                   offset) < 0)
                     return false;
                 return true;
             }
@@ -393,13 +412,16 @@ bool minic_aarch64_emit_abi_instruction(
                                  : "  str w%zu, [sp, #%zu]\n",
                             location->gp_first, offset) < 0)
                     return false;
-            } else if (fprintf(out, minic_lp64_register64_type(program, target, ins->type)
-                               ? "  ldr x9, [sp, #%zu]\n"
-                                 "  str x9, [sp, #%zu]\n"
-                               : "  ldr w9, [sp, #%zu]\n"
-                                 "  str w9, [sp, #%zu]\n",
-                               frame + location->stack_first * 8U, offset) < 0)
-                return false;
+            } else {
+                const bool wide = minic_lp64_register64_type(program,
+                    target, ins->type);
+                if (!aarch64_emit_incoming_stack_read(out, ctx,
+                        wide ? "x9" : "w9", location->stack_first) ||
+                    fprintf(out, wide ? "  str x9, [sp, #%zu]\n"
+                                      : "  str w9, [sp, #%zu]\n",
+                            offset) < 0)
+                    return false;
+            }
             return true;
         }
         default:

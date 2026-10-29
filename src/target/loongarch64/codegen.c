@@ -22,12 +22,32 @@ static bool loongarch64_emit_prologue(
     const bool has_calls = ctx->has_direct_calls;
     const bool dynamic_frame = ctx->dynamic_frame;
     size_t i;
-    if (!minic_loongarch64_emit_sp_adjust(out, frame, false) ||
-        (dynamic_frame &&
-         (!minic_loongarch64_emit_frame_mem(
-              out, "st.d", "$s0",
-              save_offset + (has_calls ? 8U : 0U), false) ||
-          fputs("  move $s0, $sp\n", out) == EOF)))
+    if (ctx->frame_alignment > 16U) {
+        /* Entry $sp is only 16-aligned. Reserve worst-case alignment slack,
+         * preserve the exact entry $sp, and round a stable callee-saved $s0
+         * frame base UP. All object slots are aligned relative to $s0;
+         * outgoing call stack space continues to use the 16-aligned $sp. */
+        if (!dynamic_frame || ctx->saved_entry_sp_offset == SIZE_MAX ||
+            fputs("  move $t0, $sp\n", out) == EOF ||
+            !minic_loongarch64_emit_sp_adjust(out, frame, false) ||
+            fprintf(out, "  move $t1, $s0\n"
+                         "  addi.d $s0, $sp, %zu\n"
+                         "  li.d $t3, -%zu\n"
+                         "  and $s0, $s0, $t3\n",
+                    ctx->frame_alignment - 1U,
+                    ctx->frame_alignment) < 0 ||
+            !minic_loongarch64_emit_frame_mem(
+                out, "st.d", "$t0", ctx->saved_entry_sp_offset, true) ||
+            !minic_loongarch64_emit_frame_mem(
+                out, "st.d", "$t1",
+                save_offset + (has_calls ? 8U : 0U), true))
+            goto fail;
+    } else if (!minic_loongarch64_emit_sp_adjust(out, frame, false) ||
+               (dynamic_frame &&
+                (!minic_loongarch64_emit_frame_mem(
+                     out, "st.d", "$s0",
+                     save_offset + (has_calls ? 8U : 0U), false) ||
+                 fputs("  move $s0, $sp\n", out) == EOF)))
         goto fail;
     if (has_calls &&
         !minic_loongarch64_emit_frame_mem(
@@ -46,7 +66,7 @@ static bool loongarch64_emit_prologue(
         for (i = 0U; i < 8U; ++i)
             if (!minic_loongarch64_emit_frame_mem(
                     out, "st.d", registers[i],
-                    frame - 64U + i * 8U, dynamic_frame))
+                    ctx->va_base + i * 8U, dynamic_frame))
                 return minic_multi_direct_machine_reject(
                     fn, "loongarch64", name, "variadic_save",
                     SIZE_MAX, SIZE_MAX, __LINE__);

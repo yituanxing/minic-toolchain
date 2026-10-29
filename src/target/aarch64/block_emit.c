@@ -26,7 +26,8 @@
 
 bool minic_aarch64_emit_lp64_record_chunk_parameter(FILE *out, size_t offset,
                                               size_t bytes, bool in_reg,
-                                              size_t gp, size_t incoming_offset) {
+                                              size_t gp, size_t incoming_offset,
+                                              size_t saved_entry_sp_offset) {
     size_t b;
     if (bytes == 0U || bytes > 8U || (in_reg && gp >= 8U) ||
         fprintf(out, "  movz x11, #%zu\n", offset & 65535U) < 0 ||
@@ -35,7 +36,11 @@ bool minic_aarch64_emit_lp64_record_chunk_parameter(FILE *out, size_t offset,
         fputs("  add x11, sp, x11\n", out) == EOF ||
         (in_reg
          ? fprintf(out, "  mov x9, x%zu\n", gp) < 0
-         : fprintf(out, "  ldr x9, [sp, #%zu]\n", incoming_offset) < 0))
+         : saved_entry_sp_offset != SIZE_MAX
+             ? fprintf(out, "  ldr x16, [x19, #%zu]\n"
+                            "  ldr x9, [x16, #%zu]\n",
+                       saved_entry_sp_offset, incoming_offset) < 0
+             : fprintf(out, "  ldr x9, [sp, #%zu]\n", incoming_offset) < 0))
         return false;
     for (b = 0U; b < bytes; ++b)
         if (fprintf(out, "  strb w9, [x11, #%zu]\n", b) < 0 ||
@@ -120,7 +125,8 @@ bool minic_aarch64_emit_parameter_object(FILE *out,
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     const MinicLP64ArgumentPlan *incoming_plan,
-    const MinicLP64FramePlan *frame_plan, size_t frame) {
+    const MinicLP64FramePlan *frame_plan, size_t frame,
+    size_t saved_entry_sp_offset) {
 const MinicLP64ArgumentLocation *location;
             size_t size, slots, object_offset, k, chunk;
             if (!minic_multi_direct_parameter_object_location(
@@ -146,7 +152,12 @@ const MinicLP64ArgumentLocation *location;
                  * bytes to this callee's independently addressable object. */
                 if ((location->gp_registers != 0U
                      ? fprintf(out, "  mov x10, x%zu\n", location->gp_first) < 0
-                     : fprintf(out, "  ldr x10, [sp, #%zu]\n",
+                     : saved_entry_sp_offset != SIZE_MAX
+                         ? fprintf(out, "  ldr x16, [x19, #%zu]\n"
+                                        "  ldr x10, [x16, #%zu]\n",
+                               saved_entry_sp_offset,
+                               location->stack_first * 8U) < 0
+                         : fprintf(out, "  ldr x10, [sp, #%zu]\n",
                                frame + location->stack_first * 8U) < 0) ||
                     fprintf(out, "  movz x11, #%zu\n",
                             object_offset & 65535U) < 0 ||
@@ -169,8 +180,10 @@ const MinicLP64ArgumentLocation *location;
                 if (!minic_aarch64_emit_lp64_record_chunk_parameter(out,
                         object_offset + chunk * 8U, payload,
                         in_reg, in_reg ? location->gp_first + chunk : 0U,
-                        in_reg ? 0U : frame +
-                                     (location->stack_first + chunk) * 8U))
+                        in_reg ? 0U : (saved_entry_sp_offset != SIZE_MAX
+                            ? (location->stack_first + chunk) * 8U
+                            : frame + (location->stack_first + chunk) * 8U),
+                        saved_entry_sp_offset))
                     return false;
             }
             return true;
@@ -244,7 +257,8 @@ bool minic_aarch64_emit_terminator(FILE *out,
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreBlock *block,
     size_t id, size_t block_id, const MinicLP64FramePlan *frame_plan,
-    size_t frame, size_t save_offset, bool has_direct_calls,
+    size_t frame, size_t save_offset, size_t saved_entry_sp_offset,
+    bool has_direct_calls,
     bool dynamic_frame, bool has_indirect_return,
     size_t indirect_return_offset) {
         switch (block->terminator.kind) {
@@ -315,13 +329,22 @@ bool minic_aarch64_emit_terminator(FILE *out,
                                       ? "  ldr x0, [sp, #%zu]\n"
                                       : "  ldr w0, [sp, #%zu]\n",
                          (size_t)block->terminator.return_value * 8U) < 0) ||
-                (has_direct_calls && fprintf(out, "  ldr x30, [sp, #%zu]\n",
-                                             save_offset) < 0) ||
-                (dynamic_frame &&
+                (saved_entry_sp_offset != SIZE_MAX &&
+                 (fprintf(out, "  ldr x9, [x19, #%zu]\n"
+                               "  ldr x10, [x19, #%zu]\n",
+                         saved_entry_sp_offset,
+                         save_offset + (has_direct_calls ? 8U : 0U)) < 0 ||
+                  (has_direct_calls && fprintf(out,
+                         "  ldr x30, [x19, #%zu]\n", save_offset) < 0) ||
+                  fputs("  mov sp, x9\n  mov x19, x10\n", out) == EOF)) ||
+                (saved_entry_sp_offset == SIZE_MAX && has_direct_calls &&
+                 fprintf(out, "  ldr x30, [sp, #%zu]\n",
+                         save_offset) < 0) ||
+                (saved_entry_sp_offset == SIZE_MAX && dynamic_frame &&
                  (fputs("  mov sp, x19\n", out) == EOF ||
                   fprintf(out, "  ldr x19, [sp, #%zu]\n",
                           save_offset + (has_direct_calls ? 8U : 0U)) < 0)) ||
-                (frame != 0U &&
+                (saved_entry_sp_offset == SIZE_MAX && frame != 0U &&
                  (fprintf(out, "  movz x12, #%zu\n", frame & 65535U) < 0 ||
                   (frame > 65535U &&
                    fprintf(out, "  movk x12, #%zu, lsl #16\n", frame >> 16U) < 0) ||
@@ -414,7 +437,8 @@ static bool aarch64_machine_emit_family(
         return minic_aarch64_emit_record_copy(out, program, target, fn, ins);
     case MINIC_DIRECT_MACHINE_PARAMETER_OBJECT:
         return minic_aarch64_emit_parameter_object(out, program, target, fn, ins,
-            ctx->incoming_plan, ctx->frame_plan, ctx->frame);
+            ctx->incoming_plan, ctx->frame_plan, ctx->frame,
+            ctx->saved_entry_sp_offset);
     case MINIC_DIRECT_MACHINE_MEMORY:
         return minic_aarch64_emit_memory_instruction(
             out, program, target, fn, ins, ctx->frame_plan, needs_gp_store);
@@ -449,7 +473,8 @@ static bool aarch64_machine_emit_terminator(
     const MinicCoreBlock *block, size_t block_id) {
     return minic_aarch64_emit_terminator(out, ctx->program, ctx->target, ctx->fn,
         block, ctx->id, block_id, ctx->frame_plan, ctx->frame,
-        ctx->save_offset, ctx->has_direct_calls, ctx->dynamic_frame,
+        ctx->save_offset, ctx->saved_entry_sp_offset,
+        ctx->has_direct_calls, ctx->dynamic_frame,
         ctx->has_indirect_return, ctx->indirect_return_offset);
 }
 

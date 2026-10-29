@@ -561,12 +561,12 @@ static const MinicAttributeDescriptor minic_attribute_descriptors[] = {
                           MINIC_ATTRIBUTE_ALIGNED,
                           MINIC_ATTRIBUTE_CLASS_LAYOUT,
                           MINIC_ATTRIBUTE_TARGET_OBJECT | MINIC_ATTRIBUTE_TARGET_TYPE |
-                              MINIC_ATTRIBUTE_TARGET_FIELD),
+                              MINIC_ATTRIBUTE_TARGET_FIELD | MINIC_ATTRIBUTE_TARGET_FUNCTION),
     MINIC_ATTRIBUTE_ENTRY("__aligned__",
                           MINIC_ATTRIBUTE_ALIGNED,
                           MINIC_ATTRIBUTE_CLASS_LAYOUT,
                           MINIC_ATTRIBUTE_TARGET_OBJECT | MINIC_ATTRIBUTE_TARGET_TYPE |
-                              MINIC_ATTRIBUTE_TARGET_FIELD),
+                              MINIC_ATTRIBUTE_TARGET_FIELD | MINIC_ATTRIBUTE_TARGET_FUNCTION),
     {
         "transparent_union",
         sizeof("transparent_union") - 1U,

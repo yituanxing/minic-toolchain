@@ -35,7 +35,7 @@ bool minic_loongarch64_emit_residual_instruction(
     const MinicCoreInstruction *ins;
     const char *name;
     const char *reject_stage = "machine_emit";
-    size_t id, frame, va_gp, va_count, reject_block;
+    size_t id, va_gp, va_count, reject_block;
     size_t reject_ins;
     bool dynamic_frame;
     if (out == NULL || ctx == NULL || needs_writeback == NULL || ctx->fn == NULL ||
@@ -50,7 +50,6 @@ bool minic_loongarch64_emit_residual_instruction(
     ins = &fn->instructions[ins_id];
     name = ctx->name;
     id = ctx->id;
-    frame = ctx->frame;
     va_gp = ctx->va_gp;
     va_count = ctx->va_count;
     reject_block = block_id;
@@ -112,8 +111,7 @@ bool minic_loongarch64_emit_residual_instruction(
             /* Shared semantic verifier proves the ABI binding+SSA. The
              * target requalifies exact LoongArch hardware state, and writes
              * the per-CPU register without masquerading as a C store. */
-            if (dynamic_frame ||
-                !minic_multi_direct_fixed_register_write_shape(
+            if (!minic_multi_direct_fixed_register_write_shape(
                     program, target, fn, ins, &binding) ||
                 binding->register_name_length != 4U ||
                 memcmp(binding->register_name, "$r21", 4U) != 0 ||
@@ -129,13 +127,10 @@ bool minic_loongarch64_emit_residual_instruction(
         case MINIC_CORE_INSTRUCTION_FIXED_REGISTER_READ: {
             const MinicCoreFixedRegisterBinding *binding;
             const char *physical;
-            /* Same common typed Core instruction already used by x86,
-             * AArch64 and RV, with target-owned LoongArch register spelling
-             * and LP64D SSA writeback. Read LIVE TP or SP, never emit an ELF
-             * global or silently virtualize the thread pointer. Dynamic
-             * stack frames are not qualified for a live-SP read yet. */
-            if (dynamic_frame ||
-                !minic_multi_direct_fixed_register_read_shape(
+            /* Fixed TP/r21 are architectural, independent of a realigned
+             * local frame. A live SP read in a dynamic/realigned frame must
+             * remain explicitly rejected: its value differs across allocas. */
+            if (!minic_multi_direct_fixed_register_read_shape(
                     program, target, fn, ins, &binding) ||
                 (binding->register_name_length != 3U &&
                  binding->register_name_length != 4U))
@@ -152,6 +147,10 @@ bool minic_loongarch64_emit_residual_instruction(
                      memcmp(binding->register_name, "$r21", 4U) == 0)
                 physical = "$r21";
             else
+                return minic_multi_direct_machine_reject(
+                    fn, "loongarch64", name, "fixed_register_read",
+                    reject_block, reject_ins, __LINE__);
+            if (dynamic_frame && strcmp(physical, "$sp") == 0)
                 return minic_multi_direct_machine_reject(
                     fn, "loongarch64", name, "fixed_register_read",
                     reject_block, reject_ins, __LINE__);
@@ -341,7 +340,7 @@ bool minic_loongarch64_emit_residual_instruction(
             if (va_count != 1U || !minic_type_is_pointer(ins->type) ||
                 ins->result >= fn->value_count ||
                 fprintf(out, "  li.d $t0, %zu\n",
-                        frame - 64U + va_gp * 8U) < 0 ||
+                        ctx->va_base + va_gp * 8U) < 0 ||
                 fprintf(out, "  add.d $t0, %s, $t0\n",
                         dynamic_frame ? "$s0" : "$sp") < 0)
                 return minic_multi_direct_machine_reject(fn, "loongarch64", name,

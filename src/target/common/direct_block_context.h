@@ -21,6 +21,8 @@ typedef struct MinicDirectLP64BlockContext {
     const char *name;
     size_t id;
     size_t frame;
+    size_t frame_alignment;
+    size_t saved_entry_sp_offset;
     size_t save_offset;
     size_t indirect_return_offset;
     size_t va_base;

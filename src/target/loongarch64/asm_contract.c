@@ -9,7 +9,7 @@
 bool minic_loongarch64_qualified_opaque_asm(const MinicCoreInlineAsm *a) {
     static const char *const allowed[] = {
         "idle0", "tlbrd", "tlbclr", "tlbflush", "tlbsrch",
-        "tlbwr", "tlbfill", "dbar0", "dbar0x700", "nop"
+        "tlbwr", "tlbfill", "dbar0", "dbar0x700", "ibar0", "nop"
     };
     char compact[64];
     size_t i, n = 0U;
@@ -20,6 +20,13 @@ bool minic_loongarch64_qualified_opaque_asm(const MinicCoreInlineAsm *a) {
         a->template_length == 0U || a->template_length >= sizeof(compact) ||
         a->is_goto || a->register_clobber_count != 0U)
         return false;
+    /* Original Linux cache.c emits one tab-indented IBAR followed by LF.
+     * Accept that single literal opcode, never a newline-delimited program
+     * through the general compact/whitelist matcher below. */
+    if (a->template_length == sizeof("\tibar 0\n") - 1U &&
+        memcmp(a->template_text, "\tibar 0\n",
+               sizeof("\tibar 0\n") - 1U) == 0)
+        return true;
     for (i = 0U; i < a->template_length; ++i) {
         const char c = a->template_text[i];
         if (c == ' ' || c == '\t') continue;
@@ -37,7 +44,7 @@ bool minic_loongarch64_qualified_opaque_asm(const MinicCoreInlineAsm *a) {
  * generic scalar Core inline assembly. */
 bool minic_loongarch64_requires_qualified_input_asm(const MinicInlineAsm *src) {
     static const char *const reserved[] = {
-        "dbar", "amand_db.w", "amor_db.w", "amxor_db.w", "amadd_db.w",
+        "dbar", "cacop", "amand_db.w", "amor_db.w", "amxor_db.w", "amadd_db.w",
         "amand_db.d", "amor_db.d", "amxor_db.d", "amadd_db.d",
         "csrrd", "csrxchg", "1:ll.w", "1:ll.d", "sltu",
         "movgr2fcsr", "ldx.", "stx.", "amadd.", "amand.", "amor.",
@@ -317,6 +324,51 @@ static bool loongarch64_dbar_template(const char *text, size_t length) {
         if (text[i] != ' ' && text[i] != '\t')
             return false;
     }
+    return true;
+}
+
+/* Linux's cache flush uses an immediate cache opcode and a GNU ZC memory
+ * address. The memory operand provides the ADDRESS of the byte lvalue; the
+ * hardware CACOP, not a byte load or an ordinary compiler barrier, performs
+ * the cache operation. Refuse any additional instruction or modifier. */
+static bool loong_linux_cacop_form(const char *text, size_t length) {
+    static const char exact[] = "cacop%0,%1";
+    char compact[sizeof(exact)];
+    size_t i, n = 0U;
+    if (!text || !length) return false;
+    for (i = 0U; i < length; ++i) {
+        const char c = text[i];
+        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') continue;
+        if (c == ';' || c == '\0' || n + 1U >= sizeof(compact))
+            return false;
+        compact[n++] = c;
+    }
+    compact[n] = '\0';
+    return strcmp(compact, exact) == 0;
+}
+
+static bool loong_linux_cacop_source(
+    const MinicC0Program *program, const MinicInlineAsm *src,
+    MinicTargetInlineAsmContract *contract) {
+    const MinicExpression *opcode, *address;
+    if (!program || !src || !contract || !src->is_volatile || src->is_goto ||
+        !loong_linux_cacop_form(src->template_text, src->template_length) ||
+        src->output_count != 0U || src->input_count != 2U || !src->inputs ||
+        src->label_count != 0U || src->clobber_count != 0U ||
+        src->register_clobber_count != 0U || src->has_memory_clobber ||
+        !loong_csr_constraint(&src->inputs[0], "i") ||
+        !loong_csr_constraint(&src->inputs[1], "ZC"))
+        return false;
+    opcode = minic_c0_program_expression(program, src->inputs[0].expression);
+    address = minic_c0_program_expression(program, src->inputs[1].expression);
+    if (!opcode || !minic_type_is_integer(opcode->type) || !address ||
+        address->value_category != MINIC_VALUE_LVALUE ||
+        !minic_type_equal(address->type, minic_type_unsigned_char()))
+        return false;
+    contract->operand_count = 2U;
+    contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
+    contract->implicit_memory_effect = true;
     return true;
 }
 
@@ -2653,6 +2705,7 @@ bool minic_loongarch64_qualify_inline_asm(
     const MinicInlineAsmOperand *op;
     const MinicExpression *expr;
     if (loong_linux_clock_source(program, src, contract)) return true;
+    if (loong_linux_cacop_source(program, src, contract)) return true;
     if (loong_linux_vdso_source(program, src, contract)) return true;
     if (loong_linux_irq_switch_source(program, src, contract)) return true;
     if (loong_linux_frametrace_source(program, src, contract)) return true;
@@ -3109,6 +3162,46 @@ static bool loong_linux_xchg_small_emit(FILE *out,
     return true;
 }
 
+static bool loong_linux_cacop_emit(
+    FILE *out, const MinicDirectLP64BlockContext *ctx,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
+    const MinicCoreFunction *fn = ctx->fn;
+    const MinicCoreStructuredInlineAsmOperand *b =
+        ins->value.structured_inline_asm.operands;
+    const MinicCoreInstruction *def;
+    MinicCoreInstructionId definition;
+    MinicType pointee;
+    int64_t code;
+    if (!info->is_volatile || info->is_goto || !info->has_memory_clobber ||
+        info->register_clobber_count != 0U ||
+        ins->value.structured_inline_asm.operand_count != 2U ||
+        b[0].operand_index != 0U || b[1].operand_index != 1U ||
+        b[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
+        b[1].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT ||
+        b[0].early_clobber || b[1].early_clobber ||
+        b[0].has_fixed_register_binding || b[1].has_fixed_register_binding ||
+        b[0].value >= fn->value_count || b[1].value >= fn->value_count ||
+        !minic_type_is_integer(fn->values[b[0].value].type) ||
+        !minic_type_pointee(fn->values[b[1].value].type, &pointee) ||
+        !minic_type_equal(pointee, minic_type_unsigned_char()))
+        return false;
+    definition = fn->values[b[0].value].definition;
+    if (definition >= fn->instruction_count) return false;
+    def = &fn->instructions[definition];
+    if (def->kind != MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT ||
+        def->result != b[0].value)
+        return false;
+    code = def->value.integer_value;
+    /* The frozen Linux flush_cache_line selects six D-cache operations:
+     * (leaf | 0x08), leaf in 0..5. Never allow dynamic opcodes or a generic
+     * arbitrary-cache-operation assembler escape. */
+    if (code < 8 || code > 13) return false;
+    return minic_loongarch64_emit_frame_mem(
+               out, "ld.d", "$t0", (size_t)b[1].value * 8U,
+               ctx->dynamic_frame) &&
+           fprintf(out, "  cacop %lld, $t0, 0\n", (long long)code) >= 0;
+}
+
 bool minic_loongarch64_emit_qualified_structured_asm(
     FILE *out, const MinicDirectLP64BlockContext *ctx,
     const MinicCoreInstruction *ins) {
@@ -3120,6 +3213,8 @@ bool minic_loongarch64_emit_qualified_structured_asm(
         ins->value.structured_inline_asm.inline_asm_id >= ctx->fn->inline_asm_count)
         return false;
     info = &ctx->fn->inline_asms[ins->value.structured_inline_asm.inline_asm_id];
+    if (loong_linux_cacop_form(info->template_text, info->template_length))
+        return loong_linux_cacop_emit(out, ctx, ins, info);
     if (loong_linux_vdso_syscall_form(info->template_text, info->template_length))
         return loong_linux_vdso_emit(out, ctx, ins, info);
     {

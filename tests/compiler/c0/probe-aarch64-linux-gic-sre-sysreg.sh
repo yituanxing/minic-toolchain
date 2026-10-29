@@ -29,7 +29,9 @@ grep -Eq '^  ldr x9, \[sp, #[0-9]+\]$' "$work/mini.s" ||
     fail 'MSR incoming typed value not loaded into x9'
 
 # Three independent dangerous edits plus foreign target must fail closed.
-sed 's/((5) << 5)/((4) << 5)/g' "$fixture" >"$work/wrong-reg.c"
+# ICC_CTLR_EL1 (op2=4) is a real GICv3 write register admitted by the
+# full Linux GIC ISA catalog. Use reserved/non-catalog op2=6 instead.
+sed 's/((5) << 5)/((6) << 5)/g' "$fixture" >"$work/wrong-reg.c"
 sed 's/"rZ" (value)/"r" (value)/' "$fixture" >"$work/wrong-constraint.c"
 sed 's/\.purgem\\tmsr_s/.purgem\\tmsr_y/' \
     "$fixture" >"$work/wrong-macro.c"

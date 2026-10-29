@@ -10,6 +10,7 @@
 typedef struct MinicRiscvFunctionSymbol {
     const char *symbol_name;
     const char *section_name;
+    size_t explicit_alignment;
     MinicSymbolVisibility visibility;
     bool is_internal;
     bool is_weak;
@@ -29,6 +30,7 @@ static inline bool minic_riscv_function_symbol_from_function(const MinicFunction
     }
     symbol->symbol_name = symbol_name;
     symbol->section_name = function->section_name;
+    symbol->explicit_alignment = function->explicit_alignment;
     symbol->visibility = function->visibility;
     symbol->is_internal = function->is_internal;
     symbol->is_weak = function->is_weak;
@@ -95,6 +97,9 @@ minic_riscv_emit_function_symbol_begin(FILE *file, const MinicRiscvFunctionSymbo
             }
         }
     }
+    if (symbol->explicit_alignment != 0U &&
+        fprintf(file, ".balign %zu\n", symbol->explicit_alignment) < 0)
+        return false;
     return fprintf(file,
                    ".type %s, @function\n"
                    "%s:\n",

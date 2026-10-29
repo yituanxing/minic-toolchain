@@ -79,7 +79,9 @@ static bool x86_emit_function(FILE *out, const MinicC0Program *program,
         if (declaration->visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT &&
             (vis == NULL || fprintf(out, "%s %s\n", vis, name) < 0)) goto done;
     }
-    if (fprintf(out, ".type %s,@function\n%s:\n"
+    if ((declaration->explicit_alignment != 0U &&
+         fprintf(out, ".balign %zu\n", declaration->explicit_alignment) < 0) ||
+        fprintf(out, ".type %s,@function\n%s:\n"
                      "  pushq %%rbp\n  movq %%rsp, %%rbp\n", name, name) < 0)
         goto done;
     if (frame.frame_size != 0U &&

@@ -16,6 +16,8 @@ typedef struct MinicDirectLP64FunctionPlan {
     MinicLP64FramePlan frame_plan;
     MinicLP64CallPlanCache outgoing_calls;
     size_t frame_size;
+    size_t frame_alignment;
+    size_t saved_entry_sp_offset;
     size_t save_offset;
     size_t indirect_return_offset;
     bool has_indirect_return;

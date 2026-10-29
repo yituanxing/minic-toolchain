@@ -383,7 +383,8 @@ bool minic_loongarch64_emit_abi_instruction(
                     const size_t payload = bytes - chunk * 8U >= 8U
                         ? 8U : bytes - chunk * 8U;
                     if (!minic_loongarch64_emit_lp64_record_chunk_parameter(out,
-                            dst + chunk * 8U, payload, true, chunk, 0U, dynamic_frame))
+                            dst + chunk * 8U, payload, true, chunk, 0U,
+                            dynamic_frame, SIZE_MAX))
                         return false;
                 }
                 return true;
@@ -434,8 +435,13 @@ bool minic_loongarch64_emit_abi_instruction(
                         if (!emit_sp_mem(out, "st.d", gp_regs[location->gp_first + chunk],
                                          dst + chunk * 8U))
                             return false;
-                    } else if (!emit_sp_mem(out, "ld.d", "$t0",
-                                            frame + (location->stack_first + chunk - used) * 8U) ||
+                    } else if ((ctx->saved_entry_sp_offset != SIZE_MAX
+                                   ? !minic_loongarch64_emit_incoming_stack_mem(
+                                         out, "ld.d", "$t0",
+                                         (location->stack_first + chunk - used) * 8U,
+                                         ctx->saved_entry_sp_offset)
+                                   : !emit_sp_mem(out, "ld.d", "$t0",
+                                         frame + (location->stack_first + chunk - used) * 8U)) ||
                                !emit_sp_mem(out, "st.d", "$t0",
                                             dst + chunk * 8U))
                         return false;
@@ -461,8 +467,13 @@ bool minic_loongarch64_emit_abi_instruction(
                 const char *const store =
                     minic_lp64_register64_type(program, target, ins->type) ||
                     minic_type_is_double(ins->type) ? "st.d" : "st.w";
-                if (!emit_sp_mem(out, load, "$t0",
-                                 frame + location->stack_first * 8U) ||
+                if (!(ctx->saved_entry_sp_offset != SIZE_MAX
+                          ? minic_loongarch64_emit_incoming_stack_mem(
+                                out, load, "$t0",
+                                location->stack_first * 8U,
+                                ctx->saved_entry_sp_offset)
+                          : emit_sp_mem(out, load, "$t0",
+                                frame + location->stack_first * 8U)) ||
                     !emit_sp_mem(out, store, "$t0", offset))
                     return false;
             }

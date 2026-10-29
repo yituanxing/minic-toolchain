@@ -396,6 +396,9 @@ typedef struct MinicFunction {
     size_t assembler_name_length;
     char *section_name;
     size_t section_name_length;
+    /* GNU aligned(N) on a function is a symbol-entry alignment, independent
+     * of stack/object layout. Zero means the target's natural alignment. */
+    size_t explicit_alignment;
     MinicSymbolVisibility visibility;
     MinicType return_type;
     /* Owned exact-length parameter array. Stack/specialization snapshots
@@ -755,6 +758,9 @@ bool minic_c0_program_set_function_section(MinicC0Program *program,
                                            MinicFunctionId function_id,
                                            const char *name,
                                            size_t name_length);
+bool minic_c0_program_set_function_alignment(MinicC0Program *program,
+                                             MinicFunctionId function_id,
+                                             size_t alignment);
 bool minic_c0_program_set_function_variadic(MinicC0Program *program,
                                             MinicFunctionId function_id,
                                             bool is_variadic);

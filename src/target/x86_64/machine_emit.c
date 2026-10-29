@@ -813,8 +813,32 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
         bool signed_result;
         const char *opcode = NULL, *flag = NULL;
         if (!minic_core_integer_overflow_shape(
-                program, target, fn, ins, &width, &signed_result))
-            return false;
+                program, target, fn, ins, &width, &signed_result)) {
+            bool signed_left;
+            if (!minic_core_integer_overflow_mixed_add_i32_shape(
+                    program, target, fn, ins, &signed_left) ||
+                !x86_value_load(out, frame, lhs, "%rax") ||
+                !x86_value_load(out, frame, rhs, "%r10"))
+                return false;
+            /* GNU generic addition has infinite precision: unsigned64 plus
+             * signed32 can require 65 bits. Keep a signed high limb, carry
+             * from the low limb, and compare against sign-extended int32. */
+            if (fputs(signed_left
+                    ? "  movslq %eax, %rax\n  movq %rax, %r8\n"
+                      "  sarq $63, %r8\n"
+                    : "  movslq %r10d, %r10\n  movq %r10, %r8\n"
+                      "  sarq $63, %r8\n", out) == EOF ||
+                fputs("  addq %r10, %rax\n  adcq $0, %r8\n"
+                      "  movslq %eax, %r9\n  cmpq %r9, %rax\n"
+                      "  setne %r11b\n  sarq $63, %r9\n"
+                      "  cmpq %r9, %r8\n  setne %r8b\n"
+                      "  orb %r8b, %r11b\n", out) == EOF ||
+                !x86_value_load(out, frame, address, "%r10") ||
+                fputs("  movl %eax, (%r10)\n"
+                      "  movzbq %r11b, %rax\n", out) == EOF)
+                return false;
+            return x86_value_store(out, frame, ins->result);
+        }
         switch (ins->value.integer_overflow.operator_kind) {
         case MINIC_CORE_INTEGER_OVERFLOW_ADD:
             opcode = width == 8U ? "addq" : "addl";

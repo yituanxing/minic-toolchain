@@ -15,7 +15,8 @@ bool minic_lp64_frame_plan_objects_with_storage(
     MinicLP64FramePlan *plan) {
     size_t pos, i;
     if (program == NULL || target == NULL || fn == NULL || plan == NULL ||
-        fn->value_count > 32768U || fn->object_count > 8192U ||
+        !minic_lp64_baseline_values_fit_frame(fn->value_count) ||
+        fn->object_count > 8192U ||
         (fn->object_count != 0U && fn->objects == NULL) ||
         plan->object_offsets != NULL || plan->wide_offsets != NULL)
         return false;
@@ -33,15 +34,20 @@ bool minic_lp64_frame_plan_objects_with_storage(
     plan->object_count = fn->object_count;
     plan->value_count = fn->value_count;
     pos = fn->value_count * 8U;
+    plan->max_object_alignment = 1U;
     for (i = 0U; i < plan->object_storage.count; ++i) {
         const MinicCoreObjectStorage *storage = &plan->object_storage.objects[i];
         const size_t align = storage->alignment;
         const size_t extent = storage->extent;
-        if (align > 16U || extent > MINIC_LARGE_FRAME_MAX ||
+        /* The target prologue must actually realign its stable frame base
+         * when a GNU local needs more than the 16-byte public call ABI. */
+        if (align > 256U || extent > MINIC_LARGE_FRAME_MAX ||
             !minic_core_frame_reserve(&pos, align, extent,
                                       MINIC_LARGE_FRAME_MAX,
                                       &plan->object_offsets[i]))
             return false;
+        if (align > plan->max_object_alignment)
+            plan->max_object_alignment = align;
     }
     plan->object_end = pos;
     return true;
@@ -93,11 +99,15 @@ void minic_lp64_frame_plan_destroy(MinicLP64FramePlan *plan) {
  * Preserve existing ABI-specific bounds, offset and stack alignment. */
 bool minic_lp64_finalize_direct_frame(
     size_t object_end, bool has_calls, bool dynamic_frame, bool has_varargs,
-    MinicLP64DirectABI abi, size_t *save_offset, size_t *va_base,
+    size_t frame_alignment, MinicLP64DirectABI abi,
+    size_t *save_offset, size_t *va_base,
     size_t *frame_size) {
-    size_t save, required, frame, va = 0U;
+    size_t save, required, frame, va = 0U, slack;
     if (save_offset == NULL || frame_size == NULL ||
         object_end > MINIC_LARGE_FRAME_MAX ||
+        frame_alignment < 16U || frame_alignment > 256U ||
+        (frame_alignment & (frame_alignment - 1U)) != 0U ||
+        (frame_alignment > 16U && !dynamic_frame) ||
         (abi != MINIC_LP64_ABI_AAPCS64 &&
          abi != MINIC_LP64_ABI_LOONGARCH64_LP64D))
         return false;
@@ -108,16 +118,23 @@ bool minic_lp64_finalize_direct_frame(
         if (!minic_core_frame_align_up(save, 16U, &va)) return false;
         save = va + 224U;
     }
-    required = (has_calls ? 8U : 0U) + (dynamic_frame ? 8U : 0U);
+    required = (has_calls ? 8U : 0U) + (dynamic_frame ? 8U : 0U) +
+               (frame_alignment > 16U ? 8U : 0U);
     if (abi == MINIC_LP64_ABI_LOONGARCH64_LP64D && has_varargs)
         required += 64U;
     if (save > MINIC_LARGE_FRAME_MAX - required) return false;
     if (!minic_core_frame_align_up(save + required, 16U, &frame))
         return false;
-    /* Expose the rejected size for the existing opt-in FRAME_CAP trace. */
-    *frame_size = frame;
-    if (frame > MINIC_LARGE_FRAME_MAX) return false;
+    /* Entry SP only guarantees 16B. This slack bounds the upward rounding
+     * of the target's aligned fixed-frame base while keeping SP 16B. */
+    slack = frame_alignment - 16U;
+    if (frame > MINIC_LARGE_FRAME_MAX ||
+        slack > MINIC_LARGE_FRAME_MAX - frame) return false;
     *save_offset = save;
+    if (abi == MINIC_LP64_ABI_LOONGARCH64_LP64D && has_varargs)
+        va = frame - 64U;
     if (va_base != NULL) *va_base = va;
+    /* Expose the actual SP subtraction, including all alignment slack. */
+    *frame_size = frame + slack;
     return true;
 }

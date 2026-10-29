@@ -16,6 +16,8 @@ on:
       - "src/target/riscv64/**"
       - "tests/compiler/c0/probe-riscv-shared-word-operations.sh"
       - "tests/compiler/c0/probe-four-backend-dynamic-stack.sh"
+      - "tests/compiler/c0/probe-gnu-function-aligned-native.sh"
+      - "tests/compiler/c0/gnu_function_aligned.c"
       - "tests/compiler/c0/dynamic_stack_wide_spill.c"
       - "tests/compiler/c0/dynamic_stack_wide_spill_helper.c"
       - ".github/workflows/minic-runtime-fourarch.yml"
@@ -105,6 +107,8 @@ on:
       - "tests/compiler/c0/probe-x86-compiler-rt-native.sh"
       - "tests/compiler/c0/probe-lp64-compiler-rt-qemu.sh"
       - "tests/compiler/c0/probe-four-backend-dynamic-stack.sh"
+      - "tests/compiler/c0/probe-gnu-function-aligned-native.sh"
+      - "tests/compiler/c0/gnu_function_aligned.c"
       - "tests/compiler/c0/dynamic_stack_wide_spill.c"
       - "tests/compiler/c0/dynamic_stack_wide_spill_helper.c"
       - "tests/compiler/c0/probe-runtime-isnan.sh"
@@ -252,6 +256,12 @@ jobs:
         run: |
           set -Eeuo pipefail
           bash tests/compiler/c0/probe-gnu-empty-volatile-core-family.sh
+      - name: GNU function entry alignment (ELF native, four ISA declarations)
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash tests/compiler/c0/probe-gnu-function-aligned-native.sh \
+            "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc" "${{ matrix.target }}"
       - name: GNU original x86 Linux PREFETCHW CPU ALTERNATIVE native patch-table ELF verification
         if: matrix.target == 'x86_64'
         shell: bash

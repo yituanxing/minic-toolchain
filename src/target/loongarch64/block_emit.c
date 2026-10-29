@@ -30,7 +30,8 @@
 bool minic_loongarch64_emit_lp64_record_chunk_parameter(FILE *out, size_t offset,
                                               size_t bytes, bool in_reg,
                                               size_t gp, size_t incoming_offset,
-                                              bool dynamic_frame) {
+                                              bool dynamic_frame,
+                                              size_t saved_entry_sp_offset) {
     size_t b;
     if (bytes == 0U || bytes > 8U || (in_reg && gp >= 8U) ||
         fprintf(out, "  li.d $t2, %zu\n"
@@ -38,7 +39,11 @@ bool minic_loongarch64_emit_lp64_record_chunk_parameter(FILE *out, size_t offset
                 dynamic_frame ? "$s0" : "$sp") < 0 ||
         (in_reg
          ? fprintf(out, "  or $t0, $a%zu, $zero\n", gp) < 0
-         : !minic_loongarch64_emit_frame_mem(out, "ld.d", "$t0",
+         : saved_entry_sp_offset != SIZE_MAX
+             ? !minic_loongarch64_emit_incoming_stack_mem(
+                   out, "ld.d", "$t0", incoming_offset,
+                   saved_entry_sp_offset)
+             : !minic_loongarch64_emit_frame_mem(out, "ld.d", "$t0",
                            incoming_offset, dynamic_frame)))
         return false;
     for (b = 0U; b < bytes; ++b)
@@ -119,7 +124,8 @@ static bool minic_loongarch64_emit_record_load(FILE *out,
 bool minic_loongarch64_emit_parameter_object(FILE *out,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     const MinicLP64ArgumentPlan *incoming_plan,
-    const MinicLP64FramePlan *frame_plan, size_t frame, bool dynamic_frame) {
+    const MinicLP64FramePlan *frame_plan, size_t frame, bool dynamic_frame,
+    size_t saved_entry_sp_offset) {
 const MinicLP64ArgumentLocation *location;
             size_t size, slots, object_offset, k, chunk;
             if (!minic_multi_direct_parameter_object_location(
@@ -138,7 +144,12 @@ const MinicLP64ArgumentLocation *location;
             if (location->kind == MINIC_LP64_ARGUMENT_INDIRECT_RECORD) {
                 if ((location->gp_registers != 0U
                      ? fprintf(out, "  move $t0, $a%zu\n", location->gp_first) < 0
-                     : !emit_sp_mem(out, "ld.d", "$t0",
+                     : saved_entry_sp_offset != SIZE_MAX
+                         ? !minic_loongarch64_emit_incoming_stack_mem(
+                               out, "ld.d", "$t0",
+                               location->stack_first * 8U,
+                               saved_entry_sp_offset)
+                         : !emit_sp_mem(out, "ld.d", "$t0",
                                     frame + location->stack_first * 8U)) ||
                     fprintf(out, "  li.d $t1, %zu\n"
                                  "  add.d $t1, %s, $t1\n",
@@ -162,8 +173,9 @@ const MinicLP64ArgumentLocation *location;
                 if (!minic_loongarch64_emit_lp64_record_chunk_parameter(out,
                         object_offset + chunk * 8U, payload,
                         in_reg, in_reg ? location->gp_first + chunk : 0U,
-                        frame + stack_slot * 8U,
-                        dynamic_frame))
+                        saved_entry_sp_offset != SIZE_MAX
+                            ? stack_slot * 8U : frame + stack_slot * 8U,
+                        dynamic_frame, saved_entry_sp_offset))
                     return false;
             }
             return true;
@@ -233,7 +245,8 @@ bool minic_loongarch64_emit_terminator(FILE *out,
     size_t id, size_t block_id, const MinicLP64FramePlan *frame_plan,
     size_t frame, size_t save_offset, bool has_direct_calls,
     bool dynamic_frame, bool has_indirect_return,
-    size_t indirect_return_offset) {
+    size_t indirect_return_offset, size_t frame_alignment,
+    size_t saved_entry_sp_offset) {
         switch (block->terminator.kind) {
         case MINIC_CORE_TERMINATOR_RETURN:
             if (minic_type_is_record(fn->return_type)) {
@@ -287,12 +300,19 @@ bool minic_loongarch64_emit_terminator(FILE *out,
                                           ? "ld.d" : "ld.w", "$a0",
                                      (size_t)block->terminator.return_value * 8U))) ||
                 (has_direct_calls && !emit_sp_mem(out, "ld.d", "$ra", save_offset)) ||
-                (dynamic_frame &&
+                (frame_alignment > 16U &&
+                 (saved_entry_sp_offset == SIZE_MAX ||
+                  !minic_loongarch64_emit_frame_mem(out, "ld.d", "$t0",
+                      saved_entry_sp_offset, true) ||
+                  !minic_loongarch64_emit_frame_mem(out, "ld.d", "$t1",
+                      save_offset + (has_direct_calls ? 8U : 0U), true) ||
+                  fputs("  move $sp, $t0\n  move $s0, $t1\n", out) == EOF)) ||
+                (frame_alignment <= 16U && dynamic_frame &&
                  (fputs("  move $sp, $s0\n", out) == EOF ||
                   !minic_loongarch64_emit_frame_mem(out, "ld.d", "$s0",
-                                  save_offset + (has_direct_calls ? 8U : 0U),
-                                  false))) ||
-                (!minic_loongarch64_emit_sp_adjust(out, frame, true)) ||
+                      save_offset + (has_direct_calls ? 8U : 0U), false))) ||
+                (frame_alignment <= 16U &&
+                 !minic_loongarch64_emit_sp_adjust(out, frame, true)) ||
                 fputs("  ret\n", out) == EOF) return false;
             break;
         case MINIC_CORE_TERMINATOR_INDIRECT_BRANCH:
@@ -380,7 +400,8 @@ static bool loongarch64_machine_emit_family(
     case MINIC_DIRECT_MACHINE_PARAMETER_OBJECT:
         return minic_loongarch64_emit_parameter_object(
             out, fn, ins, ctx->incoming_plan, ctx->frame_plan,
-            ctx->frame, ctx->dynamic_frame);
+            ctx->frame, ctx->dynamic_frame,
+            ctx->saved_entry_sp_offset);
     case MINIC_DIRECT_MACHINE_MEMORY:
         return minic_loongarch64_emit_memory_instruction(
             out, program, target, fn, ins, ctx->frame_plan,
@@ -420,7 +441,8 @@ static bool loongarch64_machine_emit_terminator(
         out, ctx->program, ctx->target, ctx->fn,
         block, ctx->id, block_id, ctx->frame_plan, ctx->frame,
         ctx->save_offset, ctx->has_direct_calls, ctx->dynamic_frame,
-        ctx->has_indirect_return, ctx->indirect_return_offset);
+        ctx->has_indirect_return, ctx->indirect_return_offset,
+        ctx->frame_alignment, ctx->saved_entry_sp_offset);
 }
 
 bool minic_loongarch64_emit_core_blocks(

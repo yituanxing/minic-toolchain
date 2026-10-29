@@ -134,6 +134,49 @@ MinicCoreLowerStatus core_asm_try_target_register_contract(
             return status;
         }
     }
+    /* GNU operands are lowered left-to-right, but one operand may contain
+     * control flow (for example a conditional lvalue address). That moves the
+     * eventual ASM effect to a successor block. A prior local-object address
+     * is a pure frame-relative value; it must be rematerialized in the effect
+     * block instead of transporting its SSA ID across a CFG edge where Core
+     * does not promise it is available. Do not replay loads, arithmetic,
+     * volatile accesses or an arbitrary pointer expression: their evaluation
+     * order and side effects are observable. */
+    for (i = 0U; i < ins.value.structured_inline_asm.operand_count; ++i) {
+        MinicCoreStructuredInlineAsmOperand *bind =
+            &ins.value.structured_inline_asm.operands[i];
+        MinicCoreInstructionId definition;
+        const MinicCoreInstruction *producer;
+        const MinicCoreBlock *block;
+        size_t j;
+        bool already_in_effect_block = false;
+        if (bind->value >= ctx->function->value_count)
+            continue;
+        definition = ctx->function->values[bind->value].definition;
+        if (definition >= ctx->function->instruction_count) {
+            free(normalized);
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        producer = &ctx->function->instructions[definition];
+        if (producer->kind != MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS)
+            continue;
+        block = &ctx->function->blocks[ctx->block_id];
+        for (j = 0U; j < block->instruction_count; ++j) {
+            if (block->instructions[j] == definition) {
+                already_in_effect_block = true;
+                break;
+            }
+        }
+        if (!already_in_effect_block) {
+            MinicCoreInstruction local_address = *producer;
+            local_address.result = MINIC_CORE_VALUE_INVALID;
+            if (!minic_core_function_append_value_instruction(
+                    ctx->function, ctx->block_id, &local_address, &bind->value)) {
+                free(normalized);
+                return MINIC_CORE_LOWER_ERROR;
+            }
+        }
+    }
     /* The observable output makes even a GNU nonvolatile CPUID semantically
      * effectful. Conservatively do not optimize or discard it. */
     /* A target-qualified +Q/+ZB memory RMW is a hardware side effect even

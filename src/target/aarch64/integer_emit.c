@@ -192,8 +192,29 @@ bool minic_aarch64_emit_integer_instruction(
             size_t width;
             bool is_signed;
             if (!minic_core_integer_overflow_shape(
-                    program, target, fn, ins, &width, &is_signed))
-                return false;
+                    program, target, fn, ins, &width, &is_signed)) {
+                bool signed_left;
+                if (!minic_core_integer_overflow_mixed_add_i32_shape(
+                        program, target, fn, ins, &signed_left) ||
+                    fprintf(out, "  ldr x9, [sp, #%zu]\n"
+                                 "  ldr x10, [sp, #%zu]\n"
+                                 "  ldr x11, [sp, #%zu]\n",
+                            (size_t)lhs * 8U, (size_t)rhs * 8U,
+                            (size_t)address * 8U) < 0 ||
+                    fputs(signed_left
+                          ? "  sxtw x9, w9\n  asr x12, x9, #63\n"
+                          : "  sxtw x10, w10\n  asr x12, x10, #63\n",
+                          out) == EOF ||
+                    fputs("  adds x9, x9, x10\n  adc x12, x12, xzr\n"
+                          "  sxtw x13, w9\n  cmp x9, x13\n"
+                          "  cset w14, ne\n  asr x13, x13, #63\n"
+                          "  cmp x12, x13\n  cset w15, ne\n"
+                          "  orr w10, w14, w15\n  str w9, [x11]\n"
+                          "  mov w9, w10\n", out) == EOF)
+                    return false;
+                *needs_gp_store = true;
+                return true;
+            }
             const bool wide = width == 8U;
             const int op = ins->value.integer_overflow.operator_kind;
             if (fprintf(out, wide

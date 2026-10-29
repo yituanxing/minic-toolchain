@@ -70,6 +70,21 @@ bool minic_multi_direct_lp64_function_plan_prepare(
                 architecture_name, name, fn->value_count, fn->object_count);
         return false;
     }
+    plan->frame_alignment = plan->frame_plan.max_object_alignment > 16U
+        ? plan->frame_plan.max_object_alignment : 16U;
+    /* LoongArch's current linear va_list walks directly from the saved GARs
+     * into the caller's overflow area. An aligned local-frame gap breaks
+     * that contiguity; do not silently give such a function a wrong cursor. */
+    if (plan->frame_alignment > 16U && plan->variadic_count != 0U &&
+        abi == MINIC_LP64_ABI_LOONGARCH64_LP64D) {
+        plan->failed_stage = "variadic_frame_realign";
+        return false;
+    }
+    /* A local aligned above the public 16B stack guarantee requires a
+     * callee-saved fixed base and a saved unmodified entry SP. This also
+     * covers genuinely dynamic stack allocations in the same function. */
+    if (plan->frame_alignment > 16U)
+        plan->has_dynamic_stack = true;
     object_end = plan->frame_plan.object_end;
     plan->failed_stage = "binary128_layout";
     if (!minic_core_frame_align_up(object_end, 16U, &ld_base))
@@ -113,7 +128,7 @@ bool minic_multi_direct_lp64_function_plan_prepare(
     plan->failed_instruction = SIZE_MAX;
     if (!minic_lp64_finalize_direct_frame(
             object_end, plan->has_calls, plan->has_dynamic_stack,
-            plan->variadic_count != 0U, abi,
+            plan->variadic_count != 0U, plan->frame_alignment, abi,
             &plan->save_offset, &plan->variadic_save_base,
             &plan->frame_size)) {
         if (getenv("MINIC_M1_TRACE") != NULL &&
@@ -123,6 +138,9 @@ bool minic_multi_direct_lp64_function_plan_prepare(
                 architecture_name, name, plan->frame_size, object_end);
         return false;
     }
+    plan->saved_entry_sp_offset = plan->frame_alignment > 16U
+        ? plan->save_offset + (plan->has_calls ? 8U : 0U) + 8U
+        : SIZE_MAX;
     plan->failed_stage = NULL;
     return true;
 }

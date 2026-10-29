@@ -19,19 +19,43 @@ static bool aarch64_emit_prologue(
     const size_t save_offset = ctx->save_offset;
     const bool has_calls = ctx->has_direct_calls;
     const bool dynamic_frame = ctx->dynamic_frame;
+    const bool realigned = ctx->frame_alignment > 16U;
     size_t i;
+    if (realigned && (!dynamic_frame ||
+        ctx->frame_alignment > 256U ||
+        (ctx->frame_alignment & (ctx->frame_alignment - 1U)) != 0U ||
+        ctx->saved_entry_sp_offset == SIZE_MAX))
+        goto fail;
+    /* Entry SP is guaranteed only 16B by AAPCS64. Preserve both the
+     * original incoming stack address and callee-owned x19 before changing
+     * SP, then align a stable local frame base with the reserved slack. */
+    if (realigned && fputs("  mov x14, x19\n  mov x15, sp\n", out) == EOF)
+        goto fail;
     if (frame != 0U &&
         (fprintf(out, "  movz x12, #%zu\n", frame & 65535U) < 0 ||
          (frame > 65535U &&
           fprintf(out, "  movk x12, #%zu, lsl #16\n", frame >> 16U) < 0) ||
          fputs("  sub sp, sp, x12\n", out) == EOF))
         goto fail;
-    if (has_calls && fprintf(out, "  str x30, [sp, #%zu]\n",
-                             save_offset) < 0)
+    if (realigned) {
+        if (fprintf(out, "  add x9, sp, #%zu\n"
+                         "  and x9, x9, #-%zu\n"
+                         "  mov x19, x9\n",
+                    ctx->frame_alignment - 1U,
+                    ctx->frame_alignment) < 0 ||
+            fprintf(out, "  str x14, [x19, #%zu]\n"
+                         "  str x15, [x19, #%zu]\n",
+                    save_offset + (has_calls ? 8U : 0U),
+                    ctx->saved_entry_sp_offset) < 0 ||
+            (has_calls && fprintf(out, "  str x30, [x19, #%zu]\n",
+                                  save_offset) < 0))
+            goto fail;
+    } else if (has_calls && fprintf(out, "  str x30, [sp, #%zu]\n",
+                                      save_offset) < 0)
         goto fail;
     /* x19 is the AAPCS64 callee-saved stable frame anchor when alloca
      * moves sp. Call arguments still use the live outgoing sp area. */
-    if (dynamic_frame &&
+    if (dynamic_frame && !realigned &&
         (fprintf(out, "  str x19, [sp, #%zu]\n",
                  save_offset + (has_calls ? 8U : 0U)) < 0 ||
          fputs("  mov x19, sp\n", out) == EOF))
