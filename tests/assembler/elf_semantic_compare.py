@@ -13,32 +13,117 @@ IGNORE_SECTION_NAMES = {".symtab", ".strtab", ".shstrtab"}
 R_RISCV_ALIGN = 43
 R_RISCV_RELAX = 51
 
-# Widths mask only fields the linker will rewrite. The numeric relocation
-# namespace is machine-specific: a RISC-V type number is not an x86/ARM type.
-# Unrecognized widths make the strict verdict INCONCLUSIVE, never equal.
-RISC_V_RELOC_WIDTH = {
-    1: 4, 2: 8,
-    16: 4, 17: 4, 18: 8, 19: 8,
-    20: 4, 21: 4, 22: 4, 23: 4, 24: 4, 25: 4,
-    26: 4, 27: 4, 28: 4, 29: 4, 30: 4, 31: 4, 32: 4,
-    33: 1, 34: 2, 35: 4, 36: 8,
-    37: 1, 38: 2, 39: 4, 40: 8,
-    44: 2, 45: 2, 46: 2,
-    47: 4, 48: 4, 49: 4, 50: 4,
-    52: 1, 53: 1, 54: 1, 55: 2, 56: 4, 57: 4,
-    59: 4, 62: 4, 63: 4, 64: 4, 65: 4,
+# A relocation may rewrite *bits of an instruction*, not all bytes occupied
+# by that instruction. Masking the whole R_RISCV_BRANCH word would silently
+# equate BEQ and BNE; masking an AArch64 ADRP word would hide its destination
+# register. Every entry below is a tuple of (byte displacement, field width
+# in bytes, bit mask inside the field). The mask names ONLY linker-modified
+# bits. Types absent from a machine table make the verdict INCONCLUSIVE.
+#
+# Sources: RISC-V ELF psABI §Relocations, ARM AAELF64 §5.7, LoongArch ELF ABI
+# §Relocations, and the x86-64 ELF ABI relocation definitions in elf.h.
+# https://github.com/riscv-non-isa/riscv-elf-psabi-doc/blob/master/riscv-elf.adoc
+# https://github.com/ARM-software/abi-aa/blob/main/aaelf64/aaelf64.rst
+# https://github.com/loongson/LoongArch-Documentation/blob/main/docs/LoongArch-ELF-ABI-EN.adoc
+def data_field(size):
+    return ((0, size, (1 << (size * 8)) - 1),)
+
+
+def instruction_field(mask):
+    return ((0, 4, mask),)
+
+
+RV_U = instruction_field(0xfffff000)
+RV_I = instruction_field(0xfff00000)
+RV_S = instruction_field(0xfe000f80)
+RV_B = RV_S  # B-type and S-type scatter to the same instruction bit positions.
+RV_J = instruction_field(0xfffff000)
+RV_CALL = ((0, 4, 0xfffff000), (4, 4, 0xfff00000))
+LA_LO12 = instruction_field(0x003ffc00)
+LA_HI20 = instruction_field(0x01ffffe0)
+
+RISC_V_RELOC_FIELDS = {
+    0: (), 1: data_field(4), 2: data_field(8),
+    **{t: RV_B for t in (16,)},
+    17: RV_J, 18: RV_CALL, 19: RV_CALL,
+    **{t: RV_U for t in (20, 21, 22, 23, 26, 29, 62)},
+    **{t: RV_I for t in (24, 27, 30, 63, 64)},
+    **{t: RV_S for t in (25, 28, 31)},
+    32: (),  # TPREL_ADD annotates ADD: the linker changes no instruction bits.
+    **{t: data_field(n) for t, n in {
+        33: 1, 34: 2, 35: 4, 36: 8,
+        37: 1, 38: 2, 39: 4, 40: 8,
+        41: 4, 54: 1, 55: 2, 56: 4, 57: 4, 59: 4,
+    }.items()},
+    44: ((0, 2, 0x1c7c),),  # RVC CB-Type immediate, retain rs1'/opcode.
+    45: ((0, 2, 0x1ffc),),  # RVC CJ-Type immediate, retain funct3/opcode.
+    52: ((0, 1, 0x3f),), 53: ((0, 1, 0x3f),),  # SUB6 / SET6.
+    65: (),  # TLSDESC_CALL is a relaxation marker, not a patched field.
 }
-RELOC_WIDTH_BY_MACHINE = {
-    "EM_RISCV": RISC_V_RELOC_WIDTH,
-    "EM_X86_64": {1: 8, 2: 4, 3: 4, 4: 4, 9: 4, 10: 4,
-                  11: 4, 12: 2, 13: 2, 14: 1, 15: 1, 24: 8,
-                  25: 8, 26: 4, 27: 8, 28: 8, 32: 4, 33: 8,
-                  34: 4, 35: 4, 36: 8, 41: 4, 42: 4},
-    # Grow these from GNU external oracles, not by guessing a relocation's
-    # field width. All other A64/Loong relocations are explicitly unknown.
-    "EM_AARCH64": {257: 8, 258: 4, 259: 2, 260: 8, 261: 4, 262: 2,
-                   275: 4, 277: 4, 278: 4, 282: 4, 283: 4},
-    "EM_LOONGARCH": {1: 1, 2: 2, 3: 4, 4: 8, 5: 4, 6: 8},
+
+X86_RELOC_FIELDS = {
+    0: (),
+    **{t: data_field(n) for t, n in {
+        1: 8, 2: 4, 3: 4, 4: 4, 9: 4, 10: 4, 11: 4,
+        12: 2, 13: 2, 14: 1, 15: 1,
+        16: 8, 17: 8, 18: 8, 19: 4, 20: 4, 21: 4, 22: 4, 23: 4,
+        24: 8, 25: 8, 26: 4, 27: 8, 28: 8, 29: 8, 30: 8, 31: 8,
+        32: 4, 33: 8, 34: 4, 36: 8, 41: 4, 42: 4,
+    }.items()},
+    35: (),  # R_X86_64_TLSDESC_CALL marker; preserve the complete CALL.
+}
+
+A64_MOVW = instruction_field(0x001fffe0)  # 16-bit immediate at [20:5].
+A64_SIGNED_MOVW = instruction_field(0x401fffe0)  # MOVN/MOVZ selection too.
+A64_ADR = instruction_field(0x60ffffe0)  # immlo [30:29], immhi [23:5].
+A64_LO12 = instruction_field(0x003ffc00)  # imm12 [21:10].
+AARCH64_RELOC_FIELDS = {
+    0: (), 256: (),
+    **{t: data_field(n) for t, n in {
+        257: 8, 258: 4, 259: 2, 260: 8, 261: 4, 262: 2, 314: 4,
+    }.items()},
+    **{t: A64_MOVW for t in (263, 264, 265, 266, 267, 268, 269,
+                             288, 290)},
+    **{t: A64_SIGNED_MOVW for t in (270, 271, 272, 287, 289, 291)},
+    273: instruction_field(0x00ffffe0),  # LDR literal [23:5].
+    274: A64_ADR, 275: A64_ADR, 276: A64_ADR,
+    277: A64_LO12, 278: A64_LO12,
+    279: instruction_field(0x0007ffe0),  # test-and-branch imm14 [18:5].
+    280: instruction_field(0x00ffffe0),  # conditional branch imm19 [23:5].
+    282: instruction_field(0x03ffffff),
+    283: instruction_field(0x03ffffff),
+    **{t: A64_LO12 for t in (284, 285, 286, 299)},
+}
+
+LOONGARCH_RELOC_FIELDS = {
+    0: (), 1: data_field(4), 2: data_field(8),
+    6: data_field(4), 7: data_field(8), 8: data_field(4),
+    9: data_field(8), 10: data_field(4), 11: data_field(8),
+    **{t: () for t in range(20, 38)},
+    38: instruction_field(0x00007c00),
+    **{t: LA_LO12 for t in (39, 40, 68, 70, 72, 74, 76, 78, 80, 82, 84)},
+    41: instruction_field(0x03fffc00),
+    42: instruction_field(0x03fffc00),
+    43: LA_HI20,
+    44: instruction_field(0x03fffc1f),
+    45: instruction_field(0x03ffffff),
+    46: data_field(4),
+    **{t: data_field(n) for t, n in {
+        47: 1, 48: 2, 49: 3, 50: 4, 51: 8,
+        52: 1, 53: 2, 54: 3, 55: 4, 56: 8,
+    }.items()},
+    57: (), 58: (),
+    64: instruction_field(0x03fffc00),
+    65: instruction_field(0x03fffc1f),
+    66: instruction_field(0x03ffffff),
+    **{t: LA_HI20 for t in (67, 69, 71, 73, 75, 77, 79, 81, 83)},
+}
+
+RELOC_FIELDS_BY_MACHINE = {
+    "EM_RISCV": RISC_V_RELOC_FIELDS,
+    "EM_X86_64": X86_RELOC_FIELDS,
+    "EM_AARCH64": AARCH64_RELOC_FIELDS,
+    "EM_LOONGARCH": LOONGARCH_RELOC_FIELDS,
 }
 
 
@@ -153,7 +238,7 @@ def relocation_counter(elf, section_keys):
     unknown_width = collections.defaultdict(list)
 
     machine = str(elf.header["e_machine"])
-    widths = RELOC_WIDTH_BY_MACHINE.get(machine, {})
+    fields = RELOC_FIELDS_BY_MACHINE.get(machine, {})
     for sec in elf.iter_sections():
         if not isinstance(sec, RelocationSection):
             continue
@@ -165,16 +250,20 @@ def relocation_counter(elf, section_keys):
             typ = int(rel["r_info_type"])
             offset = int(rel["r_offset"])
             addend = int(rel["r_addend"]) if is_rela else 0
+            if not is_rela:
+                unknown_width[target_name].append(
+                    (offset, typ, "REL-implicit-addend-not-decoded"))
             if machine == "EM_RISCV" and typ == R_RISCV_RELAX:
                 # RELAX is a linker optimization hint, not required for the
                 # unrelaxed object's functional semantics.
                 continue
             if machine == "EM_RISCV" and typ == R_RISCV_ALIGN:
                 # GNU as may reserve relaxable alignment padding and let the
-                # linker delete excess bytes. MiniAS currently commits the
-                # final padding in the object, so ALIGN is optional metadata.
+                # linker delete excess bytes. Treat only verified NOP bytes
+                # as linker-discardable: masking arbitrary bytes here would
+                # hide a changed instruction in executable code.
                 if addend > 0:
-                    masks[target_name].append((offset, offset + addend))
+                    masks[target_name].append((offset, addend, None))
                 continue
 
             sym = symtab.get_symbol(int(rel["r_info_sym"]))
@@ -183,11 +272,18 @@ def relocation_counter(elf, section_keys):
                 sym_key = ("NONE",)
             out[(target_name, offset, typ, sym_key, addend)] += 1
 
-            width = widths.get(typ)
-            if width:
-                masks[target_name].append((offset, offset + width))
+            # ELF REL records its addend in the section bytes, not r_addend.
+            # Without decoding its target-specific field, treating REL as a
+            # zero-addend RELA could call two different relocations equal.
+            if not is_rela:
+                continue
+            if typ in fields:
+                masks[target_name].extend(
+                    (offset + displacement, width, bitmask)
+                    for displacement, width, bitmask in fields[typ])
             else:
-                unknown_width[target_name].append((offset, typ))
+                unknown_width[target_name].append(
+                    (offset, typ, "unknown-target-relocation-fields"))
 
     return out, masks, unknown_width
 
@@ -236,12 +332,40 @@ def alignment_compatible(reference, candidate):
     return True
 
 
-def masked_bytes(data, ranges):
+def riscv_alignment_nops(data, little_endian):
+    """The only NOP encodings GAS uses for R_RISCV_ALIGN padding."""
+    byteorder = "little" if little_endian else "big"
+    offset = 0
+    while offset < len(data):
+        if (offset + 4 <= len(data) and
+                int.from_bytes(data[offset:offset + 4], byteorder) == 0x00000013):
+            offset += 4  # addi zero,zero,0
+        elif (offset + 2 <= len(data) and
+              int.from_bytes(data[offset:offset + 2], byteorder) == 0x0001):
+            offset += 2  # c.nop
+        else:
+            return False
+    return True
+
+
+def masked_bytes(data, ranges, little_endian):
     b = bytearray(data)
-    for start, end in ranges:
-        start = max(0, min(len(b), start))
-        end = max(start, min(len(b), end))
-        b[start:end] = b"\x00" * (end - start)
+    byteorder = "little" if little_endian else "big"
+    for start, width, bitmask in ranges:
+        end = start + width
+        if start < 0 or width < 0 or end > len(b):
+            raise ValueError("relocation field extends outside target section")
+        if bitmask is None:
+            # The only whole-range suppression is an R_RISCV_ALIGN area,
+            # whose original bytes MUST first be verified as legal NOPs.
+            if not riscv_alignment_nops(data[start:end], little_endian):
+                raise ValueError("R_RISCV_ALIGN covers non-NOP source bytes")
+            b[start:end] = b"\x00" * width
+            continue
+        if bitmask < 0 or bitmask >= (1 << (8 * width)):
+            raise ValueError("invalid target relocation bit mask")
+        value = int.from_bytes(b[start:end], byteorder)
+        b[start:end] = (value & ~bitmask).to_bytes(width, byteorder)
     return bytes(b)
 
 
@@ -252,13 +376,24 @@ def comparable_contents(elf, section_keys, masks, unknown_width):
         name = sec.name
         if name in IGNORE_SECTION_NAMES or isinstance(sec, RelocationSection):
             continue
-        if str(sec["sh_type"]) != "SHT_PROGBITS":
+        kind = str(sec["sh_type"])
+        if kind in ("SHT_NOBITS", "SHT_NULL", "SHT_GROUP"):
+            # NOBITS has no file-backed content; GROUP is normalized above
+            # by signature and membership, not raw section-header indices.
             continue
         key = section_keys[index]
+        if kind == "SHT_SYMTAB_SHNDX":
+            # This table encodes ELF section indices tied to symtab order.
+            # Until it is symbolically normalized, never assert equality.
+            skipped[key] = [(0, "SHT_SYMTAB_SHNDX", "unsupported-index-table")]
+            continue
         if unknown_width.get(key):
             skipped[key] = list(unknown_width[key])
             continue
-        data = masked_bytes(sec.data(), masks.get(key, []))
+        # Include SHT_NOTE, init/fini/preinit arrays, RISC-V attributes and
+        # all other file-backed section types. Type and size alone cannot
+        # certify their contents; many affect loader/linker behavior.
+        data = masked_bytes(sec.data(), masks.get(key, []), elf.little_endian)
         out[key] = {
             "size": len(data),
             "sha256": hashlib.sha256(data).hexdigest(),
@@ -316,11 +451,16 @@ def compare_paths(reference_path, candidate_path):
     }
     strict_alignment = reference["section_alignment"] == candidate["section_alignment"]
 
+    compatible_equal = all(dimensions.values())
     result = {
         "reference": str(Path(reference_path)),
         "candidate": str(Path(candidate_path)),
-        "equal": all(dimensions.values()),
-        "strict_equal": all(dimensions.values()) and strict_alignment,
+        "equal": compatible_equal,  # Historical compatible-alignment verdict.
+        "compatible_equal": compatible_equal,
+        "strict_equal": compatible_equal and strict_alignment,
+        "alignment_verdict": ("exact" if strict_alignment else
+                              "compatible" if dimensions["section_alignment_compatible"]
+                              else "incompatible"),
         "inconclusive": not dimensions["known_relocation_widths"],
         "dimensions": dimensions,
         "strict_section_alignment": strict_alignment,

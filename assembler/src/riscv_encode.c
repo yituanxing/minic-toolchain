@@ -1,5 +1,6 @@
 #include "minias_internal.h"
 #include "riscv_fixup_kinds.h"
+#include "riscv_profile.h"
 #include "riscv_target.h"
 
 #include <ctype.h>
@@ -838,42 +839,48 @@ typedef struct RvMCDesc {
     const char *name;
     unsigned family;
     uint32_t base;
+    uint64_t required_features;
+    bool rv64_only;
 } RvMCDesc;
-#define RVD(name, group, base) {name, RV_MC_##group, base}
+#define RVD(name, group, base) {name, RV_MC_##group, base, 0U, false}
+#define RVM(name, group, base) {name, RV_MC_##group, base, RISCV_ISA_M, false}
+#define RVM64(name, group, base) {name, RV_MC_##group, base, RISCV_ISA_M, true}
+#define RV64(name, group, base) {name, RV_MC_##group, base, 0U, true}
+#define RVZ(name, group, base) {name, RV_MC_##group, base, RISCV_ISA_ZBB, false}
 static const RvMCDesc rv_mc_table[] = {
     RVD("add",R,0x00000033U), RVD("sub",R,0x40000033U),
     RVD("sll",R,0x00001033U), RVD("slt",R,0x00002033U),
     RVD("sltu",R,0x00003033U), RVD("xor",R,0x00004033U),
     RVD("srl",R,0x00005033U), RVD("sra",R,0x40005033U),
     RVD("or",R,0x00006033U), RVD("and",R,0x00007033U),
-    RVD("mul",R,0x02000033U), RVD("mulh",R,0x02001033U),
-    RVD("mulhu",R,0x02003033U), RVD("div",R,0x02004033U),
-    RVD("divu",R,0x02005033U), RVD("rem",R,0x02006033U),
-    RVD("remu",R,0x02007033U),
-    RVD("addw",R,0x0000003bU), RVD("subw",R,0x4000003bU),
-    RVD("sllw",R,0x0000103bU), RVD("srlw",R,0x0000503bU),
-    RVD("sraw",R,0x4000503bU),
-    RVD("mulw",R,0x0200003bU), RVD("divw",R,0x0200403bU),
-    RVD("divuw",R,0x0200503bU), RVD("remw",R,0x0200603bU),
-    RVD("remuw",R,0x0200703bU),
+    RVM("mul",R,0x02000033U), RVM("mulh",R,0x02001033U),
+    RVM("mulhu",R,0x02003033U), RVM("div",R,0x02004033U),
+    RVM("divu",R,0x02005033U), RVM("rem",R,0x02006033U),
+    RVM("remu",R,0x02007033U),
+    RV64("addw",R,0x0000003bU), RV64("subw",R,0x4000003bU),
+    RV64("sllw",R,0x0000103bU), RV64("srlw",R,0x0000503bU),
+    RV64("sraw",R,0x4000503bU),
+    RVM64("mulw",R,0x0200003bU), RVM64("divw",R,0x0200403bU),
+    RVM64("divuw",R,0x0200503bU), RVM64("remw",R,0x0200603bU),
+    RVM64("remuw",R,0x0200703bU),
     RVD("sgt",R,0x00002033U), RVD("sgtu",R,0x00003033U),
-    RVD("addi",I,0x00000013U), RVD("addiw",I,0x0000001bU),
+    RVD("addi",I,0x00000013U), RV64("addiw",I,0x0000001bU),
     RVD("slti",I,0x00002013U), RVD("sltiu",I,0x00003013U),
     RVD("xori",I,0x00004013U), RVD("ori",I,0x00006013U),
     RVD("andi",I,0x00007013U),
     RVD("slli",I,0x00001013U), RVD("srli",I,0x00005013U),
     RVD("srai",I,0x40005013U),
-    RVD("slliw",I,0x0000101bU), RVD("srliw",I,0x0000501bU),
-    RVD("sraiw",I,0x4000501bU),
-    RVD("sext.w",I,0x0000001bU),
-    RVD("orc.b",I,0x28705013U), RVD("rev8",I,0x6b805013U),
-    RVD("ctz",I,0x60101013U),
+    RV64("slliw",I,0x0000101bU), RV64("srliw",I,0x0000501bU),
+    RV64("sraiw",I,0x4000501bU),
+    RV64("sext.w",I,0x0000001bU),
+    RVZ("orc.b",I,0x28705013U), RVZ("rev8",I,0x6b805013U),
+    RVZ("ctz",I,0x60101013U),
     RVD("lb",LOAD,0x00000003U), RVD("lh",LOAD,0x00001003U),
-    RVD("lw",LOAD,0x00002003U), RVD("ld",LOAD,0x00003003U),
+    RVD("lw",LOAD,0x00002003U), RV64("ld",LOAD,0x00003003U),
     RVD("lbu",LOAD,0x00004003U), RVD("lhu",LOAD,0x00005003U),
-    RVD("lwu",LOAD,0x00006003U),
+    RV64("lwu",LOAD,0x00006003U),
     RVD("sb",STORE,0x00000023U), RVD("sh",STORE,0x00001023U),
-    RVD("sw",STORE,0x00002023U), RVD("sd",STORE,0x00003023U),
+    RVD("sw",STORE,0x00002023U), RV64("sd",STORE,0x00003023U),
     RVD("lui",U,0x00000037U), RVD("auipc",U,0x00000017U),
     RVD("beq",BRANCH,0x00000063U), RVD("bne",BRANCH,0x00001063U),
     RVD("blt",BRANCH,0x00004063U), RVD("bge",BRANCH,0x00005063U),
@@ -885,7 +892,35 @@ static const RvMCDesc rv_mc_table[] = {
     RVD("bgtu",BRANCH,0x00006063U), RVD("bleu",BRANCH,0x00007063U),
     RVD("j",JAL,0x0000006fU), RVD("jal",JAL,0x0000006fU)
 };
+#undef RVM
+#undef RVM64
+#undef RV64
+#undef RVZ
 #undef RVD
+
+static const RvMCDesc *rv_find_mc_descriptor(const char *mnemonic) {
+    size_t index;
+    for (index = 0U; index < sizeof(rv_mc_table) / sizeof(rv_mc_table[0]);
+         ++index)
+        if (strcmp(mnemonic, rv_mc_table[index].name) == 0)
+            return &rv_mc_table[index];
+    return NULL;
+}
+
+bool minias_riscv_mc_descriptor_policy(const char *mnemonic,
+                                       uint64_t *required_features,
+                                       bool *rv64_only,
+                                       unsigned *family) {
+    const RvMCDesc *descriptor = rv_find_mc_descriptor(mnemonic);
+    if (descriptor == NULL) return false;
+    if (required_features != NULL)
+        *required_features = descriptor->required_features;
+    if (rv64_only != NULL)
+        *rv64_only = descriptor->rv64_only;
+    if (family != NULL)
+        *family = descriptor->family;
+    return true;
+}
 
 
 /* A fixed-width typed instruction has no layout dependence on its operand
@@ -1397,10 +1432,10 @@ invalid:
                      op,stmt->args,stmt->line);
     return false;
 }
-bool minias_riscv_parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
-    const RvMCDesc *desc = NULL;
+static bool rv_parse_mcinst_impl(MiniAs *as, MiniAsStmt *stmt) {
+    const RvMCDesc *desc;
     char operands[8][128];
-    size_t count, i;
+    size_t count;
     int rd = -1, rs1 = -1, rs2 = -1;
     int64_t imm = 0;
     bool is_imm = false;
@@ -1410,12 +1445,7 @@ bool minias_riscv_parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
     char base[128];
     const char *op = stmt->op;
 
-    for (i = 0U; i < sizeof(rv_mc_table) / sizeof(rv_mc_table[0]); ++i) {
-        if (strcmp(op, rv_mc_table[i].name) == 0) {
-            desc = &rv_mc_table[i];
-            break;
-        }
-    }
+    desc = rv_find_mc_descriptor(op);
     if (desc == NULL) {
         bool handled;
         if(!split_operands(stmt->args,operands,8U,&count))goto invalid;
@@ -1631,6 +1661,34 @@ invalid:
 oom:
     minias_set_error(as,"out-of-memory:riscv-mcinst");
     return false;
+}
+
+/* The E ABI removes integer registers x16..x31, not symbols spelled a6,
+ * s2, t3 or x16. All instruction forms, including aliases, CSR, vector,
+ * FP and multiword pseudos, retain their actual register operands in MCInst.
+ * Check those typed operands after parsing, never a lexical sweep over the
+ * original assembly text. EF_RVE=8 also covers -mabi=ilp32e without -march. */
+bool minias_riscv_parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
+    const MiniAsRiscvState *state = MINIAS_RV_STATE(as);
+    const MiniAsMCInst *inst;
+    size_t index;
+
+    if (!rv_parse_mcinst_impl(as, stmt)) return false;
+    if (state == NULL ||
+        ((state->isa_features & RISCV_ISA_E) == 0U &&
+         (as->elf_flags & 8U) == 0U)) return true;
+    inst = stmt->mcinst;
+    if (inst == NULL) return true; /* Unrecognized mnemonic fails at measure. */
+    for (index = 0U; index < inst->count; ++index) {
+        const MiniAsMCOperand *operand = &inst->operands[index];
+        if (operand->kind == MINIAS_MC_REGISTER &&
+            operand->reg_class == MINIAS_MC_REG_GPR && operand->reg >= 16U) {
+            minias_set_error(as, "riscv32e-invalid-register:%s:line=%zu",
+                             stmt->op, stmt->line);
+            return false;
+        }
+    }
+    return true;
 }
 
 

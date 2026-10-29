@@ -36,6 +36,10 @@ jobs:
           test -x build/release/bin/minic-as
       - name: Enforce ISA-private fixup and MC emission ownership
         run: bash tests/assembler/probe-mc-target-boundary.sh
+      - name: RV32E validates parsed GPRs without treating symbols as registers
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-rv32e-typed-registers.sh
       - name: Reject false-green immutable Linux seven-shard manifests
         run: bash tests/assembler/probe-minias-acceptance-gates.sh
       - name: Verify MCLayout validates source-ordered fragments and stable anchors
@@ -205,6 +209,10 @@ jobs:
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-aarch64-retained-delta.sh
+      - name: GNU AArch64 typed literal pool mixed-width identity and relocation
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-aarch64-literal-pool-order.sh
       - name: GNU AArch64 fixed .org and forward DATA layout
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=aarch64 \

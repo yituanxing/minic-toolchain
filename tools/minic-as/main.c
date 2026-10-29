@@ -1,19 +1,23 @@
 #include "minias.h"
-#include "minias_internal.h"
 #include <stdio.h>
 #include <string.h>
 
 static void usage(FILE *out, const char *name) {
-    fprintf(out, "usage: %s [--target=riscv|aarch64|x86_64|loongarch64] "
-            "[-march=ISA] [-mabi=ABI] -o OUTPUT INPUT.s\n", name);
+    size_t i;
+    fprintf(out, "usage: %s [--target=", name);
+    for (i = 0U; i < minias_supported_target_count(); ++i) {
+        const char *target = minias_supported_target_name(i);
+        if (target == NULL) continue;
+        if (i != 0U) fputc('|', out);
+        fputs(target, out);
+    }
+    fputs("] [-march=ISA] [-mabi=ABI] -o OUTPUT INPUT.s\n", out);
 }
 
 int main(int argc, char **argv) {
     const char *input = NULL, *output = NULL;
     const char *march = NULL, *mabi = NULL, *target_name = "riscv";
-    const MiniAsTargetOps *target;
-    MiniAsAssemblyConfig config;
-    char error[256] = {0};
+    MiniAsInvocation invocation;
     int i;
 
     for (i = 1; i < argc; ++i) {
@@ -45,21 +49,8 @@ int main(int argc, char **argv) {
         return 2;
     }
 
-    target = minias_find_target(target_name);
-    if (target == NULL) {
-        fprintf(stderr, "minic-as: unsupported-target:%s\n", target_name);
-        return 2;
-    }
-    if (target->resolve_profile == NULL ||
-        !target->resolve_profile(march, mabi, &config,
-                                 error, sizeof(error))) {
-        fprintf(stderr, "minic-as: %s\n",
-                error[0] != '\0' ? error : "missing-target-profile");
-        return 2;
-    }
-    if (config.target != target) {
-        fprintf(stderr, "minic-as: internal:profile-target-mismatch\n");
-        return 2;
-    }
-    return minias_assemble_config(input, output, &config, stderr);
+    invocation.target = target_name;
+    invocation.march = march;
+    invocation.mabi = mabi;
+    return minias_assemble_invocation(input, output, &invocation, stderr);
 }

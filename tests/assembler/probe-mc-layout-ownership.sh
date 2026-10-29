@@ -17,10 +17,14 @@ for n in ('minias_relayout_fragments','minias_resolve_deferred_data',
         raise SystemExit('old driver layout: '+n)
 for n in ('minias_parse_common_space','minias_parse_common_fill'):
     if n+'(' not in expr:raise SystemExit('DATA grammar missing in MCExpr: '+n)
-for n in ('minias_compile_variable_mc','minias_resolve_variable_mc'):
-    if n+'(' not in expr:raise SystemExit('variable MCExpr owner missing: '+n)
-if 'minias_resolve_variable_mc(' not in layout:
-    raise SystemExit('MCLayout failed to consume retained variable expressions')
+for n in ('minias_compile_deferred_expr','minias_evaluate_deferred_expr',
+          'minias_deferred_expr_destroy','minias_compile_variable_exprs',
+          'minias_resolve_variable_exprs'):
+    if n+'(' not in expr:raise SystemExit('persistent MCExpr owner missing: '+n)
+if 'minias_resolve_variable_exprs(' not in layout:
+    raise SystemExit('MCLayout failed to consume persistent variable expressions')
+if 'minias_compile_variable_mc(' in expr or 'minias_resolve_variable_mc(' in layout:
+    raise SystemExit('obsolete variable DATA text/legacy MC path survived')
 emitter=driver[driver.index('static bool emit_data_stmt('):
                driver.index('static bool parse_numeric_label_id(')]
 if 'minias_parse_common_fill(' in emitter or 'minias_parse_common_space(' in emitter:

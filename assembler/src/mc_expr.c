@@ -1118,239 +1118,356 @@ done:
     free(copy);return ok;
 }
 
-/* Kbuild frequently asks GAS for N slots per label delta. Retain the
- * parentheses as syntax only, then capture (S1-S2)*N as one typed size
- * operand. Multiplication is checked at layout, after Symbol placement. */
-static bool parse_symbol_difference_multiplier(const char *text,
-        MiniAsSymbolExpr *lhs,MiniAsSymbolExpr *rhs,uint64_t *multiplier) {
-    char *copy=minias_strdup(text),*body,*p,*star=NULL;
-    unsigned depth=0U;
-    int64_t number;
-    bool ok=false;
-    if(!copy)return false;
-    body=minias_expr_strip_outer_parens(copy);
-    for(p=body;*p;++p) {
-        if(*p=='(')++depth;
-        else if(*p==')') {
-            if(depth==0U)goto done;
-            --depth;
-        }else if(*p=='*' && depth==0U) {
-            if(star!=NULL)goto done;
-            star=p;
-        }
-    }
-    if(depth!=0U || star==NULL)goto done;
-    *star++='\0';
-    if(!minias_eval_i64_expression(minias_trim(star),&number) ||
-       number<0 ||
-       !parse_symbol_difference(minias_expr_strip_outer_parens(
-                     minias_trim(body)),lhs,rhs))goto done;
-    *multiplier=(uint64_t)number;
-    ok=true;
-done:
-    free(copy);return ok;
+/* A persistent GNU scalar-expression program shared by .org and variable
+ * DATA fragments. Parse once at the source site, bind symbols to stable
+ * ordinals, and evaluate against the final MCFragment dot.  The operators
+ * and signed-overflow contracts intentionally match the absolute GNU
+ * expression parser above; this is not another source-string fallback. */
+typedef enum DeferredOp {
+    DEF_LITERAL, DEF_SYMBOL, DEF_DOT,
+    DEF_NEG, DEF_INV, DEF_LNOT,
+    DEF_ADD, DEF_SUB, DEF_MUL, DEF_DIV, DEF_MOD,
+    DEF_SHL, DEF_SHR, DEF_LT, DEF_LE, DEF_GT, DEF_GE,
+    DEF_EQ, DEF_NE, DEF_AND, DEF_XOR, DEF_OR, DEF_LAND, DEF_LOR
+} DeferredOp;
+
+typedef struct DeferredNode {
+    DeferredOp op;
+    size_t left,right;
+    size_t symbol_index;
+    int64_t value;
+} DeferredNode;
+
+struct MiniAsDeferredExpr {
+    DeferredNode *nodes;
+    size_t count,capacity,root;
+};
+
+typedef struct DeferredParser {
+    MiniAs *as;
+    MiniAsDeferredExpr *tree;
+    const char *cursor;
+    unsigned depth;
+} DeferredParser;
+
+static void deferred_skip(DeferredParser *p) {
+    while(*p->cursor==' ' || *p->cursor=='\t')++p->cursor;
 }
 
-/* Variable-sized directives are MCFragments, not little interpreters.
- * Compile their operands once into the same semantic MCExpr vocabulary as
- * fixed-width data, but prioritize symbols and '.' over an immediately
- * evaluable numeric result: an already-defined local label can still move
- * when an earlier branch expands. Unsupported complex grammar uses the
- * existing source resolver until it is covered by the typed expression
- * algebra; the common layout engine remains the sole placement authority. */
-bool minias_compile_variable_mc(MiniAs *as, MiniAsStmt *stmt) {
-    char *copy=minias_strdup(stmt->args),*cursor;
-    MiniAsMCData *data=NULL;
-    unsigned count=1U, i=0U;
-    bool fallback=false;
-    if(!copy) {
-        minias_set_error(as,"out-of-memory:variable-mcexpr");return false;
-    }
-    for(cursor=copy;*cursor;++cursor)if(*cursor==',')++count;
-    if(count>3U || (strcmp(stmt->op,".fill")!=0 && count>2U)) {
-        free(copy);return true; /* the legacy validator diagnoses syntax */
-    }
-    data=calloc(1U,sizeof(*data));
-    if(!data) {
-        free(copy);minias_set_error(as,"out-of-memory:variable-mcdata");
-        return false;
-    }
-    data->fields=calloc(count,sizeof(*data->fields));
-    if(!data->fields) {
-        free(copy);free(data);
-        minias_set_error(as,"out-of-memory:variable-mcfields");return false;
-    }
-    data->count=count;
-    cursor=copy;
-    while(i<count) {
-        char *comma=strchr(cursor,',');
-        char *token;
-        MiniAsMCExpr *out=&data->fields[i];
-        MiniAsSymbolExpr lhs={0},rhs={0};
-        uint64_t literal=0U,divisor=0U;
-        bool shift=false;
-        if(comma)*comma='\0';
-        token=minias_trim(cursor);
-        if(*token=='\0') {fallback=true;break;}
-        /* Stable dot anchors and relocatable symbols take precedence over
-         * the parse-site absolute evaluator. Mutable ABS .set names have
-         * already been snapshotted by add_data_stmt. */
-        if(minias_parse_symbol_addend(token,&lhs) &&
-           strcmp(lhs.name,".")==0) {
-            out->kind=MINIAS_MC_EXPR_DOT;
-            out->lhs_addend=lhs.addend;
-        }else if(parse_symbol_minus_dot_divisor(token,&lhs,&divisor)) {
-            out->kind=MINIAS_MC_EXPR_SYMBOL_MINUS_DOT_DIV;
-            out->lhs_addend=lhs.addend;
-            out->divisor=divisor;
-        }else if(parse_symbol_minus_dot(token,&lhs)) {
-            out->kind=MINIAS_MC_EXPR_SYMBOL_MINUS_DOT;
-            out->lhs_addend=lhs.addend;
-        }else if(parse_symbol_difference_multiplier(token,&lhs,&rhs,&divisor)) {
-            out->kind=MINIAS_MC_EXPR_DIFFERENCE_MUL;
-            out->lhs_addend=lhs.addend;
-            out->rhs_addend=rhs.addend;
-            out->multiplier=divisor;
-        }else if(parse_symbol_difference_divisor(token,&lhs,&rhs,
-                                                &divisor,&shift)) {
-            out->kind=MINIAS_MC_EXPR_DIFFERENCE_DIV;
-            out->lhs_addend=lhs.addend;
-            out->rhs_addend=rhs.addend;
-            out->divisor=divisor;
-            out->logical_shift=shift;
-        }else if(parse_symbol_difference(token,&lhs,&rhs)) {
-            out->kind=strcmp(lhs.name,".")==0 ?
-                MINIAS_MC_EXPR_DOT_MINUS_SYMBOL : MINIAS_MC_EXPR_DIFFERENCE;
-            out->lhs_addend=lhs.addend;
-            out->rhs_addend=rhs.addend;
-        }else if(parse_data_symbol_addend(token,&lhs)) {
-            out->kind=MINIAS_MC_EXPR_SYMBOL;
-            out->lhs_addend=lhs.addend;
-        }else if(minias_eval_u64_expression(token,&literal) ||
-                 minias_parse_absolute_data_bits(as,token,&literal)) {
-            out->kind=MINIAS_MC_EXPR_CONSTANT;
-            out->constant=literal;
-        }else {
-            fallback=true;break;
-        }
-        if(out->kind!=MINIAS_MC_EXPR_CONSTANT &&
-           out->kind!=MINIAS_MC_EXPR_DOT &&
-           out->kind!=MINIAS_MC_EXPR_DOT_MINUS_SYMBOL) {
-            MiniAsSymbol *sym=minias_get_symbol(as,lhs.name,true);
-            if(!sym) {
-                free(copy);minias_mcdata_destroy(data);return false;
-            }
-            out->has_lhs=true;
-            out->lhs_symbol_index=(size_t)(sym-as->symbols);
-        }
-        if(out->kind==MINIAS_MC_EXPR_DIFFERENCE ||
-           out->kind==MINIAS_MC_EXPR_DIFFERENCE_MUL ||
-           out->kind==MINIAS_MC_EXPR_DIFFERENCE_DIV ||
-           out->kind==MINIAS_MC_EXPR_DOT_MINUS_SYMBOL) {
-            MiniAsSymbol *sym=minias_get_symbol(as,rhs.name,true);
-            if(!sym) {
-                free(copy);minias_mcdata_destroy(data);return false;
-            }
-            out->has_rhs=true;
-            out->rhs_symbol_index=(size_t)(sym-as->symbols);
-        }
-        ++i;
-        cursor=comma?comma+1U:NULL;
-    }
-    free(copy);
-    if(fallback) {
-        minias_mcdata_destroy(data);
-        return true;
-    }
-    stmt->variable_mcdata=data;
+static bool deferred_add(DeferredParser *p, DeferredOp op,
+                         size_t lhs,size_t rhs,size_t symbol,int64_t value,
+                         size_t *id) {
+    MiniAsDeferredExpr *t=p->tree;
+    DeferredNode *node;
+    if(t->count>=512U ||
+       !minias_grow_array((void **)&t->nodes,&t->capacity,
+                          sizeof(*t->nodes),t->count+1U))return false;
+    *id=t->count++;
+    node=&t->nodes[*id];
+    node->op=op;node->left=lhs;node->right=rhs;
+    node->symbol_index=symbol;node->value=value;
     return true;
 }
 
-/* Absolute, checked evaluation of typed variable-size operands. All symbol
- * handles are stable ordinals, never pointers into an expanding SymbolTable;
- * '.' denotes this Fragment's FINAL section-relative start address. */
-static bool evaluate_variable_scalar(const MiniAs *as,const MiniAsStmt *stmt,
-                                     const MiniAsMCExpr *expr,int64_t *result) {
-    const MiniAsSymbol *lhs=NULL,*rhs=NULL;
-    int64_t left=0,right=0,diff;
-    if(stmt->offset>(uint64_t)INT64_MAX)return false;
-    if(expr->kind==MINIAS_MC_EXPR_CONSTANT) {
-        *result=(int64_t)expr->constant;return true;
+/* Larger precedence binds first. GNU comparisons produce -1 (true), while
+ * && and || produce 1, exactly as the lexical absolute evaluator does. */
+typedef struct DeferredInfix {
+    const char *spelling;
+    DeferredOp op;
+    unsigned precedence;
+} DeferredInfix;
+
+static const DeferredInfix deferred_infix[] = {
+    {"||",DEF_LOR,1U},{"&&",DEF_LAND,2U},
+    {"|",DEF_OR,3U},{"^",DEF_XOR,4U},{"&",DEF_AND,5U},
+    {"==",DEF_EQ,6U},{"!=",DEF_NE,6U},
+    {"<=",DEF_LE,7U},{">=",DEF_GE,7U},
+    {"<<",DEF_SHL,8U},{">>",DEF_SHR,8U},
+    {"<",DEF_LT,7U},{">",DEF_GT,7U},
+    {"+",DEF_ADD,9U},{"-",DEF_SUB,9U},
+    {"*",DEF_MUL,10U},{"/",DEF_DIV,10U},{"%",DEF_MOD,10U}
+};
+
+static const DeferredInfix *deferred_operator(const char *s) {
+    size_t i;
+    for(i=0U;i<sizeof(deferred_infix)/sizeof(deferred_infix[0]);++i) {
+        size_t n=strlen(deferred_infix[i].spelling);
+        if(strncmp(s,deferred_infix[i].spelling,n)!=0)continue;
+        /* Do not take a prefix of another binary operator. */
+        if(n==1U && ((s[0]=='|' && s[1]=='|') ||
+                     (s[0]=='&' && s[1]=='&') ||
+                     (s[0]=='<' && (s[1]=='<' || s[1]=='=')) ||
+                     (s[0]=='>' && (s[1]=='>' || s[1]=='='))))continue;
+        return &deferred_infix[i];
     }
-    if(expr->has_lhs) {
-        if(expr->lhs_symbol_index>=as->symbol_count)return false;
-        lhs=&as->symbols[expr->lhs_symbol_index];
-        if(!lhs->defined || lhs->value>(uint64_t)INT64_MAX ||
-           !minias_checked_add_i64((int64_t)lhs->value,
-                                  expr->lhs_addend,&left))return false;
-    }
-    if(expr->has_rhs) {
-        if(expr->rhs_symbol_index>=as->symbol_count)return false;
-        rhs=&as->symbols[expr->rhs_symbol_index];
-        if(!rhs->defined || rhs->value>(uint64_t)INT64_MAX ||
-           !minias_checked_add_i64((int64_t)rhs->value,
-                                  expr->rhs_addend,&right))return false;
-    }
-    switch(expr->kind) {
-    case MINIAS_MC_EXPR_DOT:
-        return minias_checked_add_i64((int64_t)stmt->offset,
-                                     expr->lhs_addend,result);
-    case MINIAS_MC_EXPR_SYMBOL:
-        if(lhs==NULL || lhs->section!=MINIAS_SECTION_ABS)return false;
-        *result=left;return true;
-    case MINIAS_MC_EXPR_SYMBOL_MINUS_DOT:
-    case MINIAS_MC_EXPR_SYMBOL_MINUS_DOT_DIV:
-        if(lhs==NULL || lhs->section!=stmt->section ||
-           !checked_sub_i64(left,(int64_t)stmt->offset,&diff))return false;
-        if(expr->kind==MINIAS_MC_EXPR_SYMBOL_MINUS_DOT_DIV) {
-            if(expr->divisor==0U || expr->divisor>(uint64_t)INT64_MAX)return false;
-            diff/=(int64_t)expr->divisor;
-        }
-        *result=diff;return true;
-    case MINIAS_MC_EXPR_DOT_MINUS_SYMBOL:
-        if(rhs==NULL || rhs->section!=stmt->section ||
-           !minias_checked_add_i64((int64_t)stmt->offset,
-                                  expr->lhs_addend,&left) ||
-           !checked_sub_i64(left,right,result))return false;
-        return true;
-    case MINIAS_MC_EXPR_DIFFERENCE:
-    case MINIAS_MC_EXPR_DIFFERENCE_MUL:
-    case MINIAS_MC_EXPR_DIFFERENCE_DIV:
-        if(lhs==NULL || rhs==NULL || lhs->section!=rhs->section ||
-           (lhs->section<0 && lhs->section!=MINIAS_SECTION_ABS) ||
-           !checked_sub_i64(left,right,&diff))return false;
-        if(expr->kind==MINIAS_MC_EXPR_DIFFERENCE_MUL) {
-            if(expr->multiplier>(uint64_t)INT64_MAX ||
-               (expr->multiplier!=0U &&
-                (diff>INT64_MAX/(int64_t)expr->multiplier ||
-                 diff<INT64_MIN/(int64_t)expr->multiplier)))return false;
-            diff*=(int64_t)expr->multiplier;
-        }else if(expr->kind==MINIAS_MC_EXPR_DIFFERENCE_DIV) {
-            if(expr->divisor==0U || expr->divisor>(uint64_t)INT64_MAX)return false;
-            diff=expr->logical_shift ?
-                (int64_t)((uint64_t)diff/expr->divisor) :
-                diff/(int64_t)expr->divisor;
-        }
-        *result=diff;return true;
-    default:return false;
-    }
+    return NULL;
 }
 
-bool minias_resolve_variable_mc(MiniAs *as,const MiniAsStmt *stmt,
-                                uint64_t *repeat,unsigned *width,
-                                uint64_t *value) {
-    const MiniAsMCData *data=stmt->variable_mcdata;
-    int64_t fields[3]={0,1,0};
+static bool deferred_parse_binary(DeferredParser *p,unsigned minimum,
+                                  size_t *result);
+
+static bool deferred_parse_prefix(DeferredParser *p,size_t *result) {
+    const char *start;
+    char *end=NULL;
+    char name[256];
+    size_t length,operand;
+    uint64_t number;
+    MiniAsSymbol *symbol;
+    DeferredOp op;
+    if(++p->depth>96U)return false;
+    deferred_skip(p);
+    if(*p->cursor=='(') {
+        ++p->cursor;
+        if(!deferred_parse_binary(p,1U,result))return false;
+        deferred_skip(p);
+        if(*p->cursor!=')')return false;
+        ++p->cursor;--p->depth;return true;
+    }
+    if(*p->cursor=='+' || *p->cursor=='-' ||
+       *p->cursor=='~' || *p->cursor=='!') {
+        char ch=*p->cursor++;
+        if(!deferred_parse_prefix(p,&operand))return false;
+        if(ch=='+') {*result=operand;--p->depth;return true;}
+        op=ch=='-'?DEF_NEG:ch=='~'?DEF_INV:DEF_LNOT;
+        --p->depth;
+        return deferred_add(p,op,operand,0U,0U,0,result);
+    }
+    if(*p->cursor=='.' &&
+       !minias_expr_symbol_continue(p->cursor[1])) {
+        ++p->cursor;--p->depth;
+        return deferred_add(p,DEF_DOT,0U,0U,0U,0,result);
+    }
+    if(minias_expr_symbol_start(*p->cursor)) {
+        start=p->cursor++;
+        while(minias_expr_symbol_continue(*p->cursor))++p->cursor;
+        length=(size_t)(p->cursor-start);
+        if(length==0U || length>=sizeof(name))return false;
+        memcpy(name,start,length);name[length]='\0';
+        symbol=minias_get_symbol(p->as,name,true);
+        if(symbol==NULL)return false;
+        --p->depth;
+        return deferred_add(p,DEF_SYMBOL,0U,0U,
+                             (size_t)(symbol-p->as->symbols),0,result);
+    }
+    if(!minias_parse_number_literal(p->cursor,&end,&number))return false;
+    p->cursor=end;--p->depth;
+    return deferred_add(p,DEF_LITERAL,0U,0U,0U,
+               number>(uint64_t)INT64_MAX?
+               -(int64_t)(UINT64_MAX-number)-1:(int64_t)number,result);
+}
+
+static bool deferred_parse_binary(DeferredParser *p,unsigned minimum,
+                                  size_t *result) {
+    size_t lhs,rhs;
+    if(!deferred_parse_prefix(p,&lhs))return false;
+    for(;;) {
+        const DeferredInfix *found;
+        deferred_skip(p);
+        found=deferred_operator(p->cursor);
+        if(found==NULL || found->precedence<minimum)break;
+        p->cursor+=strlen(found->spelling);
+        if(!deferred_parse_binary(p,found->precedence+1U,&rhs) ||
+           !deferred_add(p,found->op,lhs,rhs,0U,0,&lhs))return false;
+    }
+    *result=lhs;
+    return true;
+}
+
+void minias_deferred_expr_destroy(MiniAsDeferredExpr *tree) {
+    if(tree!=NULL) {free(tree->nodes);free(tree);}
+}
+
+MiniAsDeferredExpr *minias_compile_deferred_expr(MiniAs *as,
+                                                 const char *text) {
+    MiniAsDeferredExpr *tree=calloc(1U,sizeof(*tree));
+    DeferredParser parser;
+    if(tree==NULL) {
+        minias_set_error(as,"out-of-memory:deferred-expression");return NULL;
+    }
+    parser.as=as;parser.tree=tree;parser.cursor=text;parser.depth=0U;
+    if(!deferred_parse_binary(&parser,1U,&tree->root))goto invalid;
+    deferred_skip(&parser);
+    if(*parser.cursor!='\0')goto invalid;
+    return tree;
+invalid:
+    minias_deferred_expr_destroy(tree);
+    if(as->error[0]=='\0')
+        minias_set_error(as,"unsupported-typed-deferred-expression:%.90s",text);
+    return NULL;
+}
+
+/* All children have smaller IDs than their parent. One iterative pass
+ * avoids recursive evaluation on every layout iteration, and a bound on
+ * expression nodes protects complex GNU macro-generated inputs. */
+bool minias_evaluate_deferred_expr(const MiniAs *as,
+                                  const MiniAsDeferredExpr *tree,
+                                  uint64_t dot,int dot_section,
+                                  bool allow_same_section,int64_t *result) {
+    int64_t values[512];
+    /* ELF section identities are algebraic units, not just current numeric
+     * addresses: .space (end_in_A-start_in_B) must NOT turn unrelated
+     * relocations into an apparently absolute size.  A single live section
+     * coefficient is enough for GNU's legal S1-S2, .-S and (. + addend)
+     * forms.  Non-linear operators only accept already-absolute operands. */
+    int sections[512];
+    int coefficients[512];
     size_t i;
+    if(!tree || tree->count==0U || tree->count>512U ||
+       dot>(uint64_t)INT64_MAX)return false;
+    for(i=0U;i<tree->count;++i) {
+        const DeferredNode *n=&tree->nodes[i];
+        int64_t l=0,r=0,v=0;
+        int lc=0,rc=0,c=0,section=MINIAS_SECTION_ABS;
+        int ls=MINIAS_SECTION_ABS,rs=MINIAS_SECTION_ABS;
+        uint64_t bits;
+        if(n->left<i) {
+            l=values[n->left];lc=coefficients[n->left];ls=sections[n->left];
+        }
+        if(n->right<i) {
+            r=values[n->right];rc=coefficients[n->right];rs=sections[n->right];
+        }
+        switch(n->op) {
+        case DEF_LITERAL:v=n->value;break;
+        case DEF_DOT:
+            if(dot_section<0)return false;
+            v=(int64_t)dot;c=1;section=dot_section;
+            break;
+        case DEF_SYMBOL: {
+            const MiniAsSymbol *sym;
+            if(n->symbol_index>=as->symbol_count)return false;
+            sym=&as->symbols[n->symbol_index];
+            if(!sym->defined || sym->section==MINIAS_SECTION_COMMON ||
+               (sym->section!=MINIAS_SECTION_ABS &&
+                sym->value>(uint64_t)INT64_MAX))return false;
+            v=(int64_t)sym->value;
+            if(sym->section!=MINIAS_SECTION_ABS) {
+                if(sym->section<0)return false;
+                c=1;section=sym->section;
+            }
+            break;
+        }
+        case DEF_NEG:
+            if(l==INT64_MIN)return false;
+            v=-l;c=-lc;section=ls;break;
+        case DEF_INV:
+            if(lc!=0)return false;
+            v=~l;break;
+        case DEF_LNOT:
+            if(lc!=0)return false;
+            v=l==0?1:0;break;
+        case DEF_ADD:case DEF_SUB:
+            /* Cross-section subtraction is not an absolute number, even
+             * when both section-relative st_values happen to be equal. */
+            if(lc!=0 && rc!=0 && ls!=rs)return false;
+            section=lc!=0?ls:rs;
+            c=n->op==DEF_ADD?lc+rc:lc-rc;
+            /* Two same-sign RELOC operands cannot be represented as one
+             * ELF section-relative value: S1+S2 is invalid, S1-S2 is
+             * absolute only when both symbols belong to one section. */
+            if(c>1 || c< -1)return false;
+            if(c==0)section=MINIAS_SECTION_ABS;
+            if(!(n->op==DEF_ADD?
+                 minias_checked_add_i64(l,r,&v):
+                 checked_sub_i64(l,r,&v)))return false;
+            break;
+        case DEF_MUL:if(!checked_mul_absolute_i64(l,r,&v))return false;break;
+        case DEF_DIV:case DEF_MOD:
+            if(r==0 || (l==INT64_MIN && r==-1))return false;
+            v=n->op==DEF_DIV?l/r:l%r;break;
+        case DEF_SHL:case DEF_SHR:
+            if(r<0 || r>=63)return false;
+            bits=(uint64_t)l;
+            if(n->op==DEF_SHL)bits<<=(unsigned)r;
+            else if(l<0 && r>0)
+                bits=(bits>>(unsigned)r)|(UINT64_MAX<<(64U-(unsigned)r));
+            else bits>>=(unsigned)r;
+            v=(int64_t)bits;break;
+        case DEF_LT:v=l<r?-1:0;break;
+        case DEF_LE:v=l<=r?-1:0;break;
+        case DEF_GT:v=l>r?-1:0;break;
+        case DEF_GE:v=l>=r?-1:0;break;
+        case DEF_EQ:v=l==r?-1:0;break;
+        case DEF_NE:v=l!=r?-1:0;break;
+        case DEF_AND:v=l&r;break;
+        case DEF_XOR:v=l^r;break;
+        case DEF_OR:v=l|r;break;
+        case DEF_LAND:v=(l!=0 && r!=0)?1:0;break;
+        case DEF_LOR:v=(l!=0 || r!=0)?1:0;break;
+        default:return false;
+        }
+        /* Only add/sub preserve relocatable section affinity. All other
+         * arithmetic must operate on an already absolute expression. */
+        if(n->op>=DEF_MUL && (lc!=0 || rc!=0))return false;
+        values[i]=v;
+        sections[i]=section;
+        coefficients[i]=c;
+    }
+    if(tree->root>=tree->count)return false;
+    if(coefficients[tree->root]!=0 &&
+       !(allow_same_section && coefficients[tree->root]==1 &&
+         sections[tree->root]==dot_section))return false;
+    *result=values[tree->root];
+    return true;
+}
+
+bool minias_compile_variable_exprs(MiniAs *as,MiniAsStmt *stmt) {
+    char *copy=minias_strdup(stmt->args),*cursor,*start;
+    unsigned count=0U,depth=0U;
     bool fill=strcmp(stmt->op,".fill")==0;
-    if(!data || data->count==0U || data->count>3U)return false;
+    if(!copy) {
+        minias_set_error(as,"out-of-memory:variable-expression");
+        return false;
+    }
+    start=copy;
+    for(cursor=copy;;++cursor) {
+        char ch=*cursor;
+        if(ch=='(')++depth;
+        else if(ch==')') {
+            if(depth==0U)goto invalid;
+            --depth;
+        }
+        if(ch==',' && depth==0U) {
+            *cursor='\0';
+            if(count>=3U || (!fill && count>=2U))goto invalid;
+            stmt->variable_exprs[count]=
+                minias_compile_deferred_expr(as,minias_trim(start));
+            if(stmt->variable_exprs[count]==NULL)goto invalid;
+            ++count;start=cursor+1U;
+            continue;
+        }
+        if(ch=='\0')break;
+    }
+    if(depth!=0U || count>=3U || (!fill && count>=2U))goto invalid;
+    stmt->variable_exprs[count]=
+        minias_compile_deferred_expr(as,minias_trim(start));
+    if(stmt->variable_exprs[count]==NULL)goto invalid;
+    stmt->variable_expr_count=count+1U;
+    free(copy);
+    return true;
+invalid:
+    free(copy);
+    if(as->error[0]=='\0')
+        minias_set_error(as,"bad-variable-data-expression:line=%zu",stmt->line);
+    return false;
+}
+
+bool minias_resolve_variable_exprs(MiniAs *as,const MiniAsStmt *stmt,
+                                  uint64_t *repeat,unsigned *width,
+                                  uint64_t *value) {
+    int64_t fields[3]={0,1,0};
+    unsigned i;
+    bool fill=strcmp(stmt->op,".fill")==0;
+    if(stmt->variable_expr_count==0U ||
+       stmt->variable_expr_count>(fill?3U:2U))return false;
     if(!fill)fields[1]=0;
-    for(i=0U;i<data->count;++i)
-        if(!evaluate_variable_scalar(as,stmt,&data->fields[i],&fields[i]))
+    for(i=0U;i<stmt->variable_expr_count;++i)
+        if(!minias_evaluate_deferred_expr(as,stmt->variable_exprs[i],
+                                          stmt->offset,stmt->section,false,
+                                          &fields[i]))
             return false;
     if(fill) {
         if(fields[1]<0 || fields[1]>8)return false;
-        *repeat=fields[0]<0 ? 0U : (uint64_t)fields[0];
+        *repeat=fields[0]<0?0U:(uint64_t)fields[0];
         *width=(unsigned)fields[1];
         *value=(uint64_t)fields[2];
     }else {
@@ -1361,7 +1478,6 @@ bool minias_resolve_variable_mc(MiniAs *as,const MiniAsStmt *stmt,
     }
     return true;
 }
-
 bool minias_compile_data_mc(MiniAs *as, MiniAsStmt *stmt,
                             unsigned width) {
     MiniAsMCData *data;

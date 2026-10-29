@@ -262,6 +262,7 @@ MINIAS_SOURCES := \
 	assembler/src/x86_64_target.c \
 	assembler/src/loongarch64_target.c \
 	assembler/src/target_registry.c \
+	assembler/src/invocation.c \
 	assembler/src/riscv_profile.c \
 	assembler/src/expression.c \
 	assembler/src/mc_expr.c \

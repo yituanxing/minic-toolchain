@@ -603,14 +603,9 @@ bool minias_section_append(MiniAs *as, int section_index, const void *data, size
     }
     sec = &as->sections[(size_t)section_index];
     if (as->capture_instruction_bytes) {
-        /* RISC-V/AArch64 padding callbacks predate the transaction API and
-         * still use section_append.  Treat only the verified ALIGN owner as
-         * a padding sink; instruction encoders remain forbidden to bypass
-         * the Target byte API.  Both paths commit once in emit_sections. */
-        if (as->emitting_fragment &&
-            as->emitting_fragment_id < as->stmt_count &&
-            as->stmts[as->emitting_fragment_id].kind == MINIAS_STMT_ALIGN)
-            return minias_emit_instruction_bytes(as, section_index, data, size);
+        /* Every Target now uses the same transactional instruction-byte
+         * sink for BOTH opcodes and executable alignment.  No backend may
+         * bypass the MCFragment byte-ownership boundary. */
         minias_set_error(as, "target-bypassed-mc-code-emitter");
         return false;
     }
@@ -769,10 +764,11 @@ void minias_destroy(MiniAs *as) {
     for (i = 0U; i < as->stmt_count; ++i) {
         free(as->stmts[i].op);
         free(as->stmts[i].args);
-        free(as->stmts[i].org_expression);
+        minias_deferred_expr_destroy(as->stmts[i].org_expr);
         free(as->stmts[i].static_data);
         minias_mcdata_destroy(as->stmts[i].mcdata);
-        minias_mcdata_destroy(as->stmts[i].variable_mcdata);
+        for (size_t k=0U;k<3U;++k)
+            minias_deferred_expr_destroy(as->stmts[i].variable_exprs[k]);
         if (as->stmts[i].mcinst != NULL) {
             MiniAsMCInst *mc = as->stmts[i].mcinst;
             size_t k;
@@ -1814,16 +1810,13 @@ static bool handle_org_position(MiniAs *as, const char *args,
         fragment->org_addend = symbolic.addend;
         as->has_org_constraints = true;
     } else {
-        /* Complex but already parsed GNU arithmetic still belongs to this
-         * .org Fragment. Keep its exact position expression and recompute
-         * padding after every upstream change; never reuse the parse-time
-         * byte count merely because the grammar was not a simple S+A. */
+        /* Retain the complete GNU expression as stable SymbolID operations.
+         * Its dot and symbol values are evaluated only from MCLayout, not
+         * by re-entering a source parser with mutable current-section. */
         MiniAsStmt *fragment=&as->stmts[as->stmt_count - 1U];
-        fragment->org_expression=minias_strdup(args);
-        if(fragment->org_expression==NULL) {
-            minias_set_error(as,"out-of-memory:org-expression");
-            return false;
-        }
+        fragment->org_expr=minias_compile_deferred_expr(as,args);
+        if(fragment->org_expr==NULL)return false;
+        fragment->org_mode=MINIAS_ORG_TYPED_EXPR;
         as->has_org_constraints=true;
     }
     return advance_current_location(as, pad);
@@ -2742,7 +2735,7 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
         return false;
     if((!strcmp(op,".fill") || !strcmp(op,".space") ||
         !strcmp(op,".skip") || !strcmp(op,".zero")) &&
-       !minias_compile_variable_mc(as,&as->stmts[as->stmt_count-1U]))
+       !minias_compile_variable_exprs(as,&as->stmts[as->stmt_count-1U]))
         return false;
     if(delayed) {
         as->stmts[as->stmt_count-1U].deferred_data_size=true;
@@ -2750,7 +2743,9 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
         /* A deferred size is a persistent Fragment property. It need not
          * trigger a second source parse: the shared layout solver can
          * recompute it after branch growth using final symbol anchors.
-         * Position-dependent .if/.org/.set still require the guard. */
+         * Only controls that change the Fragment graph, notably
+         * location-dependent .if/.elseif, retain the reparse guard.
+         * Typed .org/.fill/.space are resolved in-place by MCLayout. */
     }
     return advance_current_location(as, bytes);
 }
@@ -3122,16 +3117,21 @@ static bool flush_literal_pools(MiniAs *as,size_t line,bool all) {
     uint32_t original_subsection=as->current_subsection;
     size_t i;
     unsigned width;
-    /* GNU GAS groups the pending A64 literal pool by DATA WIDTH before
-     * first-use order: 32-bit entries precede 64-bit entries.  FIFO
-     * insertion alone shifts the PC-relative LDR imm19 and relocations
-     * for mixed W/X =symbol requests; source byte oracle proves this. */
+    const bool width_order=as->target->literal_pool_order==
+                           MINIAS_LITERAL_POOL_WIDTH_ASC;
+    /* GNU GAS scheduling is TargetInfo policy, not a hard-coded AArch64
+     * rule inside the Common assembler.  Each selected entry becomes an
+     * owned ALIGN fragment, symbol anchor, and typed DATA fragment below;
+     * no synthetic .balign/.long/.quad source text is reparsed. */
     for(width=4U;width<=8U;width*=2U) {
-    for(i=0U;i<as->literal_count;++i) {
+      for(i=0U;i<as->literal_count;++i) {
         MiniAsLiteral *entry=&as->literals[i];
-        if(entry->width!=width)continue;
-        char alignment[16],value[384],label[64];
-        int written;
+        MiniAsStmt *fragment;
+        MiniAsMCData *data;
+        MiniAsSymbol *target;
+        uint64_t current,pad;
+        if(width_order && entry->width!=width)continue;
+        if(!width_order && width!=4U)continue;
         if(entry->emitted ||
            (!all && (entry->section!=as->current_section ||
                      entry->subsection!=as->current_subsection)))continue;
@@ -3141,20 +3141,47 @@ static bool flush_literal_pools(MiniAs *as,size_t line,bool all) {
             if(!minias_ensure_subsection(as,as->current_section,as->current_subsection))
                 goto failure;
         }
-        written=snprintf(alignment,sizeof(alignment),"%u,0",entry->width);
-        if(written<0 || (size_t)written>=sizeof(alignment))goto failure;
-        if(!handle_align(as,".balign",alignment,line))goto failure;
-        written=snprintf(label,sizeof(label),"%s",entry->label);
-        if(written<0 || (size_t)written>=sizeof(label))goto failure;
-        if(!define_label(as,label,line))goto failure;
-        written=snprintf(value,sizeof(value),"%s%+lld",
-                         entry->expression.name,
-                         (long long)entry->expression.addend);
-        if(written<0 || (size_t)written>=sizeof(value))goto failure;
-        if(!add_data_stmt(as,entry->width==8U?".quad":".long",value,line))
+        if(!minias_current_location(as,&current))goto failure;
+        pad=((uint64_t)entry->width-(current&((uint64_t)entry->width-1U)))&
+            ((uint64_t)entry->width-1U);
+        if(!add_stmt(as,MINIAS_STMT_ALIGN,".literal_pool_align","",line,
+                     (uint32_t)pad,entry->width))goto failure;
+        fragment=&as->stmts[as->stmt_count-1U];
+        fragment->align_has_fill=true;
+        fragment->align_fill=0U;
+        if((uint64_t)entry->width>as->sections[(size_t)entry->section].align)
+            as->sections[(size_t)entry->section].align=entry->width;
+        if(!advance_current_location(as,pad) ||
+           !define_label(as,entry->label,line))goto failure;
+
+        /* Literal payload is a standard typed MCExpr+SymbolID. Data bytes
+         * and relocation fixups follow exactly the ordinary DATA emitter;
+         * the pool cannot depend on another pass over synthetic strings. */
+        if(!add_stmt(as,MINIAS_STMT_DATA,".literal_pool_data","",line,
+                     entry->width,1U))goto failure;
+        fragment=&as->stmts[as->stmt_count-1U];
+        data=calloc(1U,sizeof(*data));
+        if(data==NULL) {
+            minias_set_error(as,"out-of-memory:literal-pool-data");
             goto failure;
+        }
+        data->fields=calloc(1U,sizeof(*data->fields));
+        if(data->fields==NULL) {
+            free(data);
+            minias_set_error(as,"out-of-memory:literal-pool-fields");
+            goto failure;
+        }
+        data->width=entry->width;data->count=1U;
+        target=minias_get_symbol(as,entry->expression.name,true);
+        if(target==NULL) {minias_mcdata_destroy(data);goto failure;}
+        data->fields[0].kind=MINIAS_MC_EXPR_SYMBOL;
+        data->fields[0].has_lhs=true;
+        data->fields[0].lhs_symbol_index=(size_t)(target-as->symbols);
+        data->fields[0].lhs_addend=entry->expression.addend;
+        fragment->mcdata=data;
+        if(!advance_current_location(as,entry->width))goto failure;
         entry->emitted=true;
-    }
+      }
     }
     as->current_section=original_section;
     as->current_subsection=original_subsection;

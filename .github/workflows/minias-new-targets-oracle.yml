@@ -7,15 +7,24 @@ on:
       - 'elf/**'
       - 'tests/assembler/probe-comdat-groups.sh'
       - 'tests/assembler/probe-mc-cross-layer-contract.sh'
+      - 'tests/assembler/probe-mc-owned-deferred-directives.sh'
       - 'tests/assembler/probe-cfi-debug-frame.sh'
       - 'tests/assembler/probe-cfi-dual-frame.sh'
       - 'tests/assembler/probe-minias-acceptance-gates.sh'
       - 'tests/assembler/probe-elf-semantic-comdat-strict.sh'
+      - 'tests/assembler/probe-elf-semantic-payload-bitfields.py'
       - 'tests/assembler/probe-link-order-gcc-patchable.sh'
       - 'tests/assembler/probe-miniobjcopy-comdat-rewrite.sh'
+      - 'tests/assembler/probe-minias-ci-routing.py'
+      - 'tests/assembler/probe-public-target-invocation.sh'
       - 'tests/assembler/probe-x86-loong-base.sh'
       - 'tests/assembler/probe-mc-operand-lexer.sh'
       - 'tests/assembler/mc-operand-lexer-contract.c'
+      - 'tools/ci/check_ci_miniobjcopy_elf_route_v1.py'
+      - 'tools/ci/select_miniobjcopy_elf_route_v1.py'
+      - '.github/workflows/miniobjcopy-strip-regressions-v1.yml'
+      - '.github/workflows/minias-linux-generated-3x7-replay.yml'
+      - '.github/workflows/minias-linux-pinned-3x7-replay.yml'
       - '.github/workflows/minias-new-targets-oracle.yml'
       - 'Makefile'
   workflow_dispatch:
@@ -42,14 +51,26 @@ jobs:
             binutils-loongarch64-linux-gnu python3-pyelftools
       - name: Build exact-head MiniAS and all four target backends
         run: make -j2 MODE=release CFLAGS=-Werror build/release/bin/minic-as build/release/bin/minic-objcopy
+      - name: Enforce MiniAS Linux candidate gates and shared ELF CI routing
+        run: python3 tests/assembler/probe-minias-ci-routing.py
+      - name: Validate public MiniAS target invocation without internal headers
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-public-target-invocation.sh
       - name: Validate GNU duplicate COMDAT and strict semantic comparator
         run: |
           bash tests/assembler/probe-elf-semantic-comdat-strict.sh
           bash tests/assembler/probe-minias-acceptance-gates.sh
+      - name: Reject false GNU ELF parity from opcode masks and non-PROGBITS payloads
+        run: python3 tests/assembler/probe-elf-semantic-payload-bitfields.py
       - name: GNU x86 cross-layer section, alias, layout and FILE semantics
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-mc-cross-layer-contract.sh
+      - name: All four Targets retain typed GNU deferred directive fragments
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-mc-owned-deferred-directives.sh
       - name: GNU x86 link-order section identity, RELA and linker GC
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \

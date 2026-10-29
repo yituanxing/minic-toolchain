@@ -1,4 +1,4 @@
-name: MiniAS Genuine Kbuild-Generated Linux 3x7 Replay
+name: MiniAS Genuine Kbuild-Generated Linux 3x7 Candidate Gate (Legacy)
 # 2026-10-28 rerun: inspect GNU KVM fragment mismatch with original saved .s and exact previous instruction source.
 
 # Exact-head grouped replay after Common forward GNU subtraction, typed IA32 EFI, AArch64 SMOV, and trampoline section-base aliases. Source coverage only, GNU ELF parity to follow.
@@ -6,6 +6,9 @@ name: MiniAS Genuine Kbuild-Generated Linux 3x7 Replay
 # Includes real GNU-created binary .incbin dependencies. No refetching,
 # placeholder data, compiler changes, or cross-target config drift.
 # 21 independent source-to-ELF MiniAS scans; NOT GNU ELF semantic parity.
+# The scans preserve first-failure diagnostics, but their aggregate must fail
+# if any original Kbuild object is not ASSEMBLED_UNVERIFIED.  The canonical
+# exact-head acceptance owner is minias-linux-pinned-3x7-replay.yml.
 on:
   workflow_dispatch:
   push:
@@ -92,14 +95,16 @@ jobs:
         with:
           pattern: minias-genuine-result-*
           path: build/minias-genuine-collected
-      - name: Require disjoint exactly 21 full source shards and summarize first blockers
+      - name: Require strict 9645 candidate coverage across all 21 original shards
         run: |
           python3 tools/ci/minias-linux-kbuild-seven-v1.py aggregate \
+            --strict \
             --results build/minias-genuine-collected \
             --dest build/minias-genuine-summary.json
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: minias-genuine-three-target-summary
           path: build/minias-genuine-summary.json
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 14

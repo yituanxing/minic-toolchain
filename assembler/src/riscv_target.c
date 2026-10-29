@@ -8,14 +8,9 @@
 #include <stdlib.h>
 
 static bool is_conditional_branch_op(const char *op) {
-    return strcmp(op, "beq") == 0 || strcmp(op, "bne") == 0 ||
-           strcmp(op, "blt") == 0 || strcmp(op, "bge") == 0 ||
-           strcmp(op, "bltu") == 0 || strcmp(op, "bgeu") == 0 ||
-           strcmp(op, "beqz") == 0 || strcmp(op, "bnez") == 0 ||
-           strcmp(op, "bltz") == 0 || strcmp(op, "bgez") == 0 ||
-           strcmp(op, "bgtz") == 0 || strcmp(op, "blez") == 0 ||
-           strcmp(op, "bgt") == 0 || strcmp(op, "ble") == 0 ||
-           strcmp(op, "bgtu") == 0 || strcmp(op, "bleu") == 0;
+    unsigned family = 0U;
+    return minias_riscv_mc_descriptor_policy(op, NULL, NULL, &family) &&
+           family == RV_MC_BRANCH;
 }
 
 
@@ -26,27 +21,36 @@ static bool is_conditional_branch_op(const char *op) {
  * sections, exported symbols and relocations pass the basic oracle.
  *
  * Preserve the existing .org zero-fill semantics and data alignment. */
-static bool minias_section_append_code_alignment(MiniAs *as,
-                                                 int section_index,
-                                                 size_t size) {
+static bool riscv_emit_code_alignment(MiniAs *as,
+                                     int section_index,
+                                     size_t size) {
     static const unsigned char nop32[] = {0x13U, 0x00U, 0x00U, 0x00U};
     static const unsigned char nop16[] = {0x01U, 0x00U};
+    static const unsigned char zeros[16] = {0U};
 
     if ((size & 1U) != 0U) {
         /* A raw byte in .text (e.g. embedded alternatives/data) can leave
          * an odd-sized alignment gap. No sequence of 16/32-bit RISC-V NOP
          * encodings fills an odd byte count; retain the previous zero-byte
          * fill for this non-instruction-shaped case, as GNU as does. */
-        return minias_section_append_zero(as, section_index, size);
+        while (size != 0U) {
+            size_t chunk = size > sizeof(zeros) ? sizeof(zeros) : size;
+            if (!minias_emit_instruction_bytes(as, section_index, zeros, chunk))
+                return false;
+            size -= chunk;
+        }
+        return true;
     }
     while (size >= sizeof(nop32)) {
-        if (!minias_section_append(as, section_index, nop32, sizeof(nop32))) {
+        if (!minias_emit_instruction_bytes(as, section_index,
+                                           nop32, sizeof(nop32))) {
             return false;
         }
         size -= sizeof(nop32);
     }
     if (size == sizeof(nop16)) {
-        return minias_section_append(as, section_index, nop16, sizeof(nop16));
+        return minias_emit_instruction_bytes(as, section_index,
+                                             nop16, sizeof(nop16));
     }
     return true;
 }
@@ -180,13 +184,12 @@ static bool strict_base_i_check_sections(MiniAs *as) {
 /* The selected ISA is enforced at the target boundary, not in the common
  * assembler. No -march preserves the historical Linux assembler behavior. */
 static uint64_t riscv_required_features(const char *op) {
-    static const char *const m_ops[] = {
-        "mul", "mulh", "mulhu", "mulhsu", "mulw", "div", "divu",
-        "divw", "divuw", "rem", "remu", "remw", "remuw"
-    };
-    size_t i;
-    for (i = 0U; i < sizeof(m_ops) / sizeof(m_ops[0]); ++i)
-        if (strcmp(op, m_ops[i]) == 0) return RISCV_ISA_M;
+    uint64_t required = 0U;
+    if (minias_riscv_mc_descriptor_policy(op, &required, NULL, NULL))
+        return required;
+    /* Legacy/pseudo and extension families not yet represented by the
+     * fixed-width table retain their existing GNU mnemonic policy. */
+    if (strcmp(op, "mulhsu") == 0) return RISCV_ISA_M;
     if (strncmp(op, "amo", 3U) == 0 ||
         strncmp(op, "lr.", 3U) == 0 ||
         strncmp(op, "sc.", 3U) == 0) return RISCV_ISA_A;
@@ -195,8 +198,6 @@ static uint64_t riscv_required_features(const char *op) {
         strncmp(op, "vle", 3U) == 0 ||
         strncmp(op, "vse", 3U) == 0 ||
         strncmp(op, "vmv.", 4U) == 0) return RISCV_ISA_V;
-    if (strcmp(op, "orc.b") == 0 || strcmp(op, "rev8") == 0 ||
-        strcmp(op, "ctz") == 0) return RISCV_ISA_ZBB;
     if (strncmp(op, "csr", 3U) == 0) return RISCV_ISA_ZICSR;
     if (strcmp(op, "fence.i") == 0) return RISCV_ISA_ZIFENCEI;
     if (strcmp(op, "frcsr") == 0 || strcmp(op, "fscsr") == 0)
@@ -223,51 +224,10 @@ static uint64_t riscv_required_features(const char *op) {
     return 0U;
 }
 static bool is_rv64_only_opcode(const char *op) {
-    static const char *const names[] = {
-        "ld", "sd", "lwu", "addiw", "slliw", "srliw", "sraiw",
-        "addw", "subw", "sllw", "srlw", "sraw",
-        "mulw", "divw", "divuw", "remw", "remuw", "sext.w", "negw"
-    };
-    size_t i;
-    for (i = 0U; i < sizeof(names) / sizeof(names[0]); ++i)
-        if (strcmp(names[i], op) == 0) return true;
-    return false;
-}
-
-/* RV32E only has integer registers x0..x15. This conservative source-level
- * operand guard is kept until fully typed target operands can replace it.
- * Reject all names for absent ABI registers, not just numeric x16..x31. */
-static bool rv32e_operands_valid(const char *args) {
-    const char *p = args;
-    while (*p != '\0') {
-        char token[48];
-        size_t len = 0U;
-        unsigned number = 0U;
-        while (*p != '\0' && !isalnum((unsigned char)*p) && *p != '_') ++p;
-        while (*p != '\0' && (isalnum((unsigned char)*p) || *p == '_')) {
-            if (len + 1U < sizeof(token)) token[len++] = *p;
-            ++p;
-        }
-        token[len] = '\0';
-        if (len == 0U) continue;
-        if (token[0] == 'x' && len > 1U) {
-            size_t j;
-            for (j = 1U; j < len; ++j) {
-                if (token[j] < '0' || token[j] > '9') break;
-                number = number * 10U + (unsigned)(token[j] - '0');
-            }
-            if (j == len && number >= 16U) return false;
-        }
-        if ((len == 2U && token[0] == 'a' &&
-             token[1] >= '6' && token[1] <= '7') ||
-            (len == 2U && token[0] == 't' &&
-             token[1] >= '3' && token[1] <= '6') ||
-            (token[0] == 's' &&
-             ((len == 2U && token[1] >= '2' && token[1] <= '9') ||
-              (len == 3U && token[1] == '1' &&
-               (token[2] == '0' || token[2] == '1'))))) return false;
-    }
-    return true;
+    bool rv64_only = false;
+    if (minias_riscv_mc_descriptor_policy(op, NULL, &rv64_only, NULL))
+        return rv64_only;
+    return strcmp(op, "negw") == 0; /* non-table pseudo */
 }
 
 static bool riscv_validate_selected_isa(const MiniAs *as, const char *op,
@@ -303,11 +263,10 @@ static bool riscv_validate_instruction(const MiniAs *as,
         (void)snprintf(reason, cap, "riscv32-unsupported-opcode:%s", op);
         return false;
     }
-    if (MINIAS_RV_STATE(as)->isa_explicit && (MINIAS_RV_STATE(as)->isa_features & RISCV_ISA_E) &&
-        !rv32e_operands_valid(args)) {
-        (void)snprintf(reason, cap, "riscv32e-invalid-register:%s", op);
-        return false;
-    }
+    /* RV32E register bounds are checked after MCInst parsing. Raw tokens
+     * such as a6/s2 may name symbols, including branch and LA targets;
+     * only typed GPR operands can be interpreted as hardware registers. */
+    (void)args;
     return true;
 }
 
@@ -553,23 +512,14 @@ static bool riscv_expanded_size(const char *op, uint32_t measured,
 
 static bool riscv_relax_instruction(MiniAs *as, const MiniAsStmt *stmt,
                                     uint32_t *expanded) {
-    const char *comma, *target_text;
     MiniAsSymbolExpr expr;
     const MiniAsSymbol *symbol;
     int64_t displacement;
     *expanded = stmt->size;
-    if (stmt->size != 4U || !is_conditional_branch_op(stmt->op))
+    if (stmt->size != 4U || stmt->mcinst == NULL ||
+        stmt->mcinst->opcode != RV_MC_BRANCH)
         return true;
-    if (stmt->mcinst != NULL && stmt->mcinst->opcode == RV_MC_BRANCH) {
-        expr = *stmt->mcinst->operands[2].symbol;
-    } else {
-        /* Legacy relaxation path for opcode families not yet migrated. */
-        comma = strrchr(stmt->args, ',');
-        if (comma == NULL) return true;
-        target_text = comma + 1;
-        while (*target_text == ' ' || *target_text == '\t') ++target_text;
-        if (!minias_parse_symbol_addend(target_text, &expr)) return true;
-    }
+    expr = *stmt->mcinst->operands[2].symbol;
     symbol = minias_get_symbol(as, expr.name, false);
     if (symbol == NULL || !symbol->defined ||
         symbol->section != stmt->section ||
@@ -701,7 +651,7 @@ static const MiniAsTargetOps riscv_ops = {
     .encode = minias_riscv_encode,
     .relax_instruction = riscv_relax_instruction,
     .expanded_instruction_size = riscv_expanded_size,
-    .append_code_alignment = minias_section_append_code_alignment,
+    .append_code_alignment = riscv_emit_code_alignment,
     .fixup_relocation_type = riscv_fixup_relocation_type,
     .validate_output = strict_base_i_check_sections,
     /* RV64 DWARF register numbering: ra=x1, sp=x2; DW_CFA code unit

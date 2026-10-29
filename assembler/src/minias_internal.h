@@ -118,8 +118,15 @@ typedef enum MiniAsOrgMode {
     MINIAS_ORG_SOURCE = 0,
     MINIAS_ORG_ABSOLUTE,
     MINIAS_ORG_DOT_ADDEND,
-    MINIAS_ORG_SYMBOL_ADDEND
+    MINIAS_ORG_SYMBOL_ADDEND,
+    MINIAS_ORG_TYPED_EXPR
 } MiniAsOrgMode;
+
+/* Persistent, owned expression trees for layout-sensitive GNU directives.
+ * Each tree binds symbols to stable SymbolIDs while the source is parsed;
+ * layout evaluates it with a supplied Fragment address, never a mutable
+ * parser's global current_section or a second copy of the source text. */
+typedef struct MiniAsDeferredExpr MiniAsDeferredExpr;
 
 /* Common fixup kinds describe generic byte-addressed data semantics.
  * Machine-specific kinds are opaque uint32_t values owned by the Target.
@@ -322,9 +329,7 @@ typedef struct MiniAsStmt {
     uint64_t align_max_skip;
     /* Common MCLayout owns every captured .org expression, never Target. */
     MiniAsOrgMode org_mode;
-    /* Only the SOURCE compatibility variant needs its retained GNU text;
-     * fixed-form constraints use the typed fields below. */
-    char *org_expression;
+    MiniAsDeferredExpr *org_expr;
     uint64_t org_target;
     size_t org_symbol_index;
     int64_t org_addend;
@@ -344,7 +349,8 @@ typedef struct MiniAsStmt {
     unsigned char *static_data;
     size_t static_data_size;
     MiniAsMCData *mcdata; /* fixed-width DATA: retained typed expressions */
-    MiniAsMCData *variable_mcdata; /* .fill/.space: retained size operands */
+    MiniAsDeferredExpr *variable_exprs[3]; /* .fill/.space size/value */
+    unsigned variable_expr_count;
     MiniAsMCInst *mcinst; /* allocated by target parser, freed by core */
 } MiniAsStmt;
 
@@ -535,9 +541,13 @@ bool minias_expr_parse_symbol_absolute_tail(MiniAs *, const char *,
                                             MiniAsSymbolExpr *);
 bool minias_evaluate_absolute_expression(MiniAs *, const char *, int64_t *);
 bool minias_compile_data_mc(MiniAs *, MiniAsStmt *, unsigned);
-bool minias_compile_variable_mc(MiniAs *, MiniAsStmt *);
-bool minias_resolve_variable_mc(MiniAs *, const MiniAsStmt *,
-                               uint64_t *, unsigned *, uint64_t *);
+MiniAsDeferredExpr *minias_compile_deferred_expr(MiniAs *, const char *);
+bool minias_evaluate_deferred_expr(const MiniAs *, const MiniAsDeferredExpr *,
+                                  uint64_t, int, bool, int64_t *);
+void minias_deferred_expr_destroy(MiniAsDeferredExpr *);
+bool minias_compile_variable_exprs(MiniAs *, MiniAsStmt *);
+bool minias_resolve_variable_exprs(MiniAs *, const MiniAsStmt *,
+                                  uint64_t *, unsigned *, uint64_t *);
 bool minias_emit_mc_data(MiniAs *, const MiniAsStmt *);
 void minias_mcdata_destroy(MiniAsMCData *);
 bool minias_evaluate_absolute_operand(MiniAs *,const char *,int64_t *);
@@ -625,6 +635,13 @@ typedef struct MiniAsCfiABI {
     bool initial_ra_saved;
 } MiniAsCfiABI;
 
+/* A literal pool owns ordinary MCFragments, but entry scheduling is an ISA
+ * policy: AArch64 GNU GAS groups 32-bit entries before 64-bit entries. */
+typedef enum MiniAsLiteralPoolOrder {
+    MINIAS_LITERAL_POOL_FIRST_USE = 0,
+    MINIAS_LITERAL_POOL_WIDTH_ASC
+} MiniAsLiteralPoolOrder;
+
 MiniAsCfiABI minias_cfi_abi(const MiniAs *);
 
 typedef struct MiniAsTargetOps {
@@ -667,6 +684,7 @@ typedef struct MiniAsTargetOps {
      * semantic fixup at the explicit section offset. */
     bool (*parse_named_relocation)(const char *, MiniAsFixupKind *, unsigned *);
     bool supports_literal_pools; /* .ltorg/.pool only for a checked target */
+    MiniAsLiteralPoolOrder literal_pool_order;
     bool (*validate_output)(MiniAs *);
     /* Target-advertised GNU implicit .eh_frame: never infer ISA from
      * numeric ELF e_machine inside Common CFI/layout dispatch. */

@@ -348,33 +348,19 @@ static bool org_fragment_padding(MiniAs *as, const MiniAsStmt *stmt,
             minias_set_error(as,"org-symbol-addend-overflow:line=%zu",stmt->line);
             return false;
         }
-    } else if (stmt->org_mode == MINIAS_ORG_SOURCE &&
-               stmt->org_expression != NULL) {
-        /* Compatibility bridge for fully parenthesized source arithmetic.
-         * Unlike the old one-time padding, this evaluates the retained
-         * position constraint at every Fragment fixed-point iteration.
-         * A future expression-AST batch can replace this single bridge. */
-        const int old_section=as->current_section;
-        const uint32_t old_subsection=as->current_subsection;
-        const bool old_dot_override=as->expr_dot_override;
-        const uint64_t old_dot=as->expr_dot_value;
+    } else if (stmt->org_mode == MINIAS_ORG_TYPED_EXPR &&
+               stmt->org_expr != NULL) {
+        /* A retained, stable SymbolID expression. Its dot is supplied
+         * explicitly by MCLayout: there is no source reparsing and no
+         * temporary mutation of lexical parser state during fixed point. */
         int64_t resolved=0;
-        bool evaluated;
         if(location>(uint64_t)INT64_MAX) {
             minias_set_error(as,"org-location-overflow:line=%zu",stmt->line);
             return false;
         }
-        as->current_section=stmt->section;
-        as->current_subsection=stmt->subsection;
-        as->expr_dot_override=true;
-        as->expr_dot_value=location;
-        evaluated=minias_evaluate_absolute_expression(as,
-                         stmt->org_expression,&resolved);
-        as->current_section=old_section;
-        as->current_subsection=old_subsection;
-        as->expr_dot_override=old_dot_override;
-        as->expr_dot_value=old_dot;
-        if(!evaluated || resolved<0) {
+        if(!minias_evaluate_deferred_expr(as,stmt->org_expr,
+                                         location,stmt->section,true,&resolved) ||
+           resolved<0) {
             minias_set_error(as,"org-expression-unresolved:line=%zu",stmt->line);
             return false;
         }
@@ -461,8 +447,7 @@ static bool minias_relayout_fragments(MiniAs *as, bool *org_changed) {
             }
             stmt->offset = sub->size;
             if (stmt->kind == MINIAS_STMT_ALIGN &&
-                (stmt->org_mode != MINIAS_ORG_SOURCE ||
-                 stmt->org_expression != NULL)) {
+                stmt->org_mode != MINIAS_ORG_SOURCE) {
                 uint32_t pad;
                 if (sub->size > UINT64_MAX - sub->base ||
                     !org_fragment_padding(as,stmt,sub->base+sub->size,
@@ -542,8 +527,6 @@ static bool minias_relayout_fragments(MiniAs *as, bool *org_changed) {
  * to a truly undefined label must remain an error, never a zero fill. */
 static bool minias_resolve_deferred_data(MiniAs *as) {
     size_t pass;
-    int previous_section=as->current_section;
-    uint32_t previous_subsection=as->current_subsection;
     if(!as->has_deferred_data && !as->has_org_constraints)return true;
     /* .org, .fill and .space share a single fixed point.  A subsection
      * base may change as another numbered subsection grows, so resolving
@@ -552,77 +535,36 @@ static bool minias_resolve_deferred_data(MiniAs *as) {
         size_t i;
         bool changed=false;
         bool org_changed=false;
-        if(!minias_relayout_fragments(as,&org_changed))goto invalid;
+        if(!minias_relayout_fragments(as,&org_changed))return false;
         for(i=0U;i<as->stmt_count;++i) {
             MiniAsStmt *stmt=&as->stmts[i];
             uint64_t n=0U;
             if(!stmt->deferred_data_size)continue;
-            as->current_section=stmt->section;
-            as->current_subsection=stmt->subsection;
-            as->expr_dot_override=true;
-            as->expr_dot_value=stmt->offset;
-            if(stmt->variable_mcdata!=NULL) {
+            {
                 uint64_t repeat=0U,bits=0U;
                 unsigned width=0U;
-                if(!minias_resolve_variable_mc(as,stmt,&repeat,&width,&bits) ||
+                if(!minias_resolve_variable_exprs(as,stmt,&repeat,&width,&bits) ||
                    (width!=0U && repeat>UINT32_MAX/width)) {
                     minias_set_error(as,"unresolved-typed-variable-data:line=%zu",
                                      stmt->line);
-                    goto invalid;
+                    return false;
                 }
                 n=repeat*width;
                 stmt->variable_repeat=repeat;
                 stmt->variable_element_width=width;
                 stmt->variable_value=bits;
-                stmt->variable_data_resolved=true;
-            }else if(!strcmp(stmt->op,".fill")) {
-                unsigned width=0U;
-                uint64_t repeat=0U,bits=0U;
-                if(!minias_parse_common_fill(as,stmt->args,&repeat,&width,&bits) ||
-                   (width!=0U && repeat>UINT32_MAX/width)) {
-                    minias_set_error(as,
-                        "unresolved-deferred-fill:%s:line=%zu",
-                        stmt->args,stmt->line);
-                    goto invalid;
-                }
-                n=repeat*width;
-                stmt->variable_repeat=repeat;
-                stmt->variable_element_width=width;
-                stmt->variable_value=bits;
-                stmt->variable_data_resolved=true;
-            }else {
-                uint64_t amount=0U;
-                uint8_t fill=0U;
-                if(!minias_parse_common_space(as,stmt->args,&amount,&fill) ||
-                   amount>UINT32_MAX) {
-                    minias_set_error(as,
-                        "unresolved-deferred-space:%s:line=%zu",
-                        stmt->args,stmt->line);
-                    goto invalid;
-                }
-                n=amount;
-                stmt->variable_repeat=amount;
-                stmt->variable_element_width=1U;
-                stmt->variable_value=fill;
                 stmt->variable_data_resolved=true;
             }
-            as->expr_dot_override=false;
             if(n!=(uint64_t)stmt->size) {
                 stmt->size=(uint32_t)n;
                 changed=true;
             }
         }
         if(!changed && !org_changed) {
-            as->current_section=previous_section;
-            as->current_subsection=previous_subsection;
             return true;
         }
     }
     minias_set_error(as,"mc-fragment-layout-nonconvergent");
-invalid:
-    as->expr_dot_override=false;
-    as->current_section=previous_section;
-    as->current_subsection=previous_subsection;
     return false;
 }
 
@@ -808,8 +750,7 @@ static bool minias_validate_fragment_layout(MiniAs *as) {
                 goto done;
             }
             if(stmt->kind==MINIAS_STMT_ALIGN &&
-               (stmt->org_mode!=MINIAS_ORG_SOURCE ||
-                stmt->org_expression!=NULL)) {
+               stmt->org_mode!=MINIAS_ORG_SOURCE) {
                 uint32_t padding;
                 if (!org_fragment_padding(as,stmt,expected,true,&padding))
                     goto done;
@@ -979,7 +920,7 @@ bool minias_solve_fragment_layout(MiniAs *as,
         size_t typed_variable=0U,source_variable=0U,i;
         for(i=0U;i<as->stmt_count;++i) {
             if(!as->stmts[i].deferred_data_size)continue;
-            if(as->stmts[i].variable_mcdata!=NULL)++typed_variable;
+            if(as->stmts[i].variable_expr_count!=0U)++typed_variable;
             else ++source_variable;
         }
         if(passes!=0U)

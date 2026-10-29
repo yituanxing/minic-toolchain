@@ -59,8 +59,9 @@ mini_value=$(readelf -sW "$work/mini.o" | awk '$NF=="variable_start" {print $2}'
 gnu_value=$(readelf -sW "$work/gnu.o" | awk '$NF=="variable_start" {print $2}')
 test "$mini_value" = "$gnu_value"
 
-# Unsupported symbolic arithmetic remains a deliberately observable fallback;
-# it must still assemble to the same bytes and not disappear as a no-op.
+# Compound scaled symbolic arithmetic is now a persistent typed expression;
+# there must be no fallback source interpretation, and emitted bytes must
+# still match GNU after the final fragment layout.
 cat >"$work/fallback.s" <<'SRC'
 .data
   .space ((span_end-span_begin)*2)+1,0x5a
@@ -72,7 +73,7 @@ SRC
 MINIAS_TRACE_RELAYOUT=1 "$MINIAS" "${mini[@]}" \
   -o "$work/fallback-mini.o" "$work/fallback.s" 2>"$work/trace"
 "${gas[@]}" -o "$work/fallback-gnu.o" "$work/fallback.s"
-grep -q '^minias-mcexpr-variable:typed=0 fallback=1$' "$work/trace"
+grep -q '^minias-mcexpr-variable:typed=1 fallback=0$' "$work/trace"
 "${copy[@]}" -j .data -O binary "$work/fallback-mini.o" "$work/fallback-mini.bin"
 "${copy[@]}" -j .data -O binary "$work/fallback-gnu.o" "$work/fallback-gnu.bin"
 cmp "$work/fallback-mini.bin" "$work/fallback-gnu.bin"
@@ -96,4 +97,4 @@ for invalid in undefined cross_section; do
   test ! -e "$work/bad.o"
 done
 
-echo "MINIAS_VARIABLE_MCEXPR_FIXEDPOINT=PASS arch=$ARCH typed_symbol_ids=1 lexical_mutable_set=1 forward_data=1 dot_anchor=1 scaled_difference=1 GNU_exact=1 fallback_explicit=1 invalid_rejected=2"
+echo "MINIAS_VARIABLE_MCEXPR_FIXEDPOINT=PASS arch=$ARCH typed_symbol_ids=1 lexical_mutable_set=1 forward_data=1 dot_anchor=1 scaled_difference=1 GNU_exact=1 compound_persistent=1 fallback=0 invalid_rejected=2"

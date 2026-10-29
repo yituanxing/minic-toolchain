@@ -36,6 +36,14 @@ enum MiniAsRiscvMCFamily {
     RV_MC_LI, RV_MC_CALL, RV_MC_TAIL, RV_MC_LA, RV_MC_RAW
 };
 
+/* One Target-private instruction descriptor lookup supplies both parser
+ * dispatch and ISA/XLEN policy. Unknown/legacy pseudo spellings return
+ * false and continue through the Target's explicit compatibility policy. */
+bool minias_riscv_mc_descriptor_policy(const char *mnemonic,
+                                       uint64_t *required_features,
+                                       bool *rv64_only,
+                                       unsigned *family);
+
 /* RISC-V-only psABI relocation constants. */
 #define MINIAS_R_RISCV_32 1U
 #define MINIAS_R_RISCV_64 2U

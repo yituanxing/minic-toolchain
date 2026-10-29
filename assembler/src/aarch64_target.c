@@ -4852,7 +4852,7 @@ static bool code_alignment(MiniAs *as, int section, size_t amount) {
         return false;
     }
     while (amount != 0U) {
-        if (!minias_section_append(as, section, nop, sizeof(nop)))
+        if (!minias_emit_instruction_bytes(as, section, nop, sizeof(nop)))
             return false;
         amount -= sizeof(nop);
     }
@@ -4996,6 +4996,7 @@ static const MiniAsTargetOps ops = {
     .dot_relative_fixup = MINIAS_FIXUP_PREL32,
     .inst_directive_width = 4U,
     .supports_literal_pools = true,
+    .literal_pool_order = MINIAS_LITERAL_POOL_WIDTH_ASC,
     .cfi_implicit_eh_frame = true,
     .cfi_code_align = 4U,
     .cfi_data_align = -8,
