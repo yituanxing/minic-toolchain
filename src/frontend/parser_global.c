@@ -97,6 +97,8 @@ bool minic_parser_global_zero_definition(MinicParser *parser,
                                          MinicType object_type,
                                          MinicSourceSpan name_span);
 
+static bool parse_static_declarator_tail(MinicParser *parser, MinicType base_type);
+
 static bool parse_static_scalar(MinicParser *parser, MinicType type, MinicSourceSpan name_span) {
     MinicGlobalObjectId object_id;
     bool braced;
@@ -147,38 +149,65 @@ static bool parse_static_scalar(MinicParser *parser, MinicType type, MinicSource
             return false;
         }
     }
-    if (parser->current.kind == MINIC_TOKEN_COMMA) {
-        MinicSourceSpan next_name_span;
+    return parse_static_declarator_tail(parser, type);
+}
 
-        if (!minic_parser_advance(parser) || parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
-            minic_parser_error(parser, "expected static scalar declarator after ','");
-            return false;
-        }
-        next_name_span = parser->current.span;
-        if (!minic_parser_advance(parser)) {
-            return false;
-        }
-        if (parser->current.kind == MINIC_TOKEN_EQUAL) {
-            return parse_static_scalar(parser, type, next_name_span);
-        }
-        if (parser->current.kind == MINIC_TOKEN_SEMICOLON) {
-            return minic_parser_global_zero_definition(parser, type, next_name_span);
-        }
-        if (parser->current.kind == MINIC_TOKEN_COMMA) {
-            return minic_parser_parse_static_zero_declaration_list_after_head(parser,
-                                                                               type,
-                                                                               type,
-                                                                               next_name_span,
-                                                                               NULL,
-                                                                               0U,
-                                                                               false,
-                                                                               0U);
-        }
-        minic_parser_error(parser,
-                           "expected '=', ',' or ';' after static scalar declarator");
+/* A C declaration may define several objects using one base type, including
+ * independently initialized arrays.  The array paths used to require a ';'
+ * immediately after their first initializer, even for the valid GNU Linux
+ * form `static u8 a[N] = {...}, b[N] = {...};`.  Resume at the next declarator
+ * instead of treating the comma as part of the initializer. */
+static bool parse_static_declarator_tail(MinicParser *parser, MinicType base_type) {
+    MinicSourceSpan name_span;
+    MinicType object_type;
+    char section_name[256];
+    size_t section_name_length;
+    size_t explicit_alignment;
+    bool has_section;
+
+    if (parser == NULL) {
         return false;
     }
-    return minic_parser_expect(parser, MINIC_TOKEN_SEMICOLON, "expected ';' after global object");
+    if (parser->current.kind == MINIC_TOKEN_SEMICOLON) {
+        return minic_parser_advance(parser);
+    }
+    if (parser->current.kind != MINIC_TOKEN_COMMA || !minic_parser_advance(parser)) {
+        minic_parser_error(parser, "expected ',' or ';' after static initializer");
+        return false;
+    }
+    if (!minic_parser_parse_pointer_declarator(parser, base_type, &object_type) ||
+        parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
+        if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+            minic_parser_error(parser, "expected static declarator after initializer");
+        }
+        return false;
+    }
+    name_span = parser->current.span;
+    if (!minic_parser_advance(parser)) {
+        return false;
+    }
+    if (parser->current.kind == MINIC_TOKEN_COMMA) {
+        return minic_parser_parse_static_zero_declaration_list_after_head(parser,
+                                                                           base_type,
+                                                                           object_type,
+                                                                           name_span,
+                                                                           NULL,
+                                                                           0U,
+                                                                           false,
+                                                                           0U);
+    }
+    section_name_length = 0U;
+    explicit_alignment = 0U;
+    has_section = false;
+    (void)memset(section_name, 0, sizeof(section_name));
+    return minic_parser_parse_static_global_after_head(parser,
+                                                       object_type,
+                                                       name_span,
+                                                       section_name,
+                                                       sizeof(section_name),
+                                                       &section_name_length,
+                                                       &has_section,
+                                                       &explicit_alignment);
 }
 
 static bool parse_extern_function_pointer_object_declarator(MinicParser *parser,
@@ -757,8 +786,17 @@ static bool parse_static_pointer_array(MinicParser *parser,
             return false;
         }
     }
-    return minic_parser_expect(
-        parser, MINIC_TOKEN_SEMICOLON, "expected ';' after static pointer array");
+    {
+        MinicType declaration_base;
+
+        /* Pointer stars are per declarator in C: `char *a[2], *b[2]`
+         * describes two pointer arrays, not a pointer and a double pointer. */
+        if (!minic_type_pointee(element_type, &declaration_base)) {
+            minic_parser_error(parser, "invalid static pointer-array declaration base");
+            return false;
+        }
+        return parse_static_declarator_tail(parser, declaration_base);
+    }
 }
 
 static bool static_object_type_is_read_only(const MinicC0Program *program, MinicType type) {
@@ -874,8 +912,7 @@ static bool parse_static_inferred_integer_array(MinicParser *parser,
         }
         return false;
     }
-    return minic_parser_expect(
-        parser, MINIC_TOKEN_SEMICOLON, "expected ';' after inferred static integer array");
+    return parse_static_declarator_tail(parser, element_type);
 }
 
 static bool parse_static_inferred_char_array(MinicParser *parser,
@@ -939,8 +976,7 @@ static bool parse_static_inferred_char_array(MinicParser *parser,
             "inferred static character array requires a string or braced scalar initializer");
         return false;
     }
-    return minic_parser_expect(
-        parser, MINIC_TOKEN_SEMICOLON, "expected ';' after static character array");
+    return parse_static_declarator_tail(parser, element_type);
 }
 
 bool minic_parser_parse_static_zero_declaration_list_after_head(MinicParser *parser,
@@ -1190,8 +1226,7 @@ static bool parse_preformed_static_array_definition(MinicParser *parser,
                    parser, object_id, object_type)) {
         return false;
     }
-    return minic_parser_expect(
-        parser, MINIC_TOKEN_SEMICOLON, "expected ';' after pre-formed static array definition");
+    return parse_static_declarator_tail(parser, object_type);
 }
 
 bool minic_parser_parse_static_global_after_head(MinicParser *parser,
@@ -1398,8 +1433,7 @@ bool minic_parser_parse_static_global_after_head(MinicParser *parser,
         }
         return false;
     }
-    return minic_parser_expect(
-        parser, MINIC_TOKEN_SEMICOLON, "expected ';' after static array initializer");
+    return parse_static_declarator_tail(parser, element_type);
 }
 
 bool minic_parser_parse_static_global(MinicParser *parser) {

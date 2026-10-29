@@ -324,33 +324,47 @@ bool minic_x86_64_linux_kvm_hypercall_alt_form(
     return x86_linux_compact_asm_equals(text, length, expected);
 }
 
+/* The SEV fallback emits AMD VMMCALL directly; unlike the alternative form,
+ * no ELF patch record is produced. Both use the same Linux register ABI. */
+bool minic_x86_64_linux_kvm_hypercall_direct_form(
+    const char *text, size_t length) {
+    return text != NULL && length == 7U &&
+           memcmp(text, "vmmcall", 7U) == 0;
+}
+
 static bool x86_linux_kvm_hypercall_alt_source(
     const MinicC0Program *program, const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
-    static const char *const regs[] = {"a", "b", "c"};
+    static const char *const regs[] = {"a", "b", "c", "d", "S"};
     const MinicExpression *output, *arg;
+    bool alt;
     size_t i;
+    if (!src) return false;
+    alt = minic_x86_64_linux_kvm_hypercall_alt_form(
+        src->template_text, src->template_length);
     if (!program || !src || !contract || !src->is_volatile || src->is_goto ||
-        !minic_x86_64_linux_kvm_hypercall_alt_form(
-            src->template_text, src->template_length) ||
+        (!alt && !minic_x86_64_linux_kvm_hypercall_direct_form(
+            src->template_text, src->template_length)) ||
         src->output_count != 1U || !src->outputs ||
-        src->input_count != 3U || !src->inputs || src->label_count ||
+        src->input_count < 1U || src->input_count > 5U ||
+        (!alt && src->input_count > 4U) ||
+        !src->inputs || src->label_count ||
         !src->has_memory_clobber || src->clobber_count != 1U ||
         src->register_clobber_count ||
         !target_constraint_is(&src->outputs[0], "=a")) return false;
     output = minic_c0_program_expression(program, src->outputs[0].expression);
     if (!output || output->value_category != MINIC_VALUE_LVALUE ||
         !minic_type_equal(output->type, minic_type_long())) return false;
-    for (i = 0U; i < 3U; ++i) {
+    for (i = 0U; i < src->input_count; ++i) {
         arg = minic_c0_program_expression(program, src->inputs[i].expression);
         if (!arg || !target_constraint_is(&src->inputs[i], regs[i]) ||
             !minic_type_equal(arg->type, i == 0U
                 ? minic_type_unsigned_int() : minic_type_unsigned_long()))
             return false;
     }
-    contract->operand_count = 4U;
+    contract->operand_count = 1U + src->input_count;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
-    for (i = 1U; i < 4U; ++i)
+    for (i = 1U; i < contract->operand_count; ++i)
         contract->kinds[i] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->implicit_memory_effect = true;
     return true;

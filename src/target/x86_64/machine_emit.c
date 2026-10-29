@@ -42,6 +42,31 @@ static bool x86_asm_symbol_relocation_valid(const char *text) {
     return true;
 }
 
+/* Linux's bundled ZSTD decoder places four progressively narrower GNU
+ * basic-asm alignments around an explicitly padded hot loop.  A basic asm
+ * `nop` is part of that same source sequence.  Match the entire text and
+ * reject every other opaque instruction, including appended directives:
+ * opaque asm must never become a generic pass-through to GNU as. */
+static unsigned int x86_linux_zstd_loop_padding_form(
+    const MinicCoreInlineAsm *a) {
+    static const char *const forms[] = {
+        "nop", ".p2align 3", ".p2align 4", ".p2align 5"
+    };
+    size_t i;
+    if (a == NULL || a->template_text == NULL || !a->is_volatile ||
+        a->is_goto || a->has_memory_clobber ||
+        a->register_clobber_count != 0U ||
+        a->resolved_immediate_count != 0U)
+        return 0U;
+    for (i = 0U; i < sizeof(forms) / sizeof(forms[0]); ++i) {
+        const size_t length = strlen(forms[i]);
+        if (a->template_length == length &&
+            memcmp(a->template_text, forms[i], length) == 0)
+            return (unsigned int)(i + 1U);
+    }
+    return 0U;
+}
+
 /* Linux static-key patching needs three genuine *link-time* relocations.
  * On x86 the patch-site and target use PREL32, and the key/branch-flags
  * entry uses PREL64. Core's symbolic specialization can resolve the key
@@ -314,6 +339,16 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
             if (!a->is_volatile || a->is_goto || a->has_memory_clobber ||
                 a->register_clobber_count != 0U) return false;
             return fputs("  .p2align 6\n", out) != EOF;
+        }
+        if (a != NULL) {
+            const unsigned int padding = x86_linux_zstd_loop_padding_form(a);
+            if (padding != 0U) {
+                static const char *const emitted[] = {
+                    "  nop\n", "  .p2align 3\n", "  .p2align 4\n",
+                    "  .p2align 5\n"
+                };
+                return fputs(emitted[padding - 1U], out) != EOF;
+            }
         }
         if (a != NULL && minic_x86_64_linux_amx_tilerelease_form(
                 a->template_text, a->template_length)) {

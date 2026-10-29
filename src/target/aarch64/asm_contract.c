@@ -980,7 +980,7 @@ static bool aarch64_linux_alt_lse_partition(
  * (VHE alternate system-register access feature 50). */
 static bool aarch64_linux_alt_emit_middle(
     FILE *out, unsigned int cap, bool uses_lse) {
-    if (!out || (cap != 33U && cap != 50U)) return false;
+    if (!out || (cap != 33U && cap != 47U && cap != 50U)) return false;
     return fprintf(out,
         "662:\n"
         "  .pushsection .altinstructions, \"a\"\n"
@@ -1741,6 +1741,16 @@ static bool aarch64_linux_uaccess_bic_template(
  * register allowlist and reject arbitrary substituted GNU ASM. Source and
  * machine emission consult this one target ISA contract. */
 static const char *aarch64_linux_msr_register(const char *text, size_t len) {
+    /* Linux debug-sr.h expands restore_debug() into the full 16-slot
+     * architectural breakpoint/watchpoint register bank.  Keep the
+     * finite set of named GNU registers, never a generic `msr %s` gate. */
+#define AARCH64_LINUX_DEBUG_WRITES(n) \
+    "dbgbcr" #n "_el1", "dbgbvr" #n "_el1", \
+    "dbgwcr" #n "_el1", "dbgwvr" #n "_el1"
+    /* PMUv3 event registers are architecturally indexed 0..30; KVM and
+     * arm_pmuv3.c write both counter and event-selector banks. */
+#define AARCH64_LINUX_PMU_WRITES(n) \
+    "pmevcntr" #n "_el0", "pmevtyper" #n "_el0"
     static const char *const registers[] = {
         "daif", "ttbr0_el1", "ttbr1_el1", "tcr_el1", "sctlr_el1",
         "contextidr_el1", "cpacr_el1", "vbar_el1", "mdscr_el1",
@@ -1755,11 +1765,39 @@ static const char *aarch64_linux_msr_register(const char *text, size_t len) {
         "par_el1", "elr_el2", "spsr_el2", "spsr_abt", "spsr_und",
         "vmpidr_el2", "cnthctl_el2", "cntvoff_el2", "pmuserenr_el0",
         "pmcntenset_el0", "pmcntenclr_el0", "pmovsclr_el0",
-        "pmevtyper0_el0", "pmevcntr0_el0", "pmselr_el0",
+        "pmselr_el0",
         "pmintenset_el1", "pmintenclr_el1", "pmccntr_el0",
-        "pmccfiltr_el0", "pmcr_el0", "dbgbcr15_el1",
-        "dbgbvr0_el1", "CPACR_EL1"
+        "pmccfiltr_el0", "pmcr_el0", "CPACR_EL1",
+        "mdccint_el1", "tpidr_el1", "sp_el1",
+        "spsr_irq", "spsr_fiq", "dacr32_el2", "ifsr32_el2",
+        "dbgvcr32_el2", "mair_el1", "vbar_el2",
+        AARCH64_LINUX_DEBUG_WRITES(0), AARCH64_LINUX_DEBUG_WRITES(1),
+        AARCH64_LINUX_DEBUG_WRITES(2), AARCH64_LINUX_DEBUG_WRITES(3),
+        AARCH64_LINUX_DEBUG_WRITES(4), AARCH64_LINUX_DEBUG_WRITES(5),
+        AARCH64_LINUX_DEBUG_WRITES(6), AARCH64_LINUX_DEBUG_WRITES(7),
+        AARCH64_LINUX_DEBUG_WRITES(8), AARCH64_LINUX_DEBUG_WRITES(9),
+        AARCH64_LINUX_DEBUG_WRITES(10), AARCH64_LINUX_DEBUG_WRITES(11),
+        AARCH64_LINUX_DEBUG_WRITES(12), AARCH64_LINUX_DEBUG_WRITES(13),
+        AARCH64_LINUX_DEBUG_WRITES(14), AARCH64_LINUX_DEBUG_WRITES(15),
+        AARCH64_LINUX_PMU_WRITES(0), AARCH64_LINUX_PMU_WRITES(1),
+        AARCH64_LINUX_PMU_WRITES(2), AARCH64_LINUX_PMU_WRITES(3),
+        AARCH64_LINUX_PMU_WRITES(4), AARCH64_LINUX_PMU_WRITES(5),
+        AARCH64_LINUX_PMU_WRITES(6), AARCH64_LINUX_PMU_WRITES(7),
+        AARCH64_LINUX_PMU_WRITES(8), AARCH64_LINUX_PMU_WRITES(9),
+        AARCH64_LINUX_PMU_WRITES(10), AARCH64_LINUX_PMU_WRITES(11),
+        AARCH64_LINUX_PMU_WRITES(12), AARCH64_LINUX_PMU_WRITES(13),
+        AARCH64_LINUX_PMU_WRITES(14), AARCH64_LINUX_PMU_WRITES(15),
+        AARCH64_LINUX_PMU_WRITES(16), AARCH64_LINUX_PMU_WRITES(17),
+        AARCH64_LINUX_PMU_WRITES(18), AARCH64_LINUX_PMU_WRITES(19),
+        AARCH64_LINUX_PMU_WRITES(20), AARCH64_LINUX_PMU_WRITES(21),
+        AARCH64_LINUX_PMU_WRITES(22), AARCH64_LINUX_PMU_WRITES(23),
+        AARCH64_LINUX_PMU_WRITES(24), AARCH64_LINUX_PMU_WRITES(25),
+        AARCH64_LINUX_PMU_WRITES(26), AARCH64_LINUX_PMU_WRITES(27),
+        AARCH64_LINUX_PMU_WRITES(28), AARCH64_LINUX_PMU_WRITES(29),
+        AARCH64_LINUX_PMU_WRITES(30)
     };
+#undef AARCH64_LINUX_DEBUG_WRITES
+#undef AARCH64_LINUX_PMU_WRITES
     char compact[96];
     size_t i, n = 0U;
     if (!text || !len || len >= sizeof(compact)) return NULL;
@@ -1964,14 +2002,17 @@ static const Aarch64LinuxWriteSysreg aarch64_linux_write_sysregs[] = {
     {3U,0U,12U,12U,3U}, /* ICC_BPR1_EL1 */
     {3U,0U,12U,12U,4U}, /* ICC_CTLR_EL1 */
     {3U,0U,12U,12U,7U}, /* ICC_IGRPEN1_EL1 */
-    {3U,0U,12U,9U,0U}, /* ICC_AP0R0_EL1 */
-    {3U,0U,12U,9U,1U}, /* ICC_AP0R1_EL1 */
-    {3U,0U,12U,9U,2U}, /* ICC_AP0R2_EL1 */
-    {3U,0U,12U,9U,3U}, /* ICC_AP0R3_EL1 */
-    {3U,0U,12U,8U,4U}, /* ICC_AP1R0_EL1, GNU SYS_AP1Rn macro 4|0 */
-    {3U,0U,12U,8U,5U}, /* ICC_AP1R1_EL1, GNU SYS_AP1Rn macro 4|1 */
-    {3U,0U,12U,8U,6U}, /* ICC_AP1R2_EL1, GNU SYS_AP1Rn macro 4|2 */
-    {3U,0U,12U,8U,7U}, /* ICC_AP1R3_EL1, GNU SYS_AP1Rn macro 4|3 */
+    /* Linux sysreg.h SYS_ICC_AP0Rn is CRm=8, op2=(4|n);
+     * SYS_ICC_AP1Rn is CRm=9, op2=n (previous table was reversed). */
+    {3U,0U,12U,8U,4U}, /* ICC_AP0R0_EL1 */
+    {3U,0U,12U,8U,5U}, /* ICC_AP0R1_EL1 */
+    {3U,0U,12U,8U,6U}, /* ICC_AP0R2_EL1 */
+    {3U,0U,12U,8U,7U}, /* ICC_AP0R3_EL1 */
+    {3U,0U,12U,9U,0U}, /* ICC_AP1R0_EL1 */
+    {3U,0U,12U,9U,1U}, /* ICC_AP1R1_EL1 */
+    {3U,0U,12U,9U,2U}, /* ICC_AP1R2_EL1 */
+    {3U,0U,12U,9U,3U}, /* ICC_AP1R3_EL1 */
+    {3U,4U,12U,9U,5U}, /* ICC_SRE_EL2 */
     /* Linux 6.6 arch/arm64/tools/sysreg + KVM hyp/switch.h: explicit
      * hypervisor trap controls. Each exact 5-field instruction encoding
      * is lowered as privileged MSR, never as a discarded GNU macro. */
@@ -2007,17 +2048,31 @@ static const Aarch64LinuxWriteSysreg aarch64_linux_write_sysregs[] = {
     {3U,0U,1U,2U,1U}, /* TRFCR_EL1 */
     {3U,0U,12U,1U,1U}, /* DISR_EL1 */
     {3U,0U,2U,0U,0U}, /* TTBR0_EL1 */
+    {3U,0U,2U,0U,1U}, /* TTBR1_EL1 */
     {3U,0U,2U,0U,2U}, /* TCR_EL1 */
+    {3U,0U,2U,0U,3U}, /* TCR2_EL1 */
     {3U,0U,4U,0U,0U}, /* SPSR_EL1 */
     {3U,0U,4U,0U,1U}, /* ELR_EL1 */
     {3U,0U,5U,2U,0U}, /* ESR_EL1 */
+    {3U,0U,5U,1U,0U}, /* AFSR0_EL1 */
+    {3U,0U,5U,1U,1U}, /* AFSR1_EL1 */
     {3U,0U,5U,6U,0U}, /* TFSR_EL1 */
     {3U,0U,5U,6U,1U}, /* TFSRE0_EL1 */
+    {3U,0U,6U,0U,0U}, /* FAR_EL1 */
+    {3U,0U,10U,2U,0U}, /* MAIR_EL1 */
+    {3U,0U,10U,2U,2U}, /* PIRE0_EL1 */
+    {3U,0U,10U,2U,3U}, /* PIR_EL1 */
+    {3U,0U,10U,3U,0U}, /* AMAIR_EL1 */
+    {3U,0U,12U,0U,0U}, /* VBAR_EL1 */
+    {3U,0U,13U,0U,1U}, /* CONTEXTIDR_EL1 */
+    {3U,0U,14U,1U,0U}, /* CNTKCTL_EL1 */
     {3U,0U,9U,9U,0U}, /* PMSCR_EL1 */
     /* EL2 control, stage-2 translation, virtual GIC and timer registers. */
     {3U,4U,1U,0U,0U}, /* SCTLR_EL2 */
     {3U,4U,1U,2U,0U}, /* ZCR_EL2 */
     {3U,4U,12U,1U,1U}, /* DISR_EL2 */
+    {3U,4U,3U,0U,0U}, /* DACR32_EL2 */
+    {3U,4U,5U,0U,1U}, /* IFSR32_EL2 */
     {3U,4U,12U,11U,0U}, /* ICH_HCR_EL2 */
     {3U,4U,12U,11U,7U}, /* ICH_VMCR_EL2 */
     /* arch/arm64/include/asm/sysreg.h: AP0R is CRm=8, AP1R is CRm=9;
@@ -2058,10 +2113,21 @@ static const Aarch64LinuxWriteSysreg aarch64_linux_write_sysregs[] = {
     {3U,5U,2U,0U,0U}, /* TTBR0_EL12 */
     {3U,5U,2U,0U,1U}, /* TTBR1_EL12 */
     {3U,5U,2U,0U,2U}, /* TCR_EL12 */
+    {3U,5U,2U,0U,3U}, /* TCR2_EL12 */
     {3U,5U,4U,0U,0U}, /* SPSR_EL12 */
+    {3U,5U,4U,0U,1U}, /* ELR_EL12 */
     {3U,5U,5U,1U,0U}, /* AFSR0_EL12 */
     {3U,5U,5U,1U,1U}, /* AFSR1_EL12 */
-    {3U,5U,5U,2U,0U}  /* ESR_EL12 */
+    {3U,5U,5U,2U,0U}, /* ESR_EL12 */
+    {3U,5U,5U,6U,0U}, /* TFSR_EL12 */
+    {3U,5U,6U,0U,0U}, /* FAR_EL12 */
+    {3U,5U,10U,2U,0U}, /* MAIR_EL12 */
+    {3U,5U,10U,2U,2U}, /* PIRE0_EL12 */
+    {3U,5U,10U,2U,3U}, /* PIR_EL12 */
+    {3U,5U,10U,3U,0U}, /* AMAIR_EL12 */
+    {3U,5U,12U,0U,0U}, /* VBAR_EL12 */
+    {3U,5U,13U,0U,1U}, /* CONTEXTIDR_EL12 */
+    {3U,5U,14U,1U,0U}  /* CNTKCTL_EL12 */
 };
 
 /* Linux 6.6 arm64 sysreg.h write_sysreg_s() is the WRITE companion to
@@ -2178,52 +2244,80 @@ static bool aarch64_linux_encoded_sysreg_write_emit(
  * original capability record. Reuse the single-register GNU decoders. */
 typedef struct Aarch64LinuxVheSysregAlternative {
     bool is_read;
+    unsigned int capability;
     unsigned int old_opcode, new_opcode;
 } Aarch64LinuxVheSysregAlternative;
+/* Only register pairs corresponding to the exact KVM EL1/EL12 or EL2/EL1
+ * alias move may be re-encoded.  Both must be known architectural SYS_*
+ * tuple encodings. This is deliberately not an arbitrary GNU macro bridge. */
+static bool aarch64_linux_vhe_sysreg_pair(
+    const Aarch64LinuxWriteSysreg *old_reg,
+    const Aarch64LinuxWriteSysreg *new_reg) {
+    return old_reg && new_reg && old_reg->op0 == 3U &&
+           new_reg->op0 == 3U && old_reg->crn == new_reg->crn &&
+           old_reg->crm == new_reg->crm && old_reg->op2 == new_reg->op2 &&
+           ((old_reg->op1 == 0U && new_reg->op1 == 5U) ||
+            (old_reg->op1 == 4U && new_reg->op1 == 0U));
+}
+static const Aarch64LinuxWriteSysreg *aarch64_linux_known_sysreg_opcode(
+    unsigned int opcode) {
+    const unsigned int reg_bits = opcode & 0x001fffe0U;
+    size_t i;
+    for (i = 0U; i < sizeof(aarch64_linux_write_sysregs) /
+                       sizeof(aarch64_linux_write_sysregs[0]); ++i) {
+        const Aarch64LinuxWriteSysreg *reg = &aarch64_linux_write_sysregs[i];
+        if (reg_bits == ((reg->op0 << 19) | (reg->op1 << 16) |
+                         (reg->crn << 12) | (reg->crm << 8) |
+                         (reg->op2 << 5))) return reg;
+    }
+    return NULL;
+}
 static bool aarch64_linux_vhe_sysreg_alternative_form(
     const char *text, size_t length,
     Aarch64LinuxVheSysregAlternative *result) {
     char old_body[768], new_body[768];
-    unsigned int old_opcode, new_opcode, old_write, new_write, field;
-    if (!result || !aarch64_linux_alt_partition(
-            text, length, 50U, old_body, sizeof(old_body),
-            new_body, sizeof(new_body))) return false;
-    old_opcode = aarch64_linux_encoded_sysreg_form(
-        old_body, strlen(old_body));
-    new_opcode = aarch64_linux_encoded_sysreg_form(
-        new_body, strlen(new_body));
-    for (field = 0U; field < 2U; ++field) {
-        const unsigned int common = (3U << 19) | (4U << 12) |
-                                    (field << 5) | 9U;
-        if (old_opcode == (0xd5200000U | (4U << 16) | common) &&
-            new_opcode == (0xd5200000U | common)) {
+    unsigned int cap;
+    if (!result) return false;
+    for (cap = 47U; cap <= 50U; cap += 3U) {
+        unsigned int old_opcode, new_opcode, old_write, new_write;
+        const Aarch64LinuxWriteSysreg *old_reg, *new_reg;
+        if (!aarch64_linux_alt_partition(
+                text, length, cap, old_body, sizeof(old_body),
+                new_body, sizeof(new_body))) continue;
+        old_opcode = aarch64_linux_encoded_sysreg_form(
+            old_body, strlen(old_body));
+        new_opcode = aarch64_linux_encoded_sysreg_form(
+            new_body, strlen(new_body));
+        old_reg = aarch64_linux_known_sysreg_opcode(old_opcode);
+        new_reg = aarch64_linux_known_sysreg_opcode(new_opcode);
+        if (old_opcode && new_opcode &&
+            aarch64_linux_vhe_sysreg_pair(old_reg, new_reg)) {
             result->is_read = true;
+            result->capability = cap;
             result->old_opcode = old_opcode;
             result->new_opcode = new_opcode;
             return true;
         }
-    }
-    old_write = aarch64_linux_encoded_sysreg_write_form(
-        old_body, strlen(old_body));
-    new_write = aarch64_linux_encoded_sysreg_write_form(
-        new_body, strlen(new_body));
-    if (!old_write || !new_write) return false;
-    for (field = 0U; field < 2U; ++field) {
-        const Aarch64LinuxWriteSysreg *old_reg =
-            &aarch64_linux_write_sysregs[old_write - 1U];
-        const Aarch64LinuxWriteSysreg *new_reg =
-            &aarch64_linux_write_sysregs[new_write - 1U];
-        if (old_reg->op0 == 3U && old_reg->op1 == 4U &&
-            old_reg->crn == 4U && old_reg->crm == 0U &&
-            old_reg->op2 == field && new_reg->op0 == 3U &&
-            new_reg->op1 == 0U && new_reg->crn == 4U &&
-            new_reg->crm == 0U && new_reg->op2 == field) {
-            result->is_read = false;
-            result->old_opcode = 0xd5000000U |
-                (3U << 19) | (4U << 16) | (4U << 12) | (field << 5) | 9U;
-            result->new_opcode = 0xd5000000U |
-                (3U << 19) | (4U << 12) | (field << 5) | 9U;
-            return true;
+        old_write = aarch64_linux_encoded_sysreg_write_form(
+            old_body, strlen(old_body));
+        new_write = aarch64_linux_encoded_sysreg_write_form(
+            new_body, strlen(new_body));
+        if (old_write && new_write) {
+            old_reg = &aarch64_linux_write_sysregs[old_write - 1U];
+            new_reg = &aarch64_linux_write_sysregs[new_write - 1U];
+            if (aarch64_linux_vhe_sysreg_pair(old_reg, new_reg)) {
+                result->is_read = false;
+                result->capability = cap;
+                result->old_opcode = 0xd5000000U |
+                    (old_reg->op0 << 19) | (old_reg->op1 << 16) |
+                    (old_reg->crn << 12) | (old_reg->crm << 8) |
+                    (old_reg->op2 << 5) | 9U;
+                result->new_opcode = 0xd5000000U |
+                    (new_reg->op0 << 19) | (new_reg->op1 << 16) |
+                    (new_reg->crn << 12) | (new_reg->crm << 8) |
+                    (new_reg->op2 << 5) | 9U;
+                return true;
+            }
         }
     }
     return false;
@@ -2286,7 +2380,7 @@ static bool aarch64_linux_vhe_sysreg_alternative_emit(
                 form->is_read ? "x10" : "x9",
                 (size_t)op->value * 8U,
                 form->old_opcode) < 0 ||
-        !aarch64_linux_alt_emit_middle(out, 50U, false) ||
+        !aarch64_linux_alt_emit_middle(out, form->capability, false) ||
         fprintf(out, "  .inst 0x%08x\n", form->new_opcode) < 0 ||
         !aarch64_linux_alt_emit_end(out)) return false;
     return !form->is_read || fputs("  str x9, [x10]\n", out) != EOF;
@@ -2297,15 +2391,16 @@ static bool aarch64_linux_vhe_sysreg_alternative_emit(
  * GNU register-or-zero operand. This is a KERNEL HARDWARE invalidation,
  * not a C function call or an ordinary compiler memory fence. Keep all
  * original TLBI opcodes in this ISA target, never generic Core. */
-enum { AARCH64_LINUX_TLBI_ADDR_FORM_COUNT = 11U };
+enum { AARCH64_LINUX_TLBI_ADDR_FORM_COUNT = 13U };
 static const char *const aarch64_linux_tlbi_names[] = {
     /* All forms before ADDR_FORM_COUNT have one rZ input. */
     "vale1is", "vale2is", "aside1is", "rvale1is",
     "vae1is", "rvae1is", "vaale1is", "vaae1is",
     /* KVM stage-2 and EL2 address translations. */
-    "ipas2e1is", "ipas2e1", "vae2is",
+    "ipas2e1is", "ipas2e1", "vae2is", "ripas2e1is", "ripas2e1",
     /* Whole-context invalidations have no explicit operand. */
-    "vmalle1", "vmalle1is", "alle1is", "vmalls12e1is"
+    "vmalle1", "vmalle1is", "alle1is", "vmalls12e1is",
+    "vmalls12e1"
 };
 static unsigned int aarch64_linux_tlbi_form(const char *text,size_t length) {
     char normalized[128],expected[128];

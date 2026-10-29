@@ -19,6 +19,27 @@
  * target owned; planning and type checks are shared with the other LP64
  * backend, preserving AArch64 and LoongArch64 ABI/ISA divergence. */
 
+/* An AArch64 MOVZ immediate carries just 16 bits. A pointer element stride
+ * may be much larger (Linux has large ZSTD contexts and LZO thread records),
+ * so materialize the complete target LP64 size without silently truncating
+ * its upper words. x10/x11 are reserved scratch registers in this emitter. */
+static bool aarch64_emit_size_constant(FILE *out, unsigned int reg,
+                                       size_t value) {
+    const uint64_t imm = (uint64_t)value;
+    unsigned int shift;
+    if (out == NULL || (reg != 10U && reg != 11U) ||
+        fprintf(out, "  movz x%u, #%" PRIu64 "\n",
+                reg, imm & UINT64_C(0xffff)) < 0)
+        return false;
+    for (shift = 16U; shift <= 48U; shift += 16U) {
+        if (((imm >> shift) & UINT64_C(0xffff)) != 0U &&
+            fprintf(out, "  movk x%u, #%" PRIu64 ", lsl #%u\n",
+                    reg, (imm >> shift) & UINT64_C(0xffff), shift) < 0)
+            return false;
+    }
+    return true;
+}
+
 
 bool minic_aarch64_emit_residual_instruction(
     FILE *out, const MinicDirectLP64BlockContext *ctx,
@@ -354,20 +375,8 @@ bool minic_aarch64_emit_residual_instruction(
                     return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
                                                reject_block, reject_ins, __LINE__);
             } else if (bytes > 4095U) {
-                const uint64_t imm = (uint64_t)bytes;
-                unsigned int shift;
-                if (fprintf(out, "  movz x10, #%" PRIu64 "\n",
-                            imm & UINT64_C(0xffff)) < 0)
-                    return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
-                                               reject_block, reject_ins, __LINE__);
-                for (shift = 16U; shift <= 48U; shift += 16U) {
-                    if (((imm >> shift) & UINT64_C(0xffff)) != 0U &&
-                        fprintf(out, "  movk x10, #%" PRIu64 ", lsl #%u\n",
-                                (imm >> shift) & UINT64_C(0xffff), shift) < 0)
-                        return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
-                                                   reject_block, reject_ins, __LINE__);
-                }
-                if (fputs("  add x9, x9, x10\n", out) == EOF)
+                if (!aarch64_emit_size_constant(out, 10U, bytes) ||
+                    fputs("  add x9, x9, x10\n", out) == EOF)
                     return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
                                                reject_block, reject_ins, __LINE__);
             }
@@ -395,7 +404,7 @@ bool minic_aarch64_emit_residual_instruction(
                     ins->value.pointer_offset.subtract ? 1 : 0);
             }
             if (!minic_multi_direct_pointer_offset_shape(
-                    program, target, fn, ins, 65535U, &iw, &signed_index) ||
+                    program, target, fn, ins, SIZE_MAX, &iw, &signed_index) ||
                 fprintf(out, "  ldr x9, [sp, #%zu]\n", (size_t)base * 8U) < 0 ||
                 fprintf(out,
                         iw == 1U ? (signed_index
@@ -412,9 +421,9 @@ bool minic_aarch64_emit_residual_instruction(
                 return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
             if (stride != 0U) {
-                if (fprintf(out, "  movz x11, #%zu\n"
-                                 "  mul x10, x10, x11\n"
-                                 "  %s x9, x9, x10\n", stride,
+                if (!aarch64_emit_size_constant(out, 11U, stride) ||
+                    fprintf(out, "  mul x10, x10, x11\n"
+                                 "  %s x9, x9, x10\n",
                             ins->value.pointer_offset.subtract ? "sub" : "add") < 0)
                     return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);

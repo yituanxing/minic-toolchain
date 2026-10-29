@@ -1,0 +1,70 @@
+/* Original Linux 6.6.143 arm64 hyp/debug-sr.h restore_debug() expands
+ * all 16 DBGBCR/DBGBVR/DBGWCR/DBGWVR slots. arm_pmuv3.c emits
+ * PMEVTYPERn and PMEVNCTRn through write_sysreg(). */
+#define WRITE_NAMED(reg) \
+    void write_##reg(unsigned long long v) { \
+        asm volatile("msr " #reg ", %x0" : : "rZ"(v)); \
+    }
+#define WRITE_DEBUG(n) \
+    WRITE_NAMED(dbgbcr##n##_el1) \
+    WRITE_NAMED(dbgbvr##n##_el1) \
+    WRITE_NAMED(dbgwcr##n##_el1) \
+    WRITE_NAMED(dbgwvr##n##_el1)
+#define WRITE_PMU(n) \
+    WRITE_NAMED(pmevcntr##n##_el0) \
+    WRITE_NAMED(pmevtyper##n##_el0)
+WRITE_DEBUG(0)
+WRITE_DEBUG(1)
+WRITE_DEBUG(2)
+WRITE_DEBUG(3)
+WRITE_DEBUG(4)
+WRITE_DEBUG(5)
+WRITE_DEBUG(6)
+WRITE_DEBUG(7)
+WRITE_DEBUG(8)
+WRITE_DEBUG(9)
+WRITE_DEBUG(10)
+WRITE_DEBUG(11)
+WRITE_DEBUG(12)
+WRITE_DEBUG(13)
+WRITE_DEBUG(14)
+WRITE_DEBUG(15)
+WRITE_PMU(0)
+WRITE_PMU(1)
+WRITE_PMU(2)
+WRITE_PMU(3)
+WRITE_PMU(4)
+WRITE_PMU(5)
+WRITE_PMU(6)
+WRITE_PMU(7)
+WRITE_PMU(8)
+WRITE_PMU(9)
+WRITE_PMU(10)
+WRITE_PMU(11)
+WRITE_PMU(12)
+WRITE_PMU(13)
+WRITE_PMU(14)
+WRITE_PMU(15)
+WRITE_PMU(16)
+WRITE_PMU(17)
+WRITE_PMU(18)
+WRITE_PMU(19)
+WRITE_PMU(20)
+WRITE_PMU(21)
+WRITE_PMU(22)
+WRITE_PMU(23)
+WRITE_PMU(24)
+WRITE_PMU(25)
+WRITE_PMU(26)
+WRITE_PMU(27)
+WRITE_PMU(28)
+WRITE_PMU(29)
+WRITE_PMU(30)
+WRITE_NAMED(spsr_irq)
+WRITE_NAMED(spsr_fiq)
+WRITE_NAMED(sp_el1)
+WRITE_NAMED(dacr32_el2)
+WRITE_NAMED(ifsr32_el2)
+WRITE_NAMED(dbgvcr32_el2)
+WRITE_NAMED(mdccint_el1)
+WRITE_NAMED(tpidr_el1)

@@ -261,22 +261,29 @@ static bool emit_linux_pv_indirect_call(
  * Linux binds the number to EAX, first two arguments to RBX/RCX, and the
  * result to RAX. RBX must be preserved by this SysV function even when the
  * GNU inline-asm statement specifies a read-only fixed-B input. */
-static bool emit_linux_kvm_hypercall_alt(
+static bool emit_linux_kvm_hypercall(
     FILE *out, const MinicCoreFunction *fn, const MinicX86Frame *frame,
     const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
     const MinicCoreStructuredInlineAsmOperand *b =
         ins->value.structured_inline_asm.operands;
-    static const char *const args[] = {"%rax", "%rbx", "%rcx"};
+    static const char *const args[] = {
+        "%rax", "%rbx", "%rcx", "%rdx", "%rsi"
+    };
+    const bool alt = info != NULL &&
+        minic_x86_64_linux_kvm_hypercall_alt_form(
+            info->template_text, info->template_length);
+    const size_t count = ins != NULL ?
+        ins->value.structured_inline_asm.operand_count : 0U;
     size_t i;
     if (!out || !fn || !frame || !ins || !info || !b ||
-        !minic_x86_64_linux_kvm_hypercall_alt_form(
-            info->template_text, info->template_length) ||
+        (!alt && !minic_x86_64_linux_kvm_hypercall_direct_form(
+            info->template_text, info->template_length)) ||
         !info->is_volatile || info->is_goto || !info->has_memory_clobber ||
         info->register_clobber_count ||
-        ins->value.structured_inline_asm.operand_count != 4U ||
+        count < 2U || count > 6U || (!alt && count > 5U) ||
         b[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
         !minic_type_is_pointer(fn->values[b[0].value].type)) return false;
-    for (i = 0U; i < 4U; ++i) {
+    for (i = 0U; i < count; ++i) {
         if (b[i].operand_index != i || b[i].value >= fn->value_count ||
             b[i].early_clobber || b[i].has_fixed_register_binding ||
             (i != 0U && (b[i].kind !=
@@ -286,10 +293,10 @@ static bool emit_linux_kvm_hypercall_alt(
             return false;
     }
     if (fputs("  pushq %rbx\n", out) == EOF) return false;
-    for (i = 0U; i < 3U; ++i)
+    for (i = 0U; i + 1U < count; ++i)
         if (!x86_value_load(out, frame, b[i + 1U].value, args[i])) return false;
-    return fputs(
-        "  movl %eax, %eax\n"
+    if (fputs("  movl %eax, %eax\n", out) == EOF) return false;
+    if (alt && fputs(
         "661:\n"
         "  vmcall\n"
         "662:\n"
@@ -307,9 +314,10 @@ static bool emit_linux_kvm_hypercall_alt(
         "6641:\n"
         "  vmmcall\n"
         "6651:\n"
-        "  .popsection\n", out) != EOF &&
-        x86_value_load(out, frame, b[0].value, "%r11") &&
-        fputs("  movq %rax, (%r11)\n  popq %rbx\n", out) != EOF;
+        "  .popsection\n", out) == EOF) return false;
+    if (!alt && fputs("  vmmcall\n", out) == EOF) return false;
+    return x86_value_load(out, frame, b[0].value, "%r11") &&
+           fputs("  movq %rax, (%r11)\n  popq %rbx\n", out) != EOF;
 }
 
 /* Linux's emergency stack-switch call must not touch an old possibly
@@ -5453,8 +5461,10 @@ bool minic_x86_64_emit_structured_asm(
             info->template_text, info->template_length))
         return emit_linux_pv_indirect_call(out, fn, frame, ins, info);
     if (minic_x86_64_linux_kvm_hypercall_alt_form(
+            info->template_text, info->template_length) ||
+        minic_x86_64_linux_kvm_hypercall_direct_form(
             info->template_text, info->template_length))
-        return emit_linux_kvm_hypercall_alt(out, fn, frame, ins, info);
+        return emit_linux_kvm_hypercall(out, fn, frame, ins, info);
     if (minic_x86_64_linux_exception_stack_call_form(
             info->template_text, info->template_length))
         return emit_linux_exception_stack_call(out, fn, frame, ins, info);

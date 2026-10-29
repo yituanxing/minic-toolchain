@@ -256,6 +256,112 @@ static MinicCoreLowerStatus lower_record_value_address(MinicCoreLowerContext *co
    Materialize one private result object and copy exactly the selected arm into
    it. Arms may be ordinary address-backed records, compound literals, direct
    record-returning calls, or nested record conditionals. */
+/* SysV/AAPCS64 register-save-area varargs classify a one-scalar-field record
+ * as one scalar argument. Reuse the target-owned scalar cursor operation, but
+ * materialize the value into a fresh record object in Core. The rule is
+ * deliberately narrow: multi-field, union, padded, and bit-field aggregates
+ * need the target's full aggregate ABI classifier and remain rejected. */
+static MinicCoreLowerStatus lower_abi_cursor_scalar_record_va_arg(
+    MinicCoreLowerContext *context, const MinicExpression *expression,
+    MinicType record_type, MinicCoreObjectId *object_id) {
+    const MinicRecord *record;
+    const MinicRecordField *field;
+    const MinicExpression *target;
+    MinicCoreInstruction instruction;
+    MinicCoreValueId list_address;
+    MinicCoreValueId cursor;
+    MinicCoreValueId value;
+    MinicCoreValueId record_address;
+    MinicCoreValueId field_address;
+    MinicType cursor_type;
+    MinicType record_pointer_type;
+    MinicType field_pointer_type;
+    size_t record_size;
+    size_t record_alignment;
+    size_t field_size;
+    size_t field_alignment;
+    MinicCoreLowerStatus status;
+
+    record = minic_c0_program_record(context->body->program, record_type.record_id);
+    target = minic_c0_program_expression(
+        context->body->program, expression->value.unary.operand);
+    if (record == NULL || !record->is_complete || record->is_union ||
+        record->field_count != 1U || record->fields == NULL ||
+        target == NULL || target->value_category != MINIC_VALUE_LVALUE ||
+        !minic_type_is_pointer(target->type) || minic_type_is_const(target->type) ||
+        !minic_type_unqualified(target->type, &cursor_type) ||
+        !minic_type_is_pointer(cursor_type))
+        return MINIC_CORE_LOWER_UNSUPPORTED;
+    field = &record->fields[0];
+    if (field->is_array || field->is_bit_field || field->is_flexible_array ||
+        field->is_zero_length_array || field->is_anonymous_member ||
+        (!minic_type_is_integer(field->type) &&
+         !minic_type_is_pointer(field->type) &&
+         !minic_type_is_double(field->type)) ||
+        !minic_data_layout_type(core_data_layout(context),
+                                context->body->program, record_type,
+                                &record_size, &record_alignment) ||
+        !minic_data_layout_type(core_data_layout(context),
+                                context->body->program, field->type,
+                                &field_size, &field_alignment) ||
+        record_size != field_size || record_alignment != field_alignment ||
+        record_size == 0U || record_size > 8U ||
+        !minic_type_pointer_to(record_type, &record_pointer_type) ||
+        !minic_type_pointer_to(field->type, &field_pointer_type))
+        return MINIC_CORE_LOWER_UNSUPPORTED;
+
+    status = lower_address(context, expression->value.unary.operand, &list_address);
+    if (status != MINIC_CORE_LOWER_OK) return status;
+    (void)memset(&instruction, 0, sizeof(instruction));
+    instruction.kind = MINIC_CORE_INSTRUCTION_LOAD;
+    instruction.span = expression->span;
+    instruction.type = cursor_type;
+    instruction.result = MINIC_CORE_VALUE_INVALID;
+    instruction.value.load.address = list_address;
+    instruction.value.load.is_volatile = minic_type_is_volatile(target->type);
+    if (!minic_core_function_append_value_instruction(
+            context->function, context->block_id, &instruction, &cursor))
+        return MINIC_CORE_LOWER_ERROR;
+
+    (void)memset(&instruction, 0, sizeof(instruction));
+    instruction.kind = MINIC_CORE_INSTRUCTION_VARIADIC_NEXT_SCALAR;
+    instruction.span = expression->span;
+    instruction.type = field->type;
+    instruction.result = MINIC_CORE_VALUE_INVALID;
+    instruction.value.operand = cursor;
+    if (!minic_core_function_append_value_instruction(
+            context->function, context->block_id, &instruction, &value))
+        return MINIC_CORE_LOWER_ERROR;
+
+    if (!minic_core_function_add_object(
+            context->function, expression->span, record_type, object_id))
+        return MINIC_CORE_LOWER_ERROR;
+    (void)memset(&instruction, 0, sizeof(instruction));
+    instruction.kind = MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS;
+    instruction.span = expression->span;
+    instruction.type = record_pointer_type;
+    instruction.result = MINIC_CORE_VALUE_INVALID;
+    instruction.value.object_id = *object_id;
+    if (!minic_core_function_append_value_instruction(
+            context->function, context->block_id, &instruction, &record_address))
+        return MINIC_CORE_LOWER_ERROR;
+    status = append_scalar_bitcast(context, expression->span,
+                                   field_pointer_type, record_address,
+                                   &field_address);
+    if (status != MINIC_CORE_LOWER_OK) return status;
+    (void)memset(&instruction, 0, sizeof(instruction));
+    instruction.kind = MINIC_CORE_INSTRUCTION_STORE;
+    instruction.span = expression->span;
+    instruction.type = minic_type_void();
+    instruction.result = MINIC_CORE_VALUE_INVALID;
+    instruction.value.store.address = field_address;
+    instruction.value.store.stored_value = value;
+    instruction.value.store.is_volatile = false;
+    return minic_core_function_append_effect_instruction(
+               context->function, context->block_id, &instruction)
+               ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR;
+}
+
 static MinicCoreLowerStatus lower_record_va_arg_object(
     MinicCoreLowerContext *context,
     const MinicExpression *expression,
@@ -277,15 +383,20 @@ static MinicCoreLowerStatus lower_record_va_arg_object(
 
     if (context == NULL || context->body == NULL || context->body->program == NULL ||
         context->function == NULL || context->target == NULL ||
-        context->target->variadic_scalar_read_kind !=
-            MINIC_VARIADIC_SCALAR_READ_LINEAR_SLOT ||
-        context->target->variadic_linear_slot_bytes == 0U ||
         expression == NULL || object_id == NULL ||
         expression->kind != MINIC_EXPRESSION_BUILTIN_VA_ARG ||
         !minic_type_unqualified(expression->type, &record_type) ||
         !minic_type_is_record(record_type)) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
+    if (context->target->variadic_scalar_read_kind ==
+            MINIC_VARIADIC_SCALAR_READ_ABI_CURSOR)
+        return lower_abi_cursor_scalar_record_va_arg(
+            context, expression, record_type, object_id);
+    if (context->target->variadic_scalar_read_kind !=
+            MINIC_VARIADIC_SCALAR_READ_LINEAR_SLOT ||
+        context->target->variadic_linear_slot_bytes == 0U)
+        return MINIC_CORE_LOWER_UNSUPPORTED;
     /* A structured GP/FP cursor needs a target-specific aggregate ABI
      * classifier; reinterpreting its tag pointer as a linear record slot
      * would silently read unrelated bytes. Reject until it is modeled. */
