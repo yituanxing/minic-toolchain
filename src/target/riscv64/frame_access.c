@@ -1,5 +1,6 @@
 #include "target/riscv64/frame_access.h"
 #include "target/riscv64/codegen_internal.h"
+#include "target/riscv/register_identity.h"
 #include <stdint.h>
 #include <stdio.h>
 
@@ -103,6 +104,8 @@ minic_riscv64_frame_load_chunk(FILE *file,
                       size_t offset,
                       size_t size) {
     const char *opcode;
+    const char *address_register;
+    const char *byte_register;
     size_t byte_index;
 
     if (file == NULL || frame == NULL || destination_register == NULL ||
@@ -112,12 +115,27 @@ minic_riscv64_frame_load_chunk(FILE *file,
     if (size == 8U) {
         return minic_riscv64_frame_emit_load64(file, frame, destination_register, offset);
     }
+    /* A partial aggregate can be materialized into any ABI argument GPR or
+     * compiler temporary. Address and byte scratch must remain distinct from
+     * the result even when the caller spells that register as xN, not tN. */
     opcode = size == 4U ? "lwu" : size == 2U ? "lhu" : size == 1U ? "lbu" : NULL;
+    byte_register = opcode == NULL &&
+                    minic_riscv_gpr_name_equal(destination_register, "t1")
+                        ? "t3" : "t1";
+    address_register =
+        (minic_riscv_gpr_name_equal(destination_register, "t3") ||
+         (opcode == NULL &&
+          minic_riscv_gpr_name_equal(byte_register, "t3"))) ? "t4" : "t3";
+    if (minic_riscv_gpr_name_equal(destination_register, address_register) ||
+        minic_riscv_gpr_name_equal(destination_register, byte_register) ||
+        minic_riscv_gpr_name_equal(address_register, byte_register))
+        return false;
     if (opcode != NULL) {
-        if (!minic_riscv64_frame_emit_address(file, frame, "t3", offset)) {
+        if (!minic_riscv64_frame_emit_address(file, frame, address_register, offset)) {
             return false;
         }
-        return fprintf(file, "  %s %s, 0(t3)\n", opcode, destination_register) >= 0;
+        return fprintf(file, "  %s %s, 0(%s)\n",
+                       opcode, destination_register, address_register) >= 0;
     }
     if (fprintf(file, "  li %s, 0\n", destination_register) < 0) {
         return false;
@@ -129,14 +147,17 @@ minic_riscv64_frame_load_chunk(FILE *file,
             return false;
         }
         byte_offset = offset + byte_index;
-        if (!minic_riscv64_frame_emit_address(file, frame, "t3", byte_offset) ||
-            fprintf(file, "  lbu t1, 0(t3)\n") < 0) {
+        if (!minic_riscv64_frame_emit_address(file, frame, address_register, byte_offset) ||
+            fprintf(file, "  lbu %s, 0(%s)\n", byte_register, address_register) < 0) {
             return false;
         }
-        if (byte_index != 0U && fprintf(file, "  slli t1, t1, %zu\n", byte_index * 8U) < 0) {
+        if (byte_index != 0U &&
+            fprintf(file, "  slli %s, %s, %zu\n",
+                    byte_register, byte_register, byte_index * 8U) < 0) {
             return false;
         }
-        if (fprintf(file, "  or %s, %s, t1\n", destination_register, destination_register) < 0) {
+        if (fprintf(file, "  or %s, %s, %s\n",
+                    destination_register, destination_register, byte_register) < 0) {
             return false;
         }
     }
@@ -150,6 +171,7 @@ minic_riscv64_frame_store_chunk(FILE *file,
                        size_t offset,
                        size_t size) {
     const char *opcode;
+    const char *address_register;
     size_t byte_index;
 
     if (file == NULL || frame == NULL || source_register == NULL ||
@@ -159,12 +181,17 @@ minic_riscv64_frame_store_chunk(FILE *file,
     if (size == 8U) {
         return minic_riscv64_frame_emit_store64(file, frame, source_register, offset);
     }
+    address_register = minic_riscv_gpr_name_equal(source_register, "t3") ?
+                           "t4" : "t3";
+    if (minic_riscv_gpr_name_equal(source_register, address_register))
+        return false;
     opcode = size == 4U ? "sw" : size == 2U ? "sh" : size == 1U ? "sb" : NULL;
     if (opcode != NULL) {
-        if (!minic_riscv64_frame_emit_address(file, frame, "t3", offset)) {
+        if (!minic_riscv64_frame_emit_address(file, frame, address_register, offset)) {
             return false;
         }
-        return fprintf(file, "  %s %s, 0(t3)\n", opcode, source_register) >= 0;
+        return fprintf(file, "  %s %s, 0(%s)\n",
+                       opcode, source_register, address_register) >= 0;
     }
     if (fprintf(file, "  mv t1, %s\n", source_register) < 0) {
         return false;
@@ -176,8 +203,8 @@ minic_riscv64_frame_store_chunk(FILE *file,
             return false;
         }
         byte_offset = offset + byte_index;
-        if (!minic_riscv64_frame_emit_address(file, frame, "t3", byte_offset) ||
-            fprintf(file, "  sb t1, 0(t3)\n") < 0) {
+        if (!minic_riscv64_frame_emit_address(file, frame, address_register, byte_offset) ||
+            fprintf(file, "  sb t1, 0(%s)\n", address_register) < 0) {
             return false;
         }
         if (byte_index + 1U < size && fprintf(file, "  srli t1, t1, 8\n") < 0) {

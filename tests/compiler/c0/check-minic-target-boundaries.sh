@@ -39,7 +39,7 @@ has src/target/riscv64/core_codegen.c \
 has src/target/riscv32/rv32_abi_plan.c 'type = i < view.parameter_count ? view.parameter_types[i] : actual;'
 has src/target/riscv32/rv32_abi_plan.c 'call_fixed_type'
 has src/target/riscv32/rv32_frame.c 'off == SIZE_MAX'
-has src/target/riscv32/rv32_frame.c 'strcmp(reg, "t6") == 0'
+has src/target/riscv32/rv32_frame.c 'minic_riscv_gpr_name_equal(reg, "t6")'
 
 has src/target/riscv64/frame_layout.c \
   'minic_core_object_reuse_plan_build('
@@ -91,6 +91,14 @@ has src/target/loongarch64/residual_emit.c 'MINIC_CORE_CALL_FRAME_ADDRESS_FRAME'
 has src/target/x86_64/asm_contract.c 'x86_linux_local_xadd_source('
 has src/target/x86_64/machine_asm.c 'emit_linux_local_xadd('
 lacks src/core/core_lower_asm_target.c 'local_add_return'
+# SMP-lock, local, GS-XADD, and GS-CMPXCHG/retry are now one typed target
+# decision shared by source admission and machine revalidation. The machine
+# dispatcher does not independently repeat several string-family scans.
+has src/target/x86_64/asm_contract.h 'MinicX86GsAtomicPlan'
+has src/target/x86_64/asm_contract.c 'x86_linux_gs_atomic_source('
+has src/target/x86_64/machine_asm.c 'switch (atomic.kind)'
+lacks src/target/x86_64/asm_contract.h 'minic_x86_64_linux_smp_xadd_width('
+lacks src/target/x86_64/asm_contract.h 'minic_x86_64_linux_gs_cmpxchg_loop('
 
 # The original x86 cmpxchg and trycmpxchg share one target descriptor
 # but DIFFER in Core operand roles and semantics (old value vs hardware ZF).
@@ -126,10 +134,13 @@ lacks src/core/core_lower_asm_target.c 'mrs_s'
 
 # GNU PIC policy is declared in TargetInfo, never a Driver target switch.
 has src/target/target_info.h 'pic_lowering_supported;'
-has src/target/target_info.c 'x86_64_target.pic_lowering_supported = true;'
-has src/target/target_info.c 'rv64_target.pic_lowering_supported = true;'
-has src/target/target_info.c 'aarch64_target.pic_lowering_supported = true;'
-has src/target/target_info.c 'loongarch64_target.pic_lowering_supported = true;'
+has src/target/target_info.c 'minic_target_language_descriptors[]'
+has src/target/target_info.c '.pic_lowering_supported = true,'
+has src/target/target_info.c '.architecture = MINIC_TARGET_ARCH_RISCV32,'
+has src/target/target_info.c '.architecture = MINIC_TARGET_ARCH_RISCV64,'
+has src/target/target_info.c '.architecture = MINIC_TARGET_ARCH_X86_64,'
+has src/target/target_info.c '.architecture = MINIC_TARGET_ARCH_AARCH64,'
+has src/target/target_info.c '.architecture = MINIC_TARGET_ARCH_LOONGARCH64,'
 has tools/minic-cc/main.c '!target_info->pic_lowering_supported'
 
 # Original Linux arm64 tlbflush __tlbi and __tlbi_sync_s1ish are
@@ -537,7 +548,7 @@ has src/target/riscv32/rv32_abi_plan.h 'size_t instruction_id;'
 lacks src/target/riscv32/rv32_emit.c 'rv32_scalar_storage_words(f, f->return_type, &bits)'
 has src/target/riscv32/rv32_frame.c 'varargs_offset'
 has src/target/riscv32/rv32_emit.c 'MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS'
-has src/target/target_info.c 'rv32_target.variadic_linear_slot_bytes = 4U'
+has src/target/target_info.c '.variadic_linear_slot_bytes = 4U,'
 lacks src/target/riscv32/rv32_emit.c 'defining variadic functions requires ILP32 va_list ABI'
 has src/target/riscv32/rv32_frame.c 'max_outgoing_stack_words'
 lacks src/target/riscv32/rv32_frame.c 'minic_core_function_facts_analyze('

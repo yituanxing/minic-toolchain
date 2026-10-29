@@ -33,10 +33,12 @@ linkability, ELF/psABI correctness, or QEMU execution. Those remain separate
 post-architecture milestones.
 
 An independent four-architecture runtime workflow on that same pre-refactor
-commit also had **two pre-existing failures**: x86-64 typed-overflow builtins
-and LoongArch64 LP64D hidden-`a0` record result. These are baseline defects,
-not proof of regressions from the architectural batches; distinguish them
-explicitly when comparing future runtime jobs.
+commit had **three pre-existing failures**: x86-64 typed-overflow builtins,
+AArch64 AAPCS64 `x8` large-record indirect result, and LoongArch64 LP64D
+hidden-`a0` record result. The post-refactor run at `f3eda60e8` reproduced
+those same three failures; RV64 passed. These are baseline defects, not proof
+of regressions from the architectural batches; compare exact runtime steps
+and diagnostics when assessing later changes.
 
 ## Exhaustive source inventory for the review
 
@@ -94,7 +96,7 @@ symbol/call-chain review do not amount to line-by-line correctness proof.
 | P1 | Global initialization/ELF classification repeated in RV32, RV64, x86 and `common/global_emit.c` | Common checked GlobalEmissionPlan followed by native dialect callbacks; remove only duplicate classification, not native ELF/relo handling |
 | P1 | Core legacy `is_array+count` and materialized array types coexist; block-local SSA value transport special-cased | Unify representation at AST-to-Core boundary, keep block-local SSA contract explicit; remove obsolete fallback after all consumers migrate |
 | P1 | RV32/RV64 frame scratch and machine-ISA checks differ; RV64 source register can conflict with large-offset address scratch | Explicit scratch constraints, complete FunctionSymbol initialization, later shared RISC-V generated-ISA verifier parametrized by XLEN |
-| P2 | 83 stale architecture review source fingerprints in `check-minic-target-boundaries.sh` ledger after full-coverage changes | Refresh only with reviewed file evidence; stale fingerprints are a maintenance failure, **not 83 compiler bugs** |
+| P2 | 90 stale architecture review source fingerprints in the `check-minic-target-boundaries.sh` ledger after the first batch | Refresh only with reviewed file evidence; stale fingerprints are a maintenance failure, **not 90 compiler bugs** |
 
 Two implementation hazards must not be misclassified as dead code:
 
@@ -140,3 +142,49 @@ Do not overwrite the older dirty `minic-toolchain` worktree when integrating
 the reviewed changes; its uncommitted and untracked files are independent
 user work. The MiniC-only development branch is
 `refactor/minic-target-language-boundary`.
+
+## Second architecture integration: boundaries retired, semantics retained
+
+The next reviewed tree starts from the published first-batch head `cc3f27767`.
+Its change set owns six independent architectural concerns:
+
+1. Core: remove eight unreachable GNU structured-ASM shape handlers and
+   their dispatch prototypes, while retaining all four legacy SSA-result
+   opcodes still consumed by RV32/RV64. Target qualification, memory effects,
+   fixed registers, early-clobber and `asm goto` retain their existing
+   admission order.
+2. TargetInfo/frontend: replace five lazy per-target initialization branches
+   with one declarative language-policy table and three *C integer models*.
+   The five distinct machine ABIs remain independent. Move AArch64 opaque
+   vector header-return permission out of the parser; normalize RISC-V
+   register aliases to target-owned physical identity without widening RV32
+   source-ASM admission.
+3. AArch64: add native typed FrameRef address, memory-width and scratch
+   policy, migrate FP and direct memory SSA frame operations, and test large
+   displacement and dynamic `x19` anchor hazards. The legacy assembly-text
+   legalizer is intentionally **still active** for integer, call, block and
+   qualified inline-ASM paths, and must not be deleted this batch.
+4. x86: replace redundant GNU SMP/local/percpu XADD and GS CMPXCHG recognizers
+   with one target-private typed atomic decision, preserving each variation's
+   separate operand proof and native emitter validation.
+5. RISC-V: normalize `xN`/ABI/fp aliases in fixed/clobber/scratch decisions,
+   reject over-capacity RV64 ASM plans before indexing a ten-slot buffer,
+   and preserve live data/address registers across large-frame chunk access.
+6. Common globals: validate size/alignment, ELF classification and nine
+   initializer payload shapes into one pure GlobalEmissionPlan, then dispatch
+   output. ISA-specific relocation callbacks and legacy backend-local global
+   classification are not collapsed yet.
+
+The local strict `-Werror` MiniC compiler build and focused tests (typed A64
+frame, x86 GNU-native GS atomics including four negative cases, RISC-V
+physical alias/frame, five-target model, target-language options, Core ASM
+fail-closed census, five-ISA operand-capacity rejection) pass. The independent
+three-ISA **exact-head 21-shard frozen GNU Linux replay remains the required
+post-push acceptance**, and successful C-only emission must never be relabeled
+as GNU AS, ELF link, kernel boot or QEMU runtime certification.
+
+Two older RV inline-ASM unit scripts hard-code physical temporary registers
+(`t1/t0` and `t3`) that already differed on the pre-batch compiler binary;
+those are stale textual fixture expectations, not evidence of a new compiler
+semantic regression. Their checks should eventually assert operand semantics
+and constraints instead of accidental register allocation names.

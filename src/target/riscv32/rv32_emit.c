@@ -11,6 +11,7 @@
 #include "target/common/core_block_walk.h"
 #include "target/common/core_instruction_family.h"
 #include "target/riscv/instruction_select.h"
+#include "target/riscv/register_identity.h"
 #include "target/riscv32/rv32_abi_cursor.h"
 #include "target/riscv/function_symbol.h"
 #include "target/riscv32/rv32_global_emit.h"
@@ -45,22 +46,21 @@ static bool rv32_source_arg_clobbers_safe(const MinicCoreInlineAsm *source,
     for (i = 0U; i < source->register_clobber_count; ++i) {
         const MinicCoreInlineAsmRegisterClobber *entry =
             &source->register_clobbers[i];
-        unsigned reg;
-        if (entry->name == NULL || entry->name_length != 2U) return false;
-        if (entry->name[0] == 't' && entry->name[1] >= '0' &&
-            entry->name[1] <= '6') {
+        unsigned physical_id;
+        if (!minic_riscv_gpr_id(entry->name, entry->name_length,
+                               &physical_id)) return false;
+        if ((physical_id >= 5U && physical_id <= 7U) ||
+            (physical_id >= 28U && physical_id <= 31U)) {
             /* SIZE_MAX is the explicit callee-saved-input allocator policy.
              * The normal t-register operand allocator cannot use this. */
             if (structured_operands != SIZE_MAX) return false;
             continue;
         }
-        if (entry->name[0] != 'a' || entry->name[1] < '0' ||
-            entry->name[1] > '7') return false;
-        reg = (unsigned)(entry->name[1] - '0');
+        if (physical_id < 10U || physical_id > 17U) return false;
         /* Structured operands 6 and 7 are allocated to a0 and a1.
          * Legacy operands never use argument registers. */
-        if (structured_operands != SIZE_MAX && reg < 2U &&
-            structured_operands > (size_t)(6U + reg))
+        if (structured_operands != SIZE_MAX && physical_id < 12U &&
+            structured_operands > (size_t)(6U + physical_id - 10U))
             return false;
     }
     return true;
@@ -305,9 +305,10 @@ static bool rv32_emit_source_structured_asm(
         for (i = 0U; i < source->register_clobber_count; ++i) {
             const MinicCoreInlineAsmRegisterClobber *c =
                 &source->register_clobbers[i];
-            if (c->name != NULL && c->name_length == 2U &&
-                c->name[0] == 't' && c->name[1] >= '0' && c->name[1] <= '6')
-                has_t_clobber = true;
+            unsigned id;
+            if (minic_riscv_gpr_id(c->name, c->name_length, &id) &&
+                ((id >= 5U && id <= 7U) ||
+                 (id >= 28U && id <= 31U))) has_t_clobber = true;
         }
         if (has_t_clobber) {
             const char *const saved_regs[] = {"s1", "s2"};
@@ -377,13 +378,12 @@ static bool rv32_emit_source_structured_asm(
                     b->value >= f->value_count)
                     return false;
                 fixed = &f->fixed_register_bindings[b->fixed_register_binding_id];
-                if (!fixed->is_local || fixed->register_name == NULL ||
-                    fixed->register_name_length != 2U ||
-                    fixed->register_name[0] != 'a' ||
-                    fixed->register_name[1] < '0' ||
-                    fixed->register_name[1] > '7')
+                if (!fixed->is_local ||
+                    !minic_riscv_gpr_id(fixed->register_name,
+                                       fixed->register_name_length, &reg_index) ||
+                    reg_index < 10U || reg_index > 17U)
                     return false;
-                reg_index = (unsigned)(fixed->register_name[1] - '0');
+                reg_index -= 10U;
                 if (register_used[reg_index]) return false;
                 register_used[reg_index] = true;
                 seen[b->operand_index] = true;

@@ -113,6 +113,10 @@ bool minic_target_info_language_type_supported(const MinicTargetInfo *target,
 bool minic_target_info_named_builtin_type(const MinicTargetInfo *target,
                                           const char *spelling, size_t length,
                                           MinicType *type);
+/* Header-only opaque vector return identities: permits a foreign function
+ * declaration and its header attribute, never a vector CALL or definition. */
+bool minic_target_info_header_opaque_vector_return(const MinicTargetInfo *target,
+                                                    MinicType return_type);
 /* Target-specific GCC unary builtins are described here without making
  * Frontend or Core switch on an architecture. Machine encoding stays owned
  * by the target CALL emitter, with an internal unspellable callee name. */

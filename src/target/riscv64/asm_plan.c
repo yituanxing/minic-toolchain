@@ -1,4 +1,5 @@
 #include "target/riscv64/asm_plan.h"
+#include "target/riscv/register_identity.h"
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -21,7 +22,8 @@ static bool core_asm_callee_saved_index_for_mask(const char *name, size_t *resul
         return false;
     }
     for (index = 0U; index < MINIC_RISCV64_ASM_CALLEE_SAVED_COUNT; ++index) {
-        if (strcmp(name, minic_riscv64_asm_callee_saved_registers[index]) == 0) {
+        if (minic_riscv_gpr_name_equal(
+                name, minic_riscv64_asm_callee_saved_registers[index])) {
             *result = index;
             return true;
         }
@@ -43,17 +45,18 @@ size_t minic_riscv64_asm_callee_saved_mask_count(uint16_t mask) {
 static bool core_inline_asm_clobbers_register(const MinicCoreInlineAsm *inline_asm,
                                                const char *register_name) {
     size_t index;
-    size_t name_length;
+    unsigned candidate_id;
 
-    if (inline_asm == NULL || register_name == NULL) {
+    if (inline_asm == NULL ||
+        !minic_riscv_gpr_name_id(register_name, &candidate_id)) {
         return true;
     }
-    name_length = strlen(register_name);
     for (index = 0U; index < inline_asm->register_clobber_count; ++index) {
         const MinicCoreInlineAsmRegisterClobber *clobber =
             &inline_asm->register_clobbers[index];
-        if (clobber->name != NULL && clobber->name_length == name_length &&
-            memcmp(clobber->name, register_name, name_length) == 0) {
+        unsigned clobber_id;
+        if (minic_riscv_gpr_id(clobber->name, clobber->name_length,
+                               &clobber_id) && clobber_id == candidate_id) {
             return true;
         }
     }
@@ -71,31 +74,20 @@ static const MinicCoreRiscv64AsmRegisterCandidate core_asm_caller_saved_register
 };
 
 static bool core_asm_register_name_equal(const char *left, const char *right) {
-    return left != NULL && right != NULL && strcmp(left, right) == 0;
+    return minic_riscv_gpr_name_equal(left, right);
 }
 
 static bool core_asm_register_is_caller_saved(const char *name) {
-    size_t index;
-    for (index = 0U;
-         index < sizeof(core_asm_caller_saved_registers) /
-                     sizeof(core_asm_caller_saved_registers[0]);
-         ++index) {
-        if (core_asm_register_name_equal(name, core_asm_caller_saved_registers[index].name)) {
-            return true;
-        }
-    }
-    return false;
+    unsigned id;
+    return minic_riscv_gpr_name_id(name, &id) &&
+           minic_riscv_gpr_caller_saved(id);
 }
 
 
 static bool core_asm_register_is_callee_saved(const char *name) {
-    size_t index;
-    for (index = 0U; index < MINIC_RISCV64_ASM_CALLEE_SAVED_COUNT; ++index) {
-        if (core_asm_register_name_equal(name, minic_riscv64_asm_callee_saved_registers[index])) {
-            return true;
-        }
-    }
-    return false;
+    unsigned id;
+    return minic_riscv_gpr_name_id(name, &id) &&
+           minic_riscv_gpr_callee_saved(id);
 }
 
 static bool core_asm_register_in_use(const char *const *operand_registers,
@@ -221,7 +213,9 @@ static bool core_structured_inline_asm_allocate(
         return false;
     }
     operand_count = instruction->value.structured_inline_asm.operand_count;
-    if (operand_count == 0U || operand_count > MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT) {
+    /* Core admits up to sixteen source operands. This machine plan has only
+     * ten physical bindings: reject before indexing either ten-slot array. */
+    if (operand_count == 0U || operand_count > MINIC_RISCV64_ASM_MAX_OPERANDS) {
         return false;
     }
     inline_asm = &function->inline_asms[instruction->value.structured_inline_asm.inline_asm_id];
@@ -250,6 +244,8 @@ static bool core_structured_inline_asm_allocate(
         const MinicCoreStructuredInlineAsmOperand *binding =
             &instruction->value.structured_inline_asm.operands[binding_index];
         const MinicCoreFixedRegisterBinding *fixed_binding;
+        if (binding->operand_index >= MINIC_RISCV64_ASM_MAX_OPERANDS)
+            return false;
         if (!binding->has_fixed_register_binding) {
             continue;
         }
@@ -280,6 +276,8 @@ static bool core_structured_inline_asm_allocate(
         const char *const *preferences;
         size_t preference_count;
 
+        if (binding->operand_index >= MINIC_RISCV64_ASM_MAX_OPERANDS)
+            return false;
         if (operand_registers[binding->operand_index] != NULL) {
             continue;
         }

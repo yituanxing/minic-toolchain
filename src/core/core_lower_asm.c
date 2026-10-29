@@ -312,10 +312,6 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
     if (handled) return core_asm_trace_status(context, source, status, "structured_roles");
 
     handled = false;
-    status = core_asm_try_fixed_and_register_operands(context, statement, source, &handled);
-    if (handled) return core_asm_trace_status(context, source, status, "fixed_register");
-
-    handled = false;
     status = core_asm_try_atomic_and_immediate_forms(context, statement, source, &handled);
     if (handled) return core_asm_trace_status(context, source, status, "atomic_immediate");
 

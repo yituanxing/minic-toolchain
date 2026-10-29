@@ -1,0 +1,114 @@
+#include "target/aarch64/frame_emit.h"
+#include <assert.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+static char *test_transfer(bool store, MinicA64FrameView view,
+    MinicA64FrameRef ref, MinicA64FrameRegister reg,
+    MinicA64ScratchPolicy scratch, bool expected) {
+    FILE *out = tmpfile();
+    char *buffer;
+    long size;
+    assert(out != NULL);
+    assert((store ? minic_a64_emit_frame_store(out, &view, ref, reg, scratch)
+                  : minic_a64_emit_frame_load(out, &view, ref, reg, scratch))
+           == expected);
+    assert(fflush(out) == 0);
+    assert(fseek(out, 0L, SEEK_END) == 0);
+    size = ftell(out);
+    assert(size >= 0 && size < 8192);
+    buffer = malloc((size_t)size + 1U);
+    assert(buffer != NULL);
+    rewind(out);
+    assert(fread(buffer, 1U, (size_t)size, out) == (size_t)size);
+    buffer[size] = '\0';
+    assert(fclose(out) == 0);
+    return buffer;
+}
+
+static void expect(char *output, const char *fragment) {
+    if (strstr(output, fragment) == NULL) {
+        (void)fprintf(stderr, "Expected %s in:\n%s\n", fragment, output);
+        abort();
+    }
+    free(output);
+}
+
+int main(void) {
+    MinicA64FrameView stable = {false, 256U, 0U, SIZE_MAX};
+    MinicA64FrameView dynamic = {true, 256U, 96U, SIZE_MAX};
+    MinicA64FrameView aligned = {true, 256U, 0U, 80U};
+    const MinicA64ScratchPolicy free_scratch = {0U, 0U};
+    const MinicA64FrameRef slot = {MINIC_A64_FRAME_OWNED, 40U};
+    char *output;
+    FILE *address_stream;
+    expect(test_transfer(false, stable, slot,
+        (MinicA64FrameRegister){MINIC_A64_REG_D, 9U},
+        free_scratch, true), "ldr d9, [sp, #40]");
+    expect(test_transfer(true, dynamic, slot,
+        (MinicA64FrameRegister){MINIC_A64_REG_S, 9U},
+        free_scratch, true), "str s9, [x19, #40]");
+    stable.outgoing_sp_bytes = 96U;
+    expect(test_transfer(false, stable, slot,
+        (MinicA64FrameRegister){MINIC_A64_REG_X, 9U},
+        free_scratch, true), "ldr x9, [sp, #136]");
+    expect(test_transfer(false, dynamic,
+        (MinicA64FrameRef){MINIC_A64_FRAME_OUTGOING, 40U},
+        (MinicA64FrameRegister){MINIC_A64_REG_X, 9U},
+        free_scratch, true), "ldr x9, [sp, #40]");
+    expect(test_transfer(false, aligned,
+        (MinicA64FrameRef){MINIC_A64_FRAME_INCOMING, 64U},
+        (MinicA64FrameRegister){MINIC_A64_REG_X, 9U},
+        free_scratch, true), "ldr x9, [x17, #80]");
+    expect(test_transfer(false, stable,
+        (MinicA64FrameRef){MINIC_A64_FRAME_INCOMING, 64U},
+        (MinicA64FrameRegister){MINIC_A64_REG_X, 9U},
+        free_scratch, true), "ldr x9, [sp, #432]");
+
+    /* Exact hybrid boundary: the old text rewrite is still enabled.
+     * A value stored in x17 MUST NOT be overwritten by its address scratch
+     * even if the scaled A64 STR encoding could reach this displacement. */
+    output = test_transfer(true, stable,
+        (MinicA64FrameRef){MINIC_A64_FRAME_OWNED, 32760U},
+        (MinicA64FrameRegister){MINIC_A64_REG_X, 17U},
+        free_scratch, true);
+    assert(strstr(output, "[sp, #32760]") == NULL);
+    expect(output, "str x17, [x16]");
+    expect(test_transfer(false, dynamic,
+        (MinicA64FrameRef){MINIC_A64_FRAME_OWNED, 4096U},
+        (MinicA64FrameRegister){MINIC_A64_REG_Q, 9U},
+        (MinicA64ScratchPolicy){UINT32_C(1) << 17U, 0U}, true),
+        "ldr q9, [x16]");
+    output = test_transfer(false, dynamic,
+        (MinicA64FrameRef){MINIC_A64_FRAME_OWNED, 65520U},
+        (MinicA64FrameRegister){MINIC_A64_REG_W, 9U},
+        (MinicA64ScratchPolicy){
+            (UINT32_C(1) << 16U) | (UINT32_C(1) << 17U), 0U}, false);
+    assert(*output == '\0');
+    free(output);
+    stable.frame_size = SIZE_MAX;
+    output = test_transfer(false, stable,
+        (MinicA64FrameRef){MINIC_A64_FRAME_INCOMING, 64U},
+        (MinicA64FrameRegister){MINIC_A64_REG_X, 9U},
+        free_scratch, false);
+    assert(*output == '\0');
+    free(output);
+    output = test_transfer(false, stable, slot,
+        (MinicA64FrameRegister){MINIC_A64_REG_W, 31U},
+        free_scratch, false);
+    assert(*output == '\0');
+    free(output);
+    address_stream = tmpfile();
+    assert(address_stream != NULL);
+    assert(!minic_a64_emit_frame_address(address_stream, &dynamic,
+        (MinicA64FrameRef){MINIC_A64_FRAME_OWNED, 32760U},
+        19U, free_scratch)); /* never destroy anchored x19 */
+    assert(minic_a64_emit_frame_address(address_stream, &dynamic,
+        (MinicA64FrameRef){MINIC_A64_FRAME_OWNED, 32760U},
+        10U, free_scratch));
+    assert(fclose(address_stream) == 0);
+    (void)puts("AARCH64_TYPED_FRAME_REF=PASS");
+    return 0;
+}

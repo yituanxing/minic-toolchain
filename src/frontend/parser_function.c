@@ -42,18 +42,6 @@ typedef struct MinicFunctionAttributeContext {
     const char *unsupported_message;
 } MinicFunctionAttributeContext;
 
-/* AArch64 glibc's math-vector.h has vector PCS declarations with opaque
- * NEON/SVE return types. Permit only those foreign declarations. Core
- * lowering still rejects calls or definitions involving opaque vectors. */
-static bool aarch64_header_vector_return(MinicType type) {
-    return type.pointer_depth == 0U &&
-           (type.base_kind == MINIC_TYPE_BASE_AARCH64_FLOAT32X4 ||
-            type.base_kind == MINIC_TYPE_BASE_AARCH64_FLOAT64X2 ||
-            type.base_kind == MINIC_TYPE_BASE_AARCH64_SVE_FLOAT32 ||
-            type.base_kind == MINIC_TYPE_BASE_AARCH64_SVE_FLOAT64 ||
-            type.base_kind == MINIC_TYPE_BASE_AARCH64_SVE_BOOL);
-}
-
 static bool glibc_header_vector_pcs_attribute(const MinicParser *parser,
                                                const MinicParsedAttribute *attr) {
     return parser != NULL && attr != NULL && !attr->has_arguments &&
@@ -1583,7 +1571,8 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                 is_internal,
                 is_inline,
                 is_extern_declaration,
-                !is_internal && aarch64_header_vector_return(typed_return_type),
+                !is_internal && minic_target_info_header_opaque_vector_return(
+                                    parser->target_info, typed_return_type),
                 &typed_calling_convention,
                 section_name,
                 sizeof(section_name),
@@ -1900,7 +1889,8 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
             is_internal,
             is_inline,
             is_extern_declaration,
-            !is_internal && aarch64_header_vector_return(return_type),
+            !is_internal && minic_target_info_header_opaque_vector_return(
+                                parser->target_info, return_type),
             &calling_convention,
             section_name,
             sizeof(section_name),

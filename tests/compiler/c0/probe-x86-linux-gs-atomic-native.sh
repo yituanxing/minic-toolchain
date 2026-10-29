@@ -73,6 +73,11 @@ source='\n'.join(defs)+'\n'
 (d/'gnu.c').write_text(source.replace('mini_', 'gnu_'))
 (d/'bad.i').write_text(source.replace('cmpxchgl %[nval], %%gs:%[var]',
                                       'cmpxchgl %[nval], %%gs:%[var]; cli'))
+(d/'bad-loop.i').write_text(source.replace('jnz 1b', 'jz 1b'))
+(d/'bad-segment.i').write_text(source.replace(
+    'xaddq %[tmp], %%gs:%[var]', 'xaddq %[tmp], %%fs:%[var]'))
+(d/'bad-carrier.i').write_text(source.replace(
+    '[oval] "+a"(old)', '[oval] "=a"(old)'))
 driver += ['int main(void) {','  volatile unsigned long long storage=0;',
            '  if (syscall(SYS_arch_prctl, ARCH_SET_GS, (unsigned long)&storage)) return 2;',
            *checks,'  return 0;','}']
@@ -86,9 +91,12 @@ grep -Fq 'cmpxchgq ' "$d/mini.s"
 grep -Fq '%gs:' "$d/mini.s"
 gcc -O0 -no-pie "$d/driver.c" "$d/mini.o" "$d/gnu.o" -o "$d/run"
 "$d/run"
-if "$mini" --target=x86_64-linux -S "$d/bad.i" -o "$d/bad.s" >/dev/null 2>&1; then
-    echo 'X86_GS_ATOMIC_FAIL=unsafe extra instruction accepted' >&2
-    exit 1
-fi
-test ! -e "$d/bad.s"
-echo 'MINIC_X86_GS_ATOMIC=PASS forms=12 GNU_native=12 negative=1'
+for negative in bad bad-loop bad-segment bad-carrier; do
+    if "$mini" --target=x86_64-linux -S "$d/$negative.i" \
+        -o "$d/$negative.s" >/dev/null 2>&1; then
+        echo "X86_GS_ATOMIC_FAIL=unsafe $negative variant accepted" >&2
+        exit 1
+    fi
+    test ! -e "$d/$negative.s"
+done
+echo 'MINIC_X86_GS_ATOMIC=PASS forms=12 GNU_native=12 negative=4'

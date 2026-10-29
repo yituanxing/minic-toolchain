@@ -87,6 +87,7 @@ static int verify_language_admission(void) {
         const MinicTargetInfo *t = minic_target_info_from_name(names[i]);
         MinicType va_type;
         MinicType vector_type;
+        MinicType vector_pointer;
         bool is_x86 = i == 2U;
         bool is_arm = i == 3U;
         bool has_extended_float = i != 0U;
@@ -116,8 +117,21 @@ static int verify_language_admission(void) {
         }
         has_vector = minic_target_info_named_builtin_type(
             t, "__SVBool_t", sizeof("__SVBool_t") - 1U, &vector_type);
+        if (!minic_type_pointer_to(
+                minic_type_aarch64_header_builtin(
+                    MINIC_TYPE_BASE_AARCH64_FLOAT32X4), &vector_pointer)) {
+            (void)fprintf(stderr, "FAIL target vector pointer construction: %s\n", names[i]);
+            return 1;
+        }
         if (has_vector != is_arm ||
             (is_arm && vector_type.base_kind != MINIC_TYPE_BASE_AARCH64_SVE_BOOL) ||
+            minic_target_info_header_opaque_vector_return(
+                t, minic_type_aarch64_header_builtin(
+                       MINIC_TYPE_BASE_AARCH64_FLOAT32X4)) != is_arm ||
+            minic_target_info_header_opaque_vector_return(
+                t, minic_type_float128()) ||
+            minic_target_info_header_opaque_vector_return(
+                t, vector_pointer) ||
             minic_target_info_named_builtin_type(
                 t, "__SVBool_t", sizeof("__SVBool_t") - 2U, NULL) ||
             minic_target_info_named_builtin_type(
@@ -349,6 +363,25 @@ static int verify_fixed_register_target_contract(void) {
             (void)fprintf(stderr, "FIXED_REGISTER_TARGET=FAIL %s\n", names[i]);
             return 1;
         }
+    }
+    {
+        const MinicTargetInfo *rv64 = minic_target_info_from_name("riscv64-linux");
+        const MinicTargetInfo *rv32 = minic_target_info_from_name("riscv32-linux");
+        if (rv64 == NULL || rv32 == NULL ||
+            !minic_target_info_local_fixed_register_supported(rv64, "a7", 2U) ||
+            !minic_target_info_local_fixed_register_supported(rv64, "x17", 3U) ||
+            minic_target_info_local_fixed_register_supported(rv64, "x7", 2U) ||
+            !minic_target_info_inline_asm_register_clobber_supported(rv64, "t2", 2U) ||
+            !minic_target_info_inline_asm_register_clobber_supported(rv64, "x7", 2U) ||
+            !minic_target_info_inline_asm_register_clobber_supported(rv64, "x31", 3U) ||
+            minic_target_info_inline_asm_register_clobber_supported(rv64, "x8", 2U) ||
+            minic_target_info_inline_asm_register_clobber_supported(rv64, "sp", 2U) ||
+            minic_target_info_local_fixed_register_supported(rv32, "x17", 3U) ||
+            minic_target_info_inline_asm_register_clobber_supported(rv32, "x7", 2U)) {
+            (void)fprintf(stderr, "RISCV_PHYSICAL_REGISTER_ADMISSION=FAIL\n");
+            return 1;
+        }
+        (void)puts("RISCV_PHYSICAL_REGISTER_ADMISSION=PASS rv64_aliases rv32_fail_closed");
     }
     (void)puts("FIXED_REGISTER_TARGET=PASS rv_sp_tp x86_rsp_live aarch64_sp_live other_GPRs_fail_closed");
     return 0;

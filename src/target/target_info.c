@@ -1,9 +1,13 @@
 #include "target/target_info.h"
+#include "target/riscv/register_identity.h"
 
 #include <stdint.h>
 #include <string.h>
 
-static const MinicTargetIntegerModel minic_rv64_integer_model = {
+/* Integer widths and signedness are C language-model facts, not calling
+ * conventions. These three models may be shared by targets with identical
+ * C integer semantics without conflating their ABIs or machine lowering. */
+static const MinicTargetIntegerModel minic_lp64_unsigned_char_integer_model = {
     .plain_char_sign = MINIC_INTEGER_SIGN_UNSIGNED,
     .semantic_width_bits = {[MINIC_INTEGER_RANK_BOOL] = 1U,
                             [MINIC_INTEGER_RANK_CHAR] = 8U,
@@ -16,7 +20,7 @@ static const MinicTargetIntegerModel minic_rv64_integer_model = {
 
 /* RV32 Linux ILP32; semantic integer conversions must not inherit LP64.
  * Plain char is unsigned on RISC-V; wchar_t uses the normal signed int ABI. */
-static const MinicTargetIntegerModel minic_rv32_integer_model = {
+static const MinicTargetIntegerModel minic_ilp32_unsigned_char_integer_model = {
     .plain_char_sign = MINIC_INTEGER_SIGN_UNSIGNED,
     .semantic_width_bits = {[MINIC_INTEGER_RANK_BOOL] = 1U,
                             [MINIC_INTEGER_RANK_CHAR] = 8U,
@@ -28,32 +32,7 @@ static const MinicTargetIntegerModel minic_rv32_integer_model = {
 };
 
 /* LP64, signed plain char and signed 32-bit wchar_t on x86-64 Linux. */
-static const MinicTargetIntegerModel minic_x86_64_linux_integer_model = {
-    .plain_char_sign = MINIC_INTEGER_SIGN_SIGNED,
-    .semantic_width_bits = {[MINIC_INTEGER_RANK_BOOL] = 1U,
-                            [MINIC_INTEGER_RANK_CHAR] = 8U,
-                            [MINIC_INTEGER_RANK_SHORT] = 16U,
-                            [MINIC_INTEGER_RANK_INT] = 32U,
-                            [MINIC_INTEGER_RANK_LONG] = 64U,
-                            [MINIC_INTEGER_RANK_LONG_LONG] = 64U,
-                            [MINIC_INTEGER_RANK_INT128] = 128U},
-};
-
-/* AAPCS64 (Linux LP64): plain char unsigned, 32-bit unsigned wchar_t.
- * Do not conflate this language model with ARM's register-call ABI. */
-static const MinicTargetIntegerModel minic_aarch64_linux_integer_model = {
-    .plain_char_sign = MINIC_INTEGER_SIGN_UNSIGNED,
-    .semantic_width_bits = {[MINIC_INTEGER_RANK_BOOL] = 1U,
-                            [MINIC_INTEGER_RANK_CHAR] = 8U,
-                            [MINIC_INTEGER_RANK_SHORT] = 16U,
-                            [MINIC_INTEGER_RANK_INT] = 32U,
-                            [MINIC_INTEGER_RANK_LONG] = 64U,
-                            [MINIC_INTEGER_RANK_LONG_LONG] = 64U,
-                            [MINIC_INTEGER_RANK_INT128] = 128U},
-};
-
-/* LoongArch ELF lp64d has signed plain char (unlike AAPCS64). */
-static const MinicTargetIntegerModel minic_loongarch64_linux_integer_model = {
+static const MinicTargetIntegerModel minic_lp64_signed_char_integer_model = {
     .plain_char_sign = MINIC_INTEGER_SIGN_SIGNED,
     .semantic_width_bits = {[MINIC_INTEGER_RANK_BOOL] = 1U,
                             [MINIC_INTEGER_RANK_CHAR] = 8U,
@@ -181,152 +160,155 @@ integer_literal_fits(const MinicTargetIntegerModel *model, MinicType type, uint6
     return value <= (UINT64_C(1) << (bits - 1U)) - UINT64_C(1);
 }
 
+/* This is the sole target-registration boundary for C language policy.
+ * Backend ABI lowering is not inferred from shared integer widths or vararg
+ * cursor representation: each target explicitly declares its own fields. */
+typedef struct MinicTargetLanguageDescriptor {
+    MinicTargetInfo target;
+    const MinicDataLayout *(*layout)(void);
+    MinicIntegerSign wide_character_sign;
+    MinicIntegerRank wide_character_rank;
+    MinicIntegerRank libc_size_rank;
+} MinicTargetLanguageDescriptor;
+
+static const MinicTargetLanguageDescriptor minic_target_language_descriptors[] = {
+    {
+        .target = {
+            .architecture = MINIC_TARGET_ARCH_RISCV32,
+            .integer_model = &minic_ilp32_unsigned_char_integer_model,
+            .word_integer_rank = MINIC_INTEGER_RANK_INT,
+            .gnu_sizeof_void_is_one = true,
+            .gnu_sizeof_function_is_one = true,
+            /* No RV64 cursor reuse: RV32 uses its own ILP32 register pairs. */
+            .variadic_scalar_read_kind = MINIC_VARIADIC_SCALAR_READ_LINEAR_SLOT,
+            .variadic_linear_slot_bytes = 4U,
+            .variadic_copy_kind = MINIC_VARIADIC_COPY_SCALAR_ASSIGNMENT,
+            .call_frame_return_address_level0 = true,
+            .call_frame_frame_address_level0 = true,
+            .riscv_isa = {.xlen = 32U, .abi = MINIC_RISCV_ABI_ILP32,
+                          .strict_isa = true},
+        },
+        .layout = minic_riscv32_linux_data_layout,
+        .wide_character_sign = MINIC_INTEGER_SIGN_SIGNED,
+        .wide_character_rank = MINIC_INTEGER_RANK_INT,
+        .libc_size_rank = MINIC_INTEGER_RANK_INT,
+    },
+    {
+        .target = {
+            .architecture = MINIC_TARGET_ARCH_RISCV64,
+            .integer_model = &minic_lp64_unsigned_char_integer_model,
+            .word_integer_rank = MINIC_INTEGER_RANK_LONG,
+            .language_type_capabilities = MINIC_TARGET_LANG_EXTENDED_FLOAT_DECLARATIONS,
+            .gnu_sizeof_void_is_one = true,
+            .gnu_sizeof_function_is_one = true,
+            .variadic_scalar_read_kind = MINIC_VARIADIC_SCALAR_READ_LINEAR_SLOT,
+            .variadic_linear_slot_bytes = 8U,
+            .variadic_copy_kind = MINIC_VARIADIC_COPY_SCALAR_ASSIGNMENT,
+            .pic_lowering_supported = true,
+            .call_frame_return_address_level0 = true,
+            .call_frame_frame_address_level0 = true,
+            .riscv_isa = {.xlen = 64U, .abi = MINIC_RISCV_ABI_LP64D,
+                          .strict_isa = false},
+        },
+        .layout = minic_default_data_layout,
+        .wide_character_sign = MINIC_INTEGER_SIGN_SIGNED,
+        .wide_character_rank = MINIC_INTEGER_RANK_INT,
+        .libc_size_rank = MINIC_INTEGER_RANK_LONG,
+    },
+    {
+        .target = {
+            .architecture = MINIC_TARGET_ARCH_X86_64,
+            .integer_model = &minic_lp64_signed_char_integer_model,
+            .word_integer_rank = MINIC_INTEGER_RANK_LONG,
+            .language_type_capabilities = MINIC_TARGET_LANG_EXTENDED_FLOAT_DECLARATIONS |
+                MINIC_TARGET_LANG_ABI_STATE_VA_LIST_CURSOR |
+                MINIC_TARGET_LANG_MS_X64_FUNCTION_POINTER_DECLARATIONS,
+            .call_lowering_capabilities = MINIC_TARGET_CALL_MS_X64_FIXED_SCALAR,
+            .gnu_sizeof_void_is_one = true,
+            .gnu_sizeof_function_is_one = true,
+            .variadic_scalar_read_kind = MINIC_VARIADIC_SCALAR_READ_ABI_CURSOR,
+            .variadic_copy_kind = MINIC_VARIADIC_COPY_ABI_STATE,
+            .pic_lowering_supported = true,
+            /* The SysV x86 rbp prologue supports only frame level zero. */
+            .call_frame_return_address_level0 = true,
+            .call_frame_frame_address_level0 = true,
+        },
+        .layout = minic_x86_64_linux_data_layout,
+        .wide_character_sign = MINIC_INTEGER_SIGN_SIGNED,
+        .wide_character_rank = MINIC_INTEGER_RANK_INT,
+        .libc_size_rank = MINIC_INTEGER_RANK_LONG,
+    },
+    {
+        .target = {
+            .architecture = MINIC_TARGET_ARCH_AARCH64,
+            .integer_model = &minic_lp64_unsigned_char_integer_model,
+            .word_integer_rank = MINIC_INTEGER_RANK_LONG,
+            .language_type_capabilities = MINIC_TARGET_LANG_EXTENDED_FLOAT_DECLARATIONS |
+                MINIC_TARGET_LANG_OPAQUE_VECTOR_HEADER_DECLARATIONS,
+            .gnu_sizeof_void_is_one = true,
+            .gnu_sizeof_function_is_one = true,
+            .variadic_scalar_read_kind = MINIC_VARIADIC_SCALAR_READ_ABI_CURSOR,
+            /* AAPCS64 va_copy duplicates an owned 32-byte ABI-state cursor. */
+            .variadic_copy_kind = MINIC_VARIADIC_COPY_ABI_STATE,
+            .pic_lowering_supported = true,
+            .call_frame_return_address_level0 = true,
+            .call_frame_frame_address_level0 = true,
+            /* x29 can follow one AAPCS64 parent frame; other targets cannot. */
+            .call_frame_frame_address_level1 = true,
+        },
+        .layout = minic_aarch64_linux_data_layout,
+        .wide_character_sign = MINIC_INTEGER_SIGN_UNSIGNED,
+        .wide_character_rank = MINIC_INTEGER_RANK_INT,
+        .libc_size_rank = MINIC_INTEGER_RANK_LONG,
+    },
+    {
+        .target = {
+            .architecture = MINIC_TARGET_ARCH_LOONGARCH64,
+            .integer_model = &minic_lp64_signed_char_integer_model,
+            .word_integer_rank = MINIC_INTEGER_RANK_LONG,
+            .language_type_capabilities = MINIC_TARGET_LANG_EXTENDED_FLOAT_DECLARATIONS,
+            .gnu_sizeof_void_is_one = true,
+            .gnu_sizeof_function_is_one = true,
+            .variadic_scalar_read_kind = MINIC_VARIADIC_SCALAR_READ_LINEAR_SLOT,
+            .variadic_linear_slot_bytes = 8U,
+            .variadic_copy_kind = MINIC_VARIADIC_COPY_SCALAR_ASSIGNMENT,
+            .pic_lowering_supported = true,
+            .call_frame_return_address_level0 = true,
+            .call_frame_frame_address_level0 = true,
+        },
+        .layout = minic_loongarch64_linux_data_layout,
+        .wide_character_sign = MINIC_INTEGER_SIGN_SIGNED,
+        .wide_character_rank = MINIC_INTEGER_RANK_INT,
+        .libc_size_rank = MINIC_INTEGER_RANK_LONG,
+    },
+};
+
 const MinicTargetInfo *minic_target_info_for_architecture(
     MinicTargetArchitecture architecture) {
-    static MinicTargetInfo rv64_target;
-    static MinicTargetInfo rv32_target;
-    static MinicTargetInfo x86_64_target;
-    static MinicTargetInfo aarch64_target;
-    static MinicTargetInfo loongarch64_target;
+    static MinicTargetInfo canonical_targets[
+        sizeof(minic_target_language_descriptors) /
+        sizeof(minic_target_language_descriptors[0])];
+    size_t index;
 
-    if (architecture == MINIC_TARGET_ARCH_RISCV32) {
-        if (rv32_target.data_layout == NULL) {
-            rv32_target.architecture = MINIC_TARGET_ARCH_RISCV32;
-            rv32_target.riscv_isa.xlen = 32U;
-            rv32_target.riscv_isa.abi = MINIC_RISCV_ABI_ILP32;
-            rv32_target.riscv_isa.strict_isa = true;
-            rv32_target.data_layout = minic_riscv32_linux_data_layout();
-            rv32_target.integer_model = &minic_rv32_integer_model;
-            rv32_target.wide_character_type = minic_type_int();
-            rv32_target.libc_size_type = minic_type_unsigned_int();
-            rv32_target.word_integer_rank = MINIC_INTEGER_RANK_INT;
-            rv32_target.gnu_sizeof_void_is_one = true;
-            rv32_target.gnu_sizeof_function_is_one = true;
-            /* RV32 calls need their own ILP32 register-pair/frame lowering.
-             * Never copy an LP64 cursor until that machine side is qualified. */
-            rv32_target.variadic_scalar_read_kind =
-                MINIC_VARIADIC_SCALAR_READ_LINEAR_SLOT;
-            rv32_target.variadic_linear_slot_bytes = 4U;
-            rv32_target.variadic_copy_kind =
-                MINIC_VARIADIC_COPY_SCALAR_ASSIGNMENT;
-            /* The ILP32 machine emitter always saves ra in its own frame.
-             * Only level zero is qualified; never expose caller unwinding. */
-            rv32_target.call_frame_return_address_level0 = true;
-            rv32_target.call_frame_frame_address_level0 = true;
+    for (index = 0U; index < sizeof(minic_target_language_descriptors) /
+                                 sizeof(minic_target_language_descriptors[0]); ++index) {
+        const MinicTargetLanguageDescriptor *descriptor = &minic_target_language_descriptors[index];
+        MinicTargetInfo *target = &canonical_targets[index];
+        if (descriptor->target.architecture != architecture) continue;
+        if (target->data_layout == NULL) {
+            MinicTargetInfo initialized = descriptor->target;
+            initialized.data_layout = descriptor->layout();
+            if (initialized.data_layout == NULL ||
+                !integer_type_with_rank(descriptor->wide_character_sign,
+                                        descriptor->wide_character_rank,
+                                        &initialized.wide_character_type) ||
+                !integer_type_with_rank(MINIC_INTEGER_SIGN_UNSIGNED,
+                                        descriptor->libc_size_rank,
+                                        &initialized.libc_size_type))
+                return NULL;
+            *target = initialized;
         }
-        return &rv32_target;
-    }
-    if (architecture == MINIC_TARGET_ARCH_RISCV64) {
-        if (rv64_target.data_layout == NULL) {
-            rv64_target.architecture = MINIC_TARGET_ARCH_RISCV64;
-            rv64_target.pic_lowering_supported = true;
-            rv64_target.riscv_isa.xlen = 64U;
-            rv64_target.riscv_isa.abi = MINIC_RISCV_ABI_LP64D;
-            rv64_target.riscv_isa.strict_isa = false;
-            rv64_target.data_layout = minic_default_data_layout();
-            rv64_target.integer_model = &minic_rv64_integer_model;
-            /* RISC-V Linux psABI: wchar_t is signed 32-bit on ILP32 and LP64.
-             * -fshort-wchar remains a per-invocation 16-bit override. */
-            rv64_target.wide_character_type = minic_type_int();
-            rv64_target.libc_size_type = minic_type_unsigned_long();
-            rv64_target.word_integer_rank = MINIC_INTEGER_RANK_LONG;
-            rv64_target.language_type_capabilities = MINIC_TARGET_LANG_EXTENDED_FLOAT_DECLARATIONS;
-            rv64_target.gnu_sizeof_void_is_one = true;
-            rv64_target.gnu_sizeof_function_is_one = true;
-            rv64_target.variadic_scalar_read_kind = MINIC_VARIADIC_SCALAR_READ_LINEAR_SLOT;
-            rv64_target.variadic_linear_slot_bytes = 8U;
-            rv64_target.variadic_copy_kind = MINIC_VARIADIC_COPY_SCALAR_ASSIGNMENT;
-            rv64_target.call_frame_return_address_level0 = true;
-            rv64_target.call_frame_frame_address_level0 = true;
-        }
-        return &rv64_target;
-    }
-    if (architecture == MINIC_TARGET_ARCH_X86_64) {
-        if (x86_64_target.data_layout == NULL) {
-            x86_64_target.architecture = MINIC_TARGET_ARCH_X86_64;
-            x86_64_target.pic_lowering_supported = true;
-            x86_64_target.data_layout = minic_x86_64_linux_data_layout();
-            x86_64_target.integer_model = &minic_x86_64_linux_integer_model;
-            x86_64_target.wide_character_type = minic_type_int();
-            x86_64_target.libc_size_type = minic_type_unsigned_long();
-            x86_64_target.word_integer_rank = MINIC_INTEGER_RANK_LONG;
-            x86_64_target.language_type_capabilities = MINIC_TARGET_LANG_EXTENDED_FLOAT_DECLARATIONS | MINIC_TARGET_LANG_ABI_STATE_VA_LIST_CURSOR | MINIC_TARGET_LANG_MS_X64_FUNCTION_POINTER_DECLARATIONS;
-            x86_64_target.call_lowering_capabilities =
-                MINIC_TARGET_CALL_MS_X64_FIXED_SCALAR;
-            x86_64_target.gnu_sizeof_void_is_one = true;
-            x86_64_target.gnu_sizeof_function_is_one = true;
-            x86_64_target.variadic_scalar_read_kind = MINIC_VARIADIC_SCALAR_READ_ABI_CURSOR;
-            x86_64_target.variadic_linear_slot_bytes = 0U;
-            x86_64_target.variadic_copy_kind = MINIC_VARIADIC_COPY_ABI_STATE;
-            /* Every SysV x86 function begins with push rbp/mov rsp,rbp.
-             * Hence true entry return-PC is 8(rbp), and frame level0 is
-             * rbp even after nested CALL, stack alignment or alloca.
-             * No cross-function unwind or nonzero level is admitted. */
-            x86_64_target.call_frame_return_address_level0 = true;
-            x86_64_target.call_frame_frame_address_level0 = true;
-        }
-        return &x86_64_target;
-    }
-    if (architecture == MINIC_TARGET_ARCH_AARCH64) {
-        if (aarch64_target.data_layout == NULL) {
-            aarch64_target.architecture = MINIC_TARGET_ARCH_AARCH64;
-            /* The AArch64 emitter resolves TU-local addresses with
-             * ADRP+LO12 and interposable addresses via GOT page loads.
-             * BL relocations remain PLT-capable, so both PIE and DSO code
-             * use the same position-independent address lowering. */
-            aarch64_target.pic_lowering_supported = true;
-            aarch64_target.data_layout = minic_aarch64_linux_data_layout();
-            aarch64_target.integer_model = &minic_aarch64_linux_integer_model;
-            aarch64_target.wide_character_type = minic_type_unsigned_int();
-            aarch64_target.libc_size_type = minic_type_unsigned_long();
-            aarch64_target.word_integer_rank = MINIC_INTEGER_RANK_LONG;
-            aarch64_target.language_type_capabilities = MINIC_TARGET_LANG_EXTENDED_FLOAT_DECLARATIONS | MINIC_TARGET_LANG_OPAQUE_VECTOR_HEADER_DECLARATIONS;
-            aarch64_target.gnu_sizeof_void_is_one = true;
-            aarch64_target.gnu_sizeof_function_is_one = true;
-            aarch64_target.variadic_scalar_read_kind = MINIC_VARIADIC_SCALAR_READ_ABI_CURSOR;
-            aarch64_target.variadic_linear_slot_bytes = 0U;
-            /* AAPCS64 carries a mutable 32-byte ABI-state record behind
-             * the frontend's pointer proxy. Core va_copy requests an owned
-             * destination cursor, never a scalar pointer assignment. */
-            aarch64_target.variadic_copy_kind = MINIC_VARIADIC_COPY_ABI_STATE;
-            /* Native AAPCS64 owns the x29 chain [caller-fp, caller-lr]
-             * including leaf and dynamic-stack functions. Return PC level
-             * zero is separately saved as the entry LR. */
-            aarch64_target.call_frame_return_address_level0 = true;
-            aarch64_target.call_frame_frame_address_level0 = true;
-            aarch64_target.call_frame_frame_address_level1 = true;
-        }
-        return &aarch64_target;
-    }
-    if (architecture == MINIC_TARGET_ARCH_LOONGARCH64) {
-        if (loongarch64_target.data_layout == NULL) {
-            loongarch64_target.architecture = MINIC_TARGET_ARCH_LOONGARCH64;
-            /* la.local emits PC-relative TU-local addresses, whereas
-             * la.global emits GOT-based references to preemptible symbols.
-             * The target owns both classifications and B26/PLT calls. */
-            loongarch64_target.pic_lowering_supported = true;
-            loongarch64_target.data_layout = minic_loongarch64_linux_data_layout();
-            loongarch64_target.integer_model = &minic_loongarch64_linux_integer_model;
-            loongarch64_target.wide_character_type = minic_type_int();
-            loongarch64_target.libc_size_type = minic_type_unsigned_long();
-            loongarch64_target.word_integer_rank = MINIC_INTEGER_RANK_LONG;
-            loongarch64_target.language_type_capabilities = MINIC_TARGET_LANG_EXTENDED_FLOAT_DECLARATIONS;
-            loongarch64_target.gnu_sizeof_void_is_one = true;
-            loongarch64_target.gnu_sizeof_function_is_one = true;
-            loongarch64_target.variadic_scalar_read_kind = MINIC_VARIADIC_SCALAR_READ_LINEAR_SLOT;
-            loongarch64_target.variadic_linear_slot_bytes = 8U;
-            loongarch64_target.variadic_copy_kind = MINIC_VARIADIC_COPY_SCALAR_ASSIGNMENT;
-            /* GNU __builtin_return_address(0) reads the ENTRY ra. This is
-             * independent of whether the function later issues direct or
-             * indirect calls: the shared LP64 CALL plan saves ra at entry
-             * whenever it can be clobbered. No level>0 unwind or frame
-             * address is implied by this capability. */
-            loongarch64_target.call_frame_return_address_level0 = true;
-            /* Original LoongArch Linux stacktrace/process use level-0 SP:
-             * only a stable current frame base, never parent unwinding. */
-            loongarch64_target.call_frame_frame_address_level0 = true;
-        }
-        return &loongarch64_target;
+        return target;
     }
     return NULL;
 }
@@ -446,6 +428,23 @@ bool minic_target_info_named_builtin_type(const MinicTargetInfo *target,
         }
     }
     return false;
+}
+
+bool minic_target_info_header_opaque_vector_return(const MinicTargetInfo *target,
+                                                    MinicType return_type) {
+    if (return_type.pointer_depth != 0U ||
+        !minic_target_info_language_type_supported(target, return_type.base_kind))
+        return false;
+    switch (return_type.base_kind) {
+    case MINIC_TYPE_BASE_AARCH64_FLOAT32X4:
+    case MINIC_TYPE_BASE_AARCH64_FLOAT64X2:
+    case MINIC_TYPE_BASE_AARCH64_SVE_FLOAT32:
+    case MINIC_TYPE_BASE_AARCH64_SVE_FLOAT64:
+    case MINIC_TYPE_BASE_AARCH64_SVE_BOOL:
+        return true;
+    default:
+        return false;
+    }
 }
 
 /* A glibc header-only PCS marker must not enable actual vector call ABI.
@@ -1008,9 +1007,17 @@ bool minic_target_info_local_fixed_register_supported(const MinicTargetInfo *tar
         }
         return number <= 17U;
     }
-    if (target->architecture != MINIC_TARGET_ARCH_RISCV64 &&
-        target->architecture != MINIC_TARGET_ARCH_RISCV32)
-        return false;
+    if (target->architecture == MINIC_TARGET_ARCH_RISCV64) {
+        unsigned physical_id;
+        /* Only ABI a0..a7 (x10..x17): a local named register never
+         * reserves a machine register. The structured machine owner still
+         * validates each source operand and every clobber independently. */
+        return minic_riscv_gpr_id(name, name_length, &physical_id) &&
+               physical_id >= 10U && physical_id <= 17U;
+    }
+    if (target->architecture != MINIC_TARGET_ARCH_RISCV32) return false;
+    /* RV32 has a separate ILP32 emitter; do not infer its contract from the
+     * RV64 physical-alias support until qualified at the machine boundary. */
     return name_length == 2U && name[0] == 'a' && name[1] >= '0' && name[1] <= '7';
 }
 
@@ -1080,8 +1087,11 @@ bool minic_target_info_inline_asm_register_clobber_supported(const MinicTargetIn
      * a0..a7 to GNU asm operands, so declaring them clobbered cannot alias an
      * allocator-owned operand. Broader saved/special register classes remain
      * fail-closed until their preservation contract is explicit. */
-    return name_length == 2U && ((name[0] == 't' && name[1] >= '0' && name[1] <= '6') ||
-                                 (name[0] == 'a' && name[1] >= '0' && name[1] <= '7'));
+    {
+        unsigned physical_id;
+        return minic_riscv_gpr_id(name, name_length, &physical_id) &&
+               minic_riscv_gpr_caller_saved(physical_id);
+    }
 }
 
     /* GNU syntax and local-fixed-register binding are two different contracts.

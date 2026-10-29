@@ -10,7 +10,7 @@
     672,
     673
   ],
-  "audit_in_progress": "MiniC batch14 architecture consolidation: Direct LP64 ABI policies, trusted Core ASM source provenance, x86 physical register banks, and RV64 frame scratch liveness. New source owners are indexed without silently certifying stale blob reviews. Exact-head Linux .i-to-.s, GNU AS, link and QEMU are independent evidence; the four-architecture runtime has two pre-existing failures.",
+  "audit_in_progress": "MiniC architecture consolidation: Direct LP64 ABI policies, trusted Core ASM source provenance, x86 physical register banks, and RV64 frame scratch liveness. New source owners are indexed without silently certifying stale blob reviews. Exact-head Linux .i-to-.s, GNU AS, link and QEMU are independent evidence; the four-architecture runtime has three pre-existing failures (x86 typed overflow, AArch64 x8 sret, LoongArch hidden a0).",
   "next_deep_review": [
     "src/target/aarch64/asm_legalize.c",
     "src/target/loongarch64/frame_emit.c",
@@ -93,6 +93,17 @@
     "src/target/aarch64/fp_emit.h": {
       "blob": "36ef03ccd8d0613d45b1cce126fb432879cb3073",
       "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/aarch64/frame_emit.c": {
+      "blob": "0f4eea0cb3f594f000d8fd2119975efb9f4b0374",
+      "review_depth": "targeted",
+      "ci_touched_in": [],
+      "note": "2026-10-29: typed AArch64 FrameRef and scratch constraints reviewed with native API and real FP/memory emission probes; legacy text legalization remains for unconverted families."
+    },
+    "src/target/aarch64/frame_emit.h": {
+      "blob": "dd176e6c52ca108221e696b5c8c221a061a93786",
+      "review_depth": "targeted",
       "ci_touched_in": []
     },
     "src/target/aarch64/integer_emit.c": {
@@ -662,6 +673,12 @@
       "blob": "e2d0f254cbc60d0f02e1b0840255a773b89c517b",
       "review_depth": "inventory",
       "ci_touched_in": []
+    },
+    "src/target/riscv/register_identity.h": {
+      "blob": "94380000f2353bf0d04ff706bb912e5071c62056",
+      "review_depth": "targeted",
+      "ci_touched_in": [],
+      "note": "2026-10-29: numeric xN and ABI register spelling normalized to physical GPR IDs; RV32/RV64 qualifier and scratch checks reviewed with standalone production tests."
     },
     "src/target/riscv/isa_features.h": {
       "blob": "db4042710b20ea06f834a99b34329df32ef9fada",

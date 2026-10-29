@@ -2622,13 +2622,11 @@ static bool emit_linux_port_io(FILE *out,const MinicC0Program *program,
 static bool emit_linux_local_xadd(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicX86Frame *frame,
-    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
-    const size_t smp_width = minic_x86_64_linux_smp_xadd_width(
-        info->template_text,info->template_length);
-    const size_t percpu_width = minic_x86_64_linux_percpu_xadd_width(
-        info->template_text, info->template_length);
-    const size_t width = smp_width ? smp_width : percpu_width ? percpu_width :
-        minic_x86_64_linux_local_xadd_width(info->template_text, info->template_length);
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info,
+    MinicX86GsAtomicPlan plan) {
+    const bool smp = plan.kind == MINIC_X86_GS_ATOMIC_XADD_SMP;
+    const bool percpu = plan.kind == MINIC_X86_GS_ATOMIC_XADD_PERCPU;
+    const size_t width = plan.width;
     static const char *const names[] = {"b","w","l","q"};
     const char *suffix, *source_reg;
     const MinicCoreStructuredInlineAsmOperand *b =
@@ -2637,10 +2635,13 @@ static bool emit_linux_local_xadd(
     size_t size, i;
     bool sign;
     if (!out || !program || !target || !fn || !frame || !b || !width ||
+        (plan.kind != MINIC_X86_GS_ATOMIC_XADD_SMP &&
+         plan.kind != MINIC_X86_GS_ATOMIC_XADD_LOCAL &&
+         plan.kind != MINIC_X86_GS_ATOMIC_XADD_PERCPU) ||
         !info->is_volatile || info->is_goto ||
         !info->has_memory_clobber ||
-        info->register_clobber_count!=(smp_width?1U:0U) ||
-        (smp_width && (!info->register_clobbers ||
+        info->register_clobber_count!=(smp?1U:0U) ||
+        (smp && (!info->register_clobbers ||
          !clobber_is(&info->register_clobbers[0],"cc"))) ||
         ins->value.structured_inline_asm.operand_count != 2U)
         return false;
@@ -2666,12 +2667,12 @@ static bool emit_linux_local_xadd(
     if(!x86_value_load(out,frame,b[0].value,"%r8") ||
        fprintf(out,"  mov%s (%%r8), %s\n",suffix,source_reg)<0 ||
        !x86_value_load(out,frame,b[1].value,"%r11"))return false;
-    if(smp_width && fputs("  .pushsection .smp_locks,\"a\"\n"
+    if(smp && fputs("  .pushsection .smp_locks,\"a\"\n"
         "  .balign 4\n  .long 671f - .\n  .popsection\n671:\n",out)==EOF)
         return false;
     if(fprintf(out,"  %sxadd%s %s, %s(%%r11)\n",
-          smp_width?"lock; ":"",suffix,source_reg,
-          percpu_width?"%gs:":"")<0)return false;
+          smp?"lock; ":"",suffix,source_reg,
+          percpu?"%gs:":"")<0)return false;
     return fprintf(out,"  mov%s %s, (%%r8)\n",suffix,source_reg)>=0;
 }
 
@@ -2681,19 +2682,20 @@ static bool emit_linux_local_xadd(
 static bool emit_linux_gs_cmpxchg(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicX86Frame *frame,
-    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info,
+    MinicX86GsAtomicPlan plan) {
     const MinicCoreStructuredInlineAsmOperand *bind =
         ins->value.structured_inline_asm.operands;
-    const size_t width = minic_x86_64_linux_gs_cmpxchg_width(
-        info->template_text, info->template_length);
-    const bool loop = minic_x86_64_linux_gs_cmpxchg_loop(
-        info->template_text, info->template_length);
+    const size_t width = plan.width;
+    const bool loop = plan.kind == MINIC_X86_GS_ATOMIC_CMPXCHG_RETRY;
     const char *suffix, *new_register, *old_register;
     size_t i, actual;
     bool sign;
     MinicType type;
     if (!out || !program || !target || !fn || !frame || !bind ||
-        !width || !info->is_volatile || info->is_goto ||
+        !width || (plan.kind != MINIC_X86_GS_ATOMIC_CMPXCHG &&
+                   plan.kind != MINIC_X86_GS_ATOMIC_CMPXCHG_RETRY) ||
+        !info->is_volatile || info->is_goto ||
         !info->has_memory_clobber || info->register_clobber_count ||
         ins->value.structured_inline_asm.operand_count != 3U)
         return false;
@@ -6261,18 +6263,23 @@ bool minic_x86_64_emit_structured_asm(
     if (minic_x86_64_port_io_form(
             info->template_text,info->template_length)!=MINIC_X86_PORT_IO_NONE)
         return emit_linux_port_io(out,program,target,fn,frame,ins,info);
-    if (minic_x86_64_linux_smp_xadd_width(
-            info->template_text, info->template_length))
-        return emit_linux_local_xadd(out, program, target, fn, frame, ins, info);
-    if (minic_x86_64_linux_local_xadd_width(
-            info->template_text, info->template_length))
-        return emit_linux_local_xadd(out, program, target, fn, frame, ins, info);
-    if (minic_x86_64_linux_percpu_xadd_width(
-            info->template_text, info->template_length))
-        return emit_linux_local_xadd(out, program, target, fn, frame, ins, info);
-    if (minic_x86_64_linux_gs_cmpxchg_width(
-            info->template_text, info->template_length))
-        return emit_linux_gs_cmpxchg(out, program, target, fn, frame, ins, info);
+    {
+        const MinicX86GsAtomicPlan atomic = minic_x86_64_gs_atomic_plan(
+            info->template_text, info->template_length);
+        switch (atomic.kind) {
+        case MINIC_X86_GS_ATOMIC_XADD_SMP:
+        case MINIC_X86_GS_ATOMIC_XADD_LOCAL:
+        case MINIC_X86_GS_ATOMIC_XADD_PERCPU:
+            return emit_linux_local_xadd(out, program, target, fn, frame,
+                                         ins, info, atomic);
+        case MINIC_X86_GS_ATOMIC_CMPXCHG:
+        case MINIC_X86_GS_ATOMIC_CMPXCHG_RETRY:
+            return emit_linux_gs_cmpxchg(out, program, target, fn, frame,
+                                         ins, info, atomic);
+        case MINIC_X86_GS_ATOMIC_NONE:
+            break;
+        }
+    }
     if (minic_x86_64_linux_rep_stos_width(
             info->template_text, info->template_length))
         return emit_linux_rep_stos(out, program, target, fn, frame, ins, info);

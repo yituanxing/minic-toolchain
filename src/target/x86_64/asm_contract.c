@@ -4194,7 +4194,7 @@ static bool x86_linux_atomic_rmw_source(
 
 /* Original GNU Linux SMP xadd (1/2/4/8): 671 patch section plus LOCK.
  * This ABI/ISA contract is separate from non-LOCK local_add_return. */
-size_t minic_x86_64_linux_smp_xadd_width(const char *text,size_t len) {
+static size_t x86_linux_smp_xadd_width(const char *text,size_t len) {
     static const char *const forms[] = {
         ".pushsection.smp_locks,\"a\".balign4.long671f-..popsection671:"
         "lock;xaddb%b0,%1",
@@ -4219,9 +4219,9 @@ size_t minic_x86_64_linux_smp_xadd_width(const char *text,size_t len) {
     return 0U;
 }
 static bool x86_linux_smp_xadd_source(const MinicC0Program *program,
-    const MinicInlineAsm *src,MinicTargetInlineAsmContract *contract) {
-    const size_t width=src?minic_x86_64_linux_smp_xadd_width(
-        src->template_text,src->template_length):0U;
+    const MinicInlineAsm *src,MinicTargetInlineAsmContract *contract,
+    MinicX86GsAtomicPlan plan) {
+    const size_t width=plan.kind==MINIC_X86_GS_ATOMIC_XADD_SMP?plan.width:0U;
     const MinicExpression *reg,*mem;
     MinicType rt,mt;
     const MinicIntegerRank rank=width==1U?MINIC_INTEGER_RANK_CHAR:
@@ -4255,7 +4255,7 @@ static bool x86_linux_smp_xadd_source(const MinicC0Program *program,
  * register +r receives the PREVIOUS memory value after bare xaddq; +m
  * is the true hardware RMW lvalue. Core uses existing typed operand roles.
  * This target-owned ISA contract must never widen into generic ASM text. */
-size_t minic_x86_64_linux_local_xadd_width(const char *text, size_t len) {
+static size_t x86_linux_local_xadd_width(const char *text, size_t len) {
     char compact[64];
     size_t i, n = 0U;
     if (text == NULL || len == 0U || len >= sizeof(compact)) return 0U;
@@ -4272,11 +4272,11 @@ size_t minic_x86_64_linux_local_xadd_width(const char *text, size_t len) {
 }
 static bool x86_linux_local_xadd_source(
     const MinicC0Program *program, const MinicInlineAsm *src,
-    MinicTargetInlineAsmContract *contract) {
+    MinicTargetInlineAsmContract *contract, MinicX86GsAtomicPlan plan) {
     const MinicExpression *reg, *mem;
     MinicType reg_type, mem_type;
-    const size_t width = src ? minic_x86_64_linux_local_xadd_width(
-        src->template_text, src->template_length) : 0U;
+    const size_t width = plan.kind == MINIC_X86_GS_ATOMIC_XADD_LOCAL ?
+        plan.width : 0U;
     if (!program || !src || !contract || !width ||
         !src->is_volatile || src->is_goto ||
         !src->outputs || src->output_count != 2U ||
@@ -4312,7 +4312,7 @@ static bool x86_linux_local_xadd_source(
 /* XADD against GS-relative per-CPU memory returns the previous value in the
  * register lvalue and updates the per-CPU slot, exactly as the direct-memory
  * Linux local XADD does. The GS segment belongs solely to this x86 target. */
-size_t minic_x86_64_linux_percpu_xadd_width(const char *text, size_t length) {
+static size_t x86_linux_percpu_xadd_width(const char *text, size_t length) {
     static const char *const patterns[] = {
         "xaddb%0,%%gs:%1", "xaddw%0,%%gs:%1",
         "xaddl%0,%%gs:%1", "xaddq%0,%%gs:%1",
@@ -4337,11 +4337,11 @@ size_t minic_x86_64_linux_percpu_xadd_width(const char *text, size_t length) {
 
 static bool x86_linux_percpu_xadd_source(
     const MinicC0Program *program, const MinicInlineAsm *source,
-    MinicTargetInlineAsmContract *contract) {
+    MinicTargetInlineAsmContract *contract, MinicX86GsAtomicPlan plan) {
     const MinicExpression *reg, *memory;
     MinicType reg_type, mem_type;
-    const size_t width = source ? minic_x86_64_linux_percpu_xadd_width(
-        source->template_text, source->template_length) : 0U;
+    const size_t width = plan.kind == MINIC_X86_GS_ATOMIC_XADD_PERCPU ?
+        plan.width : 0U;
     if (!program || !source || !contract || width == 0U ||
         source->is_goto ||
         source->output_count != 2U || !source->outputs ||
@@ -4378,9 +4378,9 @@ static bool x86_linux_percpu_xadd_source(
  * cmpxchg updates GS-relative memory only on equality and returns the
  * observed previous memory value in that same carrier. Keep the memory
  * operand separate from an ordinary C dereference: %gs is architectural. */
-static size_t minic_x86_64_linux_gs_cmpxchg_loop_width(
+static size_t x86_linux_gs_cmpxchg_loop_width(
     const char *text, size_t length);
-size_t minic_x86_64_linux_gs_cmpxchg_width(const char *text, size_t length) {
+static size_t x86_linux_gs_cmpxchg_width(const char *text, size_t length) {
     static const char *const symbolic[] = {
         "cmpxchgb%[nval],%%gs:%[var]", "cmpxchgw%[nval],%%gs:%[var]",
         "cmpxchgl%[nval],%%gs:%[var]", "cmpxchgq%[nval],%%gs:%[var]"
@@ -4395,10 +4395,10 @@ size_t minic_x86_64_linux_gs_cmpxchg_width(const char *text, size_t length) {
         if (x86_linux_compact_asm_equals(text, length, symbolic[i]) ||
             x86_linux_compact_asm_equals(text, length, numeric[i]))
             return widths[i];
-    return minic_x86_64_linux_gs_cmpxchg_loop_width(text, length);
+    return 0U;
 }
 
-static size_t minic_x86_64_linux_gs_cmpxchg_loop_width(
+static size_t x86_linux_gs_cmpxchg_loop_width(
     const char *text, size_t length) {
     static const char *const opcodes[] = {
         "cmpxchgb", "cmpxchgw", "cmpxchgl", "cmpxchgq"
@@ -4422,18 +4422,34 @@ static size_t minic_x86_64_linux_gs_cmpxchg_loop_width(
     return 0U;
 }
 
-bool minic_x86_64_linux_gs_cmpxchg_loop(const char *text, size_t length) {
-    return minic_x86_64_linux_gs_cmpxchg_loop_width(text, length) != 0U;
+/* Source qualification and machine lowering converge on this one typed
+ * decision; the variant also owns lock metadata, segment override, and the
+ * retry-loop distinction. Unknown templates stay unadmitted. */
+MinicX86GsAtomicPlan minic_x86_64_gs_atomic_plan(
+    const char *text, size_t length) {
+    MinicX86GsAtomicPlan plan = {MINIC_X86_GS_ATOMIC_NONE, 0U};
+    if (!text || !length) return plan;
+    if ((plan.width = x86_linux_smp_xadd_width(text, length)) != 0U)
+        plan.kind = MINIC_X86_GS_ATOMIC_XADD_SMP;
+    else if ((plan.width = x86_linux_local_xadd_width(text, length)) != 0U)
+        plan.kind = MINIC_X86_GS_ATOMIC_XADD_LOCAL;
+    else if ((plan.width = x86_linux_percpu_xadd_width(text, length)) != 0U)
+        plan.kind = MINIC_X86_GS_ATOMIC_XADD_PERCPU;
+    else if ((plan.width = x86_linux_gs_cmpxchg_width(text, length)) != 0U)
+        plan.kind = MINIC_X86_GS_ATOMIC_CMPXCHG;
+    else if ((plan.width = x86_linux_gs_cmpxchg_loop_width(text, length)) != 0U)
+        plan.kind = MINIC_X86_GS_ATOMIC_CMPXCHG_RETRY;
+    else plan.width = 0U;
+    return plan;
 }
 
 static bool x86_linux_gs_cmpxchg_source(
     const MinicC0Program *program, const MinicInlineAsm *source,
-    MinicTargetInlineAsmContract *contract) {
-    const size_t width = source ? minic_x86_64_linux_gs_cmpxchg_width(
-        source->template_text, source->template_length) : 0U;
+    MinicTargetInlineAsmContract *contract, MinicX86GsAtomicPlan plan) {
+    const size_t width = plan.kind == MINIC_X86_GS_ATOMIC_CMPXCHG ||
+        plan.kind == MINIC_X86_GS_ATOMIC_CMPXCHG_RETRY ? plan.width : 0U;
     size_t i;
-    const bool loop = source && minic_x86_64_linux_gs_cmpxchg_loop(
-        source->template_text, source->template_length);
+    const bool loop = plan.kind == MINIC_X86_GS_ATOMIC_CMPXCHG_RETRY;
     if (!program || !source || !contract || !width || source->is_goto ||
         source->output_count != 2U || source->input_count != 1U ||
         !source->outputs || !source->inputs || source->label_count ||
@@ -4476,6 +4492,31 @@ static bool x86_linux_gs_cmpxchg_source(
     contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->implicit_memory_effect = true;
     return true;
+}
+
+/* Dispatch once to the target-owned machine decision. Each variant still
+ * verifies its original GNU operand ABI; no generic Core layer needs to
+ * understand SMP locks, GS addressing or the CMPXCHG accumulator. */
+static bool x86_linux_gs_atomic_source(
+    const MinicC0Program *program, const MinicInlineAsm *source,
+    MinicTargetInlineAsmContract *contract) {
+    const MinicX86GsAtomicPlan plan = source ? minic_x86_64_gs_atomic_plan(
+        source->template_text, source->template_length) :
+        (MinicX86GsAtomicPlan){0};
+    switch (plan.kind) {
+    case MINIC_X86_GS_ATOMIC_XADD_SMP:
+        return x86_linux_smp_xadd_source(program, source, contract, plan);
+    case MINIC_X86_GS_ATOMIC_XADD_LOCAL:
+        return x86_linux_local_xadd_source(program, source, contract, plan);
+    case MINIC_X86_GS_ATOMIC_XADD_PERCPU:
+        return x86_linux_percpu_xadd_source(program, source, contract, plan);
+    case MINIC_X86_GS_ATOMIC_CMPXCHG:
+    case MINIC_X86_GS_ATOMIC_CMPXCHG_RETRY:
+        return x86_linux_gs_cmpxchg_source(program, source, contract, plan);
+    case MINIC_X86_GS_ATOMIC_NONE:
+        return false;
+    }
+    return false;
 }
 
 /* Linux memset16/32/64: two early-clobbered fixed register results and
@@ -8635,13 +8676,7 @@ bool minic_x86_64_qualify_inline_asm(
         return true;
     if (x86_port_io_source(program, source, contract))
         return true;
-    if (x86_linux_smp_xadd_source(program, source, contract))
-        return true;
-    if (x86_linux_local_xadd_source(program, source, contract))
-        return true;
-    if (x86_linux_percpu_xadd_source(program, source, contract))
-        return true;
-    if (x86_linux_gs_cmpxchg_source(program, source, contract))
+    if (x86_linux_gs_atomic_source(program, source, contract))
         return true;
     if (x86_linux_rep_stos_source(program, source, contract))
         return true;

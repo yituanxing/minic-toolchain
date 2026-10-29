@@ -85,9 +85,22 @@ unsigned int minic_x86_64_linux_fpu_kernel_restore_form(const char *, size_t);
 /* x87 legacy state prepare: FNCLEX; EMMS; FILD DWORD PTR [state]. */
 bool minic_x86_64_linux_x87_fild_prepare_form(const char *, size_t);
 unsigned int minic_x86_64_linux_mxcsr_form(const char *, size_t);
-size_t minic_x86_64_linux_percpu_xadd_width(const char *, size_t);
-size_t minic_x86_64_linux_gs_cmpxchg_width(const char *, size_t);
-bool minic_x86_64_linux_gs_cmpxchg_loop(const char *, size_t);
+/* One target-owned decision for all XADD variants and GS-relative CAS.
+ * Source admission and physical emission independently validate the same
+ * exact GNU template, then check their distinct operand representations. */
+typedef enum MinicX86GsAtomicKind {
+    MINIC_X86_GS_ATOMIC_NONE = 0,
+    MINIC_X86_GS_ATOMIC_XADD_SMP,
+    MINIC_X86_GS_ATOMIC_XADD_LOCAL,
+    MINIC_X86_GS_ATOMIC_XADD_PERCPU,
+    MINIC_X86_GS_ATOMIC_CMPXCHG,
+    MINIC_X86_GS_ATOMIC_CMPXCHG_RETRY
+} MinicX86GsAtomicKind;
+typedef struct MinicX86GsAtomicPlan {
+    MinicX86GsAtomicKind kind;
+    size_t width;
+} MinicX86GsAtomicPlan;
+MinicX86GsAtomicPlan minic_x86_64_gs_atomic_plan(const char *, size_t);
 size_t minic_x86_64_linux_rep_stos_width(const char *, size_t);
 unsigned int minic_x86_64_linux_lowlevel_scalar_form(const char *, size_t);
 unsigned int minic_x86_64_linux_boot_flags_form(const char *, size_t);
@@ -276,8 +289,6 @@ typedef struct MinicX86AtomicRmwDesc {
 } MinicX86AtomicRmwDesc;
 MinicX86AtomicRmw minic_x86_64_atomic_rmw_form(const char *,size_t);
 /* Original Linux local_add_return: bare XADD, not LOCK-serialized SMP. */
-size_t minic_x86_64_linux_smp_xadd_width(const char *,size_t);
-size_t minic_x86_64_linux_local_xadd_width(const char *, size_t);
 const MinicX86AtomicRmwDesc *minic_x86_64_atomic_rmw_description(
     MinicX86AtomicRmw);
 

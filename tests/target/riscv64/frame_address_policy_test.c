@@ -111,6 +111,21 @@ static bool frame_pair_case(bool dynamic_frame, bool store,
     return ok;
 }
 
+static bool frame_chunk_case(bool load, const char *register_name,
+                             size_t size, const char *required,
+                             const char *forbidden) {
+    MinicRiscv64CoreFrame frame = {0};
+    FILE *file = tmpfile();
+    bool ok = file != NULL &&
+        (load ? minic_riscv64_frame_load_chunk(
+                    file, &frame, register_name, 4096U, size) :
+                minic_riscv64_frame_store_chunk(
+                    file, &frame, register_name, 4096U, size)) &&
+        emitted_contains(file, required, forbidden);
+    if (file != NULL) (void)fclose(file);
+    return ok;
+}
+
 int main(void) {
     MinicRiscvFrameAddressPolicy impossible = {
         "sp", "t2", "t2", "ld", "sd"
@@ -124,6 +139,8 @@ int main(void) {
                          "sd t2, 2047(sp)", "li t2,") ||
         !frame_word_case(false, true, "t2", 2048U,
                          "sd t2, 0(t6)", "li t2,") ||
+        !frame_word_case(false, true, "x7", 2048U,
+                         "sd x7, 0(t6)", "li t2,") ||
         !frame_word_case(false, false, "t2", 2048U,
                          "ld t2, 0(t6)", "li t2,") ||
         !frame_word_case(false, true, "t0", 4096U,
@@ -132,6 +149,8 @@ int main(void) {
                          "sd t6, 0(t5)", "li t6,") ||
         !frame_word_case(true, false, "t6", 4096U,
                          "ld t6, 0(t5)", "li t6,") ||
+        !frame_word_case(true, true, "x31", 4096U,
+                         "sd x31, 0(t5)", "li t6,") ||
         !frame_address_case(false, "t3", 2048U,
                             "add t3, sp, t3") ||
         !frame_address_case(true, "t6", 2048U,
@@ -146,6 +165,14 @@ int main(void) {
                          "sd t1, 0(t6)", "sd t2, 0(t6)", "li t2,") ||
         !frame_pair_case(true, false, "t1", "t2",
                          "ld t1, 0(t6)", "ld t2, 0(t6)", "li t2,") ||
+        !frame_chunk_case(true, "t1", 3U,
+                          "or t1, t1, t3", "lbu t1, 0(") ||
+        !frame_chunk_case(true, "x28", 4U,
+                          "lwu x28, 0(t4)", "lwu x28, 0(t3)") ||
+        !frame_chunk_case(false, "t3", 3U,
+                          "sb t1, 0(t4)", "mv t4, t3") ||
+        !frame_chunk_case(false, "x28", 2U,
+                          "sh x28, 0(t4)", "sh x28, 0(t3)") ||
         !fail_closed || !symbol_default_case()) {
         (void)fprintf(stderr, "RISC-V machine frame address policy regression FAIL\n");
         return 1;

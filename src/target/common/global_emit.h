@@ -20,6 +20,37 @@ typedef bool (*MinicMultiScalarBitsEmitter)(FILE *, const MinicC0Program *,
                                             const MinicTargetInfo *, MinicType,
                                             uint64_t);
 
+/* One checked language/DataLayout decision for a global object's payload.
+ * No ISA register, relocation encoding or assembly spelling enters the plan.
+ * Native backends can select their directives from this same classification
+ * while retaining their own relocation callbacks and ELF symbol policy. */
+typedef enum MinicMultiGlobalPayloadKind {
+    MINIC_MULTI_GLOBAL_PAYLOAD_ZERO,
+    MINIC_MULTI_GLOBAL_PAYLOAD_ZERO_RELOCATIONS,
+    MINIC_MULTI_GLOBAL_PAYLOAD_RECORD_FLAT,
+    MINIC_MULTI_GLOBAL_PAYLOAD_RECORD_RECURSIVE,
+    MINIC_MULTI_GLOBAL_PAYLOAD_RECORD_FLEXIBLE,
+    MINIC_MULTI_GLOBAL_PAYLOAD_ARRAY_RECORD,
+    MINIC_MULTI_GLOBAL_PAYLOAD_ARRAY_RECURSIVE,
+    MINIC_MULTI_GLOBAL_PAYLOAD_ARRAY_SCALAR_RELOCATIONS,
+    MINIC_MULTI_GLOBAL_PAYLOAD_SCALAR_BITS
+} MinicMultiGlobalPayloadKind;
+
+typedef struct MinicMultiGlobalEmissionPlan {
+    MinicMultiGlobalPayloadKind payload_kind;
+    size_t storage_size;
+    size_t storage_alignment;
+    size_t scalar_width;
+    MinicType scalar_type;
+    /* Default ELF section only; an explicit validated section attribute
+     * remains the owner's choice.  It is not target-specific GAS syntax. */
+    const char *default_elf_section;
+} MinicMultiGlobalEmissionPlan;
+
+bool minic_multi_global_emission_plan_build(
+    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicGlobalObject *object, MinicMultiGlobalEmissionPlan *plan);
+
 /* Common source-section sanitizer shared by the x86/RV32/RV64 and direct
  * ELF emission paths: no architecture may interpolate raw GAS directives. */
 bool minic_multi_elf_safe_section_name(const char *);

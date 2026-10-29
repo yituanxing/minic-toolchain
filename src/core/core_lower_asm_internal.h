@@ -93,8 +93,4 @@ MinicCoreLowerStatus core_asm_try_structured_roles_and_asm_goto(
     MinicCoreLowerContext *context, const MinicStatement *statement,
     const MinicInlineAsm *source, bool *handled);
 
-MinicCoreLowerStatus core_asm_try_fixed_and_register_operands(
-    MinicCoreLowerContext *context, const MinicStatement *statement,
-    const MinicInlineAsm *source, bool *handled);
-
 #endif

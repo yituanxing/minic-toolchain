@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
+#include "target/riscv/register_identity.h"
 
 /* A machine frame access must never overwrite its data/base register while
  * materializing a displacement larger than the signed 12-bit load/store
@@ -22,8 +23,8 @@ typedef struct MinicRiscvFrameAddressPolicy {
 static inline bool minic_riscv_frame_register_available(
     const char *candidate, const char *base, const char *value) {
     return candidate != NULL && candidate[0] != '\0' &&
-           strcmp(candidate, base) != 0 &&
-           (value == NULL || strcmp(candidate, value) != 0);
+           !minic_riscv_gpr_name_equal(candidate, base) &&
+           (value == NULL || !minic_riscv_gpr_name_equal(candidate, value));
 }
 
 static inline const char *minic_riscv_frame_select_scratch(
@@ -33,12 +34,12 @@ static inline const char *minic_riscv_frame_select_scratch(
     if (minic_riscv_frame_register_available(
             policy->preferred_scratch, policy->base_register, value) &&
         (protected_register == NULL ||
-         strcmp(policy->preferred_scratch, protected_register) != 0))
+         !minic_riscv_gpr_name_equal(policy->preferred_scratch, protected_register)))
         return policy->preferred_scratch;
     if (minic_riscv_frame_register_available(
             policy->alternate_scratch, policy->base_register, value) &&
         (protected_register == NULL ||
-         strcmp(policy->alternate_scratch, protected_register) != 0))
+         !minic_riscv_gpr_name_equal(policy->alternate_scratch, protected_register)))
         return policy->alternate_scratch;
     return NULL;
 }
@@ -48,7 +49,7 @@ static inline bool minic_riscv_frame_emit_address(
     const char *destination, size_t offset) {
     if (out == NULL || policy == NULL || policy->base_register == NULL ||
         destination == NULL || destination[0] == '\0' ||
-        strcmp(destination, policy->base_register) == 0)
+        minic_riscv_gpr_name_equal(destination, policy->base_register))
         return false;
     if (offset <= 2047U)
         return fprintf(out, "  addi %s, %s, %zu\n",
