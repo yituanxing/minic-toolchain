@@ -1361,6 +1361,151 @@ typedef struct LoongLinuxUaccess {
     const char *opcode;
 } LoongLinuxUaccess;
 
+/* This register numbering is the Linux LoongArch exception-table ABI. It is
+ * shared by user access and futex atomic LL/SC, so recognize it once rather
+ * than relaxing each operation to an unrestricted `.irp` assembler escape. */
+static const char loong_linux_exception_gpr_map[] =
+    ".equ.L__gpr_num_zero,0"
+    ".irpnum,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31"
+    ".equ.L__gpr_num_$r\\num,\\num"
+    ".endr"
+    ".equ.L__gpr_num_$ra,1"
+    ".equ.L__gpr_num_$tp,2"
+    ".equ.L__gpr_num_$sp,3"
+    ".irpnum,0,1,2,3,4,5,6,7"
+    ".equ.L__gpr_num_$a\\num,4+\\num"
+    ".endr"
+    ".irpnum,0,1,2,3,4,5,6,7,8"
+    ".equ.L__gpr_num_$t\\num,12+\\num"
+    ".endr"
+    ".equ.L__gpr_num_$s9,22"
+    ".equ.L__gpr_num_$fp,22"
+    ".irpnum,0,1,2,3,4,5,6,7,8"
+    ".equ.L__gpr_num_$s\\num,23+\\num"
+    ".endr";
+
+typedef enum LoongLinuxFutexRmw {
+    LOONG_FUTEX_NONE = 0,
+    LOONG_FUTEX_SET,
+    LOONG_FUTEX_ADD,
+    LOONG_FUTEX_OR,
+    LOONG_FUTEX_AND,
+    LOONG_FUTEX_XOR
+} LoongLinuxFutexRmw;
+
+/* All five futex operations use one precise GNU template family. In
+ * particular, .short (2) is the LoongArch EX_TYPE_UACCESS_ERR_ZERO exception
+ * handler, not a passive note. Both LL and SC have distinct fault entries;
+ * their fixup register must hold -EFAULT on failure. */
+static LoongLinuxFutexRmw loong_linux_futex_rmw_form(
+    const char *text, size_t length) {
+    static const char *const operations[] = {
+        "move$t0,%z5", "add.w$t0,%1,%z5", "or$t0,%1,%z5",
+        "and$t0,%1,%z5", "xor$t0,%1,%z5"
+    };
+    static const char first[] = "1:ll.w%1,%4#__futex_atomic_op";
+    static const char loop[] = "2:sc.w$t0,%2beqz$t0,1b3:";
+    static const char exception_prefix[] =
+        ".pushsection__ex_table,\"a\".balign4";
+    static const char exception_suffix[] =
+        ".long((3b)-.).short(2)"
+        ".short((((.L__gpr_num_%0)<<0)|((.L__gpr_num_zero)<<5)))"
+        ".popsection";
+    char compact[3600];
+    size_t n = 0U, i, form;
+    const char *cursor;
+    if (!text || length == 0U || length >= sizeof(compact))
+        return LOONG_FUTEX_NONE;
+    for (i = 0U; i < length; ++i) {
+        const char ch = text[i];
+        if (ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n') continue;
+        if (ch == '\0' || n + 1U >= sizeof(compact)) return LOONG_FUTEX_NONE;
+        compact[n++] = ch;
+    }
+    compact[n] = '\0';
+    if (strncmp(compact, first, sizeof(first) - 1U) != 0)
+        return LOONG_FUTEX_NONE;
+    for (form = 0U; form < sizeof(operations) / sizeof(operations[0]); ++form) {
+        const size_t op_len = strlen(operations[form]);
+        cursor = compact + sizeof(first) - 1U;
+        if (strncmp(cursor, operations[form], op_len) != 0) continue;
+        cursor += op_len;
+        if (strncmp(cursor, loop, sizeof(loop) - 1U) != 0) continue;
+        cursor += sizeof(loop) - 1U;
+        for (i = 0U; i < 2U; ++i) {
+            const size_t map_len = sizeof(loong_linux_exception_gpr_map) - 1U;
+            if (strncmp(cursor, loong_linux_exception_gpr_map, map_len) != 0)
+                break;
+            cursor += map_len;
+            if (strncmp(cursor, exception_prefix,
+                        sizeof(exception_prefix) - 1U) != 0) break;
+            cursor += sizeof(exception_prefix) - 1U;
+            if (strncmp(cursor, i == 0U ? ".long((1b)-.)" : ".long((2b)-.)",
+                        sizeof(".long((1b)-.)") - 1U) != 0) break;
+            cursor += sizeof(".long((1b)-.)") - 1U;
+            if (strncmp(cursor, exception_suffix,
+                        sizeof(exception_suffix) - 1U) != 0) break;
+            cursor += sizeof(exception_suffix) - 1U;
+        }
+        if (i == 2U && *cursor == '\0')
+            return (LoongLinuxFutexRmw)(form + 1U);
+    }
+    return LOONG_FUTEX_NONE;
+}
+
+static bool loong_linux_futex_rmw_source(
+    const MinicC0Program *program, const MinicInlineAsm *src,
+    MinicTargetInlineAsmContract *contract) {
+    const MinicExpression *err, *old, *mem_output, *mem_input, *value;
+    MinicType plain;
+    size_t i;
+    if (!program || !src || !contract || !src->is_volatile || src->is_goto ||
+        loong_linux_futex_rmw_form(src->template_text, src->template_length) ==
+            LOONG_FUTEX_NONE ||
+        src->output_count != 3U || src->input_count != 3U ||
+        !src->outputs || !src->inputs || src->label_count != 0U ||
+        !src->has_memory_clobber || src->clobber_count != 2U ||
+        src->register_clobber_count != 1U || !src->register_clobbers ||
+        !loong_csr_constraint(&src->outputs[0], "=r") ||
+        !loong_csr_constraint(&src->outputs[1], "=&r") ||
+        !loong_csr_constraint(&src->outputs[2], "=ZC") ||
+        !loong_csr_constraint(&src->inputs[0], "0") ||
+        !loong_csr_constraint(&src->inputs[1], "ZC") ||
+        !loong_csr_constraint(&src->inputs[2], "Jr") ||
+        src->register_clobbers[0].name_length != 2U ||
+        memcmp(src->register_clobbers[0].name, "t0", 2U) != 0)
+        return false;
+    err = minic_c0_program_expression(program, src->outputs[0].expression);
+    old = minic_c0_program_expression(program, src->outputs[1].expression);
+    mem_output = minic_c0_program_expression(program, src->outputs[2].expression);
+    mem_input = minic_c0_program_expression(program, src->inputs[1].expression);
+    value = minic_c0_program_expression(program, src->inputs[2].expression);
+    if (!err || !old || !mem_output || !mem_input || !value ||
+        err->value_category != MINIC_VALUE_LVALUE ||
+        old->value_category != MINIC_VALUE_LVALUE ||
+        mem_output->value_category != MINIC_VALUE_LVALUE ||
+        mem_input->value_category != MINIC_VALUE_LVALUE ||
+        minic_type_is_const(err->type) || minic_type_is_const(old->type) ||
+        !minic_type_unqualified(err->type, &plain) ||
+        !minic_type_equal(plain, minic_type_int()) ||
+        !minic_type_unqualified(old->type, &plain) ||
+        !minic_type_equal(plain, minic_type_int()) ||
+        !minic_type_unqualified(mem_output->type, &plain) ||
+        !minic_type_equal(plain, minic_type_unsigned_int()) ||
+        !minic_type_unqualified(mem_input->type, &plain) ||
+        !minic_type_equal(plain, minic_type_unsigned_int()) ||
+        !minic_type_is_integer(value->type)) return false;
+    contract->operand_count = 6U;
+    for (i = 0U; i < 6U; ++i)
+        contract->kinds[i] = i <= 1U
+            ? MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT
+            : i == 2U ? MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT
+            : i == 4U ? MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT
+            : MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->implicit_memory_effect = true;
+    return true;
+}
+
 static bool loong_linux_uaccess_form(
     const char *text, size_t length, LoongLinuxUaccess *result) {
     static const struct {
@@ -1378,25 +1523,7 @@ static bool loong_linux_uaccess_form(
         {"1:st.w%z2,%1#__put_user_asm2:", false, 4U, "st.w"},
         {"1:st.d%z2,%1#__put_user_asm2:", false, 8U, "st.d"}
     };
-    static const char common[] =
-        ".equ.L__gpr_num_zero,0"
-        ".irpnum,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31"
-        ".equ.L__gpr_num_$r\\num,\\num"
-        ".endr"
-        ".equ.L__gpr_num_$ra,1"
-        ".equ.L__gpr_num_$tp,2"
-        ".equ.L__gpr_num_$sp,3"
-        ".irpnum,0,1,2,3,4,5,6,7"
-        ".equ.L__gpr_num_$a\\num,4+\\num"
-        ".endr"
-        ".irpnum,0,1,2,3,4,5,6,7,8"
-        ".equ.L__gpr_num_$t\\num,12+\\num"
-        ".endr"
-        ".equ.L__gpr_num_$s9,22"
-        ".equ.L__gpr_num_$fp,22"
-        ".irpnum,0,1,2,3,4,5,6,7,8"
-        ".equ.L__gpr_num_$s\\num,23+\\num"
-        ".endr"
+    static const char common_tail[] =
         ".pushsection__ex_table,\"a\""
         ".balign4"
         ".long((1b)-.)"
@@ -1421,13 +1548,16 @@ static bool loong_linux_uaccess_form(
     compact[n] = '\0';
     for (i = 0U; i < sizeof(forms) / sizeof(forms[0]); ++i) {
         const size_t prefix = strlen(forms[i].prefix);
-        const size_t middle = sizeof(common) - 1U;
+        const size_t map_len = sizeof(loong_linux_exception_gpr_map) - 1U;
+        const size_t middle = sizeof(common_tail) - 1U;
         const char *tail = forms[i].load ? load_tail : store_tail;
         const size_t suffix = strlen(tail);
-        if (n != prefix + middle + suffix ||
+        if (n != prefix + map_len + middle + suffix ||
             memcmp(compact, forms[i].prefix, prefix) != 0 ||
-            memcmp(compact + prefix, common, middle) != 0 ||
-            memcmp(compact + prefix + middle, tail, suffix) != 0) continue;
+            memcmp(compact + prefix, loong_linux_exception_gpr_map, map_len) != 0 ||
+            memcmp(compact + prefix + map_len, common_tail, middle) != 0 ||
+            memcmp(compact + prefix + map_len + middle, tail, suffix) != 0)
+            continue;
         result->load = forms[i].load;
         result->width = forms[i].width;
         result->opcode = forms[i].opcode;
@@ -1559,11 +1689,109 @@ static bool loong_linux_uaccess_emit(
     return true;
 }
 
+static bool loong_linux_futex_rmw_emit(
+    FILE *out, const MinicDirectLP64BlockContext *ctx,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info,
+    LoongLinuxFutexRmw operation) {
+    static const char *const opcodes[] = {
+        NULL, "move", "add.w", "or", "and", "xor"
+    };
+    const MinicCoreFunction *fn = ctx->fn;
+    const MinicCoreStructuredInlineAsmOperand *b =
+        ins->value.structured_inline_asm.operands;
+    const MinicCoreInstruction *initial;
+    MinicType pointee;
+    size_t i;
+    if (!out || !ctx || !fn || !ins || !info ||
+        operation < LOONG_FUTEX_SET || operation > LOONG_FUTEX_XOR ||
+        !info->is_volatile || info->is_goto || !info->has_memory_clobber ||
+        info->register_clobber_count != 1U || !info->register_clobbers ||
+        info->register_clobbers[0].name_length != 2U ||
+        memcmp(info->register_clobbers[0].name, "t0", 2U) != 0 ||
+        ins->value.structured_inline_asm.operand_count != 6U ||
+        loong_linux_futex_rmw_form(info->template_text, info->template_length) !=
+            operation) return false;
+    for (i = 0U; i < 6U; ++i) {
+        const MinicCoreStructuredInlineAsmOperandKind expected = i <= 1U
+            ? MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT
+            : i == 2U ? MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT
+            : i == 4U ? MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT
+            : MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+        if (b[i].value >= fn->value_count || b[i].operand_index != i ||
+            b[i].kind != expected || b[i].has_fixed_register_binding ||
+            b[i].early_clobber) return false;
+    }
+    for (i = 0U; i < 3U; ++i) {
+        if (!minic_type_pointee(fn->values[b[i].value].type, &pointee) ||
+            !minic_type_equal(pointee, i == 2U
+                ? minic_type_unsigned_int() : minic_type_int())) return false;
+    }
+    if (!minic_type_pointee(fn->values[b[4].value].type, &pointee) ||
+        !minic_type_equal(pointee, minic_type_unsigned_int()) ||
+        !minic_type_equal(fn->values[b[3].value].type, minic_type_int()) ||
+        !minic_type_is_integer(fn->values[b[5].value].type) ||
+        fn->values[b[3].value].definition >= fn->instruction_count)
+        return false;
+    initial = &fn->instructions[fn->values[b[3].value].definition];
+    /* GNU matching constraint "0" initializes the error register to zero;
+     * it is NOT a free register allocation choice. Fault handler type 2
+     * writes -EFAULT only to the physical error register in extable data. */
+    if (initial->kind != MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT ||
+        initial->value.integer_value != 0) return false;
+    if (!minic_loongarch64_emit_frame_mem(
+            out, "ld.d", "$t4", (size_t)b[4].value * 8U,
+            ctx->dynamic_frame) ||
+        !minic_loongarch64_emit_frame_mem(
+            out, "ld.d", "$t5", (size_t)b[2].value * 8U,
+            ctx->dynamic_frame) ||
+        !minic_loongarch64_emit_frame_mem(
+            out, "ld.d", "$t2", (size_t)b[5].value * 8U,
+            ctx->dynamic_frame) ||
+        /* Frame offset legalization may consume $t3 as a scratch. The
+         * fault-status register must survive that helper after the loop. */
+        fputs("  addi.w $t6, $zero, 0\n", out) == EOF ||
+        fputs("1:\n  ll.w $t1, $t4, 0\n", out) == EOF)
+        return false;
+    /* SC writes a success flag into its source register; materialize the
+     * desired new value afresh on every retry. ADD.W is 32-bit modulo
+     * arithmetic, while logical ops use LoongArch's 64-bit GPR forms. */
+    if (operation == LOONG_FUTEX_SET) {
+        if (fputs("  move $t0, $t2\n", out) == EOF) return false;
+    } else if (fprintf(out, "  %s $t0, $t1, $t2\n",
+                       opcodes[(size_t)operation]) < 0) return false;
+    if (fputs(
+            "2:\n"
+            "  sc.w $t0, $t5, 0\n"
+            "  beqz $t0, 1b\n"
+            "3:\n"
+            "  .pushsection __ex_table, \"a\"\n"
+            "  .balign 4\n"
+            "  .long (1b - .)\n"
+            "  .long (3b - .)\n"
+            "  .short 2\n"
+            "  .short ((18 << 0) | (0 << 5))\n"
+            "  .long (2b - .)\n"
+            "  .long (3b - .)\n"
+            "  .short 2\n"
+            "  .short ((18 << 0) | (0 << 5))\n"
+            "  .popsection\n", out) == EOF ||
+        !minic_loongarch64_emit_frame_mem(
+            out, "ld.d", "$t7", (size_t)b[0].value * 8U,
+            ctx->dynamic_frame) ||
+        fputs("  st.w $t6, $t7, 0\n", out) == EOF ||
+        !minic_loongarch64_emit_frame_mem(
+            out, "ld.d", "$t7", (size_t)b[1].value * 8U,
+            ctx->dynamic_frame) ||
+        fputs("  st.w $t1, $t7, 0\n", out) == EOF) return false;
+    return true;
+}
+
 bool minic_loongarch64_qualify_inline_asm(
     const MinicC0Program *program, const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
     const MinicInlineAsmOperand *op;
     const MinicExpression *expr;
+    if (loong_linux_futex_rmw_source(program, src, contract)) return true;
     if(program&&src&&contract&&src->is_volatile&&!src->is_goto&&
        src->output_count==0U&&src->input_count==0U&&
        src->clobber_count==1U&&src->has_memory_clobber&&
@@ -2042,6 +2270,12 @@ bool minic_loongarch64_emit_qualified_structured_asm(
             info->template_text, info->template_length);
         if (add_unless != 0U)
             return loong_linux_add_unless_emit(out, ctx, ins, info, add_unless);
+    }
+    {
+        const LoongLinuxFutexRmw futex = loong_linux_futex_rmw_form(
+            info->template_text, info->template_length);
+        if (futex != LOONG_FUTEX_NONE)
+            return loong_linux_futex_rmw_emit(out, ctx, ins, info, futex);
     }
     {
         LoongLinuxUaccess uaccess;

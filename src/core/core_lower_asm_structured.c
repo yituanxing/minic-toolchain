@@ -514,7 +514,7 @@ MinicCoreLowerStatus core_asm_try_structured_roles_and_asm_goto(
             }
             if ((binding->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
                  binding->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE) &&
-                core_inline_asm_local_fixed_binding_id(
+                core_inline_asm_fixed_binding_id(
                     context->body->program, expression, &fixed_binding_id)) {
                 binding->fixed_register_binding_id = fixed_binding_id;
                 binding->has_fixed_register_binding = true;
@@ -555,7 +555,7 @@ MinicCoreLowerStatus core_asm_try_structured_roles_and_asm_goto(
                     break;
                 }
                 binding->kind = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
-                if (core_inline_asm_local_fixed_binding_id(
+                if (core_inline_asm_fixed_binding_id(
                         context->body->program, expression, &fixed_binding_id)) {
                     binding->fixed_register_binding_id = fixed_binding_id;
                     binding->has_fixed_register_binding = true;
@@ -769,7 +769,7 @@ MinicCoreLowerStatus core_asm_try_fixed_and_register_operands(
                 minic_type_is_const(expression->type) || minic_type_is_volatile(expression->type) ||
                 !minic_type_unqualified(expression->type, &value_type) ||
                 !core_memory_scalar_type(value_type) ||
-                !core_inline_asm_local_fixed_binding_id(
+                !core_inline_asm_fixed_binding_id(
                     context->body->program, expression, &fixed_binding_ids[output_index])) {
                 supported_shape = false;
                 break;
@@ -795,7 +795,7 @@ MinicCoreLowerStatus core_asm_try_fixed_and_register_operands(
                 expression->kind != MINIC_EXPRESSION_LOCAL ||
                 !core_scalar_expression_value_type(context->body, expression, &value_type) ||
                 !core_memory_scalar_type(value_type) ||
-                !core_inline_asm_local_fixed_binding_id(
+                !core_inline_asm_fixed_binding_id(
                     context->body->program, expression, &fixed_binding_ids[operand_index])) {
                 supported_shape = false;
             }

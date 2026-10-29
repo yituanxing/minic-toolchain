@@ -29,19 +29,27 @@ bool core_inline_asm_register_output_constraint(const MinicInlineAsmOperand *ope
            core_inline_asm_constraint_is(operand, "=&r");
 }
 
-/* M105_FIXED_REGISTER_STRUCTURED_ASM: preflight locates a frontend binding
-   without mutating Core. The commit phase imports register spelling/type into
-   Core-owned opaque metadata before the instruction is appended. */
- bool core_inline_asm_local_fixed_binding_id(const MinicC0Program *program,
+/* M105_FIXED_REGISTER_STRUCTURED_ASM: preflight resolves both a declared
+ * `register T local asm("rN")` and the dedicated FIXED_REGISTER expression
+ * used by global hardware bindings (for example x86 Linux RSP). No register
+ * spelling or ISA-specific policy enters Core: the target must qualify the
+ * exact ASM contract before this binding is ever imported. */
+bool core_inline_asm_fixed_binding_id(const MinicC0Program *program,
                                                    const MinicExpression *expression,
                                                    size_t *binding_id) {
     const MinicFixedRegisterBinding *binding;
     size_t index;
 
-    if (program == NULL || expression == NULL || binding_id == NULL ||
-        expression->kind != MINIC_EXPRESSION_LOCAL) {
+    if (program == NULL || expression == NULL || binding_id == NULL) {
         return false;
     }
+    if (expression->kind == MINIC_EXPRESSION_FIXED_REGISTER) {
+        *binding_id = expression->value.fixed_register_binding_id;
+        binding = minic_c0_program_fixed_register_binding(program, *binding_id);
+        return binding != NULL && binding->register_name != NULL &&
+               binding->register_name_length != 0U;
+    }
+    if (expression->kind != MINIC_EXPRESSION_LOCAL) return false;
     binding = minic_c0_program_local_fixed_register_binding(program, expression->value.local_id);
     if (binding == NULL) {
         return false;

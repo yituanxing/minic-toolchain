@@ -8,3 +8,7 @@ struct desc_ptr {
 void minic_test_linux_lidt(const struct desc_ptr *descriptor) {
     asm volatile("lidt %0" : : "m" (*descriptor));
 }
+
+void minic_test_linux_lgdt(const struct desc_ptr *descriptor) {
+    asm volatile("lgdt %0" : : "m" (*descriptor));
+}

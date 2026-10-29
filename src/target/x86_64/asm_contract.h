@@ -7,7 +7,13 @@ unsigned int minic_x86_64_linux_testcc_form(const char *, size_t);
 unsigned int minic_x86_64_linux_gs_testcc_form(const char *, size_t);
 /* x86 original Linux _THIS_IP_ RIP-relative register-result hardware ABI */
 bool minic_x86_64_linux_ip_here_template(const char *, size_t);
-bool minic_x86_64_linux_lidt_template(const char *, size_t);
+/* Real 10-byte x86-64 GDTR/IDTR descriptor memory operands. */
+unsigned int minic_x86_64_linux_descriptor_table_form(const char *, size_t);
+bool minic_x86_64_linux_boot_segments_template(const char *, size_t);
+/* Linux three-way CALL patching: exact alternatives/relocations and RSP ABI. */
+bool minic_x86_64_linux_three_call_alternative_form(const char *, size_t);
+/* CR0/2/3/4 reads and CR2/3 writes, including GNU dummy-memory ordering. */
+unsigned int minic_x86_64_linux_control_register_form(const char *, size_t);
 unsigned int minic_x86_64_linux_zero_barrier_form(const char *, size_t);
 unsigned int minic_x86_64_linux_counter_form(const char *,size_t);
 unsigned int minic_x86_64_hweight_alternative_form(const char *,size_t);

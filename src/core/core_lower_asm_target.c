@@ -55,7 +55,7 @@ MinicCoreLowerStatus core_asm_try_target_register_contract(
         if ((bind->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
              bind->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
              bind->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE) &&
-            core_inline_asm_local_fixed_binding_id(
+            core_inline_asm_fixed_binding_id(
                 ctx->body->program, source_expression,
                 &source_fixed_binding_id)) {
             if (!core_import_fixed_register_binding(

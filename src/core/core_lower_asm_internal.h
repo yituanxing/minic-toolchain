@@ -50,7 +50,7 @@ MinicCoreLowerStatus core_asm_try_empty_barrier_scalar_forms(
 
 /* Operand normalization -> structured Core effect admission.
  * These interfaces are private to GNU inline-asm lowering, not Core IR API. */
-bool core_inline_asm_local_fixed_binding_id(const MinicC0Program *program,
+bool core_inline_asm_fixed_binding_id(const MinicC0Program *program,
                                                    const MinicExpression *expression,
                                                    size_t *binding_id);
 

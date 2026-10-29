@@ -99,6 +99,38 @@ bool minic_aarch64_emit_residual_instruction(
                 *needs_writeback = false;
                 return true;
             }
+            /* Materialize the vetted privileged PSTATE opcode in Target.
+             * Do not forward even a whitelisted GNU arithmetic expression
+             * to the assembler as an uninspected opaque instruction. */
+            if (source != NULL) {
+                const unsigned int pstate = minic_aarch64_linux_pstate_imm_opcode(
+                    source->template_text, source->template_length);
+                if (pstate != 0U) {
+                    if (!minic_aarch64_qualified_opaque_asm(source) ||
+                        fprintf(out, "  .inst 0x%08x\n", pstate) < 0)
+                        return minic_multi_direct_machine_reject(
+                            fn, "aarch64", name, "pstate_immediate_asm",
+                            reject_block, reject_ins, __LINE__);
+                    *needs_writeback = false;
+                    return true;
+                }
+                {
+                    const unsigned int daif =
+                        minic_aarch64_linux_daif_immediate_form(
+                            source->template_text, source->template_length);
+                    if (daif != 0U) {
+                        const char *reg = (daif & 1U) ? "daifset" : "daifclr";
+                        const unsigned int imm = daif <= 2U ? 3U : 15U;
+                        if (!minic_aarch64_qualified_opaque_asm(source) ||
+                            fprintf(out, "  msr %s, #%u\n", reg, imm) < 0)
+                            return minic_multi_direct_machine_reject(
+                                fn, "aarch64", name, "daif_immediate_asm",
+                                reject_block, reject_ins, __LINE__);
+                        *needs_writeback = false;
+                        return true;
+                    }
+                }
+            }
             if (!minic_aarch64_qualified_opaque_asm(source) ||
                 fwrite(source->template_text, 1U, source->template_length, out) !=
                     source->template_length ||

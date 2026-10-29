@@ -185,6 +185,67 @@ static bool aarch64_linux_structured_spill_slot_valid(size_t slot) {
  * privileged/ordering ISA. Source/preflight and machine emission use the
  * SAME qualifier. Never accept arbitrary target text or replace with a
  * compiler barrier. */
+/* Linux PSTATE.{SSBS,DIT,PAN} uses an instruction encoding in old GNU
+ * assemblers that do not know the register alias. The admissible producer
+ * set is the frozen kernel's exact .inst(0xd500401f | ...) with two fully
+ * specified selector fields and a boolean immediate. No arbitrary .inst
+ * expression, PSTATE field, or extra instruction is admitted. */
+unsigned int minic_aarch64_linux_pstate_imm_opcode(
+    const char *text, size_t length) {
+    static const struct { unsigned int op1, op2; } forms[] = {
+        {0U, 4U}, {3U, 1U}, {3U, 4U}
+    };
+    char compact[160], expected[160];
+    size_t n = 0U, i, bit;
+    if (!text || !length || length >= sizeof(compact)) return 0U;
+    for (i = 0U; i < length; ++i) {
+        const char ch = text[i];
+        if (ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n') continue;
+        if (ch == '\0' || n + 1U >= sizeof(compact)) return 0U;
+        compact[n++] = ch;
+    }
+    compact[n] = '\0';
+    for (i = 0U; i < sizeof(forms) / sizeof(forms[0]); ++i)
+        for (bit = 0U; bit < 2U; ++bit) {
+            const int written = snprintf(expected, sizeof(expected),
+                ".inst(0xd500401f|((%u)<<16|(%u)<<5)|((!!(%u))<<8))",
+                forms[i].op1, forms[i].op2, (unsigned int)bit);
+            if (written > 0 && (size_t)written < sizeof(expected) &&
+                strcmp(compact, expected) == 0)
+                return 0xd500401fU | (forms[i].op1 << 16U) |
+                       (forms[i].op2 << 5U) | ((unsigned int)bit << 8U);
+        }
+    return 0U;
+}
+
+/* DAIFSet/DAIFClr execute a four-bit PSTATE mask update, not a normal
+ * memory barrier. Linux uses #3 in GIC fast paths and #15 during full
+ * exception masking. Admit the exact Linux annotation only when it occurs
+ * after the single supported #15 instruction; another `//` or a semicolon
+ * cannot hide an unrelated privileged instruction. */
+unsigned int minic_aarch64_linux_daif_immediate_form(
+    const char *text, size_t length) {
+    static const char *const forms[] = {
+        "msrdaifset,#3", "msrdaifclr,#3",
+        "msrdaifset,#0xf", "msrdaifclr,#0xf",
+        "msrdaifset,#0xf//local_daif_mask"
+    };
+    char compact[96];
+    size_t n = 0U, i;
+    if (!text || length == 0U || length >= sizeof(compact)) return 0U;
+    for (i = 0U; i < length; ++i) {
+        const char c = text[i];
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
+        if (c == '\0' || n + 1U >= sizeof(compact)) return 0U;
+        compact[n++] = c;
+    }
+    compact[n] = '\0';
+    for (i = 0U; i < sizeof(forms) / sizeof(forms[0]); ++i)
+        if (strcmp(compact, forms[i]) == 0)
+            return i == 4U ? 3U : (unsigned int)(i + 1U);
+    return 0U;
+}
+
 bool minic_aarch64_qualified_opaque_asm(const MinicCoreInlineAsm *a) {
     static const char *const allowed[] = {
         "msrdaifset,#3", "msrdaifclr,#3",
@@ -197,6 +258,14 @@ bool minic_aarch64_qualified_opaque_asm(const MinicCoreInlineAsm *a) {
     char compact[64];
     size_t i, n = 0U;
     if (minic_aarch64_linux_cap_asm_goto_core(a)) return true;
+    if (a != NULL && a->is_volatile && !a->is_goto &&
+        a->register_clobber_count == 0U &&
+        minic_aarch64_linux_daif_immediate_form(
+            a->template_text, a->template_length) != 0U) return true;
+    if (a != NULL && a->is_volatile && !a->is_goto &&
+        a->register_clobber_count == 0U &&
+        minic_aarch64_linux_pstate_imm_opcode(
+            a->template_text, a->template_length) != 0U) return true;
     if (minic_multi_direct_linux_bug_asm(
             a, "14470", "14471", "14472", "brk0x800", true))
         return true;

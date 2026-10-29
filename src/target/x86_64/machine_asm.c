@@ -15,6 +15,170 @@ static bool clobber_is(const MinicCoreInlineAsmRegisterClobber *c,
            memcmp(c->name, name, len) == 0;
 }
 
+/* Resolve a GNU `i` function-symbol operand exclusively from its Core SSA
+ * definition. The target must emit CALL rel32 with a direct ELF relocation,
+ * not load a runtime function pointer, invent a C call, or consult the AST. */
+static const char *x86_asm_direct_function_symbol(
+    const MinicCoreFunction *fn, MinicCoreValueId value) {
+    const MinicCoreInstruction *definition;
+    size_t symbol_id;
+    if (!fn || value >= fn->value_count ||
+        fn->values[value].definition >= fn->instruction_count) return NULL;
+    definition = &fn->instructions[fn->values[value].definition];
+    if (definition->kind != MINIC_CORE_INSTRUCTION_FUNCTION_ADDRESS ||
+        definition->result != value) return NULL;
+    symbol_id = definition->value.function_symbol_id;
+    if (symbol_id >= fn->function_symbol_count ||
+        !fn->function_symbols[symbol_id].name ||
+        !fn->function_symbols[symbol_id].name[0]) return NULL;
+    return fn->function_symbols[symbol_id].name;
+}
+
+/* The three ISA alternatives share the same RDI pointer operand. Linux's
+ * `+r(current_stack_pointer)` is the physical RSP, invariant across each
+ * returning CALL; machine code must never move a synthetic SSA value to
+ * RSP. Each replacement is a genuine five-byte CALL rel32. All feature
+ * identifiers and .altinstructions PC-relative metadata are emitted by the
+ * target and are independently verified by GNU AS in the Linux fixture. */
+static bool emit_linux_three_call_alternative(
+    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, const MinicX86Frame *frame,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
+    const MinicCoreStructuredInlineAsmOperand *b =
+        ins->value.structured_inline_asm.operands;
+    const MinicCoreFixedRegisterBinding *fixed;
+    const char *skip, *skip_end;
+    const char *names[3];
+    MinicType output_type;
+    size_t i, width;
+    bool signed_type;
+    if (!out || !program || !target || !fn || !frame || !ins || !info ||
+        !b || !info->is_volatile || info->is_goto ||
+        !info->has_memory_clobber || info->register_clobber_count != 3U ||
+        !info->register_clobbers ||
+        !clobber_is(&info->register_clobbers[0], "cc") ||
+        !clobber_is(&info->register_clobbers[1], "rax") ||
+        !clobber_is(&info->register_clobbers[2], "rcx") ||
+        !minic_x86_64_linux_three_call_alternative_form(
+            info->template_text, info->template_length) ||
+        ins->value.structured_inline_asm.operand_count != 6U ||
+        b[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
+        b[1].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
+        !b[1].has_fixed_register_binding ||
+        b[1].fixed_register_binding_id >= fn->fixed_register_binding_count ||
+        b[5].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
+        b[0].value >= fn->value_count || b[5].value >= fn->value_count ||
+        b[0].has_fixed_register_binding || b[5].has_fixed_register_binding ||
+        !minic_type_pointee(fn->values[b[0].value].type, &output_type) ||
+        !minic_type_is_pointer(output_type) ||
+        !minic_x86_64_scalar_width(
+            program, target, output_type, &width, &signed_type) || width != 8U ||
+        !minic_type_equal(fn->values[b[5].value].type, output_type))
+        return false;
+    fixed = &fn->fixed_register_bindings[b[1].fixed_register_binding_id];
+    if (!fixed->register_name || fixed->register_name_length != 3U ||
+        memcmp(fixed->register_name, "rsp", 3U) != 0 ||
+        !minic_type_is_integer(fixed->type)) return false;
+    for (i = 0U; i < 6U; ++i) {
+        if (b[i].operand_index != i || b[i].value >= fn->value_count ||
+            b[i].early_clobber || (i != 1U && b[i].has_fixed_register_binding))
+            return false;
+        if (i >= 2U && i <= 4U) {
+            if (b[i].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
+                !(names[i - 2U] = x86_asm_direct_function_symbol(fn, b[i].value)))
+                return false;
+        }
+    }
+    if (!x86_value_load(out, frame, b[5].value, "%rdi")) return false;
+    /* The complete .skip arithmetic was equality-checked against the
+     * exact Linux grammar, including both MAX operands. Preserve those
+     * original assembler tokens without reproducing a subtly different
+     * parenthesization in a second copy of the expression. */
+    skip = strstr(info->template_text, ".skip ");
+    skip_end = skip ? strchr(skip, '\n') : NULL;
+    if (!skip || !skip_end || skip_end <= skip ||
+        fprintf(out, "661:\n  call %s\n662:\n", names[0]) < 0 ||
+        fwrite(skip, 1U, (size_t)(skip_end - skip + 1), out) !=
+            (size_t)(skip_end - skip + 1)) return false;
+    if (fprintf(out,
+         "663:\n"
+         "  .pushsection .altinstructions,\"a\"\n"
+         "  .long 661b - .\n"
+         "  .long 6641f - .\n"
+         "  .4byte (3*32+16)\n"
+         "  .byte 663b-661b\n"
+         "  .byte 6651f-6641f\n"
+         "  .long 661b - .\n"
+         "  .long 6642f - .\n"
+         "  .4byte (9*32+9)\n"
+         "  .byte 663b-661b\n"
+         "  .byte 6652f-6642f\n"
+         "  .popsection\n"
+         "  .pushsection .altinstr_replacement,\"ax\"\n"
+         "6641:\n"
+         "  call %s\n"
+         "6651:\n"
+         "6642:\n"
+         "  call %s\n"
+         "6652:\n"
+         "  .popsection\n",
+         names[1], names[2]) < 0) return false;
+    /* GNU `=D` writes the post-CALL RDI to the C lvalue. The call can
+     * advance the pointer (REP STOS), so dropping this store is incorrect. */
+    return x86_value_load(out, frame, b[0].value, "%r11") &&
+           fputs("  movq %rdi, (%r11)\n", out) != EOF;
+}
+
+/* Control registers are architectural registers, not ordinary Core scalar
+ * lvalues. The selected ISA owns both the encoding and the read/write
+ * direction. The read's GNU dummy memory operand is an ordering dependency;
+ * emitting a load from its synthetic address (often 0x1000) would fault. */
+static bool emit_linux_control_register(
+    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, const MinicX86Frame *frame,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
+    static const char *const machine_registers[] = {
+        "%cr0", "%cr2", "%cr3", "%cr4", "%cr2", "%cr3"
+    };
+    const unsigned int form = minic_x86_64_linux_control_register_form(
+        info->template_text, info->template_length);
+    const bool reading = form != 0U && form <= 4U;
+    const MinicCoreStructuredInlineAsmOperand *b =
+        ins->value.structured_inline_asm.operands;
+    MinicType output_type, input_type;
+    size_t width, i;
+    bool sign;
+    if (!form || !info->is_volatile || info->is_goto ||
+        info->register_clobber_count != 0U ||
+        !info->has_memory_clobber ||
+        ins->value.structured_inline_asm.operand_count != (reading ? 2U : 1U))
+        return false;
+    for (i = 0U; i < ins->value.structured_inline_asm.operand_count; ++i)
+        if (b[i].value >= fn->value_count || b[i].operand_index != i ||
+            b[i].early_clobber || b[i].has_fixed_register_binding) return false;
+    if (reading) {
+        if (b[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
+            b[1].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT ||
+            !minic_type_pointee(fn->values[b[0].value].type, &output_type) ||
+            !minic_type_pointee(fn->values[b[1].value].type, &input_type) ||
+            !minic_type_equal(output_type, minic_type_unsigned_long()) ||
+            !minic_type_equal(input_type, minic_type_unsigned_int()) ||
+            !minic_x86_64_scalar_width(
+                program, target, output_type, &width, &sign) || width != 8U)
+            return false;
+        return fprintf(out, "  movq %s, %%rax\n",
+                       machine_registers[form - 1U]) >= 0 &&
+               x86_value_load(out, frame, b[0].value, "%r11") &&
+               fputs("  movq %rax, (%r11)\n", out) != EOF;
+    }
+    if (b[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
+        !minic_type_equal(fn->values[b[0].value].type, minic_type_unsigned_long()))
+        return false;
+    return x86_value_load(out, frame, b[0].value, "%rax") &&
+           fprintf(out, "  movq %%rax, %s\n",
+                   machine_registers[form - 1U]) >= 0;
+}
+
 /* Print GNU numeric template references using x86 assigned physical regs.
  * Operand 7 is a genuine memory reference, never a value expression. */
 static bool emit_mulacc_template(FILE *out, const MinicCoreInlineAsm *info) {
@@ -1273,8 +1437,41 @@ bool minic_x86_64_emit_structured_asm(
     bindings = ins->value.structured_inline_asm.operands;
     if (!info->template_text)
         return false;
-    if (minic_x86_64_linux_lidt_template(
+    if (minic_x86_64_linux_control_register_form(
+            info->template_text, info->template_length))
+        return emit_linux_control_register(
+            out, program, target, fn, frame, ins, info);
+    if (minic_x86_64_linux_three_call_alternative_form(
+            info->template_text, info->template_length))
+        return emit_linux_three_call_alternative(
+            out, program, target, fn, frame, ins, info);
+    if (minic_x86_64_linux_boot_segments_template(
             info->template_text, info->template_length)) {
+        const MinicCoreStructuredInlineAsmOperand *operand = bindings;
+        size_t width;
+        if (!operand || !info->is_volatile || info->is_goto ||
+            !info->has_memory_clobber || info->register_clobber_count != 0U ||
+            ins->value.structured_inline_asm.operand_count != 1U ||
+            operand[0].operand_index != 0U ||
+            operand[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
+            operand[0].has_fixed_register_binding || operand[0].early_clobber ||
+            operand[0].value >= fn->value_count ||
+            !minic_x86_64_scalar_width(program, target,
+                fn->values[operand[0].value].type, &width, &sign) ||
+            (width != 2U && width != 4U && width != 8U)) return false;
+        /* GNU's movl %%eax,%%ds/ss/es is an architectural selector load.
+         * Only the 16-bit selector participates; unlike a C assignment to
+         * memory this changes live CPU state and SS can inhibit interrupts
+         * until the following instruction. Keep original operation order. */
+        return x86_value_load(out, frame, operand[0].value, "%rax") &&
+               fputs("  movw %ax, %ds\n"
+                     "  movw %ax, %ss\n"
+                     "  movw %ax, %es\n", out) != EOF;
+    }
+    {
+        const unsigned int table = minic_x86_64_linux_descriptor_table_form(
+            info->template_text, info->template_length);
+        if (table != 0U) {
         const MinicCoreStructuredInlineAsmOperand *operand = bindings;
         MinicType desc_type;
         size_t size;
@@ -1294,7 +1491,9 @@ bool minic_x86_64_emit_structured_asm(
          * the packed 10-byte descriptor; no fabricated doubleword load or
          * user-mode software emulation is permitted. */
         return x86_value_load(out, frame, operand[0].value, "%r11") &&
-               fputs("  lidt (%r11)\n", out) != EOF;
+               fputs(table == 1U ? "  lidt (%r11)\n" :
+                                   "  lgdt (%r11)\n", out) != EOF;
+        }
     }
     {
         const unsigned int gs_bit = minic_x86_64_linux_gs_testcc_form(
