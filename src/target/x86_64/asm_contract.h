@@ -14,6 +14,16 @@ bool minic_x86_64_linux_iret_to_self_form(const char *, size_t);
 bool minic_x86_64_linux_int3_selftest_form(const char *, size_t);
 bool minic_x86_64_linux_pv_indirect_call_form(const char *, size_t);
 bool minic_x86_64_linux_alt_reloc_selftest_form(const char *, size_t);
+bool minic_x86_64_linux_real_mode_far_jump_form(const char *, size_t);
+bool minic_x86_64_linux_unreachable_opaque(const char *, size_t);
+unsigned int minic_x86_64_linux_mmio_read_form(const char *, size_t);
+unsigned int minic_x86_64_linux_mmio_write_form(const char *, size_t);
+bool minic_x86_64_linux_mmio_type_matches(MinicType, unsigned int);
+/* Fixed-SI/DI, fixed-CX repeated string I/O with a DX port operand. */
+unsigned int minic_x86_64_linux_rep_string_io_form(const char *, size_t);
+/* Atomic register/memory exchange with the GNU +r/+m two-output ABI. */
+unsigned int minic_x86_64_linux_atomic_xchg_form(const char *, size_t);
+unsigned int minic_x86_64_linux_pvclock_scale_form(const char *, size_t);
 bool minic_x86_64_linux_boot_segments_template(const char *, size_t);
 unsigned int minic_x86_64_linux_privileged_zero_form(const char *, size_t);
 bool minic_x86_64_linux_amx_tilerelease_form(const char *, size_t);
@@ -86,6 +96,7 @@ unsigned int minic_x86_64_linux_msr_form(const char *,size_t);
 bool minic_x86_64_ip_fast_csum_template(const char *,size_t);
 bool minic_x86_64_checksum_fold_template(const char *,size_t);
 bool minic_x86_64_add32_carry_template(const char *,size_t);
+bool minic_x86_64_linux_tcpudp_nofold_template(const char *, size_t);
 bool minic_x86_64_linux_percpu_form(const char *,size_t,unsigned int *,size_t *);
 unsigned int minic_x86_64_gs_tied_alu_form(const char *,size_t,size_t *);
 bool minic_x86_64_linux_prefetchw_alt_form(const char *,size_t);

@@ -174,7 +174,9 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
             asm_id < fn->inline_asm_count ? &fn->inline_asms[asm_id] : NULL;
         static const char *const privileged[] = {
             "  cli\n", "  sti\n", "  sti\n  hlt\n", "  hlt\n",
-            "  wbinvd\n", "  swapgs\n", "  .byte 0x0f, 0x01, 0xe8\n"
+            "  wbinvd\n", "  swapgs\n", "  .byte 0x0f, 0x01, 0xe8\n",
+            "  outb %al, $0x80\n", "  outb %al, $0xed\n",
+            "  int3\n"
         };
         unsigned int form;
         if (a != NULL && a->is_goto) {
@@ -199,8 +201,10 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
             /* Each source form has no register or C operand and carries an
              * explicit "memory" clobber. No arbitrary opaque assembler
              * payload may reach this privileged instruction switch. */
-            if (!a->is_volatile || (form != 4U && !a->has_memory_clobber) ||
-                a->register_clobber_count != 0U || form > 7U)
+            if (!a->is_volatile ||
+                (form != 4U && form != 8U && form != 9U &&
+                 form != 10U && !a->has_memory_clobber) ||
+                a->register_clobber_count != 0U || form > 10U)
                 return false;
             return fputs(privileged[form - 1U], out) != EOF;
         }
@@ -267,6 +271,13 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
                 "6641: lfence\n"
                 "6651:\n"
                 "  .popsection\n", out) != EOF;
+        }
+        if (a != NULL && minic_x86_64_linux_unreachable_opaque(
+                a->template_text, a->template_length)) {
+            if (!a->is_volatile || a->is_goto || a->has_memory_clobber ||
+                a->register_clobber_count) return false;
+            return fwrite(a->template_text, 1U, a->template_length, out) ==
+                   a->template_length && fputc('\n', out) != EOF;
         }
         if (a == NULL || a->is_goto || a->register_clobber_count != 0U ||
             !minic_x86_64_linux_bug_table_opaque(
