@@ -1001,6 +1001,107 @@ static bool loong_fcsr0_write_emit(
            fputs("  movgr2fcsr $fcsr0, $t0\n",out)!=EOF;
 }
 
+/* Linux unaligned-trap emulation selects one of 32 physical FPRs at
+ * runtime. The GNU transfer is a 64-bit bit-preserving FP/GPR move, not
+ * numeric floating-point conversion; recognize all F0..F31 in both
+ * directions with one register-indexed target contract. */
+static unsigned int loong_linux_fpr_transfer_form(
+    const char *text, size_t length) {
+    char compact[96], expected[96];
+    size_t i, n = 0U, reg;
+    if (!text || !length || length >= sizeof(compact)) return 0U;
+    for (i = 0U; i < length; ++i) {
+        const char c = text[i];
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
+        if (c == '\0' || c == ';' || n + 1U >= sizeof(compact))
+            return 0U;
+        compact[n++] = c;
+    }
+    compact[n] = '\0';
+    for (reg = 0U; reg < 32U; ++reg) {
+        int written = snprintf(expected, sizeof(expected),
+            "movfr2gr.d%%0,$f%zu", reg);
+        if (written > 0 && (size_t)written < sizeof(expected) &&
+            strcmp(compact, expected) == 0) return (unsigned int)reg + 1U;
+        written = snprintf(expected, sizeof(expected),
+            "movgr2fr.d$f%zu,%%0", reg);
+        if (written > 0 && (size_t)written < sizeof(expected) &&
+            strcmp(compact, expected) == 0) return (unsigned int)reg + 33U;
+    }
+    return 0U;
+}
+
+static bool loong_linux_fpr_transfer_source(
+    const MinicC0Program *program, const MinicInlineAsm *src,
+    MinicTargetInlineAsmContract *contract) {
+    const unsigned int form = src ? loong_linux_fpr_transfer_form(
+        src->template_text, src->template_length) : 0U;
+    const bool read = form <= 32U;
+    const MinicInlineAsmOperand *operand;
+    const MinicExpression *value;
+    MinicType plain;
+    if (!program || !src || !contract || !form || !src->is_volatile ||
+        src->is_goto || src->output_count != (read ? 1U : 0U) ||
+        src->input_count != (read ? 0U : 1U) ||
+        src->clobber_count || src->register_clobber_count ||
+        src->has_memory_clobber || src->label_count)
+        return false;
+    operand = read ? (src->outputs ? &src->outputs[0] : NULL) :
+        (src->inputs ? &src->inputs[0] : NULL);
+    if (!operand || !loong_csr_constraint(operand, read ? "=r" : "r"))
+        return false;
+    value = minic_c0_program_expression(program, operand->expression);
+    if (!value || (read && (value->value_category != MINIC_VALUE_LVALUE ||
+                            minic_type_is_const(value->type))) ||
+        !minic_type_unqualified(value->type, &plain) ||
+        !minic_type_equal(plain, minic_type_unsigned_long()))
+        return false;
+    contract->operand_count = 1U;
+    contract->kinds[0] = read ?
+        MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
+        MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    return true;
+}
+
+static bool loong_linux_fpr_transfer_emit(
+    FILE *out, const MinicDirectLP64BlockContext *ctx,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
+    const MinicCoreFunction *fn;
+    const MinicCoreStructuredInlineAsmOperand *b;
+    const unsigned int form = info ? loong_linux_fpr_transfer_form(
+        info->template_text, info->template_length) : 0U;
+    const bool read = form <= 32U;
+    const unsigned int reg = (form - 1U) % 32U;
+    MinicType pointee;
+    if (!out || !ctx || !ctx->fn || !ins || !info || !form ||
+        !info->is_volatile || info->is_goto || info->has_memory_clobber ||
+        info->register_clobber_count ||
+        ins->value.structured_inline_asm.operand_count != 1U)
+        return false;
+    fn = ctx->fn;
+    b = ins->value.structured_inline_asm.operands;
+    if (!b || b[0].operand_index || b[0].early_clobber ||
+        b[0].has_fixed_register_binding || b[0].value >= fn->value_count ||
+        b[0].kind != (read ?
+            MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
+            MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT))
+        return false;
+    if (read) {
+        if (!minic_type_pointee(fn->values[b[0].value].type, &pointee) ||
+            !minic_type_equal(pointee, minic_type_unsigned_long()))
+            return false;
+        return fprintf(out, "  movfr2gr.d $t0, $f%u\n", reg) >= 0 &&
+            minic_loongarch64_emit_frame_mem(out, "ld.d", "$t1",
+                (size_t)b[0].value * 8U, ctx->dynamic_frame) &&
+            fputs("  st.d $t0, $t1, 0\n", out) != EOF;
+    }
+    return minic_type_equal(fn->values[b[0].value].type,
+               minic_type_unsigned_long()) &&
+        minic_loongarch64_emit_frame_mem(out, "ld.d", "$t0",
+            (size_t)b[0].value * 8U, ctx->dynamic_frame) &&
+        fprintf(out, "  movgr2fr.d $f%u, $t0\n", reg) >= 0;
+}
+
 /* Linux LoongArch __get_user/__put_user has a hardware faulting load/store
  * coupled to an exception-table register fixup. The generated .equ/.irp
  * register map is part of the ABI, not optional decoration. Match its full
@@ -2148,6 +2249,7 @@ bool minic_loongarch64_qualify_inline_asm(
     if (loong_linux_irq_switch_source(program, src, contract)) return true;
     if (loong_linux_frametrace_source(program, src, contract)) return true;
     if (loong_linux_frametrace_csr_source(program, src, contract)) return true;
+    if (loong_linux_fpr_transfer_source(program, src, contract)) return true;
     if (loong_linux_futex_rmw_source(program, src, contract)) return true;
     if(program&&src&&contract&&src->is_volatile&&!src->is_goto&&
        src->output_count==0U&&src->input_count==0U&&
@@ -2618,6 +2720,9 @@ bool minic_loongarch64_emit_qualified_structured_asm(
     if (loong_linux_frametrace_csr_form(
             info->template_text, info->template_length) != UINT32_MAX)
         return loong_linux_frametrace_csr_emit(out, ctx, ins, info);
+    if (loong_linux_fpr_transfer_form(
+            info->template_text, info->template_length))
+        return loong_linux_fpr_transfer_emit(out, ctx, ins, info);
     {
         const unsigned int invtlb = loong_linux_invtlb_form(
             info->template_text, info->template_length);

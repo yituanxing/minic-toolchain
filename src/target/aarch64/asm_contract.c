@@ -1748,6 +1748,7 @@ typedef struct Aarch64UaccessForm {
     bool is_load;
     unsigned int width;
     const char *mnemonic;
+    unsigned int exception_type;
 } Aarch64UaccessForm;
 
 static bool aarch64_linux_uaccess_form(const char *text, size_t length,
@@ -1757,15 +1758,24 @@ static bool aarch64_linux_uaccess_form(const char *text, size_t length,
         bool load;
         unsigned int width;
         const char *mnemonic;
+        unsigned int exception_type;
     } forms[] = {
-        {"1:ldtrb%w1,[%2]2:", true, 1U, "ldtrb w10"},
-        {"1:ldtrh%w1,[%2]2:", true, 2U, "ldtrh w10"},
-        {"1:ldtr%w1,[%2]2:", true, 4U, "ldtr w10"},
-        {"1:ldtr%x1,[%2]2:", true, 8U, "ldtr x10"},
-        {"1:sttrb%w1,[%2]2:", false, 1U, "sttrb w10"},
-        {"1:sttrh%w1,[%2]2:", false, 2U, "sttrh w10"},
-        {"1:sttr%w1,[%2]2:", false, 4U, "sttr w10"},
-        {"1:sttr%x1,[%2]2:", false, 8U, "sttr x10"}
+        {"1:ldtrb%w1,[%2]2:", true, 1U, "ldtrb w10", 2U},
+        {"1:ldtrh%w1,[%2]2:", true, 2U, "ldtrh w10", 2U},
+        {"1:ldtr%w1,[%2]2:", true, 4U, "ldtr w10", 2U},
+        {"1:ldtr%x1,[%2]2:", true, 8U, "ldtr x10", 2U},
+        {"1:sttrb%w1,[%2]2:", false, 1U, "sttrb w10", 2U},
+        {"1:sttrh%w1,[%2]2:", false, 2U, "sttrh w10", 2U},
+        {"1:sttr%w1,[%2]2:", false, 4U, "sttr w10", 2U},
+        {"1:sttr%x1,[%2]2:", false, 8U, "sttr x10", 2U},
+        {"1:ldrb%w1,[%2]2:", true, 1U, "ldrb w10", 3U},
+        {"1:ldrh%w1,[%2]2:", true, 2U, "ldrh w10", 3U},
+        {"1:ldr%w1,[%2]2:", true, 4U, "ldr w10", 3U},
+        {"1:ldr%x1,[%2]2:", true, 8U, "ldr x10", 3U},
+        {"1:strb%w1,[%2]2:", false, 1U, "strb w10", 3U},
+        {"1:strh%w1,[%2]2:", false, 2U, "strh w10", 3U},
+        {"1:str%w1,[%2]2:", false, 4U, "str w10", 3U},
+        {"1:str%x1,[%2]2:", false, 8U, "str x10", 3U}
     };
     static const char common[] =
         ".irpnum,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30"
@@ -1779,6 +1789,18 @@ static bool aarch64_linux_uaccess_form(const char *text, size_t length,
         ".long((1b)-.)"
         ".long((2b)-.)"
         ".short(2)";
+    static const char common_kernel[] =
+        ".irpnum,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30"
+        ".equ.L__gpr_num_x\\num,\\num"
+        ".equ.L__gpr_num_w\\num,\\num"
+        ".endr"
+        ".equ.L__gpr_num_xzr,31"
+        ".equ.L__gpr_num_wzr,31"
+        ".pushsection__ex_table,\"a\""
+        ".align2"
+        ".long((1b)-.)"
+        ".long((2b)-.)"
+        ".short(3)";
     static const char load_tail[] =
         ".short((((.L__gpr_num_%w0)<<0)|((.L__gpr_num_%w1)<<5)))"
         ".popsection";
@@ -1798,17 +1820,20 @@ static bool aarch64_linux_uaccess_form(const char *text, size_t length,
     compact[n] = '\0';
     for (i = 0U; i < sizeof(forms) / sizeof(forms[0]); ++i) {
         const size_t prefix = strlen(forms[i].prefix);
-        const size_t middle = sizeof(common) - 1U;
+        const char *middle_text = forms[i].exception_type == 2U ?
+            common : common_kernel;
+        const size_t middle = strlen(middle_text);
         const char *tail = forms[i].load ? load_tail : store_tail;
         const size_t suffix = strlen(tail);
         if (n != prefix + middle + suffix ||
             memcmp(compact, forms[i].prefix, prefix) != 0 ||
-            memcmp(compact + prefix, common, middle) != 0 ||
+            memcmp(compact + prefix, middle_text, middle) != 0 ||
             memcmp(compact + prefix + middle, tail, suffix) != 0)
             continue;
         result->is_load = forms[i].load;
         result->width = forms[i].width;
         result->mnemonic = forms[i].mnemonic;
+        result->exception_type = forms[i].exception_type;
         return true;
     }
     return false;
@@ -1917,12 +1942,13 @@ static bool aarch64_linux_uaccess_emit(
             "  .align 2\n"
             "  .long (1b - .)\n"
             "  .long (2b - .)\n"
-            "  .short 2\n"
+            "  .short %u\n"
             "  .short ((9 << 0) | (%u << 5))\n"
             "  .popsection\n"
             "  ldr x12, [sp, #%zu]\n"
             "  str w9, [x12]\n",
-            form->mnemonic, form->is_load ? 10U : 31U,
+            form->mnemonic, form->exception_type,
+            form->is_load ? 10U : 31U,
             (size_t)op[0].value * 8U) < 0) return false;
     if (form->is_load &&
         fprintf(out,

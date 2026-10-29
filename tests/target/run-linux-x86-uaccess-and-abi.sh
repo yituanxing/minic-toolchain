@@ -16,7 +16,11 @@ for fixture in \
     x86_64_linux_cpu_buffer_clear \
     x86_64_linux_debug_register \
     x86_64_linux_thread_state \
-    x86_64_linux_membuf_abi
+    x86_64_linux_membuf_abi \
+    x86_64_linux_kernel_nofault_goto \
+    x86_64_linux_smap_rep_alternative \
+    x86_64_linux_usercopy_lfence \
+    x86_64_linux_load_unaligned_zeropad
 do
     "$host_cc" -E -P "$source_root/tests/target/$fixture.c" \
         -o "$workdir/$fixture.i"
@@ -120,6 +124,60 @@ if ! grep -Fq 'c7020000 0303' "$workdir/alt.hex" ||
     exit 1
 fi
 
+# Linux x86 uaccess nofault GNU ASM GOTO carries two PREL32 relocations
+# per typed MOV: the fault instruction and its actual C error block.
+readelf -r "$workdir/x86_64_linux_kernel_nofault_goto.o" > "$workdir/nofault.reloc"
+readelf -x __ex_table "$workdir/x86_64_linux_kernel_nofault_goto.o" > "$workdir/nofault.hex"
+if ! grep -Fq '.rela__ex_table' "$workdir/nofault.reloc" ||
+   [ "$(grep -c 'R_X86_64_PC32' "$workdir/nofault.reloc")" -ne 16 ] ||
+   [ "$(grep -o '03000000' "$workdir/nofault.hex" | wc -l)" -ne 8 ]; then
+    printf 'FAIL: kernel nofault 8 MOV types, C fault label, or PREL32 fixup lost\n' >&2
+    exit 1
+fi
+"$host_cc" -no-pie \
+    "$source_root/tests/target/x86_64_linux_kernel_nofault_driver.c" \
+    "$workdir/x86_64_linux_kernel_nofault_goto.o" -o "$workdir/nofault-run"
+"$workdir/nofault-run"
+
+# Four SMAP forms carry feature 308, REP MOVSB FSRM feature 66116;
+# none may lose its original alternative replacement or PREL32 metadata.
+readelf -r "$workdir/x86_64_linux_smap_rep_alternative.o" > "$workdir/smap.reloc"
+objcopy --dump-section .altinstructions="$workdir/smap.altbin" \
+    "$workdir/x86_64_linux_smap_rep_alternative.o"
+smap_features=$(od -An -tx1 -v "$workdir/smap.altbin" | tr -d '[:space:]')
+readelf -x __ex_table "$workdir/x86_64_linux_smap_rep_alternative.o" > "$workdir/smap.extable"
+if [ "$(printf '%s' "$smap_features" | grep -o '34010000' | wc -l)" -ne 4 ] ||
+   [ "$(printf '%s' "$smap_features" | grep -o '44020100' | wc -l)" -ne 1 ] ||
+   ! grep -Fq 'rep_movs_alternative' "$workdir/smap.reloc" ||
+   ! grep -Fq '.rela__ex_table' "$workdir/smap.reloc" ||
+   ! grep -Fq '03000000' "$workdir/smap.extable"; then
+    printf 'FAIL: SMAP/FSRM alternatives, replacement CALL, or exception metadata lost\n' >&2
+    exit 1
+fi
+objcopy --dump-section .altinstructions="$workdir/lfence.altbin" \
+    "$workdir/x86_64_linux_usercopy_lfence.o"
+lfence_features=$(od -An -tx1 -v "$workdir/lfence.altbin" | tr -d '[:space:]')
+readelf -r "$workdir/x86_64_linux_usercopy_lfence.o" > "$workdir/lfence.reloc"
+if [ "$(printf '%s' "$lfence_features" | grep -o '82020000' | wc -l)" -ne 1 ] ||
+   ! grep -Fq '.rela.altinstructions' "$workdir/lfence.reloc"; then
+    printf 'FAIL: Linux usercopy LFENCE feature 642 or PREL32 patch lost\n' >&2
+    exit 1
+fi
+readelf -r "$workdir/x86_64_linux_load_unaligned_zeropad.o" > "$workdir/unaligned.reloc"
+readelf -x __ex_table "$workdir/x86_64_linux_load_unaligned_zeropad.o" > "$workdir/unaligned.hex"
+if ! grep -Fq '.rela__ex_table' "$workdir/unaligned.reloc" ||
+   [ "$(grep -c 'R_X86_64_PC32' "$workdir/unaligned.reloc")" -ne 2 ] ||
+   ! grep -Fq '14000000' "$workdir/unaligned.hex" ||
+   ! grep -Fq 'movq (%r10), %rax' "$workdir/x86_64_linux_load_unaligned_zeropad.s"; then
+    printf 'FAIL: type-20 Linux zero-padded unaligned load or recovery metadata lost\n' >&2
+    exit 1
+fi
+"$host_cc" -no-pie \
+    "$source_root/tests/target/x86_64_linux_load_unaligned_driver.c" \
+    "$workdir/x86_64_linux_load_unaligned_zeropad.o" \
+    -o "$workdir/unaligned-run"
+"$workdir/unaligned-run"
+
 # SysV two-GPR aggregate: GNU caller -> MiniC callee, plus MiniC -> MiniC
 # call. Safe to execute: the fixture has no privileged instructions.
 "$host_cc" -no-pie "$source_root/tests/target/x86_64_linux_membuf_driver.c" \
@@ -155,4 +213,40 @@ if "$minic_cc" -S "$workdir/mutated_extable.i" --target=x86_64-linux \
     exit 1
 fi
 
-printf 'PASS: Linux x86 uaccess, MDS/WBINVD/SWAPGS, CLFLUSH, DR0/1/2/3/6/7, FSGSBASE, LKGS and segment __ex_table, GS pointer, membuf 2-GPR runtime\n'
+sed 's/\.long 3/\.long 4/g' \
+    "$workdir/x86_64_linux_kernel_nofault_goto.i" > "$workdir/mutated_nofault.i"
+if "$minic_cc" -S "$workdir/mutated_nofault.i" --target=x86_64-linux \
+    -o "$workdir/mutated_nofault.s" >/dev/null 2>&1; then
+    printf 'FAIL: corrupted kernel nofault exception type accepted\n' >&2
+    exit 1
+fi
+sed 's/rep movsb/rep stosb/g' \
+    "$workdir/x86_64_linux_smap_rep_alternative.i" > "$workdir/mutated_rep.i"
+if "$minic_cc" -S "$workdir/mutated_rep.i" --target=x86_64-linux \
+    -o "$workdir/mutated_rep.s" >/dev/null 2>&1; then
+    printf 'FAIL: invalid REP MOVSB alternative admitted\n' >&2
+    exit 1
+fi
+sed 's/0x01,0xca/0x01,0xcc/g' \
+    "$workdir/x86_64_linux_smap_rep_alternative.i" > "$workdir/mutated_smap.i"
+if "$minic_cc" -S "$workdir/mutated_smap.i" --target=x86_64-linux \
+    -o "$workdir/mutated_smap.s" >/dev/null 2>&1; then
+    printf 'FAIL: invalid SMAP ALTERNATIVE opcode admitted\n' >&2
+    exit 1
+fi
+sed 's/lfence/sfence/g' \
+    "$workdir/x86_64_linux_usercopy_lfence.i" > "$workdir/mutated_lfence.i"
+if "$minic_cc" -S "$workdir/mutated_lfence.i" --target=x86_64-linux \
+    -o "$workdir/mutated_lfence.s" >/dev/null 2>&1; then
+    printf 'FAIL: invalid usercopy LFENCE ALTERNATIVE admitted\n' >&2
+    exit 1
+fi
+sed 's/"20"/"21"/g' \
+    "$workdir/x86_64_linux_load_unaligned_zeropad.i" > "$workdir/mutated_unaligned.i"
+if "$minic_cc" -S "$workdir/mutated_unaligned.i" --target=x86_64-linux \
+    -o "$workdir/mutated_unaligned.s" >/dev/null 2>&1; then
+    printf 'FAIL: invalid type-21 unaligned load recovery admitted\n' >&2
+    exit 1
+fi
+
+printf 'PASS: Linux x86 uaccess, kernel nofault C asm-goto, SMAP/FSRM/LFENCE alternatives, type-20 unaligned zero-pad, MDS/WBINVD/SWAPGS, CLFLUSH, DR0/1/2/3/6/7, FSGSBASE, LKGS and segment __ex_table, GS pointer, signed/unsigned 2-GPR ABI runtime\n'

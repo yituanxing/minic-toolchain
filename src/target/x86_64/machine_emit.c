@@ -119,7 +119,8 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
         return minic_x86_64_emit_fp_instruction(out, program, target, fn,
                                                 frame, ins);
     if (ins->kind == MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM)
-        return minic_x86_64_emit_structured_asm(out, program, target, fn, frame, ins);
+        return minic_x86_64_emit_structured_asm(
+            out, program, target, fn, frame, ins, function_id);
     if (ins->kind == MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM) {
         const size_t asm_id = ins->value.inline_asm_id;
         const MinicCoreInlineAsm *a = fn != NULL &&
@@ -150,6 +151,33 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
                 a->register_clobber_count != 0U || form > 6U)
                 return false;
             return fputs(privileged[form - 1U], out) != EOF;
+        }
+        if (a != NULL && minic_x86_64_linux_smap_alternative_form(
+                a->template_text, a->template_length))
+            return minic_x86_64_emit_linux_smap_alternative(
+                out, fn, frame, NULL, a);
+        if (a != NULL && minic_x86_64_linux_lfence_alternative_form(
+                a->template_text, a->template_length)) {
+            if (!a->is_volatile || !a->has_memory_clobber ||
+                a->register_clobber_count || a->is_goto)
+                return false;
+            return fputs(
+                "661:\n"
+                "662:\n"
+                "  .skip -(((6651f-6641f)-(662b-661b)) > 0) * "
+                    "((6651f-6641f)-(662b-661b)),0x90\n"
+                "663:\n"
+                "  .pushsection .altinstructions,\"a\"\n"
+                "  .long 661b - .\n"
+                "  .long 6641f - .\n"
+                "  .4byte (20*32+2)\n"
+                "  .byte 663b-661b\n"
+                "  .byte 6651f-6641f\n"
+                "  .popsection\n"
+                "  .pushsection .altinstr_replacement,\"ax\"\n"
+                "6641: lfence\n"
+                "6651:\n"
+                "  .popsection\n", out) != EOF;
         }
         if (a == NULL || a->is_goto || a->register_clobber_count != 0U ||
             !minic_x86_64_linux_bug_table_opaque(
@@ -476,6 +504,46 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
             return false;
         }
         return x86_value_store(out, frame, ins->result);
+    case MINIC_CORE_INSTRUCTION_RECORD_LOAD: {
+        /* The source is an address-backed record *value*, not a scalar
+         * register result. Materialize an independent owned Core object
+         * using exact byte-wise reads, including volatile source bytes.
+         * This mirrors the common DirectLP64 record-load contract. */
+        MinicType source_pointee, source_plain, target_plain, object_plain;
+        size_t extent, alignment, offset;
+        const MinicCoreObjectId dest =
+            ins->value.record_load.destination_object;
+        const MinicCoreValueId source =
+            ins->value.record_load.source_address;
+        if (ins->result != MINIC_CORE_VALUE_INVALID ||
+            !minic_type_is_record(ins->type) ||
+            dest >= frame->object_count || dest >= fn->object_count ||
+            source >= fn->value_count ||
+            !minic_type_pointee(fn->values[source].type, &source_pointee) ||
+            !minic_type_unqualified(source_pointee, &source_plain) ||
+            !minic_type_unqualified(ins->type, &target_plain) ||
+            !minic_type_unqualified(fn->objects[dest].type, &object_plain) ||
+            !minic_type_equal(source_plain, target_plain) ||
+            !minic_type_equal(object_plain, target_plain) ||
+            !minic_data_layout_type(target->data_layout, program,
+                                    target_plain, &extent, &alignment) ||
+            !alignment ||
+            extent > frame->object_storage.objects[dest].extent ||
+            !x86_value_load(out, frame, source, "%r11"))
+            return false;
+        if (frame->objects_from_aligned_rsp) {
+            if (fprintf(out, "  leaq %zu(%%rsp), %%r10\n",
+                        frame->object_offsets[dest]) < 0) return false;
+        } else if (fprintf(out, "  leaq -%zu(%%rbp), %%r10\n",
+                           frame->object_offsets[dest]) < 0) return false;
+        for (offset = 0U; offset < extent; ++offset)
+            if (fprintf(out,
+                    "  movzbq %zu(%%r11), %%rax\n"
+                    "  movb %%al, %zu(%%r10)\n",
+                    offset, offset) < 0)
+                return false;
+        return true;
+    }
     case MINIC_CORE_INSTRUCTION_RECORD_COPY: {
         /* Byte-preserving copy between already-evaluated addresses.
          * Do not assume field layout or alignment; match RV64 semantics. */

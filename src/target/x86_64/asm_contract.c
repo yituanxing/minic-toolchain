@@ -3135,6 +3135,353 @@ static bool x86_linux_fsgsbase_source(
     return true;
 }
 
+/* Linux kernel nofault MOV accesses have a three-word __ex_table record
+ * whose second PREL32 word points to the C asm-goto fault label. They are
+ * different from ordinary MOV and from uaccess __get_user() helpers.
+ * Return 1..4 for load b/w/l/q and 5..8 for store b/w/l/q. */
+unsigned int minic_x86_64_linux_kernel_nofault_goto_form(
+    const char *text, size_t length) {
+    static const char suffix[] =
+        ".pushsection\"__ex_table\",\"a\".balign4"
+        ".long(1b)-..long(%l2)-..long3.popsection";
+    char compact[200], expected[200];
+    size_t i, n = 0U, variant;
+    static const char widths[] = "bwlq";
+    if (!text || !length || length >= sizeof(compact)) return 0U;
+    for (i = 0U; i < length; ++i) {
+        const char c = text[i];
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
+        if (c == '\0' || n + 1U >= sizeof(compact)) return 0U;
+        compact[n++] = c;
+    }
+    compact[n] = '\0';
+    for (variant = 0U; variant < 8U; ++variant) {
+        const bool load = variant < 4U;
+        int written = snprintf(expected, sizeof(expected),
+            "1:mov%c%s%s", widths[variant % 4U],
+            load ? "%[umem],%[output]" : "%0,%1", suffix);
+        if (written > 0 && (size_t)written < sizeof(expected) &&
+            strcmp(compact, expected) == 0)
+            return (unsigned int)variant + 1U;
+        /* Core replaces GNU named operands with ordinal indices, but
+         * retains the %l2 label placeholder for machine relocation. */
+        if (load) {
+            written = snprintf(expected, sizeof(expected),
+                "1:mov%c%%1,%%0%s", widths[variant], suffix);
+            if (written > 0 && (size_t)written < sizeof(expected) &&
+                strcmp(compact, expected) == 0)
+                return (unsigned int)variant + 1U;
+        }
+    }
+    return 0U;
+}
+
+static bool x86_linux_kernel_nofault_goto_source(
+    const MinicC0Program *program, const MinicInlineAsm *source,
+    MinicTargetInlineAsmContract *contract) {
+    const unsigned int form = source ?
+        minic_x86_64_linux_kernel_nofault_goto_form(
+            source->template_text, source->template_length) : 0U;
+    const bool load = form <= 4U;
+    const unsigned int bytes = form ? 1U << ((form - 1U) % 4U) : 0U;
+    const MinicInlineAsmOperand *data;
+    const MinicInlineAsmOperand *memory;
+    const MinicExpression *data_expr, *memory_expr;
+    MinicType type;
+    if (!program || !source || !contract || !form || !source->is_goto ||
+        source->output_count != (load ? 1U : 0U) ||
+        source->input_count != (load ? 1U : 2U) ||
+        source->label_count != 1U || !source->labels ||
+        source->clobber_count || source->register_clobber_count ||
+        source->has_memory_clobber ||
+        (load && (!source->outputs || !source->is_volatile)) ||
+        !source->inputs)
+        return false;
+    data = load ? &source->outputs[0] : &source->inputs[0];
+    memory = &source->inputs[load ? 0U : 1U];
+    if (!target_constraint_is(data, load ?
+            (bytes == 1U ? "=q" : "=r") :
+            (bytes == 1U ? "iq" : bytes == 8U ? "er" : "ir")) ||
+        !target_constraint_is(memory, "m"))
+        return false;
+    data_expr = minic_c0_program_expression(program, data->expression);
+    memory_expr = minic_c0_program_expression(program, memory->expression);
+    if (!data_expr || !memory_expr ||
+        (load && (data_expr->value_category != MINIC_VALUE_LVALUE ||
+                  minic_type_is_const(data_expr->type))) ||
+        memory_expr->value_category != MINIC_VALUE_LVALUE ||
+        !minic_type_is_record(memory_expr->type) ||
+        !minic_type_unqualified(data_expr->type, &type) ||
+        !minic_type_is_integer(type) ||
+        (bytes == 1U && type.integer_rank != MINIC_INTEGER_RANK_CHAR) ||
+        (bytes == 2U && type.integer_rank != MINIC_INTEGER_RANK_SHORT) ||
+        (bytes == 4U && type.integer_rank != MINIC_INTEGER_RANK_INT) ||
+        (bytes == 8U && type.integer_rank != MINIC_INTEGER_RANK_LONG &&
+                        type.integer_rank != MINIC_INTEGER_RANK_LONG_LONG))
+        return false;
+    contract->operand_count = 2U;
+    contract->kinds[0] = load ?
+        MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
+        MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
+    contract->implicit_memory_effect = true;
+    return true;
+}
+
+/* Linux copy_user_generic couples REP MOVSB with the FSRM alternative CALL
+ * and an exception-table recovery entry. The four GNU read/write operands
+ * are RCX/RDI/RSI plus a fixed live RSP dependency; the replacement call
+ * is not a normal C SysV call, and all relocations must survive intact. */
+bool minic_x86_64_linux_rep_movsb_alternative_form(
+    const char *text, size_t length) {
+    static const char expected[] =
+        "1:#ALT:oldnstr661:repmovsb662:#ALT:padding"
+        ".skip-(((6651f-6641f)-(662b-661b))>0)*"
+        "((6651f-6641f)-(662b-661b)),0x90"
+        "663:.pushsection.altinstructions,\"a\""
+        ".long661b-..long6641f-..4byte(((1<<0)<<16)|((18*32+4)))"
+        ".byte663b-661b.byte6651f-6641f.popsection"
+        ".pushsection.altinstr_replacement,\"ax\""
+        "#ALT:replacement16641:callrep_movs_alternative6651:.popsection"
+        "2:.pushsection\"__ex_table\",\"a\".balign4"
+        ".long(1b)-..long(2b)-..long3.popsection";
+    char compact[560];
+    size_t i, n = 0U;
+    if (!text || length != 506U) return false;
+    for (i = 0U; i < length; ++i) {
+        const char c = text[i];
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
+        if (c == '\0' || n + 1U >= sizeof(compact)) return false;
+        compact[n++] = c;
+    }
+    compact[n] = '\0';
+    return strcmp(compact, expected) == 0;
+}
+
+/* Four appearances of Linux's SMAP ALTERNATIVE macro share the exact
+ * static-key feature and relocation layout, but have distinct observable
+ * state changes. A template is admissible only with the complete section
+ * metadata, feature 9*32+20, and precisely one of the four replacement
+ * instruction bodies. Removing the patch metadata must never silently
+ * turn a conditional STAC/CLAC into an unconditional privileged opcode. */
+unsigned int minic_x86_64_linux_smap_alternative_form(
+    const char *text, size_t length) {
+    static const char shared[] =
+        "#ALT:oldnstr661:662:#ALT:padding"
+        ".skip-(((6651f-6641f)-(662b-661b))>0)*"
+        "((6651f-6641f)-(662b-661b)),0x90"
+        "663:.pushsection.altinstructions,\"a\""
+        ".long661b-..long6641f-..4byte(9*32+20)"
+        ".byte663b-661b.byte6651f-6641f.popsection"
+        ".pushsection.altinstr_replacement,\"ax\""
+        "#ALT:replacement16641:";
+    static const char *const prefixes[] = {
+        "", "", "#smap_save", "#smap_restore"
+    };
+    static const char *const bodies[] = {
+        ".byte0x0f,0x01,0xca", ".byte0x0f,0x01,0xcb",
+        "pushf;pop%0;.byte0x0f,0x01,0xca", "push%0;popf"
+    };
+    char compact[700], expected[700];
+    size_t i, n = 0U;
+    unsigned int form;
+    if (!text || length > 680U || length < 300U) return 0U;
+    for (i = 0U; i < length; ++i) {
+        const char c = text[i];
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
+        if (c == '\0' || n + 1U >= sizeof(compact)) return 0U;
+        compact[n++] = c;
+    }
+    compact[n] = '\0';
+    for (form = 1U; form <= 4U; ++form) {
+        const int required = snprintf(expected, sizeof(expected), "%s%s%s%s",
+            prefixes[form - 1U], shared, bodies[form - 1U],
+            "6651:.popsection");
+        if (required > 0 && (size_t)required < sizeof(expected) &&
+            strcmp(compact, expected) == 0)
+            return form;
+    }
+    return 0U;
+}
+
+/* Mitigation switch in user_access_begin(): an empty sequence is replaced
+ * with LFENCE iff X86_FEATURE_USERCOPY_FENCE (20*32+2) is present. The
+ * alternative lengths, feature, labels and ELF sections are indivisible. */
+bool minic_x86_64_linux_lfence_alternative_form(
+    const char *text, size_t length) {
+    static const char expected[] =
+        "#ALT:oldnstr661:662:#ALT:padding"
+        ".skip-(((6651f-6641f)-(662b-661b))>0)*"
+        "((6651f-6641f)-(662b-661b)),0x90"
+        "663:.pushsection.altinstructions,\"a\""
+        ".long661b-..long6641f-..4byte(20*32+2)"
+        ".byte663b-661b.byte6651f-6641f.popsection"
+        ".pushsection.altinstr_replacement,\"ax\""
+        "#ALT:replacement16641:lfence6651:.popsection";
+    char compact[420];
+    size_t i, count = 0U;
+    if (!text || length != 351U) return false;
+    for (i = 0U; i < length; ++i) {
+        const char c = text[i];
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
+        if (c == '\0' || count + 1U >= sizeof(compact)) return false;
+        compact[count++] = c;
+    }
+    compact[count] = '\0';
+    return strcmp(compact, expected) == 0;
+}
+
+/* Linux strnlen/strscpy fast path: faulting word read, followed by a
+ * type-20 exception-table record. This is NOT the generic nofault handler
+ * (type 3): the exception handler completes the part-before-page-boundary
+ * word and zeros the remaining inaccessible bytes in the result register. */
+bool minic_x86_64_linux_load_unaligned_zeropad_form(
+    const char *text, size_t length) {
+    static const char expected[] =
+        "1:\tmov %[mem], %[ret]\n"
+        "2:\n"
+        " .pushsection \"__ex_table\",\"a\"\n"
+        " .balign 4\n"
+        " .long (1b) - .\n"
+        " .long (2b) - .\n"
+        " .long 20 \n"
+        " .popsection\n";
+    static const char numeric[] =
+        "1:\tmov %1, %0\n"
+        "2:\n"
+        " .pushsection \"__ex_table\",\"a\"\n"
+        " .balign 4\n"
+        " .long (1b) - .\n"
+        " .long (2b) - .\n"
+        " .long 20 \n"
+        " .popsection\n";
+    return text &&
+        ((length == sizeof(expected) - 1U &&
+          memcmp(text, expected, length) == 0) ||
+         (length == sizeof(numeric) - 1U &&
+          memcmp(text, numeric, length) == 0));
+}
+
+static bool x86_linux_load_unaligned_zeropad_source(
+    const MinicC0Program *program, const MinicInlineAsm *source,
+    MinicTargetInlineAsmContract *contract) {
+    const MinicExpression *output, *memory;
+    if (!program || !source || !contract ||
+        !minic_x86_64_linux_load_unaligned_zeropad_form(
+            source->template_text, source->template_length) ||
+        !source->is_volatile || source->is_goto ||
+        source->output_count != 1U || !source->outputs ||
+        source->input_count != 1U || !source->inputs ||
+        source->label_count || source->clobber_count ||
+        source->has_memory_clobber || source->register_clobber_count ||
+        !target_constraint_is(&source->outputs[0], "=r") ||
+        !target_constraint_is(&source->inputs[0], "m"))
+        return false;
+    output = minic_c0_program_expression(
+        program, source->outputs[0].expression);
+    memory = minic_c0_program_expression(
+        program, source->inputs[0].expression);
+    if (!output || !memory ||
+        output->value_category != MINIC_VALUE_LVALUE ||
+        minic_type_is_const(output->type) ||
+        !minic_type_equal(output->type, minic_type_unsigned_long()) ||
+        memory->value_category != MINIC_VALUE_LVALUE ||
+        !minic_type_equal(memory->type, minic_type_unsigned_long()))
+        return false;
+    contract->operand_count = 2U;
+    contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+    contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
+    contract->implicit_memory_effect = true;
+    return true;
+}
+
+static bool x86_linux_smap_alternative_source(
+    const MinicC0Program *program, const MinicInlineAsm *source,
+    MinicTargetInlineAsmContract *contract) {
+    const MinicExpression *expression;
+    const unsigned int form = source ?
+        minic_x86_64_linux_smap_alternative_form(
+            source->template_text, source->template_length) : 0U;
+    const MinicInlineAsmOperand *operand;
+    if (!program || !source || !contract || (form != 3U && form != 4U) ||
+        !source->is_volatile || source->is_goto || source->label_count ||
+        !source->has_memory_clobber || source->clobber_count != 2U ||
+        source->register_clobber_count != 1U ||
+        !source->register_clobbers ||
+        !clobber_is(&source->register_clobbers[0], "cc") ||
+        source->output_count != (form == 3U ? 1U : 0U) ||
+        source->input_count != (form == 4U ? 1U : 0U))
+        return false;
+    operand = form == 3U ? &source->outputs[0] : &source->inputs[0];
+    if (!target_constraint_is(operand, form == 3U ? "=rm" : "g"))
+        return false;
+    expression = minic_c0_program_expression(program, operand->expression);
+    if (!expression ||
+        (form == 3U && (expression->value_category != MINIC_VALUE_LVALUE ||
+                        minic_type_is_const(expression->type))) ||
+        !minic_type_equal(expression->type, minic_type_unsigned_long()))
+        return false;
+    contract->operand_count = 1U;
+    contract->kinds[0] = form == 3U ?
+        MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
+        MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->implicit_memory_effect = true;
+    return true;
+}
+
+static bool x86_linux_rep_movsb_alternative_source(
+    const MinicC0Program *program, const MinicInlineAsm *source,
+    MinicTargetInlineAsmContract *contract) {
+    static const char *const constraints[] = {"+c", "+D", "+S", "+r"};
+    const MinicExpression *expression;
+    const MinicFixedRegisterBinding *stack_binding;
+    size_t i;
+    if (!program || !source || !contract ||
+        !minic_x86_64_linux_rep_movsb_alternative_form(
+            source->template_text, source->template_length) ||
+        !source->is_volatile || source->is_goto ||
+        source->output_count != 4U || !source->outputs ||
+        source->input_count || source->label_count ||
+        source->clobber_count != 2U || !source->has_memory_clobber ||
+        source->register_clobber_count != 1U ||
+        !source->register_clobbers ||
+        !clobber_is(&source->register_clobbers[0], "rax"))
+        return false;
+    for (i = 0U; i < 4U; ++i) {
+        if (!target_constraint_is(&source->outputs[i], constraints[i]))
+            return false;
+        expression = minic_c0_program_expression(
+            program, source->outputs[i].expression);
+        if (!expression ||
+            (i != 3U && expression->value_category != MINIC_VALUE_LVALUE) ||
+            (i != 3U && minic_type_is_const(expression->type)) ||
+            (i == 0U || i == 3U ?
+                !minic_type_equal(expression->type, minic_type_unsigned_long()) :
+                !minic_type_is_pointer(expression->type)))
+            return false;
+    }
+    expression = minic_c0_program_expression(
+        program, source->outputs[3].expression);
+    if (!expression) return false;
+    if (expression->kind == MINIC_EXPRESSION_FIXED_REGISTER)
+        stack_binding = minic_c0_program_fixed_register_binding(
+            program, expression->value.fixed_register_binding_id);
+    else if (expression->kind == MINIC_EXPRESSION_LOCAL)
+        stack_binding = minic_c0_program_local_fixed_register_binding(
+            program, expression->value.local_id);
+    else return false;
+    if (!stack_binding || !stack_binding->register_name ||
+        strcmp(stack_binding->register_name, "rsp") != 0)
+        return false;
+    contract->operand_count = 4U;
+    for (i = 0U; i < 4U; ++i)
+        contract->kinds[i] =
+            i == 3U ? MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT :
+                      MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE;
+    contract->implicit_memory_effect = true;
+    return true;
+}
+
 /* The exception-table register helper in Linux loadsegment(ES/DS/SS) is
  * distinct from the short-selector FS fixup. Its type-17 entry names the
  * GPR that held the selector so the exception handler can rewrite it.
@@ -3630,7 +3977,15 @@ bool minic_x86_64_qualify_inline_asm(
         return true;
     if (x86_linux_lkgs_extable_source(program, source, contract))
         return true;
+    if (x86_linux_load_unaligned_zeropad_source(program, source, contract))
+        return true;
     if (x86_linux_fsgsbase_source(program, source, contract))
+        return true;
+    if (x86_linux_kernel_nofault_goto_source(program, source, contract))
+        return true;
+    if (x86_linux_rep_movsb_alternative_source(program, source, contract))
+        return true;
+    if (x86_linux_smap_alternative_source(program, source, contract))
         return true;
     if (x86_linux_segment_register_extable_source(program, source, contract))
         return true;

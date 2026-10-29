@@ -35,6 +35,14 @@ unsigned int minic_x86_64_linux_segment_load_extable_form(const char *, size_t);
 bool minic_x86_64_linux_lkgs_extable_form(const char *, size_t);
 unsigned int minic_x86_64_linux_fsgsbase_form(const char *, size_t);
 unsigned int minic_x86_64_linux_segment_register_extable_form(const char *, size_t);
+unsigned int minic_x86_64_linux_kernel_nofault_goto_form(const char *, size_t);
+bool minic_x86_64_linux_rep_movsb_alternative_form(const char *, size_t);
+/* Linux SMAP ALTERNATIVE: empty baseline, STAC/CLAC or flags save/restore. */
+unsigned int minic_x86_64_linux_smap_alternative_form(const char *, size_t);
+/* Linux harden_usercopy speculative barrier ALTERNATIVE, feature 642. */
+bool minic_x86_64_linux_lfence_alternative_form(const char *, size_t);
+/* Linux fast string load with type-20 partial-page zero-pad exception. */
+bool minic_x86_64_linux_load_unaligned_zeropad_form(const char *, size_t);
 unsigned int minic_x86_64_linux_zero_barrier_form(const char *, size_t);
 unsigned int minic_x86_64_linux_counter_form(const char *,size_t);
 /* FXSAVE/FXSAVE64 exact 512-byte aligned architectural memory images. */

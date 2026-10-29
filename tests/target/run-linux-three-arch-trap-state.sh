@@ -12,7 +12,9 @@ trap 'rm -rf -- "$workdir"' EXIT HUP INT TERM
 
 for record in \
     aarch64:aarch64_linux_cpu_state_and_fault \
-    loongarch64:loongarch64_linux_trap_state
+    aarch64:aarch64_linux_kernel_nofault \
+    loongarch64:loongarch64_linux_trap_state \
+    loongarch64:loongarch64_linux_fpr_transfer
 do
     arch=${record%%:*}
     fixture=${record#*:}
@@ -21,6 +23,35 @@ do
     "$minic_cc" -S "$workdir/$fixture.i" --target="$arch-linux" \
         -fshort-wchar -funsigned-char -fno-PIE \
         -o "$workdir/$fixture.s"
+done
+
+# Kernel-address nofault accesses use ordinary LDR/STR, NOT unprivileged
+# LDTR/STTR; the fault fixup is type 3 (type 2 means user-memory access).
+arm_nofault="$workdir/aarch64_linux_kernel_nofault.s"
+for opcode in \
+    'ldrb w10, [x11]' 'ldrh w10, [x11]' \
+    'ldr w10, [x11]' 'ldr x10, [x11]' \
+    'strb w10, [x11]' 'strh w10, [x11]' \
+    'str w10, [x11]' 'str x10, [x11]'
+do
+    if ! grep -Fq "$opcode" "$arm_nofault"; then
+        printf 'FAIL: AArch64 kernel nofault opcode %s absent\n' "$opcode" >&2
+        exit 1
+    fi
+done
+if [ "$(grep -c '  .short 3$' "$arm_nofault")" -ne 8 ]; then
+    printf 'FAIL: AArch64 kernel nofault type-3 exception count mismatched\n' >&2
+    exit 1
+fi
+
+loong_fpr="$workdir/loongarch64_linux_fpr_transfer.s"
+for reg in $(seq 0 31)
+do
+    if ! grep -Fq "movfr2gr.d \$t0, \$f$reg" "$loong_fpr" ||
+       ! grep -Fq "movgr2fr.d \$f$reg, \$t0" "$loong_fpr"; then
+        printf 'FAIL: LoongArch 64-bit FPR%s transfer direction absent\n' "$reg" >&2
+        exit 1
+    fi
 done
 
 arm="$workdir/aarch64_linux_cpu_state_and_fault.s"
@@ -84,5 +115,19 @@ if "$minic_cc" -S "$workdir/bad_irq.i" --target=loongarch64-linux \
     printf 'FAIL: mutated LoongArch IRQ stack-switch call was admitted\n' >&2
     exit 1
 fi
+sed 's/\.short (3)/.short (4)/g' \
+    "$workdir/aarch64_linux_kernel_nofault.i" > "$workdir/bad_nofault.i"
+if "$minic_cc" -S "$workdir/bad_nofault.i" --target=aarch64-linux \
+    -o "$workdir/bad_nofault.s" >/dev/null 2>&1; then
+    printf 'FAIL: AArch64 corrupted kernel-nofault exception type admitted\n' >&2
+    exit 1
+fi
+sed 's/"31"/"32"/g' \
+    "$workdir/loongarch64_linux_fpr_transfer.i" > "$workdir/bad_fpr.i"
+if "$minic_cc" -S "$workdir/bad_fpr.i" --target=loongarch64-linux \
+    -o "$workdir/bad_fpr.s" >/dev/null 2>&1; then
+    printf 'FAIL: LoongArch out-of-range FPR32 transfer admitted\n' >&2
+    exit 1
+fi
 
-printf 'PASS: original Linux arm64 TPIDR/AT/PAR alternatives and LoongArch IRQ stack/trap CSR contracts\n'
+printf 'PASS: Linux arm64 TPIDR/AT/PAR and 8 kernel-nofault type-3 fixups; LoongArch IRQ/trap CSR plus F0..F31 bidirectional bit transfers\n'

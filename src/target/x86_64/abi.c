@@ -84,11 +84,11 @@ bool minic_x86_64_one_gp_record(const MinicC0Program *program,
     return true;
 }
 
-/* SysV AMD64 two-INTEGER-eightbyte records include both SQLite Token
- * (pointer + u32, padded to 16 bytes) and Linux membuf (pointer + size_t).
- * Both consume exactly two GP registers or two stack slots. Classify only
- * this proven two-field layout: never infer that arbitrary 16-byte records
- * with floating, nested, misaligned or bit-field members have this ABI. */
+/* SysV AMD64 two-INTEGER-eightbyte records include SQLite Token
+ * (pointer + u32), Linux membuf (pointer + size_t), and Linux timespec64
+ * (s64 seconds + long nanoseconds). Both eightbytes consume one GPR.
+ * Keep the exact naturally aligned two-field shape; floating, nested,
+ * packed, union and bit-field members are not safely INTEGER-classified. */
 bool minic_x86_64_two_gp_record(const MinicC0Program *program,
                               const MinicTargetInfo *target, MinicType type) {
     const MinicRecord *rec;
@@ -107,7 +107,8 @@ bool minic_x86_64_two_gp_record(const MinicC0Program *program,
         a->is_bit_field || b->is_bit_field ||
         a->element_count != 1U || b->element_count != 1U ||
         a->is_array || b->is_array ||
-        !minic_type_is_pointer(a->type) || !minic_type_is_integer(b->type))
+        (!minic_type_is_pointer(a->type) && !minic_type_is_integer(a->type)) ||
+        (!minic_type_is_pointer(b->type) && !minic_type_is_integer(b->type)))
         return false;
     return minic_common_aggregate_storage_shape(
                program, target->data_layout, type, 8U, &shape) &&

@@ -1209,7 +1209,14 @@ bool core_inline_asm_numeric_template(const MinicInlineAsm *source,
         }
         if (source->template_text[cursor] >= '0' && source->template_text[cursor] <= '9') {
             operand_index = (size_t)(source->template_text[cursor] - '0');
-            if (operand_index >= source->output_count + source->input_count) {
+            /* In GNU extended asm-goto, %lN refers to a C label AFTER all
+             * register/memory output and input operand numbers. Preserve
+             * that label reference for the target's PREL32 relocation;
+             * unlike a scalar %N it does not bind a Core SSA value. */
+            if (operand_index >= source->output_count + source->input_count &&
+                !(source->is_goto && modifier == 'l' &&
+                  source->label_count == 1U &&
+                  operand_index == source->output_count + source->input_count)) {
                 free(normalized);
                 return false;
             }

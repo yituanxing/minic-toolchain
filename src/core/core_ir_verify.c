@@ -676,6 +676,13 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
             inline_asm->template_length == 0U || !inline_asm->is_volatile) {
             return false;
         }
+        /* The C label is a real CFG destination even when the asm also
+         * produces typed GNU register outputs. The same Core block IDs
+         * are used by opaque and structured goto machine emitters. */
+        if (inline_asm->is_goto &&
+            (inline_asm->goto_target >= function->block_count ||
+             inline_asm->goto_second_target != MINIC_CORE_BLOCK_INVALID))
+            return false;
         /* Core only validates the ASM operand/effect shape. A target may
          * qualify a zero-operand instruction which clobbers exactly one
          * machine condition-code resource (x86 "cc"); its ISA emitter

@@ -138,6 +138,21 @@ MinicCoreLowerStatus core_asm_try_target_register_contract(
                 ctx->function, id, c->name, c->name_length))
             return MINIC_CORE_LOWER_ERROR;
     }
+    if (source->is_goto) {
+        MinicCoreBlockId target_block;
+        MinicCoreLowerStatus status;
+        MinicCoreInlineAsm *stored;
+        if (source->label_count != 1U || !source->labels ||
+            source->labels[0].target_statement == MINIC_STATEMENT_INVALID)
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        status = ensure_statement_block(
+            ctx, source->labels[0].target_statement, &target_block);
+        if (status != MINIC_CORE_LOWER_OK) return status;
+        stored = &ctx->function->inline_asms[id];
+        stored->is_goto = true;
+        stored->goto_target = target_block;
+        stored->source_inline_asm_id = SIZE_MAX;
+    }
     ins.value.structured_inline_asm.inline_asm_id = id;
     return minic_core_function_append_effect_instruction(
         ctx->function, ctx->block_id, &ins)
