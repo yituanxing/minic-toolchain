@@ -123,7 +123,6 @@ static bool la_branch_instruction(MiniAs *as, MiniAsMCInst *m,
         /* GNU psABI BxxZ aliases share the one existing typed B16,
          * relocation and local-branch encode path, not a second encoder. */
         bool zero_first=!strcmp(op,"bgtz") || !strcmp(op,"blez");
-        if(!minias_parse_symbol_addend(t[1],&expr))return false;
         memcpy(t[2],t[1],strlen(t[1])+1U);
         if(zero_first) {
             memcpy(t[1],t[0],strlen(t[0])+1U);
@@ -410,6 +409,8 @@ static bool la_parse_vector_pattern(MiniAsMCInst *m,const char *op,
                 encoding|=((uint32_t)reg)<<layout->shifts[arg];
                 m->operands[arg].kind=MINIAS_MC_REGISTER;
                 m->operands[arg].reg=reg;
+                m->operands[arg].reg_class=cls==LA_ARG_GPR ?
+                    MINIAS_MC_REG_GPR:MINIAS_MC_REG_VECTOR;
             }
         }
         m->count=count;
@@ -442,174 +443,260 @@ static void la_capture_rri(MiniAsMCInst *m,unsigned rd,unsigned rj,int64_t imm) 
     la_capture_imm_operand(m,2U,imm);
 }
 
+/* One target-owned scalar grammar.  A scalar opcode is an ISA encoding plus
+ * an operand form, not another control-flow arm in the assembler's parser.
+ * Keep this local to LoongArch; neither Common MC nor AArch64 should know
+ * how an LA register or immediate occupies its instruction word. */
+typedef enum {
+    LA_SCALAR_GPR3, LA_SCALAR_GPR2, LA_SCALAR_IMM12,
+    LA_SCALAR_UIMM12, LA_SCALAR_SHIFT5, LA_SCALAR_SHIFT6,
+    LA_SCALAR_PTR14, LA_SCALAR_UPPER20, LA_SCALAR_ATOMIC
+} LaScalarShape;
+typedef struct {
+    const char *name;
+    uint32_t opcode;
+    LaScalarShape shape;
+} LaScalarPattern;
+
+static const LaScalarPattern la_scalar_patterns[] = {
+    {"add.d",0x00108000U,LA_SCALAR_GPR3},
+    {"sub.d",0x00118000U,LA_SCALAR_GPR3},
+    {"add.w",0x00100000U,LA_SCALAR_GPR3},
+    {"sub.w",0x00110000U,LA_SCALAR_GPR3},
+    {"and",0x00148000U,LA_SCALAR_GPR3},
+    {"or",0x00150000U,LA_SCALAR_GPR3},
+    {"xor",0x00158000U,LA_SCALAR_GPR3},
+    {"slt",0x00120000U,LA_SCALAR_GPR3},
+    {"sltu",0x00128000U,LA_SCALAR_GPR3},
+    {"maskeqz",0x00130000U,LA_SCALAR_GPR3},
+    {"masknez",0x00138000U,LA_SCALAR_GPR3},
+    {"nor",0x00140000U,LA_SCALAR_GPR3},
+    {"orn",0x00160000U,LA_SCALAR_GPR3},
+    {"andn",0x00168000U,LA_SCALAR_GPR3},
+    {"sll.w",0x00170000U,LA_SCALAR_GPR3},
+    {"srl.w",0x00178000U,LA_SCALAR_GPR3},
+    {"sra.w",0x00180000U,LA_SCALAR_GPR3},
+    {"sll.d",0x00188000U,LA_SCALAR_GPR3},
+    {"srl.d",0x00190000U,LA_SCALAR_GPR3},
+    {"sra.d",0x00198000U,LA_SCALAR_GPR3},
+    {"rotr.w",0x001b0000U,LA_SCALAR_GPR3},
+    {"rotr.d",0x001b8000U,LA_SCALAR_GPR3},
+    {"mul.w",0x001c0000U,LA_SCALAR_GPR3},
+    {"mul.d",0x001d8000U,LA_SCALAR_GPR3},
+    {"mulh.w",0x001c8000U,LA_SCALAR_GPR3},
+    {"mulh.wu",0x001d0000U,LA_SCALAR_GPR3},
+    {"mulh.d",0x001e0000U,LA_SCALAR_GPR3},
+    {"mulh.du",0x001e8000U,LA_SCALAR_GPR3},
+    {"div.w",0x00200000U,LA_SCALAR_GPR3},
+    {"mod.w",0x00208000U,LA_SCALAR_GPR3},
+    {"div.wu",0x00210000U,LA_SCALAR_GPR3},
+    {"mod.wu",0x00218000U,LA_SCALAR_GPR3},
+    {"div.d",0x00220000U,LA_SCALAR_GPR3},
+    {"mod.d",0x00228000U,LA_SCALAR_GPR3},
+    {"div.du",0x00230000U,LA_SCALAR_GPR3},
+    {"mod.du",0x00238000U,LA_SCALAR_GPR3},
+    {"ldx.b",0x38000000U,LA_SCALAR_GPR3},
+    {"ldx.h",0x38040000U,LA_SCALAR_GPR3},
+    {"ldx.w",0x38080000U,LA_SCALAR_GPR3},
+    {"ldx.d",0x380c0000U,LA_SCALAR_GPR3},
+    {"stx.b",0x38100000U,LA_SCALAR_GPR3},
+    {"stx.h",0x38140000U,LA_SCALAR_GPR3},
+    {"stx.w",0x38180000U,LA_SCALAR_GPR3},
+    {"stx.d",0x381c0000U,LA_SCALAR_GPR3},
+    {"ldx.bu",0x38200000U,LA_SCALAR_GPR3},
+    {"ldx.hu",0x38240000U,LA_SCALAR_GPR3},
+    {"ldx.wu",0x38280000U,LA_SCALAR_GPR3},
+    {"addi.d",0x02c00000U,LA_SCALAR_IMM12},
+    {"addi.w",0x02800000U,LA_SCALAR_IMM12},
+    {"slti",0x02000000U,LA_SCALAR_IMM12},
+    {"sltui",0x02400000U,LA_SCALAR_IMM12},
+    {"lu52i.d",0x03000000U,LA_SCALAR_IMM12},
+    {"ld.d",0x28c00000U,LA_SCALAR_IMM12},
+    {"st.d",0x29c00000U,LA_SCALAR_IMM12},
+    {"ld.w",0x28800000U,LA_SCALAR_IMM12},
+    {"st.w",0x29800000U,LA_SCALAR_IMM12},
+    {"ld.b",0x28000000U,LA_SCALAR_IMM12},
+    {"ld.h",0x28400000U,LA_SCALAR_IMM12},
+    {"st.b",0x29000000U,LA_SCALAR_IMM12},
+    {"st.h",0x29400000U,LA_SCALAR_IMM12},
+    {"ld.bu",0x2a000000U,LA_SCALAR_IMM12},
+    {"ld.hu",0x2a400000U,LA_SCALAR_IMM12},
+    {"ld.wu",0x2a800000U,LA_SCALAR_IMM12},
+    {"ll.w",0x20000000U,LA_SCALAR_PTR14},
+    {"sc.w",0x21000000U,LA_SCALAR_PTR14},
+    {"ll.d",0x22000000U,LA_SCALAR_PTR14},
+    {"sc.d",0x23000000U,LA_SCALAR_PTR14},
+    {"ldptr.w",0x24000000U,LA_SCALAR_PTR14},
+    {"stptr.w",0x25000000U,LA_SCALAR_PTR14},
+    {"ldptr.d",0x26000000U,LA_SCALAR_PTR14},
+    {"stptr.d",0x27000000U,LA_SCALAR_PTR14},
+    {"andi",0x03400000U,LA_SCALAR_UIMM12},
+    {"ori",0x03800000U,LA_SCALAR_UIMM12},
+    {"xori",0x03c00000U,LA_SCALAR_UIMM12},
+    {"slli.w",0x00408000U,LA_SCALAR_SHIFT5},
+    {"slli.d",0x00410000U,LA_SCALAR_SHIFT6},
+    {"srli.w",0x00448000U,LA_SCALAR_SHIFT5},
+    {"srli.d",0x00450000U,LA_SCALAR_SHIFT6},
+    {"srai.w",0x00488000U,LA_SCALAR_SHIFT5},
+    {"srai.d",0x00490000U,LA_SCALAR_SHIFT6},
+    {"rotri.w",0x004c8000U,LA_SCALAR_SHIFT5},
+    {"rotri.d",0x004d0000U,LA_SCALAR_SHIFT6},
+    {"lu12i.w",0x14000000U,LA_SCALAR_UPPER20},
+    {"lu32i.d",0x16000000U,LA_SCALAR_UPPER20},
+    {"pcaddi",0x18000000U,LA_SCALAR_UPPER20},
+    {"pcalau12i",0x1a000000U,LA_SCALAR_UPPER20},
+    {"pcaddu12i",0x1c000000U,LA_SCALAR_UPPER20},
+    {"pcaddu18i",0x1e000000U,LA_SCALAR_UPPER20},
+    {"clo.w",0x00001000U,LA_SCALAR_GPR2},
+    {"clz.w",0x00001400U,LA_SCALAR_GPR2},
+    {"cto.w",0x00001800U,LA_SCALAR_GPR2},
+    {"ctz.w",0x00001c00U,LA_SCALAR_GPR2},
+    {"clo.d",0x00002000U,LA_SCALAR_GPR2},
+    {"clz.d",0x00002400U,LA_SCALAR_GPR2},
+    {"cto.d",0x00002800U,LA_SCALAR_GPR2},
+    {"ctz.d",0x00002c00U,LA_SCALAR_GPR2},
+    {"revb.2h",0x00003000U,LA_SCALAR_GPR2},
+    {"revb.4h",0x00003400U,LA_SCALAR_GPR2},
+    {"revb.2w",0x00003800U,LA_SCALAR_GPR2},
+    {"revb.d",0x00003c00U,LA_SCALAR_GPR2},
+    {"revh.2w",0x00004000U,LA_SCALAR_GPR2},
+    {"revh.d",0x00004400U,LA_SCALAR_GPR2},
+    {"bitrev.4b",0x00004800U,LA_SCALAR_GPR2},
+    {"bitrev.8b",0x00004c00U,LA_SCALAR_GPR2},
+    {"bitrev.w",0x00005000U,LA_SCALAR_GPR2},
+    {"bitrev.d",0x00005400U,LA_SCALAR_GPR2},
+    {"ext.w.h",0x00005800U,LA_SCALAR_GPR2},
+    {"ext.w.b",0x00005c00U,LA_SCALAR_GPR2},
+    {"rdtimel.w",0x00006000U,LA_SCALAR_GPR2},
+    {"rdtimeh.w",0x00006400U,LA_SCALAR_GPR2},
+    {"rdtime.d",0x00006800U,LA_SCALAR_GPR2},
+    {"cpucfg",0x00006c00U,LA_SCALAR_GPR2},
+    {"iocsrrd.b",0x06480000U,LA_SCALAR_GPR2},
+    {"iocsrrd.h",0x06480400U,LA_SCALAR_GPR2},
+    {"iocsrrd.w",0x06480800U,LA_SCALAR_GPR2},
+    {"iocsrrd.d",0x06480c00U,LA_SCALAR_GPR2},
+    {"iocsrwr.b",0x06481000U,LA_SCALAR_GPR2},
+    {"iocsrwr.h",0x06481400U,LA_SCALAR_GPR2},
+    {"iocsrwr.w",0x06481800U,LA_SCALAR_GPR2},
+    {"iocsrwr.d",0x06481c00U,LA_SCALAR_GPR2},
+    {"amswap.w",0x38600000U,LA_SCALAR_ATOMIC},
+    {"amswap.d",0x38608000U,LA_SCALAR_ATOMIC},
+    {"amadd.w",0x38610000U,LA_SCALAR_ATOMIC},
+    {"amadd.d",0x38618000U,LA_SCALAR_ATOMIC},
+    {"amand.w",0x38620000U,LA_SCALAR_ATOMIC},
+    {"amand.d",0x38628000U,LA_SCALAR_ATOMIC},
+    {"amor.w",0x38630000U,LA_SCALAR_ATOMIC},
+    {"amor.d",0x38638000U,LA_SCALAR_ATOMIC},
+    {"amxor.w",0x38640000U,LA_SCALAR_ATOMIC},
+    {"amxor.d",0x38648000U,LA_SCALAR_ATOMIC},
+    {"ammax.w",0x38650000U,LA_SCALAR_ATOMIC},
+    {"ammax.d",0x38658000U,LA_SCALAR_ATOMIC},
+    {"ammin.w",0x38660000U,LA_SCALAR_ATOMIC},
+    {"ammin.d",0x38668000U,LA_SCALAR_ATOMIC},
+    {"ammax.wu",0x38670000U,LA_SCALAR_ATOMIC},
+    {"ammax.du",0x38678000U,LA_SCALAR_ATOMIC},
+    {"ammin.wu",0x38680000U,LA_SCALAR_ATOMIC},
+    {"ammin.du",0x38688000U,LA_SCALAR_ATOMIC},
+    {"amswap_db.w",0x38690000U,LA_SCALAR_ATOMIC},
+    {"amswap_db.d",0x38698000U,LA_SCALAR_ATOMIC},
+    {"amadd_db.w",0x386a0000U,LA_SCALAR_ATOMIC},
+    {"amadd_db.d",0x386a8000U,LA_SCALAR_ATOMIC},
+    {"amand_db.w",0x386b0000U,LA_SCALAR_ATOMIC},
+    {"amand_db.d",0x386b8000U,LA_SCALAR_ATOMIC},
+    {"amor_db.w",0x386c0000U,LA_SCALAR_ATOMIC},
+    {"amor_db.d",0x386c8000U,LA_SCALAR_ATOMIC},
+    {"amxor_db.w",0x386d0000U,LA_SCALAR_ATOMIC},
+    {"amxor_db.d",0x386d8000U,LA_SCALAR_ATOMIC}
+};
+
+static const LaScalarPattern *la_find_scalar_pattern(const char *op) {
+    size_t i;
+    for(i=0U;i<sizeof(la_scalar_patterns)/sizeof(la_scalar_patterns[0]);++i)
+        if(strcmp(la_scalar_patterns[i].name,op)==0)
+            return &la_scalar_patterns[i];
+    return NULL;
+}
+
+static bool la_parse_scalar_pattern(MiniAsMCInst *m,const char *op,
+                                    char args[4][192],unsigned count,
+                                    bool *recognized) {
+    const LaScalarPattern *rule=la_find_scalar_pattern(op);
+    unsigned rd=0U,rj=0U,rk=0U,need;
+    int64_t value=0;
+    uint32_t bits=0U,mask=0U;
+    *recognized=rule!=NULL;
+    if(rule==NULL)return false;
+    need=(rule->shape==LA_SCALAR_GPR2 ||
+          rule->shape==LA_SCALAR_UPPER20)?2U:3U;
+    if(rule->shape==LA_SCALAR_ATOMIC && count==4U) {
+        uint64_t zero;
+        /* GCC's four-argument pseudo is the same instruction with an
+         * explicit reserved u0:0 field, not a second atomic family. */
+        if(!minias_eval_u64_expression(args[3],&zero) || zero!=0U)
+            return false;
+        need=4U;
+    }
+    if(count!=need || !la_reg(args[0],&rd) ||
+       (rule->shape!=LA_SCALAR_UPPER20 && !la_reg(args[1],&rj)))
+        return false;
+    m->encoding=rule->opcode;
+    if(rule->shape==LA_SCALAR_GPR2) {
+        m->encoding|=(rj<<5U)|rd;
+        la_capture_gpr_operand(m,0U,rd);
+        la_capture_gpr_operand(m,1U,rj);
+    } else if(rule->shape==LA_SCALAR_GPR3 ||
+              rule->shape==LA_SCALAR_ATOMIC) {
+        if(!la_reg(args[2],&rk))return false;
+        /* Atomics swap assembly operand 1/2 field placement relative to
+         * ordinary three-register instructions. */
+        m->encoding|=(rule->shape==LA_SCALAR_ATOMIC ?
+            (rj<<10U)|(rk<<5U) : (rk<<10U)|(rj<<5U))|rd;
+        la_capture_rrr(m,rd,rj,rk);
+        if(need==4U)la_capture_imm_operand(m,3U,0);
+    } else {
+        if(rule->shape==LA_SCALAR_UPPER20) {
+            if(!minias_eval_i64_expression(args[1],&value) ||
+               value<-524288 || value>524287)return false;
+            m->encoding|=(((uint32_t)value)&UINT32_C(0xfffff))<<5U;
+            la_capture_gpr_operand(m,0U,rd);
+            la_capture_imm_operand(m,1U,value);
+        } else {
+            if(!minias_eval_i64_expression(args[2],&value))return false;
+            switch(rule->shape) {
+                case LA_SCALAR_IMM12:
+                    if(value<-2048 || value>2047)return false;
+                    bits=12U;break;
+                case LA_SCALAR_UIMM12:
+                    if(value<0 || value>4095)return false;
+                    bits=12U;break;
+                case LA_SCALAR_SHIFT5:
+                    if(value<0 || value>31)return false;
+                    bits=5U;break;
+                case LA_SCALAR_SHIFT6:
+                    if(value<0 || value>63)return false;
+                    bits=6U;break;
+                case LA_SCALAR_PTR14:
+                    if(value<-32768 || value>32764 || value%4!=0)
+                        return false;
+                    value/=4;
+                    bits=14U;break;
+                default:return false;
+            }
+            mask=(UINT32_C(1)<<bits)-1U;
+            m->encoding|=(((uint32_t)value)&mask)<<10U;
+            m->encoding|=(rj<<5U);
+            la_capture_rri(m,rd,rj,rule->shape==LA_SCALAR_PTR14 ?
+                           value*4 : value);
+        }
+        m->encoding|=rd;
+    }
+    m->count=need;
+    return true;
+}
+
 static bool la_parse(MiniAs *as,MiniAsStmt *s) {
-    static const struct {const char *name;uint32_t code;} gpr3[]={
-        {"add.d",UINT32_C(0x00108000)},{"sub.d",UINT32_C(0x00118000)},
-        {"add.w",UINT32_C(0x00100000)},{"sub.w",UINT32_C(0x00110000)},
-        {"and",UINT32_C(0x00148000)},{"or",UINT32_C(0x00150000)},
-        {"xor",UINT32_C(0x00158000)},{"slt",UINT32_C(0x00120000)},
-        {"sltu",UINT32_C(0x00128000)},
-        {"maskeqz",UINT32_C(0x00130000)},
-        {"masknez",UINT32_C(0x00138000)},
-        {"nor",UINT32_C(0x00140000)},
-        {"orn",UINT32_C(0x00160000)},
-        {"andn",UINT32_C(0x00168000)},
-        {"sll.w",UINT32_C(0x00170000)},
-        {"srl.w",UINT32_C(0x00178000)},
-        {"sra.w",UINT32_C(0x00180000)},
-        {"sll.d",UINT32_C(0x00188000)},
-        {"srl.d",UINT32_C(0x00190000)},
-        {"sra.d",UINT32_C(0x00198000)},
-        {"rotr.w",UINT32_C(0x001b0000)},
-        {"rotr.d",UINT32_C(0x001b8000)},
-        {"mul.w",UINT32_C(0x001c0000)},
-        {"mul.d",UINT32_C(0x001d8000)},
-        {"mulh.w",UINT32_C(0x001c8000)},
-        {"mulh.wu",UINT32_C(0x001d0000)},
-        {"mulh.d",UINT32_C(0x001e0000)},
-        {"mulh.du",UINT32_C(0x001e8000)},
-        {"div.w",UINT32_C(0x00200000)},
-        {"mod.w",UINT32_C(0x00208000)},
-        {"div.wu",UINT32_C(0x00210000)},
-        {"mod.wu",UINT32_C(0x00218000)},
-        {"div.d",UINT32_C(0x00220000)},
-        {"mod.d",UINT32_C(0x00228000)},
-        {"div.du",UINT32_C(0x00230000)},
-        {"mod.du",UINT32_C(0x00238000)},
-        {"ldx.b",UINT32_C(0x38000000)},
-        {"ldx.h",UINT32_C(0x38040000)},
-        {"ldx.w",UINT32_C(0x38080000)},
-        {"ldx.d",UINT32_C(0x380c0000)},
-        {"stx.b",UINT32_C(0x38100000)},
-        {"stx.h",UINT32_C(0x38140000)},
-        {"stx.w",UINT32_C(0x38180000)},
-        {"stx.d",UINT32_C(0x381c0000)},
-        {"ldx.bu",UINT32_C(0x38200000)},
-        {"ldx.hu",UINT32_C(0x38240000)},
-        {"ldx.wu",UINT32_C(0x38280000)}
-    };
-    static const struct {const char *name;uint32_t code;} imm12[]={
-        {"addi.d",UINT32_C(0x02c00000)},
-        {"addi.w",UINT32_C(0x02800000)},
-        {"slti",UINT32_C(0x02000000)},
-        {"sltui",UINT32_C(0x02400000)},
-        {"lu52i.d",UINT32_C(0x03000000)},
-        {"ld.d",UINT32_C(0x28c00000)},
-        {"st.d",UINT32_C(0x29c00000)},
-        {"ld.w",UINT32_C(0x28800000)},
-        {"st.w",UINT32_C(0x29800000)},
-        {"ld.b",UINT32_C(0x28000000)},
-        {"ld.h",UINT32_C(0x28400000)},
-        {"st.b",UINT32_C(0x29000000)},
-        {"st.h",UINT32_C(0x29400000)},
-        {"ld.bu",UINT32_C(0x2a000000)},
-        {"ld.hu",UINT32_C(0x2a400000)},
-        {"ld.wu",UINT32_C(0x2a800000)}
-    };
-    /* GNU LA64 so10:14<<2; require byte offset aligned to four,
-     * encode the signed scaled si14 without inventing relocations. */
-    static const struct {const char *name;uint32_t code;} ptr14[]={
-        {"ll.w",UINT32_C(0x20000000)},
-        {"sc.w",UINT32_C(0x21000000)},
-        {"ll.d",UINT32_C(0x22000000)},
-        {"sc.d",UINT32_C(0x23000000)},
-        {"ldptr.w",UINT32_C(0x24000000)},
-        {"stptr.w",UINT32_C(0x25000000)},
-        {"ldptr.d",UINT32_C(0x26000000)},
-        {"stptr.d",UINT32_C(0x27000000)}
-    };
-    static const struct {const char *name;uint32_t code;} unsigned12[]={
-        {"andi",UINT32_C(0x03400000)},
-        {"ori",UINT32_C(0x03800000)},
-        {"xori",UINT32_C(0x03c00000)}
-    };
-    static const struct {
-        const char *name;uint32_t code;unsigned bits;
-    } shifts[]={
-        {"slli.w",UINT32_C(0x00408000),5U},
-        {"slli.d",UINT32_C(0x00410000),6U},
-        {"srli.w",UINT32_C(0x00448000),5U},
-        {"srli.d",UINT32_C(0x00450000),6U},
-        {"srai.w",UINT32_C(0x00488000),5U},
-        {"srai.d",UINT32_C(0x00490000),6U},
-        {"rotri.w",UINT32_C(0x004c8000),5U},
-        {"rotri.d",UINT32_C(0x004d0000),6U}
-    };
-    static const struct {const char *name;uint32_t code;} upper20[]={
-        {"lu12i.w",UINT32_C(0x14000000)},
-        {"lu32i.d",UINT32_C(0x16000000)},
-        {"pcaddi",UINT32_C(0x18000000)},
-        {"pcalau12i",UINT32_C(0x1a000000)},
-        {"pcaddu12i",UINT32_C(0x1c000000)},
-        {"pcaddu18i",UINT32_C(0x1e000000)}
-    };
-    /* GNU binutils: r0:5,r5:5 fixed unary integer transforms. */
-    static const struct {const char *name;uint32_t code;} unary[]={
-        {"clo.w",UINT32_C(0x00001000)},{"clz.w",UINT32_C(0x00001400)},
-        {"cto.w",UINT32_C(0x00001800)},{"ctz.w",UINT32_C(0x00001c00)},
-        {"clo.d",UINT32_C(0x00002000)},{"clz.d",UINT32_C(0x00002400)},
-        {"cto.d",UINT32_C(0x00002800)},{"ctz.d",UINT32_C(0x00002c00)},
-        {"revb.2h",UINT32_C(0x00003000)},
-        {"revb.4h",UINT32_C(0x00003400)},
-        {"revb.2w",UINT32_C(0x00003800)},
-        {"revb.d",UINT32_C(0x00003c00)},
-        {"revh.2w",UINT32_C(0x00004000)},
-        {"revh.d",UINT32_C(0x00004400)},
-        {"bitrev.4b",UINT32_C(0x00004800)},
-        {"bitrev.8b",UINT32_C(0x00004c00)},
-        {"bitrev.w",UINT32_C(0x00005000)},
-        {"bitrev.d",UINT32_C(0x00005400)},
-        {"ext.w.h",UINT32_C(0x00005800)},
-        {"ext.w.b",UINT32_C(0x00005c00)},
-        {"rdtimel.w",UINT32_C(0x00006000)},
-        {"rdtimeh.w",UINT32_C(0x00006400)},
-        {"rdtime.d",UINT32_C(0x00006800)},
-        {"cpucfg",UINT32_C(0x00006c00)},
-        {"iocsrrd.b",UINT32_C(0x06480000)},
-        {"iocsrrd.h",UINT32_C(0x06480400)},
-        {"iocsrrd.w",UINT32_C(0x06480800)},
-        {"iocsrrd.d",UINT32_C(0x06480c00)},
-        {"iocsrwr.b",UINT32_C(0x06481000)},
-        {"iocsrwr.h",UINT32_C(0x06481400)},
-        {"iocsrwr.w",UINT32_C(0x06481800)},
-        {"iocsrwr.d",UINT32_C(0x06481c00)}
-    };
-    /* GNU atomic opcodes r0:5,r10:5,r5:5: the second assembly
-     * operand occupies rk/bit10; the third is the memory base rj/bit5.
-     * Never mix the register field order into ordinary gpr3. */
-    static const struct {const char *name;uint32_t code;} atomics[]={
-        {"amswap.w",UINT32_C(0x38600000)},
-        {"amswap.d",UINT32_C(0x38608000)},
-        {"amadd.w",UINT32_C(0x38610000)},
-        {"amadd.d",UINT32_C(0x38618000)},
-        {"amand.w",UINT32_C(0x38620000)},
-        {"amand.d",UINT32_C(0x38628000)},
-        {"amor.w",UINT32_C(0x38630000)},
-        {"amor.d",UINT32_C(0x38638000)},
-        {"amxor.w",UINT32_C(0x38640000)},
-        {"amxor.d",UINT32_C(0x38648000)},
-        {"ammax.w",UINT32_C(0x38650000)},
-        {"ammax.d",UINT32_C(0x38658000)},
-        {"ammin.w",UINT32_C(0x38660000)},
-        {"ammin.d",UINT32_C(0x38668000)},
-        {"ammax.wu",UINT32_C(0x38670000)},
-        {"ammax.du",UINT32_C(0x38678000)},
-        {"ammin.wu",UINT32_C(0x38680000)},
-        {"ammin.du",UINT32_C(0x38688000)},
-        {"amswap_db.w",UINT32_C(0x38690000)},
-        {"amswap_db.d",UINT32_C(0x38698000)},
-        {"amadd_db.w",UINT32_C(0x386a0000)},
-        {"amadd_db.d",UINT32_C(0x386a8000)},
-        {"amand_db.w",UINT32_C(0x386b0000)},
-        {"amand_db.d",UINT32_C(0x386b8000)},
-        {"amor_db.w",UINT32_C(0x386c0000)},
-        {"amor_db.d",UINT32_C(0x386c8000)},
-        {"amxor_db.w",UINT32_C(0x386d0000)},
-        {"amxor_db.d",UINT32_C(0x386d8000)}
-    };
     MiniAsMCInst *m=minias_mcinst_alloc(4U);
-    char t[4][192],*end;unsigned n,i,rd,rj,rk;
-    long val;
+    char t[4][192];unsigned n,i,rd,rj,rk;
     if(!m){minias_set_error(as,"out-of-memory:loongarch64-mcinst");return false;}
     if(!*s->args) {
         static const struct {const char *name;uint32_t bits;} privileged[]={
@@ -657,6 +744,7 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
                     (rj<<5U)|rd;
         m->operands[0].kind=MINIAS_MC_REGISTER;
         m->operands[0].reg=rd;
+        m->operands[0].reg_class=MINIAS_MC_REG_FPR;
         m->operands[1].kind=MINIAS_MC_REGISTER;
         m->operands[1].reg=rj;
         goto done;
@@ -675,12 +763,17 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
     if(n==2U && !strcmp(s->op,"movgr2fcsr") &&
        la_special_reg(t[0],"$fcsr",3U,&rd) && la_reg(t[1],&rj)) {
         m->count=2U;m->encoding=UINT32_C(0x0114c000)|(rj<<5U)|rd;
+        la_capture_gpr_operand(m,0U,rd);
+        la_capture_gpr_operand(m,1U,rj);
         goto done;
     }
     if(n==2U && !strcmp(s->op,"movfr2gr.d") &&
        la_reg(t[0],&rd) &&
        la_special_reg(t[1],"$f",31U,&rj)) {
         m->count=2U;m->encoding=UINT32_C(0x0114b800)|(rj<<5U)|rd;
+        la_capture_gpr_operand(m,0U,rd);
+        la_capture_gpr_operand(m,1U,rj);
+        m->operands[1].reg_class=MINIAS_MC_REG_FPR;
         goto done;
     }
     if(n==2U && (!strcmp(s->op,"li.w") || !strcmp(s->op,"li.d")) &&
@@ -745,14 +838,13 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
      * GNU GAS 12/20/20/12 sign-extension reduction, not merely a
      * hard-coded fix for Linux's 0x8000/0x9000 upper bits. */
     if(n==2U && !strcmp(s->op,"li.d") && la_reg(t[0],&rd)) {
-        uint64_t bits;uint32_t words[4];
+        uint64_t bits;
         if(minias_eval_u64_expression(t[1],&bits)) {
             m->opcode=LA_MC_LI64_SEQUENCE;m->count=2U;
             m->operands[0].kind=MINIAS_MC_REGISTER;
             m->operands[0].reg=rd;
             m->operands[1].kind=MINIAS_MC_IMMEDIATE;
             m->operands[1].immediate=bits;
-            (void)la_li_d_words(bits,rd,words);
             goto done;
         }
     }
@@ -776,6 +868,8 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
                     m->encoding=fp[i].op|
                         (((uint32_t)offset&UINT32_C(0xfff))<<10U)|
                         (rj<<5U)|rd;
+                    la_capture_rri(m,rd,rj,offset);
+                    m->operands[0].reg_class=MINIAS_MC_REG_FPR;
                     goto done;
                 }
     }
@@ -788,6 +882,7 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
             m->count=3U;
             m->encoding=UINT32_C(0x06400000)|
                 ((uint32_t)level<<10U)|(rj<<5U)|rd;
+            la_capture_rri(m,rd,rj,(int64_t)level);
             goto done;
         }
     }
@@ -800,6 +895,8 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
             m->count=2U;
             m->encoding=UINT32_C(0x06440000)|
                         ((uint32_t)level<<10U)|(rj<<5U);
+            la_capture_gpr_operand(m,0U,rj);
+            la_capture_imm_operand(m,1U,(int64_t)level);
             goto done;
         }
     }
@@ -820,6 +917,8 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
        la_reg(t[1],&rj)) {
         m->count=2U;
         m->encoding=UINT32_C(0x0114d800)|(rj<<5U)|rd;
+        la_capture_gpr_operand(m,0U,rd);
+        la_capture_gpr_operand(m,1U,rj);
         goto done;
     }
     if(n==3U && !strcmp(s->op,"invtlb") &&
@@ -969,17 +1068,16 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
      * above is a canonical zero-link JIRL, not a second instruction family. */
     if(!strcmp(s->op,"jirl") && n==3U &&
        la_reg(t[0],&rd) && la_reg(t[1],&rj)) {
-        long long delta;
-        errno=0;delta=strtoll(t[2],&end,0);
-        if(!errno && end!=t[2] && !*end &&
-           delta>=-131072LL && delta<=131068LL && delta%4LL==0LL) {
+        int64_t delta;
+        if(minias_eval_i64_expression(t[2],&delta) &&
+           delta>=-131072 && delta<=131068 && delta%4==0) {
             m->count=3U;
             m->operands[0].kind=MINIAS_MC_REGISTER;m->operands[0].reg=rd;
             m->operands[1].kind=MINIAS_MC_REGISTER;m->operands[1].reg=rj;
             m->operands[2].kind=MINIAS_MC_IMMEDIATE;
             m->operands[2].immediate=(uint64_t)delta;
             m->encoding=UINT32_C(0x4c000000) |
-                (((uint32_t)(delta/4LL)&UINT32_C(0xffff))<<10U) |
+                (((uint32_t)(delta/4)&UINT32_C(0xffff))<<10U) |
                 (rj<<5U)|rd;
             goto done;
         }
@@ -994,21 +1092,6 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
             m->operands[0].kind=MINIAS_MC_REGISTER;
             m->operands[0].reg=rd;
             goto done;
-        }
-        int64_t upper;
-        if (minias_eval_i64_expression(t[1],&upper) &&
-            upper>=-524288 && upper<=524287) {
-            for(i=0U;i<sizeof(upper20)/sizeof(upper20[0]);++i)
-                if(!strcmp(s->op,upper20[i].name)) {
-                    m->count=2U;
-                    m->operands[0].kind=MINIAS_MC_REGISTER;
-                    m->operands[0].reg=rd;
-                    m->operands[1].kind=MINIAS_MC_IMMEDIATE;
-                    m->operands[1].immediate=(uint64_t)(int64_t)upper;
-                    m->encoding=upper20[i].code |
-                        ((((uint32_t)upper)&UINT32_C(0xfffff))<<5U) | rd;
-                    goto done;
-                }
         }
     }
     /* Privileged CSR opcodes, validated exact 14-bit immediate.
@@ -1042,19 +1125,6 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
             m->operands[2].kind=MINIAS_MC_IMMEDIATE;
             m->operands[2].immediate=csr;
             goto done;
-        }
-    }
-    if(n==2U && la_reg(t[0],&rd) && la_reg(t[1],&rj)) {
-        for(i=0U;i<sizeof(unary)/sizeof(unary[0]);++i) {
-            if(strcmp(s->op,unary[i].name)==0) {
-                m->count=2U;
-                m->encoding=unary[i].code|(rj<<5U)|rd;
-                m->operands[0].kind=MINIAS_MC_REGISTER;
-                m->operands[0].reg=rd;
-                m->operands[1].kind=MINIAS_MC_REGISTER;
-                m->operands[1].reg=rj;
-                goto done;
-            }
         }
     }
     if(!strcmp(s->op,"move") && n==2U &&
@@ -1113,105 +1183,26 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
         m->operands[2].immediate=(uint64_t)imm;
         goto done;
     }
-    if((n!=3U && n!=4U) ||
-       !la_reg(t[0],&rd) || !la_reg(t[1],&rj)) goto fail;
-    if(n==4U) {
-        uint64_t reserved;
-        /* Real GCC LoongArch .S uses GAS's atomic pseudo fourth operand
-         * u0:0. The fourth operand is mandatory zero, not an ISA field. */
-        if(!minias_eval_u64_expression(t[3],&reserved) || reserved!=0U)
-            goto fail;
-    }
-    if(la_reg(t[2],&rk)) {
-        for(i=0U;i<sizeof(atomics)/sizeof(atomics[0]);++i)
-            if(!strcmp(s->op,atomics[i].name)) {
-                m->count=n;
-                m->encoding=atomics[i].code|(rj<<10U)|(rk<<5U)|rd;
-                m->operands[0].kind=MINIAS_MC_REGISTER;
-                m->operands[0].reg=rd;
-                m->operands[1].kind=MINIAS_MC_REGISTER;
-                m->operands[1].reg=rj;
-                m->operands[2].kind=MINIAS_MC_REGISTER;
-                m->operands[2].reg=rk;
-                if(n==4U) {
-                    m->operands[3].kind=MINIAS_MC_IMMEDIATE;
-                    m->operands[3].immediate=0U;
-                }
-                goto done;
-            }
-        if(n==4U)goto fail;
-        for(i=0U;i<sizeof(gpr3)/sizeof(gpr3[0]);++i)
-            if(!strcmp(s->op,gpr3[i].name)) {
-                m->count=3U;m->encoding=gpr3[i].code |
-                    (rk<<10U)|(rj<<5U)|rd;
-                la_capture_rrr(m,rd,rj,rk);
-                goto done;
-            }
-    } else {
+    /* Symbolic PCALA low-part needs a relocation. The same scalar opcode
+     * descriptor supplies the signed 12-bit field and GPR positions. */
+    if(n==3U && la_reg(t[0],&rd) && la_reg(t[1],&rj)) {
+        const LaScalarPattern *rule=la_find_scalar_pattern(s->op);
         MiniAsSymbolExpr expr;
-        if(n==4U)goto fail;
-        if(la_reloc_expr(t[2],"%pc_lo12",&expr)) {
-            for(i=0U;i<sizeof(imm12)/sizeof(imm12[0]);++i)
-                if(strcmp(s->op,imm12[i].name)==0) {
-                    if(!la_symbol_operand(as,m,2U,&expr))goto fail;
-                    m->opcode=LA_MC_PCALA_LO12;
-                    m->count=3U;
-                    m->encoding=imm12[i].code|(rj<<5U)|rd;
-                    m->operands[0].kind=MINIAS_MC_REGISTER;
-                    m->operands[0].reg=rd;
-                    m->operands[1].kind=MINIAS_MC_REGISTER;
-                    m->operands[1].reg=rj;
-                    goto done;
-                }
+        if(rule!=NULL && rule->shape==LA_SCALAR_IMM12 &&
+           la_reloc_expr(t[2],"%pc_lo12",&expr)) {
+            if(!la_symbol_operand(as,m,2U,&expr))goto fail;
+            m->opcode=LA_MC_PCALA_LO12;
+            m->count=3U;
+            m->encoding=rule->opcode|(rj<<5U)|rd;
+            la_capture_gpr_operand(m,0U,rd);
+            la_capture_gpr_operand(m,1U,rj);
+            goto done;
         }
-        {
-        int64_t signed_value;
-        if(minias_eval_i64_expression(t[2],&signed_value) &&
-           signed_value>=LONG_MIN && signed_value<=LONG_MAX) {
-            val=(long)signed_value;
-            if (val>=-2048L && val<=2047L) {
-                for(i=0U;i<sizeof(imm12)/sizeof(imm12[0]);++i)
-                    if(!strcmp(s->op,imm12[i].name)) {
-                        m->count=3U;m->encoding=imm12[i].code |
-                            (((uint32_t)val & UINT32_C(0xfff))<<10U) |
-                            (rj<<5U)|rd;
-                        la_capture_rri(m,rd,rj,(int64_t)val);
-                        goto done;
-                    }
-            }
-            if (val>=0 && val<=4095L) {
-                for(i=0U;i<sizeof(unsigned12)/sizeof(unsigned12[0]);++i)
-                    if(!strcmp(s->op,unsigned12[i].name)) {
-                        m->count=3U;
-                        m->encoding=unsigned12[i].code |
-                            ((uint32_t)val<<10U) | (rj<<5U) | rd;
-                        la_capture_rri(m,rd,rj,(int64_t)val);
-                        goto done;
-                    }
-            }
-            if (val>=0 && val<=63L) {
-                for(i=0U;i<sizeof(shifts)/sizeof(shifts[0]);++i)
-                    if(!strcmp(s->op,shifts[i].name) &&
-                        (unsigned long)val < (1UL<<shifts[i].bits)) {
-                        m->count=3U;
-                        m->encoding=shifts[i].code |
-                            ((uint32_t)val<<10U) | (rj<<5U) | rd;
-                        la_capture_rri(m,rd,rj,(int64_t)val);
-                        goto done;
-                    }
-            }
-            if (val>=-32768L && val<=32764L && val%4L==0L) {
-                for(i=0U;i<sizeof(ptr14)/sizeof(ptr14[0]);++i)
-                    if(!strcmp(s->op,ptr14[i].name)) {
-                        m->count=3U;m->encoding=ptr14[i].code |
-                            ((((uint32_t)(val/4L)) & UINT32_C(0x3fff))<<10U) |
-                            (rj<<5U)|rd;
-                        la_capture_rri(m,rd,rj,(int64_t)val);
-                        goto done;
-                    }
-            }
-        }
-        }
+    }
+    {
+        bool scalar_mnemonic=false;
+        if(la_parse_scalar_pattern(m,s->op,t,n,&scalar_mnemonic))goto done;
+        if(scalar_mnemonic)goto fail;
     }
 fail:
     minias_set_error(as,"unsupported-loongarch64-operands:%s:%s:line=%zu",

@@ -3369,6 +3369,41 @@ invalid:
     return false;
 }
 
+/* GAS `.ident` is NOT parser metadata. It emits a mergeable string in the
+ * ELF .comment section. If `.ident` creates the section, GAS seeds it with
+ * one leading NUL; if source code already created .comment, no seed is
+ * added. The payload is ordinary immutable MC DATA, so it participates in
+ * the exact same Section/Subsection/Layout/ELF lifetime as all other data.
+ * An implicit section switch must not change `.previous` or the current
+ * source subsection. */
+static bool handle_ident(MiniAs *as,char *args,size_t line) {
+    const int prior=minias_find_section(as,".comment");
+    const int section=minias_ensure_section(as,".comment",
+                      MINIAS_SHT_PROGBITS,
+                      MINIAS_SHF_MERGE|MINIAS_SHF_STRINGS,1U);
+    const int saved_section=as->current_section;
+    const uint32_t saved_subsection=as->current_subsection;
+    bool ok;
+    char seed[]="1";
+    if(section<0)return false;
+    /* GAS upgrades an existing .comment to SHF_MERGE|SHF_STRINGS and
+     * sh_entsize=1 when `.ident` is used, preserving any explicit flags
+     * such as SHF_ALLOC. A later section declaration does not undo that. */
+    as->sections[(size_t)section].flags |=
+        MINIAS_SHF_MERGE|MINIAS_SHF_STRINGS;
+    as->sections[(size_t)section].entry_size=1U;
+    as->current_section=section;
+    as->current_subsection=0U;
+    ok=minias_ensure_subsection(as,section,0U)!=NULL &&
+       (prior>=0 || add_data_stmt(as,".zero",seed,line)) &&
+       add_data_stmt(as,".asciz",args,line);
+    as->current_section=saved_section;
+    as->current_subsection=saved_subsection;
+    if(!ok && as->error[0]=='\0')
+        minias_set_error(as,"bad-directive:.ident:line=%zu",line);
+    return ok;
+}
+
 static MiniAsMacro *find_macro(MiniAs *as, const char *name);
 static bool expand_macro_invocation(MiniAs *as,
                                     MiniAsMacro *macro,
@@ -3388,29 +3423,14 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
         return true;
     }
 
-    /* GNU's preprocessed native .S contains CPP source line markers.
-     * This form is common to all architectures; AArch64 also uses '#'
-     * in real instruction immediates, so only strict # N "file" is metadata. */
     /* GNU GCC/Clang inline-assembler boundaries are exact standalone
      * source markers. AArch64 uses # for immediate operands, so do not
      * treat arbitrary #foo or #number as a comment. */
     if (strcmp(text, "#APP") == 0 || strcmp(text, "#NO_APP") == 0 ||
         strcmp(text, "#NOAPP") == 0) return true;
-    /* At column zero after trim, # starts a GNU assembler comment;
-     * this does NOT suppress #immediate in A64 instruction operands. */
+    /* A leading '# ' begins a GNU preprocessor line or comment; a target
+     * immediate such as '#42' is still an operand, never a comment. */
     if(text[0]=='#' && isspace((unsigned char)text[1]))return true;
-    if (text[0] == '#' && isspace((unsigned char)text[1])) {
-        const char *marker = text + 2;
-        while (isspace((unsigned char)*marker)) ++marker;
-        if (isdigit((unsigned char)*marker)) {
-            while (isdigit((unsigned char)*marker)) ++marker;
-            if (isspace((unsigned char)*marker)) {
-                while (isspace((unsigned char)*marker)) ++marker;
-                if (*marker == '"' && strchr(marker + 1, '"') != NULL)
-                    return true;
-            }
-        }
-    }
 
     /* GNU .ifb/.ifnb compare the *expanded* argument against blank,
      * without any target ISA grammar; shared conditional stack owns them. */
@@ -3681,27 +3701,20 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
         strchr(args, '.') != NULL) {
         as->layout_sensitive = true;
     }
-    /* GNU .req aliases are written as NAME .req REGISTER. Route this
-     * generic target-directive spelling through the existing backend hook;
-     * Common knows nothing about A64 alias names or register classes. */
-    if(op[0]!='.' && !strncmp(args,".req",4U) &&
-       (args[4]=='\0' || isspace((unsigned char)args[4])) &&
-       as->target->parse_target_directive) {
-        bool handled=false;
-        if(!as->target->parse_target_directive(as,op,args,line,&handled))
-            return false;
-        if(handled)return true;
-    }
-    if (op[0] == '.') {
+    /* Target syntax can be a dotted directive (`.option`) or a bare
+     * identifier followed by a target directive (`alias .req x0`). Common
+     * cannot enumerate the latter forms without leaking ISA grammars. Ask
+     * the owning Target first for EVERY non-macro statement; an unhandled
+     * instruction then reaches the mandatory parsed-MCInst interface. */
+    if (as->target->parse_target_directive != NULL) {
         bool handled = false;
-        /* Target-specific directives are optional, unlike the mandatory
-         * MCInst hooks. No-backend-specific-directive is a valid target. */
-        if (as->target->parse_target_directive != NULL &&
-            !as->target->parse_target_directive(as, op, args,
-                                                 line, &handled)) {
+        if (!as->target->parse_target_directive(as, op, args,
+                                                line, &handled)) {
             return false;
         }
         if (handled) return true;
+    }
+    if (op[0] == '.') {
         if (as->target->validate_common_directive != NULL &&
             !as->target->validate_common_directive(as, op, line))
             return false;
@@ -3853,8 +3866,12 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
             as->altmacro_active=strcmp(op,".altmacro")==0;
             return true;
         }
-        if (strcmp(op, ".file") == 0 ||
-            strcmp(op, ".ident") == 0 || strcmp(op, ".end") == 0) {
+        if (strcmp(op, ".ident") == 0) {
+            return handle_ident(as,args,line);
+        }
+        if (strcmp(op, ".end") == 0) {
+            /* GAS ignores a trailing .end operand but stops the stream. */
+            as->source_ended=true;
             return true;
         }
         if (strcmp(op, ".align") == 0 || strcmp(op, ".balign") == 0 ||
@@ -3881,9 +3898,7 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
             strcmp(op, ".uleb128") == 0 || strcmp(op, ".sleb128") == 0 ||
             strcmp(op, ".asciz") == 0 ||
             strcmp(op, ".string") == 0 || strcmp(op, ".ascii") == 0 ||
-            strcmp(op, ".incbin") == 0 ||
-            strcmp(op, ".uleb128") == 0 ||
-            strcmp(op, ".sleb128") == 0) {
+            strcmp(op, ".incbin") == 0) {
             char *rewritten_args = NULL;
             bool ok;
 
@@ -4891,7 +4906,7 @@ static bool process_source_line(MiniAs *as, const char *source, size_t line) {
     }
     strip_comment(copy, as->target);
     cursor = copy;
-    while (cursor != NULL) {
+    while (cursor != NULL && !as->source_ended) {
         char *semicolon = find_statement_separator(cursor);
         if (semicolon != NULL) {
             *semicolon = '\0';
@@ -5089,7 +5104,7 @@ static bool process_irp_block(MiniAs *as,
     }
 
     cursor = comma + 1;
-    for (;;) {
+    for (; !as->source_ended;) {
         char *next_comma;
         char *next_space;
         char *next;
@@ -5158,7 +5173,7 @@ static bool process_source_range(MiniAs *as,
                                  size_t end) {
     size_t i = begin;
 
-    while (i < end) {
+    while (i < end && !as->source_ended) {
         char macro_argument[1024];
         int macro_kind =
             classify_macro_line(as, lines[i].text,
@@ -5276,7 +5291,9 @@ static bool process_source_range(MiniAs *as,
                                         &repetitions)) {
                     return false;
                 }
-                for (iteration = 0U; iteration < repetitions; ++iteration) {
+                for (iteration = 0U;
+                     iteration < repetitions && !as->source_ended;
+                     ++iteration) {
                     if (!process_source_range(as, lines, i + 1U, j)) {
                         return false;
                     }
@@ -5311,7 +5328,7 @@ static bool read_repeat_block(MiniAs *as,
     size_t depth = 1U;
     char linebuf[65536];
 
-    while (fgets(linebuf, sizeof(linebuf), file) != NULL) {
+    while (!as->source_ended && fgets(linebuf, sizeof(linebuf), file) != NULL) {
         size_t len;
         char argument[256];
         int kind;
@@ -5575,7 +5592,9 @@ bool minias_parse_file(MiniAs *as, const char *path) {
                     fclose(file);
                     return false;
                 }
-                for (iteration = 0U; iteration < repetitions; ++iteration) {
+                for (iteration = 0U;
+                     iteration < repetitions && !as->source_ended;
+                     ++iteration) {
                     if (!process_source_range(as, lines, 0U, count)) {
                         destroy_source_lines(lines, count);
                         fclose(file);

@@ -13,27 +13,6 @@ static bool reject(char *error, size_t cap, const char *reason,
     return false;
 }
 
-/* Target-owned RISC-V ELF attributes, with explicitly selected ISA only.
- * The vendor subsection length excludes the leading A format byte. */
-static bool create_attribute(MiniAsRiscvProfile *out, const char *isa) {
-    size_t n = strlen(isa), total = 18U + n;
-    size_t i;
-    unsigned char *buf = out->arch_attribute;
-    if (total > sizeof(out->arch_attribute)) return false;
-    memset(buf, 0, total);
-    buf[0] = 'A';
-    for (i = 0U; i < 4U; ++i) {
-        buf[1U + i] = (unsigned char)((total - 1U) >> (8U * i));
-        buf[12U + i] = (unsigned char)((total - 11U) >> (8U * i));
-    }
-    memcpy(buf + 5U, "riscv", 6U);
-    buf[11] = 1U; /* Tag_File */
-    buf[16] = 5U; /* Tag_RISCV_arch */
-    memcpy(buf + 17U, isa, n + 1U);
-    out->arch_attribute_size = total;
-    return true;
-}
-
 static bool append_isa(char *buf, size_t cap, size_t *len,
                        const char *feature) {
     size_t n = strlen(feature);
@@ -127,8 +106,9 @@ static bool parse_isa(const char *arch, MiniAsRiscvProfile *out,
             !append_isa(normalized, sizeof(normalized),
                         &used, order[i].name))
             return reject(error, cap, "riscv-arch-too-long", arch);
-    if (!create_attribute(out, normalized))
+    if (strlen(normalized) + 1U > sizeof(out->arch_attribute_isa))
         return reject(error, cap, "riscv-arch-too-long", arch);
+    memcpy(out->arch_attribute_isa, normalized, strlen(normalized) + 1U);
     return true;
 }
 

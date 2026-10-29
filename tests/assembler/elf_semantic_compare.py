@@ -9,7 +9,47 @@ from pathlib import Path
 from elftools.elf.elffile import ELFFile
 from elftools.elf.relocation import RelocationSection
 
-IGNORE_SECTION_NAMES = {".symtab", ".strtab", ".shstrtab"}
+# These generated tables are normalized below (symbol identities and stable
+# section keys). A user section whose name merely *collides* with a generated
+# table is still real object content. Ignoring by name alone is a false-green
+# whenever an ELF carries a PROGBITS section named `.strtab` or `.symtab`.
+def generated_table_indices(elf):
+    """Only omit the *actual* generated tables, never name-based lookalikes.
+
+    An ET_REL may have two SHT_STRTAB sections with the same name. The table
+    reached by canonical .symtab.sh_link is generated; a separately allocated
+    string table, even when spelled `.strtab`, is ordinary object content.
+    """
+    tables = set()
+    shstrndx = elf.header["e_shstrndx"]
+    if isinstance(shstrndx, int) and 0 <= shstrndx < elf.num_sections():
+        shstrtab = elf.get_section(shstrndx)
+        if (shstrtab.name == ".shstrtab" and
+                str(shstrtab["sh_type"]) == "SHT_STRTAB"):
+            tables.add(shstrndx)
+    for index, section in enumerate(elf.iter_sections()):
+        if (section.name != ".symtab" or
+                str(section["sh_type"]) != "SHT_SYMTAB"):
+            continue
+        tables.add(index)
+        linked = int(section["sh_link"])
+        if linked < 0 or linked >= elf.num_sections():
+            raise ValueError("canonical ELF .symtab has invalid linked string table")
+        strtab = elf.get_section(linked)
+        if (strtab.name == ".strtab" and
+                str(strtab["sh_type"]) == "SHT_STRTAB"):
+            tables.add(linked)
+    return tables
+
+
+def primary_symbol_table(elf):
+    """Resolve the real ELF symtab by type, not by spoofable section name."""
+    tables = [section for section in elf.iter_sections()
+              if section.name == ".symtab" and
+              str(section["sh_type"]) == "SHT_SYMTAB"]
+    if len(tables) > 1:
+        raise ValueError("multiple canonical ELF .symtab sections")
+    return tables[0] if tables else None
 R_RISCV_ALIGN = 43
 R_RISCV_RELAX = 51
 
@@ -175,7 +215,7 @@ def mapping_symbol_tag(elf, sym):
 
 
 def mapping_symbol_counter(elf, section_keys):
-    symbols = elf.get_section_by_name(".symtab")
+    symbols = primary_symbol_table(elf)
     result = collections.Counter()
     if symbols is None:
         return result
@@ -276,7 +316,7 @@ def symbol_semantic_key(elf, sym, section_keys):
 
 def symbol_counter(elf, section_keys):
     out = collections.Counter()
-    symtab = elf.get_section_by_name(".symtab")
+    symtab = primary_symbol_table(elf)
     if symtab is None:
         return out
     for sym in symtab.iter_symbols():
@@ -402,12 +442,11 @@ def relocation_counter(elf, section_keys):
     return out, masks, unknown_width, ordered, relax_markers
 
 
-def section_metadata(elf, section_keys):
+def section_metadata(elf, section_keys, generated_tables):
     core = {}
     alignment = {}
     for index, sec in enumerate(elf.iter_sections()):
-        name = sec.name
-        if name in IGNORE_SECTION_NAMES:
+        if index in generated_tables:
             continue
         hdr = sec.header
         kind = str(hdr["sh_type"])
@@ -516,12 +555,11 @@ def masked_bytes(data, ranges, little_endian):
     return bytes(b)
 
 
-def comparable_contents(elf, section_keys, masks, unknown_width):
+def comparable_contents(elf, section_keys, masks, unknown_width, generated_tables):
     out = {}
     skipped = {}
     for index, sec in enumerate(elf.iter_sections()):
-        name = sec.name
-        if name in IGNORE_SECTION_NAMES or isinstance(sec, RelocationSection):
+        if index in generated_tables or isinstance(sec, RelocationSection):
             continue
         kind = str(sec["sh_type"])
         if kind in ("SHT_NOBITS", "SHT_NULL", "SHT_GROUP"):
@@ -568,9 +606,12 @@ def load_semantics(path):
         if int(elf.header["e_phnum"]) != 0:
             raise ValueError("ET_REL object unexpectedly contains program headers")
         section_keys, groups = stable_sections(elf)
+        generated_tables = generated_table_indices(elf)
         relocs, masks, unknown, order, relax = relocation_counter(elf, section_keys)
-        contents, skipped = comparable_contents(elf, section_keys, masks, unknown)
-        section_core, section_alignment = section_metadata(elf, section_keys)
+        contents, skipped = comparable_contents(elf, section_keys, masks, unknown,
+                                                generated_tables)
+        section_core, section_alignment = section_metadata(elf, section_keys,
+                                                           generated_tables)
         return {
             "header": {
                 "class": int(elf.elfclass),

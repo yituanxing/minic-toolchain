@@ -3,6 +3,8 @@
 #include <limits.h>
 #include <stdint.h>
 #include <stddef.h>
+#include <stdlib.h>
+#include <string.h>
 
 /* Canonical DWARF CFI serializer. The parser never writes an output section,
  * the Target never encodes DW_CFA bytes, and CFI source instructions are
@@ -128,11 +130,21 @@ static bool encode_cfi(MiniAs *as,int sec,const MiniAsCfiOp *op) {
 }
 
 
+/* The CIE owns all CFI events at the procedure's first PC, not just the
+ * Target's default CFA/RA state.  A later DW_CFA_restore reverts to that
+ * initial state; leaving these events in the FDE is not equivalent. */
+static bool emit_initial_cfi(MiniAs *as,int sec,size_t first,size_t count) {
+    size_t i;
+    for(i=0U;i<count;++i)
+        if(!encode_cfi(as,sec,&as->cfi_ops[first+i]))return false;
+    return true;
+}
+
 /* GNU DWARF32 zR CIE: one engine for every Target psABI.
  * Only TargetInfo specifies initial CFA/RA policy and relocation mapping;
  * CFI bytes, CIE variant reuse and anchored FDEs remain Common-owned. */
 static bool emit_eh_cie(MiniAs *as,int sec,bool simple,bool signal,
-                        size_t *cie_begin) {
+                        size_t first,size_t count,size_t *cie_begin) {
     MiniAsCfiABI abi=minias_cfi_abi(as);
     size_t begin=as->sections[(size_t)sec].size;
     *cie_begin=begin;
@@ -150,26 +162,129 @@ static bool emit_eh_cie(MiniAs *as,int sec,bool simple,bool signal,
            !uleb(as,sec,abi.stack_reg) ||
            !uleb(as,sec,abi.initial_cfa_offset))return false;
         if(abi.initial_ra_saved) {
-            unsigned magnitude=(unsigned)(-abi.data_align);
+            uint64_t magnitude=(uint64_t)(-(int64_t)abi.data_align);
             if(abi.return_reg>=64U || magnitude==0U ||
                abi.initial_cfa_offset%magnitude!=0U ||
                !put8(as,sec,(uint8_t)(0x80U|abi.return_reg)) ||
                !uleb(as,sec,abi.initial_cfa_offset/magnitude))return false;
         }
     }
-    return finish_length(as,sec,begin);
+    return emit_initial_cfi(as,sec,first,count) &&
+           finish_length(as,sec,begin);
+}
+
+/* `.debug_frame` has the same Target-defined initial CFA and saved-RA
+ * semantics as `.eh_frame`, but no zR augmentation.  In particular, GNU
+ * distinguishes `.cfi_startproc` from `.cfi_startproc simple` with distinct
+ * CIEs.  A single CIE with an invented CFA offset zero changes the initial
+ * unwind state even when all the following FDE operations are well formed.
+ * DWARF CIE v1 has a one-byte return column; all currently registered Target
+ * psABIs have a return register in this range. */
+static bool emit_debug_cie(MiniAs *as,int sec,bool simple,
+                           size_t first,size_t count,size_t *cie_begin) {
+    const MiniAsCfiABI abi=minias_cfi_abi(as);
+    size_t begin=as->sections[(size_t)sec].size;
+    *cie_begin=begin;
+    if(abi.code_align==0U || abi.data_align>=0 ||
+       abi.return_reg>UINT8_MAX)return false;
+    if(!put32(as,sec,0U) || !put32(as,sec,UINT32_MAX) ||
+       !put8(as,sec,1U) || !put8(as,sec,0U) ||
+       !uleb(as,sec,abi.code_align) || !sleb(as,sec,abi.data_align) ||
+       !put8(as,sec,(uint8_t)abi.return_reg))return false;
+    if(!simple) {
+        if(!put8(as,sec,0x0cU) || !uleb(as,sec,abi.stack_reg) ||
+           !uleb(as,sec,abi.initial_cfa_offset))return false;
+        if(abi.initial_ra_saved) {
+            uint64_t scale=(uint64_t)(-(int64_t)abi.data_align);
+            if(abi.return_reg>=64U || scale==0U ||
+               abi.initial_cfa_offset%scale!=0U ||
+               !put8(as,sec,(uint8_t)(0x80U|abi.return_reg)) ||
+               !uleb(as,sec,abi.initial_cfa_offset/scale))return false;
+        }
+    }
+    return emit_initial_cfi(as,sec,first,count) &&
+           finish_length(as,sec,begin);
+}
+
+typedef struct MiniAsCfiCieVariant {
+    size_t first_op;
+    size_t prefix_count;
+    size_t offset;
+    bool simple;
+    bool signal;
+} MiniAsCfiCieVariant;
+
+/* Keep the exact retained bytecode in the identity of a CIE.  GNU shares a
+ * CIE between procedures with identical initial CFI but materializes a new
+ * one when a pre-PC .cfi_def_cfa or .cfi_offset changes.  Comparing typed
+ * events avoids concatenating source strings or accidentally coalescing
+ * different initial unwind states. */
+static bool cfi_same_initial(const MiniAs *as,
+                             const MiniAsCfiCieVariant *candidate,
+                             const MiniAsCfiProc *proc,size_t count,
+                             bool eh) {
+    size_t i;
+    if(candidate->simple!=proc->simple ||
+       (eh && candidate->signal!=proc->signal_frame) ||
+       candidate->prefix_count!=count)return false;
+    for(i=0U;i<count;++i) {
+        const MiniAsCfiOp *a=&as->cfi_ops[candidate->first_op+i];
+        const MiniAsCfiOp *b=&as->cfi_ops[proc->first_op+i];
+        if(a->kind!=b->kind || a->reg!=b->reg || a->value!=b->value ||
+           a->byte_count!=b->byte_count ||
+           (a->byte_count!=0U &&
+            (a->bytes==NULL || b->bytes==NULL ||
+             memcmp(a->bytes,b->bytes,a->byte_count)!=0)))return false;
+    }
+    return true;
+}
+
+/* A Linux translation unit may have thousands of distinct function-start
+ * CFI states.  Preserve GNU's first-seen CIE order but index the variants by
+ * the complete retained initial-event stream, avoiding a quadratic search
+ * across all earlier functions.  Hash collisions always compare typed data. */
+static uint64_t cfi_hash_word(uint64_t hash,uint64_t value) {
+    unsigned i;
+    for(i=0U;i<8U;++i) {
+        hash^=(uint8_t)value;
+        hash*=UINT64_C(1099511628211);
+        value>>=8U;
+    }
+    return hash;
+}
+
+static uint64_t cfi_initial_hash(const MiniAs *as,
+                                 const MiniAsCfiProc *proc,
+                                 size_t count,bool eh) {
+    uint64_t hash=UINT64_C(14695981039346656037);
+    size_t i,j;
+    hash=cfi_hash_word(hash,proc->simple?1U:0U);
+    hash=cfi_hash_word(hash,eh && proc->signal_frame?1U:0U);
+    hash=cfi_hash_word(hash,count);
+    for(i=0U;i<count;++i) {
+        const MiniAsCfiOp *op=&as->cfi_ops[proc->first_op+i];
+        hash=cfi_hash_word(hash,op->kind);
+        hash=cfi_hash_word(hash,op->reg);
+        hash=cfi_hash_word(hash,(uint64_t)op->value);
+        hash=cfi_hash_word(hash,op->byte_count);
+        for(j=0U;j<op->byte_count;++j) {
+            hash^=op->bytes[j];
+            hash*=UINT64_C(1099511628211);
+        }
+    }
+    return hash;
 }
 
 /* One serializer invocation per selected output section. In particular,
  * selecting both .eh_frame and .debug_frame must not mean choosing whichever
  * boolean happens to be true: they have different CIE pointers and relocation
  * policies, but share precisely the same finalized CFI event stream. */
-static bool cfi_emit_section(MiniAs *as,bool eh) {
-    size_t i;
+static bool cfi_emit_section_core(MiniAs *as,bool eh,
+                                  MiniAsCfiCieVariant *variants,
+                                  size_t *variant_slots,size_t slot_count) {
+    size_t i,variant_count=0U;
     int section;
     MiniAsSection *data;
-    bool cie_known[2][2]={{false,false},{false,false}};
-    size_t cie_offset[2][2]={{0U,0U},{0U,0U}};
     if(eh && (!as->target->cfi_implicit_eh_frame ||
               minias_cfi_abi(as).address_size!=(as->output_elf32?4U:8U) ||
               as->target->supports_fixup==NULL ||
@@ -182,25 +297,11 @@ static bool cfi_emit_section(MiniAs *as,bool eh) {
         eh?minias_cfi_abi(as).address_size:8U);
     if(section<0)return false;
     data=&as->sections[(size_t)section];
-    if(!eh) {
-        /* DWARF32 CIE v3, absolute CIE pointer for .debug_frame.
-         * Original Common ownership and byte format remain unchanged. */
-        if(!put32(as,section,0U) ||
-           !put32(as,section,UINT32_MAX) ||
-           !put8(as,section,3U) ||
-           !put8(as,section,0U) ||
-           !uleb(as,section,minias_cfi_abi(as).code_align) ||
-           !sleb(as,section,minias_cfi_abi(as).data_align) ||
-           !uleb(as,section,minias_cfi_abi(as).return_reg) ||
-           !put8(as,section,0x0cU) ||
-           !uleb(as,section,minias_cfi_abi(as).stack_reg) ||
-           !uleb(as,section,0U) ||
-           !finish_length(as,section,0U))return false;
-    }
     for(i=0U;i<as->cfi_proc_count;++i) {
         const MiniAsCfiProc *proc=&as->cfi_procs[i];
         const MiniAsSymbol *begin,*end;
-        size_t j,base,ptr;
+        size_t j,base,ptr,initial_count=0U,variant_index,slot;
+        uint64_t signature;
         uint64_t loc;
         if(proc->begin_symbol>=as->symbol_count ||
            proc->end_symbol>=as->symbol_count)return false;
@@ -213,21 +314,46 @@ static bool cfi_emit_section(MiniAs *as,bool eh) {
             minias_set_error(as,"invalid-cfi-procedure-layout");
             return false;
         }
-        if(eh) {
-            unsigned simple=proc->simple?1U:0U;
-            unsigned signal=proc->signal_frame?1U:0U;
-            if(!cie_known[simple][signal]) {
-                if(!emit_eh_cie(as,section,proc->simple,
-                                proc->signal_frame,
-                                &cie_offset[simple][signal]))return false;
-                cie_known[simple][signal]=true;
-            }
+        if(proc->first_op>as->cfi_op_count ||
+           proc->op_count>as->cfi_op_count-proc->first_op)return false;
+        for(j=0U;j<proc->op_count;++j) {
+            const MiniAsCfiOp *op=&as->cfi_ops[proc->first_op+j];
+            const MiniAsSymbol *anchor;
+            if(op->symbol_index>=as->symbol_count)return false;
+            anchor=&as->symbols[op->symbol_index];
+            if(!anchor->defined || anchor->section!=begin->section ||
+               anchor->value<begin->value || anchor->value>end->value)return false;
+            if(anchor->value!=begin->value)break;
+            ++initial_count;
+        }
+        signature=cfi_initial_hash(as,proc,initial_count,eh);
+        slot=(size_t)(signature&(uint64_t)(slot_count-1U));
+        while(variant_slots[slot]!=0U) {
+            variant_index=variant_slots[slot]-1U;
+            if(cfi_same_initial(as,&variants[variant_index],proc,
+                                initial_count,eh))break;
+            slot=(slot+1U)&(slot_count-1U);
+        }
+        if(variant_slots[slot]==0U) {
+            variant_index=variant_count;
+            MiniAsCfiCieVariant *new_variant=&variants[variant_count++];
+            new_variant->first_op=proc->first_op;
+            new_variant->prefix_count=initial_count;
+            new_variant->simple=proc->simple;
+            new_variant->signal=proc->signal_frame;
+            if(eh) {
+                if(!emit_eh_cie(as,section,proc->simple,proc->signal_frame,
+                                proc->first_op,initial_count,
+                                &new_variant->offset))return false;
+            } else if(!emit_debug_cie(as,section,proc->simple,
+                                      proc->first_op,initial_count,
+                                      &new_variant->offset))return false;
+            variant_slots[slot]=variant_index+1U;
         }
         data=&as->sections[(size_t)section];
         base=data->size;
         if(eh) {
-            size_t cie=cie_offset[proc->simple?1U:0U]
-                                   [proc->signal_frame?1U:0U];
+            size_t cie=variants[variant_index].offset;
             if(base+4U<cie || base+4U-cie>UINT32_MAX)return false;
             if(!put32(as,section,0U) ||
                !put32(as,section,(uint32_t)(base+4U-cie)))return false;
@@ -239,8 +365,10 @@ static bool cfi_emit_section(MiniAs *as,bool eh) {
                MINIAS_FIXUP_ORIGIN_SYNTHETIC_SECTION,section,ptr,MINIAS_FIXUP_PREL32,4U,
                                  begin->name,0))return false;
         } else {
+            size_t cie=variants[variant_index].offset;
+            if(cie>UINT32_MAX)return false;
             if(!put32(as,section,0U) ||
-               !put32(as,section,0U))return false;
+               !put32(as,section,(uint32_t)cie))return false;
             ptr=as->sections[(size_t)section].size;
             if(!put_cfi_address(as,section,0U) ||
                !put_cfi_address(as,section,end->value-begin->value) ||
@@ -250,7 +378,7 @@ static bool cfi_emit_section(MiniAs *as,bool eh) {
                                  begin->name,0))return false;
         }
         loc=begin->value;
-        for(j=0U;j<proc->op_count;++j) {
+        for(j=initial_count;j<proc->op_count;++j) {
             const MiniAsCfiOp *op=&as->cfi_ops[proc->first_op+j];
             const MiniAsSymbol *symbol;
             if(op->symbol_index>=as->symbol_count)return false;
@@ -279,6 +407,26 @@ static bool cfi_emit_section(MiniAs *as,bool eh) {
         data=&as->sections[(size_t)section];
     }
     return true;
+}
+
+static bool cfi_emit_section(MiniAs *as,bool eh) {
+    MiniAsCfiCieVariant *variants;
+    size_t *slots,slot_count=16U;
+    bool ok;
+    if(as->cfi_proc_count>SIZE_MAX/sizeof(*variants) ||
+       as->cfi_proc_count>SIZE_MAX/2U)return false;
+    while(slot_count<as->cfi_proc_count*2U) {
+        if(slot_count>SIZE_MAX/2U)return false;
+        slot_count*=2U;
+    }
+    variants=calloc(as->cfi_proc_count,sizeof(*variants));
+    if(variants==NULL)return false;
+    slots=calloc(slot_count,sizeof(*slots));
+    if(slots==NULL) {free(variants);return false;}
+    ok=cfi_emit_section_core(as,eh,variants,slots,slot_count);
+    free(slots);
+    free(variants);
+    return ok;
 }
 
 bool minias_cfi_emit(MiniAs *as) {

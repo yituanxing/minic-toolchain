@@ -12,16 +12,11 @@
  * are independent of ISA and ELF e_machine. Target encoders never duplicate
  * these algorithms; the driver owns sections, macros, and fragment layout. */
 
-static bool parse_i64_data(const char *text, int64_t *out) {
-    char *copy = minias_strdup(text);
-    char *normalized;
-    char *end = NULL;
-    long long value;
-
-    if (copy == NULL) {
-        return false;
-    }
-    normalized = minias_trim(copy);
+/* The two integer-data entry points differ only in signed range policy.
+ * Their parenthesis normalization must be identical: a whole-expression
+ * group is removable, but `(2)+3` must remain unaltered. */
+static char *normalize_integer_data_group(char *copy) {
+    char *normalized = minias_trim(copy);
     for (;;) {
         size_t len = strlen(normalized);
         size_t i;
@@ -54,6 +49,16 @@ static bool parse_i64_data(const char *text, int64_t *out) {
         normalized = minias_trim(normalized + 1);
     }
 
+    return normalized;
+}
+
+static bool parse_i64_data(const char *text, int64_t *out) {
+    char *copy = minias_strdup(text);
+    char *normalized;
+    char *end = NULL;
+    long long value;
+    if (copy == NULL) return false;
+    normalized = normalize_integer_data_group(copy);
     errno = 0;
     value = strtoll(normalized, &end, 0);
     if (errno != 0 || end == normalized) {
@@ -87,38 +92,7 @@ static bool parse_data_integer_bits(const char *text, uint64_t *out) {
     if (copy == NULL) {
         return false;
     }
-    normalized = minias_trim(copy);
-    for (;;) {
-        size_t len = strlen(normalized);
-        size_t i;
-        int depth = 0;
-        bool encloses_all = true;
-
-        if (len < 2U || normalized[0] != '(' ||
-            normalized[len - 1U] != ')') {
-            break;
-        }
-        for (i = 0U; i < len; ++i) {
-            if (normalized[i] == '(') {
-                ++depth;
-            } else if (normalized[i] == ')') {
-                --depth;
-                if (depth < 0) {
-                    encloses_all = false;
-                    break;
-                }
-                if (depth == 0 && i + 1U != len) {
-                    encloses_all = false;
-                    break;
-                }
-            }
-        }
-        if (!encloses_all || depth != 0) {
-            break;
-        }
-        normalized[len - 1U] = '\0';
-        normalized = minias_trim(normalized + 1);
-    }
+    normalized = normalize_integer_data_group(copy);
     if (*normalized == '-') {
         free(copy);
         return false;

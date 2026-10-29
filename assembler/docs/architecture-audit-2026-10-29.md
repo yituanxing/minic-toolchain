@@ -173,3 +173,54 @@ seams have been substantially reduced in Batch F/G.
 This is the design and local regression inventory for Batch G. Only an
 exact-head CI result tied to its *actual pushed commit* can establish its
 remote Linux/GNU outcome; keep PR #667 Draft while P0 remains open.
+
+## Batch H cross-owner whole-source audit (2026-10-29)
+
+Six Target/Common/ELF owners and an independent CFI adversarial reviewer
+read the active assembler sources and traced the GNU contracts. This is an
+implementation inventory before the batch's remote exact-head CI; do not
+promote local cross-toolchain SKIPs or the old 9,645 `.s` aggregate into a
+strict ELF `.o` parity claim.
+
+| Layer | Proven defect or structural debt | Batch H change |
+|---|---|---|
+| Common directives | `.ident` silently discarded ELF `.comment` contents and metadata; `.end` was a no-op even inside macros, repeats and semicolon-separated source | Emit GNU-compatible `.comment` mergeable strings; propagate end-of-source across nested parse frames; remove repeated/dead directive cases and ISA-specific bare-name dispatch |
+| x86-64 | Jcc/CMOV/SETcc condition aliases duplicated, memory measure/encode independently chose SIB/REX/disp widths; valid SETcc high-byte registers rejected | One x86 condition descriptor and memory-layout decision, AH/CH/DH/BH without REX, GNU exact opcode/EA probes |
+| RISC-V | RV32 accepted RV64-only scalar FP moves/conversions and `.d` atomics; profile serialized ELF attributes then Target reparsed fixed offsets; numeric attribute values assumed a byte | XLEN-specific instruction boundary, canonical profile string serialized exactly once, ULEB128 attribute payload, wider RV32/RV64 oracles |
+| AArch64 | Scalar memory forms had parallel descriptor and legacy encoder paths, plus a literal `if (0)` dead path; ADR subtraction risked signed overflow | Retain one A64-specific memory descriptor for ordinary/deferred operations; remove six redundant MC opcodes and dead branch, guard arithmetic |
+| LoongArch64 | 148 scalar mnemonics repeated 9 operand-shape parsers; LSX/LASX operands silently inherited GPR class | One LoongArch-specific opcode/operand-shape table, typed FPR/VECTOR classes, GNU scalar/vector positive and negative cases |
+| ELF writer | `SHF_LINK_ORDER` target resolution rescanned every section for each metadata section | Build one sorted `SectionName → SectionID` index; 1,024 independent GNU `sh_link`/relocation stress pairs |
+| Strict comparator | `.symtab`, `.strtab`, `.shstrtab` skipped by name alone, allowing forged same-named real data sections to evade payload checks | Exclude only structural sections identified by actual ELF section indices and type/link relationships; add name-collision adversarial cases |
+| DWARF CFI | Register numbers incorrectly capped at 255; more critically, CIE omitted pre-first-PC CFI, causing `.cfi_restore` to revert to the wrong initial state, and `.debug_frame` reused a single non-simple CIE for `simple` functions | ULEB128 register operands, Target ABI initial CFA/RA, type-and-event-sequence-specific CIEs for EH/debug, indexed reuse of full typed pre-PC event streams |
+
+The CFI bug is a **runtime correctness issue**, not merely cosmetic ELF byte
+layout. For `CFI_OFFSET r6,-16; nop; CFI_RESTORE r6`, GNU puts the initial
+register save in the CIE, so the later restore refers to that state. The old
+MiniAS placed the save in the FDE, making restore semantically different.
+`probe-cfi-initial-state-gnu.sh` now checks GNU CIE/FDE event streams,
+reused initial CIE identities and the split after the first PC advance. The
+Common CFI writer indexes CIE variants by a hash of retained typed prefix
+events, with exact collision verification, to avoid O(procedures²) searches.
+
+**Architecture decision:** retain Common MC/Target ownership and one
+RISC-V ISA family with distinct XLEN/ABI, keeping AArch64 and LoongArch64
+independent. Continue architectural work only at proven remaining seams:
+
+1. **P0** original pinned Linux GNU Kbuild `.o` strict semantic parity on
+   the exact current source tree; then full linker Image and QEMU P0/P1.
+2. **P1** Target-owned register-bank identity: one generic VECTOR class
+   cannot express LoongArch VR128 vs XR256, nor specialized FCSR/FCC banks.
+3. **P1** persistent dynamic conditional-region graph and typed operands for
+   AArch64 deferred differences, x86 large parser flags and residual Loong
+   floating-point/system instructions; preserve correct existing paths until
+   independent GNU tests cover replacements.
+4. **P1** GNU `.debug_line` directory/file table parity and CFI byte-format
+   corner cases beyond the newly covered initial unwind semantics.
+5. **P2** audit old MiniAS workflows against frozen GNU producers and legacy
+   evidence before deleting anything. A historical workflow is not dead
+   simply because a newer strict 3×7 gate exists.
+
+Count production-code changes from `assembler/src` additions **and**
+deletions separately from scripts, docs and workflows. Run `-Werror`, A0,
+GNU x86/ELF/CFI regression and remote RISC-V/A64/Loong GNU contracts on the
+new head; only then record exact run IDs and final pass/fail status.

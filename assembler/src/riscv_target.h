@@ -8,11 +8,14 @@
 #include <stddef.h>
 
 #define MINIAS_RISCV_OPTION_PIC 1U
+#define MINIAS_RISCV_OPTION_NO_RVC 2U
 
 /* TargetContext: RISC-V ISA/ABI/attribute data never belongs to Common.
  * RV32 and RV64 are profiles of this single Target, not separate assemblers. */
 typedef struct MiniAsRiscvState {
-    bool strict_rv64i;
+    /* Explicit profile ISA restrictions also apply to RV32 and to
+     * non-I-only profiles; do not encode an XLEN in this policy flag. */
+    bool strict_isa_directives;
     unsigned strict_i_xlen;
     bool isa_explicit;
     unsigned target_xlen;

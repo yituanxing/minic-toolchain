@@ -449,6 +449,11 @@ typedef struct MiniAs {
     size_t macro_expansion_depth;
     bool altmacro_active; /* GNU %absolute-expression positional arguments */
     bool conditional_active;
+    /* GAS `.end` terminates the entire source stream, including a macro,
+     * inline semicolon statement or repetition expansion. It is not a
+     * discardable directive: all callers of the shared source dispatcher
+     * observe this one state, independently of target instruction syntax. */
+    bool source_ended;
     /* GNU GAS's quoted-string-aware, multi-line C comment lexical state. */
     bool c_comment_active;
     bool layout_sensitive; /* position-dependent parser-control fallback */

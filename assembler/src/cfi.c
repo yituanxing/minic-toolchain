@@ -64,7 +64,12 @@ static bool cfi_integer(const char *text, int64_t *value) {
 
 static bool cfi_register(const char *text, unsigned *reg) {
     int64_t number;
-    if (!cfi_integer(text, &number) || number < 0 || number > 255)
+    /* DW_CFA operands use ULEB128 register numbers.  The 8-bit limit
+     * belongs only to DWARF v1's CIE return-address register field, not
+     * to individual .cfi_* register operands.  GNU accepts registers
+     * above 255 on all supported targets. */
+    if (!cfi_integer(text, &number) || number < 0 ||
+        (uint64_t)number > UINT_MAX)
         return false;
     *reg = (unsigned)number;
     return true;
@@ -313,7 +318,8 @@ bool minias_cfi_directive(MiniAs *as,const char *op,
         if(!cfi_two(args,&reg,&value) || (def && value<0) ||
            ((offset || val) &&
             (value>0 || value%minias_cfi_abi(as).data_align!=0)) ||
-           (!def && !offset && !val && (value<0 || value>255)))
+           (!def && !offset && !val &&
+            (value<0 || (uint64_t)value>UINT_MAX)))
             goto bad;
         kind=def?CFI_DEF_CFA:offset?CFI_OFFSET:
              val?CFI_VAL_OFFSET:CFI_REGISTER;
@@ -327,7 +333,8 @@ bool minias_cfi_directive(MiniAs *as,const char *op,
                !strcmp(op,".cfi_undefined") ||
                !strcmp(op,".cfi_same_value")) {
         if (!cfi_integer(args,&value) || value<0 ||
-            (!strcmp(op,".cfi_def_cfa_offset")?false:value>255))goto bad;
+            (strcmp(op,".cfi_def_cfa_offset")!=0 &&
+             (uint64_t)value>UINT_MAX))goto bad;
         if (!strcmp(op,".cfi_def_cfa_offset")) {
             kind=CFI_DEF_CFA_OFFSET;
             proc->cfa_offset=value;

@@ -32,6 +32,37 @@ typedef struct MiniAsELFSymbolState {
     bool emit;
 } MiniAsELFSymbolState;
 
+/* A LINK_ORDER reference can name a section instead of an anchor symbol.
+ * Linux objects may contain thousands of unique named sections. Resolving
+ * every metadata section by scanning every input section becomes quadratic
+ * even after the symbol/relocation liveness plan has become linear. Keep a
+ * single name-to-SectionID index for this ELF serialization transaction;
+ * sorting by input SectionID preserves GNU's first-match behavior and the
+ * existing special choice of a same-COMDAT member on duplicate names. */
+typedef struct MiniAsELFSectionName {
+    const char *name;
+    size_t section_id;
+} MiniAsELFSectionName;
+
+static int compare_elf_section_name(const void *lhs,const void *rhs) {
+    const MiniAsELFSectionName *a=lhs,*b=rhs;
+    int cmp=strcmp(a->name,b->name);
+    if(cmp!=0)return cmp;
+    return a->section_id<b->section_id?-1:
+           a->section_id>b->section_id?1:0;
+}
+
+static size_t first_named_elf_section(const MiniAsELFSectionName *index,
+                                      size_t count,const char *name) {
+    size_t lo=0U,hi=count;
+    while(lo<hi) {
+        size_t mid=lo+(hi-lo)/2U;
+        if(strcmp(index[mid].name,name)<0)lo=mid+1U;
+        else hi=mid;
+    }
+    return lo;
+}
+
 static bool plan_elf_symbols(MiniAs *as,MiniAsELFSymbolState *states,
                              size_t *emitted_count) {
     size_t i;
@@ -81,7 +112,8 @@ static bool plan_elf_symbols(MiniAs *as,MiniAsELFSymbolState *states,
  * also accepted as a reference even if there is no same-named STT_SECTION
  * symbol (e.g. `.text.foo').  Numeric GAS test-only arguments emit zero. */
 static bool resolve_link_order_target(MiniAs *as, size_t owner,
-                                      size_t *target) {
+                                      const MiniAsELFSectionName *name_index,
+                                      size_t name_count,size_t *target) {
     const MiniAsSection *section=&as->sections[owner];
     const char *reference=section->link_order_reference;
     const MiniAsSymbol *symbol;
@@ -110,14 +142,15 @@ static bool resolve_link_order_target(MiniAs *as, size_t owner,
     }
     /* A section-name reference is valid without defining a homonymous
      * symbol.  Prefer the owner's COMDAT key if its name is duplicated. */
-    for(i=0U;i<as->section_count;++i) {
-        const MiniAsSection *other=&as->sections[i];
-        if(strcmp(other->name,reference)!=0)continue;
-        if(candidate==SIZE_MAX)candidate=i;
+    for(i=first_named_elf_section(name_index,name_count,reference);
+        i<name_count && strcmp(name_index[i].name,reference)==0;++i) {
+        const size_t section_id=name_index[i].section_id;
+        const MiniAsSection *other=&as->sections[section_id];
+        if(candidate==SIZE_MAX)candidate=section_id;
         else if(section->group_signature!=NULL &&
                 other->group_signature!=NULL &&
                 strcmp(section->group_signature,other->group_signature)==0) {
-            candidate=i;
+            candidate=section_id;
             break;
         } else if(section->group_signature==NULL) {
             minias_set_error(as,"ambiguous-link-order-section:%s:section=%s",
@@ -141,6 +174,7 @@ static bool minias_write_elf(MiniAs *as,
     MiniElfWriteSymbol *symbols = NULL;
     MiniElfWriteRela *relocations = NULL;
     size_t *symbol_map = NULL;
+    MiniAsELFSectionName *name_index = NULL;
     MiniAsELFSymbolState *symbol_states = NULL;
     char **private_names = NULL;
     unsigned char *image = NULL;
@@ -192,6 +226,7 @@ static bool minias_write_elf(MiniAs *as,
      * symbol_map would otherwise create an undersized ordinal map even
      * though the surrounding calloc arrays reject their own overflow. */
     if(section_count>SIZE_MAX/sizeof(*sections) ||
+       as->section_count>SIZE_MAX/sizeof(*name_index) ||
        expected_symbol_count>SIZE_MAX/sizeof(*symbols) ||
        as->fixup_count>SIZE_MAX/sizeof(*relocations) ||
        as->symbol_count>SIZE_MAX/sizeof(*symbol_map) ||
@@ -207,16 +242,28 @@ static bool minias_write_elf(MiniAs *as,
                          sizeof(*relocations));
     symbol_map = malloc((as->symbol_count == 0U ? 1U : as->symbol_count) *
                         sizeof(*symbol_map));
+    name_index = malloc((as->section_count == 0U ? 1U : as->section_count) *
+                        sizeof(*name_index));
     private_names = calloc(as->symbol_count == 0U ? 1U : as->symbol_count,
                            sizeof(*private_names));
     if (sections == NULL || symbols == NULL || relocations == NULL ||
-        symbol_map == NULL || private_names == NULL) {
+        symbol_map == NULL || name_index == NULL || private_names == NULL) {
         minias_set_error(as, "out-of-memory:elf");
         goto done;
     }
     for (i = 0U; i < as->symbol_count; ++i) {
         symbol_map[i] = SIZE_MAX;
     }
+    for (i = 0U; i < as->section_count; ++i) {
+        if (as->sections[i].name == NULL) {
+            minias_set_error(as,"unnamed-elf-section");
+            goto done;
+        }
+        name_index[i].name=as->sections[i].name;
+        name_index[i].section_id=i;
+    }
+    qsort(name_index,as->section_count,sizeof(*name_index),
+          compare_elf_section_name);
 
     /* STT_FILE is a real ELF local symbol with absolute section identity.
      * Keep it outside the user-label hash and the relocation SymbolID map;
@@ -238,7 +285,8 @@ static bool minias_write_elf(MiniAs *as,
         output->flags = input->flags;
         if((input->flags & MINIAS_SHF_LINK_ORDER)!=0U) {
             size_t linked_target=SIZE_MAX;
-            if(!resolve_link_order_target(as,i,&linked_target))goto done;
+            if(!resolve_link_order_target(as,i,name_index,as->section_count,
+                                          &linked_target))goto done;
             if(linked_target!=SIZE_MAX) {
                 output->has_link_order_target=true;
                 output->linked_target_section=linked_target;
@@ -493,6 +541,7 @@ done:
     }
     free(image);
     free(symbol_map);
+    free(name_index);
     free(symbol_states);
     free(relocations);
     free(symbols);

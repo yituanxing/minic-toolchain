@@ -3,6 +3,7 @@
 #include "riscv_profile.h"
 #include <stdio.h>
 #include <ctype.h>
+#include <errno.h>
 #include <stdint.h>
 #include <string.h>
 #include <stdlib.h>
@@ -236,7 +237,25 @@ static bool is_rv64_only_opcode(const char *op) {
     bool rv64_only = false;
     if (minias_riscv_mc_descriptor_policy(op, NULL, &rv64_only, NULL))
         return rv64_only;
-    return strcmp(op, "negw") == 0; /* non-table pseudo */
+    /* The fixed-word descriptor table already marks LD/SD, word ALU and
+     * shifts. Multiword and extension instruction families retain typed
+     * operands but are parsed through different target-private dispatchers;
+     * they must obey XLEN even when no explicit -march was requested. */
+    if (strcmp(op, "negw") == 0 ||
+        strcmp(op, "fmv.x.d") == 0 || strcmp(op, "fmv.d.x") == 0 ||
+        strcmp(op, "fcvt.d.l") == 0 || strcmp(op, "fcvt.d.lu") == 0 ||
+        strcmp(op, "fcvt.l.d") == 0 || strcmp(op, "fcvt.lu.d") == 0)
+        return true;
+
+    /* RV32A supports 32-bit AMOs, not the 64-bit .d forms. Restrict the
+     * suffix check to atomic families: e.g. FLD/ FSD are legal on RV32D,
+     * and RV32V can use vector element widths larger than XLEN. */
+    if (strncmp(op, "amo", 3U) == 0 || strncmp(op, "lr.", 3U) == 0 ||
+        strncmp(op, "sc.", 3U) == 0) {
+        const char *width = strstr(op, ".d");
+        return width != NULL && (width[2] == '\0' || width[2] == '.');
+    }
+    return false;
 }
 
 static bool riscv_validate_selected_isa(const MiniAs *as, const char *op,
@@ -250,7 +269,8 @@ static bool riscv_validate_selected_isa(const MiniAs *as, const char *op,
         return false;
     }
     bits = riscv_required_features(op);
-    if (((as->target_options & 2U) != 0U) && (bits & RISCV_ISA_C)) {
+    if (((as->target_options & MINIAS_RISCV_OPTION_NO_RVC) != 0U) &&
+        (bits & RISCV_ISA_C)) {
         (void)snprintf(reason, cap, "disabled-riscv-compressed:%s", op);
         return false;
     }
@@ -267,7 +287,7 @@ static bool riscv_validate_instruction(const MiniAs *as,
     /* Machine feature checks must precede MCInst parsing, but operand
      * decoding and sizing are exclusively the target MCInst hooks. */
     if (!riscv_validate_selected_isa(as, op, reason, cap)) return false;
-    if (MINIAS_RV_STATE(as)->isa_explicit && MINIAS_RV_STATE(as)->target_xlen == 32U &&
+    if (MINIAS_RV_STATE(as)->target_xlen == 32U &&
         is_rv64_only_opcode(op)) {
         (void)snprintf(reason, cap, "riscv32-unsupported-opcode:%s", op);
         return false;
@@ -291,7 +311,7 @@ static bool riscv_validate_common_directive(MiniAs *as, const char *op,
         ".zero", ".space", ".asciz", ".string", ".ascii", ".incbin"
     };
     size_t i;
-    if (!MINIAS_RV_STATE(as)->strict_rv64i ||
+    if (!MINIAS_RV_STATE(as)->strict_isa_directives ||
         (as->sections[(size_t)as->current_section].flags &
          MINIAS_SHF_EXECINSTR) == 0U) return true;
     if (strcmp(op, ".org") == 0) {
@@ -313,18 +333,41 @@ static bool riscv_validate_common_directive(MiniAs *as, const char *op,
 /* The TargetContext stores Tag_File attributes as semantic fields. The ELF
  * attribute blob is derived from them, never edited in place using offsets
  * that depend on which source directive happened to come first. GNU emits
- * stack_align (4) before arch (5), then unaligned_access (6). */
+ * stack_align (4) before arch (5), then unaligned_access (6). Numeric
+ * attributes are ULEB128; treating them as bytes truncates valid values. */
 static void riscv_store_le32(unsigned char *out, uint32_t value) {
     unsigned i;
     for (i = 0U; i != 4U; ++i) out[i] = (unsigned char)(value >> (8U * i));
+}
+
+static size_t riscv_uleb32_size(unsigned value) {
+    size_t size = 1U;
+    while (value >= 128U) {
+        value >>= 7U;
+        ++size;
+    }
+    return size;
+}
+
+static size_t riscv_store_uleb32(unsigned char *out, unsigned value) {
+    size_t size = 0U;
+    do {
+        unsigned char next = (unsigned char)(value & 127U);
+        value >>= 7U;
+        if (value != 0U) next |= 128U;
+        out[size++] = next;
+    } while (value != 0U);
+    return size;
 }
 
 static bool riscv_rebuild_attributes(MiniAs *as, size_t line) {
     MiniAsRiscvState *state = MINIAS_RV_STATE(as);
     const size_t arch_size = strlen(state->arch_attribute_isa) + 1U;
     const size_t size = 17U + arch_size +
-                        (state->stack_align_present ? 2U : 0U) +
-                        (state->unaligned_access_present ? 2U : 0U);
+                        (state->stack_align_present ?
+                            1U + riscv_uleb32_size(state->stack_align) : 0U) +
+                        (state->unaligned_access_present ?
+                            1U + riscv_uleb32_size(state->unaligned_access) : 0U);
     unsigned char *buf = state->target_attributes;
     size_t at = 16U;
     if (size > sizeof(state->target_attributes)) {
@@ -339,14 +382,14 @@ static bool riscv_rebuild_attributes(MiniAs *as, size_t line) {
     riscv_store_le32(buf + 12U, (uint32_t)(size - 11U));
     if (state->stack_align_present) {
         buf[at++] = 4U;
-        buf[at++] = (unsigned char)state->stack_align;
+        at += riscv_store_uleb32(buf + at, state->stack_align);
     }
     buf[at++] = 5U;
     memcpy(buf + at, state->arch_attribute_isa, arch_size);
     at += arch_size;
     if (state->unaligned_access_present) {
         buf[at++] = 6U;
-        buf[at++] = (unsigned char)state->unaligned_access;
+        at += riscv_store_uleb32(buf + at, state->unaligned_access);
     }
     if (at != size) {
         minias_set_error(as, "internal:riscv-attribute-layout");
@@ -356,36 +399,12 @@ static bool riscv_rebuild_attributes(MiniAs *as, size_t line) {
     return true;
 }
 
-/* A selected -march initially arrives as the target profile's canonical
- * Tag_RISCV_arch blob. Decode it once into target semantic state; subsequent
- * .attribute directives never look at serialized byte offsets again. */
-static bool riscv_import_attribute_arch(MiniAs *as,
-                                         const unsigned char *blob, size_t size) {
-    MiniAsRiscvState *state = MINIAS_RV_STATE(as);
-    size_t arch_len = 0U;
-    if (size < 18U || size > sizeof(state->target_attributes) ||
-        blob[0] != 'A' || memcmp(blob + 5U, "riscv", 6U) != 0 ||
-        blob[11U] != 1U || blob[16U] != 5U) {
-        minias_set_error(as, "invalid-riscv-profile-attribute-layout");
-        return false;
-    }
-    while (17U + arch_len < size && blob[17U + arch_len] != 0U)
-        ++arch_len;
-    if (17U + arch_len + 1U != size ||
-        arch_len + 1U > sizeof(state->arch_attribute_isa)) {
-        minias_set_error(as, "invalid-riscv-profile-arch-attribute");
-        return false;
-    }
-    memcpy(state->arch_attribute_isa, blob + 17U, arch_len + 1U);
-    return riscv_rebuild_attributes(as, 0U);
-}
-
 static bool riscv_set_numeric_attribute(MiniAs *as, unsigned tag,
                                         unsigned value, size_t line) {
     MiniAsRiscvState *state = MINIAS_RV_STATE(as);
     bool *present = NULL;
     unsigned *stored = NULL;
-    if (value > 127U || state->target_attributes_size == 0U) {
+    if (state->target_attributes_size == 0U) {
         minias_set_error(as, "riscv-attribute-layout-unavailable:line=%zu", line);
         return false;
     }
@@ -452,8 +471,10 @@ static bool riscv_assemble_attribute(MiniAs *as, const char *args, size_t line) 
     if (strcmp(key, "stack_align") != 0 && strcmp(key, "4") != 0 &&
         strcmp(key, "unaligned_access") != 0 && strcmp(key, "6") != 0)
         goto invalid;
+    errno = 0;
     number = strtoul(value, &end, 0);
-    if (end == value || *end != '\0' || number > 127U)
+    if (end == value || *end != '\0' || errno == ERANGE ||
+        number > UINT32_MAX)
         goto invalid;
     return riscv_set_numeric_attribute(
         as, (strcmp(key, "stack_align") == 0 || strcmp(key, "4") == 0) ? 4U : 6U,
@@ -470,7 +491,7 @@ static bool riscv_target_directive(MiniAs *as, const char *op,
         *handled = true;
         return riscv_assemble_attribute(as, args, line);
     }
-    if (MINIAS_RV_STATE(as)->strict_rv64i && strcmp(op, ".insn") == 0) {
+    if (MINIAS_RV_STATE(as)->strict_isa_directives && strcmp(op, ".insn") == 0) {
         minias_set_error(as, "unsupported-isa-escape:.insn:line=%zu", line);
         return false;
     }
@@ -483,7 +504,7 @@ static bool riscv_target_directive(MiniAs *as, const char *op,
         minias_set_error(as, "unsupported-isa-option:%s:line=%zu", args, line);
         return false;
     }
-    if (MINIAS_RV_STATE(as)->strict_rv64i &&
+    if (MINIAS_RV_STATE(as)->strict_isa_directives &&
         strcmp(args, "pic") != 0 && strcmp(args, "nopic") != 0 &&
         strcmp(args, "push") != 0 && strcmp(args, "pop") != 0 &&
         strcmp(args, "norvc") != 0 && strcmp(args, "norelax") != 0 &&
@@ -498,7 +519,7 @@ static bool riscv_target_directive(MiniAs *as, const char *op,
     } else if (strcmp(args, "nopic") == 0) {
         as->target_options &= ~(uint32_t)MINIAS_RISCV_OPTION_PIC;
     } else if (strcmp(args, "norvc") == 0) {
-        as->target_options |= 2U; /* Disable explicit C instructions. */
+        as->target_options |= MINIAS_RISCV_OPTION_NO_RVC;
     } else if (strcmp(args, "push") == 0) {
         if (MINIAS_RV_STATE(as)->option_depth >=
             sizeof(MINIAS_RV_STATE(as)->option_stack) /
@@ -615,25 +636,29 @@ static bool riscv_init_target_state(MiniAs *as,
     if (config->target_profile_size != 0U) {
         memcpy(&profile, config->target_profile, sizeof(profile));
         if (profile.elf32 != config->elf32 ||
-            profile.arch_attribute_size > sizeof(state->target_attributes)) {
+            memchr(profile.arch_attribute_isa, '\0',
+                   sizeof(profile.arch_attribute_isa)) == NULL) {
             free(state);
-            minias_set_error(as, "riscv-target-profile-class-or-attributes");
+            minias_set_error(as, "riscv-target-profile-class-or-isa");
             return false;
         }
         state->strict_i_xlen = profile.strict_i_xlen;
         state->isa_explicit = profile.explicit_isa;
         state->isa_features = profile.features;
-        /* Publish state before calling the target-owned serializer. */
+        /* Profile resolution passes semantic ISA spelling. Only the Target
+         * serializes ELF Tag_File attributes, including later directives. */
+        memcpy(state->arch_attribute_isa, profile.arch_attribute_isa,
+               sizeof(profile.arch_attribute_isa));
         as->target_state = state;
-        if (profile.arch_attribute_size != 0U &&
-            !riscv_import_attribute_arch(as, profile.arch_attribute,
-                                          profile.arch_attribute_size)) {
+        if (profile.arch_attribute_isa[0] != '\0' &&
+            !riscv_rebuild_attributes(as, 0U)) {
             free(state);
             as->target_state = NULL;
             return false;
         }
     }
-    state->strict_rv64i = state->strict_i_xlen != 0U || state->isa_explicit;
+    state->strict_isa_directives = state->strict_i_xlen != 0U ||
+                                   state->isa_explicit;
     as->target_state = state;
     return true;
 }

@@ -25,8 +25,9 @@ typedef struct MiniAsRiscvProfile {
     unsigned strict_i_xlen;
     bool explicit_isa;
     uint64_t features;
-    unsigned char arch_attribute[512];
-    size_t arch_attribute_size;
+    /* Canonical target ISA spelling, not a serialized ELF vendor section.
+     * Object output owns the one and only attribute serializer. */
+    char arch_attribute_isa[512];
 } MiniAsRiscvProfile;
 
 bool minias_riscv_resolve_profile(const char *march, const char *mabi,

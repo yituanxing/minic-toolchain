@@ -276,13 +276,7 @@ enum {
     A64_MC_CMP_IMM,
     A64_MC_CMN_REG,
     A64_MC_CMN_IMM,
-    A64_MC_LDR,
     A64_MC_LDR_LITERAL,
-    A64_MC_STR,
-    A64_MC_LDRB,
-    A64_MC_STRB,
-    A64_MC_LDRH,
-    A64_MC_STRH,
     A64_MC_LDST_UNSCALED,
     A64_MC_LDST_SCALED,
     A64_MC_LDST_UNPRIV,
@@ -788,29 +782,28 @@ enum {
 typedef struct A64ScalarMemoryForm {
     unsigned bytes; /* 0: GPR destination determines transfer width */
     unsigned allowed_registers;
-    unsigned scaled_mc_opcode; /* 0: encode preselected target word */
     uint32_t scaled_w;
     uint32_t scaled_x;
 } A64ScalarMemoryForm;
 
 static const A64ScalarMemoryForm a64_scalar_memory_forms[]={
-    {0U,A64_SCALAR_W|A64_SCALAR_X,A64_MC_LDR,
+    {0U,A64_SCALAR_W|A64_SCALAR_X,
         UINT32_C(0xb9400000),UINT32_C(0xf9400000)},
-    {0U,A64_SCALAR_W|A64_SCALAR_X,A64_MC_STR,
+    {0U,A64_SCALAR_W|A64_SCALAR_X,
         UINT32_C(0xb9000000),UINT32_C(0xf9000000)},
-    {1U,A64_SCALAR_W,A64_MC_LDRB,
+    {1U,A64_SCALAR_W,
         UINT32_C(0x39400000),0U},
-    {1U,A64_SCALAR_W,A64_MC_STRB,
+    {1U,A64_SCALAR_W,
         UINT32_C(0x39000000),0U},
-    {2U,A64_SCALAR_W,A64_MC_LDRH,
+    {2U,A64_SCALAR_W,
         UINT32_C(0x79400000),0U},
-    {2U,A64_SCALAR_W,A64_MC_STRH,
+    {2U,A64_SCALAR_W,
         UINT32_C(0x79000000),0U},
-    {4U,A64_SCALAR_X,0U,
+    {4U,A64_SCALAR_X,
         0U,UINT32_C(0xb9800000)},
-    {1U,A64_SCALAR_W|A64_SCALAR_X,0U,
+    {1U,A64_SCALAR_W|A64_SCALAR_X,
         UINT32_C(0x39c00000),UINT32_C(0x39800000)},
-    {2U,A64_SCALAR_W|A64_SCALAR_X,0U,
+    {2U,A64_SCALAR_W|A64_SCALAR_X,
         UINT32_C(0x79c00000),UINT32_C(0x79800000)}
 };
 
@@ -858,6 +851,42 @@ static const A64ScalarMemoryForm *a64_scalar_memory_form(const char *op,
     return NULL;
 }
 
+/* Final layout can change a symbol difference used as a memory displacement.
+ * Resolve such a displacement through the SAME ISA table as ordinary scalar
+ * loads/stores, rather than maintaining an independent six-mnemonic encoder
+ * with a second set of opcode bases and load/store widths.  A positive
+ * displacement takes unsigned-scaled imm12 where possible, otherwise signed
+ * unscaled imm9.  The current deferred parser admits the six simple LDR/STR
+ * W/X/B/H spellings; other table forms use their own fixed typed paths. */
+static bool a64_encode_deferred_scalar_memory(const MiniAsMCInst *inst,
+                                               int64_t offset,
+                                               bool *matched,
+                                               uint32_t *word) {
+    unsigned i;
+    bool wide=inst->operands[0].register_64;
+    uint32_t original=inst->encoding;
+    *matched=false;
+    for(i=0U;i<sizeof(a64_scalar_memory_forms)/
+                   sizeof(a64_scalar_memory_forms[0]);++i) {
+        const A64ScalarMemoryForm *form=&a64_scalar_memory_forms[i];
+        unsigned unit=form->bytes?form->bytes:(wide?8U:4U);
+        if(original!=(wide?form->scaled_x:form->scaled_w))continue;
+        *matched=true;
+        if(offset>=0 && offset%(int64_t)unit==0 &&
+           offset/(int64_t)unit<=4095) {
+            *word=original|((uint32_t)(offset/(int64_t)unit)<<10U);
+            return true;
+        }
+        if(offset>=-256 && offset<=255) {
+            *word=(original-UINT32_C(0x01000000))|
+                  (((uint32_t)offset&511U)<<12U);
+            return true;
+        }
+        return false;
+    }
+    return false;
+}
+
 static bool a64_parse_scalar_memory(MiniAsMCInst *inst,const char *op,
                                    char t[4][384],unsigned n) {
     unsigned policy,rd,base,mode,regbase,index,option,unitshift,unit;
@@ -903,8 +932,7 @@ static bool a64_parse_scalar_memory(MiniAsMCInst *inst,const char *op,
                              mode==2U?UINT32_C(0x400):0U);
         }else {
             if(offset/(int64_t)unit>4095)return false;
-            inst->opcode=form->scaled_mc_opcode?
-                         form->scaled_mc_opcode:A64_MC_LDST_SCALED;
+            inst->opcode=A64_MC_LDST_SCALED;
             inst->count=3U;
             inst->encoding=base_opcode;
             offset/=(int64_t)unit;
@@ -3762,10 +3790,6 @@ lane_complete:;
      * The AArch64 integer/memory family is parsed into typed operands.
      * No instruction is silently translated through a RISC-V pipeline.
      */
-    /* End parser return follows. */
-    if(0) {
-        /* The AArch64 integer/memory family is parsed into typed operands. */
-    }
     if(deferred_use!=A64_DEFERRED_NONE) {
         MiniAsMCOperand *slot;
         if(inst->count>=5U) {
@@ -3811,9 +3835,6 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
             case A64_MC_ADD_IMM: case A64_MC_SUB_IMM:
             case A64_MC_ADDS_IMM: case A64_MC_SUBS_IMM:
             case A64_MC_CMP_IMM: case A64_MC_CMN_IMM:
-            case A64_MC_LDR: case A64_MC_STR:
-            case A64_MC_LDRB: case A64_MC_STRB:
-            case A64_MC_LDRH: case A64_MC_STRH:
             case A64_MC_LDST_SCALED: case A64_MC_LDST_UNSCALED:
             case A64_MC_STP: case A64_MC_LDP: case A64_MC_LDPSW:
             case A64_MC_B: case A64_MC_BL:
@@ -4020,8 +4041,12 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
                 (int64_t)target->value<INT64_MIN-expr->addend)) {
                 minias_set_error(as,"aarch64-adr-overflow");return false;
             }
-            displacement=(int64_t)target->value+expr->addend-
-                         (int64_t)stmt->offset;
+            displacement=(int64_t)target->value+expr->addend;
+            if(displacement<INT64_MIN+(int64_t)stmt->offset) {
+                minias_set_error(as,"aarch64-adr-pcrel-overflow");
+                return false;
+            }
+            displacement-=(int64_t)stmt->offset;
             if(displacement<-(INT64_C(1)<<20U) ||
                displacement>=(INT64_C(1)<<20U)) {
                 minias_set_error(as,"aarch64-adr-range");return false;
@@ -4428,6 +4453,20 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
             break;
         case A64_MC_LDST_SCALED:
             if(has_deferred) {
+                /* Scalar memory uses the shared target ISA descriptor;
+                 * floating-point S/D/Q retains its own width bank. */
+                bool scalar_matched;
+                if(a64_encode_deferred_scalar_memory(inst,deferred_value,
+                                                     &scalar_matched,&code)) {
+                    code|=(inst->operands[1].reg<<5U)|inst->operands[0].reg;
+                    break;
+                }
+                if(scalar_matched) {
+                    minias_set_error(as,
+                        "aarch64-final-memory-offset-out-of-range:line=%zu",
+                        stmt->line);
+                    return false;
+                }
                 uint32_t base=inst->encoding&~UINT32_C(0x00400000);
                 unsigned unit=base==UINT32_C(0xbd000000)?4U:
                               base==UINT32_C(0xfd000000)?8U:
@@ -4465,54 +4504,6 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
                                             inst->operands[2].immediate)&511U)<<12U) |
                 (inst->operands[1].reg<<5U)|inst->operands[0].reg;
             break;
-        case A64_MC_LDR:
-        case A64_MC_STR:
-        case A64_MC_LDRB:
-        case A64_MC_STRB:
-        case A64_MC_LDRH:
-        case A64_MC_STRH: {
-            bool sf = inst->operands[0].register_64;
-            uint32_t base =
-                inst->opcode == A64_MC_LDR ? (sf ? UINT32_C(0xf9400000) : UINT32_C(0xb9400000)) :
-                inst->opcode == A64_MC_STR ? (sf ? UINT32_C(0xf9000000) : UINT32_C(0xb9000000)) :
-                inst->opcode == A64_MC_LDRB ? UINT32_C(0x39400000) :
-                inst->opcode == A64_MC_STRB ? UINT32_C(0x39000000) :
-                inst->opcode == A64_MC_LDRH ? UINT32_C(0x79400000) :
-                                              UINT32_C(0x79000000);
-            if(has_deferred) {
-                unsigned unit=(inst->opcode==A64_MC_LDRB ||
-                               inst->opcode==A64_MC_STRB)?1U:
-                              (inst->opcode==A64_MC_LDRH ||
-                               inst->opcode==A64_MC_STRH)?2U:sf?8U:4U;
-                if(deferred_value>=0 && deferred_value%(int64_t)unit==0 &&
-                   deferred_value/(int64_t)unit<=4095) {
-                    code=base |
-                         ((uint32_t)(deferred_value/(int64_t)unit)<<10U) |
-                         (inst->operands[1].reg<<5U)|inst->operands[0].reg;
-                }else if(deferred_value>=-256 && deferred_value<=255) {
-                    uint32_t unscaled;
-                    /* Standard A64 LD/ST unscaled encodings replace the
-                     * unsigned-imm12 family, retaining width/load bits. */
-                    unscaled=(inst->opcode==A64_MC_LDR ?
-                              (sf?UINT32_C(0xf8400000):UINT32_C(0xb8400000)):
-                              inst->opcode==A64_MC_STR ?
-                              (sf?UINT32_C(0xf8000000):UINT32_C(0xb8000000)):
-                              inst->opcode==A64_MC_LDRB?UINT32_C(0x38400000):
-                              inst->opcode==A64_MC_STRB?UINT32_C(0x38000000):
-                              inst->opcode==A64_MC_LDRH?UINT32_C(0x78400000):
-                                                       UINT32_C(0x78000000));
-                    code=unscaled |
-                         (((uint32_t)deferred_value&511U)<<12U) |
-                         (inst->operands[1].reg<<5U)|inst->operands[0].reg;
-                }else {
-                    minias_set_error(as,"aarch64-final-memory-offset-out-of-range:line=%zu",
-                                     stmt->line);
-                    return false;
-                }
-            }else code = base | ((uint32_t)inst->operands[2].immediate << 10U) |
-                        (inst->operands[1].reg << 5U) | inst->operands[0].reg;
-            break;
-        }
         case A64_MC_STP:
         case A64_MC_LDP:
         case A64_MC_LDPSW: {
