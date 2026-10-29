@@ -1676,6 +1676,12 @@ bool minias_emit_mc_data(MiniAs *as,const MiniAsStmt *stmt) {
         minias_set_error(as,"invalid-mc-data-layout:line=%zu",stmt->line);
         return false;
     }
+    if(!as->emitting_fragment || as->active_encode_result==NULL ||
+       as->emitting_fragment_id>=as->stmt_count ||
+       &as->stmts[as->emitting_fragment_id]!=stmt) {
+        minias_set_error(as,"mcdata-emission-without-fragment");
+        return false;
+    }
     for(i=0U;i<data->count;++i) {
         const MiniAsMCExpr *x=&data->fields[i];
         const MiniAsSymbol *lhs=NULL,*rhs=NULL;
@@ -1688,7 +1694,10 @@ bool minias_emit_mc_data(MiniAs *as,const MiniAsStmt *stmt) {
                              x->kind==MINIAS_MC_EXPR_DIFFERENCE ||
                              x->kind==MINIAS_MC_EXPR_DIFFERENCE_DIV;
         uint64_t value=x->constant;
-        uint64_t at=(uint64_t)as->sections[(size_t)stmt->section].size;
+        /* The Section cursor stays unchanged until this DATA fragment's
+         * transaction commits. Locate '.' from the owned fragment offset
+         * plus bytes already staged in the same result. */
+        uint64_t at=stmt->offset+as->active_encode_result->byte_count;
         bool literal=x->kind==MINIAS_MC_EXPR_CONSTANT;
         unsigned j;
         unsigned char bytes[8];

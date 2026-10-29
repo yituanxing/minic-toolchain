@@ -405,6 +405,10 @@ typedef struct MiniAsEncodeFixupRequest {
     MiniAsFixupKind kind;
     unsigned width;
     MiniAsSymbolRef symbol_ref;
+    /* Common MCData may refer to a final parse-site SymbolID without
+     * recreating its textual symbol name. Targets continue using NameIds. */
+    bool has_symbol_index;
+    size_t symbol_index;
     bool prefer_section_symbol;
 } MiniAsEncodeFixupRequest;
 
@@ -419,6 +423,14 @@ typedef struct MiniAsEncodeResult {
     unsigned char *bytes;
     size_t byte_count;
     size_t byte_capacity;
+    /* Large immutable .incbin/.ascii data is borrowed until this fragment
+     * commits. Repeated fills/patterns stay compact instead of allocating
+     * a second potentially huge temporary output buffer. */
+    const unsigned char *borrowed_bytes;
+    unsigned char repeat_pattern[8];
+    size_t repeat_count;
+    unsigned repeat_width;
+    bool repeat_ignore_nobits_fill;
     MiniAsEncodeFixupRequest *fixups;
     size_t fixup_count;
     size_t fixup_capacity;
@@ -495,13 +507,12 @@ typedef struct MiniAs {
     MiniAsFixup *fixups;
     size_t fixup_count;
     size_t fixup_capacity;
-    /* Set only while emitting one persistent, numbered MC fragment.
-     * Targets can use legacy append() during migration but never own the
-     * fixup's final section offset. */
+    /* All source Fragments stage bytes/fills/fixups before Common commits.
+     * CFI/.reloc/DWARF are deliberately separate, section-owned operations.
+     * The commit guard prevents the final materializer from re-staging. */
     bool emitting_fragment;
+    bool committing_fragment;
     size_t emitting_fragment_id;
-    /* Active fragment transaction, not globally committed Section state. */
-    bool capture_instruction_bytes;
     MiniAsEncodeResult *active_encode_result;
     MiniAsLiteral *literals;
     size_t literal_count;

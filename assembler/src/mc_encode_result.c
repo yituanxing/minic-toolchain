@@ -11,7 +11,7 @@
  */
 static MiniAsEncodeResult *active_result(MiniAs *as, const char *operation) {
     if (as == NULL || !as->emitting_fragment ||
-        !as->capture_instruction_bytes || as->active_encode_result == NULL ||
+        as->active_encode_result == NULL ||
         as->emitting_fragment_id >= as->stmt_count) {
         if (as != NULL)
             minias_set_error(as, "encode-result-without-fragment:%s",
