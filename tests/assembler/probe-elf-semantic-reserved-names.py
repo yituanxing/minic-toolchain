@@ -40,7 +40,14 @@ def main():
     with tempfile.TemporaryDirectory(prefix="minias-elf-reserved-") as temp:
         root = pathlib.Path(temp)
         for label, value in (("first", 0x11), ("second", 0x22)):
-            source = f'.section .payload_table_name,"a",@progbits\n.byte {value}\n'
+            # GAS omits .symtab/.strtab entirely for symbol-free objects.
+            # Force a real canonical symbol table before forging a second,
+            # user-data section with a colliding *name*.  The prior fixture
+            # assumed the generated tables existed and failed in CI before
+            # exercising the comparator at all.
+            source = ('.text\n.globl canonical_export\n'
+                      'canonical_export:\nnop\n'
+                      f'.section .payload_table_name,"a",@progbits\n.byte {value}\n')
             subprocess.run(["as", "--64", "-o", str(root / f"{label}.o"), "-"],
                            input=source, text=True, check=True)
         for collision in (".symtab", ".strtab", ".shstrtab"):
