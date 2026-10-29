@@ -355,16 +355,19 @@ static bool rv64_scalar_gpr_call_argument_supported(
 }
 
 /* ABI legality is independent of whether the callee address is a symbol or
- * an SSA pointer. One checked CoreCallView, one RV64 cursor, and one transfer
- * shape checker cover both. Only the intentionally unsupported *indirect*
+ * an SSA pointer. One checked CoreCallView, one immutable RV64 prepared
+ * placement and one transfer shape checker cover both. We must not rerun a
+ * default LP64D cursor here: the frame/caller may target soft-float LP64.
+ * Only the intentionally unsupported *indirect*
  * unnamed-record path remains a policy difference: its machine emitter does
  * not yet transport those aggregates. Never widen admission ahead of emit. */
 static bool rv64_core_call_arguments_supported(
     const MinicC0Program *program, const MinicCoreFunction *function,
-    const MinicCoreCallView *call, MinicRiscv64AbiCursor *cursor,
+    const MinicCoreCallView *call, const MinicRiscv64PreparedCall *prepared,
     bool direct_call) {
     size_t index;
-    if (program == NULL || function == NULL || call == NULL || cursor == NULL ||
+    if (program == NULL || function == NULL || call == NULL || prepared == NULL ||
+        prepared->argument_count != call->argument_count ||
         call->argument_count > function->call_argument_count ||
         call->argument_begin > function->call_argument_count ||
         call->argument_count > function->call_argument_count - call->argument_begin ||
@@ -374,7 +377,7 @@ static bool rv64_core_call_arguments_supported(
         return false;
     for (index = 0U; index < call->argument_count; ++index) {
         const MinicCoreCallArgument *argument = &call->arguments[index];
-        MinicRiscv64AbiArgumentLocation location;
+        const MinicRiscv64AbiArgumentLocation location = prepared->arguments[index];
         MinicType actual_type, type;
         const bool fixed = index < call->parameter_count;
         if (!minic_core_call_view_argument_type(function, call, index, &actual_type))
@@ -384,8 +387,6 @@ static bool rv64_core_call_arguments_supported(
             (!call->is_variadic ||
              (!minic_riscv64_scalar_type(type) &&
               (!direct_call || !minic_type_is_record(type)))))
-            return false;
-        if (!minic_riscv64_abi_place_argument(program, type, fixed, cursor, &location))
             return false;
         if (minic_riscv64_scalar_type(type)) {
             if (argument->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
@@ -479,11 +480,10 @@ static bool rv64_core_call_return_supported(
 bool minic_riscv64_core_direct_call_supported(const MinicC0Program *program,
                                        const MinicCoreFunction *function,
                                        const MinicCoreInstruction *instruction,
-                                       const MinicCoreCallView *semantic_view) {
+                                       const MinicCoreCallView *semantic_view,
+                                       const MinicRiscv64PreparedCall *prepared) {
     MinicCoreCallView call;
     const MinicCoreCallee *callee;
-    MinicRiscv64AbiCursor cursor;
-    MinicRiscv64AbiValue return_value;
     size_t argument_index;
 
     /* The already-admitted Common FunctionPlan supplies an immutable
@@ -519,12 +519,11 @@ bool minic_riscv64_core_direct_call_supported(const MinicC0Program *program,
         }
         return true;
     }
-    if (!minic_riscv64_abi_cursor_initialize_for_return(
-            program, call.return_type, &cursor, &return_value) ||
-        !rv64_core_call_return_supported(&call, &return_value)) {
+    if (prepared == NULL ||
+        !rv64_core_call_return_supported(&call, &prepared->return_value)) {
         return false;
     }
-    return rv64_core_call_arguments_supported(program, function, &call, &cursor, true);
+    return rv64_core_call_arguments_supported(program, function, &call, prepared, true);
 }
 
 /* M151_INDIRECT_CALL_BATCH_OWNER: validate indirect arguments through the
@@ -532,11 +531,10 @@ bool minic_riscv64_core_direct_call_supported(const MinicC0Program *program,
 bool minic_riscv64_core_indirect_call_supported(const MinicC0Program *program,
                                          const MinicCoreFunction *function,
                                          const MinicCoreInstruction *instruction,
-                                         const MinicCoreCallView *semantic_view) {
+                                         const MinicCoreCallView *semantic_view,
+                                         const MinicRiscv64PreparedCall *prepared) {
     MinicCoreCallView call;
     const MinicCoreCallSignature *signature;
-    MinicRiscv64AbiCursor cursor;
-    MinicRiscv64AbiValue return_value;
     size_t argument_index;
 
     if (!(semantic_view != NULL ? (call = *semantic_view, true) :
@@ -570,12 +568,11 @@ bool minic_riscv64_core_indirect_call_supported(const MinicC0Program *program,
         }
         return true;
     }
-    if (!minic_riscv64_abi_cursor_initialize_for_return(
-            program, call.return_type, &cursor, &return_value) ||
-        !rv64_core_call_return_supported(&call, &return_value)) {
+    if (prepared == NULL ||
+        !rv64_core_call_return_supported(&call, &prepared->return_value)) {
         return false;
     }
-    return rv64_core_call_arguments_supported(program, function, &call, &cursor, false);
+    return rv64_core_call_arguments_supported(program, function, &call, prepared, false);
 }
 
 

@@ -180,3 +180,84 @@ const MinicTargetAsmSourcePolicy minic_loongarch64_asm_source_policy = {
 const MinicTargetMachineBuiltinPolicy minic_loongarch64_machine_builtin_policy = {
     .signature = loong_machine_builtin_signature,
 };
+
+/* Linux 6.6 __SYSCALL_DEFINEx constructs exactly this named symbol family:
+ * sys_SUFFIX is a GNU alias of __se_sys_SUFFIX. The latter receives full
+ * signed long (or signed long long for __SC_LONG's 64-bit exceptional case)
+ * register words, then performs the source-C type conversions internally.
+ * This exception is NOT an implicit C cast and must never admit arbitrary
+ * 8-byte aliases simply because their pointers/integers fit in a GPR. */
+static bool loong_syscall_alias_names_match(const MinicFunction *alias,
+                                            const MinicFunction *owner) {
+    static const char public_prefix[] = "sys_";
+    static const char sanitizer_prefix[] = "__se_sys_";
+    const char *name, *sanitizer;
+    if (alias == NULL || owner == NULL || alias->name == NULL || owner->name == NULL)
+        return false;
+    name = alias->name;
+    sanitizer = owner->name;
+    if (strncmp(name, public_prefix, sizeof(public_prefix) - 1U) != 0 ||
+        strncmp(sanitizer, sanitizer_prefix,
+                sizeof(sanitizer_prefix) - 1U) != 0 ||
+        name[sizeof(public_prefix) - 1U] == '\0' ||
+        strcmp(name + sizeof(public_prefix) - 1U,
+               sanitizer + sizeof(sanitizer_prefix) - 1U) != 0)
+        return false;
+    /* GNU's source names and ELF symbol identities must agree. Do not let
+     * unrelated C declarations fake a kernel syscall family through an
+     * asm-label override that would escape this restricted ABI exception. */
+    return (alias->assembler_name == NULL ||
+            strcmp(alias->assembler_name, name) == 0) &&
+           (owner->assembler_name == NULL ||
+            strcmp(owner->assembler_name, sanitizer) == 0);
+}
+
+static bool loong_syscall_alias_word_pair(const MinicTargetInfo *target,
+                                          const MinicC0Program *program,
+                                          MinicType public_type,
+                                          MinicType sanitizer_type) {
+    size_t public_size, sanitizer_size;
+    if ((!minic_type_is_integer(public_type) &&
+         !minic_type_is_pointer(public_type)) ||
+        !minic_type_is_integer(sanitizer_type) ||
+        sanitizer_type.integer_sign != MINIC_INTEGER_SIGN_SIGNED ||
+        (sanitizer_type.integer_rank != MINIC_INTEGER_RANK_LONG &&
+         sanitizer_type.integer_rank != MINIC_INTEGER_RANK_LONG_LONG) ||
+        !minic_target_info_sizeof_type(target, program, public_type,
+                                       &public_size) ||
+        !minic_target_info_sizeof_type(target, program, sanitizer_type,
+                                       &sanitizer_size))
+        return false;
+    return public_size != 0U && public_size <= 8U && sanitizer_size == 8U;
+}
+
+static bool loong_syscall_alias_abi_compatible(
+    const MinicTargetInfo *target, const MinicC0Program *program,
+    const MinicFunction *alias, const MinicFunction *owner) {
+    size_t i;
+    if (target == NULL || target->architecture != MINIC_TARGET_ARCH_LOONGARCH64 ||
+        program == NULL || alias == NULL || owner == NULL ||
+        alias->parameter_count == 0U || alias->parameter_count > 6U ||
+        alias->parameter_count != owner->parameter_count ||
+        alias->is_defined || !owner->is_defined ||
+        alias->is_variadic || owner->is_variadic ||
+        alias->is_internal || owner->is_internal ||
+        !loong_syscall_alias_names_match(alias, owner) ||
+        !minic_type_equal(alias->return_type, minic_type_long()) ||
+        !minic_type_equal(owner->return_type, minic_type_long()))
+        return false;
+    for (i = 0U; i < alias->parameter_count; ++i) {
+        if (minic_c0_types_compatible(
+                program, alias->parameter_types[i], owner->parameter_types[i]))
+            continue;
+        if (!loong_syscall_alias_word_pair(target, program,
+                                           alias->parameter_types[i],
+                                           owner->parameter_types[i]))
+            return false;
+    }
+    return true;
+}
+
+const MinicTargetAliasAbiPolicy minic_loongarch64_alias_abi_policy = {
+    .allow_incompatible_prototypes = loong_syscall_alias_abi_compatible,
+};

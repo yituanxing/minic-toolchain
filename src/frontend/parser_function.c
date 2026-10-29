@@ -289,13 +289,12 @@ static bool consume_function_attribute(MinicParser *parser,
         MinicSourceSpan literal;
         const char *value;
         size_t length;
-        static const char *const safe_scalar_targets[] = {
-            "default", "bmi2", "popcnt", "lzcnt",
-            /* Linux 6.6 Zstd BMI2_TARGET_ATTRIBUTE expands to these three
-             * optional scalar x86 feature names in one GCC target string. */
-            "lzcnt,bmi,bmi2"
-        };
-        size_t index;
+        MinicTargetGnuFunctionAttributeKind target_kind =
+            descriptor->kind == MINIC_ATTRIBUTE_NOCF_CHECK
+                ? MINIC_TARGET_GNU_FUNCTION_NOCF_CHECK
+                : descriptor->kind == MINIC_ATTRIBUTE_INDIRECT_BRANCH
+                    ? MINIC_TARGET_GNU_FUNCTION_INDIRECT_BRANCH
+                    : MINIC_TARGET_GNU_FUNCTION_TARGET_CPU;
 
         if (!minic_target_info_gnu_function_security_attribute_supported(
                 parser->target_info,
@@ -313,7 +312,8 @@ static bool consume_function_attribute(MinicParser *parser,
                 minic_parser_error(parser, "GNU nocf_check takes no arguments");
                 return false;
             }
-            return true;
+            return minic_target_info_gnu_function_security_attribute_value_supported(
+                parser->target_info, target_kind, NULL, 0U);
         }
         if (!function_attribute_argument_token(
                 parser, attribute, MINIC_TOKEN_STRING_LITERAL, &literal) ||
@@ -328,24 +328,18 @@ static bool consume_function_attribute(MinicParser *parser,
             /* GCC's `keep` preserves ordinary indirect branches for marked
              * functions. MiniC presently emits those ordinary branches and
              * has no thunk/retpoline generator to select per declaration. */
-            if (length == 4U && memcmp(value, "keep", 4U) == 0)
+            if (minic_target_info_gnu_function_security_attribute_value_supported(
+                    parser->target_info, target_kind, value, length))
                 return true;
             minic_parser_error(parser,
                 "GNU indirect_branch policy requires supported value 'keep'");
             return false;
         }
-        /* MiniC emits baseline x86 scalar integer instructions for these
-         * optional scalar extensions; target("bmi2") does not demand BMI2
-         * instructions or a different call ABI. Do not admit no-sse /
-         * general-regs-only: those would constrain our existing FP backend.
-         * Vector, ABI-changing and unrecognized strings fail closed. */
-        for (index = 0U;
-             index < sizeof(safe_scalar_targets) / sizeof(safe_scalar_targets[0]);
-             ++index) {
-            if (length == strlen(safe_scalar_targets[index]) &&
-                memcmp(value, safe_scalar_targets[index], length) == 0)
-                return true;
-        }
+        /* ISA/feature vocabulary is target owned. Frontend only confirms
+         * one string-literal attribute argument and diagnoses rejection. */
+        if (minic_target_info_gnu_function_security_attribute_value_supported(
+                parser->target_info, target_kind, value, length))
+            return true;
         minic_parser_error(parser,
             "GNU x86 target attribute requests an unsupported machine policy");
         return false;

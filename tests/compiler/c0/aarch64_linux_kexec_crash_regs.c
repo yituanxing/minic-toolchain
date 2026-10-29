@@ -7,8 +7,29 @@ struct arm64_crash_regs {
     u64 sp, pc, pstate;
 };
 
+/* Compile-only large-frame oracle. These volatile reads force many Core
+ * intermediate values before the original GNU register-snapshot ASM,
+ * pushing its input SSA pointer beyond the 4-KiB text-legalizer boundary.
+ * Never execute this variant: it deliberately perturbs the pointer. */
+#ifdef MINIC_CRASH_LARGE_SSA
+extern volatile u64 minic_crash_stress_value;
+#define MINI_STRESS_1(p) ((struct arm64_crash_regs *)((u64)(p) ^ minic_crash_stress_value))
+#define MINI_STRESS_2(p) MINI_STRESS_1(MINI_STRESS_1(p))
+#define MINI_STRESS_4(p) MINI_STRESS_2(MINI_STRESS_2(p))
+#define MINI_STRESS_8(p) MINI_STRESS_4(MINI_STRESS_4(p))
+#define MINI_STRESS_16(p) MINI_STRESS_8(MINI_STRESS_8(p))
+#define MINI_STRESS_32(p) MINI_STRESS_16(MINI_STRESS_16(p))
+#define MINI_STRESS_64(p) MINI_STRESS_32(MINI_STRESS_32(p))
+#define MINI_STRESS_128(p) MINI_STRESS_64(MINI_STRESS_64(p))
+#define MINI_STRESS_256(p) MINI_STRESS_128(MINI_STRESS_128(p))
+#define MINI_STRESS_512(p) MINI_STRESS_256(MINI_STRESS_256(p))
+#endif
+
 void arm64_crash_setup_regs(struct arm64_crash_regs *newregs) {
     u64 tmp1, tmp2;
+#ifdef MINIC_CRASH_LARGE_SSA
+    newregs = MINI_STRESS_512(newregs);
+#endif
     __asm__ __volatile__ (
         "stp\t x0,   x1, [%2, #16 *  0]\n"
         "stp\t x2,   x3, [%2, #16 *  1]\n"

@@ -55,3 +55,62 @@ const MinicTargetAsmSourcePolicy minic_aarch64_asm_source_policy = {
     .immediate_diagnostic =
         "GNU asm 'I' input requires an AArch64 unsigned imm12 (optional shift 12)",
 };
+
+/* These five names are opaque C header identities, not a vector storage,
+ * arithmetic, or function-call PCS implementation. A source declaration
+ * may mention them only while the selected target explicitly advertises
+ * header-only opaque vector declarations. */
+static bool aarch_named_header_builtin(const MinicTargetInfo *target,
+                                       const char *name, size_t length,
+                                       MinicType *type) {
+    static const struct {
+        const char *name;
+        MinicTypeBaseKind kind;
+    } names[] = {
+        {"__Float32x4_t", MINIC_TYPE_BASE_AARCH64_FLOAT32X4},
+        {"__Float64x2_t", MINIC_TYPE_BASE_AARCH64_FLOAT64X2},
+        {"__SVFloat32_t", MINIC_TYPE_BASE_AARCH64_SVE_FLOAT32},
+        {"__SVFloat64_t", MINIC_TYPE_BASE_AARCH64_SVE_FLOAT64},
+        {"__SVBool_t", MINIC_TYPE_BASE_AARCH64_SVE_BOOL}
+    };
+    size_t i;
+    for (i = 0U; i < sizeof(names) / sizeof(names[0]); ++i) {
+        if (aarch_register_is(name, length, names[i].name) &&
+            minic_target_info_language_type_supported(target, names[i].kind)) {
+            if (type != NULL)
+                *type = minic_type_aarch64_header_builtin(names[i].kind);
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool aarch_header_opaque_return(const MinicTargetInfo *target,
+                                       MinicType type) {
+    if (type.pointer_depth != 0U ||
+        !minic_target_info_language_type_supported(target, type.base_kind))
+        return false;
+    switch (type.base_kind) {
+    case MINIC_TYPE_BASE_AARCH64_FLOAT32X4:
+    case MINIC_TYPE_BASE_AARCH64_FLOAT64X2:
+    case MINIC_TYPE_BASE_AARCH64_SVE_FLOAT32:
+    case MINIC_TYPE_BASE_AARCH64_SVE_FLOAT64:
+    case MINIC_TYPE_BASE_AARCH64_SVE_BOOL:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static bool aarch_header_attribute(const MinicTargetInfo *target,
+                                   const char *name, size_t length) {
+    return (target->language_type_capabilities &
+            MINIC_TARGET_LANG_OPAQUE_VECTOR_HEADER_DECLARATIONS) != 0U &&
+           aarch_register_is(name, length, "__aarch64_vector_pcs__");
+}
+
+const MinicTargetSourceLanguagePolicy minic_aarch64_source_language_policy = {
+    .named_builtin_type = aarch_named_header_builtin,
+    .header_opaque_return = aarch_header_opaque_return,
+    .header_attribute = aarch_header_attribute,
+};

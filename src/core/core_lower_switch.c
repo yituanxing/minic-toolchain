@@ -224,58 +224,21 @@ static bool core_switch_label_has_function_reentry(
     const MinicCoreLowerContext *context, MinicStatementId label_id) {
     const MinicC0Program *program;
     const MinicStatement *label;
-    size_t index;
+    MinicCoreReentryQuery query;
 
-    if (context == NULL || context->body == NULL || context->body->program == NULL) {
-        return false;
-    }
+    if (context == NULL || context->body == NULL ||
+        context->body->program == NULL) return false;
     program = context->body->program;
     label = minic_c0_program_statement(program, label_id);
-    if (label == NULL || label->kind != MINIC_STATEMENT_LABEL) {
-        return false;
-    }
-    if (minic_core_reentry_index_ready(context->reentry_index, program))
-        return minic_core_reentry_index_switch_label_referenced(
-            context->reentry_index, program, label_id);
-    for (index = 0U; index < program->statement_count; ++index) {
-        const MinicStatement *source;
+    if (label == NULL || label->kind != MINIC_STATEMENT_LABEL) return false;
 
-        source = minic_c0_program_statement(program, index);
-        if (source == NULL) {
-            return false;
-        }
-        if (source->kind == MINIC_STATEMENT_GOTO &&
-            source->expression == MINIC_EXPRESSION_INVALID &&
-            source->target_statement == label_id) {
-            return true;
-        }
-        if (source->kind == MINIC_STATEMENT_INLINE_ASM &&
-            source->inline_asm_id < program->inline_asm_count) {
-            const MinicInlineAsm *inline_asm = &program->inline_asms[source->inline_asm_id];
-            size_t label_index;
-
-            if (!inline_asm->is_goto) {
-                continue;
-            }
-            for (label_index = 0U; label_index < inline_asm->label_count; ++label_index) {
-                if (inline_asm->labels[label_index].target_statement == label_id) {
-                    return true;
-                }
-            }
-        }
-    }
-    for (index = 0U; index < program->expression_count; ++index) {
-        const MinicExpression *expression = minic_c0_program_expression(program, index);
-
-        if (expression == NULL) {
-            return false;
-        }
-        if (expression->kind == MINIC_EXPRESSION_LABEL_ADDRESS &&
-            expression->value.label_statement_id == label_id) {
-            return true;
-        }
-    }
-    return false;
+    (void)memset(&query, 0, sizeof(query));
+    query.label_id = label_id;
+    query.checks = MINIC_CORE_REENTRY_CHECK_EXTERNAL_JUMP |
+                   MINIC_CORE_REENTRY_CHECK_LABEL_ADDRESS;
+    query.purpose = MINIC_CORE_REENTRY_PURPOSE_SWITCH_LABEL;
+    return minic_core_reentry_query(
+        context->reentry_index, program, &query) != 0U;
 }
 
 /* A break nested under an if/compound block still exits the current switch.

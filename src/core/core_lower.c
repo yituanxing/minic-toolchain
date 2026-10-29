@@ -1008,44 +1008,18 @@ bool minic_core_lower_unreachable_external_reentry(
         statement_membership[extra_statement_id] = true;
     }
 
-    unsafe = false;
-    for (source_index = 0U; source_index < program->statement_count && !unsafe;
-         ++source_index) {
-        const MinicStatement *source;
-
-        if (statement_membership[source_index]) {
-            continue;
-        }
-        source = minic_c0_program_statement(program, source_index);
-        if (source == NULL) {
-            unsafe = true;
-            break;
-        }
-        if (source->kind == MINIC_STATEMENT_GOTO &&
-            source->target_statement < program->statement_count &&
-            statement_membership[source->target_statement]) {
-            unsafe = true;
-            break;
-        }
-        if (source->kind == MINIC_STATEMENT_INLINE_ASM &&
-            source->inline_asm_id < program->inline_asm_count) {
-            const MinicInlineAsm *inline_asm;
-            size_t label_index;
-
-            inline_asm = &program->inline_asms[source->inline_asm_id];
-            if (!inline_asm->is_goto) {
-                continue;
-            }
-            for (label_index = 0U; label_index < inline_asm->label_count; ++label_index) {
-                MinicStatementId target;
-
-                target = inline_asm->labels[label_index].target_statement;
-                if (target < program->statement_count && statement_membership[target]) {
-                    unsafe = true;
-                    break;
-                }
-            }
-        }
+    {
+        const MinicCoreReentryQuery query = {
+            .membership = statement_membership,
+            .label_id = MINIC_STATEMENT_INVALID,
+            .checks = MINIC_CORE_REENTRY_CHECK_EXTERNAL_JUMP,
+            .purpose = MINIC_CORE_REENTRY_PURPOSE_UNREACHABLE_TAIL
+        };
+        /* This deliberately uses the weak external-source-edge policy.
+         * CASE dispatch, label addresses and already bound Core blocks are
+         * separate consumers and must not be folded into the same bool. */
+        unsafe = minic_core_reentry_query(
+            context->reentry_index, program, &query) != 0U;
     }
 
     free(visited_blocks);
@@ -1162,70 +1136,34 @@ static bool core_unreferenced_internal_loop_label(
         return false;
     }
 
-    if (minic_core_reentry_index_ready(context->reentry_index, program)) {
-        /* Exact early-exit semantics: referenced labels are never
-         * optimization-only internal while metadata. */
-        if (!minic_core_reentry_index_unreferenced_loop_label(
-                context->reentry_index, program, label_id))
+    {
+        MinicCoreReentryQuery query = {
+            .membership = NULL,
+            .label_id = label_id,
+            .checks = MINIC_CORE_REENTRY_CHECK_EXTERNAL_JUMP |
+                      MINIC_CORE_REENTRY_CHECK_LABEL_ADDRESS,
+            .purpose = MINIC_CORE_REENTRY_PURPOSE_LOOP_LABEL
+        };
+        if (minic_core_reentry_query(
+                context->reentry_index, program, &query) != 0U)
             return false;
-        loop_matches = 0U;
-        for (index = 0U; index < program->statement_count; ++index) {
-            const MinicStatement *candidate =
-                minic_c0_program_statement(program, index);
-            if (candidate == NULL) return false;
-            if (candidate->kind == MINIC_STATEMENT_WHILE &&
-                minic_core_loop_internal_while_label_pair(label, candidate)) {
-                ++loop_matches;
-                if (loop_matches > 1U) return false;
-            }
-        }
-        return loop_matches == 1U;
     }
 
+    /* Reentry and parser ownership are distinct proofs. A label with no
+     * incoming edge is metadata only if exactly one normalized while owns
+     * its source position; the incoming-edge index cannot prove uniqueness. */
     loop_matches = 0U;
     for (index = 0U; index < program->statement_count; ++index) {
-        const MinicStatement *candidate = minic_c0_program_statement(program, index);
-        if (candidate == NULL) {
-            return false;
-        }
+        const MinicStatement *candidate =
+            minic_c0_program_statement(program, index);
+        if (candidate == NULL) return false;
         if (candidate->kind == MINIC_STATEMENT_WHILE &&
             minic_core_loop_internal_while_label_pair(label, candidate)) {
-            loop_matches += 1U;
-            if (loop_matches > 1U) {
-                return false;
-            }
-        }
-        if (candidate->kind == MINIC_STATEMENT_GOTO &&
-            candidate->target_statement == label_id) {
-            return false;
-        }
-        if (candidate->kind == MINIC_STATEMENT_INLINE_ASM &&
-            candidate->inline_asm_id < program->inline_asm_count) {
-            const MinicInlineAsm *inline_asm = &program->inline_asms[candidate->inline_asm_id];
-            size_t label_index;
-            if (inline_asm->is_goto) {
-                for (label_index = 0U; label_index < inline_asm->label_count; ++label_index) {
-                    if (inline_asm->labels[label_index].target_statement == label_id) {
-                        return false;
-                    }
-                }
-            }
+            ++loop_matches;
+            if (loop_matches > 1U) return false;
         }
     }
-    if (loop_matches != 1U) {
-        return false;
-    }
-    for (index = 0U; index < program->expression_count; ++index) {
-        const MinicExpression *expression = minic_c0_program_expression(program, index);
-        if (expression == NULL) {
-            return false;
-        }
-        if (expression->kind == MINIC_EXPRESSION_LABEL_ADDRESS &&
-            expression->value.label_statement_id == label_id) {
-            return false;
-        }
-    }
-    return true;
+    return loop_matches == 1U;
 }
 
 

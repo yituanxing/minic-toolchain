@@ -55,15 +55,27 @@ typedef enum MinicTargetCallCapability {
     MINIC_TARGET_CALL_MS_X64_FIXED_SCALAR = 1U << 0
 } MinicTargetCallCapability;
 
+/* Function-attribute spelling and target value policy are C source-language
+ * admissions, distinct from ISA code-generation and ABI lowering. */
+typedef enum MinicTargetGnuFunctionAttributeKind {
+    MINIC_TARGET_GNU_FUNCTION_NOCF_CHECK = 0,
+    MINIC_TARGET_GNU_FUNCTION_INDIRECT_BRANCH,
+    MINIC_TARGET_GNU_FUNCTION_TARGET_CPU
+} MinicTargetGnuFunctionAttributeKind;
+
 /* Source-level GNU register/constraint admission is owned by each target.
  * This opaque policy is intentionally distinct from machine-ASM emission. */
 struct MinicTargetAsmSourcePolicy;
 struct MinicTargetMachineBuiltinPolicy;
+struct MinicTargetAliasAbiPolicy;
+struct MinicTargetSourceLanguagePolicy;
 
 typedef struct MinicTargetInfo {
     MinicTargetArchitecture architecture;
     const struct MinicTargetAsmSourcePolicy *asm_source_policy;
     const struct MinicTargetMachineBuiltinPolicy *machine_builtin_policy;
+    const struct MinicTargetAliasAbiPolicy *alias_abi_policy;
+    const struct MinicTargetSourceLanguagePolicy *source_language_policy;
     const MinicDataLayout *data_layout;
     const MinicTargetIntegerModel *integer_model;
     MinicType wide_character_type;
@@ -143,6 +155,9 @@ bool minic_target_info_header_attribute_supported(const MinicTargetInfo *target,
  * admission alone never requests an unsupported machine mitigation. */
 bool minic_target_info_gnu_function_security_attribute_supported(
     const MinicTargetInfo *target, const char *attribute, size_t length);
+bool minic_target_info_gnu_function_security_attribute_value_supported(
+    const MinicTargetInfo *target, MinicTargetGnuFunctionAttributeKind kind,
+    const char *value, size_t value_length);
 /* ELF linkage is a source-program property shared by the two LP64 targets.
  * A proven TU-local symbol may use PC-relative addressing in PIC; all other
  * addresses need a target-specific GOT sequence. */

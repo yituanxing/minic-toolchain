@@ -81,7 +81,6 @@ static bool core_block_contains_reentry_label(const MinicCoreLowerContext *conte
     bool *visited_blocks;
     bool *statement_membership;
     bool unsafe;
-    size_t index;
 
     if (context == NULL || context->body == NULL || context->body->program == NULL ||
         block == NULL) {
@@ -107,74 +106,17 @@ static bool core_block_contains_reentry_label(const MinicCoreLowerContext *conte
     unsafe = !core_mark_discarded_if_membership(
         context, block, visited_blocks, statement_membership);
 
-    if (minic_core_reentry_index_ready(context->reentry_index, program)) {
-        minic_core_reentry_index_check_discarded(
-            context->reentry_index, program, statement_membership, &unsafe);
-    } else {
-        /* case/default labels are entered by switch dispatch, independently of
-           lexical fallthrough, so never prune a subtree that owns one. */
-        for (index = 0U; index < program->statement_count && !unsafe; ++index) {
-            const MinicStatement *statement;
-            if (!statement_membership[index]) {
-                continue;
-            }
-            statement = minic_c0_program_statement(program, index);
-            if (statement == NULL || statement->kind == MINIC_STATEMENT_CASE ||
-                statement->kind == MINIC_STATEMENT_DEFAULT) {
-                unsafe = true;
-            }
-        }
-
-        /* Only jumps originating outside the discarded membership are external
-           re-entry. Internal goto/asm-goto edges disappear with the subtree. */
-        for (index = 0U; index < program->statement_count && !unsafe; ++index) {
-            const MinicStatement *source;
-            if (statement_membership[index]) {
-                continue;
-            }
-            source = minic_c0_program_statement(program, index);
-            if (source == NULL) {
-                unsafe = true;
-                break;
-            }
-            if (source->kind == MINIC_STATEMENT_GOTO &&
-                source->target_statement < program->statement_count &&
-                statement_membership[source->target_statement]) {
-                unsafe = true;
-                break;
-            }
-            if (source->kind == MINIC_STATEMENT_INLINE_ASM &&
-                source->inline_asm_id < program->inline_asm_count) {
-                const MinicInlineAsm *inline_asm = &program->inline_asms[source->inline_asm_id];
-                size_t label_index;
-                if (!inline_asm->is_goto) {
-                    continue;
-                }
-                for (label_index = 0U; label_index < inline_asm->label_count; ++label_index) {
-                    MinicStatementId target = inline_asm->labels[label_index].target_statement;
-                    if (target < program->statement_count && statement_membership[target]) {
-                        unsafe = true;
-                        break;
-                    }
-                }
-            }
-        }
-
-        /* An address-taken label may be reached through computed goto from code
-           that is not represented as a direct target edge here. Keep it alive. */
-        for (index = 0U; index < program->expression_count && !unsafe; ++index) {
-            const MinicExpression *expression = minic_c0_program_expression(program, index);
-            if (expression == NULL) {
-                unsafe = true;
-                break;
-            }
-            if (expression->kind == MINIC_EXPRESSION_LABEL_ADDRESS &&
-                expression->value.label_statement_id < program->statement_count &&
-                statement_membership[expression->value.label_statement_id]) {
-                unsafe = true;
-            }
-        }
-
+    if (!unsafe) {
+        MinicCoreReentryQuery query = {
+            .membership = statement_membership,
+            .label_id = MINIC_STATEMENT_INVALID,
+            .checks = MINIC_CORE_REENTRY_CHECK_EXTERNAL_JUMP |
+                      MINIC_CORE_REENTRY_CHECK_LABEL_ADDRESS |
+                      MINIC_CORE_REENTRY_CHECK_CASE_DISPATCH,
+            .purpose = MINIC_CORE_REENTRY_PURPOSE_IF_DISCARDED
+        };
+        unsafe = minic_core_reentry_query(
+            context->reentry_index, program, &query) != 0U;
     }
 
     free(visited_blocks);

@@ -14,7 +14,7 @@ src="$root/tests/compiler/c0/aarch64_linux_kexec_crash_regs.c"
 # PSTATE, and local-label PC. Verify the real target instructions, not a
 # compiler-only placeholder or an abbreviated register dump.
 test "$(grep -c '^  stp x.*\[x0, #' "$work/crash.s")" -eq 16
-grep -Eq '^  ldr x0, \[sp, #[0-9]+\]$' "$work/crash.s"
+grep -Fq '  ldr x0, [x0]' "$work/crash.s"
 pair=0
 while test "$pair" -lt 15; do
     first=$((pair * 2))
@@ -44,6 +44,29 @@ if sed -n '/^  stp x0, x1, \[x0, #0\]/,/^1: stp x10, x9, \[x0, #256\]/p' \
     echo 'AARCH_KEXEC_CRASH=FAIL pre-snapshot-mutation' >&2; exit 1
 fi
 
+# Large owned-slot regression: before the x16/x17 image is saved, the
+# old whole-program [sp,#>4095] textual rewrite secretly materialized an
+# address in x17. A correctly typed input must build its address entirely
+# in x0, then dereference x0 immediately before the first STP. Other
+# compiler-generated temporaries earlier in the function may use x17.
+"$host" -E -P -std=gnu11 -DMINIC_CRASH_LARGE_SSA "$src" \
+    -o "$work/crash-large.i"
+"$mini" --target=aarch64-linux -S "$work/crash-large.i" \
+    -o "$work/crash-large.s"
+awk '
+    /^  stp x0, x1, \[x0, #0\]$/ {
+        found++
+        if (before != "  ldr x0, [x0]" ||
+            before2 != "  add x0, sp, x0" ||
+            before3 !~ /^  movz x0, #[0-9]+$/) bad=1
+    }
+    {before3=before2; before2=before; before=$0}
+    END {if (found != 1 || bad) exit 1}
+' "$work/crash-large.s" || {
+    echo 'AARCH_KEXEC_CRASH=FAIL large-owned-input-scratch' >&2; exit 1;
+}
+grep -Fq '  stp x16, x17, [x0, #128]' "$work/crash-large.s"
+
 for target in x86_64 loongarch64; do
     if "$mini" --target="$target-linux" -S "$work/crash.i" \
         -o "$work/foreign.s" >/dev/null 2>&1; then
@@ -69,7 +92,8 @@ done
 
 if command -v aarch64-linux-gnu-gcc >/dev/null 2>&1; then
     aarch64-linux-gnu-gcc -c "$work/crash.s" -o "$work/crash.o"
-    echo 'AARCH_KEXEC_CRASH=PASS gpr_pairs=15 sp=1 pstate_pc=1 foreign=2 negative=5 GNU_GAS=PASS'
+    aarch64-linux-gnu-gcc -c "$work/crash-large.s" -o "$work/crash-large.o"
+    echo 'AARCH_KEXEC_CRASH=PASS gpr_pairs=15 sp=1 pstate_pc=1 large_frame=PASS foreign=2 negative=5 GNU_GAS=PASS'
 else
-    echo 'AARCH_KEXEC_CRASH=PASS gpr_pairs=15 sp=1 pstate_pc=1 foreign=2 negative=5 GNU_GAS=SKIP'
+    echo 'AARCH_KEXEC_CRASH=PASS gpr_pairs=15 sp=1 pstate_pc=1 large_frame=PASS foreign=2 negative=5 GNU_GAS=SKIP'
 fi

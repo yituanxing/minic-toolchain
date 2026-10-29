@@ -62,3 +62,41 @@ const MinicTargetAsmSourcePolicy minic_x86_64_asm_source_policy = {
     .immediate_may_defer = true,
     .immediate_diagnostic = "GNU asm 'I' input requires an x86 shift count 0..31",
 };
+
+static bool x86_source_function_attribute_name(const char *name, size_t length) {
+    return x86_match(name, length, "nocf_check") ||
+           x86_match(name, length, "__indirect_branch__") ||
+           x86_match(name, length, "__target__");
+}
+
+/* This is a SOURCE policy, not an instruction generation feature request.
+ * `nocf_check` and `indirect_branch(keep)` describe the baseline emitter's
+ * existing non-IBT/no-thunk behavior. The recognized target strings are
+ * allowed only while MiniC continues to generate baseline scalar opcodes:
+ * SIMD, no-SSE, ABI-changing, and unknown machine feature requests reject. */
+static bool x86_source_function_attribute_value(
+    MinicTargetGnuFunctionAttributeKind kind,
+    const char *value, size_t length) {
+    static const char *const scalar_only_targets[] = {
+        "default", "bmi2", "popcnt", "lzcnt", "lzcnt,bmi,bmi2"
+    };
+    size_t i;
+    switch (kind) {
+    case MINIC_TARGET_GNU_FUNCTION_NOCF_CHECK:
+        return value == NULL && length == 0U;
+    case MINIC_TARGET_GNU_FUNCTION_INDIRECT_BRANCH:
+        return value != NULL && x86_match(value, length, "keep");
+    case MINIC_TARGET_GNU_FUNCTION_TARGET_CPU:
+        if (value == NULL) return false;
+        for (i = 0U;
+             i < sizeof(scalar_only_targets) / sizeof(scalar_only_targets[0]); ++i)
+            if (x86_match(value, length, scalar_only_targets[i])) return true;
+        return false;
+    }
+    return false;
+}
+
+const MinicTargetSourceLanguagePolicy minic_x86_64_source_language_policy = {
+    .gnu_function_attribute_name = x86_source_function_attribute_name,
+    .gnu_function_attribute_value = x86_source_function_attribute_value,
+};

@@ -1225,6 +1225,12 @@ SRC
         exit 1
     fi
     grep -Fq 'GNU function alias requires' "$work/invalid-alias.err"
+    # The positive kernel syscall alias above is genuine GNU/QEMU evidence.
+    # The dedicated matrix additionally compares GCC source acceptance with
+    # MiniC's exact Loong-only symbol-family/ABI admission and fail-closed
+    # behavior for unrelated external aliases and unsafe ABI transfers.
+    MINIC_CC="$MINIC_CC" HOST_CC="$cross_cc" \
+        sh "$root/tests/compiler/c0/probe-loongarch64-syscall-alias-policy.sh"
     echo 'MINIC_LOONGARCH64_FORWARD_SYSCALL_ALIAS_GNU_QEMU=PASS'
     cat > "$work/dbar.i" <<'SRC'
 static void release_barrier(void) {

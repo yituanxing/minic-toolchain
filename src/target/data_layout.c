@@ -738,6 +738,12 @@ static bool aggregate_scalar_slot_layout_for_object(const MinicDataLayout *layou
         if (array_type->is_zero_length) {
             return true;
         }
+        /* GNU zero-sized records (including arrays of them) contribute no
+         * scalar relocation slots. Do not invent a byte stride or divide by
+         * the zero-sized element while searching later initializer slots. */
+        if (element_size == 0U) {
+            return true;
+        }
         element_index = 0U;
         while (array_type->element_count == 0U || element_index < array_type->element_count) {
             size_t before_cursor;
@@ -831,6 +837,11 @@ static bool aggregate_scalar_slot_layout_for_object(const MinicDataLayout *layou
                                         minic_type_equal(type, object->type)
                                     ? object->flexible_array_initializer_count
                                     : 0U;
+            }
+            /* A zero-sized member has no scalar slots; later members still
+             * keep their true DataLayout byte offsets and relocation slots. */
+            if (element_size == 0U) {
+                continue;
             }
             for (element_index = 0U; element_index < element_count; ++element_index) {
                 size_t element_offset;

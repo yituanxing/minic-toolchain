@@ -63,6 +63,18 @@ static bool aarch64_futex_owned_x17_x12_scratch(FILE *out,
         MINIC_A64_REG_X, scratch);
 }
 
+/* The timer-counter dependency ASM holds x9 (dependency/address), x10
+ * (counter value), and x11 (output pointer) live at different points.
+ * Its `add x9,sp,x9` intentionally uses the instantaneous physical SP;
+ * only the surrounding compiler-owned SSA slots use this typed contract. */
+static bool aarch64_counter_owned_x(FILE *out,
+    const MinicDirectLP64BlockContext *ctx, unsigned int reg,
+    MinicCoreValueId id) {
+    const MinicA64ScratchPolicy scratch = {UINT32_C(0xe00), 17U};
+    return aarch64_owned_reg_policy(out, ctx, reg, id,
+        MINIC_A64_REG_X, scratch);
+}
+
 /* Original Linux 6.6 arch/arm64/include/asm/jump_label.h.  Both jump
  * sites own one 16-byte __jump_table record: site and C label PREL32,
  * static-key/branch-flags PREL64.  Only the original two templates qualify;
@@ -3096,39 +3108,38 @@ static bool aarch64_linux_hyp_spin_emit(
             size != width) return false;
     }
     if (lock) {
-        if (fprintf(out,
-            "  ldr x13, [sp, #%zu]\n  ldr x14, [sp, #%zu]\n"
+        if (!aarch64_atomic_owned_x(out, ctx, 13U, ops[3].value) ||
+            !aarch64_atomic_owned_x(out, ctx, 14U, ops[4].value) ||
+            fprintf(out,
             "661:\n  prfm pstl1strm, [x13]\n"
             "1: ldaxr w9, [x13]\n  add w10, w9, #65536\n"
-            "  stxr w11, w10, [x13]\n  cbnz w11, 1b\n",
-            (size_t)ops[3].value * 8U, (size_t)ops[4].value * 8U) < 0 ||
+            "  stxr w11, w10, [x13]\n  cbnz w11, 1b\n") < 0 ||
             !aarch64_linux_alt_emit_middle(out, 33U, true) ||
             fprintf(out,
             "  mov w11, #65536\n  ldadda w11, w9, [x13]\n"
             "  .rept 3\n  nop\n  .endr\n") < 0 ||
             !aarch64_linux_alt_emit_end(out)) return false;
-        return fprintf(out,
+        return fputs(
             "  eor w10, w9, w9, ror #16\n  cbz w10, 3f\n"
             "  sevl\n2: wfe\n  ldaxrh w11, [x14]\n"
-            "  eor w10, w11, w9, lsr #16\n  cbnz w10, 2b\n3:\n"
-            "  ldr x15, [sp, #%zu]\n  str w9, [x15]\n"
-            "  ldr x15, [sp, #%zu]\n  str w10, [x15]\n"
-            "  ldr x15, [sp, #%zu]\n  str w11, [x15]\n",
-            (size_t)ops[0].value * 8U,
-            (size_t)ops[1].value * 8U,
-            (size_t)ops[2].value * 8U) >= 0;
+            "  eor w10, w11, w9, lsr #16\n  cbnz w10, 2b\n3:\n", out) != EOF &&
+            aarch64_atomic_owned_x(out, ctx, 15U, ops[0].value) &&
+            fputs("  str w9, [x15]\n", out) != EOF &&
+            aarch64_atomic_owned_x(out, ctx, 15U, ops[1].value) &&
+            fputs("  str w10, [x15]\n", out) != EOF &&
+            aarch64_atomic_owned_x(out, ctx, 15U, ops[2].value) &&
+            fputs("  str w11, [x15]\n", out) != EOF;
     }
-    if (fprintf(out,
-        "  ldr x13, [sp, #%zu]\n661:\n"
+    if (!aarch64_atomic_owned_x(out, ctx, 13U, ops[0].value) ||
+        fprintf(out,
+        "661:\n"
         "  ldrh w9, [x13]\n  add w9, w9, #1\n"
-        "  stlrh w9, [x13]\n",
-        (size_t)ops[0].value * 8U) < 0 ||
+        "  stlrh w9, [x13]\n") < 0 ||
         !aarch64_linux_alt_emit_middle(out, 33U, true) ||
         fprintf(out, "  mov w9, #1\n  staddlh w9, [x13]\n  nop\n") < 0 ||
         !aarch64_linux_alt_emit_end(out)) return false;
-    return fprintf(out,
-        "  ldr x14, [sp, #%zu]\n  str x9, [x14]\n",
-        (size_t)ops[1].value * 8U) >= 0;
+    return aarch64_atomic_owned_x(out, ctx, 14U, ops[1].value) &&
+           fputs("  str x9, [x14]\n", out) != EOF;
 }
 
 /* Linux __cmpwait_case_{8,16,32,64}: typed three-operand GNU ASM
@@ -4038,8 +4049,8 @@ static bool aarch64_linux_atomic_dec_positive_emit(
             !minic_type_pointee(fn->values[ops[i].value].type, &pointee) ||
             !aarch64_stlr_type(pointee, 8U)) return false;
     }
-    return fprintf(out,
-        "  ldr x10, [sp, #%zu]\n"
+    return aarch64_atomic_owned_x(out, ctx, 10U, ops[2].value) &&
+        fputs(
         "  prfm pstl1strm, [x10]\n"
         "1:\n"
         "  ldxr x9, [x10]\n"
@@ -4048,14 +4059,11 @@ static bool aarch64_linux_atomic_dec_positive_emit(
         "  stlxr w12, x9, [x10]\n"
         "  cbnz w12, 1b\n"
         "  dmb ish\n"
-        "2:\n"
-        "  ldr x13, [sp, #%zu]\n"
-        "  str x9, [x13]\n"
-        "  ldr x13, [sp, #%zu]\n"
-        "  str x12, [x13]\n",
-        (size_t)ops[2].value * 8U,
-        (size_t)ops[0].value * 8U,
-        (size_t)ops[1].value * 8U) >= 0;
+        "2:\n", out) != EOF &&
+        aarch64_atomic_owned_x(out, ctx, 13U, ops[0].value) &&
+        fputs("  str x9, [x13]\n", out) != EOF &&
+        aarch64_atomic_owned_x(out, ctx, 13U, ops[1].value) &&
+        fputs("  str x12, [x13]\n", out) != EOF;
 }
 
 /* Native AArch64 128-bit LL/SC compare-exchange. Its eight GNU named
@@ -4332,26 +4340,21 @@ static bool aarch64_linux_lse_casp128_emit(
             fixed->register_name[1] != (char)('0' + (i < 2U ? i : i - 1U)) ||
             !aarch64_stlr_type(fixed->type, 8U)) return false;
     }
-    return fprintf(out,
-        "  .arch_extension lse\n"
-        "  ldr x10, [sp, #%zu]\n"
-        "  ldr x11, [sp, #%zu]\n  ldr x0, [x11]\n"
-        "  ldr x11, [sp, #%zu]\n  ldr x1, [x11]\n"
-        "  ldr x2, [sp, #%zu]\n"
-        "  ldr x3, [sp, #%zu]\n"
-        "  ldr x4, [sp, #%zu]\n"
-        "  %s x0, x1, x2, x3, [x10]\n"
-        "  ldr x11, [sp, #%zu]\n  str x0, [x11]\n"
-        "  ldr x11, [sp, #%zu]\n  str x1, [x11]\n",
-        (size_t)op[2].value * 8U,
-        (size_t)op[0].value * 8U,
-        (size_t)op[1].value * 8U,
-        (size_t)op[3].value * 8U,
-        (size_t)op[4].value * 8U,
-        (size_t)op[5].value * 8U,
-        mode == 1U ? "casp" : "caspal",
-        (size_t)op[0].value * 8U,
-        (size_t)op[1].value * 8U) >= 0;
+    return fputs("  .arch_extension lse\n", out) != EOF &&
+           aarch64_atomic_owned_x(out, ctx, 10U, op[2].value) &&
+           aarch64_atomic_owned_x(out, ctx, 11U, op[0].value) &&
+           fputs("  ldr x0, [x11]\n", out) != EOF &&
+           aarch64_atomic_owned_x(out, ctx, 11U, op[1].value) &&
+           fputs("  ldr x1, [x11]\n", out) != EOF &&
+           aarch64_atomic_owned_x(out, ctx, 2U, op[3].value) &&
+           aarch64_atomic_owned_x(out, ctx, 3U, op[4].value) &&
+           aarch64_atomic_owned_x(out, ctx, 4U, op[5].value) &&
+           fprintf(out, "  %s x0, x1, x2, x3, [x10]\n",
+                   mode == 1U ? "casp" : "caspal") >= 0 &&
+           aarch64_atomic_owned_x(out, ctx, 11U, op[0].value) &&
+           fputs("  str x0, [x11]\n", out) != EOF &&
+           aarch64_atomic_owned_x(out, ctx, 11U, op[1].value) &&
+           fputs("  str x1, [x11]\n", out) != EOF;
 }
 
 /* Original Linux atomic_lse.h signed decrement-unless-negative loop. The
@@ -4459,10 +4462,10 @@ static bool aarch64_linux_lse_dec_positive_emit(
             (i == 0U ? !minic_type_is_pointer(pointee)
                      : !aarch64_stlr_type(pointee, 8U))) return false;
     }
-    return fprintf(out,
-        "  .arch_extension lse\n"
-        "  ldr x10, [sp, #%zu]\n"
-        "  ldr x11, [sp, #%zu]\n"
+    return fputs("  .arch_extension lse\n", out) != EOF &&
+        aarch64_atomic_owned_x(out, ctx, 10U, op[1].value) &&
+        aarch64_atomic_owned_x(out, ctx, 11U, op[0].value) &&
+        fputs(
         "  ldr x9, [x11]\n"
         "1:\n"
         "  ldr x12, [x10]\n"
@@ -4473,12 +4476,9 @@ static bool aarch64_linux_lse_dec_positive_emit(
         "  sub x12, x12, x9\n"
         "  cbnz x12, 1b\n"
         "2:\n"
-        "  str x9, [x11]\n"
-        "  ldr x11, [sp, #%zu]\n"
-        "  str x12, [x11]\n",
-        (size_t)op[1].value * 8U,
-        (size_t)op[0].value * 8U,
-        (size_t)op[2].value * 8U) >= 0;
+        "  str x9, [x11]\n", out) != EOF &&
+        aarch64_atomic_owned_x(out, ctx, 11U, op[2].value) &&
+        fputs("  str x12, [x11]\n", out) != EOF;
 }
 
 /* Linux arm64 futex LL/SC exception recovery is part of the atomic
@@ -4953,15 +4953,12 @@ static bool aarch64_linux_counter_ordering_emit(
         !aarch64_linux_sysreg_u64_type(result) ||
         !aarch64_linux_sysreg_u64_type(fn->values[op[1].value].type))
         return false;
-    return fprintf(out,
-        "  ldr x10, [sp, #%zu]\n"
-        "  eor x9, x10, x10\n"
-        "  add x9, sp, x9\n"
-        "  ldr xzr, [x9]\n"
-        "  ldr x11, [sp, #%zu]\n"
-        "  str x9, [x11]\n",
-        (size_t)op[1].value * 8U,
-        (size_t)op[0].value * 8U) >= 0;
+    return aarch64_counter_owned_x(out, ctx, 10U, op[1].value) &&
+           fputs("  eor x9, x10, x10\n"
+                 "  add x9, sp, x9\n"
+                 "  ldr xzr, [x9]\n", out) != EOF &&
+           aarch64_counter_owned_x(out, ctx, 11U, op[0].value) &&
+           fputs("  str x9, [x11]\n", out) != EOF;
 }
 
 /* ARMv8.5 RNDR and RNDRRS return their success state in NZCV. The CSET
@@ -6203,37 +6200,30 @@ static bool aarch64_linux_lse_emit(
              !aarch64_stlr_type(fn->values[op->value].type, form->width)))
             return false;
     }
-    if (fprintf(out, "  .arch_extension lse\n  ldr x10, [sp, #%zu]\n",
-                (size_t)ops[0].value * 8U) < 0)
+    if (fputs("  .arch_extension lse\n", out) == EOF ||
+        !aarch64_atomic_owned_x(out, ctx, 10U, ops[0].value))
         return false;
     if (form->kind == AARCH64_LSE_STORE) {
-        return fprintf(out,
-            "  ldr x11, [sp, #%zu]\n"
-            "  %s %s11, [x10]\n",
-            (size_t)ops[1].value * 8U, form->mnemonic, reg) >= 0;
+        return aarch64_atomic_owned_x(out, ctx, 11U, ops[1].value) &&
+               fprintf(out, "  %s %s11, [x10]\n",
+                       form->mnemonic, reg) >= 0;
     }
     if (form->kind == AARCH64_LSE_FETCH) {
-        return fprintf(out,
-            "  ldr x11, [sp, #%zu]\n"
-            "  %s%s %s11, %s9, [x10]\n"
-            "  ldr x12, [sp, #%zu]\n"
-            "  str %s9, [x12]\n",
-            (size_t)ops[2].value * 8U,
-            form->mnemonic, order[form->mode], reg, reg,
-            (size_t)ops[1].value * 8U, reg) >= 0;
+        return aarch64_atomic_owned_x(out, ctx, 11U, ops[2].value) &&
+               fprintf(out, "  %s%s %s11, %s9, [x10]\n",
+                       form->mnemonic, order[form->mode], reg, reg) >= 0 &&
+               aarch64_atomic_owned_x(out, ctx, 12U, ops[1].value) &&
+               fprintf(out, "  str %s9, [x12]\n", reg) >= 0;
     }
     /* GNU +r is an observable read/write local; the Core binding is its
      * address, unlike a write-only =r destination. CAS returns the observed
      * old value even when the comparison fails. */
-    return fprintf(out,
-        "  ldr x12, [sp, #%zu]\n"
-        "  %s, [x12]\n"
-        "  ldr x11, [sp, #%zu]\n"
-        "  cas%s%s %s9, %s11, [x10]\n"
-        "  %s, [x12]\n",
-        (size_t)ops[1].value * 8U, load,
-        (size_t)ops[2].value * 8U,
-        order[form->mode], width_suffix, reg, reg, store) >= 0;
+    return aarch64_atomic_owned_x(out, ctx, 12U, ops[1].value) &&
+           fprintf(out, "  %s, [x12]\n", load) >= 0 &&
+           aarch64_atomic_owned_x(out, ctx, 11U, ops[2].value) &&
+           fprintf(out, "  cas%s%s %s9, %s11, [x10]\n",
+                   order[form->mode], width_suffix, reg, reg) >= 0 &&
+           fprintf(out, "  %s, [x12]\n", store) >= 0;
 }
 
 /* Linux 6.6 arch/arm64/include/asm/kexec.h crash_setup_regs(): the whole
@@ -6275,6 +6265,7 @@ static bool aarch64_linux_crash_regs_emit(
     const MinicCoreStructuredInlineAsmOperand *op =
         ins->value.structured_inline_asm.operands;
     const MinicCoreFunction *fn = ctx->fn;
+    MinicA64FrameView frame;
     MinicType first, second, record, plain_record;
     size_t record_size, record_alignment;
     size_t i;
@@ -6306,9 +6297,16 @@ static bool aarch64_linux_crash_regs_emit(
      * early-clobber rules it cannot alias the two outputs, which are x9/x10.
      * A no-writeback STP permits its base (x0) also to be the first source;
      * therefore the saved x0 image is the actual input-register value at
-     * asm entry. Every other GPR stays untouched until its image is stored. */
-    if (fprintf(out, "  ldr x0, [sp, #%zu]\n",
-                (size_t)op[2].value * 8U) < 0) return false;
+     * asm entry. Every other GPR stays untouched until its image is stored.
+     * In particular, the legacy large-SP legalizer would use x17 to lower a
+     * far [sp,#offset] load, corrupting the x17 image BEFORE the snapshot.
+     * Build the owned-slot address directly in x0 and dereference it: this
+     * needs no separate physical scratch, regardless of frame size. */
+    frame = (MinicA64FrameView){false, ctx->frame, 0U,
+                                ctx->saved_entry_sp_offset};
+    if (!minic_a64_emit_owned_address(out, &frame,
+            (size_t)op[2].value * 8U, 0U) ||
+        fputs("  ldr x0, [x0]\n", out) == EOF) return false;
     for (i = 0U; i < 15U; ++i)
         if (fprintf(out, "  stp x%zu, x%zu, [x0, #%zu]\n",
                     i * 2U, i * 2U + 1U, i * 16U) < 0) return false;
@@ -6324,13 +6322,14 @@ static bool aarch64_linux_crash_regs_emit(
             "  orr x9, x9, x10\n"
             "  adr x10, 1f\n"
             "1: stp x10, x9, [x0, #256]\n", out) == EOF) return false;
-    return fprintf(out,
-        "  ldr x0, [sp, #%zu]\n"
-        "  str x9, [x0]\n"
-        "  ldr x0, [sp, #%zu]\n"
-        "  str x10, [x0]\n",
-        (size_t)op[0].value * 8U,
-        (size_t)op[1].value * 8U) >= 0;
+    /* x17 is dead after its image was captured at [x0,#128], so this
+     * post-snapshot phase can use the typed load's regular scratch. */
+    return minic_a64_emit_owned_slot(out, &frame, false,
+               MINIC_A64_REG_X, 0U, (size_t)op[0].value * 8U) &&
+           fputs("  str x9, [x0]\n", out) != EOF &&
+           minic_a64_emit_owned_slot(out, &frame, false,
+               MINIC_A64_REG_X, 0U, (size_t)op[1].value * 8U) &&
+           fputs("  str x10, [x0]\n", out) != EOF;
 }
 
 bool minic_aarch64_emit_qualified_structured_asm(

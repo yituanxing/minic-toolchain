@@ -757,7 +757,9 @@ has src/target/common/direct_call_plan.c 'minic_core_call_view_argument_type(fn,
 has src/target/riscv64/call_emit.c 'call->return_form != MINIC_CORE_CALL_RETURN_OBJECT'
 has src/target/riscv64/frame_layout.c 'frame->semantic_calls = frame->call_index.index'
 has src/target/riscv64/call_emit.c 'minic_core_call_index_find('
-has src/target/riscv64/core_admission.c 'semantic_calls->sites[call_site++].view'
+has src/target/riscv64/core_admission.c 'view = &semantic_calls->sites[call_site].view'
+has src/target/riscv64/core_admission.c 'prepared = abi_plan->outgoing_calls.sites[call_site]'
+has src/target/riscv64/core_admission.c 'prepared->instruction_id != index'
 has src/target/riscv64/core_admission.c 'shape = &storage->objects[index]'
 has src/target/riscv64/core_admission.c 'minic_core_object_storage('
 has src/target/riscv64/core_codegen.c 'isa->abi == MINIC_RISCV_ABI_LP64, facts, storage)'
@@ -799,9 +801,15 @@ lacks src/target/x86_64/frame.c 'minic_x86_64_frame_init_prepared('
 lacks src/target/riscv32/rv32_frame.c 'rv32_frame_init_prepared('
 lacks src/target/riscv64/core_codegen.c 'minic_riscv64_emit_core_function_for_program_with_symbol_prepared('
 has src/target/riscv64/frame_layout.c 'facts->needs_saved_return_address'
-# All five targets now preplan real ABI CALL placement once. RV64 directly
-# consumes the exact prepared psABI locations for machine CALL emission.
-has src/target/riscv64/frame_layout.c 'minic_riscv64_call_plan_cache_build('
+# All five targets now preplan real ABI CALL placement once. RV64 must
+# construct its typed cache before admission (honoring LP64/LP64D), then
+# transfer ownership into the frame instead of reclassifying in production.
+has src/target/riscv64/core_admission.c 'minic_riscv64_call_plan_cache_build('
+has src/target/riscv64/frame_layout.c 'frame->outgoing_calls = abi_plan->outgoing_calls'
+has src/target/riscv64/frame_layout.c 'abi_plan->outgoing_calls = (MinicRiscv64CallPlanCache){0}'
+has src/target/riscv64/legalize.c 'const MinicRiscv64PreparedCall *prepared'
+lacks src/target/riscv64/legalize.c 'minic_riscv64_abi_cursor_initialize_for_return('
+lacks src/target/riscv64/legalize.c 'minic_riscv64_abi_place_argument('
 # RV64 standalone and production must converge on the one Common CALL index
 # and one target ABI plan; the obsolete standalone sizing walker is deleted.
 has src/target/riscv64/frame_layout.c 'minic_core_call_index_handle_prepare('
@@ -852,7 +860,8 @@ lacks src/target/common/direct_instruction_semantics.h 'minic_multi_direct_abi_t
 lacks src/target/common/direct_instruction_semantics.h 'minic_multi_direct_integer_machine_kind('
 # Read-only Common CALL snapshots are consumed in ordinal order by both
 # Direct LP64 ABIs and RV64 capability, never looked up repeatedly by ID.
-has src/target/riscv64/core_admission.c 'semantic_calls->sites[call_site++]'
+has src/target/riscv64/core_admission.c 'view = &semantic_calls->sites[call_site].view'
+has src/target/riscv64/core_admission.c '++call_site;'
 lacks src/target/riscv64/core_admission.c 'minic_core_call_index_get('
 # Prepared RV32 and Direct LP64 CALL machines borrow the Common sorted
 # semantic CALL index, leaving one canonical ordinal lookup for production.

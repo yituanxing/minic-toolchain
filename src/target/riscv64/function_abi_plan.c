@@ -138,7 +138,14 @@ bool minic_riscv64_function_abi_plan_build(
 }
 void minic_riscv64_function_abi_plan_destroy(
     MinicRiscv64FunctionAbiPlan *plan) {
+    size_t i;
     if (plan == NULL) return;
     free(plan->parameter_locations);
+    /* ABI unit tests link the function planner without machine-call cache
+     * implementation; release ownership locally without another link edge. */
+    if (plan->outgoing_calls.sites != NULL)
+        for (i = 0U; i < plan->outgoing_calls.count; ++i)
+            free(plan->outgoing_calls.sites[i]);
+    free(plan->outgoing_calls.sites);
     (void)memset(plan, 0, sizeof(*plan));
 }

@@ -217,6 +217,7 @@ static const MinicTargetLanguageDescriptor minic_language_riscv64 = {
 static const MinicTargetLanguageDescriptor minic_language_x86_64 = {
         .target = {
             .asm_source_policy = &minic_x86_64_asm_source_policy,
+            .source_language_policy = &minic_x86_64_source_language_policy,
             .integer_model = &minic_lp64_signed_char_integer_model,
             .word_integer_rank = MINIC_INTEGER_RANK_LONG,
             .language_type_capabilities = MINIC_TARGET_LANG_EXTENDED_FLOAT_DECLARATIONS |
@@ -240,6 +241,7 @@ static const MinicTargetLanguageDescriptor minic_language_x86_64 = {
 static const MinicTargetLanguageDescriptor minic_language_aarch64 = {
         .target = {
             .asm_source_policy = &minic_aarch64_asm_source_policy,
+            .source_language_policy = &minic_aarch64_source_language_policy,
             .integer_model = &minic_lp64_unsigned_char_integer_model,
             .word_integer_rank = MINIC_INTEGER_RANK_LONG,
             .language_type_capabilities = MINIC_TARGET_LANG_EXTENDED_FLOAT_DECLARATIONS |
@@ -264,6 +266,7 @@ static const MinicTargetLanguageDescriptor minic_language_loongarch64 = {
         .target = {
             .asm_source_policy = &minic_loongarch64_asm_source_policy,
             .machine_builtin_policy = &minic_loongarch64_machine_builtin_policy,
+            .alias_abi_policy = &minic_loongarch64_alias_abi_policy,
             .integer_model = &minic_lp64_signed_char_integer_model,
             .word_integer_rank = MINIC_INTEGER_RANK_LONG,
             .language_type_capabilities = MINIC_TARGET_LANG_EXTENDED_FLOAT_DECLARATIONS,
@@ -414,89 +417,55 @@ bool minic_target_info_language_type_supported(const MinicTargetInfo *target,
     return (target->language_type_capabilities & required) != 0U;
 }
 
-/* Opaque header-only identities are registered at the target boundary. No
- * frontend CPU-name test or implicit vector layout follows from recognition. */
+/* Source-language vocabulary is owned by the selected target policy.
+ * Frontend never names an architecture; the ABI layout and machine emitter
+ * do not inherit a capability merely from a recognized header spelling. */
 bool minic_target_info_named_builtin_type(const MinicTargetInfo *target,
                                           const char *spelling, size_t length,
                                           MinicType *type) {
-    static const struct {
-        const char *spelling;
-        MinicTypeBaseKind kind;
-    } names[] = {
-        {"__Float32x4_t", MINIC_TYPE_BASE_AARCH64_FLOAT32X4},
-        {"__Float64x2_t", MINIC_TYPE_BASE_AARCH64_FLOAT64X2},
-        {"__SVFloat32_t", MINIC_TYPE_BASE_AARCH64_SVE_FLOAT32},
-        {"__SVFloat64_t", MINIC_TYPE_BASE_AARCH64_SVE_FLOAT64},
-        {"__SVBool_t", MINIC_TYPE_BASE_AARCH64_SVE_BOOL}
-    };
-    size_t index;
-    if (target == NULL || spelling == NULL) return false;
-    for (index = 0U; index < sizeof(names) / sizeof(names[0]); ++index) {
-        if (length == strlen(names[index].spelling) &&
-            memcmp(spelling, names[index].spelling, length) == 0 &&
-            minic_target_info_language_type_supported(target, names[index].kind)) {
-            if (type != NULL) {
-                *type = minic_type_aarch64_header_builtin(names[index].kind);
-            }
-            return true;
-        }
-    }
-    return false;
+    const MinicTargetSourceLanguagePolicy *policy =
+        target == NULL ? NULL : target->source_language_policy;
+    return policy != NULL && spelling != NULL &&
+           policy->named_builtin_type != NULL &&
+           policy->named_builtin_type(target, spelling, length, type);
 }
 
 bool minic_target_info_header_opaque_vector_return(const MinicTargetInfo *target,
                                                     MinicType return_type) {
-    if (return_type.pointer_depth != 0U ||
-        !minic_target_info_language_type_supported(target, return_type.base_kind))
-        return false;
-    switch (return_type.base_kind) {
-    case MINIC_TYPE_BASE_AARCH64_FLOAT32X4:
-    case MINIC_TYPE_BASE_AARCH64_FLOAT64X2:
-    case MINIC_TYPE_BASE_AARCH64_SVE_FLOAT32:
-    case MINIC_TYPE_BASE_AARCH64_SVE_FLOAT64:
-    case MINIC_TYPE_BASE_AARCH64_SVE_BOOL:
-        return true;
-    default:
-        return false;
-    }
+    const MinicTargetSourceLanguagePolicy *policy =
+        target == NULL ? NULL : target->source_language_policy;
+    return policy != NULL && policy->header_opaque_return != NULL &&
+           policy->header_opaque_return(target, return_type);
 }
 
-/* A glibc header-only PCS marker must not enable actual vector call ABI.
- * Naming/target admission is centralized here, not in the C parser. */
 bool minic_target_info_header_attribute_supported(const MinicTargetInfo *target,
                                                   const char *spelling,
                                                   size_t length) {
-    static const char name[] = "__aarch64_vector_pcs__";
-    return target != NULL && spelling != NULL &&
-           (target->language_type_capabilities &
-            MINIC_TARGET_LANG_OPAQUE_VECTOR_HEADER_DECLARATIONS) != 0U &&
-           length == sizeof(name) - 1U &&
-           memcmp(spelling, name, length) == 0;
+    const MinicTargetSourceLanguagePolicy *policy =
+        target == NULL ? NULL : target->source_language_policy;
+    return policy != NULL && spelling != NULL &&
+           policy->header_attribute != NULL &&
+           policy->header_attribute(target, spelling, length);
 }
 
-/* The GNU function annotations emitted by native x86 Linux headers/objects
- * are declarations of the existing x86 function ABI, not a request to share
- * x86 names with foreign targets. Parser-owned argument validation is needed
- * before using these annotations; this function handles only admission. */
 bool minic_target_info_gnu_function_security_attribute_supported(
     const MinicTargetInfo *target, const char *attribute, size_t length) {
-    static const char *const names[] = {
-        "nocf_check", "__indirect_branch__", "__target__"
-    };
-    size_t index;
-    if (target == NULL || target->architecture != MINIC_TARGET_ARCH_X86_64 ||
-        attribute == NULL) {
-        return false;
-    }
-    for (index = 0U; index < sizeof(names) / sizeof(names[0]); ++index) {
-        if (length == strlen(names[index]) &&
-            memcmp(attribute, names[index], length) == 0) {
-            return true;
-        }
-    }
-    return false;
+    const MinicTargetSourceLanguagePolicy *policy =
+        target == NULL ? NULL : target->source_language_policy;
+    return policy != NULL && attribute != NULL &&
+           policy->gnu_function_attribute_name != NULL &&
+           policy->gnu_function_attribute_name(attribute, length);
 }
 
+bool minic_target_info_gnu_function_security_attribute_value_supported(
+    const MinicTargetInfo *target, MinicTargetGnuFunctionAttributeKind kind,
+    const char *value, size_t value_length) {
+    const MinicTargetSourceLanguagePolicy *policy =
+        target == NULL ? NULL : target->source_language_policy;
+    return policy != NULL && (value != NULL || value_length == 0U) &&
+           policy->gnu_function_attribute_value != NULL &&
+           policy->gnu_function_attribute_value(kind, value, value_length);
+}
 /* Both AArch64's ADRP+ADD and LoongArch's la.local are valid in PIE only
  * when a symbol is nonpreemptible. Never infer internal linkage from the
  * spelling alone or from a source declaration without an owned definition. */
@@ -605,31 +574,11 @@ bool minic_target_info_word_integer_type(const MinicTargetInfo *target,
     return integer_type_with_rank(sign, target->word_integer_rank, type);
 }
 
-/* For LoongArch's Linux syscall `sys_* -> __se_sys_*` aliases the public
- * ABI names typed ints/pointers while the sanitizer entry receives one
- * 64-bit word per argument. ABI transport is the identical GPR slot, NOT a
- * C type cast. Never admit floating/aggregate, 128-bit, variadic, or
- * mismatched return signatures using this special admission. */
-static bool minic_loongarch64_syscall_alias_word_pair(
-    const MinicTargetInfo *target, const MinicC0Program *program,
-    MinicType call_type, MinicType definition_type) {
-    size_t call_size, definition_size;
-    if (target == NULL || target->architecture != MINIC_TARGET_ARCH_LOONGARCH64 ||
-        program == NULL ||
-        (!minic_type_is_integer(call_type) && !minic_type_is_pointer(call_type)) ||
-        !minic_type_is_integer(definition_type) ||
-        !minic_target_info_sizeof_type(target, program, call_type, &call_size) ||
-        !minic_target_info_sizeof_type(target, program, definition_type, &definition_size))
-        return false;
-    /* The sanitizer must receive full-width integer ABI words; allowing an
-     * arbitrary 32-bit callee could truncate an address or signed input. */
-    return call_size != 0U && call_size <= 8U && definition_size == 8U;
-}
-
 bool minic_target_info_function_alias_abi_compatible(
     const MinicTargetInfo *target, const MinicC0Program *program,
     const MinicFunction *alias, const MinicFunction *owner) {
     size_t i;
+    bool incompatible_parameters = false;
     if (target == NULL || program == NULL || alias == NULL || owner == NULL ||
         alias->parameter_count != owner->parameter_count ||
         alias->is_variadic != owner->is_variadic ||
@@ -640,13 +589,17 @@ bool minic_target_info_function_alias_abi_compatible(
         if (minic_c0_types_compatible(
                 program, alias->parameter_types[i], owner->parameter_types[i]))
             continue;
-        if (alias->is_variadic || alias->is_internal || owner->is_internal ||
-            !minic_loongarch64_syscall_alias_word_pair(
-                target, program, alias->parameter_types[i],
-                owner->parameter_types[i]))
-            return false;
+        incompatible_parameters = true;
     }
-    return true;
+    /* C-prototype compatible aliases remain target-neutral. Exceptions are
+     * an ABI transport contract, never a new rule for C type compatibility:
+     * a target owner must certify the WHOLE function and real symbol family. */
+    if (!incompatible_parameters) return true;
+    return !alias->is_variadic && !alias->is_internal && !owner->is_internal &&
+           target->alias_abi_policy != NULL &&
+           target->alias_abi_policy->allow_incompatible_prototypes != NULL &&
+           target->alias_abi_policy->allow_incompatible_prototypes(
+               target, program, alias, owner);
 }
 
 bool minic_target_info_sizeof_type(const MinicTargetInfo *target,

@@ -60,11 +60,23 @@ bool minic_riscv64_core_frame_initialize_with_storage(
         frame->semantic_calls->count !=
             facts->direct_call_count + facts->indirect_call_count)
         return false;
-    if (!minic_riscv64_call_plan_cache_build(
-            program, function,
-            abi_plan != NULL && abi_plan->named_parameter_cursor.lp64_soft_float,
-            frame->semantic_calls, &frame->outgoing_calls))
+    if (abi_plan != NULL) {
+        /* Capability admission already checked and qualified this exact
+         * ordered CALL index. Transfer its psABI locations into the frame;
+         * never classify the same calls again with a different FP mode. */
+        if (!abi_plan->prepared ||
+            abi_plan->outgoing_calls.count != frame->semantic_calls->count ||
+            (frame->semantic_calls->count != 0U &&
+             abi_plan->outgoing_calls.sites == NULL))
+            return false;
+        frame->outgoing_calls = abi_plan->outgoing_calls;
+        abi_plan->outgoing_calls = (MinicRiscv64CallPlanCache){0};
+    } else if (!minic_riscv64_call_plan_cache_build(
+                   program, function, false,
+                   frame->semantic_calls, &frame->outgoing_calls)) {
+        /* Standalone legacy frame entry retains its checked fallback. */
         return false;
+    }
     outgoing_argument_size = frame->outgoing_calls.maximum_stack_bytes;
     frame->outgoing_argument_size = outgoing_argument_size;
     frame->dynamic_call_area_size = 0U;
