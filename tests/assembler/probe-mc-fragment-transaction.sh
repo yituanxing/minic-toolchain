@@ -3,7 +3,10 @@
 # cursors or write partial machine instructions into finalized Sections.
 set -Eeuo pipefail
 src=assembler/src/assembler.c
-grep -q 'target-bypassed-mc-code-emitter' "$src"
+# The old capture_instruction_bytes switch was the two-commit-path bridge.
+! grep -q 'capture_instruction_bytes' "$src"
+grep -q 'minias_stage_fragment_bytes' "$src"
+grep -q 'minias_stage_fragment_pattern' "$src"
 python3 - "$src" <<'PY'
 import sys
 s=open(sys.argv[1],encoding='utf-8').read()
@@ -21,21 +24,22 @@ for invariant in (
     'result->byte_count != owner->size',
     'minias_grow_array((void **)&as->fixups',
     'minias_record_fixup(as,',
-    'minias_section_append(as, owner->section,',
+    'minias_section_append(',
+    'as->committing_fragment=true',
     'minias_encode_result_destroy(result)',
 ):
     if invariant not in commit:
         raise SystemExit('missing complete EncodeResult commit invariant: '+invariant)
-if 'minias_section_append(as, owner->section,' not in commit:
-    raise SystemExit('missing final Section byte commit')
+if 'as->committing_fragment=false' not in commit:
+    raise SystemExit('commit guard not released after final Section materialization')
 start=s.index('bool minias_emit_sections(')
 end=s.index('int minias_assemble_config(',start)
 body=s[start:end]
 if 'section->size = (size_t)stmt->offset' in body:
     raise SystemExit('MCFragment still restores a virtual Section cursor')
-if 'as->active_encode_result->byte_count != stmt->size' not in body:
+if 'as->active_encode_result->byte_count!=stmt->size' not in body:
     raise SystemExit('missing final encoded fragment size check')
-if 'if (!minias_commit_encode_result(as, stmt))' not in body:
+if 'if(!minias_commit_encode_result(as,stmt))' not in body:
     raise SystemExit('MCFragment does not require successful Common commit')
-print('MINIAS_MC_FRAGMENT_TRANSACTION=PASS target_cursor=isolated encoded_size=checked commit=atomic')
+print('MINIAS_MC_FRAGMENT_TRANSACTION=PASS target_cursor=isolated all_fragments=single_commit encoded_size=checked stage_guard=removed')
 PY
