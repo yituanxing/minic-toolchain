@@ -632,7 +632,9 @@ minic_core_lower_if(MinicCoreLowerContext *context, const MinicStatement *statem
             if ((minic_const_eval_integer(context->body->program,
                                           context->target,
                                           statement->expression, &condition_value) ||
-                 (!core_block_contains_inline_asm(context, then_source) &&
+                 (minic_core_cfg_pure_call_argument(
+                      context, statement->expression, 0U) &&
+                  !core_block_contains_inline_asm(context, then_source) &&
                   (else_source == NULL ||
                    !core_block_contains_inline_asm(context, else_source)) &&
                   core_const_eval_integer_with_locals(
@@ -644,17 +646,6 @@ minic_core_lower_if(MinicCoreLowerContext *context, const MinicStatement *statem
                 condition_known = true;
                 condition_is_zero = integer_condition_is_zero;
             }
-        }
-        if (context->source_function != NULL &&
-            context->source_function->name != NULL &&
-            strcmp(context->source_function->name, "genl_op_from_split") == 0) {
-            (void)fprintf(stderr,
-                          "GENL_IF_DECISION expression=%zu kind=%d known=%d zero=%d block=%u\n",
-                          (size_t)statement->expression,
-                          (int)condition_expression->kind,
-                          condition_known ? 1 : 0,
-                          condition_is_zero ? 1 : 0,
-                          (unsigned int)context->block_id);
         }
         if (condition_known) {
             const MinicBlock *discarded_source;

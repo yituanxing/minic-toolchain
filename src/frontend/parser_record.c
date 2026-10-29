@@ -869,16 +869,23 @@ bool minic_parser_parse_record_definition_specifier(MinicParser *parser, MinicTy
 
     if (parser->current.kind == MINIC_TOKEN_IDENTIFIER) {
         MinicSourceSpan name_span;
+        const MinicParserTagBinding *tag;
         const MinicRecord *record;
 
         name_span = parser->current.span;
-        record_id = minic_parser_find_record_in_current_scope(parser, name_span);
+        if (!minic_parser_resolve_tag(parser, name_span,
+                                      is_union ? MINIC_PARSER_TAG_UNION
+                                               : MINIC_PARSER_TAG_STRUCT,
+                                      true, &tag)) {
+            return false;
+        }
+        record_id = tag == NULL ? MINIC_RECORD_INVALID : tag->entity.record_id;
         if (record_id == MINIC_RECORD_INVALID) {
             if (!minic_c0_program_add_record(parser->program,
                                              parser->source + name_span.begin.offset,
                                              minic_parser_span_length(name_span),
                                              &record_id) ||
-                !minic_parser_bind_record_tag(parser, name_span, record_id)) {
+                !minic_parser_bind_record_tag(parser, name_span, record_id, is_union)) {
                 minic_parser_error(parser, "out of memory while adding record");
                 return false;
             }
@@ -946,6 +953,7 @@ bool minic_parser_parse_record_definition_specifier(MinicParser *parser, MinicTy
 
 static bool parse_record_forward_declaration(MinicParser *parser) {
     MinicSourceSpan name_span;
+    const MinicParserTagBinding *tag;
     MinicRecordId record_id;
     MinicTokenKind keyword;
     bool is_union;
@@ -958,13 +966,19 @@ static bool parse_record_forward_declaration(MinicParser *parser) {
         return false;
     }
     name_span = parser->current.span;
-    record_id = minic_parser_find_record_in_current_scope(parser, name_span);
+    if (!minic_parser_resolve_tag(parser, name_span,
+                                  is_union ? MINIC_PARSER_TAG_UNION
+                                           : MINIC_PARSER_TAG_STRUCT,
+                                  true, &tag)) {
+        return false;
+    }
+    record_id = tag == NULL ? MINIC_RECORD_INVALID : tag->entity.record_id;
     if (record_id == MINIC_RECORD_INVALID) {
         if (!minic_c0_program_add_record(parser->program,
                                          parser->source + name_span.begin.offset,
                                          minic_parser_span_length(name_span),
                                          &record_id) ||
-            !minic_parser_bind_record_tag(parser, name_span, record_id)) {
+            !minic_parser_bind_record_tag(parser, name_span, record_id, is_union)) {
             minic_parser_error(parser, "cannot create forward record tag");
             return false;
         }

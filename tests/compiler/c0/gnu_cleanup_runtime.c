@@ -30,6 +30,39 @@ static int for_break_cleanup(void) {
     return cleanup_trace;
 }
 
+static int forward_goto_cleanup(void) {
+    cleanup_trace = 0;
+    {
+        int guard __attribute__((cleanup(cleanup_record))) = 6;
+        if (guard != 0) goto outside_guard;
+    }
+outside_guard:
+    return cleanup_trace;
+}
+
+static int same_scope_goto_keeps_guard(void) {
+    cleanup_trace = 0;
+    {
+        int guard __attribute__((cleanup(cleanup_record))) = 7;
+        goto inside_guard;
+inside_guard:
+        if (cleanup_trace != 0 || guard != 7) return -1;
+    }
+    return cleanup_trace;
+}
+
+static int backward_goto_cleanup(void) {
+    int done = 0;
+    cleanup_trace = 0;
+again:
+    if (done) return cleanup_trace;
+    {
+        int guard __attribute__((cleanup(cleanup_record))) = 8;
+        done = 1;
+        goto again;
+    }
+}
+
 static int linux_guard_shape(void) {
     cleanup_trace = 0;
     for (int guard __attribute__((__cleanup__(cleanup_record))) = 5;
@@ -56,6 +89,15 @@ int main(void) {
     }
     if (for_break_cleanup() != 4) {
         return 13;
+    }
+    if (forward_goto_cleanup() != 6) {
+        return 15;
+    }
+    if (same_scope_goto_keeps_guard() != 7) {
+        return 16;
+    }
+    if (backward_goto_cleanup() != 8) {
+        return 17;
     }
     if (linux_guard_shape() != 5) {
         return 14;

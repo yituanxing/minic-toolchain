@@ -1464,9 +1464,16 @@ static bool eval_arithmetic_expression(const MinicC0Program *program,
     case MINIC_EXPRESSION_FLOATING: {
         double floating;
 
-        (void)memcpy(&floating, &expression->value.floating_bits, sizeof(floating));
         if (minic_type_is_float(expression->type)) {
-            floating = (double)(float)floating;
+            /* The parser stores binary32 in the low 32 bits of floating_bits.
+             * Reinterpreting the whole uint64 as binary64 silently turns
+             * static casts such as (int)1.5f into zero. */
+            uint32_t binary32 = (uint32_t)expression->value.floating_bits;
+            float literal;
+            (void)memcpy(&literal, &binary32, sizeof(literal));
+            floating = (double)literal;
+        } else {
+            (void)memcpy(&floating, &expression->value.floating_bits, sizeof(floating));
         }
         value->floating = floating;
         return true;

@@ -112,13 +112,18 @@ minic_riscv64_frame_load_chunk(FILE *file,
         size == 0U || size > 8U) {
         return false;
     }
-    if (size == 8U) {
+    /* The frame base is at least 16-byte aligned, but packed CoreObjects
+     * may start at an odd byte offset. A whole-word access is valid only
+     * when the actual address is aligned to its access width. */
+    if (size == 8U && offset % 8U == 0U) {
         return minic_riscv64_frame_emit_load64(file, frame, destination_register, offset);
     }
     /* A partial aggregate can be materialized into any ABI argument GPR or
      * compiler temporary. Address and byte scratch must remain distinct from
      * the result even when the caller spells that register as xN, not tN. */
-    opcode = size == 4U ? "lwu" : size == 2U ? "lhu" : size == 1U ? "lbu" : NULL;
+    opcode = size == 4U && offset % 4U == 0U ? "lwu" :
+             size == 2U && offset % 2U == 0U ? "lhu" :
+             size == 1U ? "lbu" : NULL;
     byte_register = opcode == NULL &&
                     minic_riscv_gpr_name_equal(destination_register, "t1")
                         ? "t3" : "t1";
@@ -178,14 +183,16 @@ minic_riscv64_frame_store_chunk(FILE *file,
         size == 0U || size > 8U) {
         return false;
     }
-    if (size == 8U) {
+    if (size == 8U && offset % 8U == 0U) {
         return minic_riscv64_frame_emit_store64(file, frame, source_register, offset);
     }
     address_register = minic_riscv_gpr_name_equal(source_register, "t3") ?
                            "t4" : "t3";
     if (minic_riscv_gpr_name_equal(source_register, address_register))
         return false;
-    opcode = size == 4U ? "sw" : size == 2U ? "sh" : size == 1U ? "sb" : NULL;
+    opcode = size == 4U && offset % 4U == 0U ? "sw" :
+             size == 2U && offset % 2U == 0U ? "sh" :
+             size == 1U ? "sb" : NULL;
     if (opcode != NULL) {
         if (!minic_riscv64_frame_emit_address(file, frame, address_register, offset)) {
             return false;

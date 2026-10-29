@@ -210,14 +210,9 @@ MinicCoreLowerStatus minic_core_lower_try_builtin_unary(
                    : MINIC_CORE_LOWER_ERROR; }
     }
 
-    /* M175F_RUNTIME_FFSLL_OWNER: __builtin_ffsll returns a one-based
-       least-significant-set-bit index and zero for a zero operand.  Reuse the
-       existing unsigned-long CTZ semantic owner instead of introducing a
-       target-specific FFS instruction.  RV64's long and long long are both
-       64-bit, so converting signed long long to unsigned long preserves the
-       operand bit pattern modulo 2^64.  The double zero-test yields a canonical
-       int nonzero mask; multiplying by it maps the CTZ zero sentinel (64) back
-       to the required ffsll zero result. */
+    /* __builtin_ffsll is defined over all 64 bits on LP64 *and* ILP32.
+       Convert to unsigned long long before CTZ; unsigned long truncates the
+       high word on RV32 and incorrectly turns ffsll(1LL << 40) into zero. */
     if (expression->kind == MINIC_EXPRESSION_BUILTIN_UNARY &&
         expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_FFSLL) {
         const MinicExpression *operand;
@@ -248,7 +243,7 @@ MinicCoreLowerStatus minic_core_lower_try_builtin_unary(
             { *handled = true; return MINIC_CORE_LOWER_ERROR; }
         }
         status = minic_core_lower_internal_append_integer_conversion(
-            context, operand->span, minic_type_unsigned_long(), operand_value, &unsigned_value);
+            context, operand->span, minic_type_unsigned_long_long(), operand_value, &unsigned_value);
         if (status != MINIC_CORE_LOWER_OK) {
             { *handled = true; return status; }
         }
@@ -1335,8 +1330,14 @@ MinicCoreLowerStatus minic_core_lower_try_pointer_arithmetic(
                               index_value_type)) {
             { *handled = true; return MINIC_CORE_LOWER_ERROR; }
         }
+        /* Preserve deterministic IR provenance: this instruction is appended
+         * as a whole, so leaving span/padding uninitialized leaks stack data
+         * into the verifier, dumps and downstream debug diagnostics. */
+        (void)memset(&instruction, 0, sizeof(instruction));
         instruction.kind = MINIC_CORE_INSTRUCTION_POINTER_OFFSET;
+        instruction.span = expression->span;
         instruction.type = pointer_value_type;
+        instruction.result = MINIC_CORE_VALUE_INVALID;
         instruction.value.pointer_offset.base = pointer_value;
         instruction.value.pointer_offset.index = index_value;
         instruction.value.pointer_offset.element_size = element_size;

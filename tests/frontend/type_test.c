@@ -31,6 +31,12 @@ int main(void)
     MinicType pointer_to_pointer_type;
     MinicType pointer_to_const_pointer_type;
     MinicType const_pointer_to_pointer_type;
+    MinicType const_void_type;
+    MinicType const_void_pointer_type;
+    MinicType volatile_void_type;
+    MinicType volatile_void_pointer_type;
+    MinicType volatile_pointer_object_type;
+    MinicType pointer_to_volatile_pointer_type;
     MinicType record_type;
     MinicType other_record_type;
     MinicType record_pointer_type;
@@ -240,6 +246,28 @@ int main(void)
         !minic_type_pointee(pointer_to_pointer_type, &recovered_type) ||
         !minic_type_equal(recovered_type, pointer_type)) {
         return fail("pointee recovery");
+    }
+    if (!minic_type_add_const(void_type, &const_void_type) ||
+        !minic_type_pointer_to(const_void_type, &const_void_pointer_type) ||
+        !minic_type_add_volatile(void_type, &volatile_void_type) ||
+        !minic_type_pointer_to(volatile_void_type, &volatile_void_pointer_type) ||
+        !minic_type_add_volatile(pointer_type, &volatile_pointer_object_type) ||
+        !minic_type_pointer_to(volatile_pointer_object_type,
+                               &pointer_to_volatile_pointer_type) ||
+        !minic_type_assignment_compatible(void_pointer_type, pointer_to_pointer_type) ||
+        minic_type_assignment_compatible(void_pointer_type,
+                                         pointer_to_const_pointer_type) ||
+        minic_type_assignment_compatible(void_pointer_type,
+                                         pointer_to_volatile_pointer_type) ||
+        !minic_type_assignment_compatible(const_void_pointer_type,
+                                          pointer_to_const_pointer_type) ||
+        !minic_type_assignment_compatible(volatile_void_pointer_type,
+                                          pointer_to_volatile_pointer_type) ||
+        minic_type_assignment_compatible(pointer_to_pointer_type,
+                                         const_void_pointer_type) ||
+        minic_type_assignment_compatible(pointer_to_pointer_type,
+                                         volatile_void_pointer_type)) {
+        return fail("void pointer conversion preserves immediate pointee qualifiers");
     }
 
     record_type = minic_type_record(3U);

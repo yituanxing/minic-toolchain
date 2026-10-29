@@ -75,7 +75,6 @@ bool minic_riscv64_emit_memory_instruction(
                minic_riscv64_emit_scalar_store_for_program(file, program, stored_type, "t1", "t0");
     }
     case MINIC_CORE_INSTRUCTION_RECORD_LOAD: {
-        const char *opcode;
         size_t destination_offset;
         size_t record_size;
 
@@ -89,19 +88,14 @@ bool minic_riscv64_emit_memory_instruction(
                 file, frame, instruction->value.record_load.source_address, "t0")) {
             return false;
         }
-        if (record_size <= 8U) {
-            opcode = record_size == 8U ? "ld" : record_size == 4U ? "lwu" :
-                     record_size == 2U ? "lhu" : "lbu";
-            if (fprintf(file, "  %s t1, 0(t0)\n", opcode) < 0 ||
-                !minic_riscv64_frame_store_chunk(file, frame, "t1", destination_offset, record_size)) {
-                return false;
-            }
-            return true;
-        }
-
-        /* M162_CORE_RV64_RECORD_LOAD: materialize arbitrary non-empty records
-           into the destination CoreObject without assuming source alignment.
-           This mirrors RECORD_COPY's byte-safe O0 fallback. */
+        /* RECORD_LOAD's source pointer may name an unaligned member inside a
+         * packed enclosing record even when its own record type has natural
+         * 2/4/8-byte alignment. Core does not yet carry a proven pointer
+         * alignment at this instruction. Copy every byte until such a proof
+         * exists; direct lhu/lwu/ld plus sh/sw/sd can trap or corrupt records
+         * of 2/4/8 bytes, and irregular 3/5/6/7-byte sizes need exact copies
+         * regardless of alignment. This is the same byte-safe O0 primitive
+         * used by RECORD_COPY, with no second target copy algorithm. */
         if (!minic_riscv64_frame_emit_address(file, frame, "t1", destination_offset)) {
             return false;
         }

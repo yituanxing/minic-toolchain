@@ -551,14 +551,10 @@ bool minic_core_function_add_callee(MinicCoreFunction *function,
             return false;
         }
     }
-    for (index = 0U; index < function->inline_asm_count; ++index) {
-        const MinicCoreInlineAsm *inline_asm;
-
-        inline_asm = &function->inline_asms[index];
-        if (inline_asm->template_text == NULL || !inline_asm->is_volatile) {
-            return false;
-        }
-    }
+    /* The inline-ASM ingress validates its own records and the Core verifier
+     * validates consumers. Adding a CALL must not rescan an unrelated ASM
+     * table: doing so made a function with many CALLs and ASM sites quadratic
+     * and coupled two independently owned IR collections. */
     for (index = 0U; index < function->callee_count; ++index) {
         const MinicCoreCallee *existing;
 

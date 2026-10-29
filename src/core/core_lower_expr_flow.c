@@ -11,6 +11,52 @@
 
 /* Expression control-flow owner. Every helper maintains source evaluation
  * order and Core CFG semantics, independent from target ABI or machine IR. */
+typedef struct CoreExpressionFactFork {
+    MinicCoreLocalIntegerConstant *entry;
+    MinicCoreLocalIntegerConstant *first_path;
+} CoreExpressionFactFork;
+
+static void core_expression_fact_fork_dispose(CoreExpressionFactFork *fork) {
+    if (fork == NULL) return;
+    free(fork->first_path);
+    free(fork->entry);
+    fork->first_path = NULL;
+    fork->entry = NULL;
+}
+
+static bool core_expression_fact_snapshot(
+    MinicCoreLowerContext *context,
+    MinicCoreLocalIntegerConstant **out) {
+    if (context == NULL || context->source_function == NULL || out == NULL)
+        return false;
+    *out = minic_core_local_facts_snapshot(context);
+    return context->source_function->local_count == 0U || *out != NULL;
+}
+
+static bool core_expression_fact_fork_begin(
+    MinicCoreLowerContext *context, CoreExpressionFactFork *fork) {
+    if (fork == NULL) return false;
+    fork->entry = NULL;
+    fork->first_path = NULL;
+    return core_expression_fact_snapshot(context, &fork->entry);
+}
+
+/* The first arm was built; restore the branch-entry state before lowering
+ * its mutually exclusive sibling, regardless of source spelling. */
+static bool core_expression_fact_fork_second(
+    MinicCoreLowerContext *context, CoreExpressionFactFork *fork) {
+    if (fork == NULL ||
+        !core_expression_fact_snapshot(context, &fork->first_path)) return false;
+    minic_core_local_facts_restore(context, fork->entry);
+    return true;
+}
+
+static bool core_expression_fact_fork_join(
+    MinicCoreLowerContext *context, const CoreExpressionFactFork *fork) {
+    return fork != NULL && minic_core_local_facts_meet(
+        context, fork->first_path, context->local_integer_constants);
+}
+
 MinicCoreLowerStatus minic_core_lower_try_conditional(
     MinicCoreLowerContext *context, const MinicExpression *expression,
     MinicCoreValueId *value_id, bool *handled) {
@@ -76,6 +122,7 @@ MinicCoreLowerStatus minic_core_lower_try_conditional(
         MinicCoreBlockId true_block;
         MinicCoreValueId discarded_value;
         MinicCoreLowerStatus status;
+        CoreExpressionFactFork facts;
 
         true_expression = minic_c0_program_expression(
             context->body->program, expression->value.conditional.when_true);
@@ -97,32 +144,46 @@ MinicCoreLowerStatus minic_core_lower_try_conditional(
         if (status != MINIC_CORE_LOWER_OK) {
             { *handled = true; return status; }
         }
+        if (!core_expression_fact_fork_begin(context, &facts)) {
+            { *handled = true; return MINIC_CORE_LOWER_ERROR; }
+        }
 
         context->block_id = true_block;
         status = lower_expression(
             context, expression->value.conditional.when_true, &discarded_value);
         if (status != MINIC_CORE_LOWER_OK) {
-            { *handled = true; return status; }
+            goto void_conditional_done;
         }
         status = minic_core_lower_internal_set_branch(context, context->block_id, expression->span, merge_block);
         if (status != MINIC_CORE_LOWER_OK) {
-            { *handled = true; return status; }
+            goto void_conditional_done;
+        }
+        if (!core_expression_fact_fork_second(context, &facts)) {
+            status = MINIC_CORE_LOWER_ERROR;
+            goto void_conditional_done;
         }
 
         context->block_id = false_block;
         status = lower_expression(
             context, expression->value.conditional.when_false, &discarded_value);
         if (status != MINIC_CORE_LOWER_OK) {
-            { *handled = true; return status; }
+            goto void_conditional_done;
         }
         status = minic_core_lower_internal_set_branch(context, context->block_id, expression->span, merge_block);
         if (status != MINIC_CORE_LOWER_OK) {
-            { *handled = true; return status; }
+            goto void_conditional_done;
         }
 
         context->block_id = merge_block;
+        if (!core_expression_fact_fork_join(context, &facts)) {
+            status = MINIC_CORE_LOWER_ERROR;
+            goto void_conditional_done;
+        }
         *value_id = MINIC_CORE_VALUE_INVALID;
-        { *handled = true; return MINIC_CORE_LOWER_OK; }
+void_conditional_done:
+        core_expression_fact_fork_dispose(&facts);
+        *handled = true;
+        return status;
     }
     /* BATCH_N_GNU_OMITTED_MIDDLE_CONDITIONAL: GNU `a ?: b` reuses the
        already-evaluated condition value on the true path.  Materialize that
@@ -147,6 +208,7 @@ MinicCoreLowerStatus minic_core_lower_try_conditional(
         MinicCoreTerminator terminator;
         MinicType assignment_type;
         MinicType result_type;
+        CoreExpressionFactFork facts;
 
         if (expression->value.conditional.condition == MINIC_EXPRESSION_INVALID ||
             expression->value.conditional.when_true != expression->value.conditional.condition ||
@@ -261,11 +323,18 @@ MinicCoreLowerStatus minic_core_lower_try_conditional(
                 context->function, context->block_id, &terminator)) {
             { *handled = true; return MINIC_CORE_LOWER_ERROR; }
         }
+        if (!core_expression_fact_fork_begin(context, &facts)) {
+            { *handled = true; return MINIC_CORE_LOWER_ERROR; }
+        }
 
         context->block_id = true_block;
         status = minic_core_lower_internal_set_branch(context, context->block_id, expression->span, merge_block);
         if (status != MINIC_CORE_LOWER_OK) {
-            { *handled = true; return status; }
+            goto omitted_conditional_done;
+        }
+        if (!core_expression_fact_fork_second(context, &facts)) {
+            status = MINIC_CORE_LOWER_ERROR;
+            goto omitted_conditional_done;
         }
 
         context->block_id = false_block;
@@ -274,7 +343,7 @@ MinicCoreLowerStatus minic_core_lower_try_conditional(
                                                expression->value.conditional.when_false,
                                                &false_value);
         if (status != MINIC_CORE_LOWER_OK) {
-            { *handled = true; return status; }
+            goto omitted_conditional_done;
         }
         status = minic_core_lower_internal_store_scalar_value(context,
                                     false_expression->span,
@@ -282,16 +351,22 @@ MinicCoreLowerStatus minic_core_lower_try_conditional(
                                     result_object,
                                     false_value);
         if (status != MINIC_CORE_LOWER_OK) {
-            { *handled = true; return status; }
+            goto omitted_conditional_done;
         }
         status = minic_core_lower_internal_set_branch(context, context->block_id, expression->span, merge_block);
         if (status != MINIC_CORE_LOWER_OK) {
-            { *handled = true; return status; }
+            goto omitted_conditional_done;
         }
 
         context->block_id = merge_block;
-        { *handled = true; return minic_core_lower_internal_reload_scalar_value(
-            context, expression->span, result_type, result_object, value_id); }
+        status = core_expression_fact_fork_join(context, &facts)
+            ? minic_core_lower_internal_reload_scalar_value(
+                context, expression->span, result_type, result_object, value_id)
+            : MINIC_CORE_LOWER_ERROR;
+omitted_conditional_done:
+        core_expression_fact_fork_dispose(&facts);
+        *handled = true;
+        return status;
     }
     if (expression->kind == MINIC_EXPRESSION_CONDITIONAL) {
         const MinicExpression *false_expression;
@@ -305,6 +380,7 @@ MinicCoreLowerStatus minic_core_lower_try_conditional(
         MinicType false_type;
         MinicType result_type;
         MinicType true_type;
+        CoreExpressionFactFork facts;
 
         /* M60_POINTER_CONDITIONAL_VALUE: C conditional values may be pointer
            scalars as well as integers. The existing arm conversion, spill and
@@ -348,6 +424,9 @@ MinicCoreLowerStatus minic_core_lower_try_conditional(
         if (status != MINIC_CORE_LOWER_OK) {
             { *handled = true; return status; }
         }
+        if (!core_expression_fact_fork_begin(context, &facts)) {
+            { *handled = true; return MINIC_CORE_LOWER_ERROR; }
+        }
 
         context->block_id = true_block;
         status = minic_core_lower_internal_lower_scalar_assignment_value(context,
@@ -355,16 +434,20 @@ MinicCoreLowerStatus minic_core_lower_try_conditional(
                                                expression->value.conditional.when_true,
                                                &arm_value);
         if (status != MINIC_CORE_LOWER_OK) {
-            { *handled = true; return status; }
+            goto scalar_conditional_done;
         }
         status = minic_core_lower_internal_store_scalar_value(
             context, true_expression->span, result_type, result_object, arm_value);
         if (status != MINIC_CORE_LOWER_OK) {
-            { *handled = true; return status; }
+            goto scalar_conditional_done;
         }
         status = minic_core_lower_internal_set_branch(context, context->block_id, expression->span, merge_block);
         if (status != MINIC_CORE_LOWER_OK) {
-            { *handled = true; return status; }
+            goto scalar_conditional_done;
+        }
+        if (!core_expression_fact_fork_second(context, &facts)) {
+            status = MINIC_CORE_LOWER_ERROR;
+            goto scalar_conditional_done;
         }
 
         context->block_id = false_block;
@@ -373,21 +456,27 @@ MinicCoreLowerStatus minic_core_lower_try_conditional(
                                                expression->value.conditional.when_false,
                                                &arm_value);
         if (status != MINIC_CORE_LOWER_OK) {
-            { *handled = true; return status; }
+            goto scalar_conditional_done;
         }
         status = minic_core_lower_internal_store_scalar_value(
             context, false_expression->span, result_type, result_object, arm_value);
         if (status != MINIC_CORE_LOWER_OK) {
-            { *handled = true; return status; }
+            goto scalar_conditional_done;
         }
         status = minic_core_lower_internal_set_branch(context, context->block_id, expression->span, merge_block);
         if (status != MINIC_CORE_LOWER_OK) {
-            { *handled = true; return status; }
+            goto scalar_conditional_done;
         }
 
         context->block_id = merge_block;
-        { *handled = true; return minic_core_lower_internal_reload_scalar_value(
-            context, expression->span, result_type, result_object, value_id); }
+        status = core_expression_fact_fork_join(context, &facts)
+            ? minic_core_lower_internal_reload_scalar_value(
+                context, expression->span, result_type, result_object, value_id)
+            : MINIC_CORE_LOWER_ERROR;
+scalar_conditional_done:
+        core_expression_fact_fork_dispose(&facts);
+        *handled = true;
+        return status;
     }
     return MINIC_CORE_LOWER_OK;
 }

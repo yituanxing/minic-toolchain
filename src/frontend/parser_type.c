@@ -498,6 +498,7 @@ bool minic_parser_parse_type_specifiers(MinicParser *parser, MinicType *type) {
         MinicLexer saved_lexer;
         MinicToken saved_token;
         MinicParsedAttributeList probe_attributes;
+        const MinicParserTagBinding *tag;
         MinicRecordId record_id;
         MinicTokenKind record_keyword;
         bool is_definition;
@@ -540,27 +541,31 @@ bool minic_parser_parse_type_specifiers(MinicParser *parser, MinicType *type) {
                                    "expected record tag or definition after record keyword");
                 return false;
             }
-            record_id = minic_parser_find_record(parser, parser->current.span);
-            if (record_id == MINIC_RECORD_INVALID) {
+            {
                 const MinicSourceSpan name_span = parser->current.span;
 
-                if (!minic_c0_program_add_record(parser->program,
-                                                 parser->source + name_span.begin.offset,
-                                                 minic_parser_span_length(name_span),
-                                                 &record_id) ||
-                    !minic_parser_bind_record_tag(parser, name_span, record_id)) {
-                    minic_parser_error(parser, "out of memory while declaring record tag");
+                if (!minic_parser_advance(parser) ||
+                    !minic_parser_resolve_tag(parser, name_span,
+                                              is_union ? MINIC_PARSER_TAG_UNION
+                                                       : MINIC_PARSER_TAG_STRUCT,
+                                              parser->current.kind == MINIC_TOKEN_SEMICOLON,
+                                              &tag)) {
                     return false;
                 }
-                parser->program->records[record_id].is_union = is_union;
-            } else if (parser->program->records[record_id].is_union != is_union) {
-                minic_parser_error(parser, "record tag kind does not match prior declaration");
-                return false;
+                record_id = tag == NULL ? MINIC_RECORD_INVALID : tag->entity.record_id;
+                if (record_id == MINIC_RECORD_INVALID) {
+                    if (!minic_c0_program_add_record(parser->program,
+                                                     parser->source + name_span.begin.offset,
+                                                     minic_parser_span_length(name_span),
+                                                     &record_id) ||
+                        !minic_parser_bind_record_tag(parser, name_span, record_id, is_union)) {
+                        minic_parser_error(parser, "out of memory while declaring record tag");
+                        return false;
+                    }
+                    parser->program->records[record_id].is_union = is_union;
+                }
             }
             parsed_type = minic_type_record(record_id);
-            if (!minic_parser_advance(parser)) {
-                return false;
-            }
         }
     } else if (minic_parser_identifier_is(parser, "_Float128") ||
                minic_parser_identifier_is(parser, "_Float32") ||

@@ -50,6 +50,9 @@ static const char *minic_backend_usage_group(MinicCoreInstructionKind kind) {
     case MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS:
     case MINIC_CORE_INSTRUCTION_VARIADIC_NEXT_SCALAR:
     case MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS:
+    case MINIC_CORE_INSTRUCTION_FIXED_REGISTER_READ:
+    case MINIC_CORE_INSTRUCTION_FIXED_REGISTER_WRITE:
+    case MINIC_CORE_INSTRUCTION_VARIADIC_COPY:
         return "abi";
     case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS:
     case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS:
@@ -121,7 +124,7 @@ void minic_backend_core_usage_dump(const char *arch,
                                           const MinicTargetInfo *target,
                                           const MinicCoreFunction *functions,
                                           size_t function_count) {
-    size_t counts[MINIC_CORE_INSTRUCTION_ATOMIC_LOAD + 1U][4] = {{0U}};
+    size_t counts[MINIC_CORE_INSTRUCTION_KIND_COUNT][4] = {{0U}};
     size_t totals[MINIC_CORE_TERMINATOR_UNREACHABLE + 1U] = {0U};
     size_t i, j, kind, bucket, n_functions = 0U, n_instructions = 0U;
     const char *const widths[4] = {"unknown", "upto32", "64", "over64"};
@@ -136,7 +139,7 @@ void minic_backend_core_usage_dump(const char *arch,
             const unsigned int bits = minic_backend_usage_bits(
                 program, target, fn, ins);
             kind = (size_t)ins->kind;
-            if (kind > (size_t)MINIC_CORE_INSTRUCTION_ATOMIC_LOAD)
+            if (kind >= (size_t)MINIC_CORE_INSTRUCTION_KIND_COUNT)
                 continue;
             bucket = bits == 0U ? 0U : bits <= 32U ? 1U :
                      bits == 64U ? 2U : 3U;
@@ -154,7 +157,7 @@ void minic_backend_core_usage_dump(const char *arch,
     (void)fprintf(stderr,
                   "MINIC_CORE_USAGE_SUMMARY arch=%s functions=%zu instructions=%zu support_verified=0\n",
                   arch, n_functions, n_instructions);
-    for (kind = 0U; kind <= (size_t)MINIC_CORE_INSTRUCTION_ATOMIC_LOAD; ++kind)
+    for (kind = 0U; kind < (size_t)MINIC_CORE_INSTRUCTION_KIND_COUNT; ++kind)
         for (bucket = 0U; bucket < 4U; ++bucket)
             if (counts[kind][bucket] != 0U)
                 (void)fprintf(stderr,

@@ -734,9 +734,13 @@ MinicCoreLowerStatus minic_core_lower_internal_lower_condition_branch(MinicCoreL
         }
     }
     if (expression->kind == MINIC_EXPRESSION_BINARY &&
-        expression->value.binary.operator_kind == MINIC_BINARY_LOGICAL_AND) {
+        (expression->value.binary.operator_kind == MINIC_BINARY_LOGICAL_AND ||
+         expression->value.binary.operator_kind == MINIC_BINARY_LOGICAL_OR)) {
         const MinicExpression *left_expression;
+        MinicCoreLocalIntegerConstant *skipped_rhs_facts;
+        MinicCoreLocalIntegerConstant *evaluated_rhs_facts;
         MinicConstValue left_constant;
+        bool is_and = expression->value.binary.operator_kind == MINIC_BINARY_LOGICAL_AND;
         bool left_is_zero;
         MinicCoreBlockId right_block;
 
@@ -751,59 +755,56 @@ MinicCoreLowerStatus minic_core_lower_internal_lower_condition_branch(MinicCoreL
                                       context->target,
                                       &left_constant,
                                       &left_is_zero)) {
-            if (left_is_zero) {
-                return minic_core_lower_internal_set_branch(context, context->block_id, span, when_false);
-            }
-            return minic_core_lower_internal_lower_condition_branch(
-                context, expression->value.binary.right, span, when_true, when_false);
+            if (is_and && left_is_zero)
+                return minic_core_lower_internal_set_branch(
+                    context, context->block_id, span, when_false);
+            if (!is_and && !left_is_zero)
+                return minic_core_lower_internal_set_branch(
+                    context, context->block_id, span, when_true);
+            return minic_core_lower_internal_lower_condition_branch(context,
+                expression->value.binary.right, span, when_true, when_false);
         }
         if (!minic_core_function_add_block(context->function, &right_block)) {
             return MINIC_CORE_LOWER_ERROR;
         }
         status = minic_core_lower_internal_lower_condition_branch(
-            context, expression->value.binary.left, span, right_block, when_false);
+            context, expression->value.binary.left, span,
+            is_and ? right_block : when_true,
+            is_and ? when_false : right_block);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
+        /* An RHS assignment executes on only one edge. Its local constant
+         * facts cannot be used after the logical expression unless the
+         * skipped edge proves the same value. Source side effects while
+         * evaluating the LHS have already occurred before this snapshot. */
+        skipped_rhs_facts = minic_core_local_facts_snapshot(context);
+        if (context->source_function != NULL &&
+            context->source_function->local_count != 0U &&
+            skipped_rhs_facts == NULL) return MINIC_CORE_LOWER_ERROR;
         context->block_id = right_block;
-        return minic_core_lower_internal_lower_condition_branch(
+        status = minic_core_lower_internal_lower_condition_branch(
             context, expression->value.binary.right, span, when_true, when_false);
-    }
-    if (expression->kind == MINIC_EXPRESSION_BINARY &&
-        expression->value.binary.operator_kind == MINIC_BINARY_LOGICAL_OR) {
-        const MinicExpression *left_expression;
-        MinicConstValue left_constant;
-        bool left_is_zero;
-        MinicCoreBlockId right_block;
-
-        left_expression = minic_c0_program_expression(
-            context->body->program, expression->value.binary.left);
-        if (left_expression != NULL && minic_type_is_integer(left_expression->type) &&
-            minic_const_eval_integer(context->body->program,
-                                     context->target,
-                                     expression->value.binary.left,
-                                     &left_constant) &&
-            minic_const_value_is_zero(context->body->program,
-                                      context->target,
-                                      &left_constant,
-                                      &left_is_zero)) {
-            if (!left_is_zero) {
-                return minic_core_lower_internal_set_branch(context, context->block_id, span, when_true);
-            }
-            return minic_core_lower_internal_lower_condition_branch(
-                context, expression->value.binary.right, span, when_true, when_false);
+        if (status != MINIC_CORE_LOWER_OK) {
+            free(skipped_rhs_facts);
+            return status;
         }
-        if (!minic_core_function_add_block(context->function, &right_block)) {
+        evaluated_rhs_facts = minic_core_local_facts_snapshot(context);
+        if (context->source_function != NULL &&
+            context->source_function->local_count != 0U &&
+            evaluated_rhs_facts == NULL) {
+            free(skipped_rhs_facts);
             return MINIC_CORE_LOWER_ERROR;
         }
-        status = minic_core_lower_internal_lower_condition_branch(
-            context, expression->value.binary.left, span, when_true, right_block);
-        if (status != MINIC_CORE_LOWER_OK) {
-            return status;
+        if (!minic_core_local_facts_meet(context, skipped_rhs_facts,
+                                          evaluated_rhs_facts)) {
+            free(evaluated_rhs_facts);
+            free(skipped_rhs_facts);
+            return MINIC_CORE_LOWER_ERROR;
         }
-        context->block_id = right_block;
-        return minic_core_lower_internal_lower_condition_branch(
-            context, expression->value.binary.right, span, when_true, when_false);
+        free(evaluated_rhs_facts);
+        free(skipped_rhs_facts);
+        return MINIC_CORE_LOWER_OK;
     }
 
     if (context->source_function != NULL &&
@@ -1354,26 +1355,19 @@ minic_core_lower_internal_lower_block(MinicCoreLowerContext *context, const Mini
            cleanup-expression lowering, which remains fail-closed here. */
         /* M142_NONEDGE_CLEANUP_METADATA_OWNER: cleanup ids describe the
            current lifetime context as well as executable cleanup transitions.
-           A plain ASSIGN has no control edge of its own, so crossing cleanup is
-           still owned by the eventual RETURN/BREAK/GOTO/scope-exit edge. An
-           adjacent parser-internal loop label is likewise target metadata, not
-           an executable cleanup edge. Keep every other nonzero-distance shape
-           fail-closed; in particular BREAK/GOTO and structured IF/WHILE are not
-           generalized here. */
+           ASSIGN and LABEL have no outgoing control edge of their own: the
+           eventual RETURN/BREAK/GOTO/scope-exit owns cleanup execution. GNU
+           source labels inside an active cleanup context must carry their
+           actual context for a goto to resolve the correct lifetime boundary.
+           Keep other nonzero-distance shapes fail-closed. */
         if (statement->cleanup_context != statement->cleanup_stop_context &&
             statement->kind != MINIC_STATEMENT_RETURN &&
             statement->kind != MINIC_STATEMENT_ASSIGN &&
             statement->kind != MINIC_STATEMENT_BREAK &&
+            statement->kind != MINIC_STATEMENT_LABEL &&
             !(statement->kind == MINIC_STATEMENT_GOTO &&
               statement->expression == MINIC_EXPRESSION_INVALID &&
-              statement->target_statement != MINIC_STATEMENT_INVALID) &&
-            !(statement->kind == MINIC_STATEMENT_LABEL &&
-              statement_index + 1U < source_block->statement_count &&
-              minic_core_loop_internal_while_label_pair(
-                  statement,
-                  minic_c0_program_statement(
-                      context->body->program,
-                      source_block->statements[statement_index + 1U])))) {
+              statement->target_statement != MINIC_STATEMENT_INVALID)) {
             (void)fprintf(stderr,
                           "CORE_FAST_TRACE stage=statement reason=cleanup-context "
                           "function=%s kind=%d span=%zu:%zu cleanup=%llu stop=%llu\n",
@@ -1414,6 +1408,13 @@ minic_core_lower_internal_lower_block(MinicCoreLowerContext *context, const Mini
                 }
             }
             context->block_id = label_block;
+            /* Nested switch fallback emits CASE/DEFAULT as ordinary reentry
+             * labels in the shared source-block walker. A dispatch edge may
+             * enter this label without executing its lexical predecessor;
+             * facts learned in the previous case are therefore not valid.
+             * The top-level switch segment owner performs its own precise
+             * dispatch/fallthrough meet and never visits these label nodes. */
+            minic_core_local_facts_clear_known(context);
         } else if (statement->kind == MINIC_STATEMENT_LABEL) {
             const MinicStatement *loop = NULL;
             bool internal_loop_label = false;

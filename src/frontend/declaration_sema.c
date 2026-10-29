@@ -356,10 +356,10 @@ MinicDeclarationExternalObjectMergeStatus minic_declaration_merge_external_objec
      * commit step that may allocate, so perform it before composite-type mutation.
      * Array completion and the remaining metadata setters are allocation-free after
      * this preflight and therefore cannot introduce a semantic half-commit. */
-    if ((minic_type_is_array(object->type) &&
+    if (!minic_declaration_apply_object_attributes(program, object_id, attributes) ||
+        (minic_type_is_array(object->type) &&
          !minic_declaration_merge_external_array_composite_type(
-             program, object->type, declared_type)) ||
-        !minic_declaration_apply_object_attributes(program, object_id, attributes)) {
+             program, object->type, declared_type))) {
         return MINIC_DECLARATION_EXTERNAL_OBJECT_MERGE_COMMIT_FAILED;
     }
     return MINIC_DECLARATION_EXTERNAL_OBJECT_MERGE_OK;

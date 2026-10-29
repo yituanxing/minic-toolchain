@@ -428,6 +428,10 @@ static bool core_inline_asm_symbolic_lvalue_address(
                 element_type,
                 &element_size,
                 &element_alignment) ||
+            /* A GNU zero-sized element has no address stride. Do not feed
+             * that size to the signed overflow division below; an inline
+             * relocation cannot assign meaningful offsets to its elements. */
+            element_size == 0U ||
             element_size > (size_t)INT64_MAX ||
             !core_inline_asm_specialized_integer(
                 context, expression->value.subscript.index, &index, depth + 1U)) {
@@ -1169,10 +1173,12 @@ bool core_inline_asm_numeric_template(const MinicInlineAsm *source,
     char *normalized;
 
     if (source == NULL || template_out == NULL || template_length_out == NULL ||
-        source->template_text == NULL ||
+        source->template_text == NULL || source->template_length == SIZE_MAX ||
         source->output_count > MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT ||
         source->input_count > MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT -
-                                  source->output_count) {
+                                  source->output_count ||
+        (source->output_count != 0U && source->outputs == NULL) ||
+        (source->input_count != 0U && source->inputs == NULL)) {
         return false;
     }
     normalized = (char *)malloc(source->template_length + 1U);
@@ -1416,7 +1422,8 @@ bool core_inline_asm_numeric_template(const MinicInlineAsm *source,
     size_t output_length;
 
     if (source == NULL || template_out == NULL || template_length_out == NULL ||
-        source->template_text == NULL || source->inputs == NULL || source->input_count != 1U) {
+        source->template_text == NULL || source->template_length == SIZE_MAX ||
+        source->inputs == NULL || source->input_count != 1U) {
         return false;
     }
     normalized = (char *)malloc(source->template_length + 1U);
@@ -1476,6 +1483,13 @@ bool core_inline_asm_numeric_template(const MinicInlineAsm *source,
     output_length = template_length;
     replacement_count = 0U;
     for (cursor = 0U; cursor + 1U < template_length; ++cursor) {
+        /* GNU %% is a literal percent, not the beginning of operand %0.
+         * Skip both bytes together: the later target emitter will turn %%
+         * into one percent after immediate specialization. */
+        if (template_text[cursor] == '%' && template_text[cursor + 1U] == '%') {
+            cursor += 1U;
+            continue;
+        }
         if (template_text[cursor] == '%' && template_text[cursor + 1U] == '0') {
             if (replacement_length >= 2U) {
                 size_t growth = replacement_length - 2U;
@@ -1499,6 +1513,13 @@ bool core_inline_asm_numeric_template(const MinicInlineAsm *source,
     }
     output_cursor = 0U;
     for (cursor = 0U; cursor < template_length; ++cursor) {
+        if (template_text[cursor] == '%' && cursor + 1U < template_length &&
+            template_text[cursor + 1U] == '%') {
+            baked[output_cursor++] = '%';
+            baked[output_cursor++] = '%';
+            cursor += 1U;
+            continue;
+        }
         if (template_text[cursor] == '%' && cursor + 1U < template_length &&
             template_text[cursor + 1U] == '0') {
             (void)memcpy(baked + output_cursor, replacement, replacement_length);

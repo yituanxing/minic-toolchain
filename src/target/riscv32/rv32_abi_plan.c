@@ -56,14 +56,19 @@ static bool rv32_plan_shape(const MinicC0Program *program,
                 layout_ok ? size : 0U, layout_ok ? align : 0U);
         if (!layout_ok || size > UINT32_MAX)
             return false;
-        (void)align;
+        entry->alignment = align;
         entry->record_size = size;
         entry->indirect_record = size > 8U;
         /* GNU empty aggregates occupy no psABI register or stack word. */
         entry->words = size > 8U ? 1U : (unsigned)shape.words;
         return true;
     }
-    return rv32_scalar_storage_words(function, type, &entry->words);
+    if (!rv32_scalar_storage_words(function, type, &entry->words) ||
+        !minic_data_layout_type(target->data_layout, program, type, &size, &align) ||
+        align == 0U)
+        return false;
+    entry->alignment = align;
+    return true;
 }
 
 static bool rv32_plan_incoming(const MinicC0Program *program,
@@ -106,6 +111,7 @@ static bool rv32_plan_incoming(const MinicC0Program *program,
             return rv32_abi_reject("incoming_type", i, function->parameter_types[i]);
         if (entry->words == 0U) continue;
         if (!minic_riscv32_abi_place(&cursor, entry->words, false,
+                                      entry->alignment,
                                       &entry->location))
             return rv32_abi_reject("incoming_place", i, function->parameter_types[i]);
     }
@@ -155,15 +161,16 @@ static bool rv32_plan_call(const MinicC0Program *program,
         type = i < view.parameter_count ? view.parameter_types[i] : actual;
         if (i < view.parameter_count && !minic_type_equal(type, actual))
             return rv32_abi_reject("call_fixed_type", i, type);
-        /* Record varargs obey the very same ILP32 ABI shape and cursor as
-         * scalar varargs: <=2 XLEN words by value, larger via the caller's
-         * Core snapshot pointer. The variadic flag below makes the cursor
-         * apply psABI even-register alignment for two-word arguments. */
+        /* Record varargs obey the same ILP32 ABI shape and cursor as scalar
+         * varargs: <=2 XLEN words by value, larger via a Core snapshot
+         * pointer. Even-register pairing depends on the actual 8-byte ABI
+         * alignment, not on an aggregate's 8-byte size alone. */
         if (!rv32_plan_shape(program, target, function, type, entry))
             return rv32_abi_reject("call_arg_type", i, type);
         if (entry->words == 0U) continue;
         if (!minic_riscv32_abi_place(&cursor, entry->words,
                 view.is_variadic && i >= view.parameter_count,
+                entry->alignment,
                 &entry->location))
             return rv32_abi_reject("call_place", i, type);
     }

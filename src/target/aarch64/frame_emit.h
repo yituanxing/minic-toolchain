@@ -61,6 +61,15 @@ bool minic_a64_emit_frame_address(FILE *out, const MinicA64FrameView *view,
     MinicA64FrameRef frame, unsigned int gp_target,
     MinicA64ScratchPolicy scratch);
 
+/* Core SSA and record slots are always owned by the stable function frame.
+ * Keep that ownership and default IP0/IP1 scratch selection in one place
+ * instead of re-creating a stack-text transport in each opcode family. */
+bool minic_a64_emit_owned_slot(FILE *out, const MinicA64FrameView *view,
+    bool store, MinicA64FrameRegisterClass kind,
+    unsigned int reg, size_t offset);
+bool minic_a64_emit_owned_address(FILE *out, const MinicA64FrameView *view,
+    size_t offset, unsigned int gp_target);
+
 static inline MinicA64FrameRef minic_a64_owned_slot(size_t offset) {
     MinicA64FrameRef ref = {MINIC_A64_FRAME_OWNED, offset};
     return ref;

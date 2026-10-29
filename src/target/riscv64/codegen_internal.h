@@ -47,7 +47,8 @@ bool minic_riscv64_emit_scalar_store_for_program(FILE *file,
 bool minic_riscv64_emit_integer_aggregate_load_chunk_profile(
     FILE *file, const MinicC0Program *program, MinicType type,
     size_t chunk_index, const char *destination_register,
-    const char *address_register, bool lp64_soft_float);
+    const char *address_register, bool lp64_soft_float,
+    size_t known_frame_offset);
 bool minic_riscv64_emit_integer_aggregate_load_chunk(FILE *file,
                                                      const MinicC0Program *program,
                                                      MinicType type,

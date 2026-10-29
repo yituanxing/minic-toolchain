@@ -352,6 +352,7 @@ TYPE_ALIAS_TEST_BINARY  := $(BUILD_DIR)/tests/frontend/type-alias-test
 AST_CONTRACT_TEST_SOURCES := \
 	src/frontend/ast.c \
 	src/frontend/expression_semantics.c \
+	src/frontend/const_eval.c \
 	src/frontend/ast_global.c \
 	src/frontend/ast_traversal.c \
 	src/frontend/ast_verifier.c \
@@ -520,7 +521,11 @@ $(MINIC_CC_BINARY): $(MINIC_OBJECTS)
 	@mkdir -p "$(dir $@)"
 	$(CC) $(MINIC_OBJECTS) $(MINIC_LDFLAGS) -o "$@"
 
-$(MINIC_BINARY): $(MINIC_DRIVER_OBJECTS)
+# The staged driver invokes the sibling minic-cc at runtime. An order-only
+# prerequisite prevents parallel `make -j check-fast` from launching it while
+# the compiler binary is still being relinked, without relinking the driver
+# for every compiler implementation change.
+$(MINIC_BINARY): $(MINIC_DRIVER_OBJECTS) | $(MINIC_CC_BINARY)
 	@mkdir -p "$(dir $@)"
 	$(CC) $(MINIC_DRIVER_OBJECTS) $(MINIC_LDFLAGS) -o "$@"
 
@@ -1309,6 +1314,7 @@ check-linux-symbolic-integer-and-record: $(MINIC_CC_BINARY)
 
 check-fast: check-x86-linux-control-state check-linux-three-arch-trap-state check-x86-linux-uaccess-and-abi check-linux-symbolic-integer-and-record check-target-selection-m0 check-x86_64-m1 check-token-model check-lexer check-type check-record check-type-alias check-ast-contract check-layout check-rv64-abi check-static-functions check-unsigned-declarations check-long-types check-for-loops check-unbounded-for-break check-prefix-decrement-update check-cast-expressions check-unsigned-char-layout check-pointer-subscripts check-pointer-arithmetic check-pointer-object-const check-const-locals check-global-objects check-bitwise-xor check-integer-bit-operations check-pointer-members check-expression-statements check-postfix-subscripts check-compound-xor-assignment $(MINIC_BINARY)
 	MINIC="$(abspath $(MINIC_BINARY))" \
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
 	HOST_CC="$(CC)" \
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
 	sh tests/compiler/c0/run.sh

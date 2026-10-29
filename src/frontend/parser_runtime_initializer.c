@@ -1585,6 +1585,7 @@ static bool parse_runtime_record_designated_tail(MinicParser *parser, MinicExpre
         size_t top_level_field_index;
         MinicArrayObjectInfo member_array;
         MinicType member_type;
+        MinicSourcePosition member_begin;
         bool member_is_array;
 
         if (!parse_runtime_record_designator_target(
@@ -1602,6 +1603,9 @@ static bool parse_runtime_record_designated_tail(MinicParser *parser, MinicExpre
             return false;
         }
         member_type = member->type;
+        /* Parsing the field value can grow/reallocate the expression arena;
+         * never retain member's borrowed pointer across that parser call. */
+        member_begin = member->span.begin;
         member_is_array =
             minic_c0_expression_array_object_info(parser->program, member, &member_array);
         if (parser->current.kind == MINIC_TOKEN_LBRACE && member_is_array) {
@@ -1672,7 +1676,7 @@ static bool parse_runtime_record_designated_tail(MinicParser *parser, MinicExpre
                     return false;
                 }
                 return parse_positional_runtime_record_initializer_from(
-                    parser, target_id, member->span.begin, next_field);
+                    parser, target_id, member_begin, next_field);
             }
             continue;
         }

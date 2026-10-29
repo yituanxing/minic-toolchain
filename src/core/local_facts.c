@@ -100,6 +100,43 @@ void minic_core_local_facts_restore(
                  count * sizeof(*snapshot));
 }
 
+bool minic_core_local_facts_meet(
+    MinicCoreLowerContext *context,
+    const MinicCoreLocalIntegerConstant *left,
+    const MinicCoreLocalIntegerConstant *right) {
+    size_t index;
+
+    if (context == NULL || context->source_function == NULL) return false;
+    if (context->source_function->local_count == 0U) return true;
+    if (context->local_integer_constants == NULL || left == NULL || right == NULL)
+        return false;
+    for (index = 0U; index < context->source_function->local_count; ++index) {
+        const MinicCoreLocalIntegerConstant *lhs = &left[index];
+        const MinicCoreLocalIntegerConstant *rhs = &right[index];
+        MinicCoreLocalIntegerConstant merged = *lhs;
+        bool same_value = lhs->known && rhs->known &&
+            !lhs->escaped && !rhs->escaped &&
+            minic_type_equal(lhs->value.type, rhs->value.type) &&
+            lhs->value.bits == rhs->value.bits;
+
+        merged.escaped = lhs->escaped || rhs->escaped;
+        merged.program_zero_checked =
+            lhs->program_zero_checked && rhs->program_zero_checked;
+        merged.program_zero_stable =
+            lhs->program_zero_stable && rhs->program_zero_stable;
+        merged.specialization_modified =
+            lhs->specialization_modified || rhs->specialization_modified;
+        merged.specialization_known =
+            lhs->specialization_known && rhs->specialization_known &&
+            minic_type_equal(lhs->specialization_value.type,
+                             rhs->specialization_value.type) &&
+            lhs->specialization_value.bits == rhs->specialization_value.bits;
+        merged.known = same_value && !merged.escaped;
+        context->local_integer_constants[index] = merged;
+    }
+    return true;
+}
+
 void minic_core_local_facts_clear_known(MinicCoreLowerContext *context) {
     size_t index;
 

@@ -295,6 +295,11 @@ static bool rv32_emit_source_structured_asm(
         return false;
     source = &f->inline_asms[ins->value.structured_inline_asm.inline_asm_id];
     n = ins->value.structured_inline_asm.operand_count;
+    /* Core admits up to 16 source roles, but RV32's generic machine plan
+     * has only eight distinct operand registers. Fail closed before any
+     * operand traversal or per-role machine-array access. */
+    if (n > MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT)
+        return false;
     /* An asm that declares all scratch/argument registers clobbered (Linux
      * IRQ stack-switch trampolines do this) requires stable input registers.
      * s1/s2 are callee-saved by the invoked code; save the compiler's old
@@ -425,7 +430,7 @@ static bool rv32_emit_source_structured_asm(
             return true;
         }
     }
-    if (n == 0U || n > MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT ||
+    if (n == 0U || n > sizeof(regs) / sizeof(regs[0]) ||
         !source->is_volatile || source->template_text == NULL || source->is_goto ||
         !rv32_source_arg_clobbers_safe(source, n))
         return false;

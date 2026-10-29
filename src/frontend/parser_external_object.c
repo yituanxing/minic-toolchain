@@ -3,7 +3,6 @@
 #include "frontend/declaration_sema.h"
 #include "frontend/parser_internal.h"
 #include "frontend/parser_static_initializer.h"
-#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -35,10 +34,7 @@ static bool parse_external_integer_array_definition(MinicParser *parser,
     MinicType declared_array_type;
     MinicType declared_element_type;
     size_t element_count;
-    size_t initializer_count;
     bool inferred_bound;
-    bool definition_omits_bound;
-    bool multidimensional;
     bool reused_existing;
 
     if (parser == NULL || section_name == NULL || section_name_length == NULL ||
@@ -52,8 +48,6 @@ static bool parse_external_integer_array_definition(MinicParser *parser,
 
     element_count = 0U;
     inferred_bound = false;
-    definition_omits_bound = false;
-    multidimensional = false;
     reused_existing = false;
     declared_element_type = element_type;
     if (!minic_parser_advance(parser)) {
@@ -61,7 +55,6 @@ static bool parse_external_integer_array_definition(MinicParser *parser,
     }
     if (parser->current.kind == MINIC_TOKEN_RBRACKET) {
         inferred_bound = true;
-        definition_omits_bound = true;
         if (!minic_parser_advance(parser)) {
             return false;
         }
@@ -82,7 +75,6 @@ static bool parse_external_integer_array_definition(MinicParser *parser,
             return false;
         }
         declared_element_type = nested_element_type;
-        multidimensional = true;
     }
 
     if (!minic_parser_parse_gnu_object_attribute_lists_with_symbol_metadata(
@@ -157,11 +149,14 @@ static bool parse_external_integer_array_definition(MinicParser *parser,
         return false;
     }
 
-    if ((inferred_bound || multidimensional) && parser->current.kind == MINIC_TOKEN_LBRACE) {
-        MinicType object_type;
-
-        object_type = object->type;
-        if (!minic_parser_parse_static_storage_initializer_value(parser, object_id, object_type)) {
+    /* Both fixed and inferred aggregate arrays use the same transactional
+     * static-initializer engine. The old hand-written pointer/int loops below
+     * were unreachable: this function is only called for [] declarators,
+     * and all of their brace initializers already took the generic path.
+     * Keep only the valid brace-free char[] = "..." spelling. */
+    if (parser->current.kind == MINIC_TOKEN_LBRACE) {
+        if (!minic_parser_parse_static_storage_initializer_value(
+                parser, object_id, object->type)) {
             if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
                 minic_parser_error(parser, "cannot initialize external aggregate array");
             }
@@ -170,205 +165,22 @@ static bool parse_external_integer_array_definition(MinicParser *parser,
         return minic_parser_expect(
             parser, MINIC_TOKEN_SEMICOLON, "expected ';' after external array definition");
     }
-
-    if (minic_type_is_pointer(element_type)) {
-        if (!minic_parser_expect(
-                parser, MINIC_TOKEN_LBRACE, "expected '{' in external pointer array initializer") ||
-            !minic_c0_global_object_set_zero_initialized(parser->program, object_id)) {
-            return false;
-        }
-        initializer_count = 0U;
-        while (parser->current.kind != MINIC_TOKEN_RBRACE) {
-            MinicGlobalObjectId target_id;
-            bool has_relocation;
-
-            if (!inferred_bound && initializer_count >= element_count) {
-                minic_parser_error(parser, "too many external pointer array initializers");
-                return false;
-            }
-            target_id = MINIC_GLOBAL_OBJECT_INVALID;
-            has_relocation = false;
-            if (parser->current.kind == MINIC_TOKEN_STRING_LITERAL) {
-                MinicSourceSpan literal_span;
-                MinicType literal_type;
-                MinicType literal_pointer_type;
-                const MinicArrayType *literal_array;
-
-                if (!minic_parser_create_string_literal_object(
-                        parser, &target_id, &literal_type, &literal_span)) {
-                    return false;
-                }
-                literal_array =
-                    minic_c0_program_array_type(parser->program, literal_type.array_type_id);
-                if (literal_array == NULL || !minic_type_is_array(literal_type) ||
-                    !minic_type_pointer_to(literal_array->element_type, &literal_pointer_type) ||
-                    !minic_type_assignment_compatible(element_type, literal_pointer_type)) {
-                    minic_parser_error(parser,
-                                       "external pointer array string initializer type mismatch");
-                    return false;
-                }
-                (void)literal_span;
-                has_relocation = true;
-            } else if (parser->current.kind == MINIC_TOKEN_IDENTIFIER) {
-                MinicType source_pointer_type;
-                const MinicGlobalObject *target;
-
-                target_id = minic_parser_find_global_object(parser, parser->current.span);
-                target = target_id == MINIC_GLOBAL_OBJECT_INVALID
-                             ? NULL
-                             : minic_c0_program_global_object(parser->program, target_id);
-                if (target == NULL) {
-                    minic_parser_error(
-                        parser, "external pointer array initializer requires a known object");
-                    return false;
-                }
-                if (minic_type_is_array(target->type)) {
-                    const MinicArrayType *target_array;
-
-                    target_array =
-                        minic_c0_program_array_type(parser->program, target->type.array_type_id);
-                    if (target_array == NULL ||
-                        !minic_type_pointer_to(target_array->element_type, &source_pointer_type)) {
-                        minic_parser_error(parser, "cannot decay pointer array initializer object");
-                        return false;
-                    }
-                } else if (!minic_type_pointer_to(target->type, &source_pointer_type)) {
-                    minic_parser_error(parser,
-                                       "cannot take address of pointer array initializer object");
-                    return false;
-                }
-                if (!minic_type_assignment_compatible(element_type, source_pointer_type) ||
-                    !minic_parser_advance(parser)) {
-                    if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
-                        minic_parser_error(
-                            parser, "external pointer array object initializer type mismatch");
-                    }
-                    return false;
-                }
-                has_relocation = true;
-            } else if (!minic_parser_parse_null_pointer_constant_expression(parser, element_type)) {
-                if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
-                    minic_parser_error(parser,
-                                       "external pointer array scalar initializer must be null");
-                }
-                return false;
-            }
-            if (has_relocation && !minic_c0_global_object_add_object_relocation(
-                                      parser->program,
-                                      object_id,
-                                      MINIC_GLOBAL_RELOCATION_LOCATION_ARRAY_ELEMENT,
-                                      initializer_count,
-                                      target_id)) {
-                minic_parser_error(parser, "cannot record external pointer array relocation");
-                return false;
-            }
-            initializer_count += 1U;
-
-            if (parser->current.kind == MINIC_TOKEN_COMMA) {
-                if (!minic_parser_advance(parser)) {
-                    return false;
-                }
-                if (parser->current.kind == MINIC_TOKEN_RBRACE) {
-                    break;
-                }
-            } else if (parser->current.kind != MINIC_TOKEN_RBRACE) {
-                minic_parser_error(parser,
-                                   "expected ',' or '}' in external pointer array initializer");
-                return false;
-            }
-        }
-        if (!minic_parser_expect(parser,
-                                 MINIC_TOKEN_RBRACE,
-                                 "expected '}' after external pointer array initializer")) {
-            return false;
-        }
-        if (initializer_count == 0U) {
-            minic_parser_error(parser, "external pointer array requires at least one initializer");
-            return false;
-        }
-        if (inferred_bound) {
-            element_count = initializer_count;
-            if (!minic_c0_program_complete_array_type(
-                    parser->program, object->type, element_count)) {
-                minic_parser_error(parser, "cannot infer external pointer array bound");
-                return false;
-            }
-        }
-        return minic_parser_expect(
-            parser, MINIC_TOKEN_SEMICOLON, "expected ';' after external pointer array definition");
-    }
-
-    if (parser->current.kind == MINIC_TOKEN_STRING_LITERAL) {
+    if (inferred_bound && minic_type_is_char_integer(element_type) &&
+        parser->current.kind == MINIC_TOKEN_STRING_LITERAL) {
         size_t string_count;
-
-        if (!definition_omits_bound || !minic_type_is_char_integer(element_type) ||
-            !inferred_bound ||
-            !minic_parser_add_string_literal_initializer(parser, object_id, &string_count) ||
-            !minic_c0_program_complete_array_type(parser->program, object->type, string_count)) {
+        if (!minic_parser_add_string_literal_initializer(parser, object_id, &string_count) ||
+            !minic_c0_program_complete_array_type(
+                parser->program, object->type, string_count)) {
             if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
                 minic_parser_error(parser, "unsupported external string array definition");
             }
             return false;
         }
-    } else {
-        if (!minic_parser_expect(
-                parser, MINIC_TOKEN_LBRACE, "expected '{' in external array initializer")) {
-            return false;
-        }
-        initializer_count = 0U;
-        while (parser->current.kind != MINIC_TOKEN_RBRACE) {
-            int64_t parsed;
-
-            if (!minic_parser_parse_integer_constant_expression(parser, &parsed)) {
-                return false;
-            }
-            if (parsed < INT_MIN || parsed > INT_MAX) {
-                minic_parser_error(parser,
-                                   "external integer array initializer is out of supported range");
-                return false;
-            }
-            if (!inferred_bound && initializer_count >= element_count) {
-                minic_parser_error(parser, "too many external integer array initializers");
-                return false;
-            }
-            if (!minic_c0_global_object_add_initializer(parser->program, object_id, (int)parsed)) {
-                minic_parser_error(parser, "cannot record external integer array initializer");
-                return false;
-            }
-            initializer_count += 1U;
-
-            if (parser->current.kind == MINIC_TOKEN_COMMA) {
-                if (!minic_parser_advance(parser)) {
-                    return false;
-                }
-                if (parser->current.kind == MINIC_TOKEN_RBRACE) {
-                    break;
-                }
-            } else if (parser->current.kind != MINIC_TOKEN_RBRACE) {
-                minic_parser_error(parser, "expected ',' or '}' in external array initializer");
-                return false;
-            }
-        }
-        if (!minic_parser_expect(
-                parser, MINIC_TOKEN_RBRACE, "expected '}' after external array initializer")) {
-            return false;
-        }
-        if (initializer_count == 0U) {
-            minic_parser_error(parser, "external integer array requires at least one initializer");
-            return false;
-        }
-        if (inferred_bound) {
-            element_count = initializer_count;
-            if (!minic_c0_program_complete_array_type(
-                    parser->program, object->type, element_count)) {
-                minic_parser_error(parser, "cannot infer external integer array bound");
-                return false;
-            }
-        }
+        return minic_parser_expect(
+            parser, MINIC_TOKEN_SEMICOLON, "expected ';' after external array definition");
     }
-
-    return minic_parser_expect(
-        parser, MINIC_TOKEN_SEMICOLON, "expected ';' after external array definition");
+    minic_parser_error(parser, "external array initializer requires braces or a character string");
+    return false;
 }
 
 bool minic_parser_external_object_metadata(MinicParser *parser,

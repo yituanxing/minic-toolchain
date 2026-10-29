@@ -19,7 +19,9 @@ bool rv32_emit_object_word(FILE *out, const Rv32Frame *fr,
     offset += (size_t)word * 4U;
     available = record_size - (size_t)word * 4U;
     chunk = available < 4U ? available : 4U;
-    if (chunk == 4U)
+    /* A packed CoreObject may occupy an odd frame offset. Preserve the
+     * direct XLEN load only if the actual frame address is aligned. */
+    if (chunk == 4U && offset % 4U == 0U)
         return rv32_fixed_stack(out, fr, "lw", reg, offset);
     if (!rv32_address(out, fr, "t2", offset) ||
         fprintf(out, "  li %s, 0\n", reg) < 0)
@@ -155,13 +157,14 @@ bool rv32_emit_call(FILE *out, const MinicCoreFunction *f,
             size_t remaining = plan->record_return_size - word * 4U;
             size_t dest = fr->object_offsets[obj] + word * 4U;
             size_t byte;
-            if (remaining >= 4U) {
+            if (remaining >= 4U && dest % 4U == 0U) {
                 if (!rv32_fixed_stack(out, fr, "sw", reg, dest))
                     return false;
             } else {
+                const size_t bytes = remaining < 4U ? remaining : 4U;
                 if (!rv32_address(out, fr, "t2", dest))
                     return false;
-                for (byte = 0U; byte < remaining; ++byte) {
+                for (byte = 0U; byte < bytes; ++byte) {
                     if (fprintf(out,
                                 "  srli t1, %s, %zu\n"
                                 "  sb t1, %zu(t2)\n",
@@ -227,7 +230,7 @@ bool rv32_emit_parameter_object(FILE *out, const MinicCoreFunction *f,
         if (chunk > 4U) chunk = 4U;
         if (!rv32_incoming_word(out, fr, in, "t0"))
             return false;
-        if (chunk == 4U) {
+        if (chunk == 4U && offset % 4U == 0U) {
             if (!rv32_fixed_stack(out, fr, "sw", "t0", offset)) return false;
         } else {
             if (!rv32_address(out, fr, "t2", offset)) return false;

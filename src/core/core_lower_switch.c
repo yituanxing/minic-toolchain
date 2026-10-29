@@ -695,6 +695,10 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
     bool all_segments_terminate;
     bool segment_breaks[MINIC_CORE_SWITCH_LABEL_LIMIT];
     bool segment_terminates[MINIC_CORE_SWITCH_LABEL_LIMIT];
+    MinicCoreLocalIntegerConstant *entry_facts;
+    MinicCoreLocalIntegerConstant *fallthrough_facts;
+    size_t fact_bytes;
+    bool have_fallthrough_facts;
 
     if (context == NULL || context->body == NULL || context->body->program == NULL ||
         context->function == NULL || statement == NULL || terminated == NULL ||
@@ -1052,6 +1056,23 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
        break still reaches the synthetic exit and is therefore non-terminating. */
     (void)memset(segment_breaks, 0, sizeof(segment_breaks));
     (void)memset(segment_terminates, 0, sizeof(segment_terminates));
+    /* Each label is reachable from the selector dispatch; a preceding label
+     * contributes a second predecessor only on actual fallthrough. Maintain
+     * the intersection of both paths' local facts before lowering each case. */
+    if (context->source_function == NULL ||
+        context->source_function->local_count >
+            SIZE_MAX / sizeof(*fallthrough_facts))
+        return MINIC_CORE_LOWER_ERROR;
+    fact_bytes = context->source_function->local_count * sizeof(*fallthrough_facts);
+    entry_facts = minic_core_local_facts_snapshot(context);
+    fallthrough_facts = fact_bytes == 0U ? NULL : malloc(fact_bytes);
+    if (fact_bytes != 0U && (entry_facts == NULL || fallthrough_facts == NULL)) {
+        free(entry_facts);
+        free(fallthrough_facts);
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    have_fallthrough_facts = false;
+    status = MINIC_CORE_LOWER_OK;
     for (source_index = 0U; source_index < label_count; ++source_index) {
         MinicBlock segment;
         MinicCoreBlockId fallthrough_target;
@@ -1062,6 +1083,14 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
         size_t scan;
         MinicCoreBlockId saved_break_target;
         bool segment_terminated;
+
+        minic_core_local_facts_restore(context, entry_facts);
+        if (have_fallthrough_facts &&
+            !minic_core_local_facts_meet(context, entry_facts, fallthrough_facts)) {
+            status = MINIC_CORE_LOWER_ERROR;
+            goto switch_case_facts_cleanup;
+        }
+        have_fallthrough_facts = false;
 
         if ((prune_constant_prefix && source_index < constant_entry_label) ||
             (prune_constant_suffix && source_index > constant_entry_label)) {
@@ -1076,7 +1105,10 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
              * may represent dead GNU assembly or accidental effects. */
             if (!minic_core_function_set_terminator(
                     context->function, labels[source_index].body_block,
-                    &unreachable)) return MINIC_CORE_LOWER_ERROR;
+                    &unreachable)) {
+                status = MINIC_CORE_LOWER_ERROR;
+                goto switch_case_facts_cleanup;
+            }
             segment_terminates[source_index] = true;
             segment_breaks[source_index] = false;
             continue;
@@ -1093,7 +1125,8 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
             segment_statement =
                 minic_c0_program_statement(context->body->program, body->statements[scan]);
             if (segment_statement == NULL) {
-                return MINIC_CORE_LOWER_ERROR;
+                status = MINIC_CORE_LOWER_ERROR;
+                goto switch_case_facts_cleanup;
             }
             /* A direct break terminates ordinary switch fallthrough. A later
                ordinary LABEL is reachable only when the function really owns
@@ -1123,7 +1156,8 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
                                   scan,
                                   (unsigned long long)segment_statement->cleanup_context,
                                   (unsigned long long)segment_statement->cleanup_stop_context);
-                    return MINIC_CORE_LOWER_UNSUPPORTED;
+                    status = MINIC_CORE_LOWER_UNSUPPORTED;
+                    goto switch_case_facts_cleanup;
                 }
                 if (break_index == SIZE_MAX) {
                     break_index = scan;
@@ -1144,7 +1178,7 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
             status = minic_core_lower_internal_lower_block(context, &segment, &segment_terminated);
             context->break_target = saved_break_target;
             if (status != MINIC_CORE_LOWER_OK) {
-                return status;
+                goto switch_case_facts_cleanup;
             }
         }
         segment_terminates[source_index] = segment_terminated;
@@ -1207,8 +1241,15 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
             status = minic_core_lower_internal_set_branch(
                 context, context->block_id, statement->span, fallthrough_target);
             if (status != MINIC_CORE_LOWER_OK) {
-                return status;
+                goto switch_case_facts_cleanup;
             }
+        }
+        if (!segment_terminated && break_index == SIZE_MAX &&
+            source_index + 1U < label_count) {
+            if (fact_bytes != 0U)
+                (void)memcpy(fallthrough_facts,
+                             context->local_integer_constants, fact_bytes);
+            have_fallthrough_facts = true;
         }
 
         if (reentry_index != SIZE_MAX) {
@@ -1223,12 +1264,13 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
                 reentry_label->target_expression != MINIC_EXPRESSION_INVALID ||
                 reentry_label->expression != MINIC_EXPRESSION_INVALID ||
                 reentry_label->target_statement != MINIC_STATEMENT_INVALID) {
-                return MINIC_CORE_LOWER_UNSUPPORTED;
+                status = MINIC_CORE_LOWER_UNSUPPORTED;
+                goto switch_case_facts_cleanup;
             }
             status = ensure_statement_block(
                 context, body->statements[reentry_index], &reentry_block);
             if (status != MINIC_CORE_LOWER_OK) {
-                return status;
+                goto switch_case_facts_cleanup;
             }
             context->block_id = reentry_block;
             reentry_terminated = false;
@@ -1242,7 +1284,7 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
                 status = minic_core_lower_internal_lower_block(context, &reentry_segment, &reentry_terminated);
                 context->break_target = saved_break_target;
                 if (status != MINIC_CORE_LOWER_OK) {
-                    return status;
+                    goto switch_case_facts_cleanup;
                 }
             }
             if (!reentry_terminated) {
@@ -1255,11 +1297,28 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
                 status = minic_core_lower_internal_set_branch(
                     context, context->block_id, reentry_label->span, reentry_fallthrough);
                 if (status != MINIC_CORE_LOWER_OK) {
-                    return status;
+                    goto switch_case_facts_cleanup;
+                }
+                if (source_index + 1U < label_count) {
+                    if (have_fallthrough_facts &&
+                        !minic_core_local_facts_meet(
+                            context, fallthrough_facts,
+                            context->local_integer_constants)) {
+                        status = MINIC_CORE_LOWER_ERROR;
+                        goto switch_case_facts_cleanup;
+                    }
+                    if (fact_bytes != 0U)
+                        (void)memcpy(fallthrough_facts,
+                                     context->local_integer_constants, fact_bytes);
+                    have_fallthrough_facts = true;
                 }
             }
         }
     }
+switch_case_facts_cleanup:
+    free(entry_facts);
+    free(fallthrough_facts);
+    if (status != MINIC_CORE_LOWER_OK) return status;
 
     all_segments_terminate = default_label != SIZE_MAX && label_count != 0U;
     if (all_segments_terminate) {

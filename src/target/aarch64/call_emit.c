@@ -34,18 +34,17 @@ static bool emit_lp64_record_chunk_argument(FILE *out, size_t offset,
  * optionally realigned local frame. Use the saved entry address whenever
  * an over-aligned C object forced x19 to become the stable frame base. */
 static bool aarch64_emit_incoming_stack_read(FILE *out,
-    const MinicDirectLP64BlockContext *ctx, const char *register_name,
+    const MinicDirectLP64BlockContext *ctx,
+    MinicA64FrameRegisterClass kind, unsigned int reg,
     size_t stack_slot) {
-    if (!out || !ctx || !register_name ||
-        stack_slot > (SIZE_MAX - 16U) / 8U) return false;
-    if (ctx->saved_entry_sp_offset != SIZE_MAX)
-        return fprintf(out, "  ldr x16, [x19, #%zu]\n"
-                            "  ldr %s, [x16, #%zu]\n",
-                       ctx->saved_entry_sp_offset,
-                       register_name, stack_slot * 8U + 16U) >= 0;
-    if (ctx->frame > SIZE_MAX - stack_slot * 8U - 16U) return false;
-    return fprintf(out, "  ldr %s, [sp, #%zu]\n", register_name,
-                   ctx->frame + stack_slot * 8U + 16U) >= 0;
+    const MinicA64FrameView view = {
+        ctx->dynamic_frame, ctx->frame, 0U, ctx->saved_entry_sp_offset
+    };
+    if (!out || !ctx || stack_slot > SIZE_MAX / 8U) return false;
+    return minic_a64_emit_frame_load(out, &view,
+        (MinicA64FrameRef){MINIC_A64_FRAME_INCOMING, stack_slot * 8U},
+        (MinicA64FrameRegister){kind, reg},
+        (MinicA64ScratchPolicy){0U, 0U});
 }
 
 /* Outgoing calls and incoming named parameters share the same ABI plan
@@ -60,6 +59,10 @@ bool minic_aarch64_emit_abi_instruction(
     const MinicCoreFunction *fn;
     const MinicLP64FramePlan *frame_plan;
     const MinicLP64ArgumentPlan *incoming_plan;
+    const MinicA64FrameView frame_view = {
+        ctx ? ctx->dynamic_frame : false, ctx ? ctx->frame : 0U,
+        0U, ctx ? ctx->saved_entry_sp_offset : SIZE_MAX
+    };
     if (out == NULL || ctx == NULL || ctx->program == NULL ||
         ctx->target == NULL || ctx->fn == NULL || ctx->frame_plan == NULL ||
         ctx->incoming_plan == NULL || ctx->outgoing_calls == NULL ||
@@ -299,11 +302,15 @@ bool minic_aarch64_emit_abi_instruction(
                     bytes == 0U || bytes > 16U || slots > 2U)
                     return false;
                 for (chunk = 0U; chunk < slots; ++chunk) {
+                    const MinicA64FrameView view = {
+                        ctx->dynamic_frame, ctx->frame, 0U,
+                        ctx->saved_entry_sp_offset
+                    };
                     const size_t payload = bytes - chunk * 8U >= 8U
                         ? 8U : bytes - chunk * 8U;
-                    if (!minic_aarch64_emit_lp64_record_chunk_parameter(out,
-                            dst + chunk * 8U, payload, true, chunk, 0U,
-                            SIZE_MAX))
+                    if (!minic_aarch64_emit_lp64_record_chunk_parameter(
+                            out, &view, dst + chunk * 8U, payload,
+                            true, chunk, 0U))
                         return false;
                 }
                 return true;
@@ -311,16 +318,18 @@ bool minic_aarch64_emit_abi_instruction(
             if (minic_type_is_int128_integer(ins->type)) {
                 size_t dst;
                 if (!minic_lp64_frame_plan_wide_slot(frame_plan, ins->result, &dst) ||
-                    fprintf(out, "  str x0, [sp, #%zu]\n"
-                                 "  str x1, [sp, #%zu]\n",
-                            dst, dst + 8U) < 0)
+                    !minic_a64_emit_owned_slot(out, &frame_view, true,
+                        MINIC_A64_REG_X, 0U, dst) ||
+                    !minic_a64_emit_owned_slot(out, &frame_view, true,
+                        MINIC_A64_REG_X, 1U, dst + 8U))
                     return false;
                 return true;
             }
             if (minic_type_is_long_double(ins->type)) {
                 size_t dst;
                 if (!minic_lp64_frame_plan_wide_slot(frame_plan, ins->result, &dst) ||
-                    fprintf(out, "  str q0, [sp, #%zu]\n", dst) < 0)
+                    !minic_a64_emit_owned_slot(out, &frame_view, true,
+                        MINIC_A64_REG_Q, 0U, dst))
                     return false;
                 return true;
             }
@@ -355,14 +364,17 @@ bool minic_aarch64_emit_abi_instruction(
                     return false;
                 for (limb = 0U; limb < 2U; ++limb) {
                     if (location->gp_registers == 2U) {
-                        if (fprintf(out, "  str x%zu, [sp, #%zu]\n",
-                                    location->gp_first + limb, dst + limb * 8U) < 0)
+                        if (!minic_a64_emit_owned_slot(out, &frame_view, true,
+                                MINIC_A64_REG_X,
+                                (unsigned int)(location->gp_first + limb),
+                                dst + limb * 8U))
                             return false;
                     } else if (location->gp_registers == 0U) {
-                        if (!aarch64_emit_incoming_stack_read(out, ctx, "x9",
+                        if (!aarch64_emit_incoming_stack_read(out, ctx,
+                                MINIC_A64_REG_X, 9U,
                                 location->stack_first + limb) ||
-                            fprintf(out, "  str x9, [sp, #%zu]\n",
-                                    dst + limb * 8U) < 0)
+                            !minic_a64_emit_owned_slot(out, &frame_view, true,
+                                MINIC_A64_REG_X, 9U, dst + limb * 8U))
                             return false;
                     }
                     else if (location->gp_registers != 0U)
@@ -375,13 +387,16 @@ bool minic_aarch64_emit_abi_instruction(
                 if (!minic_lp64_frame_plan_wide_slot(frame_plan, ins->result, &dst))
                     return false;
                 if (location->fp_registers != 0U) {
-                    if (fprintf(out, "  str q%zu, [sp, #%zu]\n",
-                                location->fp_first, dst) < 0)
+                    if (!minic_a64_emit_owned_slot(out, &frame_view, true,
+                            MINIC_A64_REG_Q,
+                            (unsigned int)location->fp_first, dst))
                         return false;
                 } else {
-                    if (!aarch64_emit_incoming_stack_read(out, ctx, "q9",
+                    if (!aarch64_emit_incoming_stack_read(out, ctx,
+                            MINIC_A64_REG_Q, 9U,
                             location->stack_first) ||
-                        fprintf(out, "  str q9, [sp, #%zu]\n", dst) < 0)
+                        !minic_a64_emit_owned_slot(out, &frame_view, true,
+                            MINIC_A64_REG_Q, 9U, dst))
                         return false;
                 }
                 return true;
@@ -390,34 +405,35 @@ bool minic_aarch64_emit_abi_instruction(
                 minic_type_is_float(ins->type)) {
                 const bool is_float = minic_type_is_float(ins->type);
                 if (location->fp_registers != 0U) {
-                    if (fprintf(out, is_float ? "  str s%zu, [sp, #%zu]\n"
-                                              : "  str d%zu, [sp, #%zu]\n",
-                                location->fp_first, offset) < 0)
+                    if (!minic_a64_emit_owned_slot(out, &frame_view, true,
+                            is_float ? MINIC_A64_REG_S : MINIC_A64_REG_D,
+                            (unsigned int)location->fp_first, offset))
                         return false;
-                } else if (!aarch64_emit_incoming_stack_read(
-                               out, ctx, is_float ? "s9" : "d9",
+                } else if (!aarch64_emit_incoming_stack_read(out, ctx,
+                               is_float ? MINIC_A64_REG_S : MINIC_A64_REG_D,
+                               9U,
                                location->stack_first) ||
-                           fprintf(out, is_float
-                                      ? "  str s9, [sp, #%zu]\n"
-                                      : "  str d9, [sp, #%zu]\n",
-                                   offset) < 0)
+                           !minic_a64_emit_owned_slot(out, &frame_view, true,
+                               is_float ? MINIC_A64_REG_S : MINIC_A64_REG_D,
+                               9U, offset))
                     return false;
                 return true;
             }
             if (location->gp_registers != 0U) {
-                if (fprintf(out, minic_lp64_register64_type(program, target, ins->type)
-                                 ? "  str x%zu, [sp, #%zu]\n"
-                                 : "  str w%zu, [sp, #%zu]\n",
-                            location->gp_first, offset) < 0)
+                if (!minic_a64_emit_owned_slot(out, &frame_view, true,
+                        minic_lp64_register64_type(program, target, ins->type)
+                            ? MINIC_A64_REG_X : MINIC_A64_REG_W,
+                        (unsigned int)location->gp_first, offset))
                     return false;
             } else {
                 const bool wide = minic_lp64_register64_type(program,
                     target, ins->type);
                 if (!aarch64_emit_incoming_stack_read(out, ctx,
-                        wide ? "x9" : "w9", location->stack_first) ||
-                    fprintf(out, wide ? "  str x9, [sp, #%zu]\n"
-                                      : "  str w9, [sp, #%zu]\n",
-                            offset) < 0)
+                        wide ? MINIC_A64_REG_X : MINIC_A64_REG_W,
+                        9U, location->stack_first) ||
+                    !minic_a64_emit_owned_slot(out, &frame_view, true,
+                        wide ? MINIC_A64_REG_X : MINIC_A64_REG_W,
+                        9U, offset))
                     return false;
             }
             return true;

@@ -367,13 +367,13 @@ static bool minic_type_void_object_pointer_compatible(MinicType target, MinicTyp
         (source_is_void && minic_type_is_function(target_pointee))) {
         return false;
     }
-    /* A pointer object is itself an object, so T ** is compatible with void *.
-       Preserve the existing qualifier check for the one-level object case. */
-    if ((target_is_void && source.pointer_depth > 1U) ||
-        (source_is_void && target.pointer_depth > 1U)) {
-        return true;
-    }
-    return (source_pointee.base_qualifiers & ~target_pointee.base_qualifiers) == 0U;
+    /* A pointer object is itself an object, so T ** may convert to void *.
+     * Its immediate pointee can nevertheless be a const/volatile pointer
+     * object. Checking only base_qualifiers silently discards that object's
+     * qualifiers for nested pointers. */
+    return (!minic_type_is_const(source_pointee) || minic_type_is_const(target_pointee)) &&
+           (!minic_type_is_volatile(source_pointee) ||
+            minic_type_is_volatile(target_pointee));
 }
 
 bool minic_type_assignment_compatible(MinicType target, MinicType source) {

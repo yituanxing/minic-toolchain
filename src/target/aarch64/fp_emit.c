@@ -11,12 +11,7 @@
 static bool fp_slot(FILE *out, const MinicA64FrameView *frame,
                     bool store, MinicA64FrameRegisterClass kind,
                     unsigned int reg, size_t offset) {
-    const MinicA64FrameRegister operand = {kind, reg};
-    const MinicA64ScratchPolicy scratch = {0U, 0U};
-    return store ? minic_a64_emit_frame_store(out, frame,
-                       minic_a64_owned_slot(offset), operand, scratch)
-                 : minic_a64_emit_frame_load(out, frame,
-                       minic_a64_owned_slot(offset), operand, scratch);
+    return minic_a64_emit_owned_slot(out, frame, store, kind, reg, offset);
 }
 
 /* Own the native instruction sequences for the IEEE numeric family.

@@ -146,6 +146,11 @@ typedef enum MinicCoreInstructionKind {
     MINIC_CORE_INSTRUCTION_FIXED_REGISTER_WRITE
 } MinicCoreInstructionKind;
 
+/* One exclusive upper bound for opcode-indexed tables and diagnostics.
+ * Keep this adjacent to the last real opcode as the IR vocabulary grows;
+ * it is intentionally not an instruction-kind enum member. */
+enum { MINIC_CORE_INSTRUCTION_KIND_COUNT = MINIC_CORE_INSTRUCTION_FIXED_REGISTER_WRITE + 1U };
+
 /* M91_BUILTIN_UNREACHABLE_TERMINATOR: unreachable is a CFG fact, not a
    value-producing instruction and not an invented target trap. */
 typedef enum MinicCoreTerminatorKind {

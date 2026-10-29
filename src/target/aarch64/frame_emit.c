@@ -208,3 +208,21 @@ bool minic_a64_emit_frame_address(FILE *out, const MinicA64FrameView *view,
     return a64_address_from_base(out, gp_target,
         scratch == 16U ? "x16" : "x17", resolved.displacement);
 }
+
+bool minic_a64_emit_owned_slot(FILE *out, const MinicA64FrameView *view,
+    bool store, MinicA64FrameRegisterClass kind,
+    unsigned int reg, size_t offset) {
+    const MinicA64FrameRegister operand = {kind, reg};
+    const MinicA64ScratchPolicy scratch = {0U, 0U};
+    return store ? minic_a64_emit_frame_store(out, view,
+                       minic_a64_owned_slot(offset), operand, scratch)
+                 : minic_a64_emit_frame_load(out, view,
+                       minic_a64_owned_slot(offset), operand, scratch);
+}
+
+bool minic_a64_emit_owned_address(FILE *out, const MinicA64FrameView *view,
+    size_t offset, unsigned int gp_target) {
+    const MinicA64ScratchPolicy scratch = {0U, 0U};
+    return minic_a64_emit_frame_address(out, view,
+        minic_a64_owned_slot(offset), gp_target, scratch);
+}

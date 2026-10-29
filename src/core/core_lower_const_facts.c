@@ -453,7 +453,8 @@ static bool core_expression_known_null_pointer_depth(
         return core_expression_known_null_pointer_depth(
             context, expression->value.unary.operand, depth + 1U);
     }
-    if (minic_core_lower_direct_local_read(context, expression_id, &local_id) &&
+    if (minic_core_cfg_pure_call_argument(context, expression_id, 0U) &&
+        minic_core_lower_direct_local_read(context, expression_id, &local_id) &&
         minic_core_local_null_pointer_get(context, local_id)) {
         return true;
     }
@@ -462,6 +463,20 @@ static bool core_expression_known_null_pointer_depth(
         const MinicFunction *callee;
         const MinicBlock *callee_body;
         const MinicStatement *return_statement;
+        size_t argument_index;
+
+        /* The returned pointer may be known without the call being elidable.
+         * In particular, every argument is evaluated before a helper's
+         * unconditional null return. Never discard an effectful argument. */
+        for (argument_index = 0U;
+             argument_index < expression->value.call.argument_count;
+             ++argument_index) {
+            if (!minic_core_cfg_pure_call_argument(
+                    context,
+                    minic_c0_call_argument(expression, argument_index), 0U)) {
+                return false;
+            }
+        }
 
         callee = minic_c0_program_function(
             context->body->program, expression->value.call.function_id);
@@ -479,6 +494,15 @@ static bool core_expression_known_null_pointer_depth(
             context->body->program, callee_body->statements[0]);
         if (return_statement == NULL || return_statement->kind != MINIC_STATEMENT_RETURN ||
             return_statement->expression == MINIC_EXPRESSION_INVALID) {
+            return false;
+        }
+        /* The callee body belongs to another local-fact namespace. A caller's
+         * local NULL fact must not prove anything about its return expression.
+         * Only an independently pure, literal-derived return is safe. */
+        if (!minic_core_cfg_pure_call_argument(
+                context, return_statement->expression, 0U) ||
+            !minic_c0_expression_is_null_pointer_constant_v0(
+                context->body->program, return_statement->expression)) {
             return false;
         }
         return core_expression_known_null_pointer_depth(
@@ -1552,7 +1576,12 @@ statement_expression_done:
             context, expression->value.binary.right, 0U);
 
         if (left_expression != NULL && right_expression != NULL &&
-            left_range != right_range) {
+            left_range != right_range &&
+            /* A range proof says only what an expression returns, not that
+             * evaluating it is optional. This condition also rejects calls,
+             * assignments, increments and volatile reads anywhere inside
+             * the comparison, including its boolean-valued operand. */
+            minic_core_cfg_pure_call_argument(context, expression_id, 0U)) {
             MinicExpressionId constant_id = left_range
                                                 ? expression->value.binary.right
                                                 : expression->value.binary.left;

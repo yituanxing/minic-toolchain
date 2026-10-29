@@ -1416,6 +1416,7 @@ static bool parse_builtin_overflow_predicate(MinicParser *parser,
     MinicExpressionId left_id, right_id, result_id;
     const MinicExpression *left, *right, *result;
     MinicSourcePosition begin;
+    MinicSourcePosition result_end;
     MinicType result_type;
     if (parser == NULL || expression_id == NULL) return false;
     begin = parser->current.span.begin;
@@ -1434,8 +1435,14 @@ static bool parse_builtin_overflow_predicate(MinicParser *parser,
     if (left == NULL || right == NULL || result == NULL ||
         !minic_type_is_integer(left->type) || !minic_type_is_integer(right->type) ||
         !minic_type_is_integer(result->type) || minic_type_is_bool_integer(result->type) ||
-        !minic_type_unqualified(result->type, &result_type) ||
-        !normalize_overflow_integer_operand(parser, &left_id, result_type) ||
+        !minic_type_unqualified(result->type, &result_type)) {
+        minic_parser_error(parser, "overflow predicate requires three integer operands");
+        return false;
+    }
+    /* Operand normalization appends expressions and can reallocate the AST.
+     * Save the third operand's span before either append occurs. */
+    result_end = result->span.end;
+    if (!normalize_overflow_integer_operand(parser, &left_id, result_type) ||
         !normalize_overflow_integer_operand(parser, &right_id, result_type)) {
         minic_parser_error(parser, "overflow predicate requires three integer operands");
         return false;
@@ -1443,7 +1450,7 @@ static bool parse_builtin_overflow_predicate(MinicParser *parser,
     (void)memset(&expression, 0, sizeof(expression));
     expression.kind = MINIC_EXPRESSION_BUILTIN_OVERFLOW_P;
     expression.span.begin = begin;
-    expression.span.end = result->span.end;
+    expression.span.end = result_end;
     expression.type = minic_type_bool();
     expression.value_category = MINIC_VALUE_RVALUE;
     expression.value.overflow.operator_kind = operator_kind;

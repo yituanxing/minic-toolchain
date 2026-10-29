@@ -67,10 +67,27 @@ bool minic_x86_64_emit_global(FILE *out, const MinicC0Program *program,
     size_t storage_size, alignment, width, scalar_align, i;
     bool array_of_records, all_zero_aggregate = false;
     const char *directive;
-    if (obj == NULL || obj->name == NULL || obj->name[0] == '\0' ||
+    if (out == NULL || program == NULL || target == NULL ||
+        target->data_layout == NULL || obj == NULL ||
+        obj->name == NULL || obj->name[0] == '\0' ||
         obj->alias_target != MINIC_GLOBAL_OBJECT_INVALID ||
-        !minic_data_layout_global_object(target->data_layout, program, obj,
-                                         &storage_size, &alignment)) return false;
+        (obj->relocation_count != 0U && obj->relocations == NULL) ||
+        (obj->visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT &&
+         minic_multi_elf_visibility_directive(obj->visibility) == NULL)) return false;
+    if (minic_type_is_record(obj->type) && obj->relocation_count == 0U) {
+        /* The common payload planner owns bytewise-zero record detection,
+         * including nested records, padding and zero-valued initializer
+         * slots. Keep x86's existing section policy and relocation dialect:
+         * the generic plan is not a drop-in emitter for every x86 global. */
+        MinicMultiGlobalEmissionPlan record_plan;
+        if (!minic_multi_global_emission_plan_build(program, target, obj,
+                                                   &record_plan)) return false;
+        storage_size = record_plan.storage_size;
+        alignment = record_plan.storage_alignment;
+        all_zero_aggregate =
+            record_plan.payload_kind == MINIC_MULTI_GLOBAL_PAYLOAD_ZERO;
+    } else if (!minic_data_layout_global_object(target->data_layout, program, obj,
+                                                 &storage_size, &alignment)) return false;
     scalar = obj->type;
     while (minic_type_is_array(scalar)) {
         const MinicArrayType *arr = minic_c0_program_array_type(program, scalar.array_type_id);
@@ -96,24 +113,6 @@ bool minic_x86_64_emit_global(FILE *out, const MinicC0Program *program,
         (directive == NULL || width == 0U ||
          obj->initializer_count > storage_size / width)) return false;
     if (obj->initializer_count != 0U && obj->initializer_values == NULL) return false;
-    /* A fully zero aggregate is bytewise zero for this x86 target even
-     * when its type contains nested records, bit-fields and padding.
-     * Never take this shortcut for relocations or a nonzero slot. */
-    /* C static-storage records have an implicit all-zero initializer
-     * even when no aggregate initializer token exists. Model that through
-     * the same byte-exact DataLayout path as explicit zeros. */
-    if (minic_type_is_record(obj->type) && obj->relocation_count == 0U) {
-        all_zero_aggregate = obj->initializer_count == 0U;
-        if (obj->initializer_count != 0U) {
-            all_zero_aggregate = true;
-            for (i = 0U; i < obj->initializer_count; ++i) {
-                if (obj->initializer_values[i] != 0U) {
-                    all_zero_aggregate = false;
-                    break;
-                }
-            }
-        }
-    }
     if (obj->section_name != NULL) {
         if (!minic_multi_elf_safe_section_name(obj->section_name) ||
             fprintf(out, ".section %s,\"%s\",@progbits\n",

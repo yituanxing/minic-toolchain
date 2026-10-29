@@ -58,6 +58,30 @@ int main(void) {
         (MinicA64FrameRef){MINIC_A64_FRAME_OUTGOING, 40U},
         (MinicA64FrameRegister){MINIC_A64_REG_X, 9U},
         free_scratch, true), "ldr x9, [sp, #40]");
+    /* The single owned-slot API is shared by FP, memory, block/terminator
+     * and record transport. It must never fall back to the live alloca SP. */
+    address_stream = tmpfile();
+    assert(address_stream != NULL);
+    assert(minic_a64_emit_owned_slot(address_stream, &dynamic, false,
+        MINIC_A64_REG_X, 9U, 4096U));
+    assert(minic_a64_emit_owned_slot(address_stream, &dynamic, true,
+        MINIC_A64_REG_W, 9U, 32760U));
+    assert(minic_a64_emit_owned_address(address_stream, &dynamic,
+        5000U, 11U));
+    assert(fflush(address_stream) == 0);
+    rewind(address_stream);
+    {
+        char emitted[1024];
+        const size_t n = fread(emitted, 1U, sizeof(emitted) - 1U,
+                               address_stream);
+        emitted[n] = '\0';
+        assert(strstr(emitted, "add x17, x19, x17") != NULL);
+        assert(strstr(emitted, "ldr x9, [x17]") != NULL);
+        assert(strstr(emitted, "str w9, [x17]") != NULL);
+        assert(strstr(emitted, "add x11, x19, x11") != NULL);
+        assert(strstr(emitted, "[sp, #4096]") == NULL);
+    }
+    assert(fclose(address_stream) == 0);
     expect(test_transfer(false, aligned,
         (MinicA64FrameRef){MINIC_A64_FRAME_INCOMING, 64U},
         (MinicA64FrameRegister){MINIC_A64_REG_X, 9U},

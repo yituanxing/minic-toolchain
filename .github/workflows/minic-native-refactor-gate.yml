@@ -152,6 +152,12 @@ jobs:
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minic-native-backend all
           test -x build/minic-native-backend/bin/minic
           test -x build/minic-native-backend/bin/minic-cc
+      - name: Full-source review architecture and correctness batch native oracles
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash tests/compiler/c0/probe-review-batch-2026-10-29.sh \
+            "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
       - name: Exact original Linux AArch64 MRS u64 ABI family and negative target qualification
         run: |
           set -Eeuo pipefail

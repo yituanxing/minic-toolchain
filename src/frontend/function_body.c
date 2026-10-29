@@ -781,17 +781,21 @@ bool minic_c0_program_recompute_inline_emission_references(MinicC0Program *progr
     size_t object_index;
     bool success = false;
 
-    if (program == NULL || !initialize_validation(program, &validation) ||
-        !assign_local_owners(&validation)) {
+    if (!initialize_validation(program, &validation)) {
+        return false;
+    }
+    if (!assign_local_owners(&validation)) {
+        destroy_validation(&validation);
         return false;
     }
     reachable = calloc(program->function_count == 0U ? 1U : program->function_count,
                        sizeof(*reachable));
     processed = calloc(program->function_count == 0U ? 1U : program->function_count,
                        sizeof(*processed));
-    queue = malloc((program->function_count == 0U ? 1U : program->function_count) *
-                   sizeof(*queue));
-    if (reachable == NULL || processed == NULL || queue == NULL) {
+    if (reachable == NULL || processed == NULL ||
+        !allocate_array((void **)&queue,
+                        program->function_count == 0U ? 1U : program->function_count,
+                        sizeof(*queue))) {
         goto done;
     }
 

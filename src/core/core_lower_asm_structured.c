@@ -328,7 +328,10 @@ MinicCoreLowerStatus core_asm_try_immediate_output_csr(
                         context->function,
                         specialized_template,
                         specialized_length,
-                        source->is_volatile,
+                        /* A register output is an observable value even for
+                         * GNU nonvolatile asm. Core's stored effect must be
+                         * retained until its value has been written back. */
+                        true,
                         source->has_memory_clobber,
                         &inline_asm_id);
                     free(specialized_template);

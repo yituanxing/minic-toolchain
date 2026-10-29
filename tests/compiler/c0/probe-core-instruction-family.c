@@ -5,7 +5,7 @@
  * Compiler-generated M/A/F instructions are never inferred from membership. */
 int main(void) {
     unsigned int i, integer = 0U, floating = 0U, calls = 0U;
-    for (i = 0U; i <= (unsigned int)MINIC_CORE_INSTRUCTION_VARIADIC_COPY; ++i) {
+    for (i = 0U; i < (unsigned int)MINIC_CORE_INSTRUCTION_KIND_COUNT; ++i) {
         MinicCoreInstructionKind kind = (MinicCoreInstructionKind)i;
         bool a = minic_core_instruction_is_integer_scalar(kind);
         bool b = minic_core_instruction_is_floating_scalar(kind);

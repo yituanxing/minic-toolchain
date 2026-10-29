@@ -1,4 +1,5 @@
 #include "core/core_lower_internal.h"
+#include "core/linear_vararg_cursor.h"
 #include "frontend/expression_semantics.h"
 #include <stdint.h>
 #include <stdlib.h>
@@ -65,6 +66,83 @@ static MinicCoreLowerStatus linear_vararg_align8(
         context, span, cursor_type, masked, result);
 }
 
+MinicCoreLowerStatus minic_core_linear_vararg_prepare_cursor(
+    MinicCoreLowerContext *context, MinicSourceSpan span,
+    MinicCoreValueId cursor, MinicType cursor_type,
+    size_t value_alignment, MinicCoreValueId *aligned_cursor) {
+    if (context == NULL || context->target == NULL || aligned_cursor == NULL ||
+        context->target->variadic_scalar_read_kind !=
+            MINIC_VARIADIC_SCALAR_READ_LINEAR_SLOT ||
+        context->target->variadic_linear_slot_bytes == 0U ||
+        value_alignment == 0U || value_alignment > 8U) {
+        return MINIC_CORE_LOWER_UNSUPPORTED;
+    }
+    if (context->target->variadic_linear_slot_bytes == 4U &&
+        value_alignment == 8U) {
+        return linear_vararg_align8(
+            context, span, cursor, cursor_type, aligned_cursor);
+    }
+    *aligned_cursor = cursor;
+    return MINIC_CORE_LOWER_OK;
+}
+
+MinicCoreLowerStatus minic_core_linear_vararg_advance(
+    MinicCoreLowerContext *context, MinicSourceSpan span,
+    MinicCoreValueId cursor, MinicCoreValueId list_address,
+    MinicType cursor_type, size_t value_size, bool is_volatile) {
+    MinicCoreInstruction operation;
+    MinicCoreValueId slots, next_cursor;
+    size_t slot_bytes;
+    size_t slot_count;
+
+    if (context == NULL || context->target == NULL || context->function == NULL ||
+        context->target->variadic_scalar_read_kind !=
+            MINIC_VARIADIC_SCALAR_READ_LINEAR_SLOT ||
+        (slot_bytes = context->target->variadic_linear_slot_bytes) == 0U ||
+        value_size == 0U) {
+        return MINIC_CORE_LOWER_UNSUPPORTED;
+    }
+    /* Division before addition avoids overflowing size_t for large sizes. */
+    slot_count = 1U + (value_size - 1U) / slot_bytes;
+    if (slot_count > INT64_MAX) {
+        return MINIC_CORE_LOWER_UNSUPPORTED;
+    }
+    (void)memset(&operation, 0, sizeof(operation));
+    operation.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
+    operation.span = span;
+    operation.type = minic_type_int();
+    operation.result = MINIC_CORE_VALUE_INVALID;
+    operation.value.integer_value = (int64_t)slot_count;
+    if (!minic_core_function_append_value_instruction(
+            context->function, context->block_id, &operation, &slots)) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    (void)memset(&operation, 0, sizeof(operation));
+    operation.kind = MINIC_CORE_INSTRUCTION_POINTER_OFFSET;
+    operation.span = span;
+    operation.type = cursor_type;
+    operation.result = MINIC_CORE_VALUE_INVALID;
+    operation.value.pointer_offset.base = cursor;
+    operation.value.pointer_offset.index = slots;
+    operation.value.pointer_offset.element_size = slot_bytes;
+    operation.value.pointer_offset.subtract = false;
+    if (!minic_core_function_append_value_instruction(
+            context->function, context->block_id, &operation, &next_cursor)) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    (void)memset(&operation, 0, sizeof(operation));
+    operation.kind = MINIC_CORE_INSTRUCTION_STORE;
+    operation.span = span;
+    operation.type = minic_type_void();
+    operation.result = MINIC_CORE_VALUE_INVALID;
+    operation.value.store.address = list_address;
+    operation.value.store.stored_value = next_cursor;
+    operation.value.store.is_volatile = is_volatile;
+    return minic_core_function_append_effect_instruction(
+               context->function, context->block_id, &operation)
+               ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR;
+}
+
 MinicCoreLowerStatus minic_core_lower_vararg_scalar(
     MinicCoreLowerContext *context, const MinicExpression *expression,
     MinicCoreValueId *value_id) {
@@ -75,8 +153,6 @@ MinicCoreLowerStatus minic_core_lower_vararg_scalar(
     MinicCoreValueId cursor_value;
     MinicCoreValueId value_address;
     MinicCoreValueId argument_value;
-    MinicCoreValueId one;
-    MinicCoreValueId next_cursor;
     MinicType cursor_type;
     MinicType value_pointer_type;
     size_t value_size;
@@ -152,16 +228,10 @@ MinicCoreLowerStatus minic_core_lower_vararg_scalar(
             context->function, context->block_id, &operation, &cursor_value)) {
         return MINIC_CORE_LOWER_ERROR;
     }
-    if (context->target->variadic_scalar_read_kind ==
-            MINIC_VARIADIC_SCALAR_READ_LINEAR_SLOT &&
-        context->target->variadic_linear_slot_bytes == 4U &&
-        value_alignment == 8U) {
-        MinicCoreValueId aligned;
-        status = linear_vararg_align8(
-            context, expression->span, cursor_value, cursor_type, &aligned);
-        if (status != MINIC_CORE_LOWER_OK) return status;
-        cursor_value = aligned;
-    }
+    status = minic_core_linear_vararg_prepare_cursor(
+        context, expression->span, cursor_value, cursor_type,
+        value_alignment, &cursor_value);
+    if (status != MINIC_CORE_LOWER_OK) return status;
     status = append_scalar_bitcast(
         context, expression->span, value_pointer_type, cursor_value, &value_address);
     if (status != MINIC_CORE_LOWER_OK) {
@@ -182,44 +252,10 @@ MinicCoreLowerStatus minic_core_lower_vararg_scalar(
             context->function, context->block_id, &operation, &argument_value)) {
         return MINIC_CORE_LOWER_ERROR;
     }
-    (void)memset(&operation, 0, sizeof(operation));
-    operation.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
-    operation.span = expression->span;
-    operation.type = minic_type_int();
-    operation.result = MINIC_CORE_VALUE_INVALID;
-    operation.value.integer_value = (int64_t)((value_size +
-        context->target->variadic_linear_slot_bytes - 1U) /
-        context->target->variadic_linear_slot_bytes);
-    if (!minic_core_function_append_value_instruction(
-            context->function, context->block_id, &operation, &one)) {
-        return MINIC_CORE_LOWER_ERROR;
-    }
-    (void)memset(&operation, 0, sizeof(operation));
-    operation.kind = MINIC_CORE_INSTRUCTION_POINTER_OFFSET;
-    operation.span = expression->span;
-    operation.type = cursor_type;
-    operation.result = MINIC_CORE_VALUE_INVALID;
-    operation.value.pointer_offset.base = cursor_value;
-    operation.value.pointer_offset.index = one;
-    operation.value.pointer_offset.element_size =
-        context->target->variadic_linear_slot_bytes;
-    operation.value.pointer_offset.subtract = false;
-    if (!minic_core_function_append_value_instruction(
-            context->function, context->block_id, &operation, &next_cursor)) {
-        return MINIC_CORE_LOWER_ERROR;
-    }
-    (void)memset(&operation, 0, sizeof(operation));
-    operation.kind = MINIC_CORE_INSTRUCTION_STORE;
-    operation.span = expression->span;
-    operation.type = minic_type_void();
-    operation.result = MINIC_CORE_VALUE_INVALID;
-    operation.value.store.address = list_address;
-    operation.value.store.stored_value = next_cursor;
-    operation.value.store.is_volatile = minic_type_is_volatile(target->type);
-    if (!minic_core_function_append_effect_instruction(
-            context->function, context->block_id, &operation)) {
-        return MINIC_CORE_LOWER_ERROR;
-    }
+    status = minic_core_linear_vararg_advance(
+        context, expression->span, cursor_value, list_address,
+        cursor_type, value_size, minic_type_is_volatile(target->type));
+    if (status != MINIC_CORE_LOWER_OK) return status;
     *value_id = argument_value;
     return MINIC_CORE_LOWER_OK;
 }

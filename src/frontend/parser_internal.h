@@ -44,14 +44,26 @@ typedef struct MinicParserOrdinaryBinding {
     MinicEnumeratorId enumerator_id;
 } MinicParserOrdinaryBinding;
 
-typedef struct MinicParserRecordTag {
+/* struct, union, and enum share one C tag namespace. Ordinary identifiers,
+ * including enumerators, live in a distinct namespace. */
+typedef enum MinicParserTagKind {
+    MINIC_PARSER_TAG_STRUCT,
+    MINIC_PARSER_TAG_UNION,
+    MINIC_PARSER_TAG_ENUM
+} MinicParserTagKind;
+
+typedef struct MinicParserTagBinding {
     MinicSourceSpan name_span;
-    MinicRecordId record_id;
-} MinicParserRecordTag;
+    MinicParserTagKind kind;
+    union {
+        MinicRecordId record_id;
+        MinicEnumId enum_id;
+    } entity;
+} MinicParserTagBinding;
 
 typedef struct MinicParserScopeFrame {
     size_t binding_begin;
-    size_t record_tag_begin;
+    size_t tag_begin;
     size_t enum_constant_begin;
     MinicCleanupContextId cleanup_context;
 } MinicParserScopeFrame;
@@ -68,11 +80,6 @@ typedef struct MinicParserEnumConstant {
     MinicSourceSpan name_span;
     MinicEnumeratorId enumerator_id;
 } MinicParserEnumConstant;
-
-typedef struct MinicParserEnumTag {
-    MinicSourceSpan name_span;
-    MinicEnumId enum_id;
-} MinicParserEnumTag;
 
 typedef struct MinicParserSwitchContext {
     uint64_t case_lower_values[MINIC_PARSER_MAX_SWITCH_CASES];
@@ -137,9 +144,9 @@ typedef struct MinicParser {
     size_t local_binding_count;
     size_t local_binding_capacity;
 
-    MinicParserRecordTag *record_tags;
-    size_t record_tag_count;
-    size_t record_tag_capacity;
+    MinicParserTagBinding *tags;
+    size_t tag_count;
+    size_t tag_capacity;
 
     MinicParserScopeFrame *scopes;
     size_t scope_count;
@@ -148,10 +155,6 @@ typedef struct MinicParser {
     MinicParserEnumConstant *enum_constants;
     size_t enum_constant_count;
     size_t enum_constant_capacity;
-
-    MinicParserEnumTag *enum_tags;
-    size_t enum_tag_count;
-    size_t enum_tag_capacity;
 
     size_t perf_find_local_calls;
     size_t perf_find_local_steps;
@@ -439,7 +442,6 @@ bool minic_parser_bind_enum_constant(MinicParser *parser,
                                      MinicEnumeratorId enumerator_id);
 MinicEnumeratorId minic_parser_find_enum_constant(const MinicParser *parser,
                                                   MinicSourceSpan name_span);
-MinicEnumId minic_parser_find_enum_tag(const MinicParser *parser, MinicSourceSpan name_span);
 bool minic_parser_parse_enum_specifier(MinicParser *parser, MinicType *enum_type);
 bool minic_parser_find_record_field_path(const MinicParser *parser,
                                          const MinicRecord *record,
@@ -468,12 +470,20 @@ bool minic_parser_declare_block_scope_extern_object(MinicParser *parser,
                                                     MinicGlobalObjectId *object_id);
 MinicFixedRegisterBindingId minic_parser_find_fixed_register_binding(const MinicParser *parser,
                                                                      MinicSourceSpan name_span);
-MinicRecordId minic_parser_find_record(const MinicParser *parser, MinicSourceSpan name_span);
-MinicRecordId minic_parser_find_record_in_current_scope(const MinicParser *parser,
-                                                        MinicSourceSpan name_span);
+const MinicParserTagBinding *minic_parser_find_tag(const MinicParser *parser,
+                                                   MinicSourceSpan name_span);
+const MinicParserTagBinding *minic_parser_find_tag_in_current_scope(
+    const MinicParser *parser, MinicSourceSpan name_span);
+bool minic_parser_resolve_tag(MinicParser *parser, MinicSourceSpan name_span,
+                              MinicParserTagKind kind, bool current_scope_only,
+                              const MinicParserTagBinding **tag);
 bool minic_parser_bind_record_tag(MinicParser *parser,
                                   MinicSourceSpan name_span,
-                                  MinicRecordId record_id);
+                                  MinicRecordId record_id,
+                                  bool is_union);
+bool minic_parser_bind_enum_tag(MinicParser *parser,
+                                MinicSourceSpan name_span,
+                                MinicEnumId enum_id);
 MinicTypeAliasId minic_parser_find_type_alias(const MinicParser *parser, MinicSourceSpan name_span);
 
 bool minic_parser_parse_type_name_preserving_incomplete(MinicParser *parser, MinicType *type);

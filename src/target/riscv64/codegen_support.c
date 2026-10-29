@@ -64,12 +64,14 @@ static bool minic_riscv64_integer_aggregate_abi(
 bool minic_riscv64_emit_integer_aggregate_load_chunk_profile(
     FILE *file, const MinicC0Program *program, MinicType type,
     size_t chunk_index, const char *destination_register,
-    const char *address_register, bool lp64_soft_float) {
+    const char *address_register, bool lp64_soft_float,
+    size_t known_frame_offset) {
     size_t chunk_count;
     size_t chunk_offset;
     size_t chunk_size;
     size_t index;
     size_t storage_size;
+    bool aligned_for_native_load;
 
     if (file == NULL || destination_register == NULL || address_register == NULL ||
         !minic_riscv64_integer_aggregate_abi(
@@ -78,25 +80,34 @@ bool minic_riscv64_emit_integer_aggregate_load_chunk_profile(
         return false;
     }
     chunk_offset = chunk_index * 8U;
+    if (chunk_offset >= storage_size)
+        return false;
     chunk_size = storage_size - chunk_offset;
     if (chunk_size > 8U) {
         chunk_size = 8U;
     }
-    if (chunk_size == 8U) {
+    /* Only a proven RV64 frame address can use a native multi-byte load.
+     * A record member inside an enclosing packed struct may be unaligned
+     * even when the member's own record type has natural alignment. The
+     * legacy helper passes SIZE_MAX and takes the byte-gather path. */
+    aligned_for_native_load = known_frame_offset != SIZE_MAX &&
+        known_frame_offset <= SIZE_MAX - chunk_offset &&
+        (known_frame_offset + chunk_offset) % chunk_size == 0U;
+    if (chunk_size == 8U && aligned_for_native_load) {
         return fprintf(file,
                        "  ld %s, %zu(%s)\n",
                        destination_register,
                        chunk_offset,
                        address_register) >= 0;
     }
-    if (chunk_size == 4U) {
+    if (chunk_size == 4U && aligned_for_native_load) {
         return fprintf(file,
                        "  lwu %s, %zu(%s)\n",
                        destination_register,
                        chunk_offset,
                        address_register) >= 0;
     }
-    if (chunk_size == 2U) {
+    if (chunk_size == 2U && aligned_for_native_load) {
         return fprintf(file,
                        "  lhu %s, %zu(%s)\n",
                        destination_register,
@@ -129,7 +140,7 @@ bool minic_riscv64_emit_integer_aggregate_load_chunk(
     const char *address_register) {
     return minic_riscv64_emit_integer_aggregate_load_chunk_profile(
         file, program, type, chunk_index,
-        destination_register, address_register, false);
+        destination_register, address_register, false, SIZE_MAX);
 }
 
 void minic_riscv64_set_diagnostic(MinicDiagnostic *diagnostic,
