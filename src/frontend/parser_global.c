@@ -12,6 +12,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+static bool static_object_type_is_read_only(const MinicC0Program *program, MinicType type);
+
 bool minic_parser_global_apply_metadata(MinicParser *parser,
                                          MinicGlobalObjectId object_id,
                                          const char *section_name,
@@ -48,7 +50,8 @@ bool minic_parser_global_begin_definition(MinicParser *parser,
                                                 minic_parser_span_length(name_span),
                                                 type,
                                                 true,
-                                                minic_type_is_const(type),
+                                                static_object_type_is_read_only(
+                                                    parser->program, type),
                                                 object_id)) {
             minic_parser_error(parser, "cannot create static object definition");
             return false;
@@ -56,9 +59,48 @@ bool minic_parser_global_begin_definition(MinicParser *parser,
         return true;
     }
     existing = minic_c0_program_global_object(parser->program, *object_id);
-    if (existing == NULL || !existing->is_internal || !minic_type_equal(existing->type, type) ||
-        !minic_c0_global_object_begin_definition(parser->program, *object_id)) {
+    if (existing == NULL || !existing->is_internal ||
+        (!minic_type_equal(existing->type, type) &&
+         !minic_declaration_external_object_types_compatible(
+             parser->program, existing->type, type)) ||
+        !minic_c0_global_object_begin_definition(parser->program, *object_id) ||
+        (minic_type_is_array(existing->type) && minic_type_is_array(type) &&
+         !minic_declaration_merge_external_array_composite_type(
+             parser->program, existing->type, type))) {
         minic_parser_error(parser, "conflicting static object definition");
+        return false;
+    }
+    return true;
+}
+
+/* One owner of file-scope internal-linkage tentative state, including array
+ * composite bounds.  The parser's object/array syntax must not create a
+ * second implementation of C's tentative→definition transition. */
+static bool global_merge_static_tentative(MinicParser *parser,
+                                          MinicType declared_type,
+                                          MinicSourceSpan name_span,
+                                          bool is_read_only,
+                                          MinicGlobalObjectId *object_id) {
+    const MinicGlobalObject *existing;
+
+    if (parser == NULL || object_id == NULL) {
+        return false;
+    }
+    *object_id = minic_parser_find_global_object_entity(parser, name_span);
+    if (*object_id == MINIC_GLOBAL_OBJECT_INVALID) {
+        return minic_c0_program_add_tentative_global_object(
+            parser->program, parser->source + name_span.begin.offset,
+            minic_parser_span_length(name_span), declared_type, true,
+            is_read_only, object_id);
+    }
+    existing = minic_c0_program_global_object(parser->program, *object_id);
+    if (existing == NULL || !existing->is_internal ||
+        !minic_declaration_external_object_types_compatible(
+            parser->program, existing->type, declared_type) ||
+        !minic_c0_global_object_merge_tentative(parser->program, *object_id) ||
+        (minic_type_is_array(existing->type) &&
+         !minic_declaration_merge_external_array_composite_type(
+             parser->program, existing->type, declared_type))) {
         return false;
     }
     return true;
@@ -644,57 +686,23 @@ static bool parse_static_scalar_array(MinicParser *parser,
     existing_id = minic_parser_find_global_object_entity(parser, name_span);
     object_id = MINIC_GLOBAL_OBJECT_INVALID;
     if (parser->current.kind == MINIC_TOKEN_SEMICOLON) {
-        const MinicGlobalObject *existing;
-        const MinicArrayType *existing_array;
-        const MinicArrayType *declared_array;
         bool discard_declared;
 
-        if (existing_id == MINIC_GLOBAL_OBJECT_INVALID) {
-            if (!minic_c0_program_add_tentative_global_object(parser->program,
-                                                              parser->source +
-                                                                  name_span.begin.offset,
-                                                              minic_parser_span_length(name_span),
-                                                              object_type,
-                                                              true,
-                                                              minic_type_is_const(element_type),
-                                                              &object_id)) {
-                minic_parser_error(parser,
-                                   "cannot create static scalar array tentative definition");
-                return false;
-            }
-        } else {
-            existing = minic_c0_program_global_object(parser->program, existing_id);
-            existing_array =
-                existing != NULL && minic_type_is_array(existing->type)
-                    ? minic_c0_program_array_type(parser->program, existing->type.array_type_id)
-                    : NULL;
-            declared_array =
-                minic_c0_program_array_type(parser->program, object_type.array_type_id);
-            discard_declared =
-                object_type.array_type_id + 1U == parser->program->array_type_count &&
-                (existing == NULL || existing->type.array_type_id != object_type.array_type_id);
-            if (existing == NULL || existing_array == NULL || declared_array == NULL ||
-                !existing->is_internal ||
-                !minic_type_equal(existing_array->element_type, declared_array->element_type) ||
-                (existing_array->element_count != 0U && declared_array->element_count != 0U &&
-                 existing_array->element_count != declared_array->element_count) ||
-                (existing_array->is_zero_length != declared_array->is_zero_length &&
-                 (existing_array->is_zero_length || declared_array->is_zero_length)) ||
-                (existing_array->element_count == 0U && !existing_array->is_zero_length &&
-                 declared_array->element_count != 0U &&
-                 !minic_c0_program_complete_array_type(
-                     parser->program, existing->type, declared_array->element_count)) ||
-                !minic_c0_global_object_merge_tentative(parser->program, existing_id)) {
-                minic_parser_error(parser, "conflicting static scalar array tentative definition");
-                return false;
-            }
-            object_id = existing_id;
-            if (discard_declared &&
-                !minic_c0_program_discard_last_array_type(parser->program, object_type)) {
-                minic_parser_error(parser,
-                                   "cannot retire transient static scalar array declaration");
-                return false;
-            }
+        discard_declared = existing_id != MINIC_GLOBAL_OBJECT_INVALID &&
+                           object_type.array_type_id + 1U ==
+                               parser->program->array_type_count &&
+                           parser->program->global_objects[existing_id].type.array_type_id !=
+                               object_type.array_type_id;
+        if (!global_merge_static_tentative(parser, object_type, name_span,
+                                           minic_type_is_const(element_type), &object_id)) {
+            minic_parser_error(parser, "conflicting static scalar array tentative definition");
+            return false;
+        }
+        if (discard_declared &&
+            !minic_c0_program_discard_last_array_type(parser->program, object_type)) {
+            minic_parser_error(parser,
+                               "cannot retire transient static scalar array declaration");
+            return false;
         }
         if (!minic_parser_global_apply_metadata(parser,
                                       object_id,
@@ -708,47 +716,19 @@ static bool parse_static_scalar_array(MinicParser *parser,
         return minic_parser_advance(parser);
     }
 
-    if (existing_id == MINIC_GLOBAL_OBJECT_INVALID) {
-        if (!minic_c0_program_add_global_object(parser->program,
-                                                parser->source + name_span.begin.offset,
-                                                minic_parser_span_length(name_span),
-                                                object_type,
-                                                true,
-                                                minic_type_is_const(element_type),
-                                                &object_id)) {
-            minic_parser_error(parser, "cannot create static scalar array object");
-            return false;
-        }
-    } else {
-        const MinicGlobalObject *existing;
+    if (!minic_parser_global_begin_definition(
+            parser, object_type, name_span, &object_id)) {
+        minic_parser_error(parser, "conflicting static scalar array definition");
+        return false;
+    }
+    if (existing_id != MINIC_GLOBAL_OBJECT_INVALID) {
         const MinicArrayType *existing_array;
-        const MinicArrayType *declared_array;
-        size_t declared_count;
         bool discard_declared;
 
-        existing = minic_c0_program_global_object(parser->program, existing_id);
-        existing_array =
-            existing != NULL && minic_type_is_array(existing->type)
-                ? minic_c0_program_array_type(parser->program, existing->type.array_type_id)
-                : NULL;
-        declared_array = minic_c0_program_array_type(parser->program, object_type.array_type_id);
-        declared_count = declared_array == NULL ? 0U : declared_array->element_count;
         discard_declared =
             object_type.array_type_id + 1U == parser->program->array_type_count &&
-            (existing == NULL || existing->type.array_type_id != object_type.array_type_id);
-        if (existing == NULL || existing_array == NULL || declared_array == NULL ||
-            !existing->is_internal || !existing->is_tentative ||
-            !minic_type_equal(existing_array->element_type, declared_array->element_type) ||
-            (existing_array->element_count != 0U && declared_count != 0U &&
-             existing_array->element_count != declared_count) ||
-            (existing_array->element_count == 0U && declared_count != 0U &&
-             !minic_c0_program_complete_array_type(
-                 parser->program, existing->type, declared_count)) ||
-            !minic_c0_global_object_begin_definition(parser->program, existing_id)) {
-            minic_parser_error(parser, "conflicting static scalar array definition");
-            return false;
-        }
-        object_id = existing_id;
+            parser->program->global_objects[object_id].type.array_type_id !=
+                object_type.array_type_id;
         object_type = parser->program->global_objects[object_id].type;
         existing_array = minic_c0_program_array_type(parser->program, object_type.array_type_id);
         if (existing_array == NULL) {
@@ -838,7 +818,6 @@ bool minic_parser_global_zero_definition(MinicParser *parser,
                                          MinicType object_type,
                                          MinicSourceSpan name_span) {
     MinicGlobalObjectId object_id;
-    const MinicGlobalObject *existing;
 
     if (parser == NULL || parser->current.kind != MINIC_TOKEN_SEMICOLON ||
         (!minic_type_is_integer(object_type) && !minic_type_is_pointer(object_type) &&
@@ -850,27 +829,11 @@ bool minic_parser_global_zero_definition(MinicParser *parser,
         minic_parser_error(parser, "static object requires a complete object type");
         return false;
     }
-    object_id = minic_parser_find_global_object_entity(parser, name_span);
-    if (object_id == MINIC_GLOBAL_OBJECT_INVALID) {
-        if (!minic_c0_program_add_tentative_global_object(
-                parser->program,
-                parser->source + name_span.begin.offset,
-                minic_parser_span_length(name_span),
-                object_type,
-                true,
-                static_object_type_is_read_only(parser->program, object_type),
-                &object_id)) {
-            minic_parser_error(parser, "cannot create static tentative definition");
-            return false;
-        }
-    } else {
-        existing = minic_c0_program_global_object(parser->program, object_id);
-        if (existing == NULL || !existing->is_internal ||
-            !minic_type_equal(existing->type, object_type) ||
-            !minic_c0_global_object_merge_tentative(parser->program, object_id)) {
-            minic_parser_error(parser, "conflicting static tentative definition");
-            return false;
-        }
+    if (!global_merge_static_tentative(
+            parser, object_type, name_span,
+            static_object_type_is_read_only(parser->program, object_type), &object_id)) {
+        minic_parser_error(parser, "conflicting static tentative definition");
+        return false;
     }
     return minic_parser_advance(parser);
 }
@@ -1006,29 +969,11 @@ bool minic_parser_parse_static_zero_declaration_list_after_head(MinicParser *par
             }
             return false;
         }
-        object_id = minic_parser_find_global_object_entity(parser, name_span);
-        if (object_id == MINIC_GLOBAL_OBJECT_INVALID) {
-            if (!minic_c0_program_add_tentative_global_object(
-                    parser->program,
-                    parser->source + name_span.begin.offset,
-                    minic_parser_span_length(name_span),
-                    object_type,
-                    true,
-                    static_object_type_is_read_only(parser->program, object_type),
-                    &object_id)) {
-                minic_parser_error(parser, "cannot create static tentative declarator");
-                return false;
-            }
-        } else {
-            const MinicGlobalObject *existing;
-
-            existing = minic_c0_program_global_object(parser->program, object_id);
-            if (existing == NULL || !existing->is_internal ||
-                !minic_type_equal(existing->type, object_type) ||
-                !minic_c0_global_object_merge_tentative(parser->program, object_id)) {
-                minic_parser_error(parser, "conflicting static tentative declarator");
-                return false;
-            }
+        if (!global_merge_static_tentative(
+                parser, object_type, name_span,
+                static_object_type_is_read_only(parser->program, object_type), &object_id)) {
+            minic_parser_error(parser, "conflicting static tentative declarator");
+            return false;
         }
         if (!minic_parser_global_apply_metadata(parser,
                                       object_id,
@@ -1075,14 +1020,8 @@ static bool parse_preformed_static_array_definition(MinicParser *parser,
     }
     if (!minic_declaration_instantiate_incomplete_array_object_type(
             parser->program, object_type, &instance_type) ||
-        !minic_c0_program_add_global_object(
-            parser->program,
-            parser->source + name_span.begin.offset,
-            minic_parser_span_length(name_span),
-            instance_type,
-            true,
-            static_object_type_is_read_only(parser->program, object_type),
-            &object_id) ||
+        !minic_parser_global_begin_definition(
+            parser, instance_type, name_span, &object_id) ||
         !minic_parser_global_apply_metadata(parser,
                                       object_id,
                                       section_name,
@@ -1096,7 +1035,9 @@ static bool parse_preformed_static_array_definition(MinicParser *parser,
         return false;
     }
 
-    object_type = instance_type;
+    /* Composite declarations refer to the already-owned object's canonical
+     * array descriptor; a typedef spelling must not replace that identity. */
+    object_type = parser->program->global_objects[object_id].type;
     array_type = minic_c0_program_array_type(parser->program, object_type.array_type_id);
     if (array_type == NULL) {
         minic_parser_error(parser, "invalid pre-formed static array descriptor");

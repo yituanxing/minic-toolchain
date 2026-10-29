@@ -27,7 +27,7 @@
 | P2 | `src/target/target_info.c:288-303` | `minic_target_info_for_architecture` 懒初始化静态 `canonical_targets[]`，检查 `data_layout == NULL` 然后写整对象；并发调用会形成非同步读/写。命令行单线程路径下风险低，但作为库的 ABI 需改为静态只读 const、`call_once` 或按请求返回局部完整描述对象。 | 未修复 |
 | P2 / 性能 | `src/target/data_layout.c:554-575` 与 record field 辅助布局链 | 程序校验逐 record 逐 field 重新询问布局，深记录/多字段时重复递归深度与偏移检查，存在较多冗余计算。先做深嵌套 record 微基准验证增长曲线，若明显热点改为单次缓存布局，再复用 field 结果。 | 候选优化，尚无 benchmark |
 | P2 | `src/core/core_lower_local_effects.c:28-132,133-262`；`src/core/core_lower_if.c:187-224`；`src/core/core_lower_loop.c:384-450` | 为每个 tracked local 重复递归 AST 判断是否有副作用，复杂度近似 `locals × AST`，并与 `local_facts` 的逃逸模型形成隐含契约。优化前需确认所有 address-of 都标记 escape；更稳妥是每块只构造一次写/逃逸集合，供 if/loop 消费。 | 未修复，正确性需补别名/间接写测试 |
-| P2 / 失败路径 | `src/core/core_lower_if.c:674-878` | `minic_core_lower_if` 依次 alloc `fallthrough_facts`、`incoming_facts`、`branch_entry_facts`、`then_facts`、`else_facts`，部分 add-block、lower-block、set-branch 错误路径直接 `return`，无统一 cleanup；在批量 C 文件失败重试时泄漏。改成单个 `cleanup:` 统一 free 五个指针、status 返回，保留原始成功 CFG 语义。 | 未修复 |
+| P2 / 失败路径 | `src/core/core_lower_if.c:674-878` | `minic_core_lower_if` 的六个事实快照（含 `then_exit_facts`）在部分 add-block、lower-block、set-branch 错误路径直接 `return`，无统一 cleanup；在批量 C 文件失败重试时泄漏。 | **本轮统一所有 post-snapshot 状态出口并释放六份快照，见下面增补；五 ISA 负例确认原状态传播未丢失。** |
 | P1 / 长双精度 capability 风险 | `src/core/core_lower_assignments.c:370-391`；`src/core/core_lower_arithmetic.c:46-67,317-340,628-644`；`src/target/data_layout.c:42-61` | **不仅 `++/--`**：长双精度 unary negate、binary `+ - * /` 与复合赋值均硬调用 IEEE binary128 `__*tf3`，前两处还直接构造 IEEE binary128 的 `0.0` / `1.0` bit pattern；x86-64 `long double` 虽占 16 bytes，但通常是 x87 extended 80 格式，**大小相同不等于编码相同**。应引入 target scalar *representation/capability* 查询，将 libc helper、常量编码从 Core 搬到 target 语义 provider，未知编码 fail closed。先检查 x86 emitter 是否已拒绝相关 IR，确认实际受影响范围。 | 未修复；需构造分目标回归 |
 
 ## 关键边界判断
@@ -153,3 +153,40 @@
 - 新复核源 `packed { unsigned first:1; unsigned value:32; }` GCC 接受、`sizeof=5`；旧 Core 只允许 `bit_offset+width <= declared storage_width`，导致整个函数 unsupported，而非正确的 5 字节访问。复核者提供 `tests/compiler/c0/packed_bitfield_cross_word_window.c` 后，Core window helper 在需要时把**存储位操作容器**从 unsigned32 提升为 unsigned64，继续只读写实际 5 字节；C 的 `value_type`、整数提升/有符号位域的 32bit sign extension 仍基于**原类型宽度**，不能被 transport 64bit 错改。
 - 四入口均消费新的可扩容 storage window，signed/unsigned 五字节位域的 read、assign、compound、postfix 全部进入运行时回归。`run-packed-bitfield-cross-word-window.sh`：GNU native **exit0**、MiniC x86 native **exit0**，五目标 `-S` **5/5**，并使用 PROT_NONE guard-page 证明没有第 6 字节的越界访问。
 - **OPEN，明确 fail-closed：** GCC 同样接受 `{ unsigned first:1; unsigned long long value:64; }` 的 9 字节 packed record；其 65 位临时位窗口无法装入当前 Core 上限 64 位无符号 transport。已新增 `tests/compiler/c0/packed_bitfield_cross_word_64_limit.c` 并验证 GCC syntax PASS；MiniC `-S` **非零拒绝**并报告 `Core IR does not yet support function 'read_nine'`。后续应引入 high/low split transport 或小型字节向量 helper，不能把宽度截成 64 并静默发错码。
+
+## 第三轮：Core 降低状态 provenance 与 IF facts 错误出口统一（2026-10-29）
+
+### 真实 Linux 汇总 `kind=5 status=1 owners=1071` 的语义
+
+**来源链已经确认**，而非猜测成死代码或吞掉错误：
+
+1. `src/frontend/ast.h`：statement `kind=5` 即 `MINIC_STATEMENT_INLINE_ASM`。
+2. `src/core/core_lower.c:1469-1472,1582-1594`：GNU ASM lower 返回 `MINIC_CORE_LOWER_UNSUPPORTED=1` 时立即产出 `CORE_FAST_TRACE stage=statement reason=lower-status ... kind=5 status=1`；**真实 lowering 尝试失败**，不是虚构日志。这条调用栈内返回非 OK，从不让当前函数错误地标成 LOWER_OK。
+3. `src/compiler/core_function_set.c:66-114`：最初对所有 parser `is_referenced` 的已定义 static helper 尝试 Core lowering，记录每函数 status。`src/compiler/compiler.c:343-368`：然后 `minic_prune_inline_specializations_from_core`，最后 `minic_validate_core_functions`。`src/compiler/core_reachability.c:351-435` 明确将 parser 初始引用视作 discovery hint，实际 emitted CFG 的 Core call/function-address 和非 Core root 决定最终 `is_referenced`；初次失败但最终不可达的 static helper 可被丢弃。
+4. `tools/ci/linux-three-isa-seven-probe-v1.py:227-247` 将 **pre-prune** 整份 stderr 的 `core_lower_traces` 收入报告，不按 final reachable 过滤，而 `core_frontiers` 来自 **post-prune** 的 `MINIC_CORE_FUNCTION_FAILURE`。因此 9,559/9,559 编译完成与某些 `kind=5` 初降日志并存**逻辑上合理**：两者统计阶段不同。报告聚合的 `owners=1071` 表示具有这类初降尝试 trace 的不同 owner，并非 1,071 个最终活跃函数的失败数。
+
+**动态、五 ISA 可重复的充分复现：**
+
+- 新 `tests/compiler/c0/core_failed_unreachable_function_prune.c` 包含 parser 实际引用的 `static unused_after_core_fold`，helper 内有 Core 不支持的 GNU constraint `"=Z"`；`main` 在恒假 `if(sizeof(unsigned char)==0U)` 源分支里引用 helper。GCC `-O2` 原生可编译运行。
+- 将同一 `.c` 经 `cc -E -P` 转成 `.i`，**x86_64 / RV32 / RV64 / AArch64 / LoongArch64** 逐一 MiniC `-S`：均 EXIT0 且 stderr 必含 `CORE_FAST_TRACE stage=statement reason=lower-status function=unused_after_core_fold kind=5 status=1`；设置 `MINIC_CORE_FAILURE_CENSUS=1` 后均**没有** `MINIC_CORE_FUNCTION_FAILURE`。x86 GNU 与 MiniC 汇编链接 native 都 exit0。
+- 新 `tests/compiler/c0/core_if_snapshot_cleanup_negative.c` 的 `unsupported_if_body` 与 `unsupported_else_body` 为**活函数**，同样的 `"=Z"` 分别在 IF 的 then/else arm 出错；五 ISA MiniC `-S` **全部非零拒绝**，同时保留 `stage=if reason=then-body`/`else-body`、`reason=lower-status ... kind=5 status=1` 与 `MINIC_CORE_FUNCTION_FAILURE kind=UNSUPPORTED`。脚本 `tests/compiler/c0/run-core-if-snapshot-and-prune.sh` 将两类状态、GNU/MiniC native 和全部五 ISA 合在一条回归，**PASS**。
+
+**架构结论（P1 / 统计 provenance，不是 P0 误编译）：** `CoreLowerStatus`、初降诊断和最终 reachability 是三个独立事实，不能以单个 `CORE_FAST_TRACE` 推断最终功能缺口。保留初降 trace 作为有价值的 capability/支持率输入；CI 报告应把 `pre_prune_lower_attempts` 与 `post_prune_live_failures` 独立列明，最好在 function-level trace/报告中加入 final-liveness provenance 和 accepted/rejected 阶段，以免混淆。当然不应简单关闭 stderr 或删除诊断，更不可把真正**活函数失败**也过滤掉。此项需要 compiler/CI owner 配合，不在本代理的非 ASM Core 独占范围内修改。
+
+### 本轮 Core 架构修复
+
+`src/core/core_lower_if.c:479-849`：把 `incoming_facts`、`branch_entry_facts`、`then_facts`、`else_facts`、`fallthrough_facts`、`then_exit_facts` 六份快照统一初始化为 NULL，并把**所有 snapshot 后**的 alloc/CFG add-block/IF then-else lower/merge branch/condition branch 失败出口汇合到唯一 `if_facts_cleanup:`；原始 `MinicCoreLowerStatus` 原封不动向外传播，成功路径仍在 merge 后写 `*terminated` 和返回 LOWER_OK。明确了“单函数整体 lowering 失败即丢弃 IR；暂态 fact 资源必须在本函数释放”的 ownership 边界。GNU ASM 活函数拒绝回归同时为最常见失败分支覆盖；负例证明**未通过隐藏诊断来‘修复’ 1,071 trace**。
+
+不宣称 LeakSanitizer leak test 全通过：本环境 ASAN 编译器构建可用，但 LSAN 运行提示 `does not work under ptrace`，因此仅有明确的 C 所有权路径静态审查、负例状态/代码运行回归，非分配失败注入和实际 leak 检测。完整七路 Linux exact-head 矩阵由集成者另行验收。
+
+### 保留的第三轮架构清单（责任和优先级）
+
+| 优先级 | 位置 | 尚待模型化的多权威源、下一步验证 | 修改范围 |
+| --- | --- | --- | --- |
+| P1 | `src/core/core_lower_if.c:550-608,703-840`、`src/core/local_facts.c:145-250`、`src/core/core_lower_const_facts.c:257-392` | Linux 函数专名 `dma_direct_alloc`、`shmem_alloc_and_acct_folio`、`genl_op_from_split` 的 trace 散落在多个事实/CFG模块，部分无环境开关。先标记哪些是 CI 脚本真实依赖（`GENL_COND_EMIT` 等），再迁移为由源 span/function 选择的可选统一 TraceSink；**不**删除真实 lower-status。 | Core + CI 联动，后续批量 |
+| P1 | `src/core/core_lower_bool.c:74-158`、`src/core/core_lower_const_facts.c:243-365`、`src/core/core_lower_loop.c:398-449` | stable zero-bool oracle 与局部事实缓存多处全函数扫描；合并前需用 goto/label、asm goto、逃逸、GNU statement expression 证明相同 effect/reentry 保守性，否则不同 oracle 级别应显式分型。 | Core pure-use/def summary |
+| P1 | `src/core/core_lower.c:1233-1594`、`src/core/source_loop_shapes.c`、`src/core/core_lower_switch.c` | parser 合成 LABEL/WHILE/CASE、cleanup lifetime/context、generic source walk、loop/switch 特例，各层都在推断 reentry 和 fallthrough；应独立索引并注明入口权威、让 verifier 端证明 CFG，不依靠各 owner 重扫 AST 和不同 pruning 判断。 | Core CFG/reentry contract |
+| P1 | `src/compiler/core_function_set.c:66-114`、`src/compiler/core_reachability.c:351-435`、`tools/ci/linux-three-isa-seven-probe-v1.py:227-247` | initial reference 与 post-Core liveness 是两个阶段，现日志混采。加 provenance 而非压制错误，并测试未引用 helpers 的真实失败、可达 helpers 的强制拒绝。 | Compiler/CI（交总负责） |
+| P2 | `src/core/core_lower_if.c:187-224`、`src/core/core_lower_loop.c:398-449`、`src/core/core_lower_local_effects.c` | 对每个 local 反复扫描整 AST，复杂度近似 `O(locals×AST)`；构造一次 per-block 读写/逃逸集合需覆盖复合左值与 statement expression tail，复用第二轮已修 source effect 单测。 | Core CFG/effects 性能 |
+
+**冻结边界：** 本轮未编辑 `src/core/core_ir.h`、`src/core/core_ir_verify.c`（由 GNU ASM registry 并行代理独占），也未编辑 `src/core/core_lower_asm*`、Target/Frontend；所有第 1/2 轮已修的 switch/ternary/bitfield 路径保持原状。`run-core-if-snapshot-and-prune.sh` 和既有 Core branch/switch/effect 正例均 PASS。

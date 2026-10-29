@@ -8509,224 +8509,146 @@ static bool x86_linux_debug_register_source(
     return true;
 }
 
+/* The source-level ABI recognizers share one admission signature. This
+ * adapter keeps the no-operand memory barrier in the same ordered inventory
+ * instead of making it a hidden exceptional dispatch branch. */
+static bool x86_linux_zero_barrier_qualifier(
+    const MinicC0Program *program, const MinicInlineAsm *source,
+    MinicTargetInlineAsmContract *contract) {
+    (void)program;
+    return x86_linux_zero_barrier_source(source, contract);
+}
+
+typedef bool (*MinicX86SourceQualifier)(
+    const MinicC0Program *, const MinicInlineAsm *,
+    MinicTargetInlineAsmContract *);
+
+/* Source matching is a policy table, not a machine emitter or Core opcode.
+ * Order is part of the existing qualification behavior: the first complete
+ * source contract wins, with the generic arithmetic forms only at the end.
+ * No new Linux template or ISA subset is implicitly admitted here. */
+static const MinicX86SourceQualifier minic_x86_source_qualifiers[] = {
+    x86_linux_crash_register_source,
+    x86_linux_pm_trace_source,
+    x86_linux_vmware_hypercall_source,
+    x86_linux_vmware_stealclock_alt_source,
+    x86_linux_kvm_hypercall_alt_source,
+    x86_linux_exception_stack_call_source,
+    x86_linux_legacy_fnsave_source,
+    x86_linux_kexec_load_segments_source,
+    x86_linux_efi_kernel_transfer_source,
+    x86_linux_pci_mmconfig_source,
+    x86_linux_cmpxchg128_source,
+    x86_linux_task_size_alt_source,
+    x86_linux_irq_stack_call_source,
+    x86_linux_preempt_static_call_source,
+    x86_linux_preempt_gs_dec_source,
+    x86_linux_gen_endbr_source,
+    x86_linux_kaslr_mul_source,
+    x86_linux_muldiv_u64_source,
+    x86_linux_via_xstore_source,
+    x86_linux_crash_segment_snapshot_source,
+    x86_linux_task_control_source,
+    x86_linux_iret_to_self_source,
+    x86_linux_int3_selftest_source,
+    x86_linux_pv_indirect_call_source,
+    x86_linux_alt_reloc_selftest_source,
+    x86_linux_real_mode_far_jump_source,
+    x86_linux_mmio_read_source,
+    x86_linux_mmio_write_source,
+    x86_linux_rep_string_io_source,
+    x86_linux_iomem_copy_source,
+    x86_linux_i915_movntdqa_source,
+    x86_linux_flushcache_copy_source,
+    x86_linux_atomic_xchg_source,
+    x86_linux_pvclock_scale_source,
+    x86_linux_pkru_source,
+    x86_linux_fdiv_bug_source,
+    x86_linux_monitor_wait_source,
+    x86_zstd_cpuid_source,
+    x86_linux_segment_read_source,
+    x86_linux_segment_load_extable_source,
+    x86_linux_lkgs_extable_source,
+    x86_linux_load_unaligned_zeropad_source,
+    x86_linux_lar_selector_source,
+    x86_linux_random_seed_source,
+    x86_linux_fsgsbase_source,
+    x86_linux_kernel_nofault_goto_source,
+    x86_linux_rep_movsb_alternative_source,
+    x86_linux_rep_stosb_alternative_source,
+    x86_linux_fpu_user_frame_source,
+    x86_linux_x87_fild_prepare_source,
+    x86_linux_fpu_kernel_restore_source,
+    x86_linux_fxrstor_safe_source,
+    x86_linux_xstate_fault_source,
+    x86_linux_xrstor_alternative_source,
+    x86_linux_xsave_triple_alternative_source,
+    x86_linux_smap_alternative_source,
+    x86_linux_segment_register_extable_source,
+    x86_linux_put_user_call_source,
+    x86_linux_get_user_call_source,
+    x86_linux_idle_clflush_alt_source,
+    x86_linux_pat_clflushopt_source,
+    x86_linux_futex_extable_source,
+    x86_linux_verw_clear_source,
+    x86_linux_debug_register_source,
+    x86_x87_probe_source,
+    x86_fxsave_source,
+    x86_xsetbv_source,
+    x86_linux_alternative_wrmsr_source,
+    x86_linux_control_register_source,
+    x86_linux_tlb_cache_source,
+    x86_linux_three_call_alternative_source,
+    x86_linux_boot_segments_source,
+    x86_linux_lidt_source,
+    x86_linux_gs_testcc_source,
+    x86_linux_testcc_source,
+    x86_prefetchw_alt_source,
+    x86_apic_amd_alt_source,
+    x86_gs_tied_alu_source,
+    x86_linux_zero_barrier_qualifier,
+    x86_linux_ip_here_source,
+    x86_add32_carry_source,
+    x86_linux_tcpudp_nofold_source,
+    x86_percpu_gs_source,
+    x86_ip_fast_csum_source,
+    x86_checksum_source,
+    x86_linux_msr_source,
+    x86_hweight_source,
+    x86_counter_source,
+    x86_port_io_source,
+    x86_linux_gs_atomic_source,
+    x86_linux_rep_stos_source,
+    x86_linux_lowlevel_scalar_source,
+    x86_linux_boot_flags_source,
+    x86_linux_delay_mul_source,
+    x86_linux_delay_wait_source,
+    x86_linux_identity_load_source,
+    x86_linux_ipv6_checksum_source,
+    x86_linux_lock_bitcc_source,
+    x86_linux_boot_string_source,
+    x86_linux_vdso_syscall_source,
+    x86_linux_vdso_cpunode_source,
+    x86_linux_csum_partial_source,
+    x86_linux_atomic_rmw_source,
+    x86_linux_raw_cmpxchg_source,
+    x86_trycas_source,
+    x86_linux_bitops_source,
+};
+
 bool minic_x86_64_qualify_inline_asm(
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
     bool is_mulacc = false, is_muldiv = false;
     size_t i, count;
     if (!contract) return false;
-    if (x86_linux_crash_register_source(program, source, contract))
-        return true;
-    if (x86_linux_pm_trace_source(program, source, contract))
-        return true;
-    if (x86_linux_vmware_hypercall_source(program, source, contract))
-        return true;
-    if (x86_linux_vmware_stealclock_alt_source(program, source, contract))
-        return true;
-    if (x86_linux_kvm_hypercall_alt_source(program, source, contract))
-        return true;
-    if (x86_linux_exception_stack_call_source(program, source, contract))
-        return true;
-    if (x86_linux_legacy_fnsave_source(program, source, contract))
-        return true;
-    if (x86_linux_kexec_load_segments_source(program, source, contract))
-        return true;
-    if (x86_linux_efi_kernel_transfer_source(program, source, contract))
-        return true;
-    if (x86_linux_pci_mmconfig_source(program, source, contract))
-        return true;
-    if (x86_linux_cmpxchg128_source(program, source, contract))
-        return true;
-    if (x86_linux_task_size_alt_source(program, source, contract))
-        return true;
-    if (x86_linux_irq_stack_call_source(program, source, contract))
-        return true;
-    if (x86_linux_preempt_static_call_source(program, source, contract))
-        return true;
-    if (x86_linux_preempt_gs_dec_source(program, source, contract))
-        return true;
-    if (x86_linux_gen_endbr_source(program, source, contract))
-        return true;
-    if (x86_linux_kaslr_mul_source(program, source, contract))
-        return true;
-    if (x86_linux_muldiv_u64_source(program, source, contract))
-        return true;
-    if (x86_linux_via_xstore_source(program, source, contract))
-        return true;
-    if (x86_linux_crash_segment_snapshot_source(program, source, contract))
-        return true;
-    if (x86_linux_task_control_source(program, source, contract))
-        return true;
-    if (x86_linux_iret_to_self_source(program, source, contract))
-        return true;
-    if (x86_linux_int3_selftest_source(program, source, contract))
-        return true;
-    if (x86_linux_pv_indirect_call_source(program, source, contract))
-        return true;
-    if (x86_linux_alt_reloc_selftest_source(program, source, contract))
-        return true;
-    if (x86_linux_real_mode_far_jump_source(program, source, contract))
-        return true;
-    if (x86_linux_mmio_read_source(program, source, contract))
-        return true;
-    if (x86_linux_mmio_write_source(program, source, contract))
-        return true;
-    if (x86_linux_rep_string_io_source(program, source, contract))
-        return true;
-    if (x86_linux_iomem_copy_source(program, source, contract))
-        return true;
-    if (x86_linux_i915_movntdqa_source(program, source, contract))
-        return true;
-    if (x86_linux_flushcache_copy_source(program, source, contract))
-        return true;
-    if (x86_linux_atomic_xchg_source(program, source, contract))
-        return true;
-    if (x86_linux_pvclock_scale_source(program, source, contract))
-        return true;
-    if (x86_linux_pkru_source(program, source, contract))
-        return true;
-    if (x86_linux_fdiv_bug_source(program, source, contract))
-        return true;
-    if (x86_linux_monitor_wait_source(program, source, contract))
-        return true;
-    if (x86_zstd_cpuid_source(program, source, contract))
-        return true;
-    if (x86_linux_segment_read_source(program, source, contract))
-        return true;
-    if (x86_linux_segment_load_extable_source(program, source, contract))
-        return true;
-    if (x86_linux_lkgs_extable_source(program, source, contract))
-        return true;
-    if (x86_linux_load_unaligned_zeropad_source(program, source, contract))
-        return true;
-    if (x86_linux_lar_selector_source(program, source, contract))
-        return true;
-    if (x86_linux_random_seed_source(program, source, contract))
-        return true;
-    if (x86_linux_fsgsbase_source(program, source, contract))
-        return true;
-    if (x86_linux_kernel_nofault_goto_source(program, source, contract))
-        return true;
-    if (x86_linux_rep_movsb_alternative_source(program, source, contract))
-        return true;
-    if (x86_linux_rep_stosb_alternative_source(program, source, contract))
-        return true;
-    if (x86_linux_fpu_user_frame_source(program, source, contract))
-        return true;
-    if (x86_linux_x87_fild_prepare_source(program, source, contract))
-        return true;
-    if (x86_linux_fpu_kernel_restore_source(program, source, contract))
-        return true;
-    if (x86_linux_fxrstor_safe_source(program, source, contract))
-        return true;
-    if (x86_linux_xstate_fault_source(program, source, contract))
-        return true;
-    if (x86_linux_xrstor_alternative_source(program, source, contract))
-        return true;
-    if (x86_linux_xsave_triple_alternative_source(program, source, contract))
-        return true;
-    if (x86_linux_smap_alternative_source(program, source, contract))
-        return true;
-    if (x86_linux_segment_register_extable_source(program, source, contract))
-        return true;
-    if (x86_linux_put_user_call_source(program, source, contract))
-        return true;
-    if (x86_linux_get_user_call_source(program, source, contract))
-        return true;
-    if (x86_linux_idle_clflush_alt_source(program, source, contract))
-        return true;
-    if (x86_linux_pat_clflushopt_source(program, source, contract))
-        return true;
-    if (x86_linux_futex_extable_source(program, source, contract))
-        return true;
-    if (x86_linux_verw_clear_source(program, source, contract))
-        return true;
-    if (x86_linux_debug_register_source(program, source, contract))
-        return true;
-    if (x86_x87_probe_source(program, source, contract))
-        return true;
-    if (x86_fxsave_source(program, source, contract))
-        return true;
-    if (x86_xsetbv_source(program, source, contract))
-        return true;
-    if (x86_linux_alternative_wrmsr_source(program, source, contract))
-        return true;
-    if (x86_linux_control_register_source(program, source, contract))
-        return true;
-    if (x86_linux_tlb_cache_source(program, source, contract))
-        return true;
-    if (x86_linux_three_call_alternative_source(program, source, contract))
-        return true;
-    if (x86_linux_boot_segments_source(program, source, contract))
-        return true;
-    if (x86_linux_lidt_source(program, source, contract))
-        return true;
-    if (x86_linux_gs_testcc_source(program, source, contract))
-        return true;
-    if (x86_linux_testcc_source(program, source, contract))
-        return true;
-    if (x86_prefetchw_alt_source(program, source, contract))
-        return true;
-    if (x86_apic_amd_alt_source(program, source, contract))
-        return true;
-    if (x86_gs_tied_alu_source(program, source, contract))
-        return true;
-    if (x86_linux_zero_barrier_source(source, contract))
-        return true;
-    if (x86_linux_ip_here_source(program, source, contract))
-        return true;
-    if (x86_add32_carry_source(program, source, contract))
-        return true;
-    if (x86_linux_tcpudp_nofold_source(program, source, contract))
-        return true;
-    if (x86_percpu_gs_source(program, source, contract))
-        return true;
-    if (x86_ip_fast_csum_source(program, source, contract))
-        return true;
-    if (x86_checksum_source(program, source, contract))
-        return true;
-    if (x86_linux_msr_source(program, source, contract))
-        return true;
-    if (x86_hweight_source(program, source, contract))
-        return true;
-    if (x86_counter_source(program, source, contract))
-        return true;
-    if (x86_port_io_source(program, source, contract))
-        return true;
-    if (x86_linux_gs_atomic_source(program, source, contract))
-        return true;
-    if (x86_linux_rep_stos_source(program, source, contract))
-        return true;
-    if (x86_linux_lowlevel_scalar_source(program, source, contract))
-        return true;
-    if (x86_linux_boot_flags_source(program, source, contract))
-        return true;
-    if (x86_linux_delay_mul_source(program, source, contract))
-        return true;
-    if (x86_linux_delay_wait_source(program, source, contract))
-        return true;
-    if (x86_linux_identity_load_source(program, source, contract))
-        return true;
-    if (x86_linux_ipv6_checksum_source(program, source, contract))
-        return true;
-    if (x86_linux_lock_bitcc_source(program, source, contract))
-        return true;
-    if (x86_linux_boot_string_source(program, source, contract))
-        return true;
-    if (x86_linux_vdso_syscall_source(program, source, contract))
-        return true;
-    if (x86_linux_vdso_cpunode_source(program, source, contract))
-        return true;
-    if (x86_linux_csum_partial_source(program, source, contract))
-        return true;
-    if (x86_linux_atomic_rmw_source(program, source, contract))
-        return true;
-    if (x86_linux_raw_cmpxchg_source(program, source, contract))
-        return true;
-    if (x86_trycas_source(program, source, contract))
-        return true;
-    if (x86_linux_bitops_source(program, source, contract))
-        return true;
+    for (i = 0U;
+         i < sizeof(minic_x86_source_qualifiers) /
+                 sizeof(minic_x86_source_qualifiers[0]);
+         ++i) {
+        if (minic_x86_source_qualifiers[i](program, source, contract))
+            return true;
+    }
     if (x86_linux_atomic_cc_source(program, source)) {
         const MinicX86AtomicCCDesc *d = minic_x86_64_atomic_cc_description(
             minic_x86_64_atomic_cc_form(

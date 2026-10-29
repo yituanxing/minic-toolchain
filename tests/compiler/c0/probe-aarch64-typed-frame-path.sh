@@ -15,6 +15,17 @@ cc -std=c11 -Wall -Wextra -Werror -I"$repo/src" \
     -o "$scratch/frame-test"
 "$scratch/frame-test"
 
+# The integer and residual machine families have no remaining implicit
+# Core-owned `sp` slot users. A source-side guard catches regressions even
+# when the old text legalizer accidentally masks the emitted mistake.
+for source in integer_emit.c residual_emit.c; do
+    if grep -Eq '\[sp,|add x[0-9]+, sp, x[0-9]+' \
+        "$repo/src/target/aarch64/$source"; then
+        echo "AARCH64_TYPED_FRAME_SOURCE=FAIL legacy SP reference: $source" >&2
+        exit 1
+    fi
+done
+
 # Real production paths: Core FP SSA and scalar memory operations.
 "$minic" --target=aarch64-linux -S \
     "$repo/tests/compiler/c0/aarch64-typed-frame-production.i" \
@@ -24,6 +35,17 @@ grep -Fq 'fmul d9, d9, d10' "$scratch/real.s"
 grep -Fq 'fdiv d9, d9, d10' "$scratch/real.s"
 grep -Eq 'ldr x10, \[(sp|x19)' "$scratch/real.s"
 grep -Fq 'str x9, [x10]' "$scratch/real.s"
+
+# Pointer arithmetic loads integer indices through a stable owned frame
+# address. Narrow reads (ldrsb/ldrsh/ldrsw) can use the same region without
+# pretending that all integer values occupy an 8-byte memory transfer.
+cc -E -P -nostdinc -x c \
+    "$repo/tests/compiler/c0/aarch64_64bit_pointer_stride.c" \
+    -o "$scratch/pointer.i"
+"$minic" --target=aarch64-linux -S \
+    "$scratch/pointer.i" -o "$scratch/pointer.s"
+grep -Eq '^  add x16, (sp|x19), #[0-9]+$' "$scratch/pointer.s"
+grep -Fq '  ldr x10, [x16]' "$scratch/pointer.s"
 
 # Real Core block/return/parameter paths, including a moving live SP and
 # record-copy returns. These now share the same typed owned-slot/frame APIs
@@ -62,5 +84,7 @@ if command -v aarch64-linux-gnu-gcc >/dev/null 2>&1; then
         -o "$scratch/dynamic.o"
     aarch64-linux-gnu-gcc -c -x assembler "$scratch/record.s" \
         -o "$scratch/record.o"
+    aarch64-linux-gnu-gcc -c -x assembler "$scratch/pointer.s" \
+        -o "$scratch/pointer.o"
 fi
-echo 'AARCH64_TYPED_FRAME_PRODUCTION=PASS fp_memory_block_return_dynamic_owned_outgoing_large_record_gnu_asm_if_available'
+echo 'AARCH64_TYPED_FRAME_PRODUCTION=PASS fp_memory_integer_residual_pointer_block_return_dynamic_owned_outgoing_large_record_gnu_asm_if_available'

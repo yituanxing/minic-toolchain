@@ -10,7 +10,9 @@ src="$root/tests/compiler/c0/aarch64_va_copy_abi.c"
 "$MINIC_CC" --target=aarch64-linux -S "$work/copy.i" -o "$work/minic.s"
 grep -Fq 'ldp x11, x12, [x10]' "$work/minic.s"
 grep -Fq 'stp x13, x14, [x9, #16]' "$work/minic.s"
-grep -Fq 'add x9, sp, x9' "$work/minic.s"
+# The cursor is a typed callee-owned frame address. The old `movz;
+# add x9,sp,x9` postpass pattern must no longer be the machine contract.
+grep -Eq '^  (add x9, (sp|x19), #[0-9]+|mov x9, (sp|x19))$' "$work/minic.s"
 gcc=${AARCH64_CC:-aarch64-linux-gnu-gcc}
 qemu=${QEMU_AARCH64:-qemu-aarch64}
 if ! command -v "$gcc" >/dev/null 2>&1 ||

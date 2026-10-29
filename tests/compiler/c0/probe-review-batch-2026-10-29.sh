@@ -24,6 +24,7 @@ sh tests/compiler/c0/run-packed-bitfield-cross-word-window.sh
 sh tests/compiler/c0/probe-static-array-redeclaration.sh
 sh tests/compiler/c0/run-core-local-effect-summary.sh
 sh tests/compiler/c0/probe-rv64-hardfloat-ninth-fixed.sh
+sh tests/compiler/c0/probe-minic-target-machine-options.sh
 sh tests/compiler/c0/probe-rv64-hardfloat-fp-record-reject.sh
 sh tests/compiler/c0/probe-loongarch64-packed-scalar-alignment.sh
 sh tests/compiler/c0/probe-x86-immediate-qualification.sh

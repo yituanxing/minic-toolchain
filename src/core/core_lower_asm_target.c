@@ -61,13 +61,12 @@ MinicCoreLowerStatus core_asm_try_target_register_contract(
         MinicCoreLowerStatus status;
         bind->operand_index = i;
         bind->kind = contract.kinds[i];
-        bind->gnu_early_clobber = contract.gnu_early_clobber[i];
         if (getenv("MINIC_GNU_ASM_CONSTRAINT_TRACE") != NULL)
             (void)fprintf(stderr,
                 "CORE_GNU_ASM_CONSTRAINT function=%s operand=%zu "
                 "kind=%d gnu_early=%d core_early=%d\n",
                 ctx->source_function ? ctx->source_function->name : "?",
-                i, (int)bind->kind, (int)bind->gnu_early_clobber,
+                i, (int)bind->kind, (int)contract.gnu_early_clobber[i],
                 (int)bind->early_clobber);
         /* A target-qualified GNU register operand may name a local
          * `register T v asm("rN")`. This is an instruction operand's
@@ -192,19 +191,11 @@ MinicCoreLowerStatus core_asm_try_target_register_contract(
      * requires its memory-readwrite effect to be represented explicitly;
      * derive that property from the TARGET-QUALIFIED operand role, not from
      * an architecture-specific template string or new Core opcode. */
-    {
-        bool memory_effect =
-            source->has_memory_clobber || contract.implicit_memory_effect;
-        for (i = 0U; i < contract.operand_count; ++i)
-            if (contract.kinds[i] ==
-                MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE)
-                memory_effect = true;
-        if (!minic_core_function_add_opaque_inline_asm(
-                ctx->function, normalized, length, true,
-                memory_effect, &id)) {
-            free(normalized);
-            return MINIC_CORE_LOWER_ERROR;
-        }
+    if (!minic_core_function_add_opaque_inline_asm(
+            ctx->function, normalized, length, true,
+            contract.effective_memory_effect, &id)) {
+        free(normalized);
+        return MINIC_CORE_LOWER_ERROR;
     }
     free(normalized);
     for (i = 0U; i < source->register_clobber_count; ++i) {
@@ -237,6 +228,9 @@ MinicCoreLowerStatus core_asm_try_target_register_contract(
             statement->inline_asm_id;
     }
     ins.value.structured_inline_asm.inline_asm_id = id;
+    if (!core_asm_publish_operand_plan(
+            &ins, &ctx->function->inline_asms[id], &contract))
+        return MINIC_CORE_LOWER_ERROR;
     return minic_core_function_append_effect_instruction(
         ctx->function, ctx->block_id, &ins)
         ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR;

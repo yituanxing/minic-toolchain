@@ -27,8 +27,9 @@ def main():
     # These are genuine post-prune Core failure functions, not an inference
     # from the single first-error diagnostic of the translation unit.
     core_groups = collections.defaultdict(lambda: collections.defaultdict(list))
-    # Source-lowering traces carry per-owner diagnostic evidence, not proof
-    # that identical compiler text has the same architectural root cause.
+    # Source-lowering traces are emitted while the speculative Core candidate
+    # set is still being prepared. A passing TU may have pruned all of those
+    # candidate functions, so do not present that evidence as a live blocker.
     core_trace_groups = collections.defaultdict(lambda: collections.defaultdict(set))
     # Enumerate real AArch64/LoongArch64 unsupported MACHINE instruction kinds.
     # A string saying "M1 unsupported" cannot justify treating all 400+
@@ -87,6 +88,12 @@ def main():
                 raise SystemExit("THREE_LINUX_CENSUS=FAIL duplicate C owner")
             state["indices"].add(index)
             state["objects"].add(obj)
+            # The stdout/stderr traces are captured before the Core
+            # reachability/pruning gate. Preserve both categories of
+            # evidence rather than conflating them with final TU status.
+            observation_phase = ("passing_tu_pre_prune_attempt"
+                                 if row.get("status") == "MINIC_S_PASS"
+                                 else "failing_tu_pre_prune_attempt")
             frontiers = row.get("core_frontiers")
             if not isinstance(frontiers, list):
                 raise SystemExit("THREE_LINUX_CENSUS=FAIL missing Core frontier census")
@@ -114,7 +121,7 @@ def main():
                         or not re.fullmatch(r"(?:na|-?[0-9]+)", str(trace.get("kind", "")))
                         or not re.fullmatch(r"(?:na|-?[0-9]+)", str(trace.get("status", "")))):
                     raise SystemExit("THREE_LINUX_CENSUS=FAIL invalid Core trace")
-                signature = (trace["stage"], trace["reason"],
+                signature = (observation_phase, trace["stage"], trace["reason"],
                              str(trace["kind"]), str(trace["status"]))
                 core_trace_groups[signature][target].add(obj)
             machine_frontiers = row.get("machine_frontiers", [])
@@ -220,7 +227,7 @@ def main():
                         or entry.get("goto") not in (0, 1)
                         or entry.get("volatile") not in (0, 1)):
                     raise SystemExit("THREE_LINUX_CENSUS=FAIL invalid Core ASM frontier form")
-                key = (target, entry["reason"], entry["signature_hash"],
+                key = (observation_phase, target, entry["reason"], entry["signature_hash"],
                        entry["template_hash"], entry["preview"])
                 core_asm_classes[key][entry["function"]].add(obj)
             totals[target]["total"] += 1
@@ -258,10 +265,10 @@ def main():
     ]
     core_frontiers.sort(key=lambda e: (-e["total"], e["kind"], e["function"]))
     core_trace_frontiers = [
-        dict(stage=stage, reason=reason, kind=kind, status=status,
+        dict(observation_phase=phase, stage=stage, reason=reason, kind=kind, status=status,
              affected_owners=sum(len(objects) for objects in targets.values()),
              targets={arch: sorted(objects) for arch, objects in targets.items()})
-        for (stage, reason, kind, status), targets in core_trace_groups.items()
+        for (phase, stage, reason, kind, status), targets in core_trace_groups.items()
     ]
     core_trace_frontiers.sort(
         key=lambda e: (-e["affected_owners"], -len(e["targets"]),
@@ -309,11 +316,11 @@ def main():
     ]
     asm_form_frontiers.sort(key=lambda x:(-x["instances"],x["target"],x["hash"]))
     core_asm_frontiers = [
-        dict(target=target, reason=reason, signature_hash=signature,
+        dict(observation_phase=phase, target=target, reason=reason, signature_hash=signature,
              template_hash=template, preview=preview,
              functions=len(functions),
              owners=sorted({owner for names in functions.values() for owner in names}))
-        for (target, reason, signature, template, preview), functions
+        for (phase, target, reason, signature, template, preview), functions
         in core_asm_classes.items()
     ]
     core_asm_frontiers.sort(
@@ -344,7 +351,8 @@ def main():
         print(f"THREE_LINUX_ALL_CORE_FRONTIERS target={arch} failures={count} distinct_functions={functions}")
     for item in core_trace_frontiers[:40]:
         targets = ",".join(sorted(item["targets"]))
-        print(f"THREE_LINUX_CORE_TRACE stage={item['stage']} reason={item['reason']} "
+        print(f"THREE_LINUX_CORE_TRACE phase={item['observation_phase']} "
+              f"stage={item['stage']} reason={item['reason']} "
               f"kind={item['kind']} status={item['status']} "
               f"owners={item['affected_owners']} targets={targets}")
     for item in machine_kind_frontiers[:30]:
@@ -375,7 +383,8 @@ def main():
               f"length={entry['template_length']} "
               f"instances={entry['instances']} owners={len(entry['owners'])}")
     for entry in core_asm_frontiers[:40]:
-        print(f"THREE_LINUX_ASM_FRONTIER target={entry['target']} "
+        print(f"THREE_LINUX_ASM_FRONTIER phase={entry['observation_phase']} "
+              f"target={entry['target']} "
               f"reason={entry['reason']} signature={entry['signature_hash']} "
               f"template={entry['template_hash']} preview={entry['preview'][:32]} "
               f"functions={entry['functions']} owners={len(entry['owners'])}")

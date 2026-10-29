@@ -551,14 +551,17 @@ MinicCoreLowerStatus core_asm_try_structured_roles_and_asm_goto(
         size_t input_index;
         bool supported_shape = true;
         bool implicit_memory_effect = false;
+        MinicAsmOperandPlan plan;
 
         (void)memset(&structured, 0, sizeof(structured));
+        (void)memset(&plan, 0, sizeof(plan));
         structured.kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
         structured.span = statement->span;
         structured.type = minic_type_void();
         structured.result = MINIC_CORE_VALUE_INVALID;
         structured.value.structured_inline_asm.operand_count =
             source->output_count + source->input_count;
+        plan.operand_count = structured.value.structured_inline_asm.operand_count;
 
         /* Phase 1: pure classification only. No Core mutation is permitted. */
         for (output_index = 0U; output_index < source->output_count; ++output_index) {
@@ -581,11 +584,6 @@ MinicCoreLowerStatus core_asm_try_structured_roles_and_asm_goto(
             binding->early_clobber =
                 operand->constraint_text != NULL &&
                 memchr(operand->constraint_text, '&', operand->constraint_length) != NULL;
-            /* Unlike target-qualified aggregate register outputs, generic
-             * `=&r` / `+&r` also uses the physical GNU constraint directly
-             * for Core register allocation. Preserve both facts separately
-             * so downstream consumers can inspect one uniform source flag. */
-            binding->gnu_early_clobber = binding->early_clobber;
             if (operand->access == MINIC_INLINE_ASM_OPERAND_WRITE_ONLY &&
                 (core_inline_asm_constraint_is(operand, "=r") ||
                  core_inline_asm_constraint_is(operand, "=&r"))) {
@@ -612,6 +610,7 @@ MinicCoreLowerStatus core_asm_try_structured_roles_and_asm_goto(
                 supported_shape = false;
                 break;
             }
+            plan.kinds[output_index] = binding->kind;
             if ((binding->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
                  binding->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE) &&
                 core_inline_asm_fixed_binding_id(
@@ -664,7 +663,13 @@ MinicCoreLowerStatus core_asm_try_structured_roles_and_asm_goto(
                 supported_shape = false;
                 break;
             }
+            plan.kinds[operand_index] = binding->kind;
         }
+
+        plan.implicit_memory_effect = implicit_memory_effect;
+        if (supported_shape && !minic_backend_capture_asm_operand_source(
+                source, MINIC_ASM_OPERAND_PLAN_GENERIC_STRUCTURED, &plan))
+            supported_shape = false;
 
         /* Template normalization is also part of preflight. A failed probe
            falls through with the Core function exactly unchanged. */
@@ -725,8 +730,7 @@ MinicCoreLowerStatus core_asm_try_structured_roles_and_asm_goto(
                                                             numeric_template,
                                                             numeric_template_length,
                                                             true,
-                                                            source->has_memory_clobber ||
-                                                                implicit_memory_effect,
+                                                            plan.effective_memory_effect,
                                                             &inline_asm_id)) {
                 free(numeric_template);
                 { *handled = true; return MINIC_CORE_LOWER_ERROR; }
@@ -747,6 +751,9 @@ MinicCoreLowerStatus core_asm_try_structured_roles_and_asm_goto(
                 }
             }
             structured.value.structured_inline_asm.inline_asm_id = inline_asm_id;
+            if (!core_asm_publish_operand_plan(
+                    &structured, &context->function->inline_asms[inline_asm_id], &plan))
+                { *handled = true; return MINIC_CORE_LOWER_ERROR; }
             { *handled = true; return minic_core_function_append_effect_instruction(
                        context->function, context->block_id, &structured)
                        ? MINIC_CORE_LOWER_OK

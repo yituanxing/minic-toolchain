@@ -691,6 +691,17 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
             inline_asm->template_length == 0U || !inline_asm->is_volatile) {
             return false;
         }
+        if (inline_asm->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_NONE &&
+            (inline_asm->operand_plan_owner !=
+                 MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED &&
+             inline_asm->operand_plan_owner !=
+                 MINIC_ASM_OPERAND_PLAN_GENERIC_STRUCTURED)) return false;
+        if (inline_asm->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_NONE &&
+            (inline_asm->source_output_count >
+                 instruction->value.structured_inline_asm.operand_count ||
+             ((inline_asm->explicit_memory_clobber ||
+               inline_asm->implicit_memory_effect) &&
+              !inline_asm->has_memory_clobber))) return false;
         /* The C label is a real CFG destination even when the asm also
          * produces typed GNU register outputs. The same Core block IDs
          * are used by opaque and structured goto machine emitters. */
@@ -726,7 +737,14 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
                  binding->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT &&
                  binding->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE &&
                  binding->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT &&
-                 binding->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE)) {
+                 binding->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE) ||
+                (inline_asm->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_NONE &&
+                 ((binding->gnu_early_clobber || binding->gnu_readwrite) &&
+                  operand_index >= inline_asm->source_output_count)) ||
+                (binding->has_tied_output &&
+                 (inline_asm->operand_plan_owner == MINIC_ASM_OPERAND_PLAN_NONE ||
+                  operand_index < inline_asm->source_output_count ||
+                  binding->tied_output_index >= inline_asm->source_output_count))) {
                 return false;
             }
             used_indices[binding->operand_index] = true;

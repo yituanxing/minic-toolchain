@@ -75,32 +75,148 @@ const MinicBackend *minic_backend_for_target(const MinicTargetInfo *target) {
     return NULL;
 }
 
+static uint64_t minic_asm_hash_bytes(uint64_t hash,
+                                     const char *data, size_t count) {
+    size_t i;
+    if (data == NULL) return hash;
+    for (i = 0U; i < count; ++i) {
+        hash ^= (unsigned char)data[i];
+        hash *= UINT64_C(1099511628211);
+    }
+    return hash;
+}
+
+static uint64_t minic_asm_hash_size(uint64_t hash, size_t count) {
+    uint64_t bits = (uint64_t)count;
+    size_t i;
+    for (i = 0U; i < 8U; ++i) {
+        hash ^= (unsigned char)(bits & UINT64_C(255));
+        hash *= UINT64_C(1099511628211);
+        bits >>= 8U;
+    }
+    return hash;
+}
+
+/* Identity includes the exact ordered GNU source constraints, flags,
+ * clobbers and template. It is deliberately ISA-independent and is not a
+ * license for an emitter to skip its own machine-form validation. */
+uint64_t minic_backend_asm_source_form_id(const MinicInlineAsm *source) {
+    uint64_t hash = UINT64_C(14695981039346656037);
+    size_t i;
+    if (source == NULL) return 0U;
+    hash = minic_asm_hash_bytes(hash, source->template_text,
+                                source->template_length);
+    hash = minic_asm_hash_size(hash, source->output_count);
+    hash = minic_asm_hash_size(hash, source->input_count);
+    hash = minic_asm_hash_size(hash, source->label_count);
+    hash = minic_asm_hash_size(hash, source->register_clobber_count);
+    hash = minic_asm_hash_size(hash, source->clobber_count);
+    hash = minic_asm_hash_size(hash, source->has_memory_clobber ? 1U : 0U);
+    hash = minic_asm_hash_size(hash, source->is_goto ? 1U : 0U);
+    hash = minic_asm_hash_size(hash, source->is_volatile ? 1U : 0U);
+    for (i = 0U; i < source->output_count && source->outputs != NULL; ++i) {
+        const MinicInlineAsmOperand *op = &source->outputs[i];
+        hash = minic_asm_hash_bytes(hash, op->constraint_text,
+                                    op->constraint_length);
+        hash = minic_asm_hash_size(hash, (size_t)op->access);
+    }
+    for (i = 0U; i < source->input_count && source->inputs != NULL; ++i) {
+        const MinicInlineAsmOperand *op = &source->inputs[i];
+        hash = minic_asm_hash_bytes(hash, op->constraint_text,
+                                    op->constraint_length);
+        hash = minic_asm_hash_size(hash, (size_t)op->access);
+    }
+    for (i = 0U; i < source->register_clobber_count &&
+                 source->register_clobbers != NULL; ++i) {
+        const MinicInlineAsmRegisterClobber *clobber =
+            &source->register_clobbers[i];
+        hash = minic_asm_hash_bytes(hash, clobber->name,
+                                    clobber->name_length);
+    }
+    return hash;
+}
+
+static void minic_asm_capture_tie(const MinicInlineAsm *source,
+                                   const MinicInlineAsmOperand *input,
+                                   MinicAsmOperandPlan *plan, size_t slot) {
+    size_t i;
+    if (input->constraint_length == 1U && input->constraint_text[0] >= '0' &&
+        input->constraint_text[0] <= '9') {
+        i = (size_t)(input->constraint_text[0] - '0');
+        if (i < source->output_count) {
+            plan->has_tied_output[slot] = true;
+            plan->tied_output_index[slot] = i;
+        }
+        return;
+    }
+    if (input->constraint_length <= 2U || input->constraint_text[0] != '[' ||
+        input->constraint_text[input->constraint_length - 1U] != ']') return;
+    for (i = 0U; i < source->output_count; ++i) {
+        const MinicInlineAsmOperand *output = &source->outputs[i];
+        if (output->name && output->name_length == input->constraint_length - 2U &&
+            memcmp(output->name, input->constraint_text + 1U,
+                   output->name_length) == 0) {
+            plan->has_tied_output[slot] = true;
+            plan->tied_output_index[slot] = i;
+            return;
+        }
+    }
+}
+
+bool minic_backend_capture_asm_operand_source(
+    const MinicInlineAsm *source, MinicAsmOperandPlanOwner owner,
+    MinicAsmOperandPlan *plan) {
+    size_t i;
+    bool effective_memory;
+    if (!source || !plan || owner == MINIC_ASM_OPERAND_PLAN_NONE ||
+        source->output_count > MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT ||
+        source->input_count > MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT -
+                                  source->output_count ||
+        plan->operand_count != source->output_count + source->input_count ||
+        (source->output_count != 0U && source->outputs == NULL) ||
+        (source->input_count != 0U && source->inputs == NULL)) return false;
+    plan->owner = owner;
+    plan->source_form_id = minic_backend_asm_source_form_id(source);
+    plan->output_count = source->output_count;
+    plan->explicit_memory_clobber = source->has_memory_clobber;
+    memset(plan->gnu_early_clobber, 0, sizeof(plan->gnu_early_clobber));
+    memset(plan->gnu_readwrite, 0, sizeof(plan->gnu_readwrite));
+    memset(plan->has_tied_output, 0, sizeof(plan->has_tied_output));
+    memset(plan->tied_output_index, 0, sizeof(plan->tied_output_index));
+    effective_memory = source->has_memory_clobber || plan->implicit_memory_effect;
+    for (i = 0U; i < plan->operand_count; ++i) {
+        const bool output = i < source->output_count;
+        const MinicInlineAsmOperand *op = output ? &source->outputs[i] :
+            &source->inputs[i - source->output_count];
+        if (!op->constraint_text || op->constraint_length == 0U ||
+            (output && op->access == MINIC_INLINE_ASM_OPERAND_READ_ONLY) ||
+            (!output && op->access != MINIC_INLINE_ASM_OPERAND_READ_ONLY))
+            return false;
+        plan->gnu_readwrite[i] =
+            op->access == MINIC_INLINE_ASM_OPERAND_READ_WRITE;
+        if (output)
+            plan->gnu_early_clobber[i] =
+                memchr(op->constraint_text, '&', op->constraint_length) != NULL;
+        else
+            minic_asm_capture_tie(source, op, plan, i);
+        if (plan->kinds[i] == MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE) {
+            plan->implicit_memory_effect = true;
+            effective_memory = true;
+        }
+    }
+    plan->effective_memory_effect = effective_memory;
+    return true;
+}
+
 bool minic_backend_qualify_inline_asm(
     const MinicBackend *backend, const MinicC0Program *program,
     const MinicInlineAsm *source, MinicTargetInlineAsmContract *contract) {
-    size_t i;
     if (!backend || !program || !source || !contract ||
         !backend->qualify_inline_asm) return false;
     memset(contract, 0, sizeof(*contract));
-    if (!backend->qualify_inline_asm(program, source, contract) ||
-        contract->operand_count != source->output_count + source->input_count ||
-        contract->operand_count > MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT ||
-        (source->output_count != 0U && source->outputs == NULL) ||
-        (source->input_count != 0U && source->inputs == NULL))
-        return false;
-    memset(contract->gnu_early_clobber, 0,
-           sizeof(contract->gnu_early_clobber));
-    /* Only the GNU output operand can declare early clobber. Keep the
-     * original source fact even if the target maps its storage into a
-     * different Core transport kind. This is independent of the ISA. */
-    for (i = 0U; i < source->output_count; ++i) {
-        const MinicInlineAsmOperand *op = &source->outputs[i];
-        if (op->constraint_text == NULL || op->constraint_length == 0U)
-            return false;
-        contract->gnu_early_clobber[i] =
-            memchr(op->constraint_text, '&', op->constraint_length) != NULL;
-    }
-    return true;
+    return backend->qualify_inline_asm(program, source, contract) &&
+           minic_backend_capture_asm_operand_source(
+               source, MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED, contract);
 }
 
 /* Shared lexical guard; one ISA may reserve source prefix families without

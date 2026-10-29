@@ -388,7 +388,15 @@ exists src/target/riscv/isa_resolve.h
 exists src/target/riscv/isa_resolve.c
 has src/target/riscv/isa_resolve.c 'bool minic_riscv_isa_resolve('
 lacks src/target/riscv64/isa.c 'bool minic_riscv_isa_resolve('
-has tools/minic-cc/main.c 'target/riscv/isa_resolve.h'
+# The driver carries only target-agnostic machine options. RISC-V feature
+# decoding is owned by the selected target, never the CLI.
+exists src/target/target_machine_options.h
+exists src/target/target_machine_options.c
+has src/target/target_machine_options.c 'minic_riscv_isa_resolve('
+has tools/minic-cc/main.c 'minic_target_machine_options_resolve('
+lacks tools/minic-cc/main.c 'target/riscv/isa_resolve.h'
+lacks tools/minic-cc/main.c '.riscv_isa'
+exists tests/compiler/c0/probe-minic-target-machine-options.sh
 lacks src/target/riscv64/isa.h 'typedef enum MinicRiscvFeature'
 # The old, unused ABI admission functions were misleading duplicates of
 # the live target/ABI planner. They must not be restored.
@@ -808,7 +816,8 @@ has src/target/riscv64/call_emit.c 'rv64_resolve_prepared_call('
 # a regression to the 64-bit scalar result silently loses a1.
 has src/target/riscv64/call_emit.c 'static bool emit_core_call_wide_result('
 has src/target/riscv64/legalize.c 'static bool rv64_wide_call_argument_supported('
-has src/target/riscv64/legalize.c 'return_value.kind == MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR'
+has src/target/riscv64/legalize.c 'static bool rv64_core_call_return_supported('
+has src/target/riscv64/legalize.c 'case MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR:'
 has src/target/riscv64/abi.c 'minic_type_is_int128_integer(type)) && size == 16U'
 lacks src/target/riscv64/abi.c '(lp64_soft_float && minic_type_is_int128_integer(type))'
 if [[ "$(grep -Fc 'return emit_core_call_wide_result(' src/target/riscv64/call_emit.c)" != 2 ]]; then

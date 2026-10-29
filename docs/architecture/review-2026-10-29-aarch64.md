@@ -188,3 +188,66 @@ cases); AArch SMMU dynamic barrier smoke PASS; structured ASM 45/640 update
 source-only smoke PASS. GNU host reference fixture returns its expected code
 42. No `aarch64-linux-gnu-gcc`/QEMU executable is available locally; GNU AArch64
 assembly/link and QEMU mixed-ABI runtime are **SKIP**, pending exact-head CI.
+
+## Third whole-family migration: integer, residual and variadic state
+
+The next architecture batch migrated **the entire integer opcode emitter**
+and **the Core residual emitter** from implicit frame-relative assembly
+strings into typed `MinicA64FrameRef` operations. Their active callers now
+pass one `MinicA64FrameView` built from the already-planned function frame.
+
+- `integer_emit.c`: integer arithmetic, signed/unsigned comparisons,
+  checked overflow, bit-scans, narrow operations, 128-bit shifts and carry
+  arithmetic all load/store SSA and wide slots using `OWNED`. No GP input in
+  these paths uses x16/x17; typed frame materialization may use them as
+  ephemeral scratch, without interrupting NZCV-dependent arithmetic pairs.
+- `residual_emit.c`: address constants, function/block/object/record field
+  addresses, scalar bitcasts, pointer arithmetic, int128 conversions,
+  variadic cursor initialization, `va_copy`, `va_arg`, and dynamic alloca's
+  *count* read now all use `OWNED`. Narrow signed/unsigned pointer indices
+  use a typed owned **address** in x16 followed by their correct byte/half/
+  word loads; converting those to a uniform 64-bit load would have changed
+  C signedness and width semantics.
+- `MINIC_CORE_INSTRUCTION_DYNAMIC_STACK_ALLOC` still deliberately emits
+  `sub sp, sp, x10` and `mov x9, sp`, because the resulting allocation is
+  the **live physical SP**, not an owned SSA frame slot. In particular, the
+  variadic 32-byte cursor and GP/FP save areas are owned by the stable frame;
+  moving SP for an alloca must not move those addresses.
+- The dedicated `va_copy` ABI probe now checks typed cursor address formation
+  instead of assuming the obsolete `movz; add x9,sp,x9` spelling. The typed
+  production probe also checks native pointer-offset index loads and guards
+  against reintroducing raw `sp` SSA references into either emitter.
+
+**Reference design:** Arm's official [AAPCS64 specification]
+(https://github.com/ARM-software/abi-aa/blob/main/aapcs64/aapcs64.rst)
+defines 16-byte stack alignment, callee-saved x19–x29 and the two-word frame
+record; LLVM's upstream
+[AArch64FrameLowering](https://github.com/llvm/llvm-project/blob/main/llvm/lib/Target/AArch64/AArch64FrameLowering.cpp)
+explicitly treats variable-sized stack objects as a separate frame-lowering
+case. These support our distinction among callee-owned stable frame slots,
+incoming argument area, transient outgoing arguments and physical `sp`.
+Neither source justifies eliminating AArch64-specific ABI classification.
+
+**Local checks for this exact working tree:** `make -j8 CFLAGS=-Werror
+build/debug/bin/minic-cc` PASS; per-source strict C11 `-Werror` syntax on
+the changed AArch emitters PASS; `AARCH64_TYPED_FRAME_REF=PASS`,
+`AARCH64_TYPED_FRAME_PRODUCTION=PASS`,
+`AAPCS64_SRET_SOURCE=PASS`, `AARCH64_VA_COPY_ABI=COMPILE_PASS`,
+`AARCH64_LIVE_SP=PASS`, `SMMU_DYNAMIC_DMB=PASS`,
+`MINIC_AARCH64_LINUX_NARROW_PTR_MIXED_MUL=PASS`; the large-pointer-stride
+five-ISA source/host-native regression also PASS. Local AArch64 GNU GAS and
+QEMU are absent, so foreign-architecture runtime and exact-head CI remain
+**unverified**, not an invented five-ISA native-run PASS.
+
+**Legacy paths remain active and are intentionally not deleted:** the
+`asm_contract.c` machine catalog still has well over one hundred raw
+`[sp,#]` instruction templates (including futex, CMPXCHG128, privileged
+sysregister, KVM/EL2, LSE, cache and MMIO paths). Some of those explicitly
+have live x16/x17 operands; rewriting their addresses with an implicit x17
+postpass is a register-liveness risk, but blindly replacing them would be
+just as unsafe. `asm_legalize.c` still has real consumers through both the
+per-function dynamic copy and whole-program large-offset finalizer. Before
+retirement, split the giant ASM source-admission and machine-emission families
+around typed operand descriptors and a per-template scratch exclusion mask;
+prove source-only and AArch64 native runtime per family. No dead-path removal
+is claimed in this batch.

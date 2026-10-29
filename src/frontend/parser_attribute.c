@@ -101,6 +101,68 @@ static bool parse_attribute_arguments(MinicParser *parser, MinicParsedAttribute 
     return validate_attribute_argument_count(parser, attribute, argument_count);
 }
 
+bool minic_parser_consume_function_pointer_attribute(MinicParser *parser,
+                                                      const MinicParsedAttribute *attribute,
+                                                      MinicType *pointer_type,
+                                                      bool *consumed) {
+    const MinicAttributeDescriptor *descriptor;
+
+    if (parser == NULL || attribute == NULL || pointer_type == NULL || consumed == NULL) {
+        return false;
+    }
+    *consumed = false;
+    descriptor = attribute->descriptor;
+    if (descriptor == NULL) {
+        return true;
+    }
+    if (descriptor->kind == MINIC_ATTRIBUTE_MS_ABI) {
+        /* A declaration-only ABI identity is separate from permission to
+         * emit an actual MS x64 call.  TargetInfo owns both decisions. */
+        if (!attribute->has_arguments &&
+            minic_target_info_function_pointer_calling_convention_declaration_supported(
+                parser->target_info, MINIC_CALLING_CONVENTION_MS_X64) &&
+            minic_c0_program_function_pointer_with_calling_convention(
+                parser->program, *pointer_type,
+                MINIC_CALLING_CONVENTION_MS_X64, pointer_type)) {
+            *consumed = true;
+        }
+        return true;
+    }
+    if (minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_FUNCTION) &&
+        (descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_INFORMATIONAL ||
+         descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_DIAGNOSTIC ||
+         descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_OPTIMIZATION ||
+         descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_CONTROL_FLOW)) {
+        *consumed = true;
+    }
+    return true;
+}
+
+bool minic_parser_apply_function_pointer_declarator_attributes(
+    MinicParser *parser,
+    const MinicParsedAttributeList *attributes,
+    MinicType *pointer_type,
+    const char *unsupported_message) {
+    size_t index;
+
+    if (parser == NULL || attributes == NULL || pointer_type == NULL ||
+        unsupported_message == NULL) {
+        return false;
+    }
+    for (index = 0U; index < attributes->count; ++index) {
+        bool consumed;
+        if (!minic_parser_consume_function_pointer_attribute(
+                parser, &attributes->values[index], pointer_type, &consumed)) {
+            return false;
+        }
+        if (!consumed) {
+            minic_parser_error(parser, "%s", unsupported_message);
+            return false;
+        }
+    }
+    return true;
+}
+
 bool minic_parser_parse_gnu_attribute_lists(MinicParser *parser,
                                             MinicParsedAttributeConsumer consumer,
                                             void *context) {

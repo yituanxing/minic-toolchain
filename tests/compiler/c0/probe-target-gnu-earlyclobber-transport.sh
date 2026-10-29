@@ -21,7 +21,8 @@ for entry in "${cases[@]}"; do
     IFS='|' read -r target source minimum <<< "$entry"
     cc -E -P -std=gnu11 -x c "$root/tests/compiler/c0/$source" \
         -o "$tmp/$target.i"
-    MINIC_GNU_ASM_CONSTRAINT_TRACE=1 "$minic" --target="$target-linux" \
+    MINIC_GNU_ASM_CONSTRAINT_TRACE=1 MINIC_ASM_OPERAND_PLAN_TRACE=1 \
+        "$minic" --target="$target-linux" \
         -S "$tmp/$target.i" -o "$tmp/$target.s" 2>"$tmp/$target.log"
     test -s "$tmp/$target.s"
     actual="$(grep -c 'CORE_GNU_ASM_CONSTRAINT .* gnu_early=1 core_early=0' \
@@ -36,6 +37,11 @@ for entry in "${cases[@]}"; do
         echo "FAIL $target conflated source and Core allocator early flags" >&2
         exit 1
     fi
+    if ! grep -E 'CORE_ASM_OPERAND_PLAN owner=1 source_form=[0-9a-f]{16} .* gnu_early=[1-9]' \
+            "$tmp/$target.log" >/dev/null; then
+        echo "FAIL $target typed source form did not reach Core" >&2
+        exit 1
+    fi
     echo "TARGET_GNU_EARLY_SOURCE=$target preserved=$actual"
 done
 
@@ -45,8 +51,11 @@ done
 cc -E -P -std=gnu11 -x c \
     "$root/tests/compiler/c0/gnu_inline_asm_readwrite_earlyclobber.c" \
     -o "$tmp/riscv.i"
-"$minic" --target=riscv64-linux -S "$tmp/riscv.i" -o "$tmp/riscv64.s"
+MINIC_ASM_OPERAND_PLAN_TRACE=1 "$minic" --target=riscv64-linux \
+    -S "$tmp/riscv.i" -o "$tmp/riscv64.s" 2>"$tmp/riscv64.log"
 grep -Eq 'add a0, a0,' "$tmp/riscv64.s"
+grep -E 'CORE_ASM_OPERAND_PLAN owner=2 source_form=[0-9a-f]{16} .* gnu_early=3 ' \
+    "$tmp/riscv64.log" >/dev/null
 rv32_early='fail_closed'
 if "$minic" --target=riscv32-linux -S "$tmp/riscv.i" \
         -o "$tmp/rv32-early.s" >/dev/null 2>&1; then

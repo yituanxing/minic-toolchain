@@ -1,7 +1,7 @@
 #include "minic/compiler.h"
 #include "target/target_info.h"
-#include "target/riscv/isa_resolve.h" /* shared 32/64-bit target ISA policy */
 #include "target/target_catalog.h"
+#include "target/target_machine_options.h"
 
 #include <stdbool.h>
 #include <stdio.h>
@@ -14,7 +14,7 @@ static void minic_print_usage(FILE *stream, const char *program) {
     (void)fprintf(stream, "usage: %s -S <preprocessed-input.i> [--target=", program);
     for (i = 0U; i < count; ++i)
         (void)fprintf(stream, "%s%s", i == 0U ? "" : "|", targets[i].name);
-    (void)fprintf(stream, "] [-march=rv32i|rv64i|rv64im|rv64imafd] [-mabi=ilp32|lp64|lp64d] [-ffunction-sections|-fno-function-sections] [-fPIE|-fPIC|-fno-pie] [-fsigned-char|-funsigned-char] [-fshort-wchar|-fno-short-wchar] -o <output.s>\n");
+    (void)fprintf(stream, "] [-march=<target-isa>] [-mabi=<target-abi>] [-ffunction-sections|-fno-function-sections] [-fPIE|-fPIC|-fno-pie] [-fsigned-char|-funsigned-char] [-fshort-wchar|-fno-short-wchar] -o <output.s>\n");
 }
 
 int main(int argc, char **argv) {
@@ -155,13 +155,9 @@ int main(int argc, char **argv) {
     selected_target.position_independent = position_independent;
     if (march != NULL || mabi != NULL) {
         char reason[240];
-        if (target_entry->isa_family != MINIC_TARGET_ISA_FAMILY_RISCV) {
-            (void)fprintf(stderr, "%s: -march/-mabi currently require RISC-V\n", argv[0]);
-            return 2;
-        }
-        if (!minic_riscv_isa_resolve(march, mabi, &selected_target.riscv_isa,
-                                     reason, sizeof(reason))) {
-            (void)fprintf(stderr, "%s: invalid RISC-V configuration: %s\n", argv[0], reason);
+        if (!minic_target_machine_options_resolve(
+                &selected_target, march, mabi, reason, sizeof(reason))) {
+            (void)fprintf(stderr, "%s: %s\n", argv[0], reason);
             return 2;
         }
     }

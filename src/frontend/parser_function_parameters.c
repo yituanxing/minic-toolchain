@@ -82,27 +82,9 @@ static bool parse_function_pointer_parameter_declarator(MinicParser *parser,
         minic_parser_error(parser, "cannot build function pointer parameter type");
         return false;
     }
-    for (size_t attribute_index = 0U;
-         attribute_index < declarator.attributes.count; ++attribute_index) {
-        const MinicParsedAttribute *attribute =
-            &declarator.attributes.values[attribute_index];
-        const MinicAttributeDescriptor *descriptor = attribute->descriptor;
-        if (descriptor != NULL && descriptor->kind == MINIC_ATTRIBUTE_MS_ABI &&
-            minic_target_info_function_pointer_calling_convention_declaration_supported(
-                parser->target_info, MINIC_CALLING_CONVENTION_MS_X64) &&
-            minic_c0_program_function_pointer_with_calling_convention(
-                parser->program, *parameter_type,
-                MINIC_CALLING_CONVENTION_MS_X64, parameter_type))
-            continue;
-        if (descriptor != NULL &&
-            minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_FUNCTION) &&
-            (descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_INFORMATIONAL ||
-             descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_DIAGNOSTIC ||
-             descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_OPTIMIZATION ||
-             descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_CONTROL_FLOW))
-            continue;
-        minic_parser_error(parser,
-            "unsupported GNU ABI attribute on function pointer parameter");
+    if (!minic_parser_apply_function_pointer_declarator_attributes(
+            parser, &declarator.attributes, parameter_type,
+            "unsupported GNU ABI attribute on function pointer parameter")) {
         return false;
     }
     *name_span = declarator.name_span;

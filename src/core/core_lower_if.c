@@ -479,10 +479,10 @@ minic_core_lower_if(MinicCoreLowerContext *context, const MinicStatement *statem
     MinicCoreLowerStatus status;
     MinicCoreLocalIntegerConstant *fallthrough_facts = NULL;
     MinicCoreLocalIntegerConstant *then_exit_facts = NULL;
-    MinicCoreLocalIntegerConstant *incoming_facts;
-    MinicCoreLocalIntegerConstant *branch_entry_facts;
-    MinicCoreLocalIntegerConstant *then_facts;
-    MinicCoreLocalIntegerConstant *else_facts;
+    MinicCoreLocalIntegerConstant *incoming_facts = NULL;
+    MinicCoreLocalIntegerConstant *branch_entry_facts = NULL;
+    MinicCoreLocalIntegerConstant *then_facts = NULL;
+    MinicCoreLocalIntegerConstant *else_facts = NULL;
     bool else_terminated;
     bool needs_merge;
     bool then_terminated;
@@ -671,7 +671,8 @@ minic_core_lower_if(MinicCoreLowerContext *context, const MinicStatement *statem
     incoming_facts = minic_core_local_facts_snapshot(context);
     if (context->source_function != NULL &&
         context->source_function->local_count != 0U && incoming_facts == NULL) {
-        return MINIC_CORE_LOWER_ERROR;
+        status = MINIC_CORE_LOWER_ERROR;
+        goto if_facts_cleanup;
     }
     branch_entry_facts = NULL;
     then_facts = NULL;
@@ -684,16 +685,18 @@ minic_core_lower_if(MinicCoreLowerContext *context, const MinicStatement *statem
     branch_entry_facts = minic_core_local_facts_snapshot(context);
     if (context->source_function != NULL &&
         context->source_function->local_count != 0U && branch_entry_facts == NULL) {
-        free(incoming_facts);
-        return MINIC_CORE_LOWER_ERROR;
+        status = MINIC_CORE_LOWER_ERROR;
+        goto if_facts_cleanup;
     }
     condition_block = context->block_id;
     if (!minic_core_function_add_block(context->function, &then_block)) {
-        return MINIC_CORE_LOWER_ERROR;
+        status = MINIC_CORE_LOWER_ERROR;
+        goto if_facts_cleanup;
     }
     else_block = MINIC_CORE_BLOCK_INVALID;
     if (else_source != NULL && !minic_core_function_add_block(context->function, &else_block)) {
-        return MINIC_CORE_LOWER_ERROR;
+        status = MINIC_CORE_LOWER_ERROR;
+        goto if_facts_cleanup;
     }
 
     context->block_id = then_block;
@@ -712,7 +715,7 @@ minic_core_lower_if(MinicCoreLowerContext *context, const MinicStatement *statem
                       (int)condition_expression->kind,
                       statement->span.begin.line,
                       statement->span.begin.column);
-        return status;
+        goto if_facts_cleanup;
     }
     if (context->source_function && context->source_function->name &&
         strcmp(context->source_function->name, "genl_op_from_split") == 0)
@@ -726,9 +729,8 @@ minic_core_lower_if(MinicCoreLowerContext *context, const MinicStatement *statem
     then_facts = minic_core_local_facts_snapshot(context);
     if (context->source_function != NULL &&
         context->source_function->local_count != 0U && then_facts == NULL) {
-        free(branch_entry_facts);
-        free(incoming_facts);
-        return MINIC_CORE_LOWER_ERROR;
+        status = MINIC_CORE_LOWER_ERROR;
+        goto if_facts_cleanup;
     }
     else_continuation_block = MINIC_CORE_BLOCK_INVALID;
     else_terminated = false;
@@ -745,16 +747,14 @@ minic_core_lower_if(MinicCoreLowerContext *context, const MinicStatement *statem
                           (int)condition_expression->kind,
                           statement->span.begin.line,
                           statement->span.begin.column);
-            return status;
+            goto if_facts_cleanup;
         }
         else_continuation_block = context->block_id;
         else_facts = minic_core_local_facts_snapshot(context);
         if (context->source_function != NULL &&
             context->source_function->local_count != 0U && else_facts == NULL) {
-            free(then_facts);
-            free(branch_entry_facts);
-            free(incoming_facts);
-            return MINIC_CORE_LOWER_ERROR;
+            status = MINIC_CORE_LOWER_ERROR;
+            goto if_facts_cleanup;
         }
     }
 
@@ -762,18 +762,19 @@ minic_core_lower_if(MinicCoreLowerContext *context, const MinicStatement *statem
     merge_block = MINIC_CORE_BLOCK_INVALID;
     if (needs_merge) {
         if (!minic_core_function_add_block(context->function, &merge_block)) {
-            return MINIC_CORE_LOWER_ERROR;
+            status = MINIC_CORE_LOWER_ERROR;
+            goto if_facts_cleanup;
         }
         if (!then_terminated) {
             status = minic_core_lower_internal_set_branch(context, then_continuation_block, statement->span, merge_block);
             if (status != MINIC_CORE_LOWER_OK) {
-                return status;
+                goto if_facts_cleanup;
             }
         }
         if (else_source != NULL && !else_terminated) {
             status = minic_core_lower_internal_set_branch(context, else_continuation_block, statement->span, merge_block);
             if (status != MINIC_CORE_LOWER_OK) {
-                return status;
+                goto if_facts_cleanup;
             }
         }
         false_target = else_source == NULL ? merge_block : else_block;
@@ -807,8 +808,7 @@ minic_core_lower_if(MinicCoreLowerContext *context, const MinicStatement *statem
                       (int)condition_expression->kind,
                       statement->span.begin.line,
                       statement->span.begin.column);
-        free(incoming_facts);
-        return status;
+        goto if_facts_cleanup;
     }
     context->block_id = continuation_block;
     if (!(else_source == NULL && then_terminated)) {
@@ -819,15 +819,10 @@ minic_core_lower_if(MinicCoreLowerContext *context, const MinicStatement *statem
             else_source == NULL ? branch_entry_facts : else_facts,
             else_source == NULL ? true : !else_terminated);
     }
-    free(else_facts);
-    free(then_facts);
-    free(branch_entry_facts);
     if (else_source == NULL) {
         core_runtime_if_merge_false_fallthrough(
             context, fallthrough_facts, then_exit_facts, then_terminated);
     }
-    free(then_exit_facts);
-    free(fallthrough_facts);
     if (getenv("MINIC_SHMEM_IF_TRACE") != NULL &&
         context->source_function != NULL &&
         strcmp(context->source_function->name, "shmem_alloc_and_acct_folio") == 0) {
@@ -840,13 +835,24 @@ minic_core_lower_if(MinicCoreLowerContext *context, const MinicStatement *statem
                 then_terminated ? 1 : 0);
         }
     }
-    free(incoming_facts);
     if (context->source_function && context->source_function->name &&
         strcmp(context->source_function->name, "genl_op_from_split") == 0)
         (void)fprintf(stderr, "GENL_IF_PATH stage=post_guard expr=%zu status=%d block=%u\n",
             (size_t)statement->expression, (int)status,
             (unsigned int)context->block_id);
     *terminated = !needs_merge;
-    return MINIC_CORE_LOWER_OK;
+    status = MINIC_CORE_LOWER_OK;
+if_facts_cleanup:
+    /* All Core CFG building in this function is transactional at the outer
+     * function level: a failed lower discards its IR. Keep the local fact
+     * snapshots equally owned regardless of which nested source path failed.
+     * This includes an unsupported GNU inline-ASM statement in either arm. */
+    free(else_facts);
+    free(then_facts);
+    free(branch_entry_facts);
+    free(then_exit_facts);
+    free(fallthrough_facts);
+    free(incoming_facts);
+    return status;
 }
 

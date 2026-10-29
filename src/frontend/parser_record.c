@@ -165,7 +165,6 @@ static bool parse_function_pointer_field_declarator(MinicParser *parser,
                                                     MinicSourceSpan *name_span,
                                                     MinicType *field_type) {
     MinicParsedFunctionDeclarator declarator;
-    size_t attribute_index;
 
     if (parser == NULL || name_span == NULL || field_type == NULL ||
         !minic_parser_parse_parenthesized_function_declarator(parser, true, true, &declarator)) {
@@ -176,29 +175,9 @@ static bool parse_function_pointer_field_declarator(MinicParser *parser,
         minic_parser_error(parser, "cannot build function pointer field type");
         return false;
     }
-    for (attribute_index = 0U; attribute_index < declarator.attributes.count;
-         ++attribute_index) {
-        const MinicParsedAttribute *attribute = &declarator.attributes.values[attribute_index];
-        const MinicAttributeDescriptor *descriptor = attribute->descriptor;
-
-        if (descriptor != NULL && descriptor->kind == MINIC_ATTRIBUTE_MS_ABI &&
-            !attribute->has_arguments &&
-            minic_target_info_function_pointer_calling_convention_declaration_supported(
-                parser->target_info, MINIC_CALLING_CONVENTION_MS_X64) &&
-            minic_c0_program_function_pointer_with_calling_convention(
-                parser->program, *field_type, MINIC_CALLING_CONVENTION_MS_X64, field_type)) {
-            continue;
-        }
-        if (descriptor != NULL &&
-            minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_FUNCTION) &&
-            (descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_INFORMATIONAL ||
-             descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_DIAGNOSTIC ||
-             descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_OPTIMIZATION ||
-             descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_CONTROL_FLOW)) {
-            continue;
-        }
-        minic_parser_error(parser,
-                           "unsupported GNU attribute in function-pointer record declarator");
+    if (!minic_parser_apply_function_pointer_declarator_attributes(
+            parser, &declarator.attributes, field_type,
+            "unsupported GNU attribute in function-pointer record declarator")) {
         return false;
     }
     *name_span = declarator.name_span;
@@ -229,26 +208,16 @@ static bool consume_record_field_attribute(MinicParser *parser,
     }
     if (!minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_FIELD)) {
         if (context->has_field_type &&
-            descriptor->kind == MINIC_ATTRIBUTE_MS_ABI &&
-            minic_target_info_function_pointer_calling_convention_declaration_supported(
-                parser->target_info, MINIC_CALLING_CONVENTION_MS_X64) &&
-            minic_c0_program_function_pointer_with_calling_convention(
-                parser->program, context->field_type,
-                MINIC_CALLING_CONVENTION_MS_X64, &context->field_type))
-            return true;
-        bool function_parse_only;
-
-        function_parse_only =
-            context->has_field_type &&
             minic_type_is_pointer(context->field_type) &&
-            context->field_type.base_kind == MINIC_TYPE_BASE_FUNCTION &&
-            minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_FUNCTION) &&
-            (descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_INFORMATIONAL ||
-             descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_DIAGNOSTIC ||
-             descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_OPTIMIZATION ||
-             descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_CONTROL_FLOW);
-        if (function_parse_only) {
-            return true;
+            context->field_type.base_kind == MINIC_TYPE_BASE_FUNCTION) {
+            bool consumed;
+            if (!minic_parser_consume_function_pointer_attribute(
+                    parser, attribute, &context->field_type, &consumed)) {
+                return false;
+            }
+            if (consumed) {
+                return true;
+            }
         }
         minic_parser_error(parser, "unsupported GNU record field attribute");
         return false;
@@ -300,15 +269,6 @@ static bool parse_typed_record_field_attributes(MinicParser *parser,
     return true;
 }
 
-static bool
-record_field_function_attribute_is_parse_only(const MinicAttributeDescriptor *descriptor) {
-    return descriptor != NULL &&
-           (descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_INFORMATIONAL ||
-            descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_DIAGNOSTIC ||
-            descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_OPTIMIZATION ||
-            descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_CONTROL_FLOW);
-}
-
 static bool apply_record_field_declaration_attributes(MinicParser *parser,
                                                       const MinicParsedAttributeList *attributes,
                                                       MinicType *field_type,
@@ -322,6 +282,9 @@ static bool apply_record_field_declaration_attributes(MinicParser *parser,
         explicit_alignment == NULL || is_packed == NULL) {
         return false;
     }
+    (void)memset(&context, 0, sizeof(context));
+    context.field_type = *field_type;
+    context.has_field_type = true;
     context.explicit_alignment = *explicit_alignment;
     context.is_packed = *is_packed;
     is_function_pointer =
@@ -332,28 +295,21 @@ static bool apply_record_field_declaration_attributes(MinicParser *parser,
 
         attribute = &attributes->values[index];
         descriptor = attribute->descriptor;
-        if (is_function_pointer && descriptor != NULL &&
-            descriptor->kind == MINIC_ATTRIBUTE_MS_ABI &&
-            minic_target_info_function_pointer_calling_convention_declaration_supported(
-                parser->target_info, MINIC_CALLING_CONVENTION_MS_X64)) {
-            if (!minic_c0_program_function_pointer_with_calling_convention(
-                    parser->program, *field_type,
-                    MINIC_CALLING_CONVENTION_MS_X64, field_type)) {
-                minic_parser_error(parser, "invalid ms_abi function-pointer field type");
+        if (is_function_pointer) {
+            bool consumed;
+            if (!minic_parser_consume_function_pointer_attribute(
+                    parser, attribute, &context.field_type, &consumed)) {
                 return false;
             }
-            continue;
+            if (consumed) {
+                continue;
+            }
         }
         if (descriptor != NULL &&
             minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_FIELD)) {
             if (!consume_record_field_attribute(parser, attribute, &context)) {
                 return false;
             }
-            continue;
-        }
-        if (is_function_pointer && descriptor != NULL &&
-            minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_FUNCTION) &&
-            record_field_function_attribute_is_parse_only(descriptor)) {
             continue;
         }
         minic_parser_error(parser,
@@ -365,6 +321,7 @@ static bool apply_record_field_declaration_attributes(MinicParser *parser,
          * not a parse-only bypass of layout or ABI contracts. */
         return false;
     }
+    *field_type = context.field_type;
     *explicit_alignment = context.explicit_alignment;
     *is_packed = context.is_packed;
     return true;

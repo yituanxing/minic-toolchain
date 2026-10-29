@@ -1,4 +1,5 @@
 #include "target/aarch64/integer_emit.h"
+#include "target/aarch64/frame_emit.h"
 #include "target/aarch64/scalar_normalize.h"
 #include "target/common/direct_instruction_semantics.h"
 #include "target/common/core_numeric_shape.h"
@@ -12,10 +13,10 @@
 bool minic_aarch64_emit_integer_instruction(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
-    const MinicLP64FramePlan *frame_plan,
+    const MinicLP64FramePlan *frame_plan, const MinicA64FrameView *view,
     bool *needs_gp_store) {
     if (out == NULL || program == NULL || target == NULL ||
-        fn == NULL || ins == NULL || frame_plan == NULL ||
+        fn == NULL || ins == NULL || frame_plan == NULL || view == NULL ||
          needs_gp_store == NULL)
         return false;
     *needs_gp_store = false;
@@ -31,14 +32,17 @@ bool minic_aarch64_emit_integer_instruction(
             !minic_type_equal(fn->values[src].type, ins->type) ||
             !minic_lp64_frame_plan_wide_slot(frame_plan, src, &from) ||
             !minic_lp64_frame_plan_wide_slot(frame_plan, ins->result, &to) ||
-            fprintf(out, "  ldr x9, [sp, #%zu]\n"
-                         "  ldr x10, [sp, #%zu]\n",
-                    from, from + 8U) < 0 ||
+            !minic_a64_emit_owned_slot(out, view, false,
+                MINIC_A64_REG_X, 9U, from) ||
+            !minic_a64_emit_owned_slot(out, view, false,
+                MINIC_A64_REG_X, 10U, from + 8U) ||
             fputs(ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_NEGATE
                   ? "  negs x9, x9\n  ngc x10, x10\n"
                   : "  mvn x9, x9\n  mvn x10, x10\n", out) == EOF ||
-            fprintf(out, "  str x9, [sp, #%zu]\n"
-                         "  str x10, [sp, #%zu]\n", to, to + 8U) < 0)
+            !minic_a64_emit_owned_slot(out, view, true,
+                MINIC_A64_REG_X, 9U, to) ||
+            !minic_a64_emit_owned_slot(out, view, true,
+                MINIC_A64_REG_X, 10U, to + 8U))
             return false;
         return true;
     }
@@ -67,11 +71,14 @@ bool minic_aarch64_emit_integer_instruction(
                 !minic_lp64_frame_plan_wide_slot(frame_plan, rhs, &right) ||
                 (!comparison &&
                  !minic_lp64_frame_plan_wide_slot(frame_plan, ins->result, &dst)) ||
-                fprintf(out, "  ldr x9, [sp, #%zu]\n"
-                             "  ldr x10, [sp, #%zu]\n"
-                             "  ldr x11, [sp, #%zu]\n"
-                             "  ldr x13, [sp, #%zu]\n",
-                        left, left + 8U, right, right + 8U) < 0)
+                !minic_a64_emit_owned_slot(out, view, false,
+                    MINIC_A64_REG_X, 9U, left) ||
+                !minic_a64_emit_owned_slot(out, view, false,
+                    MINIC_A64_REG_X, 10U, left + 8U) ||
+                !minic_a64_emit_owned_slot(out, view, false,
+                    MINIC_A64_REG_X, 11U, right) ||
+                !minic_a64_emit_owned_slot(out, view, false,
+                    MINIC_A64_REG_X, 13U, right + 8U))
                 return false;
             switch (ins->kind) {
             case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
@@ -122,9 +129,10 @@ bool minic_aarch64_emit_integer_instruction(
                 *needs_gp_store = true;
                 return true;
             }
-            return fprintf(out, "  str x9, [sp, #%zu]\n"
-                                "  str x10, [sp, #%zu]\n",
-                           dst, dst + 8U) >= 0;
+            return minic_a64_emit_owned_slot(out, view, true,
+                       MINIC_A64_REG_X, 9U, dst) &&
+                   minic_a64_emit_owned_slot(out, view, true,
+                       MINIC_A64_REG_X, 10U, dst + 8U);
         }
     }
     if (ins->kind == MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO) {
@@ -133,11 +141,12 @@ bool minic_aarch64_emit_integer_instruction(
         if (src < fn->value_count &&
             minic_type_is_int128_integer(fn->values[src].type)) {
             if (!minic_lp64_frame_plan_wide_slot(frame_plan, src, &from) ||
-                fprintf(out, "  ldr x9, [sp, #%zu]\n"
-                             "  ldr x10, [sp, #%zu]\n"
-                             "  orr x9, x9, x10\n"
-                             "  cmp x9, #0\n  cset w9, eq\n",
-                        from, from + 8U) < 0)
+                !minic_a64_emit_owned_slot(out, view, false,
+                    MINIC_A64_REG_X, 9U, from) ||
+                !minic_a64_emit_owned_slot(out, view, false,
+                    MINIC_A64_REG_X, 10U, from + 8U) ||
+                fputs("  orr x9, x9, x10\n"
+                      "  cmp x9, #0\n  cset w9, eq\n", out) == EOF)
                 return false;
             *needs_gp_store = true;
             return true;
@@ -155,12 +164,13 @@ bool minic_aarch64_emit_integer_instruction(
                 fn->values[rhs].type, &rw, &sign) ||
             !minic_lp64_frame_plan_wide_slot(frame_plan, lhs, &src) ||
             !minic_lp64_frame_plan_wide_slot(frame_plan, ins->result, &dst) ||
-            fprintf(out, rw == 8U ? "  ldr x10, [sp, #%zu]\n"
-                                   : "  ldr w10, [sp, #%zu]\n",
-                    (size_t)rhs * 8U) < 0 ||
-            fprintf(out, "  ldr x9, [sp, #%zu]\n"
-                         "  ldr x11, [sp, #%zu]\n",
-                    src, src + 8U) < 0 ||
+            !minic_a64_emit_owned_slot(out, view, false,
+                rw == 8U ? MINIC_A64_REG_X : MINIC_A64_REG_W,
+                10U, (size_t)rhs * 8U) ||
+            !minic_a64_emit_owned_slot(out, view, false,
+                MINIC_A64_REG_X, 9U, src) ||
+            !minic_a64_emit_owned_slot(out, view, false,
+                MINIC_A64_REG_X, 11U, src + 8U) ||
             fputs("  cbz x10, 2f\n"
                   "  cmp x10, #64\n  b.hs 1f\n"
                   "  neg x13, x10\n"
@@ -174,9 +184,10 @@ bool minic_aarch64_emit_integer_instruction(
                   "  lsl x11, x9, x10\n"
                   "  mov x9, xzr\n"
                   "2:\n", out) == EOF ||
-            fprintf(out, "  str x9, [sp, #%zu]\n"
-                         "  str x11, [sp, #%zu]\n",
-                    dst, dst + 8U) < 0)
+            !minic_a64_emit_owned_slot(out, view, true,
+                MINIC_A64_REG_X, 9U, dst) ||
+            !minic_a64_emit_owned_slot(out, view, true,
+                MINIC_A64_REG_X, 11U, dst + 8U))
             return false;
         (void)sign;
         return true;
@@ -222,11 +233,12 @@ bool minic_aarch64_emit_integer_instruction(
                                                 : "  uxth w9, w9\n");
                     const char *store = narrow.result_width == 1U
                         ? "  strb w9, [x11]\n" : "  strh w9, [x11]\n";
-                    if (fprintf(out, "  ldr w9, [sp, #%zu]\n"
-                                     "  ldr w10, [sp, #%zu]\n"
-                                     "  ldr x11, [sp, #%zu]\n",
-                                (size_t)lhs * 8U, (size_t)rhs * 8U,
-                                (size_t)address * 8U) < 0 ||
+                    if (!minic_a64_emit_owned_slot(out, view, false,
+                            MINIC_A64_REG_W, 9U, (size_t)lhs * 8U) ||
+                        !minic_a64_emit_owned_slot(out, view, false,
+                            MINIC_A64_REG_W, 10U, (size_t)rhs * 8U) ||
+                        !minic_a64_emit_owned_slot(out, view, false,
+                            MINIC_A64_REG_X, 11U, (size_t)address * 8U) ||
                         fputs(left_narrow, out) == EOF ||
                         fputs(narrow.left_signed ? "  sxtw x9, w9\n"
                                                   : "  uxtw x9, w9\n", out) == EOF ||
@@ -255,11 +267,12 @@ bool minic_aarch64_emit_integer_instruction(
                      * not the result of C's usual integer promotions. The
                      * product of two 32-bit operands always fits 64 bits,
                      * even when one is signed and the other unsigned. */
-                    if (fprintf(out, "  ldr w9, [sp, #%zu]\n"
-                                     "  ldr w10, [sp, #%zu]\n"
-                                     "  ldr x11, [sp, #%zu]\n",
-                                (size_t)lhs * 8U, (size_t)rhs * 8U,
-                                (size_t)address * 8U) < 0 ||
+                    if (!minic_a64_emit_owned_slot(out, view, false,
+                            MINIC_A64_REG_W, 9U, (size_t)lhs * 8U) ||
+                        !minic_a64_emit_owned_slot(out, view, false,
+                            MINIC_A64_REG_W, 10U, (size_t)rhs * 8U) ||
+                        !minic_a64_emit_owned_slot(out, view, false,
+                            MINIC_A64_REG_X, 11U, (size_t)address * 8U) ||
                         fputs(multiply_signed_left ? "  sxtw x9, w9\n"
                                                    : "  uxtw x9, w9\n", out) == EOF ||
                         fputs(multiply_signed_right ? "  sxtw x10, w10\n"
@@ -279,11 +292,12 @@ bool minic_aarch64_emit_integer_instruction(
                 bool signed_left;
                 if (!minic_core_integer_overflow_mixed_add_i32_shape(
                         program, target, fn, ins, &signed_left) ||
-                    fprintf(out, "  ldr x9, [sp, #%zu]\n"
-                                 "  ldr x10, [sp, #%zu]\n"
-                                 "  ldr x11, [sp, #%zu]\n",
-                            (size_t)lhs * 8U, (size_t)rhs * 8U,
-                            (size_t)address * 8U) < 0 ||
+                    !minic_a64_emit_owned_slot(out, view, false,
+                        MINIC_A64_REG_X, 9U, (size_t)lhs * 8U) ||
+                    !minic_a64_emit_owned_slot(out, view, false,
+                        MINIC_A64_REG_X, 10U, (size_t)rhs * 8U) ||
+                    !minic_a64_emit_owned_slot(out, view, false,
+                        MINIC_A64_REG_X, 11U, (size_t)address * 8U) ||
                     fputs(signed_left
                           ? "  sxtw x9, w9\n  asr x12, x9, #63\n"
                           : "  sxtw x10, w10\n  asr x12, x10, #63\n",
@@ -300,12 +314,14 @@ bool minic_aarch64_emit_integer_instruction(
             }
             const bool wide = width == 8U;
             const int op = ins->value.integer_overflow.operator_kind;
-            if (fprintf(out, wide
-                      ? "  ldr x9, [sp, #%zu]\n  ldr x10, [sp, #%zu]\n"
-                      : "  ldr w9, [sp, #%zu]\n  ldr w10, [sp, #%zu]\n",
-                        (size_t)lhs * 8U, (size_t)rhs * 8U) < 0 ||
-                fprintf(out, "  ldr x11, [sp, #%zu]\n",
-                        (size_t)address * 8U) < 0)
+            if (!minic_a64_emit_owned_slot(out, view, false,
+                    wide ? MINIC_A64_REG_X : MINIC_A64_REG_W,
+                    9U, (size_t)lhs * 8U) ||
+                !minic_a64_emit_owned_slot(out, view, false,
+                    wide ? MINIC_A64_REG_X : MINIC_A64_REG_W,
+                    10U, (size_t)rhs * 8U) ||
+                !minic_a64_emit_owned_slot(out, view, false,
+                    MINIC_A64_REG_X, 11U, (size_t)address * 8U))
                 return false;
             if (op == MINIC_CORE_INTEGER_OVERFLOW_ADD ||
                 op == MINIC_CORE_INTEGER_OVERFLOW_SUBTRACT) {
@@ -352,10 +368,9 @@ bool minic_aarch64_emit_integer_instruction(
             unsigned int width;
             if (!minic_core_integer_bitscan_shape(
                     program, target, fn, ins, &width) ||
-                fprintf(out, width == 64U
-                           ? "  ldr x9, [sp, #%zu]\n"
-                           : "  ldr w9, [sp, #%zu]\n",
-                        (size_t)operand * 8U) < 0 ||
+                !minic_a64_emit_owned_slot(out, view, false,
+                    width == 64U ? MINIC_A64_REG_X : MINIC_A64_REG_W,
+                    9U, (size_t)operand * 8U) ||
                 (width != 64U && width < 32U &&
                  fprintf(out, "  and w9, w9, #%u\n",
                          (1U << width) - 1U) < 0))
@@ -388,12 +403,13 @@ bool minic_aarch64_emit_integer_instruction(
                         fn->values[rhs].type, &rw, &rs) ||
                     !minic_lp64_frame_plan_wide_slot(frame_plan, lhs, &src_offset) ||
                     !minic_lp64_frame_plan_wide_slot(frame_plan, ins->result, &dst_offset) ||
-                    fprintf(out, rw == 8U ?
-                            "  ldr x10, [sp, #%zu]\n" :
-                            "  ldr w10, [sp, #%zu]\n", (size_t)rhs * 8U) < 0 ||
-                    fprintf(out, "  ldr x9, [sp, #%zu]\n"
-                                 "  ldr x11, [sp, #%zu]\n",
-                            src_offset, src_offset + 8U) < 0 ||
+                    !minic_a64_emit_owned_slot(out, view, false,
+                        rw == 8U ? MINIC_A64_REG_X : MINIC_A64_REG_W,
+                        10U, (size_t)rhs * 8U) ||
+                    !minic_a64_emit_owned_slot(out, view, false,
+                        MINIC_A64_REG_X, 9U, src_offset) ||
+                    !minic_a64_emit_owned_slot(out, view, false,
+                        MINIC_A64_REG_X, 11U, src_offset + 8U) ||
                     fputs("  cbz x10, 2f\n"
                           "  cmp x10, #64\n"
                           "  b.hs 1f\n"
@@ -410,10 +426,11 @@ bool minic_aarch64_emit_integer_instruction(
                                  "  asr x11, x11, #63\n" :
                                  "  lsr x9, x11, x10\n"
                                  "  mov x11, xzr\n", out) == EOF ||
-                    fprintf(out, "2:\n"
-                                 "  str x9, [sp, #%zu]\n"
-                                 "  str x11, [sp, #%zu]\n",
-                            dst_offset, dst_offset + 8U) < 0)
+                    fputs("2:\n", out) == EOF ||
+                    !minic_a64_emit_owned_slot(out, view, true,
+                        MINIC_A64_REG_X, 9U, dst_offset) ||
+                    !minic_a64_emit_owned_slot(out, view, true,
+                        MINIC_A64_REG_X, 11U, dst_offset + 8U))
                     return false;
                 (void)rs;
                 return true;
@@ -434,15 +451,15 @@ bool minic_aarch64_emit_integer_instruction(
                                    : "  asr w9, w9, w10\n")
                            : (wide ? "  lsr x9, x9, x10\n"
                                    : "  lsr w9, w9, w10\n"));
-            if (fprintf(out, wide ? "  ldr x9, [sp, #%zu]\n"
-                                  : "  ldr w9, [sp, #%zu]\n",
-                        (size_t)lhs * 8U) < 0 ||
+            if (!minic_a64_emit_owned_slot(out, view, false,
+                    wide ? MINIC_A64_REG_X : MINIC_A64_REG_W,
+                    9U, (size_t)lhs * 8U) ||
                 /* Narrow signed shifts need sign-extension BEFORE the
                  * arithmetic shift; normalizing only the result is late. */
                 (lw < 4U && !minic_aarch64_emit_integer_normalize(out, lw, ls)) ||
-                fprintf(out, rw == 8U ? "  ldr x10, [sp, #%zu]\n"
-                                     : "  ldr w10, [sp, #%zu]\n",
-                        (size_t)rhs * 8U) < 0 ||
+                !minic_a64_emit_owned_slot(out, view, false,
+                    rw == 8U ? MINIC_A64_REG_X : MINIC_A64_REG_W,
+                    10U, (size_t)rhs * 8U) ||
                 fputs(op, out) == EOF ||
                 (!wide && !minic_aarch64_emit_integer_normalize(out, lw, ls)))
                 return false;
@@ -459,9 +476,9 @@ bool minic_aarch64_emit_integer_instruction(
             bool sign;
             if (!minic_multi_direct_integer_unary_shape(
                     program, target, fn, ins, &width, &sign) ||
-                fprintf(out, width == 8U ? "  ldr x9, [sp, #%zu]\n"
-                                         : "  ldr w9, [sp, #%zu]\n",
-                        (size_t)operand * 8U) < 0 ||
+                !minic_a64_emit_owned_slot(out, view, false,
+                    width == 8U ? MINIC_A64_REG_X : MINIC_A64_REG_W,
+                    9U, (size_t)operand * 8U) ||
                 fputs(width == 8U ? "  mvn x9, x9\n" : "  mvn w9, w9\n",
                       out) == EOF ||
                 (width != 8U && !minic_aarch64_emit_integer_normalize(out, width, sign)))
@@ -475,9 +492,9 @@ bool minic_aarch64_emit_integer_instruction(
             bool sign;
             if (!minic_multi_direct_integer_unary_shape(
                     program, target, fn, ins, &width, &sign) ||
-                fprintf(out, width == 8U ? "  ldr x9, [sp, #%zu]\n"
-                                         : "  ldr w9, [sp, #%zu]\n",
-                        (size_t)operand * 8U) < 0 ||
+                !minic_a64_emit_owned_slot(out, view, false,
+                    width == 8U ? MINIC_A64_REG_X : MINIC_A64_REG_W,
+                    9U, (size_t)operand * 8U) ||
                 fputs(width == 8U ? "  neg x9, x9\n" : "  neg w9, w9\n",
                       out) == EOF ||
                 (width != 8U && !minic_aarch64_emit_integer_normalize(out, width, sign)))
@@ -506,12 +523,12 @@ bool minic_aarch64_emit_integer_instruction(
                 : ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT
                     ? (wide ? "  sub x9, x9, x10\n" : "  sub w9, w9, w10\n")
                     : (wide ? "  mul x9, x9, x10\n" : "  mul w9, w9, w10\n");
-            if (fprintf(out, wide ? "  ldr x9, [sp, #%zu]\n"
-                                  : "  ldr w9, [sp, #%zu]\n",
-                        (size_t)lhs * 8U) < 0 ||
-                fprintf(out, wide ? "  ldr x10, [sp, #%zu]\n"
-                                  : "  ldr w10, [sp, #%zu]\n",
-                        (size_t)rhs * 8U) < 0 ||
+            if (!minic_a64_emit_owned_slot(out, view, false,
+                    wide ? MINIC_A64_REG_X : MINIC_A64_REG_W,
+                    9U, (size_t)lhs * 8U) ||
+                !minic_a64_emit_owned_slot(out, view, false,
+                    wide ? MINIC_A64_REG_X : MINIC_A64_REG_W,
+                    10U, (size_t)rhs * 8U) ||
                 fputs(opcode, out) == EOF ||
                 (!wide && !minic_aarch64_emit_integer_normalize(out, lw, ls)))
                 return false;
@@ -536,12 +553,12 @@ bool minic_aarch64_emit_integer_instruction(
                 : ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_XOR
                     ? (wide ? "  eor x9, x9, x10\n" : "  eor w9, w9, w10\n")
                     : (wide ? "  orr x9, x9, x10\n" : "  orr w9, w9, w10\n");
-            if (fprintf(out, wide ? "  ldr x9, [sp, #%zu]\n"
-                                  : "  ldr w9, [sp, #%zu]\n",
-                        (size_t)lhs * 8U) < 0 ||
-                fprintf(out, wide ? "  ldr x10, [sp, #%zu]\n"
-                                  : "  ldr w10, [sp, #%zu]\n",
-                        (size_t)rhs * 8U) < 0 ||
+            if (!minic_a64_emit_owned_slot(out, view, false,
+                    wide ? MINIC_A64_REG_X : MINIC_A64_REG_W,
+                    9U, (size_t)lhs * 8U) ||
+                !minic_a64_emit_owned_slot(out, view, false,
+                    wide ? MINIC_A64_REG_X : MINIC_A64_REG_W,
+                    10U, (size_t)rhs * 8U) ||
                 fputs(opcode, out) == EOF ||
                 (lw != 8U && !minic_aarch64_emit_integer_normalize(out, lw, ls)))
                 return false;
@@ -559,12 +576,12 @@ bool minic_aarch64_emit_integer_instruction(
                     program, target, fn, ins, &lw, &rw, &ls, &rs))
                 return false;
             wide = lw == 8U;
-            if (fprintf(out, wide ? "  ldr x9, [sp, #%zu]\n"
-                                  : "  ldr w9, [sp, #%zu]\n",
-                        (size_t)lhs * 8U) < 0 ||
-                fprintf(out, wide ? "  ldr x10, [sp, #%zu]\n"
-                                  : "  ldr w10, [sp, #%zu]\n",
-                        (size_t)rhs * 8U) < 0)
+            if (!minic_a64_emit_owned_slot(out, view, false,
+                    wide ? MINIC_A64_REG_X : MINIC_A64_REG_W,
+                    9U, (size_t)lhs * 8U) ||
+                !minic_a64_emit_owned_slot(out, view, false,
+                    wide ? MINIC_A64_REG_X : MINIC_A64_REG_W,
+                    10U, (size_t)rhs * 8U))
                 return false;
             op = ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE
                 ? (wide ? (ls ? "  sdiv x9, x9, x10\n"
@@ -591,11 +608,11 @@ bool minic_aarch64_emit_integer_instruction(
             const MinicCoreValueId lhs = ins->value.binary.left;
             const MinicCoreValueId rhs = ins->value.binary.right;
             if (!minic_multi_direct_pointer_less_shape(fn, ins) ||
-                fprintf(out, "  ldr x9, [sp, #%zu]\n"
-                             "  ldr x10, [sp, #%zu]\n"
-                             "  cmp x9, x10\n"
-                             "  cset w9, lo\n",
-                        (size_t)lhs * 8U, (size_t)rhs * 8U) < 0)
+                !minic_a64_emit_owned_slot(out, view, false,
+                    MINIC_A64_REG_X, 9U, (size_t)lhs * 8U) ||
+                !minic_a64_emit_owned_slot(out, view, false,
+                    MINIC_A64_REG_X, 10U, (size_t)rhs * 8U) ||
+                fputs("  cmp x9, x10\n  cset w9, lo\n", out) == EOF)
                 return false;
             *needs_gp_store = true;
             return true;
@@ -610,10 +627,11 @@ bool minic_aarch64_emit_integer_instruction(
                 lhs < fn->value_count && rhs < fn->value_count &&
                 minic_type_is_pointer(fn->values[lhs].type) &&
                 minic_type_is_pointer(fn->values[rhs].type)) {
-                if (fprintf(out, "  ldr x9, [sp, #%zu]\n"
-                                 "  ldr x10, [sp, #%zu]\n"
-                                 "  cmp x9, x10\n  cset w9, eq\n",
-                            (size_t)lhs * 8U, (size_t)rhs * 8U) < 0)
+                if (!minic_a64_emit_owned_slot(out, view, false,
+                        MINIC_A64_REG_X, 9U, (size_t)lhs * 8U) ||
+                    !minic_a64_emit_owned_slot(out, view, false,
+                        MINIC_A64_REG_X, 10U, (size_t)rhs * 8U) ||
+                    fputs("  cmp x9, x10\n  cset w9, eq\n", out) == EOF)
                     return false;
                 *needs_gp_store = true;
             return true;
@@ -622,12 +640,12 @@ bool minic_aarch64_emit_integer_instruction(
                     program, target, fn, ins, &lw, &rw, &ls, &rs))
                 return false;
             wide = lw == 8U;
-            if (fprintf(out, wide ? "  ldr x9, [sp, #%zu]\n"
-                                  : "  ldr w9, [sp, #%zu]\n",
-                        (size_t)lhs * 8U) < 0 ||
-                fprintf(out, wide ? "  ldr x10, [sp, #%zu]\n"
-                                  : "  ldr w10, [sp, #%zu]\n",
-                        (size_t)rhs * 8U) < 0 ||
+            if (!minic_a64_emit_owned_slot(out, view, false,
+                    wide ? MINIC_A64_REG_X : MINIC_A64_REG_W,
+                    9U, (size_t)lhs * 8U) ||
+                !minic_a64_emit_owned_slot(out, view, false,
+                    wide ? MINIC_A64_REG_X : MINIC_A64_REG_W,
+                    10U, (size_t)rhs * 8U) ||
                 fputs(ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_LESS
                           ? (wide
                               ? (ls ? "  cmp x9, x10\n  cset w9, lt\n"
@@ -649,9 +667,9 @@ bool minic_aarch64_emit_integer_instruction(
                     program, target, fn, ins, &width, &sign, &pointer))
                 return false;
             wide = pointer || width == 8U;
-            if (fprintf(out, wide ? "  ldr x9, [sp, #%zu]\n"
-                                  : "  ldr w9, [sp, #%zu]\n",
-                        (size_t)v * 8U) < 0 ||
+            if (!minic_a64_emit_owned_slot(out, view, false,
+                    wide ? MINIC_A64_REG_X : MINIC_A64_REG_W,
+                    9U, (size_t)v * 8U) ||
                 fputs(wide ? "  cmp x9, #0\n  cset w9, eq\n"
                            : "  cmp w9, #0\n  cset w9, eq\n", out) == EOF)
                 return false;

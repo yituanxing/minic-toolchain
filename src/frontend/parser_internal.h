@@ -317,6 +317,18 @@ bool minic_parser_parse_gnu_attribute_lists(MinicParser *parser,
                                             void *context);
 bool minic_parser_collect_gnu_attribute_lists(MinicParser *parser,
                                               MinicParsedAttributeList *attributes);
+/* A single frontend policy for GNU attributes on function-pointer declarators
+ * (typedefs, parameters and record fields).  The target owns ABI admission;
+ * parse-only attributes never silently change a function type. */
+bool minic_parser_consume_function_pointer_attribute(MinicParser *parser,
+                                                      const MinicParsedAttribute *attribute,
+                                                      MinicType *pointer_type,
+                                                      bool *consumed);
+bool minic_parser_apply_function_pointer_declarator_attributes(
+    MinicParser *parser,
+    const MinicParsedAttributeList *attributes,
+    MinicType *pointer_type,
+    const char *unsupported_message);
 bool minic_parser_apply_section_attribute(MinicParser *parser,
                                           const MinicParsedAttribute *attribute,
                                           char *buffer,

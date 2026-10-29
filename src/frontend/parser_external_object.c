@@ -150,10 +150,9 @@ static bool parse_external_integer_array_definition(MinicParser *parser,
     }
 
     /* Both fixed and inferred aggregate arrays use the same transactional
-     * static-initializer engine. The old hand-written pointer/int loops below
-     * were unreachable: this function is only called for [] declarators,
-     * and all of their brace initializers already took the generic path.
-     * Keep only the valid brace-free char[] = "..." spelling. */
+     * static-initializer engine. A preceding complete [N] declaration can
+     * make an omitted-bound [] definition fixed here; both states must still
+     * share the common brace path. Keep the brace-free char[] = "..." spelling. */
     if (parser->current.kind == MINIC_TOKEN_LBRACE) {
         if (!minic_parser_parse_static_storage_initializer_value(
                 parser, object_id, object->type)) {

@@ -457,7 +457,8 @@ static bool aarch64_machine_emit_family(
             ctx->frame_plan, &frame_view, needs_gp_store);
     case MINIC_DIRECT_MACHINE_INTEGER:
         return minic_aarch64_emit_integer_instruction(
-            out, program, target, fn, ins, ctx->frame_plan, needs_gp_store);
+            out, program, target, fn, ins, ctx->frame_plan,
+            &frame_view, needs_gp_store);
     case MINIC_DIRECT_MACHINE_ABI:
         return minic_aarch64_emit_abi_instruction(
             out, ctx, ins, shape->result_offset, needs_gp_store);

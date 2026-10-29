@@ -1,4 +1,58 @@
 #include "core/core_lower_asm_internal.h"
+#include <inttypes.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+/* All source-side GNU constraint identity, matching outputs and memory
+ * effects have been classified before Core materialization. Store one
+ * immutable typed summary and avoid separate Target/Generic handoff code. */
+bool core_asm_publish_operand_plan(MinicCoreInstruction *instruction,
+    MinicCoreInlineAsm *stored, const MinicAsmOperandPlan *plan) {
+    size_t i;
+    if (!instruction || !stored || !plan ||
+        instruction->kind != MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM ||
+        plan->owner == MINIC_ASM_OPERAND_PLAN_NONE ||
+        instruction->value.structured_inline_asm.operand_count != plan->operand_count ||
+        plan->output_count > plan->operand_count ||
+        plan->operand_count > MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT ||
+        stored->has_memory_clobber != plan->effective_memory_effect)
+        return false;
+    for (i = 0U; i < plan->operand_count; ++i) {
+        MinicCoreStructuredInlineAsmOperand *binding =
+            &instruction->value.structured_inline_asm.operands[i];
+        if (binding->kind != plan->kinds[i] || binding->operand_index != i ||
+            (plan->has_tied_output[i] &&
+             (i < plan->output_count ||
+              plan->tied_output_index[i] >= plan->output_count)))
+            return false;
+        binding->gnu_early_clobber = plan->gnu_early_clobber[i];
+        binding->gnu_readwrite = plan->gnu_readwrite[i];
+        binding->has_tied_output = plan->has_tied_output[i];
+        binding->tied_output_index = plan->tied_output_index[i];
+    }
+    stored->operand_plan_owner = plan->owner;
+    stored->source_form_id = plan->source_form_id;
+    stored->source_output_count = plan->output_count;
+    stored->explicit_memory_clobber = plan->explicit_memory_clobber;
+    stored->implicit_memory_effect = plan->implicit_memory_effect;
+    if (getenv("MINIC_ASM_OPERAND_PLAN_TRACE") != NULL) {
+        size_t early = 0U, tied = 0U;
+        for (i = 0U; i < plan->operand_count; ++i) {
+            early += plan->gnu_early_clobber[i] ? 1U : 0U;
+            tied += plan->has_tied_output[i] ? 1U : 0U;
+        }
+        (void)fprintf(stderr,
+            "CORE_ASM_OPERAND_PLAN owner=%d source_form=%016" PRIx64
+            " outputs=%zu operands=%zu gnu_early=%zu tied=%zu "
+            "explicit_memory=%d implicit_memory=%d effective_memory=%d\n",
+            (int)plan->owner, plan->source_form_id, plan->output_count,
+            plan->operand_count, early, tied,
+            plan->explicit_memory_clobber ? 1 : 0,
+            plan->implicit_memory_effect ? 1 : 0,
+            plan->effective_memory_effect ? 1 : 0);
+    }
+    return true;
+}
 
 #include "frontend/const_eval.h"
 #include "frontend/expression_semantics.h"

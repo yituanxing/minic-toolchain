@@ -2,11 +2,17 @@
 #define MINIC_CORE_CORE_LOWER_ASM_INTERNAL_H
 
 #include "core/core_lower_internal.h"
+#include "target/backend.h"
 
 /* Shared GNU asm input-normalization bounds: consumed by operand decoding,
  * tracing and CSR structured-effect lowering across separate C files. */
 #define MINIC_CORE_IMMEDIATE_ASM_LIMIT 8U
 #define MINIC_CORE_IMMEDIATE_TEXT_LIMIT 64U
+
+/* One typed GNU operand-plan publication path for both target-qualified
+ * and target-neutral structured forms. No ISA interpretation is done here. */
+bool core_asm_publish_operand_plan(MinicCoreInstruction *instruction,
+    MinicCoreInlineAsm *stored, const MinicAsmOperandPlan *plan);
 
 /* Private AST inline-asm operand normalization → Core effect admission seam.
  * Lowering probes deliberately retain their original ordered dispatch:

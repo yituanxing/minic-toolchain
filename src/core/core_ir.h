@@ -262,11 +262,27 @@ typedef struct MinicCoreInlineAsmRegisterClobber {
     size_t name_length;
 } MinicCoreInlineAsmRegisterClobber;
 
+/* Source/Generic/Target admission is a semantic Core provenance decision,
+ * not an ISA type. The target validates actual machine opcode forms. */
+typedef enum MinicAsmOperandPlanOwner {
+    MINIC_ASM_OPERAND_PLAN_NONE = 0,
+    MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED,
+    MINIC_ASM_OPERAND_PLAN_GENERIC_STRUCTURED
+} MinicAsmOperandPlanOwner;
+
 typedef struct MinicCoreInlineAsm {
     char *template_text;
     size_t template_length;
     bool is_volatile;
     bool has_memory_clobber;
+    /* Immutable typed Source -> Core -> Target summary. The hash identifies
+     * the exact source GNU form, including ordered constraints and clobbers;
+     * the machine emitter must still validate its ISA-specific semantics. */
+    MinicAsmOperandPlanOwner operand_plan_owner;
+    uint64_t source_form_id;
+    size_t source_output_count;
+    bool explicit_memory_clobber;
+    bool implicit_memory_effect;
     /* BATCH_L_STRUCTURED_REGISTER_READWRITE: keep register-clobber spelling
        as opaque target metadata. Core does not interpret register names; the
        selected backend only uses them to avoid operand/clobber collisions. */
@@ -332,6 +348,9 @@ typedef struct MinicCoreStructuredInlineAsmOperand {
      * Core MEMORY_OUTPUT (aggregate result) while still requiring a distinct
      * physical register from all live inputs. */
     bool gnu_early_clobber;
+    bool gnu_readwrite;
+    bool has_tied_output;
+    size_t tied_output_index;
 } MinicCoreStructuredInlineAsmOperand;
 
 typedef struct MinicCoreInstruction {

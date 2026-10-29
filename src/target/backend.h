@@ -8,6 +8,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 /*
  * Core/Target seam: compiler.c owns C semantics and Core IR; the selected
@@ -26,10 +27,17 @@ typedef bool (*MinicBackendEmitProgram)(
     size_t function_count, bool function_sections,
     MinicDiagnostic *diagnostic);
 
-/* Target selects operand roles; Core materializes their semantic values.
- * No physical registers, ISA opcodes or frame offsets enter Core IR. */
-typedef struct MinicTargetInlineAsmContract {
+/* The Source -> Core -> Target GNU operand plan. The target selects only
+ * value/address transport roles and implicit machine effects. The shared
+ * source capture fills all GNU qualifiers, ties and semantic identity; Core
+ * materializes values without inspecting any ISA register or opcode. */
+typedef struct MinicAsmOperandPlan {
+    MinicAsmOperandPlanOwner owner;
+    /* Stable source-form signature, not a promise of a machine opcode ID.
+     * Native emitters must still verify exact target-dependent semantics. */
+    uint64_t source_form_id;
     size_t operand_count;
+    size_t output_count;
     MinicCoreStructuredInlineAsmOperandKind kinds[MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT];
     /* GNU physical-register constraint metadata is orthogonal to the Core
      * address/value transport role. For instance an aggregate `=&r` output
@@ -38,12 +46,27 @@ typedef struct MinicTargetInlineAsmContract {
      * minic_backend_qualify_inline_asm; individual ISA recognizers must not
      * duplicate constraint parsing. */
     bool gnu_early_clobber[MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT];
+    bool gnu_readwrite[MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT];
+    bool has_tied_output[MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT];
+    size_t tied_output_index[MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT];
+    bool explicit_memory_clobber;
     /* Some GNU hardware writes address a scalar pointer register, rather
      * than exposing a GNU +m or +Q operand (Linux arm64 __raw_write*).
      * Preserve the real hardware memory effect in target-neutral Core
      * without misclassifying the pointer as a C memory lvalue. */
     bool implicit_memory_effect;
-} MinicTargetInlineAsmContract;
+    bool effective_memory_effect;
+} MinicAsmOperandPlan;
+
+/* Existing ISA qualifier signatures remain source-compatible throughout
+ * the staged migration; new target forms return the same typed plan. */
+typedef MinicAsmOperandPlan MinicTargetInlineAsmContract;
+
+/* Exact GNU source facts, independent of the target qualifier and its
+ * possibly address-backed physical-register result representation. */
+bool minic_backend_capture_asm_operand_source(
+    const MinicInlineAsm *, MinicAsmOperandPlanOwner, MinicAsmOperandPlan *);
+uint64_t minic_backend_asm_source_form_id(const MinicInlineAsm *);
 
 typedef bool (*MinicBackendQualifyInlineAsm)(
     const MinicC0Program *, const MinicInlineAsm *, MinicTargetInlineAsmContract *);

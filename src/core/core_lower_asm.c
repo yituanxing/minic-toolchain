@@ -176,17 +176,6 @@ static uint64_t core_asm_census_hash_bytes(uint64_t hash,
     return hash;
 }
 
-static uint64_t core_asm_census_hash_number(uint64_t hash, size_t value) {
-    size_t i;
-    uint64_t bits = (uint64_t)value;
-    for (i = 0U; i < 8U; ++i) {
-        hash ^= (unsigned char)(bits & UINT64_C(255));
-        hash *= UINT64_C(1099511628211);
-        bits >>= 8U;
-    }
-    return hash;
-}
-
 static void core_asm_trace_frontier(
     const MinicCoreLowerContext *context, const MinicInlineAsm *source,
     const char *reason) {
@@ -200,33 +189,10 @@ static void core_asm_trace_frontier(
         source == NULL || reason == NULL) return;
     template_hash = core_asm_census_hash_bytes(
         template_hash, source->template_text, source->template_length);
-    signature_hash = core_asm_census_hash_number(template_hash, source->output_count);
-    signature_hash = core_asm_census_hash_number(signature_hash, source->input_count);
-    signature_hash = core_asm_census_hash_number(signature_hash, source->label_count);
-    signature_hash = core_asm_census_hash_number(signature_hash, source->register_clobber_count);
-    signature_hash = core_asm_census_hash_number(signature_hash, source->clobber_count);
-    signature_hash = core_asm_census_hash_number(signature_hash,
-                                                 source->has_memory_clobber ? 1U : 0U);
-    signature_hash = core_asm_census_hash_number(signature_hash, source->is_goto ? 1U : 0U);
-    signature_hash = core_asm_census_hash_number(signature_hash, source->is_volatile ? 1U : 0U);
-    for (i = 0U; i < source->output_count && source->outputs != NULL; ++i) {
-        const MinicInlineAsmOperand *op = &source->outputs[i];
-        signature_hash = core_asm_census_hash_bytes(
-            signature_hash, op->constraint_text, op->constraint_length);
-        signature_hash = core_asm_census_hash_number(signature_hash, (size_t)op->access);
-    }
-    for (i = 0U; i < source->input_count && source->inputs != NULL; ++i) {
-        const MinicInlineAsmOperand *op = &source->inputs[i];
-        signature_hash = core_asm_census_hash_bytes(
-            signature_hash, op->constraint_text, op->constraint_length);
-        signature_hash = core_asm_census_hash_number(signature_hash, (size_t)op->access);
-    }
-    for (i = 0U; i < source->register_clobber_count &&
-                 source->register_clobbers != NULL; ++i) {
-        const MinicInlineAsmRegisterClobber *clobber = &source->register_clobbers[i];
-        signature_hash = core_asm_census_hash_bytes(
-            signature_hash, clobber->name, clobber->name_length);
-    }
+    /* The same source-form fingerprint is attached to admitted structured
+     * Core instructions. Failed forms use that identical identity here;
+     * distinct diagnostic paths must not carry a second hash algorithm. */
+    signature_hash = minic_backend_asm_source_form_id(source);
     for (i = 0U; i < source->template_length && n < sizeof(preview) - 1U; ++i) {
         const unsigned char c = (unsigned char)source->template_text[i];
         if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
