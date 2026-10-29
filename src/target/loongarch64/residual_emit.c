@@ -309,7 +309,14 @@ bool minic_loongarch64_emit_residual_instruction(
                     fn, "loongarch64", name, reject_stage, reject_block,
                     reject_ins, __LINE__);
             if (pointer_to_integer) {
-                if (!emit_sp_mem(out, "ld.d", "$t0", (size_t)source * 8U))
+                /* A C pointer cast to _Bool is 0/1, not its low byte and
+                 * not the original 64-bit address. The legacy Common
+                 * validator returns 0 for a full 64-bit transfer, newer
+                 * callers may explicitly report 8; only _Bool reports 1. */
+                if ((src_width != 0U && src_width != 1U && src_width != 8U) ||
+                    !emit_sp_mem(out, "ld.d", "$t0", (size_t)source * 8U) ||
+                    (src_width == 1U &&
+                     fputs("  sltu $t0, $zero, $t0\n", out) == EOF))
                     return minic_multi_direct_machine_reject(fn, "loongarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
                 break;

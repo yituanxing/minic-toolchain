@@ -65,8 +65,8 @@ static bool x86_one_gp_integer_fields(const MinicC0Program *program,
     for (i = 0U; i < rec->field_count; ++i) {
         const MinicRecordField *field = minic_c0_record_field(rec, i);
         size_t bytes, field_align, offset, bit_offset;
-        if (!field || field->is_array || field->is_flexible_array ||
-            field->is_zero_length_array || field->element_count != 1U ||
+        if (!field || field->is_flexible_array ||
+            field->is_zero_length_array || field->element_count == 0U ||
             !minic_data_layout_type(target->data_layout, program, field->type,
                                     &bytes, &field_align) ||
             !minic_data_layout_record_field_layout(target->data_layout, program,
@@ -83,11 +83,20 @@ static bool x86_one_gp_integer_fields(const MinicC0Program *program,
                     (8U - offset) * 8U ||
                 bit_offset + field->bit_width > (size - offset) * 8U)
                 return false;
-        } else if (!x86_one_gp_integer_fields(program, target, field->type,
-                                              depth + 1U) ||
-                   /* A real unaligned non-bit-field member is MEMORY. */
-                   offset % field_align || bytes > size - offset)
-            return false;
+        } else {
+            size_t element;
+            /* C arrays participate in SysV eightbyte classification. A
+             * GNU `struct { u32 val[2]; }` is INTEGER in RAX, even though
+             * its field is not a scalar declarator. Reject any genuinely
+             * unaligned element or an array crossing the record boundary. */
+            if (offset % field_align || !bytes ||
+                field->element_count > (size - offset) / bytes)
+                return false;
+            for (element = 0U; element < field->element_count; ++element)
+                if (!x86_one_gp_integer_fields(program, target, field->type,
+                                               depth + 1U))
+                    return false;
+        }
     }
     return true;
 }
@@ -140,8 +149,8 @@ static bool x86_two_gp_integer_fields(const MinicC0Program *program,
     for (i = 0U; i < rec->field_count; ++i) {
         const MinicRecordField *field = minic_c0_record_field(rec, i);
         size_t offset, bit_offset, field_bytes, field_align;
-        if (!field || field->is_array || field->is_flexible_array ||
-            field->is_zero_length_array || field->element_count != 1U ||
+        if (!field || field->is_flexible_array ||
+            field->is_zero_length_array || field->element_count == 0U ||
             !minic_data_layout_type(target->data_layout, program, field->type,
                                     &field_bytes, &field_align) ||
             !minic_data_layout_record_field_layout(target->data_layout, program,
@@ -161,9 +170,16 @@ static bool x86_two_gp_integer_fields(const MinicC0Program *program,
             if (field->bit_width &&
                 (end_bits > 128U || (start_bits / 64U) != ((end_bits - 1U) / 64U)))
                 return false;
-        } else if (!x86_two_gp_integer_fields(program, target, field->type,
-                                               absolute + offset, depth + 1U))
-            return false;
+        } else {
+            size_t element;
+            if (!field_bytes || field->element_count >
+                (bytes - offset) / field_bytes)
+                return false;
+            for (element = 0U; element < field->element_count; ++element)
+                if (!x86_two_gp_integer_fields(program, target, field->type,
+                     absolute + offset + element * field_bytes, depth + 1U))
+                    return false;
+        }
     }
     return true;
 }
@@ -175,7 +191,32 @@ bool minic_x86_64_two_gp_record(const MinicC0Program *program,
         return false;
     return minic_common_aggregate_storage_shape(
                program, target->data_layout, type, 8U, &shape) &&
-           shape.bytes == 16U && shape.alignment == 8U &&
+           shape.bytes == 16U && shape.alignment <= 8U &&
            x86_two_gp_integer_fields(program, target, type, 0U, 0U);
+}
+
+bool minic_x86_64_record_abi_compatible(MinicType actual, MinicType declared) {
+    MinicType normalized_actual, normalized_declared;
+    /* C erases a parameter's top-level `const`/`volatile` for by-value
+     * ABI placement. Preserve nested pointee qualifiers and record identity. */
+    return minic_type_is_record(actual) && minic_type_is_record(declared) &&
+        minic_type_unqualified(actual, &normalized_actual) &&
+        minic_type_unqualified(declared, &normalized_declared) &&
+        minic_type_equal(normalized_actual, normalized_declared);
+}
+
+bool minic_x86_64_memory_result_record(const MinicC0Program *program,
+                                      const MinicTargetInfo *target,
+                                      MinicType type, size_t *bytes) {
+    size_t alignment;
+    if (program == NULL || target == NULL || bytes == NULL ||
+        !minic_type_is_record(type) ||
+        !minic_data_layout_type(target->data_layout, program, type,
+                                bytes, &alignment)) return false;
+    /* The current ABI subset admits exact, bounded >16-byte sret records.
+     * Unclassified <=16-byte SSE/mixed/unaligned records remain fail-closed,
+     * never silently impersonated by a memory return. */
+    return *bytes > 16U && *bytes <= 4096U &&
+           alignment != 0U && alignment <= 16U;
 }
 

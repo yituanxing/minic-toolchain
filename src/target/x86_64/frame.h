@@ -35,6 +35,10 @@ typedef struct MinicX86Frame {
      * two-word Core load/store and general source evaluation. */
     bool saves_incoming_gp;
     size_t incoming_gp_save_offset;
+    /* Hidden SysV memory-result destination occupies RDI and must survive
+     * arbitrary nested calls until every aggregate return path. */
+    bool has_sret;
+    size_t sret_save_offset;
     size_t object_base_alignment;
     bool objects_from_aligned_rsp;
     /* SysV x86-64 va_list: gp_offset / fp_offset / overflow / reg_save.

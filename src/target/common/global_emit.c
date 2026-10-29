@@ -1133,9 +1133,11 @@ bool minic_multi_emit_simple_global(FILE *out, const MinicC0Program *program,
         if (array == NULL || array->element_count == 0U) return false;
         scalar = array->element_type;
     }
-    /* Ordinary nullable pointer objects and arrays of pointer scalars
-     * have exact pointer-sized zero payloads on these two ELF LP64 targets.
-     * Nonzero numeric pointer initializers remain fail-closed. */
+    /* Integer-to-pointer constant initializers are already represented by
+     * their target-width scalar bits in the Frontend.  Emit those bits just
+     * like integer scalars: Linux uses nonzero sentinels (for example
+     * (void *)-1 in eventpoll) and they are not ELF symbol relocations.
+     * DataLayout determines the pointer width, including ILP32 targets. */
     if ((!minic_type_is_integer(scalar) &&
          !minic_type_is_pointer(scalar)) ||
         !minic_data_layout_type(target->data_layout, program, scalar,
@@ -1161,8 +1163,6 @@ bool minic_multi_emit_simple_global(FILE *out, const MinicC0Program *program,
     } else {
         for (i = 0U; i < obj->initializer_count; ++i) {
             uint64_t bits = obj->initializer_values[i];
-            if (minic_type_is_pointer(scalar) && bits != 0U)
-                return false;
             if (width < 8U)
                 bits &= (UINT64_C(1) << (8U * width)) - UINT64_C(1);
             if (fprintf(out, "  %s %" PRIu64 "\n", directive, bits) < 0)

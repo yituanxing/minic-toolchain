@@ -3,6 +3,7 @@
 #include "target/x86_64/asm_contract.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
 
@@ -649,7 +650,7 @@ static bool emit_linux_control_register(
     const MinicCoreFunction *fn, const MinicX86Frame *frame,
     const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
     static const char *const machine_registers[] = {
-        "%cr0", "%cr2", "%cr3", "%cr4", "%cr2", "%cr3"
+        "%cr0", "%cr2", "%cr3", "%cr4", "%cr2", "%cr3", "%cr0", "%cr4"
     };
     const unsigned int form = minic_x86_64_linux_control_register_form(
         info->template_text, info->template_length);
@@ -682,12 +683,47 @@ static bool emit_linux_control_register(
                x86_value_load(out, frame, b[0].value, "%r11") &&
                fputs("  movq %rax, (%r11)\n", out) != EOF;
     }
+    if (form == 7U || form == 8U) {
+        if (b[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE ||
+            !minic_type_pointee(fn->values[b[0].value].type, &input_type) ||
+            !minic_type_equal(input_type, minic_type_unsigned_long()) ||
+            !x86_value_load(out, frame, b[0].value, "%r11")) return false;
+        /* GNU +r input/output: source is live and remains unchanged after
+         * moving its bits to the privileged control register. */
+        return fprintf(out, "  movq (%%r11), %%rax\n  movq %%rax, %s\n",
+                       machine_registers[form - 1U]) >= 0;
+    }
     if (b[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
         !minic_type_equal(fn->values[b[0].value].type, minic_type_unsigned_long()))
         return false;
     return x86_value_load(out, frame, b[0].value, "%rax") &&
            fprintf(out, "  movq %%rax, %s\n",
                    machine_registers[form - 1U]) >= 0;
+}
+
+static bool emit_linux_tlb_cache(
+    FILE *out, const MinicCoreFunction *fn, const MinicX86Frame *frame,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
+    const unsigned int form = minic_x86_64_linux_tlb_cache_form(
+        info->template_text, info->template_length);
+    const MinicCoreStructuredInlineAsmOperand *b =
+        ins->value.structured_inline_asm.operands;
+    if (!form || !info->is_volatile || info->is_goto ||
+        !info->has_memory_clobber || info->register_clobber_count != 0U ||
+        ins->value.structured_inline_asm.operand_count != 1U ||
+        b[0].operand_index != 0U || b[0].value >= fn->value_count ||
+        b[0].early_clobber || b[0].has_fixed_register_binding ||
+        b[0].kind != (form == 1U
+            ? MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT
+            : MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE) ||
+        !(minic_type_is_pointer(fn->values[b[0].value].type) ||
+          (form == 1U && minic_type_equal(
+              fn->values[b[0].value].type, minic_type_unsigned_long()))) ||
+        !x86_value_load(out, frame, b[0].value, "%rax")) return false;
+    /* Distinct cache/TLB hardware effects with exact GNU operand grammar.
+     * `clflush` uses the checked +m C lvalue; `invlpg` takes an address. */
+    return fputs(form == 1U ? "  invlpg (%rax)\n" :
+                                 "  clflush (%rax)\n", out) != EOF;
 }
 
 /* Linux's alternative_msr_write is not an unconditional WRMSR. The kernel
@@ -1831,9 +1867,18 @@ static bool emit_linux_raw_cmpxchg(
             return false;
         type = fn->values[b[i].value].type;
         if (i < 2U && !minic_type_pointee(type, &type)) return false;
+        width = 0U;
         if (!minic_x86_64_scalar_width(program, target, type, &width, &sign) ||
-            width != d->width || !minic_type_is_integer(type))
+            width != d->width ||
+            !(minic_type_is_integer(type) || minic_type_is_pointer(type))) {
+            if (getenv("MINIC_M1_TRACE") != NULL)
+                (void)fprintf(stderr,
+                    "MINIC_X86_RAW_CMPXCHG_REJECT function=%s operand=%zu "
+                    "type_base=%d depth=%u width=%zu expected=%zu\n",
+                    fn->name ? fn->name : "?", i, (int)type.base_kind,
+                    type.pointer_depth, width, d->width);
             return false;
+        }
     }
     if (!x86_value_load(out, frame, b[3].value, "%rax") ||
         !x86_value_load(out, frame, b[2].value, "%r10") ||
@@ -3832,6 +3877,9 @@ bool minic_x86_64_emit_structured_asm(
             info->template_text, info->template_length))
         return emit_linux_control_register(
             out, program, target, fn, frame, ins, info);
+    if (minic_x86_64_linux_tlb_cache_form(
+            info->template_text, info->template_length))
+        return emit_linux_tlb_cache(out, fn, frame, ins, info);
     if (minic_x86_64_linux_three_call_alternative_form(
             info->template_text, info->template_length))
         return emit_linux_three_call_alternative(

@@ -427,6 +427,10 @@ bool minic_aarch64_emit_residual_instruction(
                             (size_t)source * 8U) < 0)
                     return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
+                if (src_width == 1U &&
+                    fputs("  cmp x9, #0\n  cset x9, ne\n", out) == EOF)
+                    return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
+                                    reject_block, reject_ins, __LINE__);
                 break;
             }
             if (fprintf(out, (src_pointer || src_width == 8U)

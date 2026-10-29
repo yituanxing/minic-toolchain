@@ -41,10 +41,261 @@ bool minic_loongarch64_requires_qualified_input_asm(const MinicInlineAsm *src) {
         "amand_db.d", "amor_db.d", "amxor_db.d", "amadd_db.d",
         "csrrd", "csrxchg", "1:ll.w", "1:ll.d", "sltu",
         "movgr2fcsr", "ldx.", "stx.", "amadd.", "amand.", "amor.",
-        "amswap_db.w", "amswap_db.d"
+        "amswap_db.w", "amswap_db.d", "rdtime.d", "la.pcrel"
     };
     return minic_backend_inline_asm_prefix_matches(
         src, reserved, sizeof(reserved) / sizeof(reserved[0]));
+}
+
+/* The original LoongArch Linux clock reader returns two *hardware* values.
+ * They cannot be synthesized from compiler temporaries or a normal load.
+ * The VDSO's _start reference, conversely, must remain PC-relative: a GOT
+ * address would not describe the runtime VDSO image base. These two exact
+ * GNU source contracts use the existing typed structured-ASM Core roles. */
+typedef enum LoongLinuxClockAsm {
+    LOONG_CLOCK_NONE = 0,
+    LOONG_CLOCK_RDTIME_NUMERIC,
+    LOONG_CLOCK_RDTIME_NAMED,
+    LOONG_CLOCK_VDSO_BASE,
+    LOONG_CLOCK_CPU_ID,
+    LOONG_CLOCK_COUNTER_ONLY
+} LoongLinuxClockAsm;
+
+static bool loong_csr_constraint(const MinicInlineAsmOperand *op,
+                                 const char *word);
+static bool loong_linux_clock_output_type(MinicType type, bool word32) {
+    MinicType plain;
+    return minic_type_unqualified(type, &plain) &&
+           (word32 ? minic_type_equal(plain, minic_type_int())
+                   : (minic_type_equal(plain, minic_type_unsigned_long()) ||
+                      minic_type_equal(plain, minic_type_unsigned_long_long())));
+}
+
+static LoongLinuxClockAsm loong_linux_clock_form(
+    const char *text, size_t length) {
+    static const char *const forms[] = {
+        "rdtime.d%0,%1", "rdtime.d%[val],%[tid]",
+        "la.pcrel%0,_start", "rdtime.d$zero,%0",
+        "rdtime.d%0,$zero"
+    };
+    char compact[96];
+    size_t i, n = 0U;
+    if (!text || !length || length >= sizeof(compact)) return LOONG_CLOCK_NONE;
+    for (i = 0U; i < length; ++i) {
+        const char c = text[i];
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
+        if (c == ';' || c == '\0' || n + 1U >= sizeof(compact))
+            return LOONG_CLOCK_NONE;
+        compact[n++] = c;
+    }
+    compact[n] = '\0';
+    for (i = 0U; i < sizeof(forms) / sizeof(forms[0]); ++i)
+        if (strcmp(compact, forms[i]) == 0)
+            return (LoongLinuxClockAsm)(i + 1U);
+    return LOONG_CLOCK_NONE;
+}
+
+static bool loong_linux_clock_source(
+    const MinicC0Program *program, const MinicInlineAsm *src,
+    MinicTargetInlineAsmContract *contract) {
+    const LoongLinuxClockAsm form = src ? loong_linux_clock_form(
+        src->template_text, src->template_length) : LOONG_CLOCK_NONE;
+    const size_t count = form == LOONG_CLOCK_VDSO_BASE ||
+                         form == LOONG_CLOCK_CPU_ID ||
+                         form == LOONG_CLOCK_COUNTER_ONLY ? 1U : 2U;
+    size_t i;
+    if (!program || !src || !contract || form == LOONG_CLOCK_NONE ||
+        src->is_goto || src->output_count != count || src->input_count ||
+        !src->outputs || src->label_count || src->clobber_count ||
+        src->register_clobber_count ||
+        src->has_memory_clobber != (form == LOONG_CLOCK_CPU_ID) ||
+        src->is_volatile != (form != LOONG_CLOCK_VDSO_BASE)) return false;
+    for (i = 0U; i < count; ++i) {
+        const MinicExpression *expr = minic_c0_program_expression(
+            program, src->outputs[i].expression);
+        const bool named = form == LOONG_CLOCK_RDTIME_NAMED;
+        const bool word32 = form == LOONG_CLOCK_CPU_ID ||
+            (form == LOONG_CLOCK_RDTIME_NUMERIC && i == 1U);
+        if (!expr || expr->value_category != MINIC_VALUE_LVALUE ||
+            minic_type_is_const(expr->type) ||
+            !loong_linux_clock_output_type(expr->type, word32) ||
+            !loong_csr_constraint(&src->outputs[i], named ? "=&r" : "=r"))
+            return false;
+        contract->kinds[i] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+    }
+    contract->operand_count = count;
+    return true;
+}
+
+static bool loong_linux_clock_emit(
+    FILE *out, const MinicDirectLP64BlockContext *ctx,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info,
+    LoongLinuxClockAsm form) {
+    const MinicCoreFunction *fn = ctx->fn;
+    const MinicCoreStructuredInlineAsmOperand *b =
+        ins->value.structured_inline_asm.operands;
+    const size_t count = form == LOONG_CLOCK_VDSO_BASE ||
+                         form == LOONG_CLOCK_CPU_ID ||
+                         form == LOONG_CLOCK_COUNTER_ONLY ? 1U : 2U;
+    size_t i;
+    if (!out || !info || form == LOONG_CLOCK_NONE ||
+        info->is_goto || info->register_clobber_count ||
+        info->has_memory_clobber != (form == LOONG_CLOCK_CPU_ID) ||
+        ins->value.structured_inline_asm.operand_count != count) return false;
+    for (i = 0U; i < count; ++i) {
+        MinicType pointee;
+        const bool word32 = form == LOONG_CLOCK_CPU_ID ||
+            (form == LOONG_CLOCK_RDTIME_NUMERIC && i == 1U);
+        if (b[i].operand_index != i || b[i].value >= fn->value_count ||
+            b[i].has_fixed_register_binding ||
+            b[i].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
+            !minic_type_pointee(fn->values[b[i].value].type, &pointee) ||
+            !loong_linux_clock_output_type(pointee, word32))
+            return false;
+    }
+    if (fputs(form == LOONG_CLOCK_VDSO_BASE
+              ? "  la.pcrel $t0, _start\n"
+              : form == LOONG_CLOCK_CPU_ID
+                  ? "  rdtime.d $zero, $t0\n"
+                  : form == LOONG_CLOCK_COUNTER_ONLY
+                    ? "  rdtime.d $t0, $zero\n"
+                  : "  rdtime.d $t0, $t1\n", out) == EOF) return false;
+    for (i = 0U; i < count; ++i)
+        if (!minic_loongarch64_emit_frame_mem(
+                out, "ld.d", "$t2", (size_t)b[i].value * 8U,
+                ctx->dynamic_frame) ||
+            fprintf(out, "  %s %s, $t2, 0\n",
+                    (form == LOONG_CLOCK_RDTIME_NUMERIC && i == 1U) ||
+                    form == LOONG_CLOCK_CPU_ID
+                        ? "st.w" : "st.d",
+                    i == 0U ? "$t0" : "$t1") < 0)
+            return false;
+    return true;
+}
+
+/* Linux's VDSO fallback syscall is a privileged ABI effect, even though the
+ * GNU template itself has no textual %operand placeholders. Bind exact
+ * physical a7/a0/a1 operands here: treating them as generic scalar inputs
+ * would make a convincing .s file that silently passed wrong syscall args. */
+static bool loong_linux_vdso_syscall_form(const char *text, size_t length) {
+    char compact[32];
+    size_t i, n = 0U;
+    if (!text || !length || length >= sizeof(compact)) return false;
+    for (i = 0U; i < length; ++i) {
+        const char c = text[i];
+        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') continue;
+        if (c == ';' || c == '\0' || n + 1U >= sizeof(compact))
+            return false;
+        compact[n++] = c;
+    }
+    compact[n] = '\0';
+    return strcmp(compact, "syscall0") == 0;
+}
+
+static bool loong_linux_vdso_clobbers(
+    const MinicCoreInlineAsmRegisterClobber *regs, size_t count) {
+    size_t i;
+    if (!regs || count != 9U) return false;
+    for (i = 0U; i < 9U; ++i) {
+        const char *s = regs[i].name;
+        const size_t n = regs[i].name_length;
+        if (!s || n != 3U || s[0] != '$' || s[1] != 't' ||
+            s[2] != (char)('0' + i)) return false;
+    }
+    return true;
+}
+
+static bool loong_linux_vdso_source(
+    const MinicC0Program *program, const MinicInlineAsm *src,
+    MinicTargetInlineAsmContract *contract) {
+    static const char *const constraints[] = {"+r", "r", "r", "r"};
+    size_t i;
+    if (!program || !src || !contract || !src->is_volatile || src->is_goto ||
+        !loong_linux_vdso_syscall_form(src->template_text, src->template_length) ||
+        src->output_count != 1U || src->input_count != 3U ||
+        !src->outputs || !src->inputs || src->label_count ||
+        !src->has_memory_clobber || src->clobber_count != 10U ||
+        src->register_clobber_count != 9U || !src->register_clobbers)
+        return false;
+    for (i = 0U; i < 9U; ++i) {
+        const MinicInlineAsmRegisterClobber *c = &src->register_clobbers[i];
+        if (!c->name || c->name_length != 3U || c->name[0] != '$' ||
+            c->name[1] != 't' || c->name[2] != (char)('0' + i)) return false;
+    }
+    for (i = 0U; i < 4U; ++i) {
+        const MinicInlineAsmOperand *op = i == 0U
+            ? &src->outputs[0] : &src->inputs[i - 1U];
+        const MinicExpression *expr = minic_c0_program_expression(
+            program, op->expression);
+        if (!loong_csr_constraint(op, constraints[i]) || !expr ||
+            (i == 0U && (expr->value_category != MINIC_VALUE_LVALUE ||
+                         minic_type_is_const(expr->type))) ||
+            (i <= 1U && !minic_type_equal(expr->type, minic_type_long())) ||
+            (i == 2U && !minic_type_is_pointer(expr->type) &&
+              !minic_type_equal(expr->type, minic_type_int())) ||
+            (i == 3U && !minic_type_is_pointer(expr->type)))
+            return false;
+        contract->kinds[i] = i == 0U
+            ? MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE
+            : MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    }
+    contract->operand_count = 4U;
+    contract->implicit_memory_effect = true;
+    return true;
+}
+
+static bool loong_linux_vdso_emit(
+    FILE *out, const MinicDirectLP64BlockContext *ctx,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
+    static const char *const registers[] = {"a0", "a7", "a0", "a1"};
+    const MinicCoreFunction *fn = ctx->fn;
+    const MinicCoreStructuredInlineAsmOperand *b =
+        ins->value.structured_inline_asm.operands;
+    size_t i;
+    if (!out || !info || !info->is_volatile || info->is_goto ||
+        !info->has_memory_clobber ||
+        !loong_linux_vdso_syscall_form(info->template_text, info->template_length) ||
+        !loong_linux_vdso_clobbers(
+            info->register_clobbers, info->register_clobber_count) ||
+        ins->value.structured_inline_asm.operand_count != 4U)
+        return false;
+    for (i = 0U; i < 4U; ++i) {
+        const MinicCoreFixedRegisterBinding *fixed;
+        const MinicType type = fn->values[b[i].value < fn->value_count
+            ? b[i].value : 0U].type;
+        MinicType pointee;
+        if (b[i].operand_index != i || b[i].value >= fn->value_count ||
+            b[i].early_clobber || !b[i].has_fixed_register_binding ||
+            b[i].fixed_register_binding_id >= fn->fixed_register_binding_count ||
+            b[i].kind != (i == 0U
+                ? MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE
+                : MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT)) return false;
+        fixed = &fn->fixed_register_bindings[b[i].fixed_register_binding_id];
+        if (!fixed->is_local || !fixed->register_name ||
+            fixed->register_name_length != 2U ||
+            memcmp(fixed->register_name, registers[i], 2U) != 0 ||
+            (i == 0U && (!minic_type_pointee(type, &pointee) ||
+                          !minic_type_equal(pointee, minic_type_long()))) ||
+            (i == 1U && !minic_type_equal(type, minic_type_long())) ||
+            (i == 2U && !minic_type_is_pointer(type) &&
+             !minic_type_equal(type, minic_type_int())) ||
+            (i == 3U && !minic_type_is_pointer(type))) return false;
+    }
+    /* Materialize the syscall-number and both argument registers from
+     * Core SSA, independently of the compiler's scratch register choices. */
+    if (!minic_loongarch64_emit_frame_mem(out, "ld.d", "$a7",
+            (size_t)b[1].value * 8U, ctx->dynamic_frame) ||
+        !minic_loongarch64_emit_frame_mem(out,
+            minic_type_is_pointer(fn->values[b[2].value].type)
+                ? "ld.d" : "ld.w", "$a0",
+            (size_t)b[2].value * 8U, ctx->dynamic_frame) ||
+        !minic_loongarch64_emit_frame_mem(out, "ld.d", "$a1",
+            (size_t)b[3].value * 8U, ctx->dynamic_frame) ||
+        fputs("  syscall 0\n", out) == EOF ||
+        !minic_loongarch64_emit_frame_mem(out, "ld.d", "$t2",
+            (size_t)b[0].value * 8U, ctx->dynamic_frame) ||
+        fputs("  st.d $a0, $t2, 0\n", out) == EOF) return false;
+    return true;
 }
 
 /* A legal LoongArch DBAR barrier is a hardware ordering operation, NOT a
@@ -1382,7 +1633,9 @@ static bool loong_linux_sub_positive_source(
                                        src->template_length, &form) ||
         src->output_count != 3U || src->input_count != 1U ||
         !src->outputs || !src->inputs || src->label_count != 0U ||
-        !src->has_memory_clobber || src->clobber_count != 1U ||
+        /* +ZC itself is the hardware read/write memory effect. Original
+         * GNU Linux has no separate "memory" clobber for this LL/SC. */
+        src->has_memory_clobber || src->clobber_count != 0U ||
         src->register_clobber_count != 0U ||
         !loong_csr_constraint(&src->inputs[0], form.add_negated ? "I" : "r"))
         return false;
@@ -1559,6 +1812,92 @@ static LoongLinuxFutexRmw loong_linux_futex_rmw_form(
             return (LoongLinuxFutexRmw)(form + 1U);
     }
     return LOONG_FUTEX_NONE;
+}
+
+/* The original futex compare/exchange uses the same fault-table encoding as
+ * futex RMW, but a distinct comparison branch and three GNU outputs. Do not
+ * admit arbitrary .irp / .short assembler text under this template. */
+static bool loong_linux_futex_cmpxchg_form(const char *text, size_t length) {
+    static const char prefix[] =
+        "#futex_atomic_cmpxchg_inatomic"
+        "1:ll.w%1,%3bne%1,%z4,3fmove$t0,%z5"
+        "2:sc.w$t0,%2beqz$t0,1b3:dbar0x700";
+    static const char section[] = ".pushsection__ex_table,\"a\".balign4";
+    static const char suffix[] =
+        ".long((3b)-.).short(2)"
+        ".short((((.L__gpr_num_%0)<<0)|((.L__gpr_num_zero)<<5)))"
+        ".popsection";
+    char compact[3600];
+    const char *cursor;
+    size_t i, n = 0U;
+    if (!text || !length || length >= sizeof(compact)) return false;
+    for (i = 0U; i < length; ++i) {
+        const char c = text[i];
+        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') continue;
+        if (c == '\0' || n + 1U >= sizeof(compact)) return false;
+        compact[n++] = c;
+    }
+    compact[n] = '\0';
+    if (strncmp(compact, prefix, sizeof(prefix) - 1U) != 0) return false;
+    cursor = compact + sizeof(prefix) - 1U;
+    for (i = 0U; i < 2U; ++i) {
+        const size_t map_len = sizeof(loong_linux_exception_gpr_map) - 1U;
+        const char *site = i == 0U ? ".long((1b)-.)" : ".long((2b)-.)";
+        if (strncmp(cursor, loong_linux_exception_gpr_map, map_len) != 0)
+            return false;
+        cursor += map_len;
+        if (strncmp(cursor, section, sizeof(section) - 1U) != 0)
+            return false;
+        cursor += sizeof(section) - 1U;
+        if (strncmp(cursor, site, strlen(site)) != 0) return false;
+        cursor += strlen(site);
+        if (strncmp(cursor, suffix, sizeof(suffix) - 1U) != 0) return false;
+        cursor += sizeof(suffix) - 1U;
+    }
+    return *cursor == '\0';
+}
+
+static bool loong_linux_futex_cmpxchg_source(
+    const MinicC0Program *program, const MinicInlineAsm *src,
+    MinicTargetInlineAsmContract *contract) {
+    static const char *const out[] = {"+r", "=&r", "=ZC"};
+    static const char *const in[] = {"ZC", "Jr", "Jr"};
+    size_t i;
+    if (!program || !src || !contract || !src->is_volatile || src->is_goto ||
+        !loong_linux_futex_cmpxchg_form(src->template_text, src->template_length) ||
+        src->output_count != 3U || src->input_count != 3U ||
+        !src->outputs || !src->inputs || src->label_count ||
+        !src->has_memory_clobber || src->clobber_count != 2U ||
+        src->register_clobber_count != 1U || !src->register_clobbers ||
+        src->register_clobbers[0].name_length != 2U ||
+        memcmp(src->register_clobbers[0].name, "t0", 2U) != 0)
+        return false;
+    for (i = 0U; i < 6U; ++i) {
+        const bool output = i < 3U;
+        const MinicInlineAsmOperand *op = output
+            ? &src->outputs[i] : &src->inputs[i - 3U];
+        const MinicExpression *expr = minic_c0_program_expression(
+            program, op->expression);
+        MinicType plain;
+        if (!loong_csr_constraint(op, output ? out[i] : in[i - 3U]) ||
+            !expr ||
+            (output && (expr->value_category != MINIC_VALUE_LVALUE ||
+                        minic_type_is_const(expr->type))) ||
+            ((i == 2U || i == 3U) &&
+             expr->value_category != MINIC_VALUE_LVALUE) ||
+            !minic_type_unqualified(expr->type, &plain) ||
+            !minic_type_equal(plain, i == 0U
+                ? minic_type_int() : minic_type_unsigned_int())) return false;
+        contract->kinds[i] = i == 0U
+            ? MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE
+            : i == 1U ? MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT
+            : i == 2U ? MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT
+            : i == 3U ? MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT
+            : MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    }
+    contract->operand_count = 6U;
+    contract->implicit_memory_effect = true;
+    return true;
 }
 
 static bool loong_linux_futex_rmw_source(
@@ -1890,6 +2229,73 @@ static bool loong_linux_futex_rmw_emit(
         !minic_loongarch64_emit_frame_mem(
             out, "ld.d", "$t7", (size_t)b[1].value * 8U,
             ctx->dynamic_frame) ||
+        fputs("  st.w $t1, $t7, 0\n", out) == EOF) return false;
+    return true;
+}
+
+static bool loong_linux_futex_cmpxchg_emit(
+    FILE *out, const MinicDirectLP64BlockContext *ctx,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
+    const MinicCoreFunction *fn = ctx->fn;
+    const MinicCoreStructuredInlineAsmOperand *b =
+        ins->value.structured_inline_asm.operands;
+    static const MinicCoreStructuredInlineAsmOperandKind kinds[] = {
+        MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE,
+        MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT,
+        MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT,
+        MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT,
+        MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT,
+        MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT
+    };
+    size_t i;
+    if (!out || !ctx || !ins || !info || !info->is_volatile || info->is_goto ||
+        !loong_linux_futex_cmpxchg_form(info->template_text, info->template_length) ||
+        !info->has_memory_clobber || info->register_clobber_count != 1U ||
+        !info->register_clobbers ||
+        info->register_clobbers[0].name_length != 2U ||
+        memcmp(info->register_clobbers[0].name, "t0", 2U) != 0 ||
+        ins->value.structured_inline_asm.operand_count != 6U) return false;
+    for (i = 0U; i < 6U; ++i) {
+        MinicType plain = fn->values[b[i].value < fn->value_count
+            ? b[i].value : 0U].type;
+        if (b[i].operand_index != i || b[i].value >= fn->value_count ||
+            b[i].kind != kinds[i] || b[i].has_fixed_register_binding ||
+            (i != 1U && b[i].early_clobber)) return false;
+        if (i < 4U && !minic_type_pointee(plain, &plain)) return false;
+        if (!minic_type_equal(plain, i == 0U
+                ? minic_type_int() : minic_type_unsigned_int())) return false;
+    }
+    if (!minic_loongarch64_emit_frame_mem(out, "ld.d", "$t4",
+            (size_t)b[3].value * 8U, ctx->dynamic_frame) ||
+        !minic_loongarch64_emit_frame_mem(out, "ld.d", "$t5",
+            (size_t)b[2].value * 8U, ctx->dynamic_frame) ||
+        !minic_loongarch64_emit_frame_mem(out, "ld.wu", "$t2",
+            (size_t)b[4].value * 8U, ctx->dynamic_frame) ||
+        !minic_loongarch64_emit_frame_mem(out, "ld.wu", "$t8",
+            (size_t)b[5].value * 8U, ctx->dynamic_frame) ||
+        fputs("  addi.w $t6, $zero, 0\n"
+              "1: ll.w $t1, $t4, 0\n"
+              "  bne $t1, $t2, 3f\n"
+              "  move $t0, $t8\n"
+              "2: sc.w $t0, $t5, 0\n"
+              "  beqz $t0, 1b\n"
+              "3: dbar 0x700\n"
+              "  .pushsection __ex_table, \"a\"\n"
+              "  .balign 4\n"
+              "  .long (1b - .)\n"
+              "  .long (3b - .)\n"
+              "  .short 2\n"
+              "  .short ((18 << 0) | (0 << 5))\n"
+              "  .long (2b - .)\n"
+              "  .long (3b - .)\n"
+              "  .short 2\n"
+              "  .short ((18 << 0) | (0 << 5))\n"
+              "  .popsection\n", out) == EOF ||
+        !minic_loongarch64_emit_frame_mem(out, "ld.d", "$t7",
+            (size_t)b[0].value * 8U, ctx->dynamic_frame) ||
+        fputs("  st.w $t6, $t7, 0\n", out) == EOF ||
+        !minic_loongarch64_emit_frame_mem(out, "ld.d", "$t7",
+            (size_t)b[1].value * 8U, ctx->dynamic_frame) ||
         fputs("  st.w $t1, $t7, 0\n", out) == EOF) return false;
     return true;
 }
@@ -2246,11 +2652,14 @@ bool minic_loongarch64_qualify_inline_asm(
     MinicTargetInlineAsmContract *contract) {
     const MinicInlineAsmOperand *op;
     const MinicExpression *expr;
+    if (loong_linux_clock_source(program, src, contract)) return true;
+    if (loong_linux_vdso_source(program, src, contract)) return true;
     if (loong_linux_irq_switch_source(program, src, contract)) return true;
     if (loong_linux_frametrace_source(program, src, contract)) return true;
     if (loong_linux_frametrace_csr_source(program, src, contract)) return true;
     if (loong_linux_fpr_transfer_source(program, src, contract)) return true;
     if (loong_linux_futex_rmw_source(program, src, contract)) return true;
+    if (loong_linux_futex_cmpxchg_source(program, src, contract)) return true;
     if(program&&src&&contract&&src->is_volatile&&!src->is_goto&&
        src->output_count==0U&&src->input_count==0U&&
        src->clobber_count==1U&&src->has_memory_clobber&&
@@ -2711,6 +3120,14 @@ bool minic_loongarch64_emit_qualified_structured_asm(
         ins->value.structured_inline_asm.inline_asm_id >= ctx->fn->inline_asm_count)
         return false;
     info = &ctx->fn->inline_asms[ins->value.structured_inline_asm.inline_asm_id];
+    if (loong_linux_vdso_syscall_form(info->template_text, info->template_length))
+        return loong_linux_vdso_emit(out, ctx, ins, info);
+    {
+        const LoongLinuxClockAsm clock_form = loong_linux_clock_form(
+            info->template_text, info->template_length);
+        if (clock_form != LOONG_CLOCK_NONE)
+            return loong_linux_clock_emit(out, ctx, ins, info, clock_form);
+    }
     if (loong_linux_irq_switch_template(
             info->template_text, info->template_length, true))
         return loong_linux_irq_switch_emit(out, ctx, ins, info);
@@ -2748,6 +3165,9 @@ bool minic_loongarch64_emit_qualified_structured_asm(
         if (futex != LOONG_FUTEX_NONE)
             return loong_linux_futex_rmw_emit(out, ctx, ins, info, futex);
     }
+    if (loong_linux_futex_cmpxchg_form(info->template_text,
+                                       info->template_length))
+        return loong_linux_futex_cmpxchg_emit(out, ctx, ins, info);
     {
         LoongLinuxUaccess uaccess;
         if (loong_linux_uaccess_form(info->template_text,

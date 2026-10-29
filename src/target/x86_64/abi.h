@@ -16,5 +16,9 @@ bool minic_x86_64_storage_width(const MinicC0Program *, const MinicTargetInfo *,
 bool minic_x86_64_one_gp_record(const MinicC0Program *, const MinicTargetInfo *,
                                 MinicType, size_t *);
 bool minic_x86_64_two_gp_record(const MinicC0Program *, const MinicTargetInfo *, MinicType);
+bool minic_x86_64_record_abi_compatible(MinicType, MinicType);
+/* SysV AMD64 MEMORY-class result uses a hidden first GPR destination. */
+bool minic_x86_64_memory_result_record(const MinicC0Program *,
+                                      const MinicTargetInfo *, MinicType, size_t *);
 
 #endif

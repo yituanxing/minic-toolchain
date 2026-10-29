@@ -38,8 +38,11 @@ static bool x86_emit_call_arguments_planned(
         if (arg->kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {
             const MinicCoreObjectId object = arg->value.object_id;
             if (object >= fn->object_count ||
-                !minic_type_equal(fn->objects[object].type, type))
+                !minic_x86_64_record_abi_compatible(
+                    fn->objects[object].type, type))
                 return false;
+            if (loc->kind == MINIC_X86_ARG_RECORD_EMPTY)
+                continue;
             /* Outgoing stack reservation changes RSP-relative local-object
              * addresses in highly aligned frames. Compensate precisely. */
             if (frame->objects_from_aligned_rsp) {
@@ -199,9 +202,15 @@ static bool x86_emit_call_record_result(
     size_t bytes;
     if (object >= fn->object_count ||
         !minic_type_is_record(callee->return_type) ||
-        !minic_type_equal(fn->objects[object].type, callee->return_type) ||
-        !x86_object_address(out, frame, object, "%r10"))
+        !minic_x86_64_record_abi_compatible(
+            fn->objects[object].type, callee->return_type))
         return false;
+    if (minic_x86_64_memory_result_record(
+            program, target, callee->return_type, &bytes))
+        /* The callee has already written the exact object via the sret
+         * pointer, not an RAX/RDX proxy. */
+        return true;
+    if (!x86_object_address(out, frame, object, "%r10")) return false;
     if (minic_x86_64_one_gp_record(program, target, callee->return_type, &bytes))
         return x86_one_gp_store(out, bytes);
     if (minic_x86_64_two_gp_record(program, target, callee->return_type))
@@ -209,6 +218,31 @@ static bool x86_emit_call_record_result(
             "  movq %%rax, 0(%%r10)\n"
             "  movq %%rdx, 8(%%r10)\n") >= 0;
     return false;
+}
+
+static bool x86_prepare_call_sret(FILE *out, const MinicC0Program *program,
+    const MinicTargetInfo *target, const MinicCoreFunction *fn,
+    const MinicX86Frame *frame, const MinicCoreCallView *call,
+    MinicCoreObjectId object, size_t allocated_stack_bytes) {
+    size_t bytes;
+    if (!minic_x86_64_memory_result_record(
+            program, target, call->return_type, &bytes))
+        return true;
+    if (call->return_form != MINIC_CORE_CALL_RETURN_OBJECT ||
+        object >= fn->object_count ||
+        !minic_x86_64_record_abi_compatible(
+            fn->objects[object].type, call->return_type))
+        return false;
+    /* Argument marshalling has already reserved stack call space. Correct
+     * an RSP-relative high-alignment object address for that reservation,
+     * and preserve all explicit GP arguments, which now start at RSI. */
+    if (frame->objects_from_aligned_rsp) {
+        if (frame->object_offsets[object] > SIZE_MAX - allocated_stack_bytes)
+            return false;
+        return fprintf(out, "  leaq %zu(%%rsp), %%rdi\n",
+            frame->object_offsets[object] + allocated_stack_bytes) >= 0;
+    }
+    return x86_object_address(out, frame, object, "%rdi");
 }
 
 static bool x86_emit_call_result(FILE *out, const MinicC0Program *program,
@@ -517,7 +551,9 @@ bool minic_x86_64_emit_call_instruction(
             }
             return false;
         }
-        if (fprintf(out, "  call %s@PLT\n", callee->name) < 0 ||
+        if (!x86_prepare_call_sret(out, program, target, fn, frame,
+                &call, ins->value.call.result_object, outgoing_bytes) ||
+            fprintf(out, "  call %s@PLT\n", callee->name) < 0 ||
             (outgoing_bytes != 0U &&
              fprintf(out, "  addq $%zu, %%rsp\n", outgoing_bytes) < 0))
             return false;

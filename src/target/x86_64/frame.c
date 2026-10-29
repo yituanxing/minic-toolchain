@@ -69,6 +69,17 @@ bool minic_x86_64_frame_init_with_storage(const MinicC0Program *program,
             fn, MINIC_CORE_VALUE_SLOT_LINEAR, 0U, (size_t)INT32_MAX,
             &frame->value_offsets, &value_bytes))
         return x86_frame_preflight_reject(fn, "value-slots");
+    {
+        size_t result_bytes;
+        frame->has_sret = minic_x86_64_memory_result_record(
+            program, target, fn->return_type, &result_bytes);
+        if (frame->has_sret) {
+            if (value_bytes > (size_t)INT32_MAX - 8U)
+                return x86_frame_preflight_reject(fn, "sret-slot");
+            value_bytes += 8U;
+            frame->sret_save_offset = value_bytes;
+        }
+    }
     /* Freeze the entire incoming GP register bank before any Core
      * instruction can use RDX as the high limb of a temporary. Otherwise
      * an early __int128 parameter may destroy a later GP parameter before
@@ -110,15 +121,11 @@ bool minic_x86_64_frame_init_with_storage(const MinicC0Program *program,
             }
         }
         if (count != frame->varargs_count) return false;
-        /* Variadic frame support currently admits only scalar named
-         * parameters; reuse the already-classified SysV argument locations
-         * instead of maintaining a second register-bank cursor. */
-        for (i = 0U; i < fn->parameter_count; ++i) {
-            MinicX86ArgClass kind = frame->incoming_arguments.locations[i].kind;
-            if (kind != MINIC_X86_ARG_INTEGER &&
-                kind != MINIC_X86_ARG_SSE)
-                return false;
-        }
+        /* The single SysV planner has already classified *all* named
+         * parameters, including aggregates and empty GNU records. The
+         * cursor below is therefore the ABI ground truth for va_start;
+         * separately rejecting by-value records here would also reject
+         * valid va_copy sites in non-variadic helper functions. */
         gp_used = frame->incoming_arguments.end.gp_used;
         fp_used = frame->incoming_arguments.end.fp_used;
         stack_used = frame->incoming_arguments.end.stack_slots;

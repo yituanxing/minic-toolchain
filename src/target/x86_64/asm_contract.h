@@ -31,8 +31,10 @@ bool minic_x86_64_linux_x87_fwait_fault_form(const char *, size_t);
 bool minic_x86_64_linux_weak_wrmsr_fence_form(const char *, size_t);
 /* Linux three-way CALL patching: exact alternatives/relocations and RSP ABI. */
 bool minic_x86_64_linux_three_call_alternative_form(const char *, size_t);
-/* CR0/2/3/4 reads and CR2/3 writes, including GNU dummy-memory ordering. */
+/* CR0/2/3/4 reads and CR0/2/3 writes, including GNU dummy-memory ordering. */
 unsigned int minic_x86_64_linux_control_register_form(const char *, size_t);
+/* Physical TLB invalidation and cacheline writeback, exact GNU operands. */
+unsigned int minic_x86_64_linux_tlb_cache_form(const char *, size_t);
 /* Linux ALTERNATIVE() with an empty baseline and WRMSR replacement. */
 bool minic_x86_64_linux_alternative_wrmsr_form(const char *, size_t);
 /* Linux native MONITOR/MWAIT and interrupt-enabling MWAIT byte ISA family. */

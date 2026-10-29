@@ -84,6 +84,9 @@ static bool x86_emit_function(FILE *out, const MinicC0Program *program,
         goto done;
     if (frame.frame_size != 0U &&
         fprintf(out, "  subq $%zu, %%rsp\n", frame.frame_size) < 0) goto done;
+    if (frame.has_sret &&
+        fprintf(out, "  movq %%rdi, -%zu(%%rbp)\n",
+                frame.sret_save_offset) < 0) goto done;
     if (frame.objects_from_aligned_rsp &&
         fprintf(out, "  andq $-%zu, %%rsp\n", frame.object_base_alignment) < 0)
         goto done;

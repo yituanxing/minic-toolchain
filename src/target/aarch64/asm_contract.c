@@ -193,7 +193,7 @@ static bool aarch64_linux_structured_spill_slot_valid(size_t slot) {
 unsigned int minic_aarch64_linux_pstate_imm_opcode(
     const char *text, size_t length) {
     static const struct { unsigned int op1, op2; } forms[] = {
-        {0U, 4U}, {3U, 1U}, {3U, 4U}
+        {0U, 4U}, {3U, 1U}, {3U, 2U}, {3U, 4U}
     };
     char compact[160], expected[160];
     size_t n = 0U, i, bit;
@@ -622,7 +622,7 @@ static const Aarch64AtomicOperation aarch64_atomic_operations[] = {
 bool minic_aarch64_requires_qualified_input_asm(const MinicInlineAsm *src) {
     static const char *const fixed[] = {
         "brk", "stlrb", "stlrh", "stlr", "ldarb", "ldarh", "ldar",
-        "msr", "bic", ".if", ".irp", "dc", "ic",
+        "msr", "svc", "bic", ".if", ".irp", "dc", "ic",
         /* GNU .irp SYSREG metadata and D/I-cache operations are ISA-owned.
          * A rejected constraint must not reach the generic Core ASM path. */
         "strb", "strh", "str",
@@ -1272,22 +1272,14 @@ static bool aarch64_linux_io_dependency_emit(
  * a full GNU .irp/.equ/.macro/.inst/.purgem expansion, NOT a simple MRS.
  * Keep all source directives and SYS_* hardware encodings on target side.
  * Never pass privileged GNU macro statements through unqualified. */
-static const struct {
-    unsigned int op0, op1, crn, crm, op2;
-} aarch64_encoded_read_sysregs[] = {
-    {3U,0U,0U,0U,0U}, {3U,0U,0U,0U,5U},
-    {3U,0U,12U,12U,5U}, /* ICC_SRE_EL1 */
-    {3U,0U,12U,11U,3U}, /* ICC_RPR_EL1 */
-    {3U,0U,0U,4U,0U}, {3U,0U,0U,6U,2U},
-    {3U,0U,0U,7U,0U}, {3U,0U,0U,7U,1U},
-    {3U,0U,4U,6U,0U}, {3U,3U,0U,0U,1U},
-    {3U,3U,14U,0U,5U}, {3U,3U,14U,0U,6U}
-};
 static unsigned int aarch64_linux_encoded_sysreg_form(
     const char *text, size_t length) {
     static const char prefix[] = ".irpnum,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30.equ.L__gpr_num_x\\num,\\num.equ.L__gpr_num_w\\num,\\num.endr.equ.L__gpr_num_xzr,31.equ.L__gpr_num_wzr,31.macromrs_s,rt,sreg.inst(0xd5200000|(\\sreg)|(.L__gpr_num_\\rt)).endm";
+    static const char suffix[] = ".purgemmrs_s";
     char normalized[768],expected[768];
-    size_t i,n=0U;
+    unsigned int op0,op1,crn,crm,op2;
+    int parsed=0, count;
+    size_t i,n=0U,prefix_len=sizeof(prefix)-1U;
     if(!text||!length||length>=sizeof(normalized))return 0U;
     for(i=0U;i<length;++i){
         const char ch=text[i];
@@ -1296,31 +1288,22 @@ static unsigned int aarch64_linux_encoded_sysreg_form(
         normalized[n++]=ch;
     }
     normalized[n]='\0';
-    for(i=0U;i<sizeof(aarch64_encoded_read_sysregs)/
-                    sizeof(aarch64_encoded_read_sysregs[0]);++i){
-        int count=snprintf(expected,sizeof(expected),
+    if(n<=prefix_len || memcmp(normalized,prefix,prefix_len)!=0)return 0U;
+    if(sscanf(normalized+prefix_len,
+              "mrs_s%%0,(((%u)<<19)|((%u)<<16)|((%u)<<12)|"
+              "((%u)<<8)|((%u)<<5)).purgemmrs_s%n",
+              &op0,&op1,&crn,&crm,&op2,&parsed)!=5 || parsed<=0 ||
+       normalized[prefix_len+(size_t)parsed]!='\0' ||
+       op0!=3U || op1>7U || crn>15U || crm>15U || op2>7U)
+        return 0U;
+    count=snprintf(expected,sizeof(expected),
           "%smrs_s%%0,(((%u)<<19)|((%u)<<16)|((%u)<<12)|"
-          "((%u)<<8)|((%u)<<5)).purgemmrs_s",
-          prefix,aarch64_encoded_read_sysregs[i].op0,
-          aarch64_encoded_read_sysregs[i].op1,
-          aarch64_encoded_read_sysregs[i].crn,
-          aarch64_encoded_read_sysregs[i].crm,
-          aarch64_encoded_read_sysregs[i].op2);
-        if(count>0&&(size_t)count<sizeof(expected)&&
-            strcmp(normalized,expected)==0)return (unsigned int)i+1U;
-    }
-    return 0U;
-}
-static unsigned int aarch64_linux_encoded_sysreg_instruction(unsigned int form){
-    const size_t index=(size_t)form-1U;
-    if(!form||index>=sizeof(aarch64_encoded_read_sysregs)/
-                     sizeof(aarch64_encoded_read_sysregs[0]))return 0U;
+          "((%u)<<8)|((%u)<<5))%s",
+          prefix,op0,op1,crn,crm,op2,suffix);
+    if(count<=0||(size_t)count>=sizeof(expected)||
+       strcmp(normalized,expected)!=0)return 0U;
     return 0xd5200000U |
-           (aarch64_encoded_read_sysregs[index].op0<<19) |
-           (aarch64_encoded_read_sysregs[index].op1<<16) |
-           (aarch64_encoded_read_sysregs[index].crn<<12) |
-           (aarch64_encoded_read_sysregs[index].crm<<8) |
-           (aarch64_encoded_read_sysregs[index].op2<<5) |
+           (op0<<19) | (op1<<16) | (crn<<12) | (crm<<8) | (op2<<5) |
            9U; /* x9 is the known emitted scratch register */
 }
 static bool aarch64_linux_encoded_sysreg_source(
@@ -1346,13 +1329,13 @@ static bool aarch64_linux_encoded_sysreg_source(
 static bool aarch64_linux_encoded_sysreg_emit(
     FILE *out,const MinicDirectLP64BlockContext *ctx,
     const MinicCoreInstruction *ins,const MinicCoreInlineAsm *info) {
-    const unsigned int form=aarch64_linux_encoded_sysreg_form(
+    const unsigned int opcode=aarch64_linux_encoded_sysreg_form(
         info->template_text,info->template_length);
     const MinicCoreFunction *fn=ctx->fn;
     const MinicCoreStructuredInlineAsmOperand *op=
         ins->value.structured_inline_asm.operands;
     MinicType type;
-    if(!out||!ctx||!fn||!info||!op||!form||ctx->dynamic_frame||
+    if(!out||!ctx||!fn||!info||!op||!opcode||ctx->dynamic_frame||
        !info->is_volatile||info->is_goto||info->has_memory_clobber||
        info->register_clobber_count||
        ins->value.structured_inline_asm.operand_count!=1U||
@@ -1365,7 +1348,7 @@ static bool aarch64_linux_encoded_sysreg_emit(
     return fprintf(out,"  .inst 0x%08x\n"
                        "  ldr x10, [sp, #%zu]\n"
                        "  str x9, [x10]\n",
-           aarch64_linux_encoded_sysreg_instruction(form),
+           opcode,
            (size_t)op[0].value*8U)>=0;
 }
 
@@ -1978,9 +1961,9 @@ static unsigned int aarch64_linux_smccc_form(const char *s, size_t n) {
     return 0U;
 }
 
-static bool aarch64_linux_smccc_local_binding(
+static bool aarch64_linux_fixed_gpr_local_binding(
     const MinicC0Program *program, const MinicExpression *e,
-    unsigned int register_number) {
+    unsigned int register_number, bool allow_pointer) {
     const MinicFixedRegisterBinding *binding;
     const MinicLocal *local;
     if (!program || !e || e->kind != MINIC_EXPRESSION_LOCAL ||
@@ -1998,11 +1981,12 @@ static bool aarch64_linux_smccc_local_binding(
          binding->register_name[0] != 'x') ||
         binding->register_name[1] != (char)('0' + register_number))
         return false;
-    return minic_type_is_integer(e->type) &&
+    return (allow_pointer && minic_type_is_pointer(e->type)) ||
+           (minic_type_is_integer(e->type) &&
            (minic_type_equal(e->type, minic_type_unsigned_long()) ||
             minic_type_equal(e->type, minic_type_long()) ||
             minic_type_equal(e->type, minic_type_unsigned_int()) ||
-            minic_type_equal(e->type, minic_type_int()));
+            minic_type_equal(e->type, minic_type_int())));
 }
 
 static bool aarch64_linux_smccc_source(
@@ -2022,7 +2006,8 @@ static bool aarch64_linux_smccc_source(
         const MinicExpression *e = minic_c0_program_expression(
             program, op->expression);
         if (!constraint(op, "=r") ||
-            !aarch64_linux_smccc_local_binding(program, e, (unsigned int)i) ||
+            !aarch64_linux_fixed_gpr_local_binding(program, e,
+                                                  (unsigned int)i, false) ||
             !minic_type_equal(e->type, minic_type_unsigned_long()))
             return false;
         contract->kinds[i] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
@@ -2032,7 +2017,8 @@ static bool aarch64_linux_smccc_source(
         const MinicExpression *e = minic_c0_program_expression(
             program, op->expression);
         if (!constraint(op, "r") ||
-            !aarch64_linux_smccc_local_binding(program, e, (unsigned int)i))
+            !aarch64_linux_fixed_gpr_local_binding(program, e,
+                                                  (unsigned int)i, false))
             return false;
         contract->kinds[4U + i] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     }
@@ -2100,6 +2086,108 @@ static bool aarch64_linux_smccc_emit(
     return true;
 }
 
+/* The vDSO's original fallback syscall has a narrower, independently
+ * checked GNU contract than SMCCC: x0/x1 carry the arguments, x8 the Linux
+ * syscall number, and x0 the result.  The fixed local register bindings are
+ * essential; a free-form `svc` or a registerless opaque barrier is unsafe. */
+static bool aarch64_linux_svc_form(const char *s, size_t n) {
+    char compact[16];
+    size_t i, used = 0U;
+    if (!s || n == 0U || n >= sizeof(compact)) return false;
+    for (i = 0U; i < n; ++i) {
+        const char c = s[i];
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
+        if (used + 1U >= sizeof(compact)) return false;
+        compact[used++] = c;
+    }
+    compact[used] = '\0';
+    return strcmp(compact, "svc#0") == 0;
+}
+
+static bool aarch64_linux_svc_source(
+    const MinicC0Program *program, const MinicInlineAsm *src,
+    MinicTargetInlineAsmContract *contract) {
+    static const unsigned int registers[] = {0U, 1U, 8U};
+    size_t i;
+    const MinicExpression *ret;
+    if (!program || !src || !contract ||
+        !aarch64_linux_svc_form(src->template_text, src->template_length) ||
+        !src->is_volatile || src->is_goto || src->output_count != 1U ||
+        src->input_count != 3U || !src->outputs || !src->inputs ||
+        src->label_count != 0U || src->clobber_count != 1U ||
+        src->register_clobber_count != 0U || !src->has_memory_clobber ||
+        !constraint(&src->outputs[0], "=r")) return false;
+    ret = minic_c0_program_expression(program, src->outputs[0].expression);
+    if (!aarch64_linux_fixed_gpr_local_binding(program, ret, 0U, false) ||
+        !minic_type_equal(ret->type, minic_type_long())) return false;
+    contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+    for (i = 0U; i < 3U; ++i) {
+        const MinicExpression *arg = minic_c0_program_expression(
+            program, src->inputs[i].expression);
+        if (!constraint(&src->inputs[i], "r") ||
+            !aarch64_linux_fixed_gpr_local_binding(program, arg,
+                                                   registers[i], true) ||
+            (i == 2U && !minic_type_equal(arg->type, minic_type_long())))
+            return false;
+        contract->kinds[i + 1U] =
+            MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    }
+    contract->operand_count = 4U;
+    contract->implicit_memory_effect = true;
+    return true;
+}
+
+static bool aarch64_linux_svc_emit(
+    FILE *out, const MinicDirectLP64BlockContext *ctx,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
+    static const unsigned int registers[] = {0U, 1U, 8U};
+    const MinicCoreFunction *fn = ctx->fn;
+    const MinicCoreStructuredInlineAsmOperand *ops =
+        ins->value.structured_inline_asm.operands;
+    size_t i;
+    if (!out || !fn || !ops || !info || ctx->dynamic_frame ||
+        !aarch64_linux_svc_form(info->template_text, info->template_length) ||
+        !info->is_volatile || info->is_goto || !info->has_memory_clobber ||
+        info->register_clobber_count != 0U ||
+        ins->value.structured_inline_asm.operand_count != 4U)
+        return false;
+    for (i = 0U; i < 4U; ++i) {
+        const MinicCoreStructuredInlineAsmOperand *op = &ops[i];
+        const MinicCoreFixedRegisterBinding *fixed;
+        const unsigned int reg = i == 0U ? 0U : registers[i - 1U];
+        MinicType type;
+        if (op->operand_index != i || op->value >= fn->value_count ||
+            !op->has_fixed_register_binding ||
+            op->fixed_register_binding_id >= fn->fixed_register_binding_count ||
+            op->early_clobber ||
+            op->kind != (i == 0U ?
+                 MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
+                 MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
+            !aarch64_linux_structured_spill_slot_valid(op->value)) return false;
+        fixed = &fn->fixed_register_bindings[op->fixed_register_binding_id];
+        if (!fixed->is_local || !fixed->register_name ||
+            fixed->register_name_length != 2U ||
+            fixed->register_name[0] != 'x' ||
+            fixed->register_name[1] != (char)('0' + reg)) return false;
+        type = fn->values[op->value].type;
+        if (i == 0U) {
+            if (!minic_type_pointee(type, &type) ||
+                !minic_type_equal(type, minic_type_long()) ||
+                !minic_type_equal(type, fixed->type)) return false;
+        } else if (!minic_type_equal(type, fixed->type) ||
+                   (!minic_type_is_pointer(type) &&
+                    !minic_type_is_integer(type)) ||
+                   (i == 3U && !minic_type_equal(type, minic_type_long())))
+            return false;
+    }
+    for (i = 1U; i < 4U; ++i)
+        if (fprintf(out, "  ldr x%u, [sp, #%zu]\n", registers[i - 1U],
+                    (size_t)ops[i].value * 8U) < 0) return false;
+    return fputs("  svc #0\n", out) != EOF &&
+           fprintf(out, "  ldr x9, [sp, #%zu]\n  str x0, [x9]\n",
+                   (size_t)ops[0].value * 8U) >= 0;
+}
+
 /* Linux arch_timer_read_cnt{p,v}ct_el0: feature 19 replaces an ISB+MRS
  * pair with NOP+MRS_S. The replacement reads CNTPOCTSS/CNTVCTSS (op2
  * 5/6), so treating this as an ordinary MRS would silently break the
@@ -2162,8 +2250,9 @@ static bool aarch64_linux_timer_alternative_source(
         !src->is_volatile || src->is_goto ||
         src->output_count != 1U || src->input_count != 0U ||
         !src->outputs || src->label_count != 0U ||
-        src->clobber_count != 0U || src->register_clobber_count != 0U ||
-        src->has_memory_clobber || !constraint(&src->outputs[0], "=r"))
+        src->clobber_count != (src->has_memory_clobber ? 1U : 0U) ||
+        src->register_clobber_count != 0U ||
+        !constraint(&src->outputs[0], "=r"))
         return false;
     result = minic_c0_program_expression(program, src->outputs[0].expression);
     if (!result || result->value_category != MINIC_VALUE_LVALUE ||
@@ -2183,7 +2272,7 @@ static bool aarch64_linux_timer_alternative_emit(
         ins->value.structured_inline_asm.operands;
     MinicType result;
     if (!out || !fn || !info || !op || ctx->dynamic_frame ||
-        !info->is_volatile || info->is_goto || info->has_memory_clobber ||
+        !info->is_volatile || info->is_goto ||
         info->register_clobber_count != 0U ||
         (form != 1U && form != 2U) ||
         ins->value.structured_inline_asm.operand_count != 1U ||
@@ -2727,6 +2816,7 @@ bool minic_aarch64_qualify_inline_asm(
         }
     }
     if(aarch64_linux_smccc_source(program,src,contract))return true;
+    if(aarch64_linux_svc_source(program,src,contract))return true;
     if(aarch64_linux_timer_alternative_source(program,src,contract))return true;
     if(aarch64_linux_counter_ordering_source(program,src,contract))return true;
     if(aarch64_linux_rng_sysreg_source(program,src,contract))return true;
@@ -3114,6 +3204,7 @@ bool minic_aarch64_qualify_inline_asm(
         constraint(&src->outputs[1], "=&r") &&
         constraint(&src->outputs[2], "+Q") &&
         (constraint(&src->inputs[0], "Lr") ||
+         constraint(&src->inputs[0], "Kr") ||
          constraint(&src->inputs[0], "r") ||
          constraint(&src->inputs[0], "Ir") ||
          constraint(&src->inputs[0], "Jr"))) {
@@ -3122,7 +3213,9 @@ bool minic_aarch64_qualify_inline_asm(
             src->template_text, src->template_length, false, &atomic);
         const size_t width = accepted ? atomic.width : 0U;
         accepted = accepted &&
-            constraint(&src->inputs[0], atomic.op->rmw_constraint);
+            constraint(&src->inputs[0],
+                       width == 8U ? atomic.op->rmw_constraint :
+                                     atomic.op->fetch32_constraint);
         for (i = 0U; i < 4U && accepted; ++i) {
             const MinicInlineAsmOperand *operand = i < 3U ?
                 &src->outputs[i] : &src->inputs[0];
@@ -3413,6 +3506,8 @@ bool minic_aarch64_emit_qualified_structured_asm(
         if (smccc != 0U)
             return aarch64_linux_smccc_emit(out, ctx, ins, info, smccc);
     }
+    if (aarch64_linux_svc_form(info->template_text, info->template_length))
+        return aarch64_linux_svc_emit(out, ctx, ins, info);
     {
         Aarch64UaccessForm uaccess;
         if (aarch64_linux_uaccess_form(info->template_text,

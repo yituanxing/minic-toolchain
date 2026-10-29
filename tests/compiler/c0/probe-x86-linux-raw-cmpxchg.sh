@@ -34,6 +34,13 @@ unsigned long mini_cas64(unsigned long *p, unsigned long old, unsigned long new)
       : "=a"(ret), "+m"(*p) : "r"(new), "0"(old) : "memory");
   return ret;
 }
+void *mini_casptr(void **p, void *old, void *new) {
+  void *ret;
+  asm volatile(".pushsection .smp_locks,\"a\"\n"
+      ".balign 4\n.long 671f - .\n.popsection\n671:\n\tlock; cmpxchgq %2,%1"
+      : "=a"(ret), "+m"(*p) : "r"(new), "0"(old) : "memory");
+  return ret;
+}
 SRC
 "$mini" --target=x86_64-linux -S "$d/raw.i" -o "$d/mini.s"
 for opcode in cmpxchgb cmpxchgw cmpxchgl cmpxchgq;do
@@ -51,7 +58,17 @@ extern unsigned mini_cas32(unsigned*,unsigned,unsigned);
 extern unsigned gnu_cas32(unsigned*,unsigned,unsigned);
 extern unsigned long mini_cas64(unsigned long*,unsigned long,unsigned long);
 extern unsigned long gnu_cas64(unsigned long*,unsigned long,unsigned long);
+extern void *mini_casptr(void **,void *,void *);
+extern void *gnu_casptr(void **,void *,void *);
 int main(void) {
+  {
+    int a=1,b=2,c=3;
+    void *left=&a,*right=&a;
+    void *ma=mini_casptr(&left,&a,&b),*ga=gnu_casptr(&right,&a,&b);
+    if(ma!=ga||left!=right||left!=&b)return 2;
+    ma=mini_casptr(&left,&c,&a);ga=gnu_casptr(&right,&c,&a);
+    if(ma!=ga||left!=right||left!=&b)return 3;
+  }
   for(unsigned i=0;i<90;++i)for(unsigned old=0;old<100;++old) {
     unsigned char a8=(unsigned char)i,b8=a8;
     unsigned short a16=(unsigned short)i,b16=a16;
@@ -80,4 +97,4 @@ for bad in unexpected-instruction wrong-constraint wrong-width; do
   fi
   test ! -e "$d/bad.s"
 done
-echo 'MINIC_X86_LINUX_RAW_CMPXCHG=PASS widths=4 SMP_LOCK=1 GNU_native_pairs=36000 negative=3'
+echo 'MINIC_X86_LINUX_RAW_CMPXCHG=PASS integer_widths=4 pointer_width=8 SMP_LOCK=1 GNU_native_pairs=36000 negative=3'

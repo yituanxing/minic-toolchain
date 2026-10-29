@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 /* One ABI classifier for both incoming and outgoing SysV argument streams.
  * A two-GPR record is indivisible: both registers or both stack slots.
@@ -34,12 +35,30 @@ static bool x86_sysv_place(const MinicC0Program *program,
             /* SysV AMD64 classifies any aggregate larger than 16 bytes as
              * MEMORY. Smaller unsupported SSE or mixed classes must remain
              * explicit failures. Keep emission bounded to avoid huge stubs. */
-            size_t alignment;
+            size_t alignment = 0U;
+            const MinicRecord *record = minic_c0_program_record(
+                program, type.record_id);
+            bytes = 0U;
+            if (minic_data_layout_type(target->data_layout, program, type,
+                                       &bytes, &alignment) && bytes == 0U &&
+                record != NULL && record->is_complete &&
+                record->field_count == 0U) {
+                /* A GNU C `struct empty {}` is omitted from the SysV
+                 * argument stream, including through inlined functions. */
+                loc->kind = MINIC_X86_ARG_RECORD_EMPTY;
+                return true;
+            }
             if (!minic_data_layout_type(target->data_layout, program, type,
                                         &bytes, &alignment) ||
                 bytes <= 16U || bytes > 4096U ||
-                alignment == 0U || alignment > 16U)
+                alignment == 0U || alignment > 16U) {
+                if (getenv("MINIC_M1_TRACE") != NULL)
+                    (void)fprintf(stderr,
+                        "MINIC_X86_ARG_RECORD_CLASS_REJECT record=%zu "
+                        "bytes=%zu align=%zu\n",
+                        (size_t)type.record_id, bytes, alignment);
                 return false;
+            }
             loc->kind = MINIC_X86_ARG_RECORD_MEMORY;
             loc->record_bytes = bytes;
             loc->on_stack = true;
@@ -106,6 +125,12 @@ bool minic_x86_64_plan_incoming_arguments(
     if (program == NULL || target == NULL || fn == NULL || plan == NULL ||
         (fn->parameter_count != 0U && fn->parameter_types == NULL) ||
         !x86_sysv_plan_alloc(fn->parameter_count, plan)) return false;
+    {
+        size_t result_bytes;
+        if (minic_x86_64_memory_result_record(
+                program, target, fn->return_type, &result_bytes))
+            cursor.gp_used = 1U;
+    }
     for (i = 0U; i < fn->parameter_count; ++i)
         if (!x86_sysv_place(program, target, fn->parameter_types[i],
                              &cursor, &plan->locations[i])) {
@@ -128,6 +153,13 @@ bool minic_x86_64_plan_outgoing_arguments(
         (view->argument_count != 0U && view->arguments == NULL) ||
         (view->parameter_count != 0U && view->parameter_types == NULL) ||
         !x86_sysv_plan_alloc(view->argument_count, plan)) return false;
+    {
+        size_t result_bytes;
+        if (view->return_form == MINIC_CORE_CALL_RETURN_OBJECT &&
+            minic_x86_64_memory_result_record(
+                program, target, view->return_type, &result_bytes))
+            cursor.gp_used = 1U;
+    }
     plan->is_variadic = view->is_variadic;
     for (i = 0U; i < view->argument_count; ++i) {
         MinicType type;

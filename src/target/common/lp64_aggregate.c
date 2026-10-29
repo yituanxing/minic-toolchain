@@ -19,15 +19,20 @@ static bool minic_multi_integer_record_members(
     if (program == NULL || target == NULL || depth > 16U ||
         !minic_data_layout_type(target->data_layout, program, type,
                                 &total, &alignment) ||
-        total == 0U || alignment == 0U || alignment > 8U)
+        alignment == 0U || alignment > 8U)
         return false;
     if (minic_type_is_integer(type) || minic_type_is_pointer(type))
-        return total <= 8U;
+        return total != 0U && total <= 8U;
     if (!minic_type_is_record(type)) return false;
     record = minic_c0_program_record(program, type.record_id);
-    if (record == NULL || !record->is_complete ||
-        record->field_count == 0U)
+    if (record == NULL || !record->is_complete)
         return false;
+    /* GNU C permits zero-sized complete records nested in an otherwise
+     * nonempty aggregate.  They consume no INTEGER eightbyte and must not
+     * make the enclosing record's ABI classification fail.  The public
+     * GP-record predicate below still rejects a top-level zero-byte value. */
+    if (record->field_count == 0U)
+        return total == 0U;
     for (i = 0U; i < record->field_count; ++i) {
         const MinicRecordField *field = minic_c0_record_field(record, i);
         size_t offset, field_size, field_align;
@@ -67,7 +72,8 @@ static bool minic_multi_integer_record_members(
                  target->data_layout, program, record, i, &offset) ||
             (!field->is_bit_field && field_align != 0U &&
              offset % field_align != 0U) ||
-            offset >= total ||
+            offset > total ||
+            (field_size != 0U && offset == total) ||
             (!field->is_bit_field && field_size > total - offset))
             return false;
     }

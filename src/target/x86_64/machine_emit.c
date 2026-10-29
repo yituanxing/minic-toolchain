@@ -435,13 +435,18 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
         const size_t position = ins->value.parameter_object.parameter_index;
         const MinicCoreObjectId object = ins->value.parameter_object.object_id;
         const MinicX86ArgLocation *location;
+        const bool type_compatible = position < fn->parameter_count &&
+            object < fn->object_count &&
+            minic_x86_64_record_abi_compatible(
+                fn->objects[object].type, fn->parameter_types[position]);
         if (position >= frame->incoming_arguments.argument_count ||
             frame->incoming_arguments.locations == NULL ||
-            object >= fn->object_count ||
-            !minic_type_equal(fn->objects[object].type,
-                              fn->parameter_types[position]))
+            object >= fn->object_count || !type_compatible)
             return false;
         location = &frame->incoming_arguments.locations[position];
+        if (location->kind == MINIC_X86_ARG_RECORD_EMPTY)
+            return frame->object_storage.objects != NULL &&
+                   frame->object_storage.objects[object].extent == 0U;
         if (location->kind != MINIC_X86_ARG_RECORD_ONE_GP &&
             location->kind != MINIC_X86_ARG_RECORD_TWO_GP &&
             location->kind != MINIC_X86_ARG_RECORD_MEMORY)
@@ -1169,8 +1174,22 @@ bool minic_x86_64_emit_core_terminator(FILE *out,
             } else if (minic_x86_64_two_gp_record(program, target, fn->return_type)) {
                 if (fputs("  movq 0(%r11), %rax\n"
                           "  movq 8(%r11), %rdx\n",out)==EOF)return false;
+            } else if (frame->has_sret && frame->sret_save_offset != 0U &&
+                       minic_x86_64_memory_result_record(
+                           program, target, fn->return_type, &bytes)) {
+                /* Caller passes a private destination in RDI. Its saved
+                 * value is stable across nested calls; a bounded byte copy
+                 * preserves tail bytes and does not read past the record. */
+                if (fprintf(out,
+                    "  movq %%r11, %%rsi\n"
+                    "  movq -%zu(%%rbp), %%rdi\n"
+                    "  movq $%zu, %%rcx\n"
+                    "  rep movsb\n"
+                    "  movq -%zu(%%rbp), %%rax\n",
+                    frame->sret_save_offset, bytes,
+                    frame->sret_save_offset) < 0) return false;
             } else {
-                /* Unclassified SSE or MEMORY/sret SysV results are rejected;
+                /* Unclassified SSE or mixed SysV results remain rejected;
                  * never return a record using an invented scalar ABI. */
                 return false;
             }
