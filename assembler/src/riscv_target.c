@@ -7,13 +7,6 @@
 #include <string.h>
 #include <stdlib.h>
 
-static bool is_conditional_branch_op(const char *op) {
-    unsigned family = 0U;
-    return minias_riscv_mc_descriptor_policy(op, NULL, NULL, &family) &&
-           family == RV_MC_BRANCH;
-}
-
-
 /* GNU as fills RISC-V executable .align/.p2align/.balign gaps with
  * executable NOPs, never zero halfwords.  In arch/riscv/lib/strcmp.S the
  * .p2align 3 immediately precedes the aligned Zbb fast path: emitting
@@ -56,36 +49,52 @@ static bool riscv_emit_code_alignment(MiniAs *as,
 }
 
 
-static uint32_t riscv_fixup_relocation_type(MiniAsFixupKind kind,
-                                              unsigned width) {
-    switch (kind) {
-        case MINIAS_FIXUP_ABS:
-            return width == 4U ? MINIAS_R_RISCV_32 :
-                   width == 8U ? MINIAS_R_RISCV_64 : 0U;
-        case MINIAS_FIXUP_PREL32:
-            return width==4U?57U:0U; /* R_RISCV_32_PCREL */
-        case MINIAS_FIXUP_ADD:
-            return width == 2U ? MINIAS_R_RISCV_ADD16 :
-                   width == 4U ? MINIAS_R_RISCV_ADD32 :
-                   width == 8U ? MINIAS_R_RISCV_ADD64 : 0U;
-        case MINIAS_FIXUP_SUB:
-            return width == 2U ? MINIAS_R_RISCV_SUB16 :
-                   width == 4U ? MINIAS_R_RISCV_SUB32 :
-                   width == 8U ? MINIAS_R_RISCV_SUB64 : 0U;
-        case MINIAS_FIXUP_RV_CALL_PLT:
-            return width == 4U ? MINIAS_R_RISCV_CALL_PLT : 0U;
-        case MINIAS_FIXUP_RV_PCREL_HI20:
-            return width == 4U ? MINIAS_R_RISCV_PCREL_HI20 : 0U;
-        case MINIAS_FIXUP_RV_GOT_HI20:
-            return width == 4U ? MINIAS_R_RISCV_GOT_HI20 : 0U;
-        case MINIAS_FIXUP_RV_PCREL_LO12_I:
-            return width == 4U ? MINIAS_R_RISCV_PCREL_LO12_I : 0U;
-        case MINIAS_FIXUP_RV_PCREL_LO12_S:
-            return width == 4U ? MINIAS_R_RISCV_PCREL_LO12_S : 0U;
-        case MINIAS_FIXUP_RV_JAL:
-            return width == 4U ? MINIAS_R_RISCV_JAL : 0U;
-        default: return 0U;
+/* One declarative target ABI inventory is consumed by both semantic
+ * capability queries and ELF relocation encoding. A relocation's numeric
+ * value must never double as a boolean capability inside Common. */
+static const struct {
+    MiniAsFixupKind kind;
+    unsigned width;
+    uint32_t relocation;
+} riscv_fixup_forms[] = {
+    {MINIAS_FIXUP_ABS, 4U, MINIAS_R_RISCV_32},
+    {MINIAS_FIXUP_ABS, 8U, MINIAS_R_RISCV_64},
+    {MINIAS_FIXUP_PREL32, 4U, 57U}, /* R_RISCV_32_PCREL */
+    {MINIAS_FIXUP_ADD, 2U, MINIAS_R_RISCV_ADD16},
+    {MINIAS_FIXUP_ADD, 4U, MINIAS_R_RISCV_ADD32},
+    {MINIAS_FIXUP_ADD, 8U, MINIAS_R_RISCV_ADD64},
+    {MINIAS_FIXUP_SUB, 2U, MINIAS_R_RISCV_SUB16},
+    {MINIAS_FIXUP_SUB, 4U, MINIAS_R_RISCV_SUB32},
+    {MINIAS_FIXUP_SUB, 8U, MINIAS_R_RISCV_SUB64},
+    {MINIAS_FIXUP_RV_CALL_PLT, 4U, MINIAS_R_RISCV_CALL_PLT},
+    {MINIAS_FIXUP_RV_PCREL_HI20, 4U, MINIAS_R_RISCV_PCREL_HI20},
+    {MINIAS_FIXUP_RV_GOT_HI20, 4U, MINIAS_R_RISCV_GOT_HI20},
+    {MINIAS_FIXUP_RV_PCREL_LO12_I, 4U, MINIAS_R_RISCV_PCREL_LO12_I},
+    {MINIAS_FIXUP_RV_PCREL_LO12_S, 4U, MINIAS_R_RISCV_PCREL_LO12_S},
+    {MINIAS_FIXUP_RV_JAL, 4U, MINIAS_R_RISCV_JAL}
+};
+
+static bool riscv_lookup_fixup_form(MiniAsFixupKind kind, unsigned width,
+                                   uint32_t *relocation) {
+    size_t i;
+    for (i = 0U; i < sizeof(riscv_fixup_forms) / sizeof(riscv_fixup_forms[0]); ++i) {
+        if (riscv_fixup_forms[i].kind != kind ||
+            riscv_fixup_forms[i].width != width) continue;
+        if (relocation != NULL) *relocation = riscv_fixup_forms[i].relocation;
+        return true;
     }
+    return false;
+}
+
+static bool riscv_supports_fixup(MiniAsFixupKind kind, unsigned width) {
+    return riscv_lookup_fixup_form(kind, width, NULL);
+}
+
+static uint32_t riscv_fixup_relocation_type(MiniAsFixupKind kind,
+                                            unsigned width) {
+    uint32_t relocation = 0U;
+    (void)riscv_lookup_fixup_form(kind, width, &relocation);
+    return relocation;
 }
 
 /* Validate raw 32-bit encodings AFTER macro/ISA pseudo expansion, section
@@ -500,25 +509,24 @@ static void riscv_object_attributes(const MiniAs *as, unsigned char elf_class,
     }
 }
 
-/* Only the target knows RISC-V B-immediate widths and its inverse-
- * branch + JAL fallback. The common layout never inspects mnemonics or
- * rewrites machine opcodes. */
-static bool riscv_expanded_size(const char *op, uint32_t measured,
-                                uint32_t *expanded) {
-    if (measured != 4U || !is_conditional_branch_op(op)) return false;
-    *expanded = 8U;
-    return true;
-}
-
-static bool riscv_relax_instruction(MiniAs *as, const MiniAsStmt *stmt,
-                                    uint32_t *expanded) {
+/* One retained MCInst determines both the range-dependent minimum and the
+ * terminal encoding alternative. No opcode text is inspected during
+ * relaxation: GNU aliases and macro-generated branches behave identically.
+ * The inverse B-branch + JAL sequence belongs to the RV encoder;
+ * Common only applies the requested fragment size. */
+static bool riscv_plan_instruction_relaxation(MiniAs *as,
+                                              const MiniAsStmt *stmt,
+                                              MiniAsTargetRelaxPlan *plan) {
     MiniAsSymbolExpr expr;
     const MiniAsSymbol *symbol;
     int64_t displacement;
-    *expanded = stmt->size;
+    plan->current_size = stmt->size;
+    plan->required_size = stmt->size;
+    plan->terminal_size = stmt->size;
     if (stmt->size != 4U || stmt->mcinst == NULL ||
         stmt->mcinst->opcode != RV_MC_BRANCH)
         return true;
+    plan->terminal_size = 8U;
     expr = *stmt->mcinst->operands[2].symbol;
     symbol = minias_get_symbol(as, expr.name, false);
     if (symbol == NULL || !symbol->defined ||
@@ -538,7 +546,9 @@ static bool riscv_relax_instruction(MiniAs *as, const MiniAsStmt *stmt,
     }
     displacement += expr.addend;
     if ((displacement % 2) == 0 &&
-        (displacement < -4096 || displacement > 4094)) *expanded = 8U;
+        (displacement < -4096 || displacement > 4094)) {
+        plan->required_size = 8U;
+    }
     return true;
 }
 
@@ -649,9 +659,9 @@ static const MiniAsTargetOps riscv_ops = {
     .parse_mcinst = minias_riscv_parse_mcinst,
     .measure_mcinst = minias_riscv_measure_mcinst,
     .encode = minias_riscv_encode,
-    .relax_instruction = riscv_relax_instruction,
-    .expanded_instruction_size = riscv_expanded_size,
+    .plan_instruction_relaxation = riscv_plan_instruction_relaxation,
     .append_code_alignment = riscv_emit_code_alignment,
+    .supports_fixup = riscv_supports_fixup,
     .fixup_relocation_type = riscv_fixup_relocation_type,
     .validate_output = strict_base_i_check_sections,
     /* RV64 DWARF register numbering: ra=x1, sp=x2; DW_CFA code unit

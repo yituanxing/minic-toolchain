@@ -273,25 +273,6 @@ static bool rv32_li_value(uint64_t bits, int64_t *result) {
     return true;
 }
 
-static uint32_t li64_materialized_size(uint64_t bits) {
-    int byte_index = 7;
-    uint32_t instructions = 1U;
-    int i;
-
-    while (byte_index > 0 &&
-           ((bits >> ((unsigned int)byte_index * 8U)) & UINT64_C(0xff)) == 0U) {
-        --byte_index;
-    }
-    for (i = byte_index - 1; i >= 0; --i) {
-        uint64_t byte = (bits >> ((unsigned int)i * 8U)) & UINT64_C(0xff);
-        ++instructions;
-        if (byte != 0U) {
-            ++instructions;
-        }
-    }
-    return instructions * 4U;
-}
-
 static bool parse_csr_numeric_expression(const char *text, uint32_t *csr) {
     const char *cursor = text;
     char *end = NULL;
@@ -594,6 +575,68 @@ static bool append_u32(MiniAs *as, int section, uint32_t value) {
     return minias_emit_instruction_bytes(as, section, bytes, sizeof(bytes));
 }
 
+/* A single RV LI.D/LI.W materialization plan supplies BOTH retained-MCInst
+ * measurement and emitted machine bytes. Previously their independent
+ * 32/64-bit heuristic branches could silently disagree when a new encoding
+ * alternative changed the number of words after layout. At most 15 words:
+ * leading ADDI + seven shifts and seven nonzero-byte ADDIs. */
+static bool rv_materialize_li(MiniAs *as, const MiniAsStmt *stmt,
+                              uint32_t words[16], unsigned *count) {
+    const MiniAsMCInst *m = stmt->mcinst;
+    const uint64_t bits = m->operands[1].immediate;
+    const int64_t signed_value = (int64_t)m->operands[2].immediate;
+    const bool fits_signed32 = m->encoding != 0U;
+    const int rd = (int)m->operands[0].reg;
+    int64_t hi, lo;
+    *count = 0U;
+    if (MINIAS_RV_STATE(as)->target_xlen == 32U) {
+        int64_t value;
+        if (!rv32_li_value(bits, &value)) {
+            minias_set_error(as, "rv32i-li-overflows-32-bits:line=%zu",
+                             stmt->line);
+            return false;
+        }
+        if (value >= -2048 && value <= 2047) {
+            words[(*count)++] = enc_i(0x13U, rd, 0U, 0, value);
+            return true;
+        }
+        hi = (value + INT64_C(2048)) >> 12;
+        lo = value - hi * INT64_C(4096);
+        words[(*count)++] = 0x37U | ((uint32_t)rd << 7U) |
+                            (((uint32_t)hi & UINT32_C(0xfffff)) << 12U);
+        if (lo != 0) words[(*count)++] = enc_i(0x13U, rd, 0U, rd, lo);
+        return true;
+    }
+    if (fits_signed32) {
+        if (signed_value >= -2048 && signed_value <= 2047) {
+            words[(*count)++] = enc_i(0x13U, rd, 0U, 0, signed_value);
+            return true;
+        }
+        hi = (signed_value + INT64_C(2048)) >> 12;
+        lo = signed_value - hi * INT64_C(4096);
+        words[(*count)++] = 0x37U | ((uint32_t)rd << 7U) |
+                            (((uint32_t)hi & UINT32_C(0xfffff)) << 12U);
+        words[(*count)++] = enc_i(0x1bU, rd, 0U, rd, lo);
+        return true;
+    }
+    {
+        int index = 7, i;
+        uint64_t top;
+        while (index > 0 &&
+               ((bits >> ((unsigned)index * 8U)) & UINT64_C(0xff)) == 0U)
+            --index;
+        top = (bits >> ((unsigned)index * 8U)) & UINT64_C(0xff);
+        words[(*count)++] = enc_i(0x13U, rd, 0U, 0, (int64_t)top);
+        for (i = index - 1; i >= 0; --i) {
+            uint64_t byte = (bits >> ((unsigned)i * 8U)) & UINT64_C(0xff);
+            words[(*count)++] = enc_i(0x13U, rd, 1U, rd, 8);
+            if (byte != 0U)
+                words[(*count)++] = enc_i(0x13U, rd, 0U, rd, (int64_t)byte);
+        }
+    }
+    return true;
+}
+
 static bool parse_vsetvli_vtype(char operands[][128],
                                   size_t count,
                                   uint32_t *vtypei) {
@@ -803,27 +846,10 @@ bool minias_riscv_measure_mcinst(MiniAs *as, const MiniAsStmt *stmt,
             *size = 8U;
             return true;
         case RV_MC_LI: {
-            uint64_t bits = m->operands[1].immediate;
-            const int64_t signed_value = (int64_t)m->operands[2].immediate;
-            const bool fits_signed32 = m->encoding != 0U;
-            if (MINIAS_RV_STATE(as)->target_xlen == 32U) {
-                int64_t value, hi, lo;
-                if (!rv32_li_value(bits, &value)) {
-                    minias_set_error(as,
-                                     "rv32i-li-overflows-32-bits:line=%zu",
-                                     stmt->line);
-                    return false;
-                }
-                hi = (value + INT64_C(2048)) >> 12;
-                lo = value - hi * INT64_C(4096);
-                *size = (value >= -2048 && value <= 2047) ||
-                        lo == 0 ? 4U : 8U;
-            } else if (fits_signed32) {
-                *size = signed_value >= -2048 && signed_value <= 2047 ?
-                        4U : 8U;
-            } else {
-                *size = li64_materialized_size(bits);
-            }
+            uint32_t words[16];
+            unsigned count;
+            if (!rv_materialize_li(as, stmt, words, &count)) return false;
+            *size = count * 4U;
             return true;
         }
         default:
@@ -950,7 +976,7 @@ static void rv_set_imm(MiniAsMCOperand *op, int64_t num) {
  * No source string is accessed by the final instruction writer. */
 static bool rv_mc_word(MiniAs *as, MiniAsStmt *stmt,
                        uint32_t skeleton, int rd, int rs1, int rs2) {
-    MiniAsMCInst *m = calloc(1U, sizeof(*m) + 3U * sizeof(*m->operands));
+    MiniAsMCInst *m = minias_mcinst_alloc(3U);
     if (m == NULL) {
         minias_set_error(as, "out-of-memory:riscv-word-mcinst");
         return false;
@@ -988,7 +1014,7 @@ static bool rv_parse_simple_mc(MiniAs *as, MiniAsStmt *stmt,
         MiniAsMCInst *m;
         uint32_t word;
         if (!parse_raw_insn_directive(stmt->args, &word)) goto invalid;
-        m = calloc(1U, sizeof(*m));
+        m = minias_mcinst_alloc(0U);
         if (m == NULL) goto oom;
         m->opcode = RV_MC_RAW;
         m->encoding = word;
@@ -1000,7 +1026,7 @@ static bool rv_parse_simple_mc(MiniAs *as, MiniAsStmt *stmt,
         if(n!=2U || (rd=reg_number(ops[0]))<=0 ||
            !parse_i64(ops[1],&imm) || imm < -32 || imm > 31)
             goto invalid;
-        m=calloc(1U,sizeof(*m)+2U*sizeof(*m->operands));
+        m=minias_mcinst_alloc(2U);
         if(m==NULL)goto oom;
         m->opcode=RV_MC_C16;
         m->encoding=(2U<<13U) |
@@ -1123,7 +1149,7 @@ static bool rv_parse_multi_mc(MiniAs *as, MiniAsStmt *stmt,
         *handled = false;
         return true;
     }
-    m = calloc(1U, sizeof(*m) + slots * sizeof(*m->operands));
+    m = minias_mcinst_alloc(slots);
     if (m == NULL) {
         minias_set_error(as, "out-of-memory:riscv-multi-mcinst");
         return false;
@@ -1143,7 +1169,7 @@ static bool rv_parse_multi_mc(MiniAs *as, MiniAsStmt *stmt,
         }
         m->operands[symbol_index].symbol = malloc(sizeof(expr));
         if (m->operands[symbol_index].symbol == NULL) {
-            free(m);
+            minias_mcinst_destroy(m);
             minias_set_error(as, "out-of-memory:riscv-multi-symbol");
             return false;
         }
@@ -1407,7 +1433,7 @@ static bool rv_parse_fp_mc(MiniAs *as, MiniAsStmt *stmt,
             !parse_mem(operands[1], &offset, memory_base) ||
             (rs1 = reg_number(memory_base)) < 0 ||
             offset < -2048 || offset > 2047) goto invalid;
-        m=calloc(1U,sizeof(*m)+3U*sizeof(*m->operands));
+        m=minias_mcinst_alloc(3U);
         if (m==NULL) {
             minias_set_error(as,"out-of-memory:riscv-fp-memory");
             return false;
@@ -1550,7 +1576,7 @@ static bool rv_parse_mcinst_impl(MiniAs *as, MiniAsStmt *stmt) {
         } else goto invalid;
         slots = 3U;
         if (symbolic) {
-            inst = calloc(1U, sizeof(*inst) + slots * sizeof(*inst->operands));
+            inst = minias_mcinst_alloc(slots);
             if (inst == NULL) goto oom;
             inst->opcode = family == RV_MC_LOAD ?
                            RV_MC_SYMBOL_LOAD : RV_MC_SYMBOL_STORE;
@@ -1560,7 +1586,7 @@ static bool rv_parse_mcinst_impl(MiniAs *as, MiniAsStmt *stmt) {
             rv_set_reg(&inst->operands[1], rs1);
             inst->operands[2].symbol = malloc(sizeof(expr));
             if (inst->operands[2].symbol == NULL) {
-                free(inst);
+                minias_mcinst_destroy(inst);
                 goto oom;
             }
             *inst->operands[2].symbol = expr;
@@ -1599,13 +1625,13 @@ static bool rv_parse_mcinst_impl(MiniAs *as, MiniAsStmt *stmt) {
             MiniAsSymbolExpr parsed;
             if (!minias_parse_symbol_addend(symbol_text,&parsed)) goto invalid;
             slots=3U;
-            inst=calloc(1U,sizeof(*inst)+slots*sizeof(*inst->operands));
+            inst=minias_mcinst_alloc(slots);
             if (inst==NULL) goto oom;
             inst->opcode=family; inst->encoding=encoding; inst->count=slots;
             rv_set_reg(&inst->operands[0],rs1);
             rv_set_reg(&inst->operands[1],rs2);
             inst->operands[2].symbol=malloc(sizeof(parsed));
-            if(inst->operands[2].symbol==NULL){free(inst);goto oom;}
+            if(inst->operands[2].symbol==NULL){minias_mcinst_destroy(inst);goto oom;}
             *inst->operands[2].symbol=parsed;
             inst->operands[2].kind=MINIAS_MC_SYMBOL;
             stmt->mcinst=inst;
@@ -1625,12 +1651,12 @@ static bool rv_parse_mcinst_impl(MiniAs *as, MiniAsStmt *stmt) {
             MiniAsSymbolExpr parsed;
             if (!minias_parse_symbol_addend(sym,&parsed)) goto invalid;
             slots=2U;
-            inst=calloc(1U,sizeof(*inst)+slots*sizeof(*inst->operands));
+            inst=minias_mcinst_alloc(slots);
             if(inst==NULL) goto oom;
             inst->opcode=family; inst->encoding=encoding; inst->count=slots;
             rv_set_reg(&inst->operands[0],rd);
             inst->operands[1].symbol=malloc(sizeof(parsed));
-            if(inst->operands[1].symbol==NULL){free(inst);goto oom;}
+            if(inst->operands[1].symbol==NULL){minias_mcinst_destroy(inst);goto oom;}
             *inst->operands[1].symbol=parsed;
             inst->operands[1].kind=MINIAS_MC_SYMBOL;
             stmt->mcinst=inst;
@@ -1638,7 +1664,7 @@ static bool rv_parse_mcinst_impl(MiniAs *as, MiniAsStmt *stmt) {
         return true;
     } else return true;
 
-    inst=calloc(1U,sizeof(*inst)+slots*sizeof(*inst->operands));
+    inst=minias_mcinst_alloc(slots);
     if(inst==NULL)goto oom;
     inst->opcode=family;inst->encoding=encoding;inst->count=slots;
     rv_set_reg(&inst->operands[0],rd);
@@ -1699,65 +1725,17 @@ bool minias_riscv_parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
 static bool rv_encode_multi_mc(MiniAs *as, const MiniAsStmt *stmt) {
     const MiniAsMCInst *m = stmt->mcinst;
     if (m->opcode == RV_MC_LI) {
-        uint64_t bits = m->operands[1].immediate;
-        int64_t signed_value = (int64_t)m->operands[2].immediate;
-        bool fits_signed32 = m->encoding != 0U;
-        int rd = (int)m->operands[0].reg;
-        if (MINIAS_RV_STATE(as)->target_xlen == 32U) {
-            int64_t rv32_value, hi, lo;
-            if (!rv32_li_value(bits, &rv32_value)) {
-                minias_set_error(as, "rv32i-li-overflows-32-bits:line=%zu",
-                                 stmt->line);
-                return false;
-            }
-            if (rv32_value >= -2048 && rv32_value <= 2047)
-                return append_u32(as, stmt->section,
-                                  enc_i(0x13U, rd, 0U, 0, rv32_value));
-            hi = (rv32_value + INT64_C(2048)) >> 12;
-            lo = rv32_value - hi * INT64_C(4096);
-            if (!append_u32(as, stmt->section,
-                            0x37U | ((uint32_t)rd << 7U) |
-                            (((uint32_t)hi & UINT32_C(0xfffff)) << 12U)))
-                return false;
-            return lo == 0 || append_u32(as, stmt->section,
-                                         enc_i(0x13U, rd, 0U, rd, lo));
+        uint32_t words[16];
+        unsigned count, i;
+        if (!rv_materialize_li(as, stmt, words, &count)) return false;
+        if (stmt->size != count * 4U) {
+            minias_set_error(as, "internal:riscv-li-plan-layout-mismatch:line=%zu",
+                             stmt->line);
+            return false;
         }
-        if (fits_signed32) {
-            int64_t hi, lo;
-            if (signed_value >= -2048 && signed_value <= 2047)
-                return append_u32(as, stmt->section,
-                                  enc_i(0x13U, rd, 0U, 0, signed_value));
-            hi = (signed_value + INT64_C(2048)) >> 12;
-            lo = signed_value - hi * INT64_C(4096);
-            if (!append_u32(as, stmt->section,
-                            0x37U | ((uint32_t)rd << 7U) |
-                            (((uint32_t)hi & UINT32_C(0xfffff)) << 12U)))
-                return false;
-            return append_u32(as, stmt->section,
-                              enc_i(0x1bU, rd, 0U, rd, lo));
-        }
-        {
-            int index = 7, i;
-            uint64_t top;
-            while (index > 0 &&
-                   ((bits >> ((unsigned)index * 8U)) & UINT64_C(0xff)) == 0U)
-                --index;
-            top = (bits >> ((unsigned)index * 8U)) & UINT64_C(0xff);
-            if (!append_u32(as, stmt->section,
-                            enc_i(0x13U, rd, 0U, 0, (int64_t)top)))
-                return false;
-            for (i = index - 1; i >= 0; --i) {
-                uint64_t byte = (bits >> ((unsigned)i * 8U)) & UINT64_C(0xff);
-                if (!append_u32(as, stmt->section,
-                                enc_i(0x13U, rd, 1U, rd, 8)))
-                    return false;
-                if (byte != 0U &&
-                    !append_u32(as, stmt->section,
-                                enc_i(0x13U, rd, 0U, rd, (int64_t)byte)))
-                    return false;
-            }
-            return true;
-        }
+        for (i = 0U; i < count; ++i)
+            if (!append_u32(as, stmt->section, words[i])) return false;
+        return true;
     }
 
     if (m->opcode == RV_MC_CALL || m->opcode == RV_MC_TAIL) {

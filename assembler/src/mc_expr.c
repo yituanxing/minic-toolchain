@@ -1601,14 +1601,23 @@ bool minias_compile_data_mc(MiniAs *as, MiniAsStmt *stmt,
     return true;
 }
 
+/* A relocation's wire-format integer is not a capability bit. In ELF the
+ * relocation number zero can have assigned semantics on an architecture;
+ * Common must ask Target policy before choosing a fixup strategy. */
+static bool target_supports_fixup(const MiniAs *as,
+                                  MiniAsFixupKind kind,unsigned width) {
+    return as->target->supports_fixup!=NULL &&
+           as->target->supports_fixup(kind,width);
+}
+
 static bool emit_symbol_minus_dot(MiniAs *as,
                                   const MiniAsStmt *stmt,
                                   unsigned int width,
                                   uint64_t relocation_offset,
                                   const MiniAsSymbolExpr *expr) {
     MiniAsSymbol *target = minias_get_symbol(as, expr->name, false);
-    uint32_t add_type = as->target->fixup_relocation_type(MINIAS_FIXUP_ADD, width);
-    uint32_t sub_type = as->target->fixup_relocation_type(MINIAS_FIXUP_SUB, width);
+    bool can_add=target_supports_fixup(as,MINIAS_FIXUP_ADD,width);
+    bool can_sub=target_supports_fixup(as,MINIAS_FIXUP_SUB,width);
 
     if (target != NULL && target->defined && target->section == stmt->section) {
         int64_t difference =
@@ -1634,13 +1643,13 @@ static bool emit_symbol_minus_dot(MiniAs *as,
             as->target->dot_relative_fixup:MINIAS_FIXUP_PREL64;
         if((width==4U || width==8U) &&
            kind!=MINIAS_FIXUP_NONE &&
-           as->target->fixup_relocation_type(kind,width)!=0U)
+           target_supports_fixup(as,kind,width))
             return minias_section_append_zero(as,stmt->section,width) &&
                    minias_add_fixup(as,stmt->section,relocation_offset,
                                     kind,width,expr->name,expr->addend);
     }
 
-    if (add_type == 0U || sub_type == 0U) {
+    if (!can_add || !can_sub) {
         minias_set_error(as,
                          "unsupported-symbol-difference-width:%u:line=%zu",
                          width,
@@ -1730,8 +1739,8 @@ static bool emit_symbol_difference(MiniAs *as,
                                    const MiniAsSymbolExpr *rhs_expr) {
     MiniAsSymbol *lhs = minias_get_symbol(as, lhs_expr->name, false);
     MiniAsSymbol *rhs = minias_get_symbol(as, rhs_expr->name, false);
-    uint32_t add_type = as->target->fixup_relocation_type(MINIAS_FIXUP_ADD, width);
-    uint32_t sub_type = as->target->fixup_relocation_type(MINIAS_FIXUP_SUB, width);
+    bool can_add=target_supports_fixup(as,MINIAS_FIXUP_ADD,width);
+    bool can_sub=target_supports_fixup(as,MINIAS_FIXUP_SUB,width);
 
     if (lhs != NULL && rhs != NULL && lhs->defined && rhs->defined &&
         /* If both names resolve to the same real section, its load
@@ -1743,7 +1752,7 @@ static bool emit_symbol_difference(MiniAs *as,
          * contracts are required by kernel .alternative patching. */
         lhs->section == rhs->section &&
         (lhs->section >= 0 || lhs->section == MINIAS_SECTION_ABS) &&
-        (add_type == 0U || sub_type == 0U)) {
+        (!can_add || !can_sub)) {
         /* Modular arithmetic gives correct low 8/16/32/64 bits and avoids
          * undefined signed overflow for large absolute/forward symbols. */
         uint64_t value=(lhs->value+(uint64_t)lhs_expr->addend)-
@@ -1767,7 +1776,7 @@ static bool emit_symbol_difference(MiniAs *as,
      * genuine paired relocations continue to use their existing path.
      */
     if((width==4U || width==8U) &&
-       (add_type==0U || sub_type==0U) &&
+       (!can_add || !can_sub) &&
        rhs!=NULL && rhs->defined &&
        /* GNU GAS resolves defined GLOBAL/WEAK anchors to their section
         * positions for PC64 as well as LOCAL anchors. This binding
@@ -1776,7 +1785,7 @@ static bool emit_symbol_difference(MiniAs *as,
         MiniAsFixupKind kind=width==4U?
             as->target->dot_relative_fixup:MINIAS_FIXUP_PREL64;
         if(kind!=MINIAS_FIXUP_NONE &&
-           as->target->fixup_relocation_type(kind,width)!=0U) {
+           target_supports_fixup(as,kind,width)) {
             uint64_t delta=relocation_offset-rhs->value+
                            (uint64_t)lhs_expr->addend-
                            (uint64_t)rhs_expr->addend;
@@ -1785,7 +1794,7 @@ static bool emit_symbol_difference(MiniAs *as,
                                     kind,width,lhs_expr->name,(int64_t)delta);
         }
     }
-    if (add_type == 0U || sub_type == 0U) {
+    if (!can_add || !can_sub) {
         minias_set_error(as,
                          "unsupported-symbol-difference-width:%u:line=%zu",
                          width,
@@ -1953,10 +1962,8 @@ bool minias_emit_mc_data(MiniAs *as,const MiniAsStmt *stmt) {
             MiniAsSymbol *right=x->has_rhs ?
                 &as->symbols[x->rhs_symbol_index] : NULL;
             if(x->kind==MINIAS_MC_EXPR_DIFFERENCE &&
-               (as->target->fixup_relocation_type(MINIAS_FIXUP_ADD,
-                                                  data->width)==0U ||
-                as->target->fixup_relocation_type(MINIAS_FIXUP_SUB,
-                                                  data->width)==0U) &&
+               (!target_supports_fixup(as,MINIAS_FIXUP_ADD,data->width) ||
+                !target_supports_fixup(as,MINIAS_FIXUP_SUB,data->width)) &&
                left && right && left->defined && right->defined &&
                left->section==right->section &&
                (left->section==MINIAS_SECTION_ABS ||

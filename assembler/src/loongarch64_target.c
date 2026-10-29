@@ -400,7 +400,7 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
         {"amxor_db.w",UINT32_C(0x386d0000)},
         {"amxor_db.d",UINT32_C(0x386d8000)}
     };
-    MiniAsMCInst *m=calloc(1U,sizeof(*m)+4U*sizeof(MiniAsMCOperand));
+    MiniAsMCInst *m=minias_mcinst_alloc(4U);
     char t[4][192],*end;unsigned n,i,rd,rj,rk;
     long val;
     if(!m){minias_set_error(as,"out-of-memory:loongarch64-mcinst");return false;}
@@ -1341,7 +1341,7 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
 fail:
     minias_set_error(as,"unsupported-loongarch64-operands:%s:%s:line=%zu",
                      s->op,s->args,s->line);
-    free(m);return false;
+    minias_mcinst_destroy(m);return false;
 done:
     s->mcinst=m;return true;
 }
@@ -1515,35 +1515,52 @@ static bool la_validate(MiniAs *as) {
         }
     return true;
 }
-static uint32_t la_reloc(MiniAsFixupKind kind,unsigned width) {
-    if(width!=4U && width!=8U)return 0U;
-    switch(kind) {
-        case MINIAS_FIXUP_ABS:
-            return width==8U?2U:1U; /* R_LARCH_64 / R_LARCH_32 */
-        case MINIAS_FIXUP_PREL32:
-            return width==4U?99U:0U; /* R_LARCH_32_PCREL */
-        case MINIAS_FIXUP_ADD:
-            return width==8U?51U:50U; /* ADD64 / ADD32 */
-        case MINIAS_FIXUP_SUB:
-            return width==8U?56U:55U; /* SUB64 / SUB32 */
-        case MINIAS_FIXUP_LARCH_PCALA_HI20:
-            return width==4U?71U:0U;
-        case MINIAS_FIXUP_LARCH_PCALA_LO12:
-            return width==4U?72U:0U;
-        case MINIAS_FIXUP_LARCH_B16:
-            return width==4U?64U:0U;
-        case MINIAS_FIXUP_LARCH_B21:
-            return width==4U?65U:0U;
-        case MINIAS_FIXUP_LARCH_B26:
-            return width==4U?66U:0U;
-        default: return 0U;
+/* Target-specific ELF ABI forms also constitute the semantic capabilities.
+ * In particular, only ADD/SUB/ABS admit 64-bit data on LoongArch. */
+static const struct {
+    MiniAsFixupKind kind;
+    unsigned width;
+    uint32_t relocation;
+} la_fixup_forms[] = {
+    {MINIAS_FIXUP_ABS,4U,1U}, /* R_LARCH_32 */
+    {MINIAS_FIXUP_ABS,8U,2U}, /* R_LARCH_64 */
+    {MINIAS_FIXUP_PREL32,4U,99U}, /* R_LARCH_32_PCREL */
+    {MINIAS_FIXUP_ADD,4U,50U},
+    {MINIAS_FIXUP_ADD,8U,51U},
+    {MINIAS_FIXUP_SUB,4U,55U},
+    {MINIAS_FIXUP_SUB,8U,56U},
+    {MINIAS_FIXUP_LARCH_PCALA_HI20,4U,71U},
+    {MINIAS_FIXUP_LARCH_PCALA_LO12,4U,72U},
+    {MINIAS_FIXUP_LARCH_B16,4U,64U},
+    {MINIAS_FIXUP_LARCH_B21,4U,65U},
+    {MINIAS_FIXUP_LARCH_B26,4U,66U}
+};
+
+static bool la_lookup_fixup_form(MiniAsFixupKind kind,unsigned width,
+                                 uint32_t *relocation) {
+    size_t i;
+    for(i=0U;i<sizeof(la_fixup_forms)/sizeof(la_fixup_forms[0]);++i) {
+        if(la_fixup_forms[i].kind!=kind || la_fixup_forms[i].width!=width)
+            continue;
+        if(relocation!=NULL)*relocation=la_fixup_forms[i].relocation;
+        return true;
     }
+    return false;
+}
+static bool la_supports_fixup(MiniAsFixupKind kind,unsigned width) {
+    return la_lookup_fixup_form(kind,width,NULL);
+}
+static uint32_t la_reloc(MiniAsFixupKind kind,unsigned width) {
+    uint32_t relocation=0U;
+    (void)la_lookup_fixup_form(kind,width,&relocation);
+    return relocation;
 }
 static const MiniAsTargetOps ops={
     .name="loongarch64",.comment_prefix='#',.elf_machine=258U,
     .resolve_profile=la_profile,.parse_mcinst=la_parse,
     .measure_mcinst=la_measure,.encode=la_encode,
-    .append_code_alignment=la_align,.fixup_relocation_type=la_reloc,
+    .append_code_alignment=la_align,.supports_fixup=la_supports_fixup,
+    .fixup_relocation_type=la_reloc,
     .validate_output=la_validate,
     .cfi_implicit_eh_frame=true,
     .cfi_code_align=4U,

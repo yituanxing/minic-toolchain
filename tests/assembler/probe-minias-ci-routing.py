@@ -56,6 +56,65 @@ def check_canonical_gate() -> None:
             raise AssertionError(f"canonical Kbuild gate missing: {token}")
 
 
+def check_exact_head_four_target_gnu_gates() -> None:
+    """Fast PR checks must compile PR head, not GitHub's synthetic merge ref."""
+    expected_ref = (
+        "ref: ${{ github.event_name == 'pull_request' && "
+        "github.event.pull_request.head.sha || github.sha }}"
+    )
+    expectations = {
+        "minias-target-contract.yml": {
+            "native-a0-rv32i": ("riscv",),
+            "aarch64-vertical": ("aarch64",),
+        },
+        "minias-new-targets-oracle.yml": {
+            "integer-gnu-differential": ("x86_64", "loongarch64"),
+        },
+    }
+    for workflow, jobs in expectations.items():
+        source = (WORKFLOWS / workflow).read_text()
+        if "pull_request:" not in source:
+            raise AssertionError(f"exact-head GNU oracle no longer runs for PRs: {workflow}")
+        if "probe-typed-relax-four-target-stress.sh" not in source:
+            raise AssertionError(f"new stress changes do not trigger: {workflow}")
+        for name, targets in jobs.items():
+            body = job(source, name)
+            if body.count(expected_ref) != 1:
+                raise AssertionError(f"{workflow}/{name} could use a synthetic merge HEAD")
+            if "git rev-parse HEAD" not in body or "MINIAS_EXACT_HEAD=PASS" not in body:
+                raise AssertionError(f"{workflow}/{name} lacks checkout SHA assertion")
+            if "CFLAGS=-Werror" not in body:
+                raise AssertionError(f"{workflow}/{name} lacks a strict exact-head build")
+            for target in targets:
+                invocation = (
+                    f"ARCH={target} \\\n"
+                    "            bash tests/assembler/probe-typed-relax-four-target-stress.sh"
+                )
+                if invocation not in body:
+                    raise AssertionError(
+                        f"{workflow}/{name} missing GNU typed relax stress for {target}"
+                    )
+            if name == "integer-gnu-differential":
+                if "probe-x86-typed-branch-growth.sh" not in body:
+                    raise AssertionError("GNU x86 branch growth oracle no longer runs")
+                if "'tests/assembler/probe-x86-typed-branch-growth.sh'" not in source:
+                    raise AssertionError("x86 branch-growth oracle changes do not trigger CI")
+                metadata_regression = "probe-elf-semantic-reloc-metadata-order.py"
+                if metadata_regression not in body:
+                    raise AssertionError("strict GNU ELF relocation/metadata mutation oracle missing")
+                if f"'tests/assembler/{metadata_regression}'" not in source:
+                    raise AssertionError("ELF semantic oracle changes do not trigger CI")
+            if name == "native-a0-rv32i":
+                if "probe-mc-operand-lifetime.sh" not in body:
+                    raise AssertionError("Common MCOperand lifecycle probe no longer runs")
+                if "probe-mc-operand-failure-unwind.sh" not in body:
+                    raise AssertionError("four-target malformed operand unwind no longer runs")
+                if "probe-rv-typed-li-materialization.sh" not in body:
+                    raise AssertionError("RV32/RV64 typed LI semantic oracle no longer runs")
+                if "command -v riscv64-linux-gnu-as" not in body:
+                    raise AssertionError("RV GNU semantic oracle could silently skip")
+
+
 def main() -> None:
     subprocess.run([sys.executable,
                     str(ROOT / "tools/ci/check_ci_miniobjcopy_elf_route_v1.py")],
@@ -65,9 +124,11 @@ def main() -> None:
                     "--self-test"], check=True)
     check_generated_gate()
     check_canonical_gate()
+    check_exact_head_four_target_gnu_gates()
     print("MINIAS_CI_ROUTING=PASS canonical_3x7=strict "
           "legacy_3x7=strict_aggregate preserved_diagnostics=1 "
-          "shared_elf=canonical_reader_objcopy_strip")
+          "shared_elf=canonical_reader_objcopy_strip "
+          "fast_pr=exact_head GNU_stress_targets=4")
 
 
 if __name__ == "__main__":

@@ -19,6 +19,9 @@ R_RISCV_RELAX = 51
 # register. Every entry below is a tuple of (byte displacement, field width
 # in bytes, bit mask inside the field). The mask names ONLY linker-modified
 # bits. Types absent from a machine table make the verdict INCONCLUSIVE.
+# IMPORTANT: a relocation which *adds to/subtracts from* existing contents
+# must have an empty mask. Its V term is a true input to the link calculation;
+# hiding it would assert the wrong linked output for identical RELA records.
 #
 # Sources: RISC-V ELF psABI §Relocations, ARM AAELF64 §5.7, LoongArch ELF ABI
 # §Relocations, and the x86-64 ELF ABI relocation definitions in elf.h.
@@ -50,14 +53,15 @@ RISC_V_RELOC_FIELDS = {
     **{t: RV_I for t in (24, 27, 30, 63, 64)},
     **{t: RV_S for t in (25, 28, 31)},
     32: (),  # TPREL_ADD annotates ADD: the linker changes no instruction bits.
+    **{t: () for t in range(33, 41)},  # ADD/SUB are V +/- S +/- A.
     **{t: data_field(n) for t, n in {
-        33: 1, 34: 2, 35: 4, 36: 8,
-        37: 1, 38: 2, 39: 4, 40: 8,
         41: 4, 54: 1, 55: 2, 56: 4, 57: 4, 59: 4,
     }.items()},
     44: ((0, 2, 0x1c7c),),  # RVC CB-Type immediate, retain rs1'/opcode.
     45: ((0, 2, 0x1ffc),),  # RVC CJ-Type immediate, retain funct3/opcode.
-    52: ((0, 1, 0x3f),), 53: ((0, 1, 0x3f),),  # SUB6 / SET6.
+    52: (),  # SUB6 uses the existing low 6 bits as its V term.
+    53: ((0, 1, 0x3f),),  # SET6 replaces only the low 6 bits.
+    43: (), 51: (),  # ALIGN padding and RELAX are handled separately.
     65: (),  # TLSDESC_CALL is a relaxation marker, not a patched field.
 }
 
@@ -108,10 +112,7 @@ LOONGARCH_RELOC_FIELDS = {
     44: instruction_field(0x03fffc1f),
     45: instruction_field(0x03ffffff),
     46: data_field(4),
-    **{t: data_field(n) for t, n in {
-        47: 1, 48: 2, 49: 3, 50: 4, 51: 8,
-        52: 1, 53: 2, 54: 3, 55: 4, 56: 8,
-    }.items()},
+    **{t: () for t in range(47, 57)},  # R_LARCH_ADD/SUB use V as input.
     57: (), 58: (),
     64: instruction_field(0x03fffc00),
     65: instruction_field(0x03fffc1f),
@@ -126,6 +127,21 @@ RELOC_FIELDS_BY_MACHINE = {
     "EM_LOONGARCH": LOONGARCH_RELOC_FIELDS,
 }
 
+# An in-place additive relocation must not overlap a separately masked
+# replacement relocation. The relocation records are order-sensitive in that
+# case, and without simulating the linker there is no sound content mask.
+ADDITIVE_RELOC_WIDTHS = {
+    "EM_RISCV": {
+        **{t: n for t, n in {33: 1, 34: 2, 35: 4, 36: 8,
+                             37: 1, 38: 2, 39: 4, 40: 8}.items()},
+        52: 1,
+    },
+    "EM_LOONGARCH": {
+        **{t: n for t, n in {47: 1, 48: 2, 49: 3, 50: 4, 51: 8,
+                             52: 1, 53: 2, 54: 3, 55: 4, 56: 8}.items()},
+    },
+}
+
 
 def section_name_for_index(elf, idx, section_keys):
     if isinstance(idx, int):
@@ -133,6 +149,43 @@ def section_name_for_index(elf, idx, section_keys):
             return section_keys[idx]
         return f"INDEX:{idx}"
     return str(idx)
+
+
+def mapping_symbol_tag(elf, sym):
+    """Identify A64/RISC-V code/data mapping, ignoring private uniquifiers.
+
+    AArch64 AAELF64 §5.6.5 requires $x at each code section start. RISC-V
+    psABI §10.14 also permits an optional $x<ISA> with architecture metadata.
+    Prefix-only `$xfoo` checks would discard unrelated valid ELF symbols.
+    """
+    if (sym["st_info"]["bind"] != "STB_LOCAL" or
+            sym["st_info"]["type"] != "STT_NOTYPE" or
+            int(sym["st_size"]) != 0):
+        return None
+    name = sym.name
+    machine = str(elf.header["e_machine"])
+    if machine not in ("EM_AARCH64", "EM_RISCV"):
+        return None
+    tag = name.split(".", 1)[0]
+    if tag in ("$x", "$d"):
+        return tag
+    if machine == "EM_RISCV" and tag.startswith(("$xrv32", "$xrv64")):
+        return tag
+    return None
+
+
+def mapping_symbol_counter(elf, section_keys):
+    symbols = elf.get_section_by_name(".symtab")
+    result = collections.Counter()
+    if symbols is None:
+        return result
+    for sym in symbols.iter_symbols():
+        tag = mapping_symbol_tag(elf, sym)
+        if tag is None:
+            continue
+        sec = section_name_for_index(elf, sym["st_shndx"], section_keys)
+        result[(tag, sec, int(sym["st_value"]))] += 1
+    return result
 
 
 def stable_sections(elf):
@@ -198,6 +251,7 @@ def symbol_semantic_key(elf, sym, section_keys):
     bind = info["bind"]
     typ = info["type"]
     vis = sym["st_other"]["visibility"]
+    other_bits = int(sym["st_other"]["local"])
     shndx = sym["st_shndx"]
     sec = section_name_for_index(elf, shndx, section_keys)
     value = int(sym["st_value"])
@@ -205,19 +259,19 @@ def symbol_semantic_key(elf, sym, section_keys):
     name = sym.name or ""
 
     if typ == "STT_FILE":
-        return ("FILE", name, sec)
-    if bind == "STB_LOCAL" and (name.startswith("$x") or name.startswith("$d")):
-        # RISC-V mapping symbols are assembler/disassembler metadata, not
-        # link-visible source symbols.
+        return ("FILE", name, bind, typ, vis, other_bits, sec, value, size)
+    if mapping_symbol_tag(elf, sym) is not None:
+        # Evaluated separately: A64 mapping transitions are required; RISC-V
+        # accepts optional mapping information with stricter exact parity.
         return None
     if typ == "STT_SECTION":
-        return ("SECTION", sec)
+        return ("SECTION", bind, vis, other_bits, sec, value, size)
     # GNU as and MiniAS may invent different local anchor names for an
     # equivalent PC-relative relocation pair. Normalize defined locals by the
     # semantic address they denote instead of their private spelling.
     if bind == "STB_LOCAL" and isinstance(shndx, int):
-        return ("LOCAL", typ, vis, sec, value, size)
-    return ("NAMED", name, bind, typ, vis, sec, value, size)
+        return ("LOCAL", typ, vis, other_bits, sec, value, size)
+    return ("NAMED", name, bind, typ, vis, other_bits, sec, value, size)
 
 
 def symbol_counter(elf, section_keys):
@@ -234,17 +288,23 @@ def symbol_counter(elf, section_keys):
 
 def relocation_counter(elf, section_keys):
     out = collections.Counter()
+    relax_markers = collections.Counter()
     masks = collections.defaultdict(list)
     unknown_width = collections.defaultdict(list)
+    ordered = {}
+    additive_ranges = collections.defaultdict(list)
 
     machine = str(elf.header["e_machine"])
     fields = RELOC_FIELDS_BY_MACHINE.get(machine, {})
-    for sec in elf.iter_sections():
+    for index, sec in enumerate(elf.iter_sections()):
         if not isinstance(sec, RelocationSection):
             continue
         target_name = section_name_for_index(elf, int(sec["sh_info"]), section_keys)
         symtab = elf.get_section(int(sec["sh_link"]))
+        if symtab is None or not hasattr(symtab, "get_symbol"):
+            raise ValueError("relocation section missing symbol table")
         is_rela = sec.is_RELA()
+        entries = []
 
         for rel in sec.iter_relocations():
             typ = int(rel["r_info_type"])
@@ -253,24 +313,33 @@ def relocation_counter(elf, section_keys):
             if not is_rela:
                 unknown_width[target_name].append(
                     (offset, typ, "REL-implicit-addend-not-decoded"))
-            if machine == "EM_RISCV" and typ == R_RISCV_RELAX:
-                # RELAX is a linker optimization hint, not required for the
-                # unrelaxed object's functional semantics.
-                continue
-            if machine == "EM_RISCV" and typ == R_RISCV_ALIGN:
-                # GNU as may reserve relaxable alignment padding and let the
-                # linker delete excess bytes. Treat only verified NOP bytes
-                # as linker-discardable: masking arbitrary bytes here would
-                # hide a changed instruction in executable code.
-                if addend > 0:
-                    masks[target_name].append((offset, addend, None))
-                continue
-
             sym = symtab.get_symbol(int(rel["r_info_sym"]))
             sym_key = symbol_semantic_key(elf, sym, section_keys)
             if sym_key is None:
-                sym_key = ("NONE",)
-            out[(target_name, offset, typ, sym_key, addend)] += 1
+                tag = mapping_symbol_tag(elf, sym)
+                sym_key = ("MAPPING", tag,
+                           section_name_for_index(elf, sym["st_shndx"], section_keys),
+                           int(sym["st_value"]))
+            entry = (target_name, offset, typ, sym_key, addend)
+            if machine == "EM_RISCV" and typ == R_RISCV_RELAX:
+                # psABI §11 permits *optional* linker relaxation. Absence
+                # does not alter the unrelaxed program, but it does differ
+                # from GNU's exact optimization contract, so record it for
+                # strict parity without failing compatible semantics.
+                relax_markers[entry] += 1
+                continue
+            out[entry] += 1
+            entries.append(entry)
+
+            if machine == "EM_RISCV" and typ == R_RISCV_ALIGN:
+                # Unlike RELAX, ALIGN affects both the linker removal extent
+                # and section layout. Comparing its offset/addend/symbol is
+                # mandatory. Only genuine NOP padding may be hidden below.
+                if addend < 0:
+                    raise ValueError("negative R_RISCV_ALIGN padding extent")
+                if is_rela and addend:
+                    masks[target_name].append((offset, addend, None))
+                continue
 
             # ELF REL records its addend in the section bytes, not r_addend.
             # Without decoding its target-specific field, treating REL as a
@@ -285,7 +354,36 @@ def relocation_counter(elf, section_keys):
                 unknown_width[target_name].append(
                     (offset, typ, "unknown-target-relocation-fields"))
 
-    return out, masks, unknown_width
+            additive_size = ADDITIVE_RELOC_WIDTHS.get(machine, {}).get(typ)
+            if additive_size:
+                additive_ranges[target_name].append((offset, offset + additive_size))
+
+        # In-place SET/SUB and LoongArch stack-operator relocations are
+        # procedural and cannot be reduced to a multiset. Keep order at
+        # multiply-relocated offsets, and entire LoongArch SOP streams.
+        by_offset = collections.defaultdict(list)
+        for entry in entries:
+            by_offset[entry[1]].append(entry)
+        if machine == "EM_LOONGARCH" and any(
+                20 <= entry[2] <= 46 for entry in entries):
+            ordered[section_keys[index]] = entries
+        else:
+            repeated = {offset: rows for offset, rows in by_offset.items()
+                        if len(rows) > 1}
+            if repeated:
+                ordered[section_keys[index]] = sorted(repeated.items())
+
+    for target_name, ranges in additive_ranges.items():
+        for start, width, bitmask in masks.get(target_name, []):
+            # Disjoint bit ranges in a word are safe, but conservatively
+            # decline overlapping additive/replacement operations.
+            if any(start < end and start + width > begin
+                   for begin, end in ranges):
+                unknown_width[target_name].append(
+                    (start, width, "overlapping-additive-and-replacement-relocations"))
+                break
+
+    return out, masks, unknown_width, ordered, relax_markers
 
 
 def section_metadata(elf, section_keys):
@@ -293,26 +391,56 @@ def section_metadata(elf, section_keys):
     alignment = {}
     for index, sec in enumerate(elf.iter_sections()):
         name = sec.name
-        if name in IGNORE_SECTION_NAMES or isinstance(sec, RelocationSection):
+        if name in IGNORE_SECTION_NAMES:
             continue
         hdr = sec.header
+        kind = str(hdr["sh_type"])
+        flags = int(hdr["sh_flags"])
         key = section_keys[index]
         metadata = {
-            "type": str(hdr["sh_type"]),
-            "flags": int(hdr["sh_flags"]),
+            "type": kind,
+            "flags": flags,
             "entsize": int(hdr["sh_entsize"]),
             "size": int(hdr["sh_size"]),
         }
-        # SHF_LINK_ORDER's sh_link refers to the associated input section,
-        # not to the symbol table like SHT_RELA's sh_link. Compare the
-        # section's semantic identity instead of its layout-dependent ELF
-        # header number; two otherwise identical patch-table sections may
-        # have different retention rules under --gc-sections.
-        if int(hdr["sh_flags"]) & 0x80:
-            linked = int(hdr["sh_link"])
-            if linked < 0 or linked >= elf.num_sections():
-                raise ValueError("SHF_LINK_ORDER section links outside ELF")
+        if (str(elf.header["e_machine"]) == "EM_RISCV" and
+                isinstance(sec, RelocationSection)):
+            # R_RISCV_RELAX is an optional optimization *hint*. It occupies
+            # a real RELA slot in GNU's object but its absence is compatible
+            # when other relocations are identical. Keep physical differences
+            # in strict relaxation_markers rather than leak them through
+            # sh_size into compatible section-core equality.
+            entry_count = sec.num_relocations()
+            if entry_count * metadata["entsize"] != metadata["size"]:
+                raise ValueError("malformed relocation section size")
+            relax_count = sum(int(rel["r_info_type"]) == R_RISCV_RELAX
+                              for rel in sec.iter_relocations())
+            metadata["size"] -= relax_count * metadata["entsize"]
+        # ELF gABI §3.5: sh_link is a section index, while sh_info is either
+        # an integer, a target section (SHF_INFO_LINK, SHT_REL/A) or a group
+        # signature's symbol index (SHT_GROUP). Preserve all of them without
+        # comparing layout-specific section/symbol table ordinals.
+        linked = int(hdr["sh_link"])
+        if linked < 0 or linked >= elf.num_sections():
+            raise ValueError(f"section {key} sh_link outside ELF")
+        if linked or flags & 0x80 or isinstance(sec, RelocationSection) or kind == "SHT_GROUP":
+            metadata["link"] = section_keys[linked] if linked else None
+        if flags & 0x80:
+            # Retain the field name used by existing GNU LINK_ORDER probes.
             metadata["linked_section"] = section_keys[linked] if linked else None
+
+        info = int(hdr["sh_info"])
+        if isinstance(sec, RelocationSection) or flags & 0x40:
+            if info < 0 or info >= elf.num_sections():
+                raise ValueError(f"section {key} sh_info outside ELF")
+            metadata["info_section"] = section_keys[info] if info else None
+        elif kind == "SHT_GROUP":
+            symtab = elf.get_section(linked)
+            if symtab is None or not hasattr(symtab, "get_symbol"):
+                raise ValueError("SHT_GROUP sh_info lacks signature symbol table")
+            metadata["group_signature"] = symtab.get_symbol(info).name
+        elif info:
+            metadata["info_value"] = info
         core[key] = metadata
         alignment[key] = int(hdr["sh_addralign"])
     return core, alignment
@@ -411,7 +539,7 @@ def load_semantics(path):
     with open(path, "rb") as f:
         elf = ELFFile(f)
         section_keys, groups = stable_sections(elf)
-        relocs, masks, unknown = relocation_counter(elf, section_keys)
+        relocs, masks, unknown, order, relax = relocation_counter(elf, section_keys)
         contents, skipped = comparable_contents(elf, section_keys, masks, unknown)
         section_core, section_alignment = section_metadata(elf, section_keys)
         return {
@@ -421,12 +549,21 @@ def load_semantics(path):
                 "type": str(elf.header["e_type"]),
                 "machine": str(elf.header["e_machine"]),
                 "flags": int(elf.header["e_flags"]),
+                "osabi": str(elf.header["e_ident"]["EI_OSABI"]),
+                "abi_version": int(elf.header["e_ident"]["EI_ABIVERSION"]),
+                "elf_version": str(elf.header["e_version"]),
+                "entry": int(elf.header["e_entry"]),
+                "program_header_count": int(elf.header["e_phnum"]),
             },
             "section_core": section_core,
             "section_alignment": section_alignment,
             "groups": groups,
             "symbols": counter_to_sorted_list(symbol_counter(elf, section_keys)),
+            "mapping_symbols": counter_to_sorted_list(
+                mapping_symbol_counter(elf, section_keys)),
             "relocations": counter_to_sorted_list(relocs),
+            "relocation_order": order,
+            "relaxation_markers": counter_to_sorted_list(relax),
             "contents_masked": contents,
             "content_skipped_unknown_reloc_width": skipped,
         }
@@ -435,6 +572,13 @@ def load_semantics(path):
 def compare_paths(reference_path, candidate_path):
     reference = load_semantics(reference_path)
     candidate = load_semantics(candidate_path)
+    exact_mapping = reference["mapping_symbols"] == candidate["mapping_symbols"]
+    # RISC-V mapping symbols may be omitted by a producer; if both producers
+    # emit them, their code/data boundaries and ISA annotations must agree.
+    # AArch64 mapping, in contrast, is mandatory at executable code starts.
+    mapping_compatible = exact_mapping or (
+        reference["header"]["machine"] == "EM_RISCV" and
+        (not reference["mapping_symbols"] or not candidate["mapping_symbols"]))
     dimensions = {
         "header": reference["header"] == candidate["header"],
         "section_core": reference["section_core"] == candidate["section_core"],
@@ -443,13 +587,16 @@ def compare_paths(reference_path, candidate_path):
             reference["section_alignment"], candidate["section_alignment"]
         ),
         "symbols": reference["symbols"] == candidate["symbols"],
+        "mapping_symbols_compatible": mapping_compatible,
         "relocations": reference["relocations"] == candidate["relocations"],
+        "relocation_order": reference["relocation_order"] == candidate["relocation_order"],
         "contents_masked": reference["contents_masked"] == candidate["contents_masked"],
         "known_relocation_widths": not (
             reference["content_skipped_unknown_reloc_width"] or
             candidate["content_skipped_unknown_reloc_width"]),
     }
     strict_alignment = reference["section_alignment"] == candidate["section_alignment"]
+    strict_relaxation = reference["relaxation_markers"] == candidate["relaxation_markers"]
 
     compatible_equal = all(dimensions.values())
     result = {
@@ -457,21 +604,25 @@ def compare_paths(reference_path, candidate_path):
         "candidate": str(Path(candidate_path)),
         "equal": compatible_equal,  # Historical compatible-alignment verdict.
         "compatible_equal": compatible_equal,
-        "strict_equal": compatible_equal and strict_alignment,
+        "strict_equal": compatible_equal and strict_alignment and
+                        strict_relaxation and exact_mapping,
         "alignment_verdict": ("exact" if strict_alignment else
                               "compatible" if dimensions["section_alignment_compatible"]
                               else "incompatible"),
         "inconclusive": not dimensions["known_relocation_widths"],
         "dimensions": dimensions,
         "strict_section_alignment": strict_alignment,
+        "strict_relaxation_markers": strict_relaxation,
+        "strict_mapping_symbols": exact_mapping,
         "reference_skipped_content": reference["content_skipped_unknown_reloc_width"],
         "candidate_skipped_content": candidate["content_skipped_unknown_reloc_width"],
     }
-    if not result["equal"] or not strict_alignment:
+    if not result["equal"] or not strict_alignment or not strict_relaxation or not exact_mapping:
         differences = {}
         for key, equal in dimensions.items():
             if not equal and key not in ("section_alignment_compatible",
-                                         "known_relocation_widths"):
+                                         "known_relocation_widths",
+                                         "mapping_symbols_compatible"):
                 ref_value = reference[key]
                 cand_value = candidate[key]
                 differences[key] = {
@@ -490,6 +641,20 @@ def compare_paths(reference_path, candidate_path):
             differences["unknown_relocation_widths"] = {
                 "reference": reference["content_skipped_unknown_reloc_width"],
                 "candidate": candidate["content_skipped_unknown_reloc_width"],
+            }
+        if not strict_relaxation:
+            differences["relaxation_markers"] = {
+                "reference": reference["relaxation_markers"],
+                "candidate": candidate["relaxation_markers"],
+                "strict": False,
+                "compatible": True,
+            }
+        if not exact_mapping:
+            differences["mapping_symbols"] = {
+                "reference": reference["mapping_symbols"],
+                "candidate": candidate["mapping_symbols"],
+                "strict": False,
+                "compatible": mapping_compatible,
             }
         result["differences"] = differences
     return result

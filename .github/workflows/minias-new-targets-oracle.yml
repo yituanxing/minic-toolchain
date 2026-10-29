@@ -1,10 +1,12 @@
-name: MiniAS x86-64 and LoongArch64 Integer GNU Oracle
+name: MiniAS x86-64 and LoongArch64 GNU Oracle + Four-Target Contract
 
 on:
   pull_request:
     paths:
-      - 'assembler/src/**'
+      - 'assembler/**'
       - 'elf/**'
+      - 'tools/minic-as/**'
+      - 'src/target/**'
       - 'tests/assembler/probe-comdat-groups.sh'
       - 'tests/assembler/probe-mc-cross-layer-contract.sh'
       - 'tests/assembler/probe-mc-owned-deferred-directives.sh'
@@ -13,10 +15,14 @@ on:
       - 'tests/assembler/probe-minias-acceptance-gates.sh'
       - 'tests/assembler/probe-elf-semantic-comdat-strict.sh'
       - 'tests/assembler/probe-elf-semantic-payload-bitfields.py'
+      - 'tests/assembler/probe-elf-semantic-reloc-metadata-order.py'
       - 'tests/assembler/probe-link-order-gcc-patchable.sh'
       - 'tests/assembler/probe-miniobjcopy-comdat-rewrite.sh'
       - 'tests/assembler/probe-minias-ci-routing.py'
       - 'tests/assembler/probe-public-target-invocation.sh'
+      - 'tests/assembler/probe-typed-relax-four-target-stress.sh'
+      - 'tests/assembler/probe-x86-typed-branch-growth.sh'
+      - 'tests/assembler/elf_semantic_compare.py'
       - 'tests/assembler/probe-x86-loong-base.sh'
       - 'tests/assembler/probe-mc-operand-lexer.sh'
       - 'tests/assembler/mc-operand-lexer-contract.c'
@@ -44,6 +50,17 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+        with:
+          # A PR's default checkout is refs/pull/*/merge, not the exact
+          # source head whose MiniAS result is being accepted.
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          repository: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name || github.repository }}
+      - name: Assert evaluated source is exact PR head
+        run: |
+          actual="$(git rev-parse HEAD)"
+          expected="${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}"
+          test "$actual" = "$expected"
+          echo "MINIAS_EXACT_HEAD=PASS sha=$actual"
       - name: Install real LoongArch GNU assembler
         run: |
           sudo apt-get update
@@ -63,6 +80,8 @@ jobs:
           bash tests/assembler/probe-minias-acceptance-gates.sh
       - name: Reject false GNU ELF parity from opcode masks and non-PROGBITS payloads
         run: python3 tests/assembler/probe-elf-semantic-payload-bitfields.py
+      - name: Reject GNU ELF parity false-greens from relocation order, ALIGN and metadata
+        run: python3 tests/assembler/probe-elf-semantic-reloc-metadata-order.py
       - name: GNU x86 cross-layer section, alias, layout and FILE semantics
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
@@ -71,6 +90,16 @@ jobs:
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-mc-owned-deferred-directives.sh
+      - name: GNU x86-64 and LoongArch64 160-typed-fragment relaxation stress
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=x86_64 \
+            bash tests/assembler/probe-typed-relax-four-target-stress.sh
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=loongarch64 \
+            bash tests/assembler/probe-typed-relax-four-target-stress.sh
+      - name: GNU x86-64 typed short/near branch growth, alias and relocation oracle
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-x86-typed-branch-growth.sh
       - name: GNU x86 link-order section identity, RELA and linker GC
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \

@@ -172,7 +172,8 @@ static bool cfi_emit_section(MiniAs *as,bool eh) {
     size_t cie_offset[2][2]={{0U,0U},{0U,0U}};
     if(eh && (!as->target->cfi_implicit_eh_frame ||
               minias_cfi_abi(as).address_size!=(as->output_elf32?4U:8U) ||
-              as->target->fixup_relocation_type(MINIAS_FIXUP_PREL32,4U)==0U)) {
+              as->target->supports_fixup==NULL ||
+              !as->target->supports_fixup(MINIAS_FIXUP_PREL32,4U))) {
         minias_set_error(as,"unsupported-target-eh-frame");
         return false;
     }

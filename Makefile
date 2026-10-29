@@ -267,6 +267,7 @@ MINIAS_SOURCES := \
 	assembler/src/expression.c \
 	assembler/src/mc_expr.c \
 	assembler/src/mc_lexer.c \
+	assembler/src/mc_operand_semantics.c \
 	assembler/src/mc_layout.c \
 	assembler/src/riscv_encode.c \
 	assembler/src/string_literal.c \

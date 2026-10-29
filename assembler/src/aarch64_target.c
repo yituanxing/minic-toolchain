@@ -2113,8 +2113,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
     if(!a64_capture_deferred_difference(as,stmt,&deferred_difference,
                                         &deferred_use))return false;
     if(!a64_fold_absolute_memory_address(as,stmt))return false;
-    MiniAsMCInst *inst = calloc(1U, sizeof(*inst) +
-                                5U * sizeof(MiniAsMCOperand));
+    MiniAsMCInst *inst = minias_mcinst_alloc(5U);
     unsigned reg, imm;
     bool reg64;
     char first[80], second[80];
@@ -2135,7 +2134,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         uint32_t base;
         if(!split_operands(args,tok,&n) || n!=2U) {
             minias_set_error(as,"bad-aarch64-fp-memory:%s:line=%zu",
-                             args,stmt->line);free(inst);return false;
+                             args,stmt->line);minias_mcinst_destroy(inst);return false;
         }
         if(a64_scalar_fp_reg(tok[0],&rd,&fp64))width=fp64?8U:4U;
         else if(parse_a64_q_reg(tok[0],&rd))width=16U;
@@ -2143,7 +2142,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
            mode!=0U || off<0 || off%(int64_t)width!=0 ||
            off/(int64_t)width>4095) {
             minias_set_error(as,"bad-aarch64-fp-memory:%s:line=%zu",
-                             args,stmt->line);free(inst);return false;
+                             args,stmt->line);minias_mcinst_destroy(inst);return false;
         }
         base=width==4U?UINT32_C(0xbd000000):
              width==8U?UINT32_C(0xfd000000):
@@ -2171,7 +2170,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
            !a64_attach_expr(inst,1U,&pool)) {
             minias_set_error(as,"bad-aarch64-literal-load:%s:line=%zu",
                              args,stmt->line);
-            free(inst);return false;
+            minias_mcinst_destroy(inst);return false;
         }
         inst->opcode=A64_MC_LDR_LITERAL;inst->count=2U;
         put_reg(&inst->operands[0],rd,wide);
@@ -2191,7 +2190,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
            !a64_attach_expr(inst,1U,&source)) {
             minias_set_error(as,"bad-aarch64-direct-literal:%s:line=%zu",
                              args,stmt->line);
-            free(inst);return false;
+            minias_mcinst_destroy(inst);return false;
         }
         inst->opcode=A64_MC_LDR_LITERAL;inst->count=2U;
         inst->encoding=1U; /* target-local direct vs queued =literal */
@@ -2225,7 +2224,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
                           (wd!=wn || wd!=wm || wd!=wa))) {
             minias_set_error(as,"bad-aarch64-multiply-accumulate:%s:line=%zu",
                              args,stmt->line);
-            free(inst);return false;
+            minias_mcinst_destroy(inst);return false;
         }
         inst->opcode=A64_MC_ARITH_ALIAS;inst->count=4U;
         inst->encoding=tab[k].base;
@@ -2276,14 +2275,14 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
            alu_sp) {
             minias_set_error(as,"bad-aarch64-arith-alias:%s:line=%zu",
                              args,stmt->line);
-            free(inst);return false;
+            minias_mcinst_destroy(inst);return false;
         }
         if(!ops[alu_k].unary &&
            (!parse_a64_reg(alu_tok[1],&alu_rn,&alu_nwide,&alu_sp) ||
             alu_sp)) {
             minias_set_error(as,"bad-aarch64-arith-source:%s:line=%zu",
                              args,stmt->line);
-            free(inst);return false;
+            minias_mcinst_destroy(inst);return false;
         }
         if(!parse_a64_reg(alu_tok[ops[alu_k].unary?1U:2U],
                           &alu_rm,&alu_mwide,&alu_sp) || alu_sp ||
@@ -2295,7 +2294,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
                (!ops[alu_k].unary && alu_nwide!=alu_wide)))) {
             minias_set_error(as,"bad-aarch64-arith-width:%s:line=%zu",
                              args,stmt->line);
-            free(inst);return false;
+            minias_mcinst_destroy(inst);return false;
         }
         inst->opcode=A64_MC_ARITH_ALIAS;inst->count=3U;
         inst->encoding=ops[alu_k].base;
@@ -2304,7 +2303,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
             if(!a64_shift_fields(alu_tok[2],alu_wide,false,&shift_fields)) {
                 minias_set_error(as,"bad-aarch64-neg-shift:%s:line=%zu",
                                  args,stmt->line);
-                free(inst);return false;
+                minias_mcinst_destroy(inst);return false;
             }
             inst->encoding|=shift_fields;
         }
@@ -2344,7 +2343,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
            !parse_signed_number(bit_tok[3],&width)) {
             minias_set_error(as,"bad-aarch64-bitfield-operands:%s:line=%zu",
                              args,stmt->line);
-            free(inst);return false;
+            minias_mcinst_destroy(inst);return false;
         }
         reg_bits=bit_wide?64U:32U;
         if(lsb<0 || lsb>=(int64_t)reg_bits ||
@@ -2353,7 +2352,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
              (width<1 || width>(int64_t)reg_bits-lsb))) {
             minias_set_error(as,"bad-aarch64-bitfield-range:%s:line=%zu",
                              args,stmt->line);
-            free(inst);return false;
+            minias_mcinst_destroy(inst);return false;
         }
         inst->opcode=A64_MC_BITFIELD;inst->count=4U;
         inst->encoding=base;
@@ -2379,7 +2378,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
            !parse_a64_reg(tok[1],&rn,&sourcewide,&sp) || sp ||
            wide!=sourcewide) {
             minias_set_error(as,"bad-aarch64-shift:%s:line=%zu",args,stmt->line);
-            free(inst);return false;
+            minias_mcinst_destroy(inst);return false;
         }
         inst->opcode=A64_MC_SHIFT;inst->count=3U;
         inst->encoding=shiftop;
@@ -2389,7 +2388,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
             if(sp || shiftwide!=wide) {
                 minias_set_error(as,"bad-aarch64-shift-width:%s:line=%zu",
                                  args,stmt->line);
-                free(inst);return false;
+                minias_mcinst_destroy(inst);return false;
             }
             inst->encoding|=UINT32_C(0x100);
             put_reg(&inst->operands[2],rm,wide);
@@ -2398,7 +2397,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
                amount<0 || amount>=(wide?64:32)) {
                 minias_set_error(as,"bad-aarch64-shift-immediate:%s:line=%zu",
                                  args,stmt->line);
-                free(inst);return false;
+                minias_mcinst_destroy(inst);return false;
             }
             put_immediate(&inst->operands[2],amount);
         }
@@ -2414,7 +2413,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
            lsb<0 || lsb>=(wd?64:32)) {
             minias_set_error(as,"bad-aarch64-extr:%s:line=%zu",
                              args,stmt->line);
-            free(inst);return false;
+            minias_mcinst_destroy(inst);return false;
         }
         inst->opcode=A64_MC_EXTR;inst->count=4U;
         put_reg(&inst->operands[0],rd,wd);
@@ -2433,19 +2432,19 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
            !a64_condition_code(tok[3],&cc)) {
             minias_set_error(as,"bad-aarch64-conditional-compare:%s:line=%zu",
                              args,stmt->line);
-            free(inst);return false;
+            minias_mcinst_destroy(inst);return false;
         }
         literal=parse_signed_number(tok[1],&ccmp_immediate);
         if(literal && (ccmp_immediate<0 || ccmp_immediate>31)) {
             minias_set_error(as,"bad-aarch64-ccmp-immediate:%s:line=%zu",
                              tok[1],stmt->line);
-            free(inst);return false;
+            minias_mcinst_destroy(inst);return false;
         }
         if(!literal && (!parse_a64_reg(tok[1],&rm,&otherwide,&sp) ||
                         sp || otherwide!=wide)) {
             minias_set_error(as,"bad-aarch64-ccmp-register:%s:line=%zu",
                              tok[1],stmt->line);
-            free(inst);return false;
+            minias_mcinst_destroy(inst);return false;
         }
         inst->opcode=A64_MC_COND_COMPARE;inst->count=4U;
         inst->encoding=(!strcmp(op,"ccmp")?UINT32_C(0x7a400000):
@@ -2475,12 +2474,12 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
            !a64_condition_code(tok[3],&cc)) {
             minias_set_error(as,"bad-aarch64-conditional-select:%s:line=%zu",
                              args,stmt->line);
-            free(inst);return false;
+            minias_mcinst_destroy(inst);return false;
         }
         for(i=0U;i<sizeof(select)/sizeof(select[0]);++i)
             if(!strcmp(op,select[i].name))break;
         if(i==sizeof(select)/sizeof(select[0])) {
-            free(inst);return false;
+            minias_mcinst_destroy(inst);return false;
         }
         inst->opcode=A64_MC_COND_SELECT;inst->count=3U;
         inst->encoding=select[i].base|(cc<<12U);
@@ -2496,7 +2495,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
            wd!=wn || !a64_condition_code(tok[2],&cc)) {
             minias_set_error(as,"bad-aarch64-conditional-alias:%s:line=%zu",
                              args,stmt->line);
-            free(inst);return false;
+            minias_mcinst_destroy(inst);return false;
         }
         /* GNU CNEG/CINV invert their condition and duplicate Rn in
          * CSNEG/CSINV. Reuse the identical typed conditional selector
@@ -2521,7 +2520,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
            !a64_condition_code(parts[n-1U],&cond)) {
             minias_set_error(as,"bad-aarch64-csel-alias:%s:line=%zu",
                              args,stmt->line);
-            free(inst);return false;
+            minias_mcinst_destroy(inst);return false;
         }
         inst->opcode=A64_MC_CSEL_ALIAS;
         inst->count=2U;
@@ -2542,7 +2541,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
            (da&UINT32_C(0xc00))!=0U) {
             minias_set_error(as,"bad-aarch64-simd-mvn:%s:line=%zu",
                              args,stmt->line);
-            free(inst);return false;
+            minias_mcinst_destroy(inst);return false;
         }
         inst->opcode=A64_MC_SIMD_CRYPTO;inst->count=2U;
         inst->encoding=UINT32_C(0x2e205800)|
@@ -2589,7 +2588,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
 bad_reduction:
         minias_set_error(as,"bad-aarch64-simd-reduce:%s:line=%zu",
                          args,stmt->line);
-        free(inst);return false;
+        minias_mcinst_destroy(inst);return false;
 reduction_done:;
     } else if(!strcmp(op,"mvn") &&
               split_two(args,first,sizeof(first),second,sizeof(second))) {
@@ -2599,7 +2598,7 @@ reduction_done:;
            wide!=otherwide) {
             minias_set_error(as,"bad-aarch64-mvn:%s:line=%zu",
                              args,stmt->line);
-            free(inst);return false;
+            minias_mcinst_destroy(inst);return false;
         }
         inst->opcode=A64_MC_MVN_REG;inst->count=2U;
         put_reg(&inst->operands[0],rd,wide);
@@ -2696,7 +2695,7 @@ reduction_done:;
         if(!found) {
             minias_set_error(as,"bad-aarch64-operands:%s:%s:line=%zu",
                              op,args,stmt->line);
-            free(inst);return false;
+            minias_mcinst_destroy(inst);return false;
         }
         inst->opcode=A64_MC_SYS_OP;inst->count=1U;
         inst->encoding=word&~UINT32_C(31);
@@ -2709,7 +2708,7 @@ reduction_done:;
         int64_t value;
         if(!parse_signed_number(second,&value) || value<0 || value>1) {
             minias_set_error(as,"bad-aarch64-spsel-immediate:%s:line=%zu",
-                             args,stmt->line);free(inst);return false;
+                             args,stmt->line);minias_mcinst_destroy(inst);return false;
         }
         inst->opcode=A64_MC_SYSTEM_IMM;inst->count=1U;
         inst->encoding=UINT32_C(0xd50040bf);
@@ -2722,7 +2721,7 @@ reduction_done:;
            daif_immediate<0 || daif_immediate>15) {
             minias_set_error(as,"bad-aarch64-daif-immediate:%s:line=%zu",
                              args,stmt->line);
-            free(inst);return false;
+            minias_mcinst_destroy(inst);return false;
         }
         inst->opcode=A64_MC_SYSTEM_IMM;inst->count=1U;
         inst->encoding=!strcmp(first,"daifset")?
@@ -2745,7 +2744,7 @@ reduction_done:;
             msrcode==0U)) {
             minias_set_error(as,"bad-aarch64-sysreg:%s:line=%zu",
                              args,stmt->line);
-            free(inst);return false;
+            minias_mcinst_destroy(inst);return false;
         }
         inst->opcode=read?A64_MC_MRS:A64_MC_MSR;
         inst->count=1U;
@@ -2761,7 +2760,7 @@ reduction_done:;
            !a64_vector_view(dst,&vd,&ar)) {
             minias_set_error(as,"bad-aarch64-simd-lane:%s:line=%zu",
                              args,stmt->line);
-            free(inst);return false;
+            minias_mcinst_destroy(inst);return false;
         }
         if(!strcmp(op,"dup")) {
             bool d=((ar&UINT32_C(0xc00))==UINT32_C(0xc00));
@@ -2770,7 +2769,7 @@ reduction_done:;
                !parse_a64_reg(source,&rn,&wide,&sp) || sp || wide!=d) {
                 minias_set_error(as,"bad-aarch64-dup-source:%s:line=%zu",
                                  args,stmt->line);
-                free(inst);return false;
+                minias_mcinst_destroy(inst);return false;
             }
             inst->opcode=A64_MC_SIMD_DUP;inst->count=2U;
             inst->encoding=UINT32_C(0x0e000c00)|
@@ -2784,7 +2783,7 @@ reduction_done:;
                        (element!=0U && element!=UINT32_C(0x400))) ||
                !a64_vector_view(source,&rn,&vdarr) || vdarr!=ar) {
                 minias_set_error(as,"bad-aarch64-reverse-vector:%s:line=%zu",
-                                 args,stmt->line);free(inst);return false;
+                                 args,stmt->line);minias_mcinst_destroy(inst);return false;
             }
             inst->opcode=A64_MC_SIMD_REV32;inst->count=2U;
             inst->encoding=(rev64?UINT32_C(0x0e200800):
@@ -2798,7 +2797,7 @@ reduction_done:;
         if(!a64_sys_fields(args,&bits,&rt)) {
             minias_set_error(as,"bad-aarch64-sys-fields:%s:line=%zu",
                              args,stmt->line);
-            free(inst);return false;
+            minias_mcinst_destroy(inst);return false;
         }
         inst->opcode=A64_MC_SYS_OP;inst->count=1U;
         inst->encoding=bits;
@@ -2811,7 +2810,7 @@ reduction_done:;
            !a64_casp_fields(args,&rs,&rt,&rn,&wide)){
             minias_set_error(as,"bad-aarch64-casp:%s:line=%zu",
                              args,stmt->line);
-            free(inst);return false;
+            minias_mcinst_destroy(inst);return false;
         }
         inst->opcode=A64_MC_LSE_PAIR;inst->count=3U;
         inst->encoding=(wide?UINT32_C(0x48207c00):
@@ -2838,7 +2837,7 @@ reduction_done:;
            mode!=0U || off%16!=0 || off<-4096 || off>4080) {
             minias_set_error(as,"bad-aarch64-ldg:%s:line=%zu",
                              args,stmt->line);
-            free(inst);return false;
+            minias_mcinst_destroy(inst);return false;
         }
         inst->opcode=A64_MC_MTE_STGM;inst->count=2U;
         inst->encoding=UINT32_C(0xd9600000)|
@@ -2858,7 +2857,7 @@ reduction_done:;
            offset!=0 || mode!=0U) {
             minias_set_error(as,"bad-aarch64-mte-tags:%s:line=%zu",
                              args,stmt->line);
-            free(inst);return false;
+            minias_mcinst_destroy(inst);return false;
         }
         inst->opcode=A64_MC_MTE_STGM;inst->count=2U;
         inst->encoding=!strcmp(op,"ldgm")?
@@ -2877,7 +2876,7 @@ reduction_done:;
            !a64_ins_lane(first,&vd,&imm5,&source_x)) {
             minias_set_error(as,"bad-aarch64-ins-lane:%s:line=%zu",
                              args,stmt->line);
-            free(inst);return false;
+            minias_mcinst_destroy(inst);return false;
         }
         vector_source=a64_ins_lane(second,&rn,&source_imm5,&wide);
         if(vector_source) {
@@ -2887,13 +2886,13 @@ reduction_done:;
             source_marker=source_imm5&(~source_imm5+1U);
             if(source_marker!=(imm5&(~imm5+1U))) {
                 minias_set_error(as,"bad-aarch64-ins-source-width:%s:line=%zu",
-                                 args,stmt->line);free(inst);return false;
+                                 args,stmt->line);minias_mcinst_destroy(inst);return false;
             }
             source_imm4=(source_imm5&~source_marker)>>1U;
         }else if(!parse_a64_reg(second,&rn,&wide,&sp) || sp ||
                  wide!=source_x) {
             minias_set_error(as,"bad-aarch64-ins-source:%s:line=%zu",
-                             args,stmt->line);free(inst);return false;
+                             args,stmt->line);minias_mcinst_destroy(inst);return false;
         }
         inst->opcode=A64_MC_SIMD_DUP;inst->count=2U;
         inst->encoding=(vector_source?UINT32_C(0x6e000400):
@@ -2908,7 +2907,7 @@ reduction_done:;
         bool fp_dst,fp_src,fd=false,fs=false,gd=false,gs=false,sp;
         if(!split_two(args,dst,sizeof(dst),source,sizeof(source))) {
             minias_set_error(as,"bad-aarch64-fmov:%s:line=%zu",
-                             args,stmt->line);free(inst);return false;
+                             args,stmt->line);minias_mcinst_destroy(inst);return false;
         }
         fp_dst=a64_scalar_fp_reg(dst,&rd,&fd);
         fp_src=a64_scalar_fp_reg(source,&rn,&fs);
@@ -2918,7 +2917,7 @@ reduction_done:;
            (fp_src && (!parse_a64_reg(dst,&rd,&gd,&sp) || sp ||
                        fs!=gd))) {
             minias_set_error(as,"bad-aarch64-fmov:%s:line=%zu",
-                             args,stmt->line);free(inst);return false;
+                             args,stmt->line);minias_mcinst_destroy(inst);return false;
         }
         inst->opcode=A64_MC_SIMD_DUP;inst->count=2U;
         inst->encoding=fp_dst?(fd?UINT32_C(0x9e670000):
@@ -2944,14 +2943,14 @@ reduction_done:;
            !a64_vector_view(tok[1],&rn,&sa) || da!=sa ||
            !parse_signed_number(tok[2],&shift)) {
             minias_set_error(as,"bad-aarch64-simd-shift:%s:line=%zu",
-                             args,stmt->line);free(inst);return false;
+                             args,stmt->line);minias_mcinst_destroy(inst);return false;
         }
         bits=8U<<((da&UINT32_C(0xc00))>>10U);
         if((right?(shift<1 || shift>(int64_t)bits):
                    (shift<0 || shift>=(int64_t)bits)) ||
            (bits==64U && (da&UINT32_C(0x40000000))==0U)) {
             minias_set_error(as,"bad-aarch64-simd-shift-range:%s:line=%zu",
-                             args,stmt->line);free(inst);return false;
+                             args,stmt->line);minias_mcinst_destroy(inst);return false;
         }
         encoded_shift=right?2U*bits-(unsigned)shift:bits+(unsigned)shift;
         base=!strcmp(op,"ushr")?UINT32_C(0x2f000400):
@@ -2974,12 +2973,12 @@ reduction_done:;
                strcmp(args,"15")!=0) {
                 minias_set_error(as,"bad-aarch64-isb:%s:line=%zu",
                                  args,stmt->line);
-                free(inst);return false;
+                minias_mcinst_destroy(inst);return false;
             }
         } else if(!a64_barrier_option(args,&barrier)) {
             minias_set_error(as,"bad-aarch64-barrier:%s:line=%zu",
                              args,stmt->line);
-            free(inst);return false;
+            minias_mcinst_destroy(inst);return false;
         }
         inst->opcode=A64_MC_BARRIER;
         inst->encoding=(is_isb?UINT32_C(0xd50330df):
@@ -3009,14 +3008,14 @@ reduction_done:;
            !parse_a64_reg(tok[1],&rn,&wn,&sp) || sp || wn ||
            !parse_a64_reg(tok[2],&rm,&wm,&sp) || sp) {
             minias_set_error(as,"bad-aarch64-crc32:%s:line=%zu",args,stmt->line);
-            free(inst);return false;
+            minias_mcinst_destroy(inst);return false;
         }
         for(k=0U;k<sizeof(crc)/sizeof(crc[0]);++k)
             if(!strcmp(op,crc[k].name))break;
         if(k==sizeof(crc)/sizeof(crc[0]) ||
            wm!=crc[k].xsrc) {
             minias_set_error(as,"bad-aarch64-crc-width:%s:line=%zu",args,stmt->line);
-            free(inst);return false;
+            minias_mcinst_destroy(inst);return false;
         }
         inst->opcode=A64_MC_ARITH_ALIAS;inst->count=3U;
         inst->encoding=crc[k].base;
@@ -3039,7 +3038,7 @@ reduction_done:;
            !a64_vector_view(tok[1],&rn,&sa) ||
            da!=UINT32_C(0x40000000) || sa!=da) {
             minias_set_error(as,"bad-aarch64-aes:%s:line=%zu",args,stmt->line);
-            free(inst);return false;
+            minias_mcinst_destroy(inst);return false;
         }
         for(k=0U;k<sizeof(aes)/sizeof(aes[0]);++k)
             if(!strcmp(op,aes[k].name))break;
@@ -3103,7 +3102,7 @@ reduction_done:;
                  (da&UINT32_C(0xc00))!=0U)) {
                 minias_set_error(as,"bad-aarch64-simd-logic:%s:line=%zu",
                                  args,stmt->line);
-                free(inst);return false;
+                minias_mcinst_destroy(inst);return false;
             }
             for(i=0U;i<sizeof(table)/sizeof(table[0]);++i)
                 if(!strcmp(op,table[i].name))break;
@@ -3120,7 +3119,7 @@ reduction_done:;
         }else {
             minias_set_error(as,"bad-aarch64-operands:%s:%s:line=%zu",
                              op,args,stmt->line);
-            free(inst);return false;
+            minias_mcinst_destroy(inst);return false;
         }
     } else if(!strcmp(op,"ext")) {
         char tok[4][384];unsigned n,rd,rn,rm;
@@ -3135,7 +3134,7 @@ reduction_done:;
            index>=((da&UINT32_C(0x40000000))?16:8)) {
             minias_set_error(as,"bad-aarch64-ext:%s:line=%zu",
                              args,stmt->line);
-            free(inst);return false;
+            minias_mcinst_destroy(inst);return false;
         }
         inst->opcode=A64_MC_SIMD_EXT;inst->count=4U;
         inst->encoding=UINT32_C(0x2e000000)|
@@ -3154,7 +3153,7 @@ reduction_done:;
            !parse_signed_number(text,&number)) {
             minias_set_error(as,"bad-aarch64-movi:%s:line=%zu",
                              args,stmt->line);
-            free(inst);return false;
+            minias_mcinst_destroy(inst);return false;
         }
         /* GNU MOVI Vd.2D, #bitmask64 forms encode one bit per repeated
          * 64-bit byte: each byte MUST be 0x00 or 0xff. Reuse existing
@@ -3169,7 +3168,7 @@ reduction_done:;
                 if(octet!=0U && octet!=UINT8_MAX) {
                     minias_set_error(as,"bad-aarch64-movi-2d-mask:%s:line=%zu",
                                      args,stmt->line);
-                    free(inst);return false;
+                    minias_mcinst_destroy(inst);return false;
                 }
                 if(octet==UINT8_MAX)simd_imm|=1U<<k;
             }
@@ -3185,7 +3184,7 @@ reduction_done:;
         }else {
             minias_set_error(as,"bad-aarch64-movi-size:%s:line=%zu",
                              args,stmt->line);
-            free(inst);return false;
+            minias_mcinst_destroy(inst);return false;
         }
         inst->opcode=A64_MC_SIMD_IMM;inst->count=1U;
         inst->encoding=base|
@@ -3201,7 +3200,7 @@ reduction_done:;
            n!=(store?4U:3U)) {
             minias_set_error(as,"bad-aarch64-exclusive-pair:%s:line=%zu",
                              args,stmt->line);
-            free(inst);return false;
+            minias_mcinst_destroy(inst);return false;
         }
         k=store?1U:0U;
         if((store && (!parse_a64_reg(tok[0],&rs,&ws,&sp) || sp || ws)) ||
@@ -3212,7 +3211,7 @@ reduction_done:;
            off!=0 || mode!=0U) {
             minias_set_error(as,"bad-aarch64-exclusive-pair:%s:line=%zu",
                              args,stmt->line);
-            free(inst);return false;
+            minias_mcinst_destroy(inst);return false;
         }
         inst->opcode=A64_MC_EXCLUSIVE_PAIR;inst->count=4U;
         inst->encoding=(wt?UINT32_C(0xc8200000):
@@ -3240,7 +3239,7 @@ reduction_done:;
            tabarr!=UINT32_C(0x40000000) ||
            indexarr!=dstarr || count<1U || count>4U) {
             minias_set_error(as,"bad-aarch64-table-lookup:%s:line=%zu",
-                             args,stmt->line);free(inst);return false;
+                             args,stmt->line);minias_mcinst_destroy(inst);return false;
         }
         inst->opcode=A64_MC_SIMD_LOGIC;inst->count=3U;
         inst->encoding=UINT32_C(0x0e000000)|
@@ -3288,7 +3287,7 @@ reduction_done:;
         }
         if(!valid) {
             minias_set_error(as,"bad-aarch64-crypto-poly-sha1:%s:line=%zu",
-                             args,stmt->line);free(inst);return false;
+                             args,stmt->line);minias_mcinst_destroy(inst);return false;
         }
         inst->opcode=tri?A64_MC_SIMD_LOGIC:A64_MC_SIMD_CRYPTO;
         inst->count=tri?3U:2U;
@@ -3314,7 +3313,7 @@ reduction_done:;
            !a64_vector_view(arg[2],&rm,&shape) ||
            shape!=UINT32_C(0x40000800)) {
             minias_set_error(as,"bad-aarch64-sha1-round:%s:line=%zu",
-                             args,stmt->line);free(inst);return false;
+                             args,stmt->line);minias_mcinst_destroy(inst);return false;
         }
         inst->opcode=A64_MC_SIMD_LOGIC;inst->count=3U;
         inst->encoding=!strcmp(op,"sha1c")?UINT32_C(0x5e000000):
@@ -3332,7 +3331,7 @@ reduction_done:;
            !a64_scalar_fp_reg(dst,&rd,&dw) || dw ||
            !a64_scalar_fp_reg(src,&rn,&nw) || nw) {
             minias_set_error(as,"bad-aarch64-sha1h:%s:line=%zu",
-                             args,stmt->line);free(inst);return false;
+                             args,stmt->line);minias_mcinst_destroy(inst);return false;
         }
         inst->opcode=A64_MC_SIMD_CRYPTO;inst->count=2U;
         inst->encoding=UINT32_C(0x5e280800);
@@ -3362,7 +3361,7 @@ reduction_done:;
         }
         if(!valid) {
             minias_set_error(as,"bad-aarch64-sha256:%s:line=%zu",
-                             args,stmt->line);free(inst);return false;
+                             args,stmt->line);minias_mcinst_destroy(inst);return false;
         }
         inst->opcode=tri?A64_MC_SIMD_LOGIC:A64_MC_SIMD_CRYPTO;
         inst->count=tri?3U:2U;
@@ -3384,7 +3383,7 @@ reduction_done:;
         if(!split_two(args,dst,sizeof(dst),source,sizeof(source)) ||
            !a64_ins_lane(source,&rn,&lane,&is_x)) {
             minias_set_error(as,"bad-aarch64-mov-lane:%s:line=%zu",
-                             args,stmt->line);free(inst);return false;
+                             args,stmt->line);minias_mcinst_destroy(inst);return false;
         }
         if(is_fp) {
             if(!a64_scalar_fp_d(dst,&rd) || !is_x)goto invalid_lane;
@@ -3414,7 +3413,7 @@ reduction_done:;
 invalid_lane:
         minias_set_error(as,"bad-aarch64-mov-lane:%s:line=%zu",
                          args,stmt->line);
-        free(inst);return false;
+        minias_mcinst_destroy(inst);return false;
 lane_complete:;
     } else if(!strcmp(op,"stg") || !strcmp(op,"stzg") ||
               !strcmp(op,"st2g") || !strcmp(op,"stz2g")) {
@@ -3427,19 +3426,19 @@ lane_complete:;
            !parse_a64_reg(tok[0],&rt,&wide,&sp) || sp || !wide ||
            !parse_a64_mem(tok[1],&rn,&off,&mode)) {
             minias_set_error(as,"bad-aarch64-stz2g:%s:line=%zu",
-                             args,stmt->line);free(inst);return false;
+                             args,stmt->line);minias_mcinst_destroy(inst);return false;
         }
         if(n==3U) {
             if(mode!=0U || off!=0 ||
                !parse_signed_number(tok[2],&off)) {
                 minias_set_error(as,"bad-aarch64-stz2g-post:%s:line=%zu",
-                                 args,stmt->line);free(inst);return false;
+                                 args,stmt->line);minias_mcinst_destroy(inst);return false;
             }
             mode=2U;
         }
         if(off%16!=0 || off<-4096 || off>4080){
             minias_set_error(as,"bad-aarch64-stz2g-offset:%s:line=%zu",
-                             args,stmt->line);free(inst);return false;
+                             args,stmt->line);minias_mcinst_destroy(inst);return false;
         }
         {
             uint32_t base=!strcmp(op,"stg")?UINT32_C(0xd9200000):
@@ -3478,12 +3477,12 @@ lane_complete:;
             size_t stride=argument_length+1U;
             if(stride>SIZE_MAX/4U || stride>(1024U*1024U)) {
                 minias_set_error(as,"aarch64-operand-text-too-large:line=%zu",
-                                 stmt->line);free(inst);return false;
+                                 stmt->line);minias_mcinst_destroy(inst);return false;
             }
             large=malloc(stride*4U);
             if(!large) {
                 minias_set_error(as,"out-of-memory:aarch64-operand-text");
-                free(large);free(inst);return false;
+                free(large);minias_mcinst_destroy(inst);return false;
             }
             for(k=0U;k<4U;++k) {
                 tokens[k]=large+k*stride;
@@ -3498,7 +3497,7 @@ lane_complete:;
              * syntax must not be silently normalized or misattributed. */
             minias_set_error(as,"bad-aarch64-wide-immediate:%s:line=%zu",
                              args,stmt->line);
-            free(large);free(inst);return false;
+            free(large);minias_mcinst_destroy(inst);return false;
         }
         modifier=a64_movw_relocation(tokens[1],&movw_expr,&movw_fixup,
                                       &shift,&constant,&bits,&signed_negative);
@@ -3506,7 +3505,7 @@ lane_complete:;
            (!modifier && !parse_imm16(tokens[1],&imm16))) {
             minias_set_error(as,"bad-aarch64-wide-immediate:%s:line=%zu",
                              args,stmt->line);
-            free(large);free(inst);return false;
+            free(large);minias_mcinst_destroy(inst);return false;
         }
         if(modifier && constant)
             imm16=(unsigned)((signed_negative?~bits:bits)>>(16U*shift))&
@@ -3518,7 +3517,7 @@ lane_complete:;
                raw_shift<0 || raw_shift>=(wide?64:32) ||
                (raw_shift%16)!=0) {
                 minias_set_error(as,"bad-aarch64-mov-shift:line=%zu",stmt->line);
-                free(large);free(inst);return false;
+                free(large);minias_mcinst_destroy(inst);return false;
             }
             shift=(unsigned)raw_shift/16U;
         }
@@ -3533,7 +3532,7 @@ lane_complete:;
         if(modifier && !constant) {
             if(!a64_attach_expr(inst,1U,&movw_expr)) {
                 minias_set_error(as,"out-of-memory:a64-movw-reloc");
-                free(large);free(inst);return false;
+                free(large);minias_mcinst_destroy(inst);return false;
             }
         }else put_immediate(&inst->operands[1],(int64_t)imm16);
         free(large);
@@ -3561,7 +3560,7 @@ lane_complete:;
         }else {
             minias_set_error(as,"bad-aarch64-hint:%s:line=%zu",
                              args,stmt->line);
-            free(inst);return false;
+            minias_mcinst_destroy(inst);return false;
         }
     } else if (strcmp(op, "eret") == 0 && *args == '\0') {
         /* ELR_ELx exception return is a fixed architectural encoding.
@@ -3592,7 +3591,7 @@ lane_complete:;
            (da&UINT32_C(0xc00))!=0U) {
             minias_set_error(as,"bad-aarch64-mov-vector:%s:line=%zu",
                              args,stmt->line);
-            free(inst);return false;
+            minias_mcinst_destroy(inst);return false;
         }
         inst->opcode=A64_MC_SIMD_MOVE;inst->count=2U;
         inst->encoding=(da&UINT32_C(0x40000000))?
@@ -3636,14 +3635,14 @@ lane_complete:;
                (!reg64 && signed_value<INT32_MIN)) {
                 minias_set_error(as,"bad-aarch64-mov-negative:%s:line=%zu",
                                  second,stmt->line);
-                free(inst);return false;
+                minias_mcinst_destroy(inst);return false;
             }
             value=((uint64_t)signed_value)&mask;
         }else if(!minias_eval_u64_expression(literal,&value) ||
                  (!reg64 && (value>>32U)!=0U)) {
             minias_set_error(as,"bad-aarch64-mov-constant:%s:line=%zu",
                              second,stmt->line);
-            free(inst);return false;
+            minias_mcinst_destroy(inst);return false;
         }
         for(j=0U;j<limit;++j) {
             uint64_t piece=UINT64_C(0xffff)<<(j*16U);
@@ -3674,7 +3673,7 @@ lane_complete:;
         }else {
             minias_set_error(as,"bad-aarch64-mov-not-single-encoding:%s:line=%zu",
                              second,stmt->line);
-            free(inst);return false;
+            minias_mcinst_destroy(inst);return false;
         }
     } else if (strcmp(op, "brk") == 0 && parse_imm16(args,&imm)) {
         inst->opcode=A64_MC_BRK;inst->count=1U;
@@ -3695,19 +3694,19 @@ lane_complete:;
         if (!minias_parse_symbol_addend(args, &expr)) {
             minias_set_error(as, "bad-aarch64-branch-target:%s:line=%zu",
                              args, stmt->line);
-            free(inst);
+            minias_mcinst_destroy(inst);
             return false;
         }
         if ((expr.addend & 3) != 0) {
             minias_set_error(as, "bad-aarch64-branch-addend:%s:line=%zu",
                              args, stmt->line);
-            free(inst);
+            minias_mcinst_destroy(inst);
             return false;
         }
         inst->operands[0].symbol = malloc(sizeof(expr));
         if (inst->operands[0].symbol == NULL) {
             minias_set_error(as, "out-of-memory:aarch64-symbol-mcinst");
-            free(inst);
+            minias_mcinst_destroy(inst);
             return false;
         }
         *inst->operands[0].symbol = expr;
@@ -3723,12 +3722,12 @@ lane_complete:;
             (expr.addend & 3) != 0) {
             minias_set_error(as,"bad-aarch64-condbranch:%s:line=%zu",
                              args,stmt->line);
-            free(inst);return false;
+            minias_mcinst_destroy(inst);return false;
         }
         inst->operands[1].symbol=malloc(sizeof(expr));
         if(!inst->operands[1].symbol) {
             minias_set_error(as,"out-of-memory:aarch64-condbranch-symbol");
-            free(inst);return false;
+            minias_mcinst_destroy(inst);return false;
         }
         *inst->operands[1].symbol=expr;
         inst->opcode=strcmp(op,"cbz")==0?A64_MC_CBZ:A64_MC_CBNZ;
@@ -3748,7 +3747,7 @@ lane_complete:;
            (expr.addend&3)!=0 || !a64_attach_expr(inst,2U,&expr)) {
             minias_set_error(as,"bad-aarch64-testbranch:%s:line=%zu",
                              args,stmt->line);
-            free(inst);return false;
+            minias_mcinst_destroy(inst);return false;
         }
         inst->opcode=!strcmp(op,"tbz")?A64_MC_TBZ:A64_MC_TBNZ;
         inst->count=3U;
@@ -3762,7 +3761,7 @@ lane_complete:;
                (expr.addend&3)!=0 || !a64_attach_expr(inst,0U,&expr)) {
                 minias_set_error(as,"bad-aarch64-conditional:%s:line=%zu",
                                  args,stmt->line);
-                free(inst);return false;
+                minias_mcinst_destroy(inst);return false;
             }
             inst->opcode=A64_MC_BCOND;inst->count=1U;
             inst->encoding=cond;
@@ -3773,7 +3772,7 @@ lane_complete:;
         } else {
             minias_set_error(as,"bad-aarch64-operands:%s:%s:line=%zu",
                              op,args,stmt->line);
-            free(inst);return false;
+            minias_mcinst_destroy(inst);return false;
         }
     }
     /*
@@ -3788,13 +3787,13 @@ lane_complete:;
         MiniAsMCOperand *slot;
         if(inst->count>=5U) {
             minias_set_error(as,"aarch64-deferred-operand-capacity");
-            free(inst);return false;
+            minias_mcinst_destroy(inst);return false;
         }
         slot=&inst->operands[inst->count];
         slot->difference=malloc(sizeof(deferred_difference));
         if(!slot->difference) {
             minias_set_error(as,"out-of-memory:aarch64-deferred-difference");
-            free(inst);return false;
+            minias_mcinst_destroy(inst);return false;
         }
         *slot->difference=deferred_difference;
         slot->kind=MINIAS_MC_SYMBOL_DIFFERENCE;
@@ -4859,66 +4858,65 @@ static bool code_alignment(MiniAs *as, int section, size_t amount) {
     return true;
 }
 
-static uint32_t aarch64_fixup_relocation_type(MiniAsFixupKind kind,
-                                               unsigned width) {
-    switch (kind) {
-        case MINIAS_FIXUP_ABS:
-            return width == 4U ? AARCH64_R_ABS32 :
-                   width == 8U ? AARCH64_R_ABS64 : 0U;
-        case MINIAS_FIXUP_PREL32:
-            return width == 4U ? AARCH64_R_PREL32 : 0U;
-        case MINIAS_FIXUP_PREL64:
-            return width == 8U ? AARCH64_R_PREL64 : 0U;
-        case MINIAS_FIXUP_A64_CALL26:
-            return width == 4U ? AARCH64_R_CALL26 : 0U;
-        case MINIAS_FIXUP_A64_JUMP26:
-            return width == 4U ? AARCH64_R_JUMP26 : 0U;
-        case MINIAS_FIXUP_A64_CONDBR19:
-            return width == 4U ? AARCH64_R_CONDBR19 : 0U;
-        case MINIAS_FIXUP_A64_LD_PREL_LO19:
-            return width == 4U ? AARCH64_R_LD_PREL_LO19 : 0U;
-        case MINIAS_FIXUP_A64_TSTBR14:
-            return width == 4U ? AARCH64_R_TSTBR14 : 0U;
-        case MINIAS_FIXUP_A64_ADR_LO21:
-            return width == 4U ? AARCH64_R_ADR_PREL_LO21 : 0U;
-        case MINIAS_FIXUP_A64_ADRP_HI21:
-            return width == 4U ? AARCH64_R_ADR_PREL_PG_HI21 : 0U;
-        case MINIAS_FIXUP_A64_ADR_GOT_PAGE:
-            return width == 4U ? AARCH64_R_ADR_GOT_PAGE : 0U;
-        case MINIAS_FIXUP_A64_LD64_GOT_LO12:
-            return width == 4U ? AARCH64_R_LD64_GOT_LO12_NC : 0U;
-        case MINIAS_FIXUP_A64_ADD_LO12:
-            return width == 4U ? AARCH64_R_ADD_ABS_LO12_NC : 0U;
-        case MINIAS_FIXUP_A64_LDST8_LO12:
-            return width == 4U ? AARCH64_R_LDST8_ABS_LO12_NC : 0U;
-        case MINIAS_FIXUP_A64_LDST16_LO12:
-            return width == 4U ? AARCH64_R_LDST16_ABS_LO12_NC : 0U;
-        case MINIAS_FIXUP_A64_LDST32_LO12:
-            return width == 4U ? AARCH64_R_LDST32_ABS_LO12_NC : 0U;
-        case MINIAS_FIXUP_A64_LDST64_LO12:
-            return width == 4U ? AARCH64_R_LDST64_ABS_LO12_NC : 0U;
-        case MINIAS_FIXUP_A64_MOVW_G0:
-            return width == 4U ? AARCH64_R_MOVW_UABS_G0 : 0U;
-        case MINIAS_FIXUP_A64_MOVW_G0_NC:
-            return width == 4U ? AARCH64_R_MOVW_UABS_G0_NC : 0U;
-        case MINIAS_FIXUP_A64_MOVW_G1:
-            return width == 4U ? AARCH64_R_MOVW_UABS_G1 : 0U;
-        case MINIAS_FIXUP_A64_MOVW_G1_NC:
-            return width == 4U ? AARCH64_R_MOVW_UABS_G1_NC : 0U;
-        case MINIAS_FIXUP_A64_MOVW_G2:
-            return width == 4U ? AARCH64_R_MOVW_UABS_G2 : 0U;
-        case MINIAS_FIXUP_A64_MOVW_G2_NC:
-            return width == 4U ? AARCH64_R_MOVW_UABS_G2_NC : 0U;
-        case MINIAS_FIXUP_A64_MOVW_G3:
-            return width == 4U ? AARCH64_R_MOVW_UABS_G3 : 0U;
-        case MINIAS_FIXUP_A64_MOVW_SG0:
-            return width == 4U ? AARCH64_R_MOVW_SABS_G0 : 0U;
-        case MINIAS_FIXUP_A64_MOVW_SG1:
-            return width == 4U ? AARCH64_R_MOVW_SABS_G1 : 0U;
-        case MINIAS_FIXUP_A64_MOVW_SG2:
-            return width == 4U ? AARCH64_R_MOVW_SABS_G2 : 0U;
-        default: return 0U;
+/* AArch64 ELF relocation forms simultaneously define the semantic fixup
+ * capability and the ABI number. Width is explicit: pretending ABS32 and
+ * ABS64 are interchangeable caused earlier cross-target policy leaks. */
+static const struct {
+    MiniAsFixupKind kind;
+    unsigned width;
+    uint32_t relocation;
+} aarch64_fixup_forms[] = {
+    {MINIAS_FIXUP_ABS, 4U, AARCH64_R_ABS32},
+    {MINIAS_FIXUP_ABS, 8U, AARCH64_R_ABS64},
+    {MINIAS_FIXUP_PREL32, 4U, AARCH64_R_PREL32},
+    {MINIAS_FIXUP_PREL64, 8U, AARCH64_R_PREL64},
+    {MINIAS_FIXUP_A64_CALL26, 4U, AARCH64_R_CALL26},
+    {MINIAS_FIXUP_A64_JUMP26, 4U, AARCH64_R_JUMP26},
+    {MINIAS_FIXUP_A64_CONDBR19, 4U, AARCH64_R_CONDBR19},
+    {MINIAS_FIXUP_A64_LD_PREL_LO19, 4U, AARCH64_R_LD_PREL_LO19},
+    {MINIAS_FIXUP_A64_TSTBR14, 4U, AARCH64_R_TSTBR14},
+    {MINIAS_FIXUP_A64_ADR_LO21, 4U, AARCH64_R_ADR_PREL_LO21},
+    {MINIAS_FIXUP_A64_ADRP_HI21, 4U, AARCH64_R_ADR_PREL_PG_HI21},
+    {MINIAS_FIXUP_A64_ADR_GOT_PAGE, 4U, AARCH64_R_ADR_GOT_PAGE},
+    {MINIAS_FIXUP_A64_LD64_GOT_LO12, 4U, AARCH64_R_LD64_GOT_LO12_NC},
+    {MINIAS_FIXUP_A64_ADD_LO12, 4U, AARCH64_R_ADD_ABS_LO12_NC},
+    {MINIAS_FIXUP_A64_LDST8_LO12, 4U, AARCH64_R_LDST8_ABS_LO12_NC},
+    {MINIAS_FIXUP_A64_LDST16_LO12, 4U, AARCH64_R_LDST16_ABS_LO12_NC},
+    {MINIAS_FIXUP_A64_LDST32_LO12, 4U, AARCH64_R_LDST32_ABS_LO12_NC},
+    {MINIAS_FIXUP_A64_LDST64_LO12, 4U, AARCH64_R_LDST64_ABS_LO12_NC},
+    {MINIAS_FIXUP_A64_MOVW_G0, 4U, AARCH64_R_MOVW_UABS_G0},
+    {MINIAS_FIXUP_A64_MOVW_G0_NC, 4U, AARCH64_R_MOVW_UABS_G0_NC},
+    {MINIAS_FIXUP_A64_MOVW_G1, 4U, AARCH64_R_MOVW_UABS_G1},
+    {MINIAS_FIXUP_A64_MOVW_G1_NC, 4U, AARCH64_R_MOVW_UABS_G1_NC},
+    {MINIAS_FIXUP_A64_MOVW_G2, 4U, AARCH64_R_MOVW_UABS_G2},
+    {MINIAS_FIXUP_A64_MOVW_G2_NC, 4U, AARCH64_R_MOVW_UABS_G2_NC},
+    {MINIAS_FIXUP_A64_MOVW_G3, 4U, AARCH64_R_MOVW_UABS_G3},
+    {MINIAS_FIXUP_A64_MOVW_SG0, 4U, AARCH64_R_MOVW_SABS_G0},
+    {MINIAS_FIXUP_A64_MOVW_SG1, 4U, AARCH64_R_MOVW_SABS_G1},
+    {MINIAS_FIXUP_A64_MOVW_SG2, 4U, AARCH64_R_MOVW_SABS_G2}
+};
+
+static bool aarch64_lookup_fixup_form(MiniAsFixupKind kind, unsigned width,
+                                     uint32_t *relocation) {
+    size_t i;
+    for (i = 0U; i < sizeof(aarch64_fixup_forms) / sizeof(aarch64_fixup_forms[0]); ++i) {
+        if (aarch64_fixup_forms[i].kind != kind ||
+            aarch64_fixup_forms[i].width != width) continue;
+        if (relocation != NULL) *relocation = aarch64_fixup_forms[i].relocation;
+        return true;
     }
+    return false;
+}
+
+static bool aarch64_supports_fixup(MiniAsFixupKind kind, unsigned width) {
+    return aarch64_lookup_fixup_form(kind, width, NULL);
+}
+
+static uint32_t aarch64_fixup_relocation_type(MiniAsFixupKind kind,
+                                              unsigned width) {
+    uint32_t relocation = 0U;
+    (void)aarch64_lookup_fixup_form(kind, width, &relocation);
+    return relocation;
 }
 
 static bool validate(MiniAs *as) {
@@ -4990,6 +4988,7 @@ static const MiniAsTargetOps ops = {
     .measure_mcinst = aarch64_measure_mcinst,
     .encode = encode,
     .append_code_alignment = code_alignment,
+    .supports_fixup = aarch64_supports_fixup,
     .fixup_relocation_type = aarch64_fixup_relocation_type,
     .parse_named_relocation = a64_named_relocation,
     .validate_output = validate,

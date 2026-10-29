@@ -227,10 +227,16 @@ typedef struct MiniAsMCInst {
     unsigned opcode;
     uint32_t encoding; /* target-owned base machine-bit template */
     unsigned count;
+    /* Lifetime capacity is independent from successfully parsed operands.
+     * A partially parsed instruction still owns initialized slots. */
+    unsigned capacity;
     /* Allocate exactly the number of operands required by the target.
      * RV64 vector ops may have six; future targets need not resize MCInst. */
     MiniAsMCOperand operands[];
 } MiniAsMCInst;
+
+MiniAsMCInst *minias_mcinst_alloc(unsigned capacity);
+void minias_mcinst_destroy(MiniAsMCInst *mcinst);
 
 typedef struct MiniAsConditional {
     bool parent_active;
@@ -642,6 +648,21 @@ typedef enum MiniAsLiteralPoolOrder {
     MINIAS_LITERAL_POOL_WIDTH_ASC
 } MiniAsLiteralPoolOrder;
 
+/* A target-selected, typed encoding alternative for one retained MCInst.
+ * required_size is the smallest currently legal encoding after symbol/range
+ * checks; terminal_size is the monotonic long alternative available when
+ * an earlier branch forces this Fragment to grow.  Both are measured from
+ * the retained instruction, never recovered from its mnemonic spelling.
+ * The final encoding is determined uniquely by retained MCInst and size. */
+typedef struct MiniAsTargetRelaxPlan {
+    uint32_t current_size;
+    uint32_t required_size;
+    uint32_t terminal_size;
+} MiniAsTargetRelaxPlan;
+
+bool minias_query_target_relax_plan(MiniAs *,const MiniAsStmt *,
+                                   MiniAsTargetRelaxPlan *);
+
 MiniAsCfiABI minias_cfi_abi(const MiniAs *);
 
 typedef struct MiniAsTargetOps {
@@ -674,11 +695,14 @@ typedef struct MiniAsTargetOps {
     bool (*parse_mcinst)(MiniAs *, MiniAsStmt *);
     bool (*measure_mcinst)(MiniAs *, const MiniAsStmt *, uint32_t *);
     bool (*encode)(MiniAs *, const MiniAsStmt *);
-    /* Layout owns iteration; each target owns encoding alternatives and
-     * target-specific range checks. Return the next encoding size. */
-    bool (*relax_instruction)(MiniAs *, const MiniAsStmt *, uint32_t *);
-    bool (*expanded_instruction_size)(const char *, uint32_t, uint32_t *);
+    /* One typed TargetRelaxPlan supplies both the range requirement and
+     * the longest legal encoding. No Common mnemonic/argument reparse. */
+    bool (*plan_instruction_relaxation)(MiniAs *,const MiniAsStmt *,
+                                        MiniAsTargetRelaxPlan *);
     bool (*append_code_alignment)(MiniAs *, int, size_t);
+    /* A semantic capability: never infer target support from an ELF
+     * relocation number, where zero may be a valid numeric enumeration. */
+    bool (*supports_fixup)(MiniAsFixupKind, unsigned);
     uint32_t (*fixup_relocation_type)(MiniAsFixupKind, unsigned);
     /* GNU named relocation spelling is ISA-owned; Common only places the
      * semantic fixup at the explicit section offset. */

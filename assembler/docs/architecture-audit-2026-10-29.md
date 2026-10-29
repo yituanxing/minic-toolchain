@@ -85,3 +85,40 @@ an implementation shortcut survived after a shared ownership model existed.
 Before merging this batch: report effective **production-code** additions
 plus deletions separately from tests/CI/docs, require exact-head fast CI and
 original 3×7 strict summary, preserve Draft PR #667 and one MiniAS branch.
+
+## Batch F implementation review — worktree after `16d045092`
+
+This section records the **uncommitted Batch F implementation and CI design**,
+not a new exact-head acceptance result. Changes in the working tree must be
+reviewed as one architectural batch; earlier successes at `6eea437b8` do
+not certify the later source tree.
+
+| Seam | Batch F implementation | Still requires proof |
+|---|---|---|
+| Target branch growth | `MiniAsTargetRelaxPlan` carries `current_size`, `required_size`, and `terminal_size`; Common MCLayout validates the retained MCInst and monotonic growth rather than calling a mnemonic-string size callback | Four Target encode/measure consistency, genuine GNU branch boundaries, source-reparse trace |
+| ELF relocation decisions | `TargetOps.supports_fixup(kind,width)` makes capability explicit; Common MCExpr no longer treats numeric relocation type zero as a universal unsupported sentinel | Cross-target ELF semantic deltas, paired ADD/SUB and PREL policies, unknown relocation semantics fail closed |
+| MCInst ownership | Allocator/destructor track operand `capacity` separately from count, permitting cleanup of partially parsed nested operands | Lifetime/partial-parse/failure-unwind regressions and sanitizer results on the exact commit |
+| RV LI instruction selection | `rv_materialize_li` now constructs one instruction-word plan for both size measurement and encoding, removing a parallel heuristic | RV32/RV64 signed boundaries, runtime value reconstruction and real GNU semantic oracle (GNU's instruction sequence need not be byte-identical) |
+| Four-target GNU evidence | One fast RV/A64 contract and one x86/Loong GNU oracle add shared 160-fragment deferred DATA/ORG/RELA stress; x86 also checks short/near branch growth | Execute with all three cross GNU assemblers in CI; only local x86 GNU stress was confirmed at this audit |
+| Object semantic comparator | Mutation checks now cover relocation order, RISC-V ALIGN/RELAX addends, additive relocation fields, section references, symbol attributes and ELF header metadata | Compare genuine original Kbuild GNU objects, not just candidate assembly or synthetic probes |
+| PR exact-head guarantee | All three fast PR jobs now explicitly check out `pull_request.head.sha` (or `github.sha` for dispatch) and assert `git rev-parse HEAD` before compiling | Obtain successful GitHub Actions job IDs on the newly pushed source commit |
+| Shared ELF consumers | Existing MiniObjcopy/Strip push gate retains Reader/AR/NM, Objcopy A0/A1 and Strip A0 checks; explicit `[miniobjcopy-strip-regressions]` runs them even if a change is isolated to MiniAS's own ELF writer | Read exact-commit six-consumer verdict rather than inferring it from routing or historical green |
+
+The dedicated RV32/RV64 LI probe locally reconstructed 27 expected register
+values and confirmed emitted-word counts. Local cross GNU tools were absent;
+the fast RV CI job now requires `riscv64-linux-gnu-as` before invoking the
+oracle so a GNU comparison cannot be silently reported as optional.
+
+The current canonical Linux replay remains the **single** pinned original
+GNU Kbuild 3-target × 7-shard, `aggregate --strict`, 9,645-candidate gate.
+It establishes original `.s` assembly coverage, never GNU ELF equality,
+Image linkage, or QEMU/P1 by itself. The legacy generated replay is retained
+for diagnostics but its aggregate is also strict. A commit message with
+`[minias-replay-3x7] [miniobjcopy-strip-regressions]` selects the canonical
+21-shard scan and six shared-ELF consumers on the **same one branch**, without
+triggering unrelated heavy Linux/Objcopy workflows.
+
+**Next exact-head acceptance, not yet executed for Batch F:** fast GNU jobs
+for RV64, x86-64, AArch64 and LoongArch64; 21 pinned shards and strict
+aggregate; canonical MiniObjcopy/Strip regressions. Preserve the PR as Draft
+until the associated commit SHA, test counts and run URLs are recorded.

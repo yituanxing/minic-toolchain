@@ -568,6 +568,37 @@ static bool minias_resolve_deferred_data(MiniAs *as) {
     return false;
 }
 
+/* The sole Common validation gate for Target encoding alternatives.
+ * Source replay and MCLayout both ask the same retained typed MCInst;
+ * neither side reparses a mnemonic or guesses its terminal instruction size. */
+bool minias_query_target_relax_plan(MiniAs *as,const MiniAsStmt *stmt,
+                                   MiniAsTargetRelaxPlan *plan) {
+    if(as==NULL || stmt==NULL || plan==NULL ||
+       stmt->kind!=MINIAS_STMT_INSN || stmt->mcinst==NULL) {
+        if(as!=NULL)minias_set_error(as,"invalid-target-relaxation-owner");
+        return false;
+    }
+    plan->current_size=stmt->size;
+    plan->required_size=stmt->size;
+    plan->terminal_size=stmt->size;
+    if(as->target->plan_instruction_relaxation!=NULL &&
+       !as->target->plan_instruction_relaxation(as,stmt,plan)) {
+        if(as->error[0]=='\0')
+            minias_set_error(as,"target-relaxation-plan-failed:line=%zu",
+                             stmt->line);
+        return false;
+    }
+    if(plan->current_size!=stmt->size ||
+       plan->required_size<plan->current_size ||
+       plan->terminal_size<plan->required_size ||
+       plan->terminal_size==0U) {
+        minias_set_error(as,"invalid-target-relaxation-plan:line=%zu",
+                         stmt->line);
+        return false;
+    }
+    return true;
+}
+
 static bool collect_out_of_range_branches(MiniAs *as,
                                           size_t **ids,
                                           size_t *count,
@@ -596,21 +627,12 @@ static bool collect_out_of_range_branches(MiniAs *as,
     }
     as->forced_long_branch_ids=*ids;
     as->forced_long_branch_count=*count;
-    if (as->target->relax_instruction == NULL) return true;
     for (i = 0U; i < as->stmt_count; ++i) {
         const MiniAsStmt *stmt = &as->stmts[i];
-        uint32_t expanded = stmt->size;
-        if (stmt->kind != MINIAS_STMT_INSN ||
-            !as->target->relax_instruction(as, stmt, &expanded)) {
-            if (as->error[0] != '\0') return false;
-            continue;
-        }
-        if (expanded <= stmt->size) continue;
-        if (as->target->expanded_instruction_size == NULL) {
-            minias_set_error(as, "target-relaxation-size-unavailable:%s",
-                             stmt->op);
-            return false;
-        }
+        MiniAsTargetRelaxPlan plan;
+        if(stmt->kind!=MINIAS_STMT_INSN)continue;
+        if(!minias_query_target_relax_plan(as,stmt,&plan))return false;
+        if(plan.required_size<=stmt->size)continue;
         if(as->forced_long_branch_bitmap[i])continue;
         if (!minias_grow_array((void **)ids, capacity, sizeof(**ids), *count + 1U)) {
             minias_set_error(as, "out-of-memory:branch-relaxation");
@@ -872,35 +894,19 @@ bool minias_solve_fragment_layout(MiniAs *as,
         for(j=0U;j<*forced_count;++j) {
             size_t id=(*forced_ids)[j];
             MiniAsStmt *fragment;
-            uint32_t grown;
+            MiniAsTargetRelaxPlan plan;
             if(id>=as->stmt_count) {
                 minias_set_error(as,"internal:relaxation-fragment-id");
                 return false;
             }
             fragment=&as->stmts[id];
-            grown=fragment->size;
-            if(as->target->expanded_instruction_size==NULL) {
-                minias_set_error(as,"missing-target-fragment-growth:%s",
-                                 fragment->op);
+            if(!minias_query_target_relax_plan(as,fragment,&plan))return false;
+            if(plan.terminal_size>fragment->size)
+                fragment->size=plan.terminal_size;
+            else if(plan.required_size>fragment->size) {
+                minias_set_error(as,"unrelaxed-target-fragment:line=%zu",
+                                 fragment->line);
                 return false;
-            }
-            if(as->target->expanded_instruction_size(fragment->op,
-                                                      fragment->size,&grown)) {
-                if(grown<=fragment->size) {
-                    minias_set_error(as,"invalid-target-fragment-growth:%s",
-                                     fragment->op);
-                    return false;
-                }
-                fragment->size=grown;
-            }else {
-                uint32_t needed=fragment->size;
-                if(as->target->relax_instruction==NULL ||
-                   !as->target->relax_instruction(as,fragment,&needed) ||
-                   needed>fragment->size) {
-                    minias_set_error(as,"unrelaxed-target-fragment:%s",
-                                     fragment->op);
-                    return false;
-                }
             }
         }
         if(!minias_relayout_fragments(as,NULL) ||

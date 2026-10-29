@@ -382,16 +382,23 @@ static bool minias_write_elf(MiniAs *as,
                              (unsigned)input->kind);
             goto done;
         }
+        /* The encoded ELF relocation number is an opaque Target value,
+         * not a predicate. R_*_NONE may legitimately be zero; only the
+         * semantic capability contract can reject an unsupported fixup.
+         * A raw NONE request is never allowed to masquerade as an actual
+         * relocation, regardless of a future target's numeric mapping. */
+        if (input->kind == MINIAS_FIXUP_NONE ||
+            as->target->supports_fixup == NULL ||
+            !as->target->supports_fixup(input->kind,input->width)) {
+            minias_set_error(as, "unsupported-elf-fixup:kind=%u",
+                             (unsigned)input->kind);
+            goto done;
+        }
         output->target_section = (size_t)input->section;
         output->offset = final_offset;
         output->symbol_index = symbol_map[input->symbol_index];
         output->type =
             as->target->fixup_relocation_type(input->kind, input->width);
-        if (output->type == 0U) {
-            minias_set_error(as, "unsupported-elf-fixup:kind=%u",
-                             (unsigned)input->kind);
-            goto done;
-        }
         output->addend = input->addend;
         if(section_reloc) {
             const MiniAsSymbol *local=&as->symbols[input->symbol_index];

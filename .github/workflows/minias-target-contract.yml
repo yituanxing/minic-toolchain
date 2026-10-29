@@ -25,6 +25,15 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          repository: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name || github.repository }}
+      - name: Assert evaluated source is exact PR head
+        run: |
+          actual="$(git rev-parse HEAD)"
+          expected="${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}"
+          test "$actual" = "$expected"
+          echo "MINIAS_EXACT_HEAD=PASS sha=$actual"
       - name: Install RISC-V GNU assembler/linker and QEMU user runner
         run: |
           sudo apt-get update
@@ -34,8 +43,12 @@ jobs:
         run: |
           make -j2 MODE=release CFLAGS=-Werror build/release/bin/minic-as
           test -x build/release/bin/minic-as
+      - name: Reject malformed four-target operands with clean failure unwind
+        run: bash tests/assembler/probe-mc-operand-failure-unwind.sh
       - name: Enforce ISA-private fixup and MC emission ownership
         run: bash tests/assembler/probe-mc-target-boundary.sh
+      - name: Validate Common MCOperand nested ownership and error-path lifecycle
+        run: bash tests/assembler/probe-mc-operand-lifetime.sh
       - name: RV32E validates parsed GPRs without treating symbols as registers
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
@@ -48,6 +61,16 @@ jobs:
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-relax-plan-stress.sh
+      - name: GNU RV64I 160-typed-fragment relaxation stress
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=riscv \
+            bash tests/assembler/probe-typed-relax-four-target-stress.sh
+      - name: GNU RV32/RV64 typed LI materialization semantics and measurement
+        run: |
+          # This CI acceptance gate may never silently skip its GNU oracle.
+          command -v riscv64-linux-gnu-as
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-rv-typed-li-materialization.sh
       - name: Assert one Common DWARF object model, CFI writer and owned bytecode
         run: bash tests/assembler/probe-cfi-model-ownership.sh
       - name: Enforce one Common MCFragment layout engine and shared variable DATA
@@ -162,6 +185,15 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          repository: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name || github.repository }}
+      - name: Assert evaluated source is exact PR head
+        run: |
+          actual="$(git rev-parse HEAD)"
+          expected="${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}"
+          test "$actual" = "$expected"
+          echo "MINIAS_EXACT_HEAD=PASS sha=$actual"
       - name: Install GNU AArch64 assembler, linker and QEMU
         run: |
           sudo apt-get update
@@ -177,6 +209,10 @@ jobs:
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=aarch64 \
             bash tests/assembler/probe-common-mcexpr-four-arch.sh
+      - name: GNU AArch64 160-typed-fragment relaxation stress
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=aarch64 \
+            bash tests/assembler/probe-typed-relax-four-target-stress.sh
       - name: GNU AArch64 one-pass immutable binary DATA
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=aarch64 \

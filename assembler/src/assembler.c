@@ -769,23 +769,7 @@ void minias_destroy(MiniAs *as) {
         minias_mcdata_destroy(as->stmts[i].mcdata);
         for (size_t k=0U;k<3U;++k)
             minias_deferred_expr_destroy(as->stmts[i].variable_exprs[k]);
-        if (as->stmts[i].mcinst != NULL) {
-            MiniAsMCInst *mc = as->stmts[i].mcinst;
-            size_t k;
-            for (k = 0U; k < mc->count; ++k) {
-                if (mc->operands[k].kind == MINIAS_MC_SYMBOL)
-                    free(mc->operands[k].symbol);
-                else if(mc->operands[k].kind == MINIAS_MC_SYMBOL_DIFFERENCE)
-                    free(mc->operands[k].difference);
-                else if (mc->operands[k].kind == MINIAS_MC_MEMORY) {
-                    if (mc->operands[k].memory != NULL) {
-                        free(mc->operands[k].memory->symbol);
-                        free(mc->operands[k].memory);
-                    }
-                }
-            }
-            free(mc);
-        }
+        minias_mcinst_destroy(as->stmts[i].mcinst);
     }
     free(as->stmts);
     free(as->fixups);
@@ -3883,16 +3867,20 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
             return false;
         }
         if (minias_force_long_branch_for_stmt(as, statement_id)) {
-            uint32_t grown = 0U;
-            if (as->target->expanded_instruction_size == NULL ||
-                !as->target->expanded_instruction_size(op, size, &grown) ||
-                grown <= size) {
+            MiniAsTargetRelaxPlan plan;
+            /* Forced-long source replay consults the very same retained
+             * MCInst alternative plan as the later MCLayout fixed point.
+             * The Target never guesses a branch width from op spelling. */
+            as->stmts[statement_id].size=size;
+            if (!minias_query_target_relax_plan(
+                    as,&as->stmts[statement_id],&plan) ||
+                plan.terminal_size<=size) {
                 minias_set_error(as, "invalid-target-relaxation:%s:line=%zu",
                                  op, line);
                 free(rewritten_args);
                 return false;
             }
-            size = grown;
+            size = plan.terminal_size;
         }
         as->stmts[statement_id].size = size;
         free(rewritten_args);
