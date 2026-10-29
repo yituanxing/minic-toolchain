@@ -130,3 +130,36 @@ Integrated local gates on the shared modified tree:
 
 The batch is intentionally not a declaration of complete GNU semantics,
 original Linux full object parity, final Image link or QEMU boot success.
+
+## 7. Next integration: parse-time SectionKey / Subsection indexes (pending CI)
+
+The prior 35-file reading inventory remains the audited source baseline. This
+follow-up is an actual cross-file change to the Common parser and MCLayout, not
+a claim that all Target architectural debt is complete.
+
+- **SectionKey identity:** one open-addressed, allocation-checked index holds
+  the complete (name, nullable COMDAT signature, nullable LINK_ORDER source
+  anchor) key. The original SectionID, first-declaration type/flags, alignment
+  updates and appending to a group-specific Section are unchanged. No
+  name-only lookup is used to resolve the full key.
+- **Subsection identity:** a second hash uses (immutable SectionID, GNU
+  subsection number). The table is refreshed immediately after MCLayout sorts
+  the owned subsection array, avoiding stale ordinal aliases while retaining
+  the old sorted binary-search path for layout/fixups.
+- **Failure ownership:** a failed allocation does not publish a Section or
+  Subsection slot. Both indexes have explicit context destruction; the ELF
+  writer's independent SectionName index is retained because its ordering and
+  lookup contract is different.
+- **Oracle:** the GNU section/subsection test covers 4096 SectionIDs, 8192
+  push/pop reopens, COMDAT same-name variants, LINK_ORDER cross-products,
+  nullable link-order identity and first-declaration merge entsize.
+- **Four additional probes** independently exercise x86 ModRM/register forms,
+  user-owned versus generated .debug_line, and LoongArch alias/privileged
+  families, all wired as fail-closed GNU steps in the existing fast oracle job.
+
+**Verification at authoring time:** code blobs and workflow changes prepared;
+no exact-head Release/A0/GNU/21-shard outcome has yet been obtained for this
+batch. Do not promote the newly wired probes to PASS until a run on its actual
+commit SHA has succeeded. Existing unresolved P1 items remain Fragment
+emission transactions, conditional dependency graph, and target-wide form
+deduplication. GNU runtime/Image/QEMU are separate correctness tracks.

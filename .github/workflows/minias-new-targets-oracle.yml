@@ -150,6 +150,10 @@ jobs:
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-x86-memory-encoding-layout.sh
+      - name: GNU x86 typed ModRM memory and register forms exact bytes and relocations
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-x86-modrm-forms-gnu.sh
       - name: GNU x86 same-section symbol binding and one memory Fixup policy
         run: |
           command -v as
@@ -167,6 +171,10 @@ jobs:
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-elf-link-order-index.sh
+      - name: GNU 4096-section full-key and numbered subsection parser-index stress
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-mc-section-subsection-key-index-gnu.sh
       - name: Native MiniAS to MiniObjcopy COMDAT member rewrite versus GNU objcopy
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
@@ -190,6 +198,10 @@ jobs:
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-cfi-signed-save-offsets-gnu.sh
+      - name: Reject collision of user-owned .debug_line with synthesized line tables
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-x86-debug-line-mixed-section-gnu.sh
       - name: GNU x86 DWARF directory and file table references
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
@@ -328,6 +340,11 @@ jobs:
           LOONGAS=loongarch64-linux-gnu-as \
           LOONGCOPY=loongarch64-linux-gnu-objcopy \
             bash tests/assembler/probe-loong-scalar-opcode-shapes.sh
+      - name: GNU LoongArch64 aliases and privileged target operand contracts
+        run: |
+          command -v loongarch64-linux-gnu-as
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-loong-alias-privilege-gnu.sh
       - name: LoongArch64 FCSR FCC GPR FPR LSX LASX register-bank identity versus GNU
         run: |
           command -v loongarch64-linux-gnu-as

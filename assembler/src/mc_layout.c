@@ -53,35 +53,88 @@ bool minias_validate_fragment_semantics(MiniAs *as) {
     return true;
 }
 
-MiniAsSubsection *minias_find_subsection(MiniAs *as, int section, uint32_t number) {
-    size_t i;
+/* The parse-time subsection table cannot use Section-name identity: its
+ * key is the immutable SectionID plus the numbered GNU subsection. Layout
+ * subsequently sorts the owned array, so the slot table is rebuilt in place
+ * after that permutation and no old index/pointer may escape. */
+static size_t subsection_key_hash(int section,uint32_t number) {
+    uint64_t key=((uint64_t)(uint32_t)section<<32)|(uint64_t)number;
+    key^=key>>33;
+    key*=UINT64_C(0xff51afd7ed558ccd);
+    key^=key>>33;
+    key*=UINT64_C(0xc4ceb9fe1a85ec53);
+    key^=key>>33;
+    return (size_t)key;
+}
 
-    for (i = 0U; i < as->subsection_count; ++i) {
-        MiniAsSubsection *sub = &as->subsections[i];
-        if (sub->section == section && sub->number == number) {
-            return sub;
-        }
+static void subsection_index_fill(MiniAs *as) {
+    size_t i;
+    const size_t capacity=as->subsection_slot_capacity;
+    memset(as->subsection_slots,0,capacity*sizeof(*as->subsection_slots));
+    for(i=0U;i<as->subsection_count;++i) {
+        const MiniAsSubsection *sub=&as->subsections[i];
+        size_t slot=subsection_key_hash(sub->section,sub->number)&(capacity-1U);
+        while(as->subsection_slots[slot]!=0U)
+            slot=(slot+1U)&(capacity-1U);
+        as->subsection_slots[slot]=i+1U;
+    }
+}
+
+static bool subsection_index_reserve(MiniAs *as) {
+    size_t capacity=as->subsection_slot_capacity;
+    size_t *slots;
+    if(capacity!=0U && as->subsection_count+1U<capacity/2U)return true;
+    if(capacity>SIZE_MAX/2U) {
+        minias_set_error(as,"subsection-index-too-large");
+        return false;
+    }
+    capacity=capacity==0U ? 16U : capacity*2U;
+    slots=calloc(capacity,sizeof(*slots));
+    if(slots==NULL) {
+        minias_set_error(as,"out-of-memory:subsection-index");
+        return false;
+    }
+    free(as->subsection_slots);
+    as->subsection_slots=slots;
+    as->subsection_slot_capacity=capacity;
+    subsection_index_fill(as);
+    return true;
+}
+
+MiniAsSubsection *minias_find_subsection(MiniAs *as,int section,uint32_t number) {
+    size_t slot;
+    const size_t capacity=as->subsection_slot_capacity;
+    if(capacity==0U)return NULL;
+    slot=subsection_key_hash(section,number)&(capacity-1U);
+    while(as->subsection_slots[slot]!=0U) {
+        MiniAsSubsection *sub=&as->subsections[as->subsection_slots[slot]-1U];
+        if(sub->section==section && sub->number==number)return sub;
+        slot=(slot+1U)&(capacity-1U);
     }
     return NULL;
 }
 
-MiniAsSubsection *minias_ensure_subsection(MiniAs *as, int section, uint32_t number) {
-    MiniAsSubsection *sub = minias_find_subsection(as, section, number);
-
-    if (sub != NULL) {
-        return sub;
-    }
-    if (!minias_grow_array((void **)&as->subsections,
-                    &as->subsection_capacity,
-                    sizeof(*as->subsections),
-                    as->subsection_count + 1U)) {
-        minias_set_error(as, "out-of-memory:subsection");
+MiniAsSubsection *minias_ensure_subsection(MiniAs *as,int section,uint32_t number) {
+    MiniAsSubsection *sub=minias_find_subsection(as,section,number);
+    size_t slot;
+    if(sub!=NULL)return sub;
+    if(!subsection_index_reserve(as))return NULL;
+    if(!minias_grow_array((void **)&as->subsections,
+                           &as->subsection_capacity,
+                           sizeof(*as->subsections),
+                           as->subsection_count+1U)) {
+        minias_set_error(as,"out-of-memory:subsection");
         return NULL;
     }
-    sub = &as->subsections[as->subsection_count++];
-    memset(sub, 0, sizeof(*sub));
-    sub->section = section;
-    sub->number = number;
+    sub=&as->subsections[as->subsection_count];
+    memset(sub,0,sizeof(*sub));
+    sub->section=section;
+    sub->number=number;
+    slot=subsection_key_hash(section,number)&(as->subsection_slot_capacity-1U);
+    while(as->subsection_slots[slot]!=0U)
+        slot=(slot+1U)&(as->subsection_slot_capacity-1U);
+    as->subsection_slots[slot]=as->subsection_count+1U;
+    ++as->subsection_count;
     return sub;
 }
 
@@ -98,11 +151,8 @@ static int compare_subsections(const void *lhs_ptr, const void *rhs_ptr) {
     return 0;
 }
 
-/* The parser must tolerate arbitrary source-order .subsection switches, so
- * its lookup is intentionally linear. Once MCLayout canonicalizes the
- * subsection array it is immutable and sorted (Section, subsection number).
- * A distinct logarithmic lookup avoids O(symbols * subsections) searches in
- * every relayout/fixup iteration of large real-world objects. */
+/* During layout the subsection array is sorted by its immutable key;
+ * binary lookup remains O(log N) and does not depend on hash-table state. */
 static MiniAsSubsection *find_canonical_subsection(const MiniAs *as,
                                                    int section,
                                                    uint32_t number) {
@@ -132,6 +182,9 @@ bool minias_finalize_subsection_layout(MiniAs *as) {
               as->subsection_count,
               sizeof(*as->subsections),
               compare_subsections);
+        /* qsort permutes array indices; refresh every parser hash slot
+         * before any later consumer can request a subsection. */
+        if(as->subsection_slot_capacity!=0U)subsection_index_fill(as);
     }
     for (i = 0U; i < as->section_count; ++i) {
         as->sections[i].layout_size = 0U;

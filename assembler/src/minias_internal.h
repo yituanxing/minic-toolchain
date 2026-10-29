@@ -476,6 +476,9 @@ typedef struct MiniAs {
     MiniAsSection *sections;
     size_t section_count;
     size_t section_capacity;
+    /* Full SectionKey (name, COMDAT signature, LINK_ORDER anchor). */
+    size_t *section_slots;
+    size_t section_slot_capacity;
     MiniAsSymbol *symbols;
     size_t symbol_count;
     size_t symbol_capacity;
@@ -506,6 +509,10 @@ typedef struct MiniAs {
     MiniAsSubsection *subsections;
     size_t subsection_count;
     size_t subsection_capacity;
+    /* Parser subsection (SectionID, number) -> slot index. Rebuilt when
+     * canonical layout sorts the owned subsection array. */
+    size_t *subsection_slots;
+    size_t subsection_slot_capacity;
     MiniAsSectionState *section_stack;
     size_t section_stack_count;
     size_t section_stack_capacity;

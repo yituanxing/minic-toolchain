@@ -261,77 +261,152 @@ void minias_set_error(MiniAs *as, const char *format, ...) {
     va_end(ap);
 }
 
-/* ELF permits multiple sections with the same name when their COMDAT group
- * signatures differ.  All Fragment/Symbol/Fixup owners retain the immutable
- * Section index; textual names alone are not section identity. */
-static int minias_find_section_key(const MiniAs *as, const char *name,
-                                   const char *group_signature,
-                                   const char *link_order_reference) {
-    size_t i;
-
-    for (i = 0U; i < as->section_count; ++i) {
-        const char *current=as->sections[i].group_signature;
-        const char *linked=as->sections[i].link_order_reference;
-        if (strcmp(as->sections[i].name, name) == 0 &&
-            ((current==NULL && group_signature==NULL) ||
-             (current!=NULL && group_signature!=NULL &&
-              strcmp(current,group_signature)==0)) &&
-            ((linked==NULL && link_order_reference==NULL) ||
-             (linked!=NULL && link_order_reference!=NULL &&
-              strcmp(linked,link_order_reference)==0))) {
-            return (int)i;
+/* A SectionKey includes the whole GNU ELF grouping identity; name alone
+ * is not unique for COMDAT or SHF_LINK_ORDER. SectionIDs never change even
+ * when the Section array grows. This open-addressed index has independent
+ * lifetime from ELF writer's ordering index and preserves first definition. */
+static uint64_t section_key_hash_component(uint64_t hash,const char *text) {
+    const unsigned char *p=(const unsigned char *)text;
+    hash^=text==NULL ? UINT64_C(0) : UINT64_C(1);
+    hash*=UINT64_C(1099511628211);
+    if(text!=NULL) {
+        while(*p!='\0') {
+            hash^=(uint64_t)*p++;
+            hash*=UINT64_C(1099511628211);
         }
     }
-    return -1;
+    hash^=UINT64_C(255); /* tuple boundary */
+    return hash*UINT64_C(1099511628211);
 }
 
-int minias_find_section(const MiniAs *as, const char *name) {
+static size_t section_key_hash(const char *name,const char *group,
+                               const char *link_order) {
+    uint64_t hash=UINT64_C(1469598103934665603);
+    hash=section_key_hash_component(hash,name);
+    hash=section_key_hash_component(hash,group);
+    hash=section_key_hash_component(hash,link_order);
+    return (size_t)hash;
+}
+
+static bool section_key_component_equal(const char *a,const char *b) {
+    return a==b || (a!=NULL && b!=NULL && strcmp(a,b)==0);
+}
+
+static bool section_key_equal(const MiniAsSection *sec,const char *name,
+                              const char *group,const char *link_order) {
+    return section_key_component_equal(sec->name,name) &&
+           section_key_component_equal(sec->group_signature,group) &&
+           section_key_component_equal(sec->link_order_reference,link_order);
+}
+
+/* Rehash only on growth, never on lookup. On OOM the original index remains
+ * intact, and the pending new Section is not committed. */
+static bool minias_rebuild_section_index(MiniAs *as,size_t capacity) {
+    size_t *slots=calloc(capacity,sizeof(*slots));
+    size_t i;
+    if(slots==NULL) {
+        minias_set_error(as,"out-of-memory:section-index");
+        return false;
+    }
+    for(i=0U;i<as->section_count;++i) {
+        const MiniAsSection *sec=&as->sections[i];
+        size_t slot=section_key_hash(sec->name,sec->group_signature,
+                                      sec->link_order_reference)&(capacity-1U);
+        while(slots[slot]!=0U)slot=(slot+1U)&(capacity-1U);
+        slots[slot]=i+1U;
+    }
+    free(as->section_slots);
+    as->section_slots=slots;
+    as->section_slot_capacity=capacity;
+    return true;
+}
+
+static bool minias_reserve_section_index(MiniAs *as) {
+    const size_t cap=as->section_slot_capacity;
+    size_t next;
+    if(cap!=0U && as->section_count+1U<cap/2U)return true;
+    if(cap>SIZE_MAX/2U) {
+        minias_set_error(as,"section-index-too-large");
+        return false;
+    }
+    next=cap==0U ? 16U : cap*2U;
+    return minias_rebuild_section_index(as,next);
+}
+
+static size_t minias_section_index_slot(const MiniAs *as,const char *name,
+                                         const char *group,
+                                         const char *link_order) {
+    size_t slot=section_key_hash(name,group,link_order)&
+                (as->section_slot_capacity-1U);
+    /* At most half of the table is occupied. An empty slot always exists. */
+    while(as->section_slots[slot]!=0U) {
+        const size_t section_id=as->section_slots[slot]-1U;
+        if(section_key_equal(&as->sections[section_id],name,group,link_order))
+            break;
+        slot=(slot+1U)&(as->section_slot_capacity-1U);
+    }
+    return slot;
+}
+
+static int minias_find_section_key(const MiniAs *as,const char *name,
+                                   const char *group_signature,
+                                   const char *link_order_reference) {
+    size_t slot;
+    if(as->section_slot_capacity==0U)return -1;
+    slot=minias_section_index_slot(as,name,group_signature,
+                                   link_order_reference);
+    return as->section_slots[slot]==0U ? -1 :
+           (int)(as->section_slots[slot]-1U);
+}
+
+int minias_find_section(const MiniAs *as,const char *name) {
     return minias_find_section_key(as,name,NULL,NULL);
 }
 
-static int minias_ensure_section_key(MiniAs *as, const char *name,
+static int minias_ensure_section_key(MiniAs *as,const char *name,
                                      const char *group_signature,
                                      const char *link_order_reference,
-                                     uint32_t type, uint64_t flags,
+                                     uint32_t type,uint64_t flags,
                                      uint64_t align) {
-    int found = minias_find_section_key(as, name, group_signature,
-                                        link_order_reference);
+    const int found=minias_find_section_key(as,name,group_signature,
+                                             link_order_reference);
     MiniAsSection *sec;
-
-    if (found >= 0) {
-        sec = &as->sections[(size_t)found];
-        /* The first section declaration fixes ELF type and flags.
-         * GAS ignores later conflicting .section metadata (with a
-         * warning); OR-ing flags and changing PROGBITS to NOBITS can
-         * silently discard real code and break all relocation offsets. */
+    size_t slot;
+    if(found>=0) {
+        sec=&as->sections[(size_t)found];
+        /* Preserve GAS first declaration; later conflicting metadata must
+         * never silently change ELF section type or discard stored bytes. */
         (void)type;
         (void)flags;
-        if (align > sec->align) sec->align = align;
+        if(align>sec->align)sec->align=align;
         return found;
     }
-    if (!minias_grow_array((void **)&as->sections,
-                    &as->section_capacity,
-                    sizeof(*as->sections),
-                    as->section_count + 1U)) {
-        minias_set_error(as, "out-of-memory:section");
+    if(as->section_count>=(size_t)INT_MAX) {
+        minias_set_error(as,"section-count-too-large");
         return -1;
     }
-    sec = &as->sections[as->section_count];
-    memset(sec, 0, sizeof(*sec));
-    sec->name = minias_strdup(name);
-    if (sec->name == NULL) {
-        minias_set_error(as, "out-of-memory:section-name");
+    if(!minias_reserve_section_index(as))return -1;
+    if(!minias_grow_array((void **)&as->sections,&as->section_capacity,
+                          sizeof(*as->sections),as->section_count+1U)) {
+        minias_set_error(as,"out-of-memory:section");
         return -1;
     }
-    if (group_signature != NULL) {
-        sec->group_signature = minias_strdup(group_signature);
-        if (sec->group_signature == NULL) {
+    sec=&as->sections[as->section_count];
+    memset(sec,0,sizeof(*sec));
+    sec->name=minias_strdup(name);
+    if(sec->name==NULL) {
+        minias_set_error(as,"out-of-memory:section-name");
+        return -1;
+    }
+    if(group_signature!=NULL) {
+        sec->group_signature=minias_strdup(group_signature);
+        if(sec->group_signature==NULL) {
             free(sec->name);sec->name=NULL;
             minias_set_error(as,"out-of-memory:group-signature");
             return -1;
         }
     }
-    if (link_order_reference != NULL) {
+    if(link_order_reference!=NULL) {
         sec->link_order_reference=minias_strdup(link_order_reference);
         if(sec->link_order_reference==NULL) {
             free(sec->group_signature);sec->group_signature=NULL;
@@ -340,11 +415,15 @@ static int minias_ensure_section_key(MiniAs *as, const char *name,
             return -1;
         }
     }
-    sec->type = type;
-    sec->flags = flags;
-    sec->align = align == 0U ? 1U : align;
+    sec->type=type;
+    sec->flags=flags;
+    sec->align=align==0U ? 1U : align;
+    /* No failure point remains: publish SectionID and hash entry together. */
+    slot=minias_section_index_slot(as,name,group_signature,
+                                   link_order_reference);
+    as->section_slots[slot]=as->section_count+1U;
     ++as->section_count;
-    return (int)(as->section_count - 1U);
+    return (int)(as->section_count-1U);
 }
 
 int minias_ensure_section(MiniAs *as,
@@ -1058,6 +1137,7 @@ void minias_destroy(MiniAs *as) {
         free(as->sections[i].data);
     }
     free(as->sections);
+    free(as->section_slots);
     if(as->target && as->target->destroy_target_state)
         as->target->destroy_target_state(as);
     for (i = 0U; i < as->symbol_count; ++i) {
@@ -1088,6 +1168,7 @@ void minias_destroy(MiniAs *as) {
     }
     free(as->literals);
     free(as->subsections);
+    free(as->subsection_slots);
     free(as->section_stack);
     free(as->numeric_label_counts);
     free(as->conditionals);
