@@ -605,19 +605,6 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         {"pushf",{0x9c},1},{"pushfq",{0x9c},1},
         {"popf",{0x9d},1},{"popfq",{0x9d},1}
     };
-    static const struct {const char *op; unsigned opcode; bool wide;} binary[]={
-        /* Retain x86 ISA format in the same typed register/ModR/M path.
-         * 0x100 marks 0F prefix; operand widths remain x86 Target-only. */
-        {"btl",0x1a3U,false},{"btq",0x1a3U,true},
-        {"btsl",0x1abU,false},{"btsq",0x1abU,true},
-        {"btrl",0x1b3U,false},{"btrq",0x1b3U,true},
-        {"btcl",0x1bbU,false},{"btcq",0x1bbU,true},
-        {"xaddl",0x1c1U,false},{"xaddq",0x1c1U,true},
-        {"xaddw",0x1c1U,false},{"btsw",0x1abU,false},
-        {"btrw",0x1b3U,false},{"btcw",0x1bbU,false},
-        {"btw",0x1a3U,false},{"cmpxchgw",0x1b1U,false},
-        {"cmpxchgl",0x1b1U,false},{"cmpxchgq",0x1b1U,true}
-    };
     /* Extended reg/memory forms beyond the common ALU/MOV/TEST descriptor.
      * Availability is explicit: an absent direction has no opcode at all. */
     static const struct {
@@ -1876,30 +1863,62 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             }
         }
     }
-    for(i=0U;i<sizeof(binary)/sizeof(binary[0]);++i) {
-        size_t name_len=strlen(s->op);
-        size_t form_len=strlen(binary[i].op);
-        bool is_word=binary[i].op[form_len-1U]=='w';
-        bool exact=!strcmp(s->op,binary[i].op);
-        bool inferred=form_len==name_len+1U &&
-            !strncmp(s->op,binary[i].op,name_len) &&
-            (binary[i].op[form_len-1U]=='w' ||
-             binary[i].op[form_len-1U]=='l' ||
-             binary[i].op[form_len-1U]=='q');
-        if((!exact && !inferred) || !x64_args2(s->args,src,dst))continue;
-        if(is_word) {
-            if(!x64_register16(src,&rs) || !x64_register16(dst,&rd))continue;
-            ws=false;wd=false;
-        } else {
-            if(!x64_register(src,&rs,&ws) || !x64_register(dst,&rd,&wd))continue;
+    /* Register forms share the exact descriptor table used by memory
+     * ModR/M forms. A second xadd/cmpxchg/bt opcode table previously omitted
+     * byte XADD/CMPXCHG entirely. Keep the ISA-special compact XCHG encoding
+     * in this one typed lowering path, not in the source scanner. */
+    for(i=0U;i<sizeof(regmem)/sizeof(regmem[0]);++i) {
+        const char *form=regmem[i].op;
+        size_t name_len=strlen(s->op),form_len=strlen(form);
+        const bool family=!strncmp(form,"bt",2U) ||
+            !strncmp(form,"xadd",4U) ||
+            !strncmp(form,"cmpxchg",7U) ||
+            !strncmp(form,"xchg",4U);
+        const bool is_xchg=!strncmp(form,"xchg",4U);
+        const bool exact=!strcmp(s->op,form);
+        const bool inferred=form_len==name_len+1U &&
+            !strncmp(s->op,form,name_len);
+        const char suffix=form[form_len-1U];
+        unsigned width=suffix=='b'?8U:suffix=='w'?16U:
+                       suffix=='l'?32U:suffix=='q'?64U:0U;
+        bool highsrc=false,highdst=false,valid=false;
+        if(!family || !regmem[i].has_rm_dest || width==0U ||
+           (!exact && !inferred) ||
+           !x64_args2(s->args,src,dst))continue;
+        if(width==8U) {
+            highsrc=x64_high_register8(src,&rs);
+            highdst=x64_high_register8(dst,&rd);
+            valid=(highsrc || x64_register8(src,&rs)) &&
+                  (highdst || x64_register8(dst,&rd));
+            if(valid &&
+               (rs>=8U || rd>=8U ||
+                (rs>=4U && !highsrc) || (rd>=4U && !highdst)) &&
+               (highsrc || highdst))goto invalid;
+        }else if(width==16U) {
+            valid=x64_register16(src,&rs) && x64_register16(dst,&rd);
+        }else {
+            valid=x64_register(src,&rs,&ws) &&
+                  x64_register(dst,&rd,&wd) &&
+                  ws==(width==64U) && wd==ws;
         }
-        if(ws!=binary[i].wide || wd!=binary[i].wide)continue;
-        m->opcode=X64_REG_BINARY;m->count=2U;
-        m->encoding=binary[i].opcode|(is_word?0x400U:0U);
+        if(!valid)continue;
+        m->opcode=width==8U?X64_BINARY8:X64_REG_BINARY;
+        m->count=2U;
+        m->encoding=regmem[i].rm_dest |
+            (!is_xchg?UINT32_C(0x100):0U) |
+            (width==16U?UINT32_C(0x400):0U) |
+            (highsrc?UINT32_C(0x1000):0U) |
+            (highdst?UINT32_C(0x2000):0U);
+        /* GNU selects 90+reg for XCHG with the accumulator; XCHG
+         * eax,eax is 87 c0, but rax,rax is the canonical single NOP. */
+        if(is_xchg && width!=8U && (rs==0U || rd==0U) &&
+           !(width==32U && rs==0U && rd==0U))
+            m->encoding|=UINT32_C(0x4000);
         m->operands[0].kind=MINIAS_MC_REGISTER;
-        m->operands[0].reg=rs;m->operands[1].reg=rd;
+        m->operands[0].reg=rs;
+        m->operands[0].register_64=width==64U;
         m->operands[1].kind=MINIAS_MC_REGISTER;
-        m->operands[0].register_64=binary[i].wide;
+        m->operands[1].reg=rd;
         goto done;
     }
     /* Reuse the same condition-code policy as CMOV: JMP/CALL have fixed
@@ -2802,6 +2821,7 @@ static bool x64_register_encoding_plan(const MiniAsMCInst *m,
             r=m->operands[0].reg;d=m->operands[1].reg;
             if(plan.rex)
                 code[n++]=(unsigned char)(0x40U|((r>>3U)<<2U)|(d>>3U));
+            if(m->encoding&UINT32_C(0x100))code[n++]=0x0fU;
             code[n++]=(unsigned char)m->encoding;
             code[n++]=(unsigned char)(0xc0U|((r&7U)<<3U)|(d&7U));
             break;
@@ -2935,8 +2955,20 @@ static bool x64_register_encoding_plan(const MiniAsMCInst *m,
             break;
         case X64_REG_BINARY:
             r=m->operands[0].reg;d=m->operands[1].reg;
-            if(m->encoding&0x400U)code[n++]=0x66U;
-            if(m->encoding&0x2000U)code[n++]=0xf3U;
+            if(m->encoding&UINT32_C(0x400))code[n++]=0x66U;
+            if(m->encoding&UINT32_C(0x4000)) {
+                /* 90+rd accumulator XCHG, including canonical 66 90 and
+                 * xchgq %rax,%rax -> 90.  REX.B extends the non-AX reg. */
+                const unsigned other=r==0U?d:r;
+                if(!(other==0U && m->operands[0].register_64) &&
+                   (m->operands[0].register_64 || other>=8U))
+                    code[n++]=(unsigned char)(0x40U|
+                        (m->operands[0].register_64?8U:0U)|
+                        (other>>3U));
+                code[n++]=(unsigned char)(0x90U|(other&7U));
+                break;
+            }
+            if(m->encoding&UINT32_C(0x2000))code[n++]=0xf3U;
             if(plan.rex)
                 code[n++]=(unsigned char)(0x40U|
                     (m->operands[0].register_64?8U:0U)|
