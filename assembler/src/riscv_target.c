@@ -472,6 +472,10 @@ static bool riscv_target_directive(MiniAs *as, const char *op,
             return false;
         }
         state->options=state->option_stack[--state->option_depth];
+    } else if(!state->isa_explicit && strcmp(args,"arch,+v")==0) {
+        /* In the permissive legacy profile V is already available. Keep
+         * the GNU source spelling without claiming a new .option arch
+         * capability; explicit ISA changes still require real snapshots. */
     } else if(strcmp(args,"norelax")!=0) {
         /* Absence of relaxation markers is a real supported norelax mode.
          * A positive relax request cannot silently produce nonrelaxable

@@ -528,31 +528,11 @@ bool minias_evaluate_absolute_operand(MiniAs *as,const char *text,
 bool minias_parse_symbol_difference(const char *expression,
                                     MiniAsSymbolDifference *out) {
     char *copy,*value,*minus;
-    size_t n,i;
-    unsigned level;
-    bool wrapping;
     bool ok=false;
     if(!expression || !out)return false;
     copy=minias_strdup(expression);
     if(!copy)return false;
-    value=minias_trim(copy);
-    /* Strip whole-expression parentheses, never partial subexpressions. */
-    for(;;) {
-        n=strlen(value);
-        if(n<3U || value[0]!='(' || value[n-1U]!=')')break;
-        level=0U;wrapping=true;
-        for(i=0U;i<n;++i) {
-            if(value[i]=='(')++level;
-            else if(value[i]==')') {
-                if(level==0U){wrapping=false;break;}
-                --level;
-                if(level==0U && i!=n-1U){wrapping=false;break;}
-            }
-        }
-        if(!wrapping || level!=0U)break;
-        value[n-1U]='\0';
-        value=minias_trim(value+1U);
-    }
+    value=minias_expr_strip_outer_parens(copy);
     minus=strchr(value,'-');
     if(minus && minus!=value) {
         *minus++='\0';
