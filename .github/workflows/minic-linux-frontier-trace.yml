@@ -30,8 +30,8 @@ jobs:
         target: [x86_64, aarch64, loongarch64]
     env:
       # One immutable, already completed 3x7 campaign. Do not rebuild Linux.
-      SOURCE_RUN: '40828203968'
-      SOURCE_HEAD: '63468744588ca163316e54cac0d1383daf93d108'
+      SOURCE_RUN: '40832411777'
+      SOURCE_HEAD: '60965b6a53aab085497ed5fd2d0d3d1bef6b4611'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -39,23 +39,23 @@ jobs:
       - name: Download only existing SHA-bound GNU preprocessed corpus
         uses: actions/download-artifact@v4
         with:
-          run-id: 40828203968
+          run-id: 40832411777
           github-token: ${{ github.token }}
-          name: three-linux-gnu-i-${{ matrix.target }}-63468744588ca163316e54cac0d1383daf93d108
+          name: three-linux-gnu-i-${{ matrix.target }}-60965b6a53aab085497ed5fd2d0d3d1bef6b4611
           path: ${{ runner.temp }}/minic-frontier-old
       - name: Download the exact original MiniC binary
         uses: actions/download-artifact@v4
         with:
-          run-id: 40828203968
+          run-id: 40832411777
           github-token: ${{ github.token }}
-          name: three-linux-minic-63468744588ca163316e54cac0d1383daf93d108
+          name: three-linux-minic-60965b6a53aab085497ed5fd2d0d3d1bef6b4611
           path: ${{ runner.temp }}/minic-frontier-bin
       - name: Download seven small error reports for this ISA only
         uses: actions/download-artifact@v4
         with:
-          run-id: 40828203968
+          run-id: 40832411777
           github-token: ${{ github.token }}
-          pattern: three-linux-errors-${{ matrix.target }}-*-63468744588ca163316e54cac0d1383daf93d108
+          pattern: three-linux-errors-${{ matrix.target }}-*-60965b6a53aab085497ed5fd2d0d3d1bef6b4611
           path: ${{ runner.temp }}/minic-frontier-reports
       - name: Exact manifest/compiler SHA proof and focused owner-only diagnostics
         shell: bash
