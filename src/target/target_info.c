@@ -967,13 +967,20 @@ bool minic_target_info_inline_asm_register_clobber_supported(const MinicTargetIn
     if (target->architecture == MINIC_TARGET_ARCH_LOONGARCH64) {
         /* In original Linux GNU LoongArch Kbuild C, "$tN" and "tN"
          * denote one caller-saved physical scratch register.
-         * Admission of names is distinct from machine asm qualification. */
+         * Admission of names is distinct from machine asm qualification.
+         * arch/loongarch/kernel/traps.c additionally declares all eight
+         * argument GPRs and callee-saved $s0 in the exact IRQ-stack-switch
+         * inline asm. $s0 is syntax-only here: an actual target opcode
+         * must both save and restore it, and preserve $ra across its BL.
+         * No generic template acquires permission to clobber either. */
         if (name_length == 3U && name[0] == '$') {
             ++name;
             --name_length;
         }
-        return name_length == 2U && name[0] == 't' &&
-               name[1] >= '0' && name[1] <= '8';
+        return name_length == 2U &&
+               ((name[0] == 't' && name[1] >= '0' && name[1] <= '8') ||
+                (name[0] == 'a' && name[1] >= '0' && name[1] <= '7') ||
+                (name[0] == 's' && name[1] == '0'));
     }
     if (target->architecture != MINIC_TARGET_ARCH_RISCV64) return false;
     /* TargetConstraint v1 keeps temporary registers available to the current
@@ -986,7 +993,7 @@ bool minic_target_info_inline_asm_register_clobber_supported(const MinicTargetIn
                                  (name[0] == 'a' && name[1] >= '0' && name[1] <= '7'));
 }
 
-/* GNU syntax and local-fixed-register binding are two different contracts.
+    /* GNU syntax and local-fixed-register binding are two different contracts.
  * Only parse original Linux x86 EBX/RBX clobber NAMES; the fixed-register
  * binding and physical machine checks must still reject callee-saved RBX.
  * No target ISA knowledge escapes this TargetInfo boundary. */

@@ -2815,12 +2815,130 @@ static bool qualified(const MinicC0Program *program,
     return true;
 }
 
+/* Linux 6.6 x86/include/asm/mwait.h deliberately spells MONITOR, MONITORX,
+ * MWAIT and MWAITX as raw opcode bytes to compile with older assemblers.
+ * Parse the exact instruction sequence and fixed A/C/D or A/B/C operand
+ * assignments. The STI+MWAIT form enables interrupts for the sleeping
+ * instruction; silently treating STI as an ordinary compiler fence would
+ * race the idle wakeup path. The return value is a target-owned ISA ID. */
+unsigned int minic_x86_64_linux_monitor_wait_form(
+    const char *text, size_t length) {
+    static const char *const forms[] = {
+        ".byte0x0f,0x01,0xc8;",       /* MONITOR */
+        ".byte0x0f,0x01,0xfa;",       /* MONITORX */
+        ".byte0x0f,0x01,0xc9;",       /* MWAIT */
+        ".byte0x0f,0x01,0xfb;",       /* MWAITX */
+        "sti;.byte0x0f,0x01,0xc9;"    /* STI; MWAIT */
+    };
+    char compact[96];
+    size_t i, n = 0U;
+    if (!text || !length || length >= sizeof(compact)) return 0U;
+    for (i = 0U; i < length; ++i) {
+        const char c = text[i];
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
+        if (c == '\0' || n + 1U >= sizeof(compact)) return 0U;
+        compact[n++] = c;
+    }
+    compact[n] = '\0';
+    for (i = 0U; i < sizeof(forms)/sizeof(forms[0]); ++i)
+        if (strcmp(compact, forms[i]) == 0) return (unsigned int)i + 1U;
+    return 0U;
+}
+
+static bool x86_linux_monitor_wait_source(
+    const MinicC0Program *program, const MinicInlineAsm *source,
+    MinicTargetInlineAsmContract *contract) {
+    static const char *const regs_acd[] = {"a", "c", "d"};
+    static const char *const regs_abc[] = {"a", "b", "c"};
+    const unsigned int form = source ? minic_x86_64_linux_monitor_wait_form(
+        source->template_text, source->template_length) : 0U;
+    const size_t count = form == 1U || form == 2U || form == 4U ? 3U : 2U;
+    const char *const *regs = form == 4U ? regs_abc : regs_acd;
+    size_t i;
+    if (!program || !source || !contract || !form ||
+        !source->is_volatile || source->is_goto || source->output_count ||
+        source->input_count != count || !source->inputs ||
+        source->label_count || source->clobber_count ||
+        source->register_clobber_count || source->has_memory_clobber)
+        return false;
+    for (i = 0U; i < count; ++i) {
+        const MinicInlineAsmOperand *op = &source->inputs[i];
+        const MinicExpression *value = minic_c0_program_expression(
+            program, op->expression);
+        MinicType plain;
+        if (!c_is(op, regs[i]) || !value ||
+            !minic_type_unqualified(value->type, &plain) ||
+            (!minic_type_is_pointer(plain) &&
+             !minic_type_is_integer(plain)))
+            return false;
+        contract->kinds[i] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    }
+    contract->operand_count = count;
+    return true;
+}
+
+/* copy_thread() snapshots segment selectors from live CPU state. DS/ES
+ * are 16-bit architectural registers, even in long mode. A C memory
+ * load is not equivalent, and the ordinary fixed-register allocator cannot
+ * manufacture their values. Only the original two selector reads, with
+ * unsigned-short output and compiler memory ordering, are admitted. */
+unsigned int minic_x86_64_linux_segment_read_form(
+    const char *text, size_t length) {
+    static const char *const allowed[] = {"mov%%es,%0", "mov%%ds,%0"};
+    char normalized[48];
+    size_t i, n = 0U;
+    if (!text || !length || length >= sizeof(normalized)) return 0U;
+    for (i = 0U; i < length; ++i) {
+        const char c = text[i];
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n')
+            continue;
+        if (c == '\0' || c == ';' || n + 1U >= sizeof(normalized))
+            return 0U;
+        normalized[n++] = c;
+    }
+    normalized[n] = '\0';
+    for (i = 0U; i < sizeof(allowed)/sizeof(allowed[0]); ++i)
+        if (strcmp(normalized, allowed[i]) == 0) return (unsigned int)i + 1U;
+    return 0U;
+}
+
+static bool x86_linux_segment_read_source(
+    const MinicC0Program *program, const MinicInlineAsm *source,
+    MinicTargetInlineAsmContract *contract) {
+    const MinicExpression *dst;
+    MinicType plain;
+    if (!program || !source || !contract || source->is_volatile ||
+        source->is_goto || !minic_x86_64_linux_segment_read_form(
+            source->template_text, source->template_length) ||
+        source->output_count != 1U || !source->outputs ||
+        source->input_count || source->label_count ||
+        source->clobber_count != 1U || !source->has_memory_clobber ||
+        source->register_clobber_count ||
+        !c_is(&source->outputs[0], "=r"))
+        return false;
+    dst = minic_c0_program_expression(
+        program, source->outputs[0].expression);
+    if (!dst || dst->value_category != MINIC_VALUE_LVALUE ||
+        minic_type_is_const(dst->type) ||
+        !minic_type_unqualified(dst->type, &plain) ||
+        !minic_type_equal(plain, minic_type_unsigned_short()))
+        return false;
+    contract->operand_count = 1U;
+    contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+    contract->implicit_memory_effect = true;
+    return true;
+}
+
 bool minic_x86_64_qualify_inline_asm(
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
     bool is_mulacc = false, is_muldiv = false;
     size_t i, count;
     if (!contract) return false;
+    if (x86_linux_monitor_wait_source(program, source, contract))
+        return true;
+    if (x86_linux_segment_read_source(program, source, contract))
+        return true;
     if (x86_x87_probe_source(program, source, contract))
         return true;
     if (x86_fxsave_source(program, source, contract))

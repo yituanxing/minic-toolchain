@@ -17,6 +17,10 @@ bool minic_x86_64_linux_three_call_alternative_form(const char *, size_t);
 unsigned int minic_x86_64_linux_control_register_form(const char *, size_t);
 /* Linux ALTERNATIVE() with an empty baseline and WRMSR replacement. */
 bool minic_x86_64_linux_alternative_wrmsr_form(const char *, size_t);
+/* Linux native MONITOR/MWAIT and interrupt-enabling MWAIT byte ISA family. */
+unsigned int minic_x86_64_linux_monitor_wait_form(const char *, size_t);
+/* Read the live 16-bit DS/ES segment selector, not the segment base. */
+unsigned int minic_x86_64_linux_segment_read_form(const char *, size_t);
 unsigned int minic_x86_64_linux_zero_barrier_form(const char *, size_t);
 unsigned int minic_x86_64_linux_counter_form(const char *,size_t);
 /* FXSAVE/FXSAVE64 exact 512-byte aligned architectural memory images. */

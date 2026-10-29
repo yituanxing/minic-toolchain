@@ -965,7 +965,9 @@ static bool loong_fcsr0_write_source(
     if(!e||!minic_type_unqualified(e->type,&plain)||
        !minic_type_is_integer(plain)||
        !(minic_type_equal(plain,minic_type_int())||
-         minic_type_equal(plain,minic_type_unsigned_int())))
+         minic_type_equal(plain,minic_type_unsigned_int())||
+         minic_type_equal(plain,minic_type_long())||
+         minic_type_equal(plain,minic_type_unsigned_long())))
         return false;
     contract->operand_count=1U;
     contract->kinds[0]=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
@@ -987,10 +989,15 @@ static bool loong_fcsr0_write_emit(
        b[0].early_clobber||b[0].has_fixed_register_binding||
        !minic_type_unqualified(fn->values[b[0].value].type,&plain)||
        !(minic_type_equal(plain,minic_type_int())||
-         minic_type_equal(plain,minic_type_unsigned_int())))
+         minic_type_equal(plain,minic_type_unsigned_int())||
+         minic_type_equal(plain,minic_type_long())||
+         minic_type_equal(plain,minic_type_unsigned_long())))
         return false;
     return minic_loongarch64_emit_frame_mem(
-             out,"ld.w","$t0",(size_t)b[0].value*8U,ctx->dynamic_frame)&&
+             out,(minic_type_equal(plain,minic_type_long())||
+                   minic_type_equal(plain,minic_type_unsigned_long()))?
+                   "ld.d":"ld.w","$t0",(size_t)b[0].value*8U,
+             ctx->dynamic_frame)&&
            fputs("  movgr2fcsr $fcsr0, $t0\n",out)!=EOF;
 }
 
@@ -1786,11 +1793,361 @@ static bool loong_linux_futex_rmw_emit(
     return true;
 }
 
+/* Linux 6.6 arch/loongarch/kernel/traps.c: the IRQ entry helper switches
+ * to the per-CPU interrupt stack for one C call and returns to its original
+ * frame afterwards. This is not a general assembly-text passthrough: the
+ * exact five-instruction program, two named inputs and complete clobber
+ * vector together form one privileged calling-convention contract.
+ *
+ * The original GCC clobbers $s0, so GCC saves/restores that callee-saved
+ * register in the containing function. MiniC's ordinary fixed frame does
+ * not reserve $s0: our lowering explicitly saves both $s0 and $ra around
+ * the nested BL, independent of the ordinary C-call scanner. Also, no
+ * stack-frame access is allowed between changing SP and restoring it. */
+static bool loong_linux_irq_switch_template(
+    const char *text, size_t length, bool numeric) {
+    static const char source_form[] =
+        "move$s0,$spmove$sp,%[stk]move$a0,%[regs]"
+        "blhandle_loongarch_irqmove$sp,$s0";
+    static const char core_form[] =
+        "move$s0,$spmove$sp,%0move$a0,%1"
+        "blhandle_loongarch_irqmove$sp,$s0";
+    const char *const expected = numeric ? core_form : source_form;
+    char compact[256];
+    size_t i, n = 0U;
+    if (!text || !length || length >= sizeof(compact)) return false;
+    for (i = 0U; i < length; ++i) {
+        const char c = text[i];
+        if (c == '\n' || c == '\r' || c == '\t' || c == ' ')
+            continue;
+        if (c == '\0' || c == ';' || n + 1U >= sizeof(compact))
+            return false;
+        compact[n++] = c;
+    }
+    compact[n] = '\0';
+    return strcmp(compact, expected) == 0;
+}
+
+static bool loong_linux_irq_switch_clobber(
+    const char *name, size_t length, size_t index) {
+    char kind;
+    unsigned int number;
+    if (!name || length != 3U || name[0] != '$' || index >= 18U)
+        return false;
+    if (index < 8U) {
+        kind = 'a';
+        number = (unsigned int)index;
+    } else if (index == 8U) {
+        kind = 's';
+        number = 0U;
+    } else {
+        kind = 't';
+        number = (unsigned int)(index - 9U);
+    }
+    return name[1] == kind && name[2] == (char)('0' + number);
+}
+
+static bool loong_linux_irq_switch_source(
+    const MinicC0Program *program, const MinicInlineAsm *source,
+    MinicTargetInlineAsmContract *contract) {
+    const MinicExpression *stack, *regs;
+    MinicType plain;
+    size_t i;
+    if (!program || !source || !contract || !source->is_volatile ||
+        source->is_goto || source->output_count || source->input_count != 2U ||
+        !source->inputs || source->label_count || !source->has_memory_clobber ||
+        source->clobber_count != 19U || source->register_clobber_count != 18U ||
+        !source->register_clobbers ||
+        !loong_linux_irq_switch_template(
+            source->template_text, source->template_length, false) ||
+        !loong_csr_constraint(&source->inputs[0], "r") ||
+        !loong_csr_constraint(&source->inputs[1], "r") ||
+        !source->inputs[0].name || source->inputs[0].name_length != 3U ||
+        memcmp(source->inputs[0].name, "stk", 3U) != 0 ||
+        !source->inputs[1].name || source->inputs[1].name_length != 4U ||
+        memcmp(source->inputs[1].name, "regs", 4U) != 0)
+        return false;
+    for (i = 0U; i < 18U; ++i)
+        if (!loong_linux_irq_switch_clobber(
+                source->register_clobbers[i].name,
+                source->register_clobbers[i].name_length, i))
+            return false;
+    stack = minic_c0_program_expression(
+        program, source->inputs[0].expression);
+    regs = minic_c0_program_expression(
+        program, source->inputs[1].expression);
+    if (!stack || !regs || !minic_type_unqualified(stack->type, &plain) ||
+        !minic_type_equal(plain, minic_type_unsigned_long()) ||
+        !minic_type_is_pointer(regs->type))
+        return false;
+    contract->operand_count = 2U;
+    contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->implicit_memory_effect = true;
+    return true;
+}
+
+static bool loong_linux_irq_switch_emit(
+    FILE *out, const MinicDirectLP64BlockContext *ctx,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
+    const MinicCoreFunction *fn;
+    const MinicCoreStructuredInlineAsmOperand *operands;
+    size_t i;
+    if (!out || !ctx || !ctx->fn || !ins || !info) return false;
+    fn = ctx->fn;
+    operands = ins->value.structured_inline_asm.operands;
+    if (!info->is_volatile || info->is_goto || !info->has_memory_clobber ||
+        ctx->dynamic_frame || !loong_linux_irq_switch_template(
+            info->template_text, info->template_length, true) ||
+        info->register_clobber_count != 18U || !info->register_clobbers ||
+        ins->value.structured_inline_asm.operand_count != 2U || !operands)
+        return false;
+    for (i = 0U; i < 18U; ++i)
+        if (!loong_linux_irq_switch_clobber(
+                info->register_clobbers[i].name,
+                info->register_clobbers[i].name_length, i))
+            return false;
+    for (i = 0U; i < 2U; ++i) {
+        const MinicCoreStructuredInlineAsmOperand *op = &operands[i];
+        if (op->operand_index != i ||
+            op->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
+            op->early_clobber || op->has_fixed_register_binding ||
+            op->value >= fn->value_count ||
+            ((i == 0U && !minic_type_equal(
+                fn->values[op->value].type, minic_type_unsigned_long())) ||
+             (i == 1U &&
+              !minic_type_is_pointer(fn->values[op->value].type))))
+            return false;
+        if (!minic_loongarch64_emit_frame_mem(
+                out, "ld.d", i == 0U ? "$t0" : "$t1",
+                (size_t)op->value * 8U, false))
+            return false;
+    }
+    /* Local 16-byte ABI-aligned save frame is anchored by $s0 across BL.
+     * Caller-save argument/temp clobbers need no other preservation; all
+     * Core virtual values live in frame slots, not scratch registers. */
+    return fputs(
+        "  addi.d $sp, $sp, -16\n"
+        "  st.d $s0, $sp, 0\n"
+        "  st.d $ra, $sp, 8\n"
+        "  move $s0, $sp\n"
+        "  move $sp, $t0\n"
+        "  move $a0, $t1\n"
+        "  bl handle_loongarch_irq\n"
+        "  move $sp, $s0\n"
+        "  ld.d $ra, $sp, 8\n"
+        "  ld.d $s0, $sp, 0\n"
+        "  addi.d $sp, $sp, 16\n", out) != EOF;
+}
+
+/* Linux prepare_frametrace() dumps the physical register bank into the
+ * incoming pt_regs, with an unusual $ra/CSR_ERA PC capture in the middle.
+ * It MUST stay a target machine effect, including the temporary $ra write
+ * and restore. The template recognizer reconstructs all 30 register stores
+ * and their exact offsets, so a dropped register, different stride or
+ * inserted executable opcode cannot be silently compiled. */
+static bool loong_linux_frametrace_template(
+    const char *text, size_t length) {
+    char expected[2048];
+    char normalized[2048];
+    size_t n = 0U, i, j;
+    int count;
+    if (!text || !length || length >= sizeof(normalized)) return false;
+    for (i = 0U; i < length; ++i) {
+        const char c = text[i];
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n')
+            continue;
+        if (c == '\0' || c == ';' || n + 1U >= sizeof(normalized))
+            return false;
+        normalized[n++] = c;
+    }
+    normalized[n] = '\0';
+    count = snprintf(expected, sizeof(expected),
+        "st.d$r1,%%1,8*1pcaddi$ra,0st.d$ra,%%0ld.d$ra,%%1,8");
+    if (count < 0 || (size_t)count >= sizeof(expected)) return false;
+    j = (size_t)count;
+    for (i = 2U; i <= 31U; ++i) {
+        count = snprintf(expected + j, sizeof(expected) - j,
+                         "st.d$r%zu,%%1,8*%zu", i, i);
+        if (count < 0 || (size_t)count >= sizeof(expected) - j)
+            return false;
+        j += (size_t)count;
+    }
+    return strcmp(normalized, expected) == 0;
+}
+
+static bool loong_linux_frametrace_source(
+    const MinicC0Program *program, const MinicInlineAsm *source,
+    MinicTargetInlineAsmContract *contract) {
+    const MinicExpression *out, *in;
+    MinicType plain;
+    if (!program || !source || !contract || !source->is_volatile ||
+        source->is_goto || source->output_count != 1U || !source->outputs ||
+        source->input_count != 1U || !source->inputs || source->label_count ||
+        source->clobber_count != 1U || !source->has_memory_clobber ||
+        source->register_clobber_count ||
+        !loong_linux_frametrace_template(
+            source->template_text, source->template_length) ||
+        !loong_csr_constraint(&source->outputs[0], "=m") ||
+        !loong_csr_constraint(&source->inputs[0], "r"))
+        return false;
+    out = minic_c0_program_expression(
+        program, source->outputs[0].expression);
+    in = minic_c0_program_expression(
+        program, source->inputs[0].expression);
+    if (!out || !in || out->value_category != MINIC_VALUE_LVALUE ||
+        minic_type_is_const(out->type) ||
+        !minic_type_unqualified(out->type, &plain) ||
+        !minic_type_equal(plain, minic_type_unsigned_long()) ||
+        !minic_type_is_pointer(in->type))
+        return false;
+    contract->operand_count = 2U;
+    contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT;
+    contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->implicit_memory_effect = true;
+    return true;
+}
+
+static bool loong_linux_frametrace_emit(
+    FILE *out, const MinicDirectLP64BlockContext *ctx,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
+    const MinicCoreFunction *fn;
+    const MinicCoreStructuredInlineAsmOperand *b;
+    MinicType pointee;
+    size_t i;
+    if (!out || !ctx || !ctx->fn || !ins || !info) return false;
+    fn = ctx->fn;
+    b = ins->value.structured_inline_asm.operands;
+    if (!info->is_volatile || info->is_goto || !info->has_memory_clobber ||
+        info->register_clobber_count ||
+        !loong_linux_frametrace_template(
+            info->template_text, info->template_length) ||
+        ins->value.structured_inline_asm.operand_count != 2U || !b ||
+        b[0].operand_index != 0U ||
+        b[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT ||
+        b[1].operand_index != 1U ||
+        b[1].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT)
+        return false;
+    for (i = 0U; i < 2U; ++i)
+        if (b[i].early_clobber || b[i].has_fixed_register_binding ||
+            b[i].value >= fn->value_count)
+            return false;
+    if (!minic_type_pointee(fn->values[b[0].value].type, &pointee) ||
+        !minic_type_equal(pointee, minic_type_unsigned_long()) ||
+        !minic_type_is_pointer(fn->values[b[1].value].type) ||
+        !minic_loongarch64_emit_frame_mem(
+            out, "ld.d", "$t0", (size_t)b[1].value * 8U,
+            ctx->dynamic_frame) ||
+        !minic_loongarch64_emit_frame_mem(
+            out, "ld.d", "$t1", (size_t)b[0].value * 8U,
+            ctx->dynamic_frame) ||
+        fputs("  st.d $r1, $t0, 8\n"
+              "  pcaddi $ra, 0\n"
+              "  st.d $ra, $t1, 0\n"
+              "  ld.d $ra, $t0, 8\n", out) == EOF)
+        return false;
+    for (i = 2U; i <= 31U; ++i)
+        if (fprintf(out, "  st.d $r%zu, $t0, %zu\n", i, i * 8U) < 0)
+            return false;
+    return true;
+}
+
+/* prepare_frametrace's six direct CSR snapshots use literal register
+ * indices, not the irqflags CSR_CRMD named GNU immediate-zero template.
+ * Read the real privileged CSR before storing each corresponding pt_regs
+ * member; preserve the source's exact set of indices and output width. */
+static unsigned int loong_linux_frametrace_csr_form(
+    const char *text, size_t length) {
+    static const struct { const char *text; unsigned int csr; } forms[] = {
+        {"csrrd%0,0x7", 7U},   /* CSR_BADV */
+        {"csrrd%0,0x0", 0U},   /* CSR_CRMD */
+        {"csrrd%0,0x1", 1U},   /* CSR_PRMD */
+        {"csrrd%0,0x2", 2U},   /* CSR_EUEN */
+        {"csrrd%0,0x4", 4U},   /* CSR_ECFG */
+        {"csrrd%0,0x5", 5U}    /* CSR_ESTAT */
+    };
+    char compact[64];
+    size_t i, n = 0U;
+    if (!text || !length || length >= sizeof(compact)) return UINT32_MAX;
+    for (i = 0U; i < length; ++i) {
+        const char c = text[i];
+        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') continue;
+        if (c == '\0' || c == ';' || n + 1U >= sizeof(compact))
+            return UINT32_MAX;
+        compact[n++] = c;
+    }
+    compact[n] = '\0';
+    for (i = 0U; i < sizeof(forms)/sizeof(forms[0]); ++i)
+        if (strcmp(compact, forms[i].text) == 0) return forms[i].csr;
+    return UINT32_MAX;
+}
+
+static bool loong_linux_frametrace_csr_source(
+    const MinicC0Program *program, const MinicInlineAsm *source,
+    MinicTargetInlineAsmContract *contract) {
+    const MinicExpression *result;
+    MinicType plain;
+    if (!program || !source || !contract || !source->is_volatile ||
+        source->is_goto || source->output_count != 1U || !source->outputs ||
+        source->input_count || source->label_count || source->clobber_count ||
+        source->register_clobber_count || source->has_memory_clobber ||
+        loong_linux_frametrace_csr_form(
+            source->template_text, source->template_length) == UINT32_MAX ||
+        !loong_csr_constraint(&source->outputs[0], "=r"))
+        return false;
+    result = minic_c0_program_expression(
+        program, source->outputs[0].expression);
+    if (!result || result->value_category != MINIC_VALUE_LVALUE ||
+        minic_type_is_const(result->type) ||
+        !minic_type_unqualified(result->type, &plain) ||
+        (!minic_type_equal(plain, minic_type_unsigned_long()) &&
+         !minic_type_equal(plain, minic_type_unsigned_int())))
+        return false;
+    contract->operand_count = 1U;
+    contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+    return true;
+}
+
+static bool loong_linux_frametrace_csr_emit(
+    FILE *out, const MinicDirectLP64BlockContext *ctx,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
+    const MinicCoreFunction *fn;
+    const MinicCoreStructuredInlineAsmOperand *b;
+    MinicType pointee;
+    const unsigned int csr = loong_linux_frametrace_csr_form(
+        info->template_text, info->template_length);
+    if (!out || !ctx || !ctx->fn || !ins || !info || csr == UINT32_MAX)
+        return false;
+    fn = ctx->fn;
+    b = ins->value.structured_inline_asm.operands;
+    if (!info->is_volatile || info->is_goto || info->has_memory_clobber ||
+        info->register_clobber_count ||
+        ins->value.structured_inline_asm.operand_count != 1U || !b ||
+        b[0].operand_index != 0U ||
+        b[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
+        b[0].early_clobber || b[0].has_fixed_register_binding ||
+        b[0].value >= fn->value_count ||
+        !minic_type_pointee(fn->values[b[0].value].type, &pointee) ||
+        (!minic_type_equal(pointee, minic_type_unsigned_long()) &&
+         !minic_type_equal(pointee, minic_type_unsigned_int())))
+        return false;
+    return fprintf(out, "  csrrd $t0, %u\n", csr) >= 0 &&
+        minic_loongarch64_emit_frame_mem(
+            out, "ld.d", "$t1", (size_t)b[0].value * 8U,
+            ctx->dynamic_frame) &&
+        fprintf(out, "  %s $t0, $t1, 0\n",
+                minic_type_equal(pointee, minic_type_unsigned_long()) ?
+                "st.d" : "st.w") >= 0;
+}
+
 bool minic_loongarch64_qualify_inline_asm(
     const MinicC0Program *program, const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
     const MinicInlineAsmOperand *op;
     const MinicExpression *expr;
+    if (loong_linux_irq_switch_source(program, src, contract)) return true;
+    if (loong_linux_frametrace_source(program, src, contract)) return true;
+    if (loong_linux_frametrace_csr_source(program, src, contract)) return true;
     if (loong_linux_futex_rmw_source(program, src, contract)) return true;
     if(program&&src&&contract&&src->is_volatile&&!src->is_goto&&
        src->output_count==0U&&src->input_count==0U&&
@@ -2252,6 +2609,15 @@ bool minic_loongarch64_emit_qualified_structured_asm(
         ins->value.structured_inline_asm.inline_asm_id >= ctx->fn->inline_asm_count)
         return false;
     info = &ctx->fn->inline_asms[ins->value.structured_inline_asm.inline_asm_id];
+    if (loong_linux_irq_switch_template(
+            info->template_text, info->template_length, true))
+        return loong_linux_irq_switch_emit(out, ctx, ins, info);
+    if (loong_linux_frametrace_template(
+            info->template_text, info->template_length))
+        return loong_linux_frametrace_emit(out, ctx, ins, info);
+    if (loong_linux_frametrace_csr_form(
+            info->template_text, info->template_length) != UINT32_MAX)
+        return loong_linux_frametrace_csr_emit(out, ctx, ins, info);
     {
         const unsigned int invtlb = loong_linux_invtlb_form(
             info->template_text, info->template_length);

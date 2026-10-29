@@ -1585,6 +1585,82 @@ static bool emit_memory_clobber_matched(
     return true;
 }
 
+/* The raw-byte Linux idle helpers still have a physical register ABI:
+ * MONITOR consumes RAX/RCX/RDX, MWAIT consumes RAX/RCX, and MWAITX uses
+ * RAX/RBX/RCX. The B register is SysV callee-saved, so only MWAITX adds a
+ * local push/pop; every other input is caller-scratch. In particular STI
+ * must remain next to its MWAIT opcode, with no compiler-generated loads
+ * or stack adjustment inserted between them. */
+static bool emit_linux_monitor_wait(
+    FILE *out, const MinicCoreFunction *fn, const MinicX86Frame *frame,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
+    static const char *const regs_acd[] = {"%rax", "%rcx", "%rdx"};
+    static const char *const regs_abc[] = {"%rax", "%rbx", "%rcx"};
+    static const char *const byte_codes[] = {
+        "  .byte 0x0f, 0x01, 0xc8\n",
+        "  .byte 0x0f, 0x01, 0xfa\n",
+        "  .byte 0x0f, 0x01, 0xc9\n",
+        "  .byte 0x0f, 0x01, 0xfb\n",
+        "  sti\n  .byte 0x0f, 0x01, 0xc9\n"
+    };
+    const unsigned int form = minic_x86_64_linux_monitor_wait_form(
+        info->template_text, info->template_length);
+    const size_t count = form == 1U || form == 2U || form == 4U ? 3U : 2U;
+    const char *const *regs = form == 4U ? regs_abc : regs_acd;
+    const MinicCoreStructuredInlineAsmOperand *b =
+        ins->value.structured_inline_asm.operands;
+    size_t i;
+    if (!form || !info->is_volatile || info->is_goto ||
+        info->has_memory_clobber || info->register_clobber_count ||
+        ins->value.structured_inline_asm.operand_count != count || !b)
+        return false;
+    for (i = 0U; i < count; ++i) {
+        const MinicCoreStructuredInlineAsmOperand *op = &b[i];
+        if (op->operand_index != i ||
+            op->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
+            op->early_clobber || op->has_fixed_register_binding ||
+            op->value >= fn->value_count ||
+            (!minic_type_is_pointer(fn->values[op->value].type) &&
+             !minic_type_is_integer(fn->values[op->value].type)))
+            return false;
+    }
+    if (form == 4U && fputs("  pushq %rbx\n", out) == EOF)
+        return false;
+    for (i = 0U; i < count; ++i)
+        if (!x86_value_load(out, frame, b[i].value, regs[i]))
+            return false;
+    if (fputs(byte_codes[form - 1U], out) == EOF)
+        return false;
+    return form != 4U || fputs("  popq %rbx\n", out) != EOF;
+}
+
+static bool emit_linux_segment_read(
+    FILE *out, const MinicCoreFunction *fn, const MinicX86Frame *frame,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
+    const unsigned int selector = minic_x86_64_linux_segment_read_form(
+        info->template_text, info->template_length);
+    const MinicCoreStructuredInlineAsmOperand *op =
+        ins->value.structured_inline_asm.operands;
+    MinicType pointee;
+    if (!selector || !info->is_volatile || info->is_goto ||
+        !info->has_memory_clobber || info->register_clobber_count ||
+        ins->value.structured_inline_asm.operand_count != 1U || !op ||
+        op[0].operand_index != 0U ||
+        op[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
+        op[0].early_clobber || op[0].has_fixed_register_binding ||
+        op[0].value >= fn->value_count ||
+        !minic_type_pointee(fn->values[op[0].value].type, &pointee) ||
+        !minic_type_equal(pointee, minic_type_unsigned_short()))
+        return false;
+    /* x86-64 has no generic scalar-expression representation for the
+     * segment selector register. Read its low 16 physical bits, then store
+     * exactly 16 bits into the original lvalue; never widen that store. */
+    return fprintf(out, "  movw %s, %%ax\n",
+                   selector == 1U ? "%es" : "%ds") >= 0 &&
+        x86_value_load(out, frame, op[0].value, "%r11") &&
+        fputs("  movw %ax, (%r11)\n", out) != EOF;
+}
+
 bool minic_x86_64_emit_structured_asm(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicX86Frame *frame,
@@ -1609,6 +1685,12 @@ bool minic_x86_64_emit_structured_asm(
     bindings = ins->value.structured_inline_asm.operands;
     if (!info->template_text)
         return false;
+    if (minic_x86_64_linux_monitor_wait_form(
+            info->template_text, info->template_length))
+        return emit_linux_monitor_wait(out, fn, frame, ins, info);
+    if (minic_x86_64_linux_segment_read_form(
+            info->template_text, info->template_length))
+        return emit_linux_segment_read(out, fn, frame, ins, info);
     if (info->template_length == 6U &&
         memcmp(info->template_text, "xsetbv", 6U) == 0)
         return emit_linux_xsetbv(out, program, target, fn, frame, ins, info);

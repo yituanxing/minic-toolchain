@@ -14,7 +14,8 @@ for fixture in \
     x86_64_linux_cpu_feature_goto \
     x86_64_linux_xstate_control \
     x86_64_linux_fxsave \
-    x86_64_linux_fpu_boot
+    x86_64_linux_fpu_boot \
+    x86_64_linux_idle_and_segments
 do
     "$host_cc" -E -P "$source_root/tests/target/$fixture.c" \
         -o "$workdir/$fixture.i"
@@ -28,6 +29,7 @@ done
 objdump -d "$workdir/x86_64_linux_xstate_control.o" > "$workdir/xstate.dump"
 objdump -d "$workdir/x86_64_linux_fxsave.o" > "$workdir/fxsave.dump"
 objdump -d "$workdir/x86_64_linux_fpu_boot.o" > "$workdir/fpu.dump"
+objdump -d "$workdir/x86_64_linux_idle_and_segments.o" > "$workdir/idle.dump"
 readelf -SW "$workdir/x86_64_linux_cpu_feature_goto.o" > "$workdir/cpu.sections"
 readelf -x .altinstructions "$workdir/x86_64_linux_cpu_feature_goto.o" > "$workdir/cpu.alt.hex"
 readelf -SW "$workdir/x86_64_linux_alternative_wrmsr.o" > "$workdir/msr.sections"
@@ -53,6 +55,25 @@ do
         exit 1
     fi
 done
+for instruction in monitor monitorx mwait mwaitx sti
+do
+    if ! grep -q "$instruction" "$workdir/idle.dump"; then
+        printf 'FAIL: x86 Linux idle instruction %s absent\n' "$instruction" >&2
+        exit 1
+    fi
+done
+for selector in es ds
+do
+    if ! grep -q "%$selector" "$workdir/idle.dump"; then
+        printf 'FAIL: x86 Linux segment selector %s absent\n' "$selector" >&2
+        exit 1
+    fi
+done
+if ! grep -Fq 'pushq %rbx' "$workdir/x86_64_linux_idle_and_segments.s" ||
+   ! grep -Fq 'popq %rbx' "$workdir/x86_64_linux_idle_and_segments.s"; then
+    printf 'FAIL: MWAITX must preserve callee-saved RBX\n' >&2
+    exit 1
+fi
 for section in .altinstructions .altinstr_replacement .altinstr_aux
 do
     if ! grep -Fq "$section" "$workdir/cpu.sections"; then
@@ -81,4 +102,4 @@ do
         -o "$workdir/core_switch_detached.$arch.s"
 done
 
-printf 'PASS: Linux x86 WRMSR/CPU alternatives, xstate, FXSAVE, x87, IRQ and 3-arch switch goto reentry\n'
+printf 'PASS: Linux x86 WRMSR/CPU alternatives, xstate, FXSAVE, x87, IRQ, MONITOR/MWAIT, segment selectors and 3-arch switch goto reentry\n'
