@@ -732,6 +732,16 @@ full Linux object correctness are independently tracked after this cleanup.
   even when the first one fails; `if: !cancelled()` plus a non-silent failure
   collector avoids masking the next newly exposed issue. This is a failure
   reporting improvement, not a relaxation of any oracle's pass criteria.
+- The E2 exact-head rerun (`6d9681eb`) passed the full AArch64 job and the
+  x86/Loong Oracle workflow. All five new native probes executed: four
+  passed, while the dynamic-token probe compared unrelated GNU-local `B16`
+  relocation records with MiniAS's already contractually resolved local
+  branches. `probe-x86-loong-base.sh` explicitly defines their acceptance
+  as **exact GNU `.text` bytes**, without imposing GNU's retained local
+  linker-relaxation records. The new probe now asserts full `.text` bytes and
+  exact offset/type/symbol/addend parity for its two **external PCALA**
+  relocations only. It labels the distinct local-B16 policy explicitly,
+  never claims whole-object relocation equality and keeps fail-closed tests.
 
 ## Following batch — actionable implementation cuts from six-agent audit
 

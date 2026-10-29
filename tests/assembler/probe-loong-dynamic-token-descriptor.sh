@@ -62,20 +62,28 @@ if ((gnu_available)); then
     done
     exit 1
   fi
+  # GNU GAS keeps R_LARCH_B16 for resolved same-section local branches,
+  # while MiniAS deliberately fixes their PC-relative displacement in its
+  # Common layout pass.  The established GNU local-branch contract in
+  # probe-x86-loong-base.sh compares exact machine bytes, not those optional
+  # linker-relaxation records.  This probe owns the two *external* PCALA
+  # descriptors and must compare their offset/type/symbol/addend exactly.
   python3 - "$work/mini.o" "$work/gnu.o" <<'PY'
 import re
 import subprocess
 import sys
+pcala_types={'R_LARCH_PCALA_HI20','R_LARCH_PCALA_LO12'}
 def relocs(path):
     out=[]
     for line in subprocess.check_output(['readelf','-Wr',path],text=True).splitlines():
         columns=line.split()
-        if len(columns)>=5 and re.fullmatch('[0-9a-fA-F]{8,16}',columns[0]) and columns[2].startswith('R_LARCH_'):
+        if (len(columns)>=5 and re.fullmatch('[0-9a-fA-F]{8,16}',columns[0])
+                and columns[2] in pcala_types):
             out.append((columns[0],columns[2],tuple(columns[4:])))
     return out
 mini,gnu=relocs(sys.argv[1]),relocs(sys.argv[2])
-if mini!=gnu:
-    raise SystemExit(f'Loong typed relocation ownership differs: {mini} != {gnu}')
+if mini!=gnu or len(mini)!=2 or {entry[1] for entry in mini}!=pcala_types:
+    raise SystemExit(f'Loong external PCALA descriptor parity differs: {mini} != {gnu}')
 PY
 fi
 
@@ -103,4 +111,4 @@ fi
 test ! -e "$work/too_long_symbol.o"
 
 if ((gnu_available)); then oracle=exact; else oracle='NOT_TESTED:explicit_local_no_cross_GNU'; fi
-echo "MINIAS_LOONG_DYNAMIC_TOKENS=PASS operands=191,192,512 PCALA=2 GNU_bytes_relocs=$oracle negatives=4 no_partial_object=1"
+echo "MINIAS_LOONG_DYNAMIC_TOKENS=PASS operands=191,192,512 PCALA=2 GNU_bytes=$oracle GNU_PCALA=$oracle local_B16=policy_exempt negatives=4 no_partial_object=1"
