@@ -870,7 +870,8 @@ MinicFunctionId minic_parser_find_function(const MinicParser *parser_const,
 #if defined(MINIC_TEST_FORCE_PARSER_HASH_FALLBACK)
     return minic_parser_function_name_linear_fallback(parser, name_span);
 #endif
-    if (!minic_parser_function_name_index_sync(parser) ||
+    if (parser->cache_owner != parser ||
+        !minic_parser_function_name_index_sync(parser) ||
         parser->perf_function_name_slot_capacity == 0U) {
         return minic_parser_function_name_linear_fallback(parser, name_span);
     }

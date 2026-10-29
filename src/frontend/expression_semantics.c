@@ -109,6 +109,15 @@ static bool conditional_type_only(const MinicC0Program *program,
         *result = when_true;
         return true;
     }
+    /* GNU C accepts `condition ? void_side_effect() : 0` (and the
+     * reversed ordering), giving the entire conditional void type. The
+     * nonvoid arm is evaluated solely for side effects; its value is
+     * discarded. Linux x86's pgd_clear() uses precisely this extension
+     * when the five-level page-table branch invokes native_pgd_clear(). */
+    if (minic_type_is_void(when_true) || minic_type_is_void(when_false)) {
+        *result = minic_type_void();
+        return true;
+    }
     if (minic_type_conditional_pointer_common(when_true, when_false, result)) {
         return true;
     }

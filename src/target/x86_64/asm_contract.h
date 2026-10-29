@@ -131,6 +131,15 @@ unsigned int minic_x86_64_linux_fxsave_form(const char *, size_t);
 bool minic_x86_64_linux_x87_probe_form(const char *, size_t);
 unsigned int minic_x86_64_hweight_alternative_form(const char *,size_t);
 unsigned int minic_x86_64_linux_msr_form(const char *,size_t);
+/* Exact GNU four-register VMware hypercall, legacy FNSAVE, and kexec
+ * architectural segment reload. Unknown templates remain fail-closed. */
+unsigned int minic_x86_64_linux_vmware_hypercall_form(const char *, size_t);
+bool minic_x86_64_linux_legacy_fnsave_form(const char *, size_t);
+bool minic_x86_64_linux_kexec_load_segments_form(const char *, size_t);
+bool minic_x86_64_linux_efi_kernel_transfer_form(const char *, size_t);
+/* AMD Fam10h PCI MMCONFIG requires AL/AX/EAX specifically, with a separate
+ * address-register operand rather than a generic GNU `m` memory operand. */
+unsigned int minic_x86_64_linux_pci_mmconfig_form(const char *, size_t, bool);
 bool minic_x86_64_ip_fast_csum_template(const char *,size_t);
 bool minic_x86_64_checksum_fold_template(const char *,size_t);
 bool minic_x86_64_add32_carry_template(const char *,size_t);

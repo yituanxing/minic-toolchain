@@ -17,6 +17,7 @@
 #include "target/riscv/record_copy_bytes.h"
 #include "target/common/program_visit.h"
 #include "target/common/program_emit.h"
+#include "target/common/elf_alias_emit.h"
 #include "target/data_layout.h"
 #include <inttypes.h>
 #include <limits.h>
@@ -829,6 +830,9 @@ static bool rv32_visit_global(
     const MinicGlobalObject *obj, size_t index, void *opaque) {
     Rv32ProgramContext *ctx = opaque;
     (void)index;
+    if (obj->is_extern && obj->alias_target != MINIC_GLOBAL_OBJECT_INVALID)
+        return minic_multi_elf_emit_object_alias(
+            out, program, obj, "@object");
     if (minic_riscv32_emit_flat_global(out, program, target, obj)) return true;
     {
         char message[256];

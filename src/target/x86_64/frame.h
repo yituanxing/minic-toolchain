@@ -11,7 +11,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-/* SysV x86-64 frame *plan*, not emitted x86 instructions. The backend
+/* x86-64 ABI frame *plan* (SysV or Microsoft x64), not emitted instructions. The backend
  * retains independent register moves, object-address and prologue code.
  * A future Machine IR may consume or replace this target-specific plan. */
 /* Per-Core-value 8-byte frame slots, or 16 bytes for int128/x87 long double.
@@ -24,7 +24,7 @@ typedef struct MinicX86Frame {
     bool borrows_object_storage;
     MinicX86ArgumentPlan incoming_arguments;
     MinicX86OutgoingCallPlans outgoing_call_plans;
-    /* Borrowed for the duration of this function emission. SysV machine
+    /* Borrowed for the duration of this function emission. Target machine
      * location planning remains x86-owned and consumes semantic CALL views. */
     const MinicCoreCallIndex *semantic_calls;
     size_t object_count;
@@ -35,6 +35,11 @@ typedef struct MinicX86Frame {
      * two-word Core load/store and general source evaluation. */
     bool saves_incoming_gp;
     size_t incoming_gp_save_offset;
+    /* A Win64 callee must preserve RDI/RSI and XMM6-XMM15, even when its
+     * body calls a SysV function that is free to overwrite those registers.
+     * Each save owns disjoint rbp-relative frame slots. */
+    size_t ms_nonvolatile_gp_save_offset;
+    size_t ms_nonvolatile_xmm_save_offset;
     /* Hidden SysV memory-result destination occupies RDI and must survive
      * arbitrary nested calls until every aggregate return path. */
     bool has_sret;

@@ -8,18 +8,6 @@ host_cc=${HOST_CC:-cc}
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 fail() { printf '%s\n' "X86_MSABI_FIELD=FAIL $*" >&2; exit 1; }
-reject() {
-    local target=$1 name=$2 expected=$3
-    if "$minic" --target="$target" -S "$work/$name.i" -o "$work/$name.s" \
-        >"$work/$name.out" 2>"$work/$name.err"; then
-        fail "unsafe source admitted target=$target case=$name"
-    fi
-    test ! -e "$work/$name.s" || fail "partial assembly left for $name"
-    grep -Eq "$expected" "$work/$name.err" || {
-        sed -n '1,12p' "$work/$name.err" >&2
-        fail "missing fail-closed ABI diagnostic for $name"
-    }
-}
 preprocess() {
     "$host_cc" -E -P -std=gnu11 -x c "$work/$1.c" -o "$work/$1.i"
 }
@@ -93,8 +81,8 @@ preprocess direct-declaration
 grep -F 'subq $32, %rsp' "$work/direct-declaration.s" >/dev/null ||
     fail 'MS ABI direct call omitted 32-byte shadow space'
 
-# MS ABI function *definitions* still require Win64 incoming parameter,
-# nonvolatile-save and return ABI lowering; they remain fail-closed.
+# MS ABI fixed-scalar definitions now have real Win64 ingress and callee
+# nonvolatile preservation, not an implicit SysV function body.
 cat >"$work/direct.c" <<'SRC'
 __attribute__((ms_abi)) long efi_direct(long address) { return address + 1; }
 long call_efi_direct(void) { return efi_direct(7); }
@@ -102,7 +90,14 @@ SRC
 preprocess direct
 "$host_cc" -std=gnu11 -Wall -Wextra -Werror -c "$work/direct.c" \
     -o "$work/direct-gnu.o" || fail 'GNU rejected direct MS ABI source'
-reject x86_64-linux direct 'ms_abi function definition requires Microsoft x64 incoming ABI'
+"$minic" --target=x86_64-linux -S "$work/direct.i" -o "$work/direct.s" ||
+    fail 'MiniC rejected supported scalar MS ABI definition'
+grep -F 'movq %rcx, %rax' "$work/direct.s" >/dev/null ||
+    fail 'MS ABI definition omitted RCX incoming argument'
+grep -F 'movq %rdi,' "$work/direct.s" >/dev/null ||
+    fail 'MS ABI definition omitted RDI nonvolatile save'
+grep -F 'movdqu %xmm6,' "$work/direct.s" >/dev/null ||
+    fail 'MS ABI definition omitted XMM6 nonvolatile save'
 
 # A pure type declaration using the x86-only ABI attribute may not be
 # treated as a portable pointer on LP64D/AAPCS64 (where it is meaningless).
@@ -115,4 +110,4 @@ for target in aarch64-linux loongarch64-linux; do
     test ! -e "$work/foreign-${target}.s" || fail 'foreign partial output'
 done
 
-printf '%s\n' 'X86_MSABI_FIELD=PASS GNU_decl=2 MiniC_GNU_AS=2 typed_table=1 parenthesized_parameter=1 direct_call=1 indirect_call=1 definition_reject=1 foreign_target_reject=2'
+printf '%s\n' 'X86_MSABI_FIELD=PASS GNU_decl=2 MiniC_GNU_AS=2 typed_table=1 parenthesized_parameter=1 direct_call=1 indirect_call=1 definition_admit=1 foreign_target_reject=2'

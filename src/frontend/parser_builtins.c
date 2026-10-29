@@ -1161,14 +1161,17 @@ static bool parse_builtin_unary(MinicParser *parser,
     switch (operator_kind) {
     case MINIC_BUILTIN_UNARY_CLZ:
     case MINIC_BUILTIN_UNARY_CTZ:
+    case MINIC_BUILTIN_UNARY_POPCOUNT:
         argument_type = minic_type_unsigned_int();
         break;
     case MINIC_BUILTIN_UNARY_CLZL:
     case MINIC_BUILTIN_UNARY_CTZL:
+    case MINIC_BUILTIN_UNARY_POPCOUNTL:
         argument_type = minic_type_unsigned_long();
         break;
     case MINIC_BUILTIN_UNARY_CLZLL:
     case MINIC_BUILTIN_UNARY_CTZLL:
+    case MINIC_BUILTIN_UNARY_POPCOUNTLL:
         argument_type = minic_type_unsigned_long_long();
         break;
     case MINIC_BUILTIN_UNARY_FFSLL:
@@ -1401,6 +1404,53 @@ static bool parse_builtin_overflow(MinicParser *parser,
                                    MinicOverflowOperator operator_kind,
                                    MinicExpressionId *expression_id) {
     return parse_builtin_overflow_typed(parser, operator_kind, NULL, expression_id);
+}
+
+/* GCC's *_overflow_p third operand selects the destination integer type,
+ * without being evaluated.  Preserve its AST id as type-only metadata: Core
+ * may never lower or execute the expression. */
+static bool parse_builtin_overflow_predicate(MinicParser *parser,
+                                             MinicOverflowOperator operator_kind,
+                                             MinicExpressionId *expression_id) {
+    MinicExpression expression;
+    MinicExpressionId left_id, right_id, result_id;
+    const MinicExpression *left, *right, *result;
+    MinicSourcePosition begin;
+    MinicType result_type;
+    if (parser == NULL || expression_id == NULL) return false;
+    begin = parser->current.span.begin;
+    if (!minic_parser_advance(parser) ||
+        !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '(' after overflow predicate") ||
+        !minic_parser_expression_parse_internal(parser, &left_id, 0U, true) ||
+        !minic_parser_expect(parser, MINIC_TOKEN_COMMA, "expected ',' after first operand") ||
+        !minic_parser_expression_parse_internal(parser, &right_id, 0U, true) ||
+        !minic_parser_expect(parser, MINIC_TOKEN_COMMA, "expected ',' after second operand") ||
+        !minic_parser_expression_parse_internal(parser, &result_id, 0U, true) ||
+        !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')' after overflow predicate"))
+        return false;
+    left = minic_c0_program_expression(parser->program, left_id);
+    right = minic_c0_program_expression(parser->program, right_id);
+    result = minic_c0_program_expression(parser->program, result_id);
+    if (left == NULL || right == NULL || result == NULL ||
+        !minic_type_is_integer(left->type) || !minic_type_is_integer(right->type) ||
+        !minic_type_is_integer(result->type) || minic_type_is_bool_integer(result->type) ||
+        !minic_type_unqualified(result->type, &result_type) ||
+        !normalize_overflow_integer_operand(parser, &left_id, result_type) ||
+        !normalize_overflow_integer_operand(parser, &right_id, result_type)) {
+        minic_parser_error(parser, "overflow predicate requires three integer operands");
+        return false;
+    }
+    (void)memset(&expression, 0, sizeof(expression));
+    expression.kind = MINIC_EXPRESSION_BUILTIN_OVERFLOW_P;
+    expression.span.begin = begin;
+    expression.span.end = result->span.end;
+    expression.type = minic_type_bool();
+    expression.value_category = MINIC_VALUE_RVALUE;
+    expression.value.overflow.operator_kind = operator_kind;
+    expression.value.overflow.left = left_id;
+    expression.value.overflow.right = right_id;
+    expression.value.overflow.result_pointer = result_id;
+    return minic_parser_add_expression(parser, &expression, expression_id);
 }
 
 static bool parse_fixed_width_overflow(MinicParser *parser,
@@ -1813,6 +1863,27 @@ bool minic_parser_try_builtin_primary_early(
         *handled = true;
         return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
     }
+    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_popcount")) {
+        if (!parse_builtin_unary(parser, MINIC_BUILTIN_UNARY_POPCOUNT,
+                                 "__builtin_popcount", &primary_id) ||
+            !minic_parser_parse_postfix(parser, primary_id, &primary_id)) return false;
+        *handled = true;
+        return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
+    }
+    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_popcountl")) {
+        if (!parse_builtin_unary(parser, MINIC_BUILTIN_UNARY_POPCOUNTL,
+                                 "__builtin_popcountl", &primary_id) ||
+            !minic_parser_parse_postfix(parser, primary_id, &primary_id)) return false;
+        *handled = true;
+        return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
+    }
+    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_popcountll")) {
+        if (!parse_builtin_unary(parser, MINIC_BUILTIN_UNARY_POPCOUNTLL,
+                                 "__builtin_popcountll", &primary_id) ||
+            !minic_parser_parse_postfix(parser, primary_id, &primary_id)) return false;
+        *handled = true;
+        return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
+    }
     if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_ffs")) {
         if (!parse_builtin_unary(
                 parser, MINIC_BUILTIN_UNARY_FFSLL, "__builtin_ffs", &primary_id) ||
@@ -1893,6 +1964,12 @@ bool minic_parser_try_builtin_primary_early(
         *handled = true;
         return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
     }
+    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_add_overflow_p")) {
+        if (!parse_builtin_overflow_predicate(parser, MINIC_OVERFLOW_ADD, &primary_id) ||
+            !minic_parser_parse_postfix(parser, primary_id, &primary_id)) return false;
+        *handled = true;
+        return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
+    }
     if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_sub_overflow")) {
         if (!parse_builtin_overflow(parser, MINIC_OVERFLOW_SUBTRACT, &primary_id) ||
             !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
@@ -1901,11 +1978,23 @@ bool minic_parser_try_builtin_primary_early(
         *handled = true;
         return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
     }
+    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_sub_overflow_p")) {
+        if (!parse_builtin_overflow_predicate(parser, MINIC_OVERFLOW_SUBTRACT, &primary_id) ||
+            !minic_parser_parse_postfix(parser, primary_id, &primary_id)) return false;
+        *handled = true;
+        return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
+    }
     if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_mul_overflow")) {
         if (!parse_builtin_overflow(parser, MINIC_OVERFLOW_MULTIPLY, &primary_id) ||
             !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
             return false;
         }
+        *handled = true;
+        return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
+    }
+    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_mul_overflow_p")) {
+        if (!parse_builtin_overflow_predicate(parser, MINIC_OVERFLOW_MULTIPLY, &primary_id) ||
+            !minic_parser_parse_postfix(parser, primary_id, &primary_id)) return false;
         *handled = true;
         return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
     }

@@ -627,7 +627,8 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         return append_scalar_bitcast(
             context, expression->span, expression->type, operand_value, value_id);
     }
-    if (expression->kind == MINIC_EXPRESSION_BUILTIN_OVERFLOW &&
+    if ((expression->kind == MINIC_EXPRESSION_BUILTIN_OVERFLOW ||
+         expression->kind == MINIC_EXPRESSION_BUILTIN_OVERFLOW_P) &&
         (expression->value.overflow.operator_kind == MINIC_OVERFLOW_ADD ||
          expression->value.overflow.operator_kind == MINIC_OVERFLOW_SUBTRACT ||
          expression->value.overflow.operator_kind == MINIC_OVERFLOW_MULTIPLY)) {
@@ -647,7 +648,10 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         MinicType result_type;
         MinicType right_type;
         MinicType right_value_type;
+        MinicType result_pointer_type;
+        bool is_predicate;
 
+        is_predicate = expression->kind == MINIC_EXPRESSION_BUILTIN_OVERFLOW_P;
         if (!minic_type_equal(expression->type, minic_type_bool())) {
             return MINIC_CORE_LOWER_ERROR;
         }
@@ -659,7 +663,9 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
             context->body->program, expression->value.overflow.result_pointer);
         if (left_expression == NULL || right_expression == NULL ||
             result_pointer_expression == NULL || context->target == NULL ||
-            !minic_type_pointee(result_pointer_expression->type, &result_type) ||
+            !(is_predicate
+                  ? minic_type_unqualified(result_pointer_expression->type, &result_type)
+                  : minic_type_pointee(result_pointer_expression->type, &result_type)) ||
             !minic_type_is_integer(result_type) || minic_type_is_bool_integer(result_type) ||
             minic_type_is_const(result_type) || minic_type_is_volatile(result_type) ||
             !core_scalar_expression_value_type(context->body, left_expression, &left_type) ||
@@ -724,10 +730,28 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
             return status;
         }
 
-        status =
-            lower_expression(context, expression->value.overflow.result_pointer, &result_address);
-        if (status != MINIC_CORE_LOWER_OK) {
-            return status;
+        if (is_predicate) {
+            MinicCoreObjectId result_object;
+            MinicCoreInstruction object_address;
+            if (!minic_type_pointer_to(result_type, &result_pointer_type) ||
+                !minic_core_function_add_object(
+                    context->function, expression->span, result_type, &result_object))
+                return MINIC_CORE_LOWER_ERROR;
+            (void)memset(&object_address, 0, sizeof(object_address));
+            object_address.kind = MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS;
+            object_address.span = expression->span;
+            object_address.type = result_pointer_type;
+            object_address.result = MINIC_CORE_VALUE_INVALID;
+            object_address.value.object_id = result_object;
+            if (!minic_core_function_append_value_instruction(
+                    context->function, context->block_id,
+                    &object_address, &result_address))
+                return MINIC_CORE_LOWER_ERROR;
+        } else {
+            result_pointer_type = result_pointer_expression->type;
+            status = lower_expression(
+                context, expression->value.overflow.result_pointer, &result_address);
+            if (status != MINIC_CORE_LOWER_OK) return status;
         }
         status =
             minic_core_lower_internal_reload_scalar_value(context, left_expression->span, left_value_type, left_object, &left);
@@ -744,7 +768,7 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
             !minic_type_equal(context->function->values[left].type, left_value_type) ||
             !minic_type_equal(context->function->values[right].type, right_value_type) ||
             !minic_type_equal(context->function->values[result_address].type,
-                              result_pointer_expression->type)) {
+                              result_pointer_type)) {
             return MINIC_CORE_LOWER_ERROR;
         }
         instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW;

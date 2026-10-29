@@ -453,16 +453,32 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
         return x86_normalize(out, program, target, ins->type) &&
                x86_value_store(out, frame, ins->result);
     case MINIC_CORE_INSTRUCTION_PARAMETER: {
-        static const char *const regs[] = {
+        static const char *const sysv_regs[] = {
             "%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9"};
+        static const char *const ms_x64_regs[] = {
+            "%rcx", "%rdx", "%r8", "%r9"};
+        const char *const *regs;
+        size_t register_limit;
+        const bool ms_x64 = frame->incoming_arguments.calling_convention ==
+            MINIC_CALLING_CONVENTION_MS_X64;
         size_t position = ins->value.parameter_index;
         const MinicX86ArgLocation *location;
+        if (ms_x64) {
+            regs = ms_x64_regs;
+            register_limit = 4U;
+        } else if (frame->incoming_arguments.calling_convention ==
+                   MINIC_CALLING_CONVENTION_DEFAULT) {
+            regs = sysv_regs;
+            register_limit = 6U;
+        } else {
+            return false;
+        }
         if (position >= frame->incoming_arguments.argument_count ||
             frame->incoming_arguments.locations == NULL)
             return false;
         location = &frame->incoming_arguments.locations[position];
         if (minic_type_is_int128_integer(ins->type)) {
-            if (location->kind != MINIC_X86_ARG_I128_TWO_GP)
+            if (ms_x64 || location->kind != MINIC_X86_ARG_I128_TWO_GP)
                 return false;
             if (!location->on_stack) {
                 if (location->gp_index > 4U ||
@@ -489,7 +505,7 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
             return x86_i128_store(out, frame, ins->result, "%r10", "%r11");
         }
         if (minic_type_is_long_double(ins->type)) {
-            if (location->kind != MINIC_X86_ARG_X87_MEMORY ||
+            if (ms_x64 || location->kind != MINIC_X86_ARG_X87_MEMORY ||
                 fprintf(out, "  fldt %zu(%%rbp)\n",
                         16U + location->stack_index * 8U) < 0)
                 return false;
@@ -498,7 +514,8 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
         if (minic_type_is_double(ins->type) || minic_type_is_float(ins->type)) {
             if (location->kind != MINIC_X86_ARG_SSE) return false;
             if (!location->on_stack) {
-                if (fprintf(out, minic_type_is_double(ins->type)
+                if (location->fp_index >= (ms_x64 ? 4U : 8U) ||
+                    fprintf(out, minic_type_is_double(ins->type)
                              ? "  movq %%xmm%zu, %%rax\n"
                              : "  movd %%xmm%zu, %%eax\n",
                             location->fp_index) < 0)
@@ -509,7 +526,8 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
         } else {
             if (location->kind != MINIC_X86_ARG_INTEGER) return false;
             if (!location->on_stack) {
-                if ((frame->saves_incoming_gp
+                if (location->gp_index >= register_limit ||
+                    (frame->saves_incoming_gp
                      ? fprintf(out, "  movq -%zu(%%rbp), %%rax\n",
                          frame->incoming_gp_save_offset +
                              location->gp_index * 8U)
@@ -546,7 +564,9 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
             object < fn->object_count &&
             minic_x86_64_record_abi_compatible(
                 fn->objects[object].type, fn->parameter_types[position]);
-        if (position >= frame->incoming_arguments.argument_count ||
+        if (frame->incoming_arguments.calling_convention !=
+                MINIC_CALLING_CONVENTION_DEFAULT ||
+            position >= frame->incoming_arguments.argument_count ||
             frame->incoming_arguments.locations == NULL ||
             object >= fn->object_count || !type_compatible)
             return false;

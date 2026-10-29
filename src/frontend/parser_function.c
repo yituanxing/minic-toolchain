@@ -2013,12 +2013,22 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                                                   force_emit,
                                                   alias_symbol_literal);
     }
-    /* Caller-side Win64 marshalling is implemented; definition ingress,
-     * nonvolatile RDI/RSI/XMM6-15 saves and MS return ABI are separate.
-     * Reject bodies until their complete machine ABI is implemented. */
-    if (calling_convention != MINIC_CALLING_CONVENTION_DEFAULT) {
+    /* An MS x64 definition is a distinct incoming ABI, not a SysV body
+     * with merely an attribute attached. The x86 target implements fixed
+     * scalar ingress and all MS nonvolatile preservation, while variable
+     * arguments, aggregates, TI and x87 remain explicitly unsupported. */
+    if (calling_convention == MINIC_CALLING_CONVENTION_MS_X64 &&
+        !minic_parser_calling_convention_fixed_scalar_supported(
+            parser, calling_convention, return_type, parameter_types,
+            parameter_count, is_variadic)) {
         minic_parser_error(parser,
-            "ms_abi function definition requires Microsoft x64 incoming ABI lowering");
+            "ms_abi function definition requires supported fixed scalar signature");
+        return false;
+    }
+    if (calling_convention != MINIC_CALLING_CONVENTION_DEFAULT &&
+        calling_convention != MINIC_CALLING_CONVENTION_MS_X64) {
+        minic_parser_error(parser,
+            "unsupported nondefault function definition calling convention");
         return false;
     }
     if (alias_symbol_literal.end.offset != 0U) {
@@ -2133,6 +2143,14 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     } else if (!minic_c0_program_define_function(
                    parser->program, function_id, local_begin, body_block)) {
         minic_parser_error(parser, "cannot define previously declared function");
+        return false;
+    }
+    /* The definition path must persist the same ABI identity as a preceding
+     * prototype: otherwise Core silently defaults the body to SysV even
+     * though callers correctly use Microsoft's RCX/RDX/R8/R9 convention. */
+    if (!minic_c0_program_set_function_calling_convention(
+            parser->program, function_id, calling_convention)) {
+        minic_parser_error(parser, "conflicting function definition calling convention");
         return false;
     }
     if (!minic_c0_program_set_function_inline(parser->program, function_id, is_inline)) {
@@ -2449,6 +2467,7 @@ bool minic_parse_c0_program_for_target(const char *path,
     bool success;
 
     (void)memset(&parser, 0, sizeof(parser));
+    parser.cache_owner = &parser;
     parser.path = path;
     parser.source = source;
     parser.diagnostic = diagnostic;

@@ -137,6 +137,16 @@ bool minic_loongarch64_qualified_opaque_asm(const MinicCoreInlineAsm *a) {
         "idle0", "tlbrd", "tlbclr", "tlbflush", "tlbsrch",
         "tlbwr", "tlbfill", "dbar0", "dbar0x700", "ibar0", "nop"
     };
+    /* The original LoongArch Linux 6.6.143 CPU-hotplug and text-relocation
+     * paths emit these fixed hardware instructions with trailing newlines.
+     * The generic one-instruction whitelist deliberately rejects embedded
+     * newlines; qualify these exact source spellings, including the ordered
+     * IBAR/DBAR pair needed after executable text relocation.  No arbitrary
+     * multi-instruction opaque ASM or operand interpolation is admitted. */
+    static const char *const linux_newline_hardware[] = {
+        "dbar 0\n\t", "idle 0\n\t", "nop\n\t",
+        "ibar 0 \t\ndbar 0 \t\n"
+    };
     char compact[64];
     size_t i, n = 0U;
     if (minic_loongarch64_linux_jump_label_asm_goto_core(a)) return true;
@@ -148,6 +158,17 @@ bool minic_loongarch64_qualified_opaque_asm(const MinicCoreInlineAsm *a) {
         a->template_length == 0U || a->template_length >= sizeof(compact) ||
         a->is_goto || a->register_clobber_count != 0U)
         return false;
+    for (i = 0U;
+         i < sizeof(linux_newline_hardware) /
+             sizeof(linux_newline_hardware[0]); ++i) {
+        const size_t length = strlen(linux_newline_hardware[i]);
+        /* CPU-hotplug DBAR carries a compiler memory barrier; IDLE, NOP
+         * and the relocation IBAR/DBAR pair have no memory clobber. */
+        if ((i == 0U || !a->has_memory_clobber) &&
+            a->template_length == length &&
+            memcmp(a->template_text, linux_newline_hardware[i], length) == 0)
+            return true;
+    }
     /* Original Linux cache.c emits one tab-indented IBAR followed by LF.
      * Accept that single literal opcode, never a newline-delimited program
      * through the general compact/whitelist matcher below. */

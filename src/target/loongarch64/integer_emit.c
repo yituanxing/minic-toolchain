@@ -6,6 +6,45 @@
 #include "target/loongarch64/frame_emit.h"
 #include <stdio.h>
 
+/* GNU checked-addition uses the original *mathematical* operand values,
+ * then converts to the destination type. Linux fs/udf/inode.c passes a
+ * compile-time sizeof that Core legally narrows to a signed i32 constant,
+ * and le32_to_cpu() supplies u32. The i32+u32 sum fits signed i64, while
+ * the signed i32 destination can overflow. Keep this contract explicit:
+ * never treat the u32 as signed or infer overflow from add.w alone. */
+static bool loong_checked_add_i32_u32_shape(
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
+    bool *signed_left) {
+    MinicCoreValueId left, right, address;
+    MinicType result;
+    if (fn == NULL || ins == NULL || signed_left == NULL ||
+        ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW ||
+        ins->value.integer_overflow.operator_kind !=
+            MINIC_CORE_INTEGER_OVERFLOW_ADD)
+        return false;
+    left = ins->value.integer_overflow.left;
+    right = ins->value.integer_overflow.right;
+    address = ins->value.integer_overflow.result_address;
+    if (left >= fn->value_count || right >= fn->value_count ||
+        address >= fn->value_count ||
+        !minic_type_pointee(fn->values[address].type, &result) ||
+        !minic_type_equal(result, minic_type_int()))
+        return false;
+    if (minic_type_equal(fn->values[left].type, minic_type_int()) &&
+        minic_type_equal(fn->values[right].type,
+                         minic_type_unsigned_int())) {
+        *signed_left = true;
+        return true;
+    }
+    if (minic_type_equal(fn->values[left].type,
+                         minic_type_unsigned_int()) &&
+        minic_type_equal(fn->values[right].type, minic_type_int())) {
+        *signed_left = false;
+        return true;
+    }
+    return false;
+}
+
 /* Keep dynamic-stack addressing behind the target frame helper. */
 #define emit_sp_mem(_out, _op, _reg, _offset) \
     minic_loongarch64_emit_frame_mem((_out), (_op), (_reg), (_offset), dynamic_frame)
@@ -199,6 +238,29 @@ bool minic_loongarch64_emit_integer_instruction(
                     program, target, fn, ins, &width, &is_signed)) {
                 bool multiply_signed_left, multiply_signed_right;
                 bool multiply_signed_result;
+                bool add_signed_left;
+                if (loong_checked_add_i32_u32_shape(fn, ins,
+                                                    &add_signed_left)) {
+                    if (!emit_sp_mem(out, "ld.w", "$t0",
+                                     (size_t)lhs * 8U) ||
+                        !emit_sp_mem(out, "ld.w", "$t1",
+                                     (size_t)rhs * 8U) ||
+                        !emit_sp_mem(out, "ld.d", "$t2",
+                                     (size_t)address * 8U) ||
+                        fputs(add_signed_left
+                                  ? "  bstrpick.d $t1, $t1, 31, 0\n"
+                                  : "  bstrpick.d $t0, $t0, 31, 0\n",
+                              out) == EOF ||
+                        fputs("  add.d $t3, $t0, $t1\n"
+                              "  add.w $t0, $t3, $zero\n"
+                              "  xor $t4, $t3, $t0\n"
+                              "  sltu $t4, $zero, $t4\n"
+                              "  st.w $t0, $t2, 0\n"
+                              "  move $t0, $t4\n", out) == EOF)
+                        return false;
+                    *needs_gp_store = true;
+                    return true;
+                }
                 if (minic_core_integer_overflow_mixed_multiply_i32_shape(
                         program, target, fn, ins,
                         &multiply_signed_left, &multiply_signed_right,

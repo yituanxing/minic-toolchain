@@ -18,7 +18,7 @@ bool minic_x86_64_align(size_t value, size_t alignment, size_t *out) {
 }
 
 /* Opt-in physical frame preflight stage trace. The frontend/core diagnosis
- * has already succeeded when this is reached; separating incoming SysV
+ * has already succeeded when this is reached; separating incoming ABI
  * placement, outgoing CALL placement, object storage and SSA slot layout
  * makes a real Linux ABI rejection actionable without relaxing any gate. */
 static bool x86_frame_preflight_reject(
@@ -50,12 +50,12 @@ bool minic_x86_64_frame_init_with_storage(const MinicC0Program *program,
     frame->semantic_calls = facts->call_index;
     if (!minic_x86_64_plan_incoming_arguments(
             program, target, fn, &frame->incoming_arguments))
-        return x86_frame_preflight_reject(fn, "incoming-sysv");
+        return x86_frame_preflight_reject(fn, "incoming-abi");
     if (facts->call_index != NULL &&
         !minic_x86_64_outgoing_call_plans_prepare(
             program, target, fn, facts->call_index,
             &frame->outgoing_call_plans))
-        return x86_frame_preflight_reject(fn, "outgoing-sysv");
+        return x86_frame_preflight_reject(fn, "outgoing-abi");
     if (!minic_core_object_storage_plan_acquire(
             program, target->data_layout, fn, storage,
             &frame->object_storage, &frame->borrows_object_storage))
@@ -94,6 +94,20 @@ bool minic_x86_64_frame_init_with_storage(const MinicC0Program *program,
             value_bytes += 48U;
             break;
         }
+    if (fn->calling_convention == MINIC_CALLING_CONVENTION_MS_X64) {
+        /* Win64 extends the SysV nonvolatile bank by RDI/RSI and XMM6..15.
+         * Save all ten vector registers: even a body which only emits
+         * scalar code can invoke arbitrary SysV callees (where those vector
+         * registers are volatile). Reserve the two GP slots first, then
+         * ten 16-byte vector slots, preserving Core value ownership. */
+        if (frame->saves_incoming_gp || frame->has_sret ||
+            frame->varargs_count != 0U ||
+            value_bytes > (size_t)INT32_MAX - 176U)
+            return x86_frame_preflight_reject(fn, "ms-x64-nonvolatile");
+        frame->ms_nonvolatile_gp_save_offset = value_bytes + 8U;
+        frame->ms_nonvolatile_xmm_save_offset = value_bytes + 32U;
+        value_bytes += 176U;
+    }
     /* Discover semantic va_start sites from Core. A VA cursor is not an RV64
      * sequential argument pointer under SysV x86-64. */
     if (frame->varargs_count != 0U) {

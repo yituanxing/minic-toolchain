@@ -193,6 +193,37 @@ bool minic_aarch64_emit_integer_instruction(
             bool is_signed;
             if (!minic_core_integer_overflow_shape(
                     program, target, fn, ins, &width, &is_signed)) {
+                bool multiply_signed_left, multiply_signed_right;
+                bool multiply_signed_result;
+                if (minic_core_integer_overflow_mixed_multiply_i32_shape(
+                        program, target, fn, ins,
+                        &multiply_signed_left, &multiply_signed_right,
+                        &multiply_signed_result)) {
+                    /* GNU checked arithmetic uses the mathematical product,
+                     * not the result of C's usual integer promotions. The
+                     * product of two 32-bit operands always fits 64 bits,
+                     * even when one is signed and the other unsigned. */
+                    if (fprintf(out, "  ldr w9, [sp, #%zu]\n"
+                                     "  ldr w10, [sp, #%zu]\n"
+                                     "  ldr x11, [sp, #%zu]\n",
+                                (size_t)lhs * 8U, (size_t)rhs * 8U,
+                                (size_t)address * 8U) < 0 ||
+                        fputs(multiply_signed_left ? "  sxtw x9, w9\n"
+                                                   : "  uxtw x9, w9\n", out) == EOF ||
+                        fputs(multiply_signed_right ? "  sxtw x10, w10\n"
+                                                    : "  uxtw x10, w10\n", out) == EOF ||
+                        fputs("  mul x12, x9, x10\n"
+                              "  mov w9, w12\n", out) == EOF ||
+                        fputs(multiply_signed_result ? "  sxtw x13, w9\n"
+                                                     : "  uxtw x13, w9\n", out) == EOF ||
+                        fputs("  cmp x12, x13\n"
+                              "  cset w10, ne\n"
+                              "  str w9, [x11]\n"
+                              "  mov w9, w10\n", out) == EOF)
+                        return false;
+                    *needs_gp_store = true;
+                    return true;
+                }
                 bool signed_left;
                 if (!minic_core_integer_overflow_mixed_add_i32_shape(
                         program, target, fn, ins, &signed_left) ||

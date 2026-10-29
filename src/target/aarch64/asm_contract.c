@@ -1748,7 +1748,17 @@ static const char *aarch64_linux_msr_register(const char *text, size_t len) {
         "cntp_ctl_el0", "cntp_cval_el0", "cntv_ctl_el0",
         "cntv_cval_el0", "tpidr_el0", "tpidrro_el0",
         "tpidr_el2", "hcr_el2", "cptr_el2", "vtcr_el2",
-        "vttbr_el2", "fpexc32_el2", "hstr_el2", "mdcr_el2"
+        "vttbr_el2", "fpexc32_el2", "hstr_el2", "mdcr_el2",
+        /* Linux 6.6.143 KVM hyp/PMU writes use the same one-input rZ
+         * sysreg contract.  These names are GNU AArch64 hardware operands,
+         * not ordinary C variables or aliases; preserve the MSR effect. */
+        "par_el1", "elr_el2", "spsr_el2", "spsr_abt", "spsr_und",
+        "vmpidr_el2", "cnthctl_el2", "cntvoff_el2", "pmuserenr_el0",
+        "pmcntenset_el0", "pmcntenclr_el0", "pmovsclr_el0",
+        "pmevtyper0_el0", "pmevcntr0_el0", "pmselr_el0",
+        "pmintenset_el1", "pmintenclr_el1", "pmccntr_el0",
+        "pmccfiltr_el0", "pmcr_el0", "dbgbcr15_el1",
+        "dbgbvr0_el1", "CPACR_EL1"
     };
     char compact[96];
     size_t i, n = 0U;
@@ -2010,16 +2020,34 @@ static const Aarch64LinuxWriteSysreg aarch64_linux_write_sysregs[] = {
     {3U,4U,12U,1U,1U}, /* DISR_EL2 */
     {3U,4U,12U,11U,0U}, /* ICH_HCR_EL2 */
     {3U,4U,12U,11U,7U}, /* ICH_VMCR_EL2 */
-    {3U,4U,12U,12U,0U}, /* ICH_AP0R0_EL2 */
-    {3U,4U,12U,12U,1U}, /* ICH_AP0R1_EL2 */
-    {3U,4U,12U,12U,2U}, /* ICH_AP0R2_EL2 */
-    {3U,4U,12U,8U,0U}, /* ICH_LR0_EL2 */
-    {3U,4U,12U,8U,1U}, /* ICH_LR1_EL2 */
-    {3U,4U,12U,8U,2U}, /* ICH_LR2_EL2 */
-    {3U,4U,12U,9U,0U}, /* ICH_LR8_EL2 */
-    {3U,4U,12U,9U,1U}, /* ICH_LR9_EL2 */
-    {3U,4U,12U,9U,2U}, /* ICH_LR10_EL2 */
-    {3U,4U,12U,9U,5U}, /* ICH_LR13_EL2 */
+    /* arch/arm64/include/asm/sysreg.h: AP0R is CRm=8, AP1R is CRm=9;
+     * list registers LR0..7 are CRm=12, LR8..15 are CRm=13. The former
+     * abbreviated table accidentally swapped CRm for these families,
+     * producing wrong hardware effects despite syntactically valid .inst. */
+    {3U,4U,12U,8U,0U}, /* ICH_AP0R0_EL2 */
+    {3U,4U,12U,8U,1U}, /* ICH_AP0R1_EL2 */
+    {3U,4U,12U,8U,2U}, /* ICH_AP0R2_EL2 */
+    {3U,4U,12U,8U,3U}, /* ICH_AP0R3_EL2 */
+    {3U,4U,12U,9U,0U}, /* ICH_AP1R0_EL2 */
+    {3U,4U,12U,9U,1U}, /* ICH_AP1R1_EL2 */
+    {3U,4U,12U,9U,2U}, /* ICH_AP1R2_EL2 */
+    {3U,4U,12U,9U,3U}, /* ICH_AP1R3_EL2 */
+    {3U,4U,12U,12U,0U}, /* ICH_LR0_EL2 */
+    {3U,4U,12U,12U,1U}, /* ICH_LR1_EL2 */
+    {3U,4U,12U,12U,2U}, /* ICH_LR2_EL2 */
+    {3U,4U,12U,12U,3U}, /* ICH_LR3_EL2 */
+    {3U,4U,12U,12U,4U}, /* ICH_LR4_EL2 */
+    {3U,4U,12U,12U,5U}, /* ICH_LR5_EL2 */
+    {3U,4U,12U,12U,6U}, /* ICH_LR6_EL2 */
+    {3U,4U,12U,12U,7U}, /* ICH_LR7_EL2 */
+    {3U,4U,12U,13U,0U}, /* ICH_LR8_EL2 */
+    {3U,4U,12U,13U,1U}, /* ICH_LR9_EL2 */
+    {3U,4U,12U,13U,2U}, /* ICH_LR10_EL2 */
+    {3U,4U,12U,13U,3U}, /* ICH_LR11_EL2 */
+    {3U,4U,12U,13U,4U}, /* ICH_LR12_EL2 */
+    {3U,4U,12U,13U,5U}, /* ICH_LR13_EL2 */
+    {3U,4U,12U,13U,6U}, /* ICH_LR14_EL2 */
+    {3U,4U,12U,13U,7U}, /* ICH_LR15_EL2 */
     {3U,4U,14U,0U,6U}, /* CNTVOFF_EL2 */
     {3U,4U,4U,0U,0U}, /* SPSR_EL2 */
     {3U,4U,4U,0U,1U}, /* ELR_EL2 */
@@ -2268,20 +2296,18 @@ static bool aarch64_linux_vhe_sysreg_alternative_emit(
  * The original source uses .arch armv8.5-a followed by TLBI and an rZ
  * GNU register-or-zero operand. This is a KERNEL HARDWARE invalidation,
  * not a C function call or an ordinary compiler memory fence. Keep all
- * ten original TLBI opcodes in this ISA target, never generic Core. */
+ * original TLBI opcodes in this ISA target, never generic Core. */
+enum { AARCH64_LINUX_TLBI_ADDR_FORM_COUNT = 11U };
+static const char *const aarch64_linux_tlbi_names[] = {
+    /* All forms before ADDR_FORM_COUNT have one rZ input. */
+    "vale1is", "vale2is", "aside1is", "rvale1is",
+    "vae1is", "rvae1is", "vaale1is", "vaae1is",
+    /* KVM stage-2 and EL2 address translations. */
+    "ipas2e1is", "ipas2e1", "vae2is",
+    /* Whole-context invalidations have no explicit operand. */
+    "vmalle1", "vmalle1is", "alle1is", "vmalls12e1is"
+};
 static unsigned int aarch64_linux_tlbi_form(const char *text,size_t length) {
-    static const char *const names[]={
-        "vale1is",
-        "vale2is",
-        "aside1is",
-        "rvale1is",
-        "vae1is",
-        "rvae1is",
-        "vaale1is",
-        "vaae1is",
-        "vmalle1",
-        "vmalle1is"
-    };
     char normalized[128],expected[128];
     size_t i,n=0U;
     if(!text||!length||length>=sizeof(normalized))return 0U;
@@ -2292,37 +2318,28 @@ static unsigned int aarch64_linux_tlbi_form(const char *text,size_t length) {
         normalized[n++]=ch;
     }
     normalized[n]='\0';
-    for(i=0U;i<sizeof(names)/sizeof(names[0]);++i){
+    for(i=0U;i<sizeof(aarch64_linux_tlbi_names)/
+                  sizeof(aarch64_linux_tlbi_names[0]);++i){
         const int written=snprintf(expected,sizeof(expected),
-            ".archarmv8.5-atlbi%s%s",names[i],
-            i<8U?",%x0":"");
+            ".archarmv8.5-atlbi%s%s",aarch64_linux_tlbi_names[i],
+            i<AARCH64_LINUX_TLBI_ADDR_FORM_COUNT?",%x0":"");
         if(written>0&&(size_t)written<sizeof(expected)&&
            strcmp(normalized,expected)==0)return (unsigned int)i+1U;
     }
     return 0U;
 }
 static const char *aarch64_linux_tlbi_mnemonic(unsigned int form) {
-    static const char *const names[]={
-        "vale1is",
-        "vale2is",
-        "aside1is",
-        "rvale1is",
-        "vae1is",
-        "rvae1is",
-        "vaale1is",
-        "vaae1is",
-        "vmalle1",
-        "vmalle1is"
-    };
-    return !form||(size_t)form>sizeof(names)/sizeof(names[0])
-        ? NULL:names[form-1U];
+    return !form || (size_t)form > sizeof(aarch64_linux_tlbi_names) /
+            sizeof(aarch64_linux_tlbi_names[0])
+        ? NULL : aarch64_linux_tlbi_names[form - 1U];
 }
 static bool aarch64_linux_tlbi_source(
     const MinicC0Program *program,const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
     const unsigned int form=src?aarch64_linux_tlbi_form(
         src->template_text,src->template_length):0U;
-    const bool has_address=form>=1U&&form<=8U;
+    const bool has_address=form>=1U&&
+        form<=AARCH64_LINUX_TLBI_ADDR_FORM_COUNT;
     const MinicExpression *arg;
     if(!program||!src||!contract||!form||src->is_goto||
        src->output_count!=0U||src->input_count!=(has_address?1U:0U)||
@@ -2354,9 +2371,10 @@ static bool aarch64_linux_tlbi_emit(
     if(!out||!ctx||!fn||!info||!mnemonic||ctx->dynamic_frame||
        info->is_goto||!info->is_volatile||
        !info->has_memory_clobber||info->register_clobber_count||
-       ins->value.structured_inline_asm.operand_count!=(form<=8U?1U:0U))
+       ins->value.structured_inline_asm.operand_count!=
+           (form<=AARCH64_LINUX_TLBI_ADDR_FORM_COUNT?1U:0U))
         return false;
-    if(form>8U)
+    if(form>AARCH64_LINUX_TLBI_ADDR_FORM_COUNT)
         return fprintf(out,"  .arch armv8.5-a\n  tlbi %s\n",mnemonic)>=0;
     if(!b||b[0].operand_index!=0U||b[0].value>=fn->value_count||
        !aarch64_linux_structured_spill_slot_valid(b[0].value)||b[0].early_clobber||

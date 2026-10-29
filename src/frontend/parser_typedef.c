@@ -164,7 +164,8 @@ MinicTypeAliasId minic_parser_find_type_alias(const MinicParser *parser,
     }
 
     ((MinicParser *)parser)->perf_typedef_queries += 1U;
-    if (minic_parser_typedef_index_sync((MinicParser *)parser)) {
+    if (parser->cache_owner == parser &&
+        minic_parser_typedef_index_sync((MinicParser *)parser)) {
         bool consistent = false;
         MinicTypeAliasId id = minic_parser_typedef_index_lookup(
             (MinicParser *)parser, name_span, &consistent);

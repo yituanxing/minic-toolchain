@@ -86,6 +86,20 @@ static bool x86_emit_function(FILE *out, const MinicC0Program *program,
         goto done;
     if (frame.frame_size != 0U &&
         fprintf(out, "  subq $%zu, %%rsp\n", frame.frame_size) < 0) goto done;
+    if (frame.ms_nonvolatile_gp_save_offset != 0U) {
+        size_t i;
+        if (fprintf(out,
+                "  movq %%rdi, -%zu(%%rbp)\n"
+                "  movq %%rsi, -%zu(%%rbp)\n",
+                frame.ms_nonvolatile_gp_save_offset,
+                frame.ms_nonvolatile_gp_save_offset + 8U) < 0)
+            goto done;
+        for (i = 0U; i < 10U; ++i)
+            if (fprintf(out, "  movdqu %%xmm%zu, -%zu(%%rbp)\n",
+                        i + 6U,
+                        frame.ms_nonvolatile_xmm_save_offset + i * 16U) < 0)
+                goto done;
+    }
     if (frame.has_sret &&
         fprintf(out, "  movq %%rdi, -%zu(%%rbp)\n",
                 frame.sret_save_offset) < 0) goto done;
@@ -183,8 +197,24 @@ static bool x86_emit_function(FILE *out, const MinicC0Program *program,
         }
     }
     }
-    if (fprintf(out, ".Lmini_x86_f%zu_ret:\n  leave\n  ret\n"
-                     ".size %s,.-%s\n", function_id, name, name) < 0) goto done;
+    if (fprintf(out, ".Lmini_x86_f%zu_ret:\n", function_id) < 0) goto done;
+    if (frame.ms_nonvolatile_gp_save_offset != 0U) {
+        size_t i;
+        /* Epilogue must not touch RAX/XMM0: they hold the scalar return. */
+        for (i = 0U; i < 10U; ++i)
+            if (fprintf(out, "  movdqu -%zu(%%rbp), %%xmm%zu\n",
+                        frame.ms_nonvolatile_xmm_save_offset + i * 16U,
+                        i + 6U) < 0)
+                goto done;
+        if (fprintf(out,
+                "  movq -%zu(%%rbp), %%rdi\n"
+                "  movq -%zu(%%rbp), %%rsi\n",
+                frame.ms_nonvolatile_gp_save_offset,
+                frame.ms_nonvolatile_gp_save_offset + 8U) < 0)
+            goto done;
+    }
+    if (fprintf(out, "  leave\n  ret\n.size %s,.-%s\n", name, name) < 0)
+        goto done;
     /* GNU constructor: ELF startup loader traverses .init_array before main.
      * Do not use ordinary .data; register a relocated function pointer. */
     if (declaration->is_constructor &&
@@ -215,6 +245,55 @@ static bool x86_visit_global(
     if (minic_x86_64_emit_global(out, program, target, obj)) return true;
     {
         char message[256];
+        if (getenv("MINIC_X86_GLOBAL_TRACE") != NULL) {
+            const MinicArrayType *outer = minic_type_is_array(obj->type)
+                ? minic_c0_program_array_type(program, obj->type.array_type_id) : NULL;
+            size_t r;
+            (void)fprintf(stderr,
+                          "MINIC_X86_GLOBAL_FRONTIER object=%s base=%u depth=%u "
+                          "array_count=%zu array_zero=%d element_base=%u "
+                          "element_record=%zu init=%zu reloc=%zu\n",
+                          obj->name != NULL ? obj->name : "<unnamed>",
+                          (unsigned int)obj->type.base_kind,
+                          obj->type.pointer_depth,
+                          outer != NULL ? outer->element_count : 0U,
+                          outer != NULL && outer->is_zero_length ? 1 : 0,
+                          outer != NULL ? (unsigned int)outer->element_type.base_kind : 0U,
+                          outer != NULL ? outer->element_type.record_id : 0U,
+                          obj->initializer_count, obj->relocation_count);
+            if (outer != NULL && minic_type_is_record(outer->element_type)) {
+                const MinicRecord *record = minic_c0_program_record(
+                    program, outer->element_type.record_id);
+                size_t f;
+                (void)fprintf(stderr,
+                              "MINIC_X86_GLOBAL_RECORD_FRONTIER record=%zu "
+                              "count=%zu union=%d complete=%d\n",
+                              outer->element_type.record_id,
+                              record != NULL ? record->field_count : 0U,
+                              record != NULL && record->is_union ? 1 : 0,
+                              record != NULL && record->is_complete ? 1 : 0);
+                if (record != NULL) for (f = 0U; f < record->field_count; ++f) {
+                    const MinicRecordField *field = &record->fields[f];
+                    (void)fprintf(stderr,
+                                  "MINIC_X86_GLOBAL_FIELD_FRONTIER index=%zu "
+                                  "base=%u count=%zu bitfield=%d union=%d\n",
+                                  f, (unsigned int)field->type.base_kind,
+                                  field->element_count, field->is_bit_field ? 1 : 0,
+                                  minic_type_is_record(field->type) ? 1 : 0);
+                }
+            }
+            for (r = 0U; r < obj->relocation_count; ++r) {
+                const MinicGlobalRelocation *reloc = &obj->relocations[r];
+                (void)fprintf(stderr,
+                              "MINIC_X86_GLOBAL_RELOCATION_FRONTIER object=%s "
+                              "index=%zu kind=%u slot=%zu target_kind=%u "
+                              "target_id=%zu addend=%" PRId64 "\n",
+                              obj->name != NULL ? obj->name : "<unnamed>",
+                              r, (unsigned int)reloc->location_kind,
+                              reloc->location_index, (unsigned int)reloc->target_kind,
+                              reloc->target_id, reloc->target_byte_addend);
+            }
+        }
         (void)snprintf(message, sizeof(message),
                        "x86-64 global initializer/relocation unsupported: %s "
                        "(record=%d init=%zu reloc=%zu union=%zu zero=%d tentative=%d)",

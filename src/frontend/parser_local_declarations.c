@@ -1262,10 +1262,12 @@ static bool parse_inferred_static_local_array(MinicParser *parser,
         return false;
     }
 
-    if (parser->current.kind == MINIC_TOKEN_STRING_LITERAL) {
-        if (!minic_type_is_char_integer(element_type)) {
+    if (parser->current.kind == MINIC_TOKEN_STRING_LITERAL ||
+        parser->current.kind == MINIC_TOKEN_WIDE_STRING_LITERAL) {
+        if (!minic_parser_static_string_element_compatible(
+                parser, element_type, parser->current.kind)) {
             minic_parser_error(parser,
-                               "string initializer requires a character static local array");
+                               "string initializer requires a compatible static local array element type");
             return false;
         }
         if (!minic_parser_create_string_literal_object(

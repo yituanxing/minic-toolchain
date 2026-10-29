@@ -209,6 +209,18 @@ bool minic_x86_64_requires_qualified_input_asm(const MinicInlineAsm *src) {
     if (src && src->template_text &&
         (minic_x86_64_linux_crash_segment_snapshot_form(
              src->template_text, src->template_length) != 0U ||
+         minic_x86_64_linux_efi_kernel_transfer_form(
+             src->template_text, src->template_length) ||
+         minic_x86_64_linux_legacy_fnsave_form(
+             src->template_text, src->template_length) ||
+         minic_x86_64_linux_vmware_hypercall_form(
+             src->template_text, src->template_length) != 0U ||
+         minic_x86_64_linux_kexec_load_segments_form(
+             src->template_text, src->template_length) ||
+         minic_x86_64_linux_pci_mmconfig_form(
+             src->template_text, src->template_length, false) != 0U ||
+         minic_x86_64_linux_pci_mmconfig_form(
+             src->template_text, src->template_length, true) != 0U ||
          minic_x86_64_linux_via_xstore_form(
              src->template_text, src->template_length) ||
          x86_linux_compact_asm_equals(
@@ -479,6 +491,59 @@ static bool x86_linux_mmio_read_source(const MinicC0Program *program,
     contract->operand_count = 2U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
+    contract->implicit_memory_effect = true;
+    return true;
+}
+
+/* PCI MMCONFIG's AMD Fam10h restriction is stronger than normal MMIO:
+ * the *hardware* memory access must use AL/AX/EAX, and GNU's `r` input
+ * is the address itself. Never accept a general `m` form under this ABI. */
+unsigned int minic_x86_64_linux_pci_mmconfig_form(
+    const char *text, size_t length, bool write) {
+    static const char *const reads[] = {
+        "movb(%1),%%al", "movw(%1),%%ax", "movl(%1),%%eax"
+    };
+    static const char *const writes[] = {
+        "movb%%al,(%1)", "movw%%ax,(%1)", "movl%%eax,(%1)"
+    };
+    size_t i;
+    for (i = 0U; i < 3U; ++i)
+        if (x86_linux_compact_asm_equals(text, length,
+                write ? writes[i] : reads[i]))
+            return (unsigned int)1U << i;
+    return 0U;
+}
+
+static bool x86_linux_pci_mmconfig_source(
+    const MinicC0Program *program, const MinicInlineAsm *source,
+    MinicTargetInlineAsmContract *contract) {
+    const bool read = source && source->output_count == 1U;
+    const unsigned int width = source ? minic_x86_64_linux_pci_mmconfig_form(
+        source->template_text, source->template_length, !read) : 0U;
+    const MinicExpression *address, *value;
+    if (!program || !source || !contract || !width ||
+        !source->is_volatile || source->is_goto || source->label_count ||
+        source->output_count != (read ? 1U : 0U) ||
+        source->input_count != (read ? 1U : 2U) || !source->inputs ||
+        (read && !source->outputs) || source->register_clobber_count ||
+        source->clobber_count != (read ? 0U : 1U) ||
+        source->has_memory_clobber != !read ||
+        !target_constraint_is(read ? &source->outputs[0] : &source->inputs[0],
+              read ? "=a" : "a") ||
+        !target_constraint_is(&source->inputs[read ? 0U : 1U], "r")) return false;
+    address = minic_c0_program_expression(program,
+        source->inputs[read ? 0U : 1U].expression);
+    value = minic_c0_program_expression(program, read ?
+        source->outputs[0].expression : source->inputs[0].expression);
+    if (!address || !value || !minic_type_is_pointer(address->type) ||
+        !minic_x86_64_linux_mmio_type_matches(value->type, width) ||
+        (read && (value->value_category != MINIC_VALUE_LVALUE ||
+                  minic_type_is_const(value->type)))) return false;
+    contract->operand_count = 2U;
+    contract->kinds[0] = read ?
+        MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
+        MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->implicit_memory_effect = true;
     return true;
 }
@@ -2472,6 +2537,157 @@ static bool x86_hweight_source(const MinicC0Program *program,
 }
 
 
+/* VMware vmcall/vmmcall GNU ABI has four independent 32-bit inputs and four
+ * 32-bit outputs in EAX/ECX/EDX/EBX. These hypervisor opcodes are NEVER
+ * interchangeable with CPUID or with an ordinary C function call. */
+unsigned int minic_x86_64_linux_vmware_hypercall_form(
+    const char *text, size_t length) {
+    if (text && length == 6U && memcmp(text, "vmcall", 6U) == 0) return 1U;
+    if (text && length == 7U && memcmp(text, "vmmcall", 7U) == 0) return 2U;
+    return 0U;
+}
+
+static bool x86_linux_vmware_hypercall_source(
+    const MinicC0Program *program, const MinicInlineAsm *source,
+    MinicTargetInlineAsmContract *contract) {
+    static const char *const regs[] = {"a", "c", "d", "b"};
+    size_t i;
+    if (!program || !source || !contract ||
+        !minic_x86_64_linux_vmware_hypercall_form(
+            source->template_text, source->template_length) ||
+        source->is_volatile || source->is_goto || source->label_count ||
+        source->output_count != 4U || source->input_count != 4U ||
+        !source->outputs || !source->inputs ||
+        !source->has_memory_clobber || source->clobber_count != 1U ||
+        source->register_clobber_count) return false;
+    for (i = 0U; i < 8U; ++i) {
+        const bool output = i < 4U;
+        const MinicInlineAsmOperand *operand = output ?
+            &source->outputs[i] : &source->inputs[i - 4U];
+        const MinicExpression *expression = minic_c0_program_expression(
+            program, operand->expression);
+        MinicType type;
+        char expected[4];
+        expected[0] = '='; expected[1] = regs[i % 4U][0];
+        expected[2] = '\0';
+        if (!c_is(operand, output ? expected : regs[i % 4U]) ||
+            !expression || !minic_type_unqualified(expression->type, &type) ||
+            !minic_type_equal(type, minic_type_unsigned_int()) ||
+            (output && (expression->value_category != MINIC_VALUE_LVALUE ||
+                        minic_type_is_const(expression->type)))) return false;
+        contract->kinds[i] = output ?
+            MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
+            MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    }
+    contract->operand_count = 8U;
+    contract->implicit_memory_effect = true;
+    return true;
+}
+
+/* 64-bit FNSAVE writes the 108-byte legacy x87 image and resets x87 state;
+ * FWAIT must follow it to expose deferred faults before FRSTOR. */
+bool minic_x86_64_linux_legacy_fnsave_form(
+    const char *text, size_t length) {
+    return x86_linux_compact_asm_equals(text, length, "fnsave%[fp];fwait") ||
+           x86_linux_compact_asm_equals(text, length, "fnsave%0;fwait");
+}
+
+static bool x86_linux_legacy_fnsave_source(
+    const MinicC0Program *program, const MinicInlineAsm *source,
+    MinicTargetInlineAsmContract *contract) {
+    const MinicExpression *image;
+    size_t size, alignment;
+    if (!program || !source || !contract ||
+        !minic_x86_64_linux_legacy_fnsave_form(
+            source->template_text, source->template_length) ||
+        !source->is_volatile || source->is_goto || source->label_count ||
+        source->output_count != 1U || source->input_count || !source->outputs ||
+        source->has_memory_clobber || source->clobber_count ||
+        source->register_clobber_count ||
+        !c_is(&source->outputs[0], "=m") ||
+        !source->outputs[0].name ||
+        source->outputs[0].name_length != 2U ||
+        memcmp(source->outputs[0].name, "fp", 2U)) return false;
+    image = minic_c0_program_expression(program,
+        source->outputs[0].expression);
+    if (!image || image->value_category != MINIC_VALUE_LVALUE ||
+        minic_type_is_const(image->type) ||
+        !minic_data_layout_type(
+            minic_target_info_data_layout(minic_target_info_for_architecture(
+                MINIC_TARGET_ARCH_X86_64)), program, image->type,
+            &size, &alignment) || size < 108U) return false;
+    contract->operand_count = 1U;
+    contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT;
+    return true;
+}
+
+/* x86 Linux kexec resets DS/ES/SS/FS/GS together, from the same GNU 'a'
+ * selector input, on the identity-mapped boot path. */
+bool minic_x86_64_linux_kexec_load_segments_form(
+    const char *text, size_t length) {
+    return x86_linux_compact_asm_equals(text, length,
+        "movl%0,%%dsmovl%0,%%esmovl%0,%%ssmovl%0,%%fsmovl%0,%%gs");
+}
+
+static bool x86_linux_kexec_load_segments_source(
+    const MinicC0Program *program, const MinicInlineAsm *source,
+    MinicTargetInlineAsmContract *contract) {
+    const MinicExpression *selector;
+    MinicType type;
+    if (!program || !source || !contract ||
+        !minic_x86_64_linux_kexec_load_segments_form(
+            source->template_text, source->template_length) ||
+        !source->is_volatile || source->is_goto || source->label_count ||
+        source->output_count || source->input_count != 1U || !source->inputs ||
+        !source->has_memory_clobber || source->clobber_count != 1U ||
+        source->register_clobber_count || !c_is(&source->inputs[0], "a"))
+        return false;
+    selector = minic_c0_program_expression(program,
+        source->inputs[0].expression);
+    if (!selector || !minic_type_unqualified(selector->type, &type) ||
+        !minic_type_is_integer(type)) return false;
+    contract->operand_count = 1U;
+    contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->implicit_memory_effect = true;
+    return true;
+}
+
+/* EFI's final transition is a real indirect JMP, NOT an indirect call;
+ * firmware's boot_params value must be in RSI on entry to the kernel image.
+ * Accept no other indirect branch or ABI register assignment. */
+bool minic_x86_64_linux_efi_kernel_transfer_form(
+    const char *text, size_t length) {
+    return x86_linux_compact_asm_equals(text, length, "jmp*%0");
+}
+
+static bool x86_linux_efi_kernel_transfer_source(
+    const MinicC0Program *program, const MinicInlineAsm *source,
+    MinicTargetInlineAsmContract *contract) {
+    const MinicExpression *entry, *boot;
+    MinicType type;
+    if (!program || !source || !contract ||
+        !minic_x86_64_linux_efi_kernel_transfer_form(
+            source->template_text, source->template_length) ||
+        source->is_goto || source->label_count || source->output_count ||
+        source->input_count != 2U || !source->inputs ||
+        source->clobber_count || source->has_memory_clobber ||
+        source->register_clobber_count ||
+        !c_is(&source->inputs[0], "r") ||
+        !c_is(&source->inputs[1], "S")) return false;
+    entry = minic_c0_program_expression(program,
+        source->inputs[0].expression);
+    boot = minic_c0_program_expression(program,
+        source->inputs[1].expression);
+    if (!entry || !boot ||
+        !minic_type_unqualified(entry->type, &type) ||
+        !minic_type_equal(type, minic_type_unsigned_long()) ||
+        !minic_type_is_pointer(boot->type)) return false;
+    contract->operand_count = 2U;
+    contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    return true;
+}
+
 /* Original Linux asm/msr.h Linux 6.6 __rdmsr/__wrmsr:
  * Only the EXACT 1: RDMSR/WRMSR; 2: original GNU exception table
  * (two PC-relative exception entries, fixup type 9/8) may be executed.
@@ -2481,7 +2697,10 @@ unsigned int minic_x86_64_linux_msr_form(const char *text,size_t len) {
       "1:rdmsr2:.pushsection\"__ex_table\",\"a\".balign4"
       ".long(1b)-..long(2b)-..long9.popsection",
       "1:wrmsr2:.pushsection\"__ex_table\",\"a\".balign4"
-      ".long(1b)-..long(2b)-..long8.popsection"
+      ".long(1b)-..long(2b)-..long8.popsection",
+      /* mce_rdmsrl: architectural-violation #MC fixup kind 13. */
+      "1:rdmsr2:.pushsection\"__ex_table\",\"a\".balign4"
+      ".long(1b)-..long(2b)-..long13.popsection"
     };
     /* Source named operands are canonicalized to numeric %0 by Core.
      * Exact matching of both representations preserves the hardware and
@@ -2507,8 +2726,8 @@ unsigned int minic_x86_64_linux_msr_form(const char *text,size_t len) {
        norm[n++]=c;
     }
     norm[n]=0;
-    for(i=0U;i<2U;++i)
-        if(strcmp(norm,exact[i])==0)return (unsigned int)i+1U;
+    for(i=0U;i<3U;++i)
+        if(strcmp(norm,exact[i])==0)return i==2U?5U:(unsigned int)i+1U;
     return 0U;
 }
 static bool x86_linux_msr_source(const MinicC0Program *program,
@@ -2556,13 +2775,13 @@ static bool x86_linux_msr_source(const MinicC0Program *program,
     }
     if(!program||!src||!contract||!form||!src->is_volatile||
        src->is_goto||src->label_count||
-       src->output_count!=(form==1U?2U:0U)||
-       src->input_count!=(form==1U?1U:3U)||
-       (form==1U&&!src->outputs)||!src->inputs||
-       src->clobber_count!=(form==1U?0U:1U)||
+       src->output_count!=((form==1U||form==5U)?2U:0U)||
+       src->input_count!=((form==1U||form==5U)?1U:3U)||
+       ((form==1U||form==5U)&&!src->outputs)||!src->inputs||
+       src->clobber_count!=((form==1U||form==5U)?0U:1U)||
        src->has_memory_clobber!=(form==2U)||
        src->register_clobber_count)return false;
-    if(form==1U) {
+    if(form==1U || form==5U) {
         if(!c_is(&src->outputs[0],"=a")||
            !c_is(&src->outputs[1],"=d")||
            !c_is(&src->inputs[0],"c"))return false;
@@ -2579,7 +2798,7 @@ static bool x86_linux_msr_source(const MinicC0Program *program,
            !minic_type_is_integer(type)||type.pointer_depth||
            (output&&(e->value_category!=MINIC_VALUE_LVALUE||
                      minic_type_is_const(e->type)))||
-           (form==1U&&output?
+           ((form==1U||form==5U)&&output?
               (type.integer_rank!=MINIC_INTEGER_RANK_LONG&&
                type.integer_rank!=MINIC_INTEGER_RANK_INT):
               type.integer_rank!=MINIC_INTEGER_RANK_INT))
@@ -7893,6 +8112,16 @@ bool minic_x86_64_qualify_inline_asm(
     bool is_mulacc = false, is_muldiv = false;
     size_t i, count;
     if (!contract) return false;
+    if (x86_linux_vmware_hypercall_source(program, source, contract))
+        return true;
+    if (x86_linux_legacy_fnsave_source(program, source, contract))
+        return true;
+    if (x86_linux_kexec_load_segments_source(program, source, contract))
+        return true;
+    if (x86_linux_efi_kernel_transfer_source(program, source, contract))
+        return true;
+    if (x86_linux_pci_mmconfig_source(program, source, contract))
+        return true;
     if (x86_linux_cmpxchg128_source(program, source, contract))
         return true;
     if (x86_linux_task_size_alt_source(program, source, contract))

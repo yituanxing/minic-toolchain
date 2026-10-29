@@ -91,6 +91,9 @@ typedef struct MinicParserPendingFunctionAlias {
 } MinicParserPendingFunctionAlias;
 
 typedef struct MinicParser {
+    /* Parser probes copy this structure by value. Only the original parser
+     * owns mutable lookup-cache storage; a probe must use linear lookup. */
+    const struct MinicParser *cache_owner;
     const char *path;
     const char *source;
     MinicLexer lexer;
@@ -539,6 +542,9 @@ bool minic_parser_parse_string_literal_size(MinicParser *parser, uint64_t *size)
 bool minic_parser_add_string_literal_initializer(MinicParser *parser,
                                                  MinicGlobalObjectId object_id,
                                                  size_t *element_count);
+bool minic_parser_static_string_element_compatible(MinicParser *parser,
+                                                   MinicType element_type,
+                                                   MinicTokenKind literal_kind);
 bool minic_parser_parse_bounded_string_literal_values(MinicParser *parser,
                                                       size_t element_capacity,
                                                       int *values);

@@ -182,7 +182,7 @@ static bool x86_emit_call_arguments_planned(
            fprintf(out, "  movb $%zu, %%al\n", plan->end.fp_used) >= 0;
 }
 
-/* Machine CALL emission consumes the one SysV plan built for its
+/* Machine CALL emission consumes the x86 ABI plan built for its
  * Common Core CALL identity; external standalone emission still works. */
 static bool x86_emit_call_arguments(
     FILE *out, const MinicC0Program *program,

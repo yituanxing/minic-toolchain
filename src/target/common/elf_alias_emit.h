@@ -42,9 +42,10 @@ static inline bool minic_multi_elf_emit_alias(
                    alias_name, type_directive, alias_name, target_name) >= 0;
 }
 
-/* The parser and AST verifier already require a defined, type-compatible
- * same-TU target. Check that contract once more before producing machine
- * symbols, so no unsupported external alias can silently be emitted. */
+/* The parser and AST verifier already require a defined, representation-
+ * compatible same-TU target.  The GNU object-alias boundary also allows
+ * cv-qualified array elements to name the same storage; ordinary C type
+ * compatibility elsewhere still remains strict. */
 static inline bool minic_multi_elf_emit_object_alias(
     FILE *out, const MinicC0Program *program,
     const MinicGlobalObject *alias, const char *type_directive) {
@@ -56,7 +57,7 @@ static inline bool minic_multi_elf_emit_object_alias(
     target = minic_c0_program_global_object(program, alias->alias_target);
     return target != NULL && target != alias &&
            !target->is_extern && !target->is_tentative &&
-           minic_c0_types_compatible(program, alias->type, target->type) &&
+           minic_c0_object_alias_types_compatible(program, alias->type, target->type) &&
            minic_multi_elf_emit_alias(
                out, alias->name, target->name, alias->is_internal,
                alias->is_weak, alias->visibility, type_directive);

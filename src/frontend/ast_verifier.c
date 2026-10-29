@@ -820,14 +820,17 @@ static bool verify_expression(const MinicC0Program *program,
         switch (expression->value.builtin_unary.operator_kind) {
         case MINIC_BUILTIN_UNARY_CLZ:
         case MINIC_BUILTIN_UNARY_CTZ:
+        case MINIC_BUILTIN_UNARY_POPCOUNT:
             expected_operand_type = minic_type_unsigned_int();
             break;
         case MINIC_BUILTIN_UNARY_CLZL:
         case MINIC_BUILTIN_UNARY_CTZL:
+        case MINIC_BUILTIN_UNARY_POPCOUNTL:
             expected_operand_type = minic_type_unsigned_long();
             break;
         case MINIC_BUILTIN_UNARY_CLZLL:
         case MINIC_BUILTIN_UNARY_CTZLL:
+        case MINIC_BUILTIN_UNARY_POPCOUNTLL:
             expected_operand_type = minic_type_unsigned_long_long();
             break;
         case MINIC_BUILTIN_UNARY_FFSLL:
@@ -904,7 +907,8 @@ static bool verify_expression(const MinicC0Program *program,
                minic_c0_assignment_compatible(program, pointee,
                                                expression->value.atomic_store.source);
     }
-    case MINIC_EXPRESSION_BUILTIN_OVERFLOW: {
+    case MINIC_EXPRESSION_BUILTIN_OVERFLOW:
+    case MINIC_EXPRESSION_BUILTIN_OVERFLOW_P: {
         const MinicExpression *overflow_left;
         const MinicExpression *overflow_right;
         const MinicExpression *result_pointer;
@@ -921,7 +925,9 @@ static bool verify_expression(const MinicC0Program *program,
                minic_type_equal(expression->type, minic_type_bool()) &&
                expression->value.overflow.operator_kind >= MINIC_OVERFLOW_ADD &&
                expression->value.overflow.operator_kind <= MINIC_OVERFLOW_MULTIPLY &&
-               minic_type_pointee(result_pointer->type, &result_type) &&
+               (expression->kind == MINIC_EXPRESSION_BUILTIN_OVERFLOW_P
+                    ? minic_type_unqualified(result_pointer->type, &result_type)
+                    : minic_type_pointee(result_pointer->type, &result_type)) &&
                minic_type_is_integer(result_type) && !minic_type_is_bool_integer(result_type) &&
                minic_type_is_integer(overflow_left->type) &&
                minic_type_is_integer(overflow_right->type);
@@ -1760,7 +1766,8 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
             if (alias_target_object == NULL || alias_target_object == object ||
                 !object->is_extern || object->is_internal || object->is_block_scope_extern_only ||
                 alias_target_object->is_extern || alias_target_object->is_tentative ||
-                !minic_c0_types_compatible(program, object->type, alias_target_object->type)) {
+                !minic_c0_object_alias_types_compatible(
+                    program, object->type, alias_target_object->type)) {
                 MINIC_AST_VERIFY_FAIL(minic_c0_ast_verify_stage_default_reason(stage));
             }
         }

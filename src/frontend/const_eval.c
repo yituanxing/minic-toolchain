@@ -506,6 +506,14 @@ static bool eval_builtin_unary(const MinicC0Program *program,
             bits >>= 1U;
         }
         break;
+    case MINIC_BUILTIN_UNARY_POPCOUNT:
+    case MINIC_BUILTIN_UNARY_POPCOUNTL:
+    case MINIC_BUILTIN_UNARY_POPCOUNTLL:
+        while (bits != 0U) {
+            bits &= bits - UINT64_C(1);
+            count += 1U;
+        }
+        break;
     case MINIC_BUILTIN_UNARY_ISDIGIT:
         count = bits >= UINT64_C(48) && bits <= UINT64_C(57) ? 1U : 0U;
         break;
@@ -534,6 +542,112 @@ static bool eval_builtin_unary(const MinicC0Program *program,
 
     value->type = expression->type;
     return normalize_bits(program, target, value->type, count, &value->bits);
+}
+
+typedef struct MinicConstWideInteger {
+    uint64_t high;
+    uint64_t low;
+} MinicConstWideInteger;
+
+static bool const_wide_from_integer(const MinicC0Program *program,
+                                    const MinicTargetInfo *target,
+                                    MinicConstValue source,
+                                    MinicConstWideInteger *wide) {
+    if (wide == NULL) return false;
+    if (integer_type_is_signed(program, source.type)) {
+        int64_t signed_value;
+        if (!value_signed(program, target, &source, &signed_value)) return false;
+        wide->high = signed_value < 0 ? UINT64_MAX : UINT64_C(0);
+        wide->low = (uint64_t)signed_value;
+    } else {
+        wide->high = UINT64_C(0);
+        if (!normalize_bits(program, target, source.type, source.bits, &wide->low)) return false;
+    }
+    return true;
+}
+
+static MinicConstWideInteger const_wide_negate(MinicConstWideInteger value) {
+    MinicConstWideInteger negated;
+    negated.low = ~value.low + UINT64_C(1);
+    negated.high = ~value.high + (negated.low == 0U ? UINT64_C(1) : UINT64_C(0));
+    return negated;
+}
+
+static MinicConstWideInteger const_wide_multiply(MinicConstWideInteger left,
+                                                  MinicConstWideInteger right) {
+    bool neg_left = left.high == UINT64_MAX;
+    bool neg_right = right.high == UINT64_MAX;
+    uint64_t a, b, low0, cross0, cross1, high0;
+    uint64_t partial, old_low;
+    MinicConstWideInteger result;
+    if (neg_left) left = const_wide_negate(left);
+    if (neg_right) right = const_wide_negate(right);
+    a = left.low;
+    b = right.low;
+    low0 = (a & UINT64_C(0xffffffff)) * (b & UINT64_C(0xffffffff));
+    cross0 = (a >> 32U) * (b & UINT64_C(0xffffffff));
+    cross1 = (a & UINT64_C(0xffffffff)) * (b >> 32U);
+    high0 = (a >> 32U) * (b >> 32U);
+    partial = low0 + (cross0 << 32U);
+    result.high = high0 + (cross0 >> 32U) + (partial < low0 ? UINT64_C(1) : UINT64_C(0));
+    old_low = partial;
+    result.low = partial + (cross1 << 32U);
+    result.high += (cross1 >> 32U) + (result.low < old_low ? UINT64_C(1) : UINT64_C(0));
+    return neg_left != neg_right ? const_wide_negate(result) : result;
+}
+
+static bool eval_builtin_overflow_predicate(const MinicC0Program *program,
+                                            const MinicTargetInfo *target,
+                                            const MinicExpression *expression,
+                                            unsigned int depth,
+                                            MinicConstValue *value) {
+    const MinicExpression *third;
+    MinicConstValue left_const, right_const;
+    MinicConstWideInteger left, right, result;
+    unsigned int result_width;
+    uint64_t truncated, extended;
+    bool overflow;
+    if (expression == NULL || value == NULL ||
+        expression->kind != MINIC_EXPRESSION_BUILTIN_OVERFLOW_P ||
+        !eval_expression(program, target, expression->value.overflow.left,
+                         depth + 1U, &left_const) ||
+        !eval_expression(program, target, expression->value.overflow.right,
+                         depth + 1U, &right_const) ||
+        !const_wide_from_integer(program, target, left_const, &left) ||
+        !const_wide_from_integer(program, target, right_const, &right)) return false;
+    third = minic_c0_program_expression(program, expression->value.overflow.result_pointer);
+    if (third == NULL || !integer_width(program, target, third->type, &result_width) ||
+        result_width == 0U || result_width > 64U) return false;
+    switch (expression->value.overflow.operator_kind) {
+    case MINIC_OVERFLOW_ADD:
+        result.low = left.low + right.low;
+        result.high = left.high + right.high +
+                      (result.low < left.low ? UINT64_C(1) : UINT64_C(0));
+        break;
+    case MINIC_OVERFLOW_SUBTRACT:
+        result.low = left.low - right.low;
+        result.high = left.high - right.high -
+                      (left.low < right.low ? UINT64_C(1) : UINT64_C(0));
+        break;
+    case MINIC_OVERFLOW_MULTIPLY:
+        result = const_wide_multiply(left, right);
+        break;
+    default: return false;
+    }
+    truncated = result.low & width_mask(result_width);
+    if (integer_type_is_signed(program, third->type)) {
+        if ((truncated & (UINT64_C(1) << (result_width - 1U))) != 0U)
+            extended = truncated | ~width_mask(result_width);
+        else
+            extended = truncated;
+        overflow = result.low != extended ||
+                   result.high != (extended >> 63U ? UINT64_MAX : UINT64_C(0));
+    } else {
+        overflow = result.high != 0U || result.low != truncated;
+    }
+    value->type = expression->type;
+    value->bits = overflow ? UINT64_C(1) : UINT64_C(0);
+    return true;
 }
 
 /* GNU C permits a comparison of two integer-derived pointer constants in a
@@ -1100,6 +1214,8 @@ static bool eval_expression(const MinicC0Program *program,
     }
     case MINIC_EXPRESSION_BUILTIN_UNARY:
         return eval_builtin_unary(program, target, expression, depth, value);
+    case MINIC_EXPRESSION_BUILTIN_OVERFLOW_P:
+        return eval_builtin_overflow_predicate(program, target, expression, depth, value);
     case MINIC_EXPRESSION_BINARY:
         return eval_binary(program, target, expression, depth, value);
     case MINIC_EXPRESSION_CONDITIONAL: {

@@ -241,12 +241,14 @@ bool core_expression_may_modify_local(const MinicCoreLowerContext *context,
         return core_expression_may_modify_local(
             context, expression->value.builtin_unary.operand, local_id, depth + 1U);
     case MINIC_EXPRESSION_BUILTIN_OVERFLOW:
+    case MINIC_EXPRESSION_BUILTIN_OVERFLOW_P:
         return core_expression_may_modify_local(
                    context, expression->value.overflow.left, local_id, depth + 1U) ||
                core_expression_may_modify_local(
                    context, expression->value.overflow.right, local_id, depth + 1U) ||
-               core_expression_may_modify_local(
-                   context, expression->value.overflow.result_pointer, local_id, depth + 1U);
+               (expression->kind == MINIC_EXPRESSION_BUILTIN_OVERFLOW &&
+                core_expression_may_modify_local(
+                    context, expression->value.overflow.result_pointer, local_id, depth + 1U));
     case MINIC_EXPRESSION_COMPOUND_LITERAL:
     case MINIC_EXPRESSION_BUILTIN_UNREACHABLE:
     case MINIC_EXPRESSION_BUILTIN_ALLOCA:

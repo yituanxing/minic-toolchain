@@ -408,9 +408,11 @@ bool minic_multi_direct_floating_shape(
 }
 
 /* Scalar bitcast shape for direct LP64 lowering. Pointer->integer preserves
- * all 64 address bits, except C pointer->bool which produces canonical 0/1.
+ * all 64 address bits at pointer width, truncates to 32 bits for C's narrow
+ * integer casts, or produces canonical 0/1 for C pointer->bool.
  * source_width reports the integer result width for pointer->integer and
- * the integer input width for integer->pointer. */
+ * the integer input width for integer->pointer; source_signed describes the
+ * integer result on pointer->integer and the input otherwise. */
 bool minic_multi_direct_scalar_bitcast_shape(
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
@@ -438,11 +440,12 @@ bool minic_multi_direct_scalar_bitcast_shape(
     if (*pointer_to_integer) {
         if (!minic_lp64_scalar_integer_width(program, target, ins->type,
                                              &output_width, &output_signed) ||
-            (output_width != 8U &&
+            (output_width != 8U && output_width != 4U &&
              !(output_width == 1U &&
                minic_type_equal(ins->type, minic_type_bool()))))
             return false;
         *source_width = output_width;
+        *source_signed = output_signed;
         return true;
     }
     if (!minic_type_is_pointer(ins->type))

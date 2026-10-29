@@ -678,8 +678,7 @@ bool minic_parser_static_scalar_array_transaction(MinicParser *parser,
         return minic_parser_add_bounded_string_literal_initializer(
             parser, object_id, element_count);
     }
-    if (parser != NULL && minic_type_is_char_integer(element_type) &&
-        parser->current.kind == MINIC_TOKEN_LBRACE) {
+    if (parser != NULL && parser->current.kind == MINIC_TOKEN_LBRACE) {
         MinicParser probe;
 
         probe = *parser;

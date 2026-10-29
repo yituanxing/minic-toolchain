@@ -35,7 +35,7 @@ grep -F '32(%rsp)' "$work/client.s" >/dev/null
 grep -F '48(%rsp)' "$work/client.s" >/dev/null
 grep -F 'call *%r11' "$work/client.s" >/dev/null
 
-for case_name in VARARGS AGGREGATE INT128 LONG_DOUBLE DEFINITION; do
+for case_name in VARARGS AGGREGATE INT128 LONG_DOUBLE; do
     "$host_cc" -E -P -std=gnu11 "-DNEG_$case_name" "$reject" \
         -o "$work/$case_name.i"
     if "$minic" --target=x86_64-linux -S "$work/$case_name.i" \
@@ -55,4 +55,4 @@ for case_name in VARARGS AGGREGATE INT128 LONG_DOUBLE DEFINITION; do
     }
 done
 
-echo 'MS_X64_SCALAR_NATIVE=PASS gcc_oracle=1 direct=6 indirect=6 negative=5 stack_shadow=1'
+echo 'MS_X64_SCALAR_NATIVE=PASS gcc_oracle=1 direct=6 indirect=6 negative=4 stack_shadow=1'

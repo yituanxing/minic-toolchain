@@ -104,6 +104,44 @@ static bool x86_sysv_place(const MinicC0Program *program,
     return cursor->stack_slots <= (size_t)INT32_MAX / 8U;
 }
 
+/* Microsoft x64 uses the same four *positional* slots for GP and SSE
+ * arguments. Stack arguments start after the compulsory 32-byte home area;
+ * carrying their source position as stack_index makes position four land at
+ * 32(%rsp) on calls and at 48(%rbp) on function entry. */
+static bool x86_ms_x64_place(const MinicC0Program *program,
+                            const MinicTargetInfo *target, MinicType type,
+                            size_t position, MinicX86ArgLocation *loc) {
+    size_t bytes;
+    bool sign;
+    if (program == NULL || target == NULL || loc == NULL ||
+        position > ((size_t)INT32_MAX - 16U) / 8U ||
+        minic_type_is_record(type) || minic_type_is_int128_integer(type) ||
+        minic_type_is_long_double(type)) return false;
+    (void)memset(loc, 0, sizeof(*loc));
+    loc->gp_index = position;
+    loc->fp_index = position;
+    loc->stack_index = position;
+    loc->on_stack = position >= 4U;
+    if (minic_type_is_float(type) || minic_type_is_double(type)) {
+        loc->kind = MINIC_X86_ARG_SSE;
+        return true;
+    }
+    if (!minic_x86_64_scalar_width(program, target, type, &bytes, &sign))
+        return false;
+    loc->kind = MINIC_X86_ARG_INTEGER;
+    return true;
+}
+
+static bool x86_ms_x64_scalar_return(const MinicC0Program *program,
+                                    const MinicTargetInfo *target,
+                                    MinicType type) {
+    size_t bytes;
+    bool sign;
+    return minic_type_is_void(type) || minic_type_is_float(type) ||
+           minic_type_is_double(type) ||
+           minic_x86_64_scalar_width(program, target, type, &bytes, &sign);
+}
+
 static bool x86_sysv_plan_alloc(size_t count, MinicX86ArgumentPlan *plan) {
     if (plan == NULL || plan->locations != NULL ||
         plan->argument_count != 0U ||
@@ -123,9 +161,21 @@ bool minic_x86_64_plan_incoming_arguments(
     MinicX86ArgCursor cursor = {0};
     size_t i;
     if (program == NULL || target == NULL || fn == NULL || plan == NULL ||
-        fn->calling_convention != MINIC_CALLING_CONVENTION_DEFAULT ||
+        !minic_function_calling_convention_valid(fn->calling_convention) ||
         (fn->parameter_count != 0U && fn->parameter_types == NULL) ||
         !x86_sysv_plan_alloc(fn->parameter_count, plan)) return false;
+    plan->calling_convention = fn->calling_convention;
+    if (fn->calling_convention == MINIC_CALLING_CONVENTION_MS_X64) {
+        if (!x86_ms_x64_scalar_return(program, target, fn->return_type))
+            goto failed;
+        for (i = 0U; i < fn->parameter_count; ++i)
+            if (!x86_ms_x64_place(program, target, fn->parameter_types[i],
+                                  i, &plan->locations[i])) goto failed;
+        if (fn->parameter_count > 4U)
+            cursor.stack_slots = fn->parameter_count - 4U;
+        plan->end = cursor;
+        return true;
+    }
     {
         size_t result_bytes;
         if (minic_x86_64_memory_result_record(
@@ -134,12 +184,12 @@ bool minic_x86_64_plan_incoming_arguments(
     }
     for (i = 0U; i < fn->parameter_count; ++i)
         if (!x86_sysv_place(program, target, fn->parameter_types[i],
-                             &cursor, &plan->locations[i])) {
-            minic_x86_64_argument_plan_destroy(plan);
-            return false;
-        }
+                             &cursor, &plan->locations[i])) goto failed;
     plan->end = cursor;
     return true;
+failed:
+    minic_x86_64_argument_plan_destroy(plan);
+    return false;
 }
 
 bool minic_x86_64_plan_outgoing_arguments(
@@ -161,37 +211,20 @@ bool minic_x86_64_plan_outgoing_arguments(
          * have the SAME four positional indices, unlike SysV independent
          * integer/FP cursors. Every call, including zero-arg, reserves 32B
          * home space. Slots 4+ occupy the stack above that home space. */
-        if (view->is_variadic || minic_type_is_record(view->return_type) ||
-            minic_type_is_int128_integer(view->return_type) ||
-            minic_type_is_long_double(view->return_type) ||
+        if (view->is_variadic ||
+            !x86_ms_x64_scalar_return(program, target, view->return_type) ||
             (view->argument_count > ((size_t)INT32_MAX - 47U) / 8U))
             goto failed;
         plan->is_variadic = false;
         for (i = 0U; i < view->argument_count; ++i) {
             MinicType type;
-            MinicX86ArgLocation *loc = &plan->locations[i];
-            size_t scalar_bytes;
-            bool sign;
             if (!minic_core_call_view_argument_type(fn, view, i, &type))
                 goto failed;
             if (i < view->parameter_count)
                 type = view->parameter_types[i];
-            if (minic_type_is_record(type) ||
-                minic_type_is_int128_integer(type) ||
-                minic_type_is_long_double(type))
+            if (!x86_ms_x64_place(program, target, type, i,
+                                  &plan->locations[i]))
                 goto failed;
-            loc->gp_index = i;
-            loc->fp_index = i;
-            loc->stack_index = i;
-            loc->on_stack = i >= 4U;
-            if (minic_type_is_float(type) || minic_type_is_double(type)) {
-                loc->kind = MINIC_X86_ARG_SSE;
-            } else if (minic_x86_64_scalar_width(
-                           program, target, type, &scalar_bytes, &sign)) {
-                loc->kind = MINIC_X86_ARG_INTEGER;
-            } else {
-                goto failed;
-            }
         }
         if (view->argument_count > 4U)
             cursor.stack_slots = view->argument_count - 4U;
@@ -236,8 +269,8 @@ void minic_x86_64_argument_plan_destroy(MinicX86ArgumentPlan *plan) {
     (void)memset(plan, 0, sizeof(*plan));
 }
 
-/* The Common visitor supplies validated CALL views. SysV owns only the
- * register/stack ABI planning, performed once per call rather than in
+/* The Common visitor supplies validated CALL views. x86 owns only the
+ * SysV/Win64 register-and-stack ABI planning, performed once per call rather than in
  * the machine instruction emitter. Standalone emitters retain fallback. */
 bool minic_x86_64_outgoing_call_plans_prepare(
     const MinicC0Program *program, const MinicTargetInfo *target,

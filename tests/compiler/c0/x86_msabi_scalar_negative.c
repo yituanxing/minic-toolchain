@@ -18,6 +18,4 @@ long rejected(struct T *t) { return t->cb(1); }
 typedef long double callback_t(long);
 struct T { callback_t __attribute__((ms_abi)) *cb; };
 long double rejected(struct T *t) { return t->cb(7); }
-#elif defined(NEG_DEFINITION)
-__attribute__((ms_abi)) long rejected(long value) { return value + 3; }
 #endif

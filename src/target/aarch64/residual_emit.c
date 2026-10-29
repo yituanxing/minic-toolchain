@@ -442,6 +442,11 @@ bool minic_aarch64_emit_residual_instruction(
                     fputs("  cmp x9, #0\n  cset x9, ne\n", out) == EOF)
                     return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
+                if (src_width == 4U &&
+                    fputs(src_signed ? "  sxtw x9, w9\n"
+                                    : "  uxtw x9, w9\n", out) == EOF)
+                    return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
+                                    reject_block, reject_ins, __LINE__);
                 break;
             }
             if (fprintf(out, (src_pointer || src_width == 8U)

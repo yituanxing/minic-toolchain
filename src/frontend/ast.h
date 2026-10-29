@@ -71,6 +71,7 @@ typedef enum MinicExpressionKind {
     MINIC_EXPRESSION_BUILTIN_VA_ARG,
     MINIC_EXPRESSION_BUILTIN_UNARY,
     MINIC_EXPRESSION_BUILTIN_OVERFLOW,
+    MINIC_EXPRESSION_BUILTIN_OVERFLOW_P,
     /* GNU atomic integer store is a distinct side effect. */
     MINIC_EXPRESSION_BUILTIN_ATOMIC_STORE,
     MINIC_EXPRESSION_BUILTIN_ATOMIC_LOAD
@@ -117,6 +118,9 @@ typedef enum MinicBuiltinUnaryOperator {
     MINIC_BUILTIN_UNARY_CTZ,
     MINIC_BUILTIN_UNARY_CTZL,
     MINIC_BUILTIN_UNARY_CTZLL,
+    MINIC_BUILTIN_UNARY_POPCOUNT,
+    MINIC_BUILTIN_UNARY_POPCOUNTL,
+    MINIC_BUILTIN_UNARY_POPCOUNTLL,
     MINIC_BUILTIN_UNARY_FFSLL,
     MINIC_BUILTIN_UNARY_ISDIGIT,
     MINIC_BUILTIN_UNARY_CONSTANT_P,
@@ -1047,6 +1051,9 @@ bool minic_c0_global_object_set_zero_initialized(MinicC0Program *program,
                                                  MinicGlobalObjectId global_object_id);
 bool minic_c0_global_object_set_extern(MinicC0Program *program,
                                        MinicGlobalObjectId global_object_id);
+bool minic_c0_object_alias_types_compatible(const MinicC0Program *program,
+                                            MinicType alias_type,
+                                            MinicType target_type);
 bool minic_c0_global_object_set_alias(MinicC0Program *program,
                                       MinicGlobalObjectId global_object_id,
                                       MinicGlobalObjectId target_object_id);

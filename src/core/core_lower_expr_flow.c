@@ -47,9 +47,9 @@ MinicCoreLowerStatus minic_core_lower_try_conditional(
                 if (status != MINIC_CORE_LOWER_OK) {
                     { *handled = true; return status; }
                 }
-                if (discarded_value != MINIC_CORE_VALUE_INVALID) {
-                    { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-                }
+                /* GNU mixed-void conditional arms may produce a scalar
+                 * which is intentionally discarded. Both the scalar and
+                 * void expression paths have already executed their effects. */
                 *value_id = MINIC_CORE_VALUE_INVALID;
                 { *handled = true; return MINIC_CORE_LOWER_OK; }
             }
@@ -60,9 +60,10 @@ MinicCoreLowerStatus minic_core_lower_try_conditional(
                 context, expression->type, selected_expression, value_id); }
         }
     }
-    /* M53_VOID_CONDITIONAL_EXPRESSION: C permits an effect-only
-       conditional when both arms have void type. Model it as CFG only; there is
-       deliberately no synthetic scalar result or spill object. */
+    /* M53_VOID_CONDITIONAL_EXPRESSION: ISO C permits two void arms; GNU C
+       additionally permits one void arm and one scalar-valued arm, whose
+       resulting value is discarded. Model both as effect-only CFG, without
+       a synthetic scalar result or spill object. */
     if (expression->kind == MINIC_EXPRESSION_CONDITIONAL &&
         !expression->value.conditional.uses_condition_value &&
         expression->value.conditional.when_true != MINIC_EXPRESSION_INVALID &&
@@ -82,10 +83,6 @@ MinicCoreLowerStatus minic_core_lower_try_conditional(
             context->body->program, expression->value.conditional.when_false);
         if (true_expression == NULL || false_expression == NULL) {
             { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-        }
-        if (!minic_type_is_void(true_expression->type) ||
-            !minic_type_is_void(false_expression->type)) {
-            { *handled = true; return MINIC_CORE_LOWER_UNSUPPORTED; }
         }
         if (!minic_core_function_add_block(context->function, &true_block) ||
             !minic_core_function_add_block(context->function, &false_block) ||
@@ -107,9 +104,6 @@ MinicCoreLowerStatus minic_core_lower_try_conditional(
         if (status != MINIC_CORE_LOWER_OK) {
             { *handled = true; return status; }
         }
-        if (discarded_value != MINIC_CORE_VALUE_INVALID) {
-            { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-        }
         status = minic_core_lower_internal_set_branch(context, context->block_id, expression->span, merge_block);
         if (status != MINIC_CORE_LOWER_OK) {
             { *handled = true; return status; }
@@ -120,9 +114,6 @@ MinicCoreLowerStatus minic_core_lower_try_conditional(
             context, expression->value.conditional.when_false, &discarded_value);
         if (status != MINIC_CORE_LOWER_OK) {
             { *handled = true; return status; }
-        }
-        if (discarded_value != MINIC_CORE_VALUE_INVALID) {
-            { *handled = true; return MINIC_CORE_LOWER_ERROR; }
         }
         status = minic_core_lower_internal_set_branch(context, context->block_id, expression->span, merge_block);
         if (status != MINIC_CORE_LOWER_OK) {

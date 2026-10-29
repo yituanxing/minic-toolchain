@@ -272,7 +272,8 @@ MinicEnumeratorId minic_parser_find_enum_constant(
     return minic_parser_enum_global_linear_fallback(
         parser, name_span, global_count);
 #endif
-    if (!minic_parser_enum_global_index_sync(parser, global_count) ||
+    if (parser->cache_owner != parser ||
+        !minic_parser_enum_global_index_sync(parser, global_count) ||
         parser->perf_enum_name_slot_capacity == 0U) {
         return minic_parser_enum_global_linear_fallback(parser, name_span, global_count);
     }

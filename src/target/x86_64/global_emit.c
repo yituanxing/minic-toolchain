@@ -138,7 +138,16 @@ bool minic_x86_64_emit_global(FILE *out, const MinicC0Program *program,
     }
     if (fprintf(out, "  .balign %zu\n.type %s,@object\n%s:\n",
                 alignment, obj->name, obj->name) < 0) return false;
-    if (all_zero_aggregate ||
+    /* GNU permits an empty initializer for an inferred-length array of
+     * records.  In defconfig this is the exact source form of Linux's
+     * feature-gated GSS enctype, GuC register and HDA configuration tables.
+     * DataLayout has already proven that the entire object occupies zero
+     * bytes: emit its ELF symbol with size zero, without asking the ordinary
+     * record-array walker to invent a nonexistent first record. */
+    if (storage_size == 0U && obj->initializer_count == 0U &&
+        obj->relocation_count == 0U && obj->union_selection_count == 0U) {
+        /* No bytes precede the ELF .size directive. */
+    } else if (all_zero_aggregate ||
         ((obj->is_zero_initialized || obj->is_tentative) &&
          obj->initializer_count == 0U && obj->relocation_count == 0U)) {
         if (fprintf(out, "  .zero %zu\n", storage_size) < 0) return false;

@@ -1501,6 +1501,44 @@ minic_c0_program_fixed_register_binding(const MinicC0Program *program,
     return &program->fixed_register_bindings[binding_id];
 }
 
+/* GNU object aliases name the target's storage, rather than redeclaring
+ * the target's C type.  Linux deliberately exposes readonly aliases for
+ * internal `static volatile const unsigned char[]` lookup tables.  Their
+ * cv-qualification differs from the actual storage but does not change
+ * the object representation.  Keep ordinary C declaration compatibility
+ * strict: only the GNU alias boundary may discard these element qualifiers. */
+bool minic_c0_object_alias_types_compatible(
+    const MinicC0Program *program, MinicType alias_type, MinicType target_type) {
+    const MinicArrayType *alias_array;
+    const MinicArrayType *target_array;
+    MinicType alias_element;
+    MinicType target_element;
+
+    if (minic_c0_types_compatible(program, alias_type, target_type)) {
+        return true;
+    }
+    if (program == NULL || !minic_type_is_array(alias_type) ||
+        !minic_type_is_array(target_type)) {
+        return false;
+    }
+    alias_array = minic_c0_program_array_type(program, alias_type.array_type_id);
+    target_array = minic_c0_program_array_type(program, target_type.array_type_id);
+    if (alias_array == NULL || target_array == NULL ||
+        alias_array->is_zero_length != target_array->is_zero_length ||
+        alias_array->element_count != target_array->element_count) {
+        return false;
+    }
+    alias_element = alias_array->element_type;
+    target_element = target_array->element_type;
+    if (!minic_type_is_integer(alias_element) ||
+        !minic_type_is_integer(target_element) ||
+        !minic_type_unqualified(alias_element, &alias_element) ||
+        !minic_type_unqualified(target_element, &target_element)) {
+        return false;
+    }
+    return minic_type_equal(alias_element, target_element);
+}
+
 bool minic_c0_global_object_set_alias(MinicC0Program *program,
                                       MinicGlobalObjectId global_object_id,
                                       MinicGlobalObjectId target_object_id) {
@@ -1517,7 +1555,7 @@ bool minic_c0_global_object_set_alias(MinicC0Program *program,
         object->is_zero_initialized || object->is_block_scope_extern_only ||
         object->initializer_count != 0U || object->relocation_count != 0U ||
         target->is_extern || target->is_tentative ||
-        !minic_c0_types_compatible(program, object->type, target->type) ||
+        !minic_c0_object_alias_types_compatible(program, object->type, target->type) ||
         (object->alias_target != MINIC_GLOBAL_OBJECT_INVALID &&
          object->alias_target != target_object_id)) {
         return false;

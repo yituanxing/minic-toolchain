@@ -1,6 +1,29 @@
 #include "target/aarch64/memory_emit.h"
 #include "target/common/direct_instruction_semantics.h"
 #include <stdio.h>
+#include <stdlib.h>
+
+/* The full Linux frontier reports failing Core instruction IDs. When a
+ * scalar LOAD is rejected, retain the exact source/target type identities so
+ * that a new shape is implemented only after its ABI has been established. */
+static void report_load_shape_reject(const MinicCoreFunction *fn,
+                                     const MinicCoreInstruction *ins,
+                                     MinicCoreValueId address) {
+    if (getenv("MINIC_BACKEND_CENSUS") != NULL) {
+        const MinicType *address_type = address < fn->value_count
+            ? &fn->values[address].type : NULL;
+        (void)fprintf(stderr,
+                      "MINIC_AARCH64_LOAD_SHAPE_REJECT result_base=%d "
+                      "result_rank=%d result_ptr=%u result_enum=%zu "
+                      "address_id=%zu address_base=%d address_ptr=%u\n",
+                      (int)ins->type.base_kind,
+                      (int)ins->type.integer_rank,
+                      ins->type.pointer_depth, (size_t)ins->type.enum_id,
+                      (size_t)address,
+                      address_type ? (int)address_type->base_kind : -1,
+                      address_type ? address_type->pointer_depth : 0U);
+    }
+}
 
 static bool emit_integer_memory(FILE *out, bool store,
                                 size_t width, bool sign) {
@@ -95,8 +118,11 @@ bool minic_aarch64_emit_memory_instruction(
                 MinicCoreValueId addr;
                 size_t dst;
                 if (!minic_multi_direct_wide_scalar_load_location(
-                        fn, ins, frame_plan, &addr, &dst) ||
-                fprintf(out, "  ldr x10, [sp, #%zu]\n"
+                        fn, ins, frame_plan, &addr, &dst)) {
+                    report_load_shape_reject(fn, ins, ins->value.load.address);
+                    return false;
+                }
+                if (fprintf(out, "  ldr x10, [sp, #%zu]\n"
                                  "  ldr x9, [x10]\n"
                                  "  ldr x11, [x10, #8]\n"
                                  "  str x9, [sp, #%zu]\n"
@@ -110,8 +136,11 @@ bool minic_aarch64_emit_memory_instruction(
                 MinicCoreValueId addr;
                 size_t dst;
                 if (!minic_multi_direct_wide_scalar_load_location(
-                        fn, ins, frame_plan, &addr, &dst) ||
-                fprintf(out, "  ldr x10, [sp, #%zu]\n"
+                        fn, ins, frame_plan, &addr, &dst)) {
+                    report_load_shape_reject(fn, ins, ins->value.load.address);
+                    return false;
+                }
+                if (fprintf(out, "  ldr x10, [sp, #%zu]\n"
                                  "  ldr q9, [x10]\n"
                                  "  str q9, [sp, #%zu]\n",
                             (size_t)addr * 8U, dst) < 0)
@@ -124,8 +153,10 @@ bool minic_aarch64_emit_memory_instruction(
             size_t width = 0U;
             bool sign = false, pointer = false;
             if (!minic_multi_direct_scalar_load_shape(
-                    program, target, fn, ins, &width, &sign, &pointer))
+                    program, target, fn, ins, &width, &sign, &pointer)) {
+                report_load_shape_reject(fn, ins, addr);
                 return false;
+            }
             if (
                 fprintf(out, "  ldr x10, [sp, #%zu]\n", (size_t)addr * 8U) < 0 ||
                 (pointer ? fputs("  ldr x9, [x10]\n", out) == EOF
