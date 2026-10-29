@@ -233,7 +233,10 @@ fi
 if command -v riscv64-linux-gnu-as >/dev/null 2>&1 &&
    command -v riscv64-linux-gnu-objcopy >/dev/null 2>&1; then
     for mode in rvc norvc odd gap2 gap4; do
-        riscv64-linux-gnu-as -march=rv64gc -mabi=lp64d \
+        # GNU GAS pads the END of .text to sh_addralign by default. MiniAS
+        # stores the logical section bytes without this optional tail pad;
+        # suppress it so cmp checks the full instruction/alignment stream.
+        riscv64-linux-gnu-as --no-pad-sections -march=rv64gc -mabi=lp64d \
             -o "$work/alignment-$mode.gnu.o" "$work/alignment-$mode.s"
         riscv64-linux-gnu-objcopy -O binary --only-section=.text \
             "$work/alignment-$mode.o" "$work/alignment-$mode.text"
@@ -244,7 +247,7 @@ if command -v riscv64-linux-gnu-as >/dev/null 2>&1 &&
 fi
 
 if command -v riscv64-linux-gnu-as >/dev/null 2>&1; then
-    riscv64-linux-gnu-as -march=rv64gc -mabi=lp64d \
+    riscv64-linux-gnu-as --no-pad-sections -march=rv64gc -mabi=lp64d \
         -o "$work/gnu.o" "$work/restored.s"
     # ELF producer metadata may differ; compare the emitted text words.
     python3 - "$work/gnu.o" "$work/rv64gc.o" <<'PY'
