@@ -206,6 +206,9 @@ typedef struct MiniAsMCOperand {
     MiniAsMCOperandKind kind;
     unsigned reg;
     MiniAsMCRegisterClass reg_class;
+    /* Target-private register-bank identity; zero means unspecified.
+     * Common owns storage/lifetime and never interprets its ISA meaning. */
+    uint16_t target_reg_bank;
     bool register_64;
     uint64_t immediate;
     /* Symbol names are allocated only for symbol operands. Integer-heavy
@@ -219,6 +222,11 @@ typedef struct MiniAsMCOperand {
 typedef struct MiniAsMCInst {
     unsigned opcode;
     uint32_t encoding; /* target-owned base machine-bit template */
+    /* Opaque Target form and retained lowering/encoding plan.  Unlike a
+     * machine word these identify semantic choices across layout passes. */
+    uint32_t target_form;
+    void *target_payload;
+    void (*dispose_target_payload)(void *);
     unsigned count;
     /* Disposes the target-private representation of MINIAS_MC_MEMORY.
      * A NULL callback means the payload has no nested allocations. */
@@ -356,6 +364,38 @@ typedef struct MiniAsStmt {
     MiniAsMCInst *mcinst; /* allocated by target parser, freed by core */
 } MiniAsStmt;
 
+/* A Target proposes one whole encoded fragment.  Common alone assigns its
+ * final SymbolIDs, relocation ownership and Section bytes after validation. */
+typedef struct MiniAsEncodeFixupRequest {
+    int section;
+    uint32_t fragment_offset;
+    MiniAsFixupKind kind;
+    unsigned width;
+    char *symbol_name;
+    int64_t addend;
+    bool prefer_section_symbol;
+} MiniAsEncodeFixupRequest;
+
+typedef struct MiniAsEncodeAnchorRequest {
+    char *name;
+    int section;
+    uint32_t subsection;
+    uint64_t offset;
+} MiniAsEncodeAnchorRequest;
+
+typedef struct MiniAsEncodeResult {
+    unsigned char *bytes;
+    size_t byte_count;
+    size_t byte_capacity;
+    MiniAsEncodeFixupRequest *fixups;
+    size_t fixup_count;
+    size_t fixup_capacity;
+    MiniAsEncodeAnchorRequest *anchors;
+    size_t anchor_count;
+    size_t anchor_capacity;
+    uint32_t elf_flags_or;
+} MiniAsEncodeResult;
+
 /* Common deferred DWARF .debug_frame CFI fragments. Target psABI owns register
  * identities and alignment; Common owns symbolic anchors and serialization. */
 enum {
@@ -420,12 +460,9 @@ typedef struct MiniAs {
      * fixup's final section offset. */
     bool emitting_fragment;
     size_t emitting_fragment_id;
-    /* Per-instruction buffer owned by the MC engine. Target CodeEmitters
-     * never advance final Section cursors before an atomic commit. */
+    /* Active fragment transaction, not globally committed Section state. */
     bool capture_instruction_bytes;
-    unsigned char *encoded_instruction_bytes;
-    size_t encoded_instruction_size;
-    size_t encoded_instruction_capacity;
+    MiniAsEncodeResult *active_encode_result;
     MiniAsLiteral *literals;
     size_t literal_count;
     size_t literal_capacity;
@@ -435,7 +472,8 @@ typedef struct MiniAs {
     MiniAsSectionState *section_stack;
     size_t section_stack_count;
     size_t section_stack_capacity;
-    size_t pcrel_anchor_counter;
+    /* Global private-name ordinal allocated at successful MC commit. */
+    size_t synthetic_anchor_counter;
     size_t expr_anchor_counter;
     size_t *numeric_label_counts;
     size_t numeric_label_capacity;
@@ -579,6 +617,18 @@ bool minias_add_fixup(MiniAs *as,
                       unsigned width,
                       const char *symbol_name,
                       int64_t addend);
+/* Target instructions and executable alignment produce a single staged
+ * EncodeResult; no Target may directly insert into global Fixup/Symbol/ELF
+ * arrays while its encoder can still fail. Offsets remain fragment-relative. */
+bool minias_encode_add_fixup(MiniAs *as, int section, uint64_t offset,
+                             MiniAsFixupKind kind, unsigned width,
+                             const char *symbol_name, int64_t addend,
+                             bool prefer_section_symbol);
+bool minias_encode_request_anchor(MiniAs *as, const MiniAsStmt *stmt,
+                                  const char *prefix, char *out,
+                                  size_t capacity);
+bool minias_encode_add_elf_flags(MiniAs *as, uint32_t flags);
+void minias_encode_result_destroy(MiniAsEncodeResult *result);
 /* Section-owned relocations are explicit .reloc directives or generated
  * DWARF records. Never silently fall back here from a Target encoder. */
 bool minias_add_section_fixup(MiniAs *as, MiniAsFixupOrigin origin,
@@ -600,9 +650,8 @@ bool minias_decode_string_literals(const char *text,
                                    bool nul_terminate,
                                    unsigned char **data,
                                    size_t *size);
-/* All instruction bytes are produced through the target CodeEmitter interface.
- * The emitter returns a fragment-owned buffer; Common alone commits sections.
- * Target NOP alignment may still use the separate section append API. */
+/* All Target instruction and executable-padding bytes are staged into the
+ * active fragment result; Common alone publishes its complete transaction. */
 bool minias_emit_instruction_bytes(MiniAs *as, int section_index,
                                    const void *data, size_t size);
 bool minias_section_append(MiniAs *as, int section_index, const void *data, size_t size);

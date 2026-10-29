@@ -16,6 +16,52 @@ for backend in riscv_target.c riscv_encode.c aarch64_target.c \
         exit 1
     fi
 done
+# A byte-only capture is not an MC transaction.  Every Target now returns
+# fragment-owned Fixup/Symbol requests to the Common encoder transaction;
+# legacy direct edits of the global object graph are forbidden.  Inspect
+# tokens rather than raw grep hits so comments cannot manufacture a PASS.
+python3 - <<'PY'
+from pathlib import Path
+import re
+
+targets = ('riscv_target.c', 'riscv_encode.c', 'aarch64_target.c',
+           'x86_64_target.c', 'loongarch64_target.c')
+bad = []
+patterns = {
+    'direct Fixup insertion': r'\bminias_add_fixup\s*\(',
+    'global Fixup array access': r'\bas\s*->\s*fixups\s*\[',
+    'global ELF flag mutation':
+        r'\bas\s*->\s*elf_flags\s*(?:\|=|&=|\^=|\+=|-=|=(?!=)|\+\+|--)',
+    'global synthetic-anchor counter mutation':
+        r'\bas\s*->\s*pcrel_anchor_counter\s*(?:\+\+|--|\+=|-=|=(?!=))',
+    'direct synthetic Symbol insertion':
+        r'\bminias_get_symbol\s*\(\s*as\s*,[^;]*?,\s*true\s*\)',
+}
+for name in targets:
+    path = Path('assembler/src') / name
+    source = path.read_text(encoding='utf-8')
+    # Drop C comments and literals without changing line breaks, then check
+    # whole tokens across whitespace/newlines.  The functional test below is
+    # a separate gate: source spelling alone is not semantic proof.
+    cleaned = re.sub(
+        r'/\*[\s\S]*?\*/|//[^\n]*|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'',
+        lambda m: '\n' * m.group().count('\n') + ' ', source)
+    for label, pattern in patterns.items():
+        match = re.search(pattern, cleaned, flags=re.DOTALL)
+        if match:
+            line = cleaned.count('\n', 0, match.start()) + 1
+            bad.append(f'{path}:{line}: {label}')
+if bad:
+    raise SystemExit('MiniAS Target/Common encode ownership violation:\n' +
+                     '\n'.join(bad))
+
+core = Path('assembler/src/minias_internal.h').read_text(encoding='utf-8')
+for api in ('minias_encode_add_fixup', 'minias_encode_request_anchor',
+            'minias_encode_add_elf_flags'):
+    if not re.search(r'\b' + api + r'\s*\(', core):
+        raise SystemExit('Missing Common transaction API: ' + api)
+print('MINIAS_MC_ENCODE_BOUNDARY=PASS target_mutation=none requests=typed')
+PY
 # Code alignment is a Target-owned NOP policy but still emits through the
 # identical MC byte transaction as every instruction. No architecture gets
 # a special direct-Section bridge for ALIGN or for an instruction emitter.

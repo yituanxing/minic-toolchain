@@ -48,5 +48,11 @@ void minias_mcinst_destroy(MiniAsMCInst *inst) {
                 free(op->memory);
         }
     }
+    if (inst->target_payload != NULL) {
+        if (inst->dispose_target_payload != NULL)
+            inst->dispose_target_payload(inst->target_payload);
+        else
+            free(inst->target_payload);
+    }
     free(inst);
 }

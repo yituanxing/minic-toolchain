@@ -283,3 +283,68 @@ commit in CI; previous head results cannot certify this batch.
    Kbuild evidence; archive only proven-obsolete diagnostics after a
    source-hash preserving migration. Do not delete entire legacy workflows
    merely because a newer seven-shard gate exists.
+
+## Batch J: complete Target encode-result ownership (2026-10-29)
+
+Architecture-only implementation after six independent Common/Target/ELF/CI
+audits. This batch is **not** a new original-Linux or full GNU semantic
+acceptance result. The single MiniAS branch and Draft PR #667 are retained.
+
+### Before / after ownership
+
+| Boundary | Previous mixed ownership | New authoritative owner |
+|---|---|---|
+| Instruction bytes | Target used a Common byte capture buffer | `MiniAsEncodeResult` owns one fragment's bytes until checked commit |
+| Instruction Fixups | Target called `minias_add_fixup`, immediately mutating global symbols and Fixups | Target stages fragment-relative typed requests; Common validates, interns symbols and commits Fixups |
+| Synthetic PCREL anchors | RISC-V encoder directly allocated/defined `MiniAsSymbol` and incremented the global counter | Target requests a private anchor; Common defines it and advances an ISA-neutral counter at commit |
+| Target ELF bits | RISC-V C16 encoder directly ORed `as->elf_flags` | Target stages flag delta; Common applies it only after the fragment bytes and requests are accepted |
+| AArch64 section-symbol preference | Target changed `as->fixups[last]` after insertion | Preference travels as a typed Fixup request property |
+| Target operand ownership | Generic class alone lost SIMD/VR/XR distinctions; certain pseudos used hidden operand slots | Common owns opaque Target bank/form/payload storage and disposal, without decoding ISA-specific values |
+
+The DATA, explicit `.reloc`, CFI and DWARF-generated section-owned Fixup
+paths deliberately retain their existing Common semantics. A Common commit
+allocation failure stops assembly before writing an output ELF; the internal
+half-built assembly context is destroyed, **not** made reusable by rollback.
+
+### Backend consolidation within the same production batch
+
+- RISC-V `.option` mutable state and push/pop live in TargetContext; a single
+  branch plan supplies layout and final encoding decisions at each layout
+  iteration, and final RV Fixups/PCREL anchors are staged.
+- x86-64 shares register encoding decisions across measurement and emission,
+  unifies the previously duplicated memory-payload attachment paths, and
+  stages all target instruction Fixups.
+- AArch64 retains target-private register bank and scalar-memory form IDs;
+  deferred difference payloads no longer masquerade as an extra MC operand.
+- LoongArch retains distinct VR128/XR256/FCSR/FCC register banks and an
+  owned LI.D lowering plan, shared by measurement and encoding.
+
+### Exact local structural evidence
+
+- Debug and Release (`-O2 -Werror`) MiniAS builds: PASS.
+- Existing MiniAS A0: 30/30 PASS.
+- New four-Target EncodeResult probe: PASS, including instruction-owned,
+  explicit-section and CFI section Fixups, plus failed-output rejection.
+- Static Target/Common ownership guard: PASS.
+- Focused x86, AArch64, RISC-V and LoongArch probes: local paths PASS.
+- AddressSanitizer/UBSan focused probes: PASS with leak detection disabled;
+  LeakSanitizer could not operate in this container's process-tracing setup.
+- Remote cross-GNU object parity, Linux 3x7 and Image/QEMU were **not run**.
+
+### Boundaries remaining after Batch J
+
+1. **P1 typed Fragment and persistent conditional-region graph:** `.org`,
+   `.fill`, `.space` still borrow source spelling and dynamic `.if/.elseif`
+   may trigger whole-source reparsing; eliminate only with dependency-aware
+   SourceFrame/Fragment ownership.
+2. **P1 stable symbol IDs in machine operands:** remaining target-private
+   `MiniAsSymbolExpr{name[256]}` and lookup-by-name in measure/encode should
+   migrate to the already-owned Common SymbolID/MCExpr model.
+3. **P1 complete target plans:** x86 still has unmerged measure/encode families
+   and ALIGN inspects Common `stmts`; AArch64 `.req` still rewrites operand
+   text before position-aware register parsing; Loong and RV have residual
+   legacy opcode/feature spellings. Keep ISA policies in their own Targets.
+4. **P2 source and object helpers:** collapse only proven duplicated numeric
+   expression lexers, macro/rept source walkers, DWARF byte primitives and
+   REL/RELA decoding; keep ELF Reader, RelocatableWriter and Rewrite roles
+   separate and preserve old Kbuild artifacts before CI cleanup.

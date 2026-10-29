@@ -20,6 +20,9 @@ typedef struct MiniAsRiscvState {
     bool isa_explicit;
     unsigned target_xlen;
     uint64_t isa_features;
+    /* Mutable .option mode belongs to this TargetContext, not MiniAs.
+     * The matching immutable parse-site view lives in stmt->site. */
+    uint32_t options;
     /* Semantic source of ELF Tag_File attributes. Serialization is a single
      * target-owned step, independent of source .attribute directive order. */
     char arch_attribute_isa[512];
@@ -54,6 +57,24 @@ bool minias_riscv_mc_descriptor_policy(const char *mnemonic,
                                        bool *rv64_only,
                                        unsigned *family);
 
+/* One ephemeral, layout-generation-specific branch resolution.  The result
+ * must be recomputed after each Common MCLayout pass: retained MCInst owns
+ * the expression, but Symbol offsets can move while fragments relax.  Both
+ * Target relaxation and final encoding consume these exact range decisions. */
+typedef struct MiniAsRiscvBranchPlan {
+    bool local;
+    int64_t displacement;
+    uint32_t required_size;
+    bool short_legal;
+    bool long_legal;
+    bool jal_legal;
+} MiniAsRiscvBranchPlan;
+struct MiniAs;
+struct MiniAsStmt;
+bool minias_riscv_resolve_branch_plan(struct MiniAs *as,
+                                      const struct MiniAsStmt *stmt,
+                                      MiniAsRiscvBranchPlan *result);
+
 /* RISC-V-only psABI relocation constants. */
 #define MINIAS_R_RISCV_32 1U
 #define MINIAS_R_RISCV_64 2U
@@ -69,6 +90,5 @@ bool minias_riscv_mc_descriptor_policy(const char *mnemonic,
 #define MINIAS_R_RISCV_SUB16 38U
 #define MINIAS_R_RISCV_SUB32 39U
 #define MINIAS_R_RISCV_SUB64 40U
-#define MINIAS_R_RISCV_RELAX 51U
 
 #endif

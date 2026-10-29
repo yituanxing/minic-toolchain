@@ -562,15 +562,104 @@ bool minias_add_section_fixup(MiniAs *as, MiniAsFixupOrigin origin,
                                symbol_name, addend, origin);
 }
 
+/* Commit a complete Target result after its encoded length has passed the
+ * fragment invariant.  No Target code runs during this phase.  Section-owned
+ * .reloc and DWARF fixups retain their separate explicit Common APIs.
+ *
+ * On allocation failure assembly aborts without writing an output object;
+ * semantic state never becomes visible to a subsequent Target invocation.
+ */
+static bool minias_commit_encode_result(MiniAs *as, const MiniAsStmt *owner) {
+    MiniAsEncodeResult *result = as->active_encode_result;
+    size_t i;
+    if (result == NULL || !as->emitting_fragment ||
+        owner != &as->stmts[as->emitting_fragment_id]) {
+        minias_set_error(as, "encode-commit-without-fragment");
+        return false;
+    }
+    if (result->byte_count != owner->size ||
+        owner->offset > UINT64_MAX - owner->size ||
+        owner->section < 0 || (size_t)owner->section >= as->section_count) {
+        minias_set_error(as, "invalid-complete-encode-result:line=%zu",
+                         owner->line);
+        return false;
+    }
+    /* Validate requests before the first global mutation. */
+    if (result->anchor_count > SIZE_MAX - as->synthetic_anchor_counter ||
+        result->fixup_count > SIZE_MAX - as->fixup_count) {
+        minias_set_error(as, "encoded-request-count-overflow");
+        return false;
+    }
+    for (i = 0U; i < result->anchor_count; ++i) {
+        const MiniAsEncodeAnchorRequest *request = &result->anchors[i];
+        if (request->section != owner->section ||
+            request->subsection != owner->subsection ||
+            request->offset < owner->offset ||
+            request->offset - owner->offset > owner->size ||
+            minias_get_symbol(as, request->name, false) != NULL) {
+            minias_set_error(as, "invalid-encoded-anchor:line=%zu",
+                             owner->line);
+            return false;
+        }
+    }
+    for (i = 0U; i < result->fixup_count; ++i) {
+        const MiniAsEncodeFixupRequest *request = &result->fixups[i];
+        if (request->section != owner->section ||
+            request->fragment_offset > owner->size ||
+            request->width > owner->size - request->fragment_offset) {
+            minias_set_error(as, "invalid-encoded-fixup-commit:line=%zu",
+                             owner->line);
+            return false;
+        }
+    }
+    /* Reserve the Fixup backing storage before defining synthetic symbols.
+     * Their final indices and relocation bindings still belong to Common. */
+    if (!minias_grow_array((void **)&as->fixups, &as->fixup_capacity,
+                           sizeof(*as->fixups),
+                           as->fixup_count + result->fixup_count)) {
+        minias_set_error(as, "out-of-memory:encoded-fixup-commit");
+        return false;
+    }
+    for (i = 0U; i < result->anchor_count; ++i) {
+        const MiniAsEncodeAnchorRequest *request = &result->anchors[i];
+        MiniAsSymbol *anchor = minias_get_symbol(as, request->name, true);
+        if (anchor == NULL) return false;
+        anchor->defined = true;
+        anchor->section = request->section;
+        anchor->subsection = request->subsection;
+        anchor->value = request->offset;
+        anchor->bind = MINIAS_STB_LOCAL;
+    }
+    for (i = 0U; i < result->fixup_count; ++i) {
+        const MiniAsEncodeFixupRequest *request = &result->fixups[i];
+        if (!minias_record_fixup(as, request->section,
+                                 owner->offset + request->fragment_offset,
+                                 request->kind, request->width,
+                                 request->symbol_name, request->addend,
+                                 MINIAS_FIXUP_ORIGIN_FRAGMENT))
+            return false;
+        as->fixups[as->fixup_count - 1U].prefer_section_symbol =
+            request->prefer_section_symbol;
+    }
+    if (!minias_section_append(as, owner->section,
+                               result->bytes, result->byte_count))
+        return false;
+    as->synthetic_anchor_counter += result->anchor_count;
+    as->elf_flags |= result->elf_flags_or;
+    minias_encode_result_destroy(result);
+    return true;
+}
+
 bool minias_emit_instruction_bytes(MiniAs *as, int section_index,
                                    const void *data, size_t size) {
     MiniAsSection *sec;
+    MiniAsEncodeResult *result = as->active_encode_result;
     if (section_index < 0 || (size_t)section_index >= as->section_count) {
         minias_set_error(as, "invalid-target-emission-section");
         return false;
     }
     sec = &as->sections[(size_t)section_index];
-    if (!as->capture_instruction_bytes) {
+    if (!as->capture_instruction_bytes || result == NULL) {
         minias_set_error(as, "target-emission-outside-instruction");
         return false;
     }
@@ -592,21 +681,20 @@ bool minias_emit_instruction_bytes(MiniAs *as, int section_index,
         owner->section != section_index ||
         sec->type == MINIAS_SHT_NOBITS ||
         size > SIZE_MAX - sec->size ||
-        size > SIZE_MAX - as->encoded_instruction_size) {
+        size > SIZE_MAX - result->byte_count) {
         minias_set_error(as, "instruction-emission-section-or-size");
         return false;
     }
-    needed = as->encoded_instruction_size + size;
-    if (!minias_grow_array((void **)&as->encoded_instruction_bytes,
-                    &as->encoded_instruction_capacity,
+    needed = result->byte_count + size;
+    if (!minias_grow_array((void **)&result->bytes,
+                    &result->byte_capacity,
                     sizeof(unsigned char), needed)) {
         minias_set_error(as, "out-of-memory:encoded-instruction");
         return false;
     }
     if (size != 0U)
-        memcpy(as->encoded_instruction_bytes +
-                   as->encoded_instruction_size, data, size);
-    as->encoded_instruction_size = needed;
+        memcpy(result->bytes + result->byte_count, data, size);
+    result->byte_count = needed;
     /* The CodeEmitter owns bytes until the transaction commits. A Target
      * never updates a final Section size or cursor while encoding. */
     return true;
@@ -795,7 +883,10 @@ void minias_destroy(MiniAs *as) {
     }
     free(as->stmts);
     free(as->fixups);
-    free(as->encoded_instruction_bytes);
+    if (as->active_encode_result != NULL) {
+        minias_encode_result_destroy(as->active_encode_result);
+        free(as->active_encode_result);
+    }
     free(as->literals);
     free(as->subsections);
     free(as->section_stack);
@@ -5716,6 +5807,16 @@ bool minias_emit_sections(MiniAs *as) {
     size_t i;
     MiniAsEmitRef *refs = NULL;
 
+    if (as->active_encode_result != NULL) {
+        minias_set_error(as, "encode-result-reentered");
+        return false;
+    }
+    as->active_encode_result = calloc(1U, sizeof(*as->active_encode_result));
+    if (as->active_encode_result == NULL) {
+        minias_set_error(as, "out-of-memory:encode-result");
+        return false;
+    }
+
     for (i = 0U; i < as->section_count; ++i) {
         as->sections[i].size = 0U;
     }
@@ -5774,7 +5875,6 @@ bool minias_emit_sections(MiniAs *as) {
         as->emitting_fragment_id = refs[i].order;
         as->capture_instruction_bytes =
             stmt->kind == MINIAS_STMT_INSN || staged_padding;
-        as->encoded_instruction_size = 0U;
         if (stmt->kind == MINIAS_STMT_ALIGN) {
             bool exec_align = (section->flags & MINIAS_SHF_EXECINSTR) != 0U &&
                               strcmp(stmt->op, ".org") != 0;
@@ -5827,27 +5927,25 @@ bool minias_emit_sections(MiniAs *as) {
             free(refs);
             return false;
         }
-        /* Target-encoded bytes are a complete fragment result: neither
-         * Target nor the parser may commit part of an instruction to the
-         * final Section. All four Targets share this same commit path. */
+        /* A Target can stage bytes, fixups, synthetic symbols and ELF flags,
+         * but only Common may publish the complete, length-checked result. */
         as->capture_instruction_bytes = false;
-        as->emitting_fragment = false;
         if (stmt->kind == MINIAS_STMT_INSN || staged_padding) {
-            if (as->encoded_instruction_size != stmt->size ||
+            if (as->active_encode_result->byte_count != stmt->size ||
                 stmt->offset > SIZE_MAX) {
                 minias_set_error(as,
                     "encoded-fragment-size-mismatch:line=%zu:expected=%u:actual=%zu",
-                    stmt->line,stmt->size,as->encoded_instruction_size);
+                    stmt->line,stmt->size,
+                    as->active_encode_result->byte_count);
                 free(refs);
                 return false;
             }
-            if (!minias_section_append(as,stmt->section,
-                                       as->encoded_instruction_bytes,
-                                       as->encoded_instruction_size)) {
+            if (!minias_commit_encode_result(as, stmt)) {
                 free(refs);
                 return false;
             }
         }
+        as->emitting_fragment = false;
     }
     free(refs);
 

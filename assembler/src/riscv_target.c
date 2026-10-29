@@ -193,10 +193,7 @@ static bool strict_base_i_check_sections(MiniAs *as) {
 
 /* The selected ISA is enforced at the target boundary, not in the common
  * assembler. No -march preserves the historical Linux assembler behavior. */
-static uint64_t riscv_required_features(const char *op) {
-    uint64_t required = 0U;
-    if (minias_riscv_mc_descriptor_policy(op, &required, NULL, NULL))
-        return required;
+static uint64_t riscv_legacy_required_features(const char *op) {
     /* Legacy/pseudo and extension families not yet represented by the
      * fixed-width table retain their existing GNU mnemonic policy. */
     if (strcmp(op, "mulhsu") == 0) return RISCV_ISA_M;
@@ -233,10 +230,7 @@ static uint64_t riscv_required_features(const char *op) {
         return UINT64_MAX;
     return 0U;
 }
-static bool is_rv64_only_opcode(const char *op) {
-    bool rv64_only = false;
-    if (minias_riscv_mc_descriptor_policy(op, NULL, &rv64_only, NULL))
-        return rv64_only;
+static bool riscv_legacy_rv64_only_opcode(const char *op) {
     /* The fixed-word descriptor table already marks LD/SD, word ALU and
      * shifts. Multiword and extension instruction families retain typed
      * operands but are parsed through different target-private dispatchers;
@@ -257,18 +251,38 @@ static bool is_rv64_only_opcode(const char *op) {
     }
     return false;
 }
+/* ISA legality consumes one descriptor lookup per instruction.  The typed
+ * descriptor table is authoritative when it recognizes the mnemonic; only
+ * the remaining pseudo/extension families use the isolated compatibility
+ * policy below.  Parser and validator must not each interpret separate
+ * copies of the same descriptor metadata. */
+typedef struct RiscvInstructionPolicy {
+    uint64_t required_features;
+    bool rv64_only;
+} RiscvInstructionPolicy;
+
+static RiscvInstructionPolicy riscv_instruction_policy(const char *op) {
+    RiscvInstructionPolicy policy = {0U, false};
+    if (!minias_riscv_mc_descriptor_policy(op, &policy.required_features,
+                                            &policy.rv64_only, NULL)) {
+        policy.required_features = riscv_legacy_required_features(op);
+        policy.rv64_only = riscv_legacy_rv64_only_opcode(op);
+    }
+    return policy;
+}
 
 static bool riscv_validate_selected_isa(const MiniAs *as, const char *op,
+                                        const RiscvInstructionPolicy *policy,
                                         char *reason, size_t cap) {
     uint64_t bits;
     /* Strict base-I retains the exhaustive post-encoding word validator,
      * including its established machine-encoding error diagnostics. */
-    bits = riscv_required_features(op);
+    bits = policy->required_features;
     /* `.option norvc` is an instruction-site state even in the historical
      * implicit ISA mode. Do not bury the C opcode gate behind explicit
      * -march validation: GNU rejects c.* after norvc in either mode. */
     if (bits != UINT64_MAX &&
-        ((as->target_options & MINIAS_RISCV_OPTION_NO_RVC) != 0U) &&
+        ((MINIAS_RV_STATE(as)->options & MINIAS_RISCV_OPTION_NO_RVC) != 0U) &&
         (bits & RISCV_ISA_C)) {
         (void)snprintf(reason, cap, "disabled-riscv-compressed:%s", op);
         return false;
@@ -289,11 +303,12 @@ static bool riscv_validate_selected_isa(const MiniAs *as, const char *op,
 static bool riscv_validate_instruction(const MiniAs *as,
                                        const char *op, const char *args,
                                        char *reason, size_t cap) {
+    const RiscvInstructionPolicy policy = riscv_instruction_policy(op);
     /* Machine feature checks must precede MCInst parsing, but operand
      * decoding and sizing are exclusively the target MCInst hooks. */
-    if (!riscv_validate_selected_isa(as, op, reason, cap)) return false;
+    if (!riscv_validate_selected_isa(as, op, &policy, reason, cap)) return false;
     if (MINIAS_RV_STATE(as)->target_xlen == 32U &&
-        is_rv64_only_opcode(op)) {
+        policy.rv64_only) {
         (void)snprintf(reason, cap, "riscv32-unsupported-opcode:%s", op);
         return false;
     }
@@ -520,13 +535,13 @@ static bool riscv_target_directive(MiniAs *as, const char *op,
     /* PIC/nopic must be captured per statement for correct la expansion.
      * Legacy non-I arch/rvc/relax modes still require semantic qualification. */
     if (strcmp(args, "pic") == 0) {
-        as->target_options |= MINIAS_RISCV_OPTION_PIC;
+        MINIAS_RV_STATE(as)->options |= MINIAS_RISCV_OPTION_PIC;
     } else if (strcmp(args, "nopic") == 0) {
-        as->target_options &= ~(uint32_t)MINIAS_RISCV_OPTION_PIC;
+        MINIAS_RV_STATE(as)->options &= ~(uint32_t)MINIAS_RISCV_OPTION_PIC;
     } else if (strcmp(args, "norvc") == 0) {
-        as->target_options |= MINIAS_RISCV_OPTION_NO_RVC;
+        MINIAS_RV_STATE(as)->options |= MINIAS_RISCV_OPTION_NO_RVC;
     } else if (strcmp(args, "rvc") == 0) {
-        as->target_options &= ~(uint32_t)MINIAS_RISCV_OPTION_NO_RVC;
+        MINIAS_RV_STATE(as)->options &= ~(uint32_t)MINIAS_RISCV_OPTION_NO_RVC;
     } else if (strcmp(args, "push") == 0) {
         if (MINIAS_RV_STATE(as)->option_depth >=
             sizeof(MINIAS_RV_STATE(as)->option_stack) /
@@ -534,13 +549,15 @@ static bool riscv_target_directive(MiniAs *as, const char *op,
             minias_set_error(as, "option-stack-overflow:line=%zu", line);
             return false;
         }
-        MINIAS_RV_STATE(as)->option_stack[MINIAS_RV_STATE(as)->option_depth++] = as->target_options;
+        MINIAS_RV_STATE(as)->option_stack[MINIAS_RV_STATE(as)->option_depth++] =
+            MINIAS_RV_STATE(as)->options;
     } else if (strcmp(args, "pop") == 0) {
         if (MINIAS_RV_STATE(as)->option_depth == 0U) {
             minias_set_error(as, "option-stack-underflow:line=%zu", line);
             return false;
         }
-        as->target_options = MINIAS_RV_STATE(as)->option_stack[--MINIAS_RV_STATE(as)->option_depth];
+        MINIAS_RV_STATE(as)->options =
+            MINIAS_RV_STATE(as)->option_stack[--MINIAS_RV_STATE(as)->option_depth];
     }
     return true;
 }
@@ -559,17 +576,71 @@ static void riscv_object_attributes(const MiniAs *as, unsigned char elf_class,
     }
 }
 
-/* One retained MCInst determines both the range-dependent minimum and the
- * terminal encoding alternative. No opcode text is inspected during
- * relaxation: GNU aliases and macro-generated branches behave identically.
- * The inverse B-branch + JAL sequence belongs to the RV encoder;
- * Common only applies the requested fragment size. */
+/* Resolve one retained Target branch against the CURRENT layout generation.
+ * The symbol identity/encoding policy is target-owned; no caller may cache a
+ * displacement in MCInst across Common relaxation passes.  Both the branch
+ * growth planner and final encoder share the range/alignment decisions. */
+bool minias_riscv_resolve_branch_plan(MiniAs *as,
+                                      const MiniAsStmt *stmt,
+                                      MiniAsRiscvBranchPlan *result) {
+    const MiniAsMCInst *m = stmt->mcinst;
+    const MiniAsSymbolExpr *expr;
+    const MiniAsSymbol *symbol;
+    int64_t displacement;
+    if (result == NULL || m == NULL ||
+        (m->opcode != RV_MC_BRANCH && m->opcode != RV_MC_JAL)) {
+        minias_set_error(as,"internal:riscv-branch-plan-kind");
+        return false;
+    }
+    memset(result,0,sizeof(*result));
+    result->required_size=4U;
+    expr=m->operands[m->opcode==RV_MC_BRANCH?2U:1U].symbol;
+    if (expr == NULL) {
+        minias_set_error(as,"internal:riscv-branch-plan-symbol");
+        return false;
+    }
+    symbol=minias_get_symbol(as,expr->name,false);
+    if(symbol==NULL || !symbol->defined || symbol->section!=stmt->section ||
+       (m->opcode==RV_MC_JAL && symbol->subsection!=stmt->subsection))
+        return true;
+    if(symbol->value>(uint64_t)INT64_MAX || stmt->offset>(uint64_t)INT64_MAX) {
+        minias_set_error(as,"riscv-branch-offset-overflow");
+        return false;
+    }
+    displacement=(int64_t)symbol->value-(int64_t)stmt->offset;
+    if((expr->addend>0 && displacement>INT64_MAX-expr->addend) ||
+       (expr->addend<0 && displacement<INT64_MIN-expr->addend)) {
+        minias_set_error(as,"riscv-branch-addend-overflow");
+        return false;
+    }
+    displacement+=expr->addend;
+    result->local=true;
+    result->displacement=displacement;
+    result->jal_legal=(displacement&1)==0 &&
+                      displacement>=-(INT64_C(1)<<20) &&
+                      displacement<=(INT64_C(1)<<20)-2;
+    if(m->opcode==RV_MC_BRANCH) {
+        result->short_legal=(displacement&1)==0 &&
+                            displacement>=-4096 && displacement<=4094;
+        result->long_legal=displacement>=INT64_MIN+4 &&
+                           ((displacement-4)&1)==0 &&
+                           displacement-4>=-(INT64_C(1)<<20) &&
+                           displacement-4<=(INT64_C(1)<<20)-2;
+        /* Odd displacements cannot be repaired by growing the branch.
+         * Even overflows grow monotonically; unreachably far targets then
+         * fail in final encoding with the established long-JAL diagnostic. */
+        if(!result->short_legal && (displacement&1)==0)
+            result->required_size=8U;
+    }
+    return true;
+}
+
+/* One retained MCInst determines the range-dependent minimum and terminal
+ * encoding alternative.  Common only applies the requested fragment size. */
 static bool riscv_plan_instruction_relaxation(MiniAs *as,
                                               const MiniAsStmt *stmt,
                                               MiniAsTargetRelaxPlan *plan) {
-    MiniAsSymbolExpr expr;
-    const MiniAsSymbol *symbol;
-    int64_t displacement;
+    MiniAsRiscvBranchPlan branch;
     plan->current_size = stmt->size;
     plan->required_size = stmt->size;
     plan->terminal_size = stmt->size;
@@ -577,28 +648,8 @@ static bool riscv_plan_instruction_relaxation(MiniAs *as,
         stmt->mcinst->opcode != RV_MC_BRANCH)
         return true;
     plan->terminal_size = 8U;
-    expr = *stmt->mcinst->operands[2].symbol;
-    symbol = minias_get_symbol(as, expr.name, false);
-    if (symbol == NULL || !symbol->defined ||
-        symbol->section != stmt->section ||
-        symbol->value > (uint64_t)INT64_MAX ||
-        stmt->offset > (uint64_t)INT64_MAX) return true;
-
-    /* Subtract first, then add the symbolic addend with explicit overflow
-     * checks. The old expression evaluated (value + addend) before
-     * subtraction and could trigger signed overflow for valid offsets. */
-    displacement = (int64_t)symbol->value - (int64_t)stmt->offset;
-    if ((expr.addend > 0 && displacement > INT64_MAX - expr.addend) ||
-        (expr.addend < 0 && displacement < INT64_MIN - expr.addend)) {
-        minias_set_error(as, "riscv-relaxation-offset-overflow:%s:line=%zu",
-                         stmt->op, stmt->line);
-        return false;
-    }
-    displacement += expr.addend;
-    if ((displacement % 2) == 0 &&
-        (displacement < -4096 || displacement > 4094)) {
-        plan->required_size = 8U;
-    }
+    if (!minias_riscv_resolve_branch_plan(as,stmt,&branch))return false;
+    plan->required_size=branch.required_size;
     return true;
 }
 
@@ -691,7 +742,7 @@ static bool riscv_configure_legacy(MiniAsAssemblyConfig *config,
 
 static void riscv_capture_site_state(const MiniAs *as,
                                       MiniAsTargetSiteState *site) {
-    site->mode_bits = as->target_options;
+    site->mode_bits = MINIAS_RV_STATE(as)->options;
     site->profile_features = MINIAS_RV_STATE(as)->isa_features;
 }
 

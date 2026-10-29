@@ -47,6 +47,10 @@ jobs:
         run: bash tests/assembler/probe-mc-operand-failure-unwind.sh
       - name: Enforce ISA-private fixup and MC emission ownership
         run: bash tests/assembler/probe-mc-target-boundary.sh
+      - name: Four Target EncodeResult and Common-owned Fixup/Symbol transactions
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-mc-encode-result.sh
       - name: Validate Common MCOperand nested ownership and error-path lifecycle
         run: bash tests/assembler/probe-mc-operand-lifetime.sh
       - name: RV32E validates parsed GPRs without treating symbols as registers
