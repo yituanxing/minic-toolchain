@@ -800,10 +800,14 @@ bool minias_riscv_measure_mcinst(MiniAs *as, const MiniAsStmt *stmt,
             *size = 8U;
             return true;
         case RV_MC_LI: {
-            uint32_t words[16];
-            unsigned count;
-            if (!rv_materialize_li(as, stmt, words, &count)) return false;
-            *size = count * 4U;
+            const MiniAsRiscvLiPlan *plan =
+                minias_riscv_find_li_plan(as, m);
+            if (plan == NULL) {
+                minias_set_error(as, "internal:riscv-li-plan-missing:line=%zu",
+                                 stmt->line);
+                return false;
+            }
+            *size = plan->count * 4U;
             return true;
         }
         default:
@@ -887,12 +891,16 @@ static const RvMCDesc *rv_find_mc_descriptor(const char *mnemonic) {
     return NULL;
 }
 
+static bool rv_legacy_form_policy(const char *mnemonic,
+                                  uint64_t *required_features,
+                                  bool *rv64_only);
 bool minias_riscv_mc_descriptor_policy(const char *mnemonic,
                                        uint64_t *required_features,
                                        bool *rv64_only,
                                        unsigned *family) {
     const RvMCDesc *descriptor = rv_find_mc_descriptor(mnemonic);
-    if (descriptor == NULL) return false;
+    if (descriptor == NULL)
+        return rv_legacy_form_policy(mnemonic, required_features, rv64_only);
     if (required_features != NULL)
         *required_features = descriptor->required_features;
     if (rv64_only != NULL)
@@ -1140,6 +1148,16 @@ static bool rv_parse_multi_mc(MiniAs *as, MiniAsStmt *stmt,
         m->operands[symbol_index].kind = MINIAS_MC_SYMBOL;
     }
     stmt->mcinst = m;
+    if (family == RV_MC_LI) {
+        uint32_t words[16];
+        unsigned count;
+        if (!rv_materialize_li(as, stmt, words, &count) ||
+            !minias_riscv_store_li_plan(as, m, words, count)) {
+            stmt->mcinst = NULL;
+            minias_mcinst_destroy(m);
+            return false;
+        }
+    }
     return true;
 invalid:
     minias_set_error(as, "bad-riscv-pseudo-mcinst:%s:%s:line=%zu",
@@ -1421,6 +1439,130 @@ invalid:
                      op,stmt->args,stmt->line);
     return false;
 }
+
+/* Target-private opcode/form registry for pseudo, privileged and extension
+ * forms not represented by the fixed RvMCDesc encoding table. Exactly one
+ * parser family is selected per mnemonic: no repeated speculative parsing,
+ * no successful parse that defers unknown-opcode diagnostics to layout.
+ * Exact aliases take precedence over broad extension-family prefixes. */
+typedef bool (*RvFormParser)(MiniAs *, MiniAsStmt *, char [][128], size_t,
+                             bool *);
+typedef struct RvParseForm {
+    const char *spelling;
+    RvFormParser parse;
+    bool prefix;
+    uint64_t required_features;
+    bool rv64_only;
+} RvParseForm;
+#define RV_FORM(name, parser) {name, parser, false, 0U, false}
+#define RV_EXTENSION(name, parser, feature) {name, parser, false, feature, false}
+#define RV_EXT64(name, parser, feature) {name, parser, false, feature, true}
+#define RV_PRIVILEGED(name, parser) {name, parser, false, UINT64_MAX, false}
+#define RV_PREFIX(name, parser, feature) {name, parser, true, feature, false}
+static const RvParseForm rv_parse_forms[] = {
+    RV_FORM(".insn", rv_parse_simple_mc),
+    RV_EXTENSION("c.li", rv_parse_simple_mc, RISCV_ISA_C),
+    RV_FORM("nop", rv_parse_simple_mc),
+    RV_FORM("ret", rv_parse_simple_mc),
+    RV_PRIVILEGED("sret", rv_parse_simple_mc),
+    RV_FORM("ecall", rv_parse_simple_mc),
+    RV_FORM("ebreak", rv_parse_simple_mc),
+    RV_PRIVILEGED("wfi", rv_parse_simple_mc),
+    RV_PRIVILEGED("pause", rv_parse_simple_mc),
+    RV_EXTENSION("fence.i", rv_parse_simple_mc, RISCV_ISA_ZIFENCEI),
+    RV_FORM("fence", rv_parse_simple_mc),
+    RV_PRIVILEGED("sfence.vma", rv_parse_simple_mc),
+    RV_FORM("jalr", rv_parse_simple_mc),
+    RV_FORM("mv", rv_parse_simple_mc),
+    RV_FORM("move", rv_parse_simple_mc),
+    RV_FORM("snez", rv_parse_simple_mc),
+    RV_FORM("seqz", rv_parse_simple_mc),
+    RV_FORM("neg", rv_parse_simple_mc),
+    RV_EXT64("negw", rv_parse_simple_mc, 0U),
+    RV_FORM("not", rv_parse_simple_mc),
+    RV_FORM("jr", rv_parse_simple_mc),
+    RV_EXTENSION("fscsr", rv_parse_simple_mc,
+                 RISCV_ISA_F | RISCV_ISA_ZICSR),
+    RV_EXTENSION("frcsr", rv_parse_simple_mc,
+                 RISCV_ISA_F | RISCV_ISA_ZICSR),
+    RV_FORM("li", rv_parse_multi_mc),
+    RV_FORM("call", rv_parse_multi_mc),
+    RV_FORM("tail", rv_parse_multi_mc),
+    RV_FORM("lla", rv_parse_multi_mc),
+    RV_FORM("la", rv_parse_multi_mc),
+    RV_EXTENSION("vmv.v.i", rv_parse_vector_mc, RISCV_ISA_V),
+    RV_EXTENSION("vsetvli", rv_parse_vector_mc, RISCV_ISA_V),
+    RV_EXTENSION("vsetvl", rv_parse_vector_mc, RISCV_ISA_V),
+    RV_EXTENSION("csrr", rv_parse_csr_mc, RISCV_ISA_ZICSR),
+    RV_EXTENSION("csrrw", rv_parse_csr_mc, RISCV_ISA_ZICSR),
+    RV_EXTENSION("csrrc", rv_parse_csr_mc, RISCV_ISA_ZICSR),
+    RV_EXTENSION("csrw", rv_parse_csr_mc, RISCV_ISA_ZICSR),
+    RV_EXTENSION("csrs", rv_parse_csr_mc, RISCV_ISA_ZICSR),
+    RV_EXTENSION("csrc", rv_parse_csr_mc, RISCV_ISA_ZICSR),
+    /* These families have widths/ordering or FP rounding modifiers. Their
+     * existing decoders validate the COMPLETE suffix, not just the stem. */
+    RV_PREFIX("vle", rv_parse_vector_mc, RISCV_ISA_V),
+    RV_PREFIX("vse", rv_parse_vector_mc, RISCV_ISA_V),
+    RV_PREFIX("amo", rv_parse_atomic_mc, RISCV_ISA_A),
+    RV_PREFIX("lr.", rv_parse_atomic_mc, RISCV_ISA_A),
+    RV_PREFIX("sc.", rv_parse_atomic_mc, RISCV_ISA_A),
+    RV_PREFIX("f", rv_parse_fp_mc, RISCV_ISA_F)
+};
+#undef RV_FORM
+#undef RV_EXTENSION
+#undef RV_EXT64
+#undef RV_PRIVILEGED
+#undef RV_PREFIX
+
+static const RvParseForm *rv_find_parse_form(const char *op) {
+    size_t i;
+    for (i = 0U; i < sizeof(rv_parse_forms)/sizeof(rv_parse_forms[0]); ++i)
+        if (!rv_parse_forms[i].prefix &&
+            strcmp(op, rv_parse_forms[i].spelling) == 0)
+            return &rv_parse_forms[i];
+    for (i = 0U; i < sizeof(rv_parse_forms)/sizeof(rv_parse_forms[0]); ++i)
+        if (rv_parse_forms[i].prefix &&
+            strncmp(op, rv_parse_forms[i].spelling,
+                    strlen(rv_parse_forms[i].spelling)) == 0)
+            return &rv_parse_forms[i];
+    return NULL;
+}
+
+/* The parser table is also the feature/XLEN policy source for every dynamic
+ * form. No disconnected list in the TargetInfo needs to guess whether an
+ * alias belongs to A/F/D/V or to RV64. Width suffixes are semantic subforms,
+ * validated by each family decoder when the MCInst is constructed. */
+static bool rv_legacy_form_policy(const char *mnemonic,
+                                  uint64_t *required_features,
+                                  bool *rv64_only) {
+    const RvParseForm *form = rv_find_parse_form(mnemonic);
+    uint64_t features;
+    bool only64;
+    if (form == NULL) return false;
+    features = form->required_features;
+    only64 = form->rv64_only;
+    if (form->parse == rv_parse_atomic_mc) {
+        const char *width = strstr(mnemonic, ".d");
+        if (width != NULL && (width[2] == '\0' || width[2] == '.'))
+            only64 = true;
+    } else if (form->parse == rv_parse_fp_mc) {
+        if (strcmp(mnemonic, "fld") == 0 ||
+            strcmp(mnemonic, "fsd") == 0 ||
+            strstr(mnemonic, ".d") != NULL)
+            features = RISCV_ISA_D;
+        if (strcmp(mnemonic, "fmv.x.d") == 0 ||
+            strcmp(mnemonic, "fmv.d.x") == 0 ||
+            strcmp(mnemonic, "fcvt.d.l") == 0 ||
+            strcmp(mnemonic, "fcvt.d.lu") == 0 ||
+            strcmp(mnemonic, "fcvt.l.d") == 0 ||
+            strcmp(mnemonic, "fcvt.lu.d") == 0)
+            only64 = true;
+    }
+    if (required_features != NULL) *required_features = features;
+    if (rv64_only != NULL) *rv64_only = only64;
+    return true;
+}
+
 static bool rv_parse_mcinst_impl(MiniAs *as, MiniAsStmt *stmt) {
     const RvMCDesc *desc;
     char operands[8][128];
@@ -1436,21 +1578,23 @@ static bool rv_parse_mcinst_impl(MiniAs *as, MiniAsStmt *stmt) {
 
     desc = rv_find_mc_descriptor(op);
     if (desc == NULL) {
-        bool handled;
+        const RvParseForm *form = rv_find_parse_form(op);
+        bool handled = false;
+        bool accepted;
+        if (form == NULL) {
+            minias_set_error(as, "unsupported-instruction:%s:line=%zu",
+                             op, stmt->line);
+            return false;
+        }
         if(!split_operands(stmt->args,operands,8U,&count))goto invalid;
-        if (!rv_parse_simple_mc(as, stmt, operands, count, &handled) ||
-            handled) return as->error[0] == '\0';
-        if (!rv_parse_multi_mc(as, stmt, operands, count, &handled) ||
-            handled) return as->error[0] == '\0';
-        if (!rv_parse_vector_mc(as, stmt, operands, count, &handled) ||
-            handled) return as->error[0] == '\0';
-        if (!rv_parse_atomic_mc(as, stmt, operands, count, &handled) ||
-            handled) return as->error[0] == '\0';
-        if (!rv_parse_csr_mc(as, stmt, operands, count, &handled) ||
-            handled) return as->error[0] == '\0';
-        if (!rv_parse_fp_mc(as, stmt, operands, count, &handled) ||
-            handled) return as->error[0] == '\0';
-        return true;
+        accepted = form->parse(as, stmt, operands, count, &handled);
+        if (!accepted) return false;
+        if (!handled) {
+            minias_set_error(as, "unsupported-instruction:%s:line=%zu",
+                             op, stmt->line);
+            return false;
+        }
+        return as->error[0] == '\0';
     }
     family = desc->family;
     encoding = desc->base;
@@ -1667,7 +1811,11 @@ bool minias_riscv_parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         ((state->isa_features & RISCV_ISA_E) == 0U &&
          (as->elf_flags & 8U) == 0U)) return true;
     inst = stmt->mcinst;
-    if (inst == NULL) return true; /* Unrecognized mnemonic fails at measure. */
+    /* The parse-form registry rejects unknown mnemonics before layout. */
+    if (inst == NULL) {
+        minias_set_error(as, "internal:riscv-parse-form-without-mcinst");
+        return false;
+    }
     for (index = 0U; index < inst->count; ++index) {
         const MiniAsMCOperand *operand = &inst->operands[index];
         if (operand->kind == MINIAS_MC_REGISTER &&
@@ -1687,16 +1835,21 @@ bool minias_riscv_parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
 static bool rv_encode_multi_mc(MiniAs *as, const MiniAsStmt *stmt) {
     const MiniAsMCInst *m = stmt->mcinst;
     if (m->opcode == RV_MC_LI) {
-        uint32_t words[16];
-        unsigned count, i;
-        if (!rv_materialize_li(as, stmt, words, &count)) return false;
-        if (stmt->size != count * 4U) {
+        const MiniAsRiscvLiPlan *plan =
+            minias_riscv_find_li_plan(as, m);
+        unsigned i;
+        if (plan == NULL) {
+            minias_set_error(as, "internal:riscv-li-plan-missing:line=%zu",
+                             stmt->line);
+            return false;
+        }
+        if (stmt->size != plan->count * 4U) {
             minias_set_error(as, "internal:riscv-li-plan-layout-mismatch:line=%zu",
                              stmt->line);
             return false;
         }
-        for (i = 0U; i < count; ++i)
-            if (!append_u32(as, stmt->section, words[i])) return false;
+        for (i = 0U; i < plan->count; ++i)
+            if (!append_u32(as, stmt->section, plan->words[i])) return false;
         return true;
     }
 

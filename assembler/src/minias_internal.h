@@ -116,6 +116,22 @@ typedef enum MiniAsStmtKind {
     MINIAS_STMT_DATA
 } MiniAsStmtKind;
 
+/* The public Target-facing statement class deliberately remains coarse:
+ * existing CodeEmitter hooks may distinguish instructions from raw data.
+ * Common MCLayout and the Section writer instead dispatch on this complete
+ * semantic Fragment discriminator, never the spelling of a GNU directive.
+ * A new directive alias must select an existing FragmentKind, rather than
+ * teaching relayout and emission another source-name special case. */
+typedef enum MiniAsFragmentKind {
+    MINIAS_FRAGMENT_INSTRUCTION,
+    MINIAS_FRAGMENT_ALIGNMENT,
+    MINIAS_FRAGMENT_ORIGIN,
+    MINIAS_FRAGMENT_FIXED_DATA,
+    MINIAS_FRAGMENT_FILL,
+    MINIAS_FRAGMENT_SPACE,
+    MINIAS_FRAGMENT_BYTES
+} MiniAsFragmentKind;
+
 /* A typed position constraint, comparable to LLVM MCOrgFragment. */
 typedef enum MiniAsOrgMode {
     MINIAS_ORG_SOURCE = 0,
@@ -324,6 +340,7 @@ typedef struct MiniAsMCData {
 
 typedef struct MiniAsStmt {
     MiniAsStmtKind kind;
+    MiniAsFragmentKind fragment_kind;
     char *op;
     char *args;
     size_t line;
@@ -499,8 +516,6 @@ typedef struct MiniAs {
     bool has_org_constraints; /* typed position-dependent .org fragments */
     bool has_cross_subsection_size_end; /* retained .size cross-subsection span */
     bool has_mutable_absolute_sets; /* snapshot mutable .set in data */
-    bool expr_dot_override; /* explicit fragment-local dot while evaluating */
-    uint64_t expr_dot_value;
     uint32_t target_options;
     /* Opaque per-assembly backend parser state, owned and freed by Target. */
     void *target_state;
@@ -573,6 +588,7 @@ bool minias_force_long_branch_for_stmt(const MiniAs *, size_t);
 void minias_layout_destroy(MiniAs *);
 bool minias_solve_fragment_layout(MiniAs *, size_t **, size_t *, size_t *,
                                   bool *, FILE *);
+bool minias_validate_fragment_semantics(MiniAs *);
 bool minias_parse_common_space(MiniAs *, const char *, uint64_t *, uint8_t *);
 bool minias_parse_common_fill(MiniAs *, const char *, uint64_t *, unsigned *,
                               uint64_t *);
@@ -596,11 +612,6 @@ bool minias_resolve_variable_exprs(MiniAs *, const MiniAsStmt *,
 bool minias_emit_mc_data(MiniAs *, const MiniAsStmt *);
 void minias_mcdata_destroy(MiniAsMCData *);
 bool minias_evaluate_absolute_operand(MiniAs *,const char *,int64_t *);
-bool minias_evaluate_same_subsection_difference(MiniAs *,const char *,int64_t *);
-/* Relocatable base + (defined same-subsection label difference + absolute
- * offset). Shared expression owner, no ISA-specific source parsing. */
-bool minias_fold_local_difference_addend(MiniAs *,const char *,
-                                        MiniAsSymbolExpr *);
 /* Parsed syntax may name forward symbols; resolve only after final
  * same-section layout and fail closed on missing/cross-section anchors. */
 bool minias_parse_symbol_difference(const char *,MiniAsSymbolDifference *);
@@ -654,6 +665,9 @@ bool minias_decode_string_literals(const char *text,
  * active fragment result; Common alone publishes its complete transaction. */
 bool minias_emit_instruction_bytes(MiniAs *as, int section_index,
                                    const void *data, size_t size);
+/* A target may choose padding bytes based on the preceding Fragment class.
+ * Common owns source order, subsection identity and adjacency rules. */
+bool minias_code_alignment_preceded_by_adjacent_data(const MiniAs *, int section);
 bool minias_section_append(MiniAs *as, int section_index, const void *data, size_t size);
 bool minias_section_append_zero(MiniAs *as, int section_index, size_t size);
 void minias_set_error(MiniAs *as, const char *format, ...);

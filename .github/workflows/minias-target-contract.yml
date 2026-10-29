@@ -110,6 +110,16 @@ jobs:
         run: bash tests/assembler/probe-mc-layout-ownership.sh
       - name: Enforce unique Common MCExpr grammar and emission ownership
         run: bash tests/assembler/probe-mc-expression-ownership.sh
+      - name: GNU expression precedence oracle across four Target data sections
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-mc-shared-expression-grammar.sh
+      - name: GNU source frame macro, repeat and end ownership
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-common-skipped-macro-repeat-gnu.sh
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-common-source-end-gnu.sh
       - name: Run complete A0 including ISA/ABI and macro relaxation regressions
         run: make MODE=release check-minias-a0
       - name: GNU RISC-V target-shared MC operand lexer and rejected mismatched groups
@@ -313,6 +323,10 @@ jobs:
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=aarch64 \
             bash tests/assembler/probe-cfi-debug-frame.sh
+      - name: AArch64 .req aliases only resolve in typed register positions
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-aarch64-typed-register-alias.sh
       - name: Test independent AArch64 backend through shared ELF engine
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \

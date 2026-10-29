@@ -10,6 +10,17 @@
 #define MINIAS_RISCV_OPTION_PIC 1U
 #define MINIAS_RISCV_OPTION_NO_RVC 2U
 
+struct MiniAsMCInst;
+
+/* LI is a parsed, immutable target instruction plan. The MCInst pointer is
+ * stable across stmt-vector relocation and layout retries. The Target owns
+ * the materialized instruction words until the entire assembly is destroyed. */
+typedef struct MiniAsRiscvLiPlan {
+    const struct MiniAsMCInst *key;
+    unsigned count;
+    uint32_t words[16];
+} MiniAsRiscvLiPlan;
+
 /* TargetContext: RISC-V ISA/ABI/attribute data never belongs to Common.
  * RV32 and RV64 are profiles of this single Target, not separate assemblers. */
 typedef struct MiniAsRiscvState {
@@ -35,6 +46,9 @@ typedef struct MiniAsRiscvState {
     /* GNU RISC-V .option push/pop is target-local, never shared state. */
     uint32_t option_stack[64];
     size_t option_depth;
+    MiniAsRiscvLiPlan *li_plans;
+    size_t li_plan_capacity;
+    size_t li_plan_count;
 } MiniAsRiscvState;
 
 /* Typed target-private accessor; avoids RISC-V downcasts in MC Core. */
@@ -71,6 +85,11 @@ typedef struct MiniAsRiscvBranchPlan {
 } MiniAsRiscvBranchPlan;
 struct MiniAs;
 struct MiniAsStmt;
+bool minias_riscv_store_li_plan(struct MiniAs *as,
+                               const struct MiniAsMCInst *inst,
+                               const uint32_t *words, unsigned count);
+const MiniAsRiscvLiPlan *minias_riscv_find_li_plan(
+    const struct MiniAs *as, const struct MiniAsMCInst *inst);
 bool minias_riscv_resolve_branch_plan(struct MiniAs *as,
                                       const struct MiniAsStmt *stmt,
                                       MiniAsRiscvBranchPlan *result);

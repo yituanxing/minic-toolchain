@@ -348,3 +348,90 @@ half-built assembly context is destroyed, **not** made reusable by rollback.
    expression lexers, macro/rept source walkers, DWARF byte primitives and
    REL/RELA decoding; keep ELF Reader, RelocatableWriter and Rewrite roles
    separate and preserve old Kbuild artifacts before CI cleanup.
+
+## Batch K: typed Fragment, one SourceFrame entry, and four Target plans
+
+Architecture-only implementation after the second six-agent read-through of
+the exact Batch J tree. This is one cross-layer batch, not a Linux correctness
+claim. The single `refactor/minias-target-isa-abi-core` branch and Draft
+PR #667 remain the only development route.
+
+### Removed new/old parallel paths
+
+- Common now records an ISA-neutral `MiniAsFragmentKind` for instruction,
+  alignment, origin, fixed data, fill, space and raw bytes. Relayout and
+  emission no longer dispatch these semantic cases by re-reading `stmt->op`.
+  A Fragment-kind/payload invariant is checked before both layout and emit;
+  the coarse `MiniAsStmtKind` remains for existing Target ABI callbacks.
+- Physical-file source lines are captured as a `MiniAsSourceFrame` and enter
+  the same `process_source_range` collector as macro, REPT and IRP frames.
+  Two separate FILE-only macro/repetition collectors were removed. `.end`,
+  inactive conditionals and inline statement cases retain their behavior.
+- The three Common integer-expression policies (wrapping unsigned, checked
+  signed and deferred MCExpr) share a lexical operator/precedence grammar.
+  Duplicate tables, repeated parenthesis normalization, two unused expression
+  APIs and unwritten dot-override state were removed, while the distinct
+  overflow, symbol and section policies remain separate.
+- x86 code alignment asks a read-only Common predecessor-site query instead
+  of opening `as->stmts`; memory and ALU measure/encode use one Target-owned
+  `X64EncodingPlan`. Hidden zero-operand lengths and MOV-immediate register
+  values were replaced with typed form/operand representation; redundant ALU
+  group maps and 17 duplicate memory-kind assignments were removed.
+- AArch64 `.req` aliases are resolved only in register-typed operand parsers,
+  never by textual replacement of every identifier. This fixes an observed
+  symbol/register collision: an alias `sym .req x9` used beside a real symbol
+  `sym:` previously emitted relocations to an undefined `x9`, while the new
+  encoder retains the correct `sym` references. Q-register pair operands also
+  retain their proper Target bank instead of being labeled GPR.
+- RISC-V retains a per-MCInst LI lowering plan used by both measurement and
+  emission. Target-private opcode/form registry, extension parsing, XLEN
+  policy and canonical ELF ISA attributes now share descriptor ownership;
+  unknown mnemonics fail during parse. RV32/RV64 remain one Target.
+- LoongArch64 scalar, LSX/LASX and special-register families consume retained
+  Target Form/Bank in encoding, instead of depending exclusively on a parsed
+  final machine word. `LI.W`, `LI.D` and `LA.PCREL` share a lowering/fixup
+  plan. Target-private capability gating preserves the existing public
+  `-march=loongarch64` contract, without inventing GNU option spellings.
+
+### Validation and honest limits
+
+- Integrated Release `-O2 -Werror` build: **PASS**.
+- `make MODE=release check-minias-a0`: **PASS**, 30 objects.
+- Four-Target EncodeResult/fixup ownership and static Common/Target guards:
+  **PASS**.
+- SourceFrame inactive macro/repeat and `.end` GNU x86 bytes: **PASS**.
+- GNU x86 memory, register-width and branch probes: **PASS**; LoongArch
+  scalar/vector/register-bank probes and 140 pre/post object comparisons:
+  **PASS** (the latter is not a GNU Loong oracle).
+- AArch64 typed alias regression: **PASS**, exactly two symbolic `sym`
+  relocations and no `x9` leakage.
+- Shared expression grammar: four Targets match GNU x86's 60-byte DATA
+  section, 8 rejected overflow/divide-by-zero cases leave no output.
+- RISC-V seven focused profile/LI/RV32E/option/attribute probes: **PASS**.
+  RV32I real ELF32 link/QEMU test needs absent cross GCC in this container.
+- Full exact-head Linux 3x7, remote cross-GNU parity and Image/QEMU were
+  **NOT RUN** for this batch. Draft PR must not be marked accepted on the
+  strength of local architecture oracles.
+
+### Remaining architecture closure work
+
+1. **Stable machine operand SymbolID / typed relocation modifiers.** Target
+   operands still allocate `MiniAsSymbolExpr{name[256]}` and resolve by name
+   during layout/encoding, despite Common MCExpr having symbol identities.
+   Migrate all four Targets together through a Target-neutral reference API;
+   keep `@plt`, page/lo12 and ISA relocation meaning Target-private.
+2. **Persistent conditional dependency graph.** `.if/.elseif/.set` may change
+   Fragment count and still trigger full-file reparse after branch growth.
+   SourceFrame is the front-end entry, not yet a stable conditional-region
+   graph. Do not delete source replay without symbol/expansion identity and
+   dependency invalidation. `.org` retains its four lexical modes for now.
+3. **SourceFrame peak memory.** Physical source text is currently buffered in
+   `MiniAsSourceLine[]` until parsing completes; memory is then freed before
+   layout/emission. A later bounded, chunked SourceFrame reader can reduce
+   peak memory without restoring the old duplicated collectors.
+4. **Remaining Target families and object utilities.** Complete A64 memory
+   operand typing, Loong hand-built fixed encoding, remaining x86 form
+   descriptions, RV typed modifiers and `.option relax`; consolidate shared
+   ELF byte/reloc primitives and DWARF context lifetimes after the MC symbols
+   and conditional ownership are stable. Preserve frozen Linux input assets
+   and consumer-specific ELF Reader/Writer/Rewrite roles.

@@ -22,6 +22,43 @@ static bool append_isa(char *buf, size_t cap, size_t *len,
     return true;
 }
 
+/* A single Target-private extension inventory drives source recognition and
+ * canonical ELF Tag_RISCV_arch spelling. Extension letter, long spelling,
+ * feature bit, and standardized version suffix must not drift apart. */
+typedef struct RiscvExtensionSpec {
+    uint64_t bit;
+    char letter;
+    const char *long_name;
+    const char *attribute_suffix;
+} RiscvExtensionSpec;
+static const RiscvExtensionSpec riscv_extensions[] = {
+    {RISCV_ISA_M, 'm', NULL, "_m2p0"},
+    {RISCV_ISA_A, 'a', NULL, "_a2p1"},
+    {RISCV_ISA_F, 'f', NULL, "_f2p2"},
+    {RISCV_ISA_D, 'd', NULL, "_d2p2"},
+    {RISCV_ISA_Q, 'q', NULL, "_q2p2"},
+    {RISCV_ISA_C, 'c', NULL, "_c2p0"},
+    {RISCV_ISA_V, 'v', NULL, "_v1p0"},
+    {RISCV_ISA_ZICSR, '\0', "zicsr", "_zicsr2p0"},
+    {RISCV_ISA_ZIFENCEI, '\0', "zifencei", "_zifencei2p0"},
+    {RISCV_ISA_ZBB, '\0', "zbb", "_zbb1p0"}
+};
+
+static uint64_t riscv_lookup_extension(char letter, const char *spelling,
+                                       size_t length) {
+    size_t i;
+    for (i = 0U; i < sizeof(riscv_extensions) /
+                        sizeof(riscv_extensions[0]); ++i) {
+        const RiscvExtensionSpec *ext = &riscv_extensions[i];
+        if (letter != '\0' && ext->letter == letter) return ext->bit;
+        if (spelling != NULL && ext->long_name != NULL &&
+            strlen(ext->long_name) == length &&
+            strncmp(spelling, ext->long_name, length) == 0)
+            return ext->bit;
+    }
+    return 0U;
+}
+
 static bool parse_isa(const char *arch, MiniAsRiscvProfile *out,
                       char *error, size_t cap) {
     uint64_t features = 0U;
@@ -29,15 +66,6 @@ static bool parse_isa(const char *arch, MiniAsRiscvProfile *out,
     unsigned xlen;
     size_t i, used;
     char normalized[512];
-    struct Ext { uint64_t bit; const char *name; };
-    static const struct Ext order[] = {
-        {RISCV_ISA_M, "_m2p0"}, {RISCV_ISA_A, "_a2p1"},
-        {RISCV_ISA_F, "_f2p2"}, {RISCV_ISA_D, "_d2p2"},
-        {RISCV_ISA_Q, "_q2p2"}, {RISCV_ISA_C, "_c2p0"},
-        {RISCV_ISA_V, "_v1p0"}, {RISCV_ISA_ZICSR, "_zicsr2p0"},
-        {RISCV_ISA_ZIFENCEI, "_zifencei2p0"},
-        {RISCV_ISA_ZBB, "_zbb1p0"}
-    };
     if (strncmp(arch, "rv32", 4U) == 0) xlen = 32U;
     else if (strncmp(arch, "rv64", 4U) == 0) xlen = 64U;
     else return reject(error, cap, "unsupported-arch", arch);
@@ -51,17 +79,9 @@ static bool parse_isa(const char *arch, MiniAsRiscvProfile *out,
     } else return reject(error, cap, "unsupported-riscv-base", arch);
     ++p;
     while (*p != '\0' && *p != '_') {
-        uint64_t ext = 0U;
-        switch (*p) {
-            case 'm': ext = RISCV_ISA_M; break;
-            case 'a': ext = RISCV_ISA_A; break;
-            case 'f': ext = RISCV_ISA_F; break;
-            case 'd': ext = RISCV_ISA_D; break;
-            case 'q': ext = RISCV_ISA_Q; break;
-            case 'c': ext = RISCV_ISA_C; break;
-            case 'v': ext = RISCV_ISA_V; break;
-            default: return reject(error, cap, "unqualified-riscv-extension", arch);
-        }
+        uint64_t ext = riscv_lookup_extension(*p, NULL, 0U);
+        if (ext == 0U)
+            return reject(error, cap, "unqualified-riscv-extension", arch);
         if ((features & ext) != 0U)
             return reject(error, cap, "duplicate-riscv-extension", arch);
         features |= ext;
@@ -73,13 +93,9 @@ static bool parse_isa(const char *arch, MiniAsRiscvProfile *out,
         uint64_t ext;
         while (*p != '\0' && *p != '_') ++p;
         n = (size_t)(p - start);
-        if (n == 5U && strncmp(start, "zicsr", 5U) == 0)
-            ext = RISCV_ISA_ZICSR;
-        else if (n == 8U && strncmp(start, "zifencei", 8U) == 0)
-            ext = RISCV_ISA_ZIFENCEI;
-        else if (n == 3U && strncmp(start, "zbb", 3U) == 0)
-            ext = RISCV_ISA_ZBB;
-        else return reject(error, cap, "unqualified-riscv-extension", arch);
+        ext = riscv_lookup_extension('\0', start, n);
+        if (ext == 0U)
+            return reject(error, cap, "unqualified-riscv-extension", arch);
         if ((features & ext) != 0U)
             return reject(error, cap, "duplicate-riscv-extension", arch);
         features |= ext;
@@ -101,10 +117,11 @@ static bool parse_isa(const char *arch, MiniAsRiscvProfile *out,
                            xlen, (features & RISCV_ISA_E) ? "e2p0" : "i2p1");
     if (used >= sizeof(normalized))
         return reject(error, cap, "riscv-arch-too-long", arch);
-    for (i = 0U; i < sizeof(order) / sizeof(order[0]); ++i)
-        if ((features & order[i].bit) != 0U &&
+    for (i = 0U; i < sizeof(riscv_extensions) /
+                      sizeof(riscv_extensions[0]); ++i)
+        if ((features & riscv_extensions[i].bit) != 0U &&
             !append_isa(normalized, sizeof(normalized),
-                        &used, order[i].name))
+                        &used, riscv_extensions[i].attribute_suffix))
             return reject(error, cap, "riscv-arch-too-long", arch);
     if (strlen(normalized) + 1U > sizeof(out->arch_attribute_isa))
         return reject(error, cap, "riscv-arch-too-long", arch);

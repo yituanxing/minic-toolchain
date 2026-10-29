@@ -5,7 +5,22 @@ from pathlib import Path
 driver=Path('assembler/src/assembler.c').read_text()
 layout=Path('assembler/src/mc_layout.c').read_text()
 expr=Path('assembler/src/mc_expr.c').read_text()
+internal=Path('assembler/src/minias_internal.h').read_text()
 mk=Path('Makefile').read_text()
+for fragment in ('INSTRUCTION','ALIGNMENT','ORIGIN','FIXED_DATA',
+                 'FILL','SPACE','BYTES'):
+    if 'MINIAS_FRAGMENT_'+fragment not in internal:
+        raise SystemExit('Common Fragment discriminator missing '+fragment)
+if 'fragment_kind' not in driver or 'fragment_kind' not in layout:
+    raise SystemExit('layout/emission still ignores persistent FragmentKind')
+for legacy in ('strcmp(stmt->op', 'strncmp(stmt->op'):
+    if legacy in layout:
+        raise SystemExit('MCLayout selects semantic fragment by source text: '+legacy)
+if 'MiniAsSourceFrame' not in driver or 'process_source_frame(' not in driver:
+    raise SystemExit('physical file and expansion inputs lack shared SourceFrame')
+for old_reader in ('read_macro_block(', 'read_repeat_block('):
+    if old_reader in driver:
+        raise SystemExit('obsolete file-only source collector: '+old_reader)
 for n in ('minias_solve_fragment_layout','minias_relayout_fragments',
           'minias_resolve_deferred_data','collect_out_of_range_branches',
           'minias_finalize_subsection_layout'):
@@ -38,5 +53,5 @@ if 'minias_validate_fragment_layout' not in layout:
     raise SystemExit('MCLayout must prove fragment placement before encoding')
 if 'minias_solve_fragment_layout(' not in driver:
     raise SystemExit('missing Common layout fixed-point call')
-print('MINIAS_MCLAYOUT_OWNER=PASS persistent=1 branch_size=target_callback')
+print('MINIAS_MCLAYOUT_OWNER=PASS persistent=1 typed_fragments=1 branch_size=target_callback')
 PY

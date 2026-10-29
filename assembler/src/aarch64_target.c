@@ -66,44 +66,40 @@ static void a64_destroy_aliases(MiniAs *as) {
     as->target_state=NULL;
 }
 
-static char *a64_expand_register_aliases(MiniAs *as,const char *input) {
-    const A64AliasState *st=(const A64AliasState *)as->target_state;
-    size_t len=strlen(input),pos=0U,out=0U,limit;
-    char *expanded;
-    if(!st || !st->count)return minias_strdup(input);
-    if(len>SIZE_MAX/8U-1U)return NULL;
-    limit=8U*(len+1U);
-    expanded=malloc(limit);
-    if(!expanded)return NULL;
-    while(pos<len) {
-        unsigned k;
-        size_t begin=pos;
-        const char *replacement=NULL;
-        if(isalpha((unsigned char)input[pos]) || input[pos]=='_') {
-            ++pos;
-            while(pos<len && (isalnum((unsigned char)input[pos]) ||
-                              input[pos]=='_'))++pos;
-            for(k=0U;k<st->count;++k) {
-                size_t n=strlen(st->entries[k].alias);
-                if(pos-begin==n &&
-                   !memcmp(input+begin,st->entries[k].alias,n)) {
-                    replacement=st->entries[k].canonical;
-                    break;
-                }
-            }
-        }else ++pos;
-        if(replacement) {
-            size_t n=strlen(replacement);
-            if(n>=limit-out){free(expanded);return NULL;}
-            memcpy(expanded+out,replacement,n);out+=n;
-        }else {
-            size_t n=pos-begin;
-            if(n>=limit-out){free(expanded);return NULL;}
-            memcpy(expanded+out,input+begin,n);out+=n;
-        }
+/* .req resolution is valid only in a *typed register operand* position.
+ * In particular `ldr x0,=label` must never rewrite a symbol named label,
+ * and branch expressions/relocation modifiers are not register operands.
+ * The caller already knows the ISA register grammar; this routine merely
+ * substitutes one lexical register atom (including a vector arrangement or
+ * lane suffix) without modifying the source or any symbol expression. */
+static const char *a64_resolve_register_alias(const A64AliasState *st,
+                                               const char *text,
+                                               char *buffer,size_t capacity) {
+    unsigned i;
+    const char *body=text;
+    size_t body_len;
+    size_t prefix=0U;
+    if(!st || !st->count)return text;
+    if(*body=='{') {++body;prefix=1U;}
+    body_len=strlen(body);
+    for(i=0U;i<st->count;++i) {
+        size_t n=strlen(st->entries[i].alias);
+        const char *tail;
+        size_t canonical_len,suffix_len;
+        if(n>body_len)continue;
+        tail=body+n;
+        if(strncmp(body,st->entries[i].alias,n)!=0 ||
+           (*tail!='\0' && *tail!='.' && *tail!='[' &&
+            *tail!='}' && !isspace((unsigned char)*tail)))continue;
+        canonical_len=strlen(st->entries[i].canonical);
+        suffix_len=strlen(tail);
+        if(prefix+canonical_len+suffix_len>=capacity)return text;
+        if(prefix)buffer[0]='{';
+        memcpy(buffer+prefix,st->entries[i].canonical,canonical_len);
+        memcpy(buffer+prefix+canonical_len,tail,suffix_len+1U);
+        return buffer;
     }
-    expanded[out]='\0';
-    return expanded;
+    return text;
 }
 
 static bool parse_register(const char *text, unsigned *reg, bool *is_64) {
@@ -117,6 +113,27 @@ static bool parse_register(const char *text, unsigned *reg, bool *is_64) {
     *reg = (unsigned)value;
     *is_64 = text[0] == 'x';
     return true;
+}
+
+/* Some GNU aliases (BR/RET/MOV-constant) accept Xn/Wn but intentionally
+ * reject SP/ZR. Preserve that narrower grammar when resolving aliases. */
+static bool a64_parse_named_gpr(const A64AliasState *aliases,const char *text,
+                                 unsigned *reg,bool *wide) {
+    char resolved[96];
+    text=a64_resolve_register_alias(aliases,text,resolved,sizeof(resolved));
+    return parse_register(text,reg,wide);
+}
+
+/* ISA family dispatch must inspect the *register operand*, never assume
+ * its source spelling starts with x/v/d: an alias is a different token. */
+static char a64_register_prefix(const A64AliasState *aliases,const char *text) {
+    char atom[96],expanded[96];
+    size_t length;
+    while(isspace((unsigned char)*text))++text;
+    length=strcspn(text,", \t\n\r");
+    if(length==0U || length>=sizeof(atom))return *text;
+    memcpy(atom,text,length);atom[length]='\0';
+    return *a64_resolve_register_alias(aliases,atom,expanded,sizeof(expanded));
 }
 
 static bool parse_imm16(const char *text, unsigned *result) {
@@ -329,12 +346,14 @@ static bool split_operands(const char *args, char out[4][384], unsigned *n) {
     return split_operands_sized(args,slots,caps,n);
 }
 
-/* SIMD/FP registers are a distinct target ISA register bank. Avoid
- * pretending Q/V operands are GPRs or changing the common MC register
- * representation: bank selection is kept in a target encoding flag. */
-static bool parse_a64_q_reg(const char *text,unsigned *number) {
+/* SIMD/FP registers carry explicit Target-bank metadata in the MC envelope.
+ * Alias substitution is performed here, after the operand position has been
+ * identified as a register; arbitrary source symbols remain untouched. */
+static bool parse_a64_q_reg(const A64AliasState *aliases,const char *text,unsigned *number) {
+    char resolved[96];
     char *end;
     unsigned long n;
+    text=a64_resolve_register_alias(aliases,text,resolved,sizeof(resolved));
     if(text[0]!='q' || !isdigit((unsigned char)text[1]))return false;
     errno=0;n=strtoul(text+1U,&end,10);
     if(errno || *end!='\0' || n>31UL)return false;
@@ -343,11 +362,12 @@ static bool parse_a64_q_reg(const char *text,unsigned *number) {
 
 /* One vector register arrangement for LD1/ST1, no multi-vector lists
  * or lane load pseudo-expansions accepted until independently proven. */
-static bool parse_a64_single_v(const char *text,unsigned *reg,
+static bool parse_a64_single_v(const A64AliasState *aliases,const char *text,unsigned *reg,
                                uint32_t *arrange) {
+    char resolved[96];
     char copy[96],*p,*end;
     unsigned long n;
-    size_t len=strlen(text);
+    size_t len;
     static const struct {const char *s;uint32_t flags;} forms[]={
         {".16b",UINT32_C(0x40000000)},
         {".8b",UINT32_C(0x00000000)},
@@ -359,6 +379,8 @@ static bool parse_a64_single_v(const char *text,unsigned *reg,
         {".1d",UINT32_C(0x00000c00)}
     };
     unsigned i;
+    text=a64_resolve_register_alias(aliases,text,resolved,sizeof(resolved));
+    len=strlen(text);
     if(len<6U || len>=sizeof(copy) ||
        text[0]!='{' || text[len-1U]!='}')return false;
     memcpy(copy,text+1U,len-2U);copy[len-2U]='\0';
@@ -380,16 +402,18 @@ static bool parse_a64_single_v(const char *text,unsigned *reg,
  * LD1/ST1's brace-only register-list grammar. */
 /* SHA/PMULL 128-bit polynomial destination is .1Q, distinct from
  * ordinary .2D views and from scalar Qn operands. */
-static bool a64_vector_1q(const char *text,unsigned *reg) {
+static bool a64_vector_1q(const A64AliasState *aliases,const char *text,unsigned *reg) {
+    char resolved[96];
     char *end;
     unsigned long value;
+    text=a64_resolve_register_alias(aliases,text,resolved,sizeof(resolved));
     if(text[0]!='v' || !isdigit((unsigned char)text[1]))return false;
     errno=0;value=strtoul(text+1U,&end,10);
     if(errno || value>31UL || strcmp(end,".1q"))return false;
     *reg=(unsigned)value;return true;
 }
 
-static bool a64_vector_view(const char *text,unsigned *reg,
+static bool a64_vector_view(const A64AliasState *aliases,const char *text,unsigned *reg,
                             uint32_t *arrange) {
     char wrapped[96];
     size_t n=strlen(text);
@@ -397,7 +421,7 @@ static bool a64_vector_view(const char *text,unsigned *reg,
     wrapped[0]='{';
     memcpy(wrapped+1U,text,n);
     wrapped[n+1U]='}';wrapped[n+2U]='\0';
-    return parse_a64_single_v(wrapped,reg,arrange);
+    return parse_a64_single_v(aliases,wrapped,reg,arrange);
 }
 
 /* GNU .req may bind scalar or vector bank registers, not only GPRs.
@@ -418,7 +442,7 @@ static bool a64_req_vector_bank(const char *text,unsigned *reg) {
  * vM.T-vN.T ranges or comma-separated contiguous lists, up to four.
  * Reuse the single-vector arrangement decoder for EACH member; no
  * parallel vector ISA parser and no implicit register skipping. */
-static bool a64_structure_vlist(const char *text,unsigned *first,
+static bool a64_structure_vlist(const A64AliasState *aliases,const char *text,unsigned *first,
                                 uint32_t *arrange,unsigned *number) {
     char copy[96],*body,*p,*dash,*comma;
     unsigned start,last,member=0U;
@@ -432,8 +456,8 @@ static bool a64_structure_vlist(const char *text,unsigned *first,
     if(dash) {
         if(strchr(body,',') || strchr(dash+1U,'-'))return false;
         *dash='\0';
-        if(!a64_vector_view(minias_trim(body),&start,&flags) ||
-           !a64_vector_view(minias_trim(dash+1U),&last,&each) ||
+        if(!a64_vector_view(aliases,minias_trim(body),&start,&flags) ||
+           !a64_vector_view(aliases,minias_trim(dash+1U),&last,&each) ||
            flags!=each)return false;
         member=(last+32U-start)%32U+1U;
         if(member<2U || member>4U)return false;
@@ -442,7 +466,7 @@ static bool a64_structure_vlist(const char *text,unsigned *first,
         do {
             comma=strchr(p,',');
             if(comma)*comma='\0';
-            if(!a64_vector_view(minias_trim(p),&last,&each) ||
+            if(!a64_vector_view(aliases,minias_trim(p),&last,&each) ||
                member==4U)return false;
             if(member==0U){start=last;flags=each;}
             else if(each!=flags || last!=(start+member)%32U)
@@ -461,8 +485,10 @@ static bool a64_structure_vlist(const char *text,unsigned *first,
  * Unlike ordinary A64 operands this form has FIVE fields; parse here
  * rather than raising Common's global 4-operand limit or duplicating
  * the entire instruction tokenizer. */
-static bool parse_a64_reg(const char *text, unsigned *number, bool *is64,
+static bool parse_a64_reg(const A64AliasState *aliases,const char *text, unsigned *number, bool *is64,
                           bool *is_sp) {
+    char resolved[96];
+    text=a64_resolve_register_alias(aliases,text,resolved,sizeof(resolved));
     *is_sp = false;
     if (strcmp(text, "sp") == 0 || strcmp(text, "wsp") == 0) {
         *number = 31U;
@@ -486,7 +512,7 @@ static bool parse_signed_number(const char *text, int64_t *out) {
     return *text!='\0' && minias_eval_i64_expression(text,out);
 }
 
-static bool a64_sys_fields(const char *args,uint32_t *word,unsigned *rt) {
+static bool a64_sys_fields(const A64AliasState *aliases,const char *args,uint32_t *word,unsigned *rt) {
     char text[256],tok[5][80];char *start,*end;
     int64_t numbers[4];unsigned i;
     bool wide,sp;
@@ -514,7 +540,7 @@ static bool a64_sys_fields(const char *args,uint32_t *word,unsigned *rt) {
         if(!parse_signed_number(v,&numbers[i]) || numbers[i]<0 ||
            numbers[i]>(i==0U?7:i==3U?7:15))return false;
     }
-    if(!parse_a64_reg(tok[4],rt,&wide,&sp) || !wide || sp)return false;
+    if(!parse_a64_reg(aliases,tok[4],rt,&wide,&sp) || !wide || sp)return false;
     *word=UINT32_C(0xd5080000)|
           ((uint32_t)numbers[0]<<16U)|
           ((uint32_t)numbers[1]<<12U)|
@@ -570,7 +596,7 @@ static void put_immediate(MiniAsMCOperand *dst, int64_t value) {
  * symbolic LO12 and ordinary numeric memory operands.  Keep it target-local
  * and parse the offset's *kind* only in the consuming instruction family;
  * a general-number parser must not reject a valid :lo12: relocation. */
-static bool a64_memory_components(const char *text,unsigned *base,
+static bool a64_memory_components(const A64AliasState *aliases,const char *text,unsigned *base,
                                   char offset[96],unsigned *mode) {
     char inside[96], *comma, *regtext;
     size_t size = strlen(text);
@@ -591,7 +617,7 @@ static bool a64_memory_components(const char *text,unsigned *base,
     size = strlen(regtext);
     while (size && isspace((unsigned char)regtext[size - 1U]))
         regtext[--size] = '\0';
-    if (!parse_a64_reg(regtext, base, &is64, &issp) || !is64)
+    if (!parse_a64_reg(aliases,regtext, base, &is64, &issp) || !is64)
         return false;
     offset[0] = '\0';
     if (comma) {
@@ -604,10 +630,10 @@ static bool a64_memory_components(const char *text,unsigned *base,
     return true;
 }
 
-static bool parse_a64_mem(const char *text, unsigned *base, int64_t *offset,
+static bool parse_a64_mem(const A64AliasState *aliases,const char *text, unsigned *base, int64_t *offset,
                           unsigned *mode) {
     char displacement[96];
-    if(!a64_memory_components(text,base,displacement,mode))return false;
+    if(!a64_memory_components(aliases,text,base,displacement,mode))return false;
     *offset=0;
     return !*displacement || parse_signed_number(displacement,offset);
 }
@@ -617,7 +643,7 @@ static bool parse_a64_mem(const char *text, unsigned *base, int64_t *offset,
  * register of each consecutive even pair; validate both members here.
  * Reuse the EXISTING four-operand A64 tokenizer after isolating [Rn].
  */
-static bool a64_casp_fields(const char *args,unsigned *rs,unsigned *rt,
+static bool a64_casp_fields(const A64AliasState *aliases,const char *args,unsigned *rs,unsigned *rt,
                              unsigned *rn,bool *wide) {
     char buffer[384],tokens[4][384],*last;
     unsigned n,r1,r3;
@@ -630,15 +656,15 @@ static bool a64_casp_fields(const char *args,unsigned *rs,unsigned *rt,
     if(!last)return false;
     *last++='\0';last=minias_trim(last);
     if(!split_operands(buffer,tokens,&n) || n!=4U ||
-       !parse_a64_reg(tokens[0],rs,&w0,&sp) || sp ||
-       !parse_a64_reg(tokens[1],&r1,&w1,&sp) || sp ||
-       !parse_a64_reg(tokens[2],rt,&w2,&sp) || sp ||
-       !parse_a64_reg(tokens[3],&r3,&w3,&sp) || sp ||
+       !parse_a64_reg(aliases,tokens[0],rs,&w0,&sp) || sp ||
+       !parse_a64_reg(aliases,tokens[1],&r1,&w1,&sp) || sp ||
+       !parse_a64_reg(aliases,tokens[2],rt,&w2,&sp) || sp ||
+       !parse_a64_reg(aliases,tokens[3],&r3,&w3,&sp) || sp ||
        !(w0==w1 && w0==w2 && w0==w3) ||
        (*rs&1U) || (*rt&1U) ||
        *rs>=30U || *rt>=30U ||
        r1!=*rs+1U || r3!=*rt+1U ||
-       !parse_a64_mem(last,rn,&offset,&mode) ||
+       !parse_a64_mem(aliases,last,rn,&offset,&mode) ||
        offset!=0 || mode!=0U)return false;
     *wide=w0;return true;
 }
@@ -646,11 +672,13 @@ static bool a64_casp_fields(const char *args,unsigned *rs,unsigned *rt,
 /* Element-indexed INS Vd.T[index], Rn.
  * The lane index is the architectural imm5 encoded in bits[20:16].
  * No independent FP register representation is needed in Common IR. */
-static bool a64_ins_lane(const char *text,unsigned *vd,uint32_t *imm5,
+static bool a64_ins_lane(const A64AliasState *aliases,const char *text,unsigned *vd,uint32_t *imm5,
                           bool *x_source) {
+    char resolved[96];
     char *end;unsigned long num,index;
     char elem;
     unsigned bits;
+    text=a64_resolve_register_alias(aliases,text,resolved,sizeof(resolved));
     if(text[0]!='v' || !isdigit((unsigned char)text[1]))return false;
     errno=0;num=strtoul(text+1U,&end,10);
     if(errno || num>31UL || *end!='.' || !end[1] ||
@@ -670,22 +698,24 @@ static bool a64_ins_lane(const char *text,unsigned *vd,uint32_t *imm5,
 
 /* One target FP scalar register-bank recognizer for S/D GPR transfers,
  * also reused by earlier D-lane MOV. No Core register-bank ISA leak. */
-static bool a64_scalar_fp_reg(const char *text,unsigned *out,
+static bool a64_scalar_fp_reg(const A64AliasState *aliases,const char *text,unsigned *out,
                               bool *wide) {
+    char resolved[96];
     char *end;unsigned long v;
+    text=a64_resolve_register_alias(aliases,text,resolved,sizeof(resolved));
     if((text[0]!='s' && text[0]!='d') ||
        !isdigit((unsigned char)text[1]))return false;
     errno=0;v=strtoul(text+1U,&end,10);
     if(errno || *end!='\0' || v>31UL)return false;
     *out=(unsigned)v;*wide=text[0]=='d';return true;
 }
-static bool a64_scalar_fp_d(const char *text,unsigned *out) {
+static bool a64_scalar_fp_d(const A64AliasState *aliases,const char *text,unsigned *out) {
     bool wide;
-    return a64_scalar_fp_reg(text,out,&wide) && wide;
+    return a64_scalar_fp_reg(aliases,text,out,&wide) && wide;
 }
 /* A64 register-indexed memory with typed base/index, extension and scale.
  * This does not change shared Section, MCInst, Fixup or ELF ownership. */
-static bool a64_indexed_memory(const char *text,unsigned *base,
+static bool a64_indexed_memory(const A64AliasState *aliases,const char *text,unsigned *base,
                                 unsigned *index,unsigned *option,
                                 bool *scaled,unsigned amount_shift) {
     char inside[96],tokens[4][384];
@@ -699,8 +729,8 @@ static bool a64_indexed_memory(const char *text,unsigned *base,
     memcpy(inside,text+1U,length-2U);
     inside[length-2U]='\0';
     if(!split_operands(inside,tokens,&n) || (n!=2U && n!=3U) ||
-       !parse_a64_reg(tokens[0],base,&wide,&sp) || !wide ||
-       !parse_a64_reg(tokens[1],index,&wide,&sp) || sp)return false;
+       !parse_a64_reg(aliases,tokens[0],base,&wide,&sp) || !wide ||
+       !parse_a64_reg(aliases,tokens[1],index,&wide,&sp) || sp)return false;
     *option=3U;*scaled=false;
     if(n==2U)return wide;
     mode=tokens[2];
@@ -935,7 +965,7 @@ static bool a64_encode_deferred_scalar_memory(const MiniAsMCInst *inst,
     return false;
 }
 
-static bool a64_parse_scalar_memory(MiniAsMCInst *inst,const char *op,
+static bool a64_parse_scalar_memory(const A64AliasState *aliases,MiniAsMCInst *inst,const char *op,
                                    char t[4][384],unsigned n) {
     unsigned policy,rd,base,mode,regbase,index,option,unitshift,unit;
     bool wide,sp,scaled;
@@ -944,7 +974,7 @@ static bool a64_parse_scalar_memory(MiniAsMCInst *inst,const char *op,
     const A64ScalarMemoryForm *form=a64_scalar_memory_form(op,&policy);
     if(!form || (n!=2U && n!=3U) ||
        (policy!=A64_SCALAR_DIRECT && n!=2U) ||
-       !parse_a64_reg(t[0],&rd,&wide,&sp) || sp ||
+       !parse_a64_reg(aliases,t[0],&rd,&wide,&sp) || sp ||
        !(form->allowed_registers & (wide?A64_SCALAR_X:A64_SCALAR_W)))
         return false;
     base_opcode=wide?form->scaled_x:form->scaled_w;
@@ -953,7 +983,7 @@ static bool a64_parse_scalar_memory(MiniAsMCInst *inst,const char *op,
     unit=form->bytes?form->bytes:(wide?8U:4U);
     unitshift=unit==1U?0U:unit==2U?1U:unit==4U?2U:3U;
     if(n==2U && policy==A64_SCALAR_DIRECT &&
-       a64_indexed_memory(t[1],&regbase,&index,&option,&scaled,unitshift)) {
+       a64_indexed_memory(aliases,t[1],&regbase,&index,&option,&scaled,unitshift)) {
         inst->opcode=A64_MC_LDST_INDEX;inst->count=3U;
         inst->encoding=(base_opcode-UINT32_C(0x00dff800)) |
                         (option<<13U) | (scaled?UINT32_C(0x1000):0U);
@@ -962,7 +992,7 @@ static bool a64_parse_scalar_memory(MiniAsMCInst *inst,const char *op,
         put_reg(&inst->operands[2],index,option==3U || option==7U);
         return true;
     }
-    if(!parse_a64_mem(t[1],&base,&offset,&mode))return false;
+    if(!parse_a64_mem(aliases,t[1],&base,&offset,&mode))return false;
     if(policy==A64_SCALAR_UNPRIVILEGED) {
         if(mode!=0U || offset<-256 || offset>255)return false;
         inst->opcode=A64_MC_LDST_UNPRIV;inst->count=3U;
@@ -996,7 +1026,7 @@ static bool a64_parse_scalar_memory(MiniAsMCInst *inst,const char *op,
 
 /* Parsed target-owned instruction family. Complete AArch64 still requires
  * ADRP/GOT, conditional branches, shifts, and relocation fixup bitfields. */
-static bool parse_integer_family(MiniAsMCInst *inst,
+static bool parse_integer_family(const A64AliasState *aliases,MiniAsMCInst *inst,
                                  const char *op, const char *args) {
     char t[4][384];
     unsigned n = 0U, rd, rn, rm, base, mode;
@@ -1009,8 +1039,8 @@ static bool parse_integer_family(MiniAsMCInst *inst,
      * even for #0: keep shift bit for GNU exact-byte comparison. */
     if(n==4U && (!strcmp(op,"add") || !strcmp(op,"sub") ||
                  !strcmp(op,"adds") || !strcmp(op,"subs")) &&
-       parse_a64_reg(t[0],&rd,&wd,&spd) &&
-       parse_a64_reg(t[1],&rn,&wn,&spn) && wd==wn &&
+       parse_a64_reg(aliases,t[0],&rd,&wd,&spd) &&
+       parse_a64_reg(aliases,t[1],&rn,&wn,&spn) && wd==wn &&
        !(rd==31U&&!spd) && !(rn==31U&&!spn) &&
        parse_signed_number(t[2],&imm) &&
        strncmp(t[3],"lsl",3U)==0 &&
@@ -1042,9 +1072,9 @@ static bool parse_integer_family(MiniAsMCInst *inst,
             bool dwide,nwide,mwide,dsp,nsp,msp;
             uint32_t ext;
             bool sp_sensitive;
-            if(parse_a64_reg(t[0],&erd,&dwide,&dsp) &&
-               (cmp || parse_a64_reg(t[1],&ern,&nwide,&nsp)) &&
-               parse_a64_reg(t[cmp?1U:2U],&erm,&mwide,&msp) && !msp &&
+            if(parse_a64_reg(aliases,t[0],&erd,&dwide,&dsp) &&
+               (cmp || parse_a64_reg(aliases,t[1],&ern,&nwide,&nsp)) &&
+               parse_a64_reg(aliases,t[cmp?1U:2U],&erm,&mwide,&msp) && !msp &&
                (cmp || dwide==nwide)) {
                 if(cmp) {
                     ern=erd;nwide=dwide;nsp=dsp;erd=31U;dsp=false;
@@ -1074,8 +1104,8 @@ static bool parse_integer_family(MiniAsMCInst *inst,
     /* MVN shifted is the existing ORN Rd,ZR,Rm machine word. */
     if(!strcmp(op,"mvn") && n==3U) {
         uint32_t shift;
-        if(!parse_a64_reg(t[0],&rd,&wd,&spd) || spd ||
-           !parse_a64_reg(t[1],&rm,&wm,&spm) || spm || wm!=wd ||
+        if(!parse_a64_reg(aliases,t[0],&rd,&wd,&spd) || spd ||
+           !parse_a64_reg(aliases,t[1],&rm,&wm,&spm) || spm || wm!=wd ||
            !a64_shift_fields(t[2],wd,true,&shift))return false;
         inst->opcode=A64_MC_BIC_REG;inst->count=3U;
         inst->encoding=UINT32_C(0x20000000)|shift;
@@ -1103,10 +1133,10 @@ static bool parse_integer_family(MiniAsMCInst *inst,
                          !strcmp(op,"eor") || !strcmp(op,"ands") ||
                          !strcmp(op,"bic") || !strcmp(op,"bics") ||
                          !strcmp(op,"orn") || !strcmp(op,"eon") || !strcmp(op,"tst");
-            if(!parse_a64_reg(t[0],&rd,&wd,&spd) || spd ||
-               (!compare && (!parse_a64_reg(t[1],&rn,&wn,&spn) ||
+            if(!parse_a64_reg(aliases,t[0],&rd,&wd,&spd) || spd ||
+               (!compare && (!parse_a64_reg(aliases,t[1],&rn,&wn,&spn) ||
                              spn || wn!=wd)) ||
-               !parse_a64_reg(t[index],&rm,&wm,&spm) || spm ||
+               !parse_a64_reg(aliases,t[index],&rm,&wm,&spm) || spm ||
                wm!=wd ||
                !a64_shift_fields(t[compare?2U:3U],wd,logical,&shift))
                 return false;
@@ -1147,8 +1177,8 @@ static bool parse_integer_family(MiniAsMCInst *inst,
         unsigned vector_count;
         static const uint32_t offsets[]={0U,UINT32_C(0x7000),
              UINT32_C(0xa000),UINT32_C(0x6000),UINT32_C(0x2000)};
-        if(!a64_structure_vlist(t[0],&rd,&arrangement,&vector_count) ||
-           !parse_a64_mem(t[1],&base,&imm,&mode) ||
+        if(!a64_structure_vlist(aliases,t[0],&rd,&arrangement,&vector_count) ||
+           !parse_a64_mem(aliases,t[1],&base,&imm,&mode) ||
            mode!=0U || imm!=0)return false;
         inst->opcode=A64_MC_SIMD_SINGLE;inst->count=n;
         inst->encoding=arrangement|
@@ -1172,7 +1202,7 @@ static bool parse_integer_family(MiniAsMCInst *inst,
                     return false;
                 put_immediate(&inst->operands[2],31);
             } else {
-                if(!parse_a64_reg(t[2],&offset_reg,&wide,&sp) ||
+                if(!parse_a64_reg(aliases,t[2],&offset_reg,&wide,&sp) ||
                    !wide || sp)return false;
                 put_reg(&inst->operands[2],offset_reg,true);
             }
@@ -1185,8 +1215,8 @@ static bool parse_integer_family(MiniAsMCInst *inst,
     if ((!strcmp(op,"ldxr") || !strcmp(op,"ldaxr") ||
          !strcmp(op,"ldxrb") || !strcmp(op,"ldaxrb") ||
          !strcmp(op,"ldxrh") || !strcmp(op,"ldaxrh")) && n==2U) {
-        if(!parse_a64_reg(t[0],&rd,&wd,&spd) || spd ||
-           !parse_a64_mem(t[1],&base,&imm,&mode) ||
+        if(!parse_a64_reg(aliases,t[0],&rd,&wd,&spd) || spd ||
+           !parse_a64_mem(aliases,t[1],&base,&imm,&mode) ||
            imm!=0 || mode!=0U)return false;
         if((strchr(op,'b') || strchr(op,'h')) && wd)return false;
         inst->opcode=A64_MC_EXCLUSIVE;inst->count=2U;
@@ -1200,9 +1230,9 @@ static bool parse_integer_family(MiniAsMCInst *inst,
     if ((!strcmp(op,"stxr") || !strcmp(op,"stlxr") ||
          !strcmp(op,"stxrb") || !strcmp(op,"stlxrb") ||
          !strcmp(op,"stxrh") || !strcmp(op,"stlxrh")) && n==3U) {
-        if(!parse_a64_reg(t[0],&rd,&wd,&spd) || wd || spd ||
-           !parse_a64_reg(t[1],&rn,&wn,&spn) || spn ||
-           !parse_a64_mem(t[2],&base,&imm,&mode) ||
+        if(!parse_a64_reg(aliases,t[0],&rd,&wd,&spd) || wd || spd ||
+           !parse_a64_reg(aliases,t[1],&rn,&wn,&spn) || spn ||
+           !parse_a64_mem(aliases,t[2],&base,&imm,&mode) ||
            imm!=0 || mode!=0U)return false;
         if((op[strlen(op)-1U]=='b' || op[strlen(op)-1U]=='h') && wn)
             return false;
@@ -1241,7 +1271,7 @@ static bool parse_integer_family(MiniAsMCInst *inst,
             if(!strcmp(suffix,"strm"))++hint;
             else if(strcmp(suffix,"keep"))return false;
         }
-        if(a64_indexed_memory(t[1],&base,&index,&option,&scaled,3U)) {
+        if(a64_indexed_memory(aliases,t[1],&base,&index,&option,&scaled,3U)) {
             /* 0xF8A0_0800 shares the indexed LDST encoder's option and
              * scaled bit fields; hint Rt is an immediate 0..31 rather
              * than a GPR. */
@@ -1253,7 +1283,7 @@ static bool parse_integer_family(MiniAsMCInst *inst,
             put_reg(&inst->operands[2],index,option==3U || option==7U);
             return true;
         }
-        if(!parse_a64_mem(t[1],&base,&imm,&mode) ||
+        if(!parse_a64_mem(aliases,t[1],&base,&imm,&mode) ||
            mode!=0U || imm<0 || imm%8!=0 || imm/8>4095)
             return false;
         inst->opcode=A64_MC_PRFM;inst->count=3U;
@@ -1268,8 +1298,8 @@ static bool parse_integer_family(MiniAsMCInst *inst,
         !strcmp(op,"uxtb") || !strcmp(op,"uxth")) && n==2U) {
         bool signed_alias=op[0]=='s';
         bool byte_alias=op[3]=='b';
-        if(!parse_a64_reg(t[0],&rd,&wd,&spd) || spd ||
-           !parse_a64_reg(t[1],&rn,&wn,&spn) || spn || wn ||
+        if(!parse_a64_reg(aliases,t[0],&rd,&wd,&spd) || spd ||
+           !parse_a64_reg(aliases,t[1],&rn,&wn,&spn) || spn || wn ||
            (!signed_alias && wn))return false;
         inst->opcode=A64_MC_BITFIELD;inst->count=4U;
         inst->encoding=signed_alias?UINT32_C(0x13000000):
@@ -1281,8 +1311,8 @@ static bool parse_integer_family(MiniAsMCInst *inst,
         return true;
     }
     if ((!strcmp(op,"sxtw") || !strcmp(op,"uxtw")) && n==2U) {
-        if(!parse_a64_reg(t[0],&rd,&wd,&spd) || !wd || spd ||
-           !parse_a64_reg(t[1],&rn,&wn,&spn) || wn || spn)return false;
+        if(!parse_a64_reg(aliases,t[0],&rd,&wd,&spd) || !wd || spd ||
+           !parse_a64_reg(aliases,t[1],&rn,&wn,&spn) || wn || spn)return false;
         inst->opcode=A64_MC_EXTEND_W;inst->count=2U;
         inst->encoding=!strcmp(op,"sxtw")?0U:1U;
         put_reg(&inst->operands[0],rd,true);
@@ -1295,8 +1325,8 @@ static bool parse_integer_family(MiniAsMCInst *inst,
         !strcmp(op,"rev32") || !strcmp(op,"rbit") ||
         !strcmp(op,"clz") || !strcmp(op,"cls")) && n==2U) {
         uint32_t opcodebits;
-        if(!parse_a64_reg(t[0],&rd,&wd,&spd) || spd ||
-           !parse_a64_reg(t[1],&rn,&wn,&spn) || spn || wd!=wn ||
+        if(!parse_a64_reg(aliases,t[0],&rd,&wd,&spd) || spd ||
+           !parse_a64_reg(aliases,t[1],&rn,&wn,&spn) || spn || wd!=wn ||
            (!strcmp(op,"rev32") && !wd))return false;
         opcodebits=!strcmp(op,"rbit")?UINT32_C(0x5ac00000):
                    !strcmp(op,"rev16")?UINT32_C(0x5ac00400):
@@ -1317,9 +1347,9 @@ static bool parse_integer_family(MiniAsMCInst *inst,
         bool load=op[0]=='l';
         bool byte=op[4]=='b';
         bool half=op[4]=='h';
-        if(!parse_a64_reg(t[0],&rd,&wd,&spd) || spd ||
+        if(!parse_a64_reg(aliases,t[0],&rd,&wd,&spd) || spd ||
            ((byte || half) && wd) ||
-           !parse_a64_mem(t[1],&base,&imm,&mode) ||
+           !parse_a64_mem(aliases,t[1],&base,&imm,&mode) ||
            imm!=0 || mode!=0U)return false;
         inst->opcode=A64_MC_ACQUIRE_RELEASE;inst->count=2U;
         inst->encoding=byte?(load?2U:4U):
@@ -1330,8 +1360,8 @@ static bool parse_integer_family(MiniAsMCInst *inst,
     }
     if(!strcmp(op,"tst") && n==2U) {
         uint64_t bits;uint32_t fields;
-        if(!parse_a64_reg(t[0],&rn,&wn,&spn) || spn)return false;
-        if(parse_a64_reg(t[1],&rm,&wm,&spm)) {
+        if(!parse_a64_reg(aliases,t[0],&rn,&wn,&spn) || spn)return false;
+        if(parse_a64_reg(aliases,t[1],&rm,&wm,&spm)) {
             if(spm || wn!=wm)return false;
             inst->opcode=A64_MC_TST_REG;inst->count=2U;
             put_reg(&inst->operands[0],rn,wn);
@@ -1357,8 +1387,8 @@ static bool parse_integer_family(MiniAsMCInst *inst,
         return true;
     }
     if (strcmp(op, "mov") == 0 && n == 2U) {
-        if (!parse_a64_reg(t[0], &rd, &wd, &spd) ||
-            !parse_a64_reg(t[1], &rn, &wn, &spn) || wd != wn)
+        if (!parse_a64_reg(aliases,t[0], &rd, &wd, &spd) ||
+            !parse_a64_reg(aliases,t[1], &rn, &wn, &spn) || wd != wn)
             return false;
         /* SP form aliases ADD #0. Register form aliases ORR with ZR. */
         if (spd || spn) {
@@ -1378,10 +1408,10 @@ static bool parse_integer_family(MiniAsMCInst *inst,
          strcmp(op, "eor") == 0 || strcmp(op, "ands") == 0 ||
          (strcmp(op,"bic")==0 || strcmp(op,"bics")==0 ||
           strcmp(op,"orn")==0 || strcmp(op,"eon")==0)) && n == 3U) {
-        if (!parse_a64_reg(t[0], &rd, &wd, &spd) ||
-            !parse_a64_reg(t[1], &rn, &wn, &spn) || wd != wn)
+        if (!parse_a64_reg(aliases,t[0], &rd, &wd, &spd) ||
+            !parse_a64_reg(aliases,t[1], &rn, &wn, &spn) || wd != wn)
             return false;
-        if (parse_a64_reg(t[2], &rm, &wm, &spm)) {
+        if (parse_a64_reg(aliases,t[2], &rm, &wm, &spm)) {
             if (wd != wm || spd || spn || spm) return false;
             kind = strcmp(op, "add") == 0 ? A64_MC_ADD_REG :
                    strcmp(op, "sub") == 0 ? A64_MC_SUB_REG :
@@ -1437,8 +1467,8 @@ static bool parse_integer_family(MiniAsMCInst *inst,
         return true;
     }
     if ((strcmp(op, "cmp") == 0 || strcmp(op, "cmn") == 0) && n == 2U) {
-        if (!parse_a64_reg(t[0], &rn, &wn, &spn)) return false;
-        if (parse_a64_reg(t[1], &rm, &wm, &spm)) {
+        if (!parse_a64_reg(aliases,t[0], &rn, &wn, &spn)) return false;
+        if (parse_a64_reg(aliases,t[1], &rm, &wm, &spm)) {
             if (wn != wm || spn || spm) return false;
             kind = strcmp(op,"cmp")==0 ? A64_MC_CMP_REG : A64_MC_CMN_REG;
             put_reg(&inst->operands[1], rm, wm);
@@ -1467,20 +1497,20 @@ static bool parse_integer_family(MiniAsMCInst *inst,
      * unsigned scaled, pre/post-index, explicitly unscaled and unprivileged
      * encodings. GNU distinguishes the addressing policy, not the core
      * register/width grammar; this keeps all forms in sync. */
-    if(a64_parse_scalar_memory(inst,op,t,n))return true;
+    if(a64_parse_scalar_memory(aliases,inst,op,t,n))return true;
     if ((!strcmp(op, "stp") || !strcmp(op, "ldp") ||
          !strcmp(op,"ldpsw") || !strcmp(op,"stnp") ||
          !strcmp(op,"ldnp")) && (n == 3U || n == 4U)) {
         bool signed_pair=!strcmp(op,"ldpsw");
         bool nontemporal=!strcmp(op,"stnp") || !strcmp(op,"ldnp");
-        bool qpair=parse_a64_q_reg(t[0],&rd);
+        bool qpair=parse_a64_q_reg(aliases,t[0],&rd);
         if(qpair) {
-            if(signed_pair || !parse_a64_q_reg(t[1],&rn))return false;
+            if(signed_pair || !parse_a64_q_reg(aliases,t[1],&rn))return false;
             wd=true;wn=true;spd=false;spn=false;
-        } else if(!parse_a64_reg(t[0], &rd, &wd, &spd) || spd ||
-                  !parse_a64_reg(t[1], &rn, &wn, &spn) ||
+        } else if(!parse_a64_reg(aliases,t[0], &rd, &wd, &spd) || spd ||
+                  !parse_a64_reg(aliases,t[1], &rn, &wn, &spn) ||
                   spn || wd!=wn)return false;
-        if(!parse_a64_mem(t[2], &base, &imm, &mode))return false;
+        if(!parse_a64_mem(aliases,t[2], &base, &imm, &mode))return false;
         if(signed_pair && !wd)return false;
         /* LDNP/STNP have ONLY signed scaled imm7 offset addressing;
          * pre/post writeback encodings belong to LDP/STP. */
@@ -1502,8 +1532,13 @@ static bool parse_integer_family(MiniAsMCInst *inst,
         inst->encoding = (nontemporal?3U:mode) |
                          (qpair?UINT32_C(0x100):0U);
         inst->count = 4U;
-        put_reg(&inst->operands[0], rd, wd);
-        put_reg(&inst->operands[1], rn, wn);
+        if(qpair) {
+            put_q(&inst->operands[0],rd);
+            put_q(&inst->operands[1],rn);
+        }else {
+            put_reg(&inst->operands[0],rd,wd);
+            put_reg(&inst->operands[1],rn,wn);
+        }
         put_reg(&inst->operands[2], base, true);
         put_immediate(&inst->operands[3],
                       imm / (qpair?16:(signed_pair?4:(wd?8:4))));
@@ -1555,7 +1590,7 @@ static bool a64_lo12_expr(const char *text,MiniAsSymbolExpr *expr) {
            minias_parse_symbol_addend(text+6U,expr);
 }
 
-static bool a64_parse_relocated(MiniAsMCInst *inst,
+static bool a64_parse_relocated(const A64AliasState *aliases,MiniAsMCInst *inst,
                                 const char *op,const char *args) {
     char tok[4][384];
     unsigned n,rd,rn,policy;
@@ -1564,7 +1599,7 @@ static bool a64_parse_relocated(MiniAsMCInst *inst,
     const A64ScalarMemoryForm *memory_form;
     if(!split_operands(args,tok,&n))return false;
     if(!strcmp(op,"adr") && n==2U &&
-       parse_a64_reg(tok[0],&rd,&wd,&spd) && wd && !spd &&
+       parse_a64_reg(aliases,tok[0],&rd,&wd,&spd) && wd && !spd &&
        minias_parse_symbol_addend(tok[1],&expr) &&
        a64_attach_expr(inst,1U,&expr)) {
         inst->opcode=A64_MC_ADR;inst->count=2U;
@@ -1572,7 +1607,7 @@ static bool a64_parse_relocated(MiniAsMCInst *inst,
         return true;
     }
     if(!strcmp(op,"adrp") && n==2U &&
-       parse_a64_reg(tok[0],&rd,&wd,&spd) && wd && !spd) {
+       parse_a64_reg(aliases,tok[0],&rd,&wd,&spd) && wd && !spd) {
         /* GNU :got:SYMBOL selects a DIFFERENT ELF relocation from the
          * default page-relative ADRP. The instruction bytes are equal,
          * but confusing 275 with 311 would break Linux GOT links. */
@@ -1585,8 +1620,8 @@ static bool a64_parse_relocated(MiniAsMCInst *inst,
         return true;
     }
     if(!strcmp(op,"add") && n==3U &&
-       parse_a64_reg(tok[0],&rd,&wd,&spd) &&
-       parse_a64_reg(tok[1],&rn,&wn,&spn) && wd==wn &&
+       parse_a64_reg(aliases,tok[0],&rd,&wd,&spd) &&
+       parse_a64_reg(aliases,tok[1],&rn,&wn,&spn) && wd==wn &&
        !(rd==31U&&!spd) && !(rn==31U&&!spn) &&
        a64_lo12_expr(tok[2],&expr) &&
        a64_attach_expr(inst,2U,&expr)) {
@@ -1595,7 +1630,7 @@ static bool a64_parse_relocated(MiniAsMCInst *inst,
         put_reg(&inst->operands[1],rn,wn);
         return true;
     }
-    if(n!=2U || !parse_a64_reg(tok[0],&rd,&wd,&spd) || spd)
+    if(n!=2U || !parse_a64_reg(aliases,tok[0],&rd,&wd,&spd) || spd)
         return false;
     /* The ordinary and symbolic paths must not maintain competing
      * width, transfer size and opcode tables.  In particular, LDRSW's
@@ -1610,7 +1645,7 @@ static bool a64_parse_relocated(MiniAsMCInst *inst,
         char displacement[96],*b=displacement;
         unsigned mode;
         bool got_lo12;
-        if(!a64_memory_components(tok[1],&rn,displacement,&mode) ||
+        if(!a64_memory_components(aliases,tok[1],&rn,displacement,&mode) ||
            mode!=0U || !*displacement)
             return false;
         if(*b=='#')++b;
@@ -1880,7 +1915,7 @@ static bool a64_barrier_option(const char *name,unsigned *imm) {
 /* Target-scoped ARMv8.1 LSE ISA family; no Common or ELF encoding clone.
  * Enforce directive opt-in and typed W/X source, destination and X base.
  * CAS has a distinct acquire/release encoding; ST aliases return to ZR. */
-static bool a64_parse_lse(MiniAs *as,MiniAsMCInst *inst,
+static bool a64_parse_lse(const A64AliasState *aliases,MiniAs *as,MiniAsMCInst *inst,
                           const char *op,const char *args) {
     static const struct {const char *name;unsigned kind;bool store;} ops[]={
         {"cas",0U,false},{"ldadd",1U,false},{"ldclr",2U,false},
@@ -1919,11 +1954,11 @@ static bool a64_parse_lse(MiniAs *as,MiniAsMCInst *inst,
     }
     if(!split_operands(args,tok,&n) ||
        n!=(ops[group].store?2U:3U) ||
-       !parse_a64_reg(tok[0],&rs,&wide,&sp) || sp ||
+       !parse_a64_reg(aliases,tok[0],&rs,&wide,&sp) || sp ||
        (subword!=0U && wide) ||
        (!ops[group].store &&
-        (!parse_a64_reg(tok[1],&rt,&wr,&sp) || sp || wr!=wide)) ||
-       !parse_a64_mem(tok[n-1U],&rn,&off,&mode) ||
+        (!parse_a64_reg(aliases,tok[1],&rt,&wr,&sp) || sp || wr!=wide)) ||
+       !parse_a64_mem(aliases,tok[n-1U],&rn,&off,&mode) ||
        off!=0 || mode!=0U)return false;
     inst->opcode=A64_MC_LSE;inst->count=3U;
     inst->encoding=ops[group].kind |
@@ -2149,18 +2184,12 @@ static bool a64_capture_deferred_difference(MiniAs *as,MiniAsStmt *stmt,
 }
 
 static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
+    const A64AliasState *aliases=(const A64AliasState *)as->target_state;
     MiniAsSymbolDifference deferred_difference;
     A64DeferredDifferenceUse deferred_use=A64_DEFERRED_NONE;
-    /* Bind aliases at this precise instruction site; subsequent .unreq
-     * or redefining an alias cannot retroactively change prior MCInsts. */
-    if(as->target_state) {
-        char *expanded=a64_expand_register_aliases(as,stmt->args);
-        if(!expanded) {
-            minias_set_error(as,"out-of-memory:aarch64-req-expansion");
-            return false;
-        }
-        free(stmt->args);stmt->args=expanded;
-    }
+    /* Alias state belongs to this lexical parse site. Typed register
+     * recognizers bind the resolved number/bank into MCInst immediately;
+     * later .unreq cannot change any previously parsed instruction. */
     if(!a64_capture_deferred_difference(as,stmt,&deferred_difference,
                                         &deferred_use))return false;
     if(!a64_fold_absolute_memory_address(as,stmt))return false;
@@ -2176,7 +2205,9 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         return false;
     }
     if((!strcmp(op,"ldr") || !strcmp(op,"str")) &&
-       (args[0]=='s' || args[0]=='d' || args[0]=='q')) {
+       (a64_register_prefix(aliases,args)=='s' ||
+        a64_register_prefix(aliases,args)=='d' ||
+        a64_register_prefix(aliases,args)=='q')) {
         /* S/D/Q FP/SIMD unsigned-scaled memory goes through the already
          * checked typed A64 LDST path; no new emitter or Common ISA. */
         char tok[4][384];unsigned n,rd,rn,mode,width=0U;
@@ -2187,9 +2218,9 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
             minias_set_error(as,"bad-aarch64-fp-memory:%s:line=%zu",
                              args,stmt->line);minias_mcinst_destroy(inst);return false;
         }
-        if(a64_scalar_fp_reg(tok[0],&rd,&fp64))width=fp64?8U:4U;
-        else if(parse_a64_q_reg(tok[0],&rd))width=16U;
-        if(width==0U || !parse_a64_mem(tok[1],&rn,&off,&mode) ||
+        if(a64_scalar_fp_reg(aliases,tok[0],&rd,&fp64))width=fp64?8U:4U;
+        else if(parse_a64_q_reg(aliases,tok[0],&rd))width=16U;
+        if(width==0U || !parse_a64_mem(aliases,tok[1],&rn,&off,&mode) ||
            mode!=0U || off<0 || off%(int64_t)width!=0 ||
            off/(int64_t)width>4095) {
             minias_set_error(as,"bad-aarch64-fp-memory:%s:line=%zu",
@@ -2215,7 +2246,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         bool wide,sp;
         MiniAsSymbolExpr source,pool;
         if(!split_operands(args,operands,&n) || n!=2U ||
-           !parse_a64_reg(operands[0],&rd,&wide,&sp) || sp ||
+           !parse_a64_reg(aliases,operands[0],&rd,&wide,&sp) || sp ||
            operands[1][0]!='=' ||
            !minias_parse_symbol_addend(operands[1]+1U,&source) ||
            !minias_queue_literal(as,&source,wide?8U:4U,&pool) ||
@@ -2237,7 +2268,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         bool wide,sp;
         MiniAsSymbolExpr source;
         if(!split_operands(args,operands,&n) || n!=2U ||
-           !parse_a64_reg(operands[0],&rd,&wide,&sp) || sp ||
+           !parse_a64_reg(aliases,operands[0],&rd,&wide,&sp) || sp ||
            !minias_parse_symbol_addend(operands[1],&source) ||
            !a64_attach_expr(inst,1U,&source)) {
             minias_set_error(as,"bad-aarch64-direct-literal:%s:line=%zu",
@@ -2247,7 +2278,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         inst->opcode=A64_MC_LDR_LITERAL;inst->count=2U;
         inst->encoding=1U; /* target-local direct vs queued =literal */
         put_reg(&inst->operands[0],rd,wide);
-    } else if(a64_parse_lse(as,inst,op,args)) {
+    } else if(a64_parse_lse(aliases,as,inst,op,args)) {
         /* LSE grammar is owned by one target decoder. */
     } else if(!strcmp(op,"madd") || !strcmp(op,"msub") ||
               !strcmp(op,"umaddl") || !strcmp(op,"smaddl") ||
@@ -2268,10 +2299,10 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
             if(!strcmp(op,tab[k].name))break;
         if(k==sizeof(tab)/sizeof(tab[0]) ||
            !split_operands(args,tok,&n) || n!=4U ||
-           !parse_a64_reg(tok[0],&rd,&wd,&sp) || sp ||
-           !parse_a64_reg(tok[1],&rn,&wn,&sp) || sp ||
-           !parse_a64_reg(tok[2],&rm,&wm,&sp) || sp ||
-           !parse_a64_reg(tok[3],&ra,&wa,&sp) || sp ||
+           !parse_a64_reg(aliases,tok[0],&rd,&wd,&sp) || sp ||
+           !parse_a64_reg(aliases,tok[1],&rn,&wn,&sp) || sp ||
+           !parse_a64_reg(aliases,tok[2],&rm,&wm,&sp) || sp ||
+           !parse_a64_reg(aliases,tok[3],&ra,&wa,&sp) || sp ||
            (tab[k].longop?(!wd || wn || wm || !wa):
                           (wd!=wn || wd!=wm || wd!=wa))) {
             minias_set_error(as,"bad-aarch64-multiply-accumulate:%s:line=%zu",
@@ -2323,20 +2354,20 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
            (ops[alu_k].unary?
              (alu_n!=2U &&
               (alu_n!=3U || alu_k>1U)):alu_n!=3U) ||
-           !parse_a64_reg(alu_tok[0],&alu_rd,&alu_wide,&alu_sp) ||
+           !parse_a64_reg(aliases,alu_tok[0],&alu_rd,&alu_wide,&alu_sp) ||
            alu_sp) {
             minias_set_error(as,"bad-aarch64-arith-alias:%s:line=%zu",
                              args,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
         if(!ops[alu_k].unary &&
-           (!parse_a64_reg(alu_tok[1],&alu_rn,&alu_nwide,&alu_sp) ||
+           (!parse_a64_reg(aliases,alu_tok[1],&alu_rn,&alu_nwide,&alu_sp) ||
             alu_sp)) {
             minias_set_error(as,"bad-aarch64-arith-source:%s:line=%zu",
                              args,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
-        if(!parse_a64_reg(alu_tok[ops[alu_k].unary?1U:2U],
+        if(!parse_a64_reg(aliases,alu_tok[ops[alu_k].unary?1U:2U],
                           &alu_rm,&alu_mwide,&alu_sp) || alu_sp ||
            (ops[alu_k].long_wide?
               (!alu_wide || alu_nwide || alu_mwide):
@@ -2387,9 +2418,9 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
                       !strcmp(op,"sbfx") || !strcmp(op,"sbfiz")?
                       UINT32_C(0x13000000):UINT32_C(0x33000000);
         if(!split_operands(args,bit_tok,&bit_n) || bit_n!=4U ||
-           !parse_a64_reg(bit_tok[0],&bit_rd,&bit_wide,&bit_sp) ||
+           !parse_a64_reg(aliases,bit_tok[0],&bit_rd,&bit_wide,&bit_sp) ||
            bit_sp ||
-           !parse_a64_reg(bit_tok[1],&bit_rn,&bit_source_wide,&bit_sp) ||
+           !parse_a64_reg(aliases,bit_tok[1],&bit_rn,&bit_source_wide,&bit_sp) ||
            bit_sp || bit_wide!=bit_source_wide ||
            !parse_signed_number(bit_tok[2],&lsb) ||
            !parse_signed_number(bit_tok[3],&width)) {
@@ -2426,8 +2457,8 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
                          !strcmp(op,"lsr")?1U:
                          !strcmp(op,"asr")?2U:3U;
         if(!split_operands(args,tok,&n) || n!=3U ||
-           !parse_a64_reg(tok[0],&rd,&wide,&sp) || sp ||
-           !parse_a64_reg(tok[1],&rn,&sourcewide,&sp) || sp ||
+           !parse_a64_reg(aliases,tok[0],&rd,&wide,&sp) || sp ||
+           !parse_a64_reg(aliases,tok[1],&rn,&sourcewide,&sp) || sp ||
            wide!=sourcewide) {
             minias_set_error(as,"bad-aarch64-shift:%s:line=%zu",args,stmt->line);
             minias_mcinst_destroy(inst);return false;
@@ -2436,7 +2467,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         inst->encoding=shiftop;
         put_reg(&inst->operands[0],rd,wide);
         put_reg(&inst->operands[1],rn,wide);
-        if(parse_a64_reg(tok[2],&rm,&shiftwide,&sp)) {
+        if(parse_a64_reg(aliases,tok[2],&rm,&shiftwide,&sp)) {
             if(sp || shiftwide!=wide) {
                 minias_set_error(as,"bad-aarch64-shift-width:%s:line=%zu",
                                  args,stmt->line);
@@ -2458,9 +2489,9 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         bool wd,wn,wm,sp;
         int64_t lsb;
         if(!split_operands(args,extra,&n) || n!=4U ||
-           !parse_a64_reg(extra[0],&rd,&wd,&sp) || sp ||
-           !parse_a64_reg(extra[1],&rn,&wn,&sp) || sp ||
-           !parse_a64_reg(extra[2],&rm,&wm,&sp) || sp ||
+           !parse_a64_reg(aliases,extra[0],&rd,&wd,&sp) || sp ||
+           !parse_a64_reg(aliases,extra[1],&rn,&wn,&sp) || sp ||
+           !parse_a64_reg(aliases,extra[2],&rm,&wm,&sp) || sp ||
            wd!=wn || wd!=wm || !parse_signed_number(extra[3],&lsb) ||
            lsb<0 || lsb>=(wd?64:32)) {
             minias_set_error(as,"bad-aarch64-extr:%s:line=%zu",
@@ -2479,7 +2510,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         int64_t ccmp_immediate,nzcv;
         bool literal;
         if(!split_operands(args,tok,&n) || n!=4U ||
-           !parse_a64_reg(tok[0],&rn,&wide,&sp) || sp ||
+           !parse_a64_reg(aliases,tok[0],&rn,&wide,&sp) || sp ||
            !parse_signed_number(tok[2],&nzcv) || nzcv<0 || nzcv>15 ||
            !a64_condition_code(tok[3],&cc)) {
             minias_set_error(as,"bad-aarch64-conditional-compare:%s:line=%zu",
@@ -2492,7 +2523,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
                              tok[1],stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
-        if(!literal && (!parse_a64_reg(tok[1],&rm,&otherwide,&sp) ||
+        if(!literal && (!parse_a64_reg(aliases,tok[1],&rm,&otherwide,&sp) ||
                         sp || otherwide!=wide)) {
             minias_set_error(as,"bad-aarch64-ccmp-register:%s:line=%zu",
                              tok[1],stmt->line);
@@ -2520,9 +2551,9 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
             {"csneg",UINT32_C(0x5a800400)}
         };
         if(!split_operands(args,tok,&n) || n!=4U ||
-           !parse_a64_reg(tok[0],&rd,&wd,&sp) || sp ||
-           !parse_a64_reg(tok[1],&rn,&wn,&sp) || sp || wd!=wn ||
-           !parse_a64_reg(tok[2],&rm,&wm,&sp) || sp || wd!=wm ||
+           !parse_a64_reg(aliases,tok[0],&rd,&wd,&sp) || sp ||
+           !parse_a64_reg(aliases,tok[1],&rn,&wn,&sp) || sp || wd!=wn ||
+           !parse_a64_reg(aliases,tok[2],&rm,&wm,&sp) || sp || wd!=wm ||
            !a64_condition_code(tok[3],&cc)) {
             minias_set_error(as,"bad-aarch64-conditional-select:%s:line=%zu",
                              args,stmt->line);
@@ -2542,8 +2573,8 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         char tok[4][384];unsigned n,rd,rn,cc;
         bool wd,wn,sp;
         if(!split_operands(args,tok,&n) || n!=3U ||
-           !parse_a64_reg(tok[0],&rd,&wd,&sp) || sp ||
-           !parse_a64_reg(tok[1],&rn,&wn,&sp) || sp ||
+           !parse_a64_reg(aliases,tok[0],&rd,&wd,&sp) || sp ||
+           !parse_a64_reg(aliases,tok[1],&rn,&wn,&sp) || sp ||
            wd!=wn || !a64_condition_code(tok[2],&cc)) {
             minias_set_error(as,"bad-aarch64-conditional-alias:%s:line=%zu",
                              args,stmt->line);
@@ -2566,9 +2597,9 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         bool wd,wn=false,sp;
         if(!split_operands(args,parts,&n) ||
            n!=(!strcmp(op,"cinc")?3U:2U) ||
-           !parse_a64_reg(parts[0],&rd,&wd,&sp) || sp ||
+           !parse_a64_reg(aliases,parts[0],&rd,&wd,&sp) || sp ||
            (!strcmp(op,"cinc") &&
-            (!parse_a64_reg(parts[1],&rn,&wn,&sp) || sp || wn!=wd)) ||
+            (!parse_a64_reg(aliases,parts[1],&rn,&wn,&sp) || sp || wn!=wd)) ||
            !a64_condition_code(parts[n-1U],&cond)) {
             minias_set_error(as,"bad-aarch64-csel-alias:%s:line=%zu",
                              args,stmt->line);
@@ -2581,15 +2612,15 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         put_reg(&inst->operands[0],rd,wd);
         put_reg(&inst->operands[1],rn,wd);
     } else if((!strcmp(op,"mvn") || !strcmp(op,"not")) &&
-              args[0]=='v') {
+              a64_register_prefix(aliases,args)=='v') {
         /* AdvSIMD MVN/NOT is a two-register 8B/16B operation, not the
          * scalar GPR MVN (ORN with ZR). Reuse the established two-register
          * typed encoder used by native ARM crypto register instructions. */
         char tok[4][384];unsigned n,rd,rn;
         uint32_t da,sa;
         if(!split_operands(args,tok,&n) || n!=2U ||
-           !a64_vector_view(tok[0],&rd,&da) ||
-           !a64_vector_view(tok[1],&rn,&sa) || da!=sa ||
+           !a64_vector_view(aliases,tok[0],&rd,&da) ||
+           !a64_vector_view(aliases,tok[1],&rn,&sa) || da!=sa ||
            (da&UINT32_C(0xc00))!=0U) {
             minias_set_error(as,"bad-aarch64-simd-mvn:%s:line=%zu",
                              args,stmt->line);
@@ -2613,17 +2644,19 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
             {"umaxv",UINT32_C(0x2e30a800)},
             {"addv", UINT32_C(0x0e31b800)}
         };
-        char tok[4][384],*end;unsigned n,rd,rn,k;
+        char tok[4][384],*end,resolved[96];unsigned n,rd,rn,k;
         unsigned long dst_number;
         uint32_t arrange;
         unsigned elem;
+        const char *dst;
         if(!split_operands(args,tok,&n) || n!=2U ||
-           (tok[0][0]!='b' && tok[0][0]!='h' && tok[0][0]!='s') ||
-           !isdigit((unsigned char)tok[0][1]) ||
-           !a64_vector_view(tok[1],&rn,&arrange))goto bad_reduction;
-        errno=0;dst_number=strtoul(tok[0]+1U,&end,10);
+           !a64_vector_view(aliases,tok[1],&rn,&arrange))goto bad_reduction;
+        dst=a64_resolve_register_alias(aliases,tok[0],resolved,sizeof(resolved));
+        if((dst[0]!='b' && dst[0]!='h' && dst[0]!='s') ||
+           !isdigit((unsigned char)dst[1]))goto bad_reduction;
+        errno=0;dst_number=strtoul(dst+1U,&end,10);
         if(errno || *end!='\0' || dst_number>31UL)goto bad_reduction;
-        elem=tok[0][0]=='b'?0U:tok[0][0]=='h'?1U:2U;
+        elem=dst[0]=='b'?0U:dst[0]=='h'?1U:2U;
         if(((arrange&UINT32_C(0xc00))>>10U)!=elem ||
            (elem==2U && !(arrange&UINT32_C(0x40000000))))
             goto bad_reduction;
@@ -2645,8 +2678,8 @@ reduction_done:;
     } else if(!strcmp(op,"mvn") &&
               split_two(args,first,sizeof(first),second,sizeof(second))) {
         unsigned rd,rm;bool wide,otherwide,sp;
-        if(!parse_a64_reg(first,&rd,&wide,&sp) || sp ||
-           !parse_a64_reg(second,&rm,&otherwide,&sp) || sp ||
+        if(!parse_a64_reg(aliases,first,&rd,&wide,&sp) || sp ||
+           !parse_a64_reg(aliases,second,&rm,&otherwide,&sp) || sp ||
            wide!=otherwide) {
             minias_set_error(as,"bad-aarch64-mvn:%s:line=%zu",
                              args,stmt->line);
@@ -2740,7 +2773,7 @@ reduction_done:;
             if((!strncmp(sysops[i].name,"rv",2U) ||
                 !strncmp(sysops[i].name,"ripas2",6U)) &&
                (as->target_options&A64_FEATURE_TLBI_RANGE)==0U)break;
-            if(paired && (!parse_a64_reg(operand,&rt,&rt64,&rtsp) ||
+            if(paired && (!parse_a64_reg(aliases,operand,&rt,&rt64,&rtsp) ||
                           !rt64 || rtsp))break;
             word=sysops[i].word;found=true;break;
         }
@@ -2788,10 +2821,10 @@ reduction_done:;
         /* Rt=31 is legal XZR for MRS/MSR, unlike SP. Use the
          * existing target register grammar rather than x0..x30 only. */
         if(read ?
-           (!parse_a64_reg(first,&rt,&wide,&sp) || sp || !wide ||
+           (!parse_a64_reg(aliases,first,&rt,&wide,&sp) || sp || !wide ||
             !a64_system_register(second,&mrscode,&msrcode) ||
             mrscode==0U) :
-           (!parse_a64_reg(second,&rt,&wide,&sp) || sp || !wide ||
+           (!parse_a64_reg(aliases,second,&rt,&wide,&sp) || sp || !wide ||
             !a64_system_register(first,&mrscode,&msrcode) ||
             msrcode==0U)) {
             minias_set_error(as,"bad-aarch64-sysreg:%s:line=%zu",
@@ -2804,12 +2837,12 @@ reduction_done:;
         put_reg(&inst->operands[0],rt,true);
     } else if(!strcmp(op,"dup") ||
               ((!strcmp(op,"rev32") || !strcmp(op,"rev64")) &&
-               args[0]=='v')) {
+               a64_register_prefix(aliases,args)=='v')) {
         char dst[96],source[96];unsigned vd,rn;
         uint32_t ar;
         bool wide,sp;
         if(!split_two(args,dst,sizeof(dst),source,sizeof(source)) ||
-           !a64_vector_view(dst,&vd,&ar)) {
+           !a64_vector_view(aliases,dst,&vd,&ar)) {
             minias_set_error(as,"bad-aarch64-simd-lane:%s:line=%zu",
                              args,stmt->line);
             minias_mcinst_destroy(inst);return false;
@@ -2818,7 +2851,7 @@ reduction_done:;
             bool d=((ar&UINT32_C(0xc00))==UINT32_C(0xc00));
             unsigned lane=1U<<((ar&UINT32_C(0xc00))>>10U);
             if((d && !(ar&UINT32_C(0x40000000))) ||
-               !parse_a64_reg(source,&rn,&wide,&sp) || sp || wide!=d) {
+               !parse_a64_reg(aliases,source,&rn,&wide,&sp) || sp || wide!=d) {
                 minias_set_error(as,"bad-aarch64-dup-source:%s:line=%zu",
                                  args,stmt->line);
                 minias_mcinst_destroy(inst);return false;
@@ -2833,7 +2866,7 @@ reduction_done:;
             if((rev64?(element!=0U && element!=UINT32_C(0x400) &&
                          element!=UINT32_C(0x800)):
                        (element!=0U && element!=UINT32_C(0x400))) ||
-               !a64_vector_view(source,&rn,&vdarr) || vdarr!=ar) {
+               !a64_vector_view(aliases,source,&rn,&vdarr) || vdarr!=ar) {
                 minias_set_error(as,"bad-aarch64-reverse-vector:%s:line=%zu",
                                  args,stmt->line);minias_mcinst_destroy(inst);return false;
             }
@@ -2847,7 +2880,7 @@ reduction_done:;
         else put_vector(&inst->operands[1],rn);
     } else if(!strcmp(op,"sys")) {
         uint32_t bits;unsigned rt;
-        if(!a64_sys_fields(args,&bits,&rt)) {
+        if(!a64_sys_fields(aliases,args,&bits,&rt)) {
             minias_set_error(as,"bad-aarch64-sys-fields:%s:line=%zu",
                              args,stmt->line);
             minias_mcinst_destroy(inst);return false;
@@ -2860,7 +2893,7 @@ reduction_done:;
         unsigned rs,rt,rn;
         bool wide;
         if((as->target_options&A64_FEATURE_LSE)==0U ||
-           !a64_casp_fields(args,&rs,&rt,&rn,&wide)){
+           !a64_casp_fields(aliases,args,&rs,&rt,&rn,&wide)){
             minias_set_error(as,"bad-aarch64-casp:%s:line=%zu",
                              args,stmt->line);
             minias_mcinst_destroy(inst);return false;
@@ -2885,8 +2918,8 @@ reduction_done:;
          * top-level operand grammar, NOT the old single-comma split_two. */
         if((as->target_options&A64_FEATURE_MTE)==0U ||
            !split_operands(args,tok,&n) || n!=2U ||
-           !parse_a64_reg(tok[0],&rt,&wide,&sp) || sp || !wide ||
-           !parse_a64_mem(tok[1],&rn,&off,&mode) ||
+           !parse_a64_reg(aliases,tok[0],&rt,&wide,&sp) || sp || !wide ||
+           !parse_a64_mem(aliases,tok[1],&rn,&off,&mode) ||
            mode!=0U || off%16!=0 || off<-4096 || off>4080) {
             minias_set_error(as,"bad-aarch64-ldg:%s:line=%zu",
                              args,stmt->line);
@@ -2905,8 +2938,8 @@ reduction_done:;
         int64_t offset;
         if((as->target_options&A64_FEATURE_MTE)==0U ||
            !split_operands(args,tok,&n) || n!=2U ||
-           !parse_a64_reg(tok[0],&rt,&wide,&sp) || sp || !wide ||
-           !parse_a64_mem(tok[1],&rn,&offset,&mode) ||
+           !parse_a64_reg(aliases,tok[0],&rt,&wide,&sp) || sp || !wide ||
+           !parse_a64_mem(aliases,tok[1],&rn,&offset,&mode) ||
            offset!=0 || mode!=0U) {
             minias_set_error(as,"bad-aarch64-mte-tags:%s:line=%zu",
                              args,stmt->line);
@@ -2918,7 +2951,7 @@ reduction_done:;
         put_reg(&inst->operands[0],rt,true);
         put_reg(&inst->operands[1],rn,true);
     } else if(!strcmp(op,"ins") ||
-              (!strcmp(op,"mov") && args[0]=='v' &&
+              (!strcmp(op,"mov") && a64_register_prefix(aliases,args)=='v' &&
                strchr(args,'[')!=NULL)) {
         /* GNU MOV Vd.element[lane],Wn/Xn is INS's exact lane encoding,
          * not the earlier whole-register MOV/ORR alias. */
@@ -2926,12 +2959,12 @@ reduction_done:;
         uint32_t imm5,source_imm5=0U,source_marker=0U,source_imm4=0U;
         bool source_x,wide,sp,vector_source;
         if(!split_two(args,first,sizeof(first),second,sizeof(second)) ||
-           !a64_ins_lane(first,&vd,&imm5,&source_x)) {
+           !a64_ins_lane(aliases,first,&vd,&imm5,&source_x)) {
             minias_set_error(as,"bad-aarch64-ins-lane:%s:line=%zu",
                              args,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
-        vector_source=a64_ins_lane(second,&rn,&source_imm5,&wide);
+        vector_source=a64_ins_lane(aliases,second,&rn,&source_imm5,&wide);
         if(vector_source) {
             /* GNU INS/MOV Vd.element[i],Vn.element[j]: same element
              * width but independent lane indices. Destination imm5
@@ -2942,7 +2975,7 @@ reduction_done:;
                                  args,stmt->line);minias_mcinst_destroy(inst);return false;
             }
             source_imm4=(source_imm5&~source_marker)>>1U;
-        }else if(!parse_a64_reg(second,&rn,&wide,&sp) || sp ||
+        }else if(!parse_a64_reg(aliases,second,&rn,&wide,&sp) || sp ||
                  wide!=source_x) {
             minias_set_error(as,"bad-aarch64-ins-source:%s:line=%zu",
                              args,stmt->line);minias_mcinst_destroy(inst);return false;
@@ -2963,12 +2996,12 @@ reduction_done:;
             minias_set_error(as,"bad-aarch64-fmov:%s:line=%zu",
                              args,stmt->line);minias_mcinst_destroy(inst);return false;
         }
-        fp_dst=a64_scalar_fp_reg(dst,&rd,&fd);
-        fp_src=a64_scalar_fp_reg(source,&rn,&fs);
+        fp_dst=a64_scalar_fp_reg(aliases,dst,&rd,&fd);
+        fp_src=a64_scalar_fp_reg(aliases,source,&rn,&fs);
         if(fp_dst==fp_src ||
-           (fp_dst && (!parse_a64_reg(source,&rn,&gs,&sp) || sp ||
+           (fp_dst && (!parse_a64_reg(aliases,source,&rn,&gs,&sp) || sp ||
                        fd!=gs)) ||
-           (fp_src && (!parse_a64_reg(dst,&rd,&gd,&sp) || sp ||
+           (fp_src && (!parse_a64_reg(aliases,dst,&rd,&gd,&sp) || sp ||
                        fs!=gd))) {
             minias_set_error(as,"bad-aarch64-fmov:%s:line=%zu",
                              args,stmt->line);minias_mcinst_destroy(inst);return false;
@@ -2998,8 +3031,8 @@ reduction_done:;
         bool right=!strcmp(op,"ushr") || !strcmp(op,"sshr") ||
                    !strcmp(op,"sri");
         if(!split_operands(args,tok,&n) || n!=3U ||
-           !a64_vector_view(tok[0],&rd,&da) ||
-           !a64_vector_view(tok[1],&rn,&sa) || da!=sa ||
+           !a64_vector_view(aliases,tok[0],&rd,&da) ||
+           !a64_vector_view(aliases,tok[1],&rn,&sa) || da!=sa ||
            !parse_signed_number(tok[2],&shift)) {
             minias_set_error(as,"bad-aarch64-simd-shift:%s:line=%zu",
                              args,stmt->line);minias_mcinst_destroy(inst);return false;
@@ -3063,9 +3096,9 @@ reduction_done:;
         bool wd,wn,wm,sp;
         if((as->target_options&A64_FEATURE_CRC)==0U ||
            !split_operands(args,tok,&n) || n!=3U ||
-           !parse_a64_reg(tok[0],&rd,&wd,&sp) || sp || wd ||
-           !parse_a64_reg(tok[1],&rn,&wn,&sp) || sp || wn ||
-           !parse_a64_reg(tok[2],&rm,&wm,&sp) || sp) {
+           !parse_a64_reg(aliases,tok[0],&rd,&wd,&sp) || sp || wd ||
+           !parse_a64_reg(aliases,tok[1],&rn,&wn,&sp) || sp || wn ||
+           !parse_a64_reg(aliases,tok[2],&rm,&wm,&sp) || sp) {
             minias_set_error(as,"bad-aarch64-crc32:%s:line=%zu",args,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
@@ -3093,8 +3126,8 @@ reduction_done:;
         uint32_t da,sa;
         if((as->target_options&A64_FEATURE_CRYPTO)==0U ||
            !split_operands(args,tok,&n) || n!=2U ||
-           !a64_vector_view(tok[0],&rd,&da) ||
-           !a64_vector_view(tok[1],&rn,&sa) ||
+           !a64_vector_view(aliases,tok[0],&rd,&da) ||
+           !a64_vector_view(aliases,tok[1],&rn,&sa) ||
            da!=UINT32_C(0x40000000) || sa!=da) {
             minias_set_error(as,"bad-aarch64-aes:%s:line=%zu",args,stmt->line);
             minias_mcinst_destroy(inst);return false;
@@ -3109,7 +3142,7 @@ reduction_done:;
               !strcmp(op,"and") || !strcmp(op,"bic") ||
               !strcmp(op,"bsl") || !strcmp(op,"bit") ||
               !strcmp(op,"bif") ||
-              (!strcmp(op,"add") && args[0]=='v') ||
+              (!strcmp(op,"add") && a64_register_prefix(aliases,args)=='v') ||
               !strcmp(op,"cmeq") || !strcmp(op,"cmgt") ||
               !strcmp(op,"cmge") || !strcmp(op,"cmhi") ||
               !strcmp(op,"cmhs") || !strcmp(op,"cmtst") ||
@@ -3143,7 +3176,7 @@ reduction_done:;
             {"zip2",UINT32_C(0x0e007800)}
         };
         if(split_operands(args,tok,&n) && n==3U &&
-           tok[0][0]=='v') {
+           a64_register_prefix(aliases,tok[0])=='v') {
             bool permute=!strcmp(op,"trn1") || !strcmp(op,"trn2") ||
                          !strcmp(op,"uzp1") || !strcmp(op,"uzp2") ||
                          !strcmp(op,"zip1") || !strcmp(op,"zip2");
@@ -3151,9 +3184,9 @@ reduction_done:;
                          !strcmp(op,"cmge") || !strcmp(op,"cmhi") ||
                          !strcmp(op,"cmhs") || !strcmp(op,"cmtst");
             bool sized=permute || compare || !strcmp(op,"add");
-            if(!a64_vector_view(tok[0],&rd,&da) ||
-               !a64_vector_view(tok[1],&rn,&sa) ||
-               !a64_vector_view(tok[2],&rm,&ta) ||
+            if(!a64_vector_view(aliases,tok[0],&rd,&da) ||
+               !a64_vector_view(aliases,tok[1],&rn,&sa) ||
+               !a64_vector_view(aliases,tok[2],&rm,&ta) ||
                da!=sa || da!=ta ||
                (sized?
                  ((da&UINT32_C(0xc00))==UINT32_C(0xc00) &&
@@ -3173,7 +3206,7 @@ reduction_done:;
             put_vector(&inst->operands[0],rd);
             put_vector(&inst->operands[1],rn);
             put_vector(&inst->operands[2],rm);
-        }else if(parse_integer_family(inst,op,args)) {
+        }else if(parse_integer_family(aliases,inst,op,args)) {
             /* Scalar ALU uses the same already proven Target machinery. */
         }else {
             minias_set_error(as,"bad-aarch64-operands:%s:%s:line=%zu",
@@ -3185,9 +3218,9 @@ reduction_done:;
         uint32_t da,sa,ta;
         int64_t index;
         if(!split_operands(args,tok,&n) || n!=4U ||
-           !a64_vector_view(tok[0],&rd,&da) ||
-           !a64_vector_view(tok[1],&rn,&sa) ||
-           !a64_vector_view(tok[2],&rm,&ta) ||
+           !a64_vector_view(aliases,tok[0],&rd,&da) ||
+           !a64_vector_view(aliases,tok[1],&rn,&sa) ||
+           !a64_vector_view(aliases,tok[2],&rm,&ta) ||
            da!=sa || da!=ta || (da&UINT32_C(0xc00))!=0U ||
            !parse_signed_number(tok[3],&index) || index<0 ||
            index>=((da&UINT32_C(0x40000000))?16:8)) {
@@ -3208,7 +3241,7 @@ reduction_done:;
         int64_t number;
         unsigned simd_imm;
         if(!split_two(args,vreg,sizeof(vreg),text,sizeof(text)) ||
-           !a64_vector_view(vreg,&rd,&ar) ||
+           !a64_vector_view(aliases,vreg,&rd,&ar) ||
            !parse_signed_number(text,&number)) {
             minias_set_error(as,"bad-aarch64-movi:%s:line=%zu",
                              args,stmt->line);
@@ -3262,11 +3295,11 @@ reduction_done:;
             minias_mcinst_destroy(inst);return false;
         }
         k=store?1U:0U;
-        if((store && (!parse_a64_reg(tok[0],&rs,&ws,&sp) || sp || ws)) ||
-           !parse_a64_reg(tok[k],&rt,&wt,&sp) || sp ||
-           !parse_a64_reg(tok[k+1U],&rt2,&wt2,&sp) || sp ||
+        if((store && (!parse_a64_reg(aliases,tok[0],&rs,&ws,&sp) || sp || ws)) ||
+           !parse_a64_reg(aliases,tok[k],&rt,&wt,&sp) || sp ||
+           !parse_a64_reg(aliases,tok[k+1U],&rt2,&wt2,&sp) || sp ||
            wt!=wt2 ||
-           !parse_a64_mem(tok[k+2U],&rn,&off,&mode) ||
+           !parse_a64_mem(aliases,tok[k+2U],&rn,&off,&mode) ||
            off!=0 || mode!=0U) {
             minias_set_error(as,"bad-aarch64-exclusive-pair:%s:line=%zu",
                              args,stmt->line);
@@ -3290,9 +3323,9 @@ reduction_done:;
         char tok[4][384];unsigned n,rd,rn,rm,count;
         uint32_t dstarr,tabarr,indexarr;
         if(!split_operands(args,tok,&n) || n!=3U ||
-           !a64_vector_view(tok[0],&rd,&dstarr) ||
-           !a64_structure_vlist(tok[1],&rn,&tabarr,&count) ||
-           !a64_vector_view(tok[2],&rm,&indexarr) ||
+           !a64_vector_view(aliases,tok[0],&rd,&dstarr) ||
+           !a64_structure_vlist(aliases,tok[1],&rn,&tabarr,&count) ||
+           !a64_vector_view(aliases,tok[2],&rm,&indexarr) ||
            (dstarr!=UINT32_C(0) &&
             dstarr!=UINT32_C(0x40000000)) ||
            tabarr!=UINT32_C(0x40000000) ||
@@ -3324,25 +3357,25 @@ reduction_done:;
              * widths: polynomial bytes -> Vd.8H and polynomial 64-bit
              * halves -> Vd.1Q. Both reuse the same three-register
              * emitter; Vn/Vm shapes must match low/high selection. */
-            bool bytes=a64_vector_view(tok[0],&rd,&da) &&
+            bool bytes=a64_vector_view(aliases,tok[0],&rd,&da) &&
                        da==UINT32_C(0x40000400);
-            if(!bytes)valid=a64_vector_1q(tok[0],&rd);
+            if(!bytes)valid=a64_vector_1q(aliases,tok[0],&rd);
             if(valid) {
                 uint32_t source=bytes?
                     (pair?UINT32_C(0x40000000):UINT32_C(0)):
                     (pair?UINT32_C(0x40000c00):UINT32_C(0x00000c00));
-                valid=a64_vector_view(tok[1],&rn,&sa) &&
-                      a64_vector_view(tok[2],&rm,&ta) &&
+                valid=a64_vector_view(aliases,tok[1],&rn,&sa) &&
+                      a64_vector_view(aliases,tok[2],&rm,&ta) &&
                       sa==source && ta==source;
             }
             if(valid && bytes)
                 inst->encoding=pair?UINT32_C(0x4e20e000):
                                      UINT32_C(0x0e20e000);
         }else if(valid) {
-            valid=a64_vector_view(tok[0],&rd,&da) &&
-                  a64_vector_view(tok[1],&rn,&sa) &&
+            valid=a64_vector_view(aliases,tok[0],&rd,&da) &&
+                  a64_vector_view(aliases,tok[1],&rn,&sa) &&
                   da==UINT32_C(0x40000800) && sa==da &&
-                  (!tri || (a64_vector_view(tok[2],&rm,&ta) && ta==da));
+                  (!tri || (a64_vector_view(aliases,tok[2],&rm,&ta) && ta==da));
         }
         if(!valid) {
             minias_set_error(as,"bad-aarch64-crypto-poly-sha1:%s:line=%zu",
@@ -3367,9 +3400,9 @@ reduction_done:;
         bool wide;uint32_t shape;
         if((as->target_options&A64_FEATURE_CRYPTO)==0U ||
            !split_operands(args,arg,&n) || n!=3U ||
-           !parse_a64_q_reg(arg[0],&rd) ||
-           !a64_scalar_fp_reg(arg[1],&rn,&wide) || wide ||
-           !a64_vector_view(arg[2],&rm,&shape) ||
+           !parse_a64_q_reg(aliases,arg[0],&rd) ||
+           !a64_scalar_fp_reg(aliases,arg[1],&rn,&wide) || wide ||
+           !a64_vector_view(aliases,arg[2],&rm,&shape) ||
            shape!=UINT32_C(0x40000800)) {
             minias_set_error(as,"bad-aarch64-sha1-round:%s:line=%zu",
                              args,stmt->line);minias_mcinst_destroy(inst);return false;
@@ -3387,8 +3420,8 @@ reduction_done:;
         char dst[96],src[96];
         if((as->target_options&A64_FEATURE_CRYPTO)==0U ||
            !split_two(args,dst,sizeof(dst),src,sizeof(src)) ||
-           !a64_scalar_fp_reg(dst,&rd,&dw) || dw ||
-           !a64_scalar_fp_reg(src,&rn,&nw) || nw) {
+           !a64_scalar_fp_reg(aliases,dst,&rd,&dw) || dw ||
+           !a64_scalar_fp_reg(aliases,src,&rn,&nw) || nw) {
             minias_set_error(as,"bad-aarch64-sha1h:%s:line=%zu",
                              args,stmt->line);minias_mcinst_destroy(inst);return false;
         }
@@ -3407,15 +3440,15 @@ reduction_done:;
         bool valid=(as->target_options&A64_FEATURE_CRYPTO)!=0U &&
                    split_operands(args,tok,&n) && n==(tri?3U:2U);
         if(valid && pair) {
-            valid=parse_a64_q_reg(tok[0],&rd) &&
-                  parse_a64_q_reg(tok[1],&rn);
+            valid=parse_a64_q_reg(aliases,tok[0],&rd) &&
+                  parse_a64_q_reg(aliases,tok[1],&rn);
         }else if(valid) {
-            valid=a64_vector_view(tok[0],&rd,&da) &&
-                  a64_vector_view(tok[1],&rn,&sa) &&
+            valid=a64_vector_view(aliases,tok[0],&rd,&da) &&
+                  a64_vector_view(aliases,tok[1],&rn,&sa) &&
                   da==UINT32_C(0x40000800) && sa==da;
         }
         if(valid && tri) {
-            valid=a64_vector_view(tok[2],&rm,&ta) &&
+            valid=a64_vector_view(aliases,tok[2],&rm,&ta) &&
                   ta==UINT32_C(0x40000800);
         }
         if(!valid) {
@@ -3437,7 +3470,7 @@ reduction_done:;
         }
         if(tri)put_vector(&inst->operands[2],rm);
     } else if(!strcmp(op,"umov") || !strcmp(op,"smov") ||
-              (!strcmp(op,"mov") && args[0]=='d')) {
+              (!strcmp(op,"mov") && a64_register_prefix(aliases,args)=='d')) {
         /* One target-owned lane transfer for UMOV/SMOV and MOV Dn aliases,
          * with distinct signed-extension width rules and GNU encoding. */
         char dst[96],source[96];unsigned rd,rn;
@@ -3445,14 +3478,14 @@ reduction_done:;
         bool is_x,wide=false,sp,is_fp=!strcmp(op,"mov");
         bool signext=!strcmp(op,"smov");
         if(!split_two(args,dst,sizeof(dst),source,sizeof(source)) ||
-           !a64_ins_lane(source,&rn,&lane,&is_x)) {
+           !a64_ins_lane(aliases,source,&rn,&lane,&is_x)) {
             minias_set_error(as,"bad-aarch64-mov-lane:%s:line=%zu",
                              args,stmt->line);minias_mcinst_destroy(inst);return false;
         }
         if(is_fp) {
-            if(!a64_scalar_fp_d(dst,&rd) || !is_x)goto invalid_lane;
+            if(!a64_scalar_fp_d(aliases,dst,&rd) || !is_x)goto invalid_lane;
         }else {
-            if(!parse_a64_reg(dst,&rd,&wide,&sp) || sp)goto invalid_lane;
+            if(!parse_a64_reg(aliases,dst,&rd,&wide,&sp) || sp)goto invalid_lane;
             /* Signed: W <- B/H, X <- B/H/S. Unsigned: W <- B/H/S,
              * X <- D. Lane imm5's low set bit identifies element width. */
             if(signext) {
@@ -3488,8 +3521,8 @@ lane_complete:;
         bool wide,sp;int64_t off;
         if((as->target_options&A64_FEATURE_MTE)==0U ||
            !split_operands(args,tok,&n) || (n!=2U && n!=3U) ||
-           !parse_a64_reg(tok[0],&rt,&wide,&sp) || sp || !wide ||
-           !parse_a64_mem(tok[1],&rn,&off,&mode)) {
+           !parse_a64_reg(aliases,tok[0],&rt,&wide,&sp) || sp || !wide ||
+           !parse_a64_mem(aliases,tok[1],&rn,&off,&mode)) {
             minias_set_error(as,"bad-aarch64-stz2g:%s:line=%zu",
                              args,stmt->line);minias_mcinst_destroy(inst);return false;
         }
@@ -3520,7 +3553,7 @@ lane_complete:;
         put_reg(&inst->operands[0],rt,true);
         put_reg(&inst->operands[1],rn,true);
     } else if((!strcmp(op,"br")||!strcmp(op,"blr")) &&
-       parse_register(args,&reg,&reg64) && reg64) {
+       a64_parse_named_gpr(aliases,args,&reg,&reg64) && reg64) {
         inst->opcode=!strcmp(op,"br")?A64_MC_BR:A64_MC_BLR;
         inst->count=1U;
         put_reg(&inst->operands[0],reg,true);
@@ -3556,7 +3589,7 @@ lane_complete:;
         }
         parsed=split_operands_sized(args,tokens,cap,&n);
         if(!parsed || (n!=2U && n!=3U) ||
-           !parse_a64_reg(tokens[0],&rd,&wide,&sp) || sp) {
+           !parse_a64_reg(aliases,tokens[0],&rd,&wide,&sp) || sp) {
             /* Preserve the real GNU-expanded operand and register
              * shape in the pinned first-blocker census. Unsupported MOVW
              * syntax must not be silently normalized or misattributed. */
@@ -3640,17 +3673,18 @@ lane_complete:;
     } else if (strcmp(op, "ret") == 0 && *args == '\0') {
         inst->opcode = A64_MC_RET;
     } else if (strcmp(op, "ret") == 0 &&
-               parse_register(args, &reg, &reg64) && reg64) {
+               a64_parse_named_gpr(aliases,args, &reg, &reg64) && reg64) {
         inst->opcode = A64_MC_RET;
         inst->count = 1U;
         put_reg(&inst->operands[0],reg,true);
     } else if(!strcmp(op,"mov") &&
                split_two(args,first,sizeof(first),second,sizeof(second)) &&
-               first[0]=='v' && second[0]=='v') {
+               a64_register_prefix(aliases,first)=='v' &&
+               a64_register_prefix(aliases,second)=='v') {
         unsigned vd,vn;
         uint32_t da,sa;
-        if(!a64_vector_view(first,&vd,&da) ||
-           !a64_vector_view(second,&vn,&sa) || da!=sa ||
+        if(!a64_vector_view(aliases,first,&vd,&da) ||
+           !a64_vector_view(aliases,second,&vn,&sa) || da!=sa ||
            (da&UINT32_C(0xc00))!=0U) {
             minias_set_error(as,"bad-aarch64-mov-vector:%s:line=%zu",
                              args,stmt->line);
@@ -3663,7 +3697,7 @@ lane_complete:;
         put_vector(&inst->operands[1],vn);
     } else if (strcmp(op, "mov") == 0 &&
                split_two(args, first, sizeof(first), second, sizeof(second)) &&
-               parse_register(first, &reg, &reg64) &&
+               a64_parse_named_gpr(aliases,first, &reg, &reg64) &&
                parse_imm16(second, &imm)) {
         inst->opcode = A64_MC_MOVZ;
         inst->count = 2U;
@@ -3671,7 +3705,7 @@ lane_complete:;
         put_immediate(&inst->operands[1],(int64_t)imm);
     } else if (!strcmp(op,"mov") &&
                split_two(args,first,sizeof(first),second,sizeof(second)) &&
-               parse_register(first,&reg,&reg64) &&
+               a64_parse_named_gpr(aliases,first,&reg,&reg64) &&
                (second[0]=='-' || second[0]=='#' ||
                 isdigit((unsigned char)second[0]))) {
         /* One GNU MOV constant grammar and encoder, including signed
@@ -3777,7 +3811,7 @@ lane_complete:;
         MiniAsSymbolExpr expr;
         bool is_sp;
         if (!split_two(args, first, sizeof(first), second, sizeof(second)) ||
-            !parse_a64_reg(first, &reg, &reg64, &is_sp) || is_sp ||
+            !parse_a64_reg(aliases,first, &reg, &reg64, &is_sp) || is_sp ||
             !minias_parse_symbol_addend(second, &expr) ||
             (expr.addend & 3) != 0) {
             minias_set_error(as,"bad-aarch64-condbranch:%s:line=%zu",
@@ -3800,7 +3834,7 @@ lane_complete:;
         int64_t bit;
         MiniAsSymbolExpr expr;
         if(!split_operands(args,t,&n) || n!=3U ||
-           !parse_a64_reg(t[0],&rd,&wide,&sp) || sp ||
+           !parse_a64_reg(aliases,t[0],&rd,&wide,&sp) || sp ||
            !parse_signed_number(t[1],&bit) || bit<0 ||
            bit>=(wide?64:32) ||
            !minias_parse_symbol_addend(t[2],&expr) ||
@@ -3825,9 +3859,9 @@ lane_complete:;
             }
             inst->opcode=A64_MC_BCOND;inst->count=1U;
             inst->encoding=cond;
-        } else if (a64_parse_relocated(inst,op,args)) {
+        } else if (a64_parse_relocated(aliases,inst,op,args)) {
             /* ADRP/LO12 relocation is typed and target-owned. */
-        } else if (parse_integer_family(inst,op,args)) {
+        } else if (parse_integer_family(aliases,inst,op,args)) {
             /* Reuse existing typed register and memory IR. */
         } else {
             minias_set_error(as,"bad-aarch64-operands:%s:%s:line=%zu",
@@ -4735,7 +4769,7 @@ static bool directive(MiniAs *as, const char *op, const char *args,
         unsigned n;bool wide,sp;size_t i;
         *handled=true;
         while(isspace((unsigned char)*canonical))++canonical;
-        if((!parse_a64_reg(canonical,&n,&wide,&sp) &&
+        if((!parse_a64_reg(NULL,canonical,&n,&wide,&sp) &&
             !a64_req_vector_bank(canonical,&n)) ||
            !isalpha((unsigned char)op[0]) ||
            strlen(op)>=sizeof(((A64AliasState *)0)->entries[0].alias)) {

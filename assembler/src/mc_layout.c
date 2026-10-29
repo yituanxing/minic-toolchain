@@ -8,6 +8,58 @@
 /* Common MCLayout subsystem. Fragment identities are immutable; Target
  * hooks give ISA instruction widths and relaxation ranges. */
 
+/* One semantic contract between the source parser, MCLayout and emitter.
+ * Statement.kind remains a coarse Target-facing compatibility class, but
+ * the discriminated FragmentKind owns all final layout/materialization
+ * decisions. This check makes it impossible to silently fall back to
+ * interpreting source spelling when a producer forgets its typed payload.
+ */
+bool minias_validate_fragment_semantics(MiniAs *as) {
+    size_t i;
+    for(i=0U;i<as->stmt_count;++i) {
+        const MiniAsStmt *stmt=&as->stmts[i];
+        bool valid=false;
+        switch(stmt->fragment_kind) {
+        case MINIAS_FRAGMENT_INSTRUCTION:
+            valid=stmt->kind==MINIAS_STMT_INSN && stmt->mcinst!=NULL;
+            break;
+        case MINIAS_FRAGMENT_ALIGNMENT:
+            valid=stmt->kind==MINIAS_STMT_ALIGN &&
+                  stmt->org_mode==MINIAS_ORG_SOURCE &&
+                  stmt->align!=0U &&
+                  (stmt->align&(stmt->align-1U))==0U;
+            break;
+        case MINIAS_FRAGMENT_ORIGIN:
+            valid=stmt->kind==MINIAS_STMT_ALIGN &&
+                  stmt->org_mode!=MINIAS_ORG_SOURCE &&
+                  (stmt->org_mode!=MINIAS_ORG_TYPED_EXPR ||
+                   stmt->org_expr!=NULL);
+            break;
+        case MINIAS_FRAGMENT_FIXED_DATA:
+            valid=stmt->kind==MINIAS_STMT_DATA && stmt->mcdata!=NULL;
+            break;
+        case MINIAS_FRAGMENT_FILL:
+        case MINIAS_FRAGMENT_SPACE:
+            valid=stmt->kind==MINIAS_STMT_DATA &&
+                  stmt->variable_expr_count!=0U;
+            break;
+        case MINIAS_FRAGMENT_BYTES:
+            valid=stmt->kind==MINIAS_STMT_DATA &&
+                  stmt->static_data_size==(size_t)stmt->size &&
+                  (stmt->size==0U || stmt->static_data!=NULL);
+            break;
+        }
+        if(!valid) {
+            minias_set_error(as,
+                "invalid-typed-fragment:kind=%u:class=%u:line=%zu",
+                (unsigned)stmt->fragment_kind,(unsigned)stmt->kind,
+                stmt->line);
+            return false;
+        }
+    }
+    return true;
+}
+
 MiniAsSubsection *minias_find_subsection(MiniAs *as, int section, uint32_t number) {
     size_t i;
 
@@ -501,9 +553,7 @@ static bool minias_scan_fragment_layout(MiniAs *as, bool *placement_changed) {
                 return false;
             }
             stmt->offset = sub->size;
-            if (stmt->kind == MINIAS_STMT_ALIGN &&
-                stmt->org_mode == MINIAS_ORG_SOURCE &&
-                       strcmp(stmt->op, ".org") != 0) {
+            if (stmt->fragment_kind == MINIAS_FRAGMENT_ALIGNMENT) {
                 const uint64_t alignment = stmt->align;
                 uint64_t pad;
                 if (alignment == 0U ||
@@ -626,15 +676,13 @@ static bool minias_relayout_fragments(MiniAs *as, bool *org_changed) {
     }
     for(i=0U;i<graph->stmt_count;++i) {
         const MiniAsStmt *stmt=&as->stmts[i];
-        if(stmt->kind!=MINIAS_STMT_ALIGN ||
-           stmt->org_mode==MINIAS_ORG_SOURCE)continue;
+        if(stmt->fragment_kind!=MINIAS_FRAGMENT_ORIGIN)continue;
         if(!org_fragment_padding(as,stmt,stmt->offset,
                                  &graph->org_next_size[i]))return false;
     }
     for(i=0U;i<graph->stmt_count;++i) {
         MiniAsStmt *stmt=&as->stmts[i];
-        if(stmt->kind!=MINIAS_STMT_ALIGN ||
-           stmt->org_mode==MINIAS_ORG_SOURCE)continue;
+        if(stmt->fragment_kind!=MINIAS_FRAGMENT_ORIGIN)continue;
         if(stmt->size!=graph->org_next_size[i]) {
             stmt->size=graph->org_next_size[i];
             changed=true;
@@ -905,8 +953,7 @@ static bool minias_validate_fragment_layout(MiniAs *as) {
                                  (unsigned long long)stmt->offset);
                 goto done;
             }
-            if(stmt->kind==MINIAS_STMT_ALIGN &&
-               stmt->org_mode!=MINIAS_ORG_SOURCE) {
+            if(stmt->fragment_kind==MINIAS_FRAGMENT_ORIGIN) {
                 uint32_t padding;
                 if (!org_fragment_padding(as,stmt,expected,&padding))
                     goto done;
@@ -917,8 +964,7 @@ static bool minias_validate_fragment_layout(MiniAs *as) {
                         (unsigned long long)expected);
                     goto done;
                 }
-            } else if(stmt->kind==MINIAS_STMT_ALIGN &&
-                      strcmp(stmt->op,".org")!=0) {
+            } else if(stmt->fragment_kind==MINIAS_FRAGMENT_ALIGNMENT) {
                 uint64_t alignment=stmt->align,padding;
                 if(alignment==0U || (alignment&(alignment-1U))!=0U) {
                     minias_set_error(as,"invalid-layout-alignment:line=%zu",
@@ -936,10 +982,8 @@ static bool minias_validate_fragment_layout(MiniAs *as) {
                 }
             }
             if(stmt->variable_data_resolved &&
-               (strcmp(stmt->op,".fill")==0 ||
-                strcmp(stmt->op,".space")==0 ||
-                strcmp(stmt->op,".skip")==0 ||
-                strcmp(stmt->op,".zero")==0)) {
+               (stmt->fragment_kind==MINIAS_FRAGMENT_FILL ||
+                stmt->fragment_kind==MINIAS_FRAGMENT_SPACE)) {
                 uint64_t count=stmt->variable_repeat;
                 unsigned width=stmt->variable_element_width;
                 if(width>8U || (width!=0U &&
@@ -1015,7 +1059,8 @@ bool minias_solve_fragment_layout(MiniAs *as,
     bool added=false;
     size_t passes=0U;
     *reparse_source=false;
-    if(!minias_resolve_deferred_data(as) ||
+    if(!minias_validate_fragment_semantics(as) ||
+       !minias_resolve_deferred_data(as) ||
        !collect_out_of_range_branches(as,forced_ids,forced_count,
                                        forced_capacity,&added))
         return false;

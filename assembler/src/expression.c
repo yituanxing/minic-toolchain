@@ -1,4 +1,5 @@
 #include "minias_internal.h"
+#include "expression_grammar.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -9,6 +10,56 @@ typedef struct MiniAsAddendParser {
     const char *cursor;
     bool signed_shift;
 } MiniAsAddendParser;
+
+typedef struct MiniAsExprOperatorSpec {
+    const char *text;
+    MiniAsExprBinaryOp op;
+    unsigned precedence;
+    unsigned width;
+} MiniAsExprOperatorSpec;
+
+/* Single longest-token-first GNU operator table.  No evaluator is allowed
+ * to privately reinterpret `<<` as `<`, `&&` as `&`, etc.  The unsigned,
+ * checked signed and deferred evaluators select their own supported levels. */
+#define EXPR_TOKEN(text,op,precedence) \
+    {text,op,precedence,(unsigned)(sizeof(text)-1U)}
+static const MiniAsExprOperatorSpec minias_expr_binary_ops[] = {
+    EXPR_TOKEN("||",MINIAS_EXPR_OP_LOR,1U),
+    EXPR_TOKEN("&&",MINIAS_EXPR_OP_LAND,2U),
+    EXPR_TOKEN("==",MINIAS_EXPR_OP_EQ,6U),
+    EXPR_TOKEN("!=",MINIAS_EXPR_OP_NE,6U),
+    EXPR_TOKEN("<=",MINIAS_EXPR_OP_LE,7U),
+    EXPR_TOKEN(">=",MINIAS_EXPR_OP_GE,7U),
+    EXPR_TOKEN("<<",MINIAS_EXPR_OP_SHL,8U),
+    EXPR_TOKEN(">>",MINIAS_EXPR_OP_SHR,8U),
+    EXPR_TOKEN("|",MINIAS_EXPR_OP_OR,3U),
+    EXPR_TOKEN("^",MINIAS_EXPR_OP_XOR,4U),
+    EXPR_TOKEN("&",MINIAS_EXPR_OP_AND,5U),
+    EXPR_TOKEN("<",MINIAS_EXPR_OP_LT,7U),
+    EXPR_TOKEN(">",MINIAS_EXPR_OP_GT,7U),
+    EXPR_TOKEN("+",MINIAS_EXPR_OP_ADD,9U),
+    EXPR_TOKEN("-",MINIAS_EXPR_OP_SUB,9U),
+    EXPR_TOKEN("*",MINIAS_EXPR_OP_MUL,10U),
+    EXPR_TOKEN("/",MINIAS_EXPR_OP_DIV,10U),
+    EXPR_TOKEN("%",MINIAS_EXPR_OP_MOD,10U)
+};
+#undef EXPR_TOKEN
+
+bool minias_expr_scan_binary(const char *cursor,MiniAsExprBinary *out) {
+    size_t i;
+    if(!cursor || !out)return false;
+    for(i=0U;i<sizeof(minias_expr_binary_ops)/
+                sizeof(minias_expr_binary_ops[0]);++i) {
+        const MiniAsExprOperatorSpec *spec=&minias_expr_binary_ops[i];
+        if(cursor[0]!=spec->text[0] ||
+           strncmp(cursor,spec->text,spec->width)!=0)continue;
+        out->op=spec->op;
+        out->precedence=spec->precedence;
+        out->width=spec->width;
+        return true;
+    }
+    return false;
+}
 
 /* One canonical integer literal owner for Target ISA immediates and
  * Common layout expressions. C17 strtoull(base=0) is not required to
@@ -50,23 +101,17 @@ bool minias_parse_number_literal(const char *text,char **end,
     return true;
 }
 
-static void skip_addend_space(MiniAsAddendParser *parser) {
-    while (*parser->cursor == ' ' || *parser->cursor == '\t') {
-        ++parser->cursor;
-    }
-}
-
 static bool parse_addend_or(MiniAsAddendParser *parser, uint64_t *value);
 
 static bool parse_addend_primary(MiniAsAddendParser *parser, uint64_t *value) {
     char *end = NULL;
-    skip_addend_space(parser);
+    minias_expr_skip_space(&parser->cursor);
     if (*parser->cursor == '(') {
         ++parser->cursor;
         if (!parse_addend_or(parser, value)) {
             return false;
         }
-        skip_addend_space(parser);
+        minias_expr_skip_space(&parser->cursor);
         if (*parser->cursor != ')') {
             return false;
         }
@@ -80,7 +125,7 @@ static bool parse_addend_primary(MiniAsAddendParser *parser, uint64_t *value) {
 }
 
 static bool parse_addend_unary(MiniAsAddendParser *parser, uint64_t *value) {
-    skip_addend_space(parser);
+    minias_expr_skip_space(&parser->cursor);
     if (*parser->cursor == '+') {
         ++parser->cursor;
         return parse_addend_unary(parser, value);
@@ -120,25 +165,22 @@ static bool parse_addend_mul(MiniAsAddendParser *parser, uint64_t *value) {
         return false;
     }
     for (;;) {
-        char op;
+        MiniAsExprBinaryOp op;
         uint64_t rhs;
 
-        skip_addend_space(parser);
-        op = *parser->cursor;
-        if (op != '*' && op != '/' && op != '%') {
+        if (!minias_expr_take_binary(&parser->cursor,10U,&op)) {
             break;
         }
-        ++parser->cursor;
         if (!parse_addend_unary(parser, &rhs)) {
             return false;
         }
-        if (op == '*') {
+        if (op == MINIAS_EXPR_OP_MUL) {
             result *= rhs;
         } else {
             if (rhs == 0U) {
                 return false;
             }
-            result = op == '/' ? result / rhs : result % rhs;
+            result = op == MINIAS_EXPR_OP_DIV ? result / rhs : result % rhs;
         }
     }
     *value = result;
@@ -152,19 +194,16 @@ static bool parse_addend_sum(MiniAsAddendParser *parser, uint64_t *value) {
         return false;
     }
     for (;;) {
-        char op;
+        MiniAsExprBinaryOp op;
         uint64_t rhs;
 
-        skip_addend_space(parser);
-        op = *parser->cursor;
-        if (op != '+' && op != '-') {
+        if (!minias_expr_take_binary(&parser->cursor,9U,&op)) {
             break;
         }
-        ++parser->cursor;
         if (!parse_addend_mul(parser, &rhs)) {
             return false;
         }
-        result = op == '+' ? result + rhs : result - rhs;
+        result = op == MINIAS_EXPR_OP_ADD ? result + rhs : result - rhs;
     }
     *value = result;
     return true;
@@ -177,22 +216,16 @@ static bool parse_addend_shift(MiniAsAddendParser *parser, uint64_t *value) {
         return false;
     }
     for (;;) {
-        bool left;
+        MiniAsExprBinaryOp op;
         uint64_t rhs;
 
-        skip_addend_space(parser);
-        if (strncmp(parser->cursor, "<<", 2U) == 0) {
-            left = true;
-        } else if (strncmp(parser->cursor, ">>", 2U) == 0) {
-            left = false;
-        } else {
+        if (!minias_expr_take_binary(&parser->cursor,8U,&op)) {
             break;
         }
-        parser->cursor += 2;
         if (!parse_addend_sum(parser, &rhs) || rhs >= 64U) {
             return false;
         }
-        if (left) {
+        if (op == MINIAS_EXPR_OP_SHL) {
             result <<= (unsigned int)rhs;
         } else if (parser->signed_shift && rhs != 0U &&
                    (result & (UINT64_C(1) << 63U)) != 0U) {
@@ -215,12 +248,11 @@ static bool parse_addend_and(MiniAsAddendParser *parser, uint64_t *value) {
         return false;
     }
     for (;;) {
+        MiniAsExprBinaryOp op;
         uint64_t rhs;
-        skip_addend_space(parser);
-        if (*parser->cursor != '&' || parser->cursor[1] == '&') {
+        if (!minias_expr_take_binary(&parser->cursor,5U,&op)) {
             break;
         }
-        ++parser->cursor;
         if (!parse_addend_shift(parser, &rhs)) {
             return false;
         }
@@ -237,12 +269,11 @@ static bool parse_addend_xor(MiniAsAddendParser *parser, uint64_t *value) {
         return false;
     }
     for (;;) {
+        MiniAsExprBinaryOp op;
         uint64_t rhs;
-        skip_addend_space(parser);
-        if (*parser->cursor != '^') {
+        if (!minias_expr_take_binary(&parser->cursor,4U,&op)) {
             break;
         }
-        ++parser->cursor;
         if (!parse_addend_and(parser, &rhs)) {
             return false;
         }
@@ -259,12 +290,11 @@ static bool parse_addend_or(MiniAsAddendParser *parser, uint64_t *value) {
         return false;
     }
     for (;;) {
+        MiniAsExprBinaryOp op;
         uint64_t rhs;
-        skip_addend_space(parser);
-        if (*parser->cursor != '|' || parser->cursor[1] == '|') {
+        if (!minias_expr_take_binary(&parser->cursor,3U,&op)) {
             break;
         }
-        ++parser->cursor;
         if (!parse_addend_xor(parser, &rhs)) {
             return false;
         }
@@ -284,7 +314,7 @@ bool minias_eval_u64_expression(const char *text, uint64_t *value) {
     if (!parse_addend_or(&parser, value)) {
         return false;
     }
-    skip_addend_space(&parser);
+    minias_expr_skip_space(&parser.cursor);
     return *parser.cursor == '\0';
 }
 
@@ -298,7 +328,7 @@ bool minias_eval_i64_expression(const char *text, int64_t *value) {
     parser.cursor=text;
     parser.signed_shift=true;
     if (!parse_addend_or(&parser,&bits)) return false;
-    skip_addend_space(&parser);
+    minias_expr_skip_space(&parser.cursor);
     if (*parser.cursor!='\0') return false;
     *value=(int64_t)bits;
     return true;

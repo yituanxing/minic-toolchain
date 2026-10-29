@@ -191,71 +191,10 @@ static bool strict_base_i_check_sections(MiniAs *as) {
 
 
 
-/* The selected ISA is enforced at the target boundary, not in the common
- * assembler. No -march preserves the historical Linux assembler behavior. */
-static uint64_t riscv_legacy_required_features(const char *op) {
-    /* Legacy/pseudo and extension families not yet represented by the
-     * fixed-width table retain their existing GNU mnemonic policy. */
-    if (strcmp(op, "mulhsu") == 0) return RISCV_ISA_M;
-    if (strncmp(op, "amo", 3U) == 0 ||
-        strncmp(op, "lr.", 3U) == 0 ||
-        strncmp(op, "sc.", 3U) == 0) return RISCV_ISA_A;
-    if (strncmp(op, "c.", 2U) == 0) return RISCV_ISA_C;
-    if (strncmp(op, "vset", 4U) == 0 ||
-        strncmp(op, "vle", 3U) == 0 ||
-        strncmp(op, "vse", 3U) == 0 ||
-        strncmp(op, "vmv.", 4U) == 0) return RISCV_ISA_V;
-    if (strncmp(op, "csr", 3U) == 0) return RISCV_ISA_ZICSR;
-    if (strcmp(op, "fence.i") == 0) return RISCV_ISA_ZIFENCEI;
-    if (strcmp(op, "frcsr") == 0 || strcmp(op, "fscsr") == 0)
-        return RISCV_ISA_F | RISCV_ISA_ZICSR;
-    if (strcmp(op, "fld") == 0 || strcmp(op, "fsd") == 0 ||
-        (op[0] == 'f' && strstr(op, ".d") != NULL))
-        return RISCV_ISA_D;
-    if (strcmp(op, "flw") == 0 || strcmp(op, "fsw") == 0 ||
-        (op[0] == 'f' && (strncmp(op, "fadd", 4U) == 0 ||
-         strncmp(op, "fsub", 4U) == 0 ||
-         strncmp(op, "fmul", 4U) == 0 ||
-         strncmp(op, "fdiv", 4U) == 0 ||
-         strncmp(op, "fmv.", 4U) == 0 ||
-         strncmp(op, "fsgnj", 5U) == 0 ||
-         strncmp(op, "fcvt", 4U) == 0 ||
-         strncmp(op, "feq", 3U) == 0 ||
-         strncmp(op, "flt", 3U) == 0 ||
-         strncmp(op, "fle", 3U) == 0))) return RISCV_ISA_F;
-    /* These unprivileged ISA profiles cannot assert implementation of
-     * privileged or otherwise unmodelled extension families. */
-    if (strcmp(op, "sret") == 0 || strcmp(op, "sfence.vma") == 0 ||
-        strcmp(op, "wfi") == 0 || strcmp(op, "pause") == 0)
-        return UINT64_MAX;
-    return 0U;
-}
-static bool riscv_legacy_rv64_only_opcode(const char *op) {
-    /* The fixed-word descriptor table already marks LD/SD, word ALU and
-     * shifts. Multiword and extension instruction families retain typed
-     * operands but are parsed through different target-private dispatchers;
-     * they must obey XLEN even when no explicit -march was requested. */
-    if (strcmp(op, "negw") == 0 ||
-        strcmp(op, "fmv.x.d") == 0 || strcmp(op, "fmv.d.x") == 0 ||
-        strcmp(op, "fcvt.d.l") == 0 || strcmp(op, "fcvt.d.lu") == 0 ||
-        strcmp(op, "fcvt.l.d") == 0 || strcmp(op, "fcvt.lu.d") == 0)
-        return true;
-
-    /* RV32A supports 32-bit AMOs, not the 64-bit .d forms. Restrict the
-     * suffix check to atomic families: e.g. FLD/ FSD are legal on RV32D,
-     * and RV32V can use vector element widths larger than XLEN. */
-    if (strncmp(op, "amo", 3U) == 0 || strncmp(op, "lr.", 3U) == 0 ||
-        strncmp(op, "sc.", 3U) == 0) {
-        const char *width = strstr(op, ".d");
-        return width != NULL && (width[2] == '\0' || width[2] == '.');
-    }
-    return false;
-}
-/* ISA legality consumes one descriptor lookup per instruction.  The typed
- * descriptor table is authoritative when it recognizes the mnemonic; only
- * the remaining pseudo/extension families use the isolated compatibility
- * policy below.  Parser and validator must not each interpret separate
- * copies of the same descriptor metadata. */
+/* ISA legality consumes one Target-private descriptor policy: fixed-form
+ * instruction metadata and dynamic pseudo/extension parse-form metadata
+ * live together in riscv_encode.c. No -march preserves the historical
+ * permissive compatibility mode, but it cannot invent an unknown opcode. */
 typedef struct RiscvInstructionPolicy {
     uint64_t required_features;
     bool rv64_only;
@@ -263,11 +202,8 @@ typedef struct RiscvInstructionPolicy {
 
 static RiscvInstructionPolicy riscv_instruction_policy(const char *op) {
     RiscvInstructionPolicy policy = {0U, false};
-    if (!minias_riscv_mc_descriptor_policy(op, &policy.required_features,
-                                            &policy.rv64_only, NULL)) {
-        policy.required_features = riscv_legacy_required_features(op);
-        policy.rv64_only = riscv_legacy_rv64_only_opcode(op);
-    }
+    (void)minias_riscv_mc_descriptor_policy(op, &policy.required_features,
+                                            &policy.rv64_only, NULL);
     return policy;
 }
 
@@ -721,7 +657,90 @@ static bool riscv_init_target_state(MiniAs *as,
     return true;
 }
 
+/* MCInst is heap-owned and stable even if Common grows/reorders its statement
+ * vector. A Target-local table owns the lowering plan, not a second parser or
+ * a mutable layout offset. Rehash only copies plans; never the MCInst itself. */
+static size_t riscv_li_plan_bucket(const MiniAsMCInst *inst, size_t mask) {
+    uintptr_t value = (uintptr_t)inst >> 4U;
+    value ^= value >> 17U;
+    value ^= value >> 9U;
+    return (size_t)value & mask;
+}
+
+static bool riscv_li_plan_reserve(MiniAs *as, MiniAsRiscvState *state) {
+    size_t next = state->li_plan_capacity == 0U ? 64U :
+                  state->li_plan_capacity * 2U;
+    MiniAsRiscvLiPlan *slots;
+    size_t i;
+    if (next < state->li_plan_capacity ||
+        next > SIZE_MAX / sizeof(*slots)) {
+        minias_set_error(as, "out-of-memory:riscv-li-plan-capacity");
+        return false;
+    }
+    slots = calloc(next, sizeof(*slots));
+    if (slots == NULL) {
+        minias_set_error(as, "out-of-memory:riscv-li-plan-table");
+        return false;
+    }
+    for (i = 0U; i < state->li_plan_capacity; ++i) {
+        size_t bucket;
+        if (state->li_plans[i].key == NULL) continue;
+        bucket = riscv_li_plan_bucket(state->li_plans[i].key, next - 1U);
+        while (slots[bucket].key != NULL)
+            bucket = (bucket + 1U) & (next - 1U);
+        slots[bucket] = state->li_plans[i];
+    }
+    free(state->li_plans);
+    state->li_plans = slots;
+    state->li_plan_capacity = next;
+    return true;
+}
+
+bool minias_riscv_store_li_plan(MiniAs *as, const MiniAsMCInst *inst,
+                               const uint32_t *words, unsigned count) {
+    MiniAsRiscvState *state = MINIAS_RV_STATE(as);
+    size_t bucket;
+    if (state == NULL || inst == NULL || words == NULL ||
+        count == 0U || count > 16U) {
+        minias_set_error(as, "invalid-riscv-li-lowering-plan");
+        return false;
+    }
+    /* Keep maximum occupancy below 75%, including the new entry. */
+    if (state->li_plan_capacity == 0U ||
+        (state->li_plan_count + 1U) * 4U >=
+        state->li_plan_capacity * 3U) {
+        if (!riscv_li_plan_reserve(as, state)) return false;
+    }
+    bucket = riscv_li_plan_bucket(inst, state->li_plan_capacity - 1U);
+    while (state->li_plans[bucket].key != NULL &&
+           state->li_plans[bucket].key != inst)
+        bucket = (bucket + 1U) & (state->li_plan_capacity - 1U);
+    if (state->li_plans[bucket].key == NULL) ++state->li_plan_count;
+    state->li_plans[bucket].key = inst;
+    state->li_plans[bucket].count = count;
+    memcpy(state->li_plans[bucket].words, words,
+           count * sizeof(*words));
+    return true;
+}
+
+const MiniAsRiscvLiPlan *minias_riscv_find_li_plan(
+    const MiniAs *as, const MiniAsMCInst *inst) {
+    const MiniAsRiscvState *state = MINIAS_RV_STATE(as);
+    size_t bucket;
+    if (state == NULL || inst == NULL || state->li_plan_capacity == 0U)
+        return NULL;
+    bucket = riscv_li_plan_bucket(inst, state->li_plan_capacity - 1U);
+    while (state->li_plans[bucket].key != NULL) {
+        if (state->li_plans[bucket].key == inst)
+            return &state->li_plans[bucket];
+        bucket = (bucket + 1U) & (state->li_plan_capacity - 1U);
+    }
+    return NULL;
+}
+
 static void riscv_destroy_target_state(MiniAs *as) {
+    if (as->target_state != NULL)
+        free(MINIAS_RV_STATE(as)->li_plans);
     free(as->target_state);
     as->target_state = NULL;
 }

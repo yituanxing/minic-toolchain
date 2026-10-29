@@ -674,10 +674,10 @@ bool minias_emit_instruction_bytes(MiniAs *as, int section_index,
     /* Instruction and executable-padding fragments use the same private
      * byte transaction.  A Target cannot append alignment NOPs directly to
      * the final Section, where a failed encoder would leave partial bytes. */
-    if ((owner->kind != MINIAS_STMT_INSN &&
-         !(owner->kind == MINIAS_STMT_ALIGN &&
+    if ((owner->fragment_kind != MINIAS_FRAGMENT_INSTRUCTION &&
+         !(owner->fragment_kind == MINIAS_FRAGMENT_ALIGNMENT &&
            (sec->flags & MINIAS_SHF_EXECINSTR) != 0U &&
-           !owner->align_has_fill && strcmp(owner->op,".org") != 0)) ||
+           !owner->align_has_fill)) ||
         owner->section != section_index ||
         sec->type == MINIAS_SHT_NOBITS ||
         size > SIZE_MAX - sec->size ||
@@ -699,6 +699,26 @@ bool minias_emit_instruction_bytes(MiniAs *as, int section_index,
      * never updates a final Section size or cursor while encoding. */
     return true;
 
+}
+
+/* Source-order and final position are Common-owned properties, not private
+ * target parser data.  The x86 padding policy queries this site predicate
+ * without reaching through MiniAs into neighboring retained statements. */
+bool minias_code_alignment_preceded_by_adjacent_data(const MiniAs *as,
+                                                      int section) {
+    const MiniAsStmt *owner, *previous;
+    if(as==NULL || !as->emitting_fragment ||
+       as->emitting_fragment_id==0U ||
+       as->emitting_fragment_id>=as->stmt_count)return false;
+    owner=&as->stmts[as->emitting_fragment_id];
+    previous=&as->stmts[as->emitting_fragment_id-1U];
+    return owner->fragment_kind==MINIAS_FRAGMENT_ALIGNMENT &&
+           owner->section==section &&
+           previous->kind==MINIAS_STMT_DATA &&
+           previous->section==section &&
+           previous->subsection==owner->subsection &&
+           previous->offset<=UINT64_MAX-previous->size &&
+           previous->offset+previous->size==owner->offset;
 }
 
 bool minias_section_append(MiniAs *as, int section_index, const void *data, size_t size) {
@@ -928,6 +948,11 @@ static bool add_stmt(MiniAs *as,
     st = &as->stmts[as->stmt_count];
     memset(st, 0, sizeof(*st));
     st->kind = kind;
+    st->fragment_kind = kind == MINIAS_STMT_INSN
+                        ? MINIAS_FRAGMENT_INSTRUCTION
+                        : kind == MINIAS_STMT_ALIGN
+                        ? MINIAS_FRAGMENT_ALIGNMENT
+                        : MINIAS_FRAGMENT_FIXED_DATA;
     st->op = minias_strdup(op);
     st->args = minias_strdup(args == NULL ? "" : args);
     st->line = line;
@@ -1904,6 +1929,7 @@ static bool handle_org_position(MiniAs *as, const char *args,
         minias_deferred_expr_destroy(deferred);
         return false;
     }
+    as->stmts[as->stmt_count-1U].fragment_kind=MINIAS_FRAGMENT_ORIGIN;
     as->stmts[as->stmt_count - 1U].align_has_fill = has_fill;
     as->stmts[as->stmt_count - 1U].align_fill = fill;
     if(deferred!=NULL) {
@@ -2665,6 +2691,7 @@ static bool snapshot_mutable_data_tokens(MiniAs *as,const char *input,
 static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
     uint64_t count = 0U;
     uint64_t bytes;
+    MiniAsFragmentKind fragment_kind=MINIAS_FRAGMENT_FIXED_DATA;
     unsigned int width = data_width(as, op);
     char *copy = NULL;
     char *cursor;
@@ -2681,6 +2708,7 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
     bool has_binary_snapshot=false;
 
     if (!strcmp(op,".fill")) {
+        fragment_kind=MINIAS_FRAGMENT_FILL;
         unsigned elem=0U;
         uint64_t repeats=0U,value=0U;
         delayed=common_data_has_symbolic_token(args);
@@ -2700,6 +2728,7 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
             variable_width=elem;
         }
     } else if (strcmp(op,".uleb128")==0 || strcmp(op,".sleb128")==0) {
+        fragment_kind=MINIAS_FRAGMENT_BYTES;
         unsigned char coded[10];
         size_t len=0U;
         if(!minias_leb_bytes(as,op,args,coded,&len)) {
@@ -2711,12 +2740,14 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
         leb_snapshot_size=len;
         has_leb_snapshot=true;
     } else if (strcmp(op, ".incbin") == 0) {
+        fragment_kind=MINIAS_FRAGMENT_BYTES;
         if(!capture_incbin(as,args,line,&string_snapshot,
                            &string_snapshot_size))return false;
         bytes=(uint64_t)string_snapshot_size;
         has_binary_snapshot=true;
     } else if (strcmp(op, ".asciz") == 0 || strcmp(op, ".string") == 0 ||
         strcmp(op, ".ascii") == 0) {
+        fragment_kind=MINIAS_FRAGMENT_BYTES;
         unsigned char *decoded = NULL;
         size_t decoded_size = 0U;
         bool terminate = strcmp(op, ".ascii") != 0;
@@ -2732,6 +2763,7 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
         bytes = (uint64_t)decoded_size;
     } else if (strcmp(op, ".zero") == 0 || strcmp(op, ".space") == 0 ||
                strcmp(op, ".skip") == 0) {
+        fragment_kind=MINIAS_FRAGMENT_SPACE;
         uint8_t fill=0U;
         delayed=common_data_has_symbolic_token(args);
         if (!minias_parse_common_space(as,args,&count,&fill)) {
@@ -2854,8 +2886,8 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
         if(!changed){free(snapshot);snapshot=NULL;}
     }
     if(!snapshot && as->has_mutable_absolute_sets &&
-       (!strcmp(op,".fill") || !strcmp(op,".space") ||
-        !strcmp(op,".skip") || !strcmp(op,".zero")) &&
+       (fragment_kind==MINIAS_FRAGMENT_FILL ||
+        fragment_kind==MINIAS_FRAGMENT_SPACE) &&
        !snapshot_mutable_data_tokens(as,args,&snapshot))return false;
     if (!add_stmt(as, MINIAS_STMT_DATA, op,
                   snapshot?snapshot:args, line, (uint32_t)bytes, 1U)) {
@@ -2863,6 +2895,7 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
         free(string_snapshot);
         return false;
     }
+    as->stmts[as->stmt_count-1U].fragment_kind=fragment_kind;
     free(snapshot);
     if(has_leb_snapshot || has_binary_snapshot || string_snapshot!=NULL) {
         MiniAsStmt *stmt=&as->stmts[as->stmt_count-1U];
@@ -2890,8 +2923,8 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
     if(width!=0U &&
        !minias_compile_data_mc(as,&as->stmts[as->stmt_count-1U],width))
         return false;
-    if((!strcmp(op,".fill") || !strcmp(op,".space") ||
-        !strcmp(op,".skip") || !strcmp(op,".zero")) &&
+    if((fragment_kind==MINIAS_FRAGMENT_FILL ||
+        fragment_kind==MINIAS_FRAGMENT_SPACE) &&
        !minias_compile_variable_exprs(as,&as->stmts[as->stmt_count-1U]))
         return false;
     if(delayed) {
@@ -2908,8 +2941,11 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
 }
 
 static bool emit_data_stmt(MiniAs *as, const MiniAsStmt *stmt) {
-
-    if(!strcmp(stmt->op,".fill")) {
+    /* Source spelling is intentionally absent from this dispatcher.
+     * Every data producer, including synthesized literal pools, installs
+     * its semantic FragmentKind while parsing, once and for all. */
+    switch(stmt->fragment_kind) {
+    case MINIAS_FRAGMENT_FILL: {
         uint64_t repeat=stmt->variable_repeat;
         uint64_t value=stmt->variable_value;
         uint64_t i;
@@ -2931,12 +2967,7 @@ static bool emit_data_stmt(MiniAs *as, const MiniAsStmt *stmt) {
                 return false;
         return true;
     }
-    if(strcmp(stmt->op,".uleb128")==0 ||
-       strcmp(stmt->op,".sleb128")==0 ||
-       strcmp(stmt->op,".ascii")==0 ||
-       strcmp(stmt->op,".asciz")==0 ||
-       strcmp(stmt->op,".string")==0 ||
-       strcmp(stmt->op,".incbin")==0) {
+    case MINIAS_FRAGMENT_BYTES:
         if(stmt->static_data_size!=stmt->size ||
            (stmt->size!=0U && !stmt->static_data)) {
             minias_set_error(as,"immutable-data-fragment-size:line=%zu",
@@ -2947,10 +2978,7 @@ static bool emit_data_stmt(MiniAs *as, const MiniAsStmt *stmt) {
          * lexical source site; no second lexer or absolute-evaluator pass. */
         return minias_section_append(as,stmt->section,
                                      stmt->static_data,stmt->static_data_size);
-    }
-    if (strcmp(stmt->op, ".zero") == 0 ||
-        strcmp(stmt->op, ".space") == 0 ||
-        strcmp(stmt->op, ".skip") == 0) {
+    case MINIAS_FRAGMENT_SPACE:
         if(!stmt->variable_data_resolved ||
            stmt->variable_element_width!=1U ||
            stmt->variable_repeat!=(uint64_t)stmt->size ||
@@ -2961,9 +2989,13 @@ static bool emit_data_stmt(MiniAs *as, const MiniAsStmt *stmt) {
         }
         return emit_common_space(as,stmt->section,stmt->size,
                                  (uint8_t)stmt->variable_value);
+    case MINIAS_FRAGMENT_FIXED_DATA:
+        return minias_emit_mc_data(as,stmt);
+    default:
+        minias_set_error(as,"unexpected-data-fragment-kind:%u:line=%zu",
+                         (unsigned)stmt->fragment_kind,stmt->line);
+        return false;
     }
-
-    return minias_emit_mc_data(as,stmt);
 }
 
 static bool parse_numeric_label_id(const char *text, size_t *id) {
@@ -4073,6 +4105,23 @@ typedef struct MiniAsSourceLine {
     size_t line;
 } MiniAsSourceLine;
 
+/* The physical file and each expanded source body are processed by the
+ * same macro/REPT/IRP collector. A SourceFrame owns only its lexical text;
+ * the assembler retains typed Fragment/Symbol data independently of it.
+ * Later conditional-region invalidation can retain this frame instead of
+ * depending on a second physical-file parser with different state rules. */
+typedef enum MiniAsSourceFrameKind {
+    MINIAS_SOURCE_FRAME_FILE,
+    MINIAS_SOURCE_FRAME_EXPANSION
+} MiniAsSourceFrameKind;
+
+typedef struct MiniAsSourceFrame {
+    MiniAsSourceFrameKind kind;
+    MiniAsSourceLine *lines;
+    size_t count;
+    size_t capacity;
+} MiniAsSourceFrame;
+
 static void destroy_source_lines(MiniAsSourceLine *lines, size_t count);
 static bool valid_irp_parameter_name(const char *name);
 static char *substitute_irp_parameter(MiniAs *as,
@@ -4598,6 +4647,23 @@ static bool process_source_range(MiniAs *as,
                                  MiniAsSourceLine *lines,
                                  size_t begin,
                                  size_t end);
+static bool process_inline_repeat_line(MiniAs *as,const char *source,
+                                       size_t line,bool *handled);
+
+/* Collector entry is the same for physical FILE frames and expansion views.
+ * Its caller owns frame storage; the recursive collector may borrow a slice
+ * for nested macro and repetition bodies without making source copies. */
+static bool process_source_frame(MiniAs *as,
+                                 const MiniAsSourceFrame *frame) {
+    if(frame==NULL ||
+       (frame->kind!=MINIAS_SOURCE_FRAME_FILE &&
+        frame->kind!=MINIAS_SOURCE_FRAME_EXPANSION) ||
+       (frame->count!=0U && frame->lines==NULL)) {
+        minias_set_error(as,"invalid-source-frame");
+        return false;
+    }
+    return process_source_range(as,frame->lines,0U,frame->count);
+}
 
 static char *strip_macro_argument_quotes(char *text) {
     size_t len;
@@ -4802,7 +4868,14 @@ static bool expand_macro_invocation(MiniAs *as,
         expanded[i].line = macro->body_lines[i];
     }
     ++as->macro_expansion_depth;
-    ok = process_source_range(as, expanded, 0U, body_count);
+    {
+        const MiniAsSourceFrame frame={
+            .kind=MINIAS_SOURCE_FRAME_EXPANSION,
+            .lines=expanded,
+            .count=body_count
+        };
+        ok=process_source_frame(as,&frame);
+    }
     --as->macro_expansion_depth;
 
 done:
@@ -4810,72 +4883,6 @@ done:
     free(vararg_buffer);
     free(copy);
     return ok;
-}
-
-static bool read_macro_block(MiniAs *as,
-                             FILE *file,
-                             size_t *line_no,
-                             MiniAsSourceLine **lines_out,
-                             size_t *count_out) {
-    char linebuf[65536];
-    MiniAsSourceLine *lines = NULL;
-    size_t count = 0U;
-    size_t capacity = 0U;
-    size_t depth = 1U;
-
-    while (fgets(linebuf, sizeof(linebuf), file) != NULL) {
-        char argument[1024];
-        int kind;
-        size_t len;
-
-        ++*line_no;
-        if(!validate_user_source_private_marker(as,linebuf,*line_no)) {
-            destroy_source_lines(lines,count);
-            return false;
-        }
-        strip_gnu_c_comments(as,linebuf);
-        len = strlen(linebuf);
-        if (len == sizeof(linebuf) - 1U && linebuf[len - 1U] != '\n') {
-            minias_set_error(as, "line-too-long:line=%zu", *line_no);
-            destroy_source_lines(lines, count);
-            return false;
-        }
-        kind = classify_macro_line(as, linebuf, argument, sizeof(argument));
-        if (kind < 0) {
-            minias_set_error(as, "out-of-memory:macro-classify");
-            destroy_source_lines(lines, count);
-            return false;
-        }
-        if (kind == MINIAS_MACRO_BEGIN) {
-            ++depth;
-        } else if (kind == MINIAS_MACRO_END) {
-            --depth;
-            if (depth == 0U) {
-                *lines_out = lines;
-                *count_out = count;
-                return true;
-            }
-        }
-        if (!minias_grow_array((void **)&lines,
-                        &capacity,
-                        sizeof(*lines),
-                        count + 1U)) {
-            minias_set_error(as, "out-of-memory:macro-source-lines");
-            destroy_source_lines(lines, count);
-            return false;
-        }
-        lines[count].text = minias_strdup(linebuf);
-        lines[count].line = *line_no;
-        if (lines[count].text == NULL) {
-            minias_set_error(as, "out-of-memory:macro-source-line");
-            destroy_source_lines(lines, count);
-            return false;
-        }
-        ++count;
-    }
-    minias_set_error(as, "unterminated-directive:.macro");
-    destroy_source_lines(lines, count);
-    return false;
 }
 
 enum {
@@ -5250,7 +5257,12 @@ static bool process_irp_block(MiniAs *as,
                 return false;
             }
         }
-        if (!process_source_range(as, expanded, 0U, count)) {
+        const MiniAsSourceFrame frame={
+            .kind=MINIAS_SOURCE_FRAME_EXPANSION,
+            .lines=expanded,
+            .count=count
+        };
+        if (!process_source_frame(as,&frame)) {
             destroy_source_lines(expanded, count);
             free(copy);
             return false;
@@ -5280,6 +5292,7 @@ static bool process_source_range(MiniAs *as,
     size_t i = begin;
 
     while (i < end && !as->source_ended) {
+        bool inline_handled=false;
         char macro_argument[1024];
         int macro_kind =
             classify_macro_line(as, lines[i].text,
@@ -5288,6 +5301,13 @@ static bool process_source_range(MiniAs *as,
         char argument[256];
         size_t repeat_label_prefix=0U;
         int kind;
+
+        /* File and expansion frames must agree on the semicolon-separated
+         * GNU inline `.rept/.irp ... .endr` grammar. Dispatch that one
+         * lexical special case before collector classification in BOTH. */
+        if(!process_inline_repeat_line(as,lines[i].text,lines[i].line,
+                                       &inline_handled))return false;
+        if(inline_handled) {++i;continue;}
 
         /* GAS does not lex .macro/.rept/.irp at all in an inactive .if
          * branch. Only nested conditionals can reactivate parsing. In
@@ -5408,7 +5428,12 @@ static bool process_source_range(MiniAs *as,
                 for (iteration = 0U;
                      iteration < repetitions && !as->source_ended;
                      ++iteration) {
-                    if (!process_source_range(as, lines, i + 1U, j)) {
+                    const MiniAsSourceFrame body={
+                        .kind=MINIAS_SOURCE_FRAME_EXPANSION,
+                        .lines=lines+i+1U,
+                        .count=j-i-1U
+                    };
+                    if (!process_source_frame(as,&body)) {
                         return false;
                     }
                 }
@@ -5428,81 +5453,6 @@ static bool process_source_range(MiniAs *as,
         ++i;
     }
     return true;
-}
-
-static bool read_repeat_block(MiniAs *as,
-                              FILE *file,
-                              size_t *line_no,
-                              int opener_kind,
-                              MiniAsSourceLine **lines_out,
-                              size_t *count_out) {
-    MiniAsSourceLine *lines = NULL;
-    size_t count = 0U;
-    size_t capacity = 0U;
-    size_t depth = 1U;
-    char linebuf[65536];
-
-    while (!as->source_ended && fgets(linebuf, sizeof(linebuf), file) != NULL) {
-        size_t len;
-        char argument[256];
-        int kind;
-
-        ++*line_no;
-        if(!validate_user_source_private_marker(as,linebuf,*line_no)) {
-            destroy_source_lines(lines,count);
-            return false;
-        }
-        strip_gnu_c_comments(as,linebuf);
-        len = strlen(linebuf);
-        if (len == sizeof(linebuf) - 1U && linebuf[len - 1U] != '\n') {
-            minias_set_error(as, "line-too-long:line=%zu", *line_no);
-            destroy_source_lines(lines, count);
-            return false;
-        }
-        kind = classify_repeat_line(as, linebuf, argument,
-                                    sizeof(argument),NULL);
-        if (kind < 0) {
-            minias_set_error(as, "out-of-memory:repeat-classify");
-            destroy_source_lines(lines, count);
-            return false;
-        }
-        if (kind == MINIAS_REPEAT_REPT || kind == MINIAS_REPEAT_IRP) {
-            ++depth;
-        } else if (kind == MINIAS_REPEAT_ENDR) {
-            --depth;
-            if (depth == 0U) {
-                *lines_out = lines;
-                *count_out = count;
-                return true;
-            }
-        }
-        if (!minias_grow_array((void **)&lines,
-                        &capacity,
-                        sizeof(*lines),
-                        count + 1U)) {
-            minias_set_error(as, "out-of-memory:repeat-lines");
-            destroy_source_lines(lines, count);
-            return false;
-        }
-        lines[count].text = minias_strdup(linebuf);
-        lines[count].line = *line_no;
-        if (lines[count].text == NULL) {
-            minias_set_error(as, "out-of-memory:repeat-line");
-            destroy_source_lines(lines, count);
-            return false;
-        }
-        ++count;
-    }
-
-    if (ferror(file)) {
-        minias_set_error(as, "input-read:repeat-block");
-    } else {
-        minias_set_error(as,
-                         "unterminated-directive:%s",
-                         opener_kind == MINIAS_REPEAT_IRP ? ".irp" : ".rept");
-    }
-    destroy_source_lines(lines, count);
-    return false;
 }
 
 /* GNU GAS permits semicolon-separated assignments and complete .rept/.irp
@@ -5542,8 +5492,13 @@ static bool process_inline_repeat_line(MiniAs *as,const char *source,
         cursor=end==NULL?NULL:end+1U;
     }
     if(ok && opener && closer) {
+        const MiniAsSourceFrame frame={
+            .kind=MINIAS_SOURCE_FRAME_EXPANSION,
+            .lines=pieces,
+            .count=count
+        };
         *handled=true;
-        ok=process_source_range(as,pieces,0U,count);
+        ok=process_source_frame(as,&frame);
     }
     for(i=0U;i<count;++i)pieces[i].text=NULL; /* owned by copy */
     free(pieces);
@@ -5577,199 +5532,85 @@ static bool validate_user_source_private_marker(MiniAs *as,
     return true;
 }
 
-bool minias_parse_file(MiniAs *as, const char *path) {
-    FILE *file = fopen(path, "r");
+/* A physical input is lexed exactly once into an owned SourceFrame.  The
+ * shared range collector below now handles FILE, expanded MACRO and
+ * REPT/IRP bodies, including nested collectors and inactive .if branches.
+ * The fully retained frame avoids independent streaming collector paths
+ * whose treatment of inline semicolons and nested directives could diverge.
+ *
+ * This is deliberately NOT a replacement for location-dependent .if
+ * re-evaluation: the assembly driver still reopens input when necessary. */
+static bool collect_file_source_frame(MiniAs *as, const char *path,
+                                      MiniAsSourceFrame *frame) {
+    FILE *file=fopen(path,"r");
     char linebuf[65536];
-    size_t line_no = 0U;
-
-    if (file == NULL) {
-        minias_set_error(as, "input-open:%s", path);
+    size_t line_no=0U;
+    bool ok=true;
+    if(file==NULL) {
+        minias_set_error(as,"input-open:%s",path);
         return false;
     }
     as->c_comment_active=false;
-    while (fgets(linebuf, sizeof(linebuf), file) != NULL) {
+    frame->kind=MINIAS_SOURCE_FRAME_FILE;
+    while(fgets(linebuf,sizeof(linebuf),file)!=NULL) {
         size_t len;
-        char argument[256];
-        size_t repeat_label_prefix=0U;
-        int kind;
-
+        MiniAsSourceLine *line;
         ++line_no;
         if(!validate_user_source_private_marker(as,linebuf,line_no)) {
-            fclose(file);
-            return false;
+            ok=false;break;
         }
         strip_gnu_c_comments(as,linebuf);
-        len = strlen(linebuf);
-        if (len == sizeof(linebuf) - 1U && linebuf[len - 1U] != '\n') {
-            minias_set_error(as, "line-too-long:line=%zu", line_no);
-            fclose(file);
-            return false;
+        len=strlen(linebuf);
+        if(len==sizeof(linebuf)-1U && linebuf[len-1U]!='\n') {
+            minias_set_error(as,"line-too-long:line=%zu",line_no);
+            ok=false;break;
         }
-
-        /* A complete inline repetition is lexed as logical statements
-         * before physical-line .macro/.rept classification. */
-        {
-            bool consumed=false;
-            if(!process_inline_repeat_line(as,linebuf,line_no,&consumed)) {
-                fclose(file);return false;
-            }
-            if(consumed)continue;
+        if(!minias_grow_array((void **)&frame->lines,
+                              &frame->capacity,sizeof(*frame->lines),
+                              frame->count+1U)) {
+            minias_set_error(as,"out-of-memory:source-frame");
+            ok=false;break;
         }
-
-        /* An inactive conditional is not a macro/repetition parsing
-         * context; parse only .if/.elseif/.else/.endif until reactivated.
-         * This also keeps skipped unmatched collector end markers inert. */
-        if(!as->conditional_active) {
-            if(!process_source_line(as,linebuf,line_no)) {
-                fclose(file);return false;
-            }
-            continue;
+        line=&frame->lines[frame->count];
+        line->text=minias_strdup(linebuf);
+        if(line->text==NULL) {
+            minias_set_error(as,"out-of-memory:source-frame-line");
+            ok=false;break;
         }
-
-        {
-            char macro_argument[1024];
-            int macro_kind =
-                classify_macro_line(as, linebuf,
-                                    macro_argument,
-                                    sizeof(macro_argument));
-            if (macro_kind < 0) {
-                minias_set_error(as, "out-of-memory:macro-classify");
-                fclose(file);
-                return false;
-            }
-            if (macro_kind == MINIAS_MACRO_END) {
-                minias_set_error(as,
-                                 "unmatched-directive:.endm:line=%zu",
-                                 line_no);
-                fclose(file);
-                return false;
-            }
-            if (macro_kind == MINIAS_MACRO_BEGIN) {
-                MiniAsSourceLine *macro_lines = NULL;
-                size_t macro_count = 0U;
-                size_t opener_line = line_no;
-
-                if (!read_macro_block(as,
-                                      file,
-                                      &line_no,
-                                      &macro_lines,
-                                      &macro_count)) {
-                    fclose(file);
-                    return false;
-                }
-                if (!define_macro(as,
-                                  macro_argument,
-                                  macro_lines,
-                                  macro_count,
-                                  opener_line)) {
-                    destroy_source_lines(macro_lines, macro_count);
-                    fclose(file);
-                    return false;
-                }
-                destroy_source_lines(macro_lines, macro_count);
-                continue;
-            }
-        }
-
-        kind = classify_repeat_line(as, linebuf, argument,
-                                    sizeof(argument),&repeat_label_prefix);
-        if (kind < 0) {
-            minias_set_error(as, "out-of-memory:repeat-classify");
-            fclose(file);
-            return false;
-        }
-        if (kind == MINIAS_REPEAT_ENDR) {
-            minias_set_error(as,
-                             "unmatched-directive:.endr:line=%zu",
-                             line_no);
-            fclose(file);
-            return false;
-        }
-        if (kind == MINIAS_REPEAT_REPT || kind == MINIAS_REPEAT_IRP) {
-            MiniAsSourceLine *lines = NULL;
-            size_t count = 0U;
-            size_t opener_line = line_no;
-            if(!emit_repeat_leading_label(as,linebuf,repeat_label_prefix,
-                                          opener_line)){
-                fclose(file);return false;
-            }
-
-            if (!read_repeat_block(as,
-                                   file,
-                                   &line_no,
-                                   kind,
-                                   &lines,
-                                   &count)) {
-                destroy_source_lines(lines, count);
-                fclose(file);
-                return false;
-            }
-            if (kind == MINIAS_REPEAT_REPT) {
-                uint64_t repetitions;
-                uint64_t iteration;
-
-                if (!repeat_count_value(as,
-                                        argument,
-                                        opener_line,
-                                        &repetitions)) {
-                    destroy_source_lines(lines, count);
-                    fclose(file);
-                    return false;
-                }
-                for (iteration = 0U;
-                     iteration < repetitions && !as->source_ended;
-                     ++iteration) {
-                    if (!process_source_range(as, lines, 0U, count)) {
-                        destroy_source_lines(lines, count);
-                        fclose(file);
-                        return false;
-                    }
-                }
-            } else if (!process_irp_block(as,
-                                          lines,
-                                          count,
-                                          argument,
-                                          opener_line)) {
-                destroy_source_lines(lines, count);
-                fclose(file);
-                return false;
-            }
-            destroy_source_lines(lines, count);
-            continue;
-        }
-        if (!process_source_line(as, linebuf, line_no)) {
-            fclose(file);
-            return false;
-        }
+        line->line=line_no;
+        ++frame->count;
     }
-    if (ferror(file)) {
-        minias_set_error(as, "input-read:%s", path);
-        fclose(file);
-        return false;
-    }
-    if(as->c_comment_active) {
-        minias_set_error(as,"unterminated-gnu-block-comment");
-        fclose(file);
-        return false;
-    }
-    if (as->conditional_count != 0U) {
-        minias_set_error(as,
-                         "unterminated-directive:.if:depth=%zu",
-                         as->conditional_count);
-        fclose(file);
-        return false;
-    }
-    if (as->cfi_active) {
-        minias_set_error(as, "unterminated-directive:.cfi_startproc");
-        fclose(file);
-        return false;
+    if(ok && ferror(file)) {
+        minias_set_error(as,"input-read:%s",path);
+        ok=false;
     }
     fclose(file);
-    if(as->target->supports_literal_pools &&
-       !flush_literal_pools(as,line_no,true))return false;
-    if (!minias_finalize_subsection_layout(as)) {
+    if(ok && as->c_comment_active) {
+        minias_set_error(as,"unterminated-gnu-block-comment");
+        ok=false;
+    }
+    return ok;
+}
+
+bool minias_parse_file(MiniAs *as, const char *path) {
+    MiniAsSourceFrame frame={0};
+    bool parsed=collect_file_source_frame(as,path,&frame);
+    if(parsed)
+        parsed=process_source_frame(as,&frame);
+    destroy_source_lines(frame.lines,frame.count);
+    if(!parsed)return false;
+    if(as->conditional_count!=0U) {
+        minias_set_error(as,"unterminated-directive:.if:depth=%zu",
+                         as->conditional_count);
         return false;
     }
+    if(as->cfi_active) {
+        minias_set_error(as,"unterminated-directive:.cfi_startproc");
+        return false;
+    }
+    if(as->target->supports_literal_pools &&
+       !flush_literal_pools(as,frame.count,true))return false;
+    if(!minias_finalize_subsection_layout(as))return false;
     return minias_refresh_symbol_aliases(as);
 }
 
@@ -5807,6 +5648,7 @@ bool minias_emit_sections(MiniAs *as) {
     size_t i;
     MiniAsEmitRef *refs = NULL;
 
+    if(!minias_validate_fragment_semantics(as))return false;
     if (as->active_encode_result != NULL) {
         minias_set_error(as, "encode-result-reentered");
         return false;
@@ -5836,9 +5678,9 @@ bool minias_emit_sections(MiniAs *as) {
     for (i = 0U; i < as->stmt_count; ++i) {
         MiniAsStmt *stmt = refs[i].stmt;
         MiniAsSection *section = &as->sections[(size_t)stmt->section];
-        const bool staged_padding = stmt->kind == MINIAS_STMT_ALIGN &&
+        const bool staged_padding = stmt->fragment_kind == MINIAS_FRAGMENT_ALIGNMENT &&
             (section->flags & MINIAS_SHF_EXECINSTR) != 0U &&
-            strcmp(stmt->op,".org") != 0 && !stmt->align_has_fill;
+            !stmt->align_has_fill;
 
         if ((uint64_t)section->size > stmt->offset) {
             /* The offset invariant must fail CLOSED, but record the
@@ -5874,10 +5716,10 @@ bool minias_emit_sections(MiniAs *as) {
         as->emitting_fragment = true;
         as->emitting_fragment_id = refs[i].order;
         as->capture_instruction_bytes =
-            stmt->kind == MINIAS_STMT_INSN || staged_padding;
+            stmt->fragment_kind == MINIAS_FRAGMENT_INSTRUCTION || staged_padding;
         if (stmt->kind == MINIAS_STMT_ALIGN) {
             bool exec_align = (section->flags & MINIAS_SHF_EXECINSTR) != 0U &&
-                              strcmp(stmt->op, ".org") != 0;
+                              stmt->fragment_kind == MINIAS_FRAGMENT_ALIGNMENT;
             if (!(stmt->align_has_fill
                       ? emit_common_space(as,stmt->section,stmt->size,stmt->align_fill)
                       : exec_align
