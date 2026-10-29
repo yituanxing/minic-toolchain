@@ -15,7 +15,7 @@
 MinicCoreLowerStatus minic_core_lower_try_bit_field_assignment(
     MinicCoreLowerContext *context, const MinicExpression *target,
     MinicExpressionId source_id, MinicSourceSpan span,
-    MinicCoreValueId *result_value, bool *matched) {
+    MinicCoreValueId *result_value, bool is_initializer_write, bool *matched) {
     if (context == NULL || context->body == NULL ||
         context->body->program == NULL || context->function == NULL ||
         target == NULL || matched == NULL) return MINIC_CORE_LOWER_ERROR;
@@ -63,7 +63,10 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_assignment(
                 !minic_type_is_integer(value_type) ||
                 (!core_unsigned_bit_field_semantic_type(context, value_type) &&
                  !minic_type_is_signed_integer(value_type)) ||
-                minic_type_is_const(target->type) ||
+                /* Const qualification prohibits mutation, not initialization.
+                 * Only the parser's aggregate-initializer writes carry the
+                 * provenance needed to bypass this semantic guard. */
+                (minic_type_is_const(target->type) && !is_initializer_write) ||
                 !core_bit_field_storage_type(
                     context, value_type, &storage_type, &storage_width) ||
                 storage_width == 0U || storage_width > 64U ||

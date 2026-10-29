@@ -239,12 +239,14 @@ static bool minic_lp64_admit_call(
         bool record_result = false;
         size_t return_record_bytes = 0U, return_record_slots = 0U;
         size_t fp_elements = 0U, fp_width = 0U;
-        if (ins->kind == MINIC_CORE_INSTRUCTION_CALL &&
-            minic_type_is_record(ins->type) &&
-            ins->value.call.result_object < fn->object_count &&
+        const MinicCoreObjectId result_object =
+            ins->kind == MINIC_CORE_INSTRUCTION_CALL
+                ? ins->value.call.result_object : ins->value.indirect_call.result_object;
+        if (minic_type_is_record(ins->type) &&
+            result_object < fn->object_count &&
             ins->result == MINIC_CORE_VALUE_INVALID &&
-            fn->objects[ins->value.call.result_object].element_count == 1U &&
-            minic_type_equal(fn->objects[ins->value.call.result_object].type,
+            fn->objects[result_object].element_count == 1U &&
+            minic_type_equal(fn->objects[result_object].type,
                              ins->type) &&
             ((minic_multi_gp_record(program, target, ins->type,
                                    &return_record_bytes, &return_record_slots) &&

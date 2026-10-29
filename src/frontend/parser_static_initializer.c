@@ -2617,8 +2617,42 @@ static bool parse_static_union_constant(MinicParser *parser,
         return false;
     }
 
-    if (parser->current.kind == MINIC_TOKEN_COMMA) {
-        if (!minic_parser_advance(parser)) {
+    if (parser->current.kind == MINIC_TOKEN_COMMA && !minic_parser_advance(parser)) {
+        return false;
+    }
+    /* GNU C permits successive designators for distinct fields of the same
+     * active anonymous record embedded in a union. For example, ARM64 KVM
+     * initializes `union { u64 val; struct { ... fgt:4; bit:6; }; }`
+     * using `{ .fgt = group, .bit = position }`. The first promoted member
+     * already zero-materialized the rest of that record: update its exact
+     * subobject slots, never select a different union variant. */
+    while (has_designator && designator.depth > 1U &&
+           parser->current.kind == MINIC_TOKEN_DOT) {
+        MinicStaticRecordDesignator next;
+        const MinicRecordField *leaf_field;
+        size_t relative_slot;
+
+        if (!parse_static_record_designator_path(parser, record, &next) ||
+            next.depth <= 1U || next.has_array_index ||
+            next.field_indices[0] != selected_index ||
+            !static_record_designator_leaf_slot(parser->program,
+                                                record,
+                                                &next,
+                                                &relative_slot,
+                                                &leaf_field) ||
+            union_base_slot > SIZE_MAX - relative_slot ||
+            !overwrite_static_zero_field_value(parser,
+                                               object_id,
+                                               leaf_field,
+                                               union_base_slot + relative_slot)) {
+            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                minic_parser_error(parser,
+                                   "union initializer designators must stay within the "
+                                   "same active record member");
+            }
+            return false;
+        }
+        if (parser->current.kind == MINIC_TOKEN_COMMA && !minic_parser_advance(parser)) {
             return false;
         }
     }

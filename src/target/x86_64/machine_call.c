@@ -214,22 +214,22 @@ static bool x86_emit_call_arguments(
 static bool x86_emit_call_record_result(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicX86Frame *frame,
-    const MinicCoreCallee *callee, MinicCoreObjectId object) {
+    MinicType return_type, MinicCoreObjectId object) {
     size_t bytes;
     if (object >= fn->object_count ||
-        !minic_type_is_record(callee->return_type) ||
+        !minic_type_is_record(return_type) ||
         !minic_x86_64_record_abi_compatible(
-            fn->objects[object].type, callee->return_type))
+            fn->objects[object].type, return_type))
         return false;
     if (minic_x86_64_memory_result_record(
-            program, target, callee->return_type, &bytes))
+            program, target, return_type, &bytes))
         /* The callee has already written the exact object via the sret
          * pointer, not an RAX/RDX proxy. */
         return true;
     if (!x86_object_address(out, frame, object, "%r10")) return false;
-    if (minic_x86_64_one_gp_record(program, target, callee->return_type, &bytes))
+    if (minic_x86_64_one_gp_record(program, target, return_type, &bytes))
         return x86_one_gp_store(out, bytes);
-    if (minic_x86_64_two_gp_record(program, target, callee->return_type))
+    if (minic_x86_64_two_gp_record(program, target, return_type))
         return fprintf(out,
             "  movq %%rax, 0(%%r10)\n"
             "  movq %%rdx, 8(%%r10)\n") >= 0;
@@ -576,7 +576,7 @@ bool minic_x86_64_emit_call_instruction(
         if (!(ins->value.call.result_object != MINIC_CORE_OBJECT_INVALID
                   ? (ins->result == MINIC_CORE_VALUE_INVALID &&
                      x86_emit_call_record_result(
-                         out, program, target, fn, frame, callee,
+                         out, program, target, fn, frame, callee->return_type,
                          ins->value.call.result_object))
                   : x86_emit_call_result(out, program, target, frame,
                                          callee->return_type, ins->result))) {
@@ -606,11 +606,18 @@ bool minic_x86_64_emit_call_instruction(
         signature = call.signature;
         if (!x86_emit_call_arguments(out, program, target, fn, frame,
                                      &call, cached_plan, &outgoing_bytes) ||
+            !x86_prepare_call_sret(out, program, target, fn, frame,
+                    &call, ins->value.indirect_call.result_object, outgoing_bytes) ||
             !x86_value_load(out, frame, callee, "%r11") ||
             fprintf(out, "  call *%%r11\n") < 0 ||
             (outgoing_bytes != 0U &&
              fprintf(out, "  addq $%zu, %%rsp\n", outgoing_bytes) < 0))
             return false;
+        if (call.return_form == MINIC_CORE_CALL_RETURN_OBJECT) {
+            return ins->result == MINIC_CORE_VALUE_INVALID &&
+                   x86_emit_call_record_result(out, program, target, fn, frame,
+                      signature->return_type, ins->value.indirect_call.result_object);
+        }
         return x86_emit_call_result(out, program, target, frame,
                                     signature->return_type, ins->result);
     }

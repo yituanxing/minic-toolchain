@@ -262,6 +262,9 @@ MinicCoreLowerStatus minic_core_lower_direct_record_call_object(
 MinicCoreLowerStatus minic_core_lower_indirect_call(
     MinicCoreLowerContext *context, const MinicExpression *expression,
     MinicCoreValueId *value_id);
+MinicCoreLowerStatus minic_core_lower_indirect_record_call_object(
+    MinicCoreLowerContext *context, const MinicExpression *expression,
+    MinicCoreObjectId *result_object);
 
 /* Source-to-Core assignments; target ABI and machine details never enter. */
 MinicCoreLowerStatus minic_core_lower_assignment_pair(
@@ -276,7 +279,7 @@ MinicCoreLowerStatus minic_core_lower_scalar_update(
 MinicCoreLowerStatus minic_core_lower_try_bit_field_assignment(
     MinicCoreLowerContext *context, const MinicExpression *target,
     MinicExpressionId source_id, MinicSourceSpan span,
-    MinicCoreValueId *result_value, bool *matched);
+    MinicCoreValueId *result_value, bool is_initializer_write, bool *matched);
 
 /* Shared source-effect probe: if and loop CFG both consume this conservative check. */
 bool core_expression_may_modify_local(

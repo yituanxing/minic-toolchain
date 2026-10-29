@@ -472,8 +472,13 @@ static bool verify_expression(const MinicC0Program *program,
             return false;
         }
         for (parameter_index = 0U; parameter_index < function->parameter_count; ++parameter_index) {
-            if (!minic_type_equal(function_type->parameter_types[parameter_index],
-                                  function->parameter_types[parameter_index])) {
+            /* Function signatures are interned using C-compatible nested
+             * array shapes, rather than whichever array descriptor was
+             * allocated first.  Preserve the same structural contract at
+             * the function-designator verifier boundary. */
+            if (!minic_c0_types_compatible(program,
+                                          function_type->parameter_types[parameter_index],
+                                          function->parameter_types[parameter_index])) {
                 return false;
             }
         }
@@ -1026,6 +1031,11 @@ static bool verify_statement(const MinicC0Program *program,
     const MinicExpression *expression;
 
     if (statement == NULL) {
+        return false;
+    }
+    /* Initialization provenance is attached solely to synthesized scalar
+     * writes, never to an arbitrary source assignment or control statement. */
+    if (statement->is_initializer_write && statement->kind != MINIC_STATEMENT_ASSIGN) {
         return false;
     }
     target = program_expression(program, statement->target_expression);

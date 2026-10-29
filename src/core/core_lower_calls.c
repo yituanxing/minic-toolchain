@@ -927,10 +927,13 @@ MinicCoreLowerStatus minic_core_lower_direct_record_call_object(
 
 /* M83_FIRST_CLASS_INDIRECT_CALL: keep the callee as a first-class SSA
    function-pointer value; the static signature is copied into Core so
-   verification and later backends do not depend on frontend Program state. */
-MinicCoreLowerStatus minic_core_lower_indirect_call(MinicCoreLowerContext *context,
+   verification and later backends do not depend on frontend Program state.
+   The return destination follows one target-neutral dual form for *all*
+   calling conventions: scalar SSA or address-backed aggregate object. */
+static MinicCoreLowerStatus core_lower_indirect_call_impl(MinicCoreLowerContext *context,
                                                 const MinicExpression *expression,
-                                                MinicCoreValueId *value_id) {
+                                                MinicCoreValueId *value_id,
+                                                MinicCoreObjectId *result_object) {
     const MinicExpression *callee_expression;
     const MinicFunctionType *signature;
     MinicCoreCallSignatureId signature_id;
@@ -947,9 +950,11 @@ MinicCoreLowerStatus minic_core_lower_indirect_call(MinicCoreLowerContext *conte
     size_t argument_count;
     size_t argument_index;
     bool returns_void;
+    bool returns_record;
 
     if (context == NULL || context->body == NULL || context->body->program == NULL ||
-        context->function == NULL || expression == NULL || value_id == NULL ||
+        context->function == NULL || expression == NULL ||
+        ((value_id == NULL) == (result_object == NULL)) ||
         expression->kind != MINIC_EXPRESSION_CALL ||
         expression->value.call.function_id != MINIC_FUNCTION_INVALID) {
         return MINIC_CORE_LOWER_ERROR;
@@ -990,7 +995,10 @@ MinicCoreLowerStatus minic_core_lower_indirect_call(MinicCoreLowerContext *conte
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
     returns_void = minic_type_is_void(signature->return_type);
-    if (!returns_void && !core_memory_scalar_type(signature->return_type)) {
+    returns_record = minic_type_is_record(signature->return_type);
+    if (result_object != NULL ? !returns_record :
+        (returns_record || (!returns_void &&
+         !core_memory_scalar_type(signature->return_type)))) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
 
@@ -1077,6 +1085,18 @@ MinicCoreLowerStatus minic_core_lower_indirect_call(MinicCoreLowerContext *conte
     instruction.value.indirect_call.signature_id = signature_id;
     instruction.value.indirect_call.argument_begin = argument_begin;
     instruction.value.indirect_call.argument_count = argument_count;
+    instruction.value.indirect_call.result_object = MINIC_CORE_OBJECT_INVALID;
+    if (returns_record) {
+        if (!minic_core_function_add_object(
+                context->function, expression->span,
+                signature->return_type, result_object)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        instruction.value.indirect_call.result_object = *result_object;
+        return minic_core_function_append_effect_instruction(
+                   context->function, context->block_id, &instruction)
+                   ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR;
+    }
     if (returns_void) {
         *value_id = MINIC_CORE_VALUE_INVALID;
         return minic_core_function_append_effect_instruction(
@@ -1088,5 +1108,17 @@ MinicCoreLowerStatus minic_core_lower_indirect_call(MinicCoreLowerContext *conte
                context->function, context->block_id, &instruction, value_id)
                ? MINIC_CORE_LOWER_OK
                : MINIC_CORE_LOWER_ERROR;
+}
+
+MinicCoreLowerStatus minic_core_lower_indirect_call(MinicCoreLowerContext *context,
+                                                const MinicExpression *expression,
+                                                MinicCoreValueId *value_id) {
+    return core_lower_indirect_call_impl(context, expression, value_id, NULL);
+}
+
+MinicCoreLowerStatus minic_core_lower_indirect_record_call_object(
+    MinicCoreLowerContext *context, const MinicExpression *expression,
+    MinicCoreObjectId *result_object) {
+    return core_lower_indirect_call_impl(context, expression, NULL, result_object);
 }
 

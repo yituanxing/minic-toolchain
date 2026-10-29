@@ -781,9 +781,20 @@ static bool parse_static_pointer_array(MinicParser *parser,
                     parser, MINIC_TOKEN_RBRACE, "zero-length array initializer must be empty")) {
                 return false;
             }
-        } else if (!minic_parser_static_scalar_array_transaction(
-                       parser, object_id, element_type, element_count, inferred_bound)) {
-            return false;
+        } else {
+            /* A pointer declarator can have several array suffixes:
+             * `const char *names[2][4]` is an array of arrays of pointers.
+             * The scalar-array fast path accepts only the innermost pointer
+             * elements and cannot consume the nested brace groups. */
+            if (minic_type_is_array(array_type->element_type)) {
+                if (!minic_parser_parse_static_storage_initializer_value(
+                        parser, object_id, object_type)) {
+                    return false;
+                }
+            } else if (!minic_parser_static_scalar_array_transaction(
+                           parser, object_id, element_type, element_count, inferred_bound)) {
+                return false;
+            }
         }
     }
     {

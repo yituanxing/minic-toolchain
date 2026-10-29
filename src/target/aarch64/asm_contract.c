@@ -1,6 +1,7 @@
 #include "target/aarch64/asm_contract.h"
 #include "target/common/lp64_frame.h"
 #include "target/common/direct_linux_bug_asm.h"
+#include "target/data_layout.h"
 #include "frontend/const_eval.h"
 #include <string.h>
 
@@ -382,10 +383,11 @@ unsigned int minic_aarch64_linux_rept_nop_count(
 bool minic_aarch64_qualified_opaque_asm(const MinicCoreInlineAsm *a) {
     static const char *const allowed[] = {
         "msrdaifset,#3", "msrdaifclr,#3", "msrdaifclr,#8",
-        "yield", "hint#6", "hint#20", "sev", "sevl", "wfe", "wfi", "nop",
+        "yield", "hint#6", "hint#17", "hint#18", "hint#20",
+        "sev", "sevl", "wfe", "wfi", "nop",
         "dsbsy", "dsbst", "dsbish", "dsbishst", "dsbld",
         "dmbish", "dmbishld", "dmbishst", "dmbsy",
-        "icialluis",
+        "icialluis", "iciallu",
         "dmbosh", "dmboshld", "dmboshst", "isb"
     };
     char compact[64];
@@ -473,6 +475,14 @@ static const char *aarch64_linux_mrs_register(const char *text, size_t len) {
         {"mrs%0,far_el1", "far_el1"},
         {"mrs%0,par_el1", "par_el1"},
         {"mrs%0,id_aa64mmfr1_el1", "id_aa64mmfr1_el1"},
+        /* hyp/debug-sr.h derives the architectural breakpoint/watchpoint
+         * bank sizes from ID_AA64DFR0_EL1, then saves MDCCINT_EL1. The
+         * hyp sysreg save/restore path also reads these fixed registers. */
+        {"mrs%0,id_aa64dfr0_el1", "id_aa64dfr0_el1"},
+        {"mrs%0,mdccint_el1", "mdccint_el1"},
+        {"mrs%0,tpidrro_el0", "tpidrro_el0"},
+        {"mrs%0,sp_el1", "sp_el1"},
+        {"mrs%0,vmpidr_el2", "vmpidr_el2"},
         {"mrs%0,hcr_el2", "hcr_el2"},
         /* KVM hyp/switch.h reads/restores these exact EL2 trap/debug
          * registers using the ordinary read_sysreg() GNU "=r" API. */
@@ -510,8 +520,10 @@ static const char *aarch64_barrier_template(const char *text, size_t len) {
         "dsb sy", "dsb ish", "dsb ishst", "dsb ld", "dsb st",
         "dsb nsh", "dsb nshst", "isb",
         "msr daifset, #3", "msr daifclr, #3", "msr daifclr, #8",
-        "yield", "hint #6", "hint #20", "sev", "sevl", "wfe", "wfi", "nop",
-        "ic ialluis"
+        /* barrier.h psb_csync()/tsb_csync(): architected trace drain hints. */
+        "yield", "hint #6", "hint #17", "hint #18", "hint #20",
+        "sev", "sevl", "wfe", "wfi", "nop",
+        "ic ialluis", "ic iallu"
     };
     char normalized[64];
     size_t i, n = 0U;
@@ -523,6 +535,9 @@ static const char *aarch64_barrier_template(const char *text, size_t len) {
     if (len == sizeof("ic\tialluis") - 1U &&
         memcmp(text, "ic\tialluis", len) == 0)
         return "ic ialluis";
+    if (len == sizeof("ic\tiallu") - 1U &&
+        memcmp(text, "ic\tiallu", len) == 0)
+        return "ic iallu";
     for (i = 0U; i < len; ++i) {
         const char c = text[i];
         if (c == '\t' || c == '\r' || c == '\n')
@@ -1996,6 +2011,20 @@ static const Aarch64LinuxWriteSysreg aarch64_linux_write_sysregs[] = {
     {3U,0U,4U,6U,0U},  /* ICC_PMR_EL1 */
     {3U,3U,4U,2U,2U},  /* SVCR */
     {3U,3U,13U,0U,5U}, /* TPIDR2_EL0 */
+    /* kvm_host.h __vcpu_write_sys_reg_to_cpu(): complete VHE-only
+     * runtime switch includes these seven additional SYS_* writes. */
+    {3U,3U,13U,0U,2U}, /* TPIDR_EL0 */
+    {3U,3U,13U,0U,3U}, /* TPIDRRO_EL0 */
+    {3U,0U,13U,0U,4U}, /* TPIDR_EL1 */
+    {3U,0U,7U,4U,0U},  /* PAR_EL1 */
+    {3U,4U,3U,0U,0U},  /* DACR32_EL2 */
+    {3U,4U,5U,0U,1U},  /* IFSR32_EL2 */
+    {2U,4U,0U,7U,0U},  /* DBGVCR32_EL2 */
+    /* Qualcomm Kryo's original Linux indirect L2 accessors use two
+     * vendor-defined S3_3_C15_C0 registers, both authenticated against
+     * the full GNU MSR_S wrapper and these exact tuples. */
+    {3U,3U,15U,0U,6U}, /* L2CPUSRSELR_EL1 */
+    {3U,3U,15U,0U,7U}, /* L2CPUSRDR_EL1 */
     {3U,0U,12U,11U,1U}, /* ICC_DIR_EL1 */
     {3U,0U,12U,11U,5U}, /* ICC_SGI1R_EL1 */
     {3U,0U,12U,12U,1U}, /* ICC_EOIR1_EL1 */
@@ -2071,8 +2100,6 @@ static const Aarch64LinuxWriteSysreg aarch64_linux_write_sysregs[] = {
     {3U,4U,1U,0U,0U}, /* SCTLR_EL2 */
     {3U,4U,1U,2U,0U}, /* ZCR_EL2 */
     {3U,4U,12U,1U,1U}, /* DISR_EL2 */
-    {3U,4U,3U,0U,0U}, /* DACR32_EL2 */
-    {3U,4U,5U,0U,1U}, /* IFSR32_EL2 */
     {3U,4U,12U,11U,0U}, /* ICH_HCR_EL2 */
     {3U,4U,12U,11U,7U}, /* ICH_VMCR_EL2 */
     /* arch/arm64/include/asm/sysreg.h: AP0R is CRm=8, AP1R is CRm=9;
@@ -2481,6 +2508,201 @@ static bool aarch64_linux_tlbi_emit(
             "  .arch armv8.5-a\n"
             "  tlbi %s, x9\n",
             (size_t)b[0].value*8U,mnemonic)>=0;
+}
+
+/* Original Linux arch/arm64/kvm/hyp/include/nvhe/spinlock.h uses a ticket
+ * lock with a feature-33 LSE replacement.  The output value of all three
+ * temporary registers is observable to C, and the owner load has acquire
+ * ordering.  The .altinstructions PREL32 relocation/length descriptors
+ * must survive together with the LL/SC and LSE instruction sequences. */
+typedef enum Aarch64LinuxHypSpinForm {
+    AARCH64_LINUX_HYP_SPIN_NONE,
+    AARCH64_LINUX_HYP_SPIN_LOCK,
+    AARCH64_LINUX_HYP_SPIN_UNLOCK
+} Aarch64LinuxHypSpinForm;
+static Aarch64LinuxHypSpinForm aarch64_linux_hyp_spin_form(
+    const char *text, size_t length) {
+    static const char lock_old[] =
+        "prfmpstl1strm,%31:ldaxr%w0,%3add%w1,%w0,#(1<<16)"
+        "stxr%w2,%w1,%3cbnz%w2,1b";
+    static const char lock_new[] =
+        ".arch_extensionlsemov%w2,#(1<<16)ldadda%w2,%w0,%3"
+        ".rept3nop.endr";
+    static const char lock_tail[] =
+        "eor%w1,%w0,%w0,ror#16cbz%w1,3fsevl2:wfe"
+        "ldaxrh%w2,%4eor%w1,%w2,%w0,lsr#16cbnz%w1,2b3:";
+    static const char unlock_old[] =
+        "ldrh%w1,%0add%w1,%w1,#1stlrh%w1,%0";
+    static const char unlock_new[] =
+        ".arch_extensionlsemov%w1,#1staddlh%w1,%0.rept1nop.endr";
+    static const char boundary[] = ".previous.endif";
+    char compact[1900], old_body[320], new_body[320];
+    const char *end;
+    size_t i, n = 0U, alt_len;
+    if (!text || !length || length >= sizeof(compact)) return AARCH64_LINUX_HYP_SPIN_NONE;
+    for (i = 0U; i < length; ++i) {
+        const char ch = text[i];
+        if (ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r') continue;
+        if (ch == '\0' || ch == ';' || n + 1U >= sizeof(compact))
+            return AARCH64_LINUX_HYP_SPIN_NONE;
+        compact[n++] = ch;
+    }
+    compact[n] = '\0';
+    end = strstr(compact, boundary);
+    if (!end) return AARCH64_LINUX_HYP_SPIN_NONE;
+    alt_len = (size_t)(end - compact) + sizeof(boundary) - 1U;
+    if (!aarch64_linux_alt_partition(compact, alt_len, 33U,
+            old_body, sizeof(old_body), new_body, sizeof(new_body)))
+        return AARCH64_LINUX_HYP_SPIN_NONE;
+    if (strcmp(old_body, lock_old) == 0 &&
+        strcmp(new_body, lock_new) == 0 &&
+        strcmp(end + sizeof(boundary) - 1U, lock_tail) == 0)
+        return AARCH64_LINUX_HYP_SPIN_LOCK;
+    if (strcmp(old_body, unlock_old) == 0 &&
+        strcmp(new_body, unlock_new) == 0 &&
+        end[sizeof(boundary) - 1U] == '\0')
+        return AARCH64_LINUX_HYP_SPIN_UNLOCK;
+    return AARCH64_LINUX_HYP_SPIN_NONE;
+}
+
+static bool aarch64_linux_hyp_spin_type(
+    const MinicC0Program *program, MinicType type,
+    size_t width, bool record) {
+    size_t size, alignment;
+    MinicType plain;
+    return program && minic_type_unqualified(type, &plain) &&
+           (record ? minic_type_is_record(plain) :
+                     minic_type_is_unsigned_integer(plain)) &&
+           minic_data_layout_type(minic_default_data_layout(), program,
+                                  plain, &size, &alignment) && size == width;
+}
+
+static bool aarch64_linux_hyp_spin_source(
+    const MinicC0Program *program, const MinicInlineAsm *src,
+    MinicTargetInlineAsmContract *contract) {
+    const Aarch64LinuxHypSpinForm form = src ? aarch64_linux_hyp_spin_form(
+        src->template_text, src->template_length) : AARCH64_LINUX_HYP_SPIN_NONE;
+    const bool lock = form == AARCH64_LINUX_HYP_SPIN_LOCK;
+    size_t i, count;
+    if (!program || !src || !contract || form == AARCH64_LINUX_HYP_SPIN_NONE ||
+        !src->is_volatile || src->is_goto || src->label_count ||
+        src->clobber_count != 1U || !src->has_memory_clobber ||
+        src->register_clobber_count || !src->outputs ||
+        src->output_count != (lock ? 4U : 2U) ||
+        src->input_count != (lock ? 1U : 0U) ||
+        (lock && !src->inputs)) return false;
+    count = src->output_count + src->input_count;
+    for (i = 0U; i < count; ++i) {
+        const bool output = i < src->output_count;
+        const MinicInlineAsmOperand *operand = output ? &src->outputs[i] :
+            &src->inputs[i - src->output_count];
+        const MinicExpression *expr = minic_c0_program_expression(
+            program, operand->expression);
+        const char *expected = lock ?
+            (i < 3U ? "=&r" : i == 3U ? "+Q" : "Q") :
+            (i == 0U ? "=Q" : "=&r");
+        const size_t width = lock ? (i == 4U ? 2U : 4U) :
+            (i == 0U ? 2U : 8U);
+        const bool record = lock && (i == 0U || i == 1U || i == 3U);
+        if (!constraint(operand, expected) || !expr ||
+            expr->value_category != MINIC_VALUE_LVALUE ||
+            (output && minic_type_is_const(expr->type)) ||
+            !aarch64_linux_hyp_spin_type(program, expr->type,
+                                         width, record)) return false;
+        /* GNU can return a 32-bit union through one GPR; Core's ordinary
+         * register-output kind assumes scalar pointees.  Transport this
+         * source-verified union via an addressable output, then this target
+         * alone assigns w9/w10 and stores their full bit patterns. */
+        contract->kinds[i] = lock ?
+            (i < 2U ? MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT :
+             i == 2U ? MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
+             i == 3U ? MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE :
+                       MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT) :
+            (i == 0U ? MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT :
+                       MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT);
+    }
+    contract->operand_count = count;
+    contract->implicit_memory_effect = true;
+    return true;
+}
+
+static bool aarch64_linux_hyp_spin_emit(
+    FILE *out, const MinicDirectLP64BlockContext *ctx,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
+    const Aarch64LinuxHypSpinForm form = aarch64_linux_hyp_spin_form(
+        info->template_text, info->template_length);
+    const MinicCoreFunction *fn = ctx->fn;
+    const MinicCoreStructuredInlineAsmOperand *ops =
+        ins->value.structured_inline_asm.operands;
+    const bool lock = form == AARCH64_LINUX_HYP_SPIN_LOCK;
+    size_t i, count;
+    if (!out || !fn || !info || !ops ||
+        form == AARCH64_LINUX_HYP_SPIN_NONE || ctx->dynamic_frame ||
+        !info->is_volatile || info->is_goto ||
+        !info->has_memory_clobber || info->register_clobber_count ||
+        ins->value.structured_inline_asm.operand_count != (lock ? 5U : 2U))
+        return false;
+    count = ins->value.structured_inline_asm.operand_count;
+    for (i = 0U; i < count; ++i) {
+        MinicType pointee;
+        size_t size, alignment;
+        const MinicCoreStructuredInlineAsmOperandKind expected = lock ?
+            (i < 2U ? MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT :
+             i == 2U ? MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
+             i == 3U ? MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE :
+                       MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT) :
+            (i == 0U ? MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT :
+                       MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT);
+        const size_t width = lock ? (i == 4U ? 2U : 4U) :
+                                     (i == 0U ? 2U : 8U);
+        const bool record = lock && (i == 0U || i == 1U || i == 3U);
+        if (ops[i].kind != expected || ops[i].operand_index != i ||
+            ops[i].has_fixed_register_binding ||
+            ops[i].early_clobber ||
+            ops[i].value >= fn->value_count ||
+            !aarch64_linux_structured_spill_slot_valid(ops[i].value) ||
+            !minic_type_pointee(fn->values[ops[i].value].type, &pointee) ||
+            (record ? !minic_type_is_record(pointee) :
+                      !minic_type_is_unsigned_integer(pointee)) ||
+            !ctx->target || !ctx->target->data_layout || !ctx->program ||
+            !minic_data_layout_type(ctx->target->data_layout, ctx->program,
+                                    pointee, &size, &alignment) ||
+            size != width) return false;
+    }
+    if (lock) {
+        if (fprintf(out,
+            "  ldr x13, [sp, #%zu]\n  ldr x14, [sp, #%zu]\n"
+            "661:\n  prfm pstl1strm, [x13]\n"
+            "1: ldaxr w9, [x13]\n  add w10, w9, #65536\n"
+            "  stxr w11, w10, [x13]\n  cbnz w11, 1b\n",
+            (size_t)ops[3].value * 8U, (size_t)ops[4].value * 8U) < 0 ||
+            !aarch64_linux_alt_emit_middle(out, 33U, true) ||
+            fprintf(out,
+            "  mov w11, #65536\n  ldadda w11, w9, [x13]\n"
+            "  .rept 3\n  nop\n  .endr\n") < 0 ||
+            !aarch64_linux_alt_emit_end(out)) return false;
+        return fprintf(out,
+            "  eor w10, w9, w9, ror #16\n  cbz w10, 3f\n"
+            "  sevl\n2: wfe\n  ldaxrh w11, [x14]\n"
+            "  eor w10, w11, w9, lsr #16\n  cbnz w10, 2b\n3:\n"
+            "  ldr x15, [sp, #%zu]\n  str w9, [x15]\n"
+            "  ldr x15, [sp, #%zu]\n  str w10, [x15]\n"
+            "  ldr x15, [sp, #%zu]\n  str w11, [x15]\n",
+            (size_t)ops[0].value * 8U,
+            (size_t)ops[1].value * 8U,
+            (size_t)ops[2].value * 8U) >= 0;
+    }
+    if (fprintf(out,
+        "  ldr x13, [sp, #%zu]\n661:\n"
+        "  ldrh w9, [x13]\n  add w9, w9, #1\n"
+        "  stlrh w9, [x13]\n",
+        (size_t)ops[0].value * 8U) < 0 ||
+        !aarch64_linux_alt_emit_middle(out, 33U, true) ||
+        fprintf(out, "  mov w9, #1\n  staddlh w9, [x13]\n  nop\n") < 0 ||
+        !aarch64_linux_alt_emit_end(out)) return false;
+    return fprintf(out,
+        "  ldr x14, [sp, #%zu]\n  str x9, [x14]\n",
+        (size_t)ops[1].value * 8U) >= 0;
 }
 
 /* Linux __cmpwait_case_{8,16,32,64}: typed three-operand GNU ASM
@@ -4549,6 +4771,7 @@ bool minic_aarch64_qualify_inline_asm(
         }
     }
     if(aarch64_linux_bitrev_source(program,src,contract))return true;
+    if(aarch64_linux_hyp_spin_source(program,src,contract))return true;
     if(aarch64_linux_lse_source(program,src,contract))return true;
     if(aarch64_linux_xpaclri_source(program,src,contract))return true;
     if(aarch64_linux_smccc_source(program,src,contract))return true;
@@ -4601,7 +4824,8 @@ bool minic_aarch64_qualify_inline_asm(
          * The original Linux `asm("ic ialluis")` omits the keyword, but
          * still executes a privileged I-cache invalidate. Admit this
          * exact ISA opcode without weakening other nonvolatile forms. */
-        if(form && (src->is_volatile || strcmp(form,"ic ialluis")==0) &&
+        if(form && (src->is_volatile || strcmp(form,"ic ialluis")==0 ||
+                    strcmp(form,"ic iallu")==0) &&
            src->clobber_count <= 1U &&
            src->has_memory_clobber==(src->clobber_count==1U)) {
             contract->operand_count=0U;
@@ -5291,6 +5515,10 @@ bool minic_aarch64_emit_qualified_structured_asm(
     if (ins->value.structured_inline_asm.inline_asm_id >= fn->inline_asm_count)
         return false;
     info = &fn->inline_asms[ins->value.structured_inline_asm.inline_asm_id];
+    if (aarch64_linux_hyp_spin_form(
+            info->template_text, info->template_length) !=
+        AARCH64_LINUX_HYP_SPIN_NONE)
+        return aarch64_linux_hyp_spin_emit(out, ctx, ins, info);
     if (info->template_length == sizeof("rbit %w0, %w1") - 1U &&
         memcmp(info->template_text, "rbit %w0, %w1",
                sizeof("rbit %w0, %w1") - 1U) == 0) {

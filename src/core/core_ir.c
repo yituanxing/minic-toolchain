@@ -656,7 +656,8 @@ bool minic_core_function_add_call_signature(MinicCoreFunction *function,
         function_type_id == MINIC_FUNCTION_TYPE_INVALID ||
         !minic_function_calling_convention_valid(calling_convention) ||
         function->call_signature_count >= (size_t)UINT32_MAX ||
-        (!minic_type_is_void(return_type) && !minic_core_ir_call_scalar_type(return_type)) ||
+        (!minic_type_is_void(return_type) && !minic_type_is_record(return_type) &&
+         !minic_core_ir_call_scalar_type(return_type)) ||
         (parameter_count != 0U && parameter_types == NULL) ||
         parameter_count > SIZE_MAX / sizeof(*stored.parameter_types)) {
         return false;

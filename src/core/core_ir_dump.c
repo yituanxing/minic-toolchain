@@ -539,7 +539,14 @@ static bool dump_instruction(FILE *output,
             instruction->value.indirect_call.callee >= function->value_count) {
             return false;
         }
-        if (instruction->result == MINIC_CORE_VALUE_INVALID) {
+        if (minic_type_is_record(instruction->type)) {
+            if (fprintf(output,
+                        "  %%o%" PRIu32 " = call.indirect %%%" PRIu32 "(",
+                        instruction->value.indirect_call.result_object,
+                        instruction->value.indirect_call.callee) < 0) {
+                return false;
+            }
+        } else if (instruction->result == MINIC_CORE_VALUE_INVALID) {
             if (fprintf(output,
                         "  call.indirect %%%" PRIu32 "(",
                         instruction->value.indirect_call.callee) < 0) {

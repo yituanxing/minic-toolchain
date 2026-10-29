@@ -630,6 +630,16 @@
       "review_depth": "inventory",
       "ci_touched_in": []
     },
+    "src/target/loongarch64/simd_asm.c": {
+      "blob": "114d34d3f89ccf59e2a9a30cc33d5aa9b0b33032",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/loongarch64/simd_asm.h": {
+      "blob": "04942ab687e9dfd7b8af95e9aaa00c63a0ae74e8",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
     "src/target/riscv/function_symbol.h": {
       "blob": "a5dc789030efa18c0e1a231bfee73d3ad9c78824",
       "review_depth": "inventory",

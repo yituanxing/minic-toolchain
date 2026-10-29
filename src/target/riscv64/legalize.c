@@ -578,6 +578,14 @@ bool minic_riscv64_core_indirect_call_supported(const MinicC0Program *program,
             program, signature->return_type, &cursor, &return_value) ||
         (return_value.kind != MINIC_RISCV64_ABI_VALUE_VOID &&
          return_value.kind != MINIC_RISCV64_ABI_VALUE_INTEGER &&
+         !(return_value.kind == MINIC_RISCV64_ABI_VALUE_AGGREGATE &&
+           minic_type_is_record(signature->return_type) &&
+           return_value.slot_count >= 1U && return_value.slot_count <= 2U &&
+           call.return_form == MINIC_CORE_CALL_RETURN_OBJECT) &&
+         !(return_value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT &&
+           minic_type_is_record(signature->return_type) &&
+           return_value.storage_size > 16U && return_value.slot_count == 1U &&
+           call.return_form == MINIC_CORE_CALL_RETURN_OBJECT) &&
          !(return_value.kind == MINIC_RISCV64_ABI_VALUE_FLOAT &&
            (minic_type_is_float(signature->return_type) ||
             minic_type_is_double(signature->return_type))) &&

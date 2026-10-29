@@ -24,6 +24,18 @@ void minic_ghash_update(minic_pmull_update callback,
     minic_pmull_fallback(1, digest, (const char *)0, key->h, (const char *)0);
 }
 
+static void minic_accept_pmull_function(minic_pmull_update simd_update,
+                                       u64 digest[], struct minic_ghash_key *key) {
+    simd_update(1, digest, (const char *)0, key->h, (const char *)0);
+}
+
+void minic_ghash_real_declared_update(u64 digest[], struct minic_ghash_key *key) {
+    /* A real GNU Linux ghash call also passes a function designator whose
+     * parameter has a separately parsed compatible multi-dimensional array
+     * type.  Signature interning must not use only array descriptor IDs. */
+    minic_accept_pmull_function(minic_pmull_fallback, digest, key);
+}
+
 static u64 minic_storage[2][2] = {{3U, 4U}, {5U, 6U}};
 
 static u64 minic_sum_const(const u64 h[][2]) {

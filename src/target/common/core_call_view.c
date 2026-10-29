@@ -57,32 +57,33 @@ bool minic_core_call_view_build(const MinicCoreFunction *function,
         return false;
     if (!minic_type_equal(view.return_type, instruction->type))
         return false;
+    const MinicCoreObjectId result_object =
+        instruction->kind == MINIC_CORE_INSTRUCTION_CALL
+            ? instruction->value.call.result_object
+            : instruction->value.indirect_call.result_object;
     if (minic_type_is_void(instruction->type)) {
-        if (instruction->result != MINIC_CORE_VALUE_INVALID)
+        if (instruction->result != MINIC_CORE_VALUE_INVALID ||
+            result_object != MINIC_CORE_OBJECT_INVALID)
             return false;
         view.return_form = MINIC_CORE_CALL_RETURN_VOID;
     } else if (minic_type_is_record(instruction->type)) {
-        if (instruction->kind != MINIC_CORE_INSTRUCTION_CALL ||
-            instruction->value.call.result_object >= function->object_count ||
+        if (result_object >= function->object_count ||
             function->objects == NULL ||
             !minic_type_equal(
-                function->objects[instruction->value.call.result_object].type,
+                function->objects[result_object].type,
                 instruction->type) ||
             instruction->result != MINIC_CORE_VALUE_INVALID)
             return false;
         view.return_form = MINIC_CORE_CALL_RETURN_OBJECT;
     } else {
-        if (instruction->result >= function->value_count ||
+        if (result_object != MINIC_CORE_OBJECT_INVALID ||
+            instruction->result >= function->value_count ||
             function->values == NULL ||
             !minic_type_equal(function->values[instruction->result].type,
                               instruction->type))
             return false;
         view.return_form = MINIC_CORE_CALL_RETURN_VALUE;
     }
-    if (instruction->kind == MINIC_CORE_INSTRUCTION_CALL &&
-        view.return_form != MINIC_CORE_CALL_RETURN_OBJECT &&
-        instruction->value.call.result_object != MINIC_CORE_OBJECT_INVALID)
-        return false;
     view.argument_begin = begin;
     view.argument_count = count;
     if (count != 0U)

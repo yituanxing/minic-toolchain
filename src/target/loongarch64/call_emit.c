@@ -106,6 +106,9 @@ bool minic_loongarch64_emit_abi_instruction(
                                           : ins->value.call.argument_begin;
             const size_t count = indirect ? ins->value.indirect_call.argument_count
                                           : ins->value.call.argument_count;
+            const MinicCoreObjectId result_object = indirect
+                ? ins->value.indirect_call.result_object
+                : ins->value.call.result_object;
             static const char *const gp_regs[8] = {
                 "$a0", "$a1", "$a2", "$a3", "$a4", "$a5", "$a6", "$a7"};
             static const char *const fp_regs[8] = {
@@ -224,10 +227,8 @@ bool minic_loongarch64_emit_abi_instruction(
                         return false;
                 }
             }
-            if (!indirect && minic_type_is_record(ins->type)) {
+            if (minic_type_is_record(ins->type)) {
                 size_t result_bytes, dst;
-                const MinicCoreObjectId result_object =
-                    ins->value.call.result_object;
                 if (minic_multi_indirect_record(program, target,
                         ins->type, &result_bytes) && result_bytes > 16U) {
                     /* The ABI planner reserved $a0 BEFORE placing explicit
@@ -354,10 +355,9 @@ bool minic_loongarch64_emit_abi_instruction(
                 return false;
             if (minic_type_is_void(ins->type)) return true;
             if (minic_type_is_record(ins->type)) {
-                const MinicCoreObjectId object_id =
-                    ins->value.call.result_object;
+                const MinicCoreObjectId object_id = result_object;
                 size_t bytes, slots, dst, chunk, fp_elements, fp_width;
-                if (indirect || object_id >= fn->object_count ||
+                if (object_id >= fn->object_count ||
                     !minic_lp64_frame_plan_object(frame_plan, object_id, &dst))
                     return false;
                 if (minic_multi_empty_record(program, target, ins->type))

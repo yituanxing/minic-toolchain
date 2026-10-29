@@ -135,6 +135,10 @@ static bool core_record_snapshot_single_call_candidate(
             instruction->value.call.result_object == candidate) {
             return false;
         }
+        if (instruction->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL &&
+            instruction->value.indirect_call.result_object == candidate) {
+            return false;
+        }
     }
     if (producer_count != 1U || producer == MINIC_CORE_INSTRUCTION_INVALID ||
         !core_instruction_block_position(function,

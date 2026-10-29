@@ -296,6 +296,9 @@ static bool core_object_interval_build_index(
                 begin=instruction->value.call.argument_begin;
                 count=instruction->value.call.argument_count;
             } else if (instruction->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL) {
+                if (instruction->value.indirect_call.result_object < object_count) {
+                    disqualified[instruction->value.indirect_call.result_object]=1U;
+                }
                 begin=instruction->value.indirect_call.argument_begin;
                 count=instruction->value.indirect_call.argument_count;
             }

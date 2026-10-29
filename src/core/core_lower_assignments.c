@@ -13,11 +13,12 @@
  * effectful storage, local facts, and scalar prefix/postfix updates.
  * Bit-field assignments dispatch to the dedicated semantic owner. */
 
-MinicCoreLowerStatus minic_core_lower_assignment_pair(MinicCoreLowerContext *context,
+static MinicCoreLowerStatus minic_core_lower_assignment_pair_impl(MinicCoreLowerContext *context,
                                                   MinicExpressionId target_id,
                                                   MinicExpressionId source_id,
                                                   MinicSourceSpan span,
-                                                  MinicCoreValueId *result_value) {
+                                                  MinicCoreValueId *result_value,
+                                                  bool is_initializer_write) {
     const MinicExpression *target;
     const MinicExpression *source;
     const MinicExpression *source_operand;
@@ -83,7 +84,7 @@ MinicCoreLowerStatus minic_core_lower_assignment_pair(MinicCoreLowerContext *con
     {
         bool matched;
         status = minic_core_lower_try_bit_field_assignment(
-            context, target, source_id, span, result_value, &matched);
+            context, target, source_id, span, result_value, is_initializer_write, &matched);
         if (matched || status != MINIC_CORE_LOWER_OK) return status;
     }
     if (!minic_type_unqualified(target->type, &stored_type) ||
@@ -200,6 +201,15 @@ MinicCoreLowerStatus minic_core_lower_assignment_pair(MinicCoreLowerContext *con
     return MINIC_CORE_LOWER_OK;
 }
 
+MinicCoreLowerStatus minic_core_lower_assignment_pair(MinicCoreLowerContext *context,
+                                                  MinicExpressionId target_id,
+                                                  MinicExpressionId source_id,
+                                                  MinicSourceSpan span,
+                                                  MinicCoreValueId *result_value) {
+    return minic_core_lower_assignment_pair_impl(context, target_id, source_id,
+                                                 span, result_value, false);
+}
+
 MinicCoreLowerStatus minic_core_lower_assignment(MinicCoreLowerContext *context,
                                              const MinicStatement *statement) {
     MinicExpressionId source_id;
@@ -210,7 +220,9 @@ MinicCoreLowerStatus minic_core_lower_assignment(MinicCoreLowerContext *context,
     }
     target_id = statement->target_expression;
     source_id = statement->expression;
-    return minic_core_lower_assignment_pair(context, target_id, source_id, statement->span, NULL);
+    return minic_core_lower_assignment_pair_impl(context, target_id, source_id,
+                                                 statement->span, NULL,
+                                                 statement->is_initializer_write);
 }
 
 /* M102_UNSIGNED_BIT_FIELD_SCALAR_UPDATE / M154_SIGNED_BIT_FIELD_UPDATE_OWNER:

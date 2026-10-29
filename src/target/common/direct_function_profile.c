@@ -65,7 +65,13 @@ MinicDirectLP64ProfileResult minic_multi_direct_lp64_profile_function(
             if (!ins->value.variadic_address.copy_destination)
                 ++starts;
         }
-        if (cursors != profile->variadic_address_count || starts > 1U ||
+        /* A function may legitimately restart the same va_list after
+         * va_end (configfs config_item_set_name does two independent
+         * formatting passes). Each va_start has its own Core cursor origin;
+         * the AAPCS64 frame planner already allocates a separate 32-byte
+         * mutable tag for every origin. Rejecting starts > 1 here was an
+         * obsolete preflight limit, not an ABI restriction. */
+        if (cursors != profile->variadic_address_count ||
             (starts != 0U && !decl->is_variadic) ||
             (starts != 0U &&
              (profile->fixed_gp_count > 8U || profile->fixed_fp_count > 8U)))

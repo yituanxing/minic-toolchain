@@ -1380,7 +1380,8 @@ bool minic_c0_program_discard_last_array_type(MinicC0Program *program, MinicType
     return true;
 }
 
-static bool minic_function_type_matches(const MinicFunctionType *descriptor,
+static bool minic_function_type_matches(const MinicC0Program *program,
+                                        const MinicFunctionType *descriptor,
                                         MinicType return_type,
                                         const MinicType *parameter_types,
                                         size_t parameter_count,
@@ -1395,8 +1396,15 @@ static bool minic_function_type_matches(const MinicFunctionType *descriptor,
         return false;
     }
     for (parameter_index = 0U; parameter_index < parameter_count; ++parameter_index) {
-        if (!minic_type_equal(descriptor->parameter_types[parameter_index],
-                              parameter_types[parameter_index])) {
+        /* Two declarations may independently intern the same array shape.
+         * In particular GNU Linux's PMULL callback and its asmlinkage
+         * implementation both spell `const u64 h[][2]`, but the array type
+         * IDs are independent.  C function parameter compatibility is about
+         * type structure (including inner qualifiers and bounds), not the
+         * allocation identity of the array descriptor. */
+        if (!minic_c0_types_compatible(program,
+                                      descriptor->parameter_types[parameter_index],
+                                      parameter_types[parameter_index])) {
             return false;
         }
     }
@@ -1433,7 +1441,8 @@ static bool minic_c0_program_add_variadic_function_type_with_convention(MinicC0P
     }
     for (function_type_index = 0U; function_type_index < program->function_type_count;
          ++function_type_index) {
-        if (minic_function_type_matches(&program->function_types[function_type_index],
+        if (minic_function_type_matches(program,
+                                        &program->function_types[function_type_index],
                                         return_type,
                                         normalized_parameter_types,
                                         parameter_count,

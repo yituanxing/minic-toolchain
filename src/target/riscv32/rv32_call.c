@@ -109,6 +109,7 @@ bool rv32_emit_call(FILE *out, const MinicCoreFunction *f,
                     MinicCoreInstructionId id) {
     const Rv32CallAbiPlan *plan;
     const MinicCoreCallView *view;
+    MinicCoreObjectId result_object;
     unsigned words;
     if (out == NULL || f == NULL || fr == NULL || ins == NULL ||
         (ins->kind != MINIC_CORE_INSTRUCTION_CALL &&
@@ -119,16 +120,17 @@ bool rv32_emit_call(FILE *out, const MinicCoreFunction *f,
     plan = rv32_function_abi_call(&fr->abi, id);
     if (plan == NULL) return false;
     view = &plan->view;
+    result_object = ins->kind == MINIC_CORE_INSTRUCTION_CALL
+        ? ins->value.call.result_object : ins->value.indirect_call.result_object;
     if (plan->stack_words > fr->outgoing_size / 4U ||
         !rv32_emit_scalar_call_arguments(out, f, fr, plan))
         return false;
     if (plan->indirect_return) {
         /* The receiver's Core result object is the ABI-hidden sret target.
          * Argument placement was already shifted past a0 by the same plan. */
-        if (ins->kind != MINIC_CORE_INSTRUCTION_CALL ||
-            ins->value.call.result_object >= fr->object_count ||
+        if (result_object >= fr->object_count ||
             !rv32_address(out, fr, "a0",
-                fr->object_offsets[ins->value.call.result_object]))
+                fr->object_offsets[result_object]))
             return false;
     }
     if (ins->kind == MINIC_CORE_INSTRUCTION_CALL) {
@@ -143,12 +145,11 @@ bool rv32_emit_call(FILE *out, const MinicCoreFunction *f,
     }
     if (plan->record_return_size != 0U) {
         size_t obj, word;
-        if (ins->kind != MINIC_CORE_INSTRUCTION_CALL ||
-            ins->value.call.result_object >= fr->object_count ||
+        if (result_object >= fr->object_count ||
             ins->result != MINIC_CORE_VALUE_INVALID)
             return false;
         if (plan->indirect_return) return true;
-        obj = ins->value.call.result_object;
+        obj = result_object;
         for (word = 0U; word < (plan->record_return_size + 3U) / 4U; ++word) {
             const char *reg = word == 0U ? "a0" : "a1";
             size_t remaining = plan->record_return_size - word * 4U;

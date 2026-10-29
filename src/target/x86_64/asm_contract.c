@@ -219,6 +219,8 @@ bool minic_x86_64_requires_qualified_input_asm(const MinicInlineAsm *src) {
              src->template_text, src->template_length) ||
          minic_x86_64_linux_exception_stack_call_form(
              src->template_text, src->template_length) ||
+         minic_x86_64_linux_vmware_stealclock_alt_form(
+             src->template_text, src->template_length) ||
          minic_x86_64_linux_vmware_hypercall_form(
              src->template_text, src->template_length) != 0U ||
          minic_x86_64_linux_kexec_load_segments_form(
@@ -322,6 +324,67 @@ bool minic_x86_64_linux_kvm_hypercall_alt_form(
         ".pushsection.altinstr_replacement,\"ax\""
         "#ALT:replacement16641:vmmcall6651:.popsection";
     return x86_linux_compact_asm_equals(text, length, expected);
+}
+
+/* VMware legacy I/O backdoor is the boot-time fallback for both Intel and
+ * AMD hypercall encodings. Linux emits TWO alternatives with exact feature
+ * IDs (8*32+18,8*32+19); replacing the old port I/O by only one bare
+ * vmcall would make the image invalid on the other hypervisor path. */
+bool minic_x86_64_linux_vmware_stealclock_alt_form(
+    const char *text, size_t length) {
+    static const char expected[] =
+        "#ALT:oldinstr2661:movw$0x5658,%%dx;inl(%%dx),%%eax"
+        "662:#ALT:padding2.skip-((((6651f-6641f)^"
+        "(((6651f-6641f)^(6652f-6642f))&"
+        "-(-((6651f-6641f)<(6652f-6642f)))))-(662b-661b))>0)*"
+        "(((6651f-6641f)^(((6651f-6641f)^(6652f-6642f))&"
+        "-(-((6651f-6641f)<(6652f-6642f)))))-(662b-661b)),0x90"
+        "663:.pushsection.altinstructions,\"a\""
+        ".long661b-..long6641f-..4byte(8*32+18)"
+        ".byte663b-661b.byte6651f-6641f"
+        ".long661b-..long6642f-..4byte(8*32+19)"
+        ".byte663b-661b.byte6652f-6642f.popsection"
+        ".pushsection.altinstr_replacement,\"ax\""
+        "#ALT:replacement16641:vmcall6651:"
+        "#ALT:replacement26642:vmmcall6652:.popsection";
+    return x86_linux_compact_asm_equals(text, length, expected);
+}
+
+static bool x86_linux_vmware_stealclock_alt_source(
+    const MinicC0Program *program, const MinicInlineAsm *src,
+    MinicTargetInlineAsmContract *contract) {
+    static const char *const regs[] = {"a", "b", "c", "d", "S", "D"};
+    const MinicExpression *expr;
+    MinicType plain;
+    size_t i;
+    if (!program || !src || !contract || !src->is_volatile || src->is_goto ||
+        !minic_x86_64_linux_vmware_stealclock_alt_form(
+            src->template_text, src->template_length) ||
+        src->output_count != 2U || src->input_count != 6U ||
+        !src->outputs || !src->inputs || src->label_count ||
+        !src->has_memory_clobber || src->clobber_count != 1U ||
+        src->register_clobber_count ||
+        !target_constraint_is(&src->outputs[0], "=a") ||
+        !target_constraint_is(&src->outputs[1], "=c")) return false;
+    for (i = 0U; i < 8U; ++i) {
+        const bool output = i < 2U;
+        const MinicInlineAsmOperand *op = output ?
+            &src->outputs[i] : &src->inputs[i - 2U];
+        expr = minic_c0_program_expression(program, op->expression);
+        if ((!output && !target_constraint_is(op, regs[i - 2U])) ||
+            !expr || !minic_type_unqualified(expr->type, &plain) ||
+            (output && expr->value_category != MINIC_VALUE_LVALUE) ||
+            (output && minic_type_is_const(expr->type)) ||
+            !(minic_type_equal(plain, minic_type_unsigned_int()) ||
+              (!output && minic_type_equal(plain, minic_type_int()))))
+            return false;
+        contract->kinds[i] = output ?
+            MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
+            MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    }
+    contract->operand_count = 8U;
+    contract->implicit_memory_effect = true;
+    return true;
 }
 
 /* The SEV fallback emits AMD VMMCALL directly; unlike the alternative form,
@@ -1599,7 +1662,8 @@ static bool x86_linux_crash_segment_snapshot_source(
     if (!output || output->value_category != MINIC_VALUE_LVALUE ||
         minic_type_is_const(output->type) ||
         !minic_type_unqualified(output->type, &type) ||
-        !minic_type_equal(type, minic_type_unsigned_long())) return false;
+        !(minic_type_equal(type, minic_type_unsigned_short()) ||
+          minic_type_equal(type, minic_type_unsigned_long()))) return false;
     contract->operand_count = 1U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     return true;
@@ -2713,6 +2777,7 @@ unsigned int minic_x86_64_linux_vmware_hypercall_form(
     const char *text, size_t length) {
     if (text && length == 6U && memcmp(text, "vmcall", 6U) == 0) return 1U;
     if (text && length == 7U && memcmp(text, "vmmcall", 7U) == 0) return 2U;
+    if (x86_linux_compact_asm_equals(text, length, "inl(%%dx),%%eax")) return 3U;
     return 0U;
 }
 
@@ -2741,7 +2806,8 @@ static bool x86_linux_vmware_hypercall_source(
         expected[2] = '\0';
         if (!c_is(operand, output ? expected : regs[i % 4U]) ||
             !expression || !minic_type_unqualified(expression->type, &type) ||
-            !minic_type_equal(type, minic_type_unsigned_int()) ||
+            !(minic_type_equal(type, minic_type_unsigned_int()) ||
+              (!output && minic_type_equal(type, minic_type_int()))) ||
             (output && (expression->value_category != MINIC_VALUE_LVALUE ||
                         minic_type_is_const(expression->type)))) return false;
         contract->kinds[i] = output ?
@@ -2869,6 +2935,9 @@ unsigned int minic_x86_64_linux_msr_form(const char *text,size_t len) {
       ".long(1b)-..long(2b)-..long8.popsection",
       /* mce_rdmsrl: architectural-violation #MC fixup kind 13. */
       "1:rdmsr2:.pushsection\"__ex_table\",\"a\".balign4"
+      ".long(1b)-..long(2b)-..long13.popsection",
+      /* mce_wrmsrl: same #MC exception type, but writes ECX:EAX:EDX. */
+      "1:wrmsr2:.pushsection\"__ex_table\",\"a\".balign4"
       ".long(1b)-..long(2b)-..long13.popsection"
     };
     /* Source named operands are canonicalized to numeric %0 by Core.
@@ -2895,8 +2964,8 @@ unsigned int minic_x86_64_linux_msr_form(const char *text,size_t len) {
        norm[n++]=c;
     }
     norm[n]=0;
-    for(i=0U;i<3U;++i)
-        if(strcmp(norm,exact[i])==0)return i==2U?5U:(unsigned int)i+1U;
+    for(i=0U;i<4U;++i)
+        if(strcmp(norm,exact[i])==0)return i==2U?5U:i==3U?6U:(unsigned int)i+1U;
     return 0U;
 }
 static bool x86_linux_msr_source(const MinicC0Program *program,
@@ -2948,7 +3017,7 @@ static bool x86_linux_msr_source(const MinicC0Program *program,
        src->input_count!=((form==1U||form==5U)?1U:3U)||
        ((form==1U||form==5U)&&!src->outputs)||!src->inputs||
        src->clobber_count!=((form==1U||form==5U)?0U:1U)||
-       src->has_memory_clobber!=(form==2U)||
+       src->has_memory_clobber!=(form==2U||form==6U)||
        src->register_clobber_count)return false;
     if(form==1U || form==5U) {
         if(!c_is(&src->outputs[0],"=a")||
@@ -8282,6 +8351,8 @@ bool minic_x86_64_qualify_inline_asm(
     size_t i, count;
     if (!contract) return false;
     if (x86_linux_vmware_hypercall_source(program, source, contract))
+        return true;
+    if (x86_linux_vmware_stealclock_alt_source(program, source, contract))
         return true;
     if (x86_linux_kvm_hypercall_alt_source(program, source, contract))
         return true;

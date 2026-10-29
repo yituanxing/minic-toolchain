@@ -448,6 +448,10 @@ typedef struct MinicCoreInstruction {
             MinicCoreCallSignatureId signature_id;
             size_t argument_begin;
             size_t argument_count;
+            /* Indirect and direct aggregate returns obey the same Core
+             * ownership contract: result bytes live in an object, and
+             * machine-specific ABI placement is deferred to Target. */
+            MinicCoreObjectId result_object;
         } indirect_call;
     } value;
 } MinicCoreInstruction;

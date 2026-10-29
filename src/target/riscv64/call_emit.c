@@ -609,6 +609,53 @@ static bool rv64_resolve_prepared_call(
     return true;
 }
 
+/* Return-object storage is source/Core semantics. Both direct and indirect
+ * calls consume the same psABI return classification and materialize exactly
+ * the same GP-register chunks (or use hidden a0 for large records). */
+static bool rv64_emit_call_record_result(
+    FILE *file, const MinicC0Program *program,
+    const MinicCoreFunction *function, const MinicRiscv64CoreFrame *frame,
+    MinicCoreObjectId object_id, const MinicRiscv64AbiValue *return_value) {
+    size_t chunk_index;
+    size_t object_offset;
+    if (return_value->kind == MINIC_RISCV64_ABI_VALUE_INDIRECT) {
+        return return_value->storage_size > 16U &&
+               return_value->slot_count == 1U && object_id < function->object_count;
+    }
+    if (return_value->kind != MINIC_RISCV64_ABI_VALUE_AGGREGATE ||
+        return_value->slot_count == 0U || return_value->slot_count > 2U ||
+        object_id >= function->object_count ||
+        !minic_riscv64_core_frame_object_offset(
+            program, function, frame, object_id, &object_offset))
+        return false;
+    for (chunk_index = 0U; chunk_index < return_value->slot_count; ++chunk_index) {
+        size_t chunk_offset = chunk_index * 8U;
+        size_t chunk_size;
+        const char *source_register =
+            minic_riscv64_abi_integer_argument_registers[chunk_index];
+        if (chunk_offset >= return_value->storage_size ||
+            object_offset > SIZE_MAX - chunk_offset)
+            return false;
+        chunk_size = return_value->storage_size - chunk_offset;
+        if (chunk_size > 8U) chunk_size = 8U;
+        if (!minic_riscv64_frame_store_chunk(
+                file, frame, source_register, object_offset + chunk_offset, chunk_size))
+            return false;
+    }
+    return true;
+}
+
+static bool rv64_emit_call_hidden_return_pointer(
+    FILE *file, const MinicC0Program *program,
+    const MinicCoreFunction *function, const MinicRiscv64CoreFrame *frame,
+    MinicCoreObjectId object_id) {
+    size_t result_offset;
+    return object_id < function->object_count &&
+           minic_riscv64_core_frame_object_offset(
+               program, function, frame, object_id, &result_offset) &&
+           minic_riscv64_frame_emit_address(file, frame, "a0", result_offset);
+}
+
 bool minic_riscv64_emit_direct_call(FILE *file,
                       const MinicC0Program *program,
                       const MinicCoreFunction *function,
@@ -630,14 +677,9 @@ bool minic_riscv64_emit_direct_call(FILE *file,
     callee = call->callee;
     return_value = planned->return_value;
     if (return_value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT) {
-        size_t result_offset;
-        if (call->return_form != MINIC_CORE_CALL_RETURN_OBJECT)
-            return false;
-
-        if (instruction->value.call.result_object >= function->object_count ||
-            !minic_riscv64_core_frame_object_offset(
-                program, function, frame, instruction->value.call.result_object, &result_offset) ||
-            !minic_riscv64_frame_emit_address(file, frame, "a0", result_offset)) {
+        if (call->return_form != MINIC_CORE_CALL_RETURN_OBJECT ||
+            !rv64_emit_call_hidden_return_pointer(file, program, function, frame,
+                                                   instruction->value.call.result_object)) {
             return false;
         }
     }
@@ -652,40 +694,8 @@ bool minic_riscv64_emit_direct_call(FILE *file,
         return true;
     }
     if (minic_type_is_record(instruction->type)) {
-        size_t chunk_index;
-        size_t object_offset;
-
-        if (return_value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT) {
-            return return_value.storage_size > 16U && return_value.slot_count == 1U &&
-                   instruction->value.call.result_object < function->object_count;
-        }
-        if (return_value.kind != MINIC_RISCV64_ABI_VALUE_AGGREGATE ||
-            return_value.slot_count == 0U || return_value.slot_count > 2U ||
-            instruction->value.call.result_object >= function->object_count ||
-            !minic_riscv64_core_frame_object_offset(
-                program, function, frame, instruction->value.call.result_object, &object_offset)) {
-            return false;
-        }
-        for (chunk_index = 0U; chunk_index < return_value.slot_count; ++chunk_index) {
-            size_t chunk_offset = chunk_index * 8U;
-            size_t chunk_size;
-            const char *source_register =
-                minic_riscv64_abi_integer_argument_registers[chunk_index];
-
-            if (chunk_offset >= return_value.storage_size ||
-                object_offset > SIZE_MAX - chunk_offset) {
-                return false;
-            }
-            chunk_size = return_value.storage_size - chunk_offset;
-            if (chunk_size > 8U) {
-                chunk_size = 8U;
-            }
-            if (!minic_riscv64_frame_store_chunk(
-                    file, frame, source_register, object_offset + chunk_offset, chunk_size)) {
-                return false;
-            }
-        }
-        return true;
+        return rv64_emit_call_record_result(file, program, function, frame,
+            instruction->value.call.result_object, &return_value);
     }
     if (minic_type_is_long_double(instruction->type) ||
         minic_type_is_int128_integer(instruction->type))
@@ -713,6 +723,11 @@ bool minic_riscv64_emit_indirect_call(FILE *file,
         planned->argument_count != call->argument_count)
         return false;
     return_value = planned->return_value;
+    if (return_value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT &&
+        (call->return_form != MINIC_CORE_CALL_RETURN_OBJECT ||
+         !rv64_emit_call_hidden_return_pointer(file, program, function, frame,
+             instruction->value.indirect_call.result_object)))
+        return false;
     if (!emit_core_call_arguments(
             file, program, function, frame,
             call, planned, false))
@@ -723,6 +738,10 @@ bool minic_riscv64_emit_indirect_call(FILE *file,
     }
     if (minic_type_is_void(instruction->type)) {
         return true;
+    }
+    if (minic_type_is_record(instruction->type)) {
+        return rv64_emit_call_record_result(file, program, function, frame,
+            instruction->value.indirect_call.result_object, &return_value);
     }
     if (minic_type_is_long_double(instruction->type) ||
         minic_type_is_int128_integer(instruction->type))

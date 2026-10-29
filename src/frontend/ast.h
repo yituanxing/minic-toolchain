@@ -322,6 +322,10 @@ typedef struct MinicStatement {
     MinicSourceSpan span;
     MinicExpressionId target_expression;
     MinicExpressionId expression;
+    /* Only parser-created writes within an aggregate's initialization block
+     * have this provenance. A const member may be initialized here, while a
+     * later ordinary assignment to that same member remains forbidden. */
+    bool is_initializer_write;
     MinicStatementId target_statement;
     MinicInlineAsmId inline_asm_id;
     MinicCleanupContextId cleanup_context;

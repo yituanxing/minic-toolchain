@@ -225,9 +225,10 @@ static bool minic_multi_direct_result_slot_offset(
     if ((ins->kind == MINIC_CORE_INSTRUCTION_CALL ||
          ins->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL) &&
         (minic_type_is_void(ins->type) ||
-         (ins->kind == MINIC_CORE_INSTRUCTION_CALL &&
-          minic_type_is_record(ins->type) &&
-          ins->value.call.result_object != MINIC_CORE_OBJECT_INVALID))) {
+         (minic_type_is_record(ins->type) &&
+          (ins->kind == MINIC_CORE_INSTRUCTION_CALL
+              ? ins->value.call.result_object
+              : ins->value.indirect_call.result_object) != MINIC_CORE_OBJECT_INVALID))) {
         /* Effect-only call or record-result object: no scalar Core slot. */
         *offset = 0U;
         return true;

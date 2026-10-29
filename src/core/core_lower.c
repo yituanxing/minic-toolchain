@@ -539,6 +539,9 @@ static MinicCoreLowerStatus lower_return(MinicCoreLowerContext *context,
                        expression->value.call.function_id != MINIC_FUNCTION_INVALID) {
                 status = minic_core_lower_direct_record_call_object(
                     context, expression, &terminator.return_object);
+            } else if (expression->kind == MINIC_EXPRESSION_CALL) {
+                status = minic_core_lower_indirect_record_call_object(
+                    context, expression, &terminator.return_object);
             } else if (expression->kind == MINIC_EXPRESSION_CONDITIONAL &&
                        minic_type_is_record(expression->type)) {
                 status = minic_core_lower_record_conditional_object(

@@ -595,6 +595,8 @@ MinicCoreLowerStatus minic_core_lower_internal_record_materialized_address(
     } else if (expression->kind == MINIC_EXPRESSION_CALL &&
                expression->value.call.function_id != MINIC_FUNCTION_INVALID) {
         status = minic_core_lower_direct_record_call_object(context, expression, &object_id);
+    } else if (expression->kind == MINIC_EXPRESSION_CALL) {
+        status = minic_core_lower_indirect_record_call_object(context, expression, &object_id);
     } else if (expression->kind == MINIC_EXPRESSION_COMPOUND_LITERAL) {
         status = minic_core_lower_record_compound_literal_object(context, expression, &object_id);
     } else {
@@ -811,7 +813,7 @@ MinicCoreLowerStatus minic_core_lower_record_copy_statement(MinicCoreLowerContex
     MinicCoreValueId source_address;
     MinicType source_type;
     MinicType target_type;
-    bool direct_record_call;
+    bool record_call;
     bool record_assignment_value;
     bool record_conditional_value;
     bool record_va_arg_value;
@@ -826,9 +828,7 @@ MinicCoreLowerStatus minic_core_lower_record_copy_statement(MinicCoreLowerContex
     }
     target = minic_c0_program_expression(context->body->program, statement->target_expression);
     source = minic_c0_program_expression(context->body->program, statement->expression);
-    direct_record_call =
-        source != NULL && source->kind == MINIC_EXPRESSION_CALL &&
-        source->value.call.function_id != MINIC_FUNCTION_INVALID;
+    record_call = source != NULL && source->kind == MINIC_EXPRESSION_CALL;
     record_assignment_value =
         source != NULL && source->kind == MINIC_EXPRESSION_ASSIGNMENT;
     record_conditional_value =
@@ -848,7 +848,7 @@ MinicCoreLowerStatus minic_core_lower_record_copy_statement(MinicCoreLowerContex
         !minic_type_unqualified(source->type, &source_type) ||
         !minic_type_equal(target_type, source_type) || !minic_type_is_record(target_type) ||
         (statement->kind == MINIC_STATEMENT_RECORD_COPY && minic_type_is_const(target->type)) ||
-        (!direct_record_call && !record_assignment_value && !record_conditional_value &&
+        (!record_call && !record_assignment_value && !record_conditional_value &&
          !record_va_arg_value && !record_statement_value && !record_member_value &&
          (!minic_c0_record_value_is_copy_source(context->body->program, statement->expression) ||
           !minic_c0_record_value_is_address_backed(
@@ -859,11 +859,13 @@ MinicCoreLowerStatus minic_core_lower_record_copy_statement(MinicCoreLowerContex
     if (record == NULL || !record->is_complete) {
         return MINIC_CORE_LOWER_ERROR;
     }
-    if (direct_record_call) {
+    if (record_call) {
         MinicCoreObjectId source_object;
         MinicType pointer_type;
 
-        status = minic_core_lower_direct_record_call_object(context, source, &source_object);
+        status = source->value.call.function_id != MINIC_FUNCTION_INVALID
+            ? minic_core_lower_direct_record_call_object(context, source, &source_object)
+            : minic_core_lower_indirect_record_call_object(context, source, &source_object);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
@@ -946,8 +948,7 @@ MinicCoreLowerStatus minic_core_lower_try_direct_record_member(
         record = minic_c0_program_record(context->body->program, expression->value.member.record_id);
         field = minic_c0_record_field(record, expression->value.member.field_index);
         if (base != NULL &&
-            ((base->kind == MINIC_EXPRESSION_CALL &&
-              base->value.call.function_id != MINIC_FUNCTION_INVALID) ||
+            (base->kind == MINIC_EXPRESSION_CALL ||
              base->kind == MINIC_EXPRESSION_CONDITIONAL ||
              base->kind == MINIC_EXPRESSION_COMPOUND_LITERAL ||
              base->kind == MINIC_EXPRESSION_CAST ||

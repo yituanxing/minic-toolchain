@@ -130,6 +130,7 @@ static bool add_array_object_element_assignment(MinicParser *parser,
     statement.span = value_span;
     statement.target_expression = target_id;
     statement.expression = value_id;
+    statement.is_initializer_write = true;
     statement.target_statement = MINIC_STATEMENT_INVALID;
     statement.cleanup_context = parser->cleanup_context;
     statement.cleanup_stop_context = MINIC_CLEANUP_CONTEXT_ROOT;
@@ -1060,6 +1061,7 @@ static bool add_zero_assignment_to_lvalue(MinicParser *parser,
     statement.span = initializer_span;
     statement.target_expression = target_id;
     statement.expression = value_id;
+    statement.is_initializer_write = true;
     statement.target_statement = MINIC_STATEMENT_INVALID;
     statement.cleanup_context = parser->cleanup_context;
     statement.cleanup_stop_context = MINIC_CLEANUP_CONTEXT_ROOT;
@@ -1295,6 +1297,7 @@ static bool add_runtime_record_member_assignment(MinicParser *parser,
     statement.span.end = value->span.end;
     statement.target_expression = member_id;
     statement.expression = value_id;
+    statement.is_initializer_write = true;
     statement.target_statement = MINIC_STATEMENT_INVALID;
     statement.cleanup_context = parser->cleanup_context;
     statement.cleanup_stop_context = MINIC_CLEANUP_CONTEXT_ROOT;

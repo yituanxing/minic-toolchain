@@ -1954,13 +1954,82 @@ static bool emit_linux_vmware_hypercall(
     for (i = 0U; i < 4U; ++i)
         if (!x86_value_load(out, frame, ops[4U + i].value, in_regs[i]))
             return false;
-    if (fputs(form == 1U ? "  vmcall\n" : "  vmmcall\n", out) == EOF)
+    if (fputs(form == 1U ? "  vmcall\n" :
+              form == 2U ? "  vmmcall\n" :
+                           "  inl (%dx), %eax\n", out) == EOF)
         return false;
     for (i = 0U; i < 4U; ++i) {
         if (!x86_value_load(out, frame, ops[i].value, "%r11") ||
             fprintf(out, "  movl %s, (%%r11)\n", out_regs[i]) < 0)
             return false;
     }
+    return fputs("  popq %rbx\n", out) != EOF;
+}
+
+static bool emit_linux_vmware_stealclock_alt(
+    FILE *out, const MinicC0Program *program,
+    const MinicTargetInfo *target, const MinicCoreFunction *fn,
+    const MinicX86Frame *frame, const MinicCoreInstruction *ins,
+    const MinicCoreInlineAsm *info) {
+    static const char *const inputs[] = {
+        "%rax", "%rbx", "%rcx", "%rdx", "%rsi", "%rdi"
+    };
+    static const char *const outputs[] = {"%eax", "%ecx"};
+    /* GNU ALTERNATIVE_2 chooses the longer replacement length via xor/min
+     * formulation, and pads the original site only if it is too short. */
+    static const char max_replacement[] =
+        "((6651f-6641f) ^ (((6651f-6641f) ^ (6652f-6642f)) & "
+        "-(-((6651f-6641f) < (6652f-6642f)))))";
+    const MinicCoreStructuredInlineAsmOperand *b =
+        ins->value.structured_inline_asm.operands;
+    size_t i, width; bool sign; MinicType ty;
+    if (!out || !program || !target || !fn || !frame || !ins || !info || !b ||
+        !minic_x86_64_linux_vmware_stealclock_alt_form(
+            info->template_text, info->template_length) ||
+        !info->is_volatile || info->is_goto || !info->has_memory_clobber ||
+        info->register_clobber_count ||
+        ins->value.structured_inline_asm.operand_count != 8U) return false;
+    for (i = 0U; i < 8U; ++i) {
+        if (b[i].operand_index != i || b[i].value >= fn->value_count ||
+            b[i].has_fixed_register_binding || b[i].early_clobber ||
+            b[i].kind != (i < 2U ?
+                MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
+                MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT)) return false;
+        ty = fn->values[b[i].value].type;
+        if (i < 2U && !minic_type_pointee(ty, &ty)) return false;
+        if (!minic_x86_64_scalar_width(program, target, ty, &width, &sign) ||
+            width != 4U) return false;
+    }
+    if (fputs("  pushq %rbx\n", out) == EOF) return false;
+    for (i = 0U; i < 6U; ++i)
+        if (!x86_value_load(out, frame, b[2U + i].value, inputs[i]))
+            return false;
+    if (fputs("661:\n  movw $0x5658, %dx\n  inl (%dx), %eax\n"
+              "662:\n", out) == EOF ||
+        fprintf(out, "  .skip -(((%s) - (662b-661b)) > 0) * "
+                     "((%s) - (662b-661b)),0x90\n",
+                     max_replacement, max_replacement) < 0 ||
+        fputs("663:\n"
+              "  .pushsection .altinstructions,\"a\"\n"
+              "  .long 661b - .\n"
+              "  .long 6641f - .\n"
+              "  .4byte (8*32+18)\n"
+              "  .byte 663b-661b\n"
+              "  .byte 6651f-6641f\n"
+              "  .long 661b - .\n"
+              "  .long 6642f - .\n"
+              "  .4byte (8*32+19)\n"
+              "  .byte 663b-661b\n"
+              "  .byte 6652f-6642f\n"
+              "  .popsection\n"
+              "  .pushsection .altinstr_replacement,\"ax\"\n"
+              "6641:\n  vmcall\n6651:\n"
+              "6642:\n  vmmcall\n6652:\n"
+              "  .popsection\n", out) == EOF) return false;
+    for (i = 0U; i < 2U; ++i)
+        if (!x86_value_load(out, frame, b[i].value, "%r11") ||
+            fprintf(out, "  movl %s, (%%r11)\n", outputs[i]) < 0)
+            return false;
     return fputs("  popq %rbx\n", out) != EOF;
 }
 
@@ -2056,7 +2125,7 @@ static bool emit_linux_msr(FILE *out,const MinicC0Program *program,
     if(!out||!program||!target||!fn||!frame||!ins||!info||!ops||
        !form||!info->is_volatile||info->is_goto||
        info->register_clobber_count||
-       info->has_memory_clobber!=(form==2U||form==4U)||
+       info->has_memory_clobber!=(form==2U||form==4U||form==6U)||
        ins->value.structured_inline_asm.operand_count!=count)return false;
     if(form==3U || form==4U) {
         static const char *const in_regs_read[]={"%rcx"};
@@ -2131,7 +2200,7 @@ static bool emit_linux_msr(FILE *out,const MinicC0Program *program,
        "  .long %u\n"
        "  .popsection\n",
        (form==1U||form==5U)?"rdmsr":"wrmsr",
-       form==5U?13U:form==1U?9U:8U)<0)return false;
+       (form==5U||form==6U)?13U:form==1U?9U:8U)<0)return false;
     for(i=0U;i<outputs;++i){
         if(!minic_type_pointee(fn->values[ops[i].value].type,&ty)||
            !minic_x86_64_scalar_width(program,target,ty,&width,&sign)||
@@ -5462,8 +5531,9 @@ bool minic_x86_64_emit_structured_asm(
         return emit_linux_pv_indirect_call(out, fn, frame, ins, info);
     if (minic_x86_64_linux_kvm_hypercall_alt_form(
             info->template_text, info->template_length) ||
-        minic_x86_64_linux_kvm_hypercall_direct_form(
-            info->template_text, info->template_length))
+        (ins->value.structured_inline_asm.operand_count <= 5U &&
+         minic_x86_64_linux_kvm_hypercall_direct_form(
+             info->template_text, info->template_length)))
         return emit_linux_kvm_hypercall(out, fn, frame, ins, info);
     if (minic_x86_64_linux_exception_stack_call_form(
             info->template_text, info->template_length))
@@ -5745,11 +5815,14 @@ bool minic_x86_64_emit_structured_asm(
                 b[0].early_clobber || b[0].has_fixed_register_binding ||
                 b[0].value >= fn->value_count ||
                 !minic_type_pointee(fn->values[b[0].value].type, &type) ||
-                !minic_type_equal(type, minic_type_unsigned_long()))
+                !(minic_type_equal(type, minic_type_unsigned_short()) ||
+                  minic_type_equal(type, minic_type_unsigned_long())))
                 return false;
             return fprintf(out, "  movl %s, %%eax\n", names[segment - 1U]) >= 0 &&
                    x86_value_load(out, frame, b[0].value, "%r11") &&
-                   fputs("  movq %rax, (%r11)\n", out) != EOF;
+                   fputs(minic_type_equal(type, minic_type_unsigned_short())
+                             ? "  movw %ax, (%r11)\n"
+                             : "  movq %rax, (%r11)\n", out) != EOF;
         }
     }
     {
@@ -6010,6 +6083,10 @@ bool minic_x86_64_emit_structured_asm(
             info->template_text, info->template_length))
         return emit_linux_vmware_hypercall(out, program, target,
                                           fn, frame, ins, info);
+    if (minic_x86_64_linux_vmware_stealclock_alt_form(
+            info->template_text, info->template_length))
+        return emit_linux_vmware_stealclock_alt(out, program, target,
+                                               fn, frame, ins, info);
     if (minic_x86_64_linux_legacy_fnsave_form(
             info->template_text, info->template_length))
         return emit_linux_legacy_fnsave(out, program, target,

@@ -901,8 +901,20 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
             return false;
         }
         returns_void = minic_type_is_void(signature->return_type);
-        if ((returns_void && instruction->result != MINIC_CORE_VALUE_INVALID) ||
-            (!returns_void && !instruction_result_is_valid(function, instruction))) {
+        if (returns_void) {
+            if (instruction->result != MINIC_CORE_VALUE_INVALID ||
+                instruction->value.indirect_call.result_object != MINIC_CORE_OBJECT_INVALID)
+                return false;
+        } else if (minic_type_is_record(signature->return_type)) {
+            if (instruction->result != MINIC_CORE_VALUE_INVALID ||
+                instruction->value.indirect_call.result_object >= function->object_count ||
+                !minic_type_equal(
+                    function->objects[instruction->value.indirect_call.result_object].type,
+                    signature->return_type))
+                return false;
+        } else if (!minic_core_ir_call_scalar_type(signature->return_type) ||
+                   instruction->value.indirect_call.result_object != MINIC_CORE_OBJECT_INVALID ||
+                   !instruction_result_is_valid(function, instruction)) {
             return false;
         }
         argument_end = instruction->value.indirect_call.argument_begin +
@@ -1154,9 +1166,8 @@ bool minic_core_function_verify(const MinicCoreFunction *function) {
             (callee->parameter_count != 0U && callee->parameter_types == NULL)) {
             return false;
         }
-        /* M85B_RECORD_CALLEE_VERIFIER: direct callees share the same
-           scalar-or-record parameter contract used by creation and CALL
-           instruction verification. Indirect signatures remain scalar-only. */
+        /* Direct and indirect signatures share one scalar-or-record parameter
+         * contract. The Core CALL result_object controls aggregate ownership. */
         for (parameter_index = 0U; parameter_index < callee->parameter_count; ++parameter_index) {
             if (!minic_core_ir_call_parameter_type(callee->parameter_types[parameter_index])) {
                 return false;
@@ -1170,8 +1181,7 @@ bool minic_core_function_verify(const MinicCoreFunction *function) {
         signature = &function->call_signatures[index];
         if (signature->function_type_id == MINIC_FUNCTION_TYPE_INVALID ||
             !minic_function_calling_convention_valid(signature->calling_convention) ||
-            (!minic_type_is_void(signature->return_type) &&
-             !minic_core_ir_call_scalar_type(signature->return_type)) ||
+            (!minic_core_ir_direct_call_return_type(signature->return_type)) ||
             (signature->parameter_count != 0U && signature->parameter_types == NULL)) {
             return false;
         }

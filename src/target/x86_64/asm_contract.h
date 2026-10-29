@@ -16,6 +16,7 @@ bool minic_x86_64_linux_pv_indirect_call_form(const char *, size_t);
 bool minic_x86_64_linux_kvm_hypercall_alt_form(const char *, size_t);
 bool minic_x86_64_linux_kvm_hypercall_direct_form(const char *, size_t);
 bool minic_x86_64_linux_exception_stack_call_form(const char *, size_t);
+bool minic_x86_64_linux_vmware_stealclock_alt_form(const char *, size_t);
 bool minic_x86_64_linux_alt_reloc_selftest_form(const char *, size_t);
 bool minic_x86_64_linux_real_mode_far_jump_form(const char *, size_t);
 bool minic_x86_64_linux_unreachable_opaque(const char *, size_t);

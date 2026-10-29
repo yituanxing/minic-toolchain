@@ -14,6 +14,7 @@ typedef struct MinicLocalObjectAttributes {
     MinicFunctionId cleanup_function;
     MinicSourceSpan cleanup_attribute_span;
     size_t explicit_alignment;
+    bool function_pointer_noreturn;
 } MinicLocalObjectAttributes;
 
 static bool parse_cleanup_attribute_function(MinicParser *parser,
@@ -64,6 +65,18 @@ static bool consume_local_object_attribute(MinicParser *parser,
         minic_parser_error(parser, "unsupported GNU attribute on local object");
         return false;
     }
+    /* `void __attribute__((noreturn)) (*hibernate_exit)(...)` declares a
+     * local pointer to a non-returning function, not an annotated object.
+     * Defer the function-type check until the parenthesized declarator has
+     * been built. MiniC does not infer unreachable code from noreturn calls,
+     * so preserving ordinary indirect-call flow is conservative. */
+    if (descriptor->kind == MINIC_ATTRIBUTE_NORETURN && !attribute->has_arguments) {
+        if (attributes == NULL) {
+            return false;
+        }
+        attributes->function_pointer_noreturn = true;
+        return true;
+    }
     if (!minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_OBJECT)) {
         minic_parser_error(parser, "GNU attribute is not valid on a local object");
         return false;
@@ -76,6 +89,17 @@ static bool consume_local_object_attribute(MinicParser *parser,
     if (descriptor->kind == MINIC_ATTRIBUTE_MAY_ALIAS) {
         if (attribute->has_arguments) {
             minic_parser_error(parser, "GNU may_alias local attribute takes no arguments");
+            return false;
+        }
+        return true;
+    }
+    /* Linux cmd-db's `u8 query[N] __nonstring` indicates that an array may
+     * lack a trailing NUL. This annotation controls GCC string warnings;
+     * MiniC does not issue such diagnostics or infer string bounds from the
+     * attribute, so it is safely observational on a local object. */
+    if (descriptor->kind == MINIC_ATTRIBUTE_NONSTRING) {
+        if (attribute->has_arguments) {
+            minic_parser_error(parser, "GNU nonstring local attribute takes no arguments");
             return false;
         }
         return true;
@@ -560,6 +584,12 @@ parse_local_declarator(MinicParser *parser,
         if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
             minic_parser_error(parser, "expected local name");
         }
+        return false;
+    }
+    if (attributes.function_pointer_noreturn &&
+        (!minic_type_is_pointer(declared_type) ||
+         declared_type.base_kind != MINIC_TYPE_BASE_FUNCTION)) {
+        minic_parser_error(parser, "GNU noreturn on a local requires a function pointer");
         return false;
     }
     if (minic_type_is_void(declared_type)) {
