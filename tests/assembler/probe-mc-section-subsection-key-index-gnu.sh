@@ -42,6 +42,8 @@ count=4096
     printf '.section .meta.empty,"a",@progbits\n.byte 0x53\n'
     # Repeated declarations preserve the first sh_entsize. A contradictory
     # entsize is a separate MiniAS policy check below: GNU rejects it.
+    # SHF_STRINGS without SHF_MERGE still defaults sh_entsize=1 in GAS.
+    printf '.section .rodata.strings_only,"aS",@progbits\n.asciz "hello"\n'
     printf '.section .rodata.merge,"aMS",@progbits,1\n.asciz "a"\n'
     printf '.section .rodata.merge,"aMS",@progbits,1\n.asciz "b"\n'
     printf '.section .rodata.merge,"aMS",@progbits,1\n.asciz "c"\n'
@@ -95,7 +97,7 @@ def elf_sections(path):
 
 def selected(sections):
     interesting = ('.text.index_', '.text.same', '.meta.mix',
-                   '.rodata.merge')
+                   '.rodata.merge', '.rodata.strings_only')
     return sorted((name, kind, flags, size, alignment, entsize, data,
                    sections[linked][0] if linked and (flags & 128) else '')
                   for name, kind, flags, size, linked, alignment, entsize, data
@@ -110,6 +112,12 @@ if ours != expected:
         if pair[0] != pair[1]:
             raise SystemExit(f'ELF section mismatch at {index}: {pair!r}')
     raise SystemExit(f'ELF section count mismatch: MiniAS={len(ours)} GNU={len(expected)}')
+
+only_strings = [entry for entry in ours
+                if entry[0] == '.rodata.strings_only']
+if len(only_strings) != 1 or only_strings[0][5] != 1 or \
+   only_strings[0][6] != b'hello\0':
+    raise SystemExit(f'S-only GNU sh_entsize default mismatch: {only_strings}')
 
 counts = collections.Counter(name for name, *_ in ours)
 if sum(name.startswith('.text.index_') for name in counts) != count:
