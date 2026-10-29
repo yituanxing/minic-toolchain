@@ -38,12 +38,36 @@ MinicCoreLowerStatus core_asm_try_target_register_contract(
             : &source->inputs[i - source->output_count];
         MinicCoreStructuredInlineAsmOperand *bind =
             &ins.value.structured_inline_asm.operands[i];
+        const MinicExpression *source_expression = minic_c0_program_expression(
+            ctx->body->program, op->expression);
+        size_t source_fixed_binding_id;
         MinicCoreLowerStatus status;
         bind->operand_index = i;
         bind->kind = contract.kinds[i];
+        /* A target-qualified GNU register operand may name a local
+         * `register T v asm("rN")`. This is an instruction operand's
+         * physical placement constraint, not a reservation of the GPR for
+         * the C variable's entire lifetime. Transport the imported local
+         * binding without exposing register names or ISA policy to Core.
+         * Every backend must then prove its own complete physical operand
+         * assignment or reject the form. This shared path runs BEFORE the
+         * legacy fixed-register special case on all three Linux targets. */
+        if ((bind->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
+             bind->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
+             bind->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE) &&
+            core_inline_asm_local_fixed_binding_id(
+                ctx->body->program, source_expression,
+                &source_fixed_binding_id)) {
+            if (!core_import_fixed_register_binding(
+                    ctx, source_fixed_binding_id,
+                    &bind->fixed_register_binding_id)) {
+                free(normalized);
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            bind->has_fixed_register_binding = true;
+        }
         if (bind->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) {
-            const MinicExpression *expr = minic_c0_program_expression(
-                ctx->body->program, op->expression);
+            const MinicExpression *expr = source_expression;
             MinicConstValue folded;
             /* Target GNU immediate operands can be full integer constant
              * expressions (Linux uaccess bit55 uses 1UL << 55), not only
@@ -52,10 +76,15 @@ MinicCoreLowerStatus core_asm_try_target_register_contract(
              * normal expression path. The machine backend still verifies
              * the actual Core definition and exact ISA encoding. This
              * rule is generic for all target-qualified scalar inputs. */
+            /* A Linux GNU `i` operand often names a parameter of an
+             * integer-specialized always-inline function. The source AST
+             * remains a local read, but Core has an exact, flow-sensitive
+             * constant fact for that local. Use the same Common oracle as
+             * ordinary expression lowering; targets must still reject
+             * runtime-varying ISA opcode/immediate operands. */
             if (expr && minic_type_is_integer(expr->type) &&
-                minic_const_eval_integer(
-                    ctx->body->program, ctx->target,
-                    op->expression, &folded)) {
+                core_const_eval_integer_with_locals(
+                    ctx, op->expression, &folded)) {
                 MinicCoreInstruction constant_ins;
                 (void)memset(&constant_ins, 0, sizeof(constant_ins));
                 constant_ins.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;

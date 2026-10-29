@@ -4,8 +4,10 @@
 bool minic_x86_64_requires_qualified_input_asm(const MinicInlineAsm *);
 /* Linux constant bit-test with GNU flag output (@ccnz/@ccz). */
 unsigned int minic_x86_64_linux_testcc_form(const char *, size_t);
+unsigned int minic_x86_64_linux_gs_testcc_form(const char *, size_t);
 /* x86 original Linux _THIS_IP_ RIP-relative register-result hardware ABI */
 bool minic_x86_64_linux_ip_here_template(const char *, size_t);
+bool minic_x86_64_linux_lidt_template(const char *, size_t);
 unsigned int minic_x86_64_linux_zero_barrier_form(const char *, size_t);
 unsigned int minic_x86_64_linux_counter_form(const char *,size_t);
 unsigned int minic_x86_64_hweight_alternative_form(const char *,size_t);
@@ -28,6 +30,7 @@ bool minic_x86_64_qualify_inline_asm(
 bool minic_x86_64_asm_nospec_template(const char *, size_t);
 /* Qualified x86 per-cpu stable GS segment read, exact GNU p input. */
 bool minic_x86_64_asm_percpu_stable_template(const char *, size_t);
+size_t minic_x86_64_asm_percpu_stable_width(const char *, size_t);
 bool minic_x86_64_asm_mulacc_template(const char *, size_t);
 bool minic_x86_64_asm_muldiv_template(const char *, size_t);
 /* The one x86 GNU Linux bitops ISA family: native BT/BTS/BTR,

@@ -1713,6 +1713,22 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
                 !type_is_top_level_unqualified(function->parameter_types[parameter_index]) ||
                 minic_type_is_void(function->parameter_types[parameter_index]) ||
                 minic_type_is_function(function->parameter_types[parameter_index])) {
+                if (getenv("MINIC_AST_VERIFY_TRACE") != NULL) {
+                    const MinicType t = function->parameter_types[parameter_index];
+                    (void)fprintf(stderr,
+                        "MINIC_AST_PARAMETER_FRONTIER function=%s index=%zu "
+                        "base=%u rank=%u sign=%u plain_char=%d ptr=%u qualifiers=%u "
+                        "ptrqual=%u top_unqualified=%d type_valid=%d\n",
+                        function->name != NULL ? function->name : "<unnamed>",
+                        parameter_index, (unsigned int)t.base_kind,
+                        (unsigned int)t.integer_rank,
+                        (unsigned int)t.integer_sign, t.is_plain_char ? 1 : 0,
+                        (unsigned int)t.pointer_depth,
+                        (unsigned int)t.base_qualifiers,
+                        (unsigned int)t.pointer_qualifiers,
+                        type_is_top_level_unqualified(t) ? 1 : 0,
+                        type_is_valid(program, target, t) ? 1 : 0);
+                }
                 MINIC_AST_VERIFY_FAIL(minic_c0_ast_verify_stage_default_reason(stage));
             }
         }

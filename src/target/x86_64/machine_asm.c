@@ -1147,17 +1147,26 @@ static bool emit_percpu_stable_u64(
         b[0].value >= fn->value_count || b[1].value >= fn->value_count ||
         !minic_type_pointee(fn->values[b[0].value].type, &type) ||
         !minic_x86_64_scalar_width(
-            program, target, type, &width, &sign) || width != 8U ||
-        !minic_type_is_integer(type) ||
+            program, target, type, &width, &sign) ||
+        width != minic_x86_64_asm_percpu_stable_width(
+            info->template_text, info->template_length) ||
         !minic_type_is_pointer(fn->values[b[1].value].type))
         return false;
     /* x86-64 SysV RAX/R10/R11 are caller-saved and Core SSA is spilled.
      * The original GNU %P operand can be materialized as an address in R10;
      * %gs:(R10) gives exactly GS-base + per-cpu symbol/field displacement. */
-    return x86_value_load(out, frame, b[1].value, "%r10") &&
-           fputs("  movq %gs:(%r10), %rax\n", out) != EOF &&
-           x86_value_load(out, frame, b[0].value, "%r11") &&
-           fputs("  movq %rax, (%r11)\n", out) != EOF;
+    {
+        const char *const suffix = width == 1U ? "b" : width == 2U ? "w" :
+                                   width == 4U ? "l" : "q";
+        const char *const accumulator = width == 1U ? "%al" :
+            width == 2U ? "%ax" : width == 4U ? "%eax" : "%rax";
+        return x86_value_load(out, frame, b[1].value, "%r10") &&
+               fprintf(out, "  mov%s %%gs:(%%r10), %s\n",
+                       suffix, accumulator) >= 0 &&
+               x86_value_load(out, frame, b[0].value, "%r11") &&
+               fprintf(out, "  mov%s %s, (%%r11)\n",
+                       suffix, accumulator) >= 0;
+    }
 }
 static bool emit_muldiv_u64(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
@@ -1264,6 +1273,64 @@ bool minic_x86_64_emit_structured_asm(
     bindings = ins->value.structured_inline_asm.operands;
     if (!info->template_text)
         return false;
+    if (minic_x86_64_linux_lidt_template(
+            info->template_text, info->template_length)) {
+        const MinicCoreStructuredInlineAsmOperand *operand = bindings;
+        MinicType desc_type;
+        size_t size;
+        if (!operand || !info->is_volatile || info->is_goto ||
+            !info->has_memory_clobber || info->register_clobber_count != 0U ||
+            ins->value.structured_inline_asm.operand_count != 1U ||
+            operand[0].operand_index != 0U ||
+            operand[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT ||
+            operand[0].early_clobber || operand[0].has_fixed_register_binding ||
+            operand[0].value >= fn->value_count ||
+            !minic_type_pointee(fn->values[operand[0].value].type, &desc_type) ||
+            !minic_type_is_record(desc_type) ||
+            !minic_target_info_sizeof_type(target, program, desc_type, &size) ||
+            size != 10U)
+            return false;
+        /* Memory input is the Core lvalue address. LIDT atomically consumes
+         * the packed 10-byte descriptor; no fabricated doubleword load or
+         * user-mode software emulation is permitted. */
+        return x86_value_load(out, frame, operand[0].value, "%r11") &&
+               fputs("  lidt (%r11)\n", out) != EOF;
+    }
+    {
+        const unsigned int gs_bit = minic_x86_64_linux_gs_testcc_form(
+            info->template_text, info->template_length);
+        if (gs_bit != 0U) {
+            const MinicCoreStructuredInlineAsmOperand *b = bindings;
+            MinicType flag_type, mem_type;
+            size_t width;
+            if (!info->is_volatile || info->is_goto ||
+                !info->has_memory_clobber || info->register_clobber_count ||
+                ins->value.structured_inline_asm.operand_count != 3U ||
+                b[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
+                b[1].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT ||
+                b[2].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
+                b[0].operand_index != 0U || b[1].operand_index != 1U ||
+                b[2].operand_index != 2U ||
+                b[0].value >= fn->value_count ||
+                b[1].value >= fn->value_count ||
+                b[2].value >= fn->value_count ||
+                !minic_type_pointee(fn->values[b[0].value].type, &flag_type) ||
+                !minic_type_equal(flag_type, minic_type_bool()) ||
+                !minic_type_pointee(fn->values[b[1].value].type, &mem_type) ||
+                !minic_x86_64_scalar_width(
+                    program, target, mem_type, &width, &sign) ||
+                (gs_bit == 1U ? (width != 4U && width != 8U)
+                              : width != 8U)) return false;
+            return x86_value_load(out, frame, b[1].value, "%r11") &&
+                   x86_value_load(out, frame, b[2].value, "%r10") &&
+                   fprintf(out, "  bt%c %s, %%gs:(%%r11)\n",
+                           gs_bit == 1U ? 'l' : 'q',
+                           gs_bit == 1U ? "%r10d" : "%r10") >= 0 &&
+                   fputs("  setc %al\n", out) != EOF &&
+                   x86_value_load(out, frame, b[0].value, "%r11") &&
+                   fputs("  movb %al, (%r11)\n", out) != EOF;
+        }
+    }
     {
         const unsigned int testcc = minic_x86_64_linux_testcc_form(
             info->template_text, info->template_length);

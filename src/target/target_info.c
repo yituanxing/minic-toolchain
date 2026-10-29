@@ -897,10 +897,16 @@ bool minic_target_info_local_fixed_register_supported(const MinicTargetInfo *tar
     if (target->architecture == MINIC_TARGET_ARCH_AARCH64) {
         /* AAPCS64 x0..x17 are the integer argument and caller-scratch
          * GPR names used by original GNU Linux C (e.g. syscall x8).
+         * GNU arm64 SMCCC also spells the same physical register r0..r17
+         * in local `register ... asm("r0")` declarations. Admitting a local
+         * variable does NOT reserve that register: the complete structured
+         * SMC/HVC operand and clobber contract must still be proven by the
+         * AArch64 machine owner before emitting the privileged instruction.
          * Keep platform-reserved x18, stack pointer, and callee-saved
          * x19..x29 excluded until machine ownership is certified. */
         unsigned int number;
-        if (name_length < 2U || name_length > 3U || name[0] != 'x' ||
+        if (name_length < 2U || name_length > 3U ||
+            (name[0] != 'x' && name[0] != 'r') ||
             name[1] < '0' || name[1] > '9')
             return false;
         number = (unsigned int)(name[1] - '0');
@@ -1020,9 +1026,20 @@ typedef struct MinicMachineBuiltinDesc {
     size_t immediate_index;
 } MinicMachineBuiltinDesc;
 
-static MinicType minic_machine_builtin_type(MinicMachineBuiltinScalar scalar) {
+static MinicType minic_machine_builtin_type(const MinicTargetInfo *target,
+                                            MinicMachineBuiltinScalar scalar) {
+    /* Machine builtins are injected as synthetic frontend function
+     * signatures. A plain `char` ABI argument must carry the SELECTED
+     * target's signedness, exactly as a parsed C char declaration does.
+     * minic_type_char() alone has the default unsigned spelling and was
+     * poisoning every LoongArch CRC builtin declaration: the parsed-AST
+     * verifier would reject the entire Linux translation unit before Core. */
     switch (scalar) {
-    case MINIC_MACHINE_BUILTIN_CHAR: return minic_type_char();
+    case MINIC_MACHINE_BUILTIN_CHAR: {
+        MinicType type;
+        return minic_target_info_plain_char_type(target, &type)
+            ? type : minic_type_void();
+    }
     case MINIC_MACHINE_BUILTIN_SHORT: return minic_type_short();
     case MINIC_MACHINE_BUILTIN_INT: return minic_type_int();
     case MINIC_MACHINE_BUILTIN_LONG: return minic_type_long();
@@ -1095,9 +1112,9 @@ bool minic_target_info_machine_builtin_signature(
         (void)memcpy(callee, internal_prefix, prefix_length);
         (void)memcpy(callee + prefix_length, descriptor->suffix, suffix_length);
         callee[prefix_length + suffix_length] = '\0';
-        *result = minic_machine_builtin_type(descriptor->result);
+        *result = minic_machine_builtin_type(target, descriptor->result);
         for (j = 0U; j < descriptor->argc; ++j)
-            arguments[j] = minic_machine_builtin_type(descriptor->arg[j]);
+            arguments[j] = minic_machine_builtin_type(target, descriptor->arg[j]);
         *argument_count = descriptor->argc;
         *mnemonic = descriptor->mnemonic;
         *immediate_index = descriptor->immediate_index;

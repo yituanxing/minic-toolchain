@@ -102,6 +102,65 @@ unsigned int minic_x86_64_linux_testcc_form(const char *text, size_t length) {
     return 0U;
 }
 
+/* The per-CPU bit test reads GS-relative storage. It cannot be lowered
+ * through an ordinary C pointer dereference: GS is an architectural base,
+ * and the GNU flag output observes CF after BT. Preserve both effects. */
+unsigned int minic_x86_64_linux_gs_testcc_form(
+    const char *text, size_t length) {
+    static const char *const forms[] = {
+        "btl%%gs:%2,%1/*outputconditioncodec*/",
+        "btq%%gs:%2,%1/*outputconditioncodec*/"
+    };
+    char compact[120];
+    size_t i, n = 0U;
+    if (!text || !length || length >= sizeof(compact)) return 0U;
+    for (i = 0U; i < length; ++i) {
+        const char c = text[i];
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
+        if (c == '\0' || n + 1U >= sizeof(compact)) return 0U;
+        compact[n++] = c;
+    }
+    compact[n] = '\0';
+    for (i = 0U; i < sizeof(forms) / sizeof(forms[0]); ++i)
+        if (strcmp(compact, forms[i]) == 0) return (unsigned int)i + 1U;
+    return 0U;
+}
+
+static bool x86_linux_gs_testcc_source(
+    const MinicC0Program *program, const MinicInlineAsm *src,
+    MinicTargetInlineAsmContract *contract) {
+    const unsigned int form = src ? minic_x86_64_linux_gs_testcc_form(
+        src->template_text, src->template_length) : 0U;
+    const MinicExpression *flag, *memory, *index;
+    MinicType plain;
+    if (!program || !src || !contract || !form || !src->is_volatile ||
+        src->is_goto || src->output_count != 1U || src->input_count != 2U ||
+        !src->outputs || !src->inputs || src->label_count ||
+        src->has_memory_clobber || src->clobber_count != 0U ||
+        src->register_clobber_count != 0U ||
+        !target_constraint_is(&src->outputs[0], "=@ccc") ||
+        !target_constraint_is(&src->inputs[0], "m") ||
+        !target_constraint_is(&src->inputs[1], "Ir")) return false;
+    flag = minic_c0_program_expression(program, src->outputs[0].expression);
+    memory = minic_c0_program_expression(program, src->inputs[0].expression);
+    index = minic_c0_program_expression(program, src->inputs[1].expression);
+    if (!flag || !memory || !index ||
+        flag->value_category != MINIC_VALUE_LVALUE ||
+        memory->value_category != MINIC_VALUE_LVALUE ||
+        minic_type_is_const(flag->type) ||
+        !minic_type_unqualified(flag->type, &plain) ||
+        !minic_type_equal(plain, minic_type_bool()) ||
+        !minic_type_unqualified(memory->type, &plain) ||
+        !minic_type_is_integer(plain) ||
+        !minic_type_is_integer(index->type)) return false;
+    contract->operand_count = 3U;
+    contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+    contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
+    contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->implicit_memory_effect = true;
+    return true;
+}
+
 static bool x86_linux_testcc_source(
     const MinicC0Program *program, const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
@@ -140,9 +199,54 @@ static bool x86_linux_testcc_source(
 /* Keep the GS per-CPU source reserved, without capturing ordinary MOV. */
 bool minic_x86_64_requires_qualified_input_asm(const MinicInlineAsm *src) {
     static const char *const reserved[] = {"movq %%gs:", "cmp",
-        "outb ", "outw ", "outl ", "inb ", "inw ", "inl "};
+        "outb ", "outw ", "outl ", "inb ", "inw ", "inl ", "lidt"};
     return minic_backend_inline_asm_prefix_matches(
         src, reserved, sizeof(reserved) / sizeof(reserved[0]));
+}
+
+/* LGDT/LIDT do not read an integer value: their operand is the actual
+ * ten-byte packed descriptor (u16 limit, u64 base). Linux boot and IDT
+ * setup use this privileged memory form, not a pointer-valued register.
+ * A different struct or width would make the CPU read beyond the operand. */
+bool minic_x86_64_linux_lidt_template(const char *text, size_t length) {
+    static const char exact[] = "lidt %0";
+    return text != NULL && length == sizeof(exact) - 1U &&
+           memcmp(text, exact, sizeof(exact) - 1U) == 0;
+}
+
+static bool x86_linux_lidt_source(
+    const MinicC0Program *program, const MinicInlineAsm *src,
+    MinicTargetInlineAsmContract *contract) {
+    const MinicExpression *descriptor;
+    const MinicRecord *record;
+    MinicType unqualified;
+    if (!program || !src || !contract || !src->is_volatile || src->is_goto ||
+        !minic_x86_64_linux_lidt_template(
+            src->template_text, src->template_length) ||
+        src->output_count != 0U || src->input_count != 1U || !src->inputs ||
+        src->label_count != 0U || src->clobber_count != 0U ||
+        src->register_clobber_count != 0U || src->has_memory_clobber ||
+        !target_constraint_is(&src->inputs[0], "m")) return false;
+    descriptor = minic_c0_program_expression(
+        program, src->inputs[0].expression);
+    if (!descriptor || descriptor->value_category != MINIC_VALUE_LVALUE ||
+        !minic_type_unqualified(descriptor->type, &unqualified) ||
+        !minic_type_is_record(unqualified)) return false;
+    record = minic_c0_program_record(program, unqualified.record_id);
+    if (!record || !record->is_complete || record->is_union ||
+        !record->is_packed || record->field_count != 2U ||
+        !record->fields || record->fields[0].is_bit_field ||
+        record->fields[1].is_bit_field ||
+        !record->fields[0].name || !record->fields[1].name ||
+        strcmp(record->fields[0].name, "size") != 0 ||
+        strcmp(record->fields[1].name, "address") != 0 ||
+        !minic_type_equal(record->fields[0].type, minic_type_unsigned_short()) ||
+        !minic_type_equal(record->fields[1].type, minic_type_unsigned_long()))
+        return false;
+    contract->operand_count = 1U;
+    contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
+    contract->implicit_memory_effect = true;
+    return true;
 }
 
 /* Exact original Linux cmp/sbb two-instruction target ISA shape. */
@@ -224,36 +328,43 @@ static bool x86_linux_ip_here_source(
  * address computation followed by a REAL GS-segment hardware read.
  * Only the literal 64-bit instruction / two exact operands are admitted.
  * A Core address SSA value represents P[var]; x86 still owns the GS ISA. */
-bool minic_x86_64_asm_percpu_stable_template(const char *s, size_t length) {
-    static const char *const forms[] = {
-        "movq%%gs:%P[var],%[val]", "movq%%gs:%P1,%0"
+size_t minic_x86_64_asm_percpu_stable_width(const char *s, size_t length) {
+    static const struct { const char *name; size_t width; } forms[] = {
+        {"movb%%gs:%P[var],%[val]",1U}, {"movb%%gs:%P1,%0",1U},
+        {"movw%%gs:%P[var],%[val]",2U}, {"movw%%gs:%P1,%0",2U},
+        {"movl%%gs:%P[var],%[val]",4U}, {"movl%%gs:%P1,%0",4U},
+        {"movq%%gs:%P[var],%[val]",8U}, {"movq%%gs:%P1,%0",8U}
     };
     char compact[96]; size_t i, n = 0U;
-    if (!s || length == 0U || length >= sizeof(compact)) return false;
+    if (!s || length == 0U || length >= sizeof(compact)) return 0U;
     for (i = 0U; i < length; ++i) {
         const char c = s[i];
-        if (c == ';' || c == '\r' || c == '\n') return false;
+        if (c == ';' || c == '\r' || c == '\n') return 0U;
         if (c == ' ' || c == '\t') continue;
-        if (n + 1U >= sizeof(compact)) return false;
+        if (n + 1U >= sizeof(compact)) return 0U;
         compact[n++] = c;
     }
     compact[n] = '\0';
     for (i = 0U; i < sizeof(forms) / sizeof(forms[0]); ++i)
-        if (strcmp(forms[i], compact) == 0) return true;
-    return false;
+        if (strcmp(forms[i].name, compact) == 0) return forms[i].width;
+    return 0U;
+}
+bool minic_x86_64_asm_percpu_stable_template(const char *s, size_t length) {
+    return minic_x86_64_asm_percpu_stable_width(s, length) != 0U;
 }
 static bool x86_percpu_source(const MinicC0Program *program,
                               const MinicInlineAsm *src) {
     const MinicExpression *out, *in;
     MinicType type;
+    const size_t width = src ? minic_x86_64_asm_percpu_stable_width(
+        src->template_text, src->template_length) : 0U;
     if (!program || !src || src->is_goto || src->is_volatile ||
         src->output_count != 1U || src->input_count != 1U ||
         !src->outputs || !src->inputs ||
         src->clobber_count != 0U || src->register_clobber_count != 0U ||
         src->has_memory_clobber || src->label_count != 0U ||
-        !minic_x86_64_asm_percpu_stable_template(
-            src->template_text, src->template_length) ||
-        !target_constraint_is(&src->outputs[0], "=r") ||
+        width == 0U ||
+        !target_constraint_is(&src->outputs[0], width == 1U ? "=q" : "=r") ||
         !target_constraint_is(&src->inputs[0], "p"))
         return false;
     out = minic_c0_program_expression(program, src->outputs[0].expression);
@@ -261,8 +372,13 @@ static bool x86_percpu_source(const MinicC0Program *program,
     return out && in && out->value_category == MINIC_VALUE_LVALUE &&
            !minic_type_is_const(out->type) &&
            minic_type_unqualified(out->type, &type) &&
-           (minic_type_equal(type, minic_type_unsigned_long_long()) ||
-            minic_type_equal(type, minic_type_unsigned_long())) &&
+           (minic_type_is_pointer(type) ? width == 8U :
+            minic_type_is_integer(type) && type.base_kind == MINIC_TYPE_BASE_INT &&
+            (width == 1U ? type.integer_rank == MINIC_INTEGER_RANK_CHAR :
+             width == 2U ? type.integer_rank == MINIC_INTEGER_RANK_SHORT :
+             width == 4U ? type.integer_rank == MINIC_INTEGER_RANK_INT :
+             (type.integer_rank == MINIC_INTEGER_RANK_LONG ||
+              type.integer_rank == MINIC_INTEGER_RANK_LONG_LONG))) &&
            minic_type_is_pointer(in->type);
 }
 static bool c_is(const MinicInlineAsmOperand *op, const char *s) {
@@ -2152,6 +2268,10 @@ bool minic_x86_64_qualify_inline_asm(
     bool is_mulacc = false, is_muldiv = false;
     size_t i, count;
     if (!contract) return false;
+    if (x86_linux_lidt_source(program, source, contract))
+        return true;
+    if (x86_linux_gs_testcc_source(program, source, contract))
+        return true;
     if (x86_linux_testcc_source(program, source, contract))
         return true;
     if (x86_prefetchw_alt_source(program, source, contract))

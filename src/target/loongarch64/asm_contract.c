@@ -8,7 +8,8 @@
  * ISA semantics, unlike compiler barriers, remain target-local. */
 bool minic_loongarch64_qualified_opaque_asm(const MinicCoreInlineAsm *a) {
     static const char *const allowed[] = {
-        "idle0", "tlbrd", "dbar0", "dbar0x700", "nop"
+        "idle0", "tlbrd", "tlbclr", "tlbflush", "tlbsrch",
+        "tlbwr", "tlbfill", "dbar0", "dbar0x700", "nop"
     };
     char compact[64];
     size_t i, n = 0U;
@@ -468,7 +469,16 @@ static unsigned loong_linux_xchg_form(const char *text,size_t length){
         "amswap_db.w%[tmp],%[val],%[mem]",
         "amswap_db.d%[tmp],%[val],%[mem]",
         /* Checked numeric representation after Core name resolution. */
-        "amswap_db.w%1,%2,%0","amswap_db.d%1,%2,%0"
+        "amswap_db.w%1,%2,%0","amswap_db.d%1,%2,%0",
+        /* Linux relaxed xchg is an atomic swap without the DB fence. */
+        "amswap.w%1,%z2,%0","amswap.d%1,%z2,%0",
+        /* The local atomic fetch operations have the SAME Core operand
+         * roles as xchg: +ZB memory, old GPR output, scalar input. Only
+         * the hardware AMO operation differs; never emulate a RMW in C. */
+        "amadd.w%1,%2,%0","amadd.d%1,%2,%0",
+        "amand.w%1,%2,%0","amand.d%1,%2,%0",
+        "amor.w%1,%2,%0","amor.d%1,%2,%0",
+        "amxor.w%1,%2,%0","amxor.d%1,%2,%0"
     };
     char compact[96];size_t n=0U,i;
     if(!text||!length||length>=sizeof(compact))return 0U;
@@ -488,7 +498,7 @@ static bool loong_linux_xchg_source(const MinicC0Program *p,
     const unsigned form=s?loong_linux_xchg_form(
         s->template_text,s->template_length):0U;
     const size_t width=form&&form%2U==0U?8U:4U;
-    const bool named=form>=3U;
+    const bool named=form>=3U&&form<=6U;
     const MinicExpression *mem,*res,*val;
     if(!p||!s||!c||!form||!s->is_volatile||s->is_goto||
        s->output_count!=2U||s->input_count!=1U||!s->outputs||!s->inputs||
@@ -497,7 +507,7 @@ static bool loong_linux_xchg_source(const MinicC0Program *p,
        s->has_memory_clobber==named||
        !loong_csr_constraint(&s->outputs[0],"+ZB")||
        !loong_csr_constraint(&s->outputs[1],"=&r")||
-       !loong_csr_constraint(&s->inputs[0],named?"r":"Jr"))return false;
+       !loong_csr_constraint(&s->inputs[0],named||form>=9U?"r":"Jr"))return false;
     mem=minic_c0_program_expression(p,s->outputs[0].expression);
     res=minic_c0_program_expression(p,s->outputs[1].expression);
     val=minic_c0_program_expression(p,s->inputs[0].expression);
@@ -839,11 +849,10 @@ static size_t loong_percpu_amo_form(const char *text, size_t length) {
     return SIZE_MAX;
 }
 static bool loong_percpu_amo_memory_type(MinicType type,size_t width) {
-    MinicType plain;
-    return minic_type_unqualified(type,&plain) &&
-        (width==4U ? minic_type_equal(plain,minic_type_unsigned_int())
-         : (minic_type_equal(plain,minic_type_unsigned_long()) ||
-            minic_type_equal(plain,minic_type_unsigned_long_long())));
+    /* AMO operates on width-sized bit patterns; signedness does not affect
+     * the hardware RMW, and Linux percpu/local atomics use signed counters
+     * as well as unsigned storage. Keep the exact primitive-width rule. */
+    return loong_linux_cmpxchg_word(type, width);
 }
 static bool loong_percpu_amo_source(
     const MinicC0Program *program,const MinicInlineAsm *src,
@@ -991,6 +1000,108 @@ static bool loong_fcsr0_write_emit(
  * GNU source form and then emit with known, target-owned physical registers.
  * Unrecognized templates remain unsupported instead of being passed through
  * as an untracked opaque machine side effect. */
+/* Architectural INVTLB has three GNU operand shapes: ASID+VA, VA-only,
+ * and ASID-only. Both zero-register variants are real TLB operations, not
+ * CPU fences. Keep the immediate opcode range and Linux-defined encodings
+ * in this target instead of allowing an arbitrary textual instruction. */
+static unsigned int loong_linux_invtlb_form(const char *text, size_t length) {
+    static const char *const forms[] = {
+        "invtlb%0,%1,%2", "invtlb%0,$zero,%1",
+        "invtlb%0,%1,$zero", "invtlb%0,$zero,$zero"
+    };
+    char compact[90];
+    size_t i, n = 0U;
+    if (!text || !length || length >= sizeof(compact)) return 0U;
+    for (i = 0U; i < length; ++i) {
+        const char c = text[i];
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
+        if (c == '\0' || n + 1U >= sizeof(compact)) return 0U;
+        compact[n++] = c;
+    }
+    compact[n] = '\0';
+    for (i = 0U; i < sizeof(forms) / sizeof(forms[0]); ++i)
+        if (strcmp(compact, forms[i]) == 0) return (unsigned int)i + 1U;
+    return 0U;
+}
+
+static bool loong_linux_invtlb_opcode(int64_t value) {
+    return (value >= 0 && value <= 6) ||
+           (value >= 9 && value <= 14) ||
+           (value >= 16 && value <= 22);
+}
+
+static bool loong_linux_invtlb_source(
+    const MinicC0Program *program, const MinicInlineAsm *src,
+    MinicTargetInlineAsmContract *contract) {
+    const unsigned int form = src ? loong_linux_invtlb_form(
+        src->template_text, src->template_length) : 0U;
+    size_t i;
+    if (!program || !src || !contract || !form || !src->is_volatile ||
+        src->is_goto || src->output_count != 0U ||
+        src->input_count != (form == 1U ? 3U : form == 4U ? 1U : 2U) ||
+        !src->inputs || src->label_count != 0U ||
+        !src->has_memory_clobber || src->clobber_count != 1U ||
+        src->register_clobber_count != 0U) return false;
+    for (i = 0U; i < src->input_count; ++i) {
+        const MinicInlineAsmOperand *op = &src->inputs[i];
+        const MinicExpression *expr = minic_c0_program_expression(
+            program, op->expression);
+        MinicType plain;
+        if (!loong_csr_constraint(op, i == 0U ? "i" : "r") ||
+            !expr || !minic_type_unqualified(expr->type, &plain) ||
+            !minic_type_is_integer(plain) ||
+            !loong_linux_cmpxchg_word(
+                plain, i == 0U || (form == 1U && i == 1U) ||
+                               (form == 3U && i == 1U) ? 4U : 8U))
+            return false;
+        contract->kinds[i] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    }
+    contract->operand_count = src->input_count;
+    contract->implicit_memory_effect = true;
+    return true;
+}
+
+static bool loong_linux_invtlb_emit(
+    FILE *out, const MinicDirectLP64BlockContext *ctx,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info,
+    unsigned int form) {
+    const MinicCoreFunction *fn = ctx->fn;
+    const MinicCoreStructuredInlineAsmOperand *b =
+        ins->value.structured_inline_asm.operands;
+    const MinicCoreInstruction *def;
+    MinicCoreInstructionId definition;
+    size_t i;
+    if (!out || !ctx || !fn || !info || !form || form > 4U ||
+        !info->is_volatile || info->is_goto ||
+        !info->has_memory_clobber || info->register_clobber_count != 0U ||
+        ins->value.structured_inline_asm.operand_count !=
+            (form == 1U ? 3U : form == 4U ? 1U : 2U)) return false;
+    for (i = 0U; i < ins->value.structured_inline_asm.operand_count; ++i)
+        if (b[i].operand_index != i || b[i].value >= fn->value_count ||
+            b[i].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
+            b[i].has_fixed_register_binding || b[i].early_clobber)
+            return false;
+    definition = fn->values[b[0].value].definition;
+    if (definition >= fn->instruction_count) return false;
+    def = &fn->instructions[definition];
+    if (def->kind != MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT ||
+        def->result != b[0].value ||
+        !loong_linux_invtlb_opcode(def->value.integer_value)) return false;
+    if (form == 1U || form == 3U) {
+        if (!minic_loongarch64_emit_frame_mem(
+                out, "ld.d", "$t0", (size_t)b[1].value * 8U,
+                ctx->dynamic_frame)) return false;
+    } else if (fputs("  or $t0, $zero, $zero\n", out) == EOF) return false;
+    if (form == 1U || form == 2U) {
+        if (!minic_loongarch64_emit_frame_mem(
+                out, "ld.d", "$t1",
+                (size_t)b[form == 1U ? 2U : 1U].value * 8U,
+                ctx->dynamic_frame)) return false;
+    } else if (fputs("  or $t1, $zero, $zero\n", out) == EOF) return false;
+    return fprintf(out, "  invtlb %lld, $t0, $t1\n",
+                   (long long)def->value.integer_value) >= 0;
+}
+
 /* The 32/64-bit Linux fetch-add-unless primitives are a single LL/SC
  * semantic family. Their memory output is marked =ZB by GNU, although the
  * hardware both reads and writes that address. Core must retain the actual
@@ -1461,7 +1572,8 @@ bool minic_loongarch64_qualify_inline_asm(
         contract->operand_count=0U;
         return true;
     }
-    if (loong_linux_sub_positive_source(program, src, contract) ||
+    if (loong_linux_invtlb_source(program, src, contract) ||
+        loong_linux_sub_positive_source(program, src, contract) ||
         loong_linux_add_unless_source(program, src, contract) ||
         loong_linux_uaccess_source(program, src, contract) ||
         loong_fcsr0_write_source(program, src, contract) ||
@@ -1554,11 +1666,31 @@ static bool minic_loongarch64_emit_csr(
         !info->has_memory_clobber || info->register_clobber_count ||
         ins->value.structured_inline_asm.operand_count !=
             (form == 1U ? 2U : 3U)) return false;
-    for (i = 0U; i < ins->value.structured_inline_asm.operand_count; ++i)
+    for (i = 0U; i < ins->value.structured_inline_asm.operand_count; ++i) {
+        /* Linux arch_local_irq_save binds its unsigned mask as GNU local
+         * `register u32 mask asm("t0")`. The actual instruction below loads
+         * that operand into PHYSICAL $t0 before CSRXCHG. Core now preserves
+         * the local hardreg name instead of discarding it. Only this exact
+         * matching binding is safe; a different fixed register cannot be
+         * silently reallocated to $t0. All other CSR operands must remain
+         * ordinary spill-backed values or addresses. */
+        if (b[i].has_fixed_register_binding) {
+            const MinicCoreFixedRegisterBinding *fixed;
+            if (form != 2U || i != 1U ||
+                b[i].fixed_register_binding_id >= fn->fixed_register_binding_count)
+                return false;
+            fixed = &fn->fixed_register_bindings[b[i].fixed_register_binding_id];
+            if (!fixed->is_local || !fixed->register_name ||
+                fixed->register_name_length != 2U ||
+                memcmp(fixed->register_name, "t0", 2U) != 0 ||
+                !minic_type_equal(fixed->type, minic_type_unsigned_int()))
+                return false;
+        }
         if (b[i].operand_index != i || b[i].value >= fn->value_count ||
-            b[i].early_clobber || b[i].has_fixed_register_binding ||
+            b[i].early_clobber ||
             b[i].value > MINIC_LARGE_FRAME_MAX / 8U)
             return false;
+    }
     if (b[0].kind != (form == 1U ?
             MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
             MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE) ||
@@ -1787,7 +1919,7 @@ static bool loong_linux_xchg_emit(FILE *out,
     const unsigned form=loong_linux_xchg_form(
         info->template_text,info->template_length);
     const size_t width=form&&form%2U==0U?8U:4U;
-    const bool named=form>=3U;
+    const bool named=form>=3U&&form<=6U;
     const MinicCoreFunction *fn=ctx->fn;
     const MinicCoreStructuredInlineAsmOperand *b=
         ins->value.structured_inline_asm.operands;
@@ -1814,7 +1946,10 @@ static bool loong_linux_xchg_emit(FILE *out,
            minic_loongarch64_emit_frame_mem(
              out,width==8U?"ld.d":"ld.w","$t0",
              (size_t)b[2].value*8U,ctx->dynamic_frame)&&
-           fprintf(out,"  amswap_db.%c $t2, $t0, $t1\n",
+           fprintf(out,"  %s.%c $t2, $t0, $t1\n",
+                   form>=15U?"amxor":form>=13U?"amor":
+                   form>=11U?"amand":form>=9U?"amadd":
+                   form>=7U?"amswap":"amswap_db",
                    width==8U?'d':'w')>=0&&
            minic_loongarch64_emit_frame_mem(
              out,"ld.d","$t1",(size_t)b[1].value*8U,ctx->dynamic_frame)&&
@@ -1889,6 +2024,12 @@ bool minic_loongarch64_emit_qualified_structured_asm(
         ins->value.structured_inline_asm.inline_asm_id >= ctx->fn->inline_asm_count)
         return false;
     info = &ctx->fn->inline_asms[ins->value.structured_inline_asm.inline_asm_id];
+    {
+        const unsigned int invtlb = loong_linux_invtlb_form(
+            info->template_text, info->template_length);
+        if (invtlb != 0U)
+            return loong_linux_invtlb_emit(out, ctx, ins, info, invtlb);
+    }
     {
         LoongLinuxSubPositive sub_positive;
         if (loong_linux_sub_positive_form(
