@@ -33,27 +33,53 @@ def full_c_module():
     spec.loader.exec_module(module)
     return module
 
-def target_object(path: Path, expected_machine: int) -> bool:
+# Non-main ELF domains are real Kbuild products, not 64-bit MiniC owners.
+# Keep 32-bit ABIs explicit (including any C owners) instead of dropping them.
+COMPAT_DOMAINS = {
+    "x86_64": (
+        ("arch/x86/boot/", 3),
+        ("arch/x86/realmode/", 3),
+        ("arch/x86/entry/vdso/vdso32/", 3),
+    ),
+    "aarch64": (("arch/arm64/kernel/vdso32/", 40),),
+}
+
+def classify_object(path: Path, out: Path, target: str) -> str:
     if path.is_symlink():
         raise ValueError("symlink object is not an acceptable golden: " + str(path))
     with path.open("rb") as stream:
         hdr = stream.read(64)
     if hdr[:4] != b"\x7fELF":
-        return False
-    if len(hdr) < 52:
+        return "non-elf"
+    if len(hdr) < 20:
         raise ValueError("truncated GNU ELF object: " + str(path))
-    # x86 bzImage legitimately contains a separate 32-bit early-boot domain.
-    # Do not classify its .o as a 64-bit MiniC target C owner.
-    if hdr[4:6] != b"\x02\x01":
-        if (expected_machine == MACHINES["x86_64"]
-                and hdr[4:6] == b"\x01\x01"
-                and ("/arch/x86/boot/" in path.as_posix()
-                     or "/arch/x86/realmode/" in path.as_posix())):
-            return False
+    elf_class, endian = hdr[4], hdr[5]
+    if endian != 1 or elf_class not in (1, 2):
         raise ValueError("unexpected target ELF class/data: " + str(path))
-    machine = struct.unpack_from("<H", hdr, 18)[0]
+    if len(hdr) < (52 if elf_class == 1 else 64):
+        raise ValueError("truncated GNU ELF header: " + str(path))
     kind = struct.unpack_from("<H", hdr, 16)[0]
-    return kind == 1 and machine == expected_machine
+    machine = struct.unpack_from("<H", hdr, 18)[0]
+    if kind != 1:
+        return "non-relocatable"
+    if elf_class == 2:
+        if machine != MACHINES[target]:
+            return "foreign-elf64"
+        return "main"
+    rel = path.relative_to(out).as_posix()
+    # x32 rebrands x86-64 vDSO object code into ELF32/EM_X86_64
+    # using objcopy; it is a separate ABI but not an additional C owner.
+    if (target == "x86_64" and rel.startswith("arch/x86/entry/vdso/")
+            and rel.endswith("-x32.o")):
+        if machine != MACHINES["x86_64"]:
+            raise ValueError("unexpected x32 ELF target machine: " + str(path))
+        return "compat"
+    for prefix, expected_machine in COMPAT_DOMAINS.get(target, ()):
+        if rel.startswith(prefix):
+            if machine != expected_machine:
+                raise ValueError("unexpected compat ELF32 target machine: " + str(path))
+            return "compat"
+    raise ValueError("unclassified target ELF32 relocatable: " + str(path))
 
 def census(out: Path, target: str, image: str, evidence: Path, minimum: int,
            config_profile: str = "broad") -> dict:
@@ -79,22 +105,22 @@ def census(out: Path, target: str, image: str, evidence: Path, minimum: int,
                 parts[2] == "tools")
     candidates = sorted(o for o in out.rglob("*.o") if o.is_file())
     host_objects = [o for o in candidates if is_host_object(o)]
-    objects = [
-        o for o in candidates if not is_host_object(o)
-        and target_object(o, MACHINES[target])
+    classified = [
+        (obj, classify_object(obj, out, target))
+        for obj in candidates if not is_host_object(obj)
     ]
+    objects = [obj for obj, domain in classified if domain == "main"]
+    compat = [obj for obj, domain in classified if domain == "compat"]
+    foreign = [obj for obj, domain in classified if domain == "foreign-elf64"]
     if not objects:
         raise ValueError("no matching GNU Linux target ELF relocatables")
-    # Preserve excluded ELF32 boot objects as a separate explicit scope.
-    boot32 = []
-    if target == "x86_64":
-        for domain in ("arch/x86/boot", "arch/x86/realmode"):
-            for o in sorted((out / domain).rglob("*.o")):
-                if o.is_file() and not o.is_symlink():
-                    with o.open("rb") as stream:
-                        magic = stream.read(6)
-                    if magic == b"\x7fELF\x01\x01":
-                        boot32.append(o.relative_to(out).as_posix())
+    # Retain original x86 early-boot domain count for historical comparisons.
+    boot32 = [
+        obj.relative_to(out).as_posix() for obj in compat
+        if target == "x86_64"
+        and obj.relative_to(out).as_posix().startswith(
+            ("arch/x86/boot/", "arch/x86/realmode/"))
+    ]
     evidence.mkdir(parents=True, exist_ok=True)
     (evidence / "separate-host-build-objects.txt").write_text(
         "# GNU Kbuild host helper objects, never MiniC kernel C owners\n"
@@ -102,18 +128,53 @@ def census(out: Path, target: str, image: str, evidence: Path, minimum: int,
     (evidence / "separate-x86-elf32-boot-domain.txt").write_text(
         "# x86 early boot ELF32; not x86_64 MiniC certified C owners\n"
         + "".join(name + "\n" for name in boot32))
+    (evidence / "separate-foreign-elf64-objects.sha256").write_text("".join(
+        f"{sha(obj)}  {obj.relative_to(out).as_posix()}\n" for obj in foreign
+    ))
     golden = evidence / "gnu-target-objects.sha256"
     golden.write_text("".join(
         f"{sha(obj)}  {obj.relative_to(out).as_posix()}\n" for obj in objects
     ))
+    # RV32/RV64 precedent: ABI-separated objects get their own SHA-locked
+    # universe and the same canonical GNU .o.cmd C-owner verifier.
+    compat_golden = evidence / "gnu-compat-elf32-objects.sha256"
+    compat_golden.write_text("".join(
+        f"{sha(obj)}  {obj.relative_to(out).as_posix()}\n" for obj in compat
+    ))
     common = full_c_module()
     owners, excluded = common.examine(out, golden)
+    compat_owners, compat_excluded = common.examine(out, compat_golden)
+    compat_c_set = set(compat_owners)
+    if len(compat_owners) != len(compat_c_set):
+        raise ValueError("duplicate 32-bit compat C owners")
+    (evidence / "separate-elf32-compat-owners.txt").write_text(
+        "# ABI-separate ELF32 C owners; not certified by the ELF64 MiniC run\n"
+        + "".join(name + "\n" for name in sorted(compat_owners)))
+    (evidence / "separate-elf32-compat-objects.tsv").write_text(
+        "object\tsha256\tsource_kind\n"
+        + "".join(
+            f"{obj.relative_to(out).as_posix()}\t{sha(obj)}\t"
+            f"{'C' if obj.relative_to(out).as_posix() in compat_c_set else 'non-C'}\n"
+            for obj in compat))
+    (evidence / "separate-elf32-compat-excluded.tsv").write_text(
+        "object\treason\n" +
+        "".join(f"{name}\t{reason}\n" for name, reason in compat_excluded))
     if len(owners) < minimum or len(owners) != len(set(owners)):
         raise ValueError("incomplete or duplicate original Kbuild C-owner universe: "
                          + str(len(owners)))
     config = out / ".config"
     if not config.is_file():
         raise ValueError("missing frozen GNU Kconfig")
+    # Record the resolved default compatibility settings rather than forcing
+    # extra ABI builds whose C translation units MiniC does not yet target.
+    configured = set(config.read_text().splitlines())
+    compat_symbols = ("CONFIG_IA32_EMULATION", "CONFIG_X86_X32_ABI",
+                      "CONFIG_COMPAT", "CONFIG_COMPAT_VDSO")
+    effective_compat_kconfig = {
+        symbol: ("y" if f"{symbol}=y" in configured else
+                 "m" if f"{symbol}=m" in configured else "n")
+        for symbol in compat_symbols
+    }
     # The canonical C owner set is derived from true .o.cmd metadata, NOT
     # from source-name guessing or an RV64 fixed 2064-object assumption.
     owners = sorted(owners)
@@ -130,12 +191,18 @@ def census(out: Path, target: str, image: str, evidence: Path, minimum: int,
         "config_profile": config_profile,
         "kernel": image, "kernel_sha256": sha(kernel),
         "config_sha256": sha(config),
+        "effective_compat_kconfig": effective_compat_kconfig,
         "gnu_target_objects": len(objects), "gnu_c_owners": len(owners),
         "excluded_non_c_objects": len(excluded),
         "separate_host_build_objects": len(host_objects),
+        "separate_foreign_elf64_objects": len(foreign),
         "separate_host_manifest_sha256": sha(evidence / "separate-host-build-objects.txt"),
         "separate_x86_early_boot_elf32_objects": len(boot32),
-        "scope": "ELF64_MAIN_TARGET_C_ONLY_NOT_X86_EARLY_BOOT_ELF32",
+        "separate_elf32_compat_objects": len(compat),
+        "separate_elf32_compat_c_owners": len(compat_owners),
+        "separate_elf32_compat_manifest_sha256": sha(compat_golden),
+        "separate_elf32_compat_c_manifest_sha256": sha(evidence / "separate-elf32-compat-owners.txt"),
+        "scope": "ELF64_MAIN_TARGET_C_ONLY_ELF32_ABI_SEPARATELY_ATTESTED",
         "owner_manifest_sha256": sha(evidence / "full-c-owners.txt"),
     }
     (evidence / "discovery.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
@@ -225,20 +292,70 @@ def self_test() -> None:
                 struct.pack_into("<H", hdr, 16, 1)
                 struct.pack_into("<H", hdr, 18, machine)
                 helper.write_bytes(hdr)
-            if target == "x86_64":
-                for name in ("arch/x86/boot/regs.o",
-                             "arch/x86/realmode/rm/wakeup_asm.o"):
-                    boot = out / name
-                    boot.parent.mkdir(parents=True)
-                    boot.write_bytes(b"\x7fELF\x01\x01" + bytes(64))
+            compat_cases = {
+                "x86_64": (
+                    ("arch/x86/boot/regs.o", 3, ".S"),
+                    ("arch/x86/realmode/rm/wakeup_asm.o", 3, ".S"),
+                    ("arch/x86/entry/vdso/vdso32/note.o", 3, ".S"),
+                    ("arch/x86/entry/vdso/vdso32/vclock_gettime.o", 3, ".c"),
+                    ("arch/x86/entry/vdso/vclock_gettime-x32.o", 62, ".S"),
+                ),
+                "aarch64": (
+                    ("arch/arm64/kernel/vdso32/vgettimeofday.o", 40, ".c"),
+                ),
+            }
+            for name, compat_machine, suffix in compat_cases.get(target, ()):
+                obj = out / name
+                obj.parent.mkdir(parents=True, exist_ok=True)
+                hdr = bytearray(64)
+                hdr[0:6] = b"\x7fELF\x01\x01"
+                struct.pack_into("<H", hdr, 16, 1)
+                struct.pack_into("<H", hdr, 18, compat_machine)
+                obj.write_bytes(hdr)
+                (obj.parent / ("." + obj.name + ".cmd")).write_text(
+                    f"source_{name} := /fixed/original/{name[:-2]}{suffix}\n")
             ev = base / target / "evidence"
             result = census(out, target, "vmlinux", ev, minimum=2)
             assert result["separate_x86_early_boot_elf32_objects"] == (
                 2 if target == "x86_64" else 0)
+            assert result["separate_elf32_compat_objects"] == {
+                "x86_64": 5, "aarch64": 1, "loongarch64": 0
+            }[target]
+            assert result["separate_elf32_compat_c_owners"] == {
+                "x86_64": 1, "aarch64": 1, "loongarch64": 0
+            }[target]
             assert result["gnu_c_owners"] == 2
             assert result["gnu_target_objects"] == 2
             assert result["separate_host_build_objects"] == 3
             assert result["verdict"] == "GNU_BUILD_ONLY_NOT_QEMU_CERTIFIED_NOT_MINIC"
+            # Neither a foreign ELF32 ABI nor an undisclosed ELF32 build
+            # scope may silently disappear from the MiniC coverage denominator.
+            unexpected = out / "lib/unexpected32.o"
+            bad_hdr = bytearray(64)
+            bad_hdr[0:6] = b"\x7fELF\x01\x01"
+            struct.pack_into("<H", bad_hdr, 16, 1)
+            struct.pack_into("<H", bad_hdr, 18, 3)
+            unexpected.write_bytes(bad_hdr)
+            try:
+                classify_object(unexpected, out, target)
+            except ValueError as exc:
+                assert "unclassified target ELF32" in str(exc)
+            else:
+                raise AssertionError("accepted unclassified ELF32")
+            unexpected.unlink()
+            if target == "x86_64":
+                wrong = out / "arch/x86/entry/vdso/vdso32/wrong.o"
+                wrong.write_bytes(bad_hdr)
+                wrong_hdr = bytearray(bad_hdr)
+                struct.pack_into("<H", wrong_hdr, 18, 40)
+                wrong.write_bytes(wrong_hdr)
+                try:
+                    classify_object(wrong, out, target)
+                except ValueError as exc:
+                    assert "unexpected compat ELF32 target machine" in str(exc)
+                else:
+                    raise AssertionError("accepted foreign compat ELF32 machine")
+                wrong.unlink()
             tamper = out / "lib/b.o"
             tamper.write_bytes(tamper.read_bytes() + b"TAMPER")
             try:
@@ -260,7 +377,7 @@ def self_test() -> None:
         else:
             raise AssertionError("accepted missing common Kconfig feature")
         print("MINIC_LINUX_THREE_GNU_SELFTEST=PASS targets=3 "
-              "host_excluded=3 early_boot_domains=2 shared_kconfig_fail_closed=1 "
+              "host_excluded=3 compat_elf32_domains=3 compat_C_isolated=1 "
               "sha_tamper_rejected=1 no_false_qemu=1")
 
 def main() -> int:
