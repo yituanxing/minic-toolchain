@@ -769,8 +769,7 @@ bool minic_multi_emit_record_array_global(
         const MinicRecordField *field = minic_c0_record_field(record, i);
         if (field == NULL || field->element_count != 1U ||
             minic_type_is_array(field->type) ||
-            (minic_type_is_record(field->type) &&
-             !minic_c0_program_record(program, field->type.record_id)->is_union))
+            minic_type_is_record(field->type))
             flat = false;
     }
     if (flat)

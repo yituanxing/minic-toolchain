@@ -274,6 +274,15 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
         return MINIC_CORE_LOWER_ERROR;
     }
 
+    /* GNU allows more operands than our fixed-size Core representation.
+     * Reject the entire shape before any target or legacy lowering can claim
+     * it, including the overflow-safe mixed output/input boundary. */
+    if (source->output_count > MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT ||
+        source->input_count > MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT -
+                                  source->output_count) {
+        return MINIC_CORE_LOWER_UNSUPPORTED;
+    }
+
 
     core_asm_trace_input_batch(context, source);
 

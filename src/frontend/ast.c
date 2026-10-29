@@ -1918,6 +1918,62 @@ static bool minic_c0_gnu_void_function_pointer_assignment_compatible(MinicType t
            (minic_type_is_function(target_pointee) && minic_type_is_void(source_pointee));
 }
 
+/* The Linux module_param type-check macro intentionally returns an
+ * `enum foo *` from an `unsigned int *` probe function. GCC accepts this
+ * one-level mismatch with -Wincompatible-pointer-types, and the pointer
+ * representation is identical when the completed enum is compatible with
+ * exactly that integer type. Keep unrelated enum pointers, different
+ * integer ranks, deeper pointers, and qualifier drops strictly rejected. */
+static bool minic_c0_gnu_enum_underlying_pointer_compatible(
+    const MinicC0Program *program, MinicType target, MinicType source) {
+    MinicType target_pointee, source_pointee, enum_type, integer_type, effective;
+
+    if (program == NULL || target.pointer_depth != 1U || source.pointer_depth != 1U ||
+        !minic_type_pointee(target, &target_pointee) ||
+        !minic_type_pointee(source, &source_pointee))
+        return false;
+    if (minic_type_is_const(source_pointee) && !minic_type_is_const(target_pointee))
+        return false;
+    if (minic_type_is_volatile(source_pointee) && !minic_type_is_volatile(target_pointee))
+        return false;
+    if (minic_type_is_enum(target_pointee) && minic_type_is_integer(source_pointee) &&
+        !minic_type_is_enum(source_pointee)) {
+        enum_type = target_pointee;
+        integer_type = source_pointee;
+    } else if (minic_type_is_enum(source_pointee) &&
+               minic_type_is_integer(target_pointee) && !minic_type_is_enum(target_pointee)) {
+        enum_type = source_pointee;
+        integer_type = target_pointee;
+    } else {
+        return false;
+    }
+    return minic_c0_type_effective_integer_type(program, enum_type, &effective) &&
+           minic_type_unqualified(effective, &effective) &&
+           minic_type_unqualified(integer_type, &integer_type) &&
+           minic_type_equal(effective, integer_type);
+}
+
+/* GNU C (also ISO C23) admits `T (*)[N]` where a formal parameter requires
+ * `const T (*)[N]`. GCC -std=gnu11 -Wpedantic diagnoses the pre-C23
+ * constraint but compiles it with ordinary Linux flags. Unlike a pointer to
+ * pointer, one array layer must not mask an inner qualifier change. Reuse
+ * the existing exact array shape/equality proof, then check direction. */
+static bool minic_c0_gnu_qualified_array_pointer_assignment_compatible(
+    const MinicC0Program *program, MinicType target, MinicType source) {
+    const MinicArrayType *target_array;
+    const MinicArrayType *source_array;
+    if (!minic_c0_array_pointer_qualified_equality_compatible(program, target, source))
+        return false;
+    target_array = minic_c0_program_array_type(program, target.array_type_id);
+    source_array = minic_c0_program_array_type(program, source.array_type_id);
+    if (target_array == NULL || source_array == NULL)
+        return false;
+    return (!minic_type_is_const(source_array->element_type) ||
+            minic_type_is_const(target_array->element_type)) &&
+           (!minic_type_is_volatile(source_array->element_type) ||
+            minic_type_is_volatile(target_array->element_type));
+}
+
 bool minic_c0_assignment_compatible(const MinicC0Program *program,
                                     MinicType target_type,
                                     MinicExpressionId source_expression_id) {
@@ -1936,6 +1992,10 @@ bool minic_c0_assignment_compatible(const MinicC0Program *program,
     if (minic_type_is_pointer(target_type) && minic_type_is_pointer(source->type) &&
         (minic_c0_types_compatible(program, target_type, source->type) ||
          minic_c0_gnu_void_function_pointer_assignment_compatible(target_type, source->type) ||
+         minic_c0_gnu_enum_underlying_pointer_compatible(
+             program, target_type, source->type) ||
+         minic_c0_gnu_qualified_array_pointer_assignment_compatible(
+             program, target_type, source->type) ||
          minic_type_gnu_pointer_sign_compatible(target_type, source->type))) {
         return true;
     }

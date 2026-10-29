@@ -717,6 +717,47 @@ static bool eval_integer_address_pointer_bits(const MinicC0Program *program,
     return true;
 }
 
+/* A file-scope array is a linker-backed object whose address is necessarily
+ * nonzero, even though its numeric address is unknown at compile time.  GNU
+ * static constant expressions use this fact for table lengths such as
+ * `(literal ? sizeof literal - 1 : 0)` in Linux nf_conntrack_sip.  Distinguish
+ * array-to-pointer decay from reading a pointer-valued global: only the
+ * former is an address constant.  The decoder rejects arbitrary pointers,
+ * local arrays, nonzero subscripts, and runtime loads. */
+static bool eval_known_global_array_pointer_truth(
+    const MinicC0Program *program, MinicExpressionId expression_id,
+    unsigned int depth) {
+    const MinicExpression *expression;
+    const MinicExpression *subscript;
+    const MinicExpression *base;
+    const MinicExpression *index;
+    const MinicGlobalObject *object;
+
+    if (program == NULL || depth > MINIC_CONST_EVAL_MAX_DEPTH)
+        return false;
+    expression = minic_c0_program_expression(program, expression_id);
+    if (expression == NULL || !minic_type_is_pointer(expression->type))
+        return false;
+    if (expression->kind == MINIC_EXPRESSION_CAST ||
+        expression->kind == MINIC_EXPRESSION_CONVERSION ||
+        expression->kind == MINIC_EXPRESSION_BITCAST)
+        return eval_known_global_array_pointer_truth(
+            program, expression->value.unary.operand, depth + 1U);
+    if (expression->kind != MINIC_EXPRESSION_ADDRESS_OF)
+        return false;
+    subscript = minic_c0_program_expression(program, expression->value.unary.operand);
+    if (subscript == NULL || subscript->kind != MINIC_EXPRESSION_SUBSCRIPT)
+        return false;
+    base = minic_c0_program_expression(program, subscript->value.subscript.base);
+    index = minic_c0_program_expression(program, subscript->value.subscript.index);
+    if (base == NULL || base->kind != MINIC_EXPRESSION_GLOBAL_OBJECT ||
+        index == NULL || index->kind != MINIC_EXPRESSION_INTEGER ||
+        index->value.integer_value != 0)
+        return false;
+    object = minic_c0_program_global_object(program, base->value.global_object_id);
+    return object != NULL && minic_type_is_array(object->type);
+}
+
 static bool eval_integer_address_pointer_compare(const MinicC0Program *program,
                                                  const MinicTargetInfo *target,
                                                  const MinicExpression *expression,
@@ -1235,9 +1276,14 @@ static bool eval_expression(const MinicC0Program *program,
                                                    expression->value.conditional.condition,
                                                    depth + 1U,
                                                    &pointer_bits)) {
-                return false;
+                if (!eval_known_global_array_pointer_truth(
+                        program, expression->value.conditional.condition,
+                        depth + 1U))
+                    return false;
+                truthy = true;
+            } else {
+                truthy = pointer_bits != 0U;
             }
-            truthy = pointer_bits != 0U;
         } else if (!eval_expression(program,
                                     target,
                                     expression->value.conditional.condition,

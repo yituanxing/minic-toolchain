@@ -193,6 +193,58 @@ bool minic_aarch64_emit_integer_instruction(
             bool is_signed;
             if (!minic_core_integer_overflow_shape(
                     program, target, fn, ins, &width, &is_signed)) {
+                MinicCoreIntegerOverflowNarrowShape narrow;
+                if (minic_core_integer_overflow_narrow_result_shape(
+                        program, target, fn, ins, &narrow)) {
+                    const int op = ins->value.integer_overflow.operator_kind;
+                    const char *operation =
+                        op == MINIC_CORE_INTEGER_OVERFLOW_ADD
+                            ? "  add x12, x9, x10\n"
+                        : op == MINIC_CORE_INTEGER_OVERFLOW_SUBTRACT
+                            ? "  sub x12, x9, x10\n"
+                            : "  mul x12, x9, x10\n";
+                    const char *left_narrow = narrow.left_width == 1U
+                        ? (narrow.left_signed ? "  sxtb w9, w9\n"
+                                              : "  uxtb w9, w9\n")
+                        : narrow.left_width == 2U
+                            ? (narrow.left_signed ? "  sxth w9, w9\n"
+                                                  : "  uxth w9, w9\n") : "";
+                    const char *right_narrow = narrow.right_width == 1U
+                        ? (narrow.right_signed ? "  sxtb w10, w10\n"
+                                               : "  uxtb w10, w10\n")
+                        : narrow.right_width == 2U
+                            ? (narrow.right_signed ? "  sxth w10, w10\n"
+                                                   : "  uxth w10, w10\n") : "";
+                    const char *result_narrow = narrow.result_width == 1U
+                        ? (narrow.result_signed ? "  sxtb w9, w9\n"
+                                                : "  uxtb w9, w9\n")
+                        : (narrow.result_signed ? "  sxth w9, w9\n"
+                                                : "  uxth w9, w9\n");
+                    const char *store = narrow.result_width == 1U
+                        ? "  strb w9, [x11]\n" : "  strh w9, [x11]\n";
+                    if (fprintf(out, "  ldr w9, [sp, #%zu]\n"
+                                     "  ldr w10, [sp, #%zu]\n"
+                                     "  ldr x11, [sp, #%zu]\n",
+                                (size_t)lhs * 8U, (size_t)rhs * 8U,
+                                (size_t)address * 8U) < 0 ||
+                        fputs(left_narrow, out) == EOF ||
+                        fputs(narrow.left_signed ? "  sxtw x9, w9\n"
+                                                  : "  uxtw x9, w9\n", out) == EOF ||
+                        fputs(right_narrow, out) == EOF ||
+                        fputs(narrow.right_signed ? "  sxtw x10, w10\n"
+                                                   : "  uxtw x10, w10\n", out) == EOF ||
+                        fputs(operation, out) == EOF ||
+                        fputs("  mov w9, w12\n", out) == EOF ||
+                        fputs(result_narrow, out) == EOF ||
+                        fputs(narrow.result_signed ? "  sxtw x13, w9\n"
+                                                   : "  uxtw x13, w9\n", out) == EOF ||
+                        fputs("  cmp x12, x13\n  cset w10, ne\n", out) == EOF ||
+                        fputs(store, out) == EOF ||
+                        fputs("  mov w9, w10\n", out) == EOF)
+                        return false;
+                    *needs_gp_store = true;
+                    return true;
+                }
                 bool multiply_signed_left, multiply_signed_right;
                 bool multiply_signed_result;
                 if (minic_core_integer_overflow_mixed_multiply_i32_shape(

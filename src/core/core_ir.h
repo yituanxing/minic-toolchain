@@ -283,7 +283,9 @@ typedef struct MinicCoreInlineAsm {
     size_t resolved_immediate_count;
 } MinicCoreInlineAsm;
 
-#define MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT 8U
+/* Core-wide bound for GNU extended-asm operand roles. Keep this independent
+ * from the smaller operand counts of ISA-specific machine templates. */
+#define MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT 16U
 
 typedef enum MinicCoreStructuredInlineAsmOperandKind {
     MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT = 0,

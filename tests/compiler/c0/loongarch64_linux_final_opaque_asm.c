@@ -15,7 +15,9 @@ void loong_linux_smp_bug_435(void) {
         ".short 435; .short 0; .popsection; 10001: break 1");
 }
 void loong_linux_relocate_cache_sync(void) {
-    __asm__ __volatile__("ibar 0 \t\n" "dbar 0 \t\n");
+    /* Original arch/loongarch/kernel/relocate.c carries a compiler barrier
+     * after copying executable text, unlike the old abbreviated fixture. */
+    __asm__ __volatile__("ibar 0 \t\n" "dbar 0 \t\n" ::: "memory");
 }
 void loong_linux_idle_play_dead_asm(void) {
     __asm__ __volatile__("dbar 0\n\t" : : : "memory");

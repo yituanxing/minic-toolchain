@@ -44,6 +44,23 @@ def all_backend_reject_frontiers(stderr,target):
                  kind=int(m.group(6)),backend_line=int(m.group(7)))
             for m in BACKEND_REJECT.finditer(stderr) if m.group(1)==target]
 
+# Preserve source and ABI type identities of unsupported AArch64 scalar
+# LOADs. This is diagnostic evidence only and never changes admission.
+AARCH64_LOAD_SHAPE_REJECT = re.compile(
+    r"^MINIC_AARCH64_LOAD_SHAPE_REJECT result_base=(\d+) "
+    r"result_rank=(\d+) result_ptr=(\d+) result_enum=(\d+) "
+    r"address_id=(\d+) address_base=(-?\d+) address_ptr=(\d+)$",
+    re.MULTILINE)
+
+def all_load_shape_frontiers(stderr,target):
+    if target != "aarch64":
+        return []
+    return [dict(result_base=int(m.group(1)),result_rank=int(m.group(2)),
+                 result_ptr=int(m.group(3)),result_enum=int(m.group(4)),
+                 address_id=int(m.group(5)),address_base=int(m.group(6)),
+                 address_ptr=int(m.group(7)))
+            for m in AARCH64_LOAD_SHAPE_REJECT.finditer(stderr)]
+
 MACHINE_OPCODE_REJECT = re.compile(
     r"^MINIC_M8_OPCODE_REJECT arch=(aarch64|loongarch64) "
     r"function=([A-Za-z_][A-Za-z_0-9]*) block=(\d+) "
@@ -178,6 +195,7 @@ def probe(a):
             asm_frontiers=all_core_asm_frontiers(error_text)
             machine_frontiers=all_machine_opcode_frontiers(error_text,a.target)
             backend_frontiers=all_backend_reject_frontiers(error_text,a.target)
+            load_shape_frontiers=all_load_shape_frontiers(error_text,a.target)
             preflight_roots=all_preflight_roots(error_text,a.target)
             asm_forms=all_asm_form_frontiers(error_text,a.target)
             if core_frontiers and ok:
@@ -193,13 +211,15 @@ def probe(a):
                         asm_frontiers=asm_frontiers,
                         machine_frontiers=machine_frontiers,
                         backend_frontiers=backend_frontiers,
+                        load_shape_frontiers=load_shape_frontiers,
                         preflight_roots=preflight_roots,asm_forms=asm_forms,
                         asm_sha256=sha(asm) if ok else None)
         except subprocess.TimeoutExpired:
             asm.unlink(missing_ok=True)
             return dict(index=row["index"],object=obj,status="MINIC_TIMEOUT",diagnostic="timeout",
                         core_frontiers=[],core_lower_traces=[],machine_frontiers=[],
-                        backend_frontiers=[],preflight_roots=[],asm_forms=[],asm_frontiers=[],
+                        backend_frontiers=[],load_shape_frontiers=[],
+                        preflight_roots=[],asm_forms=[],asm_frontiers=[],
                         input_sha256=row["sha256"])
     with concurrent.futures.ThreadPoolExecutor(max_workers=a.workers) as executor:
         data=list(executor.map(process,selected))

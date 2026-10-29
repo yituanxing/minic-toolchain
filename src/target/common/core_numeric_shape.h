@@ -31,6 +31,25 @@ bool minic_core_integer_overflow_mixed_multiply_i32_shape(
     const MinicC0Program *, const MinicTargetInfo *,
     const MinicCoreFunction *, const MinicCoreInstruction *,
     bool *signed_left, bool *signed_right, bool *signed_result);
+
+/* The GNU _overflow_p destination can be narrower than its integer operands.
+ * Operands up to 32 bits and destinations of 8/16 bits have exact arithmetic
+ * within a 64-bit machine register (including mixed signs). The target owns
+ * the widening, operation, range comparison and narrow result store. */
+typedef struct MinicCoreIntegerOverflowNarrowShape {
+    size_t left_width;
+    size_t right_width;
+    size_t result_width;
+    bool left_signed;
+    bool right_signed;
+    bool result_signed;
+} MinicCoreIntegerOverflowNarrowShape;
+
+bool minic_core_integer_overflow_narrow_result_shape(
+    const MinicC0Program *, const MinicTargetInfo *,
+    const MinicCoreFunction *, const MinicCoreInstruction *,
+    MinicCoreIntegerOverflowNarrowShape *shape);
+
 bool minic_core_integer_bitscan_shape(
     const MinicC0Program *, const MinicTargetInfo *,
     const MinicCoreFunction *, const MinicCoreInstruction *,

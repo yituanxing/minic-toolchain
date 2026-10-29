@@ -2815,6 +2815,121 @@ static bool aarch64_linux_fixed_gpr_local_binding(
             minic_type_equal(e->type, minic_type_int())));
 }
 
+/* Linux 6.6 arch/arm64/include/asm/compiler.h:
+ *
+ *   register unsigned long ptr asm("x30") = value;
+ *   asm(ARM64_ASM_PREAMBLE "hint #7\n" : "+r" (ptr));
+ *
+ * `hint #7` is XPACLRI: it operates on the physical *link register*, not
+ * on a freely allocatable operand.  Treating the tied +r output as an
+ * ordinary SSA operand silently strips PAC from the wrong register.  The
+ * only local x30 binding admitted here must therefore be a complete, exact
+ * instruction/operand contract.  GNU may prepend an .arch directive, but
+ * the HINT encoding itself is available in the base A64 ISA. */
+static bool aarch64_linux_xpaclri_form(const char *text, size_t length) {
+    char compact[96];
+    size_t i, n = 0U;
+    const char *suffix;
+    if (!text || !length || length >= sizeof(compact)) return false;
+    for (i = 0U; i < length; ++i) {
+        const char c = text[i];
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
+        if (c == '\0' || c == ';' || n + 1U >= sizeof(compact)) return false;
+        compact[n++] = c;
+    }
+    compact[n] = '\0';
+    if (strcmp(compact, "hint#7") == 0) return true;
+    /* These are the GNU ARM64_ASM_ARCH spelling variants for Linux arm64;
+     * no arbitrary preamble, instruction, or assembler directive is accepted. */
+    if (strncmp(compact, ".archarmv8", sizeof(".archarmv8") - 1U) != 0)
+        return false;
+    suffix = compact + sizeof(".archarmv8") - 1U;
+    return strcmp(suffix, "-ahint#7") == 0 ||
+           strcmp(suffix, ".1-ahint#7") == 0 ||
+           strcmp(suffix, ".2-ahint#7") == 0 ||
+           strcmp(suffix, ".3-ahint#7") == 0 ||
+           strcmp(suffix, ".4-ahint#7") == 0 ||
+           strcmp(suffix, ".5-ahint#7") == 0 ||
+           strcmp(suffix, ".6-ahint#7") == 0 ||
+           strcmp(suffix, ".7-ahint#7") == 0 ||
+           strcmp(suffix, ".8-ahint#7") == 0 ||
+           strcmp(suffix, ".9-ahint#7") == 0;
+}
+
+static bool aarch64_linux_xpaclri_source(
+    const MinicC0Program *program, const MinicInlineAsm *src,
+    MinicTargetInlineAsmContract *contract) {
+    const MinicInlineAsmOperand *op;
+    const MinicExpression *expr;
+    const MinicFixedRegisterBinding *fixed;
+    const MinicLocal *local;
+    if (!program || !src || !contract || src->is_goto ||
+        !aarch64_linux_xpaclri_form(src->template_text, src->template_length) ||
+        src->output_count != 1U || !src->outputs || src->input_count != 0U ||
+        src->label_count != 0U || src->clobber_count != 0U ||
+        src->register_clobber_count != 0U || src->has_memory_clobber)
+        return false;
+    op = &src->outputs[0];
+    if (!constraint(op, "+r") || op->access != MINIC_INLINE_ASM_OPERAND_READ_WRITE)
+        return false;
+    expr = minic_c0_program_expression(program, op->expression);
+    if (!expr || expr->kind != MINIC_EXPRESSION_LOCAL ||
+        expr->value_category != MINIC_VALUE_LVALUE ||
+        !minic_type_equal(expr->type, minic_type_unsigned_long()) ||
+        minic_type_is_const(expr->type) || minic_type_is_volatile(expr->type))
+        return false;
+    local = minic_c0_program_local(program, expr->value.local_id);
+    fixed = minic_c0_program_local_fixed_register_binding(
+        program, expr->value.local_id);
+    if (!local || !fixed || local->is_array ||
+        !minic_type_equal(local->type, expr->type) ||
+        !minic_type_equal(fixed->type, expr->type) ||
+        fixed->register_name_length != 3U ||
+        memcmp(fixed->register_name, "x30", 3U) != 0)
+        return false;
+    contract->operand_count = 1U;
+    contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE;
+    return true;
+}
+
+static bool aarch64_linux_xpaclri_emit(
+    FILE *out, const MinicDirectLP64BlockContext *ctx,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
+    const MinicCoreFunction *fn = ctx->fn;
+    const MinicCoreStructuredInlineAsmOperand *op =
+        ins->value.structured_inline_asm.operands;
+    const MinicCoreFixedRegisterBinding *fixed;
+    MinicType pointee;
+    if (!out || !fn || !op || !info || ctx->dynamic_frame || info->is_goto ||
+        !aarch64_linux_xpaclri_form(info->template_text, info->template_length) ||
+        ins->value.structured_inline_asm.operand_count != 1U ||
+        info->register_clobber_count != 0U || info->has_memory_clobber ||
+        op[0].operand_index != 0U || op[0].early_clobber ||
+        op[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE ||
+        !op[0].has_fixed_register_binding ||
+        op[0].fixed_register_binding_id >= fn->fixed_register_binding_count ||
+        op[0].value >= fn->value_count ||
+        !aarch64_linux_structured_spill_slot_valid(op[0].value) ||
+        !minic_type_pointee(fn->values[op[0].value].type, &pointee) ||
+        !minic_type_equal(pointee, minic_type_unsigned_long()))
+        return false;
+    fixed = &fn->fixed_register_bindings[op[0].fixed_register_binding_id];
+    if (!fixed->is_local || !fixed->register_name ||
+        fixed->register_name_length != 3U ||
+        memcmp(fixed->register_name, "x30", 3U) != 0 ||
+        !minic_type_equal(fixed->type, minic_type_unsigned_long()))
+        return false;
+    /* The entry LR is saved by AArch64's stp x29, x30 frame prologue and
+     * restored by the epilogue. No BL occurs while x30 contains the PAC
+     * operand. Emit one contiguous read-modify-write of physical x30. */
+    return fprintf(out,
+        "  ldr x9, [sp, #%zu]\n"
+        "  ldr x30, [x9]\n"
+        "  hint #7\n"
+        "  str x30, [x9]\n",
+        (size_t)op[0].value * 8U) >= 0;
+}
+
 static bool aarch64_linux_smccc_source(
     const MinicC0Program *program, const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
@@ -4340,6 +4455,7 @@ bool minic_aarch64_qualify_inline_asm(
     }
     if(aarch64_linux_bitrev_source(program,src,contract))return true;
     if(aarch64_linux_lse_source(program,src,contract))return true;
+    if(aarch64_linux_xpaclri_source(program,src,contract))return true;
     if(aarch64_linux_smccc_source(program,src,contract))return true;
     if(aarch64_linux_svc_source(program,src,contract))return true;
     if(aarch64_linux_wfxt_source(program,src,contract))return true;
@@ -5162,6 +5278,8 @@ bool minic_aarch64_emit_qualified_structured_asm(
         if (timer != 0U)
             return aarch64_linux_timer_alternative_emit(out, ctx, ins, info, timer);
     }
+    if (aarch64_linux_xpaclri_form(info->template_text, info->template_length))
+        return aarch64_linux_xpaclri_emit(out, ctx, ins, info);
     {
         const unsigned int smccc = aarch64_linux_smccc_form(
             info->template_text, info->template_length);

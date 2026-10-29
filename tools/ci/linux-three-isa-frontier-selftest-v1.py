@@ -39,6 +39,24 @@ assert mod.all_backend_reject_frontiers(
     "block=3 instruction=7 kind=43 backend_line=156\n","aarch64")==[
         dict(function="foo",stage="emit",block=3,instruction=7,
              kind=43,backend_line=156)]
+load_shape_log=(
+    "MINIC_AARCH64_LOAD_SHAPE_REJECT result_base=1 "
+    "result_rank=5 result_ptr=0 result_enum=18446744073709551615 "
+    "address_id=6 address_base=2 address_ptr=1\n"
+    "MINIC_AARCH64_LOAD_SHAPE_REJECT result_base=17 "
+    "result_rank=0 result_ptr=0 result_enum=0 "
+    "address_id=4 address_base=-1 address_ptr=0\n")
+assert mod.all_load_shape_frontiers(load_shape_log,"aarch64")==[
+    dict(result_base=1,result_rank=5,result_ptr=0,
+         result_enum=18446744073709551615,address_id=6,
+         address_base=2,address_ptr=1),
+    dict(result_base=17,result_rank=0,result_ptr=0,
+         result_enum=0,address_id=4,address_base=-1,address_ptr=0)]
+assert mod.all_load_shape_frontiers(load_shape_log,"loongarch64")==[]
+assert mod.all_load_shape_frontiers(
+    "MINIC_AARCH64_LOAD_SHAPE_REJECT result_base=X "
+    "result_rank=0 result_ptr=0 result_enum=0 "
+    "address_id=4 address_base=0 address_ptr=1\n","aarch64")==[]
 assert mod.all_preflight_roots(
     "MINIC_BACKEND_PREFLIGHT_ROOT arch=loongarch64 "
     "function=alpha reason=gnu_asm_qualification blocks=4 "
@@ -96,4 +114,4 @@ assert mod.all_core_asm_frontiers(
     asm_frontier.replace("signature_hash=1111111111111111",
                          "signature_hash=INVALID_HASH")) == [
           mod.all_core_asm_frontiers(asm_frontier)[1]]
-print("THREE_LINUX_ALL_FRONTIERS_SELFTEST=PASS three_independent_failures=1 normal_unchanged=1 machine_trace=3")
+print("THREE_LINUX_ALL_FRONTIERS_SELFTEST=PASS three_independent_failures=1 normal_unchanged=1 machine_trace=3 load_shape_trace=2")

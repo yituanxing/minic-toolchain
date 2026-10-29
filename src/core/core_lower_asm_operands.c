@@ -1170,7 +1170,9 @@ bool core_inline_asm_numeric_template(const MinicInlineAsm *source,
 
     if (source == NULL || template_out == NULL || template_length_out == NULL ||
         source->template_text == NULL ||
-        source->output_count + source->input_count > 10U) {
+        source->output_count > MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT ||
+        source->input_count > MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT -
+                                  source->output_count) {
         return false;
     }
     normalized = (char *)malloc(source->template_length + 1U);
@@ -1208,7 +1210,22 @@ bool core_inline_asm_numeric_template(const MinicInlineAsm *source,
             }
         }
         if (source->template_text[cursor] >= '0' && source->template_text[cursor] <= '9') {
-            operand_index = (size_t)(source->template_text[cursor] - '0');
+            size_t index_begin = cursor;
+
+            operand_index = 0U;
+            /* GNU %10 and %15 are single operand references, not %1 followed
+             * by literal digits. Preserve every digit for the target parser. */
+            do {
+                operand_index = operand_index * 10U +
+                    (size_t)(source->template_text[cursor] - '0');
+                cursor += 1U;
+                if (operand_index > MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT) {
+                    free(normalized);
+                    return false;
+                }
+            } while (cursor < source->template_length &&
+                     source->template_text[cursor] >= '0' &&
+                     source->template_text[cursor] <= '9');
             /* In GNU extended asm-goto, %lN refers to a C label AFTER all
              * register/memory output and input operand numbers. Preserve
              * that label reference for the target's PREL32 relocation;
@@ -1223,7 +1240,8 @@ bool core_inline_asm_numeric_template(const MinicInlineAsm *source,
             if (modifier != '\0') {
                 normalized[output_length++] = modifier;
             }
-            normalized[output_length++] = source->template_text[cursor++];
+            while (index_begin < cursor)
+                normalized[output_length++] = source->template_text[index_begin++];
             continue;
         }
         if (source->template_text[cursor] == '[') {
@@ -1255,14 +1273,19 @@ bool core_inline_asm_numeric_template(const MinicInlineAsm *source,
                 operand_index = source->output_count + source->input_count;
                 resolved = true;
             }
-            if (!resolved || operand_index > 9U) {
+            if (!resolved ||
+                operand_index > MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT ||
+                (operand_index == MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT &&
+                 !source->is_goto)) {
                 free(normalized);
                 return false;
             }
             if (modifier != '\0') {
                 normalized[output_length++] = modifier;
             }
-            normalized[output_length++] = (char)('0' + operand_index);
+            if (operand_index >= 10U)
+                normalized[output_length++] = (char)('0' + operand_index / 10U);
+            normalized[output_length++] = (char)('0' + operand_index % 10U);
             cursor = name_end + 1U;
             continue;
         }

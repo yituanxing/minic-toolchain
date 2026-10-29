@@ -1193,6 +1193,13 @@ static bool append_static_chained_array_designator_value(MinicParser *parser,
     return true;
 }
 
+/* This is implemented beside the record designator path walker below, so
+ * `[index].field = ...` can share precisely the same anonymous-member and
+ * union-selection rules as a plain `.field = ...` initializer. */
+static bool append_static_chained_record_designator_value(
+    MinicParser *parser, MinicGlobalObjectId object_id, MinicType record_type,
+    size_t *selected_slot, size_t *selected_slot_count);
+
 static bool parse_static_forward_array_initializer(MinicParser *parser,
                                                    MinicGlobalObjectId object_id,
                                                    MinicType element_type,
@@ -1263,6 +1270,14 @@ static bool parse_static_forward_array_initializer(MinicParser *parser,
                     goto done;
                 }
                 chained_designator = true;
+            } else if (parser->current.kind == MINIC_TOKEN_DOT &&
+                       minic_type_is_record(element_type)) {
+                if (first != last) {
+                    minic_parser_error(parser,
+                                       "outer GNU range record designator cannot be chained yet");
+                    goto done;
+                }
+                chained_designator = true;
             } else if (!minic_parser_expect(
                            parser, MINIC_TOKEN_EQUAL, "expected '=' after array designator")) {
                 goto done;
@@ -1286,8 +1301,13 @@ static bool parse_static_forward_array_initializer(MinicParser *parser,
         relocation_begin = object->relocation_count;
         union_selection_begin = object->union_selection_count;
         if ((chained_designator
-                 ? !append_static_chained_array_designator_value(
-                       parser, object_id, element_type, &chained_slot, &chained_slot_count)
+                 ? !(parser->current.kind == MINIC_TOKEN_LBRACKET
+                         ? append_static_chained_array_designator_value(
+                               parser, object_id, element_type, &chained_slot,
+                               &chained_slot_count)
+                         : append_static_chained_record_designator_value(
+                               parser, object_id, element_type, &chained_slot,
+                               &chained_slot_count))
                  : !minic_parser_parse_static_storage_initializer_value(
                        parser, object_id, element_type)) ||
             !capture_static_aggregate_array_action(parser,
@@ -1543,11 +1563,13 @@ static bool static_record_designator_leaf_slot(const MinicC0Program *program,
         field_index = designator->field_indices[depth];
         field = minic_c0_record_field(current_record, field_index);
         if (field == NULL || field->element_count == 0U || field->is_flexible_array ||
-            !minic_c0_global_record_field_initializer_slot(
-                program, current_record, field_index, &relative) ||
-            total > SIZE_MAX - relative) {
+            (!current_record->is_union &&
+             !minic_c0_global_record_field_initializer_slot(
+                 program, current_record, field_index, &relative))) {
             return false;
         }
+        if (current_record->is_union) relative = 0U;
+        if (total > SIZE_MAX - relative) return false;
         total += relative;
         if (depth + 1U == designator->depth) {
             *slot_index = total;
@@ -2070,6 +2092,43 @@ static bool append_static_record_designator_value(MinicParser *parser,
         }
     }
     return true;
+}
+
+static bool append_static_chained_record_designator_value(
+    MinicParser *parser, MinicGlobalObjectId object_id, MinicType record_type,
+    size_t *selected_slot, size_t *selected_slot_count) {
+    const MinicRecord *record;
+    const MinicRecordField *leaf;
+    MinicStaticRecordDesignator designator;
+    size_t leaf_slots;
+
+    if (parser == NULL || !minic_type_is_record(record_type) ||
+        selected_slot == NULL || selected_slot_count == NULL) {
+        return false;
+    }
+    record = minic_c0_program_record(parser->program, record_type.record_id);
+    if (record == NULL || !record->is_complete ||
+        !parse_static_record_designator_path(parser, record, &designator)) {
+        return false;
+    }
+    if (designator.has_array_index) {
+        minic_parser_error(parser,
+                           "array-element designator after record-array index is unsupported");
+        return false;
+    }
+    if (!static_record_designator_leaf_slot(parser->program, record, &designator,
+                                            selected_slot, &leaf) ||
+        !minic_c0_global_initializer_slot_count(parser->program, leaf->type,
+                                                &leaf_slots) ||
+        (leaf_slots != 0U && leaf->element_count > SIZE_MAX / leaf_slots)) {
+        minic_parser_error(parser,
+                           "record-array chained member initializer span overflows");
+        return false;
+    }
+    *selected_slot_count = leaf_slots * leaf->element_count;
+    return append_static_record_designator_value(parser, object_id, record,
+                                                 designator.field_indices,
+                                                 designator.depth);
 }
 
 static bool append_static_record_array_element_designator_value(MinicParser *parser,

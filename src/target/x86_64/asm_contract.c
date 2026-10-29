@@ -213,6 +213,12 @@ bool minic_x86_64_requires_qualified_input_asm(const MinicInlineAsm *src) {
              src->template_text, src->template_length) ||
          minic_x86_64_linux_legacy_fnsave_form(
              src->template_text, src->template_length) ||
+         minic_x86_64_linux_pv_indirect_call_form(
+             src->template_text, src->template_length) ||
+         minic_x86_64_linux_kvm_hypercall_alt_form(
+             src->template_text, src->template_length) ||
+         minic_x86_64_linux_exception_stack_call_form(
+             src->template_text, src->template_length) ||
          minic_x86_64_linux_vmware_hypercall_form(
              src->template_text, src->template_length) != 0U ||
          minic_x86_64_linux_kexec_load_segments_form(
@@ -297,6 +303,139 @@ bool minic_x86_64_linux_pv_indirect_call_form(const char *text, size_t length) {
         ".byte%c5.byte772b-771b.balign8.popsection";
     return x86_linux_compact_asm_equals(text, length, expected) ||
            x86_linux_compact_asm_equals(text, length, numeric);
+}
+
+/* Real Linux 6.6 KVM's alternative hypercall encoding: Intel VMCALL is the
+ * initially executable instruction; AMD VMMCALL is a separate replacement
+ * fragment selected by the kernel's alternative patching using the exact
+ * X86_FEATURE_VMMCALL (8*32+15) metadata and PC-relative section offsets.
+ * A raw VMCALL/VMMCALL with equivalent CPU instruction alone is insufficient. */
+bool minic_x86_64_linux_kvm_hypercall_alt_form(
+    const char *text, size_t length) {
+    static const char expected[] =
+        "#ALT:oldnstr661:vmcall662:#ALT:padding"
+        ".skip-(((6651f-6641f)-(662b-661b))>0)*"
+        "((6651f-6641f)-(662b-661b)),0x90"
+        "663:.pushsection.altinstructions,\"a\""
+        ".long661b-..long6641f-..4byte(8*32+15)"
+        ".byte663b-661b.byte6651f-6641f.popsection"
+        ".pushsection.altinstr_replacement,\"ax\""
+        "#ALT:replacement16641:vmmcall6651:.popsection";
+    return x86_linux_compact_asm_equals(text, length, expected);
+}
+
+static bool x86_linux_kvm_hypercall_alt_source(
+    const MinicC0Program *program, const MinicInlineAsm *src,
+    MinicTargetInlineAsmContract *contract) {
+    static const char *const regs[] = {"a", "b", "c"};
+    const MinicExpression *output, *arg;
+    size_t i;
+    if (!program || !src || !contract || !src->is_volatile || src->is_goto ||
+        !minic_x86_64_linux_kvm_hypercall_alt_form(
+            src->template_text, src->template_length) ||
+        src->output_count != 1U || !src->outputs ||
+        src->input_count != 3U || !src->inputs || src->label_count ||
+        !src->has_memory_clobber || src->clobber_count != 1U ||
+        src->register_clobber_count ||
+        !target_constraint_is(&src->outputs[0], "=a")) return false;
+    output = minic_c0_program_expression(program, src->outputs[0].expression);
+    if (!output || output->value_category != MINIC_VALUE_LVALUE ||
+        !minic_type_equal(output->type, minic_type_long())) return false;
+    for (i = 0U; i < 3U; ++i) {
+        arg = minic_c0_program_expression(program, src->inputs[i].expression);
+        if (!arg || !target_constraint_is(&src->inputs[i], regs[i]) ||
+            !minic_type_equal(arg->type, i == 0U
+                ? minic_type_unsigned_int() : minic_type_unsigned_long()))
+            return false;
+    }
+    contract->operand_count = 4U;
+    contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+    for (i = 1U; i < 4U; ++i)
+        contract->kinds[i] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->implicit_memory_effect = true;
+    return true;
+}
+
+/* Exceptional double-fault-safe x86 stack call (Linux page_fault_oops):
+ * the outgoing function receives 3 fixed SysV arguments on a special
+ * per-CPU exception stack; the old RSP is stored at the new stack top and
+ * restored by POP %rsp. The executable call target must remain a direct
+ * function-symbol PC-relative relocation and the objtool reachable record
+ * must point at the instruction after that call. */
+bool minic_x86_64_linux_exception_stack_call_form(
+    const char *text, size_t length) {
+    static const char named[] =
+        "movq%%rsp,(%[tos])movq%[tos],%%rsp"
+        "movq%[arg3],%%rdxmovq%[arg2],%%rsimovq%[arg1],%%rdi"
+        "call%c[__func]998:.pushsection.discard.reachable"
+        ".long998b.popsectionpopq%%rsp";
+    static const char numeric[] =
+        "movq%%rsp,(%3)movq%3,%%rsp"
+        "movq%6,%%rdxmovq%5,%%rsimovq%4,%%rdi"
+        "call%c2998:.pushsection.discard.reachable"
+        ".long998b.popsectionpopq%%rsp";
+    return x86_linux_compact_asm_equals(text, length, named) ||
+           x86_linux_compact_asm_equals(text, length, numeric);
+}
+
+static bool x86_linux_exception_stack_call_source(
+    const MinicC0Program *program, const MinicInlineAsm *src,
+    MinicTargetInlineAsmContract *contract) {
+    static const char *const outputs[] = {"+r", "+r"};
+    static const char *const inputs[] = {"i", "r", "r", "r", "r"};
+    static const char *const clobbers[] = {
+        "cc", "rax", "rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10"
+    };
+    const MinicExpression *tos, *sp, *fn, *arg, *tos_input;
+    const MinicFixedRegisterBinding *sp_fixed;
+    size_t i;
+    if (!program || !src || !contract || src->is_goto || !src->is_volatile ||
+        !minic_x86_64_linux_exception_stack_call_form(
+            src->template_text, src->template_length) ||
+        src->output_count != 2U || src->input_count != 5U ||
+        !src->outputs || !src->inputs || src->label_count ||
+        !src->has_memory_clobber || src->clobber_count != 10U ||
+        src->register_clobber_count != 9U || !src->register_clobbers)
+        return false;
+    for (i = 0U; i < 2U; ++i)
+        if (!target_constraint_is(&src->outputs[i], outputs[i])) return false;
+    for (i = 0U; i < 5U; ++i)
+        if (!target_constraint_is(&src->inputs[i], inputs[i])) return false;
+    for (i = 0U; i < 9U; ++i)
+        if (!clobber_is(&src->register_clobbers[i], clobbers[i])) return false;
+    tos = minic_c0_program_expression(program, src->outputs[0].expression);
+    sp = minic_c0_program_expression(program, src->outputs[1].expression);
+    fn = minic_c0_program_expression(program, src->inputs[0].expression);
+    tos_input = minic_c0_program_expression(program, src->inputs[1].expression);
+    if (!tos || !sp || !fn ||
+        tos->value_category != MINIC_VALUE_LVALUE ||
+        !minic_type_is_pointer(tos->type) ||
+        !minic_type_equal(sp->type, minic_type_unsigned_long()) ||
+        fn->kind != MINIC_EXPRESSION_FUNCTION ||
+        !minic_type_is_pointer(fn->type) ||
+        tos->kind != MINIC_EXPRESSION_LOCAL ||
+        !tos_input || tos_input->kind != MINIC_EXPRESSION_LOCAL ||
+        tos->value.local_id != tos_input->value.local_id ||
+        sp->kind != MINIC_EXPRESSION_FIXED_REGISTER) return false;
+    sp_fixed = minic_c0_program_fixed_register_binding(
+        program, sp->value.fixed_register_binding_id);
+    if (!sp_fixed || !sp_fixed->register_name ||
+        strcmp(sp_fixed->register_name, "rsp")) return false;
+    for (i = 1U; i < 5U; ++i) {
+        arg = minic_c0_program_expression(program, src->inputs[i].expression);
+        if (!arg || (!minic_type_is_pointer(arg->type) &&
+            !minic_type_equal(arg->type, minic_type_unsigned_long())))
+            return false;
+    }
+    contract->operand_count = 7U;
+    /* Both GNU +r outputs keep the original values unchanged after this
+     * balanced stack operation; Core keeps their scalar input identities. */
+    contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    for (i = 2U; i < 7U; ++i)
+        contract->kinds[i] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->implicit_memory_effect = true;
+    return true;
 }
 
 /* Text-poking selftest: retain an empty baseline (NOP padded to replacement
@@ -885,13 +1024,16 @@ static bool x86_linux_pv_indirect_call_source(const MinicC0Program *program,
                                                const MinicInlineAsm *src,
                                                MinicTargetInlineAsmContract *contract) {
     static const char *const outputs[] = {"=D", "=S", "=d", "=c", "+r"};
+    static const char *const input_regs[] = {"D", "S", "d", "c"};
     static const char *const clobbers[] = {"cc", "rax", "r8", "r9", "r10", "r11"};
     const MinicExpression *address, *type_number, *stack;
     size_t i;
     if (!program || !src || !contract || !src->is_volatile || src->is_goto ||
         !minic_x86_64_linux_pv_indirect_call_form(src->template_text,
                                                   src->template_length) ||
-        src->output_count != 5U || !src->outputs || src->input_count != 2U ||
+        src->output_count != 5U || !src->outputs || src->input_count < 2U ||
+        src->input_count > 6U ||
+        5U + src->input_count > MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT ||
         !src->inputs || src->label_count || !src->has_memory_clobber ||
         src->clobber_count != 7U || src->register_clobber_count != 6U ||
         !src->register_clobbers ||
@@ -899,6 +1041,17 @@ static bool x86_linux_pv_indirect_call_source(const MinicC0Program *program,
         !target_constraint_is(&src->inputs[1], "m")) return false;
     for (i = 0U; i < 5U; ++i)
         if (!target_constraint_is(&src->outputs[i], outputs[i])) return false;
+    /* PVOP_VCALL0..4 pass arguments via the *fixed* SysV integer register
+     * sequence, even though the asm's four output registers are separately
+     * listed. The callback may rely on D/S/d/c at the CALL boundary; these
+     * are not arbitrary register inputs and cannot be omitted or reordered. */
+    for (i = 2U; i < src->input_count; ++i) {
+        const MinicExpression *arg = minic_c0_program_expression(
+            program, src->inputs[i].expression);
+        if (!target_constraint_is(&src->inputs[i], input_regs[i - 2U]) ||
+            !arg || !minic_type_equal(arg->type, minic_type_unsigned_long()))
+            return false;
+    }
     for (i = 0U; i < 6U; ++i)
         if (!clobber_is(&src->register_clobbers[i], clobbers[i])) return false;
     stack = minic_c0_program_expression(program, src->outputs[4].expression);
@@ -909,12 +1062,14 @@ static bool x86_linux_pv_indirect_call_source(const MinicC0Program *program,
         !minic_type_is_integer(type_number->type) ||
         address->value_category != MINIC_VALUE_LVALUE ||
         !minic_type_is_pointer(address->type)) return false;
-    contract->operand_count = 7U;
+    contract->operand_count = 5U + src->input_count;
     for (i = 0U; i < 4U; ++i)
         contract->kinds[i] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     contract->kinds[4] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->kinds[5] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->kinds[6] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
+    for (i = 7U; i < contract->operand_count; ++i)
+        contract->kinds[i] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->implicit_memory_effect = true;
     return true;
 }
@@ -8113,6 +8268,10 @@ bool minic_x86_64_qualify_inline_asm(
     size_t i, count;
     if (!contract) return false;
     if (x86_linux_vmware_hypercall_source(program, source, contract))
+        return true;
+    if (x86_linux_kvm_hypercall_alt_source(program, source, contract))
+        return true;
+    if (x86_linux_exception_stack_call_source(program, source, contract))
         return true;
     if (x86_linux_legacy_fnsave_source(program, source, contract))
         return true;

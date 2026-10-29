@@ -674,7 +674,7 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
        semantic values/addresses; target register assignment stays in the backend. */
     case MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM: {
         const MinicCoreInlineAsm *inline_asm;
-        bool used_indices[10] = {false};
+        bool used_indices[MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT] = {false};
         bool has_memory_readwrite = false;
         size_t operand_index;
 
@@ -713,7 +713,8 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
             MinicType value_type;
 
             binding = &instruction->value.structured_inline_asm.operands[operand_index];
-            if (binding->operand_index > 9U || used_indices[binding->operand_index] ||
+            if (binding->operand_index >= MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT ||
+                used_indices[binding->operand_index] ||
                 binding->value >= function->value_count || !available_values[binding->value] ||
                 (binding->has_fixed_register_binding &&
                  binding->fixed_register_binding_id >=

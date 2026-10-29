@@ -162,9 +162,10 @@ bool minic_loongarch64_qualified_opaque_asm(const MinicCoreInlineAsm *a) {
          i < sizeof(linux_newline_hardware) /
              sizeof(linux_newline_hardware[0]); ++i) {
         const size_t length = strlen(linux_newline_hardware[i]);
-        /* CPU-hotplug DBAR carries a compiler memory barrier; IDLE, NOP
-         * and the relocation IBAR/DBAR pair have no memory clobber. */
-        if ((i == 0U || !a->has_memory_clobber) &&
+        /* Linux's CPU-hotplug DBAR and the IBAR/DBAR executable-text
+         * relocation fence both carry a compiler memory barrier.  Match
+         * their *exact* literal source templates, never a generic program. */
+        if ((i == 0U || i == 3U || !a->has_memory_clobber) &&
             a->template_length == length &&
             memcmp(a->template_text, linux_newline_hardware[i], length) == 0)
             return true;

@@ -978,6 +978,14 @@ bool minic_target_info_local_fixed_register_supported(const MinicTargetInfo *tar
          * or arbitrary hard-register reservations are implied here. */
         if (name_length == 2U && memcmp(name, "sp", 2U) == 0)
             return true;
+        /* Linux arm64 compiler.h binds the PAC-stripping XPACLRI input and
+         * result to the actual link register: register unsigned long
+         * asm("x30").  The AArch64 GNU inline-asm machine contract validates
+         * the complete `hint #7` tied +r form and preserves the entry LR in
+         * the function frame. This is a local operand binding, not permission
+         * for arbitrary C writes to x30 or a global register reservation. */
+        if (name_length == 3U && memcmp(name, "x30", 3U) == 0)
+            return true;
         /* AAPCS64 x0..x17 are the integer argument and caller-scratch
          * GPR names used by original GNU Linux C (e.g. syscall x8).
          * GNU arm64 SMCCC also spells the same physical register r0..r17

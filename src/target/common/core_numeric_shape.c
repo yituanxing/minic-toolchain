@@ -167,6 +167,46 @@ bool minic_core_integer_overflow_mixed_multiply_i32_shape(
     return *signed_left != *signed_right || *signed_left != *signed_result;
 }
 
+bool minic_core_integer_overflow_narrow_result_shape(
+    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
+    MinicCoreIntegerOverflowNarrowShape *shape) {
+    MinicCoreValueId lhs, rhs, address;
+    MinicType result_type;
+    int op;
+    if (!program || !target || !fn || !ins || !shape ||
+        ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW)
+        return false;
+    op = ins->value.integer_overflow.operator_kind;
+    lhs = ins->value.integer_overflow.left;
+    rhs = ins->value.integer_overflow.right;
+    address = ins->value.integer_overflow.result_address;
+    if ((op != MINIC_CORE_INTEGER_OVERFLOW_ADD &&
+         op != MINIC_CORE_INTEGER_OVERFLOW_SUBTRACT &&
+         op != MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY) ||
+        lhs >= fn->value_count || rhs >= fn->value_count ||
+        address >= fn->value_count ||
+        !minic_type_pointee(fn->values[address].type, &result_type) ||
+        !minic_type_is_integer(result_type) ||
+        minic_type_is_enum(result_type) ||
+        minic_type_is_bool_integer(result_type) ||
+        minic_type_is_const(result_type) ||
+        minic_type_is_volatile(result_type) ||
+        !minic_lp64_scalar_integer_width(
+            program, target, result_type,
+            &shape->result_width, &shape->result_signed) ||
+        !minic_lp64_scalar_integer_width(
+            program, target, fn->values[lhs].type,
+            &shape->left_width, &shape->left_signed) ||
+        !minic_lp64_scalar_integer_width(
+            program, target, fn->values[rhs].type,
+            &shape->right_width, &shape->right_signed))
+        return false;
+    return (shape->result_width == 1U || shape->result_width == 2U) &&
+           shape->left_width >= 1U && shape->left_width <= 4U &&
+           shape->right_width >= 1U && shape->right_width <= 4U;
+}
+
 /* CLZ/CTZ are defined here for unsigned 8/16/32/64 Core operands.
  * The ISA owns masking or bitfield extraction and exact machine opcodes. */
 bool minic_core_integer_bitscan_shape(

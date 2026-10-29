@@ -693,8 +693,8 @@ static bool parse_fixed_runtime_nested_array_initializer(
                 parser, base_id, index, parser->current.span, &element_id)) {
             return false;
         }
-        if (parser->current.kind == MINIC_TOKEN_STRING_LITERAL &&
-            minic_type_is_char_integer(nested_array->element_type)) {
+        if (minic_parser_static_string_element_compatible(
+                parser, nested_array->element_type, parser->current.kind)) {
             if (!parse_runtime_character_array_string_initializer(parser,
                                                                   element_id,
                                                                   nested_array->element_type,
@@ -782,8 +782,9 @@ static bool parse_local_character_array_string_initializer(MinicParser *parser,
     bool success;
 
     local = minic_c0_program_local(parser->program, local_id);
-    if (local == NULL || !local->is_array || !minic_type_is_char_integer(local->type) ||
-        parser->current.kind != MINIC_TOKEN_STRING_LITERAL) {
+    if (local == NULL || !local->is_array ||
+        !minic_parser_static_string_element_compatible(parser, local->type,
+                                                       parser->current.kind)) {
         return false;
     }
     initializer_span = parser->current.span;
@@ -1006,8 +1007,8 @@ minic_parser_runtime_local_array(MinicParser *parser, MinicLocalId local_id, boo
     if (!minic_parser_advance(parser)) {
         return false;
     }
-    if (minic_type_is_char_integer(element_type) &&
-        parser->current.kind == MINIC_TOKEN_STRING_LITERAL) {
+    if (minic_parser_static_string_element_compatible(parser, element_type,
+                                                       parser->current.kind)) {
         return parse_local_character_array_string_initializer(
             parser, local_id, infer_count, declared_count);
     }
@@ -1223,8 +1224,8 @@ static bool parse_runtime_character_array_string_initializer(MinicParser *parser
     bool success;
 
     if (parser == NULL || element_count == 0U ||
-        !minic_type_is_char_integer(element_type) ||
-        parser->current.kind != MINIC_TOKEN_STRING_LITERAL) {
+        !minic_parser_static_string_element_compatible(parser, element_type,
+                                                       parser->current.kind)) {
         return false;
     }
     initializer_span = parser->current.span;
