@@ -62,9 +62,9 @@ data = text_section(sys.argv[1])
 words = struct.unpack('<' + 'I' * (len(data) // 4), data)
 expected = (
     0xb9400820, 0xf9400420, 0xb81fc062, 0x39400cc5,
-    0x79400507, 0xb9800549, 0x3980058b, 0x39c0058b,
-    0x798005cd, 0x79c005cd, 0xb8404020, 0xf81f8062,
-    0x78dfe0a4, 0xb85ff820, 0x38002862, 0xb88008a4,
+    0x79400507, 0xb9800549, 0x39c0058b, 0x3980058b,
+    0x79c005cd, 0x798005cd, 0xb8404020, 0xf81f8062,
+    0x789fe0a4, 0xb85ff820, 0x38002862, 0xb88008a4,
     0xf86878e6, 0xf8008462, 0xf8408c62,
 )
 if words != expected:
@@ -76,6 +76,15 @@ if words != expected:
 if sys.argv[2]:
     gnu_text = text_section(sys.argv[2])
     if data != gnu_text:
+        if len(gnu_text) % 4:
+            raise AssertionError('GNU A64 .text is not instruction aligned')
+        gnu_words = struct.unpack('<' + 'I' * (len(gnu_text) // 4), gnu_text)
+        for index in range(max(len(words), len(gnu_words))):
+            ours = f'{words[index]:08x}' if index < len(words) else '<missing>'
+            gnu = f'{gnu_words[index]:08x}' if index < len(gnu_words) else '<missing>'
+            if ours != gnu:
+                print(f'MINIAS_A64_GNU_MISMATCH index={index} '
+                      f'mini={ours} GNU={gnu}', file=sys.stderr)
         raise AssertionError('MiniAS A64 scalar-memory bytes differ from GNU GAS')
     oracle = 'exact'
 else:

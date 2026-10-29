@@ -809,9 +809,9 @@ static const A64ScalarMemoryForm a64_scalar_memory_forms[]={
     {4U,A64_SCALAR_X,0U,
         0U,UINT32_C(0xb9800000)},
     {1U,A64_SCALAR_W|A64_SCALAR_X,0U,
-        UINT32_C(0x39800000),UINT32_C(0x39c00000)},
+        UINT32_C(0x39c00000),UINT32_C(0x39800000)},
     {2U,A64_SCALAR_W|A64_SCALAR_X,0U,
-        UINT32_C(0x79800000),UINT32_C(0x79c00000)}
+        UINT32_C(0x79c00000),UINT32_C(0x79800000)}
 };
 
 typedef struct A64ScalarMemorySpelling {
