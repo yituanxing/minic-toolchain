@@ -43,6 +43,8 @@ on:
       - 'tests/assembler/probe-x86-symbol-binding-fixups-gnu.sh'
       - 'tests/assembler/probe-mcexpr-signed-overflow.sh'
       - 'tests/assembler/probe-mc-fragment-single-commit-gnu.sh'
+      - 'tests/assembler/probe-mcinst-lifetime-ownership.sh'
+      - 'tests/assembler/mcinst-lifetime-contract.c'
       - 'tests/assembler/elf_semantic_compare.py'
       - 'tests/assembler/probe-x86-loong-base.sh'
       - 'tests/assembler/probe-mc-operand-lexer.sh'
@@ -160,6 +162,8 @@ jobs:
           command -v as
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-x86-symbol-binding-fixups-gnu.sh
+      - name: MCInst capacity and Target destructor ownership (all backend constructors)
+        run: bash tests/assembler/probe-mcinst-lifetime-ownership.sh
       - name: GNU x86 single Fragment emission transaction (DATA, ALIGN, FILL, SPACE, ORG, NOBITS)
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \

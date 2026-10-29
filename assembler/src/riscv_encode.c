@@ -1118,6 +1118,7 @@ static bool rv_parse_multi_mc(MiniAs *as, MiniAsStmt *stmt,
          * Re-layout never destroys/reparses the plan; source replay creates
          * a fresh assembly with separately owned MCInst objects. */
         m->target_payload = plan;
+        m->dispose_target_payload = free;
         if (!rv_materialize_li(as, stmt, plan->words, &plan->count)) {
             stmt->mcinst = NULL;
             minias_mcinst_destroy(m);

@@ -28,13 +28,15 @@ MiniAsMCInst *minias_mcinst_alloc(unsigned capacity) {
  * the union is exclusively owned by its parent operand.  Common never sees
  * the internal fields of a Target-owned memory operand, which may have ISA-
  * specific nested allocations released by its instruction's callback.
- * The fallback for pre-migration target constructors uses
- * the existing count contract, so old and new Target parsers coexist safely
- * while backend migrations proceed. */
+ * All in-tree Targets allocate through minias_mcinst_alloc, even for
+ * zero-operand instructions. Capacity is the single lifetime contract:
+ * reading count here would resurrect an obsolete, potentially unsafe
+ * ownership path. Heap-owned memory and Target payloads must supply
+ * their own destructor, including partially constructed instructions. */
 void minias_mcinst_destroy(MiniAsMCInst *inst) {
     size_t i, slots;
     if (inst == NULL) return;
-    slots = inst->capacity != 0U ? inst->capacity : inst->count;
+    slots = inst->capacity;
     for (i = 0U; i < slots; ++i) {
         MiniAsMCOperand *op = &inst->operands[i];
         if (op->kind == MINIAS_MC_BOUND_SYMBOL) {
@@ -42,17 +44,15 @@ void minias_mcinst_destroy(MiniAsMCInst *inst) {
         } else if (op->kind == MINIAS_MC_BOUND_SYMBOL_DIFFERENCE) {
             free(op->bound_difference);
         } else if (op->kind == MINIAS_MC_MEMORY && op->memory != NULL) {
-            if (inst->dispose_memory != NULL)
-                inst->dispose_memory(op->memory);
-            else
-                free(op->memory);
+            /* A missing callback is an internal Target ownership violation,
+             * not permission for Common to guess how nested ISA data dies. */
+            if (inst->dispose_memory == NULL) abort();
+            inst->dispose_memory(op->memory);
         }
     }
     if (inst->target_payload != NULL) {
-        if (inst->dispose_target_payload != NULL)
-            inst->dispose_target_payload(inst->target_payload);
-        else
-            free(inst->target_payload);
+        if (inst->dispose_target_payload == NULL) abort();
+        inst->dispose_target_payload(inst->target_payload);
     }
     free(inst);
 }

@@ -261,8 +261,8 @@ typedef struct MiniAsMCInst {
     void *target_payload;
     void (*dispose_target_payload)(void *);
     unsigned count;
-    /* Disposes the target-private representation of MINIAS_MC_MEMORY.
-     * A NULL callback means the payload has no nested allocations. */
+    /* Every Target-owned MC_MEMORY heap payload has a mandatory destructor;
+     * Common never guesses whether a private operand has nested storage. */
     void (*dispose_memory)(void *);
     /* Lifetime capacity is independent from successfully parsed operands.
      * A partially parsed instruction still owns initialized slots. */
