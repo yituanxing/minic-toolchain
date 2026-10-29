@@ -6,6 +6,23 @@
     { name_value, sizeof(name_value) - 1U, kind_value, class_value, targets_value, 0U, 0U, false }
 
 static const MinicAttributeDescriptor minic_attribute_descriptors[] = {
+    /* These are not generic GNU metadata: the frontend must validate target
+     * support and argument semantics before admitting each declaration. */
+    {
+        "nocf_check", sizeof("nocf_check") - 1U,
+        MINIC_ATTRIBUTE_NOCF_CHECK, MINIC_ATTRIBUTE_CLASS_LANGUAGE_SEMANTIC,
+        MINIC_ATTRIBUTE_TARGET_FUNCTION, 0U, 0U, true,
+    },
+    {
+        "__indirect_branch__", sizeof("__indirect_branch__") - 1U,
+        MINIC_ATTRIBUTE_INDIRECT_BRANCH, MINIC_ATTRIBUTE_CLASS_LANGUAGE_SEMANTIC,
+        MINIC_ATTRIBUTE_TARGET_FUNCTION, 1U, 1U, true,
+    },
+    {
+        "__target__", sizeof("__target__") - 1U,
+        MINIC_ATTRIBUTE_TARGET_CPU, MINIC_ATTRIBUTE_CLASS_LANGUAGE_SEMANTIC,
+        MINIC_ATTRIBUTE_TARGET_FUNCTION, 1U, 1U, true,
+    },
     MINIC_ATTRIBUTE_ENTRY("ms_abi", MINIC_ATTRIBUTE_MS_ABI,
                           MINIC_ATTRIBUTE_CLASS_LANGUAGE_SEMANTIC,
                           MINIC_ATTRIBUTE_TARGET_FUNCTION),

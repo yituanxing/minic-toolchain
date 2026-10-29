@@ -4740,6 +4740,77 @@ static bool x86_bit_scan_operand_type(
            minic_type_equal(type, minic_type_unsigned_int());
 }
 
+/* Linux 6.6 lib/zstd/common/cpu.h uses three nonvolatile CPUID layouts,
+ * rather than the four-output kernel native_cpuid convention. In particular,
+ * its EAX/ECX *inputs* are ordinary 32-bit integers (not tied "0"/"2"
+ * operands). The omitted registers are declared clobbered in the source;
+ * the machine implementation still saves the ABI-preserved RBX. */
+static bool x86_zstd_cpuid_source(
+    const MinicC0Program *program, const MinicInlineAsm *source,
+    MinicTargetInlineAsmContract *contract) {
+    static const char *const form_out[][3] = {
+        {"=a", NULL, NULL}, {"=a", "=c", "=d"}, {"=a", "=b", "=c"}
+    };
+    static const char *const form_in[][2] = {
+        {"a", NULL}, {"a", NULL}, {"a", "c"}
+    };
+    static const char *const form_clobbers[][3] = {
+        {"ebx", "ecx", "edx"}, {"ebx", NULL, NULL},
+        {"edx", NULL, NULL}
+    };
+    static const size_t output_counts[] = {1U, 3U, 3U};
+    static const size_t input_counts[] = {1U, 1U, 2U};
+    static const size_t clobber_counts[] = {3U, 1U, 1U};
+    size_t form, i;
+    if (!program || !source || !contract || source->is_volatile ||
+        source->is_goto || source->label_count || source->has_memory_clobber ||
+        source->template_length != 5U || !source->template_text ||
+        memcmp(source->template_text, "cpuid", 5U) != 0 ||
+        !source->outputs || !source->inputs ||
+        !source->register_clobbers)
+        return false;
+    for (form = 0U; form < 3U; ++form) {
+        if (source->output_count != output_counts[form] ||
+            source->input_count != input_counts[form] ||
+            source->clobber_count != clobber_counts[form] ||
+            source->register_clobber_count != clobber_counts[form])
+            continue;
+        for (i = 0U; i < clobber_counts[form]; ++i)
+            if (!clobber_is(&source->register_clobbers[i],
+                            form_clobbers[form][i]))
+                break;
+        if (i != clobber_counts[form]) continue;
+        for (i = 0U; i < output_counts[form]; ++i) {
+            const MinicExpression *expr = minic_c0_program_expression(
+                program, source->outputs[i].expression);
+            MinicType plain;
+            if (!c_is(&source->outputs[i], form_out[form][i]) || !expr ||
+                expr->value_category != MINIC_VALUE_LVALUE ||
+                minic_type_is_const(expr->type) ||
+                !minic_type_unqualified(expr->type, &plain) ||
+                (!minic_type_equal(plain, minic_type_unsigned_int()) &&
+                 !minic_type_equal(plain, minic_type_int())))
+                return false;
+            contract->kinds[i] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+        }
+        for (i = 0U; i < input_counts[form]; ++i) {
+            const MinicExpression *expr = minic_c0_program_expression(
+                program, source->inputs[i].expression);
+            MinicType plain;
+            if (!c_is(&source->inputs[i], form_in[form][i]) || !expr ||
+                !minic_type_unqualified(expr->type, &plain) ||
+                (!minic_type_equal(plain, minic_type_unsigned_int()) &&
+                 !minic_type_equal(plain, minic_type_int())))
+                return false;
+            contract->kinds[output_counts[form]+i] =
+                MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+        }
+        contract->operand_count = output_counts[form] + input_counts[form];
+        return true;
+    }
+    return false;
+}
+
 static bool qualified(const MinicC0Program *program,
                       const MinicInlineAsm *src, bool *is_mulacc, bool *is_muldiv) {
     static const char *const cpuid_out[4] = {"=a","=b","=c","=d"};
@@ -7426,6 +7497,8 @@ bool minic_x86_64_qualify_inline_asm(
     if (x86_linux_fdiv_bug_source(program, source, contract))
         return true;
     if (x86_linux_monitor_wait_source(program, source, contract))
+        return true;
+    if (x86_zstd_cpuid_source(program, source, contract))
         return true;
     if (x86_linux_segment_read_source(program, source, contract))
         return true;

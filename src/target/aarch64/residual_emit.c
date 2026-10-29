@@ -15,35 +15,6 @@
 #include <string.h>
 
 
-static bool aarch64_static_object(const MinicC0Program *program,
-                                  const char *symbol) {
-    size_t i;
-    if (program == NULL || symbol == NULL) return false;
-    for (i = 0U; i < program->global_object_count; ++i) {
-        const MinicGlobalObject *obj = &program->global_objects[i];
-        if (obj->name != NULL && strcmp(obj->name, symbol) == 0 &&
-            obj->is_internal && !obj->is_extern &&
-            !obj->is_block_scope_extern_only) return true;
-    }
-    return false;
-}
-
-static bool aarch64_static_function(const MinicC0Program *program,
-                                    const char *symbol) {
-    size_t i;
-    if (program == NULL || symbol == NULL) return false;
-    for (i = 0U; i < program->function_count; ++i) {
-        const MinicFunction *fn = &program->functions[i];
-        const char *name = fn->assembler_name != NULL
-            ? fn->assembler_name : fn->name;
-        if (name != NULL && strcmp(name, symbol) == 0 &&
-            fn->is_defined && fn->is_internal) return true;
-    }
-    return false;
-}
-
-
-
 /* Residual machine lowering after Core family admission. Each case is
  * target owned; planning and type checks are shared with the other LP64
  * backend, preserving AArch64 and LoongArch64 ABI/ISA divergence. */
@@ -265,7 +236,7 @@ bool minic_aarch64_emit_residual_instruction(
             if (!minic_multi_direct_global_address_symbol(fn, ins, &symbol))
                 return minic_multi_direct_machine_reject(
                     fn, "aarch64", name, reject_stage, reject_block, reject_ins, __LINE__);
-            if (aarch64_static_object(program, symbol)) {
+            if (minic_target_info_elf_object_is_tu_local(program, symbol)) {
                 /* RoundKey and other proven static-TU objects: preserve
                  * direct static-PC-relative addresses. */
                 if (fprintf(out, "  adrp x9, %s\n"
@@ -295,7 +266,7 @@ bool minic_aarch64_emit_residual_instruction(
             if (!minic_multi_direct_function_address_symbol(fn, ins, &symbol))
                 return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
                                            reject_block, reject_ins, __LINE__);
-            if (aarch64_static_function(program, symbol)) {
+            if (minic_target_info_elf_function_is_tu_local(program, symbol)) {
                 if (fprintf(out, "  adrp x9, %s\n"
                                  "  add x9, x9, :lo12:%s\n",
                             symbol, symbol) < 0)

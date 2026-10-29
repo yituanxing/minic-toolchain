@@ -51,7 +51,36 @@ MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
                    : MINIC_CORE_LOWER_ERROR;
     }
     if (expression->value_category != MINIC_VALUE_LVALUE) {
-        return MINIC_CORE_LOWER_UNSUPPORTED;
+        const MinicExpression *base;
+        const MinicRecord *record;
+        const MinicRecordField *field;
+        MinicCoreValueId base_address;
+
+        /* An array field of a record rvalue is an array object in the
+         * enclosing record's full-expression temporary, not an lvalue in
+         * the source AST. Array decay/subscript may request its backing
+         * address; materialize the one record before projecting the field. */
+        if (expression->value_category != MINIC_VALUE_RVALUE ||
+            expression->kind != MINIC_EXPRESSION_MEMBER ||
+            !minic_c0_expression_array_object_info(
+                context->body->program, expression, NULL))
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        base = minic_c0_program_expression(
+            context->body->program, expression->value.member.base);
+        record = minic_c0_program_record(
+            context->body->program, expression->value.member.record_id);
+        field = minic_c0_record_field(record, expression->value.member.field_index);
+        if (base == NULL || field == NULL ||
+            (!field->is_array && !minic_type_is_array(field->type)))
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        status = minic_core_lower_internal_record_materialized_address(
+            context, expression->value.member.base, &base_address);
+        if (status != MINIC_CORE_LOWER_OK)
+            return status;
+        return minic_core_lower_internal_append_field_address(
+            context, expression->span, base_address,
+            expression->value.member.record_id,
+            expression->value.member.field_index, expression->type, address_id);
     }
     /* Array compound literals reuse the legacy repeated-local storage model
        until frontend array representation convergence. Execute their hidden

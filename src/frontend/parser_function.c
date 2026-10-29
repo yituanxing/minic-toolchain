@@ -282,6 +282,71 @@ static bool consume_function_attribute(MinicParser *parser,
         return false;
     }
 
+    if (descriptor->kind == MINIC_ATTRIBUTE_NOCF_CHECK ||
+        descriptor->kind == MINIC_ATTRIBUTE_INDIRECT_BRANCH ||
+        descriptor->kind == MINIC_ATTRIBUTE_TARGET_CPU) {
+        MinicSourceSpan literal;
+        const char *value;
+        size_t length;
+        static const char *const safe_scalar_targets[] = {
+            "default", "bmi2", "popcnt", "lzcnt"
+        };
+        size_t index;
+
+        if (!minic_target_info_gnu_function_security_attribute_supported(
+                parser->target_info,
+                parser->source + attribute->name_span.begin.offset,
+                minic_parser_span_length(attribute->name_span))) {
+            minic_parser_error(parser,
+                "GNU x86 function-security attribute requires x86_64 target support");
+            return false;
+        }
+        if (descriptor->kind == MINIC_ATTRIBUTE_NOCF_CHECK) {
+            /* Native GCC's nocf_check disables IBT ENDBR insertion. MiniC's
+             * current x86 backend does not insert ENDBR, so no emission change
+             * is needed here. Full-kernel IBT eligibility is separate. */
+            if (attribute->has_arguments) {
+                minic_parser_error(parser, "GNU nocf_check takes no arguments");
+                return false;
+            }
+            return true;
+        }
+        if (!function_attribute_argument_token(
+                parser, attribute, MINIC_TOKEN_STRING_LITERAL, &literal) ||
+            minic_parser_span_length(literal) < 2U) {
+            minic_parser_error(parser,
+                "GNU x86 function-security policy requires one string literal");
+            return false;
+        }
+        value = parser->source + literal.begin.offset + 1U;
+        length = minic_parser_span_length(literal) - 2U;
+        if (descriptor->kind == MINIC_ATTRIBUTE_INDIRECT_BRANCH) {
+            /* GCC's `keep` preserves ordinary indirect branches for marked
+             * functions. MiniC presently emits those ordinary branches and
+             * has no thunk/retpoline generator to select per declaration. */
+            if (length == 4U && memcmp(value, "keep", 4U) == 0)
+                return true;
+            minic_parser_error(parser,
+                "GNU indirect_branch policy requires supported value 'keep'");
+            return false;
+        }
+        /* MiniC emits baseline x86 scalar integer instructions for these
+         * optional scalar extensions; target("bmi2") does not demand BMI2
+         * instructions or a different call ABI. Do not admit no-sse /
+         * general-regs-only: those would constrain our existing FP backend.
+         * Vector, ABI-changing and unrecognized strings fail closed. */
+        for (index = 0U;
+             index < sizeof(safe_scalar_targets) / sizeof(safe_scalar_targets[0]);
+             ++index) {
+            if (length == strlen(safe_scalar_targets[index]) &&
+                memcmp(value, safe_scalar_targets[index], length) == 0)
+                return true;
+        }
+        minic_parser_error(parser,
+            "GNU x86 target attribute requests an unsupported machine policy");
+        return false;
+    }
+
     if (descriptor->kind == MINIC_ATTRIBUTE_ALIGNED) {
         if (context->explicit_alignment == NULL ||
             !minic_parser_apply_alignment_attribute(

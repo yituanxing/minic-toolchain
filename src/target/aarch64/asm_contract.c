@@ -641,6 +641,101 @@ static const Aarch64AtomicOperation aarch64_atomic_operations[] = {
     {"add", "add", "Ir", "Ir", "Ir"},
     {"sub", "sub", "Jr", "Jr", "Jr"}
 };
+
+/* The LSE half of Linux's atomic API is compiled alongside its LL/SC
+ * fallback even on CPUs that select LL/SC at runtime. Its ISA extension is
+ * an explicit instruction property of the inline-ASM template, independent
+ * of the subset of instructions emitted by MiniC itself.
+ *
+ * Recognize complete GNU templates in both their named source and numeric
+ * Core forms. No C function-name based admission, and no opaque fallback:
+ * the same descriptor validates all 32/64-bit RMWs and 8/16/32/64-bit CAS.
+ */
+typedef enum {
+    AARCH64_LSE_STORE, AARCH64_LSE_FETCH, AARCH64_LSE_CAS
+} Aarch64LseKind;
+
+typedef struct {
+    Aarch64LseKind kind;
+    const char *mnemonic;
+    size_t width;
+    unsigned int mode; /* RMW 0=relaxed, 1=acquire, 2=release, 3=acq_rel */
+} Aarch64LseForm;
+
+static bool aarch64_lse_form(const char *text, size_t length,
+                            bool numeric, Aarch64LseForm *result) {
+    static const struct {
+        const char *store, *fetch;
+    } operations[] = {
+        {"stclr", "ldclr"}, {"stset", "ldset"},
+        {"steor", "ldeor"}, {"stadd", "ldadd"}
+    };
+    static const char *const mode_suffix[] = {"", "a", "l", "al"};
+    static const size_t cas_widths[] = {1U, 2U, 4U, 8U};
+    static const char *const cas_suffix[] = {"b", "h", "", ""};
+    char compact[160], expected[160];
+    size_t i, n = 0U, operation, mode, width;
+    if (!text || !length || length >= sizeof(compact) || !result)
+        return false;
+    for (i = 0U; i < length; ++i) {
+        const char c = text[i];
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
+        if (c == '\0' || n + 1U >= sizeof(compact)) return false;
+        compact[n++] = c;
+    }
+    compact[n] = '\0';
+
+    for (width = 4U; width <= 8U; width += 4U) {
+        const char *input = width == 8U ? "%" : "%w";
+        for (operation = 0U; operation < sizeof(operations) /
+                 sizeof(operations[0]); ++operation) {
+            const char *names[2] = {
+                operations[operation].store, operations[operation].fetch
+            };
+            unsigned int kind;
+            for (kind = 0U; kind < 2U; ++kind) {
+                for (mode = 0U; mode < (kind ? 4U : 1U); ++mode) {
+                    const char *mnemonic = names[kind];
+                    const int written = snprintf(expected, sizeof(expected),
+                        ".arch_extensionlse%s%s%s%s,%s%s",
+                        mnemonic, kind ? mode_suffix[mode] : "",
+                        input, numeric ? (kind ? "2" : "1") : "[i]",
+                        kind ? input : "",
+                        kind ? (numeric ? "1,%0" : "[old],%[v]") :
+                               (numeric ? "%0" : "%[v]"));
+                    if (written > 0 && (size_t)written < sizeof(expected) &&
+                        strcmp(compact, expected) == 0) {
+                        result->kind = kind ? AARCH64_LSE_FETCH : AARCH64_LSE_STORE;
+                        result->mnemonic = mnemonic;
+                        result->width = width;
+                        result->mode = (unsigned int)mode;
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    for (width = 0U; width < 4U; ++width) {
+        const char *reg = cas_widths[width] == 8U ? "%" : "%w";
+        for (mode = 0U; mode < 4U; ++mode) {
+            const int written = snprintf(expected, sizeof(expected),
+                ".arch_extensionlsecas%s%s%s%s,%s%s,%s",
+                mode_suffix[mode], cas_suffix[width], reg,
+                numeric ? "1" : "[old]", reg,
+                numeric ? "2" : "[new]", numeric ? "%0" : "%[v]");
+            if (written > 0 && (size_t)written < sizeof(expected) &&
+                strcmp(compact, expected) == 0) {
+                result->kind = AARCH64_LSE_CAS;
+                result->mnemonic = "cas";
+                result->width = cas_widths[width];
+                result->mode = (unsigned int)mode;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 /* Reserve source atomic prefixes from exactly the same typed operation
  * catalog used for source qualification and physical LL/SC emission. */
 bool minic_aarch64_requires_qualified_input_asm(const MinicInlineAsm *src) {
@@ -652,7 +747,7 @@ bool minic_aarch64_requires_qualified_input_asm(const MinicInlineAsm *src) {
         "strb", "strh", "str",
         /* Original Linux CMPXCHG begins with PRFM and named operands;
          * rejected constraints/modes must not escape into generic Core. */
-        "prfm", "prfm", "1:"
+        "prfm", "prfm", "1:", ".arch_extension lse"
     };
     char prefix[64];
     const char *const single[] = {prefix};
@@ -3453,6 +3548,52 @@ static bool aarch64_linux_user_cache_fault_emit(
         (size_t)op[1].value * 8U, instruction,
         9U | (31U << 5), (size_t)op[0].value * 8U) >= 0;
 }
+static bool aarch64_linux_lse_source(
+    const MinicC0Program *program, const MinicInlineAsm *src,
+    MinicTargetInlineAsmContract *contract) {
+    Aarch64LseForm form;
+    size_t i, count;
+    if (!program || !src || !contract || !src->is_volatile || src->is_goto ||
+        src->label_count || src->register_clobber_count || !src->outputs ||
+        !src->inputs ||
+        !aarch64_lse_form(src->template_text, src->template_length,
+                          false, &form))
+        return false;
+    count = form.kind == AARCH64_LSE_STORE ? 2U : 3U;
+    if (src->output_count != count - 1U || src->input_count != 1U ||
+        src->clobber_count != (form.mode != 0U ? 1U : 0U) ||
+        src->has_memory_clobber != (form.mode != 0U) ||
+        !constraint(&src->outputs[0], "+Q") ||
+        (form.kind == AARCH64_LSE_FETCH &&
+         !constraint(&src->outputs[1], "=r")) ||
+        (form.kind == AARCH64_LSE_CAS &&
+         !constraint(&src->outputs[1], "+r")) ||
+        !constraint(&src->inputs[0],
+                    form.kind == AARCH64_LSE_CAS ? "rZ" : "r"))
+        return false;
+    for (i = 0U; i < count; ++i) {
+        const bool output = i < src->output_count;
+        const MinicInlineAsmOperand *op = output ? &src->outputs[i] :
+            &src->inputs[i - src->output_count];
+        const MinicExpression *value = minic_c0_program_expression(
+            program, op->expression);
+        if (!value || (output &&
+            (value->value_category != MINIC_VALUE_LVALUE ||
+             minic_type_is_const(value->type))) ||
+            !aarch64_stlr_type(value->type, form.width))
+            return false;
+        contract->kinds[i] = i == 0U
+            ? MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE
+            : output
+                ? MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE
+                : MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+        if (form.kind == AARCH64_LSE_FETCH && i == 1U)
+            contract->kinds[i] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+    }
+    contract->operand_count = count;
+    return true;
+}
+
 bool minic_aarch64_qualify_inline_asm(
     const MinicC0Program *program, const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
@@ -3493,6 +3634,7 @@ bool minic_aarch64_qualify_inline_asm(
             }
         }
     }
+    if(aarch64_linux_lse_source(program,src,contract))return true;
     if(aarch64_linux_smccc_source(program,src,contract))return true;
     if(aarch64_linux_svc_source(program,src,contract))return true;
     if(aarch64_linux_wfxt_source(program,src,contract))return true;
@@ -4135,6 +4277,85 @@ static bool aarch64_linux_percpu_write_alternative_emit(
         (size_t)operand[0].value * 8U) >= 0;
 }
 
+static bool aarch64_linux_lse_emit(
+    FILE *out, const MinicDirectLP64BlockContext *ctx,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info,
+    const Aarch64LseForm *form) {
+    static const char *const order[] = {"", "a", "l", "al"};
+    const MinicCoreFunction *fn = ctx->fn;
+    const MinicCoreStructuredInlineAsmOperand *ops =
+        ins->value.structured_inline_asm.operands;
+    const size_t count = form->kind == AARCH64_LSE_STORE ? 2U : 3U;
+    const char *reg = form->width == 8U ? "x" : "w";
+    const char *width_suffix = form->width == 1U ? "b" :
+                               form->width == 2U ? "h" : "";
+    const char *load = form->width == 1U ? "ldrb w9" :
+                       form->width == 2U ? "ldrh w9" :
+                       form->width == 4U ? "ldr w9" : "ldr x9";
+    const char *store = form->width == 1U ? "strb w9" :
+                        form->width == 2U ? "strh w9" :
+                        form->width == 4U ? "str w9" : "str x9";
+    MinicType pointee;
+    size_t i;
+    if (!out || !fn || !info || !form || !ops || !info->is_volatile ||
+        info->is_goto || !info->has_memory_clobber ||
+        info->register_clobber_count || ctx->dynamic_frame ||
+        ins->value.structured_inline_asm.operand_count != count ||
+        form->mode >= sizeof(order) / sizeof(order[0]))
+        return false;
+    for (i = 0U; i < count; ++i) {
+        const MinicCoreStructuredInlineAsmOperand *op = &ops[i];
+        const MinicCoreStructuredInlineAsmOperandKind kind = i == 0U ?
+            MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE :
+            i == 1U && form->kind == AARCH64_LSE_FETCH ?
+                MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
+            i == 1U && form->kind == AARCH64_LSE_CAS ?
+                MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE :
+                MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+        if (op->operand_index != i || op->kind != kind ||
+            op->has_fixed_register_binding || op->early_clobber ||
+            op->value >= fn->value_count ||
+            !aarch64_linux_structured_spill_slot_valid(op->value) ||
+            (i != count - 1U &&
+             (!minic_type_pointee(fn->values[op->value].type, &pointee) ||
+              !aarch64_stlr_type(pointee, form->width))) ||
+            (i == count - 1U &&
+             !aarch64_stlr_type(fn->values[op->value].type, form->width)))
+            return false;
+    }
+    if (fprintf(out, "  .arch_extension lse\n  ldr x10, [sp, #%zu]\n",
+                (size_t)ops[0].value * 8U) < 0)
+        return false;
+    if (form->kind == AARCH64_LSE_STORE) {
+        return fprintf(out,
+            "  ldr x11, [sp, #%zu]\n"
+            "  %s %s11, [x10]\n",
+            (size_t)ops[1].value * 8U, form->mnemonic, reg) >= 0;
+    }
+    if (form->kind == AARCH64_LSE_FETCH) {
+        return fprintf(out,
+            "  ldr x11, [sp, #%zu]\n"
+            "  %s%s %s11, %s9, [x10]\n"
+            "  ldr x12, [sp, #%zu]\n"
+            "  str %s9, [x12]\n",
+            (size_t)ops[2].value * 8U,
+            form->mnemonic, order[form->mode], reg, reg,
+            (size_t)ops[1].value * 8U, reg) >= 0;
+    }
+    /* GNU +r is an observable read/write local; the Core binding is its
+     * address, unlike a write-only =r destination. CAS returns the observed
+     * old value even when the comparison fails. */
+    return fprintf(out,
+        "  ldr x12, [sp, #%zu]\n"
+        "  %s, [x12]\n"
+        "  ldr x11, [sp, #%zu]\n"
+        "  cas%s%s %s9, %s11, [x10]\n"
+        "  %s, [x12]\n",
+        (size_t)ops[1].value * 8U, load,
+        (size_t)ops[2].value * 8U,
+        order[form->mode], width_suffix, reg, reg, store) >= 0;
+}
+
 bool minic_aarch64_emit_qualified_structured_asm(
     FILE *out, const MinicDirectLP64BlockContext *ctx,
     const MinicCoreInstruction *ins) {
@@ -4151,6 +4372,12 @@ bool minic_aarch64_emit_qualified_structured_asm(
     if (ins->value.structured_inline_asm.inline_asm_id >= fn->inline_asm_count)
         return false;
     info = &fn->inline_asms[ins->value.structured_inline_asm.inline_asm_id];
+    {
+        Aarch64LseForm lse;
+        if (aarch64_lse_form(info->template_text, info->template_length,
+                             true, &lse))
+            return aarch64_linux_lse_emit(out, ctx, ins, info, &lse);
+    }
     if (aarch64_linux_at_s1e1r_template(
             info->template_text, info->template_length))
         return aarch64_linux_at_s1e1r_emit(out, ctx, ins, info);

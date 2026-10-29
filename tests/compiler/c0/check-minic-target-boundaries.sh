@@ -128,6 +128,8 @@ lacks src/core/core_lower_asm_target.c 'mrs_s'
 has src/target/target_info.h 'pic_lowering_supported;'
 has src/target/target_info.c 'x86_64_target.pic_lowering_supported = true;'
 has src/target/target_info.c 'rv64_target.pic_lowering_supported = true;'
+has src/target/target_info.c 'aarch64_target.pic_lowering_supported = true;'
+has src/target/target_info.c 'loongarch64_target.pic_lowering_supported = true;'
 has tools/minic-cc/main.c '!target_info->pic_lowering_supported'
 
 # Original Linux arm64 tlbflush __tlbi and __tlbi_sync_s1ish are

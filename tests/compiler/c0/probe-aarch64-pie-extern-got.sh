@@ -26,7 +26,11 @@ SRC
 "$gcc" -E -P -std=gnu11 "$work/pic.c" -o "$work/pic.i"
 "$gcc" -c -O0 "$work/main.c" -o "$work/main.o"
 "$gcc" -c -O0 -x c "$work/pic.i" -o "$work/pic.gnu.o"
-"$MINIC_CC" --target=aarch64-linux -S "$work/pic.i" -o "$work/pic.s"
+# Exercise the actual driver admission path, not merely GNU's -pie linker.
+"$MINIC_CC" --target=aarch64-linux -fPIE -S "$work/pic.i" -o "$work/pic.s"
+grep -Fq 'adrp x9, :got:optind' "$work/pic.s"
+grep -Fq 'adrp x9, :got:puts' "$work/pic.s"
+grep -Fq 'adrp x9, local_value' "$work/pic.s"
 "$gcc" -c -x assembler "$work/pic.s" -o "$work/pic.mini.o"
 for linkage in pie static; do
     case "$linkage" in

@@ -64,13 +64,14 @@ int main(void){
 SRC
 gcc -fPIE -pie "$d/piehost.c" -x assembler "$d/pie.s" -o "$d/host-pie"
 "$d/host-pie"
-# Don't replace source/data linker policy for unqualified targets.
+# The only still-unqualified target is RV32; AArch64 and LoongArch64
+# now have their own PC-relative local/GOT external address lowering.
 cat > "$d/invalid.i" <<'SRC'
 int value(void){return 42;}
 SRC
-for target in aarch64 loongarch64 riscv32;do
+for target in riscv32;do
  if "$mini" --target="$target-linux" -fPIC -S "$d/invalid.i" -o "$d/bad.s" >/dev/null 2>&1;then
   echo "UNQUALIFIED_PIC_ACCEPTED=$target" >&2;exit 1
  fi
 done
-echo "MINIC_X86_PIC=PASS GOTPCREL=1 PLT=1 dynamic_DSO_GNU_diff=1 PIE_ASLR=1 three_unqualified_targets=rejected"
+echo "MINIC_X86_PIC=PASS GOTPCREL=1 PLT=1 dynamic_DSO_GNU_diff=1 PIE_ASLR=1 rv32_unqualified=rejected"

@@ -185,8 +185,13 @@ bool minic_loongarch64_emit_residual_instruction(
         }
         case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS: {
             const char *symbol;
+            /* la.local is a PC-relative, base-independent kernel PIE
+             * address for a proven internal definition. All other data
+             * references use LoongArch's GOT-based la.global sequence. */
             if (!minic_multi_direct_global_address_symbol(fn, ins, &symbol) ||
-                fprintf(out, "  la.global $t0, %s\n", symbol) < 0 ||
+                fprintf(out, "  %s $t0, %s\n",
+                        minic_target_info_elf_object_is_tu_local(program, symbol)
+                            ? "la.local" : "la.global", symbol) < 0 ||
                 !emit_sp_mem(out, "st.d", "$t0", offset))
                 return minic_multi_direct_machine_reject(fn, "loongarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
@@ -195,7 +200,9 @@ bool minic_loongarch64_emit_residual_instruction(
         case MINIC_CORE_INSTRUCTION_FUNCTION_ADDRESS: {
             const char *symbol;
             if (!minic_multi_direct_function_address_symbol(fn, ins, &symbol) ||
-                fprintf(out, "  la.global $t0, %s\n", symbol) < 0 ||
+                fprintf(out, "  %s $t0, %s\n",
+                        minic_target_info_elf_function_is_tu_local(program, symbol)
+                            ? "la.local" : "la.global", symbol) < 0 ||
                 !emit_sp_mem(out, "st.d", "$t0", offset)) return minic_multi_direct_machine_reject(fn, "loongarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
             { *needs_writeback = false; return true; }

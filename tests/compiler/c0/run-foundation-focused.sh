@@ -81,6 +81,7 @@ for test_script in \
     run-gnu-empty-records.sh \
     run-gnu-extension-prefix-declarations.sh \
     run-gnu-prefix-function-attributes.sh \
+    run-x86-security-function-attributes.sh \
     run-gnu-format-cold-attributes.sh \
     run-anonymous-record-members.sh \
     run-block-scope-record-tags.sh \

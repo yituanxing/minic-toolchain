@@ -67,10 +67,9 @@ typedef struct MinicTargetInfo {
     MinicVariadicScalarReadKind variadic_scalar_read_kind;
     size_t variadic_linear_slot_bytes;
     MinicVariadicCopyKind variadic_copy_kind;
-    /* A pure target-owned capability: x86 SysV already uses GOTPCREL
-     * for data/function addresses and PLT for external calls; RV64 has
-     * its own qualified RISC-V PIC path. Do not leak target enumeration
-     * into Frontend/Driver or pretend AArch/Loong/RV32 are qualified. */
+    /* Target-owned capability: executable/shared ELF symbol references must
+     * use qualified local-PCREL or external-GOT lowering and PLT-capable
+     * function calls. RV32 remains fail-closed for PIC/PIE. */
     bool pic_lowering_supported;
     /* Per-translation-unit target-qualified GNU PIC/PIE lowering selection.
      * The canonical target descriptors default to static PC-relative.
@@ -121,6 +120,18 @@ bool minic_target_info_machine_builtin_signature(
 bool minic_target_info_header_attribute_supported(const MinicTargetInfo *target,
                                                   const char *spelling,
                                                   size_t length);
+/* GNU x86 function-security attribute spellings are target-admitted at the
+ * language boundary. Argument arity/spellings remain a parser obligation;
+ * admission alone never requests an unsupported machine mitigation. */
+bool minic_target_info_gnu_function_security_attribute_supported(
+    const MinicTargetInfo *target, const char *attribute, size_t length);
+/* ELF linkage is a source-program property shared by the two LP64 targets.
+ * A proven TU-local symbol may use PC-relative addressing in PIC; all other
+ * addresses need a target-specific GOT sequence. */
+bool minic_target_info_elf_object_is_tu_local(const MinicC0Program *program,
+                                              const char *symbol);
+bool minic_target_info_elf_function_is_tu_local(const MinicC0Program *program,
+                                                const char *symbol);
 bool minic_target_info_function_pointer_calling_convention_declaration_supported(
     const MinicTargetInfo *target, MinicFunctionCallingConvention convention);
 bool minic_target_info_builtin_va_list_type(const MinicTargetInfo *target,

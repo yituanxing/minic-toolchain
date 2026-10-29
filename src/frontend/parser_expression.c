@@ -2017,7 +2017,8 @@ static bool parse_unary(MinicParser *parser, MinicExpressionId *expression_id, b
                 minic_parser_error(parser, "cannot form pointer to function designator");
                 return false;
             }
-        } else if (minic_c0_expression_array_object_info(
+        } else if (operand_expression->value_category == MINIC_VALUE_LVALUE &&
+                   minic_c0_expression_array_object_info(
                        parser->program, operand_expression, NULL)) {
             MinicType array_type;
 

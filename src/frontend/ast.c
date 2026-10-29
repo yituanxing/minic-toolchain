@@ -1496,8 +1496,30 @@ bool minic_c0_expression_array_object_info(const MinicC0Program *program,
                                            MinicArrayObjectInfo *info) {
     MinicArrayObjectInfo resolved;
 
-    if (program == NULL || expression == NULL || expression->value_category != MINIC_VALUE_LVALUE) {
+    if (program == NULL || expression == NULL) {
         return false;
+    }
+    if (expression->value_category != MINIC_VALUE_LVALUE) {
+        const MinicExpression *base;
+        const MinicRecord *record;
+        const MinicRecordField *field;
+
+        /* ISO C permits array-to-pointer decay from a member of a record
+         * rvalue. The record owns an unnamed temporary through the end of
+         * the full expression. This exception must not turn an arbitrary
+         * array rvalue into an addressable/modifiable lvalue. */
+        if (expression->value_category != MINIC_VALUE_RVALUE ||
+            expression->kind != MINIC_EXPRESSION_MEMBER)
+            return false;
+        base = minic_c0_program_expression(program, expression->value.member.base);
+        record = minic_c0_program_record(program, expression->value.member.record_id);
+        field = minic_c0_record_field(record, expression->value.member.field_index);
+        if (base == NULL || base->value_category != MINIC_VALUE_RVALUE ||
+            !minic_type_is_record(base->type) ||
+            base->type.record_id != expression->value.member.record_id ||
+            !minic_c0_record_value_is_copy_source(program, expression->value.member.base) ||
+            field == NULL || (!field->is_array && !minic_type_is_array(field->type)))
+            return false;
     }
     (void)memset(&resolved, 0, sizeof(resolved));
     if (expression->kind == MINIC_EXPRESSION_COMPOUND_LITERAL) {

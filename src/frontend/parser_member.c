@@ -255,12 +255,13 @@ static bool parse_record_rvalue_member(MinicParser *parser,
         return false;
     }
     field = minic_c0_record_field(record, path.field_indices[0]);
-    /* A nested record member of an rvalue record is still an rvalue. Keep
-     * its original aggregate identity so .inner.leaf chains can project
-     * through the one materialized base, without inventing an lvalue. Array
-     * members require independent temporary/decay semantics and stay gated. */
-    if (field == NULL || field->is_array) {
-        minic_parser_error(parser, "record rvalue member currently excludes array fields");
+    /* A member selected from a record rvalue is never an lvalue. In
+     * particular, an array member can decay to a pointer into the containing
+     * record's full-expression temporary, but cannot become an assignable
+     * array lvalue. Core must materialize the record before taking its
+     * array field's address. */
+    if (field == NULL) {
+        minic_parser_error(parser, "record rvalue member field is invalid");
         return false;
     }
     member_type = field->type;

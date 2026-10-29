@@ -623,7 +623,6 @@ static bool verify_expression(const MinicC0Program *program,
         if (record_rvalue_base) {
             record_type = operand->type;
             if (!minic_c0_record_value_is_copy_source(program, expression->value.member.base) ||
-                field->is_array ||
                 expression->value_category != MINIC_VALUE_RVALUE) {
                 return false;
             }

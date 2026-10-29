@@ -268,6 +268,11 @@ const MinicTargetInfo *minic_target_info_for_architecture(
     if (architecture == MINIC_TARGET_ARCH_AARCH64) {
         if (aarch64_target.data_layout == NULL) {
             aarch64_target.architecture = MINIC_TARGET_ARCH_AARCH64;
+            /* The AArch64 emitter resolves TU-local addresses with
+             * ADRP+LO12 and interposable addresses via GOT page loads.
+             * BL relocations remain PLT-capable, so both PIE and DSO code
+             * use the same position-independent address lowering. */
+            aarch64_target.pic_lowering_supported = true;
             aarch64_target.data_layout = minic_aarch64_linux_data_layout();
             aarch64_target.integer_model = &minic_aarch64_linux_integer_model;
             aarch64_target.wide_character_type = minic_type_unsigned_int();
@@ -294,6 +299,10 @@ const MinicTargetInfo *minic_target_info_for_architecture(
     if (architecture == MINIC_TARGET_ARCH_LOONGARCH64) {
         if (loongarch64_target.data_layout == NULL) {
             loongarch64_target.architecture = MINIC_TARGET_ARCH_LOONGARCH64;
+            /* la.local emits PC-relative TU-local addresses, whereas
+             * la.global emits GOT-based references to preemptible symbols.
+             * The target owns both classifications and B26/PLT calls. */
+            loongarch64_target.pic_lowering_supported = true;
             loongarch64_target.data_layout = minic_loongarch64_linux_data_layout();
             loongarch64_target.integer_model = &minic_loongarch64_linux_integer_model;
             loongarch64_target.wide_character_type = minic_type_int();
@@ -448,6 +457,58 @@ bool minic_target_info_header_attribute_supported(const MinicTargetInfo *target,
             MINIC_TARGET_LANG_OPAQUE_VECTOR_HEADER_DECLARATIONS) != 0U &&
            length == sizeof(name) - 1U &&
            memcmp(spelling, name, length) == 0;
+}
+
+/* The GNU function annotations emitted by native x86 Linux headers/objects
+ * are declarations of the existing x86 function ABI, not a request to share
+ * x86 names with foreign targets. Parser-owned argument validation is needed
+ * before using these annotations; this function handles only admission. */
+bool minic_target_info_gnu_function_security_attribute_supported(
+    const MinicTargetInfo *target, const char *attribute, size_t length) {
+    static const char *const names[] = {
+        "nocf_check", "__indirect_branch__", "__target__"
+    };
+    size_t index;
+    if (target == NULL || target->architecture != MINIC_TARGET_ARCH_X86_64 ||
+        attribute == NULL) {
+        return false;
+    }
+    for (index = 0U; index < sizeof(names) / sizeof(names[0]); ++index) {
+        if (length == strlen(names[index]) &&
+            memcmp(attribute, names[index], length) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Both AArch64's ADRP+ADD and LoongArch's la.local are valid in PIE only
+ * when a symbol is nonpreemptible. Never infer internal linkage from the
+ * spelling alone or from a source declaration without an owned definition. */
+bool minic_target_info_elf_object_is_tu_local(const MinicC0Program *program,
+                                              const char *symbol) {
+    size_t index;
+    if (program == NULL || symbol == NULL) return false;
+    for (index = 0U; index < program->global_object_count; ++index) {
+        const MinicGlobalObject *object = &program->global_objects[index];
+        if (object->name != NULL && strcmp(object->name, symbol) == 0 &&
+            object->is_internal && !object->is_extern &&
+            !object->is_block_scope_extern_only) return true;
+    }
+    return false;
+}
+
+bool minic_target_info_elf_function_is_tu_local(const MinicC0Program *program,
+                                                const char *symbol) {
+    size_t index;
+    if (program == NULL || symbol == NULL) return false;
+    for (index = 0U; index < program->function_count; ++index) {
+        const MinicFunction *function = &program->functions[index];
+        const char *name = minic_c0_function_symbol_name(function);
+        if (name != NULL && strcmp(name, symbol) == 0 &&
+            function->is_defined && function->is_internal) return true;
+    }
+    return false;
 }
 
 /* ABI type spelling is a language capability; the target backend still

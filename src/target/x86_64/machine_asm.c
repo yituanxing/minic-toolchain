@@ -4950,6 +4950,84 @@ static bool emit_linux_fdiv_bug(
                  "  fninit\n", out) != EOF;
 }
 
+/* Zstd's three CPUID source contracts have only one or three outputs; none
+ * ties EAX to an output as native_cpuid does. Recover every hardware role
+ * from the qualified exact clobber+operand shape, including the ECX subleaf
+ * input for leaf 7. Never let these count-2/count-4 forms fall through to
+ * bit-scan, NOSPEC or muldiv machine dispatch. */
+static bool emit_zstd_cpuid(
+    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, const MinicX86Frame *frame,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
+    static const char *const output_regs[][3] = {
+        {"%eax", NULL, NULL},
+        {"%eax", "%ecx", "%edx"},
+        {"%eax", "%ebx", "%ecx"}
+    };
+    static const char *const input_regs[][2] = {
+        {"%rax", NULL}, {"%rax", NULL}, {"%rax", "%rcx"}
+    };
+    static const char *const clobbers[][3] = {
+        {"ebx", "ecx", "edx"}, {"ebx", NULL, NULL},
+        {"edx", NULL, NULL}
+    };
+    static const size_t output_counts[] = {1U, 3U, 3U};
+    static const size_t input_counts[] = {1U, 1U, 2U};
+    static const size_t clobber_counts[] = {3U, 1U, 1U};
+    const MinicCoreStructuredInlineAsmOperand *b =
+        ins->value.structured_inline_asm.operands;
+    const size_t count = ins->value.structured_inline_asm.operand_count;
+    size_t form, i, bytes;
+    bool sign;
+    if (info->template_length != 5U ||
+        memcmp(info->template_text, "cpuid", 5U) != 0 ||
+        info->has_memory_clobber ||
+        !info->register_clobbers)
+        return false;
+    for (form = 0U; form < 3U; ++form) {
+        if (count != output_counts[form] + input_counts[form] ||
+            info->register_clobber_count != clobber_counts[form])
+            continue;
+        for (i = 0U; i < clobber_counts[form]; ++i)
+            if (!clobber_is(&info->register_clobbers[i], clobbers[form][i]))
+                break;
+        if (i == clobber_counts[form]) break;
+    }
+    if (form == 3U) return false;
+    for (i = 0U; i < count; ++i) {
+        const MinicCoreValueId id = b[i].value;
+        MinicType pointee;
+        if (id >= fn->value_count || b[i].operand_index != i ||
+            b[i].has_fixed_register_binding || b[i].early_clobber)
+            return false;
+        if (i < output_counts[form]) {
+            if (b[i].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
+                !minic_type_pointee(fn->values[id].type, &pointee) ||
+                !minic_x86_64_scalar_width(program, target, pointee,
+                                            &bytes, &sign) || bytes != 4U)
+                return false;
+        } else if (b[i].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
+                   !minic_x86_64_scalar_width(program, target,
+                                               fn->values[id].type,
+                                               &bytes, &sign) || bytes != 4U)
+            return false;
+    }
+    /* CPUID overwrites EBX regardless of which outputs are requested.
+     * Saving RBX is required by System V x86-64 ABI, even for register
+     * clobbers that GNU's inline-asm register allocator could handle. */
+    if (fputs("  pushq %rbx\n", out) == EOF) return false;
+    for (i = 0U; i < input_counts[form]; ++i)
+        if (!x86_value_load(out, frame, b[output_counts[form]+i].value,
+                            input_regs[form][i]))
+            return false;
+    if (fputs("  cpuid\n", out) == EOF) return false;
+    for (i = 0U; i < output_counts[form]; ++i)
+        if (!x86_value_load(out, frame, b[i].value, "%r10") ||
+            fprintf(out, "  movl %s, (%%r10)\n", output_regs[form][i]) < 0)
+            return false;
+    return fputs("  popq %rbx\n", out) != EOF;
+}
+
 bool minic_x86_64_emit_structured_asm(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicX86Frame *frame,
@@ -4974,6 +5052,12 @@ bool minic_x86_64_emit_structured_asm(
     bindings = ins->value.structured_inline_asm.operands;
     if (!info->template_text)
         return false;
+    if (info->template_length == 5U &&
+        memcmp(info->template_text, "cpuid", 5U) == 0 &&
+        (ins->value.structured_inline_asm.operand_count == 2U ||
+         ins->value.structured_inline_asm.operand_count == 4U ||
+         ins->value.structured_inline_asm.operand_count == 5U))
+        return emit_zstd_cpuid(out, program, target, fn, frame, ins, info);
     if (minic_x86_64_linux_irq_stack_call_form(
             info->template_text, info->template_length))
         return emit_linux_irq_stack_call(out, fn, frame, ins, info);
