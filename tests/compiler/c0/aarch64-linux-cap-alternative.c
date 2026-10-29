@@ -58,7 +58,7 @@
 #ifndef PAN_CAP
 #define PAN_CAP 38
 #endif
-#ifdef CHECK_UNSUPPORTED_PAN
+#ifdef CHECK_PAN_ALT
 void linux_pan_disable(void) {
     __asm__(ALTERNATIVE_CFG("nop", SET_PSTATE_PAN(0), PAN_CAP));
 }

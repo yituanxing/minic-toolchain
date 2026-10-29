@@ -91,17 +91,37 @@ grep -Fq 'MINIC_DEFERRED_ASM_IMMEDIATE requires inline specialization' "$work/de
 grep -Fq '.extern __minic_deferred_asm_immediate_' "$work/deferred.s"
 test "$(grep -Fc 'MINIC_DEFERRED_ASM_IMMEDIATE' "$work/deferred.s")" -eq 2
 
-# Another Linux alternative (zero-operand PAN .inst) is deliberately still
-# unsupported. Ensure the exact asm-goto exception did not widen admission.
-cc -E -P -DCHECK_UNSUPPORTED_PAN -x c "$source" -o "$work/pan.i"
-if "$minic" --target=aarch64-linux -S "$work/pan.i" \
-    -o "$work/pan.s" >"$work/pan.log" 2>&1; then
-    echo 'unsupported PAN alternative accidentally accepted' >&2; exit 1
-fi
-test ! -e "$work/pan.s"
+# Linux 6.6.143's exact zero-operand PAN alternative has since acquired its
+# own target-side machine contract. Assert the original feature-38 hardware
+# alternative is preserved, then reject altered cpucap/opcode/metadata.
+# Keeping the old blanket-rejection expectation would incorrectly fail when
+# an independently verified privileged instruction becomes supported.
+cc -E -P -DCHECK_PAN_ALT -x c "$source" -o "$work/pan.i"
+"$minic" --target=aarch64-linux -S "$work/pan.i" \
+    -o "$work/pan.s"
+test "$(grep -Fc '.hword 38' "$work/pan.s")" -ge 2
+test "$(grep -Fc '.pushsection .altinstructions' "$work/pan.s")" -ge 2
+cc -E -P -DCHECK_PAN_ALT -DPAN_CAP=37 -x c "$source" \
+    -o "$work/pan-wrong-cap.i"
+sed 's/0xd500401f/0xd500401e/g' "$work/pan.i" \
+    > "$work/pan-wrong-opcode.i"
+sed '/void linux_pan_disable/,/int linux_has_cap_unlikely/s/664f-663f/664f-662b/g' \
+    "$work/pan.i" \
+    > "$work/pan-wrong-length.i"
+for kind in cap opcode length; do
+    if cmp -s "$work/pan.i" "$work/pan-wrong-$kind.i"; then
+        echo "invalid PAN mutation fixture: $kind" >&2; exit 1
+    fi
+    if "$minic" --target=aarch64-linux -S "$work/pan-wrong-$kind.i" \
+        -o "$work/pan-wrong-$kind.s" >/dev/null 2>&1; then
+        echo "unsafe PAN alternative accidentally accepted: $kind" >&2
+        exit 1
+    fi
+    test ! -e "$work/pan-wrong-$kind.s"
+done
 
 if [[ "${MINIC_SOURCE_ONLY:-0}" == 1 ]]; then
-    echo 'AARCH64_CAP_ASM_GOTO=PASS source forms=2 metadata=12B edges=2 deferred=tracked negatives=19'
+    echo 'AARCH64_CAP_ASM_GOTO=PASS source forms=2 metadata=12B edges=2 PAN38=PASS deferred=tracked negatives=22'
     exit 0
 fi
 
@@ -118,4 +138,4 @@ for compiler in gnu mini; do
         exit 1
     fi
 done
-echo 'AARCH64_CAP_ASM_GOTO=PASS GNU_QEMU_42=2 forms=2 metadata=12B negatives=19 deferred=tracked'
+echo 'AARCH64_CAP_ASM_GOTO=PASS GNU_QEMU_42=2 forms=2 metadata=12B PAN38=PASS negatives=22 deferred=tracked'
