@@ -504,7 +504,10 @@ bool minic_target_info_elf_function_is_tu_local(const MinicC0Program *program,
     if (program == NULL || symbol == NULL) return false;
     for (index = 0U; index < program->function_count; ++index) {
         const MinicFunction *function = &program->functions[index];
-        const char *name = minic_c0_function_symbol_name(function);
+        /* TargetInfo is also linked by standalone ABI/layout tests without
+         * the compiler's C0 symbol helper; keep this lookup self-contained. */
+        const char *name = function->assembler_name != NULL
+            ? function->assembler_name : function->name;
         if (name != NULL && strcmp(name, symbol) == 0 &&
             function->is_defined && function->is_internal) return true;
     }
