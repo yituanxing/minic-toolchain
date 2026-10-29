@@ -106,6 +106,11 @@ static bool minic_lp64_plan_types(
                     stack += 2U;
                 }
             } else {
+                /* LoongArch LP64D preserves split a7/stack for a named
+                 * __int128, but an unnamed 16-aligned vararg consumes an
+                 * even GAR pair or spills the entire value to the stack. */
+                if (abi->variadic_align_wide_gp_pair && variadic && j >= fixed &&
+                    gp < abi->gp_argument_registers && (gp & 1U)) ++gp;
                 const size_t available = gp < abi->gp_argument_registers
                     ? abi->gp_argument_registers - gp : 0U;
                 const size_t used = available < 2U ? available : 2U;
@@ -226,6 +231,7 @@ static bool minic_lp64_admit_call(
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     const MinicCoreCallView *semantic_view,
+    const MinicDirectLP64AbiPolicy *abi,
     MinicDirectLP64IndirectRecord indirect_record,
     MinicDirectLP64IndirectRecord indirect_return,
     const char *arch, const char *name, size_t i,
@@ -236,7 +242,8 @@ static bool minic_lp64_admit_call(
     size_t j, begin, count, parameter_count;
     bool is_variadic;
     if (program == NULL || target == NULL || fn == NULL || ins == NULL ||
-        semantic_view == NULL || indirect_record == NULL || arch == NULL ||
+        semantic_view == NULL || !minic_direct_lp64_abi_policy_valid(abi) ||
+        indirect_record == NULL || arch == NULL ||
         name == NULL || types == NULL)
         return false;
     call = *semantic_view;
@@ -393,6 +400,8 @@ static bool minic_lp64_admit_call(
                     (!minic_type_is_long_double(actual) &&
                      !minic_type_is_double(actual) &&
                      !minic_type_is_pointer(actual) &&
+                     !(abi->variadic_align_wide_gp_pair &&
+                       minic_type_is_int128_integer(actual)) &&
                      (!minic_lp64_scalar_integer_width(program, target, actual,
                                             &actual_width, &actual_signed) ||
                       (actual_width != 4U && actual_width != 8U)))) return false;
@@ -457,7 +466,8 @@ bool minic_lp64_plan_function_calls(
             !minic_core_instruction_is_call(fn->instructions[id].kind) ||
             !minic_lp64_admit_call(
                 program, target, fn, &fn->instructions[id],
-                &calls->sites[ordinal].view, indirect_record, indirect_return,
+                &calls->sites[ordinal].view, abi,
+                indirect_record, indirect_return,
                 arch, name,
                 id, types))
             goto failed;

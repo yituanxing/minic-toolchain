@@ -2,6 +2,7 @@
 #include "target/common/direct_instruction_semantics.h"
 #include "target/loongarch64/frame_emit.h"
 #include <stdio.h>
+#include <string.h>
 
 /* A positive proof skips even the alignment branch on the hot path. The
  * Core SSA definition is immutable; only roots whose alignment is known from
@@ -68,6 +69,59 @@ static size_t loong_known_address_alignment(
 #define emit_sp_mem(_out, _op, _reg, _offset) \
     minic_loongarch64_emit_frame_mem((_out), (_op), (_reg), (_offset), dynamic_frame)
 
+/* A single transport for compiler-generated integer stores, including the
+ * outputs of target-qualified GNU ASM. The ASM instruction itself is left
+ * untouched: only the compiler's writeback to its C lvalue is guarded. */
+static bool loong_emit_scalar_store(FILE *out, size_t width,
+                                    const char *value_reg,
+                                    const char *address_reg,
+                                    const char *scratch_reg,
+                                    bool proven_aligned) {
+    static size_t serial;
+    const char *op = width == 1U ? "st.b" : width == 2U ? "st.h" :
+                     width == 4U ? "st.w" : width == 8U ? "st.d" : NULL;
+    size_t i, label;
+    if (!out || !op || !value_reg || !address_reg || !scratch_reg ||
+        strcmp(value_reg, address_reg) == 0 ||
+        strcmp(value_reg, scratch_reg) == 0 ||
+        strcmp(address_reg, scratch_reg) == 0)
+        return false;
+    if (width == 1U || proven_aligned)
+        return fprintf(out, "  %s %s, %s, 0\n", op,
+                       value_reg, address_reg) >= 0;
+    label = serial++;
+    if (fprintf(out,
+            "  andi %s, %s, %zu\n"
+            "  beqz %s, .Lloong_store_native_%zu\n"
+            "  move %s, %s\n",
+            scratch_reg, address_reg, width - 1U,
+            scratch_reg, label, scratch_reg, value_reg) < 0)
+        return false;
+    for (i = 0U; i < width; ++i) {
+        if (fprintf(out, "  st.b %s, %s, %zu\n",
+                    scratch_reg, address_reg, i) < 0 ||
+            (i + 1U < width &&
+             fprintf(out, "  srli.d %s, %s, 8\n",
+                     scratch_reg, scratch_reg) < 0)) return false;
+    }
+    return fprintf(out,
+            "  b .Lloong_store_done_%zu\n"
+            ".Lloong_store_native_%zu:\n"
+            "  %s %s, %s, 0\n"
+            ".Lloong_store_done_%zu:\n",
+            label, label, op, value_reg, address_reg, label) >= 0;
+}
+
+bool minic_loongarch64_emit_asm_output_store(
+    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, MinicCoreValueId address,
+    size_t width, const char *value_reg, const char *address_reg,
+    const char *scratch_reg) {
+    return loong_emit_scalar_store(out, width, value_reg, address_reg,
+        scratch_reg, loong_known_address_alignment(program, target, fn,
+            address, 0U) >= width);
+}
+
 /* Core LOAD/STORE deliberately carries no trusted alignment metadata: an
  * ordinary scalar or pointer may live inside a GNU packed record. Preserve
  * the native fast path at runtime for aligned addresses, and gather/scatter
@@ -77,12 +131,10 @@ static bool emit_integer_memory(FILE *out, bool store,
                                 size_t width, bool sign, bool atomic,
                                 bool proven_aligned) {
     const char *op = NULL;
-    if (store) {
-        op = width == 1U ? "  st.b $t0, $t1, 0\n" :
-             width == 2U ? "  st.h $t0, $t1, 0\n" :
-             width == 4U ? "  st.w $t0, $t1, 0\n" :
-             width == 8U ? "  st.d $t0, $t1, 0\n" : NULL;
-    } else {
+    if (store)
+        return loong_emit_scalar_store(out, width, "$t0", "$t1", "$t3",
+                                       atomic || proven_aligned);
+    else {
         op = width == 1U ? (sign ? "  ld.b $t0, $t1, 0\n" :
                                      "  ld.bu $t0, $t1, 0\n") :
              width == 2U ? (sign ? "  ld.h $t0, $t1, 0\n" :
@@ -98,16 +150,7 @@ static bool emit_integer_memory(FILE *out, bool store,
         fputs(op, out) == EOF ||
         fputs("  b 2f\n1:\n", out) == EOF)
         return false;
-    if (store) {
-        if (fprintf(out, "  li.d $t4, %zu\n", width) < 0 ||
-            fputs("3:\n"
-                  "  st.b $t0, $t1, 0\n"
-                  "  srli.d $t0, $t0, 8\n"
-                  "  addi.d $t1, $t1, 1\n"
-                  "  addi.d $t4, $t4, -1\n"
-                  "  bnez $t4, 3b\n", out) == EOF)
-            return false;
-    } else {
+    {
         if (fprintf(out, "  li.d $t4, %zu\n", width) < 0 ||
             fputs("  move $t0, $zero\n"
                   "  move $t5, $zero\n"

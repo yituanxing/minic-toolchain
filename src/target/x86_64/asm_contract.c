@@ -1,6 +1,68 @@
 #include "target/x86_64/asm_contract.h"
 #include <stdio.h>
 #include <string.h>
+
+/* Core's form ID is transport metadata, not a trusted capability. A future
+ * pass, serialized IR, or standalone Core client can manufacture it. Check
+ * the exact admitted source spelling/variant once at the target boundary;
+ * the emitter then consumes the typed semantic form without text dispatch.
+ * In particular zero returned by an ISA form matcher never admits a variant. */
+bool minic_x86_64_typed_machine_form_matches_template(
+    uint32_t form_id, uint32_t variant, const char *text, size_t length) {
+    unsigned int form = 0U;
+    if (!text) return false;
+    switch ((MinicX86MachineAsmForm)form_id) {
+    case MINIC_X86_MACHINE_ASM_ZSTD_CPUID:
+        return variant == 0U && length == 5U &&
+            memcmp(text, "cpuid", 5U) == 0;
+    case MINIC_X86_MACHINE_ASM_XSETBV:
+        return variant == 0U && length == 6U &&
+            memcmp(text, "xsetbv", 6U) == 0;
+    case MINIC_X86_MACHINE_ASM_MMIO_READ:
+        form = minic_x86_64_linux_mmio_read_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_MMIO_WRITE:
+        form = minic_x86_64_linux_mmio_write_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_ATOMIC_XCHG:
+        form = minic_x86_64_linux_atomic_xchg_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_MONITOR_WAIT:
+        form = minic_x86_64_linux_monitor_wait_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_SEGMENT_READ:
+        form = minic_x86_64_linux_segment_read_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_FSGSBASE:
+        form = minic_x86_64_linux_fsgsbase_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_RANDOM_SEED:
+        form = minic_x86_64_linux_random_seed_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_PKRU:
+        form = minic_x86_64_linux_pkru_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_MXCSR:
+        form = minic_x86_64_linux_mxcsr_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_UNWIND_CONTEXT:
+        return variant == 0U &&
+            minic_x86_64_linux_unwind_context_form(text, length);
+    case MINIC_X86_MACHINE_ASM_FDIV_BUG:
+        return variant == 0U &&
+            minic_x86_64_linux_fdiv_bug_form(text, length);
+    case MINIC_X86_MACHINE_ASM_X87_FILD_PREPARE:
+        return variant == 0U &&
+            minic_x86_64_linux_x87_fild_prepare_form(text, length);
+    case MINIC_X86_MACHINE_ASM_X87_PROBE:
+        return variant == 0U &&
+            minic_x86_64_linux_x87_probe_form(text, length);
+    default:
+        return false;
+    }
+    return form != 0U && variant == form;
+}
+
 /* All GNU %c inputs have already been resolved into owned symbols/numbers
  * by the shared Core operand normalizer. Preserve the Linux BUG/WARN metadata
  * in its original section, including the actual x86 UD2 instruction, numeric
@@ -804,6 +866,7 @@ static bool x86_linux_mmio_write_source(const MinicC0Program *program,
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
     contract->implicit_memory_effect = true;
+    contract->target_machine_form_variant = width;
     return true;
 }
 
@@ -832,6 +895,7 @@ static bool x86_linux_mmio_read_source(const MinicC0Program *program,
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
     contract->implicit_memory_effect = true;
+    contract->target_machine_form_variant = width;
     return true;
 }
 
@@ -1178,6 +1242,7 @@ static bool x86_linux_atomic_xchg_source(
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE;
     contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
     contract->implicit_memory_effect = true;
+    contract->target_machine_form_variant = width;
     return true;
 }
 
@@ -6055,6 +6120,7 @@ static bool x86_linux_monitor_wait_source(
         contract->kinds[i] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     }
     contract->operand_count = count;
+    contract->target_machine_form_variant = form;
     return true;
 }
 
@@ -6121,6 +6187,7 @@ static bool x86_linux_segment_read_source(
     contract->operand_count = 1U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     contract->implicit_memory_effect = true;
+    contract->target_machine_form_variant = form;
     return true;
 }
 
@@ -6315,6 +6382,7 @@ static bool x86_linux_fsgsbase_source(
         MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
         MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->implicit_memory_effect = true;
+    contract->target_machine_form_variant = form;
     return true;
 }
 
@@ -6725,6 +6793,79 @@ bool minic_x86_64_linux_unwind_context_form(const char *text, size_t length) {
     }
     compact[n] = '\0';
     return strcmp(compact, expected) == 0;
+}
+
+/* Previously the two MXCSR memory forms were claimed by Core's generic
+ * `m`/`=m` source classifier and only identified here at machine emission.
+ * The hardware CSR side effect and 32-bit operand width belong to x86.
+ * Preserve both numeric and named GNU operands, including optional stronger
+ * compiler memory clobbers admitted by the old generic path. */
+static bool x86_linux_mxcsr_source(
+    const MinicC0Program *program, const MinicInlineAsm *source,
+    MinicTargetInlineAsmContract *contract) {
+    const unsigned int form = source ? minic_x86_64_linux_mxcsr_form(
+        source->template_text, source->template_length) : 0U;
+    const bool reading_memory = form == 1U;
+    const MinicInlineAsmOperand *operand;
+    const MinicExpression *expression;
+    MinicType plain;
+    if (!program || !source || !contract || !form ||
+        !source->is_volatile || source->is_goto || source->label_count ||
+        source->output_count != (reading_memory ? 0U : 1U) ||
+        source->input_count != (reading_memory ? 1U : 0U) ||
+        source->clobber_count != (source->has_memory_clobber ? 1U : 0U) ||
+        source->register_clobber_count ||
+        (reading_memory ? !source->inputs : !source->outputs))
+        return false;
+    operand = reading_memory ? &source->inputs[0] : &source->outputs[0];
+    if (!target_constraint_is(operand, reading_memory ? "m" : "=m") ||
+        operand->access != (reading_memory ?
+            MINIC_INLINE_ASM_OPERAND_READ_ONLY :
+            MINIC_INLINE_ASM_OPERAND_WRITE_ONLY)) return false;
+    expression = minic_c0_program_expression(program, operand->expression);
+    if (!expression || expression->value_category != MINIC_VALUE_LVALUE ||
+        (!reading_memory && minic_type_is_const(expression->type)) ||
+        !minic_type_unqualified(expression->type, &plain) ||
+        !minic_type_equal(plain, minic_type_unsigned_int())) return false;
+    contract->operand_count = 1U;
+    contract->kinds[0] = reading_memory ?
+        MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT :
+        MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT;
+    contract->implicit_memory_effect = true;
+    contract->target_machine_form_variant = form;
+    return true;
+}
+
+/* ORC's live RIP/RSP/RBP snapshot has three *independent* register outputs.
+ * Keep this x86-specific privileged register view out of generic Core ASM
+ * admission; no memory operand, clobber or extra instruction is permitted. */
+static bool x86_linux_unwind_context_source(
+    const MinicC0Program *program, const MinicInlineAsm *source,
+    MinicTargetInlineAsmContract *contract) {
+    size_t i;
+    if (!program || !source || !contract ||
+        !minic_x86_64_linux_unwind_context_form(
+            source->template_text, source->template_length) ||
+        !source->is_volatile || source->is_goto || source->label_count ||
+        source->output_count != 3U || !source->outputs ||
+        source->input_count || source->clobber_count ||
+        source->has_memory_clobber || source->register_clobber_count)
+        return false;
+    for (i = 0U; i < 3U; ++i) {
+        const MinicInlineAsmOperand *operand = &source->outputs[i];
+        const MinicExpression *expression = minic_c0_program_expression(
+            program, operand->expression);
+        MinicType plain;
+        if (!target_constraint_is(operand, "=r") ||
+            operand->access != MINIC_INLINE_ASM_OPERAND_WRITE_ONLY ||
+            !expression || expression->value_category != MINIC_VALUE_LVALUE ||
+            minic_type_is_const(expression->type) ||
+            !minic_type_unqualified(expression->type, &plain) ||
+            !minic_type_equal(plain, minic_type_unsigned_long())) return false;
+        contract->kinds[i] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+    }
+    contract->operand_count = 3U;
+    return true;
 }
 
 /* Linux TASK_SIZE_MAX's CPU-feature alternative selects a 47-bit or 56-bit
@@ -7295,6 +7436,7 @@ static bool x86_linux_pkru_source(
         contract->kinds[index] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     }
     contract->operand_count = source->output_count + source->input_count;
+    contract->target_machine_form_variant = form;
     return true;
 }
 
@@ -7579,10 +7721,10 @@ static bool x86_linux_random_seed_source(
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
     const MinicExpression *flag, *output;
+    const unsigned int form = source ? minic_x86_64_linux_random_seed_form(
+        source->template_text, source->template_length) : 0U;
     MinicType plain;
-    if (!program || !source || !contract ||
-        !minic_x86_64_linux_random_seed_form(
-            source->template_text, source->template_length) ||
+    if (!program || !source || !contract || !form ||
         !source->is_volatile || source->is_goto ||
         source->output_count != 2U || !source->outputs ||
         source->input_count || source->label_count || source->clobber_count ||
@@ -7606,6 +7748,7 @@ static bool x86_linux_random_seed_source(
     contract->operand_count = 2U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+    contract->target_machine_form_variant = form;
     return true;
 }
 
@@ -8527,114 +8670,125 @@ typedef bool (*MinicX86SourceQualifier)(
  * Order is part of the existing qualification behavior: the first complete
  * source contract wins, with the generic arithmetic forms only at the end.
  * No new Linux template or ISA subset is implicitly admitted here. */
-static const MinicX86SourceQualifier minic_x86_source_qualifiers[] = {
-    x86_linux_crash_register_source,
-    x86_linux_pm_trace_source,
-    x86_linux_vmware_hypercall_source,
-    x86_linux_vmware_stealclock_alt_source,
-    x86_linux_kvm_hypercall_alt_source,
-    x86_linux_exception_stack_call_source,
-    x86_linux_legacy_fnsave_source,
-    x86_linux_kexec_load_segments_source,
-    x86_linux_efi_kernel_transfer_source,
-    x86_linux_pci_mmconfig_source,
-    x86_linux_cmpxchg128_source,
-    x86_linux_task_size_alt_source,
-    x86_linux_irq_stack_call_source,
-    x86_linux_preempt_static_call_source,
-    x86_linux_preempt_gs_dec_source,
-    x86_linux_gen_endbr_source,
-    x86_linux_kaslr_mul_source,
-    x86_linux_muldiv_u64_source,
-    x86_linux_via_xstore_source,
-    x86_linux_crash_segment_snapshot_source,
-    x86_linux_task_control_source,
-    x86_linux_iret_to_self_source,
-    x86_linux_int3_selftest_source,
-    x86_linux_pv_indirect_call_source,
-    x86_linux_alt_reloc_selftest_source,
-    x86_linux_real_mode_far_jump_source,
-    x86_linux_mmio_read_source,
-    x86_linux_mmio_write_source,
-    x86_linux_rep_string_io_source,
-    x86_linux_iomem_copy_source,
-    x86_linux_i915_movntdqa_source,
-    x86_linux_flushcache_copy_source,
-    x86_linux_atomic_xchg_source,
-    x86_linux_pvclock_scale_source,
-    x86_linux_pkru_source,
-    x86_linux_fdiv_bug_source,
-    x86_linux_monitor_wait_source,
-    x86_zstd_cpuid_source,
-    x86_linux_segment_read_source,
-    x86_linux_segment_load_extable_source,
-    x86_linux_lkgs_extable_source,
-    x86_linux_load_unaligned_zeropad_source,
-    x86_linux_lar_selector_source,
-    x86_linux_random_seed_source,
-    x86_linux_fsgsbase_source,
-    x86_linux_kernel_nofault_goto_source,
-    x86_linux_rep_movsb_alternative_source,
-    x86_linux_rep_stosb_alternative_source,
-    x86_linux_fpu_user_frame_source,
-    x86_linux_x87_fild_prepare_source,
-    x86_linux_fpu_kernel_restore_source,
-    x86_linux_fxrstor_safe_source,
-    x86_linux_xstate_fault_source,
-    x86_linux_xrstor_alternative_source,
-    x86_linux_xsave_triple_alternative_source,
-    x86_linux_smap_alternative_source,
-    x86_linux_segment_register_extable_source,
-    x86_linux_put_user_call_source,
-    x86_linux_get_user_call_source,
-    x86_linux_idle_clflush_alt_source,
-    x86_linux_pat_clflushopt_source,
-    x86_linux_futex_extable_source,
-    x86_linux_verw_clear_source,
-    x86_linux_debug_register_source,
-    x86_x87_probe_source,
-    x86_fxsave_source,
-    x86_xsetbv_source,
-    x86_linux_alternative_wrmsr_source,
-    x86_linux_control_register_source,
-    x86_linux_tlb_cache_source,
-    x86_linux_three_call_alternative_source,
-    x86_linux_boot_segments_source,
-    x86_linux_lidt_source,
-    x86_linux_gs_testcc_source,
-    x86_linux_testcc_source,
-    x86_prefetchw_alt_source,
-    x86_apic_amd_alt_source,
-    x86_gs_tied_alu_source,
-    x86_linux_zero_barrier_qualifier,
-    x86_linux_ip_here_source,
-    x86_add32_carry_source,
-    x86_linux_tcpudp_nofold_source,
-    x86_percpu_gs_source,
-    x86_ip_fast_csum_source,
-    x86_checksum_source,
-    x86_linux_msr_source,
-    x86_hweight_source,
-    x86_counter_source,
-    x86_port_io_source,
-    x86_linux_gs_atomic_source,
-    x86_linux_rep_stos_source,
-    x86_linux_lowlevel_scalar_source,
-    x86_linux_boot_flags_source,
-    x86_linux_delay_mul_source,
-    x86_linux_delay_wait_source,
-    x86_linux_identity_load_source,
-    x86_linux_ipv6_checksum_source,
-    x86_linux_lock_bitcc_source,
-    x86_linux_boot_string_source,
-    x86_linux_vdso_syscall_source,
-    x86_linux_vdso_cpunode_source,
-    x86_linux_csum_partial_source,
-    x86_linux_atomic_rmw_source,
-    x86_linux_raw_cmpxchg_source,
-    x86_trycas_source,
-    x86_linux_bitops_source,
+typedef struct MinicX86SourceQualifierEntry {
+    MinicX86SourceQualifier qualify;
+    MinicX86MachineAsmForm machine_form;
+} MinicX86SourceQualifierEntry;
+
+#define X86_SOURCE(fn) {fn, MINIC_X86_MACHINE_ASM_NONE}
+#define X86_SOURCE_TYPED(fn, id) {fn, MINIC_X86_MACHINE_ASM_##id}
+static const MinicX86SourceQualifierEntry minic_x86_source_qualifiers[] = {
+    X86_SOURCE(x86_linux_crash_register_source),
+    X86_SOURCE(x86_linux_pm_trace_source),
+    X86_SOURCE(x86_linux_vmware_hypercall_source),
+    X86_SOURCE(x86_linux_vmware_stealclock_alt_source),
+    X86_SOURCE(x86_linux_kvm_hypercall_alt_source),
+    X86_SOURCE(x86_linux_exception_stack_call_source),
+    X86_SOURCE(x86_linux_legacy_fnsave_source),
+    X86_SOURCE(x86_linux_kexec_load_segments_source),
+    X86_SOURCE(x86_linux_efi_kernel_transfer_source),
+    X86_SOURCE(x86_linux_pci_mmconfig_source),
+    X86_SOURCE(x86_linux_cmpxchg128_source),
+    X86_SOURCE(x86_linux_task_size_alt_source),
+    X86_SOURCE_TYPED(x86_linux_unwind_context_source, UNWIND_CONTEXT),
+    X86_SOURCE_TYPED(x86_linux_mxcsr_source, MXCSR),
+    X86_SOURCE(x86_linux_irq_stack_call_source),
+    X86_SOURCE(x86_linux_preempt_static_call_source),
+    X86_SOURCE(x86_linux_preempt_gs_dec_source),
+    X86_SOURCE(x86_linux_gen_endbr_source),
+    X86_SOURCE(x86_linux_kaslr_mul_source),
+    X86_SOURCE(x86_linux_muldiv_u64_source),
+    X86_SOURCE(x86_linux_via_xstore_source),
+    X86_SOURCE(x86_linux_crash_segment_snapshot_source),
+    X86_SOURCE(x86_linux_task_control_source),
+    X86_SOURCE(x86_linux_iret_to_self_source),
+    X86_SOURCE(x86_linux_int3_selftest_source),
+    X86_SOURCE(x86_linux_pv_indirect_call_source),
+    X86_SOURCE(x86_linux_alt_reloc_selftest_source),
+    X86_SOURCE(x86_linux_real_mode_far_jump_source),
+    X86_SOURCE_TYPED(x86_linux_mmio_read_source, MMIO_READ),
+    X86_SOURCE_TYPED(x86_linux_mmio_write_source, MMIO_WRITE),
+    X86_SOURCE(x86_linux_rep_string_io_source),
+    X86_SOURCE(x86_linux_iomem_copy_source),
+    X86_SOURCE(x86_linux_i915_movntdqa_source),
+    X86_SOURCE(x86_linux_flushcache_copy_source),
+    X86_SOURCE_TYPED(x86_linux_atomic_xchg_source, ATOMIC_XCHG),
+    X86_SOURCE(x86_linux_pvclock_scale_source),
+    X86_SOURCE_TYPED(x86_linux_pkru_source, PKRU),
+    X86_SOURCE_TYPED(x86_linux_fdiv_bug_source, FDIV_BUG),
+    X86_SOURCE_TYPED(x86_linux_monitor_wait_source, MONITOR_WAIT),
+    X86_SOURCE_TYPED(x86_zstd_cpuid_source, ZSTD_CPUID),
+    X86_SOURCE_TYPED(x86_linux_segment_read_source, SEGMENT_READ),
+    X86_SOURCE(x86_linux_segment_load_extable_source),
+    X86_SOURCE(x86_linux_lkgs_extable_source),
+    X86_SOURCE(x86_linux_load_unaligned_zeropad_source),
+    X86_SOURCE(x86_linux_lar_selector_source),
+    X86_SOURCE_TYPED(x86_linux_random_seed_source, RANDOM_SEED),
+    X86_SOURCE_TYPED(x86_linux_fsgsbase_source, FSGSBASE),
+    X86_SOURCE(x86_linux_kernel_nofault_goto_source),
+    X86_SOURCE(x86_linux_rep_movsb_alternative_source),
+    X86_SOURCE(x86_linux_rep_stosb_alternative_source),
+    X86_SOURCE(x86_linux_fpu_user_frame_source),
+    X86_SOURCE_TYPED(x86_linux_x87_fild_prepare_source, X87_FILD_PREPARE),
+    X86_SOURCE(x86_linux_fpu_kernel_restore_source),
+    X86_SOURCE(x86_linux_fxrstor_safe_source),
+    X86_SOURCE(x86_linux_xstate_fault_source),
+    X86_SOURCE(x86_linux_xrstor_alternative_source),
+    X86_SOURCE(x86_linux_xsave_triple_alternative_source),
+    X86_SOURCE(x86_linux_smap_alternative_source),
+    X86_SOURCE(x86_linux_segment_register_extable_source),
+    X86_SOURCE(x86_linux_put_user_call_source),
+    X86_SOURCE(x86_linux_get_user_call_source),
+    X86_SOURCE(x86_linux_idle_clflush_alt_source),
+    X86_SOURCE(x86_linux_pat_clflushopt_source),
+    X86_SOURCE(x86_linux_futex_extable_source),
+    X86_SOURCE(x86_linux_verw_clear_source),
+    X86_SOURCE(x86_linux_debug_register_source),
+    X86_SOURCE_TYPED(x86_x87_probe_source, X87_PROBE),
+    X86_SOURCE(x86_fxsave_source),
+    X86_SOURCE_TYPED(x86_xsetbv_source, XSETBV),
+    X86_SOURCE(x86_linux_alternative_wrmsr_source),
+    X86_SOURCE(x86_linux_control_register_source),
+    X86_SOURCE(x86_linux_tlb_cache_source),
+    X86_SOURCE(x86_linux_three_call_alternative_source),
+    X86_SOURCE(x86_linux_boot_segments_source),
+    X86_SOURCE(x86_linux_lidt_source),
+    X86_SOURCE(x86_linux_gs_testcc_source),
+    X86_SOURCE(x86_linux_testcc_source),
+    X86_SOURCE(x86_prefetchw_alt_source),
+    X86_SOURCE(x86_apic_amd_alt_source),
+    X86_SOURCE(x86_gs_tied_alu_source),
+    X86_SOURCE(x86_linux_zero_barrier_qualifier),
+    X86_SOURCE(x86_linux_ip_here_source),
+    X86_SOURCE(x86_add32_carry_source),
+    X86_SOURCE(x86_linux_tcpudp_nofold_source),
+    X86_SOURCE(x86_percpu_gs_source),
+    X86_SOURCE(x86_ip_fast_csum_source),
+    X86_SOURCE(x86_checksum_source),
+    X86_SOURCE(x86_linux_msr_source),
+    X86_SOURCE(x86_hweight_source),
+    X86_SOURCE(x86_counter_source),
+    X86_SOURCE(x86_port_io_source),
+    X86_SOURCE(x86_linux_gs_atomic_source),
+    X86_SOURCE(x86_linux_rep_stos_source),
+    X86_SOURCE(x86_linux_lowlevel_scalar_source),
+    X86_SOURCE(x86_linux_boot_flags_source),
+    X86_SOURCE(x86_linux_delay_mul_source),
+    X86_SOURCE(x86_linux_delay_wait_source),
+    X86_SOURCE(x86_linux_identity_load_source),
+    X86_SOURCE(x86_linux_ipv6_checksum_source),
+    X86_SOURCE(x86_linux_lock_bitcc_source),
+    X86_SOURCE(x86_linux_boot_string_source),
+    X86_SOURCE(x86_linux_vdso_syscall_source),
+    X86_SOURCE(x86_linux_vdso_cpunode_source),
+    X86_SOURCE(x86_linux_csum_partial_source),
+    X86_SOURCE(x86_linux_atomic_rmw_source),
+    X86_SOURCE(x86_linux_raw_cmpxchg_source),
+    X86_SOURCE(x86_trycas_source),
+    X86_SOURCE(x86_linux_bitops_source),
 };
+#undef X86_SOURCE_TYPED
+#undef X86_SOURCE
 
 bool minic_x86_64_qualify_inline_asm(
     const MinicC0Program *program, const MinicInlineAsm *source,
@@ -8646,8 +8800,11 @@ bool minic_x86_64_qualify_inline_asm(
          i < sizeof(minic_x86_source_qualifiers) /
                  sizeof(minic_x86_source_qualifiers[0]);
          ++i) {
-        if (minic_x86_source_qualifiers[i](program, source, contract))
+        if (minic_x86_source_qualifiers[i].qualify(program, source, contract)) {
+            contract->target_machine_form_id =
+                (uint32_t)minic_x86_source_qualifiers[i].machine_form;
             return true;
+        }
     }
     if (x86_linux_atomic_cc_source(program, source)) {
         const MinicX86AtomicCCDesc *d = minic_x86_64_atomic_cc_description(

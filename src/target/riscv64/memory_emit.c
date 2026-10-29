@@ -1,5 +1,6 @@
 #include "target/riscv64/memory_emit.h"
 #include "target/riscv/record_copy_bytes.h"
+#include "target/riscv/typed_memory.h"
 #include "target/riscv64/frame_access.h"
 #include "target/riscv64/codegen_internal.h"
 #include "target/riscv64/legalize.h"
@@ -40,39 +41,53 @@ bool minic_riscv64_emit_memory_instruction(
     if (file == NULL || function == NULL || frame == NULL || instruction == NULL)
         return false;
     switch (instruction->kind) {
-    case MINIC_CORE_INSTRUCTION_LOAD:
+    case MINIC_CORE_INSTRUCTION_LOAD: {
+        const size_t guaranteed = minic_riscv_address_alignment(
+            program, minic_default_data_layout(), function,
+            instruction->value.load.address);
         if (minic_type_is_int128_integer(instruction->type) ||
             minic_type_is_long_double(instruction->type)) {
             if (!minic_riscv64_frame_load_value(file, frame, instruction->value.load.address, "t0") ||
-                fprintf(file, "  ld t1, 0(t0)\n  ld t2, 8(t0)\n") < 0) {
+                !minic_riscv_emit_typed_word_pair(
+                    file, false, 64U, "t1", "t2", "t0", "t3",
+                    guaranteed, "rv64_memory")) {
                 return false;
             }
             return minic_riscv64_frame_store_int128(file, frame, instruction->result, "t1", "t2");
         }
         if (!minic_riscv64_frame_load_value(file, frame, instruction->value.load.address, "t0") ||
-            !minic_riscv64_emit_scalar_load_for_program(
-                file, program, instruction->type, "t1", "t0")) {
+            !minic_riscv64_emit_safe_scalar_load(
+                file, program, instruction->type, "t1", "t0", "t3",
+                guaranteed)) {
             return false;
         }
         return minic_riscv64_frame_store_value(file, frame, instruction->result, "t1");
+    }
     case MINIC_CORE_INSTRUCTION_STORE: {
         MinicCoreValueId stored_value;
         MinicType stored_type;
+        size_t guaranteed;
 
         stored_value = instruction->value.store.stored_value;
         if (stored_value >= function->value_count) {
             return false;
         }
         stored_type = function->values[stored_value].type;
+        guaranteed = minic_riscv_address_alignment(
+            program, minic_default_data_layout(), function,
+            instruction->value.store.address);
         if (minic_type_is_int128_integer(stored_type) ||
             minic_type_is_long_double(stored_type)) {
             return minic_riscv64_frame_load_value(file, frame, instruction->value.store.address, "t0") &&
                    minic_riscv64_frame_load_int128(file, frame, stored_value, "t1", "t2") &&
-                   fprintf(file, "  sd t1, 0(t0)\n  sd t2, 8(t0)\n") >= 0;
+                   minic_riscv_emit_typed_word_pair(
+                       file, true, 64U, "t1", "t2", "t0", "t3",
+                       guaranteed, "rv64_memory");
         }
         return minic_riscv64_frame_load_value(file, frame, instruction->value.store.address, "t0") &&
                minic_riscv64_frame_load_value(file, frame, stored_value, "t1") &&
-               minic_riscv64_emit_scalar_store_for_program(file, program, stored_type, "t1", "t0");
+               minic_riscv64_emit_safe_scalar_store(
+                   file, program, stored_type, "t1", "t0", "t3", guaranteed);
     }
     case MINIC_CORE_INSTRUCTION_RECORD_LOAD: {
         size_t destination_offset;

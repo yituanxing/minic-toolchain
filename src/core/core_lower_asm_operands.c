@@ -32,6 +32,8 @@ bool core_asm_publish_operand_plan(MinicCoreInstruction *instruction,
     }
     stored->operand_plan_owner = plan->owner;
     stored->source_form_id = plan->source_form_id;
+    stored->target_machine_form_id = plan->target_machine_form_id;
+    stored->target_machine_form_variant = plan->target_machine_form_variant;
     stored->source_output_count = plan->output_count;
     stored->explicit_memory_clobber = plan->explicit_memory_clobber;
     stored->implicit_memory_effect = plan->implicit_memory_effect;

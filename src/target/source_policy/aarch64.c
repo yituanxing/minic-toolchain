@@ -114,3 +114,20 @@ const MinicTargetSourceLanguagePolicy minic_aarch64_source_language_policy = {
     .header_opaque_return = aarch_header_opaque_return,
     .header_attribute = aarch_header_attribute,
 };
+
+/* AAPCS64 builtin va_list currently uses an unqualified void* source
+ * cursor. Only that exact proxy shape qualifies for the 32-byte ABI-state
+ * snapshot; integer/object pointers and const/volatile cursor bindings
+ * must not receive it. Distinguishing an unrelated void* variable from a
+ * builtin va_list typedef requires a future distinct frontend C identity. */
+static bool aarch_va_cursor_state_copy_type(MinicType type) {
+    MinicType pointee;
+    return minic_type_pointee(type, &pointee) &&
+           minic_type_is_void(pointee) &&
+           !minic_type_is_const(type) &&
+           !minic_type_is_volatile(type);
+}
+
+const MinicTargetVaCursorSourceAbiPolicy minic_aarch64_va_cursor_source_abi_policy = {
+    .state_copy_source_type_supported = aarch_va_cursor_state_copy_type,
+};

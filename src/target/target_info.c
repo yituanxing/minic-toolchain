@@ -218,6 +218,7 @@ static const MinicTargetLanguageDescriptor minic_language_x86_64 = {
         .target = {
             .asm_source_policy = &minic_x86_64_asm_source_policy,
             .source_language_policy = &minic_x86_64_source_language_policy,
+            .va_cursor_source_abi_policy = &minic_x86_64_va_cursor_source_abi_policy,
             .integer_model = &minic_lp64_signed_char_integer_model,
             .word_integer_rank = MINIC_INTEGER_RANK_LONG,
             .language_type_capabilities = MINIC_TARGET_LANG_EXTENDED_FLOAT_DECLARATIONS |
@@ -242,6 +243,7 @@ static const MinicTargetLanguageDescriptor minic_language_aarch64 = {
         .target = {
             .asm_source_policy = &minic_aarch64_asm_source_policy,
             .source_language_policy = &minic_aarch64_source_language_policy,
+            .va_cursor_source_abi_policy = &minic_aarch64_va_cursor_source_abi_policy,
             .integer_model = &minic_lp64_unsigned_char_integer_model,
             .word_integer_rank = MINIC_INTEGER_RANK_LONG,
             .language_type_capabilities = MINIC_TARGET_LANG_EXTENDED_FLOAT_DECLARATIONS |
@@ -611,14 +613,19 @@ bool minic_target_info_sizeof_type(const MinicTargetInfo *target,
     if (target == NULL || program == NULL || size == NULL) {
         return false;
     }
-    /* The x86 runtime cursor proxy occupies one machine pointer but
-     * __builtin_va_list is really struct __va_list_tag[1] (24 bytes).
-     * Until that array object/parameter ABI model exists, never return 8
-     * for sizeof(va_list) or sizeof(local_va_list). This catches typedefs
-     * and expressions, unlike spelling-based parser diagnostics. */
-    if (minic_type_is_x86_va_list_cursor(type) &&
-        target->architecture == MINIC_TARGET_ARCH_X86_64) {
-        return false;
+    /* A target may have an internal pointer-sized proxy whose source C
+     * sizeof does not equal the backing ABI state. Do not let the generic
+     * DataLayout invent that size; all other C types still use DataLayout. */
+    if (minic_type_builtin_declaration_role(type.base_kind) ==
+        MINIC_BUILTIN_DECLARATION_ABI_CURSOR) {
+        /* A foreign or unregistered ABI cursor cannot inherit pointer
+         * layout silently. A target with a complete source representation
+         * may explicitly permit sizes through its own registered policy. */
+        if (!minic_target_info_language_type_supported(target, type.base_kind) ||
+            target->va_cursor_source_abi_policy == NULL ||
+            target->va_cursor_source_abi_policy->sizeof_proxy_forbidden == NULL ||
+            target->va_cursor_source_abi_policy->sizeof_proxy_forbidden(type))
+            return false;
     }
     if (minic_type_is_void(type)) {
         if (!target->gnu_sizeof_void_is_one) {
@@ -942,20 +949,9 @@ bool minic_target_info_variadic_state_copy_type_supported(
     const MinicTargetInfo *target, MinicType type) {
     if (!target || target->variadic_copy_kind != MINIC_VARIADIC_COPY_ABI_STATE)
         return false;
-    switch (target->architecture) {
-    case MINIC_TARGET_ARCH_X86_64:
-        return minic_type_is_x86_va_list_cursor(type);
-    case MINIC_TARGET_ARCH_AARCH64: {
-        MinicType pointee;
-        /* Only MiniC's canonical void* builtin proxy is a qualified
-         * AAPCS64 cursor; an arbitrary source pointer must not acquire
-         * a hidden 32-byte copy ABI by accident. */
-        return minic_type_pointee(type, &pointee) &&
-               minic_type_is_void(pointee) &&
-               !minic_type_is_const(type) &&
-               !minic_type_is_volatile(type);
-    }
-    default:
-        return false;
-    }
+    /* Source C cursor identity is target-owned. This does not select the
+     * actual Core state-copy opcode or machine implementation. */
+    return target->va_cursor_source_abi_policy != NULL &&
+           target->va_cursor_source_abi_policy->state_copy_source_type_supported != NULL &&
+           target->va_cursor_source_abi_policy->state_copy_source_type_supported(type);
 }

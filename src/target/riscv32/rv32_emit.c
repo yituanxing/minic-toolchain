@@ -12,6 +12,7 @@
 #include "target/common/core_instruction_family.h"
 #include "target/riscv/instruction_select.h"
 #include "target/riscv/register_identity.h"
+#include "target/riscv/typed_memory.h"
 #include "target/riscv32/rv32_abi_cursor.h"
 #include "target/riscv/function_symbol.h"
 #include "target/riscv32/rv32_global_emit.h"
@@ -278,8 +279,34 @@ static bool rv32_emit_source_legacy_asm(
  * neither frame accesses nor early-clobber outputs alias a live asm operand.
  * Fixed-register bindings and explicit register clobbers need a separate
  * target allocation plan, and remain rejected until one is available. */
+static bool rv32_emit_source_asm_scalar_transfer(
+    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *f, MinicCoreValueId address,
+    MinicType value_type, bool store, const char *value_register,
+    const char *address_register, const char *scratch_register) {
+    unsigned bits;
+    bool is_signed;
+    const char *opcode;
+    size_t known_alignment;
+    if (out == NULL || program == NULL || target == NULL ||
+        target->data_layout == NULL || f == NULL ||
+        !rv32_scalar(f, value_type, &bits, &is_signed))
+        return false;
+    opcode = store
+        ? (bits <= 8U ? "sb" : bits <= 16U ? "sh" : "sw")
+        : (bits <= 8U ? (is_signed ? "lb" : "lbu") :
+           bits <= 16U ? (is_signed ? "lh" : "lhu") : "lw");
+    known_alignment = minic_riscv_address_alignment(
+        program, target->data_layout, f, address);
+    return minic_riscv_emit_typed_memory(
+        out, store, 32U, bits <= 8U ? 1U : bits / 8U,
+        !store && is_signed, opcode, value_register, address_register,
+        scratch_register, known_alignment, "rv32_asm");
+}
+
 static bool rv32_emit_source_structured_asm(
-    FILE *out, const MinicCoreFunction *f, const Rv32Frame *fr,
+    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *f, const Rv32Frame *fr,
     const MinicCoreInstruction *ins) {
     const MinicCoreInlineAsm *source;
     static const char *const regs[] = {
@@ -407,8 +434,9 @@ static bool rv32_emit_source_structured_asm(
                         return false;
                     if (b->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE &&
                         (!rv32_slot(out, fr, b->value, "t0", true) ||
-                         fprintf(out, "  lw %s, 0(t0)\n",
-                                 abi_registers[reg_index]) < 0))
+                         !rv32_emit_source_asm_scalar_transfer(
+                             out, program, target, f, b->value, pointee,
+                             false, abi_registers[reg_index], "t0", "t6")))
                         return false;
                 } else {
                     return false;
@@ -421,9 +449,12 @@ static bool rv32_emit_source_structured_asm(
                     &ins->value.structured_inline_asm.operands[i];
                 if (b->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE ||
                     b->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT) {
-                    if (!rv32_slot(out, fr, b->value, "t0", true) ||
-                        fprintf(out, "  sw %s, 0(t0)\n",
-                                bindings[b->operand_index]) < 0)
+                    MinicType pointee;
+                    if (!minic_type_pointee(f->values[b->value].type, &pointee) ||
+                        !rv32_slot(out, fr, b->value, "t0", true) ||
+                        !rv32_emit_source_asm_scalar_transfer(
+                            out, program, target, f, b->value, pointee,
+                            true, bindings[b->operand_index], "t0", "t6"))
                         return false;
                 }
             }
@@ -502,13 +533,12 @@ static bool rv32_emit_source_structured_asm(
             unsigned bits;
             bool is_signed;
             MinicType pointee;
-            const char *load;
             if (!minic_type_pointee(f->values[b->value].type, &pointee) ||
                 !rv32_scalar(f, pointee, &bits, &is_signed))
                 return false;
-            load = bits == 8U ? (is_signed ? "lb" : "lbu") :
-                   bits == 16U ? (is_signed ? "lh" : "lhu") : "lw";
-            if (fprintf(out, "  %s %s, 0(a2)\n", load, reg) < 0)
+            if (!rv32_emit_source_asm_scalar_transfer(
+                    out, program, target, f, b->value, pointee,
+                    false, reg, "a2", "t6"))
                 return false;
         }
     }
@@ -520,7 +550,6 @@ static bool rv32_emit_source_structured_asm(
         unsigned bits = 0U;
         bool is_signed;
         MinicType pointee;
-        const char *store;
         if (b->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT &&
             b->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE)
             continue;
@@ -528,16 +557,22 @@ static bool rv32_emit_source_structured_asm(
             (!rv32_scalar(f, pointee, &bits, &is_signed) &&
              !rv32_is_wide_integer(f, pointee)))
             return false;
-        store = bits == 8U ? "sb" : bits == 16U ? "sh" : "sw";
-        if (!rv32_slot(out, fr, b->value, "a2", true) ||
-            fprintf(out, "  %s %s, 0(a2)\n", store, regs[b->operand_index]) < 0)
+        if (!rv32_slot(out, fr, b->value, "a2", true))
             return false;
         /* GNU ILP32 permits a long-long register output; the source template
          * can designate its low register via %N.  A template which only
          * writes that low word leaves the upper register unspecified; choose
          * zero as a stable value for the otherwise uninitialized half. */
-        if (rv32_is_wide_integer(f, pointee) &&
-            fprintf(out, "  sw zero, 4(a2)\n") < 0)
+        if (rv32_is_wide_integer(f, pointee)) {
+            size_t proven_alignment = minic_riscv_address_alignment(
+                program, target->data_layout, f, b->value);
+            if (!minic_riscv_emit_typed_word_pair(
+                    out, true, 32U, regs[b->operand_index], "zero", "a2",
+                    "t6", proven_alignment, "rv32_asm"))
+                return false;
+        } else if (!rv32_emit_source_asm_scalar_transfer(
+                       out, program, target, f, b->value, pointee,
+                       true, regs[b->operand_index], "a2", "t6"))
             return false;
     }
     return true;
@@ -559,7 +594,8 @@ static bool rv32_emit_ins(FILE *out, const MinicC0Program *program,
     if (family == MINIC_CORE_FAMILY_INTEGER_SCALAR ||
         family == MINIC_CORE_FAMILY_OVERFLOW ||
         family == MINIC_CORE_FAMILY_BITCAST)
-        return rv32_emit_integer_instruction(out, f, fr, ins, symbol);
+        return rv32_emit_integer_instruction(out, program, target, f, fr,
+                                             ins, symbol);
     if (family == MINIC_CORE_FAMILY_FLOATING_SCALAR)
         return rv32_emit_fp_instruction(out, f, fr, ins);
     switch (ins->kind) {
@@ -613,7 +649,7 @@ static bool rv32_emit_ins(FILE *out, const MinicC0Program *program,
     case MINIC_CORE_INSTRUCTION_SCALAR_INPUT_INLINE_ASM:
         return rv32_emit_source_legacy_asm(out, f, fr, ins);
     case MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM:
-        return rv32_emit_source_structured_asm(out, f, fr, ins);
+        return rv32_emit_source_structured_asm(out, program, target, f, fr, ins);
     case MINIC_CORE_INSTRUCTION_COMPILER_BARRIER:
         return true;
     case MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS: {

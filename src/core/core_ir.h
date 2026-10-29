@@ -280,6 +280,10 @@ typedef struct MinicCoreInlineAsm {
      * the machine emitter must still validate its ISA-specific semantics. */
     MinicAsmOperandPlanOwner operand_plan_owner;
     uint64_t source_form_id;
+    /* Opaque target-produced ASM dispatch facts. A source hash is only
+     * provenance; it must never be interpreted as this machine form ID. */
+    uint32_t target_machine_form_id;
+    uint32_t target_machine_form_variant;
     size_t source_output_count;
     bool explicit_memory_clobber;
     bool implicit_memory_effect;

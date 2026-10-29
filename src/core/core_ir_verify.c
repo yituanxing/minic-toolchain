@@ -696,6 +696,10 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
                  MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED &&
              inline_asm->operand_plan_owner !=
                  MINIC_ASM_OPERAND_PLAN_GENERIC_STRUCTURED)) return false;
+        if ((inline_asm->target_machine_form_id != 0U &&
+             inline_asm->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED) ||
+            (inline_asm->target_machine_form_id == 0U &&
+             inline_asm->target_machine_form_variant != 0U)) return false;
         if (inline_asm->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_NONE &&
             (inline_asm->source_output_count >
                  instruction->value.structured_inline_asm.operand_count ||

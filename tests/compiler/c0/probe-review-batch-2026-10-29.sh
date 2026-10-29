@@ -34,8 +34,15 @@ sh tests/compiler/c0/probe-rv64-hardfloat-fp-record-reject.sh
 sh tests/compiler/c0/probe-rv64-lp64-softfloat-record-call.sh
 sh tests/compiler/c0/probe-loongarch64-packed-scalar-alignment.sh
 sh tests/compiler/c0/probe-loongarch64-syscall-alias-policy.sh
+sh tests/compiler/c0/probe-loongarch64-vararg-int128-pair.sh
+bash tests/compiler/c0/probe-loongarch64-packed-asm-output.sh "$mini"
 bash tests/compiler/c0/probe-data-layout-zero-size-reloc.sh
+sh tests/compiler/c0/run-alignof-expression.sh
+sh tests/compiler/c0/run-packed-record-layout.sh
 sh tests/compiler/c0/probe-x86-immediate-qualification.sh
+bash tests/target/run-x86-typed-asm-forms.sh
+bash tests/compiler/c0/probe-x86-typed-mmio-atomic-oracle.sh "$mini"
+bash tests/compiler/c0/probe-x86-typed-machine-qualification-gaps.sh "$mini"
 sh tests/compiler/c0/probe-x86-sysv-integer-record-tree.sh
 bash tests/compiler/c0/probe-gnu-variadic-restart.sh
 bash tests/compiler/c0/probe-target-gnu-earlyclobber-transport.sh "$mini"
@@ -49,7 +56,12 @@ bash tests/compiler/c0/probe-core-asm-empty-rk.sh
 bash tests/compiler/c0/probe-core-asm-nonvolatile-rk.sh
 bash tests/compiler/c0/probe-core-asm-zero-stride.sh
 sh tests/compiler/c0/probe-rv32-target-gate.sh
+sh tests/compiler/c0/probe-rv32-packed-scalar-alignment.sh
+sh tests/compiler/c0/probe-riscv-packed-overflow-alignment.sh
+sh tests/compiler/c0/probe-rv64-packed-wide-alignment.sh
+sh tests/compiler/c0/probe-riscv-packed-structured-asm-alignment.sh
 bash tests/compiler/c0/probe-aarch64-typed-frame-path.sh "$mini"
+bash tests/compiler/c0/probe-aarch64-variadic-incoming-stack.sh
 sh tests/compiler/c0/probe-aarch64-linux-kexec-crash-regs.sh
 
 echo 'MINIC_REVIEW_BATCH=PASS native_oracles=1 five_target_source=1 no_runtime_overclaim=1'

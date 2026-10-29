@@ -711,6 +711,12 @@
       "review_depth": "inventory",
       "ci_touched_in": []
     },
+    "src/target/riscv/typed_memory.h": {
+      "blob": "1a3b83d20dfa39b766a21796bf65e0784720cdbd",
+      "review_depth": "targeted",
+      "ci_touched_in": [],
+      "note": "2026-10-29: shared RV32/RV64 Base-I typed scalar transport reviewed for unknown address alignment and split wide words; GNU-native and five-ISA compile probes included in batch21."
+    },
     "src/target/riscv/word_operations.c": {
       "blob": "0a60a585c911c308ab68a98ee7f36e5222612db1",
       "review_depth": "inventory",

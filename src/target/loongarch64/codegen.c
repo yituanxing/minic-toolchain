@@ -23,6 +23,7 @@ static const MinicDirectLP64AbiPolicy loongarch64_abi_policy = {
     .long_double_in_fp_register = false,
     .variadic_floating_in_fp_register = false,
     .variadic_named_double_supported = false,
+    .variadic_align_wide_gp_pair = true,
     .variadic_cursor = MINIC_DIRECT_LP64_VARIADIC_LINEAR_GP,
     .variadic_save_bytes = 64U,
     .variadic_save_alignment = 8U,

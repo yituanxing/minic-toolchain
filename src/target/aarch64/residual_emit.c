@@ -71,8 +71,10 @@ bool minic_aarch64_emit_residual_instruction(
     id = ctx->id;
     frame = ctx->frame;
     va_base = ctx->va_base;
-    va_fp = ctx->va_fp;
-    va_gp = ctx->va_gp;
+    /* Named stack arguments can exhaust either register bank. AAPCS64
+     * encodes exhausted banks as offset zero, never a positive offset. */
+    va_fp = ctx->va_fp < 8U ? ctx->va_fp : 8U;
+    va_gp = ctx->va_gp < 8U ? ctx->va_gp : 8U;
     va_count = ctx->va_count;
     reject_block = block_id;
     reject_ins = (size_t)ins_id;
@@ -578,7 +580,8 @@ bool minic_aarch64_emit_residual_instruction(
         }
         case MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS: {
             size_t seen = 0U, i, cursor_offset;
-            const size_t stack_top = frame;
+            MinicA64FrameRef first_unnamed_stack_arg;
+            const MinicA64ScratchPolicy entry_sp_scratch = {0U, 0U};
             const size_t gr_top = va_base + 96U;
             const size_t vr_top = va_base + 224U;
             for (i = 0U; i < ins_id; ++i)
@@ -586,12 +589,22 @@ bool minic_aarch64_emit_residual_instruction(
                     MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS)
                     ++seen;
             if (va_count == 0U || seen >= va_count ||
+                ctx->incoming_plan == NULL ||
+                ctx->incoming_plan->stack_slots > SIZE_MAX / 8U ||
                 !minic_type_is_pointer(ins->type) ||
                 ins->result >= fn->value_count ||
                 (seen != 0U && frame < (va_count - seen) * 32U))
                 return minic_multi_direct_machine_reject(fn, "aarch64", name,
                                            reject_stage, reject_block,
                                            reject_ins, __LINE__);
+            /* Named fixed parameters may themselves consume incoming stack
+             * slots after the x0..x7/v0..v7 banks are exhausted. The
+             * vararg cursor starts AFTER those slots, matching the same
+             * AAPCS64 argument planner used by the caller. */
+            first_unnamed_stack_arg = (MinicA64FrameRef){
+                MINIC_A64_FRAME_INCOMING,
+                ctx->incoming_plan->stack_slots * 8U
+            };
             cursor_offset = seen == 0U ? va_base
                 : frame - (va_count - seen) * 32U;
             if (ins->value.variadic_address.copy_destination) {
@@ -611,8 +624,15 @@ bool minic_aarch64_emit_residual_instruction(
                 return minic_multi_direct_machine_reject(fn, "aarch64", name,
                                            reject_stage, reject_block,
                                            reject_ins, __LINE__);
-            if (!minic_a64_emit_owned_address(out, &frame_view,
-                    stack_top, 10U) ||
+            /* The prologue first pushes the 16-byte x29/x30 record and
+             * THEN subtracts `frame`. Thus owned [sp + frame] names that
+             * record, not the caller's first stack-passed argument.
+             * FrameRef INCOMING owns the +16 transition and, for dynamic
+             * over-aligned locals, recovers the saved entry SP instead of
+             * incorrectly reconstructing it relative to live x19. Its
+             * offset additionally skips every named stack argument. */
+            if (!minic_a64_emit_frame_address(out, &frame_view,
+                    first_unnamed_stack_arg, 10U, entry_sp_scratch) ||
                 fputs("  str x10, [x9]\n", out) == EOF)
                 return minic_multi_direct_machine_reject(fn, "aarch64", name,
                                            reject_stage, reject_block,

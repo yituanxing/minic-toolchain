@@ -1,9 +1,19 @@
 #include "target/riscv32/rv32_internal.h"
 #include "target/riscv/record_copy_bytes.h"
+#include "target/riscv/typed_memory.h"
 #include "target/riscv/instruction_select.h"
 #include "target/data_layout.h"
 #include <inttypes.h>
 #include <stdint.h>
+
+/* ILP32 wide scalar is two consecutive little-endian words.  A runtime
+ * alignment check is needed for unknown typed pointers, not just explicit
+ * FIELD_ADDRESS: a packed member can escape and later be loaded through a
+ * regular long-long pointer.  The byte path uses only Base-I lbu/sb. */
+static bool rv32_wide_memory(FILE *out, bool store, size_t alignment) {
+    return minic_riscv_emit_typed_word_pair(out, store, 32U,
+        "t1", "t2", "t0", "t3", alignment, "rv32_memory");
+}
 
 /* Addressing, ILP32 memory and aggregate transport. Core's record layout
  * is obtained through target DataLayout, never host sizeof or LP64 slots. */
@@ -13,6 +23,7 @@ bool rv32_emit_memory_instruction(FILE *out, const MinicC0Program *program,
                                   const Rv32Frame *fr,
                                   const MinicCoreInstruction *ins) {
     unsigned bits;
+    size_t access_alignment;
     if (out == NULL || program == NULL || target == NULL ||
         f == NULL || fr == NULL || ins == NULL) return false;
     switch (ins->kind) {
@@ -60,13 +71,15 @@ bool rv32_emit_memory_instruction(FILE *out, const MinicC0Program *program,
                rv32_slot(out, fr, ins->result, "t0", false);
     }
     case MINIC_CORE_INSTRUCTION_LOAD:
+        access_alignment = minic_riscv_address_alignment(program, target->data_layout, f,
+                                          ins->value.load.address);
         if (rv32_scalar_storage_words(f, ins->type, &bits) && bits == 2U)
             return rv32_slot(out, fr, ins->value.load.address, "t0", true) &&
-                   fprintf(out, "  lw t1, 0(t0)\n  lw t2, 4(t0)\n") >= 0 &&
+                   rv32_wide_memory(out, false, access_alignment) &&
                    rv32_pair_slot(out, fr, ins->result,
                                   "t1", "t2", false);
         return rv32_slot(out, fr, ins->value.load.address, "t0", true) &&
-               rv32_load_mem(out, f, ins->type, "t1") &&
+               rv32_load_mem(out, f, ins->type, "t1", access_alignment) &&
                rv32_slot(out, fr, ins->result, "t1", false);
     case MINIC_CORE_INSTRUCTION_DYNAMIC_STACK_ALLOC: {
         /* Fixed SSA and locals use s0. Each dynamic allocation leaves a
@@ -100,6 +113,8 @@ bool rv32_emit_memory_instruction(FILE *out, const MinicC0Program *program,
             rv32_slot(out, fr, ins->result, "t0", false);
     }
     case MINIC_CORE_INSTRUCTION_STORE:
+        access_alignment = minic_riscv_address_alignment(program, target->data_layout, f,
+                                          ins->value.store.address);
         if (ins->value.store.stored_value < f->value_count &&
             rv32_scalar_storage_words(
                 f, f->values[ins->value.store.stored_value].type, &bits) &&
@@ -107,11 +122,12 @@ bool rv32_emit_memory_instruction(FILE *out, const MinicC0Program *program,
             return rv32_slot(out, fr, ins->value.store.address, "t0", true) &&
                    rv32_pair_slot(out, fr, ins->value.store.stored_value,
                                   "t1", "t2", true) &&
-                   fprintf(out, "  sw t1, 0(t0)\n  sw t2, 4(t0)\n") >= 0;
+                   rv32_wide_memory(out, true, access_alignment);
         return ins->value.store.stored_value < f->value_count &&
                rv32_slot(out, fr, ins->value.store.address, "t0", true) &&
                rv32_slot(out, fr, ins->value.store.stored_value, "t1", true) &&
-               rv32_store_mem(out, f, f->values[ins->value.store.stored_value].type);
+               rv32_store_mem(out, f,
+                   f->values[ins->value.store.stored_value].type, access_alignment);
     case MINIC_CORE_INSTRUCTION_RECORD_COPY: {
         size_t copy_size, alignment;
         if (!minic_type_is_record(ins->type) ||

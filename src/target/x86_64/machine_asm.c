@@ -582,9 +582,9 @@ static bool emit_linux_mmio_read(
     const MinicCoreStructuredInlineAsmOperand *b =
         ins->value.structured_inline_asm.operands;
     MinicType pointee;
-    const unsigned int width = info ? minic_x86_64_linux_mmio_read_form(
-        info->template_text, info->template_length) : 0U;
-    if (!out || !fn || !frame || !ins || !info || !b || !width ||
+    const unsigned int width = info ? info->target_machine_form_variant : 0U;
+    if (!out || !fn || !frame || !ins || !info || !b ||
+        (width != 1U && width != 2U && width != 4U && width != 8U) ||
         !info->is_volatile || info->is_goto || !info->has_memory_clobber ||
         info->register_clobber_count ||
         ins->value.structured_inline_asm.operand_count != 2U ||
@@ -618,9 +618,9 @@ static bool emit_linux_mmio_write(
     const MinicCoreStructuredInlineAsmOperand *b =
         ins->value.structured_inline_asm.operands;
     MinicType pointee;
-    const unsigned int width = info ? minic_x86_64_linux_mmio_write_form(
-        info->template_text, info->template_length) : 0U;
-    if (!out || !fn || !frame || !ins || !info || !b || !width ||
+    const unsigned int width = info ? info->target_machine_form_variant : 0U;
+    if (!out || !fn || !frame || !ins || !info || !b ||
+        (width != 1U && width != 2U && width != 4U && width != 8U) ||
         !info->is_volatile || info->is_goto || !info->has_memory_clobber ||
         info->register_clobber_count ||
         ins->value.structured_inline_asm.operand_count != 2U ||
@@ -929,15 +929,15 @@ static bool emit_linux_atomic_xchg(
     };
     const MinicCoreStructuredInlineAsmOperand *b =
         ins->value.structured_inline_asm.operands;
-    const unsigned int width = info ? minic_x86_64_linux_atomic_xchg_form(
-        info->template_text, info->template_length) : 0U;
+    const unsigned int width = info ? info->target_machine_form_variant : 0U;
     const size_t index = width == 1U ? 0U : width == 2U ? 1U :
                          width == 4U ? 2U : 3U;
     MinicType reg_type, mem_type;
     size_t reg_bytes, mem_bytes;
     bool reg_signed, mem_signed;
     if (!out || !program || !target || !fn || !frame || !ins || !info ||
-        !b || !width || !info->is_volatile || info->is_goto ||
+        !b || (width != 1U && width != 2U && width != 4U && width != 8U) ||
+        !info->is_volatile || info->is_goto ||
         !info->has_memory_clobber || info->register_clobber_count != 1U ||
         ins->value.structured_inline_asm.operand_count != 2U ||
         b[0].operand_index || b[1].operand_index != 1U ||
@@ -2475,8 +2475,6 @@ static bool emit_linux_xsetbv(FILE *out, const MinicC0Program *program,
     size_t count, i;
     if (!out || !program || !target || !function || !frame ||
         !instruction || !source || !source->template_text ||
-        source->template_length != 6U ||
-        memcmp(source->template_text, "xsetbv", 6U) != 0 ||
         !source->is_volatile || source->is_goto ||
         source->has_memory_clobber || source->register_clobber_count != 0U)
         return false;
@@ -2543,8 +2541,6 @@ static bool emit_linux_x87_probe(FILE *out,
     const MinicCoreStructuredInlineAsmOperand *bindings;
     size_t i;
     if (!out || !function || !frame || !instruction || !source ||
-        !minic_x86_64_linux_x87_probe_form(
-            source->template_text, source->template_length) ||
         !source->is_volatile || source->is_goto ||
         !source->has_memory_clobber || source->register_clobber_count != 0U ||
         instruction->value.structured_inline_asm.operand_count != 2U)
@@ -3864,8 +3860,7 @@ static bool emit_linux_monitor_wait(
         "  .byte 0x0f, 0x01, 0xfb\n",
         "  sti\n  .byte 0x0f, 0x01, 0xc9\n"
     };
-    const unsigned int form = minic_x86_64_linux_monitor_wait_form(
-        info->template_text, info->template_length);
+    const unsigned int form = info->target_machine_form_variant;
     const size_t count = form == 1U || form == 2U || form == 4U ? 3U : 2U;
     const char *const *regs = form == 4U ? regs_abc : regs_acd;
     const MinicCoreStructuredInlineAsmOperand *b =
@@ -3898,8 +3893,7 @@ static bool emit_linux_monitor_wait(
 static bool emit_linux_segment_read(
     FILE *out, const MinicCoreFunction *fn, const MinicX86Frame *frame,
     const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
-    const unsigned int selector = minic_x86_64_linux_segment_read_form(
-        info->template_text, info->template_length);
+    const unsigned int selector = info->target_machine_form_variant;
     const bool short_selector = selector <= 2U || selector >= 7U;
     const MinicCoreStructuredInlineAsmOperand *op =
         ins->value.structured_inline_asm.operands;
@@ -4013,8 +4007,7 @@ static bool emit_linux_fsgsbase(
     static const char *const mnemonics[] = {
         "rdfsbase", "rdgsbase", "wrfsbase", "wrgsbase"
     };
-    const unsigned int form = minic_x86_64_linux_fsgsbase_form(
-        info->template_text, info->template_length);
+    const unsigned int form = info->target_machine_form_variant;
     const bool reading = form <= 2U;
     const MinicCoreStructuredInlineAsmOperand *op =
         ins->value.structured_inline_asm.operands;
@@ -4304,8 +4297,7 @@ static bool emit_linux_lar_selector(
 static bool emit_linux_random_seed(
     FILE *out, const MinicCoreFunction *fn, const MinicX86Frame *frame,
     const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
-    const unsigned int form = minic_x86_64_linux_random_seed_form(
-        info->template_text, info->template_length);
+    const unsigned int form = info->target_machine_form_variant;
     const MinicCoreStructuredInlineAsmOperand *b =
         ins->value.structured_inline_asm.operands;
     MinicType type;
@@ -4557,8 +4549,6 @@ static bool emit_linux_unwind_context(
         ins->value.structured_inline_asm.operands;
     size_t i;
     if (!out || !fn || !frame || !info ||
-        !minic_x86_64_linux_unwind_context_form(
-            info->template_text, info->template_length) ||
         !info->is_volatile || info->is_goto || info->has_memory_clobber ||
         info->register_clobber_count != 0U ||
         ins->value.structured_inline_asm.operand_count != 3U || !b)
@@ -4582,12 +4572,11 @@ static bool emit_linux_unwind_context(
 static bool emit_linux_mxcsr(
     FILE *out, const MinicCoreFunction *fn, const MinicX86Frame *frame,
     const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
-    const unsigned int form = minic_x86_64_linux_mxcsr_form(
-        info->template_text, info->template_length);
+    const unsigned int form = info->target_machine_form_variant;
     const MinicCoreStructuredInlineAsmOperand *b =
         ins->value.structured_inline_asm.operands;
     MinicType plain;
-    if (!out || !fn || !frame || !info || form == 0U ||
+    if (!out || !fn || !frame || !info || (form != 1U && form != 2U) ||
         !info->is_volatile || info->is_goto || info->register_clobber_count ||
         ins->value.structured_inline_asm.operand_count != 1U || !b ||
         b[0].operand_index != 0U || b[0].early_clobber ||
@@ -4609,8 +4598,6 @@ static bool emit_linux_x87_fild_prepare(
         ins->value.structured_inline_asm.operands;
     MinicType type;
     if (!out || !fn || !frame || !info ||
-        !minic_x86_64_linux_x87_fild_prepare_form(
-            info->template_text, info->template_length) ||
         !info->is_volatile || info->is_goto || !info->has_memory_clobber ||
         ins->value.structured_inline_asm.operand_count != 1U || !b ||
         b[0].operand_index != 0U ||
@@ -5459,8 +5446,7 @@ static bool emit_linux_pkru(
         MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT,
         MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT
     };
-    const unsigned int form = info ? minic_x86_64_linux_pkru_form(
-        info->template_text, info->template_length) : 0U;
+    const unsigned int form = info ? info->target_machine_form_variant : 0U;
     const bool read = form == 1U;
     const MinicCoreStructuredInlineAsmOperand *bindings =
         ins->value.structured_inline_asm.operands;
@@ -5520,8 +5506,6 @@ static bool emit_linux_fdiv_bug(
     MinicType pointee;
     size_t i;
     if (!out || !fn || !frame || !info ||
-        !minic_x86_64_linux_fdiv_bug_form(
-            info->template_text, info->template_length) ||
         !info->is_volatile || info->is_goto || !info->has_memory_clobber ||
         info->register_clobber_count ||
         ins->value.structured_inline_asm.operand_count != 3U || !b)
@@ -5578,9 +5562,7 @@ static bool emit_zstd_cpuid(
     const size_t count = ins->value.structured_inline_asm.operand_count;
     size_t form, i, bytes;
     bool sign;
-    if (info->template_length != 5U ||
-        memcmp(info->template_text, "cpuid", 5U) != 0 ||
-        info->has_memory_clobber ||
+    if (info->has_memory_clobber ||
         !info->register_clobbers)
         return false;
     for (form = 0U; form < 3U; ++form) {
@@ -5651,6 +5633,52 @@ bool minic_x86_64_emit_structured_asm(
     bindings = ins->value.structured_inline_asm.operands;
     if (!info->template_text)
         return false;
+    /* Only the target qualifier can publish an opcode family. Core transports
+     * the result without interpreting ISA data; the source_form_id fingerprint
+     * stays independent. Unknown typed IDs must fail closed, never fall back
+     * to the legacy text recognizer. Every emitter still checks Core operands. */
+    if (info->target_machine_form_id != MINIC_X86_MACHINE_ASM_NONE) {
+        if (info->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED)
+            return false;
+        if (!minic_x86_64_typed_machine_form_matches_template(
+                info->target_machine_form_id,
+                info->target_machine_form_variant,
+                info->template_text, info->template_length)) return false;
+        switch ((MinicX86MachineAsmForm)info->target_machine_form_id) {
+        case MINIC_X86_MACHINE_ASM_ZSTD_CPUID:
+            return emit_zstd_cpuid(out, program, target, fn, frame, ins, info);
+        case MINIC_X86_MACHINE_ASM_XSETBV:
+            return emit_linux_xsetbv(out, program, target, fn, frame, ins, info);
+        case MINIC_X86_MACHINE_ASM_MMIO_READ:
+            return emit_linux_mmio_read(out, fn, frame, ins, info);
+        case MINIC_X86_MACHINE_ASM_MMIO_WRITE:
+            return emit_linux_mmio_write(out, fn, frame, ins, info);
+        case MINIC_X86_MACHINE_ASM_ATOMIC_XCHG:
+            return emit_linux_atomic_xchg(out, program, target, fn, frame, ins, info);
+        case MINIC_X86_MACHINE_ASM_FDIV_BUG:
+            return emit_linux_fdiv_bug(out, fn, frame, ins, info);
+        case MINIC_X86_MACHINE_ASM_MONITOR_WAIT:
+            return emit_linux_monitor_wait(out, fn, frame, ins, info);
+        case MINIC_X86_MACHINE_ASM_SEGMENT_READ:
+            return emit_linux_segment_read(out, fn, frame, ins, info);
+        case MINIC_X86_MACHINE_ASM_FSGSBASE:
+            return emit_linux_fsgsbase(out, fn, frame, ins, info);
+        case MINIC_X86_MACHINE_ASM_RANDOM_SEED:
+            return emit_linux_random_seed(out, fn, frame, ins, info);
+        case MINIC_X86_MACHINE_ASM_X87_FILD_PREPARE:
+            return emit_linux_x87_fild_prepare(out, fn, frame, ins, info);
+        case MINIC_X86_MACHINE_ASM_X87_PROBE:
+            return emit_linux_x87_probe(out, fn, frame, ins, info);
+        case MINIC_X86_MACHINE_ASM_PKRU:
+            return emit_linux_pkru(out, fn, frame, ins, info);
+        case MINIC_X86_MACHINE_ASM_MXCSR:
+            return emit_linux_mxcsr(out, fn, frame, ins, info);
+        case MINIC_X86_MACHINE_ASM_UNWIND_CONTEXT:
+            return emit_linux_unwind_context(out, fn, frame, ins, info);
+        default:
+            return false;
+        }
+    }
     if (minic_x86_64_linux_crash_gpr_snapshot_form(
             info->template_text, info->template_length) ||
         minic_x86_64_linux_crash_misc_snapshot_form(
@@ -5659,12 +5687,6 @@ bool minic_x86_64_emit_structured_asm(
     if (minic_x86_64_linux_pm_trace_form(
             info->template_text, info->template_length))
         return emit_linux_pm_trace_record(out, fn, frame, ins, info);
-    if (info->template_length == 5U &&
-        memcmp(info->template_text, "cpuid", 5U) == 0 &&
-        (ins->value.structured_inline_asm.operand_count == 2U ||
-         ins->value.structured_inline_asm.operand_count == 4U ||
-         ins->value.structured_inline_asm.operand_count == 5U))
-        return emit_zstd_cpuid(out, program, target, fn, frame, ins, info);
     if (minic_x86_64_linux_irq_stack_call_form(
             info->template_text, info->template_length))
         return emit_linux_irq_stack_call(out, fn, frame, ins, info);
@@ -5704,12 +5726,6 @@ bool minic_x86_64_emit_structured_asm(
             info->template_text, info->template_length, true))
         return emit_linux_pci_mmconfig(out, program, target,
                                       fn, frame, ins, info);
-    if (minic_x86_64_linux_mmio_read_form(
-            info->template_text, info->template_length))
-        return emit_linux_mmio_read(out, fn, frame, ins, info);
-    if (minic_x86_64_linux_mmio_write_form(
-            info->template_text, info->template_length))
-        return emit_linux_mmio_write(out, fn, frame, ins, info);
     if (minic_x86_64_linux_rep_string_io_form(
             info->template_text, info->template_length))
         return emit_linux_rep_string_io(out, fn, frame, ins, info);
@@ -5722,42 +5738,18 @@ bool minic_x86_64_emit_structured_asm(
     if (minic_x86_64_linux_flushcache_copy_form(
             info->template_text, info->template_length))
         return emit_linux_flushcache_copy(out, fn, frame, ins, info);
-    if (minic_x86_64_linux_atomic_xchg_form(
-            info->template_text, info->template_length))
-        return emit_linux_atomic_xchg(out, program, target, fn, frame, ins, info);
     if (minic_x86_64_linux_pvclock_scale_form(
             info->template_text, info->template_length))
         return emit_linux_pvclock_scale(out, fn, frame, ins, info);
     if (minic_x86_64_linux_task_size_alt_form(
             info->template_text, info->template_length))
         return emit_linux_task_size_alt(out, fn, frame, ins, info);
-    if (minic_x86_64_linux_unwind_context_form(
-            info->template_text, info->template_length))
-        return emit_linux_unwind_context(out, fn, frame, ins, info);
-    if (minic_x86_64_linux_mxcsr_form(
-            info->template_text, info->template_length))
-        return emit_linux_mxcsr(out, fn, frame, ins, info);
-    if (minic_x86_64_linux_pkru_form(
-            info->template_text, info->template_length))
-        return emit_linux_pkru(out, fn, frame, ins, info);
-    if (minic_x86_64_linux_fdiv_bug_form(
-            info->template_text, info->template_length))
-        return emit_linux_fdiv_bug(out, fn, frame, ins, info);
-    if (minic_x86_64_linux_monitor_wait_form(
-            info->template_text, info->template_length))
-        return emit_linux_monitor_wait(out, fn, frame, ins, info);
-    if (minic_x86_64_linux_segment_read_form(
-            info->template_text, info->template_length))
-        return emit_linux_segment_read(out, fn, frame, ins, info);
     if (minic_x86_64_linux_segment_load_extable_form(
             info->template_text, info->template_length))
         return emit_linux_segment_load_extable(out, fn, frame, ins, info);
     if (minic_x86_64_linux_lkgs_extable_form(
             info->template_text, info->template_length))
         return emit_linux_lkgs_extable(out, fn, frame, ins, info);
-    if (minic_x86_64_linux_fsgsbase_form(
-            info->template_text, info->template_length))
-        return emit_linux_fsgsbase(out, fn, frame, ins, info);
     if (minic_x86_64_linux_kernel_nofault_goto_form(
             info->template_text, info->template_length))
         return emit_linux_kernel_nofault_goto(
@@ -5771,9 +5763,6 @@ bool minic_x86_64_emit_structured_asm(
     if (minic_x86_64_linux_fpu_user_frame_form(
             info->template_text, info->template_length))
         return emit_linux_fpu_user_frame(out, fn, frame, ins, info);
-    if (minic_x86_64_linux_x87_fild_prepare_form(
-            info->template_text, info->template_length))
-        return emit_linux_x87_fild_prepare(out, fn, frame, ins, info);
     if (minic_x86_64_linux_fpu_kernel_restore_form(
             info->template_text, info->template_length))
         return emit_linux_fpu_kernel_restore(out, fn, frame, ins, info);
@@ -5795,9 +5784,6 @@ bool minic_x86_64_emit_structured_asm(
     if (minic_x86_64_linux_lar_selector_form(
             info->template_text, info->template_length))
         return emit_linux_lar_selector(out, fn, frame, ins, info);
-    if (minic_x86_64_linux_random_seed_form(
-            info->template_text, info->template_length))
-        return emit_linux_random_seed(out, fn, frame, ins, info);
     if (minic_x86_64_linux_smap_alternative_form(
             info->template_text, info->template_length))
         return minic_x86_64_emit_linux_smap_alternative(
@@ -5828,15 +5814,9 @@ bool minic_x86_64_emit_structured_asm(
     if (minic_x86_64_linux_debug_register_form(
             info->template_text, info->template_length))
         return emit_linux_debug_register(out, fn, frame, ins, info);
-    if (info->template_length == 6U &&
-        memcmp(info->template_text, "xsetbv", 6U) == 0)
-        return emit_linux_xsetbv(out, program, target, fn, frame, ins, info);
     if (minic_x86_64_linux_fxsave_form(
             info->template_text, info->template_length))
         return emit_linux_fxsave(out, program, target, fn, frame, ins, info);
-    if (minic_x86_64_linux_x87_probe_form(
-            info->template_text, info->template_length))
-        return emit_linux_x87_probe(out, fn, frame, ins, info);
     if (minic_x86_64_linux_alternative_wrmsr_form(
             info->template_text, info->template_length))
         return emit_linux_alternative_wrmsr(

@@ -1,4 +1,5 @@
 #include "target/riscv64/inline_asm_emit.h"
+#include "target/riscv/typed_memory.h"
 #include "target/riscv64/asm_plan.h"
 #include "target/riscv64/frame_access.h"
 #include "target/riscv64/codegen_internal.h"
@@ -679,6 +680,7 @@ static bool emit_structured_inline_asm(FILE *file,
     const char *const *operand_registers;
     const bool *memory_operand;
     const char *scratch_register;
+    const char *transfer_scratch_register;
     size_t binding_index;
     size_t index;
 
@@ -689,6 +691,7 @@ static bool emit_structured_inline_asm(FILE *file,
     operand_registers = plan->operand_registers;
     memory_operand = plan->memory_operand;
     scratch_register = plan->scratch_register;
+    transfer_scratch_register = plan->transfer_scratch_register;
     inline_asm = &function->inline_asms[instruction->value.structured_inline_asm.inline_asm_id];
 
     for (binding_index = 0U;
@@ -710,8 +713,12 @@ static bool emit_structured_inline_asm(FILE *file,
             if (!minic_riscv64_frame_load_value(file, frame, binding->value, scratch_register) ||
                 !minic_type_pointee(function->values[binding->value].type, &pointee) ||
                 !minic_type_unqualified(pointee, &value_type) ||
-                !minic_riscv64_emit_scalar_load_for_program(
-                    file, program, value_type, register_name, scratch_register)) {
+                !minic_riscv64_emit_safe_scalar_load(
+                    file, program, value_type, register_name, scratch_register,
+                    transfer_scratch_register,
+                    minic_riscv_address_alignment(
+                        program, minic_default_data_layout(), function,
+                        binding->value))) {
                 return false;
             }
             break;
@@ -797,8 +804,12 @@ static bool emit_structured_inline_asm(FILE *file,
              !minic_riscv64_emit_integer_conversion_for_program(
                  file, program, value_type, register_name)) ||
             !minic_riscv64_frame_load_value(file, frame, binding->value, scratch_register) ||
-            !minic_riscv64_emit_scalar_store_for_program(
-                file, program, value_type, register_name, scratch_register)) {
+            !minic_riscv64_emit_safe_scalar_store(
+                file, program, value_type, register_name, scratch_register,
+                transfer_scratch_register,
+                minic_riscv_address_alignment(
+                    program, minic_default_data_layout(), function,
+                    binding->value))) {
             return false;
         }
     }

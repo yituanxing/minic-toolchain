@@ -881,234 +881,188 @@ MinicCoreLowerStatus minic_core_lower_internal_lower_condition_branch(MinicCoreL
    function-scope re-entry. Direct goto and asm-goto from outside remain
    fail-closed. Normalized blocks may form a graph, so membership discovery is
    cycle-safe. */
-static bool core_mark_block_statement_membership(
-    const MinicCoreLowerContext *context,
-    MinicBlockId block_id,
-    bool *visited_blocks,
-    size_t block_count,
-    bool *statement_membership,
-    size_t statement_count) {
-    const MinicBlock *block;
-    size_t block_statement_index;
+/* Shared AST ownership set. The statement-kind gate matters: on non-CFG
+ * statements, then_block/else_block are not semantic child edges and must not
+ * pull an unrelated block into the query (notably labels/returns/inline asm). */
+static bool core_source_subtree_collect_block(
+    const MinicC0Program *program, const MinicBlock *block,
+    bool *visited_blocks, CoreSourceSubtreeMembership *membership);
 
-    if (block_id == MINIC_BLOCK_INVALID) {
-        return true;
-    }
-    if (context == NULL || context->body == NULL || context->body->program == NULL ||
-        visited_blocks == NULL || statement_membership == NULL || block_id >= block_count) {
-        return false;
-    }
-    if (visited_blocks[block_id]) {
-        return true;
-    }
-    visited_blocks[block_id] = true;
-    block = minic_c0_program_block(context->body->program, block_id);
-    if (block == NULL) {
-        return false;
-    }
-    for (block_statement_index = 0U;
-         block_statement_index < block->statement_count;
-         ++block_statement_index) {
-        MinicStatementId statement_id;
-        const MinicStatement *statement;
-
-        statement_id = block->statements[block_statement_index];
-        if (statement_id >= statement_count) {
-            return false;
-        }
-        statement_membership[statement_id] = true;
-        statement = minic_c0_program_statement(context->body->program, statement_id);
-        if (statement == NULL ||
-            !core_mark_block_statement_membership(context,
-                                                  statement->then_block,
-                                                  visited_blocks,
-                                                  block_count,
-                                                  statement_membership,
-                                                  statement_count) ||
-            !core_mark_block_statement_membership(context,
-                                                  statement->else_block,
-                                                  visited_blocks,
-                                                  block_count,
-                                                  statement_membership,
-                                                  statement_count)) {
-            return false;
-        }
+static bool core_source_subtree_collect_children(
+    const MinicC0Program *program, const MinicStatement *statement,
+    bool *visited_blocks, CoreSourceSubtreeMembership *membership) {
+    MinicBlockId children[2];
+    size_t index;
+    if (program == NULL || statement == NULL || visited_blocks == NULL ||
+        membership == NULL) return false;
+    if (statement->kind != MINIC_STATEMENT_IF &&
+        statement->kind != MINIC_STATEMENT_WHILE &&
+        statement->kind != MINIC_STATEMENT_SWITCH) return true;
+    children[0] = statement->then_block;
+    children[1] = statement->else_block;
+    for (index = 0U; index < 2U; ++index) {
+        MinicBlockId id = children[index];
+        const MinicBlock *child;
+        if (id == MINIC_BLOCK_INVALID) continue;
+        if (id >= program->block_count) return false;
+        if (visited_blocks[id]) continue;
+        visited_blocks[id] = true;
+        child = minic_c0_program_block(program, id);
+        if (!core_source_subtree_collect_block(
+                program, child, visited_blocks, membership)) return false;
     }
     return true;
 }
 
-bool minic_core_lower_unreachable_external_reentry(
+static bool core_source_subtree_collect_block(
+    const MinicC0Program *program, const MinicBlock *block,
+    bool *visited_blocks, CoreSourceSubtreeMembership *membership) {
+    size_t i;
+    if (program == NULL || block == NULL || visited_blocks == NULL ||
+        membership == NULL ||
+        (block->statement_count != 0U && block->statements == NULL)) return false;
+    for (i = 0U; i < block->statement_count; ++i) {
+        MinicStatementId id = block->statements[i];
+        const MinicStatement *statement = minic_c0_program_statement(program, id);
+        if (id >= membership->statement_count || statement == NULL) return false;
+        membership->statements[id] = true;
+        if (!core_source_subtree_collect_children(
+                program, statement, visited_blocks, membership)) return false;
+    }
+    return true;
+}
+
+void core_source_subtree_membership_destroy(CoreSourceSubtreeMembership *membership) {
+    if (membership == NULL) return;
+    free(membership->statements);
+    membership->statements = NULL;
+    membership->statement_count = 0U;
+}
+
+static bool core_source_subtree_membership_begin(
     const MinicCoreLowerContext *context,
-    const MinicStatement *root_statement,
-    MinicStatementId extra_statement_id) {
+    CoreSourceSubtreeMembership *membership, bool **visited_out) {
     const MinicC0Program *program;
-    bool *visited_blocks;
-    bool *statement_membership;
-    bool root_found;
-    bool unsafe;
-    size_t source_index;
-
-    if (context == NULL || context->body == NULL || context->body->program == NULL ||
-        root_statement == NULL) {
-        return true;
+    if (context == NULL || context->body == NULL ||
+        (program = context->body->program) == NULL ||
+        membership == NULL || visited_out == NULL ||
+        program->statement_count == 0U ||
+        program->block_count > SIZE_MAX / sizeof(bool) ||
+        program->statement_count > SIZE_MAX / sizeof(bool)) return false;
+    membership->statements = NULL;
+    membership->statement_count = 0U;
+    *visited_out = (bool *)calloc(
+        program->block_count == 0U ? 1U : program->block_count, sizeof(bool));
+    membership->statements =
+        (bool *)calloc(program->statement_count, sizeof(bool));
+    if (*visited_out == NULL || membership->statements == NULL) {
+        free(*visited_out);
+        *visited_out = NULL;
+        core_source_subtree_membership_destroy(membership);
+        return false;
     }
+    membership->statement_count = program->statement_count;
+    return true;
+}
+
+bool core_source_subtree_membership_from_block(
+    const MinicCoreLowerContext *context, const MinicBlock *block,
+    CoreSourceSubtreeMembership *membership) {
+    bool *visited = NULL;
+    bool valid;
+    if (!core_source_subtree_membership_begin(context, membership, &visited))
+        return false;
+    valid = core_source_subtree_collect_block(
+        context->body->program, block, visited, membership);
+    free(visited);
+    if (!valid) core_source_subtree_membership_destroy(membership);
+    return valid;
+}
+
+bool core_source_subtree_membership_from_statement(
+    const MinicCoreLowerContext *context, const MinicStatement *root,
+    MinicStatementId extra_statement_id,
+    CoreSourceSubtreeMembership *membership) {
+    const MinicC0Program *program;
+    bool *visited = NULL;
+    bool found = false;
+    bool valid = false;
+    size_t index;
+    if (!core_source_subtree_membership_begin(context, membership, &visited))
+        return false;
     program = context->body->program;
-    if (program->statement_count == 0U ||
-        program->block_count > SIZE_MAX / sizeof(*visited_blocks) ||
-        program->statement_count > SIZE_MAX / sizeof(*statement_membership)) {
-        return true;
-    }
-    visited_blocks = program->block_count == 0U
-                         ? NULL
-                         : (bool *)calloc(program->block_count, sizeof(*visited_blocks));
-    statement_membership =
-        (bool *)calloc(program->statement_count, sizeof(*statement_membership));
-    if ((program->block_count != 0U && visited_blocks == NULL) ||
-        statement_membership == NULL) {
-        free(visited_blocks);
-        free(statement_membership);
-        return true;
-    }
-
-    root_found = false;
-    for (source_index = 0U; source_index < program->statement_count; ++source_index) {
-        const MinicStatement *candidate;
-
-        candidate = minic_c0_program_statement(program, source_index);
-        if (candidate == NULL) {
-            free(visited_blocks);
-            free(statement_membership);
-            return true;
+    if (root != NULL && (extra_statement_id == MINIC_STATEMENT_INVALID ||
+                         extra_statement_id < program->statement_count)) {
+        for (index = 0U; index < program->statement_count; ++index) {
+            const MinicStatement *candidate =
+                minic_c0_program_statement(program, index);
+            if (candidate == NULL) break;
+            if (candidate == root) {
+                membership->statements[index] = true;
+                found = true;
+                break;
+            }
         }
-        if (candidate == root_statement) {
-            statement_membership[source_index] = true;
-            root_found = true;
+        if (found && core_source_subtree_collect_children(
+                         program, root, visited, membership)) {
+            if (extra_statement_id != MINIC_STATEMENT_INVALID)
+                membership->statements[extra_statement_id] = true;
+            valid = true;
         }
     }
-    if (!root_found ||
-        (extra_statement_id != MINIC_STATEMENT_INVALID &&
-         extra_statement_id >= program->statement_count) ||
-        !core_mark_block_statement_membership(context,
-                                              root_statement->then_block,
-                                              visited_blocks,
-                                              program->block_count,
-                                              statement_membership,
-                                              program->statement_count) ||
-        !core_mark_block_statement_membership(context,
-                                              root_statement->else_block,
-                                              visited_blocks,
-                                              program->block_count,
-                                              statement_membership,
-                                              program->statement_count)) {
-        free(visited_blocks);
-        free(statement_membership);
-        return true;
-    }
-    if (extra_statement_id != MINIC_STATEMENT_INVALID) {
-        statement_membership[extra_statement_id] = true;
-    }
+    free(visited);
+    if (!valid) core_source_subtree_membership_destroy(membership);
+    return valid;
+}
 
+/* A static source edge and an already materialized Core label block are
+ * different entry authorities, but they must query the SAME ownership set.
+ * The weak static policy is intentionally not IF's stronger CASE/&&label gate. */
+static bool core_unreachable_statement_may_reenter(
+    const MinicCoreLowerContext *context, const MinicStatement *root,
+    MinicStatementId extra_statement_id, bool inspect_bound_core_blocks) {
+    CoreSourceSubtreeMembership membership = {0};
+    const MinicC0Program *program;
+    bool unsafe;
+    size_t index;
+    if (!core_source_subtree_membership_from_statement(
+            context, root, extra_statement_id, &membership)) return true;
+    program = context->body->program;
     {
         const MinicCoreReentryQuery query = {
-            .membership = statement_membership,
+            .membership = membership.statements,
             .label_id = MINIC_STATEMENT_INVALID,
             .checks = MINIC_CORE_REENTRY_CHECK_EXTERNAL_JUMP,
             .purpose = MINIC_CORE_REENTRY_PURPOSE_UNREACHABLE_TAIL
         };
-        /* This deliberately uses the weak external-source-edge policy.
-         * CASE dispatch, label addresses and already bound Core blocks are
-         * separate consumers and must not be folded into the same bool. */
         unsafe = minic_core_reentry_query(
             context->reentry_index, program, &query) != 0U;
     }
-
-    free(visited_blocks);
-    free(statement_membership);
+    if (!unsafe && inspect_bound_core_blocks) {
+        /* Missing/incomplete dynamic ownership is UNKNOWN, never evidence
+         * that no previously created label block can reenter this subtree. */
+        if (context->statement_blocks == NULL ||
+            context->statement_block_count < membership.statement_count) {
+            unsafe = true;
+        } else {
+            for (index = 0U; index < membership.statement_count; ++index) {
+                if (index != extra_statement_id && membership.statements[index] &&
+                    context->statement_blocks[index] != MINIC_CORE_BLOCK_INVALID) {
+                    unsafe = true;
+                    break;
+                }
+            }
+        }
+    }
+    core_source_subtree_membership_destroy(&membership);
     return unsafe;
 }
 
-/* A prior goto can pre-bind a label block inside an otherwise unreachable loop;
-   pruning that loop would leave the target block unterminated. */
-static bool core_unreachable_statement_has_bound_reentry(
-    const MinicCoreLowerContext *context,
-    const MinicStatement *root_statement,
+bool minic_core_lower_unreachable_external_reentry(
+    const MinicCoreLowerContext *context, const MinicStatement *root,
     MinicStatementId extra_statement_id) {
-    const MinicC0Program *program;
-    bool *visited_blocks;
-    bool *statement_membership;
-    bool root_found;
-    bool has_reentry;
-    size_t index;
-
-    if (context == NULL || context->body == NULL || context->body->program == NULL ||
-        context->statement_blocks == NULL || root_statement == NULL) {
-        return false;
-    }
-    program = context->body->program;
-    if (program->statement_count == 0U ||
-        context->statement_block_count < program->statement_count ||
-        program->block_count > SIZE_MAX / sizeof(*visited_blocks) ||
-        program->statement_count > SIZE_MAX / sizeof(*statement_membership)) {
-        return false;
-    }
-    visited_blocks = program->block_count == 0U
-                         ? NULL
-                         : (bool *)calloc(program->block_count, sizeof(*visited_blocks));
-    statement_membership =
-        (bool *)calloc(program->statement_count, sizeof(*statement_membership));
-    if ((program->block_count != 0U && visited_blocks == NULL) ||
-        statement_membership == NULL) {
-        free(visited_blocks);
-        free(statement_membership);
-        return false;
-    }
-
-    root_found = false;
-    for (index = 0U; index < program->statement_count; ++index) {
-        const MinicStatement *candidate = minic_c0_program_statement(program, index);
-        if (candidate == NULL) {
-            free(visited_blocks);
-            free(statement_membership);
-            return false;
-        }
-        if (candidate == root_statement) {
-            statement_membership[index] = true;
-            root_found = true;
-        }
-    }
-    if (!root_found ||
-        !core_mark_block_statement_membership(context,
-                                              root_statement->then_block,
-                                              visited_blocks,
-                                              program->block_count,
-                                              statement_membership,
-                                              program->statement_count) ||
-        !core_mark_block_statement_membership(context,
-                                              root_statement->else_block,
-                                              visited_blocks,
-                                              program->block_count,
-                                              statement_membership,
-                                              program->statement_count)) {
-        free(visited_blocks);
-        free(statement_membership);
-        return false;
-    }
-    if (extra_statement_id != MINIC_STATEMENT_INVALID &&
-        extra_statement_id < program->statement_count) {
-        statement_membership[extra_statement_id] = true;
-    }
-
-    has_reentry = false;
-    for (index = 0U; index < program->statement_count; ++index) {
-        if (index != extra_statement_id && statement_membership[index] &&
-            context->statement_blocks[index] != MINIC_CORE_BLOCK_INVALID) {
-            has_reentry = true;
-            break;
-        }
-    }
-    free(visited_blocks);
-    free(statement_membership);
-    return has_reentry;
+    return core_unreachable_statement_may_reenter(
+        context, root, extra_statement_id, false);
 }
 
 /* M144_UNREFERENCED_LOOP_LABEL_METADATA_OWNER: parser loop normalization can
@@ -1212,14 +1166,9 @@ minic_core_lower_internal_lower_block(MinicCoreLowerContext *context, const Mini
                 unreachable_loop =
                     minic_c0_program_statement(context->body->program, unreachable_loop_id);
                 if (minic_core_loop_internal_while_label_pair(statement, unreachable_loop)) {
-                    if (minic_core_lower_unreachable_external_reentry(
-                            context,
-                            unreachable_loop,
-                            source_block->statements[statement_index]) ||
-                        core_unreachable_statement_has_bound_reentry(
-                            context,
-                            unreachable_loop,
-                            source_block->statements[statement_index])) {
+                    if (core_unreachable_statement_may_reenter(
+                            context, unreachable_loop,
+                            source_block->statements[statement_index], true)) {
                         MinicCoreBlockId detached_preheader;
 
                         /* A source goto may legally target a user label inside
@@ -1251,10 +1200,8 @@ minic_core_lower_internal_lower_block(MinicCoreLowerContext *context, const Mini
                 }
             }
             if (statement->kind == MINIC_STATEMENT_WHILE &&
-                (minic_core_lower_unreachable_external_reentry(
-                     context, statement, MINIC_STATEMENT_INVALID) ||
-                 core_unreachable_statement_has_bound_reentry(
-                     context, statement, MINIC_STATEMENT_INVALID))) {
+                core_unreachable_statement_may_reenter(
+                    context, statement, MINIC_STATEMENT_INVALID, true)) {
                 MinicCoreBlockId detached_preheader;
 
                 if (!minic_core_function_add_block(

@@ -36,6 +36,12 @@ typedef struct MinicAsmOperandPlan {
     /* Stable source-form signature, not a promise of a machine opcode ID.
      * Native emitters must still verify exact target-dependent semantics. */
     uint64_t source_form_id;
+    /* Opaque, target-owned semantic machine-form identity and its admitted
+     * variant (for example a validated instruction width). Core transports
+     * these facts without interpreting any ISA opcode. Zero means legacy
+     * source revalidation or generic structured ASM, never 'any opcode'. */
+    uint32_t target_machine_form_id;
+    uint32_t target_machine_form_variant;
     size_t operand_count;
     size_t output_count;
     MinicCoreStructuredInlineAsmOperandKind kinds[MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT];

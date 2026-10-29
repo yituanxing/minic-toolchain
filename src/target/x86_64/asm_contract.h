@@ -1,6 +1,32 @@
 #ifndef MINIC_TARGET_X86_64_ASM_CONTRACT_H
 #define MINIC_TARGET_X86_64_ASM_CONTRACT_H
 #include "target/backend.h"
+/* The source qualifier chooses a semantic family once. Core transports this
+ * number opaquely; the machine emitter still validates native operand
+ * registers/widths and hardware side effects before emitting any bytes.
+ * Zero is reserved for the qualified families not yet migrated. */
+typedef enum MinicX86MachineAsmForm {
+    MINIC_X86_MACHINE_ASM_NONE = 0,
+    MINIC_X86_MACHINE_ASM_ZSTD_CPUID,
+    MINIC_X86_MACHINE_ASM_XSETBV,
+    MINIC_X86_MACHINE_ASM_MMIO_READ,
+    MINIC_X86_MACHINE_ASM_MMIO_WRITE,
+    MINIC_X86_MACHINE_ASM_ATOMIC_XCHG,
+    MINIC_X86_MACHINE_ASM_FDIV_BUG,
+    MINIC_X86_MACHINE_ASM_MONITOR_WAIT,
+    MINIC_X86_MACHINE_ASM_SEGMENT_READ,
+    MINIC_X86_MACHINE_ASM_FSGSBASE,
+    MINIC_X86_MACHINE_ASM_RANDOM_SEED,
+    MINIC_X86_MACHINE_ASM_X87_FILD_PREPARE,
+    MINIC_X86_MACHINE_ASM_X87_PROBE,
+    MINIC_X86_MACHINE_ASM_PKRU,
+    MINIC_X86_MACHINE_ASM_MXCSR,
+    MINIC_X86_MACHINE_ASM_UNWIND_CONTEXT
+} MinicX86MachineAsmForm;
+/* Verify that an opaque Core form ID still matches its immutable GNU
+ * template. The x86 emitter must call this before using form/variant data. */
+bool minic_x86_64_typed_machine_form_matches_template(
+    uint32_t, uint32_t, const char *, size_t);
 bool minic_x86_64_requires_qualified_input_asm(const MinicInlineAsm *);
 /* Linux constant bit-test with GNU flag output (@ccnz/@ccz). */
 unsigned int minic_x86_64_linux_testcc_form(const char *, size_t);

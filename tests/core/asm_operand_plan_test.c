@@ -62,6 +62,13 @@ static void check_source_plan(MinicAsmOperandPlanOwner owner) {
     initial_id = plan.source_form_id;
     assert(initial_id == minic_backend_asm_source_form_id(&source));
 
+    /* Core carries a target-owned ID/payload without treating the source
+     * fingerprint as a machine opcode. This synthetic value tests transport,
+     * not target admission (tested by x86's exact form gate separately). */
+    plan.target_machine_form_id = owner == MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED
+        ? 1234U : 0U;
+    plan.target_machine_form_variant = plan.target_machine_form_id ? 8U : 0U;
+
     (void)memset(&ins, 0, sizeof(ins));
     (void)memset(&effect, 0, sizeof(effect));
     ins.kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
@@ -75,6 +82,8 @@ static void check_source_plan(MinicAsmOperandPlanOwner owner) {
     assert(effect.operand_plan_owner == owner && effect.source_form_id == initial_id &&
            effect.source_output_count == 3U && !effect.explicit_memory_clobber &&
            effect.implicit_memory_effect);
+    assert(effect.target_machine_form_id == plan.target_machine_form_id &&
+           effect.target_machine_form_variant == plan.target_machine_form_variant);
     assert(ins.value.structured_inline_asm.operands[0].gnu_early_clobber &&
            ins.value.structured_inline_asm.operands[0].gnu_readwrite &&
            ins.value.structured_inline_asm.operands[3].has_tied_output &&

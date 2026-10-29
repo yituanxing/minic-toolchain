@@ -63,8 +63,8 @@ static bool aarch64_futex_owned_x17_x12_scratch(FILE *out,
         MINIC_A64_REG_X, scratch);
 }
 
-/* The timer-counter dependency ASM holds x9 (dependency/address), x10
- * (counter value), and x11 (output pointer) live at different points.
+/* The timer-counter and MMIO dependency ASMs hold x9 (dependency/address),
+ * x10 (observed value), and x11 (output pointer) live at different points.
  * Its `add x9,sp,x9` intentionally uses the instantaneous physical SP;
  * only the surrounding compiler-owned SSA slots use this typed contract. */
 static bool aarch64_counter_owned_x(FILE *out,
@@ -73,6 +73,30 @@ static bool aarch64_counter_owned_x(FILE *out,
     const MinicA64ScratchPolicy scratch = {UINT32_C(0xe00), 17U};
     return aarch64_owned_reg_policy(out, ctx, reg, id,
         MINIC_A64_REG_X, scratch);
+}
+
+/* Independently audited privileged GNU-ASM contracts below use physical
+ * x9..x16 for their explicit inputs/results, fixup status and output
+ * addresses. None uses IP1/x17 as an operand. Reserve the entire range so
+ * even far Core-owned spill slots materialize through x17 alone; emitted
+ * fault PCs, exception register numbers and ALTERNATIVE spans stay intact. */
+static bool aarch64_privileged_owned_reg(FILE *out,
+    const MinicDirectLP64BlockContext *ctx, unsigned int reg,
+    MinicCoreValueId id, MinicA64FrameRegisterClass kind) {
+    const MinicA64ScratchPolicy scratch = {UINT32_C(0x1fe00), 17U};
+    return aarch64_owned_reg_policy(out, ctx, reg, id, kind, scratch);
+}
+
+static bool aarch64_privileged_owned_x(FILE *out,
+    const MinicDirectLP64BlockContext *ctx, unsigned int reg,
+    MinicCoreValueId id) {
+    return aarch64_privileged_owned_reg(out, ctx, reg, id, MINIC_A64_REG_X);
+}
+
+static bool aarch64_privileged_owned_w(FILE *out,
+    const MinicDirectLP64BlockContext *ctx, unsigned int reg,
+    MinicCoreValueId id) {
+    return aarch64_privileged_owned_reg(out, ctx, reg, id, MINIC_A64_REG_W);
 }
 
 /* Original Linux 6.6 arch/arm64/include/asm/jump_label.h.  Both jump
@@ -1363,8 +1387,8 @@ static bool aarch64_linux_kvm_va_mask_emit(
         !aarch64_linux_structured_spill_slot_valid(op[0].value) ||
         !minic_type_pointee(fn->values[op[0].value].type,&type) ||
         !minic_type_equal(type,minic_type_unsigned_long())) return false;
-    return fprintf(out,
-        "  ldr x10, [sp, #%zu]\n  ldr x9, [x10]\n"
+    return aarch64_privileged_owned_x(out, ctx, 10U, op[0].value) &&
+        fputs("  ldr x9, [x10]\n"
         "  .if 1 == 1\n661:\n"
         "  and x9, x9, #1\n  ror x9, x9, #1\n"
         "  add x9, x9, #0\n  add x9, x9, #0, lsl #12\n"
@@ -1375,8 +1399,7 @@ static bool aarch64_linux_kvm_va_mask_emit(
         "  .hword (1 << 15) | (1)\n"
         "  .byte 662b - 661b\n  .byte 664f - 663f\n"
         "  .popsection\n663:\n664:\n  .endif\n"
-        "  str x9, [x10]\n",
-        (size_t)op[0].value * 8U) >= 0;
+        "  str x9, [x10]\n", out) != EOF;
 }
 
 /* Match the entire original GNU Linux template, not a mnemonic prefix.
@@ -2007,10 +2030,10 @@ static bool aarch64_linux_kvm_at_fixup_emit(
                 !aarch64_stlr_type(type, 4U) :
                 !aarch64_linux_sysreg_u64_type(type))) return false;
     }
-    return fprintf(out,
-        "  ldr x13, [sp, #%zu]\n"
-        "  ldr w9, [x13]\n"
-        "  ldr x14, [sp, #%zu]\n"
+    return aarch64_privileged_owned_x(out, ctx, 13U, ops[0].value) &&
+        fputs("  ldr w9, [x13]\n", out) != EOF &&
+        aarch64_privileged_owned_x(out, ctx, 14U, ops[3].value) &&
+        fputs(
         "  mrs x10, spsr_el2\n"
         "  mrs x11, elr_el2\n"
         "1: at s1e1r, x14\n"
@@ -2024,15 +2047,11 @@ static bool aarch64_linux_kvm_at_fixup_emit(
         "  .align 3\n"
         "  .long (1b - .), (2b - .)\n"
         "  .popsection\n"
-        "  str w9, [x13]\n"
-        "  ldr x12, [sp, #%zu]\n"
-        "  str x10, [x12]\n"
-        "  ldr x12, [sp, #%zu]\n"
-        "  str x11, [x12]\n",
-        (size_t)ops[0].value * 8U,
-        (size_t)ops[3].value * 8U,
-        (size_t)ops[1].value * 8U,
-        (size_t)ops[2].value * 8U) >= 0;
+        "  str w9, [x13]\n", out) != EOF &&
+        aarch64_privileged_owned_x(out, ctx, 12U, ops[1].value) &&
+        fputs("  str x10, [x12]\n", out) != EOF &&
+        aarch64_privileged_owned_x(out, ctx, 12U, ops[2].value) &&
+        fputs("  str x11, [x12]\n", out) != EOF;
 }
 /* AT S1E1R explicitly requests a stage-1 EL1 address translation and
  * updates PAR_EL1. The operand is a virtual address, not an ordinary load;
@@ -2097,8 +2116,8 @@ static bool aarch64_linux_at_s1e1r_emit(
         !minic_type_equal(fn->values[op[0].value].type,
                           minic_type_unsigned_long()))
         return false;
-    return fprintf(out, "  ldr x9, [sp, #%zu]\n  at s1e1r, x9\n",
-                   (size_t)op[0].value * 8U) >= 0;
+    return aarch64_privileged_owned_x(out, ctx, 9U, op[0].value) &&
+           fputs("  at s1e1r, x9\n", out) != EOF;
 }
 static bool aarch64_linux_uaccess_bic_template(
     const char *text, size_t length) {
@@ -2280,13 +2299,11 @@ static bool aarch64_linux_io_dependency_emit(
        !minic_type_equal(type,minic_type_unsigned_long())||
        !minic_type_equal(fn->values[b[1].value].type,
                          minic_type_unsigned_long()))return false;
-    return fprintf(out,
-        "  ldr x10, [sp, #%zu]\n"
-        "  eor x9, x10, x10\n"
-        "  cbnz x9, .\n"
-        "  ldr x11, [sp, #%zu]\n"
-        "  str x9, [x11]\n",
-        (size_t)b[1].value*8U,(size_t)b[0].value*8U)>=0;
+    return aarch64_counter_owned_x(out, ctx, 10U, b[1].value) &&
+           fputs("  eor x9, x10, x10\n"
+                 "  cbnz x9, .\n", out) != EOF &&
+           aarch64_counter_owned_x(out, ctx, 11U, b[0].value) &&
+           fputs("  str x9, [x11]\n", out) != EOF;
 }
 
 /* Exact original Linux 6.6.143 arm64 sysreg.h read_sysreg_s SYS_*:
@@ -2393,11 +2410,9 @@ static bool aarch64_linux_encoded_sysreg_emit(
        op[0].kind!=MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT||
        !minic_type_pointee(fn->values[op[0].value].type,&type)||
        !aarch64_linux_sysreg_u64_type(type))return false;
-    return fprintf(out,"  .inst 0x%08x\n"
-                       "  ldr x10, [sp, #%zu]\n"
-                       "  str x9, [x10]\n",
-           opcode,
-           (size_t)op[0].value*8U)>=0;
+    return fprintf(out, "  .inst 0x%08x\n", opcode) >= 0 &&
+           aarch64_privileged_owned_x(out, ctx, 10U, op[0].value) &&
+           fputs("  str x9, [x10]\n", out) != EOF;
 }
 
 typedef struct Aarch64LinuxWriteSysreg {
@@ -2688,9 +2703,9 @@ static bool aarch64_linux_encoded_sysreg_write_emit(
     reg = &aarch64_linux_write_sysregs[form - 1U];
     encoding = (reg->op0 << 19) | (reg->op1 << 16) |
                (reg->crn << 12) | (reg->crm << 8) | (reg->op2 << 5);
-    return fprintf(out, "  ldr x9, [sp, #%zu]\n  .inst 0x%08x\n",
-        (size_t)op->value * 8U,
-        0xd5000000U | encoding | 9U) >= 0;
+    return aarch64_privileged_owned_x(out, ctx, 9U, op->value) &&
+           fprintf(out, "  .inst 0x%08x\n",
+                   0xd5000000U | encoding | 9U) >= 0;
 }
 
 /* Linux KVM's VHE feature-50 alternative is an ALTERNATIVE around two full
@@ -2841,9 +2856,9 @@ static bool aarch64_linux_vhe_sysreg_alternative_emit(
             !minic_type_pointee(fn->values[op->value].type, &type) :
             !minic_type_unqualified(fn->values[op->value].type, &type)) ||
         !aarch64_linux_sysreg_u64_type(type)) return false;
-    if (fprintf(out, "  ldr %s, [sp, #%zu]\n661:\n  .inst 0x%08x\n",
-                form->is_read ? "x10" : "x9",
-                (size_t)op->value * 8U,
+    if (!aarch64_privileged_owned_x(out, ctx,
+                form->is_read ? 10U : 9U, op->value) ||
+        fprintf(out, "661:\n  .inst 0x%08x\n",
                 form->old_opcode) < 0 ||
         !aarch64_linux_alt_emit_middle(out, form->capability, false) ||
         fprintf(out, "  .inst 0x%08x\n", form->new_opcode) < 0 ||
@@ -2941,11 +2956,9 @@ static bool aarch64_linux_tlbi_emit(
        b[0].has_fixed_register_binding||
        b[0].kind!=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT||
        !minic_type_is_integer(fn->values[b[0].value].type))return false;
-    return fprintf(out,
-            "  ldr x9, [sp, #%zu]\n"
-            "  .arch armv8.5-a\n"
-            "  tlbi %s, x9\n",
-            (size_t)b[0].value*8U,mnemonic)>=0;
+    return aarch64_privileged_owned_x(out, ctx, 9U, b[0].value) &&
+           fprintf(out, "  .arch armv8.5-a\n  tlbi %s, x9\n",
+                   mnemonic) >= 0;
 }
 
 /* Original Linux arch/arm64/kvm/hyp/include/nvhe/spinlock.h uses a ticket
@@ -3285,10 +3298,9 @@ static bool aarch64_linux_zeropad_emit(
      * fixup's .short indexes remain EXACTLY (9,10); they are not a guessed
      * GNU allocator binding. Section-relative .long offsets are evaluated
      * by the independent target assembler at the actual instruction PC. */
-    return fprintf(out,
-        "  ldr x10, [sp, #%zu]\n"
-        "  ldr x11, [sp, #%zu]\n"
-        "1: ldr x9, [x11]\n"
+    return aarch64_privileged_owned_x(out, ctx, 10U, ops[1].value) &&
+        aarch64_privileged_owned_x(out, ctx, 11U, ops[2].value) &&
+        fputs("1: ldr x9, [x11]\n"
         "2:\n"
         "  .pushsection __ex_table, \"a\"\n"
         "  .align 2\n"
@@ -3296,11 +3308,9 @@ static bool aarch64_linux_zeropad_emit(
         "  .long (2b - .)\n"
         "  .short 4\n"
         "  .short ((9 << 0) | (10 << 5))\n"
-        "  .popsection\n"
-        "  ldr x12, [sp, #%zu]\n"
-        "  str x9, [x12]\n",
-        (size_t)ops[1].value * 8U, (size_t)ops[2].value * 8U,
-        (size_t)ops[0].value * 8U) >= 0;
+        "  .popsection\n", out) != EOF &&
+        aarch64_privileged_owned_x(out, ctx, 12U, ops[0].value) &&
+        fputs("  str x9, [x12]\n", out) != EOF;
 }
 
 /* Linux 6.6 arm64 __get_user/__put_user: the unprivileged LDTR/STTR
@@ -3491,15 +3501,13 @@ static bool aarch64_linux_uaccess_emit(
      * user pointer, x12 the lvalue address. The fault fixup needs the
      * physical register indices, so these must agree with the instructions.
      * DirectLP64 owns the scratch GPRs and their spill boundaries. */
-    if (fprintf(out,
-            "  ldr x12, [sp, #%zu]\n"
-            "  ldr w9, [x12]\n"
-            "  ldr x11, [sp, #%zu]\n",
-            (size_t)op[0].value * 8U,
-            (size_t)op[2].value * 8U) < 0) return false;
+    if (!aarch64_privileged_owned_x(out, ctx, 12U, op[0].value) ||
+        fputs("  ldr w9, [x12]\n", out) == EOF ||
+        !aarch64_privileged_owned_x(out, ctx, 11U, op[2].value))
+        return false;
     if (!form->is_load &&
-        fprintf(out, "  ldr x10, [sp, #%zu]\n",
-                (size_t)op[1].value * 8U) < 0) return false;
+        !aarch64_privileged_owned_x(out, ctx, 10U, op[1].value))
+        return false;
     if (fprintf(out,
             "1: %s, [x11]\n"
             "2:\n"
@@ -3509,17 +3517,14 @@ static bool aarch64_linux_uaccess_emit(
             "  .long (2b - .)\n"
             "  .short %u\n"
             "  .short ((9 << 0) | (%u << 5))\n"
-            "  .popsection\n"
-            "  ldr x12, [sp, #%zu]\n"
-            "  str w9, [x12]\n",
+            "  .popsection\n",
             form->mnemonic, form->exception_type,
-            form->is_load ? 10U : 31U,
-            (size_t)op[0].value * 8U) < 0) return false;
+            form->is_load ? 10U : 31U) < 0 ||
+        !aarch64_privileged_owned_x(out, ctx, 12U, op[0].value) ||
+        fputs("  str w9, [x12]\n", out) == EOF) return false;
     if (form->is_load &&
-        fprintf(out,
-                "  ldr x12, [sp, #%zu]\n"
-                "  str x10, [x12]\n",
-                (size_t)op[1].value * 8U) < 0) return false;
+        (!aarch64_privileged_owned_x(out, ctx, 12U, op[1].value) ||
+         fputs("  str x10, [x12]\n", out) == EOF)) return false;
     return true;
 }
 
@@ -3683,12 +3688,10 @@ static bool aarch64_linux_xpaclri_emit(
     /* The entry LR is saved by AArch64's stp x29, x30 frame prologue and
      * restored by the epilogue. No BL occurs while x30 contains the PAC
      * operand. Emit one contiguous read-modify-write of physical x30. */
-    return fprintf(out,
-        "  ldr x9, [sp, #%zu]\n"
-        "  ldr x30, [x9]\n"
+    return aarch64_privileged_owned_x(out, ctx, 9U, op[0].value) &&
+        fputs("  ldr x30, [x9]\n"
         "  hint #7\n"
-        "  str x30, [x9]\n",
-        (size_t)op[0].value * 8U) >= 0;
+        "  str x30, [x9]\n", out) != EOF;
 }
 
 static bool aarch64_linux_smccc_source(
@@ -3785,17 +3788,15 @@ static bool aarch64_linux_smccc_emit(
         const MinicType arg_type = fn->values[op[i].value].type;
         const bool narrow = minic_type_is_enum(arg_type) ||
             arg_type.integer_rank == MINIC_INTEGER_RANK_INT;
-        if (fprintf(out, "  ldr %c%zu, [sp, #%zu]\n",
-                    narrow ? 'w' : 'x',
-                    i - 4U, (size_t)op[i].value * 8U) < 0) return false;
+        if (!aarch64_privileged_owned_reg(out, ctx, (unsigned int)(i - 4U),
+                op[i].value, narrow ? MINIC_A64_REG_W : MINIC_A64_REG_X))
+            return false;
     }
     if (fputs(form == 1U ? "  hvc #0\n" : "  smc #0\n", out) == EOF)
         return false;
     for (i = 0U; i < 4U; ++i)
-        if (fprintf(out,
-                    "  ldr x12, [sp, #%zu]\n"
-                    "  str x%zu, [x12]\n",
-                    (size_t)op[i].value * 8U, i) < 0) return false;
+        if (!aarch64_privileged_owned_x(out, ctx, 12U, op[i].value) ||
+            fprintf(out, "  str x%zu, [x12]\n", i) < 0) return false;
     return true;
 }
 
@@ -3894,11 +3895,11 @@ static bool aarch64_linux_svc_emit(
             return false;
     }
     for (i = 1U; i < 4U; ++i)
-        if (fprintf(out, "  ldr x%u, [sp, #%zu]\n", registers[i - 1U],
-                    (size_t)ops[i].value * 8U) < 0) return false;
+        if (!aarch64_privileged_owned_x(out, ctx, registers[i - 1U],
+                ops[i].value)) return false;
     return fputs("  svc #0\n", out) != EOF &&
-           fprintf(out, "  ldr x9, [sp, #%zu]\n  str x0, [x9]\n",
-                   (size_t)ops[0].value * 8U) >= 0;
+           aarch64_privileged_owned_x(out, ctx, 9U, ops[0].value) &&
+           fputs("  str x0, [x9]\n", out) != EOF;
 }
 
 /* FEAT_WFxT: original Linux arm64 delay.c uses the generic SYS-register
@@ -3957,9 +3958,8 @@ static bool aarch64_linux_wfxt_emit(
        op[0].has_fixed_register_binding||
        !aarch64_linux_structured_spill_slot_valid(op[0].value)||
        !aarch64_stlr_type(fn->values[op[0].value].type,8U))return false;
-    return fprintf(out,"  ldr x9, [sp, #%zu]\n"
-                       "  msr s0_3_c1_c0_%u, x9\n",
-                   (size_t)op[0].value*8U,form-1U)>=0;
+    return aarch64_privileged_owned_x(out, ctx, 9U, op[0].value) &&
+           fprintf(out, "  msr s0_3_c1_c0_%u, x9\n", form-1U) >= 0;
 }
 
 /* Linux atomic64_dec_if_positive has no input operand: its +Q memory is
@@ -4875,12 +4875,11 @@ static bool aarch64_linux_timer_alternative_emit(
         "664:\n"
         "  .org . - (664b-663b) + (662b-661b)\n"
         "  .org . - (662b-661b) + (664b-663b)\n"
-        "  .previous\n  .endif\n"
-        "  ldr x10, [sp, #%zu]\n"
-        "  str x9, [x10]\n",
+        "  .previous\n  .endif\n",
         form == 1U ? "cntpct_el0" : "cntvct_el0",
-        0xd53be000U | ((form == 1U ? 5U : 6U) << 5U) | 9U,
-        (size_t)op[0].value * 8U) >= 0;
+        0xd53be000U | ((form == 1U ? 5U : 6U) << 5U) | 9U) >= 0 &&
+        aarch64_privileged_owned_x(out, ctx, 10U, op[0].value) &&
+        fputs("  str x9, [x10]\n", out) != EOF;
 }
 
 /* Linux arch_counter_enforce_ordering() is a real dependent LOAD from SP.
@@ -5056,16 +5055,12 @@ static bool aarch64_linux_rng_sysreg_emit(
     }
     /* MRS_S sets NZCV; CSET immediately captures Z=0 as 1. The subsequent
      * stack spills cannot change the already materialized success bit. */
-    return fprintf(out,
-        "  .inst 0x%08x\n"
-        "  cset w10, ne\n"
-        "  ldr x11, [sp, #%zu]\n"
-        "  str x9, [x11]\n"
-        "  ldr x11, [sp, #%zu]\n"
-        "  strb w10, [x11]\n",
-        0xd53b2409U | ((form == 2U ? 1U : 0U) << 5U),
-        (size_t)op[0].value * 8U,
-        (size_t)op[1].value * 8U) >= 0;
+    return fprintf(out, "  .inst 0x%08x\n  cset w10, ne\n",
+            0xd53b2409U | ((form == 2U ? 1U : 0U) << 5U)) >= 0 &&
+           aarch64_privileged_owned_x(out, ctx, 11U, op[0].value) &&
+           fputs("  str x9, [x11]\n", out) != EOF &&
+           aarch64_privileged_owned_x(out, ctx, 11U, op[1].value) &&
+           fputs("  strb w10, [x11]\n", out) != EOF;
 }
 
 /* Qualcomm arm64 return-stack-buffer sanitization intentionally executes
@@ -5128,15 +5123,14 @@ static bool aarch64_linux_qcom_return_stack_emit(
         !aarch64_linux_structured_spill_slot_valid(op[0].value) ||
         !minic_type_pointee(fn->values[op[0].value].type, &value) ||
         !aarch64_linux_sysreg_u64_type(value)) return false;
-    return fprintf(out,
+    return fputs(
         "  mov x9, x30\n"
         "  .rept 16\n"
         "  bl . + 4\n"
         "  .endr\n"
-        "  mov x30, x9\n"
-        "  ldr x10, [sp, #%zu]\n"
-        "  str x9, [x10]\n",
-        (size_t)op[0].value * 8U) >= 0;
+        "  mov x30, x9\n", out) != EOF &&
+        aarch64_privileged_owned_x(out, ctx, 10U, op[0].value) &&
+        fputs("  str x9, [x10]\n", out) != EOF;
 }
 
 /* Linux arm64 cache-maintenance operations are architectural side effects:
@@ -5239,8 +5233,8 @@ static bool aarch64_linux_cache_op_emit(
          !minic_type_equal(type, minic_type_unsigned_long()) &&
          !minic_type_equal(type, minic_type_unsigned_long_long())))
         return false;
-    return fprintf(out, "  ldr x9, [sp, #%zu]\n  %s, x9\n",
-                   (size_t)op->value * 8U, mnemonic) >= 0;
+    return aarch64_privileged_owned_x(out, ctx, 9U, op->value) &&
+           fprintf(out, "  %s, x9\n", mnemonic) >= 0;
 }
 
 /* User-cache maintenance is the exception-recovering companion of the
@@ -5352,8 +5346,8 @@ static bool aarch64_linux_user_cache_fault_emit(
         return false;
     /* W9 is the actual fault-rewritten result register, encoded as 9 in
      * type-2's data word. X10 is the cache-operation address operand. */
-    return fprintf(out,
-        "  ldr x10, [sp, #%zu]\n"
+    return aarch64_privileged_owned_x(out, ctx, 10U, op[1].value) &&
+        fprintf(out,
         "1: %s, x10\n"
         "  mov w9, #0\n"
         "2:\n"
@@ -5363,11 +5357,10 @@ static bool aarch64_linux_user_cache_fault_emit(
         "  .long (2b) - .\n"
         "  .short 2\n"
         "  .short %u\n"
-        "  .popsection\n"
-        "  ldr x11, [sp, #%zu]\n"
-        "  str w9, [x11]\n",
-        (size_t)op[1].value * 8U, instruction,
-        9U | (31U << 5), (size_t)op[0].value * 8U) >= 0;
+        "  .popsection\n",
+        instruction, 9U | (31U << 5)) >= 0 &&
+        aarch64_privileged_owned_x(out, ctx, 11U, op[0].value) &&
+        fputs("  str w9, [x11]\n", out) != EOF;
 }
 static bool aarch64_linux_bitrev_source(
     const MinicC0Program *program, const MinicInlineAsm *src,
@@ -6130,9 +6123,8 @@ static bool aarch64_linux_percpu_write_alternative_emit(
     /* Both alternatives consume x9, a caller-clobbered AAPCS64 register.
      * Feature 47 owns the EL1-to-EL2 patch and its 12-byte relative table.
      * The paired .orgs reject any replacement instruction-size mismatch. */
-    return fprintf(out,
-        "  ldr x9, [sp, #%zu]\n"
-        "  .if 1 == 1\n"
+    return aarch64_privileged_owned_x(out, ctx, 9U, operand[0].value) &&
+        fputs("  .if 1 == 1\n"
         "661:\n"
         "  msr tpidr_el1, x9\n"
         "662:\n"
@@ -6150,8 +6142,7 @@ static bool aarch64_linux_percpu_write_alternative_emit(
         "  .org . - (664b-663b) + (662b-661b)\n"
         "  .org . - (662b-661b) + (664b-663b)\n"
         "  .previous\n"
-        "  .endif\n",
-        (size_t)operand[0].value * 8U) >= 0;
+        "  .endif\n", out) != EOF;
 }
 
 static bool aarch64_linux_lse_emit(
@@ -6404,13 +6395,10 @@ bool minic_aarch64_emit_qualified_structured_asm(
             !aarch64_stlr_type(pointee, 4U) ||
             !aarch64_stlr_type(fn->values[op[1].value].type, 4U))
             return false;
-        return fprintf(out,
-            "  ldr w9, [sp, #%zu]\n"
-            "  rbit w9, w9\n"
-            "  ldr x10, [sp, #%zu]\n"
-            "  str w9, [x10]\n",
-            (size_t)op[1].value * 8U,
-            (size_t)op[0].value * 8U) >= 0;
+        return aarch64_privileged_owned_w(out, ctx, 9U, op[1].value) &&
+            fputs("  rbit w9, w9\n", out) != EOF &&
+            aarch64_privileged_owned_x(out, ctx, 10U, op[0].value) &&
+            fputs("  str w9, [x10]\n", out) != EOF;
     }
     {
         Aarch64LseForm lse;
@@ -6558,24 +6546,22 @@ bool minic_aarch64_emit_qualified_structured_asm(
             !aarch64_stlr_type(pointee,width) ||
             !aarch64_linux_sysreg_u64_type(fn->values[ops[2].value].type))
             return false;
-        return fprintf(out,
-            "  ldr x10, [sp, #%zu]\n"
-            "  ldr x11, [sp, #%zu]\n"
+        return aarch64_privileged_owned_x(out, ctx, 10U, ops[1].value) &&
+            aarch64_privileged_owned_x(out, ctx, 11U, ops[2].value) &&
+            fprintf(out,
             "  sevl\n"
             "  wfe\n"
             "  ldxr%s %s9, [x10]\n"
             "  eor %s9, %s9, %s11\n"
             "  cbnz %s9, 1f\n"
             "  wfe\n"
-            "1:\n"
-            "  ldr x12, [sp, #%zu]\n"
-            "  str x9, [x12]\n",
-            (size_t)ops[1].value*8U,
-            (size_t)ops[2].value*8U,
+            "1:\n",
             width==1U?"b":width==2U?"h":"",
             width==8U?"x":"w",width==8U?"x":"w",
             width==8U?"x":"w",width==8U?"x":"w",
-            width==8U?"x":"w",(size_t)ops[0].value*8U)>=0;
+            width==8U?"x":"w")>=0 &&
+            aarch64_privileged_owned_x(out, ctx, 12U, ops[0].value) &&
+            fputs("  str x9, [x12]\n", out) != EOF;
     }
     if (ins->value.structured_inline_asm.operand_count == 0U) {
         const char *barrier = aarch64_barrier_template(
@@ -6609,10 +6595,9 @@ bool minic_aarch64_emit_qualified_structured_asm(
                 !aarch64_linux_structured_spill_slot_valid(operand[0].value) ||
                 !minic_type_is_pointer(fn->values[operand[0].value].type))
                 return false;
-            return fprintf(out,
-                "  ldr x9, [sp, #%zu]\n"
-                "  prfm %s, [x9]\n",
-                (size_t)operand[0].value * 8U, hint) >= 0;
+            return aarch64_privileged_owned_x(out, ctx, 9U,
+                       operand[0].value) &&
+                   fprintf(out, "  prfm %s, [x9]\n", hint) >= 0;
         }
         if (operand != NULL &&
             operand[0].kind == MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT &&
@@ -6631,9 +6616,9 @@ bool minic_aarch64_emit_qualified_structured_asm(
             /* ABI scratch x9 holds the original rZ operand. These
              * privileged instructions are GNU-AS-only verified, never
              * executed under unprivileged QEMU user mode. */
-            return fprintf(out, "  ldr x9, [sp, #%zu]\n"
-                                "  msr %s, x9\n",
-                           (size_t)operand[0].value * 8U,
+            return aarch64_privileged_owned_x(out, ctx, 9U,
+                       operand[0].value) &&
+                   fprintf(out, "  msr %s, x9\n",
                            aarch64_linux_msr_register(
                                info->template_text, info->template_length)) >= 0;
         }
@@ -6676,10 +6661,10 @@ bool minic_aarch64_emit_qualified_structured_asm(
         /* The output SSA operand is an address. The backend reads the real
          * privileged register into an internal GPR and stores the exact LP64
          * word back to the existing Core object. No external symbol/alias. */
-        return fprintf(out, "  mrs x9, %s\n"
-                            "  ldr x10, [sp, #%zu]\n"
-                            "  str x9, [x10]\n",
-                       reg, (size_t)operand[0].value * 8U) >= 0;
+        return fprintf(out, "  mrs x9, %s\n", reg) >= 0 &&
+               aarch64_privileged_owned_x(out, ctx, 10U,
+                   operand[0].value) &&
+               fputs("  str x9, [x10]\n", out) != EOF;
     }
     if (ins->value.structured_inline_asm.operand_count == 2U &&
         aarch64_linux_io_dependency_form(
@@ -6709,8 +6694,9 @@ bool minic_aarch64_emit_qualified_structured_asm(
         /* x9/x10/x11 are AAPCS64 caller-scratch. GNU linker consumes the
          * preserved 2×PREL32, 12-byte .altinstructions feature-91 record.
          * User QEMU runs LDR; Linux runtime can replace it with LDAR. */
-        return fprintf(out,
-            "  ldr x10, [sp, #%zu]\n"
+        return aarch64_privileged_owned_x(out, ctx, 10U,
+                   ops[1].value) &&
+            fprintf(out,
             "  .if 1 == 1\n"
             "661:\n  %s\n"
             "662:\n"
@@ -6727,11 +6713,11 @@ bool minic_aarch64_emit_qualified_structured_asm(
             "  .org . - (664b-663b) + (662b-661b)\n"
             "  .org . - (662b-661b) + (664b-663b)\n"
             "  .previous\n"
-            "  .endif\n"
-            "  ldr x11, [sp, #%zu]\n"
-            "  %s\n",
-            (size_t)ops[1].value * 8U, d->old_asm, d->new_asm,
-            (size_t)ops[0].value * 8U, d->store_asm) >= 0;
+            "  .endif\n",
+            d->old_asm, d->new_asm) >= 0 &&
+            aarch64_privileged_owned_x(out, ctx, 11U,
+                ops[0].value) &&
+            fprintf(out, "  %s\n", d->store_asm) >= 0;
     }
     if (ins->value.structured_inline_asm.operand_count == 2U &&
         aarch64_linux_percpu_alternative_template(
@@ -6771,7 +6757,7 @@ bool minic_aarch64_emit_qualified_structured_asm(
          * first 2×rel32, feature=47 (u16), old/new lengths (u8 each).
          * Preserve original GNU .subsection 1 and dual .org size contracts.
          * x9 is AAPCS64 scratch and receives the finally selected MRS. */
-        return fprintf(out,
+        return fputs(
             "  .if 1 == 1\n"
             "661:\n"
             "  mrs x9, tpidr_el1\n"
@@ -6790,10 +6776,10 @@ bool minic_aarch64_emit_qualified_structured_asm(
             "  .org . - (664b-663b) + (662b-661b)\n"
             "  .org . - (662b-661b) + (664b-663b)\n"
             "  .previous\n"
-            "  .endif\n"
-            "  ldr x10, [sp, #%zu]\n"
-            "  str x9, [x10]\n",
-            (size_t)operands[0].value * 8U) >= 0;
+            "  .endif\n", out) != EOF &&
+            aarch64_privileged_owned_x(out, ctx, 10U,
+                operands[0].value) &&
+            fputs("  str x9, [x10]\n", out) != EOF;
     }
     if (ins->value.structured_inline_asm.operand_count == 2U &&
         aarch64_raw_io_store(info->template_text, info->template_length)) {

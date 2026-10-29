@@ -146,6 +146,60 @@ static int verify_language_admission(void) {
     return puts("TARGET_LANGUAGE_ADMISSION=PASS five-targets") == EOF ? 1 : 0;
 }
 
+/* Source va_list C identity is independent from Core's variadic-copy kind
+ * and from generic sizeof/DataLayout. Canonical target registrations must
+ * not accidentally admit a foreign cursor as a native state-copy operand. */
+static int verify_va_cursor_source_abi(void) {
+    static const char *const names[] = {
+        "riscv32-linux", "riscv64-linux", "x86_64-linux",
+        "aarch64-linux", "loongarch64-linux"
+    };
+    MinicC0Program empty_program = {0};
+    MinicType void_pointer, int_pointer, qualified_void, volatile_void;
+    MinicType x86_cursor = minic_type_x86_va_list_cursor();
+    size_t i, bytes;
+    if (!minic_type_pointer_to(minic_type_void(), &void_pointer) ||
+        !minic_type_pointer_to(minic_type_int(), &int_pointer) ||
+        !minic_type_add_const(void_pointer, &qualified_void) ||
+        !minic_type_add_volatile(void_pointer, &volatile_void))
+        return 1;
+    for (i = 0U; i < sizeof(names) / sizeof(names[0]); ++i) {
+        const MinicTargetInfo *t = minic_target_info_from_name(names[i]);
+        MinicTargetInfo copy;
+        bool x86 = i == 2U;
+        bool aarch = i == 3U;
+        bool state_copy = x86 || aarch;
+        if (t == NULL ||
+            (t->va_cursor_source_abi_policy != NULL) != state_copy ||
+            (t->variadic_copy_kind == MINIC_VARIADIC_COPY_ABI_STATE) != state_copy ||
+            minic_target_info_variadic_state_copy_type_supported(t, x86_cursor) != x86 ||
+            minic_target_info_variadic_state_copy_type_supported(t, void_pointer) != aarch ||
+            minic_target_info_variadic_state_copy_type_supported(t, int_pointer) ||
+            minic_target_info_variadic_state_copy_type_supported(t, qualified_void) ||
+            minic_target_info_variadic_state_copy_type_supported(t, volatile_void) ||
+            !minic_target_info_sizeof_type(t, &empty_program, void_pointer, &bytes) ||
+            bytes != t->data_layout->pointer_size ||
+            minic_target_info_sizeof_type(t, &empty_program, x86_cursor, &bytes)) {
+            (void)fprintf(stderr, "FAIL target va cursor source ABI: %s\n", names[i]);
+            return 1;
+        }
+        /* ABI-state copying fails closed without the target's source C
+         * identity policy, even if the scalar copy-kind flag is present. */
+        if (state_copy) {
+            copy = *t;
+            copy.va_cursor_source_abi_policy = NULL;
+            if (minic_target_info_variadic_state_copy_type_supported(
+                    &copy, x86 ? x86_cursor : void_pointer) ||
+                (x86 && minic_target_info_sizeof_type(
+                    &copy, &empty_program, x86_cursor, &bytes))) {
+                (void)fprintf(stderr, "FAIL target va cursor unregistered: %s\n", names[i]);
+                return 1;
+            }
+        }
+    }
+    return puts("TARGET_VA_CURSOR_SOURCE_ABI=PASS x86_sizeof_fail_closed aarch_void_pointer_state_copy five_targets") == EOF;
+}
+
 static int verify_registered_target_catalog(void) {
     const MinicTargetCatalogEntry *targets;
     const MinicDataLayout unknown_layout = {0};
@@ -579,7 +633,8 @@ int main(void) {
         verify_lp64("riscv64-linux", MINIC_TARGET_ARCH_RISCV64,
                     MINIC_INTEGER_SIGN_UNSIGNED, MINIC_INTEGER_RANK_INT,
                     MINIC_INTEGER_SIGN_SIGNED) != 0 ||
-        verify_invocation_language_abi() != 0 || verify_language_admission() != 0 || verify_rv32() != 0 ||
+        verify_invocation_language_abi() != 0 || verify_language_admission() != 0 ||
+        verify_va_cursor_source_abi() != 0 || verify_rv32() != 0 ||
         verify_lp64("aarch64-linux", MINIC_TARGET_ARCH_AARCH64,
                     MINIC_INTEGER_SIGN_UNSIGNED, MINIC_INTEGER_RANK_INT,
                     MINIC_INTEGER_SIGN_UNSIGNED) != 0 ||

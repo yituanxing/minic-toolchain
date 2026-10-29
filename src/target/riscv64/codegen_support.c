@@ -1,5 +1,6 @@
 #include "target/riscv64/codegen_internal.h"
 #include "target/riscv64/abi.h"
+#include "target/riscv/typed_memory.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -306,6 +307,48 @@ bool minic_riscv64_emit_scalar_store_for_program(FILE *file,
         type = effective_type;
     }
     return minic_riscv64_emit_scalar_store(file, type, source_register, address_register);
+}
+
+static bool minic_riscv64_emit_safe_scalar(
+    FILE *file, const MinicC0Program *program, MinicType type,
+    bool store, const char *value_register, const char *address_register,
+    const char *scratch_register, size_t proven_alignment) {
+    MinicType effective = type;
+    size_t width, type_alignment;
+    const char *op;
+    if (minic_type_is_enum(type) &&
+        !minic_c0_type_effective_integer_type(program, type, &effective))
+        return false;
+    op = store ? minic_riscv64_store_instruction(effective) :
+                 minic_riscv64_load_instruction(effective);
+    if (op == NULL ||
+        !minic_data_layout_type(minic_default_data_layout(), program,
+                                effective, &width, &type_alignment))
+        return false;
+    (void)type_alignment;
+    return minic_riscv_emit_typed_memory(
+        file, store, 64U, width,
+        !store && minic_type_is_signed_integer(effective),
+        op, value_register, address_register, scratch_register,
+        proven_alignment, "rv64_scalar");
+}
+
+bool minic_riscv64_emit_safe_scalar_load(
+    FILE *file, const MinicC0Program *program, MinicType type,
+    const char *destination_register, const char *address_register,
+    const char *scratch_register, size_t proven_alignment) {
+    return minic_riscv64_emit_safe_scalar(
+        file, program, type, false, destination_register,
+        address_register, scratch_register, proven_alignment);
+}
+
+bool minic_riscv64_emit_safe_scalar_store(
+    FILE *file, const MinicC0Program *program, MinicType type,
+    const char *source_register, const char *address_register,
+    const char *scratch_register, size_t proven_alignment) {
+    return minic_riscv64_emit_safe_scalar(
+        file, program, type, true, source_register,
+        address_register, scratch_register, proven_alignment);
 }
 
 /* RV64_INT128_PAIR_V1: keep the address stable while a0 becomes the low half. */

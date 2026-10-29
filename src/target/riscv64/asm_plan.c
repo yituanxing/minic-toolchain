@@ -90,6 +90,17 @@ static bool core_asm_register_is_callee_saved(const char *name) {
            minic_riscv_gpr_callee_saved(id);
 }
 
+/* Large-offset Core frame accesses use t2 (static) or t6/t5 (dynamic) as
+ * implicit address temporaries. Every previously loaded inline-asm operand
+ * remains live until source asm executes; never allocate these three as an
+ * operand, including a GNU fixed local binding. They remain available as
+ * the two synthesized operand-transfer scratch registers. */
+static bool core_asm_register_is_frame_temporary(const char *name) {
+    return minic_riscv_gpr_name_equal(name, "t2") ||
+           minic_riscv_gpr_name_equal(name, "t5") ||
+           minic_riscv_gpr_name_equal(name, "t6");
+}
+
 static bool core_asm_register_in_use(const char *const *operand_registers,
                                      size_t operand_count,
                                      const char *name) {
@@ -185,19 +196,20 @@ static bool core_structured_inline_asm_allocate(
     const MinicCoreInstruction *instruction,
     const char **operand_registers,
     bool *memory_operand,
-    const char **scratch_register) {
+                                            const char **scratch_register,
+                                            const char **transfer_scratch_register) {
     static const char *const output_preferences[] = {
-        "t0", "t1", "t2", "t3", "t4", "t5", "t6",
+        "t0", "t1", "t3", "t4",
         "a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7",
         "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9", "s10", "s11", "s0",
     };
     static const char *const memory_preferences[] = {
-        "t2", "t6", "t5", "t4", "t3", "t1", "t0",
+        "t4", "t3", "t1", "t0",
         "a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7",
         "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9", "s10", "s11", "s0",
     };
     static const char *const input_preferences[] = {
-        "t3", "t4", "t5", "t6", "t2", "t1", "t0",
+        "t3", "t4", "t1", "t0",
         "a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7",
         "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9", "s10", "s11", "s0",
     };
@@ -208,6 +220,7 @@ static bool core_structured_inline_asm_allocate(
 
     if (function == NULL || instruction == NULL ||
         operand_registers == NULL || memory_operand == NULL || scratch_register == NULL ||
+        transfer_scratch_register == NULL ||
         instruction->kind != MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM ||
         instruction->value.structured_inline_asm.inline_asm_id >= function->inline_asm_count) {
         return false;
@@ -258,6 +271,7 @@ static bool core_structured_inline_asm_allocate(
             core_fixed_register_binding(function, binding->fixed_register_binding_id);
         if (fixed_binding == NULL || !fixed_binding->is_local ||
             fixed_binding->register_name == NULL || fixed_binding->register_name_length == 0U ||
+            core_asm_register_is_frame_temporary(fixed_binding->register_name) ||
             core_inline_asm_clobbers_register(inline_asm, fixed_binding->register_name)) {
             return false;
         }
@@ -310,6 +324,7 @@ static bool core_structured_inline_asm_allocate(
     }
 
     *scratch_register = NULL;
+    *transfer_scratch_register = NULL;
     for (binding_index = 0U;
          binding_index < sizeof(core_asm_caller_saved_registers) /
                              sizeof(core_asm_caller_saved_registers[0]);
@@ -317,12 +332,18 @@ static bool core_structured_inline_asm_allocate(
         const char *candidate = core_asm_caller_saved_registers[binding_index].name;
         /* Scratch is used only before/after the asm, so an asm clobber is fine;
            it merely must not alias a live operand register. */
-        if (!core_asm_register_in_use(operand_registers, 10U, candidate)) {
+        if (core_asm_register_in_use(operand_registers, 10U, candidate))
+            continue;
+        if (*scratch_register == NULL)
             *scratch_register = candidate;
+        else {
+            *transfer_scratch_register = candidate;
             break;
         }
     }
-    return *scratch_register != NULL;
+    /* Typed packed lvalue ingress/egress needs both an address register and
+     * independent byte-transfer scratch. Neither may alias source operands. */
+    return *scratch_register != NULL && *transfer_scratch_register != NULL;
 }
 
 
@@ -333,7 +354,7 @@ bool minic_riscv64_asm_instruction_plan_build(
     memset(plan, 0, sizeof(*plan));
     if (!core_structured_inline_asm_allocate(
             function, instruction, plan->operand_registers, plan->memory_operand,
-            &plan->scratch_register)) return false;
+            &plan->scratch_register, &plan->transfer_scratch_register)) return false;
     plan->valid = true;
     return true;
 }

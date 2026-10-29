@@ -150,6 +150,22 @@ bool minic_core_lower_boolean_range_expression(const MinicCoreLowerContext *,
 bool minic_core_lower_unreachable_external_reentry(
     const MinicCoreLowerContext *, const MinicStatement *, MinicStatementId);
 
+/* Canonical source-subtree ownership set, independent of source CFG policy.
+ * IF, dead-tail and dynamically prebound Core-block queries borrow the same
+ * membership; failure means UNKNOWN and must forbid pruning. */
+typedef struct CoreSourceSubtreeMembership {
+    bool *statements;
+    size_t statement_count;
+} CoreSourceSubtreeMembership;
+bool core_source_subtree_membership_from_block(
+    const MinicCoreLowerContext *, const MinicBlock *,
+    CoreSourceSubtreeMembership *);
+bool core_source_subtree_membership_from_statement(
+    const MinicCoreLowerContext *, const MinicStatement *,
+    MinicStatementId extra_statement_id,
+    CoreSourceSubtreeMembership *);
+void core_source_subtree_membership_destroy(CoreSourceSubtreeMembership *);
+
 bool core_capture_enum_metadata(MinicCoreLowerContext *context);
 /* Source-wide fail-closed _Bool==0 fact used only by Core CFG lowering. */
 bool core_zero_bool_cfg_condition(const MinicCoreLowerContext *context,

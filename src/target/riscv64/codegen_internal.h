@@ -44,6 +44,12 @@ bool minic_riscv64_emit_scalar_store_for_program(FILE *file,
                                                  MinicType type,
                                                  const char *source_register,
                                                  const char *address_register);
+/* Typed Core pointer memory, distinct from aligned machine-owned frame
+ * slots. All source pointer effects must use this proven-or-guarded form. */
+bool minic_riscv64_emit_safe_scalar_load(FILE *, const MinicC0Program *,
+    MinicType, const char *, const char *, const char *, size_t);
+bool minic_riscv64_emit_safe_scalar_store(FILE *, const MinicC0Program *,
+    MinicType, const char *, const char *, const char *, size_t);
 bool minic_riscv64_emit_integer_aggregate_load_chunk_profile(
     FILE *file, const MinicC0Program *program, MinicType type,
     size_t chunk_index, const char *destination_register,

@@ -156,6 +156,43 @@ static bool minic_data_layout_type_depth(const MinicDataLayout *layout,
                                          size_t *size,
                                          size_t *alignment);
 
+/* Both the record placement algorithm and GNU __alignof__(member) queries
+ * must use this *same* effective member alignment. In particular pragma
+ * pack(N) caps the natural alignment before an explicit aligned(M) may
+ * raise it again. Field-level packed likewise overrides natural alignment;
+ * this rule is identical for integer bit-field storage boundaries. */
+static bool minic_data_layout_record_pack(const MinicRecord *record,
+                                          size_t *pack_alignment) {
+    size_t pack;
+    if (record == NULL || pack_alignment == NULL) return false;
+    pack = record->is_packed ? 1U : record->pack_alignment;
+    if (pack != 0U && (pack > 16U || (pack & (pack - 1U)) != 0U))
+        return false;
+    *pack_alignment = pack;
+    return true;
+}
+
+static bool minic_data_layout_effective_field_alignment(
+    const MinicRecordField *field, size_t pack_alignment,
+    size_t natural_alignment, size_t *alignment) {
+    size_t resolved;
+    if (field == NULL || alignment == NULL || natural_alignment == 0U)
+        return false;
+    resolved = natural_alignment;
+    if (pack_alignment != 0U && resolved > pack_alignment)
+        resolved = pack_alignment;
+    if (field->is_packed)
+        resolved = 1U;
+    if (field->explicit_alignment != 0U) {
+        if ((field->explicit_alignment & (field->explicit_alignment - 1U)) != 0U)
+            return false;
+        if (field->explicit_alignment > resolved)
+            resolved = field->explicit_alignment;
+    }
+    *alignment = resolved;
+    return true;
+}
+
 static bool minic_data_layout_record_depth(const MinicDataLayout *layout,
                                            const MinicC0Program *program,
                                            const MinicRecord *record,
@@ -176,9 +213,7 @@ static bool minic_data_layout_record_depth(const MinicDataLayout *layout,
     }
     storage_bits = 0U;
     record_alignment = 1U;
-    pack_alignment = record->is_packed ? 1U : record->pack_alignment;
-    if (pack_alignment != 0U &&
-        (pack_alignment > 16U || (pack_alignment & (pack_alignment - 1U)) != 0U)) {
+    if (!minic_data_layout_record_pack(record, &pack_alignment)) {
         return false;
     }
     for (index = 0U; index < record->field_count; ++index) {
@@ -196,30 +231,17 @@ static bool minic_data_layout_record_depth(const MinicDataLayout *layout,
             element_size > SIZE_MAX / field->element_count) {
             return false;
         }
-        if (pack_alignment != 0U && field_alignment > pack_alignment) {
-            field_alignment = pack_alignment;
-        }
+        if (!minic_data_layout_effective_field_alignment(
+                field, pack_alignment, field_alignment, &field_alignment))
+            return false;
         field_bit_offset = 0U;
         if (field->is_bit_field) {
             size_t type_bits;
             size_t alignment_bits;
             size_t field_start_bits;
 
-            /* Keep named bit-field layout attributes in the same semantic
-             * alignment policy as ordinary members. A packed field has a
-             * byte-aligned storage boundary even in an unpacked record;
-             * an explicit aligned(N) can raise that boundary again. */
-            if (field->is_packed) {
-                field_alignment = 1U;
-            }
-            if (field->explicit_alignment != 0U) {
-                if ((field->explicit_alignment & (field->explicit_alignment - 1U)) != 0U) {
-                    return false;
-                }
-                if (field->explicit_alignment > field_alignment) {
-                    field_alignment = field->explicit_alignment;
-                }
-            }
+            /* Bit-field allocation keeps its storage-unit placement rules,
+             * but shares the member alignment policy with ordinary fields. */
             if (!minic_type_is_integer(field->type) || field->element_count != 1U ||
                 field->is_array || field->is_flexible_array || field->is_zero_length_array ||
                 element_size == 0U || element_size > SIZE_MAX / 8U || field_alignment == 0U ||
@@ -278,17 +300,6 @@ static bool minic_data_layout_record_depth(const MinicDataLayout *layout,
             field_size = (field->is_flexible_array || field->is_zero_length_array)
                              ? 0U
                              : element_size * field->element_count;
-            if (field->is_packed) {
-                field_alignment = 1U;
-            }
-            if (field->explicit_alignment != 0U) {
-                if ((field->explicit_alignment & (field->explicit_alignment - 1U)) != 0U) {
-                    return false;
-                }
-                if (field->explicit_alignment > field_alignment) {
-                    field_alignment = field->explicit_alignment;
-                }
-            }
             if (record->is_union) {
                 field_offset = 0U;
                 if (field_size > storage_size) {
@@ -607,6 +618,7 @@ bool minic_data_layout_record_field_alignment(const MinicDataLayout *layout,
     const MinicRecordField *field;
     size_t field_size;
     size_t field_alignment;
+    size_t pack_alignment;
 
     if (layout == NULL || program == NULL || record == NULL || alignment == NULL ||
         field_index >= record->field_count) {
@@ -614,23 +626,13 @@ bool minic_data_layout_record_field_alignment(const MinicDataLayout *layout,
     }
     field = &record->fields[field_index];
     if (field->is_bit_field ||
+        !minic_data_layout_record_pack(record, &pack_alignment) ||
         !minic_data_layout_type(layout, program, field->type, &field_size, &field_alignment)) {
         return false;
     }
     (void)field_size;
-    if (field->is_packed || (record->is_packed && field->explicit_alignment == 0U)) {
-        field_alignment = 1U;
-    }
-    if (field->explicit_alignment != 0U) {
-        if ((field->explicit_alignment & (field->explicit_alignment - 1U)) != 0U) {
-            return false;
-        }
-        if (field->explicit_alignment > field_alignment) {
-            field_alignment = field->explicit_alignment;
-        }
-    }
-    *alignment = field_alignment;
-    return true;
+    return minic_data_layout_effective_field_alignment(
+        field, pack_alignment, field_alignment, alignment);
 }
 
 bool minic_data_layout_record_field_layout(const MinicDataLayout *layout,

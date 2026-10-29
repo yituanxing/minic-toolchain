@@ -1,8 +1,64 @@
 #include "core/core_ir_internal.h"
+#include "core/address_alignment.h"
 
 #include <inttypes.h>
 #include <stdlib.h>
 #include <string.h>
+
+static size_t core_address_alignment_gcd(size_t base, size_t offset) {
+    while (offset != 0U) {
+        const size_t next = base % offset;
+        base = offset;
+        offset = next;
+    }
+    return base == 0U ? 1U : base;
+}
+
+static size_t core_address_known_alignment_visit(
+    const MinicCoreFunction *function, MinicCoreValueId address,
+    MinicCoreAddressRootAlignment root_alignment, void *context,
+    unsigned int depth) {
+    const MinicCoreInstruction *definition;
+    size_t base_alignment, offset;
+    if (function == NULL || root_alignment == NULL ||
+        address >= function->value_count || function->values == NULL ||
+        depth > 64U || function->instructions == NULL ||
+        function->values[address].definition >= function->instruction_count)
+        return 1U;
+    definition = &function->instructions[function->values[address].definition];
+    if (definition->result != address) return 1U;
+    switch (definition->kind) {
+    case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS:
+    case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS:
+        base_alignment = root_alignment(function, definition, context);
+        return base_alignment != 0U &&
+               (base_alignment & (base_alignment - 1U)) == 0U
+            ? base_alignment : 1U;
+    case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS:
+        base_alignment = core_address_known_alignment_visit(
+            function, definition->value.field_address.base,
+            root_alignment, context, depth + 1U);
+        offset = definition->value.field_address.byte_offset;
+        return core_address_alignment_gcd(base_alignment, offset);
+    case MINIC_CORE_INSTRUCTION_POINTER_OFFSET:
+        base_alignment = core_address_known_alignment_visit(
+            function, definition->value.pointer_offset.base,
+            root_alignment, context, depth + 1U);
+        offset = definition->value.pointer_offset.element_size;
+        return core_address_alignment_gcd(base_alignment, offset);
+    default:
+        /* Parameter pointers, reloaded pointers, bitcasts, call results and
+         * unknown SSA origins carry no trusted alignment proof. */
+        return 1U;
+    }
+}
+
+size_t minic_core_address_known_alignment(
+    const MinicCoreFunction *function, MinicCoreValueId address,
+    MinicCoreAddressRootAlignment root_alignment, void *context) {
+    return core_address_known_alignment_visit(
+        function, address, root_alignment, context, 0U);
+}
 
 /* A target-independent conservative CFG filter. Keep source labels as
  * additional roots: they may be reached through a computed goto, an asm-goto

@@ -54,12 +54,25 @@ typedef struct MinicTargetSourceLanguagePolicy {
         MinicTargetGnuFunctionAttributeKind, const char *, size_t);
 } MinicTargetSourceLanguagePolicy;
 
+/* The frontend's builtin va_list proxy has a C type identity that may not
+ * match the ABI state object: x86's pointer-sized runtime proxy represents
+ * an array of 24-byte tags and must not answer sizeof as a pointer. AAPCS64
+ * instead uses a source void* proxy whose qualified copy predicate gates
+ * independent ABI-state duplication. This policy NEVER chooses how bytes
+ * are copied, how variadic arguments are accessed, or generic DataLayout. */
+typedef struct MinicTargetVaCursorSourceAbiPolicy {
+    bool (*sizeof_proxy_forbidden)(MinicType);
+    bool (*state_copy_source_type_supported)(MinicType);
+} MinicTargetVaCursorSourceAbiPolicy;
+
 extern const MinicTargetAsmSourcePolicy minic_riscv32_asm_source_policy;
 extern const MinicTargetAsmSourcePolicy minic_riscv64_asm_source_policy;
 extern const MinicTargetAsmSourcePolicy minic_x86_64_asm_source_policy;
 extern const MinicTargetAsmSourcePolicy minic_aarch64_asm_source_policy;
 extern const MinicTargetSourceLanguagePolicy minic_x86_64_source_language_policy;
 extern const MinicTargetSourceLanguagePolicy minic_aarch64_source_language_policy;
+extern const MinicTargetVaCursorSourceAbiPolicy minic_x86_64_va_cursor_source_abi_policy;
+extern const MinicTargetVaCursorSourceAbiPolicy minic_aarch64_va_cursor_source_abi_policy;
 extern const MinicTargetAsmSourcePolicy minic_loongarch64_asm_source_policy;
 extern const MinicTargetMachineBuiltinPolicy minic_loongarch64_machine_builtin_policy;
 extern const MinicTargetAliasAbiPolicy minic_loongarch64_alias_abi_policy;

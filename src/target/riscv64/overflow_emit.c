@@ -3,6 +3,7 @@
 #include "target/riscv64/legalize.h"
 #include "target/riscv64/frame_access.h"
 #include "target/riscv64/runtime_libcall.h"
+#include "target/riscv/typed_memory.h"
 #include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -14,12 +15,15 @@
  * The native-M lowering below is intentionally unchanged. */
 static bool emit_strict_i_checked_multiply(
     FILE *file, const MinicC0Program *program,
+    const MinicCoreFunction *function,
     const MinicRiscv64CoreFrame *frame,
     const MinicCoreInstruction *instruction, const MinicRiscvIsa *isa,
     MinicType result_type, size_t result_size, bool is_unsigned) {
     MinicCoreValueId lhs = instruction->value.integer_overflow.left;
     MinicCoreValueId rhs = instruction->value.integer_overflow.right;
     MinicCoreValueId output = instruction->value.integer_overflow.result_address;
+    const size_t proven_alignment = minic_riscv_address_alignment(
+        program, minic_default_data_layout(), function, output);
 
     if (!minic_riscv64_frame_load_value(file, frame, lhs, "t0") ||
         !minic_riscv64_frame_load_value(file, frame, rhs, "t1") ||
@@ -42,13 +46,15 @@ static bool emit_strict_i_checked_multiply(
          * Subsequent libcalls clobber all t-registers, so reread the source
          * values and the result pointer from their owned frame locations. */
         if (!minic_riscv64_frame_load_value(file, frame, output, "t3") ||
-            !minic_riscv64_emit_scalar_store_for_program(
-                file, program, result_type, "t2", "t3") ||
+            !minic_riscv64_emit_safe_scalar_store(
+                file, program, result_type, "t2", "t3", "t6",
+                proven_alignment) ||
             !minic_riscv64_frame_load_value(file, frame, rhs, "t1") ||
             fprintf(file, "  beqz t1, 1f\n") < 0 ||
             !minic_riscv64_frame_load_value(file, frame, output, "t3") ||
-            !minic_riscv64_emit_scalar_load_for_program(
-                file, program, result_type, "t0", "t3") ||
+            !minic_riscv64_emit_safe_scalar_load(
+                file, program, result_type, "t0", "t3", "t6",
+                proven_alignment) ||
             !minic_riscv64_emit_arithmetic_libcall(
                 file, isa, is_unsigned ? MINIC_RISCV64_LIBCALL_UDIV :
                                          MINIC_RISCV64_LIBCALL_SDIV,
@@ -74,8 +80,9 @@ static bool emit_strict_i_checked_multiply(
 
     /* A helper call invalidates t3; never reuse the pre-call output address. */
     if (!minic_riscv64_frame_load_value(file, frame, output, "t3") ||
-        !minic_riscv64_emit_scalar_store_for_program(
-            file, program, result_type, "t2", "t3"))
+        !minic_riscv64_emit_safe_scalar_store(
+            file, program, result_type, "t2", "t3", "t6",
+            proven_alignment))
         return false;
     return minic_riscv64_frame_store_value(file, frame, instruction->result, "t4");
 }
@@ -97,15 +104,19 @@ bool minic_riscv64_emit_overflow_instruction(
         MinicType right_type;
         size_t result_size;
         bool is_unsigned;
+        size_t proven_alignment;
 
         if (!minic_riscv64_core_integer_overflow_supported(
                 program, function, instruction, &result_type, &result_size, &is_unsigned))
             return false;
+        proven_alignment = minic_riscv_address_alignment(
+            program, minic_default_data_layout(), function,
+            instruction->value.integer_overflow.result_address);
         if (minic_riscv64_uses_arithmetic_libcall(isa) &&
             instruction->value.integer_overflow.operator_kind ==
                 MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY)
             return emit_strict_i_checked_multiply(
-                file, program, frame, instruction, isa, result_type, result_size,
+                file, program, function, frame, instruction, isa, result_type, result_size,
                 is_unsigned);
         if (!minic_riscv64_frame_load_value(
                 file, frame, instruction->value.integer_overflow.left, "t0") ||
@@ -135,8 +146,9 @@ bool minic_riscv64_emit_overflow_instruction(
                     !minic_riscv64_emit_integer_conversion_for_program(
                         file, program, result_type, "t2") ||
                     fprintf(file, "  xor t4, t4, t2\n  snez t4, t4\n") < 0 ||
-                    !minic_riscv64_emit_scalar_store_for_program(
-                        file, program, result_type, "t2", "t3")) {
+                    !minic_riscv64_emit_safe_scalar_store(
+                        file, program, result_type, "t2", "t3", "t6",
+                        proven_alignment)) {
                     return false;
                 }
                 return minic_riscv64_frame_store_value(file, frame, instruction->result, "t4");
@@ -158,8 +170,9 @@ bool minic_riscv64_emit_overflow_instruction(
                         unsigned_register) < 0 ||
                 !minic_riscv64_emit_integer_conversion_for_program(
                     file, program, result_type, "t2") ||
-                !minic_riscv64_emit_scalar_store_for_program(
-                    file, program, result_type, "t2", "t3")) {
+                !minic_riscv64_emit_safe_scalar_store(
+                    file, program, result_type, "t2", "t3", "t6",
+                    proven_alignment)) {
                 return false;
             }
             return minic_riscv64_frame_store_value(file, frame, instruction->result, "t4");
@@ -233,7 +246,9 @@ bool minic_riscv64_emit_overflow_instruction(
                            "  snez t4, t4\n") < 0) {
             return false;
         }
-        if (!minic_riscv64_emit_scalar_store_for_program(file, program, result_type, "t2", "t3")) {
+        if (!minic_riscv64_emit_safe_scalar_store(
+                file, program, result_type, "t2", "t3", "t6",
+                proven_alignment)) {
             return false;
         }
         return minic_riscv64_frame_store_value(file, frame, instruction->result, "t4");

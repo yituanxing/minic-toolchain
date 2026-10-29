@@ -34,6 +34,9 @@ typedef struct MinicDirectLP64AbiPolicy {
     bool long_double_in_fp_register;
     bool variadic_floating_in_fp_register;
     bool variadic_named_double_supported;
+    /* Unnamed 2*GRLEN-aligned scalar values must start at an even GAR.
+     * This is independent of whether named wide scalars may split at a7. */
+    bool variadic_align_wide_gp_pair;
     MinicDirectLP64VariadicCursor variadic_cursor;
     size_t variadic_save_bytes;
     size_t variadic_save_alignment;

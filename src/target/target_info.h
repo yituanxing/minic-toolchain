@@ -69,6 +69,7 @@ struct MinicTargetAsmSourcePolicy;
 struct MinicTargetMachineBuiltinPolicy;
 struct MinicTargetAliasAbiPolicy;
 struct MinicTargetSourceLanguagePolicy;
+struct MinicTargetVaCursorSourceAbiPolicy;
 
 typedef struct MinicTargetInfo {
     MinicTargetArchitecture architecture;
@@ -76,6 +77,9 @@ typedef struct MinicTargetInfo {
     const struct MinicTargetMachineBuiltinPolicy *machine_builtin_policy;
     const struct MinicTargetAliasAbiPolicy *alias_abi_policy;
     const struct MinicTargetSourceLanguagePolicy *source_language_policy;
+    /* C identity of the compiler's va_list proxy. ABI state-copy strategy
+     * is a separate machine/Core contract (variadic_copy_kind below). */
+    const struct MinicTargetVaCursorSourceAbiPolicy *va_cursor_source_abi_policy;
     const MinicDataLayout *data_layout;
     const MinicTargetIntegerModel *integer_model;
     MinicType wide_character_type;

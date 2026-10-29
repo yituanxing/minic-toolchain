@@ -16,6 +16,16 @@ mkdir -p "$work"
     "$root/src/core/reentry_index.c" -o "$work/core_reentry_query_test"
 "$work/core_reentry_query_test"
 
+# Directly guard canonical source-subtree membership without dragging machine
+# backends into a source-ownership test. Link only the relevant Core sections.
+"$CC" -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow \
+    -Wstrict-prototypes -Wmissing-prototypes -Werror \
+    -ffunction-sections -fdata-sections -Wl,--gc-sections \
+    -I"$root/src" -I"$root/include" \
+    "$root/tests/core/core_source_subtree_membership_test.c" \
+    "$root/src/core/core_lower.c" -o "$work/core_source_subtree_membership_test"
+"$work/core_source_subtree_membership_test"
+
 for name in core_reentry_policy_runtime m144_unreferenced_loop_label_metadata; do
     source_file="$root/tests/compiler/c0/$name.c"
     "$CC" -std=gnu11 -E -P "$source_file" -o "$work/$name.i"
@@ -30,4 +40,4 @@ for name in core_reentry_policy_runtime m144_unreferenced_loop_label_metadata; d
     "$work/$name-minic"
 done
 
-printf 'PASS Core typed reentry indexed/fallback, GCC native, MiniC native, 5 ISA -S\n'
+printf 'PASS Core typed reentry indexed/fallback, source-subtree membership, GCC native, MiniC native, 5 ISA -S\n'

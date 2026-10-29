@@ -13,73 +13,10 @@
 /* One owner for source-level if CFG, reentry safety and local-fact joins.
  * CFG terminators and structured statements remain target-independent. */
 
-/* M187_CONSTANT_IF_EXTERNAL_REENTRY: mark every statement owned by a
-   discarded block graph so internal gotos disappear with that graph rather
-   than falsely keeping an otherwise constant-dead branch alive. */
-static bool core_mark_discarded_if_membership(
-    const MinicCoreLowerContext *context,
-    const MinicBlock *block,
-    bool *visited_blocks,
-    bool *statement_membership) {
-    const MinicC0Program *program;
-    size_t index;
-
-    if (context == NULL || context->body == NULL || context->body->program == NULL ||
-        block == NULL || visited_blocks == NULL || statement_membership == NULL) {
-        return false;
-    }
-    program = context->body->program;
-    for (index = 0U; index < block->statement_count; ++index) {
-        MinicStatementId statement_id = block->statements[index];
-        const MinicStatement *statement;
-
-        if (statement_id >= program->statement_count) {
-            return false;
-        }
-        statement_membership[statement_id] = true;
-        statement = minic_c0_program_statement(program, statement_id);
-        if (statement == NULL) {
-            return false;
-        }
-        if (statement->then_block != MINIC_BLOCK_INVALID) {
-            const MinicBlock *child;
-            if (statement->then_block >= program->block_count) {
-                return false;
-            }
-            if (!visited_blocks[statement->then_block]) {
-                visited_blocks[statement->then_block] = true;
-                child = minic_c0_program_block(program, statement->then_block);
-                if (child == NULL ||
-                    !core_mark_discarded_if_membership(
-                        context, child, visited_blocks, statement_membership)) {
-                    return false;
-                }
-            }
-        }
-        if (statement->else_block != MINIC_BLOCK_INVALID) {
-            const MinicBlock *child;
-            if (statement->else_block >= program->block_count) {
-                return false;
-            }
-            if (!visited_blocks[statement->else_block]) {
-                visited_blocks[statement->else_block] = true;
-                child = minic_c0_program_block(program, statement->else_block);
-                if (child == NULL ||
-                    !core_mark_discarded_if_membership(
-                        context, child, visited_blocks, statement_membership)) {
-                    return false;
-                }
-            }
-        }
-    }
-    return true;
-}
-
 static bool core_block_contains_reentry_label(const MinicCoreLowerContext *context,
                                               const MinicBlock *block) {
+    CoreSourceSubtreeMembership membership = {0};
     const MinicC0Program *program;
-    bool *visited_blocks;
-    bool *statement_membership;
     bool unsafe;
 
     if (context == NULL || context->body == NULL || context->body->program == NULL ||
@@ -87,28 +24,13 @@ static bool core_block_contains_reentry_label(const MinicCoreLowerContext *conte
         return true;
     }
     program = context->body->program;
-    if (program->statement_count == 0U ||
-        program->block_count > SIZE_MAX / sizeof(*visited_blocks) ||
-        program->statement_count > SIZE_MAX / sizeof(*statement_membership)) {
+    /* The shared ownership builder returns UNKNOWN on malformed source or
+     * OOM, and no reachability proof may prune a block under uncertainty. */
+    if (!core_source_subtree_membership_from_block(context, block, &membership))
         return true;
-    }
-    visited_blocks = program->block_count == 0U
-                         ? NULL
-                         : (bool *)calloc(program->block_count, sizeof(*visited_blocks));
-    statement_membership =
-        (bool *)calloc(program->statement_count, sizeof(*statement_membership));
-    if ((program->block_count != 0U && visited_blocks == NULL) ||
-        statement_membership == NULL) {
-        free(visited_blocks);
-        free(statement_membership);
-        return true;
-    }
-    unsafe = !core_mark_discarded_if_membership(
-        context, block, visited_blocks, statement_membership);
-
-    if (!unsafe) {
-        MinicCoreReentryQuery query = {
-            .membership = statement_membership,
+    {
+        const MinicCoreReentryQuery query = {
+            .membership = membership.statements,
             .label_id = MINIC_STATEMENT_INVALID,
             .checks = MINIC_CORE_REENTRY_CHECK_EXTERNAL_JUMP |
                       MINIC_CORE_REENTRY_CHECK_LABEL_ADDRESS |
@@ -118,9 +40,7 @@ static bool core_block_contains_reentry_label(const MinicCoreLowerContext *conte
         unsafe = minic_core_reentry_query(
             context->reentry_index, program, &query) != 0U;
     }
-
-    free(visited_blocks);
-    free(statement_membership);
+    core_source_subtree_membership_destroy(&membership);
     return unsafe;
 }
 

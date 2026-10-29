@@ -2,6 +2,7 @@
 #include "target/loongarch64/simd_asm.h"
 #include "target/common/direct_linux_bug_asm.h"
 #include "target/loongarch64/frame_emit.h"
+#include "target/loongarch64/memory_emit.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -1352,7 +1353,9 @@ static bool loong_percpu_indexed_emit(
                minic_loongarch64_emit_frame_mem(
                    out, "ld.d", "$t1", (size_t)b[0].value*8U,
                    ctx->dynamic_frame) &&
-               fputs("  st.d $t0, $t1, 0\n", out) != EOF;
+               minic_loongarch64_emit_asm_output_store(
+                   out, ctx->program, ctx->target, fn, b[0].value,
+                   8U, "$t0", "$t1", "$t3");
     return minic_loongarch64_emit_frame_mem(
                out, "ld.d", "$t0", (size_t)b[0].value*8U,ctx->dynamic_frame) &&
            fprintf(out, "  %s $t0, $r21, $t1\n",
@@ -1637,7 +1640,9 @@ static bool loong_linux_fpr_transfer_emit(
         return fprintf(out, "  movfr2gr.d $t0, $f%u\n", reg) >= 0 &&
             minic_loongarch64_emit_frame_mem(out, "ld.d", "$t1",
                 (size_t)b[0].value * 8U, ctx->dynamic_frame) &&
-            fputs("  st.d $t0, $t1, 0\n", out) != EOF;
+            minic_loongarch64_emit_asm_output_store(
+                out, ctx->program, ctx->target, fn, b[0].value,
+                8U, "$t0", "$t1", "$t3");
     }
     return minic_type_equal(fn->values[b[0].value].type,
                minic_type_unsigned_long()) &&
