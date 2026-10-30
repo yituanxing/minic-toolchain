@@ -243,7 +243,7 @@ bool minias_finalize_subsection_layout(MiniAs *as) {
          * subsection concatenation, including sources that never needed a
          * relaxation pass. A relayout iteration also reaches this path,
          * so the end is normalized only once per layout application. */
-        if (symbol->has_size_end_anchor) {
+        if (symbol->has_size_end_anchor && !symbol->has_size_start_symbol) {
             if (symbol->size > UINT64_MAX - symbol->value) {
                 minias_set_error(as, "fragment-size-end-overflow:%s",
                                  symbol->name);
@@ -252,7 +252,24 @@ bool minias_finalize_subsection_layout(MiniAs *as) {
             symbol->size_end_value = symbol->value + symbol->size;
         }
     }
-    return minias_refresh_symbol_aliases(as);
+    if(!minias_refresh_symbol_aliases(as))return false;
+    /* The end anchor may be measured from a distinct same-section label,
+     * e.g. GNU .size public,.-.Lfunction_start.  Resolve that SymbolID
+     * only AFTER every subsection's symbols have their final bases. */
+    for(i=0U;i<as->symbol_count;++i) {
+        MiniAsSymbol *sym=&as->symbols[i];
+        const MiniAsSymbol *start;
+        if(!sym->has_size_end_anchor || !sym->has_size_start_symbol)continue;
+        if(sym->size_start_symbol_index>=as->symbol_count)return false;
+        start=&as->symbols[sym->size_start_symbol_index];
+        if(!start->defined || start->section!=sym->section ||
+           start->value>UINT64_MAX-sym->size) {
+            minias_set_error(as,"fragment-size-start-mismatch:%s",sym->name);
+            return false;
+        }
+        sym->size_end_value=start->value+sym->size;
+    }
+    return true;
 }
 
 
@@ -636,15 +653,21 @@ static bool minias_scan_fragment_layout(MiniAs *as, bool *placement_changed) {
     }
     for (i = 0U; i < graph->symbol_count; ++i) {
         MiniAsSymbol *symbol = &as->symbols[i];
-        size_t start_idx,end_idx;
+        size_t start_idx,end_idx,source;
         uint64_t start,end;
         if (!symbol->has_size_end_anchor) continue;
-        start_idx=graph->symbol_subsection[i];
+        source=symbol->has_size_start_symbol?
+               symbol->size_start_symbol_index:i;
+        if(source>=graph->symbol_count) {
+            minias_set_error(as,"fragment-size-start-index:%s",symbol->name);
+            return false;
+        }
+        start_idx=graph->symbol_subsection[source];
         end_idx=graph->end_subsection[i];
         if (!symbol->has_fragment_anchor ||
             start_idx>=graph->subsection_count ||
             end_idx>=graph->subsection_count ||
-            graph->start_local[i]>
+            graph->start_local[source]>
                 UINT64_MAX-graph->candidate_base[start_idx] ||
             graph->end_local[i]>
                 UINT64_MAX-graph->candidate_base[end_idx]) {
@@ -652,7 +675,7 @@ static bool minias_scan_fragment_layout(MiniAs *as, bool *placement_changed) {
                              symbol->name);
             return false;
         }
-        start=graph->candidate_base[start_idx]+graph->start_local[i];
+        start=graph->candidate_base[start_idx]+graph->start_local[source];
         end=graph->candidate_base[end_idx]+graph->end_local[i];
         if(end<start) {
             minias_set_error(as, "fragment-size-location-mismatch:%s",
@@ -954,9 +977,11 @@ static bool minias_validate_fragment_layout(MiniAs *as) {
                                      sym->name);
                     goto done;
                 }
+                const MiniAsSymbol *start=sym->has_size_start_symbol?
+                    &as->symbols[sym->size_start_symbol_index]:sym;
                 if(sym->size_end_value!=expected ||
-                   sym->value>expected ||
-                   sym->size!=expected-sym->value) {
+                   start->value>expected ||
+                   sym->size!=expected-start->value) {
                     minias_set_error(as,"fragment-size-end-anchor-drift:%s",
                                      sym->name);
                     goto done;

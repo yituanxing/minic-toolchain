@@ -1978,8 +1978,10 @@ static bool parse_type(MiniAs *as, char *args, size_t line) {
 static bool parse_size(MiniAs *as, char *args, size_t line) {
     char *comma = strchr(args, ',');
     MiniAsSymbol *symbol;
+    MiniAsSymbol *start_symbol;
     char *expr;
     int64_t size_addend;
+    size_t start_symbol_index;
 
     if (comma == NULL) {
         minias_set_error(as, "bad-directive:.size:line=%zu", line);
@@ -2020,15 +2022,29 @@ static bool parse_size(MiniAs *as, char *args, size_t line) {
         minias_set_error(as, "bad-size-symbol:%s:line=%zu", symbol->name, line);
         return false;
     }
+    start_symbol=symbol;
+    start_symbol_index=(size_t)(symbol-as->symbols);
     if (!minias_parse_size_end_addend(expr,symbol->name,&size_addend)) {
-        minias_set_error(as, "unsupported-expression:.size:%s:line=%zu", expr, line);
-        return false;
+        MiniAsSymbolDifference difference;
+        if(!minias_parse_symbol_difference_absolute_tail(as,expr,&difference) ||
+           strcmp(difference.positive.name,".")!=0 ||
+           (start_symbol=minias_get_symbol(as,difference.negative.name,false))==NULL ||
+           !start_symbol->defined || !start_symbol->has_fragment_anchor ||
+           !minias_parse_size_end_addend(expr,start_symbol->name,&size_addend)) {
+            minias_set_error(as,"unsupported-expression:.size:%s:line=%zu",expr,line);
+            return false;
+        }
+        start_symbol_index=(size_t)(start_symbol-as->symbols);
     }
-    if (symbol->section != as->current_section) {
+    if (symbol->section != as->current_section ||
+        start_symbol->section != as->current_section) {
         minias_set_error(as, "size-section-mismatch:%s:line=%zu", symbol->name, line);
         return false;
     }
-    if(symbol->subsection!=as->current_subsection) {
+    symbol->has_size_start_symbol=start_symbol!=symbol;
+    symbol->size_start_symbol_index=start_symbol_index;
+    if(symbol->subsection!=as->current_subsection ||
+       start_symbol->subsection!=as->current_subsection) {
         /* GAS joins numbered subsections before evaluating symbol sizes.
          * A span from subsection 0 to subsection 1 cannot be computed from
          * parse-site LOCAL offsets: capture its end owner and let MCLayout
@@ -2047,11 +2063,11 @@ static bool parse_size(MiniAs *as, char *args, size_t line) {
         if (!minias_current_location(as, &here) ||
             here>(uint64_t)INT64_MAX ||
             !minias_checked_add_i64((int64_t)here,size_addend,&end) ||
-            end<0 || (uint64_t)end < symbol->value) {
+            end<0 || (uint64_t)end < start_symbol->value) {
             minias_set_error(as, "size-location-mismatch:%s:line=%zu", symbol->name, line);
             return false;
         }
-        symbol->size = (uint64_t)end - symbol->value;
+        symbol->size = (uint64_t)end - start_symbol->value;
         symbol->has_size_end_anchor = true;
         symbol->size_end_anchor = as->stmt_count;
         symbol->size_end_subsection = as->current_subsection;

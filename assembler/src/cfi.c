@@ -1,6 +1,5 @@
 #include "minias_internal.h"
 
-#include <errno.h>
 #include <inttypes.h>
 #include <limits.h>
 #include <stdio.h>
@@ -52,48 +51,63 @@ static bool cfi_grow(void **where, size_t *capacity, size_t count,
     return true;
 }
 
-static bool cfi_integer(const char *text, int64_t *value) {
-    char *end;
-    long long number;
+/* DWARF CFI operands are absolute GNU MCExprs, not necessarily decimal
+ * literals.  Reuse Common's precedence parser and resolved .set/.equ graph;
+ * undefined or relocatable symbols must never be treated as zero. */
+static bool cfi_integer(MiniAs *as,const char *text,int64_t *value) {
+    uint64_t bits;
     if (*text == '#') ++text;
-    if (*text == '\0') return false;
-    errno = 0;
-    number = strtoll(text, &end, 0);
-    if (errno != 0 || end == text || *end != '\0') return false;
-    *value = (int64_t)number;
+    /* The absolute DATA evaluator rejects .text/.data label addresses,
+     * whereas the general-purpose layout evaluator may legitimately use
+     * them as locations.  CFI operands are never relocation expressions.
+     * After proving absoluteness, prefer signed arithmetic (notably /, >>);
+     * retain GNU's 64-bit wrapping constant behavior when signed overflow
+     * prevents that second interpretation. */
+    if(*text=='\0' || !minias_parse_absolute_data_bits(as,text,&bits))
+        return false;
+    if(minias_evaluate_absolute_operand(as,text,value))return true;
+    *value=bits<=(uint64_t)INT64_MAX ? (int64_t)bits :
+           -1-(int64_t)(UINT64_MAX-bits);
     return true;
 }
 
-static bool cfi_register(const char *text, unsigned *reg) {
+static bool cfi_register(MiniAs *as,const char *text,unsigned *reg) {
     int64_t number;
     /* DW_CFA operands use ULEB128 register numbers.  The 8-bit limit
      * belongs only to DWARF v1's CIE return-address register field, not
      * to individual .cfi_* register operands.  GNU accepts registers
      * above 255 on all supported targets. */
-    if (!cfi_integer(text, &number) || number < 0 ||
-        (uint64_t)number > UINT_MAX)
-        return false;
-    *reg = (unsigned)number;
-    return true;
+    if (cfi_integer(as,text,&number)) {
+        if(number<0 || (uint64_t)number>UINT_MAX)return false;
+        *reg=(unsigned)number;
+        return true;
+    }
+    return as->target->resolve_cfi_register!=NULL &&
+           as->target->resolve_cfi_register(as,text,reg);
 }
 
-static bool cfi_two(const char *text, unsigned *reg, int64_t *value) {
-    char left[40], right[64];
-    const char *comma = strchr(text, ',');
-    size_t count;
-    if (comma == NULL || strchr(comma + 1U, ',') != NULL) return false;
-    count = (size_t)(comma - text);
-    while (count != 0U && text[count-1U] == ' ') --count;
-    if (count == 0U || count >= sizeof(left)) return false;
-    memcpy(left,text,count);left[count]='\0';
-    ++comma;
-    while (*comma == ' ' || *comma == '\t') ++comma;
-    count = strlen(comma);
-    while (count != 0U && (comma[count-1U] == ' ' ||
-                           comma[count-1U] == '\t')) --count;
-    if (count == 0U || count >= sizeof(right)) return false;
-    memcpy(right,comma,count);right[count]='\0';
-    return cfi_register(left,reg) && cfi_integer(right,value);
+static bool cfi_two(MiniAs *as,const char *text,unsigned *reg,int64_t *value,
+                    bool register_rhs) {
+    char *copy=minias_strdup(text),*comma,*lhs,*rhs;
+    bool ok=false;
+    if(copy==NULL)return false;
+    comma=strchr(copy,',');
+    if(comma==NULL || strchr(comma+1U,',')!=NULL)goto done;
+    *comma++='\0';
+    lhs=minias_trim(copy);
+    rhs=minias_trim(comma);
+    if(*lhs && *rhs && cfi_register(as,lhs,reg)) {
+        if(register_rhs) {
+            unsigned destination;
+            if(cfi_register(as,rhs,&destination)) {
+                *value=(int64_t)destination;
+                ok=true;
+            }
+        } else ok=cfi_integer(as,rhs,value);
+    }
+done:
+    free(copy);
+    return ok;
 }
 
 /* Define a hidden source-location anchor at the current fragment boundary. */
@@ -184,7 +198,7 @@ static bool cfi_escape_directive(MiniAs *as,const char *args,size_t line) {
         }
         while(n && (token[n-1U]==' ' || token[n-1U]=='\t'))--n;
         token[n]='\0';
-        if(!n || !cfi_integer(token,&value) || value<0 || value>255)
+        if(!n || !cfi_integer(as,token,&value) || value<0 || value>255)
             goto invalid;
         bytes[count++]=(uint8_t)value;
         if(*p==',') {
@@ -307,7 +321,7 @@ bool minias_cfi_directive(MiniAs *as,const char *op,
         /* GNU emits this in the CIE, even if the directive appears after
          * the first instruction.  DWARF CIE v1 stores an 8-bit column;
          * reject overflow here instead of silently truncating it later. */
-        if (!cfi_register(args,&reg) || reg>UINT8_MAX)goto bad;
+        if (!cfi_register(as,args,&reg) || reg>UINT8_MAX)goto bad;
         proc->return_column=reg;
         return true;
     }
@@ -330,7 +344,8 @@ bool minias_cfi_directive(MiniAs *as,const char *op,
         bool rel=!strcmp(op,".cfi_rel_offset");
         bool offset=rel || !strcmp(op,".cfi_offset");
         bool val=!strcmp(op,".cfi_val_offset");
-        if(!cfi_two(args,&reg,&value) || (def && value<0) ||
+        if(!cfi_two(as,args,&reg,&value,!def && !rel && !offset && !val) ||
+           (def && value<0) ||
            (rel && (!proc->cfa_known ||
                     value<INT64_MIN+proc->cfa_offset)))goto bad;
         /* GNU .cfi_rel_offset is relative to the current CFA base
@@ -353,23 +368,21 @@ bool minias_cfi_directive(MiniAs *as,const char *op,
                !strcmp(op,".cfi_restore") ||
                !strcmp(op,".cfi_undefined") ||
                !strcmp(op,".cfi_same_value")) {
-        if (!cfi_integer(args,&value) || value<0 ||
-            (strcmp(op,".cfi_def_cfa_offset")!=0 &&
-             (uint64_t)value>UINT_MAX))goto bad;
         if (!strcmp(op,".cfi_def_cfa_offset")) {
+            if(!cfi_integer(as,args,&value) || value<0)goto bad;
             kind=CFI_DEF_CFA_OFFSET;
             proc->cfa_offset=value;
             proc->cfa_known=true;
         }
         else {
-            reg=(unsigned)value;
+            if(!cfi_register(as,args,&reg))goto bad;
             kind=!strcmp(op,".cfi_def_cfa_register")?CFI_DEF_CFA_REGISTER:
                  !strcmp(op,".cfi_restore")?CFI_RESTORE:
                  !strcmp(op,".cfi_undefined")?CFI_UNDEFINED:CFI_SAME_VALUE;
         }
     } else if(!strcmp(op,".cfi_adjust_cfa_offset")) {
         int64_t delta;
-        if(!cfi_integer(args,&delta) || !proc->cfa_known ||
+        if(!cfi_integer(as,args,&delta) || !proc->cfa_known ||
            (delta>0 && proc->cfa_offset>INT64_MAX-delta) ||
            (delta<0 && proc->cfa_offset<INT64_MIN-delta) ||
            proc->cfa_offset+delta<0)goto bad;

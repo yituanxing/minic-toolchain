@@ -27,16 +27,16 @@ static bool x64_legacy_opcode_allowed(const char *name,uint32_t mode) {
     static const char *const names[]={
         "pushl","popl","pushw","popw","push","pop",
         "pushfl","popfl","pushal","popal",
-        "movl","movw","movb","movzwl","movzbl",
+        "mov","movl","movw","movb","movzwl","movzbl",
         "nop","ret","retl","leave","lretw","lret",
         "cli","sti","cld","hlt","wbinvd","pause",
         "call","calll","jmp","ljmpw","ljmpl","ljmp",
         "jz","jnz","jc","jnc","je","jne",
-        "cmpw","cmpl","testb","testw","testl",
-        "addw","andw","orl","xorl","xorw","andl","orb",
-        "subw","shrw","imull","lgdtl","lidtl","lmsw",
+        "cmpb","cmpw","cmpl","testb","testw","testl",
+        "addw","addl","andb","andw","orl","xorl","xorw","andl","orb",
+        "subw","subl","shrw","imull","lgdtl","lidtl","lmsw","lsl",
         "lock","btsl","rep","int","rdmsr","wrmsr",
-        "movsl","movsb","stosl","stosb"
+        "movsl","movsb","stosl","stosb","leal"
     };
     size_t i;
     for(i=0U;i<sizeof(names)/sizeof(names[0]);++i) {
@@ -53,6 +53,15 @@ enum { X64_ZERO = 1, X64_REG_BINARY, X64_STACK, X64_MOV_IMM32, X64_ALU_IMM, X64_
 #define X64_ENCODING_F2 UINT32_C(0x100000)
 #define X64_ENCODING_IMM8 UINT32_C(0x200000)
 #define X64_ENCODING_LOCK UINT32_C(0x400000)
+#define X64_FORM_I386_GOTPC UINT32_C(1)
+
+typedef enum X64DisplacementReloc {
+    X64_DISP_ABSOLUTE=0,
+    X64_DISP_GOTPCREL,
+    X64_DISP_I386_GOT32X,
+    X64_DISP_I386_GOTOFF,
+    X64_DISP_I386_GOTPC
+} X64DisplacementReloc;
 
 typedef enum X64ShiftCountForm {
     X64_SHIFT_COUNT_IMMEDIATE = 0,
@@ -80,7 +89,7 @@ typedef struct X64Memory {
     bool has_symbol;
     /* x86 ELF relocation flavor is an addressing-mode property; Common
      * still owns only the canonical undecorated symbol reference. */
-    bool got_pc_relative;
+    X64DisplacementReloc reloc_flavor;
     MiniAsSymbolRef symbol;
 } X64Memory;
 
@@ -359,21 +368,37 @@ static bool x64_strip_elf_symbol_modifier(const char *raw,
 
 static bool x64_symbolic_displacement(const char *raw,
                                       MiniAsSymbolExpr *expr,
-                                      bool *got_pc_relative) {
+                                      X64DisplacementReloc *flavor,
+                                      bool elf32) {
     char buf[X64_OPERAND_CAP],*operand,*p;
     char normalized[X64_OPERAND_CAP];
     size_t len=strlen(raw);
-    *got_pc_relative=false;
+    *flavor=X64_DISP_ABSOLUTE;
     unsigned depth=0U;
     if(!len || len>=sizeof(buf))return false;
     memcpy(buf,raw,len+1U);
     operand=x64_unwrap_disp(buf);
     if(x64_strip_elf_symbol_modifier(operand,"@GOTPCREL",normalized)) {
+        if(elf32)return false;
         if(!minias_parse_symbol_addend(normalized,expr))return false;
-        *got_pc_relative=true;
+        *flavor=X64_DISP_GOTPCREL;
         return true;
     }
-    if(minias_parse_symbol_addend(operand,expr))return true;
+    if(elf32 && x64_strip_elf_symbol_modifier(operand,"@GOTOFF",normalized)) {
+        if(!minias_parse_symbol_addend(normalized,expr))return false;
+        *flavor=X64_DISP_I386_GOTOFF;
+        return true;
+    }
+    if(elf32 && x64_strip_elf_symbol_modifier(operand,"@GOT",normalized)) {
+        if(!minias_parse_symbol_addend(normalized,expr))return false;
+        *flavor=X64_DISP_I386_GOT32X;
+        return true;
+    }
+    if(minias_parse_symbol_addend(operand,expr)) {
+        if(elf32 && !strcmp(expr->name,"_GLOBAL_OFFSET_TABLE_"))
+            *flavor=X64_DISP_I386_GOTPC;
+        return true;
+    }
     for(p=operand;*p;++p) {
         int64_t leading;
         MiniAsSymbolExpr tail;
@@ -428,7 +453,8 @@ static bool x64_parse_base_memory(MiniAs *as,const char *text, X64Memory *out) {
     size_t dlen;
     unsigned count=0U, base=0U, index=0U;
     unsigned long scale=1UL;
-    bool wide, symbolic=false, pc_relative=false, got_pc_relative=false;
+    bool wide, symbolic=false, pc_relative=false;
+    X64DisplacementReloc reloc_flavor=X64_DISP_ABSOLUTE;
     const X64TargetState *state=(const X64TargetState *)as->target_state;
     const bool code16=state!=NULL &&
         (state->code_mode==X64_CODE16 || state->code_mode==X64_CODE16_GCC);
@@ -465,7 +491,8 @@ static bool x64_parse_base_memory(MiniAs *as,const char *text, X64Memory *out) {
                 displacement=(long long)arithmetic;
             else {
                 if(!x64_symbolic_displacement(operand,&expr,
-                       &got_pc_relative) || got_pc_relative)return false;
+                       &reloc_flavor,as->output_elf32) ||
+                   reloc_flavor==X64_DISP_GOTPCREL)return false;
                 symbolic=true;displacement=0;
             }
         }
@@ -475,6 +502,7 @@ static bool x64_parse_base_memory(MiniAs *as,const char *text, X64Memory *out) {
         out->address_32=address32 && !code16;
         out->scale=1U;out->address_space=space;
         out->displacement=(int64_t)displacement;
+        out->reloc_flavor=reloc_flavor;
         if(symbolic) {
             if(!minias_bind_symbol_ref(as,&expr,&out->symbol))return false;
             out->has_symbol=true;
@@ -496,7 +524,7 @@ static bool x64_parse_base_memory(MiniAs *as,const char *text, X64Memory *out) {
                 displacement=(long long)arithmetic;
             else {
                 if(!x64_symbolic_displacement(dispbuf,&symbolic_expr,
-                       &got_pc_relative) ||
+                       &reloc_flavor,as->output_elf32) ||
                    symbolic_expr.addend<INT64_MIN+4)
                     return false;
                 symbolic=true;
@@ -558,7 +586,9 @@ static bool x64_parse_base_memory(MiniAs *as,const char *text, X64Memory *out) {
            wide==address32)
             return false;
     }
-    if(got_pc_relative && !pc_relative)return false;
+    if((reloc_flavor==X64_DISP_GOTPCREL && !pc_relative) ||
+       (reloc_flavor!=X64_DISP_ABSOLUTE &&
+        reloc_flavor!=X64_DISP_GOTPCREL && pc_relative))return false;
     if (count>=2U && !address16) {
         if (!x64_register(regs[1],&index,&wide) ||
             wide==address32 ||
@@ -582,7 +612,7 @@ static bool x64_parse_base_memory(MiniAs *as,const char *text, X64Memory *out) {
     out->base=base;out->has_index=(count>=2U);
     out->index=index;out->scale=(unsigned)scale;
     out->displacement=(int64_t)displacement;
-    out->got_pc_relative=got_pc_relative;
+    out->reloc_flavor=reloc_flavor;
     if(symbolic) {
         /* GNU sym+addend(%base,%index,scale) uses an ELF ABS32S relocation
          * in a forced disp32 slot. This is distinct from RIP+PC32; target
@@ -805,7 +835,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             minias_mcinst_destroy(m);return false;
         }
     }
-    if(!strcmp(s->op,"lock")) {
+    if(!strcmp(s->op,"lock") && s->args[0]!='\0') {
         const char *operand=s->args;
         MiniAsStmt alias;
         /* LOCK must prefix one retained read-modify-write MCInst; it
@@ -1983,9 +2013,13 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         m->operands[0].register_64=wd;
         goto done;
     }
-    /* Native long-mode PUSH/POP memory forms reuse typed ModR/M/SIB.
-     * FF /6 and 8F /0 imply 64-bit width: emitting REX.W is incorrect. */
-    if((!strcmp(s->op,"pushq") || !strcmp(s->op,"popq")) &&
+    /* All x86 stack-memory forms share Group-5 FF /6 and 8F /0;
+     * operand-size prefixes are chosen from the lexical mode, never
+     * inferred from the address register's independent width. */
+    if((!strcmp(s->op,"pushq") || !strcmp(s->op,"popq") ||
+        (s->site.mode_bits!=0U &&
+         (!strcmp(s->op,"pushl") || !strcmp(s->op,"popl") ||
+          !strcmp(s->op,"pushw") || !strcmp(s->op,"popw")))) &&
        s->args[0]!='$' && x64_is_mem_candidate(s->args)) {
         X64Memory parsed;
         if(!x64_parse_base_memory(as,s->args,&parsed))goto invalid;
@@ -1993,9 +2027,12 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             minias_mcinst_destroy(m);return false;
         }
         m->opcode=X64_REG_MEMORY;m->count=2U;
-        m->encoding=!strcmp(s->op,"pushq")?0xffU:0x8fU;
+        const bool pushing=!strncmp(s->op,"push",4U);
+        const bool word=s->op[4]=='w';
+        m->encoding=(pushing?0xffU:0x8fU)|
+                    (word?UINT32_C(0x400):0U);
         m->operands[0].kind=MINIAS_MC_REGISTER;
-        m->operands[0].reg=!strcmp(s->op,"pushq")?6U:0U;
+        m->operands[0].reg=pushing?6U:0U;
         m->operands[0].register_64=false;
         goto done;
     }
@@ -2598,6 +2635,9 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             m->operands[0].kind=MINIAS_MC_REGISTER;
             m->operands[0].reg=rd;
             if(symbolic) {
+                if(as->output_elf32 &&
+                   !strcmp(symbol.name,"_GLOBAL_OFFSET_TABLE_"))
+                    m->target_form=X64_FORM_I386_GOTPC;
                 if(!x64_attach_symbol_operand(as,m,1U,&symbol,
                         "out-of-memory:x86-movl-imm32-symbol")) {
                     minias_mcinst_destroy(m);return false;
@@ -2800,6 +2840,9 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             m->operands[0].kind=MINIAS_MC_REGISTER;
             m->operands[0].reg=reg;
             m->operands[0].register_64=wide;
+            if(as->output_elf32 && s->op[n-1U]=='l' &&
+               !strcmp(expr.name,"_GLOBAL_OFFSET_TABLE_"))
+                m->target_form=X64_FORM_I386_GOTPC;
             if(!x64_attach_symbol_operand(as,m,1U,&expr,
                     "out-of-memory:x86-alu-symbol")) {
                 minias_mcinst_destroy(m);
@@ -3856,7 +3899,7 @@ static bool x64_resolve_memory_displacement(MiniAs *as,const MiniAsStmt *stmt,
     if(!mem->has_symbol || !mem->pc_relative)return true;
     /* The GOT entry is link-time state, not the target symbol's local
      * address. Even same-section definitions must keep their GOT fixup. */
-    if(mem->got_pc_relative) {
+    if(mem->reloc_flavor==X64_DISP_GOTPCREL) {
         *displacement=0U;
         *needs_pc32=true;
         return true;
@@ -3901,7 +3944,7 @@ static bool x64_emit_memory_fixups(MiniAs *as,const MiniAsStmt *stmt,
         if(mem->pc_relative && needs_pc32) {
             MiniAsSymbolRef relative;
             MiniAsFixupKind kind=MINIAS_FIXUP_X64_PC32;
-            if(mem->got_pc_relative) {
+            if(mem->reloc_flavor==X64_DISP_GOTPCREL) {
                 /* GNU GAS allows link-time MOV->LEA relaxation for GOTPCREL
                  * loads. The REX variant records the present REX prefix;
                  * non-MOV consumers retain non-relaxable GOTPCREL. */
@@ -3918,13 +3961,26 @@ static bool x64_emit_memory_fixups(MiniAs *as,const MiniAsStmt *stmt,
                     stmt->offset+layout->displacement_offset,
                     kind,4U,relative,false))
                 return false;
-        } else if(!mem->pc_relative &&
-                  !minias_encode_add_fixup_ref(as,stmt->section,
-                    stmt->offset+layout->displacement_offset,
-                    (as->output_elf32 || layout->displacement_bytes==2U)?
-                        MINIAS_FIXUP_ABS:MINIAS_FIXUP_X64_ABS32S,
-                    layout->displacement_bytes,mem->symbol,false))
-            return false;
+        } else if(!mem->pc_relative) {
+            MiniAsFixupKind kind=
+                (as->output_elf32 || layout->displacement_bytes==2U)?
+                    MINIAS_FIXUP_ABS:MINIAS_FIXUP_X64_ABS32S;
+            if(mem->reloc_flavor==X64_DISP_I386_GOT32X)
+                kind=MINIAS_FIXUP_X86_GOT32X;
+            else if(mem->reloc_flavor==X64_DISP_I386_GOTOFF)
+                kind=MINIAS_FIXUP_X86_GOTOFF;
+            else if(mem->reloc_flavor==X64_DISP_I386_GOTPC)
+                kind=MINIAS_FIXUP_X86_GOTPC;
+            MiniAsSymbolRef adjusted;
+            if(kind==MINIAS_FIXUP_X86_GOTPC &&
+               !x64_adjust_symbol_ref(as,mem->symbol,
+                   (int64_t)layout->displacement_offset,&adjusted))return false;
+            if(!minias_encode_add_fixup_ref(as,stmt->section,
+                   stmt->offset+layout->displacement_offset,
+                   kind,layout->displacement_bytes,
+                   kind==MINIAS_FIXUP_X86_GOTPC?adjusted:mem->symbol,
+                   kind==MINIAS_FIXUP_X86_GOTOFF))return false;
+        }
     }
     if(inst->opcode==X64_IMM_MEMORY &&
        inst->operands[2].kind==MINIAS_MC_BOUND_SYMBOL) {
@@ -3960,9 +4016,16 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
                 minias_set_error(as,"invalid-x86-movl-symbolic-imm32-layout");
                 return false;
             }
+            MiniAsSymbolRef adjusted;
+            MiniAsFixupKind kind=m->target_form==X64_FORM_I386_GOTPC?
+                MINIAS_FIXUP_X86_GOTPC:MINIAS_FIXUP_ABS;
+            if(kind==MINIAS_FIXUP_X86_GOTPC &&
+               !x64_adjust_symbol_ref(as,*m->operands[1].bound_symbol,
+                   (int64_t)(register_plan.size-width),&adjusted))return false;
             return minias_encode_add_fixup_ref(as,s->section,
                 s->offset+register_plan.size-width,
-                MINIAS_FIXUP_ABS,width,*m->operands[1].bound_symbol,false);
+                kind,width,kind==MINIAS_FIXUP_X86_GOTPC?
+                    adjusted:*m->operands[1].bound_symbol,false);
         }
         return true;
     }
@@ -4024,7 +4087,8 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
         }
         case X64_BRANCH: {
             const MiniAsSymbolRef *expr=m->operands[0].bound_symbol;
-            MiniAsFixupKind kind=as->output_elf32?
+            MiniAsFixupKind kind=(as->output_elf32 &&
+                                 m->target_form!=1U)?
                 MINIAS_FIXUP_X64_PC32:MINIAS_FIXUP_X64_PLT32;
             size_t width=s->size;
             int64_t displacement=0;
@@ -4179,16 +4243,28 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
                 code[n++]=(unsigned char)(imm>>(8U*i));
             if(symbol && !difference) {
                 const MiniAsSymbolRef *expr=m->operands[1].bound_symbol;
+                MiniAsSymbolRef adjusted;
+                MiniAsFixupKind kind=m->target_form==X64_FORM_I386_GOTPC?
+                    MINIAS_FIXUP_X86_GOTPC:
+                    m->operands[0].register_64 && !as->output_elf32?
+                        MINIAS_FIXUP_X64_ABS32S:MINIAS_FIXUP_ABS;
                 if(plan.immediate_bytes!=2U && plan.immediate_bytes!=4U) {
                     minias_set_error(as,"invalid-x86-alu-symbol-width");
                     return false;
                 }
                 if(!minias_emit_instruction_bytes(as,s->section,code,n))return false;
+                /* GNU R_386_GOTPC computes GOT + A - P.  GCC's GOT-base
+                 * ADD expects GOT relative to the *instruction start*;
+                 * the embedded REL addend therefore includes the byte
+                 * distance to the immediate field (1 for accumulator
+                 * opcode, 2 for opcode+ModR/M). */
+                if(kind==MINIAS_FIXUP_X86_GOTPC &&
+                   !x64_adjust_symbol_ref(as,*expr,
+                       (int64_t)plan.immediate_offset,&adjusted))return false;
                 return minias_encode_add_fixup_ref(as,s->section,
                     s->offset+plan.immediate_offset,
-                    m->operands[0].register_64 && !as->output_elf32?
-                        MINIAS_FIXUP_X64_ABS32S:MINIAS_FIXUP_ABS,
-                    plan.immediate_bytes,*expr,false);
+                    kind,plan.immediate_bytes,
+                    kind==MINIAS_FIXUP_X86_GOTPC?adjusted:*expr,false);
             }
             break;
         }
@@ -4311,7 +4387,9 @@ static uint32_t x64_reloc_for_object(const MiniAs *as,
     if(kind==MINIAS_FIXUP_X64_PC32 || kind==MINIAS_FIXUP_PREL32)
         return 2U; /* R_386_PC32 */
     if(kind==MINIAS_FIXUP_X64_PLT32)return 4U; /* R_386_PLT32 */
-    if(kind==MINIAS_FIXUP_X64_GOTPCREL)return 3U; /* R_386_GOT32 */
+    if(kind==MINIAS_FIXUP_X86_GOTPC)return 10U; /* R_386_GOTPC */
+    if(kind==MINIAS_FIXUP_X86_GOT32X)return 43U; /* R_386_GOT32X */
+    if(kind==MINIAS_FIXUP_X86_GOTOFF)return 9U; /* R_386_GOTOFF */
     return 0U;
 }
 
@@ -4343,7 +4421,72 @@ static bool x64_supports_fixup_for_object(const MiniAs *as,
     if(as->output_elf32 && width==2U)
         return kind==MINIAS_FIXUP_ABS || kind==MINIAS_FIXUP_PREL32 ||
                kind==MINIAS_FIXUP_X64_PC32;
+    if(as->output_elf32 && width==4U &&
+       (kind==MINIAS_FIXUP_X86_GOTPC ||
+        kind==MINIAS_FIXUP_X86_GOT32X ||
+        kind==MINIAS_FIXUP_X86_GOTOFF))return true;
     return x64_supports_fixup(kind,width);
+}
+
+/* GNU GAS accepts target register names in CFI directives (with or without
+ * a percent sign). Core parses numeric DWARF registers first; this target
+ * provides the ABI-specific name to DWARF register-number mapping only.
+ * ModR/M codes deliberately differ from DWARF on AMD64. */
+static bool x64_resolve_cfi_register(const MiniAs *as,const char *name,
+                                     unsigned *dwarf_reg) {
+    static const unsigned amd64_gpr_dwarf[16]={
+        0U,2U,1U,3U,7U,6U,4U,5U,8U,9U,10U,11U,12U,13U,14U,15U
+    };
+    static const struct {const char *name;unsigned dwarf;} i386_extra[]={
+        {"eip",8U},{"eflags",9U},
+        {"es",40U},{"cs",41U},{"ss",42U},
+        {"ds",43U},{"fs",44U},{"gs",45U}
+    };
+    char normalized[32];
+    const char *bare=name;
+    unsigned reg;
+    bool wide;
+    size_t i,n;
+    if(name==NULL || dwarf_reg==NULL)return false;
+    if(*bare=='%')++bare;
+    n=strlen(bare);
+    if(n==0U || n+2U>sizeof(normalized))return false;
+    normalized[0]='%';
+    memcpy(normalized+1U,bare,n+1U);
+    if(as->output_elf32) {
+        if(x64_register(normalized,&reg,&wide) && !wide && reg<8U) {
+            *dwarf_reg=reg;return true;
+        }
+        if(x64_register16(normalized,&reg) && reg<8U) {
+            *dwarf_reg=reg;return true;
+        }
+        for(i=0U;i<sizeof(i386_extra)/sizeof(i386_extra[0]);++i)
+            if(!strcmp(bare,i386_extra[i].name)) {
+                *dwarf_reg=i386_extra[i].dwarf;return true;
+            }
+        if(x64_xmm_register(normalized,&reg) && reg<8U) {
+            *dwarf_reg=21U+reg;return true;
+        }
+        if(strncmp(bare,"st",2U)==0) {
+            if(n==3U && bare[2U]>='0' && bare[2U]<='7') {
+                *dwarf_reg=11U+(unsigned)(bare[2U]-'0');return true;
+            }
+            if(n==5U && bare[2U]=='(' && bare[3U]>='0' &&
+               bare[3U]<='7' && bare[4U]==')') {
+                *dwarf_reg=11U+(unsigned)(bare[3U]-'0');return true;
+            }
+        }
+        return false;
+    }
+    if(x64_register(normalized,&reg,&wide) ||
+       x64_register16(normalized,&reg)) {
+        *dwarf_reg=amd64_gpr_dwarf[reg];return true;
+    }
+    if(!strcmp(bare,"rip")) {*dwarf_reg=16U;return true;}
+    if(x64_xmm_register(normalized,&reg)) {
+        *dwarf_reg=17U+reg;return true;
+    }
+    return false;
 }
 static void x64_resolve_cfi_abi(const MiniAs *as,MiniAsCfiABI *abi) {
     if(as->output_elf32) {
@@ -4484,6 +4627,7 @@ static const MiniAsTargetOps ops={
     .fixup_relocation_type=x64_reloc,
     .fixup_relocation_type_for_object=x64_reloc_for_object,
     .supports_fixup_for_object=x64_supports_fixup_for_object,
+    .resolve_cfi_register=x64_resolve_cfi_register,
     .resolve_cfi_abi=x64_resolve_cfi_abi,
     .supports_fixup=x64_supports_fixup,
     .parse_named_relocation=x64_named_relocation,

@@ -136,6 +136,10 @@ jobs:
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-cfi-return-column-gnu.sh
+      - name: GNU DWARF line view reset and alternate ELF symbol size anchors
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-common-dwarf-view-size-gnu.sh
       - name: GNU ELF32 i386 CIE frame ABI, bytes and relocation parity
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
@@ -144,10 +148,30 @@ jobs:
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-cfi-debug-frame-link-gnu.sh
+      - name: GNU Common CFI absolute expressions and invalid operands across targets
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-cfi-expression-gnu.sh
+      - name: GNU i386 and AMD64 CFI DWARF named-register callback semantics
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-cfi-x86-register-names-gnu.sh
       - name: GNU Linux real-mode i386 code16/code16gcc and ELF32 REL link oracle
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-x86-linux-code16-gnu.sh
+      - name: GNU Linux standalone LOCK prefix as a persistent x86 MC operand
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-x86-linux-lock-prefix-gnu.sh
+      - name: GNU GCC i386 PIC GOTPC/GOT32X/GOTOFF/PLT32 and ELF32 shared link oracle
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-x86-i386-pic-gnu.sh
+      - name: GNU i386 GOTPC immediate and displacement lowering across five opcodes
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-x86-i386-gotpc-gnu.sh
       - name: Enforce one Common MCFragment layout engine and shared variable DATA
         run: bash tests/assembler/probe-mc-layout-ownership.sh
       - name: Enforce unique Common MCExpr grammar and emission ownership

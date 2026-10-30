@@ -88,6 +88,11 @@ jobs:
             build/minias-linux-fourarch/${{ matrix.arch }}/**/Image.sha256
             build/minias-linux-fourarch/${{ matrix.arch }}/**/bzImage.sha256
             build/minias-linux-fourarch/${{ matrix.arch }}/**/vmlinuz.efi.sha256
+            # Preserve exactly the linked kernel to replay QEMU-only boot
+            # diagnostics without another 15–20 minute Linux recompilation.
+            build/minias-linux-fourarch/x86_64/mini-out/arch/x86/boot/bzImage
+            build/minias-linux-fourarch/aarch64/out/arch/arm64/boot/Image
+            build/minias-linux-fourarch/loongarch64/out/arch/loongarch/boot/vmlinuz.efi
           if-no-files-found: warn
           retention-days: 14
 

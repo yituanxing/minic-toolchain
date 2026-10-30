@@ -11,7 +11,12 @@ enum {
     MINIAS_FIXUP_X64_ABS64,
     MINIAS_FIXUP_X64_GOTPCREL,
     MINIAS_FIXUP_X64_GOTPCRELX,
-    MINIAS_FIXUP_X64_REX_GOTPCRELX
+    MINIAS_FIXUP_X64_REX_GOTPCRELX,
+    /* i386 SysV ELF32 PIC relocations. These are machine relocation
+     * semantics, not ELF relocation numbers or Common fixup kinds. */
+    MINIAS_FIXUP_X86_GOTPC,
+    MINIAS_FIXUP_X86_GOT32X,
+    MINIAS_FIXUP_X86_GOTOFF
 };
 
 #endif

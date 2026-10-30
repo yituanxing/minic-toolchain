@@ -11,7 +11,8 @@
  * GNU .file/.loc -> genuine DWARF v4 .debug_line, using shared fragment
  * anchors, target-owned absolute ELF fixups and exact finalized instruction
  * offsets. All source debug directives remain semantically observable.
- * Unsupported view/line-state extensions fail closed rather than vanishing.
+ * GNU view assertions/resets are retained until final fragment layout;
+ * unsupported line-state extensions fail closed rather than vanishing.
  */
 static bool debug_grow(void **ptr,size_t *capacity,size_t need,size_t width) {
     size_t n=*capacity?*capacity:16U;
@@ -175,6 +176,12 @@ static bool parse_loc(MiniAs *as,const char *args,size_t source_line) {
         }else if(!strcmp(part,"isa")) {
             part=debug_next_token(&cursor);
             if(!debug_unsigned(part,&loc.isa))goto bad;
+        }else if(!strcmp(part,"view")) {
+            part=debug_next_token(&cursor);
+            if(part==NULL || loc.view_mode!=0U)goto bad;
+            if(!strcmp(part,"0"))loc.view_mode=1U;
+            else if(!strcmp(part,"-0"))loc.view_mode=2U;
+            else goto bad;
         }else goto bad;
         part=debug_next_token(&cursor);
     }
@@ -421,6 +428,7 @@ bool minias_debug_emit(MiniAs *as) {
         unsigned cur_file=1U,cur_col=0U,cur_isa=0U;
         int64_t cur_line=1;
         bool cur_stmt=true;
+        bool seen_row=false;
         uint64_t position=first_sym->value;
         int source_section=first_sym->section;
         if(source_section<0 || (size_t)source_section>=as->section_count ||
@@ -430,9 +438,20 @@ bool minias_debug_emit(MiniAs *as) {
             const MiniAsSymbol *sym=&as->symbols[loc->symbol_index];
             int64_t line_diff;
             if(sym->section!=source_section)break;
+            /* GNU's location view is an address-identity constraint, not
+             * a decorative .loc token: `view 0` asserts this row is view
+             * zero, while `view -0` resets a repeated-PC view by emitting
+             * a new DW_LNE_set_address at the same section SymbolID. */
+            if(seen_row && sym->value==position && loc->view_mode==1U) {
+                minias_set_error(as,"dwarf-view-number-mismatch");
+                goto failed;
+            }
+            if(seen_row && sym->value==position && loc->view_mode==2U &&
+               !set_address(as,sec,loc->symbol_index,address_width))goto failed;
             if(sym->value<position ||
                !advance_pc(as,sec,sym->value-position))goto failed;
             position=sym->value;
+            seen_row=true;
             if(loc->file!=cur_file &&
                (!append_byte(as,sec,4U) ||
                 !append_leb(as,sec,loc->file)))goto failed;

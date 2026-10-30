@@ -107,6 +107,11 @@ typedef struct MiniAsSymbol {
      * Section. Its Fragment owner is independent of the symbol's start. */
     uint32_t size_end_subsection;
     int64_t size_end_addend; /* .size sym, .-sym+N is a retained end MCExpr */
+    /* GNU permits .size public_symbol, .-local_entry_label.  The source
+     * SymbolID owns the start Fragment even when the ELF symbol whose size
+     * we report is a distinct global alias. */
+    bool has_size_start_symbol;
+    size_t size_start_symbol_index;
     uint64_t size_end_value;
 } MiniAsSymbol;
 
@@ -505,6 +510,9 @@ typedef struct MiniAsDebugLoc {
     unsigned flags;
     unsigned discriminator;
     unsigned isa;
+    /* GNU .loc view 0 asserts a fresh address view; view -0 resets the
+     * view by re-establishing the address when two rows share a PC. */
+    unsigned view_mode; /* 0=implicit, 1=assert-zero, 2=reset-zero */
     bool is_stmt;
 } MiniAsDebugLoc;
 
@@ -935,6 +943,10 @@ typedef struct MiniAsTargetOps {
     unsigned cfi_initial_cfa_offset;
     bool cfi_initial_ra_saved;
     void (*resolve_cfi_abi)(const MiniAs *, MiniAsCfiABI *);
+    /* The DWARF register-number namespace belongs to the target ABI.
+     * Common parses numeric expressions first; Target translates GNU
+     * symbolic register spellings such as i386 ecx / %ecx. */
+    bool (*resolve_cfi_register)(const MiniAs *, const char *, unsigned *);
     /* GNU assembler directive dialect belongs to TargetInfo, not Common. */
     unsigned default_exec_alignment; /* zero: 4; x86 GNU .text has alignment 1 */
     /* Optional live ISA-state default (e.g. RVC sections align to 2,
