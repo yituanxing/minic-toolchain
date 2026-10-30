@@ -216,11 +216,8 @@ def gnu_as_identity(c, target: str) -> dict:
     gcc = c.TARGETS[target][2]
     prefix = c.TARGETS[target][1]
     assembler = prefix + "as" if prefix else "as"
-    paths = [shutil.which(gcc), shutil.which(assembler)]
-    if any(not path for path in paths):
-        raise ValueError(f"original GNU gcc/as unavailable for {target}")
-    return {"gnu_gcc_binary_sha256": file_sha(c.required(Path(paths[0]))),
-            "gnu_as_binary_sha256": file_sha(c.required(Path(paths[1])))}
+    return {"gnu_gcc_binary_sha256": file_sha(trusted_gnu_driver_binary(gcc)),
+            "gnu_as_binary_sha256": file_sha(trusted_gnu_driver_binary(assembler))}
 
 
 def trusted_gnu_driver_binary(name: str) -> Path:
@@ -274,8 +271,12 @@ def cache_identity(a: argparse.Namespace, c):
     rows, _ = verify_input(a.input, a.target, a.shard, c)
     helper = c.module("minic_gnu_shard_cache", "linux-three-isa-candidate-shard-cache-v1.py")
     gcc = c.TARGETS[a.target][2]
-    gcc_path = trusted_gnu_driver_binary(gcc)
-    identity = helper.identity(a.target, a.minic, gcc_path,
+    prefix = c.TARGETS[a.target][1]
+    assembler = prefix + "as" if prefix else "as"
+    # The cache stores GNU-AS-produced .o; its identity must include GNU AS,
+    # not just the GCC driver used for the frozen original GNU preprocessing.
+    as_path = trusted_gnu_driver_binary(assembler)
+    identity = helper.identity(a.target, a.minic, as_path,
                                a.input / "build/.config",
                                a.input / "evidence/full-c-owners.txt",
                                json_file(a.input / "frozen/manifest.json")["rows"],

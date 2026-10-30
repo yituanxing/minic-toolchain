@@ -198,6 +198,35 @@ class SevenWorkerStrictTransportTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "GNU assembler compiler missing"):
                 r.trusted_gnu_driver_binary("gcc")
 
+    def test_gnu_as_identity_resolves_both_trusted_gnu_symlinks(self):
+        gcc_real = self.dir / "gcc-real"
+        as_real = self.dir / "as-real"
+        gcc_alias = self.dir / "gcc"
+        as_alias = self.dir / "as"
+        write(gcc_real, b"real-gcc-binary")
+        write(as_real, b"real-as-binary")
+        gcc_alias.symlink_to(gcc_real)
+        as_alias.symlink_to(as_real)
+        with mock.patch.object(r.shutil, "which", side_effect=[str(gcc_alias), str(as_alias)]):
+            self.assertEqual(r.gnu_as_identity(c, "x86_64"), {
+                "gnu_gcc_binary_sha256": r.file_sha(gcc_real),
+                "gnu_as_binary_sha256": r.file_sha(as_real)})
+        with self.assertRaisesRegex(ValueError, "missing/unsafe"):
+            c.required(gcc_alias)
+
+    def test_candidate_cache_identity_binds_real_assembler_sha(self):
+        assembler = self.dir / "real-gnu-as"
+        write(assembler, b"installed-gnu-as-version-1")
+        captured = []
+        fake_helper = SimpleNamespace(identity=lambda *args: captured.append(args) or {"ok": True})
+        args = SimpleNamespace(input=self.input, target="x86_64", shard=2, minic=self.compiler)
+        with mock.patch.object(r, "trusted_gnu_driver_binary", return_value=assembler), \
+                mock.patch.object(c, "module", return_value=fake_helper):
+            helper, identity = r.cache_identity(args, c)
+        self.assertIs(helper, fake_helper)
+        self.assertEqual(identity, {"ok": True})
+        self.assertEqual(captured[0][2], assembler)
+
 
 if __name__ == "__main__":
     unittest.main()
