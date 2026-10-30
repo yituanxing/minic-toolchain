@@ -2,8 +2,10 @@
 
 > **长期维护文档，不是立即修复清单。** 发现问题先记录、核实、分类；是否进入某一批重构另行决定。
 >
-> 首次建档：2026-10-30；最近源码复核：`6b9e52e27`（`refactor/minic-target-language-boundary`）。
+> 首次建档：2026-10-30；最近源码复核：`f4045d8f9`（`refactor/minic-target-language-boundary`）。
 > 范围：MiniC 的 Frontend、Compiler、Core、Target、Driver 和验证流程；不包含 MiniAS、MiniPP、MiniLD、NaSeed。
+
+配套阅读：[全局架构与所有权图谱](minic-global-contract-map.md) · [函数契约审计台账](minic-function-contract-register.md)。
 
 ## 使用约定
 
@@ -41,6 +43,11 @@
 | [MC-016](#mc-016-线性-va_list-类型准入过宽) | P2 | INVESTIGATING | SUSPICION | RV32/RV64/Loong 接受任意指针作 `va_list` |
 | [MC-017](#mc-017-另外两个-parser-语义探测浅拷贝) | P1 | INVESTIGATING | SOURCE-TRACE | 数组 extent 探测的 Parser 副本 |
 | [MC-018](#mc-018-aarch64-短分支距离依据基本块数) | P2 | INVESTIGATING | SUSPICION | `cbnz` 距离仅按 `block_count` 估计 |
+| [MC-023](#mc-023-静态聚合后向覆写跨递归借用-record) | P1 风险 | INVESTIGATING | SOURCE-TRACE | Backward zero overwrite 的 `Record*` 跨递归持有 |
+| [MC-024](#mc-024-common-core-中的-rk-约束特例) | P2 | INVESTIGATING | DESIGN-REVIEW | Common Core GNU `rK` 方言和 Target policy 分工待证 |
+| [MC-025](#mc-025-aarch64-公共全局-object-类型伪操作兼容性) | P2 | INVESTIGATING | SOURCE-TRACE | A64 object suffix 与 Common `.type` 固定格式需实测 GAS |
+| [MC-026](#mc-026-source-form-id-的实际身份边界) | P2 | INVESTIGATING | DESIGN-REVIEW | Source ASM form hash 未覆盖符号名/标签文本，需核消费者 |
+| [MC-027](#mc-027-targetinfo-惰性初始化的并发契约) | P3 | INVESTIGATING | DESIGN-REVIEW | 静态目标描述符惰性初始化有无多线程 API 义务 |
 
 ## 索引：确实存在但不宜立即改的架构与验证债
 
@@ -166,6 +173,41 @@
 - **疑点：** `block_count<=256` 并不在逻辑上保证 `cbnz` 的 ±1MiB 范围，但当前构造有效超长单块测试受容量/ASM 资格限制，**没有可复现汇编失败**。
 - **下一证据：** 找到可接受的大块合法 Core 输入，或证明布局上界与块数真正相关。
 
+### MC-023 静态聚合后向覆写跨递归借用 Record
+
+- **位置：** `src/frontend/parser_static_initializer.c:2360–2524`，`overwrite_static_zero_record_value` / `overwrite_static_zero_record_constant`。
+- **疑点：** 当前函数从 `program->records[record_id]` 借用 `MinicRecord*`，在循环内调用能递归解析嵌套表达式的 `overwrite_static_zero_field_value`，之后仍访问 `record->fields` / `is_union`。如果其中一个合法嵌套初始化会通过内联 `struct/union` 定义导致 Program.records 扩容，借用地址可能失效。
+- **反证边界：** `parse_static_record_constant`、`parse_static_union_constant` 早已使用 `MinicRecord` 按值快照，设计成立。不能因另两函数有快照，直接断言 backward 路径必然可触发；当前没有 ASan/GCC 可接受的动态探针。
+- **下一证据：** 构造 GNU backward designated aggregate 加嵌套类型声明，调节 Record arena 容量，以有效 GCC 输入做五目标 ASan；如递归实际不允许添加 Record，则关闭为非问题。
+
+### MC-024 Common Core 中的 rK 约束特例
+
+- **位置：** `src/core/core_lower_asm_structured.c:204–260` 的 `core_asm_try_immediate_output_csr`，对照 `src/core/core_lower_asm_target.c:10`。
+- **疑点：** Common Core 直接识别 Linux RISC-V GNU ASM 的 `rK`、固定 output/input/clobber 形状并优先完成立即量特化。项目已有 Target-owned contract/资格机制，需明确这处 source constraint 语义是否可被目标拒绝、是否只属于受控兼容 fastpath。
+- **证据边界：** 未发现跨 ISA 错编实例，Core 也没有直接用 `MINIC_ARCH_*` 枚举发码。需要从 `minic_core_lower_inline_asm` 的 probe 顺序追踪真消费者；**不能按出现 `rK` 就宣告架构泄露 Bug**。
+- **下一证据：** 验证五目标 target-required admission、fastpath 输入输出等价与退回路径。若属于安全的旧指令约束兼容，标明正当特例即可。
+
+### MC-025 AArch64 公共全局 object 类型伪操作兼容性
+
+- **位置：** `src/target/aarch64/codegen.c:159` 的目标配置 `"%object"`，及 `src/target/common/global_emit.c:1250` 固定输出 `.type ...,@object` 的 simple-global 路径。
+- **疑点：** 两种 object suffix 语法可能不同，需确认哪种路径真正会执行以及 AArch64 GNU AS 对 `@object` 的接受情况。
+- **证据边界：** 这是静态审查发现的接口差异，尚无合法 C→MiniC→AArch64 GNU AS 的失败样本。当前不作为已确认错码。
+- **下一证据：** 用可选全局定义和已初始化/未初始化对象跑两种 emission path，并以当前 cross GAS/ELF 验收；如果 GAS 允许固定格式，关闭。
+
+### MC-026 Source form ID 的实际身份边界
+
+- **位置：** `src/target/backend.c:minic_backend_asm_source_form_id` 与其 `capture_asm_operand_source`、下游 target qualification。
+- **疑点：** 当前 hash 覆盖模板、ordered constraints、flags、clobbers 等，但不直接编码某些符号名称/标签文本。需确认消费者只用它作为**语法/来源形式身份**，还是将它错误当作「全部 operand 实例唯一标识」。
+- **证据边界：** `source_form_id` 与 `target_machine_form_id` 本来就有意分工；不应把不是哈希字段当作冲突或误共享的证据。
+- **下一证据：** 检查所有比较、缓存或 keyed lookup，构造只变 symbolic name/label 的 pair；若只用于统计/来源核对则关闭。
+
+### MC-027 TargetInfo 惰性初始化的并发契约
+
+- **位置：** `src/target/target_info.c:minic_target_info_for_architecture`。
+- **疑点：** 若同进程多个线程首次并发使用静态 lazily-built target descriptor，是否存在初始化竞态，应看 API/driver 的明确线程模型。
+- **证据边界：** 当前生产 CLI 每次是独立进程，未证明承诺同进程并发调用或存在可复现数据竞争；不能因此判生产 bug。
+- **下一证据：** 查找公开并发使用者、线程安全文档及构造路径；需要时 TSAN/并发探针验证。若定义单线程初始化/预先初始化则记录为设计约束。
+
 ### MC-019 两套 Bool 恒零证明扫描重叠
 
 - **位置：** `src/core/core_lower_bool.c:39–198`、`core_lower_const_facts.c:95–394`。
@@ -204,6 +246,9 @@
 | RV32/RV64 Common GPR cursor | 仅复用八寄存器 word-placement，ILP32/LP64 frame、参数宽度、具体 ABI 仍由目标负责。 |
 | RV64 Frame standalone fallback | 生产路径传入完整 ABI plan；standalone 后备有独立消费者，不是两套生产实现。 |
 | `continue-on-error`、SQLite status 收集 | 集中 owner outcome 最终裁决，不能视为静默吞错。 |
+| AST clone 共用 FunctionBody | Inline clone 按 FunctionId 追加但合法共享源 `body_block` 和 local range；Body ownership 在 clone 前校验。MC-006 是调用实例事实被写进共享 CALL，而非共享树本身有错。 |
+| ASM operand binding 双数组 | Backend contract 按序显式设置 `binding.operand_index=i`，Core 发布前检查索引一致；这是生产者/消费者协议。 |
+| Core lowering 对失败输出的保护 | `minic_core_lower_function_with_index` 用暂态 lowered 构造并验证，成功才 move 到 output；不能把过程中的 append 当成污染原 Core 对象。 |
 
 ## 审计与 CI 口径
 
@@ -215,7 +260,7 @@
 ## 新条目模板
 
 ```markdown
-### MC-023 一句话描述
+### MC-<NEXT-ID> 一句话描述（按现有最大编号递增）
 
 - 优先级：P0/P1/P2/P3；状态：INVESTIGATING；证据：SUSPICION。
 - 最近核对：<commit>；涉及架构：<targets>。

@@ -81,6 +81,8 @@ GitHub Actions 会在 Ubuntu 24.04 干净虚拟机中运行完整门禁，包括
 
 - [`docs/architecture/principles.md`](docs/architecture/principles.md)
 - [`docs/architecture/compiler-development-roadmap.md`](docs/architecture/compiler-development-roadmap.md)
+- [`docs/architecture/minic-global-contract-map.md`](docs/architecture/minic-global-contract-map.md) — 持续维护的编译管线、所有权、模块边界及新增目标契约
+- [`docs/architecture/minic-function-contract-register.md`](docs/architecture/minic-function-contract-register.md) — 关键函数契约、证据等级和待补审计范围
 - [`docs/architecture/minic-issue-register.md`](docs/architecture/minic-issue-register.md) — 持续维护的 Bug、风险、架构债及已排除误判清单
 - [`docs/standards/implementation-language.md`](docs/standards/implementation-language.md)
 - [`docs/standards/validation-toolchain.md`](docs/standards/validation-toolchain.md)

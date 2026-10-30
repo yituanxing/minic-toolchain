@@ -81,6 +81,8 @@ See:
 
 - [`docs/architecture/principles.md`](docs/architecture/principles.md)
 - [`docs/architecture/compiler-development-roadmap.md`](docs/architecture/compiler-development-roadmap.md)
+- [`docs/architecture/minic-global-contract-map.md`](docs/architecture/minic-global-contract-map.md) — living pipeline, ownership, module boundaries, and target-extension contracts
+- [`docs/architecture/minic-function-contract-register.md`](docs/architecture/minic-function-contract-register.md) — evidence-graded audit of critical function contracts and outstanding coverage
 - [`docs/architecture/minic-issue-register.md`](docs/architecture/minic-issue-register.md) — ongoing bugs, risks, design debt, and verified non-issues
 - [`docs/standards/implementation-language.md`](docs/standards/implementation-language.md)
 - [`docs/standards/validation-toolchain.md`](docs/standards/validation-toolchain.md)
