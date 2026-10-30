@@ -162,7 +162,8 @@ static bool loong_emit_scalar_store(FILE *out, size_t width,
                                     const char *value_reg,
                                     const char *address_reg,
                                     const char *scratch_reg,
-                                    bool proven_aligned) {
+                                    bool proven_aligned,
+                                    bool preserve_inputs) {
     static size_t serial;
     const char *op = width == 1U ? "st.b" : width == 2U ? "st.h" :
                      width == 4U ? "st.w" : width == 8U ? "st.d" : NULL;
@@ -185,6 +186,32 @@ static bool loong_emit_scalar_store(FILE *out, size_t width,
             scratch_reg, address_reg, width - 1U,
             scratch_reg, label) < 0)
         return false;
+    /* A normal Core STORE ends the lifetime of both scratch inputs. For
+     * unknown-alignment eightbyte stores, a counted byte loop is smaller
+     * than eight unrolled stores plus seven shifts. The asm-output path
+     * must preserve the caller's register bindings and stays unrolled. */
+    if (width == 8U && !preserve_inputs) {
+        return fprintf(out,
+            "  li.d %s, 8\n"
+            ".Lloong_store_bytes_%zu:\n"
+            "  st.b %s, %s, 0\n"
+            "  srli.d %s, %s, 8\n"
+            "  addi.d %s, %s, 1\n"
+            "  addi.d %s, %s, -1\n"
+            "  bnez %s, .Lloong_store_bytes_%zu\n"
+            "  b .Lloong_store_done_%zu\n"
+            ".Lloong_store_native_%zu:\n"
+            "  st.d %s, %s, 0\n"
+            ".Lloong_store_done_%zu:\n",
+            scratch_reg, label,
+            value_reg, address_reg,
+            value_reg, value_reg,
+            address_reg, address_reg,
+            scratch_reg, scratch_reg,
+            scratch_reg, label,
+            label, label,
+            value_reg, address_reg, label) >= 0;
+    }
     for (i = 0U; i < width; ++i) {
         if (fprintf(out, "  st.b %s, %s, %zu\n",
                     i == 0U ? value_reg : scratch_reg,
@@ -209,7 +236,7 @@ bool minic_loongarch64_emit_asm_output_store(
     const char *scratch_reg) {
     return loong_emit_scalar_store(out, width, value_reg, address_reg,
         scratch_reg, loong_known_address_alignment(program, target, fn,
-            address) >= width);
+            address) >= width, true);
 }
 
 /* Core LOAD/STORE deliberately carries no trusted alignment metadata: an
@@ -223,7 +250,7 @@ static bool emit_integer_memory(FILE *out, bool store,
     const char *op = NULL;
     if (store)
         return loong_emit_scalar_store(out, width, "$t0", "$t1", "$t3",
-                                       atomic || proven_aligned);
+                                       atomic || proven_aligned, false);
     else {
         op = width == 1U ? (sign ? "  ld.b $t0, $t1, 0\n" :
                                      "  ld.bu $t0, $t1, 0\n") :

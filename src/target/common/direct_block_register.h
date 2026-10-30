@@ -12,7 +12,7 @@
  * only if its registered operations leave the result in one known GP register
  * and consume the next left operand from that same register. No forwarding
  * crosses an instruction, block, call, asm, or control-flow boundary. */
-static inline bool minic_multi_direct_gp_chain_opcode(
+static inline bool minic_multi_direct_gp_binary_consumer_opcode(
     MinicCoreInstructionKind kind) {
     switch (kind) {
     case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
@@ -21,10 +21,29 @@ static inline bool minic_multi_direct_gp_chain_opcode(
     case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND:
     case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_XOR:
     case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR:
+    case MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE:
+    case MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER:
+    case MINIC_CORE_INSTRUCTION_INTEGER_LESS:
+    case MINIC_CORE_INSTRUCTION_SCALAR_EQUAL:
+    case MINIC_CORE_INSTRUCTION_POINTER_LESS:
         return true;
     default:
         return false;
     }
+}
+
+static inline bool minic_multi_direct_gp_unary_consumer_opcode(
+    MinicCoreInstructionKind kind) {
+    return kind == MINIC_CORE_INSTRUCTION_INTEGER_NEGATE ||
+           kind == MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT ||
+           kind == MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO;
+}
+
+static inline bool minic_multi_direct_gp_producer_opcode(
+    MinicCoreInstructionKind kind) {
+    return minic_multi_direct_gp_binary_consumer_opcode(kind) ||
+           minic_multi_direct_gp_unary_consumer_opcode(kind) ||
+           kind == MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
 }
 
 static inline bool minic_multi_direct_gp_adjacent_chain(
@@ -35,20 +54,25 @@ static inline bool minic_multi_direct_gp_adjacent_chain(
     MinicCoreValueId result;
     if (fn == NULL || producer == NULL || consumer == NULL ||
         value_use_counts == NULL ||
-        !(minic_multi_direct_gp_chain_opcode(producer->kind) ||
+        !(minic_multi_direct_gp_producer_opcode(producer->kind) ||
           producer->kind == MINIC_CORE_INSTRUCTION_LOAD) ||
-        !minic_multi_direct_gp_chain_opcode(consumer->kind))
+        !(minic_multi_direct_gp_binary_consumer_opcode(consumer->kind) ||
+          minic_multi_direct_gp_unary_consumer_opcode(consumer->kind)))
         return false;
     result = producer->result;
     return result != MINIC_CORE_VALUE_INVALID &&
            result < fn->value_count && value_use_counts[result] == 1U &&
-           (producer->kind != MINIC_CORE_INSTRUCTION_LOAD ||
-            ((minic_type_is_integer(producer->type) &&
-              !minic_type_is_int128_integer(producer->type)) ||
-             minic_type_is_pointer(producer->type))) &&
+           ((minic_type_is_integer(producer->type) &&
+             !minic_type_is_int128_integer(producer->type)) ||
+            minic_type_is_pointer(producer->type)) &&
            !minic_type_is_int128_integer(producer->type) &&
            !minic_type_is_int128_integer(consumer->type) &&
-           consumer->value.binary.left == result;
+           (minic_multi_direct_gp_binary_consumer_opcode(consumer->kind)
+             ? consumer->value.binary.left == result &&
+               ((minic_type_is_integer(fn->values[result].type) &&
+                 !minic_type_is_int128_integer(fn->values[result].type)) ||
+                minic_type_is_pointer(fn->values[result].type))
+             : consumer->value.operand == result);
 }
 
 /* A scalar LOAD or pure integer ALU result followed by its only STORE
@@ -64,7 +88,7 @@ static inline bool minic_multi_direct_gp_adjacent_result_store(
     if (fn == NULL || producer == NULL || consumer == NULL ||
         value_use_counts == NULL ||
         (producer->kind != MINIC_CORE_INSTRUCTION_LOAD &&
-         !minic_multi_direct_gp_chain_opcode(producer->kind)) ||
+         !minic_multi_direct_gp_producer_opcode(producer->kind)) ||
         consumer->kind != MINIC_CORE_INSTRUCTION_STORE)
         return false;
     result = producer->result;
