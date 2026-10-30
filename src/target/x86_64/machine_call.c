@@ -1,4 +1,5 @@
 #include "target/x86_64/machine_internal.h"
+#include "target/x86_64/codegen_options.h"
 #include "target/x86_64/abi.h"
 #include "target/x86_64/call_plan.h"
 #include "target/common/core_call_view.h"
@@ -613,7 +614,10 @@ bool minic_x86_64_emit_call_instruction(
             !x86_prepare_call_sret(out, program, target, fn, frame,
                     &call, ins->value.indirect_call.result_object, outgoing_bytes) ||
             !x86_value_load(out, frame, callee, "%r11") ||
-            fprintf(out, "  call *%%r11\n") < 0 ||
+            ((target->x86_codegen_options &
+              MINIC_X86_CODEGEN_INDIRECT_EXTERNAL_THUNK) != 0U
+                 ? fprintf(out, "  call __x86_indirect_thunk_r11\n") < 0
+                 : fprintf(out, "  call *%%r11\n") < 0) ||
             (outgoing_bytes != 0U &&
              fprintf(out, "  addq $%zu, %%rsp\n", outgoing_bytes) < 0))
             return false;

@@ -119,6 +119,10 @@ typedef struct MinicTargetInfo {
      * The canonical target descriptors default to static PC-relative.
      * A CLI invocation copies the descriptor before setting this bit. */
     bool position_independent;
+    /* Invocation-owned x86 machine mitigation contract. Frontend/Core must
+     * not inspect these target instruction-generation bits. Zero retains the
+     * original baseline userland code generation. */
+    unsigned int x86_codegen_options;
     /* Per-invocation LoongArch ELF/call ABI. Linux Kbuild uses LP64S even
      * though ordinary userland defaults to LP64D. This is target-owned,
      * never inferred from the C data model or from an assembler flag. */

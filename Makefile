@@ -551,6 +551,11 @@ check-gnu-linux-kmalloc-index-bool-guard: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
 		sh tests/compiler/c0/probe-gnu-linux-kmalloc-index-bool-guard.sh
 
+.PHONY: check-gnu-linux-kbuild-disjoint-bitmask-assert
+check-gnu-linux-kbuild-disjoint-bitmask-assert: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
+		sh tests/compiler/c0/probe-gnu-linux-kbuild-disjoint-bitmask-assert.sh
+
 # The staged driver invokes the sibling minic-cc at runtime. An order-only
 # prerequisite prevents parallel `make -j check-fast` from launching it while
 # the compiler binary is still being relinked, without relinking the driver
@@ -1429,7 +1434,7 @@ check-fast: check-x86-reachable-vma-assert check-static-const-source-boundaries 
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
 	sh tests/compiler/c0/run.sh
 
-check-fast: check-function-diagnostic-attribute check-gnu-constant-bitfield-helper-cfg check-gnu-linux-kmalloc-index-bool-guard
+check-fast: check-function-diagnostic-attribute check-gnu-constant-bitfield-helper-cfg check-gnu-linux-kmalloc-index-bool-guard check-gnu-linux-kbuild-disjoint-bitmask-assert
 
 check: check-fast
 

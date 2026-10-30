@@ -785,6 +785,141 @@ static bool core_cfg_const_pointer_bits(const MinicCoreLowerContext *context,
     return false;
 }
 
+/* A deliberately one-sided bit analysis for Linux's BUILD_BUG_ON masks.
+ * It tracks which bits MAY be one, never which bits must be one.  A conditional
+ * whose alternatives are 0 and BIT(n), for example, can carry only BIT(n)
+ * even when the condition is runtime-dependent.  The caller separately
+ * checks that evaluating the complete expression has no side effects before
+ * replacing the expression with a constant.  Unsupported operators widen to
+ * the full type mask instead of assuming a value. */
+static uint64_t core_cfg_integer_width_mask(unsigned int width) {
+    return width >= 64U ? UINT64_MAX : (UINT64_C(1) << width) - UINT64_C(1);
+}
+
+static uint64_t core_cfg_possible_one_bits(
+    const MinicCoreLowerContext *context, MinicExpressionId id,
+    unsigned int depth);
+
+/* Interpret an operand's possible bits in the containing integer type.
+ * Widening signed types may extend the sign bit into all upper bits; do not
+ * accidentally treat those upper bits as impossible. */
+static uint64_t core_cfg_possible_one_bits_as(
+    const MinicCoreLowerContext *context, MinicExpressionId id,
+    unsigned int result_width, unsigned int depth) {
+    const MinicExpression *operand = minic_c0_program_expression(
+        context->body->program, id);
+    unsigned int operand_width;
+    uint64_t bits;
+    if (operand == NULL || !minic_type_is_integer(operand->type) ||
+        !minic_target_info_integer_width(context->target,
+                                         context->body->program,
+                                         operand->type, &operand_width) ||
+        operand_width == 0U || operand_width > 64U) {
+        return UINT64_MAX;
+    }
+    bits = core_cfg_possible_one_bits(context, id, depth);
+    if (result_width > operand_width &&
+        minic_type_is_signed_integer(operand->type) &&
+        (bits & (UINT64_C(1) << (operand_width - 1U))) != 0U) {
+        bits |= ~core_cfg_integer_width_mask(operand_width);
+    }
+    return bits & core_cfg_integer_width_mask(result_width);
+}
+
+static uint64_t core_cfg_possible_one_bits(
+    const MinicCoreLowerContext *context, MinicExpressionId id,
+    unsigned int depth) {
+    const MinicExpression *expression;
+    MinicConstValue constant;
+    unsigned int width;
+    uint64_t full;
+
+    if (depth > 48U || context == NULL || context->body == NULL ||
+        context->body->program == NULL || context->target == NULL) {
+        return UINT64_MAX;
+    }
+    expression = minic_c0_program_expression(context->body->program, id);
+    if (expression == NULL || !minic_type_is_integer(expression->type) ||
+        !minic_target_info_integer_width(context->target,
+                                         context->body->program,
+                                         expression->type, &width) ||
+        width == 0U || width > 64U) {
+        return UINT64_MAX;
+    }
+    full = core_cfg_integer_width_mask(width);
+    if (minic_const_eval_integer(context->body->program, context->target,
+                                 id, &constant)) {
+        MinicConstValue converted;
+        if (minic_const_value_convert_integer(context->body->program,
+                                              context->target, &constant,
+                                              expression->type, &converted)) {
+            return converted.bits & full;
+        }
+    }
+    switch (expression->kind) {
+    case MINIC_EXPRESSION_BINARY:
+        if (expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_AND) {
+            return (core_cfg_possible_one_bits_as(
+                        context, expression->value.binary.left, width, depth + 1U) &
+                    core_cfg_possible_one_bits_as(
+                        context, expression->value.binary.right, width, depth + 1U)) & full;
+        }
+        if (expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_OR ||
+            expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_XOR) {
+            return (core_cfg_possible_one_bits_as(
+                        context, expression->value.binary.left, width, depth + 1U) |
+                    core_cfg_possible_one_bits_as(
+                        context, expression->value.binary.right, width, depth + 1U)) & full;
+        }
+        break;
+    case MINIC_EXPRESSION_CONDITIONAL:
+        return (core_cfg_possible_one_bits_as(
+                    context, expression->value.conditional.when_true, width, depth + 1U) |
+                core_cfg_possible_one_bits_as(
+                    context, expression->value.conditional.when_false, width, depth + 1U)) & full;
+    case MINIC_EXPRESSION_CAST:
+    case MINIC_EXPRESSION_BITCAST:
+    case MINIC_EXPRESSION_CONVERSION: {
+        return core_cfg_possible_one_bits_as(
+            context, expression->value.unary.operand, width, depth + 1U);
+    }
+    default:
+        break;
+    }
+    return full;
+}
+
+/* Unlike full integer constant folding, this structural proof does not
+ * require a pure predicate.  A caller must still LOWER the condition and
+ * retain its effects before selecting the only possible CFG successor. */
+bool minic_core_cfg_disjoint_bitmask_is_zero(
+    const MinicCoreLowerContext *context, MinicExpressionId id) {
+    const MinicExpression *expression;
+    unsigned int negations = 0U;
+    unsigned int depth;
+
+    if (context == NULL || context->body == NULL ||
+        context->body->program == NULL) {
+        return false;
+    }
+    for (depth = 0U; depth < 8U; ++depth) {
+        expression = minic_c0_program_expression(context->body->program, id);
+        if (expression == NULL) return false;
+        if (expression->kind == MINIC_EXPRESSION_UNARY &&
+            expression->value.unary.operator_kind == MINIC_UNARY_LOGICAL_NOT) {
+            id = expression->value.unary.operand;
+            negations ^= 1U;
+        } else {
+            break;
+        }
+    }
+    expression = minic_c0_program_expression(context->body->program, id);
+    return negations == 0U && expression != NULL &&
+           expression->kind == MINIC_EXPRESSION_BINARY &&
+           expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_AND &&
+           core_cfg_possible_one_bits(context, id, 0U) == 0U;
+}
+
 bool core_const_eval_integer_with_locals(const MinicCoreLowerContext *context,
                                                 MinicExpressionId expression_id,
                                                 MinicConstValue *value) {
@@ -1341,6 +1476,19 @@ statement_expression_done:
             value->bits = 0U;
             return true;
         }
+    }
+    /* M194_KBUILD_BIT_MASK_REACHABILITY: a nonconstant ternary such as
+     * (runtime_condition ? VM_EXEC : 0) still cannot set any bit outside
+     * VM_EXEC.  Linux combines this with constant VM flags and masks against
+     * a disjoint range in BUILD_BUG_ON.  Prove only the all-zero result, and
+     * only when dropping the full original expression preserves effects. */
+    if (expression->kind == MINIC_EXPRESSION_BINARY &&
+        expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_AND &&
+        minic_core_cfg_pure_call_argument(context, expression_id, 0U) &&
+        core_cfg_possible_one_bits(context, expression_id, 0U) == 0U) {
+        value->type = expression->type;
+        value->bits = 0U;
+        return true;
     }
     if (expression->kind == MINIC_EXPRESSION_BINARY &&
         (expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT ||

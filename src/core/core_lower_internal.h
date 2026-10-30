@@ -137,6 +137,8 @@ void core_local_constant_set(MinicCoreLowerContext *, MinicLocalId,
                              const MinicConstValue *);
 bool core_const_eval_integer_with_locals(const MinicCoreLowerContext *,
                                          MinicExpressionId, MinicConstValue *);
+bool minic_core_cfg_disjoint_bitmask_is_zero(const MinicCoreLowerContext *,
+                                             MinicExpressionId);
 bool core_const_signed_value(const MinicCoreLowerContext *,
                              const MinicConstValue *, int64_t *);
 

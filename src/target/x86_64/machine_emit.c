@@ -1,4 +1,5 @@
 #include "target/x86_64/machine_internal.h"
+#include "target/x86_64/codegen_options.h"
 #include "target/common/core_call_view.h"
 #include "target/common/core_instruction_family.h"
 #include "target/common/core_numeric_shape.h"
@@ -1429,7 +1430,10 @@ bool minic_x86_64_emit_core_terminator(FILE *out,
         /* Lua lvm.c uses GNU computed-goto dispatch. Core supplies an SSA
          * code pointer; only target instruction selection differs from RV64. */
         return x86_value_load(out, frame, term->indirect_target, "%rax") &&
-               fprintf(out, "  jmp *%%rax\n") >= 0;
+               ((target->x86_codegen_options &
+                 MINIC_X86_CODEGEN_INDIRECT_EXTERNAL_THUNK) != 0U
+                    ? fprintf(out, "  jmp __x86_indirect_thunk_rax\n") >= 0
+                    : fprintf(out, "  jmp *%%rax\n") >= 0);
     case MINIC_CORE_TERMINATOR_BRANCH:
         return fprintf(out, "  jmp .Lmini_x86_f%zu_b%u\n",
                        function_id, (unsigned int)term->branch_target) >= 0;

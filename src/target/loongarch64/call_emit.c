@@ -24,10 +24,9 @@ static bool emit_lp64_record_chunk_argument(FILE *out, size_t offset,
                                              bool dynamic_frame) {
     size_t b;
     if (bytes == 0U || bytes > 8U || (in_reg && gp >= 8U) ||
-        fprintf(out, "  li.d $t2, %zu\n"
-                     "  add.d $t2, %s, $t2\n"
-                     "  move $t0, $zero\n", offset,
-                dynamic_frame ? "$s0" : "$sp") < 0)
+        !minic_loongarch64_emit_frame_address(
+            out, "$t2", offset, dynamic_frame) ||
+        fputs("  move $t0, $zero\n", out) == EOF)
         return false;
     for (b = 0U; b < bytes; ++b)
         if (fprintf(out, "  ld.bu $t1, $t2, %zu\n"
@@ -155,9 +154,8 @@ bool minic_loongarch64_emit_abi_instruction(
                             (dynamic_frame ? 0U : stack_bytes);
                         if (!minic_multi_indirect_record(program, target,
                                 fn->objects[object_id].type, &record_size) ||
-                            fprintf(out, "  li.d $t0, %zu\n"
-                                         "  add.d $t0, %s, $t0\n",
-                                    src, dynamic_frame ? "$s0" : "$sp") < 0 ||
+                            !minic_loongarch64_emit_frame_address(
+                                out, "$t0", src, dynamic_frame) ||
                             (location->gp_registers != 0U
                              ? fprintf(out, "  move $a%zu, $t0\n", location->gp_first) < 0
                              : !minic_loongarch64_emit_frame_mem(out, "st.d", "$t0",

@@ -409,6 +409,27 @@ minic_core_lower_if(MinicCoreLowerContext *context, const MinicStatement *statem
     condition_is_pure = minic_core_cfg_pure_call_argument(
         context, statement->expression, 0U);
 
+    /* M194_KBUILD_DISJOINT_MASK_EFFECTS: Linux's BUILD_BUG_ON may mask a
+     * runtime ternary with a bit range the ternary can never set.  The false
+     * branch is provable even when the operand contains a call or volatile
+     * access.  Evaluate the ORIGINAL expression first, retaining all C
+     * effects, then omit only the impossible diagnostic branch.  This is
+     * separate from the pure-predicate shortcut below, which may omit the
+     * evaluation entirely. */
+    if (statement->cleanup_context == statement->cleanup_stop_context &&
+        minic_type_is_integer(condition_expression->type) &&
+        minic_core_cfg_disjoint_bitmask_is_zero(context, statement->expression) &&
+        !core_block_contains_reentry_label(context, then_source)) {
+        MinicCoreValueId ignored_condition = MINIC_CORE_VALUE_INVALID;
+        status = lower_expression(context, statement->expression, &ignored_condition);
+        if (status != MINIC_CORE_LOWER_OK) return status;
+        if (else_source == NULL) {
+            *terminated = false;
+            return MINIC_CORE_LOWER_OK;
+        }
+        return minic_core_lower_internal_lower_block(context, else_source, terminated);
+    }
+
     if (statement->cleanup_context == statement->cleanup_stop_context &&
         minic_type_is_integer(condition_expression->type)) {
         bool condition_is_zero;

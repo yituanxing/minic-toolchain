@@ -11,6 +11,7 @@
 #include "target/x86_64/global_emit.h"
 #include "target/x86_64/abi.h"
 #include "target/x86_64/frame.h"
+#include "target/x86_64/codegen_options.h"
 
 #include <inttypes.h>
 #include <limits.h>
@@ -87,10 +88,33 @@ static bool x86_emit_function(FILE *out, const MinicC0Program *program,
         if (!minic_multi_emit_elf_symbol_visibility(
                 out, declaration->visibility, name)) goto done;
     }
-    if ((declaration->explicit_alignment != 0U &&
-         fprintf(out, ".balign %zu\n", declaration->explicit_alignment) < 0) ||
-        fprintf(out, ".type %s,@function\n%s:\n"
-                     "  pushq %%rbp\n  movq %%rsp, %%rbp\n", name, name) < 0)
+    if (declaration->explicit_alignment != 0U &&
+        fprintf(out, ".balign %zu\n", declaration->explicit_alignment) < 0)
+        goto done;
+    /* GNU Linux's 16-byte entry patch area is emitted before the function
+     * symbol, and its start is 16-byte aligned for live ftrace patching. */
+    if ((target->x86_codegen_options &
+         MINIC_X86_CODEGEN_PATCHABLE_ENTRY_16_16) != 0U &&
+        fputs("  .balign 16\n", out) == EOF)
+        goto done;
+    if ((target->x86_codegen_options &
+         MINIC_X86_CODEGEN_PATCHABLE_ENTRY_16_16) != 0U &&
+        fprintf(out,
+                "  .pushsection __patchable_function_entries,\"awo\",@progbits,.Lmini_x86_patch_%zu\n"
+                "  .balign 8\n"
+                "  .quad .Lmini_x86_patch_%zu\n"
+                "  .popsection\n"
+                ".Lmini_x86_patch_%zu:\n"
+                "  .rept 16\n"
+                "  nop\n"
+                "  .endr\n", function_id, function_id, function_id) < 0)
+        goto done;
+    if (fprintf(out, ".type %s,@function\n%s:\n", name, name) < 0)
+        goto done;
+    if ((target->x86_codegen_options & MINIC_X86_CODEGEN_IBT_ENDBR) != 0U &&
+        fputs("  endbr64\n", out) == EOF)
+        goto done;
+    if (fputs("  pushq %rbp\n  movq %rsp, %rbp\n", out) == EOF)
         goto done;
     if (frame.frame_size != 0U &&
         fprintf(out, "  subq $%zu, %%rsp\n", frame.frame_size) < 0) goto done;
@@ -152,8 +176,15 @@ static bool x86_emit_function(FILE *out, const MinicC0Program *program,
     while (minic_core_block_walk_next(&walk, &block_index, &block)) {
         size_t k;
         if (fprintf(out, ".Lmini_x86_f%zu_b%zu:\n", function_id, block_index) < 0) goto done;
-        if (block->source_label_id != SIZE_MAX && !fn->suppress_source_label_aliases &&
-            fprintf(out, ".Luser_%zu:\n", block->source_label_id) < 0) goto done;
+        if (block->source_label_id != SIZE_MAX && !fn->suppress_source_label_aliases) {
+            if (fprintf(out, ".Luser_%zu:\n", block->source_label_id) < 0)
+                goto done;
+            /* GNU computed-goto entries are indirect branch destinations.
+             * They need ENDBR independently of the function's own entry. */
+            if ((target->x86_codegen_options & MINIC_X86_CODEGEN_IBT_ENDBR) != 0U &&
+                fputs("  endbr64\n", out) == EOF)
+                goto done;
+        }
         for (k = 0U; k < block->instruction_count; ++k) {
             MinicCoreInstructionId id = 0U;
             const MinicCoreInstruction *ins = NULL;
@@ -229,7 +260,11 @@ static bool x86_emit_function(FILE *out, const MinicC0Program *program,
                         abi->extra_nonvolatile_gp[i]) < 0)
                 goto done;
     }
-    if (fprintf(out, "  leave\n  ret\n.size %s,.-%s\n", name, name) < 0)
+    if (fputs("  leave\n", out) == EOF ||
+        ((target->x86_codegen_options & MINIC_X86_CODEGEN_RETURN_EXTERNAL_THUNK) != 0U
+             ? fputs("  jmp __x86_return_thunk\n", out) == EOF
+             : fputs("  ret\n", out) == EOF) ||
+        fprintf(out, ".size %s,.-%s\n", name, name) < 0)
         goto done;
     /* GNU constructor: ELF startup loader traverses .init_array before main.
      * Do not use ordinary .data; register a relocated function pointer. */
@@ -339,10 +374,26 @@ static bool x86_between(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *functions, size_t function_count,
     bool function_sections, void *context) {
-    return minic_program_emit_source_file_asm_stage(
-               out, program, target, functions, function_count,
-               function_sections, context) &&
-           minic_multi_elf_emit_function_aliases(out, program, "@function");
+    if (!minic_program_emit_source_file_asm_stage(
+            out, program, target, functions, function_count,
+            function_sections, context) ||
+        !minic_multi_elf_emit_function_aliases(out, program, "@function"))
+        return false;
+    if ((target->x86_codegen_options & MINIC_X86_CODEGEN_IBT_ENDBR) != 0U &&
+        fputs(".section .note.gnu.property,\"a\"\n"
+              "  .balign 8\n"
+              "  .long 1f-0f\n"
+              "  .long 4f-1f\n"
+              "  .long 5\n"
+              "0: .string \"GNU\"\n"
+              "1: .balign 8\n"
+              "  .long 0xc0000002\n"
+              "  .long 3f-2f\n"
+              "2: .long 1\n"
+              "3: .balign 8\n"
+              "4:\n", out) == EOF)
+        return false;
+    return true;
 }
 
 bool minic_x86_64_write_c0_program_with_core_functions(

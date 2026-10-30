@@ -34,8 +34,16 @@ MINIC_CFLAGS = {
     "-fno-pie", "-fno-PIE", "-fno-pic", "-fno-PIC",
 }
 LOONGARCH_ABI_FLAGS={"-mabi=lp64d","-mabi=lp64s"}
+X86_CODEGEN_FLAGS={
+    "-fcf-protection=branch","-fcf-protection=none",
+    "-mindirect-branch=thunk-extern","-mindirect-branch=keep",
+    "-mfunction-return=thunk-extern","-mfunction-return=keep",
+    "-fpatchable-function-entry=16,16",
+    "-fpatchable-function-entry=0,0","-fpatchable-function-entry=0",
+}
 def valid_minic_flags(flags,target):
-    admitted=MINIC_CFLAGS | (LOONGARCH_ABI_FLAGS if target=="loongarch64" else set())
+    admitted=MINIC_CFLAGS | (LOONGARCH_ABI_FLAGS if target=="loongarch64" else set()) | (
+        X86_CODEGEN_FLAGS if target=="x86_64" else set())
     return isinstance(flags,list) and all(x in admitted for x in flags)
 def gnu_assembler_flags(tokens):
     """Replay target machine/ABI and explicit GAS flags from the actual .o.cmd.
@@ -64,7 +72,7 @@ def original_elf_flags(path,target):
     abi=struct.unpack_from("<I",hdr,48)[0]&7
     if abi not in (1,2,3):raise ValueError("unknown GNU original LoongArch ABI: "+str(path))
     return abi
-def gnu_argv(text,gcc,obj,out,target=None):
+def gnu_command_tokens(text,gcc):
     m=re.search(r"^(?:savedcmd|cmd)_[^\n]*\s*:=\s*(.+)$",text,re.M)
     if not m:raise ValueError("no GNU Kbuild command")
     lex=shlex.shlex(m.group(1),posix=True,punctuation_chars=";&|")
@@ -73,6 +81,22 @@ def gnu_argv(text,gcc,obj,out,target=None):
     t=t[:next((i for i,v in enumerate(t) if v in (";","&&","||","|")),len(t))]
     if not t or Path(t[0]).name!=Path(gcc).name or "-c" not in t:
         raise ValueError("not a direct GNU C compile")
+    return t
+def unqualified_gnu_codegen_flags(tokens,minic_flags):
+    """List original codegen/ABI options without a proven MiniC equivalent.
+
+    Preprocessing flags have already affected the frozen GNU .i, warnings
+    affect diagnostics only, and -Wa options are replayed with GNU AS.
+    Machine, optimization, hardening, debug and C semantic options cannot be
+    silently called equivalent merely because the same .i was generated.
+    """
+    allowed=set(minic_flags)
+    return sorted({v for v in tokens[1:] if
+                   v.startswith(("-f","-m","-O","-g","-std=")) and
+                   v not in allowed and not v.startswith((
+                       "-fmacro-prefix-map=", "-ffile-prefix-map="))})
+def gnu_argv(text,gcc,obj,out,target=None):
+    t=gnu_command_tokens(text,gcc)
     outputs=[t[i+1] for i,v in enumerate(t[:-1]) if v=="-o"]
     if len(outputs)!=1:
         raise ValueError("missing/ambiguous GNU output: "+str(outputs)[:150])
@@ -82,7 +106,8 @@ def gnu_argv(text,gcc,obj,out,target=None):
     source=re.search(r"^source_[^\n]*\s*:=\s*(\S+\.c)\s*$",text,re.M)
     if len(sources)!=1 and (source is None or source.group(1) not in sources):
         raise ValueError("ambiguous GNU C source: "+str(sources)[:180])
-    flags=[v for v in t if v in MINIC_CFLAGS]
+    admitted=MINIC_CFLAGS | (X86_CODEGEN_FLAGS if target=="x86_64" else set())
+    flags=[v for v in t if v in admitted]
     assembler_flags=gnu_assembler_flags(t)
     if target=="loongarch64":
         abi_flags=[flag for flag in assembler_flags if flag.startswith("-mabi=")]
@@ -182,8 +207,28 @@ def main():
             assert flags==["-mabi=lp64s"] and as_flags==["-mabi=lp64s","-msoft-float"]
             assert valid_minic_flags(flags,"loongarch64") and not valid_minic_flags(flags,"x86_64")
             assert valid_assembler_flags(as_flags) and not valid_assembler_flags(["-mabi=lp64s\n-o /tmp/evil"])
+            # GNU -E cannot encode C machine code, ABI and hardening options.
+            # Preserve them as unqualified evidence rather than silently
+            # promoting a same-.i MiniC compile to exact GNU-option parity.
+            strict_cmd=cmd.replace(" -c ",
+                " -fshort-wchar -fcf-protection=branch -fstack-protector-strong"
+                " -ftrivial-auto-var-init=zero -mindirect-branch=thunk-extern"
+                " -mfunction-return=thunk-extern -fpatchable-function-entry=16,16"
+                " -mcmodel=kernel -O2 -c ")
+            _,forwarded,_,_=gnu_argv(strict_cmd,"gcc","lib/a.o",Path("lib/a.i"),"x86_64")
+            assert forwarded==["-fshort-wchar","-fcf-protection=branch",
+                               "-mindirect-branch=thunk-extern",
+                               "-mfunction-return=thunk-extern",
+                               "-fpatchable-function-entry=16,16"]
+            assert valid_minic_flags(forwarded,"x86_64")
+            unqualified=unqualified_gnu_codegen_flags(
+                gnu_command_tokens(strict_cmd,"gcc"),forwarded)
+            assert unqualified==sorted([
+                "-fstack-protector-strong",
+                "-ftrivial-auto-var-init=zero",
+                "-mcmodel=kernel", "-O2"])
             assert sum(len(list(range(i,99,7))) for i in range(7))==99
-            print("GNU_FROZEN_I_SELFTEST=PASS shards=7 replay_flags=1 gnu_machine_abi=1");return 0
+            print("GNU_FROZEN_I_SELFTEST=PASS shards=7 replay_flags=1 gnu_machine_abi=1 unqualified_option_audit=1");return 0
         if a.evidence is None or a.frozen is None or a.target is None:p.error("missing required paths/target")
         if a.mode=="freeze":
             if a.out is None:p.error("--out required")

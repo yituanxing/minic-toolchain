@@ -338,9 +338,8 @@ bool minic_loongarch64_emit_residual_instruction(
             }
             if (!minic_multi_direct_object_address_location(
                     fn, ins, frame_plan, &object_offset) ||
-                fprintf(out, "  li.d $t0, %zu\n"
-                             "  add.d $t0, %s, $t0\n",
-                        object_offset, dynamic_frame ? "$s0" : "$sp") < 0 ||
+                !minic_loongarch64_emit_frame_address(
+                    out, "$t0", object_offset, dynamic_frame) ||
                 !emit_sp_mem(out, "st.d", "$t0", offset)) return minic_multi_direct_machine_reject(fn, "loongarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
             { *needs_writeback = false; return true; }

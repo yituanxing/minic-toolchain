@@ -1,0 +1,12 @@
+#ifndef MINIC_TARGET_X86_64_CODEGEN_OPTIONS_H
+#define MINIC_TARGET_X86_64_CODEGEN_OPTIONS_H
+
+/* Private x86 machine emission flags; never encode ISA details in Core IR. */
+enum MinicX86CodegenOption {
+    MINIC_X86_CODEGEN_IBT_ENDBR = 1U << 0,
+    MINIC_X86_CODEGEN_INDIRECT_EXTERNAL_THUNK = 1U << 1,
+    MINIC_X86_CODEGEN_RETURN_EXTERNAL_THUNK = 1U << 2,
+    MINIC_X86_CODEGEN_PATCHABLE_ENTRY_16_16 = 1U << 3
+};
+
+#endif

@@ -24,3 +24,11 @@ int alias_escape(int x) {
 int packed_read(struct Packed *p) {
     return p->value;
 }
+
+/* Keep the frame genuinely large: the volatile byte object is observable,
+ * while incoming scalar/SSA transport remains naturally aligned above it. */
+unsigned long large_frame_touch(unsigned long x) {
+    volatile unsigned char bytes[4096];
+    bytes[4032] = (unsigned char)x;
+    return (unsigned long)bytes[4032] + x;
+}

@@ -14,7 +14,14 @@ static void minic_print_usage(FILE *stream, const char *program) {
     (void)fprintf(stream, "usage: %s -S <preprocessed-input.i> [--target=", program);
     for (i = 0U; i < count; ++i)
         (void)fprintf(stream, "%s%s", i == 0U ? "" : "|", targets[i].name);
-    (void)fprintf(stream, "] [-march=<target-isa>] [-mabi=<target-abi>] [-ffunction-sections|-fno-function-sections] [-fPIE|-fPIC|-fno-pie] [-fsigned-char|-funsigned-char] [-fshort-wchar|-fno-short-wchar] -o <output.s>\n");
+    (void)fprintf(stream, "] [-march=<target-isa>] [-mabi=<target-abi>] [-ffunction-sections|-fno-function-sections] [-fPIE|-fPIC|-fno-pie] [-fsigned-char|-funsigned-char] [-fshort-wchar|-fno-short-wchar] [-fcf-protection=branch] [-mindirect-branch=thunk-extern] [-mfunction-return=thunk-extern] [-fpatchable-function-entry=16,16] -o <output.s>\n");
+}
+
+static bool is_machine_codegen_option(const char *option) {
+    return strncmp(option, "-fcf-protection=", 16U) == 0 ||
+           strncmp(option, "-mindirect-branch=", 18U) == 0 ||
+           strncmp(option, "-mfunction-return=", 18U) == 0 ||
+           strncmp(option, "-fpatchable-function-entry=", 27U) == 0;
 }
 
 int main(int argc, char **argv) {
@@ -39,6 +46,9 @@ int main(int argc, char **argv) {
     bool target_given = false;
     const char *march = NULL;
     const char *mabi = NULL;
+    const char *machine_codegen_options[16];
+    size_t machine_codegen_option_count = 0U;
+    size_t machine_codegen_option_index;
 
     input_path = NULL;
     output_path = NULL;
@@ -115,6 +125,13 @@ int main(int argc, char **argv) {
                    strcmp(argv[index], "-fno-pic") == 0 ||
                    strcmp(argv[index], "-fno-PIC") == 0) {
             position_independent = false;
+        } else if (is_machine_codegen_option(argv[index])) {
+            if (machine_codegen_option_count ==
+                sizeof(machine_codegen_options) / sizeof(machine_codegen_options[0])) {
+                (void)fprintf(stderr, "%s: too many machine codegen options\n", argv[0]);
+                return 2;
+            }
+            machine_codegen_options[machine_codegen_option_count++] = argv[index];
         } else if (strcmp(argv[index], "--help") == 0 || strcmp(argv[index], "-h") == 0) {
             minic_print_usage(stdout, argv[0]);
             return 0;
@@ -157,6 +174,18 @@ int main(int argc, char **argv) {
         char reason[240];
         if (!minic_target_machine_options_resolve(
                 &selected_target, march, mabi, reason, sizeof(reason))) {
+            (void)fprintf(stderr, "%s: %s\n", argv[0], reason);
+            return 2;
+        }
+    }
+    for (machine_codegen_option_index = 0U;
+         machine_codegen_option_index < machine_codegen_option_count;
+         ++machine_codegen_option_index) {
+        char reason[240];
+        if (!minic_target_codegen_option_apply(
+                &selected_target,
+                machine_codegen_options[machine_codegen_option_index],
+                reason, sizeof(reason))) {
             (void)fprintf(stderr, "%s: %s\n", argv[0], reason);
             return 2;
         }

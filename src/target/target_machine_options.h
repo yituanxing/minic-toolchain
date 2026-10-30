@@ -14,5 +14,10 @@
 bool minic_target_machine_options_resolve(MinicTargetInfo *invocation_target,
                                           const char *march, const char *mabi,
                                           char *reason, size_t reason_capacity);
+/* Exact target-owned codegen options. Unsupported spellings/architectures
+ * fail closed; the frontend and driver merely transport their arguments. */
+bool minic_target_codegen_option_apply(MinicTargetInfo *invocation_target,
+                                       const char *option,
+                                       char *reason, size_t reason_capacity);
 
 #endif

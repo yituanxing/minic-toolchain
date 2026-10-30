@@ -30,6 +30,13 @@ typedef struct MinicDriverLanguageOptions {
     const char *relocation;
 } MinicDriverLanguageOptions;
 
+static bool minic_driver_is_machine_codegen_option(const char *option) {
+    return strncmp(option, "-fcf-protection=", 16U) == 0 ||
+           strncmp(option, "-mindirect-branch=", 18U) == 0 ||
+           strncmp(option, "-mfunction-return=", 18U) == 0 ||
+           strncmp(option, "-fpatchable-function-entry=", 27U) == 0;
+}
+
 static bool minic_driver_plain_char_unsigned(const MinicDriverLanguageOptions *o) {
     return o->plain_char == NULL ||
            strcmp(o->plain_char, "-funsigned-char") == 0 ||
@@ -101,7 +108,7 @@ static void usage(FILE *out, const char *argv0) {
     for (i = 0U; i < count; ++i)
         (void)fprintf(out, "%s%s", i == 0U ? "" : "|", targets[i].name);
     (void)fprintf(out,
-            "] [-march=rv32i|rv64i|rv64im|rv64imafd|rv64ima_zicsr_zifencei|rv64imac_zicsr_zifencei] [-mabi=ilp32|lp64|lp64d] [-fsigned-char|-funsigned-char] [-fshort-wchar|-fno-short-wchar] [-fPIC|-fPIE (only -S)] [--rtlib=PATH (link only)] [-ffreestanding|-fhosted] [-ffunction-sections|-fno-function-sections] [-static] "
+            "] [-march=rv32i|rv64i|rv64im|rv64imafd|rv64ima_zicsr_zifencei|rv64imac_zicsr_zifencei] [-mabi=ilp32|lp64|lp64d] [-fsigned-char|-funsigned-char] [-fshort-wchar|-fno-short-wchar] [-fPIC|-fPIE (only -S)] [-fcf-protection=branch] [-mindirect-branch=thunk-extern] [-mfunction-return=thunk-extern] [-fpatchable-function-entry=16,16] [--rtlib=PATH (link only)] [-ffreestanding|-fhosted] [-ffunction-sections|-fno-function-sections] [-static] "
             "[-nostdlib] [-nostartfiles] [-nodefaultlibs] [-nostdinc] "
             "[--sysroot DIR] [-DNAME[=VALUE]] [-UNAME] [-IDIR] "
             "[-isystem DIR] [-include FILE] [-LDIR] [-lNAME] "
@@ -461,6 +468,8 @@ int main(int argc, char **argv) {
     bool target_given = false;
     const char *march = NULL;
     const char *mabi = NULL;
+    const char *machine_codegen_options[16];
+    size_t machine_codegen_option_count = 0U;
     const char *runtime_archive = NULL;
     MinicDriverLanguageOptions language = {0};
     char *cpp = NULL;
@@ -532,6 +541,13 @@ int main(int argc, char **argv) {
                    strcmp(argument, "-fno-pic") == 0 ||
                    strcmp(argument, "-fno-PIC") == 0) {
             language.relocation = argument;
+        } else if (minic_driver_is_machine_codegen_option(argument)) {
+            if (machine_codegen_option_count ==
+                sizeof(machine_codegen_options) / sizeof(machine_codegen_options[0])) {
+                fprintf(stderr, "minic: too many machine codegen options\n");
+                return 2;
+            }
+            machine_codegen_options[machine_codegen_option_count++] = argument;
         } else if (strcmp(argument, "-ffunction-sections") == 0) {
             function_sections = true;
         } else if (strcmp(argument, "-fno-function-sections") == 0) {
@@ -694,6 +710,10 @@ int main(int argc, char **argv) {
         fprintf(stderr, "minic: PIC/PIE requires -S (qualified backend-only)\n");
         return 2;
     }
+    if (machine_codegen_option_count != 0U && mode != MINIC_DRIVER_ASSEMBLY) {
+        fprintf(stderr, "minic: machine-codegen-options-require--S\n");
+        return 2;
+    }
     if (input_count == 0U || output == NULL) {
         usage(stderr, argv[0]);
         return 2;
@@ -727,8 +747,9 @@ int main(int argc, char **argv) {
     }
 
     if (mode == MINIC_DRIVER_ASSEMBLY) {
-        char *cc_arguments[18];
+        char *cc_arguments[38];
         size_t argument_count = 0U;
+        size_t machine_index;
         cc_arguments[argument_count++] = cc;
         cc_arguments[argument_count++] = "-S";
         cc_arguments[argument_count++] = (char *)inputs[0];
@@ -752,6 +773,10 @@ int main(int argc, char **argv) {
             cc_arguments[argument_count++] = (char *)language.wide_char;
         if (language.relocation != NULL)
             cc_arguments[argument_count++] = (char *)language.relocation;
+        for (machine_index = 0U; machine_index < machine_codegen_option_count;
+             ++machine_index)
+            cc_arguments[argument_count++] =
+                (char *)machine_codegen_options[machine_index];
         cc_arguments[argument_count] = NULL;
         status = run_tool(cc_arguments);
         goto done;

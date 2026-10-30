@@ -72,9 +72,8 @@ bool minic_loongarch64_emit_lp64_record_chunk_parameter(FILE *out, size_t offset
                                               size_t saved_entry_sp_offset) {
     size_t b;
     if (bytes == 0U || bytes > 8U || (in_reg && gp >= 8U) ||
-        fprintf(out, "  li.d $t2, %zu\n"
-                     "  add.d $t2, %s, $t2\n", offset,
-                dynamic_frame ? "$s0" : "$sp") < 0 ||
+        !minic_loongarch64_emit_frame_address(out, "$t2", offset,
+                                              dynamic_frame) ||
         (in_reg
          ? fprintf(out, "  or $t0, $a%zu, $zero\n", gp) < 0
          : saved_entry_sp_offset != SIZE_MAX
@@ -120,8 +119,8 @@ static bool minic_loongarch64_emit_record_load(FILE *out,
             &source, &dest, &bytes) ||
         !minic_loongarch64_emit_frame_mem(out, "ld.d", "$t2",
             minic_lp64_frame_value_offset(frame_plan, source), ctx->dynamic_frame) ||
-        fprintf(out, "  li.d $t1, %zu\n  add.d $t1, %s, $t1\n",
-            dest, ctx->dynamic_frame ? "$s0" : "$sp") < 0)
+        !minic_loongarch64_emit_frame_address(
+            out, "$t1", dest, ctx->dynamic_frame))
         return false;
     return loongarch64_emit_record_bytes(
         out, "$t2", "$t1", "$t0", "$t3", bytes);
@@ -157,9 +156,8 @@ const MinicLP64ArgumentLocation *location;
                                saved_entry_sp_offset)
                          : !emit_sp_mem(out, "ld.d", "$t0",
                                     frame + location->stack_first * 8U)) ||
-                    fprintf(out, "  li.d $t1, %zu\n"
-                                 "  add.d $t1, %s, $t1\n",
-                            object_offset, dynamic_frame ? "$s0" : "$sp") < 0)
+                    !minic_loongarch64_emit_frame_address(
+                        out, "$t1", object_offset, dynamic_frame))
                     return false;
                 return loongarch64_emit_record_bytes(
                     out, "$t0", "$t1", "$t2", "$t3", size);
@@ -221,9 +219,8 @@ static bool loongarch64_return_indirect_record(
                                      &bytes) ||
         bytes <= 16U || bytes > 2048U ||
         !minic_lp64_frame_plan_object(frame_plan, object_id, &src) ||
-        fprintf(out, "  li.d $t1, %zu\n"
-                     "  add.d $t1, %s, $t1\n",
-                src, dynamic_frame ? "$s0" : "$sp") < 0 ||
+        !minic_loongarch64_emit_frame_address(
+            out, "$t1", src, dynamic_frame) ||
         !minic_loongarch64_emit_frame_mem(
                 out, "ld.d", "$a0", return_slot, dynamic_frame) ||
         fputs("  move $t2, $a0\n", out) == EOF ||

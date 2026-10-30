@@ -1631,7 +1631,11 @@ for target in aarch64 loongarch64; do
             else
                 grep -Fq 'sub.d $sp, $sp, $t3' "$w/$target.$testcase.s"
                 grep -Fq 'add.d $sp, $sp, $t3' "$w/$target.$testcase.s"
-                grep -Fq 'add.d $t3, $sp, $t3' "$w/$target.$testcase.s"
+                # Aligned 2KiB..32KiB frame accesses now use native
+                # LDPTR/STPTR si14<<2 instead of materializing an address.
+                # Larger/unaligned frame accesses still use $t3 + SP.
+                grep -Eq '(add\.d \$t3, \$sp, \$t3|\b(ldptr|stptr)\.[wd] \$t[0-9]+, \$sp, [0-9]+)' \
+                    "$w/$target.$testcase.s"
             fi
             echo "FOUR_BACKEND_M7_FRAME_ENCODING=PASS target=$target register_SP_adjust=1 large_offset=1"
         fi

@@ -43,6 +43,21 @@ for symbol in missing_object hidden_missing_object provided_object \
     }
 done
 
+# Kbuild can carry a strong-looking first declaration followed by the
+# actual weak external declaration. The ABI owner must use the merged symbol
+# identity regardless of declaration order; AArch64 must not reintroduce
+# R_AARCH64_ADR_PREL_PG_HI21 for a possibly absent provider.
+"$host_cc" -E -P -std=gnu11 -x c \
+    "$root/tests/compiler/c0/aarch64_weak_redeclaration_got.c" \
+    -o "$work/aarch64-weak-redeclarations.i"
+"$minic" --target=aarch64-linux -fno-pie -S \
+    "$work/aarch64-weak-redeclarations.i" \
+    -o "$work/aarch64-weak-redeclarations.s"
+for symbol in early_strong_object early_weak_object weak_function; do
+    test "$(grep -c "^\.weak $symbol$" "$work/aarch64-weak-redeclarations.s")" -eq 1
+    grep -Fq "adrp x9, :got:$symbol" "$work/aarch64-weak-redeclarations.s"
+done
+
 "$host_cc" -fno-pie -c "$work/x86_64.s" -o "$work/minic.o"
 "$host_cc" -fno-pie -c \
     "$root/tests/compiler/c0/gnu_weak_undefined_live.c" -o "$work/gnu.o"

@@ -15,6 +15,7 @@ semantic differential complete successfully.
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import concurrent.futures
 import contextlib
 import functools
@@ -48,6 +49,7 @@ ALLOWED_CFLAGS = {
 LOONGARCH_ABI_FLAGS = {"-mabi=lp64s", "-mabi=lp64d"}
 GNU_VERDICT = "GNU_QEMU_P0_P1_PASS_NOT_MINIC"
 MINIC_VERDICT = "MINIC_QEMU_P0_P1_PASS_NO_GCC_C_FALLBACK"
+MINIC_PRE_DIFF_VERDICT = "MINIC_QEMU_P0_P1_BOOTED_DIFF_PENDING"
 
 
 class Rejected(ValueError):
@@ -99,8 +101,16 @@ def compiler_pair(compiler: Path, expected: dict | None = None) -> dict[str, str
     return identity
 
 
-def verify_gnu_kbuild_commands(out: Path, rows: list[dict], gcc: str) -> None:
-    """Ensure canonical GNU .cmd source/flags identity never changed."""
+def verify_gnu_kbuild_commands(out: Path, rows: list[dict], gcc: str,
+                               target: str | None = None) -> dict:
+    """Verify canonical GNU flags and report unqualified codegen options.
+
+    This remains diagnostic during the full C/AS/link/QEMU campaign: missing
+    feature equivalence must be visible, never silently promoted to strict
+    source-option qualification or used to skip the next Linux error.
+    """
+    missing = Counter()
+    unqualified_owners = 0
     for row in rows:
         name = PurePosixPath(row["object"])
         cmd = out / name.parent / ("." + name.name + ".cmd")
@@ -110,12 +120,26 @@ def verify_gnu_kbuild_commands(out: Path, rows: list[dict], gcc: str) -> None:
                 sha(required(cmd)) != digest):
             raise Rejected(f"original GNU Kbuild .cmd provenance changed: {name}")
         try:
-            _, _, authentic_as_flags, _ = frozen_kbuild_oracle().gnu_argv(
-                cmd.read_text(), gcc, name.as_posix(), Path("unused.i"))
+            raw_cmd = cmd.read_text()
+            _, authentic_minic_flags, authentic_as_flags, _ = frozen_kbuild_oracle().gnu_argv(
+                raw_cmd, gcc, name.as_posix(), Path("unused.i"), target)
         except (OSError, ValueError) as exc:
             raise Rejected(f"invalid authentic GNU machine options for {name}: {exc}") from exc
         if row.get("gnu_as_flags") != authentic_as_flags:
             raise Rejected(f"original GNU AS machine options changed: {name}")
+        if row.get("minic_flags") != authentic_minic_flags:
+            raise Rejected(f"original GNU C language/ABI options changed: {name}")
+        options = frozen_kbuild_oracle().unqualified_gnu_codegen_flags(
+            frozen_kbuild_oracle().gnu_command_tokens(raw_cmd, gcc),
+            authentic_minic_flags)
+        if options:
+            unqualified_owners += 1
+            missing.update(options)
+    status = ("INCONCLUSIVE_UNQUALIFIED" if missing else
+              "NO_UNQUALIFIED_GNU_CODEGEN_OPTIONS")
+    return {"gnu_c_option_equivalence": status,
+            "gnu_c_option_unqualified_owners": unqualified_owners,
+            "gnu_c_option_unqualified_counts": dict(sorted(missing.items()))}
 
 
 def gnu_assembler_command(gcc: str, row: dict, asm: Path, obj: Path) -> list[str]:
@@ -181,10 +205,14 @@ def candidate_inputs(target: str, work: Path, compiler: Path,
         raise Rejected("incomplete canonical Linux ELF64 GNU C-owner manifest")
     if freeze.get("identity", {}).get("profile") != "broad":
         raise Rejected("GNU frozen profile must match the full broad Kconfig")
-    verify_gnu_kbuild_commands(out, rows, gcc)
+    option_contract = verify_gnu_kbuild_commands(out, rows, gcc, target)
+    print(f"GNU_C_OPTION_EQUIVALENCE={option_contract['gnu_c_option_equivalence']} "
+          f"target={target} owners={option_contract['gnu_c_option_unqualified_owners']}/{len(rows)} "
+          f"distinct_options={len(option_contract['gnu_c_option_unqualified_counts'])}")
     for row in rows:
         name = PurePosixPath(row["object"])
-        allowed = ALLOWED_CFLAGS | (LOONGARCH_ABI_FLAGS if target == "loongarch64" else set())
+        allowed = ALLOWED_CFLAGS | (LOONGARCH_ABI_FLAGS if target == "loongarch64" else set()) | (
+            frozen_kbuild_oracle().X86_CODEGEN_FLAGS if target == "x86_64" else set())
         if (name.is_absolute() or ".." in name.parts or name.suffix != ".o" or
                 not isinstance(row.get("minic_flags"), list) or
                 any(flag not in allowed for flag in row["minic_flags"]) or
@@ -201,7 +229,7 @@ def candidate_inputs(target: str, work: Path, compiler: Path,
                   "initramfs_sha256": golden_receipt["initramfs_sha256"],
                   "firmware_sha256": golden_receipt.get("firmware_sha256"),
                   "gnu_c_owner_manifest_sha256": discovery["owner_manifest_sha256"],
-                  **tool_identity, "arch": arch, "cross": cross,
+                  **tool_identity, **option_contract, "arch": arch, "cross": cross,
                   "gcc": gcc, "build_target": build_target,
                   "image_name": image_name, "machine": machine}
 
@@ -936,7 +964,7 @@ def relink(work: Path, output: Path, rows: list[dict], results: list[dict],
     # the preoverlay list. A new GCC-generated C object may not evade this
     # union check even if each previous MiniC .o remained byte-for-byte intact.
     census = verify_postlink_c_owners(out, output, data["target"], expected)
-    verify_gnu_kbuild_commands(out, rows, data["gcc"])
+    verify_gnu_kbuild_commands(out, rows, data["gcc"], data["target"])
     (output / "postlink-gnu-c-fallback.json").write_text(json.dumps(
         {"verdict": census["verdict"], "gnu_c_fallback_count": 0,
          "unexpected": [], "overwritten": []}, indent=2) + "\n")
@@ -970,6 +998,8 @@ def boot_and_compare(data: dict, output: Path, initramfs: Path,
                   compiler_sha256=data["compiler_sha256"],
                   compiler_driver_sha256=data["compiler_driver_sha256"],
                   compiler_cc_sha256=data["compiler_cc_sha256"],
+                  gnu_c_option_equivalence=data["gnu_c_option_equivalence"],
+                  gnu_c_option_unqualified_owners=data["gnu_c_option_unqualified_owners"],
                   golden_c_owners=data["gnu_c_owners"],
                   minic_c_owners=data["gnu_c_owners"], gnu_c_fallback_count=0,
                   lanes=[], verdict="MINIC_QEMU_NOT_CERTIFIED")
@@ -978,7 +1008,10 @@ def boot_and_compare(data: dict, output: Path, initramfs: Path,
                                profile, "2G", 240, boot_dir)
         lane["verdict"] = "MINIC_QEMU_RUNTIME_PASS"
         result["lanes"].append(lane)
-    result["verdict"] = MINIC_VERDICT
+    # A boot-complete receipt is NOT a GNU/MiniC runtime differential PASS.
+    # Keep the persisted artifact fail-closed if either comparator fails or
+    # the process is interrupted after only one lane has been compared.
+    result["verdict"] = MINIC_PRE_DIFF_VERDICT
     receipt = boot_dir / "minic-qemu-receipt.json"
     receipt.write_text(json.dumps(result, sort_keys=True, indent=2) + "\n")
     # The two executions have independent Image hashes and QEMU exits; the
@@ -993,6 +1026,21 @@ def boot_and_compare(data: dict, output: Path, initramfs: Path,
                    "--target", data["target"], "--profile", profile,
                    "--receipt", str(boot_dir / f"{profile}-differential.json")]
         subprocess.run(command, check=True)
+    # Publish the final verdict only after both independently verified GNU
+    # semantic differential receipts exist; use a same-directory atomic
+    # replacement so a failed/partial run never leaves a successful receipt.
+    for profile in ("p0", "p1"):
+        differential = json.loads(required(
+            boot_dir / f"{profile}-differential.json").read_text())
+        if (differential.get("verdict") != "GNU_MINIC_RUNTIME_SEMANTIC_MATCH" or
+                differential.get("target") != data["target"] or
+                differential.get("profile") != profile or
+                differential.get("minic_image_sha256") != result["image_sha256"]):
+            raise Rejected(f"missing authenticated {profile} runtime differential")
+    result["verdict"] = MINIC_VERDICT
+    temporary = receipt.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(result, sort_keys=True, indent=2) + "\n")
+    os.replace(temporary, receipt)
     return result
 
 
@@ -1333,8 +1381,9 @@ def self_test() -> None:
         expected = {"kernel/canonical.o": sha(first)}
         cmd = first.parent / ("." + first.name + ".cmd")
         metadata = [{"object": "kernel/canonical.o", "cmd_sha256": sha(cmd),
-                     "gnu_as_flags": []}]
-        verify_gnu_kbuild_commands(out, metadata, "gcc")
+                     "gnu_as_flags": [], "minic_flags": []}]
+        assert verify_gnu_kbuild_commands(out, metadata, "gcc")[
+            "gnu_c_option_equivalence"] == "NO_UNQUALIFIED_GNU_CODEGEN_OPTIONS"
         metadata[0]["gnu_as_flags"] = ["-mabi=lp64s"]
         try:
             verify_gnu_kbuild_commands(out, metadata, "gcc")
@@ -1343,6 +1392,14 @@ def self_test() -> None:
         else:
             raise AssertionError("forged original GNU AS flags escaped .cmd gate")
         metadata[0]["gnu_as_flags"] = []
+        metadata[0]["minic_flags"] = ["-fshort-wchar"]
+        try:
+            verify_gnu_kbuild_commands(out, metadata, "gcc")
+        except Rejected:
+            failures_checked += 1
+        else:
+            raise AssertionError("forged original GNU C ABI flags escaped .cmd gate")
+        metadata[0]["minic_flags"] = []
         assert verify_postlink_c_owners(out, evidence, "x86_64", expected)["verdict"] == \
             "POSTLINK_ALL_C_MINIC_SHA_PASS"
         added = sample_c_owner("kernel/gnu-escaped.o")
@@ -1452,10 +1509,21 @@ def main() -> int:
         # Never promote QEMU/same-source results if object provenance failed.
         boot_and_compare(data, a.output, a.initramfs, a.firmware,
                          image, golden, a.gnu_boot_logs)
-        outcome["verdict"] = "MINIC_ALL_C_GNU_LINK_QEMU_STRICT_DIFF_PASS"
-        print(f"THREE_ISA_MINIC_FULL_RUNTIME=PASS target={a.target} "
-              f"owners={len(rows)}/{len(rows)} fallback_GNU_C=0 QEMU=P0_P1 GNU_diff=PASS")
-        rc = 0
+        if data["gnu_c_option_equivalence"] != "NO_UNQUALIFIED_GNU_CODEGEN_OPTIONS":
+            # Preserve the successful link/QEMU evidence but never promote
+            # ignored original GNU codegen options to strict equivalence.
+            # This gate runs after the full campaign so it cannot hide the
+            # current three-ISA link failures or their forensic artifacts.
+            outcome["verdict"] = "MINIC_LINK_QEMU_RUNTIME_MATCH_GNU_C_OPTIONS_INCONCLUSIVE"
+            print(f"THREE_ISA_MINIC_FULL_RUNTIME=INCONCLUSIVE target={a.target} "
+                  f"owners={len(rows)}/{len(rows)} fallback_GNU_C=0 "
+                  f"QEMU=P0_P1 GNU_diff=PASS option_equivalence=INCONCLUSIVE")
+            rc = 2
+        else:
+            outcome["verdict"] = "MINIC_ALL_C_GNU_LINK_QEMU_STRICT_DIFF_PASS"
+            print(f"THREE_ISA_MINIC_FULL_RUNTIME=PASS target={a.target} "
+                  f"owners={len(rows)}/{len(rows)} fallback_GNU_C=0 QEMU=P0_P1 GNU_diff=PASS")
+            rc = 0
     except (OSError, ValueError, subprocess.SubprocessError) as exc:
         outcome["verdict"] = "MINIC_ALL_C_GNU_LINK_QEMU_FAIL"
         outcome["error"] = str(exc)

@@ -58,6 +58,7 @@ EVENT = re.compile(r"^RUNTIME_V2_SYSCALL_PASS ([a-z][a-z0-9-]*)$")
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 GNU_VERDICT = "GNU_QEMU_P0_P1_PASS_NOT_MINIC"
 MINIC_VERDICT = "MINIC_QEMU_P0_P1_PASS_NO_GCC_C_FALLBACK"
+MINIC_PRE_DIFF_VERDICT = "MINIC_QEMU_P0_P1_BOOTED_DIFF_PENDING"
 
 
 class RuntimeMismatch(ValueError):
@@ -130,7 +131,8 @@ def compare(golden: str, candidate: str, profile: str, release: str) -> dict:
 
 
 def check_receipts(gnu: dict, minic: dict, target: str, profile: str,
-                   gnu_log: Path, minic_log: Path) -> dict:
+                   gnu_log: Path, minic_log: Path,
+                   allow_pending_diff: bool = False) -> dict:
     """Require independently authenticated runtime and all-MiniC ownership.
 
     A passing log alone is never proof: a skipped QEMU job, old Image, or a
@@ -138,7 +140,13 @@ def check_receipts(gnu: dict, minic: dict, target: str, profile: str,
     """
     if not isinstance(gnu, dict) or not isinstance(minic, dict):
         raise RuntimeMismatch("missing structured QEMU proof")
-    if gnu.get("verdict") != GNU_VERDICT or minic.get("verdict") != MINIC_VERDICT:
+    # Only the differential verifier itself may consume a boot-complete but
+    # not-yet-compared candidate. Every other caller still requires the final
+    # accepted verdict, which cannot be written before BOTH comparisons pass.
+    admitted = {MINIC_VERDICT}
+    if allow_pending_diff:
+        admitted.add(MINIC_PRE_DIFF_VERDICT)
+    if gnu.get("verdict") != GNU_VERDICT or minic.get("verdict") not in admitted:
         raise RuntimeMismatch("GNU and MiniC complete P0/P1 verdicts required")
     for name, receipt in (("GNU", gnu), ("MiniC", minic)):
         if receipt.get("target") != target:
@@ -278,6 +286,11 @@ def self_test() -> None:
         bad(lambda a, b: b.update(compiler_sha256="wrong"))
         bad(lambda a, b: b.update(compiler_cc_sha256="wrong"))
         bad(lambda a, b: b.update(compiler_driver_sha256="d" * 64))
+        bad(lambda a, b: b.update(verdict=MINIC_PRE_DIFF_VERDICT))
+        pending = copy.deepcopy(minic)
+        pending["verdict"] = MINIC_PRE_DIFF_VERDICT
+        assert check_receipts(gnu, pending, "aarch64", "p1", gnu_log, minic_log,
+                              allow_pending_diff=True)["minic_c_owners"] == 4078
         bad(lambda a, b: b["lanes"][1].update(timed_out=True))
         bad(lambda a, b: b["lanes"][1].update(exit_code=124))
         bad(lambda a, b: b["lanes"][1].update(log_sha256="0" * 64))
@@ -317,7 +330,8 @@ def main() -> int:
             raise RuntimeMismatch("both logs, QEMU receipts, target, profile and output required")
         provenance = check_receipts(json.loads(args.golden_receipt.read_text()),
                                     json.loads(args.minic_receipt.read_text()),
-                                    args.target, args.profile, args.golden_log, args.minic_log)
+                                    args.target, args.profile, args.golden_log, args.minic_log,
+                                    allow_pending_diff=True)
         result = compare(args.golden_log.read_text(errors="replace"),
                          args.minic_log.read_text(errors="replace"),
                          args.profile, args.linux_release)

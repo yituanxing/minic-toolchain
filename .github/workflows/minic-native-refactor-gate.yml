@@ -7,6 +7,8 @@ on:
       - 'tools/minic/**'
       - 'tools/minic-cc/**'
       - 'tests/compiler/c0/probe-minic-driver-target-catalog.sh'
+      - 'tests/compiler/c0/probe-x86-kbuild-mitigations.sh'
+      - 'tests/compiler/c0/x86_kbuild_mitigations.c'
       - 'tests/compiler/c0/probe-target-language-abi-options.sh'
       - 'src/core/**'
       - 'src/compiler/**'
@@ -39,6 +41,8 @@ on:
       - 'tools/minic/**'
       - 'tools/minic-cc/**'
       - 'tests/compiler/c0/probe-minic-driver-target-catalog.sh'
+      - 'tests/compiler/c0/probe-x86-kbuild-mitigations.sh'
+      - 'tests/compiler/c0/x86_kbuild_mitigations.c'
       - 'tests/compiler/c0/probe-target-language-abi-options.sh'
       - 'src/core/**'
       - 'src/compiler/**'
@@ -363,6 +367,9 @@ jobs:
           test "$(uname -m)" = x86_64
           MINIC_CC="$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc" \
             HOST_CC=cc sh tests/compiler/c0/run-x86_64-native-m1.sh
+          bash tests/compiler/c0/probe-x86-kbuild-mitigations.sh \
+            "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc" \
+            "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic"
           bash tests/compiler/c0/probe-x86-nospec-native.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
           bash tests/compiler/c0/probe-linux-declaration-gates.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
           bash tests/compiler/c0/probe-linux-global-prefix-attributes.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
