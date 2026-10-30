@@ -252,16 +252,84 @@ verify_boots() {
     echo "MINIAS_LINUX_FOURARCH_BOOT=PASS arch=x86_64 flavor=$flavor p0=2/2 p1=12/12"
 }
 
-verify_boots mini "$image"
-
-# GNU is an independent baseline, never a rescue assembler for the candidate.
+# Build GNU's independent baseline even when MiniAS reaches decompression but
+# fails before printk. Previously verify_boots exited before this build.
+# GNU remains a diagnostic baseline, never a production-assembler fallback.
 configure_kernel "$gnu_out"
+gnu_build_rc=0
 if ! make -C "$src" O="$gnu_out" ARCH=x86_64 -j"$jobs" bzImage \
     >"$work/kbuild-gnu.log" 2>&1; then
     echo 'MINIAS_LINUX_FOURARCH_GNU_BASELINE=FAIL arch=x86_64' >&2
     tail -n 160 "$work/kbuild-gnu.log" >&2
+    gnu_build_rc=1
+fi
+if [[ ! -s "$gnu_image" ]]; then gnu_build_rc=1; fi
+
+diagnose_early_boot() {
+    local debug_dir="$work/diagnostics"
+    local output status flavor obj
+    mkdir -p "$debug_dir"
+    echo 'MINIAS_LINUX_FOURARCH_DIAGNOSTIC=early-boot-cpu-and-gnu-object-diff arch=x86_64'
+    # A silent reset after decompression may be a triple fault. Record the
+    # actual CPU exception sequence rather than inferring it from serial logs.
+    set +e
+    timeout --signal=TERM 25 "$qemu" \
+        -M q35 -cpu max -m 1G -smp 1 -nographic -no-reboot \
+        -d int,cpu_reset,guest_errors -D "$debug_dir/qemu-cpu.log" \
+        -kernel "$image" -initrd "$initramfs" \
+        -append 'console=ttyS0,115200 earlyprintk=serial,ttyS0 loglevel=8 panic=-1 rdinit=/init' \
+        </dev/null >"$debug_dir/qemu-serial.log" 2>&1
+    status=$?
+    set -e
+    echo "MINIAS_LINUX_FOURARCH_DIAGNOSTIC=qemu-cpu-trace arch=x86_64 status=$status"
+    tail -n 100 "$debug_dir/qemu-cpu.log" || true
+
+    # Both objects come from the same pinned Linux sources and GCC Kbuild
+    # flags. Preserve GNU-vs-MiniAS bytes and relocations for early owners.
+    for obj in \
+        arch/x86/kernel/head_64.o \
+        arch/x86/kernel/head64.o \
+        arch/x86/kernel/verify_cpu.o \
+        arch/x86/kernel/idt.o \
+        arch/x86/kernel/setup.o \
+        arch/x86/boot/compressed/head_64.o \
+        arch/x86/boot/compressed/pgtable_64.o; do
+        if [[ ! -s "$image_out/$obj" || ! -s "$gnu_out/$obj" ]]; then
+            continue
+        fi
+        output=${obj//\//_}
+        objdump -drw -M intel "$image_out/$obj" >"$debug_dir/$output.mini.disasm"
+        objdump -drw -M intel "$gnu_out/$obj" >"$debug_dir/$output.gnu.disasm"
+        diff -u "$debug_dir/$output.gnu.disasm" \
+            "$debug_dir/$output.mini.disasm" >"$debug_dir/$output.diff" || true
+        echo "MINIAS_LINUX_FOURARCH_DIAGNOSTIC=object-pair arch=x86_64 owner=$obj"
+    done
+    for flavor in mini gnu; do
+        if [[ "$flavor" == mini ]]; then output=$image_out; else output=$gnu_out; fi
+        if [[ -s "$output/vmlinux" ]]; then
+            readelf -W -h -S -l "$output/vmlinux" >"$debug_dir/$flavor-vmlinux-elf.log"
+            nm -n "$output/vmlinux" >"$debug_dir/$flavor-vmlinux-symbols.log"
+        fi
+    done
+    if [[ -s "$debug_dir/mini-vmlinux-symbols.log" && -s "$debug_dir/gnu-vmlinux-symbols.log" ]]; then
+        diff -u "$debug_dir/gnu-vmlinux-symbols.log" \
+            "$debug_dir/mini-vmlinux-symbols.log" >"$debug_dir/vmlinux-symbols.diff" || true
+    fi
+}
+
+mini_boot_rc=0
+( verify_boots mini "$image" ) || mini_boot_rc=$?
+if (( mini_boot_rc != 0 )); then
+    diagnose_early_boot
+fi
+gnu_boot_rc=0
+if (( gnu_build_rc == 0 )); then
+    ( verify_boots gnu "$gnu_image" ) || gnu_boot_rc=$?
+else
+    gnu_boot_rc=2
+fi
+if (( mini_boot_rc != 0 || gnu_boot_rc != 0 )); then
+    echo "MINIAS_LINUX_FOURARCH_RUNTIME=FAIL arch=x86_64 mini_rc=$mini_boot_rc gnu_build_rc=$gnu_build_rc gnu_boot_rc=$gnu_boot_rc" >&2
     exit 1
 fi
-test -s "$gnu_image"
-verify_boots gnu "$gnu_image"
 echo 'MINIAS_LINUX_FOURARCH_RUNTIME=PASS arch=x86_64 p0=2/2 p1=12/12 gnu_baseline=PASS gnu_bfd_link=1 no_gas_fallback=1'

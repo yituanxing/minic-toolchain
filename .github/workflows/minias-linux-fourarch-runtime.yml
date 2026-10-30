@@ -43,13 +43,14 @@ permissions:
 
 jobs:
   gcc-minias-kbuild-qemu:
-    if: (github.event_name == 'workflow_dispatch' && inputs.loong_replay_run_id == '' && !inputs.loong_gnu_baseline_build) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[minias-linux-four]'))
+    if: (github.event_name == 'workflow_dispatch' && inputs.loong_replay_run_id == '' && !inputs.loong_gnu_baseline_build) || (github.event_name == 'push' && (contains(github.event.head_commit.message, '[minias-linux-four]') || contains(github.event.head_commit.message, '[minias-linux-x86]')))
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
-        arch: [x86_64, aarch64, loongarch64]
+        # Fast x86 diagnosis doesn't rebuild the two already-P1-green ISAs.
+        arch: ${{ fromJSON(github.event_name == 'push' && contains(github.event.head_commit.message, '[minias-linux-x86]') && '["x86_64"]' || '["x86_64","aarch64","loongarch64"]') }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -121,6 +122,7 @@ jobs:
           path: |
             build/minias-linux-fourarch/${{ matrix.arch }}/**/*.log
             build/minias-linux-fourarch/${{ matrix.arch }}/**/*.trace
+            build/minias-linux-fourarch/${{ matrix.arch }}/diagnostics/**/*
             build/minias-linux-fourarch/${{ matrix.arch }}/**/failure-inputs/**/*.s
             build/minias-linux-fourarch/${{ matrix.arch }}/**/runtime-initramfs.cpio.gz
             build/minias-linux-fourarch/${{ matrix.arch }}/**/Image.sha256
@@ -141,6 +143,13 @@ jobs:
             # Preserve exactly the linked kernel to replay QEMU-only boot
             # diagnostics without another 15–20 minute Linux recompilation.
             build/minias-linux-fourarch/x86_64/mini-out/arch/x86/boot/bzImage
+            build/minias-linux-fourarch/x86_64/gnu-out/arch/x86/boot/bzImage
+            build/minias-linux-fourarch/x86_64/mini-out/arch/x86/kernel/head_64.o
+            build/minias-linux-fourarch/x86_64/gnu-out/arch/x86/kernel/head_64.o
+            build/minias-linux-fourarch/x86_64/mini-out/arch/x86/kernel/head64.o
+            build/minias-linux-fourarch/x86_64/gnu-out/arch/x86/kernel/head64.o
+            build/minias-linux-fourarch/x86_64/mini-out/arch/x86/boot/compressed/head_64.o
+            build/minias-linux-fourarch/x86_64/gnu-out/arch/x86/boot/compressed/head_64.o
             build/minias-linux-fourarch/aarch64/out/arch/arm64/boot/Image
             build/minias-linux-fourarch/loongarch64/out/arch/loongarch/boot/vmlinuz.efi
           if-no-files-found: warn
