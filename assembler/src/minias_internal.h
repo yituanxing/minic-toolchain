@@ -900,6 +900,9 @@ typedef struct MiniAsTargetOps {
     unsigned cfi_stack_reg;
     unsigned cfi_address_size;
     unsigned cfi_eh_fde_alignment; /* zero: use address size */
+    /* Optional stronger alignment of the final .eh_frame FDE. GNU x86
+     * pads intervening FDEs to 4 bytes but closes the section at 8. */
+    unsigned cfi_eh_final_alignment;
     /* GNU target CIE encoding and linker-resolved function extent policy.
      * Kept in TargetInfo: Common emits one canonical CFI event stream. */
     unsigned cfi_eh_cie_version; /* zero: DWARF1 CIE version */

@@ -131,6 +131,8 @@ AARCH64_RELOC_FIELDS = {
     **{t: A64_SIGNED_MOVW for t in (270, 271, 272, 287, 289, 291)},
     273: instruction_field(0x00ffffe0),  # LDR literal [23:5].
     274: A64_ADR, 275: A64_ADR, 276: A64_ADR,
+    311: A64_ADR,  # ADR_GOT_PAGE patches ADRP's immlo/immhi only.
+    312: A64_LO12,  # LD64_GOT_LO12_NC patches load imm12, not Rt/Rn/opcode.
     277: A64_LO12, 278: A64_LO12,
     279: instruction_field(0x0007ffe0),  # test-and-branch imm14 [18:5].
     280: instruction_field(0x00ffffe0),  # conditional branch imm19 [23:5].

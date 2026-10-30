@@ -3629,7 +3629,10 @@ static const MiniAsTargetOps ops={
     .cfi_implicit_eh_frame=true,
     .fold_local_abs_relocation_to_section=true,
     .fold_synthetic_local_relocation_to_section=true,
+    /* Intermediate FDEs use 4B DWARF32 padding; only the final FDE
+     * closes the ELF section at 8B, matching GNU GAS. */
     .cfi_eh_fde_alignment=4U,
+    .cfi_eh_final_alignment=8U,
     .cfi_code_align=1U,
     .cfi_data_align=-8,
     .cfi_return_reg=16U,

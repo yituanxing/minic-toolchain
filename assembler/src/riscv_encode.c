@@ -2369,11 +2369,11 @@ static bool rv_encode_mcinst(MiniAs *as, const MiniAsStmt *stmt) {
         minias_set_error(as,"unknown-riscv-mcinst");
         return false;
     }
-    if (!append_u32(as,stmt->section,code)) return false;
     if (m->target_form != RV_ABS_RELOC_NONE) {
         MiniAsFixupKind kind;
         unsigned symbol_index;
         const MiniAsSymbolRef *symbol;
+        uint32_t addend_low;
         switch (m->target_form) {
         case RV_ABS_RELOC_HI20:
             if (m->opcode != RV_MC_U) goto invalid_absolute_form;
@@ -2396,10 +2396,28 @@ static bool rv_encode_mcinst(MiniAs *as, const MiniAsStmt *stmt) {
         }
         symbol = m->operands[symbol_index].bound_symbol;
         if (symbol == NULL) goto invalid_absolute_form;
+        /* GAS retains the expression addend in the unresolved instruction
+         * field as well as in ELF RELA.  The linker eventually replaces this
+         * field using S+A, so these bits are a pre-relocation representation,
+         * not an additional runtime addend.  Preserve the typed SymbolRef and
+         * the ISA-specific U/I/S field layout rather than dropping A to zero. */
+        addend_low = (uint32_t)symbol->addend & 0xfffU;
+        if (kind == MINIAS_FIXUP_RV_HI20) {
+            uint32_t hi = (uint32_t)(((uint64_t)symbol->addend + 0x800U)
+                                     >> 12U) & 0xfffffU;
+            code = (code & 0xfffU) | (hi << 12U);
+        } else if (kind == MINIAS_FIXUP_RV_LO12_I) {
+            code = (code & 0x000fffffU) | (addend_low << 20U);
+        } else {
+            code = (code & ~UINT32_C(0xfe000f80)) |
+                   ((addend_low & 31U) << 7U) |
+                   ((addend_low >> 5U) << 25U);
+        }
+        if (!append_u32(as, stmt->section, code)) return false;
         return minias_encode_add_fixup_ref(as,stmt->section,stmt->offset,
                                             kind,4U,*symbol,false);
     }
-    return true;
+    return append_u32(as,stmt->section,code);
 invalid_absolute_form:
     minias_set_error(as,"internal:bad-riscv-absolute-reloc-mcinst:%u",
                      m->target_form);

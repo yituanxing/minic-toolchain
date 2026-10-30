@@ -5128,7 +5128,9 @@ typedef struct A64MappingFragment {
     int section;
     uint64_t offset;
     size_t order;
+    uint32_t size;
     bool executable;
+    bool explicit_alignment;
 } A64MappingFragment;
 
 static int a64_compare_mapping_fragments(const void *lhs,const void *rhs) {
@@ -5144,7 +5146,9 @@ static bool a64_record_source_mappings(MiniAs *as) {
     A64MappingFragment *points;
     size_t i,count=0U;
     int previous_section=-1;
-    bool previous_executable=false;
+    bool previous_executable=false,has_mapping=false;
+    bool pending_initial_data=false;
+    uint64_t pending_initial_offset=0U;
     if(as->stmt_count==0U)return true;
     if(as->stmt_count>SIZE_MAX/sizeof(*points))return false;
     points=malloc(as->stmt_count*sizeof(*points));
@@ -5156,9 +5160,23 @@ static bool a64_record_source_mappings(MiniAs *as) {
         const MiniAsStmt *stmt=&as->stmts[i];
         MiniAsSection *section;
         bool executable;
-        if(stmt->size==0U || stmt->section<0 ||
+        if(stmt->section<0 ||
            (size_t)stmt->section>=as->section_count)continue;
         section=&as->sections[(size_t)stmt->section];
+        /* Explicit alignment can establish MAP_DATA even with zero bytes;
+         * retain it until final-layout mapping reconciliation. Ordinary
+         * zero-sized statements do not contribute source mapping state. */
+        bool explicit_alignment=stmt->fragment_kind==MINIAS_FRAGMENT_ALIGNMENT &&
+            stmt->align>1U && stmt->op!=NULL &&
+            (strcmp(stmt->op,".align")==0 ||
+             strcmp(stmt->op,".p2align")==0 ||
+             strcmp(stmt->op,".balign")==0);
+        /* A zero-width alignment in executable .text changes ELF section
+         * alignment only; GAS does not create $x/$d until bytes are emitted.
+         * Data sections retain the zero-width alignment as MAP_DATA state. */
+        if(stmt->size==0U &&
+           (!explicit_alignment ||
+            (section->flags&MINIAS_SHF_EXECINSTR)!=0U))continue;
         /* GAS mapping_state(MAP_INSN) records a four-byte input-section
          * alignment for .inst even in non-executable .data. This is a
          * Target directive property, not generic raw-data alignment. */
@@ -5175,28 +5193,88 @@ static bool a64_record_source_mappings(MiniAs *as) {
             (stmt->fragment_kind==MINIAS_FRAGMENT_ALIGNMENT &&
              (section->flags&MINIAS_SHF_EXECINSTR)!=0U &&
              !stmt->align_has_fill);
+        /* GAS starts even the default .text with sh_addralign=1 and only
+         * records AArch64's 4-byte instruction alignment on the first
+         * actual instruction/mapping transition. Empty .text must stay 1. */
+        if(executable && section->align<4U)section->align=4U;
         points[count].section=stmt->section;
         points[count].offset=stmt->offset;
         points[count].order=i;
+        points[count].size=stmt->size;
         points[count].executable=executable;
+        points[count].explicit_alignment=explicit_alignment;
         ++count;
     }
     qsort(points,count,sizeof(*points),a64_compare_mapping_fragments);
     for(i=0U;i<count;++i) {
         const A64MappingFragment *point=&points[i];
-        if(point->section!=previous_section ||
-           point->executable!=previous_executable) {
-            if(!a64_record_mapping(as,point->section,point->offset,
-                                   point->executable)) {
-                free(points);
-                return false;
-            }
+        bool new_section=point->section!=previous_section;
+        bool section_executable=(as->sections[(size_t)point->section].flags&
+                                 MINIAS_SHF_EXECINSTR)!=0U;
+        if(new_section) {
             previous_section=point->section;
-            previous_executable=point->executable;
+            previous_executable=false;
+            has_mapping=false;
+            pending_initial_data=false;
+        }
+        if(point->executable) {
+            /* A first .inst following ordinary data requires a retrospective
+             * $d at the data start. GNU GAS otherwise leaves isolated data
+             * in non-executable sections unmapped. */
+            if(!has_mapping && pending_initial_data &&
+               pending_initial_offset<point->offset &&
+               !a64_record_mapping(as,point->section,pending_initial_offset,false))
+                goto mapping_failure;
+            if((!has_mapping || !previous_executable) &&
+               !a64_record_mapping(as,point->section,point->offset,true))
+                goto mapping_failure;
+            has_mapping=true;
+            previous_executable=true;
+            pending_initial_data=false;
+        } else if(section_executable) {
+            if((!has_mapping || previous_executable) &&
+               !a64_record_mapping(as,point->section,point->offset,false))
+                goto mapping_failure;
+            has_mapping=true;
+            previous_executable=false;
+        } else if(point->explicit_alignment) {
+            size_t j=i+1U;
+            bool has_following_data=point->size!=0U;
+            /* .align/.p2align/.balign switch GAS to MAP_DATA only if they
+             * produce alignment bytes or a later data fragment. A following
+             * .inst at the SAME offset supersedes the zero-byte alignment
+             * instead of leaving an extra $d at that address. */
+            while(!has_following_data && j<count &&
+                  points[j].section==point->section) {
+                if(points[j].size!=0U) {
+                    has_following_data=!points[j].executable;
+                    break;
+                }
+                ++j;
+            }
+            pending_initial_data=false;
+            if(has_following_data && (!has_mapping || previous_executable)) {
+                if(!a64_record_mapping(as,point->section,point->offset,false))
+                    goto mapping_failure;
+                has_mapping=true;
+                previous_executable=false;
+            }
+        } else if(point->size!=0U) {
+            if(has_mapping && previous_executable) {
+                if(!a64_record_mapping(as,point->section,point->offset,false))
+                    goto mapping_failure;
+                previous_executable=false;
+            } else if(!has_mapping && !pending_initial_data) {
+                pending_initial_data=true;
+                pending_initial_offset=point->offset;
+            }
         }
     }
     free(points);
     return true;
+mapping_failure:
+    free(points);
+    return false;
 }
 
 static bool validate(MiniAs *as) {
@@ -5272,6 +5350,7 @@ static const MiniAsTargetOps ops = {
     .validate_output = validate,
     .dot_relative_fixup = MINIAS_FIXUP_PREL32,
     .inst_directive_width = 4U,
+    .default_exec_alignment = 1U,
     .supports_literal_pools = true,
     .literal_pool_order = MINIAS_LITERAL_POOL_WIDTH_ASC,
     .cfi_implicit_eh_frame = true,

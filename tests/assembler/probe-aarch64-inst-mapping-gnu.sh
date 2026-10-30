@@ -69,9 +69,13 @@ import sys
 for path in sys.argv[1:]:
     rows = subprocess.check_output(
         ["readelf", "-SW", path], text=True).splitlines()
-    section = [row for row in rows if re.search(r"\]\s+\.data\s+PROGBITS\b", row)]
-    if len(section) != 1 or int(section[0].split()[-1]) != 4:
-        raise SystemExit(f".data .inst must record ELF alignment=4: {path}: {section}")
+    expected = {'.data': 4, '.text': 1}
+    for name, align in expected.items():
+        section = [row for row in rows if re.search(
+            r"\]\s+" + re.escape(name) + r"\s+PROGBITS\b", row)]
+        if len(section) != 1 or int(section[0].split()[-1]) != align:
+            raise SystemExit(f"{name} must record ELF alignment={align}: "
+                             f"{path}: {section}")
 PY
 python3 "$(dirname "$0")/elf_semantic_compare.py" --strict \
     "$work/data-gnu.o" "$work/data-mini.o" >"$work/data-semantic.json" || {
@@ -79,4 +83,51 @@ python3 "$(dirname "$0")/elf_semantic_compare.py" --strict \
     python3 -m json.tool "$work/data-semantic.json" >&2
     exit 1
 }
-echo 'MINIAS_AARCH64_INST_MAPPING=PASS GNU_strict_data_inst_alignment=4'
+echo 'MINIAS_AARCH64_INST_MAPPING=PASS GNU_strict_data_inst_alignment=4 empty_text_alignment=1'
+
+# GNU GAS does not create an initial $d merely because raw bytes appear in
+# non-executable .data/.rodata. Explicit alignment, even with zero padding,
+# changes that mapping state; .inst can also retrospectively tag preceding
+# raw data as $d. Frozen GCC helper.s relies on `.data; .align 2; .word`.
+cat >"$work/raw-data.s" <<'ASM'
+.data
+    .word 11
+ASM
+cat >"$work/aligned-data.s" <<'ASM'
+.data
+    .align 2
+    .word 11
+ASM
+cat >"$work/late-alignment.s" <<'ASM'
+.data
+    .word 11
+    .align 2
+    .word 22
+ASM
+cat >"$work/retro-inst.s" <<'ASM'
+.data
+    .word 11
+    .inst 0xd503201f
+    .word 22
+ASM
+cat >"$work/empty-text-align.s" <<'ASM'
+.text
+    .align 2
+ASM
+cat >"$work/text-align-word.s" <<'ASM'
+.text
+    .align 2
+    .word 11
+ASM
+for case in raw-data aligned-data late-alignment retro-inst \
+            empty-text-align text-align-word; do
+    "$MINIAS" --target=aarch64 -o "$work/$case-mini.o" "$work/$case.s"
+    "$AARCH64_AS" -o "$work/$case-gnu.o" "$work/$case.s"
+    python3 "$(dirname "$0")/elf_semantic_compare.py" --strict \
+        "$work/$case-gnu.o" "$work/$case-mini.o" >"$work/$case-semantic.json" || {
+        echo "MINIAS_AARCH64_MAPPING_STATE=FAIL GNU_strict_case=$case" >&2
+        python3 -m json.tool "$work/$case-semantic.json" >&2
+        exit 1
+    }
+done
+echo 'MINIAS_AARCH64_MAPPING_STATE=PASS GNU_strict_raw_align_late_align_retro_inst_empty_text=6/6'

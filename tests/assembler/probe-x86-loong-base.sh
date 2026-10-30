@@ -3264,6 +3264,32 @@ objcopy -j .eh_frame -O binary "$work/x86-eh-simple-gnu.o" "$work/x86-eh-simple-
 cmp "$work/x86-eh-simple-mini.bin" "$work/x86-eh-simple-gnu.bin"
 echo 'MINIAS_X86_EH_SIMPLE=PASS GNU_CIE_suppress_implicit_CFA'
 
+# GNU pads intermediate FDE records to DWARF32 (4B), but extends the final
+# record to the x86 .eh_frame section's 8B alignment. Aligning *every* FDE
+# to 8B breaks a real GCC two-function object while the simple case passes.
+cat > "$work/x86-eh-multi.s" <<'X86_EH_MULTI'
+.text
+.globl eh_multi_a
+eh_multi_a:
+.cfi_startproc
+nop
+ret
+.cfi_endproc
+.globl eh_multi_b
+eh_multi_b:
+.cfi_startproc
+nop
+ret
+.cfi_endproc
+X86_EH_MULTI
+"$MINIAS" --target=x86_64 -o "$work/x86-eh-multi-mini.o" "$work/x86-eh-multi.s"
+as --64 -o "$work/x86-eh-multi-gnu.o" "$work/x86-eh-multi.s"
+for flavor in mini gnu; do
+ objcopy -j .eh_frame -O binary "$work/x86-eh-multi-$flavor.o" "$work/x86-eh-multi-$flavor.bin"
+done
+cmp "$work/x86-eh-multi-mini.bin" "$work/x86-eh-multi-gnu.bin"
+echo 'MINIAS_X86_EH_MULTI=PASS GNU_intermediate_4B_final_8B_FDE_padding'
+
 # Authentic relocate_kernel_64.S forward difference: GNU uses imm32
 # even when final same-section delta is 0x73 and fits in imm8.
 cat > "$work/x86-forward-delta.s" <<'X86_FORWARD_DELTA'

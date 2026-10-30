@@ -2135,10 +2135,13 @@ static const MiniAsTargetOps ops={
     .cfi_return_reg=1U,
     .cfi_stack_reg=3U,
     .cfi_address_size=8U,
+    .cfi_eh_fde_alignment=4U,
+    .cfi_eh_final_alignment=8U,
     .cfi_initial_cfa_register_only=true,
     .cfi_eh_range_relocations=true,
     .cfi_advance_reloc_mode=1U,
     .cfi_linker_relaxation_marker=la_cfi_linker_relaxation_marker,
+    .default_exec_alignment=1U,
     .cfi_anchors_hidden=true
 };
 const MiniAsTargetOps *minias_target_loongarch64(void){return &ops;}

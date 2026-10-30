@@ -534,14 +534,17 @@ static bool cfi_emit_section_core(MiniAs *as,bool eh,
             }
             loc_symbol=op->symbol_index;
         }
-        /* GNU x86_64 .eh_frame FDEs end on an absolute 8-byte
-         * section boundary. CIEs still use DWARF32 4-byte padding;
-         * relative-to-FDE padding is insufficient when a simple CIE
-         * occupies 20 bytes, leaving the next FDE at offset 0x14. */
+        /* GNU x86_64 gives intermediate FDEs ordinary DWARF32 4-byte
+         * padding but extends the last FDE to the section's 8-byte end.
+         * A simple 20-byte CIE makes that final padding observable;
+         * aligning every FDE to 8 would instead shift later GCC FDEs. */
         if(eh) {
-            unsigned align=as->target->cfi_eh_fde_alignment!=0U ?
-                as->target->cfi_eh_fde_alignment :
-                minias_cfi_abi(as).address_size;
+            unsigned align=(i+1U==as->cfi_proc_count &&
+                as->target->cfi_eh_final_alignment!=0U) ?
+                as->target->cfi_eh_final_alignment :
+                (as->target->cfi_eh_fde_alignment!=0U ?
+                 as->target->cfi_eh_fde_alignment :
+                 minias_cfi_abi(as).address_size);
             if(align==0U || (align&(align-1U))!=0U)return false;
             while((as->sections[(size_t)section].size&
                    (size_t)(align-1U))!=0U)
