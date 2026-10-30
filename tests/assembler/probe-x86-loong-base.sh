@@ -3320,11 +3320,27 @@ objcopy -j .text -O binary "$work/x86-delta-mini.o" "$work/x86-delta-mini.bin"
 objcopy -j .text -O binary "$work/x86-delta-gnu.o" "$work/x86-delta-gnu.bin"
 cmp "$work/x86-delta-mini.bin" "$work/x86-delta-gnu.bin"
 readelf -Wr "$work/x86-delta-mini.o" | grep -q 'There are no relocations'
-printf '.text\na: nop\n.data\nb: .byte 0\n.text\naddq $(b-a), %%r8\n' >"$work/x86-cross-delta-bad.s"
-if "$MINIAS" --target=x86_64 -o "$work/x86-cross-delta-bad.o" "$work/x86-cross-delta-bad.s" >/dev/null 2>&1; then
- echo "cross-section subtraction incorrectly folded to absolute" >&2; exit 1
-fi
-echo 'MINIAS_X86_FORWARD_DELTA=PASS GNU_IMM32_PUSHi_AND_same_section_strict'
+# A cross-section subtraction is NOT necessarily an invalid absolute. GNU GAS
+# lowers b-a in an immediate field to R_X86_64_PC32 against the positive
+# section, with an addend that preserves the negative .text anchor. Compare
+# the real GNU output instead of incorrectly requiring MiniAS to reject it.
+printf '.text\n.globl a\na: nop\n.data\nb: .byte 0\n.text\naddq $(b-a), %%r8\n' >"$work/x86-cross-delta.s"
+"$MINIAS" --target=x86_64 -o "$work/x86-cross-delta-mini.o" "$work/x86-cross-delta.s"
+as --64 -o "$work/x86-cross-delta-gnu.o" "$work/x86-cross-delta.s"
+for flavor in mini gnu; do
+ objcopy -j .text -O binary "$work/x86-cross-delta-$flavor.o" "$work/x86-cross-delta-$flavor.bin"
+ # GNU GAS canonicalizes its local b to the .data section symbol; MiniAS
+ # retains b's equivalent local identity. The relocation site/type/addend
+ # must agree, and the GNU linker must compute identical final bytes.
+ readelf -Wr "$work/x86-cross-delta-$flavor.o" | awk '/R_X86_64_PC32/ {print $1,$3,$6,$7}' >"$work/x86-cross-delta-$flavor.reloc"
+ ld -e a -o "$work/x86-cross-delta-$flavor.exe" "$work/x86-cross-delta-$flavor.o"
+ objcopy -j .text -O binary "$work/x86-cross-delta-$flavor.exe" "$work/x86-cross-delta-$flavor.linked.bin"
+done
+cmp "$work/x86-cross-delta-mini.bin" "$work/x86-cross-delta-gnu.bin"
+test "$(wc -l <"$work/x86-cross-delta-mini.reloc")" -eq 1
+cmp "$work/x86-cross-delta-mini.reloc" "$work/x86-cross-delta-gnu.reloc"
+cmp "$work/x86-cross-delta-mini.linked.bin" "$work/x86-cross-delta-gnu.linked.bin"
+echo 'MINIAS_X86_FORWARD_DELTA=PASS GNU_IMM32_PUSHi_same_section_and_cross_section_PC32'
 
 # ELF64 may contain a real 32-bit EFI transition stub. GNU emits
 # pushl $16; pushl %ebp; lret without changing the outer ELF machine.

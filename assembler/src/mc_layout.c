@@ -934,11 +934,15 @@ bool minias_emit_deferred_leb_relocations(MiniAs *as) {
         if(!minias_add_late_fragment_fixup(as,i,positive_fixup,pos_id,addend) ||
            !minias_add_late_fragment_fixup(as,i,MINIAS_FIXUP_LEB_SUB,
                                           neg_id,0))return false;
-        /* GNU's target md_apply_fix clears the immediate payload to zero,
-         * retaining the original continuation-bit sequence/LEB width so
-         * the linker can rewrite the value without moving debug records. */
-        for(j=0U;j<stmt->size;++j)
-            section->data[(size_t)stmt->offset+j]&=0x80U;
+        /* GNU RISC-V GAS keeps the resolved value in the ULEB payload even
+         * when emitting R_RISCV_SET_ULEB128/SUB_ULEB128.  Only LoongArch's
+         * ADD/SUB relocation policy clears the payload while retaining the
+         * LEB continuation-bit width.  Applying that rule to RISC-V changes
+         * the original object bytes (e.g. 129 -> 0) before GNU ld sees it. */
+        if(mode==3U) {
+            for(j=0U;j<stmt->size;++j)
+                section->data[(size_t)stmt->offset+j]&=0x80U;
+        }
     }
     return true;
 }

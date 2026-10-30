@@ -773,14 +773,45 @@ static bool parse_data_absolute_prefix_plus_symbol(MiniAs *as,
     return matched;
 }
 
+/* Identify a final current-site operand without mistaking `.Llocal` for
+ * the real location counter `.`.  GNU distinguishes `S-.-3` (S-P-3)
+ * from `S-(.+3)` (also S-P-3), while `S-.+3` is (S-P)+3. */
+static bool parse_dot_suffix_addend(const char *text,int64_t *addend) {
+    char *copy=minias_strdup(text),*body,*cursor;
+    uint64_t magnitude;
+    bool grouped;
+    char sign;
+    if(copy==NULL)return false;
+    body=minias_trim(copy);
+    cursor=minias_expr_strip_outer_parens(body);
+    grouped=cursor!=body;
+    if(*cursor++!='.') {free(copy);return false;}
+    cursor=minias_trim(cursor);
+    if(*cursor=='\0') {
+        *addend=0;
+        free(copy);return true;
+    }
+    sign=*cursor++;
+    if(sign!='+' && sign!='-') {free(copy);return false;}
+    cursor=minias_trim(cursor);
+    if(!minias_parse_u64(cursor,&magnitude) || magnitude>INT64_MAX) {
+        free(copy);return false;
+    }
+    /* Grouped RHS is subtracted as a whole; an ungrouped +- tail
+     * belongs to the left-associative full expression. */
+    *addend=(sign=='+' ? (int64_t)magnitude : -(int64_t)magnitude);
+    if(grouped)*addend=-*addend;
+    free(copy);
+    return true;
+}
+
 static bool parse_symbol_minus_dot(const char *text, MiniAsSymbolExpr *expr) {
     char *copy;
     char *normalized;
     char *minus;
-    char *suffix;
     char *lhs;
     bool ok;
-    uint64_t trailing_addend = 0U;
+    int64_t trailing_addend = 0;
 
     if (text == NULL || expr == NULL) {
         return false;
@@ -790,11 +821,10 @@ static bool parse_symbol_minus_dot(const char *text, MiniAsSymbolExpr *expr) {
         return false;
     }
     normalized = minias_expr_strip_outer_parens(copy);
-    /* Select the top-level subtraction, never an addend inside a grouped
-     * symbol.  Both the public Target operand API and Common DATA now share
-     * this one grammar: ((S-8)-T), S-(T+8), and S-T+8 must not acquire
-     * different meanings merely because they were parsed by different
-     * consumers. */
+    /* Only choose a top-level subtraction whose RHS actually starts at
+     * the current-site counter. GNU Linux VDSO has S-1-.; S-.-3 instead
+     * uses its first minus. Picking either the first or the final minus
+     * unconditionally corrupts one of those two legal expressions. */
     unsigned depth=0U;
     minus=NULL;
     for(char *p=normalized;*p;++p) {
@@ -802,8 +832,13 @@ static bool parse_symbol_minus_dot(const char *text, MiniAsSymbolExpr *expr) {
         else if(*p==')') {
             if(depth==0U)break;
             --depth;
-        }else if(*p=='-' && depth==0U && p!=normalized && minus==NULL)
-            minus=p;
+        }else if(*p=='-' && depth==0U && p!=normalized) {
+            int64_t candidate_addend;
+            if(parse_dot_suffix_addend(p+1U,&candidate_addend)) {
+                minus=p;
+                trailing_addend=candidate_addend;
+            }
+        }
     }
     if(depth!=0U)minus=NULL;
     if (minus == NULL) {
@@ -811,31 +846,13 @@ static bool parse_symbol_minus_dot(const char *text, MiniAsSymbolExpr *expr) {
         return false;
     }
     *minus = '\0';
-    suffix = minias_expr_strip_outer_parens(minias_trim(minus + 1));
-    if (strcmp(suffix, ".") != 0) {
-        /* GNU accepts `symbol - . + addend` as a single PC-relative
-         * relocation. Keep the semantic symbol expression typed;
-         * do not have ELF targets parse or rewrite source strings. */
-        char *suffix_tail=suffix;
-        if(*suffix_tail++!='.') {
-            free(copy);return false;
-        }
-        while(isspace((unsigned char)*suffix_tail))++suffix_tail;
-        if(*suffix_tail++!='+') {
-            free(copy);return false;
-        }
-        suffix_tail=minias_trim(suffix_tail);
-        if(!minias_parse_u64(suffix_tail,&trailing_addend) ||
-           trailing_addend>INT64_MAX) {
-            free(copy);return false;
-        }
-    }
     lhs = minias_expr_strip_outer_parens(minias_trim(normalized));
     ok = minias_parse_symbol_addend(lhs, expr);
-    if(ok && trailing_addend!=0U) {
-        if(expr->addend>INT64_MAX-(int64_t)trailing_addend)
+    if(ok && trailing_addend!=0) {
+        int64_t result;
+        if(!minias_checked_add_i64(expr->addend,trailing_addend,&result))
             ok=false;
-        else expr->addend+=(int64_t)trailing_addend;
+        else expr->addend=result;
     }
     free(copy);
     return ok;

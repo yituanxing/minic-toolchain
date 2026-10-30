@@ -168,6 +168,10 @@ jobs:
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-x86-linux-code16-gnu.sh
+      - name: GNU Linux VDSO handwritten ELF32 EH PC32 relocation and shared link
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-x86-vdso-eh-gnu.sh
       - name: GNU x86 absolute local symbol folding and typed PUSH widths
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
