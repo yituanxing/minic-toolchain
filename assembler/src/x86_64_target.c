@@ -18,7 +18,9 @@ typedef struct X64TargetState {
     uint32_t code_mode;
 } X64TargetState;
 
-enum { X64_ZERO = 1, X64_REG_BINARY, X64_STACK, X64_MOV_IMM32, X64_ALU_IMM, X64_REG_MEMORY, X64_BRANCH, X64_IMM_MEMORY, X64_MOVQ_IMMREG, X64_MOVABS_IMMREG, X64_SETCC, X64_BINARY8, X64_MOVSLQ, X64_MOVZX_REG, X64_SHIFT_REGISTER, X64_TEST8_IMM, X64_PUSH_IMM, X64_CMOV_REG, X64_UNARY, X64_INDIRECT_REG, X64_BSWAP, X64_TEST_IMM_REG, X64_IMUL_IMM, X64_BIT_IMMREG, X64_DOUBLE_SHIFT, X64_SYSTEM_MOVE, X64_BMI2_SHIFT };
+enum { X64_ZERO = 1, X64_REG_BINARY, X64_STACK, X64_MOV_IMM32, X64_ALU_IMM, X64_REG_MEMORY, X64_BRANCH, X64_IMM_MEMORY, X64_MOVQ_IMMREG, X64_MOVABS_IMMREG, X64_SETCC, X64_BINARY8, X64_MOVSLQ, X64_MOVZX_REG, X64_SHIFT_REGISTER, X64_TEST8_IMM, X64_PUSH_IMM, X64_CMOV_REG, X64_UNARY, X64_INDIRECT_REG, X64_BSWAP, X64_TEST_IMM_REG, X64_IMUL_IMM, X64_BIT_IMMREG, X64_DOUBLE_SHIFT, X64_SYSTEM_MOVE, X64_BMI2_SHIFT, X64_XMM_IMM_REG };
+#define X64_ENCODING_NOTRACK UINT32_C(0x80000)
+#define X64_ENCODING_F2 UINT32_C(0x100000)
 
 typedef enum X64ShiftCountForm {
     X64_SHIFT_COUNT_IMMEDIATE = 0,
@@ -660,6 +662,42 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
                          s->op,s->line);
         minias_mcinst_destroy(m);return false;
     }
+    /* GNU GCC emits CET `notrack jmp *table(,%rax,8)` for indirect
+     * switch dispatch. NOTRACK is the DS (3e) prefix of the SAME group-5
+     * CALL/JMP MCInst, not a separate instruction, and must be included in
+     * the fragment size and every relocation offset. */
+    if(!strcmp(s->op,"notrack")) {
+        const char *p=s->args,*operand;
+        const char *mnemonic=NULL;
+        MiniAsStmt alias;
+        while(isspace((unsigned char)*p))++p;
+        if(!strncmp(p,"jmpq",4U) && isspace((unsigned char)p[4]))
+            {mnemonic="jmpq";operand=p+4U;}
+        else if(!strncmp(p,"jmp",3U) && isspace((unsigned char)p[3]))
+            {mnemonic="jmp";operand=p+3U;}
+        else if(!strncmp(p,"callq",5U) && isspace((unsigned char)p[5]))
+            {mnemonic="callq";operand=p+5U;}
+        else if(!strncmp(p,"call",4U) && isspace((unsigned char)p[4]))
+            {mnemonic="call";operand=p+4U;}
+        if(mnemonic==NULL)goto invalid;
+        while(isspace((unsigned char)*operand))++operand;
+        if(*operand!='*')goto invalid;
+        alias=*s;alias.op=(char *)mnemonic;
+        alias.args=(char *)operand;alias.mcinst=NULL;
+        minias_mcinst_destroy(m);
+        if(!x64_parse(as,&alias))return false;
+        m=alias.mcinst;
+        if(m==NULL || (m->opcode!=X64_INDIRECT_REG &&
+           !(m->opcode==X64_REG_MEMORY &&
+             (m->encoding&UINT32_C(0xff))==UINT32_C(0xff)))) {
+            minias_mcinst_destroy(m);
+            minias_set_error(as,"invalid-x86-notrack-branch:line=%zu",s->line);
+            return false;
+        }
+        m->encoding|=X64_ENCODING_NOTRACK;
+        original->mcinst=m;
+        return true;
+    }
     /* GNU REP BSF/BSR spell the F3-prefixed BMI bit-scan instructions.
      * Lower the alias via the SAME target-only TZCNT/LZCNT parser and
      * retained MCInst/REX/ModR/M/ELF fixup paths, without another
@@ -785,8 +823,114 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         m->operands[0].register_64=wide;
         goto done;
     }
-    /* One XMM-memory ISA descriptor family: typed ModR/M, SIB and
-     * Common PC32 fixups; 0F38 map is the sole extra escape flag. */
+    /* Mixed-width SSE conversion and transfer instructions share the same
+     * register/memory ModR/M encoding as packed SSE. Their AT&T suffixes
+     * select the GPR data width, not a second instruction implementation. */
+    {
+        static const struct {const char *name;uint32_t encoding;
+                             bool source_xmm;bool gpr_wide;} conversions[]={
+            {"movq",UINT32_C(0x0056e),false,true},
+            {"movq",UINT32_C(0x0057e),true,true},
+            {"movd",UINT32_C(0x0056e),false,false},
+            {"movd",UINT32_C(0x0057e),true,false},
+            {"cvtsi2sdl",X64_ENCODING_F2|UINT32_C(0x0012a),false,false},
+            {"cvtsi2sdq",X64_ENCODING_F2|UINT32_C(0x0012a),false,true}
+        };
+        size_t k;
+        for(k=0U;k<sizeof(conversions)/sizeof(conversions[0]);++k) {
+            const char *regtext,*rmtext;
+            unsigned reg=0U,rm=0U;
+            bool wide=false,rm_is_register=false;
+            X64Memory mem;
+            if(strcmp(s->op,conversions[k].name) ||
+               !x64_args2(s->args,src,dst))continue;
+            regtext=conversions[k].source_xmm?src:dst;
+            rmtext=conversions[k].source_xmm?dst:src;
+            if(!x64_xmm_register(regtext,&reg))continue;
+            if(conversions[k].source_xmm) {
+                if(x64_register(rmtext,&rm,&wide) &&
+                   wide==conversions[k].gpr_wide)rm_is_register=true;
+            }else if(x64_register(rmtext,&rm,&wide) &&
+                     wide==conversions[k].gpr_wide)rm_is_register=true;
+            if(rm_is_register) {
+                m->opcode=X64_REG_BINARY;m->count=2U;
+                m->encoding=conversions[k].encoding|UINT32_C(0x800);
+                m->operands[0].kind=MINIAS_MC_REGISTER;
+                m->operands[1].kind=MINIAS_MC_REGISTER;
+                m->operands[0].reg=rm;
+                m->operands[1].reg=reg;
+                /* ModR/M.reg is XMM for MOVD/Q, CVTSI2SD and their
+                 * register-reversed transfer forms. */
+                m->operands[0].register_64=conversions[k].gpr_wide;
+                goto done;
+            }
+            if(!x64_is_mem_candidate(rmtext) ||
+               !x64_parse_base_memory(as,rmtext,&mem))continue;
+            if(!x64_attach_memory_operand(as,m,&mem,
+                    "out-of-memory:x86-conversion-memory")) {
+                minias_mcinst_destroy(m);return false;
+            }
+            m->opcode=X64_REG_MEMORY;m->count=2U;
+            m->encoding=conversions[k].encoding;
+            m->operands[0].kind=MINIAS_MC_REGISTER;
+            m->operands[0].reg=reg;
+            m->operands[0].register_64=conversions[k].gpr_wide;
+            goto done;
+        }
+    }
+    /* CVTTSD2SI reverses the register classes: destination GPR occupies
+     * ModR/M.reg, source XMM or memory occupies ModR/M.rm. */
+    if(!strcmp(s->op,"cvttsd2sil") || !strcmp(s->op,"cvttsd2siq")) {
+        const bool want_wide=!strcmp(s->op,"cvttsd2siq");
+        unsigned integer_reg,xmm_reg;
+        bool wide;
+        X64Memory mem;
+        if(!x64_args2(s->args,src,dst) ||
+           !x64_register(dst,&integer_reg,&wide) || wide!=want_wide)
+            goto invalid;
+        if(x64_xmm_register(src,&xmm_reg)) {
+            m->opcode=X64_REG_BINARY;m->count=2U;
+            m->encoding=X64_ENCODING_F2|UINT32_C(0x0012c)|UINT32_C(0x800);
+            m->operands[0].kind=MINIAS_MC_REGISTER;
+            m->operands[0].reg=xmm_reg;
+            m->operands[0].register_64=want_wide;
+            m->operands[1].kind=MINIAS_MC_REGISTER;
+            m->operands[1].reg=integer_reg;
+            goto done;
+        }
+        if(!x64_is_mem_candidate(src) ||
+           !x64_parse_base_memory(as,src,&mem))goto invalid;
+        if(!x64_attach_memory_operand(as,m,&mem,
+                "out-of-memory:x86-cvttsd2si-memory")) {
+            minias_mcinst_destroy(m);return false;
+        }
+        m->opcode=X64_REG_MEMORY;m->count=2U;
+        m->encoding=X64_ENCODING_F2|UINT32_C(0x0012c);
+        m->operands[0].kind=MINIAS_MC_REGISTER;
+        m->operands[0].reg=integer_reg;
+        m->operands[0].register_64=want_wide;
+        goto done;
+    }
+    /* Packed SSE shift-immediate opcodes are 66 0F 73 /subop imm8;
+     * model the literal and XMM register as retained MC operands. */
+    if(!strcmp(s->op,"psrldq") || !strcmp(s->op,"pslldq")) {
+        uint64_t imm;
+        if(!x64_args2(s->args,src,dst) || *src!='$' ||
+           !minias_eval_u64_expression(src+1U,&imm) || imm>255U ||
+           !x64_xmm_register(dst,&rd))goto invalid;
+        m->opcode=X64_XMM_IMM_REG;m->count=2U;
+        m->encoding=!strcmp(s->op,"psrldq")?3U:7U;
+        m->operands[0].kind=MINIAS_MC_REGISTER;
+        m->operands[0].reg=rd;
+        m->operands[1].kind=MINIAS_MC_IMMEDIATE;
+        m->operands[1].immediate=imm;
+        goto done;
+    }
+    /* GNU GCC emits both XMM-register and XMM-memory operands from the
+     * same packed-SSE ISA families. Keep mandatory-prefix/opcode selection
+     * in one target descriptor, and reuse the existing ModR/M plans for
+     * register operands and memory (including symbolic RIP-relative loads).
+     * 0F38 map remains the sole extra opcode escape flag. */
     {
         static const struct {const char *name;uint32_t op;bool store;} vec[]={
             {"movntdqa",UINT32_C(0x1052a),false},
@@ -798,18 +942,46 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             {"movaps",UINT32_C(0x00128),false},
             {"movaps",UINT32_C(0x00129),true},
             {"movups",UINT32_C(0x00110),false},
-            {"movups",UINT32_C(0x00111),true}
+            {"movups",UINT32_C(0x00111),true},
+            {"movapd",UINT32_C(0x00528),false},
+            {"movapd",UINT32_C(0x00529),true},
+            {"movsd",X64_ENCODING_F2|UINT32_C(0x00110),false},
+            {"movsd",X64_ENCODING_F2|UINT32_C(0x00111),true},
+            {"pxor",UINT32_C(0x005ef),false},
+            {"pand",UINT32_C(0x005db),false},
+            {"por",UINT32_C(0x005eb),false},
+            {"paddq",UINT32_C(0x005d4),false},
+            {"paddd",UINT32_C(0x005fe),false},
+            {"andpd",UINT32_C(0x00554),false},
+            {"mulsd",X64_ENCODING_F2|UINT32_C(0x00159),false},
+            {"divsd",X64_ENCODING_F2|UINT32_C(0x0015e),false},
+            {"subsd",X64_ENCODING_F2|UINT32_C(0x0015c),false},
+            {"maxsd",X64_ENCODING_F2|UINT32_C(0x0015f),false},
+            {"ucomisd",UINT32_C(0x0052e),false},
+            {"comisd",UINT32_C(0x0052f),false},
+            {"cvtss2sd",UINT32_C(0x0215a),false}
         };
         size_t k;
         for(k=0U;k<sizeof(vec)/sizeof(vec[0]);++k) {
-            X64Memory mem;unsigned xmm=0U;
+            X64Memory mem;unsigned xmm=0U,other=0U;
             const char *memptr,*xmmtext;
             if(strcmp(s->op,vec[k].name))continue;
             if(!x64_args2(s->args,src,dst))continue;
             memptr=vec[k].store?dst:src;
             xmmtext=vec[k].store?src:dst;
-            if(!x64_xmm_register(xmmtext,&xmm) ||
-               !x64_is_mem_candidate(memptr) ||
+            if(!x64_xmm_register(xmmtext,&xmm))continue;
+            if(x64_xmm_register(memptr,&other)) {
+                if(!strcmp(vec[k].name,"movntdqa") ||
+                   !strcmp(vec[k].name,"movntdq"))continue;
+                m->opcode=X64_REG_BINARY;m->count=2U;
+                m->encoding=vec[k].op|UINT32_C(0x800);
+                m->operands[0].kind=MINIAS_MC_REGISTER;
+                m->operands[0].reg=other;
+                m->operands[1].kind=MINIAS_MC_REGISTER;
+                m->operands[1].reg=xmm;
+                goto done;
+            }
+            if(!x64_is_mem_candidate(memptr) ||
                !x64_parse_base_memory(as,memptr,&mem))continue;
             if(!x64_attach_memory_operand(as,m,&mem,"out-of-memory:x86-xmm-mem")) {
                 minias_mcinst_destroy(m);return false;
@@ -2586,11 +2758,14 @@ static X64MemoryLayout x64_memory_layout(const MiniAsMCInst *m) {
             ((m->encoding&UINT32_C(0x200)) && reg>=4U &&
              !(m->encoding&UINT32_C(0x800))) ||
             mem->base>=8U || (mem->has_index && mem->index>=8U);
+        if(m->encoding&X64_ENCODING_NOTRACK)
+            layout.prefix[layout.prefix_bytes++]=0x3eU;
         if(mem->address_space)
             layout.prefix[layout.prefix_bytes++]=
                 (unsigned char)(mem->address_space==1U?0x64U:0x65U);
         if(m->encoding&UINT32_C(0x400))layout.prefix[layout.prefix_bytes++]=0x66U;
         if(m->encoding&UINT32_C(0x2000))layout.prefix[layout.prefix_bytes++]=0xf3U;
+        if(m->encoding&X64_ENCODING_F2)layout.prefix[layout.prefix_bytes++]=0xf2U;
         if(layout.has_rex)
             layout.prefix[layout.prefix_bytes++]=(unsigned char)(0x40U |
                 (m->operands[0].register_64?8U:0U) |
@@ -2788,6 +2963,16 @@ static bool x64_register_encoding_plan(const MiniAsMCInst *m,
             code[n++]=(unsigned char)(0xc0U|((dst&7U)<<3U)|(base&7U));
             break;
         }
+        case X64_XMM_IMM_REG:
+            r=m->operands[0].reg;
+            code[n++]=0x66U;
+            if(r>=8U)code[n++]=0x41U;
+            code[n++]=0x0fU;
+            code[n++]=0x73U;
+            code[n++]=(unsigned char)(0xc0U|
+                ((m->encoding&7U)<<3U)|(r&7U));
+            code[n++]=(unsigned char)m->operands[1].immediate;
+            break;
         case X64_SYSTEM_MOVE: {
             unsigned sys=m->operands[0].reg,gpr=m->operands[1].reg;
             if(m->encoding&0x400U)code[n++]=0x66U;
@@ -2982,6 +3167,7 @@ static bool x64_register_encoding_plan(const MiniAsMCInst *m,
                 break;
             }
             if(m->encoding&UINT32_C(0x2000))code[n++]=0xf3U;
+            if(m->encoding&X64_ENCODING_F2)code[n++]=0xf2U;
             if(plan.rex)
                 code[n++]=(unsigned char)(0x40U|
                     (m->operands[0].register_64?8U:0U)|
@@ -3000,6 +3186,7 @@ static bool x64_register_encoding_plan(const MiniAsMCInst *m,
             break;
         case X64_INDIRECT_REG:
             r=m->operands[0].reg;
+            if(m->encoding&X64_ENCODING_NOTRACK)code[n++]=0x3eU;
             if(r>=8U)code[n++]=0x41U;
             code[n++]=0xffU;
             code[n++]=(unsigned char)(0xc0U|((m->encoding&7U)<<3U)|(r&7U));
