@@ -1,0 +1,4 @@
+# One-shot 3 GNU goldens + 21 independent MiniC C/GNU AS runners + 3 GNU LD/QEMU receivers.
+# Explicit workflow_dispatch also starts the campaign; bump this file in the
+# final commit to opt a pull request into the expensive full Linux runtime.
+# ZERO_C_FALLBACK_ONLY=1

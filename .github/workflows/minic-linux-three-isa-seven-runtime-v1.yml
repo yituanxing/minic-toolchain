@@ -1,0 +1,631 @@
+name: MiniC Linux 6.6.143 strict 3-ISA 7-runner GNU LD/QEMU runtime
+
+# A separate explicit runtime campaign: the existing single-runner GNU/QEMU
+# workflow and its SHA-locked original GNU golden cache contract are untouched.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/minic-linux-three-isa-seven-runtime-v1.yml'
+      - 'tools/ci/linux-three-isa-seven-runtime-v1.py'
+      - 'tools/ci/linux-three-isa-seven-runtime-trigger.txt'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: minic-linux-seven-runtime-${{ github.ref }}-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    runs-on: ubuntu-24.04
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 2
+      - name: Require explicit dispatch or latest-commit one-shot trigger
+        id: decide
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          active=false
+          if [[ '${{ github.event_name }}' == workflow_dispatch ]]; then
+            active=true
+          elif git rev-parse --verify HEAD^ >/dev/null 2>&1 &&
+               ! git diff --quiet HEAD^ HEAD -- tools/ci/linux-three-isa-seven-runtime-trigger.txt; then
+            active=true
+          fi
+          echo "run=$active" >> "$GITHUB_OUTPUT"
+          echo "MINIC_LINUX_SEVEN_EXACT_HEAD_GATE=$active sha=$(git rev-parse HEAD)"
+
+  minic-binary:
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify strict seven-runner CLI and original candidate test suite
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 -m py_compile tools/ci/linux-three-isa-seven-runtime-v1.py tools/ci/linux-three-isa-minic-candidate-v1.py
+          python3 tools/ci/linux-three-isa-seven-runtime-v1.py selftest
+          python3 tools/ci/linux-three-isa-minic-candidate-v1.py --self-test
+          python3 tools/ci/test_linux_three_isa_candidate_shard_cache_v1.py
+      - name: Build exactly one immutable MiniC and minic-cc for all 21 workers
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minic-seven-bin \
+            build/minic-seven-bin/bin/minic build/minic-seven-bin/bin/minic-cc
+          test -x build/minic-seven-bin/bin/minic
+          test -x build/minic-seven-bin/bin/minic-cc
+          sha256sum build/minic-seven-bin/bin/minic build/minic-seven-bin/bin/minic-cc
+      - uses: actions/upload-artifact@v4
+        with:
+          name: minic-linux-seven-compiler
+          path: |
+            build/minic-seven-bin/bin/minic
+            build/minic-seven-bin/bin/minic-cc
+          compression-level: 1
+          if-no-files-found: error
+          retention-days: 7
+
+  original-gnu-golden:
+    needs: [gate, minic-binary]
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64, aarch64, loongarch64]
+    env:
+      GNU_WORK: ${{ github.workspace }}/build/minic-linux-gnu-${{ matrix.target }}
+      RUNTIME_OUTPUT: ${{ github.workspace }}/build/minic-seven-gnu-boot-${{ matrix.target }}
+      LOONG_FIRMWARE_URL: https://raw.githubusercontent.com/loongson/Firmware/9e2b59f4f0d0c40258fade9769cd93c8034fd436/LoongArchVirtMachine/QEMU_EFI.fd
+      LOONG_FIRMWARE_SHA256: b375639ebcf7a873d2cab67f0c9c1c6c208fc3f1bcba4083172fa20c4fb7e1ab
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: minic-linux-seven-compiler
+          path: build/minic-seven-bin/bin
+      - name: Verify exact compiler source HEAD and restore executable bits
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = '${{ github.event.pull_request.head.sha || github.sha }}'
+          chmod +x build/minic-seven-bin/bin/minic build/minic-seven-bin/bin/minic-cc
+      - name: Install exact original GNU Kbuild and target QEMU prerequisites
+        shell: bash
+        timeout-minutes: 15
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 update -qq
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential bc bison flex libelf-dev libssl-dev cpio gzip curl \
+            xz-utils make python3
+          case '${{ matrix.target }}' in
+            x86_64) sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends qemu-system-x86 ;;
+            aarch64) sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+                         gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
+                         libc6-dev-arm64-cross qemu-system-arm ;;
+            loongarch64) sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+                            gcc-13-loongarch64-linux-gnu binutils-loongarch64-linux-gnu \
+                            libc6-dev-loong64-cross qemu-system-misc ;;
+          esac
+      - name: Identify original GNU golden exact cache key without MiniC HEAD
+        id: gnu-key
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          case '${{ matrix.target }}' in
+            x86_64) gcc=gcc; ld=ld; assembler=as ;;
+            aarch64) gcc=aarch64-linux-gnu-gcc; ld=aarch64-linux-gnu-ld; assembler=aarch64-linux-gnu-as ;;
+            loongarch64) gcc=loongarch64-linux-gnu-gcc-13; ld=loongarch64-linux-gnu-ld; assembler=loongarch64-linux-gnu-as ;;
+          esac
+          signature=$(
+            {
+              printf '%s\n' \
+                'cache_contract=three-isa-gnu-golden-precandidate-v1' \
+                'linux=6.6.143' \
+                'linux_tar_sha256=dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932' \
+                'config_profile=broad' \
+                'gnu_qemu_p0_p1_must_rerun=true' \
+                "target=${{ matrix.target }}" \
+                "gnu_work=$GNU_WORK" \
+                "workspace=$GITHUB_WORKSPACE"
+              for tool in "$gcc" "$ld" "$assembler" gcc ld as make bison flex bc; do
+                exe=$(command -v "$tool")
+                test -s "$exe"
+                printf '%s:%s:%s\n' "$tool" "$exe" "$(sha256sum "$exe" | cut -d' ' -f1)"
+              done
+              sha256sum \
+                tools/ci/linux-three-isa-golden-v1.sh \
+                tools/ci/linux-three-isa-golden-v1.py \
+                tools/ci/linux-three-isa-freeze-i-v1.py \
+                tools/ci/linux-runtime-gcc-full-c-objects-v1.py \
+                tools/ci/linux-three-isa-common.config
+            } | sha256sum | cut -c1-32
+          )
+          echo "key=linux-three-isa-gnu-golden-6.6.143-${{ matrix.target }}-$signature" >> "$GITHUB_OUTPUT"
+          echo "THREE_ISA_SEVEN_GNU_CACHE_KEY=$signature target=${{ matrix.target }}"
+      - uses: actions/cache/restore@v4
+        id: gnu-cache
+        with:
+          path: ${{ env.GNU_WORK }}
+          key: ${{ steps.gnu-key.outputs.key }}
+      - name: Build truly original GNU Linux only on exact cache MISS
+        if: steps.gnu-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$GNU_WORK"
+          MINIC_LINUX_CONFIG_PROFILE=broad bash tools/ci/linux-three-isa-golden-v1.sh \
+            '${{ matrix.target }}' "$GNU_WORK"
+      - name: Verify any restored complete GNU Kbuild against original SHA
+        if: steps.gnu-cache.outputs.cache-hit == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          case '${{ matrix.target }}' in
+            x86_64) gcc=gcc ;;
+            aarch64) gcc=aarch64-linux-gnu-gcc ;;
+            loongarch64) gcc=loongarch64-linux-gnu-gcc-13 ;;
+          esac
+          python3 tools/ci/linux-three-isa-gnu-cache-verify-v1.py \
+            --target '${{ matrix.target }}' --gnu-work "$GNU_WORK" --gcc "$gcc"
+      - name: Verify authentic LoongArch original EFI boot image and firmware
+        if: matrix.target == 'loongarch64'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          command -v qemu-system-loongarch64
+          test -s "$GNU_WORK/build/arch/loongarch/boot/vmlinuz.efi"
+          mkdir -p "$RUNTIME_OUTPUT"
+          curl --proto '=https' --tlsv1.2 -fL --retry 3 \
+            "$LOONG_FIRMWARE_URL" -o "$RUNTIME_OUTPUT/QEMU_EFI.fd"
+          printf '%s  %s\n' "$LOONG_FIRMWARE_SHA256" "$RUNTIME_OUTPUT/QEMU_EFI.fd" | sha256sum -c -
+      - name: Build original target GNU initramfs and 12-syscall oracle
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          case '${{ matrix.target }}' in
+            x86_64) cc=gcc ;;
+            aarch64) cc=aarch64-linux-gnu-gcc ;;
+            loongarch64) cc=loongarch64-linux-gnu-gcc-13 ;;
+          esac
+          mkdir -p "$RUNTIME_OUTPUT"
+          RISCV_CC="$cc" BUILD_DIR="$RUNTIME_OUTPUT/initramfs" \
+            OUTPUT_INITRAMFS="$RUNTIME_OUTPUT/runtime-initramfs.cpio.gz" \
+            bash tests/external/linux/build_runtime_initramfs.sh
+      - name: Fresh QEMU GNU-only original P0/P1 oracle on this exact cache
+        shell: bash
+        timeout-minutes: 15
+        run: |
+          set -Eeuo pipefail
+          args=()
+          if [[ '${{ matrix.target }}' == loongarch64 ]]; then
+            args+=(--firmware "$RUNTIME_OUTPUT/QEMU_EFI.fd" \
+                   --firmware-sha256 "$LOONG_FIRMWARE_SHA256")
+          fi
+          python3 tools/ci/linux-three-isa-gnu-qemu-v1.py \
+            --target '${{ matrix.target }}' --gnu-work "$GNU_WORK" \
+            --initramfs "$RUNTIME_OUTPUT/runtime-initramfs.cpio.gz" \
+            --initramfs-root "$RUNTIME_OUTPUT/initramfs/root" \
+            --output "$RUNTIME_OUTPUT/boot" --timeout 240 "${args[@]}"
+      - name: Bind fresh P0/P1 receipt to immutable GNU golden
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          case '${{ matrix.target }}' in
+            x86_64) gcc=gcc ;;
+            aarch64) gcc=aarch64-linux-gnu-gcc ;;
+            loongarch64) gcc=loongarch64-linux-gnu-gcc-13 ;;
+          esac
+          python3 tools/ci/linux-three-isa-gnu-cache-verify-v1.py \
+            --target '${{ matrix.target }}' --gnu-work "$GNU_WORK" --gcc "$gcc" \
+            --gnu-receipt "$RUNTIME_OUTPUT/boot/gnu-qemu-receipt.json"
+      - name: Save original GNU golden before any candidate C-object modifications
+        if: steps.gnu-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        continue-on-error: true
+        with:
+          path: ${{ env.GNU_WORK }}
+          key: ${{ steps.gnu-key.outputs.key }}
+      - name: Export seven non-overlapping original GNU -E/.o.cmd input artifacts
+        shell: bash
+        timeout-minutes: 15
+        run: |
+          set -Eeuo pipefail
+          python3 tools/ci/linux-three-isa-seven-runtime-v1.py export \
+            --target '${{ matrix.target }}' --gnu-work "$GNU_WORK" \
+            --minic "$GITHUB_WORKSPACE/build/minic-seven-bin/bin/minic" \
+            --gnu-receipt "$RUNTIME_OUTPUT/boot/gnu-qemu-receipt.json" \
+            --initramfs "$RUNTIME_OUTPUT/runtime-initramfs.cpio.gz" \
+            --output "$GITHUB_WORKSPACE/build/minic-seven-export-${{ matrix.target }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: minic-linux-seven-input-${{ matrix.target }}-0
+          path: build/minic-seven-export-${{ matrix.target }}/0/
+          if-no-files-found: error
+          include-hidden-files: true
+          compression-level: 3
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        with:
+          name: minic-linux-seven-input-${{ matrix.target }}-1
+          path: build/minic-seven-export-${{ matrix.target }}/1/
+          if-no-files-found: error
+          include-hidden-files: true
+          compression-level: 3
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        with:
+          name: minic-linux-seven-input-${{ matrix.target }}-2
+          path: build/minic-seven-export-${{ matrix.target }}/2/
+          if-no-files-found: error
+          include-hidden-files: true
+          compression-level: 3
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        with:
+          name: minic-linux-seven-input-${{ matrix.target }}-3
+          path: build/minic-seven-export-${{ matrix.target }}/3/
+          if-no-files-found: error
+          include-hidden-files: true
+          compression-level: 3
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        with:
+          name: minic-linux-seven-input-${{ matrix.target }}-4
+          path: build/minic-seven-export-${{ matrix.target }}/4/
+          if-no-files-found: error
+          include-hidden-files: true
+          compression-level: 3
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        with:
+          name: minic-linux-seven-input-${{ matrix.target }}-5
+          path: build/minic-seven-export-${{ matrix.target }}/5/
+          if-no-files-found: error
+          include-hidden-files: true
+          compression-level: 3
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        with:
+          name: minic-linux-seven-input-${{ matrix.target }}-6
+          path: build/minic-seven-export-${{ matrix.target }}/6/
+          if-no-files-found: error
+          include-hidden-files: true
+          compression-level: 3
+          retention-days: 7
+      - name: Preserve exact original GNU P0/P1 runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minic-linux-seven-gnu-evidence-${{ matrix.target }}
+          path: |
+            build/minic-seven-gnu-boot-${{ matrix.target }}/boot/
+            build/minic-linux-gnu-${{ matrix.target }}/evidence/
+          if-no-files-found: warn
+          retention-days: 7
+
+  seven-independent-runners:
+    needs: [gate, minic-binary, original-gnu-golden]
+    # A failing GNU LoongArch platform must not suppress live x86/AArch64
+    # evidence: each independent worker requires *its* real input artifact.
+    if: always() && needs.gate.outputs.run == 'true' && needs.minic-binary.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      max-parallel: 21
+      matrix:
+        target: [x86_64, aarch64, loongarch64]
+        shard: [0, 1, 2, 3, 4, 5, 6]
+    env:
+      INPUT: ${{ github.workspace }}/build/minic-seven-input-${{ matrix.target }}-${{ matrix.shard }}
+      OUTPUT: ${{ github.workspace }}/build/minic-seven-object-${{ matrix.target }}-${{ matrix.shard }}
+      CACHE: ${{ github.workspace }}/build/minic-seven-cache-${{ matrix.target }}-${{ matrix.shard }}
+      IDENTITY: ${{ github.workspace }}/build/minic-seven-cache-identity-${{ matrix.target }}-${{ matrix.shard }}.json
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: minic-linux-seven-input-${{ matrix.target }}-${{ matrix.shard }}
+          path: ${{ env.INPUT }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: minic-linux-seven-compiler
+          path: build/minic-seven-bin/bin
+      - name: Install only exact target GNU assembler drivers (no Linux GNU Kbuild)
+        shell: bash
+        timeout-minutes: 12
+        run: |
+          set -Eeuo pipefail
+          chmod +x build/minic-seven-bin/bin/minic build/minic-seven-bin/bin/minic-cc
+          case '${{ matrix.target }}' in
+            x86_64) command -v gcc; command -v as ;;
+            aarch64) sudo apt-get -o Acquire::Retries=3 update -qq
+                     sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+                       gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu ;;
+            loongarch64) sudo apt-get -o Acquire::Retries=3 update -qq
+                         sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+                           gcc-13-loongarch64-linux-gnu binutils-loongarch64-linux-gnu ;;
+          esac
+      - name: Bind candidate C-object cache key to exact .i/.cmd, MiniC and GNU AS
+        id: object-key
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/ci/linux-three-isa-seven-runtime-v1.py cache-key \
+            --target '${{ matrix.target }}' --shard '${{ matrix.shard }}' \
+            --minic "$GITHUB_WORKSPACE/build/minic-seven-bin/bin/minic" \
+            --input "$INPUT" --output "$IDENTITY"
+          python3 - "$IDENTITY" "$GITHUB_OUTPUT" <<'PY'
+          import json,sys
+          data=json.load(open(sys.argv[1]))
+          with open(sys.argv[2], 'a') as f:
+              print('enabled='+str(data['cacheable']).lower(), file=f)
+              print('key='+data['key'], file=f)
+          PY
+      - uses: actions/cache/restore@v4
+        id: candidate-cache
+        if: steps.object-key.outputs.enabled == 'true'
+        with:
+          path: ${{ env.CACHE }}
+          key: ${{ steps.object-key.outputs.key }}
+      - name: Reauthenticate frozen MiniC C/AS shard from exact candidate cache
+        if: steps.candidate-cache.outputs.cache-hit == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/ci/linux-three-isa-seven-runtime-v1.py cache-load \
+            --target '${{ matrix.target }}' --shard '${{ matrix.shard }}' \
+            --minic "$GITHUB_WORKSPACE/build/minic-seven-bin/bin/minic" \
+            --input "$INPUT" --output "$OUTPUT" \
+            --cache "$CACHE" --cache-identity "$IDENTITY"
+      - name: Compile every original Kbuild C owner on one real independent runner
+        if: steps.candidate-cache.outputs.cache-hit != 'true'
+        shell: bash
+        timeout-minutes: 45
+        run: |
+          set -Eeuo pipefail
+          python3 tools/ci/linux-three-isa-seven-runtime-v1.py produce \
+            --target '${{ matrix.target }}' --shard '${{ matrix.shard }}' \
+            --minic "$GITHUB_WORKSPACE/build/minic-seven-bin/bin/minic" \
+            --input "$INPUT" --output "$OUTPUT" --workers 2 --timeout 240
+      - name: Preserve authenticated candidate cache before any LD/QEMU failure
+        if: steps.object-key.outputs.enabled == 'true' && steps.candidate-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/ci/linux-three-isa-seven-runtime-v1.py cache-store \
+            --target '${{ matrix.target }}' --shard '${{ matrix.shard }}' \
+            --minic "$GITHUB_WORKSPACE/build/minic-seven-bin/bin/minic" \
+            --input "$INPUT" --output "$OUTPUT" \
+            --cache "$CACHE" --cache-identity "$IDENTITY"
+      - uses: actions/cache/save@v4
+        if: steps.object-key.outputs.enabled == 'true' && steps.candidate-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        with:
+          path: ${{ env.CACHE }}
+          key: ${{ steps.object-key.outputs.key }}
+      - name: Export only authentic independently built MiniC C ELF64 objects
+        uses: actions/upload-artifact@v4
+        with:
+          name: minic-linux-seven-objects-${{ matrix.target }}-${{ matrix.shard }}
+          path: ${{ env.OUTPUT }}/bundle/
+          include-hidden-files: true
+          if-no-files-found: error
+          compression-level: 2
+          retention-days: 7
+      - name: Preserve authentic first GNU -E / MiniC / GNU AS failures
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minic-linux-seven-failure-${{ matrix.target }}-${{ matrix.shard }}
+          path: |
+            ${{ env.OUTPUT }}/results.json
+            ${{ env.OUTPUT }}/staged/**/*.tool-stderr.txt
+          if-no-files-found: ignore
+          retention-days: 7
+
+  original-gnu-ld-qemu-receivers:
+    needs: [gate, minic-binary, original-gnu-golden, seven-independent-runners]
+    # Always provision each target receiver independently, including when
+    # another target failed. Missing any of the seven objects is a hard FAIL.
+    if: always() && needs.gate.outputs.run == 'true' && needs.minic-binary.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64, aarch64, loongarch64]
+    env:
+      GNU_WORK: ${{ github.workspace }}/build/minic-linux-gnu-${{ matrix.target }}
+      RUNTIME_OUTPUT: ${{ github.workspace }}/build/minic-seven-receiver-${{ matrix.target }}
+      LOONG_FIRMWARE_URL: https://raw.githubusercontent.com/loongson/Firmware/9e2b59f4f0d0c40258fade9769cd93c8034fd436/LoongArchVirtMachine/QEMU_EFI.fd
+      LOONG_FIRMWARE_SHA256: b375639ebcf7a873d2cab67f0c9c1c6c208fc3f1bcba4083172fa20c4fb7e1ab
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: minic-linux-seven-compiler
+          path: build/minic-seven-bin/bin
+      - name: Install unchanged target GNU LD/Kbuild and system QEMU
+        timeout-minutes: 15
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          chmod +x build/minic-seven-bin/bin/minic build/minic-seven-bin/bin/minic-cc
+          sudo apt-get -o Acquire::Retries=3 update -qq
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential bc bison flex libelf-dev libssl-dev cpio gzip curl \
+            xz-utils make python3
+          case '${{ matrix.target }}' in
+            x86_64) sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends qemu-system-x86 ;;
+            aarch64) sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+                         gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
+                         libc6-dev-arm64-cross qemu-system-arm ;;
+            loongarch64) sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+                            gcc-13-loongarch64-linux-gnu binutils-loongarch64-linux-gnu \
+                            libc6-dev-loong64-cross qemu-system-misc ;;
+          esac
+      - name: Recompute exactly the same GNU golden SHA key as original producer
+        id: gnu-key
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          case '${{ matrix.target }}' in
+            x86_64) gcc=gcc; ld=ld; assembler=as ;;
+            aarch64) gcc=aarch64-linux-gnu-gcc; ld=aarch64-linux-gnu-ld; assembler=aarch64-linux-gnu-as ;;
+            loongarch64) gcc=loongarch64-linux-gnu-gcc-13; ld=loongarch64-linux-gnu-ld; assembler=loongarch64-linux-gnu-as ;;
+          esac
+          signature=$(
+            {
+              printf '%s\n' \
+                'cache_contract=three-isa-gnu-golden-precandidate-v1' \
+                'linux=6.6.143' \
+                'linux_tar_sha256=dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932' \
+                'config_profile=broad' \
+                'gnu_qemu_p0_p1_must_rerun=true' \
+                "target=${{ matrix.target }}" \
+                "gnu_work=$GNU_WORK" \
+                "workspace=$GITHUB_WORKSPACE"
+              for tool in "$gcc" "$ld" "$assembler" gcc ld as make bison flex bc; do
+                exe=$(command -v "$tool")
+                test -s "$exe"
+                printf '%s:%s:%s\n' "$tool" "$exe" "$(sha256sum "$exe" | cut -d' ' -f1)"
+              done
+              sha256sum \
+                tools/ci/linux-three-isa-golden-v1.sh \
+                tools/ci/linux-three-isa-golden-v1.py \
+                tools/ci/linux-three-isa-freeze-i-v1.py \
+                tools/ci/linux-runtime-gcc-full-c-objects-v1.py \
+                tools/ci/linux-three-isa-common.config
+            } | sha256sum | cut -c1-32
+          )
+          echo "key=linux-three-isa-gnu-golden-6.6.143-${{ matrix.target }}-$signature" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.GNU_WORK }}
+          key: ${{ steps.gnu-key.outputs.key }}
+          fail-on-cache-miss: true
+      - name: Verify original GNU Golden complete immutable cache C/Kbuild SHAs
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          case '${{ matrix.target }}' in
+            x86_64) gcc=gcc ;;
+            aarch64) gcc=aarch64-linux-gnu-gcc ;;
+            loongarch64) gcc=loongarch64-linux-gnu-gcc-13 ;;
+          esac
+          python3 tools/ci/linux-three-isa-gnu-cache-verify-v1.py \
+            --target '${{ matrix.target }}' --gnu-work "$GNU_WORK" --gcc "$gcc"
+      - name: Restore all seven independently produced target ELF64 C shards
+        uses: actions/download-artifact@v4
+        with:
+          pattern: minic-linux-seven-objects-${{ matrix.target }}-*
+          path: build/minic-seven-incoming/
+          merge-multiple: false
+      - name: Build unchanged GNU runtime initramfs and Loong EFI original firmware
+        shell: bash
+        timeout-minutes: 12
+        run: |
+          set -Eeuo pipefail
+          case '${{ matrix.target }}' in
+            x86_64) cc=gcc ;;
+            aarch64) cc=aarch64-linux-gnu-gcc ;;
+            loongarch64) cc=loongarch64-linux-gnu-gcc-13
+                         command -v qemu-system-loongarch64
+                         mkdir -p "$RUNTIME_OUTPUT"
+                         curl --proto '=https' --tlsv1.2 -fL --retry 3 \
+                           "$LOONG_FIRMWARE_URL" -o "$RUNTIME_OUTPUT/QEMU_EFI.fd"
+                         printf '%s  %s\n' "$LOONG_FIRMWARE_SHA256" "$RUNTIME_OUTPUT/QEMU_EFI.fd" | sha256sum -c - ;;
+          esac
+          mkdir -p "$RUNTIME_OUTPUT"
+          RISCV_CC="$cc" BUILD_DIR="$RUNTIME_OUTPUT/initramfs" \
+            OUTPUT_INITRAMFS="$RUNTIME_OUTPUT/runtime-initramfs.cpio.gz" \
+            bash tests/external/linux/build_runtime_initramfs.sh
+      - name: Fresh pristine GNU golden P0/P1 QEMU before replacing any C object
+        shell: bash
+        timeout-minutes: 15
+        run: |
+          set -Eeuo pipefail
+          args=()
+          if [[ '${{ matrix.target }}' == loongarch64 ]]; then
+            args+=(--firmware "$RUNTIME_OUTPUT/QEMU_EFI.fd" \
+                   --firmware-sha256 "$LOONG_FIRMWARE_SHA256")
+          fi
+          python3 tools/ci/linux-three-isa-gnu-qemu-v1.py \
+            --target '${{ matrix.target }}' --gnu-work "$GNU_WORK" \
+            --initramfs "$RUNTIME_OUTPUT/runtime-initramfs.cpio.gz" \
+            --initramfs-root "$RUNTIME_OUTPUT/initramfs/root" \
+            --output "$RUNTIME_OUTPUT/boot" --timeout 240 "${args[@]}"
+      - name: Original GNU Kbuild LD of ALL MiniC C objects and candidate QEMU P0/P1
+        shell: bash
+        timeout-minutes: 95
+        run: |
+          set -Eeuo pipefail
+          args=()
+          if [[ '${{ matrix.target }}' == loongarch64 ]]; then
+            args+=(--firmware "$RUNTIME_OUTPUT/QEMU_EFI.fd")
+          fi
+          python3 tools/ci/linux-three-isa-seven-runtime-v1.py receive \
+            --target '${{ matrix.target }}' --gnu-work "$GNU_WORK" \
+            --minic "$GITHUB_WORKSPACE/build/minic-seven-bin/bin/minic" \
+            --gnu-receipt "$RUNTIME_OUTPUT/boot/gnu-qemu-receipt.json" \
+            --gnu-boot-logs "$RUNTIME_OUTPUT/boot" \
+            --initramfs "$RUNTIME_OUTPUT/runtime-initramfs.cpio.gz" \
+            --incoming "$GITHUB_WORKSPACE/build/minic-seven-incoming" \
+            --output "$RUNTIME_OUTPUT/candidate" "${args[@]}"
+      - name: Preserve genuine GNU LD errors, MiniC C provenance and dual QEMU logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minic-linux-seven-receiver-${{ matrix.target }}
+          path: |
+            build/minic-seven-receiver-${{ matrix.target }}/boot/
+            build/minic-seven-receiver-${{ matrix.target }}/candidate/candidate-receipt.json
+            build/minic-seven-receiver-${{ matrix.target }}/candidate/all-c-owners-result.json
+            build/minic-seven-receiver-${{ matrix.target }}/candidate/gnu-ld-relink.log
+            build/minic-seven-receiver-${{ matrix.target }}/candidate/gnu-link-failure-summary.json
+            build/minic-seven-receiver-${{ matrix.target }}/candidate/postlink-c-owner-census.json
+            build/minic-seven-receiver-${{ matrix.target }}/candidate/link-failure-owner-diagnostics/
+            build/minic-seven-receiver-${{ matrix.target }}/candidate/boot/
+          if-no-files-found: warn
+          retention-days: 14
+
+  strict-three-isa-result:
+    needs: [gate, minic-binary, original-gnu-golden, seven-independent-runners, original-gnu-ld-qemu-receivers]
+    if: always() && needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Refuse a single false PASS or omitted C/LD/QEMU target
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          echo 'MINIC_LINUX_SEVEN_GNU_ORIGINAL=${{ needs.original-gnu-golden.result }}'
+          echo 'MINIC_LINUX_SEVEN_21_C_SHARDS=${{ needs.seven-independent-runners.result }}'
+          echo 'MINIC_LINUX_SEVEN_GNU_LD_QEMU=${{ needs.original-gnu-ld-qemu-receivers.result }}'
+          test '${{ needs.minic-binary.result }}' = success
+          test '${{ needs.original-gnu-golden.result }}' = success
+          test '${{ needs.seven-independent-runners.result }}' = success
+          test '${{ needs.original-gnu-ld-qemu-receivers.result }}' = success
+          echo 'MINIC_LINUX_SEVEN_RUNTIME=PASS targets=3 seven_independent_runners_per_target=true all_C_GNU_AS_LD_QEMU_P0_P1=true'
