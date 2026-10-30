@@ -15,13 +15,30 @@ end=s.index('bool minias_section_append(',start)
 body=s[start:end]
 if 'sec->size +=' in body or 'sec->size++' in body:
     raise SystemExit('machine CodeEmitter changed the final Section cursor')
-if 'result->byte_count = needed' not in body:
-    raise SystemExit('machine CodeEmitter no longer captures private fragment bytes')
+if 'minias_stage_fragment_bytes(as,section_index,data,size,true)' not in body:
+    raise SystemExit('machine CodeEmitter bypasses fragment-owned byte staging')
+if 'minias_section_append(' in body:
+    raise SystemExit('machine CodeEmitter directly materializes Section bytes')
+start=s.index('static bool minias_stage_fragment_bytes(MiniAs *as,int section,')
+end=s.index('static bool minias_stage_fragment_pattern(',start)
+stage=s[start:end]
+for invariant in (
+    'MINIAS_WRITE_COPIED_BYTES',
+    'result->byte_storage_size+=size',
+    'result->byte_count+=size',
+    'result->writes[result->write_count++]',
+):
+    if invariant not in stage:
+        raise SystemExit('missing private ordered byte staging invariant: '+invariant)
+if 'minias_section_append(' in stage or 'sec->size +=' in stage:
+    raise SystemExit('private fragment staging mutated the final Section')
 start=s.index('static bool minias_commit_encode_result(')
 end=s.index('bool minias_emit_instruction_bytes(',start)
 commit=s[start:end]
 for invariant in (
     'result->byte_count != owner->size',
+    'logical_size!=result->byte_count',
+    'result->write_count',
     'minias_grow_array((void **)&as->fixups',
     'minias_record_fixup(as,',
     'minias_section_append(',
