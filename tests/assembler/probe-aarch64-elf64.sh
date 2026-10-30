@@ -2153,6 +2153,8 @@ echo 'MINIAS_A64_GNU_LITERAL_POOL=PASS exact_GNU_text_ABS32_ABS64_reloc_dedup_lt
 
 # Grouped ARM64 kernel system registers, immediate SPsel, SIMD REV64 and
 # scalar/vector FP load/store with strict scaled addressing. GNU byte oracle.
+# GNU GAS treats unaligned/negative LDR/STR as LDUR/STUR; scalar FP
+# writeback similarly uses its signed 9-bit immediate encoding.
 cat > "$work/a64-kernel-sys-rev-fp.s" <<'A64_SYSREVFP'
 .text
 mrs x3,id_aa64isar1_el1
@@ -2168,8 +2170,6 @@ ldr q3,[x4,#32]
 str s5,[x6,#20]
 str d7,[x8,#40]
 str q9,[x10,#48]
-# GNU GAS treats unaligned/negative LDR/STR as LDUR/STUR; scalar FP
-# writeback similarly uses its signed 9-bit immediate encoding.
 ldr s0,[x1,#3]
 str d0,[x1,#-8]
 str s0,[x1,#16]!
