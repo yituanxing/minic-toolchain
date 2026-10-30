@@ -8,6 +8,7 @@ work="$BUILD_DIR/tests/assembler/a0"
 mkdir -p "$work"
 
 sh tests/assembler/probe-riscv-absolute-relocs.sh
+bash tests/assembler/probe-minias-atomic-output.sh
 
 assemble_and_check() {
     name="$1"

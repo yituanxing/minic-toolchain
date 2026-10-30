@@ -1,9 +1,122 @@
+#define _POSIX_C_SOURCE 200809L
 #include "minias_internal.h"
 #include "minielf.h"
 
+#include <errno.h>
 #include <elf.h>
+#include <fcntl.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
+
+/* A named pipe, device (notably Kbuild's -o /dev/null probes), directory or
+ * symlink is not a replaceable regular-file destination. Preserve the old
+ * stream semantics for these paths, without ever renaming over the node. */
+static bool write_elf_stream(MiniAs *as, const char *path,
+                             const unsigned char *image, size_t image_size) {
+    FILE *file=fopen(path,"wb");
+    size_t written;
+    int close_status;
+    if(file==NULL) {
+        minias_set_error(as,"output-open:%s",path);
+        return false;
+    }
+    written=fwrite(image,1U,image_size,file);
+    close_status=fclose(file);
+    if(written!=image_size || close_status!=0) {
+        minias_set_error(as,"output-write:%s",path);
+        return false;
+    }
+    return true;
+}
+
+/* The assembled ELF image is complete before reaching the filesystem.
+ * Publish it in one same-directory rename so an I/O failure never truncates
+ * an existing output object.  O_EXCL also prevents a colliding invocation
+ * from following or overwriting another invocation's temporary file. */
+static bool write_elf_atomically(MiniAs *as, const char *path,
+                                 const unsigned char *image,
+                                 size_t image_size) {
+    static const unsigned attempt_limit=128U;
+    struct stat old_stat;
+    bool preserve_mode=false;
+    size_t path_length=strlen(path);
+    size_t capacity;
+    char *temporary;
+    FILE *file=NULL;
+    int fd=-1;
+    unsigned attempt;
+    bool temporary_created=false;
+    bool ok=false;
+
+    if(path_length>SIZE_MAX-48U) {
+        minias_set_error(as,"output-path-too-long");
+        return false;
+    }
+    capacity=path_length+48U;
+    temporary=malloc(capacity);
+    if(temporary==NULL) {
+        minias_set_error(as,"output-temp-allocation");
+        return false;
+    }
+    if(lstat(path,&old_stat)==0) {
+        if(!S_ISREG(old_stat.st_mode)) {
+            free(temporary);
+            return write_elf_stream(as,path,image,image_size);
+        }
+        preserve_mode=true;
+    }
+    for(attempt=0U;attempt<attempt_limit;++attempt) {
+        int length=snprintf(temporary,capacity,"%s.minias-tmp-%ld-%u",
+                            path,(long)getpid(),attempt);
+        if(length<0 || (size_t)length>=capacity)break;
+        fd=open(temporary,O_WRONLY|O_CREAT|O_EXCL,0666);
+        if(fd>=0) {
+            temporary_created=true;
+            break;
+        }
+        if(errno!=EEXIST)break;
+    }
+    if(fd<0) {
+        minias_set_error(as,"output-open:%s",path);
+        goto done;
+    }
+    /* Reassembling an existing regular file should retain its permissions;
+     * a new file gets 0666 filtered by the process umask via open(). */
+    if(preserve_mode && fchmod(fd,old_stat.st_mode & 0777U)!=0) {
+        minias_set_error(as,"output-mode:%s",path);
+        goto done;
+    }
+    file=fdopen(fd,"wb");
+    if(file==NULL) {
+        minias_set_error(as,"output-open:%s",path);
+        goto done;
+    }
+    fd=-1; /* fdopen transferred ownership to file. */
+    {
+        size_t written=fwrite(image,1U,image_size,file);
+        int close_status=fclose(file);
+        file=NULL;
+        if(written!=image_size || close_status!=0) {
+            minias_set_error(as,"output-write:%s",path);
+            goto done;
+        }
+    }
+    if(rename(temporary,path)!=0) {
+        minias_set_error(as,"output-rename:%s",path);
+        goto done;
+    }
+    ok=true;
+done:
+    if(file!=NULL)(void)fclose(file);
+    if(fd>=0)(void)close(fd);
+    if(!ok && temporary_created)(void)unlink(temporary);
+    free(temporary);
+    return ok;
+}
 
 /* Generic ELF STT_SECTION relocation for a target-selected, defined local
  * reference. GNU uses section+addend for eligible absolute relocations even
@@ -198,7 +311,6 @@ static bool minias_write_elf(MiniAs *as,
     bool emit_attribute;
     size_t i;
     size_t private_suffix=0U;
-    FILE *file = NULL;
     bool ok = false;
 
     if(as->symbol_count>SIZE_MAX/sizeof(*symbol_states)) {
@@ -538,30 +650,13 @@ static bool minias_write_elf(MiniAs *as,
         goto done;
     }
 
-    file = fopen(path, "wb");
-    if (file == NULL) {
-        minias_set_error(as, "output-open:%s", path);
-        goto done;
-    }
-    {
-        size_t written=fwrite(image,1U,image_size,file);
-        int close_status=fclose(file);
-        file = NULL;
-        if(written!=image_size || close_status!=0) {
-            minias_set_error(as,"output-write:%s",path);
-            goto done;
-        }
-    }
-    ok = true;
+    ok=write_elf_atomically(as,path,image,image_size);
 
 done:
     if(private_names!=NULL) {
         for(i=0U;i<as->symbol_count;++i)free(private_names[i]);
     }
     free(private_names);
-    if (file != NULL) {
-        (void)fclose(file);
-    }
     free(image);
     free(symbol_map);
     free(name_index);
