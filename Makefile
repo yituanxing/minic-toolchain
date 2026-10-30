@@ -1462,7 +1462,37 @@ check-fast: check-x86-reachable-vma-assert check-static-const-source-boundaries 
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
 	sh tests/compiler/c0/run.sh
 
-check-fast: check-function-diagnostic-attribute check-gnu-constant-bitfield-helper-cfg check-gnu-linux-kmalloc-index-bool-guard check-gnu-linux-kbuild-disjoint-bitmask-assert
+check-fast: check-function-diagnostic-attribute check-gnu-constant-bitfield-helper-cfg check-gnu-linux-kmalloc-index-bool-guard check-gnu-linux-kbuild-disjoint-bitmask-assert check-linux-empty-static-stub-cfi check-gnu-linux-static-field-guard check-core-same-global-address-order check-core-compound-record-byte-layout check-core-literal-rhs-snapshot check-gnu-linux-zoned-constant-switch
+
+.PHONY: check-linux-empty-static-stub-cfi
+check-linux-empty-static-stub-cfi: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/compiler/c0/probe-linux-empty-static-stub-cfi.sh
+
+.PHONY: check-gnu-linux-static-field-guard
+check-gnu-linux-static-field-guard: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/probe-gnu-linux-static-field-guard.sh
+
+.PHONY: check-core-same-global-address-order
+check-core-same-global-address-order: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/compiler/c0/probe-core-same-global-address-order.sh
+
+.PHONY: check-core-compound-record-byte-layout
+check-core-compound-record-byte-layout: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/compiler/c0/probe-core-compound-record-byte-layout.sh
+
+.PHONY: check-core-literal-rhs-snapshot
+check-core-literal-rhs-snapshot: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/compiler/c0/probe-core-literal-rhs-snapshot.sh
+
+.PHONY: check-gnu-linux-zoned-constant-switch
+check-gnu-linux-zoned-constant-switch: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" CC="$(CC)" \
+	sh tests/compiler/c0/probe-gnu-linux-zoned-constant-switch.sh
 
 check: check-fast
 

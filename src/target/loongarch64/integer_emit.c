@@ -4,7 +4,26 @@
 #include "target/common/core_numeric_shape.h"
 #include "target/common/lp64_scalar.h"
 #include "target/loongarch64/frame_emit.h"
+#include <inttypes.h>
 #include <stdio.h>
+
+/* Core SSA constants are immutable and retain their defining instruction.
+ * An immediate machine operand may read those bits directly without a
+ * redundant frame reload.  Do not infer constants from arbitrary local
+ * slots, which can be rewritten by volatile/ASM or aliasing effects. */
+static bool loong_integer_constant_rhs(const MinicCoreFunction *fn,
+    MinicCoreValueId id, int64_t *value) {
+    const MinicCoreInstruction *definition;
+    if (fn == NULL || value == NULL || id >= fn->value_count ||
+        fn->values[id].definition >= fn->instruction_count)
+        return false;
+    definition = &fn->instructions[fn->values[id].definition];
+    if (definition->result != id ||
+        definition->kind != MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT)
+        return false;
+    *value = definition->value.integer_value;
+    return true;
+}
 
 /* GNU checked-addition uses the original *mathematical* operand values,
  * then converts to the destination type. Linux fs/udf/inode.c passes a
@@ -485,6 +504,8 @@ bool minic_loongarch64_emit_integer_instruction(
             bool ls, rs;
             bool wide;
             const char *op;
+            const char *immediate_op = NULL;
+            int64_t shift_count = 0;
             if (!minic_multi_direct_integer_shift_shape(
                     program, target, fn, ins, &lw, &rw, &ls, &rs))
                 return false;
@@ -496,13 +517,24 @@ bool minic_loongarch64_emit_integer_instruction(
                                   : "  sra.w $t0, $t0, $t1\n")
                           : (wide ? "  srl.d $t0, $t0, $t1\n"
                                   : "  srl.w $t0, $t0, $t1\n"));
+            if (loong_integer_constant_rhs(fn, rhs, &shift_count) &&
+                shift_count >= 0 && shift_count < (wide ? 64 : 32)) {
+                immediate_op =
+                    ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT
+                        ? (wide ? "slli.d" : "slli.w")
+                        : ls ? (wide ? "srai.d" : "srai.w")
+                             : (wide ? "srli.d" : "srli.w");
+            }
             if (!emit_sp_mem(out, wide ? "ld.d" : "ld.w",
                              "$t0", minic_lp64_frame_value_offset(frame_plan, lhs)) ||
                 /* Signed narrow shift inputs require extension before sra. */
                 (lw < 4U && !minic_loongarch64_emit_integer_normalize(out, lw, ls)) ||
-                !emit_sp_mem(out, rw == 8U ? "ld.d" : "ld.w",
+                (immediate_op != NULL
+                 ? fprintf(out, "  %s $t0, $t0, %" PRId64 "\n",
+                           immediate_op, shift_count) < 0
+                 : !emit_sp_mem(out, rw == 8U ? "ld.d" : "ld.w",
                              "$t1", minic_lp64_frame_value_offset(frame_plan, rhs)) ||
-                fputs(op, out) == EOF ||
+                   fputs(op, out) == EOF) ||
                 (!wide && !minic_loongarch64_emit_integer_normalize(out, lw, ls)))
                 return false;
             (void)rs;
@@ -550,6 +582,8 @@ bool minic_loongarch64_emit_integer_instruction(
             bool ls, rs;
             bool wide;
             const char *opcode;
+            int64_t constant = 0;
+            bool immediate = false;
             if (!minic_multi_direct_integer_binary_shape(
                     program, target, fn, ins, &lw, &rw, &ls, &rs))
                 return false;
@@ -560,12 +594,24 @@ bool minic_loongarch64_emit_integer_instruction(
                 : ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT
                     ? (wide ? "  sub.d $t0, $t0, $t1\n" : "  sub.w $t0, $t0, $t1\n")
                     : (wide ? "  mul.d $t0, $t0, $t1\n" : "  mul.w $t0, $t0, $t1\n");
+            if (ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY &&
+                loong_integer_constant_rhs(fn, rhs, &constant)) {
+                if (ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_ADD) {
+                    immediate = constant >= -2048 && constant <= 2047;
+                } else if (constant >= -2047 && constant <= 2048) {
+                    constant = -constant;
+                    immediate = true;
+                }
+            }
             if ((!lhs_in_previous_gp &&
                  !emit_sp_mem(out, wide ? "ld.d" : "ld.w", "$t0",
                              minic_lp64_frame_value_offset(frame_plan, lhs))) ||
-                !emit_sp_mem(out, wide ? "ld.d" : "ld.w", "$t1",
-                             minic_lp64_frame_value_offset(frame_plan, rhs)) ||
-                fputs(opcode, out) == EOF ||
+                (immediate
+                 ? fprintf(out, "  addi.%c $t0, $t0, %" PRId64 "\n",
+                           wide ? 'd' : 'w', constant) < 0
+                 : !emit_sp_mem(out, wide ? "ld.d" : "ld.w", "$t1",
+                            minic_lp64_frame_value_offset(frame_plan, rhs)) ||
+                   fputs(opcode, out) == EOF) ||
                 (!wide && !minic_loongarch64_emit_integer_normalize(out, lw, ls)))
                 return false;
             *needs_gp_store = true;
@@ -579,6 +625,8 @@ bool minic_loongarch64_emit_integer_instruction(
             size_t lw, rw;
             bool ls, rs;
             const char *opcode;
+            const char *immediate_opcode = NULL;
+            int64_t constant = 0;
             if (!minic_multi_direct_integer_binary_shape(
                     program, target, fn, ins, &lw, &rw, &ls, &rs))
                 return false;
@@ -587,12 +635,22 @@ bool minic_loongarch64_emit_integer_instruction(
                 : ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_XOR
                     ? "  xor $t0, $t0, $t1\n"
                     : "  or $t0, $t0, $t1\n";
+            if (loong_integer_constant_rhs(fn, rhs, &constant) &&
+                constant >= 0 && constant <= 4095)
+                immediate_opcode =
+                    ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND
+                        ? "andi"
+                        : ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_XOR
+                            ? "xori" : "ori";
             if ((!lhs_in_previous_gp &&
                  !emit_sp_mem(out, lw == 8U ? "ld.d" : "ld.w",
                              "$t0", minic_lp64_frame_value_offset(frame_plan, lhs))) ||
-                !emit_sp_mem(out, rw == 8U ? "ld.d" : "ld.w",
-                             "$t1", minic_lp64_frame_value_offset(frame_plan, rhs)) ||
-                fputs(opcode, out) == EOF ||
+                (immediate_opcode != NULL
+                 ? fprintf(out, "  %s $t0, $t0, %" PRId64 "\n",
+                           immediate_opcode, constant) < 0
+                 : !emit_sp_mem(out, rw == 8U ? "ld.d" : "ld.w",
+                            "$t1", minic_lp64_frame_value_offset(frame_plan, rhs)) ||
+                   fputs(opcode, out) == EOF) ||
                 (lw != 8U && !minic_loongarch64_emit_integer_normalize(out, lw, ls)))
                 return false;
             *needs_gp_store = true;

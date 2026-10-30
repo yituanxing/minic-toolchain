@@ -706,16 +706,20 @@ MinicCoreLowerStatus minic_core_lower_direct_call(MinicCoreLowerContext *context
         (!returns_void && !core_memory_scalar_type(callee->return_type))) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
-    /* M186_EMPTY_INTERNAL_VOID_CALL_ELISION: do not materialize a pure
-       argument solely for a CONFIG-off no-op inline helper. */
-    if (returns_void && callee->is_defined && callee->is_internal && callee->is_inline &&
+    /* An internal empty void helper has no observable call effect regardless
+     * of whether the source spelled `inline`. Linux's CONFIG-off CFI stubs
+     * are ordinary static functions: retaining their unused pointer-address
+     * arguments can create unresolved linker-script symbols. Elide the call
+     * only when *every* argument is independently proven pure, and the body
+     * contains no executable statement beyond an optional bare return. */
+    if (returns_void && callee->is_defined && callee->is_internal &&
         callee->body_block != MINIC_BLOCK_INVALID) {
         const MinicBlock *callee_body = minic_c0_program_block(
             context->body->program, callee->body_block);
         bool empty_effect = callee_body != NULL && callee_body->statement_count == 0U;
         bool arguments_pure = true;
 
-        if (callee_body != NULL && callee_body->statement_count != 0U) {
+        if (callee_body != NULL && callee_body->statement_count == 1U) {
             const MinicStatement *first = minic_c0_program_statement(
                 context->body->program, callee_body->statements[0]);
             empty_effect = first != NULL && first->kind == MINIC_STATEMENT_RETURN &&

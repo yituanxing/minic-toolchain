@@ -140,6 +140,15 @@ static unsigned char *minic_static_integer_blocked_sources(
             if (callee_id < program->function_count &&
                 !program->functions[callee_id].is_defined) {
                 inline_has_external_guard[owners[index]] = 1U;
+                /* GNU __attribute__((error)) is checked after optimization.
+                 * An ordinary TU-local (non-inline) helper may contain that
+                 * guard directly, as with a constant FIELD_GET mask.  Allow
+                 * callsite integer specialization to discharge it, without
+                 * cloning arbitrary static functions just because they call
+                 * an unrelated external symbol. */
+                if (program->functions[callee_id].error_message != NULL) {
+                    static_calls_guarded_inline[owners[index]] = 1U;
+                }
             }
         }
         for (index = 0U; index < program->expression_count; ++index) {
@@ -197,6 +206,13 @@ static unsigned char *minic_static_integer_blocked_sources(
                     expression->kind == MINIC_EXPRESSION_STATEMENT
                         ? expression->value.statement_expression.block
                         : expression->value.compound_literal.initializer_block;
+                /* The source-owner walk intentionally leaves parse-only,
+                 * unreachable statement expressions unowned.  Their nested
+                 * blocks cannot affect an emitted function, so they must not
+                 * invalidate source-safety checking for the entire TU. */
+                if (owners != NULL && owners[index] == MINIC_FUNCTION_INVALID) {
+                    continue;
+                }
                 if (owners == NULL || owners[index] >= program->function_count ||
                     !minic_static_integer_claim_block(
                         nested_block,

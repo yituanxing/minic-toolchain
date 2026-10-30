@@ -222,6 +222,7 @@ MinicCoreLowerStatus minic_core_lower_internal_lower_scalar_equality_operands(Mi
     MinicType right_type;
     bool integer_comparison;
     bool pointer_comparison;
+    bool right_is_literal;
 
     if (context == NULL || context->body == NULL || context->body->program == NULL ||
         context->function == NULL || left_value == NULL || right_value == NULL) {
@@ -234,6 +235,11 @@ MinicCoreLowerStatus minic_core_lower_internal_lower_scalar_equality_operands(Mi
         !core_scalar_expression_value_type(context->body, right_expression, &right_type)) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
+    /* Only an integer literal is admitted here. Evaluating it cannot write
+     * through a pointer, call code, or switch CFG blocks, so the previously
+     * evaluated Core SSA left value cannot change while lowering the right.
+     * Keep the historical memory snapshot for every other expression. */
+    right_is_literal = right_expression->kind == MINIC_EXPRESSION_INTEGER;
 
     integer_comparison = false;
     pointer_comparison = false;
@@ -314,10 +320,11 @@ MinicCoreLowerStatus minic_core_lower_internal_lower_scalar_equality_operands(Mi
     } else {
         return MINIC_CORE_LOWER_ERROR;
     }
-    status = minic_core_lower_internal_spill_scalar_value(
-        context, left_expression->span, comparison_type, left_normalized, &left_object);
-    if (status != MINIC_CORE_LOWER_OK) {
-        return status;
+    if (!right_is_literal) {
+        status = minic_core_lower_internal_spill_scalar_value(
+            context, left_expression->span, comparison_type,
+            left_normalized, &left_object);
+        if (status != MINIC_CORE_LOWER_OK) return status;
     }
 
     status = lower_expression(context, right_id, &right_source);
@@ -343,10 +350,13 @@ MinicCoreLowerStatus minic_core_lower_internal_lower_scalar_equality_operands(Mi
     } else {
         return MINIC_CORE_LOWER_ERROR;
     }
-    status = minic_core_lower_internal_reload_scalar_value(
-        context, left_expression->span, comparison_type, left_object, left_value);
-    if (status != MINIC_CORE_LOWER_OK) {
-        return status;
+    if (right_is_literal) {
+        *left_value = left_normalized;
+    } else {
+        status = minic_core_lower_internal_reload_scalar_value(
+            context, left_expression->span, comparison_type,
+            left_object, left_value);
+        if (status != MINIC_CORE_LOWER_OK) return status;
     }
     *right_value = right_normalized;
     return MINIC_CORE_LOWER_OK;
@@ -366,6 +376,7 @@ MinicCoreLowerStatus minic_core_lower_internal_lower_integer_binary_operands(Min
     MinicCoreValueId right_normalized;
     MinicCoreValueId right_source;
     MinicCoreLowerStatus status;
+    bool right_is_literal;
 
     if (context == NULL || context->body == NULL || context->body->program == NULL ||
         context->function == NULL || left_value == NULL || right_value == NULL ||
@@ -379,6 +390,7 @@ MinicCoreLowerStatus minic_core_lower_internal_lower_integer_binary_operands(Min
         !minic_type_is_integer(right_expression->type)) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
+    right_is_literal = right_expression->kind == MINIC_EXPRESSION_INTEGER;
 
     status = lower_expression(context, left_id, &left_source);
     if (status != MINIC_CORE_LOWER_OK) {
@@ -393,12 +405,14 @@ MinicCoreLowerStatus minic_core_lower_internal_lower_integer_binary_operands(Min
                       context->source_function != NULL ? context->source_function->name : "?", (int)status);
         return status;
     }
-    status = minic_core_lower_internal_spill_scalar_value(
-        context, left_expression->span, result_type, left_normalized, &left_object);
-    if (status != MINIC_CORE_LOWER_OK) {
-        (void)fprintf(stderr, "CORE_LOWER_DETAIL marker=M90_HOT_ERROR_DETAIL function=%s stage=integer-binary reason=left-spill status=%d\n",
-                      context->source_function != NULL ? context->source_function->name : "?", (int)status);
-        return status;
+    if (!right_is_literal) {
+        status = minic_core_lower_internal_spill_scalar_value(
+            context, left_expression->span, result_type, left_normalized, &left_object);
+        if (status != MINIC_CORE_LOWER_OK) {
+            (void)fprintf(stderr, "CORE_LOWER_DETAIL marker=M90_HOT_ERROR_DETAIL function=%s stage=integer-binary reason=left-spill status=%d\n",
+                          context->source_function != NULL ? context->source_function->name : "?", (int)status);
+            return status;
+        }
     }
 
     status = lower_expression(context, right_id, &right_source);
@@ -414,12 +428,16 @@ MinicCoreLowerStatus minic_core_lower_internal_lower_integer_binary_operands(Min
                       context->source_function != NULL ? context->source_function->name : "?", (int)status);
         return status;
     }
-    status =
-        minic_core_lower_internal_reload_scalar_value(context, left_expression->span, result_type, left_object, left_value);
-    if (status != MINIC_CORE_LOWER_OK) {
-        (void)fprintf(stderr, "CORE_LOWER_DETAIL marker=M90_HOT_ERROR_DETAIL function=%s stage=integer-binary reason=left-reload status=%d\n",
-                      context->source_function != NULL ? context->source_function->name : "?", (int)status);
-        return status;
+    if (right_is_literal) {
+        *left_value = left_normalized;
+    } else {
+        status = minic_core_lower_internal_reload_scalar_value(
+            context, left_expression->span, result_type, left_object, left_value);
+        if (status != MINIC_CORE_LOWER_OK) {
+            (void)fprintf(stderr, "CORE_LOWER_DETAIL marker=M90_HOT_ERROR_DETAIL function=%s stage=integer-binary reason=left-reload status=%d\n",
+                          context->source_function != NULL ? context->source_function->name : "?", (int)status);
+            return status;
+        }
     }
     *right_value = right_normalized;
     return MINIC_CORE_LOWER_OK;

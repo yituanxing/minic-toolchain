@@ -785,6 +785,315 @@ static bool core_cfg_const_pointer_bits(const MinicCoreLowerContext *context,
     return false;
 }
 
+/* The numeric address of an external/global object is linker-owned, but the
+ * relative positions of its members and its one-past endpoint are known from
+ * DataLayout.  GNU Linux uses this in BUILD_BUG_ON guards for sentinel pointers
+ * such as (struct list_head *)&migrate_nodes.prev versus &migrate_nodes + 1.
+ * Prove only two addresses derived from the SAME complete object; never
+ * compare unrelated symbols or guess an absolute linker address. */
+typedef struct MinicCoreGlobalAddressFact {
+    MinicGlobalObjectId object_id;
+    size_t byte_offset;
+} MinicCoreGlobalAddressFact;
+
+static bool core_cfg_global_address_fact(const MinicCoreLowerContext *context,
+                                         MinicExpressionId expression_id,
+                                         unsigned int depth,
+                                         MinicCoreGlobalAddressFact *fact) {
+    const MinicC0Program *program;
+    const MinicExpression *expression;
+
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        context->target == NULL || fact == NULL || depth > 32U) {
+        return false;
+    }
+    program = context->body->program;
+    expression = minic_c0_program_expression(program, expression_id);
+    if (expression == NULL || !minic_type_is_pointer(expression->type)) {
+        return false;
+    }
+    if (expression->kind == MINIC_EXPRESSION_CAST ||
+        expression->kind == MINIC_EXPRESSION_BITCAST ||
+        expression->kind == MINIC_EXPRESSION_CONVERSION) {
+        const MinicExpression *operand = minic_c0_program_expression(
+            program, expression->value.unary.operand);
+        size_t from_size;
+        size_t to_size;
+        if (operand == NULL || !minic_type_is_pointer(operand->type) ||
+            !minic_target_info_sizeof_type(context->target, program,
+                                           operand->type, &from_size) ||
+            !minic_target_info_sizeof_type(context->target, program,
+                                           expression->type, &to_size) ||
+            from_size != to_size) {
+            return false;
+        }
+        return core_cfg_global_address_fact(context, expression->value.unary.operand,
+                                            depth + 1U, fact);
+    }
+    if (expression->kind == MINIC_EXPRESSION_ADDRESS_OF) {
+        const MinicExpression *addressed = minic_c0_program_expression(
+            program, expression->value.unary.operand);
+        if (addressed == NULL) {
+            return false;
+        }
+        if (addressed->kind == MINIC_EXPRESSION_GLOBAL_OBJECT) {
+            fact->object_id = addressed->value.global_object_id;
+            fact->byte_offset = 0U;
+            return minic_c0_program_global_object(program, fact->object_id) != NULL;
+        }
+        if (addressed->kind == MINIC_EXPRESSION_MEMBER) {
+            const MinicRecord *record = minic_c0_program_record(
+                program, addressed->value.member.record_id);
+            const MinicRecordField *field = minic_c0_record_field(
+                record, addressed->value.member.field_index);
+            MinicCoreGlobalAddressFact base;
+            size_t field_offset;
+            if (field == NULL || field->is_bit_field ||
+                !core_cfg_global_address_fact(context,
+                    addressed->value.member.base, depth + 1U, &base) ||
+                !minic_data_layout_record_field_offset(
+                    minic_target_info_data_layout(context->target), program, record,
+                    addressed->value.member.field_index, &field_offset) ||
+                field_offset > SIZE_MAX - base.byte_offset) {
+                return false;
+            }
+            fact->object_id = base.object_id;
+            fact->byte_offset = base.byte_offset + field_offset;
+            return true;
+        }
+    }
+    if (expression->kind == MINIC_EXPRESSION_BINARY &&
+        expression->value.binary.operator_kind == MINIC_BINARY_ADD) {
+        const MinicExpression *base_expression = minic_c0_program_expression(
+            program, expression->value.binary.left);
+        const MinicExpression *index_expression = minic_c0_program_expression(
+            program, expression->value.binary.right);
+        MinicCoreGlobalAddressFact base;
+        MinicConstValue index;
+        MinicConstValue widened;
+        size_t element_size;
+        size_t object_size;
+        const MinicGlobalObject *object;
+        if (base_expression == NULL || index_expression == NULL ||
+            !minic_type_is_pointer(base_expression->type) ||
+            !minic_type_is_integer(index_expression->type) ||
+            !core_cfg_global_address_fact(context, expression->value.binary.left,
+                                          depth + 1U, &base) ||
+            !minic_const_eval_integer(program, context->target,
+                                      expression->value.binary.right, &index) ||
+            !minic_const_value_convert_integer(program, context->target, &index,
+                                               minic_type_long(), &widened) ||
+            (int64_t)widened.bits < 0 ||
+            !minic_c0_pointer_arithmetic_element_size(
+                program, minic_target_info_data_layout(context->target),
+                base_expression->type, &element_size) || element_size == 0U ||
+            widened.bits > (SIZE_MAX - base.byte_offset) / element_size) {
+            return false;
+        }
+        object = minic_c0_program_global_object(program, base.object_id);
+        if (object == NULL ||
+            !minic_target_info_sizeof_type(context->target, program,
+                                           object->type, &object_size) ||
+            base.byte_offset + (size_t)widened.bits * element_size > object_size) {
+            return false;
+        }
+        fact->object_id = base.object_id;
+        fact->byte_offset = base.byte_offset + (size_t)widened.bits * element_size;
+        return true;
+    }
+    return false;
+}
+
+/* Resolve an initialized member inside nested anonymous unions/records to
+ * a byte offset relative to its exact compound-literal backing local. */
+static bool core_cfg_compound_member_layout(
+    const MinicC0Program *program,
+    const MinicDataLayout *layout,
+    const MinicExpression *member,
+    MinicLocalId root_local,
+    unsigned int depth,
+    size_t *byte_offset,
+    size_t *bit_offset) {
+    const MinicExpression *address;
+    const MinicExpression *parent;
+    const MinicRecord *record;
+    const MinicRecordField *field;
+    size_t parent_offset = 0U;
+    size_t local_offset;
+
+    if (program == NULL || layout == NULL || member == NULL ||
+        member->kind != MINIC_EXPRESSION_MEMBER ||
+        byte_offset == NULL || bit_offset == NULL || depth > 8U) {
+        return false;
+    }
+    address = minic_c0_program_expression(program, member->value.member.base);
+    parent = address != NULL && address->kind == MINIC_EXPRESSION_ADDRESS_OF
+                 ? minic_c0_program_expression(program, address->value.unary.operand)
+                 : NULL;
+    if (parent == NULL) {
+        return false;
+    }
+    if (parent->kind == MINIC_EXPRESSION_LOCAL) {
+        if (parent->value.local_id != root_local) {
+            return false;
+        }
+    } else if (parent->kind == MINIC_EXPRESSION_MEMBER) {
+        size_t parent_bit_offset;
+        if (!core_cfg_compound_member_layout(program, layout, parent, root_local,
+                                             depth + 1U, &parent_offset,
+                                             &parent_bit_offset) ||
+            parent_bit_offset != 0U) {
+            return false;
+        }
+    } else {
+        return false;
+    }
+    record = minic_c0_program_record(program, member->value.member.record_id);
+    field = minic_c0_record_field(record, member->value.member.field_index);
+    if (field == NULL ||
+        !minic_data_layout_record_field_layout(
+            layout, program, record, member->value.member.field_index,
+            &local_offset, bit_offset) ||
+        local_offset > SIZE_MAX - parent_offset) {
+        return false;
+    }
+    *byte_offset = parent_offset + local_offset;
+    return true;
+}
+
+/* GNU-style aggregate layout tests inspect bytes of a constant record
+ * compound literal.  Build a bounded, bit-accurate image from its frontend
+ * initializer assignments: unknown padding is never treated as constant.
+ * Only the target's explicit little-endian DataLayout and assignments to
+ * members of this exact compound-literal local are admitted. */
+static bool core_cfg_const_record_compound_read(
+    const MinicCoreLowerContext *context,
+    const MinicExpression *compound,
+    const MinicExpression *subscript,
+    const MinicConstValue *index,
+    MinicConstValue *result) {
+    enum { MAX_CONST_RECORD_BYTES = 256 };
+    unsigned char bytes[MAX_CONST_RECORD_BYTES] = {0};
+    unsigned char known[MAX_CONST_RECORD_BYTES] = {0};
+    const MinicC0Program *program;
+    const MinicDataLayout *layout;
+    const MinicBlock *initializer;
+    const MinicRecord *record;
+    size_t record_size;
+    size_t element_size;
+    size_t read_offset;
+    size_t i;
+    uint64_t read_bits = 0U;
+
+    if (context == NULL || context->body == NULL ||
+        context->body->program == NULL || context->target == NULL ||
+        compound == NULL || subscript == NULL || index == NULL || result == NULL ||
+        compound->kind != MINIC_EXPRESSION_COMPOUND_LITERAL ||
+        !minic_type_is_record(compound->type) ||
+        !minic_type_is_integer(subscript->type) ||
+        minic_type_is_volatile(subscript->type)) {
+        return false;
+    }
+    program = context->body->program;
+    layout = minic_target_info_data_layout(context->target);
+    if (layout == NULL || layout->byte_order != MINIC_BYTE_ORDER_LITTLE ||
+        !minic_target_info_sizeof_type(context->target, program, compound->type,
+                                       &record_size) ||
+        record_size == 0U || record_size > MAX_CONST_RECORD_BYTES ||
+        !minic_target_info_sizeof_type(context->target, program, subscript->type,
+                                       &element_size) ||
+        element_size == 0U || element_size > sizeof(read_bits) ||
+        element_size > record_size ||
+        index->bits > (record_size - element_size) / element_size) {
+        return false;
+    }
+    read_offset = (size_t)index->bits * element_size;
+    record = minic_c0_program_record(program, compound->type.record_id);
+    initializer = minic_c0_program_block(
+        program, compound->value.compound_literal.initializer_block);
+    if (record == NULL || initializer == NULL ||
+        initializer->statement_count > 2U * MAX_CONST_RECORD_BYTES) {
+        return false;
+    }
+
+    for (i = 0U; i < initializer->statement_count; ++i) {
+        const MinicStatement *statement = minic_c0_program_statement(
+            program, initializer->statements[i]);
+        const MinicExpression *target;
+        const MinicRecordField *field;
+        const MinicRecord *field_record;
+        MinicConstValue constant;
+        MinicConstValue converted;
+        size_t byte_offset;
+        size_t bit_offset;
+        size_t width;
+        size_t bit;
+
+        if (statement == NULL || statement->kind != MINIC_STATEMENT_ASSIGN ||
+            statement->target_expression == MINIC_EXPRESSION_INVALID ||
+            statement->expression == MINIC_EXPRESSION_INVALID) {
+            return false;
+        }
+        target = minic_c0_program_expression(program, statement->target_expression);
+        if (target == NULL || target->kind != MINIC_EXPRESSION_MEMBER) {
+            return false;
+        }
+        field_record = minic_c0_program_record(program, target->value.member.record_id);
+        field = minic_c0_record_field(field_record, target->value.member.field_index);
+        if (field == NULL || !minic_type_is_integer(target->type) ||
+            !core_const_eval_integer_with_locals(context, statement->expression,
+                                                 &constant) ||
+            !minic_const_value_convert_integer(program, context->target,
+                                               &constant, target->type, &converted) ||
+            !core_cfg_compound_member_layout(
+                program, layout, target,
+                compound->value.compound_literal.local_id, 0U,
+                &byte_offset, &bit_offset) || byte_offset >= record_size) {
+            return false;
+        }
+        if (field->is_bit_field) {
+            width = field->bit_width;
+            if (width == 0U || width > 64U ||
+                bit_offset > record_size * 8U - byte_offset * 8U ||
+                width > record_size * 8U - byte_offset * 8U - bit_offset) {
+                return false;
+            }
+            for (bit = 0U; bit < width; ++bit) {
+                size_t position = bit_offset + bit;
+                size_t offset = byte_offset + position / 8U;
+                unsigned char mask = (unsigned char)(1U << (position % 8U));
+                known[offset] |= mask;
+                if (((converted.bits >> bit) & UINT64_C(1)) != 0U) {
+                    bytes[offset] |= mask;
+                } else {
+                    bytes[offset] &= (unsigned char)~mask;
+                }
+            }
+        } else {
+            if (!minic_target_info_sizeof_type(context->target, program,
+                                               target->type, &width) ||
+                width == 0U || width > 8U ||
+                width > record_size - byte_offset) {
+                return false;
+            }
+            for (bit = 0U; bit < width; ++bit) {
+                known[byte_offset + bit] = 0xffU;
+                bytes[byte_offset + bit] =
+                    (unsigned char)(converted.bits >> (8U * bit));
+            }
+        }
+    }
+    for (i = 0U; i < element_size; ++i) {
+        if (known[read_offset + i] != 0xffU) {
+            return false;
+        }
+        read_bits |= (uint64_t)bytes[read_offset + i] << (8U * i);
+    }
+    result->type = subscript->type;
+    result->bits = read_bits;
+    return true;
+}
+
 /* A deliberately one-sided bit analysis for Linux's BUILD_BUG_ON masks.
  * It tracks which bits MAY be one, never which bits must be one.  A conditional
  * whose alternatives are 0 and BIT(n), for example, can carry only BIT(n)
@@ -948,6 +1257,7 @@ bool core_const_eval_integer_with_locals(const MinicCoreLowerContext *context,
         MinicConstValue element_value;
         MinicExpressionId base_id;
         unsigned int unwrap_depth;
+        bool compound_provenance = true;
 
         if (read->kind == MINIC_EXPRESSION_LVALUE_READ) {
             read = minic_c0_program_expression(
@@ -960,14 +1270,38 @@ bool core_const_eval_integer_with_locals(const MinicCoreLowerContext *context,
             for (unwrap_depth = 0U; base != NULL && unwrap_depth < 8U; ++unwrap_depth) {
                 if (base->kind == MINIC_EXPRESSION_CAST ||
                     base->kind == MINIC_EXPRESSION_BITCAST ||
-                    base->kind == MINIC_EXPRESSION_CONVERSION ||
-                    base->kind == MINIC_EXPRESSION_LVALUE_READ ||
+                    base->kind == MINIC_EXPRESSION_CONVERSION) {
+                    const MinicExpression *operand = minic_c0_program_expression(
+                        context->body->program, base->value.unary.operand);
+                    if (operand == NULL || !minic_type_is_pointer(base->type) ||
+                        !minic_type_is_pointer(operand->type)) {
+                        compound_provenance = false;
+                    }
+                    base_id = base->value.unary.operand;
+                    base = operand;
+                    continue;
+                }
+                if (base->kind == MINIC_EXPRESSION_LVALUE_READ ||
                     base->kind == MINIC_EXPRESSION_ADDRESS_OF) {
+                    if (base->kind == MINIC_EXPRESSION_LVALUE_READ) {
+                        compound_provenance = false;
+                    }
                     base_id = base->value.unary.operand;
                     base = minic_c0_program_expression(context->body->program, base_id);
                     continue;
                 }
                 break;
+            }
+            if (compound_provenance && base != NULL &&
+                base->kind == MINIC_EXPRESSION_COMPOUND_LITERAL &&
+                core_const_eval_integer_with_locals(
+                    context, subscript->value.subscript.index, &index_value) &&
+                core_cfg_const_record_compound_read(
+                    context, base, subscript, &index_value, &element_value) &&
+                minic_const_value_convert_integer(context->body->program,
+                                                  context->target, &element_value,
+                                                  expression->type, value)) {
+                return true;
             }
             if (base != NULL && base->kind == MINIC_EXPRESSION_GLOBAL_OBJECT &&
                 core_const_eval_integer_with_locals(
@@ -1371,6 +1705,8 @@ statement_expression_done:
             context->body->program, expression->value.binary.right);
         uint64_t left_bits;
         uint64_t right_bits;
+        MinicCoreGlobalAddressFact left_global;
+        MinicCoreGlobalAddressFact right_global;
         MinicFunctionId left_function;
         MinicFunctionId right_function;
         bool predicate;
@@ -1385,6 +1721,39 @@ statement_expression_done:
             predicate = left_function == right_function;
             if (expression->value.binary.operator_kind == MINIC_BINARY_NOT_EQUAL) {
                 predicate = !predicate;
+            }
+            value->type = expression->type;
+            value->bits = predicate ? 1U : 0U;
+            return true;
+        }
+        if (left != NULL && right != NULL &&
+            minic_type_is_pointer(left->type) && minic_type_is_pointer(right->type) &&
+            minic_type_equal(left->type, right->type) &&
+            core_cfg_global_address_fact(context,
+                expression->value.binary.left, 0U, &left_global) &&
+            core_cfg_global_address_fact(context,
+                expression->value.binary.right, 0U, &right_global) &&
+            left_global.object_id == right_global.object_id) {
+            switch (expression->value.binary.operator_kind) {
+            case MINIC_BINARY_EQUAL:
+                predicate = left_global.byte_offset == right_global.byte_offset;
+                break;
+            case MINIC_BINARY_NOT_EQUAL:
+                predicate = left_global.byte_offset != right_global.byte_offset;
+                break;
+            case MINIC_BINARY_LESS:
+                predicate = left_global.byte_offset < right_global.byte_offset;
+                break;
+            case MINIC_BINARY_LESS_EQUAL:
+                predicate = left_global.byte_offset <= right_global.byte_offset;
+                break;
+            case MINIC_BINARY_GREATER:
+                predicate = left_global.byte_offset > right_global.byte_offset;
+                break;
+            case MINIC_BINARY_GREATER_EQUAL:
+                predicate = left_global.byte_offset >= right_global.byte_offset;
+                break;
+            default: return false;
             }
             value->type = expression->type;
             value->bits = predicate ? 1U : 0U;

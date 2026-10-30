@@ -175,20 +175,24 @@ static bool loong_emit_scalar_store(FILE *out, size_t width,
     if (width == 1U || proven_aligned)
         return fprintf(out, "  %s %s, %s, 0\n", op,
                        value_reg, address_reg) >= 0;
+    /* Preserve the original payload register while emitting the first byte
+     * directly.  The slow path needs only the shifted upper bytes in its
+     * scratch register, so copying the entire value first is redundant. */
     label = serial++;
     if (fprintf(out,
             "  andi %s, %s, %zu\n"
-            "  beqz %s, .Lloong_store_native_%zu\n"
-            "  move %s, %s\n",
+            "  beqz %s, .Lloong_store_native_%zu\n",
             scratch_reg, address_reg, width - 1U,
-            scratch_reg, label, scratch_reg, value_reg) < 0)
+            scratch_reg, label) < 0)
         return false;
     for (i = 0U; i < width; ++i) {
         if (fprintf(out, "  st.b %s, %s, %zu\n",
-                    scratch_reg, address_reg, i) < 0 ||
+                    i == 0U ? value_reg : scratch_reg,
+                    address_reg, i) < 0 ||
             (i + 1U < width &&
              fprintf(out, "  srli.d %s, %s, 8\n",
-                     scratch_reg, scratch_reg) < 0)) return false;
+                     scratch_reg,
+                     i == 0U ? value_reg : scratch_reg) < 0)) return false;
     }
     return fprintf(out,
             "  b .Lloong_store_done_%zu\n"
@@ -231,6 +235,27 @@ static bool emit_integer_memory(FILE *out, bool store,
     if (op == NULL) return false;
     if (width == 1U || atomic || proven_aligned)
         return fputs(op, out) != EOF;
+    /* The two-byte unaligned case needs only two byte loads, a shift and
+     * an OR.  Keep the aligned native instruction as the fast path, but
+     * avoid the generic counted gather loop (counter, shift-count register
+     * and loop branch) for a fixed two-byte payload.  Both signed and
+     * unsigned halfword results retain the exact GNU extension semantics. */
+    if (width == 2U) {
+        if (fputs("  andi $t3, $t1, 1\n"
+                  "  bnez $t3, 1f\n", out) == EOF ||
+            fputs(op, out) == EOF ||
+            fputs("  b 2f\n"
+                  "1:\n"
+                  "  ld.bu $t0, $t1, 0\n"
+                  "  ld.bu $t2, $t1, 1\n"
+                  "  slli.d $t2, $t2, 8\n"
+                  "  or $t0, $t0, $t2\n", out) == EOF ||
+            (sign && fputs("  slli.d $t0, $t0, 48\n"
+                           "  srai.d $t0, $t0, 48\n", out) == EOF) ||
+            fputs("2:\n", out) == EOF)
+            return false;
+        return true;
+    }
     if (fprintf(out, "  andi $t3, $t1, %zu\n"
                      "  bnez $t3, 1f\n", width - 1U) < 0 ||
         fputs(op, out) == EOF ||

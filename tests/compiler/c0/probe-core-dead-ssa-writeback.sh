@@ -17,9 +17,12 @@ awk '/^dead_add:$/ {inside=1} inside {print} /^\.size dead_add,/ {exit}' \
 awk '/^live_store:$/ {inside=1} inside {print} /^\.size live_store,/ {exit}' \
     "$work/loong.s" > "$work/live.s"
 grep -Fq '  add.d $t0, $t0, $t1' "$work/dead.s" || fail 'dead ALU instruction missing'
-grep -Fq '  xor $t0, $t0, $t1' "$work/dead.s" || fail 'dead XOR instruction missing'
+grep -Eq '^  (xor \$t0, \$t0, \$t1|xori \$t0, \$t0, 17)$' "$work/dead.s" ||
+    fail 'dead XOR instruction missing'
 awk '
-    /  add\.d \$t0, \$t0, \$t1$/ || /  xor \$t0, \$t0, \$t1$/ {
+    /  add\.d \$t0, \$t0, \$t1$/ ||
+    /  xor \$t0, \$t0, \$t1$/ ||
+    /  xori \$t0, \$t0, 17$/ {
         if (getline <= 0 || $0 ~ /^  st\.[wd] \$t0, /) exit 1
         seen++
     }

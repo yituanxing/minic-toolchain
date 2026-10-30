@@ -2,6 +2,7 @@
 #include "core/reentry_index.h"
 #include "core/source_loop_shapes.h"
 #include "core/local_facts.h"
+#include "core/cfg_constant_calls.h"
 #include "frontend/const_eval.h"
 #include "frontend/expression_semantics.h"
 #include <inttypes.h>
@@ -811,7 +812,28 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
         label_count += 1U;
     }
 
-    status = lower_expression(context, statement->expression, &selector_source);
+    /* A proven pure constant-return inline helper has no selector-side
+     * effects.  Do not emit its call before the CFG constant-dispatch pass:
+     * CONFIG-disabled Linux helpers otherwise leave dead references behind.
+     * Non-pure selectors always retain their ordinary evaluation path. */
+    {
+        MinicConstValue constant;
+        MinicConstValue converted;
+        if (minic_core_cfg_pure_call_argument(
+                context, statement->expression, 0U) &&
+            core_const_eval_integer_with_locals(context, statement->expression, &constant) &&
+            minic_const_value_convert_integer(context->body->program,
+                                              context->target,
+                                              &constant,
+                                              selector_type,
+                                              &converted)) {
+            status = append_switch_integer_constant(
+                context, selector_expression->span, selector_type,
+                (int64_t)converted.bits, &selector_source);
+        } else {
+            status = lower_expression(context, statement->expression, &selector_source);
+        }
+    }
     if (status != MINIC_CORE_LOWER_OK) {
         return status;
     }
