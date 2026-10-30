@@ -1,6 +1,12 @@
 name: MiniAS Focused, Frozen Window and 3536 Semantic Oracles
 
 on:
+  # Opt-in exact-head Linux single-variable certification. Ordinary MiniAS
+  # pushes must never launch a two-hour kernel build by accident.
+  push:
+    branches: [refactor/minias-target-isa-abi-core]
+    paths:
+      - '.github/workflows/minias-a0-focused-diagnostics-v1.yml'
   workflow_call:
     inputs:
       mode:
@@ -1266,7 +1272,7 @@ jobs:
   linux-single:
     env:
       MINIAS_INTEGRATED_MODE: ${{ inputs.mode == 'linux-integrated' }}
-    if: (github.event_name == 'workflow_dispatch' || github.event_name == 'push') && (inputs.mode == 'linux-single' || inputs.mode == 'linux-integrated')
+    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'linux-single' || inputs.mode == 'linux-integrated')) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[minias-linux-gcc-single]'))
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
