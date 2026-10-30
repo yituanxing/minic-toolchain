@@ -58,21 +58,28 @@ def command_owners(kbuild_out: Path, compiler: str, assembler: str) -> dict[Path
                             any(name.endswith("-as") for name in executables)))
             if not (produces_cc or produces_as):
                 continue
-            # x86's native target CC and HOSTCC can both be named `gcc`.
-            # Kbuild's host-only utility directories are not kernel objects
-            # and intentionally use the system compiler/assembler. All other
-            # target CC commands remain in scope, even if their required -B
-            # wrapper selection was accidentally dropped.
-            if compiler_name == "gcc" and owner.startswith(HOST_OWNER_PREFIXES):
-                continue
             # Kbuild's object-owner metadata is a stronger source of truth
             # than looking for arbitrary .o files, many of which GNU LD/AR
             # produce without any assembler invocation.
             obj = (kbuild_out / owner).resolve()
             try:
-                obj.relative_to(kbuild_out)
+                relative_owner = obj.relative_to(kbuild_out).as_posix()
             except ValueError as exc:
                 raise ValueError(f"Kbuild owner escapes build root: {owner}") from exc
+            # x86's native target CC and HOSTCC can both be named `gcc`.
+            # The savedcmd owner can be absolute or start with `./`, while
+            # the normalized object path is under `tools/objtool/`. Test the
+            # validated, relative *destination*, not raw savedcmd spelling.
+            # Exclude only native host C compilation without an assembler
+            # override. A target command using `-B` in even a host directory
+            # must still be covered by the MiniAS trace.
+            host_c_compile = (compiler_name == "gcc" and produces_cc and
+                              not produces_as and
+                              relative_owner.startswith(HOST_OWNER_PREFIXES) and
+                              not any(token == "-B" or token.startswith("-B")
+                                      for token in tokens))
+            if host_c_compile:
+                continue
             old = expected.get(obj)
             if old is not None and old != cmdfile:
                 raise ValueError(f"duplicate object owner: {obj}: {old}, {cmdfile}")

@@ -151,6 +151,51 @@ class ProvenanceTest(unittest.TestCase):
                                                 "gcc", "as", 1, "x86_64")
         self.assertEqual((expected, passed), (1, 1))
 
+    def test_native_x86_objtool_absolute_savedcmd_owner_is_host(self) -> None:
+        self.object("tools/objtool/arch/x86/decode.o",
+                    "gcc -O2 -c -o tools/objtool/arch/x86/decode.o decode.c")
+        cmd = self.out / "tools/objtool/arch/x86/.decode.o.cmd"
+        cmd.write_text(cmd.read_text().replace(
+            "savedcmd_tools/objtool/arch/x86/decode.o :=",
+            f"savedcmd_{self.out}/tools/objtool/arch/x86/decode.o :=",
+        ))
+        self.object("arch/x86/kernel/head.o",
+                    "gcc -B/tmp/asm-bin/ -c -o arch/x86/kernel/head.o head.S")
+        self.trace.write_text(
+            f"assemble cwd={self.out} input=head.s output=arch/x86/kernel/head.o\n"
+            f"pass cwd={self.out} input=head.s output=arch/x86/kernel/head.o\n"
+        )
+        expected, passed, _ = PROVENANCE.verify(self.out, self.trace,
+                                                "gcc", "as", 1, "x86_64")
+        self.assertEqual((expected, passed), (1, 1))
+
+    def test_native_x86_objtool_dot_slash_savedcmd_owner_is_host(self) -> None:
+        self.object("tools/objtool/check.o",
+                    "gcc -c -o tools/objtool/check.o check.c")
+        cmd = self.out / "tools/objtool/.check.o.cmd"
+        cmd.write_text(cmd.read_text().replace(
+            "savedcmd_tools/objtool/check.o :=",
+            "savedcmd_./tools/objtool/check.o :=",
+        ))
+        self.trace.write_text("delegate-query --version\n")
+        expected, _, _ = PROVENANCE.verify(self.out, self.trace,
+                                            "gcc", "as", 0, "x86_64")
+        self.assertEqual(expected, 0)
+
+    def test_x86_objtool_target_cc_redirect_must_have_trace(self) -> None:
+        self.object("tools/objtool/target.o",
+                    "gcc -B/tmp/asm-bin/ -c -o tools/objtool/target.o target.c")
+        self.trace.write_text("delegate-query --version\n")
+        with self.assertRaisesRegex(ValueError, "bypassed MiniAS"):
+            PROVENANCE.verify(self.out, self.trace, "gcc", "as", 1, "x86_64")
+
+    def test_x86_objtool_direct_as_must_have_trace(self) -> None:
+        self.object("tools/objtool/native-asm.o",
+                    "as -o tools/objtool/native-asm.o native-asm.s")
+        self.trace.write_text("delegate-query --version\n")
+        with self.assertRaisesRegex(ValueError, "bypassed MiniAS"):
+            PROVENANCE.verify(self.out, self.trace, "gcc", "as", 1, "x86_64")
+
     def test_native_x86_target_cc_without_wrapper_is_detected(self) -> None:
         self.object("kernel/workqueue.o",
                     "gcc -c -o kernel/workqueue.o workqueue.c")

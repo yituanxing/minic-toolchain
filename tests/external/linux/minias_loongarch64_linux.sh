@@ -191,6 +191,14 @@ make -C "$kernel_src" O="$kernel_out" ARCH=loongarch \
 grep -qx 'CONFIG_EFI_STUB=y' "$kernel_out/.config"
 grep -qx 'CONFIG_EFI_ZBOOT=y' "$kernel_out/.config"
 
+# Snapshot the actual resolved Kconfig, independently of which assembler
+# subsequently handles Kbuild .s units. This digest is compared with a GNU
+# control from the same commit by the workflow's matched-config gate.
+config_sha256=$(sha256sum "$kernel_out/.config")
+printf '%s\n' "${config_sha256%% *}" >"$work/kernel-config.sha256"
+printf 'MINIAS_LINUX_KCONFIG_SHA256 arch=loongarch64 backend=%s sha256=%s\n' \
+  "$as_backend" "${config_sha256%% *}"
+
 started=$(date +%s)
 if ! make -C "$kernel_src" O="$kernel_out" ARCH=loongarch \
     CROSS_COMPILE=loongarch64-linux-gnu- \
@@ -210,6 +218,10 @@ if ! make -C "$kernel_src" O="$kernel_out" ARCH=loongarch \
 fi
 
 test -s "$image"
+if [[ $(sha256sum "$kernel_out/.config") != "$config_sha256" ]]; then
+  echo 'MINIAS_LINUX_FOURARCH=ERROR arch=loongarch64 kconfig_changed_during_kbuild' >&2
+  exit 1
+fi
 sha256sum "$image" >"$work/evidence/vmlinuz.efi.sha256"
 if [[ $as_backend == minias ]]; then
   passed=$(grep -c '^pass ' "$trace" || true)

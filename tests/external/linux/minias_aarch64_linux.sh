@@ -81,6 +81,36 @@ for ((i=0; i<${#args[@]}; ++i)); do
     *) if [[ -f $arg ]]; then input=$arg; fi ;;
   esac
 done
+
+# Both paths intercept this *exact* real GCC-generated entry.o assembly input.
+# The GNU lane delegates unchanged bytes/flags to actual GNU GAS, whereas the
+# MiniAS lane hands the same input to MiniAS. This is a targeted source
+# provenance oracle, not a claim about all remaining Kbuild objects.
+capture_entry_source() {
+  if [[ $out != arch/arm64/kernel/entry.o && $out != */arch/arm64/kernel/entry.o ]]; then
+    return 0
+  fi
+  if [[ ! -f $input ]]; then
+    printf 'MINIAS_AARCH64_INPUT_PROVENANCE=FAIL entry.o missing_input=%q\n' "$input" >&2
+    exit 2
+  fi
+  mkdir -p "${MINIAS_ENTRY_INPUT_DIR:?}"
+  cp -- "$input" "$MINIAS_ENTRY_INPUT_DIR/entry.o.s"
+  sha256sum "$MINIAS_ENTRY_INPUT_DIR/entry.o.s" | cut -d' ' -f1 \
+    >"$MINIAS_ENTRY_INPUT_DIR/entry.o.s.sha256"
+  printf 'MINIAS_AARCH64_INPUT_PROVENANCE=CAPTURED backend=%s output=%q sha256=%s\n' \
+    "${MINIAS_AS_BACKEND:?}" "$out" "$(<"$MINIAS_ENTRY_INPUT_DIR/entry.o.s.sha256")" \
+    >>"${MINIAS_AS_TRACE:?}"
+}
+
+# This transparent GNU control wrapper must never execute MiniAS. We give
+# GCC the same -B search-path shape as the MiniAS lane so capability probes
+# encounter a real GNU assembler, and capture entry.o without changing the
+# content of the assembler's argv or its original input file.
+if [[ ${MINIAS_AS_BACKEND:?} == gnu ]]; then
+  capture_entry_source
+  exec "${REAL_AS:?}" "$@"
+fi
 if ((query)); then
   if [[ -n $out || -n $input ]]; then
     # GCC's Kconfig AS capability probe passes `--version` alongside an actual
@@ -105,6 +135,7 @@ if [[ -z $out || -z $input ]]; then
   echo "MINIAS_AS_WRAPPER_ERROR missing_io output=$out input=$input" >&2
   exit 2
 fi
+capture_entry_source
 printf 'assemble cwd=%q input=%q output=%q\n' "$PWD" "$input" "$out" >>"$MINIAS_AS_TRACE"
 if "$MINIAS" "${options[@]}" -o "$out" "$input"; then
   # Kconfig can intentionally assemble to /dev/null; those invocations are
@@ -170,6 +201,14 @@ make -C "$src" O="$out" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- defconfig
   -e PROC_FS -e SYSFS -e TMPFS -e IPV6 -e IO_URING
 make -C "$src" O="$out" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
 
+# Record the resolved *real Kbuild* configuration for a same-commit GNU/MiniAS
+# control. Defconfig names alone do not guarantee that the two production
+# builds had identical kernel features.
+config_sha256=$(sha256sum "$out/.config")
+printf '%s\n' "${config_sha256%% *}" >"$work/kernel-config.sha256"
+printf 'MINIAS_LINUX_KCONFIG_SHA256 arch=aarch64 backend=%s sha256=%s\n' \
+  "$as_backend" "${config_sha256%% *}"
+
 export MINIAS="$minias"
 export MINIAS_AS_TRACE="$trace"
 export MINIAS_FAILURE_DIR="$work/failure-inputs"
@@ -177,13 +216,14 @@ export REAL_AS=/usr/bin/aarch64-linux-gnu-as
 export MINIAS_KBUILD_OUT="$out"
 export MINIAS_GNU_OBJECT_DIR="$gnu_objects"
 export MINIAS_GNU_SOURCE_DIR="$work/asm-sources"
+export MINIAS_AS_BACKEND="$as_backend"
+export MINIAS_ENTRY_INPUT_DIR="$work/evidence"
 : >"$trace"
-build_cc="$cc"
-build_as=$(command -v aarch64-linux-gnu-as)
-if [[ $as_backend == minias ]]; then
-  build_cc="$cc -B$bindir/"
-  build_as="$bindir/aarch64-linux-gnu-as"
-fi
+# The wrapper delegates to GNU as verbatim in the GNU control. Both lanes
+# therefore use the exact same GCC -B search-path policy; only the assembler
+# engine differs, and only the AArch64 entry.o source is captured and hashed.
+build_cc="$cc -B$bindir/"
+build_as="$bindir/aarch64-linux-gnu-as"
 start=$(date +%s)
 printf 'MINIAS_AARCH64_STAGE=KBUILD_START epoch=%s\n' "$start"
 # Keep long GNU Kbuild stages observable without changing the production
@@ -225,6 +265,10 @@ fi
 stop_progress_monitor
 printf 'MINIAS_AARCH64_STAGE=KBUILD_END elapsed_s=%s\n' \
   "$(( $(date +%s) - start ))"
+if [[ $(sha256sum "$out/.config") != "$config_sha256" ]]; then
+  echo 'MINIAS_LINUX_FOURARCH_ERROR arch=aarch64 kconfig_changed_during_kbuild' >&2
+  exit 1
+fi
 test -s "$image"
 sha256sum "$image" >"$work/Image.sha256"
 file "$image"
