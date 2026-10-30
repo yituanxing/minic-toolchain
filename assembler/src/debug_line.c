@@ -149,6 +149,7 @@ static bool parse_loc(MiniAs *as,const char *args,size_t source_line) {
     MiniAsDebugLoc loc;
     size_t symbol;
     memset(&loc,0,sizeof(loc));
+    loc.view_symbol_index=SIZE_MAX;
     if(!copy)return false;
     part=debug_next_token(&cursor);
     if(!debug_unsigned(part,&loc.file) || loc.file==0U ||
@@ -181,7 +182,18 @@ static bool parse_loc(MiniAs *as,const char *args,size_t source_line) {
             if(part==NULL || loc.view_mode!=0U)goto bad;
             if(!strcmp(part,"0"))loc.view_mode=1U;
             else if(!strcmp(part,"-0"))loc.view_mode=2U;
-            else goto bad;
+            else {
+                size_t k;
+                MiniAsSymbol *view_symbol;
+                if(!minias_expr_symbol_start(part[0]))goto bad;
+                for(k=1U;part[k];++k)
+                    if(!minias_expr_symbol_continue(part[k]))goto bad;
+                view_symbol=minias_get_symbol(as,part,true);
+                if(view_symbol==NULL || view_symbol->defined ||
+                   view_symbol->alias_pending)goto bad;
+                loc.view_symbol_index=(size_t)(view_symbol-as->symbols);
+                loc.view_mode=3U;
+            }
         }else goto bad;
         part=debug_next_token(&cursor);
     }
@@ -192,6 +204,31 @@ static bool parse_loc(MiniAs *as,const char *args,size_t source_line) {
                    as->debug_loc_count+1U,sizeof(*as->debug_locs)) ||
        !minias_anchor_here(as,&symbol))goto bad;
     loc.symbol_index=symbol;
+    {
+        const MiniAsSymbol *here=&as->symbols[symbol];
+        size_t i=as->debug_loc_count;
+        /* The parse-time value is a provisional absolute symbol usable by
+         * expressions in subsequent debug sections. Final MCLayout owns the
+         * actual ordinal, as instruction lengths can relax. */
+        while(i!=0U) {
+            const MiniAsDebugLoc *previous=&as->debug_locs[--i];
+            const MiniAsSymbol *anchor=&as->symbols[previous->symbol_index];
+            if(anchor->section==here->section &&
+               anchor->subsection==here->subsection &&
+               anchor->value==here->value) {
+                loc.view_number=previous->view_number+1U;
+                break;
+            }
+        }
+        if(loc.view_mode==2U)loc.view_number=0U;
+        if(loc.view_symbol_index!=SIZE_MAX) {
+            MiniAsSymbol *view=&as->symbols[loc.view_symbol_index];
+            view->section=MINIAS_SECTION_ABS;
+            view->subsection=0U;
+            view->value=loc.view_number;
+            view->defined=true;
+        }
+    }
     as->debug_locs[as->debug_loc_count++]=loc;
     as->debug_is_stmt=loc.is_stmt;
     free(copy);return true;
@@ -280,6 +317,7 @@ static bool set_address(MiniAs *as,int sec,size_t symbol_index,
 typedef struct MiniAsDebugLocOrder {
     int section;
     uint64_t offset;
+    uint32_t subsection;
     size_t ordinal;
 } MiniAsDebugLocOrder;
 
@@ -287,7 +325,77 @@ static int compare_loc(const void *lhs,const void *rhs) {
     const MiniAsDebugLocOrder *a=lhs,*b=rhs;
     if(a->section!=b->section)return a->section<b->section?-1:1;
     if(a->offset!=b->offset)return a->offset<b->offset?-1:1;
+    /* GNU concatenates numbered subsections before emitting line rows;
+     * two zero-width anchors at the boundary follow subsection ownership,
+     * not the interleaved source order of `.subsection` directives. */
+    if(a->subsection!=b->subsection)
+        return a->subsection<b->subsection?-1:1;
     return a->ordinal<b->ordinal?-1:a->ordinal>b->ordinal?1:0;
+}
+/* GNU GAS view labels are real absolute expressions, often referenced by
+ * `.uleb128 .LVU2-.LVU1` in GCC's DWARF location lists. Their values are
+ * computed from finalized section positions, not from source line numbers.
+ * Keeping the relationship to an anchored .loc event makes branch growth
+ * and subsection placement observable in the resulting symbol difference. */
+bool minias_debug_resolve_views(MiniAs *as,bool strict) {
+    MiniAsDebugLocOrder *order;
+    size_t i;
+    uint64_t previous_view=0U;
+    if(as->debug_loc_count==0U)return true;
+    if(as->debug_loc_count>SIZE_MAX/sizeof(*order)) {
+        minias_set_error(as,"dwarf-view-order-overflow");
+        return false;
+    }
+    order=malloc(as->debug_loc_count*sizeof(*order));
+    if(order==NULL) {
+        minias_set_error(as,"out-of-memory:dwarf-view-order");
+        return false;
+    }
+    for(i=0U;i<as->debug_loc_count;++i) {
+        const size_t symbol=as->debug_locs[i].symbol_index;
+        if(symbol>=as->symbol_count || !as->symbols[symbol].defined ||
+           as->symbols[symbol].section<0 ||
+           (size_t)as->symbols[symbol].section>=as->section_count) {
+            minias_set_error(as,"dwarf-line-invalid-anchor:%zu",i);
+            free(order);return false;
+        }
+        order[i].section=as->symbols[symbol].section;
+        order[i].offset=as->symbols[symbol].value;
+        order[i].subsection=as->symbols[symbol].subsection;
+        order[i].ordinal=i;
+    }
+    qsort(order,as->debug_loc_count,sizeof(*order),compare_loc);
+    for(i=0U;i<as->debug_loc_count;++i) {
+        MiniAsDebugLoc *loc=&as->debug_locs[order[i].ordinal];
+        const bool shared_pc=i!=0U &&
+            order[i].section==order[i-1U].section &&
+            order[i].offset==order[i-1U].offset;
+        const uint64_t view=(shared_pc && loc->view_mode!=2U)
+            ? previous_view+1U : 0U;
+        if(view<previous_view && shared_pc && loc->view_mode!=2U) {
+            minias_set_error(as,"dwarf-view-overflow");
+            free(order);return false;
+        }
+        if(strict && loc->view_mode==1U && view!=0U) {
+            minias_set_error(as,"dwarf-view-number-mismatch");
+            free(order);return false;
+        }
+        loc->view_number=view;
+        if(loc->view_symbol_index!=SIZE_MAX) {
+            MiniAsSymbol *sym;
+            if(loc->view_symbol_index>=as->symbol_count) {
+                minias_set_error(as,"dwarf-view-invalid-symbol");
+                free(order);return false;
+            }
+            sym=&as->symbols[loc->view_symbol_index];
+            sym->section=MINIAS_SECTION_ABS;
+            sym->value=view;
+            sym->defined=true;
+        }
+        previous_view=view;
+    }
+    free(order);
+    return true;
 }
 /* GNU GAS records each directory once and refers to it by a 1-based index
  * from the file table. Keep the original file paths owned by MiniAs and
@@ -355,6 +463,7 @@ bool minias_debug_emit(MiniAs *as) {
     int sec;
     unsigned address_width=as->output_elf32?4U:8U;
     if(as->debug_loc_count==0U)return true;
+    if(!minias_debug_resolve_views(as,true))return false;
     for(i=1U;i<=as->debug_file_max;++i)
         if(as->debug_files[i]==NULL) {
             minias_set_error(as,"missing-dwarf-file-index:%zu",i);
@@ -388,6 +497,7 @@ bool minias_debug_emit(MiniAs *as) {
         }
         order[i].section=as->symbols[symbol].section;
         order[i].offset=as->symbols[symbol].value;
+        order[i].subsection=as->symbols[symbol].subsection;
         order[i].ordinal=i;
     }
     qsort(order,as->debug_loc_count,sizeof(*order),compare_loc);

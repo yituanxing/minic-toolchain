@@ -1312,7 +1312,6 @@ for bad in            'popcntq %eax,%rax' \
            'shrl %rax' \
            'btq %eax, (%rdi)' \
            'xaddl %rax, (%rdi)' \
-           'movl %ds:pcpu_hot(%rip), %eax' \
            'movq %gs:bogus(%r8,%r9,5), %rax'; do
     printf '.text\n%s\n' "$bad" >"$work/invalid-mem.s"
     if "$MINIAS" --target=x86_64 -o "$work/bad-mem.o" \
@@ -1321,6 +1320,18 @@ for bad in            'popcntq %eax,%rax' \
         exit 1
     fi
 done
+# GNU GAS accepts explicit DS for RIP-relative memory and canonicalizes it
+# to the implicit default segment: the object must not emit a redundant 3E
+# prefix. Treat this as a positive GNU oracle rather than an invalid form.
+printf '.text\nmovl %%ds:pcpu_hot(%%rip), %%eax\n' >"$work/x86-ds-rip.s"
+"$MINIAS" --target=x86_64 -o "$work/x86-ds-rip-mini.o" "$work/x86-ds-rip.s"
+as --64 -o "$work/x86-ds-rip-gnu.o" "$work/x86-ds-rip.s"
+objcopy -j .text -O binary "$work/x86-ds-rip-mini.o" "$work/x86-ds-rip-mini.bin"
+objcopy -j .text -O binary "$work/x86-ds-rip-gnu.o" "$work/x86-ds-rip-gnu.bin"
+cmp "$work/x86-ds-rip-mini.bin" "$work/x86-ds-rip-gnu.bin"
+readelf -Wr "$work/x86-ds-rip-mini.o" | grep -q R_X86_64_PC32
+readelf -Wr "$work/x86-ds-rip-gnu.o" | grep -q R_X86_64_PC32
+echo 'MINIAS_X86_EXPLICIT_DS_RIP=PASS GNU_bytes=exact PC32=1'
 # Original LoongArch GCC / Linux symbolic code model, GNU object as oracle.
 cat >"$work/la-reloc.s" <<'LA_RELOC'
 .text

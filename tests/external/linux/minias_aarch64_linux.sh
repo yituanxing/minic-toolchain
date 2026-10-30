@@ -24,6 +24,7 @@ image="$out/arch/arm64/boot/Image"
 initramfs="$work/runtime-initramfs.cpio.gz"
 trace="$work/minias-as.trace"
 bindir="$work/as-override"
+gnu_objects="$work/gnu-as-objects"
 minias=${MINIAS:-"$root/build/release/bin/minic-as"}
 cc=${AARCH64_CC:-aarch64-linux-gnu-gcc}
 qemu=${AARCH64_QEMU:-qemu-system-aarch64}
@@ -86,6 +87,40 @@ fi
 printf 'assemble input=%q output=%q\n' "$input" "$out" >>"$MINIAS_AS_TRACE"
 if "$MINIAS" "${options[@]}" -o "$out" "$input"; then
   printf 'pass input=%q output=%q\n' "$input" "$out" >>"$MINIAS_AS_TRACE"
+  # A sidecar oracle captures the very same GCC-generated assembly while it
+  # still exists in /tmp.  It is never linked into the production Image.
+  capture_gnu_sidecar() {
+    absolute_out=$(realpath -m -- "$out")
+    if [[ $absolute_out == "$MINIAS_KBUILD_OUT/"* ]]; then
+      relative_out=${absolute_out#"$MINIAS_KBUILD_OUT/"}
+      reference="$MINIAS_GNU_OBJECT_DIR/$relative_out"
+      mkdir -p "$(dirname "$reference")" || return 1
+      reference_args=()
+      for ((j=0; j<${#args[@]}; ++j)); do
+        if [[ ${args[j]} == -o && $((j+1)) -lt ${#args[@]} ]]; then
+          reference_args+=(-o "$reference")
+          ((++j))
+        else
+          reference_args+=("${args[j]}")
+        fi
+      done
+      if "$REAL_AS" "${reference_args[@]}"; then
+        printf 'gnu-reference input=%q output=%q\n' "$input" "$relative_out" >>"$MINIAS_AS_TRACE"
+      else
+        printf 'gnu-reference-fail input=%q output=%q\n' "$input" "$relative_out" >>"$MINIAS_AS_TRACE"
+        return 1
+      fi
+      if [[ $relative_out == arch/arm64/kernel/* ||
+            $relative_out == arch/arm64/mm/* ]]; then
+        preserved="$MINIAS_GNU_SOURCE_DIR/${relative_out%.o}.s"
+        mkdir -p "$(dirname "$preserved")" || return 1
+        cp -- "$input" "$preserved" || return 1
+      fi
+    fi
+  }
+  if [[ -n ${MINIAS_GNU_OBJECT_DIR:-} && $out == *.o ]] && ! capture_gnu_sidecar; then
+    printf 'gnu-reference-diagnostic-fail input=%q output=%q\n' "$input" "$out" >>"$MINIAS_AS_TRACE" || true
+  fi
 else
   status=$?
   printf 'fail status=%s input=%q output=%q\n' "$status" "$input" "$out" >>"$MINIAS_AS_TRACE"
@@ -110,6 +145,9 @@ export MINIAS="$minias"
 export MINIAS_AS_TRACE="$trace"
 export MINIAS_FAILURE_DIR="$work/failure-inputs"
 export REAL_AS=/usr/bin/aarch64-linux-gnu-as
+export MINIAS_KBUILD_OUT="$out"
+export MINIAS_GNU_OBJECT_DIR="$gnu_objects"
+export MINIAS_GNU_SOURCE_DIR="$work/asm-sources"
 : >"$trace"
 start=$(date +%s)
 if ! make -C "$src" O="$out" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
@@ -134,6 +172,14 @@ failed=$(grep -c '^fail ' "$trace" || true)
 test "$passed" -gt 1000
 printf 'MINIAS_LINUX_FOURARCH_BUILD=PASS arch=aarch64 assembled=%s passed=%s probe_failures=%s elapsed_s=%s\n' \
   "$assembled" "$passed" "$failed" "$(( $(date +%s) - start ))"
+reference_count=$(find "$gnu_objects" -type f -name '*.o' 2>/dev/null | wc -l) || reference_count=0
+printf 'MINIAS_AARCH64_GNU_SIDECAR=CAPTURED objects=%s production_link=MiniAS_only\n' "$reference_count"
+if ! python3 tests/external/linux/minias_aarch64_object_oracle.py \
+  --mini-dir "$out" --gnu-dir "$gnu_objects" --out "$work/aarch64-object-oracle.tsv" \
+  >"$work/aarch64-object-oracle.log" 2>&1; then
+  echo 'MINIAS_AARCH64_GNU_SIDECAR=DIAGNOSTIC_INCOMPLETE'
+fi
+tail -n 45 "$work/aarch64-object-oracle.log" || true
 
 qemu_timeout=${QEMU_TIMEOUT_SECONDS:-120}
 boot() {
@@ -169,6 +215,10 @@ require() {
   if ! grep -E "$pattern" "$work/qemu-$lane.log" >/dev/null; then
     printf 'MINIAS_LINUX_FOURARCH_RUNTIME=FAIL arch=aarch64 lane=%s missing=%s\n' "$lane" "$pattern" >&2
     tail -n 160 "$work/qemu-$lane.log" >&2
+    if [[ $lane == p0-init && ${MINIAS_AARCH64_AUTO_BISECT:-1} == 1 ]]; then
+      WORK_DIR="$work" MINIAS_KBUILD_OUT="$out" MINIAS_GNU_OBJECT_DIR="$gnu_objects" \
+        bash tests/external/linux/minias_aarch64_object_bisect.sh || true
+    fi
     exit 1
   fi
 }

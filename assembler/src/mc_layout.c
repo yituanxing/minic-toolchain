@@ -766,19 +766,40 @@ static bool minias_resolve_deferred_data(MiniAs *as) {
     size_t pass;
     if(!as->has_deferred_data && !as->has_org_constraints &&
        !as->has_cross_subsection_size_end)return true;
-    /* .org, .fill and .space share a single fixed point.  A subsection
-     * base may change as another numbered subsection grows, so resolving
+    /* .org, .fill, .space and symbolic LEB share a single fixed point.
+     * A subsection base may change as another numbered subsection grows, so resolving
      * .org only once would produce wrong final section-relative offsets. */
     for(pass=0U;pass<=as->stmt_count;++pass) {
         size_t i;
         bool changed=false;
         bool org_changed=false;
-        if(!minias_relayout_fragments(as,&org_changed))return false;
+        if(!minias_relayout_fragments(as,&org_changed) ||
+           !minias_debug_resolve_views(as,false))return false;
         for(i=0U;i<as->stmt_count;++i) {
             MiniAsStmt *stmt=&as->stmts[i];
             uint64_t n=0U;
             if(!stmt->deferred_data_size)continue;
-            {
+            if(stmt->fragment_kind==MINIAS_FRAGMENT_BYTES &&
+               stmt->leb_mode!=0U) {
+                int64_t value;
+                unsigned char encoded[10];
+                size_t length=0U;
+                if(stmt->leb_mode>2U || stmt->variable_expr_count!=1U ||
+                   stmt->variable_exprs[0]==NULL ||
+                   !minias_evaluate_deferred_expr(as,stmt->variable_exprs[0],
+                                                  stmt->offset,stmt->section,
+                                                  false,&value) ||
+                   !minias_encode_leb_integer(value,stmt->leb_mode==2U,
+                                              encoded,&length) ||
+                   stmt->static_data==NULL) {
+                    minias_set_error(as,"unresolved-typed-leb-data:line=%zu",
+                                     stmt->line);
+                    return false;
+                }
+                memcpy(stmt->static_data,encoded,length);
+                stmt->static_data_size=length;
+                n=(uint64_t)length;
+            }else {
                 uint64_t repeat=0U,bits=0U;
                 unsigned width=0U;
                 if(!minias_resolve_variable_exprs(as,stmt,&repeat,&width,&bits) ||
@@ -1161,7 +1182,8 @@ bool minias_solve_fragment_layout(MiniAs *as,
             return false;
         }
     }
-    if(!minias_validate_fragment_layout(as))return false;
+    if(!minias_validate_fragment_layout(as) ||
+       !minias_debug_resolve_views(as,true))return false;
     if(diagnostic!=NULL && getenv("MINIAS_TRACE_RELAYOUT")!=NULL) {
         const MiniAsAnchorGraph *g=
             (const MiniAsAnchorGraph *)as->layout_anchor_graph;

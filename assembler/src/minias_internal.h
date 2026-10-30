@@ -397,11 +397,14 @@ typedef struct MiniAsStmt {
     uint64_t variable_repeat;
     uint64_t variable_value;
     unsigned variable_element_width;
-    /* Immutable parse-time machine-independent DATA byte payloads.
-     * Owns .ascii/.asciz/.string and .uleb128/.sleb128 encoding once.
-     * Unlike a source pointer, this cannot change after Symbol/Layout. */
+    /* Typed machine-independent DATA byte payloads. String/incbin and
+     * literal LEB bytes are parse-time snapshots; symbolic LEB bytes are
+     * finalized by MCLayout, never re-decoded from source on emission. */
     unsigned char *static_data;
     size_t static_data_size;
+    /* Typed LEB payload: 0=other bytes, 1=unsigned, 2=signed.
+     * Deferred expressions change this payload's length at MCLayout. */
+    unsigned leb_mode;
     MiniAsMCData *mcdata; /* fixed-width DATA: retained typed expressions */
     MiniAsDeferredExpr *variable_exprs[3]; /* .fill/.space size/value */
     unsigned variable_expr_count;
@@ -504,6 +507,9 @@ typedef struct MiniAsCfiProc {
 
 typedef struct MiniAsDebugLoc {
     size_t symbol_index;
+    /* GNU `.loc ... view NAME` defines NAME as an absolute view ordinal.
+     * The value is recomputed from final Fragment anchors after relaxation. */
+    size_t view_symbol_index; /* SIZE_MAX unless a named view is requested */
     unsigned file;
     unsigned line;
     unsigned column;
@@ -512,7 +518,8 @@ typedef struct MiniAsDebugLoc {
     unsigned isa;
     /* GNU .loc view 0 asserts a fresh address view; view -0 resets the
      * view by re-establishing the address when two rows share a PC. */
-    unsigned view_mode; /* 0=implicit, 1=assert-zero, 2=reset-zero */
+    unsigned view_mode; /* 0=implicit, 1=assert-zero, 2=reset-zero, 3=named */
+    uint64_t view_number;
     bool is_stmt;
 } MiniAsDebugLoc;
 
@@ -645,6 +652,7 @@ bool minias_anchor_here(MiniAs *as, size_t *symbol_index);
 bool minias_debug_directive(MiniAs *as,const char *op,
                             const char *args,size_t line);
 bool minias_debug_emit(MiniAs *as);
+bool minias_debug_resolve_views(MiniAs *as, bool strict);
 bool minias_write_elf32(MiniAs *as, const char *path);
 
 int minias_find_section(const MiniAs *as, const char *name);
@@ -706,6 +714,7 @@ void minias_deferred_expr_destroy(MiniAsDeferredExpr *);
 bool minias_compile_variable_exprs(MiniAs *, MiniAsStmt *);
 bool minias_resolve_variable_exprs(MiniAs *, const MiniAsStmt *,
                                   uint64_t *, unsigned *, uint64_t *);
+bool minias_encode_leb_integer(int64_t, bool, unsigned char[10], size_t *);
 bool minias_emit_mc_data(MiniAs *, const MiniAsStmt *);
 void minias_mcdata_destroy(MiniAsMCData *);
 bool minias_evaluate_absolute_operand(MiniAs *,const char *,int64_t *);

@@ -65,11 +65,13 @@ jobs:
         run: |
           bash tests/assembler/probe-aarch64-local-fold-gnu.sh
           bash tests/assembler/probe-aarch64-got-addend.sh
-      - name: LoongArch short CFI linker-relax GNU strict oracle
+      - name: LoongArch CFI and Linux alternative data GNU strict oracles
         if: matrix.arch == 'loongarch64'
         env:
           MINIAS: ${{ github.workspace }}/build/release/bin/minic-as
-        run: bash tests/assembler/probe-cfi-short-linker-relax-gnu.sh
+        run: |
+          bash tests/assembler/probe-cfi-short-linker-relax-gnu.sh
+          bash tests/assembler/probe-loong-linux-altinstructions-gnu.sh
       - name: Preserve both sides and exact failure evidence
         if: always()
         uses: actions/upload-artifact@v4

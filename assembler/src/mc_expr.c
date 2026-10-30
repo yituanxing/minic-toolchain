@@ -711,6 +711,43 @@ static bool parse_data_symbol_addend(const char *text,
     return valid;
 }
 
+/* A relocation plus a constant is commutative in GNU DATA expressions.
+ * Keep the same SymbolID/fixup regardless of operand order: the existing
+ * symbol-first parser handles `symbol + constant`, while Linux real-mode
+ * tables also emit `0x9b000000 + pa_real_mode_base`.  The prefix must be
+ * entirely absolute (not another section symbol), and arithmetic must not
+ * silently overflow a signed ELF relocation addend. */
+static bool parse_data_absolute_prefix_plus_symbol(MiniAs *as,
+                                                    const char *text,
+                                                    MiniAsSymbolExpr *expr) {
+    char *copy=minias_strdup(text),*body,*p;
+    unsigned depth=0U;
+    bool matched=false;
+    if(copy==NULL)return false;
+    body=minias_expr_strip_outer_parens(copy);
+    for(p=body;*p;++p) {
+        uint64_t bits;
+        MiniAsSymbolExpr candidate={0};
+        int64_t combined;
+        if(*p=='('){++depth;continue;}
+        if(*p==')'){if(depth==0U)break;--depth;continue;}
+        if(*p!='+' || depth!=0U || p==body)continue;
+        *p='\0';
+        if(minias_parse_absolute_data_bits(as,minias_trim(body),&bits) &&
+           minias_parse_symbol_addend(minias_trim(p+1U),&candidate) &&
+           minias_checked_add_i64(candidate.addend,signed_from_bits(bits),
+                                  &combined)) {
+            candidate.addend=combined;
+            *expr=candidate;
+            matched=true;
+        }
+        *p='+';
+        if(matched)break;
+    }
+    free(copy);
+    return matched;
+}
+
 static bool parse_symbol_minus_dot(const char *text, MiniAsSymbolExpr *expr) {
     char *copy;
     char *normalized;
@@ -1366,7 +1403,8 @@ bool minias_compile_data_mc(MiniAs *as, MiniAsStmt *stmt,
             matched=true;
         } else if((width==2U || width==4U || width==8U) &&
                   (parse_data_symbol_addend(token,&lhs) ||
-                   minias_expr_parse_symbol_absolute_tail(as,token,&lhs))) {
+                   minias_expr_parse_symbol_absolute_tail(as,token,&lhs) ||
+                   parse_data_absolute_prefix_plus_symbol(as,token,&lhs))) {
             out->kind=MINIAS_MC_EXPR_SYMBOL;
             matched=true;
         } else {

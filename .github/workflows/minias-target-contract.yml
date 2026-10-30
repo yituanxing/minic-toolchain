@@ -220,6 +220,10 @@ jobs:
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=riscv \
             bash tests/assembler/probe-mcexpr-variable-fixedpoint.sh
+      - name: GNU RISC-V deferred symbolic LEB layout and byte oracle
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=riscv \
+            bash tests/assembler/probe-mc-deferred-leb-gnu.sh
       - name: GNU RISC-V function .size signed end anchor after branch relaxation
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=riscv \
@@ -420,6 +424,10 @@ jobs:
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=aarch64 \
             bash tests/assembler/probe-mcexpr-variable-fixedpoint.sh
+      - name: GNU AArch64 deferred symbolic LEB layout and byte oracle
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=aarch64 \
+            bash tests/assembler/probe-mc-deferred-leb-gnu.sh
       - name: GNU AArch64 .size signed end-anchor and forward DATA
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=aarch64 \

@@ -14,6 +14,7 @@ on:
       - 'assembler/**'
       - 'elf/**'
       - 'tests/external/linux/minias_*_linux.sh'
+      - 'tests/external/linux/minias_aarch64_object_*'
       - 'tests/external/linux/runtime_initramfs/**'
 
 permissions:
@@ -88,6 +89,8 @@ jobs:
             build/minias-linux-fourarch/${{ matrix.arch }}/**/Image.sha256
             build/minias-linux-fourarch/${{ matrix.arch }}/**/bzImage.sha256
             build/minias-linux-fourarch/${{ matrix.arch }}/**/vmlinuz.efi.sha256
+            build/minias-linux-fourarch/${{ matrix.arch }}/**/aarch64-object-oracle.tsv
+            build/minias-linux-fourarch/${{ matrix.arch }}/**/aarch64-bisect-*.txt
             # Preserve exactly the linked kernel to replay QEMU-only boot
             # diagnostics without another 15–20 minute Linux recompilation.
             build/minias-linux-fourarch/x86_64/mini-out/arch/x86/boot/bzImage

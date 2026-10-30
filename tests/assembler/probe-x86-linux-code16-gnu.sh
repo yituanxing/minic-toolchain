@@ -350,6 +350,65 @@ vdso32:
     ret
 ASM
 
+# Additional Kbuild blockers encountered in 16-bit real-mode and 32-bit
+# VDSO/entry assembly. These have existing typed encoders; verify that the
+# legacy-mode profile admits them with GNU's operand-size prefix semantics.
+cat >"$work/code16_linux_flags_bit.s" <<'ASM'
+    .text
+    .code16
+    .globl linux_flags_bit16
+linux_flags_bit16:
+    pushf
+    popf
+    btl %eax, (%bx)
+    btrl %eax, (%bx)
+    shldl $3, %eax, %ebx
+    lcallw $0xc000, $3
+    ret
+ASM
+
+cat >"$work/code32_linux_syscall_time.s" <<'ASM'
+    .text
+    .code32
+    .globl linux_entry32
+linux_entry32:
+    sysenter
+    rdtsc
+    shrl $1, %eax
+    ret
+ASM
+
+cat >"$work/code16_linux_realmode_gcc.s" <<'ASM'
+    .text
+    .code16gcc
+    .globl linux_realmode_gcc
+linux_realmode_gcc:
+    cpuid
+    sall $1, %eax
+    incl %eax
+    negl %eax
+    outb %al, %dx
+    setne %al
+    jb 1f
+    ja 1f
+    jnb 1f
+    jbe 1f
+1:
+    ret
+ASM
+
+cat >"$work/code32_linux_fences.s" <<'ASM'
+    .text
+    .code32
+    .globl linux_fences32
+linux_fences32:
+    lfence
+    rdtscp
+    syscall
+    cmovne %eax, %ebx
+    ret
+ASM
+
 cat >"$work/code32_reboot.s" <<'ASM'
     .text
     .code32
@@ -624,6 +683,10 @@ run_positive code16_trampoline_atomic
 run_positive code16_address_modes
 run_positive code16_branch_relax
 run_positive code32_vdso
+run_positive code16_linux_flags_bit
+run_positive code32_linux_syscall_time
+run_positive code16_linux_realmode_gcc
+run_positive code32_linux_fences
 run_positive code32_reboot
 run_positive mixed_modes
 run_positive external_rel yes

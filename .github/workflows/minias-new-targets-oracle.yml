@@ -321,6 +321,18 @@ jobs:
             bash tests/assembler/probe-mcexpr-variable-fixedpoint.sh
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=loongarch64 \
             bash tests/assembler/probe-mcexpr-variable-fixedpoint.sh
+      - name: GNU numeric-first relocation addends retain ELF symbols
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-mcexpr-absolute-prefix-gnu.sh
+      - name: GNU deferred LEB and DWARF view-symbol layout semantics
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=x86_64 \
+            bash tests/assembler/probe-mc-deferred-leb-gnu.sh
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=loongarch64 \
+            bash tests/assembler/probe-mc-deferred-leb-gnu.sh
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-common-dwarf-named-views-gnu.sh
       - name: GNU x86 and LoongArch64 .size signed end anchors
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=x86_64 \

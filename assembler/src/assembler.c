@@ -701,6 +701,14 @@ const MiniAsSymbol *minias_symbol_ref_lookup(const MiniAs *as,
     return &as->symbols[index];
 }
 
+/* Keep staged MCData Fixup widths identical to the committed Section
+ * contract. LoongArch uses 8-bit and 24-bit ADD/SUB pairs as well as
+ * 16/32/64-bit relocations; staging must not reject a legal typed Fixup. */
+static bool minias_fixup_field_width(unsigned width) {
+    return width==1U || width==2U || width==3U ||
+           width==4U || width==8U;
+}
+
 static bool minias_record_fixup(MiniAs *as,
                       int section,
                       uint64_t offset,
@@ -748,8 +756,7 @@ static bool minias_record_fixup(MiniAs *as,
      * must decide whether this field needs an ELF relocation at all. */
     if (section < 0 || (size_t)section >= as->section_count ||
         as->sections[(size_t)section].type==MINIAS_SHT_NOBITS ||
-        (width != 1U && width != 2U && width != 3U &&
-         width != 4U && width != 8U) ||
+        !minias_fixup_field_width(width) ||
         offset > UINT64_MAX - width) {
         minias_set_error(as, "invalid-fixup-range:%s",
                          symbol_name != NULL ? symbol_name : "<symbol-id>");
@@ -826,7 +833,7 @@ static bool minias_stage_common_fixup(MiniAs *as,int section,uint64_t offset,
     if(owner->section!=section || section<0 ||
        (size_t)section>=as->section_count ||
        as->sections[(size_t)section].type==MINIAS_SHT_NOBITS ||
-       offset<owner->offset || (width!=2U && width!=4U && width!=8U) ||
+       offset<owner->offset || !minias_fixup_field_width(width) ||
        (name==NULL && symbol_index>=as->symbol_count)) {
         minias_set_error(as,"invalid-mcdata-fixup:line=%zu",owner->line);
         return false;
@@ -3131,17 +3138,14 @@ static bool emit_common_pattern(MiniAs *as,int section,
     return true;
 }
 
-/* Variable length GNU integer directives are DATA fragments, never
- * target opcodes. Parse only resolved absolute values; deferred symbolic
- * LEB widths require layout-aware fragments and must fail closed here. */
-static bool minias_leb_bytes(MiniAs *as,const char *op,const char *text,
-                             unsigned char output[10],size_t *length) {
-    int64_t number;
+/* One encoding contract for eagerly resolved LEB literals and the retained
+ * deferred LEB fragments resolved by MCLayout. Neither route re-parses
+ * expressions while materializing section bytes. */
+bool minias_encode_leb_integer(int64_t number,bool signed_leb,
+                               unsigned char output[10],size_t *length) {
     uint64_t bits;
-    bool signed_leb=strcmp(op,".sleb128")==0;
     size_t n=0U;
-    if(!minias_evaluate_absolute_expression(as,text,&number) ||
-       (!signed_leb && number<0))return false;
+    if(!signed_leb && number<0)return false;
     bits=(uint64_t)number;
     for(;;) {
         uint8_t byte=(uint8_t)(bits&0x7fU);
@@ -3159,6 +3163,16 @@ static bool minias_leb_bytes(MiniAs *as,const char *op,const char *text,
         output[n++]=(unsigned char)(byte | (done?0U:0x80U));
         if(done){*length=n;return true;}
     }
+}
+
+/* An immediate LEB remains a parse-time immutable byte snapshot. Symbolic
+ * expressions enter the same Fragment fixed-point as .fill/.space instead. */
+static bool minias_leb_bytes(MiniAs *as,const char *op,const char *text,
+                             unsigned char output[10],size_t *length) {
+    int64_t number;
+    return minias_evaluate_absolute_expression(as,text,&number) &&
+           minias_encode_leb_integer(number,strcmp(op,".sleb128")==0,
+                                     output,length);
 }
 
 /* Repeat a literal little-endian element: GNU .fill repeat[,size[,value]].
@@ -3191,14 +3205,12 @@ static bool common_data_has_symbolic_token(const char *p) {
 static bool data_references_mutable_set(MiniAs *as,const char *expr) {
     const char *p=expr;
     while(*p) {
-        if(*p=='.' || *p=='_' || *p=='$' ||
-           isalpha((unsigned char)*p)) {
+        if(minias_expr_symbol_start(*p)) {
             const char *start=p;
             size_t len;
             char name[256];
             MiniAsSymbol *sym;
-            do {++p;} while(isalnum((unsigned char)*p) ||
-                            *p=='.' || *p=='_' || *p=='$');
+            do {++p;} while(minias_expr_symbol_continue(*p));
             len=(size_t)(p-start);
             if(len>=sizeof(name))continue;
             memcpy(name,start,len);name[len]='\0';
@@ -3235,11 +3247,9 @@ static bool snapshot_mutable_data_tokens(MiniAs *as,const char *input,
             if(minias_parse_number_literal(p,&end,&number) && end>p) {
                 p=end;
             }else ++p;
-        }else if(*p=='.' || *p=='_' || *p=='$' ||
-                 isalpha((unsigned char)*p)) {
+        }else if(minias_expr_symbol_start(*p)) {
             char name[256];MiniAsSymbol *sym;
-            while(isalnum((unsigned char)*p) || *p=='.' ||
-                  *p=='_' || *p=='$')++p;
+            while(minias_expr_symbol_continue(*p))++p;
             part=(size_t)(p-start);
             if(part<sizeof(name)) {
                 int n;
@@ -3321,14 +3331,21 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
         fragment_kind=MINIAS_FRAGMENT_BYTES;
         unsigned char coded[10];
         size_t len=0U;
-        if(!minias_leb_bytes(as,op,args,coded,&len)) {
+        /* Forward numeric labels and DWARF view symbols are not yet
+         * located. Their widths belong to the typed layout fixed point,
+         * not to a speculative first-pass evaluation or source replay. */
+        delayed=common_data_has_symbolic_token(args);
+        if(delayed) {
+            bytes=0U;
+        }else if(!minias_leb_bytes(as,op,args,coded,&len)) {
             minias_set_error(as,"unsupported-leb-expression:%s:line=%zu",args,line);
             return false;
+        }else {
+            bytes=len;
+            memcpy(leb_snapshot,coded,len);
+            leb_snapshot_size=len;
+            has_leb_snapshot=true;
         }
-        bytes=len;
-        memcpy(leb_snapshot,coded,len);
-        leb_snapshot_size=len;
-        has_leb_snapshot=true;
     } else if (strcmp(op, ".incbin") == 0) {
         fragment_kind=MINIAS_FRAGMENT_BYTES;
         if(!capture_incbin(as,args,line,&string_snapshot,
@@ -3477,7 +3494,8 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
     }
     if(!snapshot && as->has_mutable_absolute_sets &&
        (fragment_kind==MINIAS_FRAGMENT_FILL ||
-        fragment_kind==MINIAS_FRAGMENT_SPACE) &&
+        fragment_kind==MINIAS_FRAGMENT_SPACE ||
+        (fragment_kind==MINIAS_FRAGMENT_BYTES && delayed)) &&
        !snapshot_mutable_data_tokens(as,args,&snapshot))return false;
     if (!add_stmt(as, fragment_kind, op,
                   snapshot?snapshot:args, line, (uint32_t)bytes, 1U)) {
@@ -3502,6 +3520,10 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
             string_snapshot=NULL;
         }
     }
+    if(fragment_kind==MINIAS_FRAGMENT_BYTES &&
+       (strcmp(op,".uleb128")==0 || strcmp(op,".sleb128")==0))
+        as->stmts[as->stmt_count-1U].leb_mode=
+            strcmp(op,".sleb128")==0?2U:1U;
     if(variable_parsed) {
         MiniAsStmt *fragment=&as->stmts[as->stmt_count-1U];
         fragment->variable_data_resolved=true;
@@ -3516,6 +3538,19 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
         fragment_kind==MINIAS_FRAGMENT_SPACE) &&
        !minias_compile_variable_exprs(as,&as->stmts[as->stmt_count-1U]))
         return false;
+    if(fragment_kind==MINIAS_FRAGMENT_BYTES && delayed) {
+        MiniAsStmt *stmt=&as->stmts[as->stmt_count-1U];
+        stmt->variable_exprs[0]=minias_compile_deferred_expr(as,stmt->args);
+        if(stmt->variable_exprs[0]==NULL)return false;
+        stmt->variable_expr_count=1U;
+        /* The retained payload changes size during the Fragment fixed
+         * point; allocate its maximum encoded width only once. */
+        stmt->static_data=malloc(10U);
+        if(!stmt->static_data) {
+            minias_set_error(as,"out-of-memory:deferred-leb:line=%zu",line);
+            return false;
+        }
+    }
     if(delayed) {
         as->stmts[as->stmt_count-1U].deferred_data_size=true;
         as->has_deferred_data=true;
@@ -3560,8 +3595,8 @@ static bool emit_data_stmt(MiniAs *as, const MiniAsStmt *stmt) {
                              stmt->line);
             return false;
         }
-        /* DATA emission uses exactly the byte snapshot created at the
-         * lexical source site; no second lexer or absolute-evaluator pass. */
+        /* DATA emission consumes the owned byte snapshot (lexical bytes or
+         * fixed-point-resolved LEB), never reinterpreting source text. */
         return minias_section_append(as,stmt->section,
                                      stmt->static_data,stmt->static_data_size);
     case MINIAS_FRAGMENT_SPACE:

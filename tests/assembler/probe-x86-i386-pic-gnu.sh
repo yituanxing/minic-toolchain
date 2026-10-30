@@ -30,8 +30,22 @@ addl global_value@GOT(%ebx), %eax
 ret
 .section .note.GNU-stack,"",@progbits
 ASM
+cat >"$work/gotoff_numeric.s" <<'ASM'
+.text
+.code32
+.globl gotoff_numeric
+gotoff_numeric:
+cmpl $2147483647, 4+vvar__vdso_data@GOTOFF(%edi)
+ret
+.data
+.globl vvar__vdso_data
+.hidden vvar__vdso_data
+vvar__vdso_data:
+.long 0
+.section .note.GNU-stack,"",@progbits
+ASM
 
-for case_name in external local got_variants; do
+for case_name in external local got_variants gotoff_numeric; do
   as --32 -o "$work/gnu-$case_name.o" "$work/$case_name.s"
   readelf -rW "$work/gnu-$case_name.o" >"$work/gnu-$case_name.reloc"
 done
@@ -44,6 +58,7 @@ expected = {
  'external': {'R_386_PC32','R_386_GOTPC','R_386_GOT32X','R_386_PLT32'},
  'local': {'R_386_PC32','R_386_GOTPC','R_386_GOTOFF'},
  'got_variants': {'R_386_GOT32X'},
+ 'gotoff_numeric': {'R_386_GOTOFF'},
 }
 for name, required in expected.items():
     content=(work/f'gnu-{name}.reloc').read_text()
@@ -57,12 +72,12 @@ PY
 # Link unresolved external/global symbols via *real* GNU i386 GOT/PLT, not
 # merely a self-consistent relocatable .o or an ELF header check.
 ld -m elf_i386 -shared -o "$work/gnu-pic.so" \
-  "$work/gnu-external.o" "$work/gnu-local.o" "$work/gnu-got_variants.o"
+  "$work/gnu-external.o" "$work/gnu-local.o" "$work/gnu-got_variants.o" "$work/gnu-gotoff_numeric.o"
 readelf -h "$work/gnu-pic.so" | grep -Eq 'Type:.*DYN'
 echo 'MINIAS_I386_PIC_GNU_LINK=PASS GNU_ld_ELF32_DYN=1'
 
 fail=0
-for case_name in external local got_variants; do
+for case_name in external local got_variants gotoff_numeric; do
   if ! "$minias" --target=x86_64 -march=i386 -mabi=i386 \
         -o "$work/mini-$case_name.o" "$work/$case_name.s" \
         >"$work/mini-$case_name.log" 2>&1; then
