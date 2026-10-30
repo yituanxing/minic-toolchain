@@ -1346,6 +1346,11 @@ jobs:
             esac
           done
 
+          # Kbuild invokes this wrapper in parallel.  Keep each owner event
+          # short enough for a single write: the original very long argv
+          # trace produced fragmented/interleaved lines in real -j4 Linux.
+          # Full producer arguments are already retained in Kbuild .cmd.
+
           if (( query )); then
             # Linux scripts/as-version.sh asks GCC to compile /dev/null with
             # `-Wa,--version`.  GCC consequently invokes GAS with both a
@@ -1375,9 +1380,7 @@ jobs:
                 exit 2
               fi
             fi
-            printf 'delegate-query' >>"$trace"
-            printf ' %q' "$@" >>"$trace"
-            printf '\n' >>"$trace"
+            printf 'delegate-query argc=%s\n' "${#args[@]}" >>"$trace"
             exec "$real_as" "$@"
           fi
 
@@ -1390,12 +1393,7 @@ jobs:
             exit 2
           fi
 
-          {
-            printf 'assemble input=%q output=%q' "$input" "$out"
-            printf ' argv='
-            printf ' %q' "$@"
-            printf '\n'
-          } >>"$trace"
+          printf 'assemble input=%q output=%q\n' "$input" "$out" >>"$trace"
 
           if "$minias" "${minias_opts[@]}" -o "$out" "$input"; then
             if [[ ! -s "$out" ]]; then
