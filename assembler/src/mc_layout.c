@@ -847,7 +847,15 @@ static bool collect_out_of_range_branches(MiniAs *as,
         if(stmt->fragment_kind!=MINIAS_FRAGMENT_INSTRUCTION)continue;
         if(!minias_query_target_relax_plan(as,stmt,&plan))return false;
         if(plan.required_size<=stmt->size)continue;
-        if(as->forced_long_branch_bitmap[i])continue;
+        if(as->forced_long_branch_bitmap[i]) {
+            /* Growth is monotone, but a Target may have more than one
+             * alternative (RV C16 -> B32 -> inverted B32 + JAL, for
+             * example). An id already in forced_ids is not necessarily
+             * at its terminal size. Keep the unique worklist entry and
+             * request another fixed-point pass for its *new* range. */
+            *added=true;
+            continue;
+        }
         if (!minias_grow_array((void **)ids, capacity, sizeof(**ids), *count + 1U)) {
             minias_set_error(as, "out-of-memory:branch-relaxation");
             return false;

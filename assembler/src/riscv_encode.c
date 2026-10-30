@@ -1264,13 +1264,45 @@ static bool rv_parse_simple_mc(MiniAs *as, MiniAsStmt *stmt,
              strcmp(op,"not")==0?0xfff04013U:0x00000013U;
         return rv_mc_word(as,stmt,bits,rd,rs1,0);
     }
-    if(strcmp(op,"jr")==0 || strcmp(op,"fscsr")==0 ||
-       strcmp(op,"frcsr")==0) {
+    if(strcmp(op,"jr")==0) {
         if(n!=1U || (rs1=reg_number(ops[0]))<0)goto invalid;
-        if(strcmp(op,"frcsr")==0)
-            return rv_mc_word(as,stmt,0x00302073U,rs1,0,0);
-        bits=strcmp(op,"fscsr")==0?0x00301073U:0x00000067U;
-        return rv_mc_word(as,stmt,bits,0,rs1,0);
+        return rv_mc_word(as,stmt,0x00000067U,0,rs1,0);
+    }
+    /* The floating-point status aliases are typed CSR instructions: both
+     * the one-operand write forms and GAS's value-returning two-operand
+     * forms map to the same CSRRW/CSRRWI encoding. Keep the source
+     * register/immediate distinction for the RV32E register gate. */
+    {
+        static const struct {const char *name;uint32_t csr;
+                             bool read,immediate;} forms[]={
+            {"frflags",1U,true,false},{"frrm",2U,true,false},
+            {"frcsr",3U,true,false},{"fsflags",1U,false,false},
+            {"fsrm",2U,false,false},{"fscsr",3U,false,false},
+            {"fsflagsi",1U,false,true},{"fsrmi",2U,false,true}
+        };
+        size_t i;
+        for(i=0U;i<sizeof(forms)/sizeof(forms[0]);++i) {
+            if(strcmp(op,forms[i].name)!=0)continue;
+            if(forms[i].read) {
+                if(n!=1U || (rd=reg_number(ops[0]))<0)goto invalid;
+                bits=(forms[i].csr<<20U)|(2U<<12U)|0x73U;
+                return rv_mc_word(as,stmt,bits,rd,0,0);
+            }
+            if(n!=1U && n!=2U)goto invalid;
+            if(n==2U && (rd=reg_number(ops[0]))<0)goto invalid;
+            if(forms[i].immediate) {
+                if(!parse_i64(ops[n-1U],&imm) || imm<0 || imm>31)
+                    goto invalid;
+                rs1=(int)imm;
+                bits=(forms[i].csr<<20U)|(5U<<12U)|0x73U;
+                if(!rv_mc_word(as,stmt,bits,rd,rs1,0))return false;
+                rv_set_imm(&stmt->mcinst->operands[1],imm);
+                return true;
+            }
+            if((rs1=reg_number(ops[n-1U]))<0)goto invalid;
+            bits=(forms[i].csr<<20U)|(1U<<12U)|0x73U;
+            return rv_mc_word(as,stmt,bits,rd,rs1,0);
+        }
     }
     policy->handled=false;
     return true;
@@ -1570,10 +1602,13 @@ typedef struct RvFpDesc {
     bool rv64_only;
     unsigned fpr_mask;
     unsigned default_rm;
+    bool swap_sources;
 } RvFpDesc;
 
 #define RVFP(name, kind, encoding, feature, only64, mask, rm) \
-    {name, RV_FP_##kind, encoding, RISCV_ISA_##feature, only64, mask, rm}
+    {name, RV_FP_##kind, encoding, RISCV_ISA_##feature, only64, mask, rm, false}
+#define RVFP_SWAPPED(name, encoding, feature) \
+    {name, RV_FP_COMPARE, encoding, RISCV_ISA_##feature, false, 6U, 0U, true}
 static const RvFpDesc rv_fp_forms[] = {
     RVFP("fmadd.s",FUSED,0x00000043U,F,false,15U,7U),
     RVFP("fmsub.s",FUSED,0x00000047U,F,false,15U,7U),
@@ -1617,6 +1652,10 @@ static const RvFpDesc rv_fp_forms[] = {
     RVFP("feq.d",COMPARE,0xa2002053U,D,false,6U,0U),
     RVFP("flt.d",COMPARE,0xa2001053U,D,false,6U,0U),
     RVFP("fle.d",COMPARE,0xa2000053U,D,false,6U,0U),
+    RVFP_SWAPPED("fgt.s",0xa0001053U,F),
+    RVFP_SWAPPED("fge.s",0xa0000053U,F),
+    RVFP_SWAPPED("fgt.d",0xa2001053U,D),
+    RVFP_SWAPPED("fge.d",0xa2000053U,D),
     RVFP("fclass.s",MOVE,0xe0001053U,F,false,2U,0U),
     RVFP("fclass.d",MOVE,0xe2001053U,D,false,2U,0U),
     RVFP("fmv.x.d",MOVE,0xe2000053U,D,true,2U,0U),
@@ -1647,6 +1686,7 @@ static const RvFpDesc rv_fp_forms[] = {
     RVFP("fsd",STORE,0x00003027U,D,false,1U,0U)
 };
 #undef RVFP
+#undef RVFP_SWAPPED
 
 static const RvFpDesc *rv_find_fp_form(const char *op) {
     size_t i;
@@ -1769,6 +1809,11 @@ static bool rv_parse_fp_mc(MiniAs *as, MiniAsStmt *stmt,
     }
 
     if (rd < 0 || rs1 < 0 || rs2 < 0) goto invalid;
+    if (form->swap_sources) {
+        const int reversed=rs1;
+        rs1=rs2;
+        rs2=reversed;
+    }
     return rv_mc_fp_word(as,stmt,base,rd,rs1,rs2,form->fpr_mask);
 invalid:
     minias_set_error(as,"bad-fp-mcinst:%s:%s:line=%zu",
@@ -1820,6 +1865,18 @@ static const RvParseForm rv_parse_forms[] = {
     RV_EXTENSION("fscsr", rv_parse_simple_mc,
                  RISCV_ISA_F | RISCV_ISA_ZICSR),
     RV_EXTENSION("frcsr", rv_parse_simple_mc,
+                 RISCV_ISA_F | RISCV_ISA_ZICSR),
+    RV_EXTENSION("frrm", rv_parse_simple_mc,
+                 RISCV_ISA_F | RISCV_ISA_ZICSR),
+    RV_EXTENSION("frflags", rv_parse_simple_mc,
+                 RISCV_ISA_F | RISCV_ISA_ZICSR),
+    RV_EXTENSION("fsrm", rv_parse_simple_mc,
+                 RISCV_ISA_F | RISCV_ISA_ZICSR),
+    RV_EXTENSION("fsflags", rv_parse_simple_mc,
+                 RISCV_ISA_F | RISCV_ISA_ZICSR),
+    RV_EXTENSION("fsrmi", rv_parse_simple_mc,
+                 RISCV_ISA_F | RISCV_ISA_ZICSR),
+    RV_EXTENSION("fsflagsi", rv_parse_simple_mc,
                  RISCV_ISA_F | RISCV_ISA_ZICSR),
     RV_FORM("li", rv_parse_multi_mc),
     RV_FORM("call", rv_parse_multi_mc),

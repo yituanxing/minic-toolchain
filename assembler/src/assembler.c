@@ -4147,7 +4147,8 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
         strcmp(text, "#NOAPP") == 0) return true;
     /* A leading '# ' begins a GNU preprocessor line or comment; a target
      * immediate such as '#42' is still an operand, never a comment. */
-    if(text[0]=='#' && isspace((unsigned char)text[1]))return true;
+    if(text[0]=='#' && (text[1]=='#' ||
+                        isspace((unsigned char)text[1])))return true;
 
     /* GNU .ifb/.ifnb compare the *expanded* argument against blank,
      * without any target ISA grammar; shared conditional stack owns them. */

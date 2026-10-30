@@ -270,18 +270,24 @@ typedef struct {
     unsigned operands;
     uint32_t opcode;
     LaMCOpcode kind;
+    LaRegisterBank first_bank;
 } LaBranchPattern;
 static const LaBranchPattern la_branch_patterns[]={
-    {"b",1U,UINT32_C(0x50000000),LA_MC_BRANCH26},
-    {"bl",1U,UINT32_C(0x54000000),LA_MC_BRANCH26},
-    {"beqz",2U,UINT32_C(0x40000000),LA_MC_BRANCH21},
-    {"bnez",2U,UINT32_C(0x44000000),LA_MC_BRANCH21},
-    {"beq",3U,UINT32_C(0x58000000),LA_MC_BRANCH16},
-    {"bne",3U,UINT32_C(0x5c000000),LA_MC_BRANCH16},
-    {"blt",3U,UINT32_C(0x60000000),LA_MC_BRANCH16},
-    {"bge",3U,UINT32_C(0x64000000),LA_MC_BRANCH16},
-    {"bltu",3U,UINT32_C(0x68000000),LA_MC_BRANCH16},
-    {"bgeu",3U,UINT32_C(0x6c000000),LA_MC_BRANCH16}
+    {"b",1U,UINT32_C(0x50000000),LA_MC_BRANCH26,LA_REG_BANK_NONE},
+    {"bl",1U,UINT32_C(0x54000000),LA_MC_BRANCH26,LA_REG_BANK_NONE},
+    {"beqz",2U,UINT32_C(0x40000000),LA_MC_BRANCH21,LA_REG_BANK_GPR},
+    {"bnez",2U,UINT32_C(0x44000000),LA_MC_BRANCH21,LA_REG_BANK_GPR},
+    {"beq",3U,UINT32_C(0x58000000),LA_MC_BRANCH16,LA_REG_BANK_GPR},
+    {"bne",3U,UINT32_C(0x5c000000),LA_MC_BRANCH16,LA_REG_BANK_GPR},
+    {"blt",3U,UINT32_C(0x60000000),LA_MC_BRANCH16,LA_REG_BANK_GPR},
+    {"bge",3U,UINT32_C(0x64000000),LA_MC_BRANCH16,LA_REG_BANK_GPR},
+    {"bltu",3U,UINT32_C(0x68000000),LA_MC_BRANCH16,LA_REG_BANK_GPR},
+    {"bgeu",3U,UINT32_C(0x6c000000),LA_MC_BRANCH16,LA_REG_BANK_GPR},
+    /* GNU opcodes/loongarch-opc.c float_jmp: FCC lives in bits 5..7;
+     * bit 8 distinguishes BCNEZ from BCEQZ. Both use the existing B21
+     * relocation, layout and short-branch resolution machinery. */
+    {"bceqz",2U,UINT32_C(0x48000000),LA_MC_BRANCH21,LA_REG_BANK_FCC},
+    {"bcnez",2U,UINT32_C(0x48000100),LA_MC_BRANCH21,LA_REG_BANK_FCC}
 };
 
 static bool la_branch_instruction(MiniAs *as, MiniAsMCInst *m,
@@ -311,17 +317,20 @@ static bool la_branch_instruction(MiniAs *as, MiniAsMCInst *m,
     if(branch_index>=LA_COUNT(la_branch_patterns))return false;
     b=&la_branch_patterns[branch_index];
     if(count==b->operands) {
-        /* GCC emits `bl %plt(function)` for calls which may bind through
-         * a PLT.  GNU GAS encodes its branch field and R_LARCH_B26 exactly
-         * like `bl function`; the %plt spelling is a Target-only operand
-         * modifier, not a literal ELF symbol name. */
+        /* GCC emits `bl %plt(function)` and the original BusyBox .S sources
+         * also emit `b %plt(function)`. GNU GAS uses R_LARCH_B26 with the
+         * unadorned symbol in both cases. Preserve the typed SymbolRef and
+         * branch fixup; `%plt(...)` is not a part of the symbol's name. */
         if (!(minias_parse_symbol_addend(t[count-1U],&expr) ||
-              (branch_index==1U &&
+              (branch_index<=1U &&
                la_reloc_expr(t[count-1U],"%plt",&expr))) ||
             (expr.addend&3)!=0)
             return false;
         rj=0U;rd=0U;
-        if(count>=2U && !la_reg(t[0],&rj))return false;
+        if(count>=2U &&
+           !(b->first_bank==LA_REG_BANK_FCC ?
+             la_special_reg(t[0],"$fcc",7U,&rj) :
+             la_reg(t[0],&rj)))return false;
         if(count==3U && !la_reg(t[1],&rd))return false;
         if(swap && count==3U) {unsigned tmp=rj;rj=rd;rd=tmp;}
         slot=count-1U;
@@ -331,7 +340,7 @@ static bool la_branch_instruction(MiniAs *as, MiniAsMCInst *m,
         m->count=count;
         if(count>=2U) {m->operands[0].kind=MINIAS_MC_REGISTER;
                        m->operands[0].reg=rj;
-                       la_set_register_bank(&m->operands[0],LA_REG_BANK_GPR);}
+                       la_set_register_bank(&m->operands[0],b->first_bank);}
         if(count==3U) {m->operands[1].kind=MINIAS_MC_REGISTER;
                        m->operands[1].reg=rd;
                        la_set_register_bank(&m->operands[1],LA_REG_BANK_GPR);}
@@ -920,6 +929,21 @@ static const LaSpecialRegisterPattern la_special_register_patterns[] = {
     {"fst.s",0x2b400000U,3U,{LA_BANK_FPR,LA_BANK_GPR,LA_BANK_SIGNED12},LA_FIELDS_3},
     {"fld.d",0x2b800000U,3U,{LA_BANK_FPR,LA_BANK_GPR,LA_BANK_SIGNED12},LA_FIELDS_3},
     {"fst.d",0x2bc00000U,3U,{LA_BANK_FPR,LA_BANK_GPR,LA_BANK_SIGNED12},LA_FIELDS_3},
+    /* Register-indexed scalar FP memory instructions use a GPR byte
+     * offset, not the SIGNED12 immediate of FLD/FST. One typed register
+     * descriptor covers the whole original GNU LoongArch LP64 family. */
+    {"fldx.s",0x38300000U,3U,{LA_BANK_FPR,LA_BANK_GPR,LA_BANK_GPR},LA_FIELDS_3},
+    {"fldx.d",0x38340000U,3U,{LA_BANK_FPR,LA_BANK_GPR,LA_BANK_GPR},LA_FIELDS_3},
+    {"fstx.s",0x38380000U,3U,{LA_BANK_FPR,LA_BANK_GPR,LA_BANK_GPR},LA_FIELDS_3},
+    {"fstx.d",0x383c0000U,3U,{LA_BANK_FPR,LA_BANK_GPR,LA_BANK_GPR},LA_FIELDS_3},
+    {"fldgt.s",0x38740000U,3U,{LA_BANK_FPR,LA_BANK_GPR,LA_BANK_GPR},LA_FIELDS_3},
+    {"fldgt.d",0x38748000U,3U,{LA_BANK_FPR,LA_BANK_GPR,LA_BANK_GPR},LA_FIELDS_3},
+    {"fldle.s",0x38750000U,3U,{LA_BANK_FPR,LA_BANK_GPR,LA_BANK_GPR},LA_FIELDS_3},
+    {"fldle.d",0x38758000U,3U,{LA_BANK_FPR,LA_BANK_GPR,LA_BANK_GPR},LA_FIELDS_3},
+    {"fstgt.s",0x38760000U,3U,{LA_BANK_FPR,LA_BANK_GPR,LA_BANK_GPR},LA_FIELDS_3},
+    {"fstgt.d",0x38768000U,3U,{LA_BANK_FPR,LA_BANK_GPR,LA_BANK_GPR},LA_FIELDS_3},
+    {"fstle.s",0x38770000U,3U,{LA_BANK_FPR,LA_BANK_GPR,LA_BANK_GPR},LA_FIELDS_3},
+    {"fstle.d",0x38778000U,3U,{LA_BANK_FPR,LA_BANK_GPR,LA_BANK_GPR},LA_FIELDS_3},
     {"lddir",0x06400000U,3U,{LA_BANK_GPR,LA_BANK_GPR,LA_BANK_UNSIGNED8},LA_FIELDS_3},
     {"ldpte",0x06440000U,2U,{LA_BANK_GPR,LA_BANK_UNSIGNED8},{5U,10U},{0U}},
     {"invtlb",0x06498000U,3U,{LA_BANK_UNSIGNED5,LA_BANK_GPR,LA_BANK_GPR},LA_FIELDS_3},
@@ -1387,7 +1411,7 @@ static bool la_materialize_manual_word(const MiniAsMCInst *m,
             return false;
         *word=branch->opcode;
         if(m->count>=2U) {
-            if(!la_encoded_reg(&m->operands[0],LA_REG_BANK_GPR,&rj))
+            if(!la_encoded_reg(&m->operands[0],branch->first_bank,&rj))
                 return false;
             *word|=rj<<5U;
         }

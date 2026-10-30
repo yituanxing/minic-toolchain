@@ -40,6 +40,7 @@ printf '%s\n' '.text' \
 # while la.global uses GOT_PC pair. Both pairs carry GNU's linker RELAX markers.
 printf '%s\n' '.text' '.globl gcc_pseudos' 'gcc_pseudos:' \
   'bl %plt(runtime_message)' \
+  'b %plt(external_jump)' \
   'beq $a0,$a1,.Lafter_got' \
   'beqz $a0,.Lafter_got' \
   'la.local $r12,.LANCHOR0' \
@@ -48,7 +49,23 @@ printf '%s\n' '.text' '.globl gcc_pseudos' 'gcc_pseudos:' \
   'ret' \
   '.data' '.LANCHOR0:' '.dword 7' >"$work/gcc-pseudos.s"
 
-for name in aliases numeric privilege-pcala; do
+# Real GCC cJSON/Lua output after FCMP uses an FCC branch, and GCC Lua's
+# array access uses LP64 scalar-FPR register-indexed memory. The official
+# GNU ISA patterns give BCEQZ=48000000, BCNEZ=48000100 and FLDX.D=38340000.
+printf '%s\n' '.text' '.globl fp_fcc' 'fp_fcc:' \
+  'fcmp.cun.d $fcc0,$f24,$f24' \
+  'bcnez $fcc0,.Lyes' \
+  'bceqz $fcc7,.Lno' \
+  'fldx.d $f0,$r29,$r26' \
+  'fstx.d $f1,$r29,$r26' \
+  'fldx.s $f2,$r29,$r26' \
+  'fstx.s $f3,$r29,$r26' \
+  '.Lyes:' \
+  'fldle.d $f0,$r29,$r26' \
+  '.Lno:' \
+  'ret' >"$work/fp-fcc.s"
+
+for name in aliases numeric privilege-pcala fp-fcc; do
   "$MINIAS" --target=loongarch64 -march=loongarch64 -mabi=lp64d \
     -o "$work/mini-$name.o" "$work/$name.s"
   readelf -h "$work/mini-$name.o" | grep -q 'Machine:.*LoongArch'
@@ -61,6 +78,14 @@ for kind in R_LARCH_B16 R_LARCH_B21 R_LARCH_B26 \
             R_LARCH_GOT_PC_HI20 R_LARCH_GOT_PC_LO12; do
   grep -q "$kind" "$work/gcc-pseudos.reloc"
 done
+# Both explicit PLT spellings must retain the real B26 relocation against
+# the naked target symbol, not a made-up `%plt(...)` ELF symbol identity.
+test "$(grep -c R_LARCH_B26 "$work/gcc-pseudos.reloc")" -eq 2
+grep -q 'external_jump' "$work/gcc-pseudos.reloc"
+if readelf -Wr "$work/mini-gcc-pseudos.o" | grep -q '%plt('; then
+  echo 'invalid literal %plt symbol in LoongArch relocation' >&2
+  exit 1
+fi
 test "$(grep -c R_LARCH_RELAX "$work/gcc-pseudos.reloc")" -eq 4
 
 # Host objcopy often cannot read LoongArch.  Extract .text through readelf
@@ -97,7 +122,11 @@ mini_only_bad=(
   'pcalau12i $a0,%pc_lo12(external_symbol)'
   'addi.d $a0,$a0,%pc_hi20(external_symbol)'
   'bl %plt()'
-  'b %plt(external_symbol)'
+  'b %plt()'
+  'bcnez $r0,.Ltarget'
+  'bceqz $fcc8,.Ltarget'
+  'fldx.d $r4,$r29,$r26'
+  'fldx.d $f0,$f1,$r26'
   'la.local $f0,external_symbol'
   'la.local $r12,%plt(external_symbol)'
   'la.global $f0,external_symbol'
@@ -115,7 +144,7 @@ for i in "${!bad[@]}"; do
 done
 
 if ((gnu_available)); then
-  for name in aliases numeric privilege-pcala; do
+  for name in aliases numeric privilege-pcala fp-fcc; do
     loongarch64-linux-gnu-as -mabi=lp64d -o "$work/gnu-$name.o" \
       "$work/$name.s"
     loongarch64-linux-gnu-objcopy -j .text -O binary \

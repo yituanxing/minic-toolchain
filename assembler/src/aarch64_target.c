@@ -383,7 +383,8 @@ enum {
     A64_MC_SIMD_EXT,
     A64_MC_SIMD_IMM,
     A64_MC_EXCLUSIVE_PAIR,
-    A64_MC_MTE_STZ2G
+    A64_MC_MTE_STZ2G,
+    A64_MC_FP_COMPARE
 };
 
 /* GNU AArch64 operands split on TOP-LEVEL commas, not commas within
@@ -1287,6 +1288,24 @@ static bool parse_integer_family(MiniAs *as,const A64AliasState *aliases,MiniAsM
     unsigned kind = 0U;
 
     if (!split_operands(args, t, &n)) return false;
+    /* CMP/CMN SP,Xm is the extended-register SUBS/ADDS alias with
+     * implicit UXTX #0. The ordinary shifted-register compare encodes
+     * register 31 as XZR and would silently compare the wrong value. */
+    if(n==2U && (!strcmp(op,"cmp") || !strcmp(op,"cmn"))) {
+        unsigned base,source;bool bw,sw,bsp,ssp;
+        uint32_t ext;
+        if(parse_a64_reg(aliases,t[0],&base,&bw,&bsp) && bsp &&
+           parse_a64_reg(aliases,t[1],&source,&sw,&ssp) && !ssp &&
+           bw && sw && a64_extended_fields("uxtx",true,true,&ext)) {
+            inst->opcode=A64_MC_EXT_ALU;inst->count=3U;
+            inst->encoding=(!strcmp(op,"cmp")?UINT32_C(0x6b200000):
+                                               UINT32_C(0x2b200000))|ext;
+            put_reg(&inst->operands[0],31U,true);
+            put_reg(&inst->operands[1],base,true);
+            put_reg(&inst->operands[2],source,true);
+            return true;
+        }
+    }
     /* Explicit add/sub 12-bit LSL #12 is a *distinct* instruction form
      * even for #0: keep shift bit for GNU exact-byte comparison. */
     if(n==4U && (!strcmp(op,"add") || !strcmp(op,"sub") ||
@@ -2316,6 +2335,123 @@ static bool a64_attach_branch_target(MiniAs *as,MiniAsMCInst *inst,
     return true;
 }
 
+/* Scalar IEEE FP opcodes share the architectural S/D register encoding.
+ * Keep their opcode selection here and let the existing target MC writer
+ * supply Rd/Rn/Rm. FP comparisons have no destination register and retain
+ * their own target MC form rather than inventing a dummy GPR. */
+static bool a64_parse_scalar_fp(const A64AliasState *aliases,
+                                MiniAsMCInst *inst,const char *op,
+                                const char *args) {
+    static const struct {const char *op;uint32_t base;} binary[]={
+        {"fmul",UINT32_C(0x1e200800)},
+        {"fdiv",UINT32_C(0x1e201800)},
+        {"fadd",UINT32_C(0x1e202800)},
+        {"fsub",UINT32_C(0x1e203800)},
+        {"fmax",UINT32_C(0x1e204800)},
+        {"fmin",UINT32_C(0x1e205800)},
+        {"fmaxnm",UINT32_C(0x1e206800)},
+        {"fminnm",UINT32_C(0x1e207800)}
+    };
+    static const struct {const char *op;uint32_t base;} unary[]={
+        {"fmov",UINT32_C(0x1e204000)},
+        {"fabs",UINT32_C(0x1e20c000)},
+        {"fneg",UINT32_C(0x1e214000)},
+        {"fsqrt",UINT32_C(0x1e21c000)},
+        {"frintn",UINT32_C(0x1e244000)},
+        {"frintp",UINT32_C(0x1e24c000)},
+        {"frintm",UINT32_C(0x1e254000)},
+        {"frintz",UINT32_C(0x1e25c000)}
+    };
+    char t[4][384];unsigned n,rd,rn,rm;bool wide,wide_n,wide_m;
+    size_t i;
+    if(!split_operands(args,t,&n))return false;
+    for(i=0U;i<sizeof(binary)/sizeof(binary[0]);++i) {
+        if(strcmp(op,binary[i].op))continue;
+        if(n!=3U || !a64_scalar_fp_reg(aliases,t[0],&rd,&wide) ||
+           !a64_scalar_fp_reg(aliases,t[1],&rn,&wide_n) ||
+           !a64_scalar_fp_reg(aliases,t[2],&rm,&wide_m) ||
+           wide!=wide_n || wide!=wide_m)return false;
+        inst->opcode=A64_MC_SIMD_LOGIC;inst->count=3U;
+        inst->encoding=binary[i].base|(wide?UINT32_C(0x00400000):0U);
+        put_fp_scalar(&inst->operands[0],rd,wide);
+        put_fp_scalar(&inst->operands[1],rn,wide);
+        put_fp_scalar(&inst->operands[2],rm,wide);
+        return true;
+    }
+    for(i=0U;i<sizeof(unary)/sizeof(unary[0]);++i) {
+        if(strcmp(op,unary[i].op))continue;
+        if(n!=2U || !a64_scalar_fp_reg(aliases,t[0],&rd,&wide) ||
+           !a64_scalar_fp_reg(aliases,t[1],&rn,&wide_n) ||
+           wide!=wide_n)return false;
+        inst->opcode=A64_MC_SIMD_CRYPTO;inst->count=2U;
+        inst->encoding=unary[i].base|(wide?UINT32_C(0x00400000):0U);
+        put_fp_scalar(&inst->operands[0],rd,wide);
+        put_fp_scalar(&inst->operands[1],rn,wide);
+        return true;
+    }
+    if(!strcmp(op,"fcmp") || !strcmp(op,"fcmpe")) {
+        bool zero=false;
+        if(n!=2U || !a64_scalar_fp_reg(aliases,t[0],&rn,&wide))return false;
+        if(!strcmp(t[1],"#0.0") || !strcmp(t[1],"#0"))zero=true;
+        else if(!a64_scalar_fp_reg(aliases,t[1],&rm,&wide_m) ||
+                wide!=wide_m)return false;
+        inst->opcode=A64_MC_FP_COMPARE;inst->count=2U;
+        inst->encoding=UINT32_C(0x1e202000)|
+            (wide?UINT32_C(0x00400000):0U)|
+            (!strcmp(op,"fcmpe")?16U:0U)|(zero?8U:0U);
+        put_fp_scalar(&inst->operands[0],rn,wide);
+        if(zero)put_immediate(&inst->operands[1],0);
+        else put_fp_scalar(&inst->operands[1],rm,wide);
+        return true;
+    }
+    if(!strcmp(op,"fcvt")) {
+        if(n!=2U || !a64_scalar_fp_reg(aliases,t[0],&rd,&wide) ||
+           !a64_scalar_fp_reg(aliases,t[1],&rn,&wide_n) ||
+           wide==wide_n)return false;
+        inst->opcode=A64_MC_SIMD_CRYPTO;inst->count=2U;
+        inst->encoding=wide?UINT32_C(0x1e22c000):UINT32_C(0x1e624000);
+        put_fp_scalar(&inst->operands[0],rd,wide);
+        put_fp_scalar(&inst->operands[1],rn,wide_n);
+        return true;
+    }
+    if(!strcmp(op,"scvtf") || !strcmp(op,"ucvtf")) {
+        bool unsigned_convert=!strcmp(op,"ucvtf");
+        bool gpr_wide,sp;
+        int64_t fraction;
+        if((n!=2U && n!=3U) ||
+           !a64_scalar_fp_reg(aliases,t[0],&rd,&wide))return false;
+        if(a64_scalar_fp_reg(aliases,t[1],&rn,&wide_n)) {
+            if(n!=2U || wide!=wide_n)return false;
+            inst->opcode=A64_MC_SIMD_CRYPTO;inst->count=2U;
+            inst->encoding=(wide?UINT32_C(0x5e61d800):UINT32_C(0x5e21d800))|
+                (unsigned_convert?UINT32_C(0x20000000):0U);
+            put_fp_scalar(&inst->operands[0],rd,wide);
+            put_fp_scalar(&inst->operands[1],rn,wide_n);
+            return true;
+        }
+        if(!parse_a64_reg(aliases,t[1],&rn,&gpr_wide,&sp) || sp)return false;
+        inst->opcode=A64_MC_SIMD_CRYPTO;inst->count=2U;
+        if(n==3U) {
+            if(!parse_signed_number(t[2],&fraction) || fraction<1 ||
+               fraction>(gpr_wide?64:32))return false;
+            inst->encoding=UINT32_C(0x1e020000)|
+                (gpr_wide?UINT32_C(0x80000000):0U)|
+                (wide?UINT32_C(0x00400000):0U)|
+                (unsigned_convert?UINT32_C(0x10000):0U)|
+                ((uint32_t)(64-fraction)<<10U);
+        }else {
+            inst->encoding=UINT32_C(0x1e220000)|
+                (gpr_wide?UINT32_C(0x80000000):0U)|
+                (wide?UINT32_C(0x00400000):0U)|
+                (unsigned_convert?UINT32_C(0x10000):0U);
+        }
+        put_fp_scalar(&inst->operands[0],rd,wide);
+        put_reg(&inst->operands[1],rn,gpr_wide);
+        return true;
+    }
+    return false;
+}
+
 static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
     const A64TargetState *state=(const A64TargetState *)as->target_state;
     const A64AliasState *aliases=state?state->aliases:NULL;
@@ -2333,7 +2469,9 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         minias_set_error(as, "out-of-memory:aarch64-mcinst");
         return false;
     }
-    if((!strcmp(op,"ldr") || !strcmp(op,"str")) &&
+    if(a64_parse_scalar_fp(aliases,inst,op,args)) {
+        /* All S/D arithmetic, conversion and compare forms are target ISA. */
+    }else if((!strcmp(op,"ldr") || !strcmp(op,"str")) &&
        (a64_register_prefix(aliases,args)=='s' ||
         a64_register_prefix(aliases,args)=='d' ||
         a64_register_prefix(aliases,args)=='q')) {
@@ -2383,14 +2521,19 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
             }else if(!a64_parse_memory(as,aliases,tok[1],NULL,&memory) ||
                      memory.mode!=A64_ADDRESS_OFFSET ||
                      (memory.offset.kind==A64_OFFSET_CONSTANT &&
-                      (memory.offset.constant<0 ||
-                       memory.offset.constant%(int64_t)width!=0 ||
-                       memory.offset.constant/(int64_t)width>4095))) {
+                      !((memory.offset.constant>=0 &&
+                         memory.offset.constant%(int64_t)width==0 &&
+                         memory.offset.constant/(int64_t)width<=4095) ||
+                        (memory.offset.constant>=-256 &&
+                         memory.offset.constant<=255)))) {
                 minias_set_error(as,"bad-aarch64-fp-memory:%s:line=%zu",
                                  args,stmt->line);
                 minias_mcinst_destroy(inst);return false;
             }else {
-                inst->opcode=A64_MC_LDST_SCALED;
+                inst->opcode=(memory.offset.kind==A64_OFFSET_CONSTANT &&
+                    (memory.offset.constant<0 ||
+                     memory.offset.constant%(int64_t)width!=0))?
+                     A64_MC_LDST_UNSCALED:A64_MC_LDST_SCALED;
             }
         }
         memory.access_bytes=width;
@@ -4433,6 +4576,11 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
             break;
         case A64_MC_SIMD_IMM:
             code=inst->encoding|inst->operands[0].reg;
+            break;
+        case A64_MC_FP_COMPARE:
+            code=inst->encoding|(inst->operands[0].reg<<5U);
+            if(inst->operands[1].kind==MINIAS_MC_REGISTER)
+                code|=inst->operands[1].reg<<16U;
             break;
         case A64_MC_SIMD_EXT:
             code=inst->encoding|
