@@ -913,7 +913,9 @@ if "$MINIAS" --target=aarch64 -o "$work/unsupported-arch.o" \
     exit 1
 fi
 grep -q 'unsupported-aarch64-architecture' "$work/unsupported-arch.err"
-printf '.text\nfadd d0, d0, d1\n' >"$work/unsupported.s"
+# Scalar FP arithmetic is deliberately supported by MiniAS now. Retain
+# fail-closed behavior with an actually unsupported (invalid) FP mnemonic.
+printf '.text\nfmad d0, d0, d1\n' >"$work/unsupported.s"
 if "$MINIAS" --target=aarch64 -o "$work/unsupported.o" \
     "$work/unsupported.s" >"$work/bad.stdout" 2>"$work/bad.stderr"; then
     echo 'AARCH64_VSLICE=FAIL accepted unsupported instruction' >&2

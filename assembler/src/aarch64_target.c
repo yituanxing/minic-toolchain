@@ -2350,7 +2350,10 @@ static bool a64_parse_scalar_fp(const A64AliasState *aliases,
         {"fmax",UINT32_C(0x1e204800)},
         {"fmin",UINT32_C(0x1e205800)},
         {"fmaxnm",UINT32_C(0x1e206800)},
-        {"fminnm",UINT32_C(0x1e207800)}
+        {"fminnm",UINT32_C(0x1e207800)},
+        /* Scalar AdvSIMD FABD shares register fields with FP binary ops,
+         * but its opcode is in the scalar AdvSIMD rather than FP space. */
+        {"fabd",UINT32_C(0x7ea0d400)}
     };
     static const struct {const char *op;uint32_t base;} unary[]={
         {"fmov",UINT32_C(0x1e204000)},
@@ -2404,6 +2407,24 @@ static bool a64_parse_scalar_fp(const A64AliasState *aliases,
         else put_fp_scalar(&inst->operands[1],rm,wide);
         return true;
     }
+    if(!strcmp(op,"fccmp") || !strcmp(op,"fccmpe")) {
+        unsigned cc;
+        int64_t nzcv;
+        if(n!=4U || !a64_scalar_fp_reg(aliases,t[0],&rn,&wide) ||
+           !a64_scalar_fp_reg(aliases,t[1],&rm,&wide_m) ||
+           wide!=wide_m || !parse_signed_number(t[2],&nzcv) ||
+           nzcv<0 || nzcv>15 || !a64_condition_code(t[3],&cc))return false;
+        /* FCCMP stores Rm in bits [20:16], cond in [15:12], NZCV in
+         * [3:0]. FP_COMPARE already owns the same Rn/Rm register fields. */
+        inst->opcode=A64_MC_FP_COMPARE;inst->count=2U;
+        inst->encoding=UINT32_C(0x1e200400)|
+            (wide?UINT32_C(0x00400000):0U)|
+            (!strcmp(op,"fccmpe")?UINT32_C(0x10):0U)|
+            (cc<<12U)|(uint32_t)nzcv;
+        put_fp_scalar(&inst->operands[0],rn,wide);
+        put_fp_scalar(&inst->operands[1],rm,wide);
+        return true;
+    }
     if(!strcmp(op,"fcvt")) {
         if(n!=2U || !a64_scalar_fp_reg(aliases,t[0],&rd,&wide) ||
            !a64_scalar_fp_reg(aliases,t[1],&rn,&wide_n) ||
@@ -2447,6 +2468,35 @@ static bool a64_parse_scalar_fp(const A64AliasState *aliases,
         }
         put_fp_scalar(&inst->operands[0],rd,wide);
         put_reg(&inst->operands[1],rn,gpr_wide);
+        return true;
+    }
+    if(!strcmp(op,"fcvtzs") || !strcmp(op,"fcvtzu")) {
+        bool unsigned_convert=!strcmp(op,"fcvtzu");
+        bool gpr_wide,sp;
+        if(n!=2U || !a64_scalar_fp_reg(aliases,t[1],&rn,&wide_n))
+            return false;
+        if(a64_scalar_fp_reg(aliases,t[0],&rd,&wide)) {
+            if(wide!=wide_n)return false;
+            /* AdvSIMD scalar FP-to-integer-in-vector-register form. */
+            inst->opcode=A64_MC_SIMD_CRYPTO;inst->count=2U;
+            inst->encoding=UINT32_C(0x5ea1b800)|
+                (wide?UINT32_C(0x00400000):0U)|
+                (unsigned_convert?UINT32_C(0x20000000):0U);
+            put_fp_scalar(&inst->operands[0],rd,wide);
+            put_fp_scalar(&inst->operands[1],rn,wide_n);
+        }else {
+            if(!parse_a64_reg(aliases,t[0],&rd,&gpr_wide,&sp) || sp)
+                return false;
+            /* Scalar FP-to-W/X integer conversion, using FP FTYPE and
+             * GPR SF width independently (W/D is architecturally legal). */
+            inst->opcode=A64_MC_SIMD_CRYPTO;inst->count=2U;
+            inst->encoding=UINT32_C(0x1e380000)|
+                (wide_n?UINT32_C(0x00400000):0U)|
+                (gpr_wide?UINT32_C(0x80000000):0U)|
+                (unsigned_convert?UINT32_C(0x00010000):0U);
+            put_reg(&inst->operands[0],rd,gpr_wide);
+            put_fp_scalar(&inst->operands[1],rn,wide_n);
+        }
         return true;
     }
     return false;
@@ -3566,9 +3616,20 @@ reduction_done:;
         uint32_t ar,base;
         int64_t number;
         unsigned simd_imm;
+        bool scalar_d=false;
         if(!split_two(args,vreg,sizeof(vreg),text,sizeof(text)) ||
-           !a64_vector_view(aliases,vreg,&rd,&ar) ||
            !parse_signed_number(text,&number)) {
+            minias_set_error(as,"bad-aarch64-movi:%s:line=%zu",
+                             args,stmt->line);
+            minias_mcinst_destroy(inst);return false;
+        }
+        /* Recognize scalar D first: the general vector-view recognizer also
+         * parses bare Dn as a 64-bit SIMD view, but MOVI Dn and Vn.2D have
+         * distinct opcodes (0x2f vs 0x6f). */
+        scalar_d=a64_scalar_fp_d(aliases,vreg,&rd);
+        if(scalar_d) {
+            ar=UINT32_C(0x40000c00);
+        }else if(!a64_vector_view(aliases,vreg,&rd,&ar)) {
             minias_set_error(as,"bad-aarch64-movi:%s:line=%zu",
                              args,stmt->line);
             minias_mcinst_destroy(inst);return false;
@@ -3590,7 +3651,7 @@ reduction_done:;
                 }
                 if(octet==UINT8_MAX)simd_imm|=1U<<k;
             }
-            base=UINT32_C(0x6f00e400);
+            base=scalar_d?UINT32_C(0x2f00e400):UINT32_C(0x6f00e400);
         }else if(number>=0 && number<=255 &&
                  (ar&UINT32_C(0xc00))==0U) {
             base=UINT32_C(0x0f00e400);
@@ -3606,7 +3667,7 @@ reduction_done:;
         }
         inst->opcode=A64_MC_SIMD_IMM;inst->count=1U;
         inst->encoding=base|
-                      (ar&UINT32_C(0x40000000))|
+                      (scalar_d?0U:(ar&UINT32_C(0x40000000)))|
                       ((simd_imm>>5U)<<16U)|((simd_imm&31U)<<5U);
         put_vector(&inst->operands[0],rd);
     } else if(!strcmp(op,"ldxp") || !strcmp(op,"ldaxp") ||
