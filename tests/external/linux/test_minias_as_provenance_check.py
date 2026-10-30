@@ -98,6 +98,13 @@ class ProvenanceTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "insufficient target Kbuild"):
             self.verify()
 
+    def test_kconfig_probe_only_is_not_production_coverage(self) -> None:
+        self.common()
+        self.trace.write_text(self.trace.read_text() +
+                              "delegate-kconfig-probe cwd=/tmp input=/tmp/ccfoo.s output=/dev/null\n")
+        expected, passed, counters = self.verify()
+        self.assertEqual((expected, passed, counters["queries"]), (2, 2, 2))
+
     def test_relative_cwd_output(self) -> None:
         self.common()
         nested = self.out / "mm"

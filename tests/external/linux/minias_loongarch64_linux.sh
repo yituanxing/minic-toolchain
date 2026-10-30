@@ -100,14 +100,15 @@ cat >"$work/as-override/loongarch64-linux-gnu-as" <<'MINIAS_WRAPPER'
 #!/usr/bin/env bash
 set -Eeuo pipefail
 args=("$@")
-out= input= temporary_input= query=0
+out= input= temporary_input= query=0 version_probe=0
 # Linux 6.6's arch/loongarch/Makefile forces `-msoft-float -mabi=lp64s`
 # regardless of the lp64d GNU userspace ABI chosen for the initramfs.
 flags=(--target=loongarch64 -march=loongarch64 -mabi=lp64s)
 for ((i=0; i<${#args[@]}; ++i)); do
   arg=${args[i]}
   case "$arg" in
-    --version|-v|--help) query=1 ;;
+    --version) query=1; version_probe=1 ;;
+    -v|--help) query=1 ;;
     -o) if ((i+1 < ${#args[@]})); then out=${args[i+1]}; ((i+=1)); fi ;;
     -mabi=*|-march=*) flags+=("$arg") ;;
     -*) ;;
@@ -116,7 +117,17 @@ for ((i=0; i<${#args[@]}; ++i)); do
 done
 if ((query)); then
   if [[ -n $out || -n $input ]]; then
-    echo 'MINIAS_AS_WRAPPER_ERROR arch=loongarch64 query_with_production_io' >&2
+    # Kconfig scripts/as-version.sh uses GCC -Wa,--version against a
+    # temporary /tmp/cc*.s with non-object output.  Delegate only that exact
+    # disposable probe to GNU.  No production .o or arbitrary I/O may bypass
+    # MiniAS, even when GCC supplies a version-query flag.
+    if ((version_probe)) &&
+       { { [[ $out == /dev/null ]] && [[ -z $input || $input =~ ^/tmp/cc[[:alnum:]]+\.s$ ]]; } ||
+         { [[ $out =~ (^|/)\.tmp_[0-9]+/tmp$ ]] && [[ $input =~ ^/tmp/cc[[:alnum:]]+\.s$ ]]; }; }; then
+      printf 'delegate-kconfig-probe cwd=%q input=%q output=%q\n' "$PWD" "$input" "$out" >>"${MINIAS_AS_TRACE:?}"
+      exec "${REAL_AS:?}" "$@"
+    fi
+    printf 'MINIAS_AS_WRAPPER_ERROR arch=loongarch64 query_with_production_io output=%q input=%q\n' "$out" "$input" >&2
     exit 2
   fi
   printf 'query %q\n' "$*" >>"${MINIAS_AS_TRACE:?}"

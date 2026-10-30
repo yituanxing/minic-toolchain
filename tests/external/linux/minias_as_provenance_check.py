@@ -87,9 +87,10 @@ def trace_owners(kbuild_out: Path, trace: Path) -> tuple[Counter[Path], Counter[
     counters: Counter[str] = Counter()
     for index, line in enumerate(trace.read_text(errors="replace").splitlines(), 1):
         action, _, payload = line.partition(" ")
-        if action not in {"assemble", "pass", "fail", "delegate-query", "query"}:
+        if action not in {"assemble", "pass", "fail", "delegate-query",
+                          "delegate-kconfig-probe", "query"}:
             continue
-        if action in {"delegate-query", "query"}:
+        if action in {"delegate-query", "delegate-kconfig-probe", "query"}:
             counters["queries"] += 1
             continue
         counters[action] += 1

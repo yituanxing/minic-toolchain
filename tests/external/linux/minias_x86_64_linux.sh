@@ -104,7 +104,15 @@ if (( query )); then
     # GAS `-v` may accompany a real assembly. Information-only probes are
     # delegated; any invocation that also names a production input/output
     # remains under MiniAS ownership (the verbosity flag is not forwarded).
-    if [[ -z "$input" && -z "$output" ]]; then
+    # Linux 6.6.143 scripts/as-version.sh runs GNU GCC with
+    # `-Wa,--version -c -x assembler-with-cpp /dev/null -o /dev/null`.
+    # Both paths point to the null device: this is an information query,
+    # not production code; denying it breaks `syncconfig` before Kbuild.
+    # The parser intentionally does not treat the /dev/null character device
+    # as a source file (-f is false), so input may be empty for that probe.
+    if [[ -z "$input" && -z "$output" ]] ||
+       [[ -z "$input" && "$output" == /dev/null ]] ||
+       [[ "$input" == /dev/null && "$output" == /dev/null ]]; then
         printf 'delegate-query cwd=%q argc=%s\n' "$PWD" "${#args[@]}" \
             >>"${MINIAS_AS_TRACE:?}"
         exec "${REAL_AS:?}" "$@"

@@ -13,6 +13,8 @@ on:
       - 'tools/minic-as/**'
       - 'tests/assembler/**'
       - '.github/workflows/minias-batch-3536.yml'
+      - '.github/workflows/minias-a0-gate-v1.yml'
+      - 'tests/external/linux/corpus_replay.py'
 
 permissions:
   contents: read

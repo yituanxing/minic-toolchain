@@ -1347,14 +1347,33 @@ jobs:
           done
 
           if (( query )); then
-            # A GNU-as information query must not also carry a production
-            # assembly payload.  Otherwise `as -v -o real.o real.s` could
-            # silently bypass the MiniAS-only Linux contract.
+            # Linux scripts/as-version.sh asks GCC to compile /dev/null with
+            # `-Wa,--version`.  GCC consequently invokes GAS with both a
+            # generated /tmp/cc*.s input and a *discarded* output.  Preserve
+            # this version query, but never forward an actual Kbuild .o to
+            # GNU as merely because it also carries `-v` or `--version`.
             if [[ -n "$input" || -n "$out" ]]; then
-              printf 'MINIAS_AS_WRAPPER_ERROR query_with_production_input' >&2
-              printf ' %q' "$@" >&2
-              printf '\n' >&2
-              exit 2
+              is_version_probe=0
+              for query_arg in "${args[@]}"; do
+                if [[ "$query_arg" == --version ]]; then
+                  is_version_probe=1
+                fi
+              done
+              # `/dev/null` is not a regular file, so the argument parser
+              # may leave `input` empty for that exact harmless source.
+              valid_version_probe=0
+              if [[ "$out" == /dev/null ]] && \
+                  { [[ -z "$input" ]] || [[ "$input" == /tmp/cc*.s ]]; }; then
+                valid_version_probe=1
+              elif [[ "$input" == /tmp/cc*.s && "$out" =~ ^\.tmp_[0-9]+/tmp$ ]]; then
+                valid_version_probe=1
+              fi
+              if (( ! is_version_probe || ! valid_version_probe )); then
+                printf 'MINIAS_AS_WRAPPER_ERROR query_with_production_input' >&2
+                printf ' %q' "$@" >&2
+                printf '\n' >&2
+                exit 2
+              fi
             fi
             printf 'delegate-query' >>"$trace"
             printf ' %q' "$@" >>"$trace"
@@ -1427,6 +1446,36 @@ jobs:
           chmod +x "$bindir/riscv64-linux-gnu-as"
           # GCC -B resolves the basename 'as'; Kbuild AS resolves the prefixed name.
           ln -s riscv64-linux-gnu-as "$bindir/as"
+
+          # Prove the Linux as-version exception is informational only.
+          # A genuine output owner with the same version flag must still be
+          # rejected; neither case invokes GNU as for production assembly.
+          probe_input=$(mktemp /tmp/ccXXXXXX.s)
+          probe_trace=$(mktemp /tmp/minias-as-version-query.XXXXXX.trace)
+          trap 'rm -f "$probe_input" "$probe_trace"' EXIT
+          if ! MINIAS=/bin/false MINIAS_AS_TRACE="$probe_trace" \
+                REAL_AS=/usr/bin/riscv64-linux-gnu-as \
+                "$bindir/as" --version -o /dev/null "$probe_input" \
+                | grep -q 'GNU assembler'; then
+            echo 'MINIAS_AS_VERSION_PROBE=FAIL harmless_GCC_as_version_query' >&2
+            exit 1
+          fi
+          if ! MINIAS=/bin/false MINIAS_AS_TRACE="$probe_trace" \
+                REAL_AS=/usr/bin/riscv64-linux-gnu-as \
+                "$bindir/as" --version -o /dev/null /dev/null \
+                | grep -q 'GNU assembler'; then
+            echo 'MINIAS_AS_VERSION_PROBE=FAIL dev_null_info_query' >&2
+            exit 1
+          fi
+          if MINIAS=/bin/false MINIAS_AS_TRACE="$probe_trace" \
+                REAL_AS=/usr/bin/riscv64-linux-gnu-as \
+                "$bindir/as" --version -o arch/riscv/kernel/head.o "$probe_input" \
+                >/dev/null 2>&1; then
+            echo 'MINIAS_AS_VERSION_PROBE=FAIL production_object_delegated' >&2
+            exit 1
+          fi
+          test "$(grep -c '^delegate-query ' "$probe_trace")" -eq 2
+          echo 'MINIAS_AS_VERSION_PROBE=PASS query=2 production_gnu_as=0'
 
       - name: Build Linux 6.6.143 with GCC frontend plus MiniAS only
         shell: bash
