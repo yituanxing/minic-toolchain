@@ -27,19 +27,19 @@ static bool minic_asm_text_mentions_symbol(const char *text,
     return false;
 }
 
-bool minic_inline_source_has_opaque_asm_reference(
-    const MinicC0Program *program, const MinicFunction *source) {
+bool minic_program_has_opaque_asm_symbol(const MinicC0Program *program,
+                                          const char *name, size_t name_length) {
     size_t index;
 
-    if (program == NULL || source == NULL || source->name == NULL) {
+    if (program == NULL || name == NULL || name_length == 0U) {
         return true;
     }
     for (index = 0U; index < program->file_asm_count; ++index) {
         const MinicFileAsm *source_asm = &program->file_asms[index];
         if (minic_asm_text_mentions_symbol(source_asm->text,
                                            source_asm->length,
-                                           source->name,
-                                           source->name_length)) {
+                                           name,
+                                           name_length)) {
             return true;
         }
     }
@@ -47,12 +47,19 @@ bool minic_inline_source_has_opaque_asm_reference(
         const MinicInlineAsm *source_asm = &program->inline_asms[index];
         if (minic_asm_text_mentions_symbol(source_asm->template_text,
                                            source_asm->template_length,
-                                           source->name,
-                                           source->name_length)) {
+                                           name,
+                                           name_length)) {
             return true;
         }
     }
     return false;
+}
+
+bool minic_inline_source_has_opaque_asm_reference(
+    const MinicC0Program *program, const MinicFunction *source) {
+    if (source == NULL) return true;
+    return minic_program_has_opaque_asm_symbol(
+        program, source->name, source->name_length);
 }
 
 static bool minic_inline_integer_source_has_residual_reference(

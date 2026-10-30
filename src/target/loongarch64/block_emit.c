@@ -447,6 +447,15 @@ static bool loongarch64_machine_no_native_opcode(
     return minic_loongarch64_elided_frame_address_instruction(ctx, ins);
 }
 
+static bool loongarch64_machine_immediate_rhs(
+    const MinicDirectLP64BlockContext *ctx,
+    const MinicCoreInstruction *consumer,
+    MinicCoreValueId *rhs) {
+    if (ctx == NULL) return false;
+    return minic_loongarch64_integer_rhs_immediate(
+        ctx->program, ctx->target, ctx->fn, consumer, rhs, NULL);
+}
+
 bool minic_loongarch64_emit_core_blocks(
     FILE *out, const MinicDirectLP64BlockContext *ctx) {
     static const MinicDirectMachineDispatch dispatch = {
@@ -454,7 +463,8 @@ bool minic_loongarch64_emit_core_blocks(
         loongarch64_machine_emit_family,
         loongarch64_machine_store_gp,
         loongarch64_machine_emit_terminator,
-        loongarch64_machine_no_native_opcode
+        loongarch64_machine_no_native_opcode,
+        loongarch64_machine_immediate_rhs
     };
     return minic_multi_direct_machine_dispatch(out, ctx, &dispatch);
 }

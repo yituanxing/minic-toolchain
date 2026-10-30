@@ -9,6 +9,8 @@
  * residual-reference retirement. A hit prevents static source removal. */
 bool minic_inline_source_has_opaque_asm_reference(
     const MinicC0Program *program, const MinicFunction *source);
+bool minic_program_has_opaque_asm_symbol(const MinicC0Program *program,
+                                          const char *name, size_t name_length);
 
 /* Only two existing clone construction helpers cross specialization
  * families. They remain compiler-private, never backend or Core hooks. */

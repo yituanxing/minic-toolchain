@@ -319,6 +319,7 @@ typedef struct MinicObjectAttributeContext {
     MinicSymbolVisibility *visibility;
     bool *has_visibility;
     bool *is_weak;
+    bool *force_emit;
     MinicGlobalObjectId *alias_target;
 } MinicObjectAttributeContext;
 
@@ -511,6 +512,10 @@ static bool consume_object_attribute(MinicParser *parser,
         *context->alias_target = target_id;
         return true;
     }
+    if (descriptor->kind == MINIC_ATTRIBUTE_USED && context->force_emit != NULL) {
+        *context->force_emit = true;
+        return true;
+    }
     if (object_attribute_class_is_parse_only(descriptor->semantic_class)) {
         return true;
     }
@@ -559,6 +564,7 @@ static bool initialize_object_attribute_context(MinicObjectAttributeContext *con
     context->visibility = NULL;
     context->has_visibility = NULL;
     context->is_weak = NULL;
+    context->force_emit = NULL;
     context->alias_target = NULL;
     return true;
 }
@@ -607,6 +613,36 @@ bool minic_parser_parse_gnu_object_attribute_lists(MinicParser *parser,
         return false;
     }
     return minic_parser_parse_gnu_attribute_lists(parser, consume_object_attribute, &context);
+}
+
+bool minic_parser_parse_gnu_object_attribute_lists_with_used(
+    MinicParser *parser, char *section_name, size_t section_capacity,
+    size_t *section_name_length, bool *has_section,
+    size_t *explicit_alignment, bool *force_emit) {
+    MinicObjectAttributeContext context;
+    if (parser == NULL || force_emit == NULL ||
+        !initialize_object_attribute_context(&context, section_name, section_capacity,
+                                             section_name_length, has_section,
+                                             explicit_alignment)) return false;
+    context.force_emit = force_emit;
+    return minic_parser_parse_gnu_attribute_lists(parser, consume_object_attribute, &context);
+}
+
+bool minic_parser_apply_object_attribute_list_with_used(
+    MinicParser *parser, const MinicParsedAttributeList *attributes,
+    char *section_name, size_t section_capacity,
+    size_t *section_name_length, bool *has_section,
+    size_t *explicit_alignment, bool *force_emit) {
+    MinicObjectAttributeContext context;
+    size_t index;
+    if (parser == NULL || attributes == NULL || force_emit == NULL ||
+        !initialize_object_attribute_context(&context, section_name, section_capacity,
+                                             section_name_length, has_section,
+                                             explicit_alignment)) return false;
+    context.force_emit = force_emit;
+    for (index = 0U; index < attributes->count; ++index)
+        if (!consume_object_attribute(parser, &attributes->values[index], &context)) return false;
+    return true;
 }
 
 bool minic_parser_parse_gnu_object_attribute_lists_with_visibility(

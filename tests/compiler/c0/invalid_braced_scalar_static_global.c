@@ -1,4 +1,4 @@
-static const int value = {1};
+static const int value __attribute__((used)) = {1};
 
 int main(void)
 {

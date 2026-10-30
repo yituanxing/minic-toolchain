@@ -4,7 +4,9 @@ typedef struct {
 } error;
 
 static error global_error = {((void *)0), 0};
-static const int table[4] = {0x63, 0X7c, 1,};
+/* This fixture asserts exact physical ELF array data, so explicitly retain
+ * the otherwise unreferenced static const object under dead-object DCE. */
+static const int table[4] __attribute__((used)) = {0x63, 0X7c, 1,};
 
 int main(void)
 {

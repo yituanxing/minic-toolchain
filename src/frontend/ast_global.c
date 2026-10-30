@@ -226,7 +226,7 @@ bool minic_c0_program_global_object_emittable(const MinicC0Program *program,
     size_t index;
     if (program == NULL || object == NULL) return false;
     owner = object->owner_function;
-    if (owner == MINIC_FUNCTION_INVALID) return true;
+    if (owner == MINIC_FUNCTION_INVALID) return !object->is_emission_pruned;
     if (owner >= program->function_count) return false;
     if (program->functions[owner].is_defined &&
         (!program->functions[owner].is_internal ||
@@ -241,6 +241,13 @@ bool minic_c0_program_global_object_emittable(const MinicC0Program *program,
             return true;
     }
     return false;
+}
+
+bool minic_c0_program_set_global_object_force_emit(MinicC0Program *program,
+                                                    MinicGlobalObjectId object_id) {
+    if (program == NULL || object_id >= program->global_object_count) return false;
+    program->global_objects[object_id].force_emit = true;
+    return true;
 }
 
 bool *minic_c0_program_build_global_owner_live_map(const MinicC0Program *program) {
@@ -271,7 +278,7 @@ bool minic_c0_program_global_object_emittable_with_map(
     if (owner_live_map == NULL)
         return minic_c0_program_global_object_emittable(program, object);
     owner = object->owner_function;
-    return owner == MINIC_FUNCTION_INVALID ||
+    return (owner == MINIC_FUNCTION_INVALID && !object->is_emission_pruned) ||
            (owner < program->function_count && owner_live_map[owner]);
 }
 

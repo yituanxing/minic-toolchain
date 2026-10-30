@@ -21,6 +21,9 @@ if grep -F '.globl __minic_static_local_' "$asm" >/dev/null; then
 fi
 grep -F '  .dword shared_event' "$asm" >/dev/null
 grep -F '  .dword .Lminic_string_' "$asm" >/dev/null
-grep -F '  .zero 8' "$asm" >/dev/null
+# Both eight zero bytes and one zero 64-bit pointer slot are valid
+# representations; verify this is the internal 32-byte table's null slot.
+sed -n '/^__minic_static_local_[^:]*:/,/^\.size __minic_static_local_/p' "$asm" |
+    grep -Eq '^  (\.zero 8|\.dword 0)$'
 grep -E '^\.size __minic_static_local_.*,[[:space:]]*32$' "$asm" >/dev/null
 printf '%s\n' 'PASS compiler/c0/static_local_pointer_array inferred=4 string-reloc=2 object-reloc=1 null=1 internal=1'

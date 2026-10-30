@@ -18,8 +18,8 @@ mkdir -p "$work"
 
 grep -F '.size layout, 8' "$work/short_integer_layout.s" >/dev/null
 grep -F '  .half 65535' "$work/short_integer_layout.s" >/dev/null
-grep -F '  lhu a0, 0(a0)' "$work/short_integer_layout.s" >/dev/null
-grep -F '  sh t0, 0(t1)' "$work/short_integer_layout.s" >/dev/null
-grep -F '  slli a0, a0, 48' "$work/short_integer_layout.s" >/dev/null
-grep -F '  srai a0, a0, 48' "$work/short_integer_layout.s" >/dev/null
+grep -Eq '^[[:space:]]+lhu[[:space:]]+[a-z][a-z0-9]*, 0\([a-z][a-z0-9]*\)$' "$work/short_integer_layout.s"
+grep -Eq '^[[:space:]]+sh[[:space:]]+[a-z][a-z0-9]*, 0\([a-z][a-z0-9]*\)$' "$work/short_integer_layout.s"
+grep -Eq '^[[:space:]]+slli[[:space:]]+[a-z][a-z0-9]*, [a-z][a-z0-9]*, 48$' "$work/short_integer_layout.s"
+grep -Eq '^[[:space:]]+srai[[:space:]]+[a-z][a-z0-9]*, [a-z][a-z0-9]*, 48$' "$work/short_integer_layout.s"
 printf '%s\n' 'PASS compiler/c0/short_integer size=2 align=2 unsigned-load=lhu store=sh signed-extension=16'

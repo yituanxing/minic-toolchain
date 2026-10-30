@@ -8,31 +8,40 @@ C-object fallback is permitted in the candidate kernel.
 
 ## Last completed full Linux attempt
 
-- Evidence: [GNU/QEMU CI #41050392970](https://github.com/yituanxing/minic-toolchain/actions/runs/41050392970), `f6cd6586`.
-- x86-64: 2,758 original C owners reached MiniC/GNU AS; GNU final relink
-  failed with 28 undefined references to 24 symbols (20 compile-time assert
-  references, two `__cfi_sites*`, six other references).
-- AArch64: 4,108 original C owners reached MiniC/GNU AS; GNU relink failed
-  with 198 undefined references to 109 symbols (predominantly static
-  compilation guards, including KVM `__fls`).
-- LoongArch64: 2,723 original C owners reached MiniC/GNU AS; GNU relink
-  failed at `head.o:(.ref.text+0x15c)` with `R_LARCH_B26` out of range to
-  `start_secondary`. Candidate `.text` was 145,119,440 bytes (about 8.75x
-  the GNU baseline), above the approximately 128 MiB direct-branch range.
-- The next two source fixes, `ba3a5b6d` and `61ec96f6`, did **not** cause a
-  full-Linux rerun: corresponding `gnu-boot` jobs were skipped. Their runtime
-  result must not be invented from the 4/4 general runtime workflow.
+- Evidence: [GNU/QEMU CI #41085043124](https://github.com/yituanxing/minic-toolchain/actions/runs/41085043124), exact pushed head `77491ce7`.
+  All three `gnu-boot` jobs **actually ran** and failed at candidate GNU final
+  link. In all three, original GNU golden Linux QEMU P0/P1 was **2/2 PASS**.
+  No candidate Image or QEMU boot occurred, and no GNU C fallback was allowed.
+- x86-64: **2,758/2,758** frozen C owners compiled with MiniC and GNU AS.
+  Linker undefined references fell **28 -> 11**, unique symbols **24 -> 9**
+  versus [previous full attempt #41050392970](https://github.com/yituanxing/minic-toolchain/actions/runs/41050392970):
+  seven `__compiletime_assert_*`, three `dax_get_private`, one `crc32c`.
+  The candidate ELF was 245,890,576 B vs GNU 16,075,966 B.
+- AArch64: **4,108/4,108** C owners compiled with MiniC/GNU AS. Linker
+  undefined references **198 -> 13**, unique symbols **109 -> 9**. Remaining
+  are eight ordinary `__compiletime_assert_*` plus five
+  `__kvm_nvhe___compiletime_assert_*`; GNU link also separately reported
+  unexpected GOT/PLT and run-time procedure linkages. Candidate ELF
+  263,322,300 B vs GNU 17,941,440 B.
+- LoongArch64: **2,723/2,723** C owners compiled with MiniC/GNU AS. GNU
+  linker still failed on `head.o:(.ref.text+0x15c)` -> `start_secondary` with
+  `R_LARCH_B26`, measured displacement -144,063,268 B, exceeding the signed
+  +/-128 MiB range by about 9.39 MiB. Candidate ELF 147,182,348 B vs GNU
+  16,887,804 B; no candidate QEMU boot occurred.
+- The separate success-marked native-defconfig workflow had **skipped** its
+  actual `gnu-boot` jobs and is explicitly **not** Linux runtime evidence.
 
-## Current local batch (replay evidence; awaiting exact-head GNU/QEMU)
+## Second local batch (replay evidence; awaiting new exact-head GNU/QEMU)
 
 | ISA | Frozen original Linux input or kernel source | Confirmed local result |
 | --- | --- | --- |
-| x86-64 | `drivers/gpu/drm/i915/i915_hwmon.i` | `__compiletime_assert_461`–`465` no longer appear in MiniC→GNU AS `nm -u`. Normal static helper integer specialization matches GNU `-O2`. |
-| x86-64 | Linux 6.6.143 `arch/x86/kernel/alternative.c`, CONFIG-off `__apply_fineibt` | Non-inline empty internal void calls with pure arguments no longer retain `__cfi_sites` and `__cfi_sites_end`; exact-shape GNU/MiniC AS+LD+runtime fixture passes. Complete kernel owner `.i` was not archived in the failure sample. |
-| x86-64 | `drivers/md/dm.i` | `dm_zone_endio` removed in MiniC→GNU AS→`nm -u`; original GNU oracle agrees. Other `dm` unresolved references remain. |
-| AArch64 | `mm/ksm.i` | `__compiletime_assert_508`, `509` removed using same-global-object DataLayout address facts. |
-| AArch64 | `drivers/ufs/core/ufshcd.i` | `__compiletime_assert_609`–`618` removed using bounded compound-literal byte and bitfield layout facts; unknown bits remain unknown. |
-| LoongArch64 | Frozen Linux vDSO `.i` files | Immediate arithmetic, unaligned byte paths, and elimination of left Core SSA memory snapshot for literal RHS lower native instruction count; no evidence yet of enough size reduction to cure B26. |
+| x86-64 | `drivers/gpu/drm/drm_edid.i` | `__compiletime_assert_428` removed by pure, bounded `static const` record-array read/inline getter; GNU `-O2` and side-effect negative fixtures agree. |
+| x86-64 | `drivers/md/dm.i` | All three remaining `dax_get_private` undefined calls removed using joint Core function/static-global-object graph; GNU `-O2` + GNU AS/`nm -u` strict comparison PASS. |
+| x86-64 | `net/netfilter/nf_nat_proto.i` | Remaining `crc32c` undefined call removed by the same reachability analysis; GNU `-O2` + GNU AS/`nm -u` PASS. File ASM, `used`, section, alias, volatile roots retained. |
+| AArch64 | `arch/arm64/kernel/patching.i` | `__compiletime_assert_317` removed by safe static helper cloning across two exact operand-free/identity-output empty GNU asm shapes; actual BUG table assembly remains. |
+| AArch64 | KVM `arch/arm64/kvm/arm.i`, `pmu.i`, `vgic/vgic.i` | Three `kvm_make_request` static pure guard assertions removed on original frozen GNU `.i`. |
+| AArch64 | KVM `hyp/nvhe/pkvm.nvhe.i`, `sys_regs.nvhe.i` | All five `__kvm_nvhe___compiletime_assert_{519,550,556,562,574}` discharged on original GNU `.i` by nested pure `__builtin_ffsll` argument and FIELD_GET guard proof. |
+| LoongArch64 | Frozen vDSO `vdso.i`, `vgettimeofday.i`, `vgetcpu.i` | Shared Core RHS non-CFG snapshot elision + target immediate/one-use optimizations yielded native mnemonic counts 3,331 -> 3,269; 4,180 -> 4,142; 206 -> 200 on these samples. The B26 9.39 MiB gap is **not** yet proven solved. |
 
 The local fixture probes include GNU `-O2` reference, x86-64 MiniC→GNU AS/LD
 execution, five-target MiniC `-S`, and negative cases that must remain dynamic.
@@ -41,23 +50,25 @@ ELF Image, and candidate QEMU P0/P1.
 
 ## Confirmed remaining or structurally unresolved
 
-1. **x86-64**: remaining sampled assertions in `fs/proc/task_mmu.i`
-   (`__compiletime_assert_347`, nested `__builtin_constant_p`/CPU-feature
-   `asm goto`) and `drivers/gpu/drm/drm_edid.i` (`__compiletime_assert_428`,
-   global read-only VIC table). Preserve inline ASM and dynamic evaluations.
-   The frozen owner set is a sample, not a proof that only these remain.
-2. **x86-64**: `dax_get_private` (three references), `crc32c` (one), and
-   possibly `dm_set_zones_restrictions` require safe joint static-object and
-   function reachability. Do **not** indiscriminately prune `.initcall`,
-   `.altinstructions`, `__used`/`retain`, callbacks, alias, or asm roots.
-3. **AArch64**: other owners, especially KVM guard / `__fls` references, are
-   not covered by the two replayed repaired files. Await exact-head all-owner
-   relink and collect the next full unresolved list.
-4. **LoongArch64**: measured optimization on vDSO samples is useful but much
-   smaller than the approximately 11 MiB (preferably >=20 MiB margin)
-   code-size gap to the B26 bound. Need architecture-safe general Core SSA
-   use/liveness and backend code-size work; linker/assembly bypasses are not
-   accepted as compiler correctness.
+1. **x86-64**: still lack exact frozen `.i` for five linker-reported assertion
+   owners: `_461` (`intel_gt_irq.c`), `_697` (`nf_conntrack_extend.c`),
+   `_2121` (`mac80211/tx.c`), `_369` (`ioremap.c`), `_287` (`kaslr.c`). The
+   sampled `fs/proc/task_mmu.i` `_347` also remains side-effect sensitive.
+   The candidate owner archiver now resolves actual x86 object relocations to
+   capture missing `.i/.cmd` on the *next* failed CI, not by guessing.
+2. **AArch64**: `__compiletime_assert_758` in `kernel/bpf/helpers.o` remains
+   unreplayed; five NVHE/four KVM repairs and fixmap require GNU relink proof.
+   Independently inspect final GOT/PLT dynamic-symbol check. The GNU original
+   preoverlay has 82 GOT relocations, MiniC 78, so GOT count alone is not a
+   correctness diagnosis; inspect `undefined weak` direct call semantics and
+   linker symbol binding without weakening linker checks.
+3. **LoongArch64**: vDSO instruction reductions are real but representative
+   samples cannot certify a >=9.39 MiB **whole-kernel** text reduction. Keep
+   exact `R_LARCH_B26` acceptance, and pursue target-neutral SSA liveness and
+   proven register residency before another relink.
+4. **All**: original GNU Linux C options versus MiniC are still marked
+   `INCONCLUSIVE_UNQUALIFIED` by the ledger (not falsely `equivalent`). This is
+   a separate qualification gap from 100% source ownership.
 
 ## Mandatory next gate
 

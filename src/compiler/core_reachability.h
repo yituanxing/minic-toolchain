@@ -10,4 +10,7 @@
 bool minic_prune_inline_specializations_from_core(
     MinicC0Program *program, const MinicCoreFunctionSet *set,
     bool emit_reachable_core_blocks_only);
+bool minic_prune_dead_file_scope_static_objects_from_core(
+    MinicC0Program *program, const MinicCoreFunctionSet *set,
+    bool emit_reachable_core_blocks_only);
 #endif

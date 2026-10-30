@@ -1,4 +1,6 @@
-static const char table[4] = {0, 128, 255, 1};
+/* Retain storage explicitly: this test verifies byte layout independently
+ * of dead-static-object elimination. */
+static const char table[4] __attribute__((used)) = {0, 128, 255, 1};
 
 struct Pair {
     char byte;

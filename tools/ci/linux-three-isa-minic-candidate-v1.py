@@ -380,8 +380,10 @@ def preserve_link_failed_c_owners(work: Path, output: Path, rows: list[dict],
     identities. AArch64's final vmlinux.o can instead report undefined
     __compiletime_assert_* calls without the original C owner's path. In that
     case, resolve the *actual staged MiniC ELF relocations* for precisely the
-    symbols named by GNU LD. Never infer an owner from a source basename or
-    from an aggregate vmlinux.o. This is post-failure evidence, never a GNU-C
+    symbols named by GNU LD. The same applies to x86-64's aggregate vmlinux.o
+    when the final linker reports an unresolved compiletime assertion. Never
+    infer an owner from a source basename or an aggregate vmlinux.o. This is
+    post-failure evidence, never a GNU-C
     compilation fallback, a changed ELF, or a different Kbuild/link invocation.
     """
     if not 1 <= limit <= 64 or not 1 <= byte_budget <= 256 * 1024 * 1024:
@@ -453,16 +455,17 @@ def preserve_link_failed_c_owners(work: Path, output: Path, rows: list[dict],
                 resolutions[chosen] = {"method": method}
 
     # GNU's final link commonly prints `vmlinux.o:(.text+...)` for an AArch64
-    # assertion originating in one of the many C owners already combined by
+    # or x86-64 assertion originating in one of the C owners already combined by
     # Kbuild's partial link. A path parser cannot recover that provenance.
     # Instead read the original candidate .o files (not the relinked aggregate)
-    # and require an undefined CALL26/JUMP26 relocation to an exact symbol
-    # reported by *this* failed linker run. No GNU C fallback or retry occurs.
+    # and require an undefined native branch/call relocation to an exact
+    # symbol reported by *this* failed linker run. No GNU C fallback or retry.
     relocation_candidates: list[tuple[int, str, dict[str, int]]] = []
     symbols = {item["name"] for item in summarize_gnu_link_failures(log_text)["symbols"]
                if re.fullmatch(r"__compiletime_assert_[0-9]+", item["name"])}
     relocation_errors: list[str] = []
-    if target == "aarch64" and symbols:
+    if target in ("aarch64", "x86_64") and symbols:
+        machine = 183 if target == "aarch64" else 62
         for owner in sorted(by_name):
             candidate = output / "staged" / owner
             result = by_result[owner]
@@ -471,8 +474,9 @@ def preserve_link_failed_c_owners(work: Path, output: Path, rows: list[dict],
                     raise Rejected("missing authenticated staged ELF digest")
                 if sha(required(candidate)) != result["obj_sha256"]:
                     raise Rejected("staged MiniC ELF changed before diagnostics")
-                matches = scan_aarch64_relocations(
-                    candidate, watched_undefined_symbols=symbols)["watched_undefined"]
+                matches = scan_elf64_relocations(
+                    candidate, watched_undefined_symbols=symbols,
+                    machine=machine)["watched_undefined"]
                 if matches:
                     relocation_candidates.append((sum(matches.values()), owner, matches))
             except (OSError, ValueError, struct.error) as exc:
@@ -485,7 +489,7 @@ def preserve_link_failed_c_owners(work: Path, output: Path, rows: list[dict],
             if owner not in resolutions:
                 referenced.append(owner)
                 resolutions[owner] = {
-                    "method": "authenticated_aarch64_undefined_branch_relocation",
+                    "method": f"authenticated_{target}_undefined_branch_relocation",
                     "matching_relocations": count,
                     "matching_symbols": sorted(matches)[:32],
                 }
@@ -504,9 +508,14 @@ def preserve_link_failed_c_owners(work: Path, output: Path, rows: list[dict],
                       PurePosixPath(name).name, [])), "sample_candidates": owners}
                   for name, owners in sorted(ambiguous.items())[:64]],
               "unknown_non_c_owners": sorted(unknown)[:64], "errors": []}
-    report["aarch64_relocation_match_owners"] = len(relocation_candidates)
+    report["aarch64_relocation_match_owners"] = (
+        len(relocation_candidates) if target == "aarch64" else 0)
     report["aarch64_relocation_symbols_in_link_log"] = len(symbols) if target == "aarch64" else 0
     report["aarch64_relocation_diagnostic_errors"] = relocation_errors
+    report["x86_64_relocation_match_owners"] = (
+        len(relocation_candidates) if target == "x86_64" else 0)
+    report["x86_64_relocation_symbols_in_link_log"] = (
+        len(symbols) if target == "x86_64" else 0)
     for name in referenced:
         if len(report["samples"]) >= limit:
             report["skipped"].append({"owner": name, "reason": "owner_count_budget"})
@@ -798,12 +807,13 @@ def preserve_vdso_relocation_differential(work: Path, staged: Path,
           f"owners={len(selected)} diagnostic_errors={len(report['diagnostic_errors'])}")
 
 
-def scan_aarch64_relocations(path: Path,
-                             watched_undefined_symbols: set[str] | None = None) -> dict:
-    """Read only ELF64 relocation metadata; do not execute/modify the owner.
+def scan_elf64_relocations(path: Path,
+                           watched_undefined_symbols: set[str] | None = None,
+                           machine: int = 183) -> dict:
+    """Read AArch64/x86-64 ELF64 relocations without executing the owner.
 
-    GOT relocations are direct evidence of an object's linker GOT demand.
-    Undefined CALL26/JUMP26 are *candidates*, not proof of generated PLT:
+    AArch64 GOT relocations are evidence of an object's linker GOT demand.
+    Undefined native CALL/JUMP branches are *candidates*, not generated PLT:
     a static link might resolve them without a PLT. Bounded samples preserve
     source owners while counts retain the distinction.
     """
@@ -815,9 +825,10 @@ def scan_aarch64_relocations(path: Path,
               "undefined_branch_samples": [], "watched_undefined": {}}
     with path.open("rb") as stream, mmap.mmap(stream.fileno(), 0,
                                                 access=mmap.ACCESS_READ) as image:
-        if (len(image) < 64 or image[:6] != b"\x7fELF\x02\x01" or
-                struct.unpack_from("<HH", image, 16) != (1, 183)):
-            raise ValueError("not relocatable AArch64 little-endian ELF64")
+        if (machine not in (62, 183) or len(image) < 64 or
+                image[:6] != b"\x7fELF\x02\x01" or
+                struct.unpack_from("<HH", image, 16) != (1, machine)):
+            raise ValueError("not relocatable target little-endian ELF64")
         section_start = struct.unpack_from("<Q", image, 40)[0]
         section_stride, section_count = struct.unpack_from("<HH", image, 58)
         if (section_stride != 64 or section_count < 2 or section_count > 65535 or
@@ -873,10 +884,11 @@ def scan_aarch64_relocations(path: Path,
                 entry = offset + index * stride
                 relocation_offset, info = struct.unpack_from("<QQ", image, entry)
                 kind = info & 0xffffffff
-                is_got = ((300 <= kind <= 313) or (539 <= kind <= 543) or
-                          (560 <= kind <= 569) or kind == 1025)
-                is_plt = kind == 1026
-                is_branch = kind in (282, 283)
+                is_got = machine == 183 and (
+                    (300 <= kind <= 313) or (539 <= kind <= 543) or
+                    (560 <= kind <= 569) or kind == 1025)
+                is_plt = machine == 183 and kind == 1026
+                is_branch = kind in ((282, 283) if machine == 183 else (2, 4))
                 if not is_got and not is_plt and not is_branch:
                     continue
                 name, undefined = symbol_name(symbol_table_index, info >> 32)
@@ -900,7 +912,11 @@ def scan_aarch64_relocations(path: Path,
                         totals["compiletime_assert_branch"] += 1
                         if len(totals["compiletime_assert_samples"]) < 8:
                             totals["compiletime_assert_samples"].append(sample)
-                    if len(totals["undefined_branch_samples"]) < 8:
+                    # Show all observed AArch64 direct-call candidates in the
+                    # small diagnostic sample (14 in the preceding relink),
+                    # including any undefined weak references after asserts.
+                    # This does not alter linker or QEMU acceptance.
+                    if len(totals["undefined_branch_samples"]) < 32:
                         totals["undefined_branch_samples"].append(sample)
             totals["relocations_scanned"] += count
             if totals["truncated"]:
@@ -939,7 +955,7 @@ def capture_aarch64_got_plt_owners(out: Path, staged: Path, output: Path,
         for name in names[:8192]:
             path = root if postlink else root / name
             try:
-                result = scan_aarch64_relocations(required(path))
+                result = scan_elf64_relocations(required(path))
             except (OSError, ValueError, struct.error) as exc:
                 if len(report["errors"]) < 32:
                     report["errors"].append(f"{label}:{name}:{exc}")
@@ -1214,16 +1230,16 @@ def self_test() -> None:
                          200, 48, 2, 0, 8, 24)
         aarch_elf = Path(temp) / "aarch-reloc.o"
         aarch_elf.write_bytes(tiny)
-        relocation = scan_aarch64_relocations(aarch_elf)
+        relocation = scan_elf64_relocations(aarch_elf)
         assert relocation["got"] == 1 and relocation["undefined_branch"] == 1
         assert relocation["compiletime_assert_branch"] == 1
         assert relocation["got_samples"][0]["symbol"] == "target_symbol"
-        assert scan_aarch64_relocations(aarch_elf, {
+        assert scan_elf64_relocations(aarch_elf, {
             "__compiletime_assert_317", "unrelated"})["watched_undefined"] == {
                 "__compiletime_assert_317": 1}
         struct.pack_into("<Q", tiny, 208, (1 << 32) | 1026)
         aarch_elf.write_bytes(tiny)
-        assert scan_aarch64_relocations(aarch_elf)["plt"] == 1
+        assert scan_elf64_relocations(aarch_elf)["plt"] == 1
         struct.pack_into("<Q", tiny, 208, (1 << 32) | 311)
         gnu_dir = Path(temp) / "aarch-original-gnu"
         mini_dir = Path(temp) / "aarch-minic-staged"
@@ -1247,7 +1263,7 @@ def self_test() -> None:
         assert summary["variants"]["postlink-vmlinux-o"]["got_relocations"] == 1
         aarch_elf.write_bytes(b"invalid")
         try:
-            scan_aarch64_relocations(aarch_elf)
+            scan_elf64_relocations(aarch_elf)
         except ValueError:
             pass
         else:
@@ -1490,6 +1506,65 @@ def self_test() -> None:
                     first_work / "frozen/i/kernel/first_error_2.i").read_bytes()
         assert relocation_report["unknown_non_c_owners"] == ["vmlinux.o"]
         assert len(relocation_report["skipped"]) == len(ambiguous_rows) - 2
+        # x86 GNU LD also loses per-source provenance after its `vmlinux.o`
+        # partial link.  Authenticate native R_X86_64_PC32/PLT32 CALL sites
+        # from the preserved preoverlay MiniC .o, not a source/function-name
+        # guess.  A different undefined symbol and a defined symbol cannot
+        # manufacture an assertion owner; preserve all real matches.
+        x86_tiny = bytearray(tiny)
+        struct.pack_into("<H", x86_tiny, 18, 62)
+        struct.pack_into("<Q", x86_tiny, 208, (1 << 32) | 4)
+        struct.pack_into("<Q", x86_tiny, 232, (2 << 32) | 2)
+        x86_elf = Path(temp) / "x86-aggregate-call.o"
+        x86_elf.write_bytes(x86_tiny)
+        assert scan_elf64_relocations(
+            x86_elf, {"__compiletime_assert_317"}, machine=62)[
+                "watched_undefined"] == {"__compiletime_assert_317": 1}
+        struct.pack_into("<H", x86_tiny, 128 + 48 + 6, 1)
+        x86_elf.write_bytes(x86_tiny)
+        assert not scan_elf64_relocations(
+            x86_elf, {"__compiletime_assert_317"}, machine=62)[
+                "watched_undefined"]
+        struct.pack_into("<H", x86_tiny, 128 + 48 + 6, 0)
+        x86_elf.write_bytes(x86_tiny)
+        try:
+            scan_elf64_relocations(x86_elf, machine=183)
+            raise AssertionError("x86 aggregate relocation accepted as AArch64")
+        except ValueError:
+            pass
+        x86_aggregate_out = Path(temp) / "x86-aggregate-output"
+        x86_aggregate_out.mkdir()
+        x86_link = Path(temp) / "x86-aggregate-link.log"
+        x86_link.write_text(
+            "ld: vmlinux.o:(.text+0x54): undefined reference to "
+            "`__compiletime_assert_317'\n")
+        for i, row in enumerate(ambiguous_rows):
+            staged = x86_aggregate_out / "staged" / row["object"]
+            staged.parent.mkdir(parents=True, exist_ok=True)
+            content = bytearray(x86_tiny)
+            if i not in (2, 4):
+                # The 2nd relocation now references an unrelated symbol.
+                struct.pack_into("<Q", content, 232, (1 << 32) | 4)
+            staged.write_bytes(content)
+            passed[i]["obj_sha256"] = sha(staged)
+        x86_report = preserve_link_failed_c_owners(
+            first_work, x86_aggregate_out, ambiguous_rows, passed,
+            x86_link, target="x86_64")
+        assert x86_report["x86_64_relocation_match_owners"] == 2
+        assert x86_report["x86_64_relocation_symbols_in_link_log"] == 1
+        assert x86_report["aarch64_relocation_match_owners"] == 0
+        assert [item["owner"] for item in x86_report["samples"]] == [
+            "kernel/first_error_2.o", "kernel/first_error_4.o"]
+        assert all(item["owner_resolution"] == {
+            "method": "authenticated_x86_64_undefined_branch_relocation",
+            "matching_relocations": 1,
+            "matching_symbols": ["__compiletime_assert_317"]}
+            for item in x86_report["samples"])
+        assert all((x86_aggregate_out / "link-failure-owner-diagnostics" /
+                    PurePosixPath(item["owner"]).with_suffix("") /
+                    "original.gnu.i").is_file()
+                   for item in x86_report["samples"])
+        assert x86_report["unknown_non_c_owners"] == ["vmlinux.o"]
         bad_rows = [dict(row) for row in ambiguous_rows]
         bad_rows[0]["object"] = "../malicious.o"
         bad_passed = [dict(item) for item in passed]

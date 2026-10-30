@@ -8,6 +8,35 @@
 
 bool minic_aarch64_clone_safe_opaque_asm(const MinicInlineAsm *source) {
     MinicCoreInlineAsm form;
+    if (source != NULL && source->is_volatile && !source->is_goto &&
+        source->template_length == 0U && source->output_count == 0U &&
+        source->input_count == 0U && source->label_count == 0U &&
+        source->clobber_count == 0U && source->register_clobber_count == 0U &&
+        !source->has_memory_clobber) {
+        /* An empty GNU asm volatile statement has no target instructions
+         * or symbol definitions, but remains a compiler-ordered effect in
+         * each specialization. */
+        return true;
+    }
+    if (source != NULL && !source->is_volatile && !source->is_goto &&
+        source->template_length == 0U && source->output_count == 1U &&
+        source->input_count == 1U && source->label_count == 0U &&
+        source->clobber_count == 0U && source->register_clobber_count == 0U &&
+        !source->has_memory_clobber &&
+        source->outputs != NULL && source->inputs != NULL &&
+        source->outputs[0].constraint_text != NULL &&
+        source->inputs[0].constraint_text != NULL &&
+        source->outputs[0].constraint_length == 2U &&
+        memcmp(source->outputs[0].constraint_text, "=r", 2U) == 0 &&
+        source->inputs[0].constraint_length == 1U &&
+        source->inputs[0].constraint_text[0] == '0') {
+        /* Linux's RELOC_HIDE() barrier (`asm("" : "=r"(dst) : "0"(src))`)
+         * is a register-only identity: a clone has no assembler labels,
+         * instructions or externally observable machine effects to duplicate.
+         * Preserve both operands in each cloned function; this is not a
+         * license to clone arbitrary asm with outputs or symbolic labels. */
+        return true;
+    }
     if (source == NULL || !source->is_volatile || source->is_goto ||
         source->output_count != 0U || source->input_count != 0U ||
         source->label_count != 0U || source->clobber_count != 0U ||

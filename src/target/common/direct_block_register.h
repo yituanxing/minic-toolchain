@@ -35,12 +35,17 @@ static inline bool minic_multi_direct_gp_adjacent_chain(
     MinicCoreValueId result;
     if (fn == NULL || producer == NULL || consumer == NULL ||
         value_use_counts == NULL ||
-        !minic_multi_direct_gp_chain_opcode(producer->kind) ||
+        !(minic_multi_direct_gp_chain_opcode(producer->kind) ||
+          producer->kind == MINIC_CORE_INSTRUCTION_LOAD) ||
         !minic_multi_direct_gp_chain_opcode(consumer->kind))
         return false;
     result = producer->result;
     return result != MINIC_CORE_VALUE_INVALID &&
            result < fn->value_count && value_use_counts[result] == 1U &&
+           (producer->kind != MINIC_CORE_INSTRUCTION_LOAD ||
+            ((minic_type_is_integer(producer->type) &&
+              !minic_type_is_int128_integer(producer->type)) ||
+             minic_type_is_pointer(producer->type))) &&
            !minic_type_is_int128_integer(producer->type) &&
            !minic_type_is_int128_integer(consumer->type) &&
            consumer->value.binary.left == result;

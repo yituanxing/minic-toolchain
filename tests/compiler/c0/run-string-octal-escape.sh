@@ -5,7 +5,7 @@ minic=${MINIC:-"$root/build/debug/bin/minic"}
 work=${BUILD_DIR:-"$root/build/debug"}/tests/string-octal-escape
 mkdir -p "$work"
 cat > "$work/positive.c" <<'SRC'
-static const char text[] = "\101\102\103\0\7";
+static const char text[] __attribute__((used)) = "\101\102\103\0\7";
 int main(void) {
     return text[0] == 'A' && text[1] == 'B' && text[2] == 'C' &&
            text[3] == 0 && text[4] == 7 && text[5] == 0 ? 0 : 1;

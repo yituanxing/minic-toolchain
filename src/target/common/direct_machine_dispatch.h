@@ -30,6 +30,9 @@ typedef bool (*MinicDirectMachineEmitTerminator)(
     const MinicCoreBlock *, size_t block_id);
 typedef bool (*MinicDirectMachineNoNativeOpcode)(
     const MinicDirectLP64BlockContext *, const MinicCoreInstruction *);
+typedef bool (*MinicDirectMachineImmediateRHS)(
+    const MinicDirectLP64BlockContext *, const MinicCoreInstruction *,
+    MinicCoreValueId *);
 
 typedef struct MinicDirectMachineDispatch {
     const char *architecture;
@@ -40,6 +43,9 @@ typedef struct MinicDirectMachineDispatch {
     MinicDirectMachineStoreGP store_gp;
     MinicDirectMachineEmitTerminator emit_terminator;
     MinicDirectMachineNoNativeOpcode no_native_opcode;
+    /* An ISA-only proof that this consumer reads its constant RHS directly
+     * from the Core defining instruction as a machine immediate. */
+    MinicDirectMachineImmediateRHS immediate_rhs;
 } MinicDirectMachineDispatch;
 
 static inline bool minic_multi_direct_machine_dispatch(
@@ -49,6 +55,7 @@ static inline bool minic_multi_direct_machine_dispatch(
     const MinicCoreFunction *fn;
     const MinicCoreBlock *block;
     bool *reachable;
+    bool *folded_constants = NULL;
     size_t *value_use_counts = NULL;
     bool *transparent = NULL;
     size_t transparent_capacity = 0U;
@@ -92,6 +99,46 @@ static inline bool minic_multi_direct_machine_dispatch(
             fn, dispatch->architecture, ctx->name,
             "cfg_reachability", SIZE_MAX, SIZE_MAX, __LINE__);
     }
+    /* O(instructions) preflight using the existing exact semantic use counts.
+     * When the ONLY use of an INTEGER_CONSTANT is a target-certified
+     * immediate RHS, the pure producer needs neither a native `li` nor an
+     * SSA frame writeback. All other constants keep their original emission.
+     * This does not rearrange side effects, calls, inline asm, or CFG edges. */
+    if (dispatch->immediate_rhs != NULL && have_value_use_counts &&
+        fn->value_count != 0U) {
+        folded_constants = (bool *)calloc(fn->value_count,
+                                           sizeof(*folded_constants));
+        if (folded_constants != NULL) {
+            size_t candidate_block;
+            for (candidate_block = 0U;
+                 candidate_block < fn->block_count; ++candidate_block) {
+                const MinicCoreBlock *candidate;
+                size_t candidate_ordinal;
+                if (!reachable[candidate_block]) continue;
+                candidate = &fn->blocks[candidate_block];
+                for (candidate_ordinal = 0U;
+                     candidate_ordinal < candidate->instruction_count;
+                     ++candidate_ordinal) {
+                    MinicCoreInstructionId candidate_id;
+                    const MinicCoreInstruction *consumer;
+                    const MinicCoreInstruction *def;
+                    MinicCoreValueId rhs;
+                    if (!minic_core_block_instruction_at(
+                            fn, candidate, candidate_ordinal,
+                            &candidate_id, &consumer) ||
+                        !dispatch->immediate_rhs(ctx, consumer, &rhs) ||
+                        rhs >= fn->value_count ||
+                        value_use_counts[rhs] != 1U ||
+                        fn->values[rhs].definition >= fn->instruction_count)
+                        continue;
+                    def = &fn->instructions[fn->values[rhs].definition];
+                    if (def->kind == MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT &&
+                        def->result == rhs)
+                        folded_constants[rhs] = true;
+                }
+            }
+        }
+    }
     minic_core_block_walk_begin(&walk, fn, reachable);
     while (minic_core_block_walk_next(&walk, &block_id, &block)) {
         size_t ordinal;
@@ -121,7 +168,12 @@ static inline bool minic_multi_direct_machine_dispatch(
                     transparent[ordinal] =
                         minic_core_block_instruction_at(
                             fn, block, ordinal, &candidate_id, &candidate) &&
-                        dispatch->no_native_opcode(ctx, candidate);
+                        ((folded_constants != NULL &&
+                          candidate->kind == MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT &&
+                          candidate->result != MINIC_CORE_VALUE_INVALID &&
+                          candidate->result < fn->value_count &&
+                          folded_constants[candidate->result]) ||
+                         dispatch->no_native_opcode(ctx, candidate));
                 }
             }
         }
@@ -148,6 +200,18 @@ static inline bool minic_multi_direct_machine_dispatch(
                     "machine_emit", block_id, SIZE_MAX, __LINE__);
                 goto done;
             }
+            /* Materializing an unused immutable Core constant cannot have
+             * an observable effect. The use census already determines which
+             * scalar result writebacks are dead; extend the same proof to
+             * the corresponding no-effect constant machine instruction. */
+            if (ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT &&
+                ins->result != MINIC_CORE_VALUE_INVALID &&
+                ins->result < fn->value_count &&
+                ((have_value_use_counts &&
+                  value_use_counts[ins->result] == 0U) ||
+                 (folded_constants != NULL &&
+                  folded_constants[ins->result])))
+                continue;
             if (!minic_multi_direct_machine_instruction_shape(
                     fn, ins, dispatch->allow_variadic_double_result, &shape)) {
                 success = minic_multi_direct_machine_reject(
@@ -238,6 +302,7 @@ static inline bool minic_multi_direct_machine_dispatch(
     success = true;
 done:
     free(reachable);
+    free(folded_constants);
     free(transparent);
     free(value_use_counts);
     return success;

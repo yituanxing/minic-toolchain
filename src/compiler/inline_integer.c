@@ -1,5 +1,6 @@
 #include "compiler/inline_specialize.h"
 #include "compiler/inline_specialize_internal.h"
+#include "core/opt_pure_statement.h"
 #include "frontend/const_eval.h"
 #include "frontend/function_body.h"
 #include "target/backend.h"
@@ -16,6 +17,48 @@
  * caller constants to discharge GNU compile-time guards (e.g. BUILD_BUG_ON).
  * Exhaustion is only a missed optimization, never an invalid C program. */
 #define MINIC_STATIC_INTEGER_SPECIALIZATION_LIMIT 64U
+
+typedef struct MinicInlinePureTruth {
+    const MinicC0Program *program;
+    const MinicTargetInfo *target;
+} MinicInlinePureTruth;
+
+static bool minic_inline_pure_constant_truth(void *opaque,
+                                             MinicExpressionId condition_id,
+                                             bool *truth) {
+    const MinicInlinePureTruth *context = (const MinicInlinePureTruth *)opaque;
+    MinicConstValue constant;
+    bool zero;
+    if (context == NULL || truth == NULL ||
+        !minic_const_eval_integer(context->program, context->target,
+                                  condition_id, &constant) ||
+        !minic_const_value_is_zero(context->program, context->target,
+                                   &constant, &zero)) return false;
+    *truth = !zero;
+    return true;
+}
+
+static bool minic_inline_pure_statement_constant(const MinicC0Program *program,
+                                                 const MinicTargetInfo *target,
+                                                 MinicCoreReentryIndex *reentry_index,
+                                                 MinicExpressionId expression_id,
+                                                 MinicConstValue *value) {
+    const MinicExpression *expression;
+    MinicInlinePureTruth truth_context;
+    if (program == NULL || target == NULL || value == NULL) return false;
+    expression = minic_c0_program_expression(program, expression_id);
+    if (expression == NULL || expression->kind != MINIC_EXPRESSION_STATEMENT ||
+        expression->value.statement_expression.result == MINIC_EXPRESSION_INVALID ||
+        expression->value.statement_expression.block == MINIC_BLOCK_INVALID)
+        return false;
+    truth_context.program = program;
+    truth_context.target = target;
+    if (!minic_opt_pure_statement_block(program, target, reentry_index,
+            expression->value.statement_expression.block, &truth_context,
+            minic_inline_pure_constant_truth, 0U)) return false;
+    return minic_const_eval_integer(program, target,
+                expression->value.statement_expression.result, value);
+}
 
 static bool minic_static_integer_specialization_eligible(const MinicFunction *source) {
     return source != NULL && source->is_defined && source->is_internal &&
@@ -478,6 +521,8 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
     size_t static_specialization_count = 0U;
     unsigned char *static_blocked_sources = NULL;
     bool static_sources_checked = false;
+    MinicCoreReentryIndex *pure_guard_reentry_index = NULL;
+    bool pure_guard_index_attempted = false;
 
     if (program == NULL || target == NULL) {
         return false;
@@ -536,11 +581,25 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
             MinicConstValue argument_value;
             MinicConstValue converted_value;
             MinicExpressionId argument_id = minic_c0_call_argument(expression, i);
+            const MinicExpression *argument_expression = minic_c0_program_expression(
+                program, argument_id);
+            bool argument_known;
             if (!minic_type_is_integer(source.parameter_types[i])) {
                 continue;
             }
-            if (minic_const_eval_integer(program, target, argument_id,
-                                         &argument_value) &&
+            argument_known = minic_const_eval_integer(program, target, argument_id,
+                                                      &argument_value);
+            if (!argument_known && argument_expression != NULL &&
+                argument_expression->kind == MINIC_EXPRESSION_STATEMENT) {
+                if (!pure_guard_index_attempted) {
+                    pure_guard_index_attempted = true;
+                    pure_guard_reentry_index = minic_core_reentry_index_create(program);
+                }
+                argument_known = minic_inline_pure_statement_constant(
+                    program, target, pure_guard_reentry_index,
+                    argument_id, &argument_value);
+            }
+            if (argument_known &&
                 minic_const_value_convert_integer(program, target,
                                                   &argument_value,
                                                   source.parameter_types[i],
@@ -591,6 +650,7 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
                               (unsigned int)MINIC_INLINE_INTEGER_SPECIALIZATION_LIMIT,
                               program->function_count,
                               (size_t)source_id);
+                minic_core_reentry_index_destroy(pure_guard_reentry_index);
                 return false;
             }
             if (!minic_add_inline_integer_specialization(program, source_id, known, bits,
@@ -601,6 +661,7 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
                               specialization_count,
                               program->function_count,
                               (size_t)source_id);
+                minic_core_reentry_index_destroy(pure_guard_reentry_index);
                 return false;
             }
             specialization_count += 1U;
@@ -779,6 +840,7 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
                                       (size_t)nested_source_id);
                         free(integer_expression_owners);
                         free(calls);
+                        minic_core_reentry_index_destroy(pure_guard_reentry_index);
                         return false;
                     }
                     if (!minic_add_inline_integer_specialization(
@@ -795,6 +857,7 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
                                       (size_t)nested_source_id);
                         free(integer_expression_owners);
                         free(calls);
+                        minic_core_reentry_index_destroy(pure_guard_reentry_index);
                         return false;
                     }
                     specialization_count += 1U;
@@ -827,6 +890,7 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
                       "MINIC_INLINE_INTEGER_SPECIALIZATION_V0 clones=%zu functions=%zu\n",
                       specialization_count, program->function_count);
     }
+    minic_core_reentry_index_destroy(pure_guard_reentry_index);
     return true;
 }
 

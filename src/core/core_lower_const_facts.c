@@ -1,6 +1,8 @@
 #include "core/core_lower_internal.h"
 #include "core/local_facts.h"
 #include "core/cfg_constant_calls.h"
+#include "core/core_const_global_record.h"
+#include "core/opt_pure_statement.h"
 #include "core/source_loop_shapes.h"
 #include "frontend/const_eval.h"
 #include "frontend/expression_semantics.h"
@@ -1229,6 +1231,21 @@ bool minic_core_cfg_disjoint_bitmask_is_zero(
            core_cfg_possible_one_bits(context, id, 0U) == 0U;
 }
 
+bool minic_core_cfg_pure_guard_truth(void *opaque,
+                                     MinicExpressionId condition_id,
+                                     bool *truth) {
+    const MinicCoreLowerContext *context = (const MinicCoreLowerContext *)opaque;
+    MinicConstValue constant;
+    bool zero;
+    if (context == NULL || truth == NULL ||
+        !minic_core_cfg_pure_call_argument(context, condition_id, 0U) ||
+        !core_const_eval_integer_with_locals(context, condition_id, &constant) ||
+        !minic_const_value_is_zero(context->body->program, context->target,
+                                   &constant, &zero)) return false;
+    *truth = !zero;
+    return true;
+}
+
 bool core_const_eval_integer_with_locals(const MinicCoreLowerContext *context,
                                                 MinicExpressionId expression_id,
                                                 MinicConstValue *value) {
@@ -1247,6 +1264,9 @@ bool core_const_eval_integer_with_locals(const MinicCoreLowerContext *context,
     expression = minic_c0_program_expression(context->body->program, expression_id);
     if (expression == NULL || !minic_type_is_integer(expression->type)) {
         return false;
+    }
+    if (minic_core_const_global_record_scalar(context, expression_id, value)) {
+        return true;
     }
     {
         const MinicExpression *read = expression;
@@ -1361,6 +1381,7 @@ bool core_const_eval_integer_with_locals(const MinicCoreLowerContext *context,
        local-constant subset of GNU ({ ... }) expressions. This is intentionally
        not a general AST interpreter. */
     if (expression->kind == MINIC_EXPRESSION_STATEMENT) {
+        MinicConstValue guarded_value;
         const MinicBlock *statement_block;
         MinicCoreLowerContext nested_context;
         MinicCoreLocalIntegerConstant *nested_facts = NULL;
@@ -1372,6 +1393,23 @@ bool core_const_eval_integer_with_locals(const MinicCoreLowerContext *context,
             expression->value.statement_expression.block == MINIC_BLOCK_INVALID ||
             expression->value.statement_expression.result == MINIC_EXPRESSION_INVALID) {
             return false;
+        }
+        /* Reuse Compiler's effect-free GNU do/while BUILD_BUG guard proof.
+         * The shared CFG checker rejects unproven loops, side-effecting
+         * prefixes, and any synthetic label with external reentry. */
+        if (minic_opt_pure_statement_block(
+                context->body->program, context->target, context->reentry_index,
+                expression->value.statement_expression.block, (void *)context,
+                minic_core_cfg_pure_guard_truth, 0U) &&
+            minic_core_cfg_pure_call_argument(
+                context, expression->value.statement_expression.result, 0U) &&
+            core_const_eval_integer_with_locals(
+                context, expression->value.statement_expression.result,
+                &guarded_value) &&
+            minic_const_value_convert_integer(context->body->program,
+                                              context->target, &guarded_value,
+                                              expression->type, value)) {
+            return true;
         }
         statement_block = minic_c0_program_block(
             context->body->program, expression->value.statement_expression.block);

@@ -3162,7 +3162,8 @@ parse_static_nested_record_object(MinicParser *parser, MinicType type, MinicSour
                                                                                NULL,
                                                                                0U,
                                                                                false,
-                                                                               0U);
+                                                                               0U,
+                                                                               false);
         }
         minic_parser_error(parser,
                            "expected '=', ',' or ';' after static aggregate declarator");
@@ -3315,7 +3316,8 @@ static bool parse_static_record_array(MinicParser *parser,
                                       size_t section_capacity,
                                       size_t *section_name_length,
                                       bool *has_section,
-                                      size_t *explicit_alignment) {
+                                      size_t *explicit_alignment,
+                                      bool *force_emit) {
     const MinicRecord *record;
     MinicType nested_element_type;
     MinicType object_type;
@@ -3371,12 +3373,13 @@ static bool parse_static_record_array(MinicParser *parser,
         }
         multidimensional = true;
     }
-    if (!minic_parser_parse_gnu_object_attribute_lists(parser,
+    if (!minic_parser_parse_gnu_object_attribute_lists_with_used(parser,
                                                        section_name,
                                                        section_capacity,
                                                        section_name_length,
                                                        has_section,
-                                                       explicit_alignment)) {
+                                                       explicit_alignment,
+                                                       force_emit)) {
         return false;
     }
 
@@ -3530,7 +3533,8 @@ bool minic_parser_static_record_initializer(MinicParser *parser,
                                 size_t section_capacity,
                                 size_t *section_name_length,
                                 bool *has_section,
-                                size_t *explicit_alignment) {
+                                size_t *explicit_alignment,
+                                bool *force_emit) {
     const MinicRecord *record;
 
     record = minic_c0_program_record(parser->program, type.record_id);
@@ -3546,7 +3550,8 @@ bool minic_parser_static_record_initializer(MinicParser *parser,
                                          section_capacity,
                                          section_name_length,
                                          has_section,
-                                         explicit_alignment);
+                                         explicit_alignment,
+                                         force_emit);
     }
     return parse_static_nested_record_object(parser, type, name_span);
 }

@@ -25,6 +25,49 @@ static bool loong_integer_constant_rhs(const MinicCoreFunction *fn,
     return true;
 }
 
+/* Keep machine-immediate proof in one ISA owner. The dispatcher can then
+ * remove a single-use constant materialization whose only consumer reads
+ * its immutable Core definition directly; the emitter uses the identical
+ * encoding range rather than independently guessing at valid immediates. */
+bool minic_loongarch64_integer_rhs_immediate(
+    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
+    MinicCoreValueId *rhs_id, int64_t *encoded_immediate) {
+    MinicCoreValueId rhs;
+    size_t lw, rw;
+    bool ls, rs;
+    int64_t constant;
+    if (program == NULL || target == NULL || fn == NULL || ins == NULL)
+        return false;
+    switch (ins->kind) {
+    case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
+    case MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT:
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND:
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_XOR:
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR:
+        break;
+    default:
+        return false;
+    }
+    if (!minic_multi_direct_integer_binary_shape(
+            program, target, fn, ins, &lw, &rw, &ls, &rs))
+        return false;
+    rhs = ins->value.binary.right;
+    if (!loong_integer_constant_rhs(fn, rhs, &constant))
+        return false;
+    if (ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_ADD) {
+        if (constant < -2048 || constant > 2047) return false;
+    } else if (ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT) {
+        if (constant < -2047 || constant > 2048) return false;
+        constant = -constant;
+    } else if (constant < 0 || constant > 4095) {
+        return false;
+    }
+    if (rhs_id != NULL) *rhs_id = rhs;
+    if (encoded_immediate != NULL) *encoded_immediate = constant;
+    return true;
+}
+
 /* GNU checked-addition uses the original *mathematical* operand values,
  * then converts to the destination type. Linux fs/udf/inode.c passes a
  * compile-time sizeof that Core legally narrows to a signed i32 constant,
@@ -594,15 +637,9 @@ bool minic_loongarch64_emit_integer_instruction(
                 : ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT
                     ? (wide ? "  sub.d $t0, $t0, $t1\n" : "  sub.w $t0, $t0, $t1\n")
                     : (wide ? "  mul.d $t0, $t0, $t1\n" : "  mul.w $t0, $t0, $t1\n");
-            if (ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY &&
-                loong_integer_constant_rhs(fn, rhs, &constant)) {
-                if (ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_ADD) {
-                    immediate = constant >= -2048 && constant <= 2047;
-                } else if (constant >= -2047 && constant <= 2048) {
-                    constant = -constant;
-                    immediate = true;
-                }
-            }
+            if (ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY)
+                immediate = minic_loongarch64_integer_rhs_immediate(
+                    program, target, fn, ins, NULL, &constant);
             if ((!lhs_in_previous_gp &&
                  !emit_sp_mem(out, wide ? "ld.d" : "ld.w", "$t0",
                              minic_lp64_frame_value_offset(frame_plan, lhs))) ||
@@ -635,8 +672,8 @@ bool minic_loongarch64_emit_integer_instruction(
                 : ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_XOR
                     ? "  xor $t0, $t0, $t1\n"
                     : "  or $t0, $t0, $t1\n";
-            if (loong_integer_constant_rhs(fn, rhs, &constant) &&
-                constant >= 0 && constant <= 4095)
+            if (minic_loongarch64_integer_rhs_immediate(
+                    program, target, fn, ins, NULL, &constant))
                 immediate_opcode =
                     ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND
                         ? "andi"

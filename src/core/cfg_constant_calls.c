@@ -1,5 +1,6 @@
 #include "core/cfg_constant_calls.h"
 #include "core/local_facts.h"
+#include "core/opt_pure_statement.h"
 #include "frontend/const_eval.h"
 #include "frontend/expression_semantics.h"
 #include <inttypes.h>
@@ -138,8 +139,13 @@ bool minic_core_cfg_pure_call_argument(const MinicCoreLowerContext *context,
          * In particular it remains pure for operands with runtime reads or
          * side effects, and Core's local-fact evaluator can prove the result
          * without emitting the impossible arm of a compile-time guard. */
-        return expression->value.builtin_unary.operator_kind ==
-               MINIC_BUILTIN_UNARY_CONSTANT_P;
+        if (expression->value.builtin_unary.operator_kind ==
+            MINIC_BUILTIN_UNARY_CONSTANT_P) return true;
+        /* Other represented unary builtins (CLZ/CTZ/POPCOUNT/FFS, byte swap,
+         * ISDIGIT and ISNAN) are effect-free exactly when their operand is.
+         * In particular FIELD_GET's __builtin_ffsll(mask) is not a CALL. */
+        return minic_core_cfg_pure_call_argument(
+            context, expression->value.builtin_unary.operand, depth + 1U);
     case MINIC_EXPRESSION_CAST:
     case MINIC_EXPRESSION_BITCAST:
     case MINIC_EXPRESSION_CONVERSION:
@@ -180,6 +186,21 @@ bool minic_core_cfg_pure_call_argument(const MinicCoreLowerContext *context,
                minic_core_cfg_pure_call_argument(context,
                                            expression->value.conditional.when_false,
                                            depth + 1U);
+    case MINIC_EXPRESSION_STATEMENT:
+        /* GNU ({...}) is not automatically pure.  Only the single shared
+         * no-effect guard proof may certify its prefix; its result must
+         * independently pass this expression-purity check. */
+        if (!minic_opt_pure_statement_block(
+                context->body->program, context->target,
+                context->reentry_index,
+                expression->value.statement_expression.block,
+                (void *)context, minic_core_cfg_pure_guard_truth, depth + 1U))
+            return false;
+        return expression->value.statement_expression.result ==
+                   MINIC_EXPRESSION_INVALID ||
+               minic_core_cfg_pure_call_argument(
+                   context, expression->value.statement_expression.result,
+                   depth + 1U);
     case MINIC_EXPRESSION_CALL: {
         MinicConstValue folded;
         /* An ordinary call may mutate memory and must remain a CFG effect

@@ -360,6 +360,21 @@ int minic_compile_preprocessed_file_for_target(const char *input_path,
                              "cannot prune inline specialization Core reachability");
         success = false;
     }
+    if (success && !minic_prune_dead_file_scope_static_objects_from_core(
+                       &program, &core_set, backend->emit_reachable_core_blocks_only)) {
+        minic_set_diagnostic(diagnostic, input_path, 1U, 1U,
+                             "cannot compute static object/function Core reachability");
+        success = false;
+    }
+    /* Unused file-static callback tables no longer seed their otherwise dead
+     * static functions through initializer relocations. Reuse the existing
+     * function reachability pass with the finalized object-emission policy. */
+    if (success && !minic_prune_inline_specializations_from_core(
+                       &program, &core_set, backend->emit_reachable_core_blocks_only)) {
+        minic_set_diagnostic(diagnostic, input_path, 1U, 1U,
+                             "cannot prune dead callback functions from Core");
+        success = false;
+    }
     if (success) {
         minic_bootstrap_trace_stage(input_path, "core-validate", "begin", program.function_count);
         success =

@@ -11,7 +11,7 @@ struct hook_filter {
     filter_t filters[4];
     unsigned int count;
 };
-static struct hook_filter state;
+static struct hook_filter state __attribute__((used));
 int main(void)
 {
     return sizeof(struct hook_filter) == 40 && sizeof(state.filters) == 32 ? 0 : 1;

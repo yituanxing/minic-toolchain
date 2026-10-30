@@ -95,6 +95,7 @@ MINIC_SOURCES := \
 	src/core/core_lower_expr_scalar.c \
 	src/core/core_lower_arithmetic.c \
 	src/core/core_lower_const_facts.c \
+	src/core/core_const_global_record.c \
 	src/core/cfg_constant_calls.c \
 	src/core/local_facts.c \
 	src/core/source_loop_shapes.c \
@@ -1462,7 +1463,42 @@ check-fast: check-x86-reachable-vma-assert check-static-const-source-boundaries 
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
 	sh tests/compiler/c0/run.sh
 
-check-fast: check-function-diagnostic-attribute check-gnu-constant-bitfield-helper-cfg check-gnu-linux-kmalloc-index-bool-guard check-gnu-linux-kbuild-disjoint-bitmask-assert check-linux-empty-static-stub-cfi check-gnu-linux-static-field-guard check-core-same-global-address-order check-core-compound-record-byte-layout check-core-literal-rhs-snapshot check-gnu-linux-zoned-constant-switch
+check-fast: check-function-diagnostic-attribute check-gnu-constant-bitfield-helper-cfg check-gnu-linux-kmalloc-index-bool-guard check-linux-empty-static-stub-cfi check-gnu-linux-static-field-guard check-core-same-global-address-order check-core-compound-record-byte-layout check-core-literal-rhs-snapshot check-core-rhs-no-cfg-snapshot check-gnu-linux-zoned-constant-switch check-gnu-const-global-record check-gnu-dead-file-static-object-graph check-core-inline-statement-constant-guard check-core-field-get-contiguous-mask-guard check-aarch64-fixmap-opaque-asm-clone check-loongarch64-immediate-core-fold check-gnu-linux-kbuild-disjoint-bitmask-assert
+
+.PHONY: check-core-rhs-no-cfg-snapshot
+check-core-rhs-no-cfg-snapshot: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/compiler/c0/probe-core-rhs-no-cfg-snapshot.sh
+
+.PHONY: check-core-field-get-contiguous-mask-guard
+check-core-field-get-contiguous-mask-guard: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/compiler/c0/probe-core-field-get-contiguous-mask-guard.sh
+
+.PHONY: check-gnu-dead-file-static-object-graph
+check-gnu-dead-file-static-object-graph: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/probe-gnu-dead-file-static-object-graph.sh
+
+.PHONY: check-core-inline-statement-constant-guard
+check-core-inline-statement-constant-guard: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/compiler/c0/probe-core-inline-statement-constant-guard.sh
+
+.PHONY: check-aarch64-fixmap-opaque-asm-clone
+check-aarch64-fixmap-opaque-asm-clone: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/probe-aarch64-fixmap-opaque-asm-clone.sh
+
+.PHONY: check-loongarch64-immediate-core-fold
+check-loongarch64-immediate-core-fold: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/compiler/c0/probe-loongarch64-immediate-core-fold.sh
+
+.PHONY: check-gnu-const-global-record
+check-gnu-const-global-record: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/compiler/c0/probe-gnu-const-global-record.sh
 
 .PHONY: check-linux-empty-static-stub-cfi
 check-linux-empty-static-stub-cfi: $(MINIC_CC_BINARY)

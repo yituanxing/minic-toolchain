@@ -9,7 +9,7 @@ struct static_designator_table {
 };
 
 static int anchor;
-static struct static_designator_table table = {
+static struct static_designator_table table __attribute__((used)) = {
     .val[1] = 9,
     .val[0] = 7,
     .base[1] = { .value = 13 },

@@ -1804,20 +1804,22 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
             minic_parser_error(parser, "_Noreturn specifier requires a function declarator");
             return false;
         }
-        if (!minic_parser_apply_object_attribute_list(parser,
+        if (!minic_parser_apply_object_attribute_list_with_used(parser,
                                                       &deferred_attributes,
                                                       section_name,
                                                       sizeof(section_name),
                                                       &section_name_length,
                                                       &has_section,
-                                                      &object_explicit_alignment) ||
-            !minic_parser_apply_object_attribute_list(parser,
+                                                      &object_explicit_alignment,
+                                                      &force_emit) ||
+            !minic_parser_apply_object_attribute_list_with_used(parser,
                                                       &declarator_attributes,
                                                       section_name,
                                                       sizeof(section_name),
                                                       &section_name_length,
                                                       &has_section,
-                                                      &object_explicit_alignment)) {
+                                                      &object_explicit_alignment,
+                                                      &force_emit)) {
             return false;
         }
         if (has_visibility) {
@@ -1834,7 +1836,8 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                 section_name,
                 section_name_length,
                 has_section,
-                object_explicit_alignment);
+                object_explicit_alignment,
+                force_emit);
         }
         if (!minic_parser_parse_static_global_after_head(parser,
                                                          base_type,
@@ -1844,7 +1847,8 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                                                          sizeof(section_name),
                                                          &section_name_length,
                                                          &has_section,
-                                                         &object_explicit_alignment)) {
+                                                         &object_explicit_alignment,
+                                                         &force_emit)) {
             return false;
         }
         object_id = minic_parser_find_global_object_entity(parser, name_span);
@@ -1856,7 +1860,9 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                                             has_section,
                                             object_explicit_alignment,
                                             MINIC_SYMBOL_VISIBILITY_DEFAULT,
-                                            false)) {
+                                            false) ||
+            (force_emit && !minic_c0_program_set_global_object_force_emit(
+                               parser->program, object_id))) {
             minic_parser_error(parser, "cannot persist static object metadata");
             return false;
         }

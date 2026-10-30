@@ -207,6 +207,7 @@ static bool parse_static_declarator_tail(MinicParser *parser, MinicType base_typ
     size_t section_name_length;
     size_t explicit_alignment;
     bool has_section;
+    bool force_emit;
 
     if (parser == NULL) {
         return false;
@@ -237,13 +238,15 @@ static bool parse_static_declarator_tail(MinicParser *parser, MinicType base_typ
                                                                            NULL,
                                                                            0U,
                                                                            false,
-                                                                           0U);
+                                                                           0U,
+                                                                           false);
     }
     section_name_length = 0U;
     explicit_alignment = 0U;
     has_section = false;
+    force_emit = false;
     (void)memset(section_name, 0, sizeof(section_name));
-    return minic_parser_parse_static_global_after_head(parser,
+    if (!minic_parser_parse_static_global_after_head(parser,
                                                        base_type,
                                                        object_type,
                                                        name_span,
@@ -251,7 +254,11 @@ static bool parse_static_declarator_tail(MinicParser *parser, MinicType base_typ
                                                        sizeof(section_name),
                                                        &section_name_length,
                                                        &has_section,
-                                                       &explicit_alignment);
+                                                       &explicit_alignment,
+                                                       &force_emit)) return false;
+    return !force_emit || minic_c0_program_set_global_object_force_emit(
+                              parser->program,
+                              minic_parser_find_global_object_entity(parser, name_span));
 }
 
 static bool parse_extern_function_pointer_object_declarator(MinicParser *parser,
@@ -637,7 +644,8 @@ static bool parse_static_scalar_array(MinicParser *parser,
                                       size_t section_capacity,
                                       size_t *section_name_length,
                                       bool *has_section,
-                                      size_t *explicit_alignment) {
+                                      size_t *explicit_alignment,
+                                      bool *force_emit) {
     MinicType object_type;
     MinicType declared_object_type;
     MinicGlobalObjectId object_id;
@@ -673,12 +681,13 @@ static bool parse_static_scalar_array(MinicParser *parser,
         inferred_bound = outer_array->element_count == 0U && !outer_array->is_zero_length;
         element_count = outer_array->element_count;
     }
-    if (!minic_parser_parse_gnu_object_attribute_lists(parser,
+    if (!minic_parser_parse_gnu_object_attribute_lists_with_used(parser,
                                                        section_name,
                                                        section_capacity,
                                                        section_name_length,
                                                        has_section,
-                                                       explicit_alignment)) {
+                                                       explicit_alignment,
+                                                       force_emit)) {
         return false;
     }
 
@@ -846,7 +855,8 @@ bool minic_parser_parse_static_zero_declaration_list_after_head(MinicParser *par
                                                                 const char *shared_section_name,
                                                                 size_t shared_section_name_length,
                                                                 bool shared_has_section,
-                                                                size_t shared_explicit_alignment) {
+                                                                size_t shared_explicit_alignment,
+                                                                bool shared_force_emit) {
     bool first_declarator;
 
     if (parser == NULL || parser->current.kind != MINIC_TOKEN_COMMA ||
@@ -863,6 +873,7 @@ bool minic_parser_parse_static_zero_declaration_list_after_head(MinicParser *par
         size_t section_name_length;
         size_t explicit_alignment;
         bool has_section;
+        bool force_emit = first_declarator && shared_force_emit;
 
         section_name_length = shared_section_name_length;
         explicit_alignment = shared_explicit_alignment;
@@ -891,12 +902,13 @@ bool minic_parser_parse_static_zero_declaration_list_after_head(MinicParser *par
             }
         }
 
-        if (!minic_parser_parse_gnu_object_attribute_lists(parser,
+        if (!minic_parser_parse_gnu_object_attribute_lists_with_used(parser,
                                                            section_name,
                                                            sizeof(section_name),
                                                            &section_name_length,
                                                            &has_section,
-                                                           &explicit_alignment)) {
+                                                           &explicit_alignment,
+                                                           &force_emit)) {
             return false;
         }
         if (parser->current.kind == MINIC_TOKEN_EQUAL) {
@@ -912,6 +924,8 @@ bool minic_parser_parse_static_zero_declaration_list_after_head(MinicParser *par
                                               section_name_length,
                                               has_section,
                                               explicit_alignment) ||
+                (force_emit && !minic_c0_program_set_global_object_force_emit(
+                                   parser->program, object_id)) ||
                 !minic_parser_advance(parser)) {
                 if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
                     minic_parser_error(
@@ -980,7 +994,9 @@ bool minic_parser_parse_static_zero_declaration_list_after_head(MinicParser *par
                                       section_name,
                                       section_name_length,
                                       has_section,
-                                      explicit_alignment)) {
+                                      explicit_alignment) ||
+            (force_emit && !minic_c0_program_set_global_object_force_emit(
+                               parser->program, object_id))) {
             minic_parser_error(parser, "cannot persist static tentative declarator metadata");
             return false;
         }
@@ -1094,7 +1110,8 @@ bool minic_parser_parse_static_global_after_head(MinicParser *parser,
                                                  size_t section_capacity,
                                                  size_t *section_name_length,
                                                  bool *has_section,
-                                                 size_t *explicit_alignment) {
+                                                 size_t *explicit_alignment,
+                                                 bool *force_emit) {
     MinicGlobalObjectId existing_object_id;
     if (parser == NULL ||
         (!minic_type_is_integer(element_type) && !minic_type_is_pointer(element_type) &&
@@ -1106,12 +1123,13 @@ bool minic_parser_parse_static_global_after_head(MinicParser *parser,
         return false;
     }
     existing_object_id = minic_parser_find_global_object_entity(parser, name_span);
-    if (!minic_parser_parse_gnu_object_attribute_lists(parser,
+    if (!minic_parser_parse_gnu_object_attribute_lists_with_used(parser,
                                                        section_name,
                                                        section_capacity,
                                                        section_name_length,
                                                        has_section,
-                                                       explicit_alignment)) {
+                                                       explicit_alignment,
+                                                       force_emit)) {
         return false;
     }
 
@@ -1158,7 +1176,8 @@ bool minic_parser_parse_static_global_after_head(MinicParser *parser,
                                    section_capacity,
                                    section_name_length,
                                    has_section,
-                                   explicit_alignment);
+                                   explicit_alignment,
+                                   force_emit);
     }
     if (parser->current.kind != MINIC_TOKEN_LBRACKET) {
         return parse_static_scalar(parser, declaration_base, element_type, name_span);
@@ -1176,7 +1195,8 @@ bool minic_parser_parse_static_global_after_head(MinicParser *parser,
                                      section_capacity,
                                      section_name_length,
                                      has_section,
-                                     explicit_alignment);
+                                     explicit_alignment,
+                                     force_emit);
 }
 
 bool minic_parser_parse_static_global(MinicParser *parser) {
@@ -1188,6 +1208,7 @@ bool minic_parser_parse_static_global(MinicParser *parser) {
     size_t section_name_length;
     size_t explicit_alignment;
     bool has_section;
+    bool force_emit = false;
 
     section_name_length = 0U;
     explicit_alignment = 0U;
@@ -1217,7 +1238,8 @@ bool minic_parser_parse_static_global(MinicParser *parser) {
                                                      sizeof(section_name),
                                                      &section_name_length,
                                                      &has_section,
-                                                     &explicit_alignment)) {
+                                                     &explicit_alignment,
+                                                     &force_emit)) {
         return false;
     }
     object_id = minic_parser_find_global_object_entity(parser, name_span);
@@ -1227,7 +1249,9 @@ bool minic_parser_parse_static_global(MinicParser *parser) {
                                       section_name,
                                       section_name_length,
                                       has_section,
-                                      explicit_alignment)) {
+                                      explicit_alignment) ||
+        (force_emit && !minic_c0_program_set_global_object_force_emit(
+                           parser->program, object_id))) {
         minic_parser_error(parser, "cannot persist static object metadata");
         return false;
     }

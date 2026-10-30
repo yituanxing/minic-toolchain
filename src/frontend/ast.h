@@ -602,6 +602,11 @@ typedef struct MinicGlobalObject {
     bool is_extern;
     bool is_tentative;
     bool is_block_scope_extern_only;
+    /* GNU `used` is an object emission root even without a C reference or
+     * an explicit section.  The Core-wide dead-static-object pass may only
+     * suppress internal file-scope storage lacking such roots. */
+    bool force_emit;
+    bool is_emission_pruned;
     /* Syntax-only GNU extern TLS declarations are preserved; any value
      * reference fails closed until the target supports TLS relocations. */
     bool is_thread_local;
@@ -934,6 +939,8 @@ bool minic_c0_program_set_global_object_owner(MinicC0Program *program,
                                               MinicFunctionId owner_function);
 bool minic_c0_program_global_object_emittable(const MinicC0Program *program,
                                               const MinicGlobalObject *object);
+bool minic_c0_program_set_global_object_force_emit(MinicC0Program *program,
+                                                    MinicGlobalObjectId object_id);
 /* Nullable O(F) snapshot for fast O(1) owner selection in object walks.
  * NULL on allocation failure; callers may use the uncached predicate. */
 bool *minic_c0_program_build_global_owner_live_map(const MinicC0Program *program);

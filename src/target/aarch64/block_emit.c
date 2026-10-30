@@ -496,6 +496,7 @@ bool minic_aarch64_emit_core_blocks(
         aarch64_machine_emit_family,
         aarch64_machine_store_gp,
         aarch64_machine_emit_terminator,
+        NULL,
         NULL
     };
     return minic_multi_direct_machine_dispatch(out, ctx, &dispatch);
