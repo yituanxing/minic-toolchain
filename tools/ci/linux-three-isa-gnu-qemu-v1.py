@@ -58,6 +58,13 @@ P1_SYSCALLS = (
     "inotify-create", "socketpair-rw", "ipv6-tcp-loopback", "memfd-rw",
     "pidfd-open", "futex-wake", "io-uring-setup", "mmap-mprotect",
 )
+# probe.c's bring_loopback_up() emits a separately observable success before
+# the IPv6 check.  It is an auxiliary setup operation, *not* one of the 12
+# syscall test cases counted by RUNTIME_V2_SYSCALL_END pass=12.  The authentic
+# x86_64 GNU Linux QEMU P1 oracle includes this thirteenth PASS line; require
+# that exact extra event rather than weakening the total-event assertion.
+P1_SUCCESS_EVENTS = (*P1_SYSCALLS[:6], "loopback-up", *P1_SYSCALLS[6:])
+P1_SUCCESS_LINE = re.compile(r"^RUNTIME_V2_SYSCALL_PASS ([a-z][a-z0-9-]*)$", re.MULTILINE)
 FATAL = re.compile(
     r"Kernel panic|\bOops:|\bBUG:|\bKASAN:|\bUBSAN:|out.of.bounds|"
     r"general protection fault|Unable to handle kernel|"
@@ -112,7 +119,7 @@ def validate_log(log: str, lane: str, console: str) -> None:
         raise CertificationError(f"unknown lane: {lane}")
     # Serial consoles may use CRLF; normalize for semantic markers while the
     # receipt still hashes and retains the original unmodified log bytes.
-    log = log.replace("\r\n", "\n")
+    log = log.replace("\r\n", "\n").replace("\r", "")
     fatal = FATAL.search(log)
     if fatal:
         raise CertificationError(f"{lane} fatal guest marker: {fatal.group(0)}")
@@ -131,20 +138,18 @@ def validate_log(log: str, lane: str, console: str) -> None:
     if not re.search(rf"Kernel command line:.*\bconsole={re.escape(console)}\b", log):
         missing.append(f"cmdline console={console}")
     if lane == "p0":
-        if "RUNTIME_V2_SYSCALL_BEGIN" in log:
-            missing.append("unexpected P1 execution in P0")
+        if "RUNTIME_V2_SYSCALL_BEGIN" in log or P1_SUCCESS_LINE.search(log):
+            missing.append("unexpected P1 execution/events in P0")
     else:
         if not re.search(r"Kernel command line:.*\bminic_runtime=p1\b", log):
             missing.append("cmdline minic_runtime=p1")
         mandatory_p1 = ("RUNTIME_V2_SYSCALL_BEGIN", "RUNTIME_V2_SYSCALL_END pass=12 fail=0",
                         "INIT_RUNTIME_PROBE=PASS")
         missing.extend(marker for marker in mandatory_p1 if marker not in log)
-        for name in P1_SYSCALLS:
-            marker = f"RUNTIME_V2_SYSCALL_PASS {name}"
-            if log.count(marker + "\n") != 1:
-                missing.append(f"exactly one {marker}")
-        if log.count("RUNTIME_V2_SYSCALL_PASS ") != len(P1_SYSCALLS):
-            missing.append("exactly 12 total P1 syscalls")
+        actual = P1_SUCCESS_LINE.findall(log)
+        if actual != list(P1_SUCCESS_EVENTS):
+            missing.append("exactly 12 P1 syscall events plus the ordered "
+                           f"loopback-up setup success; actual={actual}")
     if missing:
         raise CertificationError(f"{lane} missing/incorrect markers: {', '.join(missing)}")
 
@@ -153,7 +158,14 @@ def boot_args(target: str, qemu: Path, image: Path, initramfs: Path,
               firmware: Path | None, lane: str, memory: str) -> list[str]:
     spec = TARGETS[target]
     command = [str(qemu), *spec["machine_args"], "-m", memory, "-smp", "1",
-               "-nographic", "-no-reboot"]
+               "-nographic", "-no-reboot",
+               # P1 checks guest *loopback* networking only.  QEMU's default
+               # implicit user-NIC on ARM virt loads the efi-virtio.rom PXE
+               # option ROM, absent from minimal Ubuntu qemu-system-arm
+               # installations.  Suppress that unused device explicitly;
+               # do not let unrelated host-package ROM availability select
+               # whether an original GNU kernel can enter QEMU.
+               "-nic", "none"]
     if target == "loongarch64":
         if firmware is None:
             raise CertificationError("LoongArch64 requires EFI firmware (no fallback to -bios default)")
@@ -267,12 +279,26 @@ def self_test() -> None:
     validate_log(sample, "p0", "ttyS0")
     p1 = sample.replace("rdinit=/init\n", "rdinit=/init minic_runtime=p1\n")
     p1 += "RUNTIME_V2_SYSCALL_BEGIN\n"
-    p1 += "".join(f"RUNTIME_V2_SYSCALL_PASS {name}\n" for name in P1_SYSCALLS)
+    p1 += "".join(f"RUNTIME_V2_SYSCALL_PASS {name}\n" for name in P1_SUCCESS_EVENTS)
     p1 += "RUNTIME_V2_SYSCALL_END pass=12 fail=0\nINIT_RUNTIME_PROBE=PASS\n"
     validate_log(p1, "p1", "ttyS0")
     validate_log(p1.replace("\n", "\r\n"), "p1", "ttyS0")
-    for bad, lane in ((sample + "Kernel panic - not syncing\n", "p0"),
-                      (p1.replace("pass=12", "pass=11"), "p1")):
+    negatives = ((sample + "Kernel panic - not syncing\n", "p0"),
+                 (sample + "RUNTIME_V2_SYSCALL_PASS eventfd-rw\n", "p0"),
+                 (p1.replace("pass=12", "pass=11"), "p1"),
+                 (p1.replace("RUNTIME_V2_SYSCALL_PASS loopback-up\n", ""), "p1"),
+                 (p1.replace("RUNTIME_V2_SYSCALL_PASS loopback-up\n",
+                             "RUNTIME_V2_SYSCALL_PASS loopback-up\n"
+                             "RUNTIME_V2_SYSCALL_PASS loopback-up\n"), "p1"),
+                 (p1.replace("RUNTIME_V2_SYSCALL_PASS loopback-up\n",
+                             "RUNTIME_V2_SYSCALL_PASS unauthorized-extra\n"
+                             "RUNTIME_V2_SYSCALL_PASS loopback-up\n"), "p1"),
+                 (p1.replace("RUNTIME_V2_SYSCALL_PASS ipv6-tcp-loopback\n",
+                             "RUNTIME_V2_SYSCALL_PASS ipv6-tcp-loopback\n"
+                             "RUNTIME_V2_SYSCALL_PASS unauthorized-extra\n"), "p1"),
+                 (p1.replace("RUNTIME_V2_SYSCALL_PASS loopback-up\n", "") +
+                  "RUNTIME_V2_SYSCALL_PASS loopback-up\n", "p1"))
+    for bad, lane in negatives:
         try:
             validate_log(bad, lane, "ttyS0")
         except CertificationError:
@@ -281,6 +307,14 @@ def self_test() -> None:
             raise AssertionError("negative runtime oracle falsely passed")
     assert "-bios" in boot_args("loongarch64", Path("qemu"), Path("kernel"),
                                Path("initramfs"), Path("QEMU_EFI.fd"), "p1", "2G")
+    for target in TARGETS:
+        command = boot_args(target, Path("qemu"), Path("kernel"),
+                            Path("initramfs"),
+                            Path("QEMU_EFI.fd") if target == "loongarch64" else None,
+                            "p1", "2G")
+        assert command.count("-nic") == 1
+        assert command[command.index("-nic") + 1] == "none"
+        assert "-nodefaults" not in command  # preserve the serial console
     try:
         boot_args("loongarch64", Path("qemu"), Path("kernel"), Path("initramfs"),
                   None, "p0", "2G")
@@ -289,7 +323,8 @@ def self_test() -> None:
     else:
         raise AssertionError("accepted missing LoongArch EFI firmware")
     print("THREE_ISA_GNU_QEMU_SELFTEST=PASS targets=3 lanes=P0_P1 "
-          "panic_fail_closed=1 p1_fail_closed=1 loong_efi_fail_closed=1")
+          f"panic_fail_closed=1 p1_negative_cases={len(negatives)} "
+          "loong_efi_fail_closed=1 implicit_host_nic_disabled=1")
 
 
 def main() -> int:

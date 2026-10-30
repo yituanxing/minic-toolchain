@@ -247,6 +247,8 @@ jobs:
             ${{ github.workspace }}/build/minic-linux-gnu-runtime-${{ matrix.target }}/candidate/all-c-owners-result.json
             ${{ github.workspace }}/build/minic-linux-gnu-runtime-${{ matrix.target }}/candidate/gnu-ld-relink.log
             ${{ github.workspace }}/build/minic-linux-gnu-runtime-${{ matrix.target }}/candidate/postlink-gnu-c-fallback.json
+            ${{ github.workspace }}/build/minic-linux-gnu-runtime-${{ matrix.target }}/candidate/postlink-c-owner-census.json
+            ${{ github.workspace }}/build/minic-linux-gnu-runtime-${{ matrix.target }}/candidate/postlink-target-elf64-objects.sha256
             ${{ github.workspace }}/build/minic-linux-gnu-runtime-${{ matrix.target }}/candidate/boot/
           if-no-files-found: warn
           retention-days: 14

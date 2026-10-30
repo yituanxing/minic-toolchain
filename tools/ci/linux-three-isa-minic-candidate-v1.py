@@ -73,6 +73,34 @@ def module(name: str, filename: str):
     return imported
 
 
+def compiler_pair(compiler: Path, expected: dict | None = None) -> dict[str, str]:
+    """Authenticate both the front driver and the *executed* sibling compiler."""
+    driver = required(compiler)
+    cc = required(compiler.parent / "minic-cc")
+    if (not os.access(driver, os.X_OK) or not os.access(cc, os.X_OK)
+            or cc.parent != driver.parent):
+        raise Rejected("MiniC driver and sibling minic-cc must both be executable")
+    identity = {"compiler_sha256": sha(driver),
+                "compiler_driver_sha256": sha(driver),
+                "compiler_cc_sha256": sha(cc)}
+    if expected is not None and any(expected.get(key) != value
+                                    for key, value in identity.items()):
+        raise Rejected("MiniC driver or executed minic-cc binary changed during compilation")
+    return identity
+
+
+def verify_gnu_kbuild_commands(out: Path, rows: list[dict]) -> None:
+    """Ensure canonical GNU .cmd source/flags identity never changed."""
+    for row in rows:
+        name = PurePosixPath(row["object"])
+        cmd = out / name.parent / ("." + name.name + ".cmd")
+        digest = row.get("cmd_sha256")
+        if (not isinstance(digest, str) or
+                not re.fullmatch(r"[0-9a-f]{64}", digest) or
+                sha(required(cmd)) != digest):
+            raise Rejected(f"original GNU Kbuild .cmd provenance changed: {name}")
+
+
 def candidate_inputs(target: str, work: Path, compiler: Path,
                      golden_receipt: dict, initramfs: Path) -> tuple[list[dict], dict]:
     evidence, out, frozen = work / "evidence", work / "build", work / "frozen"
@@ -108,6 +136,7 @@ def candidate_inputs(target: str, work: Path, compiler: Path,
         raise Rejected("incomplete canonical Linux ELF64 GNU C-owner manifest")
     if freeze.get("identity", {}).get("profile") != "broad":
         raise Rejected("GNU frozen profile must match the full broad Kconfig")
+    verify_gnu_kbuild_commands(out, rows)
     for row in rows:
         name = PurePosixPath(row["object"])
         if (name.is_absolute() or ".." in name.parts or name.suffix != ".o" or
@@ -117,7 +146,7 @@ def candidate_inputs(target: str, work: Path, compiler: Path,
         required(out / name)
         if not (out / name).is_file():
             raise Rejected(f"missing GNU original C object: {name}")
-    comp_sha = sha(required(compiler))
+    tool_identity = compiler_pair(compiler)
     return rows, {"target": target, "gnu_c_owners": len(rows),
                   "golden_image_sha256": golden_receipt["image_sha256"],
                   "source_sha256": LINUX_SHA,
@@ -125,7 +154,7 @@ def candidate_inputs(target: str, work: Path, compiler: Path,
                   "initramfs_sha256": golden_receipt["initramfs_sha256"],
                   "firmware_sha256": golden_receipt.get("firmware_sha256"),
                   "gnu_c_owner_manifest_sha256": discovery["owner_manifest_sha256"],
-                  "compiler_sha256": comp_sha, "arch": arch, "cross": cross,
+                  **tool_identity, "arch": arch, "cross": cross,
                   "gcc": gcc, "build_target": build_target,
                   "image_name": image_name, "machine": machine}
 
@@ -183,6 +212,55 @@ def make_objects(rows: list[dict], work: Path, compiler: Path, output: Path,
     return results
 
 
+def verify_postlink_c_owners(out: Path, output: Path, target: str,
+                             expected: dict[str, str]) -> dict:
+    """Re-enumerate live GNU Kbuild ELF64 C owners after the final relink.
+
+    Checking only the previously known MiniC filenames misses a newly emitted
+    original GNU C object. Reuse the original canonical .o.cmd C-source
+    classifier on the COMPLETE postlink target-ELF64 object inventory.
+    """
+    original = module("minic_original_owner_census", "linux-three-isa-golden-v1.py")
+    common = module("minic_original_full_c", "linux-runtime-gcc-full-c-objects-v1.py")
+    out = out.resolve(strict=True)
+    records: list[tuple[str, str]] = []
+    for obj in sorted(out.rglob("*.o")):
+        if not obj.is_file():
+            continue
+        parts = obj.relative_to(out).parts
+        if (parts and parts[0] in ("tools", "scripts") or
+                len(parts) >= 3 and parts[0] == "arch" and parts[2] == "tools"):
+            continue
+        if original.classify_object(obj, out, target) != "main":
+            continue
+        records.append((obj.relative_to(out).as_posix(), sha(obj)))
+    manifest = output / "postlink-target-elf64-objects.sha256"
+    manifest.write_text("".join(f"{digest}  {name}\n" for name, digest in records))
+    owners, _excluded = common.examine(out, manifest)
+    actual = set(owners)
+    wanted = set(expected)
+    unexpected = sorted(actual - wanted)
+    missing = sorted(wanted - actual)
+    report = {"schema": "minic-three-isa-postlink-c-owners-v1",
+              "target": target, "expected_c_owners": len(expected),
+              "actual_c_owners": len(actual), "unexpected_gnu_c_owners": unexpected,
+              "missing_minic_c_owners": missing,
+              "postlink_target_object_manifest_sha256": sha(manifest),
+              "verdict": "POSTLINK_C_OWNER_FAIL"}
+    mismatched = [name for name, digest in expected.items()
+                  if name in actual and sha(required(out / name)) != digest]
+    report["c_owner_hash_mismatches"] = mismatched
+    if not unexpected and not missing and not mismatched and len(owners) == len(expected):
+        report["verdict"] = "POSTLINK_ALL_C_MINIC_SHA_PASS"
+    (output / "postlink-c-owner-census.json").write_text(
+        json.dumps(report, sort_keys=True, indent=2) + "\n")
+    if report["verdict"] != "POSTLINK_ALL_C_MINIC_SHA_PASS":
+        raise Rejected("GNU Kbuild postlink C-owner universe/fallback mismatch: "
+                       f"added={unexpected[:8]} missing={missing[:8]} "
+                       f"overwritten={mismatched[:8]}")
+    return report
+
+
 def relink(work: Path, output: Path, rows: list[dict], results: list[dict],
            data: dict, gnu_receipt: dict) -> Path:
     out, source = work / "build", work / "linux-6.6.143"
@@ -214,13 +292,14 @@ def relink(work: Path, output: Path, rows: list[dict], results: list[dict],
     (output / "gnu-ld-relink.log").write_text(linked.stdout)
     if linked.returncode:
         raise Rejected(f"original GNU Kbuild relink failed rc={linked.returncode}")
-    # Hard guarantee even if a generated header caused Kbuild to replay GNU
-    # compilation after overlay: byte-for-byte *every* C object must still be
-    # its staged MiniC version.  No 2064-style fixed count applies here.
-    fallback = [name for name, hash_ in expected.items() if sha(required(out / name)) != hash_]
-    (output / "postlink-gnu-c-fallback.json").write_text(json.dumps(fallback, indent=2) + "\n")
-    if fallback:
-        raise Rejected(f"GNU Kbuild replaced {len(fallback)} MiniC C objects; first={fallback[:8]}")
+    # Re-enumerate *all* live original-Kbuild C owners after the link, not just
+    # the preoverlay list. A new GCC-generated C object may not evade this
+    # union check even if each previous MiniC .o remained byte-for-byte intact.
+    census = verify_postlink_c_owners(out, output, data["target"], expected)
+    verify_gnu_kbuild_commands(out, rows)
+    (output / "postlink-gnu-c-fallback.json").write_text(json.dumps(
+        {"verdict": census["verdict"], "gnu_c_fallback_count": 0,
+         "unexpected": [], "overwritten": []}, indent=2) + "\n")
     # Ensure this wasn't a no-op link with an unchanged original GNU image.
     if not re.search(r"\bLD\b.*(?:vmlinux|Image)|\bAR\b.*built-in", linked.stdout):
         raise Rejected("no live GNU Kbuild rearchive/relink evidence")
@@ -249,6 +328,8 @@ def boot_and_compare(data: dict, output: Path, initramfs: Path,
                   firmware_sha256=data["firmware_sha256"],
                   image_sha256=sha(image),
                   compiler_sha256=data["compiler_sha256"],
+                  compiler_driver_sha256=data["compiler_driver_sha256"],
+                  compiler_cc_sha256=data["compiler_cc_sha256"],
                   golden_c_owners=data["gnu_c_owners"],
                   minic_c_owners=data["gnu_c_owners"], gnu_c_fallback_count=0,
                   lanes=[], verdict="MINIC_QEMU_NOT_CERTIFIED")
@@ -279,6 +360,7 @@ def self_test() -> None:
     assert set(TARGETS) == {"x86_64", "aarch64", "loongarch64"}
     assert len(ALLOWED_CFLAGS) == 16
     assert len(LINUX_SHA) == 64
+    failures_checked = 0
     with __import__("tempfile").TemporaryDirectory() as temp:
         bad = Path(temp) / "not-elf.o"
         bad.write_bytes(b"x" * 64)
@@ -288,7 +370,88 @@ def self_test() -> None:
             pass
         else:
             raise AssertionError("incorrectly accepted foreign object")
-    print("THREE_ISA_ALL_MINIC_CANDIDATE_SELFTEST=PASS targets=3 zero_gnu_fallback_gate=1")
+        out = Path(temp) / "out"
+        evidence = Path(temp) / "evidence"
+        out.mkdir()
+        evidence.mkdir()
+
+        def sample_c_owner(name: str) -> Path:
+            path = out / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            elf = bytearray(64)
+            elf[:6] = b"\x7fELF\x02\x01"
+            struct.pack_into("<HH", elf, 16, 1, 62)  # ELF64 ET_REL EM_X86_64
+            path.write_bytes(elf)
+            cmd = path.parent / ("." + path.name + ".cmd")
+            cmd.write_text(f"savedcmd_{name} := gcc -c -o {name} {name[:-2]}.c\n"
+                           f"source_{name} := {name[:-2]}.c\n")
+            return path
+
+        first = sample_c_owner("kernel/canonical.o")
+        expected = {"kernel/canonical.o": sha(first)}
+        cmd = first.parent / ("." + first.name + ".cmd")
+        metadata = [{"object": "kernel/canonical.o", "cmd_sha256": sha(cmd)}]
+        verify_gnu_kbuild_commands(out, metadata)
+        assert verify_postlink_c_owners(out, evidence, "x86_64", expected)["verdict"] == \
+            "POSTLINK_ALL_C_MINIC_SHA_PASS"
+        added = sample_c_owner("kernel/gnu-escaped.o")
+        try:
+            verify_postlink_c_owners(out, evidence, "x86_64", expected)
+        except Rejected as exc:
+            assert "added=['kernel/gnu-escaped.o']" in str(exc)
+            failures_checked += 1
+        else:
+            raise AssertionError("new postlink GNU C object escaped the owner gate")
+        added.unlink()
+        first.write_bytes(first.read_bytes() + b"GNU_TAMPER")
+        try:
+            verify_postlink_c_owners(out, evidence, "x86_64", expected)
+        except Rejected as exc:
+            assert "overwritten=['kernel/canonical.o']" in str(exc)
+            failures_checked += 1
+        else:
+            raise AssertionError("GNU rewrite of a MiniC .o escaped the SHA gate")
+        first.unlink()
+        try:
+            verify_postlink_c_owners(out, evidence, "x86_64", expected)
+        except Rejected as exc:
+            assert "missing=['kernel/canonical.o']" in str(exc)
+            failures_checked += 1
+        else:
+            raise AssertionError("missing original C owner escaped postlink gate")
+        cmd.write_text(cmd.read_text() + "# tampered after GNU freeze\n")
+        try:
+            verify_gnu_kbuild_commands(out, metadata)
+        except Rejected:
+            failures_checked += 1
+        else:
+            raise AssertionError("changed GNU .o.cmd escaped the immutable source/flags gate")
+
+        bindir = Path(temp) / "bin"
+        bindir.mkdir()
+        driver, core = bindir / "minic", bindir / "minic-cc"
+        for path in (driver, core):
+            path.write_text("#!/bin/sh\nexit 0\n")
+            path.chmod(0o755)
+        identity = compiler_pair(driver)
+        assert identity["compiler_sha256"] == identity["compiler_driver_sha256"]
+        core.write_text("#!/bin/sh\nexit 1\n")
+        try:
+            compiler_pair(driver, identity)
+        except Rejected:
+            failures_checked += 1
+        else:
+            raise AssertionError("modified minic-cc escaped binary identity gate")
+        core.write_text("#!/bin/sh\nexit 0\n")
+        driver.write_text("#!/bin/sh\nexit 2\n")
+        try:
+            compiler_pair(driver, identity)
+        except Rejected:
+            failures_checked += 1
+        else:
+            raise AssertionError("modified MiniC driver escaped binary identity gate")
+    print("THREE_ISA_ALL_MINIC_CANDIDATE_SELFTEST=PASS targets=3 "
+          f"postlink_and_binary_negative_cases={failures_checked}")
 
 
 def main() -> int:
@@ -325,12 +488,14 @@ def main() -> int:
         shutil.copyfile(a.gnu_receipt, a.output / "gnu-qemu-receipt.json")
         outcome["owner_count"] = len(rows)
         results = make_objects(rows, a.gnu_work, a.minic, a.output, data, a.workers, a.timeout)
+        compiler_pair(a.minic, data)
         failed = [row for row in results if row["status"] != "MINIC_S_GNU_AS_PASS"]
         (a.output / "all-c-owners-result.json").write_text(json.dumps(results, indent=2) + "\n")
         outcome.update(minic_s_gnu_as_pass=len(results) - len(failed), minic_s_gnu_as_fail=len(failed))
         if failed:
             raise Rejected(f"incomplete MiniC/GNU AS C owner coverage {len(results)-len(failed)}/{len(rows)}; first={failed[0]}")
         image = relink(a.gnu_work, a.output, rows, results, data, golden)
+        compiler_pair(a.minic, data)
         outcome["candidate_image_sha256"] = sha(image)
         # Never promote QEMU/same-source results if object provenance failed.
         boot_and_compare(data, a.output, a.initramfs, a.firmware,

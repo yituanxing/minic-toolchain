@@ -160,6 +160,40 @@ make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
     tail -n 80 "$ev/gcc-preflight.log"
     exit 5
   }
+# Kernel Kbuild regenerates usr/initramfs_data.o from its generated .S
+# incbin/cpio payload when a cached golden build is replayed on another
+# runner.  This is NOT an original C owner and does not participate in the
+# 2064-C MiniC compilation.  When (and ONLY when) the pinned seven-shard
+# producer/receiver sees a different payload-object SHA, prove that fact from
+# the original `.cmd` and C-owner manifest before allowing this one volatile
+# *non-C* reference. The complete SHA-certified GNU object tree, including
+# this object, is restored immediately after the preflight below.
+generated_initramfs_volatile=0
+if [[ "${COHORT_GNU_PREFLIGHT_ALLOW_SEVEN_SHARD_VOLATILE:-0}" == 1 ||
+      "${COHORT_GNU_PREFLIGHT_ALLOW_SEVEN_RECEIVER_VOLATILE:-0}" == 1 ]]; then
+  initramfs_object=usr/initramfs_data.o
+  initramfs_golden=$(awk '$2=="usr/initramfs_data.o" {print $1;exit}' "$prov/gcc-objects.sha256")
+  test -n "$initramfs_golden" && test -s "$out/$initramfs_object"
+  initramfs_current=$(sha256sum "$out/$initramfs_object" | cut -d' ' -f1)
+  if [[ "$initramfs_golden" != "$initramfs_current" ]]; then
+    test -s "$prov/original-c-owners.txt" &&
+      test "$(grep -Ec '^[^#[:space:]]+\.o$' "$prov/original-c-owners.txt")" = 2064 || {
+        echo 'COHORT_GNU_PREFLIGHT=FAIL original_2064_C_owner_manifest_unavailable' >&2; exit 6;
+      }
+    test -s "$out/usr/.initramfs_data.o.cmd" || {
+      echo 'COHORT_GNU_PREFLIGHT=FAIL missing_generated_initramfs_cmd' >&2; exit 6;
+    }
+    grep -Fq 'usr/initramfs_data.S' "$out/usr/.initramfs_data.o.cmd" || {
+      echo 'COHORT_GNU_PREFLIGHT=FAIL generated_initramfs_not_assembly' >&2; exit 6;
+    }
+    if grep -Fxq "$initramfs_object" "$prov/original-c-owners.txt"; then
+      echo 'COHORT_GNU_PREFLIGHT=FAIL generated_initramfs_is_C_owner' >&2; exit 6;
+    fi
+    generated_initramfs_volatile=1
+    printf 'COHORT_GNU_GENERATED_INITRAMFS=VERIFIED_NON_C original=%s replay=%s restored_from_golden=true\n' \
+      "$initramfs_golden" "$initramfs_current"
+  fi
+fi
 # During exact MiniPP cache replay Kbuild may regenerate init/version.o and
 # the dependent vmlinux.o from build timestamps. The pristine GNU tree was
 # SHA-attested and snapshotted above; every other reference object must remain
@@ -204,9 +238,9 @@ elif [[ "${COHORT_GNU_PREFLIGHT_ALLOW_SEVEN_SHARD_VOLATILE:-0}" == 1 ]]; then
     echo 'COHORT_GNU_PREFLIGHT=FAIL invalid_seven_shard_volatile_scope' >&2
     exit 6
   }
-  awk '$2 != "init/version-timestamp.o" && $2 != "init/version.o" && $2 != "vmlinux.o" {print}' \
+  awk -v allow="$generated_initramfs_volatile" '$2 != "init/version-timestamp.o" && $2 != "init/version.o" && $2 != "vmlinux.o" && !(allow == 1 && $2 == "usr/initramfs_data.o") {print}' \
     "$prov/gcc-objects.sha256" >"$ev/gcc-objects-stable.sha256"
-  echo 'COHORT_GNU_PREFLIGHT_VOLATILE=EXACT_SEVEN_SHARD only_init_version_and_vmlinux_excluded=true full_snapshot_restored=true'
+  echo "COHORT_GNU_PREFLIGHT_VOLATILE=EXACT_SEVEN_SHARD version_and_vmlinux_excluded=true verified_generated_initramfs_exception=$generated_initramfs_volatile full_snapshot_restored=true"
 elif [[ "${COHORT_GNU_PREFLIGHT_ALLOW_SEVEN_RECEIVER_VOLATILE:-0}" == 1 ]]; then
   # The seven per-shard producer objects and complete GNU pool are each
   # SHA-attested BEFORE this existing Kbuild sanity re-run. Kbuild modifies
@@ -224,9 +258,9 @@ elif [[ "${COHORT_GNU_PREFLIGHT_ALLOW_SEVEN_RECEIVER_VOLATILE:-0}" == 1 ]]; then
     echo 'COHORT_GNU_PREFLIGHT=FAIL invalid_seven_receiver_volatile_scope' >&2
     exit 6
   }
-  awk '$2 != "init/version-timestamp.o" && $2 != "init/version.o" && $2 != "vmlinux.o" {print}' \
+  awk -v allow="$generated_initramfs_volatile" '$2 != "init/version-timestamp.o" && $2 != "init/version.o" && $2 != "vmlinux.o" && !(allow == 1 && $2 == "usr/initramfs_data.o") {print}' \
     "$prov/gcc-objects.sha256" >"$ev/gcc-objects-stable.sha256"
-  echo 'COHORT_GNU_PREFLIGHT_VOLATILE=EXACT_SEVEN_RECEIVER only_version_and_vmlinux=true full_GNU_snapshot_restored=true'
+  echo "COHORT_GNU_PREFLIGHT_VOLATILE=EXACT_SEVEN_RECEIVER version_and_vmlinux_excluded=true verified_generated_initramfs_exception=$generated_initramfs_volatile full_GNU_snapshot_restored=true"
 elif [[ "${COHORT_GNU_PREFLIGHT_ALLOW_PINNED_VOLATILE:-0}" == 1 ]]; then
   [[ "${COHORT_ACTION:-all}" == verify && "${COHORT_NATIVE_UNION:-0}" == 1 && "$n" == 2064 ]] || {
     echo 'COHORT_GNU_PREFLIGHT=FAIL invalid_volatile_replay_scope' >&2

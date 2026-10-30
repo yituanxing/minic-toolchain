@@ -30,6 +30,43 @@
     ".short ((((.L__gpr_num_%0) << 0) | ((.L__gpr_num_%1) << 5)))\n" \
     ".popsection\n"
 
+/* Linux 6.6.143 uses a deliberately wide struct only to make the GNU "m"
+ * operand describe a faulting user address. Its type is not the ld/st width. */
+#define LOONG_UACCESS_STORE(OPCODE) \
+    "1: " OPCODE " %z2, %1  # __put_user_asm\n2:\n" LOONG_GPR_MAP \
+    ".pushsection __ex_table, \"a\"\n" \
+    ".balign 4\n" \
+    ".long ((1b) - .)\n" \
+    ".long ((2b) - .)\n" \
+    ".short (2)\n" \
+    ".short ((((.L__gpr_num_%0) << 0) | ((.L__gpr_num_zero) << 5)))\n" \
+    ".popsection\n"
+
+struct __large_struct { unsigned long buf[100]; };
+
+#define LOONG_LARGE_LOAD(NAME, OPCODE, TYPE) \
+    void NAME(int *err, TYPE *result, const TYPE *user) { \
+        __asm__ __volatile__(LOONG_UACCESS(OPCODE) \
+            : "+r"(*err), "=r"(*result) \
+            : "m"(*(const struct __large_struct *)user)); \
+    }
+
+#define LOONG_LARGE_STORE(NAME, OPCODE, TYPE) \
+    void NAME(int *err, TYPE *user, TYPE value) { \
+        __asm__ __volatile__(LOONG_UACCESS_STORE(OPCODE) \
+            : "+r"(*err), "=m"(*(struct __large_struct *)user) \
+            : "Jr"(value)); \
+    }
+
+LOONG_LARGE_LOAD(linux_large_get_byte, "ld.b", unsigned char)
+LOONG_LARGE_LOAD(linux_large_get_half, "ld.h", unsigned short)
+LOONG_LARGE_LOAD(linux_large_get_word, "ld.w", unsigned int)
+LOONG_LARGE_LOAD(linux_large_get_double, "ld.d", unsigned long)
+LOONG_LARGE_STORE(linux_large_put_byte, "st.b", unsigned char)
+LOONG_LARGE_STORE(linux_large_put_half, "st.h", unsigned short)
+LOONG_LARGE_STORE(linux_large_put_word, "st.w", unsigned int)
+LOONG_LARGE_STORE(linux_large_put_double, "st.d", unsigned long)
+
 struct __attribute__((packed)) PackedUser {
     unsigned char pad;
     int err;

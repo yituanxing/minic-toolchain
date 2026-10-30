@@ -38,6 +38,10 @@ P1_SYSCALLS = (
     "inotify-create", "socketpair-rw", "ipv6-tcp-loopback", "memfd-rw",
     "pidfd-open", "futex-wake", "io-uring-setup", "mmap-mprotect",
 )
+# probe.c emits a distinct successful loopback-interface setup event inside
+# test_ipv6_tcp(), between socketpair and the twelve counted syscalls' IPv6
+# result. This is NOT a thirteenth syscall, but MUST appear exactly once.
+P1_EXPECTED_EVENTS = (*P1_SYSCALLS[:6], "loopback-up", *P1_SYSCALLS[6:])
 P1_MARKERS = (
     "RUNTIME_V2_SYSCALL_BEGIN",
     "RUNTIME_V2_SYSCALL_END pass=12 fail=0",
@@ -106,13 +110,15 @@ def inspect(log: str, label: str, profile: str, release: str) -> dict:
         for name in P1_SYSCALLS:
             if passed.count(name) != 1:
                 raise RuntimeMismatch(f"{label}: P1 syscall {name} count={passed.count(name)}")
-        if passed != list(P1_SYSCALLS):
-            raise RuntimeMismatch(f"{label}: P1 syscall order, count, or identity changed: {passed}")
+        if passed != list(P1_EXPECTED_EVENTS):
+            raise RuntimeMismatch(f"{label}: P1 syscall/auxiliary order, count, or identity changed: {passed}")
     elif passed:
         raise RuntimeMismatch(f"{label}: unexpected P1 events in P0")
 
     return {"profile": profile, "release": release,
-            "init_markers": list(required), "syscall_events": passed}
+            "init_markers": list(required),
+            "syscall_events": [name for name in passed if name in P1_SYSCALLS],
+            "auxiliary_events": [name for name in passed if name == "loopback-up"]}
 
 
 def compare(golden: str, candidate: str, profile: str, release: str) -> dict:
@@ -165,9 +171,12 @@ def check_receipts(gnu: dict, minic: dict, target: str, profile: str,
             or produced != owners or type(gnu_owners) is not int
             or owners != gnu_owners or minic.get("gnu_c_fallback_count") != 0):
         raise RuntimeMismatch("all original ELF64 C owners must be MiniC, zero GCC C fallback")
-    if (not isinstance(minic.get("compiler_sha256"), str) or
-            not SHA256.fullmatch(minic["compiler_sha256"])):
-        raise RuntimeMismatch("missing authenticated MiniC compiler SHA")
+    for key in ("compiler_sha256", "compiler_driver_sha256", "compiler_cc_sha256"):
+        if (not isinstance(minic.get(key), str) or
+                not SHA256.fullmatch(minic[key]) or minic[key] == "0" * 64):
+            raise RuntimeMismatch(f"missing authenticated MiniC executable SHA: {key}")
+    if minic["compiler_driver_sha256"] != minic["compiler_sha256"]:
+        raise RuntimeMismatch("the authenticated MiniC driver identity changed")
 
     chosen = {}
     for name, receipt, log in (("GNU", gnu, gnu_log), ("MiniC", minic, minic_log)):
@@ -193,7 +202,7 @@ def self_test() -> None:
                  (" minic_runtime=p1" if profile == "p1" else ""),
                  "Run /init as init process", *P0_MARKERS]
         if profile == "p1":
-            lines += [P1_MARKERS[0], *(f"RUNTIME_V2_SYSCALL_PASS {x}" for x in P1_SYSCALLS),
+            lines += [P1_MARKERS[0], *(f"RUNTIME_V2_SYSCALL_PASS {x}" for x in P1_EXPECTED_EVENTS),
                       P1_MARKERS[1], P1_MARKERS[2]]
         return "\r\n".join(lines) + "\n"
 
@@ -214,6 +223,12 @@ def self_test() -> None:
                 source.replace("RUNTIME_V2_SYSCALL_PASS eventfd-rw", ""),
                 source.replace("RUNTIME_V2_SYSCALL_PASS eventfd-rw", "RUNTIME_V2_SYSCALL_FAIL eventfd-rw"),
                 source.replace("minic_runtime=p1", ""),
+                source.replace("RUNTIME_V2_SYSCALL_PASS loopback-up", ""),
+                source.replace("RUNTIME_V2_SYSCALL_PASS loopback-up", "RUNTIME_V2_SYSCALL_PASS unknown-extra"),
+                source.replace("RUNTIME_V2_SYSCALL_PASS loopback-up", "RUNTIME_V2_SYSCALL_PASS loopback-up\nRUNTIME_V2_SYSCALL_PASS loopback-up"),
+                source.replace("RUNTIME_V2_SYSCALL_PASS loopback-up\n", "")
+                      + "RUNTIME_V2_SYSCALL_PASS loopback-up\n",
+                source.replace("RUNTIME_V2_SYSCALL_PASS ipv6-tcp-loopback", "RUNTIME_V2_SYSCALL_PASS loopback-up\nRUNTIME_V2_SYSCALL_PASS ipv6-tcp-loopback"),
             ]
         for sample in mutations:
             try:
@@ -240,7 +255,9 @@ def self_test() -> None:
         gnu = dict(common, verdict=GNU_VERDICT, lanes=lanes("GNU"), gnu_c_owners=4078)
         minic = dict(common, verdict=MINIC_VERDICT, lanes=lanes("MINIC"),
                      golden_c_owners=4078, minic_c_owners=4078,
-                     gnu_c_fallback_count=0, compiler_sha256="e" * 64)
+                     gnu_c_fallback_count=0, compiler_sha256="e" * 64,
+                     compiler_driver_sha256="e" * 64,
+                     compiler_cc_sha256="f" * 64)
         assert check_receipts(gnu, minic, "aarch64", "p1", gnu_log, minic_log)["minic_c_owners"] == 4078
 
         def bad(mutator) -> None:
@@ -259,6 +276,8 @@ def self_test() -> None:
         bad(lambda a, b: a.update(source_sha256="a" * 64) or b.update(source_sha256="a" * 64))
         bad(lambda a, b: b.update(config_sha256="f" * 64))
         bad(lambda a, b: b.update(compiler_sha256="wrong"))
+        bad(lambda a, b: b.update(compiler_cc_sha256="wrong"))
+        bad(lambda a, b: b.update(compiler_driver_sha256="d" * 64))
         bad(lambda a, b: b["lanes"][1].update(timed_out=True))
         bad(lambda a, b: b["lanes"][1].update(exit_code=124))
         bad(lambda a, b: b["lanes"][1].update(log_sha256="0" * 64))

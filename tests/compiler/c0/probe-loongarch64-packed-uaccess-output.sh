@@ -37,7 +37,25 @@ grep -Fq '1: ld.b $t1, $t4, 0' "$d/packed_uaccess_byte.s"
 grep -Fq '1: ld.h $t1, $t4, 0' "$d/packed_uaccess_half.s"
 grep -Fq '1: ld.w $t1, $t4, 0' "$d/packed_uaccess_word.s"
 
-for bad in wrong-memory-width narrow-register-output injected-asm; do
+# Original GNU Linux __get_user/__put_user routes their memory address
+# through struct __large_struct, whose 800-byte size is unrelated to the
+# faulting 1/2/4/8-byte load/store. Require all eight native target forms.
+for entry in get:byte:ld.b get:half:ld.h get:word:ld.w get:double:ld.d \
+             put:byte:st.b put:half:st.h put:word:st.w put:double:st.d; do
+  IFS=: read -r action width opcode <<<"$entry"
+  name="linux_large_${action}_${width}"
+  sed -n "/^${name}:/,/^\.size ${name},/p" "$d/source.s" > "$d/$name.s"
+  test -s "$d/$name.s"
+  grep -Fq "1: $opcode " "$d/$name.s"
+  grep -Fq '.pushsection __ex_table, "a"' "$d/$name.s"
+  if [[ "$action" == get ]]; then
+    grep -Fq '.short ((12 << 0) | (13 << 5))' "$d/$name.s"
+  else
+    grep -Fq '.short ((12 << 0) | (0 << 5))' "$d/$name.s"
+  fi
+done
+
+for bad in wrong-memory-width narrow-register-output injected-asm fake-sentinel-record; do
   case "$bad" in
     wrong-memory-width)
       sed 's/"ld.b"/"ld.w"/' "$d/source.i" > "$d/bad.i" ;;
@@ -45,6 +63,8 @@ for bad in wrong-memory-width narrow-register-output injected-asm; do
       sed 's/"=r"(r->word)/"=r"(r->byte)/' "$d/source.i" > "$d/bad.i" ;;
     injected-asm)
       sed 's/"ld.b"/"ld.b; nop"/' "$d/source.i" > "$d/bad.i" ;;
+    fake-sentinel-record)
+      sed 's/__large_struct/__wrong_large_struct/g' "$d/source.i" > "$d/bad.i" ;;
   esac
   if "$mini" --target=loongarch64-linux -S "$d/bad.i" \
       -o "$d/bad.s" >/dev/null 2>&1; then
@@ -54,4 +74,4 @@ for bad in wrong-memory-width narrow-register-output injected-asm; do
   test ! -e "$d/bad.s"
 done
 
-echo 'LOONG_PACKED_UACCESS=PASS GNU_C=PASS typed_carriers=1,2,4,8 guarded_error_ingress_egress=1 exception_table=preserved negatives=3 QEMU=NOT_RUN'
+echo 'LOONG_PACKED_UACCESS=PASS GNU_C=PASS typed_carriers=1,2,4,8 original_large_struct_get_put=8 guarded_error_ingress_egress=1 exception_table=preserved negatives=4 QEMU=NOT_RUN'

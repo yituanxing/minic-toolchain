@@ -2336,13 +2336,32 @@ static bool loong_uaccess_scalar_width(MinicType type, size_t *width) {
     }
 }
 
+/* Linux __get_user/__put_user deliberately supplies its GNU "m" operand as
+ * (*(struct __large_struct *)ptr).  This is an address/dependency operand:
+ * its artificial 100-long record must not be mistaken for the hardware
+ * ld/st width.  Keep exact scalar-width checking for genuine scalar memory
+ * operands, while admitting only the named Linux sentinel record. */
+static bool loong_uaccess_memory_width_matches(
+    const MinicC0Program *program, MinicType type, unsigned int width) {
+    MinicType plain;
+    size_t actual_width;
+    const MinicRecord *record;
+    if (!program || !minic_type_unqualified(type, &plain)) return false;
+    if (!minic_type_is_record(plain))
+        return loong_uaccess_scalar_width(plain, &actual_width) &&
+               actual_width == (size_t)width;
+    record = minic_c0_program_record(program, plain.record_id);
+    return record && record->name &&
+           strcmp(record->name, "__large_struct") == 0;
+}
+
 static bool loong_linux_uaccess_source(
     const MinicC0Program *program, const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
     LoongLinuxUaccess form;
     const MinicExpression *err, *data, *memory;
     MinicType err_type;
-    size_t data_width, memory_width;
+    size_t data_width;
     if (!program || !src || !contract || !src->is_volatile || src->is_goto ||
         src->output_count != 2U || src->input_count != 1U ||
         !src->outputs || !src->inputs || src->label_count != 0U ||
@@ -2370,8 +2389,8 @@ static bool loong_linux_uaccess_source(
         !minic_type_unqualified(err->type, &err_type) ||
         !minic_type_equal(err_type, minic_type_int()) ||
         !loong_uaccess_scalar_width(data->type, &data_width) ||
-        !loong_uaccess_scalar_width(memory->type, &memory_width) ||
-        memory_width != form.width || data_width < form.width ||
+        !loong_uaccess_memory_width_matches(program, memory->type, form.width) ||
+        data_width < form.width ||
         (minic_type_is_pointer(data->type) && form.width != 8U)) return false;
     contract->operand_count = 3U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE;
@@ -2393,7 +2412,7 @@ static bool loong_linux_uaccess_emit(
     const MinicCoreStructuredInlineAsmOperand *b =
         ins->value.structured_inline_asm.operands;
     MinicType err_type, data_type, memory_type;
-    size_t i, data_width, memory_width;
+    size_t i, data_width;
 
     if (!out || !ctx || !fn || !info || !form || !info->is_volatile ||
         info->is_goto || info->register_clobber_count != 0U ||
@@ -2426,8 +2445,9 @@ static bool loong_linux_uaccess_emit(
     }
     if (
         !loong_uaccess_scalar_width(data_type, &data_width) ||
-        !loong_uaccess_scalar_width(memory_type, &memory_width) ||
-        memory_width != form->width || data_width < form->width ||
+        !loong_uaccess_memory_width_matches(
+            ctx->program, memory_type, form->width) ||
+        data_width < form->width ||
         (minic_type_is_pointer(data_type) && form->width != 8U))
         return false;
 

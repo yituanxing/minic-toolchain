@@ -1355,6 +1355,16 @@ jobs:
             echo 'RV64_FULL_EXACT_HEAD=FAIL conflicting historical/experimental commit tag' >&2
             exit 1
           fi
+          # The fresh GNU reference uses these exact Kbuild identity fields.
+          # Without them a copied source tree may rebuild the generated
+          # usr/initramfs_data.o (embedded cpio timestamp) in preflight with
+          # different bytes although no genuine C owner has changed.
+          {
+            echo 'KBUILD_BUILD_USER=minic'
+            echo 'KBUILD_BUILD_HOST=minic-ci'
+            echo 'KBUILD_BUILD_TIMESTAMP=Thu Jan  1 00:00:00 UTC 1970'
+          } >> "$GITHUB_ENV"
+          echo 'RV64_GNU_GENERATED_IDENTITIES=PINNED user=minic host=minic-ci timestamp=1970-01-01'
           echo "RV64_FULL_EXACT_HEAD=PASS sha=$MINIC_EXPECTED_HEAD_SHA shard=${{ matrix.shard }} native_source=true"
 
       - name: Install pinned GNU RISC-V build tools
@@ -2010,6 +2020,12 @@ jobs:
             echo 'RV64_FULL_RECEIVER=FAIL conflicting historical/experimental commit tag' >&2
             exit 1
           fi
+          {
+            echo 'KBUILD_BUILD_USER=minic'
+            echo 'KBUILD_BUILD_HOST=minic-ci'
+            echo 'KBUILD_BUILD_TIMESTAMP=Thu Jan  1 00:00:00 UTC 1970'
+          } >> "$GITHUB_ENV"
+          echo 'RV64_GNU_GENERATED_IDENTITIES=PINNED user=minic host=minic-ci timestamp=1970-01-01'
           echo "RV64_FULL_RECEIVER=SOURCE_PASS sha=$MINIC_EXPECTED_HEAD_SHA full_original_2064_required=true"
 
       - name: Install minimal pinned GNU binutils and GCC for P1 object-only audit
