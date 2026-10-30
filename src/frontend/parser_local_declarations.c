@@ -397,6 +397,9 @@ static bool materialize_dynamic_local_array(MinicParser *parser,
     count_local.element_count = 1U;
     count_local.is_array = false;
     count_local.is_register_storage = false;
+    count_local.declaration_block = parser->current_block;
+    count_local.has_declaration_block =
+        parser->current_block != MINIC_BLOCK_INVALID;
     if (!minic_c0_program_add_local(parser->program, &count_local, &count_local_id)) {
         minic_parser_error(parser, "cannot allocate VLA bound storage");
         return false;
@@ -408,6 +411,9 @@ static bool materialize_dynamic_local_array(MinicParser *parser,
     address_local.element_count = 1U;
     address_local.is_array = false;
     address_local.is_register_storage = false;
+    address_local.declaration_block = parser->current_block;
+    address_local.has_declaration_block =
+        parser->current_block != MINIC_BLOCK_INVALID;
     if (!minic_c0_program_add_local(parser->program, &address_local, &address_local_id)) {
         minic_parser_error(parser, "cannot allocate VLA address storage");
         return false;
@@ -681,6 +687,9 @@ parse_local_declarator(MinicParser *parser,
             return false;
         }
         local.explicit_alignment = attributes.explicit_alignment;
+        local.declaration_block = parser->current_block;
+        local.has_declaration_block =
+            parser->current_block != MINIC_BLOCK_INVALID;
         if (!minic_c0_program_add_local(parser->program, &local, &local_id)) {
             minic_parser_error(parser, "out of memory while adding local");
             return false;
@@ -736,6 +745,9 @@ parse_local_declarator(MinicParser *parser,
             return false;
         }
         local.explicit_alignment = attributes.explicit_alignment;
+        local.declaration_block = parser->current_block;
+        local.has_declaration_block =
+            parser->current_block != MINIC_BLOCK_INVALID;
         if (!minic_c0_program_add_local(parser->program, &local, &local_id)) {
             minic_parser_error(parser, "out of memory while adding local");
             return false;
@@ -888,6 +900,9 @@ bool minic_parser_local_decl_auto_type(MinicParser *parser) {
     initializer_span = initializer->span;
     initializer_type = initializer->type;
     local.type = initializer_type;
+    local.declaration_block = parser->current_block;
+    local.has_declaration_block =
+        parser->current_block != MINIC_BLOCK_INVALID;
 
     /* GNU __auto_type deliberately keeps the new name out of scope while the
        initializer is parsed.  Bind it only after the initializer type is known. */

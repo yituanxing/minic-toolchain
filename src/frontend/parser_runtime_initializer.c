@@ -487,6 +487,9 @@ static bool add_runtime_initializer_once_read(MinicParser *parser,
     local.element_count = 1U;
     local.is_array = false;
     local.is_register_storage = false;
+    local.declaration_block = parser->current_block;
+    local.has_declaration_block =
+        parser->current_block != MINIC_BLOCK_INVALID;
     if (!minic_c0_program_add_local(parser->program, &local, &local_id) ||
         !minic_parser_statement_local_lvalue(parser, local_id, value->span, &target_id)) {
         minic_parser_error(parser, "cannot create evaluate-once initializer temporary");

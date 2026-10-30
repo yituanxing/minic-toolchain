@@ -13,10 +13,31 @@
 typedef struct CoreSourceLocalEffectScan {
     const MinicCoreLowerContext *context;
     unsigned char *modified;
+    unsigned char *condition_owned;
     MinicLocalId local_begin;
     size_t local_count;
+    unsigned int statement_expression_depth;
     bool all_modified;
 } CoreSourceLocalEffectScan;
+
+static void core_source_mark_statement_expression_locals(
+    CoreSourceLocalEffectScan *scan, MinicBlockId block_id) {
+    const MinicC0Program *program;
+    size_t index;
+
+    if (scan == NULL || scan->condition_owned == NULL ||
+        scan->context == NULL || scan->context->body == NULL ||
+        (program = scan->context->body->program) == NULL ||
+        block_id == MINIC_BLOCK_INVALID || block_id >= program->block_count)
+        return;
+    for (index = 0U; index < scan->local_count; ++index) {
+        const MinicLocal *local = minic_c0_program_local(
+            program, scan->local_begin + index);
+        if (local != NULL && local->has_declaration_block &&
+            local->declaration_block == block_id)
+            scan->condition_owned[index] = 1U;
+    }
+}
 
 static void core_source_mark_all_modified(CoreSourceLocalEffectScan *scan) {
     if (scan == NULL || scan->all_modified) return;
@@ -106,10 +127,16 @@ static void core_source_collect_block(
                     scan, statement->expression, depth + 1U);
             if (statement->then_block != MINIC_BLOCK_INVALID) {
                 child = minic_c0_program_block(program, statement->then_block);
+                if (scan->statement_expression_depth != 0U)
+                    core_source_mark_statement_expression_locals(
+                        scan, statement->then_block);
                 core_source_collect_block(scan, child, depth + 1U);
             }
             if (statement->else_block != MINIC_BLOCK_INVALID) {
                 child = minic_c0_program_block(program, statement->else_block);
+                if (scan->statement_expression_depth != 0U)
+                    core_source_mark_statement_expression_locals(
+                        scan, statement->else_block);
                 core_source_collect_block(scan, child, depth + 1U);
             }
             break;
@@ -239,7 +266,11 @@ static void core_source_collect_expression(
     case MINIC_EXPRESSION_STATEMENT:
         block = minic_c0_program_block(
             program, expression->value.statement_expression.block);
+        core_source_mark_statement_expression_locals(
+            scan, expression->value.statement_expression.block);
+        ++scan->statement_expression_depth;
         core_source_collect_block(scan, block, depth + 1U);
+        --scan->statement_expression_depth;
         /* GNU stmt-expression tail is detached from its source block. */
         if (expression->value.statement_expression.result != MINIC_EXPRESSION_INVALID)
             core_source_collect_expression(
@@ -304,6 +335,27 @@ void core_expression_collect_modified_locals(
         &scan, context, modified, context->source_function->local_begin,
         context->source_function->local_count);
     core_source_collect_expression(&scan, id, depth);
+}
+
+void core_expression_collect_modified_and_condition_locals(
+    const MinicCoreLowerContext *context, MinicExpressionId id,
+    unsigned char *modified, unsigned char *condition_owned,
+    unsigned int depth) {
+    CoreSourceLocalEffectScan scan;
+    if (context == NULL || context->source_function == NULL ||
+        (context->source_function->local_count != 0U &&
+         (modified == NULL || condition_owned == NULL)))
+        return;
+    core_source_initialize_effect_scan(
+        &scan, context, modified, context->source_function->local_begin,
+        context->source_function->local_count);
+    scan.condition_owned = condition_owned;
+    core_source_collect_expression(&scan, id, depth);
+    /* An unsupported source effect can modify even an otherwise scoped
+     * temporary. No lifetime-based exemption is valid without a complete
+     * scan, so unknown traversals fail closed on both outputs. */
+    if (scan.all_modified && condition_owned != NULL && scan.local_count != 0U)
+        (void)memset(condition_owned, 0, scan.local_count);
 }
 
 void core_block_collect_modified_locals(

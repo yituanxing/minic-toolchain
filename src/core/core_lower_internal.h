@@ -310,6 +310,13 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_assignment(
 void core_expression_collect_modified_locals(
     const MinicCoreLowerContext *context, MinicExpressionId expression_id,
     unsigned char *modified, unsigned int depth);
+/* One expression scan also identifies fresh locals whose parser-recorded
+ * declaration blocks belong to GNU statement expressions in the condition.
+ * Unknown subtrees keep the effect mask conservative and clear owned bits. */
+void core_expression_collect_modified_and_condition_locals(
+    const MinicCoreLowerContext *context, MinicExpressionId expression_id,
+    unsigned char *modified, unsigned char *condition_owned,
+    unsigned int depth);
 void core_block_collect_modified_locals(
     const MinicCoreLowerContext *context, const MinicBlock *block,
     unsigned char *modified, unsigned int depth);

@@ -8,6 +8,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 /* One Common dispatch owner for the two direct-LP64 machine emitters.
  * Core order, label ownership and GP-result policy live here; *all*
@@ -40,6 +41,8 @@ static inline bool minic_multi_direct_machine_dispatch(
     MinicCoreBlockWalk walk = {0};
     const MinicCoreFunction *fn;
     const MinicCoreBlock *block;
+    bool *reachable;
+    bool success = false;
     size_t block_id;
     if (out == NULL || ctx == NULL || ctx->program == NULL ||
         ctx->target == NULL || ctx->fn == NULL || ctx->frame_plan == NULL ||
@@ -49,56 +52,85 @@ static inline bool minic_multi_direct_machine_dispatch(
         dispatch->store_gp == NULL || dispatch->emit_terminator == NULL)
         return false;
     fn = ctx->fn;
-    minic_core_block_walk_begin(&walk, fn, NULL);
+    /* The same source-label-aware CFG roots as RV32/RV64: ordinary entry,
+     * externally entered labels, asm-goto and computed-goto destinations.
+     * A GNU jump-table relocation can name a source label even when no
+     * ordinary branch reaches it, so never use entry-only traversal here.
+     * Keep machine branch lowering/ABI ownership entirely in the target. */
+    reachable = (bool *)calloc(fn->block_count == 0U ? 1U : fn->block_count,
+                                sizeof(*reachable));
+    if (reachable == NULL || !minic_core_function_mark_reachable_blocks(
+            fn, reachable, fn->block_count)) {
+        free(reachable);
+        return minic_multi_direct_machine_reject(
+            fn, dispatch->architecture, ctx->name,
+            "cfg_reachability", SIZE_MAX, SIZE_MAX, __LINE__);
+    }
+    minic_core_block_walk_begin(&walk, fn, reachable);
     while (minic_core_block_walk_next(&walk, &block_id, &block)) {
         size_t ordinal;
         if (fprintf(out, ".L%s_f%zu_b%zu:\n", dispatch->label_prefix,
                     ctx->id, block_id) < 0 ||
             (block->source_label_id != SIZE_MAX &&
              !fn->suppress_source_label_aliases &&
-             fprintf(out, ".Luser_%zu:\n", block->source_label_id) < 0))
-            return minic_multi_direct_machine_reject(
+             fprintf(out, ".Luser_%zu:\n", block->source_label_id) < 0)) {
+            success = minic_multi_direct_machine_reject(
                 fn, dispatch->architecture, ctx->name,
                 "machine_emit", block_id, SIZE_MAX, __LINE__);
+            goto done;
+        }
         for (ordinal = 0U; ordinal < block->instruction_count; ++ordinal) {
             MinicCoreInstructionId ins_id = 0U;
             const MinicCoreInstruction *ins = NULL;
             MinicDirectMachineInstructionShape shape;
             bool writeback = false;
             if (!minic_core_block_instruction_at(
-                    fn, block, ordinal, &ins_id, &ins))
-                return minic_multi_direct_machine_reject(
+                    fn, block, ordinal, &ins_id, &ins)) {
+                success = minic_multi_direct_machine_reject(
                     fn, dispatch->architecture, ctx->name,
                     "machine_emit", block_id, SIZE_MAX, __LINE__);
+                goto done;
+            }
             if (!minic_multi_direct_machine_instruction_shape(
-                    fn, ins, dispatch->allow_variadic_double_result, &shape))
-                return minic_multi_direct_machine_reject(
+                    fn, ins, dispatch->allow_variadic_double_result, &shape)) {
+                success = minic_multi_direct_machine_reject(
                     fn, dispatch->architecture, ctx->name,
                     "machine_emit", block_id, (size_t)ins_id, __LINE__);
+                goto done;
+            }
             /* A compiler-only barrier emits no native opcode and must not
              * request a value slot or target register writeback. */
             if (shape.family == MINIC_DIRECT_MACHINE_COMPILER_BARRIER)
                 continue;
             if (!dispatch->emit_family(
-                    out, ctx, ins, ins_id, block_id, &shape, &writeback))
-                return minic_multi_direct_machine_reject(
+                    out, ctx, ins, ins_id, block_id, &shape, &writeback)) {
+                success = minic_multi_direct_machine_reject(
                     fn, dispatch->architecture, ctx->name,
                     "machine_emit", block_id, (size_t)ins_id, __LINE__);
+                goto done;
+            }
             /* Integer family results use only C integer/pointer width.
              * FP, ABI, memory and residual may produce double-width GP
              * transport, matching both prior target-local dispatchers. */
             if (writeback && !dispatch->store_gp(
                     out, ctx, ins, shape.result_offset,
-                    shape.family != MINIC_DIRECT_MACHINE_INTEGER))
-                return minic_multi_direct_machine_reject(
+                    shape.family != MINIC_DIRECT_MACHINE_INTEGER)) {
+                success = minic_multi_direct_machine_reject(
                     fn, dispatch->architecture, ctx->name,
                     "machine_emit", block_id, (size_t)ins_id, __LINE__);
+                goto done;
+            }
         }
-        if (!dispatch->emit_terminator(out, ctx, block, block_id))
-            return minic_multi_direct_machine_reject(
+        if (!dispatch->emit_terminator(out, ctx, block, block_id)) {
+            success = minic_multi_direct_machine_reject(
                 fn, dispatch->architecture, ctx->name,
                 "terminator_emit", block_id, SIZE_MAX, __LINE__);
+            goto done;
+        }
     }
-    return true;
+    success = true;
+done:
+    free(reachable);
+    return success;
 }
 #endif

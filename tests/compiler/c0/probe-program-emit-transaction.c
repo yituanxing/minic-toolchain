@@ -96,6 +96,9 @@ int main(int argc, char **argv) {
     const char *path;
     if (argc != 2) return 2;
     path = argv[1];
+    /* Real AST constructors initialize an unowned file-scope object with
+     * INVALID. Do not rely on a zero-initialized synthetic test shortcut. */
+    object.owner_function = MINIC_FUNCTION_INVALID;
     declaration.is_defined = true;
     instructions[5].value.call_frame_address.kind = MINIC_CORE_CALL_FRAME_ADDRESS_RETURN;
     ir.instructions = instructions;

@@ -52,6 +52,7 @@ static void core_local_constants_prepare_if_branch(
     MinicExpressionId condition_expression) {
     size_t index;
     unsigned char *modified;
+    unsigned char *condition_owned;
     const MinicExpression *condition;
     size_t local_count;
 
@@ -66,7 +67,12 @@ static void core_local_constants_prepare_if_branch(
      * local as potentially changed; no fact can be proved by failed scans. */
     modified = (unsigned char *)calloc(local_count == 0U ? 1U : local_count,
                                        sizeof(*modified));
-    if (modified != NULL)
+    condition_owned = (unsigned char *)calloc(
+        local_count == 0U ? 1U : local_count, sizeof(*condition_owned));
+    if (modified != NULL && condition_owned != NULL)
+        core_expression_collect_modified_and_condition_locals(
+            context, condition_expression, modified, condition_owned, 0U);
+    else if (modified != NULL)
         core_expression_collect_modified_locals(
             context, condition_expression, modified, 0U);
     for (index = 0U; index < local_count; ++index) {
@@ -74,6 +80,17 @@ static void core_local_constants_prepare_if_branch(
         const MinicLocal *local = minic_c0_program_local(
             context->body->program, local_id);
         context->local_integer_constants[index] = incoming[index];
+        /* The statement-expression subtree owns these locals explicitly via
+         * parser block IDs. They were not live before this IF condition, so
+         * even their program-zero/specialization proofs must start fresh.
+         * An initializer inside min_t(u32, x, y) may then establish known
+         * ux/uy while lowering the predicate, without an artificial escape
+         * introduced by the speculative branch effect scan. */
+        if (condition_owned != NULL && condition_owned[index] != 0U) {
+            (void)memset(&context->local_integer_constants[index], 0,
+                         sizeof(context->local_integer_constants[index]));
+            continue;
+        }
         /* Local IDs cover the entire function, including block-scoped objects
          * declared after this condition.  An unknown side effect in the
          * condition cannot possibly escape an object whose lifetime has not
@@ -96,6 +113,7 @@ static void core_local_constants_prepare_if_branch(
         }
     }
     free(modified);
+    free(condition_owned);
 }
 
 static void core_local_constants_meet_if_paths(

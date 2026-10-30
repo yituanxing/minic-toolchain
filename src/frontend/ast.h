@@ -282,6 +282,13 @@ typedef struct MinicArrayObjectInfo {
 typedef struct MinicLocal {
     MinicSourceSpan name_span;
     MinicType type;
+    /* Scope ownership is parser-recorded, not inferred from text offsets.
+     * A GNU statement-expression block can own fresh locals in an enclosing
+     * IF condition; a Core effect scan must not escape them before their
+     * first initializer has executed. Synthetic/parameter locals without a
+     * proven owner keep has_declaration_block=false. */
+    MinicBlockId declaration_block;
+    bool has_declaration_block;
     size_t element_count;
     size_t explicit_alignment;
     /* Runtime-sized local arrays preserve one evaluated bound and one allocated

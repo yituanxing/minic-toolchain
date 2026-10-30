@@ -243,6 +243,7 @@ jobs:
             ${{ github.workspace }}/build/minic-linux-gnu-runtime-${{ matrix.target }}/boot/
             ${{ github.workspace }}/build/minic-linux-gnu-runtime-${{ matrix.target }}/candidate/candidate-receipt.json
             ${{ github.workspace }}/build/minic-linux-gnu-runtime-${{ matrix.target }}/candidate/all-c-owners-result.json
+            ${{ github.workspace }}/build/minic-linux-gnu-runtime-${{ matrix.target }}/candidate/failed-owner-diagnostics/
             ${{ github.workspace }}/build/minic-linux-gnu-runtime-${{ matrix.target }}/candidate/gnu-ld-relink.log
             ${{ github.workspace }}/build/minic-linux-gnu-runtime-${{ matrix.target }}/candidate/c-section-sizes.json
             ${{ github.workspace }}/build/minic-linux-gnu-runtime-${{ matrix.target }}/candidate/link-layout/

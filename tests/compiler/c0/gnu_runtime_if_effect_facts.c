@@ -100,6 +100,50 @@ static int ternary_increment(int flag) {
     return -1;
 }
 
+__attribute__((noinline)) static void touch_local_pointer(int *value) {
+    *value = 4;
+}
+
+static int statement_local_escape(int flag) {
+    int result = flag ? ({
+        int temporary = 1;
+        touch_local_pointer(&temporary);
+        temporary;
+    }) : 3;
+    return flag ? result == 4 : result == 3;
+}
+
+static int statement_local_join(int flag) {
+    int result = ({
+        int temporary = 1;
+        if (flag)
+            temporary = 2;
+        temporary;
+    });
+    return flag ? result == 2 : result == 1;
+}
+
+static int statement_local_shadow(int flag) {
+    int value = 10;
+    if (flag ? ({ int value = 1; value == 1; }) : value == 10)
+        return value;
+    return -1;
+}
+
+static int statement_nested_block_owner(int flag) {
+    int out = 0;
+    if (flag ? ({
+        int value = 0;
+        if (flag) {
+            int nested = 2;
+            value = nested;
+        }
+        value == 2;
+    }) : 0)
+        out = 1;
+    return flag ? out : !out;
+}
+
 int main(void) {
     int pure_zero = nested_pure_ternary(0);
     int pure_one = nested_pure_ternary(1);
@@ -121,5 +165,10 @@ int main(void) {
     printf("unevaluated=%d,%d increment=%d,%d\n",
         builtin_unevaluated_side_effect(0), builtin_unevaluated_side_effect(1),
         ternary_increment(0), ternary_increment(1));
+    printf("stmt_escape=%d,%d stmt_join=%d,%d shadow=%d,%d nested=%d,%d\n",
+        statement_local_escape(0), statement_local_escape(1),
+        statement_local_join(0), statement_local_join(1),
+        statement_local_shadow(0), statement_local_shadow(1),
+        statement_nested_block_owner(0), statement_nested_block_owner(1));
     return 0;
 }

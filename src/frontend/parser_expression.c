@@ -534,6 +534,9 @@ static bool parse_record_compound_literal(MinicParser *parser,
     local.element_count = 1U;
     local.is_array = false;
     local.is_register_storage = false;
+    local.declaration_block = parser->current_block;
+    local.has_declaration_block =
+        parser->current_block != MINIC_BLOCK_INVALID;
     if (!minic_c0_program_add_local(parser->program, &local, &local_id)) {
         minic_parser_error(parser, "cannot allocate compound literal backing object");
         return false;
@@ -622,6 +625,9 @@ static bool parse_array_compound_literal(MinicParser *parser,
     local.element_count = element_count;
     local.is_array = true;
     local.is_register_storage = false;
+    local.declaration_block = parser->current_block;
+    local.has_declaration_block =
+        parser->current_block != MINIC_BLOCK_INVALID;
     if (!minic_c0_program_add_local(parser->program, &local, &local_id)) {
         minic_parser_error(parser, "cannot allocate array compound literal backing object");
         return false;
@@ -702,6 +708,9 @@ static bool parse_scalar_compound_literal(MinicParser *parser,
     local.element_count = 1U;
     local.is_array = false;
     local.is_register_storage = false;
+    local.declaration_block = parser->current_block;
+    local.has_declaration_block =
+        parser->current_block != MINIC_BLOCK_INVALID;
     if (!minic_c0_program_add_local(parser->program, &local, &local_id)) {
         minic_parser_error(parser, "cannot allocate scalar compound literal backing object");
         return false;
@@ -857,6 +866,9 @@ static bool parse_gnu_scalar_to_union_cast(MinicParser *parser,
     local.name_span.end = begin;
     local.type = union_type;
     local.element_count = 1U;
+    local.declaration_block = parser->current_block;
+    local.has_declaration_block =
+        parser->current_block != MINIC_BLOCK_INVALID;
     if (!minic_c0_program_add_local(parser->program, &local, &local_id) ||
         !minic_c0_program_add_block(parser->program, &initializer_block)) {
         minic_parser_error(parser, "cannot allocate GNU union cast backing object");

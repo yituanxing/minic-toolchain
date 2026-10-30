@@ -2,8 +2,8 @@
 """Read-only QMP register snapshots from an unchanged RISC-V Linux Image.
 
 The complete initramfs/P1 oracle is deliberately NOT bypassed.  The original
-no-initrd probe is for ROM overlap; an optional mapped-initrd probe uses the
-same loader as a timed-out full-2064 P0 run without changing its verdict.
+no-initrd probe is for ROM overlap; a default-initrd or mapped-initrd probe
+uses the exact loader of a timed-out P0 run without changing its verdict.
 No gdb, custom QEMU binary, extra runner or unpinned compiler is required.
 """
 from __future__ import annotations
@@ -31,13 +31,16 @@ def selected_registers(text: str) -> dict[str, str]:
 
 def qemu_argv(qemu: str, image: Path, socket_path: Path, cmdline: str,
               memory: str = "512M", dtb: Path | None = None,
-              initramfs: Path | None = None, initrd_load_addr: int | None = None) -> list[str]:
+              initramfs: Path | None = None, initrd_load_addr: int | None = None,
+              default_initrd: Path | None = None) -> list[str]:
     argv = [qemu, "-M", "virt", "-cpu", "max", "-m", memory,
             "-smp", "1", "-nographic", "-no-reboot", "-bios", "default",
             "-kernel", str(image)]
     if dtb is not None and initramfs is not None and initrd_load_addr is not None:
         argv.extend(["-dtb", str(dtb), "-device",
                      f"loader,file={initramfs},addr=0x{initrd_load_addr:x},force-raw=on"])
+    elif default_initrd is not None:
+        argv.extend(["-initrd", str(default_initrd)])
     argv.extend(["-append", cmdline,
                  "-qmp", f"unix:{socket_path},server=on,wait=off"])
     return argv
@@ -76,6 +79,15 @@ def self_test() -> None:
     plain = qemu_argv("qemu-system-riscv64", Path("Image"), Path("/tmp/test.sock"), "console=ttyS0")
     assert plain[plain.index("-m") + 1] == "512M"
     assert "-dtb" not in plain and "-device" not in plain and "-initrd" not in plain
+    legacy = qemu_argv("qemu-system-riscv64", Path("Image"), Path("/tmp/test.sock"),
+                       "console=ttyS0 earlycon=sbi loglevel=8 panic=-1 rdinit=/init",
+                       default_initrd=Path("runtime-initramfs.cpio.gz"))
+    assert legacy[legacy.index("-m") + 1] == "512M"
+    assert legacy[legacy.index("-kernel") + 1] == "Image"
+    assert legacy[legacy.index("-initrd") + 1] == "runtime-initramfs.cpio.gz"
+    assert legacy[legacy.index("-append") + 1].endswith("rdinit=/init")
+    assert legacy.index("-kernel") < legacy.index("-initrd") < legacy.index("-append")
+    assert "-dtb" not in legacy and "-device" not in legacy
     mapped = qemu_argv("qemu-system-riscv64", Path("Image"), Path("/tmp/test.sock"),
                        "console=ttyS0 earlycon=sbi loglevel=8 panic=-1 rdinit=/init",
                        "2G", Path("full-crossblock-virt.dtb"), Path("runtime-initramfs.cpio.gz"),
@@ -85,6 +97,7 @@ def self_test() -> None:
     assert mapped[mapped.index("-device") + 1] == (
         "loader,file=runtime-initramfs.cpio.gz,addr=0xa0000000,force-raw=on")
     assert mapped[mapped.index("-append") + 1].endswith("rdinit=/init")
+    assert "-initrd" not in mapped
     print("LINUX_RUNTIME_QMP_SAMPLER_SELFTEST=PASS")
 
 
@@ -106,7 +119,8 @@ def sample(image: Path, out: Path, timeout_s: int, qemu: str, samples: list[int]
            cmdline: str, stack_words: int, stop_during_snapshot: bool = False,
            probe_lock_at_pc: int | None = None, memory: str = "512M",
            dtb: Path | None = None, initramfs: Path | None = None,
-           initrd_load_addr: int | None = None) -> int:
+           initrd_load_addr: int | None = None,
+           default_initrd: Path | None = None) -> int:
     out.mkdir(parents=True, exist_ok=True)
     # GitHub Actions workspaces regularly exceed Linux's 108-byte AF_UNIX
     # sun_path limit. Use a short, unique per-process path instead of
@@ -115,14 +129,16 @@ def sample(image: Path, out: Path, timeout_s: int, qemu: str, samples: list[int]
     if socket_path.exists() or socket_path.is_symlink():
         socket_path.unlink()
     console_path = out / ("qemu-mapped-initrd.log" if initramfs is not None
+                          else "qemu-default-initrd.log" if default_initrd is not None
                           else "qemu-early-noinitrd.log")
     result_path = out / "qemu-registers.jsonl"
     started = time.monotonic()
     argv = qemu_argv(qemu, image, socket_path, cmdline, memory, dtb,
-                     initramfs, initrd_load_addr)
-    print(f"COHORT_QMP_LOADER mode={'mapped_initrd' if initramfs else 'no_initrd'} "
+                     initramfs, initrd_load_addr, default_initrd)
+    mode = "mapped_initrd" if initramfs else "default_initrd" if default_initrd else "no_initrd"
+    print(f"COHORT_QMP_LOADER mode={mode} "
           f"memory={memory} kernel={image} dtb={dtb or 'none'} "
-          f"initramfs={initramfs or 'none'} "
+          f"initramfs={initramfs or default_initrd or 'none'} "
           f"initrd_load_addr={hex(initrd_load_addr) if initrd_load_addr is not None else 'none'} "
           f"cmdline={cmdline!r}",
           flush=True)
@@ -283,6 +299,8 @@ def main() -> int:
                    help="same immutable device tree used by mapped-initrd runtime boot")
     p.add_argument("--initramfs", type=Path,
                    help="same original initramfs as the mapped-initrd runtime boot")
+    p.add_argument("--default-initrd", type=Path,
+                   help="same original -initrd file as a default 512M runtime boot")
     p.add_argument("--initrd-load-addr", type=lambda value: int(value, 0),
                    help="physical loader address used by the original QEMU run")
     p.add_argument("--expected-image-sha256",
@@ -306,6 +324,17 @@ def main() -> int:
         p.error("image must be an existing non-empty file")
     mapping_requested = [args.dtb is not None, args.initramfs is not None,
                          args.initrd_load_addr is not None]
+    if args.default_initrd is not None:
+        if any(mapping_requested):
+            p.error("--default-initrd is mutually exclusive with mapped-initrd options")
+        if args.memory != "512M":
+            p.error("--default-initrd reproduces the original 512M runtime loader only")
+        if not args.default_initrd.is_file() or args.default_initrd.stat().st_size == 0:
+            p.error("--default-initrd requires an existing non-empty initramfs")
+        # QEMU 8.2 places the legacy -initrd at kernel entry + 128 MiB.
+        # An overlapping Image must use the existing mapped-initrd mode.
+        if args.image.stat().st_size > 128 * 1024 * 1024:
+            p.error("default-initrd overlaps Image; select mapped-initrd diagnostics")
     if any(mapping_requested) and not all(mapping_requested):
         p.error("--dtb, --initramfs and --initrd-load-addr are required together")
     if all(mapping_requested):
@@ -346,7 +375,8 @@ def main() -> int:
     return sample(args.image, args.output_dir, args.timeout_seconds, args.qemu,
                   moments, args.kernel_cmdline, args.stack_words,
                   args.stop_during_snapshot, args.probe_lock_at_pc,
-                  args.memory, args.dtb, args.initramfs, args.initrd_load_addr)
+                  args.memory, args.dtb, args.initramfs, args.initrd_load_addr,
+                  args.default_initrd)
 
 
 if __name__ == "__main__":

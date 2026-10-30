@@ -40,12 +40,14 @@ static const MinicBackend x86_64_backend = {
 };
 static const MinicBackend aarch64_backend = {
     .emit_program = minic_aarch64_write_c0_program_with_core_functions,
+    .emit_reachable_core_blocks_only = true,
     .qualify_inline_asm = minic_aarch64_qualify_inline_asm,
     .requires_qualified_input_asm = minic_aarch64_requires_qualified_input_asm,
     .qualify_inline_asm_goto = minic_aarch64_qualify_inline_asm_goto,
 };
 static const MinicBackend loongarch64_backend = {
     .emit_program = minic_loongarch64_write_c0_program_with_core_functions,
+    .emit_reachable_core_blocks_only = true,
     .qualify_inline_asm = minic_loongarch64_qualify_inline_asm,
     .requires_qualified_input_asm = minic_loongarch64_requires_qualified_input_asm,
     .qualify_inline_asm_goto = minic_loongarch64_qualify_inline_asm_goto,

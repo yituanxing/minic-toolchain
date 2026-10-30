@@ -98,6 +98,19 @@ for target in riscv32-linux riscv64-linux x86_64-linux aarch64-linux loongarch64
         exit 1
     fi
 done
+# The direct LP64 emitters must consume the same source-label-aware Core
+# reachable-block set as RV64. Counting actual emitted block labels guards
+# against silently restoring unreachable machine bodies (including cloned
+# function bodies), while source LABEL roots above retain external reentry.
+rv64_blocks=$(grep -Ec '^\.L[^:]+_core_bb[0-9]+:' "$work/riscv64-linux.s")
+aarch64_blocks=$(grep -Ec '^\.Lmini_arm_f[0-9]+_b[0-9]+:' "$work/aarch64-linux.s")
+loongarch64_blocks=$(grep -Ec '^\.Lmini_loong_f[0-9]+_b[0-9]+:' "$work/loongarch64-linux.s")
+if [ "$rv64_blocks" -eq 0 ] || [ "$aarch64_blocks" -ne "$rv64_blocks" ] ||
+   [ "$loongarch64_blocks" -ne "$rv64_blocks" ]; then
+    printf 'FAIL direct LP64 unreachable Core block emission rv64=%s aarch64=%s loongarch64=%s\n' \
+      "$rv64_blocks" "$aarch64_blocks" "$loongarch64_blocks" >&2
+    exit 1
+fi
 cc -O0 -no-pie -fno-pie -x c "$work/constant-switch.i" -o "$work/gnu"
 cc -O0 -no-pie -fno-pie -x assembler "$work/x86_64-linux.s" -o "$work/minic"
 "$work/gnu"
@@ -119,4 +132,4 @@ if "$MINIC_CC" --target=x86_64-linux -S "$work/dynamic-switch.i" \
     echo 'FAIL dynamic switch pruned executable unknown GNU asm' >&2
     exit 1
 fi
-echo 'MINIC_CORE_CONSTANT_SWITCH_DEAD_SOURCE=PASS five_targets=5 external_goto=6 suffix_break=1 suffix_return=1 conditional_fallthrough=1 dynamic_negative=1'
+echo "MINIC_CORE_CONSTANT_SWITCH_DEAD_SOURCE=PASS five_targets=5 rv64_aarch64_loongarch64_reachable_blocks=$rv64_blocks external_goto=6 suffix_break=1 suffix_return=1 conditional_fallthrough=1 dynamic_negative=1"

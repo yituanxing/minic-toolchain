@@ -2772,6 +2772,55 @@ PY_LARGEST_TUS
       echo "COHORT_TIMING trial=$name stage=qemu_mapped_qmp elapsed_ms=$(((mapped_finished-mapped_started)/1000000)) rc=$mapped_rc"
       echo "COHORT_QMP_MAPPED=DIAGNOSTIC_ONLY trial=$name original_p0=INCONCLUSIVE p1=NOT_RUN"
     fi
+    # The normal (<128 MiB) Image uses the historical 512M/-initrd loader,
+    # NOT the mapped 2G/DTB path.  On an OpenSBI-only P0 timeout, capture
+    # registers using that exact original argv (plus the read-only QMP socket)
+    # so prefix-bisection trials can distinguish a kernel PC stall from a
+    # silent console.  Never reinterpret the original runtime verdict.
+    if [[ "$profile" == fast && "$verdict" == INCONCLUSIVE &&
+          "$large_full_image" == false &&
+          "${LINUX_RUNTIME_QEMU_MEMORY:-512M}" == 512M &&
+          -z "${LINUX_RUNTIME_CUSTOM_DTB:-}" &&
+          -z "${LINUX_RUNTIME_INITRD_LOAD_ADDR:-}" &&
+          -s "$d/qemu/rdinit-init.log" ]] &&
+       grep -Fq 'OpenSBI' "$d/qemu/rdinit-init.log" &&
+       ! grep -Eq 'Linux version 6\.6\.143|Kernel panic|Oops:|Unable to handle|BUG:' \
+         "$d/qemu/rdinit-init.log"; then
+      default_started=$(date +%s%N)
+      default_rc=0
+      if python3 "$repo/tools/ci/linux-runtime-qmp-pc-sampler-v1.py" --self-test &&
+         python3 "$repo/tools/ci/linux-runtime-qmp-symbolize-v1.py" --self-test; then
+        python3 "$repo/tools/ci/linux-runtime-qmp-pc-sampler-v1.py" \
+          --image "$d/Image" --expected-image-sha256 "$image_sha" \
+          --output-dir "$d" --memory 512M \
+          --default-initrd "$ev/runtime-initramfs.cpio.gz" \
+          --kernel-cmdline 'console=ttyS0 earlycon=sbi loglevel=8 panic=-1 rdinit=/init' \
+          --timeout-seconds 20 --sample-seconds 1,4,8,12 \
+          --stop-during-snapshot \
+          >"$d/qmp-probe.log" 2>&1 || default_rc=$?
+        cat "$d/qmp-probe.log" >>"$d/runtime.log"
+        grep -E 'COHORT_QMP_(LOADER|IMAGE_IDENTITY|EARLY|PAUSED_SNAPSHOT)' \
+          "$d/qmp-probe.log" || true
+        if [[ -s "$d/qemu-registers.jsonl" && -s "$out/vmlinux" ]]; then
+          python3 "$repo/tools/ci/linux-runtime-qmp-symbolize-v1.py" \
+            --samples "$d/qemu-registers.jsonl" --vmlinux "$out/vmlinux" \
+            | tee "$d/qmp-symbols.log"
+          cat "$d/qmp-symbols.log" >>"$d/runtime.log"
+        fi
+      else
+        default_rc=99
+        echo "COHORT_QMP_DEFAULT=UNAVAILABLE reason=selftest_failed" | tee -a "$d/runtime.log"
+      fi
+      default_finished=$(date +%s%N)
+      image_sha_after=$(sha256sum "$d/Image" | cut -d' ' -f1)
+      if [[ "$image_sha_after" == "$image_sha" ]]; then
+        echo "COHORT_QMP_DEFAULT_IMAGE=UNCHANGED image_sha=$image_sha_after"
+      else
+        echo "COHORT_QMP_DEFAULT_IMAGE=ERROR image_sha_before=$image_sha image_sha_after=$image_sha_after"
+      fi
+      echo "COHORT_TIMING trial=$name stage=qemu_default_qmp elapsed_ms=$(((default_finished-default_started)/1000000)) rc=$default_rc"
+      echo "COHORT_QMP_DEFAULT=DIAGNOSTIC_ONLY trial=$name original_p0=INCONCLUSIVE p1=NOT_RUN"
+    fi
     # Reuse the existing Python-era 12-syscall P1 oracle after FULL PASS.
     # It boots the identical Image and initramfs, without a third link.
     if [[ "$profile" == full && "$verdict" == PASS ]]; then

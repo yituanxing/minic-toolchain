@@ -1698,6 +1698,8 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
         if ((local->element_count == 0U && !dynamic_vla && !local->is_zero_length_array) ||
             (local->is_zero_length_array &&
              (!local->is_array || local->element_count != 0U || dynamic_vla)) ||
+            (local->has_declaration_block &&
+             local->declaration_block >= program->block_count) ||
             !type_is_valid(program, target, local->type) ||
             minic_type_is_function(local->type) ||
             (explicit_alignment != 0U &&

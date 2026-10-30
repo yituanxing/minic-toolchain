@@ -223,6 +223,7 @@ def make_objects(rows: list[dict], work: Path, compiler: Path, output: Path,
         name = PurePosixPath(row["object"])
         source = frozen / row["input"]
         asm, obj = staging / name.with_suffix(".s"), staging / name
+        failure_stderr = staging / name.with_suffix(".tool-stderr.txt")
         asm.parent.mkdir(parents=True, exist_ok=True)
         result = dict(object=str(name), input_sha256=row["sha256"],
                       status="MINIC_AS_NOT_RUN", asm_sha256=None, obj_sha256=None)
@@ -234,6 +235,7 @@ def make_objects(rows: list[dict], work: Path, compiler: Path, output: Path,
                        *row["minic_flags"], "-S", str(source), "-o", str(asm)]
             cc = subprocess.run(command, text=True, capture_output=True, timeout=timeout)
             if cc.returncode or not asm.is_file() or not asm.stat().st_size:
+                failure_stderr.write_text(cc.stderr)
                 result.update(status="MINIC_S_FAIL", detail=cc.stderr[-600:])
                 return result
             result["asm_sha256"] = sha(asm)
@@ -245,6 +247,7 @@ def make_objects(rows: list[dict], work: Path, compiler: Path, output: Path,
                                  cwd=work / "build", text=True,
                                  capture_output=True, timeout=timeout)
             if ass.returncode or not obj.is_file() or not obj.stat().st_size:
+                failure_stderr.write_text(ass.stderr)
                 result.update(status="GNU_TARGET_AS_FAIL", detail=ass.stderr[-600:])
                 return result
             elf_machine(obj, data["machine"])
@@ -252,6 +255,7 @@ def make_objects(rows: list[dict], work: Path, compiler: Path, output: Path,
             result.update(status="MINIC_S_GNU_AS_PASS", obj_sha256=sha(obj))
             return result
         except (OSError, subprocess.TimeoutExpired, Rejected) as exc:
+            failure_stderr.write_text(f"{type(exc).__name__}: {exc}\n")
             result.update(status="SOURCE_AS_ERROR", detail=str(exc)[-600:])
             return result
         finally:
@@ -260,6 +264,76 @@ def make_objects(rows: list[dict], work: Path, compiler: Path, output: Path,
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
         results = list(pool.map(one, rows))
     return results
+
+
+def preserve_first_failed_owners(work: Path, output: Path, rows: list[dict],
+                                 results: list[dict], limit: int = 8) -> dict:
+    """Retain bounded *original* GNU -E and exact .o.cmd failure reproductions.
+
+    Failed owner inputs are never swapped with GNU compiler output and are
+    never retried during the campaign. This only copies first-error evidence
+    before the existing fail-closed no-partial-C-owner gate rejects the run.
+    """
+    failures = [item for item in results if item["status"] != "MINIC_S_GNU_AS_PASS"]
+    if not failures:
+        raise Rejected("failed-owner diagnostics require at least one failed owner")
+    if not 1 <= limit <= 8:
+        raise Rejected("first-error diagnostic budget must remain 1..8")
+    by_name = {item["object"]: item for item in rows}
+    samples = output / "failed-owner-diagnostics"
+    samples.mkdir(parents=True, exist_ok=False)
+    report = {"schema": "minic-three-isa-first-failed-owners-v1",
+              "total_failed_owners": len(failures), "sample_limit": limit,
+              "sample_count": 0, "diagnostics_only": True,
+              "no_gcc_retry_or_fallback": True, "samples": [],
+              "diagnostic_errors": []}
+    for failed in failures[:limit]:
+        name = PurePosixPath(failed["object"])
+        folder = samples / name.with_suffix("")
+        folder.mkdir(parents=True, exist_ok=False)
+        entry = {"owner": str(name), "failure_status": failed["status"],
+                 "error_tail": failed.get("detail", ""), "files": {}}
+        row = by_name.get(str(name))
+        if row is None:
+            report["diagnostic_errors"].append(f"{name}:not in frozen GNU owner manifest")
+            report["samples"].append(entry)
+            continue
+        sources = {
+            "original.gnu.i": work / "frozen" / row["input"],
+            "original.gnu.o.cmd": work / "build" / name.parent / ("." + name.name + ".cmd"),
+            "original.gnu.o": work / "build" / name,
+            "minic.s": output / "staged" / name.with_suffix(".s"),
+            "minic.o": output / "staged" / name,
+            "tool-stderr.txt": output / "staged" / name.with_suffix(".tool-stderr.txt"),
+        }
+        for label, source in sources.items():
+            try:
+                if not source.is_file() or source.is_symlink():
+                    if label in ("minic.s", "minic.o"):
+                        entry["files"][label] = {"status": "NOT_PRODUCED"}
+                        continue
+                    raise Rejected(f"missing authentic first-error evidence: {source}")
+                destination = folder / label
+                shutil.copyfile(source, destination)
+                digest = sha(destination)
+                entry["files"][label] = {"status": "COPIED", "sha256": digest,
+                                         "bytes": destination.stat().st_size}
+                if label == "original.gnu.i" and digest != row["sha256"]:
+                    raise Rejected(f"frozen GNU C input changed while preserving {name}")
+                if label == "original.gnu.o.cmd" and digest != row["cmd_sha256"]:
+                    raise Rejected(f"original GNU Kbuild .cmd changed while preserving {name}")
+            except (OSError, Rejected) as exc:
+                entry["files"][label] = {"status": "DIAGNOSTIC_ERROR", "error": str(exc)}
+                report["diagnostic_errors"].append(f"{name}:{label}:{exc}")
+        report["samples"].append(entry)
+    report["sample_count"] = len(report["samples"])
+    report["verdict"] = ("FIRST_FAILED_OWNER_DIAGNOSTICS_COMPLETE" if
+                         not report["diagnostic_errors"] else
+                         "FIRST_FAILED_OWNER_DIAGNOSTICS_PARTIAL")
+    (samples / "index.json").write_text(json.dumps(report, sort_keys=True, indent=2) + "\n")
+    print(f"THREE_ISA_FAILED_OWNER_DIAGNOSTIC verdict={report['verdict']} "
+          f"captured={report['sample_count']}/{len(failures)} limit={limit}")
+    return report
 
 
 def verify_postlink_c_owners(out: Path, output: Path, target: str,
@@ -645,6 +719,48 @@ def self_test() -> None:
             {"object": "arch/loongarch/vdso/vgetcpu.o"},
             {"object": "arch/loongarch/vdso/vgettimeofday.o"}], "loongarch64")) == 3
         failures_checked += 1
+        # Preserve only the first eight authentic frozen failures; no GCC
+        # replay or fallback is permitted even when ten owners failed.
+        first_work = Path(temp) / "first-errors-work"
+        first_out = Path(temp) / "first-errors-output"
+        first_out.mkdir()
+        failed_rows = []
+        failed_results = []
+        for i in range(10):
+            name = f"kernel/first_error_{i}.o"
+            original = first_work / "build" / name
+            original.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(gnu_obj, original)
+            cmd = original.parent / ("." + original.name + ".cmd")
+            cmd.write_text(f"savedcmd_{name} := gcc -c -o {name} {name[:-2]}.c\n")
+            frozen_path = first_work / "frozen/i" / PurePosixPath(name).with_suffix(".i")
+            frozen_path.parent.mkdir(parents=True, exist_ok=True)
+            frozen_path.write_text(f"/* untouched GNU -E owner {i} */\n")
+            staged_error = first_out / "staged" / PurePosixPath(name).with_suffix(".tool-stderr.txt")
+            staged_error.parent.mkdir(parents=True, exist_ok=True)
+            staged_error.write_text(f"COMPLETE_MINIC_STDERR_FOR_OWNER_{i}\n" + "trace\n" * 512)
+            if i == 1:
+                staged_error.with_name(f"first_error_{i}.s").write_text(".text\n")
+            failed_rows.append({"object": name, "cmd_sha256": sha(cmd),
+                                "input": "i/" + str(PurePosixPath(name).with_suffix(".i")),
+                                "sha256": sha(frozen_path)})
+            failed_results.append({"object": name, "status": "MINIC_S_FAIL",
+                                   "detail": "bounded 600-byte error tail"})
+        first_diagnostics = preserve_first_failed_owners(
+            first_work, first_out, failed_rows, failed_results)
+        assert first_diagnostics["verdict"] == "FIRST_FAILED_OWNER_DIAGNOSTICS_COMPLETE"
+        assert first_diagnostics["total_failed_owners"] == 10
+        assert first_diagnostics["sample_count"] == 8
+        first_owner = first_out / "failed-owner-diagnostics/kernel/first_error_0"
+        assert "COMPLETE_MINIC_STDERR_FOR_OWNER_0" in (
+            first_owner / "tool-stderr.txt").read_text()
+        assert (first_owner / "original.gnu.o").read_bytes() == gnu_obj.read_bytes()
+        assert sha(first_owner / "original.gnu.i") == failed_rows[0]["sha256"]
+        assert sha(first_owner / "original.gnu.o.cmd") == failed_rows[0]["cmd_sha256"]
+        assert (first_out / "failed-owner-diagnostics/kernel/first_error_1/minic.s").is_file()
+        assert not (first_out / "failed-owner-diagnostics/kernel/first_error_8").exists()
+        assert len((first_owner / "tool-stderr.txt").read_text()) > 600
+        failures_checked += 1
         # Linux kernel/configs.o has a genuine Kbuild-relative .incbin path.
         # Wrong cwd is an AS failure even when MiniC emitted valid assembly.
         kbuild = Path(temp) / "kernel-build"
@@ -791,6 +907,7 @@ def main() -> int:
         (a.output / "all-c-owners-result.json").write_text(json.dumps(results, indent=2) + "\n")
         outcome.update(minic_s_gnu_as_pass=len(results) - len(failed), minic_s_gnu_as_fail=len(failed))
         if failed:
+            preserve_first_failed_owners(a.gnu_work, a.output, rows, results)
             raise Rejected(f"incomplete MiniC/GNU AS C owner coverage {len(results)-len(failed)}/{len(rows)}; first={failed[0]}")
         image = relink(a.gnu_work, a.output, rows, results, data, golden)
         compiler_pair(a.minic, data)
