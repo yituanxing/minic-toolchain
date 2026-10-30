@@ -70,8 +70,11 @@ jobs:
       matrix:
         target: ${{ fromJSON((github.event_name == 'pull_request' || inputs.target == 'all') && '["x86_64","aarch64","loongarch64"]' || format('["{0}"]', inputs.target)) }}
     env:
-      GNU_WORK: ${{ runner.temp }}/minic-linux-gnu-${{ matrix.target }}
-      RUNTIME_OUTPUT: ${{ runner.temp }}/minic-linux-gnu-runtime-${{ matrix.target }}
+      # `runner` is unavailable in job-level env expression evaluation.
+      # `github.workspace` is a valid job-level context, and each matrix
+      # worker has its own isolated checkout/build workspace.
+      GNU_WORK: ${{ github.workspace }}/build/minic-linux-gnu-${{ matrix.target }}
+      RUNTIME_OUTPUT: ${{ github.workspace }}/build/minic-linux-gnu-runtime-${{ matrix.target }}
       LOONG_FIRMWARE_URL: ${{ inputs.loong_firmware_url }}
       LOONG_FIRMWARE_SHA256: ${{ inputs.loong_firmware_sha256 }}
     steps:
@@ -235,13 +238,13 @@ jobs:
         with:
           name: minic-three-isa-gnu-qemu-${{ matrix.target }}-${{ github.event.pull_request.head.sha || github.sha }}
           path: |
-            ${{ runner.temp }}/minic-linux-gnu-${{ matrix.target }}/evidence/
-            ${{ runner.temp }}/minic-linux-gnu-${{ matrix.target }}/build/.config
-            ${{ runner.temp }}/minic-linux-gnu-runtime-${{ matrix.target }}/boot/
-            ${{ runner.temp }}/minic-linux-gnu-runtime-${{ matrix.target }}/candidate/candidate-receipt.json
-            ${{ runner.temp }}/minic-linux-gnu-runtime-${{ matrix.target }}/candidate/all-c-owners-result.json
-            ${{ runner.temp }}/minic-linux-gnu-runtime-${{ matrix.target }}/candidate/gnu-ld-relink.log
-            ${{ runner.temp }}/minic-linux-gnu-runtime-${{ matrix.target }}/candidate/postlink-gnu-c-fallback.json
-            ${{ runner.temp }}/minic-linux-gnu-runtime-${{ matrix.target }}/candidate/boot/
+            ${{ github.workspace }}/build/minic-linux-gnu-${{ matrix.target }}/evidence/
+            ${{ github.workspace }}/build/minic-linux-gnu-${{ matrix.target }}/build/.config
+            ${{ github.workspace }}/build/minic-linux-gnu-runtime-${{ matrix.target }}/boot/
+            ${{ github.workspace }}/build/minic-linux-gnu-runtime-${{ matrix.target }}/candidate/candidate-receipt.json
+            ${{ github.workspace }}/build/minic-linux-gnu-runtime-${{ matrix.target }}/candidate/all-c-owners-result.json
+            ${{ github.workspace }}/build/minic-linux-gnu-runtime-${{ matrix.target }}/candidate/gnu-ld-relink.log
+            ${{ github.workspace }}/build/minic-linux-gnu-runtime-${{ matrix.target }}/candidate/postlink-gnu-c-fallback.json
+            ${{ github.workspace }}/build/minic-linux-gnu-runtime-${{ matrix.target }}/candidate/boot/
           if-no-files-found: warn
           retention-days: 14
