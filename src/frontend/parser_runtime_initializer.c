@@ -458,6 +458,8 @@ static bool add_runtime_initializer_once_read(MinicParser *parser,
                                               MinicType value_type,
                                               MinicExpressionId value_id,
                                               MinicExpressionId *read_id) {
+    /* FIXME(MC-035): `value` aliases Program.expressions. Creating the local
+       lvalue below can grow that arena before later reads of value->span. */
     const MinicExpression *value;
     MinicExpression lvalue_read;
     MinicExpressionId target_id;
@@ -646,6 +648,8 @@ static bool parse_runtime_character_array_string_initializer(MinicParser *parser
 
 static bool parse_fixed_runtime_nested_array_initializer(
     MinicParser *parser, MinicExpressionId base_id, size_t element_count) {
+    /* FIXME(MC-039): nested_array borrows Program.array_types across recursive
+       initializer parsing, which can grow the same arena via sizeof(type). */
     const MinicExpression *base;
     MinicArrayObjectInfo array_info;
     const MinicArrayType *nested_array;
@@ -1536,6 +1540,9 @@ static bool parse_runtime_record_designator_target(MinicParser *parser,
                 minic_parser_error(parser, "invalid top-level record designator member");
                 return false;
             }
+            /* FIXME(MC-038): an anonymous promoted member returns the leaf
+               field index here, not the outermost field used to resume the
+               next positional initializer. */
             *top_level_field_index = top_member->value.member.field_index;
         }
         current_id = member_id;

@@ -1117,6 +1117,9 @@ bool minic_c0_global_relocation_slot_type(const MinicC0Program *program,
     return false;
 }
 
+/* target_member_indices must not alias object->relocations: insertion may
+ * realloc that array before copying the member path. Current replay callers
+ * pass a separate relocation value, not an address into the growing array. */
 static bool add_global_symbol_relocation(MinicC0Program *program,
                                          MinicGlobalObjectId global_object_id,
                                          MinicGlobalRelocationLocationKind location_kind,

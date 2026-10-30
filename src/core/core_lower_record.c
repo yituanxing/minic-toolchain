@@ -583,6 +583,8 @@ MinicCoreLowerStatus minic_core_lower_record_conditional_object(
     MinicCoreLowerContext *context,
     const MinicExpression *expression,
     MinicCoreObjectId *result_object) {
+    /* FIXME(MC-036): both arms currently share local constant facts without
+       the entry restore / exit meet used by scalar conditional lowering. */
     const MinicExpression *false_expression;
     const MinicExpression *true_expression;
     MinicCoreBlockId false_block;

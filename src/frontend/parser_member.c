@@ -24,6 +24,9 @@ static void search_record_field_path(const MinicParser *parser,
         if (field == NULL) {
             continue;
         }
+        /* FIXME(MC-034): this reverse mapping is valid only for a Record
+           physically inside Program.records. Static designated initializers
+           also pass a stack Record snapshot: pointer subtraction is UB. */
         record_stack[depth] = (MinicRecordId)(record - parser->program->records);
         field_stack[depth] = index;
         if (!field->is_anonymous_member && field->name_length == name_length &&

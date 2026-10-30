@@ -1238,6 +1238,8 @@ MinicCoreLowerStatus minic_core_lower_internal_lower_expression_statement(MinicC
          expression->value.unary.operator_kind == MINIC_UNARY_PRE_DECREMENT)) {
         MinicCoreValueId discarded_value;
 
+        /* FIXME(MC-033): unlike lower_expression's value path this shortcut
+           does not invalidate the modified local's constant facts. */
         return core_trace_expression_statement_status(
             context,
             expression,

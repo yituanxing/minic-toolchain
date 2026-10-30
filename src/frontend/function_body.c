@@ -97,6 +97,10 @@ static bool visit_expression_child_ids(const MinicExpression *expression,
     if (expression == NULL || visitor == NULL) {
         return false;
     }
+    /* This is logically read-only, not physically const: the generic visitor
+     * writes each CALL argument back. For overflow arguments, this shallow
+     * copy aliases the Program-owned buffer and performs an identical write.
+     * Do not use as a concurrent read-only traversal (MC-030). */
     copy = *expression;
     read_context.visitor = visitor;
     read_context.context = context;

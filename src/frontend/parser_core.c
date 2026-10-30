@@ -321,6 +321,9 @@ bool minic_parser_begin_scope(MinicParser *parser) {
     return true;
 }
 
+/* Binding arrays contain value/ID/span metadata, not separately owned heap
+ * payloads: leaving a scope rewinds visibility counts without destroying the
+ * Program-owned Record/Enum/Type entities declared inside that scope. */
 void minic_parser_end_scope(MinicParser *parser) {
     size_t label_index;
 

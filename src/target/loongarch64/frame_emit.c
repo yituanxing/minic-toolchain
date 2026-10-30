@@ -2,7 +2,10 @@
 #include <stdio.h>
 #include <stdint.h>
 
-/* Original LoongArch64 immediate/frame-address encoding. */
+/* Large frame offsets and SP adjustment use $t3 as an address scratch.
+ * In the large-offset store case, reg must not be $t3 (the address setup
+ * would overwrite its payload). Current callers use separate data registers;
+ * the restriction is a helper precondition, not a proven emitted-code bug. */
 bool minic_loongarch64_emit_sp_mem(FILE *out, const char *op, const char *reg,
                         size_t offset) {
     if (offset <= 2047U)

@@ -19,9 +19,10 @@
    asm output.  Once immediate specialization has consumed that fact, the
    immediately preceding assignment materialization is dead.  Remove it from
    the current block only when the exact seven-instruction tail is present and
-   the target object is exactly the same output local.  Global instruction,
-   value and object tables remain monotonic; unreachable tail entries are kept
-   as harmless tombstones, preserving every global ID invariant. */
+   the target object is exactly the same output local.  Only an exact suffix
+   of both the current block and global instruction/value streams may rewind:
+   after checking contiguous IDs and definitions, their visible counts shrink
+   and the discarded IDs may be reused. Object IDs/count remain unchanged. */
 static bool core_inline_asm_rewind_dead_local_assignment(
     MinicCoreLowerContext *context,
     MinicLocalId local_id) {

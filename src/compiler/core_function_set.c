@@ -38,6 +38,9 @@ void minic_core_function_set_destroy(MinicCoreFunctionSet *set) {
     minic_core_function_set_initialize(set);
 }
 
+/* False means structural allocation failed and leaves output untouched. True
+ * publishes one Core/status slot per FunctionId, even if individual function
+ * lowerings recorded an error status; the Compiler validates those separately. */
 bool minic_prepare_core_function_set(const MinicC0Program *program,
                                             const MinicTargetInfo *target,
                                             MinicCoreFunctionSet *output) {

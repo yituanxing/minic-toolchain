@@ -1311,9 +1311,11 @@ static void minic_verify_mark_array_owner(
     }
 }
 
-/* Allocation/index creation is an optional accelerator; malformed Programs
- * still use the existing verifier's validation/error policy, with guards for
- * invalid nested field buffers not validated until later verification stages. */
+/* Optional accelerator for incomplete-array ownership. The outer Program
+ * storage shapes are preflighted, but this index walks nested Record fields
+ * and function parameter arrays before their detailed shape validation.
+ * Parser-built Programs are expected to satisfy them; arbitrary malformed Program
+ * objects are not yet guaranteed a graceful false return here (MC-032). */
 static unsigned char *minic_verify_build_array_owners(const MinicC0Program *program) {
     unsigned char *owned;
     size_t i;
