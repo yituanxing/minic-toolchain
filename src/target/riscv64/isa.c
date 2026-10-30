@@ -132,6 +132,9 @@ bool minic_riscv_isa_admit_core_instruction(
     case MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE:
     case MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT:
     case MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER:
+        /* FIXME(MC-053): LP64 softfloat supports the arithmetic opcodes
+         * above, but these comparisons/conversions/negation still lack
+         * corresponding libgcc+ABI lowering and must remain fail-closed. */
         required = MINIC_RISCV_FEATURE_F | MINIC_RISCV_FEATURE_D;
         machine = "fadd.d";
         extension = "F/D";

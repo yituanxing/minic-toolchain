@@ -51,6 +51,9 @@ MinicCoreLowerStatus minic_core_lower_try_arithmetic_unary(
                                                expression->value.unary.operand, &operand_value);
         if (status != MINIC_CORE_LOWER_OK) return status;
         (void)memset(&zero_instruction, 0, sizeof(zero_instruction));
+        /* FIXME(MC-051): 0L - x is not the semantic equivalent of unary
+         * -x for signed zero: nearest-mode +0L - +0L gives +0L, but GNU C
+         * unary negation must produce -0L. Preserve the sign operation. */
         zero_instruction.kind = MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT;
         zero_instruction.span = expression->span;
         zero_instruction.type = minic_type_long_double();

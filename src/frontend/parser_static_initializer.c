@@ -1134,6 +1134,10 @@ static bool append_static_chained_array_designator_value(MinicParser *parser,
         parser->current.kind != MINIC_TOKEN_LBRACKET) {
         return false;
     }
+    /* FIXME(MC-049): the designator expression parsed below can append
+     * ArrayTypes (e.g. sizeof(int[3])) and realloc Program.array_types.
+     * Retaining this borrowed pointer for nested/prefix/suffix work causes
+     * a reproducible ASan UAF; retain stable id/value data across parsing. */
     array = minic_c0_program_array_type(parser->program, array_type.array_type_id);
     if (array == NULL || array->element_count == 0U || array->is_zero_length ||
         selected_slot == NULL || selected_slot_count == NULL ||
@@ -2414,6 +2418,11 @@ static bool overwrite_static_zero_record_constant(MinicParser *parser,
         !minic_parser_expect(parser, MINIC_TOKEN_LBRACE, "expected '{' in record initializer")) {
         return false;
     }
+    /* FIXME(MC-023): unlike forward static Record initialization, this
+     * backward overwrite retains a Program.records element address while
+     * recursively parsing fields. A nested sizeof(struct {...}) can grow
+     * that arena; subsequent record->fields reads are ASan-confirmed UAF.
+     * Carry a stable RecordId or a verified value snapshot across parsing. */
     field_limit = record->is_union ? 1U : record->field_count;
     field_index = 0U;
     while (parser->current.kind != MINIC_TOKEN_RBRACE) {

@@ -4556,6 +4556,9 @@ static bool emit_linux_unwind_context(
         return false;
     for (i = 0U; i < 3U; ++i) {
         MinicType type;
+        /* FIXME(MC-050): Source accepts volatile unsigned long outputs
+         * after unqualification; raw Core pointee equality rejects them.
+         * Audit this contract alongside PKRU/RDRAND/FSGSBASE/CC/BITOPS. */
         if (b[i].operand_index != i || b[i].value >= fn->value_count ||
             b[i].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
             b[i].early_clobber || b[i].has_fixed_register_binding ||

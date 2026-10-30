@@ -3522,6 +3522,9 @@ static bool aarch64_linux_uaccess_emit(
             form->is_load ? 10U : 31U) < 0 ||
         !aarch64_privileged_owned_x(out, ctx, 12U, op[0].value) ||
         fputs("  str w9, [x12]\n", out) == EOF) return false;
+    /* FIXME(MC-052): ldtrb/ldtrh/ldtr w10 accept 1/2/4-byte output
+     * objects, but the unconditional str x10 below overwrites 8 bytes.
+     * Select the writeback width from a validated output type/ISA form. */
     if (form->is_load &&
         (!aarch64_privileged_owned_x(out, ctx, 12U, op[1].value) ||
          fputs("  str x10, [x12]\n", out) == EOF)) return false;

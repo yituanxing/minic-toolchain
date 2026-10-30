@@ -2,7 +2,7 @@
 
 > **长期维护文档，不是立即修复清单。** 发现问题先记录、核实、分类；是否进入某一批重构另行决定。
 >
-> 首次建档：2026-10-30；第四轮复核基线：`400f4a611`（`refactor/minic-target-language-boundary`）。
+> 首次建档：2026-10-30；第五轮审计起点：`b0870345b`（`refactor/minic-target-language-boundary`）；之前第四轮基线为 `400f4a611`。
 > 范围：MiniC 的 Frontend、Compiler、Core、Target、Driver 和验证流程；不包含 MiniAS、MiniPP、MiniLD、NaSeed。
 
 配套阅读：[全局架构与所有权图谱](minic-global-contract-map.md) · [函数契约审计台账](minic-function-contract-register.md)。
@@ -49,6 +49,12 @@
 | [MC-044](#mc-044-函数参数列表中的-record-enum-tag-作用域外泄) | P1 | OPEN | LOCAL-COMPILE-DIFF | Frontend | 原型、定义、函数指针参数里的 tag 泄漏到文件作用域 |
 | [MC-045](#mc-045-loong-futex-cmpxchg-覆盖-gnu-可读写输出初始值) | P1 | OPEN | ASM-ONLY | LoongArch64 | GNU `+r` 输入原值未被消费，机器特化无条件写回 0 |
 | [MC-048](#mc-048-rv32-指针到-64-位整数的合法转换被拒绝) | P2 | OPEN | LOCAL-COMPILE-DIFF | RV32 | Core 合法 `SCALAR_BITCAST` pointer→u64 在 RV32 目标发射器被拒绝 |
+| [MC-023](#mc-023-静态聚合后向覆写跨递归借用-record) | P0 | OPEN | ASAN | Frontend | 原调查项升级：静态 Record 后向覆盖跨 Record arena 扩容 UAF |
+| [MC-049](#mc-049-静态链式数组设计符跨-arraytype-扩容借用) | P0 | OPEN | ASAN | Frontend | 静态数组链式设计符解析 `sizeof(int[3])` 后借用 ArrayType 悬空 |
+| [MC-050](#mc-050-x86-六组-asm-限定符源端与机器端不一致) | P2 | OPEN | LOCAL-COMPILE-DIFF | x86-64 | 六种合法 GNU ASM 的 volatile 结果被机器端不一致准入拒绝 |
+| [MC-051](#mc-051-long-double-一元取负丢失有符号零) | P1 | OPEN | GNU-NATIVE-DIFF | Core | `-0L` 经 `0L - x` 实现，`-(+0L)` 错误变为正零 |
+| [MC-052](#mc-052-aarch64-uaccess-窄输出按八字节写回) | P1 | OPEN | ASM-ONLY | AArch64 | LDTRB/H/W 将1/2/4B输出统一按8B `str x` 写回，越界风险 |
+| [MC-053](#mc-053-rv64i-lp64-软浮点只覆盖四则) | P2 | OPEN | LOCAL-COMPILE-DIFF | RV64 | LP64 已实现软四则，但比较、取负、转换的 10 个合法函数均无法 `-S` |
 
 ## 索引：尚待验证的风险
 
@@ -57,12 +63,12 @@
 | [MC-016](#mc-016-线性-va_list-类型准入过宽) | P2 | INVESTIGATING | SUSPICION | RV32/RV64/Loong 接受任意指针作 `va_list` |
 | [MC-017](#mc-017-另外两个-parser-语义探测浅拷贝) | P1 | INVESTIGATING | SOURCE-TRACE | 数组 extent 探测的 Parser 副本 |
 | [MC-018](#mc-018-aarch64-短分支距离依据基本块数) | P2 | INVESTIGATING | SUSPICION | `cbnz` 距离仅按 `block_count` 估计 |
-| [MC-023](#mc-023-静态聚合后向覆写跨递归借用-record) | P1 风险 | INVESTIGATING | SOURCE-TRACE | Backward zero overwrite 的 `Record*` 跨递归持有 |
 | [MC-024](#mc-024-common-core-中的-rk-约束特例) | P2 | INVESTIGATING | DESIGN-REVIEW | Common Core GNU `rK` 方言和 Target policy 分工待证 |
 | [MC-025](#mc-025-aarch64-公共全局-object-类型伪操作兼容性) | P2 | INVESTIGATING | SOURCE-TRACE | A64 object suffix 与 Common `.type` 固定格式需实测 GAS |
 | [MC-027](#mc-027-targetinfo-惰性初始化的并发契约) | P3 | INVESTIGATING | DESIGN-REVIEW | 静态目标描述符惰性初始化有无多线程 API 义务 |
 | [MC-032](#mc-032-ast-verifier-内层容器检查顺序) | P3 | INVESTIGATING | SOURCE-TRACE | 非法内部 Program 可能在嵌套形状验证前被索引构建读取 |
 | [MC-047](#mc-047-core-事实求值与可消除副作用的证明边界) | P2 | INVESTIGATING | DESIGN-REVIEW | Core 的“值可知”事实在不同 CFG consumer 中需要明确纯度门槛 |
+| [MC-055](#mc-055-core-verifier-内部辅助数组形状先决条件) | P3 | INVESTIGATING | SOURCE-TRACE | 手构 malformed Core function 的 fixed binding/enum storage preflight 缺口，未证有效 C 错码 |
 
 已验证非问题：**[MC-026](#mc-026-source-form-id-的实际身份边界)**，状态 `CLOSED-NOT-A-BUG`，保留编号和消费者证据，避免重复误报。
 
@@ -79,6 +85,7 @@
 | [MC-031](#mc-031-parser-name-bound-无消费者的旧-api) | P3 | DEBT | SOURCE-TRACE | Parser 两个内部 helper 仅留定义/声明、无实际生产调用 |
 | [MC-040](#mc-040-嵌套-switch-labels-重复全量扫描) | P3 | DEBT | SOURCE-TRACE | 同一 nested switch 先检测再构造，两次收集标签 |
 | [MC-046](#mc-046-aarch64-两个特殊-asm-路径引用默认-target-layout) | P2 | DEBT | SOURCE-TRACE | A64 特例借用默认 RV64 DataLayout，目前字段相同但接口错误耦合 |
+| [MC-054](#mc-054-inline-symbolic-恒假表达式残留) | P3 | DEBT | SOURCE-TRACE | Inline 静态表达式深度函数保留无消费者意义的 `&& false` 分支，周边 fallback 仍活跃 |
 
 ## 条目详情与验收门槛
 
@@ -200,11 +207,11 @@
 
 ### MC-023 静态聚合后向覆写跨递归借用 Record
 
-- **位置：** `src/frontend/parser_static_initializer.c:2360–2524`，`overwrite_static_zero_record_value` / `overwrite_static_zero_record_constant`。
-- **疑点：** 当前函数从 `program->records[record_id]` 借用 `MinicRecord*`，在循环内调用能递归解析嵌套表达式的 `overwrite_static_zero_field_value`，之后仍访问 `record->fields` / `is_union`。如果其中一个合法嵌套初始化会通过内联 `struct/union` 定义导致 Program.records 扩容，借用地址可能失效。
-- **反证边界：** `parse_static_record_constant`、`parse_static_union_constant` 早已使用 `MinicRecord` 按值快照，设计成立。不能因另两函数有快照，直接断言 backward 路径必然可触发；当前没有能触发失效地址读取的动态反例。
-- **本轮最小输入：** `struct Outer g={.tail=3,.rec={sizeof(struct{int z;}),5}};` 配合合法嵌套记录定义，宿主 GCC 语法检查与 RV64 MiniC `-S` 成功；`MODE=sanitize` 关闭当前环境不可用的 LSan 后亦无 ASan 告警。它没有制造可复现的 Record arena 扩容失效，保持 `INVESTIGATING`。
-- **下一证据：** 构造 GNU backward designated aggregate 加嵌套类型声明，调节 Record arena 容量，以有效 GCC 输入做五目标 ASan；如递归实际不允许添加 Record，则关闭为非问题。
+- **第五轮升级：** `OPEN`、P0、**ASAN**，原调查已被 GNU C 有效源码及真实 heap-use-after-free 堆栈证实。之前那条单点无报警的输入仅说明当时未命中容量边界，**不能再当成反证**。
+- **位置与消费者：** `src/frontend/parser_static_initializer.c:2364–2528`，`overwrite_static_zero_record_value` → `overwrite_static_zero_record_constant`。`parse_static_record_constant` 后向覆写零字段时持有 `program->records[record_id]` 借来的 `MinicRecord *record`，`overwrite_static_zero_field_value` 解析 `sizeof(struct { int z; })` 可追加 Record，`realloc` 释放旧 arena，随后本函数 `:2496` 读取 `record->fields`（ASan READ8）。
+- **独立复现：** 持久用例 `tests/compiler/audit/mc023_static_record_backward_uaf.c`（源自 `/tmp/minic-front-static-record-backward-minimal-20261030.c`），GNU `-std=gnu11` 编译成功。预置 14 个 Record 在 16 容量界、126 个 Record 在 256 容量界均得到 MiniC ASan UAF；RV64 sanitize `-S` 堆栈指向 `overwrite_static_zero_record_constant:2496`。GCC 原生与普通 MiniC x86 生成程序在该反例上都 exit **7**，即目前证明**内存不安全**，不声称已独立观察到输出错编。
+- **其他链路的正当设计：** 正向 `parse_static_record_constant` / `parse_static_union_constant` 使用值型 Record header snapshot，fields heap 独立存在，可跨 Record arena 扩容；不可为了修后向路径删除它们。
+- **修复验收：** 后向路径持有稳定 RecordId 或值型快照，避免任何可扩容后再次解引用 arena pointer；以 16/256 容量和多目标 ASan 验证，再做正向/反向 Record+匿名字段+重定位与 GNU 汇编差分。当前尚未修复。
 
 ### MC-024 Common Core 中的 rK 约束特例
 
@@ -421,6 +428,53 @@
 - **输入与差分：** `typedef unsigned long long u64; u64 ptr_to_u64(const void *p){ return (u64)p; }` 是有效 GNU C；宿主 GCC 语法检查成功，同源 `cc -E -P` 后，MiniC `--target=riscv32-linux -S` 失败，具体记录 `<rv32-core>: ... unqualified Core instruction function=ptr_to_u64 ... kind=19 (SCALAR_BITCAST)`。x86/AArch64/Loong/RV64 对照 `-S` 全部通过，**只有 RV32 失败**。同一 RV32 中反向 `void *u64_to_ptr(u64 x){return (void *)x;}` 也可通过；多加一个中间转换 `(u64)(unsigned long)p`，RV32 `-S` 成功并发出低 32 位值、高 32 位零的成对返回，进一步锁定直接 1→2 word 的 BITCAST 路径。没有因此宣称 GNU RV32 目标运行已通过。
 - **源码契约矛盾：** `src/core/core_lower_scalar_values.c` 对合法 pointer→integer cast 形成 Core `SCALAR_BITCAST`；`core_ir_verify.c` 认可这种形状；`src/target/riscv32/rv32_integer_emit.c` 看到 `from_words=1, to_words=2` 时却只准整数扩展而拒绝 BITCAST。ILP32 下 pointer 1 word、`unsigned long long` 2 words，此差异无需假定 RV64 的物理 ABI。
 - **修复门槛：** 明确 C 的 pointer→integer 目标表示/高位扩展规则，在 Core 类型转换或 RV32 lowering 中表达而不滥用无类型 bitcast；验证指针往返、带符号/无符号目标、不同宽度、GNU RV32 GAS/运行时结果，再判断是否可消除特例。
+
+### MC-049 静态链式数组设计符跨 ArrayType 扩容借用
+
+- **状态：** `OPEN`，P0，`ASAN`；已证生产源码上的 `heap-use-after-free`，区别于 MC-039 的**运行时嵌套数组**路径。
+- **位置/链路：** `src/frontend/parser_static_initializer.c:1120–1197:append_static_chained_array_designator_value` 借 `MinicArrayType *array`；递归调用 `minic_parser_parse_array_designator_component` 可解析 `sizeof(int[3])` 并通过 `src/frontend/ast.c:20` 的 arena grow/realloc 移动 `Program.array_types`；`:1156` 再读取先前的 `array->element_type` 引发 ASan `READ size 72`。
+- **反例：** 持久用例 `tests/compiler/audit/mc049_static_chained_array_uaf.c`（源自 `/tmp/minic-front-static-chained-array-borrow-20261030.c`），合法 GNU C 静态前向链式设计符；x86 预置 29 个、RV32/RV64/AArch64/Loong 预置 30 个 typedef 数组类型时可命中容量相位，31 个前置元素可能不触发，**无告警不是安全证明**。ASan 指向上述 read/free 栈。
+- **修复/验收：** 跨任何可能 append 的解析保存稳定 TypeId/ArrayTypeId，之后重新取或在安全时按值保存明确头；以五架构多容量扩容矩阵、GNU 静态初始化值/重定位和 ASan 合验，不能只把这处改成临时 `const`。
+
+### MC-050 x86 六组 ASM 限定符源端与机器端不一致
+
+- **状态：** `OPEN`，P2，`LOCAL-COMPILE-DIFF`；是合法 GNU C 的 `MiniC -S` 准入缺口，**不是机器执行 wrong-code 证据**。
+- **共同根因：** `src/target/x86_64/asm_contract.c` 对 source 的 GNU output carrier 用 `minic_type_unqualified()` 接受 `volatile`，而 `src/target/x86_64/machine_asm.c` 的配对 `emit_*` 对 Core output pointer pointee 直接用 raw `minic_type_equal()`，从而同一 source contract 后端拒绝。Core 的 `is_volatile=true` 是目标 ASM 副作用建模的有意转换，不属于此 bug。
+- **六组独立有效模板：** `UNWIND_CONTEXT`（`x86_linux_unwind_context_source`/`emit_linux_unwind_context`）；`PKRU`（`x86_linux_pkru_source`/`emit_linux_pkru`）；`RDRAND/RDSEED`（`x86_linux_random_seed_source`/`emit_linux_random_seed`）；`FSGSBASE`（`x86_linux_fsgsbase_source`/`emit_linux_fsgsbase`）；`ATOMIC_CC`（`x86_linux_atomic_cc_source`/`emit_linux_atomic_cc`）；`BITOPS`（`x86_linux_bitops_source`/`emit_linux_bitops`）。
+- **差分：** 同一 GNU11 C 每组 `cc -O0 -Wall -Wextra -Werror -c` plain/cv 均通过，MiniC `--target=x86_64-linux -S` plain PASS、cv FAIL `kind=43`。工作区复现 `x86_5_{unwind,pkru,rdrand,fsgsbase,atomiccc,bitops}_*.c`；UNWIND、ATOMIC_CC、BITOPS 的 GNU 本机与混合 MiniC plain/native 程序可执行并 exit 0；另外三组因 CPU 特性/特权限制**未执行**。
+- **修复/验收：** 沿 source→Core→emitter 汇总所有输出类型与 `const/volatile` 规范化接口，成批消除六组不一致，覆盖 plain/cv/packed/读写组合。别机械替换每个 type_equal：例如 MMIO/MXCSR 已正确去 cv、某些 ASM 故意要求 exact identity。按同输入 GNU 严格 C、MiniC `-S`、GNU AS/link/native 可用项复核。
+
+### MC-051 long double 一元取负丢失有符号零
+
+- **状态：** `OPEN`，P1，`GNU-NATIVE-DIFF`；当前证明 x86-64 本机的合法 C 语义错误，独立于 MC-041 的字面量精度 bug。
+- **位置与根因：** `src/core/core_lower_arithmetic.c:12:minic_core_lower_try_arithmetic_unary` 对 `long double -x` 采用 `__subtf3(+0L,x)`。IEEE 浮点有符号零下 `+0L - +0L == +0L`，但 `-(+0L)` 应产生负零；对 `float` 和 `double` 的独立 NEGATE opcode 不受此处影响。
+- **可执行差分：** 持久用例 `tests/compiler/audit/mc051_long_double_negzero.c` + `_support.c`，保留 `/tmp/minic_long_double_negzero_probe.c` 的 11 项双 TU 检查。GNU x86 `failure_mask=0x0`、exit0；MiniC x86 `-S`→ GNU `cc` 链接→本机 `failure_mask=0x10`、exit1。只有 `-(+0L)` 不一致；其他正负值、`-(-0L)`、double/float、跨 TU ABI 基线符合预期。此处不能用浮点普通数值比较验证符号位。
+- **修复验收：** 实现语义上的 unary sign flip（位符号/有正确负零的 TF helper），检查目标 x87/RV64 binary128 与 softfloat，补 +0/-0、NaN、Infinity、有限值及跨 TU 严格差分；仅将 `__subtf3` 换常量不保证 NaN 语义。
+
+### MC-052 AArch64 uaccess 窄输出按八字节写回
+
+- **状态：** `OPEN`，P1，`ASM-ONLY`；源 C/机器 `.s` 的物理地址与宽度关系已经定位，**未执行 AArch64 GNU GAS/ELF/QEMU**。可能破坏邻接字段，风险严重但不能冒称运行崩溃已复现。
+- **位置与调用链：** `src/target/aarch64/asm_contract.c:3417:aarch64_linux_uaccess_source` 准入 `ldtrb/ldtrh/ldtr w10` 的 `=r` 1/2/4B C output 和 8B pointer output；`:3467:aarch64_linux_uaccess_emit` 处理 LDTR 后一律 `str x10,[x12]`（8B）写回保存的 C output address，针对 1/2/4B lvalue 都超过对象宽度。8B pointer output 源端允许但机端 raw 整数类型检查拒绝，属同一家族合同不一致。
+- **反例证据：** `/tmp/f5_a64_uaccess_{exact,u16,u32,u64,ptr,packed}.i/.s`；GNU C 语法 + MiniC A64 `-S` 对 1/2/4/8 字节输出均 PASS。1B 例 `.s` 中 `ldtrb w10,[x11]`，目的为 `sp+249` 单字节局部，后续却 `str x10,[x12]`；packed `struct{u8 tag;u8 value;}` 的 value 偏移1，仍 8B store。宿主 GNU x86 `-S` 对 C 8bit output 仅 `movb` 1B；A64 目标未执行。
+- **修复验收：** 确定 C output object 的合法物理宽度及符号扩展，分别选择 `strb/strh/str w/str x` 并复验异常表 PC/寄存器保存；统一源端和机端 pointer/const/volatile 准入。目标 A64 GNU GAS/ELF/QEMU 和 packed 周边 guard 值必须实测才可关闭。
+
+### MC-053 RV64I LP64 软浮点只覆盖四则
+
+- **状态：** `OPEN`，P2，`LOCAL-COMPILE-DIFF`；**功能缺口且显式 fail closed**，没有 silent wrong-code 证据。
+- **位置与原因：** `src/target/riscv64/isa.c:minic_riscv_isa_admit_core_instruction` 对 LP64 无 F/D 的八类 FLOAT/DOUBLE 四则放行；`src/target/riscv64/fp_emit.c:minic_riscv64_emit_fp_instruction` 的比较、double 取负、转换仍只有硬浮点 opcode；`runtime_libcall.c:minic_riscv64_softfloat_binary_symbol` 只映射四则。`riscv/isa_resolve.c` 正确因 LP64 ABI 屏蔽 codegen F/D；不能直接放开指令资格。
+- **10×4 编译差分：** 合法 GNU C 十例 `negd,cmpeq,cmplt,cmple,froms,fromu,tos,tou,ext,truncdf`：RV32I/ILP32 `10/10` -S PASS；RV64I/LP64 `0/10`；RV64IMAFD/LP64 `0/10`；RV64IMAFD/LP64D `10/10`。失败提示 `fadd.d` 占位 F/D 需求，不代表编译器偷偷发了 F/D。
+- **对照/验收：** RV64I i128 运算 9/9、binary128 long double 运算 9/9 `.s`，仍非目标运行；RV32I i128 是已知不支持。为剩余 10 类实现软 libgcc conversion/compare/negate 及 LP64 return/args ABI，保存 helper CALL 的 `ra`，重跑真实 GNU RV64 assembler/link/QEMU 及旧 RV64 stage4/Linux 回归。
+
+### MC-054 Inline symbolic 恒假表达式残留
+
+- **状态：** `DEBT`，P3，`SOURCE-TRACE`；`src/compiler/inline_symbolic.c:35–40:minic_inline_symbolic_static_expression_depth` 中 `operand != NULL && operand->kind == MINIC_EXPRESSION_LOCAL && false` 恒假，无可执行消费者分支，属于旧调试/保守判断残留。
+- **边界：** 该函数**自身仍被**符号特化调用，周边 legacy fallback 有真实行为，不得以一处 `&& false` 删除函数或重构整个 Inline。单独移除恒假分支需确保注释解释为何静态 LOCAL 深度不被认可，并复跑 clone identity/旧 fallback 测试。
+
+### MC-055 Core verifier 内部辅助数组形状先决条件
+
+- **状态：** `INVESTIGATING`，P3，`SOURCE-TRACE`；尚未复现有效 GNU C、合法 Core producer 触发错误，不声称现有错编。
+- **位置：** `src/core/core_ir_verify.c:1138–1168:minic_core_function_verify` 先对 globals/callees/call_signatures/inline_asms/call_arguments/objects/values/instructions/blocks 使用 `storage_shape_is_valid`，却未覆盖 `fixed_register_bindings` 与 `enum_types`；opcode verifier 后续可按 `fixed_register_binding_id` 对前者索引。
+- **下一证据：** 最小公开 Core verifier API 手工构造 malformed CoreFunction，独立 ASan 验证 fail-closed 契约；再确认该 API 是否承诺接受任何 malformed storage。真实 Core lowering 会维护这两 arena，故不能因差异直接升 OPEN。
 
 ## 已核对并排除的误判（不要在未有新证据时重新打开）
 

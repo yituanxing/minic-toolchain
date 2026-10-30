@@ -4,6 +4,8 @@
 >
 首建：2026-10-30；第四轮复核基线 `400f4a611`，分支 `refactor/minic-target-language-boundary`。配套：[全局阶段与所有权图谱](minic-global-contract-map.md) · [MC 缺陷台账](minic-issue-register.md)。行号仅辅助定位，**函数名和相对路径才是稳定定位符**。
 
+第五轮函数审计起点：`b0870345b`（在第四轮已发表的 HEAD 上继续）；本轮新增契约按 `F5-*` 编号，不把组条目伪称为单独 C 函数数目，也不将 `.s` 文件当作目标机器运行证据。
+
 ## 0. 怎样读这份台账
 
 - `TRACE`：本轮实际查看了该函数入口、相关调用方、关键写入及清理链；**不等于对该函数所有条件分支做了动态验证**。
@@ -493,3 +495,266 @@
 | `F4-L45` `loong_syscall_alias_abi_compatible` — 同上 | R 两函数签名、定义/asm label/1–6 参数/非变参，TargetAliasAbiPolicy 唯一消费此受控 Linux 特例。 | R2/U2/E1 |
 
 **本轮 Loong 分片证据精确边界：** MC-037 新增 `movfr2gr.d` 和 futex RMW 的 nonvolatile PASS / volatile FAIL；MC-045 用完整 GNU futex CMPXCHG 约束复现 `+r` 的旧值被清 0；MC-010 的 `add_unless` packed result 生成偏移 1 的裸 `st.w`。这三项都有合法 C→MiniC `.s` 证据，但**都没有** LoongArch64 GNU GAS/QEMU 的运行证据。clock、AMO、uaccess、FCSR、per-CPU 和其他 Linux ASM 的安全 helper/资格分工经调用链排除表象重构误报；4096B 过对齐对象被共享 FramePlan 早期拒绝，并未见非法 Loong immediate。
+
+## 第五轮：公共 Target 契约复查（新增）
+
+本节优先记录先前只有模块级摘要、尚无独立函数契约行的生产实现。对象所有权及失败回退已经与 `program_visit`、AArch64/Loong direct、RV32/RV64 frame 和 x86 frame 的实际消费者交叉追踪；`R2/U2/E1` **仅是源码及调用链证据**，不暗示新增目标运行测试。前四轮已列过的 `minic_core_function_plan_build`、`minic_program_emit_write`、`minic_multi_direct_write_program` 在本轮再次复核，但不重复分配新行。
+
+| ID · 函数（源码） | 真实调用/契约、所有权与失败语义 | 核验 |
+| --- | --- | --- |
+| `F5-M01` `minic_program_function_selected` — `target/common/program_visit.h` | R Function 定义、内部引用状态及选择策略；三个 selection 消费者共用过滤规则，跳过未引用 internal definition 不改变 FunctionId。 | R2/U2/E1 |
+| `F5-M02` `minic_program_visit_prepared_functions` — 同上 | R Program/Core/Target，逐定义 OWN 暂态 `MinicCoreFunctionPlan`，借给目标 visit 仅本次 callback 生命周期；无论 ready/visit 结果均 destroy，census 可以继续遍历但不能称文件发射成功。 | R2/U2/E1 |
+| `F5-M03` `minic_core_function_facts_analyze_collect` — `target/common/core_function_facts.c` | R Core 全指令，W caller facts、OWN 可选 `va_start` ValueId 数组；需要保存返回地址/动态栈等是 ABI-neutral facts，OOM 清零、释放而不能导致残留半成品。 | R2/U2/E1 |
+| `F5-M04` `minic_core_call_view_build` — `target/common/core_call_view.c` | R direct/indirect CALL Core signature，构 borrowed call/argument view；先检查 callee/signature ID、return object/SSA、调用约定及参数区间，不写目标寄存器布局。 | R2/U2/E1 |
+| `F5-M05` `minic_core_call_argument_actual_type` — 同上 | R Core VALUE/OBJECT argument，返回准确 source type；Record 只能由 OBJECT 载体提供，VALUE 不能假充 aggregate；不分配。 | R2/U2/E1 |
+| `F5-M06` `minic_core_call_view_argument_type` — 同上 | R call view、callee fixed parameter types 和参数 ID，W caller actual type；对固定 Record 做严格身份检查，scalar promotion/ABI class 明确保留给目标。 | R2/U2/E1 |
+| `F5-M07` `minic_core_call_index_build` — `target/common/core_call_index.c` | R Core 全指令，OWN ordered CALL site + borrowed view；验证预估 call 数及每个 view，失败 destroy 整份，供 prepared visitor 与独立 frame ABI 消费。 | R2/U2/E1 |
+| `F5-M08` `minic_core_call_index_find` — 同上 | R 按 InstructionId 单调排列的已验证索引，binary search 返回 borrowed view/ordinal；不把非 CALL instruction 错当 ordinal。 | R2/U2/E1 |
+| `F5-M09` `minic_core_call_index_handle_prepare` — 同上 | 优先 R 借 visitor-owned index；standalone RV32/RV64/A64/Loong consumer 无借用时 OWN 同一布局索引；handle 明确区分 `index` 与 `owned`，不能对 borrowed 调 free。 | R2/U2/E1 |
+| `F5-M10` `minic_core_call_index_handle_destroy` — 同上 | OWN 仅释放 handle.owned 和清 borrowed index pointer；无效重复 destroy 安全，生产 consumer 的共享 index 不在此释放。 | R2/U2/E1 |
+| `F5-M11` `minic_core_object_storage` — `target/common/core_object_storage.c` | R Object 的 CType、数组 count、显式对齐和 DataLayout，计算字节 extent/align 与溢出门；不涉及任何目标栈槽身份。 | R2/U2/E1 |
+| `F5-M12` `minic_core_object_storage_plan_build` — 同上 | R Core 对象表，OWN 单次完整 object layout snapshot；若第 N 项布局不合法则 destroy 已分配表，不发布部分有效的 plan。 | R2/U2/E1 |
+| `F5-M13` `minic_core_object_storage_plan_acquire` — 同上 | Common prepared visitor 提供 `shared` 时**浅借只读存储表**，独立消费者则 OWN 本地建表；R/W flag `borrowed` 是 release 的唯一所有权判据。 | R2/U2/E1 |
+| `F5-M14` `minic_core_object_storage_plan_release` — 同上 | 借用时只清除本地 plan 视图，拥有时 destroy；已核对 RV32/RV64/x86/LP64 frame 的各处 destructor 使用，没有双重释放的已证反例。 | R2/U2/E1 · 排误报 |
+| `F5-M15` `minic_lp64_plan_types` — `target/common/direct_call_plan.c` | R Target+ABI policy+参数类型，W caller POD argument location；A64 WholeOrStack/even pair 与 Loong SplitWithStack/variadic pair 分别由 policy 决定，不能机械归成一个固定 GPR 算法。 | R2/U2/E1 |
+| `F5-M16` `minic_lp64_plan_incoming_parameters` — 同上 | R function fixed parameter signature/target ABI；sret 是否消费物理第一个 GPR 由 policy，复用 M15 但不把 hidden pointer 写入 Core 参数数组。 | R2/U2/E1 |
+| `F5-M17` `minic_lp64_admit_call` — 同上 | R immutable `MinicCoreCallView`、VALUE/OBJECT 和 return shape；记录是否 indirect record、是否 variadic，严格拒绝 unsupported ABI；只填写暂态 types[64]，不缓存指向栈内类型数组的地址。 | R2/U2/E1 |
+| `F5-M18` `minic_lp64_plan_function_calls` — 同上 | 借 semantic CALL index，OWN malloc 的每 CALL physical site；逐站 admit→place→复制实际参数位置，错误 destroy 整份；与 x86/RV 独立 plan 共用 Core call view，而非共享目标 ABI。 | R2/U2/E1 |
+| `F5-M19` `minic_lp64_function_call_plan` — 同上 | R prepared cache + CALL index，按 instruction_id 检索并核验 ordinal/site 一致性；返回仅对 cache 生存期有效的 borrowed site。 | R2/U2/E1 |
+| `F5-M20` `minic_lp64_call_plan_cache_destroy` — 同上 | OWN 逐站点 free，然后释放 handle 可能持有的独立索引；不会释放 visitor 共享 CALL index。 | R2/U2/E1 |
+| `F5-M21` `core_object_address_build_use_index` — `target/common/core_object_intervals.c` | R 全 Core block/terminator，OWN ValueId 索引；分别记录总用途与 LOAD/STORE 直接地址用途，无法证明时放弃复用优化，不硬猜 pointer escape。 | R2/U2/E1 |
+| `F5-M22` `core_object_interval_build_index` — 同上 | R 单次指令扫描，OWN object interval/disqualify 表；record load、CALL object 和 return object 排除共槽，解析不完整或 OOM 返回不可用而非重启旧 O(objects × IR) 全扫。 | R2/U2/E1 |
+| `F5-M23` `core_scalar_object_first_access_defines` — 同上 | R 候选唯一 owner block 的 OBJECT_ADDRESS/LOAD/STORE/参数初始化，OWN 暂态 ValueId producer position 索引；第一真实读取前须定义，OOM 时 `false`，从不授予未证实的跨块共享。 | R2/U2/E1 |
+| `F5-M24` `minic_core_object_interval` — 同上 | R 单个 Object 的类型、尺寸、对齐、地址用途；只有宽度≤物理 unit 且全局索引已建立的候选可复用，其他返回成功但 `reusable=false`，与整个 Frame 失败分开。 | R2/U2/E1 |
+| `F5-M25` `minic_core_object_reuse_plan_build` — `target/common/core_object_reuse.c` | R scalar interval proof，OWN slot-array 和 intervals；按已证明的区间冲突逐个分配 slot，失败清整份计划。当前是保守 O(objects×slots×prior) 配色，**性能成本另审，不是已证 wrong-code**。 | R2/U2/E1 |
+| `F5-M26` `minic_core_object_reuse_plan_get` / `_destroy` — 同上 | getter 借 prepared plan，返回对象是否 reusable/slot/peak；destroy 释放分析索引与全部 owned 表。RV32/RV64 frame 真正消费该计划，其他目标不得虚称已启用。 | R2/U2/E1 |
+| `F5-M27` `minic_multi_direct_machine_instruction_shape` — `target/common/direct_instruction_semantics.c` | R Core opcode/value kind，W caller machine family/result slot；对 ASM/effect-only 不虚造 SSA，A64/Loong 机器 emitter 仍须各自再次认证机器编码。 | R2/U2/E1 |
+| `F5-M28` `minic_multi_direct_record_copy_extent` / `_record_load_extent` — 同上 | R Record identity、source address、volatile 和 DataLayout，返回 byte extent及 frame destination；以 16 MiB 限制阻止无界 copy，而不在 Core 写死目标小指令展开上限。 | R2/U2/E1 |
+
+**第五轮 Common 分片结论：** `CoreFunctionPlan` 是五目标共用的一次性 ABI-neutral owner；A64/Loong `LP64` 同处只表示共享**策略化调用位置规划**，不表示两 ISA 共用同一物理指令生成或完全相同的 ABI。RV32/RV64 object reuse 的旧全扫描已无独立慢路径消费者，而 Compiler 的 legacy inline fallback 仍是另一项真实语义。当前没有依据把这些活跃保守实现直接删掉。
+
+### 第五轮 Compiler / Driver / Target registration（30 个函数）
+
+这些函数在本轮按 caller→callee→失败出口复核；`minic-cc` 五目标直接发射 `.s` 的能力，不能和历史 RV64 staged driver 的链接能力混为一谈。以下只有 `R2/U2/E1` 源码证据，不等于新一轮目标运行。
+
+| ID · 函数（源码） | 调用关系、owner 与失败契约 | 核验 |
+| --- | --- | --- |
+| `F5-C01` `minic_bootstrap_trace_enabled` — `compiler/compiler.c` | R env，按变量存在性启用，不解析 `0`；trace-stage 唯一消费。 | R2/U2/E1 |
+| `F5-C02` `minic_bootstrap_trace_stage` — 同上 | R path/stage，W stderr，不改变 Program，Compiler 五个阶段调用。 | R2/U2/E1 |
+| `F5-C03` `minic_set_diagnostic` — 同上 | R format/path，W caller Diagnostic 内联 buffer，不保留借用字符串；file/verify/compile 错误共享。 | R2/U2/E1 |
+| `F5-C04` `minic_validate_core_functions` — 同上 | R CoreSet status，W Diagnostic；census 可多报错，但返回仍是 false，不能掩盖 lower 失败。 | R2/U2/E1 |
+| `F5-C05` `minic_read_file` — 同上 | OWN FILE/SourceBuffer，读/分配失败本地清理，成功 XFER buffer 给 Compiler 的统一退出。 | R2/U2/E1 |
+| `F5-C06` `minic_set_ast_verify_diagnostic` — 同上 | R verifier stage/index，W Diagnostic；非法下标/NULL detail 降级成安全错误信息。 | R2/U2/E1 |
+| `F5-C07` `minic_compile_preprocessed_file_for_target` — 同上 | OWN SourceBuffer/Program/CoreSet，R 调用方 invocation Target；Parse→Normalize→Inline→Core→Validate→Backend，失败共同析构。 | R2/U2/E1 |
+| `F5-C08` `minic_compile_preprocessed_file_with_options` — 同上 | 历史 RV64 default target 包装 C07，透传 function_sections，非第二套 compiler pipeline。 | R2/U2/E1 · 排误报 |
+| `F5-C09` `minic_compile_preprocessed_file` — 同上 | 历史 wrapper→C08(false)→C07，无新增资源所有权。 | R2/U2/E1 |
+| `F5-C10` `minic_core_set_bootstrap_trace_enabled` — `compiler/core_function_set.c` | R env，供 CoreSet begin/end 诊断，不改变 Core。 | R2/U2/E1 |
+| `F5-C11` `minic_core_function_set_initialize` — 同上 | W caller 新/已释放 CoreSet 归零；不可用来释放 live owner。 | R2/U2/E1 |
+| `F5-C12` `minic_core_function_set_destroy` — 同上 | OWN 逐槽 CoreFunction 与顶层 functions/status；LOWER_ERROR 槽也可释放。 | R2/U2/E1 |
+| `F5-C13` `minic_prepare_core_function_set` — 同上 | OWN 暂态 CoreSet+可选 reentry index；构造失败保留旧 output，成功整体 XFER；单函数 lower 结果交 C04 验证。 | R2/U2/E1 |
+| `F5-C14` `minic_backend_usage_group` — `target/backend_core_usage.c` | R Core opcode→census 诊断分类；dump 消费，不是 ISA 可发射性判定。 | R2/U2/E1 |
+| `F5-C15` `minic_backend_usage_bits` — 同上 | R Core result/argument + target type width；未知宽度回报 unknown，未证明机器支持。 | R2/U2/E1 |
+| `F5-C16` `minic_backend_core_usage_dump` — 同上 | R CoreSet 全函数 Core 指令，输出分组统计到诊断流；不修改 IR，也不替代合法性验证。 | R2/U2/E1 |
+| `F5-C17` `minic_target_machine_options_resolve` — `target/target_machine_options.c` | R Target + CLI machine flags；W caller resolved options，拒目标未定义扩展，source/codegen ISA 分离。 | R2/U2/E1 |
+| `F5-C18` `minic_print_usage` — `tools/minic-cc/main.c` | R target catalog，打印已注册用法，无编译资源所有权。 | R2/U2/E1 |
+| `F5-C19` `main` — 同上 | OWN CLI path/Target invocation；从选项进入唯一 Compiler Pipeline，错误退出与信息打印分开。 | R2/U2/E1 |
+| `F5-C20` `minic_target_catalog_all` — `target/target_catalog.c` | R static Target registration，只借条目，调用方不得释放。 | R2/U2/E1 |
+| `F5-C21` `minic_target_catalog_find` — 同上 | R target name，返回已注册 borrowed descriptor，未知目标 fail closed。 | R2/U2/E1 |
+| `F5-C22` `minic_target_catalog_for_architecture` — 同上 | R ArchitectureId，选择唯一注册目标；不将机器实现写进前端。 | R2/U2/E1 |
+| `F5-C23` `minic_target_catalog_default` — 同上 | R catalog 默认入口；用于兼容历史 target 选择，不与独立 ABI 混同。 | R2/U2/E1 |
+| `F5-C24` `minic_target_info_for_architecture` — `target/target_info.c` | R registered per-target DataLayout/ABI/ASM policy；不是 Compiler 架构 switch。 | R2/U2/E1 |
+| `F5-C25` `minic_target_invocation_begin` — 同上 | W caller invocation，绑定目标快照和 machine options 生命周期。 | R2/U2/E1 |
+| `F5-C26` `minic_target_invocation_plain_char` — 同上 | R invocation TargetInfo，返回 C plain char signedness，不写 Program。 | R2/U2/E1 |
+| `F5-C27` `minic_target_invocation_short_wchar` — 同上 | R target wchar policy，决定短 wchar 类型语义，与 C parser/布局契约衔接。 | R2/U2/E1 |
+| `F5-C28` `minic_backend_for_target` — `target/backend.c` | R registered target，返回 target-specific emit callback，未知描述符拒绝；不复制通用 Core 算法。 | R2/U2/E1 |
+| `F5-C29` `minic_backend_emit_assembly` — 同上 | R verified CoreSet + immutable Program/Target，执行后端发射；失败由 caller 回收 Core owner。 | R2/U2/E1 |
+| `F5-C30` `minic_program_emit_write` — `target/common/program_emit.c` | OWN 临时输出文件/事务式写入；最终 rename 仅在完整发射成功后发生；多个目标复用相同提交协议。 | R2/U2/E1 |
+
+### 第五轮 Frontend：静态初始化器、枚举、属性与 Record（30 组）
+
+下列 `F5-F01..F30` 按函数组/生产入口计数；每行均追过真实 consumer 与失败清理。已确认问题的 ASan 证据单独在 MC 台账登记，不能由一个反例给整份前端模块提升运行证据等级。
+
+| ID · 函数（`src/frontend/`） | 契约、所有权与实际 consumer | 核验 |
+| --- | --- | --- |
+| `F5-F01` `initializer.c:grow_actions/plan_initialize/destroy` | OWN plan.actions；realloc 不改变其他 owner，失败不发布数量，destroy 释放整个计划。 | R2/U2/E1 |
+| `F5-F02` `initializer.c:add_action/add_positional/add_designated` | W plan；只在追加成功后更新 extent、最后写、next_index；static/runtime parser 同用。 | R2/U2/E1 |
+| `F5-F03` `initializer.c:initializer_find_unclaimed` | R resolved owners，W 自有 successor path compression；逆序解析 designated 覆盖。 | R2/U2/E1 |
+| `F5-F04` `initializer.c:plan_resolve/resolved_destroy` | OWN owners/successor/final counts/first-owned；static/runtime parser 消费，失败释放部分分配。 | R2/U2/E1 |
+| `F5-F05` `initializer.c:plan_element_count` | R 显式/推断数组 extent；无外逃 borrowed pointer。 | R2/U2/E1 |
+| `F5-F06` `parser_enum.c:create_named_enum/get_or_create_enum_tag` | OWN Program Enum entity，Parser scoped tag identity；部分失败实体由 Program 析构。 | R2/U2/E1 |
+| `F5-F07` `parser_enum.c:enum_name_hash/global_slot_insert/global_index_rebuild/sync` | OWN Parser 全局枚举名 cache；分配成功再替换，OOM 退回线性搜索。 | R2/U2/E1 |
+| `F5-F08` `parser_enum.c:global_linear_fallback/find_enum_constant` | R 局部 enum binding + 全局 index；probe owner 不匹配时线性退回。 | R2/U2/E1 |
+| `F5-F09` `parser_enum.c:bind_enum_constant/destroy_enum_constants` | OWN Parser 动态 binding 表，不拥有 Program EnumeratorId；attribute probe 浅拷贝会导致 MC-005。 | R2/U2/E1 · MC-005 |
+| `F5-F10` `parser_enum.c:signed_type_fits/unsigned_type_fits/enum_value_type/normalize_value_bits/const_value_to_numeric/parse_enum_integer_value/next_enum_numeric` | R Target 整数宽度，值型规范化并判 overflow；没有跨 arena 借用。 | R2/U2/E1 |
+| `F5-F11` `parser_enum.c:choose_enum_compatible_type/choose_packed_enum_compatible_type/enum_mode_argument_is_byte/consume_enum_attribute` | R enum 候选类型及 GNU packed/mode；按 TargetInfo 选择，未知 mode 拒绝。 | R2/U2/E1 |
+| `F5-F12` `parser_enum.c:parse_enum_specifier/parse_enum_definition` | OWN Program Enum/Enumerator IDs；所有元素写完再选择兼容底层类型。 | R2/U2/E1 |
+| `F5-F13` `parser_attribute.c:parser_token_text_is/attribute_descriptor_for_token/validate_attribute_argument_count/parse_attribute_arguments` | R 稳定 SourceSpan、临时栈解析；语法层校验括号和参数数量。 | R2/U2/E1 |
+| `F5-F14` `parser_attribute.c:parse_gnu_attribute_lists/collect_parsed_attribute/collect_gnu_attribute_lists` | W caller 属性 callback/out 数组，60+ parser consumer；失败不保证整体语义回滚。 | R2/U2/E1 |
+| `F5-F15` `parser_attribute.c:consume_function_pointer_attribute/apply_function_pointer_declarator_attributes` | R target calling convention policy；函数指针 TypeId 转换交 Program owner。 | R2/U2/E1 |
+| `F5-F16` `parser_attribute.c:apply_section_attribute` | R SourceSpan，检查长度/冲突后一次写 caller char buffer，不存悬空文本地址。 | R2/U2/E1 |
+| `F5-F17` `parser_attribute.c:parse_object_visibility_argument/apply_object_visibility_attribute` | 识别四种 visibility，W caller object metadata，拒冲突值。 | R2/U2/E1 |
+| `F5-F18` `parser_attribute.c:resolve_object_alias_attribute/consume_object_attribute` | R Program globals IDs，解析 alias/SECTION/WEAK/ALIGNED 等，未定义 target fail closed。 | R2/U2/E1 |
+| `F5-F19` `parser_attribute.c:init_object_attribute_context/parse_object_attribute_lists/apply_object_attribute_lists` | W caller 栈 out-parameters；无拥有的 heap，外层 global parser 消费。 | R2/U2/E1 |
+| `F5-F20` `parser_attribute.c:apply_alignment_attribute` | `probe=*parser` 语义解析会扩容 tags/enum_constants，浅拷贝破坏 owner（MC-004/005）。 | R2/U2/ASAN |
+| `F5-F21` `parser_record.c:record_has_field/record_field_starts_parenthesized_pointer_array/_object/_attributed_function_pointer` | 词法 lookahead 的浅复制只读 token；不是 MC-004 的有副作用语义 probe。 | R2/U2/E1 |
+| `F5-F22` `parser_record.c:parse_pointer_to_array_field_declarator/parse_function_pointer_field_declarator` | R type IDs/ABI 属性，构 pointer type；字段名 SourceSpan 借稳定 SourceBuffer。 | R2/U2/E1 |
+| `F5-F23` `parser_record.c:consume_record_field_attribute/parse_typed_record_field_attributes/apply_record_field_declaration_attributes` | W caller 临时字段属性，布局语义经 DataLayout，错误时不发布半成品。 | R2/U2/E1 |
+| `F5-F24` `parser_record.c:parse_record_bit_field_width` | R 常量求值与 Target 字段宽度，拒负值/超宽/具名零宽，匿名零宽合法。 | R2/U2/E1 |
+| `F5-F25` `parser_record.c:parse_record_field_declarator` | 借 Record arena 只在无扩容区间使用；字段追加后按 RecordId 重取，再写 metadata；失败部分实体由 Program owner 清理。 | R2/U2/E1 |
+| `F5-F26` `parser_record.c:consume_record_type_attribute/parse_record_type_attributes/parse_record_field` | W Record 类型属性；解析嵌套类型后重新取 ID，属性语义由 TypeInfo 决定。 | R2/U2/E1 |
+| `F5-F27` `parser_record.c:parse_record_definition_specifier/parse_record_forward_declaration/parse_record_definition` | W Program record arena，跨递归用 RecordId；TagBinding* 只借到 append 前。 | R2/U2/E1 |
+| `F5-F28` `parser_static_initializer.c:capture_static_aggregate_array_action/materialize_static_aggregate_array_action` | OWN 独立 heap 中的 initializer/relocs/action，反向 rebasing 后归还 GlobalObject，失败统一 destroy。 | R2/U2/E1 |
+| `F5-F29` `parser_static_initializer.c:append_static_chained_array_designator_value` | `ArrayType*` 跨子表达式 `sizeof(int[3])` 重分配后继续读，MC-049 ASan UAF。 | R2/U2/ASAN · MC-049 |
+| `F5-F30` `parser_static_initializer.c:overwrite_static_zero_record_value/overwrite_static_zero_record_constant` | `Record*` 跨递归增长后读取旧 fields，MC-023 已升为 ASan 确认。 | R2/U2/ASAN · MC-023 |
+
+### 第五轮 Core：Scalar、Record、Verifier、ASM（30 组）
+
+| ID · 函数（`src/core/`） | 契约、生命周期与真实 consumer | 核验 |
+| --- | --- | --- |
+| `F5-IR01` `core_lower_scalar_values.c:minic_core_lower_internal_append_integer_conversion` | R Value.type，W typed INTEGER_CONVERSION；Verifier→machine scalar；按 Target DataLayout 执行宽度语义。 | R2/U2/E1 |
+| `F5-IR02` `...:append_scalar_bitcast` | R 标量类型，W SCALAR_BITCAST；Verifier 限 pointer/int 形状，record/va_arg 与相等性路径消费。 | R2/U2/E1 |
+| `F5-IR03` `...:minic_core_lower_internal_emit_scalar_load` | R address ValueId，W LOAD（保留 volatile 标志），assignments/record 消费。 | R2/U2/E1 |
+| `F5-IR04` `...:minic_core_lower_internal_emit_scalar_store` | R address/typed value，W STORE effect 指令，assignments/spill 消费。 | R2/U2/E1 |
+| `F5-IR05` `...:core_scalar_object_address` | R stable ObjectId，W OBJECT_ADDRESS ValueId；机器 frame 地址由 Target 负责。 | R2/U2/E1 |
+| `F5-IR06` `...:spill_scalar_value` | OWN Core 临时 object，写 store，解决 RHS/CFG 中间值生命周期。 | R2/U2/E1 |
+| `F5-IR07` `...:reload_scalar_value` | R ObjectId，W 新 SSA LOAD，避免跨块非法直接复用旧 ValueId。 | R2/U2/E1 |
+| `F5-IR08` `...:lower_scalar_equality_operands` | R LHS/RHS C 类型，先 spill LHS 再 RHS/reload；避免右侧求值污染事实/块。 | R2/U2/E1 |
+| `F5-IR09` `...:lower_integer_binary_operands` | R common integer type，W 两个 typed snapshot，arith/scalar compare 消费。 | R2/U2/E1 |
+| `F5-IR10` `...:lower_floating_binary_operands` | R float/double 源表达式，W FLOAT/DOUBLE operands，long double 不走该一般路径。 | R2/U2/E1 |
+| `F5-IR11` `...:append_runtime_scalar_call` | OWN Core CALL callee、签名和 arguments，x86 x87 intercept 或目标 TF ABI libcall 消费。 | R2/U2/E1 |
+| `F5-IR12` `...:append_long_double_conversion` | R 转换源/目标类型，W TF runtime helper；有真实 caller，不能作为旧逻辑删除。 | R2/U2/E1 |
+| `F5-IR13` `...:append_long_double_binary_helper` | R 两个 long-double 值，W `__*tf3` CALL；负零问题出于 unary 调用方式，非 helper 本身。 | R2/U2/E1 · MC-051 |
+| `F5-IR14` `...:lower_scalar_assignment_value` | R 源表达式/type，W conversion、bool zero test、TF bridge；赋值和调用共用。 | R2/U2/E1 |
+| `F5-IR15` `core_lower_arithmetic.c:minic_core_lower_try_arithmetic_unary` | float/double 各有精确 NEGATE；long double 用 `__subtf3(+0,x)`，已原生差分确认负零丢失。 | R2/U2/GNU-NATIVE-DIFF · MC-051 |
+| `F5-IR16` `...:minic_core_lower_try_arithmetic_binary` | R operator/promoted type，W integer/FP opcode、TF helper；Core expression dispatcher 消费。 | R2/U2/E1 |
+| `F5-IR17` `...:minic_core_lower_try_arithmetic_compound` | Lvalue address 和 RHS snapshot 分别持有，最后 STORE；与一般 binary 不可盲目合并。 | R2/U2/E1 |
+| `F5-IR18` `core_lower_record.c:minic_core_lower_record_compound_literal_object` | R frontend local backing+initializer，OWN Core ObjectId；record_materialized_address 消费。 | R2/U2/E1 |
+| `F5-IR19` `...:lower_record_value_address` | R record lvalue/statement expression，OWN RHS snapshot，按 C 求值时序写 RECORD_COPY。 | R2/U2/E1 |
+| `F5-IR20` `...:lower_abi_cursor_scalar_record_va_arg` | R 单字段无 padding/bitfield Record + Target ABI cursor，materialize 到对象；其他形状 fail closed。 | R2/U2/E1 |
+| `F5-IR21` `...:lower_record_va_arg_object` | R `ABI_CURSOR`/`LINEAR_SLOT` Target property，OWN aggregate result，更新 va_list。 | R2/U2/E1 |
+| `F5-IR22` `...:record_materialized_address` | 统一 conditional/member/va_arg/compound/call 聚合来源的地址身份，提供调用与 COPY consumer。 | R2/U2/E1 |
+| `F5-IR23` `...:minic_core_lower_record_conditional_object` | OWN result object + CFG 分块；局部事实缺 fork/meet 已在 MC-036 证明，不重复发新编号。 | R2/U2/E1 · MC-036 |
+| `F5-IR24` `...:record_load_object` | R typed source，OWN aggregate snapshot，W RECORD_LOAD 与 volatile；Target record load 消费。 | R2/U2/E1 |
+| `F5-IR25` `...:record_copy_statement` | 先求 source 再求 destination，W RECORD_COPY；未见独立 volatile bit 但机器 copy 特化，需更多证据才判错。 | R2/U2/E1 · INVESTIGATING |
+| `F5-IR26` `core_ir_verify.c:instruction_is_valid` | R 所有 opcode typed shape、ValueId/OBJECT/ASM/call role；合法 C 的 indirect aggregate vararg 被明确拒绝。 | R2/U2/E1 |
+| `F5-IR27` `...:verify_block/minic_core_function_verify` | R Core definitions；ValueId 全函数唯一、可用性按 block 重置；fixed binding/enum storage shape 缺口另调查。 | R2/U2/E1 · MC-055 |
+| `F5-IR28` `value_uses.c:minic_core_visit_instruction_value_uses` / terminator | 按 opcode 区分 VALUE/OBJECT/CALL/ASM/CFG uses；Target spill layout、object interval consumer 已交叉核对。 | R2/U2/E1 |
+| `F5-IR29` `core_lower_asm_operands.c:core_asm_publish_operand_plan/core_inline_asm_numeric_template` | R qualified source operand roles，W Core numeric template/tied/effect metadata，保留 `%%/%10/%l[name]` 特例。 | R2/U2/E1 |
+| `F5-IR30` `...:core_inline_asm_immediate_text/core_inline_asm_specialize_immediates` / output variant | OWN 重写后 template（caller free）；R const/local facts/Target qualifier，输出 variant 不能与立即量 variant 合并。 | R2/U2/E1 |
+
+**Core 待调查契约：** `minic_core_function_verify` 对 `fixed_register_bindings` 和 `enum_types` 未做与其他 arena 相同的 storage-shape preflight；真实 Parser→Core 生产链目前维持容量不变式，尚无有效 C 反例。该风险先以 MC-055 `INVESTIGATING` 跟踪，不能当成现存 wrong-code。
+
+### 第五轮 RISC-V：RV32 宽标量与 RV64 LP64 Softfloat（30 个）
+
+| ID · 函数（`src/target/`） | 调用、所有权、失败/ABI 契约 | 核验 |
+| --- | --- | --- |
+| `F5-R01` `riscv32/rv32_fp_emit.c:rv32_emit_fp_instruction` | `rv32_emit`→binary32/64 比较/转换 libcall；RV32I 10 个合法 C probe `-S` 成功。 | R2/U2/E1 |
+| `F5-R02` `riscv32/rv32_wide_emit.c:rv32_is_wide_integer` | R integer width，区分 RV32 两字 long long 与不支持的 i128。 | R2/U2/E1 |
+| `F5-R03` `...:wide_pair_operands` | R Core operands，W t0/t1+t2/t3 physical words，算术/比较消费者共用。 | R2/U2/E1 |
+| `F5-R04` `...:wide_shift` | R shift count，单/双 word 分路移位，不将 long long 降为单字。 | R2/U2/E1 |
+| `F5-R05` `...:rv32_emit_wide_integer` | R 64-bit Core arithmetic，W pair/shift/libcall；RV32 emitter 真实调用。 | R2/U2/E1 |
+| `F5-R06` `riscv32/rv32_scalar.c:rv32_scalar_storage_words` | R scalar type，double/long long 取两字，i128 fail closed；ABI/FP consumer 共用。 | R2/U2/E1 |
+| `F5-R07` `...:rv32_scalar` | R scalar signedness/width，供整数 emitter 和 ABI 参数分类。 | R2/U2/E1 |
+| `F5-R08` `...:rv32_canon` | W 1/8/16-bit 规范扩展值，CALL/FP consumer 真实使用。 | R2/U2/E1 |
+| `F5-R09` `...:rv32_load_mem` | R typed memory address/alignment，W scalar GPR，交给 memory emit。 | R2/U2/E1 |
+| `F5-R10` `...:rv32_store_mem` | R typed value/address/alignment，W memory，和 LOAD 对称但有副作用。 | R2/U2/E1 |
+| `F5-R11` `...:rv32_load2` | R 两个 SSA ValueId，W 两物理 GPR，wide arithmetic consumer。 | R2/U2/E1 |
+| `F5-R12` `riscv64/fp_emit.c:rv64_emit_fp_binary` | R Core floating binary + ISA，LP64 软 helper 或 LP64D 原生 F/D；四则是实际支持的子集。 | R2/U2/E1 |
+| `F5-R13` `...:minic_riscv64_emit_fp_instruction` | R FP opcode，W GPR/FPR 指令，LP64 10 个非四则操作没有软 lowering；MC-053。 | R2/U2/LOCAL-COMPILE-DIFF |
+| `F5-R14` `riscv64/runtime_libcall.c:minic_riscv64_uses_arithmetic_libcall` | R opcode/ISA，标记需 helper 的算术，overflow/return-address 规划消费。 | R2/U2/E1 |
+| `F5-R15` `...:rv64_arithmetic_kind` | R Core op，映射 5 个整数 runtime arithmetic helper 类型。 | R2/U2/E1 |
+| `F5-R16` `...:minic_riscv64_softfloat_binary_symbol` | R F32/F64 四则，返回 helper 名；比较/转换无映射是 MC-053 能力缺口。 | R2/U2/E1 · MC-053 |
+| `F5-R17` `...:minic_riscv64_needs_arithmetic_libcall` | R ISA+Core，W caller RA/preflight 需求；softfloat/integer/strict-I checked multiply 一起判。 | R2/U2/E1 |
+| `F5-R18` `...:minic_riscv64_emit_arithmetic_libcall` | R validated arguments/ABI，W helper CALL；不能直接以机器 F/D opcode 替代 LP64。 | R2/U2/E1 |
+| `F5-R19` `riscv64/overflow_emit.c:emit_strict_i_checked_multiply` | R signed multiplication inputs，W overflow result，处理 MIN/-1；M 扩展与 helper 选择分开。 | R2/U2/E1 |
+| `F5-R20` `...:minic_riscv64_emit_overflow_instruction` | R Core result-width/ISA，选择 strict-I libcall 或 native-M。 | R2/U2/E1 |
+| `F5-R21` `riscv64/function_abi_plan.c:minic_riscv64_function_abi_plan_qualified` | R profile/params/returns，W caller ABI GPR/FPR/stack placements。 | R2/U2/E1 |
+| `F5-R22` `...:minic_riscv64_function_abi_plan_build_profile` | R ISA-resolved ABI profile，OWN complete plan，Core admission consumer。 | R2/U2/E1 |
+| `F5-R23` `...:minic_riscv64_function_abi_plan_build` | standalone frame fallback 默认 lp64d，不是 production LP64 的第二 ABI。 | R2/U2/E1 · 排误报 |
+| `F5-R24` `...:minic_riscv64_function_abi_plan_destroy` | OWN plan resources；admission/frame/core codegen 的清理出口共用。 | R2/U2/E1 |
+| `F5-R25` `riscv64/legalize.c:minic_riscv64_scalar_type` | R wide/long double scalar shape，machine admission 与 call consume。 | R2/U2/E1 |
+| `F5-R26` `...:rv64_wide_call_argument_supported` | R 128-bit argument，校验两 GPR 或 stack 位置。 | R2/U2/E1 |
+| `F5-R27` `...:rv64_scalar_gpr_call_argument_supported` | R LP64 softfloat scalar/GPR fallback，防把 LP64D ABI 套进 LP64。 | R2/U2/E1 |
+| `F5-R28` `...:rv64_core_call_arguments_supported` | R direct/indirect calls/prepared ABI sites；indirect record vararg 明确 fail closed。 | R2/U2/E1 |
+| `F5-R29` `...:rv64_core_call_return_supported` | R return type/object value，验证 void/int/float/TI/record return slot。 | R2/U2/E1 |
+| `F5-R30` `riscv64/isa.c:minic_riscv_isa_admit_core_instruction` | 严格预发射 ISA gate；LP64 软四则允许，其他浮点比较/转换拒绝并显示占位 F/D 诊断（MC-053）。 | R2/U2/LOCAL-COMPILE-DIFF |
+
+**RV 边界补证：** RV64I `__int128` 运算 9/9 `.s`、binary128 long double 9/9 `.s`；RV32I 对 i128 明确拒绝。RV64IM 的 i128 MUL 为本地 `mul/mulhu`，不能按“未存 ra”错报 libcall bug。以上并不证明目标 ELF/QEMU 已执行。
+
+### 第五轮 AArch64：Linux GNU ASM Source→Core→Machine（30 个）
+
+总入口 `minic_aarch64_qualify_inline_asm`→`minic_backend_capture_asm_operand_source`→Core structured ASM→`minic_aarch64_emit_qualified_structured_asm`；以下 Source 函数读取原始 GNU operand/type 形状，Emit 函数读取目标 Core ABI/Frame 后写 `.s`，两者不共享可变缓冲区。
+
+| ID · 函数（`src/target/aarch64/asm_contract.c`） | 资格/指令写回契约 | 核验 |
+| --- | --- | --- |
+| `F5-A01` `aarch64_linux_zeropad_source` | `=&r` ulong、r pointer、Q memory，隐式内存、GNU exception template 全形状检查。 | R2/U2/E1 |
+| `F5-A02` `aarch64_linux_zeropad_emit` | x9/x10/x11 定位，12B `__ex_table` PREL32+类型4，输出8B。 | R2/U2/E1 |
+| `F5-A03` `aarch64_linux_uaccess_source` | LDTR/STTR 1/2/4/8，`+r` error、`=r/rZ` value、r pointer；缺输出对象与 ISA 物理宽度的一致性门控。 | R2/U2/ASM-ONLY · MC-052 |
+| `F5-A04` `aarch64_linux_uaccess_emit` | LDTR 8/16/32-bit 结果仍以 `str x10,[x12]` 写8B；packed/u8/u16/u32 可被覆盖。 | R2/U2/ASM-ONLY · MC-052 |
+| `F5-A05` `aarch64_linux_xpaclri_source` | x30 固定 local +r ulong，hint#7 单个 RW role。 | R2/U2/E1 |
+| `F5-A06` `aarch64_linux_xpaclri_emit` | x30 保存/恢复与 hint#7，维持函数 LR frame。 | R2/U2/E1 |
+| `F5-A07` `aarch64_linux_smccc_source` | hvc/smc #0，x0..x3 输出和 x0..x7 输入固定约束，memory clobber。 | R2/U2/E1 |
+| `F5-A08` `aarch64_linux_smccc_emit` | stage x0..x7→trap→x0..x3 写回。 | R2/U2/E1 |
+| `F5-A09` `aarch64_linux_svc_source` | svc#0，x0 result、x0/x1/x8 inputs，long 型参数和隐式 effect。 | R2/U2/E1 |
+| `F5-A10` `aarch64_linux_svc_emit` | 固定 x0/x1/x8 stage/回写；源端 r0 别名与机端 x0 要求仍需 alias 复核，非确认错码。 | R2/U2/E1 |
+| `F5-A11` `aarch64_linux_wfxt_source` | WFIT/WFET sysreg 两个常量形状，单64位 scalar。 | R2/U2/E1 |
+| `F5-A12` `aarch64_linux_wfxt_emit` | x9 timeout→`msr`，机器端复核完整 template。 | R2/U2/E1 |
+| `F5-A13` `aarch64_linux_atomic_dec_positive_source` | 64b `=&r`×2 与 `+Q`，CC+memory。 | R2/U2/E1 |
+| `F5-A14` `aarch64_linux_atomic_dec_positive_emit` | ldxr/subs/stlxr retry+dmb；两个 64b 输出正确写回。 | R2/U2/E1 |
+| `F5-A15` `aarch64_linux_cmpxchg128_source` | 128-bit `+Q`、状态/结果及四个u64输入，总8roles。 | R2/U2/E1 |
+| `F5-A16` `aarch64_linux_cmpxchg128_emit` | ldxp/ccmp/stxp/stlxp，pair旧值与32位状态按物理宽度写回。 | R2/U2/E1 |
+| `F5-A17` `aarch64_linux_lse_casp128_source` | CASP/PAL x0/x1 pair、x2/x3输入，+Q与多寄存器约束。 | R2/U2/E1 |
+| `F5-A18` `aarch64_linux_lse_casp128_emit` | `.arch_extension lse`、casp/caspal、两条 x0/x1 旧值写回；未用附加 source operand 不等于自动错码。 | R2/U2/E1 |
+| `F5-A19` `aarch64_linux_lse_dec_positive_source` | pointer `+&r`、u64 `+Q`、u64 `=&r`，3个 role。 | R2/U2/E1 |
+| `F5-A20` `aarch64_linux_lse_dec_positive_emit` | ldr/subs/casal retry，pointer 结果与临时值都8B。 | R2/U2/E1 |
+| `F5-A21` `aarch64_linux_futex_source` | 5输出+2/3输入均 u32，set/add/or/and/xor/cmpxchg，typed roles 明确。 | R2/U2/E1 |
+| `F5-A22` `aarch64_linux_futex_emit` | ldxr/stlxr budget/fault labels，`__ex_table` 两处，四个32b值正确回写。 | R2/U2/E1 |
+| `F5-A23` `aarch64_linux_timer_alternative_source` | CNT[P/V]CT_EL0 GNU alternative 形状、单 u64 输出。 | R2/U2/E1 |
+| `F5-A24` `aarch64_linux_timer_alternative_emit` | feature19 replacement + isb/mrs，双 `.org` 长度对齐约束。 | R2/U2/E1 |
+| `F5-A25` `aarch64_linux_counter_ordering_source` | eor/add sp/ldr xzr，r input 与 =r output，保留隐式 load effect。 | R2/U2/E1 |
+| `F5-A26` `aarch64_linux_counter_ordering_emit` | x10 数据依赖→x9 sp 地址→ldr xzr，结果回写。 | R2/U2/E1 |
+| `F5-A27` `aarch64_linux_rng_sysreg_source` | RNDR/RNDRRS，u64 result + bool status，CC clobber。 | R2/U2/E1 |
+| `F5-A28` `aarch64_linux_rng_sysreg_emit` | `.inst` MRS 与 cset w10，u64 `str`、bool `strb`，窄类型保护正确。 | R2/U2/E1 · 排误报 |
+| `F5-A29` `aarch64_linux_cache_op_source` | DC/IC 5种精确模板，pointer/ulong carrier，volatile 与隐式内存。 | R2/U2/E1 |
+| `F5-A30` `aarch64_linux_cache_op_emit` | 当前 TargetInfo unqual type 匹配；x9 address→DC/IC 真实指令，帧形状失败拒绝。 | R2/U2/E1 |
+
+**A64 覆盖边界：** `source_policy/aarch64.c`（120行）、`fp_emit.c`（248行）、`residual_emit.c`（793行）全读；`asm_contract.c`（7376行）只对上述生产函数/总闸与若干 descriptor 区段逐块完整核验，余下区间维持 R1。MC-052 为 Source→`.s`，缺目标 GAS/ELF/QEMU（E3）。
+
+### 第五轮 x86-64：Linux GNU ASM 双端长尾（30 组）
+
+Source 是 `src/target/x86_64/asm_contract.c`；Machine 是 `src/target/x86_64/machine_asm.c`。每一项的 Source 资格检查通过 `minic_x86_64_qualify_inline_asm` 到 Core operand plan，再由 `minic_x86_64_emit_structured_asm` 分发；Source 非 volatile、Core effect 强制 volatile 的转换是有意行为，不应误判。`F5-X10/27/28` 仅部分区段核对，诚实标 R1/U1；其他已核对双端真实消费者。
+
+| ID · Source → Machine 函数简称 | 类型、ABI/副作用与写回契约 | 核验 |
+| --- | --- | --- |
+| `F5-X01` `minic_x86_64_qualify_inline_asm` → `minic_x86_64_emit_structured_asm` | 109 资格形状（21 typed / 88 legacy），机器对应分发，unknown fail closed。 | R2/U2/E1 |
+| `F5-X02` `x86_linux_mmio_read_source` → `emit_linux_mmio_read` | 1/2/4/8B memory input + scalar result store；cv 类型两端一视同仁。 | R2/U2/E1 |
+| `F5-X03` `x86_linux_mmio_write_source` → `emit_linux_mmio_write` | register scalar input+memory output，按 1/2/4/8B 宽度选物理 store。 | R2/U2/E1 |
+| `F5-X04` `x86_linux_pci_mmconfig_source` → `emit_linux_pci_mmconfig` | AL/AX/EAX 固定寄存器，地址 constraint `r`，不误认为 `m`。 | R2/U2/E1 |
+| `F5-X05` `x86_linux_rep_string_io_source` → `emit_linux_rep_string_io` | SI/DI+CX `+` RW、DX port，machine 保存/回写两物理寄存器。 | R2/U2/E1 |
+| `F5-X06` `x86_linux_atomic_xchg_source` → `emit_linux_atomic_xchg` | readwrite register+memory，LOCK effect + 实体宽度。 | R2/U2/E1 |
+| `F5-X07` `x86_linux_pvclock_scale_source` → `emit_linux_pvclock_scale` | RDX:RAX 128-bit intermediate，经 SHRD 得 high/low outputs。 | R2/U2/E1 |
+| `F5-X08` `x86_xsetbv_source` → `emit_linux_xsetbv` | EAX/EDX/ECX fixed inputs；特权指令仅审发射，不执行。 | R2/U2/E1 |
+| `F5-X09` `x86_fxsave_source` → `emit_linux_fxsave` | 512B/16B aligned image in memory；不能退化 scalar copy。 | R2/U2/E1 |
+| `F5-X10` `x86_x87_probe_source` → `emit_linux_x87_probe` | FNSTSW/FNSTCW memory 状态；长尾条件只抽读部分区段。 | R1/U1/E1 |
+| `F5-X11` `x86_linux_pkru_source` → `emit_linux_pkru` | RDPKRU EAX/EDX output、ECX input；volatile output 与 source qualifier 不一致（MC-050）。 | R2/U2/LOCAL-COMPILE-DIFF |
+| `F5-X12` `x86_linux_random_seed_source` → `emit_linux_random_seed` | RDRAND/RDSEED CF + 64-bit result；MC-050，同类 CPU 特性依赖未执行。 | R2/U2/LOCAL-COMPILE-DIFF |
+| `F5-X13` `x86_linux_unwind_context_source` → `emit_linux_unwind_context` | RIP/RSP/RBP 三输出；volatile outputs MiniC 错拒，GNU/mixed 链接原生可执行。 | R2/U2/LOCAL-COMPILE-DIFF · MC-050 |
+| `F5-X14` `x86_linux_mxcsr_source` → `emit_linux_mxcsr` | STMXCSR/LDMXCSR memory，机器端已 unqualify，反例排除。 | R2/U2/E1 |
+| `F5-X15` `x86_linux_fsgsbase_source` → `emit_linux_fsgsbase` | FS/GS base 64b read/write；volatile output MiniC 拒，未执行 CPU 特性依赖指令。 | R2/U2/LOCAL-COMPILE-DIFF · MC-050 |
+| `F5-X16` `x86_linux_segment_read_source` → `emit_linux_segment_read` | 16-bit selector 与 32-bit widened 读；Core 强制有 effect，不是 Source 非 volatile bug。 | R2/U2/E1 · 排误报 |
+| `F5-X17` `x86_linux_monitor_wait_source` → `emit_linux_monitor_wait` | MONITOR/MWAIT(X) A/C/D 或 A/B/C，RBX push/pop，未真实运行。 | R2/U2/E1 |
+| `F5-X18` `x86_linux_raw_cmpxchg_source` → `emit_linux_raw_cmpxchg` | tied operand old value RAX，LOCK CMPXCHG，memory metadata。 | R2/U2/E1 |
+| `F5-X19` `x86_linux_trycas_source` → `emit_linux_trycas` | ZF `=@ccz`、old `+a` memory，保留比较失败旧值。 | R2/U2/E1 |
+| `F5-X20` `x86_linux_atomic_rmw_source` → `emit_linux_atomic_rmw` | 28 descriptor forms；GNU legacy `=m/m` alias 有实在消费者。 | R2/U2/E1 |
+| `F5-X21` `x86_linux_atomic_cc_source` → `emit_linux_atomic_cc` | 8 RMWcc forms，ZF/SF bool，volatile status output 被错拒（MC-050）；plain GNU/native PASS。 | R2/U2/LOCAL-COMPILE-DIFF |
+| `F5-X22` `x86_linux_bitops_source` → `emit_linux_bitops` | 12 BT/BTS/BTR/BTC 等 forms，CF output；volatile bool 机器错拒（MC-050），plain/native PASS。 | R2/U2/LOCAL-COMPILE-DIFF |
+| `F5-X23` `x86_zstd_cpuid_source` → `emit_zstd_cpuid` | 3种1/3 output variant，与 native 4-output CPUID 分离，RBX 保存。 | R2/U2/E1 |
+| `F5-X24` `x86_linux_kernel_nofault_goto_source` → `emit_linux_kernel_nofault_goto` | asm-goto label、8种 MOV 宽度、3-word PREL32 exception table。 | R2/U2/E1 |
+| `F5-X25` `x86_linux_put_user_call_source` → `emit_linux_put_user_call` | RSP/RAX/RCX/Linux helper ABI，RBX preserved，expected offsets typed。 | R2/U2/E1 |
+| `F5-X26` `x86_linux_futex_extable_source` → `emit_linux_futex_extable` | locked cmpxchg 的 `+r` 初值与两条异常表真实保留。 | R2/U2/E1 |
+| `F5-X27` `x86_linux_fdiv_bug_source` → `emit_linux_fdiv_bug` | x87 state/FISTPL/reset，长尾仅部分抽读，非运行验收。 | R1/U1/E1 |
+| `F5-X28` `qualified legacy fallback` → `emit_memory_clobber_matched/emit_bit_scan/emit_muldiv_u64` | CPUID/bit-scan/muldiv legacy 形式有消费者；部分代码未全读。 | R1/U1/E1 |
+| `F5-X29` `minic_backend_capture_asm_operand_source` → Core lowering | Source operand provenance、tied/early-clobber/effective memory；Core `is_volatile=true` 有意。 | R2/U2/E1 |
+| `F5-X30` `source_policy/x86_64.c` source qualifier policy | 固定寄存器与多种 GNU constraint admission，所有小文件 106 行已通读；未知形状拒绝。 | R2/U2/E1 |
+
+**覆盖诚实性：** `asm_contract.c` 8,874 行、`machine_asm.c` 6,442 行，typed source switch 和 30 组双端核对已完成，但若干 EFI/VMware/MSR/XSAVE/uaccess/legacy 段仍是 R1/U1，不得报“所有函数 100%”。`x86_linux_three_call_alternative_source` 与 `x86_linux_jump_label_source` 同名两处只是 forward declaration+definition，既非死分支也非两份实现。MC-050 的六家族是 `GNU C` 合法 + 本机 GNU 严格编译 + MiniC plain PASS/cv FAIL；其中 UNWIND/ATOMIC_CC/BITOPS GNU 与 mixed 原生执行成功，不等于 CV MiniC 已经通过。
