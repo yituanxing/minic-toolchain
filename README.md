@@ -81,6 +81,7 @@ See:
 
 - [`docs/architecture/principles.md`](docs/architecture/principles.md)
 - [`docs/architecture/compiler-development-roadmap.md`](docs/architecture/compiler-development-roadmap.md)
+- [`docs/architecture/minic-issue-register.md`](docs/architecture/minic-issue-register.md) — ongoing bugs, risks, design debt, and verified non-issues
 - [`docs/standards/implementation-language.md`](docs/standards/implementation-language.md)
 - [`docs/standards/validation-toolchain.md`](docs/standards/validation-toolchain.md)
 - [`docs/DEVIATIONS.md`](docs/DEVIATIONS.md)
