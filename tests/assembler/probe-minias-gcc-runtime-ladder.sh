@@ -73,6 +73,18 @@ fail() {
   echo "MINIAS_RUNTIME_LADDER_STAGE=FAIL arch=$arch stage=$1 reason=$2" >&2
 }
 
+# CI logs must expose the *actual first unsupported GCC instruction* for
+# every failing TU. Preserve complete stderr in artifacts, but print a small
+# bounded excerpt so the next repair batch does not need artifact downloads.
+diagnostic_log() {
+  local step=$1 path=$2
+  if test -s "$path"; then
+    printf 'MINIAS_RUNTIME_LADDER_DIAGNOSTIC arch=%s stage=%s step=%s file=%s\n' \
+      "$arch" "$stage" "$step" "$path" >&2
+    sed -n '1,20p' "$path" >&2
+  fi
+}
+
 for stage in "${stages[@]}"; do
   stage_dir="$work/$stage"
   mkdir -p "$stage_dir/asm" "$stage_dir/gnu" "$stage_dir/mini" "$stage_dir/evidence"
@@ -128,15 +140,18 @@ for stage in "${stages[@]}"; do
       sha256sum "$source" "$asm" >>"$stage_dir/evidence/sources.sha256"
     else
       fail "$stage" "gcc-S:$unit"
+      diagnostic_log "gcc-S:$unit" "$stage_dir/evidence/gcc-$unit.log"
       continue
     fi
     if ! "$gas" "${gas_flags[@]}" -o "$stage_dir/gnu/$unit.o" "$asm" \
          >"$stage_dir/evidence/gnu-as-$unit.log" 2>&1; then
       fail "$stage" "gnu-as:$unit"
+      diagnostic_log "gnu-as:$unit" "$stage_dir/evidence/gnu-as-$unit.log"
     fi
     if ! "$minias" "${mini_flags[@]}" -o "$stage_dir/mini/$unit.o" "$asm" \
          >"$stage_dir/evidence/mini-as-$unit.log" 2>&1; then
       fail "$stage" "mini-as:$unit"
+      diagnostic_log "mini-as:$unit" "$stage_dir/evidence/mini-as-$unit.log"
     fi
   done
 
@@ -160,6 +175,7 @@ for stage in "${stages[@]}"; do
          >"$stage_dir/evidence/$flavor-link.log" 2>&1 ||
        ! test -s "$program"; then
       fail "$stage" "gnu-bfd-link:$flavor"
+      diagnostic_log "gnu-bfd-link:$flavor" "$stage_dir/evidence/$flavor-link.log"
       continue
     fi
     if ! grep -Fq 'GNU ld' "$stage_dir/evidence/$flavor-link.log" ||

@@ -68,6 +68,18 @@ failed() {
     tee -a "$work/evidence/failures.txt" >&2
 }
 
+# Keep complete compiler/assembler/linker diagnostics as CI artifacts. A
+# bounded excerpt in the job log makes every failed TU independently visible
+# so a bulk fix can address *all* blockers exposed by the current GCC run.
+diagnostic_log() {
+  local step=$1 path=$2
+  if test -s "$path"; then
+    printf 'CJSON_MINIAS_DIAGNOSTIC arch=%s step=%s file=%s\n' \
+      "$arch" "$step" "$path" >&2
+    sed -n '1,20p' "$path" >&2
+  fi
+}
+
 # All six objects originate from *identical .s bytes*, emitted only once by
 # the cross/host GNU GCC. No compiler, source or flags difference by flavor.
 for unit in cjson harness upstream_test; do
@@ -83,6 +95,7 @@ for unit in cjson harness upstream_test; do
     sha256sum "$src" "$work/asm/$unit.s" >>"$work/evidence/sources.sha256"
   else
     failed "gcc-S:$unit"
+    diagnostic_log "gcc-S:$unit" "$work/evidence/gcc-$unit.log"
     continue
   fi
   if "$gas" "${as_flags[@]}" -o "$work/gnu/$unit.o" \
@@ -91,6 +104,7 @@ for unit in cjson harness upstream_test; do
     gnu_ok[$unit]=1
   else
     failed "GNU-as:$unit"
+    diagnostic_log "GNU-as:$unit" "$work/evidence/gnu-as-$unit.log"
   fi
   if "$minias" "${mini_flags[@]}" -o "$work/mini/$unit.o" \
       "$work/asm/$unit.s" >"$work/evidence/mini-as-$unit.log" 2>&1 &&
@@ -98,6 +112,7 @@ for unit in cjson harness upstream_test; do
     mini_ok[$unit]=1
   else
     failed "MiniAS:$unit"
+    diagnostic_log "MiniAS:$unit" "$work/evidence/mini-as-$unit.log"
   fi
 done
 
@@ -126,6 +141,8 @@ for workload in full_harness upstream_test; do
         "$work/$flavor/cjson.o" "$work/$flavor/$driver.o" -lm \
         >"$work/evidence/$flavor-$workload-link.log" 2>&1; then
       failed "GNU-BFD-link:$flavor:$workload"
+      diagnostic_log "GNU-BFD-link:$flavor:$workload" \
+        "$work/evidence/$flavor-$workload-link.log"
       continue
     fi
     if ! grep -Fq 'GNU ld' "$work/evidence/$flavor-$workload-link.log" ||

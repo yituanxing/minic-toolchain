@@ -1,0 +1,95 @@
+name: MiniAS GCC Single-AS Real BusyBox Runtime
+
+# Real original Kbuild/GCC-generated source, MiniAS for every production C
+# object, GNU binutils final linkage, real QEMU execution of ten applets.
+# Object ELF byte parity is not an acceptance gate.
+on:
+  workflow_dispatch:
+  push:
+    branches: [refactor/minias-target-isa-abi-core]
+    paths:
+      - '.github/workflows/minias-busybox-runtime.yml'
+      - 'assembler/**'
+      - 'elf/**'
+      - 'tests/assembler/probe-minias-gcc-busybox-runtime.sh'
+      - 'tests/external/busybox/check-pinned-1361-source.sh'
+
+permissions:
+  contents: read
+
+jobs:
+  gcc-minias-real-busybox:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {arch: x86_64, cc: gcc}
+          - {arch: aarch64, cc: aarch64-linux-gnu-gcc}
+          - {arch: riscv64, cc: riscv64-linux-gnu-gcc}
+          - {arch: loongarch64, cc: loongarch64-linux-gnu-gcc-13}
+    steps:
+      - name: Check out the exact candidate revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install GNU build, cross-CRT and actual QEMU user emulation
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc binutils libc6-dev make curl git tar bc bison flex pkg-config qemu-user
+          case '${{ matrix.arch }}' in
+            aarch64)
+              sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+                gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu libc6-dev-arm64-cross ;;
+            riscv64)
+              sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+                gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu libc6-dev-riscv64-cross ;;
+            loongarch64)
+              sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+                gcc-13-loongarch64-linux-gnu binutils-loongarch64-linux-gnu libc6-dev-loong64-cross ;;
+          esac
+
+      - name: Build exact MiniAS under test
+        id: build
+        run: |
+          test "$(git rev-parse HEAD)" = '${{ github.sha }}'
+          make -j2 MODE=release CFLAGS=-Werror build/release/bin/minic-as
+
+      - name: Build pinned BusyBox using original Kconfig and real GNU/MiniAS paths
+        id: busybox
+        env:
+          CC: ${{ matrix.cc }}
+          MINIAS: ${{ github.workspace }}/build/release/bin/minic-as
+          WORK_DIR: ${{ github.workspace }}/build/minias-busybox-runtime/${{ matrix.arch }}
+        run: bash tests/assembler/probe-minias-gcc-busybox-runtime.sh '${{ matrix.arch }}'
+
+      - name: Show independently observable outcomes
+        if: always()
+        run: |
+          printf '### MiniAS real BusyBox – %s\n\n' '${{ matrix.arch }}' >> "$GITHUB_STEP_SUMMARY"
+          printf '| Check | Status |\n|---|---|\n' >> "$GITHUB_STEP_SUMMARY"
+          printf '| Exact-head MiniAS build | %s |\n' '${{ steps.build.outcome }}' >> "$GITHUB_STEP_SUMMARY"
+          printf '| Original BusyBox GNU/MiniAS assembly, GNU link, QEMU applets | %s |\n' \
+            '${{ steps.busybox.outcome }}' >> "$GITHUB_STEP_SUMMARY"
+          report="build/minias-busybox-runtime/${{ matrix.arch }}/evidence/summary.txt"
+          if test -f "$report"; then
+            printf '\n```\n' >> "$GITHUB_STEP_SUMMARY"
+            sed -n '1,8p' "$report" >> "$GITHUB_STEP_SUMMARY"
+            printf '```\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Preserve source identity, every failed C owner, linkage and execution logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minias-real-busybox-${{ matrix.arch }}
+          path: |
+            build/minias-busybox-runtime/${{ matrix.arch }}/evidence/
+            build/minias-busybox-runtime/${{ matrix.arch }}/mini-as-logs/
+            build/minias-busybox-runtime/${{ matrix.arch }}/gnu/busybox
+            build/minias-busybox-runtime/${{ matrix.arch }}/mini/busybox
+          if-no-files-found: warn
+          retention-days: 14
