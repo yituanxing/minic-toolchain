@@ -56,10 +56,14 @@ static bool x64_legacy_opcode_allowed(const char *name,uint32_t mode) {
         "subw","subl","shrw","shrl","sall","incl","decl","sbbl","adcl",
         "imull","lgdtl","lidtl","lmsw","lsl",
         "lock","btl","btsl","btrl","shldl","shrdl",
-        "rep","int","rdtsc","sysenter","rdmsr","wrmsr",
+        "rep","repe","repz","repne","repnz",
+        "int","rdtsc","sysenter","rdmsr","wrmsr",
         "movsl","movsb","stosl","stosb","leal",
         "inb","inw","inl","outb","outw","outl",
-        "rdtscp","negl","divl","mull","movsbl"
+        "rdtscp","negl","divl","mull","movsbl",
+        /* Linux real-mode boot GCC uses these already-decoded machine
+         * forms; keep the mode gate aligned with actual target support. */
+        "fninit","cltd","notl","orw","shll","addb","incb"
     };
     size_t i;
     if(x64_infers_width(name))return true;
@@ -128,10 +132,13 @@ typedef struct X64Memory {
     /* Stable Common symbol identity, never an ELF SymbolID or x86 address
      * component. A name pool token does not create an object symbol. */
     bool has_symbol;
+    /* Resolved only after final fragment layout; no ELF relocation. */
+    bool has_difference;
     /* x86 ELF relocation flavor is an addressing-mode property; Common
      * still owns only the canonical undecorated symbol reference. */
     X64DisplacementReloc reloc_flavor;
     MiniAsSymbolRef symbol;
+    MiniAsSymbolDifferenceRef difference;
 } X64Memory;
 
 static void x64_dispose_memory(void *opaque) {
@@ -500,7 +507,7 @@ static bool x64_parse_base_memory(MiniAs *as,const char *text, X64Memory *out) {
     size_t dlen;
     unsigned count=0U, base=0U, index=0U;
     unsigned long scale=1UL;
-    bool wide, symbolic=false, pc_relative=false;
+    bool wide, symbolic=false, difference=false, pc_relative=false;
     X64DisplacementReloc reloc_flavor=X64_DISP_ABSOLUTE;
     const X64TargetState *state=(const X64TargetState *)as->target_state;
     const bool code16=state!=NULL &&
@@ -509,6 +516,7 @@ static bool x64_parse_base_memory(MiniAs *as,const char *text, X64Memory *out) {
     bool address16=false;
     unsigned legacy_rm=0U;
     MiniAsSymbolExpr symbolic_expr;
+    MiniAsSymbolDifference difference_expr;
     long long displacement=0;
     if(strncmp(text,"%fs:",4U)==0)segment_space=1U;
     else if(strncmp(text,"%gs:",4U)==0)segment_space=2U;
@@ -537,10 +545,13 @@ static bool x64_parse_base_memory(MiniAs *as,const char *text, X64Memory *out) {
                arithmetic>=INT32_MIN && arithmetic<=INT32_MAX)
                 displacement=(long long)arithmetic;
             else {
-                if(!x64_symbolic_displacement(operand,&expr,
-                       &reloc_flavor,as->output_elf32) ||
-                   reloc_flavor==X64_DISP_GOTPCREL)return false;
-                symbolic=true;displacement=0;
+                if(x64_symbolic_displacement(operand,&expr,
+                       &reloc_flavor,as->output_elf32) &&
+                   reloc_flavor!=X64_DISP_GOTPCREL)symbolic=true;
+                else if(minias_parse_symbol_difference(operand,
+                        &difference_expr))difference=true;
+                else return false;
+                displacement=0;
             }
         }
         memset(out,0,sizeof(*out));
@@ -553,6 +564,11 @@ static bool x64_parse_base_memory(MiniAs *as,const char *text, X64Memory *out) {
         if(symbolic) {
             if(!minias_bind_symbol_ref(as,&expr,&out->symbol))return false;
             out->has_symbol=true;
+        }
+        if(difference) {
+            if(!minias_bind_symbol_difference_ref(as,&difference_expr,
+                    &out->difference))return false;
+            out->has_difference=true;
         }
         return true;
     }
@@ -570,11 +586,13 @@ static bool x64_parse_base_memory(MiniAs *as,const char *text, X64Memory *out) {
                arithmetic>=INT32_MIN && arithmetic<=INT32_MAX)
                 displacement=(long long)arithmetic;
             else {
-                if(!x64_symbolic_displacement(dispbuf,&symbolic_expr,
-                       &reloc_flavor,as->output_elf32) ||
-                   symbolic_expr.addend<INT64_MIN+4)
-                    return false;
-                symbolic=true;
+                if(x64_symbolic_displacement(dispbuf,&symbolic_expr,
+                       &reloc_flavor,as->output_elf32) &&
+                   symbolic_expr.addend>=INT64_MIN+4)
+                    symbolic=true;
+                else if(minias_parse_symbol_difference(dispbuf,
+                        &difference_expr))difference=true;
+                else return false;
                 displacement=0;
             }
         }
@@ -672,13 +690,20 @@ static bool x64_parse_base_memory(MiniAs *as,const char *text, X64Memory *out) {
         if(!minias_bind_symbol_ref(as,&symbolic_expr,&out->symbol))return false;
         out->has_symbol=true;
     }
+    if(difference) {
+        if(!minias_bind_symbol_difference_ref(as,&difference_expr,
+                &out->difference))return false;
+        out->has_difference=true;
+    }
     return true;
 }
 
 static unsigned x64_disp_bytes(const X64Memory *mem) {
-    /* A symbol forces a 4-byte relocation slot even at a zero addend.
-     * Otherwise a base register might choose a zero/disp8 ModR/M mode. */
-    if(mem->has_symbol)return mem->address_16?2U:4U;
+    /* Symbolic displacements keep their full width until final layout:
+     * references need a relocation slot, same-section differences are
+     * resolved later. Otherwise we could prematurely choose disp8. */
+    if(mem->has_symbol || mem->has_difference)
+        return mem->address_16?2U:4U;
     if(mem->address_16) {
         if(!mem->has_base)return 2U;
         if(mem->displacement==0 && mem->address16_rm!=6U)return 0U;
@@ -773,7 +798,8 @@ static unsigned x64_legacy_operand_bits(const MiniAsStmt *s,
            !strcmp(name,"repnz"))name=s->args;
         if(!strcmp(name,"pushfl") || !strcmp(name,"popfl") ||
            !strcmp(name,"pushal") || !strcmp(name,"popal") ||
-           !strcmp(name,"retl"))return 32U;
+           !strcmp(name,"retl") || !strcmp(name,"cltd") ||
+           !strcmp(name,"cwtl"))return 32U;
         if(!strcmp(name,"lretw"))return 16U;
         if(s->site.mode_bits==X64_CODE16_GCC &&
            (!strcmp(name,"ret") || !strcmp(name,"leave")))return 32U;
@@ -799,6 +825,10 @@ static unsigned x64_legacy_operand_bits(const MiniAsStmt *s,
               m->operands[0].reg>=2U && m->operands[0].reg<=5U)) {
         const unsigned group=m->opcode==X64_INDIRECT_REG?
             m->encoding&7U:m->operands[0].reg;
+        if(group==3U || group==5U) {
+            if(!strcmp(name,"lcallw") || !strcmp(name,"ljmpw"))return 16U;
+            if(!strcmp(name,"lcalll") || !strcmp(name,"ljmpl"))return 32U;
+        }
         return (group==2U || group==3U) &&
                s->site.mode_bits==X64_CODE16_GCC?32U:16U;
     }else if(m->opcode==X64_SYSTEM_MOVE &&
@@ -2613,7 +2643,9 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
     if ((!strcmp(s->op,"call") || !strcmp(s->op,"callq") ||
          !strcmp(s->op,"jmp") || !strcmp(s->op,"jmpq") ||
          !strcmp(s->op,"ljmp") || !strcmp(s->op,"ljmpl") ||
-         !strcmp(s->op,"lcall") || !strcmp(s->op,"lcalll")) &&
+         !strcmp(s->op,"ljmpw") ||
+         !strcmp(s->op,"lcall") || !strcmp(s->op,"lcalll") ||
+         !strcmp(s->op,"lcallw")) &&
         s->args[0]=='*' && x64_is_mem_candidate(s->args+1)) {
         X64Memory parsed;
         if (!x64_parse_base_memory(as,s->args+1,&parsed))goto invalid;
@@ -2626,9 +2658,11 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         m->operands[0].reg=(!strcmp(s->op,"call") ||
                             !strcmp(s->op,"callq"))?2U:
                            (!strcmp(s->op,"lcall") ||
-                            !strcmp(s->op,"lcalll"))?3U:
+                            !strcmp(s->op,"lcalll") ||
+                            !strcmp(s->op,"lcallw"))?3U:
                            (!strcmp(s->op,"ljmp") ||
-                            !strcmp(s->op,"ljmpl"))?5U:4U;
+                            !strcmp(s->op,"ljmpl") ||
+                            !strcmp(s->op,"ljmpw"))?5U:4U;
         goto done;
     }
     if ((!strcmp(s->op,"pushq") || !strcmp(s->op,"popq") ||
@@ -4031,6 +4065,20 @@ static bool x64_resolve_memory_displacement(MiniAs *as,const MiniAsStmt *stmt,
                                             bool *needs_pc32) {
     *displacement=(uint32_t)mem->displacement;
     *needs_pc32=false;
+    if(mem->has_difference) {
+        int64_t resolved;
+        if(!minias_resolve_symbol_difference_ref(as,&mem->difference,
+                &resolved) ||
+           (mem->address_16 && (resolved<INT16_MIN ||
+                                resolved>UINT16_MAX)) ||
+           (!mem->address_16 && (resolved<INT32_MIN ||
+                                 resolved>UINT32_MAX))) {
+            minias_set_error(as,"invalid-x86-memory-symbol-difference");
+            return false;
+        }
+        *displacement=(uint32_t)resolved;
+        return true;
+    }
     if(!mem->has_symbol || !mem->pc_relative)return true;
     /* The GOT entry is link-time state, not the target symbol's local
      * address. Even same-section definitions must keep their GOT fixup. */

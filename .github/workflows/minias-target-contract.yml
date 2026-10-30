@@ -414,6 +414,10 @@ jobs:
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=aarch64 \
             bash tests/assembler/probe-mcexpr-lexical-sets.sh
+      - name: GNU Linux AArch64 MOVQ logical-shift and checked signed lanes
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-aarch64-linux-movq-gnu.sh
       - name: GNU AArch64 raw CFI bytecode retained as a single fragment event
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=aarch64 \

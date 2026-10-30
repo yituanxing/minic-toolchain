@@ -39,6 +39,18 @@ shared_expression_grammar:
     .quad (0xffffffffffffffff + 2)
     .fill (repeat_count + 0), (1 + 1), (0x1234 | 0x08)
     .space (skip_count + 1), 0x5a
+    # GNU absolute comparisons are signed predicates over unsigned
+    # bit-pattern shifts. The AArch64 Linux mov_q conditional depends on this.
+    .if (((~(1 << 20)) >> 47) == 0x1ffff)
+        .byte 0xa1
+    .else
+        .byte 0xa2
+    .endif
+    .if (((-14) >> 3) == 0x1ffffffffffffffe)
+        .byte 0xb1
+    .else
+        .byte 0xb2
+    .endif
 ASM
 
 as -o "$work/gnu.o" "$work/grammar.s"
@@ -78,6 +90,7 @@ expected = (
     + bytes.fromhex('fc ff ff ff ff ff ff 3f')
     + b'\xff' * 8 + b'\x01' + b'\x00' * 7
     + bytes.fromhex('3c 12') * 3 + b'\x5a' * 4
+    + bytes.fromhex('a1 b1')
 )
 oracle = section_bytes(sys.argv[1])
 if oracle != expected:

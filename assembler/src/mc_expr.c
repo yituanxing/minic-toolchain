@@ -321,7 +321,7 @@ static bool parse_absolute_shift(MiniAsAbsoluteExpressionParser *parser,
         if (!minias_expr_take_binary(&parser->cursor,8U,&op)) {
             break;
         }
-        if (!parse_absolute_sum(parser, &shift) || shift < 0 || shift >= 63) {
+        if (!parse_absolute_sum(parser, &shift) || shift < 0 || shift >= 64) {
             return false;
         }
         if (op == MINIAS_EXPR_OP_SHL) {
@@ -334,14 +334,12 @@ static bool parse_absolute_shift(MiniAsAbsoluteExpressionParser *parser,
             uint64_t bits=(uint64_t)result << (unsigned int)shift;
             result=signed_from_bits(bits);
         } else {
-            /* Avoid implementation-dependent negative signed right shift.
-             * GNU's >> is arithmetic, explicitly preserving sign bits. */
-            unsigned count=(unsigned)shift;
-            if(result<0 && count!=0U) {
-                uint64_t bits=(uint64_t)result;
-                bits=(bits>>count)|(UINT64_MAX<<(64U-count));
-                result=signed_from_bits(bits);
-            } else result>>=count;
+            /* GNU GAS absolute expressions shift the 64-bit bit pattern
+             * logically, even after unary minus or complement. This matters
+             * in Linux's mov_q macro, which tests (~mask >> 47) in .if.
+             * Signed C right shift would sign-extend and choose the wrong
+             * machine-instruction sequence. */
+            result=signed_from_bits((uint64_t)result>>(unsigned)shift);
         }
     }
     *value = result;
@@ -1593,11 +1591,12 @@ static bool emit_symbol_minus_dot(MiniAs *as,
         anchor->section = stmt->section;
         anchor->value = relocation_offset;
         anchor->bind = MINIAS_STB_LOCAL;
-        /* A dot-location operand generated only to hold the subtraction's
-         * linker relocation is not a source-visible label. Preserve its
-         * synthetic-local visibility explicitly in the Common SymbolID;
-         * ELF serialization must not guess that fact from its spelling. */
-        anchor->visibility = MINIAS_STV_HIDDEN;
+        /* GNU GAS emits the local relocation anchor with default ELF
+         * visibility (not STV_HIDDEN), even though it is a private label.
+         * Visibility is independent of binding and source-level naming:
+         * keep this explicit in the semantic SymbolID so the ELF writer
+         * never infers it from the generated spelling. */
+        anchor->visibility = MINIAS_STV_DEFAULT;
 
         return minias_section_append_zero(as, stmt->section, width) &&
                minias_add_fixup_symbol_id(as,

@@ -67,9 +67,10 @@ if ! cmp "$work/mini.bin" "$work/gnu.bin"; then
   exit 1
 fi
 
-# RISC-V preserves ULEB SET/SUB pairs for link-time relaxation; LoongArch
-# does so only if source anchors straddle a linker-relaxable fragment. Check
-# complete recorded offsets/kinds/section-symbol addends, not just raw bytes.
+# RISC-V preserves ULEB SET/SUB pairs for link-time relaxation. LoongArch
+# GNU assembler releases differ in ADD/SUB eligibility; the selected Target
+# profile must match the actual GNU reference. Check complete recorded
+# offsets/kinds/section-symbol addends, not just raw bytes.
 if [[ "$ARCH" == riscv || "$ARCH" == loongarch64 ]]; then
   readelf -rW "$work/mini.o" >"$work/mini.rela"
   readelf -rW "$work/gnu.o" >"$work/gnu.rela"
@@ -77,7 +78,17 @@ if [[ "$ARCH" == riscv || "$ARCH" == loongarch64 ]]; then
      "$work/mini.rela" >"$work/mini.uleb-rela"
   awk '/R_(RISCV_(SET|SUB)_ULEB128|LARCH_(ADD|SUB)_ULEB128)/ { print $1, $3, $5, $6, $7 }' \
      "$work/gnu.rela" >"$work/gnu.uleb-rela"
-  cmp "$work/mini.uleb-rela" "$work/gnu.uleb-rela"
+  if ! cmp -s "$work/mini.uleb-rela" "$work/gnu.uleb-rela"; then
+    echo "MiniAS ULEB relocation tuples ($ARCH):" >&2
+    sed -n '1,160p' "$work/mini.uleb-rela" >&2
+    echo "GNU ULEB relocation tuples ($ARCH):" >&2
+    sed -n '1,160p' "$work/gnu.uleb-rela" >&2
+    echo "MiniAS full relocations:" >&2
+    readelf -rW "$work/mini.o" >&2
+    echo "GNU full relocations:" >&2
+    readelf -rW "$work/gnu.o" >&2
+    exit 1
+  fi
 fi
 
 cat >"$work/constants.s" <<'SRC'

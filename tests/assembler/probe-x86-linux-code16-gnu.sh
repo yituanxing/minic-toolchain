@@ -469,6 +469,46 @@ reboot16:
     movl %edx, %cr0
 ASM
 
+# Exactly the eleven instruction/operand families reported by the first
+# real Linux 6.6.143 bzImage GCC -> MiniAS Kbuild pass. Keep one GNU oracle
+# for all blockers, including the deferred symbol differences in compressed
+# head_64.S and efi_mixed.S. None is a fake ELF-only acceptance criterion.
+cat >"$work/code16_linux_gcc_boot_blockers.s" <<'ASM'
+    .text
+    .code16gcc
+    .globl gcc_boot_blockers
+gcc_boot_blockers:
+    fninit
+    cltd
+    notl %eax
+    orw $1, %ax
+    shll $2, %eax
+    addb $1, %al
+    repe; movsb
+    incb %al
+    lcallw *boot_params+520
+    ret
+    .data
+boot_params:
+    .space 528
+ASM
+
+cat >"$work/code32_linux_gcc_symbol_difference.s" <<'ASM'
+    .text
+    .code32
+    .globl startup_32
+startup_32:
+    leal ((gdt) - startup_32)(%ebp), %eax
+    .zero 176
+gdt:
+    nop
+1:
+    leal (efi32_boot_args - 1b)(%ecx), %ebx
+    .zero 137
+efi32_boot_args:
+    nop
+ASM
+
 cat >"$work/mixed_modes.s" <<'ASM'
     .text
     .code16
@@ -715,6 +755,8 @@ run_positive code16_linux_realmode_gcc
 run_positive code16_typed_width_index
 run_positive code32_linux_fences
 run_positive code32_reboot
+run_positive code16_linux_gcc_boot_blockers
+run_positive code32_linux_gcc_symbol_difference
 run_positive mixed_modes
 run_positive external_rel yes
 run_positive external_rel16 yes

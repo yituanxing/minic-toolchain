@@ -122,12 +122,58 @@ for producer in gnu minias; do
     .idmap.text="$capture/proc-$producer-idmap.bin" "$object"
   aarch64-linux-gnu-readelf -SW -Wr -Ws "$object" >"$capture/proc-$producer-elf.log"
 done
+# The observed Linux P0 culprit is the executable ID-map setup path.  Require
+# GNU-identical instruction/data bytes in the runtime sections and the exact
+# relocation tuple in .idmap.text.  DWARF-only differences remain diagnostics:
+# they cannot substitute for actual Linux QEMU startup acceptance.
+python3 - "$capture/proc-gnu.o" "$capture/proc-minias.o" <<'PY'
+from elftools.elf.elffile import ELFFile
+import sys
+
+def collect(path):
+    with open(path, "rb") as handle:
+        elf = ELFFile(handle)
+        sections = {}
+        for name in (".text", ".data", ".altinstructions", ".idmap.text"):
+            section = elf.get_section_by_name(name)
+            if section is None:
+                raise ValueError(f"missing production section {name} in {path}")
+            sections[name] = (section.data(), int(section["sh_addralign"]))
+        relsec = elf.get_section_by_name(".rela.idmap.text")
+        if relsec is None:
+            raise ValueError(f"missing ID-map relocations in {path}")
+        symtab = elf.get_section(relsec["sh_link"])
+        relocations = [
+            (int(rel["r_offset"]), int(rel["r_info_type"]),
+             symtab.get_symbol(rel["r_info_sym"]).name, int(rel["r_addend"]))
+            for rel in relsec.iter_relocations()
+        ]
+        return sections, relocations
+
+try:
+    reference = collect(sys.argv[1])
+    candidate = collect(sys.argv[2])
+    if reference != candidate:
+        for name in reference[0]:
+            if reference[0][name] != candidate[0][name]:
+                print(f"MINIAS_AARCH64_PROC_RUNTIME=FAIL section={name}", file=sys.stderr)
+        if reference[1] != candidate[1]:
+            print(f"MINIAS_AARCH64_PROC_RUNTIME=FAIL idmap_relocations={candidate[1]!r}"
+                  f" expected={reference[1]!r}", file=sys.stderr)
+        raise SystemExit(1)
+    if len(reference[0][".idmap.text"][0]) != 936 or len(reference[1]) != 8:
+        raise ValueError("unexpected Linux 6.6.143 proc.o ID-map baseline")
+except ValueError as error:
+    print(f"MINIAS_AARCH64_PROC_RUNTIME=FAIL {error}", file=sys.stderr)
+    raise SystemExit(1)
+print("MINIAS_AARCH64_PROC_RUNTIME=PASS alloc_sections=4 idmap_bytes=936 idmap_relocs=8 GNU_exact=1")
+PY
 if python3 tests/assembler/elf_semantic_compare.py \
   "$capture/proc-gnu.o" "$capture/proc-minias.o" \
   --json-out "$capture/proc-semantic.json" --strict \
   >"$capture/proc-semantic.log" 2>&1; then
   echo 'MINIAS_AARCH64_PROC_SEMANTIC=EXACT GNU_vs_MiniAS=1'
 else
-  echo 'MINIAS_AARCH64_PROC_SEMANTIC=DIFF GNU_vs_MiniAS=1'
+  echo 'MINIAS_AARCH64_PROC_SEMANTIC=DIFF GNU_vs_MiniAS=1 diagnostics_only=1'
 fi
 echo 'MINIAS_AARCH64_PROC_BUILD=PASS GCC_source_identical=1 MiniAS_production_only=1'

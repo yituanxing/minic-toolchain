@@ -241,22 +241,32 @@ static bool a64_movw_relocation(const char *text,MiniAsSymbolExpr *expr,
             /* GNU accepts the full unsigned 64-bit range in :abs_g3:.
              * The signed-only evaluator rejected 0x8000... and Linux
              * MOVW macro constants despite their valid 16-bit HW lanes. */
+            /* GNU MOVW lane selection is based on the 64-bit bit pattern,
+             * including expressions such as (~0 >> 6).  Evaluating the
+             * signed grammar first changes that logical shift into an
+             * arithmetic shift and silently turns a Linux TCR literal into
+             * -1.  Reserve signed evaluation for checked signed MOVW groups;
+             * unchecked lanes and G3 use the unsigned wrapping grammar. */
             bool signed_constant=minias_eval_i64_expression(value,&immediate);
-            uint64_t value_bits=(uint64_t)immediate;
+            uint64_t value_bits=0U;
+            bool unsigned_constant=minias_eval_u64_expression(value,&value_bits);
             unsigned width=(forms[i].hw+1U)*16U;
             bool checked_signed=forms[i].name[strlen(forms[i].name)-1U]=='s';
             bool unchecked=strstr(forms[i].name,"_nc")!=NULL;
-            if(!signed_constant &&
-               !minias_eval_u64_expression(value,&value_bits))return false;
+            if(!unsigned_constant && !signed_constant)return false;
             if(checked_signed) {
                 /* A signed relocation needs a true signed value. Avoid
                  * signed INT64_MIN negation when HW=3 (full 64 bits). */
                 if(!signed_constant)return false;
+                value_bits=(uint64_t)immediate;
                 if(width<64U) {
                     int64_t bound=INT64_C(1)<<(width-1U);
                     if(immediate< -bound || immediate>=bound)return false;
                 }
-            }else if(!unchecked && width<64U &&
+            }else if(!unsigned_constant) {
+                value_bits=(uint64_t)immediate;
+            }
+            if(!checked_signed && !unchecked && width<64U &&
                      value_bits>=(UINT64_C(1)<<width))return false;
             /* Keep GNU MOVN signed negatives distinct from the upper
              * unsigned half: both have the same 64-bit storage bits. */
