@@ -13,7 +13,8 @@
 
 /* Per-ISA Core block emission, not a new IR or universal LP64 ABI. */
 bool minic_loongarch64_emit_record_copy(FILE *, const MinicC0Program *,
-    const MinicTargetInfo *, const MinicCoreFunction *, const MinicCoreInstruction *, bool dynamic_frame);
+    const MinicTargetInfo *, const MinicCoreFunction *, const MinicCoreInstruction *,
+    const MinicLP64FramePlan *, bool dynamic_frame);
 bool minic_loongarch64_emit_parameter_object(FILE *, const MinicCoreFunction *,
     const MinicCoreInstruction *, const MinicLP64ArgumentPlan *,
     const MinicLP64FramePlan *, size_t frame, bool dynamic_frame,

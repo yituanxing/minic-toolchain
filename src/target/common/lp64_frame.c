@@ -2,6 +2,7 @@
 #include "target/common/core_object_storage.h"
 #include "target/common/core_frame_layout.h"
 #include "target/common/core_value_slots.h"
+#include "target/common/core_spill_layout.h"
 #include <stdint.h>
 #include <stdlib.h>
 
@@ -13,12 +14,13 @@ bool minic_lp64_frame_plan_objects_with_storage(
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreObjectStoragePlan *shared,
     MinicLP64FramePlan *plan) {
-    size_t pos, i;
+    size_t pos, i, scalar_bytes = 0U;
     if (program == NULL || target == NULL || fn == NULL || plan == NULL ||
         !minic_lp64_baseline_values_fit_frame(fn->value_count) ||
         fn->object_count > 8192U ||
         (fn->object_count != 0U && fn->objects == NULL) ||
-        plan->object_offsets != NULL || plan->wide_offsets != NULL)
+        plan->object_offsets != NULL || plan->value_offsets != NULL ||
+        plan->wide_offsets != NULL)
         return false;
     /* Shared one-time Core storage plan also serves x86 and RV64.
      * The LP64 emitters keep their exact 8-byte slots and 1 MiB frame cap. */
@@ -33,7 +35,23 @@ bool minic_lp64_frame_plan_objects_with_storage(
     }
     plan->object_count = fn->object_count;
     plan->value_count = fn->value_count;
-    pos = fn->value_count * 8U;
+    if (fn->value_count != 0U) {
+        plan->value_offsets = (size_t *)malloc(fn->value_count *
+                                               sizeof(*plan->value_offsets));
+        if (plan->value_offsets == NULL) return false;
+        for (i = 0U; i < fn->value_count; ++i)
+            plan->value_offsets[i] = SIZE_MAX;
+    }
+    if (!minic_core_function_reused_spill_layout(
+            program, fn, target->data_layout, 8U, 0U,
+            plan->value_offsets, &scalar_bytes, NULL))
+        return false;
+    /* The source Core contract defines a result for each value ID; no
+     * backend may emit an id*8 fallback for an unmapped SSA value. */
+    for (i = 0U; i < fn->value_count; ++i)
+        if (plan->value_offsets[i] == SIZE_MAX)
+            return false;
+    pos = scalar_bytes;
     plan->max_object_alignment = 1U;
     for (i = 0U; i < plan->object_storage.count; ++i) {
         const MinicCoreObjectStorage *storage = &plan->object_storage.objects[i];
@@ -76,6 +94,17 @@ bool minic_lp64_frame_plan_object(
     return true;
 }
 
+bool minic_lp64_frame_plan_value_slot(
+    const MinicLP64FramePlan *plan, MinicCoreValueId value_id, size_t *offset) {
+    if (plan == NULL || offset == NULL || value_id >= plan->value_count ||
+        plan->value_offsets == NULL ||
+        plan->value_offsets[value_id] == SIZE_MAX ||
+        plan->value_offsets[value_id] > MINIC_LARGE_FRAME_MAX)
+        return false;
+    *offset = plan->value_offsets[value_id];
+    return true;
+}
+
 bool minic_lp64_frame_plan_wide_slot(
     const MinicLP64FramePlan *plan, MinicCoreValueId value_id, size_t *offset) {
     if (plan == NULL || offset == NULL || value_id >= plan->value_count ||
@@ -88,6 +117,7 @@ bool minic_lp64_frame_plan_wide_slot(
 void minic_lp64_frame_plan_destroy(MinicLP64FramePlan *plan) {
     if (plan == NULL) return;
     free(plan->object_offsets);
+    free(plan->value_offsets);
     free(plan->wide_offsets);
     minic_core_object_storage_plan_release(
         &plan->object_storage, plan->borrows_object_storage);

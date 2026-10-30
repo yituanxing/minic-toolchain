@@ -55,14 +55,15 @@ bool minic_loongarch64_emit_lp64_record_chunk_parameter(FILE *out, size_t offset
 
 bool minic_loongarch64_emit_record_copy(FILE *out, const MinicC0Program *program,
     const MinicTargetInfo *target, const MinicCoreFunction *fn,
-    const MinicCoreInstruction *ins, bool dynamic_frame) {
+    const MinicCoreInstruction *ins, const MinicLP64FramePlan *frame_plan,
+    bool dynamic_frame) {
 const MinicCoreValueId dst = ins->value.record_copy.destination_address;
             const MinicCoreValueId src = ins->value.record_copy.source_address;
             size_t bytes;
             if (!minic_multi_direct_record_copy_extent(program, target, fn, ins, &bytes))
                 return false;
-            if (!emit_sp_mem(out, "ld.d", "$t1", (size_t)dst * 8U) ||
-                !emit_sp_mem(out, "ld.d", "$t2", (size_t)src * 8U))
+            if (!emit_sp_mem(out, "ld.d", "$t1", minic_lp64_frame_value_offset(frame_plan, dst)) ||
+                !emit_sp_mem(out, "ld.d", "$t2", minic_lp64_frame_value_offset(frame_plan, src)))
                 return false;
             if (bytes > 64U) {
                 if (fprintf(out, "  li.d $t3, %zu\n", bytes) < 0 ||
@@ -90,13 +91,14 @@ const MinicCoreValueId dst = ins->value.record_copy.destination_address;
 static bool minic_loongarch64_emit_record_load(FILE *out,
     const MinicDirectLP64BlockContext *ctx,
     const MinicCoreInstruction *ins) {
+    const MinicLP64FramePlan *frame_plan = ctx->frame_plan;
     MinicCoreValueId source;
     size_t dest, bytes, byte;
     if (!minic_multi_direct_record_load_extent(
             ctx->program, ctx->target, ctx->fn, ins, ctx->frame_plan,
             &source, &dest, &bytes) ||
         !minic_loongarch64_emit_frame_mem(out, "ld.d", "$t2",
-            (size_t)source * 8U, ctx->dynamic_frame) ||
+            minic_lp64_frame_value_offset(frame_plan, source), ctx->dynamic_frame) ||
         fprintf(out, "  li.d $t1, %zu\n  add.d $t1, %s, $t1\n",
             dest, ctx->dynamic_frame ? "$s0" : "$sp") < 0)
         return false;
@@ -295,10 +297,10 @@ bool minic_loongarch64_emit_terminator(FILE *out,
                        ? emit_sp_mem(out,
                                      minic_type_is_float(fn->return_type)
                                          ? "fld.s" : "fld.d", "$fa0",
-                                     (size_t)block->terminator.return_value * 8U)
+                                     minic_lp64_frame_value_offset(frame_plan, block->terminator.return_value))
                        : emit_sp_mem(out, minic_lp64_register64_type(program, target, fn->return_type)
                                           ? "ld.d" : "ld.w", "$a0",
-                                     (size_t)block->terminator.return_value * 8U))) ||
+                                     minic_lp64_frame_value_offset(frame_plan, block->terminator.return_value)))) ||
                 (has_direct_calls && !emit_sp_mem(out, "ld.d", "$ra", save_offset)) ||
                 (frame_alignment > 16U &&
                  (saved_entry_sp_offset == SIZE_MAX ||
@@ -317,7 +319,7 @@ bool minic_loongarch64_emit_terminator(FILE *out,
             break;
         case MINIC_CORE_TERMINATOR_INDIRECT_BRANCH:
             if (!emit_sp_mem(out, "ld.d", "$t0",
-                             (size_t)block->terminator.indirect_target * 8U) ||
+                             minic_lp64_frame_value_offset(frame_plan, block->terminator.indirect_target)) ||
                 fputs("  jirl $zero, $t0, 0\n", out) == EOF)
                 return false;
             break;
@@ -336,7 +338,7 @@ bool minic_loongarch64_emit_terminator(FILE *out,
             /* The short LoongArch conditional jump must remain nearby. */
             if (fn->block_count > 256U) {
                 if (!emit_sp_mem(out, wide ? "ld.d" : "ld.w", "$t0",
-                                 (size_t)cond * 8U) ||
+                                 minic_lp64_frame_value_offset(frame_plan, cond)) ||
                     fprintf(out,
                             "  beqz $t0, .Lmini_loong_f%zu_false_%zu\n"
                             "  b .Lmini_loong_f%zu_b%u\n"
@@ -350,7 +352,7 @@ bool minic_loongarch64_emit_terminator(FILE *out,
                 break;
             }
             if (!emit_sp_mem(out, wide ? "ld.d" : "ld.w", "$t0",
-                             (size_t)cond * 8U) ||
+                             minic_lp64_frame_value_offset(frame_plan, cond)) ||
                 fprintf(out,
                         "  bnez $t0, .Lmini_loong_f%zu_b%u\n"
                         "  b .Lmini_loong_f%zu_b%u\n",
@@ -396,7 +398,8 @@ static bool loongarch64_machine_emit_family(
         return minic_loongarch64_emit_record_load(out, ctx, ins);
     case MINIC_DIRECT_MACHINE_RECORD_COPY:
         return minic_loongarch64_emit_record_copy(
-            out, program, target, fn, ins, ctx->dynamic_frame);
+            out, program, target, fn, ins, ctx->frame_plan,
+            ctx->dynamic_frame);
     case MINIC_DIRECT_MACHINE_PARAMETER_OBJECT:
         return minic_loongarch64_emit_parameter_object(
             out, fn, ins, ctx->incoming_plan, ctx->frame_plan,

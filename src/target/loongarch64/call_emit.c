@@ -180,7 +180,7 @@ bool minic_loongarch64_emit_abi_instruction(
                     continue;
                 }
                 const MinicType type = fn->values[arg->value.value_id].type;
-                const size_t slot = (size_t)arg->value.value_id * 8U +
+                const size_t slot = minic_lp64_frame_value_offset(frame_plan, arg->value.value_id) +
                     (dynamic_frame ? 0U : stack_bytes);
                 if (minic_type_is_long_double(type) ||
                     minic_type_is_int128_integer(type)) {
@@ -248,7 +248,7 @@ bool minic_loongarch64_emit_abi_instruction(
             }
             if (indirect) {
                 if (!emit_sp_mem(out, "ld.d", "$t2",
-                                 (size_t)ins->value.indirect_call.callee * 8U +
+                                 minic_lp64_frame_value_offset(frame_plan, ins->value.indirect_call.callee) +
                                  (dynamic_frame ? 0U : stack_bytes)) ||
                     fputs("  jirl $ra, $t2, 0\n", out) == EOF)
                     return false;

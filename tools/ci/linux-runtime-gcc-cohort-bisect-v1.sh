@@ -2757,6 +2757,24 @@ PY_LARGEST_TUS
             --samples "$d/qemu-registers.jsonl" --vmlinux "$out/vmlinux" \
             | tee "$d/qmp-symbols.log"
           cat "$d/qmp-symbols.log" >>"$d/runtime.log"
+          # The sampler observes physical PCs before satp is enabled, while
+          # vmlinux/nm names linked virtual addresses. Save one bounded,
+          # immutable same-trial GNU symbol map and disassembly around sepc
+          # and ra. A failed mapping is diagnostic-only, never P0/P1 evidence.
+          if python3 "$repo/tools/ci/linux-runtime-qmp-physical-symbols-v1.py" \
+               --self-test; then
+            python3 "$repo/tools/ci/linux-runtime-qmp-physical-symbols-v1.py" \
+              --samples "$d/qemu-registers.jsonl" \
+              --vmlinux "$out/vmlinux" --image "$d/Image" \
+              --output-dir "$d" \
+              >"$d/qmp-physical-symbols.log" 2>&1 || true
+            cat "$d/qmp-physical-symbols.log" >>"$d/runtime.log"
+            grep -E 'COHORT_QMP_(LOAD_BIAS|PHYSICAL_SYMBOL|SIGN_EXTENDED_ADDR_CANDIDATE|DISASM|NM_ARCHIVE)' \
+              "$d/qmp-physical-symbols.log" || true
+          else
+            echo 'COHORT_QMP_PHYSICAL_SYMBOLS=UNAVAILABLE reason=selftest_failed' \
+              | tee "$d/qmp-physical-symbols.log" | tee -a "$d/runtime.log"
+          fi
         fi
       else
         mapped_rc=99

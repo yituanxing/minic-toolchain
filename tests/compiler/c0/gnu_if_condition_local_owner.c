@@ -59,3 +59,23 @@ int diag_get_small(int n) {
                    (U16_MAX - sizeof(struct bpf_local_storage_elem))));
     return n + 4;
 }
+
+/* A source IF may be lowered after its arms. A later block-local cannot
+ * inherit a known/escaped fact from that speculative traversal: it has not
+ * entered its declaration scope yet. The initializer, not the earlier
+ * condition's snapshot, establishes its value. Keep an unproven runtime
+ * condition plus a dead GNU diagnostic to cover both sides of this boundary. */
+int future_local_runtime_gate;
+
+int future_local_after_impure_guard(int n) {
+    int result = n;
+    if (future_local_runtime_gate)
+        result += 2;
+    {
+        int future_value = n + 9;
+        if (__builtin_expect(!!(0), 0))
+            BUILD_BUG_ON(1);
+        result += future_value;
+    }
+    return result;
+}

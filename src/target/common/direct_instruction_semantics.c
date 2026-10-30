@@ -273,7 +273,10 @@ static bool minic_multi_direct_result_slot_offset(
                  ins->kind == MINIC_CORE_INSTRUCTION_CALL ||
                  ins->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL))))
         return false;
-    *offset = (size_t)ins->result * 8U;
+    /* Slot placement is no longer encoded in the semantic shape. The
+     * common machine dispatch resolves this validated Core result through
+     * the shared LP64 FramePlan's last-use mapping. */
+    *offset = 0U;
     return true;
 }
 

@@ -84,9 +84,9 @@ bool minic_aarch64_emit_fp_instruction(
             if (!minic_multi_direct_floating_shape(
                     program, target, fn, ins, NULL, NULL) ||
                 !fp_slot(out, frame_view, false, MINIC_A64_REG_D, 9U,
-                    (size_t)lhs * 8U) ||
+                    minic_lp64_frame_value_offset(frame_plan, lhs)) ||
                 !fp_slot(out, frame_view, false, MINIC_A64_REG_D, 10U,
-                    (size_t)rhs * 8U) ||
+                    minic_lp64_frame_value_offset(frame_plan, rhs)) ||
                 fprintf(out, "  fcmp d9, d10\n  cset w9, %s\n", condition) < 0)
                 return false;
             *needs_gp_store = true;
@@ -107,9 +107,9 @@ bool minic_aarch64_emit_fp_instruction(
             if (!minic_multi_direct_floating_shape(
                     program, target, fn, ins, NULL, NULL) ||
                 !fp_slot(out, frame_view, false, MINIC_A64_REG_D, 9U,
-                    (size_t)lhs * 8U) ||
+                    minic_lp64_frame_value_offset(frame_plan, lhs)) ||
                 !fp_slot(out, frame_view, false, MINIC_A64_REG_D, 10U,
-                    (size_t)rhs * 8U) ||
+                    minic_lp64_frame_value_offset(frame_plan, rhs)) ||
                 fputs(op, out) == EOF ||
                 !fp_slot(out, frame_view, true, MINIC_A64_REG_D, 9U, offset))
                 return false;
@@ -121,9 +121,9 @@ bool minic_aarch64_emit_fp_instruction(
             if (!minic_multi_direct_floating_shape(
                     program, target, fn, ins, NULL, NULL) ||
                 !fp_slot(out, frame_view, false, MINIC_A64_REG_D, 9U,
-                    (size_t)lhs * 8U) ||
+                    minic_lp64_frame_value_offset(frame_plan, lhs)) ||
                 !fp_slot(out, frame_view, false, MINIC_A64_REG_D, 10U,
-                    (size_t)rhs * 8U) ||
+                    minic_lp64_frame_value_offset(frame_plan, rhs)) ||
                 fputs("  fdiv d9, d9, d10\n", out) == EOF ||
                 !fp_slot(out, frame_view, true, MINIC_A64_REG_D, 9U, offset))
                 return false;
@@ -135,7 +135,7 @@ bool minic_aarch64_emit_fp_instruction(
             if (!minic_multi_direct_floating_shape(
                     program, target, fn, ins, NULL, NULL) ||
                 !fp_slot(out, frame_view, false, MINIC_A64_REG_D, 9U,
-                    (size_t)operand * 8U) ||
+                    minic_lp64_frame_value_offset(frame_plan, operand)) ||
                 fputs("  fneg d9, d9\n", out) == EOF ||
                 !fp_slot(out, frame_view, true, MINIC_A64_REG_D, 9U, offset))
                 return false;
@@ -152,7 +152,7 @@ bool minic_aarch64_emit_fp_instruction(
             if (!minic_multi_direct_floating_shape(
                     program, target, fn, ins, NULL, NULL) ||
                 !fp_slot(out, frame_view, false, MINIC_A64_REG_D, 9U,
-                    (size_t)source * 8U) ||
+                    minic_lp64_frame_value_offset(frame_plan, source)) ||
                 fputs("  fcvt s9, d9\n", out) == EOF ||
                 !fp_slot(out, frame_view, true, MINIC_A64_REG_S, 9U, offset))
                 return false;
@@ -174,9 +174,9 @@ bool minic_aarch64_emit_fp_instruction(
             if (!minic_multi_direct_floating_shape(
                     program, target, fn, ins, NULL, NULL) ||
                 !fp_slot(out, frame_view, false, MINIC_A64_REG_S, 9U,
-                    (size_t)lhs * 8U) ||
+                    minic_lp64_frame_value_offset(frame_plan, lhs)) ||
                 !fp_slot(out, frame_view, false, MINIC_A64_REG_S, 10U,
-                    (size_t)rhs * 8U) ||
+                    minic_lp64_frame_value_offset(frame_plan, rhs)) ||
                 fputs(op, out) == EOF ||
                 !fp_slot(out, frame_view, true, MINIC_A64_REG_S, 9U, offset))
                 return false;
@@ -187,7 +187,7 @@ bool minic_aarch64_emit_fp_instruction(
             if (!minic_multi_direct_floating_shape(
                     program, target, fn, ins, NULL, NULL) ||
                 !fp_slot(out, frame_view, false, MINIC_A64_REG_S, 9U,
-                    (size_t)src * 8U) ||
+                    minic_lp64_frame_value_offset(frame_plan, src)) ||
                 fputs("  fcvt d9, s9\n", out) == EOF ||
                 !fp_slot(out, frame_view, true, MINIC_A64_REG_D, 9U, offset))
                 return false;
@@ -204,7 +204,7 @@ bool minic_aarch64_emit_fp_instruction(
                     program, target, fn, ins, &width, &sign) ||
                 !fp_slot(out, frame_view, false,
                     width == 8U ? MINIC_A64_REG_X : MINIC_A64_REG_W,
-                    9U, (size_t)src * 8U) ||
+                    9U, minic_lp64_frame_value_offset(frame_plan, src)) ||
                 (width < 4U && !minic_aarch64_emit_integer_normalize(out, width, sign)) ||
                 fputs(width == 8U
                           ? (sign ? "  scvtf d9, x9\n"
@@ -235,7 +235,7 @@ bool minic_aarch64_emit_fp_instruction(
                 : sign ? "  fcvtzs w9, d9\n"
                        : "  fcvtzu w9, d9\n";
             if (!fp_slot(out, frame_view, false, MINIC_A64_REG_D,
-                    9U, (size_t)src * 8U) ||
+                    9U, minic_lp64_frame_value_offset(frame_plan, src)) ||
                 fputs(conversion, out) == EOF ||
                 (width < 4U && !minic_aarch64_emit_integer_normalize(out, width, sign)))
                 return false;

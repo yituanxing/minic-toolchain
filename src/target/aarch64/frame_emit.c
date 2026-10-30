@@ -1,4 +1,5 @@
 #include "target/aarch64/frame_emit.h"
+#include "target/common/lp64_frame.h"
 #include <inttypes.h>
 #include <string.h>
 
@@ -20,6 +21,9 @@ static bool a64_resolve(const MinicA64FrameView *view,
     out->saved_entry_frame_sp = false;
     switch (ref.region) {
     case MINIC_A64_FRAME_OWNED:
+        /* Reject an unmapped Core SSA sentinel before any address
+         * materialization. Owned offsets must fit the shared LP64 plan. */
+        if (ref.byte_offset > MINIC_LARGE_FRAME_MAX) return false;
         out->base = view->dynamic_frame ? "x19" : "sp";
         if (!view->dynamic_frame &&
             !a64_add(ref.byte_offset, view->outgoing_sp_bytes,

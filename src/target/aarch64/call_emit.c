@@ -160,7 +160,7 @@ bool minic_aarch64_emit_abi_instruction(
                     continue;
                 }
                 const MinicType type = fn->values[arg->value.value_id].type;
-                const size_t slot = (size_t)arg->value.value_id * 8U;
+                const size_t slot = minic_lp64_frame_value_offset(frame_plan, arg->value.value_id);
                 if (minic_type_is_int128_integer(type)) {
                     size_t src, limb;
                     if (location->kind != MINIC_LP64_ARGUMENT_WIDE ||
@@ -266,7 +266,7 @@ bool minic_aarch64_emit_abi_instruction(
             if (indirect) {
                 if (!minic_a64_emit_owned_slot(out, &call_view,
                         false, MINIC_A64_REG_X, 16U,
-                        (size_t)ins->value.indirect_call.callee * 8U) ||
+                        minic_lp64_frame_value_offset(frame_plan, ins->value.indirect_call.callee)) ||
                     fputs("  blr x16\n", out) == EOF)
                     return false;
             } else {

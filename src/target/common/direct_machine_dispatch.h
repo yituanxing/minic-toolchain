@@ -98,6 +98,17 @@ static inline bool minic_multi_direct_machine_dispatch(
                     "machine_emit", block_id, (size_t)ins_id, __LINE__);
                 goto done;
             }
+            /* Semantic classification validates the Core result identity;
+             * physical SSA slots belong to the once-built LP64 FramePlan.
+             * No machine family may silently return to value_id * 8. */
+            if (ins->result != MINIC_CORE_VALUE_INVALID &&
+                !minic_lp64_frame_plan_value_slot(
+                    ctx->frame_plan, ins->result, &shape.result_offset)) {
+                success = minic_multi_direct_machine_reject(
+                    fn, dispatch->architecture, ctx->name,
+                    "ssa_frame_slot", block_id, (size_t)ins_id, __LINE__);
+                goto done;
+            }
             /* A compiler-only barrier emits no native opcode and must not
              * request a value slot or target register writeback. */
             if (shape.family == MINIC_DIRECT_MACHINE_COMPILER_BARRIER)

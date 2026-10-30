@@ -187,6 +187,13 @@ bool minic_target_info_elf_object_is_tu_local(const MinicC0Program *program,
                                               const char *symbol);
 bool minic_target_info_elf_function_is_tu_local(const MinicC0Program *program,
                                                 const char *symbol);
+/* ELF local-binding decision for PIC address materialization. Unlike
+ * *_is_tu_local, a hidden/internal external declaration is nonpreemptible
+ * even when its definition is supplied by another object in the same DSO. */
+bool minic_target_info_elf_object_is_nonpreemptible(const MinicC0Program *program,
+                                                    const char *symbol);
+bool minic_target_info_elf_function_is_nonpreemptible(const MinicC0Program *program,
+                                                      const char *symbol);
 bool minic_target_info_function_pointer_calling_convention_declaration_supported(
     const MinicTargetInfo *target, MinicFunctionCallingConvention convention);
 bool minic_target_info_function_calling_convention_scalar_call_supported(

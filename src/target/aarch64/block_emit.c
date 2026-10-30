@@ -49,6 +49,7 @@ bool minic_aarch64_emit_lp64_record_chunk_parameter(FILE *out,
 bool minic_aarch64_emit_record_copy(FILE *out,
     const MinicDirectLP64BlockContext *ctx,
     const MinicCoreInstruction *ins) {
+            const MinicLP64FramePlan *frame_plan = ctx->frame_plan;
             const MinicCoreValueId dst = ins->value.record_copy.destination_address;
             const MinicCoreValueId src = ins->value.record_copy.source_address;
             const MinicA64FrameView view = {
@@ -60,9 +61,9 @@ bool minic_aarch64_emit_record_copy(FILE *out,
                     ctx->program, ctx->target, ctx->fn, ins, &bytes))
                 return false;
             if (!minic_a64_emit_owned_slot(out, &view, false,
-                    MINIC_A64_REG_X, 10U, (size_t)dst * 8U) ||
+                    MINIC_A64_REG_X, 10U, minic_lp64_frame_value_offset(frame_plan, dst)) ||
                 !minic_a64_emit_owned_slot(out, &view, false,
-                    MINIC_A64_REG_X, 11U, (size_t)src * 8U))
+                    MINIC_A64_REG_X, 11U, minic_lp64_frame_value_offset(frame_plan, src)))
                 return false;
             if (bytes > 64U) {
                 if (fprintf(out, "  movz x12, #%zu\n", bytes & 65535U) < 0 ||
@@ -92,6 +93,7 @@ bool minic_aarch64_emit_record_copy(FILE *out,
 static bool minic_aarch64_emit_record_load(FILE *out,
     const MinicDirectLP64BlockContext *ctx,
     const MinicCoreInstruction *ins) {
+    const MinicLP64FramePlan *frame_plan = ctx->frame_plan;
     MinicCoreValueId source;
     size_t dest, bytes, byte;
     const MinicA64FrameView view = {
@@ -101,7 +103,7 @@ static bool minic_aarch64_emit_record_load(FILE *out,
             ctx->program, ctx->target, ctx->fn, ins, ctx->frame_plan,
             &source, &dest, &bytes) ||
         !minic_a64_emit_owned_slot(out, &view, false,
-            MINIC_A64_REG_X, 10U, (size_t)source * 8U) ||
+            MINIC_A64_REG_X, 10U, minic_lp64_frame_value_offset(frame_plan, source)) ||
         !minic_a64_emit_owned_address(out, &view, dest, 11U))
         return false;
     if (bytes > 64U) {
@@ -319,7 +321,7 @@ bool minic_aarch64_emit_terminator(FILE *out,
                     : minic_lp64_register64_type(program, target,
                         fn->return_type) ? MINIC_A64_REG_X : MINIC_A64_REG_W;
                 if (!minic_a64_emit_owned_slot(out, &view, false, kind, 0U,
-                        (size_t)block->terminator.return_value * 8U))
+                        minic_lp64_frame_value_offset(frame_plan, block->terminator.return_value)))
                     return false;
             }
             if (saved_entry_sp_offset != SIZE_MAX) {
@@ -358,7 +360,7 @@ bool minic_aarch64_emit_terminator(FILE *out,
         case MINIC_CORE_TERMINATOR_INDIRECT_BRANCH:
             if (!minic_a64_emit_owned_slot(out, &view, false,
                     MINIC_A64_REG_X, 9U,
-                    (size_t)block->terminator.indirect_target * 8U) ||
+                    minic_lp64_frame_value_offset(frame_plan, block->terminator.indirect_target)) ||
                 fputs("  br x9\n", out) == EOF)
                 return false;
             break;
@@ -378,7 +380,7 @@ bool minic_aarch64_emit_terminator(FILE *out,
             if (fn->block_count > 256U) {
                 if (!minic_a64_emit_owned_slot(out, &view, false,
                         wide ? MINIC_A64_REG_X : MINIC_A64_REG_W,
-                        9U, (size_t)cond * 8U) ||
+                        9U, minic_lp64_frame_value_offset(frame_plan, cond)) ||
                     fprintf(out, wide
                             ? "  cbz x9, .Lmini_arm_f%zu_false_%zu\n"
                             : "  cbz w9, .Lmini_arm_f%zu_false_%zu\n",
@@ -394,7 +396,7 @@ bool minic_aarch64_emit_terminator(FILE *out,
             }
             if (!minic_a64_emit_owned_slot(out, &view, false,
                     wide ? MINIC_A64_REG_X : MINIC_A64_REG_W,
-                    9U, (size_t)cond * 8U) ||
+                    9U, minic_lp64_frame_value_offset(frame_plan, cond)) ||
                 fprintf(out, wide
                             ? "  cbnz x9, .Lmini_arm_f%zu_b%u\n"
                               "  b .Lmini_arm_f%zu_b%u\n"

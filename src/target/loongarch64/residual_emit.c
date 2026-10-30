@@ -143,7 +143,7 @@ bool minic_loongarch64_emit_residual_instruction(
                     fn, "loongarch64", name, "fixed_register_write",
                     reject_block, reject_ins, __LINE__);
             physical = binding->register_name_length == 3U ? "$tp" : "$r21";
-            if (!emit_sp_mem(out, "ld.d", "$t0", (size_t)source * 8U) ||
+            if (!emit_sp_mem(out, "ld.d", "$t0", minic_lp64_frame_value_offset(frame_plan, source)) ||
                 fprintf(out, "  move %s, $t0\n", physical) < 0)
                 return minic_multi_direct_machine_reject(
                     fn, "loongarch64", name, "fixed_register_write",
@@ -267,7 +267,7 @@ bool minic_loongarch64_emit_residual_instruction(
             size_t bytes;
             if (!minic_multi_direct_field_address_shape(
                     fn, ins, &base, &bytes) ||
-                !emit_sp_mem(out, "ld.d", "$t0", (size_t)base * 8U))
+                !emit_sp_mem(out, "ld.d", "$t0", minic_lp64_frame_value_offset(frame_plan, base)))
                 return minic_multi_direct_machine_reject(fn, "loongarch64", name, reject_stage,
                                            reject_block, reject_ins, __LINE__);
             if (bytes != 0U) {
@@ -309,14 +309,14 @@ bool minic_loongarch64_emit_residual_instruction(
             if (!minic_multi_direct_pointer_offset_shape(
                     program, target, fn, ins, (size_t)-1, &iw, &signed_index) ||
                 /* Full-width stride literal; keep LoongArch64-only assembly. */
-                !emit_sp_mem(out, "ld.d", "$t0", (size_t)base * 8U) ||
+                !emit_sp_mem(out, "ld.d", "$t0", minic_lp64_frame_value_offset(frame_plan, base)) ||
                 !emit_sp_mem(out, iw == 1U
                                   ? (signed_index ? "ld.b" : "ld.bu")
                                   : iw == 2U
                                       ? (signed_index ? "ld.h" : "ld.hu")
                                       : iw == 8U ? "ld.d"
                                       : (signed_index ? "ld.w" : "ld.wu"),
-                             "$t1", (size_t)index * 8U))
+                             "$t1", minic_lp64_frame_value_offset(frame_plan, index)))
                 return minic_multi_direct_machine_reject(fn, "loongarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
             if (stride != 0U) {
@@ -347,7 +347,7 @@ bool minic_loongarch64_emit_residual_instruction(
                  * validator returns 0 for a full 64-bit transfer, newer
                  * callers may explicitly report 8; only _Bool reports 1. */
                 if ((src_width != 0U && src_width != 1U && src_width != 8U) ||
-                    !emit_sp_mem(out, "ld.d", "$t0", (size_t)source * 8U) ||
+                    !emit_sp_mem(out, "ld.d", "$t0", minic_lp64_frame_value_offset(frame_plan, source)) ||
                     (src_width == 1U &&
                      fputs("  sltu $t0, $zero, $t0\n", out) == EOF))
                     return minic_multi_direct_machine_reject(fn, "loongarch64", name, reject_stage,
@@ -356,7 +356,7 @@ bool minic_loongarch64_emit_residual_instruction(
             }
             if (!emit_sp_mem(out, (src_pointer || src_width == 8U)
                                  ? "ld.d" : "ld.w", "$t0",
-                             (size_t)source * 8U)) return minic_multi_direct_machine_reject(fn, "loongarch64", name, reject_stage,
+                             minic_lp64_frame_value_offset(frame_plan, source))) return minic_multi_direct_machine_reject(fn, "loongarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
             if (!src_pointer && src_width != 8U &&
                 (!minic_loongarch64_emit_integer_normalize(out, src_width, src_signed) ||
@@ -388,7 +388,7 @@ bool minic_loongarch64_emit_residual_instruction(
             const MinicCoreValueId count = ins->value.operand;
             if (!minic_multi_direct_dynamic_stack_alloc_shape(
                     fn, ins, dynamic_frame) ||
-                !emit_sp_mem(out, "ld.d", "$t0", (size_t)count * 8U) ||
+                !emit_sp_mem(out, "ld.d", "$t0", minic_lp64_frame_value_offset(frame_plan, count)) ||
                 fprintf(out,
                     "  addi.d $t1, $t0, 15\n"
                     "  sltu $t2, $t1, $t0\n"
@@ -425,7 +425,7 @@ bool minic_loongarch64_emit_residual_instruction(
                             reject_block, reject_ins, __LINE__);
                 } else if (!emit_sp_mem(out,
                                  cast.source_width == 8U ? "ld.d" : "ld.w",
-                                 "$t0", (size_t)src * 8U) ||
+                                 "$t0", minic_lp64_frame_value_offset(frame_plan, src)) ||
                            (cast.source_width < 8U &&
                             !minic_loongarch64_emit_integer_normalize(
                                 out, cast.source_width, cast.source_signed)) ||
@@ -464,7 +464,7 @@ bool minic_loongarch64_emit_residual_instruction(
             }
             if (!emit_sp_mem(out,
                     cast.source_width == 8U ? "ld.d" : "ld.w",
-                    "$t0", (size_t)src * 8U))
+                    "$t0", minic_lp64_frame_value_offset(frame_plan, src)))
                 return minic_multi_direct_machine_reject(
                     fn, "loongarch64", name, reject_stage,
                     reject_block, reject_ins, __LINE__);

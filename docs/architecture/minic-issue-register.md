@@ -66,8 +66,8 @@
 | [MC-064](#mc-064-inline-asm-仅符号引用的静态函数被错误裁剪) | P1 | OPEN | ASM-ONLY | Core Reachability | `"i"` ASM 引用静态函数被降为文本后丢失函数可达性边，汇编有引用无定义 |
 | [MC-066](#mc-066-aarch64-浮点指针字段被误判为浮点聚合) | P2 | OPEN | LOCAL-COMPILE-DIFF | AArch64 ABI | 32B 聚合的 `double*` 被当 FP 成员拒绝，换成 `int*` 即通过 |
 | [MC-067](#mc-067-带-gnu-属性的-record-前向声明被错判为定义) | P2 | OPEN | LOCAL-COMPILE-DIFF | Frontend | `struct __attribute__((aligned(16))) Forward;` GCC 合法，MiniC 五目标要求 `{` |
-| [MC-069](#mc-069-aarch64-linux-vdso-在-gnu-ld-拒绝动态重定位) | P1 | OPEN | CI-LOG | AArch64 Linux 链接 | 4108 项 MiniC `-S`/GNU AS 通过，vDSO GNU LD 报 `dynamic relocations are not supported`；尚缺 readelf GNU/MiniC A/B 定因 |
-| [MC-070](#mc-070-loongarch64-linux-heado-对-start_secondary-的-b26-越界) | P1 | OPEN | CI-LOG | LoongArch64 Linux 链接 | 2723 项 MiniC `-S`/GNU AS 通过；`head.o` 的 `.ref.text` 以 `R_LARCH_B26` 引用 `start_secondary`，链接位移约 -355MiB |
+| [MC-069](#mc-069-aarch64-linux-vdso-在-gnu-ld-拒绝动态重定位) | P1 | OPEN | GNU/MiniC-ELF-AB | AArch64 Linux vDSO ELF visibility | 4108 项 MiniC `-S`/GNU AS 通过；GNU 的 HIDDEN 未定义数据符号经 ADR_PREL，而 MiniC 错为 DEFAULT+GOT，GNU LD 拒绝动态重定位 |
+| [MC-070](#mc-070-loongarch64-linux-heado-对-start_secondary-的-b26-越界) | P1 | OPEN | GNU/MiniC-ELF-AB | LoongArch64 Linux 链接/体积 | 2723 项 MiniC `-S`/GNU AS 通过，主 GNU LD B26 越界；同输入 C executable ELF 代码约 16.89MB(GNU)→371.97MB(MiniC)，膨胀 22.03× |
 | [MC-072](#mc-072-static-inline-的-computed-goto-表指向不存在的-source-label) | P1 | OPEN | GCC-DIFF/ASM-ONLY | Compiler/Core/Target | 有效 GNU `static inline` 的静态 `&&label` 表引用 `.Luser_N`，整数特化克隆发射但原函数被裁剪；源标签别名没有任何定义 |
 
 ## 索引：尚待验证的风险
@@ -83,8 +83,10 @@
 | [MC-032](#mc-032-ast-verifier-内层容器检查顺序) | P3 | INVESTIGATING | SOURCE-TRACE | 非法内部 Program 可能在嵌套形状验证前被索引构建读取 |
 | [MC-047](#mc-047-core-事实求值与可消除副作用的证明边界) | P2 | INVESTIGATING | DESIGN-REVIEW | Core 的“值可知”事实在不同 CFG consumer 中需要明确纯度门槛 |
 | [MC-055](#mc-055-core-verifier-内部辅助数组形状先决条件) | P2 | INVESTIGATING | CORE-API-ASAN | Verifier 对人为损坏的 fixed binding 形状崩溃，对公开 API 可构造的缺 enum metadata IR 误接受；未证有效 C 错码 |
-| [MC-071](#mc-071-rv64-linux-完整-gnu-链接成功但-qemu-45-秒仅见-opensbi) | P1 | INVESTIGATING | CI-LOG | 2064 项 GNU LD 已通过、Image 232284160B；45s QEMU 仅有 OpenSBI 输出，P0 未定论，P1 未到达，等待 QMP 定位 |
+| [MC-071](#mc-071-rv64-linux-完整-gnu-链接成功但-qemu-45-秒仅见-opensbi) | P1 | INVESTIGATING | QMP-FAULT+IMAGE-BYTES | 2064 项 MiniC/GNU AS、GNU LD 通过，Image 150491136B；QMP 证实 S 态 load access fault（`lbu`，非法地址 `0xffffffff88620a4c`），P0/P1 未通过 |
 | [MC-073](#mc-073-core-block_address-目标缺少-reachable-root-闭包证明) | P2 | INVESTIGATING | SOURCE-TRACE/DESIGN-REVIEW | Core verifier 允许 `BLOCK_ADDRESS` 指向无 `source_label_id` 的合法块，但 Core reachable walker 不从地址引用加入目标；**现有 Frontend 不产生该形态，未复现生产故障** |
+| [MC-074](#mc-074-推测-if-条件继承未来局部变量事实导致-x86-linux-拒编) | P0 | FIXED-UNVERIFIED | LOCAL-COMPILE-DIFF/ELF-ORACLE | Core IF 的条件事实快照继承了声明在该条件之后的局部对象事实；原 Linux 同 `.i` 五版本红绿及 first8 GNU AS 证实两行通用生命周期修正 |
+| [MC-075](#mc-075-rv64-预mmu-从-got-取出未重定位的-chosen-链接虚址) | P0 | FIXED-UNVERIFIED | SAME-IMAGE/QMP/GOT-BYTES | RV64 2064/2064 与 GNU LD 已通过，Image 中 `/chosen` 的 GOT 表项仍是 `0xffffffff88620a4c`，QEMU satp=0 时 `strlen` 读它触发 load access fault；按 ELF 可抢占性分配 GOT/PCREL 的通用 Target 修复需完整重验 |
 
 已验证非问题：**[MC-026](#mc-026-source-form-id-的实际身份边界)**、**[MC-065](#mc-065-x86-r11-跨调用快照误报排除)**，状态 `CLOSED-NOT-A-BUG`，保留编号和消费者证据，避免重复误报。
 
@@ -591,24 +593,24 @@
 
 ### MC-069 AArch64 Linux vDSO 在 GNU LD 拒绝动态重定位
 
-- **状态：** `OPEN`，P1，`CI-LOG`。阻塞点已定位为 GNU LD，但**具体非法重定位的类型、来源及 MiniC 根因均未确认**；不得仅凭报错归咎于某条指令或某个 Target 分支。
-- **现有证据：** [CI #41002133626](https://github.com/yituanxing/minic-toolchain/actions/runs/41002133626) 中 AArch64 Linux **4108 项 `MiniC -S`/GNU AS PASS**，GNU vDSO 链接阶段报告 `dynamic relocations are not supported`；原版 GNU Linux 构建的 QEMU P0/P1 基线均 PASS。前一项只能证明编译和汇编，后一项证明对照环境能启动，**均不能证明 MiniC vDSO 链接或启动成功**。
-- **下一步差分：** 保留相同 Linux 源、`.config`、预处理输入、链接脚本和 GNU binutils 版本，逐个比较原版 GCC→GNU AS 与 MiniC→GNU AS 的 vDSO 输入 `.o`：`readelf -Wr/-Ws/-SW` 与 `objdump -dr` 的 relocation 类型/符号/section、PIC/visibility 与 GOT/PLT 及链接命令。先识别首个引入的动态重定位和生产者，再审查 Frontend/Core/Target 归属，不能仅靠关闭报错或混入 GCC 对象掩盖失配。
+- **状态：** `OPEN`，P1，`GNU/MiniC-ELF-AB`。首次非法动态重定位及符号可见性差异已经由原始 GNU `.o` 与 MiniC `.o` 的 `readelf` 同输入差分证实；前端/IR/Target 具体哪个所有权边界遗失 visibility 尚未修复。
+- **现有证据：** [CI #41006230438](https://github.com/yituanxing/minic-toolchain/actions/runs/41006230438) AArch64 Linux **4108/4108 项 `MiniC -S`/GNU AS PASS**，原版 GNU QEMU P0/P1 PASS，但候选 GNU Kbuild `LD arch/arm64/kernel/vdso/vdso.so.dbg` 报 `dynamic relocations are not supported`。对同一 `arch/arm64/kernel/vdso/vgettimeofday.o`：原 GNU `.symtab` 的 `_vdso_data`、`_timens_data` 为 `NOTYPE GLOBAL HIDDEN UND`，MiniC 却为 `NOTYPE GLOBAL DEFAULT UND`；GNU 的 `.rela.text` 使用 `R_AARCH64_ADR_PREL_LO21`（共 11 条针对这两个符号的直接 PC 相对引用），MiniC 则对每个符号使用 `R_AARCH64_ADR_GOT_PAGE` 加 `R_AARCH64_LD64_GOT_LO12_NC`，引入 vDSO 不允许的动态 GOT reloc。不可把 4108 汇编覆盖算作链接/启动通过。
+- **下一步差分：** 审计 GNU `__attribute__((visibility("hidden")))`、汇编 `.hidden`、声明与实体 visibility 从 Parser→AST/IR→AArch64 符号寻址/ELF 的完整传播；保持 DEFAULT 可抢占符号的 PIC/GOT 语义，HIDDEN 不可抢占符号采用有 GNU ABI 证明的直接 PC 相对寻址。原 Kbuild 命令、链接脚本和 GNU binutils 不变，不靠符号名/vDSO 特例或混入 GCC C 对象掩盖失配。
 - **验收条件：** 在确切修复 HEAD 使用全部 MiniC C-owner vDSO 输入完成 GNU LD，无新增非法动态重定位；GNU readelf A/B 及最终 ELF/dynsym/reloc 审计 PASS；内核完整链接后同环境 QEMU P0/P1 PASS，记录 exact-head CI、构件 SHA 和实际 MiniC/GNU 工具边界。
 
 ### MC-070 LoongArch64 Linux head.o 对 start_secondary 的 B26 越界
 
-- **状态：** `OPEN`，P1，`CI-LOG`。这是已观测的 GNU LD 相对位移链接阻塞，**具体由体积膨胀、布局顺序、branch lowering 或 linker script 哪个因素导致仍待证实**。
-- **现有证据：** LoongArch64 Linux **2723 项 `MiniC -S`/GNU AS PASS**，GNU LD 对 `head.o` 的 `.ref.text` 中 `R_LARCH_B26` → `start_secondary` 报约 **-355MiB** 的超范围分支重定位；原版 GNU Linux 的 QEMU P0/P1 均 PASS。该 2723 仅为汇编覆盖，不等于 GNU LD/运行时 PASS；精确 GNU/MiniC 大小和分支目标位置 A/B 尚在等待新候选验证。
-- **下一步差分：** 对相同 `.config`、相同对象集合和 GNU linker script，采集 GCC/MiniC 的 `head.o` relocation、`start_secondary` symbol/section、`vmlinux` map、各输出 section 起止地址、`.text`/`.init.text`/`.ref.text` 大小及输入 section 排序；先确认是代码尺寸还是布局变化导致范围越界。不要未经证据就插入 target 特例的 branch trampoline、修改链接布局或宣称根因已修。
+- **状态：** `OPEN`，P1，`GNU/MiniC-ELF-AB`。这是已观测的 GNU LD 相对位移链接阻塞；新差分已证明广泛的 C 机器码体积膨胀，但没有将该溢出的全部地址贡献精确归因给单一生成算法。
+- **现有证据：** [CI #41006230438](https://github.com/yituanxing/minic-toolchain/actions/runs/41006230438) 的 LoongArch64 **2723/2723 项 `MiniC -S`/GNU AS PASS**、vDSO GNU LD PASS、主链接在 `head.o .ref.text+0x15c → start_secondary` 的 `R_LARCH_B26` 仍溢出约 **−347.47 MiB**，比旧版 −354.69 MiB 改善约 7.22 MiB。冻结原始 GNU Linux QEMU P0/P1 PASS，MiniC 候选未进入 QEMU。严格同输入 `.o` executable ELF section 汇总：原版 GNU **16,887,804 B**，MiniC **371,965,092 B**，为 **22.03×**；`vmlinux.o .text=365,536,852 B`。增量前三名为 `lib/zstd/compress/zstd_lazy.o` +4.84 MiB、`net/core/filter.o` +4.50 MiB、`kernel/bpf/verifier.o` +3.83 MiB。不能把单纯 `-S`/GNU AS 通过称为链接完成。
+- **下一步差分：** 优先利用现有 `src/target/common/core_spill_layout.c` 的 SSA last-use 槽复用替换 LP64 逐 `value_id*8` 独占栈槽，在 AArch64/LoongArch64 共用一个正确性模型；审查 Loong 未知对齐 8B 访存的约 14/20 指令展开（保留 GNU packed 的非对齐语义），以及 Core `OBJECT/FIELD_ADDRESS → LOAD/STORE` 的地址重物化。它们是候选放大器而非已完成的 355MiB 归因。对相同 `.config`、GNU linker script 保留 map/section/relocation/size A/B，不未经证明插 target-only trampoline 或修改 LD 接受范围。
 - **验收条件：** 新候选 GNU/MiniC map/readelf/size A/B 定位首个确切偏差并以通用合法规则修复；全部 2723 C-owner 对象由 MiniC 实际生产，GNU LD 完整 PASS 且无越界 relocation；Linux QEMU P0/P1 与 GNU 基线在相同配置中 PASS，保留 exact-head CI、map、ELF 和 SHA。
 
 ### MC-071 RV64 Linux 完整 GNU 链接成功但 QEMU 45 秒仅见 OpenSBI
 
-- **状态：** `INVESTIGATING`，P1，`CI-LOG`；**链接阶段已通过，运行阶段结果未定，不是已确认的编译器运行时 wrong-code**。
-- **已完成：** [CI #41004740706](https://github.com/yituanxing/minic-toolchain/actions/runs/41004740706) 中 RV64 Linux **2064 个 C-owner GNU LD PASS**，已生成 Image **232284160 字节**。此前的 unresolved `__compiletime_assert_*` 链接阻塞在本次证据中已跨过；不能把旧链接失败再次写成当前阻塞。
-- **未完成：** QEMU 45 秒观察窗仅记录 OpenSBI 输出，未得到内核 `printk`；P0 **inconclusive（尚不能断言内核启动失败）**，P1 **未到达**。不能从“只有 OpenSBI 日志”直接推断 PC 卡在哪里、CPU 是否在内核入口、是否因巨大 Image 耗时或是否有特定 MiniC 指令缺陷。待新 CI 的 QMP PC/寄存器/异常与符号化采样定位真实执行状态。
-- **验收条件：** QMP/GDB 把时间窗内的 PC、privilege/异常、入口和进度采样映射到 `Image`/`vmlinux` 符号，与同 config GNU P0/P1 的启动时间、串口输出比较；若仅为超时则调整有依据的等待策略，若为真实停顿则以首个指令/状态差异建立 GNU↔MiniC 最小复现。保留 2064 strict GNU C-owner、不回退 GCC 对象，要求 exact-head Image、SHA、GNU LD、QEMU P0/P1 及同一 Image 重复启动证据后才能标记 `VERIFIED`。
+- **状态：** `INVESTIGATING`，P1，`QMP-FAULT + IMAGE-BYTES`；**已观察到 MiniC 候选内核早期实际的 load access fault，但尚未定位造成非法指针的生成指令或 C owner**。运行验收仍 FAIL/INCONCLUSIVE，不能宣称 Linux P0 PASS。
+- **已完成：** [CI #41009152382](https://github.com/yituanxing/minic-toolchain/actions/runs/41009152382) 在准确 2064 个 MiniC GNU-E→MiniC-S→GNU-AS 对象、GNU Kbuild link、头文件重协调/第二次完整 GNU LD 后，生成真实候选 Image **150,491,136 字节**（golden GNU **22,033,920 B**）。此前 379 版本也在 [#41004740706](https://github.com/yituanxing/minic-toolchain/actions/runs/41004740706) 完整链接过更大的 232,284,160 B Image；两次都未获得 Linux 运行 P0。
+- **QMP 定位：** 当前 Image 的 45 秒 P0 仅见 OpenSBI；对**同一 SHA 镜像、原 2G+DTB+映射 initrd loader**的只读 QMP 在 1/4/8/12/20/30 秒采样完全稳定：`pc=0x802010cc`、`stvec=mepc=0x802010c8`、`satp=0`、`scause=mcause=5`、`stval=mtval=t1=0xffffffff88620a4c`、`sepc=0x883076de`。按同一 Image 物理基址 `0x80200000` 解码，`sepc` 是 **`lbu t0,0(t1)`**，`stvec` 是 `wfi` 及停机回跳。错误地址低 32 位 `0x88620a4c` 落在预期物理映像范围，**疑似不正确的符号扩展**，但当前不能直接认定是 RV64 全局寻址、内联汇编还是 Core 整数→指针转换的错误。`COHORT_QMP_IMAGE_IDENTITY=PASS`，采样前后 Image SHA 不变。P1 没有到达，`COHORT_RESULT=INCONCLUSIVE` 是严格的原测试判定。
+- **下一步/验收条件：** 原 artifact 没有同次 `vmlinux/System.map`，物理 PC 直接用虚拟链接符号 `nm` 会得到误导性 `BELOW_LINKED_TEXT`。在下一 exact-head GNU LD 成功时保存 bounded 原链接符号表和异常指令窗口，以正确 load-bias 将 `sepc/ra` 映射到第一个 C 函数及具体 relocation，再用同输入 GCC/MiniC `.i/.s/.o` 证明首个值错误并修正确性；不可硬编码故障地址。保留 2064 strict MiniC C-owner、不回退 GCC 编译，要求 GNU LD、相同 loader 的 QEMU P0/P1 和同 Image 12 次独立 P1 启动全部真实 PASS 后才能标记 VERIFIED。
 
 ### MC-072 static inline 的 computed-goto 表指向不存在的 source label
 
@@ -624,6 +626,23 @@
 - **已核实的代码条件：** `src/core/core_ir_verify.c` 的 `MINIC_CORE_INSTRUCTION_BLOCK_ADDRESS` 校验只要求目标 `< function->block_count`，并不要求目标 Core block 的 `source_label_id != SIZE_MAX` 或目标在普通 CFG 上可达；`src/core/core_ir.c:minic_core_function_mark_reachable_blocks` 仅从 entry 和 source labels 起步，沿普通 terminator 的 CFG 边扩展，不把存活 block 内的 `BLOCK_ADDRESS` 引用当作附加可达性边。`src/target/aarch64/residual_emit.c`、`src/target/loongarch64/residual_emit.c` 及 RV 发射器会将 `BLOCK_ADDRESS` 生成为目标本地 machine block 符号引用。因此，**如果未来 Core 生产者创建“存活块取地址→无源标签、无 CFG 前驱的块”**，当前筛选理论上会留下符号引用而丢掉定义。
 - **为什么现阶段不判实际缺陷：** 现有 GNU C computed goto 的 `&&label` 通过 `src/core/core_lower_expression.c` 调用 `ensure_statement_block`，该函数对 `MINIC_STATEMENT_LABEL` 目标赋予 `source_label_id`；两条 `asm goto` lowering 路径同样对目标调用它。所有 source labels 都被 walker 无条件设为 root，已验证五 ISA `-S`、AArch64/LoongArch64 地址引用/定义闭包和 x86 GNU/MiniC 本机差分。此项记录的是未来手写/重构 Core 生产者绕过当前 lowering 约定的风险。
 - **后续门槛：** 如开放其他 Core 生产者，先加入 verifier 或通用机器发射前的 BLOCK_ADDRESS／asm-goto 目标闭包检查，或将存活块取地址关系纳入共享可达性算法；用合法合成 Core 验证目标定义保留，随后检查 CFG 裁剪、GNU AS/LD 与运行语义。不要复制两套 Target 私有补丁。
+
+### MC-074 推测 IF 条件继承未来局部变量事实导致 x86 Linux 拒编
+
+- **状态：** `FIXED-UNVERIFIED`，P0，`LOCAL-COMPILE-DIFF/ELF-ORACLE`；本地已验证真实 GNU 冻结输入的 MiniC `-S` 和 GNU AS，尚待修复提交的 exact-head 三 ISA Linux CI 重新验收，**不宣称已修复全部 917 个 C owner 或已完成 Linux GNU LD/QEMU**。
+- **真实原件：** Linux 6.6.143 x86-64 原 GNU `arch/x86/entry/vsyscall/vsyscall_64.o` 的 `original.gnu.i` SHA256 `4a7eec4836d5d769e8518e6a7c4a46a2de3acf07cb6ff6fbf72067236a7949ab`，原 GNU `.o.cmd` SHA256 `b320f29c6bc6937ba092d8aad06961d501678410f72138ee9c9338eb79967e90`，GNU `.o` SHA256 `65f16b4d574e59204fdb6171e666fb786aaf4f4ee189ce3fab08b03feda2d60d`。证据来自 [CI #41009152371](https://github.com/yituanxing/minic-toolchain/actions/runs/41009152371) 的 first8 diagnostic artifact `12957283790`，与早期 a380/85d 失败输入清单的 SHA 一致；不使用重写或缩减 `.i` 冒充原件。
+- **严格版本差分：** 同一 `.i`、相同 `--target=x86_64-linux -fshort-wchar -funsigned-char -fno-pie -S`：`a38005e8` PASS、`37944e47` PASS、`85d175b9` FAIL、精确 GitHub `2c7387502d8cb6da80ef167439ff15d543126781` FAIL、本地 `3014fe0` FAIL。旧 2c `trace_emulate_vsyscall` 在保留的 GNU `if (__builtin_expect(!!(__ret_warn_on),0))` 死分支错误尝试降低 UD2 `asm`，`"i" (__flags)` 立即数不可解析，报 `Core IR does not yet support function`。`379→85d` 中 **仅撤销** `src/core/core_lower_if.c` 的 impure-condition `branch_entry_facts` 恢复可使原输入从 FAIL→PASS；仅撤销另一个 `core_lower_local_effects.c` 的 `__builtin_constant_p` 效果扫描变化则仍 FAIL，排除了以 ASM 特判绕过的必要性。
+- **通用根因与修复：** `src/core/core_lower_if.c:core_local_constants_prepare_if_branch` 维护所有 FunctionId 作用域的 local-fact 数组（包含源码后续才声明的对象）。此前对 `local->name_span.begin.offset >= condition->span.end.offset` 直接 `continue`，使尚未开始生命周期的 future local 继承 `incoming` 的 known/escaped/program-zero 状态，进而污染 speculative IF 后的表达式条件判断。改为先将该 future local 的整个事实置零，再继续；以后执行到真实初始化器时重新建立事实。无需任何 x86/ASM 特判，保留 RV64 BPF 所需的 `branch_entry_facts`/condition-owned 语义。
+- **回归证据：** 使用新改动对同 artifact 的八个原 GNU 冻结 `.i`（vsyscall、AMD iommu/ibs/core、events core、Intel bts/core/ds）执行 MiniC→GNU AS：**8/8 `-S` PASS、8/8 GNU AS PASS**，全部为合法 x86-64 ELF64 `ET_REL`；未为通过测试替换 GNU 来源或重写 C。小型正向回归已增加至 `tests/compiler/c0/gnu_if_condition_local_owner.c` + driver，验证未来局部初始化、nested GNU condition-owner、RV64 不生成 `__compiletime_assert_645` 以及 x86 GNU/MiniC 原生差分；**此小型 positive smoke 旧 2c 亦通过，它不是本项真实历史 red/green 的替代品**。
+- **后续验收：** 用修复的 exact-head 重跑原 GNU frozen 2758 C owner 全量 MiniC→GNU AS，定位仍失败的每一个 owner，再运行 GNU Kbuild LD、QEMU P0/P1；并对 RV64 原冻结 `net/core/bpf_sk_storage.i` 的 `diag_get` 重新检查 `__compiletime_assert_645` 不可达。当前尚无该 RV64 原 `.i` 的本地副本，不冒称其已完成 exact-input 差分。
+
+### MC-075 RV64 预MMU从 GOT 取出未重定位的 chosen 链接虚址
+
+- **状态：** `FIXED-UNVERIFIED`，P0，`SAME-IMAGE/QMP/GOT-BYTES`。通用 Target 地址模式修复已在本地代码和 apt-free MiniC `-S` 小样例通过；**尚未在 Linux 6.6.143 完整 GNU AS/LD、QEMU P0/P1 复验，不能标记 Linux 启动 PASS**。与 MC-071 的实际早期 load access fault 是同一事件，MC-075 记录进一步定位的 ELF/GOT 归属与候选修复。
+- **同 Image 证据：** [CI #41009152382](https://github.com/yituanxing/minic-toolchain/actions/runs/41009152382) 的原始 `Image` SHA256 `e818626307e0edc35983fba94d90c920221ccaaa669d2c33b5cc66ece8f56d5c`，长度 150491136 字节。RISC-V Image header `text_offset=0x200000`，QEMU 内存基址 `0x80000000`，所以原始 Image 偏移 `0x8620a4c` 的字节 `/chosen\0bootargs\0no4lvl\0no5lvl\0nokaslr\0` 实际物理地址为 **`0x88820a4c`**。出错时 `satp=0`、`sepc=0x883076de` 指向 `lbu t0,0(t1)`，前一条为 `c.mv t1,a0`，`a0=a1=t1=0xffffffff88620a4c`，与源字符串的**链接态高虚址**一致，却不是当前有效物理地址。
+- **GOT 实证：** 同一 QMP `gp=0x8917a728`；`gp-0x800=0x89179f28` 对应 Image 偏移 `0x8f79f28`。原始二进制该处前两个 8 字节槽全零，从 `0x8f79f38` 起按 8 字节出现连续链接态符号地址：`0xffffffff8862062a`、**`0xffffffff88620a4c`**、`0xffffffff88620a54`、`0xffffffff88620a5d`……分别落在 `/chosen`、`bootargs`、`no4lvl` 等字符串；高度吻合 RISC-V `.got` 的两零保留槽与 gp 的 +0x800 布局。该高虚址作为一个绝对 GOT 项真实存在于 Image；**还需同试次 `vmlinux` 的 GNU section/relocation、调用者的反汇编追溯 `a0` 的实际来源，才能把具体生产指令闭环证明**。
+- **目标层候选根因与通用修复：** `src/target/riscv64/core_codegen.c` 的 `GLOBAL_ADDRESS` / `FUNCTION_ADDRESS` 此前只看 `position_independent`，只要 `-fPIE/-fPIC` 就给**所有符号**发 `.option pic; la`，包括 TU 内定义的静态字符串 `.Lminic_string_*` 和隐藏符号，可能形成启动前不可用的 GOT 入口。改为复用公共 `minic_target_info_elf_object_is_nonpreemptible` / `minic_target_info_elf_function_is_nonpreemptible`：`static`/TU-local 和 `visibility(hidden/internal)` 无论 PIE/PIC 均用 PC-relative `lla`；默认可抢占的外部数据/函数继续 `.option pic; la` 使用 GOT；`-fno-pie` 路径保持 PC-relative，不按 `/chosen` 名字写特例。这与 AArch64 同类 ELF 可见性修复共享判定模型，不复制公共算法。
+- **验收门槛：** 持久脚本 `tests/compiler/c0/probe-rv64-pic-glibc-got.sh` 对 `-fPIE`、`-fPIC`、`-fno-pie` 的私有字符串、静态对象/函数、隐藏 extern、默认可抢占 extern 分别断言 `lla` 与 GOT，并接入 `make check-fast`；下轮仍须原 GNU Linux `.i`→MiniC `-S`→GNU AS 验 `R_RISCV_PCREL_HI20`/`R_RISCV_GOT_HI20`，复用同 GNU Kbuild LD 后运行 QEMU P0 和同 Image 12 次独立 P1。保存同试次 `readelf -SW -Wr vmlinux`、相关 `.o.cmd/.i/.s/.o` 与 `nm/objdump`，证明该 `.got` 入口的实际消费者，且不得将缩短/移动/掩盖故障当作通过。
 
 ## 已核对并排除的误判（不要在未有新证据时重新打开）
 

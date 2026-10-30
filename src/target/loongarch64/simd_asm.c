@@ -504,7 +504,7 @@ bool minic_loongarch64_simd_emit_structured(
                 : (step->lasx ? "xvst" : "vst");
             const char *reg = step->lasx ? "$xr" : "$vr";
             if (!minic_loongarch64_emit_frame_mem(
-                    out, "ld.d", "$t0", (size_t)value * 8U,
+                    out, "ld.d", "$t0", minic_lp64_frame_value_offset(ctx->frame_plan, value),
                     ctx->dynamic_frame) ||
                 fprintf(out, "  %s %s%u, $t0, %d\n", op, reg,
                         step->registers[0], step->memory_offset) < 0)

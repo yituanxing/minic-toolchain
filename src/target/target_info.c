@@ -496,6 +496,49 @@ bool minic_target_info_elf_function_is_tu_local(const MinicC0Program *program,
     return false;
 }
 
+/* In an ELF shared object, hidden/internal declarations are resolved within
+ * the link unit and cannot be preempted by another DSO. Their address is
+ * therefore a valid PC-relative relocation even if this TU only declares the
+ * symbol. Default-visible external references still require a GOT in PIC;
+ * preserve that distinction instead of inferring it from symbol spelling. */
+static bool minic_elf_visibility_is_nonpreemptible(MinicSymbolVisibility visibility) {
+    return visibility == MINIC_SYMBOL_VISIBILITY_HIDDEN ||
+           visibility == MINIC_SYMBOL_VISIBILITY_INTERNAL;
+}
+
+bool minic_target_info_elf_object_is_nonpreemptible(const MinicC0Program *program,
+                                                    const char *symbol) {
+    size_t index;
+    if (program == NULL || symbol == NULL) return false;
+    for (index = 0U; index < program->global_object_count; ++index) {
+        const MinicGlobalObject *object = &program->global_objects[index];
+        if (object->name == NULL || strcmp(object->name, symbol) != 0)
+            continue;
+        if ((object->is_internal && !object->is_extern &&
+             !object->is_block_scope_extern_only) ||
+            minic_elf_visibility_is_nonpreemptible(object->visibility))
+            return true;
+    }
+    return false;
+}
+
+bool minic_target_info_elf_function_is_nonpreemptible(const MinicC0Program *program,
+                                                      const char *symbol) {
+    size_t index;
+    if (program == NULL || symbol == NULL) return false;
+    for (index = 0U; index < program->function_count; ++index) {
+        const MinicFunction *function = &program->functions[index];
+        const char *name = function->assembler_name != NULL
+            ? function->assembler_name : function->name;
+        if (name == NULL || strcmp(name, symbol) != 0)
+            continue;
+        if ((function->is_defined && function->is_internal) ||
+            minic_elf_visibility_is_nonpreemptible(function->visibility))
+            return true;
+    }
+    return false;
+}
+
 /* ABI type spelling is a language capability; the target backend still
  * decides separately which calling conventions it can actually emit. */
 bool minic_target_info_function_pointer_calling_convention_declaration_supported(

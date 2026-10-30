@@ -65,7 +65,8 @@ static bool term(FILE *out, const MinicDirectLP64BlockContext *ctx,
 static int run(unsigned int failure) {
     MinicCoreInstruction ins[3] = {
         { .kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT, .result = 1U },
-        { .kind = MINIC_CORE_INSTRUCTION_COMPILER_BARRIER },
+        { .kind = MINIC_CORE_INSTRUCTION_COMPILER_BARRIER,
+          .result = MINIC_CORE_VALUE_INVALID },
         { .kind = MINIC_CORE_INSTRUCTION_CALL, .result = 2U }
     };
     MinicCoreInstructionId first[] = {0U, 1U}, second[] = {2U};
@@ -74,6 +75,7 @@ static int run(unsigned int failure) {
     MinicC0Program program = {0};
     MinicTargetInfo target = {0};
     MinicLP64FramePlan frame = {0};
+    size_t value_offsets[] = {0U, 24U, 8U};
     MinicLP64ArgumentPlan incoming = {0};
     MinicDirectLP64BlockContext ctx = {0};
     MinicDirectMachineDispatch dispatch = {
@@ -87,13 +89,23 @@ static int run(unsigned int failure) {
     blocks[0].instructions = first;
     blocks[0].instruction_count = 2U;
     blocks[0].source_label_id = SIZE_MAX;
+    blocks[0].has_terminator = true;
+    blocks[0].terminator.kind = MINIC_CORE_TERMINATOR_BRANCH;
+    blocks[0].terminator.branch_target = 1U;
     blocks[1].instructions = second;
     blocks[1].instruction_count = 1U;
     blocks[1].source_label_id = 7U;
+    blocks[1].has_terminator = true;
+    blocks[1].terminator.kind = MINIC_CORE_TERMINATOR_RETURN;
     fn.blocks = blocks;
     fn.block_count = 2U;
     fn.instructions = ins;
     fn.instruction_count = 3U;
+    fn.value_count = 3U;
+    frame.value_offsets = value_offsets;
+    frame.value_count = 3U;
+    if (failure == 5U)
+        value_offsets[1] = SIZE_MAX;
     ctx.program = &program;
     ctx.target = &target;
     ctx.fn = &fn;
@@ -115,7 +127,7 @@ static int run(unsigned int failure) {
             state.terminators != 2U ||
             strstr(got, ".Lmini_arm_f4_b0:\n") != got ||
             strstr(got, ".Lmini_arm_f4_b1:\n.Luser_7:\n") == NULL ||
-            strstr(got, "G8.0\n") == NULL)
+            strstr(got, "G24.0\n") == NULL)
             return 5;
     } else if (failure == 1U) {
         if (strcmp(state.stage, "machine_emit") != 0 ||
@@ -133,13 +145,20 @@ static int run(unsigned int failure) {
         if (strcmp(state.stage, "machine_emit") != 0 ||
             state.failed_block != 0U || state.failed_instruction != 0U)
             return 9;
+    } else if (failure == 5U) {
+        /* An unmapped source SSA value is a hard rejection, never a silent
+         * fall-through to the previous value_id * 8 byte offset. */
+        if (strcmp(state.stage, "ssa_frame_slot") != 0 ||
+            state.failed_block != 0U || state.failed_instruction != 0U ||
+            state.families != 0U || state.stores != 0U)
+            return 10;
     }
     return 0;
 }
 int main(void) {
     unsigned int fail;
-    for (fail = 0U; fail <= 4U; ++fail)
+    for (fail = 0U; fail <= 5U; ++fail)
         if (run(fail) != 0) return (int)(fail + 10U);
-    puts("MINIC_DIRECT_LP64_DISPATCH=PASS families=2 barriers=1 failure_paths=4");
+    puts("MINIC_DIRECT_LP64_DISPATCH=PASS families=2 barriers=1 failure_paths=5 unmapped_ssa=reject");
     return 0;
 }

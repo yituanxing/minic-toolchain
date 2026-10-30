@@ -203,7 +203,7 @@ bool minic_loongarch64_emit_integer_instruction(
             !emit_sp_mem(out, "ld.d", "$t0", src) ||
             !emit_sp_mem(out, "ld.d", "$t1", src + 8U) ||
             !emit_sp_mem(out, rw == 8U ? "ld.d" : "ld.w", "$t2",
-                         (size_t)rhs * 8U) ||
+                         minic_lp64_frame_value_offset(frame_plan, rhs)) ||
             fputs("  beqz $t2, 2f\n"
                   "  li.d $t4, 64\n"
                   "  bgeu $t2, $t4, 1f\n"
@@ -242,11 +242,11 @@ bool minic_loongarch64_emit_integer_instruction(
                 if (loong_checked_add_i32_u32_shape(fn, ins,
                                                     &add_signed_left)) {
                     if (!emit_sp_mem(out, "ld.w", "$t0",
-                                     (size_t)lhs * 8U) ||
+                                     minic_lp64_frame_value_offset(frame_plan, lhs)) ||
                         !emit_sp_mem(out, "ld.w", "$t1",
-                                     (size_t)rhs * 8U) ||
+                                     minic_lp64_frame_value_offset(frame_plan, rhs)) ||
                         !emit_sp_mem(out, "ld.d", "$t2",
-                                     (size_t)address * 8U) ||
+                                     minic_lp64_frame_value_offset(frame_plan, address)) ||
                         fputs(add_signed_left
                                   ? "  bstrpick.d $t1, $t1, 31, 0\n"
                                   : "  bstrpick.d $t0, $t0, 31, 0\n",
@@ -269,9 +269,9 @@ bool minic_loongarch64_emit_integer_instruction(
                      * exact mathematical product fits signed 64-bit even
                      * for INT_MIN * UINT_MAX. Compare to the *destination*
                      * range, not to ordinary C promotions. */
-                    if (!emit_sp_mem(out, "ld.w", "$t0", (size_t)lhs * 8U) ||
-                        !emit_sp_mem(out, "ld.w", "$t1", (size_t)rhs * 8U) ||
-                        !emit_sp_mem(out, "ld.d", "$t2", (size_t)address * 8U) ||
+                    if (!emit_sp_mem(out, "ld.w", "$t0", minic_lp64_frame_value_offset(frame_plan, lhs)) ||
+                        !emit_sp_mem(out, "ld.w", "$t1", minic_lp64_frame_value_offset(frame_plan, rhs)) ||
+                        !emit_sp_mem(out, "ld.d", "$t2", minic_lp64_frame_value_offset(frame_plan, address)) ||
                         (!multiply_signed_left &&
                          fputs("  bstrpick.d $t0, $t0, 31, 0\n", out) == EOF) ||
                         (!multiply_signed_right &&
@@ -296,11 +296,11 @@ bool minic_loongarch64_emit_integer_instruction(
                      * 64-bit GPRs. Include the high carry AND the loss
                      * of signed-i32 representability after narrowing. */
                     if (!emit_sp_mem(out, wide_left ? "ld.d" : "ld.w",
-                                     "$t0", (size_t)lhs * 8U) ||
+                                     "$t0", minic_lp64_frame_value_offset(frame_plan, lhs)) ||
                         !emit_sp_mem(out, wide_left ? "ld.w" : "ld.d",
-                                     "$t1", (size_t)rhs * 8U) ||
+                                     "$t1", minic_lp64_frame_value_offset(frame_plan, rhs)) ||
                         !emit_sp_mem(out, "ld.d", "$t2",
-                                     (size_t)address * 8U) ||
+                                     minic_lp64_frame_value_offset(frame_plan, address)) ||
                         fputs(wide_left
                               ? "  bstrpick.d $t1, $t1, 31, 0\n"
                               : "  bstrpick.d $t0, $t0, 31, 0\n", out) == EOF ||
@@ -320,9 +320,9 @@ bool minic_loongarch64_emit_integer_instruction(
                 bool signed_left;
                 if (!minic_core_integer_overflow_mixed_add_i32_shape(
                         program, target, fn, ins, &signed_left) ||
-                    !emit_sp_mem(out, "ld.d", "$t0", (size_t)lhs * 8U) ||
-                    !emit_sp_mem(out, "ld.d", "$t1", (size_t)rhs * 8U) ||
-                    !emit_sp_mem(out, "ld.d", "$t2", (size_t)address * 8U) ||
+                    !emit_sp_mem(out, "ld.d", "$t0", minic_lp64_frame_value_offset(frame_plan, lhs)) ||
+                    !emit_sp_mem(out, "ld.d", "$t1", minic_lp64_frame_value_offset(frame_plan, rhs)) ||
+                    !emit_sp_mem(out, "ld.d", "$t2", minic_lp64_frame_value_offset(frame_plan, address)) ||
                     fputs(signed_left
                           ? "  add.w $t0, $t0, $zero\n"
                             "  srai.d $t3, $t0, 63\n"
@@ -348,11 +348,11 @@ bool minic_loongarch64_emit_integer_instruction(
             const int op = ins->value.integer_overflow.operator_kind;
             const bool wide = width == 8U;
             if (!emit_sp_mem(out, wide ? "ld.d" : "ld.w",
-                             "$t0", (size_t)lhs * 8U) ||
+                             "$t0", minic_lp64_frame_value_offset(frame_plan, lhs)) ||
                 !emit_sp_mem(out, wide ? "ld.d" : "ld.w",
-                             "$t1", (size_t)rhs * 8U) ||
+                             "$t1", minic_lp64_frame_value_offset(frame_plan, rhs)) ||
                 !emit_sp_mem(out, "ld.d",
-                             "$t2", (size_t)address * 8U))
+                             "$t2", minic_lp64_frame_value_offset(frame_plan, address)))
                 return false;
             if (!wide && !is_signed &&
                 fputs("  bstrpick.d $t0, $t0, 31, 0\n"
@@ -418,7 +418,7 @@ bool minic_loongarch64_emit_integer_instruction(
             if (!minic_core_integer_bitscan_shape(
                     program, target, fn, ins, &width) ||
                 !emit_sp_mem(out, width == 64U ? "ld.d" : "ld.w",
-                             "$t0", (size_t)operand * 8U))
+                             "$t0", minic_lp64_frame_value_offset(frame_plan, operand)))
                 return false;
             if (width < 32U &&
                 fputs(width == 8U
@@ -456,7 +456,7 @@ bool minic_loongarch64_emit_integer_instruction(
                     !emit_sp_mem(out, "ld.d", "$t0", src_offset) ||
                     !emit_sp_mem(out, "ld.d", "$t1", src_offset + 8U) ||
                     !emit_sp_mem(out, rw == 8U ? "ld.d" : "ld.w",
-                                 "$t2", (size_t)rhs * 8U) ||
+                                 "$t2", minic_lp64_frame_value_offset(frame_plan, rhs)) ||
                     fputs("  beqz $t2, 2f\n"
                           "  li.d $t4, 64\n"
                           "  bgeu $t2, $t4, 1f\n"
@@ -497,11 +497,11 @@ bool minic_loongarch64_emit_integer_instruction(
                           : (wide ? "  srl.d $t0, $t0, $t1\n"
                                   : "  srl.w $t0, $t0, $t1\n"));
             if (!emit_sp_mem(out, wide ? "ld.d" : "ld.w",
-                             "$t0", (size_t)lhs * 8U) ||
+                             "$t0", minic_lp64_frame_value_offset(frame_plan, lhs)) ||
                 /* Signed narrow shift inputs require extension before sra. */
                 (lw < 4U && !minic_loongarch64_emit_integer_normalize(out, lw, ls)) ||
                 !emit_sp_mem(out, rw == 8U ? "ld.d" : "ld.w",
-                             "$t1", (size_t)rhs * 8U) ||
+                             "$t1", minic_lp64_frame_value_offset(frame_plan, rhs)) ||
                 fputs(op, out) == EOF ||
                 (!wide && !minic_loongarch64_emit_integer_normalize(out, lw, ls)))
                 return false;
@@ -519,7 +519,7 @@ bool minic_loongarch64_emit_integer_instruction(
             if (!minic_multi_direct_integer_unary_shape(
                     program, target, fn, ins, &width, &sign) ||
                 !emit_sp_mem(out, width == 8U ? "ld.d" : "ld.w",
-                             "$t0", (size_t)operand * 8U) ||
+                             "$t0", minic_lp64_frame_value_offset(frame_plan, operand)) ||
                 fputs("  nor $t0, $t0, $zero\n", out) == EOF ||
                 (width != 8U && !minic_loongarch64_emit_integer_normalize(out, width, sign)))
                 return false;
@@ -533,7 +533,7 @@ bool minic_loongarch64_emit_integer_instruction(
             if (!minic_multi_direct_integer_unary_shape(
                     program, target, fn, ins, &width, &sign) ||
                 !emit_sp_mem(out, width == 8U ? "ld.d" : "ld.w",
-                             "$t0", (size_t)operand * 8U) ||
+                             "$t0", minic_lp64_frame_value_offset(frame_plan, operand)) ||
                 fputs(width == 8U ? "  sub.d $t0, $zero, $t0\n"
                                   : "  sub.w $t0, $zero, $t0\n", out) == EOF ||
                 (width != 8U && !minic_loongarch64_emit_integer_normalize(out, width, sign)))
@@ -561,9 +561,9 @@ bool minic_loongarch64_emit_integer_instruction(
                     ? (wide ? "  sub.d $t0, $t0, $t1\n" : "  sub.w $t0, $t0, $t1\n")
                     : (wide ? "  mul.d $t0, $t0, $t1\n" : "  mul.w $t0, $t0, $t1\n");
             if (!emit_sp_mem(out, wide ? "ld.d" : "ld.w", "$t0",
-                             (size_t)lhs * 8U) ||
+                             minic_lp64_frame_value_offset(frame_plan, lhs)) ||
                 !emit_sp_mem(out, wide ? "ld.d" : "ld.w", "$t1",
-                             (size_t)rhs * 8U) ||
+                             minic_lp64_frame_value_offset(frame_plan, rhs)) ||
                 fputs(opcode, out) == EOF ||
                 (!wide && !minic_loongarch64_emit_integer_normalize(out, lw, ls)))
                 return false;
@@ -587,9 +587,9 @@ bool minic_loongarch64_emit_integer_instruction(
                     ? "  xor $t0, $t0, $t1\n"
                     : "  or $t0, $t0, $t1\n";
             if (!emit_sp_mem(out, lw == 8U ? "ld.d" : "ld.w",
-                             "$t0", (size_t)lhs * 8U) ||
+                             "$t0", minic_lp64_frame_value_offset(frame_plan, lhs)) ||
                 !emit_sp_mem(out, rw == 8U ? "ld.d" : "ld.w",
-                             "$t1", (size_t)rhs * 8U) ||
+                             "$t1", minic_lp64_frame_value_offset(frame_plan, rhs)) ||
                 fputs(opcode, out) == EOF ||
                 (lw != 8U && !minic_loongarch64_emit_integer_normalize(out, lw, ls)))
                 return false;
@@ -617,9 +617,9 @@ bool minic_loongarch64_emit_integer_instruction(
                         : (ls ? "  mod.w $t0, $t0, $t1\n"
                                : "  mod.wu $t0, $t0, $t1\n"));
             if (!emit_sp_mem(out, wide ? "ld.d" : "ld.w",
-                             "$t0", (size_t)lhs * 8U) ||
+                             "$t0", minic_lp64_frame_value_offset(frame_plan, lhs)) ||
                 !emit_sp_mem(out, wide ? "ld.d" : "ld.w",
-                             "$t1", (size_t)rhs * 8U) ||
+                             "$t1", minic_lp64_frame_value_offset(frame_plan, rhs)) ||
                 fputs(op, out) == EOF)
                 return false;
             *needs_gp_store = true;
@@ -631,8 +631,8 @@ bool minic_loongarch64_emit_integer_instruction(
             const MinicCoreValueId lhs = ins->value.binary.left;
             const MinicCoreValueId rhs = ins->value.binary.right;
             if (!minic_multi_direct_pointer_less_shape(fn, ins) ||
-                !emit_sp_mem(out, "ld.d", "$t0", (size_t)lhs * 8U) ||
-                !emit_sp_mem(out, "ld.d", "$t1", (size_t)rhs * 8U) ||
+                !emit_sp_mem(out, "ld.d", "$t0", minic_lp64_frame_value_offset(frame_plan, lhs)) ||
+                !emit_sp_mem(out, "ld.d", "$t1", minic_lp64_frame_value_offset(frame_plan, rhs)) ||
                 fputs("  sltu $t0, $t0, $t1\n", out) == EOF)
                 return false;
             *needs_gp_store = true;
@@ -648,8 +648,8 @@ bool minic_loongarch64_emit_integer_instruction(
                 lhs < fn->value_count && rhs < fn->value_count &&
                 minic_type_is_pointer(fn->values[lhs].type) &&
                 minic_type_is_pointer(fn->values[rhs].type)) {
-                if (!emit_sp_mem(out, "ld.d", "$t0", (size_t)lhs * 8U) ||
-                    !emit_sp_mem(out, "ld.d", "$t1", (size_t)rhs * 8U) ||
+                if (!emit_sp_mem(out, "ld.d", "$t0", minic_lp64_frame_value_offset(frame_plan, lhs)) ||
+                    !emit_sp_mem(out, "ld.d", "$t1", minic_lp64_frame_value_offset(frame_plan, rhs)) ||
                     fputs("  xor $t0, $t0, $t1\n"
                           "  sltui $t0, $t0, 1\n", out) == EOF)
                     return false;
@@ -661,9 +661,9 @@ bool minic_loongarch64_emit_integer_instruction(
                 return false;
             wide = lw == 8U;
             if (!emit_sp_mem(out, wide ? "ld.d" : "ld.w", "$t0",
-                             (size_t)lhs * 8U) ||
+                             minic_lp64_frame_value_offset(frame_plan, lhs)) ||
                 !emit_sp_mem(out, wide ? "ld.d" : "ld.w", "$t1",
-                             (size_t)rhs * 8U) ||
+                             minic_lp64_frame_value_offset(frame_plan, rhs)) ||
                 fputs(ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_LESS
                           ? (ls ? "  slt $t0, $t0, $t1\n"
                                 : "  sltu $t0, $t0, $t1\n")
@@ -682,7 +682,7 @@ bool minic_loongarch64_emit_integer_instruction(
                 return false;
             wide = pointer || width == 8U;
             if (!emit_sp_mem(out, wide ? "ld.d" : "ld.w", "$t0",
-                             (size_t)v * 8U) ||
+                             minic_lp64_frame_value_offset(frame_plan, v)) ||
                 fputs("  sltui $t0, $t0, 1\n", out) == EOF)
                 return false;
             (void)sign;

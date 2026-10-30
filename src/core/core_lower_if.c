@@ -92,15 +92,18 @@ static void core_local_constants_prepare_if_branch(
             continue;
         }
         /* Local IDs cover the entire function, including block-scoped objects
-         * declared after this condition.  An unknown side effect in the
-         * condition cannot possibly escape an object whose lifetime has not
-         * begun.  Poisoning that future object makes subsequent constant
-         * initializers unusable as GNU asm `i` operands.  Zero/unknown spans
-         * are kept conservative for compiler-generated temporaries. */
+         * declared after this condition. Their lifetime has not begun, so
+         * neither an incoming constant nor an escaped/program-zero flag can
+         * be inherited across speculative IF lowering. Start their facts
+         * afresh; a later initializer will establish its own constant before
+         * any GNU asm `i` operand consumes it. Unknown spans remain
+         * conservative for compiler-generated temporaries. */
         if (local != NULL && condition != NULL &&
             local->name_span.begin.offset != 0U &&
             condition->span.end.offset != 0U &&
             local->name_span.begin.offset >= condition->span.end.offset) {
+            (void)memset(&context->local_integer_constants[index], 0,
+                         sizeof(context->local_integer_constants[index]));
             continue;
         }
         if (incoming[index].escaped || modified == NULL || modified[index] != 0U) {

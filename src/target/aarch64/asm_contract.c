@@ -17,8 +17,9 @@ static bool aarch64_owned_reg_policy(FILE *out,
     MinicCoreValueId id, MinicA64FrameRegisterClass kind,
     MinicA64ScratchPolicy scratch) {
     MinicA64FrameView view;
-    const size_t offset = (size_t)id * 8U;
-    if (out == NULL || ctx == NULL || offset / 8U != (size_t)id)
+    size_t offset;
+    if (out == NULL || ctx == NULL ||
+        !minic_lp64_frame_plan_value_slot(ctx->frame_plan, id, &offset))
         return false;
     view = (MinicA64FrameView){
         ctx->dynamic_frame, ctx->frame, 0U, ctx->saved_entry_sp_offset
@@ -6299,7 +6300,7 @@ static bool aarch64_linux_crash_regs_emit(
     frame = (MinicA64FrameView){false, ctx->frame, 0U,
                                 ctx->saved_entry_sp_offset};
     if (!minic_a64_emit_owned_address(out, &frame,
-            (size_t)op[2].value * 8U, 0U) ||
+            minic_lp64_frame_value_offset(ctx->frame_plan, op[2].value), 0U) ||
         fputs("  ldr x0, [x0]\n", out) == EOF) return false;
     for (i = 0U; i < 15U; ++i)
         if (fprintf(out, "  stp x%zu, x%zu, [x0, #%zu]\n",
@@ -6319,10 +6320,10 @@ static bool aarch64_linux_crash_regs_emit(
     /* x17 is dead after its image was captured at [x0,#128], so this
      * post-snapshot phase can use the typed load's regular scratch. */
     return minic_a64_emit_owned_slot(out, &frame, false,
-               MINIC_A64_REG_X, 0U, (size_t)op[0].value * 8U) &&
+               MINIC_A64_REG_X, 0U, minic_lp64_frame_value_offset(ctx->frame_plan, op[0].value)) &&
            fputs("  str x9, [x0]\n", out) != EOF &&
            minic_a64_emit_owned_slot(out, &frame, false,
-               MINIC_A64_REG_X, 0U, (size_t)op[1].value * 8U) &&
+               MINIC_A64_REG_X, 0U, minic_lp64_frame_value_offset(ctx->frame_plan, op[1].value)) &&
            fputs("  str x10, [x0]\n", out) != EOF;
 }
 

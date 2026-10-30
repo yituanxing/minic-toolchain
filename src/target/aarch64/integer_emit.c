@@ -166,7 +166,7 @@ bool minic_aarch64_emit_integer_instruction(
             !minic_lp64_frame_plan_wide_slot(frame_plan, ins->result, &dst) ||
             !minic_a64_emit_owned_slot(out, view, false,
                 rw == 8U ? MINIC_A64_REG_X : MINIC_A64_REG_W,
-                10U, (size_t)rhs * 8U) ||
+                10U, minic_lp64_frame_value_offset(frame_plan, rhs)) ||
             !minic_a64_emit_owned_slot(out, view, false,
                 MINIC_A64_REG_X, 9U, src) ||
             !minic_a64_emit_owned_slot(out, view, false,
@@ -234,11 +234,11 @@ bool minic_aarch64_emit_integer_instruction(
                     const char *store = narrow.result_width == 1U
                         ? "  strb w9, [x11]\n" : "  strh w9, [x11]\n";
                     if (!minic_a64_emit_owned_slot(out, view, false,
-                            MINIC_A64_REG_W, 9U, (size_t)lhs * 8U) ||
+                            MINIC_A64_REG_W, 9U, minic_lp64_frame_value_offset(frame_plan, lhs)) ||
                         !minic_a64_emit_owned_slot(out, view, false,
-                            MINIC_A64_REG_W, 10U, (size_t)rhs * 8U) ||
+                            MINIC_A64_REG_W, 10U, minic_lp64_frame_value_offset(frame_plan, rhs)) ||
                         !minic_a64_emit_owned_slot(out, view, false,
-                            MINIC_A64_REG_X, 11U, (size_t)address * 8U) ||
+                            MINIC_A64_REG_X, 11U, minic_lp64_frame_value_offset(frame_plan, address)) ||
                         fputs(left_narrow, out) == EOF ||
                         fputs(narrow.left_signed ? "  sxtw x9, w9\n"
                                                   : "  uxtw x9, w9\n", out) == EOF ||
@@ -268,11 +268,11 @@ bool minic_aarch64_emit_integer_instruction(
                      * product of two 32-bit operands always fits 64 bits,
                      * even when one is signed and the other unsigned. */
                     if (!minic_a64_emit_owned_slot(out, view, false,
-                            MINIC_A64_REG_W, 9U, (size_t)lhs * 8U) ||
+                            MINIC_A64_REG_W, 9U, minic_lp64_frame_value_offset(frame_plan, lhs)) ||
                         !minic_a64_emit_owned_slot(out, view, false,
-                            MINIC_A64_REG_W, 10U, (size_t)rhs * 8U) ||
+                            MINIC_A64_REG_W, 10U, minic_lp64_frame_value_offset(frame_plan, rhs)) ||
                         !minic_a64_emit_owned_slot(out, view, false,
-                            MINIC_A64_REG_X, 11U, (size_t)address * 8U) ||
+                            MINIC_A64_REG_X, 11U, minic_lp64_frame_value_offset(frame_plan, address)) ||
                         fputs(multiply_signed_left ? "  sxtw x9, w9\n"
                                                    : "  uxtw x9, w9\n", out) == EOF ||
                         fputs(multiply_signed_right ? "  sxtw x10, w10\n"
@@ -293,11 +293,11 @@ bool minic_aarch64_emit_integer_instruction(
                 if (!minic_core_integer_overflow_mixed_add_i32_shape(
                         program, target, fn, ins, &signed_left) ||
                     !minic_a64_emit_owned_slot(out, view, false,
-                        MINIC_A64_REG_X, 9U, (size_t)lhs * 8U) ||
+                        MINIC_A64_REG_X, 9U, minic_lp64_frame_value_offset(frame_plan, lhs)) ||
                     !minic_a64_emit_owned_slot(out, view, false,
-                        MINIC_A64_REG_X, 10U, (size_t)rhs * 8U) ||
+                        MINIC_A64_REG_X, 10U, minic_lp64_frame_value_offset(frame_plan, rhs)) ||
                     !minic_a64_emit_owned_slot(out, view, false,
-                        MINIC_A64_REG_X, 11U, (size_t)address * 8U) ||
+                        MINIC_A64_REG_X, 11U, minic_lp64_frame_value_offset(frame_plan, address)) ||
                     fputs(signed_left
                           ? "  sxtw x9, w9\n  asr x12, x9, #63\n"
                           : "  sxtw x10, w10\n  asr x12, x10, #63\n",
@@ -316,12 +316,12 @@ bool minic_aarch64_emit_integer_instruction(
             const int op = ins->value.integer_overflow.operator_kind;
             if (!minic_a64_emit_owned_slot(out, view, false,
                     wide ? MINIC_A64_REG_X : MINIC_A64_REG_W,
-                    9U, (size_t)lhs * 8U) ||
+                    9U, minic_lp64_frame_value_offset(frame_plan, lhs)) ||
                 !minic_a64_emit_owned_slot(out, view, false,
                     wide ? MINIC_A64_REG_X : MINIC_A64_REG_W,
-                    10U, (size_t)rhs * 8U) ||
+                    10U, minic_lp64_frame_value_offset(frame_plan, rhs)) ||
                 !minic_a64_emit_owned_slot(out, view, false,
-                    MINIC_A64_REG_X, 11U, (size_t)address * 8U))
+                    MINIC_A64_REG_X, 11U, minic_lp64_frame_value_offset(frame_plan, address)))
                 return false;
             if (op == MINIC_CORE_INTEGER_OVERFLOW_ADD ||
                 op == MINIC_CORE_INTEGER_OVERFLOW_SUBTRACT) {
@@ -370,7 +370,7 @@ bool minic_aarch64_emit_integer_instruction(
                     program, target, fn, ins, &width) ||
                 !minic_a64_emit_owned_slot(out, view, false,
                     width == 64U ? MINIC_A64_REG_X : MINIC_A64_REG_W,
-                    9U, (size_t)operand * 8U) ||
+                    9U, minic_lp64_frame_value_offset(frame_plan, operand)) ||
                 (width != 64U && width < 32U &&
                  fprintf(out, "  and w9, w9, #%u\n",
                          (1U << width) - 1U) < 0))
@@ -405,7 +405,7 @@ bool minic_aarch64_emit_integer_instruction(
                     !minic_lp64_frame_plan_wide_slot(frame_plan, ins->result, &dst_offset) ||
                     !minic_a64_emit_owned_slot(out, view, false,
                         rw == 8U ? MINIC_A64_REG_X : MINIC_A64_REG_W,
-                        10U, (size_t)rhs * 8U) ||
+                        10U, minic_lp64_frame_value_offset(frame_plan, rhs)) ||
                     !minic_a64_emit_owned_slot(out, view, false,
                         MINIC_A64_REG_X, 9U, src_offset) ||
                     !minic_a64_emit_owned_slot(out, view, false,
@@ -453,13 +453,13 @@ bool minic_aarch64_emit_integer_instruction(
                                    : "  lsr w9, w9, w10\n"));
             if (!minic_a64_emit_owned_slot(out, view, false,
                     wide ? MINIC_A64_REG_X : MINIC_A64_REG_W,
-                    9U, (size_t)lhs * 8U) ||
+                    9U, minic_lp64_frame_value_offset(frame_plan, lhs)) ||
                 /* Narrow signed shifts need sign-extension BEFORE the
                  * arithmetic shift; normalizing only the result is late. */
                 (lw < 4U && !minic_aarch64_emit_integer_normalize(out, lw, ls)) ||
                 !minic_a64_emit_owned_slot(out, view, false,
                     rw == 8U ? MINIC_A64_REG_X : MINIC_A64_REG_W,
-                    10U, (size_t)rhs * 8U) ||
+                    10U, minic_lp64_frame_value_offset(frame_plan, rhs)) ||
                 fputs(op, out) == EOF ||
                 (!wide && !minic_aarch64_emit_integer_normalize(out, lw, ls)))
                 return false;
@@ -478,7 +478,7 @@ bool minic_aarch64_emit_integer_instruction(
                     program, target, fn, ins, &width, &sign) ||
                 !minic_a64_emit_owned_slot(out, view, false,
                     width == 8U ? MINIC_A64_REG_X : MINIC_A64_REG_W,
-                    9U, (size_t)operand * 8U) ||
+                    9U, minic_lp64_frame_value_offset(frame_plan, operand)) ||
                 fputs(width == 8U ? "  mvn x9, x9\n" : "  mvn w9, w9\n",
                       out) == EOF ||
                 (width != 8U && !minic_aarch64_emit_integer_normalize(out, width, sign)))
@@ -494,7 +494,7 @@ bool minic_aarch64_emit_integer_instruction(
                     program, target, fn, ins, &width, &sign) ||
                 !minic_a64_emit_owned_slot(out, view, false,
                     width == 8U ? MINIC_A64_REG_X : MINIC_A64_REG_W,
-                    9U, (size_t)operand * 8U) ||
+                    9U, minic_lp64_frame_value_offset(frame_plan, operand)) ||
                 fputs(width == 8U ? "  neg x9, x9\n" : "  neg w9, w9\n",
                       out) == EOF ||
                 (width != 8U && !minic_aarch64_emit_integer_normalize(out, width, sign)))
@@ -525,10 +525,10 @@ bool minic_aarch64_emit_integer_instruction(
                     : (wide ? "  mul x9, x9, x10\n" : "  mul w9, w9, w10\n");
             if (!minic_a64_emit_owned_slot(out, view, false,
                     wide ? MINIC_A64_REG_X : MINIC_A64_REG_W,
-                    9U, (size_t)lhs * 8U) ||
+                    9U, minic_lp64_frame_value_offset(frame_plan, lhs)) ||
                 !minic_a64_emit_owned_slot(out, view, false,
                     wide ? MINIC_A64_REG_X : MINIC_A64_REG_W,
-                    10U, (size_t)rhs * 8U) ||
+                    10U, minic_lp64_frame_value_offset(frame_plan, rhs)) ||
                 fputs(opcode, out) == EOF ||
                 (!wide && !minic_aarch64_emit_integer_normalize(out, lw, ls)))
                 return false;
@@ -555,10 +555,10 @@ bool minic_aarch64_emit_integer_instruction(
                     : (wide ? "  orr x9, x9, x10\n" : "  orr w9, w9, w10\n");
             if (!minic_a64_emit_owned_slot(out, view, false,
                     wide ? MINIC_A64_REG_X : MINIC_A64_REG_W,
-                    9U, (size_t)lhs * 8U) ||
+                    9U, minic_lp64_frame_value_offset(frame_plan, lhs)) ||
                 !minic_a64_emit_owned_slot(out, view, false,
                     wide ? MINIC_A64_REG_X : MINIC_A64_REG_W,
-                    10U, (size_t)rhs * 8U) ||
+                    10U, minic_lp64_frame_value_offset(frame_plan, rhs)) ||
                 fputs(opcode, out) == EOF ||
                 (lw != 8U && !minic_aarch64_emit_integer_normalize(out, lw, ls)))
                 return false;
@@ -578,10 +578,10 @@ bool minic_aarch64_emit_integer_instruction(
             wide = lw == 8U;
             if (!minic_a64_emit_owned_slot(out, view, false,
                     wide ? MINIC_A64_REG_X : MINIC_A64_REG_W,
-                    9U, (size_t)lhs * 8U) ||
+                    9U, minic_lp64_frame_value_offset(frame_plan, lhs)) ||
                 !minic_a64_emit_owned_slot(out, view, false,
                     wide ? MINIC_A64_REG_X : MINIC_A64_REG_W,
-                    10U, (size_t)rhs * 8U))
+                    10U, minic_lp64_frame_value_offset(frame_plan, rhs)))
                 return false;
             op = ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE
                 ? (wide ? (ls ? "  sdiv x9, x9, x10\n"
@@ -609,9 +609,9 @@ bool minic_aarch64_emit_integer_instruction(
             const MinicCoreValueId rhs = ins->value.binary.right;
             if (!minic_multi_direct_pointer_less_shape(fn, ins) ||
                 !minic_a64_emit_owned_slot(out, view, false,
-                    MINIC_A64_REG_X, 9U, (size_t)lhs * 8U) ||
+                    MINIC_A64_REG_X, 9U, minic_lp64_frame_value_offset(frame_plan, lhs)) ||
                 !minic_a64_emit_owned_slot(out, view, false,
-                    MINIC_A64_REG_X, 10U, (size_t)rhs * 8U) ||
+                    MINIC_A64_REG_X, 10U, minic_lp64_frame_value_offset(frame_plan, rhs)) ||
                 fputs("  cmp x9, x10\n  cset w9, lo\n", out) == EOF)
                 return false;
             *needs_gp_store = true;
@@ -628,9 +628,9 @@ bool minic_aarch64_emit_integer_instruction(
                 minic_type_is_pointer(fn->values[lhs].type) &&
                 minic_type_is_pointer(fn->values[rhs].type)) {
                 if (!minic_a64_emit_owned_slot(out, view, false,
-                        MINIC_A64_REG_X, 9U, (size_t)lhs * 8U) ||
+                        MINIC_A64_REG_X, 9U, minic_lp64_frame_value_offset(frame_plan, lhs)) ||
                     !minic_a64_emit_owned_slot(out, view, false,
-                        MINIC_A64_REG_X, 10U, (size_t)rhs * 8U) ||
+                        MINIC_A64_REG_X, 10U, minic_lp64_frame_value_offset(frame_plan, rhs)) ||
                     fputs("  cmp x9, x10\n  cset w9, eq\n", out) == EOF)
                     return false;
                 *needs_gp_store = true;
@@ -642,10 +642,10 @@ bool minic_aarch64_emit_integer_instruction(
             wide = lw == 8U;
             if (!minic_a64_emit_owned_slot(out, view, false,
                     wide ? MINIC_A64_REG_X : MINIC_A64_REG_W,
-                    9U, (size_t)lhs * 8U) ||
+                    9U, minic_lp64_frame_value_offset(frame_plan, lhs)) ||
                 !minic_a64_emit_owned_slot(out, view, false,
                     wide ? MINIC_A64_REG_X : MINIC_A64_REG_W,
-                    10U, (size_t)rhs * 8U) ||
+                    10U, minic_lp64_frame_value_offset(frame_plan, rhs)) ||
                 fputs(ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_LESS
                           ? (wide
                               ? (ls ? "  cmp x9, x10\n  cset w9, lt\n"
@@ -669,7 +669,7 @@ bool minic_aarch64_emit_integer_instruction(
             wide = pointer || width == 8U;
             if (!minic_a64_emit_owned_slot(out, view, false,
                     wide ? MINIC_A64_REG_X : MINIC_A64_REG_W,
-                    9U, (size_t)v * 8U) ||
+                    9U, minic_lp64_frame_value_offset(frame_plan, v)) ||
                 fputs(wide ? "  cmp x9, #0\n  cset w9, eq\n"
                            : "  cmp w9, #0\n  cset w9, eq\n", out) == EOF)
                 return false;

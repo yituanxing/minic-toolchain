@@ -2,6 +2,7 @@
 #define MINIC_TARGET_COMMON_PROGRAM_EMIT_H
 
 #include "target/common/program_visit.h"
+#include "target/common/elf_alias_emit.h"
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -71,6 +72,42 @@ static inline bool minic_program_emit_source_file_asm_stage(
     return minic_program_emit_source_file_asm(out, program);
 }
 
+/* Declarations with no body/storage nevertheless own ELF binding metadata.
+ * GNU AS must see .hidden/.internal/.protected on undefined references before
+ * final linking (e.g. vDSO private data). All five backends use this shared
+ * stage; defined objects/functions and aliases already emit their directives
+ * from their respective definition/alias paths. */
+static inline bool minic_program_emit_undefined_symbol_visibility(
+    FILE *out, const MinicC0Program *program) {
+    size_t index;
+    if (out == NULL || program == NULL) return false;
+    for (index = 0U; index < program->global_object_count; ++index) {
+        const MinicGlobalObject *object = &program->global_objects[index];
+        if (object->is_extern && !object->is_internal &&
+            object->alias_target == MINIC_GLOBAL_OBJECT_INVALID) {
+            const char *directive = minic_multi_elf_alias_visibility(object->visibility);
+            if (object->visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT &&
+                (directive == NULL || object->name == NULL ||
+                 fprintf(out, "%s %s\n", directive, object->name) < 0))
+                return false;
+        }
+    }
+    for (index = 0U; index < program->function_count; ++index) {
+        const MinicFunction *function = &program->functions[index];
+        if (!function->is_defined && !function->is_internal &&
+            function->alias_target == MINIC_FUNCTION_INVALID) {
+            const char *directive = minic_multi_elf_alias_visibility(function->visibility);
+            const char *name = function->assembler_name != NULL
+                ? function->assembler_name : function->name;
+            if (function->visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT &&
+                (directive == NULL || name == NULL ||
+                 fprintf(out, "%s %s\n", directive, name) < 0))
+                return false;
+        }
+    }
+    return true;
+}
+
 static inline bool minic_program_emit_write(
     const char *path, const MinicC0Program *program,
     const MinicTargetInfo *target, const MinicCoreFunction *functions,
@@ -110,6 +147,7 @@ static inline bool minic_program_emit_write(
     ok = config->prefix == NULL ||
          config->prefix(out, program, target, functions, function_count,
                         function_sections, context);
+    if (ok) ok = minic_program_emit_undefined_symbol_visibility(out, program);
     if (ok)
         ok = minic_program_visit_globals(
             out, program, target, config->emit_global, context);

@@ -214,10 +214,10 @@ bool minic_loongarch64_emit_memory_instruction(
                 program, target, fn, addr, 0U) >= 8U;
             if (!minic_multi_direct_wide_store_shape(
                     fn, ins, frame_plan, &src) ||
-                !emit_sp_mem(out, "ld.d", "$t1", (size_t)addr * 8U) ||
+                !emit_sp_mem(out, "ld.d", "$t1", minic_lp64_frame_value_offset(frame_plan, addr)) ||
                 !emit_sp_mem(out, "ld.d", "$t0", src) ||
                 !emit_integer_memory(out, true, 8U, false, false, aligned) ||
-                !emit_sp_mem(out, "ld.d", "$t1", (size_t)addr * 8U) ||
+                !emit_sp_mem(out, "ld.d", "$t1", minic_lp64_frame_value_offset(frame_plan, addr)) ||
                 fputs("  addi.d $t1, $t1, 8\n", out) == EOF ||
                 !emit_sp_mem(out, "ld.d", "$t0", src + 8U) ||
                 !emit_integer_memory(out, true, 8U, false, false, aligned))
@@ -236,9 +236,9 @@ bool minic_loongarch64_emit_memory_instruction(
             if (!minic_multi_direct_scalar_store_shape(
                     program, target, fn, ins, &width, &sign, &pointer))
                 return false;
-            if (!emit_sp_mem(out, "ld.d", "$t1", (size_t)addr * 8U) ||
+            if (!emit_sp_mem(out, "ld.d", "$t1", minic_lp64_frame_value_offset(frame_plan, addr)) ||
                 !emit_sp_mem(out, (pointer || width == 8U) ? "ld.d" : "ld.w", "$t0",
-                             (size_t)value * 8U) ||
+                             minic_lp64_frame_value_offset(frame_plan, value)) ||
                 !emit_integer_memory(out, true, pointer ? 8U : width, sign,
                                      atomic,
                      loong_known_address_alignment(program, target, fn,
@@ -256,13 +256,13 @@ bool minic_loongarch64_emit_memory_instruction(
                 bool aligned;
                 if (!minic_multi_direct_wide_scalar_load_location(
                         fn, ins, frame_plan, &addr, &dst) ||
-                    !emit_sp_mem(out, "ld.d", "$t1", (size_t)addr * 8U))
+                    !emit_sp_mem(out, "ld.d", "$t1", minic_lp64_frame_value_offset(frame_plan, addr)))
                     return false;
                 aligned = loong_known_address_alignment(
                     program, target, fn, addr, 0U) >= 8U;
                 if (!emit_integer_memory(out, false, 8U, false, false, aligned) ||
                     !emit_sp_mem(out, "st.d", "$t0", dst) ||
-                    !emit_sp_mem(out, "ld.d", "$t1", (size_t)addr * 8U) ||
+                    !emit_sp_mem(out, "ld.d", "$t1", minic_lp64_frame_value_offset(frame_plan, addr)) ||
                     fputs("  addi.d $t1, $t1, 8\n", out) == EOF ||
                     !emit_integer_memory(out, false, 8U, false, false, aligned) ||
                     !emit_sp_mem(out, "st.d", "$t0", dst + 8U))
@@ -278,7 +278,7 @@ bool minic_loongarch64_emit_memory_instruction(
                     program, target, fn, ins, &width, &sign, &pointer))
                 return false;
             if (
-                !emit_sp_mem(out, "ld.d", "$t1", (size_t)addr * 8U) ||
+                !emit_sp_mem(out, "ld.d", "$t1", minic_lp64_frame_value_offset(frame_plan, addr)) ||
                 !emit_integer_memory(out, false, pointer ? 8U : width, sign,
                                      atomic,
                      loong_known_address_alignment(program, target, fn,

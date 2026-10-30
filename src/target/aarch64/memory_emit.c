@@ -77,7 +77,7 @@ bool minic_aarch64_emit_memory_instruction(
             if (!minic_multi_direct_wide_store_shape(
                     fn, ins, frame_plan, &src) ||
                 !memory_slot(out, frame_view, false, MINIC_A64_REG_X, 10U,
-                    (size_t)addr * 8U) ||
+                    minic_lp64_frame_value_offset(frame_plan, addr)) ||
                 !memory_slot(out, frame_view, false, MINIC_A64_REG_X, 9U, src) ||
                 !memory_slot(out, frame_view, false, MINIC_A64_REG_X, 11U,
                     src + 8U) ||
@@ -95,7 +95,7 @@ bool minic_aarch64_emit_memory_instruction(
             if (!minic_multi_direct_wide_store_shape(
                     fn, ins, frame_plan, &src) ||
                 !memory_slot(out, frame_view, false, MINIC_A64_REG_X, 10U,
-                    (size_t)addr * 8U) ||
+                    minic_lp64_frame_value_offset(frame_plan, addr)) ||
                 !memory_slot(out, frame_view, false, MINIC_A64_REG_Q, 9U, src) ||
                 fputs("  str q9, [x10]\n", out) == EOF)
                 return false;
@@ -114,10 +114,10 @@ bool minic_aarch64_emit_memory_instruction(
                     program, target, fn, ins, &width, &sign, &pointer))
                 return false;
             if (!memory_slot(out, frame_view, false, MINIC_A64_REG_X, 10U,
-                    (size_t)addr * 8U) ||
+                    minic_lp64_frame_value_offset(frame_plan, addr)) ||
                 !memory_slot(out, frame_view, false,
                     (pointer || width == 8U) ? MINIC_A64_REG_X : MINIC_A64_REG_W,
-                    9U, (size_t)value * 8U) ||
+                    9U, minic_lp64_frame_value_offset(frame_plan, value)) ||
                 (pointer ? fputs("  str x9, [x10]\n", out) == EOF
                          : !emit_integer_memory(out, true, width, sign))) return false;
             return true;
@@ -135,7 +135,7 @@ bool minic_aarch64_emit_memory_instruction(
                     return false;
                 }
                 if (!memory_slot(out, frame_view, false, MINIC_A64_REG_X, 10U,
-                        (size_t)addr * 8U) ||
+                        minic_lp64_frame_value_offset(frame_plan, addr)) ||
                     fputs("  ldr x9, [x10]\n"
                           "  ldr x11, [x10, #8]\n", out) == EOF ||
                     !memory_slot(out, frame_view, true, MINIC_A64_REG_X,
@@ -155,7 +155,7 @@ bool minic_aarch64_emit_memory_instruction(
                     return false;
                 }
                 if (!memory_slot(out, frame_view, false, MINIC_A64_REG_X, 10U,
-                        (size_t)addr * 8U) ||
+                        minic_lp64_frame_value_offset(frame_plan, addr)) ||
                     fputs("  ldr q9, [x10]\n", out) == EOF ||
                     !memory_slot(out, frame_view, true, MINIC_A64_REG_Q,
                         9U, dst))
@@ -174,7 +174,7 @@ bool minic_aarch64_emit_memory_instruction(
             }
             if (
                 !memory_slot(out, frame_view, false, MINIC_A64_REG_X, 10U,
-                    (size_t)addr * 8U) ||
+                    minic_lp64_frame_value_offset(frame_plan, addr)) ||
                 (pointer ? fputs("  ldr x9, [x10]\n", out) == EOF
                          : !emit_integer_memory(out, false, width, sign)))
                 return false;
