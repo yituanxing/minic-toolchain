@@ -12,6 +12,7 @@ on:
       - 'tools/ci/linux-three-isa-seven-probe-v1.py'
       - 'tools/ci/linux-three-isa-focused-inputs-v1.py'
       - 'tools/ci/linux-three-isa-summary-v1.py'
+      - 'tools/ci/linux-three-isa-strict-source-gate-v1.py'
       - 'tools/ci/linux-three-isa-owner-delta-v1.py'
       - 'tools/ci/linux-three-isa-owner-delta-selftest-v1.py'
       - 'tools/ci/linux-three-isa-trigger.txt'
@@ -69,6 +70,7 @@ jobs:
           python3 -m py_compile tools/ci/linux-three-isa-golden-v1.py tools/ci/linux-three-isa-freeze-i-v1.py tools/ci/linux-three-isa-seven-probe-v1.py tools/ci/linux-three-isa-focused-inputs-v1.py tools/ci/linux-three-isa-summary-v1.py tools/ci/linux-three-isa-summary-phase-selftest-v1.py tools/ci/linux-three-isa-owner-delta-v1.py tools/ci/linux-three-isa-owner-delta-selftest-v1.py
           python3 tools/ci/linux-three-isa-frontier-selftest-v1.py
           python3 tools/ci/linux-three-isa-summary-phase-selftest-v1.py
+          python3 tools/ci/linux-three-isa-strict-source-gate-v1.py --self-test
           python3 tools/ci/linux-three-isa-owner-delta-selftest-v1.py
           python3 tools/ci/linux-three-isa-focused-inputs-v1.py --self-test
           python3 tools/ci/linux-three-isa-golden-v1.py --self-test
@@ -273,3 +275,24 @@ jobs:
           path: build/three-linux-all-root-causes.json
           retention-days: 14
           if-no-files-found: error
+  strict-source-gate:
+    needs: census-summary
+    # A diagnostic census intentionally succeeds with failing TUs so every
+    # error survives. This separate acceptance job MUST fail if even one C
+    # owner failed; success here still says nothing about GNU AS/link/QEMU.
+    if: needs.census-summary.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: three-linux-root-causes-${{ github.event.pull_request.head.sha || github.sha }}
+          path: build/three-linux-strict-receipt
+      - name: Fail closed on any missing or failed MiniC C owner
+        run: |
+          set -Eeuo pipefail
+          python3 tools/ci/linux-three-isa-strict-source-gate-v1.py \
+            --summary build/three-linux-strict-receipt/three-linux-all-root-causes.json

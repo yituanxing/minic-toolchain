@@ -1,0 +1,246 @@
+name: MiniC Linux three-ISA original GNU QEMU P0/P1 oracle
+
+# Explicit expensive campaign.  Never infer Linux runtime from the compile-only
+# 21-shard census or from four-ISA compiler micro-runtime jobs.
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/minic-linux-three-isa-gnu-qemu-v1.yml'
+      - 'tools/ci/linux-three-isa-gnu-qemu-v1.py'
+      - 'tools/ci/linux-three-isa-minic-candidate-v1.py'
+      - 'tools/ci/linux-four-isa-runtime-diff-v1.py'
+      - 'tools/ci/linux-three-isa-gnu-qemu-trigger.txt'
+  workflow_dispatch:
+    inputs:
+      target:
+        description: GNU/QEMU platform to certify
+        required: true
+        default: all
+        type: choice
+        options: [all, x86_64, aarch64, loongarch64]
+      loong_firmware_url:
+        description: HTTPS URL for known LoongArch QEMU_EFI.fd (required for LoongArch)
+        required: false
+        type: string
+      loong_firmware_sha256:
+        description: Expected SHA-256 of LoongArch EFI firmware (required for LoongArch)
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: minic-gnu-linux-qemu-${{ github.ref }}-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  campaign-gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 2
+      - name: Require one-shot PR trigger or explicit manual dispatch
+        id: decide
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          active=false
+          if [[ '${{ github.event_name }}' == workflow_dispatch ]]; then
+            active=true
+          elif git rev-parse --verify HEAD^ >/dev/null 2>&1 &&
+               ! git diff --quiet HEAD^ HEAD -- tools/ci/linux-three-isa-gnu-qemu-trigger.txt; then
+            active=true
+          fi
+          echo "run=$active" >> "$GITHUB_OUTPUT"
+          echo "GNU_QEMU_EXACT_HEAD_CAMPAIGN=$active commit=$(git rev-parse HEAD)"
+  gnu-boot:
+    needs: campaign-gate
+    if: needs.campaign-gate.outputs.run == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON((github.event_name == 'pull_request' || inputs.target == 'all') && '["x86_64","aarch64","loongarch64"]' || format('["{0}"]', inputs.target)) }}
+    env:
+      GNU_WORK: ${{ runner.temp }}/minic-linux-gnu-${{ matrix.target }}
+      RUNTIME_OUTPUT: ${{ runner.temp }}/minic-linux-gnu-runtime-${{ matrix.target }}
+      LOONG_FIRMWARE_URL: ${{ inputs.loong_firmware_url }}
+      LOONG_FIRMWARE_SHA256: ${{ inputs.loong_firmware_sha256 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Confirm GNU oracle is running the exact requested commit
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = '${{ github.event.pull_request.head.sha || github.sha }}'
+          echo "GNU_ORACLE_EXACT_HEAD=PASS head=$(git rev-parse HEAD) target=${{ matrix.target }}"
+
+      - name: Validate GNU boot oracle syntax and fail-closed synthetic cases
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 -m py_compile tools/ci/linux-three-isa-gnu-qemu-v1.py \
+            tools/ci/linux-three-isa-minic-candidate-v1.py \
+            tools/ci/linux-four-isa-runtime-diff-v1.py
+          python3 tools/ci/linux-three-isa-gnu-qemu-v1.py --self-test
+          python3 tools/ci/linux-three-isa-minic-candidate-v1.py --self-test
+          python3 tools/ci/linux-four-isa-runtime-diff-v1.py --self-test
+          bash -n tools/ci/linux-three-isa-golden-v1.sh
+
+      - name: Install original target GNU Kbuild and QEMU packages
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential bc bison flex libelf-dev libssl-dev \
+            cpio gzip curl xz-utils make python3
+          case '${{ matrix.target }}' in
+            x86_64)
+              sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends qemu-system-x86
+              command -v qemu-system-x86_64
+              ;;
+            aarch64)
+              sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+                gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu libc6-dev-arm64-cross \
+                qemu-system-arm
+              command -v qemu-system-aarch64
+              ;;
+            loongarch64)
+              sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+                gcc-13-loongarch64-linux-gnu binutils-loongarch64-linux-gnu \
+                libc6-dev-loong64-cross qemu-system-misc
+              # Ubuntu 24.04 might lack a LoongArch system emulator.  That is
+              # a missing platform, not a Linux or MiniC PASS.
+              command -v qemu-system-loongarch64 || {
+                echo 'THREE_ISA_GNU_QEMU=FAIL target=loongarch64 missing_qemu_system=1' >&2
+                exit 2
+              }
+              ;;
+          esac
+
+      - name: Preflight SHA-locked LoongArch EFI firmware (never silently skip)
+        if: matrix.target == 'loongarch64'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if [[ -z "$LOONG_FIRMWARE_URL" || ! "$LOONG_FIRMWARE_SHA256" =~ ^[0-9a-fA-F]{64}$ ]]; then
+            echo 'THREE_ISA_GNU_QEMU=FAIL target=loongarch64 firmware_url_and_sha256_required=1' >&2
+            exit 2
+          fi
+          [[ "$LOONG_FIRMWARE_URL" == https://* ]] || {
+            echo 'THREE_ISA_GNU_QEMU=FAIL target=loongarch64 firmware_https_required=1' >&2
+            exit 2
+          }
+          mkdir -p "$RUNTIME_OUTPUT"
+          curl --proto '=https' --tlsv1.2 -fL --retry 3 \
+            "$LOONG_FIRMWARE_URL" -o "$RUNTIME_OUTPUT/QEMU_EFI.fd"
+          printf '%s  %s\n' "$LOONG_FIRMWARE_SHA256" "$RUNTIME_OUTPUT/QEMU_EFI.fd" | sha256sum -c -
+          sha256sum "$RUNTIME_OUTPUT/QEMU_EFI.fd"
+
+      - name: Build pinned original GNU Linux 6.6.143 and frozen .cmd C corpus
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$GNU_WORK"
+          MINIC_LINUX_CONFIG_PROFILE=broad \
+            bash tools/ci/linux-three-isa-golden-v1.sh '${{ matrix.target }}' "$GNU_WORK"
+
+      - name: Produce bootable LoongArch EFI image from exact original GNU tree
+        if: matrix.target == 'loongarch64'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          # The broad producer certifies vmlinux, not an EFI-bootable image.
+          # This original GNU Kbuild target must actually exist and produce an
+          # EFI image.  Firmware or unsupported Kconfig failures are blockers.
+          make -C "$GNU_WORK/linux-6.6.143" O="$GNU_WORK/build" \
+            ARCH=loongarch CROSS_COMPILE=loongarch64-linux-gnu- \
+            CC=loongarch64-linux-gnu-gcc-13 -j4 vmlinuz.efi
+          test -s "$GNU_WORK/build/arch/loongarch/boot/vmlinuz.efi"
+
+      - name: Build target GNU static init, shell and 12-syscall probes
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          case '${{ matrix.target }}' in
+            x86_64) cc=gcc ;;
+            aarch64) cc=aarch64-linux-gnu-gcc ;;
+            loongarch64) cc=loongarch64-linux-gnu-gcc-13 ;;
+          esac
+          mkdir -p "$RUNTIME_OUTPUT"
+          RISCV_CC="$cc" BUILD_DIR="$RUNTIME_OUTPUT/initramfs" \
+            OUTPUT_INITRAMFS="$RUNTIME_OUTPUT/runtime-initramfs.cpio.gz" \
+            bash tests/external/linux/build_runtime_initramfs.sh
+
+      - name: Execute real QEMU P0 and P1 against exact GNU image
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          args=()
+          if [[ '${{ matrix.target }}' == loongarch64 ]]; then
+            args+=(--firmware "$RUNTIME_OUTPUT/QEMU_EFI.fd" \
+                   --firmware-sha256 "$LOONG_FIRMWARE_SHA256")
+          fi
+          python3 tools/ci/linux-three-isa-gnu-qemu-v1.py \
+            --target '${{ matrix.target }}' \
+            --gnu-work "$GNU_WORK" \
+            --initramfs "$RUNTIME_OUTPUT/runtime-initramfs.cpio.gz" \
+            --initramfs-root "$RUNTIME_OUTPUT/initramfs/root" \
+            --output "$RUNTIME_OUTPUT/boot" \
+            --timeout 240 "${args[@]}"
+
+      - name: Build one current-head MiniC compiler for all original target C owners
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror \
+            BUILD_DIR="$RUNTIME_OUTPUT/compiler" \
+            "$RUNTIME_OUTPUT/compiler/bin/minic"
+          test -x "$RUNTIME_OUTPUT/compiler/bin/minic"
+          sha256sum "$RUNTIME_OUTPUT/compiler/bin/minic"
+
+      - name: Replace every original ELF64 GNU C object with MiniC, GNU relink and QEMU differential
+        shell: bash
+        timeout-minutes: 80
+        run: |
+          set -Eeuo pipefail
+          args=()
+          if [[ '${{ matrix.target }}' == loongarch64 ]]; then
+            args+=(--firmware "$RUNTIME_OUTPUT/QEMU_EFI.fd")
+          fi
+          python3 tools/ci/linux-three-isa-minic-candidate-v1.py \
+            --target '${{ matrix.target }}' \
+            --gnu-work "$GNU_WORK" \
+            --minic "$RUNTIME_OUTPUT/compiler/bin/minic" \
+            --gnu-receipt "$RUNTIME_OUTPUT/boot/gnu-qemu-receipt.json" \
+            --gnu-boot-logs "$RUNTIME_OUTPUT/boot" \
+            --initramfs "$RUNTIME_OUTPUT/runtime-initramfs.cpio.gz" \
+            --output "$RUNTIME_OUTPUT/candidate" \
+            --workers 7 --timeout 240 "${args[@]}"
+
+      - name: Persist exact GNU oracle evidence, including failure logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minic-three-isa-gnu-qemu-${{ matrix.target }}-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            ${{ runner.temp }}/minic-linux-gnu-${{ matrix.target }}/evidence/
+            ${{ runner.temp }}/minic-linux-gnu-${{ matrix.target }}/build/.config
+            ${{ runner.temp }}/minic-linux-gnu-runtime-${{ matrix.target }}/boot/
+            ${{ runner.temp }}/minic-linux-gnu-runtime-${{ matrix.target }}/candidate/candidate-receipt.json
+            ${{ runner.temp }}/minic-linux-gnu-runtime-${{ matrix.target }}/candidate/all-c-owners-result.json
+            ${{ runner.temp }}/minic-linux-gnu-runtime-${{ matrix.target }}/candidate/gnu-ld-relink.log
+            ${{ runner.temp }}/minic-linux-gnu-runtime-${{ matrix.target }}/candidate/postlink-gnu-c-fallback.json
+            ${{ runner.temp }}/minic-linux-gnu-runtime-${{ matrix.target }}/candidate/boot/
+          if-no-files-found: warn
+          retention-days: 14

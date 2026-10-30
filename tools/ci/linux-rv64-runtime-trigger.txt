@@ -1,0 +1,4 @@
+# 2026-10-30 exact-head recertification: all original RV64 Linux 6.6.143
+# C owners through current MiniC, GNU linker and genuine P0/P1, followed by
+# 12 separate QEMU P1 boots of the same SHA-locked kernel Image. Any failed
+# owner, timeout, or mismatched generated ELF object is a FAIL.

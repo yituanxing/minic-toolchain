@@ -1,0 +1,64 @@
+# MiniC original Linux 6.6.143: four-ISA runtime qualification
+
+This document distinguishes **building every original GNU Kbuild C owner**
+from **creating and booting a full Linux Image**. It is a runbook, not a PASS
+certificate. Never promote a 21-shard `.i -> MiniC -S` census, a four-ISA
+compiler microtest, or an old QEMU image to a current-head Linux runtime PASS.
+
+## Immutable differential contract
+
+1. Use original Linux 6.6.143 archive SHA-256
+   `dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932`.
+   GNU builds fix Kbuild identity and freeze each target's resolved `.config`.
+2. Derive **all** eligible native ELF64 C owners from original GNU Kbuild
+   `.o.cmd` records. Record excluded non-C, host tools and ABI-separate ELF32
+   objects; exclusions are not a MiniC pass. No silent TU substitution.
+3. Produce original GNU kernel, GNU-built identical initramfs and two QEMU
+   logs as the *golden runtime oracle* for each ISA before judging MiniC.
+4. For a candidate, compile **every** original C owner with the exact-head
+   MiniC binary. Use GNU assembler, archiver, linker and image utilities as
+   permitted tooling, but **zero GCC-compiled kernel C fallback objects**.
+   Record per-object ownership, ELF machine, build logs and SHA hashes.
+5. Re-link all target kernel outputs with the candidate C objects. Run both
+   GNU and MiniC images under real system QEMU, separately P0 and P1, using
+   the **same Kconfig, kernel source, initramfs, firmware and QEMU ABI**.
+6. Refuse skipped QEMU, nonzero exit, timeout, kernel panic/Oops/BUG,
+   missing/multiple markers, a changed syscall order, any of the 12 missing
+   probes, wrong kernel release or mismatched SHA provenance. Preserve full
+   failed evidence; rerun *all* blocked owners together after each batch fix.
+
+## Distinct gates and current proof limits
+
+| Target | Historical proof (not current-head acceptance) | Required new proof |
+| --- | --- | --- |
+| RV64 | Stage4 2064/2064, GNU link, Linux P1 12/12; same Image had 12 boots | Exact HEAD seven-way 2064 C, GNU link, P0/P1 and 12 clean independent boots on one SHA-locked Image |
+| x86-64 | Full `.i -> -S` source coverage in prior 21-shard run | GNU P0/P1; all-owner MiniC `.o`, GNU link, candidate P0/P1 and exact GNU/MiniC differential |
+| AArch64 | 4076/4078 in one prior broad `.i -> -S` census | Close any current `.i` failures; then same full GNU/MiniC linked QEMU differential |
+| LoongArch64 | Full `.i -> -S` source coverage in prior 21-shard run | SHA-authenticated UEFI firmware, genuine QEMU GNU P0/P1; all-owner MiniC linked QEMU differential |
+
+The `tools/ci/linux-three-isa-strict-source-gate-v1.py` job rejects even one
+failed C owner but explicitly prints `AS_LINK_QEMU=NOT_RUN`. The
+`tools/ci/linux-three-isa-gnu-qemu-v1.py` oracle emits
+`GNU_QEMU_P0_P1_PASS_NOT_MINIC` only after real GNU boots. The
+`tools/ci/linux-three-isa-minic-candidate-v1.py` producer then attempts the
+full original C-owner MiniC/GNU AS replacement, original GNU relink and real
+P0/P1 QEMU candidate boots. It must preserve its failure receipt if blocked.
+The
+`tools/ci/linux-four-isa-runtime-diff-v1.py` consumer accepts paired actual
+GNU and MiniC P0/P1 receipts and rejects missing provenance or GCC C fallback.
+Passing each isolated self-test does **not** qualify a kernel image.
+
+## Campaigns
+
+- Three-ISA 21-shard source census: bump `tools/ci/linux-three-isa-trigger.txt`
+  as the last commit's change to run exactly one complete campaign.
+- RV64 seven-shard full-QEMU replay: bump
+  `tools/ci/linux-rv64-runtime-trigger.txt` on that exact PR HEAD.
+- Three-ISA original GNU/QEMU oracle: bump
+  `tools/ci/linux-three-isa-gnu-qemu-trigger.txt` on that exact PR HEAD.
+  LoongArch firmware is mandatory, not an optional skipped success.
+
+Always report each campaign's **exact commit SHA, actual jobs, C owner counts,
+native `.o` and image identity, QEMU result, and unresolved blockers**. A
+successfully queued job, green source-census collector with failed owners,
+or skipped expensive matrix is not a successful runtime qualification.
