@@ -90,11 +90,14 @@ size_t minic_core_function_fold_literal_branches(MinicCoreFunction *function) {
         definition = &function->instructions[function->values[condition].definition];
         if (definition->kind != MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT ||
             definition->result != condition ||
-            !minic_type_is_integer(function->values[condition].type))
+            !minic_type_is_integer(function->values[condition].type) ||
+            !minic_type_equal(definition->type,
+                              function->values[condition].type) ||
+            term->conditional.when_true >= function->block_count ||
+            term->conditional.when_false >= function->block_count)
             continue;
         selected = definition->value.integer_value != 0
             ? term->conditional.when_true : term->conditional.when_false;
-        if (selected >= function->block_count) continue;
         term->kind = MINIC_CORE_TERMINATOR_BRANCH;
         term->branch_target = selected;
         ++count;

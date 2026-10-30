@@ -79,12 +79,17 @@ int main(void) {
         blocks[0].terminator.kind != MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH)
         return 6;
     blocks[0].terminator.conditional.when_true = 1U;
-    values[0].type = minic_type_double();
+    blocks[0].terminator.conditional.when_false = 99U;
     if (minic_core_function_fold_literal_branches(&fn) != 0U ||
         blocks[0].terminator.kind != MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH)
         return 7;
+    blocks[0].terminator.conditional.when_false = 2U;
+    values[0].type = minic_type_double();
+    if (minic_core_function_fold_literal_branches(&fn) != 0U ||
+        blocks[0].terminator.kind != MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH)
+        return 8;
     (void)memset(&fn, 0, sizeof(fn));
-    if (minic_core_function_fold_literal_branches(&fn) != 0U) return 8;
-    puts("CORE_LITERAL_BRANCH_FOLD=PASS true=1 false=1 dynamic_preserved=1 unreachable_pruned=1 malformed_fail_closed=5");
+    if (minic_core_function_fold_literal_branches(&fn) != 0U) return 9;
+    puts("CORE_LITERAL_BRANCH_FOLD=PASS true=1 false=1 dynamic_preserved=1 unreachable_pruned=1 malformed_fail_closed=6");
     return 0;
 }

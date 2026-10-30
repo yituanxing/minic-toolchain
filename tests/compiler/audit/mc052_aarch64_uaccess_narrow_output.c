@@ -46,21 +46,26 @@ void read_pointer(void **user, void **result) {
 
 int main(void) {
     int failures = 0;
-    unsigned char byte = 0xa5U;
-    unsigned short half = 0x9a67U;
-    unsigned int word = 0x9abcdef0U;
-    unsigned long dword = 0x1234567887654321UL;
-    void *pointer_source = &word;
+    /* GNU sees a register-only pointer operand and cannot infer that LDTR
+     * consumes pointed-to automatic storage. Static volatile initializers
+     * exist in the ELF image before QEMU enters main; neither GCC -O2 nor
+     * MiniC can elide the five source memory objects. This keeps Linux's
+     * original no-clobber uaccess inline-ASM contract unchanged. */
+    static volatile unsigned char byte = 0xa5U;
+    static volatile unsigned short half = 0x9a67U;
+    static volatile unsigned int word = 0x9abcdef0U;
+    static volatile unsigned long dword = 0x1234567887654321UL;
+    static void * volatile pointer_source = (void *)&word;
     void *pointer_result = (void *)0;
     struct NarrowPair pair = {0x31U, 0U};
     unsigned short half_result = 0U;
     unsigned int word_result = 0U;
     unsigned long dword_result = 0U;
-    read_u8(&byte, &pair);
-    read_u16(&half, &half_result);
-    read_u32(&word, &word_result);
-    read_u64(&dword, &dword_result);
-    read_pointer(&pointer_source, &pointer_result);
+    read_u8((unsigned char *)&byte, &pair);
+    read_u16((unsigned short *)&half, &half_result);
+    read_u32((unsigned int *)&word, &word_result);
+    read_u64((unsigned long *)&dword, &dword_result);
+    read_pointer((void **)&pointer_source, &pointer_result);
     /* A nonzero result is a bitmask: it distinguishes the 1/2/4/8-byte
      * lvalues, their neighboring guard, and the pointer ABI independently.
      * This also identifies a broken GNU QEMU baseline before comparing MiniC. */
