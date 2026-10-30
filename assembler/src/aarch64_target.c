@@ -5802,13 +5802,6 @@ static bool validate(MiniAs *as) {
     return a64_record_source_mappings(as);
 }
 
-static void attributes(const MiniAs *as, unsigned char elf_class,
-                       MiniAsObjectAttribute *out) {
-    (void)as;
-    (void)elf_class;
-    memset(out, 0, sizeof(*out));
-}
-
 static bool aarch64_resolve_profile(const char *march, const char *mabi,
                                     MiniAsAssemblyConfig *config,
                                     char *error, size_t capacity) {
@@ -5850,7 +5843,6 @@ static const MiniAsTargetOps ops = {
     .init_target_state = a64_init_target_state,
     .capture_site_state = a64_capture_site_state,
     .destroy_target_state = a64_destroy_target_state,
-    .object_attributes = attributes,
     .name = "aarch64",
     .resolve_profile = aarch64_resolve_profile,
     .parse_mcinst = parse_mcinst,

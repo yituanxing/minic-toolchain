@@ -15,6 +15,7 @@
 #define MINIAS_SHF_TLS 1024ULL
 #define MINIAS_SHF_GROUP 512ULL
 #define MINIAS_SHF_GNU_RETAIN (1ULL << 21)
+#define MINIAS_GRP_COMDAT 1U
 #define MINIAS_SHT_PROGBITS 1U
 #define MINIAS_SHT_NOTE 7U
 #define MINIAS_SHT_INIT_ARRAY 14U
@@ -46,11 +47,19 @@ typedef struct MiniAsSection {
     char *name;
     /* GNU ELF SHT_GROUP signature; absent for ordinary Sections. */
     char *group_signature;
+    /* SHT_GROUP flags are distinct from section flags. A named group may be
+     * non-COMDAT (zero) or COMDAT (GRP_COMDAT), and `?` inherits the current
+     * source group's policy. The ELF writer merges policy by signature. */
+    uint32_t group_flags;
     /* SHF_LINK_ORDER identity is the original referenced *symbol*, not the
      * resolved SectionID: two distinct patchable-function anchors in one
      * .text still require two distinct, same-named output sections.  Resolve
      * this reference after all labels and section groups are finalized. */
     char *link_order_reference;
+    /* Explicit GNU `unique,<u32>` is a Section identity component, not an
+     * output flag. ID zero is valid and differs from no unique argument. */
+    bool has_unique_id;
+    uint32_t unique_id;
     uint32_t type;
     uint64_t flags;
     uint64_t align;
@@ -1073,9 +1082,5 @@ int minias_assemble_config(const char *, const char *,
 int minias_assemble_with_target(const char *, const char *,
                                 const MiniAsTargetOps *, bool, uint32_t,
                                 unsigned, FILE *);
-
-bool minias_riscv_measure_mcinst(MiniAs *, const MiniAsStmt *, uint32_t *);
-bool minias_riscv_parse_mcinst(MiniAs *as, MiniAsStmt *stmt);
-bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt);
 
 #endif

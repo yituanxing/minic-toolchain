@@ -404,6 +404,7 @@ static bool minias_write_elf(MiniAs *as,
         output->name = input->name;
         output->type = input->type;
         output->has_group = input->group_signature != NULL;
+        output->group_flags = input->group_flags;
         output->flags = input->flags;
         if((input->flags & MINIAS_SHF_LINK_ORDER)!=0U) {
             size_t linked_target=SIZE_MAX;

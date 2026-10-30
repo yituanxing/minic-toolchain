@@ -69,6 +69,13 @@ typedef enum MiniAsRiscvSymbolModifier {
 struct MiniAs;
 struct MiniAsStmt;
 
+/* RISC-V-private typed instruction API: Common sees only TargetOps.
+ * No other ISA or the assembler driver needs these concrete symbols. */
+bool minias_riscv_measure_mcinst(struct MiniAs *,
+                                const struct MiniAsStmt *, uint32_t *);
+bool minias_riscv_parse_mcinst(struct MiniAs *, struct MiniAsStmt *);
+bool minias_riscv_encode(struct MiniAs *, const struct MiniAsStmt *);
+
 /* Parser already chose a fixed descriptor or dynamic Target form; validate
  * its typed feature/XLEN policy once, after MCInst construction. The strict-I
  * output-word validator is an independent raw-encoding safety net. */

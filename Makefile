@@ -254,6 +254,8 @@ MINIELF_REL_OBJECTS := $(MINIELF_READER_OBJECT) $(MINIELF_REL_WRITER_OBJECT)
 MINIAS_INCLUDES := -Iassembler/src $(MINIELF_INCLUDES)
 MINIAS_SOURCES := \
 	assembler/src/assembler.c \
+	assembler/src/source_graph.c \
+	assembler/src/source_expansion.c \
 	assembler/src/cfi.c \
 	assembler/src/cfi_writer.c \
 	assembler/src/debug_line.c \

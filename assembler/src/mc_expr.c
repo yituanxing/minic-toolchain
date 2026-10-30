@@ -1301,11 +1301,15 @@ bool minias_evaluate_deferred_expr(const MiniAs *as,
             if(r==0 || (l==INT64_MIN && r==-1))return false;
             v=n->op==DEF_DIV?l/r:l%r;break;
         case DEF_SHL:case DEF_SHR:
-            if(r<0 || r>=63)return false;
+            /* GNU GAS treats right shifts of absolute 64-bit expressions
+             * as logical bit-pattern shifts, even after a same-section
+             * symbolic subtraction yields a negative signed value. Match
+             * the eager absolute grammar: bit 63 is a legal shift amount.
+             * Only resolved absolute operands may reach this path (checked
+             * below); a relocatable shift must never be guessed. */
+            if(r<0 || r>=64)return false;
             bits=(uint64_t)l;
             if(n->op==DEF_SHL)bits<<=(unsigned)r;
-            else if(l<0 && r>0)
-                bits=(bits>>(unsigned)r)|(UINT64_MAX<<(64U-(unsigned)r));
             else bits>>=(unsigned)r;
             v=signed_from_bits(bits);break;
         case DEF_LT:v=l<r?-1:0;break;

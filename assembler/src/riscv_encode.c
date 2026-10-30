@@ -791,11 +791,13 @@ static bool rv_bind_symbol_operand(MiniAs *as, MiniAsMCInst *m,
     return true;
 }
 
-/* Construct a canonical 32-bit machine word from the retained instruction.
- * RVC selection below uses this same word rather than reparsing source text.
- * Symbolic immediates never compress: their I/U relocation field has a
- * different psABI contract from the corresponding 16-bit instruction. */
-static bool rv_plain_machine_word(const MiniAsMCInst *m, uint32_t *word) {
+/* A single canonical 32-bit word builder serves RVC selection and emission.
+ * RVC rejects relocation-bearing forms because their I/U fields have a
+ * different psABI contract; ELF emission retains the zero-immediate word
+ * placeholder and attaches the typed Fixup afterward. */
+static bool rv_scalar_machine_word(const MiniAsMCInst *m,
+                                   bool allow_reloc_placeholder,
+                                   uint32_t *word) {
     uint32_t base=m->encoding;
     int rd,rs1=0,rs2=0,rs3=0;
     int64_t imm=0;
@@ -805,7 +807,8 @@ static bool rv_plain_machine_word(const MiniAsMCInst *m, uint32_t *word) {
         *word=plan->words[0];
         return true;
     }
-    if (m->target_form!=RV_ABS_RELOC_NONE || m->count==0U) return false;
+    if ((!allow_reloc_placeholder && m->target_form!=RV_ABS_RELOC_NONE) ||
+        m->count==0U) return false;
     rd=(int)m->operands[0].reg;
     if(m->count>1U && m->operands[1].kind==MINIAS_MC_REGISTER)
         rs1=(int)m->operands[1].reg;
@@ -839,6 +842,10 @@ static bool rv_plain_machine_word(const MiniAsMCInst *m, uint32_t *word) {
               ((bits&31U)<<7U)|(((bits>>5U)&127U)<<25U);
         return true;
     }
+    case RV_MC_U:
+        *word=base|((uint32_t)rd<<7U)|
+              (((uint32_t)m->operands[1].immediate&0xfffffU)<<12U);
+        return true;
     default:
         return false;
     }
@@ -854,7 +861,7 @@ static bool rv_rvc_encode_plain(const MiniAs *as, const MiniAsStmt *stmt,
     if(state==NULL || !state->isa_explicit ||
        (state->isa_features&RISCV_ISA_C)==0U ||
        (stmt->site.mode_bits&MINIAS_RISCV_OPTION_NO_RVC)!=0U ||
-       m==NULL || !rv_plain_machine_word(m,&w))return false;
+       m==NULL || !rv_scalar_machine_word(m,false,&w))return false;
     op=w&127U;
     rd=(w>>7U)&31U;
     f3=(w>>12U)&7U;
@@ -2387,21 +2394,11 @@ static bool rv_encode_mcinst(MiniAs *as, const MiniAsStmt *stmt) {
                minias_encode_add_fixup_ref(as,stmt->section,stmt->offset,
                                             fixup,2U,*symbol,false);
     }
-    int rd=(int)m->operands[0].reg,rs1=0,rs2=0,rs3=0;
-    int64_t imm=0;
+    int rd=(int)m->operands[0].reg,rs1=0;
     uint32_t base=m->encoding,code=0U;
     const MiniAsSymbolRef *expr=NULL;
     if (m->count > 1U && m->operands[1].kind==MINIAS_MC_REGISTER)
         rs1=(int)m->operands[1].reg;
-    else if (m->opcode == RV_MC_WORD && m->count > 1U &&
-             m->operands[1].kind == MINIAS_MC_IMMEDIATE)
-        rs1 = (int)m->operands[1].immediate;
-    if (m->count > 2U && m->operands[2].kind==MINIAS_MC_REGISTER)
-        rs2=(int)m->operands[2].reg;
-    if (m->count > 2U && m->operands[2].kind==MINIAS_MC_IMMEDIATE)
-        imm=(int64_t)m->operands[2].immediate;
-    if (m->count > 3U && m->operands[3].kind==MINIAS_MC_REGISTER)
-        rs3=(int)m->operands[3].reg;
     if (m->opcode == RV_MC_SYMBOL_LOAD ||
         m->opcode == RV_MC_SYMBOL_STORE) {
         const bool load = m->opcode == RV_MC_SYMBOL_LOAD;
@@ -2433,27 +2430,7 @@ static bool rv_encode_mcinst(MiniAs *as, const MiniAsStmt *stmt) {
                                        MINIAS_FIXUP_RV_PCREL_LO12_S,
                                 4U, anchor, false);
     }
-    if (m->opcode == RV_MC_WORD)
-        code = base | ((uint32_t)rd << 7U) |
-               ((uint32_t)rs1 << 15U) | ((uint32_t)rs2 << 20U) |
-               ((uint32_t)rs3 << 27U);
-    else if (m->opcode==RV_MC_R)
-        code=enc_r(base&0x7fU,rd,(base>>12U)&7U,rs1,rs2,base>>25U);
-    else if(m->opcode==RV_MC_I || m->opcode==RV_MC_LOAD) {
-        if(m->opcode==RV_MC_I && m->count==2U)
-            imm=(int64_t)m->operands[1].immediate;
-        code=base | ((uint32_t)rd<<7U) |
-             ((uint32_t)rs1<<15U) |
-             (((uint32_t)imm&0xfffU)<<20U);
-    } else if(m->opcode==RV_MC_STORE) {
-        uint32_t bits=(uint32_t)imm&0xfffU;
-        code=base | ((uint32_t)rd<<20U) |
-             ((uint32_t)rs1<<15U) |
-             ((bits&31U)<<7U) | (((bits>>5U)&127U)<<25U);
-    } else if(m->opcode==RV_MC_U)
-        code=base | ((uint32_t)rd<<7U) |
-             (((uint32_t)m->operands[1].immediate&0xfffffU)<<12U);
-    else if(m->opcode==RV_MC_BRANCH || m->opcode==RV_MC_JAL) {
+    if(m->opcode==RV_MC_BRANCH || m->opcode==RV_MC_JAL) {
         MiniAsRiscvBranchPlan branch;
         expr=m->operands[m->opcode==RV_MC_BRANCH ? 2U : 1U].bound_symbol;
         if(!minias_riscv_resolve_branch_plan(as,stmt,&branch))return false;
@@ -2501,7 +2478,7 @@ static bool rv_encode_mcinst(MiniAs *as, const MiniAsStmt *stmt) {
                minias_encode_add_fixup_ref(as,stmt->section,stmt->offset,
                                 MINIAS_FIXUP_RV_JAL,4U,*expr,
                                 false);
-    } else {
+    } else if(!rv_scalar_machine_word(m,true,&code)) {
         minias_set_error(as,"unknown-riscv-mcinst");
         return false;
     }

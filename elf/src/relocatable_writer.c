@@ -358,6 +358,7 @@ bool minielf_build_relocatable(const MiniElfRelocatableSpec *spec,
     size_t *relocation_write_counts = NULL;
     size_t *section_group_indices = NULL;
     size_t *group_signature_symbols = NULL;
+    uint32_t *group_flags = NULL;
     size_t *group_header_indices = NULL;
     uint32_t *group_name_offsets = NULL;
     size_t *symbol_output_indices = NULL;
@@ -428,6 +429,8 @@ bool minielf_build_relocatable(const MiniElfRelocatableSpec *spec,
     group_signature_symbols =
         malloc((spec->section_count == 0U ? 1U : spec->section_count) *
                sizeof(*group_signature_symbols));
+    group_flags = calloc(spec->section_count == 0U ? 1U : spec->section_count,
+                         sizeof(*group_flags));
     group_header_indices =
         malloc((spec->section_count == 0U ? 1U : spec->section_count) *
                sizeof(*group_header_indices));
@@ -459,6 +462,7 @@ bool minielf_build_relocatable(const MiniElfRelocatableSpec *spec,
         calloc(spec->symbol_count == 0U ? 1U : spec->symbol_count,
                sizeof(*symbol_name_offsets));
     if (section_group_indices == NULL || group_signature_symbols == NULL ||
+        group_flags == NULL ||
         group_header_indices == NULL || group_name_offsets == NULL ||
         relocation_counts == NULL || relocation_section_indices == NULL ||
         relocation_write_counts == NULL || section_name_offsets == NULL ||
@@ -487,7 +491,11 @@ bool minielf_build_relocatable(const MiniElfRelocatableSpec *spec,
         }
         for(j=0U;j<group_count;++j)
             if(group_signature_symbols[j]==s->group_signature_symbol)break;
-        if(j==group_count)group_signature_symbols[group_count++]=s->group_signature_symbol;
+        if(j==group_count) {
+            group_signature_symbols[group_count]=s->group_signature_symbol;
+            group_flags[group_count]=s->group_flags;
+            ++group_count;
+        } else group_flags[j]|=s->group_flags;
         section_group_indices[i]=j;
     }
 
@@ -880,7 +888,7 @@ bool minielf_build_relocatable(const MiniElfRelocatableSpec *spec,
         size_t j,offset=0U;
         const size_t hdr=group_header_indices[i];
         unsigned char *data=image+(size_t)headers[hdr].offset;
-        store_u32(data+offset,spec->data_encoding,GRP_COMDAT);
+        store_u32(data+offset,spec->data_encoding,group_flags[i]);
         offset+=4U;
         for(j=0U;j<spec->section_count;++j)
             if(section_group_indices[j]==i) {
@@ -1023,6 +1031,7 @@ done:
     free(relocation_counts);
     free(section_group_indices);
     free(group_signature_symbols);
+    free(group_flags);
     free(group_header_indices);
     free(group_name_offsets);
     free(strtab.data);

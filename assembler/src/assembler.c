@@ -1,4 +1,5 @@
 #include "minias_internal.h"
+#include "source_graph_internal.h"
 #include "minias.h"
 
 #include <ctype.h>
@@ -11,12 +12,6 @@
 static bool validate_user_source_private_marker(MiniAs *as,
                                                 const char *line,
                                                 size_t source_line);
-static void source_graph_record_condition(MiniAs *as,
-                                          MiniAsStableSiteId owner,
-                                          bool active);
-static bool source_graph_lookup_forced_branch(MiniAs *as,
-                                              const MiniAsStmt *stmt,
-                                              size_t *minimum_size);
 
 bool minias_grow_array(void **ptr, size_t *capacity, size_t elem_size, size_t need) {
     size_t next;
@@ -268,10 +263,26 @@ void minias_set_error(MiniAs *as, const char *format, ...) {
     va_end(ap);
 }
 
-/* A SectionKey includes the whole GNU ELF grouping identity; name alone
- * is not unique for COMDAT or SHF_LINK_ORDER. SectionIDs never change even
- * when the Section array grows. This open-addressed index has independent
- * lifetime from ELF writer's ordering index and preserves first definition. */
+/* SectionID is the identity of one output Section throughout parse, layout
+ * and ELF serialization. GNU can create several Sections with the same
+ * spelling; group signature, LINK_ORDER source anchor and explicit unique ID
+ * all distinguish them. The index is immutable across Section array moves.
+ * Absence of unique is different from the valid numeric ID zero. */
+typedef struct MiniAsSectionIdentity {
+    const char *name;
+    const char *group_signature;
+    const char *link_order_reference;
+    bool has_unique_id;
+    uint32_t unique_id;
+} MiniAsSectionIdentity;
+
+static MiniAsSectionIdentity section_identity(const MiniAsSection *section) {
+    MiniAsSectionIdentity result={section->name,section->group_signature,
+                                  section->link_order_reference,
+                                  section->has_unique_id,section->unique_id};
+    return result;
+}
+
 static uint64_t section_key_hash_component(uint64_t hash,const char *text) {
     const unsigned char *p=(const unsigned char *)text;
     hash^=text==NULL ? UINT64_C(0) : UINT64_C(1);
@@ -286,12 +297,19 @@ static uint64_t section_key_hash_component(uint64_t hash,const char *text) {
     return hash*UINT64_C(1099511628211);
 }
 
-static size_t section_key_hash(const char *name,const char *group,
-                               const char *link_order) {
+static size_t section_key_hash(const MiniAsSectionIdentity *key) {
     uint64_t hash=UINT64_C(1469598103934665603);
-    hash=section_key_hash_component(hash,name);
-    hash=section_key_hash_component(hash,group);
-    hash=section_key_hash_component(hash,link_order);
+    uint32_t id=key->unique_id;
+    size_t i;
+    hash=section_key_hash_component(hash,key->name);
+    hash=section_key_hash_component(hash,key->group_signature);
+    hash=section_key_hash_component(hash,key->link_order_reference);
+    hash^=key->has_unique_id ? UINT64_C(1) : UINT64_C(0);
+    hash*=UINT64_C(1099511628211);
+    for(i=0U;i<sizeof(id);++i) {
+        hash^=(id>>(i*8U))&UINT32_C(0xff);
+        hash*=UINT64_C(1099511628211);
+    }
     return (size_t)hash;
 }
 
@@ -299,11 +317,13 @@ static bool section_key_component_equal(const char *a,const char *b) {
     return a==b || (a!=NULL && b!=NULL && strcmp(a,b)==0);
 }
 
-static bool section_key_equal(const MiniAsSection *sec,const char *name,
-                              const char *group,const char *link_order) {
-    return section_key_component_equal(sec->name,name) &&
-           section_key_component_equal(sec->group_signature,group) &&
-           section_key_component_equal(sec->link_order_reference,link_order);
+static bool section_key_equal(const MiniAsSection *sec,
+                              const MiniAsSectionIdentity *key) {
+    return section_key_component_equal(sec->name,key->name) &&
+           section_key_component_equal(sec->group_signature,key->group_signature) &&
+           section_key_component_equal(sec->link_order_reference,key->link_order_reference) &&
+           sec->has_unique_id==key->has_unique_id &&
+           (!key->has_unique_id || sec->unique_id==key->unique_id);
 }
 
 /* Rehash only on growth, never on lookup. On OOM the original index remains
@@ -317,8 +337,8 @@ static bool minias_rebuild_section_index(MiniAs *as,size_t capacity) {
     }
     for(i=0U;i<as->section_count;++i) {
         const MiniAsSection *sec=&as->sections[i];
-        size_t slot=section_key_hash(sec->name,sec->group_signature,
-                                      sec->link_order_reference)&(capacity-1U);
+        const MiniAsSectionIdentity key=section_identity(sec);
+        size_t slot=section_key_hash(&key)&(capacity-1U);
         while(slots[slot]!=0U)slot=(slot+1U)&(capacity-1U);
         slots[slot]=i+1U;
     }
@@ -340,47 +360,48 @@ static bool minias_reserve_section_index(MiniAs *as) {
     return minias_rebuild_section_index(as,next);
 }
 
-static size_t minias_section_index_slot(const MiniAs *as,const char *name,
-                                         const char *group,
-                                         const char *link_order) {
-    size_t slot=section_key_hash(name,group,link_order)&
+static size_t minias_section_index_slot(const MiniAs *as,
+                                        const MiniAsSectionIdentity *key) {
+    size_t slot=section_key_hash(key)&
                 (as->section_slot_capacity-1U);
     /* At most half of the table is occupied. An empty slot always exists. */
     while(as->section_slots[slot]!=0U) {
         const size_t section_id=as->section_slots[slot]-1U;
-        if(section_key_equal(&as->sections[section_id],name,group,link_order))
+        if(section_key_equal(&as->sections[section_id],key))
             break;
         slot=(slot+1U)&(as->section_slot_capacity-1U);
     }
     return slot;
 }
 
-static int minias_find_section_key(const MiniAs *as,const char *name,
-                                   const char *group_signature,
-                                   const char *link_order_reference) {
+static int minias_find_section_key(const MiniAs *as,
+                                   const MiniAsSectionIdentity *key) {
     size_t slot;
     if(as->section_slot_capacity==0U)return -1;
-    slot=minias_section_index_slot(as,name,group_signature,
-                                   link_order_reference);
+    slot=minias_section_index_slot(as,key);
     return as->section_slots[slot]==0U ? -1 :
            (int)(as->section_slots[slot]-1U);
 }
 
 int minias_find_section(const MiniAs *as,const char *name) {
-    return minias_find_section_key(as,name,NULL,NULL);
+    const MiniAsSectionIdentity key={name,NULL,NULL,false,0U};
+    return minias_find_section_key(as,&key);
 }
 
-static int minias_ensure_section_key(MiniAs *as,const char *name,
-                                     const char *group_signature,
-                                     const char *link_order_reference,
+static int minias_ensure_section_key(MiniAs *as,
+                                     const MiniAsSectionIdentity *key,
+                                     uint32_t group_flags,
                                      uint32_t type,uint64_t flags,
                                      uint64_t align) {
-    const int found=minias_find_section_key(as,name,group_signature,
-                                             link_order_reference);
+    const int found=minias_find_section_key(as,key);
     MiniAsSection *sec;
     size_t slot;
     if(found>=0) {
         sec=&as->sections[(size_t)found];
+        if(sec->group_flags!=group_flags) {
+            minias_set_error(as,"conflicting-section-group-linkage:%s",key->name);
+            return -1;
+        }
         /* Preserve GAS first declaration; later conflicting metadata must
          * never silently change ELF section type or discard stored bytes. */
         (void)type;
@@ -400,21 +421,21 @@ static int minias_ensure_section_key(MiniAs *as,const char *name,
     }
     sec=&as->sections[as->section_count];
     memset(sec,0,sizeof(*sec));
-    sec->name=minias_strdup(name);
+    sec->name=minias_strdup(key->name);
     if(sec->name==NULL) {
         minias_set_error(as,"out-of-memory:section-name");
         return -1;
     }
-    if(group_signature!=NULL) {
-        sec->group_signature=minias_strdup(group_signature);
+    if(key->group_signature!=NULL) {
+        sec->group_signature=minias_strdup(key->group_signature);
         if(sec->group_signature==NULL) {
             free(sec->name);sec->name=NULL;
             minias_set_error(as,"out-of-memory:group-signature");
             return -1;
         }
     }
-    if(link_order_reference!=NULL) {
-        sec->link_order_reference=minias_strdup(link_order_reference);
+    if(key->link_order_reference!=NULL) {
+        sec->link_order_reference=minias_strdup(key->link_order_reference);
         if(sec->link_order_reference==NULL) {
             free(sec->group_signature);sec->group_signature=NULL;
             free(sec->name);sec->name=NULL;
@@ -424,10 +445,12 @@ static int minias_ensure_section_key(MiniAs *as,const char *name,
     }
     sec->type=type;
     sec->flags=flags;
+    sec->group_flags=group_flags;
+    sec->has_unique_id=key->has_unique_id;
+    sec->unique_id=key->unique_id;
     sec->align=align==0U ? 1U : align;
     /* No failure point remains: publish SectionID and hash entry together. */
-    slot=minias_section_index_slot(as,name,group_signature,
-                                   link_order_reference);
+    slot=minias_section_index_slot(as,key);
     as->section_slots[slot]=as->section_count+1U;
     ++as->section_count;
     return (int)(as->section_count-1U);
@@ -438,7 +461,8 @@ int minias_ensure_section(MiniAs *as,
                           uint32_t type,
                           uint64_t flags,
                           uint64_t align) {
-    return minias_ensure_section_key(as,name,NULL,NULL,type,flags,align);
+    const MiniAsSectionIdentity key={name,NULL,NULL,false,0U};
+    return minias_ensure_section_key(as,&key,0U,type,flags,align);
 }
 
 static size_t symbol_name_hash(const char *name) {
@@ -1442,25 +1466,6 @@ static uint64_t minias_target_exec_alignment(const MiniAs *as) {
     return align!=0U ? align : 4U;
 }
 
-/* A purged GNU macro owns exactly the resources freed by assembler exit.
- * Keep a single lifetime owner so later redefinitions never retain stale
- * macro parameter/body pointers in the symbol-independent Common layer. */
-static void release_macro(MiniAsMacro *macro) {
-    size_t i;
-    free(macro->name);
-    for(i=0U;i<macro->param_count;++i) {
-        free(macro->params[i].name);
-        free(macro->params[i].default_value);
-    }
-    free(macro->params);
-    for(i=0U;i<macro->body_count;++i)
-        free(macro->body[i]);
-    free(macro->body);
-    free(macro->body_lines);
-    free(macro->body_source_segments);
-    memset(macro,0,sizeof(*macro));
-}
-
 void minias_destroy(MiniAs *as) {
     size_t i;
     minias_layout_destroy(as);
@@ -1509,7 +1514,7 @@ void minias_destroy(MiniAs *as) {
     free(as->numeric_label_counts);
     free(as->conditionals);
     for(i=0U;i<as->macro_count;++i)
-        release_macro(&as->macros[i]);
+        minias_macro_destroy(&as->macros[i]);
     free(as->macros);
     free(as->cfi_procs);
     for(i=0U;i<as->cfi_op_count;++i)
@@ -1663,38 +1668,6 @@ static void strip_gnu_c_comments(MiniAs *as, char *line) {
     }
 }
 
-static void strip_comment(char *line, const MiniAsTargetOps *target) {
-    char quote = '\0';
-    bool escaped = false;
-    char *p;
-
-    for (p = line; *p != '\0'; ++p) {
-        if (escaped) {
-            escaped = false;
-            continue;
-        }
-        if (quote != '\0') {
-            if (*p == '\\') {
-                escaped = true;
-                continue;
-            }
-            if (*p == quote) {
-                quote = '\0';
-            }
-            continue;
-        }
-        if (*p == '\'' || *p == '"') {
-            quote = *p;
-            continue;
-        }
-        if ((target->comment_prefix == '/' && *p == '/' && p[1] == '/') ||
-            (target->comment_prefix != '/' && *p == target->comment_prefix)) {
-            *p = '\0';
-            return;
-        }
-    }
-}
-
 bool minias_parse_u64(const char *text, uint64_t *out) {
     char *end = NULL;
     unsigned long long value;
@@ -1718,12 +1691,17 @@ static bool switch_section(MiniAs *as,
                            const char *name,
                            const char *group_signature,
                            const char *link_order_reference,
+                           bool has_unique_id,
+                           uint32_t unique_id,
+                           uint32_t group_flags,
                            uint32_t type,
                            uint64_t flags,
                            uint64_t align) {
-    int index = minias_ensure_section_key(as, name, group_signature,
-                                          link_order_reference,
-                                          type, flags, align);
+    const MiniAsSectionIdentity key={name,group_signature,
+                                      link_order_reference,
+                                      has_unique_id,unique_id};
+    int index = minias_ensure_section_key(as,&key,group_flags,
+                                          type,flags,align);
 
     if (index < 0) {
         return false;
@@ -1751,7 +1729,10 @@ static bool parse_section_directive(MiniAs *as, char *args, size_t line) {
     bool quoted=false,escaped=false;
     uint64_t flags = 0U;
     uint32_t type = MINIAS_SHT_PROGBITS;
+    uint32_t group_flags = 0U;
     uint64_t entry_size=0U;
+    bool has_unique_id=false,inherit_group=false;
+    uint32_t unique_id=0U;
     const char *group_signature=NULL;
     const char *link_order_reference=NULL;
 
@@ -1822,6 +1803,8 @@ static bool parse_section_directive(MiniAs *as, char *args, size_t line) {
                     flags |= MINIAS_SHF_TLS;
                 } else if (*q == 'G') {
                     flags |= MINIAS_SHF_GROUP;
+                } else if (*q == '?') {
+                    inherit_group=true;
                 } else if (*q == 'R') {
                     flags |= MINIAS_SHF_GNU_RETAIN;
                 } else if (*q == 'o') {
@@ -1849,7 +1832,7 @@ static bool parse_section_directive(MiniAs *as, char *args, size_t line) {
 
         if (type_separator != NULL) {
             char *kind = minias_trim(type_separator + 1);
-            char *fields[5];
+            char *fields[8];
             size_t field_count=0U,next=0U;
             char *cursor=kind,*tail;
             while((tail=strchr(cursor,','))!=NULL) {
@@ -1877,7 +1860,9 @@ static bool parse_section_directive(MiniAs *as, char *args, size_t line) {
                  * unique empty identity so this never aliases a plain
                  * same-named Section without SHF_LINK_ORDER. */
                 link_order_reference="";
-                if(next<field_count) {
+                if(next<field_count &&
+                   !(strcmp(fields[next],"unique")==0 &&
+                     next+1U<field_count)) {
                     const char *linked=fields[next++];
                     if(*linked=='\0' || strlen(linked)>=256U ||
                        strpbrk(linked," \t,\r\n\"")!=NULL) {
@@ -1888,19 +1873,40 @@ static bool parse_section_directive(MiniAs *as, char *args, size_t line) {
                 }
             }
             if((flags & MINIAS_SHF_GROUP)!=0U) {
-                const char *sig,*mode;
-                if(field_count-next<2U) {
-                    minias_set_error(as,"missing-group-comdat:%s:line=%zu",name,line);
+                const char *sig;
+                if(next>=field_count) {
+                    minias_set_error(as,"missing-group-signature:%s:line=%zu",name,line);
                     return false;
                 }
-                sig=fields[next++];mode=fields[next++];
-                if(*sig=='\0' || strcmp(mode,"comdat")!=0 ||
+                sig=fields[next++];
+                if(*sig=='\0' ||
                    strlen(sig)>=256U ||
                    strpbrk(sig," \t,\r\n\"")!=NULL) {
-                    minias_set_error(as,"bad-section-comdat:%s:line=%zu",name,line);
+                    minias_set_error(as,"bad-section-group:%s:line=%zu",name,line);
                     return false;
                 }
                 group_signature=sig;
+                if(next<field_count &&
+                   (strcmp(fields[next],"comdat")==0 ||
+                    strcmp(fields[next],".gnu.linkonce")==0)) {
+                    group_flags=MINIAS_GRP_COMDAT;
+                    ++next;
+                }
+            }
+            /* GAS treats this trailing pair as ELF Section identity, not
+             * another section attribute. ID zero must stay distinguishable
+             * from an ordinary section with no unique argument. */
+            if(next<field_count && strcmp(fields[next],"unique")==0) {
+                uint64_t parsed;
+                ++next;
+                if(next>=field_count ||
+                   !minias_parse_u64(fields[next++],&parsed) ||
+                   parsed>UINT32_MAX) {
+                    minias_set_error(as,"bad-section-unique-id:%s:line=%zu",name,line);
+                    return false;
+                }
+                has_unique_id=true;
+                unique_id=(uint32_t)parsed;
             }
             if(next!=field_count) {
                 minias_set_error(as,"unexpected-section-parameter:%s:line=%zu",name,line);
@@ -1933,9 +1939,12 @@ static bool parse_section_directive(MiniAs *as, char *args, size_t line) {
         }
     }
 
-    if ((flags & MINIAS_SHF_GROUP)!=0U &&
-        ((flags & MINIAS_SHF_MERGE)!=0U || group_signature==NULL)) {
-        minias_set_error(as,"unsupported-comdat-flags:%s:line=%zu",name,line);
+    if(inherit_group && (flags & MINIAS_SHF_GROUP)!=0U) {
+        minias_set_error(as,"conflicting-section-group-inheritance:%s:line=%zu",name,line);
+        return false;
+    }
+    if ((flags & MINIAS_SHF_GROUP)!=0U && group_signature==NULL) {
+        minias_set_error(as,"missing-section-group:%s:line=%zu",name,line);
         return false;
     }
     if (flags == 0U) {
@@ -1957,6 +1966,15 @@ static bool parse_section_directive(MiniAs *as, char *args, size_t line) {
         /* GNU note sections are NOT implicitly SHF_ALLOC; only an
          * explicit 'a' allocates .note.* payloads. */
     }
+    if(inherit_group && as->current_section>=0 &&
+       (size_t)as->current_section<as->section_count) {
+        const MiniAsSection *prior=&as->sections[(size_t)as->current_section];
+        if(prior->group_signature!=NULL) {
+            flags|=MINIAS_SHF_GROUP;
+            group_signature=prior->group_signature;
+            group_flags=prior->group_flags;
+        }
+    }
     if(entry_size==0U &&
        (type==MINIAS_SHT_INIT_ARRAY || type==MINIAS_SHT_FINI_ARRAY ||
         type==MINIAS_SHT_PREINIT_ARRAY))
@@ -1972,9 +1990,12 @@ static bool parse_section_directive(MiniAs *as, char *args, size_t line) {
      * The .text directive already uses four-byte instruction alignment.
      */
     {
-        int prior=minias_find_section_key(as,name,group_signature,
-                                          link_order_reference);
-        bool ok=switch_section(as,name,group_signature,link_order_reference,type,flags,
+        const MiniAsSectionIdentity key={name,group_signature,
+                                          link_order_reference,
+                                          has_unique_id,unique_id};
+        int prior=minias_find_section_key(as,&key);
+        bool ok=switch_section(as,name,group_signature,link_order_reference,
+                has_unique_id,unique_id,group_flags,type,flags,
                 (flags & MINIAS_SHF_EXECINSTR)!=0U ?
                    minias_target_exec_alignment(as):1U);
         /* sh_entsize is a property of the *first* ELF section creation.
@@ -2918,20 +2939,18 @@ static bool push_conditional_value(MiniAs *as,bool condition_true) {
     conditional->else_seen = false;
     conditional->source_site = as->current_source_site;
     as->conditional_active = conditional->parent_active && condition_true;
-    source_graph_record_condition(as,conditional->source_site,
+    minias_source_graph_record_condition(as,conditional->source_site,
                                   as->conditional_active);
     return true;
 }
 
 /* Reuse the sole Common numeric-label resolver in GAS conditionals:
  * backward 661b/662b references have exact fragment-backed values. */
-static bool rewrite_numeric_local_refs(MiniAs *,const char *,
-                                       char **,size_t);
 static bool evaluate_conditional_with_labels(MiniAs *as,const char *args,
                                               size_t line,bool *selected) {
     char *expanded=NULL;
     bool valid;
-    if(!rewrite_numeric_local_refs(as,args,&expanded,line))return false;
+    if(!minias_numeric_refs_rewrite(as,args,&expanded,line))return false;
     valid=evaluate_if_expression(as,expanded,selected) ||
           (as->target->evaluate_target_if &&
            as->target->evaluate_target_if(expanded,selected));
@@ -3075,7 +3094,7 @@ static bool elseif_conditional(MiniAs *as,const char *args,size_t line) {
     as->conditional_active=conditional->parent_active &&
                            !conditional->condition_true && condition;
     conditional->condition_true|=condition;
-    source_graph_record_condition(as,conditional->source_site,
+    minias_source_graph_record_condition(as,conditional->source_site,
                                   as->conditional_active);
     return true;
 }
@@ -3095,7 +3114,7 @@ static bool else_conditional(MiniAs *as, size_t line) {
     conditional->else_seen = true;
     as->conditional_active =
         conditional->parent_active && !conditional->condition_true;
-    source_graph_record_condition(as,conditional->source_site,
+    minias_source_graph_record_condition(as,conditional->source_site,
                                   as->conditional_active);
     return true;
 }
@@ -3819,7 +3838,7 @@ static bool append_rewritten_text(char **buffer,
     return true;
 }
 
-static bool rewrite_numeric_local_refs(MiniAs *as,
+bool minias_numeric_refs_rewrite(MiniAs *as,
                                        const char *text,
                                        char **out,
                                        size_t line) {
@@ -4349,13 +4368,8 @@ static bool handle_ident(MiniAs *as,char *args,size_t line) {
     return ok;
 }
 
-static MiniAsMacro *find_macro(MiniAs *as, const char *name);
-static bool expand_macro_invocation(MiniAs *as,
-                                    MiniAsMacro *macro,
-                                    const char *args,
-                                    size_t line);
 
-static bool process_statement(MiniAs *as, char *text, size_t line) {
+bool minias_statement_process(MiniAs *as, char *text, size_t line) {
     char *space;
     char *op;
     char *args;
@@ -4492,7 +4506,7 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
     /* A GNU statement after LABEL: still starts a fresh directive.
      * Reenter the same shared conditional dispatcher instead of treating
      * '0: .ifc \arg,x' as an unknown target instruction/directive. */
-    if(had_leading_label)return process_statement(as,text,line);
+    if(had_leading_label)return minias_statement_process(as,text,line);
 
     {
         char *glued=NULL;
@@ -4596,7 +4610,7 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
         }
         for(i=0U;i<as->macro_count;++i)
             if(!strcmp(as->macros[i].name,name)) {
-                release_macro(&as->macros[i]);
+                minias_macro_destroy(&as->macros[i]);
                 if(i+1U<as->macro_count)
                     memmove(&as->macros[i],&as->macros[i+1U],
                             (as->macro_count-i-1U)*sizeof(*as->macros));
@@ -4608,9 +4622,9 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
         return true;
     }
     {
-        MiniAsMacro *macro = find_macro(as, op);
+        MiniAsMacro *macro = minias_macro_find(as, op);
         if (macro != NULL) {
-            return expand_macro_invocation(as, macro, args, line);
+            return minias_macro_expand(as, macro, args, line);
         }
         /* GAS accepts a single macro argument next to the mnemonic as
          * MACRO(symbol), where the parentheses are LITERAL argument text.
@@ -4623,12 +4637,12 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
             if(open!=NULL && open>op && length>1U &&
                op[length-1U]==')') {
                 *open='\0';
-                macro=find_macro(as,op);
+                macro=minias_macro_find(as,op);
                 /* Registry lookup needs the temporary NUL, but GNU's
                  * actual operand starts at the ORIGINAL '(' character. */
                 *open='(';
                 if(macro!=NULL)
-                    return expand_macro_invocation(as,macro,open,line);
+                    return minias_macro_expand(as,macro,open,line);
             }
         }
     }
@@ -4695,6 +4709,7 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
                                   ".text",
                                   NULL,
                                   NULL,
+                                  false,0U,0U,
                                   MINIAS_SHT_PROGBITS,
                                   MINIAS_SHF_ALLOC | MINIAS_SHF_EXECINSTR,
                                   minias_target_exec_alignment(as));
@@ -4704,6 +4719,7 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
                                   ".data",
                                   NULL,
                                   NULL,
+                                  false,0U,0U,
                                   MINIAS_SHT_PROGBITS,
                                   MINIAS_SHF_ALLOC | MINIAS_SHF_WRITE,
                                   1U);
@@ -4713,6 +4729,7 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
                                   ".bss",
                                   NULL,
                                   NULL,
+                                  false,0U,0U,
                                   MINIAS_SHT_NOBITS,
                                   MINIAS_SHF_ALLOC | MINIAS_SHF_WRITE,
                                   1U);
@@ -4829,7 +4846,7 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
             char *rewritten_args = NULL;
             bool ok;
 
-            if (!rewrite_numeric_local_refs(as,
+            if (!minias_numeric_refs_rewrite(as,
                                             args,
                                             &rewritten_args,
                                             line)) {
@@ -4843,7 +4860,7 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
             char *rewritten_args = NULL;
             bool ok;
 
-            if (!rewrite_numeric_local_refs(as,
+            if (!minias_numeric_refs_rewrite(as,
                                             args,
                                             &rewritten_args,
                                             line)) {
@@ -4873,7 +4890,7 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
         char *rewritten_args = NULL;
         size_t statement_id;
         bool ok;
-        if (!rewrite_numeric_local_refs(as, args, &rewritten_args, line))
+        if (!minias_numeric_refs_rewrite(as, args, &rewritten_args, line))
             return false;
         if(!minias_maybe_align_instruction(as,line)) {
             free(rewritten_args);
@@ -4892,7 +4909,7 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
             return false;
         }
         size_t forced_minimum_size=0U;
-        if(!source_graph_lookup_forced_branch(as,
+        if(!minias_source_graph_lookup_forced_branch(as,
                                               &as->stmts[statement_id],
                                               &forced_minimum_size)) {
             free(rewritten_args);
@@ -4920,1931 +4937,6 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
         free(rewritten_args);
     }
     return advance_current_location(as, size);
-}
-
-typedef struct MiniAsSourceLine {
-    char *text;
-    size_t line;
-    size_t source_segment;
-} MiniAsSourceLine;
-
-/* The physical file and each expanded source body are processed by the
- * same macro/REPT/IRP collector. A SourceFrame owns only its lexical text;
- * the assembler retains typed Fragment/Symbol data independently of it.
- * Later conditional-region invalidation can retain this frame instead of
- * depending on a second physical-file parser with different state rules. */
-typedef enum MiniAsSourceFrameKind {
-    MINIAS_SOURCE_FRAME_FILE,
-    MINIAS_SOURCE_FRAME_EXPANSION
-} MiniAsSourceFrameKind;
-
-typedef enum MiniAsSourceSiteKind {
-    MINIAS_SOURCE_SITE_LINE = 1,
-    MINIAS_SOURCE_SITE_SEGMENT,
-    MINIAS_SOURCE_SITE_MACRO,
-    MINIAS_SOURCE_SITE_REPT,
-    MINIAS_SOURCE_SITE_IRP,
-    MINIAS_SOURCE_SITE_INLINE_REPEAT
-} MiniAsSourceSiteKind;
-
-/* Full-key equality, not a truncated path hash, defines StableSiteID.
- * Parent is an already-interned lexical/expansion SiteID; an expansion
- * child's identity is unaffected by GNU's independently incrementing \@. */
-typedef struct MiniAsSourceSiteKey {
-    MiniAsStableSiteId parent;
-    MiniAsStableSiteId definition;
-    size_t origin_line;
-    size_t origin_segment;
-    size_t iteration;
-    MiniAsSourceSiteKind kind;
-} MiniAsSourceSiteKey;
-
-typedef struct MiniAsSourceSiteEntry {
-    MiniAsSourceSiteKey key;
-    size_t last_condition_pass;
-    MiniAsStableSiteId last_condition_owner;
-    bool last_condition_active;
-    /* Zero means that this lexical/expansion site has no forced branch.
-     * The index is stable across complete semantic replays; a pass-local
-     * Fragment ordinal is never persisted in this registry. */
-    size_t forced_branch_index;
-} MiniAsSourceSiteEntry;
-
-/* The source site identifies one expanded instruction, while this retained
- * shape prevents a branch from being accidentally attached to a different
- * instruction after a .if/.elseif changes the emitted Fragment topology.
- * All fields here are semantic parse-time values, never an output offset. */
-typedef struct MiniAsForcedOperandShape {
-    MiniAsMCOperandKind kind;
-    MiniAsMCRegisterClass reg_class;
-    uint16_t target_reg_bank;
-    unsigned reg;
-    bool register_64;
-} MiniAsForcedOperandShape;
-
-typedef struct MiniAsForcedBranchSite {
-    MiniAsStableSiteId source_site;
-    char *op;
-    uint32_t opcode;
-    uint32_t target_form;
-    uint32_t mode_bits;
-    size_t minimum_size;
-    unsigned operand_count;
-    MiniAsForcedOperandShape *operands;
-} MiniAsForcedBranchSite;
-
-typedef struct MiniAsSourceFrame {
-    MiniAsSourceFrameKind kind;
-    MiniAsSourceLine *lines;
-    size_t count;
-    size_t capacity;
-    MiniAsSourceSiteKind expansion_kind;
-    MiniAsStableSiteId invocation_site;
-    MiniAsStableSiteId definition_site;
-    size_t iteration;
-} MiniAsSourceFrame;
-
-struct MiniAsSourceGraph {
-    MiniAsSourceFrame physical;
-    MiniAsSourceSiteEntry *sites;
-    size_t site_count;
-    size_t site_capacity;
-    size_t *site_slots; /* SiteID, zero for unoccupied */
-    size_t site_slot_capacity;
-    size_t expansion_count;
-    size_t file_reads;
-    size_t parse_passes;
-    size_t conditional_changes;
-    size_t ordinal_drifts;
-    MiniAsForcedBranchSite *forced_branches;
-    size_t forced_branch_count;
-    size_t forced_branch_capacity;
-};
-
-static void destroy_source_lines(MiniAsSourceLine *lines, size_t count);
-
-static size_t source_site_hash(MiniAsSourceSiteKey key) {
-    size_t hash=(size_t)UINT64_C(0x9e3779b97f4a7c15);
-    const size_t values[]={key.parent,key.definition,key.origin_line,
-                           key.origin_segment,key.iteration,(size_t)key.kind};
-    size_t i;
-    for(i=0U;i<sizeof(values)/sizeof(values[0]);++i) {
-        size_t item=values[i];
-        item^=item>>15U;
-        item*=((size_t)UINT32_C(0x85ebca6b));
-        item^=item>>13U;
-        hash^=item+(size_t)UINT32_C(0x9e3779b9)+(hash<<6U)+(hash>>2U);
-    }
-    return hash;
-}
-
-static bool source_site_same(MiniAsSourceSiteKey a,
-                             MiniAsSourceSiteKey b) {
-    return a.parent==b.parent && a.definition==b.definition &&
-           a.origin_line==b.origin_line &&
-           a.origin_segment==b.origin_segment &&
-           a.iteration==b.iteration && a.kind==b.kind;
-}
-
-static bool source_graph_rehash(MiniAsSourceGraph *graph,size_t capacity) {
-    size_t *slots=calloc(capacity,sizeof(*slots));
-    size_t i;
-    if(slots==NULL)return false;
-    for(i=0U;i<graph->site_count;++i) {
-        size_t at=source_site_hash(graph->sites[i].key)&(capacity-1U);
-        while(slots[at]!=0U)at=(at+1U)&(capacity-1U);
-        slots[at]=i+1U;
-    }
-    free(graph->site_slots);
-    graph->site_slots=slots;
-    graph->site_slot_capacity=capacity;
-    return true;
-}
-
-static bool source_graph_intern(MiniAs *as,MiniAsSourceSiteKey key,
-                                MiniAsStableSiteId *site_id) {
-    MiniAsSourceGraph *graph=as->source_graph;
-    size_t slot,probes;
-    size_t hashed=source_site_hash(key);
-    if(graph==NULL || site_id==NULL ||
-       key.parent>graph->site_count ||
-       key.definition>graph->site_count ||
-       graph->site_count==SIZE_MAX) {
-        minias_set_error(as,"invalid-source-site-key");return false;
-    }
-    /* Most source-site visits are repeats across complete semantic replays.
-     * Probe first so a pure lookup cannot accidentally trigger a costly
-     * growth/rehash exactly at the half-full threshold. */
-    if(graph->site_slot_capacity!=0U) {
-        slot=hashed&(graph->site_slot_capacity-1U);
-        for(probes=0U;probes<graph->site_slot_capacity;++probes) {
-            size_t id=graph->site_slots[slot];
-            if(id==0U)break;
-            if(source_site_same(graph->sites[id-1U].key,key)) {
-                *site_id=id;
-                return true;
-            }
-            slot=(slot+1U)&(graph->site_slot_capacity-1U);
-        }
-    }
-    if(graph->site_slot_capacity==0U ||
-       graph->site_count+1U>=graph->site_slot_capacity/2U) {
-        size_t next=graph->site_slot_capacity==0U?64U:
-                    graph->site_slot_capacity*2U;
-        if(next<graph->site_slot_capacity ||
-           !source_graph_rehash(graph,next)) {
-            minias_set_error(as,"out-of-memory:source-site-index");
-            return false;
-        }
-    }
-    slot=hashed&(graph->site_slot_capacity-1U);
-    for(probes=0U;probes<graph->site_slot_capacity;++probes) {
-        if(graph->site_slots[slot]==0U)break;
-        slot=(slot+1U)&(graph->site_slot_capacity-1U);
-    }
-    if(probes==graph->site_slot_capacity ||
-       !minias_grow_array((void **)&graph->sites,&graph->site_capacity,
-                          sizeof(*graph->sites),graph->site_count+1U)) {
-        minias_set_error(as,"out-of-memory:source-site");return false;
-    }
-    memset(&graph->sites[graph->site_count],0,sizeof(*graph->sites));
-    graph->sites[graph->site_count].key=key;
-    *site_id=++graph->site_count;
-    graph->site_slots[slot]=*site_id;
-    if(key.kind==MINIAS_SOURCE_SITE_MACRO ||
-       key.kind==MINIAS_SOURCE_SITE_REPT ||
-       key.kind==MINIAS_SOURCE_SITE_IRP ||
-       key.kind==MINIAS_SOURCE_SITE_INLINE_REPEAT)
-        ++graph->expansion_count;
-    return true;
-}
-
-static bool source_graph_line_site(MiniAs *as,
-                                   const MiniAsSourceLine *line,
-                                   size_t segment,
-                                   MiniAsStableSiteId *site_id) {
-    const MiniAsSourceSiteKey key={
-        .parent=as->current_expansion_site,
-        .origin_line=line->line,
-        .origin_segment=line->source_segment,
-        .iteration=segment,
-        .kind=segment==0U ? MINIAS_SOURCE_SITE_LINE :
-                             MINIAS_SOURCE_SITE_SEGMENT
-    };
-    return source_graph_intern(as,key,site_id);
-}
-
-static void source_graph_record_condition(MiniAs *as,
-                                          MiniAsStableSiteId owner,
-                                          bool active) {
-    MiniAsSourceGraph *graph=as->source_graph;
-    MiniAsSourceSiteEntry *entry;
-    if(graph==NULL || as->current_source_site==MINIAS_SITE_NONE ||
-       as->current_source_site>graph->site_count)return;
-    entry=&graph->sites[as->current_source_site-1U];
-    if(entry->last_condition_pass!=0U &&
-       entry->last_condition_pass+1U==graph->parse_passes &&
-       (entry->last_condition_active!=active ||
-        entry->last_condition_owner!=owner))
-        ++graph->conditional_changes;
-    entry->last_condition_pass=graph->parse_passes;
-    entry->last_condition_owner=owner;
-    entry->last_condition_active=active;
-}
-
-static void source_graph_destroy(MiniAsSourceGraph *graph) {
-    size_t i;
-    if(graph==NULL)return;
-    destroy_source_lines(graph->physical.lines,graph->physical.count);
-    free(graph->sites);
-    free(graph->site_slots);
-    for(i=0U;i<graph->forced_branch_count;++i) {
-        free(graph->forced_branches[i].op);
-        free(graph->forced_branches[i].operands);
-    }
-    free(graph->forced_branches);
-    memset(graph,0,sizeof(*graph));
-}
-
-static bool source_graph_forced_shape_matches(
-                           const MiniAsForcedBranchSite *saved,
-                           const MiniAsStmt *stmt) {
-    const MiniAsMCInst *inst=stmt->mcinst;
-    unsigned i;
-    if(stmt->fragment_kind!=MINIAS_FRAGMENT_INSTRUCTION || inst==NULL ||
-       stmt->source_site!=saved->source_site ||
-       strcmp(stmt->op,saved->op)!=0 ||
-       inst->opcode!=saved->opcode ||
-       inst->target_form!=saved->target_form ||
-       stmt->site.mode_bits!=saved->mode_bits ||
-       inst->count>inst->capacity ||
-       inst->count!=saved->operand_count)return false;
-    /* Operand spelling is NOT a stable source identity. GNU 1f/1b refs
-     * become private generation names, while macro \@ counters can shift
-     * when an earlier conditional inserts a new macro expansion. The same
-     * lexical SourceSite and typed opcode/form/register classes remain
-     * stable; all symbol values are rebound by the fresh MC parser. */
-    for(i=0U;i<inst->count;++i) {
-        const MiniAsMCOperand *operand=&inst->operands[i];
-        const MiniAsForcedOperandShape *shape=&saved->operands[i];
-        if(operand->kind!=shape->kind ||
-           operand->reg_class!=shape->reg_class ||
-           operand->target_reg_bank!=shape->target_reg_bank ||
-           operand->reg!=shape->reg ||
-           operand->register_64!=shape->register_64)return false;
-    }
-    return true;
-}
-
-/* Parse-time branch growth has to consult the lexical identity, NOT the
- * statement's position in a newly generated vector. A different instruction
- * at the same site or a reused expansion identity is an error, even when its
- * current branch size happens to match the previous pass. */
-static bool source_graph_lookup_forced_branch(MiniAs *as,
-                                              const MiniAsStmt *stmt,
-                                              size_t *minimum_size) {
-    MiniAsSourceGraph *graph=as->source_graph;
-    size_t encoded;
-    *minimum_size=0U;
-    if(graph==NULL)return true;
-    if(stmt->source_site==MINIAS_SITE_NONE ||
-       stmt->source_site>graph->site_count) {
-        minias_set_error(as,"invalid-branch-source-site");
-        return false;
-    }
-    encoded=graph->sites[stmt->source_site-1U].forced_branch_index;
-    if(encoded==0U)return true;
-    if(encoded>graph->forced_branch_count ||
-       !source_graph_forced_shape_matches(&graph->forced_branches[encoded-1U],
-                                         stmt)) {
-        ++graph->ordinal_drifts;
-        minias_set_error(as,"changed-forced-branch-shape:line=%zu",stmt->line);
-        return false;
-    }
-    *minimum_size=graph->forced_branches[encoded-1U].minimum_size;
-    return true;
-}
-
-/* Rebind every retained source identity to a fresh, pass-local Fragment ID.
- * One SourceSite may not ambiguously denote multiple machine instructions.
- * Missing branches (e.g. a changed conditional arm) fail CLOSED rather than
- * forcing an unrelated instruction that inherited its old ordinal. */
-static bool source_graph_rebind_forced_branches(MiniAs *as,
-                                                size_t **ids,
-                                                size_t *count,
-                                                size_t *capacity) {
-    MiniAsSourceGraph *graph=as->source_graph;
-    size_t *site_to_stmt;
-    size_t i;
-    if(graph==NULL || graph->forced_branch_count==0U) {
-        *count=0U;
-        return true;
-    }
-    if(graph->site_count==SIZE_MAX ||
-       graph->site_count+1U>SIZE_MAX/sizeof(*site_to_stmt)) {
-        minias_set_error(as,"forced-source-index-overflow");
-        return false;
-    }
-    site_to_stmt=calloc(graph->site_count+1U,sizeof(*site_to_stmt));
-    if(site_to_stmt==NULL) {
-        minias_set_error(as,"out-of-memory:forced-source-index");
-        return false;
-    }
-    for(i=0U;i<as->stmt_count;++i) {
-        const MiniAsStmt *stmt=&as->stmts[i];
-        size_t *slot;
-        if(stmt->fragment_kind!=MINIAS_FRAGMENT_INSTRUCTION)continue;
-        if(stmt->source_site==MINIAS_SITE_NONE ||
-           stmt->source_site>graph->site_count) {
-            minias_set_error(as,"invalid-source-instruction-site");
-            free(site_to_stmt);
-            return false;
-        }
-        slot=&site_to_stmt[stmt->source_site];
-        *slot=*slot==0U?i+1U:SIZE_MAX;
-    }
-    if(!minias_grow_array((void **)ids,capacity,sizeof(**ids),
-                          graph->forced_branch_count)) {
-        minias_set_error(as,"out-of-memory:rebound-branch-ids");
-        free(site_to_stmt);
-        return false;
-    }
-    for(i=0U;i<graph->forced_branch_count;++i) {
-        const MiniAsForcedBranchSite *saved=&graph->forced_branches[i];
-        size_t entry=saved->source_site<=graph->site_count ?
-            site_to_stmt[saved->source_site] : 0U;
-        if(entry==0U || entry==SIZE_MAX ||
-           !source_graph_forced_shape_matches(saved,&as->stmts[entry-1U])) {
-            ++graph->ordinal_drifts;
-            minias_set_error(as,"lost-or-ambiguous-forced-source-site:%zu",
-                             (size_t)saved->source_site);
-            free(site_to_stmt);
-            return false;
-        }
-        (*ids)[i]=entry-1U;
-    }
-    free(site_to_stmt);
-    *count=graph->forced_branch_count;
-    return true;
-}
-
-static bool source_graph_capture_forced_branches(MiniAs *as,
-                                                 const size_t *ids,
-                                                 size_t count) {
-    MiniAsSourceGraph *graph=as->source_graph;
-    size_t i;
-    if(graph==NULL)return true;
-    if(count<graph->forced_branch_count) {
-        minias_set_error(as,"lost-forced-branch-after-layout");
-        return false;
-    }
-    if(!minias_grow_array((void **)&graph->forced_branches,
-                          &graph->forced_branch_capacity,
-                          sizeof(*graph->forced_branches),count)) {
-        minias_set_error(as,"out-of-memory:forced-source-sites");
-        return false;
-    }
-    for(i=0U;i<count;++i) {
-        const MiniAsStmt *stmt;
-        MiniAsForcedBranchSite *saved;
-        MiniAsTargetRelaxPlan plan;
-        unsigned j;
-        if(ids[i]>=as->stmt_count ||
-           as->stmts[ids[i]].fragment_kind!=MINIAS_FRAGMENT_INSTRUCTION ||
-           as->stmts[ids[i]].mcinst==NULL ||
-           as->stmts[ids[i]].mcinst->count>
-               as->stmts[ids[i]].mcinst->capacity) {
-            minias_set_error(as,"invalid-forced-branch-fragment:%zu",ids[i]);
-            return false;
-        }
-        stmt=&as->stmts[ids[i]];
-        if(stmt->source_site==MINIAS_SITE_NONE ||
-           stmt->source_site>graph->site_count) {
-            minias_set_error(as,"invalid-forced-branch-source-site");
-            return false;
-        }
-        if(!minias_query_target_relax_plan(as,stmt,&plan))return false;
-        if(i<graph->forced_branch_count) {
-            if(!source_graph_forced_shape_matches(&graph->forced_branches[i],
-                                                  stmt)) {
-                ++graph->ordinal_drifts;
-                minias_set_error(as,"changed-forced-branch-order:line=%zu",
-                                 stmt->line);
-                return false;
-            }
-            if(plan.required_size>stmt->size &&
-               graph->forced_branches[i].minimum_size<plan.terminal_size)
-                graph->forced_branches[i].minimum_size=plan.terminal_size;
-            continue;
-        }
-        if(plan.required_size<=stmt->size) {
-            minias_set_error(as,"invalid-forced-source-growth:line=%zu",
-                             stmt->line);
-            return false;
-        }
-        if(graph->sites[stmt->source_site-1U].forced_branch_index!=0U) {
-            ++graph->ordinal_drifts;
-            minias_set_error(as,"ambiguous-forced-branch-source-site:line=%zu",
-                             stmt->line);
-            return false;
-        }
-        saved=&graph->forced_branches[graph->forced_branch_count];
-        memset(saved,0,sizeof(*saved));
-        saved->source_site=stmt->source_site;
-        saved->op=minias_strdup(stmt->op);
-        saved->opcode=stmt->mcinst->opcode;
-        saved->target_form=stmt->mcinst->target_form;
-        saved->mode_bits=stmt->site.mode_bits;
-        /* Required is a lower bound; terminal is the actual Target-owned
-         * alternative size committed by the MCLayout growth operation. */
-        saved->minimum_size=plan.terminal_size;
-        saved->operand_count=stmt->mcinst->count;
-        if(saved->operand_count!=0U) {
-            saved->operands=calloc(saved->operand_count,
-                                   sizeof(*saved->operands));
-        }
-        if(saved->op==NULL ||
-           (saved->operand_count!=0U && saved->operands==NULL)) {
-            free(saved->op);free(saved->operands);
-            memset(saved,0,sizeof(*saved));
-            minias_set_error(as,"out-of-memory:forced-branch-shape");
-            return false;
-        }
-        for(j=0U;j<saved->operand_count;++j) {
-            const MiniAsMCOperand *operand=&stmt->mcinst->operands[j];
-            MiniAsForcedOperandShape *shape=&saved->operands[j];
-            shape->kind=operand->kind;
-            shape->reg_class=operand->reg_class;
-            shape->target_reg_bank=operand->target_reg_bank;
-            shape->reg=operand->reg;
-            shape->register_64=operand->register_64;
-        }
-        graph->sites[stmt->source_site-1U].forced_branch_index=
-            ++graph->forced_branch_count;
-    }
-    return true;
-}
-
-static void destroy_source_lines(MiniAsSourceLine *lines, size_t count);
-static bool valid_irp_parameter_name(const char *name);
-static char *substitute_irp_parameter(MiniAs *as,
-                                      const char *source,
-                                      const char *name,
-                                      const char *value);
-
-enum {
-    MINIAS_MACRO_NONE = 0,
-    MINIAS_MACRO_BEGIN = 1,
-    MINIAS_MACRO_END = 2
-};
-
-static int classify_macro_line(const MiniAs *as, const char *text,
-                               char *argument,
-                               size_t argument_size) {
-    char *copy = minias_strdup(text);
-    char *trimmed;
-    const char *rest = NULL;
-    int kind = MINIAS_MACRO_NONE;
-
-    if (argument_size != 0U) {
-        argument[0] = '\0';
-    }
-    if (copy == NULL) {
-        return -1;
-    }
-    strip_comment(copy, as->target);
-    trimmed = minias_trim(copy);
-    if (strncmp(trimmed, ".macro", 6U) == 0 &&
-        (trimmed[6] == '\0' || isspace((unsigned char)trimmed[6]))) {
-        rest = trimmed + 6;
-        kind = MINIAS_MACRO_BEGIN;
-    } else if (strcmp(trimmed, ".endm") == 0 ||
-               strcmp(trimmed, ".endmacro") == 0) {
-        kind = MINIAS_MACRO_END;
-    }
-    if (rest != NULL) {
-        while (*rest == ' ' || *rest == '\t') {
-            ++rest;
-        }
-        if (argument_size != 0U) {
-            int written = snprintf(argument, argument_size, "%s", rest);
-            if (written < 0 || (size_t)written >= argument_size) {
-                free(copy);
-                return -1;
-            }
-        }
-    }
-    free(copy);
-    return kind;
-}
-
-static size_t split_macro_tokens(char *text, char **tokens, size_t capacity) {
-    size_t count = 0U;
-    char *p = text;
-
-    while (*p != '\0') {
-        char *start;
-        int depth = 0;
-        char quote = '\0';
-
-        while (*p == ' ' || *p == '\t' || *p == ',') {
-            ++p;
-        }
-        if (*p == '\0') {
-            break;
-        }
-        if (count == capacity) {
-            return SIZE_MAX;
-        }
-        start = p;
-        while (*p != '\0') {
-            if (quote != '\0') {
-                if (*p == '\\' && p[1] != '\0') {
-                    p += 2;
-                    continue;
-                }
-                if (*p == quote) {
-                    quote = '\0';
-                }
-                ++p;
-                continue;
-            }
-            if (*p == '\'' || *p == '"') {
-                quote = *p++;
-                continue;
-            }
-            if (*p == '(' || *p == '[' || *p == '{') {
-                ++depth;
-                ++p;
-                continue;
-            }
-            if (*p == ')' || *p == ']' || *p == '}') {
-                if (depth > 0) {
-                    --depth;
-                }
-                ++p;
-                continue;
-            }
-            if (depth == 0 &&
-                (*p == ',' || *p == ' ' || *p == '\t')) {
-                break;
-            }
-            ++p;
-        }
-        if (*p != '\0') {
-            *p++ = '\0';
-        }
-        tokens[count++] = start;
-    }
-    return count;
-}
-
-static bool macro_has_top_level_comma(const char *text) {
-    int depth = 0;
-    char quote = '\0';
-
-    for (; *text != '\0'; ++text) {
-        if (quote != '\0') {
-            if (*text == '\\' && text[1] != '\0') {
-                ++text;
-                continue;
-            }
-            if (*text == quote) {
-                quote = '\0';
-            }
-            continue;
-        }
-        if (*text == '\'' || *text == '"') {
-            quote = *text;
-        } else if (*text == '(' || *text == '[' || *text == '{') {
-            ++depth;
-        } else if (*text == ')' || *text == ']' || *text == '}') {
-            if (depth > 0) {
-                --depth;
-            }
-        } else if (*text == ',' && depth == 0) {
-            return true;
-        }
-    }
-    return false;
-}
-
-static char *find_macro_argument_space(char *text) {
-    int depth = 0;
-    char quote = '\0';
-    char *p;
-
-    for (p = text; *p != '\0'; ++p) {
-        if (quote != '\0') {
-            if (*p == '\\' && p[1] != '\0') {
-                ++p;
-                continue;
-            }
-            if (*p == quote) {
-                quote = '\0';
-            }
-            continue;
-        }
-        if (*p == '\'' || *p == '"') {
-            quote = *p;
-        } else if (*p == '(' || *p == '[' || *p == '{') {
-            ++depth;
-        } else if (*p == ')' || *p == ']' || *p == '}') {
-            if (depth > 0) {
-                --depth;
-            }
-        } else if (depth == 0 && (*p == ' ' || *p == '\t')) {
-            return p;
-        }
-    }
-    return NULL;
-}
-
-static size_t split_macro_arguments(char *text,
-                                    char **tokens,
-                                    size_t capacity,
-                                    size_t expected_count,
-                                    bool preserve_parenthesized_operand) {
-    char *segments[64];
-    size_t segment_count = 0U;
-    size_t count = 0U;
-    char *cursor = text;
-    size_t needed;
-    bool last_was_comma = false;
-
-    if (!macro_has_top_level_comma(text)) {
-        /* GNU GAS treats a one-parameter arithmetic macro invocation
-         * such as 'nops (32 - 16) / 4' as ONE argument, not the 3
-         * whitespace tokens of the generic .macro parameter lexer.
-         * Preserve strict rejection of 'single 1 2' (no expression
-         * operator) and keep comma-separated multi-arg GNU binding. */
-        if(expected_count==1U && capacity!=0U) {
-            char *whole=minias_trim(text);
-            if(*whole && strpbrk(whole,"+-*/%&|^")!=NULL) {
-                tokens[0]=whole;
-                return 1U;
-            }
-        }
-        return split_macro_tokens(text, tokens, capacity);
-    }
-
-    for (;;) {
-        char *start;
-        char *p;
-        int depth = 0;
-        char quote = '\0';
-
-        while (*cursor == ' ' || *cursor == '\t') {
-            ++cursor;
-        }
-        if (*cursor == '\0') {
-            /* Explicit trailing comma is one more EMPTY positional
-             * argument. Do not synthesize it without a delimiter. */
-            if(last_was_comma) {
-                if(segment_count==sizeof(segments)/sizeof(segments[0]))
-                    return SIZE_MAX;
-                segments[segment_count++]=cursor;
-            }
-            break;
-        }
-        if (segment_count == sizeof(segments) / sizeof(segments[0])) {
-            return SIZE_MAX;
-        }
-        start = cursor;
-        p = cursor;
-        while (*p != '\0') {
-            if (quote != '\0') {
-                if (*p == '\\' && p[1] != '\0') {
-                    p += 2;
-                    continue;
-                }
-                if (*p == quote) {
-                    quote = '\0';
-                }
-                ++p;
-                continue;
-            }
-            if (*p == '\'' || *p == '"') {
-                quote = *p++;
-                continue;
-            }
-            if (*p == '(' || *p == '[' || *p == '{') {
-                ++depth;
-                ++p;
-                continue;
-            }
-            if (*p == ')' || *p == ']' || *p == '}') {
-                if (depth > 0) {
-                    --depth;
-                }
-                ++p;
-                continue;
-            }
-            if (*p == ',' && depth == 0) {
-                break;
-            }
-            ++p;
-        }
-        last_was_comma=*p==',';
-        if(last_was_comma)*p++ = '\0';
-        segments[segment_count++] = minias_trim(start);
-        cursor = p;
-        if(!last_was_comma)break;
-    }
-
-    needed = expected_count > segment_count
-                 ? expected_count - segment_count
-                 : 0U;
-    for (size_t i = 0U; i < segment_count; ++i) {
-        char *segment = segments[i];
-
-        while (needed != 0U) {
-            char *space = find_macro_argument_space(segment);
-            char *rest;
-
-            if (space == NULL) {
-                break;
-            }
-            /* A GNU comma-delimited argument like
-             *   ldr_l x0, symbol + 24
-             * is ONE symbolic expression (the third 'tmp' is omitted),
-             * not 'symbol' plus an invented tmp='+ 24'. Keep one Common
-             * expression-aware lexical rule without ISA knowledge. */
-            {
-                char *rhs=space+1U,*lhs=space;
-                while(*rhs==' ' || *rhs=='\t')++rhs;
-                while(lhs>segment && (lhs[-1]==' ' || lhs[-1]=='\t'))
-                    --lhs;
-                if((*rhs && strchr("+-*/%&|^<>",*rhs)) ||
-                   (lhs>segment && strchr("+-*/%&|^<>",lhs[-1])) ||
-                   (preserve_parenthesized_operand && *rhs=='('))
-                    break;
-            }
-            *space = '\0';
-            rest = space + 1U;
-            while (*rest == ' ' || *rest == '\t') {
-                ++rest;
-            }
-            if (*segment == '\0' || *rest == '\0') {
-                segment = rest;
-                continue;
-            }
-            if (count == capacity) {
-                return SIZE_MAX;
-            }
-            tokens[count++] = minias_trim(segment);
-            segment = rest;
-            --needed;
-        }
-        /* Blank comma-delimited arguments occupy a slot. Critical for
-         * real Linux GHASH __pmull_p8_tail ...,8b,,sh1,... where the
-         * deliberately empty 't' suffix must NOT consume sh1 and turn
-         * the ISA mnemonic into invalid 'pmullsh1'. */
-        if (count == capacity) return SIZE_MAX;
-        tokens[count++] = minias_trim(segment);
-    }
-    return count;
-}
-
-static MiniAsMacro *find_macro(MiniAs *as, const char *name) {
-    size_t i;
-
-    for (i = 0U; i < as->macro_count; ++i) {
-        if (strcmp(as->macros[i].name, name) == 0) {
-            return &as->macros[i];
-        }
-    }
-    return NULL;
-}
-
-static void compact_macro_parameter_spacing(char *text) {
-    char *read = text;
-    char *write = text;
-
-    while (*read != '\0') {
-        if (*read == '=' || *read == ':') {
-            while (write > text && (write[-1] == ' ' || write[-1] == '\t')) {
-                --write;
-            }
-            *write++ = *read++;
-            while (*read == ' ' || *read == '\t') {
-                ++read;
-            }
-            continue;
-        }
-        *write++ = *read++;
-    }
-    *write = '\0';
-}
-
-static bool define_macro(MiniAs *as,
-                         const char *argument,
-                         MiniAsSourceLine *lines,
-                         size_t count,
-                         size_t line) {
-    char *copy = minias_strdup(argument);
-    char *tokens[64];
-    size_t token_count;
-    MiniAsMacro *macro;
-    size_t i;
-
-    if (copy == NULL) {
-        minias_set_error(as, "out-of-memory:macro-definition");
-        return false;
-    }
-    compact_macro_parameter_spacing(copy);
-    token_count = split_macro_tokens(copy, tokens, 64U);
-    if (token_count == SIZE_MAX || token_count == 0U ||
-        !valid_irp_parameter_name(tokens[0])) {
-        minias_set_error(as, "bad-directive:.macro:line=%zu", line);
-        free(copy);
-        return false;
-    }
-    if (find_macro(as, tokens[0]) != NULL) {
-        minias_set_error(as, "duplicate-macro:%s:line=%zu", tokens[0], line);
-        free(copy);
-        return false;
-    }
-    if (!minias_grow_array((void **)&as->macros,
-                    &as->macro_capacity,
-                    sizeof(*as->macros),
-                    as->macro_count + 1U)) {
-        minias_set_error(as, "out-of-memory:macro");
-        free(copy);
-        return false;
-    }
-    macro = &as->macros[as->macro_count];
-    memset(macro, 0, sizeof(*macro));
-    macro->definition_site=as->current_source_site;
-    macro->name = minias_strdup(tokens[0]);
-    if (macro->name == NULL) {
-        minias_set_error(as, "out-of-memory:macro-name");
-        free(copy);
-        return false;
-    }
-    if (token_count > 1U) {
-        macro->params = calloc(token_count - 1U, sizeof(*macro->params));
-        if (macro->params == NULL) {
-            minias_set_error(as, "out-of-memory:macro-params");
-            free(copy);
-            return false;
-        }
-    }
-    macro->param_count = token_count - 1U;
-    for (i = 1U; i < token_count; ++i) {
-        char *spec = tokens[i];
-        char *qualifier = strchr(spec, ':');
-        char *equal = strchr(spec, '=');
-        char *end = NULL;
-
-        if (qualifier != NULL && (equal == NULL || qualifier < equal)) {
-            *qualifier++ = '\0';
-            end = qualifier - 1;
-        } else if (equal != NULL) {
-            *equal++ = '\0';
-            end = equal - 1;
-        }
-        if (!valid_irp_parameter_name(spec)) {
-            minias_set_error(as, "bad-macro-parameter:%s:line=%zu",
-                             spec, line);
-            free(copy);
-            return false;
-        }
-        macro->params[i - 1U].name = minias_strdup(spec);
-        if (macro->params[i - 1U].name == NULL) {
-            minias_set_error(as, "out-of-memory:macro-param-name");
-            free(copy);
-            return false;
-        }
-        if (qualifier != NULL) {
-            if(!strcmp(qualifier,"vararg") &&
-               i+1U==token_count && equal==NULL) {
-                macro->params[i-1U].variadic=true;
-            }else if(!strcmp(qualifier,"req")) {
-                macro->params[i-1U].required=true;
-            }else {
-                minias_set_error(as,"unsupported-macro-qualifier:%s:line=%zu",
-                                 qualifier,line);
-                free(copy);
-                return false;
-            }
-        }
-        if (equal != NULL) {
-            macro->params[i - 1U].default_value = minias_strdup(equal);
-            if (macro->params[i - 1U].default_value == NULL) {
-                minias_set_error(as, "out-of-memory:macro-param-default");
-                free(copy);
-                return false;
-            }
-        }
-        (void)end;
-    }
-    if (count != 0U) {
-        macro->body = calloc(count, sizeof(*macro->body));
-        macro->body_lines = calloc(count, sizeof(*macro->body_lines));
-        macro->body_source_segments=calloc(count,
-                              sizeof(*macro->body_source_segments));
-        if (macro->body == NULL || macro->body_lines == NULL ||
-            macro->body_source_segments == NULL) {
-            minias_set_error(as, "out-of-memory:macro-body");
-            free(copy);
-            return false;
-        }
-    }
-    macro->body_count = count;
-    for (i = 0U; i < count; ++i) {
-        macro->body[i] = minias_strdup(lines[i].text);
-        macro->body_lines[i] = lines[i].line;
-        macro->body_source_segments[i]=lines[i].source_segment;
-        if (macro->body[i] == NULL) {
-            minias_set_error(as, "out-of-memory:macro-body-line");
-            free(copy);
-            return false;
-        }
-    }
-    ++as->macro_count;
-    free(copy);
-    return true;
-}
-
-static char *substitute_macro_counter(MiniAs *as,
-                                      const char *source,
-                                      size_t counter) {
-    char counter_text[32];
-    size_t counter_len;
-    size_t occurrences = 0U;
-    size_t i;
-    size_t source_len = strlen(source);
-    char *output;
-    size_t out = 0U;
-
-    (void)snprintf(counter_text, sizeof(counter_text), "%zu", counter);
-    counter_len = strlen(counter_text);
-    for (i = 0U; i + 1U < source_len; ++i) {
-        if (source[i] == '\\' && source[i + 1U] == '@') {
-            ++occurrences;
-            ++i;
-        }
-    }
-    if (occurrences == 0U) {
-        return minias_strdup(source);
-    }
-    if (counter_len > 2U &&
-        occurrences > (SIZE_MAX - source_len) / (counter_len - 2U)) {
-        minias_set_error(as, "source-size-overflow:macro-counter");
-        return NULL;
-    }
-    output = malloc(source_len + occurrences * (counter_len - 2U) + 1U);
-    if (output == NULL) {
-        minias_set_error(as, "out-of-memory:macro-counter");
-        return NULL;
-    }
-    for (i = 0U; i < source_len; ++i) {
-        if (source[i] == '\\' && i + 1U < source_len &&
-            source[i + 1U] == '@') {
-            memcpy(output + out, counter_text, counter_len);
-            out += counter_len;
-            ++i;
-        } else {
-            output[out++] = source[i];
-        }
-    }
-    output[out] = '\0';
-    return output;
-}
-
-static bool process_source_range(MiniAs *as,
-                                 MiniAsSourceLine *lines,
-                                 size_t begin,
-                                 size_t end);
-static bool process_inline_repeat_line(MiniAs *as,const char *source,
-                                       size_t line,bool *handled);
-
-/* Collector entry is the same for physical FILE frames and expansion views.
- * Its caller owns frame storage; the recursive collector may borrow a slice
- * for nested macro and repetition bodies without making source copies. */
-static bool process_source_frame(MiniAs *as,
-                                 const MiniAsSourceFrame *frame) {
-    MiniAsStableSiteId previous_expansion=as->current_expansion_site;
-    MiniAsStableSiteId previous_site=as->current_source_site;
-    bool ok;
-    if(frame==NULL ||
-       (frame->kind!=MINIAS_SOURCE_FRAME_FILE &&
-        frame->kind!=MINIAS_SOURCE_FRAME_EXPANSION) ||
-       (frame->count!=0U && frame->lines==NULL)) {
-        minias_set_error(as,"invalid-source-frame");
-        return false;
-    }
-    if(frame->kind==MINIAS_SOURCE_FRAME_EXPANSION) {
-        const MiniAsSourceSiteKey key={
-            .parent=frame->invocation_site,
-            .definition=frame->definition_site,
-            .iteration=frame->iteration,
-            .kind=frame->expansion_kind
-        };
-        if(frame->invocation_site==MINIAS_SITE_NONE ||
-           (frame->expansion_kind!=MINIAS_SOURCE_SITE_MACRO &&
-            frame->expansion_kind!=MINIAS_SOURCE_SITE_REPT &&
-            frame->expansion_kind!=MINIAS_SOURCE_SITE_IRP &&
-            frame->expansion_kind!=MINIAS_SOURCE_SITE_INLINE_REPEAT)) {
-            minias_set_error(as,"invalid-source-expansion-site");
-            return false;
-        }
-        if(!source_graph_intern(as,key,&as->current_expansion_site))
-            return false;
-    }else {
-        as->current_expansion_site=MINIAS_SITE_NONE;
-    }
-    ok=process_source_range(as,frame->lines,0U,frame->count);
-    as->current_expansion_site=previous_expansion;
-    as->current_source_site=previous_site;
-    return ok;
-}
-
-static char *strip_macro_argument_quotes(char *text) {
-    size_t len;
-
-    if (text == NULL) {
-        return text;
-    }
-    len = strlen(text);
-    if (len >= 2U &&
-        ((text[0] == '"' && text[len - 1U] == '"') ||
-         (text[0] == '\'' && text[len - 1U] == '\''))) {
-        memmove(text, text + 1U, len - 2U);
-        text[len - 2U] = '\0';
-    }
-    return text;
-}
-
-static bool expand_macro_invocation(MiniAs *as,
-                                    MiniAsMacro *macro,
-                                    const char *args,
-                                    size_t line) {
-    char *copy = minias_strdup(args);
-    char *tokens[64];
-    char evaluated[64][32];
-    const char *values[64];
-    bool assigned[64]={false};
-    char *vararg_buffer=NULL;
-    size_t vararg_length=0U;
-    bool has_vararg=macro->param_count>0U &&
-           macro->params[macro->param_count-1U].variadic;
-    size_t positional=0U;
-    size_t supplied;
-    MiniAsSourceLine *expanded = NULL;
-    size_t i;
-    size_t counter;
-    /* .purgem or nested .macro can mutate the registry while executing
-     * an already-expanded immutable source snapshot. Never dereference
-     * the borrowed macro pointer after process_source_range returns. */
-    size_t body_count=macro->body_count;
-    bool ok = false;
-
-    if (copy == NULL) {
-        minias_set_error(as, "out-of-memory:macro-arguments");
-        return false;
-    }
-    supplied = split_macro_arguments(copy,
-                                     tokens,
-                                     64U,
-                                     macro->param_count,
-                                     as->target->macro_preserve_parenthesized_operand);
-    if(supplied==SIZE_MAX || (!has_vararg && supplied>macro->param_count)) {
-        minias_set_error(as, "bad-macro-arguments:%s:line=%zu",
-                         macro->name, line);
-        free(vararg_buffer);
-        free(copy);
-        return false;
-    }
-    /* GAS .altmacro evaluates %<absolute expression> at MACRO
-     * invocation time. This is required by ARM64 fpsimdmacros.h's
-     * recursive __for %\from, %((\from+\to)/2) generator; treating %0 as
-     * a name changes control flow and silently bypasses generated ISA.
-     * Conversion is bounded on-stack and happens BEFORE argument binding.
-     * Modulo (%) inside a normal expression is never reinterpreted. */
-    if(as->altmacro_active) {
-        for(i=0U;i<supplied;++i) {
-            int64_t value;
-            const char *expression=tokens[i];
-            if(*expression!='%')continue;
-            ++expression;
-            if(!*expression ||
-               !minias_evaluate_absolute_expression(as,expression,&value)) {
-                minias_set_error(as,"bad-altmacro-percent:%s:line=%zu",
-                                 tokens[i],line);
-                free(copy);return false;
-            }
-            (void)snprintf(evaluated[i],sizeof(evaluated[i]),"%lld",
-                           (long long)value);
-            tokens[i]=evaluated[i];
-        }
-    }
-    if(has_vararg) {
-        vararg_buffer=malloc(strlen(args)+1U);
-        if(!vararg_buffer) {
-            minias_set_error(as,"out-of-memory:macro-vararg");
-            free(vararg_buffer);free(copy);return false;
-        }
-        vararg_buffer[0]='\0';
-    }
-    /* GNU GAS named macro arguments can appear in any order:
-     * .macro SAVE_ALL reg=0 docfi=0 / SAVE_ALL docfi=1,reg=7.
-     * Do not substitute the literal string "docfi=1" for \\docfi,
-     * since that silently changes .if 1 to .if docfi=1.
-     * Positional and keyword argument binding share this Common owner. */
-    for(i=0U;i<macro->param_count;++i)
-        values[i]=macro->params[i].default_value ?
-                  macro->params[i].default_value:"";
-    for(i=0U;i<supplied;++i) {
-        char *token=tokens[i],*equal=strchr(token,'=');
-        size_t index;
-        if(equal && equal!=token && equal[1]!='=' &&
-           equal[-1]!='=') {
-            bool matched=false;
-            char *key;
-            *equal='\0';
-            key=minias_trim(token);
-            for(index=0U;index<macro->param_count;++index)
-                if(!strcmp(key,macro->params[index].name)) {
-                    matched=true;break;
-                }
-            if(!matched || assigned[index]) {
-                minias_set_error(as,"bad-macro-keyword:%s:%s:line=%zu",
-                                 macro->name,key,line);
-                free(vararg_buffer);free(copy);return false;
-            }
-            {
-                const char *item=strip_macro_argument_quotes(
-                                      minias_trim(equal+1U));
-                /* Empty GNU named/positional arguments retain their
-                 * declaration defaults. ARM64 __frame extra=0 is invoked
-                 * through an omitted optional outer parameter. */
-                if(*item || !macro->params[index].default_value)
-                    values[index]=item;
-            }
-        }else if(has_vararg &&
-                 positional>=macro->param_count-1U) {
-            const char *item=strip_macro_argument_quotes(token);
-            size_t len=strlen(item),max=strlen(args);
-            index=macro->param_count-1U;
-            if(assigned[index] && values[index]!=vararg_buffer) {
-                minias_set_error(as,"duplicate-macro-vararg:%s:line=%zu",
-                                 macro->name,line);
-                free(vararg_buffer);free(copy);return false;
-            }
-            if(len>max-vararg_length-
-                   (vararg_length!=0U?1U:0U)) {
-                minias_set_error(as,"macro-vararg-too-long:line=%zu",line);
-                free(vararg_buffer);free(copy);return false;
-            }
-            if(vararg_length)vararg_buffer[vararg_length++]=',';
-            memcpy(vararg_buffer+vararg_length,item,len+1U);
-            vararg_length+=len;
-            values[index]=vararg_buffer;
-            positional=macro->param_count;
-        }else {
-            while(positional<macro->param_count && assigned[positional])
-                ++positional;
-            if(positional>=macro->param_count) {
-                minias_set_error(as,"too-many-macro-arguments:%s:line=%zu",
-                                 macro->name,line);
-                free(vararg_buffer);free(copy);return false;
-            }
-            index=positional++;
-            {
-                const char *item=strip_macro_argument_quotes(token);
-                if(*item || !macro->params[index].default_value)
-                    values[index]=item;
-            }
-        }
-        assigned[index]=true;
-    }
-    for(i=0U;i<macro->param_count;++i)
-        if((!assigned[i] || !*values[i]) &&
-           macro->params[i].required) {
-            minias_set_error(as,"missing-macro-argument:%s:%s:line=%zu",
-                             macro->name,macro->params[i].name,line);
-            free(vararg_buffer);free(copy);return false;
-        }
-    if (as->macro_expansion_depth >= 64U) {
-        minias_set_error(as, "macro-expansion-depth:%s:line=%zu",
-                         macro->name, line);
-        free(vararg_buffer);
-        free(copy);
-        return false;
-    }
-    if (body_count != 0U) {
-        expanded = calloc(body_count, sizeof(*expanded));
-        if (expanded == NULL) {
-            minias_set_error(as, "out-of-memory:macro-expanded-lines");
-            free(copy);
-            return false;
-        }
-    }
-    counter = as->macro_expansion_counter++;
-    for (i = 0U; i < body_count; ++i) {
-        char *current = substitute_macro_counter(as, macro->body[i], counter);
-        size_t p;
-
-        if (current == NULL) {
-            goto done;
-        }
-        for (p = 0U; p < macro->param_count; ++p) {
-            char *next = substitute_irp_parameter(as,
-                                                  current,
-                                                  macro->params[p].name,
-                                                  values[p]);
-            free(current);
-            if (next == NULL) {
-                goto done;
-            }
-            current = next;
-        }
-        expanded[i].text = current;
-        expanded[i].line = macro->body_lines[i];
-        expanded[i].source_segment=macro->body_source_segments[i];
-    }
-    ++as->macro_expansion_depth;
-    {
-        const MiniAsSourceFrame frame={
-            .kind=MINIAS_SOURCE_FRAME_EXPANSION,
-            .lines=expanded,
-            .count=body_count,
-            .expansion_kind=MINIAS_SOURCE_SITE_MACRO,
-            .invocation_site=as->current_source_site,
-            .definition_site=macro->definition_site
-        };
-        ok=process_source_frame(as,&frame);
-    }
-    --as->macro_expansion_depth;
-
-done:
-    destroy_source_lines(expanded, body_count);
-    free(vararg_buffer);
-    free(copy);
-    return ok;
-}
-
-enum {
-    MINIAS_REPEAT_NONE = 0,
-    MINIAS_REPEAT_REPT = 1,
-    MINIAS_REPEAT_ENDR = 2,
-    MINIAS_REPEAT_IRP = 3
-};
-
-static void destroy_source_lines(MiniAsSourceLine *lines, size_t count) {
-    size_t i;
-
-    for (i = 0U; i < count; ++i) {
-        free(lines[i].text);
-    }
-    free(lines);
-}
-
-static int classify_repeat_line(const MiniAs *as, const char *text,
-                                char *argument,
-                                size_t argument_size,
-                                size_t *label_prefix_length) {
-    char *copy;
-    char *trimmed;
-    const char *rest = NULL;
-    int kind = MINIAS_REPEAT_NONE;
-
-    if (argument_size != 0U) {
-        argument[0] = '\0';
-    }
-    copy = minias_strdup(text);
-    if (copy == NULL) {
-        return -1;
-    }
-    strip_comment(copy, as->target);
-    trimmed = minias_trim(copy);
-    if(label_prefix_length)*label_prefix_length=0U;
-    /* GNU allows LABEL: .irp/.rept ...; classify the opener after
-     * its lexical labels, while preserving their source offset so
-     * the shared label handler binds them once, BEFORE expansion. */
-    {
-        char *cursor=trimmed;
-        for(;;) {
-            char *end=cursor;
-            while(*end && !isspace((unsigned char)*end) && *end!=':')
-                ++end;
-            if(*end!=':' || end==cursor)break;
-            cursor=end+1U;
-            while(isspace((unsigned char)*cursor))++cursor;
-        }
-        if(cursor!=trimmed) {
-            if(label_prefix_length)
-                *label_prefix_length=(size_t)(cursor-copy);
-            trimmed=cursor;
-        }
-    }
-
-    if (strncmp(trimmed, ".rept", 5U) == 0 &&
-        (trimmed[5] == '\0' || isspace((unsigned char)trimmed[5]))) {
-        rest = trimmed + 5;
-        kind = MINIAS_REPEAT_REPT;
-    } else if (strncmp(trimmed, ".rep", 4U) == 0 &&
-               (trimmed[4] == '\0' || isspace((unsigned char)trimmed[4]))) {
-        /* GNU .rep is the same text repetition directive as .rept.
-         * Resolve only the lexical alias; Common IRP/repetition owns
-         * balanced nesting, numeric evaluation and source fragments. */
-        rest = trimmed + 4;
-        kind = MINIAS_REPEAT_REPT;
-    } else if (strncmp(trimmed, ".irp", 4U) == 0 &&
-               (trimmed[4] == '\0' ||
-                isspace((unsigned char)trimmed[4]))) {
-        rest = trimmed + 4;
-        kind = MINIAS_REPEAT_IRP;
-    } else if (strcmp(trimmed, ".endr") == 0) {
-        kind = MINIAS_REPEAT_ENDR;
-    }
-
-    if (rest != NULL) {
-        while (*rest == ' ' || *rest == '\t') {
-            ++rest;
-        }
-        if (argument_size != 0U) {
-            int written = snprintf(argument, argument_size, "%s", rest);
-            if (written < 0 || (size_t)written >= argument_size) {
-                free(copy);
-                return -1;
-            }
-        }
-    }
-
-    if(label_prefix_length &&
-       kind!=MINIAS_REPEAT_REPT && kind!=MINIAS_REPEAT_IRP)
-        *label_prefix_length=0U;
-    free(copy);
-    return kind;
-}
-
-static char *find_statement_separator(char *text) {
-    char quote = '\0';
-    bool escaped = false;
-    char *p;
-
-    for (p = text; *p != '\0'; ++p) {
-        if (escaped) {
-            escaped = false;
-            continue;
-        }
-        if (quote != '\0') {
-            if (*p == '\\') {
-                escaped = true;
-            } else if (*p == quote) {
-                quote = '\0';
-            }
-            continue;
-        }
-        if (*p == '\'' || *p == '"') {
-            quote = *p;
-            continue;
-        }
-        if (*p == ';') {
-            return p;
-        }
-    }
-    return NULL;
-}
-
-static bool process_source_line(MiniAs *as, const char *source, size_t line) {
-    char *copy = minias_strdup(source);
-    char *cursor;
-    MiniAsStableSiteId source_site=as->current_source_site;
-    size_t segment=0U;
-    bool split;
-
-    if (copy == NULL) {
-        minias_set_error(as, "out-of-memory:source-line");
-        return false;
-    }
-    strip_comment(copy, as->target);
-    split=find_statement_separator(copy)!=NULL;
-    cursor = copy;
-    while (cursor != NULL && !as->source_ended) {
-        char *semicolon = find_statement_separator(cursor);
-        if(split) {
-            const MiniAsSourceSiteKey key={
-                .parent=source_site,
-                .iteration=segment,
-                .kind=MINIAS_SOURCE_SITE_SEGMENT
-            };
-            if(!source_graph_intern(as,key,&as->current_source_site)) {
-                free(copy);
-                as->current_source_site=source_site;
-                return false;
-            }
-        }
-        if (semicolon != NULL) {
-            *semicolon = '\0';
-        }
-        if (!process_statement(as, cursor, line)) {
-            free(copy);
-            as->current_source_site=source_site;
-            return false;
-        }
-        cursor = semicolon == NULL ? NULL : semicolon + 1;
-        ++segment;
-    }
-    free(copy);
-    as->current_source_site=source_site;
-    return true;
-}
-
-/* A .irp/.rept opener's leading label binds once at the
- * pre-expansion location, through Common's ordinary label parser. */
-static bool emit_repeat_leading_label(MiniAs *as,const char *line,
-                                      size_t prefix,size_t source_line) {
-    char *copy;bool ok;
-    if(prefix==0U)return true;
-    if(prefix>strlen(line))return false;
-    copy=malloc(prefix+1U);
-    if(!copy){minias_set_error(as,"out-of-memory:repeat-leading-label");return false;}
-    memcpy(copy,line,prefix);copy[prefix]='\0';
-    ok=process_source_line(as,copy,source_line);
-    free(copy);return ok;
-}
-
-static bool repeat_count_value(MiniAs *as,
-                               const char *argument,
-                               size_t line,
-                               uint64_t *count) {
-    int64_t value;
-    char *rewritten = NULL;
-    bool ok;
-
-    /* GNU GAS permits 661b/662b local numeric labels in .rept counts,
-     * including the kernel NOPS pattern (662b-661b)/4. Rewrite through
-     * the same Common local-label owner as instructions and .byte; do
-     * not clone target-specific numeric-label parsing. */
-    if (!rewrite_numeric_local_refs(as, argument, &rewritten, line)) {
-        return false;
-    }
-    ok = *rewritten != '\0' &&
-         minias_evaluate_absolute_expression(as, rewritten, &value) &&
-         value >= 0;
-    free(rewritten);
-    if (!ok) {
-        minias_set_error(as,
-                         "unsupported-expression:.rept:%s:line=%zu",
-                         argument,
-                         line);
-        return false;
-    }
-    if ((uint64_t)value > UINT32_MAX) {
-        minias_set_error(as,
-                         "repeat-count-too-large:%s:line=%zu",
-                         argument,
-                         line);
-        return false;
-    }
-    *count = (uint64_t)value;
-    return true;
-}
-
-static bool valid_irp_parameter_name(const char *name) {
-    const unsigned char *p = (const unsigned char *)name;
-
-    if (*p == '\0') {
-        return false;
-    }
-    for (; *p != '\0'; ++p) {
-        if (!isalnum(*p) && *p != '_') {
-            return false;
-        }
-    }
-    return true;
-}
-
-static bool irp_parameter_match(const char *text,
-                                const char *name,
-                                size_t name_len,
-                                size_t *consumed) {
-    size_t n = 1U + name_len;
-    unsigned char next;
-
-    if (text[0] != '\\' || strncmp(text + 1, name, name_len) != 0) {
-        return false;
-    }
-    next = (unsigned char)text[n];
-    if (isalnum(next) || next == '_') {
-        return false;
-    }
-    if (text[n] == '\\' && text[n + 1U] == '(' &&
-        text[n + 2U] == ')') {
-        n += 3U;
-    }
-    *consumed = n;
-    return true;
-}
-
-static char *substitute_irp_parameter(MiniAs *as,
-                                      const char *source,
-                                      const char *name,
-                                      const char *value) {
-    size_t source_pos = 0U;
-    size_t output_size = 0U;
-    size_t name_len = strlen(name);
-    size_t value_len = strlen(value);
-    char *output;
-    size_t output_pos = 0U;
-
-    while (source[source_pos] != '\0') {
-        size_t consumed;
-        if (irp_parameter_match(source + source_pos,
-                                name,
-                                name_len,
-                                &consumed)) {
-            if (value_len > SIZE_MAX - output_size) {
-                minias_set_error(as, "source-size-overflow:.irp");
-                return NULL;
-            }
-            output_size += value_len;
-            source_pos += consumed;
-        } else {
-            if (output_size == SIZE_MAX) {
-                minias_set_error(as, "source-size-overflow:.irp");
-                return NULL;
-            }
-            ++output_size;
-            ++source_pos;
-        }
-    }
-    if (output_size == SIZE_MAX) {
-        minias_set_error(as, "source-size-overflow:.irp");
-        return NULL;
-    }
-    output = malloc(output_size + 1U);
-    if (output == NULL) {
-        minias_set_error(as, "out-of-memory:irp-substitution");
-        return NULL;
-    }
-
-    source_pos = 0U;
-    while (source[source_pos] != '\0') {
-        size_t consumed;
-        if (irp_parameter_match(source + source_pos,
-                                name,
-                                name_len,
-                                &consumed)) {
-            if (value_len != 0U) {
-                memcpy(output + output_pos, value, value_len);
-            }
-            output_pos += value_len;
-            source_pos += consumed;
-        } else {
-            output[output_pos++] = source[source_pos++];
-        }
-    }
-    output[output_pos] = '\0';
-    return output;
-}
-
-static bool process_source_range(MiniAs *as,
-                                 MiniAsSourceLine *lines,
-                                 size_t begin,
-                                 size_t end);
-
-static bool process_irp_block(MiniAs *as,
-                              MiniAsSourceLine *lines,
-                              size_t count,
-                              const char *argument,
-                              size_t line,
-                              MiniAsStableSiteId invocation_site) {
-    char *copy = minias_strdup(argument);
-    char *comma;
-    char *name;
-    char *cursor;
-    size_t iteration=0U;
-
-    if (copy == NULL) {
-        minias_set_error(as, "out-of-memory:irp-argument");
-        return false;
-    }
-    comma = strchr(copy, ',');
-    if (comma == NULL) {
-        minias_set_error(as, "bad-directive:.irp:line=%zu", line);
-        free(copy);
-        return false;
-    }
-    *comma = '\0';
-    name = minias_trim(copy);
-    if (!valid_irp_parameter_name(name)) {
-        minias_set_error(as, "bad-directive:.irp:line=%zu", line);
-        free(copy);
-        return false;
-    }
-
-    cursor = comma + 1;
-    for (; !as->source_ended;) {
-        char *next_comma;
-        char *next_space;
-        char *next;
-        char *value;
-        bool comma_delimited;
-        MiniAsSourceLine *expanded = NULL;
-        size_t i;
-
-        /* GNU GAS .irp accepts BOTH commas and unquoted whitespace
-         * between values, even in the same list. Original Linux GHASH:
-         *   .irp key, K0, K1, K2, K3, K4 K5
-         * must expand K4 and K5 separately. Reuse the shared macro
-         * whitespace lexer (which respects quotes and brackets). */
-        while (*cursor == ' ' || *cursor == '\t') ++cursor;
-        next_comma = strchr(cursor, ',');
-        next_space = find_macro_argument_space(cursor);
-        comma_delimited = next_comma != NULL &&
-                          (next_space == NULL || next_comma < next_space);
-        next = comma_delimited ? next_comma : next_space;
-        if (next != NULL) *next = '\0';
-        value = minias_trim(cursor);
-        if (count != 0U) {
-            expanded = calloc(count, sizeof(*expanded));
-            if (expanded == NULL) {
-                minias_set_error(as, "out-of-memory:irp-lines");
-                free(copy);
-                return false;
-            }
-        }
-        for (i = 0U; i < count; ++i) {
-            expanded[i].line = lines[i].line;
-            expanded[i].source_segment=lines[i].source_segment;
-            expanded[i].text =
-                substitute_irp_parameter(as, lines[i].text, name, value);
-            if (expanded[i].text == NULL) {
-                destroy_source_lines(expanded, count);
-                free(copy);
-                return false;
-            }
-        }
-        const MiniAsSourceFrame frame={
-            .kind=MINIAS_SOURCE_FRAME_EXPANSION,
-            .lines=expanded,
-            .count=count,
-            .expansion_kind=MINIAS_SOURCE_SITE_IRP,
-            .invocation_site=invocation_site,
-            .definition_site=invocation_site,
-            .iteration=iteration
-        };
-        if (!process_source_frame(as,&frame)) {
-            destroy_source_lines(expanded, count);
-            free(copy);
-            return false;
-        }
-        destroy_source_lines(expanded, count);
-        ++iteration;
-        if (next == NULL) {
-            break;
-        }
-        cursor = next + 1;
-        /* Do not manufacture a blank final argument from trailing
-         * whitespace. A genuine trailing comma still carries an empty
-         * GNU positional value, as it did before this change. */
-        if (!comma_delimited) {
-            while (*cursor == ' ' || *cursor == '\t') ++cursor;
-            if (*cursor == '\0') break;
-        }
-    }
-
-    free(copy);
-    return true;
-}
-
-static bool process_source_range(MiniAs *as,
-                                 MiniAsSourceLine *lines,
-                                 size_t begin,
-                                 size_t end) {
-    size_t i = begin;
-
-    while (i < end && !as->source_ended) {
-        MiniAsStableSiteId line_site;
-        bool inline_handled=false;
-        char macro_argument[1024];
-        int macro_kind =
-            classify_macro_line(as, lines[i].text,
-                                macro_argument,
-                                sizeof(macro_argument));
-        char argument[256];
-        size_t repeat_label_prefix=0U;
-        int kind;
-
-        if(!source_graph_line_site(as,&lines[i],0U,&line_site))return false;
-        as->current_source_site=line_site;
-
-        /* File and expansion frames must agree on the semicolon-separated
-         * GNU inline `.rept/.irp ... .endr` grammar. Dispatch that one
-         * lexical special case before collector classification in BOTH. */
-        if(!process_inline_repeat_line(as,lines[i].text,lines[i].line,
-                                       &inline_handled))return false;
-        if(inline_handled) {++i;continue;}
-
-        /* GAS does not lex .macro/.rept/.irp at all in an inactive .if
-         * branch. Only nested conditionals can reactivate parsing. In
-         * particular, an unterminated .macro and unmatched .endm/.endr in
-         * skipped text are harmless source, not collector syntax. */
-        if(!as->conditional_active) {
-            if(!process_source_line(as,lines[i].text,lines[i].line))return false;
-            ++i;
-            continue;
-        }
-
-        if (macro_kind < 0) {
-            minias_set_error(as, "out-of-memory:macro-classify");
-            return false;
-        }
-        if (macro_kind == MINIAS_MACRO_END) {
-            minias_set_error(as,
-                             "unmatched-directive:.endm:line=%zu",
-                             lines[i].line);
-            return false;
-        }
-        if (macro_kind == MINIAS_MACRO_BEGIN) {
-            size_t j = i + 1U;
-            size_t depth = 1U;
-
-            while (j < end && depth != 0U) {
-                char nested_argument[1024];
-                int nested_kind =
-                    classify_macro_line(as, lines[j].text,
-                                        nested_argument,
-                                        sizeof(nested_argument));
-                if (nested_kind < 0) {
-                    minias_set_error(as, "out-of-memory:macro-classify");
-                    return false;
-                }
-                if (nested_kind == MINIAS_MACRO_BEGIN) {
-                    ++depth;
-                } else if (nested_kind == MINIAS_MACRO_END) {
-                    --depth;
-                }
-                if (depth != 0U) {
-                    ++j;
-                }
-            }
-            if (depth != 0U || j >= end) {
-                minias_set_error(as,
-                                 "unterminated-directive:.macro:line=%zu",
-                                 lines[i].line);
-                return false;
-            }
-            if (!define_macro(as,
-                              macro_argument,
-                              lines + i + 1U,
-                              j - i - 1U,
-                              lines[i].line))return false;
-            i = j + 1U;
-            continue;
-        }
-
-        kind = classify_repeat_line(as, lines[i].text,
-                                        argument,
-                                        sizeof(argument),
-                                        &repeat_label_prefix);
-        if (kind < 0) {
-            minias_set_error(as, "out-of-memory:repeat-classify");
-            return false;
-        }
-        if (kind == MINIAS_REPEAT_ENDR) {
-            minias_set_error(as,
-                             "unmatched-directive:.endr:line=%zu",
-                             lines[i].line);
-            return false;
-        }
-        if (kind == MINIAS_REPEAT_REPT || kind == MINIAS_REPEAT_IRP) {
-            size_t j = i + 1U;
-            size_t depth = 1U;
-            if(!emit_repeat_leading_label(as,lines[i].text,
-                                          repeat_label_prefix,
-                                          lines[i].line))return false;
-
-            while (j < end && depth != 0U) {
-                char nested_argument[256];
-                int nested_kind =
-                    classify_repeat_line(as, lines[j].text,
-                                         nested_argument,
-                                         sizeof(nested_argument),NULL);
-                if (nested_kind < 0) {
-                    minias_set_error(as, "out-of-memory:repeat-classify");
-                    return false;
-                }
-                if (nested_kind == MINIAS_REPEAT_REPT ||
-                    nested_kind == MINIAS_REPEAT_IRP) {
-                    ++depth;
-                } else if (nested_kind == MINIAS_REPEAT_ENDR) {
-                    --depth;
-                }
-                if (depth != 0U) {
-                    ++j;
-                }
-            }
-            if (depth != 0U || j >= end) {
-                minias_set_error(as,
-                                 "unterminated-directive:%s:line=%zu",
-                                 kind == MINIAS_REPEAT_IRP ? ".irp" : ".rept",
-                                 lines[i].line);
-                return false;
-            }
-            if (kind == MINIAS_REPEAT_REPT) {
-                uint64_t repetitions;
-                uint64_t iteration;
-
-                if (!repeat_count_value(as,
-                                        argument,
-                                        lines[i].line,
-                                        &repetitions)) {
-                    return false;
-                }
-                for (iteration = 0U;
-                     iteration < repetitions && !as->source_ended;
-                     ++iteration) {
-                    const MiniAsSourceFrame body={
-                        .kind=MINIAS_SOURCE_FRAME_EXPANSION,
-                        .lines=lines+i+1U,
-                        .count=j-i-1U,
-                        .expansion_kind=MINIAS_SOURCE_SITE_REPT,
-                        .invocation_site=line_site,
-                        .definition_site=line_site,
-                        .iteration=(size_t)iteration
-                    };
-                    if (!process_source_frame(as,&body)) {
-                        return false;
-                    }
-                }
-            } else if (!process_irp_block(as,
-                                          lines + i + 1U,
-                                          j - i - 1U,
-                                          argument,
-                                          lines[i].line,
-                                          line_site)) {
-                return false;
-            }
-            i = j + 1U;
-            continue;
-        }
-        if (!process_source_line(as, lines[i].text, lines[i].line)) {
-            return false;
-        }
-        ++i;
-    }
-    return true;
-}
-
-/* GNU GAS permits semicolon-separated assignments and complete .rept/.irp
- * blocks on ONE physical source line (Linux head_64.S page tables).  Route
- * logical statements back through the existing Common repeat/macro engine;
- * do not recognize repeat syntax a second time in Target parsers. */
-static bool process_inline_repeat_line(MiniAs *as,const char *source,
-                                       size_t line,bool *handled) {
-    MiniAsSourceLine *pieces=NULL;
-    size_t count=0U,capacity=0U,i;
-    char *copy,*cursor;
-    bool opener=false,closer=false,ok=true;
-    *handled=false;
-    if(strchr(source,';')==NULL)return true;
-    copy=minias_strdup(source);
-    if(copy==NULL) {
-        minias_set_error(as,"out-of-memory:inline-repeat");return false;
-    }
-    strip_comment(copy,as->target);
-    cursor=copy;
-    while(cursor!=NULL) {
-        char *end=find_statement_separator(cursor);
-        char argument[256];
-        int kind;
-        if(end!=NULL)*end='\0';
-        kind=classify_repeat_line(as,cursor,argument,sizeof(argument),NULL);
-        if(kind<0 || !minias_grow_array((void **)&pieces,&capacity,
-                                   sizeof(*pieces),count+1U)) {
-            minias_set_error(as,"out-of-memory:inline-repeat-segments");
-            ok=false;break;
-        }
-        pieces[count].text=cursor;
-        pieces[count].line=line;
-        pieces[count].source_segment=count;
-        ++count;
-        if(kind==MINIAS_REPEAT_REPT || kind==MINIAS_REPEAT_IRP)opener=true;
-        if(kind==MINIAS_REPEAT_ENDR)closer=true;
-        cursor=end==NULL?NULL:end+1U;
-    }
-    if(ok && opener && closer) {
-        const MiniAsSourceFrame frame={
-            .kind=MINIAS_SOURCE_FRAME_EXPANSION,
-            .lines=pieces,
-            .count=count,
-            .expansion_kind=MINIAS_SOURCE_SITE_INLINE_REPEAT,
-            .invocation_site=as->current_source_site,
-            .definition_site=as->current_source_site
-        };
-        *handled=true;
-        ok=process_source_frame(as,&frame);
-    }
-    for(i=0U;i<count;++i)pieces[i].text=NULL; /* owned by copy */
-    free(pieces);
-    free(copy);
-    return ok;
 }
 
 /* Source text may contain literal binary bytes inside quoted .ascii data,
@@ -6947,7 +5039,7 @@ static bool parse_loaded_source_graph(MiniAs *as,
     }
     as->source_graph=graph;
     ++graph->parse_passes;
-    parsed=process_source_frame(as,&graph->physical);
+    parsed=minias_source_frame_process(as,&graph->physical);
     if(!parsed)return false;
     if(as->conditional_count!=0U) {
         minias_set_error(as,"unterminated-directive:.if:depth=%zu",
@@ -6961,7 +5053,7 @@ static bool parse_loaded_source_graph(MiniAs *as,
     /* EOF-scheduled literal pools are generated by a real synthetic source
      * site, just like explicit .ltorg children are owned by their opener. */
     eof.line=graph->physical.count+1U;
-    if(!source_graph_line_site(as,&eof,0U,&as->current_source_site))
+    if(!minias_source_graph_line_site(as,&eof,0U,&as->current_source_site))
         return false;
     if(as->target->supports_literal_pools &&
        !flush_literal_pools(as,graph->physical.count,true))return false;
@@ -7217,7 +5309,7 @@ int minias_assemble_config(const char *input_path,
             }
         }
         if(parsed)parsed=parse_loaded_source_graph(&as,&graph);
-        if(parsed)parsed=source_graph_rebind_forced_branches(
+        if(parsed)parsed=minias_source_graph_rebind_forced_branches(
                 &as,&long_branch_ids,&long_branch_count,
                 &long_branch_capacity);
         if(parsed && !minias_solve_fragment_layout(
@@ -7225,7 +5317,7 @@ int minias_assemble_config(const char *input_path,
               &long_branch_capacity,&added_long_branches,diagnostic))
             parsed=false;
         if(parsed && added_long_branches) {
-            parsed=source_graph_capture_forced_branches(&as,long_branch_ids,
+            parsed=minias_source_graph_capture_forced_branches(&as,long_branch_ids,
                                                         long_branch_count);
         }
         if(parsed && added_long_branches) {
@@ -7269,7 +5361,7 @@ int minias_assemble_config(const char *input_path,
                 graph.file_reads,graph.site_count,graph.expansion_count,
                 source_reparse_pass,graph.ordinal_drifts,
                 graph.conditional_changes);
-    source_graph_destroy(&graph);
+    minias_source_graph_destroy(&graph);
     free(long_branch_ids);
     return rc;
 }

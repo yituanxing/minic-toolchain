@@ -1590,16 +1590,7 @@ static const LaBuiltinMnemonic la_builtin_mnemonics[]={
     {"move",LA_MN_MOVE,0U,LA_BRANCH_CANONICAL},
     {"preld",LA_MN_PREFETCH,0U,LA_BRANCH_CANONICAL},
     {"preldx",LA_MN_PREFETCH,1U,LA_BRANCH_CANONICAL},
-    {"addu16i.d",LA_MN_ADDU16I,0U,LA_BRANCH_CANONICAL},
-    {"tlbclr",LA_MN_PRIVILEGED,0U,LA_BRANCH_CANONICAL},
-    {"tlbflush",LA_MN_PRIVILEGED,1U,LA_BRANCH_CANONICAL},
-    {"tlbsrch",LA_MN_PRIVILEGED,2U,LA_BRANCH_CANONICAL},
-    {"tlbrd",LA_MN_PRIVILEGED,3U,LA_BRANCH_CANONICAL},
-    {"tlbwr",LA_MN_PRIVILEGED,4U,LA_BRANCH_CANONICAL},
-    {"tlbfill",LA_MN_PRIVILEGED,5U,LA_BRANCH_CANONICAL},
-    {"ertn",LA_MN_PRIVILEGED,6U,LA_BRANCH_CANONICAL},
-    {"nop",LA_MN_PRIVILEGED,7U,LA_BRANCH_CANONICAL},
-    {"ret",LA_MN_PRIVILEGED,8U,LA_BRANCH_CANONICAL}
+    {"addu16i.d",LA_MN_ADDU16I,0U,LA_BRANCH_CANONICAL}
 };
 
 static int la_compare_mnemonic(const void *lhs,const void *rhs) {
@@ -1613,7 +1604,8 @@ static bool la_build_mnemonic_index(MiniAs *as,LaTargetState *state) {
     const size_t capacity=LA_COUNT(la_branch_patterns)+
         LA_COUNT(la_vector_patterns)+LA_COUNT(la_special_register_patterns)+
         LA_COUNT(la_scalar_patterns)+LA_COUNT(la_bitfield_patterns)+
-        LA_COUNT(la_alsl_patterns)+LA_COUNT(la_builtin_mnemonics);
+        LA_COUNT(la_alsl_patterns)+LA_COUNT(la_builtin_mnemonics)+
+        LA_COUNT(la_privileged);
     LaMnemonicEntry *entries=calloc(capacity,sizeof(*entries));
     if(entries==NULL) {
         minias_set_error(as,"out-of-memory:loongarch-mnemonic-index");
@@ -1656,6 +1648,12 @@ static bool la_build_mnemonic_index(MiniAs *as,LaTargetState *state) {
                                       la_builtin_mnemonics[i].family,
                                       la_builtin_mnemonics[i].index,0U,
                                       la_builtin_mnemonics[i].branch_alias};
+    /* Privileged names and their machine words share one ISA descriptor.
+     * The index must never contain a second handwritten name inventory. */
+    for(i=0U;i<LA_COUNT(la_privileged);++i)
+        entries[n++]=(LaMnemonicEntry){la_privileged[i].name,
+                                      LA_MN_PRIVILEGED,(unsigned)i,0U,
+                                      LA_BRANCH_CANONICAL};
     qsort(entries,n,sizeof(*entries),la_compare_mnemonic);
     for(i=1U;i<n;++i)
         if(strcmp(entries[i-1U].name,entries[i].name)==0) {
