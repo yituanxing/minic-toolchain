@@ -3,7 +3,9 @@
 #include "target/common/core_frame_layout.h"
 #include "target/common/core_value_slots.h"
 #include "target/common/core_spill_layout.h"
+#include "target/common/core_object_reuse.h"
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 
 /* Bounded function-local layout, shared by AAPCS64 and LoongArch LP64D.
@@ -14,7 +16,8 @@ bool minic_lp64_frame_plan_objects_with_storage(
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreObjectStoragePlan *shared,
     MinicLP64FramePlan *plan) {
-    size_t pos, i, scalar_bytes = 0U;
+    size_t pos, i, scalar_bytes = 0U, pool_slots = 0U, pool_base = 0U;
+    MinicCoreObjectReusePlan reuse = {0};
     if (program == NULL || target == NULL || fn == NULL || plan == NULL ||
         !minic_lp64_baseline_values_fit_frame(fn->value_count) ||
         fn->object_count > 8192U ||
@@ -53,21 +56,67 @@ bool minic_lp64_frame_plan_objects_with_storage(
             return false;
     pos = scalar_bytes;
     plan->max_object_alignment = 1U;
+    /* Reuse the existing Core first-write/address-escape/interval proof used
+     * by RV32/RV64. The LP64 frame owns only the resulting byte offsets;
+     * the short-lived analysis cannot escape the planner. */
+    if (!minic_core_object_reuse_plan_build(
+            program, fn, target->data_layout, 8U, true, &reuse) ||
+        !minic_core_object_reuse_plan_get(
+            &reuse, MINIC_CORE_OBJECT_INVALID, NULL, NULL, &pool_slots)) {
+        minic_core_object_reuse_plan_destroy(&reuse);
+        return false;
+    }
     for (i = 0U; i < plan->object_storage.count; ++i) {
         const MinicCoreObjectStorage *storage = &plan->object_storage.objects[i];
         const size_t align = storage->alignment;
         const size_t extent = storage->extent;
+        bool reusable;
+        size_t slot, peak;
         /* The target prologue must actually realign its stable frame base
          * when a GNU local needs more than the 16-byte public call ABI. */
         if (align > 256U || extent > MINIC_LARGE_FRAME_MAX ||
-            !minic_core_frame_reserve(&pos, align, extent,
-                                      MINIC_LARGE_FRAME_MAX,
-                                      &plan->object_offsets[i]))
+            !minic_core_object_reuse_plan_get(
+                &reuse, (MinicCoreObjectId)i,
+                &reusable, &slot, &peak) || peak != pool_slots) {
+            minic_core_object_reuse_plan_destroy(&reuse);
             return false;
+        }
         if (align > plan->max_object_alignment)
             plan->max_object_alignment = align;
+        if (reusable) continue;
+        if (!minic_core_frame_reserve(&pos, align, extent,
+                                      MINIC_LARGE_FRAME_MAX,
+                                      &plan->object_offsets[i])) {
+            minic_core_object_reuse_plan_destroy(&reuse);
+            return false;
+        }
     }
+    if (pool_slots > MINIC_LARGE_FRAME_MAX / 8U ||
+        !minic_core_frame_reserve(&pos, 8U, pool_slots * 8U,
+                                  MINIC_LARGE_FRAME_MAX, &pool_base)) {
+        minic_core_object_reuse_plan_destroy(&reuse);
+        return false;
+    }
+    for (i = 0U; i < plan->object_storage.count; ++i) {
+        bool reusable;
+        size_t slot, peak;
+        if (!minic_core_object_reuse_plan_get(
+                &reuse, (MinicCoreObjectId)i,
+                &reusable, &slot, &peak) || peak != pool_slots ||
+            (reusable && slot >= pool_slots)) {
+            minic_core_object_reuse_plan_destroy(&reuse);
+            return false;
+        }
+        if (reusable) plan->object_offsets[i] = pool_base + slot * 8U;
+    }
+    minic_core_object_reuse_plan_destroy(&reuse);
     plan->object_end = pos;
+    if (getenv("MINIC_CORE_FRAME_TRACE") != NULL)
+        (void)fprintf(stderr,
+            "CORE_FRAME_LP64 function=%s scalar_bytes=%zu object_end=%zu "
+            "objects=%zu reusable_slots=%zu\n",
+            fn->name != NULL ? fn->name : "?", scalar_bytes,
+            pos, fn->object_count, pool_slots);
     return true;
 }
 

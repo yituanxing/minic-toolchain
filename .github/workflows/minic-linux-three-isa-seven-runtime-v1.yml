@@ -74,6 +74,9 @@ jobs:
           test -x build/minic-seven-bin/bin/minic
           test -x build/minic-seven-bin/bin/minic-cc
           sha256sum build/minic-seven-bin/bin/minic build/minic-seven-bin/bin/minic-cc
+          MINIC_CC="$PWD/build/minic-seven-bin/bin/minic" \
+            BUILD_DIR="$PWD/build/minic-seven-bin" \
+            bash tests/compiler/c0/probe-direct-lp64-source-object-slot-reuse.sh
       - uses: actions/upload-artifact@v4
         with:
           name: minic-linux-seven-compiler
@@ -538,10 +541,28 @@ jobs:
           )
           echo "key=linux-three-isa-gnu-golden-6.6.143-${{ matrix.target }}-$signature" >> "$GITHUB_OUTPUT"
       - uses: actions/cache/restore@v4
+        id: gnu-cache
+        # Same real-GNU-on-cache-MISS contract as the earlier RV Linux gate.
+        # GitHub may report a cache hit but fail the download when the account
+        # reaches its egress limit; never let this hide a MiniC Linux result.
+        continue-on-error: true
         with:
           path: ${{ env.GNU_WORK }}
           key: ${{ steps.gnu-key.outputs.key }}
-          fail-on-cache-miss: true
+      - name: Rebuild original GNU Kbuild when cache transport is unavailable
+        if: steps.gnu-cache.outcome != 'success' || steps.gnu-cache.outputs.cache-hit != 'true'
+        shell: bash
+        timeout-minutes: 65
+        run: |
+          set -Eeuo pipefail
+          # A failed restore may have left partial bytes. Preserve them outside
+          # the authenticated work path; golden.sh only accepts a new tree.
+          if [[ -e "$GNU_WORK" || -L "$GNU_WORK" ]]; then
+            test -d "$GNU_WORK" && test ! -L "$GNU_WORK"
+            mv -- "$GNU_WORK" "$RUNNER_TEMP/partial-gnu-${{ matrix.target }}-$GITHUB_RUN_ATTEMPT"
+          fi
+          MINIC_LINUX_CONFIG_PROFILE=broad bash tools/ci/linux-three-isa-golden-v1.sh \
+            '${{ matrix.target }}' "$GNU_WORK"
       - name: Verify original GNU Golden complete immutable cache C/Kbuild SHAs
         shell: bash
         run: |
@@ -635,6 +656,7 @@ jobs:
             build/minic-seven-receiver-${{ matrix.target }}/boot/
             build/minic-seven-receiver-${{ matrix.target }}/candidate/candidate-receipt.json
             build/minic-seven-receiver-${{ matrix.target }}/candidate/all-c-owners-result.json
+            build/minic-seven-receiver-${{ matrix.target }}/candidate/c-section-sizes.json
             build/minic-seven-receiver-${{ matrix.target }}/candidate/gnu-ld-relink.log
             build/minic-seven-receiver-${{ matrix.target }}/candidate/gnu-ld-final-relink*.log
             build/minic-seven-receiver-${{ matrix.target }}/candidate/gnu-link-failure-summary.json
