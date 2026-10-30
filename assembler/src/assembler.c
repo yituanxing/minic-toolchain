@@ -16,7 +16,7 @@ static void source_graph_record_condition(MiniAs *as,
                                           bool active);
 static bool source_graph_lookup_forced_branch(MiniAs *as,
                                               const MiniAsStmt *stmt,
-                                              bool *forced);
+                                              size_t *minimum_size);
 
 bool minias_grow_array(void **ptr, size_t *capacity, size_t elem_size, size_t need) {
     size_t next;
@@ -4646,22 +4646,24 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
             free(rewritten_args);
             return false;
         }
-        bool forced=false;
+        size_t forced_minimum_size=0U;
         if(!source_graph_lookup_forced_branch(as,
                                               &as->stmts[statement_id],
-                                              &forced)) {
+                                              &forced_minimum_size)) {
             free(rewritten_args);
             return false;
         }
-        if (forced) {
+        /* A source-replayed branch keeps its monotone minimum *alternative*,
+         * not merely a boolean "forced long" bit.  RV C16 -> B32 -> long8
+         * needs two reparses when a dot-sensitive .set/.if is present.
+         * Each step is still supplied by the Target's typed MC plan. */
+        while (size<forced_minimum_size) {
             MiniAsTargetRelaxPlan plan;
-            /* Forced-long source replay consults the very same retained
-             * MCInst alternative plan as the later MCLayout fixed point.
-             * The Target never guesses a branch width from op spelling. */
             as->stmts[statement_id].size=size;
             if (!minias_query_target_relax_plan(
                     as,&as->stmts[statement_id],&plan) ||
-                plan.terminal_size<=size) {
+                plan.terminal_size<=size ||
+                plan.terminal_size>forced_minimum_size) {
                 minias_set_error(as, "invalid-target-relaxation:%s:line=%zu",
                                  op, line);
                 free(rewritten_args);
@@ -4741,6 +4743,7 @@ typedef struct MiniAsForcedBranchSite {
     uint32_t opcode;
     uint32_t target_form;
     uint32_t mode_bits;
+    size_t minimum_size;
     unsigned operand_count;
     MiniAsForcedOperandShape *operands;
 } MiniAsForcedBranchSite;
@@ -4954,10 +4957,10 @@ static bool source_graph_forced_shape_matches(
  * current branch size happens to match the previous pass. */
 static bool source_graph_lookup_forced_branch(MiniAs *as,
                                               const MiniAsStmt *stmt,
-                                              bool *forced) {
+                                              size_t *minimum_size) {
     MiniAsSourceGraph *graph=as->source_graph;
     size_t encoded;
-    *forced=false;
+    *minimum_size=0U;
     if(graph==NULL)return true;
     if(stmt->source_site==MINIAS_SITE_NONE ||
        stmt->source_site>graph->site_count) {
@@ -4973,7 +4976,7 @@ static bool source_graph_lookup_forced_branch(MiniAs *as,
         minias_set_error(as,"changed-forced-branch-shape:line=%zu",stmt->line);
         return false;
     }
-    *forced=true;
+    *minimum_size=graph->forced_branches[encoded-1U].minimum_size;
     return true;
 }
 
@@ -5059,6 +5062,7 @@ static bool source_graph_capture_forced_branches(MiniAs *as,
     for(i=0U;i<count;++i) {
         const MiniAsStmt *stmt;
         MiniAsForcedBranchSite *saved;
+        MiniAsTargetRelaxPlan plan;
         unsigned j;
         if(ids[i]>=as->stmt_count ||
            as->stmts[ids[i]].fragment_kind!=MINIAS_FRAGMENT_INSTRUCTION ||
@@ -5074,6 +5078,7 @@ static bool source_graph_capture_forced_branches(MiniAs *as,
             minias_set_error(as,"invalid-forced-branch-source-site");
             return false;
         }
+        if(!minias_query_target_relax_plan(as,stmt,&plan))return false;
         if(i<graph->forced_branch_count) {
             if(!source_graph_forced_shape_matches(&graph->forced_branches[i],
                                                   stmt)) {
@@ -5082,7 +5087,15 @@ static bool source_graph_capture_forced_branches(MiniAs *as,
                                  stmt->line);
                 return false;
             }
+            if(plan.required_size>stmt->size &&
+               graph->forced_branches[i].minimum_size<plan.terminal_size)
+                graph->forced_branches[i].minimum_size=plan.terminal_size;
             continue;
+        }
+        if(plan.required_size<=stmt->size) {
+            minias_set_error(as,"invalid-forced-source-growth:line=%zu",
+                             stmt->line);
+            return false;
         }
         if(graph->sites[stmt->source_site-1U].forced_branch_index!=0U) {
             ++graph->ordinal_drifts;
@@ -5097,6 +5110,9 @@ static bool source_graph_capture_forced_branches(MiniAs *as,
         saved->opcode=stmt->mcinst->opcode;
         saved->target_form=stmt->mcinst->target_form;
         saved->mode_bits=stmt->site.mode_bits;
+        /* Required is a lower bound; terminal is the actual Target-owned
+         * alternative size committed by the MCLayout growth operation. */
+        saved->minimum_size=plan.terminal_size;
         saved->operand_count=stmt->mcinst->count;
         if(saved->operand_count!=0U) {
             saved->operands=calloc(saved->operand_count,
