@@ -2168,6 +2168,13 @@ ldr q3,[x4,#32]
 str s5,[x6,#20]
 str d7,[x8,#40]
 str q9,[x10,#48]
+# GNU GAS treats unaligned/negative LDR/STR as LDUR/STUR; scalar FP
+# writeback similarly uses its signed 9-bit immediate encoding.
+ldr s0,[x1,#3]
+str d0,[x1,#-8]
+str s0,[x1,#16]!
+ldr d0,[x1],#24
+str q0,[x1],#-16
 A64_SYSREVFP
 "$MINIAS" --target=aarch64 -o "$work/a64-sysrev-mini.o" "$work/a64-kernel-sys-rev-fp.s"
 "$AARCH64_AS" -o "$work/a64-sysrev-gnu.o" "$work/a64-kernel-sys-rev-fp.s"
@@ -2176,15 +2183,15 @@ A64_SYSREVFP
 cmp "$work/a64-sysrev-mini.bin" "$work/a64-sysrev-gnu.bin"
 for bad in 'msr SPsel,#2' 'msr SPsel,#-1' \
            'msr id_aa64isar1_el1,x3' 'rev64 v0.16b,v1.8b' \
-           'rev64 v0.2d,v1.2d' 'ldr s0,[x1,#3]' \
-           'ldr q0,[x1,#65536]' 'str d0,[x1,#-8]' \
-           'str s0,[x1,#16]!'; do
+           'rev64 v0.2d,v1.2d' 'ldr s0,[x1,#16384]' \
+           'ldr q0,[x1,#65536]' 'str d0,[x1,#-257]' \
+           'str s0,[x1,#256]!'; do
     printf '.text\n%s\n' "$bad" > "$work/a64-sysrev-invalid.s"
     if "$MINIAS" --target=aarch64 -o "$work/a64-sysrev-invalid.o" "$work/a64-sysrev-invalid.s" >/dev/null 2>&1; then
         echo "invalid ARM64 system/reverse/FP memory accepted: $bad" >&2;exit 1
     fi
 done
-echo 'MINIAS_A64_SYS_REV_FP=PASS GNU_13_words_and_9_negative'
+echo 'MINIAS_A64_SYS_REV_FP=PASS GNU_18_words_and_9_negative'
 
 # GNU KVM vector preamble macros compare two already-defined numeric labels.
 cat > "$work/a64-kvm-preamble-if.s" <<'A64_NUMERIC_IF'

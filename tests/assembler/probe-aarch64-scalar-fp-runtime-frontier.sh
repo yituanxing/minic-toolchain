@@ -65,6 +65,28 @@ for expected in \
     fi
 done
 
+# GNU GAS intentionally lowers unaligned/negative LDR/STR to LDUR/STUR;
+# pre/post indexing is signed-9-bit as well, including SIMD scalar stores.
+printf '%s\n' '.text' \
+    'ldr s0,[x1,#3]' \
+    'str d0,[x1,#-8]' \
+    'str s0,[x1,#16]!' \
+    'ldr d0,[x1],#24' \
+    'str q0,[x1],#-16' \
+    'ret' >"$work/fp-memory.s"
+"$minias" --target=aarch64 -march=armv8-a -mabi=lp64 \
+    -o "$work/fp-memory.o" "$work/fp-memory.s"
+readelf -x .text "$work/fp-memory.o" >"$work/fp-memory.hex"
+for expected in \
+    '203040bc 20801ffc 200c01bc 208441fc' \
+    '20049f3c c0035fd6'; do
+    if ! grep -qi "$expected" "$work/fp-memory.hex"; then
+        echo "AARCH64_FP_MEMORY_FRONTIER=FAIL expected=$expected" >&2
+        sed -n '1,12p' "$work/fp-memory.hex" >&2
+        exit 1
+    fi
+done
+
 # Same named instructions must not accept illegal register-bank or NZCV
 # combinations and accidentally encode nonsense.
 for invalid in \
@@ -79,7 +101,10 @@ for invalid in \
     'shl d0, d1, #64' \
     'ushr d0, s1, #11' \
     'sli s0, s1, #11' \
-    'sri v0.1d, v1.1d, #11'; do
+    'sri v0.1d, v1.1d, #11' \
+    'ldr s0,[x1,#16384]' \
+    'str d0,[x1,#-257]' \
+    'str s0,[x1,#256]!'; do
     printf '%s\n' '.text' "$invalid" >"$work/invalid.s"
     if "$minias" --target=aarch64 -march=armv8-a -mabi=lp64 \
         -o "$work/invalid.o" "$work/invalid.s" \
@@ -89,4 +114,4 @@ for invalid in \
     fi
 done
 
-echo 'AARCH64_SCALAR_FP_FRONTIER=PASS real_cjson_lua_forms=7 scalar_shifts=11 vector_shifts=2 invalid=12'
+echo 'AARCH64_SCALAR_FP_FRONTIER=PASS real_cjson_lua_forms=7 scalar_shifts=11 vector_shifts=2 fp_memory=5 invalid=15'

@@ -2531,7 +2531,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         bool fp64=false;
         A64Memory memory;
         uint32_t base;
-        if(!split_operands(args,tok,&n) || n!=2U) {
+        if(!split_operands(args,tok,&n) || (n!=2U && n!=3U)) {
             minias_set_error(as,"bad-aarch64-fp-memory:%s:line=%zu",
                              args,stmt->line);minias_mcinst_destroy(inst);return false;
         }
@@ -2549,12 +2549,13 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         inst->encoding=base;
         if(width==16U)put_q(&inst->operands[0],rd);
         else put_fp_scalar(&inst->operands[0],rd,fp64);
-        if(a64_parse_indexed_address(aliases,tok[1],width,&memory)) {
+        if(n==2U && a64_parse_indexed_address(aliases,tok[1],width,&memory)) {
             inst->opcode=A64_MC_LDST_INDEX;
         }else {
             char displacement[96];unsigned mode,base_reg;
             MiniAsSymbolExpr symbol;
-            bool lo12=a64_memory_components(aliases,tok[1],&base_reg,
+            bool lo12=n==2U &&
+                        a64_memory_components(aliases,tok[1],&base_reg,
                                               displacement,&mode) &&
                         mode==0U && *displacement &&
                         a64_lo12_expr(displacement,&symbol);
@@ -2568,10 +2569,12 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
                 }
                 memory.offset.kind=A64_OFFSET_LO12;
                 inst->opcode=A64_MC_LDST_LO12;
-            }else if(!a64_parse_memory(as,aliases,tok[1],NULL,&memory) ||
-                     memory.mode!=A64_ADDRESS_OFFSET ||
+            }else if(!a64_parse_memory(as,aliases,tok[1],
+                                      n==3U?tok[2]:NULL,&memory) ||
+                     memory.post_index_register ||
                      (memory.offset.kind==A64_OFFSET_CONSTANT &&
-                      !((memory.offset.constant>=0 &&
+                      !((memory.mode==A64_ADDRESS_OFFSET &&
+                         memory.offset.constant>=0 &&
                          memory.offset.constant%(int64_t)width==0 &&
                          memory.offset.constant/(int64_t)width<=4095) ||
                         (memory.offset.constant>=-256 &&
@@ -2580,9 +2583,10 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
                                  args,stmt->line);
                 minias_mcinst_destroy(inst);return false;
             }else {
-                inst->opcode=(memory.offset.kind==A64_OFFSET_CONSTANT &&
-                    (memory.offset.constant<0 ||
-                     memory.offset.constant%(int64_t)width!=0))?
+                inst->opcode=(memory.mode!=A64_ADDRESS_OFFSET ||
+                    (memory.offset.kind==A64_OFFSET_CONSTANT &&
+                     (memory.offset.constant<0 ||
+                     memory.offset.constant%(int64_t)width!=0)))?
                      A64_MC_LDST_UNSCALED:A64_MC_LDST_SCALED;
             }
         }
