@@ -32,6 +32,39 @@ for expected in \
     fi
 done
 
+# Lua's lmathlib emits an AdvSIMD *scalar D* shift, not a Vn.2D shift.
+# Cover the complete signed/unsigned/insert/accumulate immediate-shift set
+# sharing this encoding template. The two vector checks defend Q handling.
+printf '%s\n' '.text' \
+    'ushr d0, d0, #11' \
+    'sshr d0, d0, #11' \
+    'sri d0, d0, #11' \
+    'shl d0, d0, #11' \
+    'sli d0, d0, #11' \
+    'usra d0, d0, #11' \
+    'ssra d0, d0, #11' \
+    'urshr d0, d0, #11' \
+    'srshr d0, d0, #11' \
+    'ursra d0, d0, #11' \
+    'srsra d0, d0, #11' \
+    'ushr v0.2d, v1.2d, #11' \
+    'shl v2.8b, v3.8b, #1' \
+    'ret' >"$work/scalar-shifts.s"
+"$minias" --target=aarch64 -march=armv8-a -mabi=lp64 \
+    -o "$work/scalar-shifts.o" "$work/scalar-shifts.s"
+readelf -x .text "$work/scalar-shifts.o" >"$work/shifts.hex"
+for expected in \
+    '0004757f 0004755f 0044757f 00544b5f' \
+    '00544b7f 0014757f 0014755f 0024757f' \
+    '0024755f 0034757f 0034755f 2004756f' \
+    '6254090f c0035fd6'; do
+    if ! grep -qi "$expected" "$work/shifts.hex"; then
+        echo "AARCH64_SCALAR_SHIFT_FRONTIER=FAIL expected=$expected" >&2
+        sed -n '1,14p' "$work/shifts.hex" >&2
+        exit 1
+    fi
+done
+
 # Same named instructions must not accept illegal register-bank or NZCV
 # combinations and accidentally encode nonsense.
 for invalid in \
@@ -40,7 +73,13 @@ for invalid in \
     'fccmp d0, d0, #16, ne' \
     'fcvtzs d0, s0' \
     'fcvtzs x1, x0' \
-    'movi s0, #0'; do
+    'movi s0, #0' \
+    'ushr d0, d1, #0' \
+    'ushr d0, d1, #65' \
+    'shl d0, d1, #64' \
+    'ushr d0, s1, #11' \
+    'sli s0, s1, #11' \
+    'sri v0.1d, v1.1d, #11'; do
     printf '%s\n' '.text' "$invalid" >"$work/invalid.s"
     if "$minias" --target=aarch64 -march=armv8-a -mabi=lp64 \
         -o "$work/invalid.o" "$work/invalid.s" \
@@ -50,4 +89,4 @@ for invalid in \
     fi
 done
 
-echo 'AARCH64_SCALAR_FP_FRONTIER=PASS real_cjson_lua_forms=7 invalid=6'
+echo 'AARCH64_SCALAR_FP_FRONTIER=PASS real_cjson_lua_forms=7 scalar_shifts=11 vector_shifts=2 invalid=12'

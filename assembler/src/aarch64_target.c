@@ -3396,38 +3396,66 @@ reduction_done:;
         }
     } else if(!strcmp(op,"ushr") || !strcmp(op,"sshr") ||
               !strcmp(op,"sri") || !strcmp(op,"shl") ||
-              !strcmp(op,"sli")) {
-        /* One AdvSIMD shift-immediate ISA family, not five parsers.
+              !strcmp(op,"sli") || !strcmp(op,"usra") ||
+              !strcmp(op,"ssra") || !strcmp(op,"urshr") ||
+              !strcmp(op,"srshr") || !strcmp(op,"ursra") ||
+              !strcmp(op,"srsra")) {
+        /* One AdvSIMD shift-immediate ISA family for vectors and scalar Dn.
          * Right shifts use immh:immb=2*element_bits-shift; left shifts
          * use element_bits+shift. Preserve signed/unsigned and insert
          * semantics in the target opcode base, not the Common MC layout. */
+        static const struct {const char *name;uint32_t base;bool right;} shifts[]={
+            {"sshr",UINT32_C(0x0f000400),true},
+            {"ssra",UINT32_C(0x0f001400),true},
+            {"srshr",UINT32_C(0x0f002400),true},
+            {"srsra",UINT32_C(0x0f003400),true},
+            {"shl",UINT32_C(0x0f005400),false},
+            {"ushr",UINT32_C(0x2f000400),true},
+            {"usra",UINT32_C(0x2f001400),true},
+            {"urshr",UINT32_C(0x2f002400),true},
+            {"ursra",UINT32_C(0x2f003400),true},
+            {"sri",UINT32_C(0x2f004400),true},
+            {"sli",UINT32_C(0x2f005400),false}
+        };
         char tok[4][384];unsigned n,rd,rn,bits,encoded_shift;
         uint32_t da,sa,base;
         int64_t shift;
-        bool right=!strcmp(op,"ushr") || !strcmp(op,"sshr") ||
-                   !strcmp(op,"sri");
-        if(!split_operands(args,tok,&n) || n!=3U ||
-           !a64_vector_view(aliases,tok[0],&rd,&da) ||
-           !a64_vector_view(aliases,tok[1],&rn,&sa) || da!=sa ||
+        bool scalar=false;
+        size_t kind;
+        for(kind=0U;kind<sizeof(shifts)/sizeof(shifts[0]);++kind)
+            if(!strcmp(op,shifts[kind].name))break;
+        if(kind==sizeof(shifts)/sizeof(shifts[0]) ||
+           !split_operands(args,tok,&n) || n!=3U ||
            !parse_signed_number(tok[2],&shift)) {
             minias_set_error(as,"bad-aarch64-simd-shift:%s:line=%zu",
                              args,stmt->line);minias_mcinst_destroy(inst);return false;
         }
-        bits=8U<<((da&UINT32_C(0xc00))>>10U);
-        if((right?(shift<1 || shift>(int64_t)bits):
+        scalar=a64_scalar_fp_d(aliases,tok[0],&rd);
+        if(scalar) {
+            if(!a64_scalar_fp_d(aliases,tok[1],&rn)) {
+                minias_set_error(as,"bad-aarch64-simd-shift:%s:line=%zu",
+                                 args,stmt->line);minias_mcinst_destroy(inst);return false;
+            }
+            da=UINT32_C(0x40000c00);
+            bits=64U;
+        }else if(!a64_vector_view(aliases,tok[0],&rd,&da) ||
+                 !a64_vector_view(aliases,tok[1],&rn,&sa) || da!=sa) {
+            minias_set_error(as,"bad-aarch64-simd-shift:%s:line=%zu",
+                             args,stmt->line);minias_mcinst_destroy(inst);return false;
+        }else bits=8U<<((da&UINT32_C(0xc00))>>10U);
+        if((shifts[kind].right?(shift<1 || shift>(int64_t)bits):
                    (shift<0 || shift>=(int64_t)bits)) ||
-           (bits==64U && (da&UINT32_C(0x40000000))==0U)) {
+           (!scalar && bits==64U &&
+            (da&UINT32_C(0x40000000))==0U)) {
             minias_set_error(as,"bad-aarch64-simd-shift-range:%s:line=%zu",
                              args,stmt->line);minias_mcinst_destroy(inst);return false;
         }
-        encoded_shift=right?2U*bits-(unsigned)shift:bits+(unsigned)shift;
-        base=!strcmp(op,"ushr")?UINT32_C(0x2f000400):
-             !strcmp(op,"sshr")?UINT32_C(0x0f000400):
-             !strcmp(op,"sri") ?UINT32_C(0x2f004400):
-             !strcmp(op,"shl") ?UINT32_C(0x0f005400):
-                                UINT32_C(0x2f005400);
+        encoded_shift=shifts[kind].right?2U*bits-(unsigned)shift:
+                                           bits+(unsigned)shift;
+        base=shifts[kind].base;
+        if(scalar)base+=UINT32_C(0x50000000);
         inst->opcode=A64_MC_SIMD_DUP;inst->count=2U;
-        inst->encoding=base|(da&UINT32_C(0x40000000))|
+        inst->encoding=base|(scalar?0U:(da&UINT32_C(0x40000000)))|
                        (encoded_shift<<16U);
         put_vector(&inst->operands[0],rd);
         put_vector(&inst->operands[1],rn);
