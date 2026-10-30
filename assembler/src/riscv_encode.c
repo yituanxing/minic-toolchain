@@ -797,7 +797,7 @@ static bool rv_bind_symbol_operand(MiniAs *as, MiniAsMCInst *m,
  * different psABI contract from the corresponding 16-bit instruction. */
 static bool rv_plain_machine_word(const MiniAsMCInst *m, uint32_t *word) {
     uint32_t base=m->encoding;
-    int rd,rs1=0,rs2=0;
+    int rd,rs1=0,rs2=0,rs3=0;
     int64_t imm=0;
     if (m->opcode == RV_MC_LI) {
         const MiniAsRiscvLiPlan *plan=m->target_payload;
@@ -816,10 +816,12 @@ static bool rv_plain_machine_word(const MiniAsMCInst *m, uint32_t *word) {
         rs2=(int)m->operands[2].reg;
     if(m->count>2U && m->operands[2].kind==MINIAS_MC_IMMEDIATE)
         imm=(int64_t)m->operands[2].immediate;
+    if(m->count>3U && m->operands[3].kind==MINIAS_MC_REGISTER)
+        rs3=(int)m->operands[3].reg;
     switch(m->opcode) {
     case RV_MC_WORD:
         *word=base|((uint32_t)rd<<7U)|((uint32_t)rs1<<15U)|
-              ((uint32_t)rs2<<20U);
+              ((uint32_t)rs2<<20U)|((uint32_t)rs3<<27U);
         return true;
     case RV_MC_R:
         *word=enc_r(base&0x7fU,rd,(base>>12U)&7U,rs1,rs2,base>>25U);
@@ -1555,7 +1557,8 @@ static bool rv_mc_fp_word(MiniAs *as, MiniAsStmt *stmt,
  * lists; a new instruction could parse successfully but carry the wrong ISA
  * policy.  FPR mask: bit 0=rd, bit 1=rs1, bit 2=rs2. */
 typedef enum RvFpKind {
-    RV_FP_BINARY, RV_FP_SIGN, RV_FP_COMPARE, RV_FP_MOVE,
+    RV_FP_BINARY, RV_FP_FUSED, RV_FP_R3_FIXED, RV_FP_ALIAS,
+    RV_FP_COMPARE, RV_FP_MOVE,
     RV_FP_CONVERT, RV_FP_LOAD, RV_FP_STORE
 } RvFpKind;
 
@@ -1572,18 +1575,50 @@ typedef struct RvFpDesc {
 #define RVFP(name, kind, encoding, feature, only64, mask, rm) \
     {name, RV_FP_##kind, encoding, RISCV_ISA_##feature, only64, mask, rm}
 static const RvFpDesc rv_fp_forms[] = {
+    RVFP("fmadd.s",FUSED,0x00000043U,F,false,15U,7U),
+    RVFP("fmsub.s",FUSED,0x00000047U,F,false,15U,7U),
+    RVFP("fnmsub.s",FUSED,0x0000004bU,F,false,15U,7U),
+    RVFP("fnmadd.s",FUSED,0x0000004fU,F,false,15U,7U),
+    RVFP("fmadd.d",FUSED,0x02000043U,D,false,15U,7U),
+    RVFP("fmsub.d",FUSED,0x02000047U,D,false,15U,7U),
+    RVFP("fnmsub.d",FUSED,0x0200004bU,D,false,15U,7U),
+    RVFP("fnmadd.d",FUSED,0x0200004fU,D,false,15U,7U),
     RVFP("fadd.s",BINARY,0x00000053U,F,false,7U,7U),
     RVFP("fsub.s",BINARY,0x08000053U,F,false,7U,7U),
     RVFP("fmul.s",BINARY,0x10000053U,F,false,7U,7U),
     RVFP("fdiv.s",BINARY,0x18000053U,F,false,7U,7U),
+    RVFP("fsqrt.s",CONVERT,0x58000053U,F,false,3U,7U),
     RVFP("fadd.d",BINARY,0x02000053U,D,false,7U,7U),
     RVFP("fsub.d",BINARY,0x0a000053U,D,false,7U,7U),
     RVFP("fmul.d",BINARY,0x12000053U,D,false,7U,7U),
     RVFP("fdiv.d",BINARY,0x1a000053U,D,false,7U,7U),
-    RVFP("fsgnjn.d",SIGN,0x22001053U,D,false,7U,0U),
+    RVFP("fsqrt.d",CONVERT,0x5a000053U,D,false,3U,7U),
+    RVFP("fsgnj.s",R3_FIXED,0x20000053U,F,false,7U,0U),
+    RVFP("fsgnjn.s",R3_FIXED,0x20001053U,F,false,7U,0U),
+    RVFP("fsgnjx.s",R3_FIXED,0x20002053U,F,false,7U,0U),
+    RVFP("fmin.s",R3_FIXED,0x28000053U,F,false,7U,0U),
+    RVFP("fmax.s",R3_FIXED,0x28001053U,F,false,7U,0U),
+    RVFP("fsgnj.d",R3_FIXED,0x22000053U,D,false,7U,0U),
+    RVFP("fsgnjn.d",R3_FIXED,0x22001053U,D,false,7U,0U),
+    RVFP("fsgnjx.d",R3_FIXED,0x22002053U,D,false,7U,0U),
+    RVFP("fmin.d",R3_FIXED,0x2a000053U,D,false,7U,0U),
+    RVFP("fmax.d",R3_FIXED,0x2a001053U,D,false,7U,0U),
+    /* GAS aliases retain the same ISA feature and FP register classes.
+     * The sign-injection operation intentionally reads the source twice. */
+    RVFP("fmv.s",ALIAS,0x20000053U,F,false,7U,0U),
+    RVFP("fneg.s",ALIAS,0x20001053U,F,false,7U,0U),
+    RVFP("fabs.s",ALIAS,0x20002053U,F,false,7U,0U),
+    RVFP("fmv.d",ALIAS,0x22000053U,D,false,7U,0U),
+    RVFP("fneg.d",ALIAS,0x22001053U,D,false,7U,0U),
+    RVFP("fabs.d",ALIAS,0x22002053U,D,false,7U,0U),
+    RVFP("feq.s",COMPARE,0xa0002053U,F,false,6U,0U),
+    RVFP("flt.s",COMPARE,0xa0001053U,F,false,6U,0U),
+    RVFP("fle.s",COMPARE,0xa0000053U,F,false,6U,0U),
     RVFP("feq.d",COMPARE,0xa2002053U,D,false,6U,0U),
     RVFP("flt.d",COMPARE,0xa2001053U,D,false,6U,0U),
     RVFP("fle.d",COMPARE,0xa2000053U,D,false,6U,0U),
+    RVFP("fclass.s",MOVE,0xe0001053U,F,false,2U,0U),
+    RVFP("fclass.d",MOVE,0xe2001053U,D,false,2U,0U),
     RVFP("fmv.x.d",MOVE,0xe2000053U,D,true,2U,0U),
     RVFP("fmv.x.w",MOVE,0xe0000053U,F,false,2U,0U),
     RVFP("fmv.d.x",MOVE,0xf2000053U,D,true,1U,0U),
@@ -1598,6 +1633,14 @@ static const RvFpDesc rv_fp_forms[] = {
     RVFP("fcvt.lu.d",CONVERT,0xc2300053U,D,true,2U,7U),
     RVFP("fcvt.d.s",CONVERT,0x42000053U,D,false,3U,0U),
     RVFP("fcvt.s.d",CONVERT,0x40100053U,D,false,3U,7U),
+    RVFP("fcvt.s.w",CONVERT,0xd0000053U,F,false,1U,7U),
+    RVFP("fcvt.s.wu",CONVERT,0xd0100053U,F,false,1U,7U),
+    RVFP("fcvt.s.l",CONVERT,0xd0200053U,F,true,1U,7U),
+    RVFP("fcvt.s.lu",CONVERT,0xd0300053U,F,true,1U,7U),
+    RVFP("fcvt.w.s",CONVERT,0xc0000053U,F,false,2U,7U),
+    RVFP("fcvt.wu.s",CONVERT,0xc0100053U,F,false,2U,7U),
+    RVFP("fcvt.l.s",CONVERT,0xc0200053U,F,true,2U,7U),
+    RVFP("fcvt.lu.s",CONVERT,0xc0300053U,F,true,2U,7U),
     RVFP("flw",LOAD,0x00002007U,F,false,1U,0U),
     RVFP("fld",LOAD,0x00003007U,D,false,1U,0U),
     RVFP("fsw",STORE,0x00002027U,F,false,1U,0U),
@@ -1632,6 +1675,34 @@ static bool rv_parse_fp_mc(MiniAs *as, MiniAsStmt *stmt,
     policy->rv64_only = form->rv64_only;
     base = form->encoding;
     rm = form->default_rm;
+    if (form->kind == RV_FP_FUSED) {
+        MiniAsMCInst *m;
+        int rs3;
+        unsigned i;
+        if ((count != 4U && count != 5U) ||
+            (rd = float_reg_number(operands[0])) < 0 ||
+            (rs1 = float_reg_number(operands[1])) < 0 ||
+            (rs2 = float_reg_number(operands[2])) < 0 ||
+            (rs3 = float_reg_number(operands[3])) < 0 ||
+            (count == 5U && !parse_fp_rounding_mode(operands[4], &rm)))
+            goto invalid;
+        m = minias_mcinst_alloc(4U);
+        if (m == NULL) {
+            minias_set_error(as, "out-of-memory:riscv-fp-fused");
+            return false;
+        }
+        m->opcode = RV_MC_WORD;
+        m->encoding = base | (rm << 12U);
+        m->count = 4U;
+        rv_set_reg(&m->operands[0], rd);
+        rv_set_reg(&m->operands[1], rs1);
+        rv_set_reg(&m->operands[2], rs2);
+        rv_set_reg(&m->operands[3], rs3);
+        for (i = 0U; i < 4U; ++i)
+            m->operands[i].reg_class = MINIAS_MC_REG_FPR;
+        stmt->mcinst = m;
+        return true;
+    }
     if (form->kind == RV_FP_LOAD || form->kind == RV_FP_STORE) {
         MiniAsMCInst *m;
         if (count != 2U || (rd = float_reg_number(operands[0])) < 0)
@@ -1666,7 +1737,7 @@ static bool rv_parse_fp_mc(MiniAs *as, MiniAsStmt *stmt,
         stmt->mcinst=m;
         return true;
     }
-    if (form->kind == RV_FP_BINARY || form->kind == RV_FP_SIGN ||
+    if (form->kind == RV_FP_BINARY || form->kind == RV_FP_R3_FIXED ||
         form->kind == RV_FP_COMPARE) {
         if (count != 3U &&
             !(form->kind == RV_FP_BINARY && count == 4U)) goto invalid;
@@ -1677,6 +1748,11 @@ static bool rv_parse_fp_mc(MiniAs *as, MiniAsStmt *stmt,
         if (count == 4U && !parse_fp_rounding_mode(operands[3], &rm))
             goto invalid;
         if (form->kind == RV_FP_BINARY) base |= rm << 12U;
+    } else if (form->kind == RV_FP_ALIAS) {
+        if (count != 2U ||
+            (rd = float_reg_number(operands[0])) < 0 ||
+            (rs1 = float_reg_number(operands[1])) < 0) goto invalid;
+        rs2 = rs1;
     } else if (form->kind == RV_FP_MOVE || form->kind == RV_FP_CONVERT) {
         if (count != 2U &&
             !(form->kind == RV_FP_CONVERT && count == 3U)) goto invalid;
@@ -2254,7 +2330,7 @@ static bool rv_encode_mcinst(MiniAs *as, const MiniAsStmt *stmt) {
                minias_encode_add_fixup_ref(as,stmt->section,stmt->offset,
                                             fixup,2U,*symbol,false);
     }
-    int rd=(int)m->operands[0].reg,rs1=0,rs2=0;
+    int rd=(int)m->operands[0].reg,rs1=0,rs2=0,rs3=0;
     int64_t imm=0;
     uint32_t base=m->encoding,code=0U;
     const MiniAsSymbolRef *expr=NULL;
@@ -2267,6 +2343,8 @@ static bool rv_encode_mcinst(MiniAs *as, const MiniAsStmt *stmt) {
         rs2=(int)m->operands[2].reg;
     if (m->count > 2U && m->operands[2].kind==MINIAS_MC_IMMEDIATE)
         imm=(int64_t)m->operands[2].immediate;
+    if (m->count > 3U && m->operands[3].kind==MINIAS_MC_REGISTER)
+        rs3=(int)m->operands[3].reg;
     if (m->opcode == RV_MC_SYMBOL_LOAD ||
         m->opcode == RV_MC_SYMBOL_STORE) {
         const bool load = m->opcode == RV_MC_SYMBOL_LOAD;
@@ -2300,7 +2378,8 @@ static bool rv_encode_mcinst(MiniAs *as, const MiniAsStmt *stmt) {
     }
     if (m->opcode == RV_MC_WORD)
         code = base | ((uint32_t)rd << 7U) |
-               ((uint32_t)rs1 << 15U) | ((uint32_t)rs2 << 20U);
+               ((uint32_t)rs1 << 15U) | ((uint32_t)rs2 << 20U) |
+               ((uint32_t)rs3 << 27U);
     else if (m->opcode==RV_MC_R)
         code=enc_r(base&0x7fU,rd,(base>>12U)&7U,rs1,rs2,base>>25U);
     else if(m->opcode==RV_MC_I || m->opcode==RV_MC_LOAD) {

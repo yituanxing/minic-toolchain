@@ -111,6 +111,21 @@ units=(adler32 compress crc32 deflate gzclose gzlib gzread gzwrite \
 failures=()
 gnu_assembled=0
 mini_assembled=0
+# CI must surface the precise first GNU/MiniAS diagnostic for every original
+# translation unit, rather than exposing only a count. Complete logs remain
+# in the per-architecture artifact for later full failure analysis.
+emit_diagnostic() {
+  local stage=$1 unit=$2
+  local log="$work/evidence/$stage-$unit.log"
+  printf 'MINIAS_ZLIB_DIAGNOSTIC arch=%s stage=%s unit=%s file=%s\n' \
+    "$arch" "$stage" "$unit" "$log" >&2
+  if [[ -f "$log" ]]; then
+    sed -n '1,20p' "$log" >&2
+  else
+    printf 'MINIAS_ZLIB_DIAGNOSTIC arch=%s missing_log=%s\n' \
+      "$arch" "$log" >&2
+  fi
+}
 : >"$work/evidence/source-and-assembly.sha256"
 for unit in "${units[@]}"; do
   if [[ "$unit" == runtime-gcc-zlib ]]; then
@@ -125,6 +140,7 @@ for unit in "${units[@]}"; do
       >"$work/evidence/gcc-$unit.log" 2>&1 || [[ ! -s "$asm" ]]; then
     failures+=("gcc-S:$unit")
     echo "MINIAS_ZLIB_TU=FAIL arch=$arch unit=$unit stage=gcc-S" >&2
+    emit_diagnostic gcc "$unit"
     continue
   fi
   sha256sum "$source" "$asm" >>"$work/evidence/source-and-assembly.sha256"
@@ -134,6 +150,7 @@ for unit in "${units[@]}"; do
   else
     failures+=("gnu-as:$unit")
     echo "MINIAS_ZLIB_TU=FAIL arch=$arch unit=$unit stage=gnu-as" >&2
+    emit_diagnostic gnu-as "$unit"
   fi
   if "$minias" "${mini_flags[@]}" -o "$work/mini/$unit.o" "$asm" \
       >"$work/evidence/mini-as-$unit.log" 2>&1; then
@@ -141,6 +158,7 @@ for unit in "${units[@]}"; do
   else
     failures+=("mini-as:$unit")
     echo "MINIAS_ZLIB_TU=FAIL arch=$arch unit=$unit stage=mini-as" >&2
+    emit_diagnostic mini-as "$unit"
   fi
 done
 
@@ -166,6 +184,9 @@ for flavor in gnu mini; do
       [[ ! -s "$flavor_dir/program" ]]; then
     failures+=("gnu-bfd-link:$flavor")
     echo "MINIAS_ZLIB_LINK=FAIL arch=$arch flavor=$flavor" >&2
+    printf 'MINIAS_ZLIB_DIAGNOSTIC arch=%s stage=gnu-bfd-link flavor=%s\n' \
+      "$arch" "$flavor" >&2
+    sed -n '1,20p' "$work/evidence/$flavor-link.log" >&2
     continue
   fi
   if ! grep -Fq 'GNU ld' "$work/evidence/$flavor-link.log"; then

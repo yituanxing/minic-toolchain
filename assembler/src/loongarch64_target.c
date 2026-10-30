@@ -754,21 +754,168 @@ typedef struct {
     const char *name;
     uint32_t opcode;
     unsigned count;
-    LaRegisterOperandBank banks[3];
-    unsigned shifts[3];
-    unsigned min_register[3];
+    LaRegisterOperandBank banks[4];
+    unsigned shifts[4];
+    unsigned min_register[4];
 } LaSpecialRegisterPattern;
 
 #define LA_FIELDS_2  {0U,5U},{0U}
 #define LA_FIELDS_3  {0U,5U,10U},{0U}
+/* LoongArch scalar FP uses exactly the same indexed form encoder and typed
+ * register ownership as the existing FCSR/FCC instructions.  These records
+ * follow GNU binutils opcodes/loongarch-opc.c f0/f5/f10/f15 and c0 formats;
+ * only the Target's format table changes when the instruction set grows. */
+#define LA_FPR2(n,o) {n,o,2U,{LA_BANK_FPR,LA_BANK_FPR},LA_FIELDS_2}
+#define LA_FPR3(n,o) {n,o,3U,{LA_BANK_FPR,LA_BANK_FPR,LA_BANK_FPR},LA_FIELDS_3}
+#define LA_FCC3(n,o) {n,o,3U,{LA_BANK_FCC,LA_BANK_FPR,LA_BANK_FPR},LA_FIELDS_3}
+/* GNU comparison aliases Gt/Ge/Ugt/Uge reverse the two FPR fields; retain
+ * that swap in the descriptor's shifts instead of creating another parser. */
+#define LA_FCC3_SWAP(n,o) {n,o,3U,{LA_BANK_FCC,LA_BANK_FPR,LA_BANK_FPR},{0U,10U,5U},{0U}}
+#define LA_FPR4(n,o) {n,o,4U,{LA_BANK_FPR,LA_BANK_FPR,LA_BANK_FPR,LA_BANK_FPR},{0U,5U,10U,15U},{0U}}
 static const LaSpecialRegisterPattern la_special_register_patterns[] = {
     {"movgr2fr.d",0x0114a800U,2U,{LA_BANK_FPR,LA_BANK_GPR},LA_FIELDS_2},
     {"movgr2fr.w",0x0114a400U,2U,{LA_BANK_FPR,LA_BANK_GPR},LA_FIELDS_2},
     {"movfr2gr.d",0x0114b800U,2U,{LA_BANK_GPR,LA_BANK_FPR},LA_FIELDS_2},
+    {"movfr2gr.s",0x0114b400U,2U,{LA_BANK_GPR,LA_BANK_FPR},LA_FIELDS_2},
+    {"movfrh2gr.s",0x0114bc00U,2U,{LA_BANK_GPR,LA_BANK_FPR},LA_FIELDS_2},
+    {"movgr2frh.w",0x0114ac00U,2U,{LA_BANK_FPR,LA_BANK_GPR},LA_FIELDS_2},
     {"movfcsr2gr",0x0114c800U,2U,{LA_BANK_GPR,LA_BANK_FCSR},LA_FIELDS_2},
     {"movgr2fcsr",0x0114c000U,2U,{LA_BANK_FCSR,LA_BANK_GPR},LA_FIELDS_2},
     {"movcf2gr",0x0114dc00U,2U,{LA_BANK_GPR,LA_BANK_FCC},LA_FIELDS_2},
     {"movgr2cf",0x0114d800U,2U,{LA_BANK_FCC,LA_BANK_GPR},LA_FIELDS_2},
+    {"movcf2fr",0x0114d400U,2U,{LA_BANK_FPR,LA_BANK_FCC},LA_FIELDS_2},
+    {"movfr2cf",0x0114d000U,2U,{LA_BANK_FCC,LA_BANK_FPR},LA_FIELDS_2},
+    LA_FPR3("fadd.s",0x01008000U),
+    LA_FPR3("fsub.s",0x01028000U),
+    LA_FPR3("fmul.s",0x01048000U),
+    LA_FPR3("fdiv.s",0x01068000U),
+    LA_FPR3("fmax.s",0x01088000U),
+    LA_FPR3("fmin.s",0x010a8000U),
+    LA_FPR3("fmaxa.s",0x010c8000U),
+    LA_FPR3("fmina.s",0x010e8000U),
+    LA_FPR3("fscaleb.s",0x01108000U),
+    LA_FPR3("fcopysign.s",0x01128000U),
+    LA_FPR3("fadd.d",0x01010000U),
+    LA_FPR3("fsub.d",0x01030000U),
+    LA_FPR3("fmul.d",0x01050000U),
+    LA_FPR3("fdiv.d",0x01070000U),
+    LA_FPR3("fmax.d",0x01090000U),
+    LA_FPR3("fmin.d",0x010b0000U),
+    LA_FPR3("fmaxa.d",0x010d0000U),
+    LA_FPR3("fmina.d",0x010f0000U),
+    LA_FPR3("fscaleb.d",0x01110000U),
+    LA_FPR3("fcopysign.d",0x01130000U),
+    LA_FPR2("fabs.s",0x01140400U),
+    LA_FPR2("fneg.s",0x01141400U),
+    LA_FPR2("flogb.s",0x01142400U),
+    LA_FPR2("fclass.s",0x01143400U),
+    LA_FPR2("fsqrt.s",0x01144400U),
+    LA_FPR2("frecip.s",0x01145400U),
+    LA_FPR2("frsqrt.s",0x01146400U),
+    LA_FPR2("frecipe.s",0x01147400U),
+    LA_FPR2("frsqrte.s",0x01148400U),
+    LA_FPR2("fmov.s",0x01149400U),
+    LA_FPR2("fabs.d",0x01140800U),
+    LA_FPR2("fneg.d",0x01141800U),
+    LA_FPR2("flogb.d",0x01142800U),
+    LA_FPR2("fclass.d",0x01143800U),
+    LA_FPR2("fsqrt.d",0x01144800U),
+    LA_FPR2("frecip.d",0x01145800U),
+    LA_FPR2("frsqrt.d",0x01146800U),
+    LA_FPR2("frecipe.d",0x01147800U),
+    LA_FPR2("frsqrte.d",0x01148800U),
+    LA_FPR2("fmov.d",0x01149800U),
+    LA_FPR2("fcvt.s.d",0x01191800U),
+    LA_FPR2("fcvt.d.s",0x01192400U),
+    LA_FPR2("ftintrm.w.s",0x011a0400U),
+    LA_FPR2("ftintrm.l.s",0x011a2400U),
+    LA_FPR2("ftintrp.w.s",0x011a4400U),
+    LA_FPR2("ftintrp.l.s",0x011a6400U),
+    LA_FPR2("ftintrz.w.s",0x011a8400U),
+    LA_FPR2("ftintrz.l.s",0x011aa400U),
+    LA_FPR2("ftintrne.w.s",0x011ac400U),
+    LA_FPR2("ftintrne.l.s",0x011ae400U),
+    LA_FPR2("ftint.w.s",0x011b0400U),
+    LA_FPR2("ftint.l.s",0x011b2400U),
+    LA_FPR2("ffint.s.w",0x011d1000U),
+    LA_FPR2("ffint.s.l",0x011d1800U),
+    LA_FPR2("frint.s",0x011e4400U),
+    LA_FPR2("ftintrm.w.d",0x011a0800U),
+    LA_FPR2("ftintrm.l.d",0x011a2800U),
+    LA_FPR2("ftintrp.w.d",0x011a4800U),
+    LA_FPR2("ftintrp.l.d",0x011a6800U),
+    LA_FPR2("ftintrz.w.d",0x011a8800U),
+    LA_FPR2("ftintrz.l.d",0x011aa800U),
+    LA_FPR2("ftintrne.w.d",0x011ac800U),
+    LA_FPR2("ftintrne.l.d",0x011ae800U),
+    LA_FPR2("ftint.w.d",0x011b0800U),
+    LA_FPR2("ftint.l.d",0x011b2800U),
+    LA_FPR2("ffint.d.w",0x011d2000U),
+    LA_FPR2("ffint.d.l",0x011d2800U),
+    LA_FPR2("frint.d",0x011e4800U),
+    LA_FPR4("fmadd.d",0x08200000U),
+    LA_FPR4("fmsub.d",0x08600000U),
+    LA_FPR4("fnmadd.d",0x08a00000U),
+    LA_FPR4("fnmsub.d",0x08e00000U),
+    LA_FPR4("fmadd.s",0x08100000U),
+    LA_FPR4("fmsub.s",0x08500000U),
+    LA_FPR4("fnmadd.s",0x08900000U),
+    LA_FPR4("fnmsub.s",0x08d00000U),
+    {"fsel",0x0d000000U,4U,
+      {LA_BANK_FPR,LA_BANK_FPR,LA_BANK_FPR,LA_BANK_FCC},
+      {0U,5U,10U,15U},{0U}},
+    LA_FCC3("fcmp.caf.d",0x0c200000U),
+    LA_FCC3("fcmp.saf.d",0x0c208000U),
+    LA_FCC3("fcmp.clt.d",0x0c210000U),
+    LA_FCC3("fcmp.slt.d",0x0c218000U),
+    LA_FCC3_SWAP("fcmp.sgt.d",0x0c218000U),
+    LA_FCC3("fcmp.ceq.d",0x0c220000U),
+    LA_FCC3("fcmp.seq.d",0x0c228000U),
+    LA_FCC3("fcmp.cle.d",0x0c230000U),
+    LA_FCC3("fcmp.sle.d",0x0c238000U),
+    LA_FCC3_SWAP("fcmp.sge.d",0x0c238000U),
+    LA_FCC3("fcmp.cun.d",0x0c240000U),
+    LA_FCC3("fcmp.sun.d",0x0c248000U),
+    LA_FCC3("fcmp.cult.d",0x0c250000U),
+    LA_FCC3_SWAP("fcmp.cugt.d",0x0c250000U),
+    LA_FCC3("fcmp.sult.d",0x0c258000U),
+    LA_FCC3("fcmp.cueq.d",0x0c260000U),
+    LA_FCC3("fcmp.sueq.d",0x0c268000U),
+    LA_FCC3("fcmp.cule.d",0x0c270000U),
+    LA_FCC3_SWAP("fcmp.cuge.d",0x0c270000U),
+    LA_FCC3("fcmp.sule.d",0x0c278000U),
+    LA_FCC3("fcmp.cne.d",0x0c280000U),
+    LA_FCC3("fcmp.sne.d",0x0c288000U),
+    LA_FCC3("fcmp.cor.d",0x0c2a0000U),
+    LA_FCC3("fcmp.sor.d",0x0c2a8000U),
+    LA_FCC3("fcmp.cune.d",0x0c2c0000U),
+    LA_FCC3("fcmp.sune.d",0x0c2c8000U),
+    LA_FCC3("fcmp.caf.s",0x0c100000U),
+    LA_FCC3("fcmp.saf.s",0x0c108000U),
+    LA_FCC3("fcmp.clt.s",0x0c110000U),
+    LA_FCC3("fcmp.slt.s",0x0c118000U),
+    LA_FCC3_SWAP("fcmp.sgt.s",0x0c118000U),
+    LA_FCC3("fcmp.ceq.s",0x0c120000U),
+    LA_FCC3("fcmp.seq.s",0x0c128000U),
+    LA_FCC3("fcmp.cle.s",0x0c130000U),
+    LA_FCC3("fcmp.sle.s",0x0c138000U),
+    LA_FCC3_SWAP("fcmp.sge.s",0x0c138000U),
+    LA_FCC3("fcmp.cun.s",0x0c140000U),
+    LA_FCC3("fcmp.sun.s",0x0c148000U),
+    LA_FCC3("fcmp.cult.s",0x0c150000U),
+    LA_FCC3_SWAP("fcmp.cugt.s",0x0c150000U),
+    LA_FCC3("fcmp.sult.s",0x0c158000U),
+    LA_FCC3("fcmp.cueq.s",0x0c160000U),
+    LA_FCC3("fcmp.sueq.s",0x0c168000U),
+    LA_FCC3("fcmp.cule.s",0x0c170000U),
+    LA_FCC3_SWAP("fcmp.cuge.s",0x0c170000U),
+    LA_FCC3("fcmp.sule.s",0x0c178000U),
+    LA_FCC3("fcmp.cne.s",0x0c180000U),
+    LA_FCC3("fcmp.sne.s",0x0c188000U),
+    LA_FCC3("fcmp.cor.s",0x0c1a0000U),
+    LA_FCC3("fcmp.sor.s",0x0c1a8000U),
+    LA_FCC3("fcmp.cune.s",0x0c1c0000U),
+    LA_FCC3("fcmp.sune.s",0x0c1c8000U),
     {"fld.s",0x2b000000U,3U,{LA_BANK_FPR,LA_BANK_GPR,LA_BANK_SIGNED12},LA_FIELDS_3},
     {"fst.s",0x2b400000U,3U,{LA_BANK_FPR,LA_BANK_GPR,LA_BANK_SIGNED12},LA_FIELDS_3},
     {"fld.d",0x2b800000U,3U,{LA_BANK_FPR,LA_BANK_GPR,LA_BANK_SIGNED12},LA_FIELDS_3},
@@ -786,6 +933,11 @@ static const LaSpecialRegisterPattern la_special_register_patterns[] = {
     {"ibar",0x38728000U,1U,{LA_BANK_UNSIGNED15},{0U},{0U}},
     {"idle",0x06488000U,1U,{LA_BANK_UNSIGNED15},{0U},{0U}}
 };
+#undef LA_FPR2
+#undef LA_FPR3
+#undef LA_FCC3
+#undef LA_FCC3_SWAP
+#undef LA_FPR4
 #undef LA_FIELDS_2
 #undef LA_FIELDS_3
 

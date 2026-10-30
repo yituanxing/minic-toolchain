@@ -1441,10 +1441,24 @@ jobs:
           export REAL_AS=/usr/bin/riscv64-linux-gnu-as
 
           started=$(date +%s)
-          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
-            CC="riscv64-linux-gnu-gcc -B$bindir/" \
-            AS="$bindir/riscv64-linux-gnu-as" \
-            -j4 Image >"$work/kbuild.log" 2>&1
+          if ! make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+              CC="riscv64-linux-gnu-gcc -B$bindir/" \
+              AS="$bindir/riscv64-linux-gnu-as" \
+              -j4 Image >"$work/kbuild.log" 2>&1; then
+            # Preserve the full original Kbuild log as an artifact, but also
+            # surface the actionable GNU-link/MiniAS failures in the job log.
+            # Otherwise GitHub shows only "exit code 2" and a rerun cannot
+            # expose the next real Linux source-level obstruction.
+            echo 'MINIAS_LINUX_GCC_BUILD=FAIL stage=make-Image'
+            echo 'MINIAS_LINUX_KBUILD_DIAGNOSTIC=first-errors'
+            grep -nE 'minic-as:|(^| )error:|fatal error:|undefined reference|undefined symbol|Error [0-9]+|No rule to make target|unsupported-|bad-' \
+              "$work/kbuild.log" | head -n 80 || true
+            echo 'MINIAS_LINUX_KBUILD_DIAGNOSTIC=tail'
+            tail -n 100 "$work/kbuild.log" || true
+            echo 'MINIAS_LINUX_AS_TRACE_DIAGNOSTIC=last-failures'
+            grep '^fail ' "$work/minias-as.trace" | tail -n 40 || true
+            exit 1
+          fi
           elapsed=$(( $(date +%s) - started ))
 
           image="$out/arch/riscv/boot/Image"

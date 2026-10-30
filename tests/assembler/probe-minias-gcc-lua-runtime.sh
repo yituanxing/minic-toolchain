@@ -109,6 +109,30 @@ failures=()
 fail() {
   failures+=("$1:$2")
   echo "MINIAS_LUA_RUNTIME_STAGE=FAIL arch=$arch stage=$1 detail=$2" >&2
+  # Independent TU diagnostics are useful on a 33-file interpreter build:
+  # every failing GCC/AS owner is printed, not only the first one. The CI
+  # console stays bounded while full stderr survives in uploaded artifacts.
+  local stage=$1 detail=$2 log=''
+  case "$stage" in
+    gcc-S) log="$work/evidence/gcc-$detail.log" ;;
+    gnu-as) log="$work/evidence/gnu-as-$detail.log" ;;
+    mini-as) log="$work/evidence/mini-as-$detail.log" ;;
+    gnu|mini)
+      if [[ "$detail" == gnu-bfd-link ]]; then
+        log="$work/evidence/$stage-link.log"
+      fi
+      ;;
+  esac
+  if [[ -n "$log" ]]; then
+    printf 'MINIAS_LUA_DIAGNOSTIC arch=%s stage=%s unit=%s file=%s\n' \
+      "$arch" "$stage" "$detail" "$log" >&2
+    if [[ -f "$log" ]]; then
+      sed -n '1,20p' "$log" >&2
+    else
+      printf 'MINIAS_LUA_DIAGNOSTIC arch=%s missing_log=%s\n' \
+        "$arch" "$log" >&2
+    fi
+  fi
 }
 
 : >"$work/evidence/sources.sha256"

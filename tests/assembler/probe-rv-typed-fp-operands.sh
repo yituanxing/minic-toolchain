@@ -26,6 +26,13 @@ cat >"$work/rv32.s" <<'ASM'
   flw f0,0(a0)
   fsw f0,4(a0)
   fmv.x.w a0,f1
+  fmv.s f0,f1
+  fneg.s f0,f1
+  fabs.s f0,f1
+  fsqrt.s f0,f1
+  fclass.s a0,f0
+  fcvt.s.w f0,a0
+  fmadd.s f0,f1,f2,f3
 ASM
 cat >"$work/rv64.s" <<'ASM'
 .text
@@ -39,6 +46,21 @@ cat >"$work/rv64.s" <<'ASM'
   fcvt.s.d f0,f1
   fld f0,0(a0)
   fsd f0,8(a0)
+  fmv.d f0,f1
+  fneg.d f0,f1
+  fabs.d f0,f1
+  fsgnj.d f0,f1,f2
+  fsgnjx.d f0,f1,f2
+  fsqrt.d f0,f1
+  fmin.d f0,f1,f2
+  fmax.s f0,f1,f2
+  fclass.d a0,f0
+  fcvt.w.s a0,f0
+  fcvt.s.l f0,a0
+  fmadd.d f0,f1,f2,f3
+  fmsub.s f0,f1,f2,f3,rne
+  fnmsub.d f0,f1,f2,f3
+  fnmadd.s f0,f1,f2,f3
 ASM
 
 for arch in rv32 rv64; do
@@ -74,6 +96,10 @@ reject() {
 reject no_d_add rv64if lp64f 'fadd.d f0,f1,f2'
 reject no_d_load rv64if lp64f 'fld f0,0(a0)'
 reject no_d_convert rv64if lp64f 'fcvt.s.d f0,f1'
+reject no_d_abs_alias rv64if lp64f 'fabs.d f0,f1'
+reject no_d_mov_alias rv64if lp64f 'fmv.d f0,f1'
+reject no_d_fma rv64if lp64f 'fmadd.d f0,f1,f2,f3'
+reject invalid_fmv_alias rv64ifd lp64d 'fmv.d f0,a0'
 reject rv32_fmv_xd rv32ifd ilp32d 'fmv.x.d a0,f1'
 reject rv32_fmv_dx rv32ifd ilp32d 'fmv.d.x f1,a0'
 reject rv32_fcvt_dl rv32ifd ilp32d 'fcvt.d.l f0,a0'
@@ -83,4 +109,4 @@ reject bad_round rv64ifd lp64d 'fadd.s f0,f1,f2,invalidrm'
 reject raw_i_escape rv32i ilp32 '.insn 0x00000053'
 
 if ((gnu_available)); then oracle=exact; else oracle='NOT_TESTED:explicit_local_no_cross_GNU'; fi
-echo "MINIAS_RV_TYPED_FP=PASS rv32if=5 rv64ifd=10 GNU_bytes=$oracle rejected=10 no_partial_object=1"
+echo "MINIAS_RV_TYPED_FP=PASS rv32if=12 rv64ifd=25 GNU_bytes=$oracle rejected=14 no_partial_object=1"

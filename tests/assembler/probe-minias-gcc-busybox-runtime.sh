@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# BusyBox 1.36.1 original Kconfig/Kbuild -> GCC .s -> MiniAS for EVERY
-# target object -> GNU Kbuild archive/link -> real BusyBox applet execution.
+# BusyBox 1.36.1 original Kconfig/Kbuild -> GCC C/.S to .s -> MiniAS for
+# EVERY production assembler object -> GNU Kbuild archive/link -> real applets.
 # The GNU side starts from exactly the same generated .s files. There is no
 # GNU assembler fallback when a required MiniAS target object fails.
 set -Eeuo pipefail
@@ -75,8 +75,8 @@ if ! tar -xzf "$archive" --strip-components=1 -C "$src" \
 fi
 
 # Original upstream Kbuild, 10 selected real applets including ash; all the
-# selected applets' actual C owners AND all enabled shared libbb C owners are
-# assembled by MiniAS, not just an artificially small applet source subset.
+# selected applets' actual C owners, preprocessed .S owners, and all enabled
+# shared libbb owners are assembled by MiniAS, not just a small C subset.
 if ! make -C "$src" -j2 HOSTCC=cc CC="$cc" CROSS_COMPILE="$prefix" \
     allnoconfig >"$work/evidence/config.log" 2>&1; then
   echo 'MINIAS_BUSYBOX_RUNTIME=FAIL stage=allnoconfig' >&2
@@ -112,11 +112,18 @@ fi
 echo "MINIAS_BUSYBOX_GNU_RUNTIME=PASS arch=$arch source_pinned=1 GNU_Kbuild=1 runner=$qemu"
 
 # GCC -save-temps=obj provides the exact immutable assembler input for each
-# original Kbuild C owner, so GNU and MiniAS never receive different sources.
+# original Kbuild C or preprocessed .S owner, so MiniAS always receives the
+# same assembly that GCC originally handed to GNU GAS.
 # No GNU object may be silently retained as a required MiniAS leaf owner.
 leaf_count=0
 fail_count=0
 probe_count=0
+# Record the exact production C owners before the second Kbuild invocation.
+# BusyBox Makefile.flags probes the linker twice with a *temporary* bb_libtest.c;
+# GCC -save-temps=obj leaves a-bb_libtest.s/.o even after that C source is
+# removed. Its .o is NOT an input to any BusyBox link. In contrast, every
+# production assembler owner recorded below must survive MiniAS replacement.
+owner_asms=()
 while IFS= read -r -d '' asm; do
   relative=${asm#"$src"/}
   stem=${relative%.s}
@@ -124,18 +131,20 @@ while IFS= read -r -d '' asm; do
   mini_object="$work/mini/$stem.o"
   mini_log="$work/mini-as-logs/$stem.log"
   mkdir -p "$(dirname "$mini_object")" "$(dirname "$mini_log")"
+  case "$relative" in
+    a-bb_libtest.s|tmp.*.s)
+      ((probe_count += 1))
+      echo "MINIAS_BUSYBOX_CAPABILITY_PROBE=SKIP arch=$arch owner=$relative" \
+        >>"$work/evidence/probe-owners.txt"
+      continue
+      ;;
+  esac
   if ! test -s "$gnu_object"; then
-    # GCC's configure/link capability probes also produce tmp.*.s, but no
-    # Kbuild object. They are not production leaves and are never linked.
-    case "$relative" in
-      tmp.*.s) ((probe_count += 1)); continue ;;
-      *)
-        echo "MINIAS_BUSYBOX_OBJECT=FAIL target=$arch owner=$relative reason=missing-gnu-object" >&2
-        ((fail_count += 1))
-        continue
-        ;;
-    esac
+    echo "MINIAS_BUSYBOX_OBJECT=FAIL target=$arch owner=$relative reason=missing-gnu-object" >&2
+    ((fail_count += 1))
+    continue
   fi
+  owner_asms+=("$asm")
   ((leaf_count += 1))
   if [[ "$relative" == scripts/kconfig/* ]]; then
     # The scripts/kconfig executables are built with HOSTCC, not with the
@@ -148,21 +157,23 @@ while IFS= read -r -d '' asm; do
     mkdir -p "$work/evidence/failing-asm/$(dirname "$relative")"
     cp "$asm" "$work/evidence/failing-asm/$relative"
     echo "MINIAS_BUSYBOX_OBJECT=FAIL target=$arch owner=$relative reason=mini-as" >&2
+    echo "MINIAS_BUSYBOX_DIAGNOSTIC arch=$arch owner=$relative file=$mini_log" >&2
+    sed -n '1,4p' "$mini_log" >&2
     ((fail_count += 1))
   fi
 done < <(find "$src" -type f -name '*.s' -print0 | sort -z)
 
-printf 'C_owners=%d\nMiniAS_failures=%d\nDiscarded_GCC_capability_probe_asm=%d\n' \
+printf 'production_asm_owners=%d\nMiniAS_failures=%d\nDiscarded_GCC_capability_probe_asm=%d\n' \
   "$leaf_count" "$fail_count" "$probe_count" \
   >"$work/evidence/coverage.txt"
 if (( leaf_count < 60 || fail_count != 0 )); then
-  echo "MINIAS_BUSYBOX_RUNTIME=FAIL arch=$arch stage=all-C-owners MiniAS=$((leaf_count-fail_count))/$leaf_count" >&2
+  echo "MINIAS_BUSYBOX_RUNTIME=FAIL arch=$arch stage=all-asm-owners MiniAS=$((leaf_count-fail_count))/$leaf_count" >&2
   exit 1
 fi
 
 # Save the original GNU C objects as provenance; replace only those objects
 # for which MiniAS succeeded, then let ORIGINAL Kbuild use GNU ld and ar.
-while IFS= read -r -d '' asm; do
+for asm in "${owner_asms[@]}"; do
   relative=${asm#"$src"/}
   stem=${relative%.s}
   gnu_object="$src/$stem.o"
@@ -172,7 +183,7 @@ while IFS= read -r -d '' asm; do
   mkdir -p "$(dirname "$saved_gnu")"
   cp "$gnu_object" "$saved_gnu"
   cp "$mini_object" "$gnu_object"
-done < <(find "$src" -type f -name '*.s' -print0 | sort -z)
+done
 
 # All *_built-in.o are GNU ld -r aggregates, not GCC C leaf owners. Rebuild
 # them and all GNU ar archives using the MiniAS leaves; never rerun GCC -c.
@@ -193,7 +204,7 @@ fi
 # Verify GNU Kbuild did not secretly regenerate a MiniAS-produced C owner
 # with GCC and GNU AS while re-linking.
 replaced=0
-while IFS= read -r -d '' asm; do
+for asm in "${owner_asms[@]}"; do
   relative=${asm#"$src"/}
   stem=${relative%.s}
   [[ -s "$work/mini/$stem.o" ]] || continue
@@ -202,7 +213,7 @@ while IFS= read -r -d '' asm; do
     exit 1
   fi
   ((replaced += 1))
-done < <(find "$src" -type f -name '*.s' -print0 | sort -z)
+done
 test "$replaced" -eq "$leaf_count"
 cp "$src/busybox" "$work/mini/busybox"
 sha256sum "$work/mini/busybox" >"$work/evidence/mini-program.sha256"
@@ -272,9 +283,9 @@ for case_name in "${cases[@]}"; do
 done
 
 if (( applet_failures != 0 )); then
-  echo "MINIAS_BUSYBOX_RUNTIME=FAIL arch=$arch C_owners=$replaced applets=${#cases[@]} failures=$applet_failures" | \
+  echo "MINIAS_BUSYBOX_RUNTIME=FAIL arch=$arch production_asm_owners=$replaced applets=${#cases[@]} failures=$applet_failures" | \
     tee "$work/evidence/summary.txt" >&2
   exit 1
 fi
-echo "MINIAS_BUSYBOX_RUNTIME=PASS arch=$arch C_owners=$replaced MiniAS_only=1 GNU_relink=1 applets=${#cases[@]}/${#cases[@]} runner=$qemu" | \
+echo "MINIAS_BUSYBOX_RUNTIME=PASS arch=$arch production_asm_owners=$replaced MiniAS_only=1 GNU_relink=1 applets=${#cases[@]}/${#cases[@]} runner=$qemu" | \
   tee "$work/evidence/summary.txt"
