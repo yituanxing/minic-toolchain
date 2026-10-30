@@ -3,6 +3,7 @@ name: MiniC Linux three-ISA original GNU QEMU P0/P1 oracle
 # Explicit expensive campaign.  Never infer Linux runtime from the compile-only
 # 21-shard census or from four-ISA compiler micro-runtime jobs.
 on:
+  workflow_call:
   pull_request:
     paths:
       - '.github/workflows/minic-linux-three-isa-gnu-qemu-v1.yml'

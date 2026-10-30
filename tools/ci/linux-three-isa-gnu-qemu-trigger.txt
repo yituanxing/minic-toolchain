@@ -1,3 +1,4 @@
 # Bump one entry in a dedicated commit for an exact-HEAD original GNU
 # Linux 6.6.143 x86-64/AArch64/LoongArch64 QEMU P0/P1 campaign.
 # The GNU oracle does not certify MiniC runtime or full-C ownership.
+2026-10-30 reusable workflow launch from registered three-ISA campaign: exact-head GNU Linux 6.6.143 QEMU P0/P1, all-owner MiniC ELF64 .o overlay and GNU Kbuild relink, candidate QEMU P0/P1 and zero-fallback strict differential. LoongArch missing EFI must fail, never skip or count as PASS.

@@ -16,6 +16,7 @@ on:
       - 'tools/ci/linux-three-isa-owner-delta-v1.py'
       - 'tools/ci/linux-three-isa-owner-delta-selftest-v1.py'
       - 'tools/ci/linux-three-isa-trigger.txt'
+      - 'tools/ci/linux-three-isa-gnu-qemu-trigger.txt'
   workflow_dispatch:
 permissions:
   contents: read
@@ -26,6 +27,40 @@ concurrency:
   group: three-linux-i-${{ github.ref }}-${{ github.event.pull_request.head.sha || github.sha }}
   cancel-in-progress: false
 jobs:
+  # New workflow files may not register a standalone PR run until merged into
+  # the default branch. Call the exact same current-head GNU/MiniC full Linux
+  # QEMU workflow *from this pre-existing registered workflow* instead.
+  # Its own latest-commit trigger is independent of the 21-shard -S census.
+  gnu-qemu-campaign-gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 2
+      - name: Require an exact-head GNU/MiniC QEMU trigger
+        id: decide
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          active=false
+          if [[ '${{ github.event_name }}' == workflow_dispatch ]]; then
+            active=true
+          elif git rev-parse --verify HEAD^ >/dev/null 2>&1 &&
+               ! git diff --quiet HEAD^ HEAD -- tools/ci/linux-three-isa-gnu-qemu-trigger.txt; then
+            active=true
+          fi
+          echo "run=$active" >> "$GITHUB_OUTPUT"
+          echo "THREE_ISA_GNU_MINIC_FULL_RUNTIME_GATE=$active head=$(git rev-parse HEAD)"
+
+  gnu-minic-full-linux-runtime:
+    needs: gnu-qemu-campaign-gate
+    if: needs.gnu-qemu-campaign-gate.outputs.run == 'true'
+    uses: ./.github/workflows/minic-linux-three-isa-gnu-qemu-v1.yml
+
   # The PR contains this workflow, so GitHub's PR-wide path filter matches
   # EVERY subsequent compiler-source commit. A tiny exact-HEAD gate restores
   # the intended opt-in boundary: ordinary L1/L2 fixes do not rebuild three
