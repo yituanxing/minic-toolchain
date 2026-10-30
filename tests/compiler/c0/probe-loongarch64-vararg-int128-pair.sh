@@ -44,6 +44,9 @@ check_stack_three() {
         active && $0 ~ "^\\.size "name"," { active=0 }
         active && /^  li.d \$t3, 32$/ { start=1 }
         active && start && /^  sub.d \$sp, \$sp, \$t3$/ { window=1 }
+        # The target-owned frame helper may use the equivalent single
+        # signed-imm12 SP decrement; validate ABI slots, not opcode count.
+        active && /^  addi.d \$sp, \$sp, -32$/ { window=1 }
         active && window && /^  st.d \$t0, \$sp, 0$/ { zero=1 }
         active && window && /^  st.d \$t0, \$sp, 8$/ { eight=1 }
         active && window && /^  st.d \$t0, \$sp, 16$/ { sixteen=1 }
