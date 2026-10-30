@@ -1215,8 +1215,14 @@ def require_second_live_gnu_kbuild_link(log: str, target: str,
         required_events.append(r"(?m)^\s*\S+\s+arch/loongarch/boot/vmlinuz\.efi\s*$")
     else:
         raise Rejected(f"unrecognized GNU relink target: {target}")
-    if not all(re.search(event, log) for event in required_events):
-        raise Rejected(f"second GNU Kbuild omitted mandatory live link stages: {target}")
+    missing_events = [event for event in required_events if re.search(event, log) is None]
+    if missing_events:
+        # Preserve the authentic incremental Kbuild stages in the CI error;
+        # never infer success merely from an existing kernel Image on disk.
+        actual_events = re.findall(r"(?m)^\s*(?:AR|LD|BUILD|OBJCOPY)\s+\S+\s*$", log)
+        raise Rejected("second GNU Kbuild omitted mandatory live link stages: "
+                       f"{target} compressed_only={compressed_only} "
+                       f"missing={missing_events} actual={actual_events[:40]}")
     if expected is not None:
         compiled = set(re.findall(r"(?m)^\s*CC\s+(\S+\.o)\s*$", log))
         fallback = sorted(compiled.intersection(expected))

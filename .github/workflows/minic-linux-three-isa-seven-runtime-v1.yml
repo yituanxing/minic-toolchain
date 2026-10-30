@@ -610,6 +610,22 @@ jobs:
             --initramfs "$RUNTIME_OUTPUT/runtime-initramfs.cpio.gz" \
             --incoming "$GITHUB_WORKSPACE/build/minic-seven-incoming" \
             --output "$RUNTIME_OUTPUT/candidate" "${args[@]}"
+      - name: Capture only failed AArch64 zero-serial early-boot PC and exception trace
+        if: failure() && matrix.target == 'aarch64'
+        continue-on-error: true
+        shell: bash
+        timeout-minutes: 2
+        run: |
+          set -Eeuo pipefail
+          python3 tools/ci/linux-three-isa-aarch64-early-boot-trace-v1.py \
+            --image "$GNU_WORK/build/arch/arm64/boot/Image" \
+            --initramfs "$RUNTIME_OUTPUT/runtime-initramfs.cpio.gz" \
+            --failed-p0 "$RUNTIME_OUTPUT/candidate/boot/p0.log" \
+            --gnu-receipt "$RUNTIME_OUTPUT/boot/gnu-qemu-receipt.json" \
+            --qemu /usr/bin/qemu-system-aarch64 \
+            --vmlinux "$GNU_WORK/build/vmlinux" --nm /usr/bin/aarch64-linux-gnu-nm \
+            --output "$RUNTIME_OUTPUT/aarch64-early-trace" \
+            --timeout 15 --max-bytes 1048576
       - name: Preserve genuine GNU LD errors, MiniC C provenance and dual QEMU logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -620,10 +636,14 @@ jobs:
             build/minic-seven-receiver-${{ matrix.target }}/candidate/candidate-receipt.json
             build/minic-seven-receiver-${{ matrix.target }}/candidate/all-c-owners-result.json
             build/minic-seven-receiver-${{ matrix.target }}/candidate/gnu-ld-relink.log
+            build/minic-seven-receiver-${{ matrix.target }}/candidate/gnu-ld-final-relink*.log
             build/minic-seven-receiver-${{ matrix.target }}/candidate/gnu-link-failure-summary.json
             build/minic-seven-receiver-${{ matrix.target }}/candidate/postlink-c-owner-census.json
+            build/minic-seven-receiver-${{ matrix.target }}/candidate/postlink-*-c-owner-census.json
+            build/minic-seven-receiver-${{ matrix.target }}/candidate/postlink-live-gnu-e-minic-c*-receipt.json
             build/minic-seven-receiver-${{ matrix.target }}/candidate/link-failure-owner-diagnostics/
             build/minic-seven-receiver-${{ matrix.target }}/candidate/boot/
+            build/minic-seven-receiver-${{ matrix.target }}/aarch64-early-trace/
           if-no-files-found: warn
           retention-days: 14
 
