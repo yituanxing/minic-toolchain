@@ -14,6 +14,31 @@
 
 `R`＝只读借用；`W`＝对调用方拥有的对象进行修改；`OWN`＝函数本地分配并负责清理或显式移交；`XFER`＝有条件地转移所有权。**不能把“借用 Program 指针”简化成“Program 不会发生写入”**：Parser/Normalize/Inline 是 W，Core/Target 原则上 R。
 
+### 阅读与理解分开记账
+
+“看过函数”不等于“掌握契约”，更不等于“证明正确”。后续按两个独立进度轴积累覆盖：
+
+| 阅读轴 | 完成门槛 | 理解轴 | 完成门槛 |
+| --- | --- | --- | --- |
+| `R0` 未读 | 尚未核对实际函数体 | `U0` 未理解 | 没有产出可信的所有权/行为契约 |
+| `R1` 函数体已读 | 输入、分支、分配/释放和错误出口已通读 | `U1` 已建模型 | 写清前置条件、读写集、owner、生命周期、失败语义 |
+| `R2` 调用链已读 | 实际 caller、被调函数及其他消费者已追踪 | `U2` 契约交叉核对 | 在生产者/消费者处证明不变式；明确目标和特殊路径的例外 |
+
+验证是第三个独立证据轴：`E0` 只有源码结构、`E1` 真实 SOURCE-TRACE、`E2` 最小反例/ASan/GCC-DIFF/ELF、`E3` 目标 QEMU/原生运行。`E2/E3` 依场景适用，不需要为纯 API 不变式制造无意义的运行测试。现有 `TRACE/PARTIAL` 是此前的粗粒度口径，**不能自动换算为 `R2/U2`**；必须在后续函数复核中逐条升级。
+
+每审一个函数的固定动作是：**阅读函数及调用链 → 复原正确的设计意图 → 核查身份、状态和失败资源 → 仅为非显然不变式补源码注释 → 补本台账 → 问题有证据才写 MC**。发现现有注释与真实语义不符，要先更正注释；不要为了“每函数有注释”重复描述代码执行步骤。
+
+本轮开始的双轴试填（不是完整函数覆盖统计）：
+
+| 函数 | 阅读 | 理解 | 证据/处理 |
+| --- | --- | --- | --- |
+| `minic_c0_program_add_expression` | R2 | U2 | E1；稳定 ID 和可失效元素地址已在源码注释中明确 |
+| `minic_parser_resolve_tag` | R2 | U2 | E1；返回的 Parser tags 借用指针会被 bind 扩容失效 |
+| `minic_semantic_snapshot_rollback_probe_expression_types` | R2 | U2 | E1；计数回退不会释放 owned CALL payload（MC-009）；更正过度承诺安全的旧注释 |
+| `minic_core_function_verify:verify_block` | R2 | U2 | E1；ValueId 全函数唯一、Value 可用性按块重置的不同职责 |
+| `minic_backend_asm_source_form_id` | R2 | U2 | E1；仅记录 source 形式来源，不是实例 cache key（MC-026 已排除） |
+| `minic_riscv_emit_record_copy_bytes` | R2 | U2 | E1；forward-copy、scratch 与多 chunk 改写调用方寄存器的契约 |
+
 ## 1. Compiler 总入口与阶段管控
 
 | ID · 函数（源码） | 调用与输入/产物 | 状态修改、失败与所有权不变式 | 核验 |
@@ -83,7 +108,7 @@
 | `FN-T03` `minic_target_invocation_begin` / `_plain_char` / `_short_wchar` — 同上 | 从 canonical 读出 Target + IntegerModel，W caller-local invocation | 全部语言选项写副本；不会改变全局 descriptor，支持同进程不同调用的 char/wchar ABI 差异。 | TRACE · CONFIRMED-DESIGN |
 | `FN-T04` `minic_data_layout_type` — `src/target/data_layout.c` | R Program/Target Layout，W caller 输出尺寸/对齐 | 目标 C 存储布局，而非寄存器 ABI；检测 overflow/无效 record 失败。 | TRACE |
 | `FN-T05` `minic_backend_for_target` — `src/target/backend.c` | R Target/catalog，共同 X-macro backend 表 | 核对 count，按 architecture 精确选择；未知 target NULL；不向其他 ISA emitter fallback。 | TRACE · CONFIRMED-DESIGN |
-| `FN-T06` `minic_backend_asm_source_form_id` / `_capture_asm_operand_source` / `_qualify_inline_asm` — 同上 | R GNU template/constraint，生成 source 形式身份；目标 machine form 另证 | 来源身份与机器语义不同；name/label 是否必须进入 hash 尚无消费路径完整证明（MC-026）。 | PARTIAL · INVESTIGATE |
+| `FN-T06` `minic_backend_asm_source_form_id` / `_capture_asm_operand_source` / `_qualify_inline_asm` — 同上 | R GNU template/constraint，生成 source 形式指纹；目标 machine form 另证 | 生产消费者仅保存/打印 `source_form_id`，没有作为 operand 实例 cache key；不要求包含 symbolic name/label（MC-026 已澄清）。capture 的失败路径可能留下 partial plan，仅成功结果可发布。 | TRACE · CONFIRMED-DESIGN |
 | `FN-T07` `minic_program_visit_prepared_functions` — `src/target/common/program_visit.h` | R Program/Core/Target；OWN 每个被选 function 的 `MinicCoreFunctionPlan` | build → 传 const facts/object storage 给同步 target callback → destroy；callback 不能长期持有内部地址；失败/census 均清理。 | TRACE · CONFIRMED-DESIGN |
 | `FN-T08` `minic_core_function_plan_build` / `_destroy` — `src/target/common/core_function_plan.c` | R Core/Program/Target，OWN semantic facts、CALL index、object storage | 校验 Core 并准备 ABI-neutral 事实；不放机器寄存器或栈偏移；失败销毁部分资源。 | TRACE · CONFIRMED-DESIGN |
 | `FN-T09` `minic_program_emit_write` — `src/target/common/program_emit.h` | R Program/Core/Target，OWN 临时目标文件 | `mkstemp`→prefix→global→between→function→trailer→close→finalize→rename；失败 remove 临时 `.s`，原有公共输出不受半成品影响。 | TRACE · CONFIRMED-DESIGN |
@@ -110,10 +135,12 @@
 | `FN-V07` `minic_riscv64_core_frame_initialize_with_storage` — `src/target/riscv64/frame_layout.c` | R Core/facts/storage，XFER ABI plan 的 parameter/outgoing-call allocations 给 frame | Frame 接手资源并在失败/结束统一析构；跨过 align-down 的 varargs 边界见 MC-015。 | TRACE · KNOWN-ISSUE |
 | `FN-V08` `emit_core_function_with_symbol` / `minic_riscv64_write_c0_program_with_core_functions` — `src/target/riscv64/core_codegen.c`、`codegen_function.c` | R Core/facts/Program、W FILE*、OWN asm/frame/scratch | admit→asm plan→frame→reachability→ISA→emit；standalone 会自己准备 facts，production 借用现成 plan，两条路径有真实消费者。 | TRACE · CONFIRMED-DESIGN |
 | `FN-V09` `rv64_resolve_prepared_call` — `src/target/riscv64/call_emit.c` | R CALL index、prepared call array | 通过 Common ordinal 查找后核 `count`、`sites[ordinal]`、`instruction_id`；两数组不是“恰好同序”，而是稳定协议。 | TRACE · CONFIRMED-DESIGN |
+| `FN-V10` `emit_int128_pair_shift_left` / `minic_riscv64_emit_scalar_instruction` 的 wide shift — `src/target/riscv64/scalar_emit.c` | R verified Core values 的左右操作数类型，W target FILE* | 对 `__int128` RHS 显式拒绝；是否与有效 C/GNU RV64 支持冲突仍待真实输入及差分，见 MC-028；当前不修改机器指令语义。 | PARTIAL · INVESTIGATE |
 | `FN-L01` `loongarch64_emit_prologue` — `src/target/loongarch64/codegen.c` | R Common frame context，W FILE* | Loong 特定 SP、s0/ra/sret 与 varargs 保存；Common LP64 仅负责回调编排。 | TRACE |
 | `FN-L02` `loongarch64_emit_function` / `minic_loongarch64_write_c0_program_with_core_functions` — 同上 | R Core/facts/storage + Loong ABI Policy；W FILE* | 注入 GPR/FPR/record/sret/varargs callback，借用 T11/T12/T09 事务层；失败不会发布部分 `.s`。 | TRACE · CONFIRMED-DESIGN |
 | `FN-L03` `minic_loongarch64_emit_asm_output_store` — `src/target/loongarch64/memory_emit.c` | R Core output lvalue、width/地址、3 scratch；W FILE* | 已有未对齐 C lvalue 的安全 write helper；部分特殊 GNU ASM 跳过它（MC-010），不要为修复复制另一套 store 实现。 | TRACE · KNOWN-ISSUE |
 | `FN-L04` `minic_loongarch64_qualify_inline_asm` / `_emit_qualified_structured_asm` — `src/target/loongarch64/asm_contract.c` | R Source 约束 vs R Core typed ASM 的**两个不同阶段** | descriptor-first 与 Linux 精确 fallback 有消费者；不可按函数形似删一个；特殊输出存储 MC-010 仍在。 | TRACE · CONFIRMED-DESIGN |
+| `FN-L05` `loongarch64` 线性 variadic cursor 相关 emit — `src/target/loongarch64/residual_emit.c` | R 入口寄存器保存与 caller stack 的连续布局前提 | `direct_function_plan.c` 的 `variadic_requires_public_stack_alignment` gate 拒绝过对齐 + 变参函数；此时不承诺 realign 后的线性 cursor 连续性，属于显式能力边界，非静默错编。 | TRACE · CONFIRMED-DESIGN |
 
 公共代码 `src/target/riscv/word_operations.c`、`record_copy_bytes.c` 已被 RV32/RV64 的实际 machine-emission caller 使用，属于成功复用；x86 的 frame 与 A64/Loong 的 DirectLP64 不合并物理 ABI，同样合理。
 

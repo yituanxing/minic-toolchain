@@ -69,7 +69,9 @@ typedef struct MinicAsmOperandPlan {
 typedef MinicAsmOperandPlan MinicTargetInlineAsmContract;
 
 /* Exact GNU source facts, independent of the target qualifier and its
- * possibly address-backed physical-register result representation. */
+ * possibly address-backed physical-register result representation.
+ * On false, capture_asm_operand_source may leave a partially modified plan;
+ * callers must discard it rather than consume or retry the same result. */
 bool minic_backend_capture_asm_operand_source(
     const MinicInlineAsm *, MinicAsmOperandPlanOwner, MinicAsmOperandPlan *);
 uint64_t minic_backend_asm_source_form_id(const MinicInlineAsm *);

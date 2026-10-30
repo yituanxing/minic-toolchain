@@ -941,6 +941,9 @@ const MinicParserTagBinding *minic_parser_find_tag_in_current_scope(
     return NULL;
 }
 
+/* The returned binding belongs to parser->tags; it is not a stable handle.
+ * Binding another tag (or semantic parsing that binds one) may realloc this
+ * array. Callers must copy the needed ID/kind or resolve again afterward. */
 bool minic_parser_resolve_tag(MinicParser *parser, MinicSourceSpan name_span,
                               MinicParserTagKind kind, bool current_scope_only,
                               const MinicParserTagBinding **tag) {

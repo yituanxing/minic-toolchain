@@ -55,6 +55,10 @@ bool minic_add_inline_integer_specialization(
         source.is_variadic || source.alias_target != MINIC_FUNCTION_INVALID) {
         return false;
     }
+    /* A clone owns a new FunctionId and specialization facts, not a copied
+     * FunctionBody. Several clones intentionally share body_block/local IDs;
+     * an ExpressionId inside that body cannot identify a particular caller's
+     * CALL instance (the separate MC-006 provenance problem). */
     name_length = snprintf(name, sizeof(name), "__minic_inline_spec_%zu_%zu",
                            (size_t)source_id, ordinal);
     if (name_length <= 0 || (size_t)name_length >= sizeof(name) ||

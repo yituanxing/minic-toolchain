@@ -839,6 +839,9 @@ bool minic_core_function_add_inline_asm_register_clobber(
     return true;
 }
 
+/* The input span must be independent of function->call_arguments: growth may
+ * realloc that array before the next element is read. Current Core callers
+ * provide separate temporary argument buffers. */
 bool minic_core_function_append_call_arguments(MinicCoreFunction *function,
                                                const MinicCoreCallArgument *arguments,
                                                size_t argument_count,
@@ -887,6 +890,9 @@ static void append_reserved_instruction(MinicCoreFunction *function,
     block->instruction_count += 1U;
 }
 
+/* Input instruction must not point into function->instructions: reserve may
+ * realloc it before the input is copied. The existing lowerers pass a local
+ * instruction value; ValueId/InstructionId remain stable after growth. */
 bool minic_core_function_append_value_instruction(MinicCoreFunction *function,
                                                   MinicCoreBlockId block_id,
                                                   const MinicCoreInstruction *instruction,
@@ -921,6 +927,7 @@ bool minic_core_function_append_value_instruction(MinicCoreFunction *function,
     return true;
 }
 
+/* Same non-aliasing input contract as append_value_instruction above. */
 bool minic_core_function_append_effect_instruction(MinicCoreFunction *function,
                                                    MinicCoreBlockId block_id,
                                                    const MinicCoreInstruction *instruction) {

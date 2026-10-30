@@ -1,6 +1,9 @@
 #include "target/riscv/record_copy_bytes.h"
-/* Byte-exact forward copy. RECORD_LOAD and RECORD_COPY previously contained
- * independent copies of this 2048-byte loop with reversed register roles. */
+/* Byte-exact forward copy (not memmove). RECORD_LOAD and RECORD_COPY previously
+ * contained independent copies of this 2048-byte loop with reversed roles.
+ * Register contract: t2 is scratch when size > 0, t3 when size > 2048; for
+ * multi-chunk copies both source/destination GPRs are advanced in place.
+ * Callers must not assume these registers retain their incoming addresses. */
 bool minic_riscv_emit_record_copy_bytes(FILE *file,
                                    const char *destination_register,
                                    const char *source_register,

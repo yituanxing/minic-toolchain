@@ -119,6 +119,8 @@ flowchart TD
 
 ## 7. 验证与审计覆盖分级
 
+函数审计另有**阅读 `R0→R2`**与**理解 `U0→U2`**两条独立进度轴，细则和逐函数记录见[函数契约台账](minic-function-contract-register.md)。函数体已读、已追踪消费者、已建立契约、已证明某个可达错误是不同结论；文档只按实际完成的维度升级。源码注释着重记下非显然的不变式及所有权边界，未证实风险仍在 [MC 台账](minic-issue-register.md)中保持 `INVESTIGATING`。
+
 | 级别 | 代表什么 | 不代表什么 |
 | --- | --- | --- |
 | `SOURCE-TRACE` | 核对函数入口、真实 caller、owner、变化与析构路径 | 不是 ASan/QEMU 执行成功。 |

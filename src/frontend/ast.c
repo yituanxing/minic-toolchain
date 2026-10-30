@@ -488,6 +488,9 @@ bool minic_c0_program_add_expression(MinicC0Program *program,
                                      MinicExpressionId *expression_id) {
     uint32_t *owned_overflow = NULL;
     size_t extra_count = 0U;
+    /* The returned ExpressionId is stable; a borrowed MinicExpression* is not.
+     * Growing this arena can invalidate every previously borrowed element
+     * address. Recursive callers must reacquire elements by ID afterward. */
     /* The argument scratch is borrowed from a parser stack or source AST.
        Deep-copy here BEFORE grow/realloc; never alias or transfer ownership.
        Thus rewrites and cloned nodes cannot free each other's IDs. */

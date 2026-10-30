@@ -97,9 +97,11 @@ static uint64_t minic_asm_hash_size(uint64_t hash, size_t count) {
     return hash;
 }
 
-/* Identity includes the exact ordered GNU source constraints, flags,
- * clobbers and template. It is deliberately ISA-independent and is not a
- * license for an emitter to skip its own machine-form validation. */
+/* This source-form fingerprint covers ordered GNU constraints, flags,
+ * clobbers and template, not each symbolic operand name/label identity.
+ * It is diagnostic provenance, NOT a unique CALL/operand-instance cache key.
+ * Machine-form admission has a separate target_machine_form_id; never treat
+ * this ISA-independent fingerprint as proof of an encodable machine form. */
 uint64_t minic_backend_asm_source_form_id(const MinicInlineAsm *source) {
     uint64_t hash = UINT64_C(14695981039346656037);
     size_t i;

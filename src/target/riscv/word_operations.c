@@ -2,6 +2,12 @@
 
 #include <inttypes.h>
 
+/* Internal two-XLEN register protocol (not a calling convention): binary
+ * helpers consume t0:t1 (low:high lhs/result) and t2:t3 (rhs), clobbering
+ * t4/t5 as needed. Unary helpers update t0:t1 and may clobber t4. Shifts
+ * use t2 (optionally t5 for the high count), update t0:t1, and may clobber
+ * t2/t3/t4. Bitscan instead consumes t0, returns the count in t1 and may
+ * clobber t2/t3; CTZ destroys t0. Callers must preserve live temporaries. */
 bool minic_riscv_emit_word_pair_binary(FILE *out, MinicCoreInstructionKind kind) {
     const char *opcode;
     if (out == NULL) return false;

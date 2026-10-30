@@ -10,7 +10,9 @@
 /* One checked preparation sequence consumed by both LP64 direct backends.
  * The target supplies actual ABI classification and makes final choices
  * about native prologue, varargs register stores and instruction emission.
- * Successful planning never writes any assembly. */
+ * Successful planning never writes any assembly. The caller must supply a
+ * fresh/unowned plan: initialization clears it, and even a false result may
+ * own partial allocations that the caller must destroy. */
 bool minic_multi_direct_lp64_function_plan_prepare(
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicFunction *decl, const MinicCoreFunction *fn,

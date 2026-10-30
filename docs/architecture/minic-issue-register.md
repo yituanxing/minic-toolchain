@@ -46,8 +46,10 @@
 | [MC-023](#mc-023-静态聚合后向覆写跨递归借用-record) | P1 风险 | INVESTIGATING | SOURCE-TRACE | Backward zero overwrite 的 `Record*` 跨递归持有 |
 | [MC-024](#mc-024-common-core-中的-rk-约束特例) | P2 | INVESTIGATING | DESIGN-REVIEW | Common Core GNU `rK` 方言和 Target policy 分工待证 |
 | [MC-025](#mc-025-aarch64-公共全局-object-类型伪操作兼容性) | P2 | INVESTIGATING | SOURCE-TRACE | A64 object suffix 与 Common `.type` 固定格式需实测 GAS |
-| [MC-026](#mc-026-source-form-id-的实际身份边界) | P2 | INVESTIGATING | DESIGN-REVIEW | Source ASM form hash 未覆盖符号名/标签文本，需核消费者 |
 | [MC-027](#mc-027-targetinfo-惰性初始化的并发契约) | P3 | INVESTIGATING | DESIGN-REVIEW | 静态目标描述符惰性初始化有无多线程 API 义务 |
+| [MC-028](#mc-028-rv64-的-int128-移位计数类型限制) | P2 | INVESTIGATING | SOURCE-TRACE | RV64 128-bit 移位显式拒绝 128-bit RHS，尚待 GNU 差分 |
+
+已验证非问题：**[MC-026](#mc-026-source-form-id-的实际身份边界)**，状态 `CLOSED-NOT-A-BUG`，保留编号和消费者证据，避免重复误报。
 
 ## 索引：确实存在但不宜立即改的架构与验证债
 
@@ -115,6 +117,7 @@
 - **位置：** `src/frontend/parser_static_initializer.c:3165–3178`、`semantic_snapshot.h:167–194`、`ast.c:499–528,107–111`。
 - **证据：** 对数组 designator 的 `sizeof(func(12 个实参))` 试探解析会给 CALL 分配 `overflow_arguments`；恢复较小的 `expression_count` 后，析构只遍历当前节点计数，旧分配失去所有者。GCC 与 MiniC 均接受相应合法输入。
 - **证据边界：** 源码所有权链确认；此环境 LeakSanitizer 无有效动态泄漏报告。普通值型 ArrayType/FunctionType 计数回滚并没有同类堆所有权，不应一概否定。
+- **测试缺口：** `tests/frontend/semantic_snapshot_test.c` 只手工设置/调整 Program 的计数，不构造拥有 `overflow_arguments` 的真实 CALL；它能验证快照数量门槛，不能反证 owned payload 泄漏。`semantic_snapshot.h` 中原本过度概括“安全回滚”的注释已单独更正，**代码问题仍开放**。
 - **修复门槛：** 回滚前释放所有被撤销表达式的 owned payload，或采用显式事务；补异常/失败路径和 LSan 测试。
 
 ### MC-010 LoongArch 特殊 ASM 写回绕过对齐保护
@@ -192,14 +195,15 @@
 - **位置：** `src/target/aarch64/codegen.c:159` 的目标配置 `"%object"`，及 `src/target/common/global_emit.c:1250` 固定输出 `.type ...,@object` 的 simple-global 路径。
 - **疑点：** 两种 object suffix 语法可能不同，需确认哪种路径真正会执行以及 AArch64 GNU AS 对 `@object` 的接受情况。
 - **证据边界：** 这是静态审查发现的接口差异，尚无合法 C→MiniC→AArch64 GNU AS 的失败样本。当前不作为已确认错码。
-- **下一证据：** 用可选全局定义和已初始化/未初始化对象跑两种 emission path，并以当前 cross GAS/ELF 验收；如果 GAS 允许固定格式，关闭。
+- **下一证据：** 现有 `tests/compiler/c0/probe-aarch64-pie-extern-got.sh` 已含 static global + 真实 AArch64 cross GCC/GAS/QEMU 步骤，优先在精确 HEAD 跑它并对照 emitter 路径；必要时补已初始化/未初始化对象的差分。如果 GAS 允许固定格式，关闭。不能把 source-only 结果充当 GAS 通过。
 
 ### MC-026 Source form ID 的实际身份边界
 
+- **状态：** `CLOSED-NOT-A-BUG`；2026-10-30 本轮由真实读写调用链复核。保留条目用于防止重新误报。
 - **位置：** `src/target/backend.c:minic_backend_asm_source_form_id` 与其 `capture_asm_operand_source`、下游 target qualification。
-- **疑点：** 当前 hash 覆盖模板、ordered constraints、flags、clobbers 等，但不直接编码某些符号名称/标签文本。需确认消费者只用它作为**语法/来源形式身份**，还是将它错误当作「全部 operand 实例唯一标识」。
-- **证据边界：** `source_form_id` 与 `target_machine_form_id` 本来就有意分工；不应把不是哈希字段当作冲突或误共享的证据。
-- **下一证据：** 检查所有比较、缓存或 keyed lookup，构造只变 symbolic name/label 的 pair；若只用于统计/来源核对则关闭。
+- **先前疑点：** hash 覆盖模板、ordered constraints、flags、clobbers 等，不直接编码某些符号名称/标签文本，曾担心作为缓存键导致不同 CALL/operand 实例冲突。
+- **实际消费者：** 全生产源码检索 `source_form_id`：`backend.c` 生成，`core_lower_asm_operands.c` 保存并在可选诊断中打印，`core_lower_asm.c` 仅生成诊断 signature；**没有实例 cache/key/equality 的生产消费者**。`target_machine_form_id` 单独负责目标机器形式；`tests/core/asm_operand_plan_test.c` 仅要求约束变化时来源哈希变化。
+- **关闭依据：** 该字段是故意可跨实例重复的来源指纹，不是每个操作数/label 的唯一 ID；遗漏实例名不违反当前契约。未来若新增以其为 key 的消费者，应重新审查其键语义，不能沿用当前结论。
 
 ### MC-027 TargetInfo 惰性初始化的并发契约
 
@@ -207,6 +211,13 @@
 - **疑点：** 若同进程多个线程首次并发使用静态 lazily-built target descriptor，是否存在初始化竞态，应看 API/driver 的明确线程模型。
 - **证据边界：** 当前生产 CLI 每次是独立进程，未证明承诺同进程并发调用或存在可复现数据竞争；不能因此判生产 bug。
 - **下一证据：** 查找公开并发使用者、线程安全文档及构造路径；需要时 TSAN/并发探针验证。若定义单线程初始化/预先初始化则记录为设计约束。
+
+### MC-028 RV64 的 int128 移位计数类型限制
+
+- **位置：** `src/target/riscv64/scalar_emit.c:101–122,263–290`，对照 `src/core/core_lower_arithmetic.c:490–540`、`src/core/core_ir_verify.c:123–136` 与 `src/target/riscv32/rv32_wide_emit.c:32–67`。
+- **疑点：** RV64 `__int128` 左移和右移发射器均在 RHS 为 `__int128` 时显式返回 false；Core lowering 保留右操作数整数类型，Core verifier 准许整数右值。RV32 的宽移位消费者另有双字 RHS 处理。因此可能存在合法 C 程序在 RV64 的目标实现缺口。
+- **证据边界：** 只有源码路径对照，**尚未证明有效输入实际进入该 Core 形式，也未完成 GCC 同目标编译差分**。不能因为当前两处显式拒绝就断言 Linux workload 已失败。
+- **下一证据：** 对 `unsigned __int128 x, n; return x << n;` 及右移、常量/非常量 RHS 构造独立函数，分别用 GNU RV64 编译和 MiniC `-S`，然后 GNU AS/ELF/执行检查。若前端正规化或其他合法路径自动转换 RHS，关闭为非问题；否则按最小反例升级。
 
 ### MC-019 两套 Bool 恒零证明扫描重叠
 

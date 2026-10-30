@@ -1077,6 +1077,10 @@ static bool verify_block(const MinicCoreFunction *function,
         return false;
     }
     if (function->value_count != 0U) {
+        /* ValueIds are function-wide identities but uses must be available
+         * within this block, in instruction order. Do not carry availability
+         * from the preceding block: value_seen separately checks uniqueness
+         * of definitions across the whole function. */
         (void)memset(available_values, 0, function->value_count * sizeof(*available_values));
     }
     for (index = 0U; index < block->instruction_count; ++index) {
