@@ -953,6 +953,7 @@ cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
   src/frontend/ast_global.c \
   src/target/common/core_function_facts.c \
   src/target/common/core_function_plan.c \
+  src/core/core_ir.c \
   -o "$work/program-emit-probe"
 "$work/program-emit-probe" "$work/test-output.s"
 

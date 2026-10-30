@@ -36,9 +36,6 @@ typedef struct MinicProgramEmitConfig {
     MinicProgramEmitFinalize finalize; /* strict ISA audit or legalization */
     MinicProgramFunctionSelection selection;
     bool continue_after_failure; /* opt-in census; never retain partial .s */
-    /* Most targets emit reachable CFG blocks only. A target that still emits
-     * all Core blocks must also retain references from those blocks. */
-    bool include_unreachable_symbol_uses;
 } MinicProgramEmitConfig;
 
 /* GNU basic file-scope asm is source-owned text, not generated machine
@@ -235,18 +232,16 @@ static inline bool minic_program_emit_collect_symbol_uses(
         if (!program->functions[index].is_defined ||
             !minic_program_function_selected(&program->functions[index], config->selection))
             continue;
-        if (!config->include_unreachable_symbol_uses) {
-            reachable = calloc(function->block_count == 0U ? 1U : function->block_count,
-                               sizeof(*reachable));
-            if (reachable == NULL || !minic_core_function_mark_reachable_blocks(
-                    function, reachable, function->block_count)) {
-                free(reachable);
-                return false;
-            }
+        reachable = calloc(function->block_count == 0U ? 1U : function->block_count,
+                           sizeof(*reachable));
+        if (reachable == NULL || !minic_core_function_mark_reachable_blocks(
+                function, reachable, function->block_count)) {
+            free(reachable);
+            return false;
         }
         for (block_id = 0U; block_id < function->block_count; ++block_id) {
             const MinicCoreBlock *block = &function->blocks[block_id];
-            if (reachable != NULL && !reachable[block_id]) continue;
+            if (!reachable[block_id]) continue;
             for (ordinal = 0U; ordinal < block->instruction_count; ++ordinal) {
                 const MinicCoreInstructionId id = block->instructions[ordinal];
                 const MinicCoreInstruction *ins;

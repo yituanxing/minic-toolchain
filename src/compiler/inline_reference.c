@@ -10,8 +10,54 @@
 
 /* Compiler AST pass: remaining non-Core reference roots for inline clones.
  * Function bodies remain from the validated monolithic optimizer. */
+static bool minic_asm_text_mentions_symbol(const char *text,
+                                           size_t text_length,
+                                           const char *name,
+                                           size_t name_length) {
+    size_t offset;
+    if (text == NULL || name == NULL || name_length == 0U ||
+        name_length > text_length) {
+        return false;
+    }
+    for (offset = 0U; offset <= text_length - name_length; ++offset) {
+        if (memcmp(text + offset, name, name_length) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool minic_inline_source_has_opaque_asm_reference(
+    const MinicC0Program *program, const MinicFunction *source) {
+    size_t index;
+
+    if (program == NULL || source == NULL || source->name == NULL) {
+        return true;
+    }
+    for (index = 0U; index < program->file_asm_count; ++index) {
+        const MinicFileAsm *source_asm = &program->file_asms[index];
+        if (minic_asm_text_mentions_symbol(source_asm->text,
+                                           source_asm->length,
+                                           source->name,
+                                           source->name_length)) {
+            return true;
+        }
+    }
+    for (index = 0U; index < program->inline_asm_count; ++index) {
+        const MinicInlineAsm *source_asm = &program->inline_asms[index];
+        if (minic_asm_text_mentions_symbol(source_asm->template_text,
+                                           source_asm->template_length,
+                                           source->name,
+                                           source->name_length)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool minic_inline_integer_source_has_residual_reference(
-    const MinicC0Program *program, MinicFunctionId source_id) {
+    const MinicC0Program *program, MinicFunctionId source_id,
+    const MinicFunctionId *expression_source_owners) {
     bool *owner_live;
     size_t expression_index;
     size_t function_index;
@@ -21,6 +67,14 @@ static bool minic_inline_integer_source_has_residual_reference(
         return true;
     }
     if (program->entry_function == source_id || program->functions[source_id].force_emit) {
+        return true;
+    }
+    /* Unlike an inline source, an ordinary TU-local function may be named
+     * directly by opaque GNU asm. If so preserve its original ELF identity.
+     * A substring hit is deliberately conservative. */
+    if (!program->functions[source_id].is_inline &&
+        minic_inline_source_has_opaque_asm_reference(
+            program, &program->functions[source_id])) {
         return true;
     }
     for (function_index = 0U; function_index < program->function_count; ++function_index) {
@@ -38,6 +92,14 @@ static bool minic_inline_integer_source_has_residual_reference(
         for (relocation_index = 0U; relocation_index < object->relocation_count;
              ++relocation_index) {
             const MinicGlobalRelocation *relocation = &object->relocations[relocation_index];
+            /* A local static initializer holding &&label refers to the
+             * original source's .Luser_N label, not a specialized clone's
+             * private CFG label. Retain the owner to define that symbol. */
+            if (relocation->target_kind == MINIC_GLOBAL_RELOCATION_LABEL &&
+                object->owner_function == source_id) {
+                free(owner_live);
+                return true;
+            }
             if (relocation->target_kind == MINIC_GLOBAL_RELOCATION_FUNCTION &&
                 (MinicFunctionId)relocation->target_id == source_id) {
                 free(owner_live);
@@ -55,17 +117,51 @@ static bool minic_inline_integer_source_has_residual_reference(
              expression->value.call.function_id == source_id)) {
             return true;
         }
+        /* Computed-goto labels belong to a particular canonical source
+         * FunctionBody. Its label aliases are not emitted by specialization
+         * clones. Unknown/shared ownership conservatively keeps the source. */
+        if (!program->functions[source_id].is_inline &&
+            expression->kind == MINIC_EXPRESSION_LABEL_ADDRESS &&
+            (expression_source_owners == NULL ||
+             expression_source_owners[expression_index] == source_id ||
+             expression_source_owners[expression_index] >= program->function_count)) {
+            return true;
+        }
     }
     return false;
 }
 
 bool minic_finalize_inline_integer_specialization_references(MinicC0Program *program) {
     unsigned char *source_residual_cache = NULL;
+    MinicFunctionId *expression_source_owners = NULL;
     bool cache_allocation_failed = false;
     size_t function_index;
 
     if (program == NULL) {
         return false;
+    }
+    /* Only ordinary static specialization needs source-label ownership.
+     * Construct the canonical source index once, with fail-safe retention. */
+    for (function_index = 0U; function_index < program->function_count;
+         ++function_index) {
+        const MinicFunction *clone = &program->functions[function_index];
+        if (clone->is_integer_specialization &&
+            clone->specialization_source < program->function_count &&
+            !program->functions[clone->specialization_source].is_inline) {
+            if (program->expression_count != 0U &&
+                program->expression_count <= SIZE_MAX / sizeof(*expression_source_owners)) {
+                expression_source_owners = (MinicFunctionId *)malloc(
+                    program->expression_count * sizeof(*expression_source_owners));
+                if (expression_source_owners != NULL &&
+                    !minic_perf_program_build_expression_source_owners(
+                        program, program->function_count, expression_source_owners,
+                        program->expression_count)) {
+                    free(expression_source_owners);
+                    expression_source_owners = NULL;
+                }
+            }
+            break;
+        }
     }
     /* Generic reachability ran before cloning, while FunctionBody ownership was still
      * one-to-one. Preserve that result for clones first, then retire a source only when
@@ -90,7 +186,7 @@ bool minic_finalize_inline_integer_specialization_references(MinicC0Program *pro
         if (function->is_integer_specialization) {
             MinicFunctionId source_id = function->specialization_source;
             MinicFunction *source = &program->functions[source_id];
-            if (source->is_internal && source->is_inline && source->is_referenced) {
+            if (source->is_internal && source->is_referenced) {
                 bool has_residual_reference;
                 if (source_residual_cache == NULL && !cache_allocation_failed) {
                     source_residual_cache = (unsigned char *)calloc(
@@ -103,7 +199,8 @@ bool minic_finalize_inline_integer_specialization_references(MinicC0Program *pro
                     has_residual_reference = source_residual_cache[source_id] == 1U;
                 } else {
                     has_residual_reference =
-                        minic_inline_integer_source_has_residual_reference(program, source_id);
+                        minic_inline_integer_source_has_residual_reference(
+                            program, source_id, expression_source_owners);
                     if (source_residual_cache != NULL) {
                         source_residual_cache[source_id] =
                             has_residual_reference ? 1U : 2U;
@@ -116,6 +213,7 @@ bool minic_finalize_inline_integer_specialization_references(MinicC0Program *pro
         }
     }
     free(source_residual_cache);
+    free(expression_source_owners);
     return true;
 }
 

@@ -60,11 +60,11 @@ size_t minic_core_address_known_alignment(
         function, address, root_alignment, context, 0U);
 }
 
-/* A target-independent conservative CFG filter. Keep source labels as
- * additional roots: they may be reached through a computed goto, an asm-goto
- * or a forward function-level goto even when their lexical switch/loop arm
- * has no ordinary CFG predecessor. This is the proven RV64 reachability rule,
- * now shared with RV32 before source-owned asm reaches an RV32 assembler. */
+/* One target-independent conservative CFG filter for every Core backend.
+ * Keep source labels as additional roots: they may be reached through a
+ * computed goto, asm-goto or forward function-level goto even when their
+ * lexical switch/loop arm has no ordinary CFG predecessor. All targets must
+ * agree on this reachability set for instructions and ELF symbol uses. */
 bool minic_core_function_mark_reachable_blocks(const MinicCoreFunction *function,
                                                bool *reachable, size_t capacity) {
     MinicCoreBlockId *queue;

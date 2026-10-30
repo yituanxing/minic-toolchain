@@ -2,6 +2,7 @@
 #include "target/common/core_call_view.h"
 #include "target/common/core_instruction_family.h"
 #include "target/common/core_numeric_shape.h"
+#include "target/common/direct_residual_plan.h"
 #include "target/common/direct_instruction_semantics.h"
 #include "target/x86_64/abi.h"
 #include "target/x86_64/asm_contract.h"
@@ -680,6 +681,16 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
         return fprintf(out, "  movq %s@GOTPCREL(%%rip), %%rax\n",
                        fn->function_symbols[ins->value.function_symbol_id].name) >= 0 &&
                x86_value_store(out, frame, ins->result);
+    case MINIC_CORE_INSTRUCTION_BLOCK_ADDRESS: {
+        MinicCoreBlockId destination;
+        /* The address of a GNU &&label is a function-local code pointer.
+         * Keep it RIP-relative and preserve the Core block identity: the
+         * shared CFG filter keeps all source label blocks as roots. */
+        return minic_multi_direct_block_address_shape(fn, ins, &destination) &&
+               fprintf(out, "  leaq .Lmini_x86_f%zu_b%u(%%rip), %%rax\n",
+                       function_id, (unsigned int)destination) >= 0 &&
+               x86_value_store(out, frame, ins->result);
+    }
     case MINIC_CORE_INSTRUCTION_VARIADIC_NEXT_SCALAR: {
         /* SysV __va_list_tag is {u32 gp_offset,u32 fp_offset,
          * void *overflow_arg_area,void *reg_save_area}.

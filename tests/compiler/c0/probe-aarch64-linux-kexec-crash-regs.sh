@@ -73,12 +73,21 @@ awk '
     echo 'AARCH_KEXEC_CRASH=FAIL large-owned-input-scratch' >&2; exit 1;
 }
 grep -Fq '  stp x16, x17, [x0, #128]' "$work/crash-large.s"
-# Neither captured register may be used as an address scratch once the
-# snapshot starts. The source template must preserve the original x16/x17.
-if sed -n '/^  stp x0, x1, \[x0, #0\]/,/^  stp x16, x17, \[x0, #128\]/p' \
-    "$work/crash-large.s" | grep -Eq '^  (mov|movz|movk|add|sub|ldr|str|adr|adrp)[[:space:]]+[wx](16|17)([,[:space:]]|$)'; then
-    echo 'AARCH_KEXEC_CRASH=FAIL snapshot-x16-x17-mutation' >&2; exit 1
-fi
+# The original hardware template stores x0..x29 in 15 consecutive pairs.
+# Allow no machine instruction at all between them: this catches every
+# possible x16/x17 scratch mutation, including opcodes outside a hand-built
+# blacklist, before those registers have been snapshotted.
+awk '
+    /^  stp x0, x1, \[x0, #0\]$/ {snapshot=1; pair=0}
+    snapshot {
+        expected=sprintf("  stp x%d, x%d, [x0, #%d]", pair*2, pair*2+1, pair*16)
+        if ($0 != expected) bad=1
+        if (++pair == 15) {snapshot=0; complete++}
+    }
+    END {if (bad || complete != 1 || snapshot) exit 1}
+' "$work/crash-large.s" || {
+    echo 'AARCH_KEXEC_CRASH=FAIL snapshot-gpr-mutation' >&2; exit 1
+}
 
 for target in x86_64 loongarch64; do
     if "$mini" --target="$target-linux" -S "$work/crash.i" \

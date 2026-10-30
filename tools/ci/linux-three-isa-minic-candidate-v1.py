@@ -20,6 +20,7 @@ import functools
 import hashlib
 import importlib.util
 import json
+import mmap
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -511,6 +512,194 @@ def preserve_vdso_relocation_differential(work: Path, staged: Path,
           f"owners={len(selected)} diagnostic_errors={len(report['diagnostic_errors'])}")
 
 
+def scan_aarch64_relocations(path: Path) -> dict:
+    """Read only ELF64 relocation metadata; do not execute/modify the owner.
+
+    GOT relocations are direct evidence of an object's linker GOT demand.
+    Undefined CALL26/JUMP26 are *candidates*, not proof of generated PLT:
+    a static link might resolve them without a PLT. Bounded samples preserve
+    source owners while counts retain the distinction.
+    """
+    totals = {"got": 0, "plt": 0, "undefined_branch": 0,
+              "compiletime_assert_branch": 0,
+              "relocations_scanned": 0, "truncated": False,
+              "got_samples": [], "plt_samples": [],
+              "compiletime_assert_samples": [],
+              "undefined_branch_samples": []}
+    with path.open("rb") as stream, mmap.mmap(stream.fileno(), 0,
+                                                access=mmap.ACCESS_READ) as image:
+        if (len(image) < 64 or image[:6] != b"\x7fELF\x02\x01" or
+                struct.unpack_from("<HH", image, 16) != (1, 183)):
+            raise ValueError("not relocatable AArch64 little-endian ELF64")
+        section_start = struct.unpack_from("<Q", image, 40)[0]
+        section_stride, section_count = struct.unpack_from("<HH", image, 58)
+        if (section_stride != 64 or section_count < 2 or section_count > 65535 or
+                section_start + section_stride * section_count > len(image)):
+            raise ValueError("unsafe ELF64 section table")
+        sections = [struct.unpack_from("<IIQQQQIIQQ", image,
+                                      section_start + 64 * index)
+                    for index in range(section_count)]
+        for section in sections:
+            offset, size = section[4], section[5]
+            if section[1] != 8 and (offset > len(image) or
+                                    size > len(image) - offset):
+                raise ValueError("unsafe ELF64 section bounds")
+
+        def symbol_name(symbol_table_index: int, symbol_index: int) -> tuple[str, bool]:
+            if symbol_table_index >= len(sections):
+                raise ValueError("invalid relocation symbol table")
+            symtab = sections[symbol_table_index]
+            sym_offset, sym_size, entry_size, strings_index = (
+                symtab[4], symtab[5], symtab[9], symtab[6])
+            if symtab[1] not in (2, 11) or entry_size != 24 or strings_index >= len(sections):
+                raise ValueError("invalid ELF64 symbol table")
+            if symbol_index >= sym_size // entry_size:
+                raise ValueError("invalid relocation symbol index")
+            sym = sym_offset + symbol_index * entry_size
+            name_offset, section_index = struct.unpack_from("<IxxH", image, sym)
+            strings = sections[strings_index]
+            string_offset, string_size = strings[4], strings[5]
+            if name_offset >= string_size:
+                return "", section_index == 0
+            start = string_offset + name_offset
+            end = image.find(b"\0", start, string_offset + string_size)
+            if end == -1:
+                raise ValueError("unterminated ELF64 symbol name")
+            return image[start:end].decode("utf-8", "replace")[:160], section_index == 0
+
+        for section_index, section in enumerate(sections):
+            section_type, offset, size, symbol_table_index, stride = (
+                section[1], section[4], section[5], section[6], section[9])
+            if section_type not in (4, 9):
+                continue
+            expected_stride = 24 if section_type == 4 else 16
+            if stride != expected_stride or size % stride:
+                raise ValueError("unsafe ELF64 relocation entry size")
+            count = size // stride
+            # A diagnostics budget must never make the original Linux link
+            # unbounded; report partial coverage explicitly if exceeded.
+            budget = max(0, 4000000 - totals["relocations_scanned"])
+            if count > budget:
+                count = budget
+                totals["truncated"] = True
+            for index in range(count):
+                entry = offset + index * stride
+                relocation_offset, info = struct.unpack_from("<QQ", image, entry)
+                kind = info & 0xffffffff
+                is_got = ((300 <= kind <= 313) or (539 <= kind <= 543) or
+                          (560 <= kind <= 569) or kind == 1025)
+                is_plt = kind == 1026
+                is_branch = kind in (282, 283)
+                if not is_got and not is_plt and not is_branch:
+                    continue
+                name, undefined = symbol_name(symbol_table_index, info >> 32)
+                sample = {"symbol": name, "relocation_type": kind,
+                          "section_index": section_index, "offset": relocation_offset}
+                if is_got:
+                    totals["got"] += 1
+                    if len(totals["got_samples"]) < 8:
+                        totals["got_samples"].append(sample)
+                elif is_plt:
+                    totals["plt"] += 1
+                    if len(totals["plt_samples"]) < 8:
+                        totals["plt_samples"].append(sample)
+                elif undefined:
+                    totals["undefined_branch"] += 1
+                    if name.startswith("__compiletime_assert_"):
+                        totals["compiletime_assert_branch"] += 1
+                        if len(totals["compiletime_assert_samples"]) < 8:
+                            totals["compiletime_assert_samples"].append(sample)
+                    if len(totals["undefined_branch_samples"]) < 8:
+                        totals["undefined_branch_samples"].append(sample)
+            totals["relocations_scanned"] += count
+            if totals["truncated"]:
+                break
+    return totals
+
+
+def capture_aarch64_got_plt_owners(out: Path, staged: Path, output: Path,
+                                  rows: list[dict], postlink: bool) -> None:
+    """Bounded, diagnostic-only original GNU/MiniC owner relocation A/B.
+
+    Never change an ELF owner, original GNU Kbuild command, or linker verdict.
+    A surviving post-link vmlinux.o also includes original GNU assembly owners;
+    its undefined branch count must not be mistaken for a definitive PLT count.
+    """
+    folder = output / "aarch64-got-plt-diagnostic"
+    folder.mkdir(parents=True, exist_ok=True)
+    report: dict = {"schema": "minic-aarch64-got-plt-diagnostic-v1",
+                    "diagnostic_only_never_changes_link_or_verdict": True,
+                    "stage": "postlink" if postlink else "preoverlay",
+                    "variants": {}, "errors": []}
+    variants = (("postlink-vmlinux-o", out / "vmlinux.o", ["vmlinux.o"]),) if postlink else (
+        ("original-gnu", out, [row["object"] for row in rows]),
+        ("minic-candidate", staged, [row["object"] for row in rows]))
+    for label, root, names in variants:
+        aggregate: dict = {"owners_requested": len(names), "owners_scanned": 0,
+                           "owners_with_got": 0, "got_relocations": 0,
+                           "owners_with_plt": 0, "plt_relocations": 0,
+                           "undefined_branch_relocations": 0,
+                           "compiletime_assert_branch_relocations": 0,
+                           "relocation_records_scanned": 0,
+                           "truncated_owners": 0, "got_owner_samples": [],
+                           "plt_owner_samples": [],
+                           "compiletime_assert_owner_samples": [],
+                           "undefined_branch_owner_samples": []}
+        for name in names[:8192]:
+            path = root if postlink else root / name
+            try:
+                result = scan_aarch64_relocations(required(path))
+            except (OSError, ValueError, struct.error) as exc:
+                if len(report["errors"]) < 32:
+                    report["errors"].append(f"{label}:{name}:{exc}")
+                continue
+            aggregate["owners_scanned"] += 1
+            aggregate["got_relocations"] += result["got"]
+            aggregate["plt_relocations"] += result["plt"]
+            aggregate["undefined_branch_relocations"] += result["undefined_branch"]
+            aggregate["compiletime_assert_branch_relocations"] += (
+                result["compiletime_assert_branch"])
+            aggregate["relocation_records_scanned"] += result["relocations_scanned"]
+            aggregate["truncated_owners"] += int(result["truncated"])
+            if result["got"]:
+                aggregate["owners_with_got"] += 1
+                if len(aggregate["got_owner_samples"]) < 48:
+                    aggregate["got_owner_samples"].append(
+                        {"object": name, "count": result["got"],
+                         "samples": result["got_samples"]})
+            if result["plt"]:
+                aggregate["owners_with_plt"] += 1
+                if len(aggregate["plt_owner_samples"]) < 48:
+                    aggregate["plt_owner_samples"].append(
+                        {"object": name, "count": result["plt"],
+                         "samples": result["plt_samples"]})
+            if result["undefined_branch"] and len(
+                    aggregate["undefined_branch_owner_samples"]) < 48:
+                aggregate["undefined_branch_owner_samples"].append(
+                    {"object": name, "count": result["undefined_branch"],
+                     "compiletime_assert_count": result["compiletime_assert_branch"],
+                     "samples": result["undefined_branch_samples"]})
+            if result["compiletime_assert_branch"] and len(
+                    aggregate["compiletime_assert_owner_samples"]) < 48:
+                aggregate["compiletime_assert_owner_samples"].append(
+                    {"object": name,
+                     "compiletime_assert_count": result["compiletime_assert_branch"],
+                     "samples": result["compiletime_assert_samples"]})
+        if len(names) > 8192:
+            report["errors"].append(f"{label}:owner count exceeds 8192 diagnostic budget")
+        report["variants"][label] = aggregate
+    report["verdict"] = ("RELOCATION_DIAGNOSTIC_COMPLETE" if not report["errors"] and
+                         all(item["owners_requested"] == item["owners_scanned"] and
+                             not item["truncated_owners"]
+                             for item in report["variants"].values())
+                         else "RELOCATION_DIAGNOSTIC_PARTIAL")
+    (folder / ("postlink.json" if postlink else "preoverlay.json")).write_text(
+        json.dumps(report, sort_keys=True, indent=2) + "\n")
+    print(f"THREE_ISA_AARCH64_GOT_PLT_DIAGNOSTIC stage={report['stage']} "
+          f"verdict={report['verdict']} variants={len(report['variants'])} "
+          f"errors={len(report['errors'])}")
+
+
 def relink(work: Path, output: Path, rows: list[dict], results: list[dict],
            data: dict, gnu_receipt: dict) -> Path:
     out, source = work / "build", work / "linux-6.6.143"
@@ -534,6 +723,12 @@ def relink(work: Path, output: Path, rows: list[dict], results: list[dict],
     print(f"THREE_ISA_C_SECTION_DIAGNOSTIC target={data['target']} "
           f"verdict={sizes['verdict']} owners={sizes.get('owners_measured', 0)}/{len(rows)}")
     preserve_vdso_relocation_differential(work, pool, output, rows, data)
+    if data["target"] == "aarch64":
+        try:
+            capture_aarch64_got_plt_owners(out, pool, output, rows, False)
+        except Exception as exc:
+            (output / "aarch64-got-plt-preoverlay-error.txt").write_text(
+                str(exc)[:4096])
     # Mutate ONLY the disposable GNU Kbuild worktree after the original
     # GNU/QEMU receipt was produced and preserved.  Kbuild's original .cmd
     # dependency graph must rearchive every changed owner and relink.
@@ -553,6 +748,12 @@ def relink(work: Path, output: Path, rows: list[dict], results: list[dict],
         out, output / "link-layout", data["target"], data["machine"])
     print(f"THREE_ISA_LINK_LAYOUT_DIAGNOSTIC target={data['target']} "
           f"verdict={layout['verdict']} map={layout['gnu_ld_map']}")
+    if data["target"] == "aarch64":
+        try:
+            capture_aarch64_got_plt_owners(out, pool, output, rows, True)
+        except Exception as exc:
+            (output / "aarch64-got-plt-postlink-error.txt").write_text(
+                str(exc)[:4096])
     if linked.returncode:
         raise Rejected(f"original GNU Kbuild relink failed rc={linked.returncode}")
     # Re-enumerate *all* live original-Kbuild C owners after the link, not just
@@ -642,6 +843,65 @@ def self_test() -> None:
             raise AssertionError("unsafe GNU AS option escaped frozen-Kbuild gate")
     abi_row["gnu_as_flags"] = ["-mabi=lp64s"]
     with __import__("tempfile").TemporaryDirectory() as temp:
+        # AArch diagnostics classify real ELF relocation encodings, including
+        # an undefined branch, without GNU LD or changing an ELF object.
+        strtab = b"\0target_symbol\0__compiletime_assert_317\0"
+        tiny = bytearray(512)
+        tiny[:6] = b"\x7fELF\x02\x01"
+        struct.pack_into("<HH", tiny, 16, 1, 183)
+        struct.pack_into("<Q", tiny, 40, 256)
+        struct.pack_into("<HH", tiny, 58, 64, 4)
+        tiny[64:64 + len(strtab)] = strtab
+        struct.pack_into("<IxxH", tiny, 128 + 24, 1, 0)
+        struct.pack_into("<IxxH", tiny, 128 + 48,
+                         strtab.index(b"__compiletime_assert_317"), 0)
+        struct.pack_into("<QQq", tiny, 200, 0, (1 << 32) | 311, 0)
+        struct.pack_into("<QQq", tiny, 224, 4, (2 << 32) | 283, 0)
+        section_format = "<IIQQQQIIQQ"
+        struct.pack_into(section_format, tiny, 256 + 64, 0, 3, 0, 0,
+                         64, len(strtab), 0, 0, 1, 0)
+        struct.pack_into(section_format, tiny, 256 + 128, 0, 2, 0, 0,
+                         128, 72, 1, 0, 8, 24)
+        struct.pack_into(section_format, tiny, 256 + 192, 0, 4, 0, 0,
+                         200, 48, 2, 0, 8, 24)
+        aarch_elf = Path(temp) / "aarch-reloc.o"
+        aarch_elf.write_bytes(tiny)
+        relocation = scan_aarch64_relocations(aarch_elf)
+        assert relocation["got"] == 1 and relocation["undefined_branch"] == 1
+        assert relocation["compiletime_assert_branch"] == 1
+        assert relocation["got_samples"][0]["symbol"] == "target_symbol"
+        struct.pack_into("<Q", tiny, 208, (1 << 32) | 1026)
+        aarch_elf.write_bytes(tiny)
+        assert scan_aarch64_relocations(aarch_elf)["plt"] == 1
+        struct.pack_into("<Q", tiny, 208, (1 << 32) | 311)
+        gnu_dir = Path(temp) / "aarch-original-gnu"
+        mini_dir = Path(temp) / "aarch-minic-staged"
+        for folder in (gnu_dir, mini_dir):
+            (folder / "kernel").mkdir(parents=True)
+            (folder / "kernel/fixmap.o").write_bytes(tiny)
+        aarch_diag = Path(temp) / "aarch-got-plt-artifact"
+        rows_aarch = [{"object": "kernel/fixmap.o"}]
+        capture_aarch64_got_plt_owners(gnu_dir, mini_dir, aarch_diag,
+                                      rows_aarch, False)
+        summary = json.loads((aarch_diag / "aarch64-got-plt-diagnostic" /
+                              "preoverlay.json").read_text())
+        assert summary["verdict"] == "RELOCATION_DIAGNOSTIC_COMPLETE"
+        assert summary["variants"]["minic-candidate"]["got_relocations"] == 1
+        assert summary["variants"]["original-gnu"]["compiletime_assert_branch_relocations"] == 1
+        (gnu_dir / "vmlinux.o").write_bytes(tiny)
+        capture_aarch64_got_plt_owners(gnu_dir, mini_dir, aarch_diag,
+                                      rows_aarch, True)
+        summary = json.loads((aarch_diag / "aarch64-got-plt-diagnostic" /
+                              "postlink.json").read_text())
+        assert summary["variants"]["postlink-vmlinux-o"]["got_relocations"] == 1
+        aarch_elf.write_bytes(b"invalid")
+        try:
+            scan_aarch64_relocations(aarch_elf)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("AArch ELF relocation diagnostic accepted invalid input")
+        failures_checked += 4
         bad = Path(temp) / "not-elf.o"
         bad.write_bytes(b"x" * 64)
         try:

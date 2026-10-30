@@ -966,7 +966,7 @@ bool minic_riscv32_write_core_program(const char *path,
                                       MinicDiagnostic *diagnostic) {
     static const MinicProgramEmitConfig config = {
         rv32_visit_global, rv32_visit_function, rv32_prefix, rv32_between,
-        NULL, NULL, MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS, false, false
+        NULL, NULL, MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS, false
     };
     bool ok;
     Rv32ProgramContext context = { diagnostic };

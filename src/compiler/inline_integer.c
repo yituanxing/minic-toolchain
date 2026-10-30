@@ -11,6 +11,254 @@
 /* Compiler AST pass: integer constant specialization & AST clone creation.
  * Function bodies remain from the validated monolithic optimizer. */
 #define MINIC_INLINE_INTEGER_SPECIALIZATION_LIMIT 2048U
+/* A small, separately budgeted subset of TU-local non-inline functions needs
+ * caller constants to discharge GNU compile-time guards (e.g. BUILD_BUG_ON).
+ * Exhaustion is only a missed optimization, never an invalid C program. */
+#define MINIC_STATIC_INTEGER_SPECIALIZATION_LIMIT 64U
+
+static bool minic_static_integer_specialization_eligible(const MinicFunction *source) {
+    return source != NULL && source->is_defined && source->is_internal &&
+           !source->is_inline && !source->is_weak && !source->is_constructor &&
+           !source->force_emit && source->assembler_name == NULL &&
+           !source->is_variadic && source->alias_target == MINIC_FUNCTION_INVALID &&
+           source->local_count <= 256U;
+}
+
+static bool minic_static_integer_claim_block(
+    MinicBlockId block_id, MinicFunctionId owner,
+    MinicFunctionId *block_owners, MinicBlockId *queue,
+    size_t block_count, size_t *queue_count) {
+    if (block_id == MINIC_BLOCK_INVALID) {
+        return true;
+    }
+    if (block_id >= block_count || owner == MINIC_FUNCTION_INVALID) {
+        return false;
+    }
+    if (block_owners[block_id] == MINIC_FUNCTION_INVALID) {
+        if (*queue_count >= block_count) {
+            return false;
+        }
+        block_owners[block_id] = owner;
+        queue[(*queue_count)++] = block_id;
+    }
+    return block_owners[block_id] == owner;
+}
+
+/* A static function containing computed-goto label-address expressions must
+ * retain its original source-label aliases. A clone deliberately suppresses
+ * those aliases, so do not specialize such a source in the first place. */
+static unsigned char *minic_static_integer_blocked_sources(
+    const MinicC0Program *program) {
+    unsigned char *blocked;
+    unsigned char *inline_has_external_guard = NULL;
+    unsigned char *static_calls_guarded_inline = NULL;
+    MinicFunctionId *owners = NULL;
+    MinicFunctionId *block_owners = NULL;
+    MinicBlockId *block_queue = NULL;
+    size_t block_queue_count = 0U;
+    size_t block_cursor = 0U;
+    size_t index;
+
+    if (program == NULL) {
+        return NULL;
+    }
+    blocked = (unsigned char *)calloc(
+        program->function_count == 0U ? 1U : program->function_count,
+        sizeof(*blocked));
+    if (blocked == NULL) {
+        return NULL;
+    }
+    inline_has_external_guard = (unsigned char *)calloc(
+        program->function_count == 0U ? 1U : program->function_count, 1U);
+    static_calls_guarded_inline = (unsigned char *)calloc(
+        program->function_count == 0U ? 1U : program->function_count, 1U);
+    if (inline_has_external_guard == NULL ||
+        static_calls_guarded_inline == NULL) {
+        goto blocked_error;
+    }
+    if (program->expression_count != 0U) {
+        if (program->expression_count > SIZE_MAX / sizeof(*owners)) {
+            goto blocked_error;
+        }
+        owners = (MinicFunctionId *)malloc(program->expression_count * sizeof(*owners));
+        if (owners == NULL || !minic_perf_program_build_expression_source_owners(
+                program, program->function_count, owners, program->expression_count)) {
+            goto blocked_error;
+        }
+        for (index = 0U; index < program->expression_count; ++index) {
+            if (program->expressions[index].kind == MINIC_EXPRESSION_LABEL_ADDRESS) {
+                if (owners[index] < program->function_count) {
+                    blocked[owners[index]] = 1U;
+                } else {
+                    size_t object_index;
+                    bool relocated_label_owned = false;
+                    for (object_index = 0U;
+                         object_index < program->global_object_count;
+                         ++object_index) {
+                        const MinicGlobalObject *object =
+                            &program->global_objects[object_index];
+                        size_t reloc_index;
+                        for (reloc_index = 0U;
+                             reloc_index < object->relocation_count;
+                             ++reloc_index) {
+                            const MinicGlobalRelocation *reloc =
+                                &object->relocations[reloc_index];
+                            if (reloc->target_kind == MINIC_GLOBAL_RELOCATION_LABEL &&
+                                reloc->target_id ==
+                                    program->expressions[index].value.label_statement_id &&
+                                object->owner_function < program->function_count) {
+                                blocked[object->owner_function] = 1U;
+                                relocated_label_owned = true;
+                            }
+                        }
+                    }
+                    if (!relocated_label_owned) {
+                        goto blocked_error;
+                    }
+                }
+            }
+        }
+        /* Do not clone arbitrary static utility functions merely because an
+         * integer actual happens to be constant. Restrict this extension to
+         * the observable GNU case: a static source calls an inline helper
+         * whose body has an external diagnostic/guard path. There
+         * is no source-symbol spelling test and no target-specific rule. */
+        for (index = 0U; index < program->expression_count; ++index) {
+            const MinicExpression *call = &program->expressions[index];
+            MinicFunctionId callee_id;
+            if (call->kind != MINIC_EXPRESSION_CALL ||
+                owners[index] >= program->function_count) {
+                continue;
+            }
+            callee_id = call->value.call.function_id;
+            if (callee_id < program->function_count &&
+                !program->functions[callee_id].is_defined) {
+                inline_has_external_guard[owners[index]] = 1U;
+            }
+        }
+        for (index = 0U; index < program->expression_count; ++index) {
+            const MinicExpression *call = &program->expressions[index];
+            MinicFunctionId callee_id;
+            if (call->kind != MINIC_EXPRESSION_CALL ||
+                owners[index] >= program->function_count) {
+                continue;
+            }
+            callee_id = call->value.call.function_id;
+            if (callee_id < program->function_count &&
+                program->functions[callee_id].is_defined &&
+                program->functions[callee_id].is_internal &&
+                program->functions[callee_id].is_inline &&
+                inline_has_external_guard[callee_id]) {
+                static_calls_guarded_inline[owners[index]] = 1U;
+            }
+        }
+        for (index = 0U; index < program->function_count; ++index) {
+            if (!static_calls_guarded_inline[index]) {
+                blocked[index] = 1U;
+            }
+        }
+    }
+    if (program->block_count != 0U) {
+        if (program->block_count > SIZE_MAX / sizeof(*block_owners) ||
+            program->block_count > SIZE_MAX / sizeof(*block_queue)) {
+            goto blocked_error;
+        }
+        block_owners = (MinicFunctionId *)malloc(
+            program->block_count * sizeof(*block_owners));
+        block_queue = (MinicBlockId *)malloc(
+            program->block_count * sizeof(*block_queue));
+        if (block_owners == NULL || block_queue == NULL) {
+            goto blocked_error;
+        }
+        for (index = 0U; index < program->block_count; ++index) {
+            block_owners[index] = MINIC_FUNCTION_INVALID;
+        }
+        for (index = 0U; index < program->function_count; ++index) {
+            const MinicFunction *function = &program->functions[index];
+            if (function->is_defined && !function->is_integer_specialization &&
+                !minic_static_integer_claim_block(
+                    function->body_block, (MinicFunctionId)index,
+                    block_owners, block_queue, program->block_count,
+                    &block_queue_count)) {
+                goto blocked_error;
+            }
+        }
+        for (index = 0U; index < program->expression_count; ++index) {
+            const MinicExpression *expression = &program->expressions[index];
+            if (expression->kind == MINIC_EXPRESSION_STATEMENT ||
+                expression->kind == MINIC_EXPRESSION_COMPOUND_LITERAL) {
+                MinicBlockId nested_block =
+                    expression->kind == MINIC_EXPRESSION_STATEMENT
+                        ? expression->value.statement_expression.block
+                        : expression->value.compound_literal.initializer_block;
+                if (owners == NULL || owners[index] >= program->function_count ||
+                    !minic_static_integer_claim_block(
+                        nested_block,
+                        owners[index], block_owners, block_queue,
+                        program->block_count, &block_queue_count)) {
+                    goto blocked_error;
+                }
+            }
+        }
+        while (block_cursor < block_queue_count) {
+            MinicBlockId id = block_queue[block_cursor++];
+            const MinicBlock *block = &program->blocks[id];
+            MinicFunctionId owner = block_owners[id];
+            size_t statement_index;
+            for (statement_index = 0U; statement_index < block->statement_count;
+                 ++statement_index) {
+                const MinicStatement *statement = minic_c0_program_statement(
+                    program, block->statements[statement_index]);
+                if (statement == NULL) {
+                    goto blocked_error;
+                }
+                if (statement->kind == MINIC_STATEMENT_INLINE_ASM) {
+                    blocked[owner] = 1U;
+                }
+                if (statement->kind == MINIC_STATEMENT_IF ||
+                    statement->kind == MINIC_STATEMENT_WHILE ||
+                    statement->kind == MINIC_STATEMENT_SWITCH) {
+                    if (!minic_static_integer_claim_block(
+                            statement->then_block, owner, block_owners,
+                            block_queue, program->block_count, &block_queue_count) ||
+                        (statement->kind == MINIC_STATEMENT_IF &&
+                         !minic_static_integer_claim_block(
+                            statement->else_block, owner, block_owners,
+                            block_queue, program->block_count, &block_queue_count))) {
+                        goto blocked_error;
+                    }
+                }
+            }
+        }
+    }
+    for (index = 0U; index < program->global_object_count; ++index) {
+        const MinicGlobalObject *object = &program->global_objects[index];
+        size_t relocation_index;
+        for (relocation_index = 0U; relocation_index < object->relocation_count;
+             ++relocation_index) {
+            if (object->relocations[relocation_index].target_kind ==
+                    MINIC_GLOBAL_RELOCATION_LABEL &&
+                object->owner_function < program->function_count) {
+                blocked[object->owner_function] = 1U;
+            }
+        }
+    }
+    free(owners);
+    free(block_owners);
+    free(block_queue);
+    free(inline_has_external_guard);
+    free(static_calls_guarded_inline);
+    return blocked;
+
+blocked_error:
+    free(owners);
+    free(block_owners);
+    free(block_queue);
+    free(inline_has_external_guard);
+    free(static_calls_guarded_inline);
+    free(blocked);
+    return NULL;
+}
 
 static bool minic_inline_integer_specialization_matches(
     const MinicFunction *candidate,
@@ -51,7 +299,8 @@ bool minic_add_inline_integer_specialization(
         return false;
     }
     source = program->functions[source_id];
-    if (!source.is_defined || !source.is_internal || !source.is_inline ||
+    if (!source.is_defined || !source.is_internal ||
+        (!source.is_inline && !minic_static_integer_specialization_eligible(&source)) ||
         source.is_variadic || source.alias_target != MINIC_FUNCTION_INVALID) {
         return false;
     }
@@ -72,7 +321,7 @@ bool minic_add_inline_integer_specialization(
         !minic_c0_program_set_function_calling_convention(
             program, *specialized_id, source.calling_convention) ||
         !minic_c0_program_set_function_internal(program, *specialized_id, true) ||
-        !minic_c0_program_set_function_inline(program, *specialized_id, true) ||
+        !minic_c0_program_set_function_inline(program, *specialized_id, source.is_inline) ||
         (source.is_noreturn &&
          !minic_c0_program_set_function_noreturn(program, *specialized_id, true)) ||
         (source.section_name != NULL &&
@@ -83,6 +332,7 @@ bool minic_add_inline_integer_specialization(
     }
     specialized = &program->functions[*specialized_id];
     specialized->visibility = source.visibility;
+    specialized->explicit_alignment = source.explicit_alignment;
     specialized->specialization_source = source_id;
     specialized->is_integer_specialization = true;
     for (i = 0U; i < source.parameter_count; ++i) {
@@ -175,6 +425,9 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
     size_t expression_index;
     size_t original_function_count;
     size_t specialization_count = 0U;
+    size_t static_specialization_count = 0U;
+    unsigned char *static_blocked_sources = NULL;
+    bool static_sources_checked = false;
 
     if (program == NULL || target == NULL) {
         return false;
@@ -201,11 +454,29 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
             continue;
         }
         source = program->functions[source_id];
-        if (!source.is_defined || !source.is_internal || !source.is_inline ||
+        if (!source.is_defined || !source.is_internal ||
+            (!source.is_inline && !minic_static_integer_specialization_eligible(&source)) ||
             !source.is_referenced || source.is_variadic ||
             source.alias_target != MINIC_FUNCTION_INVALID || source.parameter_count == 0U ||
             source.parameter_count != expression->value.call.argument_count) {
             continue;
+        }
+        if (!source.is_inline) {
+            if (!static_sources_checked) {
+                static_blocked_sources = minic_static_integer_blocked_sources(program);
+                static_sources_checked = true;
+            }
+            if (static_blocked_sources == NULL) {
+                continue;
+            }
+            if (static_blocked_sources[source_id] == 0U) {
+                static_blocked_sources[source_id] =
+                    minic_inline_source_has_opaque_asm_reference(program, &source)
+                        ? 1U : 2U;
+            }
+            if (static_blocked_sources[source_id] == 1U) {
+                continue;
+            }
         }
         (void)memset(known, 0, sizeof(known));
         (void)memset(bits, 0, sizeof(bits));
@@ -238,6 +509,11 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
             }
         }
         if (specialized_id == MINIC_FUNCTION_INVALID) {
+            if (!source.is_inline &&
+                (static_specialization_count >= MINIC_STATIC_INTEGER_SPECIALIZATION_LIMIT ||
+                 specialization_count >= MINIC_INLINE_INTEGER_SPECIALIZATION_LIMIT)) {
+                continue;
+            }
             if (specialization_count >= MINIC_INLINE_INTEGER_SPECIALIZATION_LIMIT) {
                 /* FIXME(MC-043): this is an optimization budget, but the
                  * current caller treats exhaustion as a fatal TU error even
@@ -261,9 +537,13 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
                 return false;
             }
             specialization_count += 1U;
+            if (!source.is_inline) {
+                static_specialization_count += 1U;
+            }
         }
         program->expressions[expression_index].value.call.function_id = specialized_id;
     }
+    free(static_blocked_sources);
 
     {
         size_t caller_index;

@@ -1,0 +1,233 @@
+# RFC: Block-local Core value registers for the four MiniC machines
+
+Status: proposed for staged implementation; **no register allocator is implemented by this RFC**.
+
+## Why this is a Linux runtime blocker
+
+This design is based on the LoongArch64 Linux 6.6.143 GNU/MiniC strict
+differential at `d81261dd` (CI `41020466906`). The GNU C baseline reaches
+QEMU P0/P1 2/2; MiniC compiles 2723/2723 C owners with GNU AS, and GNU's
+partial link plus kallsyms1/2 links succeed. The final original GNU link
+fails with `R_LARCH_B26` overflow in `head.o` to `start_secondary` in `smp.o`.
+Do **not** change Kbuild's linker command, linker script, ELF relocation
+rules, GNU-owned assembly, C compiler owner list, or QEMU pass criteria.
+
+The C-owner executable sections total 16,887,804 bytes with GNU versus
+272,143,396 with MiniC: 16.1148x, or 255,255,592 excess bytes. The 20
+largest excess owners explain only 9.21% of that excess. Of the 2657
+GNU-nonempty owners, the MiniC/GNU ratios have p10=11.85x, p25=14.21x,
+median=16.63x, p75=19.66x, and p90=23.45x. This is a generic instruction
+selection and value-lifetime problem, not an EFI archive or individual
+source-file problem.
+
+Two real, identical preprocessed C inputs from the failed-run artifact:
+
+| Function | GNU machine instructions | MiniC machine instructions | MiniC ld/st | MiniC direct frame ld/st | MiniC `li.d` / `add.d` |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `arch/loongarch/kernel/vdso.i`: `vdso_mremap` | 6 | 135 | 68 | 48 | 10 / 6 |
+| `arch/loongarch/kernel/vdso.i`: `vvar_fault` | 66 | 1567 | 1014 | 840 | 190 / 172 |
+| `arch/loongarch/kernel/vdso.i`: `init_vdso` | 63 | 1558 | 1020 | 834 | 185 / 172 |
+| `arch/loongarch/vdso/vgetcpu.i`: `__vdso_getcpu` | 12 | 219 | 128 | not measured | 26 / 24 |
+
+The first sample alone spends 840/1567 instructions transporting
+temporary Core SSA values through compiler-owned frame slots; an additional
+362 `li.d`/`add.d` instructions mostly rebuild local addresses. These counts
+are assembly measurements, **not** predictions of how many instructions a
+register allocator will eliminate. For the second sample GNU also inlines
+`read_cpu_id` and `get_pcpu_data`, while MiniC emits direct calls; registers
+are not the whole performance gap.
+
+One MiniC parameter/local idiom currently emits:
+
+```asm
+st.d $a0, $sp, 0
+li.d $t0, 24
+add.d $t0, $sp, $t0
+st.d $t0, $sp, 8
+ld.d $t1, $sp, 8
+ld.d $t0, $sp, 0
+st.d $t0, $t1, 0
+```
+
+Here an SSA temporary is stored and immediately reloaded just to write the
+source parameter to a local object. A value-register plan can remove the
+**SSA** roundtrip; a later, alias-proven local promotion can potentially
+remove the **object** roundtrip. These are separate optimizations.
+
+## Existing contracts to reuse, not duplicate
+
+1. `src/core/core_ir_verify.c` resets `available_values` on **every block**;
+   it rejects every cross-block SSA read, including terminators. Value IDs
+   have function-wide identity but block-local lifetime. There is no Core
+   PHI or cross-edge SSA preservation requirement in this version.
+2. `src/core/value_uses.h` already visits the exact semantic uses of each
+   Core instruction and terminator. `src/target/common/core_spill_layout.c`
+   already counts uses and performs per-block last-use spill-slot reuse.
+   Reuse these visitor semantics and, where practical, the same count-analysis
+   workspace; do not invent another target-local operand scanner.
+3. `src/target/common/direct_machine_dispatch.h` classifies each instruction,
+   emits it through a machine callback, then unconditionally stores its GP
+   result to the once-planned `MinicLP64FramePlan` SSA slot. LoongArch's
+   integer/memory/residual emitters reload operands from those slots.
+4. `src/target/common/lp64_frame.c` owns value/object frame geometry and
+   currently combines SSA slot-reuse with object storage intervals and wide
+   value tails. A register-only value must not silently reacquire an old
+   `value_id * 8` fallback. Existing spill slots remain the correctness
+   fallback for every initially unsupported value.
+5. `src/target/loongarch64/frame_emit.c` owns immediate ranges and dynamic
+   `$s0` frame addressing; the new generic planner must never emit target
+   opcodes or choose its own physical frame offsets.
+
+## Proposed ownership and interfaces
+
+Add one target-agnostic planning implementation, tentatively
+`src/target/common/core_block_register_plan.{h,c}`. It consumes a **verified**
+`MinicCoreFunction`, a `MinicCoreBlock`, and a target-supplied register
+resource/ABI policy; returns immutable per-instruction value-location and
+clobber/save decisions. It contains no architecture-name switches,
+instruction mnemonics, psABI register numbers, frontend AST nodes, or
+GNU-assembler strings.
+
+Suggested conceptual interface (names deliberately provisional):
+
+```c
+typedef struct MinicCoreRegisterResourcePolicy {
+    unsigned gp_count;   /* GP pool indexes, not physical target numbers */
+    unsigned fp_count;   /* zero initially: retain old FP spill path */
+    bool (*instruction_clobbers)(const MinicCoreFunction *,
+        const MinicCoreInstruction *, void *target_abi,
+        uint64_t *gp_clobbers, uint64_t *fp_clobbers,
+        bool *unknown_effects);
+    void *target_abi;
+} MinicCoreRegisterResourcePolicy;
+
+/* Each use and result selects register pool index or existing frame slot.
+ * Before each instruction: a bounded spill/reload/move list. After it:
+ * retire dead values and record the result. The target encodes all moves. */
+bool minic_core_block_register_plan_build(
+    const MinicCoreFunction *, const MinicCoreBlock *,
+    const MinicCoreRegisterResourcePolicy *,
+    MinicCoreBlockRegisterPlan *);
+```
+
+The plan should represent **all** operand occurrences, not only distinct
+ValueIds: `v+v` is two uses of one value. One instruction's inputs must stay
+available until its final consuming machine operation; do not overwrite a
+live input with the output prematurely. Use last-use counts for release and
+choose a deterministic victim when the pool is full. Attach the canonical
+frame offset from `MinicLP64FramePlan` (or another target's approved frame
+plan) to every spilled value; size/stack alignment are never inferred from
+SSA IDs. An instruction shape or ABI type outside the proven subset simply
+gets the preexisting stack-only behavior.
+
+The register **policy** lives with the machine:
+
+- LoongArch LP64D chooses hardware registers and call/inline-asm clobbers,
+  initially a small caller-safe or callee-saved pool with an explicit save
+  contract. `$s0` remains reserved for dynamic-frame anchor; currently-used
+  `$t0`-`$t8` are **not** an assumed free pool. The target must prove scratch
+  registers do not overlap planned residents.
+- AArch64, RV32/RV64 and x86-64 supply their own hardware register pools,
+  call ABI preservation, scratch exclusions, and return/argument placement.
+  They share the plan algorithm, not a fabricated shared ABI or code emitter.
+- For each physical callee-saved register actually used, allocate a bounded
+  prologue/epilogue save region via the existing frame owner. Include
+  dynamic `alloca`, stack realignment, incoming stack args, varargs, sret,
+  and all return edges in the save/restore verification.
+
+The Common dispatcher and ISA callbacks need a location-aware emission
+contract, not textual assembly rewrites. A target callback should ask for
+the planned location of operand `v`, request a temporary when necessary, and
+report where the result resides. The existing unconditional `store_gp`
+callback becomes **conditional**; its old implementation stays only while
+unmigrated instruction families use stack fallback.
+For ordinary arithmetic, comparisons, pointer math, and scalar loads/stores,
+the native selector must accept the **actual input and destination physical
+registers** from the plan. Merely moving every `$t0` result into `$s1` and
+back before each following operation would exchange two memory instructions
+for two register moves and **would not** solve the code-size problem. The
+backend's existing fixed-scratch and destructive-operand constraints must be
+made explicit before selection; true fixed-register ABI operations may still
+need moves.
+An SSA result with no remaining semantic uses needs no artificial spill
+writeback (but its instruction's actual observable effects still execute).
+For small functions, include prologue/epilogue callee-save costs in the
+allocation choice: saving a new register to avoid one load can increase code.
+
+### Barriers, aliasing and correct-by-construction fallback
+
+- Initially support only integer/pointer values fitting a single GPR.
+  Float, int128, long double, aggregates, unhandled GNU asm forms, and exotic
+  dynamic ABI carriers continue through the existing frame path.
+- Ordinary `volatile` and atomic accesses remain executable memory effects
+  at their original Core instruction order. Cache **SSA results**, never
+  assume an externally observable lvalue's memory is unchanged. Calls may
+  alias memory objects but cannot mutate immutable Core SSA values.
+- On ordinary calls, use only ABI-proven preserved locations; spill any
+  live value in a target-clobbered physical register before the call and
+  reload on first later use. For an unclassified call ABI, conservatively
+  spill and invalidate the pool.
+- On opaque GNU inline assembly, structured assembly of unknown physical
+  clobbers, compiler memory barrier, asm-goto, or any uncertainty, flush
+  all live planned values to approved spill slots and invalidate cache
+  mappings. Machine asm outputs must be captured with exact constraints.
+  Never speculate over an unmodeled asm template.
+- At **each** CFG block boundary invalidate all mappings. The verifier's
+  block-local use contract makes this safe without PHI insertion. Terminator
+  inputs must be read before invalidation and all branch edges preserved.
+- If plan construction cannot prove physical register availability,
+  resource budgets, exact clobbers, frame bounds, or legal width, reject
+  optimization for that block and use the existing instruction-by-instruction
+  spill path. It is not an acceptance failure or a GNU C fallback.
+
+## Staged changes, obsolete paths, and gates
+
+1. **Read-only planner and tests.** Extract/reuse the current
+   `value_uses.h`/spill-layout count walk once; assert def/use, last-use,
+   duplicate operand, two-address/destructive instruction, terminator,
+   barrier, and deterministic resource pressure behavior. Instrument counts:
+   eligible scalar values, spills, reloads, flushes, and callee saves.
+   No emitted machine bytes change yet.
+2. **One complete target integration, not competing algorithms.** Integrate
+   the plan into `direct_machine_dispatch.h` and the LoongArch native
+   `block_emit`, `integer_emit`, `memory_emit`, `residual_emit`, `call_emit`,
+   `fp_emit` as applicable. Route every participating family through a
+   single location resolver. Keep untouched families on the **existing**
+   spill path, and ensure fixed scratch/clobber contracts for all native
+   emitters. Adapt `lp64_frame.{h,c}` to save only used callee registers.
+3. **Migrate AArch64, RV32/64, x86-64** by providing target-specific
+   policies and emitter transport. Do not copy the block allocator into
+   each architecture. The Core IR and frontend never branch on target name.
+4. **Delete superseded paths only after verification.** Once all cases
+   route through location-aware transport, remove the unconditional GP
+   writeback in Common dispatch and obsolete target-local `ld/st SSA slot`
+   branches. Keep `core_spill_layout`, per-target ABI frame logic, and
+   spill emission for proven fallback; they are not dead code.
+5. **Separate future Core memory promotion.** Only then analyze
+   non-address-escaping automatic locals and add semantic local scalar
+   forwarding/promotion in the Core pipeline. It must respect volatile,
+   atomic, `asm` memory clobbers, pointer alias/escape and CFG joins;
+   this is **not** a target-specific register-allocation shortcut.
+
+Required tests at every integrating step:
+
+- Core unit: one-use, repeated-use, many simultaneous values, high register
+  pressure/eviction, dead result, callee-save profitability, signed/unsigned
+  widths, calls, duplicate operand,
+  different terminators, verifier-forbidden cross-block value, zero blocks.
+- Four-ISA standalone runtime: arithmetic chains, fan-out, loops, branches,
+  nested direct/indirect calls, varargs, alloca, packed/unaligned accesses,
+  volatile/atomic, structured/opaque asm, asm-goto, computed goto,
+  long double/int128, aggregates, and sret; compare GNU baseline output.
+- Linux three-ISA exact-head strict differential; MiniC alone compiles all
+  frozen C `.i`, GNU AS/LD links unchanged objects, and original QEMU P0/P1
+  executes. An assembly-level unit PASS does **not** imply runtime PASS.
+
+Quantitative acceptance: report code size for the same 2723 C owners and
+instruction families (real `vdso.i`, `vgetcpu.i`, and at least one large
+ordinary C owner) before/after, plus exact GNU link result and `head.o`
+to `start_secondary` relocation span. The first major phase should target
+at least **50% reduction** from the present 272 MB text as a *goal*, not a
+prediction. Merely shortening immediate encoding or individual record copies
+cannot solve a 16x distributed expansion. Even a total below 136 MB is not
+proof of valid per-relocation range: inspect the actual GNU section layout.

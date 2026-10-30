@@ -37,6 +37,7 @@ static bool x86_emit_function(FILE *out, const MinicC0Program *program,
     const char *name = minic_c0_function_symbol_name(declaration);
     size_t block_index;
     MinicCoreBlockWalk walk = {0};
+    bool *reachable = NULL;
     bool success = false;
     {
         const bool named = name != NULL && name[0] != '\0';
@@ -63,6 +64,16 @@ static bool x86_emit_function(FILE *out, const MinicC0Program *program,
                       "x86-64 cannot allocate or verify Core function frame");
             return false;
         }
+    }
+    /* Match the shared Core CFG visibility contract: source labels remain
+     * roots for computed goto and asm-goto, while dead lexical arms must not
+     * contribute machine instructions or unresolved linker references. */
+    reachable = (bool *)calloc(fn->block_count == 0U ? 1U : fn->block_count,
+                               sizeof(*reachable));
+    if (reachable == NULL || !minic_core_function_mark_reachable_blocks(
+            fn, reachable, fn->block_count)) {
+        x86_error(diag, path, "x86-64 cannot discover reachable Core blocks");
+        goto done;
     }
     if (declaration->section_name != NULL) {
         if (fprintf(out, ".section %s,\"ax\",@progbits\n", declaration->section_name) < 0)
@@ -135,7 +146,7 @@ static bool x86_emit_function(FILE *out, const MinicC0Program *program,
     }
     if (fprintf(out, "  jmp .Lmini_x86_f%zu_b%u\n",
                 function_id, (unsigned int)fn->entry_block) < 0) goto done;
-    minic_core_block_walk_begin(&walk, fn, NULL);
+    minic_core_block_walk_begin(&walk, fn, reachable);
     {
     const MinicCoreBlock *block;
     while (minic_core_block_walk_next(&walk, &block_index, &block)) {
@@ -227,6 +238,7 @@ static bool x86_emit_function(FILE *out, const MinicC0Program *program,
                      ".p2align 3\n  .quad %s\n", name) < 0) goto done;
     success = true;
 done:
+    free(reachable);
     minic_x86_64_frame_destroy(&frame);
     return success;
 }
@@ -341,7 +353,7 @@ bool minic_x86_64_write_c0_program_with_core_functions(
         x86_visit_global, x86_visit_function, NULL,
         x86_between,
         ".section .note.GNU-stack,\"\",@progbits\n", NULL,
-        MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS, false, true
+        MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS, false
     };
     bool success;
     const MinicX86VisitContext visits = { diagnostic, path };

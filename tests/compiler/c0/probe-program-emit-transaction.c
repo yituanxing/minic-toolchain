@@ -77,6 +77,13 @@ int main(int argc, char **argv) {
     MinicGlobalObject object = {0};
     MinicFunction declaration = {0};
     MinicCoreFunction ir = {0};
+    /* Transaction callbacks use six global instructions for fact coverage,
+     * but executable Core must still have a valid, reachable entry block. */
+    MinicCoreBlock entry_block = {
+        .terminator = { .kind = MINIC_CORE_TERMINATOR_RETURN },
+        .has_terminator = true,
+        .source_label_id = SIZE_MAX
+    };
     MinicCoreInstruction instructions[6] = {
         { .kind = MINIC_CORE_INSTRUCTION_CALL, .value.call = { .argument_count = 7U } },
         { .kind = MINIC_CORE_INSTRUCTION_INDIRECT_CALL, .value.indirect_call = { .argument_count = 3U } },
@@ -103,6 +110,9 @@ int main(int argc, char **argv) {
     instructions[5].value.call_frame_address.kind = MINIC_CORE_CALL_FRAME_ADDRESS_RETURN;
     ir.instructions = instructions;
     ir.instruction_count = sizeof(instructions) / sizeof(instructions[0]);
+    ir.blocks = &entry_block;
+    ir.block_count = 1U;
+    ir.entry_block = 0U;
     program.global_objects = &object;
     program.global_object_count = 1U;
     target.data_layout = &(MinicDataLayout){0};

@@ -15,18 +15,22 @@ for target in riscv32 riscv64 x86_64 aarch64 loongarch64; do
     "$MINIC_CC" --target="$target-linux" -S "$work/host.i" -o "$work/$target.host.s"
     test -s "$work/$target.host.s"
 done
-for target in riscv32 riscv64 aarch64 loongarch64; do
+for target in riscv32 riscv64 x86_64 aarch64 loongarch64; do
     "$MINIC_CC" --target="$target-linux" -S "$work/source.i" -o "$work/$target.s"
     test -s "$work/$target.s"
 done
-for target in aarch64 loongarch64; do
+for target in x86_64 aarch64 loongarch64; do
     # LLVM/GNU-style source label aliases plus target-native block addresses
     # are both observable here, including labels reached by static relocation.
     test "$(grep -Ec '^\.Luser_[0-9]+:' "$work/$target.s")" -ge 5
     # Check *every* source relocation and every native block label target.
     # A Linux __jump_table site may be the only executable reference to its
     # patched destination; a missing definition must never pass -S-only.
-    if [ "$target" = aarch64 ]; then prefix=arm; else prefix=loong; fi
+    case "$target" in
+        x86_64) prefix=x86 ;;
+        aarch64) prefix=arm ;;
+        loongarch64) prefix=loong ;;
+    esac
     references=$(grep -Eo "\\.L(user_[0-9]+|mini_${prefix}_f[0-9]+_b[0-9]+)" \
         "$work/$target.s" | sort -u)
     for label in $references; do
@@ -39,15 +43,23 @@ done
 
 cc -O0 -fno-pie -no-pie -x c "$host" -o "$work/gnu"
 cc -fno-pie -no-pie -x assembler "$work/x86_64.host.s" -o "$work/minic"
+cc -O0 -fno-pie -no-pie -x c "$source" -o "$work/source.gnu"
+cc -fno-pie -no-pie -x assembler "$work/x86_64.s" -o "$work/source.minic"
 set +e
 "$work/gnu"
 gnu_rc=$?
 "$work/minic"
 minic_rc=$?
+"$work/source.gnu"
+gnu_source_rc=$?
+"$work/source.minic"
+minic_source_rc=$?
 set -e
-if [ "$gnu_rc" -ne 42 ] || [ "$minic_rc" -ne 42 ]; then
-    echo "DIRECT_LP64_SOURCE_LABEL_DIFF=FAIL GNU=$gnu_rc MiniC=$minic_rc" >&2
+if [ "$gnu_rc" -ne 42 ] || [ "$minic_rc" -ne 42 ] ||
+   [ "$gnu_source_rc" -ne 42 ] || [ "$minic_source_rc" -ne 42 ]; then
+    echo "DIRECT_LP64_SOURCE_LABEL_DIFF=FAIL GNU=$gnu_rc MiniC=$minic_rc GNU_source=$gnu_source_rc MiniC_source=$minic_source_rc" >&2
     exit 1
 fi
-printf 'DIRECT_LP64_SOURCE_LABEL_DIFF=PASS five_isa_S=5 GNU_x86_runtime=%s MiniC_x86_runtime=%s AArch64_s_bytes=%s LoongArch64_s_bytes=%s\n' \
-  "$gnu_rc" "$minic_rc" "$(wc -c <"$work/aarch64.s")" "$(wc -c <"$work/loongarch64.s")"
+printf 'DIRECT_LP64_SOURCE_LABEL_DIFF=PASS five_isa_S=5 GNU_x86_runtime=%s MiniC_x86_runtime=%s GNU_x86_labels=%s MiniC_x86_labels=%s AArch64_s_bytes=%s LoongArch64_s_bytes=%s\n' \
+  "$gnu_rc" "$minic_rc" "$gnu_source_rc" "$minic_source_rc" \
+  "$(wc -c <"$work/aarch64.s")" "$(wc -c <"$work/loongarch64.s")"

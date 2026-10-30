@@ -3582,9 +3582,19 @@ jobs:
           root="$ev/p1-identical-image-12"
           mkdir -p "$root/trials"
           image_sha=$(sha256sum "$image" | cut -d' ' -f1)
+          # The preceding full_all_verified trial already proved this exact
+          # Image under its non-overlapping large-Image DTB when >128MiB.
+          # A fresh Actions shell loses those three loader env variables;
+          # restore that SAME approved map for all twelve new QEMU processes.
+          # Smaller Images keep the original 512MiB/-initrd GNU baseline.
+          source tools/ci/linux-runtime-rv64-repeat-loader-v1.sh
+          minic_rv64_repeat_loader_selftest
+          minic_rv64_repeat_loader_select "$ev" "$image" "$initramfs" "$image_sha"
           printf 'attempt\timage_sha256\tqemu_exit\tsyscalls\tverdict\n' > "$root/repeats.tsv"
-          printf 'head=%s\nimage_sha256=%s\ncompiler_profile=native-current-head\n' \
-            "$MINIC_EXPECTED_HEAD_SHA" "$image_sha" > "$root/identity.txt"
+          printf 'head=%s\nimage_sha256=%s\ncompiler_profile=native-current-head\nloader_memory=%s\nloader_initrd=%s\n' \
+            "$MINIC_EXPECTED_HEAD_SHA" "$image_sha" \
+            "${LINUX_RUNTIME_QEMU_MEMORY:-512M}" "${LINUX_RUNTIME_INITRD_LOAD_ADDR:-default}" \
+            > "$root/identity.txt"
           for attempt in $(seq 1 12); do
             work="$root/trials/$attempt"
             mkdir -p "$work"

@@ -149,7 +149,7 @@ bool minic_multi_direct_write_program(
             direct_visit_global, direct_visit_function,
             NULL, direct_between,
             config->gnu_stack_note, NULL,
-            MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS, census, false
+            MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS, census
         };
         success = minic_program_emit_write(
             path, program, target, core_functions, core_function_count,
