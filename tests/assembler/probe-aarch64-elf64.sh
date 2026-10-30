@@ -2517,6 +2517,8 @@ echo 'MINIAS_A64_SPACED_RELOC_MACRO=PASS GNU_ADRP_machine_2x_RELA_addend_and_opt
 # Actual Linux AES frame offset: one target-level memory operand
 # normalizer must accept an existing absolute .set inside every proven
 # A64 integer/FP/paired address family, not solely STP.
+# An absolute .set may select the signed-9-bit unscaled S/D/Q form when its
+# evaluated offset is unaligned or negative; GNU explicitly permits this.
 cat > "$work/a64-common-set-memory.s" <<'A64_SET_MEMORY'
 .text
 .set .Lframe_local_offset, 80
@@ -2525,6 +2527,8 @@ ldr x10,[sp,#.Lframe_local_offset]
 str x10,[sp,#.Lframe_extra]
 ldr s2,[x3,#.Lframe_extra]
 str q4,[sp,#.Lframe_extra*2]
+ldr s0,[sp,#.Lframe_extra+1]
+str q0,[sp,#-.Lframe_extra]
 stp x29,x30,[sp,#-.Lframe_local_offset-.Lframe_extra]!
 ldp x29,x30,[sp],#.Lframe_local_offset+.Lframe_extra
 ldr x12,[x3,#.Lframe_local_offset+.Lframe_extra]
@@ -2535,15 +2539,15 @@ A64_SET_MEMORY
 "$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-setmem-gnu.o" "$work/a64-setmem-gnu.bin"
 cmp "$work/a64-setmem-mini.bin" "$work/a64-setmem-gnu.bin"
 for invalid in 'ldr x0,[sp,#.Lframe_local_offset*1000]' \
-               'ldr s0,[sp,#.Lframe_extra+1]' \
-               'str q0,[sp,#-.Lframe_extra]' \
+               'ldr s0,[sp,#.Lframe_extra+16384]' \
+               'str q0,[sp,#-.Lframe_extra*20]' \
                'ldp x29,x30,[sp],#.Lframe_local_offset*100'; do
  printf '.text\n.set .Lframe_local_offset,80\n.set .Lframe_extra,16\n%s\n' "$invalid" > "$work/a64-setmem-invalid.s"
  if "$MINIAS" --target=aarch64 -o "$work/a64-setmem-invalid.o" "$work/a64-setmem-invalid.s" >/dev/null 2>&1; then
   echo "invalid A64 absolute memory offset accepted: $invalid" >&2;exit 1
  fi
 done
-echo 'MINIAS_A64_COMMON_SET_MEMORY=PASS GNU_7_words_4_strict_negative'
+echo 'MINIAS_A64_COMMON_SET_MEMORY=PASS GNU_9_words_4_strict_negative'
 
 # Linux MOVW macro values can occupy the unsigned top half of 64 bits.
 # Compare the actual GNU A64 machine words, not merely assembler success.
