@@ -9,6 +9,7 @@
 
 #define MINIAS_RISCV_OPTION_PIC 1U
 #define MINIAS_RISCV_OPTION_NO_RVC 2U
+#define MINIAS_RISCV_OPTION_NO_RELAX 4U
 
 /* LI is a parsed, immutable target instruction plan. The MCInst pointer is
  * stable across stmt-vector relocation and layout retries. MCInst owns the
@@ -117,5 +118,9 @@ bool minias_riscv_resolve_branch_plan(struct MiniAs *as,
 #define MINIAS_R_RISCV_SET8 54U
 #define MINIAS_R_RISCV_SET16 55U
 #define MINIAS_R_RISCV_SET32 56U
+/* psABI variable-width DWARF/data relocation pair. SET must precede SUB
+ * at the same section offset; its width is the retained ULEB fragment. */
+#define MINIAS_R_RISCV_SET_ULEB128 60U
+#define MINIAS_R_RISCV_SUB_ULEB128 61U
 
 #endif

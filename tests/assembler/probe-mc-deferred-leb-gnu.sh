@@ -7,10 +7,13 @@ ARCH="${ARCH:-x86_64}"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 case "$ARCH" in
-  x86_64) target=x86_64; gas=as; copy=objcopy;;
-  riscv) target=riscv; gas=riscv64-linux-gnu-as; copy=riscv64-linux-gnu-objcopy;;
-  aarch64) target=aarch64; gas=aarch64-linux-gnu-as; copy=aarch64-linux-gnu-objcopy;;
-  loongarch64) target=loongarch64; gas=loongarch64-linux-gnu-as; copy=loongarch64-linux-gnu-objcopy;;
+  x86_64) target=x86_64; gas=as; copy=objcopy; gas_flags=();;
+  riscv) target=riscv; gas=riscv64-linux-gnu-as; copy=riscv64-linux-gnu-objcopy
+    gas_flags=(-mrelax);;
+  aarch64) target=aarch64; gas=aarch64-linux-gnu-as; copy=aarch64-linux-gnu-objcopy
+    gas_flags=();;
+  loongarch64) target=loongarch64; gas=loongarch64-linux-gnu-as; copy=loongarch64-linux-gnu-objcopy
+    gas_flags=(-mrelax);;
   *) echo "unsupported ARCH=$ARCH" >&2; exit 2;;
 esac
 
@@ -27,7 +30,17 @@ leb_start:
   .uleb128 2f-1b
   .space 127
 2:
-  .sleb128 2b-3f
+SRC
+# GNU RISC-V GAS (including binutils 2.42) rejects nonconstant SLEB, and
+# some releases crash in riscv_insert_uleb128_fixes after that diagnostic.
+# Keep this an explicit target contract, rather than treating GNU failure
+# as successful differential evidence. Other targets retain forward SLEB.
+if [[ "$ARCH" == riscv ]]; then
+    printf '  .sleb128 -65\n' >>"$work/leb.s"
+else
+    printf '  .sleb128 2b-3f\n' >>"$work/leb.s"
+fi
+cat >>"$work/leb.s" <<'SRC'
   .space 64
 3:
   .sleb128 -65
@@ -36,11 +49,48 @@ leb_start:
 SRC
 MINIAS_TRACE_RELAYOUT=1 "$MINIAS" --target="$target" -o "$work/mini.o" \
   "$work/leb.s" 2>"$work/trace"
-"$gas" -o "$work/gnu.o" "$work/leb.s"
+# Use the GNU target's default link-relaxation behavior for symbolic ULEBs;
+# their linker-visible pair may zero the raw data while preserving the
+# encoded width. A separate constant-only source below isolates Common
+# byte encoding under explicit -mno-relax without a configuration mismatch.
+"$gas" "${gas_flags[@]}" -o "$work/gnu.o" "$work/leb.s"
 grep -Eq '^minias-mcexpr-variable:typed=[1-9][0-9]* fallback=0$' "$work/trace"
 "$copy" -j .data -O binary "$work/mini.o" "$work/mini.bin"
 "$copy" -j .data -O binary "$work/gnu.o" "$work/gnu.bin"
 cmp "$work/mini.bin" "$work/gnu.bin"
+
+# RISC-V preserves ULEB SET/SUB pairs for link-time relaxation; LoongArch
+# does so only if source anchors straddle a linker-relaxable fragment. Check
+# complete recorded offsets/kinds/section-symbol addends, not just raw bytes.
+if [[ "$ARCH" == riscv || "$ARCH" == loongarch64 ]]; then
+  readelf -rW "$work/mini.o" >"$work/mini.rela"
+  readelf -rW "$work/gnu.o" >"$work/gnu.rela"
+  awk '/R_(RISCV_(SET|SUB)_ULEB128|LARCH_(ADD|SUB)_ULEB128)/ { print $1, $3, $5, $6, $7 }' \
+     "$work/mini.rela" >"$work/mini.uleb-rela"
+  awk '/R_(RISCV_(SET|SUB)_ULEB128|LARCH_(ADD|SUB)_ULEB128)/ { print $1, $3, $5, $6, $7 }' \
+     "$work/gnu.rela" >"$work/gnu.uleb-rela"
+  cmp "$work/mini.uleb-rela" "$work/gnu.uleb-rela"
+fi
+
+cat >"$work/constants.s" <<'SRC'
+.data
+  .uleb128 0
+  .uleb128 127
+  .uleb128 128
+  .uleb128 16384
+  .sleb128 -65
+  .sleb128 -1
+  .sleb128 63
+SRC
+"$MINIAS" --target="$target" -o "$work/mini-const.o" "$work/constants.s"
+if [[ "$ARCH" == riscv || "$ARCH" == loongarch64 ]]; then
+  "$gas" -mno-relax -o "$work/gnu-const.o" "$work/constants.s"
+else
+  "$gas" -o "$work/gnu-const.o" "$work/constants.s"
+fi
+"$copy" -j .data -O binary "$work/mini-const.o" "$work/mini-const.bin"
+"$copy" -j .data -O binary "$work/gnu-const.o" "$work/gnu-const.bin"
+cmp "$work/mini-const.bin" "$work/gnu-const.bin"
 
 # Invalid cross-section and undefined differences cannot silently collapse
 # to numeric addresses (and must not produce an output object).
@@ -60,4 +110,4 @@ for invalid in undefined cross_section negative_unsigned; do
   grep -q 'unresolved-typed-leb-data' "$work/invalid.err"
   test ! -e "$work/invalid.o"
 done
-echo "MINIAS_DEFERRED_LEB_GNU=PASS arch=$ARCH typed_symbols=1 fixedpoint=1 mutable_set=1 GNU_exact=1 invalid_rejected=3"
+echo "MINIAS_DEFERRED_LEB_GNU=PASS arch=$ARCH typed_symbols=1 fixedpoint=1 mutable_set=1 GNU_default_relax_ELF_exact=1 constant_norelax_exact=1 invalid_rejected=3"

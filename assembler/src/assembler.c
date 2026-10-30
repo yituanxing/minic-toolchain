@@ -103,7 +103,14 @@ static bool resolve_symbol_alias_edge(MiniAs *as, size_t alias_id) {
         alias->alias_pending = false;
         return true;
     }
-    if (alias->alias_addend >= 0) {
+    /* SHN_ABS aliases are integer expressions, not section offsets.
+     * GNU GAS keeps their full 64-bit two's-complement bit pattern: a
+     * forward `zero-2` is -2 and even UINT64_MAX+1 wraps to zero.  The
+     * nonnegative address/overflow rule below applies only to symbols
+     * owned by real sections, where an underflow cannot be an address. */
+    if (target->section == MINIAS_SECTION_ABS) {
+        value += (uint64_t)alias->alias_addend;
+    } else if (alias->alias_addend >= 0) {
         uint64_t addend = (uint64_t)alias->alias_addend;
         if (addend > UINT64_MAX - value) {
             minias_set_error(as, "set-value-overflow:%s:line=%zu",
@@ -704,7 +711,9 @@ const MiniAsSymbol *minias_symbol_ref_lookup(const MiniAs *as,
 /* Keep staged MCData Fixup widths identical to the committed Section
  * contract. LoongArch uses 8-bit and 24-bit ADD/SUB pairs as well as
  * 16/32/64-bit relocations; staging must not reject a legal typed Fixup. */
-static bool minias_fixup_field_width(unsigned width) {
+static bool minias_fixup_field_width(MiniAsFixupKind kind,unsigned width) {
+    if(kind==MINIAS_FIXUP_LEB_ADD || kind==MINIAS_FIXUP_LEB_SUB ||
+       kind==MINIAS_FIXUP_LEB_SET)return width==0U;
     return width==1U || width==2U || width==3U ||
            width==4U || width==8U;
 }
@@ -717,7 +726,8 @@ static bool minias_record_fixup(MiniAs *as,
                       const char *symbol_name,
                       size_t existing_symbol_index,
                       int64_t addend,
-                      MiniAsFixupOrigin origin,bool absolute_zero_symbol) {
+                      MiniAsFixupOrigin origin,bool absolute_zero_symbol,
+                      size_t retained_fragment_id) {
     MiniAsSymbol *symbol=NULL;
     MiniAsFixup *fixup;
     size_t symbol_index;
@@ -726,12 +736,17 @@ static bool minias_record_fixup(MiniAs *as,
     if (origin == MINIAS_FIXUP_ORIGIN_FRAGMENT) {
         const MiniAsStmt *owner;
         uint64_t delta;
-        if (!as->emitting_fragment ||
-            as->emitting_fragment_id >= as->stmt_count) {
+        if ((as->emitting_fragment && retained_fragment_id!=SIZE_MAX) ||
+            (!as->emitting_fragment && retained_fragment_id==SIZE_MAX)) {
             minias_set_error(as, "fixup-without-fragment-owner");
             return false;
         }
-        fragment_id = as->emitting_fragment_id;
+        fragment_id = retained_fragment_id!=SIZE_MAX ? retained_fragment_id :
+                     as->emitting_fragment_id;
+        if(fragment_id>=as->stmt_count) {
+            minias_set_error(as,"invalid-retained-fixup-fragment-id");
+            return false;
+        }
         owner = &as->stmts[fragment_id];
         if (owner->section != section || offset < owner->offset) {
             minias_set_error(as, "fixup-fragment-section-mismatch:line=%zu",
@@ -756,7 +771,7 @@ static bool minias_record_fixup(MiniAs *as,
      * must decide whether this field needs an ELF relocation at all. */
     if (section < 0 || (size_t)section >= as->section_count ||
         as->sections[(size_t)section].type==MINIAS_SHT_NOBITS ||
-        !minias_fixup_field_width(width) ||
+        !minias_fixup_field_width(kind,width) ||
         offset > UINT64_MAX - width) {
         minias_set_error(as, "invalid-fixup-range:%s",
                          symbol_name != NULL ? symbol_name : "<symbol-id>");
@@ -833,7 +848,7 @@ static bool minias_stage_common_fixup(MiniAs *as,int section,uint64_t offset,
     if(owner->section!=section || section<0 ||
        (size_t)section>=as->section_count ||
        as->sections[(size_t)section].type==MINIAS_SHT_NOBITS ||
-       offset<owner->offset || !minias_fixup_field_width(width) ||
+       offset<owner->offset || !minias_fixup_field_width(kind,width) ||
        (name==NULL && symbol_index>=as->symbol_count)) {
         minias_set_error(as,"invalid-mcdata-fixup:line=%zu",owner->line);
         return false;
@@ -874,7 +889,7 @@ bool minias_add_fixup(MiniAs *as, int section, uint64_t offset,
                                           symbol_name,SIZE_MAX,addend);
     return minias_record_fixup(as, section, offset, kind, width,
                                symbol_name, SIZE_MAX, addend,
-                               MINIAS_FIXUP_ORIGIN_FRAGMENT,false);
+                               MINIAS_FIXUP_ORIGIN_FRAGMENT,false,SIZE_MAX);
 }
 
 /* Fixed-width MCData already retains an actual SymbolID from its lexical
@@ -888,7 +903,7 @@ bool minias_add_fixup_symbol_id(MiniAs *as, int section, uint64_t offset,
                                           NULL,symbol_index,addend);
     return minias_record_fixup(as, section, offset, kind, width,
                                NULL, symbol_index, addend,
-                               MINIAS_FIXUP_ORIGIN_FRAGMENT,false);
+                               MINIAS_FIXUP_ORIGIN_FRAGMENT,false,SIZE_MAX);
 }
 
 bool minias_add_section_fixup(MiniAs *as, MiniAsFixupOrigin origin,
@@ -896,7 +911,40 @@ bool minias_add_section_fixup(MiniAs *as, MiniAsFixupOrigin origin,
                              MiniAsFixupKind kind, unsigned width,
                              const char *symbol_name, int64_t addend) {
     return minias_record_fixup(as, section, offset, kind, width,
-                               symbol_name, SIZE_MAX, addend, origin,false);
+                               symbol_name, SIZE_MAX, addend, origin,false,
+                               SIZE_MAX);
+}
+
+/* The final linker-relaxation predicate needs all Target MCInst fixups,
+ * including instructions parsed *after* the ULEB source line. A second
+ * retained-fragment commit window allows its paired relocation records to
+ * be added after full emission without pretending they are .reloc or DWARF
+ * section-owned fixups. The encoded ULEB bytes remain the fragment's own. */
+bool minias_add_late_fragment_fixup(MiniAs *as,size_t fragment_id,
+                                   MiniAsFixupKind kind,size_t symbol_index,
+                                   int64_t addend) {
+    const MiniAsStmt *stmt;
+    if(as==NULL || as->emitting_fragment || as->committing_fragment ||
+       fragment_id>=as->stmt_count || symbol_index>=as->symbol_count) {
+        if(as!=NULL)minias_set_error(as,"invalid-late-fragment-fixup");
+        return false;
+    }
+    stmt=&as->stmts[fragment_id];
+    if(stmt->fragment_kind!=MINIAS_FRAGMENT_BYTES || stmt->leb_mode!=1U ||
+       (kind!=MINIAS_FIXUP_LEB_ADD && kind!=MINIAS_FIXUP_LEB_SUB &&
+        kind!=MINIAS_FIXUP_LEB_SET)) {
+        minias_set_error(as,"late-fixup-non-uleb-fragment:line=%zu",
+                         stmt->line);
+        return false;
+    }
+    if(!minias_record_fixup(as,stmt->section,stmt->offset,kind,0U,
+                            NULL,symbol_index,addend,
+                            MINIAS_FIXUP_ORIGIN_FRAGMENT,false,fragment_id))
+        return false;
+    /* GNU GAS local `.L` label differences are serialized via their
+     * canonical STT_SECTION and the label's final section-relative addend. */
+    as->fixups[as->fixup_count-1U].prefer_section_symbol=true;
+    return true;
 }
 
 static bool minias_section_append_fill(MiniAs *,int,size_t,uint8_t,bool);
@@ -1015,7 +1063,7 @@ static bool minias_commit_encode_result(MiniAs *as, const MiniAsStmt *owner) {
                                      request->symbol_index : SIZE_MAX,
                                  request->absolute_zero_symbol ? 0 : request->symbol_ref.addend,
                                  MINIAS_FIXUP_ORIGIN_FRAGMENT,
-                                 request->absolute_zero_symbol))
+                                 request->absolute_zero_symbol,SIZE_MAX))
             return false;
         as->fixups[as->fixup_count - 1U].prefer_section_symbol =
             request->prefer_section_symbol;
@@ -1442,6 +1490,7 @@ void minias_destroy(MiniAs *as) {
         minias_mcinst_destroy(as->stmts[i].mcinst);
     }
     free(as->stmts);
+    free(as->pending_local_commons);
     free(as->fixups);
     if (as->active_encode_result != NULL) {
         minias_encode_result_destroy(as->active_encode_result);
@@ -4059,29 +4108,33 @@ static bool parse_comm(MiniAs *as, const char *args, size_t line) {
         free(copy);return true;
     }
     if(symbol->explicit_local_binding) {
-        int saved_section=as->current_section;
-        uint32_t saved_subsection=as->current_subsection;
+        MiniAsPendingLocalCommon *pending;
         int bss;
-        char align_buf[32],size_buf[32];
-        bool ok;
-        if((uint64_t)size>UINT32_MAX)goto invalid;
+        if((uint64_t)size>UINT32_MAX || alignment>UINT32_MAX)goto invalid;
         bss=minias_ensure_section(as,".bss",MINIAS_SHT_NOBITS,
                                   MINIAS_SHF_ALLOC|MINIAS_SHF_WRITE,1U);
         if(bss<0){free(copy);return false;}
-        as->current_section=bss;as->current_subsection=0U;
-        (void)snprintf(align_buf,sizeof(align_buf),"%llu",
-                       (unsigned long long)alignment);
-        (void)snprintf(size_buf,sizeof(size_buf),"%llu",
-                       (unsigned long long)size);
-        ok=minias_ensure_subsection(as,bss,0U)!=NULL &&
-           handle_align(as,".balign",align_buf,line) &&
-           define_label(as,name,line) &&
-           add_data_stmt(as,".zero",size_buf,line);
-        as->current_section=saved_section;
-        as->current_subsection=saved_subsection;
-        if(!ok){free(copy);return false;}
-        symbol=minias_get_symbol(as,name,false);
-        if(!symbol){free(copy);return false;}
+        if(!minias_grow_array((void **)&as->pending_local_commons,
+                &as->pending_local_common_capacity,
+                sizeof(*as->pending_local_commons),
+                as->pending_local_common_count+1U)) {
+            minias_set_error(as,"out-of-memory:pending-local-common");
+            free(copy);return false;
+        }
+        pending=&as->pending_local_commons[as->pending_local_common_count++];
+        pending->symbol_index=(size_t)(symbol-as->symbols);
+        pending->size=(uint64_t)size;
+        pending->alignment=alignment;
+        pending->line=line;
+        pending->source_site=as->current_source_site;
+        /* Mark this SymbolID as defined immediately, preserving GNU's
+         * duplicate-symbol and late .globl/.hidden semantics, but do not
+         * anchor its BSS offset until the complete subsection-0 source
+         * stream exists. It will become a real Fragment anchor at EOF. */
+        symbol->defined=true;
+        symbol->section=bss;
+        symbol->subsection=0U;
+        symbol->value=0U;
         symbol->type=MINIAS_STT_OBJECT;
         symbol->size=(uint64_t)size;
         free(copy);return true;
@@ -4097,6 +4150,67 @@ static bool parse_comm(MiniAs *as, const char *args, size_t line) {
 invalid:
     minias_set_error(as,"unsupported-common:%s:line=%zu",args,line);
     free(copy);return false;
+}
+
+/* GAS allocates local .comm symbols after every explicit .bss subsection-0
+ * declaration, even if the source's .comm appeared first. It does NOT wait
+ * until numbered subsections 1+ have been laid out. Scheduling these typed
+ * ALIGN/ZERO Fragments at source EOF under the same BSS subsection gives
+ * the shared MCLayout solver the exact final allocation order and keeps the
+ * existing SymbolID/ELF REL section-fold path unmodified. */
+static bool flush_pending_local_commons(MiniAs *as) {
+    int saved_section=as->current_section;
+    uint32_t saved_subsection=as->current_subsection;
+    MiniAsStableSiteId saved_source_site=as->current_source_site;
+    bool ok=true;
+    size_t i;
+    int bss;
+    if(as->pending_local_common_count==0U)return true;
+    bss=minias_find_section(as,".bss");
+    if(bss<0) {
+        minias_set_error(as,"pending-local-common-missing-bss");
+        return false;
+    }
+    as->current_section=bss;
+    as->current_subsection=0U;
+    if(minias_ensure_subsection(as,bss,0U)==NULL)ok=false;
+    for(i=0U;ok && i<as->pending_local_common_count;++i) {
+        const MiniAsPendingLocalCommon *pending=&as->pending_local_commons[i];
+        MiniAsSymbol *symbol;
+        uint64_t here;
+        char align_buf[32],size_buf[32];
+        if(pending->symbol_index>=as->symbol_count) {
+            minias_set_error(as,"pending-local-common-invalid-symbol");
+            ok=false;break;
+        }
+        symbol=&as->symbols[pending->symbol_index];
+        if(!symbol->defined || symbol->section!=bss ||
+           symbol->has_fragment_anchor) {
+            minias_set_error(as,"pending-local-common-mutated:%s",symbol->name);
+            ok=false;break;
+        }
+        as->current_source_site=pending->source_site;
+        (void)snprintf(align_buf,sizeof(align_buf),"%llu",
+                       (unsigned long long)pending->alignment);
+        (void)snprintf(size_buf,sizeof(size_buf),"%llu",
+                       (unsigned long long)pending->size);
+        if(!handle_align(as,".balign",align_buf,pending->line) ||
+           !minias_current_location(as,&here)) {
+            ok=false;break;
+        }
+        symbol->value=here;
+        symbol->subsection=0U;
+        symbol->has_fragment_anchor=true;
+        symbol->fragment_anchor=as->stmt_count;
+        symbol->fragment_anchor_addend=0;
+        if(!add_data_stmt(as,".zero",size_buf,pending->line)) {
+            ok=false;break;
+        }
+    }
+    as->current_section=saved_section;
+    as->current_subsection=saved_subsection;
+    as->current_source_site=saved_source_site;
+    return ok;
 }
 
 /* GNU .reloc uses a section-relative OFFSET and symbolic relocation
@@ -6768,6 +6882,7 @@ static bool parse_loaded_source_graph(MiniAs *as,
         return false;
     if(as->target->supports_literal_pools &&
        !flush_literal_pools(as,graph->physical.count,true))return false;
+    if(!flush_pending_local_commons(as))return false;
     /* Every emitted Fragment, including EOF literal-pool children, must
      * retain an actual source/expansion owner before SourceGraph is used
      * for cross-replay ordinal diagnostics. */
@@ -6963,7 +7078,8 @@ bool minias_emit_sections(MiniAs *as) {
             }
         }
     }
-    return minias_cfi_emit(as) && minias_debug_emit(as);
+    return minias_emit_deferred_leb_relocations(as) &&
+           minias_cfi_emit(as) && minias_debug_emit(as);
 }
 
 

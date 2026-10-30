@@ -73,6 +73,7 @@ typedef struct MiniAsSectionState {
     uint32_t subsection;
 } MiniAsSectionState;
 
+
 typedef struct MiniAsSymbol {
     char *name;
     int section;
@@ -150,6 +151,18 @@ typedef size_t MiniAsStableSiteId;
 #define MINIAS_SITE_NONE ((MiniAsStableSiteId)0U)
 typedef struct MiniAsSourceGraph MiniAsSourceGraph;
 
+/* GNU local .comm reserves BSS storage at the end of subsection zero,
+ * after all ordinary source fragments regardless of declaration order.
+ * Keep the original SymbolID and source site while deferring its allocation
+ * until the complete source Fragment graph has been parsed. */
+typedef struct MiniAsPendingLocalCommon {
+    size_t symbol_index;
+    uint64_t size;
+    uint64_t alignment;
+    size_t line;
+    MiniAsStableSiteId source_site;
+} MiniAsPendingLocalCommon;
+
 /* Common fixup kinds describe generic byte-addressed data semantics.
  * Machine-specific kinds are opaque uint32_t values owned by the Target.
  * ELF relocation ID selection happens only after fragment layout. */
@@ -166,7 +179,13 @@ enum {
      * bits, preserving DWARF 0x40 major opcode bits. */
     MINIAS_FIXUP_CFI_ADD6,
     MINIAS_FIXUP_CFI_SUB6,
-    MINIAS_FIXUP_CFI_SET6
+    MINIAS_FIXUP_CFI_SET6,
+    /* Zero-width relocation records operate on the full ULEB128 encoded
+     * field.  The 0 width is intentional: its extent is determined by the
+     * continuation bits, and linker relaxation must not change that width. */
+    MINIAS_FIXUP_LEB_ADD,
+    MINIAS_FIXUP_LEB_SUB,
+    MINIAS_FIXUP_LEB_SET
 };
 
 /* A symbolic machine field adjustment, still independent of ELF's numeric
@@ -544,6 +563,9 @@ typedef struct MiniAs {
     MiniAsStmt *stmts;
     size_t stmt_count;
     size_t stmt_capacity;
+    MiniAsPendingLocalCommon *pending_local_commons;
+    size_t pending_local_common_count;
+    size_t pending_local_common_capacity;
     MiniAsFixup *fixups;
     size_t fixup_count;
     size_t fixup_capacity;
@@ -715,6 +737,18 @@ bool minias_compile_variable_exprs(MiniAs *, MiniAsStmt *);
 bool minias_resolve_variable_exprs(MiniAs *, const MiniAsStmt *,
                                   uint64_t *, unsigned *, uint64_t *);
 bool minias_encode_leb_integer(int64_t, bool, unsigned char[10], size_t *);
+/* Inspect the retained expression program, never source text. Only a
+ * canonical symbolic difference (with optional absolute addend) qualifies
+ * for a linker-visible paired ULEB relocation. */
+bool minias_deferred_symbol_difference(const MiniAsDeferredExpr *,
+                                       size_t *,size_t *,int64_t *);
+/* Post-materialization relocation synthesis retains the original fragment
+ * owner even after the ordinary encoder has committed its bytes. */
+bool minias_add_late_fragment_fixup(MiniAs *,size_t,MiniAsFixupKind,
+                                   size_t,int64_t);
+bool minias_emit_deferred_leb_relocations(MiniAs *);
+/* Shared post-encoding predicate for CFI and ULEB code-distance fields. */
+bool minias_span_has_linker_relaxation(MiniAs *,size_t,size_t,bool *);
 bool minias_emit_mc_data(MiniAs *, const MiniAsStmt *);
 void minias_mcdata_destroy(MiniAsMCData *);
 bool minias_evaluate_absolute_operand(MiniAs *,const char *,int64_t *);
@@ -943,6 +977,14 @@ typedef struct MiniAsTargetOps {
     bool cfi_initial_cfa_register_only; /* GNU initial CFA register opcode */
     bool cfi_eh_range_relocations; /* paired ADD32/SUB32 on FDE range */
     unsigned cfi_advance_reloc_mode; /* 0 none, 1 ADD/SUB, 2 SET/SUB */
+    /* GNU ULEB relaxation policy. 0: no paired ELF relocations; 1: ADD/SUB
+     * only when anchors straddle a linker-relaxable instruction; 2: SET/SUB
+     * on each valid symbolic difference. ELF type numbers remain Target-ISA
+     * owned; Common sees only typed zero-width fixup semantics. */
+    unsigned leb128_reloc_mode;
+    /* GNU GAS's ULEB fixup sweep uses the Target's final relaxation state
+     * (which may be changed by .option push/norelax/pop). NULL is enabled. */
+    bool (*leb128_relocations_enabled)(const MiniAs *);
     /* Optional Target recognition of fixups that permit the linker to
      * change the encoded code span after assembly (e.g. LoongArch RELAX).
      * CFI events spanning such a fixup need linker-resolved code distances. */

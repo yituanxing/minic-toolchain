@@ -11,6 +11,8 @@ version=${LINUX_VERSION:-6.6.143}
 cc=${LOONG_CC:-loongarch64-linux-gnu-gcc-13}
 qemu=${LOONG_QEMU:-qemu-system-loongarch64}
 gnu_as=${LOONG_GNU_AS:-/usr/bin/loongarch64-linux-gnu-as}
+replay_only=${LOONG_QEMU_REPLAY_ONLY:-0}
+as_backend=${LOONG_AS_BACKEND:-minias}
 
 if [[ $version != 6.6.143 ]]; then
   echo "MINIAS_LINUX_FOURARCH=ERROR unsupported_linux_version=$version" >&2
@@ -20,33 +22,40 @@ case "$work" in
   "$repo/build/"*|/tmp/*) ;;
   *) echo "MINIAS_LINUX_FOURARCH=ERROR unsafe_workdir=$work" >&2; exit 2 ;;
 esac
-for tool in "$cc" "$qemu" "$gnu_as" "$minias" curl tar sha256sum git make cpio gzip timeout; do
+if [[ $replay_only != 0 && $replay_only != 1 ]]; then
+  echo "MINIAS_LINUX_FOURARCH=ERROR invalid_replay_only=$replay_only" >&2
+  exit 2
+fi
+if [[ $as_backend != minias && $as_backend != gnu ]]; then
+  echo "MINIAS_LINUX_FOURARCH=ERROR invalid_as_backend=$as_backend" >&2
+  exit 2
+fi
+tools=("$qemu" curl sha256sum git timeout python3)
+if [[ $replay_only == 0 ]]; then
+  tools+=("$cc" "$gnu_as" tar make cpio gzip)
+  if [[ $as_backend == minias ]]; then tools+=("$minias"); fi
+fi
+for tool in "${tools[@]}"; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     echo "MINIAS_LINUX_FOURARCH=ERROR arch=loongarch64 missing_tool=$tool" >&2
     exit 127
   fi
 done
 
-mkdir -p "$work/evidence" "$work/as-override"
+mkdir -p "$work/evidence"
 kernel_tar="$work/linux-$version.tar.xz"
 kernel_src="$work/linux-$version"
 kernel_out="$work/out"
+image="$kernel_out/arch/loongarch/boot/vmlinuz.efi"
 firmware="$work/QEMU_EFI.fd"
 initramfs="$work/runtime-initramfs.cpio.gz"
 trace="$work/evidence/as.trace"
 kbuild_log="$work/evidence/kbuild.log"
 
-# Linux and Loongson firmware are both pinned to immutable upstream bytes.
+# Loongson firmware is pinned to immutable upstream bytes. QEMU-only replay
+# uses the same firmware validation as a fresh Kbuild run.
 # Ubuntu 24.04 has qemu-system-loongarch64 but NO qemu-efi-loongarch64
 # package, so the Loongson-maintained EFI firmware must be supplied here.
-if [[ ! -s "$kernel_tar" ]]; then
-  curl -fsSL --retry 3 \
-    "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-$version.tar.xz" \
-    -o "$kernel_tar"
-fi
-printf '%s  %s\n' \
-  dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 \
-  "$kernel_tar" | sha256sum -c -
 if [[ ! -s "$firmware" ]]; then
   curl -fsSL --retry 3 \
     https://raw.githubusercontent.com/loongson/Firmware/1c55f43743b947e4c327716afc818ac5c65558ce/LoongArchVirtMachine/QEMU_EFI.fd \
@@ -59,6 +68,15 @@ if [[ $firmware_blob != eac998fb49b1d977296269e0b0955084fba9dc4a ]]; then
 fi
 printf 'MINIAS_LINUX_FOURARCH_FIRMWARE=PASS arch=loongarch64 git_blob=%s\n' "$firmware_blob"
 
+if [[ $replay_only == 0 ]]; then
+if [[ ! -s "$kernel_tar" ]]; then
+  curl -fsSL --retry 3 \
+    "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-$version.tar.xz" \
+    -o "$kernel_tar"
+fi
+printf '%s  %s\n' \
+  dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 \
+  "$kernel_tar" | sha256sum -c -
 if [[ ! -d "$kernel_src" ]]; then
   tar -xJf "$kernel_tar" -C "$work"
 fi
@@ -74,6 +92,10 @@ RISCV_CC="$cc" \
 # GCC -B also locates a plain `as`; Kbuild's AS= may use the prefixed binary.
 # Both must resolve to exactly the same fail-closed wrapper. In particular,
 # a failed assembler invocation NEVER tries GNU as on production input.
+build_cc="$cc"
+build_as="$gnu_as"
+if [[ $as_backend == minias ]]; then
+mkdir -p "$work/as-override"
 cat >"$work/as-override/loongarch64-linux-gnu-as" <<'MINIAS_WRAPPER'
 #!/usr/bin/env bash
 set -Eeuo pipefail
@@ -127,6 +149,11 @@ MINIAS_WRAPPER
 chmod +x "$work/as-override/loongarch64-linux-gnu-as"
 ln -sfn loongarch64-linux-gnu-as "$work/as-override/as"
 : >"$trace"
+export MINIAS="$minias" MINIAS_AS_TRACE="$trace" REAL_AS="$gnu_as"
+export MINIAS_FAILURE_DIR="$work/evidence/failure-inputs"
+build_cc="$cc -B$work/as-override/"
+build_as="$work/as-override/loongarch64-linux-gnu-as"
+fi
 
 make -C "$kernel_src" O="$kernel_out" ARCH=loongarch \
   CROSS_COMPILE=loongarch64-linux-gnu- CC="$cc" loongson3_defconfig
@@ -142,13 +169,11 @@ make -C "$kernel_src" O="$kernel_out" ARCH=loongarch \
 grep -qx 'CONFIG_EFI_STUB=y' "$kernel_out/.config"
 grep -qx 'CONFIG_EFI_ZBOOT=y' "$kernel_out/.config"
 
-export MINIAS="$minias" MINIAS_AS_TRACE="$trace" REAL_AS="$gnu_as"
-export MINIAS_FAILURE_DIR="$work/evidence/failure-inputs"
 started=$(date +%s)
 if ! make -C "$kernel_src" O="$kernel_out" ARCH=loongarch \
     CROSS_COMPILE=loongarch64-linux-gnu- \
-    CC="$cc -B$work/as-override/" \
-    AS="$work/as-override/loongarch64-linux-gnu-as" \
+    CC="$build_cc" \
+    AS="$build_as" \
     KCFLAGS=-Wno-error \
     -j4 vmlinuz.efi >"$kbuild_log" 2>&1; then
   echo 'MINIAS_LINUX_FOURARCH_BUILD=FAIL arch=loongarch64 stage=make-vmlinuz.efi'
@@ -158,25 +183,49 @@ if ! make -C "$kernel_src" O="$kernel_out" ARCH=loongarch \
   echo 'MINIAS_LINUX_KBUILD_DIAGNOSTIC=tail'
   tail -n 140 "$kbuild_log" || true
   echo 'MINIAS_LINUX_AS_TRACE_DIAGNOSTIC=last-failures'
-  grep '^fail ' "$trace" | tail -n 50 || true
+  if [[ $as_backend == minias ]]; then grep '^fail ' "$trace" | tail -n 50 || true; fi
   exit 1
 fi
 
-image="$kernel_out/arch/loongarch/boot/vmlinuz.efi"
 test -s "$image"
 sha256sum "$image" >"$work/evidence/vmlinuz.efi.sha256"
-passed=$(grep -c '^pass ' "$trace" || true)
-assembled=$(grep -c '^assemble ' "$trace" || true)
-test "$passed" -gt 1000
-printf 'MINIAS_LINUX_FOURARCH_BUILD=PASS arch=loongarch64 assembled=%s passed=%s elapsed_s=%s image=%s head=%s\n' \
-  "$assembled" "$passed" "$(( $(date +%s) - started ))" "$image" "${GITHUB_SHA:-local}"
+if [[ $as_backend == minias ]]; then
+  passed=$(grep -c '^pass ' "$trace" || true)
+  assembled=$(grep -c '^assemble ' "$trace" || true)
+  test "$passed" -gt 1000
+  printf 'MINIAS_LINUX_FOURARCH_BUILD=PASS arch=loongarch64 as_backend=minias assembled=%s passed=%s elapsed_s=%s image=%s head=%s\n' \
+    "$assembled" "$passed" "$(( $(date +%s) - started ))" "$image" "${GITHUB_SHA:-local}"
+else
+  printf 'MINIAS_LINUX_FOURARCH_BUILD=PASS arch=loongarch64 as_backend=gnu elapsed_s=%s image=%s head=%s\n' \
+    "$(( $(date +%s) - started ))" "$image" "${GITHUB_SHA:-local}"
+fi
+else
+  # actions/download-artifact restores the exact linked vmlinuz.efi and the
+  # GNU-built initramfs; there is no compiler, assembler or linker in replay.
+  test -s "$image" && test -s "$initramfs"
+  if [[ -s $work/evidence/vmlinuz.efi.sha256 ]]; then
+    read -r expected_sha _ <"$work/evidence/vmlinuz.efi.sha256"
+    read -r actual_sha _ < <(sha256sum "$image")
+    if [[ $expected_sha != "$actual_sha" ]]; then
+      echo "MINIAS_LINUX_FOURARCH_REPLAY=ERROR arch=loongarch64 image_digest_mismatch" >&2
+      exit 1
+    fi
+  fi
+  printf 'MINIAS_LINUX_FOURARCH_REPLAY=PASS arch=loongarch64 origin=%s image=%s initramfs=%s\n' \
+    "${LOONG_QEMU_REPLAY_ORIGIN:-minias}" "$image" "$initramfs"
+fi
 
 # Boot the very same .efi executable (no objcopy/mini-linker substitutions).
 # This is the QEMU LoongArch virt/EDK2 boot path recommended by QEMU docs.
 boot() {
   local lane=$1 append=$2 interactive=$3
   local log="$work/evidence/$lane.log" status
+  # QEMU's implicit virtio NIC asks for efi-virtio.rom, absent on Ubuntu's
+  # loongarch64 package. Replace that default NIC with an explicit equivalent
+  # whose PCI option ROM is disabled; preserve the virtio NIC itself.
   local command=("$qemu" -machine virt -cpu la464 -m 2G -smp 1
+    -nic none -netdev user,id=loongnet
+    -device virtio-net-pci,netdev=loongnet,romfile=
     -bios "$firmware" -kernel "$image" -initrd "$initramfs"
     -append "$append" -display none -serial stdio -monitor none -no-reboot)
   set +e

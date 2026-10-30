@@ -7,6 +7,27 @@ name: MiniAS Linux 6.6.143 Multiarch Real Runtime
 # this matrix extends that contract to the other three architectures.
 on:
   workflow_dispatch:
+    inputs:
+      loong_replay_run_id:
+        description: 'Optional prior Linux run ID: replay its linked LoongArch EFI without Kbuild'
+        required: false
+        type: string
+      loong_replay_artifact:
+        description: 'Exact artifact name containing loongarch64/{out,runtime-initramfs.cpio.gz,evidence}'
+        required: false
+        type: string
+        default: minias-linux-real-loongarch64
+      loong_replay_origin:
+        description: 'Label for the assembler that produced the artifact; same QEMU/firmware for both'
+        required: false
+        type: choice
+        options: [minias, gnu]
+        default: minias
+      loong_gnu_baseline_build:
+        description: 'Build one GNU-as LoongArch kernel as a matched QEMU control (not a MiniAS pass)'
+        required: false
+        type: boolean
+        default: false
   push:
     branches: [refactor/minias-target-isa-abi-core]
     paths:
@@ -22,7 +43,7 @@ permissions:
 
 jobs:
   gcc-minias-kbuild-qemu:
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minias-linux-four]')
+    if: (github.event_name == 'workflow_dispatch' && inputs.loong_replay_run_id == '' && !inputs.loong_gnu_baseline_build) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[minias-linux-four]'))
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     strategy:
@@ -107,4 +128,96 @@ jobs:
             echo 'GCC source and Kbuild + MiniAS production assembly + GNU link + system QEMU P0/P1.'
             echo 'Acceptance requires a linked kernel **and** guest runtime markers; ELF parity alone is not sufficient.'
             echo 'Result: `${{ steps.linux.outcome }}`'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # One-time matched GNU control. Both variants use the same kernel release,
+  # configuration, GCC, GNU linker, initramfs and the shared boot()/require()
+  # function; only the production assembler backend differs.
+  loong-gnu-baseline:
+    if: github.event_name == 'workflow_dispatch' && inputs.loong_replay_run_id == '' && inputs.loong_gnu_baseline_build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 110
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install GNU LoongArch Kbuild and QEMU toolchain
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc binutils make bc bison flex libssl-dev libelf-dev \
+            curl xz-utils cpio gzip zstd file python3-pyelftools \
+            gcc-13-loongarch64-linux-gnu binutils-loongarch64-linux-gnu \
+            libc6-dev-loong64-cross qemu-system-misc
+      - name: Build and boot Linux 6.6.143 through GNU AS exclusively
+        shell: bash
+        timeout-minutes: 105
+        env:
+          WORK_DIR: ${{ github.workspace }}/build/minias-linux-fourarch/loongarch64
+          LINUX_VERSION: 6.6.143
+          LOONG_AS_BACKEND: gnu
+        run: bash tests/external/linux/minias_loongarch64_linux.sh
+      - name: Preserve GNU assembler baseline and runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minias-linux-real-loongarch64-gnu
+          path: |
+            build/minias-linux-fourarch/loongarch64/evidence/*.log
+            build/minias-linux-fourarch/loongarch64/evidence/vmlinuz.efi.sha256
+            build/minias-linux-fourarch/loongarch64/runtime-initramfs.cpio.gz
+            build/minias-linux-fourarch/loongarch64/out/arch/loongarch/boot/vmlinuz.efi
+          if-no-files-found: warn
+          retention-days: 14
+
+  # The original kernel image and initramfs are preserved in the preceding
+  # build artifact. Diagnose firmware/QEMU failures on those exact bytes in
+  # minutes instead of repeating 10+ minutes of Kbuild for every iteration.
+  # A GNU-built artifact with the same layout can be selected as the baseline:
+  # both origins execute the very same boot()/require() code and pinned EFI.
+  loong-qemu-artifact-replay:
+    if: github.event_name == 'workflow_dispatch' && inputs.loong_replay_run_id != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install QEMU runtime only (no GCC or GNU assembler)
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            qemu-system-misc curl
+      - name: Restore the original linked EFI and GNU-built initramfs
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.loong_replay_artifact }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.loong_replay_run_id }}
+          github-token: ${{ github.token }}
+          path: build/minias-linux-fourarch
+      - name: Replay original linked kernel under the same pinned EFI/QEMU
+        shell: bash
+        timeout-minutes: 12
+        env:
+          WORK_DIR: ${{ github.workspace }}/build/minias-linux-fourarch/loongarch64
+          LINUX_VERSION: 6.6.143
+          LOONG_QEMU_REPLAY_ONLY: '1'
+          LOONG_QEMU_REPLAY_ORIGIN: ${{ inputs.loong_replay_origin }}
+        run: bash tests/external/linux/minias_loongarch64_linux.sh
+      - name: Preserve replay-specific QEMU/P0/P1 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minias-loong-qemu-replay-${{ inputs.loong_replay_origin }}-${{ github.run_id }}
+          path: build/minias-linux-fourarch/loongarch64/evidence/rdinit-*.log
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Summarize original kernel provenance
+        if: always()
+        run: |
+          {
+            echo '### LoongArch64 QEMU-only EFI replay'
+            echo 'Original Linux artifact: `${{ inputs.loong_replay_artifact }}` in run `${{ inputs.loong_replay_run_id }}`.'
+            echo 'Assembler origin: `${{ inputs.loong_replay_origin }}`.'
+            echo 'Only QEMU boot is executed; no recompilation, reassembly or relinking.'
           } >> "$GITHUB_STEP_SUMMARY"

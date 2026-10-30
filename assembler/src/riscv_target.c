@@ -94,6 +94,11 @@ static const struct {
     {MINIAS_FIXUP_SET, 1U, MINIAS_R_RISCV_SET8},
     {MINIAS_FIXUP_SET, 2U, MINIAS_R_RISCV_SET16},
     {MINIAS_FIXUP_SET, 4U, MINIAS_R_RISCV_SET32},
+    /* A variable-width ULEB expression is not an integer field. The
+     * zero-width semantic key describes relocation ownership; MCLayout
+     * has already reserved and emitted the encoded ULEB payload. */
+    {MINIAS_FIXUP_LEB_SET, 0U, MINIAS_R_RISCV_SET_ULEB128},
+    {MINIAS_FIXUP_LEB_SUB, 0U, MINIAS_R_RISCV_SUB_ULEB128},
     {MINIAS_FIXUP_CFI_SET6, 1U, 53U}, /* R_RISCV_SET6 */
     {MINIAS_FIXUP_CFI_SUB6, 1U, 52U}, /* R_RISCV_SUB6 */
     {MINIAS_FIXUP_RV_CALL_PLT, 4U, MINIAS_R_RISCV_CALL_PLT},
@@ -534,9 +539,14 @@ static bool riscv_target_directive(MiniAs *as, const char *op,
         /* In the permissive legacy profile V is already available. Keep
          * the GNU source spelling without claiming a new .option arch
          * capability; explicit ISA changes still require real snapshots. */
-    } else if(strcmp(args,"norelax")!=0) {
-        /* Absence of relaxation markers is a real supported norelax mode.
-         * A positive relax request cannot silently produce nonrelaxable
+    } else if(strcmp(args,"norelax")==0) {
+        /* GNU GAS retains the final target .option relax state through
+         * push/pop and gates deferred ULEB relocation emission with it.
+         * Keep the target-owned bit even though this assembler does not
+         * yet publish general R_RISCV_RELAX instruction markers. */
+        state->options|=MINIAS_RISCV_OPTION_NO_RELAX;
+    } else {
+        /* A positive relax request cannot silently produce nonrelaxable
          * CALL/HI20/ALIGN relocations. */
         goto unsupported;
     }
@@ -710,6 +720,14 @@ static bool riscv_validate_output(MiniAs *as) {
            riscv_record_object_mapping_symbols(as);
 }
 
+/* GAS's riscv_md_finish gates every deferred ULEB pair on the final global
+ * relaxation mode, not on the individual source site's .option snapshot. */
+static bool riscv_leb128_relocations_enabled(const MiniAs *as) {
+    const MiniAsRiscvState *state=(const MiniAsRiscvState *)as->target_state;
+    return state!=NULL &&
+           (state->options & MINIAS_RISCV_OPTION_NO_RELAX)==0U;
+}
+
 /* An opaque config blob belongs to this target; Common neither interprets
  * ISA features nor stores RISC-V-specific strict-mode or psABI fields. */
 static bool riscv_init_target_state(MiniAs *as,
@@ -821,6 +839,8 @@ static const MiniAsTargetOps riscv_ops = {
     .append_code_alignment = riscv_emit_code_alignment,
     .supports_fixup = riscv_supports_fixup,
     .fixup_relocation_type = riscv_fixup_relocation_type,
+    .leb128_reloc_mode = 2U, /* psABI SET_ULEB128/SUB_ULEB128 */
+    .leb128_relocations_enabled=riscv_leb128_relocations_enabled,
     .validate_output = riscv_validate_output,
     /* RV64 DWARF register numbering: ra=x1, sp=x2; DW_CFA code unit
      * is one byte, stack slots are eight bytes (LP64). Both RV32/64

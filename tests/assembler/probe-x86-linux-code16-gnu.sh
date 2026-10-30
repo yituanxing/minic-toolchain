@@ -397,6 +397,29 @@ linux_realmode_gcc:
     ret
 ASM
 
+# Linux realmode's GCC-generated instruction stream mixes unsuffixed
+# register-width inference, explicit -l, REP string width, and index-only
+# addressing in .code16gcc.  Their 66/67 ordering is part of the ISA, not
+# a mnemonic string exception in the final encoder.
+cat >"$work/code16_typed_width_index.s" <<'ASM'
+    .text
+    .code16gcc
+    .globl linux_typed_width
+linux_typed_width:
+    leal 4(%esi), %eax
+    subl $12, %esp
+    incl 4(%esp)
+    btr $15, %eax
+    btrl $2, %edx
+    rep; stosl
+    rep; movsl
+    movl 12(,%eax,4), %edx
+    movl 8(,%ecx,4), %eax
+    .code16
+    movw %ax, %dx
+    retl
+ASM
+
 cat >"$work/code32_linux_fences.s" <<'ASM'
     .text
     .code32
@@ -415,6 +438,8 @@ cat >"$work/code32_reboot.s" <<'ASM'
     .globl reboot32
 reboot32:
     movl $0x10, %eax
+    movl reboot_gdt, %eax
+    movl %eax, reboot_gdt
     movl %eax, %ds
     lgdtl reboot_gdt
     movl %cr0, %eax
@@ -427,6 +452,7 @@ reboot32:
     wrmsr
     lidtl reboot_idt
     movl %ecx, %ss
+    ljmpw $0x8, $reboot16
     ljmpl $0x8, $reboot16
 reboot_idt:
     .word 0
@@ -686,6 +712,7 @@ run_positive code32_vdso
 run_positive code16_linux_flags_bit
 run_positive code32_linux_syscall_time
 run_positive code16_linux_realmode_gcc
+run_positive code16_typed_width_index
 run_positive code32_linux_fences
 run_positive code32_reboot
 run_positive mixed_modes

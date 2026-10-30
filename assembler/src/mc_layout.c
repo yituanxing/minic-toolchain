@@ -827,6 +827,122 @@ static bool minias_resolve_deferred_data(MiniAs *as) {
     return false;
 }
 
+/* GNU link relaxation can change the distance between two already-defined
+ * anchors. TargetInfo identifies which emitted relocation *permits* code
+ * shrinking; Common checks the final fragment-owned fixup graph and stable
+ * anchor values. CFI and ULEB must share this predicate, including source
+ * subsections whose serialized order differs from parser encounter order. */
+bool minias_span_has_linker_relaxation(MiniAs *as,size_t from_symbol,
+                                      size_t to_symbol,bool *crosses) {
+    const MiniAsSymbol *from,*to;
+    uint64_t begin,end;
+    size_t i;
+    if(as==NULL || crosses==NULL || from_symbol>=as->symbol_count ||
+       to_symbol>=as->symbol_count)return false;
+    *crosses=false;
+    from=&as->symbols[from_symbol];
+    to=&as->symbols[to_symbol];
+    if(!from->defined || !to->defined || from->section<0 ||
+       from->section!=to->section)return false;
+    if(as->target->cfi_linker_relaxation_marker==NULL)return true;
+    begin=from->value<to->value?from->value:to->value;
+    end=from->value>to->value?from->value:to->value;
+    for(i=0U;i<as->fixup_count;++i) {
+        const MiniAsFixup *fixup=&as->fixups[i];
+        uint64_t site;
+        if(fixup->section!=from->section ||
+           !as->target->cfi_linker_relaxation_marker(fixup->kind))continue;
+        if(fixup->origin==MINIAS_FIXUP_ORIGIN_FRAGMENT) {
+            const MiniAsStmt *owner;
+            if(fixup->fragment_id>=as->stmt_count)return false;
+            owner=&as->stmts[fixup->fragment_id];
+            if(owner->section!=fixup->section ||
+               owner->offset>UINT64_MAX-fixup->fragment_offset)return false;
+            site=owner->offset+fixup->fragment_offset;
+        }else site=fixup->offset;
+        if(site>=begin && site<end) {
+            *crosses=true;
+            return true;
+        }
+    }
+    return true;
+}
+
+/* Called after *all* Target instructions have been encoded, because a
+ * linker-relaxable MCInst may occur after its `.uleb128 end-start` source
+ * directive (or in a section that was parsed later). All operands here are
+ * stable AST SymbolIDs, not a replay of the GNU source spelling. */
+bool minias_emit_deferred_leb_relocations(MiniAs *as) {
+    const unsigned mode=as->target->leb128_reloc_mode;
+    size_t i;
+    if(mode==0U)return true;
+    if(as->target->leb128_relocations_enabled!=NULL &&
+       !as->target->leb128_relocations_enabled(as))return true;
+    if(mode>2U) {
+        minias_set_error(as,"invalid-target-uleb-relocation-policy");
+        return false;
+    }
+    for(i=0U;i<as->stmt_count;++i) {
+        const MiniAsStmt *stmt=&as->stmts[i];
+        const MiniAsSymbol *positive,*negative;
+        size_t pos_id,neg_id,j;
+        int64_t addend;
+        bool crosses=false;
+        MiniAsFixupKind positive_fixup=mode==1U ?
+            MINIAS_FIXUP_LEB_ADD:MINIAS_FIXUP_LEB_SET;
+        MiniAsSection *section;
+        if(stmt->fragment_kind!=MINIAS_FRAGMENT_BYTES ||
+           stmt->leb_mode!=1U || !stmt->deferred_data_size ||
+           stmt->variable_expr_count!=1U ||
+           stmt->variable_exprs[0]==NULL ||
+           !minias_deferred_symbol_difference(stmt->variable_exprs[0],
+                                               &pos_id,&neg_id,&addend))
+            continue;
+        if(pos_id>=as->symbol_count || neg_id>=as->symbol_count)return false;
+        positive=&as->symbols[pos_id];
+        negative=&as->symbols[neg_id];
+        /* The Common LEB byte solver has already rejected unrelated or
+         * undefined symbols; the ELF difference must retain that invariant.
+         * A separate future target contract may admit cross-section pairs. */
+        if(!positive->defined || !negative->defined ||
+           positive->section<0 ||
+           positive->section!=negative->section) {
+            minias_set_error(as,"invalid-uleb-relocation-symbols:line=%zu",
+                             stmt->line);
+            return false;
+        }
+        if(mode==1U) {
+            if(!minias_span_has_linker_relaxation(as,neg_id,pos_id,&crosses))
+                return false;
+            if(!crosses)continue;
+        }
+        if(as->target->supports_fixup==NULL ||
+           !as->target->supports_fixup(positive_fixup,0U) ||
+           !as->target->supports_fixup(MINIAS_FIXUP_LEB_SUB,0U) ||
+           stmt->section<0 || (size_t)stmt->section>=as->section_count) {
+            minias_set_error(as,"unsupported-uleb-relocation:line=%zu",
+                             stmt->line);
+            return false;
+        }
+        section=&as->sections[(size_t)stmt->section];
+        if(stmt->size==0U || stmt->offset>section->size ||
+           stmt->size>section->size-stmt->offset) {
+            minias_set_error(as,"uleb-relocation-field-overflow:line=%zu",
+                             stmt->line);
+            return false;
+        }
+        if(!minias_add_late_fragment_fixup(as,i,positive_fixup,pos_id,addend) ||
+           !minias_add_late_fragment_fixup(as,i,MINIAS_FIXUP_LEB_SUB,
+                                          neg_id,0))return false;
+        /* GNU's target md_apply_fix clears the immediate payload to zero,
+         * retaining the original continuation-bit sequence/LEB width so
+         * the linker can rewrite the value without moving debug records. */
+        for(j=0U;j<stmt->size;++j)
+            section->data[(size_t)stmt->offset+j]&=0x80U;
+    }
+    return true;
+}
+
 /* The sole Common validation gate for Target encoding alternatives.
  * Source replay and MCLayout both ask the same retained typed MCInst;
  * neither side reparses a mnemonic or guesses its terminal instruction size. */

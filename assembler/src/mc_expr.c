@@ -1261,6 +1261,69 @@ bool minias_evaluate_deferred_expr(const MiniAs *as,
     return true;
 }
 
+/* Extract only the relocation-safe linear subset from the already compiled
+ * expression program. A + B - C is not a single GNU O_subtract; reject it
+ * instead of inventing one of its operands from a source-string rescan.
+ * The retained SymbolIDs survive numeric-label replacement, macros and
+ * post-parse subsection relayout without needing parser state. */
+typedef struct DeferredDifferenceParts {
+    size_t positive,negative;
+    bool has_positive,has_negative;
+    int64_t addend;
+} DeferredDifferenceParts;
+
+static bool deferred_collect_difference(const MiniAsDeferredExpr *tree,
+                                        size_t index,int sign,
+                                        DeferredDifferenceParts *parts) {
+    const DeferredNode *node;
+    int64_t value;
+    if(index>=tree->count || (sign!=1 && sign!=-1))return false;
+    node=&tree->nodes[index];
+    switch(node->op) {
+    case DEF_LITERAL:
+        if(sign<0) {
+            if(node->value==INT64_MIN)return false;
+            value=-node->value;
+        }else value=node->value;
+        return minias_checked_add_i64(parts->addend,value,&parts->addend);
+    case DEF_SYMBOL:
+        if(sign>0) {
+            if(parts->has_positive)return false;
+            parts->positive=node->symbol_index;
+            parts->has_positive=true;
+        }else {
+            if(parts->has_negative)return false;
+            parts->negative=node->symbol_index;
+            parts->has_negative=true;
+        }
+        return true;
+    case DEF_ADD:
+        return deferred_collect_difference(tree,node->left,sign,parts) &&
+               deferred_collect_difference(tree,node->right,sign,parts);
+    case DEF_SUB:
+        return deferred_collect_difference(tree,node->left,sign,parts) &&
+               deferred_collect_difference(tree,node->right,-sign,parts);
+    case DEF_NEG:
+        return deferred_collect_difference(tree,node->left,-sign,parts);
+    default:
+        return false;
+    }
+}
+
+bool minias_deferred_symbol_difference(const MiniAsDeferredExpr *tree,
+                                       size_t *positive,size_t *negative,
+                                       int64_t *addend) {
+    DeferredDifferenceParts parts={0};
+    if(tree==NULL || positive==NULL || negative==NULL || addend==NULL ||
+       tree->count==0U || tree->root>=tree->count ||
+       !deferred_collect_difference(tree,tree->root,1,&parts) ||
+       !parts.has_positive || !parts.has_negative)return false;
+    *positive=parts.positive;
+    *negative=parts.negative;
+    *addend=parts.addend;
+    return true;
+}
+
 bool minias_compile_variable_exprs(MiniAs *as,MiniAsStmt *stmt) {
     char *copy=minias_strdup(stmt->args),*cursor,*start;
     unsigned count=0U,depth=0U;
@@ -1530,6 +1593,11 @@ static bool emit_symbol_minus_dot(MiniAs *as,
         anchor->section = stmt->section;
         anchor->value = relocation_offset;
         anchor->bind = MINIAS_STB_LOCAL;
+        /* A dot-location operand generated only to hold the subtraction's
+         * linker relocation is not a source-visible label. Preserve its
+         * synthetic-local visibility explicitly in the Common SymbolID;
+         * ELF serialization must not guess that fact from its spelling. */
+        anchor->visibility = MINIAS_STV_HIDDEN;
 
         return minias_section_append_zero(as, stmt->section, width) &&
                minias_add_fixup_symbol_id(as,

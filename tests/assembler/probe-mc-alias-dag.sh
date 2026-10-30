@@ -42,6 +42,54 @@ for name in alias_0000 alias_0128 alias_1024 alias_2047; do
   test -n "$mini_value" && test "$mini_value" = "$gnu_value"
 done
 
+# A forward ABS dependency is a signed integer expression even when its
+# target is zero.  ELF records the full 64-bit two's-complement bits; GNU
+# also wraps addition beyond the signed and unsigned endpoints.  Do not
+# apply the section-address underflow guard to these absolute aliases.
+cat >"$work/absolute-bits.s" <<'SRC'
+.equ forward_negative, later_zero - 2
+.equ forward_positive, later_zero + 2
+.equ forward_unsigned_wrap, later_max + 1
+.equ forward_signed_wrap, later_high + 2
+.equ forward_signed_underflow, later_low - 2
+.set later_zero, 0
+.set later_max, -1
+.set later_high, 0x7fffffffffffffff
+.set later_low, -9223372036854775807
+.data
+.long forward_negative, forward_positive, forward_unsigned_wrap
+.quad forward_signed_wrap, forward_signed_underflow
+SRC
+"$MINIAS" "${mini[@]}" -o "$work/absolute-mini.o" "$work/absolute-bits.s"
+"${gas[@]}" -o "$work/absolute-gnu.o" "$work/absolute-bits.s"
+"${copy[@]}" -j .data -O binary "$work/absolute-mini.o" "$work/absolute-mini.bin"
+"${copy[@]}" -j .data -O binary "$work/absolute-gnu.o" "$work/absolute-gnu.bin"
+cmp "$work/absolute-mini.bin" "$work/absolute-gnu.bin"
+for name in forward_negative forward_positive forward_unsigned_wrap \
+            forward_signed_wrap forward_signed_underflow; do
+  mini_value=$(readelf -sW "$work/absolute-mini.o" | awk -v n="$name" '$NF == n { print $2 }')
+  gnu_value=$(readelf -sW "$work/absolute-gnu.o" | awk -v n="$name" '$NF == n { print $2 }')
+  test -n "$mini_value" && test "$mini_value" = "$gnu_value"
+done
+
+# The same arithmetic on a defined section-relative address is not an
+# ABS constant.  Guard the invalid underflow instead of silently turning
+# its output location into a wrapped section address.
+cat >"$work/section-underflow.s" <<'SRC'
+.text
+.equ invalid_section_address, later - 2
+later:
+.long 0
+.long invalid_section_address
+SRC
+if "$MINIAS" "${mini[@]}" -o "$work/section-underflow.o" \
+   "$work/section-underflow.s" 2>"$work/section-underflow.err"; then
+  echo 'MiniAS accepted wrapped negative section address' >&2
+  exit 1
+fi
+grep -q 'set-value-underflow:' "$work/section-underflow.err"
+test ! -e "$work/section-underflow.o"
+
 cat >"$work/cycle.s" <<'SRC'
 .text
 .set alpha, beta + 1
@@ -69,4 +117,4 @@ fi
 grep -q 'unresolved-set-target:' "$work/undefined.err"
 test ! -e "$work/undefined.o"
 
-echo "MINIAS_MC_ALIAS_DAG=PASS arch=$ARCH edges=2048 GNU_bytes=exact SymbolID_values=4 source_reparse=0 cycles=rejected undefined=rejected"
+echo "MINIAS_MC_ALIAS_DAG=PASS arch=$ARCH edges=2048 GNU_bytes=exact SymbolID_values=9 absolute_wrapping=GNU_exact section_underflow=rejected source_reparse=0 cycles=rejected undefined=rejected"

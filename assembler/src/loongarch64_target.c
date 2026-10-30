@@ -2233,12 +2233,24 @@ static void la_destroy_target_state(MiniAs *as) {
 }
 static bool la_validate(MiniAs *as) {
     size_t i;
-    for(i=0U;i<as->section_count;++i)
-        if((as->sections[i].flags & MINIAS_SHF_EXECINSTR) &&
-           as->sections[i].size%4U){
-            minias_set_error(as,"unaligned-loongarch-text");
+    /* GAS records four-byte ELF section alignment when an instruction is
+     * assembled, but does not implicitly pad or reject source bytes at an
+     * odd offset.  The instruction encoding itself remains four-byte wide.
+     * Arbitrary .text data (notably Kbuild's one-byte ULEB feature probes)
+     * neither requires section size divisible by four nor raises sh_addralign. */
+    for(i=0U;i<as->stmt_count;++i) {
+        const MiniAsStmt *stmt=&as->stmts[i];
+        if(stmt->fragment_kind!=MINIAS_FRAGMENT_INSTRUCTION)continue;
+        if(stmt->section<0 ||
+           (size_t)stmt->section>=as->section_count ||
+           stmt->size==0U || (stmt->size&3U)!=0U) {
+            minias_set_error(as,"invalid-loongarch-instruction-width:line=%zu",
+                             stmt->line);
             return false;
         }
+        if(as->sections[(size_t)stmt->section].align<4U)
+            as->sections[(size_t)stmt->section].align=4U;
+    }
     return true;
 }
 /* Target-specific ELF ABI forms also constitute the semantic capabilities.
@@ -2263,6 +2275,11 @@ static const struct {
     {MINIAS_FIXUP_SUB,8U,56U},
     {MINIAS_FIXUP_CFI_ADD6,1U,105U}, /* R_LARCH_ADD6 */
     {MINIAS_FIXUP_CFI_SUB6,1U,106U}, /* R_LARCH_SUB6 */
+    /* Variable-length ULEB fields are linker-adjusted in place.  The
+     * generic MCExpr owner retains the symbolic pair; LoongArch owns its
+     * relocation numbers and the zero-width field descriptor. */
+    {MINIAS_FIXUP_LEB_ADD,0U,107U}, /* R_LARCH_ADD_ULEB128 */
+    {MINIAS_FIXUP_LEB_SUB,0U,108U}, /* R_LARCH_SUB_ULEB128 */
     {MINIAS_FIXUP_LARCH_PCALA_HI20,4U,71U},
     {MINIAS_FIXUP_LARCH_PCALA_LO12,4U,72U},
     {MINIAS_FIXUP_LARCH_GOT_PC_HI20,4U,75U},
@@ -2297,6 +2314,7 @@ static bool la_cfi_linker_relaxation_marker(MiniAsFixupKind kind) {
 }
 static const MiniAsTargetOps ops={
     .name="loongarch64",.comment_prefix='#',.elf_machine=258U,
+    .leb128_reloc_mode=1U,
     .resolve_profile=la_profile,.parse_mcinst=la_parse,
     .init_target_state=la_init_target_state,
     .destroy_target_state=la_destroy_target_state,
