@@ -1475,7 +1475,9 @@ bool minias_compile_data_mc(MiniAs *as, MiniAsStmt *stmt,
     if(width==0U)return true;
     copy=minias_strdup(stmt->args);
     if(!copy){minias_set_error(as,"out-of-memory:mc-data-copy");return false;}
-    count=1U;
+    /* Keep MCData's semantic field count identical to the source producer:
+     * GAS's operand-free `.long`/`.word` emits no bytes and no fixups. */
+    count=*minias_trim(copy)=='\0'?0U:1U;
     for(walk=copy;*walk;++walk)if(*walk==',')++count;
     if(count>SIZE_MAX/sizeof(MiniAsMCExpr) || count>UINT32_MAX/width) {
         minias_set_error(as,"mc-data-count-overflow:line=%zu",stmt->line);
@@ -1486,14 +1488,14 @@ bool minias_compile_data_mc(MiniAs *as, MiniAsStmt *stmt,
         free(copy);minias_set_error(as,"out-of-memory:mc-data");return false;
     }
     stmt->mcdata=data; /* destructor owns partial parse on failure */
-    data->fields=calloc(count,sizeof(*data->fields));
-    if(!data->fields) {
+    data->fields=count?calloc(count,sizeof(*data->fields)):NULL;
+    if(count && !data->fields) {
         free(copy);minias_set_error(as,"out-of-memory:mc-data-fields");
         return false;
     }
     data->width=width;
     data->count=count;
-    walk=copy;
+    walk=count?copy:NULL;
     while(walk && i<count) {
         char *comma=strchr(walk,',');
         char *token;

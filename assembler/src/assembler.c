@@ -3452,7 +3452,11 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
             minias_set_error(as,"invalid-fixed-data-width:%s",op);
             return false;
         }
-        count=1U;
+        /* GNU GAS accepts an operand-free fixed-width directive as a
+         * zero-byte statement (`663: .long` appears in AArch64 Linux
+         * alternative-insn expansions). An empty argument list is not a
+         * single invalid MCExpr or an implicit zero-valued element. */
+        count=*minias_trim(args)=='\0'?0U:1U;
         for(cursor=args;*cursor;++cursor)
             if(*cursor==',')++count;
         if(count>UINT32_MAX/width) {
@@ -5489,7 +5493,8 @@ static char *find_macro_argument_space(char *text) {
 static size_t split_macro_arguments(char *text,
                                     char **tokens,
                                     size_t capacity,
-                                    size_t expected_count) {
+                                    size_t expected_count,
+                                    bool preserve_parenthesized_operand) {
     char *segments[64];
     size_t segment_count = 0U;
     size_t count = 0U;
@@ -5601,7 +5606,8 @@ static size_t split_macro_arguments(char *text,
                 while(lhs>segment && (lhs[-1]==' ' || lhs[-1]=='\t'))
                     --lhs;
                 if((*rhs && strchr("+-*/%&|^<>",*rhs)) ||
-                   (lhs>segment && strchr("+-*/%&|^<>",lhs[-1])))
+                   (lhs>segment && strchr("+-*/%&|^<>",lhs[-1])) ||
+                   (preserve_parenthesized_operand && *rhs=='('))
                     break;
             }
             *space = '\0';
@@ -5932,7 +5938,8 @@ static bool expand_macro_invocation(MiniAs *as,
     supplied = split_macro_arguments(copy,
                                      tokens,
                                      64U,
-                                     macro->param_count);
+                                     macro->param_count,
+                                     as->target->macro_preserve_parenthesized_operand);
     if(supplied==SIZE_MAX || (!has_vararg && supplied>macro->param_count)) {
         minias_set_error(as, "bad-macro-arguments:%s:line=%zu",
                          macro->name, line);

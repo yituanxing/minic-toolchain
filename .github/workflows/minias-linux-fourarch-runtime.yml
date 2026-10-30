@@ -94,12 +94,17 @@ jobs:
           bash tests/assembler/probe-minias-as-provenance.sh
           case '${{ matrix.arch }}' in
             x86_64)
+              bash tests/assembler/probe-common-macro-optional-data-gnu.sh
+              bash tests/assembler/probe-x86-endbr32-gnu.sh
               bash tests/assembler/probe-x86-linux-code16-gnu.sh
               bash tests/assembler/probe-x86-vdso-eh-gnu.sh
               bash tests/assembler/probe-x86-boot-header-elf32-gnu.sh
               bash tests/assembler/probe-x86-kernel-pgt-gnu.sh
               ;;
-            aarch64) bash tests/assembler/probe-aarch64-branch-binding-gnu.sh ;;
+            aarch64)
+              bash tests/assembler/probe-aarch64-branch-binding-gnu.sh
+              bash tests/assembler/probe-aarch64-macro-parenthesized-gnu.sh
+              ;;
             loongarch64)
               LOONGAS=loongarch64-linux-gnu-as \
               LOONGCOPY=loongarch64-linux-gnu-objcopy \

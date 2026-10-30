@@ -1031,6 +1031,10 @@ typedef struct MiniAsTargetOps {
      * strict RV32I sections to 4). Evaluated after Target state init. */
     unsigned (*default_exec_alignment_for_site)(const MiniAs *);
     unsigned word_directive_width; /* zero: 4, x86 GNU .word: 2 */
+    /* GNU's target-specific macro lexer can keep `op (expr)` in one
+     * comma-delimited argument when filling optional positional slots.
+     * AArch64 GAS preserves this binding; x86 GAS whitespace-splits it. */
+    bool macro_preserve_parenthesized_operand;
     unsigned inst_directive_width; /* optional raw target ISA .inst datum */
     bool align_directive_bytes;   /* x86 GNU .align: bytes, RISC-V/A64: power 2 */
     unsigned common_default_alignment_cap; /* 0: require explicit .comm alignment */

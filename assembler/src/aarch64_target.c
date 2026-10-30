@@ -5699,6 +5699,7 @@ static bool a64_named_relocation(const char *name,
 }
 
 static const MiniAsTargetOps ops = {
+    .macro_preserve_parenthesized_operand=true,
     .comment_prefix = '/', /* //, not #; AArch64 #42 is an immediate. */
     .elf_machine = 183U, /* EM_AARCH64 */
     .parse_target_directive = directive,

@@ -46,7 +46,7 @@ static bool x64_legacy_opcode_allowed(const char *name,uint32_t mode) {
         "pushl","popl","pushw","popw","push","pop",
         "pushf","popf","pushfl","popfl","pushal","popal",
         "mov","movl","movw","movb","movzwl","movzbl",
-        "nop","ret","retl","leave","lretw","lret",
+        "nop","ret","retl","leave","lretw","lret","endbr32",
         "cli","sti","cld","hlt","wbinvd","pause","cpuid","lfence",
         "syscall",
         "call","calll","jmp","jmpl","ljmpw","ljmpl","ljmp",
@@ -1844,10 +1844,15 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         m->operands[0].register_64=false;
         goto done;
     }
-    if (!strcmp(s->op,"endbr64") && !*s->args) {
+    if ((!strcmp(s->op,"endbr64") || !strcmp(s->op,"endbr32")) &&
+        !*s->args) {
         m->opcode=X64_ZERO;
         m->target_form=4U;
-        m->encoding=UINT32_C(0xfa1e0ff3);
+        /* CET IBT: F3 0F 1E FA (ENDBR64) / FB (ENDBR32).
+         * The fixed four-byte encoding is mode-independent; the legacy
+         * allowlist above still gates the parsed .code16/.code32 forms. */
+        m->encoding=!strcmp(s->op,"endbr64")?
+            UINT32_C(0xfa1e0ff3):UINT32_C(0xfb1e0ff3);
         m->count=0U;goto done;
     }
     /* All GNU REP/REPE/REPNE string forms use the canonical zero-arg
