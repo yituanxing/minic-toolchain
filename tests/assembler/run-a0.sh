@@ -101,7 +101,8 @@ for bad in mul div fadd.s fadd.d amoadd.w c.li csrrw fence.i sfence.vma pause; d
     }
 done
 for escape in '.insn r 51, 0, 1, a0, a0, a1' '.word 0x02050533' \
-              '.option arch,+m' '.option rvc' '.org 8'; do
+              '.option arch,+m' '.option arch, +v' '.option arch,+zbb' \
+              '.option rvc' '.org 8'; do
     printf '.text\n.globl test_i\ntest_i:\n    %s\n' "$escape" >"$work/strict-i-escape.s"
     rm -f "$work/strict-i-escape.o"
     if "$MINIAS" -march=rv64i -mabi=lp64 -o "$work/strict-i-escape.o" \
@@ -1026,7 +1027,7 @@ test "$macro_hex" = "13851500138676001307170013071700"
 
 cat >"$work/vector-unit.s" <<'EOF'
 .text
-.option arch,+v
+.option arch, +v
 vsetvli t0, x0, e8, m8, ta, ma
 vmv.v.i v0, -1
 vmv.v.i v8, -1
@@ -1050,9 +1051,12 @@ cat >"$work/native-zbb-tail-memexpr.s" <<'EOF'
 .globl native_zbb_tail_memexpr
 .type native_zbb_tail_memexpr, @function
 native_zbb_tail_memexpr:
+  .option push
+  .option arch, +zbb
   orc.b a0, a1
   rev8 a2, a3
   ctz a4, a5
+  .option pop
   ld t0, (0 + 8)(a0)
   sd t1, ((0 * 8) - (2 * 8))(t3)
   and t2, t2, 8 -1

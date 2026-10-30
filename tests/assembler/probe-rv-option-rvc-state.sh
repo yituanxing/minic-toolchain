@@ -105,7 +105,7 @@ grep -q 'disabled-riscv-compressed' "$work/invalid.stderr"
 # The legacy -march-omitted input must NOT silently accept GNU linker
 # relaxation requests, which require R_RISCV_RELAX/ALIGN marker relocations.
 # Unknown .option dialects must also fail rather than becoming no-ops.
-for option in relax unknown_option; do
+for option in relax unknown_option 'arch, +zmadeup'; do
     printf '.text\n.option %s\ncall external_symbol\n' "$option" >"$work/unsupported-option.s"
     for args in "legacy" "rv64gc"; do
         options=()

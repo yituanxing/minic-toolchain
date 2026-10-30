@@ -491,6 +491,25 @@ invalid:
     return false;
 }
 
+/* Recognize only documented legacy-region ISA additions. GNU accepts
+ * whitespace around the comma (`arch,+v` and `arch, +v` are equivalent);
+ * do not turn other .option arch operands into silent no-ops. */
+static bool riscv_legacy_arch_add_option(const char *args) {
+    const char *p = args;
+    while (isspace((unsigned char)*p)) ++p;
+    if (strncmp(p, "arch", 4U) != 0) return false;
+    p += 4U;
+    while (isspace((unsigned char)*p)) ++p;
+    if (*p++ != ',') return false;
+    while (isspace((unsigned char)*p)) ++p;
+    if (*p++ != '+') return false;
+    if (strncmp(p, "zbb", 3U) == 0) p += 3U;
+    else if (*p == 'v') ++p;
+    else return false;
+    while (isspace((unsigned char)*p)) ++p;
+    return *p == '\0';
+}
+
 /* One option-state transition function for both legacy and explicit ISA
  * modes. Unsupported modifiers are errors, not ignored compatibility input:
  * in particular GNU .option relax needs R_RISCV_RELAX / R_RISCV_ALIGN
@@ -533,10 +552,11 @@ static bool riscv_target_directive(MiniAs *as, const char *op,
             return false;
         }
         state->options=state->option_stack[--state->option_depth];
-    } else if(!state->isa_explicit && strcmp(args,"arch,+v")==0) {
-        /* In the permissive legacy profile V is already available. Keep
-         * the GNU source spelling without claiming a new .option arch
-         * capability; explicit ISA changes still require real snapshots. */
+    } else if(!state->isa_explicit && riscv_legacy_arch_add_option(args)) {
+        /* In the permissive legacy profile V/Zbb are already available.
+         * GNU .option arch,+ext is a local region's instruction permission,
+         * not a file-wide Tag_RISCV_arch declaration.  Do not rewrite ELF
+         * attributes or relax explicit -march ISA restrictions here. */
     } else if(strcmp(args,"norelax")==0) {
         /* GNU GAS retains the final target .option relax state through
          * push/pop and gates deferred ULEB relocation emission with it.

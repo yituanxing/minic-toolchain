@@ -83,11 +83,12 @@ set -Eeuo pipefail
 args=("$@")
 output= input=
 need_elf32=0
-query=0
+query=0 version_probe=0
 for ((i=0; i<${#args[@]}; i++)); do
     arg=${args[i]}
     case "$arg" in
-        --version|-v|--help) query=1 ;;
+        --version) query=1; version_probe=1 ;;
+        -v|--help) query=1 ;;
         --32) need_elf32=1 ;;
         -o)
             if (( i + 1 < ${#args[@]} )); then
@@ -111,8 +112,11 @@ if (( query )); then
     # The parser intentionally does not treat the /dev/null character device
     # as a source file (-f is false), so input may be empty for that probe.
     if [[ -z "$input" && -z "$output" ]] ||
-       [[ -z "$input" && "$output" == /dev/null ]] ||
-       [[ "$input" == /dev/null && "$output" == /dev/null ]]; then
+       { (( version_probe )) &&
+         { { [[ "$output" == /dev/null ]] &&
+             [[ -z "$input" || "$input" == /tmp/cc*.s ]]; } ||
+           { [[ "$output" =~ (^|/)\.tmp_[0-9]+/tmp$ ]] &&
+             [[ "$input" == /tmp/cc*.s ]]; }; }; }; then
         printf 'delegate-query cwd=%q argc=%s\n' "$PWD" "${#args[@]}" \
             >>"${MINIAS_AS_TRACE:?}"
         exec "${REAL_AS:?}" "$@"
@@ -166,6 +170,22 @@ export MINIAS="$minias"
 export MINIAS_AS_TRACE="$work/minias-as.trace"
 export MINIAS_FAILURE_DIR="$work/failure-inputs"
 export REAL_AS="$real_as"
+
+# GCC's discarded as-version probe is legal, but a real kernel .o may never
+# reach GNU as via --version. Verify both cases before expensive Kbuild.
+probe_input=$(mktemp /tmp/ccXXXXXX.s)
+if ! MINIAS=/bin/false "$wrapper" --version -o /dev/null "$probe_input" \
+    | grep -q 'GNU assembler'; then
+    echo 'MINIAS_AS_VERSION_PROBE=FAIL arch=x86_64 harmless_query' >&2
+    exit 1
+fi
+if MINIAS=/bin/false "$wrapper" --version -o "$image_out/probe-production.o" "$probe_input" \
+    >/dev/null 2>&1; then
+    echo 'MINIAS_AS_VERSION_PROBE=FAIL arch=x86_64 production_delegated' >&2
+    exit 1
+fi
+rm -f "$probe_input"
+echo 'MINIAS_AS_VERSION_PROBE=PASS arch=x86_64 query=1 production_gnu_as=0'
 
 started=$(date +%s)
 if ! make -C "$src" O="$image_out" ARCH=x86_64 \
