@@ -1463,6 +1463,13 @@ check-x86-reachable-gnu-runtime: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
 	sh tests/compiler/c0/probe-x86-reachable-gnu-runtime.sh
 
+.PHONY: check-x86-kernel-head-link-address
+check-x86-kernel-head-link-address: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	bash tests/compiler/c0/probe-x86-kernel-head-link-address.sh
+
+check-fast: check-x86-kernel-head-link-address
+
 .PHONY: check-static-local-owner-reachability
 check-static-local-owner-reachability: $(MINIC_CC_BINARY)
 	MINIC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \

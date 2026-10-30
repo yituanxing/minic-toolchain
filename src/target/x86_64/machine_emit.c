@@ -652,6 +652,15 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
     case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS:
         if (ins->value.global_id >= fn->global_count ||
             fn->globals[ins->value.global_id].name == NULL) return false;
+        /* Linux's non-PIE .head.text runs at a displaced physical address
+         * before final page tables exist. Its link-address arithmetic must
+         * retain the absolute kernel VMA (GNU -mcmodel=kernel R_X86_64_32S),
+         * never the relocated runtime address produced by RIP-relative LEA.
+         * Leave all ordinary, PIC, and non-head symbol materialization alone. */
+        if (frame->kernel_head_link_addresses)
+            return fprintf(out, "  movq $%s, %%rax\n",
+                           fn->globals[ins->value.global_id].name) >= 0 &&
+                   x86_value_store(out, frame, ins->result);
         /* In non-PIC code (including original -fno-PIE kernel C), even a
          * default-visible external uses a direct RIP-relative relocation:
          * the static link resolves it without allocating any GOT entry.

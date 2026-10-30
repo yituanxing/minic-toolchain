@@ -93,6 +93,9 @@ static bool x86_emit_function(FILE *out, const MinicC0Program *program,
         goto done;
     }
     frame.function_value_use_counts = function_value_use_counts;
+    frame.kernel_head_link_addresses = !target->position_independent &&
+        declaration->section_name != NULL &&
+        strcmp(declaration->section_name, ".head.text") == 0;
     if (declaration->section_name != NULL) {
         if (fprintf(out, ".section %s,\"ax\",@progbits\n", declaration->section_name) < 0)
             goto done;

@@ -34,6 +34,11 @@ typedef struct MinicX86Frame {
     const MinicCoreCallIndex *semantic_calls;
     size_t object_count;
     size_t frame_size;
+    /* Before early x86 kernel page tables are installed, a .head.text C
+     * function needs link-time kernel virtual symbol values for physical
+     * relocation arithmetic. RIP-relative LEA would instead materialize
+     * the currently executing (relocated) physical symbol address. */
+    bool kernel_head_link_addresses;
     /* Wide scalar operations use RDX as a scratch register. Snapshot the
      * incoming SysV GP bank in the prologue before lowering any Core body.
      * This keeps a later TI parameter alive across an earlier param's

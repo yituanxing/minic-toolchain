@@ -97,6 +97,7 @@ jobs:
           python3 tools/ci/test_linux_three_isa_seven_runtime_v1.py
           python3 tools/ci/linux-three-isa-minic-candidate-v1.py --self-test
           python3 tools/ci/test_linux_three_isa_candidate_shard_cache_v1.py
+          python3 tools/ci/linux-three-isa-loongarch64-early-boot-pc-v1.py --self-test
       - name: Build exactly one immutable MiniC and minic-cc for all 21 workers
         shell: bash
         run: |
@@ -707,6 +708,22 @@ jobs:
             --qemu /usr/bin/qemu-system-x86_64 \
             --output "$RUNTIME_OUTPUT/x86-early-trace" \
             --timeout 20 --max-bytes 1048576
+      - name: Capture failed Loong EFI-to-Linux PC and register snapshots without changing oracle
+        if: failure() && matrix.target == 'loongarch64'
+        continue-on-error: true
+        shell: bash
+        timeout-minutes: 2
+        run: |
+          set -Eeuo pipefail
+          python3 tools/ci/linux-three-isa-loongarch64-early-boot-pc-v1.py \
+            --image "$GNU_WORK/build/arch/loongarch/boot/vmlinuz.efi" \
+            --firmware "$RUNTIME_OUTPUT/QEMU_EFI.fd" \
+            --initramfs "$RUNTIME_OUTPUT/runtime-initramfs.cpio.gz" \
+            --failed-p0 "$RUNTIME_OUTPUT/candidate/boot/p0.log" \
+            --gnu-receipt "$RUNTIME_OUTPUT/boot/gnu-qemu-receipt.json" \
+            --census "$RUNTIME_OUTPUT/candidate/postlink-c-owner-census.json" \
+            --qemu /usr/bin/qemu-system-loongarch64 \
+            --output "$RUNTIME_OUTPUT/loong-early-trace"
       - name: Preserve failed x86 final MiniC candidate bzImage without rebuilding
         if: failure() && matrix.target == 'x86_64'
         continue-on-error: true
@@ -759,6 +776,7 @@ jobs:
             build/minic-seven-receiver-${{ matrix.target }}/candidate/boot/
             build/minic-seven-receiver-${{ matrix.target }}/aarch64-early-trace/
             build/minic-seven-receiver-${{ matrix.target }}/x86-early-trace/
+            build/minic-seven-receiver-${{ matrix.target }}/loong-early-trace/
           if-no-files-found: warn
           retention-days: 14
 
