@@ -205,6 +205,41 @@ bool minic_c0_program_set_function_section(MinicC0Program *program,
     return true;
 }
 
+bool minic_c0_program_set_function_diagnostic(MinicC0Program *program,
+                                              MinicFunctionId function_id,
+                                              MinicFunctionDiagnosticKind kind,
+                                              const char *message,
+                                              size_t message_length) {
+    MinicFunction *function;
+    char **owned_message;
+    size_t *owned_length;
+    char *copy;
+
+    if (program == NULL || function_id >= program->function_count ||
+        (kind != MINIC_FUNCTION_DIAGNOSTIC_ERROR &&
+         kind != MINIC_FUNCTION_DIAGNOSTIC_WARNING) ||
+        message == NULL || message_length == SIZE_MAX) {
+        return false;
+    }
+    function = &program->functions[function_id];
+    owned_message = kind == MINIC_FUNCTION_DIAGNOSTIC_ERROR
+        ? &function->error_message : &function->warning_message;
+    owned_length = kind == MINIC_FUNCTION_DIAGNOSTIC_ERROR
+        ? &function->error_message_length : &function->warning_message_length;
+    if (*owned_message != NULL && *owned_length == message_length &&
+        memcmp(*owned_message, message, message_length) == 0) return true;
+    copy = (char *)malloc(message_length + 1U);
+    if (copy == NULL) return false;
+    (void)memcpy(copy, message, message_length);
+    copy[message_length] = '\0';
+    /* GNU later same-kind redeclarations replace the text.  An error and a
+     * warning are independent; both can fire on one surviving call. */
+    free(*owned_message);
+    *owned_message = copy;
+    *owned_length = message_length;
+    return true;
+}
+
 bool minic_c0_program_set_function_alignment(MinicC0Program *program,
                                              MinicFunctionId function_id,
                                              size_t alignment) {

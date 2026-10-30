@@ -17,12 +17,12 @@ static size_t core_address_alignment_gcd(size_t base, size_t offset) {
 static size_t core_address_known_alignment_visit(
     const MinicCoreFunction *function, MinicCoreValueId address,
     MinicCoreAddressRootAlignment root_alignment, void *context,
-    unsigned int depth) {
+    unsigned int depth, unsigned int max_depth) {
     const MinicCoreInstruction *definition;
     size_t base_alignment, offset;
     if (function == NULL || root_alignment == NULL ||
         address >= function->value_count || function->values == NULL ||
-        depth > 64U || function->instructions == NULL ||
+        depth > max_depth || function->instructions == NULL ||
         function->values[address].definition >= function->instruction_count)
         return 1U;
     definition = &function->instructions[function->values[address].definition];
@@ -37,13 +37,13 @@ static size_t core_address_known_alignment_visit(
     case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS:
         base_alignment = core_address_known_alignment_visit(
             function, definition->value.field_address.base,
-            root_alignment, context, depth + 1U);
+            root_alignment, context, depth + 1U, max_depth);
         offset = definition->value.field_address.byte_offset;
         return core_address_alignment_gcd(base_alignment, offset);
     case MINIC_CORE_INSTRUCTION_POINTER_OFFSET:
         base_alignment = core_address_known_alignment_visit(
             function, definition->value.pointer_offset.base,
-            root_alignment, context, depth + 1U);
+            root_alignment, context, depth + 1U, max_depth);
         offset = definition->value.pointer_offset.element_size;
         return core_address_alignment_gcd(base_alignment, offset);
     default:
@@ -56,8 +56,17 @@ static size_t core_address_known_alignment_visit(
 size_t minic_core_address_known_alignment(
     const MinicCoreFunction *function, MinicCoreValueId address,
     MinicCoreAddressRootAlignment root_alignment, void *context) {
+    return minic_core_address_known_alignment_bounded(
+        function, address, root_alignment, context, 64U);
+}
+
+size_t minic_core_address_known_alignment_bounded(
+    const MinicCoreFunction *function, MinicCoreValueId address,
+    MinicCoreAddressRootAlignment root_alignment, void *context,
+    unsigned int max_depth) {
+    if (max_depth > 64U) max_depth = 64U;
     return core_address_known_alignment_visit(
-        function, address, root_alignment, context, 0U);
+        function, address, root_alignment, context, 0U, max_depth);
 }
 
 /* One target-independent conservative CFG filter for every Core backend.

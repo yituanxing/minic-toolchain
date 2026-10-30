@@ -115,6 +115,8 @@ void minic_c0_program_destroy(MinicC0Program *program) {
         free(program->functions[index].name);
         free(program->functions[index].assembler_name);
         free(program->functions[index].section_name);
+        free(program->functions[index].error_message);
+        free(program->functions[index].warning_message);
         free(program->functions[index].parameter_types);
     }
     for (index = 0U; index < program->record_count; ++index) {

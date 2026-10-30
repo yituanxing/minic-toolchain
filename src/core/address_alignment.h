@@ -25,4 +25,15 @@ size_t minic_core_address_known_alignment(
     MinicCoreAddressRootAlignment root_alignment,
     void *context);
 
+/* The default visitor has a 64-edge recursion guard. A caller that already
+ * enforces a stricter historical bound can preserve its exact proof/fallback
+ * decisions without maintaining a second recursive address algorithm.
+ * A larger requested bound never bypasses the Common 64-edge safety cap. */
+size_t minic_core_address_known_alignment_bounded(
+    const MinicCoreFunction *function,
+    MinicCoreValueId address,
+    MinicCoreAddressRootAlignment root_alignment,
+    void *context,
+    unsigned int max_depth);
+
 #endif

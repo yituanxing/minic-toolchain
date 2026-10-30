@@ -44,6 +44,7 @@ static const MinicBackend aarch64_backend = {
     .qualify_inline_asm = minic_aarch64_qualify_inline_asm,
     .requires_qualified_input_asm = minic_aarch64_requires_qualified_input_asm,
     .qualify_inline_asm_goto = minic_aarch64_qualify_inline_asm_goto,
+    .clone_safe_opaque_asm = minic_aarch64_clone_safe_opaque_asm,
 };
 static const MinicBackend loongarch64_backend = {
     .emit_program = minic_loongarch64_write_c0_program_with_core_functions,
@@ -266,6 +267,12 @@ bool minic_backend_qualify_inline_asm_goto(
     const MinicInlineAsm *source) {
     return backend && backend->qualify_inline_asm_goto &&
            backend->qualify_inline_asm_goto(program, source);
+}
+
+bool minic_backend_clone_safe_opaque_asm(
+    const MinicBackend *backend, const MinicInlineAsm *source) {
+    return backend && backend->clone_safe_opaque_asm && source &&
+           backend->clone_safe_opaque_asm(source);
 }
 
 bool minic_backend_emit_assembly(

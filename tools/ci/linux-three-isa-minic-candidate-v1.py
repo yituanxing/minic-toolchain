@@ -16,9 +16,11 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import contextlib
 import functools
 import hashlib
 import importlib.util
+import io
 import json
 import mmap
 import os
@@ -334,6 +336,160 @@ def preserve_first_failed_owners(work: Path, output: Path, rows: list[dict],
     (samples / "index.json").write_text(json.dumps(report, sort_keys=True, indent=2) + "\n")
     print(f"THREE_ISA_FAILED_OWNER_DIAGNOSTIC verdict={report['verdict']} "
           f"captured={report['sample_count']}/{len(failures)} limit={limit}")
+    return report
+
+
+def preserve_link_failed_c_owners(work: Path, output: Path, rows: list[dict],
+                                  results: list[dict], link_log: Path,
+                                  limit: int = 32,
+                                  byte_budget: int = 96 * 1024 * 1024) -> dict:
+    """Preserve a bounded, SHA-verified subset of *original* GNU frozen C.
+
+    GNU LD may identify an owner only as ``util.o`` even when the authentic
+    manifest has many directories containing that basename. Never guess one:
+    record the ambiguity, and capture only full-path or unique-basename owner
+    identities. This is post-failure evidence, never a GNU-C compilation
+    fallback, a changed ELF, or a different Kbuild/link invocation.
+    """
+    if not 1 <= limit <= 64 or not 1 <= byte_budget <= 256 * 1024 * 1024:
+        raise Rejected("invalid bounded link-failure diagnostic budget")
+    if len(rows) != len(results) or any(
+            item.get("status") != "MINIC_S_GNU_AS_PASS" for item in results):
+        raise Rejected("link-failure samples require a complete MiniC C-object union")
+    log_text = required(link_log).read_text(errors="replace")
+    by_name = {row["object"]: row for row in rows}
+    by_result = {item["object"]: item for item in results}
+    if len(by_name) != len(rows) or set(by_name) != set(by_result):
+        raise Rejected("link-failure source and MiniC object inventory differ")
+    # GNU LD often prints an archive member's basename, but a *unique C*
+    # basename does not prove origin: a different original GNU .S owner can
+    # have the same basename. Consult the complete original target-ELF64
+    # inventory, including non-C objects, before accepting any basename.
+    discovery = json.loads(required(work / "evidence/discovery.json").read_text())
+    target_inventory = required(work / "evidence/gnu-target-objects.sha256")
+    all_target_names: set[str] = set()
+    for line in target_inventory.read_text().splitlines():
+        match = re.fullmatch(r"([0-9a-f]{64})  (\S+)", line)
+        if match is None:
+            raise Rejected("malformed original GNU target-ELF64 object inventory")
+        name = match.group(2)
+        path = PurePosixPath(name)
+        if path.is_absolute() or ".." in path.parts or path.suffix != ".o":
+            raise Rejected("unsafe original GNU target ELF64 owner path")
+        if name in all_target_names:
+            raise Rejected("duplicate original GNU target ELF64 owner")
+        all_target_names.add(name)
+    if (len(all_target_names) != discovery.get("gnu_target_objects") or
+            not set(by_name).issubset(all_target_names)):
+        raise Rejected("incomplete original GNU target ELF64/ASM provenance")
+    by_basename: dict[str, list[str]] = {}
+    for name in all_target_names:
+        path = PurePosixPath(name)
+        by_basename.setdefault(path.name, []).append(name)
+    for owners in by_basename.values():
+        owners.sort()
+    owner_pattern = re.compile(r"(?<![A-Za-z0-9_./+-])"
+                               r"([A-Za-z0-9_.+-]+(?:/[A-Za-z0-9_.+-]+)*\.o):(?:\(|:)")
+    referenced: list[str] = []
+    ambiguous: dict[str, list[str]] = {}
+    unknown: set[str] = set()
+    all_mentions = 0
+    for line in log_text.splitlines():
+        if "undefined reference to" not in line and "relocation truncated to fit" not in line:
+            continue
+        for match in owner_pattern.finditer(line):
+            all_mentions += 1
+            token = match.group(1)
+            if "/" in token and token in by_name:
+                chosen = token
+            else:
+                candidates = by_basename.get(PurePosixPath(token).name, [])
+                if len(candidates) == 1 and candidates[0] in by_name:
+                    chosen = candidates[0]
+                elif candidates:
+                    ambiguous[token] = candidates[:16]
+                    continue
+                else:
+                    unknown.add(token)
+                    continue
+            if chosen not in referenced:
+                referenced.append(chosen)
+
+    dest = output / "link-failure-owner-diagnostics"
+    dest.mkdir(parents=True, exist_ok=False)
+    report = {"schema": "minic-three-isa-link-failure-c-owners-v1",
+              "diagnostics_only": True, "no_gcc_retry_or_fallback": True,
+              "original_link_log_sha256": sha(link_log),
+              "total_link_owner_mentions": all_mentions,
+              "unambiguously_resolved_owners": len(referenced),
+              "sample_limit": limit, "byte_budget": byte_budget,
+              "bytes_copied": 0, "samples": [], "skipped": [],
+              "ambiguous_basenames": [
+                  {"token": name, "candidate_count": len(by_basename.get(
+                      PurePosixPath(name).name, [])), "sample_candidates": owners}
+                  for name, owners in sorted(ambiguous.items())[:64]],
+              "unknown_non_c_owners": sorted(unknown)[:64], "errors": []}
+    for name in referenced:
+        if len(report["samples"]) >= limit:
+            report["skipped"].append({"owner": name, "reason": "owner_count_budget"})
+            continue
+        row = by_name[name]
+        source_name = PurePosixPath(row.get("input", ""))
+        if (source_name.is_absolute() or ".." in source_name.parts or
+                source_name.suffix != ".i"):
+            raise Rejected("unsafe original frozen GNU input in link diagnostics")
+        owner_path = PurePosixPath(name)
+        original_i = required(work / "frozen" / source_name)
+        original_cmd = required(work / "build" / owner_path.parent /
+                                ("." + owner_path.name + ".cmd"))
+        if (sha(original_i) != row.get("sha256") or
+                sha(original_cmd) != row.get("cmd_sha256")):
+            raise Rejected("frozen GNU C owner changed before link diagnostics")
+        # Copy complete files only. A large source can exceed the *remaining*
+        # budget; record its identity/size, never create truncated fake .i.
+        essential = (("original.gnu.i", original_i, row["sha256"]),
+                     ("original.gnu.o.cmd", original_cmd, row["cmd_sha256"]))
+        size = sum(path.stat().st_size for _, path, _ in essential)
+        if size > byte_budget - report["bytes_copied"]:
+            report["skipped"].append({"owner": name, "reason": "byte_budget",
+                                      "required_bytes": size})
+            continue
+        folder = dest / owner_path.with_suffix("")
+        folder.mkdir(parents=True, exist_ok=False)
+        entry = {"owner": name, "input_sha256": row["sha256"],
+                 "cmd_sha256": row["cmd_sha256"], "files": {}}
+        for label, path, expected in essential:
+            copy = folder / label
+            shutil.copyfile(path, copy)
+            if sha(copy) != expected:
+                raise Rejected("link-failure diagnostic copy changed authentic GNU input")
+            entry["files"][label] = {"sha256": expected, "bytes": copy.stat().st_size}
+        report["bytes_copied"] += size
+        # Candidate S is already MiniC-created and optional; its 1 MiB cap
+        # and the global byte cap bound artifact growth. Frozen inputs take
+        # priority within each selected owner.
+        asm = output / "staged" / owner_path.with_suffix(".s")
+        if (asm.is_file() and not asm.is_symlink() and
+                asm.stat().st_size <= 1024 * 1024 and
+                asm.stat().st_size <= byte_budget - report["bytes_copied"] and
+                sha(asm) == by_result[name].get("asm_sha256")):
+            copy = folder / "minic.s"
+            shutil.copyfile(asm, copy)
+            digest = sha(copy)
+            if digest != by_result[name]["asm_sha256"]:
+                raise Rejected("candidate S changed before link diagnostics")
+            entry["files"]["minic.s"] = {"sha256": digest,
+                                          "bytes": copy.stat().st_size}
+            report["bytes_copied"] += copy.stat().st_size
+        report["samples"].append(entry)
+    report["sample_count"] = len(report["samples"])
+    report["verdict"] = ("LINK_FAILURE_C_OWNER_SAMPLES_COMPLETE" if
+                         not report["skipped"] and not report["ambiguous_basenames"] else
+                         "LINK_FAILURE_C_OWNER_SAMPLES_BOUNDED")
+    (dest / "index.json").write_text(json.dumps(report, sort_keys=True, indent=2) + "\n")
+    print("THREE_ISA_LINK_FAILED_OWNER_DIAGNOSTIC "
+          f"verdict={report['verdict']} samples={report['sample_count']} "
+          f"unambiguous={len(referenced)} bytes={report['bytes_copied']}")
     return report
 
 
@@ -755,6 +911,17 @@ def relink(work: Path, output: Path, rows: list[dict], results: list[dict],
             (output / "aarch64-got-plt-postlink-error.txt").write_text(
                 str(exc)[:4096])
     if linked.returncode:
+        # Only after the original unchanged GNU Kbuild command has failed,
+        # retain a bounded set of its *authentic frozen GNU C* error owners.
+        # This is postmortem evidence, not a linker retry or a GNU C fallback.
+        try:
+            preserve_link_failed_c_owners(
+                work, output, rows, results, output / "gnu-ld-relink.log")
+        except Exception as exc:
+            # Postmortem collection must never conceal the actual GNU LD
+            # rejection, even if a future diagnostic parser itself fails.
+            (output / "link-failure-owner-diagnostic-error.txt").write_text(
+                str(exc)[:4096])
         raise Rejected(f"original GNU Kbuild relink failed rc={linked.returncode}")
     # Re-enumerate *all* live original-Kbuild C owners after the link, not just
     # the preoverlay list. A new GCC-generated C object may not evade this
@@ -1020,6 +1187,101 @@ def self_test() -> None:
         assert (first_out / "failed-owner-diagnostics/kernel/first_error_1/minic.s").is_file()
         assert not (first_out / "failed-owner-diagnostics/kernel/first_error_8").exists()
         assert len((first_owner / "tool-stderr.txt").read_text()) > 600
+        failures_checked += 1
+        # On original-GNU *link* failure there are no failed MiniC C owners.
+        # GNU LD can print only a basename; exactly one matching manifest
+        # owner is safe, while duplicate basenames and aggregate/derived
+        # `kvm_nvhe.o` must remain explicit unknown/ambiguous evidence.
+        link_fixture = Path(temp) / "strict-link-failure.log"
+        link_fixture.write_text(
+            "ld: first_error_2.o:(.text+0x4): undefined reference to `guard_a'\n"
+            "ld: first_error_1.o:(.text+0x8): undefined reference to `guard_b'\n"
+            "ld: first_error_3.o:(.text+0xa): undefined reference to `asm_collision'\n"
+            "ld: kernel/first_error_0.o:(.text+0xc): undefined reference to `guard_c'\n"
+            "ld: kernel/first_error_1.o:(.text+0xe): undefined reference to `full_path_guard'\n"
+            "ld: kvm_nvhe.o:(.text+0x10): undefined reference to `__kvm_nvhe_guard'\n")
+        other_name = "other/first_error_1.o"
+        other_cmd = first_work / "build/other/.first_error_1.o.cmd"
+        other_cmd.parent.mkdir(parents=True)
+        other_cmd.write_text("savedcmd := gcc original/other.i\n")
+        other_frozen = first_work / "frozen/i/other/first_error_1.i"
+        other_frozen.parent.mkdir(parents=True)
+        other_frozen.write_text("/* ambiguous unrelated GNU C owner */\n")
+        ambiguous_rows = [*failed_rows, {
+            "object": other_name, "input": "i/other/first_error_1.i",
+            "sha256": sha(other_frozen), "cmd_sha256": sha(other_cmd)}]
+        all_gnu_names = sorted([row["object"] for row in ambiguous_rows] +
+                               ["arch/asm/first_error_3.o"])
+        gnu_evidence = first_work / "evidence"
+        gnu_evidence.mkdir(parents=True)
+        (gnu_evidence / "discovery.json").write_text(json.dumps(
+            {"gnu_target_objects": len(all_gnu_names)}))
+        (gnu_evidence / "gnu-target-objects.sha256").write_text("".join(
+            f"{'a' * 64}  {name}\n" for name in all_gnu_names))
+        passed = [{"object": row["object"], "status": "MINIC_S_GNU_AS_PASS",
+                   "asm_sha256": None} for row in ambiguous_rows]
+        link_output = Path(temp) / "strict-link-output"
+        link_output.mkdir()
+        staged_asm = link_output / "staged/kernel/first_error_2.s"
+        staged_asm.parent.mkdir(parents=True)
+        staged_asm.write_text(".text\n/* MiniC exact candidate S */\n")
+        passed[2]["asm_sha256"] = sha(staged_asm)
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            link_report = preserve_link_failed_c_owners(
+                first_work, link_output, ambiguous_rows, passed, link_fixture)
+        assert "guard_a" not in stdout.getvalue()
+        assert "original GNU C owner" not in stdout.getvalue()
+        assert [item["owner"] for item in link_report["samples"]] == [
+            "kernel/first_error_2.o", "kernel/first_error_0.o",
+            "kernel/first_error_1.o"]
+        assert [item["token"] for item in link_report["ambiguous_basenames"]] == [
+            "first_error_1.o", "first_error_3.o"]
+        assert link_report["unknown_non_c_owners"] == ["kvm_nvhe.o"]
+        assert link_report["original_link_log_sha256"] == sha(link_fixture)
+        assert (link_output / "link-failure-owner-diagnostics/kernel/first_error_2/"
+                "original.gnu.i").read_bytes() == (
+                    first_work / "frozen/i/kernel/first_error_2.i").read_bytes()
+        assert (link_output / "link-failure-owner-diagnostics/kernel/first_error_1/"
+                "original.gnu.i").is_file()
+        assert not (link_output / "link-failure-owner-diagnostics/other/first_error_1").exists()
+        assert not (link_output / "link-failure-owner-diagnostics/kernel/first_error_3").exists()
+        assert not (link_output / "link-failure-owner-diagnostics/kvm_nvhe").exists()
+        assert (link_output / "link-failure-owner-diagnostics/kernel/first_error_2/"
+                "minic.s").read_bytes() == staged_asm.read_bytes()
+        link_budget_out = Path(temp) / "strict-link-budget"
+        link_budget_out.mkdir()
+        budget_report = preserve_link_failed_c_owners(
+            first_work, link_budget_out, ambiguous_rows, passed,
+            link_fixture, limit=1, byte_budget=1)
+        assert not budget_report["samples"] and len(budget_report["skipped"]) == 3
+        assert all(item["reason"] == "byte_budget" for item in budget_report["skipped"])
+        link_count_out = Path(temp) / "strict-link-count"
+        link_count_out.mkdir()
+        count_report = preserve_link_failed_c_owners(
+            first_work, link_count_out, ambiguous_rows, passed, link_fixture, limit=1)
+        assert count_report["sample_count"] == 1
+        assert count_report["skipped"] == [
+            {"owner": "kernel/first_error_0.o", "reason": "owner_count_budget"},
+            {"owner": "kernel/first_error_1.o", "reason": "owner_count_budget"}]
+        bad_rows = [dict(row) for row in ambiguous_rows]
+        bad_rows[0]["object"] = "../malicious.o"
+        bad_passed = [dict(item) for item in passed]
+        bad_passed[0]["object"] = "../malicious.o"
+        try:
+            preserve_link_failed_c_owners(
+                first_work, Path(temp) / "unsafe-owner-out", bad_rows, bad_passed, link_fixture)
+            raise AssertionError("traversal escaped original GNU owner mapping")
+        except Rejected:
+            pass
+        bad_rows = [dict(row) for row in ambiguous_rows]
+        bad_rows[0]["sha256"] = "0" * 64
+        try:
+            preserve_link_failed_c_owners(
+                first_work, Path(temp) / "bad-digest-out", bad_rows, passed, link_fixture)
+            raise AssertionError("invalid GNU frozen sha was accepted")
+        except Rejected:
+            pass
         failures_checked += 1
         # Linux kernel/configs.o has a genuine Kbuild-relative .incbin path.
         # Wrong cwd is an AS failure even when MiniC emitted valid assembly.

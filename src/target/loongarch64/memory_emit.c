@@ -1,68 +1,54 @@
 #include "target/loongarch64/memory_emit.h"
+#include "core/address_alignment.h"
 #include "target/common/direct_instruction_semantics.h"
 #include "target/loongarch64/frame_emit.h"
 #include <stdio.h>
 #include <string.h>
 
-/* A positive proof skips even the alignment branch on the hot path. The
- * Core SSA definition is immutable; only roots whose alignment is known from
- * the target DataLayout are trusted. Unknown/arbitrary pointer provenance
- * returns one and keeps the guarded native fast path. This is intentionally
- * target-local until Core exposes a general AddressAlignmentProof. */
+/* Core owns the recursive proof and gcd propagation. Preserve the former
+ * Loong 16-edge proof budget and its existing DataLayout root policy,
+ * including GLOBAL_ADDRESS (RV deliberately has a different global policy).
+ * Unknown/arbitrary pointer provenance still keeps the guarded native path. */
+typedef struct LoongAddressAlignmentContext {
+    const MinicC0Program *program;
+    const MinicTargetInfo *target;
+} LoongAddressAlignmentContext;
+
+static size_t loong_address_root_alignment(
+    const MinicCoreFunction *fn, const MinicCoreInstruction *origin,
+    void *opaque) {
+    const LoongAddressAlignmentContext *ctx = opaque;
+    size_t size, alignment;
+    if (ctx == NULL || ctx->program == NULL || ctx->target == NULL ||
+        ctx->target->data_layout == NULL || fn == NULL || origin == NULL)
+        return 1U;
+    switch (origin->kind) {
+    case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS: {
+        const MinicCoreObjectId id = origin->value.object_id;
+        if (id >= fn->object_count || fn->objects == NULL ||
+            !minic_data_layout_type(ctx->target->data_layout, ctx->program,
+                fn->objects[id].type, &size, &alignment)) return 1U;
+        if (fn->objects[id].explicit_alignment > alignment)
+            alignment = fn->objects[id].explicit_alignment;
+        return alignment;
+    }
+    case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS: {
+        const MinicCoreGlobalId id = origin->value.global_id;
+        return id < fn->global_count && fn->globals != NULL &&
+               minic_data_layout_type(ctx->target->data_layout, ctx->program,
+                   fn->globals[id].type, &size, &alignment)
+            ? alignment : 1U;
+    }
+    default: return 1U;
+    }
+}
+
 static size_t loong_known_address_alignment(
     const MinicC0Program *program, const MinicTargetInfo *target,
-    const MinicCoreFunction *fn, MinicCoreValueId value_id,
-    unsigned depth) {
-    const MinicCoreInstruction *origin;
-    size_t size, alignment, base, offset;
-    if (program == NULL || target == NULL || fn == NULL ||
-        value_id >= fn->value_count || depth > 16U ||
-        fn->values[value_id].definition >= fn->instruction_count)
-        return 1U;
-    origin = &fn->instructions[fn->values[value_id].definition];
-    if (origin->result != value_id) return 1U;
-    switch (origin->kind) {
-        case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS: {
-            const MinicCoreObjectId object_id = origin->value.object_id;
-            if (object_id >= fn->object_count ||
-                !minic_data_layout_type(target->data_layout, program,
-                    fn->objects[object_id].type, &size, &alignment))
-                return 1U;
-            if (fn->objects[object_id].explicit_alignment > alignment)
-                alignment = fn->objects[object_id].explicit_alignment;
-            return alignment;
-        }
-        case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS: {
-            const MinicCoreGlobalId id = origin->value.global_id;
-            return id < fn->global_count &&
-                   minic_data_layout_type(target->data_layout, program,
-                       fn->globals[id].type, &size, &alignment)
-                ? alignment : 1U;
-        }
-        /* No type-based promise for parameters or reloaded pointers: GNU C
-         * can forward &packed.member through an apparently natural T*. */
-        case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS:
-            base = loong_known_address_alignment(
-                program, target, fn, origin->value.field_address.base,
-                depth + 1U);
-            offset = origin->value.field_address.byte_offset;
-            break;
-        case MINIC_CORE_INSTRUCTION_POINTER_OFFSET:
-            base = loong_known_address_alignment(
-                program, target, fn, origin->value.pointer_offset.base,
-                depth + 1U);
-            offset = origin->value.pointer_offset.element_size;
-            break;
-        default: return 1U;
-    }
-    /* gcd(base, offset): (aligned base + arbitrary index*stride) is aligned
-     * to this divisor for every runtime index, with no speculation. */
-    while (offset != 0U) {
-        const size_t remainder = base % offset;
-        base = offset;
-        offset = remainder;
-    }
-    return base == 0U ? 1U : base;
+    const MinicCoreFunction *fn, MinicCoreValueId value_id) {
+    LoongAddressAlignmentContext context = {program, target};
+    return minic_core_address_known_alignment_bounded(
+        fn, value_id, loong_address_root_alignment, &context, 16U);
 }
 
 /* Dynamic frame uses s0; otherwise the frame is SP-relative. */
@@ -119,7 +105,7 @@ bool minic_loongarch64_emit_asm_output_store(
     const char *scratch_reg) {
     return loong_emit_scalar_store(out, width, value_reg, address_reg,
         scratch_reg, loong_known_address_alignment(program, target, fn,
-            address, 0U) >= width);
+            address) >= width);
 }
 
 /* Core LOAD/STORE deliberately carries no trusted alignment metadata: an
@@ -185,7 +171,7 @@ bool minic_loongarch64_emit_asm_input_scalar(
      * 64-bit GPR representation; ld.d transports the entire wide carrier. */
     return emit_integer_memory(out, false, width, width == 4U, false,
         loong_known_address_alignment(program, target, fn,
-                                      address, 0U) >= width);
+                                      address) >= width);
 }
 
 
@@ -211,7 +197,7 @@ bool minic_loongarch64_emit_memory_instruction(
             const MinicCoreValueId addr = ins->value.store.address;
             size_t src;
             const bool aligned = loong_known_address_alignment(
-                program, target, fn, addr, 0U) >= 8U;
+                program, target, fn, addr) >= 8U;
             if (!minic_multi_direct_wide_store_shape(
                     fn, ins, frame_plan, &src) ||
                 !emit_sp_mem(out, "ld.d", "$t1", minic_lp64_frame_value_offset(frame_plan, addr)) ||
@@ -242,7 +228,7 @@ bool minic_loongarch64_emit_memory_instruction(
                 !emit_integer_memory(out, true, pointer ? 8U : width, sign,
                                      atomic,
                      loong_known_address_alignment(program, target, fn,
-                         addr, 0U) >= (pointer ? 8U : width))) return false;
+                         addr) >= (pointer ? 8U : width))) return false;
             return true;
         }
     switch (ins->kind) {
@@ -259,7 +245,7 @@ bool minic_loongarch64_emit_memory_instruction(
                     !emit_sp_mem(out, "ld.d", "$t1", minic_lp64_frame_value_offset(frame_plan, addr)))
                     return false;
                 aligned = loong_known_address_alignment(
-                    program, target, fn, addr, 0U) >= 8U;
+                    program, target, fn, addr) >= 8U;
                 if (!emit_integer_memory(out, false, 8U, false, false, aligned) ||
                     !emit_sp_mem(out, "st.d", "$t0", dst) ||
                     !emit_sp_mem(out, "ld.d", "$t1", minic_lp64_frame_value_offset(frame_plan, addr)) ||
@@ -282,7 +268,7 @@ bool minic_loongarch64_emit_memory_instruction(
                 !emit_integer_memory(out, false, pointer ? 8U : width, sign,
                                      atomic,
                      loong_known_address_alignment(program, target, fn,
-                         addr, 0U) >= (pointer ? 8U : width)))
+                         addr) >= (pointer ? 8U : width)))
                 return false;
             *needs_gp_store = true;
             return true;

@@ -517,6 +517,27 @@ static bool core_cfg_small_constant_loop_call(const MinicCoreLowerContext *calle
     return false;
 }
 
+/* A discarded IF arm is safe for the narrow fallthrough-return fold only
+ * when it has no source-level reentry, labels, or inline ASM.  A single
+ * zero-argument call is enough to model a compile-time guard while excluding
+ * arbitrary expression/statement effects and nested control flow. */
+static bool core_cfg_skipped_if_guard_block_safe(const MinicC0Program *program,
+                                                 const MinicBlock *block) {
+    const MinicStatement *statement;
+    const MinicExpression *expression;
+
+    if (block == NULL || block->statement_count == 0U) return true;
+    if (block->statement_count != 1U) return false;
+    statement = minic_c0_program_statement(program, block->statements[0]);
+    if (statement == NULL || statement->kind != MINIC_STATEMENT_EXPRESSION ||
+        statement->cleanup_context != statement->cleanup_stop_context ||
+        statement->expression == MINIC_EXPRESSION_INVALID) return false;
+    expression = minic_c0_program_expression(program, statement->expression);
+    return expression != NULL && expression->kind == MINIC_EXPRESSION_CALL &&
+           expression->value.call.function_id != MINIC_FUNCTION_INVALID &&
+           expression->value.call.argument_count == 0U;
+}
+
 bool minic_core_cfg_constant_inline_call(const MinicCoreLowerContext *context,
                                           const MinicExpression *expression,
                                           MinicConstValue *value) {
@@ -602,6 +623,49 @@ bool minic_core_cfg_constant_inline_call(const MinicCoreLowerContext *context,
                         return true;
                     }
                 }
+            }
+        }
+    }
+    /* A pure constant IF whose selected arm is empty simply falls through
+     * to the next unconditional return.  This is common in small integer
+     * helpers: invalid-input diagnostics live in the provably skipped arm,
+     * while the return contains an otherwise foldable integer expression.
+     * Do not evaluate arbitrary blocks or bypass labels/asm-goto here. */
+    if (body->statement_count >= 2U && statement != NULL &&
+        statement->kind == MINIC_STATEMENT_IF &&
+        statement->expression != MINIC_EXPRESSION_INVALID &&
+        statement->cleanup_context == statement->cleanup_stop_context &&
+        minic_core_cfg_pure_call_argument(context, statement->expression, 0U)) {
+        MinicConstValue condition;
+        bool condition_is_zero;
+        const MinicBlock *selected;
+        const MinicBlock *skipped;
+        const MinicStatement *next;
+
+        if (core_cfg_eval_callee_return_expression(
+                context, callee, expression, statement->expression, &condition) &&
+            minic_const_value_is_zero(
+                program, context->target, &condition, &condition_is_zero)) {
+            MinicBlockId selected_id = condition_is_zero
+                ? statement->else_block : statement->then_block;
+            MinicBlockId skipped_id = condition_is_zero
+                ? statement->then_block : statement->else_block;
+            selected = minic_c0_program_block(program, selected_id);
+            skipped = minic_c0_program_block(program, skipped_id);
+            next = minic_c0_program_statement(program, body->statements[1]);
+            if ((selected_id == MINIC_BLOCK_INVALID ||
+                 (selected != NULL && selected->statement_count == 0U)) &&
+                core_cfg_skipped_if_guard_block_safe(program, skipped) &&
+                next != NULL && next->kind == MINIC_STATEMENT_RETURN &&
+                next->expression != MINIC_EXPRESSION_INVALID &&
+                next->cleanup_context == next->cleanup_stop_context &&
+                minic_core_cfg_pure_call_argument(
+                    context, next->expression, 0U) &&
+                core_cfg_eval_callee_return_expression(
+                    context, callee, expression, next->expression, &returned) &&
+                minic_const_value_convert_integer(
+                    program, context->target, &returned, expression->type, value)) {
+                return true;
             }
         }
     }

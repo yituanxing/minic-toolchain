@@ -35,6 +35,7 @@ typedef struct MinicFunctionAttributeContext {
     MinicSymbolVisibility *visibility;
     bool *has_visibility;
     bool *is_noreturn;
+    MinicParsedFunctionDiagnostic *diagnostic;
     size_t *explicit_alignment;
     bool *force_emit;
     bool *is_constructor;
@@ -103,6 +104,61 @@ static bool function_attribute_argument_token(MinicParser *parser,
     return true;
 }
 
+/* Reuse the language's owned string decoder for GNU diagnostic literals.
+ * A GNU attribute may contain adjacent literals (including escaped pieces)
+ * after preprocessing, e.g. error("max" "(" "delta" ")").  The pending
+ * attribute retains only this source span; Program ownership comes later. */
+static bool function_attribute_string_literal_span(
+    MinicParser *parser, const MinicParsedAttribute *attribute,
+    MinicSourceSpan *literal_span) {
+    MinicParser probe;
+    char *decoded = NULL;
+    size_t length;
+    bool success;
+
+    if (parser == NULL || attribute == NULL || literal_span == NULL ||
+        !attribute->has_arguments ||
+        attribute->arguments_span.end.offset <=
+            attribute->arguments_span.begin.offset + 1U) return false;
+    probe = *parser;
+    minic_lexer_initialize(&probe.lexer, parser->path, parser->source, parser->lexer.length);
+    probe.lexer.cursor = attribute->arguments_span.begin.offset + 1U;
+    probe.lexer.line = attribute->arguments_span.begin.line;
+    probe.lexer.column = attribute->arguments_span.begin.column + 1U;
+    success = minic_parser_advance(&probe) &&
+              minic_parser_parse_string_text(&probe, &decoded, &length, literal_span) &&
+              probe.current.kind == MINIC_TOKEN_RPAREN &&
+              probe.current.span.end.offset == attribute->arguments_span.end.offset;
+    free(decoded);
+    return success;
+}
+
+static bool function_decode_string_literal_span(
+    MinicParser *parser, MinicSourceSpan source_span,
+    char **message, size_t *length) {
+    MinicParser probe;
+    MinicSourceSpan decoded_span;
+
+    if (parser == NULL || message == NULL || length == NULL ||
+        source_span.end.offset <= source_span.begin.offset) return false;
+    probe = *parser;
+    minic_lexer_initialize(&probe.lexer, parser->path, parser->source, parser->lexer.length);
+    probe.lexer.cursor = source_span.begin.offset;
+    probe.lexer.line = source_span.begin.line;
+    probe.lexer.column = source_span.begin.column;
+    if (!minic_parser_advance(&probe) ||
+        !minic_parser_parse_string_text(&probe, message, length, &decoded_span)) {
+        return false;
+    }
+    if (decoded_span.begin.offset != source_span.begin.offset ||
+        decoded_span.end.offset != source_span.end.offset) {
+        free(*message);
+        *message = NULL;
+        return false;
+    }
+    return true;
+}
+
 static bool resolve_function_copy_attribute(MinicParser *parser,
                                             const MinicParsedAttribute *attribute) {
     MinicSourceSpan target_span;
@@ -119,10 +175,9 @@ static bool resolve_function_copy_attribute(MinicParser *parser,
         minic_parser_error(parser, "GNU copy requires a previously declared function");
         return false;
     }
-    /* MiniC currently persists symbol/layout function attributes separately from
-     * the optimization/diagnostic attributes that GCC copy propagates. GCC copy
-     * explicitly excludes alias/visibility/weak, so validating source identity is
-     * the complete semantic effect for the currently persisted copy-eligible set. */
+    /* TODO: GNU copy also propagates diagnostic function attributes.  Until
+     * copying the entire eligible metadata set is supported, this validates
+     * the source only; callers must not rely on copy for that diagnostic. */
     return true;
 }
 
@@ -485,6 +540,25 @@ static bool consume_function_attribute(MinicParser *parser,
         return true;
     }
 
+    if (descriptor->kind == MINIC_ATTRIBUTE_ERROR ||
+        descriptor->kind == MINIC_ATTRIBUTE_WARNING) {
+        MinicSourceSpan literal;
+        MinicParsedFunctionDiagnostic *pending = context->diagnostic;
+        if (pending == NULL ||
+            !function_attribute_string_literal_span(parser, attribute, &literal)) {
+            minic_parser_error(parser,
+                "GNU error/warning function attribute requires one string literal");
+            return false;
+        }
+        /* GNU attributes accumulate independently: another error overrides
+         * the prior error text, while a warning coexists with the error. */
+        if (descriptor->kind == MINIC_ATTRIBUTE_ERROR)
+            pending->error_literal = literal;
+        else
+            pending->warning_literal = literal;
+        return true;
+    }
+
     if (descriptor->kind == MINIC_ATTRIBUTE_USED) {
         if (context->force_emit != NULL) {
             *context->force_emit = true;
@@ -536,6 +610,7 @@ static bool parse_function_attribute_lists(MinicParser *parser,
                                            bool is_internal,
                                            bool is_inline,
                                            bool *is_weak,
+                                           MinicParsedFunctionDiagnostic *diagnostic,
                                            const char *unsupported_message) {
     MinicFunctionAttributeContext context;
 
@@ -553,6 +628,7 @@ static bool parse_function_attribute_lists(MinicParser *parser,
     context.visibility = NULL;
     context.has_visibility = NULL;
     context.is_noreturn = NULL;
+    context.diagnostic = diagnostic;
     context.explicit_alignment = NULL;
     context.force_emit = NULL;
     context.is_constructor = NULL;
@@ -577,6 +653,7 @@ static bool apply_function_attribute_list(MinicParser *parser,
                                           MinicSymbolVisibility *visibility,
                                           bool *has_visibility,
                                           bool *is_noreturn,
+                                          MinicParsedFunctionDiagnostic *diagnostic,
                                           size_t *explicit_alignment,
                                           bool *is_constructor,
                                           MinicSourceSpan *alias_symbol_literal,
@@ -601,6 +678,7 @@ static bool apply_function_attribute_list(MinicParser *parser,
     context.visibility = visibility;
     context.has_visibility = has_visibility;
     context.is_noreturn = is_noreturn;
+    context.diagnostic = diagnostic;
     context.explicit_alignment = explicit_alignment;
     context.force_emit = NULL;
     context.is_constructor = is_constructor;
@@ -713,26 +791,30 @@ bool minic_parser_parse_gnu_section_attribute(
     }
 }
 
-bool minic_parser_parse_gnu_function_attributes(MinicParser *parser) {
+bool minic_parser_parse_gnu_function_attributes(
+    MinicParser *parser, MinicParsedFunctionDiagnostic *diagnostic) {
     return parse_function_attribute_lists(
         parser,
         false,
         false,
         false,
         NULL,
+        diagnostic,
         "unsupported GNU function attribute; ABI/layout-affecting and unknown attributes must be "
         "implemented explicitly");
 }
 
 bool minic_parser_parse_gnu_prefix_function_attributes(MinicParser *parser,
                                                        bool is_internal,
-                                                       bool is_inline) {
+                                                       bool is_inline,
+                                                       MinicParsedFunctionDiagnostic *diagnostic) {
     return parse_function_attribute_lists(
         parser,
         true,
         is_internal,
         is_inline,
         NULL,
+        diagnostic,
         "unsupported GNU prefix function attribute; semantic and ABI-affecting attributes must be "
         "implemented explicitly");
 }
@@ -745,6 +827,7 @@ static bool parse_persistent_function_attributes(MinicParser *parser,
                                                  bool *has_section,
                                                  bool *is_weak,
                                                  bool *is_noreturn,
+                                                 MinicParsedFunctionDiagnostic *diagnostic,
                                                  size_t *explicit_alignment,
                                                  bool *force_emit,
                                                  bool *is_constructor,
@@ -766,6 +849,7 @@ static bool parse_persistent_function_attributes(MinicParser *parser,
     context.visibility = NULL;
     context.has_visibility = NULL;
     context.is_noreturn = is_noreturn;
+    context.diagnostic = diagnostic;
     context.explicit_alignment = explicit_alignment;
     context.force_emit = force_emit;
     context.is_constructor = is_constructor;
@@ -774,6 +858,38 @@ static bool parse_persistent_function_attributes(MinicParser *parser,
         "unsupported GNU function attribute; ABI/layout-affecting and unknown attributes must be "
         "implemented explicitly";
     return minic_parser_parse_gnu_attribute_lists(parser, consume_function_attribute, &context);
+}
+
+bool minic_parser_persist_function_diagnostic(
+    MinicParser *parser, MinicFunctionId function_id,
+    const MinicParsedFunctionDiagnostic *diagnostic) {
+    MinicSourceSpan literals[2];
+    MinicFunctionDiagnosticKind kinds[2];
+    size_t i;
+
+    if (parser == NULL || diagnostic == NULL) return false;
+    literals[0] = diagnostic->error_literal;
+    literals[1] = diagnostic->warning_literal;
+    kinds[0] = MINIC_FUNCTION_DIAGNOSTIC_ERROR;
+    kinds[1] = MINIC_FUNCTION_DIAGNOSTIC_WARNING;
+    for (i = 0U; i < 2U; ++i) {
+        size_t length;
+        char *message = NULL;
+        if (literals[i].end.offset == 0U) continue;
+        if (!function_decode_string_literal_span(
+                parser, literals[i], &message, &length)) {
+            minic_parser_error(parser, "invalid GNU function diagnostic literal");
+            return false;
+        }
+        if (!minic_c0_program_set_function_diagnostic(
+                parser->program, function_id, kinds[i], message, length)) {
+            free(message);
+            minic_parser_error(parser, "cannot persist GNU function diagnostic attribute");
+            return false;
+        }
+        free(message);
+    }
+    return true;
 }
 
 static bool parse_gnu_function_asm_label(
@@ -1104,7 +1220,8 @@ static bool record_function_declaration_entity(MinicParser *parser,
                                                const char *section_name,
                                                size_t section_name_length,
                                                bool has_section,
-                                               size_t explicit_alignment) {
+                                               size_t explicit_alignment,
+                                               const MinicParsedFunctionDiagnostic *diagnostic) {
     MinicFunctionId function_id;
     const MinicFunction *existing_function;
 
@@ -1200,7 +1317,7 @@ static bool record_function_declaration_entity(MinicParser *parser,
         minic_parser_error(parser, "invalid GNU function entry alignment");
         return false;
     }
-    return true;
+    return minic_parser_persist_function_diagnostic(parser, function_id, diagnostic);
 }
 
 static bool finish_function_declaration_entity(MinicParser *parser,
@@ -1223,7 +1340,8 @@ static bool finish_function_declaration_entity(MinicParser *parser,
                                                bool has_section,
                                                size_t explicit_alignment,
                                                bool force_emit,
-                                               MinicSourceSpan alias_symbol_literal) {
+                                               MinicSourceSpan alias_symbol_literal,
+                                               const MinicParsedFunctionDiagnostic *diagnostic) {
     MinicFunctionId function_id;
 
     if (parser == NULL || parser->current.kind != MINIC_TOKEN_SEMICOLON ||
@@ -1245,7 +1363,8 @@ static bool finish_function_declaration_entity(MinicParser *parser,
                                             section_name,
                                             section_name_length,
                                             has_section,
-                                            explicit_alignment)) {
+                                            explicit_alignment,
+                                            diagnostic)) {
         return false;
     }
     function_id = minic_parser_find_function(parser, name_span);
@@ -1311,6 +1430,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     bool has_visibility;
     bool object_is_weak;
     MinicSourceSpan alias_symbol_literal;
+    MinicParsedFunctionDiagnostic function_diagnostic;
 
     body_block = MINIC_BLOCK_INVALID;
     parameter_count = 0U;
@@ -1338,6 +1458,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     visibility = MINIC_SYMBOL_VISIBILITY_DEFAULT;
     has_visibility = false;
     object_is_weak = false;
+    (void)memset(&function_diagnostic, 0, sizeof(function_diagnostic));
     (void)memset(&alias_symbol_literal, 0, sizeof(alias_symbol_literal));
     (void)memset(assembler_name, 0, sizeof(assembler_name));
     (void)memset(section_name, 0, sizeof(section_name));
@@ -1576,6 +1697,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                 &visibility,
                 &has_visibility,
                 &is_noreturn,
+                &function_diagnostic,
                 &object_explicit_alignment,
                 NULL, /* function typed declarator is not startup hook */
                 NULL,
@@ -1589,6 +1711,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
             bool entity_is_weak;
             bool entity_is_noreturn;
             bool entity_force_emit;
+            MinicParsedFunctionDiagnostic entity_diagnostic = function_diagnostic;
             size_t entity_explicit_alignment = object_explicit_alignment;
 
             if (parser->current.kind == MINIC_TOKEN_LPAREN) {
@@ -1616,6 +1739,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                     NULL,
                     &entity_is_weak,
                     &entity_is_noreturn,
+                    &entity_diagnostic,
                     &entity_explicit_alignment,
                     &entity_force_emit,
                     NULL,
@@ -1647,7 +1771,8 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                                                     section_name,
                                                     section_name_length,
                                                     has_section,
-                                                    entity_explicit_alignment)) {
+                                                    entity_explicit_alignment,
+                                                    &entity_diagnostic)) {
                 return false;
             }
             function_id = minic_parser_find_function(parser, name_span);
@@ -1894,6 +2019,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
             &visibility,
             &has_visibility,
             &is_noreturn,
+            &function_diagnostic,
             &object_explicit_alignment,
             &is_constructor,
             &alias_symbol_literal,
@@ -1942,6 +2068,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                                               &has_section,
                                               &is_weak,
                                               &is_noreturn,
+                                              &function_diagnostic,
                                               &object_explicit_alignment,
                                               &force_emit,
                                               &is_constructor,
@@ -1999,7 +2126,8 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                                                   has_section,
                                                   object_explicit_alignment,
                                                   force_emit,
-                                                  alias_symbol_literal);
+                                                  alias_symbol_literal,
+                                                  &function_diagnostic);
     }
     /* An MS x64 definition is a distinct incoming ABI, not a SysV body
      * with merely an attribute attached. The x86 target implements fixed
@@ -2184,6 +2312,10 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
         !minic_c0_program_set_function_alignment(parser->program, function_id,
                                                  object_explicit_alignment)) {
         minic_parser_error(parser, "invalid GNU function entry alignment");
+        return false;
+    }
+    if (!minic_parser_persist_function_diagnostic(
+            parser, function_id, &function_diagnostic)) {
         return false;
     }
     parser->current_function = function_id;

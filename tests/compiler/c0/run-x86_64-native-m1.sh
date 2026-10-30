@@ -832,8 +832,8 @@ int main(void) {
 EOF
 check_exit sqlite_atomic_pointer 42
 
-# Real Linux default PIE: dynamic libc function *and object* address
-# materialization must resolve via GOT, not the non-PIE PC32 LEA form.
+# Explicit -fPIE: dynamic libc function *and object* address materialization
+# must resolve via GOT, whereas the original kernel's -fno-PIE permits PC32.
 cat > "$tempdir/pie_external_symbols.i" <<'EOF'
 extern char *getenv(const char *);
 extern char **environ;
@@ -845,7 +845,7 @@ int main(void) {
     return fn("PATH") != 0 && *envp != 0 ? 42 : 1;
 }
 EOF
-"$MINIC_CC" --target=x86_64-linux -S "$tempdir/pie_external_symbols.i" \
+"$MINIC_CC" --target=x86_64-linux -fPIE -S "$tempdir/pie_external_symbols.i" \
     -o "$tempdir/pie_external_symbols.s"
 grep -F '@GOTPCREL(%rip)' "$tempdir/pie_external_symbols.s" >/dev/null
 "$HOST_CC" -pie -x assembler "$tempdir/pie_external_symbols.s" \
@@ -870,6 +870,27 @@ if test "$nonpie_code" -ne 42; then
   exit 1
 fi
 echo "PASS: x86-64 GOT external function/object addresses PIE and non-PIE exit=42"
+# The GNU kernel Kbuild explicitly requests -fno-PIE. Keep default-visible
+# addresses PC-relative under that mode, and prove GNU -no-pie static link.
+"$MINIC_CC" --target=x86_64-linux -fno-PIE -S "$tempdir/pie_external_symbols.i" \
+    -o "$tempdir/nopic_external_symbols.s"
+grep -F 'leaq getenv(%rip)' "$tempdir/nopic_external_symbols.s" >/dev/null
+grep -F 'leaq environ(%rip)' "$tempdir/nopic_external_symbols.s" >/dev/null
+if grep -F '@GOTPCREL' "$tempdir/nopic_external_symbols.s" >/dev/null;then
+  echo "FAIL: -fno-PIE x86 external addresses unexpectedly use GOT" >&2
+  exit 1
+fi
+"$HOST_CC" -no-pie -x assembler "$tempdir/nopic_external_symbols.s" \
+    -o "$tempdir/nopic_external_symbols.bin"
+set +e
+"$tempdir/nopic_external_symbols.bin"
+nopic_code=$?
+set -e
+if test "$nopic_code" -ne 42; then
+  echo "FAIL: -fno-PIE external function/global addresses exit=$nopic_code expected=42" >&2
+  exit 1
+fi
+echo "PASS: x86-64 non-PIC direct function/object addresses GNU no-pie exit=42"
 
 # Real tiny-AES pressure point: read-only global byte tables.
 cat > "$tempdir/global.i" <<'EOF'

@@ -2,6 +2,7 @@
 #include "compiler/inline_specialize_internal.h"
 #include "frontend/const_eval.h"
 #include "frontend/function_body.h"
+#include "target/backend.h"
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -48,8 +49,9 @@ static bool minic_static_integer_claim_block(
  * retain its original source-label aliases. A clone deliberately suppresses
  * those aliases, so do not specialize such a source in the first place. */
 static unsigned char *minic_static_integer_blocked_sources(
-    const MinicC0Program *program) {
+    const MinicC0Program *program, const MinicTargetInfo *target) {
     unsigned char *blocked;
+    const MinicBackend *backend;
     unsigned char *inline_has_external_guard = NULL;
     unsigned char *static_calls_guarded_inline = NULL;
     MinicFunctionId *owners = NULL;
@@ -59,7 +61,11 @@ static unsigned char *minic_static_integer_blocked_sources(
     size_t block_cursor = 0U;
     size_t index;
 
-    if (program == NULL) {
+    if (program == NULL || target == NULL) {
+        return NULL;
+    }
+    backend = minic_backend_for_target(target);
+    if (backend == NULL) {
         return NULL;
     }
     blocked = (unsigned char *)calloc(
@@ -213,7 +219,11 @@ static unsigned char *minic_static_integer_blocked_sources(
                     goto blocked_error;
                 }
                 if (statement->kind == MINIC_STATEMENT_INLINE_ASM) {
-                    blocked[owner] = 1U;
+                    const MinicInlineAsm *asm_source =
+                        minic_c0_program_inline_asm(program, statement->inline_asm_id);
+                    if (!minic_backend_clone_safe_opaque_asm(backend, asm_source)) {
+                        blocked[owner] = 1U;
+                    }
                 }
                 if (statement->kind == MINIC_STATEMENT_IF ||
                     statement->kind == MINIC_STATEMENT_WHILE ||
@@ -279,6 +289,30 @@ static bool minic_inline_integer_specialization_matches(
         }
     }
     return true;
+}
+
+/* An unresolved __builtin_constant_p(expr) is evaluated later, from the
+ * current caller's Core facts.  A conservative zero-result clone is useful
+ * for GNU inline helpers whose fallback is legal only when expr is not
+ * compile-time constant, but this AST call must NOT be rewritten to it:
+ * another caller specialization can still prove the query true.  The
+ * existing Core callee selector chooses this clone only when it proves 0. */
+static bool minic_inline_integer_unresolved_constant_query(
+    const MinicC0Program *program, MinicExpressionId expression_id,
+    unsigned int depth) {
+    const MinicExpression *expression;
+    if (program == NULL || depth > 8U) return false;
+    expression = minic_c0_program_expression(program, expression_id);
+    if (expression == NULL || !minic_type_is_integer(expression->type))
+        return false;
+    if (expression->kind == MINIC_EXPRESSION_BUILTIN_UNARY)
+        return expression->value.builtin_unary.operator_kind ==
+            MINIC_BUILTIN_UNARY_CONSTANT_P;
+    if (expression->kind == MINIC_EXPRESSION_CAST ||
+        expression->kind == MINIC_EXPRESSION_CONVERSION)
+        return minic_inline_integer_unresolved_constant_query(
+            program, expression->value.unary.operand, depth + 1U);
+    return false;
 }
 
 bool minic_add_inline_integer_specialization(
@@ -444,6 +478,7 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
         size_t i;
         size_t candidate_index;
         bool has_integer_constant = false;
+        bool unresolved_constant_query = false;
 
         if (expression->kind != MINIC_EXPRESSION_CALL ||
             expression->value.call.function_id == MINIC_FUNCTION_INVALID) {
@@ -463,7 +498,8 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
         }
         if (!source.is_inline) {
             if (!static_sources_checked) {
-                static_blocked_sources = minic_static_integer_blocked_sources(program);
+                static_blocked_sources = minic_static_integer_blocked_sources(
+                    program, target);
                 static_sources_checked = true;
             }
             if (static_blocked_sources == NULL) {
@@ -483,20 +519,29 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
         for (i = 0U; i < source.parameter_count; ++i) {
             MinicConstValue argument_value;
             MinicConstValue converted_value;
-            if (!minic_type_is_integer(source.parameter_types[i]) ||
-                !minic_const_eval_integer(program, target,
-                                          minic_c0_call_argument(expression, i),
-                                          &argument_value) ||
-                !minic_const_value_convert_integer(program, target, &argument_value,
-                                                   source.parameter_types[i],
-                                                   &converted_value)) {
+            MinicExpressionId argument_id = minic_c0_call_argument(expression, i);
+            if (!minic_type_is_integer(source.parameter_types[i])) {
                 continue;
             }
-            known[i] = true;
-            bits[i] = converted_value.bits;
-            has_integer_constant = true;
+            if (minic_const_eval_integer(program, target, argument_id,
+                                         &argument_value) &&
+                minic_const_value_convert_integer(program, target,
+                                                  &argument_value,
+                                                  source.parameter_types[i],
+                                                  &converted_value)) {
+                known[i] = true;
+                bits[i] = converted_value.bits;
+                has_integer_constant = true;
+            } else if (minic_inline_integer_unresolved_constant_query(
+                           program, argument_id, 0U)) {
+                /* This speculative 0 must be revalidated in Core at the
+                 * real callsite; never replace the shared source CALL. */
+                known[i] = true;
+                bits[i] = 0U;
+                unresolved_constant_query = true;
+            }
         }
-        if (!has_integer_constant) {
+        if (!has_integer_constant && !unresolved_constant_query) {
             continue;
         }
         for (candidate_index = original_function_count;
@@ -512,6 +557,12 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
             if (!source.is_inline &&
                 (static_specialization_count >= MINIC_STATIC_INTEGER_SPECIALIZATION_LIMIT ||
                  specialization_count >= MINIC_INLINE_INTEGER_SPECIALIZATION_LIMIT)) {
+                continue;
+            }
+            if (specialization_count >= MINIC_INLINE_INTEGER_SPECIALIZATION_LIMIT &&
+                unresolved_constant_query) {
+                /* Optional candidate-only guard; a missed optimization is
+                 * never permission to reject otherwise valid C input. */
                 continue;
             }
             if (specialization_count >= MINIC_INLINE_INTEGER_SPECIALIZATION_LIMIT) {
@@ -541,7 +592,8 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
                 static_specialization_count += 1U;
             }
         }
-        program->expressions[expression_index].value.call.function_id = specialized_id;
+        if (!unresolved_constant_query)
+            program->expressions[expression_index].value.call.function_id = specialized_id;
     }
     free(static_blocked_sources);
 

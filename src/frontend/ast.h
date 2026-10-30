@@ -406,6 +406,12 @@ typedef enum MinicSymbolVisibility {
     MINIC_SYMBOL_VISIBILITY_PROTECTED
 } MinicSymbolVisibility;
 
+typedef enum MinicFunctionDiagnosticKind {
+    MINIC_FUNCTION_DIAGNOSTIC_NONE,
+    MINIC_FUNCTION_DIAGNOSTIC_ERROR,
+    MINIC_FUNCTION_DIAGNOSTIC_WARNING
+} MinicFunctionDiagnosticKind;
+
 typedef struct MinicFunction {
     char *name;
     size_t name_length;
@@ -413,6 +419,14 @@ typedef struct MinicFunction {
     size_t assembler_name_length;
     char *section_name;
     size_t section_name_length;
+    /* Program-owned GNU compile-time call diagnostic.  This is not noreturn:
+     * GCC reports error/warning only for a call surviving optimization. */
+    /* GNU error and warning may coexist; later declarations replace the
+     * message of the same kind, but do not discard the other kind. */
+    char *error_message;
+    size_t error_message_length;
+    char *warning_message;
+    size_t warning_message_length;
     /* GNU aligned(N) on a function is a symbol-entry alignment, independent
      * of stack/object layout. Zero means the target's natural alignment. */
     size_t explicit_alignment;
@@ -783,6 +797,11 @@ bool minic_c0_program_set_function_section(MinicC0Program *program,
                                            MinicFunctionId function_id,
                                            const char *name,
                                            size_t name_length);
+bool minic_c0_program_set_function_diagnostic(MinicC0Program *program,
+                                              MinicFunctionId function_id,
+                                              MinicFunctionDiagnosticKind kind,
+                                              const char *message,
+                                              size_t message_length);
 bool minic_c0_program_set_function_alignment(MinicC0Program *program,
                                              MinicFunctionId function_id,
                                              size_t alignment);

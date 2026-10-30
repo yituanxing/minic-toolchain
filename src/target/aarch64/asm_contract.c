@@ -6,6 +6,28 @@
 #include "frontend/const_eval.h"
 #include <string.h>
 
+bool minic_aarch64_clone_safe_opaque_asm(const MinicInlineAsm *source) {
+    MinicCoreInlineAsm form;
+    if (source == NULL || !source->is_volatile || source->is_goto ||
+        source->output_count != 0U || source->input_count != 0U ||
+        source->label_count != 0U || source->clobber_count != 0U ||
+        source->register_clobber_count != 0U || source->has_memory_clobber) {
+        return false;
+    }
+    /* A clone emits the *whole* opaque Core ASM effect independently. The
+     * existing machine qualifier proves this exact Linux BUG table's 14470,
+     * 14471f and 14472b numeric labels are defined within that one template,
+     * its section stack balances, and no symbolic/global labels escape.
+     * All other ASM, even another valid zero-operand instruction, stays
+     * blocked for canonical static specialization. */
+    memset(&form, 0, sizeof(form));
+    form.template_text = source->template_text;
+    form.template_length = source->template_length;
+    form.is_volatile = source->is_volatile;
+    return minic_multi_direct_linux_bug_asm(
+        &form, "14470", "14471", "14472", "brk0x800", true);
+}
+
 /* The Linux LL/SC, LSE-alternative and raw-MMIO families below allocate
  * x9..x16 to operand values, retry status and result addresses. x17/IP1 is
  * deliberately unused by their machine templates and is the sole allowed

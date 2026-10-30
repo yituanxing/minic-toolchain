@@ -1026,6 +1026,15 @@ cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
   -o "$work/core-value-slots-probe"
 "$work/core-value-slots-probe"
 
+# Strictly match the former LoongArch SSA address-alignment proof, including
+# the legacy 16-edge cutoff, while preserving the preexisting Common 64-edge
+# default for RV and other clients. This is a policy A/B, not a linker tweak.
+cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
+  -ffunction-sections -fdata-sections -Wl,--gc-sections \
+  -Iinclude -Isrc tests/compiler/c0/probe-core-address-alignment-depth.c \
+  src/core/core_ir.c -o "$work/core-address-alignment-depth-probe"
+"$work/core-address-alignment-depth-probe"
+
 # Prove checked alignment/reservation at overflow boundaries and no cursor
 # mutation on failure before running slow QEMU/runtime architecture gates.
 cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \

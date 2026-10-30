@@ -251,6 +251,8 @@ MINIC_SOURCES := \
 	tools/minic-cc/main.c
 MINIC_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINIC_SOURCES))
 MINIC_CC_BINARY := $(BUILD_DIR)/bin/minic-cc
+FUNCTION_DIAGNOSTIC_TEST_OBJECT := $(BUILD_DIR)/obj/tests/frontend/function_diagnostic_attribute_test.o
+FUNCTION_DIAGNOSTIC_TEST_BINARY := $(BUILD_DIR)/tests/frontend/function-diagnostic-attribute-test
 MINIC_DRIVER_OBJECTS := $(BUILD_DIR)/obj/tools/minic/main.o \
 	$(BUILD_DIR)/obj/src/target/target_catalog.o
 # The compiler boundary stays in minic-cc. minic is the user-facing staged
@@ -530,6 +532,24 @@ $(BUILD_DIR)/obj/%.o: %.c
 $(MINIC_CC_BINARY): $(MINIC_OBJECTS)
 	@mkdir -p "$(dir $@)"
 	$(CC) $(MINIC_OBJECTS) $(MINIC_LDFLAGS) -o "$@"
+
+$(FUNCTION_DIAGNOSTIC_TEST_BINARY): $(filter-out $(BUILD_DIR)/obj/tools/minic-cc/main.o,$(MINIC_OBJECTS)) $(FUNCTION_DIAGNOSTIC_TEST_OBJECT)
+	@mkdir -p "$(dir $@)"
+	$(CC) $^ $(MINIC_LDFLAGS) -o "$@"
+
+.PHONY: check-function-diagnostic-attribute
+check-function-diagnostic-attribute: $(FUNCTION_DIAGNOSTIC_TEST_BINARY)
+	"$(FUNCTION_DIAGNOSTIC_TEST_BINARY)"
+
+.PHONY: check-gnu-constant-bitfield-helper-cfg
+check-gnu-constant-bitfield-helper-cfg: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+		sh tests/compiler/c0/probe-gnu-constant-bitfield-helper-cfg.sh
+
+.PHONY: check-gnu-linux-kmalloc-index-bool-guard
+check-gnu-linux-kmalloc-index-bool-guard: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+		sh tests/compiler/c0/probe-gnu-linux-kmalloc-index-bool-guard.sh
 
 # The staged driver invokes the sibling minic-cc at runtime. An order-only
 # prerequisite prevents parallel `make -j check-fast` from launching it while
@@ -1398,6 +1418,8 @@ check-fast: check-x86-reachable-vma-assert check-static-const-source-boundaries 
 	HOST_CC="$(CC)" \
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
 	sh tests/compiler/c0/run.sh
+
+check-fast: check-function-diagnostic-attribute check-gnu-constant-bitfield-helper-cfg check-gnu-linux-kmalloc-index-bool-guard
 
 check: check-fast
 

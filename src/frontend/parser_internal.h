@@ -97,6 +97,13 @@ typedef struct MinicParserPendingFunctionAlias {
     MinicSourceSpan symbol_literal;
 } MinicParserPendingFunctionAlias;
 
+/* Borrowed source span valid only during parsing.  The persistent function
+ * entity must copy the message into the Program's owned storage. */
+typedef struct MinicParsedFunctionDiagnostic {
+    MinicSourceSpan error_literal;
+    MinicSourceSpan warning_literal;
+} MinicParsedFunctionDiagnostic;
+
 typedef struct MinicParser {
     /* Parser probes copy this structure by value. Only the original parser
      * owns mutable lookup-cache storage; a probe must use linear lookup. */
@@ -290,12 +297,17 @@ bool minic_parser_calling_convention_fixed_scalar_supported(
     const MinicParser *parser, MinicFunctionCallingConvention convention,
     MinicType return_type, const MinicType *parameter_types,
     size_t parameter_count, bool is_variadic);
-bool minic_parser_parse_gnu_function_attributes(MinicParser *parser);
+bool minic_parser_parse_gnu_function_attributes(
+    MinicParser *parser, MinicParsedFunctionDiagnostic *diagnostic);
 bool minic_parser_parse_gnu_section_attribute(
     MinicParser *parser, char *buffer, size_t capacity, size_t *length, bool *has_section);
 bool minic_parser_parse_gnu_prefix_function_attributes(MinicParser *parser,
                                                        bool is_internal,
-                                                       bool is_inline);
+                                                       bool is_inline,
+                                                       MinicParsedFunctionDiagnostic *diagnostic);
+bool minic_parser_persist_function_diagnostic(
+    MinicParser *parser, MinicFunctionId function_id,
+    const MinicParsedFunctionDiagnostic *diagnostic);
 bool minic_parser_parse_integer_constant_expression_value(MinicParser *parser, int64_t *value);
 bool minic_parser_parse_fixed_array_bound(MinicParser *parser, size_t *element_count);
 bool minic_parser_parse_array_designator_component(

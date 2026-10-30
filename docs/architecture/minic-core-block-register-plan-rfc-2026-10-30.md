@@ -182,6 +182,105 @@ allocation choice: saving a new register to avoid one load can increase code.
 
 ## Staged changes, obsolete paths, and gates
 
+### First LoongArch emitting slice: whole-block admission, no mixed state
+
+The first implementation should be deliberately narrower than the eventual
+location-aware dispatcher above. It must **produce real machine-code savings**
+before broadening the allocator, while retaining the existing stack path as
+the only fallback. A read-only use counter alone is not an optimization.
+
+1. The **Common** planner computes `remaining_uses` from the existing
+   `core/value_uses.h` visitor, including the block terminator. It assigns
+   deterministic pool indexes to block-local scalar integer/pointer SSA
+   results, retiring a register **after** the complete instruction consumes
+   its operands. Duplicate occurrences (`x+x`) decrement two uses but keep
+   the input resident until the opcode finishes. The first slice rejects
+   blocks needing more than the available pool instead of guessing a spill
+   victim. It never stores a value in a different live value's planned slot.
+2. Admission is **all or nothing per Core block**, decided before streaming
+   any assembly. Initially admit scalar integer/pointer constants, ordinary
+   parameter ingress, object/global/function addresses, field/pointer
+   arithmetic, common scalar arithmetic/comparisons, and safe scalar
+   loads/stores, only after all necessary instruction shapes, legal widths,
+   known alignment, register needs and terminator forms pass target-owned
+   checks. Reject calls, inline assembly of either form, fixed-register
+   traffic, compiler/atomic barriers, unproven unaligned accesses, dynamic
+   stack allocation, floating/wide values, aggregate transport, indirect
+   branches and unmodeled forms **for this first slice**. The whole block
+   then executes exactly the existing stack implementation. Calls and
+   inline assembly are not assumed harmless simply because the chosen pool
+   is normally callee-saved; later *mixed-mode* support must explicitly
+   flush/invalidate residents and model call/asm clobbers at each barrier.
+3. The **LoongArch policy** maps pool indexes to `$s1` through `$s8`
+   (`$r24`-`$r31`), which the LoongArch ELF psABI and Linux kernel register
+   convention mark callee-saved. The current native emitter reserves `$s0`
+   as the stable realigned/dynamic frame base; it actively uses `$t0`-`$t8`
+   in arithmetic, alignment fallback, large-offset addressing, calls and
+   GNU inline-asm lowering. In particular, `frame_emit.c` may destroy `$t3`
+   while materializing an address, and `asm_contract.c` uses `$t6`-`$t8`.
+   **None of these scratch registers is a free SSA home.** `$r21` is the
+   Linux per-CPU register, never part of the pool. The target must reject
+   user-visible assembler forms that can clobber planned static registers;
+   this first slice avoids the ambiguity by rejecting any block with asm.
+4. The once-built Common function plan unions the *actually used* static
+   register mask across admitted blocks. Before the existing checked LP64
+   frame finalization it reserves nonoverlapping saved-register slots with
+   `minic_core_frame_reserve`; the resulting mask/offsets enter the immutable
+   block context. Native LoongArch prologue saves **every selected** static
+   register once, and every `RETURN` edge restores them before frame
+   teardown, including realigned `$s0` frames and hidden-result returns.
+   The existing RA, `$s0`, saved-entry-SP, indirect-result and varargs
+   locations must remain disjoint and retain their ABI meaning. No blanket
+   save of all eight registers for a one-value block: count prologue and
+   epilogue cost before enabling a function whose optimization would grow
+   code.
+5. Eligible LoongArch opcodes must consume the **real input registers** and
+   produce the actual allocated destination directly (e.g. `add.d $s3,
+   $s1, $s2`), with safe distinct operand/result selection at the last-use
+   boundary. Moving `$t0` into `$s3` after the original frame reloads merely
+   relocates the bloat. Refactor the existing native instruction families so
+   the unchanged stack fallback and admitted register path use the same
+   semantic shape checks and machine-opcode selection; do **not** introduce
+   a second copy of every LoongArch arithmetic/memory algorithm. Common
+   dispatch suppresses its unconditional GP writeback only for a result
+   proven resident in the plan. The original reusable Core spill slots
+   stay allocated for all other blocks, and block boundaries invalidate all
+   register mappings (the verifier rejects cross-block SSA reads).
+
+Concrete first-wave source touch points (the final patch should explain any
+expansion of this list):
+
+| Owner | Required change |
+| --- | --- |
+| `src/target/common/core_block_register_plan.{h,c}` **new** | One block-local semantic use/lifetime allocator and immutable register/stack locations; no LoongArch register names or opcode strings. |
+| `src/target/common/direct_function_plan.{h,c}` and `direct_block_context.h` | Function-wide used-mask union, checked static-register save space, immutable plan handoff. |
+| `src/target/common/direct_machine_dispatch.h` | Route admitted blocks through a location-aware callback and make GP writeback conditional; preserve original path for whole-block rejection. |
+| `src/target/loongarch64/codegen.c` and `block_emit.c` | Define pool/ABI policy, emit prologue and all-return-edge saves/restores, pass real result/terminator locations. |
+| `src/target/loongarch64/integer_emit.c`, `residual_emit.c`, `memory_emit.c` | Share existing semantic checks, expose direct physical register operands for the supported scalar families; leave wide/FP/unaligned/asm paths unchanged. |
+| `src/target/loongarch64/call_emit.c` | Handle admitted scalar parameter ingress; calls remain an admission barrier in the first slice. |
+| `Makefile`, `tests/compiler/bootstrap/b0-sources.txt`, `tests/compiler/c0/check-minic-target-boundaries.sh` | Wire the **single** Common planner into native builds, self-host bootstrap source inventory, and no-duplicate-allocator architecture gates. |
+
+Instrument opt-in counters for eligible/rejected blocks, scalar results
+placed in registers, planned spill/reload pairs removed, physical saved
+registers and total added prologue/epilogue instructions. Add GNU-vs-MiniC
+native execution tests for distinct operands, repeated operands, dead values,
+six-to-nine simultaneously live values, signed/narrow normalization,
+parameter registers and stack parameters, memory alias/volatile order,
+branch and return terminators, all-return-edge restoration, source labels,
+asm/call fallback, realigned dynamic frames and hidden-result ABI. Test the
+actual generated GNU assembly and `.o` sizes, not just planner output. Run
+the complete four-ISA `check-fast`/runtime gates even when only LoongArch
+emission changes because the function planner and dispatcher are shared.
+
+Initial engineering estimate (not a budget or acceptance shortcut): Common
+planner **350-600** lines, LoongArch opcode/ABI transport **500-900**,
+function/frame/dispatcher integration **150-250**, and tests **200-350**,
+plus build/bootstrap manifests. The first slice may reject many real Linux
+blocks; its measured coverage on the frozen 2723-owner corpus decides when
+to add bounded eviction and per-instruction barrier flushing. Do not claim
+the RFC's 50% text-size *goal* from this subset, nor claim that shaving text
+alone proves `R_LARCH_B26` link-range safety.
+
 1. **Read-only planner and tests.** Extract/reuse the current
    `value_uses.h`/spill-layout count walk once; assert def/use, last-use,
    duplicate operand, two-address/destructive instruction, terminator,

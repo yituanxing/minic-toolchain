@@ -63,4 +63,26 @@ if grep -Fq '__compiletime_assert_fixmap' "$work/minic.s"; then
     exit 1
 fi
 grep -Fq '  bl original_set_fixmap' "$work/minic.s"
-echo "AARCH64_FIXMAP_BUG_ASM=PASS GNU_O2=1 MiniC_ASM=1 GNU_AS=$gnu_as_status static_const_specialization=1 no_GNU_C_fallback=1"
+# Unproven ASM must never inherit the narrow self-contained metadata permit.
+# Two malformed bug-table forms fail closed at target qualification, while a
+# valid but unrelated NOP still leaves the non-inline static wrapper un-cloned.
+sed 's/__bug_table/__bad_bug_table/g' "$work/original.gnu.i" >"$work/bad-section.i"
+if "$mini" --target=aarch64-linux -S "$work/bad-section.i" \
+        -o "$work/bad-section.s" >/dev/null 2>&1; then
+    echo 'AARCH64_FIXMAP_BUG_ASM=FAIL accepted a foreign bug table section' >&2
+    exit 1
+fi
+sed 's/14471f/14473f/g' "$work/original.gnu.i" >"$work/bad-numeric.i"
+if "$mini" --target=aarch64-linux -S "$work/bad-numeric.i" \
+        -o "$work/bad-numeric.s" >/dev/null 2>&1; then
+    echo 'AARCH64_FIXMAP_BUG_ASM=FAIL accepted unresolved numeric label' >&2
+    exit 1
+fi
+sed -E 's/asm volatile\(.*\); __builtin_unreachable/asm volatile("nop"); __builtin_unreachable/' \
+    "$work/original.gnu.i" >"$work/unproven-nop.i"
+"$mini" --target=aarch64-linux -S "$work/unproven-nop.i" -o "$work/unproven-nop.s"
+if ! grep -Fq '__compiletime_assert_fixmap' "$work/unproven-nop.s"; then
+    echo 'AARCH64_FIXMAP_BUG_ASM=FAIL generic ASM escaped static clone safety gate' >&2
+    exit 1
+fi
+echo "AARCH64_FIXMAP_BUG_ASM=PASS GNU_O2=1 MiniC_ASM=1 GNU_AS=$gnu_as_status static_const_specialization=1 strict_negative=3 no_GNU_C_fallback=1"

@@ -2,6 +2,9 @@
 #define MINIC_TARGET_AARCH64_ASM_CONTRACT_H
 #include "target/backend.h"
 bool minic_aarch64_requires_qualified_input_asm(const MinicInlineAsm *);
+/* Only proven per-emission GAS numeric-label BUG table templates may survive
+ * cloning an ordinary TU-local static function. This is not general ASM admission. */
+bool minic_aarch64_clone_safe_opaque_asm(const MinicInlineAsm *);
 /* Original Linux arm64 alternative_has_cap_unlikely asm-goto contract.
  * Source recognition and emitted Core-template recognition remain ISA owned. */
 bool minic_aarch64_linux_cap_asm_goto_source(const MinicInlineAsm *);

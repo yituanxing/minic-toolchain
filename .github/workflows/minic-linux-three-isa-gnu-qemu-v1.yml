@@ -203,6 +203,20 @@ jobs:
             --output "$RUNTIME_OUTPUT/boot" \
             --timeout 240 "${args[@]}"
 
+      # Measure the pristine GNU golden before the candidate overwrites .o.
+      # Apparent bytes are a cache-capacity baseline, not a compressed-size
+      # estimate or permission to skip the original GNU P0/P1 oracle.
+      - name: Measure immutable original GNU golden cache footprint
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bytes() { du -sb -- "$1" | cut -f1; }
+          test -s "$GNU_WORK/linux-6.6.143.tar.xz"
+          for part in build frozen linux-6.6.143 evidence; do
+            test -d "$GNU_WORK/$part"
+          done
+          echo "GNU_GOLDEN_CACHE_SIZE target=${{ matrix.target }} total_bytes=$(bytes "$GNU_WORK") build_bytes=$(bytes "$GNU_WORK/build") frozen_bytes=$(bytes "$GNU_WORK/frozen") source_bytes=$(bytes "$GNU_WORK/linux-6.6.143") tar_bytes=$(bytes "$GNU_WORK/linux-6.6.143.tar.xz") evidence_bytes=$(bytes "$GNU_WORK/evidence") phase=original_GNU_P0_P1_verified_before_MiniC_overlay compression=unmeasured"
+
       - name: Build one current-head MiniC compiler for all original target C owners
         shell: bash
         run: |
@@ -244,10 +258,15 @@ jobs:
             ${{ github.workspace }}/build/minic-linux-gnu-runtime-${{ matrix.target }}/candidate/candidate-receipt.json
             ${{ github.workspace }}/build/minic-linux-gnu-runtime-${{ matrix.target }}/candidate/all-c-owners-result.json
             ${{ github.workspace }}/build/minic-linux-gnu-runtime-${{ matrix.target }}/candidate/failed-owner-diagnostics/
+            ${{ github.workspace }}/build/minic-linux-gnu-runtime-${{ matrix.target }}/candidate/link-failure-owner-diagnostics/
+            ${{ github.workspace }}/build/minic-linux-gnu-runtime-${{ matrix.target }}/candidate/link-failure-owner-diagnostic-error.txt
             ${{ github.workspace }}/build/minic-linux-gnu-runtime-${{ matrix.target }}/candidate/gnu-ld-relink.log
             ${{ github.workspace }}/build/minic-linux-gnu-runtime-${{ matrix.target }}/candidate/c-section-sizes.json
             ${{ github.workspace }}/build/minic-linux-gnu-runtime-${{ matrix.target }}/candidate/link-layout/
             ${{ github.workspace }}/build/minic-linux-gnu-runtime-${{ matrix.target }}/candidate/vdso-diagnostics/
+            ${{ github.workspace }}/build/minic-linux-gnu-runtime-${{ matrix.target }}/candidate/aarch64-got-plt-diagnostic/
+            ${{ github.workspace }}/build/minic-linux-gnu-runtime-${{ matrix.target }}/candidate/aarch64-got-plt-preoverlay-error.txt
+            ${{ github.workspace }}/build/minic-linux-gnu-runtime-${{ matrix.target }}/candidate/aarch64-got-plt-postlink-error.txt
             ${{ github.workspace }}/build/minic-linux-gnu-runtime-${{ matrix.target }}/candidate/postlink-gnu-c-fallback.json
             ${{ github.workspace }}/build/minic-linux-gnu-runtime-${{ matrix.target }}/candidate/postlink-c-owner-census.json
             ${{ github.workspace }}/build/minic-linux-gnu-runtime-${{ matrix.target }}/candidate/postlink-target-elf64-objects.sha256

@@ -25,6 +25,8 @@ on:
       - "tests/compiler/c0/probe-x86-linux-cmpxchg16b-native.sh"
       - "tests/compiler/c0/x86_linux_cmpxchg16b_atomic.c"
       - "tests/compiler/c0/x86_linux_cmpxchg16b_alt.c"
+      - "tests/compiler/c0/probe-aarch64-fixmap-cross-static-const-bug-asm.sh"
+      - "tests/compiler/c0/aarch64_fixmap_cross_static_const_bug_asm.c"
       - "tests/compiler/c0/dynamic_stack_wide_spill.c"
       - "tests/compiler/c0/dynamic_stack_wide_spill_helper.c"
       - ".github/workflows/minic-runtime-fourarch.yml"
@@ -56,6 +58,8 @@ on:
       - "tests/compiler/c0/aarch64-linux-narrow-cmpxchg.c"
       - "tests/compiler/c0/probe-aarch64-large-structured-asm-spills.sh"
       - "tests/compiler/c0/probe-aarch64-linux-volatile-mrs.sh"
+      - "tests/compiler/c0/probe-aarch64-fixmap-cross-static-const-bug-asm.sh"
+      - "tests/compiler/c0/aarch64_fixmap_cross_static_const_bug_asm.c"
       - "tests/compiler/c0/probe-direct-lp64-weak-section-qemu.sh"
       - "tests/compiler/c0/probe-lp64-indirect-record-abi-qemu.sh"
       - "tests/compiler/c0/probe-aarch64-indirect-record-return-qemu.sh"
@@ -199,7 +203,7 @@ jobs:
             # --no-install-recommends otherwise omits Scrt1.o/crti.o:
             # install the cross libc development startup files explicitly.
             sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
-              gcc-aarch64-linux-gnu libc6-dev-arm64-cross lld qemu-user
+              gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu libc6-dev-arm64-cross lld qemu-user
           elif [[ "${{ matrix.target }}" == loongarch64 ]]; then
             # Existing freestanding LLVM/LLD/QEMU plus a narrowly scoped
             # original-GNU ABI oracle for the real CPUCFG builtin. Do not
@@ -214,6 +218,16 @@ jobs:
           python3 -m py_compile tools/runtime/build_runtime.py
           python3 tools/runtime/build_runtime.py --print-sources
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/runtime-ci all
+      - name: AArch64 original GNU BUG table clone with target GAS ELF relocations
+        if: matrix.target == 'aarch64'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          command -v aarch64-linux-gnu-as
+          command -v aarch64-linux-gnu-readelf
+          command -v aarch64-linux-gnu-objcopy
+          MINIC_CC="$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc" \
+            sh tests/compiler/c0/probe-aarch64-fixmap-cross-static-const-bug-asm.sh
       - name: Prove RV32 ILP32 target model and strict ELF32 assembler
         if: matrix.target == 'riscv64'
         shell: bash

@@ -87,6 +87,11 @@ typedef bool (*MinicBackendRequiresQualifiedInputAsm)(const MinicInlineAsm *);
  * machine form; Core owns only the label blocks and resolved C constants. */
 typedef bool (*MinicBackendQualifyInlineAsmGoto)(
     const MinicC0Program *, const MinicInlineAsm *);
+/* Canonical static-function specialization may duplicate an ASM site only
+ * when the selected target has proved its whole template self-contained.
+ * This is distinct from normal source instruction qualification: a valid
+ * ASM need not be safe to emit more than once under separate ELF identities. */
+typedef bool (*MinicBackendCloneSafeOpaqueAsm)(const MinicInlineAsm *);
 typedef struct MinicBackend {
     /* This is the only Core-to-machine handoff in the compile driver.
      * Today: direct GNU text. Future: lower, optimize and emit Machine IR. */
@@ -101,6 +106,7 @@ typedef struct MinicBackend {
      * Raw no-operand GNU source asm remains a separate assembly contract. */
     MinicBackendRequiresQualifiedInputAsm requires_qualified_input_asm;
     MinicBackendQualifyInlineAsmGoto qualify_inline_asm_goto;
+    MinicBackendCloneSafeOpaqueAsm clone_safe_opaque_asm;
 } MinicBackend;
 
 /* Fail closed on unknown architecture. No default or host fallback. */
@@ -122,6 +128,8 @@ bool minic_backend_requires_qualified_input_asm(
     const MinicBackend *, const MinicInlineAsm *);
 bool minic_backend_qualify_inline_asm_goto(
     const MinicBackend *, const MinicC0Program *, const MinicInlineAsm *);
+bool minic_backend_clone_safe_opaque_asm(
+    const MinicBackend *, const MinicInlineAsm *);
 
 /* Stable driver-facing emission seam. Machine IR can be inserted here. */
 bool minic_backend_emit_assembly(

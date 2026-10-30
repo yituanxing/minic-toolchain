@@ -957,19 +957,21 @@ static bool parse_block_scope_function_declaration_after_head(
     const MinicFunction *existing_function;
     size_t parameter_count;
     bool is_variadic;
+    MinicParsedFunctionDiagnostic function_diagnostic;
 
     if (parser == NULL || parser->current.kind != MINIC_TOKEN_LPAREN) {
         return false;
     }
     parameter_count = 0U;
     is_variadic = false;
+    (void)memset(&function_diagnostic, 0, sizeof(function_diagnostic));
     (void)memset(parameter_types, 0, sizeof(parameter_types));
 
     if (!minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '('") ||
         !minic_parser_parse_parameter_list(
             parser, NULL, parameter_types, &parameter_count, false, &is_variadic) ||
         !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')'") ||
-        !minic_parser_parse_gnu_function_attributes(parser) ||
+        !minic_parser_parse_gnu_function_attributes(parser, &function_diagnostic) ||
         !minic_parser_expect(
             parser, MINIC_TOKEN_SEMICOLON, "expected ';' after block-scope function declaration")) {
         return false;
@@ -984,7 +986,8 @@ static bool parse_block_scope_function_declaration_after_head(
             minic_parser_error(parser, "conflicting block-scope function declaration");
             return false;
         }
-        return true;
+        return minic_parser_persist_function_diagnostic(
+            parser, function_id, &function_diagnostic);
     }
     if (!minic_c0_program_add_function(parser->program,
                                        parser->source + name_span.begin.offset,
@@ -1000,7 +1003,8 @@ static bool parse_block_scope_function_declaration_after_head(
         minic_parser_error(parser, "out of memory while declaring block-scope function");
         return false;
     }
-    return true;
+    return minic_parser_persist_function_diagnostic(
+        parser, function_id, &function_diagnostic);
 }
 
 bool minic_parser_local_decl_ordinary(MinicParser *parser) {
@@ -1142,13 +1146,16 @@ bool minic_parser_local_decl_extern(MinicParser *parser) {
     size_t parameter_count;
     bool is_variadic;
     bool is_weak;
+    MinicParsedFunctionDiagnostic function_diagnostic;
 
     parameter_count = 0U;
     is_variadic = false;
     is_weak = false;
+    (void)memset(&function_diagnostic, 0, sizeof(function_diagnostic));
     (void)memset(parameter_types, 0, sizeof(parameter_types));
 
-    if (!minic_parser_parse_gnu_prefix_function_attributes(parser, false, false) ||
+    if (!minic_parser_parse_gnu_prefix_function_attributes(
+            parser, false, false, &function_diagnostic) ||
         !minic_parser_expect(parser, MINIC_TOKEN_KW_EXTERN, "expected keyword 'extern'") ||
         /* C permits block-scope extern declarations of incomplete record
          * objects: extern struct user_namespace init_user_ns;
@@ -1191,6 +1198,12 @@ bool minic_parser_local_decl_extern(MinicParser *parser) {
         return_type = signature->return_type;
     } else {
         if (parser->current.kind != MINIC_TOKEN_LPAREN) {
+            if (function_diagnostic.error_literal.end.offset != 0U ||
+                function_diagnostic.warning_literal.end.offset != 0U) {
+                minic_parser_error(parser,
+                    "GNU function diagnostic attribute cannot apply to an object");
+                return false;
+            }
             for (;;) {
                 if (!declare_block_scope_extern_object_declarator(
                         parser, return_type, name_span, is_weak)) {
@@ -1216,7 +1229,7 @@ bool minic_parser_local_decl_extern(MinicParser *parser) {
             !minic_parser_parse_parameter_list(
                 parser, NULL, parameter_types, &parameter_count, false, &is_variadic) ||
             !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')'") ||
-            !minic_parser_parse_gnu_function_attributes(parser)) {
+            !minic_parser_parse_gnu_function_attributes(parser, &function_diagnostic)) {
             return false;
         }
     }
@@ -1252,6 +1265,11 @@ bool minic_parser_local_decl_extern(MinicParser *parser) {
 
     if (is_weak && !minic_c0_program_set_function_weak(parser->program, function_id, true)) {
         minic_parser_error(parser, "GNU weak requires external function linkage");
+        return false;
+    }
+
+    if (!minic_parser_persist_function_diagnostic(
+            parser, function_id, &function_diagnostic)) {
         return false;
     }
 
