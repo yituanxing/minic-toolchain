@@ -194,21 +194,6 @@ AS_WRAPPER
 chmod +x "$bindir/aarch64-linux-gnu-as"
 ln -sfn aarch64-linux-gnu-as "$bindir/as"
 
-make -C "$src" O="$out" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- defconfig
-"$src/scripts/config" --file "$out/.config" \
-  -e BLK_DEV_INITRD -e DEVTMPFS -e DEVTMPFS_MOUNT \
-  -e SERIAL_AMBA_PL011 -e SERIAL_AMBA_PL011_CONSOLE \
-  -e PROC_FS -e SYSFS -e TMPFS -e IPV6 -e IO_URING
-make -C "$src" O="$out" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
-
-# Record the resolved *real Kbuild* configuration for a same-commit GNU/MiniAS
-# control. Defconfig names alone do not guarantee that the two production
-# builds had identical kernel features.
-config_sha256=$(sha256sum "$out/.config")
-printf '%s\n' "${config_sha256%% *}" >"$work/kernel-config.sha256"
-printf 'MINIAS_LINUX_KCONFIG_SHA256 arch=aarch64 backend=%s sha256=%s\n' \
-  "$as_backend" "${config_sha256%% *}"
-
 export MINIAS="$minias"
 export MINIAS_AS_TRACE="$trace"
 export MINIAS_FAILURE_DIR="$work/failure-inputs"
@@ -218,12 +203,56 @@ export MINIAS_GNU_OBJECT_DIR="$gnu_objects"
 export MINIAS_GNU_SOURCE_DIR="$work/asm-sources"
 export MINIAS_AS_BACKEND="$as_backend"
 export MINIAS_ENTRY_INPUT_DIR="$work/evidence"
+mkdir -p "$work/evidence"
 : >"$trace"
-# The wrapper delegates to GNU as verbatim in the GNU control. Both lanes
-# therefore use the exact same GCC -B search-path policy; only the assembler
-# engine differs, and only the AArch64 entry.o source is captured and hashed.
+# Use the same GCC -B wrapper and assembler for Kconfig probes and actual
+# Kbuild. Only the assembler engine changes between MiniAS and GNU controls.
 build_cc="$cc -B$bindir/"
 build_as="$bindir/aarch64-linux-gnu-as"
+
+make -C "$src" O="$out" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
+  CC="$build_cc" AS="$build_as" defconfig
+"$src/scripts/config" --file "$out/.config" \
+  -e BLK_DEV_INITRD -e DEVTMPFS -e DEVTMPFS_MOUNT \
+  -e SERIAL_AMBA_PL011 -e SERIAL_AMBA_PL011_CONSOLE \
+  -e PROC_FS -e SYSFS -e TMPFS -e IPV6 -e IO_URING
+make -C "$src" O="$out" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
+  CC="$build_cc" AS="$build_as" olddefconfig
+
+# Keep the resolved pre-build config and independently verify the final
+# Kbuild config matches it and the same-commit GNU control's final config.
+config_sha256=$(sha256sum "$out/.config")
+cp -- "$out/.config" "$work/kernel-config.pre.config"
+printf '%s\n' "${config_sha256%% *}" >"$work/kernel-config.pre.sha256"
+printf 'MINIAS_LINUX_KCONFIG_PRE_SHA256 arch=aarch64 backend=%s sha256=%s\n' \
+  "$as_backend" "${config_sha256%% *}"
+
+capture_final_kconfig() {
+  if [[ ! -s $out/.config ]]; then
+    echo 'MINIAS_LINUX_FOURARCH_ERROR arch=aarch64 missing_final_kconfig' >&2
+    return 1
+  fi
+  cp -- "$out/.config" "$work/kernel-config.final.config"
+  local final_hash diff_status
+  final_hash=$(sha256sum "$out/.config")
+  printf '%s\n' "${final_hash%% *}" >"$work/kernel-config.sha256"
+  printf 'MINIAS_LINUX_KCONFIG_FINAL_SHA256 arch=aarch64 backend=%s sha256=%s\n' \
+    "$as_backend" "${final_hash%% *}"
+  if diff -u "$work/kernel-config.pre.config" "$work/kernel-config.final.config" \
+      >"$work/evidence/kernel-config.diff.log"; then
+    echo 'MINIAS_LINUX_KCONFIG_STABLE=PASS arch=aarch64'
+  else
+    diff_status=$?
+    if [[ $diff_status -ne 1 ]]; then
+      echo "MINIAS_LINUX_FOURARCH_ERROR arch=aarch64 kconfig_diff_status=$diff_status" >&2
+      return 1
+    fi
+    echo 'MINIAS_LINUX_KCONFIG_STABLE=FAIL arch=aarch64 changed_during_kbuild' >&2
+    grep -E '^[+-](CONFIG_[A-Z0-9_]+=|# CONFIG_[A-Z0-9_]+ is not set)' \
+      "$work/evidence/kernel-config.diff.log" | head -n 100 >&2 || true
+    return 1
+  fi
+}
 start=$(date +%s)
 printf 'MINIAS_AARCH64_STAGE=KBUILD_START epoch=%s\n' "$start"
 # Keep long GNU Kbuild stages observable without changing the production
@@ -260,15 +289,13 @@ if ! make -C "$src" O="$out" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
   tail -n 90 "$work/kbuild.log" || true
   echo 'MINIAS_LINUX_AS_TRACE_DIAGNOSTIC=last-failures'
   grep '^fail ' "$trace" | tail -n 40 || true
+  capture_final_kconfig || true
   exit 1
 fi
 stop_progress_monitor
 printf 'MINIAS_AARCH64_STAGE=KBUILD_END elapsed_s=%s\n' \
   "$(( $(date +%s) - start ))"
-if [[ $(sha256sum "$out/.config") != "$config_sha256" ]]; then
-  echo 'MINIAS_LINUX_FOURARCH_ERROR arch=aarch64 kconfig_changed_during_kbuild' >&2
-  exit 1
-fi
+capture_final_kconfig
 test -s "$image"
 sha256sum "$image" >"$work/Image.sha256"
 file "$image"

@@ -20,7 +20,7 @@ if [[ ! -x "$minias" ]]; then
     echo "MINIAS_LINUX_FOURARCH_ERROR arch=x86_64 missing_minias=$minias" >&2
     exit 2
 fi
-for tool in gcc as ld ar objcopy readelf curl tar sha256sum make cpio gzip \
+for tool in gcc as ld ar objcopy readelf curl tar sha256sum cmp diff make cpio gzip \
             timeout "$qemu" python3; do
     if ! command -v "$tool" >/dev/null 2>&1; then
         echo "MINIAS_LINUX_FOURARCH_ERROR arch=x86_64 missing_tool=$tool" >&2
@@ -57,8 +57,10 @@ RISCV_CC=gcc BUILD_DIR="$work/initramfs" OUTPUT_INITRAMFS="$initramfs" \
 # Configure the same kernel for GNU and MiniAS.  Enable the *real* runtime's
 # network, eventfd, io_uring, initramfs and serial requirements explicitly.
 configure_kernel() {
-    local output=$1
-    make -C "$src" O="$output" ARCH=x86_64 x86_64_defconfig
+    local output=$1 cc=$2 assembler=$3
+    # Kconfig's compiler/assembler feature probes must use the same toolchain
+    # selection as the subsequent production build in this lane.
+    make -C "$src" O="$output" ARCH=x86_64 CC="$cc" AS="$assembler" x86_64_defconfig
     "$src/scripts/config" --file "$output/.config" \
         -e BLK_DEV_INITRD -e DEVTMPFS -e DEVTMPFS_MOUNT \
         -e TMPFS -e PROC_FS -e SYSFS -e SERIAL_8250 \
@@ -66,10 +68,37 @@ configure_kernel() {
         -e EVENTFD -e EPOLL -e INOTIFY_USER -e SIGNALFD \
         -e TIMERFD -e MEMFD_CREATE -e IO_URING -e FUTEX \
         -e NET -e PIDFD
-    make -C "$src" O="$output" ARCH=x86_64 olddefconfig
+    make -C "$src" O="$output" ARCH=x86_64 CC="$cc" AS="$assembler" olddefconfig
 }
 
-configure_kernel "$image_out"
+record_kconfig() {
+    local lane=$1 phase=$2 output=$3
+    local source="$output/.config" snapshot="$work/kconfig-$lane-$phase.config"
+    if [[ ! -s "$source" ]]; then
+        echo "MINIAS_LINUX_FOURARCH_CONFIG=FAIL arch=x86_64 lane=$lane phase=$phase missing=$source" >&2
+        exit 1
+    fi
+    cp "$source" "$snapshot"
+    local digest
+    digest=$(sha256sum "$snapshot")
+    digest=${digest%% *}
+    printf '%s\n' "$digest" >"$work/kconfig-$lane-$phase.sha256"
+    echo "MINIAS_LINUX_FOURARCH_CONFIG=RECORDED arch=x86_64 lane=$lane phase=$phase sha256=$digest"
+}
+
+compare_kconfig() {
+    local phase=$1
+    local mini="$work/kconfig-mini-$phase.config"
+    local gnu="$work/kconfig-gnu-$phase.config"
+    if cmp -s "$mini" "$gnu"; then
+        echo "MINIAS_LINUX_FOURARCH_CONFIG_PARITY=PASS arch=x86_64 phase=$phase mode=byte-exact"
+        return 0
+    fi
+    echo "MINIAS_LINUX_FOURARCH_CONFIG_PARITY=FAIL arch=x86_64 phase=$phase mode=byte-exact" >&2
+    diff -u "$gnu" "$mini" >"$work/kconfig-$phase-diff.log" || true
+    sed -n '1,100p' "$work/kconfig-$phase-diff.log" >&2
+    return 1
+}
 
 # GCC's -B selects this specific "as" executable.  Kbuild's direct AS path
 # selects the same wrapper.  Only GNU GAS *information queries* are delegated.
@@ -177,6 +206,10 @@ export MINIAS_AS_TRACE="$work/minias-as.trace"
 export MINIAS_FAILURE_DIR="$work/failure-inputs"
 export REAL_AS="$real_as"
 
+mini_cc="gcc -B$work/asm-bin/"
+configure_kernel "$image_out" "$mini_cc" "$wrapper"
+record_kconfig mini pre "$image_out"
+
 # GCC's discarded as-version probe is legal, but a real kernel .o may never
 # reach GNU as via --version. Verify both cases before expensive Kbuild.
 probe_input=$(mktemp /tmp/ccXXXXXX.s)
@@ -202,7 +235,7 @@ echo 'MINIAS_AS_VERSION_PROBE=PASS arch=x86_64 query=1 production_gnu_as=0 disca
 
 started=$(date +%s)
 if ! make -C "$src" O="$image_out" ARCH=x86_64 \
-    CC="gcc -B$work/asm-bin/" AS="$wrapper" -j"$jobs" -k bzImage \
+    CC="$mini_cc" AS="$wrapper" -j"$jobs" -k bzImage \
     >"$work/kbuild-mini.log" 2>&1; then
     echo 'MINIAS_LINUX_FOURARCH_BUILD=FAIL arch=x86_64 stage=make-bzImage'
     echo 'MINIAS_LINUX_FOURARCH_DIAGNOSTIC=all-first-errors arch=x86_64'
@@ -218,6 +251,7 @@ if ! make -C "$src" O="$image_out" ARCH=x86_64 \
     grep -E '^fail' "$work/minias-as.trace" | tail -n 100 || true
     exit 1
 fi
+record_kconfig mini final "$image_out"
 test -s "$image"
 sha256sum "$image" >"$work/bzImage.sha256"
 passes=$(grep -c '^pass ' "$work/minias-as.trace" || true)
@@ -320,15 +354,35 @@ verify_boots() {
 # Build GNU's independent baseline even when MiniAS reaches decompression but
 # fails before printk. Previously verify_boots exited before this build.
 # GNU remains a diagnostic baseline, never a production-assembler fallback.
-configure_kernel "$gnu_out"
+configure_kernel "$gnu_out" gcc as
+record_kconfig gnu pre "$gnu_out"
+config_parity_rc=0
+compare_kconfig pre || config_parity_rc=1
 gnu_build_rc=0
-if ! make -C "$src" O="$gnu_out" ARCH=x86_64 -j"$jobs" bzImage \
+if ! make -C "$src" O="$gnu_out" ARCH=x86_64 CC=gcc AS=as -j"$jobs" bzImage \
     >"$work/kbuild-gnu.log" 2>&1; then
     echo 'MINIAS_LINUX_FOURARCH_GNU_BASELINE=FAIL arch=x86_64' >&2
     tail -n 160 "$work/kbuild-gnu.log" >&2
     gnu_build_rc=1
 fi
 if [[ ! -s "$gnu_image" ]]; then gnu_build_rc=1; fi
+if (( gnu_build_rc == 0 )); then
+    record_kconfig gnu final "$gnu_out"
+    compare_kconfig final || config_parity_rc=1
+    for lane in mini gnu; do
+        if cmp -s "$work/kconfig-$lane-pre.config" "$work/kconfig-$lane-final.config"; then
+            echo "MINIAS_LINUX_FOURARCH_CONFIG_MUTATION=NONE arch=x86_64 lane=$lane"
+        else
+            echo "MINIAS_LINUX_FOURARCH_CONFIG_MUTATION=DETECTED arch=x86_64 lane=$lane" >&2
+            diff -u "$work/kconfig-$lane-pre.config" "$work/kconfig-$lane-final.config" \
+                >"$work/kconfig-$lane-kbuild-mutation.log" || true
+            config_parity_rc=1
+        fi
+    done
+else
+    echo 'MINIAS_LINUX_FOURARCH_CONFIG_PARITY=UNVERIFIED arch=x86_64 phase=final reason=gnu_build_failed' >&2
+    config_parity_rc=1
+fi
 
 diagnose_early_boot() {
     local debug_dir="$work/diagnostics"
@@ -393,8 +447,8 @@ if (( gnu_build_rc == 0 )); then
 else
     gnu_boot_rc=2
 fi
-if (( mini_boot_rc != 0 || gnu_boot_rc != 0 )); then
-    echo "MINIAS_LINUX_FOURARCH_RUNTIME=FAIL arch=x86_64 mini_rc=$mini_boot_rc gnu_build_rc=$gnu_build_rc gnu_boot_rc=$gnu_boot_rc" >&2
+if (( mini_boot_rc != 0 || gnu_boot_rc != 0 || config_parity_rc != 0 )); then
+    echo "MINIAS_LINUX_FOURARCH_RUNTIME=FAIL arch=x86_64 mini_rc=$mini_boot_rc gnu_build_rc=$gnu_build_rc gnu_boot_rc=$gnu_boot_rc config_parity_rc=$config_parity_rc" >&2
     exit 1
 fi
 echo 'MINIAS_LINUX_FOURARCH_RUNTIME=PASS arch=x86_64 p0=2/2 p1=12/12 gnu_baseline=PASS gnu_bfd_link=1 no_gas_fallback=1'

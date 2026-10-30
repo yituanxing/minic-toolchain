@@ -130,6 +130,10 @@ jobs:
           name: minias-config-${{ matrix.arch }}-minias
           path: |
             build/minias-linux-fourarch/${{ matrix.arch }}/kernel-config.sha256
+            build/minias-linux-fourarch/${{ matrix.arch }}/kernel-config.pre.sha256
+            build/minias-linux-fourarch/${{ matrix.arch }}/kernel-config.pre.config
+            build/minias-linux-fourarch/${{ matrix.arch }}/kernel-config.final.config
+            build/minias-linux-fourarch/${{ matrix.arch }}/evidence/kernel-config.diff.log
             build/minias-linux-fourarch/aarch64/evidence/entry.o.s
             build/minias-linux-fourarch/aarch64/evidence/entry.o.s.sha256
           if-no-files-found: error
@@ -241,6 +245,10 @@ jobs:
           name: minias-config-aarch64-gnu
           path: |
             build/minias-linux-fourarch/aarch64/kernel-config.sha256
+            build/minias-linux-fourarch/aarch64/kernel-config.pre.sha256
+            build/minias-linux-fourarch/aarch64/kernel-config.pre.config
+            build/minias-linux-fourarch/aarch64/kernel-config.final.config
+            build/minias-linux-fourarch/aarch64/evidence/kernel-config.diff.log
             build/minias-linux-fourarch/aarch64/evidence/entry.o.s
             build/minias-linux-fourarch/aarch64/evidence/entry.o.s.sha256
           if-no-files-found: error
@@ -301,7 +309,12 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: minias-config-loongarch64-gnu
-          path: build/minias-linux-fourarch/loongarch64/kernel-config.sha256
+          path: |
+            build/minias-linux-fourarch/loongarch64/kernel-config.sha256
+            build/minias-linux-fourarch/loongarch64/kernel-config.pre.sha256
+            build/minias-linux-fourarch/loongarch64/kernel-config.pre.config
+            build/minias-linux-fourarch/loongarch64/kernel-config.final.config
+            build/minias-linux-fourarch/loongarch64/evidence/kernel-config.diff.log
           if-no-files-found: error
           retention-days: 14
 
@@ -312,29 +325,46 @@ jobs:
     needs: [gcc-minias-kbuild-qemu, aarch64-gnu-baseline, loong-gnu-baseline]
     runs-on: ubuntu-24.04
     steps:
-      - name: Restore four exact-head production Kconfig digests
+      - name: Restore four exact-head production Kconfig snapshots
         uses: actions/download-artifact@v4
         with:
           pattern: minias-config-*
           path: config-controls
           merge-multiple: false
-      - name: Fail closed on mismatched configuration and real AArch64 entry.o source
+      - name: Fail closed on pre-final drift, matched configuration, and real AArch64 entry.o source
         shell: bash
         run: |
           set -Eeuo pipefail
           for arch in aarch64 loongarch64; do
+            for variant in minias gnu; do
+              dir="config-controls/minias-config-${arch}-${variant}"
+              for phase in pre final; do
+                file="$dir/kernel-config.${phase}.config"
+                if [[ $phase == final ]]; then
+                  digest="$dir/kernel-config.sha256"
+                else
+                  digest="$dir/kernel-config.pre.sha256"
+                fi
+                test -s "$file" && test -s "$digest"
+                grep -Exq '[a-f0-9]{64}' "$digest"
+                test "$(wc -l <"$digest")" -eq 1
+                sha256sum "$file" | cut -d' ' -f1 | cmp -s - "$digest"
+              done
+              test -f "$dir/evidence/kernel-config.diff.log"
+              if ! cmp -s "$dir/kernel-config.pre.sha256" "$dir/kernel-config.sha256"; then
+                echo "MINIAS_LINUX_KCONFIG_STABLE=FAIL arch=$arch backend=$variant pre=$(head -n1 "$dir/kernel-config.pre.sha256") final=$(head -n1 "$dir/kernel-config.sha256")"
+                head -n 80 "$dir/evidence/kernel-config.diff.log"
+                exit 1
+              fi
+              echo "MINIAS_LINUX_KCONFIG_STABLE=PASS arch=$arch backend=$variant"
+            done
             mini="config-controls/minias-config-${arch}-minias/kernel-config.sha256"
             gnu="config-controls/minias-config-${arch}-gnu/kernel-config.sha256"
-            for f in "$mini" "$gnu"; do
-              test -s "$f"
-              grep -Exq '[a-f0-9]{64}' "$f"
-              test "$(wc -l <"$f")" -eq 1
-            done
             if ! cmp -s "$mini" "$gnu"; then
-              echo "MINIAS_LINUX_MATCHED_CONFIG=FAIL arch=$arch MiniAS=$(head -n1 "$mini") GNU=$(head -n1 "$gnu")"
+              echo "MINIAS_LINUX_MATCHED_CONFIG=FAIL arch=$arch scope=final MiniAS=$(head -n1 "$mini") GNU=$(head -n1 "$gnu")"
               exit 1
             fi
-            echo "MINIAS_LINUX_MATCHED_CONFIG=PASS arch=$arch sha256=$(head -n1 "$mini")"
+            echo "MINIAS_LINUX_MATCHED_CONFIG=PASS arch=$arch scope=final sha256=$(head -n1 "$mini")"
           done
           for f in \
             config-controls/minias-config-aarch64-minias/evidence/entry.o.s.sha256 \

@@ -178,7 +178,8 @@ build_as="$work/as-override/loongarch64-linux-gnu-as"
 fi
 
 make -C "$kernel_src" O="$kernel_out" ARCH=loongarch \
-  CROSS_COMPILE=loongarch64-linux-gnu- CC="$cc" loongson3_defconfig
+  CROSS_COMPILE=loongarch64-linux-gnu- CC="$build_cc" AS="$build_as" \
+  KCFLAGS=-Wno-error loongson3_defconfig
 "$kernel_src/scripts/config" --file "$kernel_out/.config" \
   -e EFI -e EFI_STUB -e EFI_ZBOOT \
   -e BLK_DEV_INITRD -e DEVTMPFS -e DEVTMPFS_MOUNT \
@@ -187,17 +188,49 @@ make -C "$kernel_src" O="$kernel_out" ARCH=loongarch \
   -e SIGNALFD -e INOTIFY_USER -e TIMERFD -e MEMFD_CREATE -e FUTEX \
   -e PIDFD
 make -C "$kernel_src" O="$kernel_out" ARCH=loongarch \
-  CROSS_COMPILE=loongarch64-linux-gnu- CC="$cc" olddefconfig
+  CROSS_COMPILE=loongarch64-linux-gnu- CC="$build_cc" AS="$build_as" \
+  KCFLAGS=-Wno-error olddefconfig
 grep -qx 'CONFIG_EFI_STUB=y' "$kernel_out/.config"
 grep -qx 'CONFIG_EFI_ZBOOT=y' "$kernel_out/.config"
 
-# Snapshot the actual resolved Kconfig, independently of which assembler
-# subsequently handles Kbuild .s units. This digest is compared with a GNU
-# control from the same commit by the workflow's matched-config gate.
+# Config discovery and the actual Kbuild must use the same CC/AS/KCFLAGS,
+# including MiniAS' -B wrapper: otherwise Kbuild can transparently re-run
+# Kconfig with different assembler capability probes. Preserve both resolved
+# configurations and fail closed if production Kbuild still changes options.
 config_sha256=$(sha256sum "$kernel_out/.config")
-printf '%s\n' "${config_sha256%% *}" >"$work/kernel-config.sha256"
-printf 'MINIAS_LINUX_KCONFIG_SHA256 arch=loongarch64 backend=%s sha256=%s\n' \
+cp -- "$kernel_out/.config" "$work/kernel-config.pre.config"
+printf '%s\n' "${config_sha256%% *}" >"$work/kernel-config.pre.sha256"
+printf 'MINIAS_LINUX_KCONFIG_PRE_SHA256 arch=loongarch64 backend=%s sha256=%s\n' \
   "$as_backend" "${config_sha256%% *}"
+
+capture_final_kconfig() {
+  if [[ ! -s $kernel_out/.config ]]; then
+    echo 'MINIAS_LINUX_FOURARCH=ERROR arch=loongarch64 missing_final_kconfig' >&2
+    return 1
+  fi
+  cp -- "$kernel_out/.config" "$work/kernel-config.final.config"
+  local final_hash diff_status
+  final_hash=$(sha256sum "$kernel_out/.config")
+  printf '%s\n' "${final_hash%% *}" >"$work/kernel-config.sha256"
+  printf 'MINIAS_LINUX_KCONFIG_FINAL_SHA256 arch=loongarch64 backend=%s sha256=%s\n' \
+    "$as_backend" "${final_hash%% *}"
+  if diff -u "$work/kernel-config.pre.config" "$work/kernel-config.final.config" \
+      >"$work/evidence/kernel-config.diff.log"; then
+    echo 'MINIAS_LINUX_KCONFIG_STABLE=PASS arch=loongarch64'
+  else
+    diff_status=$?
+    if [[ $diff_status -ne 1 ]]; then
+      echo "MINIAS_LINUX_FOURARCH=ERROR arch=loongarch64 kconfig_diff_status=$diff_status" >&2
+      return 1
+    fi
+    echo 'MINIAS_LINUX_KCONFIG_STABLE=FAIL arch=loongarch64 changed_during_kbuild' >&2
+    grep -E '^[+-](CONFIG_[A-Z0-9_]+=|# CONFIG_[A-Z0-9_]+ is not set)' \
+      "$work/evidence/kernel-config.diff.log" | head -n 100 >&2 || true
+    return 1
+  fi
+  grep -qx 'CONFIG_EFI_STUB=y' "$work/kernel-config.final.config"
+  grep -qx 'CONFIG_EFI_ZBOOT=y' "$work/kernel-config.final.config"
+}
 
 started=$(date +%s)
 if ! make -C "$kernel_src" O="$kernel_out" ARCH=loongarch \
@@ -214,14 +247,12 @@ if ! make -C "$kernel_src" O="$kernel_out" ARCH=loongarch \
   tail -n 140 "$kbuild_log" || true
   echo 'MINIAS_LINUX_AS_TRACE_DIAGNOSTIC=last-failures'
   if [[ $as_backend == minias ]]; then grep '^fail ' "$trace" | tail -n 50 || true; fi
+  capture_final_kconfig || true
   exit 1
 fi
 
 test -s "$image"
-if [[ $(sha256sum "$kernel_out/.config") != "$config_sha256" ]]; then
-  echo 'MINIAS_LINUX_FOURARCH=ERROR arch=loongarch64 kconfig_changed_during_kbuild' >&2
-  exit 1
-fi
+capture_final_kconfig
 sha256sum "$image" >"$work/evidence/vmlinuz.efi.sha256"
 if [[ $as_backend == minias ]]; then
   passed=$(grep -c '^pass ' "$trace" || true)
