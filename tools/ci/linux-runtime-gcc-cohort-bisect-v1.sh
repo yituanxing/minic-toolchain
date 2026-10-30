@@ -46,6 +46,35 @@ if [[ "${1:-}" == --self-test-kbuild-mtime ]]; then
   echo 'COHORT_GNU_MTIME_REBASE_SELFTEST=PASS immutable_bytes=true source_older=true candidate_relink=true'
   exit 0
 fi
+if [[ "${1:-}" == --self-test-kbuild-source-alias ]]; then
+  # GNU make -C resolves a symlinked source path to the same CURDIR used
+  # when the original golden .o.cmd was generated. Copying the source into
+  # another directory produces a different Kbuild C compilation command,
+  # even when the source bytes and output directory are unchanged.
+  scratch=$(mktemp -d)
+  trap 'rm -rf -- "$scratch"' EXIT
+  canonical="$scratch/linux-expanded-kbuild-v0/linux-6.6.143"
+  alias_dir="$scratch/linux-runtime-gcc/linux-6.6.143"
+  copied="$scratch/linux-runtime-gcc/copied-linux-6.6.143"
+  out_test="$scratch/linux-runtime-gcc/out"
+  mkdir -p "$canonical" "$out_test"
+  printf '%s\n' \
+    'KBUILD_CFLAGS := -I$(CURDIR)/include' \
+    'cmd_owner = riscv64-linux-gnu-gcc $(KBUILD_CFLAGS) -c $(CURDIR)/lib/idr.c -o $(O)/lib/idr.o' \
+    'show-kbuild-command:' >"$canonical/Makefile"
+  printf '\t%s\n' '@printf "%s\n" "$(cmd_owner)"' >>"$canonical/Makefile"
+  ln -s "$canonical" "$alias_dir"
+  cp -a "$canonical" "$copied"
+  [[ -L "$alias_dir" && "$(realpath "$alias_dir")" == "$canonical" ]]
+  reference_cmd=$(make -s -C "$canonical" O="$out_test" show-kbuild-command)
+  alias_cmd=$(make -s -C "$alias_dir" O="$out_test" show-kbuild-command)
+  copied_cmd=$(make -s -C "$copied" O="$out_test" show-kbuild-command)
+  [[ "$reference_cmd" == "$alias_cmd" && "$reference_cmd" != "$copied_cmd" ]] || {
+    echo 'COHORT_GNU_SOURCE_ALIAS_SELFTEST=FAIL Kbuild_command_path_drift' >&2; exit 1;
+  }
+  echo 'COHORT_GNU_SOURCE_ALIAS_SELFTEST=PASS golden_and_alias_command_equal=true copy_command_differs=true'
+  exit 0
+fi
 if (( $# != 6 )); then
   echo "usage: $0 <src> <out> <minic> <gold-provenance> <objects-file> <evidence-dir>" >&2
   exit 64
@@ -187,7 +216,7 @@ if [[ "${COHORT_GNU_PREFLIGHT_ALLOW_SEVEN_SHARD_VOLATILE:-0}" == 1 ||
   fi
   [[ "$mtime_qualified" == 1 &&
      "$actual_cfg" == eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe &&
-     "$src" == "$repo/build/linux-runtime-gcc/linux-6.6.143" &&
+     "$src" == "$repo/build/linux-expanded-kbuild-v0/linux-6.6.143" &&
      "$out" == "$repo/build/linux-runtime-gcc/out" ]] || {
     echo 'COHORT_GNU_MTIME_REBASE=FAIL unqualified_Kbuild_fixture' >&2; exit 6;
   }

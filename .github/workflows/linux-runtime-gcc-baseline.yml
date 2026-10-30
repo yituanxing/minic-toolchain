@@ -1808,7 +1808,13 @@ jobs:
           src="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/linux-6.6.143"
           test -d "$src"
           test ! -e "$work/linux-6.6.143"
-          cp -a --reflink=auto "$src" "$work/linux-6.6.143"
+          # The GNU golden .o.cmd records the original Kbuild source path.
+          # Preserve it for this exact seven-shard producer; copied sources
+          # change the command signature and force thousands of GNU C rebuilds.
+          ln -s "$src" "$work/linux-6.6.143"
+          test -L "$work/linux-6.6.143"
+          test "$(realpath "$work/linux-6.6.143")" = "$src"
+          echo 'RV64_GNU_KBUILD_SOURCE_ALIAS=PASS lane=seven_shard original_source_path=true'
           ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}"
           if [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-full-crossblock]') && '1' || '0' }}" == 1 ]]; then
             export MINIC_LINUX_FULL_CROSSBLOCK=1 MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ=1
@@ -2741,7 +2747,13 @@ jobs:
           work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
           src="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/linux-6.6.143"
           test -d "$src"
-          cp -a --reflink=auto "$src" "$work/linux-6.6.143"
+          # Keep receiver GNU Kbuild commands byte-identical to the golden.
+          # A copied source tree changes .o.cmd dependency/command paths.
+          test ! -e "$work/linux-6.6.143"
+          ln -s "$src" "$work/linux-6.6.143"
+          test -L "$work/linux-6.6.143"
+          test "$(realpath "$work/linux-6.6.143")" = "$src"
+          echo 'RV64_GNU_KBUILD_SOURCE_ALIAS=PASS lane=seven_receiver original_source_path=true'
           ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
           if [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-full-crossblock]') && '1' || '0' }}" == 1 ]]; then
             export MINIC_LINUX_FULL_CROSSBLOCK=1 MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ=1
