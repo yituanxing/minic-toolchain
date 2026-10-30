@@ -176,6 +176,10 @@ jobs:
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-x86-boot-header-elf32-gnu.sh
+      - name: GNU Linux x86 five-level kernel page-table relocation addends
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-x86-kernel-pgt-gnu.sh
       - name: GNU x86 absolute local symbol folding and typed PUSH widths
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \

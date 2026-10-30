@@ -340,7 +340,6 @@ static bool parse_symbol_addend_inner(const char *text,
     const char *p;
     const char *start;
     size_t length;
-    int sign = 1;
     uint64_t addend_bits = 0U;
 
     if (text == NULL || expr == NULL) {
@@ -401,13 +400,10 @@ static bool parse_symbol_addend_inner(const char *text,
         ++p;
     }
     if (*p == '+' || *p == '-') {
-        if (*p == '-') {
-            sign = -1;
-        }
-        ++p;
-        while (*p == ' ' || *p == '\t') {
-            ++p;
-        }
+        /* Parse the sign as part of the entire arithmetic suffix.  In
+         * `symbol - BASE + FLAGS`, negating (BASE + FLAGS) instead would
+         * silently change +FLAGS into -FLAGS.  Linux x86's initial page
+         * tables use this exact GNU expression and need the Present bit. */
         if (!minias_eval_u64_expression(p, &addend_bits)) {
             return false;
         }
@@ -415,9 +411,6 @@ static bool parse_symbol_addend_inner(const char *text,
     }
     if (*p != '\0') {
         return false;
-    }
-    if (sign < 0) {
-        addend_bits = UINT64_C(0) - addend_bits;
     }
     expr->addend = (int64_t)addend_bits;
     return true;
