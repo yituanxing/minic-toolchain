@@ -70,7 +70,14 @@ awk '
     {before3=before2; before2=before; before=$0}
     END {if (found != 1 || !large_frame || bad) exit 1}
 ' "$work/crash-large.s" || {
-    echo 'AARCH_KEXEC_CRASH=FAIL large-owned-input-scratch' >&2; exit 1;
+    echo 'AARCH_KEXEC_CRASH=FAIL large-owned-input-scratch' >&2
+    # Diagnostic only: no weakening of the GPR snapshot or address gate.
+    # Core SSA reuse may legitimately shrink a formerly large frame.
+    grep -nE '^  (movz x12,|movk x12,|sub sp,|add x0, sp,|mov x0, sp|movz x0,|movk x0,|ldr x0, \\[x0\\]|stp x0, x1)' "$work/crash-large.s" |
+        tail -n 32 >&2 || true
+    grep -n -B7 -A2 -F '  stp x0, x1, [x0, #0]' "$work/crash-large.s" |
+        tail -n 12 >&2 || true
+    exit 1;
 }
 grep -Fq '  stp x16, x17, [x0, #128]' "$work/crash-large.s"
 # The original hardware template stores x0..x29 in 15 consecutive pairs.
