@@ -16,9 +16,9 @@ struct __attribute__((__packed__)) forward_packed_sample {
     unsigned short second;
 };
 
-static struct packed_sample sample;
-static struct suffix_packed_sample suffix_sample;
-static struct forward_packed_sample forward_sample;
+static struct packed_sample sample __attribute__((used));
+static struct suffix_packed_sample suffix_sample __attribute__((used));
+static struct forward_packed_sample forward_sample __attribute__((used));
 
 unsigned short read_second(void) {
     return sample.second;
