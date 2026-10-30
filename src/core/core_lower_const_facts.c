@@ -1237,6 +1237,73 @@ statement_expression_done:
                           : 0U;
         return true;
     }
+    if (expression->kind == MINIC_EXPRESSION_BUILTIN_UNARY) {
+        const MinicExpression *operand = minic_c0_program_expression(
+            context->body->program, expression->value.builtin_unary.operand);
+        MinicBuiltinUnaryOperator operation =
+            expression->value.builtin_unary.operator_kind;
+        unsigned int width;
+        uint64_t bits;
+        unsigned int count = 0U;
+        bool recognized =
+            operation == MINIC_BUILTIN_UNARY_CLZ ||
+            operation == MINIC_BUILTIN_UNARY_CLZL ||
+            operation == MINIC_BUILTIN_UNARY_CLZLL ||
+            operation == MINIC_BUILTIN_UNARY_CTZ ||
+            operation == MINIC_BUILTIN_UNARY_CTZL ||
+            operation == MINIC_BUILTIN_UNARY_CTZLL ||
+            operation == MINIC_BUILTIN_UNARY_POPCOUNT ||
+            operation == MINIC_BUILTIN_UNARY_POPCOUNTL ||
+            operation == MINIC_BUILTIN_UNARY_POPCOUNTLL ||
+            operation == MINIC_BUILTIN_UNARY_FFSLL;
+
+        /* The frontend folds an ICE operand already. During a constant-call
+         * evaluation the same intrinsic may instead read a specialized
+         * callee parameter. Compute the exact target-width integer result
+         * without introducing an ISA-specific KVM/fixmap exception. */
+        if (recognized && operand != NULL &&
+            core_const_eval_integer_with_locals(
+                context, expression->value.builtin_unary.operand, &operand_value) &&
+            minic_target_info_integer_width(context->target,
+                                            context->body->program,
+                                            operand->type, &width) &&
+            width > 0U && width <= 64U) {
+            bits = operand_value.bits & core_cfg_integer_width_mask(width);
+            if (operation == MINIC_BUILTIN_UNARY_CLZ ||
+                operation == MINIC_BUILTIN_UNARY_CLZL ||
+                operation == MINIC_BUILTIN_UNARY_CLZLL) {
+                if (bits == 0U) return false; /* GCC: undefined on zero */
+                while ((bits & (UINT64_C(1) << (width - 1U))) == 0U) {
+                    bits <<= 1U;
+                    ++count;
+                }
+            } else if (operation == MINIC_BUILTIN_UNARY_CTZ ||
+                       operation == MINIC_BUILTIN_UNARY_CTZL ||
+                       operation == MINIC_BUILTIN_UNARY_CTZLL) {
+                if (bits == 0U) return false;
+                while ((bits & UINT64_C(1)) == 0U) {
+                    bits >>= 1U;
+                    ++count;
+                }
+            } else if (operation == MINIC_BUILTIN_UNARY_FFSLL) {
+                if (bits != 0U) {
+                    count = 1U;
+                    while ((bits & UINT64_C(1)) == 0U) {
+                        bits >>= 1U;
+                        ++count;
+                    }
+                }
+            } else {
+                while (bits != 0U) {
+                    bits &= bits - UINT64_C(1);
+                    ++count;
+                }
+            }
+            value->type = expression->type;
+            value->bits = count;
+            return true;
+        }
+    }
     if (expression->kind == MINIC_EXPRESSION_STATEMENT &&
         expression->value.statement_expression.result != MINIC_EXPRESSION_INVALID) {
         const MinicExpression *statement_result_expression;
@@ -1322,6 +1389,36 @@ statement_expression_done:
             value->type = expression->type;
             value->bits = predicate ? 1U : 0U;
             return true;
+        }
+        /* A strong function designator has a non-null address.  This is
+         * deliberately not a generic pointer-nonnull rule: GNU undefined
+         * weak function references can legitimately resolve to NULL.  The
+         * other operand must be a proven null pointer constant (or a pure
+         * local fact), and no effectful operand may be discarded. */
+        if (left != NULL && right != NULL &&
+            (expression->value.binary.operator_kind == MINIC_BINARY_EQUAL ||
+             expression->value.binary.operator_kind == MINIC_BINARY_NOT_EQUAL) &&
+            minic_type_is_pointer(left->type) && minic_type_is_pointer(right->type) &&
+            minic_core_cfg_pure_call_argument(context, expression_id, 0U)) {
+            MinicFunctionId symbol = MINIC_FUNCTION_INVALID;
+            bool null_other = false;
+            if (core_cfg_specialized_function_symbol(
+                    context, expression->value.binary.left, 0U, &symbol)) {
+                null_other = core_expression_known_null_pointer_depth(
+                    context, expression->value.binary.right, 0U);
+            } else if (core_cfg_specialized_function_symbol(
+                           context, expression->value.binary.right, 0U, &symbol)) {
+                null_other = core_expression_known_null_pointer_depth(
+                    context, expression->value.binary.left, 0U);
+            }
+            if (null_other && symbol < context->body->program->function_count &&
+                !context->body->program->functions[symbol].is_weak) {
+                predicate = expression->value.binary.operator_kind ==
+                    MINIC_BINARY_NOT_EQUAL;
+                value->type = expression->type;
+                value->bits = predicate ? 1U : 0U;
+                return true;
+            }
         }
         if (left != NULL && right != NULL &&
             minic_type_is_pointer(left->type) && minic_type_is_pointer(right->type) &&

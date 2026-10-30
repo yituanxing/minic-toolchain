@@ -140,6 +140,16 @@ bool minic_core_cfg_pure_call_argument(const MinicCoreLowerContext *context,
                minic_core_cfg_pure_call_argument(context,
                                            expression->value.conditional.when_false,
                                            depth + 1U);
+    case MINIC_EXPRESSION_CALL: {
+        MinicConstValue folded;
+        /* An ordinary call may mutate memory and must remain a CFG effect
+         * barrier. The already-bounded static-inline constant-return
+         * evaluator proves a narrower case: all actual arguments are pure,
+         * and the body computes one constant without externally visible
+         * effects. This is needed by Linux AArch64 __fls(mask) inside
+         * BUILD_BUG_ON guards after a KVM flag's constant mask specializes. */
+        return minic_core_cfg_constant_inline_call(context, expression, &folded);
+    }
     default:
         return false;
     }

@@ -1388,7 +1388,12 @@ check-core-literal-branch-guard: $(MINIC_CC_BINARY)
 check-core-literal-branch-fold:
 	bash tests/compiler/c0/probe-core-literal-branch-fold.sh
 
-check-fast: check-loongarch64-record-copy-size check-loongarch64-frame-fold check-core-value-use-counts check-core-dead-ssa-writeback check-core-gp-forward check-core-literal-branch-guard check-core-literal-branch-fold
+.PHONY: check-core-function-designator-nonnull
+check-core-function-designator-nonnull: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
+	bash tests/compiler/c0/probe-core-function-designator-nonnull.sh
+
+check-fast: check-loongarch64-record-copy-size check-loongarch64-frame-fold check-core-value-use-counts check-core-dead-ssa-writeback check-core-gp-forward check-core-literal-branch-guard check-core-literal-branch-fold check-core-function-designator-nonnull
 
 .PHONY: check-gnu-builtin-constant-p-if-guard
 check-gnu-builtin-constant-p-if-guard: $(MINIC_CC_BINARY)

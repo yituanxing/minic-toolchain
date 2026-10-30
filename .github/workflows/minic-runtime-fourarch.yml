@@ -28,6 +28,8 @@ on:
       - "tests/compiler/c0/probe-aarch64-fixmap-cross-static-const-bug-asm.sh"
       - "tests/compiler/c0/aarch64_fixmap_cross_static_const_bug_asm.c"
       - "tests/compiler/c0/probe-aarch64-abi-audit-mc052-mc066.sh"
+      - "tests/compiler/c0/probe-kvm-constant-builtin-call-guard.sh"
+      - "tests/compiler/c0/a64_kvm_flag_guard.c"
       - "tests/compiler/audit/mc052_aarch64_uaccess_narrow_output.c"
       - "tests/compiler/audit/mc066_aarch64_fp_pointer_aggregate.c"
       - "tests/compiler/c0/dynamic_stack_wide_spill.c"
@@ -64,6 +66,8 @@ on:
       - "tests/compiler/c0/probe-aarch64-fixmap-cross-static-const-bug-asm.sh"
       - "tests/compiler/c0/aarch64_fixmap_cross_static_const_bug_asm.c"
       - "tests/compiler/c0/probe-aarch64-abi-audit-mc052-mc066.sh"
+      - "tests/compiler/c0/probe-kvm-constant-builtin-call-guard.sh"
+      - "tests/compiler/c0/a64_kvm_flag_guard.c"
       - "tests/compiler/audit/mc052_aarch64_uaccess_narrow_output.c"
       - "tests/compiler/audit/mc066_aarch64_fp_pointer_aggregate.c"
       - "tests/compiler/c0/probe-direct-lp64-weak-section-qemu.sh"
@@ -241,6 +245,13 @@ jobs:
           set -Eeuo pipefail
           MINIC_CC="$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc" \
             sh tests/compiler/c0/probe-aarch64-abi-audit-mc052-mc066.sh
+      - name: Linux KVM constant-mask inline builtin guard across four backends
+        if: matrix.target == 'aarch64'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC_CC="$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc" \
+            sh tests/compiler/c0/probe-kvm-constant-builtin-call-guard.sh
       - name: Prove RV32 ILP32 target model and strict ELF32 assembler
         if: matrix.target == 'riscv64'
         shell: bash
