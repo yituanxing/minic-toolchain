@@ -7,9 +7,9 @@ struct arm64_crash_regs {
     u64 sp, pc, pstate;
 };
 
-/* Compile-only large-frame oracle. These volatile reads force many Core
- * intermediate values before the original GNU register-snapshot ASM,
- * pushing its input SSA pointer beyond the 4-KiB text-legalizer boundary.
+/* Compile-only large-frame oracle. An escaping real 8-KiB local object
+ * forces a large owned frame even if Core safely reuses all SSA spill slots;
+ * volatile XOR reads still exercise the original register-input path.
  * Never execute this variant: it deliberately perturbs the pointer. */
 #ifdef MINIC_CRASH_LARGE_SSA
 extern volatile u64 minic_crash_stress_value;
@@ -23,11 +23,14 @@ extern volatile u64 minic_crash_stress_value;
 #define MINI_STRESS_128(p) MINI_STRESS_64(MINI_STRESS_64(p))
 #define MINI_STRESS_256(p) MINI_STRESS_128(MINI_STRESS_128(p))
 #define MINI_STRESS_512(p) MINI_STRESS_256(MINI_STRESS_256(p))
+extern void minic_crash_keep_stack_live(void *);
 #endif
 
 void arm64_crash_setup_regs(struct arm64_crash_regs *newregs) {
     u64 tmp1, tmp2;
 #ifdef MINIC_CRASH_LARGE_SSA
+    unsigned char minic_crash_large_owned_stack[8192];
+    minic_crash_keep_stack_live(minic_crash_large_owned_stack);
     newregs = MINI_STRESS_512(newregs);
 #endif
     __asm__ __volatile__ (
