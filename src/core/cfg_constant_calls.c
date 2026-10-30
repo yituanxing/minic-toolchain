@@ -93,6 +93,13 @@ bool minic_core_cfg_pure_call_argument(const MinicCoreLowerContext *context,
             context->body->program, expression->value.local_id);
         return local != NULL && !minic_type_is_volatile(local->type);
     }
+    case MINIC_EXPRESSION_BUILTIN_UNARY:
+        /* __builtin_constant_p inspects its operand without evaluating it.
+         * In particular it remains pure for operands with runtime reads or
+         * side effects, and Core's local-fact evaluator can prove the result
+         * without emitting the impossible arm of a compile-time guard. */
+        return expression->value.builtin_unary.operator_kind ==
+               MINIC_BUILTIN_UNARY_CONSTANT_P;
     case MINIC_EXPRESSION_CAST:
     case MINIC_EXPRESSION_BITCAST:
     case MINIC_EXPRESSION_CONVERSION:

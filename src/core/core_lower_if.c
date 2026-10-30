@@ -359,6 +359,7 @@ minic_core_lower_if(MinicCoreLowerContext *context, const MinicStatement *statem
     bool needs_merge;
     bool then_terminated;
     bool preserve_guard_facts;
+    bool condition_is_pure;
 
     if (context == NULL || context->body == NULL || context->body->program == NULL ||
         context->function == NULL || statement == NULL || terminated == NULL) {
@@ -379,6 +380,13 @@ minic_core_lower_if(MinicCoreLowerContext *context, const MinicStatement *statem
             return MINIC_CORE_LOWER_ERROR;
         }
     }
+
+    /* Condition lowering may happen after speculative lowering of both
+     * branches. The incoming snapshot, not the branch-exit fact table,
+     * describes facts dominating this source condition. Retain these facts
+     * only when evaluating the predicate itself has no side effects. */
+    condition_is_pure = minic_core_cfg_pure_call_argument(
+        context, statement->expression, 0U);
 
     if (statement->cleanup_context == statement->cleanup_stop_context &&
         minic_type_is_integer(condition_expression->type)) {
@@ -659,10 +667,14 @@ minic_core_lower_if(MinicCoreLowerContext *context, const MinicStatement *statem
     continuation_block = context->block_id;
     context->block_id = condition_block;
     minic_core_local_facts_restore(context, incoming_facts);
-    /* DOMINANCE_IF_GUARD_FACT_BARRIER: speculative body facts do not
-       dominate the earlier condition_block. Rebuild the runtime predicate
-       with only immutable source/specialization facts, not body updates. */
-    minic_core_local_facts_clear_known(context);
+    /* DOMINANCE_IF_GUARD_FACT_BARRIER: the restored incoming facts dominate
+     * the original condition block even though the then/else bodies were
+     * lowered first. A pure predicate may reuse them (including a known
+     * local queried by __builtin_constant_p inside a runtime ?: or &&).
+     * Unknown calls, mutations and volatile predicates still require the
+     * conservative known-fact barrier. */
+    if (!condition_is_pure)
+        minic_core_local_facts_clear_known(context);
     if (context->source_function && context->source_function->name &&
         strcmp(context->source_function->name, "genl_op_from_split") == 0)
         (void)fprintf(stderr, "GENL_IF_PATH stage=pre_guard expr=%zu condition=%u then=%u else=%u need_merge=%d\n",
