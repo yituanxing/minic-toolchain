@@ -272,8 +272,21 @@ bool minic_aarch64_emit_abi_instruction(
             } else {
                 const MinicCoreCallee *callee =
                     &fn->callees[ins->value.call.callee_id];
-                if (fprintf(out, "  bl %s\n", callee->name) < 0)
+                if (minic_target_info_elf_function_is_undefined_weak(
+                        program, callee->name)) {
+                    /* An undefined weak symbol may resolve to address zero.
+                     * Direct CALL26 can force a PLT entry, forbidden by the
+                     * Linux AArch64 linker script. Reuse the normal AAPCS64
+                     * call-clobbered IP0 register without disturbing x0..x8
+                     * argument and indirect-record-return channels. */
+                    if (fprintf(out, "  adrp x16, :got:%s\n"
+                                     "  ldr x16, [x16, :got_lo12:%s]\n"
+                                     "  blr x16\n",
+                                callee->name, callee->name) < 0)
+                        return false;
+                } else if (fprintf(out, "  bl %s\n", callee->name) < 0) {
                     return false;
+                }
             }
             if (stack_bytes != 0U &&
                 fprintf(out, "  add sp, sp, #%zu\n", stack_bytes) < 0)

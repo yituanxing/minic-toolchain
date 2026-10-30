@@ -623,6 +623,56 @@ def summarize_gnu_link_failures(log_text: str) -> dict:
             "truncated_relocations": dict(sorted(relocations.items()))}
 
 
+def print_link_symbol_owner_diagnostics(target: str, summary: dict,
+                                        owner_report: dict | None,
+                                        limit: int = 8) -> None:
+    """Bounded console view of *authenticated* failing ELF CALL owners.
+
+    Original Kbuild may report a vmlinux.o aggregate instead of a C source.
+    Match a link symbol only when the frozen-owner collector found that exact
+    symbol's undefined relocation in a digest-verified staged MiniC ELF.
+    Missing, ambiguous, or sampled-out owners are explicitly non-conclusive.
+    This never changes the original GNU link verdict and never infers a source
+    owner from a basename or a linker aggregate.
+    """
+    report = owner_report or {}
+    samples = report.get("samples", [])
+    partial = bool(report.get("skipped") or report.get("errors") or
+                   report.get("aarch64_relocation_diagnostic_errors") or
+                   report.get("verdict") != "LINK_FAILURE_C_OWNER_SAMPLES_COMPLETE")
+    symbols = summary.get("symbols", [])
+    for item in symbols[:limit]:
+        symbol = item.get("name", "")
+        # The diagnostic must not reproduce arbitrary linker text verbatim.
+        if re.fullmatch(r"[A-Za-z_.$][A-Za-z0-9_.$@+-]{0,159}", symbol) is None:
+            print("THREE_ISA_GNU_LINK_SYMBOL_OWNER " + json.dumps(
+                {"target": target, "status": "INVALID_SYMBOL_TEXT"},
+                sort_keys=True, separators=(",", ":")))
+            continue
+        matches = [row for row in samples if symbol in row.get(
+            "owner_resolution", {}).get("matching_symbols", [])]
+        if not matches:
+            status = "NO_AUTHENTICATED_C_OWNER"
+        elif partial:
+            status = "PARTIAL_OWNER_CENSUS"
+        elif len(matches) == 1:
+            status = "UNIQUE_AUTHENTICATED_ELF_RELOCATION"
+        else:
+            status = "MULTIPLE_AUTHENTICATED_ELF_RELOCATIONS"
+        owners = [{"object": row["owner"], "frozen_i_sha256": row["input_sha256"],
+                   "original_cmd_sha256": row["cmd_sha256"]}
+                  for row in matches[:4]]
+        print("THREE_ISA_GNU_LINK_SYMBOL_OWNER " + json.dumps(
+            {"target": target, "symbol": symbol,
+             "link_references": item.get("references", 0), "status": status,
+             "owners": owners, "omitted_owners": max(0, len(matches) - 4)},
+            sort_keys=True, separators=(",", ":")))
+    if len(symbols) > limit:
+        print("THREE_ISA_GNU_LINK_SYMBOL_OWNER_TRUNCATED " + json.dumps(
+            {"target": target, "reported": limit, "total": len(symbols)},
+            sort_keys=True, separators=(",", ":")))
+
+
 def verify_postlink_c_owners(out: Path, output: Path, target: str,
                              expected: dict[str, str]) -> dict:
     """Re-enumerate live GNU Kbuild ELF64 C owners after the final relink.
@@ -1075,8 +1125,9 @@ def relink(work: Path, output: Path, rows: list[dict], results: list[dict],
         # Only after the original unchanged GNU Kbuild command has failed,
         # retain a bounded set of its *authentic frozen GNU C* error owners.
         # This is postmortem evidence, not a linker retry or a GNU C fallback.
+        owner_report = None
         try:
-            preserve_link_failed_c_owners(
+            owner_report = preserve_link_failed_c_owners(
                 work, output, rows, results, output / "gnu-ld-relink.log",
                 target=data["target"])
         except Exception as exc:
@@ -1084,6 +1135,10 @@ def relink(work: Path, output: Path, rows: list[dict], results: list[dict],
             # rejection, even if a future diagnostic parser itself fails.
             (output / "link-failure-owner-diagnostic-error.txt").write_text(
                 str(exc)[:4096])
+        # The 3-ISA workflow archive can be unavailable in the current client.
+        # Make the actual failing symbols and authenticated owner SHAs visible
+        # in the ordinary CI log, without printing whole .i/.cmd/LD files.
+        print_link_symbol_owner_diagnostics(data["target"], summary, owner_report)
         raise Rejected(f"original GNU Kbuild relink failed rc={linked.returncode}")
     # Re-enumerate *all* live original-Kbuild C owners after the link, not just
     # the preoverlay list. A new GCC-generated C object may not evade this
@@ -1565,6 +1620,51 @@ def self_test() -> None:
                     "original.gnu.i").is_file()
                    for item in x86_report["samples"])
         assert x86_report["unknown_non_c_owners"] == ["vmlinux.o"]
+        # The CI console must expose the *actual* unresolved linker symbol
+        # with authenticated ELF relocation owners and source/command digests.
+        # An aggregate vmlinux.o never becomes a guessed unique C source.
+        x86_link_summary = summarize_gnu_link_failures(x86_link.read_text())
+        emitted = io.StringIO()
+        with contextlib.redirect_stdout(emitted):
+            print_link_symbol_owner_diagnostics("x86_64", x86_link_summary, x86_report)
+        lines = emitted.getvalue().splitlines()
+        assert len(lines) == 1
+        assert lines[0].startswith("THREE_ISA_GNU_LINK_SYMBOL_OWNER ")
+        evidence = json.loads(lines[0].split(" ", 1)[1])
+        assert evidence["symbol"] == "__compiletime_assert_317"
+        assert evidence["status"] == "MULTIPLE_AUTHENTICATED_ELF_RELOCATIONS"
+        assert [entry["object"] for entry in evidence["owners"]] == [
+            "kernel/first_error_2.o", "kernel/first_error_4.o"]
+        assert evidence["owners"][0]["frozen_i_sha256"] == failed_rows[2]["sha256"]
+        assert evidence["owners"][0]["original_cmd_sha256"] == failed_rows[2]["cmd_sha256"]
+        unique_report = dict(x86_report, samples=x86_report["samples"][:1],
+                             skipped=[], errors=[],
+                             verdict="LINK_FAILURE_C_OWNER_SAMPLES_COMPLETE")
+        emitted = io.StringIO()
+        with contextlib.redirect_stdout(emitted):
+            print_link_symbol_owner_diagnostics("aarch64", x86_link_summary, unique_report)
+        assert json.loads(emitted.getvalue().split(" ", 1)[1])[
+            "status"] == "UNIQUE_AUTHENTICATED_ELF_RELOCATION"
+        emitted = io.StringIO()
+        with contextlib.redirect_stdout(emitted):
+            print_link_symbol_owner_diagnostics("x86_64", x86_link_summary,
+                                                relocation_report)
+        assert json.loads(emitted.getvalue().split(" ", 1)[1])[
+            "status"] == "PARTIAL_OWNER_CENSUS"
+        emitted = io.StringIO()
+        with contextlib.redirect_stdout(emitted):
+            print_link_symbol_owner_diagnostics("x86_64", x86_link_summary, None)
+        assert json.loads(emitted.getvalue().split(" ", 1)[1])[
+            "status"] == "NO_AUTHENTICATED_C_OWNER"
+        # Eight symbols maximum, no arbitrary linker text echoed into stdout.
+        many_symbols = dict(x86_link_summary, symbols=[
+            {"name": f"__compiletime_assert_{i}", "references": 1}
+            for i in range(12)])
+        emitted = io.StringIO()
+        with contextlib.redirect_stdout(emitted):
+            print_link_symbol_owner_diagnostics("x86_64", many_symbols, None)
+        assert len(emitted.getvalue().splitlines()) == 9
+        assert "TRUNCATED" in emitted.getvalue().splitlines()[-1]
         bad_rows = [dict(row) for row in ambiguous_rows]
         bad_rows[0]["object"] = "../malicious.o"
         bad_passed = [dict(item) for item in passed]

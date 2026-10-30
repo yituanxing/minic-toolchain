@@ -18,6 +18,16 @@ on:
         default: all
         type: choice
         options: [all, x86_64, aarch64, loongarch64]
+      measure_gnu_zstd:
+        description: One-off bounded streaming zstd size/CPU pilot; no cache write
+        required: false
+        default: false
+        type: boolean
+      reuse_gnu_cache:
+        description: Opt-in exact original GNU golden restore/save; disabled until compression size is measured
+        required: false
+        default: false
+        type: boolean
       loong_firmware_url:
         description: HTTPS URL for known LoongArch QEMU_EFI.fd (required for LoongArch)
         required: false
@@ -40,6 +50,8 @@ jobs:
     timeout-minutes: 5
     outputs:
       run: ${{ steps.decide.outputs.run }}
+      pilot_target: ${{ steps.decide.outputs.pilot_target }}
+      reuse_gnu_cache: ${{ steps.decide.outputs.reuse_gnu_cache }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -51,14 +63,28 @@ jobs:
         run: |
           set -Eeuo pipefail
           active=false
+          pilot_target=none
+          reuse_gnu_cache=false
           if [[ '${{ github.event_name }}' == workflow_dispatch ]]; then
             active=true
           elif git rev-parse --verify HEAD^ >/dev/null 2>&1 &&
                ! git diff --quiet HEAD^ HEAD -- tools/ci/linux-three-isa-gnu-qemu-trigger.txt; then
             active=true
+            # Only the exact last-commit campaign trigger may opt an expensive
+            # PR into one-time sizing or SHA-locked GNU cache reuse. A mere
+            # workflow diff must never run or mutate the GNU oracle campaign.
+            pilot_marker=$(git diff --unified=0 HEAD^ HEAD -- tools/ci/linux-three-isa-gnu-qemu-trigger.txt | \
+              sed -n 's/^+# GNU_ZSTD_PILOT_TARGET=\(all\|x86_64\|aarch64\|loongarch64\)$/\1/p' | tail -1)
+            pilot_target=${pilot_marker:-none}
+            if git diff --unified=0 HEAD^ HEAD -- tools/ci/linux-three-isa-gnu-qemu-trigger.txt | \
+               grep -qx '+# GNU_CACHE_REUSE=1'; then
+              reuse_gnu_cache=true
+            fi
           fi
           echo "run=$active" >> "$GITHUB_OUTPUT"
-          echo "GNU_QEMU_EXACT_HEAD_CAMPAIGN=$active commit=$(git rev-parse HEAD)"
+          echo "pilot_target=$pilot_target" >> "$GITHUB_OUTPUT"
+          echo "reuse_gnu_cache=$reuse_gnu_cache" >> "$GITHUB_OUTPUT"
+          echo "GNU_QEMU_EXACT_HEAD_CAMPAIGN=$active pilot_target=$pilot_target reuse_gnu_cache=$reuse_gnu_cache commit=$(git rev-parse HEAD)"
   gnu-boot:
     needs: campaign-gate
     if: needs.campaign-gate.outputs.run == 'true'
@@ -96,11 +122,13 @@ jobs:
           set -Eeuo pipefail
           python3 -m py_compile tools/ci/linux-three-isa-gnu-qemu-v1.py \
             tools/ci/linux-three-isa-minic-candidate-v1.py \
+            tools/ci/linux-three-isa-gnu-cache-verify-v1.py \
             tools/ci/linux-three-isa-section-size-v1.py \
             tools/ci/linux-four-isa-runtime-diff-v1.py
           python3 tools/ci/linux-three-isa-gnu-qemu-v1.py --self-test
           python3 tools/ci/linux-three-isa-minic-candidate-v1.py --self-test
           python3 tools/ci/linux-four-isa-runtime-diff-v1.py --self-test
+          python3 tools/ci/test_linux_three_isa_gnu_cache_verify_v1.py
           bash -n tools/ci/linux-three-isa-golden-v1.sh
 
       - name: Install original target GNU Kbuild and QEMU packages
@@ -135,6 +163,15 @@ jobs:
               ;;
           esac
 
+      # No cost in ordinary PR campaigns; the opt-in pilot must be able to
+      # actually measure instead of silently reporting a missing compressor.
+      - name: Install zstd only for the one-off compression benchmark
+        if: (github.event_name == 'workflow_dispatch' && inputs.measure_gnu_zstd == true) || (github.event_name == 'pull_request' && (needs.campaign-gate.outputs.pilot_target == 'all' || needs.campaign-gate.outputs.pilot_target == matrix.target))
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends zstd
+
       - name: Preflight SHA-locked LoongArch EFI firmware (never silently skip)
         if: matrix.target == 'loongarch64'
         shell: bash
@@ -154,13 +191,83 @@ jobs:
           printf '%s  %s\n' "$LOONG_FIRMWARE_SHA256" "$RUNTIME_OUTPUT/QEMU_EFI.fd" | sha256sum -c -
           sha256sum "$RUNTIME_OUTPUT/QEMU_EFI.fd"
 
+      # RV64 precedent: pin the original GNU producer and tools, not the
+      # ever-changing MiniC candidate SHA. Never use prefix restore-keys:
+      # different Linux source/configs, toolchains or O= roots cannot match.
+      # Opt-in stays off until a real 9-13GB pristine golden is measured.
+      - name: Identify exact original GNU producer and toolchain cache identity
+        if: (github.event_name == 'workflow_dispatch' && inputs.reuse_gnu_cache == true) || (github.event_name == 'pull_request' && needs.campaign-gate.outputs.reuse_gnu_cache == 'true')
+        id: gnu_cache_identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          case '${{ matrix.target }}' in
+            x86_64) gcc=gcc; ld=ld; assembler=as ;;
+            aarch64) gcc=aarch64-linux-gnu-gcc; ld=aarch64-linux-gnu-ld; assembler=aarch64-linux-gnu-as ;;
+            loongarch64) gcc=loongarch64-linux-gnu-gcc-13; ld=loongarch64-linux-gnu-ld; assembler=loongarch64-linux-gnu-as ;;
+            *) exit 2 ;;
+          esac
+          signature=$(
+            {
+              printf '%s\n' \
+                'cache_contract=three-isa-gnu-golden-precandidate-v1' \
+                'linux=6.6.143' \
+                'linux_tar_sha256=dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932' \
+                'config_profile=broad' \
+                'gnu_qemu_p0_p1_must_rerun=true' \
+                "target=${{ matrix.target }}" \
+                "gnu_work=$GNU_WORK" \
+                "workspace=$GITHUB_WORKSPACE"
+              for tool in "$gcc" "$ld" "$assembler" gcc ld as make bison flex bc; do
+                exe=$(command -v "$tool")
+                test -s "$exe"
+                printf '%s:%s:%s\n' "$tool" "$exe" "$(sha256sum "$exe" | cut -d' ' -f1)"
+              done
+              sha256sum \
+                tools/ci/linux-three-isa-golden-v1.sh \
+                tools/ci/linux-three-isa-golden-v1.py \
+                tools/ci/linux-three-isa-freeze-i-v1.py \
+                tools/ci/linux-runtime-gcc-full-c-objects-v1.py \
+                tools/ci/linux-three-isa-common.config
+            } | sha256sum | cut -c1-32
+          )
+          [[ "$signature" =~ ^[0-9a-f]{32}$ ]]
+          echo "key=linux-three-isa-gnu-golden-6.6.143-${{ matrix.target }}-$signature" >> "$GITHUB_OUTPUT"
+          echo "THREE_ISA_GNU_CACHE_IDENTITY target=${{ matrix.target }} signature=$signature exact_GNU_work=1"
+
+      - name: Restore strictly matched original GNU golden before MiniC overlay
+        if: (github.event_name == 'workflow_dispatch' && inputs.reuse_gnu_cache == true) || (github.event_name == 'pull_request' && needs.campaign-gate.outputs.reuse_gnu_cache == 'true')
+        id: gnu_golden_cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.GNU_WORK }}
+          key: ${{ steps.gnu_cache_identity.outputs.key }}
+
       - name: Build pinned original GNU Linux 6.6.143 and frozen .cmd C corpus
+        if: steps.gnu_golden_cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
           mkdir -p "$GNU_WORK"
           MINIC_LINUX_CONFIG_PROFILE=broad \
             bash tools/ci/linux-three-isa-golden-v1.sh '${{ matrix.target }}' "$GNU_WORK"
+
+      # Verify restored .config/.i/.o.cmd/original ELF SHA and exact GNU O=.
+      # No image or QEMU receipt can be trusted from a previous run; the
+      # original GNU P0/P1 must execute freshly below, even after a cache hit.
+      - name: Reject stale or tampered restored GNU golden (build-only)
+        if: ((github.event_name == 'workflow_dispatch' && inputs.reuse_gnu_cache == true) || (github.event_name == 'pull_request' && needs.campaign-gate.outputs.reuse_gnu_cache == 'true')) && steps.gnu_golden_cache.outputs.cache-hit == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          case '${{ matrix.target }}' in
+            x86_64) gcc=gcc ;;
+            aarch64) gcc=aarch64-linux-gnu-gcc ;;
+            loongarch64) gcc=loongarch64-linux-gnu-gcc-13 ;;
+            *) exit 2 ;;
+          esac
+          python3 tools/ci/linux-three-isa-gnu-cache-verify-v1.py \
+            --target '${{ matrix.target }}' --gnu-work "$GNU_WORK" --gcc "$gcc"
 
       - name: Verify the frozen original LoongArch EFI image without rebuilding
         if: matrix.target == 'loongarch64'
@@ -203,6 +310,33 @@ jobs:
             --output "$RUNTIME_OUTPUT/boot" \
             --timeout 240 "${args[@]}"
 
+      - name: Verify fresh GNU P0/P1 is bound to exact preserved golden cache
+        if: (github.event_name == 'workflow_dispatch' && inputs.reuse_gnu_cache == true) || (github.event_name == 'pull_request' && needs.campaign-gate.outputs.reuse_gnu_cache == 'true')
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          case '${{ matrix.target }}' in
+            x86_64) gcc=gcc ;;
+            aarch64) gcc=aarch64-linux-gnu-gcc ;;
+            loongarch64) gcc=loongarch64-linux-gnu-gcc-13 ;;
+            *) exit 2 ;;
+          esac
+          python3 tools/ci/linux-three-isa-gnu-cache-verify-v1.py \
+            --target '${{ matrix.target }}' --gnu-work "$GNU_WORK" --gcc "$gcc" \
+            --gnu-receipt "$RUNTIME_OUTPUT/boot/gnu-qemu-receipt.json"
+
+      # Store the immutable GNU universe *before* any candidate .o overwrite.
+      # Never write a cache if QEMU P0/P1 or full provenance verification fails.
+      - name: Cache freshly GNU-certified original Linux golden once
+        if: ((github.event_name == 'workflow_dispatch' && inputs.reuse_gnu_cache == true) || (github.event_name == 'pull_request' && needs.campaign-gate.outputs.reuse_gnu_cache == 'true')) && steps.gnu_golden_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        # The golden is many GB apparent. Exceeding GitHub cache capacity
+        # must not hide the subsequent authoritative GNU LD/QEMU result.
+        continue-on-error: true
+        with:
+          path: ${{ env.GNU_WORK }}
+          key: ${{ steps.gnu_cache_identity.outputs.key }}
+
       # Measure the pristine GNU golden before the candidate overwrites .o.
       # Apparent bytes are a cache-capacity baseline, not a compressed-size
       # estimate or permission to skip the original GNU P0/P1 oracle.
@@ -216,6 +350,96 @@ jobs:
             test -d "$GNU_WORK/$part"
           done
           echo "GNU_GOLDEN_CACHE_SIZE target=${{ matrix.target }} total_bytes=$(bytes "$GNU_WORK") build_bytes=$(bytes "$GNU_WORK/build") frozen_bytes=$(bytes "$GNU_WORK/frozen") source_bytes=$(bytes "$GNU_WORK/linux-6.6.143") tar_bytes=$(bytes "$GNU_WORK/linux-6.6.143.tar.xz") evidence_bytes=$(bytes "$GNU_WORK/evidence") phase=original_GNU_P0_P1_verified_before_MiniC_overlay compression=unmeasured"
+
+      # One bounded read-only pilot. Tar and zstd stream into wc; neither a
+      # cache artifact nor a compressed copy of GNU objects is ever written.
+      # A missing zstd or measurement failure cannot alter GNU P0/P1 verdicts
+      # or stop the subsequent current-head MiniC candidate campaign.
+      - name: Benchmark original GNU golden zstd stream without caching
+        if: (github.event_name == 'workflow_dispatch' && inputs.measure_gnu_zstd == true) || (github.event_name == 'pull_request' && (needs.campaign-gate.outputs.pilot_target == 'all' || needs.campaign-gate.outputs.pilot_target == matrix.target))
+        shell: bash
+        continue-on-error: true
+        run: |
+          set -Eeuo pipefail
+          trap 'echo "GNU_GOLDEN_ZSTD_BENCHMARK target=${{ matrix.target }} verdict=NOT_RUN reason=unexpected_measurement_error"' ERR
+          if ! command -v zstd >/dev/null 2>&1; then
+            echo 'GNU_GOLDEN_ZSTD_BENCHMARK target=${{ matrix.target }} verdict=NOT_RUN reason=zstd_unavailable'
+            exit 0
+          fi
+          if ! command -v python3 >/dev/null 2>&1 ||
+             ! command -v timeout >/dev/null 2>&1; then
+            echo 'GNU_GOLDEN_ZSTD_BENCHMARK target=${{ matrix.target }} verdict=NOT_RUN reason=measurement_tool_unavailable'
+            exit 0
+          fi
+          if ! original_bytes=$(du -sb -- "$GNU_WORK" | cut -f1) ||
+             [[ ! "$original_bytes" =~ ^[0-9]+$ ]] || (( original_bytes == 0 )); then
+            echo 'GNU_GOLDEN_ZSTD_BENCHMARK target=${{ matrix.target }} verdict=NOT_RUN reason=invalid_original_size'
+            exit 0
+          fi
+          # Streaming a single archive includes hidden Kbuild .o.cmd files.
+          # Two zstd workers and the wall-clock cap bound the pilot cost. CPU
+          # sums all three actual child processes; no /usr/bin/time dependency.
+          set +e
+          timeout --signal=TERM --kill-after=5s 250s \
+            python3 - "$GNU_WORK" "$original_bytes" <<'PY'
+          import os
+          from pathlib import Path
+          import resource
+          import subprocess
+          import sys
+          import time
+
+          root, original = Path(sys.argv[1]), int(sys.argv[2])
+          paths = ("build", "frozen", "linux-6.6.143", "linux-6.6.143.tar.xz", "evidence")
+          processes = []
+          started = time.monotonic()
+          deadline = started + 240.0
+          cpu_before = resource.getrusage(resource.RUSAGE_CHILDREN)
+          try:
+              tar = subprocess.Popen(["tar", "-C", str(root), "-cf", "-", *paths],
+                                     stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+              processes.append(tar)
+              zstd = subprocess.Popen(["zstd", "-q", "-T2", "-3", "-c"],
+                                      stdin=tar.stdout, stdout=subprocess.PIPE,
+                                      stderr=subprocess.DEVNULL)
+              processes.append(zstd)
+              tar.stdout.close()
+              wc = subprocess.Popen(["wc", "-c"], stdin=zstd.stdout,
+                                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+              processes.append(wc)
+              zstd.stdout.close()
+              output, _ = wc.communicate(timeout=max(0.1, deadline - time.monotonic()))
+              for process in (zstd, tar):
+                  process.wait(timeout=max(0.1, deadline - time.monotonic()))
+              statuses = [process.returncode for process in processes]
+              if statuses != [0, 0, 0]:
+                  raise RuntimeError("pipeline_status=" + ",".join(map(str, statuses)))
+              compressed = int(output.strip())
+              if compressed <= 0:
+                  raise ValueError("invalid compressed byte count")
+              cpu_after = resource.getrusage(resource.RUSAGE_CHILDREN)
+              elapsed = time.monotonic() - started
+              print("GNU_GOLDEN_ZSTD_BENCHMARK target=${{ matrix.target }} verdict=MEASURED "
+                    f"original_bytes={original} compressed_bytes={compressed} "
+                    f"compression_ratio={original / compressed:.3f} "
+                    f"elapsed_seconds={elapsed:.3f} "
+                    f"user_cpu_seconds={cpu_after.ru_utime - cpu_before.ru_utime:.3f} "
+                    f"system_cpu_seconds={cpu_after.ru_stime - cpu_before.ru_stime:.3f} "
+                    "level=3 threads=2 timeout_seconds=240 saved_archive=0 cache_write=0")
+          except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as exc:
+              print("GNU_GOLDEN_ZSTD_BENCHMARK target=${{ matrix.target }} "
+                    f"verdict=NOT_RUN reason={type(exc).__name__}")
+          finally:
+              for process in processes:
+                  if process.poll() is None:
+                      process.kill()
+                      process.wait()
+          PY
+          pilot_status=$?
+          set -e
+          if (( pilot_status != 0 )); then
+            echo "GNU_GOLDEN_ZSTD_BENCHMARK target=${{ matrix.target }} verdict=NOT_RUN reason=python_or_outer_timeout status=$pilot_status timeout_seconds=250"
+          fi
 
       - name: Build one current-head MiniC compiler for all original target C owners
         shell: bash

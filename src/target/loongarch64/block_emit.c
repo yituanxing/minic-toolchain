@@ -71,9 +71,15 @@ bool minic_loongarch64_emit_lp64_record_chunk_parameter(FILE *out, size_t offset
                                               bool dynamic_frame,
                                               size_t saved_entry_sp_offset) {
     size_t b;
+    /* This is compiler-owned frame storage, not an arbitrary record pointer.
+     * For a complete naturally aligned eightbyte, one exact-width native
+     * store is equivalent to eight byte stores and seven shifts.  Preserve
+     * bytewise ingress for packed/partial chunks and unaligned frame slots. */
+    const bool direct_word = bytes == 8U && (offset & 7U) == 0U;
     if (bytes == 0U || bytes > 8U || (in_reg && gp >= 8U) ||
-        !minic_loongarch64_emit_frame_address(out, "$t2", offset,
-                                              dynamic_frame) ||
+        (!direct_word &&
+         !minic_loongarch64_emit_frame_address(out, "$t2", offset,
+                                               dynamic_frame)) ||
         (in_reg
          ? fprintf(out, "  or $t0, $a%zu, $zero\n", gp) < 0
          : saved_entry_sp_offset != SIZE_MAX
@@ -83,6 +89,9 @@ bool minic_loongarch64_emit_lp64_record_chunk_parameter(FILE *out, size_t offset
              : !minic_loongarch64_emit_frame_mem(out, "ld.d", "$t0",
                            incoming_offset, dynamic_frame)))
         return false;
+    if (direct_word)
+        return minic_loongarch64_emit_frame_mem(
+            out, "st.d", "$t0", offset, dynamic_frame);
     for (b = 0U; b < bytes; ++b)
         if (fprintf(out, "  st.b $t0, $t2, %zu\n", b) < 0 ||
             (b + 1U < bytes && fputs("  srli.d $t0, $t0, 8\n", out) == EOF))
@@ -188,6 +197,15 @@ static bool loongarch64_return_gp_record(
     if (out == NULL || bytes == 0U || bytes > 16U) return false;
     for (chunk = 0U; chunk < (bytes + 7U) / 8U; ++chunk) {
         const size_t count = bytes - chunk * 8U >= 8U ? 8U : bytes - chunk * 8U;
+        /* A complete eightbyte in a naturally aligned compiler frame is
+         * exactly one native load; do not read beyond partial record tails. */
+        if (count == 8U && ((src + chunk * 8U) & 7U) == 0U) {
+            if (!minic_loongarch64_emit_frame_mem(out, "ld.d",
+                    chunk == 0U ? "$a0" : "$a1", src + chunk * 8U,
+                    dynamic_frame))
+                return false;
+            continue;
+        }
         if (fputs("  move $t1, $zero\n", out) == EOF) return false;
         for (byte = 0U; byte < count; ++byte) {
             if (!minic_loongarch64_emit_frame_mem(
