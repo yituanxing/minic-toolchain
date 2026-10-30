@@ -223,6 +223,21 @@ def gnu_as_identity(c, target: str) -> dict:
             "gnu_as_binary_sha256": file_sha(c.required(Path(paths[1])))}
 
 
+def trusted_gnu_driver_binary(name: str) -> Path:
+    """Hash the actual distro tool; /usr/bin/*-gcc is often a symlink.
+
+    Only this trusted PATH-resolved executable is canonicalized. Frozen GNU
+    inputs, candidate objects and cache entries remain symlink-rejected.
+    """
+    executable = shutil.which(name)
+    if executable is None:
+        raise ValueError(f"target GNU assembler compiler missing: {name}")
+    resolved = Path(executable).resolve(strict=True)
+    if not resolved.is_file() or not resolved.stat().st_size:
+        raise ValueError(f"invalid installed GNU compiler executable: {name}")
+    return resolved
+
+
 def package_shard(a: argparse.Namespace, c, results: list[dict], identity: dict) -> None:
     artifacts = a.output / "bundle"
     artifacts.mkdir()
@@ -259,9 +274,7 @@ def cache_identity(a: argparse.Namespace, c):
     rows, _ = verify_input(a.input, a.target, a.shard, c)
     helper = c.module("minic_gnu_shard_cache", "linux-three-isa-candidate-shard-cache-v1.py")
     gcc = c.TARGETS[a.target][2]
-    gcc_path = shutil.which(gcc)
-    if gcc_path is None:
-        raise ValueError(f"target GNU assembler compiler missing: {gcc}")
+    gcc_path = trusted_gnu_driver_binary(gcc)
     identity = helper.identity(a.target, a.minic, gcc_path,
                                a.input / "build/.config",
                                a.input / "evidence/full-c-owners.txt",

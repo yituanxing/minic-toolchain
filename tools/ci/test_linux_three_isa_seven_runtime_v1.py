@@ -6,6 +6,7 @@ from pathlib import Path
 import struct
 import tempfile
 import unittest
+from unittest import mock
 from types import SimpleNamespace
 
 
@@ -140,6 +141,8 @@ class SevenWorkerStrictTransportTest(unittest.TestCase):
         self.populate_objects()
         results = self.collect()
         self.assertEqual(len(results), 210)
+        self.assertEqual([row["object"] for row in results],
+                         [row["object"] for row in self.rows])
         self.assertEqual(len(list((self.output / "staged").rglob("*.o"))), 210)
         victim = self.incoming / "minic-linux-seven-objects-x86_64-6/identity.json"
         victim.unlink()
@@ -183,6 +186,17 @@ class SevenWorkerStrictTransportTest(unittest.TestCase):
             c.validate_original_abi(path, "loongarch64", {"gnu_elf_abi": 1, "object": "kernel/probe.o"})
         with self.assertRaisesRegex(ValueError, "not a relocatable target ELF64"):
             c.elf_machine(path, 183)
+
+    def test_trusted_gnu_driver_symlink_resolves_without_relaxing_inputs(self):
+        actual = self.dir / "gcc-real"
+        alias = self.dir / "gcc"
+        write(actual, b"installed-gnu-tool")
+        alias.symlink_to(actual)
+        with mock.patch.object(r.shutil, "which", return_value=str(alias)):
+            self.assertEqual(r.trusted_gnu_driver_binary("gcc"), actual)
+        with mock.patch.object(r.shutil, "which", return_value=None):
+            with self.assertRaisesRegex(ValueError, "GNU assembler compiler missing"):
+                r.trusted_gnu_driver_binary("gcc")
 
 
 if __name__ == "__main__":
