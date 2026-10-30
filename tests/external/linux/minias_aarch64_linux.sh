@@ -180,6 +180,19 @@ if ! python3 tests/external/linux/minias_aarch64_object_oracle.py \
   echo 'MINIAS_AARCH64_GNU_SIDECAR=DIAGNOSTIC_INCOMPLETE'
 fi
 tail -n 45 "$work/aarch64-object-oracle.log" || true
+# proc.o is the first object isolated by real QEMU boot bisection.  Keep
+# instruction + relocation evidence even on runners where the ELF files
+# themselves are expensive to retrieve for an immediate next repair batch.
+for producer in minias gnu; do
+  if [[ $producer == minias ]]; then
+    object="$out/arch/arm64/mm/proc.o"
+  else
+    object="$gnu_objects/arch/arm64/mm/proc.o"
+  fi
+  if [[ -f $object ]]; then
+    aarch64-linux-gnu-objdump -dr "$object" >"$work/aarch64-proc-$producer-objdump.log" 2>&1 || true
+  fi
+done
 
 qemu_timeout=${QEMU_TIMEOUT_SECONDS:-120}
 boot() {
@@ -217,6 +230,7 @@ require() {
     tail -n 160 "$work/qemu-$lane.log" >&2
     if [[ $lane == p0-init && ${MINIAS_AARCH64_AUTO_BISECT:-1} == 1 ]]; then
       WORK_DIR="$work" MINIAS_KBUILD_OUT="$out" MINIAS_GNU_OBJECT_DIR="$gnu_objects" \
+        MINIAS_AARCH64_BISECT_MARKER="$pattern" \
         bash tests/external/linux/minias_aarch64_object_bisect.sh || true
     fi
     exit 1

@@ -13,6 +13,10 @@ static bool section_symbol_fixup(const MiniAs *as,const MiniAsFixup *fixup) {
     const MiniAsSymbol *sym;
     bool requested=fixup->prefer_section_symbol ||
         as->target->fold_defined_local_relocation_to_section ||
+        (as->target->fold_local_pcrel_relocation_to_section &&
+         fixup->origin==MINIAS_FIXUP_ORIGIN_FRAGMENT &&
+         (fixup->kind==MINIAS_FIXUP_PREL32 ||
+          fixup->kind==MINIAS_FIXUP_PREL64)) ||
         (as->target->fold_synthetic_local_relocation_to_section &&
          fixup->origin==MINIAS_FIXUP_ORIGIN_SYNTHETIC_SECTION) ||
         (as->target->fold_local_abs_relocation_to_section &&

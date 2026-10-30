@@ -4094,7 +4094,8 @@ static bool x64_emit_memory_fixups(MiniAs *as,const MiniAsStmt *stmt,
                     -4-(int64_t)layout->immediate_bytes,&relative) ||
                !minias_encode_add_fixup_ref(as,stmt->section,
                     stmt->offset+layout->displacement_offset,
-                    kind,4U,relative,false))
+                    kind,4U,relative,
+                    as->output_elf32 && kind==MINIAS_FIXUP_X64_PC32))
                 return false;
         } else if(!mem->pc_relative) {
             MiniAsFixupKind kind=
@@ -4223,8 +4224,15 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
         }
         case X64_BRANCH: {
             const MiniAsSymbolRef *expr=m->operands[0].bound_symbol;
-            MiniAsFixupKind kind=(as->output_elf32 &&
-                                 X64_FORM_VALUE(m)!=1U)?
+            const MiniAsSymbol *target=minias_symbol_ref_lookup(as,*expr);
+            const bool defined_local_cross_section=target && target->defined &&
+                target->bind==MINIAS_STB_LOCAL && target->section>=0 &&
+                target->section!=s->section;
+            /* GNU GAS retains PLT32 for preemptible/external calls and
+             * explicit @PLT, but a cross-section defined LOCAL branch is
+             * PC32 against the section+offset even in ELF64. */
+            MiniAsFixupKind kind=X64_FORM_VALUE(m)!=1U &&
+                (as->output_elf32 || defined_local_cross_section)?
                 MINIAS_FIXUP_X64_PC32:MINIAS_FIXUP_X64_PLT32;
             size_t width=s->size;
             int64_t displacement=0;
@@ -4279,7 +4287,9 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
                 return minias_encode_add_fixup_ref(as,s->section,
                     s->offset+width-disp_width,
                     disp_width==2U?MINIAS_FIXUP_PREL32:kind,
-                    disp_width,pc_relative,false);
+                    disp_width,pc_relative,
+                    disp_width==4U &&
+                    kind==MINIAS_FIXUP_X64_PC32);
             }
         }
         case X64_IMM_MEMORY:
@@ -4776,6 +4786,7 @@ static const MiniAsTargetOps ops={
      * The Common CFI encoder already owns the real .debug_frame FDE. */
     .cfi_implicit_eh_frame=true,
     .fold_local_abs_relocation_to_section=true,
+    .fold_local_pcrel_relocation_to_section=true,
     .fold_synthetic_local_relocation_to_section=true,
     /* Intermediate FDEs use 4B DWARF32 padding; only the final FDE
      * closes the ELF section at 8B, matching GNU GAS. */

@@ -57,7 +57,15 @@ MINIAS_TRACE_RELAYOUT=1 "$MINIAS" --target="$target" -o "$work/mini.o" \
 grep -Eq '^minias-mcexpr-variable:typed=[1-9][0-9]* fallback=0$' "$work/trace"
 "$copy" -j .data -O binary "$work/mini.o" "$work/mini.bin"
 "$copy" -j .data -O binary "$work/gnu.o" "$work/gnu.bin"
-cmp "$work/mini.bin" "$work/gnu.bin"
+if ! cmp "$work/mini.bin" "$work/gnu.bin"; then
+  echo "MiniAS .data bytes:" >&2
+  od -An -tx1 "$work/mini.bin" >&2
+  echo "GNU .data bytes:" >&2
+  od -An -tx1 "$work/gnu.bin" >&2
+  readelf -rW "$work/mini.o" >&2
+  readelf -rW "$work/gnu.o" >&2
+  exit 1
+fi
 
 # RISC-V preserves ULEB SET/SUB pairs for link-time relaxation; LoongArch
 # does so only if source anchors straddle a linker-relaxable fragment. Check

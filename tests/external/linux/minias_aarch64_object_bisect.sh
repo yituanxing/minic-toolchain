@@ -19,6 +19,7 @@ bindir="$work/as-override"
 initramfs="$work/runtime-initramfs.cpio.gz"
 summary="$work/aarch64-object-bisect.tsv"
 max_probes=${MINIAS_AARCH64_MAX_BISECT_PROBES:-24}
+target_marker=${MINIAS_AARCH64_BISECT_MARKER:-Linux version 6.6.143}
 
 mkdir -p "$originals"
 # Diagnostic probes rewrite Kbuild objects and Image temporarily. Restore
@@ -51,7 +52,7 @@ while IFS= read -r -d '' ref; do
 done < <(find "$gnu" -type f -name '*.o' -print0 | sort -z)
 
 count=${#changed[@]}
-echo "MINIAS_AARCH64_BISECT=START changed_objects=$count mode=diagnostic_only"
+echo "MINIAS_AARCH64_BISECT=START changed_objects=$count mode=diagnostic_only marker=$target_marker"
 if ((count == 0)); then
   echo 'MINIAS_AARCH64_BISECT=UNAVAILABLE no_distinct_reference_objects'
   exit 0
@@ -92,7 +93,7 @@ probe() {
     -kernel "$image" -initrd "$initramfs" \
     -append 'console=ttyAMA0 earlycon=pl011,0x9000000 loglevel=8 panic=-1 rdinit=/init' \
     </dev/null >"$boot_log" 2>&1 || status=$?
-  if grep -q 'Linux version 6.6.143' "$boot_log"; then
+  if grep -Eq "$target_marker" "$boot_log"; then
     printf '%s\t%s\tEARLY_BOOT_PASS\t%s\n' "$trial" "${#selected[@]}" "$label" >>"$summary"
     echo "MINIAS_AARCH64_BISECT_TRIAL=$trial selected=${#selected[@]} result=EARLY_BOOT_PASS label=$label qemu=$status"
     return 0

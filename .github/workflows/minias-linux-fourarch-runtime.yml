@@ -112,6 +112,12 @@ jobs:
             build/minias-linux-fourarch/${{ matrix.arch }}/**/vmlinuz.efi.sha256
             build/minias-linux-fourarch/${{ matrix.arch }}/**/aarch64-object-oracle.tsv
             build/minias-linux-fourarch/${{ matrix.arch }}/**/aarch64-bisect-*.txt
+            # Only the proven AArch64 early-boot culprit, not 4,000+ sidecars.
+            # After bisection, out/proc.o may be GNU-substituted; the saved
+            # original is the authoritative production MiniAS object.
+            build/minias-linux-fourarch/aarch64/asm-sources/arch/arm64/mm/proc.s
+            build/minias-linux-fourarch/aarch64/gnu-as-objects/arch/arm64/mm/proc.o
+            build/minias-linux-fourarch/aarch64/minias-original-objects/arch/arm64/mm/proc.o
             # Preserve exactly the linked kernel to replay QEMU-only boot
             # diagnostics without another 15–20 minute Linux recompilation.
             build/minias-linux-fourarch/x86_64/mini-out/arch/x86/boot/bzImage

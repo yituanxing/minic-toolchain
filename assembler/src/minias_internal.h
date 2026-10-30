@@ -947,6 +947,11 @@ typedef struct MiniAsTargetOps {
      * same-section references, to STT_SECTION + addend. Target policy,
      * Common ELF ownership. */
     bool fold_local_abs_relocation_to_section;
+    /* Some targets (including GNU i386/AMD64) canonicalize an ordinary
+     * source Fragment's local S - P data relocation to STT_SECTION +
+     * section-relative symbol offset.  Explicit .reloc and synthesized
+     * DWARF fixups retain their own identity/ownership contract. */
+    bool fold_local_pcrel_relocation_to_section;
     /* Some ABIs (AArch64 GAS) canonicalize eligible relocations to defined
      * local labels as STT_SECTION + offset, including PC-relative fixups. */
     bool fold_defined_local_relocation_to_section;
@@ -977,10 +982,12 @@ typedef struct MiniAsTargetOps {
     bool cfi_initial_cfa_register_only; /* GNU initial CFA register opcode */
     bool cfi_eh_range_relocations; /* paired ADD32/SUB32 on FDE range */
     unsigned cfi_advance_reloc_mode; /* 0 none, 1 ADD/SUB, 2 SET/SUB */
-    /* GNU ULEB relaxation policy. 0: no paired ELF relocations; 1: ADD/SUB
-     * only when anchors straddle a linker-relaxable instruction; 2: SET/SUB
-     * on each valid symbolic difference. ELF type numbers remain Target-ISA
-     * owned; Common sees only typed zero-width fixup semantics. */
+    /* GNU ULEB relaxation policy: 0 none; 1 ADD/SUB only when the anchors
+     * straddle a linker-relaxable instruction (newer LoongArch GNU GAS);
+     * 2 SET/SUB on each valid symbolic difference (RISC-V GNU GAS);
+     * 3 ADD/SUB on each valid difference (older LoongArch GNU GAS 2.42).
+     * Toolchain dialect is selected by TargetInfo, not by Common inspecting
+     * the assembler host or enumerating ELF machines. */
     unsigned leb128_reloc_mode;
     /* GNU GAS's ULEB fixup sweep uses the Target's final relaxation state
      * (which may be changed by .option push/norelax/pop). NULL is enabled. */

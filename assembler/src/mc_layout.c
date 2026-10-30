@@ -878,7 +878,7 @@ bool minias_emit_deferred_leb_relocations(MiniAs *as) {
     if(mode==0U)return true;
     if(as->target->leb128_relocations_enabled!=NULL &&
        !as->target->leb128_relocations_enabled(as))return true;
-    if(mode>2U) {
+    if(mode>3U) {
         minias_set_error(as,"invalid-target-uleb-relocation-policy");
         return false;
     }
@@ -888,8 +888,8 @@ bool minias_emit_deferred_leb_relocations(MiniAs *as) {
         size_t pos_id,neg_id,j;
         int64_t addend;
         bool crosses=false;
-        MiniAsFixupKind positive_fixup=mode==1U ?
-            MINIAS_FIXUP_LEB_ADD:MINIAS_FIXUP_LEB_SET;
+        MiniAsFixupKind positive_fixup=mode==2U ?
+            MINIAS_FIXUP_LEB_SET:MINIAS_FIXUP_LEB_ADD;
         MiniAsSection *section;
         if(stmt->fragment_kind!=MINIAS_FRAGMENT_BYTES ||
            stmt->leb_mode!=1U || !stmt->deferred_data_size ||

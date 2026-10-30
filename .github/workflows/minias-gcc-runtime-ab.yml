@@ -58,6 +58,11 @@ jobs:
         env:
           MINIAS: ${{ github.workspace }}/build/release/bin/minic-as
         run: bash tests/assembler/probe-aarch64-inst-mapping-gnu.sh
+      - name: x86 GNU local PC32 cross-section ELF32 REL and ELF64 RELA
+        if: matrix.arch == 'x86_64'
+        env:
+          MINIAS: ${{ github.workspace }}/build/release/bin/minic-as
+        run: bash tests/assembler/probe-common-local-pc32-section-gnu.sh
       - name: AArch64 symbol identity and GOT addend contracts
         if: matrix.arch == 'aarch64'
         env:

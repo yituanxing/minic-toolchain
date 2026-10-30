@@ -19,6 +19,10 @@ check_target() {
     local arch=$1 gnu=$2
     shift 2
     local -a mini_args=("$@")
+    # GNU triplets name the 64-bit RISC-V assembler `riscv64`, while MiniAS
+    # has one `riscv` target with XLEN/ABI selected by the profile flags.
+    local mini_target=$arch
+    if [[ $arch == riscv64 ]]; then mini_target=riscv; fi
     if ! command -v "$gnu" >/dev/null; then
         if [[ ${REQUIRE_ALL:-0} == 1 ]]; then
             echo "MINIAS_DOT_ANCHOR=FAIL arch=$arch missing=$gnu" >&2
@@ -34,7 +38,7 @@ check_target() {
                          -o "$work/gnu.o" "$work/dot.s" ;;
         *) "$gnu" -o "$work/gnu.o" "$work/dot.s" ;;
     esac
-    "$MINIAS" --target="$arch" "${mini_args[@]}" \
+    "$MINIAS" --target="$mini_target" "${mini_args[@]}" \
         -o "$work/mini.o" "$work/dot.s"
     python3 "$repo/tests/assembler/elf_semantic_compare.py" --strict \
         "$work/gnu.o" "$work/mini.o" >"$work/$arch-strict.json" || true
