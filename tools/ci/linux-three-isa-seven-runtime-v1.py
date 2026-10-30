@@ -192,9 +192,10 @@ def produce(a: argparse.Namespace, c) -> None:
         raise ValueError("refuse to reuse candidate object shard output")
     rows, identity = verify_input(a.input, a.target, a.shard, c)
     compiler = c.compiler_pair(a.minic)
-    if (identity["compiler_driver_sha256"] != compiler["compiler_driver_sha256"] or
-            identity["compiler_cc_sha256"] != compiler["compiler_cc_sha256"]):
-        raise ValueError("MiniC executable differs from GNU shard-export producer")
+    # Follow the verified RV/MiniAS frozen-source replay: original GNU -E
+    # inputs are independent of the *current* MiniC revision. The source
+    # producer's compiler SHA remains an audit field, never a cache gate.
+    # Current compiler SHA is instead bound to every emitted object receipt.
     data = {"target": a.target, "gcc": c.TARGETS[a.target][2],
             "machine": c.TARGETS[a.target][5]}
     a.output.mkdir(parents=True)
@@ -203,6 +204,16 @@ def produce(a: argparse.Namespace, c) -> None:
     (a.output / "results.json").write_text(json.dumps(results, indent=2) + "\n")
     failures = [row for row in results if row["status"] != "MINIC_S_GNU_AS_PASS"]
     if failures:
+        # Historical RV seven-way replay kept *all* per-owner results and a
+        # bounded first-failure reproduction even when a shard was red.
+        # Never make the other six independent workers wait for this shard.
+        try:
+            c.preserve_first_failed_owners(a.input, a.output, rows, results)
+        except (OSError, ValueError) as exc:
+            print(f"THREE_ISA_SEVEN_FAILURE_DIAGNOSTIC_ERROR={exc}", file=sys.stderr)
+        print(f"THREE_ISA_SEVEN_FAILURE_CENSUS target={a.target} shard={a.shard} "
+              f"failures={len(failures)}/{len(rows)} "
+              f"owners={[row['object'] for row in failures[:12]]}", file=sys.stderr)
         raise ValueError(f"incomplete MiniC/GNU AS shard {a.target}/{a.shard}: "
                          f"{len(rows)-len(failures)}/{len(rows)} first={failures[0]}")
     if c.compiler_pair(a.minic) != compiler:

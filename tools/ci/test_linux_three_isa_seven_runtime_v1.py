@@ -249,6 +249,26 @@ class SevenWorkerStrictTransportTest(unittest.TestCase):
         self.assertEqual(r.file_sha(output / "bundle/objects/kernel/owner_2.o"),
                          result["obj_sha256"])
 
+    def test_pinned_original_gnu_inputs_replay_with_new_minic_compiler_sha(self):
+        # The original GNU-E 3x7 corpus is reusable after MiniC source fixes;
+        # only the resulting object/cache receipt binds the current compiler.
+        args = SimpleNamespace(input=self.input, target="x86_64", shard=2,
+                               minic=self.compiler, output=self.dir / "replay",
+                               workers=2, timeout=240)
+        results = [{"object": row["object"], "input_sha256": row["sha256"],
+                    "status": "MINIC_S_GNU_AS_PASS"}
+                   for row in self.rows[2::7]]
+        new_pair = {"compiler_driver_sha256": "1" * 64,
+                    "compiler_cc_sha256": "2" * 64}
+        self.assertNotEqual(new_pair["compiler_driver_sha256"],
+                            self.original_identity["compiler_driver_sha256"])
+        with mock.patch.object(c, "compiler_pair", return_value=new_pair), \
+                mock.patch.object(c, "make_objects", return_value=results), \
+                mock.patch.object(r, "package_shard") as package:
+            r.produce(args, c)
+        package.assert_called_once()
+        self.assertEqual(len(r.json_file(args.output / "results.json")), 30)
+
 
 if __name__ == "__main__":
     unittest.main()

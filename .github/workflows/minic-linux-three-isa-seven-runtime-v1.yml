@@ -4,6 +4,11 @@ name: MiniC Linux 6.6.143 strict 3-ISA 7-runner GNU LD/QEMU runtime
 # workflow and its SHA-locked original GNU golden cache contract are untouched.
 on:
   workflow_dispatch:
+    inputs:
+      regenerate_original_gnu:
+        description: 'Explicitly refresh GNU input producer; pinned replay still uses prior certified run until its SHA and run-id are reviewed'
+        type: boolean
+        default: false
   pull_request:
     paths:
       - '.github/workflows/minic-linux-three-isa-seven-runtime-v1.yml'
@@ -12,6 +17,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: minic-linux-seven-runtime-${{ github.ref }}-${{ github.event.pull_request.head.sha || github.sha }}
@@ -80,7 +86,10 @@ jobs:
 
   original-gnu-golden:
     needs: [gate, minic-binary]
-    if: needs.gate.outputs.run == 'true'
+    # The known-good 21 frozen .i/.cmd input artifacts already exist. Keep
+    # this producer for explicit original-source regeneration only; like
+    # MiniAS pinned-3x7, normal compiler fixes NEVER rebuild/re-upload them.
+    if: needs.gate.outputs.run == 'true' && github.event_name == 'workflow_dispatch' && inputs.regenerate_original_gnu
     runs-on: ubuntu-24.04
     timeout-minutes: 150
     strategy:
@@ -322,7 +331,7 @@ jobs:
           retention-days: 7
 
   seven-independent-runners:
-    needs: [gate, minic-binary, original-gnu-golden]
+    needs: [gate, minic-binary]
     # A failing GNU LoongArch platform must not suppress live x86/AArch64
     # evidence: each independent worker requires *its* real input artifact.
     if: always() && needs.gate.outputs.run == 'true' && needs.minic-binary.result == 'success'
@@ -347,6 +356,11 @@ jobs:
         with:
           name: minic-linux-seven-input-${{ matrix.target }}-${{ matrix.shard }}
           path: ${{ env.INPUT }}
+          # Immutable full original GNU Linux 6.6.143 exporter from the first
+          # 3x7 run; all 21 SHA-locked artifacts are present on this run.
+          repository: ${{ github.repository }}
+          run-id: 41108659343
+          github-token: ${{ github.token }}
       - uses: actions/download-artifact@v4
         with:
           name: minic-linux-seven-compiler
@@ -441,11 +455,12 @@ jobs:
           path: |
             ${{ env.OUTPUT }}/results.json
             ${{ env.OUTPUT }}/staged/**/*.tool-stderr.txt
+            ${{ env.OUTPUT }}/failed-owner-diagnostics/
           if-no-files-found: ignore
           retention-days: 7
 
   original-gnu-ld-qemu-receivers:
-    needs: [gate, minic-binary, original-gnu-golden, seven-independent-runners]
+    needs: [gate, minic-binary, seven-independent-runners]
     # Always provision each target receiver independently, including when
     # another target failed. Missing any of the seven objects is a hard FAIL.
     if: always() && needs.gate.outputs.run == 'true' && needs.minic-binary.result == 'success'
@@ -613,7 +628,7 @@ jobs:
           retention-days: 14
 
   strict-three-isa-result:
-    needs: [gate, minic-binary, original-gnu-golden, seven-independent-runners, original-gnu-ld-qemu-receivers]
+    needs: [gate, minic-binary, seven-independent-runners, original-gnu-ld-qemu-receivers]
     if: always() && needs.gate.outputs.run == 'true'
     runs-on: ubuntu-24.04
     steps:
@@ -621,11 +636,10 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          echo 'MINIC_LINUX_SEVEN_GNU_ORIGINAL=${{ needs.original-gnu-golden.result }}'
+          echo 'MINIC_LINUX_SEVEN_GNU_ORIGINAL=PINNED_RUN_41108659343_AND_FRESH_RECEIVER_GNU_QEMU'
           echo 'MINIC_LINUX_SEVEN_21_C_SHARDS=${{ needs.seven-independent-runners.result }}'
           echo 'MINIC_LINUX_SEVEN_GNU_LD_QEMU=${{ needs.original-gnu-ld-qemu-receivers.result }}'
           test '${{ needs.minic-binary.result }}' = success
-          test '${{ needs.original-gnu-golden.result }}' = success
           test '${{ needs.seven-independent-runners.result }}' = success
           test '${{ needs.original-gnu-ld-qemu-receivers.result }}' = success
           echo 'MINIC_LINUX_SEVEN_RUNTIME=PASS targets=3 seven_independent_runners_per_target=true all_C_GNU_AS_LD_QEMU_P0_P1=true'
