@@ -1539,7 +1539,7 @@ bool minias_compile_data_mc(MiniAs *as, MiniAsStmt *stmt,
                 MINIAS_MC_EXPR_DOT_MINUS_SYMBOL :
                 MINIAS_MC_EXPR_DIFFERENCE;
             matched=true;
-        } else if((width==2U || width==4U || width==8U) &&
+        } else if((width==1U || width==2U || width==4U || width==8U) &&
                   (parse_data_symbol_addend(token,&lhs) ||
                    minias_expr_parse_symbol_absolute_tail(as,token,&lhs) ||
                    parse_data_absolute_prefix_plus_symbol(as,token,&lhs))) {
@@ -1777,14 +1777,14 @@ static bool emit_symbol_difference(MiniAs *as,
      * unsupported ADD/SUB relocation pairs on x86/AArch64. Targets with
      * genuine paired relocations continue to use their existing path.
      */
-    if((width==2U || width==4U || width==8U) &&
+    if((width==1U || width==2U || width==4U || width==8U) &&
        (!can_add || !can_sub) &&
        rhs->defined &&
        /* GNU GAS resolves defined GLOBAL/WEAK anchors to their section
         * positions for PC64 as well as LOCAL anchors. This binding
         * behavior is the same on x86-64 and AArch64. */
        rhs->section==stmt->section) {
-        MiniAsFixupKind kind=(width==2U || width==4U)?
+        MiniAsFixupKind kind=(width<=4U)?
             as->target->dot_relative_fixup:MINIAS_FIXUP_PREL64;
         if(kind!=MINIAS_FIXUP_NONE &&
            target_supports_fixup(as,kind,width)) {

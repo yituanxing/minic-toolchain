@@ -94,6 +94,7 @@ jobs:
             x86_64)
               bash tests/assembler/probe-x86-linux-code16-gnu.sh
               bash tests/assembler/probe-x86-vdso-eh-gnu.sh
+              bash tests/assembler/probe-x86-boot-header-elf32-gnu.sh
               ;;
             aarch64) bash tests/assembler/probe-aarch64-branch-binding-gnu.sh ;;
             loongarch64) : ;;

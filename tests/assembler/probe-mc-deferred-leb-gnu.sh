@@ -73,48 +73,46 @@ fi
 # profile must match the actual GNU reference. Check complete recorded
 # offsets/kinds/addends, not just raw bytes. GNU GAS and MiniAS generate
 # different private spellings for numeric labels (e.g. .L2^B1 versus our
-# interned private SymbolID); the strict ELF oracle compares their actual
-# local symbol identity/visibility/section/value instead of name spelling.
+# interned private SymbolID). Compare the referenced symbol's binding,
+# visibility, type, section and value, never the implementation-private name.
 if [[ "$ARCH" == riscv || "$ARCH" == loongarch64 ]]; then
-  readelf -rW "$work/mini.o" >"$work/mini.rela"
-  readelf -rW "$work/gnu.o" >"$work/gnu.rela"
-  awk '/R_(RISCV_(SET|SUB)_ULEB128|LARCH_(ADD|SUB)_ULEB128)/ { print $1, $3, $5, $6, $7 }' \
-     "$work/mini.rela" >"$work/mini.uleb-rela"
-  awk '/R_(RISCV_(SET|SUB)_ULEB128|LARCH_(ADD|SUB)_ULEB128)/ { print $1, $3, $5, $6, $7 }' \
-     "$work/gnu.rela" >"$work/gnu.uleb-rela"
-  if [[ "$ARCH" == loongarch64 ]]; then
-    relocation_equal=1
-    python3 "$repo/tests/assembler/elf_semantic_compare.py" --strict \
-        "$work/gnu.o" "$work/mini.o" >"$work/semantic.json" || true
-    if ! python3 - "$work/semantic.json" <<'PY_LEB'
+  python3 "$repo/tests/assembler/elf_semantic_compare.py" --strict \
+      "$work/gnu.o" "$work/mini.o" >"$work/semantic.json" || true
+  if ! python3 - "$work/semantic.json" <<'PY_LEB'
 import json
 import pathlib
 import sys
-diff = json.loads(pathlib.Path(sys.argv[1]).read_text()).get('differences', {})
+result = json.loads(pathlib.Path(sys.argv[1]).read_text())
+dimensions = result['dimensions']
+# Inconclusive byte masks are expected for variable-width ULEB relocations:
+# the raw .data comparison above and final GNU ld comparison below cover
+# those bytes. The relocation tuple and order dimensions must be explicitly
+# true, even when the full-object --strict verdict is otherwise false.
 for dimension in ('relocations', 'relocation_order'):
-    assert dimension not in diff, (dimension, diff[dimension])
+    assert dimensions[dimension] is True, (dimension, result.get('differences'))
 PY_LEB
-    then
-      relocation_equal=0
-      sed -n '1,160p' "$work/semantic.json" >&2
-    fi
-  else
-    relocation_equal=1
-    if ! cmp -s "$work/mini.uleb-rela" "$work/gnu.uleb-rela"; then
-      relocation_equal=0
-    fi
-  fi
-  if [[ $relocation_equal != 1 ]]; then
-    echo "MiniAS ULEB relocation tuples ($ARCH):" >&2
-    sed -n '1,160p' "$work/mini.uleb-rela" >&2
-    echo "GNU ULEB relocation tuples ($ARCH):" >&2
-    sed -n '1,160p' "$work/gnu.uleb-rela" >&2
+  then
+    echo "MiniAS ULEB relocation semantic mismatch ($ARCH):" >&2
+    sed -n '1,160p' "$work/semantic.json" >&2
     echo "MiniAS full relocations:" >&2
     readelf -rW "$work/mini.o" >&2
     echo "GNU full relocations:" >&2
     readelf -rW "$work/gnu.o" >&2
     exit 1
   fi
+fi
+
+# The RISC-V SET/SUB pair is also a linker contract: the local-label
+# identities must survive GNU ld's final value computation, irrespective of
+# the different internal names used by each assembler.
+linked_status=not_applicable
+if [[ "$ARCH" == riscv ]]; then
+  riscv64-linux-gnu-ld -e leb_start -o "$work/mini-linked.elf" "$work/mini.o"
+  riscv64-linux-gnu-ld -e leb_start -o "$work/gnu-linked.elf" "$work/gnu.o"
+  "$copy" -j .data -O binary "$work/mini-linked.elf" "$work/mini-linked.bin"
+  "$copy" -j .data -O binary "$work/gnu-linked.elf" "$work/gnu-linked.bin"
+  cmp "$work/mini-linked.bin" "$work/gnu-linked.bin"
+  linked_status=exact
 fi
 
 cat >"$work/constants.s" <<'SRC'
@@ -155,4 +153,4 @@ for invalid in undefined cross_section negative_unsigned; do
   grep -q 'unresolved-typed-leb-data' "$work/invalid.err"
   test ! -e "$work/invalid.o"
 done
-echo "MINIAS_DEFERRED_LEB_GNU=PASS arch=$ARCH typed_symbols=1 fixedpoint=1 mutable_set=1 GNU_default_relax_ELF_exact=1 constant_norelax_exact=1 invalid_rejected=3"
+echo "MINIAS_DEFERRED_LEB_GNU=PASS arch=$ARCH typed_symbols=1 fixedpoint=1 mutable_set=1 GNU_default_relax_reloc_semantics=exact GNU_ld_riscv_data=$linked_status constant_norelax_exact=1 invalid_rejected=3"

@@ -4827,6 +4827,11 @@ static uint32_t x64_reloc_for_object(const MiniAs *as,
     /* ELF32 i386 REL: addends live in their destination sections.  The
      * generic writer handles the object encoding; Target only maps the
      * ABI relocation family, never a Linux/Kbuild filename special case. */
+    if(width==1U) {
+        if(kind==MINIAS_FIXUP_ABS)return 22U; /* R_386_8 */
+        if(kind==MINIAS_FIXUP_PREL32)return 23U; /* R_386_PC8 */
+        return 0U;
+    }
     if(width==2U) {
         if(kind==MINIAS_FIXUP_ABS)return 20U; /* R_386_16 */
         if(kind==MINIAS_FIXUP_PREL32 || kind==MINIAS_FIXUP_X64_PC32)
@@ -4870,6 +4875,8 @@ static bool x64_supports_fixup(MiniAsFixupKind kind,unsigned width) {
 }
 static bool x64_supports_fixup_for_object(const MiniAs *as,
                                           MiniAsFixupKind kind,unsigned width) {
+    if(as->output_elf32 && width==1U)
+        return kind==MINIAS_FIXUP_ABS || kind==MINIAS_FIXUP_PREL32;
     if(as->output_elf32 && width==2U)
         return kind==MINIAS_FIXUP_ABS || kind==MINIAS_FIXUP_PREL32 ||
                kind==MINIAS_FIXUP_X64_PC32;
