@@ -136,14 +136,41 @@ static bool loong_machine_builtin_signature(
     const char **mnemonic, size_t *immediate_index) {
     static const char gnu_prefix[] = "__builtin_loongarch_";
     static const char internal_prefix[] = "__minic_target_builtin_loongarch_";
+    static const char cpucfg_intrinsic[] = "__cpucfg";
+    /* GNU <larchintrin.h> defines these four functions as extern always-
+     * inline wrappers of the matching machine builtins. Our parser retains
+     * GNU extern-inline linkage without an out-of-line body, so resolve
+     * these exact reserved spellings through the already validated ISA
+     * builtin contract rather than leaving unresolved ELF libcalls. */
+    static const char *const iocsr_wrappers[] = {
+        "__iocsrrd_d", "__iocsrrd_w", "__iocsrwr_d", "__iocsrwr_w"
+    };
+    const bool cpucfg_alias =
+        spelling != NULL && length == sizeof(cpucfg_intrinsic) - 1U &&
+        memcmp(spelling, cpucfg_intrinsic,
+               sizeof(cpucfg_intrinsic) - 1U) == 0;
+    bool iocsr_alias = false;
+    const char *suffix;
     size_t i, suffix_length, prefix_length;
+    if (spelling != NULL) {
+        for (i = 0U; i < sizeof(iocsr_wrappers) / sizeof(iocsr_wrappers[0]); ++i)
+            if (strlen(iocsr_wrappers[i]) == length &&
+                memcmp(spelling, iocsr_wrappers[i], length) == 0) {
+                iocsr_alias = true;
+                break;
+            }
+    }
     if (target == NULL || spelling == NULL || result == NULL ||
         arguments == NULL || argument_count == NULL || mnemonic == NULL ||
         immediate_index == NULL || callee == NULL || callee_capacity == 0U ||
-        length <= sizeof(gnu_prefix) - 1U ||
-        memcmp(spelling, gnu_prefix, sizeof(gnu_prefix) - 1U) != 0)
+        (!cpucfg_alias && !iocsr_alias &&
+         (length <= sizeof(gnu_prefix) - 1U ||
+          memcmp(spelling, gnu_prefix, sizeof(gnu_prefix) - 1U) != 0)))
         return false;
-    suffix_length = length - (sizeof(gnu_prefix) - 1U);
+    suffix = cpucfg_alias || iocsr_alias
+        ? spelling + 2U : spelling + sizeof(gnu_prefix) - 1U;
+    suffix_length = cpucfg_alias || iocsr_alias
+        ? length - 2U : length - (sizeof(gnu_prefix) - 1U);
     prefix_length = sizeof(internal_prefix) - 1U;
     if (suffix_length > SIZE_MAX - prefix_length ||
         prefix_length + suffix_length >= callee_capacity) return false;
@@ -151,8 +178,7 @@ static bool loong_machine_builtin_signature(
         const LoongBuiltinDesc *descriptor = &loong_builtins[i];
         size_t j;
         if (strlen(descriptor->suffix) != suffix_length ||
-            memcmp(spelling + sizeof(gnu_prefix) - 1U,
-                   descriptor->suffix, suffix_length) != 0) continue;
+            memcmp(suffix, descriptor->suffix, suffix_length) != 0) continue;
         (void)memcpy(callee, internal_prefix, prefix_length);
         (void)memcpy(callee + prefix_length, descriptor->suffix, suffix_length);
         callee[prefix_length + suffix_length] = '\0';

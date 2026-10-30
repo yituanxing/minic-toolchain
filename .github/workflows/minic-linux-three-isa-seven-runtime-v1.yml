@@ -699,6 +699,38 @@ jobs:
             --qemu /usr/bin/qemu-system-x86_64 \
             --output "$RUNTIME_OUTPUT/x86-early-trace" \
             --timeout 20 --max-bytes 1048576
+      - name: Preserve failed x86 final MiniC candidate bzImage without rebuilding
+        if: failure() && matrix.target == 'x86_64'
+        continue-on-error: true
+        shell: bash
+        timeout-minutes: 2
+        run: |
+          set -Eeuo pipefail
+          # Only an actual candidate boot attempt with final all-C provenance
+          # may export this path: never substitute the pristine GNU golden.
+          test -f "$RUNTIME_OUTPUT/candidate/boot/p0.log"
+          python3 - "$GNU_WORK" "$RUNTIME_OUTPUT" <<'PY'
+          import hashlib, json, pathlib, shutil, sys
+          work, runtime = map(pathlib.Path, sys.argv[1:])
+          census = json.loads((runtime / "candidate/postlink-c-owner-census.json").read_text())
+          assert census.get("verdict") == "POSTLINK_ALL_C_MINIC_SHA_PASS", "final MiniC C provenance unavailable"
+          image = work / "build/arch/x86/boot/bzImage"
+          assert image.is_file() and not image.is_symlink() and image.stat().st_size > 0
+          digest = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
+          before = digest(image)
+          golden = json.loads((runtime / "boot/gnu-qemu-receipt.json").read_text())
+          assert before != golden["image_sha256"], "refuse exporting GNU golden as MiniC candidate"
+          folder = runtime / "x86-early-trace"
+          folder.mkdir(parents=True, exist_ok=True)
+          destination = folder / "candidate-bzImage"
+          assert not destination.exists() and not destination.is_symlink()
+          shutil.copyfile(image, destination)
+          assert digest(destination) == before == digest(image), "candidate image changed during copy"
+          receipt = {"diagnostic_only": True, "original_path": str(image), "sha256": before,
+                     "bytes": destination.stat().st_size, "original_unchanged": True}
+          (folder / "candidate-bzImage-provenance.json").write_text(json.dumps(receipt, indent=2) + "\n")
+          print("X86_FAILED_CANDIDATE_IMAGE_PRESERVED=" + json.dumps(receipt, sort_keys=True))
+          PY
       - name: Preserve genuine GNU LD errors, MiniC C provenance and dual QEMU logs
         if: always()
         uses: actions/upload-artifact@v4

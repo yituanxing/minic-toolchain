@@ -369,6 +369,30 @@ def preserve_first_failed_owners(work: Path, output: Path, rows: list[dict],
     return report
 
 
+def loongarch_linker_context_owners(log_text: str) -> list[tuple[str, str]]:
+    """Exact GNU LD two-line context only; never carry owners past other text."""
+    header = re.compile(r"^loongarch64-linux-gnu-ld: "
+                        r"([A-Za-z0-9_.+-]+(?:/[A-Za-z0-9_.+-]+)+\.o): in function .+:$")
+    continuation = re.compile(
+        r"^(?:loongarch64-linux-gnu-ld: )?\([^\s()]+\+0x[0-9a-fA-F]+\): "
+        r"undefined reference to [`']([A-Za-z_.$][A-Za-z0-9_.$@+-]{0,159})'$")
+    owner = None
+    found = []
+    for line in log_text.splitlines():
+        match = header.fullmatch(line)
+        if match:
+            owner = match.group(1)
+            if ".." in PurePosixPath(owner).parts:
+                owner = None
+            continue
+        match = continuation.fullmatch(line)
+        if match and owner is not None:
+            found.append((owner, match.group(1)))
+        else:
+            owner = None
+    return found
+
+
 def preserve_link_failed_c_owners(work: Path, output: Path, rows: list[dict],
                                   results: list[dict], link_log: Path,
                                   limit: int = 32,
@@ -455,6 +479,25 @@ def preserve_link_failed_c_owners(work: Path, output: Path, rows: list[dict],
             if chosen not in referenced:
                 referenced.append(chosen)
                 resolutions[chosen] = {"method": method}
+
+    # Loong GNU LD prints the exact owner on a separate context line. Bind
+    # it only to a canonical C owner and its authenticated staged ELF. This
+    # is linker-context evidence, NOT a claim of relocation scanning.
+    if target == "loongarch64":
+        for owner, symbol in loongarch_linker_context_owners(log_text):
+            if owner not in by_name:
+                continue
+            candidate = required(output / "staged" / owner)
+            if sha(candidate) != by_result[owner].get("obj_sha256"):
+                raise Rejected("Loong linker-context staged MiniC ELF SHA changed")
+            elf_machine(candidate, 258)
+            validate_original_abi(candidate, target, by_name[owner])
+            if owner not in resolutions:
+                referenced.append(owner)
+                resolutions[owner] = {"method": "authenticated_exact_loongarch_linker_context"}
+            symbols_for_owner = resolutions[owner].setdefault("linker_context_symbols", [])
+            if symbol not in symbols_for_owner:
+                symbols_for_owner.append(symbol)
 
     # GNU's final link commonly prints `vmlinux.o:(.text+...)` for an AArch64
     # or x86-64 assertion originating in one of the C owners already combined by
@@ -628,11 +671,13 @@ def summarize_gnu_link_failures(log_text: str) -> dict:
 def print_link_symbol_owner_diagnostics(target: str, summary: dict,
                                         owner_report: dict | None,
                                         limit: int = 8) -> None:
-    """Bounded console view of *authenticated* failing ELF CALL owners.
+    """Bounded console view of authenticated relocation or linker-context owners.
 
     Original Kbuild may report a vmlinux.o aggregate instead of a C source.
     Match a link symbol only when the frozen-owner collector found that exact
     symbol's undefined relocation in a digest-verified staged MiniC ELF.
+    Loong's exact two-line linker context is separately labeled and requires
+    the canonical owner's staged ELF SHA and ABI, not a guessed basename.
     Missing, ambiguous, or sampled-out owners are explicitly non-conclusive.
     This never changes the original GNU link verdict and never infers a source
     owner from a basename or a linker aggregate.
@@ -652,11 +697,15 @@ def print_link_symbol_owner_diagnostics(target: str, summary: dict,
                 sort_keys=True, separators=(",", ":")))
             continue
         matches = [row for row in samples if symbol in row.get(
-            "owner_resolution", {}).get("matching_symbols", [])]
+            "owner_resolution", {}).get("matching_symbols", []) or symbol in row.get(
+            "owner_resolution", {}).get("linker_context_symbols", [])]
         if not matches:
             status = "NO_AUTHENTICATED_C_OWNER"
         elif partial:
             status = "PARTIAL_OWNER_CENSUS"
+        elif any(symbol in row.get("owner_resolution", {}).get(
+                "linker_context_symbols", []) for row in matches):
+            status = "EXACT_AUTHENTICATED_LINKER_CONTEXT"
         elif len(matches) == 1:
             status = "UNIQUE_AUTHENTICATED_ELF_RELOCATION"
         else:

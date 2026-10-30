@@ -557,6 +557,11 @@ check-gnu-linux-kbuild-disjoint-bitmask-assert: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
 		sh tests/compiler/c0/probe-gnu-linux-kbuild-disjoint-bitmask-assert.sh
 
+.PHONY: check-gnu-linux-nvme-prp-guard
+check-gnu-linux-nvme-prp-guard: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+		sh tests/compiler/c0/probe-gnu-linux-nvme-prp-guard.sh
+
 .PHONY: check-gnu-linux-i915-irq-known-zero
 check-gnu-linux-i915-irq-known-zero: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
@@ -1495,7 +1500,7 @@ check-fast: check-x86-reachable-vma-assert check-static-const-source-boundaries 
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
 	sh tests/compiler/c0/run.sh
 
-check-fast: check-function-diagnostic-attribute check-gnu-constant-bitfield-helper-cfg check-gnu-linux-kmalloc-index-bool-guard check-gnu-linux-i915-irq-known-zero check-gnu-linux-bpf-union-zero check-gnu-linux-task-mmu-swp-pfn-guard check-gnu-linux-kaslr-addr-range-guard check-gnu-linux-nf-conntrack-size check-linux-empty-static-stub-cfi check-gnu-linux-static-field-guard check-core-same-global-address-order check-core-compound-record-byte-layout check-core-literal-rhs-snapshot check-core-rhs-no-cfg-snapshot check-gnu-linux-zoned-constant-switch check-gnu-const-global-record check-gnu-dead-file-static-object-graph check-core-inline-statement-constant-guard check-core-field-get-contiguous-mask-guard check-aarch64-fixmap-opaque-asm-clone check-aarch64-weak-direct-call-got check-minic-linux-quick-replay check-linux-gnu-cache-verify check-loongarch64-record-chunk-native-word check-loongarch64-immediate-core-fold check-gnu-linux-kbuild-disjoint-bitmask-assert
+check-fast: check-function-diagnostic-attribute check-gnu-constant-bitfield-helper-cfg check-gnu-linux-kmalloc-index-bool-guard check-gnu-linux-i915-irq-known-zero check-gnu-linux-bpf-union-zero check-gnu-linux-task-mmu-swp-pfn-guard check-gnu-linux-kaslr-addr-range-guard check-gnu-linux-nf-conntrack-size check-gnu-linux-nvme-prp-guard check-linux-empty-static-stub-cfi check-gnu-linux-static-field-guard check-core-same-global-address-order check-core-compound-record-byte-layout check-core-literal-rhs-snapshot check-core-rhs-no-cfg-snapshot check-gnu-linux-zoned-constant-switch check-gnu-const-global-record check-gnu-dead-file-static-object-graph check-core-inline-statement-constant-guard check-core-field-get-contiguous-mask-guard check-aarch64-fixmap-opaque-asm-clone check-aarch64-weak-direct-call-got check-minic-linux-quick-replay check-linux-gnu-cache-verify check-loongarch64-record-chunk-native-word check-loongarch64-immediate-core-fold check-gnu-linux-kbuild-disjoint-bitmask-assert
 
 .PHONY: check-minic-linux-quick-replay
 check-minic-linux-quick-replay: $(MINIC_CC_BINARY)

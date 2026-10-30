@@ -623,6 +623,74 @@ static bool core_cfg_small_constant_loop_call(const MinicCoreLowerContext *calle
     return false;
 }
 
+/* A zero-argument file-local inline helper can compute a constant through a
+ * few initialized integer locals before returning it.  Linux nvme's PRP
+ * page-count BUILD_BUG_ON uses this source form.  Evaluate ONLY direct local
+ * assignments followed by one unconditional integer return: no effects,
+ * labels, alternate entries, cleanup, global reads or unknown expressions. */
+static bool core_cfg_straight_line_constant_return(
+    const MinicCoreLowerContext *caller_context, const MinicFunction *callee,
+    const MinicExpression *call_expression, const MinicBlock *body,
+    MinicConstValue *value) {
+    const MinicC0Program *program = caller_context->body->program;
+    MinicCoreLocalIntegerConstant *facts;
+    MinicCoreLowerContext callee_context;
+    size_t i;
+    bool success = false;
+
+
+    if (callee->parameter_count != 0U ||
+        call_expression->value.call.argument_count != 0U ||
+        callee->local_count == 0U || callee->local_count > 32U ||
+        body->statement_count < 2U || body->statement_count > 8U)
+        return false;
+    facts = (MinicCoreLocalIntegerConstant *)calloc(callee->local_count,
+                                                    sizeof(*facts));
+    if (facts == NULL) return false;
+    callee_context = *caller_context;
+    callee_context.source_function = callee;
+    callee_context.local_integer_constants = facts;
+    callee_context.cfg_constant_call_depth =
+        caller_context->cfg_constant_call_depth + 1U;
+    for (i = 0U; i < body->statement_count; ++i) {
+        const MinicStatement *statement = minic_c0_program_statement(
+            program, body->statements[i]);
+        if (statement == NULL ||
+            statement->cleanup_context != statement->cleanup_stop_context ||
+            statement->expression == MINIC_EXPRESSION_INVALID ||
+            !minic_core_cfg_pure_call_argument(&callee_context,
+                                                statement->expression, 0U))
+            break;
+        if (statement->kind == MINIC_STATEMENT_RETURN) {
+            MinicConstValue returned;
+            /* The parser can append one unreachable implicit return after
+             * the real unconditional return.  No label/goto or other
+             * statement is admitted after it. */
+            if (i + 1U < body->statement_count) {
+                const MinicStatement *tail;
+                if (i + 2U != body->statement_count) break;
+                tail = minic_c0_program_statement(program, body->statements[i + 1U]);
+                if (tail == NULL || tail->kind != MINIC_STATEMENT_RETURN ||
+                    tail->cleanup_context != tail->cleanup_stop_context)
+                    break;
+            }
+            success = core_const_eval_integer_with_locals(
+                    &callee_context, statement->expression, &returned) &&
+                minic_const_value_convert_integer(
+                    program, caller_context->target, &returned,
+                    call_expression->type, value);
+            break;
+        }
+        if (statement->kind != MINIC_STATEMENT_ASSIGN &&
+            statement->kind != MINIC_STATEMENT_EXPRESSION)
+            break;
+        if (!core_cfg_small_loop_execute_statement(&callee_context, statement))
+            break;
+    }
+    free(facts);
+    return success;
+}
+
 /* A discarded IF arm is safe for the narrow fallthrough-return fold only
  * when it has no source-level reentry, labels, or inline ASM.  An unlabeled
  * RETURN in a branch proven not taken cannot execute its return expression;
@@ -773,6 +841,10 @@ bool minic_core_cfg_constant_inline_call(const MinicCoreLowerContext *context,
         return true;
     }
     if (core_cfg_small_constant_loop_call(context, callee, expression, value)) {
+        return true;
+    }
+    if (core_cfg_straight_line_constant_return(
+            context, callee, expression, body, value)) {
         return true;
     }
     /* A leading compile-time if can make the function result independent of
