@@ -227,6 +227,28 @@ class SevenWorkerStrictTransportTest(unittest.TestCase):
         self.assertEqual(identity, {"ok": True})
         self.assertEqual(captured[0][2], assembler)
 
+    def test_producer_shard_receipt_binds_compiler_and_gnu_as(self):
+        output = self.dir / "producer"
+        staged = output / "staged/kernel/owner_2.o"
+        write(staged, elf())
+        result = {"object": "kernel/owner_2.o", "input_sha256": self.rows[2]["sha256"],
+                  "status": "MINIC_S_GNU_AS_PASS", "obj_sha256": r.file_sha(staged),
+                  "asm_sha256": "f" * 64}
+        compiler_pair = {"compiler_sha256": "a" * 64,
+                         "compiler_driver_sha256": "b" * 64,
+                         "compiler_cc_sha256": "c" * 64}
+        gnu_pair = {"gnu_gcc_binary_sha256": "d" * 64,
+                    "gnu_as_binary_sha256": "e" * 64}
+        args = SimpleNamespace(output=output, minic=self.compiler, target="x86_64")
+        with mock.patch.object(c, "compiler_pair", return_value=compiler_pair), \
+                mock.patch.object(r, "gnu_as_identity", return_value=gnu_pair):
+            r.package_shard(args, c, [result], self.original_identity)
+        receipt = r.json_file(output / "bundle/identity.json")
+        for field, value in {**compiler_pair, **gnu_pair}.items():
+            self.assertEqual(receipt[field], value)
+        self.assertEqual(r.file_sha(output / "bundle/objects/kernel/owner_2.o"),
+                         result["obj_sha256"])
+
 
 if __name__ == "__main__":
     unittest.main()

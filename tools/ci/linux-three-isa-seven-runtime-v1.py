@@ -236,6 +236,7 @@ def trusted_gnu_driver_binary(name: str) -> Path:
 
 
 def package_shard(a: argparse.Namespace, c, results: list[dict], identity: dict) -> None:
+    compiler = c.compiler_pair(a.minic)
     artifacts = a.output / "bundle"
     artifacts.mkdir()
     # Retain all target GNU AS .o and a small strict diagnostic subset of .s;
