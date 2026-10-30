@@ -19,7 +19,9 @@ case "$target" in
   loongarch64)
     arch=loongarch; cross=loongarch64-linux-gnu-
     gcc=loongarch64-linux-gnu-gcc-13; config=loongson3_defconfig
-    build_target=vmlinux; image=vmlinux ;;
+    # The EFI target may re-link vmlinux. Finish that dependency graph BEFORE
+    # recording the vmlinux digest and freezing all original GNU C owners.
+    build_target=vmlinuz.efi; image=vmlinux ;;
   *) echo "MINIC_LINUX_THREE_GNU=FAIL unsupported target=$target" >&2; exit 64 ;;
 esac
 if [[ -d "$work" ]] && find "$work" -mindepth 1 -maxdepth 1 | grep -q .; then
@@ -79,6 +81,12 @@ case "$profile" in
     # Optional original vendor defconfig as a later breadth/stress campaign.
     make -C "$src" O="$out" ARCH="$arch" CROSS_COMPILE="$cross" CC="$gcc" \
       "$config" 2>&1 | tee "$evidence/kconfig.log"
+    # The P1 oracle executes an AF_INET6 loopback test from an initramfs that
+    # deliberately has no kernel modules.  arm64 defconfig has CONFIG_IPV6=m;
+    # an unchanged GNU kernel otherwise fails before MiniC is ever invoked.
+    # Apply the SAME recorded Kconfig policy to the GNU and MiniC images.
+    "$src/scripts/config" --file "$out/.config" --enable IPV6
+    printf '%s\n' 'runtime_p1_ipv6_builtin=y' >>"$evidence/build-contract.txt"
     ;;
   *)
     echo "MINIC_LINUX_KCONFIG=FAIL unknown profile=$profile" >&2
@@ -87,6 +95,12 @@ case "$profile" in
 esac
 make -C "$src" O="$out" ARCH="$arch" CROSS_COMPILE="$cross" CC="$gcc" \
   olddefconfig 2>&1 | tee -a "$evidence/kconfig.log"
+if [[ "$profile" == broad ]]; then
+  grep -Fxq 'CONFIG_IPV6=y' "$out/.config" || {
+    echo "MINIC_LINUX_KCONFIG=FAIL target=$target P1_requires_builtin_IPV6" >&2
+    exit 2
+  }
+fi
 sha256sum "$out/.config" >"$evidence/config.sha256"
 if [[ "$profile" == common ]]; then
   python3 tools/ci/linux-three-isa-golden-v1.py \
@@ -98,6 +112,11 @@ make -C "$src" O="$out" ARCH="$arch" CROSS_COMPILE="$cross" CC="$gcc" \
 test -s "$out/$image" || {
   echo "MINIC_LINUX_THREE_GNU=FAIL image_missing=$image" >&2; exit 2;
 }
+if [[ "$target" == loongarch64 ]]; then
+  test -s "$out/arch/loongarch/boot/vmlinuz.efi" || {
+    echo 'MINIC_LINUX_THREE_GNU=FAIL loongarch_efi_image_missing' >&2; exit 2;
+  }
+fi
 python3 tools/ci/linux-three-isa-golden-v1.py \
   --target "$target" --out "$out" --image "$image" --evidence "$evidence" \
   --min-c-objects "$minimum" --config-profile "$profile"

@@ -90,6 +90,16 @@ for arch in riscv32-linux riscv64-linux x86_64-linux aarch64-linux loongarch64-l
       -S "$work/unsigned.i" -o "$work/driver.s"
     cmp "$work/cc.s" "$work/driver.s"
   done
+  # Frozen GNU Kbuild .cmd files use both lower- and upper-case spellings.
+  # The staged driver must preserve the same relocation policy as minic-cc;
+  # dropping -fno-PIE here blocks strict all-owner Linux replacement.
+  for option in -fno-pie -fno-PIE -fno-pic -fno-PIC; do
+    "$MINIC_CC" "--target=$arch" "${extra[@]}" "$option" \
+      -S "$work/volatile-char.i" -o "$work/cc.s"
+    "$MINIC" "--target=$arch" "${extra[@]}" "$option" \
+      -S "$work/volatile-char.i" -o "$work/driver.s"
+    cmp "$work/cc.s" "$work/driver.s"
+  done
   "$MINIC_CC" "--target=$arch" "${extra[@]}" -fshort-wchar \
     -S "$work/wchar16.i" -o "$work/wchar16.s"
   "$MINIC" "--target=$arch" "${extra[@]}" -fshort-wchar \

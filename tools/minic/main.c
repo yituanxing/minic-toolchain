@@ -528,7 +528,9 @@ int main(int argc, char **argv) {
                    strcmp(argument, "-fPIE") == 0 ||
                    strcmp(argument, "-fpie") == 0 ||
                    strcmp(argument, "-fno-pie") == 0 ||
-                   strcmp(argument, "-fno-pic") == 0) {
+                   strcmp(argument, "-fno-PIE") == 0 ||
+                   strcmp(argument, "-fno-pic") == 0 ||
+                   strcmp(argument, "-fno-PIC") == 0) {
             language.relocation = argument;
         } else if (strcmp(argument, "-ffunction-sections") == 0) {
             function_sections = true;

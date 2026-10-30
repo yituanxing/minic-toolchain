@@ -161,17 +161,14 @@ jobs:
           MINIC_LINUX_CONFIG_PROFILE=broad \
             bash tools/ci/linux-three-isa-golden-v1.sh '${{ matrix.target }}' "$GNU_WORK"
 
-      - name: Produce bootable LoongArch EFI image from exact original GNU tree
+      - name: Verify the frozen original LoongArch EFI image without rebuilding
         if: matrix.target == 'loongarch64'
         shell: bash
         run: |
           set -Eeuo pipefail
-          # The broad producer certifies vmlinux, not an EFI-bootable image.
-          # This original GNU Kbuild target must actually exist and produce an
-          # EFI image.  Firmware or unsupported Kconfig failures are blockers.
-          make -C "$GNU_WORK/linux-6.6.143" O="$GNU_WORK/build" \
-            ARCH=loongarch CROSS_COMPILE=loongarch64-linux-gnu- \
-            CC=loongarch64-linux-gnu-gcc-13 -j4 vmlinuz.efi
+          # The GNU producer already completed the EFI dependency graph before
+          # provenance snapshots.  Another Kbuild invocation here can re-link
+          # vmlinux and invalidate the discovery SHA without a source change.
           test -s "$GNU_WORK/build/arch/loongarch/boot/vmlinuz.efi"
 
       - name: Build target GNU static init, shell and 12-syscall probes
