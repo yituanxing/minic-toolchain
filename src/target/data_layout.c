@@ -240,8 +240,11 @@ static bool minic_data_layout_record_depth(const MinicDataLayout *layout,
             size_t alignment_bits;
             size_t field_start_bits;
 
-            /* Bit-field allocation keeps its storage-unit placement rules,
-             * but shares the member alignment policy with ordinary fields. */
+            /* Nonzero bit-fields share the member alignment cap with
+             * ordinary fields. FIXME(MC-042): an unnamed zero-width field
+             * is an exception to packed/pragma-pack capping: its natural
+             * type boundary must still align the following member. The
+             * effective alignment above currently loses that boundary. */
             if (!minic_type_is_integer(field->type) || field->element_count != 1U ||
                 field->is_array || field->is_flexible_array || field->is_zero_length_array ||
                 element_size == 0U || element_size > SIZE_MAX / 8U || field_alignment == 0U ||

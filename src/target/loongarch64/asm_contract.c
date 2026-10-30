@@ -2633,6 +2633,9 @@ static bool loong_linux_futex_cmpxchg_emit(
             (size_t)b[4].value * 8U, ctx->dynamic_frame) ||
         !minic_loongarch64_emit_frame_mem(out, "ld.wu", "$t8",
             (size_t)b[5].value * 8U, ctx->dynamic_frame) ||
+        /* FIXME(MC-045): operand 0 is GNU +r and may enter nonzero; source
+         * qualification does not prove an initial zero. Its old value is
+         * currently dropped on the no-fault/no-store path. */
         fputs("  addi.w $t6, $zero, 0\n"
               "1: ll.w $t1, $t4, 0\n"
               "  bne $t1, $t2, 3f\n"

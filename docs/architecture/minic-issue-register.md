@@ -2,7 +2,7 @@
 
 > **长期维护文档，不是立即修复清单。** 发现问题先记录、核实、分类；是否进入某一批重构另行决定。
 >
-> 首次建档：2026-10-30；本轮复核基线：`4f516707d`（`refactor/minic-target-language-boundary`）。
+> 首次建档：2026-10-30；第四轮复核基线：`400f4a611`（`refactor/minic-target-language-boundary`）。
 > 范围：MiniC 的 Frontend、Compiler、Core、Target、Driver 和验证流程；不包含 MiniAS、MiniPP、MiniLD、NaSeed。
 
 配套阅读：[全局架构与所有权图谱](minic-global-contract-map.md) · [函数契约审计台账](minic-function-contract-register.md)。
@@ -33,6 +33,8 @@
 | [MC-011](#mc-011-source-only-的-qemu-结果报告不实) | P1 | OPEN | CI-LOG | CI | Source-only 仍报告 `GNU_QEMU=2` |
 | [MC-012](#mc-012-source-only-的-elf-结果报告不实) | P1 | OPEN | CI-LOG | CI | `.s` 字符串检查被表述为 ELF reloc 验证 |
 | [MC-013](#mc-013-native-gate-的-测试触发白名单缺口) | P2 | OPEN | SOURCE-TRACE | CI | 修改 review-batch 编排未必触发 native gate |
+| [MC-014](#mc-014-rv32-变参与过对齐栈帧交界) | P0 | OPEN | ASM-ONLY | RV32 | 合法 aligned(64) 变参函数：保存区与 caller stack 不连续；零剩余 GPR 的首址也错位 |
+| [MC-015](#mc-015-rv64-变参与过对齐栈帧交界) | P0 | OPEN | ASM-ONLY | RV64 | 合法 aligned(64) 变参函数：保存区跨向 caller stack 的物理地址错位 |
 | [MC-028](#mc-028-rv64-的-int128-移位计数类型限制) | P2 | OPEN | LOCAL-COMPILE-DIFF | RV64 | 合法 GNU C 的宽移位计数导致 MiniC `-S` 拒绝，窄计数可过 |
 | [MC-033](#mc-033-core-独立自增自减语句保留过时常量事实) | P0 | OPEN | GNU-NATIVE-DIFF | Core | `x++`/`x--` 语句捷径漏失效化 local fact，实测错误分支 |
 | [MC-034](#mc-034-静态-record-设计符查找对无关对象做指针相减) | P1 | OPEN | ASAN-POINTER-PAIR | Frontend | 合法静态 `.x` initializer 触发栈 Record 与 heap records 无关指针相减 |
@@ -41,13 +43,17 @@
 | [MC-037](#mc-037-loong-特殊-asm-源端与机器端限定符不一致) | P2 | OPEN | LOCAL-COMPILE-DIFF | LoongArch64 | 合法 volatile cpucfg 输出仅因限定符在机器层拒绝 |
 | [MC-038](#mc-038-匿名字段设计符后的位置初始化游标错误) | P1 | OPEN | LOCAL-COMPILE-DIFF | Frontend | 匿名字段 `.b=2,3` GCC 接受、MiniC 错报过多位置初始化 |
 | [MC-039](#mc-039-运行时嵌套数组递归跨-array-type-扩容借用) | P0 | OPEN | ASAN | Frontend | 合法嵌套数组 `sizeof` 扩 ArrayType 时读失效借用指针 |
+| [MC-041](#mc-041-long-double-字面量提前按-binary64-舍入) | P0 | OPEN | GNU-NATIVE-DIFF | Frontend/Target | `1.0000000000000001L` 提前按 double 舍入；x86 执行得到错误比较结果 |
+| [MC-042](#mc-042-packed-零宽位域丢失对齐栅栏) | P1 | OPEN | GNU-NATIVE-DIFF | DataLayout | packed Record 的 `int:0` 不再强制下一个字段对齐，`offsetof`/`sizeof` 错误 |
+| [MC-043](#mc-043-inline-整数特化预算耗尽直接拒绝合法-c) | P1 | OPEN | LOCAL-COMPILE-DIFF | Compiler | 2048 个 clone 预算由优化上限变成对合法 C 的硬编译失败 |
+| [MC-044](#mc-044-函数参数列表中的-record-enum-tag-作用域外泄) | P1 | OPEN | LOCAL-COMPILE-DIFF | Frontend | 原型、定义、函数指针参数里的 tag 泄漏到文件作用域 |
+| [MC-045](#mc-045-loong-futex-cmpxchg-覆盖-gnu-可读写输出初始值) | P1 | OPEN | ASM-ONLY | LoongArch64 | GNU `+r` 输入原值未被消费，机器特化无条件写回 0 |
+| [MC-048](#mc-048-rv32-指针到-64-位整数的合法转换被拒绝) | P2 | OPEN | LOCAL-COMPILE-DIFF | RV32 | Core 合法 `SCALAR_BITCAST` pointer→u64 在 RV32 目标发射器被拒绝 |
 
 ## 索引：尚待验证的风险
 
 | ID | 优先级 | 状态 | 证据 | 位置/疑点 |
 | --- | --- | --- | --- | --- |
-| [MC-014](#mc-014-rv32-变参与过对齐栈帧交界) | P0 风险 | INVESTIGATING | ASM-ONLY | RV32 变参保存区与入口 SP 有潜在间隙 |
-| [MC-015](#mc-015-rv64-变参与过对齐栈帧交界) | P0 风险 | INVESTIGATING | ASM-ONLY | RV64 寄存器变参跨到调用者栈时的间隙 |
 | [MC-016](#mc-016-线性-va_list-类型准入过宽) | P2 | INVESTIGATING | SUSPICION | RV32/RV64/Loong 接受任意指针作 `va_list` |
 | [MC-017](#mc-017-另外两个-parser-语义探测浅拷贝) | P1 | INVESTIGATING | SOURCE-TRACE | 数组 extent 探测的 Parser 副本 |
 | [MC-018](#mc-018-aarch64-短分支距离依据基本块数) | P2 | INVESTIGATING | SUSPICION | `cbnz` 距离仅按 `block_count` 估计 |
@@ -56,6 +62,7 @@
 | [MC-025](#mc-025-aarch64-公共全局-object-类型伪操作兼容性) | P2 | INVESTIGATING | SOURCE-TRACE | A64 object suffix 与 Common `.type` 固定格式需实测 GAS |
 | [MC-027](#mc-027-targetinfo-惰性初始化的并发契约) | P3 | INVESTIGATING | DESIGN-REVIEW | 静态目标描述符惰性初始化有无多线程 API 义务 |
 | [MC-032](#mc-032-ast-verifier-内层容器检查顺序) | P3 | INVESTIGATING | SOURCE-TRACE | 非法内部 Program 可能在嵌套形状验证前被索引构建读取 |
+| [MC-047](#mc-047-core-事实求值与可消除副作用的证明边界) | P2 | INVESTIGATING | DESIGN-REVIEW | Core 的“值可知”事实在不同 CFG consumer 中需要明确纯度门槛 |
 
 已验证非问题：**[MC-026](#mc-026-source-form-id-的实际身份边界)**，状态 `CLOSED-NOT-A-BUG`，保留编号和消费者证据，避免重复误报。
 
@@ -71,6 +78,7 @@
 | [MC-030](#mc-030-functionbody-名义只读遍历的隐式写入) | P2 | DEBT | SOURCE-TRACE | CALL 溢出参数只读遍历经浅拷贝发生同值写回 |
 | [MC-031](#mc-031-parser-name-bound-无消费者的旧-api) | P3 | DEBT | SOURCE-TRACE | Parser 两个内部 helper 仅留定义/声明、无实际生产调用 |
 | [MC-040](#mc-040-嵌套-switch-labels-重复全量扫描) | P3 | DEBT | SOURCE-TRACE | 同一 nested switch 先检测再构造，两次收集标签 |
+| [MC-046](#mc-046-aarch64-两个特殊-asm-路径引用默认-target-layout) | P2 | DEBT | SOURCE-TRACE | A64 特例借用默认 RV64 DataLayout，目前字段相同但接口错误耦合 |
 
 ## 条目详情与验收门槛
 
@@ -136,6 +144,7 @@
 
 - **位置：** `src/target/loongarch64/asm_contract.c` 对 `add_unless`(2)、`sub_positive`(2)、futex RMW(2)、futex CMPXCHG(2)、CMPXCHG(1)、masked CMPXCHG(2)、small XCHG(2)，合计 **13 个逻辑结果槽**。
 - **证据：** 对可能不对齐的 packed C lvalue 仍直接发出 `st.w/st.d`，未经过 `src/target/loongarch64/memory_emit.c` 的安全 store helper。现有 packed 回归覆盖其他路径且记录 `QEMU=NOT_RUN`；当前仅确认汇编路径缺保护，**未证明硬件异常**。
+- **第四轮独立发射样本：** 有效 GNU C 的 `struct __attribute__((packed)) S { char lead; int rc; };` 将 `x->rc` 作为 `add_unless` GNU ASM 的 `=&r` 结果 lvalue，而真正 LL/SC 原子内存使用独立对齐的 `int *aligned_atomic`，避免故意制造未对齐原子操作的假阳性。MiniC LoongArch64 `-S` 接受并生成 `.s`：为结果地址加偏移 `1` 后直接 `st.w ...,0`，未经过对非对齐 `int` 的 byte-scatter helper。证明 MC-010 的结果槽路径确实可被用户源码触发；**尚无 Loong GAS/QEMU 报错或硬件异常**。复现 `.i` 位于工作区 `loong4_add_unless_packed.i`。
 - **修复门槛：** 复用现有 `minic_loongarch64_emit_asm_output_store`；确认结果、地址及 scratch 寄存器互不别名；覆盖 packed/对齐两路、交叉 GAS/ELF/QEMU，不改 LL/SC 源原子循环语义。
 
 ### MC-011 Source-only 的 QEMU 结果报告不实
@@ -159,15 +168,16 @@
 ### MC-014 RV32 变参与过对齐栈帧交界
 
 - **位置：** `src/target/riscv32/rv32_frame.c:172–185`、`rv32_emit.c:673–679,781–805`。
-- **证据：** 有 `aligned(64)` 局部对象的变参函数把原入口 `E` 保存后计算 `S=alignDown(E-frame_size,64)`。剩余 `a1..a7` 的保存区止于 `S+frame_size`，但调用者栈参数从 `E` 开始；两者间可能有 `0/16/32/48` 字节间隙。八个固定整数参数、零剩余 GPR 时同样从 `S+frame_size` 而非 `E` 初始化游标。
-- **验证边界：** 目标汇编可直接证明地址关系；目前没有 RV32 GNU/QEMU 动态差分，故保持 `INVESTIGATING`。
+- **状态更新（第四轮）：** `OPEN` / P0 / `ASM-ONLY`。由合法 GNU C **实际被 MiniC 接受并生成汇编**，并非仅凭对源码分支推想；但尚未运行 RV32 GNU GAS/QEMU，不能宣称机器级动态错编已复现。
+- **可重现输入：** `/tmp/minic-riscv-va-frame-probe.c` 含 `va_frame_one(int tag, ...)`（`aligned(64)` 局部 + 连续读取 9 个 `int` 变参）和 `va_frame_eight(int a0,...,int a7, ...)`（无剩余变参 GPR）。GNU `cc -E -P` 预处理后 `build/debug/bin/minic-cc --target=riscv32-linux -S` 通过。
+- **汇编/ABI 交叉证据：** `va_frame_one` 的入口为 `E=t2`，帧基址 `S=alignDown(E-160,64)`；保存 `a1..a7` 在 `S+132..156`，变参游标最终走到 `S+160`，而调用方第一个栈参数在原入口 `E`。两者在 `E` 的不同 64B 相位下可相差 16/32/48B。`va_frame_eight` 直接从 `S+128` 而非 `E` 起读，也错位。`rv32_call.c` 的 outgoing stack slot 从 caller 当前 SP 起写，与 callee 入口 SP 的 ABI 身份互相确认。
 - **修复门槛：** 正确衔接寄存器溢出到 caller stack、零 GPR 路径，并以实际交叉工具链/QEMU 检验四类入口 SP 相位。
 
 ### MC-015 RV64 变参与过对齐栈帧交界
 
 - **位置：** `src/target/riscv64/frame_layout.c`、`src/target/riscv64/core_codegen.c` 的变参保存区/动态对齐路径。
-- **证据：** `a1..a7` 保存区可止于对齐后 `S+208`，但 caller 栈参数起点是原始 `E=S+208+δ`；有剩余 GPR 后跨栈可能错位。
-- **排除：** 无剩余 GPR 的 RV64 路径已经读取保存的入口 SP，不存在 RV32 的第二种错误。
+- **状态更新（第四轮）：** `OPEN` / P0 / `ASM-ONLY`；同一个合法预处理输入 RV64 `-S` 成功。`va_frame_one` 中 `E=t0`、`S=alignDown(E-144,64)`，`a1..a7` 保存在 `S+88..136`，第 8 个变参按线性游标指向 `S+144`，但 caller 栈起点为 `E=S+144+δ`，其中 `δ` 可取 0/16/32/48；已在生成汇编和 `rv64/call_emit.c` outgoing 参数布局交叉核对。**还没有** RV64 GNU GAS/QEMU 机器运行差分。
+- **明确排除：** 对相同 fixture 的 `va_frame_eight`，RV64 在没有剩余 GPR 时确实从保存的 `entry_sp_offset` 恢复 `E` 初始化 `va_list`；这一子路径正确，不能把 RV32 的额外错误泛化到 RV64。
 - **修复门槛：** 解决跨界后的地址连续性，GNU/QEMU 验证；在动态运行确认前保持“汇编级高置信风险”。
 
 ### MC-016 线性 va_list 类型准入过宽
@@ -274,6 +284,7 @@
 - **状态：** `OPEN`，P2，`LOCAL-COMPILE-DIFF`，限 LoongArch64 特殊 GNU ASM 的**编译接受缺口**，尚无 GNU LoongArch GAS/QEMU 目标运行结果。
 - **位置：** `src/target/loongarch64/asm_contract.c:758–823` 的 `cpucfg` source gate 对结果类型先 `minic_type_unqualified`，因此接受 `volatile unsigned int`；机器 emitter 检查 Core 输出地址指针 pointee 时直接与无 cv unsigned int `minic_type_equal`，丢失 qualifier 一致性。类似源/机器配对还存在于 `frametrace` 与 `frametrace_csr`（约 `:2826–2990`），暂以**同类根因一条**跟踪，未独立证明这两个形式的动态失败。
 - **复现（2026-10-30，基线 `4f516707d`）：** GNU host `cc -std=gnu11 -Wall -Wextra -Werror -fsyntax-only -x c` 接受 `unsigned int volatile_cpucfg(unsigned int index) { volatile unsigned int cfg; __asm__ volatile("cpucfg %0, %1\\n\\t" : "=&r"(cfg) : "r"(index)); return cfg; }`。MiniC `--target=loongarch64-linux -S` 对 `unsigned int cfg` 通过，只改成 `volatile unsigned int cfg` 就报 `LoongArch64: Core instruction/ABI not yet supported by M1 emitter`。`unsigned long v; __asm__ volatile("csrrd %0, 0x7":"=r"(v));` 与 `volatile unsigned long v` 的对应 GNU CSR source 也测得同一组 MiniC PASS/FAIL；按同类 qualifier 根因归入一项。
+- **第四轮独立子型：** `asm_contract.c:loong_linux_fpr_transfer_source` 对 `movfr2gr.d %0, $f0` 的输出 pointee 使用 `minic_type_unqualified`，而 `loong_linux_fpr_transfer_emit` 直接以完整带 cv 类型比较 `unsigned long`。同一 GNU C fixture（`unsigned long out` / `volatile unsigned long out`）前者 MiniC `-S` PASS、后者 FAIL，追踪 `stage=qualified_hardware_asm`；见工作区 `loong4_fpr_{plain,cv}.i`。这是独立 ASM 家族复现、同一根因，不另分配 MC 编号；目标 Loong GNU AS/QEMU 仍未运行。
 - **验收门槛：** 对源端 qualifier、Core pointer pointee、机器输出类型定义一个共用类型比对契约；补 cpucfg 和两组 frametrace 的 volatile 与非 volatile 组合，目标 GNU AS/ELF/QEMU 执行后才宣称运行时正确。
 
 ### MC-038 匿名字段设计符后的位置初始化游标错误
@@ -354,6 +365,62 @@
 - **状态：** `DEBT`，P3，`SOURCE-TRACE`，不是已证语义错编。
 - **位置：** `src/core/core_lower_switch.c:707–725:minic_core_lower_switch` 为识别 nested cases 调用 `core_collect_nested_switch_labels`，随后在 `lower_nested_case_switch`（约 `:431`）再次进行同一类别的收集；两个真实生产消费者均在同一 lowering 时序。
 - **建议：** 后续性能/结构整理可把第一次收集结果交给 nested 路径，减少额外遍历，但需保留 nested switch 的 reentry、scope 和合法 fallthrough 规则，不能机械把 nested case lowering 并入普通 switch 分支。
+
+### MC-041 long double 字面量提前按 binary64 舍入
+
+- **状态：** `OPEN`，P0，`GNU-NATIVE-DIFF`；x86-64 同一有效 GNU C 源文件已经完成 **GCC 本机** 与 **MiniC `-S` → GNU 汇编/链接 → 本机运行** 对照，绝不是源级字符串检查。
+- **位置/根因：** `src/frontend/parser_expression.c:parse_floating`（约 176–259）识别 `L` 后仍调用 `strtod` 产生 binary64，再由 `minic_binary128_from_binary64` 扩展为内部 binary128；超出 53 位有效精度的尾数在第一步不可逆丢失。`src/target/x86_64/machine_fp.c:minic_x86_64_emit_fp_instruction` 的 x87 80-bit 常量发射明确依赖此前输入来自 binary64 并拒绝更宽的 payload，所以**只修改 Parser 为真正 binary128 而不联动 Target 并不构成完整修复**。
+- **独立复现（2026-10-30，基线 `400f4a611`）：** `int main(void){ long double a=1.0000000000000001L,b=1.0L; return a>b?7:99; }`；`cc -std=gnu11 -O0 -no-pie source.c -o gnu` 运行退出 **7**；`cc -E -P source.c -o source.i`、`build/debug/bin/minic-cc --target=x86_64-linux -S source.i -o mini.s`、`cc -no-pie mini.s -o mini` 均通过，运行退出 **99**。本仓库 x86 `long double` 机器 ABI 为 x87 extended/16B slot，因此两端不是不同 ABI 的伪差分。
+- **修复门槛：** 先明确各目标 `long double` 语义和内部 literal 精度，解析 decimal/hex、极大/极小与舍入边界时保留目标精度；更新 x87 literal 转码规则和其他四目标消费者，再做原生/目标 GNU 差分。当前未修改语义代码。
+
+### MC-042 packed 零宽位域丢失对齐栅栏
+
+- **状态：** `OPEN`，P1，`GNU-NATIVE-DIFF`；生成错误字段偏移/Record 大小，实际生成目标汇编和本机运行均差异。
+- **位置/根因：** `src/target/data_layout.c:minic_data_layout_record_depth` 在所有位域上先调用 `minic_data_layout_effective_field_alignment`；`record->is_packed` 或 `#pragma pack(1)` 将 `int : 0` 的 `alignment_bits` 压成 8，再用它对齐下一个字段。GNU packed 规则下的**未命名零宽位域是对齐栅栏例外**，不能等同普通非零位域缩窄。
+- **复现（基线 `400f4a611`）：** `struct __attribute__((packed)) P { char a; int : 0; char b; };`；同源 `__builtin_offsetof(struct P,b)` 与 `sizeof(struct P)`，GCC x86 目标得到 **4 / 5**，MiniC 得到 **1 / 2**；两套汇编均成功链接，按 `(offset==4 && size==5)` 构造的 harness，GCC 原生退出 **0**、MiniC→GNU AS/链接原生退出 **1**。`#pragma pack(push,1)`/`pop` 的等价 fixture 同样差分，已排除只由 `__attribute__((packed))` 语法触发；不含 packed 的同形结构，两端均为 4/5。
+- **独立 ELF/跨 TU 反例：** `struct P packed_instance = {.a=1,.b=2};` 由 GCC 或 MiniC 分别发射并用宿主 GNU GAS 组成 `.o`。`readelf -sW` 显示 `packed_instance` 的 `OBJECT Size` 为 **5 / 2**；用 GCC 另行编译的 consumer 链接此对象并访问 `.b`，GNU 定义对象程序退出 0，替换 MiniC 定义对象程序退出 1。证明错误已越过编译期常量，实际破坏 x86 跨 TU 对象布局 ABI。
+- **影响与修复门槛：** `offsetof`、`sizeof`、字段读写及全局初始化皆可能受到布局语义污染；复核 zero-width 与非零 bit-field、packed struct/field/pragma 及显式 aligned 的不同优先级。当前只对 x86 真实执行建立证据；共用 DataLayout 逻辑影响其他目标的风险高，但不能据此宣称其他 ISA 的 GNU/QEMU 结果。
+
+### MC-043 Inline 整数特化预算耗尽直接拒绝合法 C
+
+- **状态：** `OPEN`，P1，`LOCAL-COMPILE-DIFF`，不是已发射错码。
+- **位置/根因：** `src/compiler/inline_integer.c:minic_specialize_inline_integer_calls` 的两处 `MINIC_INLINE_INTEGER_SPECIALIZATION_LIMIT`（2048）检查，在新 clone 超限时打印 `_LIMIT_HIT` 并 `return false`；`compiler.c` 将其升级为整个 TU `cannot specialize inline integer call sites`。这使特化预算变成了通用源程序的硬接受门槛。
+- **有效输入差分（基线 `400f4a611`）：** `/tmp/minic_inline_budget_probe.c` 中同一 `static inline __attribute__((always_inline)) int identity(int x){return x;}` 在一个函数里接收 **2050 个互不相同常量**作为 callsite；GNU `cc -std=gnu11 -O2 -c` 通过，MiniC x86 `-S` 明确报 `MINIC_INLINE_INTEGER_SPECIALIZATION_LIMIT_HIT count=2048 limit=2048 functions=2050 source=0` 并失败。同一探针删去尾部两个 distinct callsite、保留 **2048** 项，MiniC `-S` 成功（隔离预算边界）。第二个独立 fixture `/tmp/minic_inline_bool_budget_probe.c` 使用 `range_sum((_Bool)(x != 0), n)` 的 1025 种整数常量，GNU `-O2 -c` PASS、MiniC `-S` 因 **布尔范围特化预算 1024** 失败；删去第 1025 项即成功。两个 pass 不同，但都把优化预算升级为 TU 硬失败，归同一类维护问题，不按每个配额另开编号。
+- **修复门槛：** 审计整数、符号、布尔三阶段对 clone budget、`always_inline` 与后续 Core 的真实要求；能安全使用原调用/其他保守语义路径时应受控退化，真正不能表示的源语义应给明确目标能力错误。不要盲目无限扩大预算导致 Linux 规模灾难；须同时测内存、栈、自举和回归。
+
+### MC-044 函数参数列表中的 Record/Enum tag 作用域外泄
+
+- **状态：** `OPEN`，P1，`LOCAL-COMPILE-DIFF`；合法 GNU C 的 namespace/scope 规则被 MiniC 前端错拒。
+- **位置/调用链：** `src/frontend/parser_declarator.c` 与 `parser_function.c:parse_function` 调 `src/frontend/parser_function_parameters.c:minic_parser_parse_parameter_list` 解析含 `struct/enum` 定义的参数类型；`parser_record.c`/`parser_enum.c` 经 `minic_parser_bind_record_tag` / enum bind 修改**当前** Parser scope。`parser_function.c` 直到函数定义 `{` 后才 `minic_parser_begin_scope`（约 `:2083`），而函数原型、定义参数以及嵌套函数指针形参从未获得正确隔离的 prototype/parameter scope。
+- **三类有效反例（2026-10-30）：** `void prototype(struct OnlyInside{int a;} value); struct OnlyInside{char b;};`；`int f(struct OnlyInside{int a;} x){return x.a;} struct OnlyInside{char b;};`；`typedef int(*Callback)(struct HiddenPointer{int a;}*p); struct HiddenPointer{char b;};`。GNU `cc -std=gnu11 -fsyntax-only` 全部 PASS（会警告 prototype-scope tag 不对外可见），MiniC x86 `-S` 全部报 `duplicate record definition`。将第一条 Record 替为 `enum Hidden {P=1}` 后，文件级 `enum Hidden {Q=2}` 也报 `duplicate enum definition`。这些是同一参数作用域所有权错误，不按四个测试变成四个 Bug。
+- **反向边界：** 两次声明把 prototype-scope `struct P` 当同一完整类型的无效 C 输入，GCC 拒绝而 MiniC 错接受，印证 tag 身份被错误共享；但这不是有效 GNU C 拒编的主要证据。反过来 `int f(struct BodyTag{int a;} x){return sizeof(struct BodyTag)==sizeof(x);}` 在函数 body 中引用该 tag 的 GNU/MiniC 正例均可通过；不能为消除泄漏把 body 内的正确可见性一起删掉。枚举常量被后续 file-level 同名普通对象遮蔽的单一样本执行正常，不能泛称所有 enum ordinary binding 均错。
+- **修复门槛：** 不能简单在参数解析末尾统一 `end_scope`：真正函数定义 body 需要能见参数及相应 tags，嵌套函数指针签名需独立结束 prototype scope；逐层清点 scope begin/end、tag 可见性、参数 ID 与声明兼容规则，覆盖 prototype、definition、typedef、nested pointer 及 enum。
+
+### MC-045 Loong futex CMPXCHG 覆盖 GNU 可读写输出初始值
+
+- **状态：** `OPEN`，P1，`ASM-ONLY`（Source→MiniC `.s`），**没有** LoongArch64 GNU GAS/QEMU 动态对照，不能写成已在真实机器运行复现。
+- **位置/根因：** `src/target/loongarch64/asm_contract.c:loong_linux_futex_cmpxchg_source` 对结果 `err` 接受 GNU `+r`（既是输入又是输出）；`loong_linux_futex_cmpxchg_emit` 机器特化却用 `addi.w ...,$zero,0` 创建固定零值并在结尾写回，忽略原 `err` 的入口值。这与 MC-010 的可能不对齐写回是**不同语义缺陷**。
+- **独立证据：** `loong4_futex_cmpxchg.c` 使用完整 Linux Loong futex GNU ASM `%z4/%z5`、双 `__ex_table` 原模板，令 `int err=7` 并使用 `"+r"(err)`；GNU host `cc -std=gnu11 -fsyntax-only` 接受，MiniC `--target=loongarch64-linux -S` 也成功。原 GNU 模板正常路径未赋值 `%0`，仅异常表 fault 路径可能改变 err，因此无 fault 时应保留初始 7；MiniC `.s` 中先 `li.w $t0,7`，随后 `addi.w $t6,$zero,0`，最后 `st.w $t6,$t7,0`，生成正常路径会将它变成 0。Linux 现有调用若先将 err 初始化成 0，则暂不触发这一具体错码；但 Source gate 允许的 GNU C 语义范围更广。
+- **修复门槛：** 机器特化保留 `+r` 旧值并仅在模板显式修改或异常分支时更新；不得假设 Linux 某条调用恰为零。必须补普通/非零初值及 compare success/fail/fault 分支的目标 GNU ELF/QEMU 差分，另独立守护 MC-010 packed output safety。
+
+### MC-046 AArch64 两个特殊 ASM 路径引用默认 Target Layout
+
+- **状态：** `DEBT`，P2，`SOURCE-TRACE`；没有已证错码。`src/target/aarch64/asm_contract.c:aarch64_stlr_memory_carrier` 与 `aarch64_linux_hyp_spin_type` 两处引用 `minic_default_data_layout()` 而非当前 AArch64 `target->data_layout`。默认布局实际是 RV64；所涉当前整数/Record 字段在 RV64/A64 的值暂相同，而且全局入口已有 A64 layout 验证，**不能把架构味道直接报成 A64 错编**。
+- **清理门槛：** 明确传入当前 Target/Layout 或改用调用方已计算的字段，保证未来布局扩充不跨目标偷借默认配置；保持现有 GNU 特例 source/emit 准入行为，经 A64 source + GNU AS/ELF 差分后再迁移。
+
+### MC-047 Core 事实求值与可消除副作用的证明边界
+
+- **状态：** `INVESTIGATING`，P2，`DESIGN-REVIEW`；本轮**没有**动态 wrong-code 反例。
+- **位置/风险：** `core_const_eval_integer_with_locals` 给出表达式可证明值，`core_lower_if.c` 消费者另检查 `minic_core_cfg_pure_call_argument`，而通用 `core_lower.c` 的 condition branch 直接根据事实改变执行路径。当前 GNU statement-expression 支持范围保守，尚未证明它会跳过有副作用的求值；但**值已知**不自动推出**表达式求值可被整个省略**。
+- **第四轮排误报：** `&&/||` 的真实 RHS lowering 已做 snapshot/meet；switch caller 在前后清 facts；两个有赋值的 GNU statement-expression 和 8 路 Core CFG 有效探针，x86 MiniC→GNU native 与 GCC 一致，RV32/RV64/A64/Loong 对同一 8 路 `.i` 的 `-S` 均通过（其余 4 目标没有目标执行证据）。
+- **下一证据：** 只在扩展常量求值能力或修改 branch folding 时，核对所有消费者是否分别需要 `known_value`、`effect_free_to_elide`；如无有效反例持续保留调查状态，不应以此为由立即重写 Core CFG。
+
+### MC-048 RV32 指针到 64 位整数的合法转换被拒绝
+
+- **状态：** `OPEN`，P2，`LOCAL-COMPILE-DIFF`；没有目标 GNU RV32 ELF/QEMU 执行证据，问题是 `-S` 接受缺口而非静默错码。
+- **输入与差分：** `typedef unsigned long long u64; u64 ptr_to_u64(const void *p){ return (u64)p; }` 是有效 GNU C；宿主 GCC 语法检查成功，同源 `cc -E -P` 后，MiniC `--target=riscv32-linux -S` 失败，具体记录 `<rv32-core>: ... unqualified Core instruction function=ptr_to_u64 ... kind=19 (SCALAR_BITCAST)`。x86/AArch64/Loong/RV64 对照 `-S` 全部通过，**只有 RV32 失败**。同一 RV32 中反向 `void *u64_to_ptr(u64 x){return (void *)x;}` 也可通过；多加一个中间转换 `(u64)(unsigned long)p`，RV32 `-S` 成功并发出低 32 位值、高 32 位零的成对返回，进一步锁定直接 1→2 word 的 BITCAST 路径。没有因此宣称 GNU RV32 目标运行已通过。
+- **源码契约矛盾：** `src/core/core_lower_scalar_values.c` 对合法 pointer→integer cast 形成 Core `SCALAR_BITCAST`；`core_ir_verify.c` 认可这种形状；`src/target/riscv32/rv32_integer_emit.c` 看到 `from_words=1, to_words=2` 时却只准整数扩展而拒绝 BITCAST。ILP32 下 pointer 1 word、`unsigned long long` 2 words，此差异无需假定 RV64 的物理 ABI。
+- **修复门槛：** 明确 C 的 pointer→integer 目标表示/高位扩展规则，在 Core 类型转换或 RV32 lowering 中表达而不滥用无类型 bitcast；验证指针往返、带符号/无符号目标、不同宽度、GNU RV32 GAS/运行时结果，再判断是否可消除特例。
 
 ## 已核对并排除的误判（不要在未有新证据时重新打开）
 

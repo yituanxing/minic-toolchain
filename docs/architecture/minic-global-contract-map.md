@@ -2,7 +2,7 @@
 
 > **持续审计文档（living document）**。这是生产路径的事实图谱，不是一次性重构 RFC，也不代表全部源码已逐行审核。
 >
-> 首建：2026-10-30；第三轮复核基线：`4f516707d`，分支 `refactor/minic-target-language-boundary`。代码演进后须更新入口、契约、证据及审计范围。
+> 首建：2026-10-30；第四轮复核基线：`400f4a611`，分支 `refactor/minic-target-language-boundary`。代码演进后须更新入口、契约、证据及审计范围。
 >
 > 配套：[函数契约台账](minic-function-contract-register.md) · [缺陷、风险与架构债](minic-issue-register.md) · [架构原则](principles.md)。
 
@@ -113,20 +113,36 @@ flowchart TD
 | Core 特殊尾部回退 | `core_inline_asm_rewind_dead_local_assignment` 同时检查 block 和全局连续尾部 ID/definitions 后缩小可见计数 | **合理但特殊**；已更正“全局始终单调、只留 tombstone”的旧误导注释，不应按普通 append-only 规则理解。 |
 | Parser 语义 probe | `probe=*parser` 的 attribute 语义求值跨 owned 容器扩容 | **已证缺陷 MC-004/005**；其他词法 probe 不受同一判定影响。 |
 | Parser Record 快照身份 | 静态 aggregate 使用栈上 `record_snapshot` 避免 Program arena 扩容使借用地址失效；字段路径 helper 却反算 `record - Program.records` | **MC-034 ASan pointer-pair 证实真实 UB**；快照本身有正确目的，应分离 Record 描述与稳定 RecordId 的传递。 |
+| 字面量语义精度 | `parse_floating` 为 `long double` 先 `strtod`（binary64）再扩为内部 binary128；x86 x87 发射假定源是 binary64 | **MC-041 新增 P0 GNU-NATIVE-DIFF**；有效十进制 `L` 字面量与 GCC 本机执行结果不同，单改 Parser 而不检查 x87/四目标机器消费者会引出新问题。 |
+| Record 零宽位域对齐 | `minic_data_layout_record_depth` 对所有位域同样先压缩 pack alignment，`int:0` 对齐栅栏被削弱 | **MC-042 P1 GNU-NATIVE-DIFF**：packed/pragma pack 下 GCC `offsetof/sizeof=4/5`、MiniC `1/2`；非 packed 输入正确；共享 DataLayout 可能影响其他 ISA，但仅 x86 有运行证据。 |
+| 参数列表 tag scope | prototype、definition、function-pointer 的参数类型解析在进入参数列表前未建立正确作用域 | **MC-044 P1**：有效 GNU C 的外层同名 Record/Enum 被误判 duplicate，五目标同一 `.i` `-S` 均拒绝；函数定义 body 对其参数 tag 应继续可见，需带生命周期重建。 |
+| Inline 特化预算 | 整数/布尔的 clone 数目限定为 2048/1024；耗尽时直接使整个 Compiler 失败 | **MC-043 P1 LOCAL-COMPILE-DIFF**：有效 2050 / 1025 个 distinct callsite 的 GNU 输入被错拒，阈值内正常；需要区分可选优化 budget 与真正必要静态特化。 |
 | Runtime 范围初始化 | evaluate-once helper 借 Expression 指针、追加新 expression 后继续读 span | **MC-035 P0 已证 ASan UAF**：合法 GNU range initializer 在 Expression arena 容量边界触发。 |
 | Runtime 嵌套数组 | borrowed ArrayType 跨递归解析，子 `sizeof(int[N])` 触发同一 arena 扩容 | **MC-039 P0 已证 ASan UAF**：14 个前置 ArrayType 触发扩容，第二个子数组读取旧地址。 |
 | 匿名字段位置初始化 | promoted MEMBER leaf 的 field index 被误用作 outermost field 游标 | **MC-038 已证 x86 `-S` 合法 GNU C 错拒**；`.b=2,3` 失败，显式 `.c=3` 正常。 |
 | Bool 两条证明 | CFG 剪枝与 local facts 的可达性/保守性政策不同 | **MC-019 架构债**；可抽共用 oracle，不可机械删任一路。 |
 | Core ASM 多种 probe | 有序资格认领，target-required fail-closed | **合理差异**；要检查具体结果约束，而不是按多个函数名判重复。 |
-| ABI varargs / packed ASM | RV32/64 对齐栈交界和 Loong 特殊写回存在汇编级风险 | **MC-010/014/015**；尚待真实 GNU 工具/QEMU 证据。 |
+| ABI varargs / packed ASM | RV32/64 过对齐 varargs 的保存区与 caller stack 有经过合法源码发射的地址不连续；Loong packed `add_unless` 结果写回实际走直接 `st.w` | **MC-010/014/015 第四轮从静态疑点补为可重放 `ASM-ONLY`**；无 GNU 目标/QEMU 运行证据，RV64 无剩余 GPR 的动态对齐分支已排除。 |
+| RV32 指针宽化转换 | Core 认可 pointer→u64 的 `SCALAR_BITCAST`，RV32 的 1→2 word 发射器拒绝此 opcode | **MC-048 P2 编译接受缺口**；GNU C 有效、RV32 `-S` fail、RV64 同形 pass，尚不是运行时错码。 |
 | RV64 `__int128` shift RHS | 宿主 GNU C 接受宽 RHS，当前 MiniC RV64 `-S` 拒绝；换窄整数 RHS 同目标可过 | **MC-028 已确认编译接受缺口**；尚不是 GNU RV64/ELF/QEMU 运行时错码证据。 |
 | Core 标量更新事实 | 表达式语句 `++/--` 直达 scalar-update，通用表达式路径才会使 local constant 失效 | **MC-033 P0 实测错编**：x86-64 GNU 链接/运行与 GCC 不同；RV32/RV64/A64/Loong `-S` 均出现错误的分支消除，仅 x86 已执行。 |
 | Record 条件表达式事实合流 | Record conditional 的 true/false/merge CFG 与 scalar fact fork/meet 不对称 | **MC-036 P1 已证 x86 GNU native 错编**；`f(1)` 应返 1，实际返 11，假臂 fact 污染 merge。 |
 | AArch64 simple-global ELF type | target config 选 `%object`，但非 extern 的 Common simple global 硬编码 `@object` | **MC-025 仍调查中**；调用链分歧真实，A64 GNU AS 接受性尚未实测，不能宣称失败。 |
 | Loong 特殊 ASM 类型限定符 | Source policy 对 volatile 输出先去限定符，Machine emitter 却用完整带限定符 pointee 与无 cv 类型相等比较 | **MC-037 已复现 cpucfg/CSR 的 `-S` 编译接受缺口**；同形 source/emitter 门控归为一个根因，目标 GAS/QEMU 尚无证据。 |
+| Loong futex 特化读写输出 | Source gate 接受 GNU `+r`，目标特化仅发固定零并回写，没有消费原始寄存器输入 | **MC-045 P1 ASM-ONLY**；`err=7` 的有效 GNU 源 `.s` 明确产生无条件清零，Linux 已知 `err=0` 不能代表全部 source contract，待 Loong runtime 验证。 |
+| A64 来源布局 | 两条 A64 Linux ASM 辅助逻辑读取默认 RV64 DataLayout，眼下布局值相同 | **MC-046 架构债**，没有已证现时错编；应在未来演进前把当前 TargetInfo/Layout 传给真实消费者。 |
+| Core 值事实 vs 可消除效果 | 常量事实在 IF/condition branch/switch 的消费者纯度要求不完全相同 | **MC-047 仅 INVESTIGATING**：8 路 CFG x86 GNU/native 全通过，其他四 ISA `-S` pass，暂不因设计风险重写 Core。 |
 | 自动化验收 | 某些 source-only 脚本把源码检查标成 QEMU/ELF | **MC-011/012/013**；验证等级必须进入报告，而非整体称“通过”。 |
 
 本轮以源码、调用链、所有权和已有测试证据交叉审核，**不是一次性重写授权**。优先补准契约与测试，问题可入台账挂起；若以后进入修复批次，应先验证所有相关消费者和旧路径是否还需要，再删除旧实现。
+
+### 第四轮跨层回看：为何不能由新 Bug 推出要重写某一层
+
+- MC-041 是**前端的数值创建和后端可表示范围共同定义的契约**。目标支持 `long double` 的 ABI 并不足以证明前端已经保存该目标精度；中间 binary128 也不足以证明 x87 能完整发射它。
+- MC-042 是**所有 ISA 共用的 DataLayout 被合法 C 特例击穿**，不能在各目标 ISA 发射器分别补一份字段偏移算法；但每个 ABI 的位域规则仍需目标 GNU oracle 独立检验。
+- MC-044 是**类型身份作用域生命周期**出错，不是 Record arena 指针是否稳定的问题；要同时保证参数标签在函数体内可见、函数体外不可见，以及嵌套 prototype scope 结束。
+- MC-043 是**可选特化配额与语义正确性混在一个布尔返回值中**；这与 MC-006/007 的调用实例事实所有权不同，不能以“统一 Inline 算法”为由一次消除所有检查。
+- MC-014/015 是**物理 caller SP 与 realigned frame SP 的身份分离**；共享 GPR placement 算法可保持，具体 `va_list` 向 caller 栈切换必须交给各 ABI 独立保证。
 
 ## 7. 验证与审计覆盖分级
 
@@ -139,6 +155,10 @@ flowchart TD
 | `GCC-DIFF / ELF-ORACLE` | 预处理输入、产物、重定位或执行语义差分 | `-S` 生成了文件不等于正确链接或执行。 |
 | `GNU AS / ELF` | 汇编器与目标文件验收 | 不代表 ABI 在目标机器上工作。 |
 | `QEMU / native` | 真实目标执行验收 | 不代表覆盖所有 CFG/ABI/ASM 路径。 |
+
+### 第四轮验证门禁实测边界
+
+另独立运行了 `tools/ci/linux-three-isa-gnu-qemu-v1.py --self-test`（`THREE_ISA_GNU_QEMU_SELFTEST=PASS`）、`linux-three-isa-strict-source-gate-v1.py --self-test`（`MINIC_S_FULL_COVERAGE_SELFTEST=PASS`，17 个负例）、`linux-three-isa-summary-phase-selftest-v1.py`（`MINIC_THREE_ISA_SUMMARY_PHASE=PASS`）。源码已核对 GNU QEMU oracle 与 MiniC `-S` 三架构七分片 candidate 的证据身份、阶段标签分别采集；**这些是脚本的 fail-closed 自测，不是本轮实际重跑 Linux 全量 QEMU 或证明 MC-011/012 所涉旧脚本已修复**。历史脚本的虚标问题须在它们自己的消费者链和精确 HEAD 上处理。
 
 上轮跟踪的 `src/` 范围为 **332 个 C/H 文件**，分布 `Frontend=70`、`Compiler=11`、`Core=45`、`Target=206`；Driver/工具入口另外审查。本轮逐条验证的是本文件中的关键生产链及 [函数契约台账](minic-function-contract-register.md) 已列函数，不应称所有源函数均已逐行深读。Target 上轮账本 `Full=7 / Targeted=4 / Pending=195`，因源码漂移还须重做过期记录；旧 `PASS` 仅说明当时指定契约通过。
 

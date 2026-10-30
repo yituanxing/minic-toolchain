@@ -462,6 +462,9 @@ bool rv32_emit_integer_instruction(FILE *out,
         } else if (!rv32_slot(out, fr, id, "t0", true)) return false;
         if (to_words == 2U) {
             if (from_words == 1U) {
+                /* FIXME(MC-048): Core admits pointer->u64 SCALAR_BITCAST;
+                 * this path rejects it although ILP32 zero-extension is
+                 * already available through an intermediate ulong cast. */
                 if (ins->kind == MINIC_CORE_INSTRUCTION_SCALAR_BITCAST ||
                     !rv32_scalar(f, f->values[id].type,
                                  &bits, &is_signed) ||

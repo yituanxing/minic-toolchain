@@ -655,6 +655,9 @@ static bool minic_specialize_inline_boolean_range_calls_for_pass(
             }
         }
         if (variant_id == MINIC_FUNCTION_INVALID) {
+            /* FIXME(MC-043): exhausting a speculative clone budget also
+             * aborts ordinary legal C call sites here. The transitive
+             * quota path below has the same failure contract. */
             if (direct_clone_count + transitive_clone_count >= 1024U ||
                 !minic_add_inline_boolean_range_specialization(
                     program,

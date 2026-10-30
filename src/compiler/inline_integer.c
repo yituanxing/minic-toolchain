@@ -239,6 +239,9 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
         }
         if (specialized_id == MINIC_FUNCTION_INVALID) {
             if (specialization_count >= MINIC_INLINE_INTEGER_SPECIALIZATION_LIMIT) {
+                /* FIXME(MC-043): this is an optimization budget, but the
+                 * current caller treats exhaustion as a fatal TU error even
+                 * when the original unspecialized call has valid semantics. */
                 (void)fprintf(stderr,
                               "MINIC_INLINE_INTEGER_SPECIALIZATION_LIMIT_HIT count=%zu limit=%u functions=%zu source=%zu\n",
                               specialization_count,

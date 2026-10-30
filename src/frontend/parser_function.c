@@ -1919,6 +1919,9 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
         return false;
     }
 
+    /* FIXME(MC-044): parameter tags are currently bound in the caller's
+     * scope. Prototype/function-pointer scopes end at ')', whereas a
+     * definition's parameter tags must remain visible through its body. */
     if (!has_preparsed_function_parameters &&
         (!minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '('") ||
          !minic_parser_parse_parameter_list(

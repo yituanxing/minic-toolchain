@@ -250,6 +250,10 @@ static bool parse_floating(MinicParser *parser, MinicExpressionId *expression_id
             return false;
         }
         if (minic_type_is_long_double(literal_type)) {
+            /* FIXME(MC-041): strtod has already rounded this spelling to
+             * binary64. Expanding the result cannot restore long-double
+             * precision; x87 and binary128 literal emitters must also be
+             * audited before changing the parser's stored representation. */
             minic_binary128_from_binary64(double_value,
                                           &expression.value.floating128_bits.low,
                                           &expression.value.floating128_bits.high);
