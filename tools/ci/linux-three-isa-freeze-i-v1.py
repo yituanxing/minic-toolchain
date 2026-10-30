@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Freeze genuine GNU Kbuild .i once; input SHA makes later MiniC replay cheap."""
-import argparse,concurrent.futures,hashlib,json,re,shlex,subprocess,sys
+import argparse,concurrent.futures,hashlib,json,re,shlex,struct,subprocess,sys
 from pathlib import Path,PurePosixPath
 def digest(p):
     h=hashlib.sha256()
@@ -33,7 +33,38 @@ MINIC_CFLAGS = {
     "-fPIE", "-fpie", "-fPIC", "-fpic",
     "-fno-pie", "-fno-PIE", "-fno-pic", "-fno-PIC",
 }
-def gnu_argv(text,gcc,obj,out):
+LOONGARCH_ABI_FLAGS={"-mabi=lp64d","-mabi=lp64s"}
+def valid_minic_flags(flags,target):
+    admitted=MINIC_CFLAGS | (LOONGARCH_ABI_FLAGS if target=="loongarch64" else set())
+    return isinstance(flags,list) and all(x in admitted for x in flags)
+def gnu_assembler_flags(tokens):
+    """Replay target machine/ABI and explicit GAS flags from the actual .o.cmd.
+
+    GNU -E freezes C semantics, but cannot encode ELF e_flags or GAS's
+    machine model into .i. LoongArch Linux, for example, uses -mabi=lp64s
+    even when the distro GNU assembler defaults to lp64d. Never reassemble
+    the original target .s using an unrelated host/toolchain default.
+    """
+    result=[]
+    for option in tokens[1:]:
+        if option.startswith("-m") and len(option)>2 or option.startswith("-Wa,"):
+            result.append(option)
+    return result
+def valid_assembler_flags(flags):
+    return isinstance(flags,list) and all(
+        isinstance(flag,str) and len(flag)>2 and
+        (flag.startswith("-m") or flag.startswith("-Wa,")) and
+        not any(c.isspace() for c in flag)
+        for flag in flags)
+def original_elf_flags(path,target):
+    if target!="loongarch64":return None
+    with path.open("rb") as f:hdr=f.read(64)
+    if len(hdr)!=64 or hdr[:6]!=b"\x7fELF\x02\x01" or struct.unpack_from("<H",hdr,18)[0]!=258:
+        raise ValueError("wrong GNU original LoongArch64 ELF owner: "+str(path))
+    abi=struct.unpack_from("<I",hdr,48)[0]&7
+    if abi not in (1,2,3):raise ValueError("unknown GNU original LoongArch ABI: "+str(path))
+    return abi
+def gnu_argv(text,gcc,obj,out,target=None):
     m=re.search(r"^(?:savedcmd|cmd)_[^\n]*\s*:=\s*(.+)$",text,re.M)
     if not m:raise ValueError("no GNU Kbuild command")
     lex=shlex.shlex(m.group(1),posix=True,punctuation_chars=";&|")
@@ -52,6 +83,14 @@ def gnu_argv(text,gcc,obj,out):
     if len(sources)!=1 and (source is None or source.group(1) not in sources):
         raise ValueError("ambiguous GNU C source: "+str(sources)[:180])
     flags=[v for v in t if v in MINIC_CFLAGS]
+    assembler_flags=gnu_assembler_flags(t)
+    if target=="loongarch64":
+        abi_flags=[flag for flag in assembler_flags if flag.startswith("-mabi=")]
+        if len(abi_flags)!=1 or abi_flags[0] not in LOONGARCH_ABI_FLAGS:
+            raise ValueError("LoongArch Linux C owner must carry one supported GNU Kbuild -mabi")
+        # One original Kbuild ABI selection feeds BOTH MiniC call lowering and
+        # GNU AS ELF e_flags; changing only the ELF tag is not ABI support.
+        flags+=abi_flags
     a=[t[0],"-E","-P"]
     i=1
     while i<len(t):
@@ -64,7 +103,7 @@ def gnu_argv(text,gcc,obj,out):
             continue
         a.append(v)
         i+=1
-    return a+["-o",str(out)],flags,outputs[0]
+    return a+["-o",str(out)],flags,assembler_flags,outputs[0]
 
 def verify(e,f,target,gcc):
     j=json.loads((f/"manifest.json").read_text());a=owners(e)
@@ -73,8 +112,9 @@ def verify(e,f,target,gcc):
         p=PurePosixPath(row["input"])
         if (name!=row["object"] or row.get("index")!=i or row["shard"]!=i%7
                 or p.is_absolute() or ".." in p.parts or p.parts[0]!="i"
-                or not isinstance(row.get("minic_flags"),list)
-                or any(x not in MINIC_CFLAGS for x in row["minic_flags"])):
+                or not valid_minic_flags(row.get("minic_flags"),target)
+                or not valid_assembler_flags(row.get("gnu_as_flags"))
+                or (target=="loongarch64" and row.get("gnu_elf_abi") not in (1,2,3))):
             raise ValueError("bad .i membership or unsupported C ABI flags")
         file=f/p
         if file.is_symlink() or digest(file)!=row["sha256"]:raise ValueError("wrong cached .i SHA "+name)
@@ -88,14 +128,16 @@ def freeze(a):
         cmd=(a.out/p.parent/("."+p.name+".cmd")).read_text()
         relative="i/"+str(p.with_suffix(".i"));out=a.frozen/relative
         out.parent.mkdir(parents=True,exist_ok=True)
-        args,mini_flags,gnu_output=gnu_argv(cmd,a.gcc,name,out)
+        args,mini_flags,as_flags,gnu_output=gnu_argv(cmd,a.gcc,name,out,a.target)
+        original_abi=original_elf_flags(a.out/p,a.target)
         v=subprocess.run(args,cwd=a.out,capture_output=True,timeout=a.timeout)
         if v.returncode or not out.is_file() or out.stat().st_size==0:
             out.unlink(missing_ok=True)
             raise ValueError(v.stderr.decode(errors="replace")[-450:])
         return dict(index=i,object=name,input=relative,sha256=digest(out),
                     shard=i%7,cmd_sha256=hashlib.sha256(cmd.encode()).hexdigest(),
-                    minic_flags=mini_flags,gnu_output=gnu_output)
+                    minic_flags=mini_flags,gnu_as_flags=as_flags,
+                    gnu_elf_abi=original_abi,gnu_output=gnu_output)
     results={};errors=[]
     with concurrent.futures.ThreadPoolExecutor(max_workers=a.workers) as pool:
         work={pool.submit(one,pair):pair[1] for pair in enumerate(items)}
@@ -120,17 +162,28 @@ def main():
     try:
         if a.mode=="selftest":
             cmd="savedcmd_lib/a.o := gcc -Wp,-MMD,lib/.a.o.d -c -o lib/a.o lib/a.c ; tools/objtool a.o"
-            v,flags,gnu_output=gnu_argv(cmd,"gcc","lib/a.o",Path("lib/a.i"))
+            v,flags,as_flags,gnu_output=gnu_argv(cmd,"gcc","lib/a.o",Path("lib/a.i"))
             assert v[:3]==["gcc","-E","-P"] and "-c" not in v and v[-2:]==["-o","lib/a.i"]
-            assert flags==[] and gnu_output=="lib/a.o"
-            v,flags,gnu_output=gnu_argv(
+            assert flags==[] and as_flags==[] and gnu_output=="lib/a.o"
+            v,flags,as_flags,gnu_output=gnu_argv(
                 cmd.replace(" -c ", " -fshort-wchar -funsigned-char -c ")
                    .replace("-o lib/a.o","-o lib/.temporary-a.o"),
                 "gcc","lib/a.o",Path("lib/a.i"))
-            assert flags==["-fshort-wchar","-funsigned-char"]
+            assert flags==["-fshort-wchar","-funsigned-char"] and as_flags==[]
             assert gnu_output=="lib/.temporary-a.o"
+            v,flags,as_flags,gnu_output=gnu_argv(
+                cmd.replace(" -c ", " -mabi=lp64s -mcmodel=normal -msoft-float -Wa,-gdwarf-2 -c "),
+                "gcc","lib/a.o",Path("lib/a.i"))
+            assert flags==[] and as_flags==[
+                "-mabi=lp64s","-mcmodel=normal","-msoft-float","-Wa,-gdwarf-2"]
+            v,flags,as_flags,gnu_output=gnu_argv(
+                cmd.replace(" -c ", " -mabi=lp64s -msoft-float -c "),
+                "gcc","lib/a.o",Path("lib/a.i"),"loongarch64")
+            assert flags==["-mabi=lp64s"] and as_flags==["-mabi=lp64s","-msoft-float"]
+            assert valid_minic_flags(flags,"loongarch64") and not valid_minic_flags(flags,"x86_64")
+            assert valid_assembler_flags(as_flags) and not valid_assembler_flags(["-mabi=lp64s\n-o /tmp/evil"])
             assert sum(len(list(range(i,99,7))) for i in range(7))==99
-            print("GNU_FROZEN_I_SELFTEST=PASS shards=7 replay_flags=1");return 0
+            print("GNU_FROZEN_I_SELFTEST=PASS shards=7 replay_flags=1 gnu_machine_abi=1");return 0
         if a.evidence is None or a.frozen is None or a.target is None:p.error("missing required paths/target")
         if a.mode=="freeze":
             if a.out is None:p.error("--out required")

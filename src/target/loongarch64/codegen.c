@@ -31,6 +31,59 @@ static const MinicDirectLP64AbiPolicy loongarch64_abi_policy = {
     .variadic_requires_public_stack_alignment = true
 };
 
+static bool loongarch64_executed_fp_type(MinicType type) {
+    return minic_type_is_float(type) || minic_type_is_double(type) ||
+           minic_type_is_long_double(type) || minic_type_is_float128(type);
+}
+
+/* LP64S passes floating arguments in GPRs and forbids compiler-generated FPU
+ * instructions in the kernel. The integer ABI remains compatible with LP64D,
+ * but we must not miscompile a future float operation or FP-valued call while
+ * soft-float arithmetic/return lowering is still unavailable. Declarations
+ * alone (including external FP prototypes and float-pointer types) are fine. */
+static bool loongarch64_lp64s_executable_supported(
+    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn) {
+    size_t i;
+    size_t count, width, j;
+    if (fn == NULL || program == NULL || target == NULL ||
+        loongarch64_executed_fp_type(fn->return_type)) return false;
+    if (minic_type_is_record(fn->return_type) &&
+        minic_multi_fp_return_record(program, target, fn->return_type,
+                                     &count, &width)) return false;
+    for (i = 0U; i < fn->parameter_count; ++i)
+        if (loongarch64_executed_fp_type(fn->parameter_types[i])) return false;
+    /* Validate actual Core call signatures, not every source declaration.
+     * An FP formal type can exist even when argument conversion was folded
+     * or no FP-typed SSA operand survives in the call lowering. */
+    for (i = 0U; i < fn->callee_count; ++i) {
+        const MinicCoreCallee *call = &fn->callees[i];
+        if (loongarch64_executed_fp_type(call->return_type)) return false;
+        for (j = 0U; j < call->parameter_count; ++j)
+            if (loongarch64_executed_fp_type(call->parameter_types[j]))
+                return false;
+    }
+    for (i = 0U; i < fn->call_signature_count; ++i) {
+        const MinicCoreCallSignature *call = &fn->call_signatures[i];
+        if (loongarch64_executed_fp_type(call->return_type)) return false;
+        for (j = 0U; j < call->parameter_count; ++j)
+            if (loongarch64_executed_fp_type(call->parameter_types[j]))
+                return false;
+    }
+    for (i = 0U; i < fn->value_count; ++i)
+        if (loongarch64_executed_fp_type(fn->values[i].type)) return false;
+    for (i = 0U; i < fn->instruction_count; ++i) {
+        const MinicCoreInstruction *ins = &fn->instructions[i];
+        if (loongarch64_executed_fp_type(ins->type)) return false;
+        if ((ins->kind == MINIC_CORE_INSTRUCTION_CALL ||
+             ins->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL) &&
+            minic_type_is_record(ins->type) &&
+            minic_multi_fp_return_record(program, target, ins->type,
+                                         &count, &width)) return false;
+    }
+    return true;
+}
+
 /* LoongArch64 owns every LP64D frame/ABI register action. Common code owns
  * the function envelope, checked planning, cleanup and ELF serialization. */
 static bool loongarch64_emit_prologue(
@@ -107,13 +160,24 @@ static bool loongarch64_emit_function(
     const MinicCoreFunction *fn, const MinicCoreFunctionFacts *facts,
     const MinicCoreObjectStoragePlan *storage, size_t id,
     bool function_sections) {
-    static const MinicDirectLP64FunctionEmitter emitter = {
-        "loongarch64", &loongarch64_abi_policy,
+    MinicDirectLP64AbiPolicy abi = loongarch64_abi_policy;
+    const MinicDirectLP64FunctionEmitter emitter = {
+        "loongarch64", &abi,
         minic_multi_indirect_record, minic_multi_indirect_record,
         "@progbits", "@function", "@init_array", "quad",
         loongarch64_emit_prologue, minic_loongarch64_emit_core_blocks,
         minic_loongarch64_qualified_opaque_asm
     };
+    if (target == NULL || fn == NULL) return false;
+    if (target->loongarch64_soft_float_abi) {
+        if (!loongarch64_lp64s_executable_supported(program, target, fn))
+            return minic_multi_direct_machine_reject(
+                fn, "loongarch64", fn->name,
+                "lp64s-float-codegen-not-supported", SIZE_MAX, SIZE_MAX,
+                __LINE__);
+        abi.name = "loongarch64-lp64s";
+        abi.fp_argument_registers = 0U;
+    }
     return minic_multi_direct_lp64_emit_function(
         out, program, target, decl, fn, facts, storage,
         id, function_sections, &emitter);

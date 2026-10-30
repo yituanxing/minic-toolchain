@@ -119,6 +119,10 @@ typedef struct MinicTargetInfo {
      * The canonical target descriptors default to static PC-relative.
      * A CLI invocation copies the descriptor before setting this bit. */
     bool position_independent;
+    /* Per-invocation LoongArch ELF/call ABI. Linux Kbuild uses LP64S even
+     * though ordinary userland defaults to LP64D. This is target-owned,
+     * never inferred from the C data model or from an assembler flag. */
+    bool loongarch64_soft_float_abi;
     /* RISC-V-specific, per-invocation subtarget. Legacy default preserved. */
     MinicRiscvIsa riscv_isa;
 } MinicTargetInfo;

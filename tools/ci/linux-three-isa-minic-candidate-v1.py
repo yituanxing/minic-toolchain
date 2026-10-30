@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import functools
 import hashlib
 import importlib.util
 import json
@@ -41,6 +42,7 @@ ALLOWED_CFLAGS = {
     "-fno-function-sections", "-fPIE", "-fpie", "-fPIC", "-fpic",
     "-fno-pie", "-fno-PIE", "-fno-pic", "-fno-PIC",
 }
+LOONGARCH_ABI_FLAGS = {"-mabi=lp64s", "-mabi=lp64d"}
 GNU_VERDICT = "GNU_QEMU_P0_P1_PASS_NOT_MINIC"
 MINIC_VERDICT = "MINIC_QEMU_P0_P1_PASS_NO_GCC_C_FALLBACK"
 
@@ -73,6 +75,11 @@ def module(name: str, filename: str):
     return imported
 
 
+@functools.lru_cache(maxsize=1)
+def frozen_kbuild_oracle():
+    return module("minic_gnu_assembler_flags", "linux-three-isa-freeze-i-v1.py")
+
+
 def compiler_pair(compiler: Path, expected: dict | None = None) -> dict[str, str]:
     """Authenticate both the front driver and the *executed* sibling compiler."""
     driver = required(compiler)
@@ -89,7 +96,7 @@ def compiler_pair(compiler: Path, expected: dict | None = None) -> dict[str, str
     return identity
 
 
-def verify_gnu_kbuild_commands(out: Path, rows: list[dict]) -> None:
+def verify_gnu_kbuild_commands(out: Path, rows: list[dict], gcc: str) -> None:
     """Ensure canonical GNU .cmd source/flags identity never changed."""
     for row in rows:
         name = PurePosixPath(row["object"])
@@ -99,6 +106,41 @@ def verify_gnu_kbuild_commands(out: Path, rows: list[dict]) -> None:
                 not re.fullmatch(r"[0-9a-f]{64}", digest) or
                 sha(required(cmd)) != digest):
             raise Rejected(f"original GNU Kbuild .cmd provenance changed: {name}")
+        try:
+            _, _, authentic_as_flags, _ = frozen_kbuild_oracle().gnu_argv(
+                cmd.read_text(), gcc, name.as_posix(), Path("unused.i"))
+        except (OSError, ValueError) as exc:
+            raise Rejected(f"invalid authentic GNU machine options for {name}: {exc}") from exc
+        if row.get("gnu_as_flags") != authentic_as_flags:
+            raise Rejected(f"original GNU AS machine options changed: {name}")
+
+
+def gnu_assembler_command(gcc: str, row: dict, asm: Path, obj: Path) -> list[str]:
+    """Keep the *original C owner's* GNU machine ABI when assembling MiniC -S.
+
+    The original GNU -E input cannot retain -mabi, -mcmodel or -Wa flags.
+    Linux's LoongArch kernel uses lp64s while distro GCC defaults to lp64d;
+    silently dropping -mabi would make the whole VDSO unlinkable.
+    """
+    flags = row.get("gnu_as_flags")
+    if not frozen_kbuild_oracle().valid_assembler_flags(flags):
+        raise Rejected(f"invalid original GNU AS machine flags: {row['object']}")
+    return [gcc, *flags, "-x", "assembler", "-c", str(asm), "-o", str(obj)]
+
+
+def validate_original_abi(obj: Path, target: str, row: dict) -> None:
+    """Enforce matching LoongArch ELF ABI against the frozen GNU C owner."""
+    if target != "loongarch64":
+        return
+    expected = row.get("gnu_elf_abi")
+    if expected not in (1, 2, 3):
+        raise Rejected(f"missing canonical LoongArch64 GNU ELF ABI: {row['object']}")
+    with obj.open("rb") as stream:
+        hdr = stream.read(64)
+    actual = struct.unpack_from("<I", hdr, 48)[0] & 7
+    if actual != expected:
+        raise Rejected(f"MiniC GNU AS LoongArch64 ABI mismatch: {row['object']} "
+                       f"original={expected} candidate={actual}")
 
 
 def candidate_inputs(target: str, work: Path, compiler: Path,
@@ -136,12 +178,14 @@ def candidate_inputs(target: str, work: Path, compiler: Path,
         raise Rejected("incomplete canonical Linux ELF64 GNU C-owner manifest")
     if freeze.get("identity", {}).get("profile") != "broad":
         raise Rejected("GNU frozen profile must match the full broad Kconfig")
-    verify_gnu_kbuild_commands(out, rows)
+    verify_gnu_kbuild_commands(out, rows, gcc)
     for row in rows:
         name = PurePosixPath(row["object"])
+        allowed = ALLOWED_CFLAGS | (LOONGARCH_ABI_FLAGS if target == "loongarch64" else set())
         if (name.is_absolute() or ".." in name.parts or name.suffix != ".o" or
                 not isinstance(row.get("minic_flags"), list) or
-                any(flag not in ALLOWED_CFLAGS for flag in row["minic_flags"])):
+                any(flag not in allowed for flag in row["minic_flags"]) or
+                not isinstance(row.get("gnu_as_flags"), list)):
             raise Rejected(f"unsafe or unsupported owner: {row['object']}")
         required(out / name)
         if not (out / name).is_file():
@@ -193,12 +237,18 @@ def make_objects(rows: list[dict], work: Path, compiler: Path, output: Path,
                 result.update(status="MINIC_S_FAIL", detail=cc.stderr[-600:])
                 return result
             result["asm_sha256"] = sha(asm)
-            ass = subprocess.run([gcc, "-x", "assembler", "-c", str(asm), "-o", str(obj)],
-                                 text=True, capture_output=True, timeout=timeout)
+            # Original GNU Kbuild invokes the assembler from its O= build
+            # directory. `.incbin "kernel/config_data.gz"` and other genuine
+            # relative assembly inputs must resolve against THAT directory,
+            # not this CI tool's repository checkout working directory.
+            ass = subprocess.run(gnu_assembler_command(gcc, row, asm, obj),
+                                 cwd=work / "build", text=True,
+                                 capture_output=True, timeout=timeout)
             if ass.returncode or not obj.is_file() or not obj.stat().st_size:
                 result.update(status="GNU_TARGET_AS_FAIL", detail=ass.stderr[-600:])
                 return result
             elf_machine(obj, data["machine"])
+            validate_original_abi(obj, data["target"], row)
             result.update(status="MINIC_S_GNU_AS_PASS", obj_sha256=sha(obj))
             return result
         except (OSError, subprocess.TimeoutExpired, Rejected) as exc:
@@ -261,6 +311,47 @@ def verify_postlink_c_owners(out: Path, output: Path, target: str,
     return report
 
 
+def preserve_vdso_symbol_differential(out: Path, staged: Path,
+                                       output: Path, rows: list[dict],
+                                       target: str) -> None:
+    """Retain the exact GNU and MiniC vDSO objects when Kbuild drops .so.dbg.
+
+    Linux x86's checkundef.sh only prints 'undefined symbols found' and then
+    make deletes the diagnostic ELF. Capture original/new nm -u and tiny C
+    object/assembly samples *before* overlay to identify a precise helper
+    without weakening the kernel's no-undefined VDSO contract.
+    """
+    if target != "x86_64":
+        return
+    names = [r["object"] for r in rows if
+             r["object"].startswith("arch/x86/entry/vdso/") and
+             r["object"].rsplit("/", 1)[-1] in
+             {"vgetcpu.o", "vclock_gettime.o", "extable.o"}]
+    if not names:
+        raise Rejected("missing original x86 VDSO C owners for undefined-symbol differential")
+    diag = output / "vdso-diagnostics"
+    diag.mkdir(parents=True, exist_ok=False)
+    report = []
+    for name in sorted(names):
+        for variant, obj in (("gnu", required(out / name)),
+                             ("minic", required(staged / name))):
+            suffix = PurePosixPath(name).name
+            destination = diag / f"{suffix}.{variant}.o"
+            shutil.copyfile(obj, destination)
+            nm = subprocess.run(["nm", "-u", "-A", str(destination)],
+                                text=True, capture_output=True, timeout=30)
+            (diag / f"{suffix}.{variant}.nm-u.txt").write_text(
+                nm.stdout + nm.stderr)
+            if nm.returncode:
+                raise Rejected(f"x86 VDSO undefined-symbol nm failed: {name} {variant}")
+            report.append({"owner": name, "kind": variant, "sha256": sha(obj),
+                           "nm_undefined": nm.stdout.splitlines()})
+        asm = required(staged / PurePosixPath(name).with_suffix(".s"))
+        shutil.copyfile(asm, diag / PurePosixPath(name).name.replace(".o", ".minic.s"))
+    (diag / "vdso-gnu-minic-undefined.json").write_text(
+        json.dumps(report, sort_keys=True, indent=2) + "\n")
+
+
 def relink(work: Path, output: Path, rows: list[dict], results: list[dict],
            data: dict, gnu_receipt: dict) -> Path:
     out, source = work / "build", work / "linux-6.6.143"
@@ -275,6 +366,7 @@ def relink(work: Path, output: Path, rows: list[dict], results: list[dict],
         if sha(staged) != hash_:
             raise Rejected(f"corrupt staged MiniC object: {name}")
         elf_machine(staged, data["machine"])
+    preserve_vdso_symbol_differential(out, pool, output, rows, data["target"])
     # Mutate ONLY the disposable GNU Kbuild worktree after the original
     # GNU/QEMU receipt was produced and preserved.  Kbuild's original .cmd
     # dependency graph must rearchive every changed owner and relink.
@@ -296,7 +388,7 @@ def relink(work: Path, output: Path, rows: list[dict], results: list[dict],
     # the preoverlay list. A new GCC-generated C object may not evade this
     # union check even if each previous MiniC .o remained byte-for-byte intact.
     census = verify_postlink_c_owners(out, output, data["target"], expected)
-    verify_gnu_kbuild_commands(out, rows)
+    verify_gnu_kbuild_commands(out, rows, data["gcc"])
     (output / "postlink-gnu-c-fallback.json").write_text(json.dumps(
         {"verdict": census["verdict"], "gnu_c_fallback_count": 0,
          "unexpected": [], "overwritten": []}, indent=2) + "\n")
@@ -361,6 +453,22 @@ def self_test() -> None:
     assert len(ALLOWED_CFLAGS) == 16
     assert len(LINUX_SHA) == 64
     failures_checked = 0
+    abi_row = {"object": "arch/loongarch/vdso/vgetcpu.o",
+               "gnu_as_flags": ["-mabi=lp64s", "-mcmodel=normal", "-msoft-float"],
+               "gnu_elf_abi": 1}
+    command = gnu_assembler_command("loongarch64-linux-gnu-gcc-13", abi_row,
+                                     Path("vgetcpu.s"), Path("vgetcpu.o"))
+    assert command[1:4] == abi_row["gnu_as_flags"]
+    assert command[-6:] == ["-x", "assembler", "-c", "vgetcpu.s", "-o", "vgetcpu.o"]
+    for invalid in (["-mabi=lp64s\n-o", "/tmp/foreign"], ["--sysroot=/tmp/foreign"]):
+        abi_row["gnu_as_flags"] = invalid
+        try:
+            gnu_assembler_command("gcc", abi_row, Path("in.s"), Path("out.o"))
+        except Rejected:
+            failures_checked += 1
+        else:
+            raise AssertionError("unsafe GNU AS option escaped frozen-Kbuild gate")
+    abi_row["gnu_as_flags"] = ["-mabi=lp64s"]
     with __import__("tempfile").TemporaryDirectory() as temp:
         bad = Path(temp) / "not-elf.o"
         bad.write_bytes(b"x" * 64)
@@ -370,6 +478,59 @@ def self_test() -> None:
             pass
         else:
             raise AssertionError("incorrectly accepted foreign object")
+        original = Path(temp) / "loong.o"
+        elf = bytearray(64)
+        elf[:6] = b"\x7fELF\x02\x01"
+        struct.pack_into("<HHI", elf, 16, 1, 258, 1)
+        struct.pack_into("<I", elf, 48, 1)
+        original.write_bytes(elf)
+        validate_original_abi(original, "loongarch64", abi_row)
+        struct.pack_into("<I", elf, 48, 3)
+        original.write_bytes(elf)
+        try:
+            validate_original_abi(original, "loongarch64", abi_row)
+        except Rejected:
+            failures_checked += 1
+        else:
+            raise AssertionError("LP64D candidate escaped original LP64S ELF guard")
+        # The x86 Linux VDSO checkundef oracle deletes its failing ELF and
+        # reports no symbol names. Preserve a reproducible GNU/MiniC owner
+        # pair with an introduced undefined helper as a regression oracle.
+        vdso_owner = "arch/x86/entry/vdso/vgetcpu.o"
+        gnu_obj = Path(temp) / "vdso-gnu" / vdso_owner
+        mini_obj = Path(temp) / "vdso-mini" / vdso_owner
+        for obj, program in ((gnu_obj, "ret"),
+                             (mini_obj, "call __minic_vdso_missing_helper\nret")):
+            obj.parent.mkdir(parents=True, exist_ok=True)
+            source = obj.with_suffix(".s")
+            source.write_text(".text\n.globl vdso_probe\nvdso_probe:\n" + program + "\n")
+            subprocess.run(["gcc", "-x", "assembler", "-c", str(source),
+                            "-o", str(obj)], check=True)
+        vdso_output = Path(temp) / "vdso-candidate"
+        vdso_output.mkdir()
+        preserve_vdso_symbol_differential(
+            Path(temp) / "vdso-gnu", Path(temp) / "vdso-mini",
+            vdso_output, [{"object": vdso_owner}], "x86_64")
+        diag = vdso_output / "vdso-diagnostics"
+        assert "__minic_vdso_missing_helper" in (
+            diag / "vgetcpu.o.minic.nm-u.txt").read_text()
+        assert "__minic_vdso_missing_helper" not in (
+            diag / "vgetcpu.o.gnu.nm-u.txt").read_text()
+        failures_checked += 1
+        # Linux kernel/configs.o has a genuine Kbuild-relative .incbin path.
+        # Wrong cwd is an AS failure even when MiniC emitted valid assembly.
+        kbuild = Path(temp) / "kernel-build"
+        (kbuild / "kernel").mkdir(parents=True)
+        (kbuild / "kernel" / "config_data.gz").write_bytes(b"frozen-kconfig")
+        embedded = Path(temp) / "kernel-configs.s"
+        embedded.write_text('.section .rodata\n.incbin "kernel/config_data.gz"\n')
+        embedded_obj = Path(temp) / "kernel-configs.o"
+        embedded_row = {"object": "kernel/configs.o", "gnu_as_flags": []}
+        subprocess.run(gnu_assembler_command("gcc", embedded_row,
+                                             embedded, embedded_obj),
+                       cwd=kbuild, capture_output=True, check=True)
+        assert embedded_obj.stat().st_size > 64
+        failures_checked += 1
         out = Path(temp) / "out"
         evidence = Path(temp) / "evidence"
         out.mkdir()
@@ -390,8 +551,17 @@ def self_test() -> None:
         first = sample_c_owner("kernel/canonical.o")
         expected = {"kernel/canonical.o": sha(first)}
         cmd = first.parent / ("." + first.name + ".cmd")
-        metadata = [{"object": "kernel/canonical.o", "cmd_sha256": sha(cmd)}]
-        verify_gnu_kbuild_commands(out, metadata)
+        metadata = [{"object": "kernel/canonical.o", "cmd_sha256": sha(cmd),
+                     "gnu_as_flags": []}]
+        verify_gnu_kbuild_commands(out, metadata, "gcc")
+        metadata[0]["gnu_as_flags"] = ["-mabi=lp64s"]
+        try:
+            verify_gnu_kbuild_commands(out, metadata, "gcc")
+        except Rejected:
+            failures_checked += 1
+        else:
+            raise AssertionError("forged original GNU AS flags escaped .cmd gate")
+        metadata[0]["gnu_as_flags"] = []
         assert verify_postlink_c_owners(out, evidence, "x86_64", expected)["verdict"] == \
             "POSTLINK_ALL_C_MINIC_SHA_PASS"
         added = sample_c_owner("kernel/gnu-escaped.o")
@@ -421,7 +591,7 @@ def self_test() -> None:
             raise AssertionError("missing original C owner escaped postlink gate")
         cmd.write_text(cmd.read_text() + "# tampered after GNU freeze\n")
         try:
-            verify_gnu_kbuild_commands(out, metadata)
+            verify_gnu_kbuild_commands(out, metadata, "gcc")
         except Rejected:
             failures_checked += 1
         else:

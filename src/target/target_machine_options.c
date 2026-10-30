@@ -3,6 +3,7 @@
 #include "target/riscv/isa_resolve.h"
 
 #include <stdio.h>
+#include <string.h>
 
 /* Target dispatch is deliberately on registered ISA-family policy, never on
  * generic C language width (LP64/ILP32). The compiler driver only forwards
@@ -26,6 +27,19 @@ bool minic_target_machine_options_resolve(MinicTargetInfo *invocation_target,
         char detail[240];
         if (entries[index].architecture != invocation_target->architecture)
             continue;
+        if (entries[index].architecture == MINIC_TARGET_ARCH_LOONGARCH64) {
+            /* Only ABI selection is currently qualified for LoongArch.
+             * Keep the userland LP64D descriptor unchanged by default. */
+            if (march != NULL || mabi == NULL ||
+                (strcmp(mabi, "lp64d") != 0 && strcmp(mabi, "lp64s") != 0)) {
+                (void)snprintf(reason, reason_capacity,
+                               "LoongArch requires -mabi=lp64d|lp64s without -march");
+                return false;
+            }
+            invocation_target->loongarch64_soft_float_abi =
+                strcmp(mabi, "lp64s") == 0;
+            return true;
+        }
         if (entries[index].isa_family != MINIC_TARGET_ISA_FAMILY_RISCV) {
             (void)snprintf(reason, reason_capacity,
                            "-march/-mabi currently require RISC-V");

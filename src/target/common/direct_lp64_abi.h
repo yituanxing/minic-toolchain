@@ -49,7 +49,14 @@ static inline bool minic_direct_lp64_abi_policy_valid(
     const MinicDirectLP64AbiPolicy *abi) {
     return abi != NULL && abi->name != NULL && abi->name[0] != '\0' &&
         abi->gp_argument_registers == 8U &&
-        abi->fp_argument_registers == 8U &&
+        /* A soft-float LP64 ABI can have no FPR argument bank at all. This
+         * is a real machine ABI choice, not an eight-register placeholder. */
+        (abi->fp_argument_registers == 0U ||
+         abi->fp_argument_registers == 8U) &&
+        (abi->fp_argument_registers != 0U ||
+         (!abi->long_double_in_fp_register &&
+          !abi->variadic_floating_in_fp_register &&
+          !abi->variadic_named_double_supported)) &&
         abi->stack_slot_bytes == 8U && abi->stack_alignment == 16U &&
         abi->indirect_result_argument_registers <= 1U &&
         (abi->record_registers == MINIC_DIRECT_LP64_RECORD_WHOLE_OR_STACK ||

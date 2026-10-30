@@ -2,6 +2,50 @@
 # One GitHub runner: one MiniC build + batched Kbuild objects, multiple
 # authenticated GCC/MiniC object overlays + GNU incremental link + QEMU.
 set -Eeuo pipefail
+# Replaying cached GNU Kbuild objects with a separately restored original
+# Linux source cache can make the source mtimes newer than the outputs. Kbuild
+# then needlessly recompiles all 2064 GNU C owners even though bytes/commands
+# are frozen. Rebase ONLY the disposable, SHA-attested seven-way fixture.
+rebase_seven_kbuild_fixture_mtimes() {
+  local source_tree=$1 golden_tree=$2
+  [[ -d "$source_tree" && -d "$golden_tree" &&
+     -f "$source_tree/Makefile" && -f "$golden_tree/.config" ]] || return 1
+  find "$source_tree" -type f -exec touch -d '2000-01-01 00:00:00 UTC' -- {} +
+  find "$golden_tree" -type f -exec touch -d '2020-01-01 00:00:00 UTC' -- {} +
+}
+if [[ "${1:-}" == --self-test-kbuild-mtime ]]; then
+  scratch=$(mktemp -d)
+  trap 'rm -rf -- "$scratch"' EXIT
+  mkdir -p "$scratch/source" "$scratch/out"
+  printf 'source bytes are pinned\n' >"$scratch/source/Makefile"
+  printf 'CONFIG_TEST=y\n' >"$scratch/out/.config"
+  printf 'object bytes are pinned\n' >"$scratch/out/owner.o"
+  printf 'image bytes are pinned\n' >"$scratch/out/Image"
+  touch -d '2026-01-01 UTC' "$scratch/source/Makefile"
+  touch -d '2020-01-01 UTC' "$scratch/out/owner.o"
+  [[ "$scratch/source/Makefile" -nt "$scratch/out/owner.o" ]]
+  printf '%s: %s\n\t@true\n%s: %s\n\t@true\n' \
+    "$scratch/out/owner.o" "$scratch/source/Makefile" \
+    "$scratch/out/Image" "$scratch/out/owner.o" >"$scratch/dependency.mk"
+  if make --no-print-directory -q -f "$scratch/dependency.mk" "$scratch/out/owner.o"; then
+    echo 'COHORT_GNU_MTIME_REBASE_SELFTEST=FAIL stale_source_not_rebuilt' >&2; exit 1
+  fi
+  bytes_before=$(sha256sum "$scratch/source/Makefile" "$scratch/out/.config" \
+      "$scratch/out/owner.o" "$scratch/out/Image" | sha256sum)
+  rebase_seven_kbuild_fixture_mtimes "$scratch/source" "$scratch/out"
+  bytes_after=$(sha256sum "$scratch/source/Makefile" "$scratch/out/.config" \
+      "$scratch/out/owner.o" "$scratch/out/Image" | sha256sum)
+  [[ "$bytes_before" == "$bytes_after" &&
+     "$scratch/out/owner.o" -nt "$scratch/source/Makefile" ]]
+  make --no-print-directory -q -f "$scratch/dependency.mk" "$scratch/out/owner.o"
+  touch "$scratch/out/owner.o"
+  [[ "$scratch/out/owner.o" -nt "$scratch/out/Image" ]]
+  if make --no-print-directory -q -f "$scratch/dependency.mk" "$scratch/out/Image"; then
+    echo 'COHORT_GNU_MTIME_REBASE_SELFTEST=FAIL new_candidate_not_relinked' >&2; exit 1
+  fi
+  echo 'COHORT_GNU_MTIME_REBASE_SELFTEST=PASS immutable_bytes=true source_older=true candidate_relink=true'
+  exit 0
+fi
 if (( $# != 6 )); then
   echo "usage: $0 <src> <out> <minic> <gold-provenance> <objects-file> <evidence-dir>" >&2
   exit 64
@@ -126,6 +170,36 @@ restore_gcc() {
 }
 trap restore_gcc EXIT
 echo "COHORT_GOLDEN=PASS objects=$n"
+# The former exact-head GNU preflight itself recompiled 2069 unchanged GNU C
+# objects, then restored the SAME dirty cached tree. Every later trial,
+# including a zero-MiniC trial, consequently exceeded the existing 64-CC
+# fail-fast bound. Repair only cache mtimes before taking the golden snapshot;
+# all original C SHA identities have already been proven above.
+if [[ "${COHORT_GNU_PREFLIGHT_ALLOW_SEVEN_SHARD_VOLATILE:-0}" == 1 ||
+      "${COHORT_GNU_PREFLIGHT_ALLOW_SEVEN_RECEIVER_VOLATILE:-0}" == 1 ]]; then
+  mtime_qualified=0
+  if [[ "${COHORT_ACTION:-all}" == compile && "$cohort_scope" == SHARD_COMPILE_ONLY &&
+        "${COHORT_ALLOW_SHARD:-0}" == 1 ]] && ((n>=280 && n<=310)); then
+    mtime_qualified=1
+  elif [[ "${COHORT_ACTION:-all}" == verify &&
+          "$cohort_scope" == FULL_C_UNIVERSE ]] && ((n==2064)); then
+    mtime_qualified=1
+  fi
+  [[ "$mtime_qualified" == 1 &&
+     "$actual_cfg" == eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe &&
+     "$src" == "$repo/build/linux-runtime-gcc/linux-6.6.143" &&
+     "$out" == "$repo/build/linux-runtime-gcc/out" ]] || {
+    echo 'COHORT_GNU_MTIME_REBASE=FAIL unqualified_Kbuild_fixture' >&2; exit 6;
+  }
+  config_before=$(sha256sum "$out/.config" | cut -d' ' -f1)
+  image_before=$(sha256sum "$out/arch/riscv/boot/Image" | cut -d' ' -f1)
+  rebase_seven_kbuild_fixture_mtimes "$src" "$out"
+  [[ "$(sha256sum "$out/.config" | cut -d' ' -f1)" == "$config_before" &&
+     "$(sha256sum "$out/arch/riscv/boot/Image" | cut -d' ' -f1)" == "$image_before" ]] || {
+    echo 'COHORT_GNU_MTIME_REBASE=FAIL immutable_bytes_changed' >&2; exit 6;
+  }
+  echo "COHORT_GNU_MTIME_REBASE=PASS source_older=true output_newer=true C_owners=$n original_GNU_SHA_unchanged=true"
+fi
 # Preserve a COMPLETE immutable GCC output tree, not only the selected .o
 # files. Linux Kbuild mutates generated headers, vDSO offsets, .cmd metadata,
 # built-in archives and kallsyms during intermediate target builds. Restoring
@@ -154,12 +228,52 @@ echo "COHORT_GOLDEN_SNAPSHOT=PASS bytes=$(du -sb "$gold_snapshot" | cut -f1)"
 # the fixture into the current runner can make its own GCC Image without
 # recompiling any certified reference object.
 echo "COHORT_GNU_PREFLIGHT=START"
-make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
-  -j4 Image >"$ev/gcc-preflight.log" 2>&1 || {
-    echo "COHORT_GNU_PREFLIGHT=FAIL stage=kbuild"
-    tail -n 80 "$ev/gcc-preflight.log"
-    exit 5
-  }
+if [[ "${COHORT_GNU_PREFLIGHT_ALLOW_SEVEN_SHARD_VOLATILE:-0}" == 1 ||
+      "${COHORT_GNU_PREFLIGHT_ALLOW_SEVEN_RECEIVER_VOLATILE:-0}" == 1 ]]; then
+  # SHA-identical GNU C objects may still hide a whole-kernel rebuild.
+  # Enforce the SAME <=64 CC invariant at preflight as at candidate link,
+  # aborting a dirty Kbuild graph before wasting another full compile.
+  setsid make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+    -j4 Image >"$ev/gcc-preflight.log" 2>&1 &
+  preflight_pid=$!
+  preflight_full_cc=0
+  while kill -0 "$preflight_pid" 2>/dev/null; do
+    preflight_cc_lines=$(grep -Ec '^  CC[[:space:]]+' "$ev/gcc-preflight.log" || true)
+    if ((preflight_cc_lines>64)); then
+      echo "COHORT_GNU_PREFLIGHT_FAST_FAIL=UNEXPECTED_CC count=$preflight_cc_lines bound=64" >&2
+      kill -TERM -- "-$preflight_pid" 2>/dev/null || true
+      wait "$preflight_pid" 2>/dev/null || true
+      preflight_full_cc=1
+      break
+    fi
+    sleep 2
+  done
+  preflight_rc=0
+  if ((preflight_full_cc)); then
+    preflight_rc=96
+  else
+    wait "$preflight_pid" || preflight_rc=$?
+  fi
+  # A fast or already exited make may finish before the first 2s poll.
+  # Recount the COMPLETE log after wait so this fail-closed bound cannot
+  # incorrectly accept a deterministic but whole-kernel GCC recompile.
+  preflight_cc_final=$(grep -Ec '^  CC[[:space:]]+' "$ev/gcc-preflight.log" || true)
+  if ((preflight_cc_final>64)); then
+    if (( ! preflight_full_cc )); then
+      echo "COHORT_GNU_PREFLIGHT_FAST_FAIL=UNEXPECTED_CC_FINAL count=$preflight_cc_final bound=64" >&2
+    fi
+    preflight_rc=96
+  fi
+else
+  preflight_rc=0
+  make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+    -j4 Image >"$ev/gcc-preflight.log" 2>&1 || preflight_rc=$?
+fi
+if ((preflight_rc!=0)); then
+  echo "COHORT_GNU_PREFLIGHT=FAIL stage=kbuild rc=$preflight_rc"
+  tail -n 80 "$ev/gcc-preflight.log"
+  exit 5
+fi
 # Kernel Kbuild regenerates usr/initramfs_data.o from its generated .S
 # incbin/cpio payload when a cached golden build is replayed on another
 # runner.  This is NOT an original C owner and does not participate in the

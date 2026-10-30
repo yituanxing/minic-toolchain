@@ -166,6 +166,57 @@ for arch in riscv32-linux riscv64-linux x86_64-linux aarch64-linux loongarch64-l
     -fsigned-char -funsigned-char -S "$work/unsigned.i" -o "$work/last-driver.s"
   cmp "$work/last.s" "$work/last-driver.s"
 done
+# Linux/LoongArch64 Kbuild uses LP64S (-mabi=lp64s -msoft-float), while
+# userland defaults to LP64D. The compiler must own the ABI choice; GNU AS
+# merely annotating a default-LP64D object as LP64S is not an ABI proof.
+cat >"$work/loong-lp64s-integer.i" <<'SRC'
+extern double declared_but_unused(double);
+struct floating_data_only { double value; };
+static unsigned long counter;
+unsigned long loong_kernel_integer(unsigned long x, unsigned long y) {
+    counter += x;
+    return counter ^ y ^ sizeof(struct floating_data_only);
+}
+SRC
+"$MINIC_CC" --target=loongarch64-linux -mabi=lp64s \
+  -S "$work/loong-lp64s-integer.i" -o "$work/loong-soft-cc.s"
+"$MINIC" --target=loongarch64-linux -mabi=lp64s \
+  -S "$work/loong-lp64s-integer.i" -o "$work/loong-soft-driver.s"
+cmp "$work/loong-soft-cc.s" "$work/loong-soft-driver.s"
+"$MINIC_CC" --target=loongarch64-linux -mabi=lp64d \
+  -S "$work/loong-lp64s-integer.i" -o "$work/loong-double-explicit.s"
+"$MINIC_CC" --target=loongarch64-linux \
+  -S "$work/loong-lp64s-integer.i" -o "$work/loong-double-default.s"
+cmp "$work/loong-double-explicit.s" "$work/loong-double-default.s"
+cat >"$work/loong-lp64s-float.i" <<'SRC'
+float loong_soft_not_implemented(float x, float y) { return x + y; }
+SRC
+cat >"$work/loong-lp64s-fp-record.i" <<'SRC'
+struct mixed_float_int { double value; int tag; };
+extern int consumes_mixed(struct mixed_float_int);
+int pass_mixed(struct mixed_float_int item) { return consumes_mixed(item); }
+SRC
+for compiler in "$MINIC_CC" "$MINIC"; do
+  for shape in float fp-record; do
+    if "$compiler" --target=loongarch64-linux -mabi=lp64s \
+        -S "$work/loong-lp64s-$shape.i" -o "$work/loong-soft-rejected.s" \
+        2>"$work/loong-soft-rejected.err"; then
+      echo "MINIC_TARGET_ABI_FLAGS=FAIL Loong LP64S emitted unsupported $shape ABI" >&2
+      exit 1
+    fi
+    test ! -e "$work/loong-soft-rejected.s"
+  done
+done
+for invalid in '-mabi=lp64f' '-mabi=lp64' '-march=loongarch64'; do
+  if "$MINIC_CC" --target=loongarch64-linux -mabi=lp64s "$invalid" \
+      -S "$work/loong-lp64s-integer.i" -o "$work/loong-bad-target.s" \
+      2>"$work/loong-bad-target.err"; then
+    echo "MINIC_TARGET_ABI_FLAGS=FAIL accepted unsupported Loong option:$invalid" >&2
+    exit 1
+  fi
+  test ! -e "$work/loong-bad-target.s"
+done
+echo 'MINIC_LOONGARCH_LP64S=PASS kernel_integer=1 float_and_record_fail_closed=1 default_lp64d=1'
 for profile in 'rv32i ilp32 riscv32-linux' 'rv64i lp64 riscv64-linux' \
   'rv64im lp64 riscv64-linux' 'rv64imafd lp64d riscv64-linux' \
   'rv64imafd lp64 riscv64-linux' \
