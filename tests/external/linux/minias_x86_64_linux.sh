@@ -151,13 +151,19 @@ if ! "${MINIAS:?}" "${minias_args[@]}" -o "$output" "$input"; then
     fi
     exit 1
 fi
-if [[ ! -s "$output" ]]; then
+if [[ "$output" != /dev/null && ! -s "$output" ]]; then
     echo "MINIAS_X86_AS_WRAPPER_ERROR empty_output=$output" >&2
+    printf 'fail cwd=%q input=%q output=%q reason=empty-output\n' \
+        "$PWD" "$input" "$output" >>"$MINIAS_AS_TRACE"
     exit 1
 fi
-if (( need_elf32 )) && ! readelf -h "$output" | grep -q 'Class:.*ELF32'; then
+# Kconfig's feature probes deliberately discard the successful assembly to
+# /dev/null. They must be counted as terminal MiniAS passes, while every real
+# production object still has to exist and have the requested ELF class.
+if [[ "$output" != /dev/null ]] && (( need_elf32 )) && ! readelf -h "$output" | grep -q 'Class:.*ELF32'; then
     echo "MINIAS_X86_AS_WRAPPER_ERROR required_ELF32_not_emitted input=$input output=$output" >&2
-    printf 'fail-elf-class input=%q output=%q\n' "$input" "$output" >>"$MINIAS_AS_TRACE"
+    printf 'fail cwd=%q input=%q output=%q reason=elf-class\n' \
+        "$PWD" "$input" "$output" >>"$MINIAS_AS_TRACE"
     exit 1
 fi
 printf 'pass cwd=%q input=%q output=%q\n' \
@@ -184,8 +190,15 @@ if MINIAS=/bin/false "$wrapper" --version -o "$image_out/probe-production.o" "$p
     echo 'MINIAS_AS_VERSION_PROBE=FAIL arch=x86_64 production_delegated' >&2
     exit 1
 fi
+# This is a real MiniAS feature probe whose successful result is deliberately
+# discarded. Its trace still needs the same assemble/pass lifecycle as a .o.
+printf '.text\nnop\n' >"$probe_input"
+if ! "$wrapper" -o /dev/null "$probe_input"; then
+    echo 'MINIAS_AS_DISCARD_PROBE=FAIL arch=x86_64 minias_to_dev_null' >&2
+    exit 1
+fi
 rm -f "$probe_input"
-echo 'MINIAS_AS_VERSION_PROBE=PASS arch=x86_64 query=1 production_gnu_as=0'
+echo 'MINIAS_AS_VERSION_PROBE=PASS arch=x86_64 query=1 production_gnu_as=0 discard_minias=1'
 
 started=$(date +%s)
 if ! make -C "$src" O="$image_out" ARCH=x86_64 \

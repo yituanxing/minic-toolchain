@@ -107,8 +107,11 @@ if [[ -z $out || -z $input ]]; then
 fi
 printf 'assemble cwd=%q input=%q output=%q\n' "$PWD" "$input" "$out" >>"$MINIAS_AS_TRACE"
 if "$MINIAS" "${options[@]}" -o "$out" "$input"; then
-  if [[ ! -s $out ]]; then
+  # Kconfig can intentionally assemble to /dev/null; those invocations are
+  # still MiniAS-owned and need a terminal pass in the provenance trace.
+  if [[ $out != /dev/null && ! -s $out ]]; then
     printf 'MINIAS_AS_WRAPPER_ERROR empty_output=%q\n' "$out" >&2
+    printf 'fail cwd=%q input=%q output=%q reason=empty-output\n' "$PWD" "$input" "$out" >>"$MINIAS_AS_TRACE"
     exit 1
   fi
   printf 'pass cwd=%q input=%q output=%q\n' "$PWD" "$input" "$out" >>"$MINIAS_AS_TRACE"

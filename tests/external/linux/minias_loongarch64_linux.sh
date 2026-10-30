@@ -148,8 +148,11 @@ if [[ -z "$input" || -z "$out" ]]; then
 fi
 printf 'assemble cwd=%q input=%q output=%q\n' "$PWD" "$input" "$out" >>"${MINIAS_AS_TRACE:?}"
 if "${MINIAS:?}" "${flags[@]}" -o "$out" "$input"; then
-  if [[ ! -s $out ]]; then
+  # Discard-only feature probes are real MiniAS invocations but cannot leave
+  # a nonempty file. Keep the nonempty guarantee on every production object.
+  if [[ $out != /dev/null && ! -s $out ]]; then
     echo "MINIAS_AS_WRAPPER_ERROR arch=loongarch64 empty_output=$out" >&2
+    printf 'fail cwd=%q input=%q output=%q reason=empty-output\n' "$PWD" "$input" "$out" >>"$MINIAS_AS_TRACE"
     exit 1
   fi
   printf 'pass cwd=%q input=%q output=%q\n' "$PWD" "$input" "$out" >>"$MINIAS_AS_TRACE"
