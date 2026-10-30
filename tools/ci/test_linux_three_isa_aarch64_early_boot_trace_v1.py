@@ -130,19 +130,59 @@ class EarlyBootTraceTest(unittest.TestCase):
         elf[18:20] = (183).to_bytes(2, "little")
         vmlinux.write_bytes(elf)
         nm = self.root / "aarch64-linux-gnu-nm"
+        runtime_vbar = 0xffffa8a0bec29800
+        slide = 0x40000000
+        fault_elr = 0xffffa8a0c34173a0
+        vector_vma = runtime_vbar - slide
+        instruction_vma = fault_elr - slide
         nm.write_text("#!/bin/sh\n"
-                      "printf 'ffff000010080000 T _text\\n'\n"
-                      "printf 'ffff000010081230 T early_fault_function\\n'\n")
+                      f"printf '{vector_vma:016x} T vectors\\n'\n"
+                      f"printf '{instruction_vma - 0x34:016x} T early_fault_function\\n'\n")
         nm.chmod(0o755)
         before = sha(vmlinux)
-        found = trace.resolve_kernel_symbols(vmlinux, nm,
-                                             ["0xffff000010081234", "0x40080000"])
+        # Exact original #41118175799 exception-entry trace grammar.
+        events = ("Taking exception 5 [IRQ] on CPU 0\n"
+                  "...from EL1 to EL1\n"
+                  "...with ESR 0x0/0x3890000\n"
+                  "...with ELR 0xffffa8a0bec2e9fc\n"
+                  "...to EL1 PC 0xffffa8a0bec29a80 PSTATE 0x3c5\n"
+                  "Taking exception 4 [Data Abort] on CPU 0\n"
+                  "...from EL1 to EL1\n"
+                  "...with ESR 0x25/0x96000047\n"
+                  "...with FAR 0xffff800080024b40\n"
+                  "...with ELR 0xffffa8a0c34173a0\n"
+                  "...to EL1 PC 0xffffa8a0bec29a00 PSTATE 0x3c5\n")
+        facts = trace.el1_vector_events(events)
+        self.assertEqual(facts["irq_entry_pcs"], ["0xffffa8a0bec29a80"])
+        self.assertEqual(facts["sync_entry_pcs"], ["0xffffa8a0bec29a00"])
+        self.assertEqual(facts["data_abort_facts"][0]["far"], "0xffff800080024b40")
+        self.assertEqual(facts["data_abort_facts"][0]["esr"], "0x25/0x96000047")
+        found = trace.strict_vector_kaslr_proof(facts, vmlinux, nm)
+        self.assertEqual(found["status"], "KASLR_SLIDE_PROVEN_TWO_EL1_VECTOR_ANCHORS")
+        self.assertEqual(found["runtime_vbar_el1"], "0xffffa8a0bec29800")
+        self.assertEqual(found["kaslr_slide"], "0x40000000")
         self.assertEqual(found["kernel_symbols_seen"], 2)
-        self.assertEqual(found["absolute_vma_matches"][0]["absolute_vma_match"]["symbol"],
-                         "early_fault_function")
-        self.assertEqual(found["absolute_vma_matches"][0]["absolute_vma_match"]["offset"],
-                         "0x4")
-        self.assertIsNone(found["absolute_vma_matches"][1]["absolute_vma_match"])
+        self.assertEqual(found["fault_symbolications"][0]["fault_instruction_elr"][
+            "nearest_executable_symbol"]["name"], "early_fault_function")
+        self.assertEqual(found["fault_symbolications"][0]["fault_instruction_elr"][
+            "nearest_executable_symbol"]["offset"], "0x34")
+        self.assertTrue(found["fault_symbolications"][0]["far_is_data_address_not_symbolicated"])
+        self.assertEqual(trace.strict_vector_kaslr_proof(facts)["status"], "UNKNOWN")
+        # Never infer a KASLR slide from one entry, conflicting vector PCs,
+        # a misaligned VBAR, or an ELF vectors symbol with wrong alignment.
+        missing_sync = dict(facts, sync_entry_pcs=[])
+        self.assertEqual(trace.strict_vector_kaslr_proof(missing_sync, vmlinux, nm)["status"],
+                         "UNKNOWN")
+        differing_sync = dict(facts, sync_entry_pcs=["0xffffa8a0bec29b00"])
+        self.assertEqual(trace.strict_vector_kaslr_proof(differing_sync, vmlinux, nm)["status"],
+                         "UNKNOWN")
+        two_irqs = dict(facts, irq_entry_pcs=["0xffffa8a0bec29a80", "0xffffa8a0bec2aa80"])
+        self.assertEqual(trace.strict_vector_kaslr_proof(two_irqs, vmlinux, nm)["status"],
+                         "UNKNOWN")
+        nm.write_text("#!/bin/sh\n"
+                      f"printf '{vector_vma + 0x800:016x} T vectors\\n'\n")
+        self.assertEqual(trace.strict_vector_kaslr_proof(facts, vmlinux, nm)["status"],
+                         "UNKNOWN")
         self.assertEqual(before, sha(vmlinux))
 
 

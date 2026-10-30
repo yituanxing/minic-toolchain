@@ -26,6 +26,7 @@ import time
 
 SCHEMA = "minic-aarch64-early-boot-trace-v1"
 VERDICT = "DIAGNOSTIC_ONLY_NEVER_GNU_OR_MINIC_RUNTIME_PASS"
+MASK64 = (1 << 64) - 1
 HEX = re.compile(r"^([0-9a-f]{64})$")
 PC_PATTERNS = (
     re.compile(r"\b(?:PC|ELR|pc|elr)\s*[:=]\s*(0x[0-9a-fA-F]+)"),
@@ -34,6 +35,11 @@ PC_PATTERNS = (
 EXCEPTION_PATTERNS = (
     re.compile(r"(?im)^.{0,180}(?:Exception|Data Abort|Instruction Abort|prefetch abort|fault|Reset).{0,180}$"),
 )
+QEMU_EXCEPTION_BEGIN = re.compile(r"(?m)^Taking exception (\d+) \[([^]]+)\] on CPU (\d+)\s*$")
+QEMU_ENTRY = re.compile(r"\.\.\.to EL1 PC (0x[0-9a-fA-F]+)\b")
+QEMU_ELR = re.compile(r"\.\.\.with ELR (0x[0-9a-fA-F]+)\b")
+QEMU_FAR = re.compile(r"\.\.\.with FAR (0x[0-9a-fA-F]+)\b")
+QEMU_ESR = re.compile(r"\.\.\.with ESR (\S+)\b")
 
 
 class DiagnosticError(ValueError):
@@ -118,14 +124,46 @@ def parse_trace(path: Path) -> dict:
     return {"guest_pc_or_elr_samples": pcs[:12],
             "exception_or_reset_samples": exceptions[:20],
             "debug_trace_bytes": path.stat().st_size,
-            "debug_trace_sha256": sha(path)}
+            "debug_trace_sha256": sha(path),
+            "raw_el1_vector_events": el1_vector_events(raw)}
 
 
-def resolve_kernel_symbols(vmlinux: Path, nm: Path, pcs: list[str]) -> dict:
-    """Read-only absolute VMA matching; do not invent an early KASLR slide."""
-    vmlinux = required(vmlinux, "original GNU-linked MiniC kernel vmlinux")
+def el1_vector_events(raw: str) -> dict:
+    """Extract QEMU's observed entry PCs, not inferred Linux symbol addresses."""
+    matches = list(QEMU_EXCEPTION_BEGIN.finditer(raw))
+    irq: list[int] = []
+    sync: list[int] = []
+    faults: list[dict] = []
+    for index, event in enumerate(matches):
+        if event.group(3) != "0" or event.group(2) not in ("IRQ", "Data Abort"):
+            continue
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(raw)
+        body = raw[event.end():end]
+        if "...from EL1 to EL1" not in body:
+            continue
+        destination = QEMU_ENTRY.search(body)
+        if destination is None:
+            continue
+        entry = int(destination.group(1), 16)
+        if event.group(2) == "IRQ" and event.group(1) == "5":
+            irq.append(entry)
+        elif event.group(2) == "Data Abort" and event.group(1) == "4":
+            sync.append(entry)
+            elr, far, esr = QEMU_ELR.search(body), QEMU_FAR.search(body), QEMU_ESR.search(body)
+            faults.append({"entry_pc": f"0x{entry:x}",
+                           "fault_elr": elr.group(1) if elr else None,
+                           "far": far.group(1) if far else None,
+                           "esr": esr.group(1) if esr else None})
+    return {"irq_count": len(irq), "sync_data_abort_count": len(sync),
+            "irq_entry_pcs": [f"0x{x:x}" for x in sorted(set(irq))],
+            "sync_entry_pcs": [f"0x{x:x}" for x in sorted(set(sync))],
+            "data_abort_facts": faults[-8:]}
+
+
+def kernel_nm_records(vmlinux: Path, nm: Path) -> tuple[list[tuple[int, str, str]], dict]:
+    """Immutable actual GNU ELF and sorted symbols, with no PC guesswork."""
+    vmlinux = required(vmlinux, "GNU-linked candidate AArch64 vmlinux")
     # Debian binutils may install a symlink to the actual .bfd executable.
-    # Preserve the user-selected executable spelling in the receipt/argv.
     nm = executable(nm, "GNU AArch64 nm binary")
     with vmlinux.open("rb") as stream:
         hdr = stream.read(64)
@@ -135,28 +173,93 @@ def resolve_kernel_symbols(vmlinux: Path, nm: Path, pcs: list[str]) -> dict:
     probe = subprocess.run([str(nm), "-n", str(vmlinux)], text=True,
                            capture_output=True, timeout=15)
     if probe.returncode or len(probe.stdout) > 16 * 1024**2:
-        raise DiagnosticError("bounded original GNU AArch64 nm failed")
+        raise DiagnosticError("bounded GNU AArch64 nm -n failed")
     records: list[tuple[int, str, str]] = []
     for line in probe.stdout.splitlines():
         match = re.match(r"^([0-9a-fA-F]{16})\s+([A-Za-z])\s+(\S+)$", line)
         if match and match.group(2) not in ("a", "A", "U", "u"):
             records.append((int(match.group(1), 16), match.group(2), match.group(3)))
     records.sort()
-    addresses = [record[0] for record in records]
-    found = []
-    for value in pcs:
-        pc = int(value, 16)
-        index = bisect.bisect_right(addresses, pc) - 1
-        match = None
-        if index >= 0 and pc - addresses[index] <= 0x10000:
-            addr, typ, symbol = records[index]
-            match = {"symbol": symbol, "symbol_type": typ,
-                     "symbol_vma": f"0x{addr:x}", "offset": f"0x{pc - addr:x}"}
-        found.append({"observed_pc": value, "absolute_vma_match": match,
-                      "runtime_relocation_slide_unknown": match is None})
-    return {"vmlinux_sha256": sha(vmlinux), "gnu_nm_binary": str(nm),
-            "gnu_nm_sha256": sha(nm), "kernel_symbols_seen": len(records),
-            "absolute_vma_matches": found}
+    return records, {"vmlinux_sha256": sha(vmlinux),
+                     "gnu_nm_binary": str(nm), "gnu_nm_sha256": sha(nm),
+                     "kernel_symbols_seen": len(records)}
+
+
+def strict_vector_kaslr_proof(facts: dict, vmlinux: Path | None = None,
+                              nm: Path | None = None) -> dict:
+    """Map a fault only after TWO independent EL1 SPx IRQ/Sync vector anchors.
+
+    ARM64 VBAR_EL1 current-EL/SPx entries are Sync +0x200 and IRQ +0x280.
+    QEMU logs both `...to EL1 PC` destinations. A lone IRQ, conflicting
+    entries, unaligned VBAR or a non-2MiB GNU vectors slide is insufficient.
+    KASLR and physical boot-PC mapping are never guessed from one address.
+    """
+    result: dict = {"status": "UNKNOWN", "reason": "need consistent IRQ and Data Abort EL1 entries",
+                    "runtime_vbar_el1": None, "kaslr_slide": None,
+                    "fault_symbolications": []}
+    irq, sync = facts.get("irq_entry_pcs"), facts.get("sync_entry_pcs")
+    if (not isinstance(irq, list) or not isinstance(sync, list) or
+            len(irq) != 1 or len(sync) != 1 or
+            facts.get("irq_count", 0) < 1 or facts.get("sync_data_abort_count", 0) < 1):
+        return result
+    irq_pc, sync_pc = int(irq[0], 16), int(sync[0], 16)
+    irq_vbar, sync_vbar = irq_pc - 0x280, sync_pc - 0x200
+    if (irq_vbar != sync_vbar or not 0 <= irq_vbar <= MASK64 or
+            irq_vbar % 0x800 != 0):
+        result["reason"] = "IRQ +0x280 and Sync +0x200 disagree or VBAR is not 2KiB aligned"
+        return result
+    result["runtime_vbar_el1"] = f"0x{irq_vbar:x}"
+    result["vector_entry_anchor_status"] = "CONSISTENT_EL1_SPX_TWO_ANCHORS"
+    if vmlinux is None or nm is None:
+        result["reason"] = "consistent VBAR observed; GNU vectors ELF/nm unavailable"
+        return result
+    records, metadata = kernel_nm_records(vmlinux, nm)
+    result.update(metadata)
+    vector_vmas = {addr for addr, typ, name in records
+                   if name == "vectors" and typ in ("T", "t", "W", "w")}
+    if len(vector_vmas) != 1:
+        result["reason"] = "GNU AArch64 nm has no unique executable vectors symbol"
+        return result
+    vectors_vma = next(iter(vector_vmas))
+    if vectors_vma % 0x800:
+        result["reason"] = "original vectors ELF symbol not 2KiB aligned"
+        return result
+    slide = (irq_vbar - vectors_vma) & MASK64
+    if slide % (2 * 1024 * 1024):
+        result["reason"] = "derived GNU vectors KASLR slide is not 2MiB aligned"
+        result["original_vectors_vma"] = f"0x{vectors_vma:x}"
+        return result
+    # Only text/function symbols can be near an executable exception ELR.
+    executable = sorted((addr, typ, name) for addr, typ, name in records
+                        if typ in ("T", "t", "W", "w"))
+    addresses = [item[0] for item in executable]
+
+    def symbolize(pc: str | None) -> dict | None:
+        if pc is None:
+            return None
+        observed = int(pc, 16)
+        original = (observed - slide) & MASK64
+        index = bisect.bisect_right(addresses, original) - 1
+        nearest = None
+        if index >= 0 and original - addresses[index] <= 0x10000:
+            addr, typ, label = executable[index]
+            nearest = {"name": label, "type": typ,
+                       "original_symbol_vma": f"0x{addr:x}",
+                       "offset": f"0x{original - addr:x}"}
+        return {"observed_runtime_pc": pc, "unrelocated_vma": f"0x{original:x}",
+                "nearest_executable_symbol": nearest}
+
+    result.update(status="KASLR_SLIDE_PROVEN_TWO_EL1_VECTOR_ANCHORS",
+                  reason="IRQ/Sync VBAR agree and GNU vectors yields 2MiB-aligned slide",
+                  original_vectors_vma=f"0x{vectors_vma:x}",
+                  kaslr_slide=f"0x{slide:x}",
+                  fault_symbolications=[{
+                      "original_raw_fault": fault,
+                      "fault_instruction_elr": symbolize(fault.get("fault_elr")),
+                      "exception_entry_pc": symbolize(fault.get("entry_pc")),
+                      "far_is_data_address_not_symbolicated": True}
+                      for fault in facts.get("data_abort_facts", [])])
+    return result
 
 
 def limits(max_bytes: int, timeout: int):
@@ -229,17 +332,15 @@ def run(image: Path, initramfs: Path, failed_p0: Path, gnu_receipt: Path,
               "diagnostic_serial_bytes": serial.stat().st_size,
               "diagnostic_serial_sha256": sha(serial),
               "image_header": image_header(image), **parse_trace(trace)}
-    if vmlinux is not None:
-        try:
-            if nm is None:
-                raise DiagnosticError("--vmlinux requires GNU --nm")
-            report["kernel_absolute_symbol_diagnostic"] = resolve_kernel_symbols(
-                vmlinux, nm, report["guest_pc_or_elr_samples"])
-        except (OSError, ValueError, subprocess.SubprocessError) as exc:
-            # Losing optional ELF symbolization may never discard the raw
-            # CPU exception trace, which remains the primary diagnostic.
-            report["kernel_absolute_symbol_diagnostic"] = {
-                "status": "UNAVAILABLE", "reason": str(exc)[:500]}
+    try:
+        report["kernel_vector_kaslr_diagnostic"] = strict_vector_kaslr_proof(
+            report["raw_el1_vector_events"], vmlinux, nm)
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        # Losing GNU nm or ELF provenance cannot create a speculative PC
+        # mapping; keep every original QEMU raw exception/ELR/FAR fact.
+        report["kernel_vector_kaslr_diagnostic"] = {
+            "status": "UNKNOWN", "reason": str(exc)[:500],
+            "fault_symbolications": []}
     unchanged = {"image": sha(image), "initramfs": sha(initramfs),
                  "empty_p0": sha(failed_p0), "gnu_receipt": sha(gnu_receipt)}
     report["original_inputs_unchanged"] = unchanged == input_shas
@@ -253,6 +354,7 @@ def run(image: Path, initramfs: Path, failed_p0: Path, gnu_receipt: Path,
           f"trace_bytes={report['debug_trace_bytes']} "
           f"pc_samples={len(report['guest_pc_or_elr_samples'])} "
           f"exception_samples={len(report['exception_or_reset_samples'])} "
+          f"kaslr={report['kernel_vector_kaslr_diagnostic']['status']} "
           "GNU_Image_unchanged=1 candidate_verdict_unchanged=1")
     return report
 

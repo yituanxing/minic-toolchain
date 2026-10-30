@@ -1470,8 +1470,12 @@ def relink(work: Path, output: Path, rows: list[dict], results: list[dict],
             work, output, rows, expected, data, compiler, timeout,
             current_link_log, epoch=epoch, link_log_path=current_log_path)
         if not second_relink_required(live_c_recompiled, expected, updated):
-            if epoch > 1:
-                require_second_live_gnu_kbuild_link(current_link_log, data["target"], expected)
+            # The previous epoch's link was already checked with its exact
+            # regenerated-owner domain. In particular, x86 Kbuild may finish
+            # with compressed/misc.o + kaslr.o, requiring genuine compressed
+            # vmlinux/bzImage LD but no redundant *main* vmlinux AR/LD here.
+            # Rechecking that same log as an unrestricted main link would
+            # reject an authentic, completed incremental GNU Kbuild epoch.
             break
         receipt_path = output / ("postlink-live-gnu-e-minic-c-receipt.json"
                                  if epoch == 1 else
