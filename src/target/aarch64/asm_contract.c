@@ -3443,6 +3443,7 @@ static bool aarch64_linux_uaccess_source(
     Aarch64UaccessForm form;
     const MinicExpression *err, *data, *pointer;
     MinicType err_type, data_type;
+    size_t data_bytes, data_alignment;
 
     if (!program || !src || !contract || !src->is_volatile || src->is_goto ||
         src->output_count != (size_t)(2U - (src->input_count == 2U)) ||
@@ -3475,6 +3476,10 @@ static bool aarch64_linux_uaccess_source(
         !minic_type_equal(err_type, minic_type_int()) ||
         (!minic_type_is_integer(data_type) &&
          !(form.width == 8U && minic_type_is_pointer(data_type))) ||
+        !minic_data_layout_type(minic_aarch64_linux_data_layout(), program,
+                                data_type, &data_bytes, &data_alignment) ||
+        (data_bytes != 1U && data_bytes != 2U &&
+         data_bytes != 4U && data_bytes != 8U) ||
         !minic_type_is_pointer(pointer->type))
         return false;
     contract->operand_count = 3U;
@@ -3495,7 +3500,8 @@ static bool aarch64_linux_uaccess_emit(
     const MinicCoreStructuredInlineAsmOperand *op =
         ins->value.structured_inline_asm.operands;
     MinicType err_type, data_type;
-    size_t i;
+    size_t i, data_bytes = 0U, data_alignment;
+    const char *writeback = NULL;
 
     if (!out || !fn || !form || !info || !info->is_volatile || info->is_goto ||
         ctx->dynamic_frame || info->register_clobber_count != 0U ||
@@ -3517,8 +3523,26 @@ static bool aarch64_linux_uaccess_emit(
         !minic_type_equal(err_type, minic_type_int()) ||
         (form->is_load &&
          (!minic_type_pointee(fn->values[op[1].value].type, &data_type) ||
-          !minic_type_is_integer(data_type))) ||
+          (!minic_type_is_integer(data_type) &&
+           !(form->width == 8U && minic_type_is_pointer(data_type))) ||
+          !ctx->target || !ctx->target->data_layout || !ctx->program ||
+          !minic_data_layout_type(ctx->target->data_layout, ctx->program,
+                                  data_type, &data_bytes, &data_alignment))) ||
         !minic_type_is_pointer(fn->values[op[2].value].type)) return false;
+    /* GNU =r output registers are widened to W/X, but the C destination
+     * remains a 1/2/4/8-byte object. The old unconditional STR X10 silently
+     * overwrote adjacent fields of packed u8/u16 output objects. Preserve
+     * the original LDTR fault/fixup register indices while narrowing only
+     * the compiler-owned C writeback. */
+    if (form->is_load) {
+        switch (data_bytes) {
+        case 1U: writeback = "  strb w10, [x12]\n"; break;
+        case 2U: writeback = "  strh w10, [x12]\n"; break;
+        case 4U: writeback = "  str w10, [x12]\n"; break;
+        case 8U: writeback = "  str x10, [x12]\n"; break;
+        default: return false;
+        }
+    }
 
     /* x9 is the original +r error, x10 the transferred value, x11 the
      * user pointer, x12 the lvalue address. The fault fixup needs the
@@ -3545,12 +3569,9 @@ static bool aarch64_linux_uaccess_emit(
             form->is_load ? 10U : 31U) < 0 ||
         !aarch64_privileged_owned_x(out, ctx, 12U, op[0].value) ||
         fputs("  str w9, [x12]\n", out) == EOF) return false;
-    /* FIXME(MC-052): ldtrb/ldtrh/ldtr w10 accept 1/2/4-byte output
-     * objects, but the unconditional str x10 below overwrites 8 bytes.
-     * Select the writeback width from a validated output type/ISA form. */
     if (form->is_load &&
         (!aarch64_privileged_owned_x(out, ctx, 12U, op[1].value) ||
-         fputs("  str x10, [x12]\n", out) == EOF)) return false;
+         fputs(writeback, out) == EOF)) return false;
     return true;
 }
 

@@ -521,6 +521,47 @@ def preserve_link_failed_c_owners(work: Path, output: Path, rows: list[dict],
     return report
 
 
+def summarize_gnu_link_failures(log_text: str) -> dict:
+    """Index authentic GNU LD failures without guessing their source owner.
+
+    The complete linker stream remains the authority.  This bounded index
+    makes a new exact-head campaign comparable before its artifacts are
+    downloaded; it neither changes Kbuild nor suppresses any diagnostic.
+    """
+    undefined: Counter[str] = Counter()
+    relocations: Counter[str] = Counter()
+    for line in log_text.splitlines():
+        for symbol in re.findall(
+                r"undefined reference to [`'‘’]?([^\s`'‘’]+)", line):
+            undefined[symbol] += 1
+        if "relocation truncated to fit" in line:
+            match = re.search(r"relocation truncated to fit:\s*(\S+)", line)
+            relocations[match.group(1) if match else "unknown"] += 1
+    categories = Counter()
+    for symbol, count in undefined.items():
+        if symbol.startswith("__compiletime_assert_"):
+            category = "compiletime_assert"
+        elif symbol.startswith(("__field_overflow", "__bad_copy_")):
+            category = "object_bounds"
+        elif symbol.startswith("kallsyms_"):
+            category = "kallsyms"
+        elif "BTF" in symbol:
+            category = "btf"
+        elif symbol.startswith("__cfi_"):
+            category = "cfi"
+        else:
+            category = "other"
+        categories[category] += count
+    return {"schema": "minic-three-isa-gnu-link-failures-v1",
+            "diagnostics_only": True,
+            "undefined_references": sum(undefined.values()),
+            "undefined_symbols": len(undefined),
+            "categories": dict(sorted(categories.items())),
+            "symbols": [{"name": name, "references": count}
+                        for name, count in sorted(undefined.items())],
+            "truncated_relocations": dict(sorted(relocations.items()))}
+
+
 def verify_postlink_c_owners(out: Path, output: Path, target: str,
                              expected: dict[str, str]) -> dict:
     """Re-enumerate live GNU Kbuild ELF64 C owners after the final relink.
@@ -948,6 +989,16 @@ def relink(work: Path, output: Path, rows: list[dict], results: list[dict],
             (output / "aarch64-got-plt-postlink-error.txt").write_text(
                 str(exc)[:4096])
     if linked.returncode:
+        # The raw GNU LD stream can be tens of MiB.  Emit a small, exact-head
+        # count in the CI console while retaining the complete artifact.
+        summary = summarize_gnu_link_failures(linked.stdout)
+        (output / "gnu-link-failure-summary.json").write_text(
+            json.dumps(summary, sort_keys=True, indent=2) + "\n")
+        print(f"THREE_ISA_GNU_LINK_FAILURE_SUMMARY target={data['target']} "
+              f"references={summary['undefined_references']} "
+              f"symbols={summary['undefined_symbols']} "
+              f"categories={json.dumps(summary['categories'], sort_keys=True)} "
+              f"relocations={json.dumps(summary['truncated_relocations'], sort_keys=True)}")
         # Only after the original unchanged GNU Kbuild command has failed,
         # retain a bounded set of its *authentic frozen GNU C* error owners.
         # This is postmortem evidence, not a linker retry or a GNU C fallback.
@@ -1048,6 +1099,15 @@ def self_test() -> None:
     assert set(TARGETS) == {"x86_64", "aarch64", "loongarch64"}
     assert len(ALLOWED_CFLAGS) == 16
     assert len(LINUX_SHA) == 64
+    link_summary = summarize_gnu_link_failures(
+        "ld: mm/gup.o: undefined reference to `__compiletime_assert_707'\n"
+        "ld: fs/exec.o: undefined reference to '__field_overflow'\n"
+        "ld: fs/exec.o: undefined reference to `__compiletime_assert_707'\n"
+        "ld: relocation truncated to fit: R_LARCH_B26 against `start_secondary'\n")
+    assert link_summary["undefined_references"] == 3
+    assert link_summary["undefined_symbols"] == 2
+    assert link_summary["categories"] == {"compiletime_assert": 2, "object_bounds": 1}
+    assert link_summary["truncated_relocations"] == {"R_LARCH_B26": 1}
     assert positional_c_sources([
         "aarch64-linux-gnu-gcc", "-E", "-P", "-include",
         "lib/vdso/gettimeofday.c", "-imacros", "generated/macros.c",

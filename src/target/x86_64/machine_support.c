@@ -56,6 +56,10 @@ bool x86_value_load(FILE *out, const MinicX86Frame *frame, MinicCoreValueId id,
 bool x86_value_store(FILE *out, const MinicX86Frame *frame, MinicCoreValueId id) {
     if (frame == NULL || id >= frame->value_count ||
         frame->value_offsets == NULL) return false;
+    /* The producer's instruction has already run. Only its dead SSA result
+     * may be omitted, never effects on memory, globals, flags, or calls. */
+    if (frame->function_value_use_counts != NULL &&
+        frame->function_value_use_counts[id] == 0U) return true;
     return fprintf(out, "  movq %%rax, -%zu(%%rbp)\n", frame->value_offsets[id]) >= 0;
 }
 
@@ -93,6 +97,8 @@ bool x86_i128_store(FILE *out, const MinicX86Frame *frame, MinicCoreValueId id,
         frame->value_offsets == NULL || low == NULL || high == NULL) return false;
     offset = frame->value_offsets[id];
     if (offset < 16U) return false;
+    if (frame->function_value_use_counts != NULL &&
+        frame->function_value_use_counts[id] == 0U) return true;
     return fprintf(out,
         "  movq %s, -%zu(%%rbp)\n"
         "  movq %s, -%zu(%%rbp)\n", low, offset, high, offset - 8U) >= 0;

@@ -261,6 +261,7 @@ jobs:
             ${{ github.workspace }}/build/minic-linux-gnu-runtime-${{ matrix.target }}/candidate/link-failure-owner-diagnostics/
             ${{ github.workspace }}/build/minic-linux-gnu-runtime-${{ matrix.target }}/candidate/link-failure-owner-diagnostic-error.txt
             ${{ github.workspace }}/build/minic-linux-gnu-runtime-${{ matrix.target }}/candidate/gnu-ld-relink.log
+            ${{ github.workspace }}/build/minic-linux-gnu-runtime-${{ matrix.target }}/candidate/gnu-link-failure-summary.json
             ${{ github.workspace }}/build/minic-linux-gnu-runtime-${{ matrix.target }}/candidate/c-section-sizes.json
             ${{ github.workspace }}/build/minic-linux-gnu-runtime-${{ matrix.target }}/candidate/link-layout/
             ${{ github.workspace }}/build/minic-linux-gnu-runtime-${{ matrix.target }}/candidate/vdso-diagnostics/

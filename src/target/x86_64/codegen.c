@@ -12,6 +12,7 @@
 #include "target/x86_64/abi.h"
 #include "target/x86_64/frame.h"
 #include "target/x86_64/codegen_options.h"
+#include "core/value_uses.h"
 
 #include <inttypes.h>
 #include <limits.h>
@@ -39,6 +40,7 @@ static bool x86_emit_function(FILE *out, const MinicC0Program *program,
     size_t block_index;
     MinicCoreBlockWalk walk = {0};
     bool *reachable = NULL;
+    size_t *function_value_use_counts = NULL;
     bool success = false;
     {
         const bool named = name != NULL && name[0] != '\0';
@@ -76,6 +78,21 @@ static bool x86_emit_function(FILE *out, const MinicC0Program *program,
         x86_error(diag, path, "x86-64 cannot discover reachable Core blocks");
         goto done;
     }
+    if (fn->value_count > SIZE_MAX / sizeof(*function_value_use_counts) ||
+        (function_value_use_counts = (size_t *)calloc(
+            fn->value_count == 0U ? 1U : fn->value_count,
+            sizeof(*function_value_use_counts))) == NULL) {
+        x86_error(diag, path, "x86-64 cannot allocate Core value-use census");
+        goto done;
+    }
+    /* One canonical pass for all blocks; a Core value that has no consumers
+     * anywhere in the function does not need a spill writeback. */
+    if (!minic_core_function_value_use_counts(
+            fn, function_value_use_counts, fn->value_count)) {
+        x86_error(diag, path, "x86-64 cannot count Core function SSA uses");
+        goto done;
+    }
+    frame.function_value_use_counts = function_value_use_counts;
     if (declaration->section_name != NULL) {
         if (fprintf(out, ".section %s,\"ax\",@progbits\n", declaration->section_name) < 0)
             goto done;
@@ -273,6 +290,7 @@ static bool x86_emit_function(FILE *out, const MinicC0Program *program,
                      ".p2align 3\n  .quad %s\n", name) < 0) goto done;
     success = true;
 done:
+    free(function_value_use_counts);
     free(reachable);
     minic_x86_64_frame_destroy(&frame);
     return success;

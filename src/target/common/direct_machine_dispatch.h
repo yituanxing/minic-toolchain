@@ -5,8 +5,10 @@
 #include "target/common/direct_block_context.h"
 #include "target/common/direct_instruction_semantics.h"
 #include "target/common/direct_program_emit.h"
+#include "core/value_uses.h"
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -42,6 +44,8 @@ static inline bool minic_multi_direct_machine_dispatch(
     const MinicCoreFunction *fn;
     const MinicCoreBlock *block;
     bool *reachable;
+    size_t *value_use_counts = NULL;
+    bool have_value_use_counts = false;
     bool success = false;
     size_t block_id;
     if (out == NULL || ctx == NULL || ctx->program == NULL ||
@@ -52,6 +56,20 @@ static inline bool minic_multi_direct_machine_dispatch(
         dispatch->store_gp == NULL || dispatch->emit_terminator == NULL)
         return false;
     fn = ctx->fn;
+    /* A Core result without any semantic use needs no machine frame
+     * writeback. Preserve the actual instruction and all memory/volatile/
+     * atomic effects; this only discards an unused SSA copy. The same Core
+     * use visitor already owns duplicate operands and terminator uses for
+     * the stack-slot reuse planner, so targets must not guess liveness.
+     * If the optional census cannot be allocated, retain legacy writebacks. */
+    if (fn->value_count != 0U &&
+        fn->value_count <= SIZE_MAX / sizeof(*value_use_counts)) {
+        value_use_counts = (size_t *)malloc(
+            fn->value_count * sizeof(*value_use_counts));
+        if (value_use_counts != NULL)
+            have_value_use_counts = minic_core_function_value_use_counts(
+                fn, value_use_counts, fn->value_count);
+    }
     /* The same source-label-aware CFG roots as RV32/RV64: ordinary entry,
      * externally entered labels, asm-goto and computed-goto destinations.
      * A GNU jump-table relocation can name a source label even when no
@@ -62,6 +80,7 @@ static inline bool minic_multi_direct_machine_dispatch(
     if (reachable == NULL || !minic_core_function_mark_reachable_blocks(
             fn, reachable, fn->block_count)) {
         free(reachable);
+        free(value_use_counts);
         return minic_multi_direct_machine_reject(
             fn, dispatch->architecture, ctx->name,
             "cfg_reachability", SIZE_MAX, SIZE_MAX, __LINE__);
@@ -123,6 +142,10 @@ static inline bool minic_multi_direct_machine_dispatch(
             /* Integer family results use only C integer/pointer width.
              * FP, ABI, memory and residual may produce double-width GP
              * transport, matching both prior target-local dispatchers. */
+            if (writeback && have_value_use_counts &&
+                ins->result != MINIC_CORE_VALUE_INVALID &&
+                value_use_counts[ins->result] == 0U)
+                writeback = false;
             if (writeback && !dispatch->store_gp(
                     out, ctx, ins, shape.result_offset,
                     shape.family != MINIC_DIRECT_MACHINE_INTEGER)) {
@@ -142,6 +165,7 @@ static inline bool minic_multi_direct_machine_dispatch(
     success = true;
 done:
     free(reachable);
+    free(value_use_counts);
     return success;
 }
 #endif

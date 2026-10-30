@@ -9,9 +9,18 @@ static bool aarch64_special_aggregate_member(
     const MinicC0Program *program, MinicType type, unsigned int depth) {
     size_t i;
     if (program == NULL || depth > 16U) return true;
-    /* FIXME(MC-066): pointers preserve a floating pointee base_kind here.
-     * Test indirection before FP-leaf classification, or a double* record
-     * member is mistaken for a floating aggregate member. */
+    /* The frontend retains a pointee's base_kind in pointer/array types.
+     * A double* member (including an array of such pointers) is INTEGER
+     * class, not an HFA leaf. Resolve the full indirection chain before
+     * inspecting floating base_kind. Actual float arrays still reject. */
+    if (minic_type_is_pointer(type)) return false;
+    if (minic_type_is_array(type)) {
+        const MinicArrayType *array =
+            minic_c0_program_array_type(program, type.array_type_id);
+        return array == NULL ||
+               aarch64_special_aggregate_member(
+                   program, array->element_type, depth + 1U);
+    }
     switch (type.base_kind) {
     case MINIC_TYPE_BASE_FLOAT:
     case MINIC_TYPE_BASE_DOUBLE:
@@ -29,13 +38,6 @@ static bool aarch64_special_aggregate_member(
         return true;
     default:
         break;
-    }
-    if (minic_type_is_array(type)) {
-        const MinicArrayType *array =
-            minic_c0_program_array_type(program, type.array_type_id);
-        return array == NULL ||
-               aarch64_special_aggregate_member(
-                   program, array->element_type, depth + 1U);
     }
     if (minic_type_is_record(type)) {
         const MinicRecord *record =

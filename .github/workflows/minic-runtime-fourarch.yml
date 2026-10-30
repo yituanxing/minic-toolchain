@@ -27,6 +27,9 @@ on:
       - "tests/compiler/c0/x86_linux_cmpxchg16b_alt.c"
       - "tests/compiler/c0/probe-aarch64-fixmap-cross-static-const-bug-asm.sh"
       - "tests/compiler/c0/aarch64_fixmap_cross_static_const_bug_asm.c"
+      - "tests/compiler/c0/probe-aarch64-abi-audit-mc052-mc066.sh"
+      - "tests/compiler/audit/mc052_aarch64_uaccess_narrow_output.c"
+      - "tests/compiler/audit/mc066_aarch64_fp_pointer_aggregate.c"
       - "tests/compiler/c0/dynamic_stack_wide_spill.c"
       - "tests/compiler/c0/dynamic_stack_wide_spill_helper.c"
       - ".github/workflows/minic-runtime-fourarch.yml"
@@ -60,6 +63,9 @@ on:
       - "tests/compiler/c0/probe-aarch64-linux-volatile-mrs.sh"
       - "tests/compiler/c0/probe-aarch64-fixmap-cross-static-const-bug-asm.sh"
       - "tests/compiler/c0/aarch64_fixmap_cross_static_const_bug_asm.c"
+      - "tests/compiler/c0/probe-aarch64-abi-audit-mc052-mc066.sh"
+      - "tests/compiler/audit/mc052_aarch64_uaccess_narrow_output.c"
+      - "tests/compiler/audit/mc066_aarch64_fp_pointer_aggregate.c"
       - "tests/compiler/c0/probe-direct-lp64-weak-section-qemu.sh"
       - "tests/compiler/c0/probe-lp64-indirect-record-abi-qemu.sh"
       - "tests/compiler/c0/probe-aarch64-indirect-record-return-qemu.sh"
@@ -228,6 +234,13 @@ jobs:
           command -v aarch64-linux-gnu-objcopy
           MINIC_CC="$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc" \
             sh tests/compiler/c0/probe-aarch64-fixmap-cross-static-const-bug-asm.sh
+      - name: AArch64 uaccess narrow output and FP-pointer ABI GNU QEMU differential
+        if: matrix.target == 'aarch64'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC_CC="$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc" \
+            sh tests/compiler/c0/probe-aarch64-abi-audit-mc052-mc066.sh
       - name: Prove RV32 ILP32 target model and strict ELF32 assembler
         if: matrix.target == 'riscv64'
         shell: bash

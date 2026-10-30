@@ -1365,7 +1365,16 @@ check-loongarch64-frame-fold: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
 	bash tests/compiler/c0/probe-loongarch64-frame-fold.sh
 
-check-fast: check-loongarch64-record-copy-size check-loongarch64-frame-fold
+.PHONY: check-core-value-use-counts
+check-core-value-use-counts:
+	bash tests/compiler/c0/probe-core-value-use-counts.sh
+
+.PHONY: check-core-dead-ssa-writeback
+check-core-dead-ssa-writeback: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	bash tests/compiler/c0/probe-core-dead-ssa-writeback.sh
+
+check-fast: check-loongarch64-record-copy-size check-loongarch64-frame-fold check-core-value-use-counts check-core-dead-ssa-writeback
 
 .PHONY: check-gnu-builtin-constant-p-if-guard
 check-gnu-builtin-constant-p-if-guard: $(MINIC_CC_BINARY)
