@@ -311,45 +311,130 @@ def verify_postlink_c_owners(out: Path, output: Path, target: str,
     return report
 
 
-def preserve_vdso_symbol_differential(out: Path, staged: Path,
-                                       output: Path, rows: list[dict],
-                                       target: str) -> None:
-    """Retain the exact GNU and MiniC vDSO objects when Kbuild drops .so.dbg.
+def vdso_c_owners(rows: list[dict], target: str) -> list[dict]:
+    """Find all C-owned vDSO inputs, including each ISA's vDSO glue object."""
+    prefixes = {
+        "x86_64": ("arch/x86/entry/vdso/",),
+        "aarch64": ("arch/arm64/kernel/vdso/",),
+        "loongarch64": ("arch/loongarch/vdso/",),
+    }
+    glue = {
+        "x86_64": set(),
+        "aarch64": {"arch/arm64/kernel/vdso.o"},
+        "loongarch64": {"arch/loongarch/kernel/vdso.o"},
+    }
+    return sorted((row for row in rows if row["object"] in glue[target] or
+                   row["object"].startswith(prefixes[target])),
+                  key=lambda row: row["object"])
 
-    Linux x86's checkundef.sh only prints 'undefined symbols found' and then
-    make deletes the diagnostic ELF. Capture original/new nm -u and tiny C
-    object/assembly samples *before* overlay to identify a precise helper
-    without weakening the kernel's no-undefined VDSO contract.
+
+def gnu_vdso_assembly_command(work: Path, row: dict, data: dict,
+                              diagnostic_input: Path, diagnostic_asm: Path) -> list[str]:
+    """Replay GNU -S using the *frozen* original GNU -E input and .o.cmd flags.
+
+    This assembly is additional forensic evidence, not a replacement for the
+    independently built original GNU object; the original GNU .o remains the
+    ABI/link oracle. Never re-preprocess the C owner or rewrite Kbuild files.
     """
-    if target != "x86_64":
-        return
-    names = [r["object"] for r in rows if
-             r["object"].startswith("arch/x86/entry/vdso/") and
-             r["object"].rsplit("/", 1)[-1] in
-             {"vgetcpu.o", "vclock_gettime.o", "extable.o"}]
-    if not names:
-        raise Rejected("missing original x86 VDSO C owners for undefined-symbol differential")
+    name = PurePosixPath(row["object"])
+    cmd_path = work / "build" / name.parent / ("." + name.name + ".cmd")
+    argv, _, _, _ = frozen_kbuild_oracle().gnu_argv(
+        required(cmd_path).read_text(), data["gcc"], row["object"],
+        diagnostic_input.with_suffix(".unused.i"), data["target"])
+    if argv[:3] != [data["gcc"], "-E", "-P"]:
+        raise Rejected(f"invalid GNU -E replay for vDSO owner {name}")
+    source_indices = [i for i, token in enumerate(argv) if
+                      token.endswith(".c") and not token.startswith("-")]
+    if len(source_indices) != 1:
+        raise Rejected(f"ambiguous vDSO GNU C source: {name}")
+    # The frozen .i is a preprocessed C translation unit. -x cpp-output
+    # avoids a second preprocessor pass even with original Kbuild -I/-D flags.
+    argv = [data["gcc"], "-S", *argv[3:]]
+    source_index = source_indices[0] - 1
+    argv[source_index:source_index + 1] = ["-x", "cpp-output", str(diagnostic_input), "-x", "none"]
+    argv[-1] = str(diagnostic_asm)
+    return argv
+
+
+def preserve_vdso_relocation_differential(work: Path, staged: Path,
+                                          output: Path, rows: list[dict],
+                                          data: dict) -> None:
+    """Save strict GNU-vs-MiniC vDSO ELF and source evidence BEFORE overlay.
+
+    x86 checkundef and arm64's dynamic-relocation gate can delete the failing
+    .so.dbg. Save both original/staged C owner objects and target-readelf
+    relocations/symbols, target-nm undefined symbols, plus both assembly views.
+    The generated GNU .s is a diagnostic replay from frozen GNU .i; the
+    original GNU .o is always preserved unchanged and remains authoritative.
+    Diagnostic tool/replay failures are written to index.json, not used to
+    weaken or alter the original GNU Kbuild linker and runtime acceptance.
+    """
+    target = data["target"]
+    selected = vdso_c_owners(rows, target)
     diag = output / "vdso-diagnostics"
     diag.mkdir(parents=True, exist_ok=False)
-    report = []
-    for name in sorted(names):
-        for variant, obj in (("gnu", required(out / name)),
+    report = {"schema": "minic-three-isa-vdso-elf-ab-v1", "target": target,
+              "original_gnu_kbuild_objects_are_authoritative": True,
+              "gnu_assembly_origin": "gnu-S-replay-of-frozen-gnu-E-i-with-authentic-o.cmd-flags",
+              "diagnostic_only_never_changes_link_or_verdict": True,
+              "owners": [], "diagnostic_errors": []}
+    tools = {"readelf": data["cross"] + "readelf", "nm": data["cross"] + "nm"}
+    # Native x86 uses the host GNU binutils; the other two use target binutils.
+    for row in selected:
+        name = PurePosixPath(row["object"])
+        owner_dir = diag / name.with_suffix("")
+        owner_dir.mkdir(parents=True, exist_ok=False)
+        entry: dict = {"owner": str(name), "gnu_kbuild_cmd_sha256": row["cmd_sha256"],
+                       "frozen_input_sha256": row["sha256"], "variants": {}}
+        for variant, obj in (("gnu", required(work / "build" / name)),
                              ("minic", required(staged / name))):
-            suffix = PurePosixPath(name).name
-            destination = diag / f"{suffix}.{variant}.o"
-            shutil.copyfile(obj, destination)
-            nm = subprocess.run(["nm", "-u", "-A", str(destination)],
-                                text=True, capture_output=True, timeout=30)
-            (diag / f"{suffix}.{variant}.nm-u.txt").write_text(
-                nm.stdout + nm.stderr)
-            if nm.returncode:
-                raise Rejected(f"x86 VDSO undefined-symbol nm failed: {name} {variant}")
-            report.append({"owner": name, "kind": variant, "sha256": sha(obj),
-                           "nm_undefined": nm.stdout.splitlines()})
-        asm = required(staged / PurePosixPath(name).with_suffix(".s"))
-        shutil.copyfile(asm, diag / PurePosixPath(name).name.replace(".o", ".minic.s"))
-    (diag / "vdso-gnu-minic-undefined.json").write_text(
-        json.dumps(report, sort_keys=True, indent=2) + "\n")
+            copied = owner_dir / f"{variant}.o"
+            shutil.copyfile(obj, copied)
+            item: dict = {"object_sha256": sha(copied), "diagnostics": {}}
+            entry["variants"][variant] = item
+            for diagnostic, tool, options in (
+                ("readelf-rW", tools["readelf"], ["-rW"]),
+                ("readelf-sW", tools["readelf"], ["-sW"]),
+                ("nm-u", tools["nm"], ["-u"]),
+            ):
+                destination = owner_dir / f"{variant}.{diagnostic}.txt"
+                try:
+                    command = subprocess.run([tool, *options, str(copied)],
+                                             text=True, capture_output=True, timeout=30)
+                    destination.write_text(command.stdout + command.stderr)
+                    item["diagnostics"][diagnostic] = {"exit_code": command.returncode}
+                    if command.returncode:
+                        report["diagnostic_errors"].append(
+                            f"{name}:{variant}:{diagnostic}:rc={command.returncode}")
+                except (OSError, subprocess.TimeoutExpired) as exc:
+                    destination.write_text(f"DIAGNOSTIC_ERROR: {exc}\n")
+                    item["diagnostics"][diagnostic] = {"error": str(exc)}
+                    report["diagnostic_errors"].append(f"{name}:{variant}:{diagnostic}:{exc}")
+        mini_asm = required(staged / name.with_suffix(".s"))
+        shutil.copyfile(mini_asm, owner_dir / "minic.s")
+        frozen = required(work / "frozen" / row["input"])
+        shutil.copyfile(frozen, owner_dir / "original.gnu.i")
+        original_cmd = required(work / "build" / name.parent / ("." + name.name + ".cmd"))
+        shutil.copyfile(original_cmd, owner_dir / "original.gnu.o.cmd")
+        gnu_asm = owner_dir / "gnu.s"
+        try:
+            command = gnu_vdso_assembly_command(work, row, data, frozen, gnu_asm)
+            replay = subprocess.run(command, cwd=work / "build", text=True,
+                                    capture_output=True, timeout=60)
+            (owner_dir / "gnu-s-replay.stderr.txt").write_text(replay.stderr)
+            entry["gnu_assembly_replay_rc"] = replay.returncode
+            if replay.returncode or not gnu_asm.is_file() or not gnu_asm.stat().st_size:
+                report["diagnostic_errors"].append(f"{name}:gnu-S-replay:rc={replay.returncode}")
+        except (OSError, subprocess.TimeoutExpired, Rejected) as exc:
+            (owner_dir / "gnu-s-replay.stderr.txt").write_text(f"DIAGNOSTIC_ERROR: {exc}\n")
+            entry["gnu_assembly_replay_error"] = str(exc)
+            report["diagnostic_errors"].append(f"{name}:gnu-S-replay:{exc}")
+        report["owners"].append(entry)
+    report["verdict"] = ("VDSO_DIAGNOSTIC_COMPLETE" if selected and
+                         not report["diagnostic_errors"] else "VDSO_DIAGNOSTIC_PARTIAL")
+    (diag / "index.json").write_text(json.dumps(report, sort_keys=True, indent=2) + "\n")
+    print(f"THREE_ISA_VDSO_ELF_AB target={target} verdict={report['verdict']} "
+          f"owners={len(selected)} diagnostic_errors={len(report['diagnostic_errors'])}")
 
 
 def relink(work: Path, output: Path, rows: list[dict], results: list[dict],
@@ -366,7 +451,15 @@ def relink(work: Path, output: Path, rows: list[dict], results: list[dict],
         if sha(staged) != hash_:
             raise Rejected(f"corrupt staged MiniC object: {name}")
         elf_machine(staged, data["machine"])
-    preserve_vdso_symbol_differential(out, pool, output, rows, data["target"])
+    # Measure the SAME C owners before overlay destroys the disposable GNU
+    # originals. This is read-only evidence; failures cannot alter the GNU
+    # linker command, suppress its errors or certify the resulting Image.
+    diagnostics = module("minic_link_sections", "linux-three-isa-section-size-v1.py")
+    sizes = diagnostics.capture_comparison(
+        out, pool, rows, data["machine"], output / "c-section-sizes.json")
+    print(f"THREE_ISA_C_SECTION_DIAGNOSTIC target={data['target']} "
+          f"verdict={sizes['verdict']} owners={sizes.get('owners_measured', 0)}/{len(rows)}")
+    preserve_vdso_relocation_differential(work, pool, output, rows, data)
     # Mutate ONLY the disposable GNU Kbuild worktree after the original
     # GNU/QEMU receipt was produced and preserved.  Kbuild's original .cmd
     # dependency graph must rearchive every changed owner and relink.
@@ -382,6 +475,10 @@ def relink(work: Path, output: Path, rows: list[dict], results: list[dict],
     linked = subprocess.run(command, stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, text=True, env=env)
     (output / "gnu-ld-relink.log").write_text(linked.stdout)
+    layout = diagnostics.capture_link_layout(
+        out, output / "link-layout", data["target"], data["machine"])
+    print(f"THREE_ISA_LINK_LAYOUT_DIAGNOSTIC target={data['target']} "
+          f"verdict={layout['verdict']} map={layout['gnu_ld_map']}")
     if linked.returncode:
         raise Rejected(f"original GNU Kbuild relink failed rc={linked.returncode}")
     # Re-enumerate *all* live original-Kbuild C owners after the link, not just
@@ -452,6 +549,7 @@ def self_test() -> None:
     assert set(TARGETS) == {"x86_64", "aarch64", "loongarch64"}
     assert len(ALLOWED_CFLAGS) == 16
     assert len(LINUX_SHA) == 64
+    module("minic_link_sections_test", "linux-three-isa-section-size-v1.py").self_test()
     failures_checked = 0
     abi_row = {"object": "arch/loongarch/vdso/vgetcpu.o",
                "gnu_as_flags": ["-mabi=lp64s", "-mcmodel=normal", "-msoft-float"],
@@ -493,11 +591,11 @@ def self_test() -> None:
             failures_checked += 1
         else:
             raise AssertionError("LP64D candidate escaped original LP64S ELF guard")
-        # The x86 Linux VDSO checkundef oracle deletes its failing ELF and
-        # reports no symbol names. Preserve a reproducible GNU/MiniC owner
-        # pair with an introduced undefined helper as a regression oracle.
+        # x86 checkundef and arm64's relocation gate delete the failed ELF.
+        # Regress the full GNU/MiniC relocation and frozen-.i assembly A/B.
         vdso_owner = "arch/x86/entry/vdso/vgetcpu.o"
-        gnu_obj = Path(temp) / "vdso-gnu" / vdso_owner
+        vdso_work = Path(temp) / "vdso-work"
+        gnu_obj = vdso_work / "build" / vdso_owner
         mini_obj = Path(temp) / "vdso-mini" / vdso_owner
         for obj, program in ((gnu_obj, "ret"),
                              (mini_obj, "call __minic_vdso_missing_helper\nret")):
@@ -506,16 +604,46 @@ def self_test() -> None:
             source.write_text(".text\n.globl vdso_probe\nvdso_probe:\n" + program + "\n")
             subprocess.run(["gcc", "-x", "assembler", "-c", str(source),
                             "-o", str(obj)], check=True)
+        vdso_cmd = gnu_obj.parent / ".vgetcpu.o.cmd"
+        vdso_cmd.write_text(
+            f"savedcmd_{vdso_owner} := gcc -O2 -c -o {vdso_owner} "
+            "arch/x86/entry/vdso/vgetcpu.c\n")
+        vdso_i = vdso_work / "frozen/i/arch/x86/entry/vdso/vgetcpu.i"
+        vdso_i.parent.mkdir(parents=True)
+        vdso_i.write_text("int original_vdso_probe(void) { return 7; }\n")
+        vdso_row = {"object": vdso_owner, "cmd_sha256": sha(vdso_cmd),
+                    "input": "i/arch/x86/entry/vdso/vgetcpu.i", "sha256": sha(vdso_i)}
         vdso_output = Path(temp) / "vdso-candidate"
         vdso_output.mkdir()
-        preserve_vdso_symbol_differential(
-            Path(temp) / "vdso-gnu", Path(temp) / "vdso-mini",
-            vdso_output, [{"object": vdso_owner}], "x86_64")
-        diag = vdso_output / "vdso-diagnostics"
+        preserve_vdso_relocation_differential(
+            vdso_work, Path(temp) / "vdso-mini", vdso_output,
+            [vdso_row], {"target": "x86_64", "cross": "", "gcc": "gcc"})
+        diag = vdso_output / "vdso-diagnostics/arch/x86/entry/vdso/vgetcpu"
         assert "__minic_vdso_missing_helper" in (
-            diag / "vgetcpu.o.minic.nm-u.txt").read_text()
+            diag / "minic.nm-u.txt").read_text()
         assert "__minic_vdso_missing_helper" not in (
-            diag / "vgetcpu.o.gnu.nm-u.txt").read_text()
+            diag / "gnu.nm-u.txt").read_text()
+        assert "__minic_vdso_missing_helper" in (
+            diag / "minic.readelf-rW.txt").read_text()
+        assert "__minic_vdso_missing_helper" not in (
+            diag / "gnu.readelf-rW.txt").read_text()
+        for variant in ("gnu", "minic"):
+            assert (diag / f"{variant}.readelf-rW.txt").is_file()
+            assert (diag / f"{variant}.readelf-sW.txt").is_file()
+            assert (diag / f"{variant}.o").is_file()
+            assert (diag / f"{variant}.s").is_file()
+        assert "original_vdso_probe" in (diag / "gnu.s").read_text()
+        assert json.loads((vdso_output / "vdso-diagnostics/index.json").read_text())[
+            "verdict"] == "VDSO_DIAGNOSTIC_COMPLETE"
+        assert [row["object"] for row in vdso_c_owners(
+            [{"object": "arch/arm64/kernel/vdso.o"},
+             {"object": "arch/arm64/kernel/vdso/vgettimeofday.o"},
+             {"object": "arch/arm64/kernel/init.o"}], "aarch64")] == [
+                 "arch/arm64/kernel/vdso.o", "arch/arm64/kernel/vdso/vgettimeofday.o"]
+        assert len(vdso_c_owners([
+            {"object": "arch/loongarch/kernel/vdso.o"},
+            {"object": "arch/loongarch/vdso/vgetcpu.o"},
+            {"object": "arch/loongarch/vdso/vgettimeofday.o"}], "loongarch64")) == 3
         failures_checked += 1
         # Linux kernel/configs.o has a genuine Kbuild-relative .incbin path.
         # Wrong cwd is an AS failure even when MiniC emitted valid assembly.

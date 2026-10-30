@@ -1250,6 +1250,18 @@ typedef struct MinicStaticLocalAttributeContext {
     bool has_section;
 } MinicStaticLocalAttributeContext;
 
+/* Binding a function-scope static also records its semantic emission owner.
+ * The generated ELF name encodes a function id for uniqueness only; emission
+ * must never infer ownership by reparsing that name. */
+static bool bind_static_local_object(MinicParser *parser,
+                                     MinicSourceSpan name_span,
+                                     MinicGlobalObjectId object_id) {
+    return parser != NULL &&
+           minic_c0_program_set_global_object_owner(
+               parser->program, object_id, parser->current_function) &&
+           minic_parser_bind_scoped_global_object(parser, name_span, object_id);
+}
+
 static bool consume_static_local_interleaved_attribute(MinicParser *parser,
                                                        const MinicParsedAttribute *attribute,
                                                        void *opaque_context);
@@ -1317,7 +1329,7 @@ static bool parse_inferred_static_local_array(MinicParser *parser,
            static-local name to the same storage object. */
         parser->program->global_objects[object_id].type = object_type;
         parser->program->global_objects[object_id].is_read_only = minic_type_is_const(element_type);
-        if (!minic_parser_bind_scoped_global_object(parser, name_span, object_id)) {
+        if (!bind_static_local_object(parser, name_span, object_id)) {
             return false;
         }
         *out_object_id = object_id;
@@ -1358,7 +1370,7 @@ static bool parse_inferred_static_local_array(MinicParser *parser,
                                                 minic_type_is_const(element_type),
                                                 &object_id) ||
             !minic_parser_parse_static_storage_initializer_value(parser, object_id, object_type) ||
-            !minic_parser_bind_scoped_global_object(parser, name_span, object_id)) {
+            !bind_static_local_object(parser, name_span, object_id)) {
             if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
                 minic_parser_error(parser, "cannot initialize inferred static local array");
             }
@@ -1402,7 +1414,7 @@ static bool parse_static_local_record_initializer(MinicParser *parser,
                                             true,
                                             minic_type_is_const(declared_type),
                                             &object_id) ||
-        !minic_parser_bind_scoped_global_object(parser, name_span, object_id) ||
+        !bind_static_local_object(parser, name_span, object_id) ||
         !minic_parser_expect(parser, MINIC_TOKEN_EQUAL, "expected '=' after static record") ||
         !minic_parser_parse_static_storage_initializer_value(parser, object_id, declared_type)) {
         if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
@@ -1446,7 +1458,7 @@ static bool add_implicitly_zero_initialized_static_local(MinicParser *parser,
                                             minic_type_is_const(declared_type),
                                             &object_id) ||
         !minic_c0_global_object_set_zero_initialized(parser->program, object_id) ||
-        !minic_parser_bind_scoped_global_object(parser, name_span, object_id)) {
+        !bind_static_local_object(parser, name_span, object_id)) {
         if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
             minic_parser_error(parser, "cannot create implicit-zero static local storage");
         }
@@ -1561,7 +1573,7 @@ static bool parse_static_local_array_declarator(MinicParser *parser,
             minic_parser_error(parser, "cannot zero static local function-pointer array");
             return false;
         }
-        if (!minic_parser_bind_scoped_global_object(parser, name_span, array_object_id)) {
+        if (!bind_static_local_object(parser, name_span, array_object_id)) {
             return false;
         }
         *out_object_id = array_object_id;
@@ -1643,7 +1655,7 @@ static bool parse_static_local_array_declarator(MinicParser *parser,
         if (minic_type_is_pointer(declared_type)) {
             if (!minic_parser_parse_static_pointer_object_initializer(
                     parser, scalar_object_id, declared_type) ||
-                !minic_parser_bind_scoped_global_object(parser, name_span, scalar_object_id)) {
+                !bind_static_local_object(parser, name_span, scalar_object_id)) {
                 if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
                     minic_parser_error(parser, "cannot finalize static local pointer storage");
                 }
@@ -1664,7 +1676,7 @@ static bool parse_static_local_array_declarator(MinicParser *parser,
              !minic_c0_global_object_set_zero_initialized(parser->program, scalar_object_id)) ||
             (scalar_bits != 0U && !minic_c0_global_object_add_initializer_bits(
                                     parser->program, scalar_object_id, scalar_bits)) ||
-            !minic_parser_bind_scoped_global_object(parser, name_span, scalar_object_id)) {
+            !bind_static_local_object(parser, name_span, scalar_object_id)) {
             minic_parser_error(parser, "cannot finalize static local integer storage");
             return false;
         }
@@ -1716,7 +1728,7 @@ static bool parse_static_local_array_declarator(MinicParser *parser,
         minic_parser_error(parser, "cannot zero-initialize static local array object");
         return false;
     }
-    if (!minic_parser_bind_scoped_global_object(parser, name_span, object_id)) {
+    if (!bind_static_local_object(parser, name_span, object_id)) {
         return false;
     }
     *out_object_id = object_id;

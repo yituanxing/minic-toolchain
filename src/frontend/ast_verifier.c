@@ -1820,6 +1820,9 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
             }
         }
         if (object->name == NULL || !type_is_valid(program, target, object->type) ||
+            (object->owner_function != MINIC_FUNCTION_INVALID &&
+             (object->owner_function >= program->function_count ||
+              !object->is_internal || object->is_extern || object->is_tentative)) ||
             minic_type_is_function(object->type) || (object->is_internal && object->is_weak) ||
             (minic_type_is_void(object->type) && !object->is_extern) ||
             (object->is_extern &&

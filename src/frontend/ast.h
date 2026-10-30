@@ -553,6 +553,10 @@ typedef struct MinicGlobalUnionSelection {
 typedef struct MinicGlobalObject {
     char *name;
     size_t name_length;
+    /* Function-scope static storage (including __func__/literal backing) is
+     * owned by its defining function. File-scope objects have INVALID owner.
+     * A dead internal inline definition must not emit its local storage. */
+    MinicFunctionId owner_function;
     char *section_name;
     size_t section_name_length;
     MinicType type;
@@ -899,6 +903,17 @@ bool minic_c0_program_add_global_object(MinicC0Program *program,
                                         bool is_internal,
                                         bool is_read_only,
                                         MinicGlobalObjectId *global_object_id);
+bool minic_c0_program_set_global_object_owner(MinicC0Program *program,
+                                              MinicGlobalObjectId object_id,
+                                              MinicFunctionId owner_function);
+bool minic_c0_program_global_object_emittable(const MinicC0Program *program,
+                                              const MinicGlobalObject *object);
+/* Nullable O(F) snapshot for fast O(1) owner selection in object walks.
+ * NULL on allocation failure; callers may use the uncached predicate. */
+bool *minic_c0_program_build_global_owner_live_map(const MinicC0Program *program);
+bool minic_c0_program_global_object_emittable_with_map(
+    const MinicC0Program *program, const MinicGlobalObject *object,
+    const bool *owner_live_map);
 bool minic_c0_program_add_extern_global_object(MinicC0Program *program,
                                                const char *name,
                                                size_t name_length,

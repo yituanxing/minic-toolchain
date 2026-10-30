@@ -28,8 +28,10 @@ static unsigned long local_zero_extent(void) {
     return sizeof(slots);
 }
 
-static unsigned long sectioned_static_object(void) {
-    static const __attribute__((section(".rodata.gnu.front")))
+/* This test asserts actual ELF section emission; keep the owner and object
+ * explicitly even when whole-program Core folding makes the call dead. */
+static __attribute__((used)) unsigned long sectioned_static_object(void) {
+    static const __attribute__((used, section(".rodata.gnu.front")))
         unsigned long values[] = { 17UL, 23UL };
     return values[1];
 }

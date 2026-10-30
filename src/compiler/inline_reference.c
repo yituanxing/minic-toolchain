@@ -12,6 +12,7 @@
  * Function bodies remain from the validated monolithic optimizer. */
 static bool minic_inline_integer_source_has_residual_reference(
     const MinicC0Program *program, MinicFunctionId source_id) {
+    bool *owner_live;
     size_t expression_index;
     size_t function_index;
     size_t object_index;
@@ -27,18 +28,24 @@ static bool minic_inline_integer_source_has_residual_reference(
             return true;
         }
     }
+    owner_live = minic_c0_program_build_global_owner_live_map(program);
     for (object_index = 0U; object_index < program->global_object_count; ++object_index) {
         const MinicGlobalObject *object = &program->global_objects[object_index];
         size_t relocation_index;
+        if (!minic_c0_program_global_object_emittable_with_map(
+                program, object, owner_live))
+            continue;
         for (relocation_index = 0U; relocation_index < object->relocation_count;
              ++relocation_index) {
             const MinicGlobalRelocation *relocation = &object->relocations[relocation_index];
             if (relocation->target_kind == MINIC_GLOBAL_RELOCATION_FUNCTION &&
                 (MinicFunctionId)relocation->target_id == source_id) {
+                free(owner_live);
                 return true;
             }
         }
     }
+    free(owner_live);
     for (expression_index = 0U; expression_index < program->expression_count;
          ++expression_index) {
         const MinicExpression *expression = &program->expressions[expression_index];

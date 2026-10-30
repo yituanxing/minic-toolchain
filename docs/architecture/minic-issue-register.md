@@ -97,6 +97,7 @@
 | [MC-040](#mc-040-嵌套-switch-labels-重复全量扫描) | P3 | DEBT | SOURCE-TRACE | 同一 nested switch 先检测再构造，两次收集标签 |
 | [MC-046](#mc-046-aarch64-两个特殊-asm-路径引用默认-target-layout) | P2 | DEBT | SOURCE-TRACE | A64 特例借用默认 RV64 DataLayout，目前字段相同但接口错误耦合 |
 | [MC-054](#mc-054-inline-symbolic-恒假表达式残留) | P3 | DEBT | SOURCE-TRACE | Inline 静态表达式深度函数保留无消费者意义的 `&& false` 分支，周边 fallback 仍活跃 |
+| [MC-068](#mc-068-always_inline-未实际展开且外部-clone-造成-init-段生命周期失配) | P1 | DEBT | CI-LOG/SOURCE-TRACE | `always_inline` 只解析未落实强制展开；独立 `.text` clone 引用 `.init.text`，GNU modpost 证实 section mismatch |
 
 ## 条目详情与验收门槛
 
@@ -574,6 +575,14 @@
 - **位置/失配：** `src/frontend/parser_record.c:minic_parser_parse_record_definition` 使用浅拷贝 lexer lookahead 仅匹配 `struct IDENTIFIER ;` 为 forward，遇 `struct __attribute__((aligned(16))) Forward;` 时错误调度到 `minic_parser_parse_record_definition_specifier`，后者要求 `{`，报 `expected '{' after record specifier`。其余没有属性的 tag forward 路径可用。
 - **持久反例：** `tests/compiler/audit/mc067_attributed_record_forward_declaration.c`；GCC `-std=gnu11 -Wall` 正常编译无警告、x86 native exit4；MiniC x86/A64/RV32/RV64/Loong `-S` **0/5 PASS**。`-DMC067_PLAIN_CONTROL` 仅移除属性，同一五目标 **5/5 PASS**。
 - **修复与验收：** 将 record declaration-head 的 attribute 和 tag 识别先统一到 tokenizer/parsed-specifier contract，再区分 forward 与 complete definition；覆盖 `struct`/`union`、属性在 tag 前后、重复声明、同名 scope，不要用多个更深的 Parser 浅复制来规避语义状态。
+
+### MC-068 always_inline 未实际展开且外部 Clone 造成 init 段生命周期失配
+
+- **状态：** `DEBT`，**P1 架构正确性债务**，`CI-LOG/SOURCE-TRACE`；尚未修复、未完成 GNU 差分验收，也**没有证据宣称已出现运行时 UAF**。
+- **精确证据：** Linux 6.6.143、MiniC exact HEAD `f493adffa6b14d4bd4ac1877c2d6c503f79556aa` 的 [CI #41002539295](https://github.com/yituanxing/minic-toolchain/actions/runs/41002539295)，七路对象编译通过并进入 GNU Kbuild `MODPOST vmlinux.symvers`。GNU modpost 报 `__minic_inline_spec_8859_28+0x104 (.text) -> memblock_alloc_try_nid (.init.text)`、`__minic_inline_spec_6114_72+0xd4 (.text) -> memblock_phys_alloc_range (.init.text)` 等多条 section mismatch；也出现普通 inline wrapper `memblock_alloc_from (.text) -> memblock_alloc_try_nid (.init.text)`。**本次最终 GNU LD 因独立的 `__compiletime_assert_*` 未定义符号失败，不是这些 modpost 警告导致 LD 失败。**
+- **源代码链路：** `src/frontend/attribute.c:272–279` 已识别 `always_inline`/`__always_inline__`；`src/frontend/parser_function.c:function_attribute_class_is_parse_only`（约 `:54–68`）将 optimization 属性按 parse-only 处理，函数语义没有持久强制内联标记；`src/compiler/inline_integer.c:minic_add_inline_integer_specialization`（`:36–94`）生成可调用的 `__minic_inline_spec_*` 外部函数，仅在源函数显式有 `section_name` 时继承，其余落入默认 `.text`；`src/core/core_lower_calls.c`（约 `:804`）保留真实 `MINIC_CORE_INSTRUCTION_CALL`，而非将函数体纳入调用方。Linux `include/linux/memblock.h` 中 `memblock_alloc`、`memblock_phys_alloc` 为 `static __always_inline` 包装器，分别调用生命周期有限的 memblock init 函数。**这不是仅某个目标后端的特例；普通 `static inline` 未消除的同类跨段调用也须审计。**
+- **架构方向：** 让属性语义从 Frontend 穿过函数实例/声明合并和 Core IR；由统一、目标无关的 Core inliner 实施函数体展开及 CFG/参数/返回值/局部对象映射。`always_inline` 应保证可展开或提供明确不可展开诊断，不应悄然保留 out-of-line 调用；普通 inline 走独立的合法性及代价策略。不能简单把所有 clone 改成 `.init.text` 或关闭 modpost 告警，这会掩盖调用方生命周期边界。
+- **验收条件：** 新增持久的 GNU 差分最小用例：正常 `.text` 调用方、`__init` 调用方、`static __always_inline`/普通 `static inline` 多层包装，目标函数在 `.init.text`，以 GCC 和 MiniC→**GNU AS/GNU LD** 分别生成 ELF，严格比较符号、relocation、段间引用和执行结果；mandatory-inline 路径不得遗留可调用的 `__minic_inline_spec_*` 或因未展开而生成 `.text → .init.text` 非法引用。覆盖多出口、局部变量、aggregate、嵌套调用、递归/超预算、asm，在实际支持目标上运行 native/QEMU 差分。以新 exact HEAD 重做 Linux 2064 C-owner 对象 GNU Kbuild 链接、modpost 与同配置 GNU baseline 比较，消除 MiniC 引入的 section mismatch；继而运行 Linux QEMU P0/P1 与同一 Image 连续启动回归。逐项保留日志和构件 SHA；不能以 `-S` 100% 或“编译成功”替代链接/运行验收。关联 [MC-043](#mc-043-inline-整数特化预算耗尽直接拒绝合法-c) 的内联预算语义另行核对。
 
 ## 已核对并排除的误判（不要在未有新证据时重新打开）
 

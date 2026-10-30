@@ -96,6 +96,7 @@ jobs:
           set -Eeuo pipefail
           python3 -m py_compile tools/ci/linux-three-isa-gnu-qemu-v1.py \
             tools/ci/linux-three-isa-minic-candidate-v1.py \
+            tools/ci/linux-three-isa-section-size-v1.py \
             tools/ci/linux-four-isa-runtime-diff-v1.py
           python3 tools/ci/linux-three-isa-gnu-qemu-v1.py --self-test
           python3 tools/ci/linux-three-isa-minic-candidate-v1.py --self-test
@@ -243,6 +244,8 @@ jobs:
             ${{ github.workspace }}/build/minic-linux-gnu-runtime-${{ matrix.target }}/candidate/candidate-receipt.json
             ${{ github.workspace }}/build/minic-linux-gnu-runtime-${{ matrix.target }}/candidate/all-c-owners-result.json
             ${{ github.workspace }}/build/minic-linux-gnu-runtime-${{ matrix.target }}/candidate/gnu-ld-relink.log
+            ${{ github.workspace }}/build/minic-linux-gnu-runtime-${{ matrix.target }}/candidate/c-section-sizes.json
+            ${{ github.workspace }}/build/minic-linux-gnu-runtime-${{ matrix.target }}/candidate/link-layout/
             ${{ github.workspace }}/build/minic-linux-gnu-runtime-${{ matrix.target }}/candidate/vdso-diagnostics/
             ${{ github.workspace }}/build/minic-linux-gnu-runtime-${{ matrix.target }}/candidate/postlink-gnu-c-fallback.json
             ${{ github.workspace }}/build/minic-linux-gnu-runtime-${{ matrix.target }}/candidate/postlink-c-owner-census.json

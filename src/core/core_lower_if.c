@@ -666,15 +666,17 @@ minic_core_lower_if(MinicCoreLowerContext *context, const MinicStatement *statem
 
     continuation_block = context->block_id;
     context->block_id = condition_block;
-    minic_core_local_facts_restore(context, incoming_facts);
-    /* DOMINANCE_IF_GUARD_FACT_BARRIER: the restored incoming facts dominate
-     * the original condition block even though the then/else bodies were
-     * lowered first. A pure predicate may reuse them (including a known
-     * local queried by __builtin_constant_p inside a runtime ?: or &&).
-     * Unknown calls, mutations and volatile predicates still require the
-     * conservative known-fact barrier. */
-    if (!condition_is_pure)
-        minic_core_local_facts_clear_known(context);
+    /* DOMINANCE_IF_GUARD_FACT_BARRIER: both arms were lowered speculatively,
+     * but only incoming facts dominate the original condition block. For a
+     * pure condition they remain valid throughout its evaluation. For an
+     * impure condition reuse the effect-filtered branch-entry snapshot: it
+     * already invalidated every escaped or potentially modified local while
+     * retaining unrelated, unescaped constants. In particular, reading a
+     * volatile global or calling a function without access to an automatic
+     * local must not erase that local's __builtin_constant_p proof. Do not
+     * restore either branch-exit facts or an unfiltered impure snapshot. */
+    minic_core_local_facts_restore(
+        context, condition_is_pure ? incoming_facts : branch_entry_facts);
     if (context->source_function && context->source_function->name &&
         strcmp(context->source_function->name, "genl_op_from_split") == 0)
         (void)fprintf(stderr, "GENL_IF_PATH stage=pre_guard expr=%zu condition=%u then=%u else=%u need_merge=%d\n",

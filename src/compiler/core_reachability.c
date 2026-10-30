@@ -274,6 +274,8 @@ static bool minic_inline_source_has_noncore_root(
     for (object_index = 0U; object_index < program->global_object_count; ++object_index) {
         const MinicGlobalObject *object = &program->global_objects[object_index];
         size_t relocation_index;
+        if (!minic_c0_program_global_object_emittable(program, object))
+            continue;
         for (relocation_index = 0U; relocation_index < object->relocation_count;
              ++relocation_index) {
             const MinicGlobalRelocation *relocation = &object->relocations[relocation_index];
@@ -292,6 +294,7 @@ static bool minic_inline_source_has_noncore_root(
  * Allocation failure retains the previous per-function scan. */
 static bool *minic_build_noncore_root_index(const MinicC0Program *program) {
     bool *roots;
+    bool *owner_live;
     size_t function_index;
     size_t object_index;
 
@@ -303,6 +306,7 @@ static bool *minic_build_noncore_root_index(const MinicC0Program *program) {
     if (roots == NULL) {
         return NULL;
     }
+    owner_live = minic_c0_program_build_global_owner_live_map(program);
     for (function_index = 0U; function_index < program->function_count; ++function_index) {
         MinicFunctionId alias_target = program->functions[function_index].alias_target;
         if ((MinicFunctionId)function_index == program->entry_function ||
@@ -316,6 +320,9 @@ static bool *minic_build_noncore_root_index(const MinicC0Program *program) {
     for (object_index = 0U; object_index < program->global_object_count; ++object_index) {
         const MinicGlobalObject *object = &program->global_objects[object_index];
         size_t relocation_index;
+        if (!minic_c0_program_global_object_emittable_with_map(
+                program, object, owner_live))
+            continue;
         for (relocation_index = 0U; relocation_index < object->relocation_count;
              ++relocation_index) {
             const MinicGlobalRelocation *relocation = &object->relocations[relocation_index];
@@ -326,6 +333,7 @@ static bool *minic_build_noncore_root_index(const MinicC0Program *program) {
             }
         }
     }
+    free(owner_live);
     return roots;
 }
 

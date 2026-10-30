@@ -8,6 +8,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 /* A single ISA/ABI-independent translation-unit traversal for all five MiniC
  * targets. Only declaration filtering and visitation order live here.
@@ -51,12 +52,25 @@ static inline bool minic_program_visit_globals(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
     MinicProgramVisitGlobal visit, void *context) {
     size_t i;
+    bool *live_owners;
+    bool success = true;
     if (out == NULL || program == NULL || visit == NULL) return false;
-    for (i = 0U; i < program->global_object_count; ++i)
-        if (!visit(out, program, target, &program->global_objects[i],
-                   i, context))
-            return false;
-    return true;
+    /* Snapshot emitted owners once: GNU Linux TUs may contain thousands of
+     * static-local objects and inline clones. The hot visitor is O(F + G),
+     * not O(F * G); allocation failure uses the exact uncached predicate. */
+    live_owners = minic_c0_program_build_global_owner_live_map(program);
+    for (i = 0U; i < program->global_object_count; ++i) {
+        const MinicGlobalObject *object = &program->global_objects[i];
+        if (!minic_c0_program_global_object_emittable_with_map(
+                program, object, live_owners))
+            continue;
+        if (!visit(out, program, target, object, i, context)) {
+            success = false;
+            break;
+        }
+    }
+    free(live_owners);
+    return success;
 }
 
 static inline bool minic_program_visit_functions(

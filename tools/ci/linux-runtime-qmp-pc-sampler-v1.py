@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
-"""Read-only QMP register snapshots from an unchanged oversized RISC-V Image.
+"""Read-only QMP register snapshots from an unchanged RISC-V Linux Image.
 
-The complete initramfs/P1 oracle is deliberately NOT bypassed: this is a
-kernel-only early-frontier diagnostic used solely after ROM/initrd overlap.
+The complete initramfs/P1 oracle is deliberately NOT bypassed.  The original
+no-initrd probe is for ROM overlap; an optional mapped-initrd probe uses the
+same loader as a timed-out full-2064 P0 run without changing its verdict.
 No gdb, custom QEMU binary, extra runner or unpinned compiler is required.
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -17,7 +19,7 @@ import subprocess
 import time
 from pathlib import Path
 
-REGISTER = re.compile(r"(?im)(?:^|[ \t])(?:x[0-9]+/)?(pc|mepc|sepc|satp|mcause|scause|sp|ra|a[0-7]|t[0-6]|s(?:1[01]|[0-9]))\s+((?:0x)?[0-9a-f]{1,16})(?=\s|$)")
+REGISTER = re.compile(r"(?im)(?:^|[ \t])(?:x[0-9]+/)?(pc|mepc|sepc|satp|mcause|scause|stvec|mtvec|sstatus|mstatus|sscratch|mscratch|sie|sip|mie|mip|medeleg|mideleg|sp|ra|a[0-7]|t[0-6]|s(?:1[01]|[0-9]))\s+((?:0x)?[0-9a-f]{1,16})(?=\s|$)")
 STACK_FIRST_WORD = re.compile(r"(?m)^[0-9a-fA-F]{8,16}:\s*0x([0-9a-fA-F]{1,16})\b")
 MONITOR_WORD = re.compile(r"0x([0-9a-fA-F]{1,16})\b")
 
@@ -25,6 +27,28 @@ MONITOR_WORD = re.compile(r"0x([0-9a-fA-F]{1,16})\b")
 
 def selected_registers(text: str) -> dict[str, str]:
     return {name.lower(): value.lower() for name, value in REGISTER.findall(text)}
+
+
+def qemu_argv(qemu: str, image: Path, socket_path: Path, cmdline: str,
+              memory: str = "512M", dtb: Path | None = None,
+              initramfs: Path | None = None, initrd_load_addr: int | None = None) -> list[str]:
+    argv = [qemu, "-M", "virt", "-cpu", "max", "-m", memory,
+            "-smp", "1", "-nographic", "-no-reboot", "-bios", "default",
+            "-kernel", str(image)]
+    if dtb is not None and initramfs is not None and initrd_load_addr is not None:
+        argv.extend(["-dtb", str(dtb), "-device",
+                     f"loader,file={initramfs},addr=0x{initrd_load_addr:x},force-raw=on"])
+    argv.extend(["-append", cmdline,
+                 "-qmp", f"unix:{socket_path},server=on,wait=off"])
+    return argv
+
+
+def image_sha256(image: Path) -> str:
+    digest = hashlib.sha256()
+    with image.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def self_test() -> None:
@@ -40,11 +64,27 @@ def self_test() -> None:
     assert selected_registers("x12/a2 0000000000000001 x31/t6 0000000000000002 x27/s11 0000000000000003") == {
         "a2": "0000000000000001", "t6": "0000000000000002",
         "s11": "0000000000000003"}
+    assert selected_registers("stvec ffffffff80000000 sstatus 0000000000000120 "
+                              "scause 000000000000000d mideleg 0000000000003666") == {
+        "stvec": "ffffffff80000000", "sstatus": "0000000000000120",
+        "scause": "000000000000000d", "mideleg": "0000000000003666"}
     captured_stack = "ff2000000000b010: 0xff6000000d9f1128 0x0000000000000000"
     candidate = STACK_FIRST_WORD.search(captured_stack)
     assert candidate and int(candidate.group(1), 16) == 0xff6000000d9f1128
     assert MONITOR_WORD.findall("ff6000000d9f1128: 0xdead4ead00010001 0xffffffff 0xdeadbeef") == [
         "dead4ead00010001", "ffffffff", "deadbeef"]
+    plain = qemu_argv("qemu-system-riscv64", Path("Image"), Path("/tmp/test.sock"), "console=ttyS0")
+    assert plain[plain.index("-m") + 1] == "512M"
+    assert "-dtb" not in plain and "-device" not in plain and "-initrd" not in plain
+    mapped = qemu_argv("qemu-system-riscv64", Path("Image"), Path("/tmp/test.sock"),
+                       "console=ttyS0 earlycon=sbi loglevel=8 panic=-1 rdinit=/init",
+                       "2G", Path("full-crossblock-virt.dtb"), Path("runtime-initramfs.cpio.gz"),
+                       0xa0000000)
+    assert mapped[mapped.index("-m") + 1] == "2G"
+    assert mapped[mapped.index("-dtb") + 1] == "full-crossblock-virt.dtb"
+    assert mapped[mapped.index("-device") + 1] == (
+        "loader,file=runtime-initramfs.cpio.gz,addr=0xa0000000,force-raw=on")
+    assert mapped[mapped.index("-append") + 1].endswith("rdinit=/init")
     print("LINUX_RUNTIME_QMP_SAMPLER_SELFTEST=PASS")
 
 
@@ -64,7 +104,9 @@ def qmp_call(reader, writer, cmd: dict) -> object:
 
 def sample(image: Path, out: Path, timeout_s: int, qemu: str, samples: list[int],
            cmdline: str, stack_words: int, stop_during_snapshot: bool = False,
-           probe_lock_at_pc: int | None = None) -> int:
+           probe_lock_at_pc: int | None = None, memory: str = "512M",
+           dtb: Path | None = None, initramfs: Path | None = None,
+           initrd_load_addr: int | None = None) -> int:
     out.mkdir(parents=True, exist_ok=True)
     # GitHub Actions workspaces regularly exceed Linux's 108-byte AF_UNIX
     # sun_path limit. Use a short, unique per-process path instead of
@@ -72,14 +114,18 @@ def sample(image: Path, out: Path, timeout_s: int, qemu: str, samples: list[int]
     socket_path = Path(f"/tmp/minic-qmp-{os.getpid()}.sock")
     if socket_path.exists() or socket_path.is_symlink():
         socket_path.unlink()
-    console_path = out / "qemu-early-noinitrd.log"
+    console_path = out / ("qemu-mapped-initrd.log" if initramfs is not None
+                          else "qemu-early-noinitrd.log")
     result_path = out / "qemu-registers.jsonl"
     started = time.monotonic()
-    argv = [qemu, "-M", "virt", "-cpu", "max", "-m", "512M",
-            "-smp", "1", "-nographic", "-no-reboot", "-bios", "default",
-            "-kernel", str(image), "-append",
-            cmdline,
-            "-qmp", f"unix:{socket_path},server=on,wait=off"]
+    argv = qemu_argv(qemu, image, socket_path, cmdline, memory, dtb,
+                     initramfs, initrd_load_addr)
+    print(f"COHORT_QMP_LOADER mode={'mapped_initrd' if initramfs else 'no_initrd'} "
+          f"memory={memory} kernel={image} dtb={dtb or 'none'} "
+          f"initramfs={initramfs or 'none'} "
+          f"initrd_load_addr={hex(initrd_load_addr) if initrd_load_addr is not None else 'none'} "
+          f"cmdline={cmdline!r}",
+          flush=True)
     # Three QMP observations suffice to discriminate persistent earlycon
     # execution from post-earlycon progress without 18 seconds per trial.
     # Bound all sample points through the CLI; default is still the fast 1/4/8 probe.
@@ -232,6 +278,15 @@ def main() -> int:
     p.add_argument("--image", type=Path)
     p.add_argument("--output-dir", type=Path)
     p.add_argument("--qemu", default="qemu-system-riscv64")
+    p.add_argument("--memory", choices=("512M", "1G", "2G"), default="512M")
+    p.add_argument("--dtb", type=Path,
+                   help="same immutable device tree used by mapped-initrd runtime boot")
+    p.add_argument("--initramfs", type=Path,
+                   help="same original initramfs as the mapped-initrd runtime boot")
+    p.add_argument("--initrd-load-addr", type=lambda value: int(value, 0),
+                   help="physical loader address used by the original QEMU run")
+    p.add_argument("--expected-image-sha256",
+                   help="refuse to sample unless the Image matches the linked trial")
     p.add_argument("--timeout-seconds", type=int, default=25)
     p.add_argument("--kernel-cmdline", default="console=ttyS0 earlycon=sbi loglevel=8 panic=-1")
     p.add_argument("--stack-words", type=int, default=4)
@@ -249,6 +304,30 @@ def main() -> int:
         p.error("--image and --output-dir are required")
     if not args.image.is_file() or args.image.stat().st_size <= 0:
         p.error("image must be an existing non-empty file")
+    mapping_requested = [args.dtb is not None, args.initramfs is not None,
+                         args.initrd_load_addr is not None]
+    if any(mapping_requested) and not all(mapping_requested):
+        p.error("--dtb, --initramfs and --initrd-load-addr are required together")
+    if all(mapping_requested):
+        if not args.dtb.is_file() or not args.initramfs.is_file() or args.initramfs.stat().st_size == 0:
+            p.error("mapped-initrd requires an existing DTB and non-empty initramfs")
+        if args.initrd_load_addr <= 0 or args.initrd_load_addr >= 0x100000000:
+            p.error("initrd-load-addr must be a nonzero address below 4GiB")
+        guest_ram_end = 0x80000000 + {"512M": 512 << 20, "1G": 1 << 30,
+                                     "2G": 2 << 30}[args.memory]
+        image_end = 0x80200000 + args.image.stat().st_size
+        initrd_end = args.initrd_load_addr + args.initramfs.stat().st_size
+        if (image_end > args.initrd_load_addr or
+                initrd_end > guest_ram_end or initrd_end > 0x100000000):
+            p.error("mapped-initrd must not overlap kernel Image or exceed guest RAM")
+    if args.expected_image_sha256 is not None:
+        if not re.fullmatch(r"[0-9a-f]{64}", args.expected_image_sha256):
+            p.error("expected-image-sha256 must be lowercase SHA256")
+        actual_sha256 = image_sha256(args.image)
+        if actual_sha256 != args.expected_image_sha256:
+            p.error("immutable Image SHA256 mismatch")
+        print(f"COHORT_QMP_IMAGE_IDENTITY=PASS image_sha={actual_sha256} "
+              f"image_bytes={args.image.stat().st_size}")
     if not 20 <= args.timeout_seconds <= 120:
         p.error("timeout must allow the register sample")
     try:
@@ -266,7 +345,8 @@ def main() -> int:
         p.error("kernel-cmdline must be ASCII and at most 256 characters")
     return sample(args.image, args.output_dir, args.timeout_seconds, args.qemu,
                   moments, args.kernel_cmdline, args.stack_words,
-                  args.stop_during_snapshot, args.probe_lock_at_pc)
+                  args.stop_during_snapshot, args.probe_lock_at_pc,
+                  args.memory, args.dtb, args.initramfs, args.initrd_load_addr)
 
 
 if __name__ == "__main__":

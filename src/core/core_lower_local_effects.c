@@ -247,6 +247,14 @@ static void core_source_collect_expression(
                 depth + 1U);
         return;
     case MINIC_EXPRESSION_BUILTIN_UNARY:
+        /* __builtin_constant_p queries whether an operand is compile-time
+         * known; the operand is not executed even if it contains ++, calls
+         * or stores. Poisoning local facts for an unevaluated operand would
+         * discard valid proofs in later source conditions. Other unary
+         * builtins evaluate their operand and keep the normal effect scan. */
+        if (expression->value.builtin_unary.operator_kind ==
+            MINIC_BUILTIN_UNARY_CONSTANT_P)
+            return;
         core_source_collect_expression(
             scan, expression->value.builtin_unary.operand, depth + 1U);
         return;

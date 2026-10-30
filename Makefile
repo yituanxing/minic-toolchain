@@ -1335,7 +1335,17 @@ check-gnu-builtin-constant-p-if-guard: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
 	sh tests/compiler/c0/run-gnu-builtin-constant-p-if-guard.sh
 
-check-fast: check-gnu-builtin-constant-p-if-guard check-asm-operand-plan check-x86-linux-control-state check-linux-three-arch-trap-state check-x86-linux-uaccess-and-abi check-linux-symbolic-integer-and-record check-packed-bitfield-field-layout check-target-selection-m0 check-x86_64-m1 check-token-model check-lexer check-type check-record check-type-alias check-layout check-rv64-abi check-static-functions check-unsigned-declarations check-long-types check-for-loops check-unbounded-for-break check-prefix-decrement-update check-cast-expressions check-unsigned-char-layout check-pointer-subscripts check-pointer-arithmetic check-pointer-object-const check-const-locals check-global-objects check-bitwise-xor check-integer-bit-operations check-pointer-members check-expression-statements check-postfix-subscripts check-compound-xor-assignment $(MINIC_BINARY)
+.PHONY: check-gnu-runtime-if-effect-facts
+check-gnu-runtime-if-effect-facts: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/run-gnu-runtime-if-effect-facts.sh
+
+.PHONY: check-static-local-owner-reachability
+check-static-local-owner-reachability: $(MINIC_CC_BINARY)
+	MINIC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	bash tests/compiler/c0/run-static-local-owner-reachability.sh
+
+check-fast: check-static-local-owner-reachability check-gnu-runtime-if-effect-facts check-gnu-builtin-constant-p-if-guard check-asm-operand-plan check-x86-linux-control-state check-linux-three-arch-trap-state check-x86-linux-uaccess-and-abi check-linux-symbolic-integer-and-record check-packed-bitfield-field-layout check-target-selection-m0 check-x86_64-m1 check-token-model check-lexer check-type check-record check-type-alias check-layout check-rv64-abi check-static-functions check-unsigned-declarations check-long-types check-for-loops check-unbounded-for-break check-prefix-decrement-update check-cast-expressions check-unsigned-char-layout check-pointer-subscripts check-pointer-arithmetic check-pointer-object-const check-const-locals check-global-objects check-bitwise-xor check-integer-bit-operations check-pointer-members check-expression-statements check-postfix-subscripts check-compound-xor-assignment $(MINIC_BINARY)
 	MINIC="$(abspath $(MINIC_BINARY))" \
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
 	HOST_CC="$(CC)" \

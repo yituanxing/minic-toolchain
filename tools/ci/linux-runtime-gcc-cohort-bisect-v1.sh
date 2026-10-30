@@ -2660,76 +2660,9 @@ PY_LARGEST_TUS
       # SAME-TRIAL vmlinux symbols (not guessed GCC offsets). The 2064
       # object cache remains byte-identical throughout this diagnostic.
       if [[ -s "$d/qemu-registers.jsonl" && -s "$out/vmlinux" ]]; then
-        python3 - "$d/qemu-registers.jsonl" "$out/vmlinux" <<'PY_EARLY_SYMBOLS' | tee "$d/qmp-symbols.log"
-import bisect,json,subprocess,sys
-from pathlib import Path
-samples=Path(sys.argv[1])
-vmlinux=Path(sys.argv[2])
-nm=subprocess.run(["/usr/bin/riscv64-linux-gnu-nm","-n","--defined-only",str(vmlinux)],
-                  text=True,capture_output=True,check=False)
-if nm.returncode:
-    print(f"COHORT_QMP_SYMBOL=INCONCLUSIVE nm_rc={nm.returncode}")
-    raise SystemExit(0)
-pairs=[]
-for line in nm.stdout.splitlines():
-    fields=line.split(None,2)
-    if len(fields)==3 and fields[1] in {"t","T","w","W"}:
-        try:
-            pairs.append((int(fields[0],16),fields[2]))
-        except ValueError:
-            continue
-pairs.sort()
-addresses=[x[0] for x in pairs]
-layout={}
-for line in nm.stdout.splitlines():
-    cols=line.split(None,2)
-    if len(cols)==3 and cols[2] in ("__earlycon_table","__earlycon_table_end"):
-        try:
-            layout[cols[2]]=int(cols[0],16)
-        except ValueError:
-            pass
-if len(layout)==2:
-    span=layout["__earlycon_table_end"]-layout["__earlycon_table"]
-    print("COHORT_EARLYCON_TABLE_LAYOUT begin=0x%x end=0x%x span_bytes=%d "
-          "struct_earlycon_id_size_expected=152 remainder=%d" %
-          (layout["__earlycon_table"],layout["__earlycon_table_end"],
-           span,span%152))
-else:
-    print("COHORT_EARLYCON_TABLE_LAYOUT=INCOMPLETE names="+",".join(sorted(layout)))
-last_pcs=[]
-pc_symbols=[]
-for line in samples.read_text().splitlines():
-    sample=json.loads(line)
-    at=sample["at_seconds"]
-    regs=sample.get("registers",{})
-    for register in ("pc","mepc","sepc"):
-        raw=regs.get(register)
-        if not raw or not addresses:
-            continue
-        try:
-            addr=int(raw,16)
-        except ValueError:
-            continue
-        if register=="pc":
-            last_pcs.append(addr)
-        pos=bisect.bisect_right(addresses,addr)-1
-        if pos<0:
-            print(f"COHORT_QMP_SYMBOL at_s={at} reg={register} addr=0x{addr:x} symbol=BELOW_LINKED_TEXT")
-        else:
-            base,symbol=pairs[pos]
-            if register == "pc":
-                pc_symbols.append((at, symbol))
-            print(f"COHORT_QMP_SYMBOL at_s={at} reg={register} addr=0x{addr:x} "
-                  f"symbol={symbol} offset=0x{addr-base:x}")
-if len(last_pcs)>=2 and last_pcs[-1]==last_pcs[-2]:
-    print(f"COHORT_QMP_STABLE_PC=OBSERVED samples={len(last_pcs)} addr=0x{last_pcs[-1]:x}")
-from collections import Counter
-frequency = Counter(s for _,s in pc_symbols)
-print(f"COHORT_QMP_PC_DIVERSITY samples={len(last_pcs)} unique_pcs={len(set(last_pcs))} "
-      f"unique_functions={len(frequency)} last_symbol={pc_symbols[-1][1] if pc_symbols else 'UNAVAILABLE'}")
-for symbol,count in frequency.most_common(12):
-    print(f"COHORT_QMP_HOTSPOT samples={count} symbol={symbol}")
-PY_EARLY_SYMBOLS
+        python3 "$repo/tools/ci/linux-runtime-qmp-symbolize-v1.py" \
+          --samples "$d/qemu-registers.jsonl" --vmlinux "$out/vmlinux" \
+          | tee "$d/qmp-symbols.log"
         cat "$d/qmp-symbols.log" >>"$d/runtime.log"
       fi
       early_finished=$(date +%s%N)
@@ -2738,7 +2671,7 @@ PY_EARLY_SYMBOLS
       if grep -Eq 'Linux version 6\.6\.143|Kernel panic|Oops:|Unable to handle|BUG:' "$d/qemu-early-noinitrd.log"; then
         echo "COHORT_KERNEL_EARLY_FRONTIER=LINUX_SERIAL_BANNER trial=$name"
       elif [[ -s "$d/qmp-symbols.log" ]] && \
-           grep -Eq 'COHORT_QMP_SYMBOL at_s=[0-9]+ reg=pc .* symbol=' "$d/qmp-symbols.log"; then
+           grep -Eq 'COHORT_QMP_SYMBOL at_s=[0-9]+ reg=pc .* symbol=.+ offset=0x' "$d/qmp-symbols.log"; then
         # OpenSBI may be the only SERIAL output, while QMP proves the guest
         # PC has already reached a concrete linked Linux kernel function.
         echo "COHORT_KERNEL_EARLY_FRONTIER=LINUX_EXECUTING_PRE_BANNER trial=$name"
@@ -2786,6 +2719,58 @@ PY_EARLY_SYMBOLS
       # INCONCLUSIVE: a kernel-only probe cannot satisfy the PID1/P1 oracle.
       cat "$d/qemu-early-noinitrd.log" >>"$d/runtime.log"
       verdict=INCONCLUSIVE
+    fi
+    # FULL_2064_MAPPED_QMP_FRONTIER: a correctly linked oversized Image may
+    # pass the non-overlapping 2G/DTB/initrd loader yet emit only OpenSBI for
+    # the whole 45s fast-P0 window. Probe the *unchanged* Image again with
+    # precisely the same memory, custom DTB, initrd loader and kernel cmdline
+    # as runtime_boot.sh. A QMP register snapshot is evidence, never a P0/P1
+    # oracle: retain INCONCLUSIVE whatever the diagnostic reports.
+    if [[ "$name" == full_all && "$profile" == fast &&
+          "$verdict" == INCONCLUSIVE && "$large_full_image" == true &&
+          -s "$d/qemu/rdinit-init.log" &&
+          -n "${LINUX_RUNTIME_CUSTOM_DTB:-}" &&
+          -n "${LINUX_RUNTIME_INITRD_LOAD_ADDR:-}" &&
+          "${LINUX_RUNTIME_QEMU_MEMORY:-}" == 2G ]] &&
+       grep -Fq 'OpenSBI' "$d/qemu/rdinit-init.log" &&
+       ! grep -Eq 'Linux version 6\.6\.143|Kernel panic|Oops:|Unable to handle|BUG:' \
+         "$d/qemu/rdinit-init.log"; then
+      mapped_started=$(date +%s%N)
+      mapped_rc=0
+      if python3 "$repo/tools/ci/linux-runtime-qmp-pc-sampler-v1.py" --self-test &&
+         python3 "$repo/tools/ci/linux-runtime-qmp-symbolize-v1.py" --self-test; then
+        python3 "$repo/tools/ci/linux-runtime-qmp-pc-sampler-v1.py" \
+          --image "$d/Image" --expected-image-sha256 "$image_sha" \
+          --output-dir "$d" --memory 2G \
+          --dtb "$LINUX_RUNTIME_CUSTOM_DTB" \
+          --initramfs "$ev/runtime-initramfs.cpio.gz" \
+          --initrd-load-addr "$LINUX_RUNTIME_INITRD_LOAD_ADDR" \
+          --kernel-cmdline 'console=ttyS0 earlycon=sbi loglevel=8 panic=-1 rdinit=/init' \
+          --timeout-seconds 40 --sample-seconds 1,4,8,12,20,30 \
+          --stop-during-snapshot \
+          >"$d/qmp-probe.log" 2>&1 || mapped_rc=$?
+        cat "$d/qmp-probe.log" >>"$d/runtime.log"
+        grep -E 'COHORT_QMP_(LOADER|IMAGE_IDENTITY|EARLY|PAUSED_SNAPSHOT)' \
+          "$d/qmp-probe.log" || true
+        if [[ -s "$d/qemu-registers.jsonl" && -s "$out/vmlinux" ]]; then
+          python3 "$repo/tools/ci/linux-runtime-qmp-symbolize-v1.py" \
+            --samples "$d/qemu-registers.jsonl" --vmlinux "$out/vmlinux" \
+            | tee "$d/qmp-symbols.log"
+          cat "$d/qmp-symbols.log" >>"$d/runtime.log"
+        fi
+      else
+        mapped_rc=99
+        echo "COHORT_QMP_MAPPED=UNAVAILABLE reason=selftest_failed" | tee -a "$d/runtime.log"
+      fi
+      mapped_finished=$(date +%s%N)
+      image_sha_after=$(sha256sum "$d/Image" | cut -d' ' -f1)
+      if [[ "$image_sha_after" == "$image_sha" ]]; then
+        echo "COHORT_QMP_MAPPED_IMAGE=UNCHANGED image_sha=$image_sha_after"
+      else
+        echo "COHORT_QMP_MAPPED_IMAGE=ERROR image_sha_before=$image_sha image_sha_after=$image_sha_after"
+      fi
+      echo "COHORT_TIMING trial=$name stage=qemu_mapped_qmp elapsed_ms=$(((mapped_finished-mapped_started)/1000000)) rc=$mapped_rc"
+      echo "COHORT_QMP_MAPPED=DIAGNOSTIC_ONLY trial=$name original_p0=INCONCLUSIVE p1=NOT_RUN"
     fi
     # Reuse the existing Python-era 12-syscall P1 oracle after FULL PASS.
     # It boots the identical Image and initramfs, without a third link.

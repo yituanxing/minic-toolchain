@@ -774,11 +774,33 @@ static bool enqueue_emission_function(const MinicC0Program *program,
     return true;
 }
 
+/* A static local initializer may take the address of another inline
+ * function. This edge exists only if the local object's enclosing function
+ * will itself be emitted. File-scope globals are unconditional roots. */
+static bool enqueue_emission_global_relocations(const MinicC0Program *program,
+                                                const MinicGlobalObject *object,
+                                                bool *reachable,
+                                                MinicFunctionId *queue,
+                                                size_t *queue_count) {
+    size_t index;
+    for (index = 0U; index < object->relocation_count; ++index) {
+        const MinicGlobalRelocation *relocation = &object->relocations[index];
+        if (relocation->target_kind == MINIC_GLOBAL_RELOCATION_FUNCTION &&
+            !enqueue_emission_function(program,
+                                       (MinicFunctionId)relocation->target_id,
+                                       reachable, queue, queue_count))
+            return false;
+    }
+    return true;
+}
+
 bool minic_c0_program_recompute_inline_emission_references(MinicC0Program *program) {
     MinicFunctionBodyValidation validation;
     bool *reachable = NULL;
     bool *processed = NULL;
     MinicFunctionId *queue = NULL;
+    size_t *owned_global_heads = NULL;
+    size_t *owned_global_next = NULL;
     size_t queue_count = 0U;
     size_t queue_cursor = 0U;
     size_t function_index;
@@ -799,9 +821,18 @@ bool minic_c0_program_recompute_inline_emission_references(MinicC0Program *progr
     if (reachable == NULL || processed == NULL ||
         !allocate_array((void **)&queue,
                         program->function_count == 0U ? 1U : program->function_count,
-                        sizeof(*queue))) {
+                        sizeof(*queue)) ||
+        !allocate_array((void **)&owned_global_heads,
+                        program->function_count == 0U ? 1U : program->function_count,
+                        sizeof(*owned_global_heads)) ||
+        !allocate_array((void **)&owned_global_next,
+                        program->global_object_count == 0U ? 1U : program->global_object_count,
+                        sizeof(*owned_global_next))) {
         goto done;
     }
+
+    for (function_index = 0U; function_index < program->function_count; ++function_index)
+        owned_global_heads[function_index] = SIZE_MAX;
 
     /* Preserve the compiler's established emission policy for every definition
      * except internal inline functions. Those are the only entities for which
@@ -826,18 +857,15 @@ bool minic_c0_program_recompute_inline_emission_references(MinicC0Program *progr
     }
     for (object_index = 0U; object_index < program->global_object_count; ++object_index) {
         const MinicGlobalObject *object = &program->global_objects[object_index];
-        size_t relocation_index;
-        for (relocation_index = 0U; relocation_index < object->relocation_count;
-             ++relocation_index) {
-            const MinicGlobalRelocation *relocation = &object->relocations[relocation_index];
-            if (relocation->target_kind == MINIC_GLOBAL_RELOCATION_FUNCTION &&
-                !enqueue_emission_function(program,
-                                           (MinicFunctionId)relocation->target_id,
-                                           reachable,
-                                           queue,
-                                           &queue_count)) {
+        MinicFunctionId owner = object->owner_function;
+        if (owner == MINIC_FUNCTION_INVALID) {
+            if (!enqueue_emission_global_relocations(
+                    program, object, reachable, queue, &queue_count))
                 goto done;
-            }
+        } else {
+            if (owner >= program->function_count) goto done;
+            owned_global_next[object_index] = owned_global_heads[owner];
+            owned_global_heads[owner] = object_index;
         }
     }
 
@@ -849,6 +877,14 @@ bool minic_c0_program_recompute_inline_emission_references(MinicC0Program *progr
             continue;
         }
         processed[function_id] = true;
+        for (object_index = owned_global_heads[function_id];
+             object_index != SIZE_MAX;
+             object_index = owned_global_next[object_index]) {
+            if (!enqueue_emission_global_relocations(
+                    program, &program->global_objects[object_index],
+                    reachable, queue, &queue_count))
+                goto done;
+        }
         if (!validate_one_function(&validation, function_id)) {
             goto done;
         }
@@ -883,6 +919,8 @@ bool minic_c0_program_recompute_inline_emission_references(MinicC0Program *progr
     success = true;
 
 done:
+    free(owned_global_next);
+    free(owned_global_heads);
     free(queue);
     free(processed);
     free(reachable);
