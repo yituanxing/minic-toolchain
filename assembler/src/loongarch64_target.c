@@ -983,7 +983,14 @@ static bool la_parse_special_register_pattern(MiniAsMCInst *m,
             case LA_BANK_FPR:
                 valid=la_fpr_reg(args[arg],&reg);break;
             case LA_BANK_FCSR:
-                valid=la_special_reg(args[arg],"$fcsr",3U,&reg);break;
+                /* Linux's GCC LoongArch backend writes numeric $r0 for the
+                 * FCSR0 operand of movfcsr2gr/movgr2fcsr.  GAS accepts this
+                 * register spelling even though the hardware operand is the
+                 * *FCSR bank*, not a GPR.  Accept only FCSR indices 0..3;
+                 * preserve the typed bank and reject $r4..$r31. */
+                valid=la_special_reg(args[arg],"$fcsr",3U,&reg) ||
+                      la_special_reg(args[arg],"$r",3U,&reg);
+                break;
             case LA_BANK_FCC:
                 valid=la_special_reg(args[arg],"$fcc",7U,&reg);break;
             case LA_BANK_SIGNED12:

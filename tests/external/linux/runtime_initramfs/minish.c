@@ -8,20 +8,59 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+static int contains_shell_rdinit(const char *command_line) {
+    static const char needle[] = "rdinit=/bin/sh";
+    const char *cursor = command_line;
+
+    while ((cursor = strstr(cursor, needle)) != NULL) {
+        const char before = cursor == command_line ? ' ' : cursor[-1];
+        const char after = cursor[sizeof(needle) - 1U];
+        if ((before == ' ' || before == '\t') &&
+            (after == '\0' || after == '\n' || after == ' ' || after == '\t')) {
+            return 1;
+        }
+        ++cursor;
+    }
+    return 0;
+}
+
 static void cat_cmdline(void) {
     FILE *file;
-    char buffer[1024];
+    char buffer[4096];
+    size_t count;
+    int read_failed;
+    int truncated = 0;
+    int close_failed;
 
     file = fopen("/proc/cmdline", "r");
     if (file == NULL) {
-        (void)fprintf(stderr, "cat: /proc/cmdline: errno=%d\n", errno);
+        (void)fprintf(stderr, "minish: proc-cmdline-open-failed errno=%d\n", errno);
         return;
     }
-    while (fgets(buffer, sizeof(buffer), file) != NULL) {
-        (void)fputs(buffer, stdout);
+
+    count = fread(buffer, 1U, sizeof(buffer) - 1U, file);
+    read_failed = ferror(file);
+    if (!read_failed && count == sizeof(buffer) - 1U) {
+        int extra = fgetc(file);
+        truncated = extra != EOF;
+        read_failed = ferror(file);
     }
-    (void)fclose(file);
-    (void)fflush(stdout);
+    close_failed = fclose(file) != 0;
+    if (read_failed || truncated || close_failed) {
+        (void)fprintf(stderr, "minish: proc-cmdline-read-failed read=%d truncated=%d close=%d\n",
+                      read_failed, truncated, close_failed);
+        return;
+    }
+    buffer[count] = '\0';
+    if (!contains_shell_rdinit(buffer)) {
+        (void)fprintf(stderr, "minish: proc-cmdline-missing-shell-rdinit\n");
+        return;
+    }
+    if (fwrite(buffer, 1U, count, stdout) != count || fflush(stdout) != 0) {
+        (void)fprintf(stderr, "minish: proc-cmdline-output-failed errno=%d\n", errno);
+        return;
+    }
+    (void)puts("MINISH_PROC_CMDLINE_READ=PASS");
 }
 
 int main(void) {

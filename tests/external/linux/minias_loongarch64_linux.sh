@@ -304,7 +304,8 @@ for marker in "Linux version $version" 'Kernel command line:.*rdinit=/bin/sh' \
   '(Run /bin/sh as init process|Starting init: /bin/sh)' \
   'MINIC_LINUX_RUNTIME_SH_READY' 'PROC_CMDLINE_BEGIN' \
   'console=ttyS0.*rdinit=/bin/sh' \
-  'PROC_CMDLINE_END' 'RDINIT_SH_OK' 'DONE_RDINIT'; do
+  'PROC_CMDLINE_END' 'MINISH_PROC_CMDLINE_READ=PASS' \
+  'RDINIT_SH_OK' 'DONE_RDINIT'; do
   require rdinit-sh-p0 "$marker"
 done
 echo 'MINIAS_LINUX_FOURARCH_P0=PASS arch=loongarch64 lanes=2/2'

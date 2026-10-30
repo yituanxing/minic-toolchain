@@ -100,7 +100,11 @@ jobs:
               bash tests/assembler/probe-x86-kernel-pgt-gnu.sh
               ;;
             aarch64) bash tests/assembler/probe-aarch64-branch-binding-gnu.sh ;;
-            loongarch64) : ;;
+            loongarch64)
+              LOONGAS=loongarch64-linux-gnu-as \
+              LOONGCOPY=loongarch64-linux-gnu-objcopy \
+                bash tests/assembler/probe-loong-fcsr-gcc-gnu.sh
+              ;;
           esac
 
       - name: Real Linux GNU Kbuild, GNU link, QEMU P0 and P1

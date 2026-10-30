@@ -353,7 +353,7 @@ for marker in "Linux version $version" \
   '(Run /bin/sh as init process|Starting init: /bin/sh)' \
   'MINIC_LINUX_RUNTIME_SH_READY' 'PROC_CMDLINE_BEGIN' \
   'console=ttyAMA0.*rdinit=/bin/sh' 'PROC_CMDLINE_END' \
-  'RDINIT_SH_OK' 'DONE_RDINIT'; do
+  'MINISH_PROC_CMDLINE_READ=PASS' 'RDINIT_SH_OK' 'DONE_RDINIT'; do
   require p0-sh "$marker"
 done
 
