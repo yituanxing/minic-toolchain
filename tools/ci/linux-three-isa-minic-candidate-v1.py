@@ -370,14 +370,19 @@ def preserve_first_failed_owners(work: Path, output: Path, rows: list[dict],
 def preserve_link_failed_c_owners(work: Path, output: Path, rows: list[dict],
                                   results: list[dict], link_log: Path,
                                   limit: int = 32,
-                                  byte_budget: int = 96 * 1024 * 1024) -> dict:
+                                  byte_budget: int = 96 * 1024 * 1024,
+                                  target: str | None = None) -> dict:
     """Preserve a bounded, SHA-verified subset of *original* GNU frozen C.
 
     GNU LD may identify an owner only as ``util.o`` even when the authentic
     manifest has many directories containing that basename. Never guess one:
     record the ambiguity, and capture only full-path or unique-basename owner
-    identities. This is post-failure evidence, never a GNU-C compilation
-    fallback, a changed ELF, or a different Kbuild/link invocation.
+    identities. AArch64's final vmlinux.o can instead report undefined
+    __compiletime_assert_* calls without the original C owner's path. In that
+    case, resolve the *actual staged MiniC ELF relocations* for precisely the
+    symbols named by GNU LD. Never infer an owner from a source basename or
+    from an aggregate vmlinux.o. This is post-failure evidence, never a GNU-C
+    compilation fallback, a changed ELF, or a different Kbuild/link invocation.
     """
     if not 1 <= limit <= 64 or not 1 <= byte_budget <= 256 * 1024 * 1024:
         raise Rejected("invalid bounded link-failure diagnostic budget")
@@ -419,6 +424,7 @@ def preserve_link_failed_c_owners(work: Path, output: Path, rows: list[dict],
     owner_pattern = re.compile(r"(?<![A-Za-z0-9_./+-])"
                                r"([A-Za-z0-9_.+-]+(?:/[A-Za-z0-9_.+-]+)*\.o):(?:\(|:)")
     referenced: list[str] = []
+    resolutions: dict[str, dict] = {}
     ambiguous: dict[str, list[str]] = {}
     unknown: set[str] = set()
     all_mentions = 0
@@ -430,10 +436,12 @@ def preserve_link_failed_c_owners(work: Path, output: Path, rows: list[dict],
             token = match.group(1)
             if "/" in token and token in by_name:
                 chosen = token
+                method = "exact_linker_path"
             else:
                 candidates = by_basename.get(PurePosixPath(token).name, [])
                 if len(candidates) == 1 and candidates[0] in by_name:
                     chosen = candidates[0]
+                    method = "unique_target_elf_basename"
                 elif candidates:
                     ambiguous[token] = candidates[:16]
                     continue
@@ -442,6 +450,45 @@ def preserve_link_failed_c_owners(work: Path, output: Path, rows: list[dict],
                     continue
             if chosen not in referenced:
                 referenced.append(chosen)
+                resolutions[chosen] = {"method": method}
+
+    # GNU's final link commonly prints `vmlinux.o:(.text+...)` for an AArch64
+    # assertion originating in one of the many C owners already combined by
+    # Kbuild's partial link. A path parser cannot recover that provenance.
+    # Instead read the original candidate .o files (not the relinked aggregate)
+    # and require an undefined CALL26/JUMP26 relocation to an exact symbol
+    # reported by *this* failed linker run. No GNU C fallback or retry occurs.
+    relocation_candidates: list[tuple[int, str, dict[str, int]]] = []
+    symbols = {item["name"] for item in summarize_gnu_link_failures(log_text)["symbols"]
+               if re.fullmatch(r"__compiletime_assert_[0-9]+", item["name"])}
+    relocation_errors: list[str] = []
+    if target == "aarch64" and symbols:
+        for owner in sorted(by_name):
+            candidate = output / "staged" / owner
+            result = by_result[owner]
+            try:
+                if not re.fullmatch(r"[0-9a-f]{64}", result.get("obj_sha256") or ""):
+                    raise Rejected("missing authenticated staged ELF digest")
+                if sha(required(candidate)) != result["obj_sha256"]:
+                    raise Rejected("staged MiniC ELF changed before diagnostics")
+                matches = scan_aarch64_relocations(
+                    candidate, watched_undefined_symbols=symbols)["watched_undefined"]
+                if matches:
+                    relocation_candidates.append((sum(matches.values()), owner, matches))
+            except (OSError, ValueError, struct.error) as exc:
+                if len(relocation_errors) < 32:
+                    relocation_errors.append(f"{owner}:{exc}")
+        # Highest observed failing-call count first; stable owner name breaks
+        # ties. Exact linker paths retain precedence if they were available.
+        for count, owner, matches in sorted(
+                relocation_candidates, key=lambda item: (-item[0], item[1])):
+            if owner not in resolutions:
+                referenced.append(owner)
+                resolutions[owner] = {
+                    "method": "authenticated_aarch64_undefined_branch_relocation",
+                    "matching_relocations": count,
+                    "matching_symbols": sorted(matches)[:32],
+                }
 
     dest = output / "link-failure-owner-diagnostics"
     dest.mkdir(parents=True, exist_ok=False)
@@ -457,6 +504,9 @@ def preserve_link_failed_c_owners(work: Path, output: Path, rows: list[dict],
                       PurePosixPath(name).name, [])), "sample_candidates": owners}
                   for name, owners in sorted(ambiguous.items())[:64]],
               "unknown_non_c_owners": sorted(unknown)[:64], "errors": []}
+    report["aarch64_relocation_match_owners"] = len(relocation_candidates)
+    report["aarch64_relocation_symbols_in_link_log"] = len(symbols) if target == "aarch64" else 0
+    report["aarch64_relocation_diagnostic_errors"] = relocation_errors
     for name in referenced:
         if len(report["samples"]) >= limit:
             report["skipped"].append({"owner": name, "reason": "owner_count_budget"})
@@ -485,7 +535,8 @@ def preserve_link_failed_c_owners(work: Path, output: Path, rows: list[dict],
         folder = dest / owner_path.with_suffix("")
         folder.mkdir(parents=True, exist_ok=False)
         entry = {"owner": name, "input_sha256": row["sha256"],
-                 "cmd_sha256": row["cmd_sha256"], "files": {}}
+                 "cmd_sha256": row["cmd_sha256"], "files": {},
+                 "owner_resolution": resolutions[name]}
         for label, path, expected in essential:
             copy = folder / label
             shutil.copyfile(path, copy)
@@ -512,7 +563,8 @@ def preserve_link_failed_c_owners(work: Path, output: Path, rows: list[dict],
         report["samples"].append(entry)
     report["sample_count"] = len(report["samples"])
     report["verdict"] = ("LINK_FAILURE_C_OWNER_SAMPLES_COMPLETE" if
-                         not report["skipped"] and not report["ambiguous_basenames"] else
+                         not report["skipped"] and not report["ambiguous_basenames"] and
+                         not relocation_errors else
                          "LINK_FAILURE_C_OWNER_SAMPLES_BOUNDED")
     (dest / "index.json").write_text(json.dumps(report, sort_keys=True, indent=2) + "\n")
     print("THREE_ISA_LINK_FAILED_OWNER_DIAGNOSTIC "
@@ -746,7 +798,8 @@ def preserve_vdso_relocation_differential(work: Path, staged: Path,
           f"owners={len(selected)} diagnostic_errors={len(report['diagnostic_errors'])}")
 
 
-def scan_aarch64_relocations(path: Path) -> dict:
+def scan_aarch64_relocations(path: Path,
+                             watched_undefined_symbols: set[str] | None = None) -> dict:
     """Read only ELF64 relocation metadata; do not execute/modify the owner.
 
     GOT relocations are direct evidence of an object's linker GOT demand.
@@ -759,7 +812,7 @@ def scan_aarch64_relocations(path: Path) -> dict:
               "relocations_scanned": 0, "truncated": False,
               "got_samples": [], "plt_samples": [],
               "compiletime_assert_samples": [],
-              "undefined_branch_samples": []}
+              "undefined_branch_samples": [], "watched_undefined": {}}
     with path.open("rb") as stream, mmap.mmap(stream.fileno(), 0,
                                                 access=mmap.ACCESS_READ) as image:
         if (len(image) < 64 or image[:6] != b"\x7fELF\x02\x01" or
@@ -839,6 +892,10 @@ def scan_aarch64_relocations(path: Path) -> dict:
                         totals["plt_samples"].append(sample)
                 elif undefined:
                     totals["undefined_branch"] += 1
+                    if (watched_undefined_symbols is not None and
+                            name in watched_undefined_symbols):
+                        match_counts = totals["watched_undefined"]
+                        match_counts[name] = match_counts.get(name, 0) + 1
                     if name.startswith("__compiletime_assert_"):
                         totals["compiletime_assert_branch"] += 1
                         if len(totals["compiletime_assert_samples"]) < 8:
@@ -1004,7 +1061,8 @@ def relink(work: Path, output: Path, rows: list[dict], results: list[dict],
         # This is postmortem evidence, not a linker retry or a GNU C fallback.
         try:
             preserve_link_failed_c_owners(
-                work, output, rows, results, output / "gnu-ld-relink.log")
+                work, output, rows, results, output / "gnu-ld-relink.log",
+                target=data["target"])
         except Exception as exc:
             # Postmortem collection must never conceal the actual GNU LD
             # rejection, even if a future diagnostic parser itself fails.
@@ -1160,6 +1218,9 @@ def self_test() -> None:
         assert relocation["got"] == 1 and relocation["undefined_branch"] == 1
         assert relocation["compiletime_assert_branch"] == 1
         assert relocation["got_samples"][0]["symbol"] == "target_symbol"
+        assert scan_aarch64_relocations(aarch_elf, {
+            "__compiletime_assert_317", "unrelated"})["watched_undefined"] == {
+                "__compiletime_assert_317": 1}
         struct.pack_into("<Q", tiny, 208, (1 << 32) | 1026)
         aarch_elf.write_bytes(tiny)
         assert scan_aarch64_relocations(aarch_elf)["plt"] == 1
@@ -1387,6 +1448,48 @@ def self_test() -> None:
         assert count_report["skipped"] == [
             {"owner": "kernel/first_error_0.o", "reason": "owner_count_budget"},
             {"owner": "kernel/first_error_1.o", "reason": "owner_count_budget"}]
+        # Real GNU final vmlinux link: ld only names an aggregate vmlinux.o
+        # and an unresolved __compiletime_assert symbol. The exact original
+        # MiniC owner comes from a digest-verified staged ELF CALL relocation.
+        # Two otherwise identical C owners must both be reported, ordered by
+        # matching relocation count, never guessed from `vmlinux.o`.
+        reloc_link = Path(temp) / "aarch-aggregate-link.log"
+        reloc_link.write_text(
+            "aarch64-linux-gnu-ld: vmlinux.o:(.text+0x54): undefined reference to "
+            "`__compiletime_assert_317'\n")
+        reloc_output = Path(temp) / "aarch-aggregate-output"
+        reloc_output.mkdir()
+        single = bytearray(tiny)
+        double = bytearray(tiny)
+        struct.pack_into("<QQq", double, 200, 0, (2 << 32) | 283, 0)
+        for i, row in enumerate(ambiguous_rows):
+            path = reloc_output / "staged" / row["object"]
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(double if row["object"] == "kernel/first_error_2.o"
+                             else single)
+            passed[i]["obj_sha256"] = sha(path)
+        relocated_asm = reloc_output / "staged/kernel/first_error_2.s"
+        relocated_asm.write_text(".text\n/* exact staged assembly */\n")
+        passed[2]["asm_sha256"] = sha(relocated_asm)
+        relocation_report = preserve_link_failed_c_owners(
+            first_work, reloc_output, ambiguous_rows, passed, reloc_link,
+            limit=2, target="aarch64")
+        assert relocation_report["aarch64_relocation_match_owners"] == len(ambiguous_rows)
+        assert relocation_report["aarch64_relocation_symbols_in_link_log"] == 1
+        assert relocation_report["aarch64_relocation_diagnostic_errors"] == []
+        assert [item["owner"] for item in relocation_report["samples"]] == [
+            "kernel/first_error_2.o", "kernel/first_error_0.o"]
+        assert relocation_report["samples"][0]["owner_resolution"] == {
+            "method": "authenticated_aarch64_undefined_branch_relocation",
+            "matching_relocations": 2,
+            "matching_symbols": ["__compiletime_assert_317"]}
+        assert (reloc_output / "link-failure-owner-diagnostics/kernel/first_error_2/"
+                "minic.s").read_bytes() == relocated_asm.read_bytes()
+        assert (reloc_output / "link-failure-owner-diagnostics/kernel/first_error_2/"
+                "original.gnu.i").read_bytes() == (
+                    first_work / "frozen/i/kernel/first_error_2.i").read_bytes()
+        assert relocation_report["unknown_non_c_owners"] == ["vmlinux.o"]
+        assert len(relocation_report["skipped"]) == len(ambiguous_rows) - 2
         bad_rows = [dict(row) for row in ambiguous_rows]
         bad_rows[0]["object"] = "../malicious.o"
         bad_passed = [dict(item) for item in passed]

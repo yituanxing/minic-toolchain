@@ -413,7 +413,9 @@ static bool loongarch64_machine_emit_family(
             out, ctx, ins, shape->result_offset, needs_gp_store);
     case MINIC_DIRECT_MACHINE_RESIDUAL:
         return minic_loongarch64_emit_residual_instruction(
-            out, ctx, ins_id, block_id, shape->result_offset, needs_gp_store);
+            out, ctx, ins_id, block_id, shape->result_offset,
+            shape->native_opcode_presence_checked,
+            shape->emits_no_native_opcode, needs_gp_store);
     case MINIC_DIRECT_MACHINE_COMPILER_BARRIER:
     default:
         return false; /* Common visitor handles compiler barriers. */
@@ -439,13 +441,20 @@ static bool loongarch64_machine_emit_terminator(
         ctx->frame_alignment, ctx->saved_entry_sp_offset);
 }
 
+static bool loongarch64_machine_no_native_opcode(
+    const MinicDirectLP64BlockContext *ctx,
+    const MinicCoreInstruction *ins) {
+    return minic_loongarch64_elided_frame_address_instruction(ctx, ins);
+}
+
 bool minic_loongarch64_emit_core_blocks(
     FILE *out, const MinicDirectLP64BlockContext *ctx) {
     static const MinicDirectMachineDispatch dispatch = {
         "loongarch64", "mini_loong", false, true,
         loongarch64_machine_emit_family,
         loongarch64_machine_store_gp,
-        loongarch64_machine_emit_terminator
+        loongarch64_machine_emit_terminator,
+        loongarch64_machine_no_native_opcode
     };
     return minic_multi_direct_machine_dispatch(out, ctx, &dispatch);
 }

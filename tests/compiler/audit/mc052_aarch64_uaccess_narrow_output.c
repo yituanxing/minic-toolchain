@@ -45,6 +45,7 @@ void read_pointer(void **user, void **result) {
 }
 
 int main(void) {
+    int failures = 0;
     unsigned char byte = 0xa5U;
     unsigned short half = 0x9a67U;
     unsigned int word = 0x9abcdef0U;
@@ -60,9 +61,16 @@ int main(void) {
     read_u32(&word, &word_result);
     read_u64(&dword, &dword_result);
     read_pointer(&pointer_source, &pointer_result);
-    return (pair.guard == 0x31U && pair.value == byte &&
-            half_result == half && word_result == word &&
-            dword_result == dword && pointer_result == pointer_source) ? 0 : 1;
+    /* A nonzero result is a bitmask: it distinguishes the 1/2/4/8-byte
+     * lvalues, their neighboring guard, and the pointer ABI independently.
+     * This also identifies a broken GNU QEMU baseline before comparing MiniC. */
+    if (pair.guard != 0x31U) failures |= 1;
+    if (pair.value != byte) failures |= 2;
+    if (half_result != half) failures |= 4;
+    if (word_result != word) failures |= 8;
+    if (dword_result != dword) failures |= 16;
+    if (pointer_result != pointer_source) failures |= 32;
+    return failures;
 }
 
 #ifdef MC052_OVERSIZE_NEGATIVE

@@ -1379,7 +1379,16 @@ check-core-gp-forward: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
 	bash tests/compiler/c0/probe-core-gp-forward.sh
 
-check-fast: check-loongarch64-record-copy-size check-loongarch64-frame-fold check-core-value-use-counts check-core-dead-ssa-writeback check-core-gp-forward
+.PHONY: check-core-literal-branch-guard
+check-core-literal-branch-guard: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
+	bash tests/compiler/c0/probe-core-literal-branch-guard.sh
+
+.PHONY: check-core-literal-branch-fold
+check-core-literal-branch-fold:
+	bash tests/compiler/c0/probe-core-literal-branch-fold.sh
+
+check-fast: check-loongarch64-record-copy-size check-loongarch64-frame-fold check-core-value-use-counts check-core-dead-ssa-writeback check-core-gp-forward check-core-literal-branch-guard check-core-literal-branch-fold
 
 .PHONY: check-gnu-builtin-constant-p-if-guard
 check-gnu-builtin-constant-p-if-guard: $(MINIC_CC_BINARY)

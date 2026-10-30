@@ -28,6 +28,8 @@ typedef bool (*MinicDirectMachineStoreGP)(
 typedef bool (*MinicDirectMachineEmitTerminator)(
     FILE *, const MinicDirectLP64BlockContext *,
     const MinicCoreBlock *, size_t block_id);
+typedef bool (*MinicDirectMachineNoNativeOpcode)(
+    const MinicDirectLP64BlockContext *, const MinicCoreInstruction *);
 
 typedef struct MinicDirectMachineDispatch {
     const char *architecture;
@@ -37,6 +39,7 @@ typedef struct MinicDirectMachineDispatch {
     MinicDirectMachineEmitFamily emit_family;
     MinicDirectMachineStoreGP store_gp;
     MinicDirectMachineEmitTerminator emit_terminator;
+    MinicDirectMachineNoNativeOpcode no_native_opcode;
 } MinicDirectMachineDispatch;
 
 static inline bool minic_multi_direct_machine_dispatch(
@@ -47,6 +50,8 @@ static inline bool minic_multi_direct_machine_dispatch(
     const MinicCoreBlock *block;
     bool *reachable;
     size_t *value_use_counts = NULL;
+    bool *transparent = NULL;
+    size_t transparent_capacity = 0U;
     bool have_value_use_counts = false;
     bool success = false;
     size_t block_id;
@@ -90,6 +95,36 @@ static inline bool minic_multi_direct_machine_dispatch(
     minic_core_block_walk_begin(&walk, fn, reachable);
     while (minic_core_block_walk_next(&walk, &block_id, &block)) {
         size_t ordinal;
+        bool have_transparency = false;
+        /* The target can certify a pure Core instruction emitted *without*
+         * any native opcodes, commonly a folded local OBJECT_ADDRESS. Such
+         * source-level instructions need not break the physical GP lifetime.
+         * A failed optional census falls back to exact adjacency. */
+        if (dispatch->allow_adjacent_gp_forward &&
+            have_value_use_counts &&
+            dispatch->no_native_opcode != NULL &&
+            block->instruction_count != 0U) {
+            if (block->instruction_count > transparent_capacity) {
+                bool *expanded = (bool *)realloc(
+                    transparent, block->instruction_count * sizeof(*transparent));
+                if (expanded != NULL) {
+                    transparent = expanded;
+                    transparent_capacity = block->instruction_count;
+                }
+            }
+            if (transparent_capacity >= block->instruction_count) {
+                have_transparency = true;
+                for (ordinal = 0U; ordinal < block->instruction_count;
+                     ++ordinal) {
+                    MinicCoreInstructionId candidate_id;
+                    const MinicCoreInstruction *candidate;
+                    transparent[ordinal] =
+                        minic_core_block_instruction_at(
+                            fn, block, ordinal, &candidate_id, &candidate) &&
+                        dispatch->no_native_opcode(ctx, candidate);
+                }
+            }
+        }
         if (fprintf(out, ".L%s_f%zu_b%zu:\n", dispatch->label_prefix,
                     ctx->id, block_id) < 0 ||
             (block->source_label_id != SIZE_MAX &&
@@ -125,18 +160,29 @@ static inline bool minic_multi_direct_machine_dispatch(
              * physical result/lhs registers. The producer's only use is
              * the next instruction, so no frame writeback is necessary. */
             shape.lhs_in_previous_gp = false;
+            shape.native_opcode_presence_checked = have_transparency;
+            shape.emits_no_native_opcode =
+                have_transparency && transparent[ordinal];
             if (dispatch->allow_adjacent_gp_forward &&
                 have_value_use_counts) {
                 MinicCoreInstructionId neighbor_id;
                 const MinicCoreInstruction *neighbor;
-                if (ordinal > 0U &&
-                    minic_core_block_instruction_at(fn, block, ordinal - 1U,
+                size_t previous = ordinal;
+                size_t next = ordinal + 1U;
+                while (previous > 0U && have_transparency &&
+                       transparent[previous - 1U])
+                    --previous;
+                if (previous > 0U &&
+                    minic_core_block_instruction_at(fn, block, previous - 1U,
                         &neighbor_id, &neighbor))
                     shape.lhs_in_previous_gp =
                         minic_multi_direct_gp_adjacent_forward(
                             fn, neighbor, ins, value_use_counts);
-                if (ordinal + 1U < block->instruction_count &&
-                    minic_core_block_instruction_at(fn, block, ordinal + 1U,
+                while (next < block->instruction_count &&
+                       have_transparency && transparent[next])
+                    ++next;
+                if (next < block->instruction_count &&
+                    minic_core_block_instruction_at(fn, block, next,
                         &neighbor_id, &neighbor))
                     forward_to_successor =
                         minic_multi_direct_gp_adjacent_forward(
@@ -192,6 +238,7 @@ static inline bool minic_multi_direct_machine_dispatch(
     success = true;
 done:
     free(reachable);
+    free(transparent);
     free(value_use_counts);
     return success;
 }

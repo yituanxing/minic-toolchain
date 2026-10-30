@@ -100,6 +100,25 @@ static bool loong_address_only_folded_uses(
     return true;
 }
 
+bool minic_loongarch64_elided_frame_address_instruction(
+    const MinicDirectLP64BlockContext *ctx,
+    const MinicCoreInstruction *ins) {
+    if (ctx == NULL || ctx->fn == NULL || ctx->frame_plan == NULL ||
+        ctx->target == NULL || ctx->program == NULL || ins == NULL ||
+        ins->result == MINIC_CORE_VALUE_INVALID)
+        return false;
+    if (ins->kind == MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS)
+        return loong_address_only_folded_uses(
+            ctx->program, ctx->target, ctx->fn, ctx->frame_plan,
+            ins->result, 0U);
+    if (ins->kind == MINIC_CORE_INSTRUCTION_FIELD_ADDRESS)
+        return loong_proven_frame_address(ctx->fn, ins->result, 0U) &&
+               loong_address_only_folded_uses(
+                   ctx->program, ctx->target, ctx->fn, ctx->frame_plan,
+                   ins->result, 0U);
+    return false;
+}
+
 
 /* Residual machine lowering after Core family admission. Each case is
  * target owned; planning and type checks are shared with the other LP64
@@ -109,7 +128,8 @@ static bool loong_address_only_folded_uses(
 bool minic_loongarch64_emit_residual_instruction(
     FILE *out, const MinicDirectLP64BlockContext *ctx,
     MinicCoreInstructionId ins_id, size_t block_id,
-    size_t offset, bool *needs_writeback) {
+    size_t offset, bool native_opcode_presence_checked,
+    bool emits_no_native_opcode, bool *needs_writeback) {
     const MinicC0Program *program;
     const MinicTargetInfo *target;
     const MinicCoreFunction *fn;
@@ -331,8 +351,10 @@ bool minic_loongarch64_emit_residual_instruction(
         }
         case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS: {
             size_t object_offset;
-            if (loong_address_only_folded_uses(
-                    program, target, fn, frame_plan, ins->result, 0U)) {
+            if ((native_opcode_presence_checked && emits_no_native_opcode) ||
+                (!native_opcode_presence_checked &&
+                 loong_address_only_folded_uses(
+                     program, target, fn, frame_plan, ins->result, 0U))) {
                 *needs_writeback = false;
                 return true;
             }
@@ -346,9 +368,11 @@ bool minic_loongarch64_emit_residual_instruction(
         }
 
         case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS: {
-            if (loong_proven_frame_address(fn, ins->result, 0U) &&
-                loong_address_only_folded_uses(
-                    program, target, fn, frame_plan, ins->result, 0U)) {
+            if ((native_opcode_presence_checked && emits_no_native_opcode) ||
+                (!native_opcode_presence_checked &&
+                 loong_proven_frame_address(fn, ins->result, 0U) &&
+                 loong_address_only_folded_uses(
+                     program, target, fn, frame_plan, ins->result, 0U))) {
                 *needs_writeback = false;
                 return true;
             }

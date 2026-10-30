@@ -16,6 +16,8 @@ test -x "$minic" || fail 'MiniC compiler missing'
     -o "$work/aarch64.s" || fail 'AArch64 untouched target compile'
 awk '/^minic_gp_anti_chain:$/ {inside=1} inside {print}
      /^\.size minic_gp_anti_chain,/ {exit}' "$work/loong.s" > "$work/anti.s"
+awk '/^minic_gp_chain:$/ {inside=1} inside {print}
+     /^\.size minic_gp_chain,/ {exit}' "$work/loong.s" > "$work/chain.s"
 
 # Former LOAD→STORE GP SSA stack cycles here had six exact adjacent
 # st.d/ld.d pairs. Core proves two pairs are single-use and can be elided.
@@ -24,6 +26,13 @@ roundtrips=$(awk '
     prior {if ($0 == "  ld.d $t0, $sp, 16") n++; prior=0}
     END {print n+0}' "$work/anti.s")
 test "$roundtrips" -le 4 || fail "adjacent SSA cycles remain: $roundtrips"
+# Folded OBJECT_ADDRESS instructions leave no machine opcode and must not
+# prematurely interrupt a genuine GP live interval. Without cross-address
+# forwarding these two functions use 64 and 73 lines respectively.
+test "$(wc -l < "$work/chain.s")" -le 56 \
+    || fail 'transparent address split the scalar chain'
+test "$(wc -l < "$work/anti.s")" -le 61 \
+    || fail 'transparent address split the anti-chain'
 grep -Fq '  mul.d $t0, $t0, $t1' "$work/anti.s" \
     || fail 'multiply effect missing'
 grep -Fq '  xor $t0, $t0, $t1' "$work/anti.s" \

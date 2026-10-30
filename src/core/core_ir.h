@@ -657,6 +657,11 @@ bool minic_core_function_append_effect_instruction(MinicCoreFunction *function,
 bool minic_core_function_set_terminator(MinicCoreFunction *function,
                                         MinicCoreBlockId block_id,
                                         const MinicCoreTerminator *terminator);
+/* Post-lowering semantic canonicalization. A branch consuming a literal Core
+ * INTEGER_CONSTANT has exactly one possible successor; preserving the other
+ * arm would create executable references to impossible GNU compile-time
+ * assertions. This changes only CFG edges, never instruction side effects. */
+size_t minic_core_function_fold_literal_branches(MinicCoreFunction *function);
 /* Conservative CFG reachability shared by every target. Ordinary source
  * labels are roots because indirect branches / function-level gotos may
  * reenter them even when lexical control flow cannot. */

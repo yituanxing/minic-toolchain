@@ -107,13 +107,19 @@ if [ "$gnu_elf" = PASS ] && command -v "$gnu_cc" >/dev/null 2>&1 &&
         -o "$work/uaccess-gnu.elf"
     qemu_sysroot=${AARCH64_QEMU_SYSROOT:-/usr/aarch64-linux-gnu}
     stage=gnu-qemu-reference
-    if ! "$cross_qemu" -L "$qemu_sysroot" "$work/uaccess-gnu.elf"; then
-        echo 'AARCH64_UACCESS=FAIL GNU baseline QEMU' >&2
+    if "$cross_qemu" -L "$qemu_sysroot" "$work/uaccess-gnu.elf"; then
+        :
+    else
+        rc=$?
+        echo "AARCH64_UACCESS=FAIL GNU baseline QEMU exit=$rc sysroot=$qemu_sysroot; low six bits: guard=1 byte=2 half=4 word=8 dword=16 pointer=32" >&2
         exit 1
     fi
     stage=gnu-qemu-minic
-    if ! "$cross_qemu" -L "$qemu_sysroot" "$work/uaccess-minic.elf"; then
-        echo 'AARCH64_UACCESS=FAIL MiniC QEMU differs from GNU baseline' >&2
+    if "$cross_qemu" -L "$qemu_sysroot" "$work/uaccess-minic.elf"; then
+        :
+    else
+        rc=$?
+        echo "AARCH64_UACCESS=FAIL MiniC QEMU differs from GNU baseline exit=$rc; low six bits: guard=1 byte=2 half=4 word=8 dword=16 pointer=32" >&2
         exit 1
     fi
     gnu_qemu=PASS

@@ -69,6 +69,39 @@ size_t minic_core_address_known_alignment_bounded(
         function, address, root_alignment, context, 0U, max_depth);
 }
 
+size_t minic_core_function_fold_literal_branches(MinicCoreFunction *function) {
+    size_t block_id, count = 0U;
+    if (function == NULL || function->blocks == NULL ||
+        (function->value_count != 0U && function->values == NULL) ||
+        (function->instruction_count != 0U && function->instructions == NULL))
+        return 0U;
+    for (block_id = 0U; block_id < function->block_count; ++block_id) {
+        MinicCoreTerminator *term = &function->blocks[block_id].terminator;
+        MinicCoreValueId condition;
+        const MinicCoreInstruction *definition;
+        MinicCoreBlockId selected;
+        if (!function->blocks[block_id].has_terminator ||
+            term->kind != MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH)
+            continue;
+        condition = term->conditional.condition;
+        if (condition >= function->value_count ||
+            function->values[condition].definition >= function->instruction_count)
+            continue;
+        definition = &function->instructions[function->values[condition].definition];
+        if (definition->kind != MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT ||
+            definition->result != condition ||
+            !minic_type_is_integer(function->values[condition].type))
+            continue;
+        selected = definition->value.integer_value != 0
+            ? term->conditional.when_true : term->conditional.when_false;
+        if (selected >= function->block_count) continue;
+        term->kind = MINIC_CORE_TERMINATOR_BRANCH;
+        term->branch_target = selected;
+        ++count;
+    }
+    return count;
+}
+
 /* One target-independent conservative CFG filter for every Core backend.
  * Keep source labels as additional roots: they may be reached through a
  * computed goto, asm-goto or forward function-level goto even when their

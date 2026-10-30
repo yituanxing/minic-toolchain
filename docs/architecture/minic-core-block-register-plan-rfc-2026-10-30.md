@@ -1,6 +1,48 @@
 # RFC: Block-local Core value registers for the four MiniC machines
 
-Status: proposed for staged implementation; **no register allocator is implemented by this RFC**.
+Status: staged implementation. A Common one-result GP interval forwarder has
+landed for LoongArch64; a full multi-register block allocator **has not**
+been implemented and remains the major Linux text-size task.
+
+## Verified progress after the original measurement
+
+The newer exact-head GNU Linux relink artifact (`41045404678`, head
+`0024b6d8`, compiler equivalent to `4502ba83`) still fails at the original
+`head.o:(.ref.text+0x15c) R_LARCH_B26` reference to `start_secondary`.
+However the ordinary local-address/frame folding batches reduced the full
+2723-owner C executable sections from about 272 MB to **159,876,892 B**
+against the original GNU **16,887,804 B**, a now **9.467x** ratio. The
+recorded branch displacement is `-156,462,784 B = -149.215 MiB`, about
+21.2 MiB beyond the B26 signed range. This is a confirmed GNU relocation
+range failure, not a missing ELF section or the x86/AArch ABI status.
+
+The first Common + LoongArch block register interval implementation keeps
+one scalar GP result in native `$t0` when its **single semantic use** is the
+next scalar integer ALU left operand or STORE input. A second stage extends
+the interval across Core `OBJECT_ADDRESS`/`FIELD_ADDRESS` instructions only
+when the target's existing proof certifies they emit **zero native opcodes**;
+any real machine instruction, call, inline asm, compiler barrier or CFG edge
+breaks this initial interval. It remains a deterministic subset of the full
+register plan below, not general register allocation. AArch64 does not opt
+into LoongArch's `$t0` convention.
+
+On the **same original frozen GNU-preprocessed sources**, rebuilding the
+clean 4502 compiler and the staged compiler gives these exact assembly sizes:
+
+| Source | 4502 baseline | Adjacent + certified transparent interval | Change |
+| --- | ---: | ---: | ---: |
+| `arch/loongarch/kernel/vdso.i` | 90,695 B / 4,578 lines | 84,573 B / 4,262 lines | -6.75% bytes |
+| `arch/loongarch/vdso/vgetcpu.i` | 11,100 B / 481 lines | 10,864 B / 469 lines | -2.13% bytes |
+
+These samples are a **local slice**, not an extrapolation to 2723 owners.
+They do not yet remove the 21.2 MiB branch-distance gap. The next phase
+must admit block intervals lasting across real scalar operations, place
+multiple live values in target-owned callee-saved GP registers, and remove
+the memory round-trips introduced by CoreLower's temporary scalar objects.
+The object-address temporary is inserted in
+`src/core/core_lower_scalar_values.c`; the correct long-term Core object
+promotion is a separate alias/cross-CFG analysis, not a claim that all these
+locals are dead or freely substitutable.
 
 ## Why this is a Linux runtime blocker
 

@@ -152,6 +152,10 @@ typedef struct MinicDirectMachineInstructionShape {
     /* Optional block-local SSA transport: target-owned physical GP result
      * of the immediately preceding scalar operation supplies this lhs. */
     bool lhs_in_previous_gp;
+    /* Machine-provided proof for elided address producers, cached during
+     * Common block planning to avoid repeating target's full use scan. */
+    bool native_opcode_presence_checked;
+    bool emits_no_native_opcode;
 } MinicDirectMachineInstructionShape;
 
 bool minic_multi_direct_machine_instruction_shape(
