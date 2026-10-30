@@ -130,6 +130,7 @@ bool minias_encode_add_elf_flags(MiniAs *as, uint32_t flags) {
 void minias_encode_result_destroy(MiniAsEncodeResult *result) {
     if (result == NULL) return;
     free(result->bytes);
+    free(result->writes);
     free(result->fixups);
     free(result->anchors);
     memset(result, 0, sizeof(*result));

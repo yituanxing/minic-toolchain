@@ -16,7 +16,10 @@ source_entry:
   nop
 .data
 .byte 0x91, 0x92
-.long external_data + 7
+# A single GCC/Linux-style statement owns several ordered DATA writes;
+# old one-pattern-per-fragment staging failed after the first .long.
+.long external_data + 7, 0x55667788
+.long 0x11223344, 0x99aabbcc
 .fill 20,4,0x11223344
 .space 8192,0x5a
 .p2align 5

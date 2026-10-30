@@ -236,10 +236,13 @@ bool minias_riscv_validate_parsed_isa(MiniAs *as, const MiniAsStmt *stmt,
     }
     /* The .insn directive is rejected by parse_target_directive for explicit
      * ISA contracts before this instruction is ever parsed. */
+    /* Privileged instructions are a privilege-level contract, not a
+     * -march extension letter. GNU AS accepts sfence.vma/sret/wfi in Linux
+     * assembly with rv64imac; target feature checks still apply to ordinary
+     * ISA instructions. Strict Base-I audits the encoded words separately. */
     if (state->isa_explicit && state->strict_i_xlen == 0U &&
-        (required_features == UINT64_MAX ||
-         (required_features != 0U &&
-          (state->isa_features & required_features) != required_features))) {
+        required_features != UINT64_MAX && required_features != 0U &&
+        (state->isa_features & required_features) != required_features) {
         minias_set_error(as,"unsupported-isa-feature:%s:line=%zu",
                          op,stmt->line);
         return false;

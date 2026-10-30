@@ -849,6 +849,7 @@ bool minias_add_section_fixup(MiniAs *as, MiniAsFixupOrigin origin,
 
 static bool minias_section_append_fill(MiniAs *,int,size_t,uint8_t,bool);
 static bool emit_common_pattern(MiniAs *,int,const unsigned char *,size_t,size_t);
+static bool minias_stage_fragment_bytes(MiniAs *,int,const void *,size_t,bool);
 
 /* Commit a complete source Fragment's result after its measured length has
  * passed the common invariant. Both target code and typed common data/fills
@@ -862,7 +863,7 @@ static bool emit_common_pattern(MiniAs *,int,const unsigned char *,size_t,size_t
  */
 static bool minias_commit_encode_result(MiniAs *as, const MiniAsStmt *owner) {
     MiniAsEncodeResult *result = as->active_encode_result;
-    size_t i;
+    size_t i,logical_size=0U;
     if (result == NULL || !as->emitting_fragment ||
         owner != &as->stmts[as->emitting_fragment_id]) {
         minias_set_error(as, "encode-commit-without-fragment");
@@ -873,6 +874,28 @@ static bool minias_commit_encode_result(MiniAs *as, const MiniAsStmt *owner) {
         owner->section < 0 || (size_t)owner->section >= as->section_count) {
         minias_set_error(as, "invalid-complete-encode-result:line=%zu",
                          owner->line);
+        return false;
+    }
+    for(i=0U;i<result->write_count;++i) {
+        const MiniAsFragmentWrite *write=&result->writes[i];
+        if(write->size>owner->size-logical_size ||
+           (write->kind==MINIAS_WRITE_COPIED_BYTES &&
+            (write->copied_offset>result->byte_storage_size ||
+             write->size>result->byte_storage_size-write->copied_offset)) ||
+           (write->kind==MINIAS_WRITE_BORROWED_BYTES &&
+            write->borrowed_bytes==NULL) ||
+           (write->kind==MINIAS_WRITE_PATTERN &&
+            (write->repeat_width==0U || write->repeat_width>8U ||
+             write->repeat_count!=write->size/write->repeat_width ||
+             write->size%write->repeat_width!=0U)) ||
+           write->kind>MINIAS_WRITE_PATTERN) {
+            minias_set_error(as,"invalid-fragment-write:line=%zu",owner->line);
+            return false;
+        }
+        logical_size+=write->size;
+    }
+    if(logical_size!=result->byte_count) {
+        minias_set_error(as,"incomplete-fragment-writes:line=%zu",owner->line);
         return false;
     }
     /* Validate requests before the first global mutation. */
@@ -944,28 +967,33 @@ static bool minias_commit_encode_result(MiniAs *as, const MiniAsStmt *owner) {
         as->fixups[as->fixup_count - 1U].prefer_section_symbol =
             request->prefer_section_symbol;
     }
-    /* Materialize only after the full fragment, including MCData fixups,
-     * has been checked. Compact .space/.fill avoid a second huge buffer. */
-    {
+    /* One ordered commit protocol handles any mixture of fixed DATA fields,
+     * deferred relocations, borrowed source bytes and compact repeated fills.
+     * There is no alternate direct-append path for a source Fragment. */
+    as->committing_fragment=true;
+    for(i=0U;i<result->write_count;++i) {
+        const MiniAsFragmentWrite *write=&result->writes[i];
         bool materialized;
-        as->committing_fragment=true;
-        if(result->repeat_width==1U)
+        if(write->kind==MINIAS_WRITE_PATTERN && write->repeat_width==1U)
             materialized=minias_section_append_fill(
-                as,owner->section,result->repeat_count,
-                result->repeat_pattern[0],result->repeat_ignore_nobits_fill);
-        else if(result->repeat_width!=0U)
+                as,owner->section,write->repeat_count,write->pattern[0],
+                write->ignore_nobits_fill);
+        else if(write->kind==MINIAS_WRITE_PATTERN)
             materialized=emit_common_pattern(
-                as,owner->section,result->repeat_pattern,
-                result->repeat_width,result->repeat_count);
+                as,owner->section,write->pattern,write->repeat_width,
+                write->repeat_count);
         else
             materialized=minias_section_append(
                 as,owner->section,
-                result->borrowed_bytes!=NULL ?
-                    result->borrowed_bytes : result->bytes,
-                result->byte_count);
-        as->committing_fragment=false;
-        if(!materialized)return false;
+                write->kind==MINIAS_WRITE_BORROWED_BYTES ?
+                    write->borrowed_bytes : result->bytes+write->copied_offset,
+                write->size);
+        if(!materialized) {
+            as->committing_fragment=false;
+            return false;
+        }
     }
+    as->committing_fragment=false;
     as->synthetic_anchor_counter += result->anchor_count;
     as->elf_flags |= result->elf_flags_or;
     minias_encode_result_destroy(result);
@@ -986,7 +1014,6 @@ bool minias_emit_instruction_bytes(MiniAs *as, int section_index,
         return false;
     }
     const MiniAsStmt *owner;
-    size_t needed;
     if (!as->emitting_fragment ||
         as->emitting_fragment_id >= as->stmt_count) {
         minias_set_error(as, "instruction-bytes-without-fragment");
@@ -1002,21 +1029,11 @@ bool minias_emit_instruction_bytes(MiniAs *as, int section_index,
            !owner->align_has_fill)) ||
         owner->section != section_index ||
         sec->type == MINIAS_SHT_NOBITS ||
-        size > SIZE_MAX - sec->size ||
-        size > SIZE_MAX - result->byte_count) {
+        size > SIZE_MAX - sec->size) {
         minias_set_error(as, "instruction-emission-section-or-size");
         return false;
     }
-    needed = result->byte_count + size;
-    if (!minias_grow_array((void **)&result->bytes,
-                    &result->byte_capacity,
-                    sizeof(unsigned char), needed)) {
-        minias_set_error(as, "out-of-memory:encoded-instruction");
-        return false;
-    }
-    if (size != 0U)
-        memcpy(result->bytes + result->byte_count, data, size);
-    result->byte_count = needed;
+    if(!minias_stage_fragment_bytes(as,section_index,data,size,true))return false;
     /* The CodeEmitter owns bytes until the transaction commits. A Target
      * never updates a final Section size or cursor while encoding. */
     return true;
@@ -1078,12 +1095,15 @@ static bool minias_section_reserve(MiniAs *as,MiniAsSection *sec,size_t need) {
  * Section-owned CFI/DWARF calls, made after all Fragments, continue using
  * the direct materializer below. */
 static bool minias_stage_fragment_bytes(MiniAs *as,int section,
-                                         const void *data,size_t size) {
+                                         const void *data,size_t size,
+                                         bool target_bytes) {
     MiniAsEncodeResult *result=as->active_encode_result;
     const MiniAsStmt *owner;
     MiniAsSection *sec=&as->sections[(size_t)section];
     const unsigned char *bytes=(const unsigned char *)data;
+    MiniAsFragmentWrite *write;
     size_t i,needed;
+    bool borrow;
     if(result==NULL || as->emitting_fragment_id>=as->stmt_count ||
        (size!=0U && data==NULL)) {
         minias_set_error(as,"invalid-fragment-bytes");
@@ -1091,12 +1111,15 @@ static bool minias_stage_fragment_bytes(MiniAs *as,int section,
     }
     owner=&as->stmts[as->emitting_fragment_id];
     if(owner->section!=section ||
-       owner->fragment_kind==MINIAS_FRAGMENT_INSTRUCTION ||
-       (owner->fragment_kind==MINIAS_FRAGMENT_ALIGNMENT &&
-        (sec->flags&MINIAS_SHF_EXECINSTR)!=0U &&
-        !owner->align_has_fill) ||
-       result->repeat_width!=0U || result->borrowed_bytes!=NULL ||
-       size>SIZE_MAX-result->byte_count ||
+       (target_bytes ?
+        (owner->fragment_kind!=MINIAS_FRAGMENT_INSTRUCTION &&
+         !(owner->fragment_kind==MINIAS_FRAGMENT_ALIGNMENT &&
+           (sec->flags&MINIAS_SHF_EXECINSTR)!=0U &&
+           !owner->align_has_fill)) :
+        (owner->fragment_kind==MINIAS_FRAGMENT_INSTRUCTION ||
+         (owner->fragment_kind==MINIAS_FRAGMENT_ALIGNMENT &&
+          (sec->flags&MINIAS_SHF_EXECINSTR)!=0U &&
+          !owner->align_has_fill))) ||
        result->byte_count>owner->size ||
        size>owner->size-result->byte_count) {
         minias_set_error(as,"fragment-byte-stage-conflict:line=%zu",owner->line);
@@ -1108,22 +1131,39 @@ static bool minias_stage_fragment_bytes(MiniAs *as,int section,
                 minias_set_error(as,"nobits-nonzero-data:%s",sec->name);
                 return false;
             }
-    needed=result->byte_count+size;
-    if(size!=0U && result->byte_count==0U &&
-       owner->fragment_kind==MINIAS_FRAGMENT_BYTES &&
-       data==owner->static_data && size==owner->static_data_size) {
-        result->borrowed_bytes=bytes;
-        result->byte_count=needed;
-        return true;
+    if(size==0U)return true;
+    borrow=!target_bytes && owner->fragment_kind==MINIAS_FRAGMENT_BYTES &&
+           data==owner->static_data && size==owner->static_data_size;
+    if(!borrow) {
+        if(size>SIZE_MAX-result->byte_storage_size) {
+            minias_set_error(as,"fragment-copied-size-overflow");
+            return false;
+        }
+        needed=result->byte_storage_size+size;
+        if(!minias_grow_array((void **)&result->bytes,
+                             &result->byte_capacity,sizeof(unsigned char),
+                             needed)) {
+            minias_set_error(as,"out-of-memory:fragment-bytes");
+            return false;
+        }
+        memcpy(result->bytes+result->byte_storage_size,bytes,size);
     }
-    if(!minias_grow_array((void **)&result->bytes,
-                          &result->byte_capacity,sizeof(unsigned char),
-                          needed)) {
-        minias_set_error(as,"out-of-memory:fragment-bytes");
+    if(!minias_grow_array((void **)&result->writes,
+                          &result->write_capacity,sizeof(*result->writes),
+                          result->write_count+1U)) {
+        minias_set_error(as,"out-of-memory:fragment-writes");
         return false;
     }
-    if(size!=0U)memcpy(result->bytes+result->byte_count,bytes,size);
-    result->byte_count=needed;
+    write=&result->writes[result->write_count++];
+    memset(write,0,sizeof(*write));
+    write->kind=borrow ? MINIAS_WRITE_BORROWED_BYTES : MINIAS_WRITE_COPIED_BYTES;
+    write->size=size;
+    if(borrow)write->borrowed_bytes=bytes;
+    else {
+        write->copied_offset=result->byte_storage_size;
+        result->byte_storage_size+=size;
+    }
+    result->byte_count+=size;
     return true;
 }
 
@@ -1134,6 +1174,7 @@ static bool minias_stage_fragment_pattern(MiniAs *as,int section,
     MiniAsEncodeResult *result=as->active_encode_result;
     const MiniAsStmt *owner;
     MiniAsSection *sec=&as->sections[(size_t)section];
+    MiniAsFragmentWrite *write;
     size_t size,i;
     if(result==NULL || as->emitting_fragment_id>=as->stmt_count ||
        width==0U || width>8U || count>SIZE_MAX/width) {
@@ -1147,8 +1188,7 @@ static bool minias_stage_fragment_pattern(MiniAs *as,int section,
        (owner->fragment_kind==MINIAS_FRAGMENT_ALIGNMENT &&
         (sec->flags&MINIAS_SHF_EXECINSTR)!=0U &&
         !owner->align_has_fill) ||
-       result->repeat_width!=0U || result->borrowed_bytes!=NULL ||
-       result->byte_count!=0U || size>owner->size) {
+       result->byte_count>owner->size || size>owner->size-result->byte_count) {
         minias_set_error(as,"fragment-pattern-stage-conflict:line=%zu",
                          owner->line);
         return false;
@@ -1159,11 +1199,22 @@ static bool minias_stage_fragment_pattern(MiniAs *as,int section,
                 minias_set_error(as,"nobits-nonzero-data:%s",sec->name);
                 return false;
             }
-    memcpy(result->repeat_pattern,pattern,width);
-    result->repeat_width=(unsigned)width;
-    result->repeat_count=count;
-    result->repeat_ignore_nobits_fill=ignore_nobits_fill;
-    result->byte_count=size;
+    if(size==0U)return true;
+    if(!minias_grow_array((void **)&result->writes,
+                          &result->write_capacity,sizeof(*result->writes),
+                          result->write_count+1U)) {
+        minias_set_error(as,"out-of-memory:fragment-writes");
+        return false;
+    }
+    write=&result->writes[result->write_count++];
+    memset(write,0,sizeof(*write));
+    write->kind=MINIAS_WRITE_PATTERN;
+    write->size=size;
+    memcpy(write->pattern,pattern,width);
+    write->repeat_width=(unsigned)width;
+    write->repeat_count=count;
+    write->ignore_nobits_fill=ignore_nobits_fill;
+    result->byte_count+=size;
     return true;
 }
 
@@ -1176,7 +1227,7 @@ bool minias_section_append(MiniAs *as, int section_index, const void *data, size
     }
     sec = &as->sections[(size_t)section_index];
     if(as->emitting_fragment && !as->committing_fragment)
-        return minias_stage_fragment_bytes(as,section_index,data,size);
+        return minias_stage_fragment_bytes(as,section_index,data,size,false);
     if (sec->type == MINIAS_SHT_NOBITS) {
         const unsigned char *bytes=(const unsigned char *)data;
         size_t i;

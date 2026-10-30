@@ -85,4 +85,21 @@ if command -v riscv64-linux-gnu-as >/dev/null && \
     cmp "$work/vdso-gnu.bin" "$work/vdso-minias.bin"
 fi
 
+# Supervisor instructions are selected by execution privilege, not by a
+# fictitious S bit in GCC's -march=rv64imac profile. Real Linux head.S uses
+# sfence.vma before writing satp; strict RV64I still rejects the same word.
+printf '.text\nsfence.vma\nsfence.vma a0, a1\nsret\nwfi\n' >"$work/priv.s"
+"$MINIAS" -march=rv64imac_zicsr_zifencei -mabi=lp64 \
+    -o "$work/priv-minias.o" "$work/priv.s"
+if command -v riscv64-linux-gnu-as >/dev/null && \
+   command -v riscv64-linux-gnu-objcopy >/dev/null; then
+    riscv64-linux-gnu-as -march=rv64imac_zicsr_zifencei -mabi=lp64 \
+        -o "$work/priv-gnu.o" "$work/priv.s"
+    riscv64-linux-gnu-objcopy -O binary -j .text \
+        "$work/priv-gnu.o" "$work/priv-gnu.bin"
+    riscv64-linux-gnu-objcopy -O binary -j .text \
+        "$work/priv-minias.o" "$work/priv-minias.bin"
+    cmp "$work/priv-gnu.bin" "$work/priv-minias.bin"
+fi
+
 echo "MINIAS_RV_EXEC_RAW_ESCAPE=PASS arch_cases=$count data_valid=${#cases[@]} vdso=PASS"

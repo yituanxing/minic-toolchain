@@ -419,18 +419,33 @@ typedef struct MiniAsEncodeAnchorRequest {
     uint64_t offset;
 } MiniAsEncodeAnchorRequest;
 
-typedef struct MiniAsEncodeResult {
-    unsigned char *bytes;
-    size_t byte_count;
-    size_t byte_capacity;
-    /* Large immutable .incbin/.ascii data is borrowed until this fragment
-     * commits. Repeated fills/patterns stay compact instead of allocating
-     * a second potentially huge temporary output buffer. */
+/* Ordered, fragment-owned output operations. One source statement can emit
+ * several fixed DATA fields, a borrowed .incbin snapshot and compact fills
+ * without copying a large pattern into an intermediate contiguous buffer. */
+typedef enum MiniAsFragmentWriteKind {
+    MINIAS_WRITE_COPIED_BYTES,
+    MINIAS_WRITE_BORROWED_BYTES,
+    MINIAS_WRITE_PATTERN
+} MiniAsFragmentWriteKind;
+typedef struct MiniAsFragmentWrite {
+    MiniAsFragmentWriteKind kind;
+    size_t size;
+    size_t copied_offset;
     const unsigned char *borrowed_bytes;
-    unsigned char repeat_pattern[8];
+    unsigned char pattern[8];
     size_t repeat_count;
     unsigned repeat_width;
-    bool repeat_ignore_nobits_fill;
+    bool ignore_nobits_fill;
+} MiniAsFragmentWrite;
+
+typedef struct MiniAsEncodeResult {
+    unsigned char *bytes;
+    size_t byte_count; /* logical fragment size, including compact writes */
+    size_t byte_storage_size; /* copied bytes only; never counts fills */
+    size_t byte_capacity;
+    MiniAsFragmentWrite *writes;
+    size_t write_count;
+    size_t write_capacity;
     MiniAsEncodeFixupRequest *fixups;
     size_t fixup_count;
     size_t fixup_capacity;
