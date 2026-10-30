@@ -595,7 +595,9 @@ bool minic_loongarch64_emit_integer_instruction(
                     program, target, fn, ins, &width, &sign) ||
                 (!lhs_in_previous_gp &&
                  !emit_sp_mem(out, width == 8U ? "ld.d" : "ld.w",
-                             "$t0", minic_lp64_frame_value_offset(frame_plan, operand))) ||
+                              "$t0", minic_lp64_frame_value_offset(frame_plan, operand))) ||
+                (lhs_in_previous_gp && width != 8U &&
+                 fputs("  slli.w $t0, $t0, 0\n", out) == EOF) ||
                 fputs("  nor $t0, $t0, $zero\n", out) == EOF ||
                 (width != 8U && !minic_loongarch64_emit_integer_normalize(out, width, sign)))
                 return false;
@@ -610,7 +612,9 @@ bool minic_loongarch64_emit_integer_instruction(
                     program, target, fn, ins, &width, &sign) ||
                 (!lhs_in_previous_gp &&
                  !emit_sp_mem(out, width == 8U ? "ld.d" : "ld.w",
-                             "$t0", minic_lp64_frame_value_offset(frame_plan, operand))) ||
+                              "$t0", minic_lp64_frame_value_offset(frame_plan, operand))) ||
+                (lhs_in_previous_gp && width != 8U &&
+                 fputs("  slli.w $t0, $t0, 0\n", out) == EOF) ||
                 fputs(width == 8U ? "  sub.d $t0, $zero, $t0\n"
                                   : "  sub.w $t0, $zero, $t0\n", out) == EOF ||
                 (width != 8U && !minic_loongarch64_emit_integer_normalize(out, width, sign)))
@@ -645,6 +649,8 @@ bool minic_loongarch64_emit_integer_instruction(
             if ((!lhs_in_previous_gp &&
                  !emit_sp_mem(out, wide ? "ld.d" : "ld.w", "$t0",
                              minic_lp64_frame_value_offset(frame_plan, lhs))) ||
+                (lhs_in_previous_gp && !wide &&
+                 fputs("  slli.w $t0, $t0, 0\n", out) == EOF) ||
                 (immediate
                  ? fprintf(out, "  addi.%c $t0, $t0, %" PRId64 "\n",
                            wide ? 'd' : 'w', constant) < 0
@@ -684,6 +690,8 @@ bool minic_loongarch64_emit_integer_instruction(
             if ((!lhs_in_previous_gp &&
                  !emit_sp_mem(out, lw == 8U ? "ld.d" : "ld.w",
                              "$t0", minic_lp64_frame_value_offset(frame_plan, lhs))) ||
+                (lhs_in_previous_gp && lw != 8U &&
+                 fputs("  slli.w $t0, $t0, 0\n", out) == EOF) ||
                 (immediate_opcode != NULL
                  ? fprintf(out, "  %s $t0, $t0, %" PRId64 "\n",
                            immediate_opcode, constant) < 0
@@ -718,6 +726,8 @@ bool minic_loongarch64_emit_integer_instruction(
             if ((!lhs_in_previous_gp &&
                  !emit_sp_mem(out, wide ? "ld.d" : "ld.w",
                              "$t0", minic_lp64_frame_value_offset(frame_plan, lhs))) ||
+                (lhs_in_previous_gp && !wide &&
+                 fputs("  slli.w $t0, $t0, 0\n", out) == EOF) ||
                 !emit_sp_mem(out, wide ? "ld.d" : "ld.w",
                              "$t1", minic_lp64_frame_value_offset(frame_plan, rhs)) ||
                 fputs(op, out) == EOF)
@@ -764,7 +774,9 @@ bool minic_loongarch64_emit_integer_instruction(
             wide = lw == 8U;
             if ((!lhs_in_previous_gp &&
                  !emit_sp_mem(out, wide ? "ld.d" : "ld.w", "$t0",
-                             minic_lp64_frame_value_offset(frame_plan, lhs))) ||
+                              minic_lp64_frame_value_offset(frame_plan, lhs))) ||
+                (lhs_in_previous_gp && !wide &&
+                 fputs("  slli.w $t0, $t0, 0\n", out) == EOF) ||
                 !emit_sp_mem(out, wide ? "ld.d" : "ld.w", "$t1",
                              minic_lp64_frame_value_offset(frame_plan, rhs)) ||
                 fputs(ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_LESS
@@ -786,7 +798,9 @@ bool minic_loongarch64_emit_integer_instruction(
             wide = pointer || width == 8U;
             if ((!lhs_in_previous_gp &&
                  !emit_sp_mem(out, wide ? "ld.d" : "ld.w", "$t0",
-                             minic_lp64_frame_value_offset(frame_plan, v))) ||
+                              minic_lp64_frame_value_offset(frame_plan, v))) ||
+                (lhs_in_previous_gp && !wide &&
+                 fputs("  slli.w $t0, $t0, 0\n", out) == EOF) ||
                 fputs("  sltui $t0, $t0, 1\n", out) == EOF)
                 return false;
             (void)sign;

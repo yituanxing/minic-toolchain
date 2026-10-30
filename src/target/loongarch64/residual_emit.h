@@ -13,6 +13,7 @@ bool minic_loongarch64_emit_residual_instruction(
     FILE *, const MinicDirectLP64BlockContext *, MinicCoreInstructionId,
     size_t block_id, size_t result_offset,
     bool native_opcode_presence_checked, bool emits_no_native_opcode,
+    bool operand_in_previous_gp,
     bool *needs_writeback);
 
 /* Certifies an address-only Core instruction generates zero native machine

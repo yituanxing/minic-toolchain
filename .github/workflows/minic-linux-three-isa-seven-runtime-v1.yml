@@ -647,6 +647,21 @@ jobs:
             --vmlinux "$GNU_WORK/build/vmlinux" --nm /usr/bin/aarch64-linux-gnu-nm \
             --output "$RUNTIME_OUTPUT/aarch64-early-trace" \
             --timeout 15 --max-bytes 1048576
+      - name: Capture only failed x86 BIOS-only P0 exception and reset evidence
+        if: failure() && matrix.target == 'x86_64'
+        continue-on-error: true
+        shell: bash
+        timeout-minutes: 2
+        run: |
+          set -Eeuo pipefail
+          python3 tools/ci/linux-three-isa-x86-early-boot-trace-v1.py \
+            --image "$GNU_WORK/build/arch/x86/boot/bzImage" \
+            --initramfs "$RUNTIME_OUTPUT/runtime-initramfs.cpio.gz" \
+            --failed-p0 "$RUNTIME_OUTPUT/candidate/boot/p0.log" \
+            --gnu-receipt "$RUNTIME_OUTPUT/boot/gnu-qemu-receipt.json" \
+            --qemu /usr/bin/qemu-system-x86_64 \
+            --output "$RUNTIME_OUTPUT/x86-early-trace" \
+            --timeout 20 --max-bytes 1048576
       - name: Preserve genuine GNU LD errors, MiniC C provenance and dual QEMU logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -666,6 +681,7 @@ jobs:
             build/minic-seven-receiver-${{ matrix.target }}/candidate/link-failure-owner-diagnostics/
             build/minic-seven-receiver-${{ matrix.target }}/candidate/boot/
             build/minic-seven-receiver-${{ matrix.target }}/aarch64-early-trace/
+            build/minic-seven-receiver-${{ matrix.target }}/x86-early-trace/
           if-no-files-found: warn
           retention-days: 14
 

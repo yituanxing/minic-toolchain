@@ -39,11 +39,39 @@ static inline bool minic_multi_direct_gp_unary_consumer_opcode(
            kind == MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO;
 }
 
-static inline bool minic_multi_direct_gp_producer_opcode(
+/* Only LoongArch currently opts in to GP forwarding.  All additions here
+ * are native scalar producers which finish with their value in its $t0
+ * transport register; AArch64 keeps its dispatch opt-out.  A target must
+ * still validate source and result widths before using this contract. */
+static inline bool minic_multi_direct_gp_scalar_producer(
     MinicCoreInstructionKind kind) {
-    return minic_multi_direct_gp_binary_consumer_opcode(kind) ||
-           minic_multi_direct_gp_unary_consumer_opcode(kind) ||
-           kind == MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
+    if (minic_multi_direct_gp_binary_consumer_opcode(kind) ||
+        minic_multi_direct_gp_unary_consumer_opcode(kind)) return true;
+    switch (kind) {
+    case MINIC_CORE_INSTRUCTION_LOAD:
+    case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT:
+    case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static inline bool minic_multi_direct_gp_scalar_consumer(
+    const MinicCoreInstruction *consumer, MinicCoreValueId result) {
+    if (consumer == NULL) return false;
+    if (minic_multi_direct_gp_binary_consumer_opcode(consumer->kind))
+        return consumer->value.binary.left == result;
+    switch (consumer->kind) {
+    case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION:
+        return consumer->value.operand == result;
+    case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE:
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT:
+    case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:
+        return consumer->value.operand == result;
+    default:
+        return false;
+}
 }
 
 static inline bool minic_multi_direct_gp_adjacent_chain(
@@ -54,25 +82,21 @@ static inline bool minic_multi_direct_gp_adjacent_chain(
     MinicCoreValueId result;
     if (fn == NULL || producer == NULL || consumer == NULL ||
         value_use_counts == NULL ||
-        !(minic_multi_direct_gp_producer_opcode(producer->kind) ||
-          producer->kind == MINIC_CORE_INSTRUCTION_LOAD) ||
-        !(minic_multi_direct_gp_binary_consumer_opcode(consumer->kind) ||
-          minic_multi_direct_gp_unary_consumer_opcode(consumer->kind)))
+        !minic_multi_direct_gp_scalar_producer(producer->kind) ||
+        !minic_multi_direct_gp_scalar_consumer(consumer, producer->result))
         return false;
     result = producer->result;
     return result != MINIC_CORE_VALUE_INVALID &&
            result < fn->value_count && value_use_counts[result] == 1U &&
-           ((minic_type_is_integer(producer->type) &&
-             !minic_type_is_int128_integer(producer->type)) ||
-            minic_type_is_pointer(producer->type)) &&
+           ((minic_type_is_integer(fn->values[result].type) &&
+             !minic_type_is_int128_integer(fn->values[result].type)) ||
+            minic_type_is_pointer(fn->values[result].type)) &&
            !minic_type_is_int128_integer(producer->type) &&
            !minic_type_is_int128_integer(consumer->type) &&
-           (minic_multi_direct_gp_binary_consumer_opcode(consumer->kind)
-             ? consumer->value.binary.left == result &&
-               ((minic_type_is_integer(fn->values[result].type) &&
-                 !minic_type_is_int128_integer(fn->values[result].type)) ||
-                minic_type_is_pointer(fn->values[result].type))
-             : consumer->value.operand == result);
+           (consumer->kind != MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION ||
+            ((minic_type_is_integer(consumer->type) &&
+              !minic_type_is_int128_integer(consumer->type)) ||
+             minic_type_is_pointer(consumer->type)));
 }
 
 /* A scalar LOAD or pure integer ALU result followed by its only STORE
@@ -87,8 +111,7 @@ static inline bool minic_multi_direct_gp_adjacent_result_store(
     MinicType type;
     if (fn == NULL || producer == NULL || consumer == NULL ||
         value_use_counts == NULL ||
-        (producer->kind != MINIC_CORE_INSTRUCTION_LOAD &&
-         !minic_multi_direct_gp_producer_opcode(producer->kind)) ||
+        !minic_multi_direct_gp_scalar_producer(producer->kind) ||
         consumer->kind != MINIC_CORE_INSTRUCTION_STORE)
         return false;
     result = producer->result;

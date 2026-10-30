@@ -129,7 +129,8 @@ bool minic_loongarch64_emit_residual_instruction(
     FILE *out, const MinicDirectLP64BlockContext *ctx,
     MinicCoreInstructionId ins_id, size_t block_id,
     size_t offset, bool native_opcode_presence_checked,
-    bool emits_no_native_opcode, bool *needs_writeback) {
+    bool emits_no_native_opcode, bool operand_in_previous_gp,
+    bool *needs_writeback) {
     const MinicC0Program *program;
     const MinicTargetInfo *target;
     const MinicCoreFunction *fn;
@@ -435,10 +436,28 @@ bool minic_loongarch64_emit_residual_instruction(
                 return minic_multi_direct_machine_reject(fn, "loongarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
             if (stride != 0U) {
-                if (fprintf(out, "  li.d $t2, %zu\n"
-                                 "  mul.d $t1, $t1, $t2\n"
-                                 "  %s $t0, $t0, $t1\n", stride,
+                /* Multiplication by an exact power of two is the same
+                 * modulo-2^64 index scaling as a left shift, including
+                 * negative signed indices. Keep arbitrary strides on the
+                 * original full-width multiply path. */
+                if ((stride & (stride - 1U)) == 0U) {
+                    size_t shift = 0U;
+                    size_t remaining = stride;
+                    while (remaining > 1U) {
+                        remaining >>= 1U;
+                        ++shift;
+                    }
+                    if ((shift != 0U &&
+                         fprintf(out, "  slli.d $t1, $t1, %zu\n", shift) < 0) ||
+                        fprintf(out, "  %s $t0, $t0, $t1\n",
                             ins->value.pointer_offset.subtract ? "sub.d" : "add.d") < 0)
+                        return minic_multi_direct_machine_reject(
+                            fn, "loongarch64", name, reject_stage,
+                            reject_block, reject_ins, __LINE__);
+                } else if (fprintf(out, "  li.d $t2, %zu\n"
+                                        "  mul.d $t1, $t1, $t2\n"
+                                        "  %s $t0, $t0, $t1\n", stride,
+                                   ins->value.pointer_offset.subtract ? "sub.d" : "add.d") < 0)
                     return minic_multi_direct_machine_reject(fn, "loongarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
             }
@@ -538,9 +557,11 @@ bool minic_loongarch64_emit_residual_instruction(
                         return minic_multi_direct_machine_reject(
                             fn, "loongarch64", name, reject_stage,
                             reject_block, reject_ins, __LINE__);
-                } else if (!emit_sp_mem(out,
+                } else if ((!operand_in_previous_gp && !emit_sp_mem(out,
                                  cast.source_width == 8U ? "ld.d" : "ld.w",
-                                 "$t0", minic_lp64_frame_value_offset(frame_plan, src)) ||
+                                 "$t0", minic_lp64_frame_value_offset(frame_plan, src))) ||
+                           (operand_in_previous_gp && cast.source_width != 8U &&
+                            fputs("  slli.w $t0, $t0, 0\n", out) == EOF) ||
                            (cast.source_width < 8U &&
                             !minic_loongarch64_emit_integer_normalize(
                                 out, cast.source_width, cast.source_signed)) ||
@@ -577,9 +598,11 @@ bool minic_loongarch64_emit_residual_instruction(
                         reject_block, reject_ins, __LINE__);
                 break;
             }
-            if (!emit_sp_mem(out,
+            if ((!operand_in_previous_gp && !emit_sp_mem(out,
                     cast.source_width == 8U ? "ld.d" : "ld.w",
-                    "$t0", minic_lp64_frame_value_offset(frame_plan, src)))
+                    "$t0", minic_lp64_frame_value_offset(frame_plan, src))) ||
+                (operand_in_previous_gp && cast.source_width != 8U &&
+                 fputs("  slli.w $t0, $t0, 0\n", out) == EOF))
                 return minic_multi_direct_machine_reject(
                     fn, "loongarch64", name, reject_stage,
                     reject_block, reject_ins, __LINE__);

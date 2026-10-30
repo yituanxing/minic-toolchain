@@ -433,7 +433,8 @@ static bool loongarch64_machine_emit_family(
         return minic_loongarch64_emit_residual_instruction(
             out, ctx, ins_id, block_id, shape->result_offset,
             shape->native_opcode_presence_checked,
-            shape->emits_no_native_opcode, needs_gp_store);
+            shape->emits_no_native_opcode, shape->lhs_in_previous_gp,
+            needs_gp_store);
     case MINIC_DIRECT_MACHINE_COMPILER_BARRIER:
     default:
         return false; /* Common visitor handles compiler barriers. */
