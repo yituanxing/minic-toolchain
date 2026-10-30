@@ -197,7 +197,9 @@ jobs:
   # defconfig, GNU compiler/linker and guest P0/P1 as the MiniAS lane. It is
   # opt-in on the same source commit, never substituted into production.
   aarch64-gnu-baseline:
-    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[minias-linux-four]') && contains(github.event.head_commit.message, '[minias-aarch-gnu-control]')
+    # A full Linux run must include its GNU control on the identical commit.
+    # Requiring a second commit-message tag let the control silently skip.
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[minias-linux-four]')
     runs-on: ubuntu-24.04
     timeout-minutes: 110
     steps:
@@ -261,11 +263,11 @@ jobs:
   # Matched GNU control. Both variants use the same kernel release,
   # configuration, GCC, GNU linker, initramfs and the shared boot()/require()
   # function; only the production assembler backend differs. The explicit
-  # [minias-linux-four] + [minias-loong-gnu-control] push gates re-certify
+  # [minias-linux-four] push gates re-certify
   # both assemblers on the same commit, without rerunning this GNU control
   # on routine MiniAS code pushes.
   loong-gnu-baseline:
-    if: (github.event_name == 'workflow_dispatch' && inputs.loong_replay_run_id == '' && inputs.loong_gnu_baseline_build) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[minias-linux-four]') && contains(github.event.head_commit.message, '[minias-loong-gnu-control]'))
+    if: (github.event_name == 'workflow_dispatch' && inputs.loong_replay_run_id == '' && inputs.loong_gnu_baseline_build) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[minias-linux-four]'))
     runs-on: ubuntu-24.04
     timeout-minutes: 110
     steps:
@@ -321,7 +323,7 @@ jobs:
   # Only full same-commit cross-arch certifications opt into this comparison.
   # The standalone MiniAS and GNU runs can still be diagnosed separately.
   matched-config-provenance:
-    if: always() && github.event_name == 'push' && contains(github.event.head_commit.message, '[minias-linux-four]') && contains(github.event.head_commit.message, '[minias-aarch-gnu-control]') && contains(github.event.head_commit.message, '[minias-loong-gnu-control]')
+    if: always() && github.event_name == 'push' && contains(github.event.head_commit.message, '[minias-linux-four]')
     needs: [gcc-minias-kbuild-qemu, aarch64-gnu-baseline, loong-gnu-baseline]
     runs-on: ubuntu-24.04
     steps:

@@ -765,3 +765,33 @@ full Linux object correctness are independently tracked after this cleanup.
    encode recomputes the word; give remaining LI.W/PCALA exceptions typed
    descriptors. Consolidate Target-private FixupSpec and explicit LSX/LASX
    feature requirements. Do not erase genuine ISA format distinctions.
+
+## 2026-10-31 exact-source re-audit and Linux gate ownership
+
+The preceding actionable list is a historical audit snapshot. At `8407e1e0`
+the latest assembler source has already closed several items: all DATA,
+FILL, SPACE, ALIGN and instruction bytes commit through a checked MC encode
+transaction; RISC-V multiword LI retains one typed plan; `.option relax` now
+fails closed rather than promising absent `R_RISCV_RELAX/ALIGN` markers.
+Do not recreate these removed implementations based on older audit text.
+
+The ELF writer now stages complete regular-file images in an exclusive
+same-directory file before atomic rename. An output-size-limit regression
+proves a failed write leaves the prior object and mode intact; nonregular
+Kbuild sinks such as `/dev/null` deliberately preserve stream behavior.
+
+At `ec3a9008`, x86-64 and RV64 real Linux QEMU P0/P1 passed independently;
+AArch64 and LoongArch64 stopped on Kbuild-time `.config` drift, **not** a
+demonstrated new instruction mismatch. `cbdb07f1` makes capability probes
+use the same toolchain as production Kbuild and records pre/final configs.
+The full `[minias-linux-four]` route must always launch its AArch64 and
+LoongArch64 GNU controls plus the matched-config/entry-source gate on the
+same commit; no second optional marker can silently omit that evidence.
+Until the new exact-head jobs finish, four-architecture runtime acceptance
+remains unproven on the current tree.
+
+Remaining structural work is constrained to genuine open seams: conditional
+SourceGraph dependency invalidation, ELF SectionKey `unique` and inherited
+COMDAT flags, and explicit target-owned RISC-V linker relaxation. Preserve
+the proven source-reparse fallback until a dependent-graph implementation
+has an independent GNU semantic oracle.
