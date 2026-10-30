@@ -489,6 +489,9 @@ typedef struct MiniAsCfiProc {
     size_t op_count;
     unsigned state_depth;
     int64_t cfa_offset;
+    /* Per-procedure CIE return address column.  .cfi_return_column changes
+     * this field, not the target ABI's initial saved-RA CFI rule. */
+    unsigned return_column;
     bool cfa_known;
     bool simple;        /* GNU .cfi_startproc simple suppresses initial CFA */
     bool signal_frame;  /* GNU .cfi_signal_frame changes CIE augmentation */
@@ -794,6 +797,8 @@ typedef struct MiniAsCfiABI {
     unsigned return_reg;
     unsigned stack_reg;
     unsigned address_size;
+    unsigned eh_fde_alignment; /* zero: align each FDE to address size */
+    unsigned eh_final_alignment; /* zero: use ordinary FDE alignment */
     unsigned negate_ra_opcode;
     unsigned initial_cfa_offset;
     bool initial_ra_saved;
@@ -867,6 +872,9 @@ typedef struct MiniAsTargetOps {
     /* A semantic capability: never infer target support from an ELF
      * relocation number, where zero may be a valid numeric enumeration. */
     bool (*supports_fixup)(MiniAsFixupKind, unsigned);
+    /* Optional object ABI-specific capability. For instance ELF32/i386
+     * exposes ABS16/PC16 while ELF64/x86-64 intentionally rejects them. */
+    bool (*supports_fixup_for_object)(const MiniAs *,MiniAsFixupKind,unsigned);
     uint32_t (*fixup_relocation_type)(MiniAsFixupKind, unsigned);
     /* Optional ABI-sensitive relocation mapping (e.g. x86-64 vs i386).
      * Both profiles reuse one instruction parser and machine encoder. */

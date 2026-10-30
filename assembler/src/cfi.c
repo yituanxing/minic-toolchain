@@ -24,6 +24,8 @@ MiniAsCfiABI minias_cfi_abi(const MiniAs *as) {
     abi.return_reg=as->target->cfi_return_reg;
     abi.stack_reg=as->target->cfi_stack_reg;
     abi.address_size=as->target->cfi_address_size;
+    abi.eh_fde_alignment=as->target->cfi_eh_fde_alignment;
+    abi.eh_final_alignment=as->target->cfi_eh_final_alignment;
     abi.negate_ra_opcode=as->target->cfi_negate_ra_opcode;
     abi.initial_cfa_offset=as->target->cfi_initial_cfa_offset;
     abi.initial_ra_saved=as->target->cfi_initial_ra_saved;
@@ -284,6 +286,7 @@ bool minias_cfi_directive(MiniAs *as,const char *op,
         proc->begin_symbol=anchor;
         proc->end_symbol=SIZE_MAX;
         proc->first_op=as->cfi_op_count;
+        proc->return_column=minias_cfi_abi(as).return_reg;
         proc->simple=strcmp(args,"simple")==0;
         proc->cfa_known=true;
         proc->cfa_offset=proc->simple?0:
@@ -298,6 +301,14 @@ bool minias_cfi_directive(MiniAs *as,const char *op,
     proc=&as->cfi_procs[as->cfi_proc_count-1U];
     if (!strcmp(op,".cfi_signal_frame") && !*args) {
         proc->signal_frame=true;
+        return true;
+    }
+    if (!strcmp(op,".cfi_return_column")) {
+        /* GNU emits this in the CIE, even if the directive appears after
+         * the first instruction.  DWARF CIE v1 stores an 8-bit column;
+         * reject overflow here instead of silently truncating it later. */
+        if (!cfi_register(args,&reg) || reg>UINT8_MAX)goto bad;
+        proc->return_column=reg;
         return true;
     }
     if (!strcmp(op,".cfi_endproc")) {

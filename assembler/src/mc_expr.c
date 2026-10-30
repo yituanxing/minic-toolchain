@@ -1420,6 +1420,8 @@ bool minias_compile_data_mc(MiniAs *as, MiniAsStmt *stmt,
  * Common must ask Target policy before choosing a fixup strategy. */
 static bool target_supports_fixup(const MiniAs *as,
                                   MiniAsFixupKind kind,unsigned width) {
+    if(as->target->supports_fixup_for_object!=NULL)
+        return as->target->supports_fixup_for_object(as,kind,width);
     return as->target->supports_fixup!=NULL &&
            as->target->supports_fixup(kind,width);
 }
@@ -1454,9 +1456,9 @@ static bool emit_symbol_minus_dot(MiniAs *as,
         /* Both supported ELF64 targets directly represent S+A-P at
          * either 32 or 64 bits. The Target reports whether it supports
          * the semantic relocation; no architecture-name branching here. */
-        MiniAsFixupKind kind=width==4U?
+        MiniAsFixupKind kind=(width==2U || width==4U)?
             as->target->dot_relative_fixup:MINIAS_FIXUP_PREL64;
-        if((width==4U || width==8U) &&
+        if((width==2U || width==4U || width==8U) &&
            kind!=MINIAS_FIXUP_NONE &&
            target_supports_fixup(as,kind,width))
             return minias_section_append_zero(as,stmt->section,width) &&
@@ -1594,14 +1596,14 @@ static bool emit_symbol_difference(MiniAs *as,
      * unsupported ADD/SUB relocation pairs on x86/AArch64. Targets with
      * genuine paired relocations continue to use their existing path.
      */
-    if((width==4U || width==8U) &&
+    if((width==2U || width==4U || width==8U) &&
        (!can_add || !can_sub) &&
        rhs->defined &&
        /* GNU GAS resolves defined GLOBAL/WEAK anchors to their section
         * positions for PC64 as well as LOCAL anchors. This binding
         * behavior is the same on x86-64 and AArch64. */
        rhs->section==stmt->section) {
-        MiniAsFixupKind kind=width==4U?
+        MiniAsFixupKind kind=(width==2U || width==4U)?
             as->target->dot_relative_fixup:MINIAS_FIXUP_PREL64;
         if(kind!=MINIAS_FIXUP_NONE &&
            target_supports_fixup(as,kind,width)) {
@@ -1745,7 +1747,7 @@ bool minias_emit_mc_data(MiniAs *as,const MiniAsStmt *stmt) {
             } else {
                 /* GNU permits a forward .short absolute .set/.equ symbol,
                  * but no target-independent ABS16 unresolved reference. */
-                if(data->width!=4U && data->width!=8U) {
+                if(!target_supports_fixup(as,MINIAS_FIXUP_ABS,data->width)) {
                     minias_set_error(as,"unsupported-symbol-width:%u:line=%zu",
                                      data->width,stmt->line);
                     return false;

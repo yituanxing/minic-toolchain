@@ -460,8 +460,11 @@ static bool minias_write_elf(MiniAs *as,
          * A raw NONE request is never allowed to masquerade as an actual
          * relocation, regardless of a future target's numeric mapping. */
         if (input->kind == MINIAS_FIXUP_NONE ||
-            as->target->supports_fixup == NULL ||
-            !as->target->supports_fixup(input->kind,input->width)) {
+            (as->target->supports_fixup_for_object!=NULL ?
+             !as->target->supports_fixup_for_object(
+                 as,input->kind,input->width) :
+             (as->target->supports_fixup==NULL ||
+              !as->target->supports_fixup(input->kind,input->width)))) {
             minias_set_error(as, "unsupported-elf-fixup:kind=%u",
                              (unsigned)input->kind);
             goto done;

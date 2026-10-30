@@ -152,12 +152,12 @@ boot() {
         'poweroff -f'
     ) | timeout --signal=TERM "$qemu_timeout" "$qemu" \
       -M virt -cpu cortex-a57 -m 1G -smp 1 \
-      -nographic -no-reboot -kernel "$image" -initrd "$initramfs" \
+      -nographic -no-reboot -nic none -kernel "$image" -initrd "$initramfs" \
       -append "$append" >"$log" 2>&1 || status=$?
   else
     timeout --signal=TERM "$qemu_timeout" "$qemu" \
       -M virt -cpu cortex-a57 -m 1G -smp 1 \
-      -nographic -no-reboot -kernel "$image" -initrd "$initramfs" \
+      -nographic -no-reboot -nic none -kernel "$image" -initrd "$initramfs" \
       -append "$append" </dev/null >"$log" 2>&1 || status=$?
   fi
   status=${status:-0}

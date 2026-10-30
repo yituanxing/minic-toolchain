@@ -132,6 +132,22 @@ jobs:
             bash tests/assembler/probe-rv-exec-directive-completeness.sh
       - name: Assert one Common DWARF object model, CFI writer and owned bytecode
         run: bash tests/assembler/probe-cfi-model-ownership.sh
+      - name: GNU CFI return-column CIE/FDE parity including LoongArch Linux directive
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-cfi-return-column-gnu.sh
+      - name: GNU ELF32 i386 CIE frame ABI, bytes and relocation parity
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-cfi-i386-gnu.sh
+      - name: GNU ELF32/ELF64 cross-object linked CFI section relocation semantics
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-cfi-debug-frame-link-gnu.sh
+      - name: GNU Linux real-mode i386 code16/code16gcc and ELF32 REL link oracle
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-x86-linux-code16-gnu.sh
       - name: Enforce one Common MCFragment layout engine and shared variable DATA
         run: bash tests/assembler/probe-mc-layout-ownership.sh
       - name: Enforce unique Common MCExpr grammar and emission ownership
