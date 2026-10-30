@@ -418,7 +418,9 @@ minic_core_lower_if(MinicCoreLowerContext *context, const MinicStatement *statem
      * evaluation entirely. */
     if (statement->cleanup_context == statement->cleanup_stop_context &&
         minic_type_is_integer(condition_expression->type) &&
-        minic_core_cfg_disjoint_bitmask_is_zero(context, statement->expression) &&
+        (minic_core_cfg_disjoint_bitmask_is_zero(context, statement->expression) ||
+         minic_core_cfg_bounded_comparison_is_false(
+             context, statement->expression)) &&
         !core_block_contains_reentry_label(context, then_source)) {
         MinicCoreValueId ignored_condition = MINIC_CORE_VALUE_INVALID;
         status = lower_expression(context, statement->expression, &ignored_condition);

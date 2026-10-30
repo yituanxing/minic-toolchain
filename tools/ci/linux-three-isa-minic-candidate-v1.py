@@ -673,6 +673,124 @@ def print_link_symbol_owner_diagnostics(target: str, summary: dict,
             sort_keys=True, separators=(",", ":")))
 
 
+def print_link_assert_source_context(target: str, summary: dict,
+                                     owner_report: dict | None,
+                                     output: Path, *,
+                                     max_symbols: int = 8,
+                                     max_sites: int = 3,
+                                     byte_budget: int = 20 * 1024) -> None:
+    """Bounded *text* evidence from authenticated original GNU frozen .i.
+
+    ELF relocation matching already established the C-owner identity in
+    ``owner_report``. Looking up the corresponding assert spelling in its GNU
+    preprocessed text is only source context: the matched token may be a
+    declaration, unreachable expansion, or macro spelling. Never label these
+    snippets as proven executing calls, and never change the GNU LD outcome.
+    """
+    if not (1 <= max_symbols <= 8 and 1 <= max_sites <= 3 and
+            512 <= byte_budget <= 20 * 1024):
+        raise ValueError("invalid bounded original GNU assert excerpt budget")
+    samples = (owner_report or {}).get("samples", [])
+    source_root = output / "link-failure-owner-diagnostics"
+    emitted_bytes = 0
+    emitted_sites = 0
+    exhausted = False
+    # All output lines (including unavailable/corrupt-source diagnostics) are
+    # charged to the same budget so a malformed generated .i cannot flood CI.
+    def emit(message: dict) -> bool:
+        nonlocal emitted_bytes, exhausted
+        line = ("THREE_ISA_GNU_ASSERT_SOURCE_CONTEXT " +
+                json.dumps(message, ensure_ascii=True, sort_keys=True,
+                           separators=(",", ":")))
+        size = len(line.encode("utf-8")) + 1
+        # Reserve space for the mandatory final summary line itself.
+        if size > byte_budget - 256 - emitted_bytes:
+            exhausted = True
+            return False
+        print(line)
+        emitted_bytes += size
+        return True
+
+    for item in summary.get("symbols", [])[:max_symbols]:
+        symbol = item.get("name", "")
+        if re.fullmatch(r"__compiletime_assert_[0-9]+", symbol) is None:
+            continue
+        matches = [row for row in samples if symbol in row.get(
+            "owner_resolution", {}).get("matching_symbols", [])][:4]
+        if not matches:
+            if not emit({"target": target, "symbol": symbol,
+                         "status": "NO_AUTHENTICATED_FROZEN_SOURCE"}):
+                break
+            continue
+        for row in matches:
+            owner = row.get("owner", "")
+            path = PurePosixPath(owner)
+            if (not owner or path.is_absolute() or ".." in path.parts or
+                    path.suffix != ".o"):
+                if not emit({"target": target, "symbol": symbol,
+                             "status": "UNSAFE_AUTHENTICATED_OWNER"}):
+                    break
+                continue
+            original = source_root / path.with_suffix("") / "original.gnu.i"
+            if (not original.is_file() or original.is_symlink() or
+                    not original.resolve().is_relative_to(source_root.resolve()) or
+                    original.stat().st_size > 24 * 1024 * 1024 or
+                    sha(original) != row.get("input_sha256")):
+                if not emit({"target": target, "symbol": symbol, "owner": owner,
+                             "status": "FROZEN_SOURCE_MISSING_OVERSIZE_OR_SHA_MISMATCH"}):
+                    break
+                continue
+            lines = original.read_text(errors="replace").splitlines()
+            token = re.compile(r"(?<![A-Za-z0-9_])" + re.escape(symbol) + r"\s*\(")
+            found = 0
+            for line_index, raw_line in enumerate(lines):
+                for occurrence in token.finditer(raw_line):
+                    if found >= max_sites:
+                        break
+                    # Preserve the exact text neighborhood (not a fabricated
+                    # .i excerpt). Long generated macro lines are explicitly
+                    # windowed around this token, with omitted data marked.
+                    context = []
+                    for n in range(max(0, line_index - 2),
+                                   min(len(lines), line_index + 3)):
+                        raw = lines[n]
+                        begin = (max(0, occurrence.start() - 100)
+                                 if n == line_index else 0)
+                        excerpt = raw[begin:begin + 220]
+                        if begin:
+                            excerpt = "[...omitted...]" + excerpt
+                        if begin + 220 < len(raw):
+                            excerpt += "[...omitted...]"
+                        context.append({"line": n + 1, "text": excerpt})
+                    if not emit({"target": target, "symbol": symbol,
+                                 "owner": owner,
+                                 "frozen_i_sha256": row["input_sha256"],
+                                 "text_line": line_index + 1,
+                                 "status": "FROZEN_GNU_I_TEXT_TOKEN_NOT_EXECUTION_PROOF",
+                                 "source_context": context}):
+                        break
+                    found += 1
+                    emitted_sites += 1
+                if found >= max_sites or exhausted:
+                    break
+            if exhausted:
+                break
+            if not found:
+                if not emit({"target": target, "symbol": symbol,
+                             "owner": owner,
+                             "frozen_i_sha256": row["input_sha256"],
+                             "status": "NO_CALL_FORM_TOKEN_IN_FROZEN_SOURCE"}):
+                    break
+        if exhausted:
+            break
+    print("THREE_ISA_GNU_ASSERT_SOURCE_CONTEXT_SUMMARY " + json.dumps(
+        {"target": target, "emitted_bytes": emitted_bytes,
+         "byte_budget": byte_budget, "emitted_sites": emitted_sites,
+         "truncated": exhausted, "diagnostics_only": True,
+         "full_GNU_LD_QEMU_certified": False},
+        sort_keys=True, separators=(",", ":")))
+
+
 def verify_postlink_c_owners(out: Path, output: Path, target: str,
                              expected: dict[str, str]) -> dict:
     """Re-enumerate live GNU Kbuild ELF64 C owners after the final relink.
@@ -1139,6 +1257,17 @@ def relink(work: Path, output: Path, rows: list[dict], results: list[dict],
         # Make the actual failing symbols and authenticated owner SHAs visible
         # in the ordinary CI log, without printing whole .i/.cmd/LD files.
         print_link_symbol_owner_diagnostics(data["target"], summary, owner_report)
+        # A second, separately bounded console record shows only authentic
+        # GNU-preprocessed source token neighborhoods. These are *not* proof
+        # the text is a live CALL; the ELF relocation above is that proof.
+        # Diagnostics are always best-effort and cannot replace GNU LD.
+        try:
+            print_link_assert_source_context(data["target"], summary,
+                                             owner_report, output)
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            print("THREE_ISA_GNU_ASSERT_SOURCE_CONTEXT_ERROR " + json.dumps(
+                {"target": data["target"], "reason": type(exc).__name__},
+                sort_keys=True, separators=(",", ":")))
         raise Rejected(f"original GNU Kbuild relink failed rc={linked.returncode}")
     # Re-enumerate *all* live original-Kbuild C owners after the link, not just
     # the preoverlay list. A new GCC-generated C object may not evade this
@@ -1637,6 +1766,69 @@ def self_test() -> None:
             "kernel/first_error_2.o", "kernel/first_error_4.o"]
         assert evidence["owners"][0]["frozen_i_sha256"] == failed_rows[2]["sha256"]
         assert evidence["owners"][0]["original_cmd_sha256"] == failed_rows[2]["cmd_sha256"]
+        # The external ZIP may be unavailable. Emit tightly bounded *raw
+        # frozen GNU preprocessor text* around real authenticated assertion
+        # spellings, without mistaking an extern declaration for a proven
+        # executing call. A long macro line and a SHA mismatch cannot flood
+        # CI or silently substitute another owner's text.
+        context_output = Path(temp) / "assert-source-context-output"
+        context_i = (context_output / "link-failure-owner-diagnostics/kernel/"
+                     "first_error_2/original.gnu.i")
+        context_i.parent.mkdir(parents=True)
+        context_i.write_text(
+            "extern void __compiletime_assert_317(void);\n"
+            "int original_gnu_owner(int x) {\n"
+            "  if (x > 0) __compiletime_assert_317();\n"
+            "  return x;\n} \n" + "y" * 32000 + " " +
+            "__compiletime_assert_317();\n")
+        context_report = dict(x86_report, samples=[dict(
+            x86_report["samples"][0], input_sha256=sha(context_i))])
+        context_output_log = io.StringIO()
+        with contextlib.redirect_stdout(context_output_log):
+            print_link_assert_source_context("x86_64", x86_link_summary,
+                                             context_report, context_output)
+        context_lines = context_output_log.getvalue().splitlines()
+        assert context_lines[-1].startswith(
+            "THREE_ISA_GNU_ASSERT_SOURCE_CONTEXT_SUMMARY ")
+        context_rows = [json.loads(line.split(" ", 1)[1])
+                        for line in context_lines[:-1]]
+        assert 1 <= len(context_rows) <= 3
+        assert all(row["status"] ==
+                   "FROZEN_GNU_I_TEXT_TOKEN_NOT_EXECUTION_PROOF"
+                   for row in context_rows)
+        assert any("if (x > 0) __compiletime_assert_317();" in
+                   item["text"] for row in context_rows
+                   for item in row["source_context"])
+        assert all(len(item["text"]) <= 250 for row in context_rows
+                   for item in row["source_context"])
+        assert "[...omitted...]" in str(context_rows[-1]["source_context"])
+        context_summary = json.loads(context_lines[-1].split(" ", 1)[1])
+        assert context_summary["emitted_sites"] == 3
+        assert context_summary["emitted_bytes"] <= 20 * 1024
+        assert context_summary["full_GNU_LD_QEMU_certified"] is False
+        assert len(context_output_log.getvalue().encode()) <= 20 * 1024
+        limited_context = io.StringIO()
+        with contextlib.redirect_stdout(limited_context):
+            print_link_assert_source_context("aarch64", x86_link_summary,
+                                             context_report, context_output,
+                                             byte_budget=512)
+        limited_lines = limited_context.getvalue().splitlines()
+        limited_summary = json.loads(limited_lines[-1].split(" ", 1)[1])
+        assert limited_summary["truncated"] and limited_summary["emitted_sites"] <= 1
+        assert len(limited_context.getvalue().encode()) <= 512
+        context_i.write_text("__compiletime_assert_317();\n/* forged text */\n")
+        tamper_log = io.StringIO()
+        with contextlib.redirect_stdout(tamper_log):
+            print_link_assert_source_context("x86_64", x86_link_summary,
+                                             context_report, context_output)
+        assert json.loads(tamper_log.getvalue().splitlines()[0].split(" ", 1)[1])[
+            "status"] == "FROZEN_SOURCE_MISSING_OVERSIZE_OR_SHA_MISMATCH"
+        no_source_log = io.StringIO()
+        with contextlib.redirect_stdout(no_source_log):
+            print_link_assert_source_context("x86_64", x86_link_summary,
+                                             None, context_output)
+        assert json.loads(no_source_log.getvalue().splitlines()[0].split(" ", 1)[1])[
+            "status"] == "NO_AUTHENTICATED_FROZEN_SOURCE"
         unique_report = dict(x86_report, samples=x86_report["samples"][:1],
                              skipped=[], errors=[],
                              verdict="LINK_FAILURE_C_OWNER_SAMPLES_COMPLETE")

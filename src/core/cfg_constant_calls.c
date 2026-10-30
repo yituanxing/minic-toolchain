@@ -64,6 +64,40 @@ static bool core_cfg_eval_callee_return_expression(
     return success;
 }
 
+typedef struct CoreCfgCalleeGuardTruthContext {
+    const MinicCoreLowerContext *caller;
+    const MinicFunction *callee;
+    const MinicExpression *call;
+} CoreCfgCalleeGuardTruthContext;
+
+/* Read a compile-time guard in the callee's own integer parameter domain.
+ * The ordinary caller-only truth callback does not know that a concrete
+ * static-inline argument has specialized a callee parameter.  Reuse the
+ * same bounded parameter/constant evaluator used for its return value;
+ * unknown, volatile, escaped and effectful conditions remain unproved. */
+static bool core_cfg_callee_guard_truth(void *opaque,
+                                         MinicExpressionId condition_id,
+                                         bool *truth) {
+    const CoreCfgCalleeGuardTruthContext *binding =
+        (const CoreCfgCalleeGuardTruthContext *)opaque;
+    MinicConstValue evaluated;
+    bool is_zero;
+    if (binding == NULL || binding->caller == NULL || truth == NULL ||
+        !minic_core_cfg_pure_call_argument(binding->caller, condition_id, 0U) ||
+        !core_cfg_eval_callee_return_expression(binding->caller,
+                                                 binding->callee,
+                                                 binding->call,
+                                                 condition_id,
+                                                 &evaluated) ||
+        !minic_const_value_is_zero(binding->caller->body->program,
+                                    binding->caller->target,
+                                    &evaluated, &is_zero)) {
+        return false;
+    }
+    *truth = !is_zero;
+    return true;
+}
+
 /* A file-local pointer getter with one unconditional return may read ordinary
  * (nonvolatile) fields, but it must not have an observable side effect.  This
  * is a purity proof, NOT a constant-value proof: a caller may discard such a
@@ -834,13 +868,33 @@ bool minic_core_cfg_constant_inline_call(const MinicCoreLowerContext *context,
             }
         }
     }
-    /* A top-level return terminates the function unconditionally.  The parser
-       may append a synthetic fallback return after it; that statement is
-       unreachable and must not be treated as an alternative return value.
-       Only consume this narrow shape: the first top-level statement itself is
-       a return with no outstanding cleanup.  Conditional/mixed bodies remain
-       fail-closed and are handled by the separate CFG-aware helper paths. */
-    statement = minic_c0_program_statement(program, body->statements[0]);
+    /* GNU Linux nf_conntrack_extend.c has a pure compile-time assertion in
+     * `total_extension_size()` immediately before an otherwise constexpr
+     * `sizeof` sum return.  The frontend normalizes `do { BUILD_BUG_ON(0); }
+     * while (0)` to WHILE(true)+IF(false)+label+IF(true) BREAK.  Reuse the
+     * already-verified source-label/reentry-aware no-effect loop proof; no
+     * new ad-hoc assertion or macro recognizer is necessary.  All remaining
+     * statements must still be the one direct unconditional return (or the
+     * frontend's unreachable synthetic fallback after that return). */
+    {
+        const CoreCfgCalleeGuardTruthContext binding = {
+            context, callee, expression
+        };
+        size_t first = 0U;
+        while (first < body->statement_count && first < 8U) {
+            const MinicStatement *prefix = minic_c0_program_statement(
+                program, body->statements[first]);
+            if (prefix == NULL || prefix->kind != MINIC_STATEMENT_WHILE ||
+                !minic_opt_pure_guard_loop(program, context->reentry_index,
+                                           prefix, (void *)&binding,
+                                           core_cfg_callee_guard_truth)) {
+                break;
+            }
+            ++first;
+        }
+        if (first >= body->statement_count) return false;
+        statement = minic_c0_program_statement(program, body->statements[first]);
+    }
     if (statement == NULL || statement->kind != MINIC_STATEMENT_RETURN ||
         statement->expression == MINIC_EXPRESSION_INVALID ||
         statement->cleanup_context != statement->cleanup_stop_context ||

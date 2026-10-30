@@ -6,6 +6,7 @@
 #include "core/source_loop_shapes.h"
 #include "frontend/const_eval.h"
 #include "frontend/expression_semantics.h"
+#include "frontend/ast_traversal.h"
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1096,6 +1097,216 @@ static bool core_cfg_const_record_compound_read(
     return true;
 }
 
+/* A GNU Linux BUILD_BUG_ON can read a zero-initialized union through a
+ * different member: `union { u32 word; arch_spinlock_t lock; } u =
+ * { .lock = __ARCH_SPIN_LOCK_UNLOCKED }; ... u.word`.  The frontend expands
+ * that automatic initializer into explicit source `is_initializer_write`
+ * stores; do not mistake a mere declaration for a proven constant. */
+static bool core_cfg_union_root_local(const MinicC0Program *p,
+                                       MinicExpressionId id, unsigned int depth,
+                                       MinicLocalId *root) {
+    const MinicExpression *e;
+    if (p == NULL || root == NULL || depth > 12U ||
+        (e = minic_c0_program_expression(p, id)) == NULL) return false;
+    if (e->kind == MINIC_EXPRESSION_LOCAL) {
+        *root = e->value.local_id;
+        return true;
+    }
+    if (e->kind == MINIC_EXPRESSION_ADDRESS_OF ||
+        e->kind == MINIC_EXPRESSION_LVALUE_READ) {
+        return core_cfg_union_root_local(p, e->value.unary.operand,
+                                         depth + 1U, root);
+    }
+    if (e->kind == MINIC_EXPRESSION_MEMBER) {
+        return core_cfg_union_root_local(p, e->value.member.base,
+                                         depth + 1U, root);
+    }
+    return false;
+}
+
+typedef struct CoreUnionRefCheck {
+    MinicExpressionId needle;
+    bool used;
+} CoreUnionRefCheck;
+
+static bool core_cfg_union_check_child(MinicExpressionId *id, void *opaque) {
+    CoreUnionRefCheck *check = (CoreUnionRefCheck *)opaque;
+    if (id != NULL && *id == check->needle) check->used = true;
+    return true;
+}
+
+/* Exact AST edge ownership: a local union may only be addressed to select
+ * members, and each address of that local/member must itself only be used
+ * as a member base.  This rejects address escape through calls/casts/asm,
+ * including aliases that could modify the union behind our zero proof. */
+static bool core_cfg_union_id_is_only_member_address(
+    const MinicC0Program *p, MinicExpressionId id,
+    MinicExpressionKind allowed_parent) {
+    size_t i;
+    for (i = 0U; i < p->expression_count; ++i) {
+        const MinicExpression *parent = &p->expressions[i];
+        MinicExpression copy = *parent;
+        CoreUnionRefCheck check = {id, false};
+        if (!minic_c0_expression_visit_child_id_refs(
+                &copy, core_cfg_union_check_child, &check)) return false;
+        if (check.used &&
+            (parent->kind != allowed_parent ||
+             (allowed_parent == MINIC_EXPRESSION_ADDRESS_OF &&
+              parent->value.unary.operand != id) ||
+             (allowed_parent == MINIC_EXPRESSION_MEMBER &&
+              parent->value.member.base != id))) return false;
+    }
+    for (i = 0U; i < p->statement_count; ++i) {
+        if (p->statements[i].expression == id ||
+            p->statements[i].target_expression == id) return false;
+    }
+    for (i = 0U; i < p->inline_asm_count; ++i) {
+        const MinicInlineAsm *a = &p->inline_asms[i];
+        size_t j;
+        for (j = 0U; j < a->input_count; ++j)
+            if (a->inputs[j].expression == id) return false;
+        for (j = 0U; j < a->output_count; ++j)
+            if (a->outputs[j].expression == id) return false;
+    }
+    return true;
+}
+
+static bool core_cfg_zero_union_scalar_read(
+    const MinicCoreLowerContext *c, MinicExpressionId id,
+    MinicConstValue *result) {
+    const MinicC0Program *p;
+    const MinicDataLayout *layout;
+    const MinicExpression *read;
+    const MinicLocal *local;
+    const MinicRecord *record;
+    const MinicBlock *entry;
+    MinicLocalId root;
+    size_t union_size, read_size, read_offset, bit_offset, i;
+    bool fully_initialized = false;
+    size_t init_begin = SIZE_MAX;
+    size_t init_count = 0U;
+
+    if (c == NULL || c->body == NULL || c->body->program == NULL ||
+        c->source_function == NULL || c->target == NULL || result == NULL) return false;
+    p = c->body->program;
+    read = minic_c0_program_expression(p, id);
+    if (read != NULL && read->kind == MINIC_EXPRESSION_LVALUE_READ)
+        read = minic_c0_program_expression(p, read->value.unary.operand);
+    if (read == NULL || read->kind != MINIC_EXPRESSION_MEMBER ||
+        !minic_type_is_integer(read->type) || minic_type_is_volatile(read->type) ||
+        !core_cfg_union_root_local(p, read->value.member.base, 0U, &root) ||
+        root < c->source_function->local_begin ||
+        root - c->source_function->local_begin >= c->source_function->local_count) return false;
+    local = minic_c0_program_local(p, root);
+    record = local != NULL && minic_type_is_record(local->type)
+                 ? minic_c0_program_record(p, local->type.record_id) : NULL;
+    layout = minic_target_info_data_layout(c->target);
+    if (local == NULL || record == NULL || !record->is_union ||
+        !record->is_complete || local->is_array ||
+        minic_type_is_volatile(local->type) ||
+        !local->has_declaration_block ||
+        local->declaration_block != c->source_function->body_block ||
+        layout == NULL || layout->byte_order != MINIC_BYTE_ORDER_LITTLE ||
+        !minic_target_info_sizeof_type(c->target, p, local->type, &union_size) ||
+        !minic_target_info_sizeof_type(c->target, p, read->type, &read_size) ||
+        union_size == 0U || union_size > 8U || read_size != union_size ||
+        !core_cfg_compound_member_layout(
+            p, layout, read, root, 0U, &read_offset, &bit_offset) ||
+        read_offset != 0U || bit_offset != 0U ||
+        (entry = minic_c0_program_block(p, local->declaration_block)) == NULL ||
+        entry->statement_count == 0U || entry->statement_count > 64U) return false;
+
+    /* A contiguous group of local declaration stores in the entry block
+     * must initialize every byte via an all-zero scalar.  Ordinary earlier
+     * statements are allowed, but an external CFG reentry label/goto is not:
+     * it could reach the later read while bypassing this initialization. */
+    for (i = 0U; i < entry->statement_count; ++i) {
+        const MinicStatement *s = minic_c0_program_statement(p, entry->statements[i]);
+        if (s == NULL || s->kind == MINIC_STATEMENT_LABEL ||
+            s->kind == MINIC_STATEMENT_GOTO ||
+            s->kind == MINIC_STATEMENT_CASE ||
+            s->kind == MINIC_STATEMENT_DEFAULT ||
+            s->kind == MINIC_STATEMENT_SWITCH) return false;
+    }
+    for (i = 0U; i < entry->statement_count; ++i) {
+        const MinicStatement *s = minic_c0_program_statement(p, entry->statements[i]);
+        const MinicExpression *target;
+        MinicLocalId target_root;
+        size_t offset, target_bit, target_size;
+        bool is_root;
+        is_root = core_cfg_union_root_local(
+            p, s->target_expression, 0U, &target_root) && target_root == root;
+        if (!is_root) {
+            if (init_count != 0U) break;
+            continue;
+        }
+        if (init_begin == SIZE_MAX) init_begin = i;
+        if (s->kind != MINIC_STATEMENT_ASSIGN || !s->is_initializer_write)
+            return false;
+        target = minic_c0_program_expression(p, s->target_expression);
+        if (target == NULL || target->kind != MINIC_EXPRESSION_MEMBER ||
+            !minic_type_is_integer(target->type) ||
+            !core_program_expr_is_literal_zero(c, s->expression) ||
+            !core_cfg_compound_member_layout(
+                p, layout, target, root, 0U, &offset, &target_bit) ||
+            target_bit != 0U ||
+            !minic_target_info_sizeof_type(
+                c->target, p, target->type, &target_size) ||
+            offset > union_size || target_size > union_size - offset)
+            return false;
+        if (offset == 0U && target_size == union_size) fully_initialized = true;
+        ++init_count;
+    }
+    if (!fully_initialized || init_begin == SIZE_MAX || init_count == 0U)
+        return false;
+    for (i = 0U; i < p->statement_count; ++i) {
+        const MinicStatement *s = &p->statements[i];
+        MinicLocalId target_root;
+        size_t j;
+        bool in_prefix = false;
+        if (!core_cfg_union_root_local(
+                p, s->target_expression, 0U, &target_root) || target_root != root)
+            continue;
+        for (j = 0U; j < init_count; ++j)
+            if (entry->statements[init_begin + j] == (MinicStatementId)i)
+                in_prefix = true;
+        if (!in_prefix) return false;
+    }
+    for (i = 0U; i < p->inline_asm_count; ++i) {
+        const MinicInlineAsm *a = &p->inline_asms[i];
+        size_t j;
+        for (j = 0U; j < a->output_count; ++j) {
+            MinicLocalId output_root;
+            if (core_cfg_union_root_local(
+                    p, a->outputs[j].expression, 0U, &output_root) &&
+                output_root == root) return false;
+        }
+    }
+    for (i = 0U; i < p->expression_count; ++i) {
+        const MinicExpression *e = &p->expressions[i];
+        MinicLocalId expr_root;
+        if (e->kind == MINIC_EXPRESSION_LOCAL && e->value.local_id == root &&
+            !core_cfg_union_id_is_only_member_address(
+                p, (MinicExpressionId)i, MINIC_EXPRESSION_ADDRESS_OF)) return false;
+        if (e->kind == MINIC_EXPRESSION_ADDRESS_OF &&
+            core_cfg_union_root_local(p, e->value.unary.operand, 0U, &expr_root) &&
+            expr_root == root &&
+            !core_cfg_union_id_is_only_member_address(
+                p, (MinicExpressionId)i, MINIC_EXPRESSION_MEMBER)) return false;
+        if ((e->kind == MINIC_EXPRESSION_ASSIGNMENT ||
+             e->kind == MINIC_EXPRESSION_COMPOUND_ASSIGNMENT) &&
+            core_cfg_union_root_local(p, e->value.binary.left, 0U, &expr_root) &&
+            expr_root == root) return false;
+        if (e->kind == MINIC_EXPRESSION_UNARY &&
+            e->value.unary.operator_kind > MINIC_UNARY_BITWISE_NOT &&
+            core_cfg_union_root_local(p, e->value.unary.operand, 0U, &expr_root) &&
+            expr_root == root) return false;
+    }
+    result->type = read->type;
+    result->bits = 0U;
+    return true;
+}
+
 /* A deliberately one-sided bit analysis for Linux's BUILD_BUG_ON masks.
  * It tracks which bits MAY be one, never which bits must be one.  A conditional
  * whose alternatives are 0 and BIT(n), for example, can carry only BIT(n)
@@ -1168,6 +1379,17 @@ static uint64_t core_cfg_possible_one_bits(
         }
     }
     switch (expression->kind) {
+    case MINIC_EXPRESSION_LOCAL:
+    case MINIC_EXPRESSION_LVALUE_READ: {
+        MinicLocalId fact_local;
+        uint64_t possible_bits;
+        if (minic_core_lower_direct_local_read(context, id, &fact_local) &&
+            minic_core_local_fact_possible_one_bits(
+                context, fact_local, &possible_bits)) {
+            return possible_bits & full;
+        }
+        break;
+    }
     case MINIC_EXPRESSION_BINARY:
         if (expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_AND) {
             return (core_cfg_possible_one_bits_as(
@@ -1198,6 +1420,134 @@ static uint64_t core_cfg_possible_one_bits(
         break;
     }
     return full;
+}
+
+/* Nonnegative value intervals are distinct from may-one bit masks: the
+ * numerical maximum of 52 and 46 is 52, even though (52|46) is 62.  GNU
+ * Linux uses this in BUILD_BUG_ON((runtime ? 52 : 46)-12 > 58) and in
+ * the two known x86 virtual-base alternatives.  Never evaluate or erase the
+ * runtime selection condition here; this only proves result bounds. */
+static bool core_cfg_nonnegative_range_impl(
+    const MinicCoreLowerContext *context, MinicExpressionId id,
+    unsigned int depth, uint64_t *minimum, uint64_t *maximum) {
+    const MinicExpression *expression;
+    MinicConstValue constant, converted;
+    unsigned int width;
+    uint64_t type_max;
+    if (context == NULL || context->body == NULL ||
+        context->body->program == NULL || context->target == NULL ||
+        minimum == NULL || maximum == NULL || depth > 32U) return false;
+    expression = minic_c0_program_expression(context->body->program, id);
+    if (expression == NULL || !minic_type_is_integer(expression->type) ||
+        minic_type_is_bool_integer(expression->type) ||
+        !minic_target_info_integer_width(context->target,
+            context->body->program, expression->type, &width) ||
+        width == 0U || width > 64U) return false;
+    type_max = minic_type_is_signed_integer(expression->type)
+        ? ((UINT64_C(1) << (width - 1U)) - UINT64_C(1))
+        : core_cfg_integer_width_mask(width);
+    if (core_const_eval_integer_with_locals(context, id, &constant) &&
+        minic_const_value_convert_integer(context->body->program,
+            context->target, &constant, expression->type, &converted) &&
+        converted.bits <= type_max) {
+        *minimum = *maximum = converted.bits;
+        return true;
+    }
+    switch (expression->kind) {
+    case MINIC_EXPRESSION_LOCAL:
+    case MINIC_EXPRESSION_LVALUE_READ: {
+        MinicLocalId local;
+        return minic_core_lower_direct_local_read(context, id, &local) &&
+            minic_core_local_fact_nonnegative_range_get(
+                context, local, minimum, maximum) && *maximum <= type_max;
+    }
+    case MINIC_EXPRESSION_CONDITIONAL: {
+        uint64_t true_min, true_max, false_min, false_max;
+        if (!core_cfg_nonnegative_range_impl(context,
+                expression->value.conditional.when_true, depth + 1U,
+                &true_min, &true_max) ||
+            !core_cfg_nonnegative_range_impl(context,
+                expression->value.conditional.when_false, depth + 1U,
+                &false_min, &false_max)) return false;
+        *minimum = true_min < false_min ? true_min : false_min;
+        *maximum = true_max > false_max ? true_max : false_max;
+        return *maximum <= type_max;
+    }
+    case MINIC_EXPRESSION_CAST:
+    case MINIC_EXPRESSION_BITCAST:
+    case MINIC_EXPRESSION_CONVERSION:
+        return core_cfg_nonnegative_range_impl(context,
+                   expression->value.unary.operand, depth + 1U,
+                   minimum, maximum) && *maximum <= type_max;
+    case MINIC_EXPRESSION_BINARY:
+        if (expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT) {
+            uint64_t offset;
+            MinicConstValue rhs;
+            if (!core_cfg_nonnegative_range_impl(context,
+                    expression->value.binary.left, depth + 1U,
+                    minimum, maximum) ||
+                !core_const_eval_integer_with_locals(context,
+                    expression->value.binary.right, &rhs) ||
+                !minic_const_value_convert_integer(context->body->program,
+                    context->target, &rhs, expression->type, &converted))
+                return false;
+            offset = converted.bits;
+            if (offset > type_max || *minimum < offset || *maximum > type_max)
+                return false;
+            *minimum -= offset;
+            *maximum -= offset;
+            return true;
+        }
+        break;
+    default:
+        break;
+    }
+    return false;
+}
+
+bool minic_core_cfg_nonnegative_range(
+    const MinicCoreLowerContext *context, MinicExpressionId id,
+    uint64_t *minimum, uint64_t *maximum) {
+    return core_cfg_nonnegative_range_impl(context, id, 0U,
+                                           minimum, maximum);
+}
+
+/* One-sided false-only CFG proof. The caller lowers the FULL original
+ * comparison (including conditional feature probes and volatile accesses)
+ * before skipping an impossible diagnostic arm. Signed negatives and any
+ * arithmetic wrap are rejected by the nonnegative range admission. */
+bool minic_core_cfg_bounded_comparison_is_false(
+    const MinicCoreLowerContext *context, MinicExpressionId id) {
+    const MinicExpression *expression;
+    unsigned int negations = 0U, depth;
+    uint64_t left_min, left_max, right_min, right_max;
+    if (context == NULL || context->body == NULL ||
+        context->body->program == NULL) return false;
+    for (depth = 0U; depth < 8U; ++depth) {
+        expression = minic_c0_program_expression(context->body->program, id);
+        if (expression == NULL) return false;
+        if (expression->kind == MINIC_EXPRESSION_UNARY &&
+            expression->value.unary.operator_kind == MINIC_UNARY_LOGICAL_NOT) {
+            negations ^= 1U;
+            id = expression->value.unary.operand;
+        } else break;
+    }
+    if (negations != 0U) return false;
+    expression = minic_c0_program_expression(context->body->program, id);
+    if (expression == NULL || expression->kind != MINIC_EXPRESSION_BINARY)
+        return false;
+    if (expression->value.binary.operator_kind != MINIC_BINARY_GREATER_EQUAL &&
+        expression->value.binary.operator_kind != MINIC_BINARY_LESS) return false;
+    if (!minic_core_cfg_nonnegative_range(
+            context, expression->value.binary.left, &left_min, &left_max) ||
+        !minic_core_cfg_nonnegative_range(
+            context, expression->value.binary.right, &right_min, &right_max))
+        return false;
+    if (expression->value.binary.operator_kind == MINIC_BINARY_GREATER_EQUAL)
+        return left_max < right_min;
+    if (expression->value.binary.operator_kind == MINIC_BINARY_LESS)
+        return left_min >= right_max;
+    return false;
 }
 
 /* Unlike full integer constant folding, this structural proof does not
@@ -1264,6 +1614,9 @@ bool core_const_eval_integer_with_locals(const MinicCoreLowerContext *context,
     expression = minic_c0_program_expression(context->body->program, expression_id);
     if (expression == NULL || !minic_type_is_integer(expression->type)) {
         return false;
+    }
+    if (core_cfg_zero_union_scalar_read(context, expression_id, value)) {
+        return true;
     }
     if (minic_core_const_global_record_scalar(context, expression_id, value)) {
         return true;

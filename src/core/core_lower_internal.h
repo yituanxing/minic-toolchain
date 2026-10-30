@@ -7,7 +7,16 @@
 typedef struct MinicCoreLocalIntegerConstant {
     MinicConstValue value;
     MinicConstValue specialization_value;
+    /* May-one bit lattice for integer locals across CFG joins.
+     * Invalid after escape, volatile access, or an unknown write. */
+    uint64_t possible_one_bits;
+    /* A bounded, nonnegative integer interval. This is an upper/lower
+     * *value* lattice, distinct from bitwise may-one and exact constants. */
+    uint64_t nonnegative_min;
+    uint64_t nonnegative_max;
     bool known;
+    bool possible_one_bits_valid;
+    bool nonnegative_range_valid;
     bool escaped;
     bool program_zero_checked;
     bool program_zero_stable;
@@ -139,6 +148,10 @@ bool core_const_eval_integer_with_locals(const MinicCoreLowerContext *,
                                          MinicExpressionId, MinicConstValue *);
 bool minic_core_cfg_disjoint_bitmask_is_zero(const MinicCoreLowerContext *,
                                              MinicExpressionId);
+bool minic_core_cfg_nonnegative_range(const MinicCoreLowerContext *,
+                                      MinicExpressionId, uint64_t *, uint64_t *);
+bool minic_core_cfg_bounded_comparison_is_false(const MinicCoreLowerContext *,
+                                                MinicExpressionId);
 bool core_const_signed_value(const MinicCoreLowerContext *,
                              const MinicConstValue *, int64_t *);
 

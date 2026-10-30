@@ -132,6 +132,21 @@ bool minic_core_local_facts_meet(
                              rhs->specialization_value.type) &&
             lhs->specialization_value.bits == rhs->specialization_value.bits;
         merged.known = same_value && !merged.escaped;
+        merged.possible_one_bits_valid = !merged.escaped &&
+            (lhs->known || lhs->possible_one_bits_valid) &&
+            (rhs->known || rhs->possible_one_bits_valid);
+        merged.possible_one_bits = merged.possible_one_bits_valid
+            ? (lhs->known ? lhs->value.bits : lhs->possible_one_bits) |
+              (rhs->known ? rhs->value.bits : rhs->possible_one_bits)
+            : UINT64_MAX;
+        merged.nonnegative_range_valid = !merged.escaped &&
+            lhs->nonnegative_range_valid && rhs->nonnegative_range_valid;
+        if (merged.nonnegative_range_valid) {
+            merged.nonnegative_min = lhs->nonnegative_min < rhs->nonnegative_min
+                ? lhs->nonnegative_min : rhs->nonnegative_min;
+            merged.nonnegative_max = lhs->nonnegative_max > rhs->nonnegative_max
+                ? lhs->nonnegative_max : rhs->nonnegative_max;
+        }
         context->local_integer_constants[index] = merged;
     }
     return true;
@@ -169,6 +184,10 @@ void minic_core_local_facts_clear_known(MinicCoreLowerContext *context) {
         } else {
             fact->known = false;
         }
+        fact->possible_one_bits_valid = fact->known && !fact->escaped;
+        fact->possible_one_bits = fact->possible_one_bits_valid
+            ? fact->value.bits : UINT64_MAX;
+        fact->nonnegative_range_valid = false;
         if (fact->specialization_known && minic_core_inline_spec_fact_trace_enabled(context)) {
             (void)fprintf(stderr,
                           "INLINE_SPEC_FACT event=clear function=%s source=%zu local=%zu known=%d modified=%d escaped=%d bits=%" PRIu64 "\n",
@@ -191,6 +210,8 @@ void minic_core_local_fact_invalidate(MinicCoreLowerContext *context,
     if (minic_core_local_fact_index(context, local_id, &index)) {
         MinicCoreLocalIntegerConstant *fact = &context->local_integer_constants[index];
         fact->known = false;
+        fact->possible_one_bits_valid = false;
+        fact->nonnegative_range_valid = false;
         if (fact->specialization_known) {
             fact->specialization_modified = true;
             if (minic_core_inline_spec_fact_trace_enabled(context)) {
@@ -214,6 +235,8 @@ void minic_core_local_fact_escape(MinicCoreLowerContext *context,
         MinicCoreLocalIntegerConstant *fact = &context->local_integer_constants[index];
         fact->known = false;
         fact->escaped = true;
+        fact->possible_one_bits_valid = false;
+        fact->nonnegative_range_valid = false;
         if (fact->specialization_known) {
             fact->specialization_modified = true;
             if (minic_core_inline_spec_fact_trace_enabled(context)) {
@@ -263,6 +286,137 @@ bool minic_core_local_fact_get(const MinicCoreLowerContext *context,
         return false;
     }
     *value = context->local_integer_constants[index].value;
+    return true;
+}
+
+bool minic_core_local_fact_possible_one_bits(
+    const MinicCoreLowerContext *context, MinicLocalId local_id,
+    uint64_t *bits) {
+    const MinicLocal *local;
+    const MinicCoreLocalIntegerConstant *fact;
+    size_t index;
+
+    if (context == NULL || context->body == NULL ||
+        context->body->program == NULL || bits == NULL ||
+        !minic_core_local_fact_index(context, local_id, &index)) {
+        return false;
+    }
+    local = minic_c0_program_local(context->body->program, local_id);
+    fact = &context->local_integer_constants[index];
+    if (local == NULL || local->is_array ||
+        !minic_type_is_integer(local->type) ||
+        minic_type_is_bool_integer(local->type) ||
+        minic_type_is_volatile(local->type) || fact->escaped ||
+        (!fact->known && !fact->possible_one_bits_valid)) {
+        return false;
+    }
+    *bits = fact->known ? fact->value.bits : fact->possible_one_bits;
+    return true;
+}
+
+bool minic_core_local_fact_or_constant(
+    MinicCoreLowerContext *context, MinicLocalId local_id,
+    const MinicConstValue *rhs) {
+    const MinicLocal *local;
+    MinicCoreLocalIntegerConstant *fact;
+    MinicConstValue converted;
+    size_t index;
+    uint64_t previous;
+
+    if (context == NULL || context->body == NULL ||
+        context->body->program == NULL || context->target == NULL ||
+        rhs == NULL ||
+        !minic_core_local_fact_index(context, local_id, &index)) {
+        return false;
+    }
+    local = minic_c0_program_local(context->body->program, local_id);
+    fact = &context->local_integer_constants[index];
+    if (local == NULL || local->is_array ||
+        !minic_type_is_integer(local->type) ||
+        minic_type_is_bool_integer(local->type) ||
+        minic_type_is_volatile(local->type) || fact->escaped ||
+        (!fact->known && !fact->possible_one_bits_valid) ||
+        !minic_const_value_convert_integer(context->body->program,
+                                           context->target, rhs,
+                                           local->type, &converted)) {
+        return false;
+    }
+    previous = fact->known ? fact->value.bits : fact->possible_one_bits;
+    fact->possible_one_bits = previous | converted.bits;
+    fact->possible_one_bits_valid = true;
+    fact->nonnegative_range_valid = false;
+    if (fact->known) {
+        fact->value.bits |= converted.bits;
+    }
+    if (converted.bits != 0U) {
+        fact->program_zero_stable = false;
+    }
+    return true;
+}
+
+bool minic_core_local_fact_nonnegative_range_get(
+    const MinicCoreLowerContext *context, MinicLocalId local_id,
+    uint64_t *minimum, uint64_t *maximum) {
+    const MinicLocal *local;
+    const MinicCoreLocalIntegerConstant *fact;
+    unsigned int width;
+    size_t index;
+    if (context == NULL || context->body == NULL ||
+        context->body->program == NULL || context->target == NULL ||
+        minimum == NULL || maximum == NULL ||
+        !minic_core_local_fact_index(context, local_id, &index)) return false;
+    local = minic_c0_program_local(context->body->program, local_id);
+    fact = &context->local_integer_constants[index];
+    if (local == NULL || local->is_array || !minic_type_is_integer(local->type) ||
+        minic_type_is_bool_integer(local->type) ||
+        minic_type_is_volatile(local->type) || fact->escaped ||
+        !minic_target_info_integer_width(context->target,
+            context->body->program, local->type, &width) ||
+        width == 0U || width > 64U) return false;
+    if (fact->known) {
+        uint64_t value = fact->value.bits;
+        uint64_t width_mask = width == 64U ? UINT64_MAX :
+            (UINT64_C(1) << width) - UINT64_C(1);
+        value &= width_mask;
+        if (minic_type_is_signed_integer(local->type) &&
+            (value & (UINT64_C(1) << (width - 1U))) != 0U) return false;
+        *minimum = *maximum = value;
+        return true;
+    }
+    if (!fact->nonnegative_range_valid) return false;
+    *minimum = fact->nonnegative_min;
+    *maximum = fact->nonnegative_max;
+    return true;
+}
+
+bool minic_core_local_fact_nonnegative_range_set(
+    MinicCoreLowerContext *context, MinicLocalId local_id,
+    uint64_t minimum, uint64_t maximum) {
+    const MinicLocal *local;
+    MinicCoreLocalIntegerConstant *fact;
+    unsigned int width;
+    uint64_t signed_limit;
+    size_t index;
+    if (context == NULL || context->body == NULL ||
+        context->body->program == NULL || context->target == NULL ||
+        minimum > maximum ||
+        !minic_core_local_fact_index(context, local_id, &index)) return false;
+    local = minic_c0_program_local(context->body->program, local_id);
+    fact = &context->local_integer_constants[index];
+    if (local == NULL || local->is_array || !minic_type_is_integer(local->type) ||
+        minic_type_is_bool_integer(local->type) ||
+        minic_type_is_volatile(local->type) || fact->escaped ||
+        !minic_target_info_integer_width(context->target,
+            context->body->program, local->type, &width) ||
+        width == 0U || width > 64U) return false;
+    signed_limit = minic_type_is_signed_integer(local->type)
+        ? (UINT64_C(1) << (width - 1U)) - UINT64_C(1)
+        : (width == 64U ? UINT64_MAX :
+           (UINT64_C(1) << width) - UINT64_C(1));
+    if (maximum > signed_limit) return false;
+    fact->nonnegative_min = minimum;
+    fact->nonnegative_max = maximum;
+    fact->nonnegative_range_valid = true;
     return true;
 }
 

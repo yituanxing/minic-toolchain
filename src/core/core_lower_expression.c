@@ -84,6 +84,18 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         fact_target = minic_c0_program_expression(
             context->body->program, expression->value.binary.left);
         if (fact_target != NULL && fact_target->kind == MINIC_EXPRESSION_LOCAL) {
+            MinicConstValue literal;
+            uint64_t before_bits;
+            /* A source-constant OR cannot set bits outside the union of
+             * existing possible-one bits and the literal. Keep the old fact
+             * alive until arithmetic lowering commits its single STORE;
+             * all other compound writes retain the original invalidation. */
+            bool bounded_or =
+                expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_OR &&
+                minic_const_eval_integer(context->body->program, context->target,
+                                         expression->value.binary.right, &literal) &&
+                minic_core_local_fact_possible_one_bits(
+                    context, fact_target->value.local_id, &before_bits);
             if (getenv("MINIC_LOCAL_FACT_TRACE") != NULL) {
                 (void)fprintf(stderr,
                               "LOCAL_FACT_COMPOUND_INVALIDATE function=%s local=%zu expression=%zu\n",
@@ -93,7 +105,8 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                               (size_t)fact_target->value.local_id,
                               (size_t)expression_id);
             }
-            minic_core_local_fact_invalidate(context, fact_target->value.local_id);
+            if (!bounded_or)
+                minic_core_local_fact_invalidate(context, fact_target->value.local_id);
         }
     }
     /* Runtime allocation is a pointer-producing rvalue. Its target-neutral

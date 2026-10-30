@@ -147,7 +147,9 @@ static MinicCoreLowerStatus minic_core_lower_assignment_pair_impl(MinicCoreLower
     }
     if (target->kind == MINIC_EXPRESSION_LOCAL) {
         MinicConstValue stored_constant;
+        uint64_t bounded_min = 0U, bounded_max = 0U;
         bool fact_known;
+        bool range_known;
         bool null_pointer_known;
         null_pointer_known = minic_core_lower_known_null_pointer(context, source_id);
         /* M191_STATEMENT_EXPRESSION_POSTLOWER_FACT: minic_core_lower_internal_lower_scalar_assignment_value()
@@ -178,8 +180,19 @@ static MinicCoreLowerStatus minic_core_lower_assignment_pair_impl(MinicCoreLower
             fact_known = core_const_eval_integer_with_locals(
                 context, source_id, &stored_constant);
         }
+        /* A dynamic conditional can have an exact nonnegative result
+         * interval even when its condition has effects. This is only a
+         * post-STORE value fact; all original condition effects have already
+         * been emitted, and unknown conversions cannot enter this lattice. */
+        range_known = !fact_known && source != NULL &&
+            minic_type_equal(source->type, stored_type) &&
+            minic_core_cfg_nonnegative_range(context, source_id,
+                                             &bounded_min, &bounded_max);
         if (fact_known) {
             core_local_constant_set(context, target->value.local_id, &stored_constant);
+        } else if (range_known) {
+            (void)minic_core_local_fact_nonnegative_range_set(
+                context, target->value.local_id, bounded_min, bounded_max);
         } else if (null_pointer_known) {
             minic_core_local_null_pointer_set(context, target->value.local_id);
         }

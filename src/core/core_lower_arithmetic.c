@@ -1,4 +1,6 @@
 #include "core/core_lower_internal.h"
+#include "core/local_facts.h"
+#include "frontend/const_eval.h"
 #include "frontend/expression_semantics.h"
 #include <string.h>
 
@@ -877,6 +879,17 @@ MinicCoreLowerStatus minic_core_lower_try_arithmetic_compound(
         if (!minic_core_function_append_effect_instruction(
                 context->function, context->block_id, &instruction)) {
             return MINIC_CORE_LOWER_ERROR;
+        }
+        if (expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_OR &&
+            target->kind == MINIC_EXPRESSION_LOCAL) {
+            MinicConstValue literal;
+            if (minic_const_eval_integer(context->body->program,
+                                         context->target,
+                                         expression->value.binary.right,
+                                         &literal)) {
+                (void)minic_core_local_fact_or_constant(
+                    context, target->value.local_id, &literal);
+            }
         }
         *value_id = stored_value;
         return MINIC_CORE_LOWER_OK;
