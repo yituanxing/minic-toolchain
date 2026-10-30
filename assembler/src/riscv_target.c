@@ -253,13 +253,16 @@ bool minias_riscv_validate_parsed_isa(MiniAs *as, const MiniAsStmt *stmt,
 }
 
 
-/* The common parser must never encode RISC-V ISA escape policy. This
- * backend owns forbidden raw-code directives on an explicit ISA contract.
- * Data outside executable sections remains valid for ELF constants. */
+/* The common parser must never encode RISC-V ISA escape policy. The strict
+ * Base-I contract forbids unknown executable bytes: a caller claiming an
+ * RV32I/RV64I-only object must not bypass instruction checking with raw data.
+ * Other explicit -march profiles retain GNU GAS's data-directive semantics,
+ * including Linux's inline `.4byte` instruction words in executable sections.
+ * ISA-feature checks for typed mnemonics remain independent of this policy. */
 static bool riscv_validate_common_directive(MiniAs *as,
                                              MiniAsCommonDirectiveKind kind,
                                              const char *op,size_t line) {
-    if (!MINIAS_RV_STATE(as)->strict_isa_directives ||
+    if (!MINIAS_RV_STATE(as)->reject_raw_exec_fragments ||
         (as->sections[(size_t)as->current_section].flags &
          MINIAS_SHF_EXECINSTR) == 0U) return true;
     if (kind == MINIAS_COMMON_DIRECTIVE_ORG) {
@@ -442,7 +445,7 @@ static bool riscv_target_directive(MiniAs *as, const char *op,
         *handled=true;
         return riscv_assemble_attribute(as,args,line);
     }
-    if(state->strict_isa_directives && strcmp(op,".insn")==0) {
+    if(state->reject_raw_exec_fragments && strcmp(op,".insn")==0) {
         minias_set_error(as,"unsupported-isa-escape:.insn:line=%zu",line);
         return false;
     }
@@ -642,8 +645,11 @@ static bool riscv_init_target_state(MiniAs *as,
             return false;
         }
     }
-    state->strict_isa_directives = state->strict_i_xlen != 0U ||
-                                   state->isa_explicit;
+    /* -march selects permitted *parsed* instruction features. A stronger
+     * raw-byte safety guarantee is warranted only for Base-I certification;
+     * treating every GNU -march as a raw-data ban rejects valid GCC Linux
+     * assembly such as the vDSO's `.4byte 0x0100000f`. */
+    state->reject_raw_exec_fragments = state->strict_i_xlen != 0U;
     as->target_state = state;
     return true;
 }

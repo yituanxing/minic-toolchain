@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Exhaustive executable raw-data escape policy for explicit RISC-V ISA.
-# Each entry mirrors one Common data_width()/add_data_stmt() directive;
-# neither aliases nor variable-length encodings may bypass selected -march.
+# Base-I raw-instruction safety must not impose a non-GNU data-directive
+# restriction on ordinary extended -march profiles. The Linux vDSO emits
+# `.4byte 0x0100000f` in its executable GCC assembly.
 set -Eeuo pipefail
 : "${MINIAS:?exact-head MiniAS binary required}"
 work=$(mktemp -d)
@@ -36,7 +36,7 @@ count=0
 for directive in "${cases[@]}"; do
     op=${directive%% *}
     printf '.text\n%s\n' "$directive" >"$work/input.s"
-    for arch in rv64i rv64im rv32i rv32im; do
+    for arch in rv64i rv32i; do
         if "$MINIAS" "-march=$arch" -o "$work/out.o" "$work/input.s" \
                 >"$work/standard.out" 2>"$work/standard.err"; then
             printf 'RISC-V ISA raw-data escape succeeded: %s / %s\n' \
@@ -51,6 +51,10 @@ for directive in "${cases[@]}"; do
         fi
         count=$((count + 1))
     done
+    for arch in rv64im rv32im; do
+        "$MINIAS" "-march=$arch" -o "$work/extended.o" "$work/input.s"
+        count=$((count + 1))
+    done
     printf '.data\n%s\n' "$directive" >"$work/data.s"
     "$MINIAS" -march=rv64im -o "$work/data.o" "$work/data.s"
 done
@@ -58,11 +62,27 @@ done
 # GNU-style .org remains a separate executable-fragment escape;
 # numeric LEB encodings are never implicitly trusted as instructions.
 printf '.text\n.org 4\n' >"$work/input.s"
-if "$MINIAS" -march=rv64im -o "$work/out.o" "$work/input.s" \
+if "$MINIAS" -march=rv64i -o "$work/out.o" "$work/input.s" \
         >"$work/standard.out" 2>"$work/standard.err"; then
     echo 'RISC-V selected ISA accepted executable .org escape' >&2
     exit 1
 fi
 grep -Fq 'unsupported-isa-escape:.org' "$work/standard.err"
 
-echo "MINIAS_RV_EXEC_RAW_ESCAPE=PASS arch_cases=$count data_valid=${#cases[@]}"
+# A real GCC Linux vDSO instruction word is raw source data, not an opcode
+# chosen by MiniAS. GNU's output remains the machine-byte authority.
+printf '.text\n.4byte 0x0100000f\n' >"$work/vdso.s"
+"$MINIAS" -march=rv64imac_zicsr_zifencei -mabi=lp64 \
+    -o "$work/vdso-minias.o" "$work/vdso.s"
+if command -v riscv64-linux-gnu-as >/dev/null && \
+   command -v riscv64-linux-gnu-objcopy >/dev/null; then
+    riscv64-linux-gnu-as -march=rv64imac_zicsr_zifencei -mabi=lp64 \
+        -o "$work/vdso-gnu.o" "$work/vdso.s"
+    riscv64-linux-gnu-objcopy -O binary -j .text \
+        "$work/vdso-gnu.o" "$work/vdso-gnu.bin"
+    riscv64-linux-gnu-objcopy -O binary -j .text \
+        "$work/vdso-minias.o" "$work/vdso-minias.bin"
+    cmp "$work/vdso-gnu.bin" "$work/vdso-minias.bin"
+fi
+
+echo "MINIAS_RV_EXEC_RAW_ESCAPE=PASS arch_cases=$count data_valid=${#cases[@]} vdso=PASS"

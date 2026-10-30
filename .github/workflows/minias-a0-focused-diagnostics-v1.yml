@@ -7,6 +7,8 @@ on:
     branches: [refactor/minias-target-isa-abi-core]
     paths:
       - '.github/workflows/minias-a0-focused-diagnostics-v1.yml'
+      - 'assembler/**'
+      - 'tests/assembler/**'
   workflow_call:
     inputs:
       mode:

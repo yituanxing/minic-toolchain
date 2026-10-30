@@ -23,7 +23,7 @@ typedef struct MiniAsRiscvLiPlan {
 typedef struct MiniAsRiscvState {
     /* Explicit profile ISA restrictions also apply to RV32 and to
      * non-I-only profiles; do not encode an XLEN in this policy flag. */
-    bool strict_isa_directives;
+    bool reject_raw_exec_fragments;
     unsigned strict_i_xlen;
     bool isa_explicit;
     unsigned target_xlen;

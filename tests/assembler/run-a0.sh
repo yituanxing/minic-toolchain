@@ -1656,11 +1656,13 @@ if "$MINIAS" -march=rv64i -o "$work/isa-option.o" \
     exit 1
 fi
 printf '.text\n.word 0x02050533\n' >"$work/isa-raw.s"
-if "$MINIAS" -march=rv64im -o "$work/isa-raw.o" \
+if "$MINIAS" -march=rv64i -o "$work/isa-raw.o" \
     "$work/isa-raw.s" 2>"$work/isa-raw.err"; then
-    echo 'MiniAS permitted raw executable ISA escape under explicit -march' >&2
+    echo 'MiniAS permitted raw executable ISA escape under strict RV64I' >&2
     exit 1
 fi
+"$MINIAS" -march=rv64im -o "$work/isa-raw-gnu-compatible.o" \
+    "$work/isa-raw.s"
 echo 'MINIAS_ISA_FEATURES=PASS RV64IM_RV64GC=1 ELF_ATTRIBUTES=2 negative=13'
 
 
