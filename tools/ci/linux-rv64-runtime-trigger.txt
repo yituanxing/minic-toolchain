@@ -2,3 +2,4 @@
 # C owners through current MiniC, GNU linker and genuine P0/P1, followed by
 # 12 separate QEMU P1 boots of the same SHA-locked kernel Image. Any failed
 # owner, timeout, or mismatched generated ELF object is a FAIL.
+2026-10-30 RV64 full Linux P0/P1 retry after seven worker cache misses in #40986864977: first produce pinned original GNU golden once when Actions cache expires, certify exact historical Kconfig/C-owner manifest/real GNU QEMU P0/P1, then let all 7 current-MiniC shards compile and link one SHA-locked Image for independent 12 QEMU P1 boots. No fallback C objects and no acceptance from a missing cache.

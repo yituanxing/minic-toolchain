@@ -3,7 +3,6 @@ name: MiniC Linux three-ISA original GNU QEMU P0/P1 oracle
 # Explicit expensive campaign.  Never infer Linux runtime from the compile-only
 # 21-shard census or from four-ISA compiler micro-runtime jobs.
 on:
-  workflow_call:
   pull_request:
     paths:
       - '.github/workflows/minic-linux-three-isa-gnu-qemu-v1.yml'
@@ -75,8 +74,11 @@ jobs:
       # worker has its own isolated checkout/build workspace.
       GNU_WORK: ${{ github.workspace }}/build/minic-linux-gnu-${{ matrix.target }}
       RUNTIME_OUTPUT: ${{ github.workspace }}/build/minic-linux-gnu-runtime-${{ matrix.target }}
-      LOONG_FIRMWARE_URL: ${{ inputs.loong_firmware_url }}
-      LOONG_FIRMWARE_SHA256: ${{ inputs.loong_firmware_sha256 }}
+      # Official Loongson QEMU virt firmware, pinned to an immutable upstream
+      # commit and the SHA-256 shipped by that same repository. User-supplied
+      # dispatch overrides remain SHA-checked and must never bypass preflight.
+      LOONG_FIRMWARE_URL: ${{ inputs.loong_firmware_url || 'https://raw.githubusercontent.com/loongson/Firmware/9e2b59f4f0d0c40258fade9769cd93c8034fd436/LoongArchVirtMachine/QEMU_EFI.fd' }}
+      LOONG_FIRMWARE_SHA256: ${{ inputs.loong_firmware_sha256 || 'b375639ebcf7a873d2cab67f0c9c1c6c208fc3f1bcba4083172fa20c4fb7e1ab' }}
     steps:
       - uses: actions/checkout@v4
         with:

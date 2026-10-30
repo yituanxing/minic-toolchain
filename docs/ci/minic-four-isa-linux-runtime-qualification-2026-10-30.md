@@ -48,6 +48,19 @@ The
 GNU and MiniC P0/P1 receipts and rejects missing provenance or GCC C fallback.
 Passing each isolated self-test does **not** qualify a kernel image.
 
+### First actual exact-head result (2026-10-30)
+
+Run [40986864965](https://github.com/yituanxing/minic-toolchain/actions/runs/40986864965)
+at `b085508010beb7fc449f0eb317cb01ec2a6a3ca6` completed all 21 MiniC
+source shards: x86-64 **2758/2758**, AArch64 **4078/4078**, LoongArch64
+**2585/2723**. The new `strict-source-gate` **failed correctly** on the 138
+LoongArch C-owner errors. This is only source/assembly-text coverage, never
+Kbuild link or QEMU runtime success. The RV64 run
+[40986864977](https://github.com/yituanxing/minic-toolchain/actions/runs/40986864977)
+failed all seven workers at missing GNU golden Actions cache, *before* MiniC
+compilation; it is not seven compiler regressions. The reproducible cache
+regeneration path must be retested independently.
+
 ## Campaigns
 
 - Three-ISA 21-shard source census: bump `tools/ci/linux-three-isa-trigger.txt`
@@ -56,7 +69,12 @@ Passing each isolated self-test does **not** qualify a kernel image.
   `tools/ci/linux-rv64-runtime-trigger.txt` on that exact PR HEAD.
 - Three-ISA original GNU/QEMU oracle: bump
   `tools/ci/linux-three-isa-gnu-qemu-trigger.txt` on that exact PR HEAD.
-  LoongArch firmware is mandatory, not an optional skipped success.
+  LoongArch firmware is mandatory, not an optional skipped success. The PR
+  workflow downloads Loongson's official QEMU virt `QEMU_EFI.fd` at pinned
+  upstream commit `9e2b59f4f0d0c40258fade9769cd93c8034fd436` and verifies
+  its published SHA-256 `b375639ebcf7a873d2cab67f0c9c1c6c208fc3f1bcba4083172fa20c4fb7e1ab`
+  before starting real QEMU; the resulting GNU boot still must independently
+  succeed before any MiniC acceptance.
 
 Always report each campaign's **exact commit SHA, actual jobs, C owner counts,
 native `.o` and image identity, QEMU result, and unresolved blockers**. A

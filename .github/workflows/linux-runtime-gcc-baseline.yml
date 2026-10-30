@@ -101,6 +101,145 @@ jobs:
           printf 'run=%s\n' "$active" >>"$GITHUB_OUTPUT"
           echo "RV64_FULL_PR_GATE=$active head=$(git rev-parse HEAD)"
 
+  # A cached original GNU Kbuild Image is an optimization, not a prerequisite
+  # for running the user's exact-head MiniC campaign. Historical branch-scoped
+  # caches (and keys tied to an older Ubuntu package hash) can disappear.
+  # Generate the *same pinned source/config* once, not independently in seven
+  # MiniC workers, and release those workers only after a real GNU P0/P1 proof.
+  rv64-current-gnu-golden:
+    needs: rv64-campaign-gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 95
+    env:
+      RV64_FULL_ACTIVE: ${{ ((github.event_name == 'workflow_dispatch' && inputs.mode == 'rv64-full') || (github.event_name == 'pull_request' && needs.rv64-campaign-gate.outputs.run == 'true')) && '1' || '0' }}
+      EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        if: env.RV64_FULL_ACTIVE == '1'
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Verify original GNU Linux golden producer identity
+        if: env.RV64_FULL_ACTIVE == '1'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          bash -n tools/ci/linux-rv64-current-golden-v1.sh
+          echo "RV64_GOLDEN_EXACT_HEAD=PASS sha=$EXPECTED_HEAD"
+
+      - name: Install pinned original GNU/QEMU Linux tools
+        if: env.RV64_FULL_ACTIVE == '1'
+        timeout-minutes: 15
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            libc6-dev-riscv64-cross bc bison flex libelf-dev libssl-dev \
+            make curl xz-utils cpio gzip file python3 qemu-system-misc opensbi
+
+      - name: Identify exact GNU toolchain/Kconfig object-cache identity
+        if: env.RV64_FULL_ACTIVE == '1'
+        id: gnu_identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cfg=eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe
+          gcc_sig=$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -c1-16)
+          ld_sig=$(sha256sum "$(command -v riscv64-linux-gnu-ld)" | cut -c1-16)
+          echo "key=linux-gnu-golden-v1-6.6.143-$cfg-$gcc_sig-$ld_sig" >> "$GITHUB_OUTPUT"
+
+      - name: Restore pinned original Linux source if it still exists
+        if: env.RV64_FULL_ACTIVE == '1'
+        uses: actions/cache/restore@v4
+        id: pristine_source_cache
+        with:
+          path: build/linux-expanded-kbuild-v0/linux-6.6.143
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932-v1
+
+      - name: Reconstitute SHA-pinned original Linux source after cache expiry
+        if: env.RV64_FULL_ACTIVE == '1' && steps.pristine_source_cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          root="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          mkdir -p "$root"
+          archive="$RUNNER_TEMP/minic-6.6.143-original-linux.tar.xz"
+          curl --proto '=https' --tlsv1.2 -fLSs --retry 4 \
+            https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz \
+            -o "$archive"
+          printf '%s  %s\n' dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 "$archive" | sha256sum -c -
+          tar -xJf "$archive" -C "$root"
+          test -s "$root/linux-6.6.143/Makefile"
+          echo 'RV64_GNU_ORIGINAL_SOURCE=PASS sha256=dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932'
+
+      - name: Save reconstructed pinned Linux source for the seven workers
+        if: env.RV64_FULL_ACTIVE == '1' && steps.pristine_source_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/linux-6.6.143
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932-v1
+
+      - name: Restore GNU/QEMU-certified object cache if still available
+        if: env.RV64_FULL_ACTIVE == '1'
+        id: original_gnu_cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/linux-runtime-gcc/out
+            build/linux-runtime-gcc/provenance
+          key: ${{ steps.gnu_identity.outputs.key }}
+
+      - name: Build original GNU Linux and certify P0/P1 on a missing cache
+        if: env.RV64_FULL_ACTIVE == '1' && steps.original_gnu_cache.outputs.cache-hit != 'true'
+        timeout-minutes: 75
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash tools/ci/linux-rv64-current-golden-v1.sh \
+            "$GITHUB_WORKSPACE/build/linux-runtime-gcc" \
+            "$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/linux-6.6.143"
+
+      - name: Attest original GNU cache source, Kconfig, owner count, QEMU contract
+        if: env.RV64_FULL_ACTIVE == '1'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
+          cfg=eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe
+          test -s "$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/linux-6.6.143/Makefile"
+          test "$(sha256sum "$work/out/.config" | cut -d' ' -f1)" = "$cfg"
+          test -s "$work/out/arch/riscv/boot/Image"
+          test -s "$work/out/vmlinux"
+          grep -Fxq 'linux_release=6.6.143' "$work/provenance/gcc-baseline.txt"
+          grep -Fxq "config_sha256=$cfg" "$work/provenance/gcc-baseline.txt"
+          grep -Fxq 'qemu_contract=full_and_p1_passed' "$work/provenance/gcc-baseline.txt"
+          grep -Fxq 'linux_archive_sha256=dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932' "$work/provenance/gcc-baseline.txt"
+          test -s "$work/provenance/gcc-objects.sha256"
+          echo "RV64_CURRENT_GNU_GOLDEN=PASS config=$cfg cache_hit=${{ steps.original_gnu_cache.outputs.cache-hit }} original_Linux=true"
+
+      - name: Cache freshly rebuilt GNU/QEMU-qualified object pool once
+        if: env.RV64_FULL_ACTIVE == '1' && steps.original_gnu_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            build/linux-runtime-gcc/out
+            build/linux-runtime-gcc/provenance
+          key: ${{ steps.gnu_identity.outputs.key }}
+
+      - name: Preserve GNU Kbuild/QEMU failure if golden regeneration is blocked
+        if: failure() && env.RV64_FULL_ACTIVE == '1'
+        uses: actions/upload-artifact@v4
+        with:
+          name: rv64-current-gnu-golden-blocker-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            build/linux-runtime-gcc/out/.config
+            build/linux-runtime-gcc/provenance/
+          if-no-files-found: warn
+          retention-days: 7
+
   gcc-runtime:
     if: (github.event_name == 'workflow_dispatch' && inputs.mode != 'rv64-full') || contains(github.event.head_commit.message, '[linux-runtime-gcc]')
     runs-on: ubuntu-24.04
@@ -1182,7 +1321,7 @@ jobs:
   # Explicit, optional 7-runner producer for the same pure-GCC C universe.
   # Do not use this lane for everyday single-TU debugging.
   gcc-shards:
-    needs: rv64-campaign-gate
+    needs: [rv64-campaign-gate, rv64-current-gnu-golden]
     if: >-
       (github.event_name == 'workflow_dispatch' && inputs.mode == 'rv64-full') ||
       (github.event_name == 'pull_request' && needs.rv64-campaign-gate.outputs.run == 'true') ||
@@ -1840,7 +1979,7 @@ jobs:
           retention-days: 3
 
   gcc-shard-verify:
-    needs: [gcc-shards, rv64-campaign-gate]
+    needs: [gcc-shards, rv64-campaign-gate, rv64-current-gnu-golden]
     # Use the SAME receiver job for exact immutable Image reboots. When the
     # seven producer jobs are skipped, always() prevents needs' implicit skip;
     # the ordinary full-shard path still requires a successful producer.
