@@ -363,6 +363,25 @@ def identity_from_input(root: Path) -> dict:
     return json_file(root / "identity.json")
 
 
+def pinned_gnu_source_receipt_sha(incoming: Path, target: str,
+                                  fresh_gnu_image_sha256: str) -> str:
+    """Pin immutable GNU input provenance, independent of fresh QEMU paths.
+
+    Historical RV/MiniAS source shards belong to their *original* producer.
+    A fresh GNU P0/P1 oracle intentionally writes different absolute QEMU,
+    initramfs and log paths, so its JSON byte SHA cannot equal the source
+    producer's receipt. Match the actual GNU Image SHA across both epochs;
+    collect() independently checks all seven original receipt SHA fields.
+    """
+    first = json_file(incoming / f"minic-linux-seven-objects-{target}-0" / "identity.json")
+    digest = first.get("gnu_receipt_sha256")
+    if (first.get("target") != target or
+            first.get("original_gnu_image_sha256") != fresh_gnu_image_sha256 or
+            not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None):
+        raise ValueError("pinned GNU source receipt does not match fresh GNU kernel Image")
+    return digest
+
+
 def collect(a: argparse.Namespace, c, rows: list[dict], identity: dict) -> list[dict]:
     all_results = []
     path_taken = set()
@@ -434,9 +453,12 @@ def receive(a: argparse.Namespace, c) -> None:
         rows, data = c.candidate_inputs(a.target, a.gnu_work, a.minic,
                                         golden, a.initramfs)
         identity = {"frozen_manifest_sha256": file_sha(c.required(a.gnu_work / "frozen/manifest.json")),
-                    "gnu_receipt_sha256": file_sha(a.gnu_receipt),
+                    "gnu_receipt_sha256": pinned_gnu_source_receipt_sha(
+                        a.incoming, a.target, golden["image_sha256"]),
                     "gnu_c_owner_manifest_sha256": data["gnu_c_owner_manifest_sha256"],
                     "original_gnu_image_sha256": golden["image_sha256"]}
+        outcome["fresh_gnu_qemu_receipt_sha256"] = file_sha(a.gnu_receipt)
+        outcome["pinned_source_producer_receipt_sha256"] = identity["gnu_receipt_sha256"]
         shutil.copy2(a.gnu_receipt, a.output / "gnu-qemu-receipt.json")
         rows_results = collect(a, c, rows, identity)
         (a.output / "all-c-owners-result.json").write_text(json.dumps(

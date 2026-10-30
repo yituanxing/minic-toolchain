@@ -269,6 +269,16 @@ class SevenWorkerStrictTransportTest(unittest.TestCase):
         package.assert_called_once()
         self.assertEqual(len(r.json_file(args.output / "results.json")), 30)
 
+    def test_receiver_uses_pinned_source_receipt_not_fresh_qemu_json_sha(self):
+        self.populate_objects()
+        self.assertEqual(
+            r.pinned_gnu_source_receipt_sha(self.incoming, "x86_64", "a" * 64),
+            "c" * 64)
+        with self.assertRaisesRegex(ValueError, "does not match fresh GNU kernel Image"):
+            r.pinned_gnu_source_receipt_sha(self.incoming, "x86_64", "f" * 64)
+        with self.assertRaisesRegex(ValueError, "missing or unsafe provenance JSON"):
+            r.pinned_gnu_source_receipt_sha(self.incoming, "aarch64", "a" * 64)
+
 
 if __name__ == "__main__":
     unittest.main()
