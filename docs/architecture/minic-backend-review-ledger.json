@@ -1183,6 +1183,12 @@
         666
       ]
     },
+    "src/target/x86_64/codegen_options.h": {
+      "blob": "20aa30c64dfe7e865ce736010bb9088ada72ff30",
+      "review_depth": "targeted",
+      "ci_touched_in": [],
+      "note": "2026-10-30: reviewed x86 Kbuild mitigation-bit contract and native assembly/ELF regression; full Linux semantics and stale source blobs remain unqualified."
+    },
     "src/target/x86_64/codegen.h": {
       "blob": "8c6874da8255d05196da1b68f2696093ee32f73a",
       "review_depth": "inventory",
