@@ -87,7 +87,9 @@ fi
 RISCV_CC="$cc" \
   BUILD_DIR="$work/initramfs-build" \
   OUTPUT_INITRAMFS="$initramfs" \
-  bash "$repo/tests/external/linux/build_runtime_initramfs.sh"
+  LINUX_RUNTIME_REPRODUCIBLE=1 \
+    bash "$repo/tests/external/linux/build_runtime_initramfs.sh"
+  sha256sum "$initramfs" | cut -d' ' -f1 >"$work/runtime-initramfs.sha256"
 
 # GCC -B also locates a plain `as`; Kbuild's AS= may use the prefixed binary.
 # Both must resolve to exactly the same fail-closed wrapper. In particular,

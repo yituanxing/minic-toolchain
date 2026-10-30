@@ -94,7 +94,7 @@ static bool x64_legacy_opcode_allowed(const char *name,uint32_t mode) {
     return false;
 }
 
-enum { X64_ZERO = 1, X64_REG_BINARY, X64_STACK, X64_MOV_IMM32, X64_ALU_IMM, X64_REG_MEMORY, X64_BRANCH, X64_IMM_MEMORY, X64_MOVQ_IMMREG, X64_MOVABS_IMMREG, X64_SETCC, X64_BINARY8, X64_MOVSLQ, X64_MOVZX_REG, X64_SHIFT_REGISTER, X64_TEST8_IMM, X64_PUSH_IMM, X64_CMOV_REG, X64_UNARY, X64_INDIRECT_REG, X64_BSWAP, X64_TEST_IMM_REG, X64_IMUL_IMM, X64_BIT_IMMREG, X64_DOUBLE_SHIFT, X64_SYSTEM_MOVE, X64_BMI2_SHIFT, X64_XMM_IMM_REG, X64_FAR_BRANCH, X64_MOFFS };
+enum { X64_ZERO = 1, X64_REG_BINARY, X64_STACK, X64_MOV_IMM32, X64_ALU_IMM, X64_REG_MEMORY, X64_BRANCH, X64_IMM_MEMORY, X64_MOVQ_IMMREG, X64_MOVABS_IMMREG, X64_SETCC, X64_BINARY8, X64_MOVSLQ, X64_MOVZX_REG, X64_SHIFT_REGISTER, X64_TEST8_IMM, X64_PUSH_IMM, X64_CMOV_REG, X64_UNARY, X64_INDIRECT_REG, X64_BSWAP, X64_TEST_IMM_REG, X64_IMUL_IMM, X64_BIT_IMMREG, X64_DOUBLE_SHIFT, X64_SYSTEM_MOVE, X64_BMI2_SHIFT, X64_XMM_IMM_REG, X64_FAR_BRANCH, X64_MOFFS, X64_SIMD_EXT };
 #define X64_ENCODING_NOTRACK UINT32_C(0x80000)
 #define X64_ENCODING_F2 UINT32_C(0x100000)
 #define X64_ENCODING_IMM8 UINT32_C(0x200000)
@@ -237,6 +237,22 @@ static bool x64_xmm_register(const char *text,unsigned *reg) {
     errno=0;id=strtoul(text+4U,&end,10);
     if(errno || *end!='\0' || id>=16UL)return false;
     *reg=(unsigned)id;return true;
+}
+
+/* AVX-512 uses an independent 32-register vector file and 8 predicate
+ * registers.  Do not pretend ZMM/K operands are GPRs or XMM aliases. */
+static bool x64_vector_register(const char *text,const char *prefix,
+                                unsigned limit,unsigned *reg) {
+    const size_t prefix_len=strlen(prefix);
+    char *end;
+    unsigned long id;
+    if(strncmp(text,prefix,prefix_len) ||
+       !isdigit((unsigned char)text[prefix_len]))return false;
+    errno=0;
+    id=strtoul(text+prefix_len,&end,10);
+    if(errno || *end!='\0' || id>=limit)return false;
+    *reg=(unsigned)id;
+    return true;
 }
 
 static bool x64_register16(const char *text,unsigned *reg) {
@@ -995,6 +1011,76 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
                              s->op,s->line);
             minias_mcinst_destroy(m);return false;
         }
+    }
+    /* Linux 6.6 Kconfig's real GNU assembler feature tests select actual
+     * machine instructions, not preprocessor capability flags.  Retain the
+     * complete typed operands so the same encoder serves register variants
+     * beyond the probe's literal operands. */
+    if(!strcmp(s->op,"sha1msg1") || !strcmp(s->op,"sha256msg1")) {
+        if(!x64_args2(s->args,src,dst) ||
+           !x64_xmm_register(src,&rs) ||
+           !x64_xmm_register(dst,&rd))goto invalid;
+        m->opcode=X64_SIMD_EXT;
+        m->encoding=!strcmp(s->op,"sha1msg1")?0U:1U;
+        m->count=2U;
+        m->operands[0].kind=MINIAS_MC_REGISTER;
+        m->operands[0].reg=rs;
+        m->operands[1].kind=MINIAS_MC_REGISTER;
+        m->operands[1].reg=rd;
+        goto done;
+    }
+    if(!strcmp(s->op,"vgf2p8mulb")) {
+        char first[X64_OPERAND_CAP],second[X64_OPERAND_CAP];
+        unsigned third;
+        if(!x64_args3(s->args,first,second,dst) ||
+           !x64_xmm_register(first,&rs) ||
+           !x64_xmm_register(second,&rd) ||
+           !x64_xmm_register(dst,&third))goto invalid;
+        m->opcode=X64_SIMD_EXT;m->encoding=2U;m->count=3U;
+        m->operands[0].kind=MINIAS_MC_REGISTER;
+        m->operands[0].reg=rs;
+        m->operands[1].kind=MINIAS_MC_REGISTER;
+        m->operands[1].reg=rd;
+        m->operands[2].kind=MINIAS_MC_REGISTER;
+        m->operands[2].reg=third;
+        goto done;
+    }
+    if(!strcmp(s->op,"vpmovm2b")) {
+        unsigned vector_width=0U;
+        if(!x64_args2(s->args,src,dst) ||
+           !x64_vector_register(src,"%k",8U,&rs))goto invalid;
+        if(x64_vector_register(dst,"%xmm",32U,&rd))vector_width=128U;
+        else if(x64_vector_register(dst,"%ymm",32U,&rd))vector_width=256U;
+        else if(x64_vector_register(dst,"%zmm",32U,&rd))vector_width=512U;
+        else goto invalid;
+        m->opcode=X64_SIMD_EXT;m->encoding=3U;m->count=3U;
+        m->operands[0].kind=MINIAS_MC_REGISTER;
+        m->operands[0].reg=rs;
+        m->operands[1].kind=MINIAS_MC_REGISTER;
+        m->operands[1].reg=rd;
+        m->operands[2].kind=MINIAS_MC_IMMEDIATE;
+        m->operands[2].immediate=vector_width;
+        goto done;
+    }
+    if(!strcmp(s->op,"wrussq") || !strcmp(s->op,"wrussd")) {
+        X64Memory mem;
+        bool wide;
+        const bool want_wide=!strcmp(s->op,"wrussq");
+        if(!x64_args2(s->args,src,dst) ||
+           !x64_register(src,&rs,&wide) || wide!=want_wide ||
+           !x64_is_mem_candidate(dst) ||
+           !x64_parse_base_memory(as,dst,&mem))goto invalid;
+        if(!x64_attach_memory_operand(as,m,&mem,
+                                     "out-of-memory:x86-wruss-memory")) {
+            minias_mcinst_destroy(m);return false;
+        }
+        m->opcode=X64_REG_MEMORY;m->count=2U;
+        m->encoding=UINT32_C(0x10000)|UINT32_C(0x100)|
+                    UINT32_C(0x400)|UINT32_C(0xf5);
+        m->operands[0].kind=MINIAS_MC_REGISTER;
+        m->operands[0].reg=rs;
+        m->operands[0].register_64=wide;
+        goto done;
     }
     if(!strcmp(s->op,"lock") && s->args[0]!='\0') {
         const char *operand=s->args;
@@ -3624,6 +3710,57 @@ static bool x64_register_encoding_plan(const MiniAsMCInst *m,
     size_t n=0U;
     unsigned r,d,i;
     switch(m->opcode) {
+        case X64_SIMD_EXT: {
+            /* SHA: legacy 0F 38 /r; GFNI: VEX.66.0F38;
+             * AVX512 mask expansion: EVEX.66.0F38.  The register
+             * assignments below follow the Intel encoding fields while
+             * retained MC operands remain in GNU AT&T source order. */
+            const unsigned src=m->operands[0].reg;
+            const unsigned dst=m->operands[1].reg;
+            switch(m->encoding) {
+                case 0U: case 1U:
+                    if(src>=16U || dst>=16U)return false;
+                    if(src>=8U || dst>=8U)
+                        code[n++]=(unsigned char)(0x40U|
+                            ((dst>>3U)<<2U)|(src>>3U));
+                    code[n++]=0x0fU;code[n++]=0x38U;
+                    code[n++]=(unsigned char)(m->encoding==0U?0xc9U:0xccU);
+                    code[n++]=(unsigned char)(0xc0U|((dst&7U)<<3U)|(src&7U));
+                    break;
+                case 2U: {
+                    const unsigned middle=dst;
+                    const unsigned output=m->operands[2].reg;
+                    if(src>=16U || middle>=16U || output>=16U)return false;
+                    code[n++]=0xc4U;
+                    code[n++]=(unsigned char)((output>=8U?0U:0x80U)|
+                        0x40U|(src>=8U?0U:0x20U)|0x02U);
+                    code[n++]=(unsigned char)((((~middle)&15U)<<3U)|0x01U);
+                    code[n++]=0xcfU;
+                    code[n++]=(unsigned char)(0xc0U|((output&7U)<<3U)|
+                        (src&7U));
+                    break;
+                }
+                case 3U: {
+                    const uint64_t width=m->operands[2].immediate;
+                    unsigned ll;
+                    if(src>=8U || dst>=32U)return false;
+                    if(width==128U)ll=0U;
+                    else if(width==256U)ll=1U;
+                    else if(width==512U)ll=2U;
+                    else return false;
+                    code[n++]=0x62U;
+                    code[n++]=(unsigned char)((dst&8U?0U:0x80U)|
+                        0x60U|(dst&16U?0U:0x10U)|0x02U);
+                    code[n++]=0x7eU;
+                    code[n++]=(unsigned char)((ll<<5U)|0x08U);
+                    code[n++]=0x28U;
+                    code[n++]=(unsigned char)(0xc0U|((dst&7U)<<3U)|src);
+                    break;
+                }
+                default:return false;
+            }
+            break;
+        }
         case X64_BMI2_SHIFT: {
             unsigned count=m->operands[0].reg;
             unsigned base=m->operands[1].reg;

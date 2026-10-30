@@ -7,11 +7,28 @@ therefore useful even when the MiniAS Image links but does not boot.
 
 import argparse
 from collections import Counter
+import gzip
+import hashlib
 import importlib.util
+import io
 import json
 from pathlib import Path
 import re
 import sys
+import tarfile
+
+
+# These are deliberate hard limits on *uncompressed* original object bytes.
+# The evidence archive is a sample, never an entire Kbuild object-tree dump.
+EVIDENCE_MAX_PAIRS = 12
+EVIDENCE_MAX_PAIR_BYTES = 512 * 1024
+EVIDENCE_MAX_TOTAL_BYTES = 4 * 1024 * 1024
+EVIDENCE_DIMENSION_PRIORITY = (
+    "contents_masked", "executable_mapping", "global_symbols",
+    "sections", "alignment", "relocations_link_effective",
+    "relocation_order", "group_semantics", "header",
+    "unknown_relocation_fields",
+)
 
 
 def is_transient_probe(path: Path) -> bool:
@@ -133,11 +150,113 @@ def compare_allocated(oracle, reference_path: Path, candidate_path: Path):
     return "ALLOC_EQUAL", "-"
 
 
+def write_alloc_diff_evidence(archive_path: Path, gnu_dir: Path, mini_dir: Path,
+                              alloc_differences):
+    """Preserve bounded, reproducible pairs of *actual* GNU/MiniAS objects.
+
+    Select representative loaded-content, mapping, symbol and relocation
+    differences in rotating dimension order. Deterministic sorting prevents
+    thousands of relocation-only entries from hiding rarer code-data faults.
+    The manifest is a diagnostic, not proof that any difference is harmless.
+    """
+    records = sorted(alloc_differences, key=lambda item: item[0].as_posix())
+    categories = {dimension: [] for dimension in EVIDENCE_DIMENSION_PRIORITY}
+    for rel, detail in records:
+        present = set(detail.split(","))
+        for dimension in EVIDENCE_DIMENSION_PRIORITY:
+            if dimension in present:
+                categories[dimension].append((rel, detail))
+        if not present.intersection(categories):
+            categories["unknown_relocation_fields"].append((rel, detail))
+
+    selected = []
+    selected_names = set()
+    skipped_oversize = set()
+    skipped_unsafe = set()
+    total_bytes = 0
+    while len(selected) < EVIDENCE_MAX_PAIRS:
+        made_progress = False
+        for dimension in EVIDENCE_DIMENSION_PRIORITY:
+            pool = categories[dimension]
+            while pool:
+                rel, detail = pool.pop(0)
+                if rel in selected_names or rel in skipped_oversize or rel in skipped_unsafe:
+                    continue
+                reference = gnu_dir / rel
+                candidate = mini_dir / rel
+                if (reference.is_symlink() or candidate.is_symlink() or
+                        not reference.is_file() or not candidate.is_file()):
+                    skipped_unsafe.add(rel)
+                    continue
+                pair_bytes = reference.stat().st_size + candidate.stat().st_size
+                if pair_bytes > EVIDENCE_MAX_PAIR_BYTES or (
+                        total_bytes + pair_bytes > EVIDENCE_MAX_TOTAL_BYTES):
+                    skipped_oversize.add(rel)
+                    continue
+                selected.append((rel, detail, dimension))
+                selected_names.add(rel)
+                total_bytes += pair_bytes
+                made_progress = True
+                break
+            if len(selected) >= EVIDENCE_MAX_PAIRS:
+                break
+        if not made_progress:
+            break
+
+    manifest = {
+        "schema": 1,
+        "scope": "AArch64 real Linux 6.6.143 GNU-as sidecar versus MiniAS production",
+        "verdict": "DIAGNOSTIC_ONLY_NOT_GNU_EQ_CERTIFICATION",
+        "alloc_diff_total": len(records),
+        "max_pairs": EVIDENCE_MAX_PAIRS,
+        "max_pair_bytes": EVIDENCE_MAX_PAIR_BYTES,
+        "max_source_bytes": EVIDENCE_MAX_TOTAL_BYTES,
+        "selected_source_bytes": total_bytes,
+        "skipped_oversize": len(skipped_oversize),
+        "skipped_unsafe": len(skipped_unsafe),
+        "objects": [],
+    }
+
+    def add_bytes(tar, name, payload):
+        member = tarfile.TarInfo(name)
+        member.size = len(payload)
+        member.mtime = 0
+        member.mode = 0o644
+        member.uid = member.gid = 0
+        member.uname = member.gname = ""
+        tar.addfile(member, io.BytesIO(payload))
+
+    archive_path.parent.mkdir(parents=True, exist_ok=True)
+    with archive_path.open("wb") as target:
+        with gzip.GzipFile(fileobj=target, mode="wb", filename="", mtime=0) as zip_file:
+            with tarfile.open(fileobj=zip_file, mode="w") as tar:
+                for rel, detail, trigger in selected:
+                    item = {"object": rel.as_posix(), "dimensions": detail.split(","),
+                            "selected_dimension": trigger}
+                    for lane, directory in (("gnu", gnu_dir), ("minias", mini_dir)):
+                        data = (directory / rel).read_bytes()
+                        # A source changing while we package is not an acceptable
+                        # explanation for a potentially truncated ELF sample.
+                        if len(data) > EVIDENCE_MAX_PAIR_BYTES:
+                            raise RuntimeError(f"evidence source changed: {lane}/{rel}")
+                        add_bytes(tar, f"objects/{lane}/{rel.as_posix()}", data)
+                        item[lane] = {"sha256": hashlib.sha256(data).hexdigest(),
+                                      "bytes": len(data)}
+                    manifest["objects"].append(item)
+                add_bytes(tar, "manifest.json", (
+                    json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode())
+    return manifest
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--mini-dir", type=Path, required=True)
     parser.add_argument("--gnu-dir", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument(
+        "--alloc-diff-evidence", type=Path,
+        help="optional bounded deterministic tar.gz of genuine ALLOC_DIFF object pairs",
+    )
     parser.add_argument(
         "--require-alloc-parity", action="store_true",
         help="fail if any production object differs in linked SHF_ALLOC semantics",
@@ -158,16 +277,20 @@ def main() -> int:
     counts = Counter()
     alloc_counts = Counter()
     alloc_dimensions = Counter()
+    alloc_differences = []
     for reference in sorted(args.gnu_dir.rglob("*.o")):
         rel = reference.relative_to(args.gnu_dir)
         if is_transient_probe(rel):
             counts["PROBE_IGNORED"] += 1
-            rows.append(("PROBE_IGNORED", rel.as_posix(), "disposable_gcc_capability_probe"))
+            rows.append(("PROBE_IGNORED", rel.as_posix(),
+                         "disposable_gcc_capability_probe", "NOT_APPLICABLE", "-"))
             continue
         candidate = args.mini_dir / rel
+        alloc_verdict, alloc_detail = "NOT_COMPUTED", "-"
         if not candidate.is_file():
             result = "MISSING"
             detail = "candidate_missing"
+            alloc_verdict = "MISSING"
         else:
             try:
                 comparison = oracle.compare_paths(reference, candidate)
@@ -190,16 +313,29 @@ def main() -> int:
                 alloc_counts[alloc_verdict] += 1
                 if alloc_detail != "-":
                     alloc_dimensions.update(alloc_detail.split(","))
+                if alloc_verdict == "ALLOC_DIFF":
+                    alloc_differences.append((rel, alloc_detail))
             except Exception as exc:
                 result = "ORACLE_ERROR"
                 detail = str(exc).replace("\t", " ").replace("\n", " ")
+                alloc_verdict, alloc_detail = "ORACLE_ERROR", "-"
         counts[result] += 1
-        rows.append((result, rel.as_posix(), detail))
+        rows.append((result, rel.as_posix(), detail, alloc_verdict, alloc_detail))
 
     with args.out.open("w") as handle:
-        handle.write("result\tobject\tdimensions\n")
-        for result, rel, detail in rows:
-            handle.write(f"{result}\t{rel}\t{detail}\n")
+        handle.write("result\tobject\tdimensions\talloc_result\talloc_dimensions\n")
+        for result, rel, detail, alloc_verdict, alloc_detail in rows:
+            handle.write(f"{result}\t{rel}\t{detail}\t{alloc_verdict}\t{alloc_detail}\n")
+    if args.alloc_diff_evidence is not None:
+        manifest = write_alloc_diff_evidence(
+            args.alloc_diff_evidence, args.gnu_dir, args.mini_dir, alloc_differences)
+        print("MINIAS_AARCH64_ALLOC_EVIDENCE status=CAPTURED "
+              f"total_diff={manifest['alloc_diff_total']} "
+              f"pairs={len(manifest['objects'])} "
+              f"skipped_oversize={manifest['skipped_oversize']} "
+              f"skipped_unsafe={manifest['skipped_unsafe']} "
+              f"source_bytes={manifest['selected_source_bytes']} "
+              "certified_gnu_equivalence=0")
     print("MINIAS_AARCH64_OBJECT_ORACLE " + " ".join(
         f"{key.lower()}={counts[key]}"
         for key in ("EQUAL", "DIFF", "INCONCLUSIVE", "MISSING", "ORACLE_ERROR",
@@ -222,7 +358,7 @@ def main() -> int:
         print(f"MINIAS_AARCH64_ALLOC_DIMENSION count={count} name={dimension}")
     for dimension, count in dimensions.most_common(12):
         print(f"MINIAS_AARCH64_OBJECT_DIMENSION count={count} name={dimension}")
-    for result, rel, detail in rows:
+    for result, rel, detail, _alloc_verdict, _alloc_detail in rows:
         if rel.startswith(("arch/arm64/kernel/", "arch/arm64/mm/")) and result != "EQUAL":
             print(f"MINIAS_AARCH64_EARLY_OBJECT status={result} path={rel} dimensions={detail}")
     production_errors = counts["MISSING"] or counts["ORACLE_ERROR"]

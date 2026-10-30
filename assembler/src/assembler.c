@@ -1569,6 +1569,59 @@ static bool add_stmt(MiniAs *as,
     if (fragment_kind == MINIAS_FRAGMENT_INSTRUCTION &&
         !as->target->parse_mcinst(as, st))
         return false;
+    /* Code-after-data needs a GNU target-defined implicit alignment. Record
+     * the transition per subsection so enormous instruction-only Linux
+     * regions do not grow a redundant alignment Fragment per instruction.
+     * The actual padding is deferred to MCLayout, where symbolic LEBs and
+     * other variable-width preceding data have their final sizes. */
+    if(fragment_kind==MINIAS_FRAGMENT_INSTRUCTION ||
+       fragment_kind==MINIAS_FRAGMENT_FIXED_DATA ||
+       fragment_kind==MINIAS_FRAGMENT_BYTES ||
+       fragment_kind==MINIAS_FRAGMENT_FILL ||
+       fragment_kind==MINIAS_FRAGMENT_SPACE ||
+       fragment_kind==MINIAS_FRAGMENT_ORIGIN) {
+        MiniAsSubsection *sub=minias_ensure_subsection(
+            as,st->section,st->subsection);
+        if(sub==NULL)return false;
+        sub->pending_instruction_alignment=
+            fragment_kind!=MINIAS_FRAGMENT_INSTRUCTION;
+    }
+    return true;
+}
+
+/* GNU AArch64 emits zero data padding before an instruction after an odd-
+ * sized .byte/.uleb128, while regular .data instructions are not padded.
+ * This is a target-advertised alignment capability, independent of ELF
+ * section alignment and shared for real instructions and .inst words.
+ * Retain an ordinary ALIGN Fragment so symbolic LEB resizing remains in
+ * MCLayout's one fixed point (including anchors before the next opcode). */
+static bool minias_maybe_align_instruction(MiniAs *as,size_t line) {
+    const unsigned alignment=as->target->implicit_instruction_alignment;
+    MiniAsSubsection *sub;
+    MiniAsStmt *stmt;
+    uint64_t pad;
+    if(alignment==0U ||
+       (as->sections[(size_t)as->current_section].flags&MINIAS_SHF_EXECINSTR)==0U)
+        return true;
+    if((alignment&(alignment-1U))!=0U || alignment>UINT32_MAX) {
+        minias_set_error(as,"invalid-target-implicit-code-alignment");
+        return false;
+    }
+    sub=minias_ensure_subsection(as,as->current_section,as->current_subsection);
+    if(sub==NULL)return false;
+    pad=(alignment-(sub->size&(alignment-1U)))&(alignment-1U);
+    if(!sub->pending_instruction_alignment && pad==0U)return true;
+    if(!add_stmt(as,MINIAS_FRAGMENT_ALIGNMENT,".implicit_code_align","",
+                 line,(uint32_t)pad,alignment))return false;
+    stmt=&as->stmts[as->stmt_count-1U];
+    /* GNU inserts zero bytes here, not 4-byte NOP instructions. Mark this
+     * as explicit DATA fill to prevent the target NOP alignment callback. */
+    stmt->align_has_fill=true;
+    stmt->align_fill=0U;
+    if(!advance_current_location(as,pad))return false;
+    sub->pending_instruction_alignment=false;
+    if(as->sections[(size_t)as->current_section].align<alignment)
+        as->sections[(size_t)as->current_section].align=alignment;
     return true;
 }
 
@@ -4796,7 +4849,19 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
                                             line)) {
                 return false;
             }
+            if(strcmp(op,".inst")==0 &&
+               !minias_maybe_align_instruction(as,line)) {
+                free(rewritten_args);
+                return false;
+            }
             ok = add_data_stmt(as, op, rewritten_args, line);
+            if(ok && strcmp(op,".inst")==0 &&
+               as->target->implicit_instruction_alignment!=0U) {
+                MiniAsSubsection *sub=minias_ensure_subsection(
+                    as,as->current_section,as->current_subsection);
+                if(sub==NULL)ok=false;
+                else sub->pending_instruction_alignment=false;
+            }
             free(rewritten_args);
             return ok;
         }
@@ -4806,10 +4871,15 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
 
     {
         char *rewritten_args = NULL;
-        const size_t statement_id = as->stmt_count;
+        size_t statement_id;
         bool ok;
         if (!rewrite_numeric_local_refs(as, args, &rewritten_args, line))
             return false;
+        if(!minias_maybe_align_instruction(as,line)) {
+            free(rewritten_args);
+            return false;
+        }
+        statement_id=as->stmt_count;
         /* ISA/ABI validation is owned by the target's one typed parser.
          * The obsolete pre-parse validation callback had no live Target. */
         ok = add_stmt(as, MINIAS_FRAGMENT_INSTRUCTION, op, rewritten_args,

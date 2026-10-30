@@ -66,6 +66,10 @@ typedef struct MiniAsSubsection {
     uint32_t number;
     uint64_t size;
     uint64_t base;
+    /* A data or placement fragment may change width during MC relaxation.
+     * Insert one target-advertised code alignment at the next instruction,
+     * not one alignment fragment per instruction in large Linux sources. */
+    bool pending_instruction_alignment;
 } MiniAsSubsection;
 
 typedef struct MiniAsSectionState {
@@ -1027,6 +1031,10 @@ typedef struct MiniAsTargetOps {
     bool (*resolve_cfi_register)(const MiniAs *, const char *, unsigned *);
     /* GNU assembler directive dialect belongs to TargetInfo, not Common. */
     unsigned default_exec_alignment; /* zero: 4; x86 GNU .text has alignment 1 */
+    /* GNU target parser automatically aligns an instruction after data in
+     * executable sections. This is distinct from ELF sh_addralign and does
+     * not apply to instructions emitted in ordinary .data sections. */
+    unsigned implicit_instruction_alignment; /* 0: no implicit alignment */
     /* Optional live ISA-state default (e.g. RVC sections align to 2,
      * strict RV32I sections to 4). Evaluated after Target state init. */
     unsigned (*default_exec_alignment_for_site)(const MiniAs *);

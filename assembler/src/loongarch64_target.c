@@ -35,7 +35,8 @@ typedef enum {
     LA_REG_BANK_VR128,
     LA_REG_BANK_XR256,
     LA_REG_BANK_FCSR,
-    LA_REG_BANK_FCC
+    LA_REG_BANK_FCC,
+    LA_REG_BANK_SCR
 } LaRegisterBank;
 
 /* The ISA feature mask belongs to the LoongArch Target and is passed through
@@ -755,7 +756,7 @@ static void la_capture_rri(MiniAsMCInst *m,unsigned rd,unsigned rj,int64_t imm) 
  * FCC/FCSR bank identity is validated here until Common has a generic way of
  * describing condition/control registers without encoding one ISA into it. */
 typedef enum {
-    LA_BANK_GPR, LA_BANK_FPR, LA_BANK_FCSR, LA_BANK_FCC,
+    LA_BANK_GPR, LA_BANK_FPR, LA_BANK_FCSR, LA_BANK_FCC, LA_BANK_SCR,
     LA_BANK_SIGNED12, LA_BANK_UNSIGNED5, LA_BANK_UNSIGNED8,
     LA_BANK_UNSIGNED14, LA_BANK_UNSIGNED15
 } LaRegisterOperandBank;
@@ -790,6 +791,11 @@ static const LaSpecialRegisterPattern la_special_register_patterns[] = {
     {"movgr2frh.w",0x0114ac00U,2U,{LA_BANK_FPR,LA_BANK_GPR},LA_FIELDS_2},
     {"movfcsr2gr",0x0114c800U,2U,{LA_BANK_GPR,LA_BANK_FCSR},LA_FIELDS_2},
     {"movgr2fcsr",0x0114c000U,2U,{LA_BANK_FCSR,LA_BANK_GPR},LA_FIELDS_2},
+    /* GNU binutils loongarch-opc.c: LBT SCR is a distinct 2-bit bank.
+     * 0x00000c00 r0:5,cr5:2; 0x00000800 cr0:2,r5:5.
+     * The former is Linux's real AS_HAS_LBT_EXTENSION capability probe. */
+    {"movscr2gr",0x00000c00U,2U,{LA_BANK_GPR,LA_BANK_SCR},LA_FIELDS_2},
+    {"movgr2scr",0x00000800U,2U,{LA_BANK_SCR,LA_BANK_GPR},LA_FIELDS_2},
     {"movcf2gr",0x0114dc00U,2U,{LA_BANK_GPR,LA_BANK_FCC},LA_FIELDS_2},
     {"movgr2cf",0x0114d800U,2U,{LA_BANK_FCC,LA_BANK_GPR},LA_FIELDS_2},
     {"movcf2fr",0x0114d400U,2U,{LA_BANK_FPR,LA_BANK_FCC},LA_FIELDS_2},
@@ -993,6 +999,8 @@ static bool la_parse_special_register_pattern(MiniAsMCInst *m,
                 break;
             case LA_BANK_FCC:
                 valid=la_special_reg(args[arg],"$fcc",7U,&reg);break;
+            case LA_BANK_SCR:
+                valid=la_special_reg(args[arg],"$scr",3U,&reg);break;
             case LA_BANK_SIGNED12:
                 valid=minias_eval_i64_expression(args[arg],&imm) &&
                       imm>=-2048 && imm<=2047;
@@ -1023,6 +1031,7 @@ static bool la_parse_special_register_pattern(MiniAsMCInst *m,
                 rule->banks[arg]==LA_BANK_FPR ? LA_REG_BANK_FPR :
                 rule->banks[arg]==LA_BANK_FCSR ? LA_REG_BANK_FCSR :
                 rule->banks[arg]==LA_BANK_FCC ? LA_REG_BANK_FCC :
+                rule->banks[arg]==LA_BANK_SCR ? LA_REG_BANK_SCR :
                 LA_REG_BANK_GPR);
         }
     }
@@ -1331,7 +1340,8 @@ static bool la_materialize_table_word(const MiniAsMCInst *m,
             } else if(!la_encoded_reg(&m->operands[i],
                          bank==LA_BANK_GPR?LA_REG_BANK_GPR:
                          bank==LA_BANK_FPR?LA_REG_BANK_FPR:
-                         bank==LA_BANK_FCSR?LA_REG_BANK_FCSR:LA_REG_BANK_FCC,
+                         bank==LA_BANK_FCSR?LA_REG_BANK_FCSR:
+                         bank==LA_BANK_SCR?LA_REG_BANK_SCR:LA_REG_BANK_FCC,
                          &value) || value<rule->min_register[i])return false;
             *word|=value<<rule->shifts[i];
         }

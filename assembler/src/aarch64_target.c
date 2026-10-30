@@ -12,8 +12,12 @@
 #define A64_FEATURE_CRC UINT32_C(0x40000000) /* ARM CRC extension */
 #define A64_FEATURE_CRYPTO UINT32_C(0x80000000) /* ARM AES/crypto extension */
 #define A64_FEATURE_MTE UINT32_C(0x08000000) /* ARM memtag extension */
+#define A64_FEATURE_SHA3 UINT32_C(0x04000000) /* ARMv8.2 SHA-3 extension */
+#define A64_FEATURE_RCPC UINT32_C(0x02000000) /* ARMv8.3 RCpc loads */
+#define A64_FEATURE_PAUTH UINT32_C(0x01000000) /* ARMv8.3 pointer auth */
 #define A64_KNOWN_FEATURES (A64_FEATURE_LSE|A64_FEATURE_TLBI_RANGE|\
-                            A64_FEATURE_CRC|A64_FEATURE_CRYPTO|A64_FEATURE_MTE)
+                            A64_FEATURE_CRC|A64_FEATURE_CRYPTO|A64_FEATURE_MTE|\
+                            A64_FEATURE_SHA3|A64_FEATURE_RCPC|A64_FEATURE_PAUTH)
 
 /* The command-line TargetSpec and GNU .arch directives are two entrypoints
  * into one AArch64-private ISA profile parser.  The serialized spec is
@@ -98,8 +102,8 @@ static bool a64_init_target_state(MiniAs *as,
             return false;
         }
         memcpy(&profile,config->target_profile,sizeof(profile));
-        if((profile.arch_revision!=A64_ARCH_V8_0 &&
-            profile.arch_revision!=A64_ARCH_V8_5) ||
+        if((profile.arch_revision<A64_ARCH_V8_0 ||
+            profile.arch_revision>A64_ARCH_V8_5) ||
            (profile.features&~A64_KNOWN_FEATURES)!=0U) {
             minias_set_error(as,"invalid-aarch64-target-profile");
             return false;
@@ -385,6 +389,7 @@ enum {
     A64_MC_SIMD_SINGLE,
     A64_MC_SIMD_MOVE,
     A64_MC_SIMD_CRYPTO,
+    A64_MC_SIMD_SHA3_FOUR,
     A64_MC_SIMD_LOGIC,
     A64_MC_SIMD_DUP,
     A64_MC_SIMD_REV32,
@@ -1612,17 +1617,22 @@ static bool parse_integer_family(MiniAs *as,const A64AliasState *aliases,MiniAsM
     }
     if((!strcmp(op,"ldar") || !strcmp(op,"stlr") ||
         !strcmp(op,"ldarb") || !strcmp(op,"stlrb") ||
-        !strcmp(op,"ldarh") || !strcmp(op,"stlrh")) && n==2U) {
+        !strcmp(op,"ldarh") || !strcmp(op,"stlrh") ||
+        !strcmp(op,"ldapr") || !strcmp(op,"ldaprb") ||
+        !strcmp(op,"ldaprh")) && n==2U) {
         A64Memory memory;
         bool load=op[0]=='l';
-        bool byte=op[4]=='b';
-        bool half=op[4]=='h';
+        bool rcpc=!strncmp(op,"ldapr",5U);
+        bool byte=rcpc?op[5]=='b':op[4]=='b';
+        bool half=rcpc?op[5]=='h':op[4]=='h';
+        if(rcpc && (a64_features(as)&A64_FEATURE_RCPC)==0U)return false;
         if(!parse_a64_reg(aliases,t[0],&rd,&wd,&spd) || spd ||
            ((byte || half) && wd) ||
            !a64_parse_memory(as,aliases,t[1],NULL,&memory) ||
            !a64_is_plain_base(&memory))return false;
         inst->opcode=A64_MC_ACQUIRE_RELEASE;inst->count=2U;
-        inst->encoding=byte?(load?2U:4U):
+        inst->encoding=rcpc?(byte?7U:half?8U:6U):
+                       byte?(load?2U:4U):
                        half?(load?3U:5U):(load?1U:0U);
         put_reg(&inst->operands[0],rd,wd);
         memory.access_bytes=byte?1U:half?2U:wd?8U:4U;
@@ -3901,6 +3911,56 @@ reduction_done:;
             put_vector(&inst->operands[1],rn);
         }
         if(tri)put_vector(&inst->operands[2],rm);
+    } else if(!strcmp(op,"eor3") || !strcmp(op,"bcax") ||
+              !strcmp(op,"rax1") || !strcmp(op,"xar") ||
+              !strcmp(op,"sha512h") || !strcmp(op,"sha512h2") ||
+              !strcmp(op,"sha512su0") || !strcmp(op,"sha512su1")) {
+        /* Real ARM SHA-3/SHA-512 extensions, not a Kconfig-only .arch
+         * acceptance shortcut. All encodings share the existing typed
+         * AdvSIMD GPR-free emitters, except the fourth SHA3 register/imm6. */
+        char tok[4][384];unsigned n=0U,rd=0U,rn=0U,rm=0U,ra=0U;
+        uint32_t da=0U,sa=0U,ta=0U,ua=0U;
+        int64_t rot=0;
+        bool four=!strcmp(op,"eor3") || !strcmp(op,"bcax") || !strcmp(op,"xar");
+        bool two=!strcmp(op,"sha512su0");
+        bool qd=!strcmp(op,"sha512h") || !strcmp(op,"sha512h2");
+        bool bytes=!strcmp(op,"eor3") || !strcmp(op,"bcax");
+        uint32_t view=bytes?UINT32_C(0x40000000):UINT32_C(0x40000c00);
+        bool valid=(a64_features(as)&A64_FEATURE_SHA3)!=0U &&
+            split_operands(args,tok,&n) && n==(four?4U:two?2U:3U);
+        if(valid && qd)valid=parse_a64_q_reg(aliases,tok[0],&rd);
+        else if(valid)valid=a64_vector_view(aliases,tok[0],&rd,&da) && da==view;
+        if(valid)valid=(qd?parse_a64_q_reg(aliases,tok[1],&rn):
+                       (a64_vector_view(aliases,tok[1],&rn,&sa) && sa==view));
+        if(valid && !two)valid=a64_vector_view(aliases,tok[2],&rm,&ta) &&
+                                ta==view;
+        if(valid && four && bytes)valid=a64_vector_view(aliases,tok[3],&ra,&ua) &&
+                                      ua==UINT32_C(0x40000000);
+        if(valid && four && !bytes)valid=parse_signed_number(
+                     tok[3][0]=='#'?tok[3]+1U:tok[3],&rot) &&
+                     rot>=0 && rot<=63;
+        if(!valid) {
+            minias_set_error(as,"bad-aarch64-sha3:%s:line=%zu",args,stmt->line);
+            minias_mcinst_destroy(inst);return false;
+        }
+        inst->opcode=four?A64_MC_SIMD_SHA3_FOUR:
+                     two?A64_MC_SIMD_CRYPTO:A64_MC_SIMD_LOGIC;
+        inst->count=four?4U:two?2U:3U;
+        inst->encoding=!strcmp(op,"eor3")?UINT32_C(0xce000000):
+                       !strcmp(op,"bcax")?UINT32_C(0xce200000):
+                       !strcmp(op,"rax1")?UINT32_C(0xce608c00):
+                       !strcmp(op,"xar")?UINT32_C(0xce800000):
+                       !strcmp(op,"sha512h")?UINT32_C(0xce608000):
+                       !strcmp(op,"sha512h2")?UINT32_C(0xce608400):
+                       !strcmp(op,"sha512su0")?UINT32_C(0xcec08000):
+                                               UINT32_C(0xce608800);
+        put_vector(&inst->operands[0],rd);
+        put_vector(&inst->operands[1],rn);
+        if(!two)put_vector(&inst->operands[2],rm);
+        if(four) {
+            if(bytes)put_vector(&inst->operands[3],ra);
+            else put_immediate(&inst->operands[3],rot);
+        }
     } else if(!strcmp(op,"umov") || !strcmp(op,"smov") ||
               (!strcmp(op,"mov") && a64_register_prefix(aliases,args)=='d')) {
         /* One target-owned lane transfer for UMOV/SMOV and MOV Dn aliases,
@@ -4086,6 +4146,46 @@ lane_complete:;
                              args,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
+    } else if ((!strcmp(op,"paciasp") || !strcmp(op,"autiasp") ||
+                !strcmp(op,"pacibsp") || !strcmp(op,"autibsp") ||
+                !strcmp(op,"retaa") || !strcmp(op,"retab")) && !*args) {
+        /* PAC stack/frame HINT aliases are valid even on baseline v8; the
+         * authenticated RETA* branch itself requires ARMv8.3-PAuth. */
+        static const struct {const char *name;uint32_t code;} forms[]={
+            {"paciasp",UINT32_C(0xd503233f)},
+            {"autiasp",UINT32_C(0xd50323bf)},
+            {"pacibsp",UINT32_C(0xd503237f)},
+            {"autibsp",UINT32_C(0xd50323ff)},
+            {"retaa",UINT32_C(0xd65f0bff)},
+            {"retab",UINT32_C(0xd65f0fff)}
+        };
+        size_t k;
+        if(!strncmp(op,"reta",4U) &&
+           (a64_features(as)&A64_FEATURE_PAUTH)==0U) {
+            minias_set_error(as,"aarch64-pauth-required:%s:line=%zu",op,stmt->line);
+            minias_mcinst_destroy(inst);return false;
+        }
+        for(k=0U;k<sizeof(forms)/sizeof(forms[0]);++k)
+            if(!strcmp(op,forms[k].name))break;
+        if(k==sizeof(forms)/sizeof(forms[0])) {
+            minias_mcinst_destroy(inst);return false;
+        }
+        inst->opcode=A64_MC_SYSTEM_IMM;
+        inst->count=1U;
+        inst->encoding=forms[k].code;
+        put_immediate(&inst->operands[0],0);
+    } else if(!strcmp(op,"bti") &&
+              (!*args || !strcmp(args,"c") || !strcmp(args,"j") ||
+               !strcmp(args,"jc"))) {
+        /* A64 BTI remains an architectural HINT on pre-BTI targets. */
+        uint32_t hint=!*args?UINT32_C(0xd503241f):
+                      !strcmp(args,"c")?UINT32_C(0xd503245f):
+                      !strcmp(args,"j")?UINT32_C(0xd503249f):
+                                         UINT32_C(0xd50324df);
+        inst->opcode=A64_MC_SYSTEM_IMM;
+        inst->count=1U;
+        inst->encoding=hint;
+        put_immediate(&inst->operands[0],0);
     } else if (strcmp(op, "eret") == 0 && *args == '\0') {
         /* ELR_ELx exception return is a fixed architectural encoding.
          * Use the existing typed system-immediate emission owner; no
@@ -4707,6 +4807,15 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
                  (inst->operands[1].reg<<5U)|
                  inst->operands[0].reg;
             break;
+        case A64_MC_SIMD_SHA3_FOUR:
+            code=inst->encoding|
+                 (inst->operands[2].reg<<16U)|
+                 ((inst->operands[3].kind==MINIAS_MC_IMMEDIATE?
+                   (uint32_t)inst->operands[3].immediate:
+                   inst->operands[3].reg)<<10U)|
+                 (inst->operands[1].reg<<5U)|
+                 inst->operands[0].reg;
+            break;
         case A64_MC_SIMD_CRYPTO:
             code=inst->encoding|(inst->operands[1].reg<<5U)|
                  inst->operands[0].reg;
@@ -4823,6 +4932,9 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
                 case 3U:opcode=UINT32_C(0x48dffc00);break;
                 case 4U:opcode=UINT32_C(0x089ffc00);break;
                 case 5U:opcode=UINT32_C(0x489ffc00);break;
+                case 6U:opcode=wide?UINT32_C(0xf8bfc000):UINT32_C(0xb8bfc000);break;
+                case 7U:opcode=UINT32_C(0x38bfc000);break;
+                case 8U:opcode=UINT32_C(0x78bfc000);break;
                 default:minias_set_error(as,"bad-aarch64-acquire-size");return false;
             }
             code=opcode | (memory->base<<5U) |
@@ -5207,6 +5319,9 @@ static bool a64_set_isa_feature(uint32_t *bits,const char *name) {
     else if(!strcmp(name,"crc"))feature=A64_FEATURE_CRC;
     else if(!strcmp(name,"crypto"))feature=A64_FEATURE_CRYPTO;
     else if(!strcmp(name,"memtag"))feature=A64_FEATURE_MTE;
+    else if(!strcmp(name,"sha3"))feature=A64_FEATURE_SHA3;
+    else if(!strcmp(name,"rcpc"))feature=A64_FEATURE_RCPC;
+    else if(!strcmp(name,"pauth"))feature=A64_FEATURE_PAUTH;
     else return false;
     if(disable)*bits&=~feature;
     else *bits|=feature;
@@ -5222,19 +5337,32 @@ static bool a64_parse_arch_profile(const char *name,A64ProfileData *profile) {
     const char *plus;
     size_t base_len;
     A64ProfileData parsed;
+    static const struct {
+        const char *name;
+        uint32_t revision;
+        uint32_t baseline;
+    } arches[]={
+        {"armv8-a", 80U, 0U},
+        {"armv8.1-a",81U,A64_FEATURE_LSE|A64_FEATURE_CRC},
+        {"armv8.2-a",82U,A64_FEATURE_LSE|A64_FEATURE_CRC},
+        {"armv8.3-a",83U,A64_FEATURE_LSE|A64_FEATURE_CRC|A64_FEATURE_RCPC|A64_FEATURE_PAUTH},
+        {"armv8.4-a",84U,A64_FEATURE_LSE|A64_FEATURE_CRC|A64_FEATURE_RCPC|A64_FEATURE_PAUTH|A64_FEATURE_TLBI_RANGE},
+        {"armv8.5-a",85U,A64_FEATURE_LSE|A64_FEATURE_CRC|A64_FEATURE_RCPC|A64_FEATURE_PAUTH|A64_FEATURE_TLBI_RANGE}
+    };
+    size_t i;
+    bool matched=false;
     if(!name || !*name || !profile)return false;
     plus=strchr(name,'+');
     base_len=plus?(size_t)(plus-name):strlen(name);
-    if(base_len==strlen("armv8-a") &&
-       strncmp(name,"armv8-a",base_len)==0) {
-        parsed.arch_revision=A64_ARCH_V8_0;
-        parsed.features=0U;
-    }else if(base_len==strlen("armv8.5-a") &&
-             strncmp(name,"armv8.5-a",base_len)==0) {
-        parsed.arch_revision=A64_ARCH_V8_5;
-        parsed.features=A64_FEATURE_LSE|A64_FEATURE_TLBI_RANGE|
-                        A64_FEATURE_CRC;
-    }else return false;
+    for(i=0U;i<sizeof(arches)/sizeof(arches[0]);++i) {
+        if(base_len!=strlen(arches[i].name) ||
+           strncmp(name,arches[i].name,base_len)!=0)continue;
+        parsed.arch_revision=arches[i].revision;
+        parsed.features=arches[i].baseline;
+        matched=true;
+        break;
+    }
+    if(!matched)return false;
     while(plus) {
         char extension[32];
         const char *start=plus+1U,*next=strchr(start,'+');
@@ -5647,11 +5775,27 @@ mapping_failure:
 
 static bool validate(MiniAs *as) {
     size_t i;
-    for (i = 0U; i < as->section_count; ++i) {
-        const MiniAsSection *sec = &as->sections[i];
-        if ((sec->flags & MINIAS_SHF_EXECINSTR) != 0U &&
-            (sec->size % 4U) != 0U) {
-            minias_set_error(as, "unaligned-aarch64-text:%s", sec->name);
+    /* The AArch64 instruction stream is word-aligned, but GNU GAS permits
+     * arbitrary BYTE DATA in an executable section (e.g. Kbuild's forward
+     * .uleb128 feature probe).  A total section-size modulo-four check
+     * mistakenly rejects valid data-only .text.  Validate actual instruction
+     * sites, including GNU .inst words, independently of section byte count. */
+    for (i = 0U; i < as->stmt_count; ++i) {
+        const MiniAsStmt *stmt=&as->stmts[i];
+        if(stmt->fragment_kind!=MINIAS_FRAGMENT_INSTRUCTION &&
+           !(stmt->op!=NULL && strcmp(stmt->op,".inst")==0))continue;
+        if(stmt->section<0 || (size_t)stmt->section>=as->section_count)
+            continue;
+        /* GAS leaves instructions in non-executable sections byte-packed;
+         * its implicit four-byte alignment only applies to code sections. */
+        if((as->sections[(size_t)stmt->section].flags&
+            MINIAS_SHF_EXECINSTR)!=0U &&
+           (stmt->offset&UINT64_C(3))!=0U) {
+            const char *section_name=(stmt->section>=0 &&
+                (size_t)stmt->section<as->section_count)?
+                as->sections[(size_t)stmt->section].name:"<unknown>";
+            minias_set_error(as, "unaligned-aarch64-instruction:%s:line=%zu",
+                             section_name, stmt->line);
             return false;
         }
     }
@@ -5720,6 +5864,7 @@ static const MiniAsTargetOps ops = {
     .dot_relative_fixup = MINIAS_FIXUP_PREL32,
     .inst_directive_width = 4U,
     .default_exec_alignment = 1U,
+    .implicit_instruction_alignment = 4U,
     .supports_literal_pools = true,
     .literal_pool_order = MINIAS_LITERAL_POOL_WIDTH_ASC,
     .cfi_implicit_eh_frame = true,

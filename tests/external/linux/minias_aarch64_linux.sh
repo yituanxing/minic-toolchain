@@ -23,6 +23,8 @@ out="$work/out"
 image="$out/arch/arm64/boot/Image"
 initramfs="$work/runtime-initramfs.cpio.gz"
 trace="$work/minias-as.trace"
+asm_source_raw="$work/production-asm-sources.raw.tsv"
+asm_source_manifest="$work/production-asm-sources.tsv"
 bindir="$work/as-override"
 gnu_objects="$work/gnu-as-objects"
 minias=${MINIAS:-"$root/build/release/bin/minic-as"}
@@ -57,8 +59,9 @@ if [[ ! -d $src ]]; then tar -xJf "$archive" -C "$work"; fi
 
 # The initramfs contains real AArch64 GNU-compiled static PID1, shell and
 # syscall-probe executables. It is deliberately identical between both runs.
-RISCV_CC="$cc" BUILD_DIR="$work/initramfs" OUTPUT_INITRAMFS="$initramfs" \
+LINUX_RUNTIME_REPRODUCIBLE=1 RISCV_CC="$cc" BUILD_DIR="$work/initramfs" OUTPUT_INITRAMFS="$initramfs" \
   bash tests/external/linux/build_runtime_initramfs.sh
+sha256sum "$initramfs" | cut -d' ' -f1 >"$work/runtime-initramfs.sha256"
 
 mkdir -p "$bindir"
 cat >"$bindir/aarch64-linux-gnu-as" <<'AS_WRAPPER'
@@ -103,13 +106,40 @@ capture_entry_source() {
     >>"${MINIAS_AS_TRACE:?}"
 }
 
+# Kbuild's GNU compiler can create thousands of short-lived /tmp/cc*.s files.
+# Hash their exact contents while they still exist; never recompile sources or
+# infer their contents from the resulting ELF object. The final manifest is
+# reduced to *all* real Kbuild CC/AS .cmd owners after the build, so temporary
+# Kconfig feature tests cannot masquerade as production evidence.
+capture_production_source() {
+  [[ $out == *.o ]] || return 0
+  local absolute_out relative_out digest
+  absolute_out=$(realpath -m -- "$out")
+  [[ $absolute_out == "$MINIAS_KBUILD_OUT/"* ]] || return 0
+  relative_out=${absolute_out#"$MINIAS_KBUILD_OUT/"}
+  if [[ ! -f $input ]]; then
+    printf 'MINIAS_AARCH64_ASM_SOURCE=FAIL missing_input=%q output=%q\n' "$input" "$relative_out" >&2
+    exit 2
+  fi
+  digest=$(sha256sum -- "$input")
+  # One small append-only printf per invocation. The output object path has
+  # already been normalized under KBUILD_OUT, so concurrent -j4 invocations
+  # cannot split one TSV record across shell printf calls.
+  printf '%s\t%s\n' "$relative_out" "${digest%% *}" >>"${MINIAS_AS_SOURCE_RAW:?}"
+}
+
 # This transparent GNU control wrapper must never execute MiniAS. We give
 # GCC the same -B search-path shape as the MiniAS lane so capability probes
 # encounter a real GNU assembler, and capture entry.o without changing the
 # content of the assembler's argv or its original input file.
 if [[ ${MINIAS_AS_BACKEND:?} == gnu ]]; then
   capture_entry_source
-  exec "${REAL_AS:?}" "$@"
+  if "${REAL_AS:?}" "$@"; then
+    capture_production_source
+    exit 0
+  else
+    exit $?
+  fi
 fi
 if ((query)); then
   if [[ -n $out || -n $input ]]; then
@@ -146,6 +176,7 @@ if "$MINIAS" "${options[@]}" -o "$out" "$input"; then
     exit 1
   fi
   printf 'pass cwd=%q input=%q output=%q\n' "$PWD" "$input" "$out" >>"$MINIAS_AS_TRACE"
+  capture_production_source
   # A sidecar oracle captures the very same GCC-generated assembly while it
   # still exists in /tmp.  It is never linked into the production Image.
   capture_gnu_sidecar() {
@@ -203,8 +234,10 @@ export MINIAS_GNU_OBJECT_DIR="$gnu_objects"
 export MINIAS_GNU_SOURCE_DIR="$work/asm-sources"
 export MINIAS_AS_BACKEND="$as_backend"
 export MINIAS_ENTRY_INPUT_DIR="$work/evidence"
+export MINIAS_AS_SOURCE_RAW="$asm_source_raw"
 mkdir -p "$work/evidence"
 : >"$trace"
+printf 'object\tassembly_sha256\n' >"$asm_source_raw"
 # Use the same GCC -B wrapper and assembler for Kconfig probes and actual
 # Kbuild. Only the assembler engine changes between MiniAS and GNU controls.
 build_cc="$cc -B$bindir/"
@@ -299,6 +332,57 @@ capture_final_kconfig
 test -s "$image"
 sha256sum "$image" >"$work/Image.sha256"
 file "$image"
+# Independent source ownership: use the actual saved Kbuild .cmd CC/AS owners,
+# not a guessed object count or a hand-picked subset. This also excludes
+# short-lived Kconfig assembler probes and host-tool objects from the final
+# cross-lane comparison without ignoring any production object.
+python3 - "$out" "$asm_source_raw" "$asm_source_manifest" "$cc" "$as_backend" <<'PY'
+from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path.cwd() / "tests/external/linux"))
+from minias_as_provenance_check import command_owners
+from minias_as_source_manifest import canonical_owner, read_manifest, require_digest
+
+out = Path(sys.argv[1]).resolve()
+raw = Path(sys.argv[2])
+manifest = Path(sys.argv[3])
+compiler = sys.argv[4]
+backend = sys.argv[5]
+expected = {p.relative_to(out).as_posix() for p in
+            command_owners(out, compiler, "aarch64-linux-gnu-as")}
+if len(expected) < 4000:
+    raise SystemExit(f"MINIAS_AARCH64_ASM_SOURCE=FAIL backend={backend} "
+                     f"reason=insufficient_kbuild_owners count={len(expected)}")
+rows = raw.read_text(encoding="utf-8").splitlines()
+if not rows or rows[0] != "object\tassembly_sha256":
+    raise SystemExit("MINIAS_AARCH64_ASM_SOURCE=FAIL invalid_raw_schema")
+owned = {}
+nonproduction = 0
+for line_number, line in enumerate(rows[1:], 2):
+    fields = line.split("\t")
+    if len(fields) != 2:
+        raise SystemExit(f"MINIAS_AARCH64_ASM_SOURCE=FAIL malformed_raw_line={line_number}")
+    owner = canonical_owner(fields[0], f"{raw}:{line_number}")
+    digest = require_digest(fields[1], f"{raw}:{line_number} object={owner}")
+    if owner not in expected:
+        nonproduction += 1
+        continue
+    if owner in owned:
+        raise SystemExit(f"MINIAS_AARCH64_ASM_SOURCE=FAIL duplicate_production_owner={owner}")
+    owned[owner] = digest
+missing = sorted(expected - owned.keys())
+if missing:
+    raise SystemExit(f"MINIAS_AARCH64_ASM_SOURCE=FAIL backend={backend} "
+                     f"missing_production={len(missing)} examples={missing[:8]}")
+manifest.write_text("object\tassembly_sha256\n" + "".join(
+    f"{owner}\t{owned[owner]}\n" for owner in sorted(expected)), encoding="utf-8")
+if len(read_manifest(manifest)) != len(expected):
+    raise SystemExit("MINIAS_AARCH64_ASM_SOURCE=FAIL canonical_manifest_incomplete")
+print(f"MINIAS_AARCH64_ASM_SOURCE=PASS backend={backend} "
+      f"production_owners={len(expected)} matched={len(owned)} "
+      f"excluded_nonproduction_probes={nonproduction} sha256=exact")
+PY
 if [[ $as_backend == minias ]]; then
 passed=$(grep -c '^pass ' "$trace" || true)
 assembled=$(grep -c '^assemble ' "$trace" || true)
@@ -326,6 +410,7 @@ run_full_object_oracle() {
   printf 'MINIAS_AARCH64_STAGE=ORACLE_START objects=%s\n' "$reference_count"
   if ! python3 tests/external/linux/minias_aarch64_object_oracle.py \
     --mini-dir "$out" --gnu-dir "$gnu_objects" --out "$work/aarch64-object-oracle.tsv" \
+    --alloc-diff-evidence "$work/aarch64-alloc-diff-evidence.tar.gz" \
     >"$work/aarch64-object-oracle.log" 2>&1; then
     tail -n 60 "$work/aarch64-object-oracle.log" >&2 || true
     echo 'MINIAS_AARCH64_GNU_SIDECAR=FAIL production_oracle_incomplete' >&2

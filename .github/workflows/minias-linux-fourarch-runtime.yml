@@ -100,16 +100,21 @@ jobs:
               bash tests/assembler/probe-x86-vdso-eh-gnu.sh
               bash tests/assembler/probe-x86-boot-header-elf32-gnu.sh
               bash tests/assembler/probe-x86-kernel-pgt-gnu.sh
+              bash tests/assembler/probe-x86-kconfig-isa-gnu.sh
               ;;
             aarch64)
               bash tests/assembler/probe-aarch64-branch-binding-gnu.sh
               bash tests/assembler/probe-aarch64-macro-parenthesized-gnu.sh
               bash tests/assembler/probe-aarch64-alternative-long-gnu.sh
+              bash tests/assembler/probe-aarch64-nonconst-leb128-gnu.sh
               ;;
             loongarch64)
               LOONGAS=loongarch64-linux-gnu-as \
               LOONGCOPY=loongarch64-linux-gnu-objcopy \
                 bash tests/assembler/probe-loong-fcsr-gcc-gnu.sh
+              LOONGAS=loongarch64-linux-gnu-as \
+              LOONGCOPY=loongarch64-linux-gnu-objcopy \
+                bash tests/assembler/probe-loong-lbt-gcc-gnu.sh
               ;;
           esac
 
@@ -134,8 +139,12 @@ jobs:
             build/minias-linux-fourarch/${{ matrix.arch }}/kernel-config.pre.config
             build/minias-linux-fourarch/${{ matrix.arch }}/kernel-config.final.config
             build/minias-linux-fourarch/${{ matrix.arch }}/evidence/kernel-config.diff.log
+            build/minias-linux-fourarch/${{ matrix.arch }}/runtime-initramfs.sha256
+            build/minias-linux-fourarch/${{ matrix.arch }}/runtime-initramfs.cpio.gz
             build/minias-linux-fourarch/aarch64/evidence/entry.o.s
             build/minias-linux-fourarch/aarch64/evidence/entry.o.s.sha256
+            build/minias-linux-fourarch/aarch64/production-asm-sources.tsv
+            build/minias-linux-fourarch/aarch64/production-asm-sources.raw.tsv
           if-no-files-found: error
           retention-days: 14
 
@@ -157,6 +166,10 @@ jobs:
             build/minias-linux-fourarch/${{ matrix.arch }}/**/bzImage.sha256
             build/minias-linux-fourarch/${{ matrix.arch }}/**/vmlinuz.efi.sha256
             build/minias-linux-fourarch/${{ matrix.arch }}/**/aarch64-object-oracle.tsv
+            build/minias-linux-fourarch/aarch64/aarch64-alloc-diff-evidence.tar.gz
+            build/minias-linux-fourarch/x86_64/kconfig-*.config
+            build/minias-linux-fourarch/x86_64/kconfig-*.sha256
+            build/minias-linux-fourarch/x86_64/kconfig-*.log
             build/minias-linux-fourarch/${{ matrix.arch }}/**/aarch64-bisect-*.txt
             # Only the two AArch64 early-boot suspects isolated by real-QEMU
             # bisection, not 4,000+ sidecars. With optional bisection enabled,
@@ -197,8 +210,7 @@ jobs:
   # defconfig, GNU compiler/linker and guest P0/P1 as the MiniAS lane. It is
   # opt-in on the same source commit, never substituted into production.
   aarch64-gnu-baseline:
-    # A full Linux run must include its GNU control on the identical commit.
-    # Requiring a second commit-message tag let the control silently skip.
+    # A full Linux run must include its independent GNU control on the same commit.
     if: github.event_name == 'push' && contains(github.event.head_commit.message, '[minias-linux-four]')
     runs-on: ubuntu-24.04
     timeout-minutes: 110
@@ -251,8 +263,12 @@ jobs:
             build/minias-linux-fourarch/aarch64/kernel-config.pre.config
             build/minias-linux-fourarch/aarch64/kernel-config.final.config
             build/minias-linux-fourarch/aarch64/evidence/kernel-config.diff.log
+            build/minias-linux-fourarch/aarch64/runtime-initramfs.sha256
+            build/minias-linux-fourarch/aarch64/runtime-initramfs.cpio.gz
             build/minias-linux-fourarch/aarch64/evidence/entry.o.s
             build/minias-linux-fourarch/aarch64/evidence/entry.o.s.sha256
+            build/minias-linux-fourarch/aarch64/production-asm-sources.tsv
+            build/minias-linux-fourarch/aarch64/production-asm-sources.raw.tsv
           if-no-files-found: error
           retention-days: 14
       - name: Summarize GNU AArch64 independent control
@@ -317,6 +333,8 @@ jobs:
             build/minias-linux-fourarch/loongarch64/kernel-config.pre.config
             build/minias-linux-fourarch/loongarch64/kernel-config.final.config
             build/minias-linux-fourarch/loongarch64/evidence/kernel-config.diff.log
+            build/minias-linux-fourarch/loongarch64/runtime-initramfs.sha256
+            build/minias-linux-fourarch/loongarch64/runtime-initramfs.cpio.gz
           if-no-files-found: error
           retention-days: 14
 
@@ -327,6 +345,9 @@ jobs:
     needs: [gcc-minias-kbuild-qemu, aarch64-gnu-baseline, loong-gnu-baseline]
     runs-on: ubuntu-24.04
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
       - name: Restore four exact-head production Kconfig snapshots
         uses: actions/download-artifact@v4
         with:
@@ -353,6 +374,12 @@ jobs:
                 sha256sum "$file" | cut -d' ' -f1 | cmp -s - "$digest"
               done
               test -f "$dir/evidence/kernel-config.diff.log"
+              runtime="$dir/runtime-initramfs.cpio.gz"
+              runtime_sha="$dir/runtime-initramfs.sha256"
+              test -s "$runtime" && test -s "$runtime_sha"
+              grep -Exq '[a-f0-9]{64}' "$runtime_sha"
+              test "$(wc -l <"$runtime_sha")" -eq 1
+              sha256sum "$runtime" | cut -d' ' -f1 | cmp -s - "$runtime_sha"
               if ! cmp -s "$dir/kernel-config.pre.sha256" "$dir/kernel-config.sha256"; then
                 echo "MINIAS_LINUX_KCONFIG_STABLE=FAIL arch=$arch backend=$variant pre=$(head -n1 "$dir/kernel-config.pre.sha256") final=$(head -n1 "$dir/kernel-config.sha256")"
                 head -n 80 "$dir/evidence/kernel-config.diff.log"
@@ -367,6 +394,13 @@ jobs:
               exit 1
             fi
             echo "MINIAS_LINUX_MATCHED_CONFIG=PASS arch=$arch scope=final sha256=$(head -n1 "$mini")"
+            mini_init="config-controls/minias-config-${arch}-minias/runtime-initramfs.sha256"
+            gnu_init="config-controls/minias-config-${arch}-gnu/runtime-initramfs.sha256"
+            if ! cmp -s "$mini_init" "$gnu_init"; then
+              echo "MINIAS_LINUX_MATCHED_INITRAMFS=FAIL arch=$arch MiniAS=$(head -n1 "$mini_init") GNU=$(head -n1 "$gnu_init")"
+              exit 1
+            fi
+            echo "MINIAS_LINUX_MATCHED_INITRAMFS=PASS arch=$arch byte_identical_sha256=$(head -n1 "$mini_init")"
           done
           for f in \
             config-controls/minias-config-aarch64-minias/evidence/entry.o.s.sha256 \
@@ -385,7 +419,13 @@ jobs:
             exit 1
           fi
           echo 'MINIAS_LINUX_MATCHED_ASM_SOURCE=PASS arch=aarch64 scope=arch/arm64/kernel/entry.o'
-          echo 'MINIAS_LINUX_MATCHED_ALL_ASM_SOURCES=NOT_TESTED remaining_objects=diagnostic_only'
+          # Compare independently GCC-generated assembly *before* either
+          # assembler encodes it. Both manifests are bound to each lane's
+          # entire saved Kbuild CC/AS production .cmd owner set, not a sample.
+          python3 tests/external/linux/minias_as_source_manifest.py \
+            --arch aarch64 --min-objects 4171 \
+            --mini-manifest config-controls/minias-config-aarch64-minias/production-asm-sources.tsv \
+            --gnu-manifest config-controls/minias-config-aarch64-gnu/production-asm-sources.tsv
           test '${{ needs.gcc-minias-kbuild-qemu.result }}' = success
           test '${{ needs.aarch64-gnu-baseline.result }}' = success
           test '${{ needs.loong-gnu-baseline.result }}' = success

@@ -12,11 +12,14 @@ snapshots and fake object paths. Real ELF parity remains a separate CI gate.
 
 from contextlib import redirect_stdout
 import copy
+import hashlib
 import importlib.machinery
 import importlib.util
 import io
+import json
 from pathlib import Path
 import sys
+import tarfile
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -242,6 +245,86 @@ class TestProductionMissingPolicy(unittest.TestCase):
         self.assertIn("probe_ignored=1", summary)
         self.assertIn("MISSING\tarch/arm64/mm/proc.o", rows)
         self.assertIn("status=FAIL", summary)
+
+
+class TestBoundedAllocatedDiffEvidence(unittest.TestCase):
+    def setup_corpus(self, scratch, entries):
+        gnu = scratch / "gnu"
+        mini = scratch / "mini"
+        gnu.mkdir()
+        mini.mkdir()
+        for name, size in entries:
+            for lane, root in ((b"GNU", gnu), (b"MINI", mini)):
+                destination = root / name
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(lane + b"X" * size)
+        return gnu, mini
+
+    def test_tar_contains_original_paired_bytes_and_reproducible_manifest(self):
+        with tempfile.TemporaryDirectory(prefix="minias-alloc-pairs-") as tmp:
+            scratch = Path(tmp)
+            gnu, mini = self.setup_corpus(scratch, [
+                ("arch/arm64/kernel/text.o", 5),
+                ("arch/arm64/kernel/map.o", 7),
+                ("arch/arm64/kernel/reloc.o", 9),
+                ("arch/arm64/kernel/reloc2.o", 11),
+            ])
+            records = [
+                (Path("arch/arm64/kernel/reloc.o"), "relocations_link_effective"),
+                (Path("arch/arm64/kernel/reloc2.o"), "relocations_link_effective"),
+                (Path("arch/arm64/kernel/map.o"), "executable_mapping"),
+                (Path("arch/arm64/kernel/text.o"), "contents_masked"),
+            ]
+            a = scratch / "sample-a.tar.gz"
+            b = scratch / "sample-b.tar.gz"
+            with patch.object(oracle, "EVIDENCE_MAX_PAIRS", 3):
+                result = oracle.write_alloc_diff_evidence(a, gnu, mini, records)
+                oracle.write_alloc_diff_evidence(b, gnu, mini, reversed(records))
+
+            self.assertEqual(a.read_bytes(), b.read_bytes())
+            self.assertEqual(result["alloc_diff_total"], 4)
+            self.assertEqual([row["selected_dimension"] for row in result["objects"]], [
+                "contents_masked", "executable_mapping", "relocations_link_effective"])
+            self.assertEqual(len(result["objects"]), 3)
+            self.assertEqual(result["verdict"],
+                             "DIAGNOSTIC_ONLY_NOT_GNU_EQ_CERTIFICATION")
+            with tarfile.open(a, "r:gz") as tar:
+                names = tar.getnames()
+                manifest = json.loads(tar.extractfile("manifest.json").read())
+                self.assertEqual(manifest, result)
+                self.assertEqual(len(names), 7)
+                for entry in manifest["objects"]:
+                    for lane, base in (("gnu", gnu), ("minias", mini)):
+                        payload = tar.extractfile(
+                            f"objects/{lane}/{entry['object']}").read()
+                        self.assertEqual(payload, (base / entry["object"]).read_bytes())
+                        self.assertEqual(entry[lane]["sha256"],
+                                         hashlib.sha256(payload).hexdigest())
+                self.assertTrue(all(member.mtime == 0 for member in tar.getmembers()))
+
+    def test_hard_size_budget_and_symlink_are_not_packaged(self):
+        with tempfile.TemporaryDirectory(prefix="minias-alloc-caps-") as tmp:
+            scratch = Path(tmp)
+            gnu, mini = self.setup_corpus(scratch, [
+                ("arch/arm64/kernel/small.o", 2),
+                ("arch/arm64/kernel/oversize.o", 100),
+                ("arch/arm64/kernel/symlink.o", 2),
+            ])
+            (mini / "arch/arm64/kernel/symlink.o").unlink()
+            (mini / "arch/arm64/kernel/symlink.o").symlink_to(
+                mini / "arch/arm64/kernel/small.o")
+            records = [
+                (Path("arch/arm64/kernel/oversize.o"), "contents_masked"),
+                (Path("arch/arm64/kernel/symlink.o"), "executable_mapping"),
+                (Path("arch/arm64/kernel/small.o"), "relocations_link_effective"),
+            ]
+            with patch.object(oracle, "EVIDENCE_MAX_PAIR_BYTES", 24):
+                result = oracle.write_alloc_diff_evidence(
+                    scratch / "sample.tar.gz", gnu, mini, records)
+            self.assertEqual(result["skipped_oversize"], 1)
+            self.assertEqual(result["skipped_unsafe"], 1)
+            self.assertEqual([entry["object"] for entry in result["objects"]],
+                             ["arch/arm64/kernel/small.o"])
 
 
 if __name__ == "__main__":
