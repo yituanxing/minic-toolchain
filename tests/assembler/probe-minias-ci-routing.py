@@ -48,12 +48,28 @@ def check_canonical_gate() -> None:
     source = (WORKFLOWS / "minias-linux-pinned-3x7-replay.yml").read_text()
     if "[minias-replay-3x7]" not in source:
         raise AssertionError("canonical exact-head trigger missing")
-    scoped_jobs = job(source, "aggregate") + job(source, "shard")
-    for token in ("--strict", "needs.shard.result == 'success'",
-                  "authentic_incbin_frozen", "manifest", "config_sha256",
-                  "minias-linux-kbuild-seven-v1.py aggregate"):
+    shard = job(source, "shard")
+    aggregate = job(source, "aggregate")
+    scoped_jobs = shard + aggregate
+    for token in ("--strict", "authentic_incbin_frozen", "manifest",
+                  "config_sha256", "minias-linux-kbuild-seven-v1.py aggregate"):
         if token not in scoped_jobs:
             raise AssertionError(f"canonical Kbuild gate missing: {token}")
+    if not re.search(r"Preserve shard diagnostics[^\n]*\n\s+if: always\(\)\n",
+                     shard):
+        raise AssertionError("failed 3x7 shard may lose its results.json")
+    if "needs.shard.result == 'success'" in aggregate:
+        raise AssertionError("failed shard suppresses the entire error census")
+    if "if: always() && needs.shard.result != 'skipped'" not in aggregate:
+        raise AssertionError("canonical census must run after failed shards")
+    for token in ("Preserve partial shard inventory", "MINIAS_SHARD_RESULT",
+                  "collection-diagnostics.json", "missing_shards",
+                  "if: always()"):
+        if token not in aggregate:
+            raise AssertionError(f"partial failed-shard diagnostics missing: {token}")
+    if not re.search(r"Require all selected 7-way shards[^\n]*\n\s+if: always\(\)",
+                     aggregate):
+        raise AssertionError("failed artifact download can suppress strict final gate")
 
 
 def check_exact_head_four_target_gnu_gates() -> None:

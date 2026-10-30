@@ -3,6 +3,7 @@
 # final SymbolID layout, while emitted bytes must be a typed snapshot.
 set -Eeuo pipefail
 test -n "$MINIAS"
+repo=$(cd "$(dirname "$0")/../.." && pwd)
 ARCH="${ARCH:-x86_64}"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
@@ -70,7 +71,10 @@ fi
 # RISC-V preserves ULEB SET/SUB pairs for link-time relaxation. LoongArch
 # GNU assembler releases differ in ADD/SUB eligibility; the selected Target
 # profile must match the actual GNU reference. Check complete recorded
-# offsets/kinds/section-symbol addends, not just raw bytes.
+# offsets/kinds/addends, not just raw bytes. GNU GAS and MiniAS generate
+# different private spellings for numeric labels (e.g. .L2^B1 versus our
+# interned private SymbolID); the strict ELF oracle compares their actual
+# local symbol identity/visibility/section/value instead of name spelling.
 if [[ "$ARCH" == riscv || "$ARCH" == loongarch64 ]]; then
   readelf -rW "$work/mini.o" >"$work/mini.rela"
   readelf -rW "$work/gnu.o" >"$work/gnu.rela"
@@ -78,7 +82,29 @@ if [[ "$ARCH" == riscv || "$ARCH" == loongarch64 ]]; then
      "$work/mini.rela" >"$work/mini.uleb-rela"
   awk '/R_(RISCV_(SET|SUB)_ULEB128|LARCH_(ADD|SUB)_ULEB128)/ { print $1, $3, $5, $6, $7 }' \
      "$work/gnu.rela" >"$work/gnu.uleb-rela"
-  if ! cmp -s "$work/mini.uleb-rela" "$work/gnu.uleb-rela"; then
+  if [[ "$ARCH" == loongarch64 ]]; then
+    relocation_equal=1
+    python3 "$repo/tests/assembler/elf_semantic_compare.py" --strict \
+        "$work/gnu.o" "$work/mini.o" >"$work/semantic.json" || true
+    if ! python3 - "$work/semantic.json" <<'PY_LEB'
+import json
+import pathlib
+import sys
+diff = json.loads(pathlib.Path(sys.argv[1]).read_text()).get('differences', {})
+for dimension in ('relocations', 'relocation_order'):
+    assert dimension not in diff, (dimension, diff[dimension])
+PY_LEB
+    then
+      relocation_equal=0
+      sed -n '1,160p' "$work/semantic.json" >&2
+    fi
+  else
+    relocation_equal=1
+    if ! cmp -s "$work/mini.uleb-rela" "$work/gnu.uleb-rela"; then
+      relocation_equal=0
+    fi
+  fi
+  if [[ $relocation_equal != 1 ]]; then
     echo "MiniAS ULEB relocation tuples ($ARCH):" >&2
     sed -n '1,160p' "$work/mini.uleb-rela" >&2
     echo "GNU ULEB relocation tuples ($ARCH):" >&2

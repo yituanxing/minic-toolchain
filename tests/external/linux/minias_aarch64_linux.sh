@@ -152,7 +152,7 @@ export MINIAS_GNU_SOURCE_DIR="$work/asm-sources"
 start=$(date +%s)
 if ! make -C "$src" O="$out" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
   CC="$cc -B$bindir/" AS="$bindir/aarch64-linux-gnu-as" \
-  -j4 Image >"$work/kbuild.log" 2>&1; then
+  -j4 -k Image >"$work/kbuild.log" 2>&1; then
   echo 'MINIAS_LINUX_FOURARCH_BUILD=FAIL arch=aarch64 stage=make-Image'
   echo 'MINIAS_LINUX_KBUILD_DIAGNOSTIC=first-errors'
   grep -nE 'minic-as:|(^| )error:|fatal error:|undefined reference|undefined symbol|Error [0-9]+|No rule to make target|unsupported-|bad-' \
@@ -228,7 +228,9 @@ require() {
   if ! grep -E "$pattern" "$work/qemu-$lane.log" >/dev/null; then
     printf 'MINIAS_LINUX_FOURARCH_RUNTIME=FAIL arch=aarch64 lane=%s missing=%s\n' "$lane" "$pattern" >&2
     tail -n 160 "$work/qemu-$lane.log" >&2
-    if [[ $lane == p0-init && ${MINIAS_AARCH64_AUTO_BISECT:-1} == 1 ]]; then
+    # Repeated full-object QEMU bisection is an opt-in diagnosis, not a
+    # default side effect of every failed exact-head Linux acceptance run.
+    if [[ $lane == p0-init && ${MINIAS_AARCH64_AUTO_BISECT:-0} == 1 ]]; then
       WORK_DIR="$work" MINIAS_KBUILD_OUT="$out" MINIAS_GNU_OBJECT_DIR="$gnu_objects" \
         MINIAS_AARCH64_BISECT_MARKER="$pattern" \
         bash tests/external/linux/minias_aarch64_object_bisect.sh || true

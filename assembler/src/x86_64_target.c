@@ -63,7 +63,12 @@ static bool x64_legacy_opcode_allowed(const char *name,uint32_t mode) {
         "rdtscp","negl","divl","mull","movsbl",
         /* Linux real-mode boot GCC uses these already-decoded machine
          * forms; keep the mode gate aligned with actual target support. */
-        "fninit","cltd","notl","orw","shll","addb","incb"
+        "fninit","cltd","notl","orw","shll","addb","incb",
+        /* GNU Linux boot's remaining real/protected-mode forms use
+         * already-owned typed zero, unary, MOVSX and system-memory
+         * encoders.  Keep only their proven legacy-mode spellings. */
+        "fnstsw","idivl","movswl","cmpsb","stosw",
+        "ltr","lgdt","lldt"
     };
     size_t i;
     if(x64_infers_width(name))return true;
@@ -2599,15 +2604,18 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
          (s->site.mode_bits!=0U &&
         !strcmp(s->op,"pushl"))) && s->args[0]=='$') {
         uint64_t bits;
-        int64_t absolute;
         MiniAsSymbolExpr expr;
         /* Already-resolved SHN_ABS .set/.equ operands are machine constants.
          * Record them as typed immediates now, so the shared PUSH encoding
          * plan selects GNU's imm8 alternative and emits no false relocation.
-         * Forward/unresolved symbols remain bound and use the safe imm32. */
-        if(minias_evaluate_absolute_operand(as,s->args+1,&absolute) &&
-           absolute>=INT32_MIN && absolute<=INT32_MAX) {
-            bits=(uint64_t)absolute;
+         * Strictly reject section-relative labels here: their temporary
+         * value may be zero but GNU requires PUSH imm32 + ABS32S relocation.
+         * The generic absolute evaluator also admits relocatable labels
+         * for layout-sensitive directives; the DATA constant oracle rejects
+         * them and keeps PUSH's immediate-vs-symbol ownership unambiguous. */
+        if(minias_parse_absolute_data_bits(as,s->args+1,&bits) &&
+           (bits<=(uint64_t)INT32_MAX ||
+            bits>=UINT64_C(0xffffffff80000000))) {
             m->opcode=X64_PUSH_IMM;m->count=1U;
             m->encoding=!strcmp(s->op,"pushw")?UINT32_C(0x400):0U;
             m->operands[0].kind=MINIAS_MC_IMMEDIATE;

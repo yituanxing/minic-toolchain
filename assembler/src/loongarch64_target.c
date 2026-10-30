@@ -2311,6 +2311,16 @@ static uint32_t la_reloc(MiniAsFixupKind kind,unsigned width) {
 static bool la_cfi_linker_relaxation_marker(MiniAsFixupKind kind) {
     return kind==MINIAS_FIXUP_LARCH_RELAX;
 }
+/* GNU LoongArch retains the original local label in linker-relaxable ULEB
+ * ADD/SUB pairs.  Folding `.Lend` to STT_SECTION + offset loses the symbol
+ * identity that the linker/debug consumers must observe.  Keep the target
+ * ABI decision here instead of special-casing ELF's generic symbol planner. */
+static bool la_allow_local_section_symbol_fixup(const MiniAsFixup *fixup,
+                                                const MiniAsSymbol *symbol) {
+    (void)symbol;
+    return fixup->kind!=MINIAS_FIXUP_LEB_ADD &&
+           fixup->kind!=MINIAS_FIXUP_LEB_SUB;
+}
 static const MiniAsTargetOps ops={
     .name="loongarch64",.comment_prefix='#',.elf_machine=258U,
     /* GNU LoongArch GAS 2.42 (Linux cross toolchain) unconditionally keeps
@@ -2325,6 +2335,7 @@ static const MiniAsTargetOps ops={
     .fixup_relocation_type=la_reloc,
     .validate_output=la_validate,
     .cfi_implicit_eh_frame=true,
+    .allow_local_section_symbol_fixup=la_allow_local_section_symbol_fixup,
     .emit_all_section_symbols=true,
     .cfi_code_align=1U,
     .cfi_data_align=-4,
@@ -2336,6 +2347,7 @@ static const MiniAsTargetOps ops={
     .cfi_initial_cfa_register_only=true,
     .cfi_eh_range_relocations=true,
     .cfi_advance_reloc_mode=1U,
+    .synthetic_expr_anchors_hidden=true,
     .cfi_linker_relaxation_marker=la_cfi_linker_relaxation_marker,
     .default_exec_alignment=1U,
     .cfi_anchors_hidden=true

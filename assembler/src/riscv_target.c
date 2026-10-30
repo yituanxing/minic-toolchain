@@ -728,6 +728,18 @@ static bool riscv_leb128_relocations_enabled(const MiniAs *as) {
            (state->options & MINIAS_RISCV_OPTION_NO_RELAX)==0U;
 }
 
+/* GNU RISC-V GAS retains the two source-label identities in the deferred
+ * R_RISCV_SET_ULEB128/SUB_ULEB128 pair.  The linker may relax instructions
+ * between those anchors; turning either operand into STT_SECTION + addend
+ * too early loses the symbol that GNU's relocation refers to.  This is a
+ * Target ELF rule, not a generic Common symbol-folding exception. */
+static bool riscv_allow_local_section_symbol_fixup(
+    const MiniAsFixup *fixup, const MiniAsSymbol *symbol) {
+    (void)symbol;
+    return fixup->kind!=MINIAS_FIXUP_LEB_SET &&
+           fixup->kind!=MINIAS_FIXUP_LEB_SUB;
+}
+
 /* An opaque config blob belongs to this target; Common neither interprets
  * ISA features nor stores RISC-V-specific strict-mode or psABI fields. */
 static bool riscv_init_target_state(MiniAs *as,
@@ -841,6 +853,8 @@ static const MiniAsTargetOps riscv_ops = {
     .fixup_relocation_type = riscv_fixup_relocation_type,
     .leb128_reloc_mode = 2U, /* psABI SET_ULEB128/SUB_ULEB128 */
     .leb128_relocations_enabled=riscv_leb128_relocations_enabled,
+    .allow_local_section_symbol_fixup=
+        riscv_allow_local_section_symbol_fixup,
     .validate_output = riscv_validate_output,
     /* RV64 DWARF register numbering: ra=x1, sp=x2; DW_CFA code unit
      * is one byte, stack slots are eight bytes (LP64). Both RV32/64

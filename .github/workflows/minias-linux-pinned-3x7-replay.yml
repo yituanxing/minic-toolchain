@@ -109,7 +109,9 @@ jobs:
             --archive 'build/minias-frozen/shard-${{ matrix.shard }}.tar.gz' \
             --minias "$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             --dest 'build/minias-linux-replay/${{ matrix.target }}-${{ matrix.shard }}'
-      - uses: actions/upload-artifact@v4
+      - name: Preserve shard diagnostics including failed infrastructure probes
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
           name: minias-linux-replay-${{ matrix.target }}-${{ matrix.shard }}
           path: build/minias-linux-replay/${{ matrix.target }}-${{ matrix.shard }}/results.json
@@ -118,15 +120,62 @@ jobs:
 
   aggregate:
     needs: shard
-    if: always() && needs.shard.result == 'success'
+    # A failed shard must not suppress the diagnostic census from the other
+    # runners.  Only an intentionally unrequested matrix skips aggregation.
+    if: always() && needs.shard.result != 'skipped'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
+        if: always()
         with:
           pattern: minias-linux-replay-*
           path: build/minias-linux-replay-collected
+      - name: Preserve partial shard inventory before the strict gate
+        if: always()
+        env:
+          MINIAS_EXPECTED_TARGETS: ${{ contains(github.event.head_commit.message, '[minias-replay-aarch-7]') && 'aarch64' || contains(github.event.head_commit.message, '[minias-replay-loong-7]') && 'loongarch64' || contains(github.event.head_commit.message, '[minias-replay-x86-7]') && 'x86_64' || 'x86_64,aarch64,loongarch64' }}
+          MINIAS_SHARD_RESULT: ${{ needs.shard.result }}
+        run: |
+          python3 - <<'PY_INVENTORY'
+          import collections, json, os, pathlib
+          root = pathlib.Path('build/minias-linux-replay-collected')
+          files = sorted(root.rglob('results.json'))
+          targets = os.environ['MINIAS_EXPECTED_TARGETS'].split(',')
+          expected = {(target, shard) for target in targets for shard in range(7)}
+          found = set()
+          statuses = collections.Counter()
+          failures = []
+          for path in files:
+              try:
+                  result = json.loads(path.read_text())
+                  key = (result['target'], result['shard'])
+                  found.add(key)
+                  for record in result.get('records', []):
+                      statuses[record['status']] += 1
+                      if record['status'] in ('CANDIDATE_FAIL', 'INFRA_ERROR'):
+                          failures.append({'target': key[0], 'shard': key[1],
+                                           'owner': record.get('owner'),
+                                           'status': record['status'],
+                                           'blocker': record.get('first_blocker')})
+              except (ValueError, KeyError, OSError) as exc:
+                  failures.append({'artifact': str(path), 'status': 'INVALID_RESULTS',
+                                   'blocker': str(exc)})
+          missing = sorted(expected - found)
+          unexpected = sorted(found - expected)
+          report = {'shard_job': os.environ['MINIAS_SHARD_RESULT'],
+                    'expected_shards': len(expected), 'received_shards': len(files),
+                    'missing_shards': missing, 'unexpected_shards': unexpected,
+                    'object_statuses': dict(statuses), 'failures': failures}
+          output = pathlib.Path('build/minias-linux-replay-collection-diagnostics.json')
+          output.parent.mkdir(parents=True, exist_ok=True)
+          output.write_text(json.dumps(report, indent=2) + '\n')
+          print(f"MINIAS_LINUX_SHARD_INVENTORY received={len(files)}/{len(expected)} "
+                f"missing={len(missing)} objects={dict(statuses)} "
+                f"shard_job={report['shard_job']}")
+          PY_INVENTORY
       - name: Require all selected 7-way shards, with disjoint architecture pools
+        if: always()
         run: |
           python3 tools/ci/minias-linux-kbuild-seven-v1.py aggregate \
             --strict \
@@ -137,6 +186,8 @@ jobs:
         if: always()
         with:
           name: minias-linux-replay-three-target-summary
-          path: build/minias-linux-replay-summary.json
+          path: |
+            build/minias-linux-replay-summary.json
+            build/minias-linux-replay-collection-diagnostics.json
           if-no-files-found: error
           retention-days: 14

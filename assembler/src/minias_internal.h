@@ -956,6 +956,10 @@ typedef struct MiniAsTargetOps {
      * local labels as STT_SECTION + offset, including PC-relative fixups. */
     bool fold_defined_local_relocation_to_section;
     bool fold_synthetic_local_relocation_to_section;
+    /* Private expression-anchor visibility is an object ABI policy. The
+     * generic symbol owner must not infer ELF visibility from the generated
+     * spelling or assume all targets share GNU GAS's choice. */
+    bool synthetic_expr_anchors_hidden;
     /* A target may veto otherwise-selected STT_SECTION folding for symbol-
      * sensitive relocation semantics (e.g. AArch64 function veneers and GOT
      * entry identity). A NULL callback imposes no additional restriction. */

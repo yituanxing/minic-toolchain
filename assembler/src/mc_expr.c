@@ -1591,12 +1591,11 @@ static bool emit_symbol_minus_dot(MiniAs *as,
         anchor->section = stmt->section;
         anchor->value = relocation_offset;
         anchor->bind = MINIAS_STB_LOCAL;
-        /* GNU GAS emits the local relocation anchor with default ELF
-         * visibility (not STV_HIDDEN), even though it is a private label.
-         * Visibility is independent of binding and source-level naming:
-         * keep this explicit in the semantic SymbolID so the ELF writer
-         * never infers it from the generated spelling. */
-        anchor->visibility = MINIAS_STV_DEFAULT;
+        /* Local binding and ELF visibility are independent. The Target ABI
+         * owns the visibility of assembler-synthesized expression anchors;
+         * the ELF writer must not infer it from their private spelling. */
+        anchor->visibility = as->target->synthetic_expr_anchors_hidden
+                                 ? MINIAS_STV_HIDDEN : MINIAS_STV_DEFAULT;
 
         return minias_section_append_zero(as, stmt->section, width) &&
                minias_add_fixup_symbol_id(as,

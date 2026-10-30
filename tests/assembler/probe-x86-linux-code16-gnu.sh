@@ -509,6 +509,67 @@ efi32_boot_args:
     nop
 ASM
 
+# Second real Linux 6.6.143 GNU Kbuild frontier after the preceding eleven
+# failures were fixed: all eight *new* opcode families must be enabled in
+# their actual 16/32-bit CPU modes, not accidentally only in long mode.
+# Both register and memory forms are checked where the machine ISA permits.
+cat >"$work/code16_linux_second_frontier.s" <<'ASM'
+    .text
+    .code16gcc
+    .globl second_frontier16
+second_frontier16:
+    fnstsw %ax
+    fnstsw -2(%ebp)
+    idivl %ecx
+    idivl 8(%ebp)
+    movswl %ax, %eax
+    movswl 4(%ebp), %edx
+    repe; cmpsb
+    rep; stosw
+    ret
+ASM
+
+cat >"$work/code32_linux_second_frontier.s" <<'ASM'
+    .text
+    .code32
+    .globl second_frontier32
+second_frontier32:
+    ltr %ax
+    ltr 2(%ebp)
+    lgdt (%esp)
+    lgdt 6(%ebp)
+    lldt %cx
+    lldt 4(%ebx)
+    ret
+ASM
+
+# Linux compressed/head_64.S and efi_mixed.S use .code32 within ELF64.
+# The CPU decoding mode must be a lexical property, not inferred from the
+# relocatable object's ELF class.
+cat >"$work/elf64_code32_linux_second_frontier.s" <<'ASM'
+    .text
+    .code32
+    .globl mixed_efi32
+mixed_efi32:
+    ltr %ax
+    lgdt (%ebx)
+    lldt %cx
+    .code64
+    ret
+ASM
+
+cat >"$work/invalid_code16_ltr_64reg.s" <<'ASM'
+    .text
+    .code16
+    ltr %r8w
+ASM
+
+cat >"$work/invalid_code32_lgdt_register.s" <<'ASM'
+    .text
+    .code32
+    lgdt %eax
+ASM
+
 cat >"$work/mixed_modes.s" <<'ASM'
     .text
     .code16
@@ -736,6 +797,37 @@ run_negative() {
     log_pass "$name"
 }
 
+run_mixed_elf64() {
+    local name=$1
+    if ! as --64 -o "$work/$name.gnu.o" "$work/$name.s" \
+            2>"$work/$name.gnu.err"; then
+        log_fail "$name" gnu_elf64_oracle_fixture_invalid
+        sed -n '1,8p' "$work/$name.gnu.err" >&2
+        return
+    fi
+    if ! "$minias" --target=x86_64 -o "$work/$name.mini.o" \
+            "$work/$name.s" 2>"$work/$name.mini.err"; then
+        log_fail "$name" minias_elf64_assembly
+        return
+    fi
+    for obj in gnu mini; do
+        objcopy -j .text -O binary "$work/$name.$obj.o" "$work/$name.$obj.bin"
+    done
+    if ! cmp -s "$work/$name.gnu.bin" "$work/$name.mini.bin"; then
+        log_fail "$name" elf64_code32_text_bytes
+        cmp -l "$work/$name.gnu.bin" "$work/$name.mini.bin" | \
+            sed -n '1,12p' >&2 || true
+        return
+    fi
+    normalize_relocations "$work/$name.gnu.o" >"$work/$name.gnu.rel"
+    normalize_relocations "$work/$name.mini.o" >"$work/$name.mini.rel"
+    if ! cmp -s "$work/$name.gnu.rel" "$work/$name.mini.rel"; then
+        log_fail "$name" elf64_code32_relocations
+        return
+    fi
+    log_pass "$name"
+}
+
 run_positive code16_setup
 run_positive code16_width_baseline
 run_positive code16gcc_stack
@@ -757,12 +849,17 @@ run_positive code32_linux_fences
 run_positive code32_reboot
 run_positive code16_linux_gcc_boot_blockers
 run_positive code32_linux_gcc_symbol_difference
+run_positive code16_linux_second_frontier
+run_positive code32_linux_second_frontier
+run_mixed_elf64 elf64_code32_linux_second_frontier
 run_positive mixed_modes
 run_positive external_rel yes
 run_positive external_rel16 yes
 run_negative invalid_code16_movq
 run_negative invalid_code32_pushq
 run_negative invalid_code16gcc_r8
+run_negative invalid_code16_ltr_64reg
+run_negative invalid_code32_lgdt_register
 
 printf 'MINIAS_X86_BOOT_ORACLE=%s pass=%d fail=%d\n' \
     "$([[ $failures == 0 ]] && echo PASS || echo FAIL)" "$passed" "$failures"

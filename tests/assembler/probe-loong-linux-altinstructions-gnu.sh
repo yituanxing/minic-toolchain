@@ -16,6 +16,27 @@ trap 'status=$?; echo "MINIAS_LOONG_LINUX_ALT=FAIL line=$LINENO exit=$status" >&
 "$MINIAS" --target=loongarch64 -march=loongarch64 -mabi=lp64d \
   -o "$work/mini.o" "$source_file"
 loongarch64-linux-gnu-as -mabi=lp64d -o "$work/gnu.o" "$source_file"
+# The target controls visibility of generated expression-site anchors.  GNU
+# LoongArch emits them as LOCAL/HIDDEN, unlike the DEFAULT anchors used by
+# other ABIs; this contract must survive the shared ELF writer unchanged.
+dot_source="$repo/tests/assembler/fixtures/loong-expr-dot-anchor-gnu.S"
+"$MINIAS" --target=loongarch64 -march=loongarch64 -mabi=lp64d \
+  -o "$work/mini-dot.o" "$dot_source"
+loongarch64-linux-gnu-as -mabi=lp64d -o "$work/gnu-dot.o" "$dot_source"
+python3 "$repo/tests/assembler/elf_semantic_compare.py" --strict \
+  "$work/gnu-dot.o" "$work/mini-dot.o" >"$work/dot-strict.json" || true
+python3 - "$work/dot-strict.json" <<'PY_DOT'
+import json
+import pathlib
+import sys
+diff = json.loads(pathlib.Path(sys.argv[1]).read_text()).get('differences', {})
+for dimension in ('relocations', 'relocation_order'):
+    assert dimension not in diff, (dimension, diff[dimension])
+PY_DOT
+hidden_count=$(readelf -sW "$work/mini-dot.o" | \
+  awk '$5=="LOCAL" && $6=="HIDDEN" && $8 ~ /^\.Lminias_private_/ {n++} END {print n+0}')
+test "$hidden_count" -eq 2
+echo 'MINIAS_LOONG_EXPR_DOT=PASS local_hidden=2 GNU_relocation_visibility=exact'
 readelf -Wr "$work/mini.o" >"$work/mini.reloc"
 readelf -Wr "$work/gnu.o" >"$work/gnu.reloc"
 python3 - "$work/mini.reloc" "$work/gnu.reloc" <<'PY'

@@ -175,7 +175,7 @@ if ! make -C "$kernel_src" O="$kernel_out" ARCH=loongarch \
     CC="$build_cc" \
     AS="$build_as" \
     KCFLAGS=-Wno-error \
-    -j4 vmlinuz.efi >"$kbuild_log" 2>&1; then
+    -j4 -k vmlinuz.efi >"$kbuild_log" 2>&1; then
   echo 'MINIAS_LINUX_FOURARCH_BUILD=FAIL arch=loongarch64 stage=make-vmlinuz.efi'
   echo 'MINIAS_LINUX_KBUILD_DIAGNOSTIC=first-errors'
   grep -nE 'minic-as:|(^| )error:|fatal error:|undefined reference|undefined symbol|Error [0-9]+|No rule to make target|unsupported-|bad-' \
