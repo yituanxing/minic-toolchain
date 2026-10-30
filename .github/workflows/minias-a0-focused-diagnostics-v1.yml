@@ -7,8 +7,12 @@ on:
     branches: [refactor/minias-target-isa-abi-core]
     paths:
       - '.github/workflows/minias-a0-focused-diagnostics-v1.yml'
+      # Explicit multiarch Linux pushes can opt into the existing successful
+      # RV64 P0/P1 lane at that same head, without running it on every push.
+      - '.github/workflows/minias-linux-fourarch-runtime.yml'
       - 'assembler/**'
       - 'tests/assembler/**'
+      - 'tests/external/linux/minias_*_linux.sh'
   workflow_call:
     inputs:
       mode:

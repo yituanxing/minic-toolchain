@@ -1,0 +1,102 @@
+name: MiniAS Linux 6.6.143 Multiarch Real Runtime
+
+# GNU GCC generates every production assembly unit; MiniAS is substituted
+# only for assembler invocations.  GNU Kbuild/binutils then link the kernel,
+# and the same kernel is booted under system QEMU for P0 and P1 checks.
+# The existing independently-certified RV64 lane remains in linux-single;
+# this matrix extends that contract to the other three architectures.
+on:
+  workflow_dispatch:
+  push:
+    branches: [refactor/minias-target-isa-abi-core]
+    paths:
+      - '.github/workflows/minias-linux-fourarch-runtime.yml'
+      - 'assembler/**'
+      - 'elf/**'
+      - 'tests/external/linux/minias_*_linux.sh'
+      - 'tests/external/linux/runtime_initramfs/**'
+
+permissions:
+  contents: read
+
+jobs:
+  gcc-minias-kbuild-qemu:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minias-linux-four]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x86_64, aarch64, loongarch64]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install GNU Kbuild and cross-architecture QEMU dependencies
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc binutils make bc bison flex libssl-dev libelf-dev \
+            curl xz-utils cpio gzip zstd file python3-pyelftools
+          case '${{ matrix.arch }}' in
+            x86_64)
+              sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+                qemu-system-x86 gcc-multilib libc6-dev-i386 ;;
+            aarch64)
+              sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+                gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
+                libc6-dev-arm64-cross qemu-system-arm ;;
+            loongarch64)
+              sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+                gcc-13-loongarch64-linux-gnu binutils-loongarch64-linux-gnu \
+                libc6-dev-loong64-cross qemu-system-misc ;;
+          esac
+
+      - name: Build exact MiniAS revision (no native assembler replacement)
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = '${{ github.sha }}'
+          make -j4 MODE=release CFLAGS=-Werror build/release/bin/minic-as
+
+      - name: Real Linux GNU Kbuild, GNU link, QEMU P0 and P1
+        id: linux
+        shell: bash
+        timeout-minutes: 105
+        env:
+          MINIAS: ${{ github.workspace }}/build/release/bin/minic-as
+          WORK_DIR: ${{ github.workspace }}/build/minias-linux-fourarch/${{ matrix.arch }}
+          LINUX_VERSION: 6.6.143
+        run: bash 'tests/external/linux/minias_${{ matrix.arch }}_linux.sh'
+
+      - name: Preserve production assembly, Kbuild and guest evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minias-linux-real-${{ matrix.arch }}
+          # Do not upload the unpacked Linux source or whole Kbuild tree.
+          # Those are multi-gigabyte; the original failures and real guest
+          # logs are the reproducible, actionable evidence.
+          path: |
+            build/minias-linux-fourarch/${{ matrix.arch }}/**/*.log
+            build/minias-linux-fourarch/${{ matrix.arch }}/**/*.trace
+            build/minias-linux-fourarch/${{ matrix.arch }}/**/failure-inputs/**/*.s
+            build/minias-linux-fourarch/${{ matrix.arch }}/**/runtime-initramfs.cpio.gz
+            build/minias-linux-fourarch/${{ matrix.arch }}/**/Image.sha256
+            build/minias-linux-fourarch/${{ matrix.arch }}/**/bzImage.sha256
+            build/minias-linux-fourarch/${{ matrix.arch }}/**/vmlinuz.efi.sha256
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Summarize exact-head real Linux execution
+        if: always()
+        run: |
+          {
+            echo '### MiniAS-only Linux 6.6.143: ${{ matrix.arch }}'
+            echo 'GCC source and Kbuild + MiniAS production assembly + GNU link + system QEMU P0/P1.'
+            echo 'Acceptance requires a linked kernel **and** guest runtime markers; ELF parity alone is not sufficient.'
+            echo 'Result: `${{ steps.linux.outcome }}`'
+          } >> "$GITHUB_STEP_SUMMARY"
