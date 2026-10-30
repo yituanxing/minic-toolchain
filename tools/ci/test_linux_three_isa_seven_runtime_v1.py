@@ -137,6 +137,51 @@ class SevenWorkerStrictTransportTest(unittest.TestCase):
             c.compiler_pair = original_pair
             r.gnu_as_identity = original_gnu_as_identity
 
+    def preflight(self):
+        args = SimpleNamespace(incoming=self.incoming, target="x86_64",
+                               minic=self.compiler)
+        with mock.patch.object(c, "compiler_pair", return_value={
+                "compiler_sha256": "d" * 64,
+                "compiler_driver_sha256": "d" * 64,
+                "compiler_cc_sha256": "e" * 64}):
+            r.preflight(args, c)
+
+    def test_preflight_rejects_partial_foreign_and_corrupt_shards(self):
+        self.populate_objects()
+        self.preflight()
+        root = self.incoming / "minic-linux-seven-objects-x86_64-0"
+        receipt = r.json_file(root / "identity.json")
+        receipt["compiler_cc_sha256"] = "0" * 64
+        json_out(root / "identity.json", receipt)
+        with self.assertRaisesRegex(ValueError, "foreign or stale"):
+            self.preflight()
+        receipt["compiler_cc_sha256"] = "e" * 64
+        receipt["original_gnu_image_sha256"] = "0" * 64
+        json_out(root / "identity.json", receipt)
+        with self.assertRaisesRegex(ValueError, "mixed original GNU"):
+            self.preflight()
+        receipt["original_gnu_image_sha256"] = "a" * 64
+        json_out(root / "identity.json", receipt)
+        results = r.json_file(root / "results.json")
+        results[0]["status"] = "GNU_GCC_C_FALLBACK"
+        json_out(root / "results.json", results)
+        with self.assertRaisesRegex(ValueError, "GCC C fallback"):
+            self.preflight()
+        results[0]["status"] = "MINIC_S_GNU_AS_PASS"
+        json_out(root / "results.json", results)
+        write(root / "objects/kernel/owner_0.o", elf(machine=183))
+        with self.assertRaisesRegex(ValueError, "SHA mismatch"):
+            self.preflight()
+        write(root / "objects/kernel/owner_0.o", elf())
+        self.preflight()
+        (self.incoming / "minic-linux-seven-objects-x86_64-6/identity.json").unlink()
+        with self.assertRaisesRegex(ValueError, "missing or unsafe"):
+            self.preflight()
+        extra = self.incoming / "minic-linux-seven-objects-x86_64-7"
+        extra.mkdir()
+        with self.assertRaisesRegex(ValueError, "missing or extra"):
+            self.preflight()
+
     def test_exact_complete_seven_shards_and_missing_shard(self):
         self.populate_objects()
         results = self.collect()

@@ -6,18 +6,26 @@ on:
   workflow_dispatch:
     inputs:
       regenerate_original_gnu:
-        description: 'Explicitly refresh GNU input producer; pinned replay still uses prior certified run until its SHA and run-id are reviewed'
+        description: 'Regenerate all original GNU inputs in this run; promote the new run ID only after full acceptance'
         type: boolean
         default: false
-  pull_request:
+  # A PR paths filter sees the entire PR diff, so a previously changed trigger
+  # caused green gate-only runs on every unrelated commit. Only a deliberate
+  # marker push starts this expensive exact-head campaign on the work branch.
+  push:
+    branches: [refactor/minic-target-language-boundary]
     paths:
-      - '.github/workflows/minic-linux-three-isa-seven-runtime-v1.yml'
-      - 'tools/ci/linux-three-isa-seven-runtime-v1.py'
       - 'tools/ci/linux-three-isa-seven-runtime-trigger.txt'
 
 permissions:
   contents: read
   actions: read
+
+env:
+  # One reviewed original GNU/Kbuild producer; not the current MiniC revision.
+  # To refresh on this branch, push the marker with [minic-regen-gnu] in the
+  # head commit subject, then promote the new run only after full P0/P1 PASS.
+  MINIC_LINUX_PINNED_INPUT_RUN: '41108659343'
 
 concurrency:
   group: minic-linux-seven-runtime-${{ github.ref }}-${{ github.event.pull_request.head.sha || github.sha }}
@@ -28,25 +36,40 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       run: ${{ steps.decide.outputs.run }}
+      regenerate: ${{ steps.decide.outputs.regenerate }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 2
-      - name: Require explicit dispatch or latest-commit one-shot trigger
+      - name: Authenticate explicit marker push or manual dispatch
         id: decide
         shell: bash
         run: |
           set -Eeuo pipefail
           active=false
+          regenerate=false
           if [[ '${{ github.event_name }}' == workflow_dispatch ]]; then
             active=true
-          elif git rev-parse --verify HEAD^ >/dev/null 2>&1 &&
-               ! git diff --quiet HEAD^ HEAD -- tools/ci/linux-three-isa-seven-runtime-trigger.txt; then
+            if [[ '${{ inputs.regenerate_original_gnu }}' == true ]]; then
+              regenerate=true
+            fi
+          elif [[ '${{ github.event_name }}' == push ]]; then
+            # This job is scheduled only by push.paths matching the marker.
             active=true
+            if [[ '${{ contains(github.event.head_commit.message, '[minic-regen-gnu]') }}' == true ]]; then
+              regenerate=true
+            fi
           fi
           echo "run=$active" >> "$GITHUB_OUTPUT"
-          echo "MINIC_LINUX_SEVEN_EXACT_HEAD_GATE=$active sha=$(git rev-parse HEAD)"
+          echo "regenerate=$regenerate" >> "$GITHUB_OUTPUT"
+          echo "MINIC_LINUX_SEVEN_EXACT_HEAD_GATE=$active regenerate=$regenerate sha=$(git rev-parse HEAD)"
+          {
+            echo '### MiniC Linux 3x7 exact-head campaign'
+            echo "Run: $active; regenerate GNU input: $regenerate"
+            echo "Commit: $(git rev-parse HEAD)"
+            echo 'A gate success is never Linux C/LD/QEMU acceptance.'
+          } >> "$GITHUB_STEP_SUMMARY"
 
   minic-binary:
     needs: gate
@@ -63,6 +86,7 @@ jobs:
           set -Eeuo pipefail
           python3 -m py_compile tools/ci/linux-three-isa-seven-runtime-v1.py tools/ci/linux-three-isa-minic-candidate-v1.py
           python3 tools/ci/linux-three-isa-seven-runtime-v1.py selftest
+          python3 tools/ci/test_linux_three_isa_seven_runtime_v1.py
           python3 tools/ci/linux-three-isa-minic-candidate-v1.py --self-test
           python3 tools/ci/test_linux_three_isa_candidate_shard_cache_v1.py
       - name: Build exactly one immutable MiniC and minic-cc for all 21 workers
@@ -92,7 +116,7 @@ jobs:
     # The known-good 21 frozen .i/.cmd input artifacts already exist. Keep
     # this producer for explicit original-source regeneration only; like
     # MiniAS pinned-3x7, normal compiler fixes NEVER rebuild/re-upload them.
-    if: needs.gate.outputs.run == 'true' && github.event_name == 'workflow_dispatch' && inputs.regenerate_original_gnu
+    if: needs.gate.outputs.run == 'true' && needs.gate.outputs.regenerate == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 150
     strategy:
@@ -334,10 +358,14 @@ jobs:
           retention-days: 7
 
   seven-independent-runners:
-    needs: [gate, minic-binary]
+    needs: [gate, minic-binary, original-gnu-golden]
     # A failing GNU LoongArch platform must not suppress live x86/AArch64
     # evidence: each independent worker requires *its* real input artifact.
-    if: always() && needs.gate.outputs.run == 'true' && needs.minic-binary.result == 'success'
+    if: >-
+      always() && needs.gate.outputs.run == 'true' &&
+      needs.minic-binary.result == 'success' &&
+      (needs.gate.outputs.regenerate != 'true' ||
+       needs.original-gnu-golden.result == 'success')
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     strategy:
@@ -359,10 +387,10 @@ jobs:
         with:
           name: minic-linux-seven-input-${{ matrix.target }}-${{ matrix.shard }}
           path: ${{ env.INPUT }}
-          # Immutable full original GNU Linux 6.6.143 exporter from the first
-          # 3x7 run; all 21 SHA-locked artifacts are present on this run.
+          # Normal runs use the reviewed frozen producer. Explicit GNU input
+          # regeneration must consume this SAME run's new 21 artifacts.
           repository: ${{ github.repository }}
-          run-id: 41108659343
+          run-id: ${{ needs.gate.outputs.regenerate == 'true' && github.run_id || env.MINIC_LINUX_PINNED_INPUT_RUN }}
           github-token: ${{ github.token }}
       - uses: actions/download-artifact@v4
         with:
@@ -486,6 +514,21 @@ jobs:
         with:
           name: minic-linux-seven-compiler
           path: build/minic-seven-bin/bin
+      - name: Restore all seven candidate C-object artifacts before GNU setup
+        uses: actions/download-artifact@v4
+        with:
+          pattern: minic-linux-seven-objects-${{ matrix.target }}-*
+          path: build/minic-seven-incoming/
+          merge-multiple: false
+      - name: Reject partial/foreign seven-shard objects before costly GNU cache
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          chmod +x build/minic-seven-bin/bin/minic build/minic-seven-bin/bin/minic-cc
+          python3 tools/ci/linux-three-isa-seven-runtime-v1.py preflight \
+            --target '${{ matrix.target }}' \
+            --minic "$GITHUB_WORKSPACE/build/minic-seven-bin/bin/minic" \
+            --incoming "$GITHUB_WORKSPACE/build/minic-seven-incoming"
       - name: Install unchanged target GNU LD/Kbuild and system QEMU
         timeout-minutes: 15
         shell: bash
@@ -574,12 +617,6 @@ jobs:
           esac
           python3 tools/ci/linux-three-isa-gnu-cache-verify-v1.py \
             --target '${{ matrix.target }}' --gnu-work "$GNU_WORK" --gcc "$gcc"
-      - name: Restore all seven independently produced target ELF64 C shards
-        uses: actions/download-artifact@v4
-        with:
-          pattern: minic-linux-seven-objects-${{ matrix.target }}-*
-          path: build/minic-seven-incoming/
-          merge-multiple: false
       - name: Build unchanged GNU runtime initramfs and Loong EFI original firmware
         shell: bash
         timeout-minutes: 12
@@ -694,7 +731,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          echo 'MINIC_LINUX_SEVEN_GNU_ORIGINAL=PINNED_RUN_41108659343_AND_FRESH_RECEIVER_GNU_QEMU'
+          echo 'MINIC_LINUX_SEVEN_INPUT_RUN=${{ needs.gate.outputs.regenerate == 'true' && github.run_id || env.MINIC_LINUX_PINNED_INPUT_RUN }}'
           echo 'MINIC_LINUX_SEVEN_21_C_SHARDS=${{ needs.seven-independent-runners.result }}'
           echo 'MINIC_LINUX_SEVEN_GNU_LD_QEMU=${{ needs.original-gnu-ld-qemu-receivers.result }}'
           test '${{ needs.minic-binary.result }}' = success

@@ -448,6 +448,87 @@ def collect(a: argparse.Namespace, c, rows: list[dict], identity: dict) -> list[
     return [by_name[row["object"]] for row in rows]
 
 
+def preflight(a: argparse.Namespace, c) -> None:
+    """Reject missing/foreign candidate shards before costly GNU Kbuild setup.
+
+    The frozen GNU .i/.cmd membership and ABI comparison still belongs to
+    receive/collect after the original GNU golden has been authenticated.
+    """
+    compiler = c.compiler_pair(a.minic)
+    common_keys = (
+        "frozen_manifest_sha256", "gnu_receipt_sha256",
+        "gnu_c_owner_manifest_sha256", "original_gnu_image_sha256",
+        "original_config_sha256", "original_owner_list_sha256",
+        "total_c_owners", "gnu_gcc_binary_sha256", "gnu_as_binary_sha256",
+    )
+    baseline = None
+    seen: set[str] = set()
+    expected_artifacts = {f"minic-linux-seven-objects-{a.target}-{shard}"
+                          for shard in range(7)}
+    if (not a.incoming.is_dir() or
+            {path.name for path in a.incoming.iterdir()} != expected_artifacts):
+        raise ValueError(f"missing or extra seven candidate artifacts for {a.target}")
+    for shard in range(7):
+        folder = a.incoming / f"minic-linux-seven-objects-{a.target}-{shard}"
+        receipt = json_file(folder / "identity.json")
+        if (receipt.get("schema") != "minic-three-isa-seven-objects-v1" or
+                receipt.get("target") != a.target or receipt.get("shard") != shard or
+                any(receipt.get(key) != value for key, value in compiler.items())):
+            raise ValueError(f"foreign or stale candidate shard {a.target}/{shard}")
+        common = {key: receipt.get(key) for key in common_keys}
+        if (not isinstance(common["total_c_owners"], int) or
+                common["total_c_owners"] < 200 or
+                any(not isinstance(common[key], str) or
+                    re.fullmatch(r"[0-9a-f]{64}", common[key]) is None
+                    for key in common_keys if key != "total_c_owners")):
+            raise ValueError(f"incomplete candidate shard identity {a.target}/{shard}")
+        if baseline is None:
+            baseline = common
+        elif common != baseline:
+            raise ValueError(f"mixed original GNU input or AS provenance in shard {shard}")
+        results = json_file(folder / "results.json")
+        expected = receipt.get("shard_c_owners")
+        if (not isinstance(results, list) or not isinstance(expected, int) or
+                expected != len(results) or
+                expected != len(range(shard, common["total_c_owners"], 7))):
+            raise ValueError(f"partial candidate shard result {a.target}/{shard}")
+        shard_owners: set[str] = set()
+        for result in results:
+            if (not isinstance(result, dict) or
+                    not isinstance(result.get("object"), str)):
+                raise ValueError(f"malformed candidate owner in shard {shard}")
+            name = safe_owner(result.get("object", ""))
+            if (str(name) in seen or
+                    result.get("status") != "MINIC_S_GNU_AS_PASS" or
+                    not isinstance(result.get("input_sha256"), str) or
+                    not isinstance(result.get("obj_sha256"), str) or
+                    not isinstance(result.get("asm_sha256"), str) or
+                    re.fullmatch(r"[0-9a-f]{64}", result["input_sha256"]) is None or
+                    re.fullmatch(r"[0-9a-f]{64}", result["obj_sha256"]) is None or
+                    re.fullmatch(r"[0-9a-f]{64}", result["asm_sha256"]) is None):
+                raise ValueError(f"duplicate, incomplete or GCC C fallback owner {name}")
+            seen.add(str(name))
+            shard_owners.add(str(name))
+            obj = c.required(folder / "objects" / name)
+            if file_sha(obj) != result["obj_sha256"]:
+                raise ValueError(f"candidate shard object SHA mismatch {name}")
+            c.elf_machine(obj, c.TARGETS[a.target][5])
+            if needs_vdso_assembly(name):
+                asm = c.required(folder / "assembly" / name.with_suffix(".s"))
+                if file_sha(asm) != result["asm_sha256"]:
+                    raise ValueError(f"candidate shard vDSO assembly SHA mismatch {name}")
+        objects_root = folder / "objects"
+        if (not objects_root.is_dir() or
+                any(path.is_symlink() for path in objects_root.rglob("*")) or
+                {path.relative_to(objects_root).as_posix()
+                 for path in objects_root.rglob("*") if path.is_file()} != shard_owners):
+            raise ValueError(f"extra or missing candidate objects in shard {shard}")
+    if baseline is None or len(seen) != baseline["total_c_owners"]:
+        raise ValueError("seven candidate shards do not cover the original C-owner count")
+    print(f"THREE_ISA_SEVEN_PREFLIGHT=PASS target={a.target} "
+          f"shards=7 owners={len(seen)} runtime_certified=false")
+
+
 def receive(a: argparse.Namespace, c) -> None:
     if a.output.exists():
         raise ValueError("refuse stale seven-runner receiver output")
@@ -520,7 +601,7 @@ def self_test() -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("export", "produce", "receive", "cache-key", "cache-store", "cache-load", "selftest"))
+    parser.add_argument("mode", choices=("export", "produce", "preflight", "receive", "cache-key", "cache-store", "cache-load", "selftest"))
     parser.add_argument("--target", choices=("x86_64", "aarch64", "loongarch64"))
     parser.add_argument("--shard", type=int)
     parser.add_argument("--gnu-work", type=Path)
@@ -539,6 +620,11 @@ def main() -> None:
     a = parser.parse_args()
     if a.mode == "selftest":
         self_test()
+        return
+    if a.mode == "preflight":
+        if not a.target or not a.minic or not a.incoming:
+            parser.error("preflight requires --target --minic --incoming")
+        preflight(a, candidate())
         return
     if not a.target or not a.minic or not a.output:
         parser.error("--target --minic --output required")
