@@ -2,14 +2,15 @@
 """Optional, fail-closed candidate shard cache. No compilation/link/runtime claims.
 
 API: identity(target, compiler, assembler, config, owner_manifest, rows,
-frozen, build, shard); store(cache, identity, staged, results);
+frozen, build, shard, external_resources=None); store(cache, identity, staged, results);
 verify(cache, expected_identity) -> manifest. Call identity again at restore
 time using authenticated original GNU inputs. A rejected cache is a miss;
 the caller must run MiniC + GNU AS, never GNU C fallback. Successful compile
 shards may be stored before linking; runtime receipts are never cached here.
 
-Conservatively refuses ALL .include/.incbin directives: their resource graph
-is not inferred from C text. Such shards remain cold (safe cache misses).
+Rejects unknown .include/.incbin directives. Only original GNU Kbuild .incbin
+sidecars explicitly listed with their SHA in the frozen producer identity can
+enter the cache, and the exact resource bytes are verified before keying.
 """
 from __future__ import annotations
 import argparse
@@ -22,6 +23,11 @@ import struct
 
 SCHEMA = "minic-gnu-candidate-shard-cache-v1"
 MACHINES = {"x86_64": 62, "aarch64": 183, "loongarch64": 258}
+# The original no-external-assembly policy is byte-for-byte unchanged. Preserve
+# its authenticated cache identity so the 20 already-cached GNU Linux shards
+# do not cold-rebuild just because a disjoint attested-.incbin path was added.
+# SHA256 of the original helper at the initial seven-runner commit de5d8f6e.
+LEGACY_REJECT_HELPER_SHA256 = "5c36760a2f7f76db8bbde78261a49e6a1fb9e27f8238171a36710fd877476c39"
 
 
 class Rejected(ValueError):
@@ -60,16 +66,52 @@ def owner_path(value):
     return p
 
 
-def no_external_assembly(path):
-    # Search anywhere, including directives embedded inside C asm strings.
-    if re.search(rb"\.(?:incbin|include)\b", safe_file(path).read_bytes(), re.I):
-        raise Rejected("external assembly resources: object cache disabled")
+def attested_resources(resources, build):
+    """Bind only source-producer-certified, build-relative GNU .incbin bytes."""
+    if resources is None:
+        return {}
+    if not isinstance(resources, dict):
+        raise Rejected("invalid original GNU external resource identity")
+    checked = {}
+    for name, expected in sorted(resources.items()):
+        if not isinstance(name, str) or not isinstance(expected, str):
+            raise Rejected("malformed original GNU external resource entry")
+        path = PurePosixPath(name)
+        if (path.is_absolute() or ".." in path.parts or str(path) != name or
+                not path.parts or "\\" in name or
+                re.fullmatch(r"[0-9a-f]{64}", expected) is None):
+            raise Rejected("unsafe original GNU external resource identity")
+        if sha(Path(build) / path) != expected:
+            raise Rejected("original GNU external resource SHA changed")
+        checked[name] = expected
+    return checked
+
+
+def no_external_assembly(path, certified=None):
+    """Allow only GNU SHA-attested .incbin, never an unbound .include."""
+    certified = certified or {}
+    data = safe_file(path).read_bytes()
+    for directive in re.finditer(rb"\.(incbin|include)\b", data, re.I):
+        if directive.group(1).lower() == b"include":
+            raise Rejected("external assembly resources: object cache disabled")
+        # GNU .s has quoted names; a preprocessed C asm string has escaped
+        # quotes. Both must identify the same original Kbuild-relative blob.
+        match = re.match(rb'\s*\\?"([^"\\\r\n]+)\\?"', data[directive.end():])
+        if match is None:
+            raise Rejected("unbound GNU .incbin path: object cache disabled")
+        try:
+            name = match.group(1).decode("utf-8", errors="strict")
+        except UnicodeDecodeError as exc:
+            raise Rejected("non-UTF8 GNU .incbin path") from exc
+        if name not in certified:
+            raise Rejected("unattested GNU .incbin resource: object cache disabled")
 
 
 def identity(target, compiler, assembler, config, owner_manifest, rows,
-             frozen, build, shard):
+             frozen, build, shard, external_resources=None):
     if target not in MACHINES or type(shard) is not int or not 0 <= shard < 7:
         raise Rejected("invalid target/shard")
+    resources = attested_resources(external_resources, build)
     selected = []
     seen = set()
     for index, row in enumerate(rows):
@@ -87,7 +129,7 @@ def identity(target, compiler, assembler, config, owner_manifest, rows,
         cmd = Path(build) / p.parent / ("." + p.name + ".cmd")
         if sha(src) != row["sha256"] or sha(cmd) != row["cmd_sha256"]:
             raise Rejected("original frozen input/command SHA mismatch")
-        no_external_assembly(src)
+        no_external_assembly(src, resources)
         for field in ("minic_flags", "gnu_as_flags"):
             if not isinstance(row[field], list) or not all(isinstance(x, str) for x in row[field]):
                 raise Rejected("invalid ordered command options")
@@ -102,7 +144,11 @@ def identity(target, compiler, assembler, config, owner_manifest, rows,
                   compiler_cc_sha256=sha(compiler.parent / "minic-cc"),
                   gnu_as_binary_sha256=sha(assembler), config_sha256=sha(config),
                   owner_manifest_sha256=sha(owner_manifest), rows=selected,
-                  helper_sha256=sha(Path(__file__)), external_asm_policy="reject")
+                  helper_sha256=(sha(Path(__file__)) if resources
+                                 else LEGACY_REJECT_HELPER_SHA256),
+                  external_asm_policy=("sha-attested-gnu-incbin-v1" if resources else "reject"))
+    if resources:
+        result["external_asm_resources"] = resources
     return result
 
 
@@ -137,7 +183,7 @@ def store(cache, expected, staged, results):
         if result.get("status") != "MINIC_S_GNU_AS_PASS":
             raise Rejected("only complete MiniC/GNU-AS pass shards are cacheable")
         asm, obj = staged / p.with_suffix(".s"), staged / p
-        no_external_assembly(asm)
+        no_external_assembly(asm, expected.get("external_asm_resources", {}))
         check_elf(obj, expected, row)
         entry = dict(object=str(p), asm_sha256=sha(asm), obj_sha256=sha(obj))
         if any(result.get(f) != entry[f] for f in ("asm_sha256", "obj_sha256")):
@@ -179,7 +225,8 @@ def verify(cache, expected):
             allowed.add(relative.as_posix())
             if sha(cache / relative) != entry[field]:
                 raise Rejected("cache artifact SHA mismatch")
-        no_external_assembly(cache / "staged" / p.with_suffix(".s"))
+        no_external_assembly(cache / "staged" / p.with_suffix(".s"),
+                             expected.get("external_asm_resources", {}))
         check_elf(cache / "staged" / p, expected, row)
     files = set()
     for p in cache.rglob("*"):

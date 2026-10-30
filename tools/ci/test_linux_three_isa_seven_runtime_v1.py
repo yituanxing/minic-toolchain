@@ -249,6 +249,48 @@ class SevenWorkerStrictTransportTest(unittest.TestCase):
         self.assertEqual(r.file_sha(output / "bundle/objects/kernel/owner_2.o"),
                          result["obj_sha256"])
 
+    def test_vdso_assembly_transport_all_three_linux_path_forms(self):
+        # arm64/loongarch name the object vdso.o rather than placing it
+        # inside a vdso/ directory; both must retain exact MiniC assembly.
+        names = ("arch/x86/entry/vdso/vgetcpu.o",
+                 "arch/arm64/kernel/vdso.o",
+                 "arch/loongarch/kernel/vdso.o")
+        for i, name in enumerate(names):
+            with self.subTest(name=name):
+                output = self.dir / f"vdso-pack-{i}"
+                obj = output / "staged" / name
+                asm = obj.with_suffix(".s")
+                write(obj, elf())
+                write(asm, f"# genuine MiniC assembly for {name}\n".encode())
+                result = {"object": name, "input_sha256": "1" * 64,
+                          "status": "MINIC_S_GNU_AS_PASS",
+                          "obj_sha256": r.file_sha(obj), "asm_sha256": r.file_sha(asm)}
+                args = SimpleNamespace(output=output, minic=self.compiler,
+                                       target="x86_64")
+                with mock.patch.object(c, "compiler_pair", return_value={}), \
+                        mock.patch.object(r, "gnu_as_identity", return_value={}):
+                    r.package_shard(args, c, [result], self.original_identity)
+                self.assertEqual(
+                    r.file_sha(output / "bundle/assembly" / Path(name).with_suffix(".s")),
+                    result["asm_sha256"])
+
+                # Exercise receiver transport and its SHA guard, too.
+                self.rows[0]["object"] = name
+                self.populate_objects()
+                artifact = self.incoming / "minic-linux-seven-objects-x86_64-0"
+                write(artifact / "assembly" / Path(name).with_suffix(".s"),
+                      asm.read_bytes())
+                results = r.json_file(artifact / "results.json")
+                results[0]["asm_sha256"] = result["asm_sha256"]
+                json_out(artifact / "results.json", results)
+                self.collect()
+                self.assertEqual(r.file_sha(self.output / "staged" /
+                                            Path(name).with_suffix(".s")),
+                                 result["asm_sha256"])
+                write(artifact / "assembly" / Path(name).with_suffix(".s"), b"tampered")
+                with self.assertRaisesRegex(ValueError, "shard .s SHA mismatch"):
+                    self.collect()
+
     def test_pinned_original_gnu_inputs_replay_with_new_minic_compiler_sha(self):
         # The original GNU-E 3x7 corpus is reusable after MiniC source fixes;
         # only the resulting object/cache receipt binds the current compiler.

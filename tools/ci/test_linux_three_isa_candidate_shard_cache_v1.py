@@ -39,15 +39,19 @@ class CacheTest(unittest.TestCase):
                              asm_sha256=c.sha(self.root / "staged/kernel/test.s"),
                              obj_sha256=c.sha(self.root / "staged/kernel/test.o"))]
 
-    def fresh(self):
+    def fresh(self, resources=None):
         return c.identity("x86_64", self.root / "bin/minic", self.root / "as",
                           self.root / "config", self.root / "owners", self.rows,
-                          self.root / "frozen", self.root / "build", 0)
+                          self.root / "frozen", self.root / "build", 0,
+                          external_resources=resources)
 
     def store(self):
         return c.store(self.root / "cache", self.expected, self.root / "staged", self.results)
 
     def test_round_trip_and_immutable(self):
+        self.assertEqual(self.expected["helper_sha256"], c.LEGACY_REJECT_HELPER_SHA256)
+        self.assertEqual(self.expected["external_asm_policy"], "reject")
+        self.assertNotIn("external_asm_resources", self.expected)
         self.store()
         self.assertTrue(c.verify(self.root / "cache", self.fresh())["compile_only_not_runtime_certified"])
         with self.assertRaises(c.Rejected):
@@ -101,6 +105,57 @@ class CacheTest(unittest.TestCase):
         (self.root / "staged/kernel/test.s").write_text('.include "anything"\n')
         with self.assertRaises(c.Rejected):
             self.store()
+
+    def genuine_gnu_incbin_fixture(self):
+        resource = self.root / "build/kernel/config_data.gz"
+        resource.write_bytes(b"actual-original-GNU-Kbuild-config-gzip-payload")
+        src = self.root / "frozen/i/kernel/test.i"
+        src.write_bytes(b'asm(".incbin \\"kernel/config_data.gz\\"");')
+        asm = self.root / "staged/kernel/test.s"
+        asm.write_bytes(b'.section .rodata\n.incbin "kernel/config_data.gz"\n')
+        self.rows[0]["sha256"] = c.sha(src)
+        self.results[0]["asm_sha256"] = c.sha(asm)
+        resources = {"kernel/config_data.gz": c.sha(resource)}
+        self.expected = self.fresh(resources)
+        return resource, resources
+
+    def test_genuine_gnu_incbin_sidecar_can_be_cached_and_reused(self):
+        resource, resources = self.genuine_gnu_incbin_fixture()
+        self.assertEqual(self.expected["external_asm_resources"], resources)
+        self.assertEqual(self.expected["external_asm_policy"], "sha-attested-gnu-incbin-v1")
+        self.store()
+        self.assertTrue(c.verify(self.root / "cache", self.fresh(resources))[
+            "compile_only_not_runtime_certified"])
+        self.assertEqual(c.sha(resource), resources["kernel/config_data.gz"])
+
+    def test_external_gnu_sidecar_drift_or_absence_invalidates_cache(self):
+        resource, resources = self.genuine_gnu_incbin_fixture()
+        self.store()
+        resource.write_bytes(b"different-real-Kbuild-generated-bytes")
+        with self.assertRaisesRegex(c.Rejected, "resource SHA changed"):
+            self.fresh(resources)
+        different = {"kernel/config_data.gz": c.sha(resource)}
+        with self.assertRaisesRegex(c.Rejected, "cache identity mismatch"):
+            c.verify(self.root / "cache", self.fresh(different))
+        resource.unlink()
+        with self.assertRaises(c.Rejected):
+            self.fresh(resources)
+
+    def test_untrusted_incbin_include_symlink_and_traversal_rejected(self):
+        resource, resources = self.genuine_gnu_incbin_fixture()
+        with self.assertRaisesRegex(c.Rejected, "unattested GNU .incbin"):
+            c.no_external_assembly(self.root / "staged/kernel/test.s", {})
+        with self.assertRaisesRegex(c.Rejected, "unsafe original GNU external resource"):
+            self.fresh({"../kernel/config_data.gz": resources["kernel/config_data.gz"]})
+        with self.assertRaisesRegex(c.Rejected, "external assembly resources"):
+            asm = self.root / "staged/kernel/test.s"
+            asm.write_bytes(b'.incbin "kernel/config_data.gz"\n.include "another.s"\n')
+            self.results[0]["asm_sha256"] = c.sha(asm)
+            self.store()
+        resource.rename(resource.with_name("config_real.gz"))
+        resource.symlink_to(resource.with_name("config_real.gz"))
+        with self.assertRaisesRegex(c.Rejected, "symlink"):
+            self.fresh(resources)
 
     def test_wrong_machine_and_failed_compile(self):
         self.results[0]["status"] = "MINIC_S_FAIL"

@@ -246,6 +246,12 @@ def trusted_gnu_driver_binary(name: str) -> Path:
     return resolved
 
 
+def needs_vdso_assembly(name: Path) -> bool:
+    # Kbuild's vDSO can be either a directory (x86) or vdso.o itself
+    # (arm64/loongarch). Preserve the exact MiniC .s for both forms.
+    return "vdso" in name.parts or name.stem == "vdso"
+
+
 def package_shard(a: argparse.Namespace, c, results: list[dict], identity: dict) -> None:
     compiler = c.compiler_pair(a.minic)
     artifacts = a.output / "bundle"
@@ -260,7 +266,7 @@ def package_shard(a: argparse.Namespace, c, results: list[dict], identity: dict)
         dest = artifacts / "objects" / name
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(obj, dest)
-        if "vdso" in name.parts:
+        if needs_vdso_assembly(name):
             asm = c.required(a.output / "staged" / name.with_suffix(".s"))
             dst = artifacts / "assembly" / name.with_suffix(".s")
             dst.parent.mkdir(parents=True, exist_ok=True)
@@ -276,11 +282,10 @@ def package_shard(a: argparse.Namespace, c, results: list[dict], identity: dict)
 def cache_identity(a: argparse.Namespace, c):
     """Reuse historical RV pattern: exact source/flags/compiler/AS keyed shard.
 
-    The separate conservative cache helper deliberately disables caching
-    owners with .incbin; such owners always compile afresh from their genuine
-    transported original GNU assembly resources.
+    The original GNU source artifact attests any .incbin sidecars with SHA;
+    the cache may only replay their original bytes with identical identity.
     """
-    rows, _ = verify_input(a.input, a.target, a.shard, c)
+    rows, input_identity = verify_input(a.input, a.target, a.shard, c)
     helper = c.module("minic_gnu_shard_cache", "linux-three-isa-candidate-shard-cache-v1.py")
     gcc = c.TARGETS[a.target][2]
     prefix = c.TARGETS[a.target][1]
@@ -292,7 +297,8 @@ def cache_identity(a: argparse.Namespace, c):
                                a.input / "build/.config",
                                a.input / "evidence/full-c-owners.txt",
                                json_file(a.input / "frozen/manifest.json")["rows"],
-                               a.input / "frozen", a.input / "build", a.shard)
+                               a.input / "frozen", a.input / "build", a.shard,
+                               input_identity["external_build_resources"])
     return helper, identity
 
 
@@ -426,7 +432,7 @@ def collect(a: argparse.Namespace, c, rows: list[dict], identity: dict) -> list[
             dst = a.output / "staged" / name
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(original, dst)
-            if "vdso" in name.parts:
+            if needs_vdso_assembly(name):
                 asm = c.required(artifact / "assembly" / name.with_suffix(".s"))
                 if file_sha(asm) != result["asm_sha256"]:
                     raise ValueError(f"shard .s SHA mismatch {name}")
