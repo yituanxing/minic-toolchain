@@ -9,9 +9,13 @@ on:
         description: 'Regenerate all original GNU inputs in this run; promote the new run ID only after full acceptance'
         type: boolean
         default: false
-  # A PR paths filter sees the entire PR diff, so a previously changed trigger
-  # caused green gate-only runs on every unrelated commit. Only a deliberate
-  # marker push starts this expensive exact-head campaign on the work branch.
+  # GitHub App ref updates can suppress downstream push-triggered Actions.
+  # Keep the proven PR entry point, but admit its expensive jobs ONLY when
+  # HEAD itself changed the explicit one-shot trigger marker.
+  pull_request:
+    paths:
+      - '.github/workflows/minic-linux-three-isa-seven-runtime-v1.yml'
+      - 'tools/ci/linux-three-isa-seven-runtime-trigger.txt'
   push:
     branches: [refactor/minic-target-language-boundary]
     paths:
@@ -60,6 +64,10 @@ jobs:
             if [[ '${{ contains(github.event.head_commit.message, '[minic-regen-gnu]') }}' == true ]]; then
               regenerate=true
             fi
+          elif [[ '${{ github.event_name }}' == pull_request ]] &&
+               git rev-parse --verify HEAD^ >/dev/null 2>&1 &&
+               ! git diff --quiet HEAD^ HEAD -- tools/ci/linux-three-isa-seven-runtime-trigger.txt; then
+            active=true
           fi
           echo "run=$active" >> "$GITHUB_OUTPUT"
           echo "regenerate=$regenerate" >> "$GITHUB_OUTPUT"
