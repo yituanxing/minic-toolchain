@@ -554,6 +554,8 @@ static bool emit_linux_alt_reloc_selftest(
         definition->result != b[0].value ||
         definition->value.global_id >= fn->global_count) return false;
     name = fn->globals[definition->value.global_id].name;
+    /* FIXME(MC-062): source admits any addressable GNU `m` lvalue, but
+     * replacement bytes and this gate require a hardcoded global symbol. */
     if (!name || strcmp(name, "__alt_reloc_selftest_addr") != 0) return false;
     return fputs(
         "661:\n"

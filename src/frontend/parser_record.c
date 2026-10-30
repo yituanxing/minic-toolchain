@@ -440,6 +440,9 @@ static bool parse_record_field_declarator(MinicParser *parser,
             parser, field_type, "record field cannot use incomplete type by value")) {
         return false;
     }
+    /* FIXME(MC-061): pointer-to-array/function-pointer declarators above
+     * may append anonymous records, invalidating this borrowed Record*.
+     * Look up record_id again after recursive declarator parsing. */
     if (record_has_field(parser, record, name_span)) {
         minic_parser_error(parser, "duplicate record field");
         return false;
@@ -735,6 +738,8 @@ static bool parse_record_field(MinicParser *parser, MinicRecordId record_id) {
     }
     declaration_alignment = 0U;
     declaration_packed = false;
+    /* FIXME(MC-063): tagged `struct Named;` is a GNU memberless declaration,
+     * unlike a tagless anonymous struct member, and must not grow the layout. */
     if (minic_type_is_record(base_type) && parser->current.kind == MINIC_TOKEN_SEMICOLON) {
         if (declaration_attributes.count != 0U) {
             minic_parser_error(
@@ -975,6 +980,8 @@ bool minic_parser_parse_record_definition(MinicParser *parser) {
         return false;
     }
 
+    /* FIXME(MC-067): this lookahead misses GNU attributes before a forward
+     * tag and misroutes the declaration to a required-`{` definition. */
     probe = *parser;
     if (minic_parser_advance(&probe) && probe.current.kind == MINIC_TOKEN_IDENTIFIER &&
         minic_parser_advance(&probe) && probe.current.kind == MINIC_TOKEN_SEMICOLON) {

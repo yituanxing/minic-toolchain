@@ -2,7 +2,7 @@
 
 > **持续审计文档（living document）**。这是生产路径的事实图谱，不是一次性重构 RFC，也不代表全部源码已逐行审核。
 >
-> 首建：2026-10-30；第五轮审计起点：`b0870345b`（前次第四轮基线 `400f4a611`）；第六轮审计起点：`74b366267`，分支 `refactor/minic-target-language-boundary`。代码演进后须更新入口、契约、证据及审计范围。
+> 首建：2026-10-30；第五轮审计起点：`b0870345b`（前次第四轮基线 `400f4a611`）；第六轮审计起点：`74b366267`；第七轮审计起点：`820116e59`，分支 `refactor/minic-target-language-boundary`。代码演进后须更新入口、契约、证据及审计范围。
 >
 > 配套：[函数契约台账](minic-function-contract-register.md) · [缺陷、风险与架构债](minic-issue-register.md) · [架构原则](principles.md)。
 
@@ -167,6 +167,25 @@ flowchart TD
 | AArch64 模板与机器宽度 | Linux AT/io dependency 的 `volatile unsigned long` 输入实测 `-S` 可通过；frame x16/x17 materialize 与 source-only constraint 分离。 | **排误报**：不新增未经实证的 bug；已登记 **MC-052** uaccess 8B 写回风险依然待修。 |
 
 第六轮测试将不同层级分开：`GNU C syntax/compile`、MiniC `-S`、ASan、GNU AS/原生可执行（仅指定 x86 正控）以及 **未完成的目标 QEMU**。新增 `MC-056/057/058` 输入存放在 `tests/compiler/audit/`，为已知失败的长期反例，不计入绿色编译成功率。源码仅加入对应所有权/ABI `FIXME(MC-...)`，不在审计轮改变运行语义。
+
+### 第七轮：实体身份比“复用某个 Helper”更重要（审计起点 `820116e59`）
+
+由七个并行阅读分片复核的 [F7 函数契约台账](minic-function-contract-register.md) 共 **212 条函数/函数组记录**（Frontend31、Compiler/Core facts30、Core/reachability33、RISC-V36、AArch64/Common49、x86长尾5、LoongArch64 28），都是函数本体与生产者、消费者 R2/U2 级追踪；有重复审计与函数组，不是 212 个首次全读的独立函数，也不是整仓覆盖率。上轮 x86 五组 R1/U1 已经过独立源端/机器端补读。新增八项确证 `MC-059/060/061/062/063/064/066/067`，`MC-065` 为明确排除的错误报告。
+
+| 层级与真实身份边界 | 复核出的契约/不一致 | 证据及下一步 |
+| --- | --- | --- |
+| Frontend RecordId vs 借用的 `Record*` | `parse_record_field_declarator` 保存 Record header 后经 pointer-to-array / function-pointer 子声明创建匿名 Record，复用失效地址；直接数组字段因检查顺序不同目前没有这次 UAF。 | **MC-061 P0 ASAN**；五目标各自不同 arena 容量相位。全局修复应联合 MC-002/003/023/056，保留每条不同生产入口反例。 |
+| GNU Record member 的有名/无名身份 | `struct Named;` 是 GNU 可警告的裸类型声明而非匿名成员；`struct {int x;};` 才成为实际匿名布局成员。 | **MC-063 P1 GNU-NATIVE-DIFF**；同输入 GNU x86 exit48，MiniC x86 exit88。DataLayout 结果错的源头在 parser 添加字段，非目标 ISA。 |
+| Declaration lookahead 与 tag entity | Record forward dispatcher 只接受 `struct IDENTIFIER ;`，漏 `struct __attribute__((aligned(16))) Forward;`，虽然 type specifier 支持属性。 | **MC-067 P2 LOCAL-COMPILE-DIFF**；五目标 0/5，通过不带属性正控 5/5。需统一声明前缀 classifier，不能为了一个属性复制整份 Parser state。 |
+| Core ASM 文本 vs FunctionId 可达性边 | `"i"(static_func)` 降为纯 OPAQUE ASM 文本 `.quad static_func`；可达性 walker 只遍历 CALL/FUNCTION_ADDRESS，丢静态函数定义。相同静态全局符号与显式 C call 有正控。 | **MC-064 P1 ASM-ONLY**；真实 GNU x86 object 保留 LOCAL FUNC、MiniC RV64 `-S` 出现未定义标签引用；尚缺 RV 目标 GNU AS/link。应在 Core 保留结构化符号根。 |
+| RISC-V 具名 union 的物理 ABI | LP64D 不应将 union 的 FP member flatten 到 FPR；Common integral-tree 判定把 union 误作 FP-only struct。 | **MC-059 P2 LOCAL-COMPILE-DIFF**；LP64D 四项失败/整数 union 正控通过；LP64 soft 五项通过。需 GCC 目标 ABI 位置/实物传参核验。 |
+| AArch64/Loong 大 Record 的跨层契约 | Common `minic_multi_indirect_record` 与 A64/Loong 返回/复制 emit 均把 2048B machine 上限混进 C/ABI admissibility。 | **MC-060 P2 LOCAL-COMPILE-DIFF**；2048 PASS / 2049 FAIL 两目标，x86/RV 同样数据能 -S。放宽时须同时调整机器大字节复制、立即数和 sret owner。 |
+| A64 pointer type 与 FP aggregate leaf | `aarch64_special_aggregate_member` 先看 `base_kind=DOUBLE`，将 `double*` 判作 FP member，错拒合法32B间接对象。 | **MC-066 P2 LOCAL-COMPILE-DIFF**；GNU语法合法，`double*` MiniC FAIL、仅改 `int*` PASS。不能扩大解释为完整 HFA 支持。 |
+| x86 GNU `m` 约束与硬编码 replacement reloc | ALT_RELOC 的 source 接受任意可寻址 GNU `m`；machine 只认识固定 global symbol，并将固定地址写入 section。 | **MC-062 P2 LOCAL-COMPILE-DIFF + GNU ELF reloc**；更换符号 GNU relocation 正确变，MiniC -S fail。需要统一 Source/机器 operand 身份。 |
+
+**架构边界与排误报：** Parser 的 `probe=*parser` 与轻量 Lexer-only lookahead 是现存不同策略，未验证可以全面合并；Core facts 的 index cache 有合法 fallback，inline `volatile` 读取在原生正控里未被消除；x86 crash-register R11 候选跨 caller-saved 函数调用、ASM 无输入约束，因此 **MC-065 CLOSED-NOT-A-BUG**。Loong `frame_emit/memory_emit/call_emit/block_emit` 主要函数已横向复核，但仍是静态 R2/U2，不等于 Loong QEMU。RISC-V union、A64 Record、x86 ALT 测试均把 GNU C、`-S`、ELF/本机执行和目标 QEMU 的证据级别分开；本轮没有跨架构 Linux image 运行验收。
+
+**维护策略：** 发现立即写 `MC` 台账+对应永久 `.c` 负例+必要的源码所有权 `FIXME`，不为单个差分立刻更改 Core/Target 协议。下一修复批次以跨模块生产者→消费者为边界合并审查，避免新旧实现并存后遗失旧路径。
 
 ### 第四轮跨层回看：为何不能由新 Bug 推出要重写某一层
 

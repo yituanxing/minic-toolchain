@@ -129,6 +129,8 @@ bool minic_multi_indirect_record(const MinicC0Program *program,
         !minic_type_is_record(type) ||
         !minic_common_aggregate_storage_shape(
             program, target->data_layout, type, 8U, &shape) ||
+        /* FIXME(MC-060): the 2048-byte threshold is an emitter limitation,
+         * not an LP64 ABI bound; A64/Loong reject legal larger records. */
         shape.bytes <= 16U || shape.bytes > 2048U ||
         shape.alignment > 16U)
         return false;

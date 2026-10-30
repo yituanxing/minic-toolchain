@@ -160,6 +160,9 @@ static bool minic_walk_reachable_core_edges(const MinicC0Program *program,
                 goto done;
             }
             instruction = &core->instructions[instruction_id];
+            /* FIXME(MC-064): opaque inline ASM may refer to a static
+             * function solely through a GNU `i` symbolic operand; lowering
+             * preserves only text, so no FUNCTION_ADDRESS edge is visited. */
             if (instruction->kind == MINIC_CORE_INSTRUCTION_CALL) {
                 MinicCoreCalleeId callee_id = instruction->value.call.callee_id;
                 const MinicCoreCallee *callee;

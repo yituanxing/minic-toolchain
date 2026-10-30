@@ -9,6 +9,9 @@ static bool aarch64_special_aggregate_member(
     const MinicC0Program *program, MinicType type, unsigned int depth) {
     size_t i;
     if (program == NULL || depth > 16U) return true;
+    /* FIXME(MC-066): pointers preserve a floating pointee base_kind here.
+     * Test indirection before FP-leaf classification, or a double* record
+     * member is mistaken for a floating aggregate member. */
     switch (type.base_kind) {
     case MINIC_TYPE_BASE_FLOAT:
     case MINIC_TYPE_BASE_DOUBLE:

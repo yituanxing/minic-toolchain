@@ -68,7 +68,10 @@ bool minic_riscv64_classify_abi_value_profile(
             return true;
         }
         if (size <= 16U) {
-            /* LP64D classifies an aggregate containing FP leaves using
+            /* FIXME(MC-059): unions with FP members are NOT flattened by
+             * the RISC-V psABI; this integral-tree test also rejects those
+             * legal named arguments/returns in LP64D.
+             * LP64D classifies an aggregate containing FP leaves using
              * register flattening (faN and sometimes aN), NOT by passing
              * a pointer. Until the complete mixed FP/GP location model is
              * implemented, reject that named/return shape rather than

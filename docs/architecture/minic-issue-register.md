@@ -58,6 +58,14 @@
 | [MC-056](#mc-056-运行时-record-顺序初始化器跨扩容借用) | P0 | OPEN | ASAN | Frontend | 普通 Record 位置初始化 `sizeof(struct {...})` 扩容后使用失效 Record* |
 | [MC-057](#mc-057-gnu-空-record-返回及实参-abi-缺口) | P2 | OPEN | LOCAL-COMPILE-DIFF | RV32/RV64/x86 | 零字节 Record ABI 合法；目标 terminator/call 路径显式拒绝不同子集 |
 | [MC-058](#mc-058-符号指针加常量偏移的传递特化丢失) | P1 | OPEN | LOCAL-COMPILE-DIFF | Compiler | 唯一 caller 的 static pointer+offset 经 inline wrapper 后无法解析 GNU ASM `i` |
+| [MC-059](#mc-059-rv64-lp64d-含浮点成员-union-被误当-fp-aggregate) | P2 | OPEN | LOCAL-COMPILE-DIFF | RV64 ABI | LP64D union 中浮点字段不能触发 FP flatten；具名参数/返回四种 GNU 用例错拒 |
+| [MC-060](#mc-060-lp64-两个目标的大聚合-2048-字节硬上限) | P2 | OPEN | LOCAL-COMPILE-DIFF | Common LP64/A64/Loong | 合法 2049B Record 的按值参数/返回在 A64/Loong preflight 错拒，2048B 通过 |
+| [MC-061](#mc-061-record-字段声明中-pointer-to-array-跨扩容借用) | P0 | OPEN | ASAN | Frontend | 声明 Record 的 pointer-to-array 字段遇匿名 Record 时 UAF，无需 initializer |
+| [MC-062](#mc-062-x86-alt-reloc-的-memory-输入源机约束分裂) | P2 | OPEN | LOCAL-COMPILE-DIFF | x86-64 ASM | Source 允许任意 GNU m lvalue，Machine 硬编码唯一符号，合法替代重定位遭拒 |
+| [MC-063](#mc-063-带标签的裸-record-声明被误作匿名成员) | P1 | OPEN | GNU-NATIVE-DIFF | Frontend/DataLayout | GNU 的 `struct Named;` 仅声明不占成员，MiniC 错当匿名成员导致 `sizeof` 错误 |
+| [MC-064](#mc-064-inline-asm-仅符号引用的静态函数被错误裁剪) | P1 | OPEN | ASM-ONLY | Core Reachability | `"i"` ASM 引用静态函数被降为文本后丢失函数可达性边，汇编有引用无定义 |
+| [MC-066](#mc-066-aarch64-浮点指针字段被误判为浮点聚合) | P2 | OPEN | LOCAL-COMPILE-DIFF | AArch64 ABI | 32B 聚合的 `double*` 被当 FP 成员拒绝，换成 `int*` 即通过 |
+| [MC-067](#mc-067-带-gnu-属性的-record-前向声明被错判为定义) | P2 | OPEN | LOCAL-COMPILE-DIFF | Frontend | `struct __attribute__((aligned(16))) Forward;` GCC 合法，MiniC 五目标要求 `{` |
 
 ## 索引：尚待验证的风险
 
@@ -73,7 +81,7 @@
 | [MC-047](#mc-047-core-事实求值与可消除副作用的证明边界) | P2 | INVESTIGATING | DESIGN-REVIEW | Core 的“值可知”事实在不同 CFG consumer 中需要明确纯度门槛 |
 | [MC-055](#mc-055-core-verifier-内部辅助数组形状先决条件) | P2 | INVESTIGATING | CORE-API-ASAN | Verifier 对人为损坏的 fixed binding 形状崩溃，对公开 API 可构造的缺 enum metadata IR 误接受；未证有效 C 错码 |
 
-已验证非问题：**[MC-026](#mc-026-source-form-id-的实际身份边界)**，状态 `CLOSED-NOT-A-BUG`，保留编号和消费者证据，避免重复误报。
+已验证非问题：**[MC-026](#mc-026-source-form-id-的实际身份边界)**、**[MC-065](#mc-065-x86-r11-跨调用快照误报排除)**，状态 `CLOSED-NOT-A-BUG`，保留编号和消费者证据，避免重复误报。
 
 ## 索引：确实存在但不宜立即改的架构与验证债
 
@@ -503,6 +511,69 @@
 - **位置/现象：** `src/compiler/inline_symbolic.c:335–413` 的 transitive symbolic argument closure 识别直接 LOCAL 静态参数事实，但没有表示“symbolic base + C 常量 pointer offset”的可传播事实。`mid_key(int *key){ return leaf_key(key+1); }` 传入的 `key` 已由唯一 caller 专门化为静态全局 `key_slots`，callee 内联 GNU `"i"(key)` 却得不到 `key_slots+4`，因而 `immediate_resolved=0`、Core 拒绝。
 - **严格隔离：** `tests/compiler/audit/mc058_inline_symbolic_pointer_offset_direct.c` 与 `_transitive.c` 的 `leaf_key` 完全相同，都是 GNU `asm volatile(".byte 0" : : "i"(key))`；仅直达 `leaf(key_slots+1)` vs 经 `mid(key_slots)`/`leaf(key+1)` 不同。GNU x86 `gcc -std=gnu11 -O2 -c` 两者 PASS；相同 `.i` 的 MiniC `--target=riscv64-linux -S` 直接 case PASS (`direct=1`)，传递 case FAIL (`direct=1 transitive=0 immediate_resolved=0`)。另完整 `.quad %c0` GCC source 可以生成 `.data+4/.data+8/.data+c` relocs，但 MiniC x86 的 opaque-ASM backend 另有失配，**不得把 `.quad` x86 MiniC FAIL 当本问题的单一因果**。
 - **独立性/修复门槛：** 仅一个 caller、没有整数形参事实或共享 CALL 的多 caller 污染，故区别 MC-006（跨实例污染）与 MC-008（整数运行时参数禁止符号特化）。需由实例事实承载 base symbol + byte offset，保证指针加法的元素大小/type normalization，保留 caller identity，回归 offsets 0/1/2、两层传递、不同全局及 GNU ASM `i` 的目标 GAS/relocs；不要直接污染共享 AST CALL。
+
+### MC-059 RV64 LP64D 含浮点成员 Union 被误当 FP Aggregate
+
+- **状态：** `OPEN`，P2，`LOCAL-COMPILE-DIFF`；RV64 目标以两种明确 ABI/ISA profile 的 `-S` 对照检测到的可复现实例；目前表现为**合法 GNU C 的显式拒绝**，非静默 ABI 运行错误。
+- **规则：** [RISC-V ratified psABI，Procedure Calling Convention](https://docs.riscv.org/reference/abi/v1.0/riscv-cc-procedure-calling-convention.html)明确规定 union **永不 flatten**，始终按整数调用约定传递；不能因为 union 任一字段是 `double`/`float` 就当作可 flatten 的 FP struct。
+- **根因：** `src/target/riscv64/abi.c:minic_riscv64_classify_abi_value_profile` 的 `size<=16` Record 分支在 LP64D 使用 `minic_common_aggregate_integral_tree`，后者在 `src/target/common/aggregate_shape.c` 对含 FP 字段的 union 递归返回 false；具名参数、返回、direct call 都在真正机器 ABI placement 前被挡住。无名变参却明确按 integer convention，实测可 `-S`。
+- **永久反例：** `tests/compiler/audit/mc059_rv64_lp64d_union_float_abi.c`，独立宏 `PROBE_RETURN/PARAM/FLOAT32/CALL/CONTROL`。GNU11 所有 case 合法且可编译；MiniC `--target=riscv64-linux -march=rv64imafd -mabi=lp64d -S` 前四项 FAIL、纯 integer union CONTROL PASS；同输入 `-march=rv64i -mabi=lp64` **5/5 PASS**。原始更广探针还对比 RV32I/ILP32。
+- **区分：** `struct { double d; }` 的 LP64D FP flatten 属另一 ABI 分支，当前未全面实现属于既有能力边界；不可为了开放 union 一概放行所有含浮点的 Record。修复需明确 `is_union` 语义，回归具名/变参、参数/返回/嵌套调用、整数 vs FP 物理寄存器、GNU 目标 GAS/ELF/QEMU。
+
+### MC-060 LP64 两个目标的大聚合 2048 字节硬上限
+
+- **状态：** `OPEN`，P2，`LOCAL-COMPILE-DIFF`；这是能由大小边界单独触发的 source acceptance gap，非已证内存破坏。
+- **源/消费链：** `src/target/common/lp64_aggregate.c:minic_multi_indirect_record` 在 Record `shape.bytes > 2048U` 返回 false；AArch64 `abi.c:minic_aarch64_indirect_record`、LoongArch64 `codegen.c` ABI policy 使用该共同判据；`direct_preflight.c:minic_multi_direct_lp64_function_preflight` 与 `direct_call_plan.c` 在发射前拒绝；A64/Loong 的 indirect return machine helper 另有 2048B 上限。这里是真实**共用策略误加源语言大小限制**，并不是 ABI 规定 2KiB 以上对象不合法。
+- **边界差分：** `tests/compiler/audit/mc060_lp64_large_record_abi_cap.c` 含 `struct LargeRecord { unsigned char bytes[N]; }` 的按值输入/返回/调用。GNU `-std=gnu11 -Wall -Wextra -Werror -fsyntax-only` 对 N=2048/2049 均通过。MiniC AArch64/LoongArch64 `-S`：2048 **PASS**、2049 **FAIL** `reason=return_abi`；同一 2049B case 的 x86、RV32、RV64 `-S` 均 PASS。这是确认的精确阈值，不是凭代码目测。
+- **验收：** 先将“机器是否有动态/计数复制策略”和“ABI 是否接受 Record”拆为不同契约；检查参数/返回/递归调用与 caller-owned hidden return pointer、堆栈对齐、缓冲区长度 overflow；用多个尺寸（16/17/2048/2049/更大）及 GNU 目标 GAS/link/QEMU 验证后才能解除。
+
+### MC-061 Record 字段声明中 Pointer-to-Array 跨扩容借用
+
+- **状态：** `OPEN`，P0，`ASAN`；合法 GNU C **Record 定义阶段**即能触发 `heap-use-after-free`，完全不需局部或静态 initializer，与 MC-023/MC-056 不同入口。
+- **失效链：** `src/frontend/parser_record.c:parse_record_field_declarator` 在开头保存借用 `MinicRecord *record`；字段 `int (*field)[sizeof(struct {int z;})]` 经 `parse_pointer_to_array_field_declarator`→`parse_array_declarator_suffix`→`parse_sizeof`→`minic_c0_program_add_anonymous_record` 增长 `Program.records`；返回后 `parser_record.c:443:record_has_field(parser, record, name_span)` 读失效 header（ASan READ8）。
+- **持久反例：** `tests/compiler/audit/mc061_record_field_pointer_array_uaf.c`；GNU11 `-fsyntax-only` 与原生可执行控制通过；五目标 ASan `-S` 的前置类型数量 14/15/16：x86/AArch64 = **UAF/PASS/PASS**，RV32/RV64/Loong = **PASS/UAF/PASS**，证明与 arena capacity 相位相关。未触发相位上的 PASS 不代表该借用安全。
+- **修复原则：** RecordId 在声明、字段重复名验证、属性/位域解析之间保持稳定；任何调用可 append Record 后必须重新取或短期值型快照，不能把 `const Record*` 当生命周期保证。修复后连同 MC-002/003/023/056 以多目标多容量 ASan 和合法 GNU 类型解析对照验收。
+
+### MC-062 x86 ALT Reloc 的 Memory 输入源机约束分裂
+
+- **状态：** `OPEN`，P2，`LOCAL-COMPILE-DIFF`（另有 GNU ELF relocation 实证）；**不是**内核 alternative 的运行时执行差异。
+- **Source 与 Machine 不一致：** `src/target/x86_64/asm_contract.c:x86_linux_alt_reloc_selftest_source` 仅检查 GNU `"m"` memory input 是可寻址 lvalue；`src/target/x86_64/machine_asm.c:emit_linux_alt_reloc_selftest` 却额外要求 Core 定义为 `GLOBAL_ADDRESS` 且符号名固定 `__alt_reloc_selftest_addr`，机器替换段硬编码 `leaq __alt_reloc_selftest_addr(%rip),%rdi`。因此 source contract 接受的合法其他符号无法兑现。
+- **差分：** `tests/compiler/audit/mc062_x86_alt_reloc_memory_operand.c` 默认 `other_alt_reloc_addr` 和 `-DALT_GOOD` 固定符号正控均通过 `cc -std=gnu11 -Wall -Wextra -Werror -c`；GNU `readelf -r` 的 `.rela.altinstr_replacement` 对应 `R_X86_64_PC32` 从 `__alt_reloc_selftest_addr` 变为 `other_alt_reloc_addr`，是实际 operand 重定位语义。MiniC GOOD `-S` PASS，BAD `-S` FAIL `kind=43`，没有坏例可执行文件。
+- **后续设计：** 明确该特化仅承诺 Linux 固定符号还是泛化 GNU memory-input lvalue：前者应在 Source gate 精准限制且交给符合 ABI 的其他路径，后者应从 Core operand 解析动态 symbol+offset 且保留 replacement PC-relative relocation。不能只在 Machine 中硬编码后把 Source 接收范围当正确。
+
+### MC-063 带标签的裸 Record 声明被误作匿名成员
+
+- **状态：** `OPEN`，P1，`GNU-NATIVE-DIFF`；与仅有 `-S` 差分的问题不同，已有本机实际执行结果错误。
+- **位置与语义：** `src/frontend/parser_record.c:parse_record_field` 在 `minic_type_is_record(base_type) && current==SEMICOLON` 时统一向外层 Record 添加匿名字段；但 GNU C `struct Named {int x;}; struct Wrapped {struct Named; int y;};` 的带标签裸类型声明**不声明匿名成员**，GCC `-Wall` 提示 `declaration does not declare anything`。相对地 `struct {int x;};` 是可用的 GNU 匿名 Record 成员，二者必须区分。
+- **持久反例：** `tests/compiler/audit/mc063_tagged_bare_record_field_layout.c` 同时检查两种语法。GCC GNU11 x86 native 得到 `sizeof(Wrapped)=4`、匿名 Record 组合大小8，整程序 exit **48**；同一输入 MiniC x86 `-S`→GNU AS/cc→native exit **88**，两个结构都被算作8；五目标 `-S` 都生成错误的 tagged 结构大小8。GCC tagged case 有警告而非错误，不能称为 ISO C 保证。
+- **修复与验收：** 区分 tagless anonymous definition、tagged bare declaration、record-tag 类型别名，核对字段布局/访问/初始化/bitfield 和 GCC GNU11 本机 ABI；对不同目标 target DataLayout 另补 GCC 对照，避免直接对后端修正 offset。
+
+### MC-064 Inline ASM 仅符号引用的静态函数被错误裁剪
+
+- **状态：** `OPEN`，P1，`ASM-ONLY`；已证**缺失本地函数定义的生成汇编**，当前无 RISC-V 目标 GNU AS/link/QEMU 验收，不能宣称已经实际链接失败。
+- **链路：** `src/core/core_lower_asm_operands.c:core_inline_asm_immediate_text` / `core_inline_asm_specialize_immediates` 将 GNU `"i"(asm_only_target)` 的静态函数引用转成裸字符串；`src/core/core_lower_asm_scalar_forms.c` 形成 `OPAQUE_INLINE_ASM`。`src/compiler/core_reachability.c:minic_walk_reachable_core_edges` 只跟 `CALL`、`FUNCTION_ADDRESS`，`minic_prune_inline_specializations_from_core` 把缺少普通 C 引用的静态函数标记不发射。前端/Lower 已通过，缺失发生于可达性身份转换。
+- **持久反例：** `tests/compiler/audit/mc064_asm_only_static_function_reachability.c`。GNU x86 `-O0/-O2` 对象中都保留 LOCAL FUNC `asm_only_target`；MiniC RV64I/LP64 `-S` 输出 `.quad asm_only_target` 但无 `asm_only_target:`。定义宏 `MC064_DIRECT_CALL` 后 MiniC 同时输出 C 调用和函数定义；仅以 ASM 引用的**静态全局变量**也有独立正控，故不能泛化为所有 ASM 符号缺失。
+- **修复与验收：** 将 ASM 中 function/object relocation source identity 保持在 Core 结构化元数据中并加入 reachability roots，不能用全文本符号子串不安全地推测身份；验证有/无普通 C 引用、函数别名、unused/used、多个目标 GNU AS/ELF relocation 与真实链接。
+
+### MC-065 x86 R11 跨调用快照误报排除
+
+- **状态：** `CLOSED-NOT-A-BUG`；编号永久占用，不计入 OPEN 缺陷数量。
+- **候选：** 一个 x86 原生对照让内联汇编写 R11，另一次内联汇编无显式输入依赖而读取 R11，出现 GCC/MiniC 数值差异。
+- **排除依据：** 两段 ASM 间包含 C 函数调用，x86-64 ABI 的 R11 是 caller-saved；读取它的 ASM 没有声明相应输入或保活依赖。此测试不能对 R11 的原值建立有效语义约束，因而不能判为 MiniC wrong-code。只有构造出遵守寄存器约束和调用约定的独立反例才能以**新证据**重开调查。
+
+### MC-066 AArch64 浮点指针字段被误判为浮点聚合
+
+- **状态：** `OPEN`，P2，`LOCAL-COMPILE-DIFF`；是合法 GNU C 的显式拒绝，不是已证 AArch64 运行时错误。
+- **源/消费链：** `src/target/aarch64/abi.c:aarch64_special_aggregate_member` 先判断 `type.base_kind` 是否 FLOAT/DOUBLE，再判断 pointer/array/record；`double*` 的 base_kind 仍指向 DOUBLE，故错误报告存在 FP aggregate leaf。`minic_aarch64_indirect_record` 用它排除合法一般整数/pointer Record，preflight 的返回 ABI 拒绝该函数。
+- **对照：** `tests/compiler/audit/mc066_aarch64_fp_pointer_aggregate.c`，32 字节 `struct { double *number; unsigned char padding[24]; }` GNU C 编译通过、MiniC `aarch64-linux -S` FAIL；只加 `-DMC066_INTEGER_PTR` 变 `int *number`，对象总长度不变，MiniC PASS。不能因此推断已实现 A64 所有 HFA 参数/返回：本路径只在间接大 Record 分类范围内生效。
+- **验收：** 在 target ABI predicate 先判断 type indirection，再做 FP member 归类；回归 float/double 的值字段 vs 各种 pointer/array/typedef、16B/17B/32B/64B Record、GNU AArch64 ABI args/returns 与 GAS/ELF/QEMU。
+
+### MC-067 带 GNU 属性的 Record 前向声明被错判为定义
+
+- **状态：** `OPEN`，P2，`LOCAL-COMPILE-DIFF`；五目标复现的是 Frontend 入口同一个解析错误。
+- **位置/失配：** `src/frontend/parser_record.c:minic_parser_parse_record_definition` 使用浅拷贝 lexer lookahead 仅匹配 `struct IDENTIFIER ;` 为 forward，遇 `struct __attribute__((aligned(16))) Forward;` 时错误调度到 `minic_parser_parse_record_definition_specifier`，后者要求 `{`，报 `expected '{' after record specifier`。其余没有属性的 tag forward 路径可用。
+- **持久反例：** `tests/compiler/audit/mc067_attributed_record_forward_declaration.c`；GCC `-std=gnu11 -Wall` 正常编译无警告、x86 native exit4；MiniC x86/A64/RV32/RV64/Loong `-S` **0/5 PASS**。`-DMC067_PLAIN_CONTROL` 仅移除属性，同一五目标 **5/5 PASS**。
+- **修复与验收：** 将 record declaration-head 的 attribute 和 tag 识别先统一到 tokenizer/parsed-specifier contract，再区分 forward 与 complete definition；覆盖 `struct`/`union`、属性在 tag 前后、重复声明、同名 scope，不要用多个更深的 Parser 浅复制来规避语义状态。
 
 ## 已核对并排除的误判（不要在未有新证据时重新打开）
 
