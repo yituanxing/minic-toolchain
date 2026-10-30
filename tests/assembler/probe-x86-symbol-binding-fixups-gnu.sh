@@ -48,6 +48,11 @@ local:
     movl $immediate,displacement(%rip)
     movl $immediate,displacement(%rax)
     movq $immediate,(%rax)
+    # GCC -fno-pie emits B8+r imm32 with both external and local symbols.
+    # Its relocation is R_X86_64_32 (not sign-extending R_X86_64_32S).
+    movl $immediate,%eax
+    movl $immediate+7,%r9d
+    movl $local,%r12d
 ASM
 "$MINIAS" --target=x86_64 -o "$work/mini.o" "$work/binding.s"
 as --64 -o "$work/gnu.o" "$work/binding.s"

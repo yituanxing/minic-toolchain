@@ -72,19 +72,64 @@ static bool finish_length(MiniAs *as,int sec,size_t begin) {
         section->data[begin+i]=(unsigned char)(length>>(i*8U));
     return true;
 }
-static bool advance_cfi(MiniAs *as,int sec,uint64_t from,uint64_t to) {
+/* Some psABIs preserve linker-visible CFI code-distance arithmetic even when
+ * the two labels are already defined in the current object.  GAS emits a
+ * fixed-width zero operand followed by SET/ADD and SUB relocations; emitting
+ * the numeric delta loses the linker's relocation/relaxation contract. */
+static bool cfi_advance_fixups(MiniAs *as,int sec,size_t field,
+                              size_t from_symbol,size_t to_symbol,
+                              unsigned width) {
+    MiniAsFixupKind positive=as->target->cfi_advance_reloc_mode==2U ?
+        MINIAS_FIXUP_SET : MINIAS_FIXUP_ADD;
+    if(from_symbol>=as->symbol_count || to_symbol>=as->symbol_count ||
+       (as->target->cfi_advance_reloc_mode!=1U &&
+        as->target->cfi_advance_reloc_mode!=2U))return false;
+    return minias_add_section_fixup(as,MINIAS_FIXUP_ORIGIN_SYNTHETIC_SECTION,
+               sec,field,positive,width,as->symbols[to_symbol].name,0) &&
+           minias_add_section_fixup(as,MINIAS_FIXUP_ORIGIN_SYNTHETIC_SECTION,
+               sec,field,MINIAS_FIXUP_SUB,width,as->symbols[from_symbol].name,0);
+}
+
+static bool advance_cfi(MiniAs *as,int sec,size_t from_symbol,
+                        size_t to_symbol,bool eh) {
     uint64_t delta;
     unsigned align=minias_cfi_abi(as).code_align;
+    uint64_t from,to;
+    bool reloc=eh && as->target->cfi_advance_reloc_mode!=0U;
+    size_t field;
+    if(from_symbol>=as->symbol_count || to_symbol>=as->symbol_count)
+        return false;
+    from=as->symbols[from_symbol].value;
+    to=as->symbols[to_symbol].value;
     if(to<from || (to-from)%align!=0U)return false;
     delta=(to-from)/align;
     if(delta==0U)return true;
     if(delta<=63U)return put8(as,sec,(uint8_t)(0x40U|(uint8_t)delta));
-    if(delta<=255U)return put8(as,sec,2U) && put8(as,sec,(uint8_t)delta);
-    if(delta<=65535U)
-        return put8(as,sec,3U) && put8(as,sec,(uint8_t)delta) &&
-               put8(as,sec,(uint8_t)(delta>>8U));
+    if(reloc && align!=1U) {
+        minias_set_error(as,"unsupported-cfi-relocation-code-alignment");
+        return false;
+    }
+    if(delta<=255U) {
+        if(!put8(as,sec,2U))return false;
+        field=as->sections[(size_t)sec].size;
+        return put8(as,sec,reloc?0U:(uint8_t)delta) &&
+               (!reloc || cfi_advance_fixups(as,sec,field,from_symbol,
+                                              to_symbol,1U));
+    }
+    if(delta<=65535U) {
+        if(!put8(as,sec,3U))return false;
+        field=as->sections[(size_t)sec].size;
+        return put8(as,sec,reloc?0U:(uint8_t)delta) &&
+               put8(as,sec,reloc?0U:(uint8_t)(delta>>8U)) &&
+               (!reloc || cfi_advance_fixups(as,sec,field,from_symbol,
+                                              to_symbol,2U));
+    }
     if(delta>UINT32_MAX)return false;
-    return put8(as,sec,4U) && put32(as,sec,(uint32_t)delta);
+    if(!put8(as,sec,4U))return false;
+    field=as->sections[(size_t)sec].size;
+    return put32(as,sec,reloc?0U:(uint32_t)delta) &&
+           (!reloc || cfi_advance_fixups(as,sec,field,from_symbol,
+                                          to_symbol,4U));
 }
 static bool encode_cfi(MiniAs *as,int sec,const MiniAsCfiOp *op) {
     uint64_t magnitude;
@@ -164,16 +209,21 @@ static bool emit_eh_cie(MiniAs *as,int sec,bool simple,bool signal,
     if(abi.code_align==0U || abi.data_align>=0 ||
        abi.return_reg>255U || abi.address_size==0U)return false;
     if(!put32(as,sec,0U) || !put32(as,sec,0U) ||
-       !put8(as,sec,1U) ||
+       !put8(as,sec,(uint8_t)(as->target->cfi_eh_cie_version!=0U ?
+                             as->target->cfi_eh_cie_version : 1U)) ||
        !put8(as,sec,'z') || !put8(as,sec,'R') ||
        (signal && !put8(as,sec,'S')) || !put8(as,sec,0U) ||
        !uleb(as,sec,abi.code_align) || !sleb(as,sec,abi.data_align) ||
        !put8(as,sec,(uint8_t)abi.return_reg) ||
        !uleb(as,sec,1U) || !put8(as,sec,0x1bU))return false;
     if(!simple) {
-        if(!put8(as,sec,0x0cU) ||
-           !uleb(as,sec,abi.stack_reg) ||
-           !uleb(as,sec,abi.initial_cfa_offset))return false;
+        if(as->target->cfi_initial_cfa_register_only &&
+           abi.initial_cfa_offset==0U) {
+            if(!put8(as,sec,0x0dU) ||
+               !uleb(as,sec,abi.stack_reg))return false;
+        } else if(!put8(as,sec,0x0cU) ||
+                  !uleb(as,sec,abi.stack_reg) ||
+                  !uleb(as,sec,abi.initial_cfa_offset))return false;
         if(abi.initial_ra_saved) {
             uint64_t magnitude=(uint64_t)(-(int64_t)abi.data_align);
             if(abi.return_reg>=64U || magnitude==0U ||
@@ -315,7 +365,6 @@ static bool cfi_emit_section_core(MiniAs *as,bool eh,
         const MiniAsSymbol *begin,*end;
         size_t j,base,ptr,initial_count=0U,variant_index,slot;
         uint64_t signature;
-        uint64_t loc;
         if(proc->begin_symbol>=as->symbol_count ||
            proc->end_symbol>=as->symbol_count)return false;
         begin=&as->symbols[proc->begin_symbol];
@@ -365,6 +414,12 @@ static bool cfi_emit_section_core(MiniAs *as,bool eh,
         }
         data=&as->sections[(size_t)section];
         base=data->size;
+        if(eh && i==0U && as->target->record_cfi_data_mapping!=NULL &&
+           !as->target->record_cfi_data_mapping(as,section,(uint64_t)base))
+            return false;
+        /* Target mapping-symbol creation can reallocate the Symbol table. */
+        begin=&as->symbols[proc->begin_symbol];
+        end=&as->symbols[proc->end_symbol];
         if(eh) {
             size_t cie=variants[variant_index].offset;
             if(base+4U<cie || base+4U-cie>UINT32_MAX)return false;
@@ -372,11 +427,19 @@ static bool cfi_emit_section_core(MiniAs *as,bool eh,
                !put32(as,section,(uint32_t)(base+4U-cie)))return false;
             ptr=as->sections[(size_t)section].size;
             if(!put32(as,section,0U) ||
-               !put32(as,section,(uint32_t)(end->value-begin->value)) ||
+               !put32(as,section,as->target->cfi_eh_range_relocations ?
+                     0U : (uint32_t)(end->value-begin->value)) ||
                !uleb(as,section,0U) ||
                !minias_add_section_fixup(as,
                MINIAS_FIXUP_ORIGIN_SYNTHETIC_SECTION,section,ptr,MINIAS_FIXUP_PREL32,4U,
                                  begin->name,0))return false;
+            if(as->target->cfi_eh_range_relocations &&
+               (!minias_add_section_fixup(as,
+                 MINIAS_FIXUP_ORIGIN_SYNTHETIC_SECTION,section,ptr+4U,
+                 MINIAS_FIXUP_ADD,4U,end->name,0) ||
+                !minias_add_section_fixup(as,
+                 MINIAS_FIXUP_ORIGIN_SYNTHETIC_SECTION,section,ptr+4U,
+                 MINIAS_FIXUP_SUB,4U,begin->name,0)))return false;
         } else {
             size_t cie=variants[variant_index].offset;
             if(cie>UINT32_MAX)return false;
@@ -390,7 +453,7 @@ static bool cfi_emit_section_core(MiniAs *as,bool eh,
                                  minias_cfi_abi(as).address_size,
                                  begin->name,0))return false;
         }
-        loc=begin->value;
+        size_t loc_symbol=proc->begin_symbol;
         for(j=initial_count;j<proc->op_count;++j) {
             const MiniAsCfiOp *op=&as->cfi_ops[proc->first_op+j];
             const MiniAsSymbol *symbol;
@@ -398,19 +461,21 @@ static bool cfi_emit_section_core(MiniAs *as,bool eh,
             symbol=&as->symbols[op->symbol_index];
             if(!symbol->defined || symbol->section!=begin->section ||
                symbol->value>end->value ||
-               !advance_cfi(as,section,loc,symbol->value) ||
+               !advance_cfi(as,section,loc_symbol,op->symbol_index,eh) ||
                !encode_cfi(as,section,op)) {
                 minias_set_error(as,"invalid-cfi-event-layout");
                 return false;
             }
-            loc=symbol->value;
+            loc_symbol=op->symbol_index;
         }
         /* GNU x86_64 .eh_frame FDEs end on an absolute 8-byte
          * section boundary. CIEs still use DWARF32 4-byte padding;
          * relative-to-FDE padding is insufficient when a simple CIE
          * occupies 20 bytes, leaving the next FDE at offset 0x14. */
         if(eh) {
-            unsigned align=minias_cfi_abi(as).address_size;
+            unsigned align=as->target->cfi_eh_fde_alignment!=0U ?
+                as->target->cfi_eh_fde_alignment :
+                minias_cfi_abi(as).address_size;
             if(align==0U || (align&(align-1U))!=0U)return false;
             while((as->sections[(size_t)section].size&
                    (size_t)(align-1U))!=0U)

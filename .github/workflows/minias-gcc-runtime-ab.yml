@@ -53,6 +53,11 @@ jobs:
           MINIAS: ${{ github.workspace }}/build/release/bin/minic-as
           WORK_DIR: ${{ github.workspace }}/build/minias-gcc-runtime-ab/${{ matrix.arch }}
         run: bash tests/assembler/probe-minias-gcc-runtime-ab.sh '${{ matrix.arch }}'
+      - name: AArch64 .inst mapping GNU strict oracle
+        if: matrix.arch == 'aarch64'
+        env:
+          MINIAS: ${{ github.workspace }}/build/release/bin/minic-as
+        run: bash tests/assembler/probe-aarch64-inst-mapping-gnu.sh
       - name: Preserve both sides and exact failure evidence
         if: always()
         uses: actions/upload-artifact@v4

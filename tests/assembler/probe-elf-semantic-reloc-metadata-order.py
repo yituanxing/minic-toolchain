@@ -238,6 +238,24 @@ def main():
             failed="known_relocation_widths")
     print("MINIAS_ORACLE_MUTATION=PASS case=overlapping-additive verdict=inconclusive")
 
+    # GNU RISC-V .eh_frame encodes a CFI location delta as SET8 followed by
+    # SUB8 on one byte. The SET overwrites V, making this precise ordered pair
+    # safely comparable even though a general SET + arithmetic overlap is not.
+    for width, set_type, sub_type in ((1, 54, 37), (2, 55, 38), (4, 56, 39)):
+        pair, loc = make_elf(243, relocations=((0, set_type, 0),
+                                               (0, sub_type, 0)))
+        result = compare(pair, pair, equal=True)
+        assert result["strict_equal"] and not result["inconclusive"], result
+        compare(pair, mutate(pair, loc["data:.text"], bytes([0xff]) * width),
+                equal=True)
+        reversed_pair, _ = make_elf(243, relocations=((0, sub_type, 0),
+                                                      (0, set_type, 0)))
+        compare(reversed_pair, reversed_pair, equal=False, inconclusive=True,
+                failed="known_relocation_widths")
+        compare(pair, reversed_pair, equal=False, inconclusive=True,
+                failed="relocation_order")
+        print(f"MINIAS_ORACLE_MUTATION=PASS case=riscv-set{width*8}-sub{width*8}-masked")
+
     # ELF identity fields are ABI contracts, not incidental object layout.
     case("elf-osabi", x86, mutate(x86, 7, b"\x03"), "header")
     case("elf-abi-version", x86, mutate(x86, 8, b"\x01"), "header")

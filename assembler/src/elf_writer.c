@@ -12,6 +12,9 @@
 static bool section_symbol_fixup(const MiniAs *as,const MiniAsFixup *fixup) {
     const MiniAsSymbol *sym;
     bool requested=fixup->prefer_section_symbol ||
+        as->target->fold_defined_local_relocation_to_section ||
+        (as->target->fold_synthetic_local_relocation_to_section &&
+         fixup->origin==MINIAS_FIXUP_ORIGIN_SYNTHETIC_SECTION) ||
         (as->target->fold_local_abs_relocation_to_section &&
          fixup->kind==MINIAS_FIXUP_ABS);
     if(!requested || fixup->symbol_index>=as->symbol_count)
@@ -433,8 +436,9 @@ static bool minias_write_elf(MiniAs *as,
         }
         if (input->section < 0 ||
             (size_t)input->section >= as->section_count ||
-            input->symbol_index >= as->symbol_count ||
-            (!section_reloc && symbol_map[input->symbol_index] == SIZE_MAX)) {
+            (input->symbol_index != SIZE_MAX &&
+             (input->symbol_index >= as->symbol_count ||
+              (!section_reloc && symbol_map[input->symbol_index] == SIZE_MAX)))) {
             minias_set_error(as, "internal:bad-relocation-symbol");
             goto done;
         }
@@ -462,7 +466,8 @@ static bool minias_write_elf(MiniAs *as,
         }
         output->target_section = (size_t)input->section;
         output->offset = final_offset;
-        output->symbol_index = symbol_map[input->symbol_index];
+        output->symbol_index = input->symbol_index == SIZE_MAX ? SIZE_MAX :
+                               symbol_map[input->symbol_index];
         output->type =
             as->target->fixup_relocation_type(input->kind, input->width);
         output->addend = input->addend;
@@ -505,6 +510,7 @@ static bool minias_write_elf(MiniAs *as,
     spec.relocations = relocations;
     spec.relocation_count = as->fixup_count;
     spec.emit_section_symbols = true;
+    spec.emit_all_section_symbols = as->target->emit_all_section_symbols;
 
     if (!minielf_build_relocatable(&spec,
                                    &image,

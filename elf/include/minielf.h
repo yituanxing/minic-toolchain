@@ -170,6 +170,7 @@ typedef struct MiniElfRelocatableSpec {
      * emits only sections actually referenced by use_section_symbol fixups,
      * not an artificial symbol for every input section. */
     bool emit_section_symbols;
+    bool emit_all_section_symbols; /* opt-in GNU AArch64 STT_SECTION policy */
 } MiniElfRelocatableSpec;
 
 bool minielf_build_relocatable(const MiniElfRelocatableSpec *spec,

@@ -57,5 +57,12 @@ if m['cie']<2 or m['fde']!=3 or m!=g:
 mr,gr=open(c).read(),open(d).read()
 if mr.count(kind)<3 or gr.count(kind)<3:
     raise SystemExit(f'{arch}: missing {kind} genuine FDE relocations\nMini:\n{mr}\nGNU:\n{gr}')
+if arch in ('riscv','riscv32','loongarch64'):
+    prefix='R_LARCH_' if arch=='loongarch64' else 'R_RISCV_'
+    for suffix in ('ADD32','SUB32'):
+        name=prefix+suffix
+        if gr.count(name)!=3 or mr.count(name)!=gr.count(name):
+            raise SystemExit(f'{arch}: {name} FDE range relocation mismatch '
+                             f'Mini={mr.count(name)} GNU={gr.count(name)}')
 print(f'MINIAS_CFI_EH_FRAME=PASS arch={arch} FDE=3 relocation={kind}')
 PY

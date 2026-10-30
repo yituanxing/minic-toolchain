@@ -155,7 +155,8 @@ enum {
     MINIAS_FIXUP_PREL32,
     MINIAS_FIXUP_PREL64,
     MINIAS_FIXUP_ADD,
-    MINIAS_FIXUP_SUB
+    MINIAS_FIXUP_SUB,
+    MINIAS_FIXUP_SET
 };
 
 /* A symbolic machine field adjustment, still independent of ELF's numeric
@@ -409,6 +410,7 @@ typedef struct MiniAsEncodeFixupRequest {
      * recreating its textual symbol name. Targets continue using NameIds. */
     bool has_symbol_index;
     size_t symbol_index;
+    bool absolute_zero_symbol; /* ELF STN_UNDEF=0 linker marker */
     bool prefer_section_symbol;
 } MiniAsEncodeFixupRequest;
 
@@ -708,6 +710,8 @@ bool minias_encode_add_fixup_ref(MiniAs *as, int section, uint64_t offset,
                                  MiniAsFixupKind kind, unsigned width,
                                  MiniAsSymbolRef ref,
                                  bool prefer_section_symbol);
+bool minias_encode_add_fixup_abs0(MiniAs *as, int section, uint64_t offset,
+                                  MiniAsFixupKind kind, unsigned width);
 bool minias_encode_request_anchor_ref(MiniAs *as, const MiniAsStmt *stmt,
                                       const char *prefix,
                                       MiniAsSymbolRef *ref);
@@ -863,18 +867,38 @@ typedef struct MiniAsTargetOps {
      * same-section references, to STT_SECTION + addend. Target policy,
      * Common ELF ownership. */
     bool fold_local_abs_relocation_to_section;
+    /* Some ABIs (AArch64 GAS) canonicalize every relocation to a defined
+     * local label as STT_SECTION + offset, including PC-relative fixups. */
+    bool fold_defined_local_relocation_to_section;
+    bool fold_synthetic_local_relocation_to_section;
+    /* Section-symbol density is ABI/assembler policy, not an ELF constant. */
+    bool emit_all_section_symbols;
+    /* Target mapping symbols for data synthesized by the Common CFI writer.
+     * Called once at the first FDE, after the CIE has been serialized. */
+    bool (*record_cfi_data_mapping)(MiniAs *, int, uint64_t);
     /* Target-owned DWARF CFI ABI (zero => not yet available). */
     unsigned cfi_code_align;
     int cfi_data_align;
     unsigned cfi_return_reg;
     unsigned cfi_stack_reg;
     unsigned cfi_address_size;
+    unsigned cfi_eh_fde_alignment; /* zero: use address size */
+    /* GNU target CIE encoding and linker-resolved function extent policy.
+     * Kept in TargetInfo: Common emits one canonical CFI event stream. */
+    unsigned cfi_eh_cie_version; /* zero: DWARF1 CIE version */
+    bool cfi_initial_cfa_register_only; /* GNU initial CFA register opcode */
+    bool cfi_eh_range_relocations; /* paired ADD32/SUB32 on FDE range */
+    unsigned cfi_advance_reloc_mode; /* 0 none, 1 ADD/SUB, 2 SET/SUB */
+    bool cfi_anchors_hidden; /* target marks private CFI anchors STV_HIDDEN */
     unsigned cfi_negate_ra_opcode;
     unsigned cfi_initial_cfa_offset;
     bool cfi_initial_ra_saved;
     void (*resolve_cfi_abi)(const MiniAs *, MiniAsCfiABI *);
     /* GNU assembler directive dialect belongs to TargetInfo, not Common. */
     unsigned default_exec_alignment; /* zero: 4; x86 GNU .text has alignment 1 */
+    /* Optional live ISA-state default (e.g. RVC sections align to 2,
+     * strict RV32I sections to 4). Evaluated after Target state init. */
+    unsigned (*default_exec_alignment_for_site)(const MiniAs *);
     unsigned word_directive_width; /* zero: 4, x86 GNU .word: 2 */
     unsigned inst_directive_width; /* optional raw target ISA .inst datum */
     bool align_directive_bytes;   /* x86 GNU .align: bytes, RISC-V/A64: power 2 */

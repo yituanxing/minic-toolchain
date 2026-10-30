@@ -70,6 +70,47 @@ bool minias_encode_add_fixup_ref(MiniAs *as,int section,uint64_t offset,
     return true;
 }
 
+/* ELF STN_UNDEF=0 relaxation markers have no SymbolRef, but retain the same
+ * fragment-owned atomic commit and byte bounds as normal target fixups. */
+bool minias_encode_add_fixup_abs0(MiniAs *as,int section,uint64_t offset,
+                                  MiniAsFixupKind kind,unsigned width) {
+    MiniAsEncodeResult *result=active_result(as,"fixup-abs0");
+    MiniAsEncodeFixupRequest *request;
+    const MiniAsStmt *owner;
+    uint64_t relative;
+    if(result==NULL)return false;
+    owner=&as->stmts[as->emitting_fragment_id];
+    if(owner->fragment_kind!=MINIAS_FRAGMENT_INSTRUCTION ||
+       section!=owner->section || section<0 ||
+       (size_t)section>=as->section_count ||
+       as->sections[(size_t)section].type==MINIAS_SHT_NOBITS ||
+       offset<owner->offset || width!=4U) {
+        minias_set_error(as,"invalid-encoded-abs0-fixup:line=%zu",owner->line);
+        return false;
+    }
+    relative=offset-owner->offset;
+    if(relative>UINT32_MAX || relative>owner->size ||
+       width>owner->size-relative) {
+        minias_set_error(as,"encoded-abs0-outside-fragment:line=%zu",owner->line);
+        return false;
+    }
+    if(result->fixup_count==SIZE_MAX ||
+       !minias_grow_array((void **)&result->fixups,
+                          &result->fixup_capacity,
+                          sizeof(*result->fixups),result->fixup_count+1U)) {
+        minias_set_error(as,"out-of-memory:abs0-fixup");
+        return false;
+    }
+    request=&result->fixups[result->fixup_count++];
+    memset(request,0,sizeof(*request));
+    request->section=section;
+    request->fragment_offset=(uint32_t)relative;
+    request->kind=kind;
+    request->width=width;
+    request->absolute_zero_symbol=true;
+    return true;
+}
+
 /* A pending anchor exists only as a pure NameId and an EncodeResult-local
  * definition request.  Common creates its Object Symbol only at commit,
  * before any associated fixup is recorded.  This preserves old GNU/ELF

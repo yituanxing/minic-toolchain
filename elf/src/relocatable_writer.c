@@ -452,10 +452,11 @@ bool minielf_build_relocatable(const MiniElfRelocatableSpec *spec,
         if (relocation_counts[i] != 0U) {
             ++relocation_section_count;
         }
-        /* A section symbol is needed only when an emitted relocation
-         * references that section; unused sections have no such symbols in
-         * GNU as. Assign a dense ordinal in canonical input-section order. */
-        if (section_symbol_output_indices[i] == 0U) {
+        /* GNU targets differ: x86 uses relocation-demanded section symbols,
+         * while AArch64 GAS creates one for every input section (including
+         * otherwise unreferenced .comment/.bss/.note.GNU-stack). */
+        if (section_symbol_output_indices[i] == 0U ||
+            (spec->emit_section_symbols && spec->emit_all_section_symbols)) {
             section_symbol_output_indices[i] = 1U + section_symbol_count++;
         }
     }

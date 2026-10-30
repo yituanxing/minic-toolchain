@@ -672,8 +672,8 @@ static bool minias_record_fixup(MiniAs *as,
                       const char *symbol_name,
                       size_t existing_symbol_index,
                       int64_t addend,
-                      MiniAsFixupOrigin origin) {
-    MiniAsSymbol *symbol;
+                      MiniAsFixupOrigin origin,bool absolute_zero_symbol) {
+    MiniAsSymbol *symbol=NULL;
     MiniAsFixup *fixup;
     size_t symbol_index;
     uint32_t relative_offset = 0U;
@@ -711,13 +711,21 @@ static bool minias_record_fixup(MiniAs *as,
      * must decide whether this field needs an ELF relocation at all. */
     if (section < 0 || (size_t)section >= as->section_count ||
         as->sections[(size_t)section].type==MINIAS_SHT_NOBITS ||
-        (width != 2U && width != 4U && width != 8U) ||
+        (width != 1U && width != 2U && width != 3U &&
+         width != 4U && width != 8U) ||
         offset > UINT64_MAX - width) {
         minias_set_error(as, "invalid-fixup-range:%s",
                          symbol_name != NULL ? symbol_name : "<symbol-id>");
         return false;
     }
-    if (existing_symbol_index != SIZE_MAX) {
+    if(absolute_zero_symbol) {
+        if(origin!=MINIAS_FIXUP_ORIGIN_FRAGMENT || symbol_name!=NULL ||
+           existing_symbol_index!=SIZE_MAX || addend!=0) {
+            minias_set_error(as,"invalid-abs0-fixup-owner");
+            return false;
+        }
+        symbol_index=SIZE_MAX;
+    } else if (existing_symbol_index != SIZE_MAX) {
         if (existing_symbol_index >= as->symbol_count) {
             minias_set_error(as, "invalid-fixup-symbol-id:%zu",
                              existing_symbol_index);
@@ -731,9 +739,9 @@ static bool minias_record_fixup(MiniAs *as,
         }
         symbol = minias_get_symbol(as, symbol_name, true);
     }
-    if (symbol == NULL) return false;
-    symbol_index = (size_t)(symbol - as->symbols);
-    if (!symbol->defined && symbol->bind == MINIAS_STB_LOCAL &&
+    if (!absolute_zero_symbol && symbol == NULL) return false;
+    if (!absolute_zero_symbol)symbol_index = (size_t)(symbol - as->symbols);
+    if (!absolute_zero_symbol && !symbol->defined && symbol->bind == MINIAS_STB_LOCAL &&
         !symbol->explicit_local_binding &&
         strncmp(symbol->name, ".L", 2U) != 0)
         symbol->bind = MINIAS_STB_GLOBAL;
@@ -822,7 +830,7 @@ bool minias_add_fixup(MiniAs *as, int section, uint64_t offset,
                                           symbol_name,SIZE_MAX,addend);
     return minias_record_fixup(as, section, offset, kind, width,
                                symbol_name, SIZE_MAX, addend,
-                               MINIAS_FIXUP_ORIGIN_FRAGMENT);
+                               MINIAS_FIXUP_ORIGIN_FRAGMENT,false);
 }
 
 /* Fixed-width MCData already retains an actual SymbolID from its lexical
@@ -836,7 +844,7 @@ bool minias_add_fixup_symbol_id(MiniAs *as, int section, uint64_t offset,
                                           NULL,symbol_index,addend);
     return minias_record_fixup(as, section, offset, kind, width,
                                NULL, symbol_index, addend,
-                               MINIAS_FIXUP_ORIGIN_FRAGMENT);
+                               MINIAS_FIXUP_ORIGIN_FRAGMENT,false);
 }
 
 bool minias_add_section_fixup(MiniAs *as, MiniAsFixupOrigin origin,
@@ -844,7 +852,7 @@ bool minias_add_section_fixup(MiniAs *as, MiniAsFixupOrigin origin,
                              MiniAsFixupKind kind, unsigned width,
                              const char *symbol_name, int64_t addend) {
     return minias_record_fixup(as, section, offset, kind, width,
-                               symbol_name, SIZE_MAX, addend, origin);
+                               symbol_name, SIZE_MAX, addend, origin,false);
 }
 
 static bool minias_section_append_fill(MiniAs *,int,size_t,uint8_t,bool);
@@ -923,10 +931,10 @@ static bool minias_commit_encode_result(MiniAs *as, const MiniAsStmt *owner) {
         if (request->section != owner->section ||
             request->fragment_offset > owner->size ||
             request->width > owner->size - request->fragment_offset ||
-            (request->has_symbol_index ?
+            (!request->absolute_zero_symbol && (request->has_symbol_index ?
              request->symbol_index>=as->symbol_count :
              request->symbol_ref.name_id>=as->symbol_name_count ||
-             as->symbol_names[request->symbol_ref.name_id].name==NULL)) {
+             as->symbol_names[request->symbol_ref.name_id].name==NULL))) {
             minias_set_error(as, "invalid-encoded-fixup-commit:line=%zu",
                              owner->line);
             return false;
@@ -953,7 +961,7 @@ static bool minias_commit_encode_result(MiniAs *as, const MiniAsStmt *owner) {
     }
     for (i = 0U; i < result->fixup_count; ++i) {
         const MiniAsEncodeFixupRequest *request = &result->fixups[i];
-        const char *name=request->has_symbol_index ? NULL :
+        const char *name=request->absolute_zero_symbol || request->has_symbol_index ? NULL :
             as->symbol_names[request->symbol_ref.name_id].name;
         if (!minias_record_fixup(as, request->section,
                                  owner->offset + request->fragment_offset,
@@ -961,8 +969,9 @@ static bool minias_commit_encode_result(MiniAs *as, const MiniAsStmt *owner) {
                                  name,
                                  request->has_symbol_index ?
                                      request->symbol_index : SIZE_MAX,
-                                 request->symbol_ref.addend,
-                                 MINIAS_FIXUP_ORIGIN_FRAGMENT))
+                                 request->absolute_zero_symbol ? 0 : request->symbol_ref.addend,
+                                 MINIAS_FIXUP_ORIGIN_FRAGMENT,
+                                 request->absolute_zero_symbol))
             return false;
         as->fixups[as->fixup_count - 1U].prefer_section_symbol =
             request->prefer_section_symbol;
@@ -1326,6 +1335,13 @@ static bool minias_init_for_target(MiniAs *as,
     as->conditional_active=true;
     as->debug_is_stmt=true;
     return minias_ensure_subsection(as,text,0U)!=NULL;
+}
+
+static uint64_t minias_target_exec_alignment(const MiniAs *as) {
+    unsigned align=as->target->default_exec_alignment_for_site!=NULL ?
+        as->target->default_exec_alignment_for_site(as) : 0U;
+    if(align==0U)align=as->target->default_exec_alignment;
+    return align!=0U ? align : 4U;
 }
 
 /* A purged GNU macro owns exactly the resources freed by assembler exit.
@@ -1808,8 +1824,7 @@ static bool parse_section_directive(MiniAs *as, char *args, size_t line) {
                                           link_order_reference);
         bool ok=switch_section(as,name,group_signature,link_order_reference,type,flags,
                 (flags & MINIAS_SHF_EXECINSTR)!=0U ?
-                   (as->target->default_exec_alignment!=0U ?
-                        as->target->default_exec_alignment:4U):1U);
+                   minias_target_exec_alignment(as):1U);
         /* sh_entsize is a property of the *first* ELF section creation.
          * Later incompatible .section definitions are ignored by GAS. */
         if(ok && prior<0 && entry_size!=0U)
@@ -4416,8 +4431,7 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
                                   NULL,
                                   MINIAS_SHT_PROGBITS,
                                   MINIAS_SHF_ALLOC | MINIAS_SHF_EXECINSTR,
-                                  as->target->default_exec_alignment != 0U ?
-                                      as->target->default_exec_alignment : 4U);
+                                  minias_target_exec_alignment(as));
         }
         if (strcmp(op, ".data") == 0) {
             return switch_section(as,
@@ -6876,6 +6890,19 @@ int minias_assemble_config(const char *input_path,
             minias_set_error(&as, "target-initialization-failed");
         }
         parsed=initialized && as.error[0]=='\0';
+        if(parsed && as.target->default_exec_alignment_for_site!=NULL) {
+            /* Initial .text is created before target ISA state exists.
+             * Reconcile its default after profile initialization, before
+             * any source fragment can rely on the Section alignment. */
+            int text_section=minias_find_section(&as,".text");
+            uint64_t align=minias_target_exec_alignment(&as);
+            if(text_section<0 || align==0U || (align&(align-1U))!=0U) {
+                minias_set_error(&as,"invalid-target-exec-alignment");
+                parsed=false;
+            } else {
+                as.sections[(size_t)text_section].align=align;
+            }
+        }
         if(parsed && !source_loaded) {
             parsed=collect_file_source_frame(&as,input_path,&graph.physical);
             if(parsed) {

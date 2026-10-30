@@ -154,6 +154,8 @@ LOONGARCH_RELOC_FIELDS = {
     46: data_field(4),
     **{t: () for t in range(47, 57)},  # R_LARCH_ADD/SUB use V as input.
     57: (), 58: (),
+    99: data_field(4),  # R_LARCH_32_PCREL writes a four-byte datum.
+    100: (),  # R_LARCH_RELAX has no patched field; linker optimization marker.
     64: instruction_field(0x03fffc00),
     65: instruction_field(0x03fffc1f),
     66: instruction_field(0x03ffffff),
@@ -181,6 +183,12 @@ ADDITIVE_RELOC_WIDTHS = {
                              52: 1, 53: 2, 54: 3, 55: 4, 56: 8}.items()},
     },
 }
+
+# RISC-V psABI CFI code-distance expressions use SETn, SUBn in this exact
+# order at one offset. SETn overwrites the original V before SUBn updates it,
+# so the original target bytes cannot influence the final linked result.
+# Other replacement/arithmetic overlaps remain inconclusive by design.
+RISCV_SET_SUB_WIDTHS = {(54, 37): 1, (55, 38): 2, (56, 39): 4}
 
 
 def section_name_for_index(elf, idx, section_keys):
@@ -333,6 +341,7 @@ def relocation_counter(elf, section_keys):
     unknown_width = collections.defaultdict(list)
     ordered = {}
     additive_ranges = collections.defaultdict(list)
+    safe_set_sub_ranges = collections.defaultdict(set)
 
     machine = str(elf.header["e_machine"])
     fields = RELOC_FIELDS_BY_MACHINE.get(machine, {})
@@ -420,6 +429,13 @@ def relocation_counter(elf, section_keys):
         by_offset = collections.defaultdict(list)
         for entry in entries:
             by_offset[entry[1]].append(entry)
+        if machine == "EM_RISCV":
+            for offset, rows in by_offset.items():
+                if len(rows) != 2:
+                    continue
+                width = RISCV_SET_SUB_WIDTHS.get((rows[0][2], rows[1][2]))
+                if width is not None:
+                    safe_set_sub_ranges[target_name].add((offset, offset + width))
         if machine == "EM_LOONGARCH" and any(
                 20 <= entry[2] <= 46 for entry in entries):
             ordered[section_keys[index]] = entries
@@ -433,7 +449,8 @@ def relocation_counter(elf, section_keys):
         for start, width, bitmask in masks.get(target_name, []):
             # Disjoint bit ranges in a word are safe, but conservatively
             # decline overlapping additive/replacement operations.
-            if any(start < end and start + width > begin
+            if any((begin, end) not in safe_set_sub_ranges[target_name] and
+                   start < end and start + width > begin
                    for begin, end in ranges):
                 unknown_width[target_name].append(
                     (start, width, "overlapping-additive-and-replacement-relocations"))

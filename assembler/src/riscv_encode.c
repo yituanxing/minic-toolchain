@@ -619,6 +619,54 @@ static bool parse_mem(const char *text, int64_t *offset, char base[128]) {
     return parse_i64(offbuf, offset);
 }
 
+/* GCC's non-PIC absolute-address sequence is two independently relocated
+ * instructions (LUI %hi and an I/S-form %lo), not a PC-relative LA pseudo.
+ * Preserve its symbol/addend in an owned MC operand until final emission. */
+static bool parse_absolute_modifier(const char *text, const char *modifier,
+                                    MiniAsSymbolExpr *expr) {
+    size_t prefix, length;
+    char inner[128];
+    if (text == NULL || modifier == NULL || expr == NULL) return false;
+    prefix = strlen(modifier);
+    length = strlen(text);
+    if (length <= prefix + 1U ||
+        strncmp(text, modifier, prefix) != 0 ||
+        text[length - 1U] != ')' ||
+        length - prefix - 1U >= sizeof(inner)) return false;
+    memcpy(inner, text + prefix, length - prefix - 1U);
+    inner[length - prefix - 1U] = '\0';
+    return minias_parse_symbol_addend(inner, expr);
+}
+
+static bool parse_absolute_lo_memory(const char *text,
+                                     MiniAsSymbolExpr *expr,
+                                     char base[128]) {
+    const char *after_expr, *end;
+    size_t prefix_length, register_length;
+    char modifier[128];
+    if (text == NULL || strncmp(text, "%lo(", 4U) != 0) return false;
+    after_expr = strchr(text + 4U, ')');
+    if (after_expr == NULL || after_expr[1] != '(') return false;
+    end = strchr(after_expr + 2U, ')');
+    if (end == NULL || end[1] != '\0') return false;
+    prefix_length = (size_t)(after_expr - text + 1);
+    register_length = (size_t)(end - (after_expr + 2U));
+    if (prefix_length >= sizeof(modifier) ||
+        register_length == 0U || register_length >= 128U) return false;
+    memcpy(modifier, text, prefix_length);
+    modifier[prefix_length] = '\0';
+    memcpy(base, after_expr + 2U, register_length);
+    base[register_length] = '\0';
+    return parse_absolute_modifier(modifier, "%lo(", expr);
+}
+
+enum {
+    RV_ABS_RELOC_NONE = 0U,
+    RV_ABS_RELOC_HI20,
+    RV_ABS_RELOC_LO12_I,
+    RV_ABS_RELOC_LO12_S
+};
+
 static bool parse_raw_insn_directive(const char *args, uint32_t *word) {
     const char *p = args;
     char format;
@@ -743,16 +791,207 @@ static bool rv_bind_symbol_operand(MiniAs *as, MiniAsMCInst *m,
     return true;
 }
 
+/* Construct a canonical 32-bit machine word from the retained instruction.
+ * RVC selection below uses this same word rather than reparsing source text.
+ * Symbolic immediates never compress: their I/U relocation field has a
+ * different psABI contract from the corresponding 16-bit instruction. */
+static bool rv_plain_machine_word(const MiniAsMCInst *m, uint32_t *word) {
+    uint32_t base=m->encoding;
+    int rd,rs1=0,rs2=0;
+    int64_t imm=0;
+    if (m->opcode == RV_MC_LI) {
+        const MiniAsRiscvLiPlan *plan=m->target_payload;
+        if (plan==NULL || plan->count!=1U) return false;
+        *word=plan->words[0];
+        return true;
+    }
+    if (m->target_form!=RV_ABS_RELOC_NONE || m->count==0U) return false;
+    rd=(int)m->operands[0].reg;
+    if(m->count>1U && m->operands[1].kind==MINIAS_MC_REGISTER)
+        rs1=(int)m->operands[1].reg;
+    else if(m->opcode==RV_MC_WORD && m->count>1U &&
+            m->operands[1].kind==MINIAS_MC_IMMEDIATE)
+        rs1=(int)m->operands[1].immediate;
+    if(m->count>2U && m->operands[2].kind==MINIAS_MC_REGISTER)
+        rs2=(int)m->operands[2].reg;
+    if(m->count>2U && m->operands[2].kind==MINIAS_MC_IMMEDIATE)
+        imm=(int64_t)m->operands[2].immediate;
+    switch(m->opcode) {
+    case RV_MC_WORD:
+        *word=base|((uint32_t)rd<<7U)|((uint32_t)rs1<<15U)|
+              ((uint32_t)rs2<<20U);
+        return true;
+    case RV_MC_R:
+        *word=enc_r(base&0x7fU,rd,(base>>12U)&7U,rs1,rs2,base>>25U);
+        return true;
+    case RV_MC_I:
+    case RV_MC_LOAD:
+        if(m->opcode==RV_MC_I && m->count==2U)
+            imm=(int64_t)m->operands[1].immediate;
+        *word=base|((uint32_t)rd<<7U)|((uint32_t)rs1<<15U)|
+              (((uint32_t)imm&0xfffU)<<20U);
+        return true;
+    case RV_MC_STORE: {
+        uint32_t bits=(uint32_t)imm&0xfffU;
+        *word=base|((uint32_t)rd<<20U)|((uint32_t)rs1<<15U)|
+              ((bits&31U)<<7U)|(((bits>>5U)&127U)<<25U);
+        return true;
+    }
+    default:
+        return false;
+    }
+}
+
+static bool rv_rvc_encode_plain(const MiniAs *as, const MiniAsStmt *stmt,
+                                 uint16_t *compressed) {
+    const MiniAsRiscvState *state=MINIAS_RV_STATE(as);
+    const MiniAsMCInst *m=stmt->mcinst;
+    uint32_t w,op,rd,rs1,rs2,f3,imm12;
+    int32_t imm;
+    uint16_t out;
+    if(state==NULL || !state->isa_explicit ||
+       (state->isa_features&RISCV_ISA_C)==0U ||
+       (stmt->site.mode_bits&MINIAS_RISCV_OPTION_NO_RVC)!=0U ||
+       m==NULL || !rv_plain_machine_word(m,&w))return false;
+    op=w&127U;
+    rd=(w>>7U)&31U;
+    f3=(w>>12U)&7U;
+    rs1=(w>>15U)&31U;
+    rs2=(w>>20U)&31U;
+    imm12=(w>>20U)&4095U;
+    imm=(int32_t)((imm12^2048U)-2048U);
+    out=0U;
+    if(op==0x13U && f3==0U) { /* ADDI, LI, MV and ADDI16SP */
+        if(rd==0U && rs1==0U && imm==0)out=0x0001U;
+        else if(rd!=0U && rs1==0U && imm>=-32 && imm<=31)
+            out=(uint16_t)(0x4001U|(rd<<7U)|
+                  (((uint32_t)imm&32U)<<7U)|(((uint32_t)imm&31U)<<2U));
+        else if(rd!=0U && rs1==rd && imm!=0 && imm>=-32 && imm<=31)
+            out=(uint16_t)(0x0001U|(rd<<7U)|
+                  (((uint32_t)imm&32U)<<7U)|(((uint32_t)imm&31U)<<2U));
+        else if(rd==2U && rs1==2U && imm!=0 && imm>=-512 &&
+                imm<=496 && (imm&15)==0)
+            out=(uint16_t)(0x6101U|
+                  (((uint32_t)imm>>9U&1U)<<12U)|
+                  (((uint32_t)imm>>4U&1U)<<6U)|
+                  (((uint32_t)imm>>6U&1U)<<5U)|
+                  (((uint32_t)imm>>7U&3U)<<3U)|
+                  (((uint32_t)imm>>5U&1U)<<2U));
+        else if(rd!=0U && rs1!=0U && rd!=rs1 && imm==0)
+            out=(uint16_t)(0x8002U|(rd<<7U)|(rs1<<2U));
+    } else if(op==0x1bU && f3==0U && rd==rs1 && rd!=0U &&
+              imm>=-32 && imm<=31)
+        out=(uint16_t)(0x2001U|(rd<<7U)|
+              (((uint32_t)imm&32U)<<7U)|(((uint32_t)imm&31U)<<2U));
+    else if(op==0x67U && f3==0U && imm==0 && rs1!=0U &&
+            (rd==0U || rd==1U))
+        out=(uint16_t)((rd==0U?0x8002U:0x9002U)|(rs1<<7U));
+    else if(op==0x3bU && (f3==0U) && rd>=8U && rd<=15U &&
+            rd==rs1 && rs2>=8U && rs2<=15U &&
+            ((w>>25U)==0U || (w>>25U)==32U))
+        out=(uint16_t)(((w>>25U)==0U?0x9c21U:0x9c01U)|
+                       ((rd-8U)<<7U)|((rs2-8U)<<2U));
+    else if((op==0x03U && (f3==2U || f3==3U)) ||
+            (op==0x23U && (f3==2U || f3==3U))) {
+        bool load=op==0x03U;
+        bool word=f3==2U;
+        uint32_t reg=load?rd:rs2;
+        uint32_t uimm=load?imm12:
+            (((w>>25U)&127U)<<5U)|((w>>7U)&31U);
+        if(uimm>2047U || (uimm&(word?3U:7U))!=0U) return false;
+        if(rs1==2U && (!load || reg!=0U)) {
+            if(word && uimm<=252U) {
+                if(load)out=(uint16_t)(0x4002U|(reg<<7U)|
+                    (((uimm>>5U)&1U)<<12U)|(((uimm>>2U)&7U)<<4U)|
+                    (((uimm>>6U)&3U)<<2U));
+                else out=(uint16_t)(0xc002U|(reg<<2U)|
+                    (((uimm>>2U)&15U)<<9U)|(((uimm>>6U)&3U)<<7U));
+            } else if(!word && uimm<=504U) {
+                if(load)out=(uint16_t)(0x6002U|(reg<<7U)|
+                    (((uimm>>5U)&1U)<<12U)|(((uimm>>3U)&3U)<<5U)|
+                    (((uimm>>6U)&7U)<<2U));
+                else out=(uint16_t)(0xe002U|(reg<<2U)|
+                    (((uimm>>3U)&7U)<<10U)|(((uimm>>6U)&7U)<<7U));
+            }
+        } else if(rs1>=8U && rs1<=15U && reg>=8U && reg<=15U) {
+            uint16_t prefix=(uint16_t)((load?(word?0x4000U:0x6000U):
+                                             (word?0xc000U:0xe000U))|
+                                        ((rs1-8U)<<7U)|((reg-8U)<<2U));
+            if(word && uimm<=124U)
+                out=(uint16_t)(prefix|(((uimm>>3U)&7U)<<10U)|
+                                      (((uimm>>2U)&1U)<<6U)|
+                                      (((uimm>>6U)&1U)<<5U));
+            else if(!word && uimm<=248U)
+                out=(uint16_t)(prefix|(((uimm>>3U)&7U)<<10U)|
+                                      (((uimm>>6U)&3U)<<5U));
+        }
+    }
+    if(out==0U)return false;
+    *compressed=out;
+    return true;
+}
+
+/* Branch width is initially selected from the ISA/register form; MCLayout
+ * may grow a short form if its eventual target is out of C range. */
+static bool rv_rvc_branch_form(const MiniAs *as,const MiniAsStmt *stmt,
+                                bool *jump) {
+    const MiniAsRiscvState *state=MINIAS_RV_STATE(as);
+    const MiniAsMCInst *m=stmt->mcinst;
+    if(state==NULL || !state->isa_explicit ||
+       (state->isa_features&RISCV_ISA_C)==0U ||
+       (stmt->site.mode_bits&MINIAS_RISCV_OPTION_NO_RVC)!=0U ||
+       m==NULL)return false;
+    if(m->opcode==RV_MC_JAL && m->operands[0].reg==0U) {
+        *jump=true;
+        return true;
+    }
+    if(m->opcode==RV_MC_BRANCH &&
+       ((m->encoding>>12U)&7U)<=1U &&
+       m->operands[0].reg>=8U && m->operands[0].reg<=15U &&
+       m->operands[1].reg==0U) {
+        *jump=false;
+        return true;
+    }
+    return false;
+}
+
+static uint16_t rv_rvc_branch_bits(int64_t d,unsigned rs1,bool neq) {
+    uint32_t bits=(uint32_t)d;
+    return (uint16_t)((neq?0xe001U:0xc001U)|
+           ((rs1-8U)<<7U)|(((bits>>8U)&1U)<<12U)|
+           (((bits>>3U)&3U)<<10U)|(((bits>>6U)&3U)<<5U)|
+           (((bits>>1U)&3U)<<3U)|(((bits>>5U)&1U)<<2U));
+}
+
+static uint16_t rv_rvc_jump_bits(int64_t d) {
+    uint32_t bits=(uint32_t)d;
+    return (uint16_t)(0xa001U|(((bits>>11U)&1U)<<12U)|
+           (((bits>>4U)&1U)<<11U)|(((bits>>8U)&3U)<<9U)|
+           (((bits>>10U)&1U)<<8U)|(((bits>>6U)&1U)<<7U)|
+           (((bits>>7U)&1U)<<6U)|(((bits>>1U)&7U)<<3U)|
+           (((bits>>5U)&1U)<<2U));
+}
+
 /* Measure the actual persisted target instruction. The layout driver
  * invokes this once after operand parsing and before placement. Neither
  * symbol spelling nor source-level expression grammar is revisited. */
 bool minias_riscv_measure_mcinst(MiniAs *as, const MiniAsStmt *stmt,
                                  uint32_t *size) {
     const MiniAsMCInst *m = stmt->mcinst;
+    uint16_t compressed;
+    bool compressed_jump;
     if (m == NULL) {
         minias_set_error(as, "unsupported-instruction:%s:line=%zu",
                          stmt->op, stmt->line);
         return false;
+    }
+    if(rv_rvc_encode_plain(as,stmt,&compressed)) {
+        *size=2U;
+        return true;
+    }
+    if(rv_rvc_branch_form(as,stmt,&compressed_jump)) {
+        *size=2U;
+        return true;
     }
     switch (m->opcode) {
         case RV_MC_C16:
@@ -1382,6 +1621,8 @@ static bool rv_parse_fp_mc(MiniAs *as, MiniAsStmt *stmt,
     int rd = -1, rs1 = -1, rs2 = 0;
     char memory_base[128];
     int64_t offset;
+    MiniAsSymbolExpr absolute_expr;
+    bool absolute_lo = false;
     if (form == NULL) {
         policy->handled = false;
         return true;
@@ -1393,10 +1634,16 @@ static bool rv_parse_fp_mc(MiniAs *as, MiniAsStmt *stmt,
     rm = form->default_rm;
     if (form->kind == RV_FP_LOAD || form->kind == RV_FP_STORE) {
         MiniAsMCInst *m;
-        if (count != 2U || (rd = float_reg_number(operands[0])) < 0 ||
-            !parse_mem(operands[1], &offset, memory_base) ||
-            (rs1 = reg_number(memory_base)) < 0 ||
-            offset < -2048 || offset > 2047) goto invalid;
+        if (count != 2U || (rd = float_reg_number(operands[0])) < 0)
+            goto invalid;
+        if (!parse_mem(operands[1], &offset, memory_base)) {
+            if (!parse_absolute_lo_memory(operands[1], &absolute_expr,
+                                          memory_base)) goto invalid;
+            absolute_lo = true;
+            offset = 0;
+        }
+        rs1 = reg_number(memory_base);
+        if (rs1 < 0 || offset < -2048 || offset > 2047) goto invalid;
         m=minias_mcinst_alloc(3U);
         if (m==NULL) {
             minias_set_error(as,"out-of-memory:riscv-fp-memory");
@@ -1408,7 +1655,14 @@ static bool rv_parse_fp_mc(MiniAs *as, MiniAsStmt *stmt,
         rv_set_reg(&m->operands[0],rd);
         m->operands[0].reg_class=MINIAS_MC_REG_FPR;
         rv_set_reg(&m->operands[1],rs1);
-        rv_set_imm(&m->operands[2],offset);
+        if (absolute_lo) {
+            m->target_form = form->kind == RV_FP_STORE ?
+                             RV_ABS_RELOC_LO12_S : RV_ABS_RELOC_LO12_I;
+            if (!rv_bind_symbol_operand(as, m, 2U, &absolute_expr)) {
+                minias_mcinst_destroy(m);
+                return false;
+            }
+        } else rv_set_imm(&m->operands[2],offset);
         stmt->mcinst=m;
         return true;
     }
@@ -1545,6 +1799,8 @@ static bool rv_parse_mcinst_impl(MiniAs *as, MiniAsStmt *stmt,
     uint32_t encoding;
     char base[128];
     const char *op = stmt->op;
+    MiniAsSymbolExpr absolute_expr;
+    unsigned absolute_reloc = RV_ABS_RELOC_NONE;
 
     desc = rv_find_mc_descriptor(op);
     if (desc == NULL) {
@@ -1613,6 +1869,13 @@ static bool rv_parse_mcinst_impl(MiniAs *as, MiniAsStmt *stmt,
                 }
             } else {
                 is_imm = parse_i64(operands[2], &imm);
+                if (!is_imm &&
+                    parse_absolute_modifier(operands[2], "%lo(",
+                                            &absolute_expr)) {
+                    absolute_reloc = RV_ABS_RELOC_LO12_I;
+                    is_imm = true;
+                    imm = 0;
+                }
             }
         }
         if (rd < 0 || rs1 < 0 || (family == RV_MC_R && rs2 < 0) ||
@@ -1647,6 +1910,14 @@ static bool rv_parse_mcinst_impl(MiniAs *as, MiniAsStmt *stmt,
         if (count == 2U && parse_mem(operands[1], &imm, base)) {
             rs1 = reg_number(base);
             if (rs1 < 0 || imm < -2048 || imm > 2047) goto invalid;
+        } else if (count == 2U &&
+                   parse_absolute_lo_memory(operands[1], &absolute_expr,
+                                            base)) {
+            rs1 = reg_number(base);
+            if (rs1 < 0) goto invalid;
+            absolute_reloc = family == RV_MC_LOAD ?
+                             RV_ABS_RELOC_LO12_I : RV_ABS_RELOC_LO12_S;
+            imm = 0;
         } else if (family == RV_MC_LOAD && count == 2U &&
                    minias_parse_symbol_addend(operands[1], &expr)) {
             /* GNU symbolic load: AUIPC rd + LOAD rd,0(rd). */
@@ -1679,7 +1950,14 @@ static bool rv_parse_mcinst_impl(MiniAs *as, MiniAsStmt *stmt,
     } else if (family == RV_MC_U) {
         if (count != 2U) goto invalid;
         rd = reg_number(operands[0]);
-        if (rd < 0 || !parse_i64(operands[1], &imm)) goto invalid;
+        if (rd < 0) goto invalid;
+        if (!parse_i64(operands[1], &imm)) {
+            if (strcmp(op, "lui") != 0 ||
+                !parse_absolute_modifier(operands[1], "%hi(",
+                                         &absolute_expr)) goto invalid;
+            absolute_reloc = RV_ABS_RELOC_HI20;
+            imm = 0;
+        }
         slots = 2U;
     } else if (family == RV_MC_BRANCH) {
         bool two = strcmp(op, "beqz") == 0 || strcmp(op, "bnez") == 0 ||
@@ -1759,10 +2037,28 @@ static bool rv_parse_mcinst_impl(MiniAs *as, MiniAsStmt *stmt,
         rv_set_reg(&inst->operands[2],rs2);
     } else if(family==RV_MC_I) {
         rv_set_reg(&inst->operands[1],rs1);
-        rv_set_imm(&inst->operands[2],imm);
+        if (absolute_reloc == RV_ABS_RELOC_LO12_I) {
+            inst->target_form = absolute_reloc;
+            if (!rv_bind_symbol_operand(as, inst, 2U, &absolute_expr)) {
+                minias_mcinst_destroy(inst);
+                return false;
+            }
+        } else rv_set_imm(&inst->operands[2],imm);
     } else if(family==RV_MC_LOAD || family==RV_MC_STORE){
         rv_set_reg(&inst->operands[1],rs1);
-        rv_set_imm(&inst->operands[2],imm);
+        if (absolute_reloc != RV_ABS_RELOC_NONE) {
+            inst->target_form = absolute_reloc;
+            if (!rv_bind_symbol_operand(as, inst, 2U, &absolute_expr)) {
+                minias_mcinst_destroy(inst);
+                return false;
+            }
+        } else rv_set_imm(&inst->operands[2],imm);
+    } else if (absolute_reloc == RV_ABS_RELOC_HI20) {
+        inst->target_form = absolute_reloc;
+        if (!rv_bind_symbol_operand(as, inst, 1U, &absolute_expr)) {
+            minias_mcinst_destroy(inst);
+            return false;
+        }
     } else rv_set_imm(&inst->operands[1],imm);
     stmt->mcinst=inst;
     return true;
@@ -1911,8 +2207,12 @@ static bool rv_encode_multi_mc(MiniAs *as, const MiniAsStmt *stmt) {
 
 static bool rv_encode_mcinst(MiniAs *as, const MiniAsStmt *stmt) {
     const MiniAsMCInst *m=stmt->mcinst;
+    uint16_t compressed;
     if (m->opcode == RV_MC_RAW)
         return append_u32(as, stmt->section, m->encoding);
+    if (rv_rvc_encode_plain(as,stmt,&compressed))
+        return append_u16(as,stmt->section,compressed) &&
+               minias_encode_add_elf_flags(as,1U);
     if (m->opcode == RV_MC_LI || m->opcode == RV_MC_CALL ||
         m->opcode == RV_MC_TAIL || m->opcode == RV_MC_LA)
         return rv_encode_multi_mc(as, stmt);
@@ -1921,6 +2221,38 @@ static bool rv_encode_mcinst(MiniAs *as, const MiniAsStmt *stmt) {
          * (c.nop/c.jr), so dispatch before reading operand[0]. */
         if(!append_u16(as,stmt->section,(uint16_t)m->encoding))return false;
         return minias_encode_add_elf_flags(as,1U); /* EF_RISCV_RVC */
+    }
+    if (stmt->size==2U &&
+        (m->opcode==RV_MC_BRANCH || m->opcode==RV_MC_JAL)) {
+        MiniAsRiscvBranchPlan branch;
+        const MiniAsSymbolRef *symbol=m->operands[
+            m->opcode==RV_MC_BRANCH?2U:1U].bound_symbol;
+        uint16_t bits;
+        MiniAsFixupKind fixup;
+        if(symbol==NULL || !minias_riscv_resolve_branch_plan(as,stmt,&branch))
+            return false;
+        if(m->opcode==RV_MC_BRANCH) {
+            int64_t disp=branch.local?branch.displacement:0;
+            if((disp&1)!=0 || disp< -256 || disp>254) {
+                minias_set_error(as,"riscv-rvc-branch-range:line=%zu",stmt->line);
+                return false;
+            }
+            bits=rv_rvc_branch_bits(disp,m->operands[0].reg,
+                                     ((m->encoding>>12U)&7U)==1U);
+            fixup=MINIAS_FIXUP_RV_RVC_BRANCH;
+        } else {
+            int64_t disp=branch.local?branch.displacement:0;
+            if((disp&1)!=0 || disp< -2048 || disp>2046) {
+                minias_set_error(as,"riscv-rvc-jump-range:line=%zu",stmt->line);
+                return false;
+            }
+            bits=rv_rvc_jump_bits(disp);
+            fixup=MINIAS_FIXUP_RV_RVC_JUMP;
+        }
+        return append_u16(as,stmt->section,bits) &&
+               minias_encode_add_elf_flags(as,1U) &&
+               minias_encode_add_fixup_ref(as,stmt->section,stmt->offset,
+                                            fixup,2U,*symbol,false);
     }
     int rd=(int)m->operands[0].reg,rs1=0,rs2=0;
     int64_t imm=0;
@@ -2001,7 +2333,10 @@ static bool rv_encode_mcinst(MiniAs *as, const MiniAsStmt *stmt) {
                     return false;
                 }
                 return append_u32(as,stmt->section,
-                                  enc_j(rd,branch.displacement));
+                                  enc_j(rd,branch.displacement)) &&
+                       (!(MINIAS_RV_STATE(as)->isa_features&RISCV_ISA_C) ||
+                        minias_encode_add_fixup_ref(as,stmt->section,
+                            stmt->offset,MINIAS_FIXUP_RV_JAL,4U,*expr,false));
             }
             if(stmt->size==8U){
                 if(!branch.long_legal){
@@ -2021,7 +2356,10 @@ static bool rv_encode_mcinst(MiniAs *as, const MiniAsStmt *stmt) {
             }
             return append_u32(as,stmt->section,
                               enc_b((base>>12U)&7U,rd,rs1,
-                                    branch.displacement));
+                                    branch.displacement)) &&
+                   (!(MINIAS_RV_STATE(as)->isa_features&RISCV_ISA_C) ||
+                    minias_encode_add_fixup_ref(as,stmt->section,stmt->offset,
+                              MINIAS_FIXUP_RV_BRANCH,4U,*expr,false));
         }
         return append_u32(as,stmt->section,enc_j(rd,0)) &&
                minias_encode_add_fixup_ref(as,stmt->section,stmt->offset,
@@ -2031,7 +2369,41 @@ static bool rv_encode_mcinst(MiniAs *as, const MiniAsStmt *stmt) {
         minias_set_error(as,"unknown-riscv-mcinst");
         return false;
     }
-    return append_u32(as,stmt->section,code);
+    if (!append_u32(as,stmt->section,code)) return false;
+    if (m->target_form != RV_ABS_RELOC_NONE) {
+        MiniAsFixupKind kind;
+        unsigned symbol_index;
+        const MiniAsSymbolRef *symbol;
+        switch (m->target_form) {
+        case RV_ABS_RELOC_HI20:
+            if (m->opcode != RV_MC_U) goto invalid_absolute_form;
+            kind = MINIAS_FIXUP_RV_HI20;
+            symbol_index = 1U;
+            break;
+        case RV_ABS_RELOC_LO12_I:
+            if (m->opcode != RV_MC_I && m->opcode != RV_MC_LOAD)
+                goto invalid_absolute_form;
+            kind = MINIAS_FIXUP_RV_LO12_I;
+            symbol_index = 2U;
+            break;
+        case RV_ABS_RELOC_LO12_S:
+            if (m->opcode != RV_MC_STORE) goto invalid_absolute_form;
+            kind = MINIAS_FIXUP_RV_LO12_S;
+            symbol_index = 2U;
+            break;
+        default:
+            goto invalid_absolute_form;
+        }
+        symbol = m->operands[symbol_index].bound_symbol;
+        if (symbol == NULL) goto invalid_absolute_form;
+        return minias_encode_add_fixup_ref(as,stmt->section,stmt->offset,
+                                            kind,4U,*symbol,false);
+    }
+    return true;
+invalid_absolute_form:
+    minias_set_error(as,"internal:bad-riscv-absolute-reloc-mcinst:%u",
+                     m->target_form);
+    return false;
 }
 
 bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {

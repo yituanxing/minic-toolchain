@@ -35,12 +35,29 @@ printf '%s\n' '.text' \
   'nop' 'ret' \
   'pcalau12i $a0,%pc_hi20(external_symbol)' \
   'addi.d $a0,$a0,%pc_lo12(external_symbol)' >"$work/privilege-pcala.s"
+# These are real GCC LP64 outputs, not handwritten substitute instruction
+# sequences. %plt is the B26 call operand; la.local emits the PCALA pair,
+# while la.global uses GOT_PC pair. Both pairs carry GNU's linker RELAX markers.
+printf '%s\n' '.text' '.globl gcc_pseudos' 'gcc_pseudos:' \
+  'bl %plt(runtime_message)' \
+  'la.local $r12,.LANCHOR0' \
+  'la.global $r13,runtime_bias' \
+  'ret' \
+  '.data' '.LANCHOR0:' '.dword 7' >"$work/gcc-pseudos.s"
 
 for name in aliases numeric privilege-pcala; do
   "$MINIAS" --target=loongarch64 -march=loongarch64 -mabi=lp64d \
     -o "$work/mini-$name.o" "$work/$name.s"
   readelf -h "$work/mini-$name.o" | grep -q 'Machine:.*LoongArch'
 done
+"$MINIAS" --target=loongarch64 -march=loongarch64 -mabi=lp64d \
+  -o "$work/mini-gcc-pseudos.o" "$work/gcc-pseudos.s"
+readelf -Wr "$work/mini-gcc-pseudos.o" >"$work/gcc-pseudos.reloc"
+for kind in R_LARCH_B26 R_LARCH_PCALA_HI20 R_LARCH_PCALA_LO12 \
+            R_LARCH_GOT_PC_HI20 R_LARCH_GOT_PC_LO12; do
+  grep -q "$kind" "$work/gcc-pseudos.reloc"
+done
+test "$(grep -c R_LARCH_RELAX "$work/gcc-pseudos.reloc")" -eq 4
 
 # Host objcopy often cannot read LoongArch.  Extract .text through readelf
 # and compare its exact hex words without depending on cross tools.
@@ -75,6 +92,12 @@ gnu_bad=(
 mini_only_bad=(
   'pcalau12i $a0,%pc_lo12(external_symbol)'
   'addi.d $a0,$a0,%pc_hi20(external_symbol)'
+  'bl %plt()'
+  'b %plt(external_symbol)'
+  'la.local $f0,external_symbol'
+  'la.local $r12,%plt(external_symbol)'
+  'la.global $f0,external_symbol'
+  'la.global $r12,%plt(external_symbol)'
 )
 bad=("${gnu_bad[@]}" "${mini_only_bad[@]}")
 for i in "${!bad[@]}"; do
@@ -97,6 +120,16 @@ if ((gnu_available)); then
       "$work/gnu-$name.o" "$work/gnu-$name.bin"
     cmp "$work/mini-$name.bin" "$work/gnu-$name.bin"
   done
+  loongarch64-linux-gnu-as -mabi=lp64d \
+    -o "$work/gnu-gcc-pseudos.o" "$work/gcc-pseudos.s"
+  loongarch64-linux-gnu-objcopy -j .text -O binary \
+    "$work/mini-gcc-pseudos.o" "$work/mini-gcc-pseudos.bin"
+  loongarch64-linux-gnu-objcopy -j .text -O binary \
+    "$work/gnu-gcc-pseudos.o" "$work/gnu-gcc-pseudos.bin"
+  cmp "$work/mini-gcc-pseudos.bin" "$work/gnu-gcc-pseudos.bin"
+  python3 "$(dirname "$0")/elf_semantic_compare.py" --strict \
+    "$work/gnu-gcc-pseudos.o" "$work/mini-gcc-pseudos.o" \
+    >"$work/gcc-pseudos-semantic.txt"
   python3 - "$work/mini-privilege-pcala.o" \
             "$work/gnu-privilege-pcala.o" <<'PY'
 import re
@@ -127,4 +160,4 @@ PY
 else
   oracle='NOT_TESTED:explicit_local_no_cross_GNU'
 fi
-echo "MINIAS_LOONG_ALIAS_PRIVILEGE=PASS aliases=5 privileged=9 PCALA=2 GNU_negatives=${#gnu_bad[@]} MiniAS_only_negatives=${#mini_only_bad[@]} GNU_bytes=$oracle GNU_relocations=$oracle no_partial_object=1"
+echo "MINIAS_LOONG_ALIAS_PRIVILEGE=PASS aliases=5 privileged=9 PCALA=2 GCC_pseudos=3 RELAX=4 GNU_negatives=${#gnu_bad[@]} MiniAS_only_negatives=${#mini_only_bad[@]} GNU_bytes=$oracle GNU_relocations=$oracle no_partial_object=1"

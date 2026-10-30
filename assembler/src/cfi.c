@@ -105,6 +105,8 @@ bool minias_anchor_here(MiniAs *as, size_t *index) {
     if (sym == NULL || sym->defined) return false;
     *index = (size_t)(sym-as->symbols);
     sym->defined = true;
+    if (as->target->cfi_anchors_hidden)
+        sym->visibility = MINIAS_STV_HIDDEN;
     sym->section = as->current_section;
     sym->subsection = as->current_subsection;
     sym->has_fragment_anchor = true;

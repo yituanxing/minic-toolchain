@@ -7,6 +7,8 @@ set -eu
 work="$BUILD_DIR/tests/assembler/a0"
 mkdir -p "$work"
 
+sh tests/assembler/probe-riscv-absolute-relocs.sh
+
 assemble_and_check() {
     name="$1"
     immediate="$2"
@@ -1616,7 +1618,7 @@ isa_qualified:
     ret
 EOF_ISA_QUAL
 "$MINIAS" -march=rv64im -mabi=lp64 -o "$work/isa-m.o" "$work/isa-qualified.s"
-readelf -A "$work/isa-m.o" | grep -q 'Tag_RISCV_arch: "rv64i2p1_m2p0"'
+readelf -A "$work/isa-m.o" | grep -q 'Tag_RISCV_arch: "rv64i2p1_m2p0_zmmul1p0"'
 for opts in 'rv64i mul a0,a1,a2' 'rv64im csrr a0,mstatus' \
             'rv64im orc.b a0,a1' 'rv64im c.li a0,1' \
             'rv64im fence.i' 'rv64i vsetvl a0,a1,a2'; do
@@ -1648,7 +1650,7 @@ EOF_GC
 "$MINIAS" -march=rv64gc -mabi=lp64d -o "$work/isa-gc.o" "$work/isa-gc.s"
 readelf -h "$work/isa-gc.o" | grep -q 'Flags:.*0x5'
 readelf -A "$work/isa-gc.o" |
-    grep -q 'Tag_RISCV_arch: "rv64i2p1_m2p0_a2p1_f2p2_d2p2_c2p0_zicsr2p0_zifencei2p0"'
+    grep -q 'Tag_RISCV_arch: "rv64i2p1_m2p0_a2p1_f2p2_d2p2_c2p0_zicsr2p0_zifencei2p0_zmmul1p0"'
 printf '.option arch, +m\n.text\nmul a0, a1, a2\n' >"$work/isa-option.s"
 if "$MINIAS" -march=rv64i -o "$work/isa-option.o" \
     "$work/isa-option.s" 2>"$work/isa-option.err"; then

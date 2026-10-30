@@ -88,14 +88,24 @@ static const struct {
     {MINIAS_FIXUP_ADD, 4U, MINIAS_R_RISCV_ADD32},
     {MINIAS_FIXUP_ADD, 8U, MINIAS_R_RISCV_ADD64},
     {MINIAS_FIXUP_SUB, 2U, MINIAS_R_RISCV_SUB16},
+    {MINIAS_FIXUP_SUB, 1U, MINIAS_R_RISCV_SUB8},
     {MINIAS_FIXUP_SUB, 4U, MINIAS_R_RISCV_SUB32},
     {MINIAS_FIXUP_SUB, 8U, MINIAS_R_RISCV_SUB64},
+    {MINIAS_FIXUP_SET, 1U, MINIAS_R_RISCV_SET8},
+    {MINIAS_FIXUP_SET, 2U, MINIAS_R_RISCV_SET16},
+    {MINIAS_FIXUP_SET, 4U, MINIAS_R_RISCV_SET32},
     {MINIAS_FIXUP_RV_CALL_PLT, 4U, MINIAS_R_RISCV_CALL_PLT},
     {MINIAS_FIXUP_RV_PCREL_HI20, 4U, MINIAS_R_RISCV_PCREL_HI20},
     {MINIAS_FIXUP_RV_GOT_HI20, 4U, MINIAS_R_RISCV_GOT_HI20},
     {MINIAS_FIXUP_RV_PCREL_LO12_I, 4U, MINIAS_R_RISCV_PCREL_LO12_I},
     {MINIAS_FIXUP_RV_PCREL_LO12_S, 4U, MINIAS_R_RISCV_PCREL_LO12_S},
-    {MINIAS_FIXUP_RV_JAL, 4U, MINIAS_R_RISCV_JAL}
+    {MINIAS_FIXUP_RV_JAL, 4U, MINIAS_R_RISCV_JAL},
+    {MINIAS_FIXUP_RV_HI20, 4U, MINIAS_R_RISCV_HI20},
+    {MINIAS_FIXUP_RV_LO12_I, 4U, MINIAS_R_RISCV_LO12_I},
+    {MINIAS_FIXUP_RV_LO12_S, 4U, MINIAS_R_RISCV_LO12_S},
+    {MINIAS_FIXUP_RV_BRANCH, 4U, MINIAS_R_RISCV_BRANCH},
+    {MINIAS_FIXUP_RV_RVC_BRANCH, 2U, MINIAS_R_RISCV_RVC_BRANCH},
+    {MINIAS_FIXUP_RV_RVC_JUMP, 2U, MINIAS_R_RISCV_RVC_JUMP}
 };
 
 static bool riscv_lookup_fixup_form(MiniAsFixupKind kind, unsigned width,
@@ -312,16 +322,56 @@ static size_t riscv_store_uleb32(unsigned char *out, unsigned value) {
     return size;
 }
 
+/* Both the ELF architecture attribute and GNU instruction mapping symbols
+ * describe the same canonical ISA. Keep its implied-feature expansion in
+ * one Target-private place rather than inventing two spellings. */
+static bool riscv_canonical_object_isa(const MiniAsRiscvState *state,
+                                       char output[512], size_t *length) {
+    const char implied_mul[] = "_zmmul1p0";
+    size_t source_length;
+    bool append_mul;
+    if (state == NULL || output == NULL || length == NULL) return false;
+    source_length = strlen(state->arch_attribute_isa);
+    append_mul = source_length != 0U &&
+        (state->isa_features & RISCV_ISA_M) != 0U &&
+        strstr(state->arch_attribute_isa, "_zmmul") == NULL;
+    *length = source_length +
+        (append_mul ? sizeof(implied_mul) - 1U : 0U);
+    if (*length >= 512U) return false;
+    memcpy(output, state->arch_attribute_isa, source_length);
+    if (append_mul)
+        memcpy(output + source_length, implied_mul,
+               sizeof(implied_mul) - 1U);
+    output[*length] = '\0';
+    return true;
+}
+
 static bool riscv_rebuild_attributes(MiniAs *as, size_t line) {
     MiniAsRiscvState *state = MINIAS_RV_STATE(as);
-    const size_t arch_size = strlen(state->arch_attribute_isa) + 1U;
-    const size_t size = 17U + arch_size +
-                        (state->stack_align_present ?
-                            1U + riscv_uleb32_size(state->stack_align) : 0U) +
-                        (state->unaligned_access_present ?
-                            1U + riscv_uleb32_size(state->unaligned_access) : 0U);
+    /* GAS canonicalizes M as also declaring its implied Zmmul subset even
+     * when GCC's source .attribute arch omits that extension. The source
+     * contract stays verbatim for .attribute conflict checks; only the
+     * serialized Tag_RISCV_arch receives this implied feature. */
+    char object_isa[512];
+    size_t object_isa_length;
+    size_t arch_size;
+    /* GNU omits an explicitly declared zero default access mode. */
+    const bool emit_unaligned = state->unaligned_access_present &&
+                                state->unaligned_access != 0U;
+    size_t size;
     unsigned char *buf = state->target_attributes;
     size_t at = 16U;
+    if (!riscv_canonical_object_isa(state,object_isa,
+                                    &object_isa_length)) {
+        minias_set_error(as, "riscv-object-isa-overflow:line=%zu", line);
+        return false;
+    }
+    arch_size = object_isa_length + 1U;
+    size = 17U + arch_size +
+                        (state->stack_align_present ?
+                            1U + riscv_uleb32_size(state->stack_align) : 0U) +
+                        (emit_unaligned ?
+                            1U + riscv_uleb32_size(state->unaligned_access) : 0U);
     if (size > sizeof(state->target_attributes)) {
         minias_set_error(as, "riscv-attribute-overflow:line=%zu", line);
         return false;
@@ -337,9 +387,9 @@ static bool riscv_rebuild_attributes(MiniAs *as, size_t line) {
         at += riscv_store_uleb32(buf + at, state->stack_align);
     }
     buf[at++] = 5U;
-    memcpy(buf + at, state->arch_attribute_isa, arch_size);
+    memcpy(buf + at, object_isa, arch_size);
     at += arch_size;
-    if (state->unaligned_access_present) {
+    if (emit_unaligned) {
         buf[at++] = 6U;
         at += riscv_store_uleb32(buf + at, state->unaligned_access);
     }
@@ -577,6 +627,21 @@ static bool riscv_plan_instruction_relaxation(MiniAs *as,
     plan->current_size = stmt->size;
     plan->required_size = stmt->size;
     plan->terminal_size = stmt->size;
+    if (stmt->size == 2U && stmt->mcinst != NULL &&
+        (stmt->mcinst->opcode == RV_MC_BRANCH ||
+         stmt->mcinst->opcode == RV_MC_JAL)) {
+        plan->terminal_size = 4U;
+        if (!minias_riscv_resolve_branch_plan(as,stmt,&branch))return false;
+        if (branch.local &&
+            (((branch.displacement & 1) != 0) ||
+             (stmt->mcinst->opcode == RV_MC_JAL ?
+                (branch.displacement < -2048 ||
+                 branch.displacement > 2046) :
+                (branch.displacement < -256 ||
+                 branch.displacement > 254))))
+            plan->required_size = 4U;
+        return true;
+    }
     if (stmt->size != 4U || stmt->mcinst == NULL ||
         stmt->mcinst->opcode != RV_MC_BRANCH)
         return true;
@@ -605,6 +670,55 @@ static bool riscv_resolve_profile(const char *march, const char *mabi,
     memcpy(config->target_profile, &profile, sizeof(profile));
     config->target_profile_size = sizeof(profile);
     return true;
+}
+
+/* GAS records the effective ISA on its first instruction in executable
+ * sections, rather than treating a .riscv.attributes blob as a substitute
+ * for local `$x<isa>` mapping symbols. Common serializes this ordinary
+ * Target-authored symbol, preserving the final MCLayout section offsets. */
+static bool riscv_record_object_mapping_symbols(MiniAs *as) {
+    const MiniAsRiscvState *state = MINIAS_RV_STATE(as);
+    char canonical[512], name[576];
+    size_t isa_length, section_index;
+    if (state == NULL || state->arch_attribute_isa[0] == '\0') return true;
+    if (!riscv_canonical_object_isa(state, canonical, &isa_length)) {
+        minias_set_error(as,"riscv-mapping-isa-overflow");
+        return false;
+    }
+    for (section_index = 0U; section_index < as->section_count;
+         ++section_index) {
+        MiniAsSymbol *symbol;
+        const MiniAsSection *section = &as->sections[section_index];
+        size_t ordinal = section_index;
+        if ((section->flags & MINIAS_SHF_EXECINSTR) == 0U ||
+            section->type != MINIAS_SHT_PROGBITS || section->size == 0U)
+            continue;
+        for (;;) {
+            int written = snprintf(name,sizeof(name),
+                                   ordinal==0U ? "$x%s" : "$x%s.%zu",
+                                   canonical,ordinal);
+            if (written < 0 || (size_t)written >= sizeof(name)) {
+                minias_set_error(as,"riscv-mapping-symbol-overflow");
+                return false;
+            }
+            if (minias_get_symbol(as,name,false) == NULL) break;
+            if (ordinal == SIZE_MAX) return false;
+            ++ordinal;
+        }
+        symbol = minias_get_symbol(as,name,true);
+        if (symbol == NULL) return false;
+        symbol->defined = true;
+        symbol->section = (int)section_index;
+        symbol->value = 0U;
+        symbol->bind = MINIAS_STB_LOCAL;
+        symbol->type = MINIAS_STT_NOTYPE;
+    }
+    return true;
+}
+
+static bool riscv_validate_output(MiniAs *as) {
+    return strict_base_i_check_sections(as) &&
+           riscv_record_object_mapping_symbols(as);
 }
 
 /* An opaque config blob belongs to this target; Common neither interprets
@@ -681,6 +795,15 @@ static void riscv_capture_site_state(const MiniAs *as,
     site->mode_bits = MINIAS_RV_STATE(as)->options;
 }
 
+static unsigned riscv_default_exec_alignment_for_site(const MiniAs *as) {
+    const MiniAsRiscvState *state = MINIAS_RV_STATE(as);
+    if (state != NULL && state->isa_explicit &&
+        (state->isa_features & RISCV_ISA_C) != 0U &&
+        (state->options & MINIAS_RISCV_OPTION_NO_RVC) == 0U)
+        return 2U;
+    return 4U;
+}
+
 static void riscv_resolve_cfi_abi(const MiniAs *as, MiniAsCfiABI *abi) {
     const MiniAsRiscvState *state=MINIAS_RV_STATE(as);
     if(state!=NULL && state->target_xlen==32U) {
@@ -695,6 +818,7 @@ static const MiniAsTargetOps riscv_ops = {
     .destroy_target_state = riscv_destroy_target_state,
     .configure_legacy_target = riscv_configure_legacy,
     .capture_site_state = riscv_capture_site_state,
+    .default_exec_alignment_for_site = riscv_default_exec_alignment_for_site,
     .elf_machine = 243U, /* EM_RISCV */
     .parse_target_directive = riscv_target_directive,
     .validate_common_directive = riscv_validate_common_directive,
@@ -708,17 +832,22 @@ static const MiniAsTargetOps riscv_ops = {
     .append_code_alignment = riscv_emit_code_alignment,
     .supports_fixup = riscv_supports_fixup,
     .fixup_relocation_type = riscv_fixup_relocation_type,
-    .validate_output = strict_base_i_check_sections,
+    .validate_output = riscv_validate_output,
     /* RV64 DWARF register numbering: ra=x1, sp=x2; DW_CFA code unit
      * is one byte, stack slots are eight bytes (LP64). Both RV32/64
      * share this Target but DWARF64 address fields are explicitly gated
      * by the generic Output ELF class check. */
     .cfi_implicit_eh_frame = true,
     .cfi_code_align = 1U,
-    .cfi_data_align = -8,
+    .cfi_data_align = -4,
     .cfi_return_reg = 1U,
     .cfi_stack_reg = 2U,
     .cfi_address_size = 8U,
+    .cfi_eh_cie_version = 3U,
+    .cfi_initial_cfa_register_only = true,
+    .cfi_eh_range_relocations = true,
+    .cfi_advance_reloc_mode = 2U,
+    .emit_all_section_symbols = true,
     .resolve_cfi_abi = riscv_resolve_cfi_abi,
 };
 

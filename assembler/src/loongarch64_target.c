@@ -17,6 +17,7 @@ typedef enum {
     LA_MC_PCALA_HI20,
     LA_MC_PCALA_LO12,
     LA_MC_PCREL_PSEUDO,
+    LA_MC_GOT_PSEUDO,
     LA_MC_LI32_SEQUENCE,
     LA_MC_LI64_SEQUENCE,
     LA_MC_BRANCH16,
@@ -57,6 +58,7 @@ typedef enum {
     LA_MN_PRIVILEGED,
     LA_MN_LI,
     LA_MN_PCREL,
+    LA_MN_GOT,
     LA_MN_BYTEPICK,
     LA_MN_JIRL,
     LA_MN_MOVE,
@@ -80,6 +82,8 @@ typedef struct {
     uint32_t features;
     LaMnemonicEntry *mnemonics;
     size_t mnemonic_count;
+    bool *relaxable_sections;
+    size_t relaxable_section_count;
 } LaTargetState;
 
 #define LA_COUNT(a) (sizeof(a)/sizeof((a)[0]))
@@ -101,6 +105,7 @@ typedef enum {
     LA_FORM_LI_D = 0x5000,
     LA_FORM_LI_W = 0x5001,
     LA_FORM_PCREL = 0x5002,
+    LA_FORM_GOT = 0x5004,
     LA_FORM_BITFIELD = 0x5003,
     LA_FORM_BYTEPICK = 0x5100,
     LA_FORM_ALSL = 0x5200,
@@ -306,7 +311,13 @@ static bool la_branch_instruction(MiniAs *as, MiniAsMCInst *m,
     if(branch_index>=LA_COUNT(la_branch_patterns))return false;
     b=&la_branch_patterns[branch_index];
     if(count==b->operands) {
-        if (!minias_parse_symbol_addend(t[count-1U],&expr) ||
+        /* GCC emits `bl %plt(function)` for calls which may bind through
+         * a PLT.  GNU GAS encodes its branch field and R_LARCH_B26 exactly
+         * like `bl function`; the %plt spelling is a Target-only operand
+         * modifier, not a literal ELF symbol name. */
+        if (!(minias_parse_symbol_addend(t[count-1U],&expr) ||
+              (branch_index==1U &&
+               la_reloc_expr(t[count-1U],"%plt",&expr))) ||
             (expr.addend&3)!=0)
             return false;
         rj=0U;rd=0U;
@@ -410,7 +421,8 @@ typedef struct {
         unsigned word;
         unsigned symbol_operand;
         MiniAsFixupKind kind;
-    } fixups[2];
+        bool absolute_zero;
+    } fixups[4];
 } LaLoweringPlan;
 
 enum { LA_LOWERING_PLAN_TAG=0x4c41504cU };
@@ -418,14 +430,16 @@ enum { LA_LOWERING_PLAN_TAG=0x4c41504cU };
 static bool la_valid_lowering_plan(const MiniAsMCInst *inst) {
     const LaLoweringPlan *plan=(const LaLoweringPlan *)inst->target_payload;
     return plan!=NULL && plan->tag==LA_LOWERING_PLAN_TAG &&
-        plan->count>0U && plan->count<=4U && plan->fixup_count<=2U &&
+        plan->count>0U && plan->count<=4U && plan->fixup_count<=4U &&
         ((inst->opcode==LA_MC_LI32_SEQUENCE &&
           inst->target_form==LA_FORM_LI_W && plan->count<=2U &&
           plan->fixup_count==0U) ||
          (inst->opcode==LA_MC_LI64_SEQUENCE &&
           inst->target_form==LA_FORM_LI_D && plan->fixup_count==0U) ||
          (inst->opcode==LA_MC_PCREL_PSEUDO &&
-          inst->target_form==LA_FORM_PCREL && plan->fixup_count==2U));
+          inst->target_form==LA_FORM_PCREL && plan->fixup_count==4U) ||
+         (inst->opcode==LA_MC_GOT_PSEUDO &&
+          inst->target_form==LA_FORM_GOT && plan->fixup_count==4U));
 }
 
 static bool la_attach_lowering_plan(MiniAs *as,MiniAsMCInst *inst,
@@ -437,7 +451,7 @@ static bool la_attach_lowering_plan(MiniAs *as,MiniAsMCInst *inst,
     }
     *plan=*source;
     plan->tag=LA_LOWERING_PLAN_TAG;
-    if(plan->count==0U || plan->count>4U || plan->fixup_count>2U) {
+    if(plan->count==0U || plan->count>4U || plan->fixup_count>4U) {
         free(plan);
         minias_set_error(as,"invalid-loongarch-lowering-plan");
         return false;
@@ -481,13 +495,49 @@ static bool la_plan_pcrel(MiniAs *as,MiniAsMCInst *inst,
     plan.words[0]=UINT32_C(0x1a000000)|destination;
     plan.words[1]=UINT32_C(0x02c00000)|
         (destination<<5U)|destination;
-    plan.fixup_count=2U;
+    /* GNU GAS defaults to linker relaxation for the one-register
+     * la.local/la.pcrel macro. Every PCALA relocation is immediately
+     * accompanied by R_LARCH_RELAX against the ELF zero symbol. This is
+     * part of the input object's semantic link contract. */
+    plan.fixup_count=4U;
     plan.fixups[0].kind=MINIAS_FIXUP_LARCH_PCALA_HI20;
     plan.fixups[0].symbol_operand=1U;
-    plan.fixups[1].word=1U;
-    plan.fixups[1].kind=MINIAS_FIXUP_LARCH_PCALA_LO12;
-    plan.fixups[1].symbol_operand=1U;
+    plan.fixups[1].kind=MINIAS_FIXUP_LARCH_RELAX;
+    plan.fixups[1].absolute_zero=true;
+    plan.fixups[2].word=1U;
+    plan.fixups[2].kind=MINIAS_FIXUP_LARCH_PCALA_LO12;
+    plan.fixups[2].symbol_operand=1U;
+    plan.fixups[3].word=1U;
+    plan.fixups[3].kind=MINIAS_FIXUP_LARCH_RELAX;
+    plan.fixups[3].absolute_zero=true;
     inst->target_form=LA_FORM_PCREL;
+    return la_attach_lowering_plan(as,inst,&plan);
+}
+
+/* Under GNU's ordinary LP64D code model, la.global is a GOT-address
+ * materialization: the first word addresses the GOT page, and the second
+ * loads the pointer from that GOT entry. It is NOT an alias of la.local;
+ * the instruction and relocation types differ despite sharing the same
+ * two-word fragment and optional-linker-relaxation policy. */
+static bool la_plan_global_got(MiniAs *as,MiniAsMCInst *inst,
+                               unsigned destination) {
+    LaLoweringPlan plan={0};
+    plan.count=2U;
+    plan.words[0]=UINT32_C(0x1a000000)|destination;
+    plan.words[1]=UINT32_C(0x28c00000)|
+        (destination<<5U)|destination;
+    plan.fixup_count=4U;
+    plan.fixups[0].kind=MINIAS_FIXUP_LARCH_GOT_PC_HI20;
+    plan.fixups[0].symbol_operand=1U;
+    plan.fixups[1].kind=MINIAS_FIXUP_LARCH_RELAX;
+    plan.fixups[1].absolute_zero=true;
+    plan.fixups[2].word=1U;
+    plan.fixups[2].kind=MINIAS_FIXUP_LARCH_GOT_PC_LO12;
+    plan.fixups[2].symbol_operand=1U;
+    plan.fixups[3].word=1U;
+    plan.fixups[3].kind=MINIAS_FIXUP_LARCH_RELAX;
+    plan.fixups[3].absolute_zero=true;
+    inst->target_form=LA_FORM_GOT;
     return la_attach_lowering_plan(as,inst,&plan);
 }
 
@@ -1336,6 +1386,10 @@ static const LaBuiltinMnemonic la_builtin_mnemonics[]={
     {"li.w",LA_MN_LI,0U,LA_BRANCH_CANONICAL},
     {"li.d",LA_MN_LI,1U,LA_BRANCH_CANONICAL},
     {"la.pcrel",LA_MN_PCREL,0U,LA_BRANCH_CANONICAL},
+    /* GNU's ordinary LP64 model lowers two-operand la.local through the
+     * same pcalau12i/addi.d relocation pair as la.pcrel. */
+    {"la.local",LA_MN_PCREL,0U,LA_BRANCH_CANONICAL},
+    {"la.global",LA_MN_GOT,0U,LA_BRANCH_CANONICAL},
     {"bytepick.w",LA_MN_BYTEPICK,0U,LA_BRANCH_CANONICAL},
     {"bytepick.d",LA_MN_BYTEPICK,1U,LA_BRANCH_CANONICAL},
     {"jr",LA_MN_JIRL,0U,LA_BRANCH_CANONICAL},
@@ -1494,18 +1548,22 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
         if(la_parse_vector_pattern(m,t,n,mnemonic->index))goto done;
         goto fail;
     }
-    if(mnemonic->family==LA_MN_PCREL &&
+    if((mnemonic->family==LA_MN_PCREL ||
+        mnemonic->family==LA_MN_GOT) &&
        n==2U && la_reg(t[0],&rd)) {
         MiniAsSymbolExpr expr;
         if(!minias_parse_symbol_addend(t[1],&expr) ||
            !la_symbol_operand(as,m,1U,&expr))goto fail;
-        m->opcode=LA_MC_PCREL_PSEUDO;
+        m->opcode=mnemonic->family==LA_MN_GOT ?
+            LA_MC_GOT_PSEUDO : LA_MC_PCREL_PSEUDO;
         m->count=2U;
         la_capture_gpr_operand(m,0U,rd);
-        if(!la_plan_pcrel(as,m,rd))goto fail;
+        if(!(mnemonic->family==LA_MN_GOT ?
+             la_plan_global_got(as,m,rd) : la_plan_pcrel(as,m,rd)))goto fail;
         goto done;
     }
-    if(mnemonic->family==LA_MN_PCREL)goto fail;
+    if(mnemonic->family==LA_MN_PCREL ||
+       mnemonic->family==LA_MN_GOT)goto fail;
     if(mnemonic->family==LA_MN_SPECIAL) {
         if(la_parse_special_register_pattern(m,t,n,mnemonic->index))goto done;
         goto fail;
@@ -1741,6 +1799,41 @@ static bool la_resolve_branch_plan(MiniAs *as,const MiniAsStmt *s,
     return true;
 }
 
+/* GNU GAS must keep same-section branch displacements as linker fixups when
+ * PCALA/GOT macros in that Section may shrink during linker relaxation. A
+ * branch at the beginning of the Section can depend on a later such macro,
+ * so the condition is computed from the complete retained statement graph,
+ * not the current source prefix. Cache once for O(n) total compilation. */
+static bool la_section_is_linker_relaxable(MiniAs *as,int section,
+                                           bool *relaxable) {
+    LaTargetState *state=(LaTargetState *)as->target_state;
+    size_t i;
+    if(state==NULL || section<0 ||
+       (size_t)section>=as->section_count)return false;
+    if(state->relaxable_sections==NULL ||
+       state->relaxable_section_count!=as->section_count) {
+        bool *sections=calloc(as->section_count,sizeof(*sections));
+        if(sections==NULL) {
+            minias_set_error(as,"out-of-memory:loongarch-relaxable-sections");
+            return false;
+        }
+        for(i=0U;i<as->stmt_count;++i) {
+            const MiniAsStmt *stmt=&as->stmts[i];
+            if(stmt->section>=0 &&
+               (size_t)stmt->section<as->section_count &&
+               stmt->mcinst!=NULL &&
+               (stmt->mcinst->opcode==LA_MC_PCREL_PSEUDO ||
+                stmt->mcinst->opcode==LA_MC_GOT_PSEUDO))
+                sections[(size_t)stmt->section]=true;
+        }
+        free(state->relaxable_sections);
+        state->relaxable_sections=sections;
+        state->relaxable_section_count=as->section_count;
+    }
+    *relaxable=state->relaxable_sections[(size_t)section];
+    return true;
+}
+
 static bool la_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
     if(!s->mcinst){minias_set_error(as,"missing-la-mcinst");return false;}
     if(s->mcinst->target_payload!=NULL) {
@@ -1754,6 +1847,7 @@ static bool la_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
         return true;
     }
     if(s->mcinst->opcode==LA_MC_PCREL_PSEUDO ||
+       s->mcinst->opcode==LA_MC_GOT_PSEUDO ||
        s->mcinst->opcode==LA_MC_LI32_SEQUENCE ||
        s->mcinst->opcode==LA_MC_LI64_SEQUENCE) {
         minias_set_error(as,"missing-loongarch-lowering-plan");
@@ -1790,6 +1884,14 @@ static bool la_encode(MiniAs *as,const MiniAsStmt *s) {
             const unsigned index=plan->fixups[k].symbol_operand;
             const unsigned word_index=plan->fixups[k].word;
             const MiniAsSymbolRef *symbol;
+            if(plan->fixups[k].absolute_zero) {
+                if(word_index>=plan->count ||
+                   plan->fixups[k].kind!=MINIAS_FIXUP_LARCH_RELAX ||
+                   !minias_encode_add_fixup_abs0(as,s->section,
+                       s->offset+word_index*4U,
+                       plan->fixups[k].kind,4U))return false;
+                continue;
+            }
             if(index>=m->count || word_index>=plan->count ||
                m->operands[index].kind!=MINIAS_MC_BOUND_SYMBOL ||
                m->operands[index].bound_symbol==NULL) {
@@ -1833,18 +1935,21 @@ static bool la_encode(MiniAs *as,const MiniAsStmt *s) {
         case LA_MC_BRANCH21:
         case LA_MC_BRANCH26: {
             LaBranchPlan branch;
+            bool linker_relaxable;
             kind=m->opcode==LA_MC_BRANCH16 ?
                  MINIAS_FIXUP_LARCH_B16 :
                  m->opcode==LA_MC_BRANCH21 ?
                  MINIAS_FIXUP_LARCH_B21 : MINIAS_FIXUP_LARCH_B26;
             slot=m->count-1U;
             if(!la_resolve_branch_plan(as,s,&branch))return false;
+            if(!la_section_is_linker_relaxable(as,s->section,
+                                               &linker_relaxable))return false;
             if(s->size!=4U || (branch.local && !branch.short_legal)) {
                 minias_set_error(as,"loong-branch-out-of-range:%s:line=%zu",
                                  s->args,s->line);
                 return false;
             }
-            if(branch.local) {
+            if(branch.local && !linker_relaxable) {
                 uint32_t off=(uint32_t)(branch.displacement/4);
                 code|=kind==MINIAS_FIXUP_LARCH_B16 ?
                     ((off&UINT32_C(0xffff))<<10U) :
@@ -1940,6 +2045,7 @@ static void la_destroy_target_state(MiniAs *as) {
     LaTargetState *state=(LaTargetState *)as->target_state;
     if(state!=NULL) {
         free(state->mnemonics);
+        free(state->relaxable_sections);
         free(state);
     }
     as->target_state=NULL;
@@ -1964,15 +2070,24 @@ static const struct {
     {MINIAS_FIXUP_ABS,4U,1U}, /* R_LARCH_32 */
     {MINIAS_FIXUP_ABS,8U,2U}, /* R_LARCH_64 */
     {MINIAS_FIXUP_PREL32,4U,99U}, /* R_LARCH_32_PCREL */
+    {MINIAS_FIXUP_ADD,1U,47U}, /* R_LARCH_ADD8 */
+    {MINIAS_FIXUP_ADD,2U,48U}, /* R_LARCH_ADD16 */
+    {MINIAS_FIXUP_ADD,3U,49U}, /* R_LARCH_ADD24 */
     {MINIAS_FIXUP_ADD,4U,50U},
     {MINIAS_FIXUP_ADD,8U,51U},
+    {MINIAS_FIXUP_SUB,1U,52U}, /* R_LARCH_SUB8 */
+    {MINIAS_FIXUP_SUB,2U,53U}, /* R_LARCH_SUB16 */
+    {MINIAS_FIXUP_SUB,3U,54U}, /* R_LARCH_SUB24 */
     {MINIAS_FIXUP_SUB,4U,55U},
     {MINIAS_FIXUP_SUB,8U,56U},
     {MINIAS_FIXUP_LARCH_PCALA_HI20,4U,71U},
     {MINIAS_FIXUP_LARCH_PCALA_LO12,4U,72U},
+    {MINIAS_FIXUP_LARCH_GOT_PC_HI20,4U,75U},
+    {MINIAS_FIXUP_LARCH_GOT_PC_LO12,4U,76U},
     {MINIAS_FIXUP_LARCH_B16,4U,64U},
     {MINIAS_FIXUP_LARCH_B21,4U,65U},
-    {MINIAS_FIXUP_LARCH_B26,4U,66U}
+    {MINIAS_FIXUP_LARCH_B26,4U,66U},
+    {MINIAS_FIXUP_LARCH_RELAX,4U,100U}
 };
 
 static bool la_lookup_fixup_form(MiniAsFixupKind kind,unsigned width,
@@ -2004,10 +2119,15 @@ static const MiniAsTargetOps ops={
     .fixup_relocation_type=la_reloc,
     .validate_output=la_validate,
     .cfi_implicit_eh_frame=true,
-    .cfi_code_align=4U,
-    .cfi_data_align=-8,
+    .emit_all_section_symbols=true,
+    .cfi_code_align=1U,
+    .cfi_data_align=-4,
     .cfi_return_reg=1U,
     .cfi_stack_reg=3U,
-    .cfi_address_size=8U
+    .cfi_address_size=8U,
+    .cfi_initial_cfa_register_only=true,
+    .cfi_eh_range_relocations=true,
+    .cfi_advance_reloc_mode=1U,
+    .cfi_anchors_hidden=true
 };
 const MiniAsTargetOps *minias_target_loongarch64(void){return &ops;}

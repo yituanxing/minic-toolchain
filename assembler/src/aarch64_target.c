@@ -5085,6 +5085,109 @@ static uint32_t aarch64_fixup_relocation_type(MiniAsFixupKind kind,
     return relocation;
 }
 
+/* AArch64 ELF requires local $x/$d mapping symbols at code/data boundaries.
+ * The symbol is target-owned; the generic ELF writer only serializes it. */
+static bool a64_record_mapping(MiniAs *as,int section,uint64_t offset,
+                               bool executable) {
+    char name[64];
+    size_t ordinal=as->symbol_count;
+    MiniAsSymbol *symbol;
+    for(;;) {
+        int n=snprintf(name,sizeof(name),"$%c.%zu",
+                       executable?'x':'d',ordinal);
+        if(n<0 || (size_t)n>=sizeof(name)) {
+            minias_set_error(as,"aarch64-mapping-name-overflow");
+            return false;
+        }
+        if(minias_get_symbol(as,name,false)==NULL)break;
+        if(ordinal==SIZE_MAX)return false;
+        ++ordinal;
+    }
+    symbol=minias_get_symbol(as,name,true);
+    if(symbol==NULL)return false;
+    symbol->defined=true;
+    symbol->section=section;
+    symbol->value=offset;
+    symbol->bind=MINIAS_STB_LOCAL;
+    symbol->type=MINIAS_STT_NOTYPE;
+    return true;
+}
+
+static bool a64_record_cfi_data_mapping(MiniAs *as,int section,
+                                        uint64_t offset) {
+    return a64_record_mapping(as,section,offset,false);
+}
+
+typedef struct A64MappingFragment {
+    int section;
+    uint64_t offset;
+    size_t order;
+    bool executable;
+} A64MappingFragment;
+
+static int a64_compare_mapping_fragments(const void *lhs,const void *rhs) {
+    const A64MappingFragment *a=lhs,*b=rhs;
+    if(a->section!=b->section)return a->section<b->section?-1:1;
+    if(a->offset!=b->offset)return a->offset<b->offset?-1:1;
+    return a->order<b->order?-1:a->order>b->order?1:0;
+}
+
+/* Source fragments may be interleaved across .subsection directives. GNU
+ * mapping symbols follow final section layout, not lexical statement order. */
+static bool a64_record_source_mappings(MiniAs *as) {
+    A64MappingFragment *points;
+    size_t i,count=0U;
+    int previous_section=-1;
+    bool previous_executable=false;
+    if(as->stmt_count==0U)return true;
+    if(as->stmt_count>SIZE_MAX/sizeof(*points))return false;
+    points=malloc(as->stmt_count*sizeof(*points));
+    if(points==NULL) {
+        minias_set_error(as,"out-of-memory:aarch64-mapping");
+        return false;
+    }
+    for(i=0U;i<as->stmt_count;++i) {
+        const MiniAsStmt *stmt=&as->stmts[i];
+        const MiniAsSection *section;
+        bool executable;
+        if(stmt->size==0U || stmt->section<0 ||
+           (size_t)stmt->section>=as->section_count)continue;
+        section=&as->sections[(size_t)stmt->section];
+        if(section->type!=MINIAS_SHT_PROGBITS ||
+           (section->flags&MINIAS_SHF_ALLOC)==0U)continue;
+        /* AArch64 GAS's s_aarch64_inst() calls mapping_state(MAP_INSN).
+         * Common intentionally parses .inst as a raw 32-bit data list,
+         * but that storage choice must not misclassify its ELF mapping as
+         * $d: an instruction word remains executable code to AArch64. */
+        executable=stmt->fragment_kind==MINIAS_FRAGMENT_INSTRUCTION ||
+            (stmt->op!=NULL && strcmp(stmt->op,".inst")==0) ||
+            (stmt->fragment_kind==MINIAS_FRAGMENT_ALIGNMENT &&
+             (section->flags&MINIAS_SHF_EXECINSTR)!=0U &&
+             !stmt->align_has_fill);
+        points[count].section=stmt->section;
+        points[count].offset=stmt->offset;
+        points[count].order=i;
+        points[count].executable=executable;
+        ++count;
+    }
+    qsort(points,count,sizeof(*points),a64_compare_mapping_fragments);
+    for(i=0U;i<count;++i) {
+        const A64MappingFragment *point=&points[i];
+        if(point->section!=previous_section ||
+           point->executable!=previous_executable) {
+            if(!a64_record_mapping(as,point->section,point->offset,
+                                   point->executable)) {
+                free(points);
+                return false;
+            }
+            previous_section=point->section;
+            previous_executable=point->executable;
+        }
+    }
+    free(points);
+    return true;
+}
+
 static bool validate(MiniAs *as) {
     size_t i;
     for (i = 0U; i < as->section_count; ++i) {
@@ -5095,7 +5198,7 @@ static bool validate(MiniAs *as) {
             return false;
         }
     }
-    return true;
+    return a64_record_source_mappings(as);
 }
 
 static void attributes(const MiniAs *as, unsigned char elf_class,
@@ -5161,6 +5264,9 @@ static const MiniAsTargetOps ops = {
     .supports_literal_pools = true,
     .literal_pool_order = MINIAS_LITERAL_POOL_WIDTH_ASC,
     .cfi_implicit_eh_frame = true,
+    .fold_defined_local_relocation_to_section = true,
+    .emit_all_section_symbols = true,
+    .record_cfi_data_mapping = a64_record_cfi_data_mapping,
     .cfi_code_align = 4U,
     .cfi_data_align = -8,
     .cfi_return_reg = 30U,

@@ -2066,7 +2066,10 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
     if (!strcmp(s->op,"movl") && x64_args2(s->args,src,dst) &&
         src[0]=='$' && x64_register(dst,&rd,&wd) && !wd) {
         uint64_t bits;
-        if(minias_eval_u64_expression(src+1U,&bits) &&
+        MiniAsSymbolExpr symbol;
+        bool numeric=minias_eval_u64_expression(src+1U,&bits);
+        bool symbolic=!numeric && minias_parse_symbol_addend(src+1U,&symbol);
+        if(symbolic || (numeric &&
            (bits<=UINT32_MAX ||
             ((int64_t)bits>=INT32_MIN && (int64_t)bits<0) ||
             /* GNU `$~0xfa1e0ff3` carries the mathematically negative
@@ -2074,12 +2077,19 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
              * explicitly bitwise complemented high-all-ones values, not
              * unrelated out-of-range literals such as $0x100000000. */
             (strchr(src+1U,'~')!=NULL &&
-             (bits>>32U)==UINT32_MAX))) {
+             (bits>>32U)==UINT32_MAX)))) {
             m->opcode=X64_MOV_IMM32;m->count=2U;
             m->operands[0].kind=MINIAS_MC_REGISTER;
             m->operands[0].reg=rd;
-            m->operands[1].kind=MINIAS_MC_IMMEDIATE;
-            m->operands[1].immediate=(uint32_t)bits;
+            if(symbolic) {
+                if(!x64_attach_symbol_operand(as,m,1U,&symbol,
+                        "out-of-memory:x86-movl-imm32-symbol")) {
+                    minias_mcinst_destroy(m);return false;
+                }
+            }else {
+                m->operands[1].kind=MINIAS_MC_IMMEDIATE;
+                m->operands[1].immediate=(uint32_t)bits;
+            }
             goto done;
         }
     }
@@ -2940,6 +2950,8 @@ static bool x64_register_encoding_plan(const MiniAsMCInst *m,
             break;
         case X64_MOV_IMM32:
             r=m->operands[0].reg;
+            /* B8+r imm32 accepts an R_X86_64_32 operand.  The ELF fixup
+             * stays attached to the typed symbol, never to pointer bits. */
             if(m->encoding&0x200U) {
                 if(r>=8U || (r>=4U && !(m->encoding&0x800U)))
                     code[n++]=(unsigned char)(0x40U|(r>>3U));
@@ -2950,7 +2962,8 @@ static bool x64_register_encoding_plan(const MiniAsMCInst *m,
                 if(r>=8U)code[n++]=0x41U;
                 code[n++]=(unsigned char)(0xb8U+(r&7U));
                 for(i=0U;i<((m->encoding&UINT32_C(0x400))?2U:4U);++i)
-                    code[n++]=(unsigned char)(m->operands[1].immediate>>(8U*i));
+                    code[n++]=(unsigned char)((m->operands[1].kind==MINIAS_MC_BOUND_SYMBOL?
+                        UINT64_C(0):m->operands[1].immediate)>>(8U*i));
             }
             break;
         case X64_REG_BINARY:
@@ -3205,9 +3218,21 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
     X64EncodingPlan plan;
     unsigned char code[16];size_t n=0;unsigned r;
     if (!m) {minias_set_error(as,"missing-x86_64-mcinst");return false;}
-    if(x64_register_encoding_plan(m,&register_plan))
-        return minias_emit_instruction_bytes(as,s->section,
-            register_plan.bytes,register_plan.size);
+    if(x64_register_encoding_plan(m,&register_plan)) {
+        if(!minias_emit_instruction_bytes(as,s->section,
+                register_plan.bytes,register_plan.size))return false;
+        if(m->opcode==X64_MOV_IMM32 &&
+           m->operands[1].kind==MINIAS_MC_BOUND_SYMBOL) {
+            if(m->encoding!=0U || register_plan.size<4U) {
+                minias_set_error(as,"invalid-x86-movl-symbolic-imm32-layout");
+                return false;
+            }
+            return minias_encode_add_fixup_ref(as,s->section,
+                s->offset+register_plan.size-4U,
+                MINIAS_FIXUP_ABS,4U,*m->operands[1].bound_symbol,false);
+        }
+        return true;
+    }
     plan=x64_encoding_plan(m);
     switch(m->opcode) {
         case X64_PUSH_IMM: {
@@ -3603,6 +3628,8 @@ static const MiniAsTargetOps ops={
      * The Common CFI encoder already owns the real .debug_frame FDE. */
     .cfi_implicit_eh_frame=true,
     .fold_local_abs_relocation_to_section=true,
+    .fold_synthetic_local_relocation_to_section=true,
+    .cfi_eh_fde_alignment=4U,
     .cfi_code_align=1U,
     .cfi_data_align=-8,
     .cfi_return_reg=16U,
