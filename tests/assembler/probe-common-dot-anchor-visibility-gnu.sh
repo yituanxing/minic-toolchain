@@ -40,21 +40,59 @@ check_target() {
     esac
     "$MINIAS" --target="$mini_target" "${mini_args[@]}" \
         -o "$work/mini.o" "$work/dot.s"
-    python3 "$repo/tests/assembler/elf_semantic_compare.py" --strict \
-        "$work/gnu.o" "$work/mini.o" >"$work/$arch-strict.json" || true
-    python3 - "$work/$arch-strict.json" "$arch" <<'PY'
-import json
-import pathlib
+    python3 - "$work/gnu.o" "$work/mini.o" "$arch" "$repo" <<'PY'
 import sys
+from pathlib import Path
 
-result = json.loads(pathlib.Path(sys.argv[1]).read_text())
-diff = result.get('differences', {})
-# GNU GAS may generate an implicit .debug_line from the bare input filename
-# where MiniAS emits only explicit `.loc` rows. That unrelated policy must
-# not dilute the exact relocation tuple/visibility check in this probe.
-for dimension in ('relocation_order', 'relocations'):
-    assert dimension not in diff, (sys.argv[2], dimension, diff[dimension])
-print(f'MINIAS_DOT_ANCHOR=PASS arch={sys.argv[2]} GNU_relocation_tuple_and_visibility=exact')
+sys.path.insert(0, str(Path(sys.argv[4]) / 'tests' / 'assembler'))
+from elf_semantic_compare import load_semantics
+
+reference = load_semantics(sys.argv[1])
+candidate = load_semantics(sys.argv[2])
+arch = sys.argv[3]
+
+# The source defines precisely two dot-anchored expressions in .debug_info.
+# Compare the COMPLETE normalized relocation tuples there (offset, kind,
+# symbol identity including LOCAL/STV_HIDDEN, addend, multiplicity), not a
+# truncated sample of global differences. GNU LoongArch may also produce an
+# implicit .rela.debug_line for the source filename. Its unrelated contents
+# belong to the independent DWARF oracle, not this synthetic-dot contract.
+def info_relocations(semantics):
+    return [row for row in semantics['relocations']
+            if row['key'][0] == '.debug_info']
+
+def info_relocation_order(semantics):
+    return {name: entries for name, entries in
+            semantics['relocation_order'].items()
+            if name in ('.rel.debug_info', '.rela.debug_info')}
+
+gnu_relocs = info_relocations(reference)
+mini_relocs = info_relocations(candidate)
+assert gnu_relocs, (arch, 'missing-GNU-dot-relocations')
+assert mini_relocs == gnu_relocs, (arch, 'debug-info-relocations',
+                                 mini_relocs, gnu_relocs)
+gnu_order = info_relocation_order(reference)
+mini_order = info_relocation_order(candidate)
+assert mini_order == gnu_order, (arch, 'debug-info-relocation-order',
+                                mini_order, gnu_order)
+
+if arch == 'loongarch64':
+    # LoongArch emits ADD/SUB pairs for both source expressions. Guard
+    # against a false green if both objects silently drop the pair, or if
+    # the synthetic SUB anchors lose GNU's LOCAL/HIDDEN visibility.
+    assert len(gnu_relocs) == len(mini_relocs) == 4, (
+        arch, 'expected-four-dot-relocations', gnu_relocs, mini_relocs)
+    assert gnu_order and mini_order, (arch, 'missing-ordered-ADD-SUB-pairs')
+    for who, relocations in (('GNU', gnu_relocs), ('MiniAS', mini_relocs)):
+        hidden = [row for row in relocations
+                  if row['key'][3][0] == 'LOCAL']
+        assert sorted(row['key'][2] for row in hidden) == [55, 56], (
+            arch, who, 'missing-LOCAL-SUB-anchors', hidden)
+        assert all(row['key'][3][2] == 'STV_HIDDEN' for row in hidden), (
+            arch, who, 'wrong-synthetic-anchor-visibility', hidden)
+
+print(f'MINIAS_DOT_ANCHOR=PASS arch={arch} '
+      'GNU_debug_info_relocation_tuple_order_and_visibility=exact')
 PY
 }
 

@@ -1101,6 +1101,20 @@ static bool minias_commit_encode_result(MiniAs *as, const MiniAsStmt *owner) {
     return true;
 }
 
+/* Target-owned executable alignment NOP bytes and the private fragment
+ * transaction must use one policy. A fill like x86's 0x90 can explicitly
+ * request canonical NOPs while other fill bytes remain literal DATA. */
+static bool minias_alignment_emits_target_nops(const MiniAs *as,
+                                               const MiniAsStmt *stmt,
+                                               const MiniAsSection *sec) {
+    return stmt->fragment_kind==MINIAS_FRAGMENT_ALIGNMENT &&
+           (sec->flags & MINIAS_SHF_EXECINSTR)!=0U &&
+           (!stmt->align_has_fill ||
+            (as->target->explicit_alignment_fill_is_code_nop &&
+             as->target->explicit_alignment_fill_is_code_nop(
+                 stmt->align_fill)));
+}
+
 bool minias_emit_instruction_bytes(MiniAs *as, int section_index,
                                    const void *data, size_t size) {
     MiniAsSection *sec;
@@ -1125,9 +1139,7 @@ bool minias_emit_instruction_bytes(MiniAs *as, int section_index,
      * byte transaction.  A Target cannot append alignment NOPs directly to
      * the final Section, where a failed encoder would leave partial bytes. */
     if ((owner->fragment_kind != MINIAS_FRAGMENT_INSTRUCTION &&
-         !(owner->fragment_kind == MINIAS_FRAGMENT_ALIGNMENT &&
-           (sec->flags & MINIAS_SHF_EXECINSTR) != 0U &&
-           !owner->align_has_fill)) ||
+         !minias_alignment_emits_target_nops(as,owner,sec)) ||
         owner->section != section_index ||
         sec->type == MINIAS_SHT_NOBITS ||
         size > SIZE_MAX - sec->size) {
@@ -1214,13 +1226,9 @@ static bool minias_stage_fragment_bytes(MiniAs *as,int section,
     if(owner->section!=section ||
        (target_bytes ?
         (owner->fragment_kind!=MINIAS_FRAGMENT_INSTRUCTION &&
-         !(owner->fragment_kind==MINIAS_FRAGMENT_ALIGNMENT &&
-           (sec->flags&MINIAS_SHF_EXECINSTR)!=0U &&
-           !owner->align_has_fill)) :
+         !minias_alignment_emits_target_nops(as,owner,sec)) :
         (owner->fragment_kind==MINIAS_FRAGMENT_INSTRUCTION ||
-         (owner->fragment_kind==MINIAS_FRAGMENT_ALIGNMENT &&
-          (sec->flags&MINIAS_SHF_EXECINSTR)!=0U &&
-          !owner->align_has_fill))) ||
+         minias_alignment_emits_target_nops(as,owner,sec))) ||
        result->byte_count>owner->size ||
        size>owner->size-result->byte_count) {
         minias_set_error(as,"fragment-byte-stage-conflict:line=%zu",owner->line);
@@ -1286,9 +1294,7 @@ static bool minias_stage_fragment_pattern(MiniAs *as,int section,
     size=width*count;
     if(owner->section!=section ||
        owner->fragment_kind==MINIAS_FRAGMENT_INSTRUCTION ||
-       (owner->fragment_kind==MINIAS_FRAGMENT_ALIGNMENT &&
-        (sec->flags&MINIAS_SHF_EXECINSTR)!=0U &&
-        !owner->align_has_fill) ||
+       minias_alignment_emits_target_nops(as,owner,sec) ||
        result->byte_count>owner->size || size>owner->size-result->byte_count) {
         minias_set_error(as,"fragment-pattern-stage-conflict:line=%zu",
                          owner->line);
@@ -6996,14 +7002,14 @@ bool minias_emit_sections(MiniAs *as) {
         as->committing_fragment=false;
         if (stmt->fragment_kind == MINIAS_FRAGMENT_ALIGNMENT ||
             stmt->fragment_kind == MINIAS_FRAGMENT_ORIGIN) {
-            bool exec_align = (section->flags & MINIAS_SHF_EXECINSTR) != 0U &&
-                              stmt->fragment_kind == MINIAS_FRAGMENT_ALIGNMENT;
-            if (!(stmt->align_has_fill
-                      ? emit_common_space(as,stmt->section,stmt->size,stmt->align_fill)
-                      : exec_align
-                      ? as->target->append_code_alignment(as, stmt->section,
-                                                              stmt->size)
-                      : minias_section_append_zero(as, stmt->section, stmt->size))) {
+            bool code_nop_align=minias_alignment_emits_target_nops(
+                as,stmt,section);
+            if (!(code_nop_align
+                      ? as->target->append_code_alignment(as,stmt,stmt->size)
+                      : stmt->align_has_fill
+                      ? emit_common_space(as,stmt->section,stmt->size,
+                                          stmt->align_fill)
+                      : minias_section_append_zero(as,stmt->section,stmt->size))) {
                 if (as->error[0] == '\0') {
                     minias_set_error(as,
                                      "emit-align-failed:%s:line=%zu",

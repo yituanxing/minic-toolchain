@@ -27,7 +27,7 @@ if [[ -n ${MINIAS_X86_ARGS:-} ]]; then
     read -r -a args <<<"$MINIAS_X86_ARGS"
 fi
 work=$(mktemp -d)
-trap 'rm -r -- "$work"' EXIT
+trap 'if [[ ${MINIAS_X86_BOOT_KEEP_WORK:-0} == 1 ]]; then printf "MINIAS_X86_BOOT_ORACLE_WORK=%s\n" "$work"; else rm -r -- "$work"; fi' EXIT
 
 for program in as readelf objcopy objdump cmp ld awk sort; do
     if ! command -v "$program" >/dev/null 2>&1; then
@@ -558,6 +558,118 @@ mixed_efi32:
     ret
 ASM
 
+# The next genuine Kbuild frontier (cpuflags, pmjump, compressed EFI/head64)
+# exercises already-owned FPU/system/indirect/return encoders and, crucially,
+# deferred section-anchor differences in both memory displacement and imm32.
+cat >"$work/code16_linux_third_frontier.s" <<'ASM'
+    .text
+    .code16gcc
+    fnstcw (%esp)
+    fnstcw -4(%ebp)
+    .balign 16, 0x90
+    ret
+ASM
+
+cat >"$work/code32_linux_third_frontier.s" <<'ASM'
+    .text
+    .code32
+boot32:
+    jmpl *%eax
+    jmpl *4(%ebx)
+    btcl $12, %eax
+    lretl
+1:
+    sgdtl (gdt - 1b)(%ebx)
+    sidtl (idt - 1b)(%ebx)
+    .balign 16, 0x90
+    ret
+gdt:
+    .space 8
+idt:
+    .space 8
+ASM
+
+cat >"$work/elf64_linux_third_frontier_difference.s" <<'ASM'
+    .text
+    .code32
+boot32:
+    call 1f
+1:
+    pop %ebx
+    subl $boot32 - 1b, %ebp
+    movl $external_end - 1b, 608(%esi)
+    subl $external_start - 1b, 608(%esi)
+    sgdtl (gdt - 1b)(%ebx)
+    sidtl (idt - 1b)(%ebx)
+    .space 160
+2:
+    subl $boot32 - 2b, %ebp
+    .code64
+startup_32:
+    leaq ((_bss-8) - startup_32)(%rbx), %rdi
+    leaq ((gdt) - startup_32)(%rbx), %rsi
+    .balign 16, 0x90
+    ret
+gdt:
+    .space 8
+idt:
+    .space 8
+_bss:
+    .space 8
+ASM
+
+# GNU chooses branch relocation flavor from the lexical CPU mode, symbol
+# binding/section, and explicit @PLT request.  ELF64 .code32 external CALL
+# deliberately differs from ELF64 .code64 external CALL, while local
+# cross-section branches remain PC32 in either mode. Compare full tuples.
+cat >"$work/elf64_branch_modes_plt.s" <<'ASM'
+    .text
+    .globl branch_probe
+    .type branch_probe,@function
+branch_probe:
+    jmp undefined_jump
+    je undefined_cond
+    call undefined_call
+    jmp local_other_section
+    jne local_other_section
+    call local_other_section
+    jmp explicit_plt@PLT
+    call explicit_plt@PLT
+    jne explicit_cond_plt@PLT
+    jmp undefined_function
+    jmp global_other_section
+    call global_other_section
+    ret
+    .code32
+branch_probe32:
+    jmp undefined_jump32
+    je undefined_cond32
+    call undefined_call32
+    jmp local_other_section
+    jmp explicit_plt32@PLT
+    jne explicit_cond_plt32@PLT
+    .code64
+    .type undefined_function,@function
+    .section .data,"aw",@progbits
+local_other_section:
+    .long 0
+    .globl global_other_section
+global_other_section:
+    .long 0
+ASM
+
+cat >"$work/elf64_conditional_plt.s" <<'ASM'
+    .text
+    .code64
+    jne ext_cond_plt@PLT
+    ja ext_above_plt@PLT
+    .code32
+    jne ext_cond32_plt@PLT
+    ja ext_above32_plt@PLT
+    .code64
+    ret
+ASM
+
 cat >"$work/invalid_code16_ltr_64reg.s" <<'ASM'
     .text
     .code16
@@ -661,8 +773,8 @@ log_pass() {
 # symbol-table ordering, relocation INFO word, and section offsets may differ.
 normalize_relocations() {
     readelf -Wr "$1" | awk '
-        /^[[:space:]]*[0-9a-fA-F]+[[:space:]]+[0-9a-fA-F]+[[:space:]]+R_386_/ {
-            print $1 ":" $3 ":" $5
+        /^[[:space:]]*[0-9a-fA-F]+[[:space:]]+[0-9a-fA-F]+[[:space:]]+R_(386_|X86_64_)/ {
+            print $1 ":" $3 ":" $5 ":" $6 ":" $7
         }
     ' | sort
 }
@@ -851,7 +963,12 @@ run_positive code16_linux_gcc_boot_blockers
 run_positive code32_linux_gcc_symbol_difference
 run_positive code16_linux_second_frontier
 run_positive code32_linux_second_frontier
+run_positive code16_linux_third_frontier
+run_positive code32_linux_third_frontier
 run_mixed_elf64 elf64_code32_linux_second_frontier
+run_mixed_elf64 elf64_linux_third_frontier_difference
+run_mixed_elf64 elf64_branch_modes_plt
+run_mixed_elf64 elf64_conditional_plt
 run_positive mixed_modes
 run_positive external_rel yes
 run_positive external_rel16 yes

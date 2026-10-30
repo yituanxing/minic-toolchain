@@ -697,6 +697,16 @@ bool minias_bind_symbol_difference_ref(MiniAs *as,
 bool minias_resolve_symbol_difference_ref(MiniAs *as,
                                           const MiniAsSymbolDifferenceRef *expr,
                                           int64_t *value);
+/* A final-layout symbol difference is either absolute (two symbols in one
+ * section), or a relocation against the positive symbol when subtracting
+ * a defined anchor in the relocation field's own section. In the latter
+ * case the returned addend is PC-relative to field_offset; the Target owns
+ * its relocation kind and width, Common owns symbolic arithmetic. */
+bool minias_resolve_symbol_difference_field(MiniAs *as,
+                                            const MiniAsSymbolDifferenceRef *expr,
+                                            int section,uint64_t field_offset,
+                                            int64_t *absolute,bool *has_reloc,
+                                            MiniAsSymbolRef *reloc_ref);
 /* Borrowed; no actual Symbol is created by lookup. Pointer is invalidated
  * by any subsequent symbol-table allocation; retain NameId across passes. */
 const MiniAsSymbol *minias_symbol_ref_lookup(const MiniAs *as,
@@ -919,7 +929,13 @@ typedef struct MiniAsTargetOps {
      * the longest legal encoding. No Common mnemonic/argument reparse. */
     bool (*plan_instruction_relaxation)(MiniAs *,const MiniAsStmt *,
                                         MiniAsTargetRelaxPlan *);
-    bool (*append_code_alignment)(MiniAs *, int, size_t);
+    /* Keep the lexical ISA/mode snapshot of the ALIGN site: a Target may
+     * need different NOP encodings for different source-selected CPU modes. */
+    bool (*append_code_alignment)(MiniAs *,const MiniAsStmt *,size_t);
+    /* Some targets interpret an explicit alignment fill as the canonical
+     * executable NOP sequence (e.g. GNU x86 `balign 16,0x90`). Common
+     * must not choose machine-code bytes or hardcode a target's fill value. */
+    bool (*explicit_alignment_fill_is_code_nop)(uint8_t);
     /* A semantic capability: never infer target support from an ELF
      * relocation number, where zero may be a valid numeric enumeration. */
     bool (*supports_fixup)(MiniAsFixupKind, unsigned);

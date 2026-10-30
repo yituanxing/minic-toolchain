@@ -12,7 +12,29 @@ repo=$(cd "$(dirname "$0")/../.." && pwd)
 source_file="$repo/tests/assembler/fixtures/loong-linux-altinstructions-data-widths.S"
 work=${WORK_DIR:-"$repo/build/minias-gcc-runtime-ab/loongarch64/linux-alternative"}
 mkdir -p "$work"
-trap 'status=$?; echo "MINIAS_LOONG_LINUX_ALT=FAIL line=$LINENO exit=$status" >&2; if [[ -s "$work/strict.json" ]]; then sed -n "1,120p" "$work/strict.json" >&2; fi; echo "MINIAS_LOONG_LINUX_ALT_ARTIFACT=$work" >&2' ERR
+report_failure() {
+  local status=$?
+  echo "MINIAS_LOONG_LINUX_ALT=FAIL line=${BASH_LINENO[0]} exit=$status" >&2
+  if [[ -s "$work/strict.json" ]]; then
+    # This is often a same-offset ADD/SUB ordering disagreement. Include
+    # both sides in one bounded log so the next batch can decide whether the
+    # order is linker-significant without downloading the full ELF artifact.
+    python3 - "$work/strict.json" <<'PY_FAIL' >&2
+import json
+import pathlib
+import sys
+diff = json.loads(pathlib.Path(sys.argv[1]).read_text()).get('differences', {})
+print('MINIAS_LOONG_ALT_RELOCATION_ORDER=' +
+      json.dumps(diff.get('relocation_order', {}), separators=(',', ':'))[:12000])
+PY_FAIL
+  fi
+  if [[ -s "$work/mini.reloc" && -s "$work/gnu.reloc" ]]; then
+    diff -u "$work/gnu.reloc" "$work/mini.reloc" >&2 || true
+  fi
+  echo "MINIAS_LOONG_LINUX_ALT_ARTIFACT=$work" >&2
+  exit "$status"
+}
+trap report_failure ERR
 "$MINIAS" --target=loongarch64 -march=loongarch64 -mabi=lp64d \
   -o "$work/mini.o" "$source_file"
 loongarch64-linux-gnu-as -mabi=lp64d -o "$work/gnu.o" "$source_file"
@@ -23,15 +45,28 @@ dot_source="$repo/tests/assembler/fixtures/loong-expr-dot-anchor-gnu.S"
 "$MINIAS" --target=loongarch64 -march=loongarch64 -mabi=lp64d \
   -o "$work/mini-dot.o" "$dot_source"
 loongarch64-linux-gnu-as -mabi=lp64d -o "$work/gnu-dot.o" "$dot_source"
-python3 "$repo/tests/assembler/elf_semantic_compare.py" --strict \
-  "$work/gnu-dot.o" "$work/mini-dot.o" >"$work/dot-strict.json" || true
-python3 - "$work/dot-strict.json" <<'PY_DOT'
-import json
-import pathlib
+python3 - "$repo/tests/assembler" "$work/gnu-dot.o" "$work/mini-dot.o" <<'PY_DOT'
 import sys
-diff = json.loads(pathlib.Path(sys.argv[1]).read_text()).get('differences', {})
-for dimension in ('relocations', 'relocation_order'):
-    assert dimension not in diff, (dimension, diff[dimension])
+sys.path.insert(0, sys.argv[1])
+from elf_semantic_compare import load_semantics
+
+gnu, mini = (load_semantics(path) for path in sys.argv[2:])
+# Some GNU GAS builds emit an implicit .debug_line for this bare source file,
+# while MiniAS emits line tables only for explicit .file/.loc directives.
+# Compare the actual expression's relocation section, not that unrelated
+# assembler-generated DWARF; retain exact offset/type/addend/symbol identity,
+# ELF binding/visibility and pair ordering within .rela.debug_info.
+def info_relocations(obj):
+    return [row for row in obj['relocations']
+            if row['key'][0] == '.debug_info']
+
+def info_order(obj):
+    return {name: entries for name, entries in obj['relocation_order'].items()
+            if name == '.rela.debug_info'}
+
+assert sum(row['count'] for row in info_relocations(gnu)) == 4
+assert info_relocations(mini) == info_relocations(gnu), 'dot relocation tuples'
+assert info_order(mini) == info_order(gnu), 'dot relocation ordering'
 PY_DOT
 hidden_count=$(readelf -sW "$work/mini-dot.o" | \
   awk '$5=="LOCAL" && $6=="HIDDEN" && $8 ~ /^\.Lminias_private_/ {n++} END {print n+0}')

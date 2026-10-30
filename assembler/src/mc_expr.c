@@ -518,6 +518,9 @@ bool minias_evaluate_absolute_operand(MiniAs *as,const char *text,
     return text && value && minias_evaluate_absolute_expression(as,text,value);
 }
 
+static bool parse_symbol_difference(const char *,
+                                    MiniAsSymbolExpr *,MiniAsSymbolExpr *);
+
 /* A GNU expression such as (identity_mapped - relocate_kernel) is
  * absolute only AFTER both label anchors exist and subsection layout is
  * finalized. Preserve the two typed symbols throughout parse and measure:
@@ -525,21 +528,8 @@ bool minias_evaluate_absolute_operand(MiniAs *as,const char *text,
  * Common owns syntax and final same-section semantics for all targets. */
 bool minias_parse_symbol_difference(const char *expression,
                                     MiniAsSymbolDifference *out) {
-    char *copy,*value,*minus;
-    bool ok=false;
-    if(!expression || !out)return false;
-    copy=minias_strdup(expression);
-    if(!copy)return false;
-    value=minias_expr_strip_outer_parens(copy);
-    minus=strchr(value,'-');
-    if(minus && minus!=value) {
-        *minus++='\0';
-        if(minias_parse_symbol_addend(minias_trim(value),&out->positive) &&
-           minias_parse_symbol_addend(minias_trim(minus),&out->negative))
-            ok=true;
-    }
-    free(copy);
-    return ok;
+    return expression && out &&
+           parse_symbol_difference(expression,&out->positive,&out->negative);
 }
 
 /* One Common parser for a retained section-symbol difference followed by
@@ -601,6 +591,43 @@ bool minias_resolve_symbol_difference_ref(MiniAs *as,
        !minias_checked_add_i64(second,pair->negative.addend,&second) ||
        !checked_sub_i64(first,second,&delta))return false;
     *value=delta;
+    return true;
+}
+
+/* For P+a - (N+b), a same-section pair is a final-layout absolute value.
+ * Otherwise, if N is a local anchor in the field's section, the linker can
+ * compute the same expression with R_PC32(P, field-N+a-b):
+ *     P + (field-N+a-b) - field = P+a-N-b.
+ * This arithmetic belongs to Common MCExpr; the target decides whether the
+ * requested field has a PC-relative relocation form. */
+bool minias_resolve_symbol_difference_field(MiniAs *as,
+                                            const MiniAsSymbolDifferenceRef *pair,
+                                            int section,uint64_t field_offset,
+                                            int64_t *absolute,bool *has_reloc,
+                                            MiniAsSymbolRef *reloc_ref) {
+    const MiniAsSymbol *positive,*negative;
+    int64_t field_minus_negative,with_positive,addend;
+    if(!as || !pair || !absolute || !has_reloc || !reloc_ref)return false;
+    *has_reloc=false;
+    if(minias_resolve_symbol_difference_ref(as,pair,absolute))return true;
+    positive=minias_symbol_ref_lookup(as,pair->positive);
+    negative=minias_symbol_ref_lookup(as,pair->negative);
+    /* The positive SymbolID may not exist yet: a first reference to an
+     * external is materialized by the fixup, never by name interning. */
+    if(!negative || !negative->defined ||
+       negative->section!=section || section<0 ||
+       (positive && positive->defined &&
+        positive->section==negative->section) ||
+       field_offset>INT64_MAX || negative->value>INT64_MAX)return false;
+    if(!checked_sub_i64((int64_t)field_offset,
+                        (int64_t)negative->value,&field_minus_negative) ||
+       !minias_checked_add_i64(field_minus_negative,
+                              pair->positive.addend,&with_positive) ||
+       !checked_sub_i64(with_positive,pair->negative.addend,&addend))
+        return false;
+    *reloc_ref=pair->positive;
+    reloc_ref->addend=addend;
+    *has_reloc=true;
     return true;
 }
 
@@ -763,7 +790,22 @@ static bool parse_symbol_minus_dot(const char *text, MiniAsSymbolExpr *expr) {
         return false;
     }
     normalized = minias_expr_strip_outer_parens(copy);
-    minus = strrchr(normalized, '-');
+    /* Select the top-level subtraction, never an addend inside a grouped
+     * symbol.  Both the public Target operand API and Common DATA now share
+     * this one grammar: ((S-8)-T), S-(T+8), and S-T+8 must not acquire
+     * different meanings merely because they were parsed by different
+     * consumers. */
+    unsigned depth=0U;
+    minus=NULL;
+    for(char *p=normalized;*p;++p) {
+        if(*p=='(')++depth;
+        else if(*p==')') {
+            if(depth==0U)break;
+            --depth;
+        }else if(*p=='-' && depth==0U && p!=normalized && minus==NULL)
+            minus=p;
+    }
+    if(depth!=0U)minus=NULL;
     if (minus == NULL) {
         free(copy);
         return false;
@@ -878,7 +920,25 @@ static bool parse_symbol_difference(const char *text,
         return false;
     }
     normalized = minias_expr_strip_outer_parens(copy);
-    minus = strrchr(normalized, '-');
+    /* A subtraction belongs to the outer expression level. For example,
+     * ((_bss-8)-startup_32) must retain the positive operand's -8 addend,
+     * not split at the '-' nested inside (_bss-8). Likewise A-B+11 uses
+     * the first top-level subtraction, not a trailing constant minus. */
+    minus = NULL;
+    unsigned paren_depth=0U;
+    for(char *p=normalized;*p;++p) {
+        if(*p=='(')++paren_depth;
+        else if(*p==')') {
+            if(paren_depth==0U) {
+                free(copy);
+                return false;
+            }
+            --paren_depth;
+        }else if(*p=='-' && paren_depth==0U && p>normalized) {
+            minus=p;
+            break;
+        }
+    }
     if (minus == NULL) {
         free(copy);
         return false;
@@ -889,7 +949,7 @@ static bool parse_symbol_difference(const char *text,
     /* GNU expression precedence: A-B+11 means (A-B)+11, whereas
      * A-(B+11) means A-B-11. Preserve the grouping *before* removing
      * enclosing parentheses from the right-hand symbol expression. */
-    rhs_parenthesized=rhs[0]=='(' &&
+    rhs_parenthesized=rhs[0]=='(' && rhs[1]!='\0' &&
                        rhs[strlen(rhs)-1U]==')';
     rhs = minias_expr_strip_outer_parens(rhs);
     if (strcmp(rhs, ".") == 0) {

@@ -2158,8 +2158,9 @@ static bool la_encode(MiniAs *as,const MiniAsStmt *s) {
     return minias_encode_add_fixup_ref(as,s->section,s->offset,kind,4U,
                                        *expr,false);
 }
-static bool la_align(MiniAs *as,int section,size_t size) {
+static bool la_align(MiniAs *as,const MiniAsStmt *stmt,size_t size) {
     static const unsigned char nop[4]={0x00,0x00,0x40,0x03};
+    int section=stmt->section;
     if(size%4U){minias_set_error(as,"unalignable-loongarch-code-gap");return false;}
     while(size){if(!minias_emit_instruction_bytes(as,section,nop,4U))return false;size-=4U;}
     return true;

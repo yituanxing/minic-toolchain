@@ -5136,8 +5136,17 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
                 distance=expr->addend;
             }else {
                 target=minias_symbol_ref_lookup(as,*expr);
+                /* A section-equal GLOBAL or WEAK branch still needs its
+                 * symbol identity at final link: strong definitions can
+                 * override a weak placeholder, and GNU GAS emits the
+                 * CALL26/JUMP26/CONDBR19/TSTBR14 relocation even for
+                 * HIDDEN globals. Only STB_LOCAL is a fixed intra-section
+                 * destination (as for ADR above). In particular, Linux
+                 * mm/sparse-vmemmap.o defines weak pmd_init/pud_init and
+                 * must call the architecture's strong implementations. */
                 if (target == NULL || !target->defined ||
-                    target->section != stmt->section) break;
+                    target->section != stmt->section ||
+                    target->bind != MINIAS_STB_LOCAL) break;
                 if (target->value > INT64_MAX || stmt->offset > INT64_MAX) {
                     minias_set_error(as, "aarch64-branch-address-overflow");
                     return false;
@@ -5377,8 +5386,9 @@ static bool directive(MiniAs *as, const char *op, const char *args,
     return true;
 }
 
-static bool code_alignment(MiniAs *as, int section, size_t amount) {
+static bool code_alignment(MiniAs *as, const MiniAsStmt *stmt, size_t amount) {
     static const unsigned char nop[] = {0x1f, 0x20, 0x03, 0xd5};
+    int section=stmt->section;
     if (amount % sizeof(nop) != 0U) {
         minias_set_error(as, "unalignable-aarch64-code-gap:%zu", amount);
         return false;

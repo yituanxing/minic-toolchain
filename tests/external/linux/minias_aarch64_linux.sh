@@ -111,7 +111,8 @@ if "$MINIAS" "${options[@]}" -o "$out" "$input"; then
         return 1
       fi
       if [[ $relative_out == arch/arm64/kernel/* ||
-            $relative_out == arch/arm64/mm/* ]]; then
+            $relative_out == arch/arm64/mm/* ||
+            $relative_out == mm/sparse-vmemmap.o ]]; then
         preserved="$MINIAS_GNU_SOURCE_DIR/${relative_out%.o}.s"
         mkdir -p "$(dirname "$preserved")" || return 1
         cp -- "$input" "$preserved" || return 1
@@ -150,9 +151,33 @@ export MINIAS_GNU_OBJECT_DIR="$gnu_objects"
 export MINIAS_GNU_SOURCE_DIR="$work/asm-sources"
 : >"$trace"
 start=$(date +%s)
+printf 'MINIAS_AARCH64_STAGE=KBUILD_START epoch=%s\n' "$start"
+# Keep long GNU Kbuild stages observable without changing the production
+# assembler, build exit status, or acceptance markers. Its normal output stays
+# in kbuild.log, while the append-only AS trace provides live counts.
+progress_monitor_pid=
+stop_progress_monitor() {
+  if [[ -n ${progress_monitor_pid:-} ]]; then
+    kill "$progress_monitor_pid" 2>/dev/null || true
+    wait "$progress_monitor_pid" 2>/dev/null || true
+    progress_monitor_pid=
+  fi
+}
+trap stop_progress_monitor EXIT
+(
+  while sleep 60; do
+    assembled_now=$(grep -c '^assemble ' "$trace" || true)
+    passed_now=$(grep -c '^pass ' "$trace" || true)
+    failed_now=$(grep -c '^fail ' "$trace" || true)
+    printf 'MINIAS_AARCH64_STAGE=KBUILD_PROGRESS elapsed_s=%s assembled=%s passed=%s failed=%s\n' \
+      "$(( $(date +%s) - start ))" "$assembled_now" "$passed_now" "$failed_now"
+  done
+) &
+progress_monitor_pid=$!
 if ! make -C "$src" O="$out" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
   CC="$cc -B$bindir/" AS="$bindir/aarch64-linux-gnu-as" \
   -j4 -k Image >"$work/kbuild.log" 2>&1; then
+  stop_progress_monitor
   echo 'MINIAS_LINUX_FOURARCH_BUILD=FAIL arch=aarch64 stage=make-Image'
   echo 'MINIAS_LINUX_KBUILD_DIAGNOSTIC=first-errors'
   grep -nE 'minic-as:|(^| )error:|fatal error:|undefined reference|undefined symbol|Error [0-9]+|No rule to make target|unsupported-|bad-' \
@@ -163,6 +188,9 @@ if ! make -C "$src" O="$out" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
   grep '^fail ' "$trace" | tail -n 40 || true
   exit 1
 fi
+stop_progress_monitor
+printf 'MINIAS_AARCH64_STAGE=KBUILD_END elapsed_s=%s\n' \
+  "$(( $(date +%s) - start ))"
 test -s "$image"
 sha256sum "$image" >"$work/Image.sha256"
 file "$image"
@@ -174,29 +202,45 @@ printf 'MINIAS_LINUX_FOURARCH_BUILD=PASS arch=aarch64 assembled=%s passed=%s pro
   "$assembled" "$passed" "$failed" "$(( $(date +%s) - start ))"
 reference_count=$(find "$gnu_objects" -type f -name '*.o' 2>/dev/null | wc -l) || reference_count=0
 printf 'MINIAS_AARCH64_GNU_SIDECAR=CAPTURED objects=%s production_link=MiniAS_only\n' "$reference_count"
-if ! python3 tests/external/linux/minias_aarch64_object_oracle.py \
-  --mini-dir "$out" --gnu-dir "$gnu_objects" --out "$work/aarch64-object-oracle.tsv" \
-  >"$work/aarch64-object-oracle.log" 2>&1; then
-  echo 'MINIAS_AARCH64_GNU_SIDECAR=DIAGNOSTIC_INCOMPLETE'
-fi
-tail -n 45 "$work/aarch64-object-oracle.log" || true
-# proc.o is the first object isolated by real QEMU boot bisection.  Keep
-# instruction + relocation evidence even on runners where the ELF files
-# themselves are expensive to retrieve for an immediate next repair batch.
-for producer in minias gnu; do
-  if [[ $producer == minias ]]; then
-    object="$out/arch/arm64/mm/proc.o"
-  else
-    object="$gnu_objects/arch/arm64/mm/proc.o"
+# The 4,000+ object oracle is a non-gating diagnostic and can take eight
+# minutes. Never put it between a linked Image and the first QEMU result.
+# Preserve targeted boot suspects immediately; run the full oracle after P1,
+# or opt in to it on a failed boot for a deeper offline investigation.
+run_full_object_oracle() {
+  local oracle_start
+  oracle_start=$(date +%s)
+  printf 'MINIAS_AARCH64_STAGE=ORACLE_START objects=%s\n' "$reference_count"
+  if ! python3 tests/external/linux/minias_aarch64_object_oracle.py \
+    --mini-dir "$out" --gnu-dir "$gnu_objects" --out "$work/aarch64-object-oracle.tsv" \
+    >"$work/aarch64-object-oracle.log" 2>&1; then
+    echo 'MINIAS_AARCH64_GNU_SIDECAR=DIAGNOSTIC_INCOMPLETE'
   fi
-  if [[ -f $object ]]; then
-    aarch64-linux-gnu-objdump -dr "$object" >"$work/aarch64-proc-$producer-objdump.log" 2>&1 || true
-  fi
+  printf 'MINIAS_AARCH64_STAGE=ORACLE_END elapsed_s=%s\n' \
+    "$(( $(date +%s) - oracle_start ))"
+  tail -n 45 "$work/aarch64-object-oracle.log" || true
+}
+# Successive *real QEMU* object bisections isolated proc.o and later
+# sparse-vmemmap.o. Retain both GNU/Mini instruction and relocation evidence
+# without uploading the 4,000+ GNU sidecar objects.
+for suspect in arch/arm64/mm/proc mm/sparse-vmemmap; do
+  for producer in minias gnu; do
+    if [[ $producer == minias ]]; then
+      object="$out/$suspect.o"
+    else
+      object="$gnu_objects/$suspect.o"
+    fi
+    if [[ -f $object ]]; then
+      aarch64-linux-gnu-objdump -dr "$object" \
+        >"$work/aarch64-${suspect##*/}-$producer-objdump.log" 2>&1 || true
+    fi
+  done
 done
 
 qemu_timeout=${QEMU_TIMEOUT_SECONDS:-120}
 boot() {
   local name=$1 append=$2 interactive=$3 log="$work/qemu-$1.log" status
+  printf 'MINIAS_AARCH64_STAGE=QEMU_START lane=%s timeout_s=%s\n' \
+    "$name" "$qemu_timeout"
   if [[ $interactive == 1 ]]; then
     (
       sleep "${QEMU_SHELL_INPUT_DELAY_SECONDS:-8}"
@@ -228,9 +272,14 @@ require() {
   if ! grep -E "$pattern" "$work/qemu-$lane.log" >/dev/null; then
     printf 'MINIAS_LINUX_FOURARCH_RUNTIME=FAIL arch=aarch64 lane=%s missing=%s\n' "$lane" "$pattern" >&2
     tail -n 160 "$work/qemu-$lane.log" >&2
+    if [[ ${MINIAS_AARCH64_FULL_OBJECT_ORACLE_ON_FAILURE:-0} == 1 ]]; then
+      run_full_object_oracle
+    fi
     # Repeated full-object QEMU bisection is an opt-in diagnosis, not a
     # default side effect of every failed exact-head Linux acceptance run.
     if [[ $lane == p0-init && ${MINIAS_AARCH64_AUTO_BISECT:-0} == 1 ]]; then
+      printf 'MINIAS_AARCH64_STAGE=BISECT_START lane=%s marker=%s\n' \
+        "$lane" "$pattern"
       WORK_DIR="$work" MINIAS_KBUILD_OUT="$out" MINIAS_GNU_OBJECT_DIR="$gnu_objects" \
         MINIAS_AARCH64_BISECT_MARKER="$pattern" \
         bash tests/external/linux/minias_aarch64_object_bisect.sh || true
@@ -273,3 +322,4 @@ done
 python3 tests/external/linux/runtime_v2_log_check.py \
   --profile p1 --log "$work/qemu-p1-init.log"
 echo 'MINIAS_LINUX_FOURARCH_RUNTIME=PASS arch=aarch64 p0=2/2 p1=12/12'
+run_full_object_oracle

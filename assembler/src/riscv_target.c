@@ -16,13 +16,12 @@
  *
  * Preserve the existing .org zero-fill semantics and data alignment. */
 static bool riscv_emit_code_alignment(MiniAs *as,
-                                     int section_index,
-                                     size_t size) {
+                                     const MiniAsStmt *owner,size_t size) {
     static const unsigned char nop32[] = {0x13U, 0x00U, 0x00U, 0x00U};
     static const unsigned char nop16[] = {0x01U, 0x00U};
     static const unsigned char zero = 0U;
     const MiniAsRiscvState *state = MINIAS_RV_STATE(as);
-    const MiniAsStmt *owner;
+    int section_index=owner->section;
     bool allow_c;
 
     if (!as->emitting_fragment || as->emitting_fragment_id >= as->stmt_count ||
@@ -30,7 +29,6 @@ static bool riscv_emit_code_alignment(MiniAs *as,
         minias_set_error(as, "internal:riscv-alignment-site-missing");
         return false;
     }
-    owner = &as->stmts[as->emitting_fragment_id];
     /* GNU GAS treats .option norvc as a source-instruction compression mode.
      * A prior C16 instruction can still leave a 2-byte gap which code
      * alignment must fill with C.NOP after switching to norvc.  The ISA
