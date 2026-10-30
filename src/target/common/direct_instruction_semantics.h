@@ -149,6 +149,9 @@ typedef enum MinicDirectMachineFamily {
 typedef struct MinicDirectMachineInstructionShape {
     MinicDirectMachineFamily family;
     size_t result_offset;
+    /* Optional block-local SSA transport: target-owned physical GP result
+     * of the immediately preceding scalar operation supplies this lhs. */
+    bool lhs_in_previous_gp;
 } MinicDirectMachineInstructionShape;
 
 bool minic_multi_direct_machine_instruction_shape(

@@ -15,7 +15,7 @@ bool minic_loongarch64_emit_integer_instruction(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     const MinicLP64FramePlan *frame_plan,
-    bool dynamic_frame,
+    bool dynamic_frame, bool lhs_in_previous_gp,
     bool *needs_gp_store);
 
 #endif

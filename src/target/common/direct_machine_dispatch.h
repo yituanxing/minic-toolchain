@@ -3,6 +3,7 @@
 
 #include "target/common/core_block_walk.h"
 #include "target/common/direct_block_context.h"
+#include "target/common/direct_block_register.h"
 #include "target/common/direct_instruction_semantics.h"
 #include "target/common/direct_program_emit.h"
 #include "core/value_uses.h"
@@ -32,6 +33,7 @@ typedef struct MinicDirectMachineDispatch {
     const char *architecture;
     const char *label_prefix;
     bool allow_variadic_double_result;
+    bool allow_adjacent_gp_forward;
     MinicDirectMachineEmitFamily emit_family;
     MinicDirectMachineStoreGP store_gp;
     MinicDirectMachineEmitTerminator emit_terminator;
@@ -103,6 +105,7 @@ static inline bool minic_multi_direct_machine_dispatch(
             const MinicCoreInstruction *ins = NULL;
             MinicDirectMachineInstructionShape shape;
             bool writeback = false;
+            bool forward_to_successor = false;
             if (!minic_core_block_instruction_at(
                     fn, block, ordinal, &ins_id, &ins)) {
                 success = minic_multi_direct_machine_reject(
@@ -116,6 +119,28 @@ static inline bool minic_multi_direct_machine_dispatch(
                     fn, dispatch->architecture, ctx->name,
                     "machine_emit", block_id, (size_t)ins_id, __LINE__);
                 goto done;
+            }
+            /* Shared Core liveness selects the location pair; a backend
+             * opts in only for opcode families it can emit with matching
+             * physical result/lhs registers. The producer's only use is
+             * the next instruction, so no frame writeback is necessary. */
+            shape.lhs_in_previous_gp = false;
+            if (dispatch->allow_adjacent_gp_forward &&
+                have_value_use_counts) {
+                MinicCoreInstructionId neighbor_id;
+                const MinicCoreInstruction *neighbor;
+                if (ordinal > 0U &&
+                    minic_core_block_instruction_at(fn, block, ordinal - 1U,
+                        &neighbor_id, &neighbor))
+                    shape.lhs_in_previous_gp =
+                        minic_multi_direct_gp_adjacent_forward(
+                            fn, neighbor, ins, value_use_counts);
+                if (ordinal + 1U < block->instruction_count &&
+                    minic_core_block_instruction_at(fn, block, ordinal + 1U,
+                        &neighbor_id, &neighbor))
+                    forward_to_successor =
+                        minic_multi_direct_gp_adjacent_forward(
+                            fn, ins, neighbor, value_use_counts);
             }
             /* Semantic classification validates the Core result identity;
              * physical SSA slots belong to the once-built LP64 FramePlan.
@@ -145,6 +170,8 @@ static inline bool minic_multi_direct_machine_dispatch(
             if (writeback && have_value_use_counts &&
                 ins->result != MINIC_CORE_VALUE_INVALID &&
                 value_use_counts[ins->result] == 0U)
+                writeback = false;
+            if (forward_to_successor)
                 writeback = false;
             if (writeback && !dispatch->store_gp(
                     out, ctx, ins, shape.result_offset,

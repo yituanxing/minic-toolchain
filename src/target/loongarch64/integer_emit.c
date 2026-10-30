@@ -57,7 +57,7 @@ bool minic_loongarch64_emit_integer_instruction(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     const MinicLP64FramePlan *frame_plan,
-    bool dynamic_frame,
+    bool dynamic_frame, bool lhs_in_previous_gp,
     bool *needs_gp_store) {
     if (out == NULL || program == NULL || target == NULL ||
         fn == NULL || ins == NULL || frame_plan == NULL ||
@@ -560,8 +560,9 @@ bool minic_loongarch64_emit_integer_instruction(
                 : ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT
                     ? (wide ? "  sub.d $t0, $t0, $t1\n" : "  sub.w $t0, $t0, $t1\n")
                     : (wide ? "  mul.d $t0, $t0, $t1\n" : "  mul.w $t0, $t0, $t1\n");
-            if (!emit_sp_mem(out, wide ? "ld.d" : "ld.w", "$t0",
-                             minic_lp64_frame_value_offset(frame_plan, lhs)) ||
+            if ((!lhs_in_previous_gp &&
+                 !emit_sp_mem(out, wide ? "ld.d" : "ld.w", "$t0",
+                             minic_lp64_frame_value_offset(frame_plan, lhs))) ||
                 !emit_sp_mem(out, wide ? "ld.d" : "ld.w", "$t1",
                              minic_lp64_frame_value_offset(frame_plan, rhs)) ||
                 fputs(opcode, out) == EOF ||
@@ -586,8 +587,9 @@ bool minic_loongarch64_emit_integer_instruction(
                 : ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_XOR
                     ? "  xor $t0, $t0, $t1\n"
                     : "  or $t0, $t0, $t1\n";
-            if (!emit_sp_mem(out, lw == 8U ? "ld.d" : "ld.w",
-                             "$t0", minic_lp64_frame_value_offset(frame_plan, lhs)) ||
+            if ((!lhs_in_previous_gp &&
+                 !emit_sp_mem(out, lw == 8U ? "ld.d" : "ld.w",
+                             "$t0", minic_lp64_frame_value_offset(frame_plan, lhs))) ||
                 !emit_sp_mem(out, rw == 8U ? "ld.d" : "ld.w",
                              "$t1", minic_lp64_frame_value_offset(frame_plan, rhs)) ||
                 fputs(opcode, out) == EOF ||

@@ -282,7 +282,8 @@ bool minic_loongarch64_emit_memory_instruction(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     const MinicLP64FramePlan *frame_plan,
-    bool dynamic_frame, bool *needs_gp_store) {
+    bool dynamic_frame, bool value_in_previous_gp,
+    bool *needs_gp_store) {
     if (out == NULL || program == NULL || target == NULL ||
         fn == NULL || ins == NULL || frame_plan == NULL ||
         needs_gp_store == NULL)
@@ -329,15 +330,17 @@ bool minic_loongarch64_emit_memory_instruction(
                 if (op == NULL ||
                     !loong_static_frame_address(
                         fn, frame_plan, addr, 0U, &direct_offset) ||
-                    !emit_sp_mem(out, (pointer || width == 8U) ? "ld.d" : "ld.w",
-                        "$t0", minic_lp64_frame_value_offset(frame_plan, value)) ||
+                    (!value_in_previous_gp &&
+                     !emit_sp_mem(out, (pointer || width == 8U) ? "ld.d" : "ld.w",
+                         "$t0", minic_lp64_frame_value_offset(frame_plan, value))) ||
                     !emit_sp_mem(out, op, "$t0", direct_offset))
                     return false;
                 return true;
             }
             if (!emit_sp_mem(out, "ld.d", "$t1", minic_lp64_frame_value_offset(frame_plan, addr)) ||
-                !emit_sp_mem(out, (pointer || width == 8U) ? "ld.d" : "ld.w", "$t0",
-                             minic_lp64_frame_value_offset(frame_plan, value)) ||
+                (!value_in_previous_gp &&
+                 !emit_sp_mem(out, (pointer || width == 8U) ? "ld.d" : "ld.w", "$t0",
+                             minic_lp64_frame_value_offset(frame_plan, value))) ||
                 !emit_integer_memory(out, true, pointer ? 8U : width, sign,
                                      atomic,
                      loong_known_address_alignment(program, target, fn,

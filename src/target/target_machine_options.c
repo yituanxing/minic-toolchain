@@ -83,11 +83,22 @@ bool minic_target_codegen_option_apply(MinicTargetInfo *target,
     else if (strcmp(option, "-fcf-protection=none") == 0) {
         flag = MINIC_X86_CODEGEN_IBT_ENDBR;
         enabled = false;
-    } else if (strcmp(option, "-mindirect-branch=thunk-extern") == 0)
+    } else if (strcmp(option, "-mindirect-branch=thunk-extern") == 0) {
+        target->x86_codegen_options &=
+            ~(unsigned int)MINIC_X86_CODEGEN_INDIRECT_INLINE_THUNK;
         flag = MINIC_X86_CODEGEN_INDIRECT_EXTERNAL_THUNK;
-    else if (strcmp(option, "-mindirect-branch=keep") == 0) {
-        flag = MINIC_X86_CODEGEN_INDIRECT_EXTERNAL_THUNK;
+    } else if (strcmp(option, "-mindirect-branch=thunk-inline") == 0) {
+        target->x86_codegen_options &=
+            ~(unsigned int)MINIC_X86_CODEGEN_INDIRECT_EXTERNAL_THUNK;
+        flag = MINIC_X86_CODEGEN_INDIRECT_INLINE_THUNK;
+    } else if (strcmp(option, "-mindirect-branch=keep") == 0) {
+        flag = MINIC_X86_CODEGEN_INDIRECT_EXTERNAL_THUNK |
+               MINIC_X86_CODEGEN_INDIRECT_INLINE_THUNK;
         enabled = false;
+    } else if (strcmp(option, "-mindirect-branch-register") == 0) {
+        /* Our indirect CALL and computed-goto machine paths already move
+         * the target into an explicit GP register, as GCC requests. */
+        return true;
     } else if (strcmp(option, "-mfunction-return=thunk-extern") == 0)
         flag = MINIC_X86_CODEGEN_RETURN_EXTERNAL_THUNK;
     else if (strcmp(option, "-mfunction-return=keep") == 0) {

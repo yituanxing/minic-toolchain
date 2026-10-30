@@ -397,7 +397,8 @@ static bool loongarch64_machine_emit_family(
     case MINIC_DIRECT_MACHINE_MEMORY:
         return minic_loongarch64_emit_memory_instruction(
             out, program, target, fn, ins, ctx->frame_plan,
-            ctx->dynamic_frame, needs_gp_store);
+            ctx->dynamic_frame, shape->lhs_in_previous_gp,
+            needs_gp_store);
     case MINIC_DIRECT_MACHINE_FP:
         return minic_loongarch64_emit_fp_instruction(
             out, program, target, fn, ins, shape->result_offset,
@@ -405,7 +406,8 @@ static bool loongarch64_machine_emit_family(
     case MINIC_DIRECT_MACHINE_INTEGER:
         return minic_loongarch64_emit_integer_instruction(
             out, program, target, fn, ins, ctx->frame_plan,
-            ctx->dynamic_frame, needs_gp_store);
+            ctx->dynamic_frame, shape->lhs_in_previous_gp,
+            needs_gp_store);
     case MINIC_DIRECT_MACHINE_ABI:
         return minic_loongarch64_emit_abi_instruction(
             out, ctx, ins, shape->result_offset, needs_gp_store);
@@ -440,7 +442,7 @@ static bool loongarch64_machine_emit_terminator(
 bool minic_loongarch64_emit_core_blocks(
     FILE *out, const MinicDirectLP64BlockContext *ctx) {
     static const MinicDirectMachineDispatch dispatch = {
-        "loongarch64", "mini_loong", false,
+        "loongarch64", "mini_loong", false, true,
         loongarch64_machine_emit_family,
         loongarch64_machine_store_gp,
         loongarch64_machine_emit_terminator

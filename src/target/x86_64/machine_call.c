@@ -617,7 +617,10 @@ bool minic_x86_64_emit_call_instruction(
             ((target->x86_codegen_options &
               MINIC_X86_CODEGEN_INDIRECT_EXTERNAL_THUNK) != 0U
                  ? fprintf(out, "  call __x86_indirect_thunk_r11\n") < 0
-                 : fprintf(out, "  call *%%r11\n") < 0) ||
+                 : (target->x86_codegen_options &
+                    MINIC_X86_CODEGEN_INDIRECT_INLINE_THUNK) != 0U
+                     ? !x86_emit_indirect_inline_thunk(out, "%r11", true)
+                     : fprintf(out, "  call *%%r11\n") < 0) ||
             (outgoing_bytes != 0U &&
              fprintf(out, "  addq $%zu, %%rsp\n", outgoing_bytes) < 0))
             return false;

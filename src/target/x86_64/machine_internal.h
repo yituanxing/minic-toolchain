@@ -15,6 +15,8 @@ bool x86_i128_load(FILE *, const MinicX86Frame *, MinicCoreValueId,
                    const char *, const char *);
 bool x86_i128_store(FILE *, const MinicX86Frame *, MinicCoreValueId,
                     const char *, const char *);
+bool x86_emit_indirect_inline_thunk(FILE *, const char *target_register,
+                                    bool is_call);
 bool x86_object_address(FILE *, const MinicX86Frame *, MinicCoreObjectId, const char *);
 bool x86_load_memory(FILE *, size_t, bool);
 bool x86_store_memory(FILE *, size_t);

@@ -79,7 +79,13 @@ static int run(unsigned int failure) {
     MinicLP64ArgumentPlan incoming = {0};
     MinicDirectLP64BlockContext ctx = {0};
     MinicDirectMachineDispatch dispatch = {
-        "aarch64", "mini_arm", true, family, gp, term
+        .architecture = "aarch64",
+        .label_prefix = "mini_arm",
+        .allow_variadic_double_result = true,
+        .allow_adjacent_gp_forward = false,
+        .emit_family = family,
+        .store_gp = gp,
+        .emit_terminator = term,
     };
     FILE *out = tmpfile();
     char got[256] = {0};
@@ -90,8 +96,12 @@ static int run(unsigned int failure) {
     blocks[0].instruction_count = 2U;
     blocks[0].source_label_id = SIZE_MAX;
     blocks[0].has_terminator = true;
-    blocks[0].terminator.kind = MINIC_CORE_TERMINATOR_BRANCH;
-    blocks[0].terminator.branch_target = 1U;
+    /* Keep the first block's result live through a real same-block
+     * terminator use; the dead-result probe covers elided writeback. */
+    blocks[0].terminator.kind = MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH;
+    blocks[0].terminator.conditional.condition = 1U;
+    blocks[0].terminator.conditional.when_true = 1U;
+    blocks[0].terminator.conditional.when_false = 1U;
     blocks[1].instructions = second;
     blocks[1].instruction_count = 1U;
     blocks[1].source_label_id = 7U;

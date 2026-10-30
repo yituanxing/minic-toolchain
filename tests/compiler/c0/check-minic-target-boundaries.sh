@@ -971,7 +971,8 @@ cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
 cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
   -ffunction-sections -fdata-sections -Wl,--gc-sections \
   -Iinclude -Isrc tests/compiler/c0/probe-direct-lp64-dispatch.c \
-  src/core/core_ir.c \
+  src/core/core_ir.c src/core/value_uses.c \
+  src/frontend/type.c \
   src/target/common/lp64_frame.c \
   -o "$work/direct-lp64-dispatch-probe"
 "$work/direct-lp64-dispatch-probe"

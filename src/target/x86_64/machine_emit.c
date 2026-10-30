@@ -1433,6 +1433,9 @@ bool minic_x86_64_emit_core_terminator(FILE *out,
                ((target->x86_codegen_options &
                  MINIC_X86_CODEGEN_INDIRECT_EXTERNAL_THUNK) != 0U
                     ? fprintf(out, "  jmp __x86_indirect_thunk_rax\n") >= 0
+                    : (target->x86_codegen_options &
+                       MINIC_X86_CODEGEN_INDIRECT_INLINE_THUNK) != 0U
+                        ? x86_emit_indirect_inline_thunk(out, "%rax", false)
                     : fprintf(out, "  jmp *%%rax\n") >= 0);
     case MINIC_CORE_TERMINATOR_BRANCH:
         return fprintf(out, "  jmp .Lmini_x86_f%zu_b%u\n",

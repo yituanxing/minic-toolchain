@@ -2,6 +2,7 @@
 #include "target/x86_64/abi.h"
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 /* Machine-local primitives used by the selected native instruction family.
  * Keep the syntax/registers architecture-owned; Core IDs map to the same
@@ -61,6 +62,32 @@ bool x86_value_store(FILE *out, const MinicX86Frame *frame, MinicCoreValueId id)
     if (frame->function_value_use_counts != NULL &&
         frame->function_value_use_counts[id] == 0U) return true;
     return fprintf(out, "  movq %%rax, -%zu(%%rbp)\n", frame->value_offsets[id]) >= 0;
+}
+
+/* GCC -mindirect-branch=thunk-inline retpoline, with an explicit register
+ * target: the outer CALL keeps the real caller continuation on the stack;
+ * the inner CALL traps speculative returns until the setup RET replaces its
+ * prediction target. For computed goto, the outer operation is a JMP, so
+ * the final target receives an unchanged stack pointer. Numeric GAS labels
+ * are intentionally local to each contiguous emitted thunk instance. */
+bool x86_emit_indirect_inline_thunk(FILE *out, const char *target_register,
+                                    bool is_call) {
+    if (out == NULL || target_register == NULL ||
+        (strcmp(target_register, "%rax") != 0 &&
+         strcmp(target_register, "%r11") != 0)) return false;
+    return fprintf(out,
+        "  jmp 4f\n"
+        "1:\n"
+        "  call 3f\n"
+        "2:\n"
+        "  pause\n"
+        "  lfence\n"
+        "  jmp 2b\n"
+        "3:\n"
+        "  movq %s, (%%rsp)\n"
+        "  ret\n"
+        "4:\n"
+        "  %s 1b\n", target_register, is_call ? "call" : "jmp") >= 0;
 }
 
 /* Low limb at -offset(%rbp), high limb at -offset+8(%rbp). */

@@ -36,7 +36,8 @@ MINIC_CFLAGS = {
 LOONGARCH_ABI_FLAGS={"-mabi=lp64d","-mabi=lp64s"}
 X86_CODEGEN_FLAGS={
     "-fcf-protection=branch","-fcf-protection=none",
-    "-mindirect-branch=thunk-extern","-mindirect-branch=keep",
+    "-mindirect-branch=thunk-extern","-mindirect-branch=thunk-inline",
+    "-mindirect-branch=keep","-mindirect-branch-register",
     "-mfunction-return=thunk-extern","-mfunction-return=keep",
     "-fpatchable-function-entry=16,16",
     "-fpatchable-function-entry=0,0","-fpatchable-function-entry=0",
@@ -227,6 +228,21 @@ def main():
                 "-fstack-protector-strong",
                 "-ftrivial-auto-var-init=zero",
                 "-mcmodel=kernel", "-O2"])
+            # Original x86 VDSO Kbuild uses inline retpolines and explicit
+            # register targets. These must survive the frozen-.cmd bridge;
+            # silent conversion to unmitigated indirect control flow is not
+            # a qualified equivalence.
+            inline_cmd=cmd.replace(" -c ",
+                " -mindirect-branch=thunk-inline -mindirect-branch-register -c ")
+            _,inline_flags,_,_=gnu_argv(
+                inline_cmd,"gcc","lib/a.o",Path("lib/a.i"),"x86_64")
+            assert inline_flags==[
+                "-mindirect-branch=thunk-inline", "-mindirect-branch-register"]
+            assert valid_minic_flags(inline_flags,"x86_64")
+            assert not valid_minic_flags(inline_flags,"aarch64")
+            assert not any(x in unqualified_gnu_codegen_flags(
+                gnu_command_tokens(inline_cmd,"gcc"),inline_flags)
+                for x in inline_flags)
             assert sum(len(list(range(i,99,7))) for i in range(7))==99
             print("GNU_FROZEN_I_SELFTEST=PASS shards=7 replay_flags=1 gnu_machine_abi=1 unqualified_option_audit=1");return 0
         if a.evidence is None or a.frozen is None or a.target is None:p.error("missing required paths/target")

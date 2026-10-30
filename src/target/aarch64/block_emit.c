@@ -492,7 +492,7 @@ static bool aarch64_machine_emit_terminator(
 bool minic_aarch64_emit_core_blocks(
     FILE *out, const MinicDirectLP64BlockContext *ctx) {
     static const MinicDirectMachineDispatch dispatch = {
-        "aarch64", "mini_arm", true,
+        "aarch64", "mini_arm", true, false,
         aarch64_machine_emit_family,
         aarch64_machine_store_gp,
         aarch64_machine_emit_terminator

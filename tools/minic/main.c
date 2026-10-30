@@ -33,6 +33,7 @@ typedef struct MinicDriverLanguageOptions {
 static bool minic_driver_is_machine_codegen_option(const char *option) {
     return strncmp(option, "-fcf-protection=", 16U) == 0 ||
            strncmp(option, "-mindirect-branch=", 18U) == 0 ||
+           strcmp(option, "-mindirect-branch-register") == 0 ||
            strncmp(option, "-mfunction-return=", 18U) == 0 ||
            strncmp(option, "-fpatchable-function-entry=", 27U) == 0;
 }
@@ -108,7 +109,7 @@ static void usage(FILE *out, const char *argv0) {
     for (i = 0U; i < count; ++i)
         (void)fprintf(out, "%s%s", i == 0U ? "" : "|", targets[i].name);
     (void)fprintf(out,
-            "] [-march=rv32i|rv64i|rv64im|rv64imafd|rv64ima_zicsr_zifencei|rv64imac_zicsr_zifencei] [-mabi=ilp32|lp64|lp64d] [-fsigned-char|-funsigned-char] [-fshort-wchar|-fno-short-wchar] [-fPIC|-fPIE (only -S)] [-fcf-protection=branch] [-mindirect-branch=thunk-extern] [-mfunction-return=thunk-extern] [-fpatchable-function-entry=16,16] [--rtlib=PATH (link only)] [-ffreestanding|-fhosted] [-ffunction-sections|-fno-function-sections] [-static] "
+            "] [-march=rv32i|rv64i|rv64im|rv64imafd|rv64ima_zicsr_zifencei|rv64imac_zicsr_zifencei] [-mabi=ilp32|lp64|lp64d] [-fsigned-char|-funsigned-char] [-fshort-wchar|-fno-short-wchar] [-fPIC|-fPIE (only -S)] [-fcf-protection=branch] [-mindirect-branch=thunk-extern|thunk-inline|keep] [-mindirect-branch-register] [-mfunction-return=thunk-extern] [-fpatchable-function-entry=16,16] [--rtlib=PATH (link only)] [-ffreestanding|-fhosted] [-ffunction-sections|-fno-function-sections] [-static] "
             "[-nostdlib] [-nostartfiles] [-nodefaultlibs] [-nostdinc] "
             "[--sysroot DIR] [-DNAME[=VALUE]] [-UNAME] [-IDIR] "
             "[-isystem DIR] [-include FILE] [-LDIR] [-lNAME] "

@@ -13,7 +13,8 @@ bool minic_loongarch64_emit_memory_instruction(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     const MinicLP64FramePlan *frame_plan,
-    bool dynamic_frame, bool *needs_gp_store);
+    bool dynamic_frame, bool value_in_previous_gp,
+    bool *needs_gp_store);
 
 /* Exact Core-origin/address/alignment eligibility used by the memory
  * emitter and address-materialization elision. Never elide a producer

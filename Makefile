@@ -1374,7 +1374,12 @@ check-core-dead-ssa-writeback: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
 	bash tests/compiler/c0/probe-core-dead-ssa-writeback.sh
 
-check-fast: check-loongarch64-record-copy-size check-loongarch64-frame-fold check-core-value-use-counts check-core-dead-ssa-writeback
+.PHONY: check-core-gp-forward
+check-core-gp-forward: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	bash tests/compiler/c0/probe-core-gp-forward.sh
+
+check-fast: check-loongarch64-record-copy-size check-loongarch64-frame-fold check-core-value-use-counts check-core-dead-ssa-writeback check-core-gp-forward
 
 .PHONY: check-gnu-builtin-constant-p-if-guard
 check-gnu-builtin-constant-p-if-guard: $(MINIC_CC_BINARY)

@@ -328,6 +328,11 @@
       "review_depth": "inventory",
       "ci_touched_in": []
     },
+    "src/target/common/direct_block_register.h": {
+      "blob": "513fb6d9aac73f5ae8bb450f150f53c2f3d7a21d",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
     "src/target/common/direct_call_plan.c": {
       "blob": "2e2f00ab1b0e1c2939d34bed41a82d2121d2e8eb",
       "review_depth": "full",
