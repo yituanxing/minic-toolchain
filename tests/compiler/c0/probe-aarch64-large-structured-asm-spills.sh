@@ -6,19 +6,31 @@ for updates in 45 640;do
   python3 - "$updates" "$d/large-$updates.i" <<'PY'
 import sys
 n=int(sys.argv[1]);out=sys.argv[2];mask=(1<<64)-1;v=17
+# A reusable scalar SSA chain no longer implies a large physical frame.
+# Force an actual non-reusable, observable local object on both boundaries.
+# The second store also reaches deep into the object, so the 4095 case
+# cannot pass merely because the total SP subtraction is large.
+frame_anchor_bytes=768 if n==45 else 8192
 lines=['typedef unsigned long u64;','static u64 published;',
- '__attribute__((noinline)) static u64 heavy(u64 x) {']
+ '__attribute__((noinline)) static u64 heavy(u64 x) {',
+ ' volatile unsigned char frame_anchor[%d];' % frame_anchor_bytes]
 for i in range(n):
     k=(i*83+17)%65521
     lines.append(' x = ((x << 3) ^ (x >> 2)) + %dUL;' % k)
     v=(((v << 3) ^ (v >> 2)) + k) & mask
-lines.extend([' asm volatile("stlr %x1, %0" : "=Q"(published) : "rZ"(x) : "memory");',
+lines.extend([' frame_anchor[0] = (unsigned char)x;',
+ ' frame_anchor[%d] = frame_anchor[0];' % (frame_anchor_bytes-1),
+ ' asm volatile("stlr %x1, %0" : "=Q"(published) : "rZ"(x) : "memory");',
  ' return published;','}',
  'int main(void) { return heavy(17UL) == %dUL ? 42 : 1; }' % v])
 open(out,'w').write('\n'.join(lines)+'\n')
 PY
   "$minic" --target=aarch64-linux -S "$d/large-$updates.i" -o "$d/large-$updates.s"
   grep -Fq 'stlr x9, [x10]' "$d/large-$updates.s"
+  if command -v aarch64-linux-gnu-as >/dev/null 2>&1; then
+    aarch64-linux-gnu-as "$d/large-$updates.s" -o "$d/large-$updates.o"
+    test -s "$d/large-$updates.o"
+  fi
   # Register allocation and Common Core spill-slot reuse can legitimately
   # eliminate the old x17 materialization. Keep the actual byte-offset
   # boundary test independent of that incidental register choice.
@@ -37,6 +49,8 @@ frame_bytes = int(match.group(2))
 minimum = 512 if updates == 45 else 4095
 if frame_bytes <= minimum:
     raise SystemExit(f'AArch64 frame {frame_bytes} did not cross {minimum}')
+if frame_bytes >= 16384:
+    raise SystemExit(f'AArch64 frame {frame_bytes} overflowed 16KiB kernel stack budget')
 if updates == 640 and not re.search(r'\badd x(\d+), sp, x\1\b', heavy):
     raise SystemExit('missing large SP-relative address materialization')
 print(f'AARCH64_LARGE_STRUCTURED_ASM_FRAME=PASS updates={updates} bytes={frame_bytes}')
