@@ -344,6 +344,10 @@ static bool minic_inline_symbolic_argument_expression(
     MinicExpressionId closed_id;
     bool used_integer_fact = false;
 
+    /* FIXME(MC-058): transitive closure carries direct symbolic operands and
+     * integer facts, but not (known global pointer + constant element offset).
+     * GNU "i" operand users therefore fail for a one-hop specialized caller. */
+
     if (program == NULL || target == NULL || symbolic_expression == NULL ||
         used_caller_fact == NULL || depth > 32U) {
         return false;

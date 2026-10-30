@@ -2,7 +2,7 @@
 
 > **持续审计文档（living document）**。这是生产路径的事实图谱，不是一次性重构 RFC，也不代表全部源码已逐行审核。
 >
-> 首建：2026-10-30；第五轮审计起点：`b0870345b`（前次第四轮基线 `400f4a611`），分支 `refactor/minic-target-language-boundary`。代码演进后须更新入口、契约、证据及审计范围。
+> 首建：2026-10-30；第五轮审计起点：`b0870345b`（前次第四轮基线 `400f4a611`）；第六轮审计起点：`74b366267`，分支 `refactor/minic-target-language-boundary`。代码演进后须更新入口、契约、证据及审计范围。
 >
 > 配套：[函数契约台账](minic-function-contract-register.md) · [缺陷、风险与架构债](minic-issue-register.md) · [架构原则](principles.md)。
 
@@ -138,7 +138,7 @@ flowchart TD
 | x86 特化 ASM 类型门控 | Source 六种 GNU 特例对输出先去 cv，Core 正确携带 lvalue pointer，机器发射再用 raw pointee type equality | **MC-050 P2 LOCAL-COMPILE-DIFF**：六家族 plain -S PASS、volatile FAIL；三个安全子例 GNU/mixed native PASS，不能虚报 volatile MiniC runtime。 |
 | AArch64 uaccess 输出宽度 | Source 接受 LDTRB/H/W 的 1/2/4B output，Machine 无条件使用 8B `str x10` | **MC-052 P1 ASM-ONLY**：可覆盖相邻 packed 字段；只证 `.s` 地址和物理宽度，无目标 GNU GAS/QEMU。 |
 | RV64I softfloat 能力 | LP64 与 ISA F/D codegen 相互独立；基本四则已有 libgcc 桥接，比较/取负/转换没有同等 helper | **MC-053 P2 LOCAL-COMPILE-DIFF**：RV64I/LP64 十例 0/10，RV64IMAFD/LP64D 10/10，属于显式拒绝的能力缺口，不等于错误机器码。 |
-| Core 验证器辅助数组 | 主 Core arena 有存储形状 preflight，fixed bindings、enum_types 没有相同先检验 | **MC-055 P3 INVESTIGATING**：仅手构 malformed Core 的 fail-closed 风险；有效 C producer 目前遵守不变式。 |
+| Core 验证器辅助数组 | 主 Core arena 有存储形状 preflight，但 fixed bindings、enum_types、function_symbols 无先检验 | **MC-055 P2 CORE-API-ASAN**：人为 malformed Core 会产生两条空指针/一条堆越界，公开 Core API 可构造欠缺 enum 元数据但 verifier 误接受；**尚未证合法 C producer 出错**。 |
 | Inline symbolic 过时判定 | `minic_inline_symbolic_static_expression_depth` 中局部值路径有 `&& false`，但其余 symbolic closure/legacy fallback 有生产消费者 | **MC-054 P3 DEBT**：可小范围清理恒假代码，不可据此删除整个函数或回退算法。 |
 
 本轮以源码、调用链、所有权和已有测试证据交叉审核，**不是一次性重写授权**。优先补准契约与测试，问题可入台账挂起；若以后进入修复批次，应先验证所有相关消费者和旧路径是否还需要，再删除旧实现。
@@ -150,6 +150,23 @@ flowchart TD
 重要跨层模型：Frontend AST 中稳定的 `TypeId/RecordId` 与可扩容的 `ArrayType*/Record*` 地址有不同生命周期；Core SSA/CallView 是语义载体，实际 output 宽度和可用软 float helper 必须由 ISA/ABI consumer 明确保证；GNU ASM Source 准入与 Machine emitter 是**同一 contract 的两端**，不能各自任意重定义 volatile、lvalue 宽度；可选 Inline 优化预算和编译正确性不可混为一谈。下一轮继续优先找全局 owner 与消费者之间的差异，使用独立 ASan、GNU native、GAS/ELF/QEMU 的真实证据逐级封闭问题。
 
 **覆盖边界：** A64 `source_policy`/`fp_emit`/`residual_emit` 全读，`asm_contract.c` 仅关键区段 R2；x86 `source_policy` 全读，两个万行级 ASM 源/机文件仅配对 30 组，不应声称长尾全量读完。所有目标新测试主要是 `-S` 源/汇编和 x86 原生可执行差分；本轮未对新 MC 条目跑 A64/Loong/RV 的目标 QEMU。
+
+### 第六轮：函数契约与真实消费者复扫（审计起点 `74b366267`）
+
+第六轮新增 [函数台账](minic-function-contract-register.md) 的 `F6-*` 共 **204 个函数/函数组记录**：Common22、Frontend28、Compiler/Inline/Reentry24、Core16、RV32/64 30、AArch6455、x86 29。它们有新读函数、helper 函数组合及重复复核，不是 204 个新的独立函数，更不是全项目 R2/U2 覆盖率。x86 五组大函数仍标 R1/U1。Core 69 个有效 opcode 已逐一核对 verifier/value-use visitor，不能据此推断所有元数据先决条件都被验证。
+
+| 设计层与函数所有权 | 本轮新的事实、生产者与消费者 | Bug 状态 / 证据边界 |
+| --- | --- | --- |
+| Frontend Record arena | runtime 顺序 initializer 持有借来的 `Record*`，首字段 `sizeof(匿名struct)` 可增长 arena，下一字段读旧指针。与静态后向覆写的 MC-023 同类失效机理、不同生产路径。 | **MC-056 P0 ASAN OPEN**，持久反例已在本仓库，五目标存在不同 capacity 相位；普通 x86 native 返回值暂与 GNU 相同。 |
+| GNU 空 Record→目标 ABI | Common shape 可以合法算出0 words；RV32 caller 有两条路径已经支持，terminator 两项失败；RV64 ABI `IGNORE` 已分类但 return emitter 和 call 资格未完全消费；x86 有自己的四项拒绝路径。 | **MC-057 P2 LOCAL-COMPILE-DIFF OPEN**，六目标×四语义角色分开记录：RV32 2/4、RV64I/LP64 0/4、RV64D 0/4、x86 0/4、A64 4/4、Loong 4/4，均为 `-S` 而非 QEMU。 |
+| Compiler symbolic fact identity | Caller 的直接已知全局指针能内联为 `"i"` 静态 operand，但 `ptr + 1` 经中间 wrapper 传递时缺 `(symbol,byte-offset)` 事实，唯一 caller 即可触发。 | **MC-058 P1 LOCAL-COMPILE-DIFF OPEN**；同源 direct PASS / transitive FAIL，独立于 MC-006 多实例污染和 MC-008 整数事实。 |
+| Core 公开 API / Verifier | Main Core buffers 形状预检完整，但 fixed binding/function symbol/enum 三元数据 arena 仍可异常；正常 add/set API 正向 ASan clean。 | **MC-055 P2 INVESTIGATING CORE-API-ASAN**，malformed 结构崩溃与 API enum 注册契约不一致有实证；非合法 GNU C 的已证错编。 |
+| x86 Source/OPAQUE 双消费者 | SMAP form1/2 属无 operand 的 opaque 机器 emit；form3/4 属有 operand structured emitter，同名机器 case 两端均活跃。 | **排误报**：GNU/MiniC -S/GNU AS/readelf 均含完整 alternative sections，不能把 form1/2 删除。 |
+| Inline/Core Optional Index | `inline_boolean_domain_legacy` 是缓存 OOM 的真实 fallback；`core_reentry_fallback` 又供 standalone CoreLower 和索引失败使用。 | **排误报**：新旧算法并存是必要的失败/standalone 支持，不是自动冗余；reentry 专项脚本 indexed/fallback、GNU/MiniC native 与五 ISA `-S` PASS。 |
+| RISC-V ABI 与帧重用 | RV32 64bit named 参数可跨 a7/entry stack，va_arg 的64bit值占偶数寄存器对；RV64I libgcc helper CALL 维持 RA 保存，公共 object reuse 排除过对齐对象。 | **排误报**：编译汇编与 psABI 一致；没有 Linux/QEMU 运行实测。 |
+| AArch64 模板与机器宽度 | Linux AT/io dependency 的 `volatile unsigned long` 输入实测 `-S` 可通过；frame x16/x17 materialize 与 source-only constraint 分离。 | **排误报**：不新增未经实证的 bug；已登记 **MC-052** uaccess 8B 写回风险依然待修。 |
+
+第六轮测试将不同层级分开：`GNU C syntax/compile`、MiniC `-S`、ASan、GNU AS/原生可执行（仅指定 x86 正控）以及 **未完成的目标 QEMU**。新增 `MC-056/057/058` 输入存放在 `tests/compiler/audit/`，为已知失败的长期反例，不计入绿色编译成功率。源码仅加入对应所有权/ABI `FIXME(MC-...)`，不在审计轮改变运行语义。
 
 ### 第四轮跨层回看：为何不能由新 Bug 推出要重写某一层
 

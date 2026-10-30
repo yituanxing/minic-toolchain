@@ -1375,6 +1375,10 @@ static bool parse_positional_runtime_record_initializer_from(MinicParser *parser
         return false;
     }
     record_id = target->type.record_id;
+    /* FIXME(MC-056): Program.records is reallocatable. The borrowed record
+     * below survives nested field-expression parsing (including sizeof an
+     * anonymous struct), so the next field iteration can read freed memory.
+     * Keep the RecordId across parsing and reacquire/snapshot field metadata. */
     record = minic_c0_program_record(parser->program, record_id);
     if (record == NULL || !record->is_complete) {
         minic_parser_error(parser,

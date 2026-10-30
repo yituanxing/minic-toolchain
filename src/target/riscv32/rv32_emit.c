@@ -694,6 +694,8 @@ static bool rv32_term(FILE *out, const MinicCoreFunction *f,
                        const char *symbol) {
     switch (term->kind) {
     case MINIC_CORE_TERMINATOR_RETURN:
+        /* FIXME(MC-057): an empty GNU Record has size 0 but is still a
+         * Record return. Falling through to scalar return rejects valid C. */
         if (fr->abi.record_return_size != 0U)
             return rv32_emit_record_return(out, fr, term, symbol);
         if (!minic_type_is_void(f->return_type)) {

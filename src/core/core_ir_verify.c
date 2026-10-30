@@ -1143,6 +1143,11 @@ bool minic_core_function_verify(const MinicCoreFunction *function) {
     size_t index;
     bool valid;
 
+    /* FIXME(MC-055): the storage-shape preflight below does not cover
+     * fixed_register_bindings, enum_types or function_symbols. Malformed
+     * external Core structures can escape preflight and crash later reads.
+     * Normal builder-produced Core is not known to violate this invariant. */
+
     if (function == NULL || function->name == NULL || function->name_length == 0U ||
         !minic_function_calling_convention_valid(function->calling_convention) ||
         (function->parameter_count != 0U && function->parameter_types == NULL) ||

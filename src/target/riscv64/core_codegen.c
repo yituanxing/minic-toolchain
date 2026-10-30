@@ -333,6 +333,9 @@ static bool emit_terminator(FILE *file,
     switch (terminator->kind) {
     case MINIC_CORE_TERMINATOR_RETURN:
         if (minic_type_is_record(function->return_type)) {
+            /* FIXME(MC-057): classify_value can return ABI_VALUE_IGNORE for
+             * a GNU zero-byte Record; this return emitter handles only
+             * AGGREGATE/INDIRECT and must model no physical return payload. */
             MinicRiscv64AbiValue return_value;
             size_t object_offset;
 

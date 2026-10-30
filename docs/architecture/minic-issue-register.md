@@ -55,6 +55,9 @@
 | [MC-051](#mc-051-long-double-一元取负丢失有符号零) | P1 | OPEN | GNU-NATIVE-DIFF | Core | `-0L` 经 `0L - x` 实现，`-(+0L)` 错误变为正零 |
 | [MC-052](#mc-052-aarch64-uaccess-窄输出按八字节写回) | P1 | OPEN | ASM-ONLY | AArch64 | LDTRB/H/W 将1/2/4B输出统一按8B `str x` 写回，越界风险 |
 | [MC-053](#mc-053-rv64i-lp64-软浮点只覆盖四则) | P2 | OPEN | LOCAL-COMPILE-DIFF | RV64 | LP64 已实现软四则，但比较、取负、转换的 10 个合法函数均无法 `-S` |
+| [MC-056](#mc-056-运行时-record-顺序初始化器跨扩容借用) | P0 | OPEN | ASAN | Frontend | 普通 Record 位置初始化 `sizeof(struct {...})` 扩容后使用失效 Record* |
+| [MC-057](#mc-057-gnu-空-record-返回及实参-abi-缺口) | P2 | OPEN | LOCAL-COMPILE-DIFF | RV32/RV64/x86 | 零字节 Record ABI 合法；目标 terminator/call 路径显式拒绝不同子集 |
+| [MC-058](#mc-058-符号指针加常量偏移的传递特化丢失) | P1 | OPEN | LOCAL-COMPILE-DIFF | Compiler | 唯一 caller 的 static pointer+offset 经 inline wrapper 后无法解析 GNU ASM `i` |
 
 ## 索引：尚待验证的风险
 
@@ -68,7 +71,7 @@
 | [MC-027](#mc-027-targetinfo-惰性初始化的并发契约) | P3 | INVESTIGATING | DESIGN-REVIEW | 静态目标描述符惰性初始化有无多线程 API 义务 |
 | [MC-032](#mc-032-ast-verifier-内层容器检查顺序) | P3 | INVESTIGATING | SOURCE-TRACE | 非法内部 Program 可能在嵌套形状验证前被索引构建读取 |
 | [MC-047](#mc-047-core-事实求值与可消除副作用的证明边界) | P2 | INVESTIGATING | DESIGN-REVIEW | Core 的“值可知”事实在不同 CFG consumer 中需要明确纯度门槛 |
-| [MC-055](#mc-055-core-verifier-内部辅助数组形状先决条件) | P3 | INVESTIGATING | SOURCE-TRACE | 手构 malformed Core function 的 fixed binding/enum storage preflight 缺口，未证有效 C 错码 |
+| [MC-055](#mc-055-core-verifier-内部辅助数组形状先决条件) | P2 | INVESTIGATING | CORE-API-ASAN | Verifier 对人为损坏的 fixed binding 形状崩溃，对公开 API 可构造的缺 enum metadata IR 误接受；未证有效 C 错码 |
 
 已验证非问题：**[MC-026](#mc-026-source-form-id-的实际身份边界)**，状态 `CLOSED-NOT-A-BUG`，保留编号和消费者证据，避免重复误报。
 
@@ -472,9 +475,34 @@
 
 ### MC-055 Core verifier 内部辅助数组形状先决条件
 
-- **状态：** `INVESTIGATING`，P3，`SOURCE-TRACE`；尚未复现有效 GNU C、合法 Core producer 触发错误，不声称现有错编。
-- **位置：** `src/core/core_ir_verify.c:1138–1168:minic_core_function_verify` 先对 globals/callees/call_signatures/inline_asms/call_arguments/objects/values/instructions/blocks 使用 `storage_shape_is_valid`，却未覆盖 `fixed_register_bindings` 与 `enum_types`；opcode verifier 后续可按 `fixed_register_binding_id` 对前者索引。
-- **下一证据：** 最小公开 Core verifier API 手工构造 malformed CoreFunction，独立 ASan 验证 fail-closed 契约；再确认该 API 是否承诺接受任何 malformed storage。真实 Core lowering 会维护这两 arena，故不能因差异直接升 OPEN。
+- **状态：** `INVESTIGATING`，P2，`CORE-API-ASAN`（仅内部 API 与人为构造）——已有真实错误访问证据，但尚未找到任何合法 C→正常 Core producer 触发，不声称现有 GNU C wrong-code。
+- **位置：** `src/core/core_ir_verify.c:1138–1168:minic_core_function_verify` 对 globals/callees/call_signatures/inline_asms/call_arguments/objects/values/instructions/blocks 检查 `storage_shape_is_valid`，却遗漏 `fixed_register_bindings`、`enum_types`、`function_symbols`。`instruction_is_valid` 对 FIXED_REGISTER 与 FUNCTION_ADDRESS 等 opcode 之后可能按未认证形状索引前两类指针（enum metadata 另被 Core accessor 使用）。
+- **ASan 证据：** `/tmp/minic_core_verify_shape_probe.c` 直接链接四个官方 Core/Frontend `.c`，`api-valid-fixed` 与 `api-valid-enum` 使用公开 add/set/verify API 都 `verified=1 count=1 capacity=8`；人为将 `binding_count=1` 且 pointer=NULL 的 `malformed-fixed` 在 verifier:325 ASan SEGV；人为令 enum_count>capacity 的 `malformed-enum` 被 verifier 错误接受、后续 `minic_core_function_effective_integer_type` ASan heap-buffer-overflow。
+- **纯 API 元数据完整性：** 不用手改数组内部形状，仅通过公开 add 指令 API 给 INTEGER_CONSTANT 结果设置 `minic_type_enum(123)` 而不调用 add_enum_type，Core verifier 返回 true；相反未注册 fixed binding 的 READ 按 ID 正确被拒绝。这说明 enum metadata 资格需明确 API 先决条件，但尚未证明 Parser/Core 正常 lowering 会遗漏它。
+- **下一步：** 把 `function_symbols` 形状负例一起跑，明确公开 Core 构造 API 是否保证其所有类型 metadata 都已显式登记；若承诺 malformed 只返回 false，应补三数组 preflight 和 enum identity 校验；以原生 ASan、Core verifier API 和真实 GNU C 回归后再改状态。
+
+### MC-056 运行时 Record 顺序初始化器跨扩容借用
+
+- **状态：** `OPEN`，P0，`ASAN`，已在**五目标**合法 GNU C 上按容量相位重现 `heap-use-after-free`；当前证明的是内存安全问题，非已证运行值错编。
+- **位置/链路：** `src/frontend/parser_runtime_initializer.c:1362–1496:parse_positional_runtime_record_initializer_from` 开头借 `program->records[id]` 的 `MinicRecord *record`，解析首字段 `sizeof(struct { int z; })` 在 `:1432` 经 `add_anonymous_record`→`minic_grow_array` 扩容 Record arena，下一字段循环 `:1398 minic_c0_record_field(record,field_index)` 读取旧 header（`ast.c:2194` ASan READ8）。
+- **持久反例与容量矩阵：** `tests/compiler/audit/mc056_runtime_record_positional_uaf.c` 具有 `R1..R15` 前置 Record 和普通 `struct Pair pair={sizeof(struct{int z;}),3}`。GCC GNU11 syntax PASS；三种前置数量 14/15/16 的五目标 sanitize `-S`：x86/AArch64 为 **UAF/PASS/PASS**；RV32/RV64/Loong 为 **PASS/UAF/PASS**。相位依赖 `records` capacity，非命中 PASS 不代表安全。默认 15 数量下 GCC native 与 MiniC x86 native 都退出 7，尚未独立观察到输出值差异。
+- **不同于 MC-023：** 本项是**运行时局部自动对象、普通顺序字段初始化**，不依赖 static backward zero overwrite、重复 designator 或 GNU diagnostic。两处根因可归为借用指针跨递归扩容，必须在修复批次一起检查，但应分别保留回归。
+- **验收：** 从 RecordId 跨 parse 重取、或在证明字段数组生命周期后以值型 header snapshot；全量检查同类 runtime record parser 的字段步进/递归/错误出口；五目标 14/15/16 + 额外扩容周期 ASan、GNU native/ELF/QEMU 再决定关闭。
+
+### MC-057 GNU 空 Record 返回及实参 ABI 缺口
+
+- **状态：** `OPEN`，P2，`LOCAL-COMPILE-DIFF`；是 GNU C extension 的目标 ABI **显式编译拒绝**，非已证静默 wrong-code。
+- **有效输入：** `tests/compiler/audit/mc057_gnu_empty_record_abi.c`，分别 `-DTEST_RETURN`（定义空结构体返回函数）、`-DTEST_PARAM`（定义空结构体参数函数）、`-DTEST_CALL_RETURN`（调用空 Record 返回者）、`-DTEST_CALL_PARAM`（调用空 Record 参数者）；四个 case 均通过 `cc -std=gnu11 -fsyntax-only` 和预处理。RISC-V GNU psABI 对支持此扩展的 C 编译器明确规定 empty struct/union 参数和返回在物理 ABI 中被忽略（[psABI 规范](https://riscv-non-isa.github.io/riscv-elf-psabi-doc/)），不是需要凭空分配一个物理返回寄存器。
+- **`-S` 六目标×四 case：** RV32I = FAIL/FAIL/PASS/PASS；RV64I/LP64、RV64IMAFD/LP64D、x86-64 均 FAIL×4；AArch64、LoongArch64 均 PASS×4。RV32 的调用侧两项能通过，不能概括为 RV32 全部不支持。
+- **结构原因：** `riscv32/rv32_abi_plan.c:rv32_plan_shape` 正确识别 `words=0`，但 `rv32_emit.c:rv32_term` 的返回路径仅在 `record_return_size!=0` 时接管 Record，否则误进入 scalar-only 检查而失败。RV64 `abi.c` 将 empty Record 归为 `MINIC_RISCV64_ABI_VALUE_IGNORE`，而 `core_codegen.c:emit_terminator` 只处理 aggregate/indirect，IGNORE 未实现；x86 的独立拒绝路径仍需逐函数关闭定位。
+- **验收：** 将 ABI `IGNORE` 明确映射到无物理参数/返回、无隐藏指针；分别验证定义和调用，兼顾 GNU 空对象的 C 层身份与 Core record 值，追加 GNU GCC 汇编与目标 GNU AS/ELF/QEMU ABI 差分。不要在 Common aggregate shape 中硬造1字或让 x86/RV64 共用机器返回算法。
+
+### MC-058 符号指针加常量偏移的传递特化丢失
+
+- **状态：** `OPEN`，P1，`LOCAL-COMPILE-DIFF`；是 MiniC 生成汇编前的合法 GNU C 接受缺口，尚无该条 MiniC 机器码输出可供执行比较。
+- **位置/现象：** `src/compiler/inline_symbolic.c:335–413` 的 transitive symbolic argument closure 识别直接 LOCAL 静态参数事实，但没有表示“symbolic base + C 常量 pointer offset”的可传播事实。`mid_key(int *key){ return leaf_key(key+1); }` 传入的 `key` 已由唯一 caller 专门化为静态全局 `key_slots`，callee 内联 GNU `"i"(key)` 却得不到 `key_slots+4`，因而 `immediate_resolved=0`、Core 拒绝。
+- **严格隔离：** `tests/compiler/audit/mc058_inline_symbolic_pointer_offset_direct.c` 与 `_transitive.c` 的 `leaf_key` 完全相同，都是 GNU `asm volatile(".byte 0" : : "i"(key))`；仅直达 `leaf(key_slots+1)` vs 经 `mid(key_slots)`/`leaf(key+1)` 不同。GNU x86 `gcc -std=gnu11 -O2 -c` 两者 PASS；相同 `.i` 的 MiniC `--target=riscv64-linux -S` 直接 case PASS (`direct=1`)，传递 case FAIL (`direct=1 transitive=0 immediate_resolved=0`)。另完整 `.quad %c0` GCC source 可以生成 `.data+4/.data+8/.data+c` relocs，但 MiniC x86 的 opaque-ASM backend 另有失配，**不得把 `.quad` x86 MiniC FAIL 当本问题的单一因果**。
+- **独立性/修复门槛：** 仅一个 caller、没有整数形参事实或共享 CALL 的多 caller 污染，故区别 MC-006（跨实例污染）与 MC-008（整数运行时参数禁止符号特化）。需由实例事实承载 base symbol + byte offset，保证指针加法的元素大小/type normalization，保留 caller identity，回归 offsets 0/1/2、两层传递、不同全局及 GNU ASM `i` 的目标 GAS/relocs；不要直接污染共享 AST CALL。
 
 ## 已核对并排除的误判（不要在未有新证据时重新打开）
 
