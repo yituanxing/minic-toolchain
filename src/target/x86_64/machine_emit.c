@@ -650,6 +650,16 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
     case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS:
         if (ins->value.global_id >= fn->global_count ||
             fn->globals[ins->value.global_id].name == NULL) return false;
+        /* ELF hidden/internal objects bind within the link unit.  A direct
+         * RIP-relative LEA is valid even for a declaration resolved by the
+         * final vDSO/shared link; using a GOT relocation would incorrectly
+         * treat the object as preemptible.  This is a linkage policy, never
+         * a Linux symbol-name exception. */
+        if (minic_target_info_elf_object_is_nonpreemptible(
+                program, fn->globals[ins->value.global_id].name))
+            return fprintf(out, "  leaq %s(%%rip), %%rax\n",
+                           fn->globals[ins->value.global_id].name) >= 0 &&
+                   x86_value_store(out, frame, ins->result);
         /* A symbol can be an interposable definition from a shared library.
          * LEA symbol(%%rip) is R_X86_64_PC32 and fails in default PIE for
          * e.g. an external libc object; GOTPCREL resolves its runtime address
@@ -660,6 +670,11 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
     case MINIC_CORE_INSTRUCTION_FUNCTION_ADDRESS:
         if (ins->value.function_symbol_id >= fn->function_symbol_count ||
             fn->function_symbols[ins->value.function_symbol_id].name == NULL) return false;
+        if (minic_target_info_elf_function_is_nonpreemptible(
+                program, fn->function_symbols[ins->value.function_symbol_id].name))
+            return fprintf(out, "  leaq %s(%%rip), %%rax\n",
+                           fn->function_symbols[ins->value.function_symbol_id].name) >= 0 &&
+                   x86_value_store(out, frame, ins->result);
         /* Taking the address of an external function must use its GOT slot
          * rather than emitting a non-PIE-compatible PC32 relocation. */
         return fprintf(out, "  movq %s@GOTPCREL(%%rip), %%rax\n",

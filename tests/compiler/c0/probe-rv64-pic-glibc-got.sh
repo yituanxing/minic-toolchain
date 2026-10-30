@@ -6,10 +6,20 @@ set -eu
 : "${MINIC_CC:?set MINIC_CC}"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT HUP INT TERM
+# Linux headers declare hidden vDSO/EFI symbols that are never used by the
+# emitted TU. A declaration alone must not create an undefined ELF symbol:
+# GNU ld rejects even an unreferenced `.hidden missing_symbol`.
 cat > "$work/source.c" <<'SRC'
 extern int optind;
 extern int puts(const char *);
 extern int printf(const char *, ...);
+extern int rv64_unused_hidden_object __attribute__((visibility("hidden")));
+extern int rv64_unused_internal_object __attribute__((visibility("internal")));
+__attribute__((visibility("protected"))) extern int rv64_unused_protected_function(void);
+__attribute__((visibility("hidden"))) extern int rv64_unused_hidden_function(void);
+static inline int rv64_unused_inline_hidden_reference(void) {
+    return rv64_unused_hidden_object + rv64_unused_hidden_function();
+}
 int *rv_pic_optind(void) { return &optind; }
 int (*rv_pic_puts(void))(const char *) { return &puts; }
 int main(void) {
@@ -38,9 +48,20 @@ SRC
 cp "$work/source.c" "$work/source.i"
 "$MINIC_CC" --target=riscv64-linux -fPIE -S "$work/source.i" -o "$work/pic.s"
 "$MINIC_CC" --target=riscv64-linux -fno-pie -S "$work/source.i" -o "$work/kernel.s"
+if grep -Eq '^[[:space:]]*\.(hidden|internal|protected)[[:space:]]+rv64_unused_' \
+   "$work/pic.s" "$work/kernel.s"; then
+  echo 'RV64_PIC_GLIBC_GOT=FAIL unreferenced visibility declaration emitted' >&2
+  exit 1
+fi
 for pic_flag in -fPIE -fPIC; do
   "$MINIC_CC" --target=riscv64-linux "$pic_flag" -S \
     "$work/nonpreemptible.c" -o "$work/nonpreemptible-$pic_flag.s"
+  for symbol in hidden_data hidden_function; do
+    grep -Eq "^[[:space:]]*\\.hidden[[:space:]]+$symbol$" "$work/nonpreemptible-$pic_flag.s" || {
+      echo "RV64_PIC_GLIBC_GOT=FAIL $pic_flag lost live hidden binding for $symbol" >&2
+      exit 1
+    }
+  done
   for symbol in local_data local_function hidden_data hidden_function; do
     grep -Eq "^[[:space:]]+lla t0, $symbol$" "$work/nonpreemptible-$pic_flag.s" || {
       echo "RV64_PIC_GLIBC_GOT=FAIL $pic_flag should use PCREL for $symbol" >&2
@@ -75,7 +96,7 @@ if grep -q '  .option pic' "$work/kernel.s"; then
   exit 1
 fi
 if [ "${MINIC_PIC_ASM_ONLY:-0}" = 1 ]; then
-  echo 'RV64_PIC_GLIBC_GOT=PASS stage=apt_free_core_target preemptible_GOT=1 private_hidden_PCREL=1 kernel_lla=1'
+  echo 'RV64_PIC_GLIBC_GOT=PASS stage=apt_free_core_target preemptible_GOT=1 private_hidden_PCREL=1 unused_visibility_decls_emitted=0 live_hidden_binding=1 kernel_lla=1'
   exit 0
 fi
 gcc=${RISCV_CC:-riscv64-linux-gnu-gcc}
@@ -119,4 +140,4 @@ if [ "$gnu_rc" -ne 42 ] || [ "$mini_rc" -ne 42 ] ||
   cat "$work/gnu.out" "$work/mini.out" "$work/mini.err" >&2
   exit 1
 fi
-echo 'RV64_PIC_GLIBC_GOT=PASS GNU_QEMU_byte_exact=1 R_RISCV_GOT_HI20_extern=1 static_kernel_PCREL=1'
+echo 'RV64_PIC_GLIBC_GOT=PASS GNU_QEMU_byte_exact=1 R_RISCV_GOT_HI20_extern=1 unused_visibility_decls_emitted=0 live_hidden_binding=1 static_kernel_PCREL=1'

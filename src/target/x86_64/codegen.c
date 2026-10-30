@@ -341,7 +341,7 @@ bool minic_x86_64_write_c0_program_with_core_functions(
         x86_visit_global, x86_visit_function, NULL,
         x86_between,
         ".section .note.GNU-stack,\"\",@progbits\n", NULL,
-        MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS, false
+        MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS, false, true
     };
     bool success;
     const MinicX86VisitContext visits = { diagnostic, path };

@@ -24,20 +24,29 @@ const MinicBlock *minic_c0_program_block(
                ? &program->blocks[id] : NULL;
 }
 
+const MinicLocal *minic_c0_program_local(
+    const MinicC0Program *program, MinicLocalId id) {
+    return program != NULL && id < program->local_count
+               ? &program->locals[id] : NULL;
+}
+
 int main(void) {
     MinicExpression expressions[6];
     MinicStatement statements[2];
     MinicStatementId statement_ids[2] = {0U, 1U};
     MinicBlock blocks[2];
+    MinicLocal locals[4];
     MinicC0Program program;
     MinicFunction source_function;
     MinicFunctionBodyView body;
     MinicCoreLowerContext context;
     unsigned char changed[3];
+    unsigned char condition_owned[3];
 
     (void)memset(expressions, 0, sizeof(expressions));
     (void)memset(statements, 0, sizeof(statements));
     (void)memset(blocks, 0, sizeof(blocks));
+    (void)memset(locals, 0, sizeof(locals));
     (void)memset(&program, 0, sizeof(program));
     (void)memset(&body, 0, sizeof(body));
     (void)memset(&context, 0, sizeof(context));
@@ -78,11 +87,25 @@ int main(void) {
     program.statement_count = 2U;
     program.blocks = blocks;
     program.block_count = 2U;
+    program.locals = locals;
+    program.local_count = 4U;
+    locals[1].has_declaration_block = true;
+    locals[1].declaration_block = 0U;
     body.program = &program;
     context.body = &body;
     source_function.local_begin = 1U;
     source_function.local_count = 3U;
     context.source_function = &source_function;
+
+    /* A GNU statement expression owns its locals by declaration block,
+     * independently of the following IF's modified-local summary. */
+    (void)memset(changed, 0, sizeof(changed));
+    (void)memset(condition_owned, 0, sizeof(condition_owned));
+    core_expression_collect_modified_and_condition_locals(
+        &context, 5U, changed, condition_owned, 0U);
+    if (condition_owned[0] != 1U || condition_owned[1] != 0U ||
+        condition_owned[2] != 0U || changed[0] != 1U)
+        return 12;
 
     /* The batch summary must agree with the historical scalar oracle for
      * every local, while inspecting the source expression/block only once. */

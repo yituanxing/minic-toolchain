@@ -19,10 +19,28 @@ open(out,'w').write('\n'.join(lines)+'\n')
 PY
   "$minic" --target=aarch64-linux -S "$d/large-$updates.i" -o "$d/large-$updates.s"
   grep -Fq 'stlr x9, [x10]' "$d/large-$updates.s"
-  grep -Fq 'add x17, sp, x17' "$d/large-$updates.s"
-  if [[ "$updates" == 640 ]];then
-    grep -Fq 'movk x17,' "$d/large-$updates.s"
-  fi
+  # Register allocation and Common Core spill-slot reuse can legitimately
+  # eliminate the old x17 materialization. Keep the actual byte-offset
+  # boundary test independent of that incidental register choice.
+  python3 - "$d/large-$updates.s" "$updates" <<'PY'
+import re
+import sys
+
+with open(sys.argv[1], encoding='utf-8') as stream:
+    assembly = stream.read()
+updates = int(sys.argv[2])
+heavy = assembly.split('heavy:\n', 1)[1].split('.globl main', 1)[0]
+match = re.search(r'\bmovz x(\d+), #(\d+)\s*\n\s*sub sp, sp, x\1\b', heavy)
+if not match:
+    raise SystemExit('missing real AArch64 heavy() stack allocation')
+frame_bytes = int(match.group(2))
+minimum = 512 if updates == 45 else 4095
+if frame_bytes <= minimum:
+    raise SystemExit(f'AArch64 frame {frame_bytes} did not cross {minimum}')
+if updates == 640 and not re.search(r'\badd x(\d+), sp, x\1\b', heavy):
+    raise SystemExit('missing large SP-relative address materialization')
+print(f'AARCH64_LARGE_STRUCTURED_ASM_FRAME=PASS updates={updates} bytes={frame_bytes}')
+PY
   if [[ "${MINIC_SOURCE_ONLY:-0}" != 1 ]];then
     aarch64-linux-gnu-gcc -static -O0 -x c "$d/large-$updates.i" -o "$d/gnu-$updates"
     aarch64-linux-gnu-gcc -static -x assembler "$d/large-$updates.s" -o "$d/mini-$updates"

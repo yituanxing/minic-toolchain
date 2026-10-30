@@ -308,8 +308,12 @@ do
     fi
 done
 readelf -r "$workdir/x86_64_linux_jump_label.o" > "$workdir/jump.reloc"
-if [ "$(grep -c 'R_X86_64_PC32' "$workdir/jump.reloc")" -ne 6 ] ||
-   [ "$(grep -c 'R_X86_64_PC64' "$workdir/jump.reloc")" -ne 3 ] ||
+objdump -r -j __jump_table "$workdir/x86_64_linux_jump_label.o" \
+    > "$workdir/jump-table.reloc"
+# Count only the __jump_table patch entries: an independently valid RIP-
+# relative address of the local key may add a PC32 relocation to .text.
+if [ "$(grep -c 'R_X86_64_PC32' "$workdir/jump-table.reloc")" -ne 6 ] ||
+   [ "$(grep -c 'R_X86_64_PC64' "$workdir/jump-table.reloc")" -ne 3 ] ||
    ! grep -Fq '.rela__jump_table' "$workdir/jump.reloc"; then
     printf 'FAIL: Linux jump_label patch-site/target/key+flags relocation lost\n' >&2
     exit 1

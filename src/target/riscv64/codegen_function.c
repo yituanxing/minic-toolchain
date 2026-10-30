@@ -162,7 +162,7 @@ bool minic_riscv64_write_c0_program_with_core_functions(const char *path,
                                                         MinicDiagnostic *diagnostic) {
     static const MinicProgramEmitConfig config = {
         rv64_visit_global, rv64_visit_function, NULL, rv64_between,
-        NULL, rv64_finalize, MINIC_PROGRAM_FUNCTION_ALL, false
+        NULL, rv64_finalize, MINIC_PROGRAM_FUNCTION_ALL, false, false
     };
     Rv64ProgramContext context = { path, diagnostic };
     bool success;

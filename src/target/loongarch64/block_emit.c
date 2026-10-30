@@ -23,6 +23,44 @@
 #define emit_sp_mem(_out, _op, _reg, _offset) \
     minic_loongarch64_emit_frame_mem((_out), (_op), (_reg), (_offset), dynamic_frame)
 
+/* Preserve byte-exact, potentially unaligned aggregate transport. The old
+ * byte-at-a-time textual expansion was O(record size), even for a 2 KiB
+ * indirect argument. A counted loop keeps the same access order without
+ * making Linux text size depend linearly on every copied record. Scratch
+ * registers are distinct in each caller, including source and destination. */
+static bool loongarch64_emit_record_bytes(FILE *out, const char *source,
+    const char *destination, const char *byte_register,
+    const char *count_register, size_t bytes) {
+    size_t byte;
+    if (out == NULL || source == NULL || destination == NULL ||
+        byte_register == NULL || count_register == NULL)
+        return false;
+    if (bytes >= 8U)
+        return fprintf(out,
+            "  li.d %s, %zu\n"
+            "1:\n"
+            "  ld.bu %s, %s, 0\n"
+            "  st.b %s, %s, 0\n"
+            "  addi.d %s, %s, 1\n"
+            "  addi.d %s, %s, 1\n"
+            "  addi.d %s, %s, -1\n"
+            "  bnez %s, 1b\n",
+            count_register, bytes, byte_register, source,
+            byte_register, destination, source, source,
+            destination, destination, count_register, count_register,
+            count_register) >= 0;
+    for (byte = 0U; byte < bytes; ++byte)
+        if (fprintf(out,
+                "  ld.bu %s, %s, 0\n"
+                "  st.b %s, %s, 0\n"
+                "  addi.d %s, %s, 1\n"
+                "  addi.d %s, %s, 1\n",
+                byte_register, source, byte_register, destination,
+                source, source, destination, destination) < 0)
+            return false;
+    return true;
+}
+
 /* The instruction-owned aggregate ingress and CFG terminator cases are
  * independent of the function-level preflight and frame lifetime. Machine
  * register syntax remains strictly owned by this ISA. */
@@ -65,25 +103,8 @@ const MinicCoreValueId dst = ins->value.record_copy.destination_address;
             if (!emit_sp_mem(out, "ld.d", "$t1", minic_lp64_frame_value_offset(frame_plan, dst)) ||
                 !emit_sp_mem(out, "ld.d", "$t2", minic_lp64_frame_value_offset(frame_plan, src)))
                 return false;
-            if (bytes > 64U) {
-                if (fprintf(out, "  li.d $t3, %zu\n", bytes) < 0 ||
-                    fputs("1:\n"
-                          "  ld.bu $t0, $t2, 0\n"
-                          "  st.b $t0, $t1, 0\n"
-                          "  addi.d $t2, $t2, 1\n"
-                          "  addi.d $t1, $t1, 1\n"
-                          "  addi.d $t3, $t3, -1\n"
-                          "  bnez $t3, 1b\n", out) == EOF)
-                    return false;
-            } else {
-                for (size_t byte = 0U; byte < bytes; ++byte)
-                    if (fputs("  ld.bu $t0, $t2, 0\n"
-                              "  st.b $t0, $t1, 0\n"
-                              "  addi.d $t2, $t2, 1\n"
-                              "  addi.d $t1, $t1, 1\n", out) == EOF)
-                        return false;
-            }
-            return true;
+            return loongarch64_emit_record_bytes(
+                out, "$t2", "$t1", "$t0", "$t3", bytes);
 }
 
 /* Native LoongArch64 byte transport for the Common typed record
@@ -93,7 +114,7 @@ static bool minic_loongarch64_emit_record_load(FILE *out,
     const MinicCoreInstruction *ins) {
     const MinicLP64FramePlan *frame_plan = ctx->frame_plan;
     MinicCoreValueId source;
-    size_t dest, bytes, byte;
+    size_t dest, bytes;
     if (!minic_multi_direct_record_load_extent(
             ctx->program, ctx->target, ctx->fn, ins, ctx->frame_plan,
             &source, &dest, &bytes) ||
@@ -102,25 +123,8 @@ static bool minic_loongarch64_emit_record_load(FILE *out,
         fprintf(out, "  li.d $t1, %zu\n  add.d $t1, %s, $t1\n",
             dest, ctx->dynamic_frame ? "$s0" : "$sp") < 0)
         return false;
-    if (bytes > 64U) {
-        if (fprintf(out, "  li.d $t3, %zu\n", bytes) < 0 ||
-            fputs("1:\n"
-                  "  ld.bu $t0, $t2, 0\n"
-                  "  st.b $t0, $t1, 0\n"
-                  "  addi.d $t2, $t2, 1\n"
-                  "  addi.d $t1, $t1, 1\n"
-                  "  addi.d $t3, $t3, -1\n"
-                  "  bnez $t3, 1b\n", out) == EOF)
-            return false;
-    } else {
-        for (byte = 0U; byte < bytes; ++byte)
-            if (fputs("  ld.bu $t0, $t2, 0\n"
-                      "  st.b $t0, $t1, 0\n"
-                      "  addi.d $t2, $t2, 1\n"
-                      "  addi.d $t1, $t1, 1\n", out) == EOF)
-                return false;
-    }
-    return true;
+    return loongarch64_emit_record_bytes(
+        out, "$t2", "$t1", "$t0", "$t3", bytes);
 }
 
 bool minic_loongarch64_emit_parameter_object(FILE *out,
@@ -129,7 +133,7 @@ bool minic_loongarch64_emit_parameter_object(FILE *out,
     const MinicLP64FramePlan *frame_plan, size_t frame, bool dynamic_frame,
     size_t saved_entry_sp_offset) {
 const MinicLP64ArgumentLocation *location;
-            size_t size, slots, object_offset, k, chunk;
+            size_t size, slots, object_offset, chunk;
             if (!minic_multi_direct_parameter_object_location(
                     fn, ins, incoming_plan, frame_plan, &location, &object_offset))
                 return false;
@@ -157,14 +161,8 @@ const MinicLP64ArgumentLocation *location;
                                  "  add.d $t1, %s, $t1\n",
                             object_offset, dynamic_frame ? "$s0" : "$sp") < 0)
                     return false;
-                for (k = 0U; k < size; ++k) {
-                    if (fputs("  ld.bu $t2, $t0, 0\n"
-                              "  st.b $t2, $t1, 0\n"
-                              "  addi.d $t0, $t0, 1\n"
-                              "  addi.d $t1, $t1, 1\n", out) == EOF)
-                        return false;
-                }
-                return true;
+                return loongarch64_emit_record_bytes(
+                    out, "$t0", "$t1", "$t2", "$t3", size);
             }
             for (chunk = 0U; chunk < slots; ++chunk) {
                 const bool in_reg = chunk < location->gp_registers;
@@ -227,16 +225,10 @@ static bool loongarch64_return_indirect_record(
                      "  add.d $t1, %s, $t1\n",
                 src, dynamic_frame ? "$s0" : "$sp") < 0 ||
         !minic_loongarch64_emit_frame_mem(
-            out, "ld.d", "$a0", return_slot, dynamic_frame) ||
-        fprintf(out, "  move $t2, $a0\n"
-                     "  li.d $t0, %zu\n"
-                     "1:\n"
-                     "  ld.bu $t4, $t1, 0\n"
-                     "  st.b $t4, $t2, 0\n"
-                     "  addi.d $t1, $t1, 1\n"
-                     "  addi.d $t2, $t2, 1\n"
-                     "  addi.d $t0, $t0, -1\n"
-                     "  bnez $t0, 1b\n", bytes) < 0)
+                out, "ld.d", "$a0", return_slot, dynamic_frame) ||
+        fputs("  move $t2, $a0\n", out) == EOF ||
+        !loongarch64_emit_record_bytes(
+            out, "$t1", "$t2", "$t4", "$t0", bytes))
         return false;
     return true;
 }

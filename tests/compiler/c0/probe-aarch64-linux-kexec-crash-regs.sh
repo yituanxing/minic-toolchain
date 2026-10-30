@@ -47,25 +47,38 @@ fi
 # Large owned-slot regression: before the x16/x17 image is saved, the
 # old whole-program [sp,#>4095] textual rewrite secretly materialized an
 # address in x17. A correctly typed input must build its address entirely
-# in x0, then dereference x0 immediately before the first STP. Other
+# in x0, then dereference x0 immediately before the first STP. Common Core
+# spill reuse may put that final input into an encodable [sp,#imm12] slot;
+# this is just as safe as the older movz/add register-offset sequence. Other
 # compiler-generated temporaries earlier in the function may use x17.
 "$host" -E -P -std=gnu11 -DMINIC_CRASH_LARGE_SSA "$src" \
     -o "$work/crash-large.i"
 "$mini" --target=aarch64-linux -S "$work/crash-large.i" \
     -o "$work/crash-large.s"
 awk '
+    /^  movz x12, #[0-9]+$/ {split($0, fields, "#"); frame_candidate=fields[2]+0}
+    /^  sub sp, sp, x12$/ {if (frame_candidate > 4095) large_frame=frame_candidate}
     /^  stp x0, x1, \[x0, #0\]$/ {
         found++
-        if (before != "  ldr x0, [x0]" ||
-            before2 != "  add x0, sp, x0" ||
-            before3 !~ /^  movz x0, #[0-9]+$/) bad=1
+        if (before != "  ldr x0, [x0]") bad=1
+        if (before2 ~ /^  add x0, sp, #[0-9]+$/) {
+            split(before2, fields, "#")
+            if (fields[2]+0 > 4095 || fields[2]+8 > large_frame) bad=1
+        } else if (before2 != "  add x0, sp, x0" ||
+                   before3 !~ /^  movz x0, #[0-9]+$/) bad=1
     }
     {before3=before2; before2=before; before=$0}
-    END {if (found != 1 || bad) exit 1}
+    END {if (found != 1 || !large_frame || bad) exit 1}
 ' "$work/crash-large.s" || {
     echo 'AARCH_KEXEC_CRASH=FAIL large-owned-input-scratch' >&2; exit 1;
 }
 grep -Fq '  stp x16, x17, [x0, #128]' "$work/crash-large.s"
+# Neither captured register may be used as an address scratch once the
+# snapshot starts. The source template must preserve the original x16/x17.
+if sed -n '/^  stp x0, x1, \[x0, #0\]/,/^  stp x16, x17, \[x0, #128\]/p' \
+    "$work/crash-large.s" | grep -Eq '^  (mov|movz|movk|add|sub|ldr|str|adr|adrp)[[:space:]]+[wx](16|17)([,[:space:]]|$)'; then
+    echo 'AARCH_KEXEC_CRASH=FAIL snapshot-x16-x17-mutation' >&2; exit 1
+fi
 
 for target in x86_64 loongarch64; do
     if "$mini" --target="$target-linux" -S "$work/crash.i" \
