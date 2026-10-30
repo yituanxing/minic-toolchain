@@ -6936,6 +6936,8 @@ int minias_assemble_config(const char *input_path,
         const bool initialized=minias_init_for_target(&as,config->target);
         as.elf_flags = config->elf_flags;
         as.output_elf32 = config->elf32;
+        as.object_machine = config->object_machine;
+        as.output_rel_relocations = config->output_rel_relocations;
         if (config->target_profile_size > sizeof(config->target_profile)) {
             minias_set_error(&as, "invalid-target-profile-size");
         } else if (initialized && as.target->init_target_state != NULL &&

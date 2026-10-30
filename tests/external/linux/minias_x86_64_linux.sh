@@ -111,7 +111,14 @@ if [[ -z "$input" || -z "$output" ]]; then
 fi
 printf 'assemble input=%q output=%q elf32=%s\n' "$input" "$output" "$need_elf32" \
     >>"${MINIAS_AS_TRACE:?}"
-if ! "${MINIAS:?}" --target=x86_64 -o "$output" "$input"; then
+minias_args=(--target=x86_64)
+if (( need_elf32 )); then
+    # GNU `as --32` is an i386 ELF32/EM_386/REL object request, not merely
+    # a CPU lexical `.code32` switch.  The Target profile owns the object
+    # ABI and i386 relocation names; ELF64 callers keep the default profile.
+    minias_args+=(-march=i386 -mabi=i386)
+fi
+if ! "${MINIAS:?}" "${minias_args[@]}" -o "$output" "$input"; then
     printf 'fail input=%q output=%q\n' "$input" "$output" >>"$MINIAS_AS_TRACE"
     if [[ -f "$input" ]]; then
         mkdir -p "${MINIAS_FAILURE_DIR:?}"

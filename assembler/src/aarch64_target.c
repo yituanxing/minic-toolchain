@@ -5069,6 +5069,7 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
         case A64_MC_BL: {
             const MiniAsSymbol *target;
             int64_t distance;
+            bool location_counter;
             bool cbz=inst->opcode==A64_MC_CBZ ||
                      inst->opcode==A64_MC_CBNZ;
             bool bcond=inst->opcode==A64_MC_BCOND;
@@ -5111,20 +5112,34 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
                   conditional?MINIAS_FIXUP_A64_CONDBR19:
                   inst->opcode==A64_MC_BL ?
                     MINIAS_FIXUP_A64_CALL26:MINIAS_FIXUP_A64_JUMP26;
-            target = minias_symbol_ref_lookup(as,*expr);
-            if (target == NULL || !target->defined ||
-                target->section != stmt->section) break;
-            if (target->value > INT64_MAX || stmt->offset > INT64_MAX) {
-                minias_set_error(as, "aarch64-branch-address-overflow");
-                return false;
+            /* AArch64 conditional and unconditional branches are relative
+             * to the address of the instruction itself.  GAS uses `.`,
+             * `.+4` and `.-4` as immediate PC destinations in real Linux
+             * busy-wait/exception paths; `.` is NOT an ELF symbol and must
+             * never escape as R_AARCH64_CONDBR19 against undefined `.`.
+             * nVHE symbol prefixing would otherwise turn it into the even
+             * less meaningful `__kvm_nvhe_.`.  All branches share this one
+             * Target-owned PC-relative lowering path. */
+            location_counter=expr->name_id<as->symbol_name_count &&
+                strcmp(as->symbol_names[expr->name_id].name,".")==0;
+            if(location_counter) {
+                distance=expr->addend;
+            }else {
+                target=minias_symbol_ref_lookup(as,*expr);
+                if (target == NULL || !target->defined ||
+                    target->section != stmt->section) break;
+                if (target->value > INT64_MAX || stmt->offset > INT64_MAX) {
+                    minias_set_error(as, "aarch64-branch-address-overflow");
+                    return false;
+                }
+                distance = (int64_t)target->value - (int64_t)stmt->offset;
+                if ((expr->addend > 0 && distance > INT64_MAX - expr->addend) ||
+                    (expr->addend < 0 && distance < INT64_MIN - expr->addend)) {
+                    minias_set_error(as, "aarch64-branch-addend-overflow");
+                    return false;
+                }
+                distance += expr->addend;
             }
-            distance = (int64_t)target->value - (int64_t)stmt->offset;
-            if ((expr->addend > 0 && distance > INT64_MAX - expr->addend) ||
-                (expr->addend < 0 && distance < INT64_MIN - expr->addend)) {
-                minias_set_error(as, "aarch64-branch-addend-overflow");
-                return false;
-            }
-            distance += expr->addend;
             if ((distance & 3) != 0 ||
                 distance < (testbit ? -INT64_C(32768):
                              conditional ? -INT64_C(1048576) :

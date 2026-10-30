@@ -150,9 +150,18 @@ typedef struct MiniElfWriteRela {
     size_t symbol_index;
     uint32_t type;
     int64_t addend;
+    /* For SHT_REL, the implicit addend occupies exactly these bytes in the
+     * target Section. Zero remains valid for existing SHT_RELA clients. */
+    unsigned field_width;
     bool use_section_symbol; /* generated STT_SECTION entry, not user symbol */
     size_t section_symbol_index;
 } MiniElfWriteRela;
+
+typedef enum MiniElfRelocationFormat {
+    /* Preserve existing RV/AArch64/x86-64 RELA output by default. */
+    MINIELF_RELOC_FORMAT_RELA = 0,
+    MINIELF_RELOC_FORMAT_REL = 1
+} MiniElfRelocationFormat;
 
 typedef struct MiniElfRelocatableSpec {
     unsigned char elf_class;
@@ -160,6 +169,10 @@ typedef struct MiniElfRelocatableSpec {
     unsigned char osabi; /* GNU IFUNC/UNIQUE require ELFOSABI_GNU */
     uint16_t machine;
     uint32_t flags;
+    /* Object-format policy is supplied by the Target profile. In SHT_REL
+     * the explicit addend is installed in section contents, then omitted
+     * from each relocation entry (e.g. Intel386 System V ELF32). */
+    MiniElfRelocationFormat relocation_format;
     const MiniElfWriteSection *sections;
     size_t section_count;
     const MiniElfWriteSymbol *symbols;

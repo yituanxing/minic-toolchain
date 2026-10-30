@@ -269,6 +269,66 @@ static bool write_rela(unsigned char *data,
     return true;
 }
 
+static bool write_rel(unsigned char *data,
+                      const MiniElfRelocatableSpec *spec,
+                      uint64_t offset,
+                      size_t symbol_index,
+                      uint32_t type) {
+    if (spec->elf_class == ELFCLASS64) {
+        uint64_t info;
+        if (symbol_index > UINT32_MAX) return false;
+        info = ((uint64_t)symbol_index << 32U) | (uint64_t)type;
+        store_u64(data, spec->data_encoding, offset);
+        store_u64(data + 8U, spec->data_encoding, info);
+        return true;
+    }
+    if (offset > UINT32_MAX || symbol_index > UINT32_C(0x00ffffff) ||
+        type > UINT32_C(0xff)) return false;
+    store_u32(data, spec->data_encoding, (uint32_t)offset);
+    store_u32(data + 4U, spec->data_encoding,
+              ((uint32_t)symbol_index << 8U) | type);
+    return true;
+}
+
+/* SHT_REL keeps the addend in the actual instruction/data field, not in the
+ * relocation entry. Patch the *serialized Section copy*, never the parser's
+ * retained Fragment bytes. It is valid for every Target that explicitly
+ * chooses REL and supplies a full-width semantic fixup field. */
+static bool write_rel_implicit_addend(unsigned char *image,
+                                     size_t image_size,
+                                     const MiniElfRelocatableSpec *spec,
+                                     const MiniElfOutputSection *section,
+                                     const MiniElfWriteRela *rel) {
+    size_t width = rel->field_width;
+    unsigned char *field;
+    int64_t signed_min;
+    uint64_t unsigned_max;
+
+    if ((width != 1U && width != 2U && width != 4U && width != 8U) ||
+        section->type == SHT_NOBITS || rel->offset > section->size ||
+        width > section->size - rel->offset ||
+        section->offset > image_size ||
+        section->size > image_size - section->offset ||
+        rel->offset > SIZE_MAX - (size_t)section->offset) return false;
+
+    if (width < 8U) {
+        signed_min = -(INT64_C(1) << (width * 8U - 1U));
+        unsigned_max = (UINT64_C(1) << (width * 8U)) - 1U;
+        if (rel->addend < signed_min ||
+            (rel->addend >= 0 && (uint64_t)rel->addend > unsigned_max))
+            return false;
+    }
+    field = image + (size_t)section->offset + (size_t)rel->offset;
+    switch (width) {
+    case 1U: field[0] = (unsigned char)rel->addend; break;
+    case 2U: store_u16(field, spec->data_encoding, (uint16_t)rel->addend); break;
+    case 4U: store_u32(field, spec->data_encoding, (uint32_t)rel->addend); break;
+    case 8U: store_u64(field, spec->data_encoding, (uint64_t)rel->addend); break;
+    default: return false;
+    }
+    return true;
+}
+
 const char *minielf_write_error_string(MiniElfWriteError error) {
     switch (error) {
     case MINIELF_WRITE_OK:
@@ -325,7 +385,7 @@ bool minielf_build_relocatable(const MiniElfRelocatableSpec *spec,
     size_t ehdr_size;
     size_t shdr_size;
     size_t sym_size;
-    size_t rela_size;
+    size_t relocation_entry_size;
     size_t word_align;
     size_t i;
     bool ok = false;
@@ -335,6 +395,8 @@ bool minielf_build_relocatable(const MiniElfRelocatableSpec *spec,
     }
     if (spec == NULL || image_out == NULL || size_out == NULL ||
         (spec->elf_class != ELFCLASS32 && spec->elf_class != ELFCLASS64) ||
+        (spec->relocation_format != MINIELF_RELOC_FORMAT_RELA &&
+         spec->relocation_format != MINIELF_RELOC_FORMAT_REL) ||
         (spec->data_encoding != ELFDATA2LSB &&
          spec->data_encoding != ELFDATA2MSB) ||
         (spec->section_count != 0U && spec->sections == NULL) ||
@@ -349,7 +411,9 @@ bool minielf_build_relocatable(const MiniElfRelocatableSpec *spec,
     ehdr_size = spec->elf_class == ELFCLASS64 ? 64U : 52U;
     shdr_size = spec->elf_class == ELFCLASS64 ? 64U : 40U;
     sym_size = spec->elf_class == ELFCLASS64 ? 24U : 16U;
-    rela_size = spec->elf_class == ELFCLASS64 ? 24U : 12U;
+    relocation_entry_size = spec->relocation_format == MINIELF_RELOC_FORMAT_REL ?
+        (spec->elf_class == ELFCLASS64 ? 16U : 8U) :
+        (spec->elf_class == ELFCLASS64 ? 24U : 12U);
     word_align = spec->elf_class == ELFCLASS64 ? 8U : 4U;
 
     if (spec->section_count > UINT16_MAX - 4U ||
@@ -505,17 +569,19 @@ bool minielf_build_relocatable(const MiniElfRelocatableSpec *spec,
                 size_t section_name_size = strlen(section_name);
                 char *name;
 
-                if (section_name_size > SIZE_MAX - 6U) {
+                size_t prefix_size = spec->relocation_format ==
+                    MINIELF_RELOC_FORMAT_REL ? 4U : 5U;
+                if (section_name_size > SIZE_MAX - prefix_size - 1U) {
                     set_error(error_out, MINIELF_WRITE_LIMIT);
                     goto done;
                 }
-                name = malloc(section_name_size + 6U);
+                name = malloc(section_name_size + prefix_size + 1U);
                 if (name == NULL) {
                     set_error(error_out, MINIELF_WRITE_OUT_OF_MEMORY);
                     goto done;
                 }
-                memcpy(name, ".rela", 5U);
-                memcpy(name + 5U, section_name, section_name_size + 1U);
+                memcpy(name, ".rela", prefix_size);
+                memcpy(name + prefix_size, section_name, section_name_size + 1U);
                 if (!buffer_append_string(&shstrtab,
                                           name,
                                           &relocation_name_offsets[i])) {
@@ -644,22 +710,23 @@ bool minielf_build_relocatable(const MiniElfRelocatableSpec *spec,
         }
         index = relocation_section_indices[i];
         if (!align_up(cursor, word_align, &aligned) ||
-            count > SIZE_MAX / rela_size) {
+            count > SIZE_MAX / relocation_entry_size) {
             set_error(error_out, MINIELF_WRITE_LIMIT);
             goto done;
         }
         cursor = aligned;
         headers[index].name = relocation_name_offsets[i];
-        headers[index].type = SHT_RELA;
+        headers[index].type = spec->relocation_format ==
+            MINIELF_RELOC_FORMAT_REL ? SHT_REL : SHT_RELA;
         headers[index].flags = SHF_INFO_LINK |
                                (section_group_indices[i]==SIZE_MAX ? 0U : SHF_GROUP);
         headers[index].offset = cursor;
-        headers[index].size = count * rela_size;
+        headers[index].size = count * relocation_entry_size;
         headers[index].link = (uint32_t)symtab_index;
         headers[index].info = (uint32_t)(i + 1U);
         headers[index].alignment = word_align;
-        headers[index].entry_size = rela_size;
-        if (!add_size(cursor, count * rela_size, &cursor)) {
+        headers[index].entry_size = relocation_entry_size;
+        if (!add_size(cursor, count * relocation_entry_size, &cursor)) {
             set_error(error_out, MINIELF_WRITE_LIMIT);
             goto done;
         }
@@ -907,13 +974,16 @@ bool minielf_build_relocatable(const MiniElfRelocatableSpec *spec,
             }
         }
         offset = (size_t)headers[section_index].offset +
-                 write_index * rela_size;
-        if (!write_rela(image + offset,
-                        spec,
-                        rela->offset,
-                        symbol_index,
-                        rela->type,
-                        rela->addend)) {
+                 write_index * relocation_entry_size;
+        if ((spec->relocation_format == MINIELF_RELOC_FORMAT_REL &&
+             !write_rel_implicit_addend(image, total_size, spec,
+                                         &headers[rela->target_section + 1U],
+                                         rela)) ||
+            !(spec->relocation_format == MINIELF_RELOC_FORMAT_REL ?
+              write_rel(image + offset, spec, rela->offset,
+                        symbol_index, rela->type) :
+              write_rela(image + offset, spec, rela->offset,
+                         symbol_index, rela->type, rela->addend))) {
             set_error(error_out, MINIELF_WRITE_INVALID_RELOCATION);
             goto done;
         }

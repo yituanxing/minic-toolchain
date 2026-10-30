@@ -470,8 +470,11 @@ static bool minias_write_elf(MiniAs *as,
         output->offset = final_offset;
         output->symbol_index = input->symbol_index == SIZE_MAX ? SIZE_MAX :
                                symbol_map[input->symbol_index];
-        output->type =
-            as->target->fixup_relocation_type(input->kind, input->width);
+        output->type = as->target->fixup_relocation_type_for_object != NULL ?
+            as->target->fixup_relocation_type_for_object(
+                as,input->kind,input->width) :
+            as->target->fixup_relocation_type(input->kind,input->width);
+        output->field_width = input->width;
         output->addend = input->addend;
         if(section_reloc) {
             const MiniAsSymbol *local=&as->symbols[input->symbol_index];
@@ -503,7 +506,11 @@ static bool minias_write_elf(MiniAs *as,
             break;
         }
     }
-    spec.machine = as->target->elf_machine;
+    spec.machine = as->object_machine != 0U ?
+                   as->object_machine : as->target->elf_machine;
+    spec.relocation_format = as->output_rel_relocations ?
+                             MINIELF_RELOC_FORMAT_REL :
+                             MINIELF_RELOC_FORMAT_RELA;
     spec.flags = as->elf_flags;
     spec.sections = sections;
     spec.section_count = section_count;

@@ -607,6 +607,11 @@ typedef struct MiniAs {
     bool debug_is_stmt;
     uint32_t elf_flags;
     bool output_elf32; /* Common object layout, not target ISA XLEN. */
+    /* Target-resolved object format overrides. Zero means the TargetOps
+     * default machine and RELA; the emitter never infers an ABI from
+     * instruction spellings or an ELF numeric class. */
+    uint16_t object_machine;
+    bool output_rel_relocations;
     /* Common-owned cache for stable symbol anchors and current-pass branch
      * membership. Cross-replay branch identities live in SourceGraph. */
     void *layout_anchor_graph;
@@ -863,6 +868,10 @@ typedef struct MiniAsTargetOps {
      * relocation number, where zero may be a valid numeric enumeration. */
     bool (*supports_fixup)(MiniAsFixupKind, unsigned);
     uint32_t (*fixup_relocation_type)(MiniAsFixupKind, unsigned);
+    /* Optional ABI-sensitive relocation mapping (e.g. x86-64 vs i386).
+     * Both profiles reuse one instruction parser and machine encoder. */
+    uint32_t (*fixup_relocation_type_for_object)(const MiniAs *,
+                                                MiniAsFixupKind, unsigned);
     /* GNU named relocation spelling is ISA-owned; Common only places the
      * semantic fixup at the explicit section offset. */
     bool (*parse_named_relocation)(const char *, MiniAsFixupKind *, unsigned *);
@@ -940,6 +949,8 @@ typedef struct MiniAsAssemblyConfig {
     const MiniAsTargetOps *target;
     bool elf32;
     uint32_t elf_flags;
+    uint16_t object_machine; /* 0: use Target's ELF machine. */
+    bool output_rel_relocations; /* false: RELA; true: REL. */
     /* Serialized TargetSpec, interpreted only by the owning Target.
      * A fixed inline buffer avoids caller-owned borrowed pointers. */
     unsigned char target_profile[1024];

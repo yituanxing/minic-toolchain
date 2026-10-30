@@ -392,6 +392,10 @@ jobs:
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-aarch64-typed-register-alias.sh
+      - name: AArch64 Linux PC dot branches use immediate displacement not undefined ELF symbols
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-aarch64-dot-branch-real-link.sh
       - name: Test independent AArch64 backend through shared ELF engine
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \

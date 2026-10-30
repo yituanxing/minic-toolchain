@@ -129,7 +129,7 @@ ln -sfn loongarch64-linux-gnu-as "$work/as-override/as"
 : >"$trace"
 
 make -C "$kernel_src" O="$kernel_out" ARCH=loongarch \
-  CROSS_COMPILE=loongarch64-linux-gnu- loongson3_defconfig
+  CROSS_COMPILE=loongarch64-linux-gnu- CC="$cc" loongson3_defconfig
 "$kernel_src/scripts/config" --file "$kernel_out/.config" \
   -e EFI -e EFI_STUB -e EFI_ZBOOT \
   -e BLK_DEV_INITRD -e DEVTMPFS -e DEVTMPFS_MOUNT \
@@ -138,7 +138,7 @@ make -C "$kernel_src" O="$kernel_out" ARCH=loongarch \
   -e SIGNALFD -e INOTIFY_USER -e TIMERFD -e MEMFD_CREATE -e FUTEX \
   -e PIDFD
 make -C "$kernel_src" O="$kernel_out" ARCH=loongarch \
-  CROSS_COMPILE=loongarch64-linux-gnu- olddefconfig
+  CROSS_COMPILE=loongarch64-linux-gnu- CC="$cc" olddefconfig
 grep -qx 'CONFIG_EFI_STUB=y' "$kernel_out/.config"
 grep -qx 'CONFIG_EFI_ZBOOT=y' "$kernel_out/.config"
 

@@ -10,6 +10,8 @@
 /* A first, fail-closed GNU AT&T SysV x86-64 target. All common expression,
  * symbol, section, fragment, and ELF handling lives outside this file. */
 #define X64_CODE32 UINT32_C(1)
+#define X64_CODE16 UINT32_C(2)
+#define X64_CODE16_GCC UINT32_C(3)
 
 /* The IA-32 thunk mode is ISA parser state, not a Common assembler option.
  * Each instruction captures the bits at its lexical site so a later .code64
@@ -695,9 +697,19 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
     m->dispose_memory=x64_dispose_memory;
     /* IA-32 mixed-mode within ELF64. Unvalidated code32 encodings fail
      * closed; these are the actual GNU EFI thunk PUSH/LRET instructions. */
-    if((s->site.mode_bits&X64_CODE32)!=0U &&
-       strcmp(s->op,"pushl") && strcmp(s->op,"lret")) {
+    if(s->site.mode_bits==X64_CODE32 &&
+       strcmp(s->op,"pushl") && strcmp(s->op,"popl") &&
+       strcmp(s->op,"movl") && strcmp(s->op,"lret")) {
         minias_set_error(as,"unsupported-x86-code32-operand:%s:line=%zu",
+                         s->op,s->line);
+        minias_mcinst_destroy(m);return false;
+    }
+    if(s->site.mode_bits==X64_CODE16 ||
+       s->site.mode_bits==X64_CODE16_GCC) {
+        /* A 16-bit instruction may require operand-size 66, address-size
+         * 67 and GNU .code16gcc defaults. Until a particular retained
+         * MCInst is proved against GAS, do not misencode it as x86-64. */
+        minias_set_error(as,"unsupported-x86-code16-operand:%s:line=%zu",
                          s->op,s->line);
         minias_mcinst_destroy(m);return false;
     }
@@ -2244,7 +2256,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
      * operand size. Linux head_64.S emits `push $0` in its return path;
      * reuse the single typed PUSH imm8/imm32 encoding and ABS32S fixup. */
     if((!strcmp(s->op,"pushq") || !strcmp(s->op,"push") ||
-       ((s->site.mode_bits&X64_CODE32)!=0U &&
+         (s->site.mode_bits==X64_CODE32 &&
         !strcmp(s->op,"pushl"))) && s->args[0]=='$') {
         uint64_t bits;
         MiniAsSymbolExpr expr;
@@ -2303,11 +2315,12 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
     }
     if ((!strcmp(s->op,"pushq") || !strcmp(s->op,"popq") ||
          !strcmp(s->op,"push") || !strcmp(s->op,"pop") ||
-         ((s->site.mode_bits&X64_CODE32)!=0U &&
-          !strcmp(s->op,"pushl"))) &&
+         (s->site.mode_bits==X64_CODE32 &&
+          (!strcmp(s->op,"pushl") || !strcmp(s->op,"popl")))) &&
         x64_register(s->args,&rs,&ws) &&
-        (ws || ((s->site.mode_bits&X64_CODE32)!=0U &&
-                !strcmp(s->op,"pushl") && !ws && rs<8U))) {
+        (ws || (s->site.mode_bits==X64_CODE32 &&
+                (!strcmp(s->op,"pushl") || !strcmp(s->op,"popl")) &&
+                !ws && rs<8U))) {
         m->opcode=X64_STACK;m->count=1U;
         m->operands[0].kind=MINIAS_MC_REGISTER;
         m->operands[0].reg=rs;
@@ -3791,12 +3804,22 @@ static bool x64_code_align(MiniAs *as,int section,size_t n) {
 
 static bool x64_profile(const char *march,const char *mabi,
                         MiniAsAssemblyConfig *cfg,char *err,size_t cap) {
-    if ((march && strcmp(march,"x86-64")) ||
-        (mabi && strcmp(mabi,"sysv"))) {
+    bool i386=(mabi && !strcmp(mabi,"i386"));
+    if ((march && strcmp(march,"x86-64") && strcmp(march,"i386")) ||
+        (mabi && strcmp(mabi,"sysv") && !i386) ||
+        (i386 && march && strcmp(march,"i386"))) {
         if(cap) snprintf(err,cap,"unsupported-x86_64-isa-abi");
         return false;
     }
-    memset(cfg,0,sizeof(*cfg));cfg->target=minias_target_x86_64();return true;
+    memset(cfg,0,sizeof(*cfg));cfg->target=minias_target_x86_64();
+    if(i386) {
+        /* GNU --32 is an object-format profile, independent of a later
+         * source-local `.code16gcc` / `.code32` CPU mode switch. */
+        cfg->elf32=true;
+        cfg->object_machine=3U; /* EM_386 */
+        cfg->output_rel_relocations=true;
+    }
+    return true;
 }
 
 static uint32_t x64_reloc(MiniAsFixupKind kind,unsigned width) {
@@ -3820,6 +3843,22 @@ static uint32_t x64_reloc(MiniAsFixupKind kind,unsigned width) {
     if(kind==MINIAS_FIXUP_X64_GOTPCREL)return 9U;
     if(kind==MINIAS_FIXUP_X64_GOTPCRELX)return 41U;
     if(kind==MINIAS_FIXUP_X64_REX_GOTPCRELX)return 42U;
+    return 0U;
+}
+
+static uint32_t x64_reloc_for_object(const MiniAs *as,
+                                     MiniAsFixupKind kind,unsigned width) {
+    if(!as->output_elf32)return x64_reloc(kind,width);
+    /* ELF32 i386 REL: addends live in their destination sections.  The
+     * generic writer handles the object encoding; Target only maps the
+     * ABI relocation family, never a Linux/Kbuild filename special case. */
+    if(width!=4U)return 0U;
+    if(kind==MINIAS_FIXUP_ABS || kind==MINIAS_FIXUP_X64_ABS32S)
+        return 1U; /* R_386_32 */
+    if(kind==MINIAS_FIXUP_X64_PC32 || kind==MINIAS_FIXUP_PREL32)
+        return 2U; /* R_386_PC32 */
+    if(kind==MINIAS_FIXUP_X64_PLT32)return 4U; /* R_386_PLT32 */
+    if(kind==MINIAS_FIXUP_X64_GOTPCREL)return 3U; /* R_386_GOT32 */
     return 0U;
 }
 
@@ -3855,6 +3894,7 @@ static bool x64_init_target_state(MiniAs *as,
         minias_set_error(as,"out-of-memory:x86-target-state");
         return false;
     }
+    state->code_mode=config->elf32?X64_CODE32:0U;
     as->target_state=state;
     return true;
 }
@@ -3875,8 +3915,10 @@ static void x64_destroy_target_state(MiniAs *as) {
 static bool x64_parse_directive(MiniAs *as,const char *op,const char *args,
                                 size_t line,bool *handled) {
     bool code32=!strcmp(op,".code32");
+    bool code16=!strcmp(op,".code16");
+    bool code16gcc=!strcmp(op,".code16gcc");
     X64TargetState *state=(X64TargetState *)as->target_state;
-    *handled=code32 || !strcmp(op,".code64");
+    *handled=code32 || code16 || code16gcc || !strcmp(op,".code64");
     if(!*handled)return true;
     if(*args) {
         minias_set_error(as,"unsupported-x86_64-code-mode:%s:line=%zu",
@@ -3887,7 +3929,8 @@ static bool x64_parse_directive(MiniAs *as,const char *op,const char *args,
         minias_set_error(as,"missing-x86-target-state");
         return false;
     }
-    state->code_mode=code32?X64_CODE32:0U;
+    state->code_mode=code16gcc?X64_CODE16_GCC:
+                     code16?X64_CODE16:code32?X64_CODE32:0U;
     return true;
 }
 /* GNU GAS treats native register tokens in .if as distinct symbolic
@@ -3964,6 +4007,7 @@ static const MiniAsTargetOps ops={
     .plan_instruction_relaxation=x64_plan_instruction_relaxation,
     .append_code_alignment=x64_code_align,
     .fixup_relocation_type=x64_reloc,
+    .fixup_relocation_type_for_object=x64_reloc_for_object,
     .supports_fixup=x64_supports_fixup,
     .parse_named_relocation=x64_named_relocation,
     .default_exec_alignment=1U,
