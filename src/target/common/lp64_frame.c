@@ -77,8 +77,8 @@ bool minic_lp64_frame_plan_wide(
     if (fn == NULL || plan == NULL || fn->value_count != plan->value_count ||
         wide_base > MINIC_LARGE_FRAME_MAX || plan->wide_offsets != NULL ||
         (fn->value_count != 0U && fn->values == NULL) ||
-        !minic_core_value_slots_build(
-            fn, MINIC_CORE_VALUE_SLOT_WIDE_TAIL, wide_base,
+        !minic_core_wide_value_slots_build(
+            fn, wide_base,
             MINIC_LARGE_FRAME_MAX, &plan->wide_offsets, &end))
         return false;
     plan->wide_base = wide_base;

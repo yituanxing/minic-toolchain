@@ -19,7 +19,17 @@ static int (*function_addresses[])(void) = {
     missing_function, hidden_missing_function, provided_function
 };
 
+/* A global initializer can carry a weak absolute relocation; a live Core
+ * address expression additionally tests the target's code relocation. On
+ * AArch64 an undefined weak may be zero, even under kernel -fno-pic. */
+static int weak_runtime_addresses(void) {
+    return &missing_object == 0 && &hidden_missing_object == 0 &&
+           missing_function == 0 && hidden_missing_function == 0 &&
+           &provided_object != 0 && provided_function != 0;
+}
+
 int main(void) {
+    if (!weak_runtime_addresses()) return 3;
     if (object_addresses[0] != 0 || object_addresses[1] != 0 ||
         object_addresses[2] == 0 || *object_addresses[2] != 17)
         return 1;

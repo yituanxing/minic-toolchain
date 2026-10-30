@@ -103,8 +103,6 @@ int main(int argc, char **argv) {
         .finalize = finalize,
         .selection = MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS,
         .continue_after_failure = false,
-        /* This output-transaction probe has no synthetic CFG blocks. */
-        .include_unreachable_symbol_uses = true,
     };
     TestContext ctx = {0};
     unsigned int stage;

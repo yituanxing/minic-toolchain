@@ -287,6 +287,9 @@ jobs:
           MINIC="$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic" \
           BUILD_DIR=build/minic-native-backend \
             sh tests/compiler/c0/run-core-block-spill-reuse.sh
+          MINIC_CC="$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc" \
+          BUILD_DIR=build/minic-native-backend \
+            sh tests/compiler/c0/probe-direct-lp64-spill-reuse-pressure.sh
 
       - name: RV64 ABI function-plan owner, hard/soft float and rollback
         shell: bash

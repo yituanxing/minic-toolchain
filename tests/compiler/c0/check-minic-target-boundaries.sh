@@ -661,14 +661,14 @@ lacks src/target/common/global_emit.h 'minic_multi_recursive_shape_supported('
 lacks src/target/common/global_emit.h 'minic_multi_emit_flexible_record_global('
 
 exists src/target/common/core_numeric_shape.h
-# Three machine frame families now consume one policy-qualified Common
-# SSA slot planner: SysV cumulative 8/16, Direct LP64 wide sidecar, and
-# the earlier RV32/RV64 block-local last-use planner.
+# All five frame implementations use one Common last-use SSA spill planner.
+# The Direct LP64 128-bit wide sidecar remains separate from scalar slots.
 exists src/target/common/core_value_slots.c
 exists src/target/common/core_value_slots.h
-has src/target/common/core_value_slots.c 'bool minic_core_value_slots_build('
-has src/target/x86_64/frame.c 'MINIC_CORE_VALUE_SLOT_LINEAR'
-has src/target/common/lp64_frame.c 'MINIC_CORE_VALUE_SLOT_WIDE_TAIL'
+has src/target/common/core_value_slots.c 'bool minic_core_wide_value_slots_build('
+has src/target/common/lp64_frame.c 'minic_core_wide_value_slots_build('
+lacks src/target/x86_64/frame.c 'minic_core_value_slots_build('
+lacks src/target/common/core_value_slots.c 'MINIC_CORE_VALUE_SLOT_LINEAR'
 lacks src/target/x86_64/frame.c 'value_bytes += slot;'
 lacks src/target/common/lp64_frame.c 'plan->wide_offsets[i] = pos;'
 exists src/target/common/core_numeric_shape.c
@@ -726,7 +726,8 @@ lacks src/target/common/core_spill_layout.c 'minic_core_function_reused_spill_pe
 lacks src/target/common/core_spill_layout.c 'minic_core_function_reused_spill_assign('
 has tests/compiler/c0/run-core-block-spill-reuse.sh 'output-rv32.s'
 has .github/workflows/minic-native-refactor-gate.yml 'Two-XLEN Common single-pass SSA spill regressions'
-for backend in src/target/riscv32/rv32_frame.c src/target/riscv64/frame_layout.c; do
+for backend in src/target/x86_64/frame.c src/target/common/lp64_frame.c \
+               src/target/riscv32/rv32_frame.c src/target/riscv64/frame_layout.c; do
   has "$backend" 'minic_core_function_reused_spill_layout('
   lacks "$backend" 'minic_core_function_reused_spill_peak('
   lacks "$backend" 'minic_core_function_reused_spill_assign('
@@ -954,7 +955,6 @@ cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
   src/frontend/ast_global.c \
   src/target/common/core_function_facts.c \
   src/target/common/core_function_plan.c \
-  src/core/core_ir.c \
   -o "$work/program-emit-probe"
 "$work/program-emit-probe" "$work/test-output.s"
 
@@ -1019,8 +1019,7 @@ cc -std=c11 -Wall -Wextra -Wpedantic -Werror \
   -o "$work/rv32-frame-access-probe"
 "$work/rv32-frame-access-probe"
 
-# Exercise the two historical SSA layouts in one true Common planner and
-# prove bounds/rollback before testing native machine frame and QEMU ABIs.
+# Exercise Direct LP64's separate wide sidecar with checked rollback.
 cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
   -Iinclude -Isrc tests/compiler/c0/probe-core-value-slots.c \
   src/target/common/core_value_slots.c src/frontend/type.c \

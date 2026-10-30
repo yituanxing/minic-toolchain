@@ -30,6 +30,19 @@ for target in x86_64 riscv32 riscv64 aarch64 loongarch64; do
     done
 done
 
+# An undefined weak *code* address is not a regular non-PIC PC-relative
+# reference on AArch64: missing providers resolve to absolute zero. GNU AS
+# must see a GOT address load, while the declaration remains ELF weak.
+"$minic" --target=aarch64-linux -fno-pie -S "$work/input.i" \
+    -o "$work/aarch64-nonpic.s"
+for symbol in missing_object hidden_missing_object provided_object \
+              missing_function hidden_missing_function provided_function; do
+    grep -Fq "adrp x9, :got:$symbol" "$work/aarch64-nonpic.s" || {
+        echo "FAIL AArch64 non-PIC undefined weak lacks GOT: $symbol" >&2
+        exit 1
+    }
+done
+
 "$host_cc" -fno-pie -c "$work/x86_64.s" -o "$work/minic.o"
 "$host_cc" -fno-pie -c \
     "$root/tests/compiler/c0/gnu_weak_undefined_live.c" -o "$work/gnu.o"

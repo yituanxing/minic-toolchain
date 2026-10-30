@@ -194,6 +194,13 @@ bool minic_target_info_elf_object_is_nonpreemptible(const MinicC0Program *progra
                                                     const char *symbol);
 bool minic_target_info_elf_function_is_nonpreemptible(const MinicC0Program *program,
                                                       const char *symbol);
+/* A missing weak definition may legally resolve to address zero. AArch64
+ * cannot use ADRP+ADD against that absolute zero from a high kernel address;
+ * it must retain an indirection even with -fno-pic. */
+bool minic_target_info_elf_object_is_undefined_weak(const MinicC0Program *program,
+                                                    const char *symbol);
+bool minic_target_info_elf_function_is_undefined_weak(const MinicC0Program *program,
+                                                      const char *symbol);
 bool minic_target_info_function_pointer_calling_convention_declaration_supported(
     const MinicTargetInfo *target, MinicFunctionCallingConvention convention);
 bool minic_target_info_function_calling_convention_scalar_call_supported(

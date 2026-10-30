@@ -539,6 +539,33 @@ bool minic_target_info_elf_function_is_nonpreemptible(const MinicC0Program *prog
     return false;
 }
 
+bool minic_target_info_elf_object_is_undefined_weak(const MinicC0Program *program,
+                                                    const char *symbol) {
+    size_t index;
+    if (program == NULL || symbol == NULL) return false;
+    for (index = 0U; index < program->global_object_count; ++index) {
+        const MinicGlobalObject *object = &program->global_objects[index];
+        if (object->name != NULL && strcmp(object->name, symbol) == 0)
+            return object->is_weak && object->is_extern &&
+                   !object->is_tentative;
+    }
+    return false;
+}
+
+bool minic_target_info_elf_function_is_undefined_weak(const MinicC0Program *program,
+                                                      const char *symbol) {
+    size_t index;
+    if (program == NULL || symbol == NULL) return false;
+    for (index = 0U; index < program->function_count; ++index) {
+        const MinicFunction *function = &program->functions[index];
+        const char *name = function->assembler_name != NULL
+            ? function->assembler_name : function->name;
+        if (name != NULL && strcmp(name, symbol) == 0)
+            return function->is_weak && !function->is_defined;
+    }
+    return false;
+}
+
 /* ABI type spelling is a language capability; the target backend still
  * decides separately which calling conventions it can actually emit. */
 bool minic_target_info_function_pointer_calling_convention_declaration_supported(

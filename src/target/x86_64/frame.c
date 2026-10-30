@@ -2,7 +2,6 @@
 #include "target/common/core_function_facts.h"
 #include "target/common/core_frame_layout.h"
 #include "target/common/core_spill_layout.h"
-#include "target/common/core_value_slots.h"
 #include "target/x86_64/abi.h"
 #include "target/data_layout.h"
 
