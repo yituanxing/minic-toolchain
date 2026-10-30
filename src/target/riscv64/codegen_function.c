@@ -33,8 +33,9 @@ static bool rv64_visit_global(
         if (object->alias_target != MINIC_GLOBAL_OBJECT_INVALID)
             return minic_multi_elf_emit_object_alias(
                 file, program, object, "@object");
-        return !object->is_weak || object->is_internal ||
-               fprintf(file, ".weak %s\n", object->name) >= 0;
+        /* The common program emitter owns referenced undefined bindings.
+         * Emitting here would duplicate `.weak` and create unused symbols. */
+        return true;
     }
     if (minic_riscv64_emit_global_object(file, program, object)) return true;
     {
@@ -70,12 +71,8 @@ static bool rv64_visit_function(
         (void)fflush(stderr);
     }
     if (!function->is_defined) {
-        const char *name = minic_c0_function_symbol_name(function);
         if (function->alias_target != MINIC_FUNCTION_INVALID)
             return minic_riscv_emit_function_alias(file, program, function);
-        if (function->is_weak && !function->is_internal)
-            return name != NULL && name[0] != '\0' &&
-                   fprintf(file, ".weak %s\n", name) >= 0;
         return true;
     }
     {

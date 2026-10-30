@@ -511,6 +511,8 @@ MINIC="$minic" BUILD_DIR="$work/function-typed-declarator" HOST_CC="$host_cc" sh
 
 MINIC="$minic" BUILD_DIR="$work/gnu-weak-function-symbol" HOST_CC="$host_cc" sh "$root/tests/compiler/c0/run-gnu-weak-function-symbol.sh"
 
+MINIC="$minic" BUILD_DIR="$work/gnu-weak-undefined-live" HOST_CC="$host_cc" sh "$root/tests/compiler/c0/run-gnu-weak-undefined-live.sh"
+
 MINIC="$minic" BUILD_DIR="$work/pragma-pack-record-layout" HOST_CC="$host_cc" sh "$root/tests/compiler/c0/run-pragma-pack-record-layout.sh"
 
 MINIC="$minic" BUILD_DIR="$work/conditional-null-pointer-constant" HOST_CC="$host_cc" sh "$root/tests/compiler/c0/run-conditional-null-pointer-constant.sh"

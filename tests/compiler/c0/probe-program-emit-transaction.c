@@ -95,8 +95,16 @@ int main(int argc, char **argv) {
     MinicC0Program program = {0};
     MinicTargetInfo target = {0};
     MinicProgramEmitConfig config = {
-        global, function, prefix, between, "T\n", finalize,
-        MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS, false
+        .emit_global = global,
+        .emit_function = function,
+        .prefix = prefix,
+        .between = between,
+        .trailer = "T\n",
+        .finalize = finalize,
+        .selection = MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS,
+        .continue_after_failure = false,
+        /* This output-transaction probe has no synthetic CFG blocks. */
+        .include_unreachable_symbol_uses = true,
     };
     TestContext ctx = {0};
     unsigned int stage;

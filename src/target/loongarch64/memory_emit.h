@@ -15,6 +15,14 @@ bool minic_loongarch64_emit_memory_instruction(
     const MinicLP64FramePlan *frame_plan,
     bool dynamic_frame, bool *needs_gp_store);
 
+/* Exact Core-origin/address/alignment eligibility used by the memory
+ * emitter and address-materialization elision. Never elide a producer
+ * unless every consumer is certified to take the direct native path. */
+bool minic_loongarch64_direct_frame_memory_use(
+    const MinicC0Program *, const MinicTargetInfo *,
+    const MinicCoreFunction *, const MinicLP64FramePlan *,
+    const MinicCoreInstruction *);
+
 /* Store a compiler-materialized structured ASM register output through the
  * same alignment proof and native/byte-fallback transport as ordinary Core
  * stores. The chosen scratch register must not alias value or address. */

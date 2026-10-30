@@ -1,5 +1,6 @@
 #include "target/loongarch64/residual_emit.h"
 #include "target/loongarch64/asm_contract.h"
+#include "target/loongarch64/memory_emit.h"
 #include "target/loongarch64/simd_asm.h"
 #include "target/loongarch64/scalar_normalize.h"
 #include "target/common/direct_residual_plan.h"
@@ -8,6 +9,7 @@
 #include "target/common/direct_program_emit.h"
 #include "target/data_layout.h"
 #include "target/loongarch64/frame_emit.h"
+#include "core/value_uses.h"
 #include <inttypes.h>
 #include <limits.h>
 #include <stdint.h>
@@ -18,6 +20,85 @@
  * uses the existing callee-saved frame anchor, never raw dynamic SP. */
 #define emit_sp_mem(_out, _op, _reg, _offset) \
     minic_loongarch64_emit_frame_mem((_out), (_op), (_reg), (_offset), dynamic_frame)
+
+typedef struct LoongAddressFoldUse {
+    MinicCoreValueId query;
+    bool seen;
+} LoongAddressFoldUse;
+
+static bool loong_proven_frame_address(
+    const MinicCoreFunction *fn, MinicCoreValueId value_id, unsigned depth) {
+    const MinicCoreInstruction *def;
+    if (fn == NULL || value_id >= fn->value_count || depth > 16U ||
+        fn->values[value_id].definition >= fn->instruction_count)
+        return false;
+    def = &fn->instructions[fn->values[value_id].definition];
+    if (def->result != value_id) return false;
+    if (def->kind == MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS)
+        return def->value.object_id < fn->object_count;
+    return def->kind == MINIC_CORE_INSTRUCTION_FIELD_ADDRESS &&
+           loong_proven_frame_address(
+               fn, def->value.field_address.base, depth + 1U);
+}
+
+static bool loong_address_fold_mark_use(MinicCoreValueId value_id, void *opaque) {
+    LoongAddressFoldUse *check = (LoongAddressFoldUse *)opaque;
+    if (check == NULL) return false;
+    if (value_id == check->query) check->seen = true;
+    return true;
+}
+
+/* A frame object has an immutable offset. Its SSA address materialization is
+ * unnecessary if EVERY user is a native load/store which directly consumes
+ * that proven object offset. Inspect all instructions and terminators,
+ * including cold/externally reachable blocks; no pointer escape is allowed. */
+static bool loong_address_only_folded_uses(
+    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, const MinicLP64FramePlan *frame_plan,
+    MinicCoreValueId value_id, unsigned depth) {
+    size_t i;
+    if (fn == NULL || value_id >= fn->value_count || depth > 16U) return false;
+    for (i = 0U; i < fn->instruction_count; ++i) {
+        const MinicCoreInstruction *ins = &fn->instructions[i];
+        LoongAddressFoldUse check = {value_id, false};
+        if (!minic_core_visit_instruction_value_uses(
+                fn, ins, loong_address_fold_mark_use, &check))
+            return false;
+        if (!check.seen) continue;
+        if ((ins->kind == MINIC_CORE_INSTRUCTION_LOAD &&
+             ins->value.load.address == value_id) ||
+            (ins->kind == MINIC_CORE_INSTRUCTION_ATOMIC_LOAD &&
+             ins->value.atomic_load.address == value_id) ||
+            (ins->kind == MINIC_CORE_INSTRUCTION_STORE &&
+             ins->value.store.address == value_id &&
+             ins->value.store.stored_value != value_id) ||
+            (ins->kind == MINIC_CORE_INSTRUCTION_ATOMIC_STORE &&
+             ins->value.atomic_store.address == value_id &&
+             ins->value.atomic_store.stored_value != value_id)) {
+            if (!minic_loongarch64_direct_frame_memory_use(
+                    program, target, fn, frame_plan, ins))
+                return false;
+            continue;
+        }
+        if (ins->kind == MINIC_CORE_INSTRUCTION_FIELD_ADDRESS &&
+            ins->value.field_address.base == value_id &&
+            ins->result != MINIC_CORE_VALUE_INVALID &&
+            loong_address_only_folded_uses(
+                program, target, fn, frame_plan,
+                ins->result, depth + 1U))
+            continue;
+        return false;
+    }
+    for (i = 0U; i < fn->block_count; ++i) {
+        LoongAddressFoldUse check = {value_id, false};
+        if (!fn->blocks[i].has_terminator ||
+            !minic_core_visit_terminator_value_uses(
+                &fn->blocks[i].terminator, loong_address_fold_mark_use, &check) ||
+            check.seen)
+            return false;
+    }
+    return true;
+}
 
 
 /* Residual machine lowering after Core family admission. Each case is
@@ -250,6 +331,11 @@ bool minic_loongarch64_emit_residual_instruction(
         }
         case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS: {
             size_t object_offset;
+            if (loong_address_only_folded_uses(
+                    program, target, fn, frame_plan, ins->result, 0U)) {
+                *needs_writeback = false;
+                return true;
+            }
             if (!minic_multi_direct_object_address_location(
                     fn, ins, frame_plan, &object_offset) ||
                 fprintf(out, "  li.d $t0, %zu\n"
@@ -261,6 +347,12 @@ bool minic_loongarch64_emit_residual_instruction(
         }
 
         case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS: {
+            if (loong_proven_frame_address(fn, ins->result, 0U) &&
+                loong_address_only_folded_uses(
+                    program, target, fn, frame_plan, ins->result, 0U)) {
+                *needs_writeback = false;
+                return true;
+            }
             /* The full Core DataLayout byte offset may exceed signed imm12.
              * li.d + add.d preserves the computed record layout. */
             MinicCoreValueId base;

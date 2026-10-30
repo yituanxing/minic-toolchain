@@ -894,7 +894,6 @@ static bool rv32_visit_declaration(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicFunction *decl, const MinicCoreFunction *fn,
     size_t index, bool function_sections, void *opaque) {
-    const char *name;
     (void)target;
     (void)fn;
     (void)index;
@@ -902,10 +901,8 @@ static bool rv32_visit_declaration(
     (void)opaque;
     if (decl->alias_target != MINIC_FUNCTION_INVALID)
         return minic_riscv_emit_function_alias(out, program, decl);
-    if (!decl->is_weak || decl->is_internal) return true;
-    name = minic_c0_function_symbol_name(decl);
-    return name != NULL && *name != '\0' &&
-           fprintf(out, ".weak %s\n", name) >= 0;
+    /* Referenced undefined weak bindings are emitted once by Common. */
+    return true;
 }
 
 static bool rv32_visit_function(

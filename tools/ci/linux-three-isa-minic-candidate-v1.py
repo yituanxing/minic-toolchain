@@ -559,6 +559,13 @@ def vdso_c_owners(rows: list[dict], target: str) -> list[dict]:
                   key=lambda row: row["object"])
 
 
+def positional_c_sources(argv: list[str]) -> list[int]:
+    """Exclude forced C includes from GCC's single source argument search."""
+    return [i for i, token in enumerate(argv) if
+            token.endswith(".c") and not token.startswith("-") and
+            (i == 0 or argv[i - 1] not in ("-include", "-imacros"))]
+
+
 def gnu_vdso_assembly_command(work: Path, row: dict, data: dict,
                               diagnostic_input: Path, diagnostic_asm: Path) -> list[str]:
     """Replay GNU -S using the *frozen* original GNU -E input and .o.cmd flags.
@@ -574,8 +581,10 @@ def gnu_vdso_assembly_command(work: Path, row: dict, data: dict,
         diagnostic_input.with_suffix(".unused.i"), data["target"])
     if argv[:3] != [data["gcc"], "-E", "-P"]:
         raise Rejected(f"invalid GNU -E replay for vDSO owner {name}")
-    source_indices = [i for i, token in enumerate(argv) if
-                      token.endswith(".c") and not token.startswith("-")]
+    # arm64 vDSO forces `-include lib/vdso/gettimeofday.c` and also compiles
+    # arch/arm64/kernel/vdso/vgettimeofday.c as the one positional TU. The
+    # included .c is already in frozen GNU -E output, never a second source.
+    source_indices = positional_c_sources(argv)
     if len(source_indices) != 1:
         raise Rejected(f"ambiguous vDSO GNU C source: {name}")
     # The frozen .i is a preprocessed C translation unit. -x cpp-output
@@ -991,6 +1000,12 @@ def self_test() -> None:
     assert set(TARGETS) == {"x86_64", "aarch64", "loongarch64"}
     assert len(ALLOWED_CFLAGS) == 16
     assert len(LINUX_SHA) == 64
+    assert positional_c_sources([
+        "aarch64-linux-gnu-gcc", "-E", "-P", "-include",
+        "lib/vdso/gettimeofday.c", "-imacros", "generated/macros.c",
+        "-O2", "arch/arm64/kernel/vdso/vgettimeofday.c",
+        "-o", "vgettimeofday.i",
+    ]) == [8]
     module("minic_link_sections_test", "linux-three-isa-section-size-v1.py").self_test()
     failures_checked = 0
     abi_row = {"object": "arch/loongarch/vdso/vgetcpu.o",

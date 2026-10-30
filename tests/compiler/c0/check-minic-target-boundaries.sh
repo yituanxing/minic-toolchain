@@ -950,6 +950,7 @@ cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
 cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
   -ffunction-sections -fdata-sections -Wl,--gc-sections \
   -Iinclude -Isrc tests/compiler/c0/probe-program-emit-transaction.c \
+  src/core/core_ir.c \
   src/frontend/ast_global.c \
   src/target/common/core_function_facts.c \
   src/target/common/core_function_plan.c \

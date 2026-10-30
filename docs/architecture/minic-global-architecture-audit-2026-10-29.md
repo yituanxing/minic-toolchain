@@ -188,3 +188,83 @@ Two older RV inline-ASM unit scripts hard-code physical temporary registers
 those are stale textual fixture expectations, not evidence of a new compiler
 semantic regression. Their checks should eventually assert operand semantics
 and constraints instead of accidental register allocation names.
+
+## 2026-10-30 exact-head GNU Linux link/runtime blockers (active)
+
+The following ledger is from PR #674 head `d81261dda21d`, **not** a
+replacement for the earlier `.i -> .s` 21-shard result. Original GNU Linux
+6.6.143 was built at each target's frozen Kconfig and boot-tested in QEMU;
+all candidate C objects must be built by MiniC and assembled/linked by GNU.
+The authoritative three-ISA run is GitHub Actions `41020466906`; the RV64
+full-C campaign is `41020466920`. Preserve the exact input/command/hash
+provenance and do not mix GCC-produced C objects into the candidate image.
+
+| Priority | Target / stage | Evidence and current blocker | Next proof required |
+| --- | --- | --- | --- |
+| P0 | x86-64 full GNU relink | 2758/2758 MiniC `.s -> GNU AS .o` pass. GNU link has unresolved `__compiletime_assert_*`, `__field_overflow`, configuration-gated functions, CFI and kallsyms references; executable sections grow from 16,075,966 to ~351 MB (21.84x). | Classify all unresolved references by Core/AST reachability, source attributes, configuration and generated sections; retain side effects and all true refs, then rerun all 2758 objects, link and QEMU P0/P1. |
+| P0 | LoongArch64 full GNU relink | 2723/2723 MiniC objects pass. GNU `head.o` original `.ref.text` branch to `start_secondary` overflows `R_LARCH_B26` by a -266,461,448-byte displacement after MiniC `.text` grows to ~267 MB (16.11x GCC executable bytes). This instruction is in original GNU assembly, not MiniC CALL lowering. | Reduce real machine-code size / preserve legal branch reach without changing Linux source, Kconfig, GNU LD or GCC fallback; retest 2723/2723 + GNU Image + QEMU. |
+| P0 | RV64 exact same-Image repeated P1 | 2064/2064, GNU full link and one `full_all_verified` QEMU P1 with 12 syscalls pass. The separate 12-process runner used QEMU's default `-initrd` at 0x88200000, overlapping a 150,491,136-byte Image; no repeated process passed. | Reuse the successful exact-Image custom DTB, initrd 0xa0000000 and 2 GiB map in each immutable-Image boot; certify 12 independent processes, each P1 12/12. |
+| P0 | Native strict output transaction | CI `41020466986` stopped on a stale positional `MinicProgramEmitConfig` test initializer and then synthetic no-CFG link/test setup. | Exact-head `check-minic-target-boundaries.sh` and complete native strict CI green. |
+| P0 | AArch64 full candidate | Original GNU Linux P0/P1 PASS; 4108/4108 MiniC C owners passed GNU AS. GNU Kbuild relink rc=2 on many `__compiletime_assert_*`, `kallsyms_*`, `__start_BTF`/`__stop_BTF`, `efi_arch_tables` and EFI attribute symbol references. No MiniC Image or QEMU candidate P0/P1 yet. The sole vDSO diagnostic complaint is an ambiguous `vgettimeofday.o` GNU `-S` input mapping, explicitly diagnostic-only, not an assembler failure. | Trace surviving undefined references to the exact Core or global source owner and determine live versus dead/config-excluded paths. Fix only proven MiniC frontend/Core/target defects; rerun 4108 owners + GNU link + QEMU P0/P1. |
+
+The LoongArch and x86 size deltas show **cross-target code materialization
+debt**, not permission to apply a Loong-only linker workaround. Common's
+Direct machine dispatcher writes every live SSA result into a frame slot,
+and target families reload operands. A first experiment skipping zero-use
+stores did not reduce the real LoongArch `vgettimeofday` fixture (0%); a
+verified single-pass use/materialization plan with target-owned register
+forwarding and conservative call/ASM/CFG invalidation is the next design
+candidate, not yet a correctness-verified fix. Existing Core spill-layout
+ownership, function lifetimes and ABI-specific frame rules must be reused;
+do not add a parallel algorithm or remove old code without proving its
+replacement covers all actual call sites.
+
+### Same-day isolated fixes entering the next whole-Linux CI
+
+* **x86 CFG ownership:** Unlike the other four backends, the x86 function
+  walker unconditionally visited all Core blocks and its backend contract did
+  not request reachable-only emission. The actual Linux undefined references
+  include calls produced solely from unreachable blocks, not just a missing
+  external library. The three matching contracts (backend feature bit, Core
+  block-walk reachability mask, live-symbol scan) are now aligned. An isolated
+  GNU AS/LD/runtime fixture proved `mesh_update` and
+  `__compiletime_assert_212` disappear as undefined references, while
+  externally entered source labels and real side effects stay executable.
+  The existing x86 lowering still rejects a dynamic `goto *ptr` independently
+  of this change; this fixture does not certify computed-goto runtime support.
+  Full 2758-owner CI is the remaining proof.
+* **Loong exact frame provenance:** Native aligned loads/stores can consume
+  a proven static Core frame-object+field offset directly. Address producers
+  are elided only when every Core use is certified to be such a memory
+  consumer; escape, asm, unknown provenance, unaligned and wide cases retain
+  the existing path. GNU Linux vDSO samples shrank by ~37% in isolated
+  compilations without changing the linker/assembly tools. This is a
+  code-size intervention, **not yet evidence** that the B26 link overflow is
+  gone.
+* **x86 Common spill allocation:** x86 now consumes the existing Core
+  block-local last-use spill layout instead of assigning a monotonically
+  increasing slot to every SSA result. The target still owns x86 SysV
+  negative-`rbp` displacement, 8/16-byte values, and preserved-register ABI
+  placement. A real Linux vDSO source plus GNU AS shrank `.text` from 42,961
+  to 31,188 bytes (27.4%), with GNU/MiniC native runtime and x86 long-double,
+  `__int128`, Win64/SysV and variadic tests passing. Whole-Linux link/runtime
+  correctness remains to be established by the exact-head CI.
+* **AArch vDSO evidence:** The diagnostic-only source resolver mistook the
+  `.c` argument of Kbuild's `-include` for a second translation-unit source;
+  the parser now excludes `-include` and `-imacros` operands and self-tests
+  the exact two-input form. This removes a false diagnostic and does not
+  resolve the independent AArch full-kernel GNU linker failures.
+* **Cross-target ELF weak undefined owner:** Actual AArch Linux ELF link
+  diagnostics include EFI objects and functions intentionally declared
+  `extern __weak`, which must resolve to zero if no definition is linked.
+  Existing emission of an ordinary strong undefined reference changed that
+  contract. Live undefined weak binding now belongs to the same Common
+  symbol-use emission pass as undefined ELF visibility; target-specific
+  definition emission remains separate. GNU AS/LD ELF binding and runtime
+  checks distinguish absent weak declarations, hidden weak references and
+  a strong provider. This fixes a concrete class of five AArch references,
+  not the remaining compiletime-assert/kallsyms/BTF linker failures.
+* **RV64 repeat loader:** The failing repeated-QEMU runner now uses the
+  custom DTB/initrd mapping already certified by the one successful
+  full-C process when an image exceeds 128 MiB. The exact-Image 12-process
+  CI must still pass before its stability result is claimed.

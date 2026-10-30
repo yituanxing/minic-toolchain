@@ -43,12 +43,112 @@ static size_t loong_address_root_alignment(
     }
 }
 
+/* Retain the Core identity of an exact frame-object address
+ * through constant field projections. This is a semantic proof (not a
+ * textual ASM peephole): an ADDRESS whose origin is a frame object cannot
+ * name an arbitrary user pointer or a different allocation. */
+static bool loong_static_frame_address(
+    const MinicCoreFunction *fn, const MinicLP64FramePlan *frame_plan,
+    MinicCoreValueId value_id, unsigned depth, size_t *offset) {
+    const MinicCoreInstruction *origin;
+    size_t base, extra;
+    if (fn == NULL || frame_plan == NULL || offset == NULL ||
+        value_id >= fn->value_count || depth > 16U ||
+        fn->values[value_id].definition >= fn->instruction_count)
+        return false;
+    origin = &fn->instructions[fn->values[value_id].definition];
+    if (origin->result != value_id) return false;
+    if (origin->kind == MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS)
+        return minic_lp64_frame_plan_object(
+            frame_plan, origin->value.object_id, offset);
+    if (origin->kind != MINIC_CORE_INSTRUCTION_FIELD_ADDRESS ||
+        !loong_static_frame_address(
+            fn, frame_plan, origin->value.field_address.base,
+            depth + 1U, &base))
+        return false;
+    extra = origin->value.field_address.byte_offset;
+    if (base > MINIC_LARGE_FRAME_MAX ||
+        extra > MINIC_LARGE_FRAME_MAX - base)
+        return false;
+    *offset = base + extra;
+    return true;
+}
+
+static const char *loong_frame_load_op(size_t width, bool sign) {
+    switch (width) {
+    case 1U: return sign ? "ld.b" : "ld.bu";
+    case 2U: return sign ? "ld.h" : "ld.hu";
+    case 4U: return "ld.w";
+    case 8U: return "ld.d";
+    default: return NULL;
+    }
+}
+
+static const char *loong_frame_store_op(size_t width) {
+    switch (width) {
+    case 1U: return "st.b";
+    case 2U: return "st.h";
+    case 4U: return "st.w";
+    case 8U: return "st.d";
+    default: return NULL;
+    }
+}
+
+/* A positive proof skips even the alignment branch on the hot path. The
+ * shared Core alignment proof keeps the target's DataLayout root policy;
+ * unknown/arbitrary pointers retain the original guarded access path. */
 static size_t loong_known_address_alignment(
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, MinicCoreValueId value_id) {
     LoongAddressAlignmentContext context = {program, target};
     return minic_core_address_known_alignment_bounded(
         fn, value_id, loong_address_root_alignment, &context, 16U);
+}
+
+bool minic_loongarch64_direct_frame_memory_use(
+    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, const MinicLP64FramePlan *plan,
+    const MinicCoreInstruction *ins) {
+    MinicCoreValueId address;
+    size_t width = 0U, direct_offset = 0U;
+    bool sign = false, pointer = false;
+    if (program == NULL || target == NULL || fn == NULL ||
+        plan == NULL || ins == NULL)
+        return false;
+    switch (ins->kind) {
+    case MINIC_CORE_INSTRUCTION_STORE:
+    case MINIC_CORE_INSTRUCTION_ATOMIC_STORE:
+        address = ins->kind == MINIC_CORE_INSTRUCTION_STORE
+            ? ins->value.store.address : ins->value.atomic_store.address;
+        if ((ins->kind == MINIC_CORE_INSTRUCTION_STORE &&
+             ins->value.store.stored_value >= fn->value_count) ||
+            (ins->kind == MINIC_CORE_INSTRUCTION_STORE &&
+             (minic_type_is_int128_integer(
+                 fn->values[ins->value.store.stored_value].type) ||
+              minic_type_is_long_double(
+                 fn->values[ins->value.store.stored_value].type))) ||
+            !minic_multi_direct_scalar_store_shape(
+                program, target, fn, ins, &width, &sign, &pointer))
+            return false;
+        break;
+    case MINIC_CORE_INSTRUCTION_LOAD:
+    case MINIC_CORE_INSTRUCTION_ATOMIC_LOAD:
+        address = ins->kind == MINIC_CORE_INSTRUCTION_LOAD
+            ? ins->value.load.address : ins->value.atomic_load.address;
+        if ((ins->kind == MINIC_CORE_INSTRUCTION_LOAD &&
+             (minic_type_is_int128_integer(ins->type) ||
+              minic_type_is_long_double(ins->type))) ||
+            !minic_multi_direct_scalar_load_shape(
+                program, target, fn, ins, &width, &sign, &pointer))
+            return false;
+        break;
+    default: return false;
+    }
+    width = pointer ? 8U : width;
+    return loong_known_address_alignment(
+               program, target, fn, address) >= width &&
+           loong_static_frame_address(
+               fn, plan, address, 0U, &direct_offset);
 }
 
 /* Dynamic frame uses s0; otherwise the frame is SP-relative. */
@@ -218,10 +318,23 @@ bool minic_loongarch64_emit_memory_instruction(
             const MinicCoreValueId value = atomic ? ins->value.atomic_store.stored_value
                                                    : ins->value.store.stored_value;
             size_t width = 0U;
+            size_t direct_offset = 0U;
             bool sign = false, pointer = false;
             if (!minic_multi_direct_scalar_store_shape(
                     program, target, fn, ins, &width, &sign, &pointer))
                 return false;
+            if (minic_loongarch64_direct_frame_memory_use(
+                    program, target, fn, frame_plan, ins)) {
+                const char *op = loong_frame_store_op(pointer ? 8U : width);
+                if (op == NULL ||
+                    !loong_static_frame_address(
+                        fn, frame_plan, addr, 0U, &direct_offset) ||
+                    !emit_sp_mem(out, (pointer || width == 8U) ? "ld.d" : "ld.w",
+                        "$t0", minic_lp64_frame_value_offset(frame_plan, value)) ||
+                    !emit_sp_mem(out, op, "$t0", direct_offset))
+                    return false;
+                return true;
+            }
             if (!emit_sp_mem(out, "ld.d", "$t1", minic_lp64_frame_value_offset(frame_plan, addr)) ||
                 !emit_sp_mem(out, (pointer || width == 8U) ? "ld.d" : "ld.w", "$t0",
                              minic_lp64_frame_value_offset(frame_plan, value)) ||
@@ -259,10 +372,22 @@ bool minic_loongarch64_emit_memory_instruction(
             const MinicCoreValueId addr = atomic ? ins->value.atomic_load.address
                                                   : ins->value.load.address;
             size_t width = 0U;
+            size_t direct_offset = 0U;
             bool sign = false, pointer = false;
             if (!minic_multi_direct_scalar_load_shape(
                     program, target, fn, ins, &width, &sign, &pointer))
                 return false;
+            if (minic_loongarch64_direct_frame_memory_use(
+                    program, target, fn, frame_plan, ins)) {
+                const char *op = loong_frame_load_op(pointer ? 8U : width, sign);
+                if (op == NULL ||
+                    !loong_static_frame_address(
+                        fn, frame_plan, addr, 0U, &direct_offset) ||
+                    !emit_sp_mem(out, op, "$t0", direct_offset))
+                    return false;
+                *needs_gp_store = true;
+                return true;
+            }
             if (
                 !emit_sp_mem(out, "ld.d", "$t1", minic_lp64_frame_value_offset(frame_plan, addr)) ||
                 !emit_integer_memory(out, false, pointer ? 8U : width, sign,

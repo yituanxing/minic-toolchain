@@ -1,6 +1,7 @@
 #include "target/x86_64/frame.h"
 #include "target/common/core_function_facts.h"
 #include "target/common/core_frame_layout.h"
+#include "target/common/core_spill_layout.h"
 #include "target/common/core_value_slots.h"
 #include "target/x86_64/abi.h"
 #include "target/data_layout.h"
@@ -60,12 +61,32 @@ bool minic_x86_64_frame_init_with_storage(const MinicC0Program *program,
     frame->varargs_count = facts->variadic_address_count;
     frame->value_count = fn->value_count;
     frame->object_count = fn->object_count;
-    /* Core owns per-value 8B/16B placement. SysV still decides that the
-     * resulting end offsets are addressed below rbp and capped at INT32_MAX. */
-    if (!minic_core_value_slots_build(
-            fn, MINIC_CORE_VALUE_SLOT_LINEAR, 0U, (size_t)INT32_MAX,
-            &frame->value_offsets, &value_bytes))
-        return x86_frame_preflight_reject(fn, "value-slots");
+    /* Core's proven block-local last-use allocator supplies offsets from
+     * the beginning of a positive-direction scratch area. SysV x86-64
+     * still owns negative-rbp addressing: turn each start into the negative
+     * end displacement that the native x86 machine emitters expect.
+     * Keep the wide two-limb layout and all ABI frame placements unchanged. */
+    if (fn->value_count != 0U) {
+        if (fn->value_count > SIZE_MAX / sizeof(*frame->value_offsets) ||
+            (frame->value_offsets = malloc(fn->value_count *
+                                           sizeof(*frame->value_offsets))) == NULL)
+            return x86_frame_preflight_reject(fn, "value-slots-alloc");
+        for (i = 0U; i < fn->value_count; ++i)
+            frame->value_offsets[i] = SIZE_MAX;
+    }
+    if (!minic_core_function_reused_spill_layout(
+            program, fn, target->data_layout, 8U, 0U,
+            frame->value_offsets, &value_bytes, NULL))
+        return x86_frame_preflight_reject(fn, "value-slots-reuse");
+    for (i = 0U; i < fn->value_count; ++i) {
+        const MinicType type = fn->values[i].type;
+        const size_t width = minic_type_is_int128_integer(type) ||
+                             minic_type_is_long_double(type) ? 16U : 8U;
+        if (frame->value_offsets[i] == SIZE_MAX ||
+            frame->value_offsets[i] > (size_t)INT32_MAX - width)
+            return x86_frame_preflight_reject(fn, "value-slots-reuse-offset");
+        frame->value_offsets[i] += width;
+    }
     {
         size_t result_bytes;
         frame->has_sret = minic_x86_64_memory_result_record(

@@ -3579,6 +3579,26 @@ jobs:
           test -s "$image" && test -s "$initramfs"
           grep -Fq 'COHORT_RESULT=PASS candidate_objects=2064 scope=FULL_C_UNIVERSE' "$ev/cohort.log"
           grep -Fq 'COHORT_P1=PASS name=full_all_verified syscalls=12 python_era_oracle=PASS' "$ev/cohort.log"
+          # Replay the loader mapping already certified for this exact Image.
+          # QEMU's default RISC-V -initrd placement (0x88200000) collides
+          # with a >128 MiB all-MiniC kernel before any guest instruction runs.
+          image_bytes=$(stat -c '%s' "$image")
+          custom_dtb=''
+          initrd_load=''
+          qemu_memory=512M
+          if ((image_bytes > 128 * 1024 * 1024)); then
+            custom_dtb="$ev/trials/full_all_verified/full-crossblock-virt.dtb"
+            initrd_load=$((0xa0000000))
+            initrd_end=$((initrd_load + $(stat -c '%s' "$initramfs")))
+            image_end=$((0x80200000 + image_bytes))
+            test -s "$custom_dtb"
+            ((image_end <= initrd_load && initrd_end < 0x100000000))
+            printf -v initrd_end_hex '%x' "$initrd_end"
+            test "$(fdtget -t x "$custom_dtb" /chosen linux,initrd-start)" = '0 a0000000'
+            test "$(fdtget -t x "$custom_dtb" /chosen linux,initrd-end)" = "0 $initrd_end_hex"
+            qemu_memory=2G
+          fi
+          echo "RV64_FULL_REPEAT_LOADER=PASS image_bytes=$image_bytes qemu_memory=$qemu_memory initrd_load=${initrd_load:-default}"
           root="$ev/p1-identical-image-12"
           mkdir -p "$root/trials"
           image_sha=$(sha256sum "$image" | cut -d' ' -f1)
@@ -3599,7 +3619,10 @@ jobs:
             work="$root/trials/$attempt"
             mkdir -p "$work"
             test "$(sha256sum "$image" | cut -d' ' -f1)" = "$image_sha"
-            if ! LINUX_IMAGE="$image" INITRAMFS="$initramfs" \
+            if ! LINUX_RUNTIME_CUSTOM_DTB="$custom_dtb" \
+                 LINUX_RUNTIME_INITRD_LOAD_ADDR="$initrd_load" \
+                 LINUX_RUNTIME_QEMU_MEMORY="$qemu_memory" \
+                 LINUX_IMAGE="$image" INITRAMFS="$initramfs" \
                  BUILD_DIR="$work/qemu" LINUX_RELEASE=6.6.143 \
                  LINUX_RUNTIME_PROFILE=p1 QEMU_TIMEOUT_SECONDS=45 \
                  bash tests/external/linux/runtime_boot.sh \

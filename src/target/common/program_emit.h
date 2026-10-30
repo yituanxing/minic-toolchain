@@ -299,7 +299,10 @@ static inline bool minic_program_emit_collect_symbol_uses(
 }
 
 /* Undefined ELF bindings belong to real references, not mere C declarations.
- * Definitions and aliases already emit their own visibility directives. */
+ * In particular, a referenced GNU extern weak symbol must retain `.weak`:
+ * the ELF linker may legally resolve it to zero without a definition.  A
+ * default-strong undefined reference silently changes that source contract.
+ * Definitions and aliases already emit their own binding directives. */
 static inline bool minic_program_emit_undefined_symbol_visibility(
     FILE *out, const MinicC0Program *program,
     const MinicCoreFunction *functions, size_t function_count,
@@ -319,13 +322,19 @@ static inline bool minic_program_emit_undefined_symbol_visibility(
         if (object->is_extern && !object->is_internal &&
             object->alias_target == MINIC_GLOBAL_OBJECT_INVALID) {
             const char *directive = minic_multi_elf_alias_visibility(object->visibility);
-            if (object->visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT &&
-                (minic_program_symbol_use_has(&uses, object->name) ||
-                 minic_program_symbol_used_in_source_asm(program, &uses, object->name)) &&
-                (directive == NULL || object->name == NULL ||
-                 fprintf(out, "%s %s\n", directive, object->name) < 0)) {
-                ok = false;
-                break;
+            const bool used =
+                minic_program_symbol_use_has(&uses, object->name) ||
+                minic_program_symbol_used_in_source_asm(program, &uses, object->name);
+            if (used) {
+                if (object->name == NULL ||
+                    (object->is_weak &&
+                     fprintf(out, ".weak %s\n", object->name) < 0) ||
+                    (object->visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT &&
+                     (directive == NULL ||
+                      fprintf(out, "%s %s\n", directive, object->name) < 0))) {
+                    ok = false;
+                    break;
+                }
             }
         }
     }
@@ -336,13 +345,19 @@ static inline bool minic_program_emit_undefined_symbol_visibility(
             const char *directive = minic_multi_elf_alias_visibility(function->visibility);
             const char *name = function->assembler_name != NULL
                 ? function->assembler_name : function->name;
-            if (function->visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT &&
-                (minic_program_symbol_use_has(&uses, name) ||
-                 minic_program_symbol_used_in_source_asm(program, &uses, name)) &&
-                (directive == NULL || name == NULL ||
-                 fprintf(out, "%s %s\n", directive, name) < 0)) {
-                ok = false;
-                break;
+            const bool used =
+                minic_program_symbol_use_has(&uses, name) ||
+                minic_program_symbol_used_in_source_asm(program, &uses, name);
+            if (used) {
+                if (name == NULL ||
+                    (function->is_weak &&
+                     fprintf(out, ".weak %s\n", name) < 0) ||
+                    (function->visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT &&
+                     (directive == NULL ||
+                      fprintf(out, "%s %s\n", directive, name) < 0))) {
+                    ok = false;
+                    break;
+                }
             }
         }
     }
