@@ -28,6 +28,11 @@ gnu_objects="$work/gnu-as-objects"
 minias=${MINIAS:-"$root/build/release/bin/minic-as"}
 cc=${AARCH64_CC:-aarch64-linux-gnu-gcc}
 qemu=${AARCH64_QEMU:-qemu-system-aarch64}
+as_backend=${AARCH64_AS_BACKEND:-minias}
+if [[ $as_backend != minias && $as_backend != gnu ]]; then
+  echo "MINIAS_LINUX_FOURARCH_ERROR invalid_as_backend=$as_backend" >&2
+  exit 2
+fi
 
 for bin in "$cc" aarch64-linux-gnu-as aarch64-linux-gnu-ld "$qemu" curl sha256sum cpio timeout python3; do
   if ! command -v "$bin" >/dev/null 2>&1; then
@@ -35,7 +40,7 @@ for bin in "$cc" aarch64-linux-gnu-as aarch64-linux-gnu-ld "$qemu" curl sha256su
     exit 2
   fi
 done
-if [[ ! -x $minias ]]; then
+if [[ $as_backend == minias && ! -x $minias ]]; then
   echo "MINIAS_LINUX_FOURARCH_ERROR missing_minias=$minias" >&2
   exit 2
 fi
@@ -75,6 +80,10 @@ for ((i=0; i<${#args[@]}; ++i)); do
   esac
 done
 if ((query)); then
+  if [[ -n $out || -n $input ]]; then
+    echo 'MINIAS_AS_WRAPPER_ERROR query_with_production_io' >&2
+    exit 2
+  fi
   printf 'delegate-query' >>"$MINIAS_AS_TRACE"
   printf ' %q' "$@" >>"$MINIAS_AS_TRACE"
   printf '\n' >>"$MINIAS_AS_TRACE"
@@ -84,9 +93,13 @@ if [[ -z $out || -z $input ]]; then
   echo "MINIAS_AS_WRAPPER_ERROR missing_io output=$out input=$input" >&2
   exit 2
 fi
-printf 'assemble input=%q output=%q\n' "$input" "$out" >>"$MINIAS_AS_TRACE"
+printf 'assemble cwd=%q input=%q output=%q\n' "$PWD" "$input" "$out" >>"$MINIAS_AS_TRACE"
 if "$MINIAS" "${options[@]}" -o "$out" "$input"; then
-  printf 'pass input=%q output=%q\n' "$input" "$out" >>"$MINIAS_AS_TRACE"
+  if [[ ! -s $out ]]; then
+    printf 'MINIAS_AS_WRAPPER_ERROR empty_output=%q\n' "$out" >&2
+    exit 1
+  fi
+  printf 'pass cwd=%q input=%q output=%q\n' "$PWD" "$input" "$out" >>"$MINIAS_AS_TRACE"
   # A sidecar oracle captures the very same GCC-generated assembly while it
   # still exists in /tmp.  It is never linked into the production Image.
   capture_gnu_sidecar() {
@@ -124,7 +137,7 @@ if "$MINIAS" "${options[@]}" -o "$out" "$input"; then
   fi
 else
   status=$?
-  printf 'fail status=%s input=%q output=%q\n' "$status" "$input" "$out" >>"$MINIAS_AS_TRACE"
+  printf 'fail status=%s cwd=%q input=%q output=%q\n' "$status" "$PWD" "$input" "$out" >>"$MINIAS_AS_TRACE"
   if [[ -f $input && -n ${MINIAS_FAILURE_DIR:-} ]]; then
     mkdir -p "$MINIAS_FAILURE_DIR"
     cp "$input" "$MINIAS_FAILURE_DIR/$(basename "$out").s"
@@ -150,6 +163,12 @@ export MINIAS_KBUILD_OUT="$out"
 export MINIAS_GNU_OBJECT_DIR="$gnu_objects"
 export MINIAS_GNU_SOURCE_DIR="$work/asm-sources"
 : >"$trace"
+build_cc="$cc"
+build_as=$(command -v aarch64-linux-gnu-as)
+if [[ $as_backend == minias ]]; then
+  build_cc="$cc -B$bindir/"
+  build_as="$bindir/aarch64-linux-gnu-as"
+fi
 start=$(date +%s)
 printf 'MINIAS_AARCH64_STAGE=KBUILD_START epoch=%s\n' "$start"
 # Keep long GNU Kbuild stages observable without changing the production
@@ -175,7 +194,7 @@ trap stop_progress_monitor EXIT
 ) &
 progress_monitor_pid=$!
 if ! make -C "$src" O="$out" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
-  CC="$cc -B$bindir/" AS="$bindir/aarch64-linux-gnu-as" \
+  CC="$build_cc" AS="$build_as" \
   -j4 -k Image >"$work/kbuild.log" 2>&1; then
   stop_progress_monitor
   echo 'MINIAS_LINUX_FOURARCH_BUILD=FAIL arch=aarch64 stage=make-Image'
@@ -194,26 +213,37 @@ printf 'MINIAS_AARCH64_STAGE=KBUILD_END elapsed_s=%s\n' \
 test -s "$image"
 sha256sum "$image" >"$work/Image.sha256"
 file "$image"
+if [[ $as_backend == minias ]]; then
 passed=$(grep -c '^pass ' "$trace" || true)
 assembled=$(grep -c '^assemble ' "$trace" || true)
 failed=$(grep -c '^fail ' "$trace" || true)
 test "$passed" -gt 1000
+python3 tests/external/linux/minias_as_provenance_check.py \
+  --arch aarch64 --kbuild-out "$out" --trace "$trace" \
+  --compiler "$cc" --assembler aarch64-linux-gnu-as --min-objects 1000
 printf 'MINIAS_LINUX_FOURARCH_BUILD=PASS arch=aarch64 assembled=%s passed=%s probe_failures=%s elapsed_s=%s\n' \
   "$assembled" "$passed" "$failed" "$(( $(date +%s) - start ))"
 reference_count=$(find "$gnu_objects" -type f -name '*.o' 2>/dev/null | wc -l) || reference_count=0
 printf 'MINIAS_AARCH64_GNU_SIDECAR=CAPTURED objects=%s production_link=MiniAS_only\n' "$reference_count"
-# The 4,000+ object oracle is a non-gating diagnostic and can take eight
-# minutes. Never put it between a linked Image and the first QEMU result.
+else
+  printf 'MINIAS_LINUX_FOURARCH_GNU_BASELINE=BUILD_PASS arch=aarch64 elapsed_s=%s image=%s\n' \
+    "$(( $(date +%s) - start ))" "$image"
+fi
+# The 4,000+ object strict ELF diff is diagnostic, but missing production
+# comparisons and oracle errors are fatal. Never run it before first QEMU.
 # Preserve targeted boot suspects immediately; run the full oracle after P1,
 # or opt in to it on a failed boot for a deeper offline investigation.
 run_full_object_oracle() {
+  if [[ $as_backend != minias ]]; then return 0; fi
   local oracle_start
   oracle_start=$(date +%s)
   printf 'MINIAS_AARCH64_STAGE=ORACLE_START objects=%s\n' "$reference_count"
   if ! python3 tests/external/linux/minias_aarch64_object_oracle.py \
     --mini-dir "$out" --gnu-dir "$gnu_objects" --out "$work/aarch64-object-oracle.tsv" \
     >"$work/aarch64-object-oracle.log" 2>&1; then
-    echo 'MINIAS_AARCH64_GNU_SIDECAR=DIAGNOSTIC_INCOMPLETE'
+    tail -n 60 "$work/aarch64-object-oracle.log" >&2 || true
+    echo 'MINIAS_AARCH64_GNU_SIDECAR=FAIL production_oracle_incomplete' >&2
+    return 1
   fi
   printf 'MINIAS_AARCH64_STAGE=ORACLE_END elapsed_s=%s\n' \
     "$(( $(date +%s) - oracle_start ))"
@@ -223,6 +253,7 @@ run_full_object_oracle() {
 # sparse-vmemmap.o. Retain both GNU/Mini instruction and relocation evidence
 # without uploading the 4,000+ GNU sidecar objects.
 for suspect in arch/arm64/mm/proc mm/sparse-vmemmap; do
+  if [[ $as_backend != minias ]]; then break; fi
   for producer in minias gnu; do
     if [[ $producer == minias ]]; then
       object="$out/$suspect.o"
@@ -321,5 +352,9 @@ for marker in "Linux version $version" \
 done
 python3 tests/external/linux/runtime_v2_log_check.py \
   --profile p1 --log "$work/qemu-p1-init.log"
-echo 'MINIAS_LINUX_FOURARCH_RUNTIME=PASS arch=aarch64 p0=2/2 p1=12/12'
-run_full_object_oracle
+if [[ $as_backend == gnu ]]; then
+  echo 'MINIAS_LINUX_FOURARCH_GNU_BASELINE=PASS arch=aarch64 p0=2/2 p1=12/12'
+else
+  echo 'MINIAS_LINUX_FOURARCH_RUNTIME=PASS arch=aarch64 p0=2/2 p1=12/12'
+  run_full_object_oracle
+fi

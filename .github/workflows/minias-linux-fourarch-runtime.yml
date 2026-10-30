@@ -91,6 +91,7 @@ jobs:
           MINIAS: ${{ github.workspace }}/build/release/bin/minic-as
         run: |
           set -Eeuo pipefail
+          bash tests/assembler/probe-minias-as-provenance.sh
           case '${{ matrix.arch }}' in
             x86_64)
               bash tests/assembler/probe-x86-linux-code16-gnu.sh
@@ -166,15 +167,67 @@ jobs:
             echo 'Result: `${{ steps.linux.outcome }}`'
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # One-time matched GNU control. Both variants use the same kernel release,
-  # configuration, GCC, GNU linker, initramfs and the shared boot()/require()
-  # function; only the production assembler backend differs.
-  loong-gnu-baseline:
-    if: github.event_name == 'workflow_dispatch' && inputs.loong_replay_run_id == '' && inputs.loong_gnu_baseline_build
+  # AArch64's independent GNU-as control uses the exact same Linux release,
+  # defconfig, GNU compiler/linker and guest P0/P1 as the MiniAS lane. It is
+  # opt-in on the same source commit, never substituted into production.
+  aarch64-gnu-baseline:
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[minias-linux-four]') && contains(github.event.head_commit.message, '[minias-aarch-gnu-control]')
     runs-on: ubuntu-24.04
     timeout-minutes: 110
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Install GNU AArch64 Kbuild and QEMU toolchain
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc binutils make bc bison flex libssl-dev libelf-dev \
+            curl xz-utils cpio gzip zstd file python3-pyelftools \
+            gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
+            libc6-dev-arm64-cross qemu-system-arm
+      - name: Build and boot matched GNU AArch64 Linux P0/P1
+        id: gnu
+        timeout-minutes: 105
+        env:
+          WORK_DIR: ${{ github.workspace }}/build/minias-linux-fourarch/aarch64-gnu-baseline
+          LINUX_VERSION: 6.6.143
+          AARCH64_AS_BACKEND: gnu
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = '${{ github.sha }}'
+          bash tests/external/linux/minias_aarch64_linux.sh
+      - name: Preserve GNU AArch64 baseline Image and QEMU logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minias-aarch64-gnu-baseline
+          path: |
+            build/minias-linux-fourarch/aarch64-gnu-baseline/*.log
+            build/minias-linux-fourarch/aarch64-gnu-baseline/*.sha256
+            build/minias-linux-fourarch/aarch64-gnu-baseline/**/qemu-*.log
+            build/minias-linux-fourarch/aarch64-gnu-baseline/out/arch/arm64/boot/Image
+          retention-days: 14
+      - name: Summarize GNU AArch64 independent control
+        if: always()
+        run: |
+          echo 'GNU GCC → GNU as → GNU ld → AArch64 Linux 6.6.143 QEMU P0/P1: `${{ steps.gnu.outcome }}`' >> "$GITHUB_STEP_SUMMARY"
+
+  # Matched GNU control. Both variants use the same kernel release,
+  # configuration, GCC, GNU linker, initramfs and the shared boot()/require()
+  # function; only the production assembler backend differs. The explicit
+  # [minias-linux-four] + [minias-loong-gnu-control] push gates re-certify
+  # both assemblers on the same commit, without rerunning this GNU control
+  # on routine MiniAS code pushes.
+  loong-gnu-baseline:
+    if: (github.event_name == 'workflow_dispatch' && inputs.loong_replay_run_id == '' && inputs.loong_gnu_baseline_build) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[minias-linux-four]') && contains(github.event.head_commit.message, '[minias-loong-gnu-control]'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 110
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
       - name: Install GNU LoongArch Kbuild and QEMU toolchain
         run: |
           sudo apt-get -o Acquire::Retries=3 update
@@ -190,7 +243,10 @@ jobs:
           WORK_DIR: ${{ github.workspace }}/build/minias-linux-fourarch/loongarch64
           LINUX_VERSION: 6.6.143
           LOONG_AS_BACKEND: gnu
-        run: bash tests/external/linux/minias_loongarch64_linux.sh
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = '${{ github.sha }}'
+          bash tests/external/linux/minias_loongarch64_linux.sh
       - name: Preserve GNU assembler baseline and runtime evidence
         if: always()
         uses: actions/upload-artifact@v4

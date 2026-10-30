@@ -115,6 +115,10 @@ for ((i=0; i<${#args[@]}; ++i)); do
   esac
 done
 if ((query)); then
+  if [[ -n $out || -n $input ]]; then
+    echo 'MINIAS_AS_WRAPPER_ERROR arch=loongarch64 query_with_production_io' >&2
+    exit 2
+  fi
   printf 'query %q\n' "$*" >>"${MINIAS_AS_TRACE:?}"
   exec "${REAL_AS:?}" "$@"
 fi
@@ -131,13 +135,17 @@ if [[ -z "$input" || -z "$out" ]]; then
   printf 'MINIAS_AS_WRAPPER_ERROR arch=loongarch64 missing_io argc=%s\n' "$#" >&2
   exit 2
 fi
-printf 'assemble input=%q output=%q\n' "$input" "$out" >>"${MINIAS_AS_TRACE:?}"
+printf 'assemble cwd=%q input=%q output=%q\n' "$PWD" "$input" "$out" >>"${MINIAS_AS_TRACE:?}"
 if "${MINIAS:?}" "${flags[@]}" -o "$out" "$input"; then
-  printf 'pass input=%q output=%q\n' "$input" "$out" >>"$MINIAS_AS_TRACE"
+  if [[ ! -s $out ]]; then
+    echo "MINIAS_AS_WRAPPER_ERROR arch=loongarch64 empty_output=$out" >&2
+    exit 1
+  fi
+  printf 'pass cwd=%q input=%q output=%q\n' "$PWD" "$input" "$out" >>"$MINIAS_AS_TRACE"
   if [[ -n "$temporary_input" ]]; then rm -f "$temporary_input"; fi
 else
   status=$?
-  printf 'fail status=%s input=%q output=%q\n' "$status" "$input" "$out" >>"$MINIAS_AS_TRACE"
+  printf 'fail status=%s cwd=%q input=%q output=%q\n' "$status" "$PWD" "$input" "$out" >>"$MINIAS_AS_TRACE"
   if [[ -f "$input" ]]; then
     mkdir -p "${MINIAS_FAILURE_DIR:?}"
     cp "$input" "$MINIAS_FAILURE_DIR/$(basename "$out").s"
@@ -193,6 +201,9 @@ if [[ $as_backend == minias ]]; then
   passed=$(grep -c '^pass ' "$trace" || true)
   assembled=$(grep -c '^assemble ' "$trace" || true)
   test "$passed" -gt 1000
+  python3 "$repo/tests/external/linux/minias_as_provenance_check.py" \
+    --arch loongarch64 --kbuild-out "$kernel_out" --trace "$trace" \
+    --compiler "$cc" --assembler loongarch64-linux-gnu-as --min-objects 1000
   printf 'MINIAS_LINUX_FOURARCH_BUILD=PASS arch=loongarch64 as_backend=minias assembled=%s passed=%s elapsed_s=%s image=%s head=%s\n' \
     "$assembled" "$passed" "$(( $(date +%s) - started ))" "$image" "${GITHUB_SHA:-local}"
 else

@@ -101,7 +101,14 @@ for ((i=0; i<${#args[@]}; i++)); do
     esac
 done
 if (( query )); then
-    exec "${REAL_AS:?}" "$@"
+    # GAS `-v` may accompany a real assembly. Information-only probes are
+    # delegated; any invocation that also names a production input/output
+    # remains under MiniAS ownership (the verbosity flag is not forwarded).
+    if [[ -z "$input" && -z "$output" ]]; then
+        printf 'delegate-query cwd=%q argc=%s\n' "$PWD" "${#args[@]}" \
+            >>"${MINIAS_AS_TRACE:?}"
+        exec "${REAL_AS:?}" "$@"
+    fi
 fi
 if [[ -z "$input" || -z "$output" ]]; then
     printf 'MINIAS_X86_AS_WRAPPER_ERROR missing_input_or_output' >&2
@@ -109,7 +116,8 @@ if [[ -z "$input" || -z "$output" ]]; then
     printf '\n' >&2
     exit 2
 fi
-printf 'assemble input=%q output=%q elf32=%s\n' "$input" "$output" "$need_elf32" \
+printf 'assemble cwd=%q input=%q output=%q elf32=%s\n' \
+    "$PWD" "$input" "$output" "$need_elf32" \
     >>"${MINIAS_AS_TRACE:?}"
 minias_args=(--target=x86_64)
 if (( need_elf32 )); then
@@ -119,7 +127,8 @@ if (( need_elf32 )); then
     minias_args+=(-march=i386 -mabi=i386)
 fi
 if ! "${MINIAS:?}" "${minias_args[@]}" -o "$output" "$input"; then
-    printf 'fail input=%q output=%q\n' "$input" "$output" >>"$MINIAS_AS_TRACE"
+    printf 'fail cwd=%q input=%q output=%q\n' \
+        "$PWD" "$input" "$output" >>"$MINIAS_AS_TRACE"
     if [[ -f "$input" ]]; then
         mkdir -p "${MINIAS_FAILURE_DIR:?}"
         owner_hash=$(printf '%s' "$output" | sha256sum)
@@ -139,7 +148,8 @@ if (( need_elf32 )) && ! readelf -h "$output" | grep -q 'Class:.*ELF32'; then
     printf 'fail-elf-class input=%q output=%q\n' "$input" "$output" >>"$MINIAS_AS_TRACE"
     exit 1
 fi
-printf 'pass input=%q output=%q\n' "$input" "$output" >>"$MINIAS_AS_TRACE"
+printf 'pass cwd=%q input=%q output=%q\n' \
+    "$PWD" "$input" "$output" >>"$MINIAS_AS_TRACE"
 WRAPPER
 chmod +x "$wrapper"
 ln -sfn as "$work/asm-bin/x86_64-linux-gnu-as"
@@ -171,6 +181,19 @@ test -s "$image"
 sha256sum "$image" >"$work/bzImage.sha256"
 passes=$(grep -c '^pass ' "$work/minias-as.trace" || true)
 test "$passes" -gt 1000
+# Every Kbuild compiler/assembler-owned production object must have a
+# successful MiniAS invocation at the same output path. This is a fail-closed
+# provenance gate, not a fixed `no_gas_fallback=1` reporting assertion. Host
+# tools, linker-combined objects and intentional GNU-AS version queries are
+# classified separately by the shared manifest checker.
+if ! python3 "$root/tests/external/linux/minias_as_provenance_check.py" \
+        --arch x86_64 \
+        --kbuild-out "$image_out" \
+        --trace "$work/minias-as.trace" \
+        --compiler gcc --assembler as --min-objects 1000; then
+    echo 'MINIAS_LINUX_FOURARCH_PROVENANCE=FAIL arch=x86_64' >&2
+    exit 1
+fi
 echo "MINIAS_LINUX_FOURARCH_BUILD=PASS arch=x86_64 image=$image mini_as_passes=$passes elapsed_s=$(( $(date +%s)-started ))"
 
 run_qemu() {

@@ -1347,6 +1347,15 @@ jobs:
           done
 
           if (( query )); then
+            # A GNU-as information query must not also carry a production
+            # assembly payload.  Otherwise `as -v -o real.o real.s` could
+            # silently bypass the MiniAS-only Linux contract.
+            if [[ -n "$input" || -n "$out" ]]; then
+              printf 'MINIAS_AS_WRAPPER_ERROR query_with_production_input' >&2
+              printf ' %q' "$@" >&2
+              printf '\n' >&2
+              exit 2
+            fi
             printf 'delegate-query' >>"$trace"
             printf ' %q' "$@" >>"$trace"
             printf '\n' >>"$trace"
@@ -1370,6 +1379,11 @@ jobs:
           } >>"$trace"
 
           if "$minias" "${minias_opts[@]}" -o "$out" "$input"; then
+            if [[ ! -s "$out" ]]; then
+              printf 'MINIAS_AS_WRAPPER_ERROR empty_output=%q\n' "$out" >&2
+              printf 'fail status=1 input=%q output=%q\n' "$input" "$out" >>"$trace"
+              exit 1
+            fi
             printf 'pass input=%q output=%q\n' "$input" "$out" >>"$trace"
             # Capture a small genuine GNU oracle alongside selected *native*
             # early-boot objects while GCC temporary .s files still exist.
@@ -1481,6 +1495,18 @@ jobs:
           # proves that GCC actually routed a substantial number of real
           # assembly jobs through MiniAS rather than bypassing the wrapper.
           test "$passed" -gt 1000
+
+          # Match actual cross-GCC production object owners in Kbuild's
+          # .cmd dependency records with this build's successful MiniAS
+          # invocations.  Exclude host tools, link aggregates, feature
+          # probes and GNU-as information-only queries from the census.
+          python3 tests/external/linux/minias_as_provenance_check.py \
+            --arch rv64 \
+            --kbuild-out "$out" \
+            --trace "$work/minias-as.trace" \
+            --compiler riscv64-linux-gnu-gcc \
+            --assembler riscv64-linux-gnu-as \
+            --min-objects 1000
 
           sha256sum "$image" >"$work/Image.sha256"
           printf 'MINIAS_LINUX_GCC_BUILD=PASS assembled=%s passed=%s probe_failures=%s query_delegates=%s elapsed_s=%s head=%s\n' \
