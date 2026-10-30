@@ -51,3 +51,32 @@ python3 "$(dirname "$0")/elf_semantic_compare.py" --strict \
     exit 1
 }
 echo 'MINIAS_AARCH64_INST_MAPPING=PASS GNU_strict_object_semantics $d0/$x4/$d12'
+
+# GNU's .inst also calls mapping_state(MAP_INSN) in .data, where that call
+# raises the section's sh_addralign to 4 (despite Common's data-list model).
+cat >"$work/data-inst.s" <<'ASM'
+.data
+    .inst 0xd503201f
+ASM
+"$MINIAS" --target=aarch64 -o "$work/data-mini.o" "$work/data-inst.s"
+"$AARCH64_AS" -o "$work/data-gnu.o" "$work/data-inst.s"
+python3 - "$work/data-mini.o" "$work/data-gnu.o" <<'PY'
+import pathlib
+import re
+import subprocess
+import sys
+
+for path in sys.argv[1:]:
+    rows = subprocess.check_output(
+        ["readelf", "-SW", path], text=True).splitlines()
+    section = [row for row in rows if re.search(r"\]\s+\.data\s+PROGBITS\b", row)]
+    if len(section) != 1 or int(section[0].split()[-1]) != 4:
+        raise SystemExit(f".data .inst must record ELF alignment=4: {path}: {section}")
+PY
+python3 "$(dirname "$0")/elf_semantic_compare.py" --strict \
+    "$work/data-gnu.o" "$work/data-mini.o" >"$work/data-semantic.json" || {
+    echo 'MINIAS_AARCH64_INST_MAPPING=FAIL GNU_strict_data_inst_semantics' >&2
+    python3 -m json.tool "$work/data-semantic.json" >&2
+    exit 1
+}
+echo 'MINIAS_AARCH64_INST_MAPPING=PASS GNU_strict_data_inst_alignment=4'

@@ -127,6 +127,8 @@ def main():
         ("riscv-sub6", 243, 52, 1),
         ("loong-add32", 258, 50, 4),
         ("loong-sub32", 258, 55, 4),
+        ("loong-add6", 258, 105, 1),
+        ("loong-sub6", 258, 106, 1),
     ):
         original, pos = make_elf(machine, relocations=((0, typ, 0),))
         case(label, original, mutate(original, pos["data:.text"],
@@ -241,20 +243,41 @@ def main():
     # GNU RISC-V .eh_frame encodes a CFI location delta as SET8 followed by
     # SUB8 on one byte. The SET overwrites V, making this precise ordered pair
     # safely comparable even though a general SET + arithmetic overlap is not.
-    for width, set_type, sub_type in ((1, 54, 37), (2, 55, 38), (4, 56, 39)):
-        pair, loc = make_elf(243, relocations=((0, set_type, 0),
-                                               (0, sub_type, 0)))
+    for bits, width, set_type, sub_type in ((6, 1, 53, 52), (8, 1, 54, 37),
+                                             (16, 2, 55, 38), (32, 4, 56, 39)):
+        pair, loc = make_elf(243,
+                             text=(b"\x40" + bytes(7) if bits == 6 else bytes(8)),
+                             relocations=((0, set_type, 0),
+                                          (0, sub_type, 0)))
         result = compare(pair, pair, equal=True)
         assert result["strict_equal"] and not result["inconclusive"], result
-        compare(pair, mutate(pair, loc["data:.text"], bytes([0xff]) * width),
+        update=(b"\x7f" if bits == 6 else bytes([0xff]) * width)
+        compare(pair, mutate(pair, loc["data:.text"], update),
                 equal=True)
-        reversed_pair, _ = make_elf(243, relocations=((0, sub_type, 0),
-                                                      (0, set_type, 0)))
+        reversed_pair, _ = make_elf(243,
+                              text=(b"\x40" + bytes(7) if bits == 6 else bytes(8)),
+                              relocations=((0, sub_type, 0),
+                                           (0, set_type, 0)))
         compare(reversed_pair, reversed_pair, equal=False, inconclusive=True,
                 failed="known_relocation_widths")
         compare(pair, reversed_pair, equal=False, inconclusive=True,
                 failed="relocation_order")
-        print(f"MINIAS_ORACLE_MUTATION=PASS case=riscv-set{width*8}-sub{width*8}-masked")
+        print(f"MINIAS_ORACLE_MUTATION=PASS case=riscv-set{bits}-sub{bits}-masked")
+    intersecting, _ = make_elf(243, relocations=((4, 54, 0),
+                                                 (4, 37, 0),
+                                                 (1, 56, 0)))
+    compare(intersecting, intersecting, equal=False, inconclusive=True,
+            failed="known_relocation_widths")
+    print("MINIAS_ORACLE_MUTATION=PASS case=riscv-set-sub-other-field-overlap")
+    compact_cfi, where = make_elf(258, text=b"\x40" + bytes(7),
+                                   relocations=((0, 105, 0), (0, 106, 0)))
+    compare(compact_cfi, compact_cfi, equal=True)
+    case("loong-cfi-add6-sub6-preserves-input", compact_cfi,
+         mutate(compact_cfi, where["data:.text"], b"\x41"), "contents_masked")
+    reversed_compact, _ = make_elf(258, text=b"\x40" + bytes(7),
+                                   relocations=((0, 106, 0), (0, 105, 0)))
+    case("loong-cfi-add6-sub6-order", compact_cfi, reversed_compact,
+         "relocation_order")
 
     # ELF identity fields are ABI contracts, not incidental object layout.
     case("elf-osabi", x86, mutate(x86, 7, b"\x03"), "header")

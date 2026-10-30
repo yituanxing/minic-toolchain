@@ -94,6 +94,8 @@ static const struct {
     {MINIAS_FIXUP_SET, 1U, MINIAS_R_RISCV_SET8},
     {MINIAS_FIXUP_SET, 2U, MINIAS_R_RISCV_SET16},
     {MINIAS_FIXUP_SET, 4U, MINIAS_R_RISCV_SET32},
+    {MINIAS_FIXUP_CFI_SET6, 1U, 53U}, /* R_RISCV_SET6 */
+    {MINIAS_FIXUP_CFI_SUB6, 1U, 52U}, /* R_RISCV_SUB6 */
     {MINIAS_FIXUP_RV_CALL_PLT, 4U, MINIAS_R_RISCV_CALL_PLT},
     {MINIAS_FIXUP_RV_PCREL_HI20, 4U, MINIAS_R_RISCV_PCREL_HI20},
     {MINIAS_FIXUP_RV_GOT_HI20, 4U, MINIAS_R_RISCV_GOT_HI20},
@@ -687,31 +689,18 @@ static bool riscv_record_object_mapping_symbols(MiniAs *as) {
     }
     for (section_index = 0U; section_index < as->section_count;
          ++section_index) {
-        MiniAsSymbol *symbol;
         const MiniAsSection *section = &as->sections[section_index];
-        size_t ordinal = section_index;
         if ((section->flags & MINIAS_SHF_EXECINSTR) == 0U ||
             section->type != MINIAS_SHT_PROGBITS || section->size == 0U)
             continue;
-        for (;;) {
-            int written = snprintf(name,sizeof(name),
-                                   ordinal==0U ? "$x%s" : "$x%s.%zu",
-                                   canonical,ordinal);
-            if (written < 0 || (size_t)written >= sizeof(name)) {
-                minias_set_error(as,"riscv-mapping-symbol-overflow");
-                return false;
-            }
-            if (minias_get_symbol(as,name,false) == NULL) break;
-            if (ordinal == SIZE_MAX) return false;
-            ++ordinal;
+        if (snprintf(name, sizeof(name), "$x%s", canonical) >=
+            (int)sizeof(name)) {
+            minias_set_error(as,"riscv-mapping-symbol-overflow");
+            return false;
         }
-        symbol = minias_get_symbol(as,name,true);
-        if (symbol == NULL) return false;
-        symbol->defined = true;
-        symbol->section = (int)section_index;
-        symbol->value = 0U;
-        symbol->bind = MINIAS_STB_LOCAL;
-        symbol->type = MINIAS_STT_NOTYPE;
+        if (!minias_define_target_mapping_symbol(as, name, section_index,
+                                                 false, (int)section_index,
+                                                 0U)) return false;
     }
     return true;
 }

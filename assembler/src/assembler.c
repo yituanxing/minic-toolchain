@@ -551,6 +551,43 @@ MiniAsSymbol *minias_get_symbol(MiniAs *as, const char *name, bool create) {
     return sym;
 }
 
+bool minias_define_target_mapping_symbol(MiniAs *as, const char *stem,
+                                         size_t first_ordinal,
+                                         bool always_suffix,
+                                         int section, uint64_t offset) {
+    char name[640];
+    size_t ordinal = first_ordinal;
+    MiniAsSymbol *symbol;
+    if (stem == NULL || *stem == '\0' || section < 0 ||
+        (size_t)section >= as->section_count) {
+        minias_set_error(as, "invalid-target-mapping-symbol");
+        return false;
+    }
+    for (;;) {
+        int written = (!always_suffix && ordinal == 0U)
+            ? snprintf(name, sizeof(name), "%s", stem)
+            : snprintf(name, sizeof(name), "%s.%zu", stem, ordinal);
+        if (written < 0 || (size_t)written >= sizeof(name)) {
+            minias_set_error(as, "target-mapping-symbol-name-overflow");
+            return false;
+        }
+        if (minias_get_symbol(as, name, false) == NULL) break;
+        if (ordinal == SIZE_MAX) {
+            minias_set_error(as, "target-mapping-symbol-ordinal-overflow");
+            return false;
+        }
+        ++ordinal;
+    }
+    symbol = minias_get_symbol(as, name, true);
+    if (symbol == NULL) return false;
+    symbol->defined = true;
+    symbol->section = section;
+    symbol->value = offset;
+    symbol->bind = MINIAS_STB_LOCAL;
+    symbol->type = MINIAS_STT_NOTYPE;
+    return true;
+}
+
 /* Stable parse-time NameIds are intentionally NOT Object SymbolIDs.  A
  * machine operand may name a forward or external symbol during parsing,
  * while the historical ELF symbol order is determined later by definitions

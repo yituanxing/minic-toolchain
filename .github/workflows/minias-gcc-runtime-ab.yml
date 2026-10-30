@@ -58,6 +58,18 @@ jobs:
         env:
           MINIAS: ${{ github.workspace }}/build/release/bin/minic-as
         run: bash tests/assembler/probe-aarch64-inst-mapping-gnu.sh
+      - name: AArch64 symbol identity and GOT addend contracts
+        if: matrix.arch == 'aarch64'
+        env:
+          MINIAS: ${{ github.workspace }}/build/release/bin/minic-as
+        run: |
+          bash tests/assembler/probe-aarch64-local-fold-gnu.sh
+          bash tests/assembler/probe-aarch64-got-addend.sh
+      - name: LoongArch short CFI linker-relax GNU strict oracle
+        if: matrix.arch == 'loongarch64'
+        env:
+          MINIAS: ${{ github.workspace }}/build/release/bin/minic-as
+        run: bash tests/assembler/probe-cfi-short-linker-relax-gnu.sh
       - name: Preserve both sides and exact failure evidence
         if: always()
         uses: actions/upload-artifact@v4

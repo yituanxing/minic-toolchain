@@ -21,7 +21,9 @@ static bool section_symbol_fixup(const MiniAs *as,const MiniAsFixup *fixup) {
         return false;
     sym=&as->symbols[fixup->symbol_index];
     return sym->defined && sym->bind==MINIAS_STB_LOCAL &&
-           sym->section>=0 && (size_t)sym->section<as->section_count;
+           sym->section>=0 && (size_t)sym->section<as->section_count &&
+           (as->target->allow_local_section_symbol_fixup==NULL ||
+            as->target->allow_local_section_symbol_fixup(fixup,sym));
 }
 
 /* Symbol-table membership is an ELF ObjectModel decision, not a Target

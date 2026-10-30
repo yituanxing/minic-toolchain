@@ -156,7 +156,12 @@ enum {
     MINIAS_FIXUP_PREL64,
     MINIAS_FIXUP_ADD,
     MINIAS_FIXUP_SUB,
-    MINIAS_FIXUP_SET
+    MINIAS_FIXUP_SET,
+    /* Compact DW_CFA_advance_loc: relocation changes only opcode low six
+     * bits, preserving DWARF 0x40 major opcode bits. */
+    MINIAS_FIXUP_CFI_ADD6,
+    MINIAS_FIXUP_CFI_SUB6,
+    MINIAS_FIXUP_CFI_SET6
 };
 
 /* A symbolic machine field adjustment, still independent of ELF's numeric
@@ -629,6 +634,13 @@ bool minias_write_elf32(MiniAs *as, const char *path);
 int minias_find_section(const MiniAs *as, const char *name);
 int minias_ensure_section(MiniAs *as, const char *name, uint32_t type, uint64_t flags, uint64_t align);
 MiniAsSymbol *minias_get_symbol(MiniAs *as, const char *name, bool create);
+/* A Target supplies the ISA mapping kind and final section position; Common
+ * exclusively owns collision-safe Object Symbol creation and definition.
+ * With always_suffix=false, ordinal zero uses the bare stem. */
+bool minias_define_target_mapping_symbol(MiniAs *as, const char *stem,
+                                         size_t first_ordinal,
+                                         bool always_suffix,
+                                         int section, uint64_t offset);
 bool minias_symbol_name_intern(MiniAs *as, const char *name,
                                MiniAsSymbolNameId *name_id);
 bool minias_bind_symbol_ref(MiniAs *as, const MiniAsSymbolExpr *expr,
@@ -867,10 +879,15 @@ typedef struct MiniAsTargetOps {
      * same-section references, to STT_SECTION + addend. Target policy,
      * Common ELF ownership. */
     bool fold_local_abs_relocation_to_section;
-    /* Some ABIs (AArch64 GAS) canonicalize every relocation to a defined
-     * local label as STT_SECTION + offset, including PC-relative fixups. */
+    /* Some ABIs (AArch64 GAS) canonicalize eligible relocations to defined
+     * local labels as STT_SECTION + offset, including PC-relative fixups. */
     bool fold_defined_local_relocation_to_section;
     bool fold_synthetic_local_relocation_to_section;
+    /* A target may veto otherwise-selected STT_SECTION folding for symbol-
+     * sensitive relocation semantics (e.g. AArch64 function veneers and GOT
+     * entry identity). A NULL callback imposes no additional restriction. */
+    bool (*allow_local_section_symbol_fixup)(const MiniAsFixup *,
+                                            const MiniAsSymbol *);
     /* Section-symbol density is ABI/assembler policy, not an ELF constant. */
     bool emit_all_section_symbols;
     /* Target mapping symbols for data synthesized by the Common CFI writer.
@@ -889,6 +906,10 @@ typedef struct MiniAsTargetOps {
     bool cfi_initial_cfa_register_only; /* GNU initial CFA register opcode */
     bool cfi_eh_range_relocations; /* paired ADD32/SUB32 on FDE range */
     unsigned cfi_advance_reloc_mode; /* 0 none, 1 ADD/SUB, 2 SET/SUB */
+    /* Optional Target recognition of fixups that permit the linker to
+     * change the encoded code span after assembly (e.g. LoongArch RELAX).
+     * CFI events spanning such a fixup need linker-resolved code distances. */
+    bool (*cfi_linker_relaxation_marker)(MiniAsFixupKind);
     bool cfi_anchors_hidden; /* target marks private CFI anchors STV_HIDDEN */
     unsigned cfi_negate_ra_opcode;
     unsigned cfi_initial_cfa_offset;

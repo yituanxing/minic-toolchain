@@ -40,8 +40,11 @@ printf '%s\n' '.text' \
 # while la.global uses GOT_PC pair. Both pairs carry GNU's linker RELAX markers.
 printf '%s\n' '.text' '.globl gcc_pseudos' 'gcc_pseudos:' \
   'bl %plt(runtime_message)' \
+  'beq $a0,$a1,.Lafter_got' \
+  'beqz $a0,.Lafter_got' \
   'la.local $r12,.LANCHOR0' \
   'la.global $r13,runtime_bias' \
+  '.Lafter_got:' \
   'ret' \
   '.data' '.LANCHOR0:' '.dword 7' >"$work/gcc-pseudos.s"
 
@@ -53,7 +56,8 @@ done
 "$MINIAS" --target=loongarch64 -march=loongarch64 -mabi=lp64d \
   -o "$work/mini-gcc-pseudos.o" "$work/gcc-pseudos.s"
 readelf -Wr "$work/mini-gcc-pseudos.o" >"$work/gcc-pseudos.reloc"
-for kind in R_LARCH_B26 R_LARCH_PCALA_HI20 R_LARCH_PCALA_LO12 \
+for kind in R_LARCH_B16 R_LARCH_B21 R_LARCH_B26 \
+            R_LARCH_PCALA_HI20 R_LARCH_PCALA_LO12 \
             R_LARCH_GOT_PC_HI20 R_LARCH_GOT_PC_LO12; do
   grep -q "$kind" "$work/gcc-pseudos.reloc"
 done

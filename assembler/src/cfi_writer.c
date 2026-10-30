@@ -90,12 +90,51 @@ static bool cfi_advance_fixups(MiniAs *as,int sec,size_t field,
                sec,field,MINIAS_FIXUP_SUB,width,as->symbols[from_symbol].name,0);
 }
 
+/* A compact DW_CFA_advance_loc embeds the delta in the low six bits of its
+ * opcode.  That constant becomes stale if a linker-relaxable instruction
+ * *between* the source anchors shrinks after the object has been written.
+ * Inspect retained section/Fragment fixups, not source spellings or an
+ * ISA-specific relocation number: the Target identifies its own markers. */
+static bool cfi_span_has_linker_relaxation(MiniAs *as,size_t from_symbol,
+                                          size_t to_symbol,bool *crosses) {
+    const MiniAsSymbol *from=&as->symbols[from_symbol];
+    const MiniAsSymbol *to=&as->symbols[to_symbol];
+    size_t i;
+    *crosses=false;
+    if(as->target->cfi_linker_relaxation_marker==NULL ||
+       from->value==to->value)return true;
+    if(from->section!=to->section)return false;
+    for(i=0U;i<as->fixup_count;++i) {
+        const MiniAsFixup *fixup=&as->fixups[i];
+        uint64_t site;
+        if(fixup->section!=from->section ||
+           !as->target->cfi_linker_relaxation_marker(fixup->kind))
+            continue;
+        if(fixup->origin==MINIAS_FIXUP_ORIGIN_FRAGMENT) {
+            const MiniAsStmt *owner;
+            if(fixup->fragment_id>=as->stmt_count)return false;
+            owner=&as->stmts[fixup->fragment_id];
+            if(owner->section!=fixup->section ||
+               owner->offset>UINT64_MAX-fixup->fragment_offset)return false;
+            site=owner->offset+fixup->fragment_offset;
+        } else {
+            site=fixup->offset;
+        }
+        if(site>=from->value && site<to->value) {
+            *crosses=true;
+            return true;
+        }
+    }
+    return true;
+}
+
 static bool advance_cfi(MiniAs *as,int sec,size_t from_symbol,
                         size_t to_symbol,bool eh) {
     uint64_t delta;
     unsigned align=minias_cfi_abi(as).code_align;
     uint64_t from,to;
     bool reloc=eh && as->target->cfi_advance_reloc_mode!=0U;
+    bool crosses_relaxation=false;
     size_t field;
     if(from_symbol>=as->symbol_count || to_symbol>=as->symbol_count)
         return false;
@@ -104,7 +143,34 @@ static bool advance_cfi(MiniAs *as,int sec,size_t from_symbol,
     if(to<from || (to-from)%align!=0U)return false;
     delta=(to-from)/align;
     if(delta==0U)return true;
-    if(delta<=63U)return put8(as,sec,(uint8_t)(0x40U|(uint8_t)delta));
+    if(delta<=63U) {
+        if(!reloc)return put8(as,sec,(uint8_t)(0x40U|(uint8_t)delta));
+        if(!cfi_span_has_linker_relaxation(as,from_symbol,to_symbol,
+                                           &crosses_relaxation))return false;
+        if(!crosses_relaxation)
+            return put8(as,sec,(uint8_t)(0x40U|(uint8_t)delta));
+        /* Preserve GAS's shortest DW_CFA_advance_loc form. Both LoongArch
+         * ADD6/SUB6 and RISC-V SET6/SUB6 touch just the low six opcode bits;
+         * the surrounding 0x40 DWARF opcode is stable across relaxation. */
+        {
+            MiniAsFixupKind positive=as->target->cfi_advance_reloc_mode==2U ?
+                MINIAS_FIXUP_CFI_SET6 : MINIAS_FIXUP_CFI_ADD6;
+            if(!as->target->supports_fixup(positive,1U) ||
+               !as->target->supports_fixup(MINIAS_FIXUP_CFI_SUB6,1U)) {
+                minias_set_error(as,"unsupported-cfi-short-relocation");
+                return false;
+            }
+            field=as->sections[(size_t)sec].size;
+            return put8(as,sec,0x40U) &&
+                   minias_add_section_fixup(as,
+                     MINIAS_FIXUP_ORIGIN_SYNTHETIC_SECTION,
+                     sec,field,positive,1U,as->symbols[to_symbol].name,0) &&
+                   minias_add_section_fixup(as,
+                     MINIAS_FIXUP_ORIGIN_SYNTHETIC_SECTION,
+                     sec,field,MINIAS_FIXUP_CFI_SUB6,1U,
+                     as->symbols[from_symbol].name,0);
+        }
+    }
     if(reloc && align!=1U) {
         minias_set_error(as,"unsupported-cfi-relocation-code-alignment");
         return false;

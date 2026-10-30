@@ -154,6 +154,7 @@ LOONGARCH_RELOC_FIELDS = {
     46: data_field(4),
     **{t: () for t in range(47, 57)},  # R_LARCH_ADD/SUB use V as input.
     57: (), 58: (),
+    105: (), 106: (),  # R_LARCH_ADD6/SUB6 update only DWARF opcode low 6.
     99: data_field(4),  # R_LARCH_32_PCREL writes a four-byte datum.
     100: (),  # R_LARCH_RELAX has no patched field; linker optimization marker.
     64: instruction_field(0x03fffc00),
@@ -181,6 +182,7 @@ ADDITIVE_RELOC_WIDTHS = {
     "EM_LOONGARCH": {
         **{t: n for t, n in {47: 1, 48: 2, 49: 3, 50: 4, 51: 8,
                              52: 1, 53: 2, 54: 3, 55: 4, 56: 8}.items()},
+        105: 1, 106: 1,
     },
 }
 
@@ -188,7 +190,8 @@ ADDITIVE_RELOC_WIDTHS = {
 # order at one offset. SETn overwrites the original V before SUBn updates it,
 # so the original target bytes cannot influence the final linked result.
 # Other replacement/arithmetic overlaps remain inconclusive by design.
-RISCV_SET_SUB_WIDTHS = {(54, 37): 1, (55, 38): 2, (56, 39): 4}
+RISCV_SET_SUB_WIDTHS = {(53, 52): 1, (54, 37): 1,
+                        (55, 38): 2, (56, 39): 4}
 
 
 def section_name_for_index(elf, idx, section_keys):
@@ -449,8 +452,9 @@ def relocation_counter(elf, section_keys):
         for start, width, bitmask in masks.get(target_name, []):
             # Disjoint bit ranges in a word are safe, but conservatively
             # decline overlapping additive/replacement operations.
-            if any((begin, end) not in safe_set_sub_ranges[target_name] and
-                   start < end and start + width > begin
+            if any(start < end and start + width > begin and
+                   not ((begin, end) in safe_set_sub_ranges[target_name] and
+                        start == begin and start + width == end)
                    for begin, end in ranges):
                 unknown_width[target_name].append(
                     (start, width, "overlapping-additive-and-replacement-relocations"))

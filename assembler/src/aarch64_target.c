@@ -1823,8 +1823,15 @@ static bool a64_parse_relocated(MiniAs *as,const A64AliasState *aliases,
          * default page-relative ADRP. The instruction bytes are equal,
          * but confusing 275 with 311 would break Linux GOT links. */
         bool got=strncmp(tok[1],":got:",5U)==0;
-        if(!minias_parse_symbol_addend(got?tok[1]+5U:tok[1],&expr) ||
-           !a64_attach_expr(as,inst,1U,&expr))return false;
+        if(!minias_parse_symbol_addend(got?tok[1]+5U:tok[1],&expr))
+            return false;
+        /* AAELF GOT-entry relocations resolve G(GDAT(S)), not G(S+A):
+         * a nonzero symbol addend cannot be represented by this relocation. */
+        if(got && expr.addend!=0) {
+            minias_set_error(as,"aarch64-got-relocation-nonzero-addend");
+            return false;
+        }
+        if(!a64_attach_expr(as,inst,1U,&expr))return false;
         inst->opcode=A64_MC_ADRP;inst->count=2U;
         inst->target_form=got?1U:0U; /* GOT page vs ordinary page */
         put_reg(&inst->operands[0],rd,true);
@@ -1869,8 +1876,12 @@ static bool a64_parse_relocated(MiniAs *as,const A64AliasState *aliases,
         got_lo12=strncmp(b,":got_lo12:",10U)==0;
         if(got_lo12 && (strcmp(op,"ldr")!=0 || !wd))return false;
         if(!(got_lo12?minias_parse_symbol_addend(b+10U,&expr):
-                        a64_lo12_expr(b,&expr)) ||
-           !minias_bind_symbol_ref(as,&expr,&memory.offset.symbol))return false;
+                        a64_lo12_expr(b,&expr)))return false;
+        if(got_lo12 && expr.addend!=0) {
+            minias_set_error(as,"aarch64-got-relocation-nonzero-addend");
+            return false;
+        }
+        if(!minias_bind_symbol_ref(as,&expr,&memory.offset.symbol))return false;
         memory.offset.kind=got_lo12?A64_OFFSET_GOT_LO12:A64_OFFSET_LO12;
         if(got_lo12)inst->opcode=A64_MC_LDST_GOT_LO12;
         inst->count=2U;
@@ -5085,32 +5096,27 @@ static uint32_t aarch64_fixup_relocation_type(MiniAsFixupKind kind,
     return relocation;
 }
 
+/* GAS's AArch64 tc_fix_adjustable does not rewrite local STT_FUNC to a
+ * section symbol: the linker must recognize function identity when choosing
+ * long-branch veneers. Likewise, GOT-entry relocations cannot carry the
+ * added section-relative offset and require the original symbol identity.
+ * Keep this target ABI rule outside the Common ELF symbol planner. */
+static bool a64_allow_local_section_symbol_fixup(const MiniAsFixup *fixup,
+                                                 const MiniAsSymbol *symbol) {
+    if(symbol->type==MINIAS_STT_FUNC ||
+       symbol->type==MINIAS_STT_GNU_IFUNC)return false;
+    return fixup->kind!=MINIAS_FIXUP_A64_ADR_GOT_PAGE &&
+           fixup->kind!=MINIAS_FIXUP_A64_LD64_GOT_LO12;
+}
+
 /* AArch64 ELF requires local $x/$d mapping symbols at code/data boundaries.
  * The symbol is target-owned; the generic ELF writer only serializes it. */
 static bool a64_record_mapping(MiniAs *as,int section,uint64_t offset,
                                bool executable) {
-    char name[64];
-    size_t ordinal=as->symbol_count;
-    MiniAsSymbol *symbol;
-    for(;;) {
-        int n=snprintf(name,sizeof(name),"$%c.%zu",
-                       executable?'x':'d',ordinal);
-        if(n<0 || (size_t)n>=sizeof(name)) {
-            minias_set_error(as,"aarch64-mapping-name-overflow");
-            return false;
-        }
-        if(minias_get_symbol(as,name,false)==NULL)break;
-        if(ordinal==SIZE_MAX)return false;
-        ++ordinal;
-    }
-    symbol=minias_get_symbol(as,name,true);
-    if(symbol==NULL)return false;
-    symbol->defined=true;
-    symbol->section=section;
-    symbol->value=offset;
-    symbol->bind=MINIAS_STB_LOCAL;
-    symbol->type=MINIAS_STT_NOTYPE;
-    return true;
+    /* Target owns the mapping transition and prefix; Common owns Symbol
+     * lookup, collision avoidance, insertion and local ELF binding. */
+    return minias_define_target_mapping_symbol(as,
+        executable?"$x":"$d",as->symbol_count,true,section,offset);
 }
 
 static bool a64_record_cfi_data_mapping(MiniAs *as,int section,
@@ -5148,11 +5154,16 @@ static bool a64_record_source_mappings(MiniAs *as) {
     }
     for(i=0U;i<as->stmt_count;++i) {
         const MiniAsStmt *stmt=&as->stmts[i];
-        const MiniAsSection *section;
+        MiniAsSection *section;
         bool executable;
         if(stmt->size==0U || stmt->section<0 ||
            (size_t)stmt->section>=as->section_count)continue;
         section=&as->sections[(size_t)stmt->section];
+        /* GAS mapping_state(MAP_INSN) records a four-byte input-section
+         * alignment for .inst even in non-executable .data. This is a
+         * Target directive property, not generic raw-data alignment. */
+        if(stmt->op!=NULL && strcmp(stmt->op,".inst")==0 &&
+           section->align<4U)section->align=4U;
         if(section->type!=MINIAS_SHT_PROGBITS ||
            (section->flags&MINIAS_SHF_ALLOC)==0U)continue;
         /* AArch64 GAS's s_aarch64_inst() calls mapping_state(MAP_INSN).
@@ -5265,6 +5276,7 @@ static const MiniAsTargetOps ops = {
     .literal_pool_order = MINIAS_LITERAL_POOL_WIDTH_ASC,
     .cfi_implicit_eh_frame = true,
     .fold_defined_local_relocation_to_section = true,
+    .allow_local_section_symbol_fixup = a64_allow_local_section_symbol_fixup,
     .emit_all_section_symbols = true,
     .record_cfi_data_mapping = a64_record_cfi_data_mapping,
     .cfi_code_align = 4U,

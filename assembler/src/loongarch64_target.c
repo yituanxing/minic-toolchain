@@ -1949,7 +1949,12 @@ static bool la_encode(MiniAs *as,const MiniAsStmt *s) {
                                  s->args,s->line);
                 return false;
             }
-            if(branch.local && !linker_relaxable) {
+            /* GNU GAS materializes the resolved displacement in the input
+             * instruction even when linker relaxation requires retaining a
+             * B16/B21/B26 relocation. Both pieces of state matter: the
+             * raw .text oracle sees the immediate, and the final linker
+             * needs the relocation when PCALA/GOT pairs may later shrink. */
+            if(branch.local) {
                 uint32_t off=(uint32_t)(branch.displacement/4);
                 code|=kind==MINIAS_FIXUP_LARCH_B16 ?
                     ((off&UINT32_C(0xffff))<<10U) :
@@ -1958,7 +1963,7 @@ static bool la_encode(MiniAs *as,const MiniAsStmt *s) {
                         ((off>>16U)&UINT32_C(0x1f)) :
                     ((off&UINT32_C(0xffff))<<10U)|
                         ((off>>16U)&UINT32_C(0x3ff));
-                kind=MINIAS_FIXUP_NONE;
+                if(!linker_relaxable)kind=MINIAS_FIXUP_NONE;
             }
             break;
         }
@@ -2080,6 +2085,8 @@ static const struct {
     {MINIAS_FIXUP_SUB,3U,54U}, /* R_LARCH_SUB24 */
     {MINIAS_FIXUP_SUB,4U,55U},
     {MINIAS_FIXUP_SUB,8U,56U},
+    {MINIAS_FIXUP_CFI_ADD6,1U,105U}, /* R_LARCH_ADD6 */
+    {MINIAS_FIXUP_CFI_SUB6,1U,106U}, /* R_LARCH_SUB6 */
     {MINIAS_FIXUP_LARCH_PCALA_HI20,4U,71U},
     {MINIAS_FIXUP_LARCH_PCALA_LO12,4U,72U},
     {MINIAS_FIXUP_LARCH_GOT_PC_HI20,4U,75U},
@@ -2109,6 +2116,9 @@ static uint32_t la_reloc(MiniAsFixupKind kind,unsigned width) {
     (void)la_lookup_fixup_form(kind,width,&relocation);
     return relocation;
 }
+static bool la_cfi_linker_relaxation_marker(MiniAsFixupKind kind) {
+    return kind==MINIAS_FIXUP_LARCH_RELAX;
+}
 static const MiniAsTargetOps ops={
     .name="loongarch64",.comment_prefix='#',.elf_machine=258U,
     .resolve_profile=la_profile,.parse_mcinst=la_parse,
@@ -2128,6 +2138,7 @@ static const MiniAsTargetOps ops={
     .cfi_initial_cfa_register_only=true,
     .cfi_eh_range_relocations=true,
     .cfi_advance_reloc_mode=1U,
+    .cfi_linker_relaxation_marker=la_cfi_linker_relaxation_marker,
     .cfi_anchors_hidden=true
 };
 const MiniAsTargetOps *minias_target_loongarch64(void){return &ops;}
