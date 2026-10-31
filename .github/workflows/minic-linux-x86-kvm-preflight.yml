@@ -114,6 +114,10 @@ jobs:
             echo 'KVM_PREFLIGHT=BLOCKED reason=invalid_guest_bootsector' >&2
             exit 1
           fi
+          if [[ "$(od -An -tx1 -j510 -N2 "$work/bootsector.bin" | tr -d '[:space:]')" != '55aa' ]]; then
+            echo 'KVM_PREFLIGHT=BLOCKED reason=invalid_guest_boot_signature' >&2
+            exit 1
+          fi
           # SeaBIOS expects genuine floppy geometry. Preserve the exact boot
           # sector and package it into a standard 1.44 MiB floppy image.
           cp "$work/bootsector.bin" "$work/guest.img"
@@ -136,6 +140,16 @@ jobs:
 
           printf 'qemu_rc=%d expected_guest_debug_exit_rc=85\n' "$qemu_rc" \
             | tee "$work/verdict.txt"
+          if [[ -f "$work/guest-output.log" ]]; then
+            echo 'KVM_PREFLIGHT_GUEST_OUTPUT_BEGIN'
+            sed -n '1,20p' "$work/guest-output.log"
+            echo 'KVM_PREFLIGHT_GUEST_OUTPUT_END'
+          fi
+          if [[ "$qemu_rc" -eq 83 ]] &&
+             grep -aFxq 'KVM_PREFLIGHT_GUEST_NESTED_VMX_MISSING' "$work/guest-output.log"; then
+            echo 'KVM_PREFLIGHT=BLOCKED reason=actual_kvm_guest_cpuid_vmx_missing' >&2
+            exit 1
+          fi
           if [[ "$qemu_rc" -ne 85 ]]; then
             echo 'KVM_PREFLIGHT=BLOCKED reason=real_kvm_guest_did_not_exit_with_magic_code' >&2
             sed -n '1,100p' "$work/qemu.stderr" >&2
