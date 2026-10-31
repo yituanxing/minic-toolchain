@@ -4053,8 +4053,11 @@ static void x64_apply_code16_register_default(const MiniAsStmt *s,
  * emits .code16gcc C instructions in ELF32 REL objects. Width comes from
  * the retained typed MCInst, never from a mnemonic spelling or white-list.
  * Each prefix is a Target-owned machine alternative counted before layout. */
-static bool x64_legacy_mode_prefixes(MiniAs *as,const MiniAsStmt *s,
-                                     unsigned char prefix[4],size_t *count) {
+/* Returns a diagnostic, or NULL on success. Both measurement and emission
+ * consume this one Target-owned prefix plan without exposing Common state. */
+static const char *x64_legacy_mode_prefixes(const MiniAsStmt *s,
+                                            unsigned char prefix[4],
+                                            size_t *count) {
     const MiniAsMCInst *m=s->mcinst;
     bool operand32=false,address32=false;
     *count=0U;
@@ -4067,16 +4070,15 @@ static bool x64_legacy_mode_prefixes(MiniAs *as,const MiniAsStmt *s,
             prefix[(*count)++]=0x66U;
         if(m && m->opcode==X64_MOFFS && m->operands[1].memory) {
             const X64Memory *mem=(const X64Memory *)m->operands[1].memory;
-            if(mem->address_space>=sizeof(x64_segment_prefixes))return false;
+            if(mem->address_space>=sizeof(x64_segment_prefixes))
+                return "invalid-x86-segment-register";
             if(mem->address_space)
                 prefix[(*count)++]=x64_segment_prefixes[mem->address_space];
         }
-        return true;
+        return NULL;
     }
-    if(!x64_mode16(s->site.mode_bits))return true;
-    if(m==NULL) {
-        minias_set_error(as,"missing-x86-code16-mcinst");return false;
-    }
+    if(!x64_mode16(s->site.mode_bits))return NULL;
+    if(m==NULL)return "missing-x86-code16-mcinst";
     operand32=X64_FORM_OPERAND_BITS(m)==32U;
     if((m->opcode==X64_REG_MEMORY || m->opcode==X64_IMM_MEMORY ||
         m->opcode==X64_MOFFS) &&
@@ -4085,7 +4087,8 @@ static bool x64_legacy_mode_prefixes(MiniAs *as,const MiniAsStmt *s,
         const X64Memory *memory=(const X64Memory *)m->operands[1].memory;
         address32=memory->address_32;
         if(memory->address_space!=0U) {
-            if(memory->address_space>=sizeof(x64_segment_prefixes))return false;
+            if(memory->address_space>=sizeof(x64_segment_prefixes))
+                return "invalid-x86-segment-register";
             prefix[(*count)++]=x64_segment_prefixes[memory->address_space];
         }
     }
@@ -4098,14 +4101,15 @@ static bool x64_legacy_mode_prefixes(MiniAs *as,const MiniAsStmt *s,
     /* GNU GAS canonicalizes LOCK after a required operand-size override:
      * `.code16 lock btsl ...` is 66 f0 0f ba, not f0 66 0f ba. */
     if(m->encoding&X64_ENCODING_LOCK)prefix[(*count)++]=0xf0U;
-    return true;
+    return NULL;
 }
 
-static bool x64_measure_base(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
+static bool x64_measure_base(MiniAsMeasureErrorSink *errors,
+                             const MiniAsStmt *s,uint32_t *size) {
     const MiniAsMCInst *m=s->mcinst;
     X64RegisterEncodingPlan register_plan;
     X64EncodingPlan plan;
-    if (!m) {minias_set_error(as,"missing-x86_64-mcinst");return false;}
+    if (!m) {minias_measure_error(errors,"missing-x86_64-mcinst");return false;}
     if(x64_register_encoding_plan(m,s->site.mode_bits,&register_plan)) {
         x64_apply_code16_register_default(s,&register_plan);
         *size=register_plan.size;
@@ -4137,16 +4141,23 @@ static bool x64_measure_base(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
         case X64_MOVQ_IMMREG: *size=7U;return true;
         case X64_MOVABS_IMMREG: *size=10U;return true;
         case X64_ALU_IMM: *size=plan.instruction_bytes;return true;
-        default: minias_set_error(as,"unknown-x86_64-mcinst");return false;
+        default: minias_measure_error(errors,"unknown-x86_64-mcinst");return false;
     }
 }
 
-static bool x64_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
+static bool x64_measure(const MiniAsMeasureView *view,
+                         MiniAsMeasureErrorSink *errors,
+                         const MiniAsStmt *s,uint32_t *size) {
     unsigned char prefix[4];size_t n;
-    if(!x64_legacy_mode_prefixes(as,s,prefix,&n) ||
-       !x64_measure_base(as,s,size))return false;
+    const char *prefix_error=x64_legacy_mode_prefixes(s,prefix,&n);
+    (void)view;
+    if(prefix_error!=NULL) {
+        minias_measure_error(errors,"%s",prefix_error);
+        return false;
+    }
+    if(!x64_measure_base(errors,s,size))return false;
     if(*size>UINT32_MAX-n) {
-        minias_set_error(as,"x86-code16-size-overflow");return false;
+        minias_measure_error(errors,"x86-code16-size-overflow");return false;
     }
     *size+=(uint32_t)n;
     return true;
@@ -4240,8 +4251,12 @@ static bool x64_plan_instruction_relaxation(MiniAs *as,
             inst,stmt->site.mode_bits,true);
         unsigned char prefixes[4];size_t prefix_count;
         int64_t value;
-        if(!x64_legacy_mode_prefixes(as,stmt,prefixes,&prefix_count))
+        const char *prefix_error=
+            x64_legacy_mode_prefixes(stmt,prefixes,&prefix_count);
+        if(prefix_error!=NULL) {
+            minias_set_error(as,"%s",prefix_error);
             return false;
+        }
         plan->terminal_size=long_plan.instruction_bytes+(uint32_t)prefix_count;
         if(stmt->size==short_plan.instruction_bytes+prefix_count &&
            (!minias_resolve_symbol_difference_ref(as,
@@ -4790,7 +4805,11 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
 static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
     MiniAsStmt native;
     unsigned char prefix[4];size_t n;
-    if(!x64_legacy_mode_prefixes(as,s,prefix,&n))return false;
+    const char *prefix_error=x64_legacy_mode_prefixes(s,prefix,&n);
+    if(prefix_error!=NULL) {
+        minias_set_error(as,"%s",prefix_error);
+        return false;
+    }
     if(n==0U)return x64_encode_base(as,s);
     if(s->size<n || s->offset>SIZE_MAX-n) {
         minias_set_error(as,"x86-code16-invalid-prefix-layout");return false;

@@ -649,6 +649,15 @@ typedef struct MiniAsPreLayoutView {
     void *target_state; /* owned and mutable only by the selected Target */
 } MiniAsPreLayoutView;
 
+/* Instruction width is a Target-owned property of retained MCInst and its
+ * parse-site ISA/mode. Measuring cannot mutate Common source, layout,
+ * symbols or fixups. Later encoding still gets its transactional emitter. */
+typedef struct MiniAsMeasureView {
+    const void *target_state;
+} MiniAsMeasureView;
+typedef struct MiniAsMeasureErrorSink MiniAsMeasureErrorSink;
+void minias_measure_error(MiniAsMeasureErrorSink *, const char *, ...);
+
 /* A borrowed, read-only view of the *final* MCLayout. Target output checks
  * cannot reach the mutable Common section/symbol/fixup graph through this
  * interface. Only the object-finalization sink below can request the two
@@ -938,7 +947,9 @@ typedef struct MiniAsTargetOps {
     /* Mandatory target instruction path: parse once, measure its retained
      * typed operands, then encode. Core owns fragment address and growth. */
     bool (*parse_mcinst)(MiniAs *, MiniAsStmt *);
-    bool (*measure_mcinst)(MiniAs *, const MiniAsStmt *, uint32_t *);
+    bool (*measure_mcinst)(const MiniAsMeasureView *,
+                           MiniAsMeasureErrorSink *,
+                           const MiniAsStmt *, uint32_t *);
     bool (*encode)(MiniAs *, const MiniAsStmt *);
     /* One typed TargetRelaxPlan supplies both the range requirement and
      * the longest legal encoding. No Common mnemonic/argument reparse. */

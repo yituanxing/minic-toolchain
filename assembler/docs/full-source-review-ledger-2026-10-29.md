@@ -1,6 +1,6 @@
 # MiniAS full production-source review ledger — 2026-10-29
 
-## Current refactor dashboard — 2026-10-31 (`7644f65`)
+## Current refactor dashboard — 2026-10-31 (four-Target measurement batch)
 
 This top section is the **current progress snapshot**. Later sections retain
 their original 2026-10-29 audit/batch evidence as history; their “pending CI”
@@ -13,13 +13,13 @@ and **architecturally closed**. A file changed once is not necessarily done.
 | MiniAS `assembler/src` production code | **32** files | 22 C + 10 headers; excludes test/docs/CLI/shared ELF |
 | Modified since audited `1d9db17` (2026-10-29) | **29/32 = 90.6%** | 26 existing modified + 3 new SourceGraph files; **code-touch coverage only** |
 | Unmodified production files | **3/32** | `invocation.c`, `mc_lexer.c`, `target_registry.c`; do not change stable code to inflate coverage |
-| Recent convergence from `ccf939f` | **19/32 = 59.4%** | 15 commits; independent recent-iteration footprint, **not** total completion |
+| Recent convergence from `ccf939f` | **19/32 = 59.4%** | 18 commits including the concurrently integrated ABI/Fixup batch; independent recent-iteration footprint, **not** total completion |
 | Full historical audited baseline | **35/35 read** | At `1d9db17`: 29 `assembler/src`, CLI, 5 shared ELF files; older source-read certificate, not a claim that every current line was reread today |
 | Shared CLI/ELF audited neighbors | **2/6 modified** | `elf/include/minielf.h`, `elf/src/relocatable_writer.c`; unchanged consumers retain independent roles |
 | MiniAS-facing tests | **190 files** | Includes fixtures/scripts; not part of the production denominator |
 
-The 90 commits after `1d9db17` changed 29 current source files with
-**+10,941/−5,772** lines in the baseline-to-HEAD diff (net +5,169).
+The 93 commits after `1d9db17` changed 29 current source files with
+**+11,047/−5,802** lines in the baseline-to-HEAD diff (net +5,245).
 That includes file splits/new SourceGraph functionality; it is **not**
 “5,772 lines of dead code eliminated”, nor a measure of correctness.
 
@@ -28,7 +28,7 @@ That includes file splits/new SourceGraph functionality; it is **not**
 | State | Count | IDs and next condition |
 | --- | ---: | --- |
 | **Closed** | **4** | P01 ISA legality versus strict-I audit; P06 AArch64 typed parse-site mapping provenance; P13 Common Fixup/fragment staging; P15 explicit Target object finalization |
-| **Partially closed** | **3** | P04 typed final/pre-layout views done, parse/measure/encode still broad; P05 SourceContext still mixed with statement routing; P14 RV E ABI owned, AArch64 dot/name debt remains |
+| **Partially closed** | **3** | P04 typed final/pre-layout **and all four measurement** views done; parse/encode still broad; P05 SourceContext still mixed with statement routing; P14 RV E ABI owned, AArch64 dot/name debt remains |
 | **Concrete correctness gaps to probe** | **3** | P09 GNU `.reloc` subset; P11 RV GLOBAL/WEAK fixup parity; P16 CFI synthetic-section collisions |
 | **Deferred on purpose** | **5** | P02/P07 scoped RV `.option arch`; P03 versioned extension profiles; P08 COFF/Mach-O/endian model; P12 object-format-neutral binding type |
 | **Audited, retained** | **1** | P10 Target local pre-resolution and ELF retained-fixup division is intentional |
@@ -43,23 +43,23 @@ refactors precede these 16 gap IDs. The remaining work has unequal sizes.
 | MCExpr/typed DATA, SectionKey/Subsection | Shared owners and lookup paths in place | New syntax only when real sources prove a gap |
 | Fragment encode/Fixup commit | Single Common staging and creation ownership | Preserve explicit `.reloc` and DWARF/CFI-specific operations |
 | Target ISA/ABI | Four Target families, RV32/RV64 XLEN+ABI, strict-I separated | Scoped `.option arch` and further ISA families when needed |
-| Target phase interfaces | Read-only post-emit and pre-layout views landed | Parse/measure/encode callbacks still see mutable Common root |
+| Target phase interfaces | Read-only post-emit, pre-layout **and all four measurement** views landed | Parse/encode callbacks still see mutable Common root |
 | Object output | One ELF32/ELF64 writer through shared `minielf` | COFF/Mach-O and endian are **future**, not current blockers |
 | Real-program validation | Exact-head fast ISA/GNU/BusyBox/runtime gates green | Full Linux kernel and 3536 opt-in suites SKIPPED on `7644f65` |
 
-Next large coherent batch: inspect Target parse/measure/encode callers,
-pick a phase boundary with actual duplicated ownership, replace **and
-delete** the old path together; then run focused GNU and real-program
-probes before batching one push. No speculative standards-wide redesign.
+The four-Target measurement seam has now been replaced as one unit:
+`TargetOps.measure_mcinst` takes an immutable Target-state view and an
+opaque Common diagnostic sink. AArch64 and LoongArch consume retained
+MCInst/Target lowering plans; RISC-V's RVC candidate and x86's legacy
+prefix planner are **shared by measure and encode** without a duplicate
+machine-width algorithm. See architecture decisions §18 and the structural
+guard `probe-mc-target-boundary.sh`. P04 remains **partial** because parse
+and encode still need full Common-owned object operations.
 
-First read of the next measurement seam: AArch64's `measure_mcinst`
-only needs the retained MCInst and a diagnostic sink; LoongArch's sizing
-reads its retained lowering plan; x86's size selection additionally calls
-the shared private legacy-mode/prefix planner, while RISC-V consults its
-Target-owned RVC encoding alternative. Converting only the easy two Targets
-would create a **second measurement callback track**, so do not count that
-as architectural closure. The coherent next change must cover all four
-measurement callers and preserve their existing machine-size policies.
+Next coherent batch: read parse-site MCInst construction and the specific
+Core APIs it needs; only restrict its signature when all four Target paths
+can be converted together without a second parser or a guessed syntax
+profile. No speculative COFF/Mach-O or standards-wide redesign.
 
 ---
 

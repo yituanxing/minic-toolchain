@@ -2060,13 +2060,16 @@ static bool la_section_is_linker_relaxable(MiniAs *as,int section,
     return true;
 }
 
-static bool la_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
-    if(!s->mcinst){minias_set_error(as,"missing-la-mcinst");return false;}
+static bool la_measure(const MiniAsMeasureView *view,
+                       MiniAsMeasureErrorSink *errors,
+                       const MiniAsStmt *s,uint32_t *size) {
+    (void)view;
+    if(!s->mcinst){minias_measure_error(errors,"missing-la-mcinst");return false;}
     if(s->mcinst->target_payload!=NULL) {
         const LaLoweringPlan *plan=
             (const LaLoweringPlan *)s->mcinst->target_payload;
         if(!la_valid_lowering_plan(s->mcinst)) {
-            minias_set_error(as,"invalid-loongarch-lowering-plan");
+            minias_measure_error(errors,"invalid-loongarch-lowering-plan");
             return false;
         }
         *size=plan->count*4U;
@@ -2076,7 +2079,7 @@ static bool la_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
        s->mcinst->opcode==LA_MC_GOT_PSEUDO ||
        s->mcinst->opcode==LA_MC_LI32_SEQUENCE ||
        s->mcinst->opcode==LA_MC_LI64_SEQUENCE) {
-        minias_set_error(as,"missing-loongarch-lowering-plan");
+        minias_measure_error(errors,"missing-loongarch-lowering-plan");
         return false;
     }
     *size=4U;

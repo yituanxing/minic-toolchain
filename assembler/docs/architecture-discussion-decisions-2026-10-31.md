@@ -198,7 +198,7 @@ that a design change has been made.
 | P01 | P0 | `riscv_profile.c:parse_isa` sets `strict_i_xlen` automatically for exact RV32I/RV64I; `riscv_target.c:strict_base_i_check_sections` and `riscv_validate_common_directive` then reject executable raw data/`.org` as an extra audit | Separate ordinary `target_isa` legality from explicit `strict_base_i_audit`; keep the valuable audit but do not redefine GAS-compatible `-march` |
 | P02 | P0/P1 | `riscv_target.c:riscv_target_directive` currently rejects `.option arch,+ext` under explicit `-march`; legacy +v/+zbb handling is a no-op. `MiniAsRiscvState.option_stack` saves only PIC/RVC/RELAX bits | Add scoped effective ISA state and save/restore it; capture the correct site ISA for MCInst, layout and encoder without accidentally changing file-level attributes |
 | P03 | P1 | `riscv_profile.h` uses one 64-bit feature mask; `riscv_profile.c` recognizes a limited fixed-version extension table and lacks general version-string parsing | Define an extendable versioned ISA/extension set and dependency validation before many Z extensions are added. No need to implement all extensions immediately |
-| P04 | P1 | Parse/measure/encode still receive mutable `MiniAs*`; output hooks use read-only final-layout views and Common sinks (§15), while LoongArch whole-section linker-relaxability now uses a read-only pre-layout view and private cache (§16) | Continue phase-appropriate Target parse/measure/encode views and a Common-owned emission sink, without breaking existing typed MCInst ownership |
+| P04 | P1 | Measurement in all four Targets now uses read-only `MiniAsMeasureView` + opaque diagnostic sink (§18); output hooks and LoongArch whole-section lookahead already use narrower final/pre-layout views (§15–16). Parse/encode still receive mutable `MiniAs*`. | Continue phase-appropriate parse/encode views and Common-owned emission sink without breaking typed MCInst and existing symbol/relaxation behavior |
 | P05 | P1/P2 | `assembler.c:minias_statement_process` still reads/writes `SourceContext` internals and owns considerable conditional/directive routing; source expansion calls back into it | Complete Source ownership and typed statement routing; a smaller file alone is **not** proof of a clean boundary |
 | P06 | P1 | `aarch64_target.c:a64_record_source_mappings`/`validate` check `strcmp(stmt->op, ".inst")` and alignment directive spellings **after** parsing to determine object mapping semantics | Store parse-site typed instruction-data/alignment provenance; keep original text only where genuinely needed for diagnostics or initial expression compilation |
 | P07 | P1 (future) | RV RVC measurement/encoding reads `state->isa_features` globally while `stmt->site.mode_bits` records only selected option bits | When scoped `.option arch` is implemented, bind the effective ISA/encoding policy to each fragment to avoid consulting the wrong state after `pop` |
@@ -751,3 +751,45 @@ RISC-V and LoongArch linker-relaxable ULEB **2/2**, RISC-V final `.option`
 states **4/4**, and five GNU CFI ABI profiles **5/5** all PASS.
 Record remote CI separately at its exact new
 commit SHA. No new kernel Image/BusyBox P0/P1 result is implied.
+## 18. P04 instruction-width measurement: four Targets, one narrow contract
+
+The instruction measurement hook previously received mutable `MiniAs*` in
+all four Targets even though no measurement algorithm needed to update
+Common-owned Sections, Symbols, Fixups or source replay state. Common now
+constructs a stack-borrowed `MiniAsMeasureView` exposing only opaque
+**const Target state** and an opaque `MiniAsMeasureErrorSink`. The sink
+forwards failures to Common's existing first-error-wins diagnostic path.
+`TargetOps.measure_mcinst` has **one replacement signature**; there is no
+compatibility callback, redundant measurement pass or ISA switch in Core.
+
+The four existing width rules survive unchanged:
+
+- **AArch64:** an existing typed MCInst is 4 bytes; a missing MCInst still
+  reports its source line through the sink.
+- **LoongArch:** retained Target-owned multiword lowering plans determine
+  their actual byte count. Missing/invalid plans still fail rather than
+  guessing a 4-byte instruction.
+- **RISC-V:** `rv_rvc_encode_plain` and `rv_rvc_branch_form` now accept
+  `const MiniAsRiscvState *` explicitly; the same first helper remains the
+  actual encoding path. Parse-site `.option` state and ISA C membership
+  still determine whether a 16-bit form is legal. LI's retained multiword
+  plan and the ordinary 4/8-byte forms remain the only other width cases.
+- **x86:** legacy 16/32-bit prefixes have one pure, retained-MCInst-driven
+  planner consumed by measurement, branch relaxation and final encode.
+  Its former writable-Core error side effect is replaced by a diagnostic
+  return, reported by the appropriate Common error path; the machine
+  prefix/operand-size decisions are not duplicated.
+
+The structural Target boundary probe checks all four callback signatures,
+the Common-private diagnostic sink and reuse of the RV/x86 encoding
+alternative. Release `-Werror`, A0 **30/30**, GNU-exact RVC options,
+x86 Linux `.code16`/`.code16gcc` **38/38**, AArch64 `$x/$d` mapping and
+LoongArch GCC pseudo/relaxation oracles passed locally. This proves the
+focused interface migration and its exercised encodings, **not** full
+ISA syntax coverage or complete downstream Linux boot parity.
+
+**Next P04 slice:** inspect the parse-side construction and ownership of
+typed MCInst and its diagnostics; only reduce `MiniAs*` in a coherent
+phase-sized batch. Encoding continues to require real Common fixup,
+symbol and fragment-transaction operations, so do not force that code
+through a fake read-only view or start a second encoder.

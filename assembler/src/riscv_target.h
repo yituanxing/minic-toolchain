@@ -72,10 +72,13 @@ typedef enum MiniAsRiscvSymbolModifier {
 
 struct MiniAs;
 struct MiniAsStmt;
+struct MiniAsMeasureView;
+struct MiniAsMeasureErrorSink;
 
 /* RISC-V-private typed instruction API: Common sees only TargetOps.
  * No other ISA or the assembler driver needs these concrete symbols. */
-bool minias_riscv_measure_mcinst(struct MiniAs *,
+bool minias_riscv_measure_mcinst(const struct MiniAsMeasureView *,
+                                struct MiniAsMeasureErrorSink *,
                                 const struct MiniAsStmt *, uint32_t *);
 bool minias_riscv_parse_mcinst(struct MiniAs *, struct MiniAsStmt *);
 bool minias_riscv_encode(struct MiniAs *, const struct MiniAsStmt *);

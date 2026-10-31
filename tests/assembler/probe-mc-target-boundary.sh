@@ -160,6 +160,51 @@ if not re.search(r'static bool la_validate\s*\(const MiniAsPostEmitView\s*\*', l
     raise SystemExit('LoongArch output validator still receives writable Core')
 print('MINIAS_MC_POST_EMIT_VIEW=PASS final_layout=readonly object_mutation=Common_sink')
 PY
+# Instruction measurement runs after parse and before fragment placement.
+# Four Targets share exactly one read-only callback; no measurement hook may
+# borrow writable MiniAs, and sizing must reuse the same Target alternatives
+# subsequently used by encoding (RVC words and x86 legacy prefixes).
+python3 - <<'PY'
+from pathlib import Path
+import re
+
+root = Path('assembler/src')
+core = (root / 'minias_internal.h').read_text()
+driver = (root / 'assembler.c').read_text()
+view = core.split('typedef struct MiniAsMeasureView {', 1)[1].split(
+    '} MiniAsMeasureView;', 1)[0]
+if re.search(r'\bMiniAs\s*\*|\bMiniAsStmt\s*\*|\bMiniAsSection\s*\*', view):
+    raise SystemExit('Measurement view exposes writable Common state')
+if not re.search(r'bool\s*\(\*measure_mcinst\)\s*\('
+                 r'const MiniAsMeasureView\s*\*\s*,\s*'
+                 r'MiniAsMeasureErrorSink\s*\*', core):
+    raise SystemExit('Measurement callback still borrows mutable MiniAs')
+if 'struct MiniAsMeasureErrorSink { MiniAs *as; };' not in driver or \
+        'struct MiniAsMeasureErrorSink {' in core:
+    raise SystemExit('Measurement diagnostic sink must remain Common-private')
+if 'const MiniAsMeasureView measure = { .target_state=as->target_state };' not in driver:
+    raise SystemExit('Measurement view does not borrow Target state at parse site')
+targets = {
+    'aarch64_target.c': 'aarch64_measure_mcinst',
+    'loongarch64_target.c': 'la_measure',
+    'x86_64_target.c': 'x64_measure',
+    'riscv_encode.c': 'minias_riscv_measure_mcinst',
+}
+for file, fn in targets.items():
+    source = (root / file).read_text()
+    if not re.search(r'\bbool\s+' + fn +
+                     r'\s*\(\s*const MiniAsMeasureView\s*\*', source):
+        raise SystemExit(f'{file}: measurement still takes mutable Core')
+rv = (root / 'riscv_encode.c').read_text()
+if rv.count('rv_rvc_encode_plain(state,stmt,&compressed)') != 1 or \
+        'rv_rvc_encode_plain(MINIAS_RV_STATE(as),stmt,&compressed)' not in rv:
+    raise SystemExit('RVC measure/encode diverged from their common plan')
+x86 = (root / 'x86_64_target.c').read_text()
+if x86.count('x64_legacy_mode_prefixes(') != 4 or \
+        'x64_legacy_mode_prefixes(s,prefix,&n)' not in x86:
+    raise SystemExit('x86 prefix size and emission diverged')
+print('MINIAS_MC_MEASURE_VIEW=PASS targets=4 common_writable_state=none')
+PY
 # Full-source LoongArch relaxability is a necessary forward-looking policy.
 # It must be precomputed once from a read-only completed SourceGraph, not
 # lazily reconstructed by scanning mutable Common Fragments during encode.

@@ -313,10 +313,13 @@ static bool split_two(const char *args, char *first, size_t cap1,
 /* AArch64 is fixed 4B. Measurement consumes the parsed MCInst just as
  * the RISC-V variable-length backend does; no duplicate mnemonic allowlist
  * or operand parsing is necessary before the instruction fragment exists. */
-static bool aarch64_measure_mcinst(MiniAs *as, const MiniAsStmt *stmt,
-                                   uint32_t *size) {
+static bool aarch64_measure_mcinst(const MiniAsMeasureView *view,
+                                   MiniAsMeasureErrorSink *errors,
+                                   const MiniAsStmt *stmt, uint32_t *size) {
+    (void)view;
     if (stmt->mcinst == NULL) {
-        minias_set_error(as, "missing-aarch64-mcinst:line=%zu", stmt->line);
+        minias_measure_error(errors, "missing-aarch64-mcinst:line=%zu",
+                             stmt->line);
         return false;
     }
     *size = 4U;

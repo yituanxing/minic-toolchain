@@ -851,9 +851,9 @@ static bool rv_scalar_machine_word(const MiniAsMCInst *m,
     }
 }
 
-static bool rv_rvc_encode_plain(const MiniAs *as, const MiniAsStmt *stmt,
+static bool rv_rvc_encode_plain(const MiniAsRiscvState *state,
+                                const MiniAsStmt *stmt,
                                  uint16_t *compressed) {
-    const MiniAsRiscvState *state=MINIAS_RV_STATE(as);
     const MiniAsMCInst *m=stmt->mcinst;
     uint32_t w,op,rd,rs1,rs2,f3,imm12;
     int32_t imm;
@@ -942,9 +942,9 @@ static bool rv_rvc_encode_plain(const MiniAs *as, const MiniAsStmt *stmt,
 
 /* Branch width is initially selected from the ISA/register form; MCLayout
  * may grow a short form if its eventual target is out of C range. */
-static bool rv_rvc_branch_form(const MiniAs *as,const MiniAsStmt *stmt,
+static bool rv_rvc_branch_form(const MiniAsRiscvState *state,
+                                const MiniAsStmt *stmt,
                                 bool *jump) {
-    const MiniAsRiscvState *state=MINIAS_RV_STATE(as);
     const MiniAsMCInst *m=stmt->mcinst;
     if(state==NULL || !state->isa_explicit ||
        (state->isa_features&RISCV_ISA_C)==0U ||
@@ -984,21 +984,23 @@ static uint16_t rv_rvc_jump_bits(int64_t d) {
 /* Measure the actual persisted target instruction. The layout driver
  * invokes this once after operand parsing and before placement. Neither
  * symbol spelling nor source-level expression grammar is revisited. */
-bool minias_riscv_measure_mcinst(MiniAs *as, const MiniAsStmt *stmt,
-                                 uint32_t *size) {
+bool minias_riscv_measure_mcinst(const MiniAsMeasureView *view,
+                                 MiniAsMeasureErrorSink *errors,
+                                 const MiniAsStmt *stmt, uint32_t *size) {
     const MiniAsMCInst *m = stmt->mcinst;
+    const MiniAsRiscvState *state = view->target_state;
     uint16_t compressed;
     bool compressed_jump;
     if (m == NULL) {
-        minias_set_error(as, "unsupported-instruction:%s:line=%zu",
-                         stmt->op, stmt->line);
+        minias_measure_error(errors, "unsupported-instruction:%s:line=%zu",
+                             stmt->op, stmt->line);
         return false;
     }
-    if(rv_rvc_encode_plain(as,stmt,&compressed)) {
+    if(rv_rvc_encode_plain(state,stmt,&compressed)) {
         *size=2U;
         return true;
     }
-    if(rv_rvc_branch_form(as,stmt,&compressed_jump)) {
+    if(rv_rvc_branch_form(state,stmt,&compressed_jump)) {
         *size=2U;
         return true;
     }
@@ -1016,8 +1018,9 @@ bool minias_riscv_measure_mcinst(MiniAs *as, const MiniAsStmt *stmt,
         case RV_MC_LI: {
             const MiniAsRiscvLiPlan *plan = m->target_payload;
             if (plan == NULL) {
-                minias_set_error(as, "internal:riscv-li-plan-missing:line=%zu",
-                                 stmt->line);
+                minias_measure_error(errors,
+                                     "internal:riscv-li-plan-missing:line=%zu",
+                                     stmt->line);
                 return false;
             }
             *size = plan->count * 4U;
@@ -2371,7 +2374,7 @@ static bool rv_encode_mcinst(MiniAs *as, const MiniAsStmt *stmt) {
     uint16_t compressed;
     if (m->opcode == RV_MC_RAW)
         return append_u32(as, stmt->section, m->encoding);
-    if (rv_rvc_encode_plain(as,stmt,&compressed))
+    if (rv_rvc_encode_plain(MINIAS_RV_STATE(as),stmt,&compressed))
         return append_u16(as,stmt->section,compressed) &&
                minias_encode_add_elf_flags(as,1U);
     if (m->opcode == RV_MC_LI || m->opcode == RV_MC_CALL ||

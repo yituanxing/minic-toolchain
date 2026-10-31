@@ -252,6 +252,7 @@ char *minias_trim(char *text) {
  * alone retains the writable object graph behind these opaque handles. */
 struct MiniAsPostEmitErrorSink { MiniAs *as; };
 struct MiniAsPostEmitObjectSink { MiniAs *as; };
+struct MiniAsMeasureErrorSink { MiniAs *as; };
 
 static void minias_set_error_va(MiniAs *as, const char *format, va_list ap) {
     if (as->error[0] != '\0') {
@@ -269,6 +270,14 @@ void minias_set_error(MiniAs *as, const char *format, ...) {
 
 void minias_post_emit_error(MiniAsPostEmitErrorSink *sink,
                             const char *format, ...) {
+    va_list ap;
+    va_start(ap, format);
+    minias_set_error_va(sink->as, format, ap);
+    va_end(ap);
+}
+
+void minias_measure_error(MiniAsMeasureErrorSink *sink,
+                          const char *format, ...) {
     va_list ap;
     va_start(ap, format);
     minias_set_error_va(sink->as, format, ap);
@@ -4548,9 +4557,12 @@ bool minias_statement_process(MiniAs *as, char *text, size_t line) {
          * The obsolete pre-parse validation callback had no live Target. */
         ok = add_stmt(as, MINIAS_FRAGMENT_INSTRUCTION, op, rewritten_args,
                       line, 0U, 1U);
-        if (ok)
+        if (ok) {
+            const MiniAsMeasureView measure = { .target_state=as->target_state };
+            MiniAsMeasureErrorSink errors = { .as=as };
             ok = as->target->measure_mcinst(
-                as, &as->stmts[statement_id], &size);
+                &measure, &errors, &as->stmts[statement_id], &size);
+        }
         if (!ok) {
             free(rewritten_args);
             return false;
