@@ -2463,50 +2463,44 @@ static bool rv_encode_mcinst(MiniAs *as, const MiniAsStmt *stmt) {
         MiniAsRiscvBranchPlan branch;
         expr=m->operands[m->opcode==RV_MC_BRANCH ? 2U : 1U].bound_symbol;
         if(!minias_riscv_resolve_branch_plan(as,stmt,&branch))return false;
-        if(m->opcode==RV_MC_BRANCH && !branch.local){
-            minias_set_error(as,"unsupported-relocation:%s:line=%zu",
-                             stmt->op,stmt->line);
-            return false;
-        }
-        if(branch.local){
-            if(m->opcode==RV_MC_JAL){
-                if(!branch.jal_legal){
-                    minias_set_error(as,"jal-range:line=%zu",stmt->line);
-                    return false;
-                }
-                return append_u32(as,stmt->section,
-                                  enc_j(rd,branch.displacement)) &&
-                       (!(MINIAS_RV_STATE(as)->isa_features&RISCV_ISA_C) ||
-                        minias_encode_add_fixup_ref(as,stmt->section,
-                            stmt->offset,MINIAS_FIXUP_RV_JAL,4U,*expr,false));
-            }
-            if(stmt->size==8U){
-                if(!branch.long_legal){
-                    minias_set_error(as,"branch-long-jal-range:%s:line=%zu",
-                                     stmt->op,stmt->line);
-                    return false;
-                }
-                return append_u32(as,stmt->section,
-                           enc_b((base>>12U &7U)^1U,rd,rs1,8)) &&
-                       append_u32(as,stmt->section,
-                                  enc_j(0,branch.displacement-4));
-            }
-            if(!branch.short_legal){
-                minias_set_error(as,"branch-range:%s:line=%zu",
-                                 stmt->op,stmt->line);
+        if(m->opcode==RV_MC_JAL){
+            if(branch.local && !branch.jal_legal){
+                minias_set_error(as,"jal-range:line=%zu",stmt->line);
                 return false;
             }
             return append_u32(as,stmt->section,
-                              enc_b((base>>12U)&7U,rd,rs1,
-                                    branch.displacement)) &&
-                   (!(MINIAS_RV_STATE(as)->isa_features&RISCV_ISA_C) ||
-                    minias_encode_add_fixup_ref(as,stmt->section,stmt->offset,
-                              MINIAS_FIXUP_RV_BRANCH,4U,*expr,false));
+                              enc_j(rd,branch.displacement)) &&
+                   minias_encode_add_fixup_ref(as,stmt->section,stmt->offset,
+                              MINIAS_FIXUP_RV_JAL,4U,*expr,false);
         }
-        return append_u32(as,stmt->section,enc_j(rd,0)) &&
+        if(stmt->size==8U){
+            int64_t jal_displacement;
+            if(branch.local && !branch.long_legal){
+                minias_set_error(as,"branch-long-jal-range:%s:line=%zu",
+                                 stmt->op,stmt->line);
+                return false;
+            }
+            if(!minias_checked_add_i64(branch.displacement,-4,
+                                       &jal_displacement)){
+                minias_set_error(as,"riscv-branch-addend-overflow");
+                return false;
+            }
+            return append_u32(as,stmt->section,
+                       enc_b((base>>12U &7U)^1U,rd,rs1,8)) &&
+                   append_u32(as,stmt->section,enc_j(0,jal_displacement)) &&
+                   minias_encode_add_fixup_ref(as,stmt->section,
+                       stmt->offset+4U,MINIAS_FIXUP_RV_JAL,4U,*expr,false);
+        }
+        if(!branch.local || !branch.short_legal){
+            minias_set_error(as,"branch-range:%s:line=%zu",
+                             stmt->op,stmt->line);
+            return false;
+        }
+        return append_u32(as,stmt->section,
+                          enc_b((base>>12U)&7U,rd,rs1,
+                                branch.displacement)) &&
                minias_encode_add_fixup_ref(as,stmt->section,stmt->offset,
-                                MINIAS_FIXUP_RV_JAL,4U,*expr,
-                                false);
+                           MINIAS_FIXUP_RV_BRANCH,4U,*expr,false);
     } else if(!rv_scalar_machine_word(m,true,&code)) {
         minias_set_error(as,"unknown-riscv-mcinst");
         return false;

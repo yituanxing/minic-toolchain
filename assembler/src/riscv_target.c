@@ -602,6 +602,7 @@ bool minias_riscv_resolve_branch_plan(MiniAs *as,
     const MiniAsMCInst *m = stmt->mcinst;
     const MiniAsSymbolRef *expr;
     const MiniAsSymbol *symbol;
+    bool same_section;
     int64_t displacement;
     if (result == NULL || m == NULL ||
         (m->opcode != RV_MC_BRANCH && m->opcode != RV_MC_JAL)) {
@@ -609,29 +610,38 @@ bool minias_riscv_resolve_branch_plan(MiniAs *as,
         return false;
     }
     memset(result,0,sizeof(*result));
-    result->required_size=4U;
+    /* A nonlocal B-type target has no relocation that can repair the
+     * 12-bit displacement. GAS emits an inverted B+8 followed by JAL+REL.
+     * A JAL itself can always carry a linker-visible JAL relocation. */
+    result->required_size=m->opcode==RV_MC_BRANCH?8U:4U;
     expr=m->operands[m->opcode==RV_MC_BRANCH?2U:1U].bound_symbol;
     if (expr == NULL) {
         minias_set_error(as,"internal:riscv-branch-plan-symbol");
         return false;
     }
     symbol=minias_symbol_ref_lookup(as,*expr);
-    if(symbol==NULL || !symbol->defined || symbol->section!=stmt->section ||
-       (m->opcode==RV_MC_JAL && symbol->subsection!=stmt->subsection))
-        return true;
-    if(symbol->value>(uint64_t)INT64_MAX || stmt->offset>(uint64_t)INT64_MAX) {
+    same_section=symbol!=NULL && symbol->defined &&
+                 symbol->section==stmt->section;
+    if(stmt->offset>(uint64_t)INT64_MAX ||
+       (same_section && symbol->value>(uint64_t)INT64_MAX)) {
         minias_set_error(as,"riscv-branch-offset-overflow");
         return false;
     }
-    displacement=(int64_t)symbol->value-(int64_t)stmt->offset;
-    if((expr->addend>0 && displacement>INT64_MAX-expr->addend) ||
-       (expr->addend<0 && displacement<INT64_MIN-expr->addend)) {
+    /* GNU writes S+A-P to the relocation field even for a defined WEAK
+     * symbol, but the relocation must remain link-time replaceable. An
+     * undefined/cross-section symbol uses S=0 as its input-field value. */
+    displacement=(same_section?(int64_t)symbol->value:0)-
+                 (int64_t)stmt->offset;
+    if(!minias_checked_add_i64(displacement,expr->addend,&displacement)) {
         minias_set_error(as,"riscv-branch-addend-overflow");
         return false;
     }
-    displacement+=expr->addend;
-    result->local=true;
     result->displacement=displacement;
+    result->local=same_section && symbol->bind!=MINIAS_STB_WEAK &&
+                  (m->opcode!=RV_MC_JAL ||
+                   symbol->subsection==stmt->subsection);
+    if(!result->local)return true;
+    result->required_size=4U;
     result->jal_legal=(displacement&1)==0 &&
                       displacement>=-(INT64_C(1)<<20) &&
                       displacement<=(INT64_C(1)<<20)-2;
@@ -665,13 +675,13 @@ static bool riscv_plan_instruction_relaxation(MiniAs *as,
          stmt->mcinst->opcode == RV_MC_JAL)) {
         plan->terminal_size = 4U;
         if (!minias_riscv_resolve_branch_plan(as,stmt,&branch))return false;
-        if (branch.local &&
-            (((branch.displacement & 1) != 0) ||
-             (stmt->mcinst->opcode == RV_MC_JAL ?
+        if (!branch.local ||
+            ((branch.displacement & 1) != 0) ||
+            (stmt->mcinst->opcode == RV_MC_JAL ?
                 (branch.displacement < -2048 ||
                  branch.displacement > 2046) :
                 (branch.displacement < -256 ||
-                 branch.displacement > 254))))
+                 branch.displacement > 254)))
             plan->required_size = 4U;
         return true;
     }

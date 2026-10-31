@@ -325,7 +325,7 @@ request to implement all of them next.
 | --- | --- | --- |
 | P09 | `.reloc` accepts less GNU grammar than full GAS | Document a syntax gap; extend only against a real source/oracle |
 | P10 | Target can pre-resolve some locals; ELF writer handles retained relocs | Preserve the existing division until a failing example proves another resolver necessary |
-| P11 | RV same-section `GLOBAL`/`WEAK` branch/jump relocation selection and fixup elimination may differ from GNU | High-value correctness probe: compare original GNU source, bytes, symbol bindings and relocations; do **not** silently eliminate externally visible weak/global linkage |
+| P11 | RV same-section `GLOBAL`/`WEAK` branch/jump relocation selection and fixup elimination differed from GNU | **Closed in §21:** one branch/layout plan preserves GNU relocs and link-time override; six RV32/RV64 GNU byte/RELA/LD oracles |
 | P12 | Common binding/type/visibility fields currently resemble ELF enums | Keep now; revise at the real second-object-format boundary |
 | P13 | At the `fed9209` baseline, fixed MCData Fixup wrappers had a direct-record fallback even though their only callers emit active Fragments | **Cleaned in section 8's batch**: always stage through `MCEncodeResult`; explicit `.reloc`, CFI/DWARF and late ULEB paths remain independent |
 | P14 | RV parse consults `as->elf_flags & 8` for an RVE feature; AArch64 encode checks interned `"."` NameId | Source/target ownership debt, not a reason to rewrite all ISA parsing now |
@@ -893,3 +893,57 @@ added. The old callback type and its broad helper signatures were removed.
 identify any real duplicated transaction or mutable-state ownership, and
 only then pick another coherent phase-sized replacement. Do not introduce
 COFF/Mach-O now or spend a batch filling theoretical syntax profiles.
+
+## 21. Encode/relax ownership audit and GNU link-visible branch/LDR binding
+
+The encode/fixup review found that Common already has **one**
+`MiniAsEncodeResult` staging and commit path. `minias_emit_sections` /
+`minias_commit_encode_result` own Section bytes and Fixups; the Targets
+produce ISA bytes and relocation requests. `mc_layout.c` validates the
+Target's expansion plan without maintaining a second encoder. An audit of
+all four Targets found no duplicated Common emit transaction whose removal
+would improve correctness. Keep that existing boundary; P04 is still
+**partial** because encode/relax have broad Common access. Do not add a
+parallel encoder merely to replace an interface signature.
+
+Two concrete **link-time binding** failures did justify changes:
+
+- **RISC-V P11:** A same-section `GLOBAL` or `WEAK` branch/JAL previously
+  dropped the GNU-visible relocation; a branch to an undefined or
+  cross-section symbol was rejected because the B immediate cannot carry
+  a link-time relocation. The one Target-private branch resolver now
+  determines local range and necessary 4/8-byte layout, while final encoding
+  preserves a B/JAL relocation for GNU link-visible symbols. For nonlocal
+  conditional branches it emits inverted B + JAL with the JAL fixup at
+  `branch+4`; an independent JAL retains a JAL fixup. The same plan governs
+  both relaxation and emission, including RVC candidate promotion.
+- **AArch64:** Direct `ldr xN, symbol` to a same-section
+  GLOBAL/WEAK/HIDDEN symbol now keeps `R_AARCH64_LD_PREL_LO19` so GNU ld can
+  override a weak definition. Defined same-section LOCAL references still
+  fold, and `ldr =symbol` retains its Common-owned literal-pool identity
+  and separate `R_AARCH64_ABS64` pool relocation.
+
+The new fixed GNU oracles compare **actual section bytes, ELF relocation
+offset/type/symbol/addend, and GNU-linked bytes** rather than treating a
+successful assembler exit as parity. `probe-rv-branch-binding-gnu.sh`
+tests `rv32i`, `rv32ic`, `rv64i`, `rv64ic`, and `rv64gc` (RVC on/off), with strong, weak, undefined,
+cross-section, explicit addend and long-range targets, including a strong
+link-time override. `probe-aarch64-ldr-binding-gnu.sh` covers four direct
+LDR relocations, LOCAL folding, literal-pool retention and the same weak
+override case. Both enter existing mandatory GNU-capable CI workflows,
+without a new optional workflow. This is a focused relocation/link audit;
+it is not a claim of complete GNU syntax coverage or Linux/QEMU boot.
+
+Integrated local evidence: Release `-Werror` and A0 **30/30 PASS**, six RV
+GNU byte/RELA/link/undefined-negative profiles (**20 relocations each**),
+the AArch64 LDR GNU byte/relocation/link oracle, x86 Linux `.code16`
+**38/38**, LoongArch GNU alias/privilege parity, and the four-Target
+structural ownership guard all PASS. Production-only change: three files,
+**+62/−54 lines (net +8)**, excluding five new tests/fixtures, docs and
+two existing CI workflows. This is correctness repair, not a wholesale
+encoder or object-format rewrite.
+
+**Next:** return to the remaining real correctness gaps P09 (`.reloc`) and
+P16 (CFI synthetic-section collisions) or the next narrowed source
+ownership batch. Endian and COFF/Mach-O remain deferred by the two-person
+project's deliberate workload budget.

@@ -103,6 +103,11 @@ jobs:
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=riscv \
             bash tests/assembler/probe-typed-relax-four-target-stress.sh
+      - name: GNU RV64 branch bindings, long branches and linked override parity
+        run: |
+          command -v riscv64-linux-gnu-as
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-rv-branch-binding-gnu.sh
       - name: GNU RV32/RV64 typed LI materialization semantics and measurement
         run: |
           # This CI acceptance gate may never silently skip its GNU oracle.

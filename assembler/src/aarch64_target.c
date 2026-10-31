@@ -4419,9 +4419,13 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
             code=(inst->operands[0].register_64?
                   UINT32_C(0x58000000):UINT32_C(0x18000000))|
                  inst->operands[0].reg;
-            if(!target || !target->defined || target->section!=stmt->section) {
-                /* A link-time PC-relative load requires the genuine AArch64
-                 * instruction fixup, not a data PREL32 relocation. */
+            if(!target || !target->defined || target->section!=stmt->section ||
+               (direct && target->bind!=MINIAS_STB_LOCAL)) {
+                /* A direct LDR to a GLOBAL/WEAK name remains relocatable
+                 * even when defined in this input .text: GNU ld can select
+                 * an overriding definition. A private =literal pool label
+                 * and ordinary same-section LOCAL target still fold. Use
+                 * the genuine instruction fixup, never data PREL32. */
                 fixup=MINIAS_FIXUP_A64_LD_PREL_LO19;
                 expr=literal;
                 break;

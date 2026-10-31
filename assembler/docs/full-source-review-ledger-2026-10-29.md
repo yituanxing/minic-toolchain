@@ -1,6 +1,6 @@
 # MiniAS full production-source review ledger — 2026-10-29
 
-## Current refactor dashboard — 2026-10-31 (four-Target measurement batch)
+## Current refactor dashboard — 2026-10-31 (GNU encode/binding correctness batch)
 
 This top section is the **current progress snapshot**. Later sections retain
 their original 2026-10-29 audit/batch evidence as history; their “pending CI”
@@ -13,13 +13,13 @@ and **architecturally closed**. A file changed once is not necessarily done.
 | MiniAS `assembler/src` production code | **32** files | 22 C + 10 headers; excludes test/docs/CLI/shared ELF |
 | Modified since audited `1d9db17` (2026-10-29) | **29/32 = 90.6%** | 26 existing modified + 3 new SourceGraph files; **code-touch coverage only** |
 | Unmodified production files | **3/32** | `invocation.c`, `mc_lexer.c`, `target_registry.c`; do not change stable code to inflate coverage |
-| Recent convergence from `ccf939f` | **19/32 = 59.4%** | 20 commits including the four-Target parse-service migration; independent recent-iteration footprint, **not** total completion |
+| Recent convergence from `ccf939f` | **21/32 = 65.6%** | 21 commits including the four-Target parse-service and GNU binding batches; independent recent-iteration footprint, **not** total completion |
 | Full historical audited baseline | **35/35 read** | At `1d9db17`: 29 `assembler/src`, CLI, 5 shared ELF files; older source-read certificate, not a claim that every current line was reread today |
 | Shared CLI/ELF audited neighbors | **2/6 modified** | `elf/include/minielf.h`, `elf/src/relocatable_writer.c`; unchanged consumers retain independent roles |
-| MiniAS-facing tests | **191 files** | Includes fixtures/scripts; not part of the production denominator |
+| MiniAS-facing tests | **196 tracked files** | Includes five new GNU branch/LDR fixtures/scripts; not part of the production denominator |
 
-The 95 commits after `1d9db17` changed 29 current source files with
-**+11,474/−6,122** lines in the baseline-to-HEAD diff (net +5,352).
+The 96 commits after `1d9db17` changed 29 current source files with
+**+11,524/−6,164** lines in the baseline-to-HEAD diff (net +5,360).
 That includes file splits/new SourceGraph functionality; it is **not**
 “5,772 lines of dead code eliminated”, nor a measure of correctness.
 
@@ -27,9 +27,9 @@ That includes file splits/new SourceGraph functionality; it is **not**
 
 | State | Count | IDs and next condition |
 | --- | ---: | --- |
-| **Closed** | **4** | P01 ISA legality versus strict-I audit; P06 AArch64 typed parse-site mapping provenance; P13 Common Fixup/fragment staging; P15 explicit Target object finalization |
+| **Closed** | **5** | P01 ISA legality versus strict-I audit; P06 AArch64 typed parse-site mapping provenance; P11 RV GLOBAL/WEAK branch/jump GNU relocation and link parity; P13 Common Fixup/fragment staging; P15 explicit Target object finalization |
 | **Partially closed** | **3** | P04 parse/measure/post-emit/pre-layout/site queries now have phase-appropriate contracts; **encode/relax remain broad**; P05 SourceContext still mixed with statement routing; P14 RV E ABI owned, AArch64 dot/name debt remains |
-| **Concrete correctness gaps to probe** | **3** | P09 GNU `.reloc` subset; P11 RV GLOBAL/WEAK fixup parity; P16 CFI synthetic-section collisions |
+| **Concrete correctness gaps to probe** | **2** | P09 GNU `.reloc` subset; P16 CFI synthetic-section collisions |
 | **Deferred on purpose** | **5** | P02/P07 scoped RV `.option arch`; P03 versioned extension profiles; P08 COFF/Mach-O/endian model; P12 object-format-neutral binding type |
 | **Audited, retained** | **1** | P10 Target local pre-resolution and ELF retained-fixup division is intentional |
 
@@ -43,9 +43,9 @@ refactors precede these 16 gap IDs. The remaining work has unequal sizes.
 | MCExpr/typed DATA, SectionKey/Subsection | Shared owners and lookup paths in place | New syntax only when real sources prove a gap |
 | Fragment encode/Fixup commit | Single Common staging and creation ownership | Preserve explicit `.reloc` and DWARF/CFI-specific operations |
 | Target ISA/ABI | Four Target families, RV32/RV64 XLEN+ABI, strict-I separated | Scoped `.option arch` and further ISA families when needed |
-| Target phase interfaces | Opaque Common parse services for four Targets; read-only post-emit, pre-layout, all measurement views; site snapshot/alignment read only Target state | Encode/relax callbacks still see mutable Common root |
+| Target phase interfaces | Opaque Common parse services for four Targets; read-only post-emit, pre-layout, all measurement views; site snapshot/alignment read only Target state | Encode/relax callbacks still see mutable Common root; reviewed single Common staging transaction retained |
 | Object output | One ELF32/ELF64 writer through shared `minielf` | COFF/Mach-O and endian are **future**, not current blockers |
-| Real-program validation | Exact-head fast ISA/GNU/BusyBox/runtime gates green | Full Linux kernel and 3536 opt-in suites SKIPPED on `7644f65` |
+| Real-program validation | Prior exact-head fast ISA/GNU/BusyBox/runtime gates green; current GNU RV/A64 relocation/link oracles local PASS | Full Linux kernel and 3536 opt-in suites not certified by this batch; current exact-head CI separately pending |
 
 The four-Target measurement seam has now been replaced as one unit:
 `TargetOps.measure_mcinst` takes an immutable Target-state view and an
@@ -64,11 +64,20 @@ allocation owner and one parser path. The old wide `parse_mcinst(MiniAs*)`
 callback is deleted, including its dynamic RV form parser signature.
 The focused GNU and A0 tests are green on the integrated tree.
 
-Next coherent batch: read the real Target encode/relax operations and
-identify any duplicate mutable Common transaction ownership before
-replacing another phase interface. Do not mistake necessary Fixup and
-symbol resolution for removable coupling. COFF/Mach-O and exhaustive ISA
-standards remain deferred.
+The encode/relax audit found **no duplicate Common encoding transaction**:
+the single `MCEncodeResult` path already owns Target/Common byte and Fixup
+staging. The concrete RV branch-symbol binding and AArch64 direct LDR
+correctness defects were fixed instead. GNU source-section bytes, exact
+relocation fields and the linked strong-over-weak symbol override all agree
+for six RV profiles (RV32/RV64; 20 relocations each) and the AArch64 LDR
+fixture (four PC-relative loads plus one literal-pool relocation). Existing
+x86/LoongArch target paths were audited and retained. See architecture
+decisions §21 and the new mandatory CI oracles.
+
+Next coherent batch: narrow the real remaining P09/P16 correctness probes
+or the shared x86/RV relaxation read-only queries, while retaining one
+layout/encode branch-decision algorithm. No COFF/Mach-O or exhaustive ISA
+standards expansion yet.
 
 ---
 

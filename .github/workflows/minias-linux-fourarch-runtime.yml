@@ -105,6 +105,7 @@ jobs:
               ;;
             aarch64)
               bash tests/assembler/probe-aarch64-branch-binding-gnu.sh
+              bash tests/assembler/probe-aarch64-ldr-binding-gnu.sh
               bash tests/assembler/probe-aarch64-macro-parenthesized-gnu.sh
               bash tests/assembler/probe-aarch64-alternative-long-gnu.sh
               bash tests/assembler/probe-aarch64-nonconst-leb128-gnu.sh
