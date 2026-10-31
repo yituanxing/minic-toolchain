@@ -112,9 +112,18 @@ static int run_p2_probe(void) {
         execl("/bin/p2-probe", "p2-probe", (char *)NULL);
         _exit(127);
     }
-    if (child < 0 || waitpid(child, &status, 0) != child ||
-        !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+    if (child < 0 || waitpid(child, &status, 0) != child) {
         (void)fprintf(stderr, "INIT_P2_PROBE=FAIL errno=%d\n", errno);
+        return 1;
+    }
+    if (!WIFEXITED(status)) {
+        (void)fprintf(stderr, "INIT_P2_PROBE=FAIL child_signal=%d\n",
+                      WIFSIGNALED(status) ? WTERMSIG(status) : -1);
+        return 1;
+    }
+    if (WEXITSTATUS(status) != 0) {
+        (void)fprintf(stderr, "INIT_P2_PROBE=FAIL child_rc=%d\n",
+                      WEXITSTATUS(status));
         return 1;
     }
     (void)puts("INIT_P2_PROBE=PASS");
