@@ -3,8 +3,9 @@ name: MiniAS Linux 6.6.143 Multiarch Real Runtime
 # GNU GCC generates every production assembly unit; MiniAS is substituted
 # only for assembler invocations.  GNU Kbuild/binutils then link the kernel,
 # and the same kernel is booted under system QEMU for P0 and P1 checks.
-# The existing independently-certified RV64 lane remains in linux-single;
-# this matrix extends that contract to the other three architectures.
+# RV64 runs in the linux-single job of minias-a0-focused-diagnostics-v1.yml.
+# Opt-in push markers [minias-linux-four] and [minias-linux-gcc-single]
+# certify all four Linux targets on one SHA, including matched GNU controls.
 on:
   workflow_dispatch:
     inputs:
