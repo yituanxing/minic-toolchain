@@ -36,6 +36,18 @@ if [[ $as_backend != minias && $as_backend != gnu ]]; then
   exit 2
 fi
 
+# The GNU and MiniAS lanes are independent Kbuild invocations. Without a
+# pinned UTS_VERSION timestamp their real GCC input for
+# init/version-timestamp.o changes even though source/config/assembler flags
+# agree; this would make full-production source equivalence unprovable.
+export KBUILD_BUILD_TIMESTAMP='Mon Jan 01 00:00:00 UTC 2024'
+export KBUILD_BUILD_USER=minias
+export KBUILD_BUILD_HOST=minias-ci
+export KBUILD_BUILD_VERSION=1
+printf 'MINIAS_LINUX_KBUILD_IDENTITY=PINNED arch=aarch64 timestamp=%q user=%s host=%s version=%s\n' \
+  "$KBUILD_BUILD_TIMESTAMP" "$KBUILD_BUILD_USER" "$KBUILD_BUILD_HOST" \
+  "$KBUILD_BUILD_VERSION"
+
 for bin in "$cc" aarch64-linux-gnu-as aarch64-linux-gnu-ld "$qemu" curl sha256sum cpio timeout python3; do
   if ! command -v "$bin" >/dev/null 2>&1; then
     echo "MINIAS_LINUX_FOURARCH_ERROR missing_tool=$bin" >&2
