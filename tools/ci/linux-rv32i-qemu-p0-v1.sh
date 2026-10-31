@@ -21,6 +21,7 @@ image_sha=$(sha256sum "$image" | cut -d' ' -f1)
 p1=${RV32I_QEMU_P1:-0}
 p2=${RV32I_QEMU_P2:-0}
 c11=${RV32I_QEMU_P2_CANONICAL11:-0}
+f18=${RV32I_QEMU_P2_FULL18:-0}
 shell=${RV32I_QEMU_SHELL:-0}
 [[ "$p2" == 0 || "$p2" == 1 ]] || {
   echo 'RV32I_QEMU_P2=FAIL invalid_p2_mode' >&2; exit 2;
@@ -30,6 +31,12 @@ shell=${RV32I_QEMU_SHELL:-0}
 }
 [[ "$c11" == 0 || "$p2" == 1 ]] || {
   echo 'RV32I_QEMU_P2=FAIL canonical11_requires_original_p2_nine_gate' >&2; exit 2;
+}
+[[ "$f18" == 0 || "$f18" == 1 ]] || {
+  echo 'RV32I_QEMU_P2=FAIL invalid_full18_mode' >&2; exit 2;
+}
+[[ "$f18" == 0 || ( "$p2" == 1 && "$c11" == 1 ) ]] || {
+  echo 'RV32I_QEMU_P2=FAIL full18_requires_certified_nine_and_canonical11' >&2; exit 2;
 }
 [[ "$p2" == 0 || ( "$p1" == 1 && "$shell" == 0 && "${RV32I_QEMU_FAST:-0}" == 0 ) ]] || {
   echo 'RV32I_QEMU_P2=FAIL requires_genuine_ELF32_userland_without_other_profiles' >&2; exit 2;
@@ -114,6 +121,14 @@ if [[ "$p1" == 1 ]]; then
         exit 3
       fi
     fi
+    if [[ "$f18" == 1 ]]; then
+      build_guest tests/external/linux/runtime_initramfs/rv32-p2-full18-raw.c runtime-p2-full18
+      riscv64-linux-gnu-objdump -dr "$work/runtime-p2-full18" >"$work/runtime-p2-full18-disassembly.txt"
+      if grep -Eq '[-0-9]+\(gp\)' "$work/runtime-p2-full18-disassembly.txt"; then
+        echo 'RV32I_GUEST_F18=FAIL freestanding_gp_relative_access' >&2
+        exit 3
+      fi
+    fi
   fi
 else
 cat >"$work/init.S" <<'ASM'
@@ -186,6 +201,9 @@ if [[ "$p1" == 1 ]]; then
     if [[ "$c11" == 1 ]]; then
       install -m 755 "$work/runtime-p2-canonical11" "$work/guest/bin/runtime-p2-canonical11"
     fi
+    if [[ "$f18" == 1 ]]; then
+      install -m 755 "$work/runtime-p2-full18" "$work/guest/bin/runtime-p2-full18"
+    fi
     : "${RV32I_QEMU_P2_MODULE_DIR:?P2 requires six real GNU Kbuild ELF32 modules built from exact Image .config}"
     module_dir=$(realpath "$RV32I_QEMU_P2_MODULE_DIR")
     mkdir -p "$work/guest/lib/modules"
@@ -240,6 +258,33 @@ if [[ "$p1" == 1 ]]; then
         echo "RV32I_QEMU_C11_MODULE=STAGED name=$name real_GNU_ELF32=true"
       done
     fi
+    if [[ "$f18" == 1 ]]; then
+      for name in nf_defrag_ipv4 nf_defrag_ipv6 nf_conntrack \
+        llc stp bridge br_netfilter veth kvm drm drm_kms_helper \
+        drm_shmem_helper virtio-gpu nvme-core nvme; do
+        src="$module_dir/$name.ko"
+        [[ -s "$src" ]] || { echo "RV32I_QEMU_F18=FAIL missing_module=$src" >&2; exit 3; }
+        riscv64-linux-gnu-readelf -h "$src" >"$work/module-$name-elf.txt"
+        for contract in 'Class:[[:space:]]+ELF32' \
+                        'Machine:[[:space:]]+RISC-V' \
+                        'Type:[[:space:]]+REL' \
+                        'Flags:[[:space:]]+0x0([[:space:]]|$)'; do
+          grep -Eq "$contract" "$work/module-$name-elf.txt" || {
+            echo "RV32I_QEMU_F18=FAIL module_elf=$name contract=$contract" >&2
+            exit 3
+          }
+        done
+        riscv64-linux-gnu-readelf -p .modinfo "$src" >"$work/module-$name-modinfo.txt"
+        grep -Eq 'vermagic=6\.6\.143 mod_unload riscv([[:space:]]|$)' \
+          "$work/module-$name-modinfo.txt" || {
+            echo "RV32I_QEMU_F18=FAIL module_vermagic=$name" >&2
+            exit 3
+          }
+        install -m 644 "$src" "$work/guest/lib/modules/$name.ko"
+        sha256sum "$src" >>"$work/rv32-p2-module-sha256.txt"
+        echo "RV32I_QEMU_F18_MODULE=STAGED name=$name real_GNU_ELF32=true"
+      done
+    fi
   fi
 fi
 if [[ ! -e "$work/guest/dev/console" ]]; then
@@ -285,7 +330,8 @@ test "$(fdtget -t x "$dtb" /chosen linux,initrd-end)" = "0 $end_hex"
 echo "RV32I_QEMU_P0_DTB=PASS image_bytes=$image_bytes image_end=$image_end initrd_start=$start_hex initrd_end=$end_hex no_overlap=true"
 
 rv32i_timeout=${RV32I_QEMU_TIMEOUT_SECONDS:-45}
-[[ "$rv32i_timeout" =~ ^[0-9]+$ ]] && (( rv32i_timeout >= 10 && rv32i_timeout <= 120 )) || {
+[[ "$rv32i_timeout" =~ ^[0-9]+$ ]] &&
+  (( rv32i_timeout >= 10 && rv32i_timeout <= ( f18 == 1 ? 300 : 120 ) )) || {
   echo 'RV32I_QEMU_P0=FAIL invalid_timeout_seconds' >&2
   exit 2
 }
@@ -294,7 +340,8 @@ printf 'RV32I_QEMU_P0=START image_sha256=%s guest=rv32i/ilp32 pid1=ELF32 firmwar
 rdinit=/init
 append_p1=
 if [[ "$p1" == 1 && "$fast" != 1 ]]; then
-  if [[ "$c11" == 1 ]]; then append_p1=' minic_runtime=p2canonical11'
+  if [[ "$f18" == 1 ]]; then append_p1=' minic_runtime=p2full18 nf_conntrack.enable_hooks=1'
+  elif [[ "$c11" == 1 ]]; then append_p1=' minic_runtime=p2canonical11'
   elif [[ "$p2" == 1 ]]; then append_p1=' minic_runtime=p2'
   else append_p1=' minic_runtime=p1'; fi
 fi
@@ -310,6 +357,16 @@ if [[ "$c11" == 1 ]]; then
   qemu_args+=( -drive "if=none,id=rv32p2ext4,file=$disk,format=raw,snapshot=on"
                -device 'virtio-blk-device,drive=rv32p2ext4' )
   echo "RV32I_QEMU_C11_DISK=STAGED sha256=$(sha256sum "$disk" | cut -d' ' -f1) genuine_virtio_blk=true"
+fi
+if [[ "$f18" == 1 ]]; then
+  : "${RV32I_QEMU_P2_NVME_IMAGE:?full18 requires real QEMU PCI NVMe namespace disk}"
+  nvme_disk=$(realpath "$RV32I_QEMU_P2_NVME_IMAGE")
+  [[ -s "$nvme_disk" ]] || { echo "RV32I_QEMU_F18=FAIL missing_nvme_disk=$nvme_disk" >&2; exit 3; }
+  qemu_args+=( -device virtio-gpu-pci
+               -drive "if=none,id=rv32p2nvmedisk,file=$nvme_disk,format=raw,snapshot=on"
+               -device nvme,id=rv32p2nvme,serial=MINICP2
+               -device nvme-ns,drive=rv32p2nvmedisk,bus=rv32p2nvme )
+  echo "RV32I_QEMU_F18_DEVICES=STAGED virtio_gpu_pci=true nvme_pci=true nvme_disk_sha256=$(sha256sum "$nvme_disk" | cut -d' ' -f1)"
 fi
 set +e
 if [[ "$shell" == 1 ]]; then
@@ -505,11 +562,61 @@ if [[ "$p1" == 1 ]]; then
         exit 1
       fi
     fi
-    python3 tests/external/linux/runtime_v2_log_check.py \
-      --profile p0 --log "$work/qemu-serial.log"
-    if [[ "$c11" == 1 ]]; then
-      echo "RV32I_QEMU_P2_CANONICAL11_FRONTIER=PASS image_sha256=$image_sha real_QEMU=true original_GNU_Kbuild=true minic_C=1741/1741 initial_p2_operations=9/9 canonical_operations=11/18 unavailable=0 scope=NOT_FULL_P2"
+    if [[ "$f18" == 1 ]]; then
+      for marker in 'INIT_RUNTIME_PROBE=PASS' \
+        'RUNTIME_V2_SYSCALL_END pass=12 fail=0' \
+        'RV32I_P2_F18_CHILD=PASS' \
+        'RV32I_P2_F18_MODULE_PASS nf_defrag_ipv4' \
+        'RV32I_P2_F18_MODULE_PASS nf_defrag_ipv6' \
+        'RV32I_P2_F18_MODULE_PASS nf_conntrack' \
+        'RV32I_P2_F18_MODULE_PASS llc' \
+        'RV32I_P2_F18_MODULE_PASS stp' \
+        'RV32I_P2_F18_MODULE_PASS bridge' \
+        'RV32I_P2_F18_MODULE_PASS br_netfilter' \
+        'RV32I_P2_F18_MODULE_PASS veth' \
+        'RV32I_P2_F18_MODULE_PASS kvm' \
+        'RV32I_P2_F18_MODULE_PASS drm' \
+        'RV32I_P2_F18_MODULE_PASS drm_kms_helper' \
+        'RV32I_P2_F18_MODULE_PASS drm_shmem_helper' \
+        'RV32I_P2_F18_MODULE_PASS virtio-gpu' \
+        'RV32I_P2_F18_MODULE_PASS nvme-core' \
+        'RV32I_P2_F18_MODULE_PASS nvme' \
+        'RV32I_P2_F18_CONNTRACK_TRACE before=0 after=1' \
+        'RV32I_P2_F18_PASS conntrack' \
+        'RV32I_P2_F18_PASS bridge' \
+        'RV32I_P2_F18_PASS br-netfilter' \
+        'RV32I_P2_F18_PASS veth' \
+        'RV32I_P2_F18_PASS kvm' \
+        'RV32I_P2_F18_PASS virtio-gpu' \
+        'RV32I_P2_F18_PASS nvme' \
+        'RV32I_P2_F18_FRONTIER=PASS new_canonical=7 old_canonical=11 full=18/18 fail=0 skip=0' \
+        'RUNTIME_V2_P2_FULL_END pass=18 fail=0 skip=0'; do
+        seen=$(grep -Fxc "$marker" "$work/qemu-p2-normalized.log" || true)
+        [[ "$seen" == 1 ]] || {
+          echo "RV32I_QEMU_F18=FAIL marker_occurrences=$seen expected=1 marker=$marker" >&2
+          tail -n 150 "$work/qemu-serial.log" >&2
+          exit 1
+        }
+      done
+      if grep -Eq '^RV32I_P2_F18_(FAIL|MODULE_FAIL|UNAVAILABLE)' "$work/qemu-p2-normalized.log" ||
+         [[ "$(grep -Ec '^RV32I_P2_F18_PASS ' "$work/qemu-p2-normalized.log")" != 7 ]] ||
+         [[ "$(grep -Ec '^RV32I_P2_F18_MODULE_PASS ' "$work/qemu-p2-normalized.log")" != 15 ]] ||
+         [[ "$(grep -Ec '^RUNTIME_V2_SYSCALL_PASS ' "$work/qemu-p2-normalized.log")" != 12 ]]; then
+        echo 'RV32I_QEMU_F18=FAIL missing_duplicate_or_negative_full18_function_or_module' >&2
+        exit 1
+      fi
+      # Reuse the historical RV64 canonical P2 manifest and checker *verbatim*;
+      # RV32 emits its own genuine ELF32 syscall outcomes for all 18 rows.
+      python3 tests/external/linux/runtime_v2_log_check.py \
+        --profile p2 --qemu-rc "$status" --log "$work/qemu-serial.log"
+      echo "RV32I_QEMU_P2_FULL18=PASS image_sha256=$image_sha real_QEMU=true original_GNU_Kbuild=true minic_C=1741/1741 canonical_operations=18/18 unavailable=0 skip=0"
     else
+      python3 tests/external/linux/runtime_v2_log_check.py \
+        --profile p0 --log "$work/qemu-serial.log"
+    fi
+    if [[ "$f18" == 0 && "$c11" == 1 ]]; then
+      echo "RV32I_QEMU_P2_CANONICAL11_FRONTIER=PASS image_sha256=$image_sha real_QEMU=true original_GNU_Kbuild=true minic_C=1741/1741 initial_p2_operations=9/9 canonical_operations=11/18 unavailable=0 scope=NOT_FULL_P2"
+    elif [[ "$f18" == 0 ]]; then
       echo "RV32I_QEMU_P2_FRONTIER=PASS image_sha256=$image_sha real_QEMU=true original_GNU_Kbuild=true minic_C=1741/1741 p2_operations=9/9 unavailable=0 scope=NOT_FULL_P2"
     fi
     exit 0

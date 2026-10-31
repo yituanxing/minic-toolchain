@@ -1,4 +1,4 @@
-name: MiniC RV32I P2 strict nine plus canonical eleven QEMU frontier (not full P2)
+name: MiniC RV32I P2 strict nine, canonical eleven, full eighteen QEMU
 
 on:
   pull_request:
@@ -6,6 +6,7 @@ on:
       - .github/workflows/minic-rv32i-linux-p2-strict-frontier.yml
       - tests/external/linux/runtime_initramfs/rv32-p2-raw.c
       - tests/external/linux/runtime_initramfs/rv32-p2-canonical11-raw.c
+      - tests/external/linux/runtime_initramfs/rv32-p2-full18-raw.c
       - tests/external/linux/runtime_initramfs/rv32-init-raw.c
       - tools/ci/linux-rv32i-qemu-p0-v1.sh
   workflow_dispatch:
@@ -52,7 +53,7 @@ jobs:
           github-token: ${{ github.token }}
           path: build/rv32-p2-strict/original-kbuild
 
-      - name: Build 19 exact-config GNU ELF32 RISC-V modules, without touching MiniC Image
+      - name: Build 34 exact-config GNU ELF32 RISC-V modules, without touching MiniC Image
         shell: bash
         timeout-minutes: 12
         run: |
@@ -145,14 +146,46 @@ jobs:
             fi
             install -m 644 "$out/$target" "$modules/$(basename "$target")"
           done
+          # Remaining seven canonical P2 checks: conntrack, bridge/veth,
+          # br-netfilter, KVM, PCI virtio GPU and PCI NVMe; all real modules.
+          # Function sections avoid the RISC-V module_loader O(N^2) RELA
+          # scan identified and recovered in the Btrfs 11/18 progression.
+          for target in \
+            net/ipv4/netfilter/nf_defrag_ipv4.ko \
+            net/ipv6/netfilter/nf_defrag_ipv6.ko net/netfilter/nf_conntrack.ko \
+            net/llc/llc.ko net/802/stp.ko net/bridge/bridge.ko \
+            net/bridge/br_netfilter.ko drivers/net/veth.ko \
+            arch/riscv/kvm/kvm.ko drivers/gpu/drm/drm.ko \
+            drivers/gpu/drm/drm_kms_helper.ko \
+            drivers/gpu/drm/drm_shmem_helper.ko \
+            drivers/gpu/drm/virtio/virtio-gpu.ko \
+            drivers/nvme/host/nvme-core.ko drivers/nvme/host/nvme.ko; do
+            echo "RV32I_F18_KBUILD_START=$target"
+            KBUILD_MODPOST_WARN=1 make -C "$src" O="$out" ARCH=riscv \
+              CROSS_COMPILE=riscv64-linux-gnu- KCFLAGS=-ffunction-sections \
+              -j4 "$target" >>"$root/modules-build.log" 2>&1
+            test -s "$out/$target"
+            max_calls=$(riscv64-linux-gnu-readelf -Wr "$out/$target" |
+              awk '/^Relocation section/ { section=$3 }
+                   /R_RISCV_CALL_PLT/ {
+                     if (++calls[section]>max) max=calls[section]
+                   }
+                   END { print max+0 }')
+            [[ "$max_calls" =~ ^[0-9]+$ && "$max_calls" -le 400 ]] || {
+              echo "RV32I_F18_MODULE_RELA=FAIL target=$target max_calls=$max_calls" >&2
+              exit 3
+            }
+            echo "RV32I_F18_MODULE_RELA=PASS target=$target max_calls=$max_calls"
+            install -m 644 "$out/$target" "$modules/$(basename "$target")"
+          done
           for file in "$modules"/*.ko; do
             riscv64-linux-gnu-readelf -h "$file" | grep -Eq 'Class:[[:space:]]+ELF32'
             riscv64-linux-gnu-readelf -p .modinfo "$file" | \
               grep -Eq 'vermagic=6\.6\.143 mod_unload riscv([[:space:]]|$)'
             sha256sum "$file"
           done
-          test "$(find "$modules" -name '*.ko' -type f | wc -l)" -eq 19
-          echo 'RV32I_P2_MODULES=BUILT count=19 original_config_verified=true runtime_load_not_yet_verified=true'
+          test "$(find "$modules" -name '*.ko' -type f | wc -l)" -eq 34
+          echo 'RV32I_P2_MODULES=BUILT count=34 original_config_verified=true runtime_load_not_yet_verified=true'
 
       - name: Execute nine required RV32I/ILP32 P2 operations in real QEMU
         shell: bash
@@ -219,6 +252,43 @@ jobs:
           echo 'RV32_P2_CANONICAL_REQUIRED=11 skip_allowed=0 full_P2_18=NOT_CERTIFIED'
           exit "$rc"
 
+      - name: Prepare a real NVMe PCI namespace backing store
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          root="$GITHUB_WORKSPACE/build/rv32-p2-strict"
+          truncate -s 64M "$root/full18-nvme.raw"
+          sha256sum "$root/full18-nvme.raw" >"$root/full18-nvme-sha256.txt"
+
+      - name: Execute all canonical P2 eighteen checks in one genuine RV32I QEMU boot
+        shell: bash
+        timeout-minutes: 9
+        run: |
+          set -Eeuo pipefail
+          root="$GITHUB_WORKSPACE/build/rv32-p2-strict"
+          image="$root/source/out/arch/riscv/boot/Image"
+          actual=$(sha256sum "$image" | cut -d' ' -f1)
+          test "$actual" = a762cb8ba55a3cbb52a1f85e61d40524941c8226a33cb35daf2bff1acd75a5a2
+          work="$root/full18-run"
+          mkdir -p "$work"
+          set +e
+          RV32I_QEMU_IMAGE="$image" RV32I_QEMU_WORK="$work" \
+            RV32I_QEMU_P2_MODULE_DIR="$root/modules" \
+            RV32I_QEMU_P2_EXT4_IMAGE="$root/canonical11-ext4.raw" \
+            RV32I_QEMU_P2_NVME_IMAGE="$root/full18-nvme.raw" \
+            RV32I_QEMU_P1=1 RV32I_QEMU_P2=1 \
+            RV32I_QEMU_P2_CANONICAL11=1 RV32I_QEMU_P2_FULL18=1 \
+            RV32I_QEMU_TIMEOUT_SECONDS=240 \
+            bash tools/ci/linux-rv32i-qemu-p0-v1.sh \
+            >"$root/full18-runner.log" 2>&1
+          rc=$?
+          set -e
+          printf 'qemu_lane_exit=%s\nsource_Image_sha256=%s\ncanonical=18/18_REQUIRED\n' \
+            "$rc" "$actual" >"$root/full18-verdict.txt"
+          tail -n 190 "$root/full18-runner.log"
+          echo 'RV32_P2_FULL_REQUIRED=18 skip_allowed=0 module_load_required=34 full_P2_only_if_real_QEMU=PASS'
+          exit "$rc"
+
       - name: Retain raw QEMU evidence even on real failure
         if: always()
         uses: actions/upload-artifact@v4
@@ -242,4 +312,11 @@ jobs:
             build/rv32-p2-strict/canonical11-run/rv32-p2-module-sha256.txt
             build/rv32-p2-strict/canonical11-run/runtime-p2-canonical11-elf.txt
             build/rv32-p2-strict/canonical11-run/runtime-p2-canonical11-disassembly.txt
+            build/rv32-p2-strict/full18-verdict.txt
+            build/rv32-p2-strict/full18-runner.log
+            build/rv32-p2-strict/full18-nvme-sha256.txt
+            build/rv32-p2-strict/full18-run/qemu-serial.log
+            build/rv32-p2-strict/full18-run/rv32-p2-module-sha256.txt
+            build/rv32-p2-strict/full18-run/runtime-p2-full18-elf.txt
+            build/rv32-p2-strict/full18-run/runtime-p2-full18-disassembly.txt
           if-no-files-found: warn

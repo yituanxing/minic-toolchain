@@ -62,6 +62,7 @@ static int equal(const char*a,const char*b,word size){
  for(word i=0;i<size;i++)if(a[i]!=b[i])return 0;
  return 1;
 }
+static int same(const char*a,const char*b){return slen(a)==slen(b)&&equal(a,b,slen(a));}
 static int has(const char*b,word n,const char*needle){
  word m=slen(needle);
  if(m>n)return 0;
@@ -70,7 +71,15 @@ static int has(const char*b,word n,const char*needle){
 }
 static int failures,passes;
 static void report(const char*id,int ok,long rc){
- if(ok){say("RV32I_P2_C11_PASS ");say(id);say("\n");passes++;}
+ if(ok){
+  say("RV32I_P2_C11_PASS ");say(id);say("\n");passes++;
+  const char*canonical=0;
+  if(same(id,"iptables4"))canonical="iptables-get-info";
+  else if(same(id,"iptables6"))canonical="ip6tables-get-info";
+  else if(same(id,"btrfs"))canonical="btrfs-filesystem-registered";
+  else if(same(id,"dm"))canonical="dm-control-device";
+  if(canonical){say("FUNCTION_PASS ");say(canonical);say("\n");}
+ }
  else{say("RV32I_P2_C11_FAIL ");say(id);say(" errno=");show_errno(rc);say("\n");failures++;}
 }
 static int load_module(const char*name){

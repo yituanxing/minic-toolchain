@@ -111,12 +111,25 @@ static int equal(const unsigned char*a,const unsigned char*b,word n){
  }
  return 1;
 }
+static int same(const char*a,const char*b){
+ return len(a)==len(b)&&equal((const unsigned char*)a,(const unsigned char*)b,len(a));
+}
 static int core_ok=0,core_fail=0,extra_ok=0,extra_unavailable=0,extra_fail=0;
 static void stage(const char*name){
  say("RV32I_P2_STAGE ");say(name);say("\n");
 }
 static void mark(const char*name,int status,int core){
- if(status==1){say("RV32I_P2_PASS ");say(name);say("\n");if(core)core_ok++;else extra_ok++;}
+ if(status==1){
+  say("RV32I_P2_PASS ");say(name);say("\n");
+  if(core){
+   core_ok++;
+   if(same(name,"ipv6-tcp-loopback"))say("RUNTIME_V2_IPV6_TCP=PASS\n");
+  }else{
+   extra_ok++;
+   /* Canonical P2 marker accompanies an actually verified operation. */
+   say("FUNCTION_PASS ");say(name);say("\n");
+  }
+ }
  else if(status==0){say("RV32I_P2_UNAVAILABLE ");say(name);say("\n");extra_unavailable++;}
  else{say("RV32I_P2_FAIL ");say(name);say("\n");if(core)core_fail++;else extra_fail++;}
 }
