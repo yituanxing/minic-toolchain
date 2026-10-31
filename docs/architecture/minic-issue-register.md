@@ -19,6 +19,11 @@
 > 其中 Parser 10 个无调用入口已补到 **MC-031**，Compiler 失败退出遗漏清理关联 **MC-043**，
 > 不借新索引重复立永久问题编号或关闭旧项。
 
+> **第十一轮全目录复扫（2026-10-31，基线 `eddd49c`）：**
+> [A11 大批清理候选与实证](README.md#第十一轮全编译器复扫实证问题与大量清理候选)
+> 在原 77 个不丢失的前提下追加 **MC-078～MC-087**，区分 Native wrongcode、GNU LD、
+> GNU/MiniC 编译差分、ASM-only 与已测量的代码体积债；无代码修复、无全量 CI。
+
 ## 使用约定
 
 - **编号永久不复用。** 新发现分配新的 `MC-xxx`；同一个根因涉及多个可独立触发的位置，可以分别登记，并注明共同根因。
@@ -83,6 +88,16 @@
 | [MC-072](#mc-072-static-inline-的-computed-goto-表指向不存在的-source-label) | P1 | OPEN | GCC-DIFF/ASM-ONLY | Compiler/Core/Target | 有效 GNU `static inline` 的静态 `&&label` 表引用 `.Luser_N`，整数特化克隆发射但原函数被裁剪；源标签别名没有任何定义 |
 | [MC-076](#mc-076-x86-early-head-同一全局符号混合物理访问与链接-vma-地址错编) | P0 | OPEN | GNU-NATIVE-DIFF/ELF-ORACLE | x86-64 early head | 同一 global 用作 pre-MMU 物理存储与链接 VMA 取址时，函数级 per-global 布尔选路把两种地址都发成 RIP-relative；GNU 异址执行 2/2 PASS、MiniC 2/2 FAIL |
 | [MC-077](#mc-077-va_start-首参递归使-function-arena-借用失效) | P0 | FIXED-UNVERIFIED | ASAN | Frontend/Loong builtin | `parse_builtin_va_start` 跨递归解析借用失效的真实 UAF；缓存 `parameter_count` 后原 sanitizer 复现通过，已增持久 probe，尚缺全目标回归 |
+| [MC-078](#mc-078-x86-pat-clflushopt-源端接受却被机器端拒绝的-unused-立即数) | P2 | OPEN | LOCAL-COMPILE-DIFF | x86-64 GNU ASM | Linux PAT `clflushopt` ALT 模板中的未使用 `"i"` 输入为 1 时，GNU C/运行接受，MiniC 源端准入却在 Machine 强制 `==0` 后错误拒编 |
+| [MC-079](#mc-079-core-取址解引用抵消绕过-local-事实逃逸造成静默错编) | P0 | OPEN | GNU-NATIVE-DIFF | Core local facts | 合法 `*(&x)=2; if(x==1)` 被当作旧局部事实折成 true；GNU x86 原生 exit22，MiniC→GNU AS/LD exit11 |
+| [MC-080](#mc-080-函数指针间接变参调用拒绝合法的-aggregate-实参) | P2 | OPEN | LOCAL-COMPILE-DIFF | Frontend/Core/Target call ABI | 函数指针的 GNU `(...)` 非具名参数为 Record 时，五目标 `-S` 0/5；同一 Record 的 direct variadic 和 indirect fixed 各 5/5，通过对照隔离门槛 |
+| [MC-081](#mc-081-rv32-接受-gnu-constructor-却漏发初始化注册) | P1 | OPEN | ASM-ONLY | RV32 global/function emission | 合法 GNU `__attribute__((constructor))` 函数在 RV32 有函数体但缺 `.init_array`；其他四目标同输入都有；缺 RV32 ELF/QEMU 运行证据 |
+| [MC-082](#mc-082-x86-sysv-三字节-record-按值参数与返回被拒绝) | P2 | OPEN | LOCAL-COMPILE-DIFF | x86 SysV ABI | 3B INTEGER-class Record 在 incoming/outgoing/return ABI classifier 被限定为 1/2/4/8，GNU native 成功而 MiniC -S 拒编 |
+| [MC-083](#mc-083-已完整声明的-char-数组再以省略边界字符串定义被错拒) | P2 | OPEN | LOCAL-COMPILE-DIFF | Frontend external array declarations | `char a[4]; char a[]="abc";` GNU 合法；MiniC 对已有完整 bound 清掉 `inferred_bound`，误禁 char string initializer |
+| [MC-084](#mc-084-x86-record-copy-逐字节展开带来可观机器码膨胀) | P2 | DEBT | GNU-NATIVE-ABI+SIZE | x86-64 aggregate machine emission | 合法 4096B 赋值双方 GNU native 执行均正确，但 MiniC 源汇编 8223 行、`.text` 65264B，GNU 仅 65 行、`.text` 5485B（含相同 driver） |
+| [MC-085](#mc-085-gnu-errorwarning-函数属性被保留但没有可达调用诊断消费者) | P1 | OPEN | LOCAL-COMPILE-DIFF | Frontend/Compiler/Core diagnostics | GNU `__attribute__((error))` 活 CALL 应拒编，MiniC 发出 CALL 且成功；`warning` 活 CALL 的 GNU 诊断被 MiniC 静默丢弃 |
+| [MC-086](#mc-086-x86-pic-隐藏的未定义-weak-对象与函数错用-pc32-重定位) | P1 | OPEN | GNU-LD/ELF-ORACLE | x86 ELF/PIC symbol binding | `weak+hidden+undefined` 在 PIC 中被误判为可 direct PCREL，MiniC `R_X86_64_PC32` 令 GNU PIE 链接失败；GNU GOTPCREL 正常链接运行 |
+| [MC-087](#mc-087-common-lp64-单函数-257-条合法-inline-asm-硬拒) | P2 | OPEN | LOCAL-COMPILE-DIFF | Common Direct LP64 preflight | 上游 Core ASM 表动态增长，但 A64/Loong Common `bool used[256]` 使第 257 条合法 `asm volatile("nop")` 被硬拒；255/256 正控均通过 |
 
 ## 索引：尚待验证的风险
 
@@ -126,6 +141,7 @@
 
 - **位置：** `src/compiler/inline_symbolic.c:135–333`，第一次明确读取在 `:250`；扩容点 `src/frontend/ast.c:516`。
 - **证据：** ASan `heap-use-after-free`，`READ of size 208`。递归闭包保存 `program->expressions[id]` 的地址，递归追加表达式引发 `realloc`，返回后仍执行 `closed = *expression`。单、双符号参数和多个 `PAD_COUNT` 扩容边界均可复现。
+- **第十一轮新独立正例：** `/tmp/minic-f11-symbolic-recursion.c` 的嵌套 inline helper `f(1, &g[i])` 由整数 caller 特化进入 symbolic closure，普通 Debug x86/RV64 编译器均 SIGSEGV 139；现有 ASan 编译器报告相同 `inline_symbolic.c:250` use-after-free（由 `ast.c:524` 的 Expression arena 扩容释放）；GNU 编译并执行返回测试预期 7，三个去除闭包条件的对照源码可编译。**属于本 MC-001 的新复现，不再新开一项。**
 - **关联风险：** `inline_symbolic.c:748–825` 在实参循环外借用 `nested` 指针，同样可能跨表达式追加，但此位置尚未独立动态复现（内部 UAF 会先触发）。
 - **修复门槛：** 使用稳定 `ExpressionId` 保存子节点身份，并在任何可能追加之后重新获取地址；双参数场景另补外层 `nested` 复测。避免递归层层拷贝 208B Expression，顾及 RV64 自举栈预算。
 
@@ -374,6 +390,7 @@
 - **位置：** `tests/compiler/c0/run-array-bound-constant-expressions.sh`、`tools/dev`、`tools/ci` 及历史 workflow。
 - **事实：** 老 `invalid_runtime_array_bound.c` 实际是合法 VLA，但相关入口仅在 disabled/历史流程中发现；不能误报当前 CI 因此失败。仓库有大量一次性补丁和 PR 阶段脚本，但活跃 workflow 静态可达图不覆盖 Makefile/dynamic 调用，**未被图命中不等于死代码**。
 - **第十轮定向运行的新观察：** `run-alignof-type-query.sh`/`run-enum-constant-expressions.sh` 假定 RV 汇编结果必为 `li a0,<constant>`；当前机器发射 `li t0,<constant>` 后经栈槽 `ld a0`，字符串匹配失败。对合法 `alignof` type 和 expression 已独立执行 MiniC x86 `.s`→GNU AS/LD→native 均退出 0，**只证明这些小样本有正确运行结果**，不表示所有失败脚本都是假阳性。`run-static-prefix-object-attributes.sh` 仍期待一个未引用 static 符号被发射，而当前 Compiler 的可达性裁剪将它去除；`run-array-bound-constant-expressions.sh` 还有未定位的失败；Loong 旧 `probe-loongarch64-linux-va-fixed-overflow.sh` 在未修改的 Debug 编译器上也失败，暂不能归因于新 `va_start` 修复。这些需要与真实 ABI/ELF oracle 一一核对，**保留红灯**。
+- **第十一次跨 CI/source-文本活性核验：** `src/frontend/ast_global.c` 有 8 个无生产 caller 的外露 relocation/extern 包装 API，但 `tools/dev/pr75*.py`、`tools/dev/materialize-linux-first500-aggregate-array-v1.py` 等历史源码重写脚本仍按这些符号名插补 C 文本；`pr75-stage.sh` / `pr76-stage.sh` 仅手动串联，`.github/Makefile/tests` 当前没有自动调用这些历史 stage，属于**源模板引用而非编译器执行调用**。**相反** `src/frontend/ast.c:minic_c0_program_set_function_parameter_count` 当前 `src/tests` 无 caller，却被 `tools/ci/apply-perf-function-parameter-exact-allocation-v1.py:90,112` 作为精确源文本锚点，且 `.github/workflows/linux-runtime-optin-perf-suite-v1.yml:2263,2321` **确实调用该脚本**。因此“删死 API”需要同时做 `.github`→脚本→源码文本锚点的活性图，不仅检索 C 符号 caller；此函数现在不能按零 C caller 直接删除。
 - **清理门槛：** 建立 workflow→Makefile→脚本→fixture 的完整可达性报告，先归档历史证据再删除，禁止批量按文件名前缀清理。
 
 ### MC-022 符号特化回归的 clone 身份断言不足
@@ -678,6 +695,74 @@
 - **实证触发：** 预置 15 个 `extern` 函数占据 Program 的函数槽，当前 variadic 函数进入第 16 槽；`__builtin_va_start` 首参包含 `0U * __builtin_loongarch_cpucfg(0U)` 的可求值 lvalue 索引，递归 target builtin 在 `parse_target_builtin` 添加第 17 个 Function，`src/frontend/ast.c:minic_grow_array` 发生 `realloc`。独立 /tmp sanitizer 构建的 ASan 报 `heap-use-after-free`：读端 `parser_builtins.c:1558`，释放链 `ast.c:20`→`:989 minic_c0_program_add_function`→`parser_builtins.c:2093 parse_target_builtin`；普通 Debug 编译器同输入 `-S` 通过且实际发出 `cpucfg`，排除短路分支造成的假复现。
 - **所有权不变式：** `FunctionId` 可在容器扩容后继续使用，旧 `MinicFunction*` 则不可；递归 parse 之前复制标量 `parameter_count` 或在递归后用 ID 重新取得，且不得改变 GNU variadic 参数验证、va_list lvalue 或机器 builtin 的既有行为。
 - **实际修复与当前验收：** 在第一次递归 `minic_parser_parse_expression` 前缓存 `size_t parameter_count`，递归后不再访问原始 `function` 指针。新增 `tests/compiler/c0/loongarch64_va_start_nested_builtin_arena.c` 与 `probe-loongarch64-va-start-nested-builtin-arena.sh`；修复前独立 sanitizer 报 UAF，修复后对原 `/tmp` `.i` **EXIT0**，新增脚本用独立 sanitizer 与普通 Debug 编译器均 **PASS**，发出的 Loong `.s` 包含实际 `cpucfg $a0, $a0`，不是死代码空转。保留普通变参正反例及跨目标回归待验；其他 `Function*`、`Expression*`、`Record*` 的递归借用独立审计，不能因此自动关闭 MC-001～005 等原有 ASan 问题。
+
+### MC-078 x86 PAT CLFLUSHOPT 源端接受却被机器端拒绝的 unused 立即数
+
+- **状态与证据：** `OPEN`，P2，`LOCAL-COMPILE-DIFF`。新一轮 F11 基于 `eddd49c` 的**实际 GNU C 可编译输入**，而非仅因两套判定看起来不一致。没有独立证明 Linux 在生产中传非零值，暂不称 Linux 运行错码。
+- **真实接缝：** `src/target/x86_64/asm_contract.c:x86_linux_pat_clflushopt_source`（约 `:8365–8395`）要求完整 Linux PAT ALT 模板、一个 `+m` 输出及一个 `"i"` 输入，却仅验证该输入属于整数类型；它不参与模板寻址 `%P0`，因此有效输入数值不受 C/GNU ASM 模板约束。`src/target/x86_64/machine_asm.c:emit_linux_pat_clflushopt`（约 `:5176–5210`）却要求此输入的 Core SSA 定义**必须为 INTEGER_CONSTANT 且 `integer_value==0`**，不满足就让后端将整个 structured ASM 判为 unsupported。源资格、Core 传递和机器执行的判定合同没有统一。
+- **最小有效差分：** 从现有 `tests/compiler/c0/x86_pat_clflushopt_alternative.c` 只把 `: "i" (0)` 换成 `: "i" (1)`，保存 `/tmp/minic-f11-x86-pat-alt-input1.c/.i`。`gcc -std=gnu11 -O0 -no-pie ... -o ...-gnu` **成功**；原生程序 exit **42** 是这个 fixture 自身规定的成功返回码，不是两编译器运行结果对比。MiniC `build/debug/bin/minic-cc --target=x86_64-linux -S ...i` **exit 1**，诊断 `x86-64 Core instruction unsupported: function clflushopt, kind 43`。本轮负责人已再次执行 GNU 编译与 MiniC `-S` 并确认 0/1 差分。
+- **清理/修复门槛：** 先核 template 绑定的 GNU 真实作用及其他 unused immediate 值域，不允许机器端额外私设不可见的 `==0` 条件；需在 Source qualifier 或完整 Machine contract 中表达同一个合规值域，不能只删掉机器端防伪。补永久同源 `i(0)`/`i(1)`、真正引用该输入的反例、GNU AS/ELF 与原生执行差分，随后逐族清掉 Source→Machine 的二次字符串分类（另见 A8-10/A9-10），不能把 MC-050/062 的不同旧问题当作本根因。
+
+### MC-079 Core 取址解引用抵消绕过 Local 事实逃逸造成静默错编
+
+- **状态与证据：** `OPEN`，P0，`GNU-NATIVE-DIFF`；在 `eddd49c` 新一轮 F11 独立发现，负责人重跑两个 native 程序 exit 22/11。仅 x86-64 已得 GNU C vs MiniC→GNU AS/LD 的真实执行证据，根因位于共用 Core，不能未经验证宣称四个其他目标也已错误运行。
+- **最小有效 GNU C：** `int probe(void) { int x=1; *(&x)=2; if (x==1) return 11; return 22; } int main(void){ return probe(); }`。`cc -std=gnu11 -O0 -no-pie -x c ...i -o gnu.bin` 成功、原生退出 **22**；相同预处理 `.i` 经 `build/debug/bin/minic-cc --target=x86_64-linux -S`、宿主 GNU AS/link 成功，运行却退出 **11**。证据临时文件 `/tmp/minic-f11-address-jyoZgd/{indirect.i,gnu.bin,minic.s,minic.bin}`；MiniC `.s` 能看见 `*(&x)=2` 真实写入内存，随后的条件已被 Core 折叠为直接返回常量 11，故不是机器 store 丢失或不同优化级的合理差异。
+- **源码所有权链：** `parser_expression.c` 保留 `ADDRESS_OF`/`DEREFERENCE` 的合法 lvalue；`core_lower_address.c`（约 `:341–353`）将 `*&object` 直接递归降低成底层 `LOCAL` 地址。普通 `ADDRESS_OF LOCAL` 在 `core_lower_expression.c:383–389` 会先调用 `minic_core_local_fact_escape`，但该优化抵消路径完全绕过 escape 记录；`core_lower_assignments.c:174–179` 只对语法上直写 `MINIC_EXPRESSION_LOCAL` 的赋值清旧事实，间接 `*(&x)` 仍被认为 `x==1`；`core_lower.c:674–685` 将 `core_const_eval_integer_with_locals` 的过时结果用来选择单分支。相关 A8-05、MC-033 是不同的 CFG/更新缺口，不能靠另一个局部补丁静默合并编号。
+- **修复门槛：** 明确表达式 canonical lvalue 身份和语义 local write/escape effect，在 `*&` 抵消之前或之后保证 fact invalidation 一致；不要机械关闭地址消除优化以牺牲性能，也不能仅针对 `x` 名称做特例。最少覆盖 `*(&x)`、`&*(&x)`、字段/数组 lvalue、volatile 与嵌套赋值、同一 local 经指针变量/控制流分支重写，逐项 GNU-native diff 后在 Core effect/facts 层收敛，避免每一种 source 表达式各造一种失效处理。
+
+### MC-080 函数指针间接变参调用拒绝合法的 Aggregate 实参
+
+- **状态与证据：** `OPEN`，P2，`LOCAL-COMPILE-DIFF`，范围 Frontend→Core→五 Target 的 GNU C 间接调用 ABI 准入；这是一项有效源码的编译覆盖缺口，**没有**执行时 wrongcode/ELF 差分。既有 MC-057 空 Record、MC-059 RV64 LP64D union FP aggregate 是不同根因。
+- **同源控制矩阵：** `struct Pair { long x; }; typedef int (*V)(int,...); int via_ptr(V fn){ struct Pair p={7}; return fn(1,p); }`；GNU `-std=gnu11 -Wall -Wextra -Werror -fsyntax-only` PASS。同一 fixture 在 `/tmp/minic-rv64-weak-Nfhwou/rv_variadic_aggregate.c` 由三个宏隔离：`CASE_INDIRECT_VARIADIC`：MiniC x86/RV32/RV64/AArch64/Loong 五目标 **0/5**，一致报 `unsupported variadic call argument type`；`CASE_DIRECT_VARIADIC`：**5/5**；`CASE_INDIRECT_FIXED`：**5/5**；三个 GNU C case **3/3 PASS**。负责人独立再次确认 x86 indirect FAIL、RV64 direct PASS。
+- **源→机器链：** `src/frontend/parser_postfix.c:259–264` 在间接变参 `...` 后直接筛选 `integer/pointer/double`，抛弃合法 Record，即便 `minic_parser_apply_default_argument_promotion` 对非标量已经原样成功返回。直接调用走 `parser_expression.c` 的独立参数处理，允许 Record。**Core 也有独立阻断：** `core_lower_calls.c:833–851`、`core_ir_verify.c:849–867` 的 direct variadic 允许 OBJECT，间接路径的 `core_lower_calls.c:1095–1117`、`core_ir_verify.c:955–973` 仍只接受 scalar。RV64 `src/target/riscv64/legalize.c:357–444`、`call_emit.c:405–414` 对非 direct 的 unnamed Record 还有机器端二次拒绝，故仅放开 Parser 不构成实现完毕。需要核查其他四目标真 psABI 能力，不能凭 source 0/5 推断所有后端已经准备好了。
+- **设计与验收门槛：** 将 direct/indirect 的 CALL 签名、变参默认提升、aggregate snapshot 在统一 Core CallView 合同内表达，随后各目标按真实 ABI 放置，机器防伪仍保留。测试 indirect variadic/fixed、direct variadic、空/packed/多寄存器 Record、不同 ABI 和返回值；GNU C→MiniC -S→目标 GNU AS/ELF→GNU caller/provider/QEMU 或原生运行。不得用拒绝合法调用作为规避后端设计的默认行为。
+
+### MC-081 RV32 接受 GNU constructor 却漏发初始化注册
+
+- **状态与证据：** `OPEN`，P1，`ASM-ONLY`；有效 GNU C 的五目标 `-S` 均成功，RV32 汇编**缺少 `.init_array`**，其他四目标实际存在。宿主 GCC 编译/执行该 C 退出 0；本地无 RV32 GNU GAS/LD/readelf/QEMU，**不能据此说已观察 RV32 运行 exit1 或 ELF 失败**。
+- **同源探针：** `/tmp/minic-rv64-weak-Nfhwou/rv_constructor.c/.i`：`static int seen; __attribute__((constructor)) static void initialize(void){ seen=73; } int main(void){return seen!=73;}`。RV32 `constructor_riscv32-linux.s` 存在 `initialize:`，整份 `.s` 无 `.init_array`；RV64 `constructor_riscv64-linux.s` 同时有 `initialize:` 与 `.section .init_array,"aw",@init_array`，x86/A64/Loong 同样保留注册段。不是把未发射函数误报为未注册。
+- **生产者与消费者：** Frontend `parser_function.c`（约 `:571–575,2193–2195`）已将 GNU constructor 属性保存到 Function 声明。RV32 `rv32_emit.c:908–918` 的函数 visitor 只发函数正文，不输出 init_array 注册；对照 RV64 `codegen_function.c:88–93`、Common Direct A64/Loong `direct_function_emit.h:105–108`、x86 `codegen.c:563–566` 均有真实输出。当前问题是目标发射职责**没消费现成属性**，不是需要发明新 Source AST 或新 Core opcode。
+- **修复门槛：** RV32 使用已有函数声明属性生成符合 GNU ELF32/ILP32 的 `.init_array` 入口，处理 `static`、priority、section/alignment、多个 constructor 的保活/次序，不复制整个 Common 全局分类算法。加入目标 GNU GAS/readelf `-SW -Wr -Ws` 与可运行启动/初始化顺序差分，再升级验证级别。
+
+### MC-082 x86 SysV 三字节 Record 按值参数与返回被拒绝
+
+- **状态与证据：** `OPEN`，P2，`LOCAL-COMPILE-DIFF`；同一有效 GNU C 的按值 `struct Three { unsigned char a[3]; }` 参数和返回，宿主 `gcc -std=gnu11 -O0 -no-pie` 编译 PASS、原生 exit42（fixture 预期），MiniC `--target=x86_64-linux -S` exit1 `cannot allocate or verify Core function frame`，不是已发射错误码。
+- **具体门控：** `src/target/x86_64/abi.c:151–168:minic_x86_64_one_gp_record` 仅将恰好 1/2/4/8 字节 Record 放入一个 GP class；`call_plan.c:25–53` 对合法 3B INTEGER-class Record 走到 `bytes<=16` 的拒绝路径。`MINIC_M1_TRACE=1` 确认 `MINIC_X86_ARG_RECORD_CLASS_REJECT record=1 bytes=3 align=1`，`function=sum_three stage=incoming-abi`。证据 `/tmp/minic-f11-x86-abi-record3.c`，负责人再次执行 GCC PASS、MiniC -S FAIL。返回值和 outgoing 调用也须按 SysV class/寄存器合法性审查，不能断言当前三者全都独立错拒。
+- **独立返回门控已补证：** `/tmp/minic-f11-x86-abi-return3.c` 只定义/调用返回 `struct Three` 的 `return_three`，GNU native 编译 PASS；MiniC x86 -S 仍 FAIL，但不同于 incoming，其 trace 为 `Core terminator unsupported: function return_three block=0 kind=0 has_terminator=1 return_object=1`。因此 **incoming 和 return 两个实际消费者** 均已独立拒编；outgoing-only 及跨编译器对象 ABI 仍待核，不把未测分支写成实证。
+- **修复门槛：** 按真实 SysV ABI 的 eightbyte INTEGER classification 和有效 byte extent 定义封装，联动参数装入、outgoing、返回、padding/未初始化高字节保守处理；避免只扩大一个判定集合。以 1..16B 多组 odd-size Record、数组/packed、不同对齐、跨 GCC/MiniC caller–callee 的 `.o` 双向 GNU ELF 和 native 执行验证。与 MC-057 空 Record（大小为零）不同。
+
+### MC-083 已完整声明的 char 数组再以省略边界字符串定义被错拒
+
+- **状态与证据：** `OPEN`，P2，`LOCAL-COMPILE-DIFF`，Frontend source declaration/initializer 分工。合法 GNU `char a[4]; char a[] = "abc";` 的同一 `.i` GNU `gcc -std=gnu11 -c` EXIT0，MiniC x86 `-S` EXIT1，明确报 `external array initializer requires braces or a character string`；没有生成过机器码，不称错码。负责人在本轮复验相同 `/tmp/f11_char_redecl_bound.i`。
+- **完整分支原因：** `src/frontend/parser_external_object.c:115–126:parse_external_integer_array_definition` 重用早前的完整 `[4]` GlobalObject 时，合法地把 `element_count` 沿用为 4、`inferred_bound=false`；但后续 `:174–185` 的无花括号字符串专用入口只允许 `if (inferred_bound && char && STRING_LITERAL)`，使“先 incomplete 再推断”与“早已有 complete bound”在词法准入上错误耦合。`char a[]="abc"` 和 `char a[4]="abc"` 两个独立正控当前 MiniC 均 PASS，这个混合 redeclaration 才触发。
+- **修复门槛：** 将“允许 char string initializer”与“是否应推断/完成 ArrayType”分为两个事实；重用已有完整 bound 时验证字节数、结尾 NUL、超限/截断、tentative/extern 多次声明与显式 GNU section 属性，不能只把 `&& inferred_bound` 删除后再次 complete 既有类型。补 GNU C→MiniC -S→GNU AS/ELF/native 和多 TU redeclaration 正反例；Common GlobalObject/initializer 所有权不可复制一份。
+
+### MC-084 x86 Record copy 逐字节展开带来可观机器码膨胀
+
+- **状态与证据：** `DEBT`，P2，`GNU-NATIVE-ABI+SIZE`，目前**未证语义错码**。对同一 4096B Record `*dst=*src`，MiniC 和 GNU GCC 分别生成 x86 `.s`，交给同一个 GNU C driver 和 GNU AS/LD，双方 native 都返回 fixture 预期 exit42。不是依赖“代码多所以一定有 bug”的主观评价。
+- **可重复测量：** `/tmp/minic-f11-x86-record-copy4096-lib.c`、`...-driver.c`。`gcc -std=gnu11 -O0 -no-pie -S` 的 `.s` 为 **65 行 / 1,079B**；MiniC `--target=x86_64-linux -S` 为 **8,223 行 / 196,877B**。两程序包含相同 driver 的 `.text`：GNU **5,485B**，MiniC **65,264B**，二者均 native PASS。这是特定 unoptimized x86 4KiB copy 的**实测代码体积差**，不等同全 Linux 程序均同比膨胀。
+- **真实实现重叠：** `src/target/x86_64/machine_emit.c:873–916` 的 RECORD_COPY 按每字节展开 `movzbq`+`movb`；`:837–871` 的 RECORD_LOAD 也逐字节。`machine_call.c:75–90` 的 outgoing aggregate copy 和 `machine_emit.c:637–651` 的 parameter-object copy 各有字/尾字节手写循环。Common `direct_instruction_semantics.c:85–117:minic_multi_direct_record_copy_extent` 已验证地址、类型和 DataLayout 范围，AArch64/Loong 已在生产消费它；x86 目前重新实现同一形状判定，**但 Common 当前有 16MiB cap 而 x86 本地无同等 cap**，不能未核接受域就机械替换。
+- **清理与验收：** 先将机器拷贝策略封装成可复用 exact-byte emitter/shape contract（SSA/ABI 与 overlap/volatile/unaligned 边界明确），再让大对象走 counted loop，小对象按安全成本展开；同步删旧逐字节大循环和重复形状判定。测试 1、3、7、8、9、2048、4096、16384B、packed、volatile、src/dst 别名、record-return/vararg，并用同源 GNU `.text`、ABI caller/provider 和 native 结果差分。不能直接套用 Loong/A64 的指令或强加其 cap。
+
+### MC-085 GNU error/warning 函数属性被保留但没有可达调用诊断消费者
+
+- **状态与证据：** `OPEN`，P1，`LOCAL-COMPILE-DIFF`；不是 GNU C 合法性问题的猜想，而是源端属性已保存、真实调用的编译诊断和 GCC `-O0/-O2` 存在确定差异。尚未与 Linux 原冻结 `.i` 全集对照具体 `__compiletime_error` 名单，不能声称已定位 Linux 链接故障唯一根因。
+- **生产者/消费者：** Frontend `src/frontend/ast_function.c:208–241` 保存 `error_message/warning_message`，`parser_function.c:764–788` 将 GNU 函数属性持久化。全 `src/` 对 `warning_message` 除 set/free 外没有读取，对 `error_message` 的唯一读取在 `src/compiler/inline_integer.c:192` 仅用于特化准入，**没有**可达 CALL 的 error/warning 发诊断者。此处语义丢失不是源端拒绝不了 attribute，而是存活 CALL 被 Compiler/Core 准入时忘记消费属性。
+- **差分矩阵：** `/tmp/minic-f11-gnu-error-attr.c` 声明 `extern void fail(void) __attribute__((error("f11 diagnostic must fire"))); int main(){fail();return 0;}`：GNU `-O0/-O2 -S` 均 EXIT1 并输出精确 error，MiniC x86 `-S` EXIT0 且保留 CALL；`if(0) fail()` 死调用两编译器在两级 GCC 对照下均 EXIT0；`/tmp/minic-f11-gnu-warning-attr.c` 的 `warning("f11 warning must fire")` 活调用 GNU EXIT0 但输出 warning，MiniC EXIT0 且**无诊断**。负责人本轮独立复验 GCC-O0 vs MiniC error/warning。
+- **修复门槛：** 在 Core 的合法可达调用集合建立后查源函数 diagnostic-attribute facts，未到达或被常量 CFG 删除的调用不得误报；不可在 Parser 原始 CALL 一律拒绝，也不能因为无常规优化而要求模拟 GCC -O2 全部消除。保证直接/间接 CALL、static clone、符号别名、GNU `__compiletime_error` 语义，必须分别处理函数属性应用于声明与经指针的可见性。将这类 diagnostic-only source policy 留在编译期分析合同，不泄漏为机器指令/SSA pseudo-call。新增原始 `.i` 的 GNU diagnostic 差分正反例，不混淆 `warning` 诊断级别与 error 退出码。
+
+### MC-086 x86 PIC 隐藏的未定义 Weak 对象与函数错用 PC32 重定位
+
+- **状态与证据：** `OPEN`，P1，`GNU-LD/ELF-ORACLE`，A9-08 从 SOURCE/GNU -S 调查升级为**真实 GNU PIE 链接失败**。不能将 RV64 同形 source/ASM 风险直接升级为 RV64 ELF 错码：仍缺该目标 GNU GAS/LD/QEMU 实验。
+- **最小源与实际 ELF：** `/tmp/minic-f11-x86-pic-hidden-undef-weak-data.c` 中 `extern int hidden_data __attribute__((weak,visibility("hidden"))); int probe_weak_data(void){return (&hidden_data==0)?42:1;}`；同源 GNU `-fPIC -S` 发 `hidden_data@GOTPCREL(%rip)`，MiniC `--target=x86_64-linux -fPIC -S` 发 `leaq hidden_data(%rip),%rax`。GNU `-fPIC -pie` 链接 PASS，运行 exit42，MiniC `.s` 经 GNU AS 产生 `R_X86_64_PC32 hidden_data -4`，GNU LD 报 `relocation R_X86_64_PC32 against undefined hidden symbol` FAIL。负责人重跑 GNU/MiniC `-S`、GNU LD 差分 4 步确认。
+- **已有仓库 fixture 补强：** `tests/compiler/c0/gnu_weak_undefined_live.c` 原已覆盖 hidden missing **object 和 function**，但 `run-gnu-weak-undefined-live.sh` 只覆盖 `-fno-pie`。将同 fixture+`gnu_weak_undefined_provider.c` 的 `-fPIC -pie` 交 GNU C 或 MiniC `.s`：GNU LINK/RUN exit0，MiniC 因 `hidden_missing_function` 的 PC32 GNU LD FAIL；两个符号的 GNU 均走 GOTPCREL、MiniC 均 direct `leaq`。所以这是**测试矩阵缺 PIC 而非需要发明新样例**。
+- **根因与修复门槛：** `src/target/target_info.c:509–565` 对 hidden symbol 给 `nonpreemptible=true` 且独立给 `undefined_weak=true`；`src/target/x86_64/machine_emit.c:706–710` 只问前者便 direct PCREL，忽略 weak 零地址合法性。AArch64 `residual_emit.c` 已有显式排除 weak 的对照策略。应在统一的 ELF reference fact/TargetInfo 决策中同时考虑 visibility、undefined weak、PIC/PIE、强定义和 GOT/PCREL，保留不同 ISA 的具体 relocation；新增 existing fixture 的 GNU `-fPIC -pie` `.o`、`readelf -Wr`、有/无 provider、static/hidden strong、运行检查。不能通过将 C weak 视为强定义或强行放宽 GNU LD 来掩盖。
+
+### MC-087 Common LP64 单函数 257 条合法 Inline ASM 硬拒
+
+- **状态与证据：** `OPEN`，P2，`LOCAL-COMPILE-DIFF`；`eddd49c` 的 MiniC、宿主 GCC 同一无依赖 `nop` C 文件，严格 255/256/257 边界差分。合法 source `__asm__ __volatile__("nop");` 逐条出现一次，GCC `-std=gnu11 -fsyntax-only` **3/3 PASS**；MiniC AArch64/LoongArch64 目标 255/256 条 **全部 -S PASS**，发出的机器汇编中恰含 255/256 个 `nop`，**257 条 -S FAIL**，诊断 `Core instruction/ABI not yet supported by M1 emitter`。只是编译拒绝，未跑两 ISA GNU AS/ELF/QEMU。
+- **根因：** `src/target/common/direct_preflight.c:15–23` 在栈上固定 `bool used[256]` 并把 `fn->inline_asm_count > 256` 拒绝，生产由 `direct_function_plan.c:41–44` 同时供 A64/Loong 使用。`src/core/core_ir.c:822–853` 的 InlineAsm arena 已按实际数量动态扩容，语义和 ISA 没有 256 指令的上限，属于旧实现容量上限泄漏为语言能力。
+- **修复门槛：** 用以 `fn->inline_asm_count` 为界、checked allocation 的位图执行 exactly-once Core ASM ID coverage，保留孤儿/重复引用、越界、内存分配失败时 fail-closed；先测 255/256/257/512 条 valid nop 与 deliberately malformed synthetic Core ASM ID，再做 A64/Loong 真 GNU GAS/readelf、必要时运行 `nop` 正控。测试输入 `/tmp/f11_lp64_asm_{255,256,257}.i`（已移至 /tmp，不在仓库）。
 
 ## 已核对并排除的误判（不要在未有新证据时重新打开）
 

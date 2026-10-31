@@ -293,6 +293,37 @@ Core effect/facts、三个 Compiler specialization、Common、五目标 GNU ASM/
 F8 的历史逐文件覆盖清单保留原 337/337 数字，不能偷偷改口径。全部新增代码与测试必须在提交的
 exact HEAD 上复验；GNU ELF/QEMU 尚未覆盖的 ISA 不因 C 源码可编译而升级结论。
 
+### 第十一轮：从大批实证反推当前 IR/后端的真实分层（基线 `eddd49c`）
+
+本轮仅扫描、记录、补真实差分；**没有改变任何编译器源码**。完整 50 个新清理索引见
+[A11 总入口](README.md#第十一轮全编译器复扫实证问题与大量清理候选)，
+十大独立动态/静态缺陷见 [MC-078～MC-087](minic-issue-register.md)。
+阅读 `src/` 336 个当前 C/H，及两 CLI，区分 R1 清点、R2 函数实现、GNU C/MiniC 差分和
+GNU native/ELF oracle；没有将“全文件清单”误说为“每行已证明正确”。
+
+| 阶段/边界 | 本轮实际发现的跨层事实 | 首先清理什么、不能马上删什么 |
+| --- | --- | --- |
+| C0 语义与声明 | C0 已经拥有完整 declaration、Function attr、ArrayType 语义；MC-083 显示数组声明的 `bound inference` 竟被同时当字符串语法开关；MC-085 显示 GNU error/warning 虽存却无可达 CALL 消费者 | 让语义准入与声明状态分离；建立 diagnostic-attribute 使用点；清八个零生产 caller relocation 包装时必须核 `tools/dev`/CI 锚点 |
+| Specialization → Core | 三种 clone 已走单一 constructor 链，但各自建 FunctionBody owner index，实例化 CALL 仍修改共享 C0；Core 外侧的 GNU ASM 根遍历还重复两套文本识别 | 先用 `(caller FunctionId, CALL ExpressionId)` 保留实例事实（MC-006～008），再合 owner/index/root；MC-001 Expr arena UAF 不能因为“减少重复扫描”而略过 |
+| Core value/effect/CFG | MC-079 证实 `*&` 抵消与 local facts 逃逸/赋值无统一 effect 合同；`core_lower_const_facts.c` 有 54 行静态不可达分支；subtree membership 与 Core intern 有跨函数/跨表重复线性工作 | 首先确保任何 canonical lvalue write 都正确杀 facts，再删可证死代码和抽索引；不让性能重构改变常量推断强度或 reentry/label 根 |
+| Core 仍携 Source 身份 | `CoreCallSignature.function_type_id` 有 Core verifier 和 Common CallView 真消费者；`FIELD_ADDRESS` 的布局/对象对齐信息尚不完全自证；Loong Machine 回读 C0 GNU ASM、按特殊 CALL 名辨 builtin | 统一 IR 的方向是 **将这些 consumer 所需的函数签名、record extent/offset、ASM 资格、builtin/constant witness 编成 Core 可验证的目标中立语义事实**，不是删光类型，也不是让 Machine 不作防伪 |
+| Common 与 ABI plan | 已有 GlobalEmissionPlan、CoreObjectStoragePlan、Direct LP64 PreparedCall、通用 CFG 可达性；但 RV Global 仍有独立 `.bss.*` 分段、A64/Loong 在 plan 后重新分类 Record，x86 RECORD_COPY 又自造 extent/byte loops | 分支逐次交接现成 plan，验证 GNU GAS/ELF 与各 ISA ABI；拒绝不必要的第二套 Global IR 或一个“万能机器 memcpy” |
+| Machine/ELF | MC-086 证 x86 hidden undefined weak 的 ELF binding facts 被不完整消费，PC32 导致 GNU PIE 链接失败；MC-081 证 RV32 Function constructor 已存 C0 但没有机器注册；MC-084 量化 x86 4KiB copy 的膨胀 | 需要一个由 TargetInfo 统一给出但 ISA 消费不同 relocation 的 symbolic reference plan；ctor 注册属于 per-target emitted global consumer；机器 code-size 需用 GNU native 正确性保护后精简 |
+| GNU ASM | x86 source 109 族中 88 仍 legacy Machine 重匹配，MC-078 源/机不一致；Loong typed SIMD 仍多次 parse；A64/Loong 共用 preflight 硬编码 ASM 256 上限（MC-087） | 逐族把 source-policy 的 `form_id+variant+validated operands` 迁为 Machine 唯一 consumer；Machine 防伪、ELF alternate/exception-table side effects 保留，动态容量不能变成语言硬限制 |
+
+**由此确定的统一 IR 判据：** 一项 C 语义事实只应由拥有它的前一阶段解析/验证一次，
+Core 对后续 consumer 输出稳定、已校验的事实与身份；目标 ABI/DataLayout 则把这些事实投射成
+寄存器、栈、重定位及机器指令，而非重新猜 C AST 的表达式形状或凭 callee 字符串推算语义。
+这不意味着 Core 可以没有 type/Record/ABI payload；恰恰相反，**需要保留仍影响正确性的类型和
+布局信息，但尽量以 Core 自己可验证、可持久化的形态存在**。当前 `Core Function IR` 与
+`GlobalObject` 并行发射全局数据也是现实约束，不能先造一个第二套 Global IR 来掩盖重复。
+
+**清理依赖顺序不是固定优先级排行：** MC-001/006～008/079 的所有权/错码修复和现有
+GNU/ELF 差分要优先保护；随后可以相互独立地做 Core 54 行死代码、Frontend 八个 wrapper
+（先处理历史脚本）、x86 局部 matcher 去重；跨阶段 ABI/ELF/ASM 统一应先迁使用点再删旧实现。
+未测试的 RV GNU GAS/QEMU、Loong/A64 GNU ABI ELF、合成 Core 负例与多目标量化基准
+均是明确未完成的验收点，**不是已完成的证据**。
+
 ## 8. 持续维护流程
 
 1. 改一个阶段/Target/函数之前，在 [函数契约台账](minic-function-contract-register.md) 确认读写集与生命周期；没有的先补。
