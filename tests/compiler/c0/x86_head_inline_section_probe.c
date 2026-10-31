@@ -49,3 +49,34 @@ __attribute__((section(".init.text")))
 unsigned long probe_nested_later(void) {
     return probe_nested_middle(3UL);
 }
+
+/* Linux overflow.h: the _Bool call only gains its range-specialized clone
+ * after the integer and symbolic passes. A sectioned integer clone of the
+ * enclosing helper has no Boolean parameter facts, but still needs the
+ * late-created Boolean callee duplicated into its own section. */
+static inline _Bool probe_overflow_expected(_Bool overflow) {
+    return __builtin_expect(!!overflow, 0);
+}
+
+static inline unsigned long probe_overflow_product(unsigned long n,
+                                                   unsigned long size) {
+    unsigned long bytes;
+    if (__builtin_expect(!!probe_overflow_expected(
+            __builtin_mul_overflow(n, size, &bytes)), 0))
+        return ~0UL;
+    return bytes;
+}
+
+static inline unsigned long probe_overflow_wrapper(unsigned long n) {
+    return probe_overflow_product(n, 2UL);
+}
+
+__attribute__((section(".head.text")))
+unsigned long probe_overflow_early(void) {
+    return probe_overflow_wrapper(3UL);
+}
+
+__attribute__((section(".init.text")))
+unsigned long probe_overflow_later(void) {
+    return probe_overflow_wrapper(3UL);
+}

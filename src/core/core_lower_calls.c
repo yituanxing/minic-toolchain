@@ -32,6 +32,55 @@ static bool core_inline_candidate_section_matches(
     return wanted == NULL || memcmp(candidate->section_name, wanted, length) == 0;
 }
 
+/* A source-AST call can point to a clone from another caller's section. The
+ * specialization planners pre-create an equivalent section-local clone; use
+ * that precise integer/symbolic/Boolean identity before searching for more
+ * caller-specific facts. Zero-known-integer variants must not fall back to
+ * an unsupported generic Linux inline helper merely because 0 > 0 is false. */
+static const MinicFunction *core_inline_same_facts_section_clone(
+    const MinicCoreLowerContext *context,
+    const MinicFunction *source,
+    const MinicFunction *current) {
+    const MinicC0Program *program;
+    size_t index, param;
+
+    if (context == NULL || context->body == NULL ||
+        context->body->program == NULL || source == NULL || current == NULL)
+        return current;
+    if (core_inline_candidate_section_matches(context, source, current))
+        return current;
+    if (!current->is_integer_specialization) return source;
+    program = context->body->program;
+    for (index = 0U; index < program->function_count; ++index) {
+        const MinicFunction *candidate = &program->functions[index];
+        bool same = true;
+        if (!candidate->is_integer_specialization ||
+            candidate->specialization_source != current->specialization_source ||
+            candidate->parameter_count != source->parameter_count ||
+            !core_inline_candidate_section_matches(context, source, candidate))
+            continue;
+        for (param = 0U; param < source->parameter_count; ++param) {
+            if (candidate->specialization_integer_known[param] !=
+                    current->specialization_integer_known[param] ||
+                (current->specialization_integer_known[param] &&
+                 candidate->specialization_integer_bits[param] !=
+                    current->specialization_integer_bits[param]) ||
+                candidate->specialization_symbolic_known[param] !=
+                    current->specialization_symbolic_known[param] ||
+                (current->specialization_symbolic_known[param] &&
+                 candidate->specialization_symbolic_expression[param] !=
+                    current->specialization_symbolic_expression[param]) ||
+                candidate->specialization_boolean_range_known[param] !=
+                    current->specialization_boolean_range_known[param]) {
+                same = false;
+                break;
+            }
+        }
+        if (same) return candidate;
+    }
+    return source;
+}
+
 /* M85_RECORD_CALL_ARGUMENT: materialize a by-value record argument as a
    private Core object snapshot before later arguments are evaluated. */
 static MinicCoreLowerStatus lower_record_call_argument_object(
@@ -263,13 +312,12 @@ static const MinicFunction *core_select_transitive_integer_specialization(
         known[parameter_index] = true;
         bits[parameter_index] = converted_value.bits;
     }
-    best = core_inline_candidate_section_matches(context, source, current_callee)
-        ? current_callee : source;
+    best = core_inline_same_facts_section_clone(context, source, current_callee);
     best_known_count = 0U;
-    if (best == current_callee && current_callee->is_integer_specialization) {
+    if (best->is_integer_specialization) {
         for (parameter_index = 0U; parameter_index < source->parameter_count;
              ++parameter_index) {
-            if (current_callee->specialization_integer_known[parameter_index]) {
+            if (best->specialization_integer_known[parameter_index]) {
                 best_known_count += 1U;
             }
         }
@@ -422,12 +470,11 @@ static const MinicFunction *core_select_transitive_symbolic_specialization(
             &actual_symbol[i],
             0U);
     }
-    best = core_inline_candidate_section_matches(context, source, current_callee)
-        ? current_callee : source;
+    best = core_inline_same_facts_section_clone(context, source, current_callee);
     best_symbol_count = 0U;
-    if (best == current_callee && current_callee->is_integer_specialization) {
+    if (best->is_integer_specialization) {
         for (i = 0U; i < source->parameter_count; ++i) {
-            if (current_callee->specialization_symbolic_known[i]) {
+            if (best->specialization_symbolic_known[i]) {
                 best_symbol_count += 1U;
             }
         }
@@ -557,11 +604,10 @@ static const MinicFunction *core_select_boolean_range_specialization(
             minic_core_lower_boolean_range_expression(
                 context, minic_c0_call_argument(expression, i), 0U);
     }
-    best = core_inline_candidate_section_matches(context, source, current_callee)
-        ? current_callee : source;
-    if (best == current_callee && current_callee->is_integer_specialization) {
+    best = core_inline_same_facts_section_clone(context, source, current_callee);
+    if (best->is_integer_specialization) {
         for (i = 0U; i < source->parameter_count; ++i) {
-            if (current_callee->specialization_boolean_range_known[i]) {
+            if (best->specialization_boolean_range_known[i]) {
                 best_count += 1U;
             }
         }
