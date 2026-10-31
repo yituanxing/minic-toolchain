@@ -20,6 +20,13 @@ readelf -rW "$work/head.o" > "$work/head.reloc" || fail 'readelf non-PIE'
 sed -n '/\.rela.head.text/,/Relocation section/p' "$work/head.reloc" \
     | grep -Eq 'R_X86_64_32S.*kernel_link_address_probe_anchor' \
     || fail '.head.text global is not GNU absolute signed32 relocation'
+sed -n '/\.rela.head.text/,/Relocation section/p' "$work/head.reloc" \
+    | grep -Eq 'R_X86_64_PC32.*kernel_head_direct_descriptor' \
+    || fail '.head.text direct data access did not get RIP-relative relocation'
+if sed -n '/\.rela.head.text/,/Relocation section/p' "$work/head.reloc" \
+    | grep -Eq 'R_X86_64_32S.*kernel_head_direct_descriptor'; then
+    fail '.head.text dereferenced global still has unmapped high-half address'
+fi
 sed -n '/\.rela.text/,/Relocation section/p' "$work/head.reloc" \
     | grep -Eq 'R_X86_64_PC32.*kernel_link_address_probe_anchor' \
     || fail 'regular .text changed its established PC-relative relocation'
@@ -37,4 +44,4 @@ if sed -n '/\.rela.head.text/,/Relocation section/p' "$work/pie.reloc" \
     | grep -Eq 'R_X86_64_32S.*kernel_link_address_probe_anchor'; then
     fail 'PIE .head.text unexpectedly received kernel absolute relocation'
 fi
-echo 'X86_KERNEL_HEAD_LINK_ADDRESS=PASS head=R_X86_64_32S normal=R_X86_64_PC32 PIE=no_32S relocated_runtime=PASS'
+echo 'X86_KERNEL_HEAD_LINK_ADDRESS=PASS head_link=R_X86_64_32S head_direct=R_X86_64_PC32 normal=R_X86_64_PC32 PIE=no_32S relocated_runtime=PASS'

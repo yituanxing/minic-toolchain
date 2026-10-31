@@ -657,7 +657,9 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
          * retain the absolute kernel VMA (GNU -mcmodel=kernel R_X86_64_32S),
          * never the relocated runtime address produced by RIP-relative LEA.
          * Leave all ordinary, PIC, and non-head symbol materialization alone. */
-        if (frame->kernel_head_link_addresses)
+        if (frame->kernel_head_link_addresses &&
+            !(frame->kernel_head_direct_data_globals != NULL &&
+              frame->kernel_head_direct_data_globals[ins->value.global_id]))
             return fprintf(out, "  movq $%s, %%rax\n",
                            fn->globals[ins->value.global_id].name) >= 0 &&
                    x86_value_store(out, frame, ins->result);

@@ -67,6 +67,92 @@ static bool x86_adjacent_direct_object_address(
            (minic_type_is_integer(stored) || minic_type_is_pointer(stored));
 }
 
+/* Resolve a direct memory operand back through Core's address-only steps.
+ * This is deliberately not a general pointer/alias analysis: a LOAD of a
+ * pointer, a PHI, or a function argument stops the proof. In particular,
+ * link-time arithmetic in __startup_64 and fixup_pointer must remain VMA
+ * arithmetic even though ordinary .head.text globals are accessed at their
+ * displaced physical addresses. */
+static MinicCoreGlobalId x86_head_memory_global(
+    const MinicCoreFunction *fn, const MinicCoreInstruction *const *defs,
+    MinicCoreValueId value) {
+    size_t depth;
+    for (depth = 0U; depth < 32U && value < fn->value_count; ++depth) {
+        const MinicCoreInstruction *ins = defs[value];
+        if (ins == NULL) break;
+        switch (ins->kind) {
+        case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS:
+            return ins->value.global_id;
+        case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS:
+            value = ins->value.field_address.base;
+            continue;
+        case MINIC_CORE_INSTRUCTION_POINTER_OFFSET:
+            value = ins->value.pointer_offset.base;
+            continue;
+        case MINIC_CORE_INSTRUCTION_SCALAR_BITCAST:
+        case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION:
+            value = ins->value.operand;
+            continue;
+        default:
+            break;
+        }
+        break;
+    }
+    return MINIC_CORE_GLOBAL_INVALID;
+}
+
+/* A global used as a real LOAD/STORE base in pre-mapping head code must be
+ * materialized relative to RIP, including other uses of the same global
+ * passed to an out-of-line data-access helper. Unreferenced head globals and
+ * address-only arithmetic retain the existing absolute-link VMA policy. */
+static bool x86_head_find_direct_data_globals(
+    const MinicCoreFunction *fn, const bool *reachable, bool *direct) {
+    const MinicCoreInstruction **defs;
+    size_t i, j;
+    if (fn->value_count > SIZE_MAX / sizeof(*defs)) return false;
+    defs = (const MinicCoreInstruction **)calloc(
+        fn->value_count == 0U ? 1U : fn->value_count, sizeof(*defs));
+    if (defs == NULL) return false;
+    for (i = 0U; i < fn->instruction_count; ++i) {
+        const MinicCoreInstruction *ins = &fn->instructions[i];
+        if (ins->result != MINIC_CORE_VALUE_INVALID &&
+            ins->result < fn->value_count)
+            defs[ins->result] = ins;
+    }
+    for (i = 0U; i < fn->block_count; ++i) {
+        const MinicCoreBlock *block = &fn->blocks[i];
+        if (!reachable[i]) continue;
+        for (j = 0U; j < block->instruction_count; ++j) {
+            const MinicCoreInstructionId id = block->instructions[j];
+            const MinicCoreInstruction *ins;
+            MinicCoreValueId address = MINIC_CORE_VALUE_INVALID;
+            MinicCoreGlobalId global;
+            if (id >= fn->instruction_count) { free(defs); return false; }
+            ins = &fn->instructions[id];
+            switch (ins->kind) {
+            case MINIC_CORE_INSTRUCTION_LOAD:
+                address = ins->value.load.address;
+                break;
+            case MINIC_CORE_INSTRUCTION_STORE:
+                address = ins->value.store.address;
+                break;
+            case MINIC_CORE_INSTRUCTION_ATOMIC_LOAD:
+                address = ins->value.atomic_load.address;
+                break;
+            case MINIC_CORE_INSTRUCTION_ATOMIC_STORE:
+                address = ins->value.atomic_store.address;
+                break;
+            default:
+                break;
+            }
+            global = x86_head_memory_global(fn, defs, address);
+            if (global < fn->global_count) direct[global] = true;
+        }
+    }
+    free(defs);
+    return true;
+}
+
 static bool x86_emit_function(FILE *out, const MinicC0Program *program,
                               const MinicTargetInfo *target, const MinicFunction *declaration,
                               const MinicCoreFunction *fn, const MinicCoreFunctionFacts *facts,
@@ -77,6 +163,7 @@ static bool x86_emit_function(FILE *out, const MinicC0Program *program,
     size_t block_index;
     MinicCoreBlockWalk walk = {0};
     bool *reachable = NULL;
+    bool *head_direct_data_globals = NULL;
     size_t *function_value_use_counts = NULL;
     /* A diagnostic-only escape hatch enables a same-compiler A/B against the
      * former all-stack scalar path without changing any Linux Kbuild flags. */
@@ -139,6 +226,18 @@ static bool x86_emit_function(FILE *out, const MinicC0Program *program,
     frame.kernel_head_link_addresses = !target->position_independent &&
         declaration->section_name != NULL &&
         strcmp(declaration->section_name, ".head.text") == 0;
+    if (frame.kernel_head_link_addresses) {
+        head_direct_data_globals = (bool *)calloc(
+            fn->global_count == 0U ? 1U : fn->global_count,
+            sizeof(*head_direct_data_globals));
+        if (head_direct_data_globals == NULL ||
+            !x86_head_find_direct_data_globals(
+                fn, reachable, head_direct_data_globals)) {
+            x86_error(diag, path, "x86-64 cannot analyze early head data addresses");
+            goto done;
+        }
+        frame.kernel_head_direct_data_globals = head_direct_data_globals;
+    }
     if (declaration->section_name != NULL) {
         if (fprintf(out, ".section %s,\"ax\",@progbits\n", declaration->section_name) < 0)
             goto done;
@@ -380,6 +479,7 @@ static bool x86_emit_function(FILE *out, const MinicC0Program *program,
                      ".p2align 3\n  .quad %s\n", name) < 0) goto done;
     success = true;
 done:
+    free(head_direct_data_globals);
     free(function_value_use_counts);
     free(reachable);
     minic_x86_64_frame_destroy(&frame);
