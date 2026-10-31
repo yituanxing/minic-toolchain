@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Freeze genuine GNU Kbuild .i once; input SHA makes later MiniC replay cheap."""
-import argparse,concurrent.futures,hashlib,json,re,shlex,struct,subprocess,sys
+import argparse,concurrent.futures,hashlib,json,posixpath,re,shlex,struct,subprocess,sys
 from pathlib import Path,PurePosixPath
 def digest(p):
     h=hashlib.sha256()
@@ -126,6 +126,41 @@ def gnu_c_source_operands(tokens):
             result.append(value)
         i+=1
     return result
+def canonical_kbuild_owner_path(path):
+    """Normalize GNU Kbuild aliases, never an owner outside the build root."""
+    p=PurePosixPath(path)
+    normal=posixpath.normpath(path)
+    if (p.is_absolute() or normal in ("", ".", "..") or
+            normal.startswith("../") or normal.startswith("/")):
+        raise ValueError("GNU Kbuild owner escapes build root: "+path)
+    return normal
+def canonical_gnu_c_source_path(path):
+    """Permit in-tree lexical ../ aliases, not traversal outside source root.
+
+    Original Kbuild may cite /.../linux-6.6.143/arch/arm64/kvm/../../../
+    virt/kvm/kvm_main.c, while its owner manifest is `virt/kvm/kvm_main.o`.
+    For generated relative sources, the build root is the path boundary.
+    """
+    p=PurePosixPath(path)
+    normal=posixpath.normpath(path)
+    if not p.is_absolute():
+        if normal in ("", ".", "..") or normal.startswith("../"):
+            raise ValueError("GNU C source escapes build root: "+path)
+    else:
+        roots=[i for i,part in enumerate(p.parts)
+               if re.fullmatch(r"linux-\d+\.\d+\.\d+",part)]
+        if not roots:
+            # Original source absolute paths must belong to a recognizable
+            # Linux source tree. Kbuild-generated C has a build-relative
+            # source_ entry instead; an arbitrary /tmp/evil.c cannot become
+            # trusted merely by agreeing with a forged source_ assignment.
+            raise ValueError("GNU C source has no Linux source root anchor: "+path)
+        root=posixpath.normpath("/"+"/".join(p.parts[1:roots[0]+1]))
+        if not normal.startswith(root+"/"):
+            raise ValueError("GNU C source escapes Linux source root: "+path)
+    if not normal.endswith((".c",".i")):
+        raise ValueError("not a GNU C source path: "+path)
+    return normal
 def gnu_codegen_option_audit(tokens,minic_flags,target=None):
     """Partition *authentic* GNU .o.cmd codegen options without broad skips.
 
@@ -162,14 +197,20 @@ def unqualified_gnu_codegen_flags(tokens,minic_flags,target=None):
     return sorted(audit["mandatory"]+audit["optimization"]+audit["debug_metadata"])
 def gnu_argv(text,gcc,obj,out,target=None):
     t=gnu_command_tokens(text,gcc)
+    cmd_keys=re.findall(r"^(?:savedcmd|cmd)_([^\n]+?)\s*:=",text,re.M)
+    if len(cmd_keys)!=1 or canonical_kbuild_owner_path(cmd_keys[0])!=obj:
+        raise ValueError("GNU Kbuild .cmd owner does not match canonical C owner: "+obj)
     outputs=[t[i+1] for i,v in enumerate(t[:-1]) if v=="-o"]
     if len(outputs)!=1:
         raise ValueError("missing/ambiguous GNU output: "+str(outputs)[:150])
     # The full C-owner inventory is already derived from authentic GNU Kbuild
     # source metadata; a noncanonical temporary -o is not an extra C owner.
     sources=gnu_c_source_operands(t)
-    source=re.findall(r"^source_"+re.escape(obj)+r"\s*:=\s*(\S+\.c)\s*$",text,re.M)
-    if len(sources)!=1 or source!=sources:
+    source=re.findall(r"^source_([^\n]+?)\s*:=\s*(\S+\.c)\s*$",text,re.M)
+    if (len(sources)!=1 or len(source)!=1 or
+            canonical_kbuild_owner_path(source[0][0])!=obj or
+            canonical_gnu_c_source_path(sources[0])!=
+            canonical_gnu_c_source_path(source[0][1])):
         raise ValueError("missing/ambiguous GNU C source for "+obj+": "+str(sources)[:180])
     admitted=MINIC_CFLAGS | (X86_CODEGEN_FLAGS if target=="x86_64" else set())
     flags=[v for v in t if v in admitted]
@@ -322,6 +363,77 @@ def main():
                 try:gnu_argv(bad,"gcc","lib/a.o",Path("lib/a.i"))
                 except ValueError:pass
                 else:raise AssertionError("ambiguous/unproven GNU C source accepted")
+            # All 21 legitimate noncanonical GNU owner keys from the real
+            # 4108-owner AArch64 frozen corpus (CI #41161283981). Kbuild's
+            # `savedcmd_` AND `source_` keys retain these aliases; the owner
+            # manifest records their canonical POSIX paths.
+            aliases=(
+                ("arch/arm/xen/enlighten.o","arch/arm64/xen/../../arm/xen/enlighten.o"),
+                ("arch/arm/xen/grant-table.o","arch/arm64/xen/../../arm/xen/grant-table.o"),
+                ("arch/arm/xen/mm.o","arch/arm64/xen/../../arm/xen/mm.o"),
+                ("arch/arm/xen/p2m.o","arch/arm64/xen/../../arm/xen/p2m.o"),
+                ("arch/arm64/kvm/hyp/aarch32.nvhe.o","arch/arm64/kvm/hyp/nvhe/../aarch32.nvhe.o"),
+                ("arch/arm64/kvm/hyp/aarch32.o","arch/arm64/kvm/hyp/vhe/../aarch32.o"),
+                ("arch/arm64/kvm/hyp/exception.nvhe.o","arch/arm64/kvm/hyp/nvhe/../exception.nvhe.o"),
+                ("arch/arm64/kvm/hyp/exception.o","arch/arm64/kvm/hyp/vhe/../exception.o"),
+                ("arch/arm64/kvm/hyp/pgtable.nvhe.o","arch/arm64/kvm/hyp/nvhe/../pgtable.nvhe.o"),
+                ("arch/arm64/kvm/hyp/vgic-v2-cpuif-proxy.nvhe.o","arch/arm64/kvm/hyp/nvhe/../vgic-v2-cpuif-proxy.nvhe.o"),
+                ("arch/arm64/kvm/hyp/vgic-v2-cpuif-proxy.o","arch/arm64/kvm/hyp/vhe/../vgic-v2-cpuif-proxy.o"),
+                ("arch/arm64/kvm/hyp/vgic-v3-sr.nvhe.o","arch/arm64/kvm/hyp/nvhe/../vgic-v3-sr.nvhe.o"),
+                ("arch/arm64/kvm/hyp/vgic-v3-sr.o","arch/arm64/kvm/hyp/vhe/../vgic-v3-sr.o"),
+                ("drivers/usb/misc/onboard_usb_hub_pdevs.o","drivers/usb/core/../misc/onboard_usb_hub_pdevs.o"),
+                ("virt/kvm/binary_stats.o","arch/arm64/kvm/../../../virt/kvm/binary_stats.o"),
+                ("virt/kvm/coalesced_mmio.o","arch/arm64/kvm/../../../virt/kvm/coalesced_mmio.o"),
+                ("virt/kvm/dirty_ring.o","arch/arm64/kvm/../../../virt/kvm/dirty_ring.o"),
+                ("virt/kvm/eventfd.o","arch/arm64/kvm/../../../virt/kvm/eventfd.o"),
+                ("virt/kvm/irqchip.o","arch/arm64/kvm/../../../virt/kvm/irqchip.o"),
+                ("virt/kvm/kvm_main.o","arch/arm64/kvm/../../../virt/kvm/kvm_main.o"),
+                ("virt/kvm/vfio.o","arch/arm64/kvm/../../../virt/kvm/vfio.o"),
+            )
+            assert len(aliases)==21
+            for canonical,raw_owner in aliases:
+                src=raw_owner.replace(".nvhe.o",".c").replace(".o",".c")
+                raw_src="/build/linux-6.6.143/"+src
+                statement=(f"savedcmd_{raw_owner} := gcc -c -o {raw_owner} {raw_src}\n"
+                           f"source_{raw_owner} := {raw_src}\n")
+                replay,_,_,original=gnu_argv(statement,"gcc",canonical,Path("unused.i"))
+                assert original==raw_owner and raw_src in replay
+                # Even source_ and argv may name lexically different but
+                # identical in-root paths. The canonical C file is unique.
+                normalized="/build/linux-6.6.143/"+posixpath.normpath(src)
+                assert gnu_argv(statement.replace(
+                    f"source_{raw_owner} := {raw_src}",
+                    f"source_{raw_owner} := {normalized}"),
+                    "gcc",canonical,Path("unused.i"))[3]==raw_owner
+            # The GNU build also has relative generated C sources (ASN.1)
+            # and other targets may spell valid in-root relative aliases.
+            for raw_owner,raw_src in (
+                ("crypto/asymmetric_keys/pkcs7.asn1.o",
+                 "crypto/asymmetric_keys/pkcs7.asn1.c"),
+                ("arch/x86/kernel/../mm/relative.o",
+                 "arch/x86/kernel/../mm/relative.c"),
+                ("arch/loongarch/kernel/../mm/relative.o",
+                 "arch/loongarch/kernel/../mm/relative.c"),
+            ):
+                canonical=canonical_kbuild_owner_path(raw_owner)
+                relative=(f"cmd_{raw_owner} := gcc -c -o {raw_owner} {raw_src}\n"
+                          f"source_{raw_owner} := {raw_src}\n")
+                assert gnu_argv(relative,"gcc",canonical,Path("unused.i"))[3]==raw_owner
+            for bad in (
+                # A second genuine C translation unit must never be hidden.
+                statement.replace(
+                    raw_src+"\n",raw_src+" /build/linux-6.6.143/other.c\n",1),
+                statement.replace("source_"+raw_owner+" :=", "source_other.o :="),
+                statement.replace(raw_src,"/build/linux-6.6.143/../../other.c"),
+                statement.replace(raw_src,"/build/linux-6.6.143/arch/../wrong.c",1),
+                statement.replace(raw_src,"/tmp/evil.c"),
+                statement+f"source_{raw_owner} := {raw_src}\n",
+                statement.replace("savedcmd_"+raw_owner,"savedcmd_../../outside.o"),
+                statement+statement.splitlines()[0]+"\n",
+            ):
+                try:gnu_argv(bad,"gcc",canonical,Path("unused.i"))
+                except ValueError:pass
+                else:raise AssertionError("GNU Kbuild owner/source alias escaped strict gate")
             # The genuine 42-option AArch receipt separates conservative
             # ABI/semantic blockers from optimization and BTF metadata, but
             # *all* three remain unqualified for strict option parity.

@@ -2,9 +2,10 @@
 """Bounded x86 BIOS-only P0 failure diagnostic; never a certification retry.
 
 Reuses the original GNU P0 QEMU CLI, unchanged candidate bzImage/initramfs,
-and AArch64 diagnostic resource limits. Adds event logging and bounded QMP
-register samples only; never recompiles, mutates objects, alters P0/P1 receipts
-or infers a symbol/owner from a BIOS-only serial log.
+and AArch64 diagnostic resource limits. Adds event logging, bounded QMP
+register samples and same-Kbuild compressed decompressor linked ELF/nm
+provenance; never recompiles, mutates objects, alters P0/P1 receipts or assigns
+a relocated PC to a symbol without proving its runtime relocation slide.
 """
 from __future__ import annotations
 import argparse
@@ -16,6 +17,7 @@ from pathlib import Path
 import re
 import signal
 import socket
+import struct
 import subprocess
 import sys
 import tempfile
@@ -29,6 +31,7 @@ VERDICT = common.VERDICT
 DiagnosticError = common.DiagnosticError
 QMP_REPLY_MAX = 65536
 QMP_SOCKET_TIMEOUT = 0.3
+COMPRESSED_NM_MAX_BYTES = 4 * 1024**2
 
 
 def bios_only(raw):
@@ -133,6 +136,84 @@ def qmp_sample_schedule(timeout):
             if second < timeout - 0.2]
 
 
+def compressed_executable_base(elf):
+    """Return the linked executable LOAD VMA, never a guest relocation slide."""
+    with elf.open("rb") as stream:
+        header = stream.read(64)
+        if len(header) < 64 or header[:6] != b"\x7fELF\x02\x01":
+            raise ValueError("compressed/vmlinux is not little-endian ELF64")
+        fields = struct.unpack_from("<HHIQQQIHHHHHH", header, 16)
+        if fields[1] != 62 or fields[8] < 56 or fields[9] > 128:
+            raise ValueError("compressed/vmlinux is not bounded x86-64 ELF")
+        phoff, phsize, phnum = fields[4], fields[8], fields[9]
+        if phoff + phsize * phnum > elf.stat().st_size:
+            raise ValueError("compressed/vmlinux has out-of-file program headers")
+        stream.seek(phoff)
+        executable = []
+        for _ in range(phnum):
+            ph = stream.read(phsize)
+            p_type, p_flags, _, p_vaddr, _, _, _, _ = struct.unpack_from(
+                "<IIQQQQQQ", ph)
+            if p_type == 1 and p_flags & 1:
+                executable.append(p_vaddr)
+        if not executable:
+            raise ValueError("compressed/vmlinux has no executable PT_LOAD")
+        return min(executable)
+
+
+def compressed_symbol_provenance(image, output):
+    """Record same-Kbuild compressed decompressor ELF and linked RVAs only.
+
+    The running decompressor is relocated: a sampled physical RIP cannot be
+    assigned to a symbol until its *actual* runtime relocation slide is known.
+    This diagnostic never borrows main vmlinux/System.map addresses.
+    """
+    elf = image.parent / "compressed" / "vmlinux"
+    receipt = dict(observation="UNAVAILABLE", source="same_candidate_Kbuild_tree",
+                   candidate_bzImage_sha256=common.sha(image),
+                   compressed_vmlinux_path=str(elf), runtime_relocation_slide="UNDETERMINED",
+                   sampled_pc_symbolication="UNRESOLVED_WITHOUT_RUNTIME_RELOCATION_SLIDE")
+    try:
+        if not elf.is_file() or elf.is_symlink():
+            raise ValueError("same-Kbuild compressed/vmlinux ELF missing or symlink")
+        if not 64 <= elf.stat().st_size <= 128 * 1024**2:
+            raise ValueError("same-Kbuild compressed/vmlinux ELF size outside diagnostic bound")
+        base = compressed_executable_base(elf)
+        nm = subprocess.run(["/usr/bin/nm", "-n", "--defined-only", str(elf)],
+                            capture_output=True, timeout=10, check=False)
+        if nm.returncode or not nm.stdout or len(nm.stdout) > COMPRESSED_NM_MAX_BYTES:
+            raise ValueError("compressed/vmlinux linked symbols unavailable or beyond 4MiB bound")
+        symbols = []
+        for line in nm.stdout.decode("utf-8", "replace").splitlines():
+            match = re.fullmatch(r"([0-9a-fA-F]{1,16})\s+([a-zA-Z])\s+(\S+)", line)
+            if match and match.group(2) in ("t", "T"):
+                address = int(match.group(1), 16)
+                if address >= base:
+                    symbols.append(dict(name=match.group(3),
+                                        linked_vma=f"0x{address:x}",
+                                        executable_rva=f"0x{address - base:x}"))
+        if not symbols:
+            raise ValueError("no linked decompressor text symbols")
+        symfile = output / "compressed-vmlinux-linked-symbols.nm"
+        symfile.write_bytes(nm.stdout)
+        important = [entry for entry in symbols if re.search(
+            r"startup_64|extract_kernel|decompress|handle_relocations|^_text$|^_head$",
+            entry["name"])]
+        receipt.update(observation="LINKED_SYMBOL_RVAS_CAPTURED_NOT_RUNTIME_SYMBOLICATED",
+                       compressed_vmlinux_sha256=common.sha(elf),
+                       compressed_vmlinux_bytes=elf.stat().st_size,
+                       linked_executable_base=f"0x{base:x}",
+                       linked_text_symbol_count=len(symbols),
+                       linked_anchor_symbols=important[:24],
+                       linked_nm_sha256=common.sha(symfile),
+                       linked_nm_bytes=symfile.stat().st_size)
+    except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+        receipt["unavailable_reason"] = f"{type(exc).__name__}: {str(exc)[:200]}"
+    (output / "compressed-vmlinux-provenance.json").write_text(
+        json.dumps(receipt, indent=2, sort_keys=True) + "\n")
+    return receipt
+
+
 def run(image, initramfs, failed_p0, gnu_receipt, output, qemu, timeout=15, max_bytes=1048576):
     image = common.required(image, "candidate bzImage")
     initramfs = common.required(initramfs, "original initramfs")
@@ -147,6 +228,7 @@ def run(image, initramfs, failed_p0, gnu_receipt, output, qemu, timeout=15, max_
     before = {name: common.sha(path) for name, path in inputs.items()}
     command = verified_command(json.loads(gnu_receipt.read_text()), qemu, image, initramfs)
     output.mkdir(parents=True, exist_ok=False)
+    compressed = compressed_symbol_provenance(image, output)
     trace, serial = output / "qemu-int-cpu-reset-guest-errors.log", output / "diagnostic-serial.log"
     started, timed_out, samples, qmp_failures = time.monotonic(), False, [], []
     # Keep the Unix socket short: GitHub Actions workspace paths can exceed
@@ -195,6 +277,7 @@ def run(image, initramfs, failed_p0, gnu_receipt, output, qemu, timeout=15, max_
                   qmp_pc_samples=samples, qmp_sample_attempts=len(samples) + len(qmp_failures),
                   qmp_observation=("LIVE_PC_SAMPLED" if samples else "UNAVAILABLE"),
                   qmp_errors=qmp_failures[:12],
+                  compressed_decompressor_provenance=compressed,
                   **parse_trace(trace, max_bytes))
     report["original_inputs_unchanged"] = before == {n: common.sha(p) for n, p in inputs.items()}
     (output / "diagnostic-receipt.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
@@ -206,6 +289,21 @@ def run(image, initramfs, failed_p0, gnu_receipt, output, qemu, timeout=15, max_
           f"timeout={int(timed_out)} trace_bytes={report['trace_bytes']} "
           f"qmp_pc_samples={len(samples)} qmp_observation={report['qmp_observation']} "
           "candidate_verdict_unchanged=1 no_recompile=1")
+    # Emit a bounded first-class PC sequence in the CI console. The diagnostic
+    # archive remains the full provenance; the event-only QEMU log cannot tell
+    # whether execution left SeaBIOS before serial became available.
+    observed = " ".join(f"{item['elapsed_seconds']:g}s:{item['pc_register']}={item['pc']}"
+                        for item in samples[:9])
+    print(f"X86_LINUX_EARLY_QMP_PC_SAMPLES={report['qmp_observation']} "
+          f"count={len(samples)} values={observed or 'none'} "
+          "symbol_or_owner_not_inferred=true")
+    print("X86_LINUX_COMPRESSED_SYMBOLS=" + compressed["observation"] +
+          " elf_sha256=" + compressed.get("compressed_vmlinux_sha256", "unavailable") +
+          " nm_sha256=" + compressed.get("linked_nm_sha256", "unavailable") +
+          " linked_exec_base=" + compressed.get("linked_executable_base", "unavailable") +
+          " anchors=" + json.dumps(compressed.get("linked_anchor_symbols", [])[:8],
+                                    separators=(",", ":")) +
+          " runtime_slide=UNDETERMINED diagnostic_only=true")
     return report
 
 

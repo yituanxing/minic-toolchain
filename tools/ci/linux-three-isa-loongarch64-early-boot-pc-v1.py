@@ -215,6 +215,12 @@ def symbol_evidence(system_map: Path, vmlinux: Path, nm: Path,
     if not vmlinux.is_file() or vmlinux.is_symlink():
         raise ValueError("candidate vmlinux absent")
     raw = system_map.read_bytes()
+    wanted = {b"_text", b"_stext", b"kernel_entry", b"start_kernel"}
+    anchors = {}
+    for line in raw.splitlines():
+        columns = line.split(None, 2)
+        if len(columns) == 3 and columns[2] in wanted:
+            anchors[columns[2].decode("ascii")] = "0x" + columns[0].decode("ascii")
     (output / "candidate-System.map.gz").write_bytes(gzip.compress(raw, compresslevel=6))
     proc = subprocess.run([str(nm), "-n", "--defined-only", str(vmlinux)],
                           stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -229,7 +235,46 @@ def symbol_evidence(system_map: Path, vmlinux: Path, nm: Path,
             "nm_command": [str(nm), "-n", "--defined-only", str(vmlinux)],
             "nm_sha256": hashlib.sha256(proc.stdout).hexdigest(),
             "nm_lines": proc.stdout.count(b"\n"), "nm_archive": "candidate-nm.txt.gz",
+            "selected_link_symbols": anchors,
             "pc_to_symbol": "not inferred: QMP PCs need observed runtime load bias"}
+
+
+def bounded_console_summary(report: dict, formal_p0: str) -> list[str]:
+    """Make decisive QMP/PE evidence visible in CI logs without dumping registers/maps."""
+    phase = ("EFI_EXIT_SERVICES_NO_LINUX_BANNER"
+             if "EFI stub: Exiting boot services" in formal_p0
+             and "Linux version 6.6.143" not in formal_p0 else "OTHER")
+    lines = [f"MINIC_LOONG_FORMAL_P0_PHASE={phase} diagnostic_only=1"]
+    image = report.get("image", {})
+    lines.append(
+        "MINIC_LOONG_EFI_IMAGES "
+        f"candidate_bytes={image.get('candidate_bytes', 'unknown')} "
+        f"candidate_sha256={image.get('candidate_sha256', 'unknown')} "
+        f"gnu_sha256={image.get('gnu_golden_sha256', 'unknown')}")
+    layout = report.get("pe_layout", {})
+    for kind, pe in (("outer_efi", layout.get("outer_efi", {})),
+                     ("inner_kernel", layout.get("inner_kernel", {}).get("pe", {}))):
+        text_size = next((section.get("raw_size") for section in pe.get("sections", [])
+                          if section.get("name") == ".text"), "unknown")
+        lines.append(
+            f"MINIC_LOONG_PE_LAYOUT kind={kind} "
+            f"entry_rva={pe.get('entry_rva', 'unknown')} "
+            f"size_of_image={pe.get('size_of_image', 'unknown')} "
+            f"text_raw_bytes={text_size}")
+    for kind, source in (("candidate", report),
+                         ("gnu_control", report.get("gnu_qmp_reference", {}))):
+        samples = source.get("samples", [])[:8]
+        points = ",".join(f"{sample.get('at_seconds', '?')}s:{sample.get('pc', 'unknown')}"
+                          for sample in samples)
+        lines.append(f"MINIC_LOONG_QMP_PC kind={kind} "
+                     f"verdict={source.get('verdict', 'unknown')} points={points}")
+    links = report.get("link_symbols", {})
+    anchors = links.get("selected_link_symbols", {})
+    lines.append("MINIC_LOONG_LINK_ANCHORS "
+                 + " ".join(f"{name}={anchors.get(name, 'unknown')}"
+                            for name in ("_text", "_stext", "kernel_entry", "start_kernel"))
+                 + " pc_to_symbol=UNRESOLVED_RUNTIME_LOAD_BIAS")
+    return lines
 
 
 def self_test() -> None:
@@ -267,6 +312,20 @@ def self_test() -> None:
     layout = pe_layout(bytes(header))
     assert layout["entry_rva"] == 0x10000 and layout["size_of_image"] == 0x30000
     assert layout["sections"][0]["name"] == ".text"
+    summary = bounded_console_summary(
+        {"image": {"candidate_bytes": 100, "candidate_sha256": "candidate",
+                    "gnu_golden_sha256": "gnu"},
+         "pe_layout": {"outer_efi": layout,
+                       "inner_kernel": {"pe": layout}},
+         "samples": [{"at_seconds": 1, "pc": "0x1000"}],
+         "gnu_qmp_reference": {"samples": [{"at_seconds": 3, "pc": "0x9000"}]},
+         "link_symbols": {"selected_link_symbols": {"_text": "0x200000"}}},
+        "EFI stub: Exiting boot services\n")
+    assert len(summary) == 7
+    assert "EFI_EXIT_SERVICES_NO_LINUX_BANNER" in summary[0]
+    assert "points=1s:0x1000" in summary[4]
+    assert "points=3s:0x9000" in summary[5]
+    assert "pc_to_symbol=UNRESOLVED_RUNTIME_LOAD_BIAS" in summary[6]
     print("MINIC_LOONG_EFI_QMP_DIAGNOSTIC_SELFTEST=PASS")
 
 
@@ -360,6 +419,8 @@ def run(args: argparse.Namespace) -> None:
         report["gnu_qmp_reference"] = reference
     (args.output / "loong-efi-qmp-receipt.json").write_text(
         json.dumps(report, indent=2, sort_keys=True) + "\n")
+    for line in bounded_console_summary(report, original_log):
+        print(line)
     print(f"MINIC_LOONG_EFI_QMP={report['verdict']} "
           f"candidate_sha256={candidate_sha} "
           f"candidate_bytes={report['image']['candidate_bytes']} "

@@ -102,6 +102,33 @@ def compiler_pair(compiler: Path, expected: dict | None = None) -> dict[str, str
     return identity
 
 
+def effective_gnu_c_option_groups(tokens: list[str]) -> dict[str, str]:
+    """Last GCC option wins *within* each authentic .o.cmd option family.
+
+    This is evidence, not an equivalence waiver. In particular GCC can see
+    -O2 then -Os, PAC then -mbranch-protection=none, or stack-protector-strong
+    then -fno-stack-protector for one owner. Preserve the raw token census and
+    strict unqualified gate separately from this effective-option view.
+    """
+    result = {name: "UNSPECIFIED" for name in
+              ("optimization", "stack_protector", "branch_protection",
+               "unwind_tables", "asynchronous_unwind_tables")}
+    for value in tokens[1:]:
+        if value.startswith("-O"):
+            result["optimization"] = value
+        elif (value.startswith("-fstack-protector") or
+              value.startswith("-fno-stack-protector")):
+            result["stack_protector"] = value
+        elif value.startswith("-mbranch-protection="):
+            result["branch_protection"] = value
+        elif value in ("-funwind-tables", "-fno-unwind-tables"):
+            result["unwind_tables"] = value
+        elif value in ("-fasynchronous-unwind-tables",
+                      "-fno-asynchronous-unwind-tables"):
+            result["asynchronous_unwind_tables"] = value
+    return result
+
+
 def verify_gnu_kbuild_commands(out: Path, rows: list[dict], gcc: str,
                                target: str | None = None) -> dict:
     """Verify SHA-bound GNU .cmd and separate *unqualified* flag categories.
@@ -114,6 +141,8 @@ def verify_gnu_kbuild_commands(out: Path, rows: list[dict], gcc: str,
     categories = {key: Counter() for key in
                   ("mandatory", "optimization", "debug_metadata", "target_defaults", "forwarded")}
     affected = Counter()
+    effective_counts: dict[str, Counter] = {}
+    effective_by_owner: dict[str, dict[str, str]] = {}
     unqualified_owners = 0
     for row in rows:
         name = PurePosixPath(row["object"])
@@ -133,9 +162,13 @@ def verify_gnu_kbuild_commands(out: Path, rows: list[dict], gcc: str,
             raise Rejected(f"original GNU AS machine options changed: {name}")
         if row.get("minic_flags") != authentic_minic_flags:
             raise Rejected(f"original GNU C language/ABI options changed: {name}")
+        original_tokens = frozen_kbuild_oracle().gnu_command_tokens(raw_cmd, gcc)
         audit = frozen_kbuild_oracle().gnu_codegen_option_audit(
-            frozen_kbuild_oracle().gnu_command_tokens(raw_cmd, gcc),
-            authentic_minic_flags, target)
+            original_tokens, authentic_minic_flags, target)
+        effective = effective_gnu_c_option_groups(original_tokens)
+        effective_by_owner[str(name)] = effective
+        for family, value in effective.items():
+            effective_counts.setdefault(family, Counter())[value] += 1
         for category, flags in audit.items():
             categories[category].update(flags)
             if flags:
@@ -151,6 +184,10 @@ def verify_gnu_kbuild_commands(out: Path, rows: list[dict], gcc: str,
               "NO_UNQUALIFIED_GNU_CODEGEN_OPTIONS")
     return {"gnu_c_option_equivalence": status,
             "gnu_c_option_observed_counts": dict(sorted(observed.items())),
+            "gnu_c_option_effective_counts": {
+                name: dict(sorted(counts.items()))
+                for name, counts in sorted(effective_counts.items())},
+            "gnu_c_option_effective_per_owner": effective_by_owner,
             "gnu_c_option_unqualified_owners": unqualified_owners,
             "gnu_c_option_unqualified_counts": dict(sorted(missing.items())),
             "gnu_c_option_mandatory_owners": affected["mandatory"],
@@ -1675,6 +1712,28 @@ def self_test() -> None:
     assert set(TARGETS) == {"x86_64", "aarch64", "loongarch64"}
     assert len(ALLOWED_CFLAGS) == 16
     assert len(LINUX_SHA) == 64
+    # Actual AArch64 GNU Kbuild appends per-owner overrides to its global
+    # -O2/-fstack-protector-strong/-mbranch-protection=pac-ret flags.
+    # vDSO separately re-enables async unwind after globally disabling it.
+    overridden = effective_gnu_c_option_groups([
+        "gcc", "-O2", "-fstack-protector-strong",
+        "-mbranch-protection=pac-ret", "-fno-unwind-tables",
+        "-fno-asynchronous-unwind-tables", "-Os", "-fno-stack-protector",
+        "-mbranch-protection=none", "-fasynchronous-unwind-tables"])
+    assert overridden == {
+        "optimization": "-Os", "stack_protector": "-fno-stack-protector",
+        "branch_protection": "-mbranch-protection=none",
+        "unwind_tables": "-fno-unwind-tables",
+        "asynchronous_unwind_tables": "-fasynchronous-unwind-tables"}
+    reversed_options = effective_gnu_c_option_groups([
+        "gcc", "-Os", "-fno-stack-protector", "-mbranch-protection=none",
+        "-fasynchronous-unwind-tables", "-O2", "-fstack-protector-strong",
+        "-mbranch-protection=pac-ret", "-fno-asynchronous-unwind-tables"])
+    assert reversed_options == {
+        "optimization": "-O2", "stack_protector": "-fstack-protector-strong",
+        "branch_protection": "-mbranch-protection=pac-ret",
+        "unwind_tables": "UNSPECIFIED",
+        "asynchronous_unwind_tables": "-fno-asynchronous-unwind-tables"}
     link_summary = summarize_gnu_link_failures(
         "ld: mm/gup.o: undefined reference to `__compiletime_assert_707'\n"
         "ld: fs/exec.o: undefined reference to '__field_overflow'\n"
@@ -2263,6 +2322,9 @@ def self_test() -> None:
         assert option_audit["gnu_c_option_optimization_counts"] == {"-O2": 1}
         assert option_audit["gnu_c_option_debug_metadata_counts"] == {"-g": 1}
         assert option_audit["gnu_c_option_unqualified_owners"] == 1
+        assert option_audit["gnu_c_option_effective_counts"]["optimization"] == {"-O2": 1}
+        assert option_audit["gnu_c_option_effective_per_owner"]["kernel/canonical.o"][
+            "stack_protector"] == "UNSPECIFIED"
         cmd.write_text("savedcmd_kernel/canonical.o := gcc -mabi=lp64 "
                        "-mlittle-endian -mbranch-protection=pac-ret "
                        "-fstack-protector-strong -ftrivial-auto-var-init=zero "
@@ -2279,6 +2341,9 @@ def self_test() -> None:
             "-mbranch-protection=pac-ret", "-fstack-protector-strong",
             "-ftrivial-auto-var-init=zero", "-fno-strict-aliasing"}
         assert option_audit["gnu_c_option_mandatory_owners"] == 1
+        assert option_audit["gnu_c_option_observed_counts"]["-O2"] == 1
+        assert option_audit["gnu_c_option_effective_counts"]["branch_protection"] == {
+            "-mbranch-protection=pac-ret": 1}
         # SHA stays authoritative, even when a C option is metadata-only.
         metadata[0]["cmd_sha256"] = "0" * 64
         try:

@@ -444,6 +444,24 @@ def probe(a: argparse.Namespace) -> int:
         print(f"MINIC_BOOT_COHORT_{a.mode.upper().replace('-', '_')}="
               f"{record['verdict']} selected={len(selected)} "
               f"strict_acceptance=false")
+        # A 1 MiB owner census is retained in the artifact, but the failure
+        # frontier must also be visible without downloading that ZIP. Only
+        # bounded observed names are printed; no inferences or relaxed gates.
+        print(f"MINIC_BOOT_COHORT_P0 mode={a.mode} "
+              f"observation={record.get('p0_observation', 'NOT_RUN')} "
+              f"owner_drift={str(record.get('owner_drift_detected', 'UNKNOWN')).lower()} "
+              f"intended_partition={str(record.get('intended_cohort_preserved_postlink', 'UNKNOWN')).lower()} "
+              f"kbuild_cc={record.get('kbuild_cc_count', 'UNKNOWN')} "
+              "diagnostic_only=true")
+        for label in ("selected_overwritten", "other_rebuilt_c_owners",
+                      "selected_actual_rebuilt_or_unknown", "missing_original_c_owners",
+                      "unexpected_c_owners"):
+            owners = record.get(label, [])
+            if not isinstance(owners, list):
+                owners = []
+            print(f"MINIC_BOOT_COHORT_OWNER_DRIFT mode={a.mode} category={label} "
+                  f"count={len(owners)} first15="
+                  f"{json.dumps(owners[:15], separators=(',', ':'))}")
 
 
 def main(argv: list[str] | None = None) -> int:

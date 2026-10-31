@@ -51,6 +51,8 @@ jobs:
       run: ${{ steps.decide.outputs.run }}
       regenerate: ${{ steps.decide.outputs.regenerate }}
       reuse_objects: ${{ steps.decide.outputs.reuse_objects }}
+      only_aarch64: ${{ steps.decide.outputs.only_aarch64 }}
+      receiver_targets: ${{ steps.decide.outputs.receiver_targets }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -64,6 +66,7 @@ jobs:
           active=false
           regenerate=false
           reuse_objects=false
+          only_aarch64=false
           if [[ '${{ github.event_name }}' == workflow_dispatch ]]; then
             active=true
             if [[ '${{ inputs.regenerate_original_gnu }}' == true ]]; then
@@ -94,19 +97,33 @@ jobs:
             if [[ "$head_subject" == *'[minic-reuse-objects]'* ]]; then
               reuse_objects=true
             fi
+            if [[ "$head_subject" == *'[minic-only-aarch64]'* ]]; then
+              only_aarch64=true
+            fi
           fi
           if [[ "$regenerate" == true && "$reuse_objects" == true ]]; then
             echo 'Refuse simultaneous original-GNU regeneration and candidate-object reuse' >&2
             exit 1
           fi
+          if [[ "$only_aarch64" == true && "$reuse_objects" != true ]]; then
+            echo 'AArch64-only receiver replay requires SHA-verified reused candidate objects' >&2
+            exit 1
+          fi
+          receiver_targets='["x86_64","aarch64","loongarch64"]'
+          if [[ "$only_aarch64" == true ]]; then
+            receiver_targets='["aarch64"]'
+          fi
           echo "run=$active" >> "$GITHUB_OUTPUT"
           echo "regenerate=$regenerate" >> "$GITHUB_OUTPUT"
           echo "reuse_objects=$reuse_objects" >> "$GITHUB_OUTPUT"
-          echo "MINIC_LINUX_SEVEN_EXACT_HEAD_GATE=$active regenerate=$regenerate reuse_objects=$reuse_objects sha=$(git rev-parse HEAD)"
+          echo "only_aarch64=$only_aarch64" >> "$GITHUB_OUTPUT"
+          echo "receiver_targets=$receiver_targets" >> "$GITHUB_OUTPUT"
+          echo "MINIC_LINUX_SEVEN_EXACT_HEAD_GATE=$active regenerate=$regenerate reuse_objects=$reuse_objects only_aarch64=$only_aarch64 receivers=$receiver_targets sha=$(git rev-parse HEAD)"
           {
             echo '### MiniC Linux 3x7 exact-head campaign'
-            echo "Run: $active; regenerate GNU input: $regenerate; reuse SHA-verified objects: $reuse_objects"
+            echo "Run: $active; regenerate GNU input: $regenerate; reuse SHA-verified objects: $reuse_objects; AArch64-only diagnostics: $only_aarch64"
             echo "Commit: $(git rev-parse HEAD)"
+            echo "Receiver targets: $receiver_targets"
             if [[ "$reuse_objects" == true ]]; then
               echo 'Candidate objects: pinned producer run 41133698941 (byte-identical compiler pair mandatory).'
             fi
@@ -567,7 +584,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [x86_64, aarch64, loongarch64]
+        target: ${{ fromJSON(needs.gate.outputs.receiver_targets) }}
     env:
       GNU_WORK: ${{ github.workspace }}/build/minic-linux-gnu-${{ matrix.target }}
       RUNTIME_OUTPUT: ${{ github.workspace }}/build/minic-seven-receiver-${{ matrix.target }}
@@ -661,16 +678,42 @@ jobs:
         # Same real-GNU-on-cache-MISS contract as the earlier RV Linux gate.
         # GitHub may report a cache hit but fail the download when the account
         # reaches its egress limit; never let this hide a MiniC Linux result.
+        # The existing cache namespace has ONLY the broad config profile.
+        # Authenticate all prefix hits, including config/owner/ELF SHA, below.
         continue-on-error: true
         with:
           path: ${{ env.GNU_WORK }}
           key: ${{ steps.gnu-key.outputs.key }}
-      - name: Rebuild original GNU Kbuild when cache transport is unavailable
-        if: steps.gnu-cache.outcome != 'success' || steps.gnu-cache.outputs.cache-hit != 'true'
+          restore-keys: |
+            linux-three-isa-gnu-golden-6.6.143-${{ matrix.target }}-
+      - name: Authenticate exact or prefix-restored original GNU golden before reuse
+        id: restored-gnu-check
+        if: steps.gnu-cache.outcome == 'success' && steps.gnu-cache.outputs.cache-matched-key != ''
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          case '${{ matrix.target }}' in
+            x86_64) gcc=gcc ;;
+            aarch64) gcc=aarch64-linux-gnu-gcc ;;
+            loongarch64) gcc=loongarch64-linux-gnu-gcc-13 ;;
+          esac
+          python3 tools/ci/linux-three-isa-gnu-cache-verify-v1.py \
+            --target '${{ matrix.target }}' --gnu-work "$GNU_WORK" --gcc "$gcc"
+          echo 'verified=true' >> "$GITHUB_OUTPUT"
+          echo 'MINIC_LINUX_GNU_CACHE_RESTORED=SHA_VERIFIED matched_key=${{ steps.gnu-cache.outputs.cache-matched-key }}'
+      - name: Rebuild original GNU Kbuild only when no authenticated cache survives
+        if: steps.restored-gnu-check.outputs.verified != 'true'
         shell: bash
         timeout-minutes: 65
         run: |
           set -Eeuo pipefail
+          if [[ '${{ steps.gnu-cache.outputs.cache-hit }}' == true ]]; then
+            # GitHub caches are immutable: a rejected exact hit cannot be
+            # overwritten. The fresh tree is still accepted on its own SHA;
+            # the poisoned cache key must be explicitly rotated/evicted later.
+            echo '::warning::Rejected exact GNU cache; rebuilding. Immutable old exact key will not be overwritten.'
+          fi
           # A failed restore may have left partial bytes. Preserve them outside
           # the authenticated work path; golden.sh only accepts a new tree.
           if [[ -e "$GNU_WORK" || -L "$GNU_WORK" ]]; then
@@ -724,6 +767,17 @@ jobs:
             --initramfs "$RUNTIME_OUTPUT/runtime-initramfs.cpio.gz" \
             --initramfs-root "$RUNTIME_OUTPUT/initramfs/root" \
             --output "$RUNTIME_OUTPUT/boot" --timeout 240 "${args[@]}"
+      - name: Save authenticated pristine GNU golden under the current exact key
+        # All prefix restores and fresh builds passed GNU SHA verification and
+        # a NEW GNU P0/P1 QEMU. Never save a candidate-modified Kbuild tree.
+        # Existing exact cache keys are immutable; cache egress/quota conflicts
+        # must not turn valid GNU/QEMU evidence into a false compiler failure.
+        if: steps.gnu-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        continue-on-error: true
+        with:
+          path: ${{ env.GNU_WORK }}
+          key: ${{ steps.gnu-key.outputs.key }}
       - name: Pin pristine GNU Loong EFI locally for same-target failure-only PC comparison
         if: matrix.target == 'loongarch64'
         shell: bash
@@ -879,6 +933,35 @@ jobs:
           (folder / "candidate-bzImage-provenance.json").write_text(json.dumps(receipt, indent=2) + "\n")
           print("X86_FAILED_CANDIDATE_IMAGE_PRESERVED=" + json.dumps(receipt, sort_keys=True))
           PY
+      - name: Record exact original initramfs SHA for failure-only future image replay
+        if: failure()
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - "$RUNTIME_OUTPUT" '${{ matrix.target }}' <<'PY'
+          import hashlib, json, pathlib, sys
+          runtime, target = pathlib.Path(sys.argv[1]), sys.argv[2]
+          initramfs = runtime / "runtime-initramfs.cpio.gz"
+          golden = runtime / "boot/gnu-qemu-receipt.json"
+          if not initramfs.is_file() or initramfs.is_symlink() or not golden.is_file():
+              raise SystemExit("exact original GNU initramfs/receipt unavailable")
+          oracle = json.loads(golden.read_text())
+          actual = hashlib.sha256(initramfs.read_bytes()).hexdigest()
+          if (oracle.get("target") != target or
+                  oracle.get("verdict") != "GNU_QEMU_P0_P1_PASS_NOT_MINIC" or
+                  oracle.get("initramfs_sha256") != actual):
+              raise SystemExit("initramfs bytes differ from passing original GNU P0/P1 receipt")
+          record = {"schema": "minic-linux-original-initramfs-artifact-v1",
+                    "target": target, "sha256": actual,
+                    "gnu_receipt_initramfs_sha256": oracle["initramfs_sha256"],
+                    "source_run_id": '${{ github.run_id }}',
+                    "candidate_head_sha": '${{ github.event.pull_request.head.sha || github.sha }}',
+                    "scope": "DIAGNOSTIC_REPLAY_INPUT_ONLY_NEVER_RUNTIME_PASS"}
+          (runtime / "runtime-initramfs-provenance.json").write_text(
+              json.dumps(record, indent=2, sort_keys=True) + "\n")
+          print("MINIC_LINUX_ORIGINAL_INITRAMFS_PRESERVED=" + json.dumps(record, sort_keys=True))
+          PY
       - name: Preserve genuine GNU LD errors, MiniC C provenance and dual QEMU logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -886,6 +969,8 @@ jobs:
           name: minic-linux-seven-receiver-${{ matrix.target }}
           path: |
             build/minic-seven-receiver-${{ matrix.target }}/boot/
+            build/minic-seven-receiver-${{ matrix.target }}/runtime-initramfs.cpio.gz
+            build/minic-seven-receiver-${{ matrix.target }}/runtime-initramfs-provenance.json
             build/minic-seven-receiver-${{ matrix.target }}/candidate/candidate-receipt.json
             build/minic-seven-receiver-${{ matrix.target }}/candidate/all-c-owners-result.json
             build/minic-seven-receiver-${{ matrix.target }}/candidate/c-section-sizes.json
@@ -918,6 +1003,23 @@ jobs:
           echo 'MINIC_LINUX_SEVEN_INPUT_RUN=${{ needs.gate.outputs.regenerate == 'true' && github.run_id || env.MINIC_LINUX_PINNED_INPUT_RUN }}'
           echo 'MINIC_LINUX_SEVEN_21_C_SHARDS=${{ needs.seven-independent-runners.result }}'
           echo 'MINIC_LINUX_SEVEN_GNU_LD_QEMU=${{ needs.original-gnu-ld-qemu-receivers.result }}'
+          if [[ '${{ needs.gate.outputs.only_aarch64 }}' == true ]]; then
+            # Deliberately red full-acceptance gate: a single reused AArch64
+            # receiver is useful diagnostic evidence but NEVER 3-ISA PASS.
+            echo 'MINIC_LINUX_SEVEN_RUNTIME=PARTIAL_RECEIVER_REPLAY_NOT_FULL_ACCEPTANCE targets=aarch64_only'
+            echo '### PARTIAL_RECEIVER_REPLAY — NOT 3-ISA ACCEPTANCE' >> "$GITHUB_STEP_SUMMARY"
+            if [[ '${{ needs.minic-binary.result }}' == success &&
+                  '${{ needs.seven-independent-runners.result }}' == skipped &&
+                  '${{ needs.original-gnu-ld-qemu-receivers.result }}' == success ]]; then
+              echo 'MINIC_LINUX_AARCH64_ONLY_RECEIVER=PASS_REUSED_SHA_VERIFIED source_run=${{ env.MINIC_LINUX_PINNED_OBJECT_RUN }}'
+              echo 'AArch64 receiver passed with 21 SHA-verified reused shards; x86 and LoongArch were NOT RUN.' >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo 'MINIC_LINUX_AARCH64_ONLY_RECEIVER=FAIL_OR_INCOMPLETE'
+              echo 'AArch64 receiver did not complete successfully; x86 and LoongArch were NOT RUN.' >> "$GITHUB_STEP_SUMMARY"
+            fi
+            echo '::error::PARTIAL_RECEIVER_REPLAY cannot satisfy strict three-ISA acceptance'
+            exit 1
+          fi
           test '${{ needs.minic-binary.result }}' = success
           if [[ '${{ needs.gate.outputs.reuse_objects }}' == true ]]; then
             # The 21 producers MUST be skipped in receiver-only mode. The

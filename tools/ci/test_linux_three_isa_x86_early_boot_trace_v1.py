@@ -3,6 +3,8 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import shutil
+import subprocess
 import tempfile
 import unittest
 
@@ -58,6 +60,8 @@ class X86TraceTest(unittest.TestCase):
         self.assertEqual(report["diagnostic_qemu_command"][-2], "-qmp")
         self.assertEqual(report["qmp_pc_samples"], [])
         self.assertEqual(report["qmp_observation"], "UNAVAILABLE")
+        self.assertEqual(report["compressed_decompressor_provenance"]["observation"],
+                         "UNAVAILABLE")
         with self.assertRaises(FileExistsError):
             t.run(**self.args)
 
@@ -110,6 +114,32 @@ with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
         self.assertFalse(report["diagnostic_timed_out"])
         self.assertTrue(report["original_inputs_unchanged"])
         self.assertEqual(report["verdict"], t.VERDICT)
+
+    @unittest.skipUnless(shutil.which("cc") and Path("/usr/bin/nm").is_file(),
+                         "host linker and nm needed for real symbol provenance")
+    def test_same_build_compressed_elf_nm_and_linked_rvas(self):
+        compressed = self.image.parent / "compressed"
+        compressed.mkdir()
+        elf = compressed / "vmlinux"
+        subprocess.run(["cc", "-x", "c", "-g", "-no-pie", "-o", str(elf), "-"],
+                       input=b"__attribute__((noinline)) int extract_kernel(void) { return 7; }\n"
+                             b"int main(void) { return extract_kernel(); }\n",
+                       check=True)
+        report = t.run(**self.args)
+        provenance = report["compressed_decompressor_provenance"]
+        self.assertEqual(provenance["observation"],
+                         "LINKED_SYMBOL_RVAS_CAPTURED_NOT_RUNTIME_SYMBOLICATED")
+        self.assertEqual(provenance["compressed_vmlinux_sha256"], t.common.sha(elf))
+        self.assertEqual(provenance["candidate_bzImage_sha256"], t.common.sha(self.image))
+        self.assertEqual(provenance["runtime_relocation_slide"], "UNDETERMINED")
+        self.assertGreater(provenance["linked_text_symbol_count"], 1)
+        self.assertTrue(any(s["name"] == "extract_kernel" for s in
+                            provenance["linked_anchor_symbols"]))
+        symfile = self.args["output"] / "compressed-vmlinux-linked-symbols.nm"
+        self.assertEqual(provenance["linked_nm_sha256"], t.common.sha(symfile))
+        self.assertEqual(json.loads((self.args["output"] /
+                                     "compressed-vmlinux-provenance.json").read_text()),
+                         provenance)
 
     def test_non_bios_log_rejected(self):
         for data in (b"", b"Linux version", self.failed.read_bytes() + b"Linux version 6.6\n"):
