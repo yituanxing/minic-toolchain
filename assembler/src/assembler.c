@@ -2883,19 +2883,6 @@ static bool capture_incbin(MiniAs *as,const char *args,size_t line,
     return true;
 }
 
-/* GAS .skip/.space/.zero share count[,fill] semantics.
- * Parse the optional fill once through the existing numeric grammar;
- * unsupported relocatable fills remain errors rather than fake zero bytes. */
-/* Shared GAS .skip/.space/.zero expression grammar: evaluate absolute
- * arithmetic and already-resolved local differences via the existing
- * Common parser. Do not fabricate sizes for forward/relocatable symbols. */
-static bool emit_common_space(MiniAs *as,int section,size_t total,uint8_t fill) {
-    /* Unlike raw .fill, GNU ignores nonzero .space/.skip in SHT_NOBITS.
-     * One checked capacity reservation + memset replaces thousands of
-     * 256-byte Section appends for large source-generated padding. */
-    return minias_section_append_fill(as,section,total,fill,true);
-}
-
 static bool emit_common_pattern(MiniAs *as,int section,
                                 const unsigned char *element,
                                 size_t width,size_t repeat) {
@@ -3408,8 +3395,8 @@ static bool emit_data_stmt(MiniAs *as, const MiniAsStmt *stmt) {
                              stmt->line);
             return false;
         }
-        return emit_common_space(as,stmt->section,stmt->size,
-                                 (uint8_t)stmt->variable_value);
+        return minias_section_append_fill(as,stmt->section,stmt->size,
+                                          (uint8_t)stmt->variable_value,true);
     case MINIAS_FRAGMENT_FIXED_DATA:
         return minias_emit_mc_data(as,stmt);
     default:
@@ -4746,8 +4733,8 @@ bool minias_emit_sections(MiniAs *as) {
             if (!(code_nop_align
                       ? as->target->append_code_alignment(as,stmt,stmt->size)
                       : stmt->align_has_fill
-                      ? emit_common_space(as,stmt->section,stmt->size,
-                                          stmt->align_fill)
+                      ? minias_section_append_fill(as,stmt->section,stmt->size,
+                                                   stmt->align_fill,true)
                       : minias_section_append_zero(as,stmt->section,stmt->size))) {
                 if (as->error[0] == '\0') {
                     minias_set_error(as,
@@ -4931,65 +4918,4 @@ int minias_assemble_config(const char *input_path,
     minias_source_graph_destroy(&graph);
     free(long_branch_ids);
     return rc;
-}
-
-int minias_assemble_with_target(const char *input_path,
-                                const char *output_path,
-                                const MiniAsTargetOps *target,
-                                bool elf32,
-                                uint32_t elf_flags,
-                                unsigned strict_i_xlen,
-                                FILE *diagnostic) {
-    MiniAsAssemblyConfig config;
-    memset(&config, 0, sizeof(config));
-    config.target = target;
-    config.elf32 = elf32;
-    config.elf_flags = elf_flags;
-    if (strict_i_xlen != 0U &&
-        (target->configure_legacy_target == NULL ||
-         !target->configure_legacy_target(&config, strict_i_xlen))) {
-        if (diagnostic != NULL)
-            fprintf(diagnostic, "minic-as: unsupported-legacy-target-configuration\n");
-        return 1;
-    }
-    return minias_assemble_config(input_path, output_path, &config, diagnostic);
-}
-
-int minias_assemble_file_target_isa(const char *input_path,
-                                    const char *output_path,
-                                    bool elf32,
-                                    uint32_t elf_flags,
-                                    unsigned strict_i_xlen,
-                                    FILE *diagnostic) {
-    return minias_assemble_with_target(input_path, output_path,
-                                       minias_target_riscv(), elf32,
-                                       elf_flags, strict_i_xlen, diagnostic);
-}
-
-/* Historical API stays permissive: only explicit -march=rv64i activates
- * ISA qualification so the existing MiniAS/Linux acceptance does not change. */
-int minias_assemble_file_target(const char *input_path,
-                                const char *output_path,
-                                bool elf32,
-                                uint32_t elf_flags,
-                                FILE *diagnostic) {
-    return minias_assemble_file_target_isa(
-        input_path, output_path, elf32, elf_flags, false, diagnostic);
-}
-
-int minias_assemble_file_class(const char *input_path,
-                               const char *output_path,
-                               bool elf32,
-                               FILE *diagnostic) {
-    return minias_assemble_file_target(input_path,
-                                       output_path,
-                                       elf32,
-                                       0U,
-                                       diagnostic);
-}
-
-int minias_assemble_file(const char *input_path,
-                         const char *output_path,
-                         FILE *diagnostic) {
-    return minias_assemble_file_class(input_path, output_path, false, diagnostic);
 }

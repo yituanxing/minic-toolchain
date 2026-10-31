@@ -813,20 +813,6 @@ static void riscv_destroy_target_state(MiniAs *as) {
     as->target_state = NULL;
 }
 
-static bool riscv_configure_legacy(MiniAsAssemblyConfig *config,
-                                   unsigned strict_i_xlen) {
-    MiniAsRiscvProfile profile;
-    if (strict_i_xlen != 32U && strict_i_xlen != 64U) return false;
-    if (config->elf32 != (strict_i_xlen == 32U)) return false;
-    memset(&profile, 0, sizeof(profile));
-    profile.elf32 = config->elf32;
-    profile.strict_i_xlen = strict_i_xlen;
-    if (sizeof(profile) > sizeof(config->target_profile)) return false;
-    memcpy(config->target_profile, &profile, sizeof(profile));
-    config->target_profile_size = sizeof(profile);
-    return true;
-}
-
 static void riscv_capture_site_state(const MiniAs *as,
                                       MiniAsTargetSiteState *site) {
     site->mode_bits = MINIAS_RV_STATE(as)->options;
@@ -853,7 +839,6 @@ static const MiniAsTargetOps riscv_ops = {
     .comment_prefix = '#',
     .init_target_state = riscv_init_target_state,
     .destroy_target_state = riscv_destroy_target_state,
-    .configure_legacy_target = riscv_configure_legacy,
     .capture_site_state = riscv_capture_site_state,
     .default_exec_alignment_for_site = riscv_default_exec_alignment_for_site,
     .elf_machine = 243U, /* EM_RISCV */
