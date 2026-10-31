@@ -2522,6 +2522,184 @@ static bool a64_parse_scalar_fp(const A64AliasState *aliases,
     return false;
 }
 
+/* ISA form selection is a single Target-owned authority. Earlier versions
+ * first recognized families with long mnemonic OR chains, then searched an
+ * independent local encoding list for the very same spelling. Retain one
+ * descriptor lookup for legality, operand shape and initial machine word. */
+typedef struct A64NamedForm {
+    const char *name;
+    uint32_t base;
+    unsigned flags;
+} A64NamedForm;
+
+enum {
+    A64_FORM_LONG = 1U << 0,
+    A64_FORM_UNARY = 1U << 1,
+    A64_FORM_HIGH = 1U << 2,
+    A64_FORM_RAW = 1U << 3,
+    A64_FORM_INSERT = 1U << 4,
+    A64_FORM_RIGHT = 1U << 5,
+    A64_FORM_SIZED = 1U << 6,
+    A64_FORM_SHIFT_ALLOWED = 1U << 7,
+    A64_FORM_THREE = 1U << 8,
+    A64_FORM_PAIR = 1U << 9,
+    A64_FORM_FOUR = 1U << 10,
+    A64_FORM_Q_DEST = 1U << 11,
+    A64_FORM_BYTE_VIEW = 1U << 12
+};
+
+static const A64NamedForm *a64_find_named_form(const char *op,
+                                               const A64NamedForm *forms,
+                                               size_t count) {
+    size_t i;
+    for(i=0U;i<count;++i)
+        if(strcmp(op,forms[i].name)==0)return &forms[i];
+    return NULL;
+}
+
+#define A64_SELECT_FORM(table) a64_find_named_form(op, table, sizeof(table)/sizeof((table)[0]))
+
+static const A64NamedForm a64_madd_forms[] = {
+    {"madd",UINT32_C(0x1b000000),0U},
+    {"msub",UINT32_C(0x1b008000),0U},
+    {"umaddl",UINT32_C(0x9ba00000),A64_FORM_LONG},
+    {"smaddl",UINT32_C(0x9b200000),A64_FORM_LONG},
+    {"umsubl",UINT32_C(0x9ba08000),A64_FORM_LONG},
+    {"smsubl",UINT32_C(0x9b208000),A64_FORM_LONG}
+};
+
+static const A64NamedForm a64_arith_alias_forms[] = {
+    {"neg",UINT32_C(0x4b000000),A64_FORM_UNARY|A64_FORM_SHIFT_ALLOWED},
+    {"negs",UINT32_C(0x6b000000),A64_FORM_UNARY|A64_FORM_SHIFT_ALLOWED},
+    {"ngc",UINT32_C(0x5a000000),A64_FORM_UNARY},
+    {"ngcs",UINT32_C(0x7a000000),A64_FORM_UNARY},
+    {"adc",UINT32_C(0x1a000000),0U},
+    {"adcs",UINT32_C(0x3a000000),0U},
+    {"sbc",UINT32_C(0x5a000000),0U},
+    {"sbcs",UINT32_C(0x7a000000),0U},
+    {"mul",UINT32_C(0x1b007c00),0U},
+    {"mneg",UINT32_C(0x1b00fc00),0U},
+    {"umull",UINT32_C(0x9ba07c00),A64_FORM_LONG},
+    {"smull",UINT32_C(0x9b207c00),A64_FORM_LONG},
+    {"umulh",UINT32_C(0x9bc07c00),A64_FORM_HIGH},
+    {"smulh",UINT32_C(0x9b407c00),A64_FORM_HIGH},
+    {"udiv",UINT32_C(0x1ac00800),0U},
+    {"sdiv",UINT32_C(0x1ac00c00),0U}
+};
+
+static const A64NamedForm a64_bitfield_forms[] = {
+    {"ubfm",UINT32_C(0x53000000),A64_FORM_RAW},
+    {"sbfm",UINT32_C(0x13000000),A64_FORM_RAW},
+    {"bfm",UINT32_C(0x33000000),A64_FORM_RAW},
+    {"ubfx",UINT32_C(0x53000000),0U},
+    {"ubfiz",UINT32_C(0x53000000),A64_FORM_INSERT},
+    {"sbfx",UINT32_C(0x13000000),0U},
+    {"sbfiz",UINT32_C(0x13000000),A64_FORM_INSERT},
+    {"bfi",UINT32_C(0x33000000),A64_FORM_INSERT},
+    {"bfxil",UINT32_C(0x33000000),0U}
+};
+
+static const A64NamedForm a64_select_forms[] = {
+    {"csel",UINT32_C(0x1a800000),0U},
+    {"csinc",UINT32_C(0x1a800400),0U},
+    {"csinv",UINT32_C(0x5a800000),0U},
+    {"csneg",UINT32_C(0x5a800400),0U}
+};
+
+static const A64NamedForm a64_reduction_forms[] = {
+    {"sminv",UINT32_C(0x0e31a800),0U},
+    {"smaxv",UINT32_C(0x0e30a800),0U},
+    {"uminv",UINT32_C(0x2e31a800),0U},
+    {"umaxv",UINT32_C(0x2e30a800),0U},
+    {"addv", UINT32_C(0x0e31b800),0U}
+};
+
+static const A64NamedForm a64_shift_forms[] = {
+    {"sshr",UINT32_C(0x0f000400),A64_FORM_RIGHT},
+    {"ssra",UINT32_C(0x0f001400),A64_FORM_RIGHT},
+    {"srshr",UINT32_C(0x0f002400),A64_FORM_RIGHT},
+    {"srsra",UINT32_C(0x0f003400),A64_FORM_RIGHT},
+    {"shl",UINT32_C(0x0f005400),0U},
+    {"ushr",UINT32_C(0x2f000400),A64_FORM_RIGHT},
+    {"usra",UINT32_C(0x2f001400),A64_FORM_RIGHT},
+    {"urshr",UINT32_C(0x2f002400),A64_FORM_RIGHT},
+    {"ursra",UINT32_C(0x2f003400),A64_FORM_RIGHT},
+    {"sri",UINT32_C(0x2f004400),A64_FORM_RIGHT},
+    {"sli",UINT32_C(0x2f005400),0U}
+};
+
+static const A64NamedForm a64_crc_forms[] = {
+    {"crc32b",UINT32_C(0x1ac04000),0U},
+    {"crc32h",UINT32_C(0x1ac04400),0U},
+    {"crc32w",UINT32_C(0x1ac04800),0U},
+    {"crc32x",UINT32_C(0x9ac04c00),A64_FORM_LONG},
+    {"crc32cb",UINT32_C(0x1ac05000),0U},
+    {"crc32ch",UINT32_C(0x1ac05400),0U},
+    {"crc32cw",UINT32_C(0x1ac05800),0U},
+    {"crc32cx",UINT32_C(0x9ac05c00),A64_FORM_LONG}
+};
+
+static const A64NamedForm a64_aes_forms[] = {
+    {"aese",UINT32_C(0x4e284800),0U},
+    {"aesd",UINT32_C(0x4e285800),0U},
+    {"aesmc",UINT32_C(0x4e286800),0U},
+    {"aesimc",UINT32_C(0x4e287800),0U}
+};
+
+static const A64NamedForm a64_simd_three_forms[] = {
+    {"eor",UINT32_C(0x2e201c00),0U},
+    {"orr",UINT32_C(0x0ea01c00),0U},
+    {"and",UINT32_C(0x0e201c00),0U},
+    {"bic",UINT32_C(0x0e601c00),0U},
+    {"bsl",UINT32_C(0x2e601c00),0U},
+    {"bit",UINT32_C(0x2ea01c00),0U},
+    {"bif",UINT32_C(0x2ee01c00),0U},
+    {"add",UINT32_C(0x0e208400),A64_FORM_SIZED},
+    {"cmeq",UINT32_C(0x2e208c00),A64_FORM_SIZED},
+    {"cmgt",UINT32_C(0x0e203400),A64_FORM_SIZED},
+    {"cmge",UINT32_C(0x0e203c00),A64_FORM_SIZED},
+    {"cmhi",UINT32_C(0x2e203400),A64_FORM_SIZED},
+    {"cmhs",UINT32_C(0x2e203c00),A64_FORM_SIZED},
+    {"cmtst",UINT32_C(0x0e208c00),A64_FORM_SIZED},
+    {"trn1",UINT32_C(0x0e002800),A64_FORM_SIZED},
+    {"trn2",UINT32_C(0x0e006800),A64_FORM_SIZED},
+    {"uzp1",UINT32_C(0x0e001800),A64_FORM_SIZED},
+    {"uzp2",UINT32_C(0x0e005800),A64_FORM_SIZED},
+    {"zip1",UINT32_C(0x0e003800),A64_FORM_SIZED},
+    {"zip2",UINT32_C(0x0e007800),A64_FORM_SIZED}
+};
+
+static const A64NamedForm a64_sha1_poly_forms[] = {
+    {"pmull",UINT32_C(0x0ee0e000),A64_FORM_THREE},
+    {"pmull2",UINT32_C(0x4ee0e000),A64_FORM_THREE|A64_FORM_PAIR},
+    {"sha1su0",UINT32_C(0x5e003000),A64_FORM_THREE},
+    {"sha1su1",UINT32_C(0x5e281800),0U}
+};
+
+static const A64NamedForm a64_sha1_round_forms[] = {
+    {"sha1c",UINT32_C(0x5e000000),0U},
+    {"sha1m",UINT32_C(0x5e002000),0U},
+    {"sha1p",UINT32_C(0x5e001000),0U}
+};
+
+static const A64NamedForm a64_sha256_forms[] = {
+    {"sha256su0",UINT32_C(0x5e282800),0U},
+    {"sha256su1",UINT32_C(0x5e006000),A64_FORM_THREE},
+    {"sha256h",UINT32_C(0x5e004000),A64_FORM_THREE|A64_FORM_PAIR},
+    {"sha256h2",UINT32_C(0x5e005000),A64_FORM_THREE|A64_FORM_PAIR}
+};
+
+static const A64NamedForm a64_sha3_forms[] = {
+    {"eor3",UINT32_C(0xce000000),A64_FORM_FOUR|A64_FORM_BYTE_VIEW},
+    {"bcax",UINT32_C(0xce200000),A64_FORM_FOUR|A64_FORM_BYTE_VIEW},
+    {"rax1",UINT32_C(0xce608c00),0U},
+    {"xar",UINT32_C(0xce800000),A64_FORM_FOUR},
+    {"sha512h",UINT32_C(0xce608000),A64_FORM_Q_DEST},
+    {"sha512h2",UINT32_C(0xce608400),A64_FORM_Q_DEST},
+    {"sha512su0",UINT32_C(0xcec08000),A64_FORM_UNARY},
+    {"sha512su1",UINT32_C(0xce608800),0U}
+};
+
 static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
     const A64TargetState *state=(const A64TargetState *)as->target_state;
     const A64AliasState *aliases=state?state->aliases:NULL;
@@ -2534,6 +2712,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
     char first[80], second[80];
     const char *op = stmt->op;
     const char *args = stmt->args;
+    const A64NamedForm *form = NULL;
 
     if (inst == NULL) {
         minias_set_error(as, "out-of-memory:aarch64-mcinst");
@@ -2658,108 +2837,67 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         put_reg(&inst->operands[0],rd,wide);
     } else if(a64_parse_lse(aliases,as,inst,op,args)) {
         /* LSE grammar is owned by one target decoder. */
-    } else if(!strcmp(op,"madd") || !strcmp(op,"msub") ||
-              !strcmp(op,"umaddl") || !strcmp(op,"smaddl") ||
-              !strcmp(op,"umsubl") || !strcmp(op,"smsubl")) {
+    } else if((form=A64_SELECT_FORM(a64_madd_forms))!=NULL) {
         /* Same target multiply-add machine form as MUL/MULL aliases,
          * but retaining the real Ra register rather than encoding ZR. */
-        static const struct {const char *name;uint32_t base;bool longop;} tab[]={
-            {"madd",UINT32_C(0x1b000000),false},
-            {"msub",UINT32_C(0x1b008000),false},
-            {"umaddl",UINT32_C(0x9ba00000),true},
-            {"smaddl",UINT32_C(0x9b200000),true},
-            {"umsubl",UINT32_C(0x9ba08000),true},
-            {"smsubl",UINT32_C(0x9b208000),true}
-        };
-        char tok[4][384];unsigned n,rd,rn,rm,ra,k;
+        char tok[4][384];unsigned n,rd,rn,rm,ra;
         bool wd,wn,wm,wa,sp;
-        for(k=0U;k<sizeof(tab)/sizeof(tab[0]);++k)
-            if(!strcmp(op,tab[k].name))break;
-        if(k==sizeof(tab)/sizeof(tab[0]) ||
-           !split_operands(args,tok,&n) || n!=4U ||
+        if(!split_operands(args,tok,&n) || n!=4U ||
            !parse_a64_reg(aliases,tok[0],&rd,&wd,&sp) || sp ||
            !parse_a64_reg(aliases,tok[1],&rn,&wn,&sp) || sp ||
            !parse_a64_reg(aliases,tok[2],&rm,&wm,&sp) || sp ||
            !parse_a64_reg(aliases,tok[3],&ra,&wa,&sp) || sp ||
-           (tab[k].longop?(!wd || wn || wm || !wa):
+           ((form->flags&A64_FORM_LONG)?(!wd || wn || wm || !wa):
                           (wd!=wn || wd!=wm || wd!=wa))) {
             minias_set_error(as,"bad-aarch64-multiply-accumulate:%s:line=%zu",
                              args,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
         inst->opcode=A64_MC_ARITH_ALIAS;inst->count=4U;
-        inst->encoding=tab[k].base;
+        inst->encoding=form->base;
         put_reg(&inst->operands[0],rd,wd);
         put_reg(&inst->operands[1],rn,wn);
         put_reg(&inst->operands[2],rm,wm);
         put_reg(&inst->operands[3],ra,wa);
-    } else if(!strcmp(op,"neg") || !strcmp(op,"negs") ||
-              !strcmp(op,"ngc") || !strcmp(op,"ngcs") ||
-              !strcmp(op,"adc") || !strcmp(op,"adcs") ||
-              !strcmp(op,"sbc") || !strcmp(op,"sbcs") ||
-              !strcmp(op,"mul") || !strcmp(op,"mneg") ||
-              !strcmp(op,"umull") || !strcmp(op,"smull") ||
-              !strcmp(op,"umulh") || !strcmp(op,"smulh") ||
-              !strcmp(op,"udiv") || !strcmp(op,"sdiv")) {
+    } else if((form=A64_SELECT_FORM(a64_arith_alias_forms))!=NULL) {
         /* GNU A64 three-operand data-processing family. NEG/NGC are
          * SUB/SBC with Rn=ZR; MUL/MNEG/MULL are multiply-add aliases
          * with Ra=ZR. Shared typed operands and one target encoder. */
-        static const struct {const char *name;uint32_t base;
-                             bool unary;bool long_wide;bool high_wide;} ops[]={
-            {"neg",UINT32_C(0x4b000000),true,false,false},
-            {"negs",UINT32_C(0x6b000000),true,false,false},
-            {"ngc",UINT32_C(0x5a000000),true,false,false},
-            {"ngcs",UINT32_C(0x7a000000),true,false,false},
-            {"adc",UINT32_C(0x1a000000),false,false,false},
-            {"adcs",UINT32_C(0x3a000000),false,false,false},
-            {"sbc",UINT32_C(0x5a000000),false,false,false},
-            {"sbcs",UINT32_C(0x7a000000),false,false,false},
-            {"mul",UINT32_C(0x1b007c00),false,false,false},
-            {"mneg",UINT32_C(0x1b00fc00),false,false,false},
-            {"umull",UINT32_C(0x9ba07c00),false,true,false},
-            {"smull",UINT32_C(0x9b207c00),false,true,false},
-            {"umulh",UINT32_C(0x9bc07c00),false,false,true},
-            {"smulh",UINT32_C(0x9b407c00),false,false,true},
-            {"udiv",UINT32_C(0x1ac00800),false,false,false},
-            {"sdiv",UINT32_C(0x1ac00c00),false,false,false}
-        };
-        char alu_tok[4][384];unsigned alu_n,alu_rd,alu_rn=31U,alu_rm,alu_k;
+        char alu_tok[4][384];unsigned alu_n,alu_rd,alu_rn=31U,alu_rm;
         bool alu_wide,alu_nwide=false,alu_mwide,alu_sp;
-        for(alu_k=0U;alu_k<sizeof(ops)/sizeof(ops[0]);++alu_k)
-            if(!strcmp(op,ops[alu_k].name))break;
-        if(alu_k==sizeof(ops)/sizeof(ops[0]) ||
-           !split_operands(args,alu_tok,&alu_n) ||
-           (ops[alu_k].unary?
+        const bool unary=(form->flags&A64_FORM_UNARY)!=0U;
+        if(!split_operands(args,alu_tok,&alu_n) ||
+           (unary?
              (alu_n!=2U &&
-              (alu_n!=3U || alu_k>1U)):alu_n!=3U) ||
+              (alu_n!=3U || !(form->flags&A64_FORM_SHIFT_ALLOWED))):alu_n!=3U) ||
            !parse_a64_reg(aliases,alu_tok[0],&alu_rd,&alu_wide,&alu_sp) ||
            alu_sp) {
             minias_set_error(as,"bad-aarch64-arith-alias:%s:line=%zu",
                              args,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
-        if(!ops[alu_k].unary &&
+        if(!unary &&
            (!parse_a64_reg(aliases,alu_tok[1],&alu_rn,&alu_nwide,&alu_sp) ||
             alu_sp)) {
             minias_set_error(as,"bad-aarch64-arith-source:%s:line=%zu",
                              args,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
-        if(!parse_a64_reg(aliases,alu_tok[ops[alu_k].unary?1U:2U],
+        if(!parse_a64_reg(aliases,alu_tok[unary?1U:2U],
                           &alu_rm,&alu_mwide,&alu_sp) || alu_sp ||
-           (ops[alu_k].long_wide?
+           ((form->flags&A64_FORM_LONG)?
               (!alu_wide || alu_nwide || alu_mwide):
-              ops[alu_k].high_wide?
+              (form->flags&A64_FORM_HIGH)?
               (!alu_wide || !alu_nwide || !alu_mwide):
               (alu_mwide!=alu_wide ||
-               (!ops[alu_k].unary && alu_nwide!=alu_wide)))) {
+               (!unary && alu_nwide!=alu_wide)))) {
             minias_set_error(as,"bad-aarch64-arith-width:%s:line=%zu",
                              args,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
         inst->opcode=A64_MC_ARITH_ALIAS;inst->count=3U;
-        inst->encoding=ops[alu_k].base;
-        if(ops[alu_k].unary && alu_n==3U) {
+        inst->encoding=form->base;
+        if(unary && alu_n==3U) {
             uint32_t shift_fields;
             if(!a64_shift_fields(alu_tok[2],alu_wide,false,&shift_fields)) {
                 minias_set_error(as,"bad-aarch64-neg-shift:%s:line=%zu",
@@ -2771,11 +2909,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         put_reg(&inst->operands[0],alu_rd,alu_wide);
         put_reg(&inst->operands[1],alu_rn,alu_wide);
         put_reg(&inst->operands[2],alu_rm,alu_mwide);
-    } else if(!strcmp(op,"ubfm") || !strcmp(op,"sbfm") ||
-              !strcmp(op,"bfm") ||
-              !strcmp(op,"ubfx") || !strcmp(op,"ubfiz") ||
-              !strcmp(op,"sbfx") || !strcmp(op,"sbfiz") ||
-              !strcmp(op,"bfi")  || !strcmp(op,"bfxil")) {
+    } else if((form=A64_SELECT_FORM(a64_bitfield_forms))!=NULL) {
         /* One ISA-owned UBFM/SBFM/BFM bitfield selector for GNU aliases:
          * extracts use imms=lsb+width-1, insertions wrap immr modulo
          * XLEN and use imms=width-1. No Common parser or ELF fork. */
@@ -2783,18 +2917,8 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         unsigned bit_n,bit_rd,bit_rn,reg_bits;
         bool bit_wide,bit_source_wide,bit_sp;
         int64_t lsb,width;
-        bool raw_form=!strcmp(op,"ubfm") || !strcmp(op,"sbfm") ||
-                      !strcmp(op,"bfm");
-        bool insertion=!strcmp(op,"ubfiz") || !strcmp(op,"sbfiz") ||
-                       !strcmp(op,"bfi");
-        uint32_t base=raw_form?
-                      (!strcmp(op,"ubfm")?UINT32_C(0x53000000):
-                       !strcmp(op,"sbfm")?UINT32_C(0x13000000):
-                                             UINT32_C(0x33000000)):
-                      !strcmp(op,"ubfx") || !strcmp(op,"ubfiz")?
-                      UINT32_C(0x53000000):
-                      !strcmp(op,"sbfx") || !strcmp(op,"sbfiz")?
-                      UINT32_C(0x13000000):UINT32_C(0x33000000);
+        const bool raw_form=(form->flags&A64_FORM_RAW)!=0U;
+        const bool insertion=(form->flags&A64_FORM_INSERT)!=0U;
         if(!split_operands(args,bit_tok,&bit_n) || bit_n!=4U ||
            !parse_a64_reg(aliases,bit_tok[0],&bit_rd,&bit_wide,&bit_sp) ||
            bit_sp ||
@@ -2816,7 +2940,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
             minias_mcinst_destroy(inst);return false;
         }
         inst->opcode=A64_MC_BITFIELD;inst->count=4U;
-        inst->encoding=base;
+        inst->encoding=form->base;
         put_reg(&inst->operands[0],bit_rd,bit_wide);
         put_reg(&inst->operands[1],bit_rn,bit_source_wide);
         put_immediate(&inst->operands[2],
@@ -2917,17 +3041,10 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         else put_reg(&inst->operands[1],rm,wide);
         put_immediate(&inst->operands[2],nzcv);
         put_immediate(&inst->operands[3],cc);
-    } else if(!strcmp(op,"csel") || !strcmp(op,"csinc") ||
-              !strcmp(op,"csinv") || !strcmp(op,"csneg")) {
+    } else if((form=A64_SELECT_FORM(a64_select_forms))!=NULL) {
         char tok[4][384];
-        unsigned n,rd,rn,rm,cc,i;
+        unsigned n,rd,rn,rm,cc;
         bool wd,wn,wm,sp;
-        static const struct {const char *name;uint32_t base;} select[]={
-            {"csel",UINT32_C(0x1a800000)},
-            {"csinc",UINT32_C(0x1a800400)},
-            {"csinv",UINT32_C(0x5a800000)},
-            {"csneg",UINT32_C(0x5a800400)}
-        };
         if(!split_operands(args,tok,&n) || n!=4U ||
            !parse_a64_reg(aliases,tok[0],&rd,&wd,&sp) || sp ||
            !parse_a64_reg(aliases,tok[1],&rn,&wn,&sp) || sp || wd!=wn ||
@@ -2937,13 +3054,8 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
                              args,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
-        for(i=0U;i<sizeof(select)/sizeof(select[0]);++i)
-            if(!strcmp(op,select[i].name))break;
-        if(i==sizeof(select)/sizeof(select[0])) {
-            minias_mcinst_destroy(inst);return false;
-        }
         inst->opcode=A64_MC_COND_SELECT;inst->count=3U;
-        inst->encoding=select[i].base|(cc<<12U);
+        inst->encoding=form->base|(cc<<12U);
         put_reg(&inst->operands[0],rd,wd);
         put_reg(&inst->operands[1],rn,wd);
         put_reg(&inst->operands[2],rm,wd);
@@ -3009,20 +3121,11 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
                        (da&UINT32_C(0x40000000));
         put_vector(&inst->operands[0],rd);
         put_vector(&inst->operands[1],rn);
-    } else if(!strcmp(op,"sminv") || !strcmp(op,"smaxv") ||
-              !strcmp(op,"uminv") || !strcmp(op,"umaxv") ||
-              !strcmp(op,"addv")) {
+    } else if((form=A64_SELECT_FORM(a64_reduction_forms))!=NULL) {
         /* All horizontal integer vector reductions share one typed
          * 2-register AdvSIMD emitter, with actual B/H/S destination bank
          * and source Q/element legality. GNU GHASH uses SMINV B0,V6.16B. */
-        static const struct {const char *name;uint32_t base;} reductions[]={
-            {"sminv",UINT32_C(0x0e31a800)},
-            {"smaxv",UINT32_C(0x0e30a800)},
-            {"uminv",UINT32_C(0x2e31a800)},
-            {"umaxv",UINT32_C(0x2e30a800)},
-            {"addv", UINT32_C(0x0e31b800)}
-        };
-        char tok[4][384],*end,resolved[96];unsigned n,rd,rn,k;
+        char tok[4][384],*end,resolved[96];unsigned n,rd,rn;
         unsigned long dst_number;
         uint32_t arrange;
         unsigned elem;
@@ -3039,10 +3142,8 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
            (elem==2U && !(arrange&UINT32_C(0x40000000))))
             goto bad_reduction;
         rd=(unsigned)dst_number;
-        for(k=0U;k<sizeof(reductions)/sizeof(reductions[0]);++k)
-            if(!strcmp(op,reductions[k].name))break;
         inst->opcode=A64_MC_SIMD_CRYPTO;inst->count=2U;
-        inst->encoding=reductions[k].base|
+        inst->encoding=form->base|
                        (arrange&UINT32_C(0x40000000))|
                        ((arrange&UINT32_C(0xc00))<<12U);
         put_fp_scalar(&inst->operands[0],rd,false);
@@ -3418,38 +3519,16 @@ reduction_done:;
             put_fp_scalar(&inst->operands[1],rn,fs);
         }
         }
-    } else if(!strcmp(op,"ushr") || !strcmp(op,"sshr") ||
-              !strcmp(op,"sri") || !strcmp(op,"shl") ||
-              !strcmp(op,"sli") || !strcmp(op,"usra") ||
-              !strcmp(op,"ssra") || !strcmp(op,"urshr") ||
-              !strcmp(op,"srshr") || !strcmp(op,"ursra") ||
-              !strcmp(op,"srsra")) {
+    } else if((form=A64_SELECT_FORM(a64_shift_forms))!=NULL) {
         /* One AdvSIMD shift-immediate ISA family for vectors and scalar Dn.
          * Right shifts use immh:immb=2*element_bits-shift; left shifts
          * use element_bits+shift. Preserve signed/unsigned and insert
          * semantics in the target opcode base, not the Common MC layout. */
-        static const struct {const char *name;uint32_t base;bool right;} shifts[]={
-            {"sshr",UINT32_C(0x0f000400),true},
-            {"ssra",UINT32_C(0x0f001400),true},
-            {"srshr",UINT32_C(0x0f002400),true},
-            {"srsra",UINT32_C(0x0f003400),true},
-            {"shl",UINT32_C(0x0f005400),false},
-            {"ushr",UINT32_C(0x2f000400),true},
-            {"usra",UINT32_C(0x2f001400),true},
-            {"urshr",UINT32_C(0x2f002400),true},
-            {"ursra",UINT32_C(0x2f003400),true},
-            {"sri",UINT32_C(0x2f004400),true},
-            {"sli",UINT32_C(0x2f005400),false}
-        };
         char tok[4][384];unsigned n,rd,rn,bits,encoded_shift;
         uint32_t da,sa,base;
         int64_t shift;
         bool scalar=false;
-        size_t kind;
-        for(kind=0U;kind<sizeof(shifts)/sizeof(shifts[0]);++kind)
-            if(!strcmp(op,shifts[kind].name))break;
-        if(kind==sizeof(shifts)/sizeof(shifts[0]) ||
-           !split_operands(args,tok,&n) || n!=3U ||
+        if(!split_operands(args,tok,&n) || n!=3U ||
            !parse_signed_number(tok[2],&shift)) {
             minias_set_error(as,"bad-aarch64-simd-shift:%s:line=%zu",
                              args,stmt->line);minias_mcinst_destroy(inst);return false;
@@ -3467,16 +3546,16 @@ reduction_done:;
             minias_set_error(as,"bad-aarch64-simd-shift:%s:line=%zu",
                              args,stmt->line);minias_mcinst_destroy(inst);return false;
         }else bits=8U<<((da&UINT32_C(0xc00))>>10U);
-        if((shifts[kind].right?(shift<1 || shift>(int64_t)bits):
+        if(((form->flags&A64_FORM_RIGHT)?(shift<1 || shift>(int64_t)bits):
                    (shift<0 || shift>=(int64_t)bits)) ||
            (!scalar && bits==64U &&
             (da&UINT32_C(0x40000000))==0U)) {
             minias_set_error(as,"bad-aarch64-simd-shift-range:%s:line=%zu",
                              args,stmt->line);minias_mcinst_destroy(inst);return false;
         }
-        encoded_shift=shifts[kind].right?2U*bits-(unsigned)shift:
+        encoded_shift=(form->flags&A64_FORM_RIGHT)?2U*bits-(unsigned)shift:
                                            bits+(unsigned)shift;
-        base=shifts[kind].base;
+        base=form->base;
         if(scalar)base+=UINT32_C(0x50000000);
         inst->opcode=A64_MC_SIMD_DUP;inst->count=2U;
         inst->encoding=base|(scalar?0U:(da&UINT32_C(0x40000000)))|
@@ -3510,17 +3589,7 @@ reduction_done:;
         /* Eight architectural CRC32/CRC32C width forms use one ALU
          * machine word with indexed Rm/Rn/Rd; CRC32X and CRC32CX
          * require X source, but W accumulator and W destination. */
-        static const struct {const char *name;uint32_t base;bool xsrc;} crc[]={
-            {"crc32b",UINT32_C(0x1ac04000),false},
-            {"crc32h",UINT32_C(0x1ac04400),false},
-            {"crc32w",UINT32_C(0x1ac04800),false},
-            {"crc32x",UINT32_C(0x9ac04c00),true},
-            {"crc32cb",UINT32_C(0x1ac05000),false},
-            {"crc32ch",UINT32_C(0x1ac05400),false},
-            {"crc32cw",UINT32_C(0x1ac05800),false},
-            {"crc32cx",UINT32_C(0x9ac05c00),true}
-        };
-        char tok[4][384];unsigned n,rd,rn,rm,k;
+        char tok[4][384];unsigned n,rd,rn,rm;
         bool wd,wn,wm,sp;
         if((a64_features(as)&A64_FEATURE_CRC)==0U ||
            !split_operands(args,tok,&n) || n!=3U ||
@@ -3530,27 +3599,18 @@ reduction_done:;
             minias_set_error(as,"bad-aarch64-crc32:%s:line=%zu",args,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
-        for(k=0U;k<sizeof(crc)/sizeof(crc[0]);++k)
-            if(!strcmp(op,crc[k].name))break;
-        if(k==sizeof(crc)/sizeof(crc[0]) ||
-           wm!=crc[k].xsrc) {
+        form=A64_SELECT_FORM(a64_crc_forms);
+        if(form==NULL || wm!=((form->flags&A64_FORM_LONG)!=0U)) {
             minias_set_error(as,"bad-aarch64-crc-width:%s:line=%zu",args,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
         inst->opcode=A64_MC_ARITH_ALIAS;inst->count=3U;
-        inst->encoding=crc[k].base;
+        inst->encoding=form->base;
         put_reg(&inst->operands[0],rd,false);
         put_reg(&inst->operands[1],rn,false);
         put_reg(&inst->operands[2],rm,wm);
-    } else if(!strcmp(op,"aese") || !strcmp(op,"aesd") ||
-              !strcmp(op,"aesmc") || !strcmp(op,"aesimc")) {
-        static const struct {const char *name;uint32_t base;} aes[]={
-            {"aese",UINT32_C(0x4e284800)},
-            {"aesd",UINT32_C(0x4e285800)},
-            {"aesmc",UINT32_C(0x4e286800)},
-            {"aesimc",UINT32_C(0x4e287800)}
-        };
-        char tok[4][384];unsigned n,rd,rn,k;
+    } else if((form=A64_SELECT_FORM(a64_aes_forms))!=NULL) {
+        char tok[4][384];unsigned n,rd,rn;
         uint32_t da,sa;
         if((a64_features(as)&A64_FEATURE_CRYPTO)==0U ||
            !split_operands(args,tok,&n) || n!=2U ||
@@ -3560,58 +3620,18 @@ reduction_done:;
             minias_set_error(as,"bad-aarch64-aes:%s:line=%zu",args,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
-        for(k=0U;k<sizeof(aes)/sizeof(aes[0]);++k)
-            if(!strcmp(op,aes[k].name))break;
         inst->opcode=A64_MC_SIMD_CRYPTO;inst->count=2U;
-        inst->encoding=aes[k].base;
+        inst->encoding=form->base;
         put_vector(&inst->operands[0],rd);
         put_vector(&inst->operands[1],rn);
-    } else if(!strcmp(op,"eor") || !strcmp(op,"orr") ||
-              !strcmp(op,"and") || !strcmp(op,"bic") ||
-              !strcmp(op,"bsl") || !strcmp(op,"bit") ||
-              !strcmp(op,"bif") ||
-              (!strcmp(op,"add") && a64_register_prefix(aliases,args)=='v') ||
-              !strcmp(op,"cmeq") || !strcmp(op,"cmgt") ||
-              !strcmp(op,"cmge") || !strcmp(op,"cmhi") ||
-              !strcmp(op,"cmhs") || !strcmp(op,"cmtst") ||
-              !strcmp(op,"trn1") || !strcmp(op,"trn2") ||
-              !strcmp(op,"uzp1") || !strcmp(op,"uzp2") ||
-              !strcmp(op,"zip1") || !strcmp(op,"zip2")) {
-        char tok[4][384];unsigned n,rd,rn,rm,i;
+    } else if((form=A64_SELECT_FORM(a64_simd_three_forms))!=NULL &&
+              (strcmp(op,"add")!=0 ||
+               a64_register_prefix(aliases,args)=='v')) {
+        char tok[4][384];unsigned n,rd,rn,rm;
         uint32_t da,sa,ta;
-        static const struct {const char *name;uint32_t base;} table[]={
-            {"eor",UINT32_C(0x2e201c00)},
-            {"orr",UINT32_C(0x0ea01c00)},
-            {"and",UINT32_C(0x0e201c00)},
-            {"bic",UINT32_C(0x0e601c00)},
-            {"bsl",UINT32_C(0x2e601c00)},
-            {"bit",UINT32_C(0x2ea01c00)},
-            {"bif",UINT32_C(0x2ee01c00)},
-            {"add",UINT32_C(0x0e208400)},
-            /* Existing typed three-register AdvSIMD emitter owns all six
-             * compare-register opcodes and a single size/Q checker. */
-            {"cmeq",UINT32_C(0x2e208c00)},
-            {"cmgt",UINT32_C(0x0e203400)},
-            {"cmge",UINT32_C(0x0e203c00)},
-            {"cmhi",UINT32_C(0x2e203400)},
-            {"cmhs",UINT32_C(0x2e203c00)},
-            {"cmtst",UINT32_C(0x0e208c00)},
-            {"trn1",UINT32_C(0x0e002800)},
-            {"trn2",UINT32_C(0x0e006800)},
-            {"uzp1",UINT32_C(0x0e001800)},
-            {"uzp2",UINT32_C(0x0e005800)},
-            {"zip1",UINT32_C(0x0e003800)},
-            {"zip2",UINT32_C(0x0e007800)}
-        };
         if(split_operands(args,tok,&n) && n==3U &&
            a64_register_prefix(aliases,tok[0])=='v') {
-            bool permute=!strcmp(op,"trn1") || !strcmp(op,"trn2") ||
-                         !strcmp(op,"uzp1") || !strcmp(op,"uzp2") ||
-                         !strcmp(op,"zip1") || !strcmp(op,"zip2");
-            bool compare=!strcmp(op,"cmeq") || !strcmp(op,"cmgt") ||
-                         !strcmp(op,"cmge") || !strcmp(op,"cmhi") ||
-                         !strcmp(op,"cmhs") || !strcmp(op,"cmtst");
-            bool sized=permute || compare || !strcmp(op,"add");
+            bool sized=(form->flags&A64_FORM_SIZED)!=0U;
             if(!a64_vector_view(aliases,tok[0],&rd,&da) ||
                !a64_vector_view(aliases,tok[1],&rn,&sa) ||
                !a64_vector_view(aliases,tok[2],&rm,&ta) ||
@@ -3624,10 +3644,8 @@ reduction_done:;
                                  args,stmt->line);
                 minias_mcinst_destroy(inst);return false;
             }
-            for(i=0U;i<sizeof(table)/sizeof(table[0]);++i)
-                if(!strcmp(op,table[i].name))break;
             inst->opcode=A64_MC_SIMD_LOGIC;inst->count=3U;
-            inst->encoding=table[i].base|
+            inst->encoding=form->base|
                           (da&UINT32_C(0x40000000))|
                           (sized?
                           ((da&UINT32_C(0xc00))<<12U):0U);
@@ -3783,15 +3801,15 @@ reduction_done:;
         put_vector(&inst->operands[0],rd);
         put_vector(&inst->operands[1],rn);
         put_vector(&inst->operands[2],rm);
-    } else if(!strcmp(op,"pmull") || !strcmp(op,"pmull2") ||
-              !strcmp(op,"sha1su0") || !strcmp(op,"sha1su1")) {
+    } else if((form=A64_SELECT_FORM(a64_sha1_poly_forms))!=NULL) {
         /* Two ARM64 kernel Crypto instruction families share existing
          * typed SIMD two-/three-register emitters and strict feature gate. */
         char tok[4][384];unsigned n,rd,rn,rm=0U;
         uint32_t sa=0U,ta=0U,da=0U;
         bool polynomial=!strncmp(op,"pmull",5U);
-        bool pair=!strcmp(op,"pmull2");
-        bool tri=polynomial || !strcmp(op,"sha1su0");
+        bool pair=(form->flags&A64_FORM_PAIR)!=0U;
+        bool tri=(form->flags&A64_FORM_THREE)!=0U;
+        bool bytes=false;
         bool valid=(a64_features(as)&A64_FEATURE_CRYPTO)!=0U &&
             split_operands(args,tok,&n) && n==(tri?3U:2U);
         if(valid && polynomial) {
@@ -3799,8 +3817,8 @@ reduction_done:;
              * widths: polynomial bytes -> Vd.8H and polynomial 64-bit
              * halves -> Vd.1Q. Both reuse the same three-register
              * emitter; Vn/Vm shapes must match low/high selection. */
-            bool bytes=a64_vector_view(aliases,tok[0],&rd,&da) &&
-                       da==UINT32_C(0x40000400);
+            bytes=a64_vector_view(aliases,tok[0],&rd,&da) &&
+                  da==UINT32_C(0x40000400);
             if(!bytes)valid=a64_vector_1q(aliases,tok[0],&rd);
             if(valid) {
                 uint32_t source=bytes?
@@ -3810,9 +3828,6 @@ reduction_done:;
                       a64_vector_view(aliases,tok[2],&rm,&ta) &&
                       sa==source && ta==source;
             }
-            if(valid && bytes)
-                inst->encoding=pair?UINT32_C(0x4e20e000):
-                                     UINT32_C(0x0e20e000);
         }else if(valid) {
             valid=a64_vector_view(aliases,tok[0],&rd,&da) &&
                   a64_vector_view(aliases,tok[1],&rn,&sa) &&
@@ -3825,17 +3840,12 @@ reduction_done:;
         }
         inst->opcode=tri?A64_MC_SIMD_LOGIC:A64_MC_SIMD_CRYPTO;
         inst->count=tri?3U:2U;
-        if(!polynomial ||
-           inst->encoding==0U)
-            inst->encoding=polynomial?
-                  (pair?UINT32_C(0x4ee0e000):UINT32_C(0x0ee0e000)):
-                  !strcmp(op,"sha1su0")?UINT32_C(0x5e003000):
-                                        UINT32_C(0x5e281800);
+        inst->encoding=polynomial && bytes?
+                       (form->base&~UINT32_C(0x00c00000)):form->base;
         put_vector(&inst->operands[0],rd);
         put_vector(&inst->operands[1],rn);
         if(tri)put_vector(&inst->operands[2],rm);
-    } else if(!strcmp(op,"sha1c") || !strcmp(op,"sha1m") ||
-              !strcmp(op,"sha1p")) {
+    } else if((form=A64_SELECT_FORM(a64_sha1_round_forms))!=NULL) {
         /* GNU ARMv8 Crypto SHA1 round operations share a typed
          * Qd,Sn,Vm.4S encoding; no second SIMD register parser. */
         char arg[4][384];unsigned n,rd,rn,rm;
@@ -3850,9 +3860,7 @@ reduction_done:;
                              args,stmt->line);minias_mcinst_destroy(inst);return false;
         }
         inst->opcode=A64_MC_SIMD_LOGIC;inst->count=3U;
-        inst->encoding=!strcmp(op,"sha1c")?UINT32_C(0x5e000000):
-                       !strcmp(op,"sha1p")?UINT32_C(0x5e001000):
-                                            UINT32_C(0x5e002000);
+        inst->encoding=form->base;
         put_q(&inst->operands[0],rd);
         put_fp_scalar(&inst->operands[1],rn,false);
         put_vector(&inst->operands[2],rm);
@@ -3871,14 +3879,13 @@ reduction_done:;
         inst->encoding=UINT32_C(0x5e280800);
         put_fp_scalar(&inst->operands[0],rd,false);
         put_fp_scalar(&inst->operands[1],rn,false);
-    } else if(!strcmp(op,"sha256su0") || !strcmp(op,"sha256su1") ||
-              !strcmp(op,"sha256h") || !strcmp(op,"sha256h2")) {
+    } else if((form=A64_SELECT_FORM(a64_sha256_forms))!=NULL) {
         /* One typed ARM SHA256 instruction family: H/H2 use scalar Qd,Qn
          * and vector Vm.4S; SU1 uses three vector .4S operands, while
          * SU0 uses two. No target-independent register-bank guessing. */
         char tok[4][384];unsigned n,rd,rn,rm=0U;uint32_t da=0U,sa=0U,ta=0U;
-        bool pair=!strcmp(op,"sha256h") || !strcmp(op,"sha256h2");
-        bool tri=strcmp(op,"sha256su0")!=0;
+        bool pair=(form->flags&A64_FORM_PAIR)!=0U;
+        bool tri=(form->flags&A64_FORM_THREE)!=0U;
         bool valid=(a64_features(as)&A64_FEATURE_CRYPTO)!=0U &&
                    split_operands(args,tok,&n) && n==(tri?3U:2U);
         if(valid && pair) {
@@ -3899,10 +3906,7 @@ reduction_done:;
         }
         inst->opcode=tri?A64_MC_SIMD_LOGIC:A64_MC_SIMD_CRYPTO;
         inst->count=tri?3U:2U;
-        inst->encoding=!strcmp(op,"sha256h")?UINT32_C(0x5e004000):
-                       !strcmp(op,"sha256h2")?UINT32_C(0x5e005000):
-                       !strcmp(op,"sha256su1")?UINT32_C(0x5e006000):
-                                                UINT32_C(0x5e282800);
+        inst->encoding=form->base;
         if(pair) {
             put_q(&inst->operands[0],rd);
             put_q(&inst->operands[1],rn);
@@ -3911,20 +3915,17 @@ reduction_done:;
             put_vector(&inst->operands[1],rn);
         }
         if(tri)put_vector(&inst->operands[2],rm);
-    } else if(!strcmp(op,"eor3") || !strcmp(op,"bcax") ||
-              !strcmp(op,"rax1") || !strcmp(op,"xar") ||
-              !strcmp(op,"sha512h") || !strcmp(op,"sha512h2") ||
-              !strcmp(op,"sha512su0") || !strcmp(op,"sha512su1")) {
+    } else if((form=A64_SELECT_FORM(a64_sha3_forms))!=NULL) {
         /* Real ARM SHA-3/SHA-512 extensions, not a Kconfig-only .arch
          * acceptance shortcut. All encodings share the existing typed
          * AdvSIMD GPR-free emitters, except the fourth SHA3 register/imm6. */
         char tok[4][384];unsigned n=0U,rd=0U,rn=0U,rm=0U,ra=0U;
         uint32_t da=0U,sa=0U,ta=0U,ua=0U;
         int64_t rot=0;
-        bool four=!strcmp(op,"eor3") || !strcmp(op,"bcax") || !strcmp(op,"xar");
-        bool two=!strcmp(op,"sha512su0");
-        bool qd=!strcmp(op,"sha512h") || !strcmp(op,"sha512h2");
-        bool bytes=!strcmp(op,"eor3") || !strcmp(op,"bcax");
+        bool four=(form->flags&A64_FORM_FOUR)!=0U;
+        bool two=(form->flags&A64_FORM_UNARY)!=0U;
+        bool qd=(form->flags&A64_FORM_Q_DEST)!=0U;
+        bool bytes=(form->flags&A64_FORM_BYTE_VIEW)!=0U;
         uint32_t view=bytes?UINT32_C(0x40000000):UINT32_C(0x40000c00);
         bool valid=(a64_features(as)&A64_FEATURE_SHA3)!=0U &&
             split_operands(args,tok,&n) && n==(four?4U:two?2U:3U);
@@ -3946,14 +3947,7 @@ reduction_done:;
         inst->opcode=four?A64_MC_SIMD_SHA3_FOUR:
                      two?A64_MC_SIMD_CRYPTO:A64_MC_SIMD_LOGIC;
         inst->count=four?4U:two?2U:3U;
-        inst->encoding=!strcmp(op,"eor3")?UINT32_C(0xce000000):
-                       !strcmp(op,"bcax")?UINT32_C(0xce200000):
-                       !strcmp(op,"rax1")?UINT32_C(0xce608c00):
-                       !strcmp(op,"xar")?UINT32_C(0xce800000):
-                       !strcmp(op,"sha512h")?UINT32_C(0xce608000):
-                       !strcmp(op,"sha512h2")?UINT32_C(0xce608400):
-                       !strcmp(op,"sha512su0")?UINT32_C(0xcec08000):
-                                               UINT32_C(0xce608800);
+        inst->encoding=form->base;
         put_vector(&inst->operands[0],rd);
         put_vector(&inst->operands[1],rn);
         if(!two)put_vector(&inst->operands[2],rm);

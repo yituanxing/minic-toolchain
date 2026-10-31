@@ -45,10 +45,10 @@ static void strip_gnu_c_comments(MiniAs *as, char *line) {
     bool escaped=false;
     size_t i;
     for(i=0U;line[i]!='\0';++i) {
-        if(as->source.c_comment_active) {
+        if(as->source->c_comment_active) {
             if(line[i]=='*' && line[i+1U]=='/') {
                 line[i++]=' ';line[i]=' ';
-                as->source.c_comment_active=false;
+                as->source->c_comment_active=false;
             }else if(line[i]!='\n' && line[i]!='\r')line[i]=' ';
             continue;
         }
@@ -67,7 +67,7 @@ static void strip_gnu_c_comments(MiniAs *as, char *line) {
             line[i]==as->target->comment_prefix))
             return;
         if(line[i]=='/' && line[i+1U]=='*') {
-            as->source.c_comment_active=true;
+            as->source->c_comment_active=true;
             line[i++]=' ';line[i]=' ';
         }
     }
@@ -93,7 +93,7 @@ bool minias_source_graph_load_physical(MiniAs *as, const char *path,
         return false;
     }
     frame=&graph->physical;
-    as->source.c_comment_active=false;
+    as->source->c_comment_active=false;
     frame->kind=MINIAS_SOURCE_FRAME_FILE;
     while(fgets(linebuf,sizeof(linebuf),file)!=NULL) {
         size_t len;
@@ -129,7 +129,7 @@ bool minias_source_graph_load_physical(MiniAs *as, const char *path,
         ok=false;
     }
     fclose(file);
-    if(ok && as->source.c_comment_active) {
+    if(ok && as->source->c_comment_active) {
         minias_set_error(as,"unterminated-gnu-block-comment");
         ok=false;
     }
@@ -178,7 +178,7 @@ static bool source_graph_rehash(MiniAsSourceGraph *graph,size_t capacity) {
 
 bool minias_source_graph_intern(MiniAs *as,MiniAsSourceSiteKey key,
                                 MiniAsStableSiteId *site_id) {
-    MiniAsSourceGraph *graph=as->source.graph;
+    MiniAsSourceGraph *graph=as->source->graph;
     size_t slot,probes;
     size_t hashed=source_site_hash(key);
     if(graph==NULL || site_id==NULL ||
@@ -239,7 +239,7 @@ bool minias_source_graph_line_site(MiniAs *as,
                                    size_t segment,
                                    MiniAsStableSiteId *site_id) {
     const MiniAsSourceSiteKey key={
-        .parent=as->source.current_expansion_site,
+        .parent=as->source->current_expansion_site,
         .origin_line=line->line,
         .origin_segment=line->source_segment,
         .iteration=segment,
@@ -252,11 +252,11 @@ bool minias_source_graph_line_site(MiniAs *as,
 void minias_source_graph_record_condition(MiniAs *as,
                                           MiniAsStableSiteId owner,
                                           bool active) {
-    MiniAsSourceGraph *graph=as->source.graph;
+    MiniAsSourceGraph *graph=as->source->graph;
     MiniAsSourceSiteEntry *entry;
-    if(graph==NULL || as->source.current_site==MINIAS_SITE_NONE ||
-       as->source.current_site>graph->site_count)return;
-    entry=&graph->sites[as->source.current_site-1U];
+    if(graph==NULL || as->source->current_site==MINIAS_SITE_NONE ||
+       as->source->current_site>graph->site_count)return;
+    entry=&graph->sites[as->source->current_site-1U];
     if(entry->last_condition_pass!=0U &&
        entry->last_condition_pass+1U==graph->parse_passes &&
        (entry->last_condition_active!=active ||
@@ -318,7 +318,7 @@ static bool source_graph_forced_shape_matches(
 bool minias_source_graph_lookup_forced_branch(MiniAs *as,
                                               const MiniAsStmt *stmt,
                                               size_t *minimum_size) {
-    MiniAsSourceGraph *graph=as->source.graph;
+    MiniAsSourceGraph *graph=as->source->graph;
     size_t encoded;
     *minimum_size=0U;
     if(graph==NULL)return true;
@@ -348,7 +348,7 @@ bool minias_source_graph_rebind_forced_branches(MiniAs *as,
                                                 size_t **ids,
                                                 size_t *count,
                                                 size_t *capacity) {
-    MiniAsSourceGraph *graph=as->source.graph;
+    MiniAsSourceGraph *graph=as->source->graph;
     size_t *site_to_stmt;
     size_t i;
     if(graph==NULL || graph->forced_branch_count==0U) {
@@ -406,7 +406,7 @@ bool minias_source_graph_rebind_forced_branches(MiniAs *as,
 bool minias_source_graph_capture_forced_branches(MiniAs *as,
                                                  const size_t *ids,
                                                  size_t count) {
-    MiniAsSourceGraph *graph=as->source.graph;
+    MiniAsSourceGraph *graph=as->source->graph;
     size_t i;
     if(graph==NULL)return true;
     if(count<graph->forced_branch_count) {

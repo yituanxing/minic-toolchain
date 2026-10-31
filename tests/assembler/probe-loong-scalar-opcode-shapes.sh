@@ -56,6 +56,16 @@ scalar_shapes:
     amxor_db.w $a0,$a1,$a2
     ammin.du $a0,$a1,$a2
     amswap.w $a0,$a1,$a2,0
+    bytepick.w $a0,$a1,$a2,0
+    bytepick.w $a0,$a1,$a2,3
+    bytepick.d $a0,$a1,$a2,0
+    bytepick.d $a0,$a1,$a2,7
+    alsl.w $a0,$a1,$a2,1
+    alsl.w $a0,$a1,$a2,4
+    alsl.wu $a0,$a1,$a2,1
+    alsl.wu $a0,$a1,$a2,4
+    alsl.d $a0,$a1,$a2,1
+    alsl.d $a0,$a1,$a2,4
     jirl $zero,$ra,4+4
     pcalau12i $a0,%pc_hi20(external_symbol)
     addi.d $a0,$a0,%pc_lo12(external_symbol)
@@ -87,6 +97,14 @@ negatives=(
     'lu32i.d $a0,-524289'
     'amswap.w $a0,$a1,$a2,1'
     'amswap.w $a0,$a1,$a2,$r0'
+    'bytepick.w $a0,$a1,$a2,-1'
+    'bytepick.w $a0,$a1,$a2,4'
+    'bytepick.d $a0,$a1,$a2,8'
+    'bytepick.w $a0,$a1,$f0,0'
+    'alsl.w $a0,$a1,$a2,0'
+    'alsl.w $a0,$a1,$a2,5'
+    'alsl.d $a0,$a1,$a2,-1'
+    'alsl.w $a0,$a1,$a2,$r3'
     'jirl $zero,$ra,2'
 )
 for bad in "${negatives[@]}"; do
@@ -98,7 +116,7 @@ for bad in "${negatives[@]}"; do
     fi
 done
 if [[ "${MINIAS_LOONG_SKIP_GNU:-0}" == 1 ]]; then
-    echo "MINIAS_LOONG_SCALAR_SHAPES=PASS GNU_bytes=NOT_TESTED positive=48 rejected=${#negatives[@]}"
+    echo "MINIAS_LOONG_SCALAR_SHAPES=PASS GNU_bytes=NOT_TESTED positive=58 rejected=${#negatives[@]}"
 else
-    echo "MINIAS_LOONG_SCALAR_SHAPES=PASS GNU_bytes=exact positive=48 rejected=${#negatives[@]}"
+    echo "MINIAS_LOONG_SCALAR_SHAPES=PASS GNU_bytes=exact positive=58 rejected=${#negatives[@]}"
 fi

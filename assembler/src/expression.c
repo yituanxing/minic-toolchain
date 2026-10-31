@@ -6,11 +6,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-typedef struct MiniAsAddendParser {
-    const char *cursor;
-    bool signed_shift;
-} MiniAsAddendParser;
-
 typedef struct MiniAsExprOperatorSpec {
     const char *text;
     MiniAsExprBinaryOp op;
@@ -44,6 +39,15 @@ static const MiniAsExprOperatorSpec minias_expr_binary_ops[] = {
     EXPR_TOKEN("%",MINIAS_EXPR_OP_MOD,10U)
 };
 #undef EXPR_TOKEN
+
+bool minias_expr_symbol_start(char ch) {
+    return (unsigned char)ch==1U || ch == '.' || ch == '$' ||
+           ch == '_' || isalpha((unsigned char)ch);
+}
+
+bool minias_expr_symbol_continue(char ch) {
+    return minias_expr_symbol_start(ch) || isdigit((unsigned char)ch);
+}
 
 bool minias_expr_scan_binary(const char *cursor,MiniAsExprBinary *out) {
     size_t i;
@@ -101,235 +105,217 @@ bool minias_parse_number_literal(const char *text,char **end,
     return true;
 }
 
-static bool parse_addend_or(MiniAsAddendParser *parser, uint64_t *value);
+typedef struct MiniAsSyntaxParser {
+    MiniAsExprSyntax *syntax;
+    const char *cursor;
+    unsigned depth;
+} MiniAsSyntaxParser;
 
-static bool parse_addend_primary(MiniAsAddendParser *parser, uint64_t *value) {
-    char *end = NULL;
+static bool syntax_add(MiniAsSyntaxParser *parser,
+                       MiniAsExprNode node,size_t *id) {
+    MiniAsExprSyntax *syntax=parser->syntax;
+    if(syntax->count>=512U)return false;
+    if(syntax->count==syntax->capacity) {
+        size_t capacity=syntax->capacity*2U;
+        MiniAsExprNode *grown;
+        if(capacity>512U)capacity=512U;
+        if(syntax->nodes==syntax->inline_nodes) {
+            grown=malloc(capacity*sizeof(*grown));
+            if(grown)memcpy(grown,syntax->inline_nodes,
+                            syntax->count*sizeof(*grown));
+        }else {
+            grown=realloc(syntax->nodes,capacity*sizeof(*grown));
+        }
+        if(!grown)return false;
+        syntax->nodes=grown;
+        syntax->capacity=capacity;
+    }
+    *id=syntax->count++;
+    syntax->nodes[*id]=node;
+    return true;
+}
+
+static bool syntax_parse_binary(MiniAsSyntaxParser *parser,
+                                unsigned minimum,size_t *result);
+
+static bool syntax_parse_prefix(MiniAsSyntaxParser *parser,size_t *result) {
+    MiniAsExprNode node={0};
+    const char *start;
+    char *end=NULL;
+    size_t operand;
+    if(++parser->depth>96U)return false;
     minias_expr_skip_space(&parser->cursor);
-    if (*parser->cursor == '(') {
+    if(*parser->cursor=='(') {
         ++parser->cursor;
-        if (!parse_addend_or(parser, value)) {
-            return false;
-        }
+        if(!syntax_parse_binary(parser,1U,result))return false;
         minias_expr_skip_space(&parser->cursor);
-        if (*parser->cursor != ')') {
-            return false;
-        }
+        if(*parser->cursor!=')')return false;
         ++parser->cursor;
+        --parser->depth;
         return true;
     }
-    if(!minias_parse_number_literal(parser->cursor,&end,value))
+    if(*parser->cursor=='+' || *parser->cursor=='-' ||
+       *parser->cursor=='~' || *parser->cursor=='!') {
+        char ch=*parser->cursor++;
+        if(!syntax_parse_prefix(parser,&operand))return false;
+        if(ch=='+') {*result=operand;--parser->depth;return true;}
+        node.kind=MINIAS_EXPR_UNARY;
+        node.unary=ch;node.left=operand;
+        --parser->depth;
+        return syntax_add(parser,node,result);
+    }
+    if(*parser->cursor=='.' &&
+       !minias_expr_symbol_continue(parser->cursor[1])) {
+        ++parser->cursor;--parser->depth;
+        node.kind=MINIAS_EXPR_DOT;
+        return syntax_add(parser,node,result);
+    }
+    if(minias_expr_symbol_start(*parser->cursor)) {
+        start=parser->cursor++;
+        while(minias_expr_symbol_continue(*parser->cursor))
+            ++parser->cursor;
+        node.length=(size_t)(parser->cursor-start);
+        if(node.length==0U || node.length>=256U)return false;
+        node.start=(size_t)(start-parser->syntax->text);
+        node.kind=MINIAS_EXPR_SYMBOL;
+        --parser->depth;
+        return syntax_add(parser,node,result);
+    }
+    if(!minias_parse_number_literal(parser->cursor,&end,&node.literal))
         return false;
     parser->cursor=end;
+    node.kind=MINIAS_EXPR_LITERAL;
+    --parser->depth;
+    return syntax_add(parser,node,result);
+}
+
+static bool syntax_parse_binary(MiniAsSyntaxParser *parser,
+                                unsigned minimum,size_t *result) {
+    size_t lhs,rhs;
+    if(!syntax_parse_prefix(parser,&lhs))return false;
+    for(;;) {
+        MiniAsExprBinary token;
+        MiniAsExprNode node={0};
+        minias_expr_skip_space(&parser->cursor);
+        if(!minias_expr_scan_binary(parser->cursor,&token) ||
+           token.precedence<minimum)break;
+        parser->cursor+=token.width;
+        if(!syntax_parse_binary(parser,token.precedence+1U,&rhs))
+            return false;
+        node.kind=MINIAS_EXPR_BINARY;
+        node.op=token.op;
+        node.left=lhs;node.right=rhs;
+        if(!syntax_add(parser,node,&lhs))return false;
+    }
+    *result=lhs;
     return true;
 }
 
-static bool parse_addend_unary(MiniAsAddendParser *parser, uint64_t *value) {
-    minias_expr_skip_space(&parser->cursor);
-    if (*parser->cursor == '+') {
-        ++parser->cursor;
-        return parse_addend_unary(parser, value);
-    }
-    if (*parser->cursor == '-') {
-        uint64_t operand;
-        ++parser->cursor;
-        if (!parse_addend_unary(parser, &operand)) {
-            return false;
-        }
-        *value = UINT64_C(0) - operand;
-        return true;
-    }
-    if (*parser->cursor == '!') {
-        uint64_t operand;
-        ++parser->cursor;
-        if(!parse_addend_unary(parser,&operand))return false;
-        *value=operand==0U?1U:0U;
-        return true;
-    }
-    if (*parser->cursor == '~') {
-        uint64_t operand;
-        ++parser->cursor;
-        if (!parse_addend_unary(parser, &operand)) {
-            return false;
-        }
-        *value = ~operand;
-        return true;
-    }
-    return parse_addend_primary(parser, value);
+void minias_expr_syntax_destroy(MiniAsExprSyntax *syntax) {
+    if(!syntax)return;
+    if(syntax->nodes!=syntax->inline_nodes)free(syntax->nodes);
+    memset(syntax,0,sizeof(*syntax));
 }
 
-static bool parse_addend_mul(MiniAsAddendParser *parser, uint64_t *value) {
-    uint64_t result;
-
-    if (!parse_addend_unary(parser, &result)) {
-        return false;
-    }
-    for (;;) {
-        MiniAsExprBinaryOp op;
-        uint64_t rhs;
-
-        if (!minias_expr_take_binary(&parser->cursor,10U,&op)) {
-            break;
-        }
-        if (!parse_addend_unary(parser, &rhs)) {
-            return false;
-        }
-        if (op == MINIAS_EXPR_OP_MUL) {
-            result *= rhs;
-        } else {
-            if (rhs == 0U) {
-                return false;
-            }
-            result = op == MINIAS_EXPR_OP_DIV ? result / rhs : result % rhs;
-        }
-    }
-    *value = result;
-    return true;
-}
-
-static bool parse_addend_sum(MiniAsAddendParser *parser, uint64_t *value) {
-    uint64_t result;
-
-    if (!parse_addend_mul(parser, &result)) {
-        return false;
-    }
-    for (;;) {
-        MiniAsExprBinaryOp op;
-        uint64_t rhs;
-
-        if (!minias_expr_take_binary(&parser->cursor,9U,&op)) {
-            break;
-        }
-        if (!parse_addend_mul(parser, &rhs)) {
-            return false;
-        }
-        result = op == MINIAS_EXPR_OP_ADD ? result + rhs : result - rhs;
-    }
-    *value = result;
-    return true;
-}
-
-static bool parse_addend_shift(MiniAsAddendParser *parser, uint64_t *value) {
-    uint64_t result;
-
-    if (!parse_addend_sum(parser, &result)) {
-        return false;
-    }
-    for (;;) {
-        MiniAsExprBinaryOp op;
-        uint64_t rhs;
-
-        if (!minias_expr_take_binary(&parser->cursor,8U,&op)) {
-            break;
-        }
-        if (!parse_addend_sum(parser, &rhs) || rhs >= 64U) {
-            return false;
-        }
-        if (op == MINIAS_EXPR_OP_SHL) {
-            result <<= (unsigned int)rhs;
-        } else if (parser->signed_shift && rhs != 0U &&
-                   (result & (UINT64_C(1) << 63U)) != 0U) {
-            /* GNU signed assembler immediates use arithmetic >>.
-             * Make sign extension explicit: signed C >> is not portable. */
-            result = (result >> (unsigned int)rhs) |
-                     (~UINT64_C(0) << (unsigned int)(64U-rhs));
-        } else {
-            result >>= (unsigned int)rhs;
-        }
-    }
-    *value = result;
-    return true;
-}
-
-static bool parse_addend_and(MiniAsAddendParser *parser, uint64_t *value) {
-    uint64_t result;
-
-    if (!parse_addend_shift(parser, &result)) {
-        return false;
-    }
-    for (;;) {
-        MiniAsExprBinaryOp op;
-        uint64_t rhs;
-        if (!minias_expr_take_binary(&parser->cursor,5U,&op)) {
-            break;
-        }
-        if (!parse_addend_shift(parser, &rhs)) {
-            return false;
-        }
-        result &= rhs;
-    }
-    *value = result;
-    return true;
-}
-
-static bool parse_addend_xor(MiniAsAddendParser *parser, uint64_t *value) {
-    uint64_t result;
-
-    if (!parse_addend_and(parser, &result)) {
-        return false;
-    }
-    for (;;) {
-        MiniAsExprBinaryOp op;
-        uint64_t rhs;
-        if (!minias_expr_take_binary(&parser->cursor,4U,&op)) {
-            break;
-        }
-        if (!parse_addend_and(parser, &rhs)) {
-            return false;
-        }
-        result ^= rhs;
-    }
-    *value = result;
-    return true;
-}
-
-static bool parse_addend_or(MiniAsAddendParser *parser, uint64_t *value) {
-    uint64_t result;
-
-    if (!parse_addend_xor(parser, &result)) {
-        return false;
-    }
-    for (;;) {
-        MiniAsExprBinaryOp op;
-        uint64_t rhs;
-        if (!minias_expr_take_binary(&parser->cursor,3U,&op)) {
-            break;
-        }
-        if (!parse_addend_xor(parser, &rhs)) {
-            return false;
-        }
-        result |= rhs;
-    }
-    *value = result;
-    return true;
-}
-
-/* Shared wrapping 64-bit integer-expression grammar for symbolic addends,
- * ISA immediates and machine-specific operands. */
-bool minias_eval_u64_expression(const char *text, uint64_t *value) {
-    MiniAsAddendParser parser;
-
-    parser.cursor = text;
-    parser.signed_shift = false;
-    if (!parse_addend_or(&parser, value)) {
-        return false;
-    }
-    minias_expr_skip_space(&parser.cursor);
-    return *parser.cursor == '\0';
-}
-
-/* Same grammar and precedence as the RV-proven unsigned expression path.
- * Only the interpretation of a negative right-shift is target-selectable.
- * This must NOT replace minias_eval_u64_expression's old semantics. */
-bool minias_eval_i64_expression(const char *text, int64_t *value) {
-    MiniAsAddendParser parser;
-    uint64_t bits;
-    if (!text || !value) return false;
+/* The one GNU expression grammar. Syntax retains neither symbol ownership
+ * nor evaluation policy: consumers bind names and evaluate after parse. */
+bool minias_expr_parse_syntax(const char *text,MiniAsExprSyntax *out) {
+    MiniAsSyntaxParser parser;
+    if(!text || !out)return false;
+    memset(out,0,sizeof(*out));
+    out->text=text;
+    out->nodes=out->inline_nodes;
+    out->capacity=sizeof(out->inline_nodes)/sizeof(out->inline_nodes[0]);
+    parser.syntax=out;
     parser.cursor=text;
-    parser.signed_shift=true;
-    if (!parse_addend_or(&parser,&bits)) return false;
+    parser.depth=0U;
+    if(!syntax_parse_binary(&parser,1U,&out->root))goto invalid;
     minias_expr_skip_space(&parser.cursor);
-    if (*parser.cursor!='\0') return false;
+    if(*parser.cursor!='\0')goto invalid;
+    return true;
+invalid:
+    minias_expr_syntax_destroy(out);
+    return false;
+}
+
+/* Target integer operands wrap to 64 bits. Their arithmetic is intentionally
+ * distinct from checked Common absolute expressions and deferred relocation
+ * algebra, but uses exactly the same syntax tree. */
+bool minias_expr_eval_integer(const MiniAsExprSyntax *syntax,
+                              bool signed_shift,uint64_t *result) {
+    uint64_t values[512];
+    size_t i;
+    if(!syntax || !result || !syntax->count ||
+       syntax->count>512U)return false;
+    for(i=0U;i<syntax->count;++i) {
+        const MiniAsExprNode *node=&syntax->nodes[i];
+        uint64_t lhs=0U,rhs=0U;
+        if(node->left<i)lhs=values[node->left];
+        if(node->right<i)rhs=values[node->right];
+        switch(node->kind) {
+        case MINIAS_EXPR_LITERAL:values[i]=node->literal;break;
+        case MINIAS_EXPR_SYMBOL:
+        case MINIAS_EXPR_DOT:return false;
+        case MINIAS_EXPR_UNARY:
+            switch(node->unary) {
+            case '-':values[i]=0U-lhs;break;
+            case '~':values[i]=~lhs;break;
+            case '!':values[i]=lhs==0U?1U:0U;break;
+            default:return false;
+            }
+            break;
+        case MINIAS_EXPR_BINARY:
+            switch(node->op) {
+            case MINIAS_EXPR_OP_MUL:values[i]=lhs*rhs;break;
+            case MINIAS_EXPR_OP_DIV:
+                if(!rhs)return false;
+                values[i]=lhs/rhs;break;
+            case MINIAS_EXPR_OP_MOD:
+                if(!rhs)return false;
+                values[i]=lhs%rhs;break;
+            case MINIAS_EXPR_OP_ADD:values[i]=lhs+rhs;break;
+            case MINIAS_EXPR_OP_SUB:values[i]=lhs-rhs;break;
+            case MINIAS_EXPR_OP_SHL:
+                if(rhs>=64U)return false;
+                values[i]=lhs<<(unsigned)rhs;break;
+            case MINIAS_EXPR_OP_SHR:
+                if(rhs>=64U)return false;
+                if(signed_shift && rhs!=0U &&
+                   (lhs & (UINT64_C(1)<<63U))) {
+                    values[i]=(lhs>>(unsigned)rhs) |
+                              (~UINT64_C(0)<<(unsigned)(64U-rhs));
+                }else values[i]=lhs>>(unsigned)rhs;
+                break;
+            case MINIAS_EXPR_OP_AND:values[i]=lhs&rhs;break;
+            case MINIAS_EXPR_OP_XOR:values[i]=lhs^rhs;break;
+            case MINIAS_EXPR_OP_OR:values[i]=lhs|rhs;break;
+            default:return false;
+            }
+            break;
+        default:return false;
+        }
+    }
+    *result=values[syntax->root];
+    return true;
+}
+
+static bool eval_integer_text(const char *text,bool signed_shift,
+                              uint64_t *result) {
+    MiniAsExprSyntax syntax;
+    bool valid;
+    if(!minias_expr_parse_syntax(text,&syntax))return false;
+    valid=minias_expr_eval_integer(&syntax,signed_shift,result);
+    minias_expr_syntax_destroy(&syntax);
+    return valid;
+}
+
+bool minias_eval_u64_expression(const char *text,uint64_t *value) {
+    return value && eval_integer_text(text,false,value);
+}
+
+bool minias_eval_i64_expression(const char *text,int64_t *value) {
+    uint64_t bits;
+    if(!value || !eval_integer_text(text,true,&bits))return false;
     *value=(int64_t)bits;
     return true;
 }

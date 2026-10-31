@@ -29,6 +29,23 @@ if ('typedef struct MiniAsSourceFrame' not in source or
 for old_reader in ('read_macro_block(', 'read_repeat_block('):
     if old_reader in driver:
         raise SystemExit('obsolete file-only source collector: '+old_reader)
+if ('MiniAsSourceContext *source;' not in internal or
+    'struct MiniAsSourceContext {' in internal or
+    'struct MiniAsSourceContext {' not in source or
+    'minias_source_context_init(' not in expansion or
+    'minias_source_context_destroy(' not in expansion or
+    'minias_source_graph_load_physical(' not in source or
+    'minias_source_graph_load_physical(&as,input_path,&graph)' not in driver):
+    raise SystemExit('SourceContext must be private and physical input have one owner')
+for old_stack in ('static bool push_conditional(',
+                  'static bool elseif_conditional(',
+                  'static bool else_conditional(',
+                  'static bool pop_conditional('):
+    if old_stack in driver:
+        raise SystemExit('directive lowerer duplicates source conditional owner: '+old_stack)
+if 'bool minias_source_push_conditional(' not in expansion or \
+   'bool minias_source_pop_conditional(' not in expansion:
+    raise SystemExit('conditional lifecycle is not owned by SourceContext')
 for n in ('minias_solve_fragment_layout','minias_relayout_fragments',
           'minias_resolve_deferred_data','collect_out_of_range_branches',
           'minias_finalize_subsection_layout'):

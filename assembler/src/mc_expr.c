@@ -12,22 +12,6 @@
  * are independent of ISA and ELF e_machine. Target encoders never duplicate
  * these algorithms; the driver owns sections, macros, and fragment layout. */
 
-typedef struct MiniAsAbsoluteExpressionParser {
-    MiniAs *as;
-    const char *cursor;
-    int64_t dot;
-    bool only_absolute_symbols;
-} MiniAsAbsoluteExpressionParser;
-
-bool minias_expr_symbol_start(char ch) {
-    return (unsigned char)ch==1U || ch == '.' || ch == '$' ||
-           ch == '_' || isalpha((unsigned char)ch);
-}
-
-bool minias_expr_symbol_continue(char ch) {
-    return minias_expr_symbol_start(ch) || isdigit((unsigned char)ch);
-}
-
 bool minias_checked_add_i64(int64_t lhs, int64_t rhs, int64_t *out) {
     if ((rhs > 0 && lhs > INT64_MAX - rhs) ||
         (rhs < 0 && lhs < INT64_MIN - rhs)) {
@@ -55,103 +39,10 @@ static int64_t signed_from_bits(uint64_t bits) {
            -1 - (int64_t)(UINT64_MAX - bits);
 }
 
-static bool parse_absolute_logical_or(MiniAsAbsoluteExpressionParser *parser,
-                                      int64_t *value);
-
-static bool parse_absolute_primary(MiniAsAbsoluteExpressionParser *parser,
-                                   int64_t *value) {
-    const char *start;
-    char name[256];
-    size_t length;
-    MiniAsSymbol *symbol;
-    char *end = NULL;
-    uint64_t number;
-
-    minias_expr_skip_space(&parser->cursor);
-    if (*parser->cursor == '(') {
-        ++parser->cursor;
-        if (!parse_absolute_logical_or(parser, value)) {
-            return false;
-        }
-        minias_expr_skip_space(&parser->cursor);
-        if (*parser->cursor != ')') {
-            return false;
-        }
-        ++parser->cursor;
-        return true;
-    }
-    if (*parser->cursor == '.' &&
-        !minias_expr_symbol_continue(parser->cursor[1])) {
-        parser->only_absolute_symbols = false;
-        *value = parser->dot;
-        ++parser->cursor;
-        return true;
-    }
-    if (minias_expr_symbol_start(*parser->cursor)) {
-        start = parser->cursor++;
-        while (minias_expr_symbol_continue(*parser->cursor)) {
-            ++parser->cursor;
-        }
-        length = (size_t)(parser->cursor - start);
-        if (length == 0U || length >= sizeof(name)) {
-            return false;
-        }
-        memcpy(name, start, length);
-        name[length] = '\0';
-        symbol = minias_get_symbol(parser->as, name, false);
-        if (symbol == NULL || !symbol->defined ||
-            symbol->section == MINIAS_SECTION_COMMON ||
-            (symbol->section != MINIAS_SECTION_ABS &&
-             symbol->value > (uint64_t)INT64_MAX)) {
-            /* ELF COMMON st_value is alignment, not an arithmetic address.
-             * GNU rejects its use in a pre-layout absolute expression. */
-            return false;
-        }
-        if (symbol->section != MINIAS_SECTION_ABS) {
-            parser->only_absolute_symbols = false;
-        }
-        *value = signed_from_bits(symbol->value);
-        return true;
-    }
-
-    if(!minias_parse_number_literal(parser->cursor,&end,&number))return false;
-    parser->cursor=end;
-    /* GAS interprets a 64-bit hex mask in arithmetic as a two's-complement
-     * value (e.g. subtracting 0xffffffff80000000 adds 0x80000000).
-     * Avoid implementation-defined uint64->int64 casts. */
-    *value=signed_from_bits(number);
-    return true;
-}
-
-static bool parse_absolute_unary(MiniAsAbsoluteExpressionParser *parser,
-                                 int64_t *value) {
-    minias_expr_skip_space(&parser->cursor);
-    if (*parser->cursor == '+') {
-        ++parser->cursor;
-        return parse_absolute_unary(parser, value);
-    }
-    if (*parser->cursor == '-') {
-        int64_t operand;
-        ++parser->cursor;
-        if (!parse_absolute_unary(parser, &operand) || operand == INT64_MIN) {
-            return false;
-        }
-        *value = -operand;
-        return true;
-    }
-    if (*parser->cursor == '~' || *parser->cursor == '!') {
-        int64_t operand;
-        bool logical=*parser->cursor=='!';
-        ++parser->cursor;
-        if (!parse_absolute_unary(parser, &operand)) {
-            return false;
-        }
-        *value = logical ? (operand==0?1:0) : ~operand;
-        return true;
-    }
-    return parse_absolute_primary(parser, value);
-}
-
+/* Syntax is shared with Target immediates and retained deferred programs.
+ * Checked absolute arithmetic and symbol resolution remain Common policy:
+ * GNU comparisons yield -1, logical operators yield 1, and signed
+ * multiplication/division reject overflow rather than wrapping. */
 static bool checked_mul_absolute_i64(int64_t lhs,
                                      int64_t rhs,
                                      int64_t *out) {
@@ -178,274 +69,123 @@ static bool checked_mul_absolute_i64(int64_t lhs,
     return true;
 }
 
-static bool parse_absolute_mul(MiniAsAbsoluteExpressionParser *parser,
-                               int64_t *value) {
-    int64_t result;
-
-    if (!parse_absolute_unary(parser, &result)) {
-        return false;
-    }
-    for (;;) {
-        MiniAsExprBinaryOp op;
-        int64_t rhs;
-        int64_t next;
-
-        if (!minias_expr_take_binary(&parser->cursor,10U,&op)) {
+static bool evaluate_absolute_syntax(MiniAs *as,
+                                     const MiniAsExprSyntax *syntax,
+                                     int64_t dot,bool *only_abs,
+                                     int64_t *result) {
+    int64_t values[512];
+    size_t i;
+    if(!syntax || !only_abs || !result || !syntax->count ||
+       syntax->count>512U)return false;
+    *only_abs=true;
+    for(i=0U;i<syntax->count;++i) {
+        const MiniAsExprNode *node=&syntax->nodes[i];
+        int64_t lhs=0,rhs=0,next=0;
+        if(node->left<i)lhs=values[node->left];
+        if(node->right<i)rhs=values[node->right];
+        switch(node->kind) {
+        case MINIAS_EXPR_LITERAL:
+            next=signed_from_bits(node->literal);
             break;
-        }
-        if (!parse_absolute_unary(parser, &rhs)) {
-            return false;
-        }
-        if (op == MINIAS_EXPR_OP_MUL) {
-            if (!checked_mul_absolute_i64(result, rhs, &next)) {
+        case MINIAS_EXPR_DOT:
+            *only_abs=false;
+            next=dot;
+            break;
+        case MINIAS_EXPR_SYMBOL: {
+            char name[256];
+            MiniAsSymbol *symbol;
+            if(!node->length || node->length>=sizeof(name))
                 return false;
+            memcpy(name,syntax->text+node->start,node->length);
+            name[node->length]='\0';
+            symbol=minias_get_symbol(as,name,false);
+            if(!symbol || !symbol->defined ||
+               symbol->section==MINIAS_SECTION_COMMON ||
+               (symbol->section!=MINIAS_SECTION_ABS &&
+                symbol->value>(uint64_t)INT64_MAX))return false;
+            if(symbol->section!=MINIAS_SECTION_ABS)*only_abs=false;
+            next=signed_from_bits(symbol->value);
+            break;
+        }
+        case MINIAS_EXPR_UNARY:
+            switch(node->unary) {
+            case '-':
+                if(lhs==INT64_MIN)return false;
+                next=-lhs;break;
+            case '~':next=~lhs;break;
+            case '!':next=lhs==0?1:0;break;
+            default:return false;
             }
-        } else {
-            if (rhs == 0 || (result == INT64_MIN && rhs == -1)) {
-                return false;
+            break;
+        case MINIAS_EXPR_BINARY:
+            switch(node->op) {
+            case MINIAS_EXPR_OP_MUL:
+                if(!checked_mul_absolute_i64(lhs,rhs,&next))
+                    return false;
+                break;
+            case MINIAS_EXPR_OP_DIV:
+            case MINIAS_EXPR_OP_MOD:
+                if(rhs==0 || (lhs==INT64_MIN && rhs==-1))
+                    return false;
+                next=node->op==MINIAS_EXPR_OP_DIV?lhs/rhs:lhs%rhs;
+                break;
+            case MINIAS_EXPR_OP_ADD:
+                if(!minias_checked_add_i64(lhs,rhs,&next))return false;
+                break;
+            case MINIAS_EXPR_OP_SUB:
+                if(!checked_sub_i64(lhs,rhs,&next))return false;
+                break;
+            case MINIAS_EXPR_OP_SHL:
+            case MINIAS_EXPR_OP_SHR:
+                if(rhs<0 || rhs>=64)return false;
+                next=signed_from_bits(node->op==MINIAS_EXPR_OP_SHL?
+                    ((uint64_t)lhs<<(unsigned)rhs):
+                    ((uint64_t)lhs>>(unsigned)rhs));
+                break;
+            case MINIAS_EXPR_OP_LT:next=lhs<rhs?-1:0;break;
+            case MINIAS_EXPR_OP_LE:next=lhs<=rhs?-1:0;break;
+            case MINIAS_EXPR_OP_GT:next=lhs>rhs?-1:0;break;
+            case MINIAS_EXPR_OP_GE:next=lhs>=rhs?-1:0;break;
+            case MINIAS_EXPR_OP_EQ:next=lhs==rhs?-1:0;break;
+            case MINIAS_EXPR_OP_NE:next=lhs!=rhs?-1:0;break;
+            case MINIAS_EXPR_OP_AND:next=lhs&rhs;break;
+            case MINIAS_EXPR_OP_XOR:next=lhs^rhs;break;
+            case MINIAS_EXPR_OP_OR:next=lhs|rhs;break;
+            case MINIAS_EXPR_OP_LAND:
+                next=(lhs!=0 && rhs!=0)?1:0;break;
+            case MINIAS_EXPR_OP_LOR:
+                next=(lhs!=0 || rhs!=0)?1:0;break;
+            default:return false;
             }
-            next = op == MINIAS_EXPR_OP_DIV ? result / rhs : result % rhs;
-        }
-        result = next;
-    }
-    *value = result;
-    return true;
-}
-
-static bool parse_absolute_sum(MiniAsAbsoluteExpressionParser *parser, int64_t *value) {
-    int64_t result;
-
-    if (!parse_absolute_mul(parser, &result)) {
-        return false;
-    }
-    for (;;) {
-        MiniAsExprBinaryOp op;
-        int64_t rhs;
-        int64_t next;
-
-        if (!minias_expr_take_binary(&parser->cursor,9U,&op)) {
             break;
+        default:return false;
         }
-        if (!parse_absolute_mul(parser, &rhs)) {
-            return false;
-        }
-        if (op == MINIAS_EXPR_OP_ADD) {
-            if (!minias_checked_add_i64(result, rhs, &next)) {
-                return false;
-            }
-        } else if (!checked_sub_i64(result, rhs, &next)) {
-            return false;
-        }
-        result = next;
+        values[i]=next;
     }
-    *value = result;
+    *result=values[syntax->root];
     return true;
-}
-
-static bool parse_absolute_shift(MiniAsAbsoluteExpressionParser *parser,
-                                 int64_t *value) {
-    int64_t result;
-
-    if (!parse_absolute_sum(parser, &result)) {
-        return false;
-    }
-    for (;;) {
-        MiniAsExprBinaryOp op;
-        int64_t shift;
-
-        if (!minias_expr_take_binary(&parser->cursor,8U,&op)) {
-            break;
-        }
-        if (!parse_absolute_sum(parser, &shift) || shift < 0 || shift >= 64) {
-            return false;
-        }
-        if (op == MINIAS_EXPR_OP_SHL) {
-            /* GNU GAS evaluates signed negative shifts as two's-complement
-             * bit operations. C signed << of a negative value is undefined,
-             * and rejecting it breaks real Linux extable_type_reg words:
-             *   (17 | ((-14) << 16)) + (.Lregnr << 8)
-             * Use the canonical unsigned bit pattern, then interpret as
-             * signed (same convention as the shared numeric evaluator). */
-            uint64_t bits=(uint64_t)result << (unsigned int)shift;
-            result=signed_from_bits(bits);
-        } else {
-            /* GNU GAS absolute expressions shift the 64-bit bit pattern
-             * logically, even after unary minus or complement. This matters
-             * in Linux's mov_q macro, which tests (~mask >> 47) in .if.
-             * Signed C right shift would sign-extend and choose the wrong
-             * machine-instruction sequence. */
-            result=signed_from_bits((uint64_t)result>>(unsigned)shift);
-        }
-    }
-    *value = result;
-    return true;
-}
-
-/* GNU GAS absolute comparisons produce -1 for true and 0 for false.
- * These are arithmetic expression operators, not only .if directives.
- * In particular Linux hand-written .fill uses -((symA-symB)>0).
- * Build comparison precedence once in Common, leaving Target expression
- * syntax and deferred symbol fixups independent. */
-static bool parse_absolute_relational(MiniAsAbsoluteExpressionParser *parser,
-                                      int64_t *value) {
-    int64_t lhs;
-    if(!parse_absolute_shift(parser,&lhs))return false;
-    for(;;) {
-        MiniAsExprBinaryOp op;
-        int64_t rhs;
-        if(!minias_expr_take_binary(&parser->cursor,7U,&op))break;
-        if(!parse_absolute_shift(parser,&rhs))return false;
-        lhs=((op==MINIAS_EXPR_OP_LT && lhs<rhs) ||
-             (op==MINIAS_EXPR_OP_LE && lhs<=rhs) ||
-             (op==MINIAS_EXPR_OP_GT && lhs>rhs) ||
-             (op==MINIAS_EXPR_OP_GE && lhs>=rhs))?-1:0;
-    }
-    *value=lhs;return true;
-}
-
-static bool parse_absolute_equality(MiniAsAbsoluteExpressionParser *parser,
-                                    int64_t *value) {
-    int64_t lhs;
-    if(!parse_absolute_relational(parser,&lhs))return false;
-    for(;;) {
-        MiniAsExprBinaryOp op;
-        int64_t rhs;
-        if(!minias_expr_take_binary(&parser->cursor,6U,&op))break;
-        if(!parse_absolute_relational(parser,&rhs))return false;
-        lhs=((lhs!=rhs)==(op==MINIAS_EXPR_OP_NE))?-1:0;
-    }
-    *value=lhs;return true;
-}
-
-static bool parse_absolute_and(MiniAsAbsoluteExpressionParser *parser,
-                               int64_t *value) {
-    int64_t result;
-
-    if (!parse_absolute_equality(parser, &result)) {
-        return false;
-    }
-    for (;;) {
-        MiniAsExprBinaryOp op;
-        int64_t rhs;
-
-        if (!minias_expr_take_binary(&parser->cursor,5U,&op)) {
-            break;
-        }
-        if (!parse_absolute_equality(parser, &rhs)) {
-            return false;
-        }
-        result &= rhs;
-    }
-    *value = result;
-    return true;
-}
-
-static bool parse_absolute_xor(MiniAsAbsoluteExpressionParser *parser,
-                               int64_t *value) {
-    int64_t result;
-
-    if (!parse_absolute_and(parser, &result)) {
-        return false;
-    }
-    for (;;) {
-        MiniAsExprBinaryOp op;
-        int64_t rhs;
-
-        if (!minias_expr_take_binary(&parser->cursor,4U,&op)) {
-            break;
-        }
-        if (!parse_absolute_and(parser, &rhs)) {
-            return false;
-        }
-        result ^= rhs;
-    }
-    *value = result;
-    return true;
-}
-
-static bool parse_absolute_or(MiniAsAbsoluteExpressionParser *parser,
-                              int64_t *value) {
-    int64_t result;
-
-    if (!parse_absolute_xor(parser, &result)) {
-        return false;
-    }
-    for (;;) {
-        MiniAsExprBinaryOp op;
-        int64_t rhs;
-
-        if (!minias_expr_take_binary(&parser->cursor,3U,&op)) {
-            break;
-        }
-        if (!parse_absolute_xor(parser, &rhs)) {
-            return false;
-        }
-        result |= rhs;
-    }
-    *value = result;
-    return true;
-}
-
-/* GNU GAS boolean operators are a separate, lower-precedence layer
- * after bitwise |/^. Unlike comparisons (-1 for true), GNU '||',
- * '&&' and unary '!' produce 1/0. Parse both operands and retain the
- * existing checked absolute arithmetic; never silently accept an
- * unresolvable symbol just because the LHS is true. */
-static bool parse_absolute_logical_and(MiniAsAbsoluteExpressionParser *parser,
-                                      int64_t *value) {
-    int64_t lhs;
-    if(!parse_absolute_or(parser,&lhs))return false;
-    for(;;) {
-        MiniAsExprBinaryOp op;
-        int64_t rhs;
-        if(!minias_expr_take_binary(&parser->cursor,2U,&op))break;
-        if(!parse_absolute_or(parser,&rhs))return false;
-        lhs=(lhs!=0 && rhs!=0)?1:0;
-    }
-    *value=lhs;return true;
-}
-
-static bool parse_absolute_logical_or(MiniAsAbsoluteExpressionParser *parser,
-                                     int64_t *value) {
-    int64_t lhs;
-    if(!parse_absolute_logical_and(parser,&lhs))return false;
-    for(;;) {
-        MiniAsExprBinaryOp op;
-        int64_t rhs;
-        if(!minias_expr_take_binary(&parser->cursor,1U,&op))break;
-        if(!parse_absolute_logical_and(parser,&rhs))return false;
-        lhs=(lhs!=0 || rhs!=0)?1:0;
-    }
-    *value=lhs;return true;
 }
 
 bool minias_evaluate_absolute_expression(MiniAs *as,
                                          const char *text,
                                          int64_t *value) {
-    MiniAsAbsoluteExpressionParser parser;
-    uint64_t dot;
-    uint64_t unsigned_value;
-
-    /* GNU supports full-precision unsigned constants in .set/.equ and
-     * conditional expressions. Resolve purely numeric, final in-range
-     * expressions before the signed symbolic path; never coerce
-     * unresolved symbols or relocations into an absolute value. */
-    if (minias_eval_u64_expression(text, &unsigned_value) &&
-        unsigned_value <= (uint64_t)INT64_MAX) {
-        *value = (int64_t)unsigned_value;
+    MiniAsExprSyntax syntax;
+    uint64_t dot,unsigned_value;
+    bool only_abs,valid;
+    if(!as || !text || !value ||
+       !minias_expr_parse_syntax(text,&syntax))return false;
+    if(minias_expr_eval_integer(&syntax,false,&unsigned_value) &&
+       unsigned_value<=(uint64_t)INT64_MAX) {
+        *value=(int64_t)unsigned_value;
+        minias_expr_syntax_destroy(&syntax);
         return true;
     }
-    if(!minias_current_location(as,&dot))return false;
-    if(dot>(uint64_t)INT64_MAX)return false;
-    parser.as = as;
-    parser.cursor = text;
-    parser.dot = (int64_t)dot;
-    parser.only_absolute_symbols = true;
-    if (!parse_absolute_logical_or(&parser, value)) {
-        return false;
-    }
-    minias_expr_skip_space(&parser.cursor);
-    return *parser.cursor == '\0';
+    valid=minias_current_location(as,&dot) &&
+          dot<=(uint64_t)INT64_MAX &&
+          evaluate_absolute_syntax(as,&syntax,(int64_t)dot,
+                                   &only_abs,value);
+    minias_expr_syntax_destroy(&syntax);
+    return valid;
 }
 
 bool minias_evaluate_absolute_operand(MiniAs *as,const char *text,
@@ -569,30 +309,28 @@ bool minias_resolve_symbol_difference_field(MiniAs *as,
 bool minias_parse_absolute_data_bits(MiniAs *as,
                                      const char *text,
                                      uint64_t *value) {
-    MiniAsAbsoluteExpressionParser parser;
+    MiniAsExprSyntax syntax;
     uint64_t dot;
     int64_t signed_value;
+    bool only_abs,valid;
 
+    if(!as || !text || !value ||
+       !minias_expr_parse_syntax(text,&syntax))return false;
     /* The canonical unsigned grammar subsumes the old strtoll/strtoull
      * fixed-DATA literal paths, including signed bit patterns and nested
      * parentheses. Never revive a separate literal interpreter here.
      * Numeric evaluation cannot fabricate symbols or relocations. */
-    if(minias_eval_u64_expression(text,value))return true;
-    if(!minias_current_location(as,&dot))return false;
-    if(dot>(uint64_t)INT64_MAX)return false;
-    parser.as = as;
-    parser.cursor = text;
-    parser.dot = (int64_t)dot;
-    parser.only_absolute_symbols = true;
-    if (!parse_absolute_logical_or(&parser, &signed_value)) {
-        return false;
+    if(minias_expr_eval_integer(&syntax,false,value)) {
+        minias_expr_syntax_destroy(&syntax);
+        return true;
     }
-    minias_expr_skip_space(&parser.cursor);
-    if (*parser.cursor != '\0' || !parser.only_absolute_symbols) {
-        return false;
-    }
-    *value = (uint64_t)signed_value;
-    return true;
+    valid=minias_current_location(as,&dot) &&
+          dot<=(uint64_t)INT64_MAX &&
+          evaluate_absolute_syntax(as,&syntax,(int64_t)dot,
+                                   &only_abs,&signed_value) && only_abs;
+    if(valid)*value=(uint64_t)signed_value;
+    minias_expr_syntax_destroy(&syntax);
+    return valid;
 }
 
 char *minias_expr_strip_outer_parens(char *text) {
@@ -1011,30 +749,6 @@ struct MiniAsDeferredExpr {
     size_t count,capacity,root;
 };
 
-typedef struct DeferredParser {
-    MiniAs *as;
-    MiniAsDeferredExpr *tree;
-    const char *cursor;
-    unsigned depth;
-} DeferredParser;
-
-static bool deferred_add(DeferredParser *p, DeferredOp op,
-                         size_t lhs,size_t rhs,size_t symbol,int64_t value,
-                         size_t *id) {
-    MiniAsDeferredExpr *t=p->tree;
-    DeferredNode *node;
-    if(t->count>=512U ||
-       !minias_grow_array((void **)&t->nodes,&t->capacity,
-                          sizeof(*t->nodes),t->count+1U))return false;
-    *id=t->count++;
-    node=&t->nodes[*id];
-    node->op=op;node->left=lhs;node->right=rhs;
-    node->symbol_index=symbol;node->value=value;
-    return true;
-}
-
-/* Deferred AST retains its own operator tags and later section algebra,
- * while sharing the exact lexer and precedence with the eager evaluators. */
 static DeferredOp deferred_operator(MiniAsExprBinaryOp op) {
     static const DeferredOp mapping[] = {
         [MINIAS_EXPR_OP_LOR]=DEF_LOR,
@@ -1061,94 +775,66 @@ static DeferredOp deferred_operator(MiniAsExprBinaryOp op) {
            mapping[op]:DEF_LITERAL;
 }
 
-static bool deferred_parse_binary(DeferredParser *p,unsigned minimum,
-                                  size_t *result);
-
-static bool deferred_parse_prefix(DeferredParser *p,size_t *result) {
-    const char *start;
-    char *end=NULL;
-    char name[256];
-    size_t length,operand;
-    uint64_t number;
-    MiniAsSymbol *symbol;
-    DeferredOp op;
-    if(++p->depth>96U)return false;
-    minias_expr_skip_space(&p->cursor);
-    if(*p->cursor=='(') {
-        ++p->cursor;
-        if(!deferred_parse_binary(p,1U,result))return false;
-        minias_expr_skip_space(&p->cursor);
-        if(*p->cursor!=')')return false;
-        ++p->cursor;--p->depth;return true;
-    }
-    if(*p->cursor=='+' || *p->cursor=='-' ||
-       *p->cursor=='~' || *p->cursor=='!') {
-        char ch=*p->cursor++;
-        if(!deferred_parse_prefix(p,&operand))return false;
-        if(ch=='+') {*result=operand;--p->depth;return true;}
-        op=ch=='-'?DEF_NEG:ch=='~'?DEF_INV:DEF_LNOT;
-        --p->depth;
-        return deferred_add(p,op,operand,0U,0U,0,result);
-    }
-    if(*p->cursor=='.' &&
-       !minias_expr_symbol_continue(p->cursor[1])) {
-        ++p->cursor;--p->depth;
-        return deferred_add(p,DEF_DOT,0U,0U,0U,0,result);
-    }
-    if(minias_expr_symbol_start(*p->cursor)) {
-        start=p->cursor++;
-        while(minias_expr_symbol_continue(*p->cursor))++p->cursor;
-        length=(size_t)(p->cursor-start);
-        if(length==0U || length>=sizeof(name))return false;
-        memcpy(name,start,length);name[length]='\0';
-        symbol=minias_get_symbol(p->as,name,true);
-        if(symbol==NULL)return false;
-        --p->depth;
-        return deferred_add(p,DEF_SYMBOL,0U,0U,
-                             (size_t)(symbol-p->as->symbols),0,result);
-    }
-    if(!minias_parse_number_literal(p->cursor,&end,&number))return false;
-    p->cursor=end;--p->depth;
-    return deferred_add(p,DEF_LITERAL,0U,0U,0U,
-               signed_from_bits(number),result);
-}
-
-static bool deferred_parse_binary(DeferredParser *p,unsigned minimum,
-                                  size_t *result) {
-    size_t lhs,rhs;
-    if(!deferred_parse_prefix(p,&lhs))return false;
-    for(;;) {
-        MiniAsExprBinary found;
-        minias_expr_skip_space(&p->cursor);
-        if(!minias_expr_scan_binary(p->cursor,&found) ||
-           found.precedence<minimum)break;
-        p->cursor+=found.width;
-        if(!deferred_parse_binary(p,found.precedence+1U,&rhs) ||
-           !deferred_add(p,deferred_operator(found.op),lhs,rhs,
-                         0U,0,&lhs))return false;
-    }
-    *result=lhs;
-    return true;
-}
-
 void minias_deferred_expr_destroy(MiniAsDeferredExpr *tree) {
     if(tree!=NULL) {free(tree->nodes);free(tree);}
 }
 
 MiniAsDeferredExpr *minias_compile_deferred_expr(MiniAs *as,
                                                  const char *text) {
-    MiniAsDeferredExpr *tree=calloc(1U,sizeof(*tree));
-    DeferredParser parser;
-    if(tree==NULL) {
-        minias_set_error(as,"out-of-memory:deferred-expression");return NULL;
+    MiniAsExprSyntax syntax;
+    MiniAsDeferredExpr *tree=NULL;
+    size_t i;
+    if(!as || !text)return NULL;
+    if(!minias_expr_parse_syntax(text,&syntax))goto invalid_syntax;
+    tree=calloc(1U,sizeof(*tree));
+    if(!tree)goto no_memory;
+    tree->nodes=calloc(syntax.count,sizeof(*tree->nodes));
+    if(!tree->nodes)goto no_memory;
+    tree->count=tree->capacity=syntax.count;
+    tree->root=syntax.root;
+    /* Node indices are stable and child-first in the shared syntax tree.
+     * Bind names to the enduring Symbol table exactly once, then discard
+     * the source-text syntax before MCLayout and Fragment relaxation. */
+    for(i=0U;i<syntax.count;++i) {
+        const MiniAsExprNode *node=&syntax.nodes[i];
+        DeferredNode *out=&tree->nodes[i];
+        out->left=node->left;out->right=node->right;
+        switch(node->kind) {
+        case MINIAS_EXPR_LITERAL:
+            out->op=DEF_LITERAL;
+            out->value=signed_from_bits(node->literal);
+            break;
+        case MINIAS_EXPR_DOT:out->op=DEF_DOT;break;
+        case MINIAS_EXPR_SYMBOL: {
+            char name[256];
+            MiniAsSymbol *symbol;
+            if(!node->length || node->length>=sizeof(name))goto invalid;
+            memcpy(name,text+node->start,node->length);
+            name[node->length]='\0';
+            symbol=minias_get_symbol(as,name,true);
+            if(!symbol)goto invalid;
+            out->op=DEF_SYMBOL;
+            out->symbol_index=(size_t)(symbol-as->symbols);
+            break;
+        }
+        case MINIAS_EXPR_UNARY:
+            out->op=node->unary=='-'?DEF_NEG:
+                    node->unary=='~'?DEF_INV:DEF_LNOT;
+            break;
+        case MINIAS_EXPR_BINARY:
+            out->op=deferred_operator(node->op);
+            break;
+        default:goto invalid;
+        }
     }
-    parser.as=as;parser.tree=tree;parser.cursor=text;parser.depth=0U;
-    if(!deferred_parse_binary(&parser,1U,&tree->root))goto invalid;
-    minias_expr_skip_space(&parser.cursor);
-    if(*parser.cursor!='\0')goto invalid;
+    minias_expr_syntax_destroy(&syntax);
     return tree;
+no_memory:
+    minias_set_error(as,"out-of-memory:deferred-expression");
 invalid:
     minias_deferred_expr_destroy(tree);
+    minias_expr_syntax_destroy(&syntax);
+invalid_syntax:
     if(as->error[0]=='\0')
         minias_set_error(as,"unsupported-typed-deferred-expression:%.90s",text);
     return NULL;

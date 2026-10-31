@@ -168,7 +168,7 @@ SourceContext ownership rather than the umbrella `MiniAs` session, and W1
 workflow deduplication. These are not implied by removal of the two eager
 variable DATA functions or the first fixed-form descriptor slice.
 
-## Consolidated deletion batch after `c1a5f8fa` (local, not yet a Linux certificate)
+## Consolidated deletion batch after `c1a5f8fa` (remote CI verified)
 
 This batch removes additional real duplicates while continuing the ownership
 boundary work. Counts compare against `c1a5f8fa`; **moved lines are not code
@@ -197,8 +197,43 @@ MCExpr module probes PASS; CI routing/provenance static probe PASS. GNU
 RISC-V cross assembler is not installed in the local environment, and this
 batch has **not** run exact-head Linux/QEMU or 21-shard GNU comparisons.
 
+This batch subsequently landed as GitHub commit
+`cb642cd2734ff58df71b1199d283b44e4c276f77` (tree
+`24728ca0dfd42390da0ef3d3d4fea96cd5b9d396`) on PR #667. The
+exact-HEAD remote ISA/ABI contract, x86/Loong GNU Oracle, MiniAS GCC
+runtime ladder, GNU GCC A/B, BusyBox and 3536 gates all reported SUCCESS.
+These remote results certify that commit only, not the following batch.
+
 The next high-value deletion work is the shared expression syntax AST with
 separate target-immediate, checked-absolute and deferred-relocation evaluators,
 followed by a private SourceContext parse API and phase-scoped Target views.
 Do not count the SourceGraph reader's relocation between translation units as
 a deleted parser or claim the whole x86/RISC-V Target form family is complete.
+
+## Shared expression AST, private SourceContext and target-form batch
+
+Baseline: the exact remote tree `24728ca0dfd42390da0ef3d3d4fea96cd5b9d396`.
+This is a second integrated source-architecture batch; its new exact-HEAD
+CI evidence must be attached to its own commit after push.
+
+| Area | Actual architecture change | Intentionally not claimed |
+| --- | --- | --- |
+| M1 expression | Remove the independent recursive integer grammar from `expression.c` and the two absolute/deferred recursive grammars from `mc_expr.c`. A single token-to-typed-AST parser now feeds distinct wrapping immediate, overflow-checked absolute and bound-SymbolID deferred evaluators. Common short expressions use inline AST node storage. | Arithmetic modes, relocation algebra and `.if`'s historical single-`=` compatibility normalization are *not* a single evaluator. |
+| S1 Source ownership | The SourceContext struct, macro frames and conditional stack are private to the Source module. The Common `MiniAs` holds an opaque, allocated SourceContext pointer. All `.if*`, `.else`, `.elseif` and `.endif` stack operations now belong to source expansion; `assembler.c` merely dispatches. | Moving the conditional implementation between files is a boundary change, not algorithm deletion; the phase-scoped Target view and persistent conditional dependency graph remain future work. |
+| AArch64 Target | Consolidate 13 mnemonic/form selectors in a Target-private named-form descriptor; delete duplicate opcode tables, form scans and SHA encodings while preserving typed MCInst emission. | No GNU AArch64 byte-oracle claim on the local machine (cross tools unavailable). |
+| LoongArch64 Target | One register+immediate form descriptor and field encoder replaces duplicate `bytepick`/`alsl` parsing/encoding branches, and shared register-bank specs enforce vector/special-reg fields. | No local GNU LoongArch byte-oracle claim (cross tools unavailable). |
+| x86 Target | Share REX/ModR/M register fields, little-endian displacement/immediate writer, `.code16` mode predicate and segment prefix map across boot and legacy instruction families. | Not all specialized x86 legality paths have become descriptor-driven. |
+
+Measured production diff (11 `assembler/src` files): **+1,346/-1,634,
+net -288**. This includes the relocations of conditionals and SourceContext
+declarations; only the eliminated independent grammars and target-private
+decision/encoder paths represent genuine duplicate deletion. Focused test
+diff (seven files including three new tests): **+238/-3, net +235**. No
+CI workflow was retired in this batch. Documentation is counted separately.
+
+The new regression corpus adds a standalone AST evaluation-policy test,
+AArch64 42 positive opcode words plus 8 negative forms, and LoongArch
+10 positive immediate boundaries plus 8 negative cases. The four-architecture
+GNU shared-expression grammar probe and existing deferred ownership tests
+must remain gate inputs. Local full Release `-Werror`/A0 30/30 passed; other
+integrated results and remote exact-HEAD SHA follow the final commit.

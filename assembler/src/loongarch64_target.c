@@ -55,12 +55,11 @@ typedef enum {
     LA_MN_SPECIAL,
     LA_MN_SCALAR,
     LA_MN_BITFIELD,
-    LA_MN_ALSL,
+    LA_MN_REG3_IMM,
     LA_MN_PRIVILEGED,
     LA_MN_LI,
     LA_MN_PCREL,
     LA_MN_GOT,
-    LA_MN_BYTEPICK,
     LA_MN_JIRL,
     LA_MN_MOVE,
     LA_MN_PREFETCH,
@@ -108,8 +107,7 @@ typedef enum {
     LA_FORM_PCREL = 0x5002,
     LA_FORM_GOT = 0x5004,
     LA_FORM_BITFIELD = 0x5003,
-    LA_FORM_BYTEPICK = 0x5100,
-    LA_FORM_ALSL = 0x5200,
+    LA_FORM_REG3_IMM = 0x5100,
     LA_FORM_JIRL = 0x5300,
     LA_FORM_MOVE = 0x5400,
     LA_FORM_PREFETCH = 0x5500,
@@ -129,10 +127,21 @@ static const LaManualPattern la_bitfield_patterns[] = {
     {"bstrins.d",UINT32_C(0x00800000),6U},
     {"bstrpick.d",UINT32_C(0x00c00000),6U}
 };
-static const LaManualPattern la_alsl_patterns[] = {
-    {"alsl.w",UINT32_C(0x00040000),2U},
-    {"alsl.wu",UINT32_C(0x00060000),2U},
-    {"alsl.d",UINT32_C(0x002c0000),2U}
+/* Byte selection and scaled address addition have the same Reg3+uimm
+ * grammar and bitfield placement.  The only differences (opcode, range and
+ * GAS's one-based sa2) belong to the form, not two parser/encoder branches. */
+typedef struct {
+    const char *name;
+    uint32_t opcode;
+    unsigned min_immediate;
+    unsigned max_immediate;
+} LaReg3ImmPattern;
+static const LaReg3ImmPattern la_reg3_imm_patterns[] = {
+    {"bytepick.w",UINT32_C(0x00080000),0U,3U},
+    {"bytepick.d",UINT32_C(0x000c0000),0U,7U},
+    {"alsl.w",UINT32_C(0x00040000),1U,4U},
+    {"alsl.wu",UINT32_C(0x00060000),1U,4U},
+    {"alsl.d",UINT32_C(0x002c0000),1U,4U}
 };
 
 static void la_set_register_bank(MiniAsMCOperand *operand,
@@ -198,6 +207,63 @@ static bool la_fpr_reg(const char *s,unsigned *reg) {
         return true;
     }
     return false;
+}
+
+/* LSX/LASX and scalar FP/FCSR instructions use one register-bank/constant
+ * lowerer.  The descriptor caller supplies the *semantic* operand range;
+ * this function is the only textual register decoder for those families. */
+typedef struct {
+    LaRegisterBank bank;
+    unsigned immediate_bits;
+    bool unsigned_immediate;
+    int64_t min_value,max_value;
+    unsigned min_register;
+} LaTypedFieldSpec;
+
+static bool la_parse_typed_field(MiniAsMCOperand *operand,const char *text,
+                                 const LaTypedFieldSpec *spec) {
+    unsigned reg=0U;
+    int64_t value=0;
+    if(spec->immediate_bits!=0U) {
+        if(spec->unsigned_immediate) {
+            uint64_t uvalue;
+            if(!minias_eval_u64_expression(text,&uvalue) ||
+               uvalue>(uint64_t)spec->max_value)return false;
+            value=(int64_t)uvalue;
+        } else if(!minias_eval_i64_expression(text,&value) ||
+                  value<spec->min_value || value>spec->max_value)return false;
+        operand->kind=MINIAS_MC_IMMEDIATE;
+        operand->immediate=(uint64_t)value;
+        return true;
+    }
+    switch(spec->bank) {
+        case LA_REG_BANK_GPR:if(!la_reg(text,&reg))return false;break;
+        case LA_REG_BANK_FPR:if(!la_fpr_reg(text,&reg))return false;break;
+        case LA_REG_BANK_VR128:
+            if(!la_special_reg(text,"$vr",31U,&reg))return false;
+            break;
+        case LA_REG_BANK_XR256:
+            if(!la_special_reg(text,"$xr",31U,&reg))return false;
+            break;
+        case LA_REG_BANK_FCSR:
+            /* GCC's Loong Linux output spells FCSR0 as $r0: accept only
+             * $r0..3 aliases while retaining the FCSR register bank. */
+            if(!(la_special_reg(text,"$fcsr",3U,&reg) ||
+                 la_special_reg(text,"$r",3U,&reg)))return false;
+            break;
+        case LA_REG_BANK_FCC:
+            if(!la_special_reg(text,"$fcc",7U,&reg))return false;
+            break;
+        case LA_REG_BANK_SCR:
+            if(!la_special_reg(text,"$scr",3U,&reg))return false;
+            break;
+        default:return false;
+    }
+    if(reg<spec->min_register)return false;
+    operand->kind=MINIAS_MC_REGISTER;
+    operand->reg=reg;
+    la_set_register_bank(operand,spec->bank);
+    return true;
 }
 typedef struct {
     char fast[4][192];
@@ -581,6 +647,22 @@ typedef struct {
     unsigned immediate_bits;
 } LaVectorPattern;
 
+static LaTypedFieldSpec la_vector_field_spec(const LaVectorPattern *pattern,
+                                              LaOperandClass cls) {
+    LaTypedFieldSpec spec={0};
+    switch(cls) {
+        case LA_ARG_GPR:spec.bank=LA_REG_BANK_GPR;break;
+        case LA_ARG_VR:spec.bank=LA_REG_BANK_VR128;break;
+        case LA_ARG_XR:spec.bank=LA_REG_BANK_XR256;break;
+        case LA_ARG_IMM:
+            spec.immediate_bits=pattern->immediate_bits;
+            spec.min_value=pattern->immediate_min;
+            spec.max_value=pattern->immediate_max;
+            break;
+    }
+    return spec;
+}
+
 static const LaVectorLayout la_vector_layouts[] = {
     [LA_VECTOR_VVV]  ={3U,{LA_ARG_VR,LA_ARG_VR,LA_ARG_VR},{0U,5U,10U}},
     [LA_VECTOR_XXX]  ={3U,{LA_ARG_XR,LA_ARG_XR,LA_ARG_XR},{0U,5U,10U}},
@@ -695,30 +777,11 @@ static bool la_parse_vector_pattern(MiniAsMCInst *m,char *args[4],
     if(count!=layout->count)return false;
     for(arg=0U;arg<count;++arg) {
         LaOperandClass cls=layout->classes[arg];
-        unsigned reg=0U;
-        int64_t value=0;
-        bool valid=false;
-        if(cls==LA_ARG_GPR)valid=la_reg(args[arg],&reg);
-        else if(cls==LA_ARG_VR)valid=la_special_reg(args[arg],"$vr",31U,&reg);
-        else if(cls==LA_ARG_XR)valid=la_special_reg(args[arg],"$xr",31U,&reg);
-        else {
-            valid=minias_eval_i64_expression(args[arg],&value) &&
-                  value>=pattern->immediate_min &&
-                  value<=pattern->immediate_max;
-        }
-        if(!valid)return false;
-        if(cls==LA_ARG_IMM) {
-            if(pattern->immediate_bits==0U ||
-               pattern->immediate_bits>12U)return false;
-            m->operands[arg].kind=MINIAS_MC_IMMEDIATE;
-            m->operands[arg].immediate=(uint64_t)value;
-        } else {
-            m->operands[arg].kind=MINIAS_MC_REGISTER;
-            m->operands[arg].reg=reg;
-            la_set_register_bank(&m->operands[arg],
-                cls==LA_ARG_GPR ? LA_REG_BANK_GPR :
-                cls==LA_ARG_VR ? LA_REG_BANK_VR128 : LA_REG_BANK_XR256);
-        }
+        LaTypedFieldSpec spec=la_vector_field_spec(pattern,cls);
+        if(cls==LA_ARG_IMM && (spec.immediate_bits==0U ||
+                               spec.immediate_bits>12U))return false;
+        if(!la_parse_typed_field(&m->operands[arg],args[arg],&spec))
+            return false;
     }
     m->count=count;
     m->target_form=(uint32_t)LA_FORM_VECTOR+index;
@@ -768,6 +831,34 @@ typedef struct {
     unsigned shifts[4];
     unsigned min_register[4];
 } LaSpecialRegisterPattern;
+
+/* Resolve the scalar FP/control/system operand bank, immediate range and
+ * width once for both parsing and materialization. */
+static LaTypedFieldSpec la_special_field_spec(LaRegisterOperandBank bank,
+                                               unsigned min_register) {
+    LaTypedFieldSpec spec={0};
+    spec.min_register=min_register;
+    switch(bank) {
+        case LA_BANK_GPR:spec.bank=LA_REG_BANK_GPR;break;
+        case LA_BANK_FPR:spec.bank=LA_REG_BANK_FPR;break;
+        case LA_BANK_FCSR:spec.bank=LA_REG_BANK_FCSR;break;
+        case LA_BANK_FCC:spec.bank=LA_REG_BANK_FCC;break;
+        case LA_BANK_SCR:spec.bank=LA_REG_BANK_SCR;break;
+        case LA_BANK_SIGNED12:
+            spec.immediate_bits=12U;
+            spec.min_value=-2048;spec.max_value=2047;
+            break;
+        case LA_BANK_UNSIGNED5:spec.immediate_bits=5U;break;
+        case LA_BANK_UNSIGNED8:spec.immediate_bits=8U;break;
+        case LA_BANK_UNSIGNED14:spec.immediate_bits=14U;break;
+        case LA_BANK_UNSIGNED15:spec.immediate_bits=15U;break;
+    }
+    if(bank>=LA_BANK_UNSIGNED5) {
+        spec.unsigned_immediate=true;
+        spec.max_value=(INT64_C(1)<<spec.immediate_bits)-1;
+    }
+    return spec;
+}
 
 #define LA_FIELDS_2  {0U,5U},{0U}
 #define LA_FIELDS_3  {0U,5U,10U},{0U}
@@ -980,60 +1071,10 @@ static bool la_parse_special_register_pattern(MiniAsMCInst *m,
     rule=&la_special_register_patterns[index];
     if(count!=rule->count)return false;
     for(arg=0U;arg<count;++arg) {
-        unsigned reg=0U;
-        int64_t imm=0;
-        bool valid=false, immediate=false;
-        unsigned width=0U;
-        switch(rule->banks[arg]) {
-            case LA_BANK_GPR:valid=la_reg(args[arg],&reg);break;
-            case LA_BANK_FPR:
-                valid=la_fpr_reg(args[arg],&reg);break;
-            case LA_BANK_FCSR:
-                /* Linux's GCC LoongArch backend writes numeric $r0 for the
-                 * FCSR0 operand of movfcsr2gr/movgr2fcsr.  GAS accepts this
-                 * register spelling even though the hardware operand is the
-                 * *FCSR bank*, not a GPR.  Accept only FCSR indices 0..3;
-                 * preserve the typed bank and reject $r4..$r31. */
-                valid=la_special_reg(args[arg],"$fcsr",3U,&reg) ||
-                      la_special_reg(args[arg],"$r",3U,&reg);
-                break;
-            case LA_BANK_FCC:
-                valid=la_special_reg(args[arg],"$fcc",7U,&reg);break;
-            case LA_BANK_SCR:
-                valid=la_special_reg(args[arg],"$scr",3U,&reg);break;
-            case LA_BANK_SIGNED12:
-                valid=minias_eval_i64_expression(args[arg],&imm) &&
-                      imm>=-2048 && imm<=2047;
-                immediate=true;width=12U;
-                break;
-            case LA_BANK_UNSIGNED5:
-            case LA_BANK_UNSIGNED8:
-            case LA_BANK_UNSIGNED14:
-            case LA_BANK_UNSIGNED15: {
-                uint64_t uimm;
-                width=rule->banks[arg]==LA_BANK_UNSIGNED5?5U:
-                      rule->banks[arg]==LA_BANK_UNSIGNED8?8U:
-                      rule->banks[arg]==LA_BANK_UNSIGNED14?14U:15U;
-                valid=minias_eval_u64_expression(args[arg],&uimm) &&
-                      uimm<(UINT64_C(1)<<width);
-                if(valid)imm=(int64_t)uimm;
-                immediate=true;
-                break;
-            }
-        }
-        if(!valid || (!immediate && reg<rule->min_register[arg]))
+        LaTypedFieldSpec spec=la_special_field_spec(rule->banks[arg],
+                                                   rule->min_register[arg]);
+        if(!la_parse_typed_field(&m->operands[arg],args[arg],&spec))
             return false;
-        if(immediate) {
-            la_capture_imm_operand(m,arg,imm);
-        } else {
-            la_capture_gpr_operand(m,arg,reg);
-            la_set_register_bank(&m->operands[arg],
-                rule->banks[arg]==LA_BANK_FPR ? LA_REG_BANK_FPR :
-                rule->banks[arg]==LA_BANK_FCSR ? LA_REG_BANK_FCSR :
-                rule->banks[arg]==LA_BANK_FCC ? LA_REG_BANK_FCC :
-                rule->banks[arg]==LA_BANK_SCR ? LA_REG_BANK_SCR :
-                LA_REG_BANK_GPR);
-        }
     }
     m->count=count;
     m->target_form=(uint32_t)LA_FORM_SPECIAL_REGISTER+index;
@@ -1291,6 +1332,21 @@ static bool la_encoded_imm(const MiniAsMCOperand *operand,
     return true;
 }
 
+/* Shared checked bit placement for vector and FP/control/system patterns.
+ * Immediate width zero means a typed register bank, never a raw field. */
+static bool la_encode_typed_field(uint32_t *word,
+                                  const MiniAsMCOperand *operand,
+                                  const LaTypedFieldSpec *spec,
+                                  unsigned shift) {
+    uint32_t value;
+    if(spec->immediate_bits!=0U) {
+        if(!la_encoded_imm(operand,spec->immediate_bits,&value))return false;
+    } else if(!la_encoded_reg(operand,spec->bank,&value) ||
+              value<spec->min_register)return false;
+    *word|=value<<shift;
+    return true;
+}
+
 static bool la_materialize_table_word(const MiniAsMCInst *m,
                                       uint32_t *word,bool *recognized) {
     uint32_t form=m->target_form;
@@ -1307,16 +1363,10 @@ static bool la_materialize_table_word(const MiniAsMCInst *m,
         if(m->count!=layout->count)return false;
         *word=pattern->opcode;
         for(i=0U;i<layout->count;++i) {
-            uint32_t value;
-            LaOperandClass cls=layout->classes[i];
-            if(cls==LA_ARG_IMM) {
-                if(!la_encoded_imm(&m->operands[i],
-                                   pattern->immediate_bits,&value))return false;
-            } else if(!la_encoded_reg(&m->operands[i],
-                         cls==LA_ARG_GPR?LA_REG_BANK_GPR:
-                         cls==LA_ARG_VR?LA_REG_BANK_VR128:LA_REG_BANK_XR256,
-                         &value))return false;
-            *word|=value<<layout->shifts[i];
+            LaTypedFieldSpec spec=la_vector_field_spec(pattern,
+                                                       layout->classes[i]);
+            if(!la_encode_typed_field(word,&m->operands[i],&spec,
+                                      layout->shifts[i]))return false;
         }
         return true;
     }
@@ -1329,21 +1379,10 @@ static bool la_materialize_table_word(const MiniAsMCInst *m,
         if(m->count!=rule->count)return false;
         *word=rule->opcode;
         for(i=0U;i<rule->count;++i) {
-            LaRegisterOperandBank bank=rule->banks[i];
-            uint32_t value;
-            if(bank>=LA_BANK_SIGNED12) {
-                unsigned bits=bank==LA_BANK_SIGNED12?12U:
-                    bank==LA_BANK_UNSIGNED5?5U:
-                    bank==LA_BANK_UNSIGNED8?8U:
-                    bank==LA_BANK_UNSIGNED14?14U:15U;
-                if(!la_encoded_imm(&m->operands[i],bits,&value))return false;
-            } else if(!la_encoded_reg(&m->operands[i],
-                         bank==LA_BANK_GPR?LA_REG_BANK_GPR:
-                         bank==LA_BANK_FPR?LA_REG_BANK_FPR:
-                         bank==LA_BANK_FCSR?LA_REG_BANK_FCSR:
-                         bank==LA_BANK_SCR?LA_REG_BANK_SCR:LA_REG_BANK_FCC,
-                         &value) || value<rule->min_register[i])return false;
-            *word|=value<<rule->shifts[i];
+            LaTypedFieldSpec spec=la_special_field_spec(rule->banks[i],
+                                                       rule->min_register[i]);
+            if(!la_encode_typed_field(word,&m->operands[i],&spec,
+                                      rule->shifts[i]))return false;
         }
         return true;
     }
@@ -1454,8 +1493,10 @@ static bool la_materialize_manual_word(const MiniAsMCInst *m,
             ((uint32_t)m->operands[3].immediate<<10U)|(rj<<5U)|rd;
         return true;
     }
-    if(form==LA_FORM_BYTEPICK || form==LA_FORM_BYTEPICK+1U ||
-       (form>=LA_FORM_ALSL && form<LA_FORM_ALSL+3U)) {
+    if(form>=LA_FORM_REG3_IMM &&
+       form<LA_FORM_REG3_IMM+LA_COUNT(la_reg3_imm_patterns)) {
+        const LaReg3ImmPattern *rule=
+            &la_reg3_imm_patterns[form-LA_FORM_REG3_IMM];
         uint64_t value;
         if(m->count!=4U ||
            !la_encoded_reg(&m->operands[0],LA_REG_BANK_GPR,&rd) ||
@@ -1463,17 +1504,11 @@ static bool la_materialize_manual_word(const MiniAsMCInst *m,
            !la_encoded_reg(&m->operands[2],LA_REG_BANK_GPR,&rk) ||
            m->operands[3].kind!=MINIAS_MC_IMMEDIATE)return false;
         value=m->operands[3].immediate;
-        if(form==LA_FORM_BYTEPICK || form==LA_FORM_BYTEPICK+1U) {
-            unsigned wide=form==LA_FORM_BYTEPICK+1U;
-            if(value>=(wide?8U:4U))return false;
-            *word=(wide?UINT32_C(0x000c0000):UINT32_C(0x00080000))|
-                ((uint32_t)value<<15U)|(rk<<10U)|(rj<<5U)|rd;
-        } else {
-            size_t index=(size_t)(form-LA_FORM_ALSL);
-            if(value<1U || value>4U)return false;
-            *word=la_alsl_patterns[index].opcode|
-                (((uint32_t)value-1U)<<15U)|(rk<<10U)|(rj<<5U)|rd;
-        }
+        if(value<rule->min_immediate || value>rule->max_immediate)
+            return false;
+        *word=rule->opcode|
+            (((uint32_t)value-rule->min_immediate)<<15U)|
+            (rk<<10U)|(rj<<5U)|rd;
         return true;
     }
     if(form==LA_FORM_JIRL || form==LA_FORM_JIRL+1U) {
@@ -1583,8 +1618,6 @@ static const LaBuiltinMnemonic la_builtin_mnemonics[]={
      * same pcalau12i/addi.d relocation pair as la.pcrel. */
     {"la.local",LA_MN_PCREL,0U,LA_BRANCH_CANONICAL},
     {"la.global",LA_MN_GOT,0U,LA_BRANCH_CANONICAL},
-    {"bytepick.w",LA_MN_BYTEPICK,0U,LA_BRANCH_CANONICAL},
-    {"bytepick.d",LA_MN_BYTEPICK,1U,LA_BRANCH_CANONICAL},
     {"jr",LA_MN_JIRL,0U,LA_BRANCH_CANONICAL},
     {"jirl",LA_MN_JIRL,1U,LA_BRANCH_CANONICAL},
     {"move",LA_MN_MOVE,0U,LA_BRANCH_CANONICAL},
@@ -1604,7 +1637,7 @@ static bool la_build_mnemonic_index(MiniAs *as,LaTargetState *state) {
     const size_t capacity=LA_COUNT(la_branch_patterns)+
         LA_COUNT(la_vector_patterns)+LA_COUNT(la_special_register_patterns)+
         LA_COUNT(la_scalar_patterns)+LA_COUNT(la_bitfield_patterns)+
-        LA_COUNT(la_alsl_patterns)+LA_COUNT(la_builtin_mnemonics)+
+        LA_COUNT(la_reg3_imm_patterns)+LA_COUNT(la_builtin_mnemonics)+
         LA_COUNT(la_privileged);
     LaMnemonicEntry *entries=calloc(capacity,sizeof(*entries));
     if(entries==NULL) {
@@ -1639,9 +1672,9 @@ static bool la_build_mnemonic_index(MiniAs *as,LaTargetState *state) {
         entries[n++]=(LaMnemonicEntry){la_bitfield_patterns[i].name,
                                       LA_MN_BITFIELD,(unsigned)i,0U,
                                       LA_BRANCH_CANONICAL};
-    for(i=0U;i<LA_COUNT(la_alsl_patterns);++i)
-        entries[n++]=(LaMnemonicEntry){la_alsl_patterns[i].name,
-                                      LA_MN_ALSL,(unsigned)i,0U,
+    for(i=0U;i<LA_COUNT(la_reg3_imm_patterns);++i)
+        entries[n++]=(LaMnemonicEntry){la_reg3_imm_patterns[i].name,
+                                      LA_MN_REG3_IMM,(unsigned)i,0U,
                                       LA_BRANCH_CANONICAL};
     for(i=0U;i<LA_COUNT(la_builtin_mnemonics);++i)
         entries[n++]=(LaMnemonicEntry){la_builtin_mnemonics[i].name,
@@ -1780,32 +1813,19 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
         }
         goto fail;
     }
-    if(mnemonic->family==LA_MN_BYTEPICK) {
-        uint64_t offset;
-        bool wide=mnemonic->index==1U;
+    if(mnemonic->family==LA_MN_REG3_IMM) {
+        const LaReg3ImmPattern *rule=
+            &la_reg3_imm_patterns[mnemonic->index];
+        uint64_t immediate;
         if(n==4U && la_reg(t[0],&rd) && la_reg(t[1],&rj) &&
-           la_reg(t[2],&rk) && minias_eval_u64_expression(t[3],&offset) &&
-           offset<(wide?8U:4U)) {
+           la_reg(t[2],&rk) &&
+           minias_eval_u64_expression(t[3],&immediate) &&
+           immediate>=rule->min_immediate &&
+           immediate<=rule->max_immediate) {
             m->count=4U;
-            m->target_form=LA_FORM_BYTEPICK+(wide?1U:0U);
+            m->target_form=LA_FORM_REG3_IMM+mnemonic->index;
             la_capture_rrr(m,rd,rj,rk);
-            la_capture_imm_operand(m,3U,(int64_t)offset);
-            goto done;
-        }
-        goto fail;
-    }
-    /* GNU LA opcode tables: sa2 lives in bits 16:15 and the source
-     * syntax specifies sa2+1 (one through four), not the encoded 0..3.
-     * Index/shift-add is a single target-local MCInst, not Common logic. */
-    if(mnemonic->family==LA_MN_ALSL) {
-        uint64_t shift;
-        if(n==4U && la_reg(t[0],&rd) && la_reg(t[1],&rj) &&
-           la_reg(t[2],&rk) && minias_eval_u64_expression(t[3],&shift) &&
-           shift>=1U && shift<=4U) {
-            m->count=4U;
-            m->target_form=LA_FORM_ALSL+mnemonic->index;
-            la_capture_rrr(m,rd,rj,rk);
-            la_capture_imm_operand(m,3U,(int64_t)shift);
+            la_capture_imm_operand(m,3U,(int64_t)immediate);
             goto done;
         }
         goto fail;

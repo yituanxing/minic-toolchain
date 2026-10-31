@@ -8,6 +8,7 @@ work="$BUILD_DIR/tests/assembler/a0"
 mkdir -p "$work"
 
 sh tests/assembler/probe-riscv-absolute-relocs.sh
+bash tests/assembler/probe-common-expr-syntax.sh
 bash tests/assembler/probe-minias-atomic-output.sh
 bash tests/assembler/probe-mc-deferred-shift-gnu.sh
 bash tests/assembler/probe-elf-sectionkey-unique-inherited-group-gnu.sh

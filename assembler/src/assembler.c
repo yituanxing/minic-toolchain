@@ -1437,6 +1437,7 @@ static bool minias_init_for_target(MiniAs *as,
         minias_set_error(as,"missing-assembler-target");
         return false;
     }
+    if(!minias_source_context_init(as))return false;
     text=minias_ensure_section(as,".text",MINIAS_SHT_PROGBITS,
             MINIAS_SHF_ALLOC|MINIAS_SHF_EXECINSTR,
             target->default_exec_alignment!=0U ?
@@ -1450,7 +1451,6 @@ static bool minias_init_for_target(MiniAs *as,
     as->current_subsection=0U;
     as->previous_section=text;
     as->previous_subsection=0U;
-    as->source.conditional_active=true;
     as->debug_is_stmt=true;
     return minias_ensure_subsection(as,text,0U)!=NULL;
 }
@@ -1508,7 +1508,7 @@ void minias_destroy(MiniAs *as) {
     free(as->subsection_slots);
     free(as->section_stack);
     free(as->numeric_label_counts);
-    minias_source_context_destroy(&as->source);
+    minias_source_context_destroy(as->source);
     free(as->cfi_procs);
     for(i=0U;i<as->cfi_op_count;++i)
         free(as->cfi_ops[i].bytes);
@@ -1542,7 +1542,7 @@ static bool add_stmt(MiniAs *as,
     st = &as->stmts[as->stmt_count];
     memset(st, 0, sizeof(*st));
     st->fragment_kind = fragment_kind;
-    st->source_site = as->source.current_site;
+    st->source_site = as->source->current_site;
     st->op = minias_strdup(op);
     st->args = minias_strdup(args == NULL ? "" : args);
     st->line = line;
@@ -2809,283 +2809,6 @@ static MiniAsCommonDirectiveKind common_directive_kind(const MiniAs *as,
     return MINIAS_COMMON_DIRECTIVE_OTHER;
 }
 
-/* GAS conditional expressions share the Common absolute arithmetic and
- * symbol resolver. A separate numeric-only parser rejected macro constants
- * such as .if docfi=0 and prematurely fragmented Linux target assembly.
- * Operators are recognized only at top-level, never in shifts or parens. */
-static bool evaluate_if_expression(MiniAs *as,const char *text,bool *result) {
-    char *copy,*p,*lhs,*rhs=NULL;
-    const char *compare=NULL;
-    char op='\0';
-    unsigned depth=0U;
-    unsigned width=0U;
-    int64_t left,right;
-    if(!text || !result)return false;
-    copy=minias_strdup(text);
-    if(!copy)return false;
-    lhs=minias_trim(copy);
-    /* Delegate logical expressions to the one Common precedence parser
-     * rather than splitting an inner '==' away from its '||' RHS. */
-    if(strstr(lhs,"||") || strstr(lhs,"&&")) {
-        bool ok=minias_evaluate_absolute_expression(as,lhs,&left);
-        free(copy);
-        if(ok)*result=left!=0;
-        return ok;
-    }
-    for(p=lhs;*p;++p) {
-        if(*p=='('){++depth;continue;}
-        if(*p==')') {
-            if(depth==0U){free(copy);return false;}
-            --depth;continue;
-        }
-        if(depth)continue;
-        if((p[0]=='<' && p[1]=='<') ||
-           (p[0]=='>' && p[1]=='>')) {++p;continue;}
-        if((p[0]=='=' && p[1]=='=') ||
-           (p[0]=='!' && p[1]=='=') ||
-           (p[0]=='<' && p[1]=='=') ||
-           (p[0]=='>' && p[1]=='=')) {
-            compare=p;width=2U;break;
-        }
-        if(*p=='=' || *p=='<' || *p=='>') {
-            compare=p;width=1U;break;
-        }
-    }
-    if(depth!=0U){free(copy);return false;}
-    if(compare) {
-        p=(char *)compare;
-        rhs=p+width;
-        op=*p;
-        *p='\0';
-        lhs=minias_trim(lhs);rhs=minias_trim(rhs);
-        if(*lhs=='\0' || *rhs=='\0' ||
-           !minias_evaluate_absolute_expression(as,lhs,&left) ||
-           !minias_evaluate_absolute_expression(as,rhs,&right)) {
-            free(copy);return false;
-        }
-        switch(op) {
-            case '=':*result=left==right;break;
-            case '!':*result=left!=right;break;
-            case '<':*result=width==2U?left<=right:left<right;break;
-            case '>':*result=width==2U?left>=right:left>right;break;
-            default:free(copy);return false;
-        }
-    } else {
-        if(!minias_evaluate_absolute_expression(as,lhs,&left)) {
-            free(copy);return false;
-        }
-        *result=left!=0;
-    }
-    free(copy);return true;
-}
-
-static bool push_conditional_value(MiniAs *as,bool condition_true) {
-    MiniAsConditional *conditional;
-    if (!minias_grow_array((void **)&as->source.conditionals,
-                    &as->source.conditional_capacity,
-                    sizeof(*as->source.conditionals),
-                    as->source.conditional_count + 1U)) {
-        minias_set_error(as, "out-of-memory:conditional");
-        return false;
-    }
-    conditional = &as->source.conditionals[as->source.conditional_count++];
-    conditional->parent_active = as->source.conditional_active;
-    conditional->condition_true = condition_true;
-    conditional->else_seen = false;
-    conditional->source_site = as->source.current_site;
-    as->source.conditional_active = conditional->parent_active && condition_true;
-    minias_source_graph_record_condition(as,conditional->source_site,
-                                  as->source.conditional_active);
-    return true;
-}
-
-/* Reuse the sole Common numeric-label resolver in GAS conditionals:
- * backward 661b/662b references have exact fragment-backed values. */
-static bool evaluate_conditional_with_labels(MiniAs *as,const char *args,
-                                              size_t line,bool *selected) {
-    char *expanded=NULL;
-    bool valid;
-    if(!minias_numeric_refs_rewrite(as,args,&expanded,line))return false;
-    valid=evaluate_if_expression(as,expanded,selected) ||
-          (as->target->evaluate_target_if &&
-           as->target->evaluate_target_if(expanded,selected));
-    free(expanded);return valid;
-}
-
-static bool push_conditional(MiniAs *as, const char *args, size_t line) {
-    bool condition_true;
-    /* False parent: keep the nested conditional frame, but GNU GAS
-     * does not resolve symbols in branches that cannot be reached. */
-    if(!as->source.conditional_active)
-        return push_conditional_value(as,false);
-    if (!evaluate_conditional_with_labels(as,args,line,&condition_true)) {
-        minias_set_error(as, "unsupported-expression:.if:%s:line=%zu", args, line);
-        return false;
-    }
-    return push_conditional_value(as,condition_true);
-}
-
-/* All numeric GNU .if* variants have the same Common conditional frame:
- * skip unreachable parents without evaluating unresolved expressions. */
-static bool push_conditional_numeric(MiniAs *as,const char *args,
-                                     const char *directive,size_t line) {
-    int64_t value;
-    bool active;
-    if(!as->source.conditional_active)return push_conditional_value(as,false);
-    if(!minias_evaluate_absolute_expression(as,args,&value)) {
-        minias_set_error(as,"unsupported-expression:%s:%s:line=%zu",
-                         directive,args,line);
-        return false;
-    }
-    active=!strcmp(directive,".ifeq")?value==0:
-           !strcmp(directive,".ifne")?value!=0:
-           !strcmp(directive,".iflt")?value<0:
-           !strcmp(directive,".ifle")?value<=0:
-           !strcmp(directive,".ifgt")?value>0:value>=0;
-    return push_conditional_value(as,active);
-}
-
-/* GNU GAS .ifdef/.ifndef inspect the CURRENT defined symbol table,
- * not relocation references, global declarations or future labels.
- * Share the exact same conditional stack as .if/.ifc/.elseif and do
- * not create symbol records while checking existence. */
-static bool push_conditional_defined(MiniAs *as,const char *args,
-                                      bool negate,size_t line) {
-    const char *p=args;
-    MiniAsSymbol *symbol;
-    bool defined;
-    if(!as->source.conditional_active)
-        return push_conditional_value(as,false);
-    if(!(*p=='_' || *p=='.' || *p=='$' ||
-         isalpha((unsigned char)*p))) {
-        minias_set_error(as,"bad-directive:.ifdef:line=%zu",line);
-        return false;
-    }
-    for(++p;*p;++p) {
-        if(!(*p=='_' || *p=='.' || *p=='$' ||
-             isalnum((unsigned char)*p))) {
-            minias_set_error(as,"bad-directive:.ifdef:line=%zu",line);
-            return false;
-        }
-    }
-    symbol=minias_get_symbol(as,args,false);
-    defined=symbol && (symbol->defined || symbol->alias_pending);
-    return push_conditional_value(as,negate?!defined:defined);
-}
-
-/* Shared GAS .ifc/.ifnc conditional text: split on a comma outside
- * quotes, strip paired quote delimiters, then compare exact byte strings.
- * Expansion of macro arguments already happens upstream.  No target
- * ISA-specific conditional parser or new conditional stack is needed. */
-/* GNU GAS .ifc/.ifnc compares trimmed *literal text*: a missing side
- * is a valid empty string, a quoted comma is still a separator, and a
- * comma in the second operand belongs to that operand. Macro expansion
- * happens before this common conditional stack is evaluated. */
-static bool push_conditional_strings(MiniAs *as,const char *args,
-                                     bool unequal,bool double_quoted,
-                                     size_t line) {
-    char *copy=minias_strdup(args),*lhs,*rhs,*comma;
-    bool equal;
-    if(!copy){minias_set_error(as,"out-of-memory:.ifc");return false;}
-    if(double_quoted) {
-        /* GAS .ifeqs/.ifnes require exactly two double-quoted strings.
-         * A comma inside a quoted operand is data, not the delimiter.
-         * Keep this on the same Common conditional stack as .ifc/.ifnc. */
-        char *end;
-        lhs=minias_trim(copy);
-        if(*lhs!='"')goto malformed;
-        ++lhs;
-        end=strchr(lhs,'"');
-        if(!end)goto malformed;
-        *end++='\0';
-        end=minias_trim(end);
-        if(*end!=',')goto malformed;
-        rhs=minias_trim(end+1);
-        if(*rhs!='"')goto malformed;
-        ++rhs;
-        end=strchr(rhs,'"');
-        if(!end)goto malformed;
-        *end++='\0';
-        if(*minias_trim(end)!='\0')goto malformed;
-    }else {
-        /* Existing .ifc/.ifnc first-comma semantics are intentional. */
-        comma=strchr(copy,',');
-        if(!comma)goto malformed;
-        *comma='\0';
-        lhs=minias_trim(copy);
-        rhs=minias_trim(comma+1);
-    }
-    equal=strcmp(lhs,rhs)==0;
-    free(copy);
-    return push_conditional_value(as,unequal?!equal:equal);
-malformed:
-    minias_set_error(as,"bad-directive:%s:line=%zu",
-                     double_quoted?".ifeqs":".ifc",line);
-    free(copy);return false;
-}
-
-/* GAS .elseif shares the same frame as .if/.else. Once an
- * earlier arm wins, do not evaluate later arms: symbols there need
- * not exist, and ignored nested branches must not leak statements. */
-static bool elseif_conditional(MiniAs *as,const char *args,size_t line) {
-    MiniAsConditional *conditional;
-    bool condition=false;
-    if(as->source.conditional_count==0U) {
-        minias_set_error(as,"unmatched-directive:.elseif:line=%zu",line);
-        return false;
-    }
-    conditional=&as->source.conditionals[as->source.conditional_count-1U];
-    if(conditional->else_seen) {
-        minias_set_error(as,"elseif-after-else:line=%zu",line);
-        return false;
-    }
-    if(conditional->parent_active && !conditional->condition_true) {
-        if(!evaluate_conditional_with_labels(as,args,line,&condition)) {
-            minias_set_error(as,"unsupported-expression:.elseif:%s:line=%zu",
-                             args,line);
-            return false;
-        }
-    }
-    as->source.conditional_active=conditional->parent_active &&
-                           !conditional->condition_true && condition;
-    conditional->condition_true|=condition;
-    minias_source_graph_record_condition(as,conditional->source_site,
-                                  as->source.conditional_active);
-    return true;
-}
-
-static bool else_conditional(MiniAs *as, size_t line) {
-    MiniAsConditional *conditional;
-
-    if (as->source.conditional_count == 0U) {
-        minias_set_error(as, "unmatched-directive:.else:line=%zu", line);
-        return false;
-    }
-    conditional = &as->source.conditionals[as->source.conditional_count - 1U];
-    if (conditional->else_seen) {
-        minias_set_error(as, "duplicate-directive:.else:line=%zu", line);
-        return false;
-    }
-    conditional->else_seen = true;
-    as->source.conditional_active =
-        conditional->parent_active && !conditional->condition_true;
-    minias_source_graph_record_condition(as,conditional->source_site,
-                                  as->source.conditional_active);
-    return true;
-}
-
-static bool pop_conditional(MiniAs *as, size_t line) {
-    MiniAsConditional conditional;
-
-    if (as->source.conditional_count == 0U) {
-        minias_set_error(as, "unmatched-directive:.endif:line=%zu", line);
-        return false;
-    }
-    conditional = as->source.conditionals[--as->source.conditional_count];
-    as->source.conditional_active = conditional.parent_active;
-    return true;
-}
-
 static char *decode_incbin_path(MiniAs *as,
                                 const char *args,
                                 size_t line) {
@@ -4154,7 +3877,7 @@ static bool parse_comm(MiniAs *as, const char *args, size_t line) {
         pending->size=(uint64_t)size;
         pending->alignment=alignment;
         pending->line=line;
-        pending->source_site=as->source.current_site;
+        pending->source_site=as->source->current_site;
         /* Mark this SymbolID as defined immediately, preserving GNU's
          * duplicate-symbol and late .globl/.hidden semantics, but do not
          * anchor its BSS offset until the complete subsection-0 source
@@ -4189,7 +3912,7 @@ invalid:
 static bool flush_pending_local_commons(MiniAs *as) {
     int saved_section=as->current_section;
     uint32_t saved_subsection=as->current_subsection;
-    MiniAsStableSiteId saved_source_site=as->source.current_site;
+    MiniAsStableSiteId saved_source_site=as->source->current_site;
     bool ok=true;
     size_t i;
     int bss;
@@ -4217,7 +3940,7 @@ static bool flush_pending_local_commons(MiniAs *as) {
             minias_set_error(as,"pending-local-common-mutated:%s",symbol->name);
             ok=false;break;
         }
-        as->source.current_site=pending->source_site;
+        as->source->current_site=pending->source_site;
         (void)snprintf(align_buf,sizeof(align_buf),"%llu",
                        (unsigned long long)pending->alignment);
         (void)snprintf(size_buf,sizeof(size_buf),"%llu",
@@ -4237,7 +3960,7 @@ static bool flush_pending_local_commons(MiniAs *as) {
     }
     as->current_section=saved_section;
     as->current_subsection=saved_subsection;
-    as->source.current_site=saved_source_site;
+    as->source->current_site=saved_source_site;
     return ok;
 }
 
@@ -4349,13 +4072,13 @@ bool minias_statement_process(MiniAs *as, char *text, size_t line) {
         bool nonblank=text[3]=='n';
         const char *arg=text+(nonblank?5U:4U);
         while(isspace((unsigned char)*arg))++arg;
-        return push_conditional_value(as,nonblank?*arg!='\0':*arg=='\0');
+        return minias_source_push_conditional_value(as,nonblank?*arg!='\0':*arg=='\0');
     }
     if ((strncmp(text,".ifeqs",6U)==0 ||
          strncmp(text,".ifnes",6U)==0) &&
         (text[6]=='\0' || isspace((unsigned char)text[6]))) {
         bool unequal=text[3]=='n';
-        return push_conditional_strings(as,minias_trim(text+6U),
+        return minias_source_push_conditional_strings(as,minias_trim(text+6U),
                                         unequal,true,line);
     }
     if ((strncmp(text,".ifc",4U)==0 ||
@@ -4365,7 +4088,7 @@ bool minias_statement_process(MiniAs *as, char *text, size_t line) {
          (text[3]=='n' && text[4]=='c' &&
           (text[5]=='\0' || isspace((unsigned char)text[5]))))) {
         bool unequal=text[3]=='n';
-        return push_conditional_strings(as,
+        return minias_source_push_conditional_strings(as,
                  minias_trim(text+(unequal?5:4)),unequal,false,line);
     }
     /* GNU .ifnotdef and .ifndef are aliases. */
@@ -4377,7 +4100,7 @@ bool minias_statement_process(MiniAs *as, char *text, size_t line) {
          (text[9]=='\0' || isspace((unsigned char)text[9])))) {
         bool negate=text[3]=='n';
         unsigned width=negate?(text[4]=='o'?9U:7U):6U;
-        return push_conditional_defined(as,minias_trim(text+width),
+        return minias_source_push_conditional_defined(as,minias_trim(text+width),
                                         negate,line);
     }
     {
@@ -4393,7 +4116,7 @@ bool minias_statement_process(MiniAs *as, char *text, size_t line) {
                 int64_t literal;
                 if (!minias_eval_i64_expression(text+width,&literal))
                     as->layout_sensitive=true;
-                return push_conditional_numeric(as,
+                return minias_source_push_conditional_numeric(as,
                            minias_trim(text+width),name,line);
             }
         }
@@ -4405,22 +4128,22 @@ bool minias_statement_process(MiniAs *as, char *text, size_t line) {
         int64_t literal;
         if (!minias_eval_i64_expression(text+3U,&literal))
             as->layout_sensitive = true;
-        return push_conditional(as, minias_trim(text + 3), line);
+        return minias_source_push_conditional(as, minias_trim(text + 3), line);
     }
     if (strncmp(text, ".elseif", 7U) == 0 &&
         (text[7] == '\0' || isspace((unsigned char)text[7]))) {
         int64_t literal;
         if (!minias_eval_i64_expression(text+7U,&literal))
             as->layout_sensitive=true;
-        return elseif_conditional(as,minias_trim(text+7U),line);
+        return minias_source_elseif_conditional(as,minias_trim(text+7U),line);
     }
     if (strcmp(text, ".else") == 0) {
-        return else_conditional(as, line);
+        return minias_source_else_conditional(as, line);
     }
     if (strcmp(text, ".endif") == 0) {
-        return pop_conditional(as, line);
+        return minias_source_pop_conditional(as, line);
     }
-    if (!as->source.conditional_active) {
+    if (!as->source->conditional_active) {
         return true;
     }
 
@@ -4553,7 +4276,7 @@ bool minias_statement_process(MiniAs *as, char *text, size_t line) {
             minias_set_error(as,"bad-directive:.purgem:%s:line=%zu",name,line);
             return false;
         }
-        minias_macro_purge(&as->source,name);
+        minias_macro_purge(as->source,name);
         return true;
     }
     {
@@ -4762,7 +4485,7 @@ bool minias_statement_process(MiniAs *as, char *text, size_t line) {
                 minias_set_error(as,"bad-directive:%s:line=%zu",op,line);
                 return false;
             }
-            as->source.altmacro_active=strcmp(op,".altmacro")==0;
+            as->source->altmacro_active=strcmp(op,".altmacro")==0;
             return true;
         }
         if (strcmp(op, ".ident") == 0) {
@@ -4770,7 +4493,7 @@ bool minias_statement_process(MiniAs *as, char *text, size_t line) {
         }
         if (strcmp(op, ".end") == 0) {
             /* GAS ignores a trailing .end operand but stops the stream. */
-            as->source.source_ended=true;
+            as->source->source_ended=true;
             return true;
         }
         if (strcmp(op, ".align") == 0 || strcmp(op, ".balign") == 0 ||
@@ -4879,18 +4602,18 @@ static bool parse_loaded_source_graph(MiniAs *as,
     MiniAsSourceLine eof={0};
     bool parsed;
     size_t i;
-    if(as->source.graph!=NULL || graph==NULL ||
+    if(as->source->graph!=NULL || graph==NULL ||
        graph->physical.kind!=MINIAS_SOURCE_FRAME_FILE) {
         minias_set_error(as,"invalid-source-graph-state");
         return false;
     }
-    as->source.graph=graph;
+    as->source->graph=graph;
     ++graph->parse_passes;
     parsed=minias_source_frame_process(as,&graph->physical);
     if(!parsed)return false;
-    if(as->source.conditional_count!=0U) {
+    if(as->source->conditional_count!=0U) {
         minias_set_error(as,"unterminated-directive:.if:depth=%zu",
-                         as->source.conditional_count);
+                         as->source->conditional_count);
         return false;
     }
     if(as->cfi_active) {
@@ -4900,7 +4623,7 @@ static bool parse_loaded_source_graph(MiniAs *as,
     /* EOF-scheduled literal pools are generated by a real synthetic source
      * site, just like explicit .ltorg children are owned by their opener. */
     eof.line=graph->physical.count+1U;
-    if(!minias_source_graph_line_site(as,&eof,0U,&as->source.current_site))
+    if(!minias_source_graph_line_site(as,&eof,0U,&as->source->current_site))
         return false;
     if(as->target->supports_literal_pools &&
        !flush_literal_pools(as,graph->physical.count,true))return false;

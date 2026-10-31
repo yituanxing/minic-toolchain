@@ -13,6 +13,10 @@
 #define X64_CODE16 UINT32_C(2)
 #define X64_CODE16_GCC UINT32_C(3)
 
+static bool x64_mode16(uint32_t mode) {
+    return mode==X64_CODE16 || mode==X64_CODE16_GCC;
+}
+
 /* The IA-32 thunk mode is ISA parser state, not a Common assembler option.
  * Each instruction captures the bits at its lexical site so a later .code64
  * directive cannot change an earlier MCInst during layout/relaxation. */
@@ -531,8 +535,7 @@ static bool x64_parse_base_memory(MiniAs *as,const char *text, X64Memory *out) {
     bool wide, symbolic=false, difference=false, pc_relative=false;
     X64DisplacementReloc reloc_flavor=X64_DISP_ABSOLUTE;
     const X64TargetState *state=(const X64TargetState *)as->target_state;
-    const bool code16=state!=NULL &&
-        (state->code_mode==X64_CODE16 || state->code_mode==X64_CODE16_GCC);
+    const bool code16=state!=NULL && x64_mode16(state->code_mode);
     bool address32=state!=NULL && state->code_mode!=0U;
     bool address16=false;
     unsigned legacy_rm=0U;
@@ -3446,6 +3449,12 @@ typedef struct X64MemoryLayout {
     uint32_t instruction_bytes;
 } X64MemoryLayout;
 
+/* X86 segment selector identities are shared by register/memory emission
+ * and 16/32-bit lexical override planning.  Keep one ISA mapping. */
+static const unsigned char x64_segment_prefixes[]={
+    0U,0x64U,0x65U,0x2eU,0x3eU,0x26U,0x36U
+};
+
 static X64MemoryLayout x64_memory_layout(const MiniAsMCInst *m,
                                           uint32_t mode_bits) {
     const X64Memory *mem=m->operands[1].memory;
@@ -3490,19 +3499,14 @@ static X64MemoryLayout x64_memory_layout(const MiniAsMCInst *m,
             mem->base>=8U || (mem->has_index && mem->index>=8U));
         if(m->encoding&X64_ENCODING_NOTRACK)
             layout.prefix[layout.prefix_bytes++]=0x3eU;
-        if((m->encoding&X64_ENCODING_LOCK) &&
-           mode_bits!=X64_CODE16 && mode_bits!=X64_CODE16_GCC)
+        if((m->encoding&X64_ENCODING_LOCK) && !x64_mode16(mode_bits))
             layout.prefix[layout.prefix_bytes++]=0xf0U;
-        if(mem->address_space && mode_bits!=X64_CODE16 &&
-           mode_bits!=X64_CODE16_GCC) {
-            static const unsigned char segprefix[]={
-                0U,0x64U,0x65U,0x2eU,0x3eU,0x26U,0x36U
-            };
-            if(mem->address_space<sizeof(segprefix))
-                layout.prefix[layout.prefix_bytes++]=segprefix[mem->address_space];
+        if(mem->address_space && !x64_mode16(mode_bits)) {
+            if(mem->address_space<sizeof(x64_segment_prefixes))
+                layout.prefix[layout.prefix_bytes++]=
+                    x64_segment_prefixes[mem->address_space];
         }
-        if((m->encoding&UINT32_C(0x400)) &&
-           mode_bits!=X64_CODE16 && mode_bits!=X64_CODE16_GCC)
+        if((m->encoding&UINT32_C(0x400)) && !x64_mode16(mode_bits))
             layout.prefix[layout.prefix_bytes++]=0x66U;
         if(m->encoding&UINT32_C(0x2000))layout.prefix[layout.prefix_bytes++]=0xf3U;
         if(m->encoding&X64_ENCODING_F2)layout.prefix[layout.prefix_bytes++]=0xf2U;
@@ -3602,8 +3606,8 @@ static X64EncodingPlan x64_encoding_plan_variant(
                 0x04U+(group<<3U)+(byte?0U:1U):
                 byte?0x80U:short_imm?0x83U:0x81U);
             plan.alu_modrm=(unsigned char)(0xc0U|(group<<3U)|(first&7U));
-            plan.immediate_offset=(word && mode_bits!=X64_CODE16 &&
-                 mode_bits!=X64_CODE16_GCC?1U:0U)+(plan.rex?1U:0U)+
+            plan.immediate_offset=(word && !x64_mode16(mode_bits)?1U:0U)+
+                (plan.rex?1U:0U)+
                 1U+(plan.alu_accumulator?0U:1U);
             plan.instruction_bytes=plan.immediate_offset+plan.immediate_bytes;
             break;
@@ -3698,13 +3702,32 @@ typedef struct X64RegisterEncodingPlan {
     uint32_t size;
 } X64RegisterEncodingPlan;
 
+/* One machine-word bitfield owner for register-direct ModR/M and REX.
+ * The callers pass the ISA's reg and r/m field roles explicitly; these
+ * rules are shared by scalar, system, condition and immediate families. */
+static unsigned char x64_modrm_registers(unsigned reg_field,unsigned rm) {
+    return (unsigned char)(0xc0U|((reg_field&7U)<<3U)|(rm&7U));
+}
+
+static unsigned char x64_rex_registers(bool wide,unsigned reg_field,
+                                      unsigned rm) {
+    return (unsigned char)(0x40U|(wide?8U:0U)|
+                           ((reg_field>>3U)<<2U)|(rm>>3U));
+}
+
+static void x64_append_le(unsigned char *code,size_t *size,uint64_t bits,
+                          unsigned width) {
+    for(unsigned i=0U;i<width;++i)
+        code[(*size)++]=(unsigned char)(bits>>(8U*i));
+}
+
 static bool x64_register_encoding_plan(const MiniAsMCInst *m,
                                        uint32_t mode_bits,
                                        X64RegisterEncodingPlan *result) {
     const X64EncodingPlan plan=x64_encoding_plan(m,0U);
     unsigned char *code=result->bytes;
     size_t n=0U;
-    unsigned r,d,i;
+    unsigned r,d;
     switch(m->opcode) {
         case X64_SIMD_EXT: {
             /* SHA: legacy 0F 38 /r; GFNI: VEX.66.0F38;
@@ -3717,11 +3740,10 @@ static bool x64_register_encoding_plan(const MiniAsMCInst *m,
                 case 0U: case 1U:
                     if(src>=16U || dst>=16U)return false;
                     if(src>=8U || dst>=8U)
-                        code[n++]=(unsigned char)(0x40U|
-                            ((dst>>3U)<<2U)|(src>>3U));
+                        code[n++]=x64_rex_registers(false,dst,src);
                     code[n++]=0x0fU;code[n++]=0x38U;
                     code[n++]=(unsigned char)(m->encoding==0U?0xc9U:0xccU);
-                    code[n++]=(unsigned char)(0xc0U|((dst&7U)<<3U)|(src&7U));
+                    code[n++]=x64_modrm_registers(dst,src);
                     break;
                 case 2U: {
                     const unsigned middle=dst;
@@ -3732,8 +3754,7 @@ static bool x64_register_encoding_plan(const MiniAsMCInst *m,
                         0x40U|(src>=8U?0U:0x20U)|0x02U);
                     code[n++]=(unsigned char)((((~middle)&15U)<<3U)|0x01U);
                     code[n++]=0xcfU;
-                    code[n++]=(unsigned char)(0xc0U|((output&7U)<<3U)|
-                        (src&7U));
+                    code[n++]=x64_modrm_registers(output,src);
                     break;
                 }
                 case 3U: {
@@ -3750,7 +3771,7 @@ static bool x64_register_encoding_plan(const MiniAsMCInst *m,
                     code[n++]=0x7eU;
                     code[n++]=(unsigned char)((ll<<5U)|0x08U);
                     code[n++]=0x28U;
-                    code[n++]=(unsigned char)(0xc0U|((dst&7U)<<3U)|src);
+                    code[n++]=x64_modrm_registers(dst,src);
                     break;
                 }
                 default:return false;
@@ -3769,7 +3790,7 @@ static bool x64_register_encoding_plan(const MiniAsMCInst *m,
                           (((~count)&15U)<<3U)|(m->encoding&3U));
             code[n++]=(unsigned char)((m->encoding&UINT32_C(0x10000))?
                        (m->encoding>>8U)&UINT32_C(0xff):UINT32_C(0xf7));
-            code[n++]=(unsigned char)(0xc0U|((dst&7U)<<3U)|(base&7U));
+            code[n++]=x64_modrm_registers(dst,base);
             break;
         }
         case X64_XMM_IMM_REG:
@@ -3778,18 +3799,17 @@ static bool x64_register_encoding_plan(const MiniAsMCInst *m,
                 d=m->operands[1].reg;
                 code[n++]=(m->encoding&X64_ENCODING_F2)?0xf2U:0x66U;
                 if(r>=8U || d>=8U)
-                    code[n++]=(unsigned char)(0x40U|((d>>3U)<<2U)|(r>>3U));
+                    code[n++]=x64_rex_registers(false,d,r);
                 code[n++]=0x0fU;
                 code[n++]=(unsigned char)m->encoding;
-                code[n++]=(unsigned char)(0xc0U|((d&7U)<<3U)|(r&7U));
+                code[n++]=x64_modrm_registers(d,r);
                 code[n++]=(unsigned char)m->operands[2].immediate;
             } else {
                 code[n++]=0x66U;
                 if(r>=8U)code[n++]=0x41U;
                 code[n++]=0x0fU;
                 code[n++]=0x73U;
-                code[n++]=(unsigned char)(0xc0U|
-                    ((m->encoding&7U)<<3U)|(r&7U));
+                code[n++]=x64_modrm_registers(m->encoding&7U,r);
                 code[n++]=(unsigned char)m->operands[1].immediate;
             }
             break;
@@ -3797,25 +3817,21 @@ static bool x64_register_encoding_plan(const MiniAsMCInst *m,
             unsigned sys=m->operands[0].reg,gpr=m->operands[1].reg;
             if(m->encoding&0x400U)code[n++]=0x66U;
             if(plan.rex)
-                code[n++]=(unsigned char)(0x40U|
-                    ((sys>>3U)<<2U)|(gpr>>3U));
+                code[n++]=x64_rex_registers(false,sys,gpr);
             if(m->encoding&0x100U)code[n++]=0x0fU;
             code[n++]=(unsigned char)m->encoding;
-            code[n++]=(unsigned char)(0xc0U|
-                ((sys&7U)<<3U)|(gpr&7U));
+            code[n++]=x64_modrm_registers(sys,gpr);
             break;
         }
         case X64_DOUBLE_SHIFT: {
             unsigned src=m->operands[0].reg,dst=m->operands[1].reg;
             if(m->encoding&0x400U)code[n++]=0x66U;
             if(plan.rex)
-                code[n++]=(unsigned char)(0x40U|
-                    (m->operands[0].register_64?8U:0U)|
-                    ((src>>3U)<<2U)|(dst>>3U));
+                code[n++]=x64_rex_registers(
+                    m->operands[0].register_64,src,dst);
             code[n++]=0x0fU;
             code[n++]=(unsigned char)(m->encoding&0xffU);
-            code[n++]=(unsigned char)(0xc0U|
-                    ((src&7U)<<3U)|(dst&7U));
+            code[n++]=x64_modrm_registers(src,dst);
             if(m->encoding&0x200U)
                 code[n++]=(unsigned char)m->operands[2].immediate;
             break;
@@ -3823,39 +3839,37 @@ static bool x64_register_encoding_plan(const MiniAsMCInst *m,
         case X64_ZERO:
             if(X64_FORM_VALUE(m)>sizeof(result->bytes) ||
                X64_FORM_VALUE(m)>sizeof(m->encoding))return false;
-            for(i=0U;i<X64_FORM_VALUE(m);++i)
-                code[n++]=(unsigned char)(m->encoding>>(8U*i));
+            x64_append_le(code,&n,m->encoding,X64_FORM_VALUE(m));
             break;
         case X64_SETCC:
             r=m->operands[0].reg;
-            if(plan.rex)code[n++]=(unsigned char)(0x40U|(r>>3U));
+            if(plan.rex)code[n++]=x64_rex_registers(false,0U,r);
             code[n++]=0x0fU;code[n++]=(unsigned char)m->encoding;
-            code[n++]=(unsigned char)(0xc0U|(r&7U));
+            code[n++]=x64_modrm_registers(0U,r);
             break;
         case X64_BINARY8:
             r=m->operands[0].reg;d=m->operands[1].reg;
             if(plan.rex)
-                code[n++]=(unsigned char)(0x40U|((r>>3U)<<2U)|(d>>3U));
+                code[n++]=x64_rex_registers(false,r,d);
             if(m->encoding&UINT32_C(0x100))code[n++]=0x0fU;
             code[n++]=(unsigned char)m->encoding;
-            code[n++]=(unsigned char)(0xc0U|((r&7U)<<3U)|(d&7U));
+            code[n++]=x64_modrm_registers(r,d);
             break;
         case X64_MOVSLQ:
             r=m->operands[0].reg;d=m->operands[1].reg;
-            code[n++]=(unsigned char)(0x48U|((d>>3U)<<2U)|(r>>3U));
+            code[n++]=x64_rex_registers(true,d,r);
             code[n++]=0x63U;
-            code[n++]=(unsigned char)(0xc0U|((d&7U)<<3U)|(r&7U));
+            code[n++]=x64_modrm_registers(d,r);
             break;
         case X64_CMOV_REG:
             r=m->operands[0].reg;d=m->operands[1].reg;
             if(m->encoding&UINT32_C(0x400))code[n++]=0x66U;
             if(plan.rex)
-                code[n++]=(unsigned char)(0x40U|
-                    (m->operands[0].register_64?8U:0U)|
-                    ((d>>3U)<<2U)|(r>>3U));
+                code[n++]=x64_rex_registers(
+                    m->operands[0].register_64,d,r);
             code[n++]=0x0fU;
             code[n++]=(unsigned char)(0x40U+(m->encoding&15U));
-            code[n++]=(unsigned char)(0xc0U|((d&7U)<<3U)|(r&7U));
+            code[n++]=x64_modrm_registers(d,r);
             break;
         case X64_UNARY:
             r=m->operands[0].reg;
@@ -3876,18 +3890,17 @@ static bool x64_register_encoding_plan(const MiniAsMCInst *m,
             if(m->encoding&UINT32_C(0x20000))code[n++]=0xf2U;
             if(m->encoding&UINT32_C(0x2000))code[n++]=0x66U;
             if(plan.rex)
-                code[n++]=(unsigned char)(0x40U|
-                    (m->operands[0].register_64?8U:0U)|(r>>3U));
+                code[n++]=x64_rex_registers(
+                    m->operands[0].register_64,0U,r);
             if(m->encoding&UINT32_C(0x8000))code[n++]=0x0fU;
             code[n++]=(unsigned char)(m->encoding&0xffU);
-            code[n++]=(unsigned char)(0xc0U|
-                (((m->encoding>>8U)&7U)<<3U)|(r&7U));
+            code[n++]=x64_modrm_registers((m->encoding>>8U)&7U,r);
             break;
         case X64_BSWAP:
             r=m->operands[0].reg;
             if(plan.rex)
-                code[n++]=(unsigned char)(0x40U|
-                    (m->operands[0].register_64?8U:0U)|(r>>3U));
+                code[n++]=x64_rex_registers(
+                    m->operands[0].register_64,0U,r);
             code[n++]=0x0fU;
             code[n++]=(unsigned char)(0xc8U+(r&7U));
             break;
@@ -3896,15 +3909,14 @@ static bool x64_register_encoding_plan(const MiniAsMCInst *m,
             r=m->operands[0].reg;
             if(m->encoding&0x400U)code[n++]=0x66U;
             if(plan.rex)
-                code[n++]=(unsigned char)(0x40U|
-                    (m->operands[0].register_64?8U:0U)|(r>>3U));
+                code[n++]=x64_rex_registers(
+                    m->operands[0].register_64,0U,r);
             if(r==0U)code[n++]=0xa9U;
             else {
                 code[n++]=0xf7U;
-                code[n++]=(unsigned char)(0xc0U|(r&7U));
+                code[n++]=x64_modrm_registers(0U,r);
             }
-            for(i=0U;i<bytes;++i)
-                code[n++]=(unsigned char)(m->operands[1].immediate>>(8U*i));
+            x64_append_le(code,&n,m->operands[1].immediate,bytes);
             break;
         }
         case X64_SHIFT_REGISTER:
@@ -3913,31 +3925,30 @@ static bool x64_register_encoding_plan(const MiniAsMCInst *m,
                X64_FORM_VALUE(m)!=X64_SHIFT_COUNT_CL)return false;
             if(plan.shift_word)code[n++]=0x66U;
             if(plan.rex)
-                code[n++]=(unsigned char)(0x40U|
-                    (m->operands[0].register_64?8U:0U)|(r>>3U));
+                code[n++]=x64_rex_registers(
+                    m->operands[0].register_64,0U,r);
             code[n++]=plan.shift_opcode;
             code[n++]=plan.shift_modrm;
             if(n!=plan.immediate_offset)return false;
-            for(i=0U;i<plan.immediate_bytes;++i)
-                code[n++]=(unsigned char)(m->operands[1].immediate>>(8U*i));
+            x64_append_le(code,&n,m->operands[1].immediate,
+                          plan.immediate_bytes);
             break;
         case X64_MOVZX_REG:
             r=m->operands[0].reg;d=m->operands[1].reg;
             if(m->encoding&0x400U)code[n++]=0x66U;
             if(plan.rex)
-                code[n++]=(unsigned char)(0x40U|
-                    (m->operands[1].register_64?8U:0U)|
-                    ((d>>3U)<<2U)|(r>>3U));
+                code[n++]=x64_rex_registers(
+                    m->operands[1].register_64,d,r);
             code[n++]=0x0fU;code[n++]=(unsigned char)(m->encoding&0xffU);
-            code[n++]=(unsigned char)(0xc0U|((d&7U)<<3U)|(r&7U));
+            code[n++]=x64_modrm_registers(d,r);
             break;
         case X64_TEST8_IMM:
             r=m->operands[0].reg;
             if(r==0U)code[n++]=0xa8U;
             else {
-                if(plan.rex)code[n++]=(unsigned char)(0x40U|(r>>3U));
+                if(plan.rex)code[n++]=x64_rex_registers(false,0U,r);
                 code[n++]=0xf6U;
-                code[n++]=(unsigned char)(0xc0U|(r&7U));
+                code[n++]=x64_modrm_registers(0U,r);
             }
             code[n++]=(unsigned char)m->operands[1].immediate;
             break;
@@ -3946,24 +3957,21 @@ static bool x64_register_encoding_plan(const MiniAsMCInst *m,
             r=m->operands[0].reg;d=m->operands[1].reg;
             if(m->encoding&0x400U)code[n++]=0x66U;
             if(plan.rex)
-                code[n++]=(unsigned char)(0x40U|
-                    (m->operands[0].register_64?8U:0U)|
-                    ((d>>3U)<<2U)|(r>>3U));
+                code[n++]=x64_rex_registers(
+                    m->operands[0].register_64,d,r);
             code[n++]=bytes==1U?0x6bU:0x69U;
-            code[n++]=(unsigned char)(0xc0U|((d&7U)<<3U)|(r&7U));
-            for(i=0U;i<bytes;++i)
-                code[n++]=(unsigned char)(m->operands[2].immediate>>(8U*i));
+            code[n++]=x64_modrm_registers(d,r);
+            x64_append_le(code,&n,m->operands[2].immediate,bytes);
             break;
         }
         case X64_BIT_IMMREG:
             r=m->operands[0].reg;
             if(m->encoding&UINT32_C(0x400))code[n++]=0x66U;
             if(plan.rex)
-                code[n++]=(unsigned char)(0x40U|
-                    (m->operands[0].register_64?8U:0U)|(r>>3U));
+                code[n++]=x64_rex_registers(
+                    m->operands[0].register_64,0U,r);
             code[n++]=0x0fU;code[n++]=0xbaU;
-            code[n++]=(unsigned char)(0xc0U|
-                ((m->encoding&7U)<<3U)|(r&7U));
+            code[n++]=x64_modrm_registers(m->encoding&7U,r);
             code[n++]=(unsigned char)m->operands[1].immediate;
             break;
         case X64_MOV_IMM32:
@@ -3979,9 +3987,10 @@ static bool x64_register_encoding_plan(const MiniAsMCInst *m,
                 if(m->encoding&UINT32_C(0x400))code[n++]=0x66U;
                 if(r>=8U)code[n++]=0x41U;
                 code[n++]=(unsigned char)(0xb8U+(r&7U));
-                for(i=0U;i<((m->encoding&UINT32_C(0x400))?2U:4U);++i)
-                    code[n++]=(unsigned char)((m->operands[1].kind!=MINIAS_MC_IMMEDIATE?
-                        UINT64_C(0):m->operands[1].immediate)>>(8U*i));
+                x64_append_le(code,&n,
+                    m->operands[1].kind==MINIAS_MC_IMMEDIATE?
+                        m->operands[1].immediate:UINT64_C(0),
+                    (m->encoding&UINT32_C(0x400))?2U:4U);
             }
             break;
         case X64_REG_BINARY:
@@ -4002,15 +4011,12 @@ static bool x64_register_encoding_plan(const MiniAsMCInst *m,
             if(m->encoding&UINT32_C(0x2000))code[n++]=0xf3U;
             if(m->encoding&X64_ENCODING_F2)code[n++]=0xf2U;
             if(plan.rex)
-                code[n++]=(unsigned char)(0x40U|
-                    (m->operands[0].register_64?8U:0U)|
-                    (((m->encoding&0x800U)?d:r)>>3U)<<2U|
-                    (((m->encoding&0x800U)?r:d)>>3U));
+                code[n++]=x64_rex_registers(m->operands[0].register_64,
+                    (m->encoding&0x800U)?d:r,(m->encoding&0x800U)?r:d);
             if(m->encoding&0x100U)code[n++]=0x0fU;
             code[n++]=(unsigned char)m->encoding;
-            code[n++]=(unsigned char)(0xc0U|
-                ((((m->encoding&0x800U)?d:r)&7U)<<3U)|
-                (((m->encoding&0x800U)?r:d)&7U));
+            code[n++]=x64_modrm_registers(
+                (m->encoding&0x800U)?d:r,(m->encoding&0x800U)?r:d);
             break;
         case X64_STACK:
             r=m->operands[0].reg;
@@ -4022,7 +4028,7 @@ static bool x64_register_encoding_plan(const MiniAsMCInst *m,
             if(m->encoding&X64_ENCODING_NOTRACK)code[n++]=0x3eU;
             if(r>=8U)code[n++]=0x41U;
             code[n++]=0xffU;
-            code[n++]=(unsigned char)(0xc0U|((m->encoding&7U)<<3U)|(r&7U));
+            code[n++]=x64_modrm_registers(m->encoding&7U,r);
             break;
         default:return false;
     }
@@ -4038,8 +4044,7 @@ static bool x64_register_encoding_plan(const MiniAsMCInst *m,
 static void x64_apply_code16_register_default(const MiniAsStmt *s,
                                               X64RegisterEncodingPlan *plan) {
     const MiniAsMCInst *m=s->mcinst;
-    if((s->site.mode_bits==X64_CODE16 ||
-        s->site.mode_bits==X64_CODE16_GCC) &&
+    if(x64_mode16(s->site.mode_bits) &&
        X64_FORM_OPERAND_BITS(m)==16U &&
        plan->size>1U && plan->bytes[0]==0x66U) {
         memmove(plan->bytes,plan->bytes+1U,plan->size-1U);
@@ -4065,17 +4070,13 @@ static bool x64_legacy_mode_prefixes(MiniAs *as,const MiniAsStmt *s,
             prefix[(*count)++]=0x66U;
         if(m && m->opcode==X64_MOFFS && m->operands[1].memory) {
             const X64Memory *mem=(const X64Memory *)m->operands[1].memory;
-            static const unsigned char segprefix[]={
-                0U,0x64U,0x65U,0x2eU,0x3eU,0x26U,0x36U
-            };
-            if(mem->address_space>=sizeof(segprefix))return false;
+            if(mem->address_space>=sizeof(x64_segment_prefixes))return false;
             if(mem->address_space)
-                prefix[(*count)++]=segprefix[mem->address_space];
+                prefix[(*count)++]=x64_segment_prefixes[mem->address_space];
         }
         return true;
     }
-    if(s->site.mode_bits!=X64_CODE16 &&
-       s->site.mode_bits!=X64_CODE16_GCC)return true;
+    if(!x64_mode16(s->site.mode_bits))return true;
     if(m==NULL) {
         minias_set_error(as,"missing-x86-code16-mcinst");return false;
     }
@@ -4087,11 +4088,8 @@ static bool x64_legacy_mode_prefixes(MiniAs *as,const MiniAsStmt *s,
         const X64Memory *memory=(const X64Memory *)m->operands[1].memory;
         address32=memory->address_32;
         if(memory->address_space!=0U) {
-            static const unsigned char segprefix[]={
-                0U,0x64U,0x65U,0x2eU,0x3eU,0x26U,0x36U
-            };
-            if(memory->address_space>=sizeof(segprefix))return false;
-            prefix[(*count)++]=segprefix[memory->address_space];
+            if(memory->address_space>=sizeof(x64_segment_prefixes))return false;
+            prefix[(*count)++]=x64_segment_prefixes[memory->address_space];
         }
     }
     /* GAS places address-size before operand-size for mixed 16/32
@@ -4162,8 +4160,7 @@ static bool x64_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
  * encoding may consult a source mnemonic a second time. */
 static uint32_t x64_branch_near_width(const MiniAsStmt *stmt) {
     const MiniAsMCInst *m=stmt->mcinst;
-    const bool mode16=stmt->site.mode_bits==X64_CODE16 ||
-                      stmt->site.mode_bits==X64_CODE16_GCC;
+    const bool mode16=x64_mode16(stmt->site.mode_bits);
     if(m->encoding==0xe8U && X64_FORM_OPERAND_BITS(m)==32U)
         return 5U;
     return m->encoding>=0x100U?(mode16?4U:6U):(mode16?3U:5U);
@@ -4485,11 +4482,9 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
         case X64_PUSH_IMM: {
             bool symbol=m->operands[0].kind==MINIAS_MC_BOUND_SYMBOL;
             int32_t imm=symbol?0:(int32_t)(uint32_t)m->operands[0].immediate;
-            unsigned i;
             bool short_imm=plan.immediate_bytes==1U;
             code[n++]=short_imm?0x6aU:0x68U;
-            for(i=0U;i<plan.immediate_bytes;++i)
-                code[n++]=(unsigned char)((uint32_t)imm>>(8U*i));
+            x64_append_le(code,&n,(uint32_t)imm,plan.immediate_bytes);
             if(symbol) {
                 const MiniAsSymbolRef *expr=m->operands[0].bound_symbol;
                 if(!minias_emit_instruction_bytes(as,s->section,code,n))return false;
@@ -4509,7 +4504,6 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
             MiniAsSymbolRef difference_relocation_ref;
             uint64_t offset=symbolic || difference?0U:m->operands[1].immediate;
             const uint16_t seg=(uint16_t)m->operands[0].immediate;
-            unsigned i;
             if(width!=2U && width!=4U) {
                 minias_set_error(as,"x86-far-invalid-offset-width");
                 return false;
@@ -4533,8 +4527,7 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
                 offset=difference_relocation?0U:(uint32_t)resolved;
             }
             code[n++]=X64_FORM_VALUE(m)==1U?0x9aU:0xeaU;
-            for(i=0U;i<width;++i)
-                code[n++]=(unsigned char)(offset>>(8U*i));
+            x64_append_le(code,&n,offset,width);
             code[n++]=(unsigned char)seg;
             code[n++]=(unsigned char)(seg>>8U);
             if(!minias_emit_instruction_bytes(as,s->section,code,n))return false;
@@ -4549,15 +4542,13 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
         }
         case X64_MOFFS: {
             const X64Memory *mem=(const X64Memory *)m->operands[1].memory;
-            unsigned i;
             const unsigned width=mem && mem->address_16?2U:4U;
             if(mem==NULL ||
                mem->has_base || mem->has_index) {
                 minias_set_error(as,"x86-moffs-invalid-address");return false;
             }
             code[n++]=(unsigned char)m->encoding;
-            for(i=0U;i<width;++i)
-                code[n++]=(unsigned char)((uint64_t)mem->displacement>>(8U*i));
+            x64_append_le(code,&n,(uint64_t)mem->displacement,width);
             if(!minias_emit_instruction_bytes(as,s->section,code,n))return false;
             if(!mem->has_symbol)return true;
             return minias_encode_add_fixup_ref(as,s->section,
@@ -4582,7 +4573,6 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
             int64_t displacement=0;
             X64BranchDistanceKind resolution;
             bool local;
-            unsigned i;
             if(width!=2U && width!=x64_branch_near_width(s) &&
                !(m->encoding==0xe8U && width==5U &&
                  s->site.mode_bits==X64_CODE16_GCC)) {
@@ -4620,8 +4610,7 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
                                  s->line);
                 return false;
             }
-            for(i=0U;i<disp_width;++i)
-                code[n++]=(unsigned char)((uint32_t)displacement>>(8U*i));
+            x64_append_le(code,&n,(uint32_t)displacement,disp_width);
             if(!minias_emit_instruction_bytes(as,s->section,code,n))return false;
             if(local)return true;
             {
@@ -4652,7 +4641,6 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
             const unsigned extra=layout.immediate_bytes;
             uint32_t immediate=extra?
                 (uint32_t)m->operands[2].immediate:0U;
-            unsigned i;
             if(m->opcode==X64_IMM_MEMORY &&
                m->operands[2].kind==MINIAS_MC_BOUND_SYMBOL_DIFFERENCE) {
                 int64_t resolved;
@@ -4682,10 +4670,8 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
                 minias_set_error(as,"invalid-x86-memory-plan-offset");
                 return false;
             }
-            for (i=0U;i<layout.displacement_bytes;++i)
-                code[n++]=(unsigned char)(disp>>(8U*i));
-            for(i=0U;i<extra;++i)
-                code[n++]=(unsigned char)(immediate>>(8U*i));
+            x64_append_le(code,&n,disp,layout.displacement_bytes);
+            x64_append_le(code,&n,immediate,extra);
             if(n!=layout.instruction_bytes || n!=s->size) {
                 minias_set_error(as,"invalid-x86-memory-layout");
                 return false;
@@ -4702,13 +4688,11 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
         }
         case X64_MOVABS_IMMREG: {
             const MiniAsMCOperand *value=&m->operands[1];
-            unsigned i;
             r=m->operands[0].reg;
             code[n++]=(unsigned char)(0x48U|(r>>3U));
             code[n++]=(unsigned char)(0xb8U|(r&7U));
-            for(i=0U;i<8U;++i)
-                code[n++]=(unsigned char)((value->kind==MINIAS_MC_BOUND_SYMBOL?
-                    UINT64_C(0):value->immediate)>>(8U*i));
+            x64_append_le(code,&n,value->kind==MINIAS_MC_BOUND_SYMBOL?
+                          UINT64_C(0):value->immediate,8U);
             if(!minias_emit_instruction_bytes(as,s->section,code,n))return false;
             if(value->kind!=MINIAS_MC_BOUND_SYMBOL)return true;
             return minias_encode_add_fixup_ref(as,s->section,s->offset+2U,
@@ -4717,21 +4701,18 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
         }
         case X64_MOVQ_IMMREG: {
             const MiniAsMCOperand *src=&m->operands[1];
-            unsigned i;
             r=m->operands[0].reg;
             code[n++]=(unsigned char)(0x48U | (r>>3U));
             code[n++]=0xc7U;
             code[n++]=(unsigned char)(0xc0U | (r&7U));
-            for(i=0U;i<4U;++i)
-                code[n++]=(unsigned char)(((uint32_t)
-                    (src->kind==MINIAS_MC_BOUND_SYMBOL?0U:src->immediate))>>(8U*i));
+            x64_append_le(code,&n,(uint32_t)
+                (src->kind==MINIAS_MC_BOUND_SYMBOL?0U:src->immediate),4U);
             if(!minias_emit_instruction_bytes(as,s->section,code,n))return false;
             if(src->kind!=MINIAS_MC_BOUND_SYMBOL)return true;
             return minias_encode_add_fixup_ref(as,s->section,s->offset+3U,
                 MINIAS_FIXUP_X64_ABS32S,4U,*src->bound_symbol,false);
         }
         case X64_ALU_IMM: {
-            unsigned i;
             bool difference=m->operands[1].kind==MINIAS_MC_BOUND_SYMBOL_DIFFERENCE;
             bool symbol=m->operands[1].kind==MINIAS_MC_BOUND_SYMBOL || difference;
             uint64_t imm=symbol?0U:m->operands[1].immediate;
@@ -4756,8 +4737,7 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
                 imm=difference_relocation?0U:(uint32_t)resolved_diff;
             }
             r=m->operands[0].reg;
-            if(plan.alu_word && s->site.mode_bits!=X64_CODE16 &&
-               s->site.mode_bits!=X64_CODE16_GCC)code[n++]=0x66U;
+            if(plan.alu_word && !x64_mode16(s->site.mode_bits))code[n++]=0x66U;
             if(plan.rex)
                 code[n++]=(unsigned char)(0x40U |
                     (m->operands[0].register_64?8U:0U) | (r>>3U));
@@ -4766,8 +4746,7 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
             if(n!=plan.immediate_offset) {
                 minias_set_error(as,"invalid-x86-alu-plan-offset");return false;
             }
-            for(i=0U;i<plan.immediate_bytes;++i)
-                code[n++]=(unsigned char)(imm>>(8U*i));
+            x64_append_le(code,&n,imm,plan.immediate_bytes);
             if(difference_relocation) {
                 if(!minias_emit_instruction_bytes(as,s->section,code,n))return false;
                 return minias_encode_add_fixup_ref(as,s->section,
@@ -4884,8 +4863,7 @@ static bool x64_code_align(MiniAs *as,const MiniAsStmt *stmt,size_t n) {
     };
     const bool legacy32=as->output_elf32 && stmt->site.mode_bits==X64_CODE32;
     const bool legacy16=as->output_elf32 &&
-        (stmt->site.mode_bits==X64_CODE16 ||
-         stmt->site.mode_bits==X64_CODE16_GCC);
+        x64_mode16(stmt->site.mode_bits);
     const int section=stmt->section;
     /* GNU GAS leaves a single 0x90 at the beginning of a code-alignment
      * fragment immediately following a raw DATA fragment, then fills the

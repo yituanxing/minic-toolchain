@@ -39,7 +39,16 @@ if 'MINIAS_EXPRESSION_GRAMMAR_H' not in syntax:
     raise SystemExit('shared Common expression grammar contract is missing')
 if 'expression_grammar.h' not in legacy or 'expression_grammar.h' not in m:
     raise SystemExit('separate absolute and MCExpr parsers no longer share grammar')
+for old in ('parse_addend_primary(', 'parse_addend_mul(',
+            'parse_absolute_primary(', 'parse_absolute_mul(',
+            'deferred_parse_prefix(', 'deferred_parse_binary(',
+            'minias_expr_take_binary('):
+    if old in legacy or old in m or old in syntax:
+        raise SystemExit('obsolete recursive expression grammar survived '+old)
+if m.count('minias_expr_parse_syntax(') < 3 or \
+   'minias_expr_parse_syntax(' not in legacy:
+    raise SystemExit('absolute and deferred consumers bypass shared AST')
 if 'assembler/src/mc_expr.c' not in mk:
     raise SystemExit('MCExpr not in build')
-print('MINIAS_MCEXPR_MODULE=PASS shared_grammar=1 one_emitter=1 immutable_fields=1 stable_symbols=1 dead_apis=0')
+print('MINIAS_MCEXPR_MODULE=PASS shared_AST=1 evaluators=3 one_emitter=1 immutable_fields=1 stable_symbols=1 dead_apis=0')
 PY

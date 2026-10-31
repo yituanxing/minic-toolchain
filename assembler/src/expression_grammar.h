@@ -2,6 +2,9 @@
 #define MINIAS_EXPRESSION_GRAMMAR_H
 
 #include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
 
 /* Common GNU expression lexical grammar.  The same operator token and
  * binding power must be used for wrapping integer operands, checked
@@ -35,25 +38,45 @@ typedef struct MiniAsExprBinary {
     unsigned width;
 } MiniAsExprBinary;
 
+/* Syntax is parsed once, independently of absolute/relocatable arithmetic.
+ * Symbol names are source spans until a consumer binds stable SymbolIDs;
+ * the syntax tree itself is short lived and never stored in a Fragment. */
+typedef enum MiniAsExprNodeKind {
+    MINIAS_EXPR_LITERAL,
+    MINIAS_EXPR_SYMBOL,
+    MINIAS_EXPR_DOT,
+    MINIAS_EXPR_UNARY,
+    MINIAS_EXPR_BINARY
+} MiniAsExprNodeKind;
+
+typedef struct MiniAsExprNode {
+    MiniAsExprNodeKind kind;
+    MiniAsExprBinaryOp op;
+    char unary;
+    uint64_t literal;
+    size_t left,right;
+    size_t start,length;
+} MiniAsExprNode;
+
+typedef struct MiniAsExprSyntax {
+    const char *text;
+    MiniAsExprNode *nodes;
+    size_t count,capacity,root;
+    /* Most ISA immediates are one or two nodes; avoid heap allocation for
+     * those hot paths while allowing larger GNU source expressions. */
+    MiniAsExprNode inline_nodes[12];
+} MiniAsExprSyntax;
+
+bool minias_expr_parse_syntax(const char *text,MiniAsExprSyntax *out);
+void minias_expr_syntax_destroy(MiniAsExprSyntax *syntax);
+bool minias_expr_eval_integer(const MiniAsExprSyntax *syntax,
+                              bool signed_shift,uint64_t *result);
+
 /* Caller must pass an operator-start position; longest tokens win. */
 bool minias_expr_scan_binary(const char *cursor, MiniAsExprBinary *out);
 
 static inline void minias_expr_skip_space(const char **cursor) {
     while (**cursor == ' ' || **cursor == '\t') ++*cursor;
-}
-
-/* Consume only the requested precedence.  Lower-precedence operators remain
- * untouched so each parser's current grammar layer owns them. */
-static inline bool minias_expr_take_binary(const char **cursor,
-                                           unsigned precedence,
-                                           MiniAsExprBinaryOp *op) {
-    MiniAsExprBinary token;
-    minias_expr_skip_space(cursor);
-    if (!minias_expr_scan_binary(*cursor, &token) ||
-        token.precedence != precedence) return false;
-    *cursor += token.width;
-    *op = token.op;
-    return true;
 }
 
 #endif

@@ -3,6 +3,51 @@
 
 #include "minias_internal.h"
 
+/* These source-only types intentionally do not appear in the Target-visible
+ * MiniAs internal model. Source expansion is their lifetime owner. */
+typedef struct MiniAsConditional {
+    bool parent_active;
+    bool condition_true;
+    bool else_seen;
+    MiniAsStableSiteId source_site;
+} MiniAsConditional;
+
+typedef struct MiniAsMacroParam {
+    char *name;
+    char *default_value;
+    bool required;
+    bool variadic;
+} MiniAsMacroParam;
+
+typedef struct MiniAsMacro {
+    char *name;
+    MiniAsMacroParam *params;
+    size_t param_count;
+    char **body;
+    size_t *body_lines;
+    size_t *body_source_segments;
+    size_t body_count;
+    MiniAsStableSiteId definition_site;
+} MiniAsMacro;
+
+struct MiniAsSourceContext {
+    MiniAsConditional *conditionals;
+    size_t conditional_count;
+    size_t conditional_capacity;
+    MiniAsMacro *macros;
+    size_t macro_count;
+    size_t macro_capacity;
+    size_t macro_expansion_counter;
+    size_t macro_expansion_depth;
+    bool altmacro_active;
+    bool conditional_active;
+    bool source_ended;
+    bool c_comment_active;
+    MiniAsSourceGraph *graph; /* borrowed from assembly invocation */
+    MiniAsStableSiteId current_site;
+    MiniAsStableSiteId current_expansion_site;
+};
+
 /* Common's lexical expansion owns source text, while the persistent graph
  * owns cross-replay SiteIDs and forced branch identities. This private header
  * describes their shared ownership contract, never an ISA-specific grammar. */
@@ -126,9 +171,22 @@ bool minias_source_graph_capture_forced_branches(MiniAs *as, const size_t *ids,
 /* Source lexical/macro/repeat expansion (fresh inside each semantic pass). */
 void minias_source_lines_destroy(MiniAsSourceLine *lines, size_t count);
 void minias_macro_destroy(MiniAsMacro *macro);
+bool minias_source_context_init(MiniAs *as);
 void minias_source_context_destroy(MiniAsSourceContext *source);
 MiniAsMacro *minias_macro_find(MiniAs *as, const char *name);
 void minias_macro_purge(MiniAsSourceContext *source, const char *name);
+bool minias_source_push_conditional_value(MiniAs *as, bool condition_true);
+bool minias_source_push_conditional(MiniAs *as, const char *args, size_t line);
+bool minias_source_push_conditional_numeric(MiniAs *as, const char *args,
+                                            const char *directive, size_t line);
+bool minias_source_push_conditional_defined(MiniAs *as, const char *args,
+                                            bool negate, size_t line);
+bool minias_source_push_conditional_strings(MiniAs *as, const char *args,
+                                            bool unequal, bool double_quoted,
+                                            size_t line);
+bool minias_source_elseif_conditional(MiniAs *as, const char *args, size_t line);
+bool minias_source_else_conditional(MiniAs *as, size_t line);
+bool minias_source_pop_conditional(MiniAs *as, size_t line);
 bool minias_macro_expand(MiniAs *as, MiniAsMacro *macro,
                              const char *args, size_t line);
 bool minias_source_frame_process(MiniAs *as, const MiniAsSourceFrame *frame);
