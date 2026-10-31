@@ -1738,7 +1738,24 @@ for bad in 'addi a7, a0, 1' 'addi x16, x1, 1' 'addi s2, s0, 1'; do
         exit 1
     fi
 done
-echo 'MINIAS_ISA_XLEN_RV32E=PASS rv32im_m=1 rv64_ops_blocked=3 rv32e_registers_blocked=3'
+
+# A bare -mabi=ilp32e must constrain typed register legality even when no
+# -march was provided. This is a Target ABI property, not a read of the
+# mutable ELF e_flags during MCInst parsing.
+printf '.text\naddi a5, a0, 1\n' >"$work/isa-e-abi-only-good.s"
+"$MINIAS" --target=riscv -mabi=ilp32e -o "$work/isa-e-abi-only-good.o" \
+    "$work/isa-e-abi-only-good.s"
+readelf -h "$work/isa-e-abi-only-good.o" | grep -q 'Flags:.*0x8.*RVE'
+printf '.text\naddi x16, x1, 1\n' >"$work/isa-e-abi-only-bad.s"
+if "$MINIAS" --target=riscv -mabi=ilp32e \
+        -o "$work/isa-e-abi-only-bad.o" "$work/isa-e-abi-only-bad.s" \
+        2>"$work/isa-e-abi-only-bad.err"; then
+    echo 'MiniAS allowed x16 under implicit-ISA ILP32E' >&2
+    exit 1
+fi
+test ! -e "$work/isa-e-abi-only-bad.o"
+grep -q 'riscv32e-invalid-register' "$work/isa-e-abi-only-bad.err"
+echo 'MINIAS_ISA_XLEN_RV32E=PASS rv32im_m=1 rv64_ops_blocked=3 rv32e_registers_blocked=3 implicit_isa_eabi=2'
 
 
 # Relaxation is now in-place for stable fragment sources: instruction growth

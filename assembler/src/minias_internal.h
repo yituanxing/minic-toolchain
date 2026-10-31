@@ -335,6 +335,9 @@ typedef struct MiniAsLiteral {
  * rather than reading mutable TargetContext during later relaxation. */
 typedef struct MiniAsTargetSiteState {
     uint32_t mode_bits;
+    /* Target-private parsed directive provenance. Common snapshots it once
+     * and never interprets the bits during layout or output finalization. */
+    uint32_t provenance_bits;
 } MiniAsTargetSiteState;
 
 /* MCExpr owns semantic operands, not source spelling. Compile each fixed-
@@ -874,7 +877,8 @@ typedef struct MiniAsTargetOps {
     /* Fully target-owned ISA/ABI state lifecycle and per-fragment snapshot. */
     bool (*init_target_state)(MiniAs *, const struct MiniAsAssemblyConfig *);
     bool (*configure_legacy_target)(struct MiniAsAssemblyConfig *, unsigned);
-    void (*capture_site_state)(const MiniAs *, MiniAsTargetSiteState *);
+    void (*capture_site_state)(const MiniAs *, const MiniAsStmt *,
+                               MiniAsTargetSiteState *);
     void (*destroy_target_state)(MiniAs *);
     bool (*validate_common_directive)(MiniAs *, MiniAsCommonDirectiveKind,
                                       const char *, size_t);

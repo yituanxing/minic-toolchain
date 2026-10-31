@@ -765,6 +765,7 @@ static bool riscv_init_target_state(MiniAs *as,
         return false;
     }
     state->target_xlen = config->elf32 ? 32U : 64U;
+    state->rv32e_abi = (config->elf_flags & 8U) != 0U; /* EF_RISCV_RVE */
     if (config->target_profile_size != 0U) {
         memcpy(&profile, config->target_profile, sizeof(profile));
         if (profile.elf32 != config->elf32 ||
@@ -817,7 +818,9 @@ static bool riscv_configure_legacy(MiniAsAssemblyConfig *config,
 }
 
 static void riscv_capture_site_state(const MiniAs *as,
+                                      const MiniAsStmt *stmt,
                                       MiniAsTargetSiteState *site) {
+    (void)stmt;
     site->mode_bits = MINIAS_RV_STATE(as)->options;
 }
 

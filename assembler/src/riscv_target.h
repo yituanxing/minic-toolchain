@@ -29,6 +29,10 @@ typedef struct MiniAsRiscvState {
     bool isa_explicit;
     unsigned target_xlen;
     uint64_t isa_features;
+    /* The E calling convention may be selected by -mabi=ilp32e even when
+     * -march is omitted. Keep this legality policy in the Target state,
+     * not in Core's mutable ELF output flags. */
+    bool rv32e_abi;
     /* Mutable .option mode belongs to this TargetContext, not MiniAs.
      * The matching immutable parse-site view lives in stmt->site. */
     uint32_t options;

@@ -2235,7 +2235,8 @@ oom:
  * s2, t3 or x16. All instruction forms, including aliases, CSR, vector,
  * FP and multiword pseudos, retain their actual register operands in MCInst.
  * Check those typed operands after parsing, never a lexical sweep over the
- * original assembly text. EF_RVE=8 also covers -mabi=ilp32e without -march. */
+ * original assembly text. The Target's ABI snapshot also covers
+ * -mabi=ilp32e without an explicit -march. */
 bool minias_riscv_parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
     const MiniAsRiscvState *state = MINIAS_RV_STATE(as);
     RvParsedIsaPolicy policy={0};
@@ -2253,7 +2254,7 @@ bool minias_riscv_parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
                                           policy.rv64_only)) return false;
     if (state == NULL ||
         ((state->isa_features & RISCV_ISA_E) == 0U &&
-         (as->elf_flags & 8U) == 0U)) return true;
+         !state->rv32e_abi)) return true;
     for (index = 0U; index < inst->count; ++index) {
         const MiniAsMCOperand *operand = &inst->operands[index];
         if (operand->kind == MINIAS_MC_REGISTER &&

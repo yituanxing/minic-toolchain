@@ -117,9 +117,26 @@ static bool a64_init_target_state(MiniAs *as,
     return true;
 }
 
+enum {
+    A64_SITE_INST_DATA = 1U,
+    A64_SITE_EXPLICIT_ALIGN = 2U
+};
+
+/* Preserve parsed GNU directive provenance while source spelling is still
+ * available. Late mapping/ELF finalization must consume this typed site
+ * state rather than reinterpret a raw mnemonic or directive string. */
 static void a64_capture_site_state(const MiniAs *as,
+                                   const MiniAsStmt *stmt,
                                    MiniAsTargetSiteState *site) {
     site->mode_bits=a64_features(as);
+    if(stmt->op!=NULL && strcmp(stmt->op,".inst")==0)
+        site->provenance_bits|=A64_SITE_INST_DATA;
+    if(stmt->fragment_kind==MINIAS_FRAGMENT_ALIGNMENT && stmt->align>1U &&
+       stmt->op!=NULL &&
+       (strcmp(stmt->op,".align")==0 ||
+        strcmp(stmt->op,".p2align")==0 ||
+        strcmp(stmt->op,".balign")==0))
+        site->provenance_bits|=A64_SITE_EXPLICIT_ALIGN;
 }
 
 static void a64_destroy_target_state(MiniAs *as) {
@@ -5648,11 +5665,8 @@ static bool a64_record_source_mappings(MiniAs *as) {
         /* Explicit alignment can establish MAP_DATA even with zero bytes;
          * retain it until final-layout mapping reconciliation. Ordinary
          * zero-sized statements do not contribute source mapping state. */
-        bool explicit_alignment=stmt->fragment_kind==MINIAS_FRAGMENT_ALIGNMENT &&
-            stmt->align>1U && stmt->op!=NULL &&
-            (strcmp(stmt->op,".align")==0 ||
-             strcmp(stmt->op,".p2align")==0 ||
-             strcmp(stmt->op,".balign")==0);
+        bool explicit_alignment=
+            (stmt->site.provenance_bits&A64_SITE_EXPLICIT_ALIGN)!=0U;
         /* A zero-width alignment in executable .text changes ELF section
          * alignment only; GAS does not create $x/$d until bytes are emitted.
          * Data sections retain the zero-width alignment as MAP_DATA state. */
@@ -5662,7 +5676,7 @@ static bool a64_record_source_mappings(MiniAs *as) {
         /* GAS mapping_state(MAP_INSN) records a four-byte input-section
          * alignment for .inst even in non-executable .data. This is a
          * Target directive property, not generic raw-data alignment. */
-        if(stmt->op!=NULL && strcmp(stmt->op,".inst")==0 &&
+        if((stmt->site.provenance_bits&A64_SITE_INST_DATA)!=0U &&
            section->align<4U)section->align=4U;
         if(section->type!=MINIAS_SHT_PROGBITS ||
            (section->flags&MINIAS_SHF_ALLOC)==0U)continue;
@@ -5671,7 +5685,7 @@ static bool a64_record_source_mappings(MiniAs *as) {
          * but that storage choice must not misclassify its ELF mapping as
          * $d: an instruction word remains executable code to AArch64. */
         executable=stmt->fragment_kind==MINIAS_FRAGMENT_INSTRUCTION ||
-            (stmt->op!=NULL && strcmp(stmt->op,".inst")==0) ||
+            (stmt->site.provenance_bits&A64_SITE_INST_DATA)!=0U ||
             (stmt->fragment_kind==MINIAS_FRAGMENT_ALIGNMENT &&
              (section->flags&MINIAS_SHF_EXECINSTR)!=0U &&
              !stmt->align_has_fill);
@@ -5769,7 +5783,7 @@ static bool validate(MiniAs *as) {
     for (i = 0U; i < as->stmt_count; ++i) {
         const MiniAsStmt *stmt=&as->stmts[i];
         if(stmt->fragment_kind!=MINIAS_FRAGMENT_INSTRUCTION &&
-           !(stmt->op!=NULL && strcmp(stmt->op,".inst")==0))continue;
+           (stmt->site.provenance_bits&A64_SITE_INST_DATA)==0U)continue;
         if(stmt->section<0 || (size_t)stmt->section>=as->section_count)
             continue;
         /* GAS leaves instructions in non-executable sections byte-packed;

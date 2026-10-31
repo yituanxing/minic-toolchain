@@ -1526,7 +1526,7 @@ static bool add_stmt(MiniAs *as,
     st->size = size;
     st->align = align;
     if (as->target->capture_site_state != NULL)
-        as->target->capture_site_state(as, &st->site);
+        as->target->capture_site_state(as, st, &st->site);
     if (st->op == NULL || st->args == NULL) {
         minias_set_error(as, "out-of-memory:stmt-text");
         return false;

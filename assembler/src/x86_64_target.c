@@ -5090,8 +5090,10 @@ static bool x64_init_target_state(MiniAs *as,
 }
 
 static void x64_capture_site_state(const MiniAs *as,
+                                   const MiniAsStmt *stmt,
                                    MiniAsTargetSiteState *site) {
     const X64TargetState *state=(const X64TargetState *)as->target_state;
+    (void)stmt;
     site->mode_bits=state==NULL?0U:state->code_mode;
 }
 

@@ -518,3 +518,50 @@ four-backend compiler runtime, GCC single-AS A/B, BusyBox, and runtime
 ladder workflows have all reported SUCCESS. Its full opt-in Linux runtime
 job was SKIPPED. Do not transfer the earlier `ae70920` full Linux P0/P1
 certificate to `d5fe7b3` or to this finalization cleanup.
+
+## 13. Typed AArch64 parse-site provenance and RV E ABI ownership
+
+After `e2698e7`, the post-emit phase is explicitly divided, but P06 still
+had an avoidable late lexical dependency: `a64_record_source_mappings` and
+`validate` checked retained source op strings to decide whether `.inst` was
+machine code or whether `.align/.p2align/.balign` was an explicit alignment.
+Those decisions belong to source interpretation, **before** MCLayout.
+
+`capture_site_state` now receives the statement being captured, alongside
+the Target's existing mode snapshot. AArch64 records two Target-private
+`provenance_bits` at parse time: `.inst` data with instruction mapping and
+explicit alignment. Finalization consumes only these retained semantic bits,
+not the original directive spelling. The common `MiniAsTargetSiteState`
+stores the opaque bits but never interprets AArch64 syntax; x86-64 and
+RISC-V preserve their existing mode snapshots. This closes the proven P06
+late-string use without adding an AST or second mapping engine.
+
+The parallel P14 read found RISC-V's typed MCInst register gate reading
+`as->elf_flags & 8` to infer RV32E, including `-mabi=ilp32e` without
+`-march`. `riscv_init_target_state` now captures `rv32e_abi` from the
+resolved Target configuration, and `riscv_encode.c` consults that policy
+beside `RISCV_ISA_E`. The Common ELF output flags are no longer used as a
+Target operand-legalization input. A0 now asserts positive x15 and rejected
+x16 in the implicit-ISA ILP32E case, including the correct ELF RVE flag.
+
+Local coverage on this pending batch: Release build PASS; A0 **30/30 PASS**;
+GNU AArch64 strict `.inst` `$d/$x` mapping, `.data` alignment and six
+source-mapping cases PASS; RV32 XLEN GNU probe PASS; SourceGraph x86/RV
+exact GNU bytes/symbols/replay **2/2 PASS**; structural boundary check PASS,
+including bans on late AArch64 statement-op comparisons and RISC-V MC's
+read of Common `elf_flags`. A full exact-head Linux boot result is **not
+claimed** here.
+
+The preceding `e2698e7` exact-head CI subsequently completed SUCCESS for
+the target ISA/ABI contract, x86/Loong GNU oracle, four-backend compiler
+runtime, GCC single-AS A/B, real BusyBox, runtime ladder and Native Strict
+Backend gates. The optional Linux kernel workflow on that commit was
+SKIPPED; retain the result and SHA distinction.
+
+**Still open:** P04 phase views should eventually prevent Target mutation
+of Common storage *by type*, rather than relying solely on transactional
+emission and reviewed callbacks. AArch64's mapping planner legitimately
+traverses final Fragment and Section layout and must gain a read-only
+FinalizeView when that interface is built. LoongArch's complete-section
+branch-relaxability cache likewise needs a query view, not a handwaved
+deletion of its global lookahead algorithm.

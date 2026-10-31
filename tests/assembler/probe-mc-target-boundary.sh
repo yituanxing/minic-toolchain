@@ -102,6 +102,26 @@ for target, (validator, finalizer) in targets.items():
             raise SystemExit(f'{target}: missing {hook}={function}')
 print('MINIAS_MC_OBJECT_FINALIZATION=PASS validation_before_mapping_before_writer=2')
 PY
+# Parse-site AArch64 mapping semantics must not be recovered by comparing
+# source strings during late section finalization. RISC-V's RVE ABI must not
+# be inferred from mutable Common ELF e_flags while parsing MC operands.
+python3 - <<'PY'
+from pathlib import Path
+
+a64 = Path('assembler/src/aarch64_target.c').read_text()
+late = a64.split('static bool a64_record_source_mappings(', 1)[1]
+late = late.split('static bool aarch64_resolve_profile(', 1)[0]
+if 'strcmp(stmt->op,' in late:
+    raise SystemExit('AArch64 still reinterprets source directive text after layout')
+if 'A64_SITE_INST_DATA' not in late or 'A64_SITE_EXPLICIT_ALIGN' not in late:
+    raise SystemExit('AArch64 mapping did not consume typed parse-site provenance')
+rv_encoder = Path('assembler/src/riscv_encode.c').read_text()
+if 'as->elf_flags' in rv_encoder:
+    raise SystemExit('RISC-V MC parser still reads Common ELF output flags')
+if 'state->rv32e_abi' not in rv_encoder:
+    raise SystemExit('RISC-V MC parser lost the target-owned E ABI gate')
+print('MINIAS_MC_SITE_PROVENANCE=PASS AArch64_late_semantics=typed RV_E_ABI=target_owned')
+PY
 # Code alignment is a Target-owned NOP policy but still emits through the
 # identical MC byte transaction as every instruction. No architecture gets
 # a special direct-Section bridge for ALIGN or for an instruction emitter.
