@@ -39,10 +39,10 @@ static inline bool minic_multi_direct_gp_unary_consumer_opcode(
            kind == MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO;
 }
 
-/* Only LoongArch currently opts in to GP forwarding.  All additions here
- * are native scalar producers which finish with their value in its $t0
- * transport register; AArch64 keeps its dispatch opt-out.  A target must
- * still validate source and result widths before using this contract. */
+/* LoongArch and x86-64 currently opt in to the same Core GP forwarding
+ * proof: their eligible native scalar producers leave the result in $t0
+ * and %rax respectively. AArch64 keeps its dispatch opt-out. The target
+ * must still validate the actual register and width contracts. */
 static inline bool minic_multi_direct_gp_scalar_producer(
     MinicCoreInstructionKind kind) {
     if (minic_multi_direct_gp_binary_consumer_opcode(kind) ||

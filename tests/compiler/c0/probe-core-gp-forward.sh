@@ -51,12 +51,34 @@ fi
     -o "$work/gnu.exe" || fail 'GNU reference build'
 "$minic" --target=x86_64-linux -S "$work/source.i" -o "$work/x86.s" \
     || fail 'MiniC native target build'
+MINIC_X86_DISABLE_ADJACENT_GP_FORWARD=1 \
+    "$minic" --target=x86_64-linux -S "$work/source.i" \
+    -o "$work/x86-baseline.s" || fail 'x86 conservative baseline build'
+"${HOST_CC:-cc}" -c -x assembler "$work/x86.s" -o "$work/x86.o" \
+    || fail 'GNU assembled forwarded x86'
+"${HOST_CC:-cc}" -c -x assembler "$work/x86-baseline.s" -o "$work/x86-baseline.o" \
+    || fail 'GNU assembled conservative x86'
+x86_bytes=$(size -A "$work/x86.o" | awk '$1 == ".text" {print $2}')
+baseline_bytes=$(size -A "$work/x86-baseline.o" | awk '$1 == ".text" {print $2}')
+x86_instructions=$(objdump -d --no-show-raw-insn "$work/x86.o" |
+    awk '/^[[:space:]]*[0-9a-f]+:/ {n++} END {print n+0}')
+baseline_instructions=$(objdump -d --no-show-raw-insn "$work/x86-baseline.o" |
+    awk '/^[[:space:]]*[0-9a-f]+:/ {n++} END {print n+0}')
+test -n "$baseline_bytes" && test -n "$x86_bytes" &&
+    test "$x86_bytes" -lt "$baseline_bytes" &&
+    test "$x86_instructions" -lt "$baseline_instructions" \
+    || fail "x86 adjacent GP machine delta absent: text $baseline_bytes->$x86_bytes instructions $baseline_instructions->$x86_instructions"
 "${HOST_CC:-cc}" -no-pie "$work/x86.s" -o "$work/minic.exe" \
     || fail 'GNU assembler/linker of MiniC native output'
+"${HOST_CC:-cc}" -no-pie "$work/x86-baseline.s" -o "$work/x86-baseline.exe" \
+    || fail 'GNU assembler/linker of MiniC conservative x86 baseline'
 gnu_status=0
 "$work/gnu.exe" || gnu_status=$?
 minic_status=0
 "$work/minic.exe" || minic_status=$?
-test "$gnu_status" -eq 42 && test "$minic_status" -eq "$gnu_status" \
-    || fail "GNU/MiniC native runtime mismatch gnu=$gnu_status minic=$minic_status"
-echo "CORE_GP_FORWARD=PASS loong_cycles=$roundtrips native_strict=42 aarch64_s=1"
+baseline_status=0
+"$work/x86-baseline.exe" || baseline_status=$?
+test "$gnu_status" -eq 42 && test "$minic_status" -eq "$gnu_status" &&
+    test "$baseline_status" -eq "$gnu_status" \
+    || fail "GNU/MiniC native runtime mismatch gnu=$gnu_status minic=$minic_status baseline=$baseline_status"
+echo "CORE_GP_FORWARD=PASS loong_cycles=$roundtrips native_strict=42 aarch64_s=1 x86_text=$baseline_bytes->$x86_bytes x86_instructions=$baseline_instructions->$x86_instructions x86_native_differential=42"

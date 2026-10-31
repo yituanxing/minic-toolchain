@@ -24,6 +24,14 @@ typedef struct MinicX86Frame {
      * conservative always-spill behavior. This is not a register allocator:
      * live Core values still use their original ABI-safe frame slots. */
     const size_t *function_value_use_counts;
+    /* One-instruction, target-owned transport for Common's proven adjacent
+     * single-use scalar GP pair. x86's producer leaves its value in %rax;
+     * the immediately following consumer can read that same %rax directly.
+     * Boolean guards keep standalone/zero-initialized frame clients inert. */
+    bool gp_forward_source_valid;
+    MinicCoreValueId gp_forward_source_id;
+    bool gp_elide_result_store_valid;
+    MinicCoreValueId gp_elide_result_store_id;
     size_t *object_offsets;
     MinicCoreObjectStoragePlan object_storage;
     bool borrows_object_storage;

@@ -52,6 +52,8 @@ jobs:
       regenerate: ${{ steps.decide.outputs.regenerate }}
       reuse_objects: ${{ steps.decide.outputs.reuse_objects }}
       only_aarch64: ${{ steps.decide.outputs.only_aarch64 }}
+      only_x86_64: ${{ steps.decide.outputs.only_x86_64 }}
+      producer_targets: ${{ steps.decide.outputs.producer_targets }}
       receiver_targets: ${{ steps.decide.outputs.receiver_targets }}
     steps:
       - uses: actions/checkout@v4
@@ -67,6 +69,7 @@ jobs:
           regenerate=false
           reuse_objects=false
           only_aarch64=false
+          only_x86_64=false
           if [[ '${{ github.event_name }}' == workflow_dispatch ]]; then
             active=true
             if [[ '${{ inputs.regenerate_original_gnu }}' == true ]]; then
@@ -100,6 +103,9 @@ jobs:
             if [[ "$head_subject" == *'[minic-only-aarch64]'* ]]; then
               only_aarch64=true
             fi
+            if [[ "$head_subject" == *'[minic-only-x86_64]'* ]]; then
+              only_x86_64=true
+            fi
           fi
           if [[ "$regenerate" == true && "$reuse_objects" == true ]]; then
             echo 'Refuse simultaneous original-GNU regeneration and candidate-object reuse' >&2
@@ -109,20 +115,36 @@ jobs:
             echo 'AArch64-only receiver replay requires SHA-verified reused candidate objects' >&2
             exit 1
           fi
+          if [[ "$only_aarch64" == true && "$only_x86_64" == true ]]; then
+            echo 'Refuse simultaneous partial AArch64 and x86 development modes' >&2
+            exit 1
+          fi
+          if [[ "$only_x86_64" == true && ( "$regenerate" == true || "$reuse_objects" == true ) ]]; then
+            echo 'x86-only development needs the pinned GNU .i/.cmd and seven fresh exact-HEAD MiniC shards' >&2
+            exit 1
+          fi
+          producer_targets='["x86_64","aarch64","loongarch64"]'
           receiver_targets='["x86_64","aarch64","loongarch64"]'
           if [[ "$only_aarch64" == true ]]; then
             receiver_targets='["aarch64"]'
+          fi
+          if [[ "$only_x86_64" == true ]]; then
+            producer_targets='["x86_64"]'
+            receiver_targets='["x86_64"]'
           fi
           echo "run=$active" >> "$GITHUB_OUTPUT"
           echo "regenerate=$regenerate" >> "$GITHUB_OUTPUT"
           echo "reuse_objects=$reuse_objects" >> "$GITHUB_OUTPUT"
           echo "only_aarch64=$only_aarch64" >> "$GITHUB_OUTPUT"
+          echo "only_x86_64=$only_x86_64" >> "$GITHUB_OUTPUT"
+          echo "producer_targets=$producer_targets" >> "$GITHUB_OUTPUT"
           echo "receiver_targets=$receiver_targets" >> "$GITHUB_OUTPUT"
-          echo "MINIC_LINUX_SEVEN_EXACT_HEAD_GATE=$active regenerate=$regenerate reuse_objects=$reuse_objects only_aarch64=$only_aarch64 receivers=$receiver_targets sha=$(git rev-parse HEAD)"
+          echo "MINIC_LINUX_SEVEN_EXACT_HEAD_GATE=$active regenerate=$regenerate reuse_objects=$reuse_objects only_aarch64=$only_aarch64 only_x86_64=$only_x86_64 producers=$producer_targets receivers=$receiver_targets sha=$(git rev-parse HEAD)"
           {
             echo '### MiniC Linux 3x7 exact-head campaign'
-            echo "Run: $active; regenerate GNU input: $regenerate; reuse SHA-verified objects: $reuse_objects; AArch64-only diagnostics: $only_aarch64"
+            echo "Run: $active; regenerate GNU input: $regenerate; reuse SHA-verified objects: $reuse_objects; AArch64-only diagnostics: $only_aarch64; x86-only fresh development: $only_x86_64"
             echo "Commit: $(git rev-parse HEAD)"
+            echo "Producer targets: $producer_targets"
             echo "Receiver targets: $receiver_targets"
             if [[ "$reuse_objects" == true ]]; then
               echo 'Candidate objects: pinned producer run 41133698941 (byte-identical compiler pair mandatory).'
@@ -154,6 +176,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = '${{ github.event.pull_request.head.sha || github.sha }}'
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minic-seven-bin \
             build/minic-seven-bin/bin/minic build/minic-seven-bin/bin/minic-cc
           test -x build/minic-seven-bin/bin/minic
@@ -456,7 +479,7 @@ jobs:
       fail-fast: false
       max-parallel: 21
       matrix:
-        target: [x86_64, aarch64, loongarch64]
+        target: ${{ fromJSON(needs.gate.outputs.producer_targets) }}
         shard: [0, 1, 2, 3, 4, 5, 6]
     env:
       INPUT: ${{ github.workspace }}/build/minic-seven-input-${{ matrix.target }}-${{ matrix.shard }}
@@ -467,6 +490,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Authenticate frozen-source producer exact HEAD before cache or MiniC
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = '${{ github.event.pull_request.head.sha || github.sha }}'
       - uses: actions/download-artifact@v4
         with:
           name: minic-linux-seven-input-${{ matrix.target }}-${{ matrix.shard }}
@@ -1018,6 +1046,23 @@ jobs:
               echo 'AArch64 receiver did not complete successfully; x86 and LoongArch were NOT RUN.' >> "$GITHUB_STEP_SUMMARY"
             fi
             echo '::error::PARTIAL_RECEIVER_REPLAY cannot satisfy strict three-ISA acceptance'
+            exit 1
+          fi
+          if [[ '${{ needs.gate.outputs.only_x86_64 }}' == true ]]; then
+            # Seven fresh x86 C owners are genuine development evidence, but
+            # skipped AArch64/LoongArch C/LD/P0/P1 MUST keep this job red.
+            echo 'MINIC_LINUX_SEVEN_RUNTIME=PARTIAL_REPLAY_NOT_ACCEPTED targets=x86_64_only producer_shards=7 receiver_targets=1'
+            echo '### PARTIAL_REPLAY — NOT ACCEPTED: only x86-64 was run' >> "$GITHUB_STEP_SUMMARY"
+            if [[ '${{ needs.minic-binary.result }}' == success &&
+                  '${{ needs.seven-independent-runners.result }}' == success &&
+                  '${{ needs.original-gnu-ld-qemu-receivers.result }}' == success ]]; then
+              echo 'MINIC_LINUX_X86_ONLY_DEV=PASS_ALL_SEVEN_FRESH_SHARDS_AND_RECEIVER_ONLY'
+              echo 'x86-64 fresh 7/7 C shards, GNU LD and QEMU receiver passed. AArch64/LoongArch64 were NOT RUN.' >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo 'MINIC_LINUX_X86_ONLY_DEV=FAIL_OR_INCOMPLETE'
+              echo 'x86-64 development did not fully pass. AArch64/LoongArch64 were NOT RUN.' >> "$GITHUB_STEP_SUMMARY"
+            fi
+            echo '::error::PARTIAL_REPLAY cannot satisfy strict three-ISA acceptance'
             exit 1
           fi
           test '${{ needs.minic-binary.result }}' = success

@@ -24,13 +24,11 @@ awk '
     }
     END {if (seen != 2) exit 1}
 ' "$work/dead.s" || fail 'unused arithmetic result emitted a stack spill'
-awk '
-    /^  addq %r10, %rax$/ {
-        if (getline <= 0 || $0 !~ /^  movq %rax, -[0-9]+\(%rbp\)$/) exit 1
-        found=1
-    }
-    END {if (!found) exit 1}
-' "$work/live.s" || fail 'live SSA result lost its stack spill'
+# A later single-use GP forwarding pass may legally remove an SSA spill,
+# whereas the volatile global write and the addition must still execute.
+# Do not force an implementation-specific stack roundtrip for a live value.
+grep -Fq '  addq %r10, %rax' "$work/live.s" ||
+    fail 'live arithmetic computation disappeared'
 grep -Fq 'movq %rax, (%r10)' "$work/live.s" ||
     fail 'observable global store disappeared'
 
@@ -50,4 +48,4 @@ cc -std=gnu11 -O2 -no-pie -Wl,-z,noexecstack "$work/mini.o" \
     "$work/driver.c" -o "$work/mini"
 "$work/gnu" || fail 'GNU C oracle failed'
 "$work/mini" || fail 'MiniC GNU-linked runtime disagrees with GNU C'
-printf 'X86_CORE_DEAD_SSA=PASS dead_spills=0 live_spill=1 GNU_AS=PASS GNU_LINK=PASS runtime=PASS\n'
+printf 'X86_CORE_DEAD_SSA=PASS dead_spills=0 live_effects_preserved=1 GNU_AS=PASS GNU_LINK=PASS runtime=PASS\n'

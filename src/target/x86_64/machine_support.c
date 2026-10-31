@@ -51,6 +51,14 @@ bool x86_value_load(FILE *out, const MinicX86Frame *frame, MinicCoreValueId id,
                            const char *reg) {
     if (frame == NULL || id >= frame->value_count ||
         frame->value_offsets == NULL) return false;
+    /* Common proves an immediately previous scalar GP producer has one
+     * semantic consumer. The producer left its normalized value in %rax;
+     * x86 does not need the SSA frame reload for that consumer's first GP
+     * operand. No other register or input may borrow the forwarding slot. */
+    if (frame->gp_forward_source_valid &&
+        frame->gp_forward_source_id == id &&
+        reg != NULL && strcmp(reg, "%rax") == 0)
+        return true;
     return fprintf(out, "  movq -%zu(%%rbp), %s\n", frame->value_offsets[id], reg) >= 0;
 }
 
@@ -59,6 +67,8 @@ bool x86_value_store(FILE *out, const MinicX86Frame *frame, MinicCoreValueId id)
         frame->value_offsets == NULL) return false;
     /* The producer's instruction has already run. Only its dead SSA result
      * may be omitted, never effects on memory, globals, flags, or calls. */
+    if (frame->gp_elide_result_store_valid &&
+        frame->gp_elide_result_store_id == id) return true;
     if (frame->function_value_use_counts != NULL &&
         frame->function_value_use_counts[id] == 0U) return true;
     return fprintf(out, "  movq %%rax, -%zu(%%rbp)\n", frame->value_offsets[id]) >= 0;

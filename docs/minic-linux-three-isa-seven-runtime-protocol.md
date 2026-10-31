@@ -74,6 +74,13 @@ the HEAD subject may additionally use `[minic-only-aarch64]` together with
 byte-verified 21-shard production batch; the global strict result deliberately
 reports **PARTIAL_RECEIVER_REPLAY**, never a three-ISA PASS. Resume all three
 receivers when a genuine changed target object or common backend fix needs it.
+For a changed x86-64 machine-code generator, a diagnostic HEAD may instead use
+`[minic-only-x86_64]` **without** `[minic-reuse-objects]` or GNU regeneration.
+It runs seven **fresh**, exact-HEAD x86-64 C producers from the fixed GNU
+`.i`/`.cmd`, then the real x86-64 GNU LD/QEMU receiver. It skips AArch64 and
+LoongArch64 to avoid repeating byte-identical work, and the global aggregate
+must report `PARTIAL_REPLAY_NOT_ACCEPTED` even if x86-64 P0/P1 both pass.
+The ordinary 3×7 mode remains the only full multi-ISA acceptance path.
 
 ## Strict acceptance versus bounded failure-only diagnosis
 

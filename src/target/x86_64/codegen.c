@@ -2,6 +2,7 @@
 #include "target/x86_64/machine_emit.h"
 #include "target/common/core_call_view.h"
 #include "target/common/core_block_walk.h"
+#include "target/common/direct_block_register.h"
 #include "target/common/program_visit.h"
 #include "target/common/program_emit.h"
 #include "target/common/elf_alias_emit.h"
@@ -41,6 +42,10 @@ static bool x86_emit_function(FILE *out, const MinicC0Program *program,
     MinicCoreBlockWalk walk = {0};
     bool *reachable = NULL;
     size_t *function_value_use_counts = NULL;
+    /* A diagnostic-only escape hatch enables a same-compiler A/B against the
+     * former all-stack scalar path without changing any Linux Kbuild flags. */
+    const bool adjacent_gp_forward_enabled =
+        getenv("MINIC_X86_DISABLE_ADJACENT_GP_FORWARD") == NULL;
     bool success = false;
     {
         const bool named = name != NULL && name[0] != '\0';
@@ -195,6 +200,8 @@ static bool x86_emit_function(FILE *out, const MinicC0Program *program,
     const MinicCoreBlock *block;
     while (minic_core_block_walk_next(&walk, &block_index, &block)) {
         size_t k;
+        bool previous_gp_forward = false;
+        MinicCoreValueId previous_gp_result = MINIC_CORE_VALUE_INVALID;
         if (fprintf(out, ".Lmini_x86_f%zu_b%zu:\n", function_id, block_index) < 0) goto done;
         if (block->source_label_id != SIZE_MAX && !fn->suppress_source_label_aliases) {
             if (fprintf(out, ".Luser_%zu:\n", block->source_label_id) < 0)
@@ -208,9 +215,28 @@ static bool x86_emit_function(FILE *out, const MinicC0Program *program,
         for (k = 0U; k < block->instruction_count; ++k) {
             MinicCoreInstructionId id = 0U;
             const MinicCoreInstruction *ins = NULL;
-            if (!minic_core_block_instruction_at(fn, block, k, &id, &ins) ||
-                !minic_x86_64_emit_core_instruction(out, program, target, fn, &frame,
-                                      ins, function_id, id)) {
+            bool forward_to_next = false;
+            const MinicCoreInstruction *next = NULL;
+            MinicCoreInstructionId next_id = 0U;
+            if (!minic_core_block_instruction_at(fn, block, k, &id, &ins)) {
+                x86_error(diag, path, "x86-64 invalid Core block instruction");
+                goto done;
+            }
+            if (adjacent_gp_forward_enabled && k + 1U < block->instruction_count) {
+                if (!minic_core_block_instruction_at(
+                        fn, block, k + 1U, &next_id, &next)) {
+                    x86_error(diag, path, "x86-64 invalid next Core block instruction");
+                    goto done;
+                }
+                forward_to_next = minic_multi_direct_gp_adjacent_forward(
+                    fn, ins, next, function_value_use_counts);
+            }
+            frame.gp_forward_source_valid = previous_gp_forward;
+            frame.gp_forward_source_id = previous_gp_result;
+            frame.gp_elide_result_store_valid = forward_to_next;
+            frame.gp_elide_result_store_id = ins->result;
+            if (!minic_x86_64_emit_core_instruction(out, program, target, fn, &frame,
+                                                    ins, function_id, id)) {
                 char message[256];
                 if (getenv("MINIC_ASM_FRONTIER_TRACE") && ins &&
                     ins->kind == MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM &&
@@ -243,7 +269,12 @@ static bool x86_emit_function(FILE *out, const MinicC0Program *program,
                 x86_error(diag, path, message);
                 goto done;
             }
+            previous_gp_forward = forward_to_next;
+            previous_gp_result = ins->result;
         }
+        /* Terminators and the next Core block never inherit %rax transport. */
+        frame.gp_forward_source_valid = false;
+        frame.gp_elide_result_store_valid = false;
         if (!block->has_terminator ||
             !minic_x86_64_emit_core_terminator(
                 out, program, target, &frame, &block->terminator, fn, function_id)) {
