@@ -1071,9 +1071,10 @@ typedef struct MiniAsTargetOps {
     unsigned cfi_eh_final_alignment;
     /* GNU target CIE encoding and linker-resolved function extent policy.
      * Kept in TargetInfo: Common emits one canonical CFI event stream. */
-    unsigned cfi_eh_cie_version; /* zero: DWARF1 CIE version */
+    unsigned cfi_cie_version; /* zero: DWARF1 CIE version, both frame outputs */
     bool cfi_initial_cfa_register_only; /* GNU initial CFA register opcode */
-    bool cfi_eh_range_relocations; /* paired ADD32/SUB32 on FDE range */
+    bool cfi_fde_range_relocations; /* paired ADD/SUB on FDE range */
+    bool cfi_debug_length_relocations; /* linker-relaxed debug CIE/FDE lengths */
     unsigned cfi_advance_reloc_mode; /* 0 none, 1 ADD/SUB, 2 SET/SUB */
     /* GNU ULEB relaxation policy: 0 none; 1 ADD/SUB only when the anchors
      * straddle a linker-relaxable instruction (newer LoongArch GNU GAS);

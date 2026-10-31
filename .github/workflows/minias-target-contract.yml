@@ -156,6 +156,11 @@ jobs:
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-cfi-return-column-gnu.sh
+          for arch in x86_64 i386 riscv32 riscv64 loongarch64; do
+            MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            MINIAS_CFI_ARCH_ONLY="$arch" \
+              bash tests/assembler/probe-cfi-source-section-collision-gnu.sh
+          done
       - name: GNU DWARF line view reset and alternate ELF symbol size anchors
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
@@ -418,6 +423,10 @@ jobs:
           command -v aarch64-linux-gnu-as
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-aarch64-relocated-scalar-memory-table.sh
+      - name: GNU explicit ELF symbol-zero relocation and source-dot fixups
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-explicit-reloc-abs0-gnu.sh
       - name: GNU AArch64 MCExpr data-byte and relocation oracle
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=aarch64 \
@@ -458,6 +467,9 @@ jobs:
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=aarch64 \
             bash tests/assembler/probe-cfi-dual-frame.sh
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+          MINIAS_CFI_ARCH_ONLY=aarch64 \
+            bash tests/assembler/probe-cfi-source-section-collision-gnu.sh
       - name: GNU AArch64 late fragment symbol differences in machine operands
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \

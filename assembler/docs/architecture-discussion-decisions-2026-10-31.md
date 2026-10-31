@@ -1074,3 +1074,70 @@ fragments. Moving those into another owner solely to erase an accessor
 would complicate the one shared pipeline; defer until a concrete
 source-stage dependency requires it. Full Linux kernel, non-ELF output and
 new ISA syntax remain outside this batch.
+
+## 24. P16 closed by a real GNU source/CFI collision; P09 symbol-zero subset
+
+The deferred P16 question has a reproducible GNU source oracle. The same
+`.s` may create `.eh_frame` / `.debug_frame`, write zero, four or **one**
+physical byte to the section, and later request both synthetic CFI streams.
+Previously `finish_length` rounded **record length** to four bytes. GNU
+rounds the **absolute section end** of an EH CIE to four and a debug CIE
+to its Target ABI address size. An odd source prefix exposed a one-byte
+offset drift; a four-byte `.debug_frame` prefix exposed four missing pad
+bytes. Both errors shifted subsequent FDE and relocation addresses.
+
+The existing CFI writer now shares one checked record-length finalizer
+with a selector for section-end versus record-local alignment. CIEs use
+section-end alignment; FDEs keep their original per-record and final EH
+alignment rules. No second section writer or source-parsing path exists.
+
+The new six-profile GNU oracle also exposed genuine baseline CFI defects
+**inside the same producer**, not conjectural standard corner cases:
+
+- RV32/RV64 debug CIEs must use the Target's version 3 and original
+  register-only initial CFA description, just like their EH CIEs.
+- LoongArch debug CIEs also need the same register-only initial CFA.
+- RV/LoongArch debug FDE ranges must retain target-owned linker-visible
+  ADD/SUB relocation pairs at address width, instead of prematurely
+  embedding a final numeric length.
+- LoongArch debug CIE/FDE **record-length** fields themselves retain
+  ADD32/SUB32 relaxation pairs. The Common CFI writer creates private
+  section-local end/start+4 anchors and commits typed **synthetic-section**
+  Fixups through the already-existing Common entry point; one narrowly
+  named LoongArch Target policy selects this behavior.
+
+EH and debug CIE initial CFA/RA opcode generation now use **one helper**;
+the shared CIE version and FDE-range policy fields were renamed to
+reflect actual use by both outputs. The CFI producer owns the bytes,
+private anchors and synthetic fixups; Target owns only the three ABI
+choices. No ELF writer special case was added.
+
+The real GNU oracle `probe-cfi-source-section-collision-gnu.sh` compares
+both section byte streams **exactly** and relocation section offsets/types
+for six profiles (x86-64, i386, RV32, RV64, AArch64, LoongArch64) × three
+physical-prefix shapes (no source section, `.long 0`, `.byte 0x5a`):
+**18/18 PASS** locally. The LoongArch `.long 0` case also links with the
+real GNU `ld` and verifies identical resulting `.debug_frame` bytes.
+Existing dual-frame, i386 byte/reloc, CFI return-column, GNU linker and
+per-Target debug-frame tests remain independently green. Therefore **P16
+is closed**, including the actual mixed-source byte/relocation contract.
+
+P09's concrete probe found the useful, narrow two-operand GNU form
+`.reloc OFFSET, RELOC_NAME`: GNU emits a relocation with **ELF symbol
+index zero**, not a fabricated `"0"` symbol. The existing explicit
+section Fixup recorder can now authorize this exact `absolute_zero_symbol`
+case, in addition to its prior fragment-owned use. The existing ELF writer
+already handles `SymbolID = SIZE_MAX` as ELF symbol zero, so no parallel
+object model was needed. GNU x86-64, i386 and AArch64 byte/relocation
+oracles all pass; `.reloc .` and `.reloc .+2` with symbolic addends were
+also proven already-correct with a separate GNU exact-oracle. Other GAS
+`.reloc` grammar is not declared supported: **P09 remains partial**.
+
+The production-only diff is **5 files, +127/−56 (net +71)**. Two new
+actual GNU probes, five source fixtures (including the original x86
+collision cases) and extensions of the existing CI
+steps are separate from that denominator. Release `-Werror`, A0 **30/30**,
+new 18/18 GNU CFI, three ELF symbol-zero profiles, three source-dot
+relocations, prior focused CFI/GNU probes and the existing ownership
+guards all pass locally. Full Linux kernel, optional 3536 suites and
+other object formats are not newly certified by this focused batch.

@@ -59,18 +59,69 @@ static bool sleb(MiniAs *as,int sec,int64_t value) {
         if(last)return true;
     }
 }
-static bool finish_length(MiniAs *as,int sec,size_t begin) {
+/* A CIE ends at a section-relative alignment boundary: four for
+ * .eh_frame, address size for .debug_frame. Source-authored bytes before
+ * it can make the DWARF32 record length itself non-multiple-of-four.
+ * FDEs still use their existing per-record/final alignment rules.
+ * Both paths patch the same four-byte record length field. */
+static bool finish_length_aligned(MiniAs *as,int sec,size_t begin,
+                                  unsigned alignment,bool section_relative) {
     MiniAsSection *section=&as->sections[(size_t)sec];
     uint32_t length;
     unsigned i;
-    while((section->size-begin)%4U!=0U)
+    if(alignment==0U || section->size<begin ||
+       (alignment&(alignment-1U))!=0U)return false;
+    while((section_relative?section->size:section->size-begin)%alignment!=0U) {
         if(!put8(as,sec,0U))return false;
+        section=&as->sections[(size_t)sec];
+    }
     section=&as->sections[(size_t)sec];
     if(section->size-begin-4U>UINT32_MAX)return false;
     length=(uint32_t)(section->size-begin-4U);
     for(i=0U;i<4U;++i)
         section->data[begin+i]=(unsigned char)(length>>(i*8U));
     return true;
+}
+static bool finish_length(MiniAs *as,int sec,size_t begin) {
+    return finish_length_aligned(as,sec,begin,4U,false);
+}
+/* LoongArch keeps even the synthesized .debug_frame record lengths as
+ * ADD32(end)-SUB32(begin+4) for linker relaxation. Record-local symbols
+ * belong to the synthetic CFI producer; they do not create source
+ * Fragments or reparse a fabricated .reloc directive. */
+static bool cfi_length_anchor(MiniAs *as,int sec,size_t offset,
+                              char *name,size_t name_capacity) {
+    MiniAsSymbol *symbol;
+    if(!minias_make_private_symbol_name(name,name_capacity,"cfilen",
+                                        as->cfi_anchor_counter++))return false;
+    symbol=minias_get_symbol(as,name,true);
+    if(symbol==NULL || symbol->defined)return false;
+    symbol->defined=true;
+    symbol->section=sec;
+    symbol->subsection=0U;
+    symbol->value=(uint64_t)offset;
+    symbol->visibility=MINIAS_STV_HIDDEN;
+    return true;
+}
+static bool cfi_finalize_debug_length(MiniAs *as,int sec,size_t begin) {
+    char end_name[72],start_name[72];
+    MiniAsSection *data;
+    size_t end;
+    if(!as->target->cfi_debug_length_relocations)return true;
+    data=&as->sections[(size_t)sec];
+    end=data->size;
+    if(end<4U || begin>end-4U)return false;
+    if(!cfi_length_anchor(as,sec,end,end_name,sizeof(end_name)) ||
+       !cfi_length_anchor(as,sec,begin+4U,start_name,
+                          sizeof(start_name)))return false;
+    data=&as->sections[(size_t)sec];
+    memset(data->data+begin,0,4U);
+    return minias_add_section_fixup(as,
+               MINIAS_FIXUP_ORIGIN_SYNTHETIC_SECTION,sec,begin,
+               MINIAS_FIXUP_ADD,4U,end_name,0,false) &&
+           minias_add_section_fixup(as,
+               MINIAS_FIXUP_ORIGIN_SYNTHETIC_SECTION,sec,begin,
+               MINIAS_FIXUP_SUB,4U,start_name,0,false);
 }
 /* Some psABIs preserve linker-visible CFI code-distance arithmetic even when
  * the two labels are already defined in the current object.  GAS emits a
@@ -226,6 +277,27 @@ static bool emit_initial_cfi(MiniAs *as,int sec,size_t first,size_t count) {
     return true;
 }
 
+/* Both generated CIE formats start from the same Target ABI state. In
+ * particular, RV and LoongArch use DW_CFA_def_cfa_register before a
+ * source .cfi_def_cfa; emitting an invented zero-offset rule in only the
+ * debug CIE changes its unwind semantics. */
+static bool emit_target_initial_cfi(MiniAs *as,int sec,
+                                    const MiniAsCfiABI *abi) {
+    if(as->target->cfi_initial_cfa_register_only &&
+       abi->initial_cfa_offset==0U) {
+        if(!put8(as,sec,0x0dU) || !uleb(as,sec,abi->stack_reg))return false;
+    }else if(!put8(as,sec,0x0cU) || !uleb(as,sec,abi->stack_reg) ||
+             !uleb(as,sec,abi->initial_cfa_offset))return false;
+    if(abi->initial_ra_saved) {
+        uint64_t scale=(uint64_t)(-(int64_t)abi->data_align);
+        if(abi->return_reg>=64U || scale==0U ||
+           abi->initial_cfa_offset%scale!=0U ||
+           !put8(as,sec,(uint8_t)(0x80U|abi->return_reg)) ||
+           !uleb(as,sec,abi->initial_cfa_offset/scale))return false;
+    }
+    return true;
+}
+
 /* GNU DWARF32 zR CIE: one engine for every Target psABI.
  * Only TargetInfo specifies initial CFA/RA policy and relocation mapping;
  * CFI bytes, CIE variant reuse and anchored FDEs remain Common-owned. */
@@ -239,31 +311,16 @@ static bool emit_eh_cie(MiniAs *as,int sec,bool simple,bool signal,
        abi.return_reg>255U || return_column>255U ||
        abi.address_size==0U)return false;
     if(!put32(as,sec,0U) || !put32(as,sec,0U) ||
-       !put8(as,sec,(uint8_t)(as->target->cfi_eh_cie_version!=0U ?
-                             as->target->cfi_eh_cie_version : 1U)) ||
+       !put8(as,sec,(uint8_t)(as->target->cfi_cie_version!=0U ?
+                             as->target->cfi_cie_version : 1U)) ||
        !put8(as,sec,'z') || !put8(as,sec,'R') ||
        (signal && !put8(as,sec,'S')) || !put8(as,sec,0U) ||
        !uleb(as,sec,abi.code_align) || !sleb(as,sec,abi.data_align) ||
        !put8(as,sec,(uint8_t)return_column) ||
        !uleb(as,sec,1U) || !put8(as,sec,0x1bU))return false;
-    if(!simple) {
-        if(as->target->cfi_initial_cfa_register_only &&
-           abi.initial_cfa_offset==0U) {
-            if(!put8(as,sec,0x0dU) ||
-               !uleb(as,sec,abi.stack_reg))return false;
-        } else if(!put8(as,sec,0x0cU) ||
-                  !uleb(as,sec,abi.stack_reg) ||
-                  !uleb(as,sec,abi.initial_cfa_offset))return false;
-        if(abi.initial_ra_saved) {
-            uint64_t magnitude=(uint64_t)(-(int64_t)abi.data_align);
-            if(abi.return_reg>=64U || magnitude==0U ||
-               abi.initial_cfa_offset%magnitude!=0U ||
-               !put8(as,sec,(uint8_t)(0x80U|abi.return_reg)) ||
-               !uleb(as,sec,abi.initial_cfa_offset/magnitude))return false;
-        }
-    }
+    if(!simple && !emit_target_initial_cfi(as,sec,&abi))return false;
     return emit_initial_cfi(as,sec,first,count) &&
-           finish_length(as,sec,begin);
+           finish_length_aligned(as,sec,begin,4U,true);
 }
 
 /* `.debug_frame` has the same Target-defined initial CFA and saved-RA
@@ -271,33 +328,28 @@ static bool emit_eh_cie(MiniAs *as,int sec,bool simple,bool signal,
  * distinguishes `.cfi_startproc` from `.cfi_startproc simple` with distinct
  * CIEs.  A single CIE with an invented CFA offset zero changes the initial
  * unwind state even when all the following FDE operations are well formed.
- * DWARF CIE v1 has a one-byte return column; all currently registered Target
- * psABIs have a return register in this range. */
+ * The CIE version and initial state follow the same Target policy as EH:
+ * GNU RV emits DWARF CIE version 3 with ULEB return-column encoding. */
 static bool emit_debug_cie(MiniAs *as,int sec,bool simple,
                            unsigned return_column,
                            size_t first,size_t count,size_t *cie_begin) {
     const MiniAsCfiABI abi=minias_cfi_abi(as);
+    unsigned version=as->target->cfi_cie_version!=0U ?
+                     as->target->cfi_cie_version : 1U;
     size_t begin=as->sections[(size_t)sec].size;
     *cie_begin=begin;
     if(abi.code_align==0U || abi.data_align>=0 ||
-       abi.return_reg>UINT8_MAX || return_column>UINT8_MAX)return false;
+       abi.address_size==0U || version>UINT8_MAX ||
+       (version<3U && return_column>UINT8_MAX))return false;
     if(!put32(as,sec,0U) || !put32(as,sec,UINT32_MAX) ||
-       !put8(as,sec,1U) || !put8(as,sec,0U) ||
+       !put8(as,sec,(uint8_t)version) || !put8(as,sec,0U) ||
        !uleb(as,sec,abi.code_align) || !sleb(as,sec,abi.data_align) ||
-       !put8(as,sec,(uint8_t)return_column))return false;
-    if(!simple) {
-        if(!put8(as,sec,0x0cU) || !uleb(as,sec,abi.stack_reg) ||
-           !uleb(as,sec,abi.initial_cfa_offset))return false;
-        if(abi.initial_ra_saved) {
-            uint64_t scale=(uint64_t)(-(int64_t)abi.data_align);
-            if(abi.return_reg>=64U || scale==0U ||
-               abi.initial_cfa_offset%scale!=0U ||
-               !put8(as,sec,(uint8_t)(0x80U|abi.return_reg)) ||
-               !uleb(as,sec,abi.initial_cfa_offset/scale))return false;
-        }
-    }
+       !(version>=3U ? uleb(as,sec,return_column) :
+                        put8(as,sec,(uint8_t)return_column)))return false;
+    if(!simple && !emit_target_initial_cfi(as,sec,&abi))return false;
     return emit_initial_cfi(as,sec,first,count) &&
-           finish_length(as,sec,begin);
+           finish_length_aligned(as,sec,begin,abi.address_size,true) &&
+           cfi_finalize_debug_length(as,sec,begin);
 }
 
 typedef struct MiniAsCfiCieVariant {
@@ -480,13 +532,13 @@ static bool cfi_emit_section_core(MiniAs *as,bool eh,
                !put32(as,section,(uint32_t)(base+4U-cie)))return false;
             ptr=as->sections[(size_t)section].size;
             if(!put32(as,section,0U) ||
-               !put32(as,section,as->target->cfi_eh_range_relocations ?
+               !put32(as,section,as->target->cfi_fde_range_relocations ?
                      0U : (uint32_t)(end->value-begin->value)) ||
                !uleb(as,section,0U) ||
                !minias_add_section_fixup(as,
                MINIAS_FIXUP_ORIGIN_SYNTHETIC_SECTION,section,ptr,MINIAS_FIXUP_PREL32,4U,
                                  begin->name,0,false))return false;
-            if(as->target->cfi_eh_range_relocations &&
+            if(as->target->cfi_fde_range_relocations &&
                (!minias_add_section_fixup(as,
                  MINIAS_FIXUP_ORIGIN_SYNTHETIC_SECTION,section,ptr+4U,
                  MINIAS_FIXUP_ADD,4U,end->name,0,false) ||
@@ -495,6 +547,7 @@ static bool cfi_emit_section_core(MiniAs *as,bool eh,
                  MINIAS_FIXUP_SUB,4U,begin->name,0,false)))return false;
         } else {
             size_t cie=variants[variant_index].offset;
+            const unsigned address_size=minias_cfi_abi(as).address_size;
             if(cie>UINT32_MAX)return false;
             if(!put32(as,section,0U) ||
                !put32(as,section,0U))return false;
@@ -502,15 +555,26 @@ static bool cfi_emit_section_core(MiniAs *as,bool eh,
             /* GNU uses STT_SECTION rather than the private CIE label.
              * Keep this identity independent of Target fold heuristics. */
             if(!put_cfi_address(as,section,0U) ||
-               !put_cfi_address(as,section,end->value-begin->value) ||
+               !put_cfi_address(as,section,
+                   as->target->cfi_fde_range_relocations ?
+                   0U : end->value-begin->value) ||
                !minias_add_section_fixup(as,
                MINIAS_FIXUP_ORIGIN_SYNTHETIC_SECTION,section,base+4U,
                                  MINIAS_FIXUP_ABS,4U,
                                  debug_base_name,(int64_t)cie,true))return false;
             if(!minias_add_section_fixup(as,
                MINIAS_FIXUP_ORIGIN_SYNTHETIC_SECTION,section,ptr,
-               MINIAS_FIXUP_ABS,minias_cfi_abi(as).address_size,
+               MINIAS_FIXUP_ABS,address_size,
                begin->name,0,false))return false;
+            if(as->target->cfi_fde_range_relocations &&
+               (!minias_add_section_fixup(as,
+                 MINIAS_FIXUP_ORIGIN_SYNTHETIC_SECTION,section,
+                 ptr+address_size,MINIAS_FIXUP_ADD,address_size,
+                 end->name,0,false) ||
+                !minias_add_section_fixup(as,
+                 MINIAS_FIXUP_ORIGIN_SYNTHETIC_SECTION,section,
+                 ptr+address_size,MINIAS_FIXUP_SUB,address_size,
+                 begin->name,0,false)))return false;
         }
         size_t loc_symbol=proc->begin_symbol;
         for(j=initial_count;j<proc->op_count;++j) {
@@ -543,7 +607,8 @@ static bool cfi_emit_section_core(MiniAs *as,bool eh,
                    (size_t)(align-1U))!=0U)
                 if(!put8(as,section,0U))return false;
         }
-        if(!finish_length(as,section,base))return false;
+        if(!finish_length(as,section,base) ||
+           (!eh && !cfi_finalize_debug_length(as,section,base)))return false;
         data=&as->sections[(size_t)section];
     }
     return true;

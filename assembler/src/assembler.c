@@ -928,7 +928,9 @@ static bool minias_record_fixup(MiniAs *as,
         return false;
     }
     if(absolute_zero_symbol) {
-        if(origin!=MINIAS_FIXUP_ORIGIN_FRAGMENT || symbol_name!=NULL ||
+        if((origin!=MINIAS_FIXUP_ORIGIN_FRAGMENT &&
+            origin!=MINIAS_FIXUP_ORIGIN_EXPLICIT_SECTION) ||
+           symbol_name!=NULL ||
            existing_symbol_index!=SIZE_MAX || addend!=0) {
             minias_set_error(as,"invalid-abs0-fixup-owner");
             return false;
@@ -4033,7 +4035,7 @@ static bool flush_pending_local_commons(MiniAs *as) {
  * the relocation name->semantic fixup mapping, and the existing Common
  * Fixup/ELF path serializes the entry. Never invent a numeric ELF type. */
 static bool handle_named_reloc(MiniAs *as,const char *args,size_t line) {
-    char *copy=minias_strdup(args),*comma1,*comma2,*offset_text,*name,*symbol;
+    char *copy=minias_strdup(args),*comma1,*comma2,*offset_text,*name,*symbol=NULL;
     MiniAsFixupKind kind=MINIAS_FIXUP_NONE;
     MiniAsSymbolExpr expression;
     unsigned width=0U;
@@ -4044,21 +4046,23 @@ static bool handle_named_reloc(MiniAs *as,const char *args,size_t line) {
     if(!comma1){free(copy);goto invalid;}
     *comma1++='\0';
     comma2=strchr(comma1,',');
-    if(!comma2){free(copy);goto invalid;}
-    *comma2++='\0';
+    if(comma2)*comma2++='\0';
     offset_text=minias_trim(copy);
     name=minias_trim(comma1);
-    symbol=minias_trim(comma2);
+    if(comma2)symbol=minias_trim(comma2);
     ok=as->current_section>=0 && as->current_subsection==0U &&
        as->target->parse_named_relocation &&
        as->target->parse_named_relocation(as,name,&kind,&width) &&
-       *symbol!='\0' && !strchr(symbol,',') &&
        minias_evaluate_absolute_expression(as,offset_text,&offset) && offset>=0 &&
-       minias_parse_symbol_addend(symbol,&expression);
-    if(ok)ok=minias_add_section_fixup(as,
+       (symbol==NULL || (*symbol!='\0' && !strchr(symbol,',') &&
+                         minias_parse_symbol_addend(symbol,&expression)));
+    if(ok && symbol!=NULL)ok=minias_add_section_fixup(as,
                  MINIAS_FIXUP_ORIGIN_EXPLICIT_SECTION,
                  as->current_section,(uint64_t)offset,
                  kind,width,expression.name,expression.addend,false);
+    else if(ok)ok=minias_record_fixup(as,as->current_section,
+                  (uint64_t)offset,kind,width,NULL,SIZE_MAX,0,
+                  MINIAS_FIXUP_ORIGIN_EXPLICIT_SECTION,true,false,SIZE_MAX);
     free(copy);
     if(ok)return true;
 invalid:
