@@ -65,6 +65,21 @@ if [[ "$mode" == shard ]]; then
   : >"$shard/mini-success-objects.txt"
   : >"$shard/mini-object-hashes.sha256"
   : >"$shard/compile.log"
+  # The restored GNU out/ tree is on a different runner. Complete generated
+  # headers and RV32 vDSO prerequisites with original GNU tools before
+  # evicting selected C owners. Otherwise Kbuild can rebuild hwprobe.o as an
+  # unselected side effect while CC points at MiniC and corrupt shard scope.
+  if ! make "${gnu_args[@]}" KBUILD_NOCMDDEP=1 -j4 prepare vdso_prepare \
+      >"$shard/gnu-prepare.log" 2>&1; then
+    echo 'RV32I_SHARD_GNU_PREPARE=FAIL' >&2
+    tail -n 60 "$shard/gnu-prepare.log" >&2
+    exit 9
+  fi
+  (cd "$out" && sha256sum --quiet -c "$prov/gcc-objects.sha256") || {
+    echo 'RV32I_SHARD_GNU_PREPARE=FAIL original_object_drift' >&2
+    exit 9
+  }
+  echo "RV32I_SHARD_GNU_PREPARE=PASS shard=$RV32I_SHARD golden_object_hashes=unchanged"
   compile_rc=0
   for owner in "${owners[@]}"; do
     test -s "$out/$owner"
@@ -76,7 +91,7 @@ if [[ "$mode" == shard ]]; then
     MINIC_KBUILD_RV32I_ORIGIN_AUDIT=1 MINIC_PRESERVE_FAILURE_INPUTS=1 \
     MINIC_KBUILD_SUCCESS_TRACE="$shard/mini-success-objects.txt" \
     MINIC_KBUILD_OBJECT_HASH_TRACE="$shard/mini-object-hashes.sha256" \
-    make "${gnu_args[@]}" -j6 -k CC="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh" \
+    make "${gnu_args[@]}" KBUILD_NOCMDDEP=1 -j6 -k CC="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh" \
       "${owners[@]}" >"$shard/compile.log" 2>&1 || compile_rc=$?
   : >"$shard/compile-blockers.txt"
   for owner in "${owners[@]}"; do

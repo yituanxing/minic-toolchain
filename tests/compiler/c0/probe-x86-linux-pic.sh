@@ -130,14 +130,11 @@ readelf -rW "$d/libaddress-pic.so" > "$d/address-shared.reloc"
 for symbol in public_value public_plus;do
  grep -E "R_X86_64_GLOB_DAT.*[[:space:]]$symbol([[:space:]]|$)" "$d/address-shared.reloc" >/dev/null
 done
-# The only still-unqualified target is RV32; AArch64 and LoongArch64
-# now have their own PC-relative local/GOT external address lowering.
+# RV32 now has its own scoped RISC-V GOT PIC lowering, independently covered
+# by the target-language ABI options probe; all five targets accept PIC.
 cat > "$d/invalid.i" <<'SRC'
 int value(void){return 42;}
 SRC
-for target in riscv32;do
- if "$mini" --target="$target-linux" -fPIC -S "$d/invalid.i" -o "$d/bad.s" >/dev/null 2>&1;then
-  echo "UNQUALIFIED_PIC_ACCEPTED=$target" >&2;exit 1
- fi
-done
-echo "MINIC_X86_PIC=PASS GOTPCREL=1 PLT=1 dynamic_DSO_GNU_diff=1 PIE_ASLR=1 nonPIC_PC32_GNU_native=1 PIC_public_GOT_DSO=1 hidden_direct=1 rv32_unqualified=rejected"
+"$mini" --target=riscv32-linux -fPIC -S "$d/invalid.i" -o "$d/rv32-pic.s"
+test -s "$d/rv32-pic.s"
+echo "MINIC_X86_PIC=PASS GOTPCREL=1 PLT=1 dynamic_DSO_GNU_diff=1 PIE_ASLR=1 nonPIC_PC32_GNU_native=1 PIC_public_GOT_DSO=1 hidden_direct=1 rv32_pic=qualified"

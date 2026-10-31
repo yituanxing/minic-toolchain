@@ -167,16 +167,31 @@ bool rv32_emit_memory_instruction(FILE *out, const MinicC0Program *program,
         (void)alignment;
         return minic_riscv_emit_record_copy_bytes(out, "t1", "t0", copy_size);
     }
-    case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS:
-        return ins->value.global_id < f->global_count &&
-               fprintf(out, "  lla t0, %s\n",
-                       f->globals[ins->value.global_id].name) >= 0 &&
+    case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS: {
+        const char *symbol;
+        bool preemptible;
+        if (ins->value.global_id >= f->global_count) return false;
+        symbol = f->globals[ins->value.global_id].name;
+        preemptible = target->position_independent &&
+            !minic_target_info_elf_object_is_nonpreemptible(program, symbol);
+        return fprintf(out, preemptible
+                       ? "  .option push\n  .option pic\n  la t0, %s\n  .option pop\n"
+                       : "  lla t0, %s\n", symbol) >= 0 &&
                rv32_slot(out, fr, ins->result, "t0", false);
-    case MINIC_CORE_INSTRUCTION_FUNCTION_ADDRESS:
-        return ins->value.function_symbol_id < f->function_symbol_count &&
-               fprintf(out, "  lla t0, %s\n",
-                       f->function_symbols[ins->value.function_symbol_id].name) >= 0 &&
+    }
+    case MINIC_CORE_INSTRUCTION_FUNCTION_ADDRESS: {
+        const char *symbol;
+        bool preemptible;
+        if (ins->value.function_symbol_id >= f->function_symbol_count)
+            return false;
+        symbol = f->function_symbols[ins->value.function_symbol_id].name;
+        preemptible = target->position_independent &&
+            !minic_target_info_elf_function_is_nonpreemptible(program, symbol);
+        return fprintf(out, preemptible
+                       ? "  .option push\n  .option pic\n  la t0, %s\n  .option pop\n"
+                       : "  lla t0, %s\n", symbol) >= 0 &&
                rv32_slot(out, fr, ins->result, "t0", false);
+    }
     default:
         return false;
     }

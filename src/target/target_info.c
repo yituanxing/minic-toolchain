@@ -182,6 +182,7 @@ static const MinicTargetLanguageDescriptor minic_language_riscv32 = {
             .variadic_scalar_read_kind = MINIC_VARIADIC_SCALAR_READ_LINEAR_SLOT,
             .variadic_linear_slot_bytes = 4U,
             .variadic_copy_kind = MINIC_VARIADIC_COPY_SCALAR_ASSIGNMENT,
+            .pic_lowering_supported = true,
             .call_frame_return_address_level0 = true,
             .call_frame_frame_address_level0 = true,
             .riscv_isa = {.xlen = 32U, .abi = MINIC_RISCV_ABI_ILP32,

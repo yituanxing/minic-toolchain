@@ -265,12 +265,33 @@ for target in aarch64 loongarch64; do
     cmp "$work/$target-pic-cc.s" "$work/$target-pic-driver.s"
   done
 done
-if "$MINIC" --target=riscv32-linux -fPIC -S "$work/signed.i" \
-  -o "$work/bad-pic.s" 2>"$work/bad-pic.err"; then
-  echo 'MINIC_TARGET_ABI_FLAGS=FAIL unqualified RV32 PIC' >&2; exit 1
-fi
-grep -Fq 'PIC lowering is not yet qualified' "$work/bad-pic.err"
-test ! -e "$work/bad-pic.s"
+# RV32 PIC follows the RV64 RISC-V psABI: preemptible globals/functions use
+# GOT-relative la under a scoped .option pic, hidden/internal symbols use
+# non-GOT PC-relative lla, and the two public drivers must emit identical .s.
+cat > "$work/rv32-pic.i" <<'RV32_PIC'
+extern int pic_external;
+extern int pic_hidden __attribute__((visibility("hidden")));
+extern int pic_external_fn(void);
+static int pic_local;
+int *pic_public_address(void) { return &pic_external; }
+int *pic_hidden_address(void) { return &pic_hidden; }
+int *pic_local_address(void) { return &pic_local; }
+int (*pic_function_address(void))(void) { return &pic_external_fn; }
+RV32_PIC
+for pic_flag in -fPIC -fPIE; do
+  "$MINIC_CC" --target=riscv32-linux "$pic_flag" -S "$work/rv32-pic.i" \
+    -o "$work/rv32-pic-cc.s"
+  "$MINIC" --target=riscv32-linux "$pic_flag" -S "$work/rv32-pic.i" \
+    -o "$work/rv32-pic-driver.s"
+  cmp "$work/rv32-pic-cc.s" "$work/rv32-pic-driver.s"
+  grep -Fxq '  la t0, pic_external' "$work/rv32-pic-cc.s"
+  grep -Fxq '  la t0, pic_external_fn' "$work/rv32-pic-cc.s"
+  grep -Fxq '  lla t0, pic_hidden' "$work/rv32-pic-cc.s"
+  grep -Fxq '  lla t0, pic_local' "$work/rv32-pic-cc.s"
+  grep -Fxq '  .option push' "$work/rv32-pic-cc.s"
+  grep -Fxq '  .option pic' "$work/rv32-pic-cc.s"
+  grep -Fxq '  .option pop' "$work/rv32-pic-cc.s"
+done
 for option in -mcmodel=large -fshort-enums -fwrapv -mtune=generic; do
   if "$MINIC_CC" --target=riscv64-linux "$option" -S "$work/unsigned.i" \
     -o "$work/unsupported.s" 2>"$work/unsupported.err"; then
@@ -294,4 +315,4 @@ EOF
 grep -Fq 'ldp x11, x12, [x10]' "$work/aarch64-va-copy.s"
 grep -Fq 'stp x13, x14, [x9, #16]' "$work/aarch64-va-copy.s"
 echo 'MINIC_AARCH64_VA_COPY=PASS independent_32byte_ABI_cursor_copy'
-echo 'MINIC_TARGET_ABI_FLAGS=PASS five_targets char_signedness wchar_override target_isolation PIC_fail_closed'
+echo 'MINIC_TARGET_ABI_FLAGS=PASS five_targets char_signedness wchar_override target_isolation rv32_scoped_GOT_PIC'

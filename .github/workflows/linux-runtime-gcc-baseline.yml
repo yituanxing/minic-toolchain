@@ -1539,6 +1539,7 @@ jobs:
         with:
           name: debug-shard-${{ matrix.shard }}
           path: |
+            build/rv32i-linux-entry/shard-${{ matrix.shard }}/gnu-prepare.log
             build/rv32i-linux-entry/shard-${{ matrix.shard }}/compile.log
             build/rv32i-linux-entry/shard-${{ matrix.shard }}/compile-blockers.txt
             build/rv32i-linux-entry/shard-${{ matrix.shard }}/make-diagnostics.txt
