@@ -10,8 +10,11 @@
  * the Linux kernel's LoongArch .text needlessly enormous.  Share the slow
  * paths *within* a function: pcaddi records the continuation in a private
  * scratch GPR and b transfers control without clobbering $ra, including in
- * leaf functions.  The hot aligned access and all memory semantics remain
- * identical.  The compiler emits functions serially. */
+ * leaf functions.  The continuation is exactly two instructions (8 bytes)
+ * after pcaddi; use the signed PC-relative immediate 2, since LLVM IAS
+ * rejects the local-label relocation form accepted by GNU as.  The hot
+ * aligned access and all memory semantics remain identical.  The compiler
+ * emits functions serially. */
 static size_t loong_memory_function_id;
 static unsigned int loong_memory_outlined;
 enum {
@@ -262,7 +265,7 @@ static bool loong_emit_scalar_store(FILE *out, size_t width,
             "  st.d $t0, $t1, 0\n"
             "  b 2f\n"
             "1:\n"
-            "  pcaddi $t6, 2f\n"
+            "  pcaddi $t6, 2\n"
             "  b .Lmini_loong_f%zu_unaligned_store8\n"
             "2:\n", loong_memory_function_id) >= 0;
     }
@@ -361,7 +364,7 @@ static bool emit_integer_memory(FILE *out, bool store,
             "%s"
             "  b 2f\n"
             "1:\n"
-            "  pcaddi $t6, 2f\n"
+            "  pcaddi $t6, 2\n"
             "  b .Lmini_loong_f%zu_unaligned_load%zu\n"
             "2:\n", width - 1U, op,
             loong_memory_function_id, width) >= 0;

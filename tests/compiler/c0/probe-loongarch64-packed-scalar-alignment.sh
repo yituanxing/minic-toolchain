@@ -36,21 +36,64 @@ awk '
     }
     /^  ld.bu \$t2, \$t1, 0$/ { byte_load++ }
     /^  st.b \$t0, \$t1, 0$/ { byte_store++ }
-    /^\.Lloong_store_bytes_[0-9]+:$/ {
-        if (name == "write_packed_wide") counted_wide_store++
+    /^  pcaddi \$t6, 2$/ {
+        if (name == "write_packed_wide") wide_continuations++
     }
-    /^  li.d \$t3, 8$/ {
-        if (name == "write_packed_wide") byte_loop_count++
+    /^  b \.Lmini_loong_f[0-9]+_unaligned_store8$/ {
+        if (name == "write_packed_wide") {
+            target = $0
+            sub(/^  b /, "", target)
+            if (shared_store_target != "" && shared_store_target != target)
+                distinct_store_targets++
+            shared_store_target = target
+            outlined_wide_stores++
+        }
+    }
+    /^\.Lmini_loong_f[0-9]+_unaligned_store8:$/ {
+        if ($0 == shared_store_target ":") {
+            shared_store_helper++
+            in_store_helper = 1
+        }
+    }
+    in_store_helper && /^  li.d \$t3, 8$/ { helper_count8++ }
+    in_store_helper && /^  st.b \$t0, \$t1, 0$/ { helper_byte_store++ }
+    in_store_helper && /^  srli.d \$t0, \$t0, 8$/ { helper_shift++ }
+    in_store_helper && /^  addi.d \$t1, \$t1, 1$/ { helper_address_step++ }
+    in_store_helper && /^  addi.d \$t3, \$t3, -1$/ { helper_counter_step++ }
+    in_store_helper && /^  bnez \$t3, 1b$/ { helper_loop++ }
+    in_store_helper && /^  jirl \$zero, \$t6, 0$/ {
+        helper_return++
+        in_store_helper = 0
     }
     /^  slli.w \$t0, \$t0, 0$/ { narrow_ext++ }
     END {
         if (guard4 < 2 || guard8 < 1 || wide_load_guard != 2 ||
             wide_store_guard != 2 || bad_static_proof ||
             byte_load < 2 || byte_store < 1 || narrow_ext < 1 ||
-            counted_wide_store != 2 || byte_loop_count != 2) {
-            printf "LOONGARCH_PACKED_ALIGNMENT=FAIL packed_guard4=%d guard8=%d wide_load=%d wide_store=%d static_guard=%d byte_load=%d byte_store=%d sign_ext=%d counted8=%d\n", guard4, guard8, wide_load_guard, wide_store_guard, bad_static_proof, byte_load, byte_store, narrow_ext, counted_wide_store > "/dev/stderr"
+            outlined_wide_stores != 2 || wide_continuations != 2 ||
+            distinct_store_targets || shared_store_helper != 1 ||
+            helper_count8 != 1 || helper_byte_store != 1 ||
+            helper_shift != 1 || helper_address_step != 1 ||
+            helper_counter_step != 1 || helper_loop != 1 ||
+            helper_return != 1) {
+            printf "LOONGARCH_PACKED_ALIGNMENT=FAIL packed_guard4=%d guard8=%d wide_load=%d wide_store=%d static_guard=%d byte_load=%d byte_store=%d sign_ext=%d outlined8=%d continuations=%d helper=%d count8=%d byte=%d shift=%d step=%d dec=%d loop=%d return=%d\n", guard4, guard8, wide_load_guard, wide_store_guard, bad_static_proof, byte_load, byte_store, narrow_ext, outlined_wide_stores, wide_continuations, shared_store_helper, helper_count8, helper_byte_store, helper_shift, helper_address_step, helper_counter_step, helper_loop, helper_return > "/dev/stderr"
             exit 1
         }
     }
 ' "$work/source.s"
-echo 'LOONGARCH_PACKED_ALIGNMENT=PASS -S packed scalar/pointer/wide guards=1 static_global_wide_fastpath=1 counted8_byte_fallback=2'
+# pcaddi uses a signed instruction-count displacement, not a symbol relocation:
+# the helper branch must occupy exactly one instruction before continuation 2:.
+# This also keeps the emitted form acceptable to Clang's integrated assembler.
+awk '
+    /^  pcaddi \$t6, 2$/ {
+        seen++
+        if (getline branch != 1 ||
+            branch !~ /^  b \.Lmini_loong_f[0-9]+_unaligned_(load4|load8|store8)$/ ||
+            getline continuation != 1 || continuation != "2:") bad++
+    }
+    END { if (seen < 2 || bad) exit 1 }
+' "$work/source.s" || {
+    echo 'LOONGARCH_PACKED_ALIGNMENT=FAIL pcaddi branch/continuation PC+8 layout' >&2
+    exit 1
+}
+echo 'LOONGARCH_PACKED_ALIGNMENT=PASS -S packed scalar/pointer/wide guards=1 static_global_wide_fastpath=1 outlined8_byte_fallback=2 shared_helper=1'
