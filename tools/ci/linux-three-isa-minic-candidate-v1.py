@@ -196,7 +196,7 @@ def verify_gnu_kbuild_commands(out: Path, rows: list[dict], gcc: str,
             raise Rejected(f"invalid authentic GNU machine options for {name}: {exc}") from exc
         if row.get("gnu_as_flags") != authentic_as_flags:
             raise Rejected(f"original GNU AS machine options changed: {name}")
-        if row.get("minic_flags") != authentic_minic_flags:
+        if effective_minic_flags(row, target) != authentic_minic_flags:
             raise Rejected(f"original GNU C language/ABI options changed: {name}")
         original_tokens = frozen_kbuild_oracle().gnu_command_tokens(raw_cmd, gcc)
         audit = frozen_kbuild_oracle().gnu_codegen_option_audit(
@@ -360,6 +360,22 @@ def elf_machine(path: Path, machine: int) -> None:
         raise Rejected(f"not a relocatable target ELF64 owner: {path}")
 
 
+def effective_minic_flags(row: dict, target: str) -> list[str]:
+    """Preserve frozen GNU identity while honoring an admitted x86 no-SSE ABI.
+
+    Legacy seven-shard manifests predate forwarding -mno-sse to MiniC, but
+    their authenticated original GNU assembler flags already record it.
+    Replaying that existing flag is required for early kernel variadic code;
+    never change the immutable frozen input/command hashes or duplicate it
+    in newly frozen manifests which already carry the MiniC option.
+    """
+    flags = list(row["minic_flags"])
+    if (target == "x86_64" and "-mno-sse" in row["gnu_as_flags"] and
+            "-mno-sse" not in flags):
+        flags.append("-mno-sse")
+    return flags
+
+
 def make_objects(rows: list[dict], work: Path, compiler: Path, output: Path,
                  data: dict, workers: int, timeout: int) -> list[dict]:
     frozen, staging = work / "frozen", output / "staged"
@@ -379,7 +395,8 @@ def make_objects(rows: list[dict], work: Path, compiler: Path, output: Path,
         started = time.monotonic()
         try:
             command = [str(compiler), f"--target={data['target']}-linux",
-                       *row["minic_flags"], "-S", str(source), "-o", str(asm)]
+                       *effective_minic_flags(row, data["target"]),
+                       "-S", str(source), "-o", str(asm)]
             cc = subprocess.run(command, text=True, capture_output=True, timeout=timeout)
             if cc.returncode or not asm.is_file() or not asm.stat().st_size:
                 failure_stderr.write_text(cc.stderr)
@@ -1461,7 +1478,8 @@ def rebuild_live_kbuild_c_owners(work: Path, output: Path, rows: list[dict],
         live_o = target.with_suffix(".live.minic.o")
         args, flags, as_flags, _ = oracle.gnu_argv(
             cmd.read_text(), data["gcc"], name, live_i, data["target"])
-        if flags != row["minic_flags"] or as_flags != row["gnu_as_flags"]:
+        if (flags != effective_minic_flags(row, data["target"]) or
+                as_flags != row["gnu_as_flags"]):
             raise Rejected(f"regenerated C owner lost its original GNU ABI flags: {name}")
         shutil.copyfile(cmd, target.with_suffix(".live.gnu.o.cmd"))
         original_gnu_e_argv = target.with_suffix(".live.gnu-e-argv.json")
