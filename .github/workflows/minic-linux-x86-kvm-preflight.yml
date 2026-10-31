@@ -68,12 +68,16 @@ jobs:
           # host KVM acceleration alone does not establish nested VMX needed
           # by the KVM_INTEL=y Linux P2 test. Only real nested-VMX guest code
           # prints the success marker and exits with (0x2a << 1) | 1 = 85.
-          nasm -f bin -o "$work/guest.img" /dev/stdin <<'ASM'
+          # GitHub's shell wrapper does not reliably give NASM the inline
+          # /dev/stdin stream: that produced an empty image in the first
+          # real runner. Materialize the assembly before invoking NASM.
+          tee "$work/guest.asm" >/dev/null <<'ASM'
           bits 16
           org 0x7c00
           start:
           xor ax, ax
           mov ds, ax
+          cld
           mov si, no_nested_vmx
           mov eax, 1
           cpuid
@@ -103,12 +107,18 @@ jobs:
           times 510-($-$$) db 0
           dw 0xaa55
           ASM
-          guest_bytes=$(stat -c %s "$work/guest.img")
+          nasm -f bin -o "$work/bootsector.bin" "$work/guest.asm"
+          guest_bytes=$(stat -c %s "$work/bootsector.bin")
           echo "KVM_GUEST_BOOTSECTOR_BYTES=$guest_bytes"
           if [[ "$guest_bytes" -ne 512 ]]; then
             echo 'KVM_PREFLIGHT=BLOCKED reason=invalid_guest_bootsector' >&2
             exit 1
           fi
+          # SeaBIOS expects genuine floppy geometry. Preserve the exact boot
+          # sector and package it into a standard 1.44 MiB floppy image.
+          cp "$work/bootsector.bin" "$work/guest.img"
+          truncate -s 1474560 "$work/guest.img"
+          test "$(stat -c %s "$work/guest.img")" -eq 1474560
 
           set +e
           timeout --signal=TERM --kill-after=5s 30s \
@@ -144,6 +154,8 @@ jobs:
         with:
           name: x86-kvm-host-preflight-${{ github.run_id }}
           path: |
+            ${{ runner.temp }}/minic-x86-kvm-preflight/guest.asm
+            ${{ runner.temp }}/minic-x86-kvm-preflight/bootsector.bin
             ${{ runner.temp }}/minic-x86-kvm-preflight/guest.img
             ${{ runner.temp }}/minic-x86-kvm-preflight/guest-output.log
             ${{ runner.temp }}/minic-x86-kvm-preflight/qemu.stdout
