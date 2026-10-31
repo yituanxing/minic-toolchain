@@ -1470,6 +1470,13 @@ check-x86-kernel-head-link-address: $(MINIC_CC_BINARY)
 
 check-fast: check-x86-kernel-head-link-address
 
+.PHONY: check-x86-head-inline-section
+check-x86-head-inline-section: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	bash tests/compiler/c0/probe-x86-head-inline-section.sh
+
+check-fast: check-x86-head-inline-section
+
 .PHONY: check-static-local-owner-reachability
 check-static-local-owner-reachability: $(MINIC_CC_BINARY)
 	MINIC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \

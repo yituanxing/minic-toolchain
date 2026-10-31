@@ -331,6 +331,8 @@ blocked_error:
 
 static bool minic_inline_integer_specialization_matches(
     const MinicFunction *candidate,
+    const MinicFunction *source,
+    const MinicFunction *caller,
     MinicFunctionId source_id,
     const bool *known,
     const uint64_t *bits,
@@ -338,7 +340,8 @@ static bool minic_inline_integer_specialization_matches(
     size_t i;
     if (candidate == NULL || !candidate->is_integer_specialization ||
         candidate->specialization_source != source_id ||
-        candidate->parameter_count != parameter_count) {
+        candidate->parameter_count != parameter_count ||
+        !minic_inline_specialization_section_matches(candidate, source, caller)) {
         return false;
     }
     for (i = 0U; i < parameter_count; ++i) {
@@ -348,6 +351,31 @@ static bool minic_inline_integer_specialization_matches(
         }
     }
     return true;
+}
+
+bool minic_inline_specialization_section_matches(
+    const MinicFunction *candidate,
+    const MinicFunction *source,
+    const MinicFunction *caller) {
+    const MinicFunction *owner;
+    const char *wanted;
+    size_t length;
+
+    if (candidate == NULL || source == NULL) return false;
+    owner = source->section_name != NULL ? source : caller;
+    wanted = owner != NULL ? owner->section_name : NULL;
+    length = wanted != NULL ? owner->section_name_length : 0U;
+    if ((candidate->section_name == NULL) != (wanted == NULL) ||
+        candidate->section_name_length != length) return false;
+    return wanted == NULL || memcmp(candidate->section_name, wanted, length) == 0;
+}
+
+bool minic_inline_section_owner_index_required(const MinicC0Program *program) {
+    size_t index;
+    if (program == NULL) return false;
+    for (index = 0U; index < program->function_count; ++index)
+        if (program->functions[index].section_name != NULL) return true;
+    return false;
 }
 
 /* An unresolved __builtin_constant_p(expr) is evaluated later, from the
@@ -377,12 +405,15 @@ static bool minic_inline_integer_unresolved_constant_query(
 bool minic_add_inline_integer_specialization(
     MinicC0Program *program,
     MinicFunctionId source_id,
+    const MinicFunction *caller,
     const bool *known,
     const uint64_t *bits,
     size_t ordinal,
     MinicFunctionId *specialized_id) {
     MinicFunction source;
     MinicFunction *specialized;
+    const char *section;
+    size_t section_length;
     char name[96];
     int name_length;
     size_t i;
@@ -392,6 +423,10 @@ bool minic_add_inline_integer_specialization(
         return false;
     }
     source = program->functions[source_id];
+    section = source.section_name != NULL ? source.section_name :
+        caller != NULL ? caller->section_name : NULL;
+    section_length = source.section_name != NULL ? source.section_name_length :
+        caller != NULL && caller->section_name != NULL ? caller->section_name_length : 0U;
     if (!source.is_defined || !source.is_internal ||
         (!source.is_inline && !minic_static_integer_specialization_eligible(&source)) ||
         source.is_variadic || source.alias_target != MINIC_FUNCTION_INVALID) {
@@ -417,10 +452,9 @@ bool minic_add_inline_integer_specialization(
         !minic_c0_program_set_function_inline(program, *specialized_id, source.is_inline) ||
         (source.is_noreturn &&
          !minic_c0_program_set_function_noreturn(program, *specialized_id, true)) ||
-        (source.section_name != NULL &&
+        (section != NULL &&
          !minic_c0_program_set_function_section(program, *specialized_id,
-                                                source.section_name,
-                                                source.section_name_length))) {
+                                                section, section_length))) {
         return false;
     }
     specialized = &program->functions[*specialized_id];
@@ -523,17 +557,36 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
     bool static_sources_checked = false;
     MinicCoreReentryIndex *pure_guard_reentry_index = NULL;
     bool pure_guard_index_attempted = false;
+    MinicFunctionId *initial_expression_owners = NULL;
+    bool initial_owner_index_ready = false;
 
     if (program == NULL || target == NULL) {
         return false;
     }
     original_function_count = program->function_count;
+    if (minic_inline_section_owner_index_required(program) &&
+        program->expression_count != 0U &&
+        program->expression_count <= SIZE_MAX / sizeof(*initial_expression_owners)) {
+        initial_expression_owners = malloc(program->expression_count *
+                                           sizeof(*initial_expression_owners));
+        if (initial_expression_owners != NULL)
+            initial_owner_index_ready = minic_perf_program_build_expression_source_owners(
+                program, original_function_count, initial_expression_owners,
+                program->expression_count);
+    }
+    if (minic_inline_section_owner_index_required(program) &&
+        program->expression_count != 0U && !initial_owner_index_ready) {
+        free(initial_expression_owners);
+        (void)fprintf(stderr, "MINIC_INLINE_SECTION_OWNER_INDEX=FAIL integer\n");
+        return false;
+    }
     for (expression_index = 0U; expression_index < program->expression_count;
          ++expression_index) {
         MinicExpression *expression = &program->expressions[expression_index];
         MinicFunctionId source_id;
         MinicFunctionId specialized_id = MINIC_FUNCTION_INVALID;
         MinicFunction source;
+        const MinicFunction *caller = NULL;
         bool known[MINIC_MAX_FUNCTION_PARAMETERS];
         uint64_t bits[MINIC_MAX_FUNCTION_PARAMETERS];
         size_t i;
@@ -550,6 +603,9 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
             continue;
         }
         source = program->functions[source_id];
+        if (initial_owner_index_ready &&
+            initial_expression_owners[expression_index] < original_function_count)
+            caller = &program->functions[initial_expression_owners[expression_index]];
         if (!source.is_defined || !source.is_internal ||
             (!source.is_inline && !minic_static_integer_specialization_eligible(&source)) ||
             !source.is_referenced || source.is_variadic ||
@@ -622,7 +678,8 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
         for (candidate_index = original_function_count;
              candidate_index < program->function_count; ++candidate_index) {
             if (minic_inline_integer_specialization_matches(
-                    &program->functions[candidate_index], source_id, known, bits,
+                    &program->functions[candidate_index], &source, caller,
+                    source_id, known, bits,
                     source.parameter_count)) {
                 specialized_id = candidate_index;
                 break;
@@ -651,9 +708,11 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
                               program->function_count,
                               (size_t)source_id);
                 minic_core_reentry_index_destroy(pure_guard_reentry_index);
+                free(initial_expression_owners);
                 return false;
             }
-            if (!minic_add_inline_integer_specialization(program, source_id, known, bits,
+            if (!minic_add_inline_integer_specialization(program, source_id, caller,
+                                                         known, bits,
                                                          specialization_count,
                                                          &specialized_id)) {
                 (void)fprintf(stderr,
@@ -662,6 +721,7 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
                               program->function_count,
                               (size_t)source_id);
                 minic_core_reentry_index_destroy(pure_guard_reentry_index);
+                free(initial_expression_owners);
                 return false;
             }
             specialization_count += 1U;
@@ -673,6 +733,7 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
             program->expressions[expression_index].value.call.function_id = specialized_id;
     }
     free(static_blocked_sources);
+    free(initial_expression_owners);
 
     {
         size_t caller_index;
@@ -822,6 +883,7 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
                      ++nested_candidate_index) {
                     if (minic_inline_integer_specialization_matches(
                             &program->functions[nested_candidate_index],
+                            &nested_source, &caller,
                             nested_source_id,
                             nested_known,
                             nested_bits,
@@ -846,6 +908,7 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
                     if (!minic_add_inline_integer_specialization(
                             program,
                             nested_source_id,
+                            &caller,
                             nested_known,
                             nested_bits,
                             specialization_count,

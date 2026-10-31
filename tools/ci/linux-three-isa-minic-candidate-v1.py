@@ -129,6 +129,37 @@ def effective_gnu_c_option_groups(tokens: list[str]) -> dict[str, str]:
     return result
 
 
+def effective_unqualified_gnu_c_options(audit: dict[str, list[str]],
+                                        effective: dict[str, str]) -> tuple[list[str], list[str]]:
+    """Distinguish active blockers from earlier, demonstrably overridden flags.
+
+    GCC processes these five mutually-exclusive option families in argv order.
+    Keep *both* sets unqualified: a later option being effective does not
+    establish that MiniC implements its semantics. Unknown options and
+    independent flags such as -fno-code-hoisting must never be shadowed.
+    """
+    active, shadowed = [], []
+    for category in ("mandatory", "optimization", "debug_metadata"):
+        for value in audit[category]:
+            family = None
+            if value.startswith("-O"):
+                family = "optimization"
+            elif value.startswith(("-fstack-protector", "-fno-stack-protector")):
+                family = "stack_protector"
+            elif value.startswith("-mbranch-protection="):
+                family = "branch_protection"
+            elif value in ("-funwind-tables", "-fno-unwind-tables"):
+                family = "unwind_tables"
+            elif value in ("-fasynchronous-unwind-tables",
+                                "-fno-asynchronous-unwind-tables"):
+                family = "asynchronous_unwind_tables"
+            if family and effective[family] != value:
+                shadowed.append(value)
+            else:
+                active.append(value)
+    return active, shadowed
+
+
 def verify_gnu_kbuild_commands(out: Path, rows: list[dict], gcc: str,
                                target: str | None = None) -> dict:
     """Verify SHA-bound GNU .cmd and separate *unqualified* flag categories.
@@ -143,6 +174,11 @@ def verify_gnu_kbuild_commands(out: Path, rows: list[dict], gcc: str,
     affected = Counter()
     effective_counts: dict[str, Counter] = {}
     effective_by_owner: dict[str, dict[str, str]] = {}
+    active_unqualified = Counter()
+    shadowed_unqualified = Counter()
+    active_unqualified_by_owner: dict[str, list[str]] = {}
+    shadowed_unqualified_by_owner: dict[str, list[str]] = {}
+    active_unqualified_owners = 0
     unqualified_owners = 0
     for row in rows:
         name = PurePosixPath(row["object"])
@@ -166,6 +202,15 @@ def verify_gnu_kbuild_commands(out: Path, rows: list[dict], gcc: str,
         audit = frozen_kbuild_oracle().gnu_codegen_option_audit(
             original_tokens, authentic_minic_flags, target)
         effective = effective_gnu_c_option_groups(original_tokens)
+        active, shadowed = effective_unqualified_gnu_c_options(audit, effective)
+        active_unqualified.update(active)
+        shadowed_unqualified.update(shadowed)
+        if active:
+            active_unqualified_by_owner[str(name)] = active
+        if shadowed:
+            shadowed_unqualified_by_owner[str(name)] = shadowed
+        if active:
+            active_unqualified_owners += 1
         effective_by_owner[str(name)] = effective
         for family, value in effective.items():
             effective_counts.setdefault(family, Counter())[value] += 1
@@ -190,6 +235,11 @@ def verify_gnu_kbuild_commands(out: Path, rows: list[dict], gcc: str,
             "gnu_c_option_effective_per_owner": effective_by_owner,
             "gnu_c_option_unqualified_owners": unqualified_owners,
             "gnu_c_option_unqualified_counts": dict(sorted(missing.items())),
+            "gnu_c_option_active_unqualified_owners": active_unqualified_owners,
+            "gnu_c_option_active_unqualified_counts": dict(sorted(active_unqualified.items())),
+            "gnu_c_option_active_unqualified_per_owner": active_unqualified_by_owner,
+            "gnu_c_option_shadowed_unqualified_counts": dict(sorted(shadowed_unqualified.items())),
+            "gnu_c_option_shadowed_unqualified_per_owner": shadowed_unqualified_by_owner,
             "gnu_c_option_mandatory_owners": affected["mandatory"],
             "gnu_c_option_mandatory_counts": dict(sorted(categories["mandatory"].items())),
             "gnu_c_option_optimization_owners": affected["optimization"],
@@ -268,6 +318,8 @@ def candidate_inputs(target: str, work: Path, compiler: Path,
           f"target={target} owners={option_contract['gnu_c_option_unqualified_owners']}/{len(rows)} "
           f"observed_distinct={len(option_contract['gnu_c_option_observed_counts'])} "
           f"unqualified_distinct={len(option_contract['gnu_c_option_unqualified_counts'])} "
+          f"active_distinct={len(option_contract['gnu_c_option_active_unqualified_counts'])} "
+          f"shadowed_distinct={len(option_contract['gnu_c_option_shadowed_unqualified_counts'])} "
           f"mandatory={len(option_contract['gnu_c_option_mandatory_counts'])} "
           f"optimization={len(option_contract['gnu_c_option_optimization_counts'])} "
           f"debug_metadata={len(option_contract['gnu_c_option_debug_metadata_counts'])} "
@@ -2325,6 +2377,45 @@ def self_test() -> None:
         assert option_audit["gnu_c_option_effective_counts"]["optimization"] == {"-O2": 1}
         assert option_audit["gnu_c_option_effective_per_owner"]["kernel/canonical.o"][
             "stack_protector"] == "UNSPECIFIED"
+        # A genuine ordered GCC .cmd may contain per-file override pairs.
+        # Only the earlier value is shadowed; the last effective option and
+        # independent semantic options remain strict qualification blockers.
+        cmd.write_text("savedcmd_kernel/canonical.o := gcc -O2 -Os "
+                       "-fstack-protector-strong -fno-stack-protector "
+                       "-mbranch-protection=pac-ret -mbranch-protection=none "
+                       "-fno-strict-aliasing -c -o kernel/canonical.o "
+                       "kernel/canonical.c\n"
+                       "source_kernel/canonical.o := kernel/canonical.c\n")
+        metadata[0]["cmd_sha256"] = sha(cmd)
+        metadata[0]["gnu_as_flags"] = ["-mbranch-protection=pac-ret",
+                                       "-mbranch-protection=none"]
+        overridden = verify_gnu_kbuild_commands(out, metadata, "gcc", "aarch64")
+        assert overridden["gnu_c_option_equivalence"] == "INCONCLUSIVE_UNQUALIFIED"
+        assert set(overridden["gnu_c_option_shadowed_unqualified_counts"]) == {
+            "-O2", "-fstack-protector-strong", "-mbranch-protection=pac-ret"}
+        assert set(overridden["gnu_c_option_active_unqualified_counts"]) == {
+            "-Os", "-fno-stack-protector", "-mbranch-protection=none",
+            "-fno-strict-aliasing"}
+        assert overridden["gnu_c_option_active_unqualified_owners"] == 1
+        assert set(overridden["gnu_c_option_active_unqualified_per_owner"][
+            "kernel/canonical.o"]) == set(overridden["gnu_c_option_active_unqualified_counts"])
+        assert set(overridden["gnu_c_option_shadowed_unqualified_per_owner"][
+            "kernel/canonical.o"]) == set(overridden["gnu_c_option_shadowed_unqualified_counts"])
+        cmd.write_text("savedcmd_kernel/canonical.o := gcc -Os -O2 "
+                       "-fno-stack-protector -fstack-protector-strong "
+                       "-mbranch-protection=none -mbranch-protection=pac-ret "
+                       "-fno-strict-aliasing -c -o kernel/canonical.o "
+                       "kernel/canonical.c\n"
+                       "source_kernel/canonical.o := kernel/canonical.c\n")
+        metadata[0]["cmd_sha256"] = sha(cmd)
+        metadata[0]["gnu_as_flags"] = ["-mbranch-protection=none",
+                                       "-mbranch-protection=pac-ret"]
+        reversed_order = verify_gnu_kbuild_commands(out, metadata, "gcc", "aarch64")
+        assert set(reversed_order["gnu_c_option_active_unqualified_counts"]) == {
+            "-O2", "-fstack-protector-strong", "-mbranch-protection=pac-ret",
+            "-fno-strict-aliasing"}
+        assert set(reversed_order["gnu_c_option_shadowed_unqualified_counts"]) == {
+            "-Os", "-fno-stack-protector", "-mbranch-protection=none"}
         cmd.write_text("savedcmd_kernel/canonical.o := gcc -mabi=lp64 "
                        "-mlittle-endian -mbranch-protection=pac-ret "
                        "-fstack-protector-strong -ftrivial-auto-var-init=zero "

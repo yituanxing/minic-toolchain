@@ -7,11 +7,13 @@ with only a QMP socket added, and its verdict cannot change P0/P1 acceptance.
 from __future__ import annotations
 
 import argparse
+import bisect
 import gzip
 import hashlib
 import importlib.util
 import io
 import json
+import mmap
 from pathlib import Path
 import re
 import shutil
@@ -26,6 +28,9 @@ import zlib
 SAMPLE_SECONDS = (1, 3, 8, 15)
 GNU_REFERENCE_SECONDS = (1, 3, 5)
 PC = re.compile(r"(?im)(?:^|\s)PC\s*[:=]?\s*(?:0x)?([0-9a-f]{8,16})(?=\s|$)")
+HMP_BYTE = re.compile(r"(?i)(?<![0-9a-f])0x([0-9a-f]{2})(?![0-9a-f])")
+NM_SYMBOL = re.compile(rb"^([0-9a-fA-F]{8,16})\s+([TtWw])\s+(\S+)$")
+PC_BYTES = 32
 
 
 def digest(path: Path) -> str:
@@ -88,6 +93,26 @@ def connect_qmp(path: Path, process: subprocess.Popen):
     raise RuntimeError("QMP socket not available within 5 seconds")
 
 
+def hmp_code_bytes(text: str, count: int = PC_BYTES,
+                   expected_pc: int | None = None) -> bytes | None:
+    """Require a contiguous HMP byte dump at the sampled PC, not nearby data."""
+    data = bytearray()
+    for line in text.splitlines():
+        if ":" not in line:
+            continue
+        address, payload = line.split(":", 1)
+        if not re.fullmatch(r"\s*(?:0x)?[0-9a-fA-F]{8,16}\s*", address):
+            continue
+        start = int(address.strip(), 16)
+        if expected_pc is not None and start != expected_pc + len(data):
+            return None
+        decoded = HMP_BYTE.findall(payload)
+        if not decoded:
+            return None
+        data.extend(int(match, 16) for match in decoded)
+    return bytes(data) if len(data) == count else None
+
+
 def run_qmp(argv: list[str], socket_path: Path, output: Path,
             sample_seconds: tuple[int, ...] = SAMPLE_SECONDS,
             log_name: str = "diagnostic-p0.log") -> list[dict]:
@@ -123,9 +148,26 @@ def run_qmp(argv: list[str], socket_path: Path, output: Path,
                             if not isinstance(raw, str):
                                 raise RuntimeError("HMP info registers not text")
                             match = PC.search(raw)
-                            samples.append({"at_seconds": second, "pause_verified": True,
-                                            "pc": f"0x{match.group(1)}" if match else None,
-                                            "registers_hmp": raw[:65536]})
+                            sample = {"at_seconds": second, "pause_verified": True,
+                                      "pc": f"0x{match.group(1)}" if match else None,
+                                      "registers_hmp": raw[:65536]}
+                            if match:
+                                try:
+                                    memory = qmp_command(
+                                        reader, writer, "human-monitor-command",
+                                        {"command-line":
+                                         f"x/{PC_BYTES}xb 0x{match.group(1)}",
+                                         "cpu-index": 0})
+                                    if not isinstance(memory, str):
+                                        raise RuntimeError("HMP x memory dump not text")
+                                    code = hmp_code_bytes(memory, expected_pc=int(
+                                        match.group(1), 16))
+                                    if code is None:
+                                        raise RuntimeError("HMP x did not return exact code bytes")
+                                    sample["pc_bytes_hex"] = code.hex()
+                                except Exception as exc:
+                                    sample["pc_bytes_error"] = f"{type(exc).__name__}: {exc}"
+                            samples.append(sample)
                         finally:
                             if paused and process.poll() is None:
                                 qmp_command(reader, writer, "cont")
@@ -239,6 +281,118 @@ def symbol_evidence(system_map: Path, vmlinux: Path, nm: Path,
             "pc_to_symbol": "not inferred: QMP PCs need observed runtime load bias"}
 
 
+def candidate_executable_segments(vmlinux: Path) -> list[tuple[int, int, int]]:
+    """Read bounded ELF64 LE LoongArch PT_LOAD executable file/VMA ranges."""
+    size = vmlinux.stat().st_size
+    if size < 64 or size > 512 * 1024 * 1024:
+        raise ValueError("candidate vmlinux outside ELF diagnostic bounds")
+    with vmlinux.open("rb") as stream:
+        header = stream.read(64)
+        if (header[:6] != b"\x7fELF\x02\x01" or
+                struct.unpack_from("<H", header, 18)[0] != 258):
+            raise ValueError("candidate vmlinux is not ELF64 LE LoongArch")
+        phoff = struct.unpack_from("<Q", header, 32)[0]
+        phentsize, phnum = struct.unpack_from("<HH", header, 54)
+        if phnum > 128 or phentsize < 56 or phoff + phentsize * phnum > size:
+            raise ValueError("candidate vmlinux program headers out of bounds")
+        segments = []
+        for index in range(phnum):
+            stream.seek(phoff + index * phentsize)
+            item = stream.read(56)
+            kind, flags, offset, vaddr, _, filesz, _, _ = struct.unpack(
+                "<IIQQQQQQ", item)
+            if kind == 1 and flags & 1 and filesz:
+                if offset + filesz > size or vaddr + filesz > 1 << 64:
+                    raise ValueError("candidate executable segment out of bounds")
+                segments.append((offset, offset + filesz, vaddr))
+    if not segments:
+        raise ValueError("candidate vmlinux has no executable PT_LOAD")
+    return segments
+
+
+def candidate_text_symbols(nm_output: bytes) -> list[tuple[int, str]]:
+    symbols = []
+    for line in nm_output.splitlines():
+        match = NM_SYMBOL.fullmatch(line)
+        if match is not None:
+            symbols.append((int(match.group(1), 16),
+                            match.group(3).decode("utf-8", errors="replace")))
+    symbols.sort()
+    return symbols
+
+
+def candidate_pc_symbol_evidence(samples: list[dict], vmlinux: Path,
+                                 nm_archive: Path) -> dict:
+    """Use observed live code bytes, not a guessed EFI/KASLR load bias.
+
+    A unique 32-byte match inside an executable PT_LOAD establishes the
+    candidate linked address of those *actual* running instructions. A GNU
+    reference image or an ambiguous short match can never provide a symbol.
+    """
+    segments = candidate_executable_segments(vmlinux)
+    nm_bytes = gzip.decompress(nm_archive.read_bytes())
+    if len(nm_bytes) > 64 * 1024 * 1024:
+        raise ValueError("candidate nm symbols outside diagnostic bound")
+    symbols = candidate_text_symbols(nm_bytes)
+    addresses = [entry[0] for entry in symbols]
+    evidence = []
+    with vmlinux.open("rb") as stream, mmap.mmap(
+            stream.fileno(), 0, access=mmap.ACCESS_READ) as binary:
+        for sample in samples:
+            item = {"at_seconds": sample.get("at_seconds"),
+                    "runtime_pc": sample.get("pc"), "verdict": "UNRESOLVED"}
+            raw = sample.get("pc_bytes_hex")
+            if not isinstance(raw, str) or len(raw) != PC_BYTES * 2:
+                item["reason"] = "NO_EXACT_LIVE_CODE_BYTES"
+                evidence.append(item)
+                continue
+            try:
+                needle = bytes.fromhex(raw)
+                runtime_pc = int(sample["pc"], 16)
+            except (TypeError, ValueError):
+                item["reason"] = "INVALID_LIVE_PC_OR_BYTES"
+                evidence.append(item)
+                continue
+            matches = []
+            for start, end, vaddr in segments:
+                pos = binary.find(needle, start, end)
+                while pos >= 0:
+                    matches.append(vaddr + pos - start)
+                    if len(matches) > 1:
+                        break
+                    pos = binary.find(needle, pos + 1, end)
+                if len(matches) > 1:
+                    break
+            item["executable_code_matches"] = min(2, len(matches))
+            if len(matches) != 1:
+                item["reason"] = ("AMBIGUOUS_EXECUTABLE_BYTES" if matches
+                                  else "LIVE_BYTES_NOT_IN_CANDIDATE_ELF")
+                evidence.append(item)
+                continue
+            linked_pc = matches[0]
+            item["candidate_link_pc"] = f"0x{linked_pc:016x}"
+            item["observed_runtime_bias"] = runtime_pc - linked_pc
+            index = bisect.bisect_right(addresses, linked_pc) - 1
+            if index < 0 or linked_pc - addresses[index] > 256 * 1024:
+                item["reason"] = "NO_NEARBY_CANDIDATE_TEXT_SYMBOL"
+            else:
+                item["verdict"] = "UNIQUE_LIVE_BYTES_IN_CANDIDATE_ELF"
+                item["candidate_symbol"] = symbols[index][1]
+                item["symbol_link_address"] = f"0x{addresses[index]:016x}"
+                item["symbol_offset_bytes"] = linked_pc - addresses[index]
+            evidence.append(item)
+    biases = [item["observed_runtime_bias"] for item in evidence
+              if "observed_runtime_bias" in item]
+    consistency = ("NO_EXACT_MATCH" if not biases else
+                   "SINGLE_MATCH" if len(biases) == 1 else
+                   "COHERENT" if len(set(biases)) == 1 else "CONFLICT")
+    return {"method": "live-32-byte-QMP-PC-match-in-candidate-exec-PT_LOAD",
+            "does_not_use_gnu_symbols": True,
+            "candidate_vmlinux_sha256": digest(vmlinux),
+            "runtime_bias_consistency": consistency,
+            "samples": evidence}
+
+
 def bounded_console_summary(report: dict, formal_p0: str) -> list[str]:
     """Make decisive QMP/PE evidence visible in CI logs without dumping registers/maps."""
     phase = ("EFI_EXIT_SERVICES_NO_LINUX_BANNER"
@@ -273,7 +427,19 @@ def bounded_console_summary(report: dict, formal_p0: str) -> list[str]:
     lines.append("MINIC_LOONG_LINK_ANCHORS "
                  + " ".join(f"{name}={anchors.get(name, 'unknown')}"
                             for name in ("_text", "_stext", "kernel_entry", "start_kernel"))
-                 + " pc_to_symbol=UNRESOLVED_RUNTIME_LOAD_BIAS")
+                 + " pc_to_symbol=LIVE_BYTES_REQUIRED")
+    for match in report.get("candidate_pc_symbols", {}).get("samples", [])[:8]:
+        lines.append(
+            "MINIC_LOONG_CANDIDATE_PC_SYMBOL "
+            f"second={match.get('at_seconds', '?')} "
+            f"pc={match.get('runtime_pc', 'unknown')} "
+            f"verdict={match.get('verdict', 'UNRESOLVED')} "
+            f"symbol={match.get('candidate_symbol', 'unknown')} "
+            f"offset={match.get('symbol_offset_bytes', 'unknown')} "
+            f"reason={match.get('reason', 'none')}")
+    if "candidate_pc_symbols" in report:
+        lines.append("MINIC_LOONG_CANDIDATE_PC_BIAS_CONSISTENCY=" +
+                     report["candidate_pc_symbols"]["runtime_bias_consistency"])
     return lines
 
 
@@ -291,6 +457,11 @@ def self_test() -> None:
     assert ([int(m.group(1), 16) for m in PC.finditer("PC 0x9000000010001234\n")]
             == [0x9000000010001234])
     assert PC.search("r0: 0x1234\n") is None
+    memory = "0x0000000000200040: " + " ".join(f"0x{i:02x}" for i in range(32))
+    assert hmp_code_bytes(memory) == bytes(range(32))
+    assert hmp_code_bytes(memory, expected_pc=0x200040) == bytes(range(32))
+    assert hmp_code_bytes(memory, expected_pc=0x200041) is None
+    assert hmp_code_bytes(memory[:-4]) is None
     events = io.BytesIO(b'{"event":"STOP"}\r\n{"return":"PC 0x9000000010001234"}\r\n')
     outgoing = io.BytesIO()
     assert qmp_command(events, outgoing, "human-monitor-command",
@@ -325,7 +496,53 @@ def self_test() -> None:
     assert "EFI_EXIT_SERVICES_NO_LINUX_BANNER" in summary[0]
     assert "points=1s:0x1000" in summary[4]
     assert "points=3s:0x9000" in summary[5]
-    assert "pc_to_symbol=UNRESOLVED_RUNTIME_LOAD_BIAS" in summary[6]
+    assert "pc_to_symbol=LIVE_BYTES_REQUIRED" in summary[6]
+    # Exact code bytes in the same candidate ELF permit evidence-backed
+    # symbolization; duplicate, missing, or malformed ELF cannot be inferred.
+    with tempfile.TemporaryDirectory(prefix="minic-loong-symtest-") as directory:
+        root = Path(directory)
+        elf = root / "candidate-vmlinux"
+        unique = bytes(range(32))
+        duplicate = bytes(range(32, 64))
+        blob = bytearray(1024)
+        blob[:6] = b"\x7fELF\x02\x01"
+        struct.pack_into("<H", blob, 18, 258)
+        struct.pack_into("<Q", blob, 32, 64)
+        struct.pack_into("<HH", blob, 54, 56, 1)
+        struct.pack_into("<IIQQQQQQ", blob, 64,
+                         1, 5, 0x100, 0x100000, 0, 0x300, 0x300, 0x1000)
+        blob[0x140:0x160] = unique
+        blob[0x180:0x1a0] = duplicate
+        blob[0x200:0x220] = duplicate
+        elf.write_bytes(blob)
+        nm_path = root / "candidate-nm.txt.gz"
+        nm_path.write_bytes(gzip.compress(
+            b"0000000000100000 T _text\n0000000000100040 T target_fn\n"))
+        tests = [
+            {"at_seconds": 1, "pc": "0x200040", "pc_bytes_hex": unique.hex()},
+            {"at_seconds": 3, "pc": "0x200080", "pc_bytes_hex": duplicate.hex()},
+            {"at_seconds": 8, "pc": "0x2000c0", "pc_bytes_hex": (b"\xaa" * 32).hex()},
+            {"at_seconds": 15, "pc": "0x2000e0"},
+        ]
+        result = candidate_pc_symbol_evidence(tests, elf, nm_path)
+        matches = result["samples"]
+        assert matches[0]["verdict"] == "UNIQUE_LIVE_BYTES_IN_CANDIDATE_ELF"
+        assert matches[0]["candidate_symbol"] == "target_fn"
+        assert matches[0]["candidate_link_pc"] == "0x0000000000100040"
+        assert matches[0]["observed_runtime_bias"] == 0x100000
+        assert matches[1]["reason"] == "AMBIGUOUS_EXECUTABLE_BYTES"
+        assert matches[2]["reason"] == "LIVE_BYTES_NOT_IN_CANDIDATE_ELF"
+        assert matches[3]["reason"] == "NO_EXACT_LIVE_CODE_BYTES"
+        assert result["runtime_bias_consistency"] == "SINGLE_MATCH"
+        with elf.open("r+b") as stream:
+            stream.seek(64 + 32)
+            stream.write(struct.pack("<Q", 0x3000))
+        try:
+            candidate_executable_segments(elf)
+        except ValueError as exc:
+            assert "out of bounds" in str(exc)
+        else:
+            raise AssertionError("out-of-bounds executable ELF accepted")
     print("MINIC_LOONG_EFI_QMP_DIAGNOSTIC_SELFTEST=PASS")
 
 
@@ -393,6 +610,18 @@ def run(args: argparse.Namespace) -> None:
     except Exception as exc:
         report["verdict"] = "DIAGNOSTIC_FAILED"
         report["diagnostic_error"] = f"{type(exc).__name__}: {exc}"
+    if "link_symbols" in report:
+        try:
+            before = report["link_symbols"]["vmlinux_sha256"]
+            if digest(args.vmlinux) != before:
+                raise RuntimeError("candidate vmlinux changed after symbol capture")
+            report["candidate_pc_symbols"] = candidate_pc_symbol_evidence(
+                report["samples"], args.vmlinux,
+                args.output / report["link_symbols"]["nm_archive"])
+            if report["candidate_pc_symbols"]["candidate_vmlinux_sha256"] != before:
+                raise RuntimeError("candidate vmlinux changed during PC mapping")
+        except Exception as exc:
+            report["candidate_pc_symbols_error"] = f"{type(exc).__name__}: {exc}"
     if args.gnu_image is not None:
         reference = {"reference_only": True,
                      "same_firmware_initrd_qemu_arguments": True,

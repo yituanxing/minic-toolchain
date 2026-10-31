@@ -909,6 +909,36 @@ jobs:
               echo "X86_BOOT_COHORT=$mode diagnostic_P0_match=0_or_inconclusive official_strict_P0=0"
             fi
           done
+          # The previously observed GNU+12 MiniC compressed cohort boots.
+          # Add only existing, early x86 C owners to that same passing baseline;
+          # this is a bounded mixed-owner diagnostic, never strict acceptance.
+          python3 - "$GNU_WORK/frozen/manifest.json" "$RUNTIME_OUTPUT/x86-early-extra-owners.json" <<'PY'
+          import json, pathlib, sys
+          available = {row['object'] for row in json.loads(pathlib.Path(sys.argv[1]).read_text())['rows']}
+          priority = ('arch/x86/kernel/head64.o', 'arch/x86/kernel/setup.o',
+                      'arch/x86/kernel/e820.o', 'arch/x86/kernel/early_printk.o',
+                      'arch/x86/kernel/cpu/common.o', 'arch/x86/mm/init_64.o',
+                      'arch/x86/mm/ident_map.o', 'init/main.o')
+          selected = [name for name in priority if name in available]
+          if len(selected) < 4:
+              raise SystemExit(f'X86_EARLY_OWNER_SELECTION=FAIL only {selected}')
+          pathlib.Path(sys.argv[2]).write_text(json.dumps(selected, indent=2) + '\n')
+          print(f'X86_EARLY_OWNER_SELECTION=PASS owners={len(selected)} paths={selected}')
+          PY
+          if python3 tools/ci/linux-three-isa-boot-cohort-diagnostic-v1.py probe \
+            --gnu-work "$GNU_WORK" \
+            --snapshot-dir "$RUNTIME_OUTPUT/x86-pristine-cohort-snapshot" \
+            --minic "$GITHUB_WORKSPACE/build/minic-seven-bin/bin/minic" \
+            --staged "$RUNTIME_OUTPUT/candidate/staged" \
+            --results "$RUNTIME_OUTPUT/candidate/all-c-owners-result.json" \
+            --trial-dir "$RUNTIME_OUTPUT/x86-cohort-early-owners" \
+            --mode gnu-plus-compressed \
+            --extra-owners-file "$RUNTIME_OUTPUT/x86-early-extra-owners.json" \
+            --link-timeout 600 --qemu-timeout 90; then
+            echo "X86_EARLY_OWNER_COHORT=diagnostic_P0_match official_strict_P0=0"
+          else
+            echo "X86_EARLY_OWNER_COHORT=diagnostic_failure_or_inconclusive official_strict_P0=0"
+          fi
       - name: Capture failed Loong EFI-to-Linux PC and register snapshots without changing oracle
         if: failure() && matrix.target == 'loongarch64'
         continue-on-error: true
@@ -1015,6 +1045,8 @@ jobs:
             build/minic-seven-receiver-${{ matrix.target }}/x86-early-trace/
             build/minic-seven-receiver-${{ matrix.target }}/x86-cohort-gnu-plus-compressed/
             build/minic-seven-receiver-${{ matrix.target }}/x86-cohort-minic-except-compressed/
+            build/minic-seven-receiver-${{ matrix.target }}/x86-cohort-early-owners/
+            build/minic-seven-receiver-${{ matrix.target }}/x86-early-extra-owners.json
             build/minic-seven-receiver-${{ matrix.target }}/loong-early-trace/
           if-no-files-found: warn
           retention-days: 14

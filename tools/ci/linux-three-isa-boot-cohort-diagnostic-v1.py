@@ -105,15 +105,23 @@ def compressed_owners(rows: list[dict]) -> list[str]:
     return chosen
 
 
-def select_owners(rows: list[dict], mode: str) -> list[str]:
+def select_owners(rows: list[dict], mode: str,
+                  extra_owners: list[str] | None = None) -> list[str]:
     if mode not in MODES:
         raise DiagnosticError(f"unsupported diagnostic selection: {mode}")
     compressed = set(compressed_owners(rows))
     all_names = [safe_owner(row["object"]) for row in rows]
+    extras = [safe_owner(name) for name in (extra_owners or [])]
+    if extras:
+        if mode != "gnu-plus-compressed":
+            raise DiagnosticError("extra owners require GNU plus MiniC compressed baseline")
+        if (len(extras) != len(set(extras)) or
+                not set(extras).issubset(set(all_names) - compressed)):
+            raise DiagnosticError("extra owners must be distinct exact non-compressed GNU C owners")
     selected = [name for name in all_names if
-                (name in compressed if mode == "gnu-plus-compressed"
+                (name in compressed or name in extras if mode == "gnu-plus-compressed"
                  else name not in compressed)]
-    if len(selected) != (COMPRESSED_COUNT if mode == MODES[0]
+    if len(selected) != (COMPRESSED_COUNT + len(extras) if mode == MODES[0]
                          else len(rows) - COMPRESSED_COUNT):
         raise DiagnosticError("incomplete controlled mixed object selection")
     return selected
@@ -329,7 +337,11 @@ def probe(a: argparse.Namespace) -> int:
         raise DiagnosticError("staged MiniC objects/results must remain outside replaced O=build")
     minic_objects = verify_staged(rows, staged, file(a.results),
                                   lambda path, row: candidate.elf_machine(path, 62))
-    selected = select_owners(rows, a.mode)
+    extra_file = file(a.extra_owners_file.absolute()) if a.extra_owners_file else None
+    extra_owners = json.loads(extra_file.read_text()) if extra_file else []
+    if not isinstance(extra_owners, list):
+        raise DiagnosticError("extra owner selection must be a JSON string array")
+    selected = select_owners(rows, a.mode, extra_owners)
     trial.mkdir(parents=True)
     original_backup = work / "build-before-cohort-diagnostic"
     if original_backup.exists() or original_backup.is_symlink():
@@ -337,6 +349,8 @@ def probe(a: argparse.Namespace) -> int:
     record = {"schema": SCHEMA, "phase": "diagnostic-only-mixed-C-objects",
               "target": TARGET, "mode": a.mode, "diagnostic_only": True,
               "strict_qualification_allowed": False, "zero_gnu_c_fallback": False,
+              "extra_owner_selection_sha256": digest(extra_file) if extra_file else None,
+              "extra_owner_selection": extra_owners,
               "gnu_source_image_sha256": info["gnu_image_sha256"],
               "original_manifest_sha256": info["original_manifest_sha256"],
               "selected_minic_owners": selected,
@@ -481,6 +495,8 @@ def main(argv: list[str] | None = None) -> int:
     test.add_argument("--results", type=Path, required=True)
     test.add_argument("--trial-dir", type=Path, required=True)
     test.add_argument("--mode", choices=MODES, required=True)
+    test.add_argument("--extra-owners-file", type=Path,
+                      help="SHA-recorded JSON list of additional exact C owners over the 12 MiniC compressed baseline; diagnostic only")
     test.add_argument("--link-timeout", type=int, default=900)
     test.add_argument("--qemu-timeout", type=int, default=240)
     test.add_argument("--max-live-cc", type=int, default=32)

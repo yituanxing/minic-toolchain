@@ -494,6 +494,8 @@ static void minic_inline_boolean_copy_existing_facts(
 
 static bool minic_inline_boolean_range_variant_matches(
     const MinicFunction *candidate,
+    const MinicFunction *source,
+    const MinicFunction *caller,
     MinicFunctionId source_id,
     const bool *integer_known,
     const uint64_t *integer_bits,
@@ -505,7 +507,8 @@ static bool minic_inline_boolean_range_variant_matches(
 
     if (candidate == NULL || !candidate->is_integer_specialization ||
         candidate->specialization_source != source_id ||
-        candidate->parameter_count != parameter_count) {
+        candidate->parameter_count != parameter_count ||
+        !minic_inline_specialization_section_matches(candidate, source, caller)) {
         return false;
     }
     for (i = 0U; i < parameter_count; ++i) {
@@ -526,6 +529,7 @@ static bool minic_inline_boolean_range_variant_matches(
 static bool minic_add_inline_boolean_range_specialization(
     MinicC0Program *program,
     MinicFunctionId source_id,
+    const MinicFunction *caller,
     const bool *integer_known,
     const uint64_t *integer_bits,
     const bool *symbolic_known,
@@ -538,6 +542,7 @@ static bool minic_add_inline_boolean_range_specialization(
     if (!minic_add_inline_symbolic_specialization(
             program,
             source_id,
+            caller,
             integer_known,
             integer_bits,
             symbolic_known,
@@ -559,8 +564,26 @@ static bool minic_specialize_inline_boolean_range_calls_for_pass(
     size_t expression_index;
     size_t direct_clone_count = 0U;
     size_t transitive_clone_count = 0U;
+    MinicFunctionId *initial_expression_owners = NULL;
+    bool initial_owner_index_ready = false;
 
     if (program == NULL || target == NULL) {
+        return false;
+    }
+    if (minic_inline_section_owner_index_required(program) &&
+        program->expression_count != 0U &&
+        program->expression_count <= SIZE_MAX / sizeof(*initial_expression_owners)) {
+        initial_expression_owners = malloc(program->expression_count *
+                                           sizeof(*initial_expression_owners));
+        if (initial_expression_owners != NULL)
+            initial_owner_index_ready = minic_perf_program_build_expression_source_owners(
+                program, program->function_count, initial_expression_owners,
+                program->expression_count);
+    }
+    if (minic_inline_section_owner_index_required(program) &&
+        program->expression_count != 0U && !initial_owner_index_ready) {
+        free(initial_expression_owners);
+        (void)fprintf(stderr, "MINIC_INLINE_SECTION_OWNER_INDEX=FAIL boolean\n");
         return false;
     }
 
@@ -574,6 +597,7 @@ static bool minic_specialize_inline_boolean_range_calls_for_pass(
         MinicFunctionId variant_id = MINIC_FUNCTION_INVALID;
         MinicFunction current;
         MinicFunction source;
+        const MinicFunction *caller = NULL;
         bool integer_known[MINIC_MAX_FUNCTION_PARAMETERS];
         uint64_t integer_bits[MINIC_MAX_FUNCTION_PARAMETERS];
         bool symbolic_known[MINIC_MAX_FUNCTION_PARAMETERS];
@@ -599,6 +623,11 @@ static bool minic_specialize_inline_boolean_range_calls_for_pass(
             continue;
         }
         source = program->functions[source_id];
+        if (initial_owner_index_ready &&
+            initial_expression_owners[expression_index] < program->function_count)
+            caller = &program->functions[initial_expression_owners[expression_index]];
+        else if (current.is_integer_specialization)
+            caller = &program->functions[current_id];
         if (!source.is_defined || !source.is_internal || !source.is_inline ||
             source.is_variadic || source.alias_target != MINIC_FUNCTION_INVALID ||
             source.parameter_count == 0U ||
@@ -643,6 +672,7 @@ static bool minic_specialize_inline_boolean_range_calls_for_pass(
              ++candidate_index) {
             if (minic_inline_boolean_range_variant_matches(
                     &program->functions[candidate_index],
+                    &source, caller,
                     source_id,
                     integer_known,
                     integer_bits,
@@ -662,18 +692,21 @@ static bool minic_specialize_inline_boolean_range_calls_for_pass(
                 !minic_add_inline_boolean_range_specialization(
                     program,
                     source_id,
+                    caller,
                     integer_known,
                     integer_bits,
                     symbolic_known,
                     symbolic_expression,
                     boolean_range_known,
                     &variant_id)) {
+                free(initial_expression_owners);
                 return false;
             }
             direct_clone_count += 1U;
         }
         program->expressions[expression_index].value.call.function_id = variant_id;
     }
+    free(initial_expression_owners);
 
     /* Then close range facts through already-specialized callers.  Do not
        rewrite the shared source AST here; Core lowering selects the matching
@@ -846,6 +879,7 @@ static bool minic_specialize_inline_boolean_range_calls_for_pass(
                      ++candidate_index) {
                     if (minic_inline_boolean_range_variant_matches(
                             &program->functions[candidate_index],
+                            &source, &caller,
                             source_id,
                             integer_known,
                             integer_bits,
@@ -862,6 +896,7 @@ static bool minic_specialize_inline_boolean_range_calls_for_pass(
                         !minic_add_inline_boolean_range_specialization(
                             program,
                             source_id,
+                            &caller,
                             integer_known,
                             integer_bits,
                             symbolic_known,

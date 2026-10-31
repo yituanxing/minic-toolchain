@@ -101,6 +101,16 @@ class DiagnosticFixture(unittest.TestCase):
                              [row["object"] for row in self.rows[:2]])
             self.assertEqual(diag.select_owners(self.rows, "minic-except-compressed"),
                              [row["object"] for row in self.rows[2:]])
+            self.assertEqual(diag.select_owners(self.rows, "gnu-plus-compressed",
+                                                ["init/main.o"]),
+                             [*([row["object"] for row in self.rows[:2]]), "init/main.o"])
+            for mode, extras in (("minic-except-compressed", ["init/main.o"]),
+                                 ("gnu-plus-compressed", ["init/main.o", "init/main.o"]),
+                                 ("gnu-plus-compressed", [self.rows[0]["object"]]),
+                                 ("gnu-plus-compressed", ["../escape.o"]),
+                                 ("gnu-plus-compressed", ["not/a-real-owner.o"])):
+                with self.assertRaises(diag.DiagnosticError):
+                    diag.select_owners(self.rows, mode, extras)
         result = diag.verify_staged(self.rows, self.root / "staged", self.results,
                                     lambda path, row: None)
         self.assertEqual(result, self.minic_sha)
@@ -177,7 +187,7 @@ class DiagnosticFixture(unittest.TestCase):
         args = argparse.Namespace(gnu_work=self.work, snapshot_dir=self.root / "snap",
                                   minic=self.minic, staged=self.root / "staged",
                                   results=self.results, trial_dir=self.root / "trial",
-                                  mode="gnu-plus-compressed", link_timeout=900,
+                                  mode="gnu-plus-compressed", extra_owners_file=None, link_timeout=900,
                                   qemu_timeout=240, max_live_cc=32)
         original_run = subprocess.run
 
@@ -199,6 +209,13 @@ class DiagnosticFixture(unittest.TestCase):
             args.trial_dir = self.root / "second-trial"
             rc = diag.probe(args)
             self.assertEqual(rc, 0)
+            extras = self.root / "early-extra-owners.json"
+            put(extras, b'["init/main.o"]')
+            args.mode = "gnu-plus-compressed"
+            args.extra_owners_file = extras
+            args.trial_dir = self.root / "extra-trial"
+            extra_rc = diag.probe(args)
+            args.extra_owners_file = None
             drift_case["enabled"] = True
             args.mode = "gnu-plus-compressed"
             args.trial_dir = self.root / "drift-trial"
@@ -208,6 +225,7 @@ class DiagnosticFixture(unittest.TestCase):
             args.trial_dir = self.root / "link-fail-trial"
             fail_rc = diag.probe(args)
         self.assertEqual(rc, 0)
+        self.assertEqual(extra_rc, 0)
         self.assertEqual(drift_rc, 2)
         self.assertEqual(fail_rc, 2)
         record = diag.read_json(self.root / "trial/diagnostic-receipt.json")
@@ -219,6 +237,11 @@ class DiagnosticFixture(unittest.TestCase):
         self.assertEqual(inverse["verdict"], "DIAGNOSTIC_P0_MATCHES_GNU_NOT_ACCEPTANCE")
         self.assertEqual(inverse["selected_minic_owners"],
                          [row["object"] for row in self.rows[2:]])
+        extra = diag.read_json(self.root / "extra-trial/diagnostic-receipt.json")
+        self.assertEqual(extra["selected_minic_owner_count"], 3)
+        self.assertEqual(extra["extra_owner_selection"], ["init/main.o"])
+        self.assertEqual(extra["extra_owner_selection_sha256"], diag.digest(extras))
+        self.assertFalse(extra["strict_qualification_allowed"])
         self.assertTrue(inverse["original_official_build_restored"])
         drift = diag.read_json(self.root / "drift-trial/diagnostic-receipt.json")
         self.assertEqual(drift["verdict"], "DIAGNOSTIC_INCONCLUSIVE_OWNER_DRIFT")
