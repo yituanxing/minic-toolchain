@@ -21,6 +21,10 @@ bool minic_c0_inline_asm_input_value_supported(
            expression->value_category == MINIC_VALUE_LVALUE &&
            (minic_type_is_record(expression->type) ||
             minic_type_is_array(expression->type) ||
+            (length == 1U && constraint[0] == 'm' &&
+             minic_type_is_gnu_fixed_vector(expression->type) &&
+             minic_target_info_language_type_supported(
+                 target, MINIC_TYPE_BASE_GNU_FIXED_VECTOR)) ||
             minic_type_is_float(expression->type) ||
             minic_type_is_double(expression->type) ||
             minic_type_is_long_double(expression->type));

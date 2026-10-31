@@ -223,7 +223,8 @@ static const MinicTargetLanguageDescriptor minic_language_x86_64 = {
             .integer_model = &minic_lp64_signed_char_integer_model,
             .word_integer_rank = MINIC_INTEGER_RANK_LONG,
             .language_type_capabilities = MINIC_TARGET_LANG_EXTENDED_FLOAT_DECLARATIONS |
-                MINIC_TARGET_LANG_MS_X64_FUNCTION_POINTER_DECLARATIONS,
+                MINIC_TARGET_LANG_MS_X64_FUNCTION_POINTER_DECLARATIONS |
+                MINIC_TARGET_LANG_GNU_FIXED_VECTOR_STORAGE,
             .call_lowering_capabilities = MINIC_TARGET_CALL_MS_X64_FIXED_SCALAR,
             .gnu_sizeof_void_is_one = true,
             .gnu_sizeof_function_is_one = true,
@@ -416,6 +417,9 @@ bool minic_target_info_language_type_supported(const MinicTargetInfo *target,
     case MINIC_TYPE_BASE_AARCH64_INT8X16:
     case MINIC_TYPE_BASE_AARCH64_POLY8X16:
         required = MINIC_TARGET_LANG_FIXED_VECTOR128_STORAGE_DECLARATIONS;
+        break;
+    case MINIC_TYPE_BASE_GNU_FIXED_VECTOR:
+        required = MINIC_TARGET_LANG_GNU_FIXED_VECTOR_STORAGE;
         break;
     default:
         return false;

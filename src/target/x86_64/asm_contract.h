@@ -27,8 +27,19 @@ typedef enum MinicX86MachineAsmForm {
     MINIC_X86_MACHINE_ASM_RAW_CMPXCHG,
     MINIC_X86_MACHINE_ASM_TRYCAS,
     MINIC_X86_MACHINE_ASM_BITOPS,
-    MINIC_X86_MACHINE_ASM_ATOMIC_CC
+    MINIC_X86_MACHINE_ASM_ATOMIC_CC,
+    MINIC_X86_MACHINE_ASM_RAID6_SIMD,
+    MINIC_X86_MACHINE_ASM_KVM_MOVDQA
 } MinicX86MachineAsmForm;
+
+/* RAID6's fixed XMM/YMM/ZMM and opmask-register GNU templates. Every
+ * instruction and memory placeholder is parsed and independently checked at
+ * source qualification and machine emission. Unsupported forms fail closed. */
+bool minic_x86_64_raid6_simd_template(const char *, size_t, size_t);
+/* Linux KVM's nonvolatile 16-byte vector_size memory operands, intentionally
+ * disjoint from RAID6's byte-lvalue/volatile SIMD assembly contract. */
+unsigned int minic_x86_64_kvm_movdqa_form(const char *, size_t);
+bool minic_x86_64_kvm_movdqa_u32x4_type(MinicType);
 
 /* GNU atomic RMWcc accepts both LOCK/SMP-patch and bare variants with
  * identical opcodes; preserve the hardware/ELF side effect in FormId data. */
@@ -238,7 +249,9 @@ typedef enum MinicX86BitopsForm {
     /* Constant-bit original Linux arch_set_bit/arch_clear_bit: 8-bit
      * RMW cannot be widened without corrupting neighboring bytes. */
     MINIC_X86_BITOPS_LOCK_OR_BYTE,
-    MINIC_X86_BITOPS_LOCK_AND_BYTE
+    MINIC_X86_BITOPS_LOCK_AND_BYTE,
+    MINIC_X86_BITOPS_LOCK_XOR_BYTE,
+    MINIC_X86_BITOPS_LOCK_CHANGE
 } MinicX86BitopsForm;
 typedef struct MinicX86BitopsDesc {
     const char *opcode;

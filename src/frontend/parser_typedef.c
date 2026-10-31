@@ -395,6 +395,44 @@ static bool consume_typedef_attribute(MinicParser *parser,
     if (descriptor->kind == MINIC_ATTRIBUTE_DEPRECATED) {
         return true;
     }
+    if (descriptor->kind == MINIC_ATTRIBUTE_VECTOR_SIZE) {
+        const MinicDataLayout *layout;
+        MinicType vector;
+        size_t element_size;
+        size_t element_alignment;
+        size_t bytes = 0U;
+
+        if (!minic_target_info_language_type_supported(
+                parser->target_info, MINIC_TYPE_BASE_GNU_FIXED_VECTOR)) {
+            minic_parser_error(parser,
+                               "GNU vector_size storage is unsupported on this target");
+            return false;
+        }
+        if (!minic_parser_apply_alignment_attribute(
+                parser, attribute, "vector size", &bytes)) {
+            return false;
+        }
+        layout = minic_target_info_data_layout(parser->target_info);
+        if (layout == NULL ||
+            !minic_data_layout_type(layout, parser->program, *context->aliased_type,
+                                    &element_size, &element_alignment) ||
+            element_size == 0U || bytes % element_size != 0U ||
+            !minic_type_gnu_fixed_vector(*context->aliased_type, bytes, &vector)) {
+            minic_parser_error(parser,
+                               "GNU vector_size requires a positive power-of-two "
+                               "multiple of an integral or floating scalar element");
+            return false;
+        }
+        (void)element_alignment;
+        if (!minic_data_layout_type(layout, parser->program, vector,
+                                    &element_size, &element_alignment)) {
+            minic_parser_error(parser,
+                               "GNU vector_size width is unsupported by target storage layout");
+            return false;
+        }
+        *context->aliased_type = vector;
+        return true;
+    }
     if (descriptor->kind == MINIC_ATTRIBUTE_ALIGNED) {
         size_t alignment;
 

@@ -61,6 +61,7 @@ static const MinicDataLayout minic_x86_64_linux_data_layout_value = {
     .long_double_alignment = 16U,
     .float128_size = 16U,
     .float128_alignment = 16U,
+    .gnu_fixed_vector_max_storage_bytes = 16U,
 };
 
 /* AAPCS64 LP64, unsigned plain char, 16-byte IEEE quad long double.
@@ -457,6 +458,27 @@ static bool minic_data_layout_type_depth(const MinicDataLayout *layout,
             return false;
         *size = layout->fixed_vector128_size;
         *alignment = layout->fixed_vector128_alignment;
+        return minic_data_layout_apply_explicit_alignment(type, alignment);
+    }
+    if (minic_type_is_gnu_fixed_vector(type)) {
+        size_t scalar_size;
+        size_t scalar_alignment;
+        MinicType element;
+        if (layout->gnu_fixed_vector_max_storage_bytes == 0U ||
+            type.gnu_vector_bytes > layout->gnu_fixed_vector_max_storage_bytes ||
+            (type.gnu_vector_bytes & (type.gnu_vector_bytes - 1U)) != 0U)
+            return false;
+        element = minic_type_void();
+        element.base_kind = type.gnu_vector_element_kind;
+        element.integer_sign = type.integer_sign;
+        element.integer_rank = type.integer_rank;
+        element.is_plain_char = type.is_plain_char;
+        if (!minic_data_layout_type_depth(layout, program, element, depth + 1U,
+                                          &scalar_size, &scalar_alignment) ||
+            scalar_size == 0U || type.gnu_vector_bytes % scalar_size != 0U)
+            return false;
+        *size = type.gnu_vector_bytes;
+        *alignment = type.gnu_vector_bytes;
         return minic_data_layout_apply_explicit_alignment(type, alignment);
     }
     if (minic_type_is_array(type)) {

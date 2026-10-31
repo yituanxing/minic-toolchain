@@ -1527,7 +1527,8 @@ static bool emit_linux_bitops(
         ins->value.structured_inline_asm.operands;
     const size_t count=ins->value.structured_inline_asm.operand_count;
     const bool byte_rmw=form==MINIC_X86_BITOPS_LOCK_OR_BYTE||
-                        form==MINIC_X86_BITOPS_LOCK_AND_BYTE;
+                        form==MINIC_X86_BITOPS_LOCK_AND_BYTE||
+                        form==MINIC_X86_BITOPS_LOCK_XOR_BYTE;
     const size_t memindex=d&&d->memory_output?0U:d&&d->has_flag?1U:0U;
     const size_t bitindex=d&&d->memory_output&&d->has_flag?2U:
                          d&&d->memory_output?1U:d&&d->has_flag?2U:1U;
@@ -1537,6 +1538,8 @@ static bool emit_linux_bitops(
     bool sign;
     if(!out||!program||!target||!fn||!frame||!ins||!info||!b||!d||
        !info->has_memory_clobber||info->register_clobber_count||
+       info->explicit_memory_clobber !=
+          (!byte_rmw || form==MINIC_X86_BITOPS_LOCK_OR_BYTE) ||
        count!=(d->has_flag?3U:2U)||(d->is_locked&&!info->is_volatile))
         return false;
     for(i=0U;i<count;++i)
@@ -5699,6 +5702,10 @@ bool minic_x86_64_emit_structured_asm(
             return emit_linux_bitops(out, program, target, fn, frame, ins, info);
         case MINIC_X86_MACHINE_ASM_ATOMIC_CC:
             return emit_linux_atomic_cc(out, program, target, fn, frame, ins, info);
+        case MINIC_X86_MACHINE_ASM_RAID6_SIMD:
+            return minic_x86_64_emit_raid6_simd(out, fn, frame, ins, info);
+        case MINIC_X86_MACHINE_ASM_KVM_MOVDQA:
+            return minic_x86_64_emit_kvm_movdqa(out, fn, frame, ins, info);
         default:
             return false;
         }

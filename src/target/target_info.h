@@ -63,7 +63,10 @@ typedef enum MinicTargetLanguageCapability {
      * ABI. Supported only for explicitly registered target vector spellings. */
     MINIC_TARGET_LANG_FIXED_VECTOR128_STORAGE_DECLARATIONS = 1U << 2,
     /* Type-only EFI callback ABI marker; does NOT admit actual MS x64 CALL. */
-    MINIC_TARGET_LANG_MS_X64_FUNCTION_POINTER_DECLARATIONS = 1U << 3
+    MINIC_TARGET_LANG_MS_X64_FUNCTION_POINTER_DECLARATIONS = 1U << 3,
+    /* GNU vector_size declaration and object storage only: no SIMD ALU,
+     * scalar reinterpretation, or vector parameter/return ABI. */
+    MINIC_TARGET_LANG_GNU_FIXED_VECTOR_STORAGE = 1U << 4
 } MinicTargetLanguageCapability;
 
 /* Code-generation contracts, kept distinct from declaration-only language

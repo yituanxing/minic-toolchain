@@ -1,5 +1,6 @@
 #include "frontend/ast_verifier.h"
 #include "frontend/expression_semantics.h"
+#include "target/data_layout.h"
 
 #include <limits.h>
 #include <stdio.h>
@@ -55,7 +56,8 @@ type_is_valid(const MinicC0Program *program, const MinicTargetInfo *target, Mini
     if (type.base_kind != MINIC_TYPE_BASE_ENUM && type.enum_id != MINIC_ENUM_INVALID) {
         return false;
     }
-    if (type.is_plain_char && type.base_kind != MINIC_TYPE_BASE_INT) {
+    if (type.is_plain_char && type.base_kind != MINIC_TYPE_BASE_INT &&
+        type.base_kind != MINIC_TYPE_BASE_GNU_FIXED_VECTOR) {
         return false;
     }
     if (type.is_plain_char) {
@@ -69,6 +71,32 @@ type_is_valid(const MinicC0Program *program, const MinicTargetInfo *target, Mini
     }
 
     switch (type.base_kind) {
+    case MINIC_TYPE_BASE_GNU_FIXED_VECTOR: {
+        MinicType scalar = minic_type_void();
+        MinicType canonical;
+        MinicType stored_type = type;
+        size_t width;
+        size_t alignment;
+        scalar.base_kind = type.gnu_vector_element_kind;
+        scalar.integer_sign = type.integer_sign;
+        scalar.integer_rank = type.integer_rank;
+        scalar.is_plain_char = type.is_plain_char;
+        /* Validate the vector *pointee* object separately from a pointer's
+         * 8-byte representation. A `sse128_t *` must remain legal even on
+         * targets whose pointer size differs from the vector width. */
+        stored_type.pointer_depth = 0U;
+        stored_type.pointer_qualifiers = 0U;
+        stored_type.pointer_volatile_qualifiers = 0U;
+        return type.record_id == MINIC_RECORD_INVALID &&
+               type.array_type_id == MINIC_ARRAY_TYPE_INVALID &&
+               type.function_type_id == MINIC_FUNCTION_TYPE_INVALID &&
+               minic_target_info_language_type_supported(
+                   target, MINIC_TYPE_BASE_GNU_FIXED_VECTOR) &&
+               minic_type_gnu_fixed_vector(scalar, type.gnu_vector_bytes, &canonical) &&
+               minic_data_layout_type(minic_target_info_data_layout(target),
+                                      program, stored_type, &width, &alignment) &&
+               width == type.gnu_vector_bytes && alignment != 0U;
+    }
     case MINIC_TYPE_BASE_VOID:
         return type.record_id == MINIC_RECORD_INVALID &&
                type.array_type_id == MINIC_ARRAY_TYPE_INVALID &&
@@ -1597,6 +1625,15 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
             !array_type->is_query_materialized &&
             !(array_owners != NULL ? array_owners[index] != 0U
                                     : incomplete_array_has_semantic_owner(program, index))) {
+            if (getenv("MINIC_AST_VERIFY_TRACE") != NULL)
+                (void)fprintf(stderr,
+                    "AST_ORPHAN_ARRAY id=%zu element_base=%d element_array=%zu "
+                    "element_pointer_depth=%u program_arrays=%zu expressions=%zu aliases=%zu\n",
+                    index, (int)array_type->element_type.base_kind,
+                    array_type->element_type.array_type_id,
+                    array_type->element_type.pointer_depth,
+                    program->array_type_count, program->expression_count,
+                    program->type_alias_count);
             MINIC_AST_VERIFY_FAIL("incomplete array type has no semantic owner");
         }
         if (array_type->is_query_materialized &&

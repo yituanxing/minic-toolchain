@@ -65,7 +65,11 @@ typedef enum MinicTypeBaseKind {
     MINIC_TYPE_BASE_AARCH64_UINT8X16,
     MINIC_TYPE_BASE_AARCH64_UINT64X2,
     MINIC_TYPE_BASE_AARCH64_INT8X16,
-    MINIC_TYPE_BASE_AARCH64_POLY8X16
+    MINIC_TYPE_BASE_AARCH64_POLY8X16,
+    /* GNU vector_size(N) is a target-neutral C type identity, distinct
+     * from every target builtin vector. Storage does not grant SIMD ALU or
+     * by-value calling convention support. */
+    MINIC_TYPE_BASE_GNU_FIXED_VECTOR
 } MinicTypeBaseKind;
 
 /* Source-language declaration shape only: this neither approves an extension
@@ -121,7 +125,15 @@ typedef struct MinicType {
     MinicFunctionTypeId function_type_id;
     MinicEnumId enum_id;
     size_t explicit_alignment;
+    /* For GNU fixed vectors the element's scalar base kind and integer
+     * sign/rank/plain-char identity live alongside the total byte size.
+     * All ordinary C types leave these two fields zeroed. */
+    MinicTypeBaseKind gnu_vector_element_kind;
+    size_t gnu_vector_bytes;
 } MinicType;
+
+bool minic_type_gnu_fixed_vector(MinicType element_type, size_t bytes, MinicType *result);
+bool minic_type_is_gnu_fixed_vector(MinicType type);
 
 MinicType minic_type_void(void);
 MinicType minic_type_bool(void);

@@ -37,6 +37,8 @@ static MinicType minic_type_integer(MinicIntegerSign sign, MinicIntegerRank rank
     type.pointer_volatile_qualifiers = MINIC_TYPE_QUALIFIER_NONE;
     type.pointer_depth = 0U;
     type.explicit_alignment = 0U;
+    type.gnu_vector_element_kind = MINIC_TYPE_BASE_VOID;
+    type.gnu_vector_bytes = 0U;
     return type;
 }
 
@@ -56,7 +58,39 @@ static MinicType minic_type_scalar(MinicTypeBaseKind base_kind) {
     type.pointer_volatile_qualifiers = MINIC_TYPE_QUALIFIER_NONE;
     type.pointer_depth = 0U;
     type.explicit_alignment = 0U;
+    type.gnu_vector_element_kind = MINIC_TYPE_BASE_VOID;
+    type.gnu_vector_bytes = 0U;
     return type;
+}
+
+bool minic_type_gnu_fixed_vector(MinicType element_type, size_t bytes, MinicType *result) {
+    MinicType type;
+    if (result == NULL || element_type.pointer_depth != 0U ||
+        element_type.base_qualifiers != MINIC_TYPE_QUALIFIER_NONE ||
+        element_type.gnu_vector_bytes != 0U ||
+        bytes == 0U || (bytes & (bytes - 1U)) != 0U ||
+        !((element_type.base_kind == MINIC_TYPE_BASE_INT &&
+           element_type.integer_rank != MINIC_INTEGER_RANK_BOOL &&
+           element_type.integer_rank != MINIC_INTEGER_RANK_NONE) ||
+          element_type.base_kind == MINIC_TYPE_BASE_FLOAT ||
+          element_type.base_kind == MINIC_TYPE_BASE_DOUBLE ||
+          element_type.base_kind == MINIC_TYPE_BASE_LONG_DOUBLE)) {
+        return false;
+    }
+    type = minic_type_scalar(MINIC_TYPE_BASE_GNU_FIXED_VECTOR);
+    type.gnu_vector_element_kind = element_type.base_kind;
+    type.gnu_vector_bytes = bytes;
+    type.integer_sign = element_type.integer_sign;
+    type.integer_rank = element_type.integer_rank;
+    type.is_plain_char = element_type.is_plain_char;
+    *result = type;
+    return true;
+}
+
+bool minic_type_is_gnu_fixed_vector(MinicType type) {
+    return type.pointer_depth == 0U &&
+           type.base_kind == MINIC_TYPE_BASE_GNU_FIXED_VECTOR &&
+           type.gnu_vector_bytes != 0U;
 }
 
 static bool minic_type_same_unqualified_identity(MinicType left, MinicType right) {
@@ -74,7 +108,9 @@ static bool minic_type_same_unqualified_identity(MinicType left, MinicType right
            left.array_type_id == right.array_type_id &&
            left.function_type_id == right.function_type_id && left.enum_id == right.enum_id &&
            left.integer_sign == right.integer_sign && left.integer_rank == right.integer_rank &&
-           left.is_plain_char == right.is_plain_char && left.pointer_depth == right.pointer_depth;
+           left.is_plain_char == right.is_plain_char && left.pointer_depth == right.pointer_depth &&
+           left.gnu_vector_element_kind == right.gnu_vector_element_kind &&
+           left.gnu_vector_bytes == right.gnu_vector_bytes;
 }
 
 static bool minic_type_pointer_qualification_compatible(MinicType target, MinicType source) {

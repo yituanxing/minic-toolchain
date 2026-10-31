@@ -33,6 +33,9 @@ typedef struct MinicDataLayout {
      * explicitly implemented source vector layout; no register ABI implied. */
     size_t fixed_vector128_size;
     size_t fixed_vector128_alignment;
+    /* Maximum GNU vector_size object width admitted for storage. This is
+     * separate from target builtin NEON declarations and SIMD value ABI. */
+    size_t gnu_fixed_vector_max_storage_bytes;
 } MinicDataLayout;
 
 bool minic_data_layout_is_little_endian(const MinicDataLayout *layout);

@@ -65,6 +65,11 @@ bool minic_x86_64_typed_machine_form_matches_template(
         return form != 0U && variant ==
             (form | (minic_x86_64_atomic_cc_locked_form(text, length)
                 ? MINIC_X86_ATOMIC_CC_LOCK_VARIANT : 0U));
+    case MINIC_X86_MACHINE_ASM_RAID6_SIMD:
+        return minic_x86_64_raid6_simd_template(text, length, variant);
+    case MINIC_X86_MACHINE_ASM_KVM_MOVDQA:
+        form = minic_x86_64_kvm_movdqa_form(text, length);
+        return form != 0U && variant == form;
     case MINIC_X86_MACHINE_ASM_UNWIND_CONTEXT:
         return variant == 0U &&
             minic_x86_64_linux_unwind_context_form(text, length);
@@ -1095,6 +1100,93 @@ static bool x86_linux_i915_movntdqa_source(
     }
     contract->operand_count = 2U;
     contract->implicit_memory_effect = true;
+    return true;
+}
+
+/* Linux lib/raid6 fixed XMM/YMM/ZMM register statements. The exact opcode
+ * syntax is owned by raid6_simd.c, never parsed by target-neutral Core.
+ * Both GNU basic asm (zero operands) and extended asm with up to eight real
+ * memory addresses have explicit hardware side effects. */
+static bool x86_linux_raid6_simd_source(
+    const MinicC0Program *program, const MinicInlineAsm *source,
+    MinicTargetInlineAsmContract *contract) {
+    size_t i, count;
+    if (!program || !source || !contract || !source->is_volatile ||
+        source->is_goto || source->label_count ||
+        source->register_clobber_count ||
+        (source->clobber_count != 0U && !source->has_memory_clobber))
+        return false;
+    count = source->output_count + source->input_count;
+    if (count > 8U || !minic_x86_64_raid6_simd_template(
+            source->template_text, source->template_length, count))
+        return false;
+    for (i = 0U; i < count; ++i) {
+        const bool output = i < source->output_count;
+        const MinicInlineAsmOperand *operand = output
+            ? &source->outputs[i]
+            : &source->inputs[i - source->output_count];
+        const MinicExpression *value = minic_c0_program_expression(
+            program, operand->expression);
+        if (!target_constraint_is(operand, output ? "=m" : "m") ||
+            !value || value->value_category != MINIC_VALUE_LVALUE)
+            return false;
+        contract->kinds[i] = output
+            ? MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT
+            : MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
+    }
+    contract->operand_count = count;
+    contract->target_machine_form_variant = (uint32_t)count;
+    contract->implicit_memory_effect = true;
+    return true;
+}
+
+unsigned int minic_x86_64_kvm_movdqa_form(const char *text, size_t length) {
+    unsigned int reg;
+    for (reg = 0U; reg < 16U; ++reg) {
+        char load[40], store[40];
+        const int l = snprintf(load, sizeof(load), "movdqa%%0,%%%%xmm%u", reg);
+        const int s = snprintf(store, sizeof(store), "movdqa%%%%xmm%u,%%0", reg);
+        if (l <= 0 || s <= 0 || (size_t)l >= sizeof(load) ||
+            (size_t)s >= sizeof(store)) return 0U;
+        if (x86_linux_compact_asm_equals(text, length, load)) return reg + 1U;
+        if (x86_linux_compact_asm_equals(text, length, store)) return reg + 17U;
+    }
+    return 0U;
+}
+
+/* KVM's `sse128_t` is a genuine GNU `u32 vector_size(16)` object: x86's
+ * data layout owns sizeof/alignof=16, while Linux -mno-sse forbids implicit
+ * SIMD code. This admission permits only the fixed-register MOVDQA memory
+ * load/store, not arithmetic or vector by-value ABI. */
+static bool x86_linux_kvm_movdqa_source(
+    const MinicC0Program *program, const MinicInlineAsm *src,
+    MinicTargetInlineAsmContract *contract) {
+    const unsigned int form = src ? minic_x86_64_kvm_movdqa_form(
+        src->template_text, src->template_length) : 0U;
+    const bool read = form <= 16U;
+    const MinicInlineAsmOperand *operand;
+    const MinicExpression *expr;
+    MinicType type;
+    if (!program || !src || !contract || !form || src->is_volatile ||
+        src->is_goto || src->label_count || src->has_memory_clobber ||
+        src->clobber_count || src->register_clobber_count ||
+        src->input_count != (read ? 1U : 0U) ||
+        src->output_count != (read ? 0U : 1U) ||
+        (read ? !src->inputs : !src->outputs)) return false;
+    operand = read ? &src->inputs[0] : &src->outputs[0];
+    if (!operand || !target_constraint_is(operand, read ? "m" : "=m"))
+        return false;
+    expr = minic_c0_program_expression(program, operand->expression);
+    if (!expr || expr->value_category != MINIC_VALUE_LVALUE ||
+        (!read && minic_type_is_const(expr->type)) ||
+        !minic_type_unqualified(expr->type, &type) ||
+        !minic_x86_64_kvm_movdqa_u32x4_type(type)) return false;
+    contract->operand_count = 1U;
+    contract->kinds[0] = read
+        ? MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT
+        : MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT;
+    contract->target_machine_form_variant = form;
+    contract->implicit_memory_effect = !read;
     return true;
 }
 
@@ -5622,7 +5714,13 @@ static const struct {
      {"orb",1,0,1,1}},
     {".pushsection.smp_locks,\"a\".balign4.long671f-..popsection671:lock;andb%b1,%0",
      ".pushsection.smp_locks,\"a\".balign4.long671f-..popsection671:lock;andb%b1,%0",
-     {"andb",1,0,1,1}}
+     {"andb",1,0,1,1}},
+    {".pushsection.smp_locks,\"a\".balign4.long671f-..popsection671:lock;xorb%b1,%0",
+     ".pushsection.smp_locks,\"a\".balign4.long671f-..popsection671:lock;xorb%b1,%0",
+     {"xorb",1,0,1,1}},
+    {".pushsection.smp_locks,\"a\".balign4.long671f-..popsection671:lock;btcq%1,%0",
+     ".pushsection.smp_locks,\"a\".balign4.long671f-..popsection671:lock;btcq%1,%0",
+     {"btcq",1,0,0,1}}
 };
 MinicX86BitopsForm minic_x86_64_linux_bitops_form(
     const char *text,size_t length) {
@@ -5658,7 +5756,8 @@ static bool x86_linux_bitops_source(
             src->template_text,src->template_length):MINIC_X86_BITOPS_NONE;
     const MinicX86BitopsDesc *desc=minic_x86_64_bitops_description(form);
     const bool byte_rmw = form==MINIC_X86_BITOPS_LOCK_OR_BYTE ||
-                          form==MINIC_X86_BITOPS_LOCK_AND_BYTE;
+                          form==MINIC_X86_BITOPS_LOCK_AND_BYTE ||
+                          form==MINIC_X86_BITOPS_LOCK_XOR_BYTE;
     const bool needs_memory_clobber = !byte_rmw ||
                                       form==MINIC_X86_BITOPS_LOCK_OR_BYTE;
     const MinicInlineAsmOperand *mem,*bit,*flag;
@@ -8746,6 +8845,8 @@ static const MinicX86SourceQualifierEntry minic_x86_source_qualifiers[] = {
     X86_SOURCE(x86_linux_rep_string_io_source),
     X86_SOURCE(x86_linux_iomem_copy_source),
     X86_SOURCE(x86_linux_i915_movntdqa_source),
+    X86_SOURCE_TYPED(x86_linux_raid6_simd_source, RAID6_SIMD),
+    X86_SOURCE_TYPED(x86_linux_kvm_movdqa_source, KVM_MOVDQA),
     X86_SOURCE(x86_linux_flushcache_copy_source),
     X86_SOURCE_TYPED(x86_linux_atomic_xchg_source, ATOMIC_XCHG),
     X86_SOURCE(x86_linux_pvclock_scale_source),

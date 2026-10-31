@@ -1241,6 +1241,18 @@ bool core_inline_asm_numeric_template(const MinicInlineAsm *source,
     if (normalized == NULL) {
         return false;
     }
+    /* GNU basic asm has no operand substitution: `%xmm0` is a literal
+     * register, not the extended-asm `%x` modifier on an operand. This path
+     * is only reached after a target has qualified the *entire* template;
+     * no input/output/goto operand may bypass the normal GNU validation. */
+    if (source->output_count == 0U && source->input_count == 0U &&
+        !source->is_goto && source->label_count == 0U) {
+        memcpy(normalized, source->template_text, source->template_length);
+        normalized[source->template_length] = '\0';
+        *template_out = normalized;
+        *template_length_out = source->template_length;
+        return true;
+    }
     cursor = 0U;
     output_length = 0U;
     while (cursor < source->template_length) {

@@ -173,7 +173,13 @@ bool minic_x86_64_two_gp_record(const MinicC0Program *program,
         return false;
     return minic_common_aggregate_storage_shape(
                program, target->data_layout, type, 8U, &shape) &&
-           shape.bytes == 16U && shape.alignment <= 8U &&
+           /* A 12-byte all-INTEGER aggregate occupies two SysV eightbytes:
+            * the second register has only four actual object bytes.  Native
+            * ingress/egress must use 32-bit loads/stores for that tail.  Do
+            * not silently admit arbitrary 9..15-byte shapes until their
+            * partial-eightbyte transport is implemented. */
+           (shape.bytes == 12U || shape.bytes == 16U) &&
+           shape.alignment <= 8U &&
            x86_integer_record_tree(program, target, type, 0U, 16U, 0U);
 }
 

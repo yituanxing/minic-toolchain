@@ -660,20 +660,30 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
                 return false;
             return x86_one_gp_store(out, location->record_bytes);
         }
+        if (location->record_bytes != 12U && location->record_bytes != 16U)
+            return false;
         if (!location->on_stack) {
             if (location->gp_index >= abi->gp_argument_count - 1U) return false;
-            return fprintf(out,
-                "  movq %s, 0(%%r10)\n"
-                "  movq %s, 8(%%r10)\n",
-                abi->gp_arguments[location->gp_index],
-                abi->gp_arguments[location->gp_index + 1U]) >= 0;
+            if (fprintf(out, "  movq %s, 0(%%r10)\n",
+                        abi->gp_arguments[location->gp_index]) < 0)
+                return false;
+            if (location->record_bytes == 12U)
+                return fprintf(out,
+                    "  movq %s, %%rax\n"
+                    "  movl %%eax, 8(%%r10)\n",
+                    abi->gp_arguments[location->gp_index + 1U]) >= 0;
+            return fprintf(out, "  movq %s, 8(%%r10)\n",
+                           abi->gp_arguments[location->gp_index + 1U]) >= 0;
         }
+        if (fprintf(out,
+            "  movq %zu(%%rbp), %%rax\n"
+            "  movq %%rax, 0(%%r10)\n",
+            16U + location->stack_index * 8U) < 0)
+            return false;
         return fprintf(out,
-            "  movq %zu(%%rbp), %%rax\n"
-            "  movq %%rax, 0(%%r10)\n"
-            "  movq %zu(%%rbp), %%rax\n"
-            "  movq %%rax, 8(%%r10)\n",
-            16U + location->stack_index * 8U,
+            location->record_bytes == 12U
+              ? "  movl %zu(%%rbp), %%eax\n  movl %%eax, 8(%%r10)\n"
+              : "  movq %zu(%%rbp), %%rax\n  movq %%rax, 8(%%r10)\n",
             24U + location->stack_index * 8U) >= 0;
     }
     case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS:
@@ -1461,10 +1471,19 @@ bool minic_x86_64_emit_core_terminator(FILE *out,
             } else if (minic_x86_64_two_gp_record(program, target, fn->return_type)) {
                 const MinicX86AbiRegisters *abi = minic_x86_64_abi_registers(
                     MINIC_CALLING_CONVENTION_DEFAULT);
+                size_t alignment;
                 if (abi == NULL || abi->gp_result_count < 2U ||
-                    fprintf(out, "  movq 0(%%r11), %s\n"
-                                 "  movq 8(%%r11), %s\n",
-                            abi->gp_results[0], abi->gp_results[1]) < 0)
+                    !minic_data_layout_type(target->data_layout, program,
+                                            fn->return_type, &bytes, &alignment) ||
+                    (bytes != 12U && bytes != 16U) ||
+                    fprintf(out, "  movq 0(%%r11), %s\n",
+                            abi->gp_results[0]) < 0)
+                    return false;
+                if (bytes == 12U) {
+                    if (fprintf(out, "  movl 8(%%r11), %%edx\n") < 0)
+                        return false;
+                } else if (fprintf(out, "  movq 8(%%r11), %s\n",
+                                   abi->gp_results[1]) < 0)
                     return false;
             } else if (frame->has_sret && frame->sret_save_offset != 0U &&
                        minic_x86_64_memory_result_record(

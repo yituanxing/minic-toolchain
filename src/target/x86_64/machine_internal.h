@@ -8,6 +8,12 @@ bool x86_one_gp_load(FILE *, size_t);
 bool x86_one_gp_store(FILE *, size_t);
 bool x86_normalize(FILE *, const MinicC0Program *, const MinicTargetInfo *, MinicType);
 bool x86_value_load(FILE *, const MinicX86Frame *, MinicCoreValueId, const char *);
+bool minic_x86_64_emit_raid6_simd(FILE *, const MinicCoreFunction *,
+    const MinicX86Frame *, const MinicCoreInstruction *,
+    const MinicCoreInlineAsm *);
+bool minic_x86_64_emit_kvm_movdqa(FILE *, const MinicCoreFunction *,
+    const MinicX86Frame *, const MinicCoreInstruction *,
+    const MinicCoreInlineAsm *);
 bool x86_value_store(FILE *, const MinicX86Frame *, MinicCoreValueId);
 bool x86_x87_load(FILE *, const MinicX86Frame *, MinicCoreValueId);
 bool x86_x87_store(FILE *, const MinicX86Frame *, MinicCoreValueId);

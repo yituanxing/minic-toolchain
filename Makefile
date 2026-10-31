@@ -218,6 +218,7 @@ MINIC_SOURCES := \
 	src/target/x86_64/codegen.c \
 	src/target/x86_64/machine_emit.c \
 	src/target/x86_64/asm_contract.c \
+	src/target/x86_64/raid6_simd.c \
 	src/target/x86_64/machine_asm.c \
 	src/target/x86_64/machine_support.c \
 	src/target/x86_64/machine_fp.c \
