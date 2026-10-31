@@ -33,3 +33,4 @@
 # GENETLINK_WARN_GUARD_CORE_FACT_INVALIDATION_FRESH_THREE_ISA=1
 # FIVE_ISA_EXACT_HEAD_FRESH_THREE_ISA_WITH_RV32_GNU_GOLDEN_PR_REPLAY=1
 # FIVE_ISA_RV32_GOT_PIC_VDSO_PREPARE_AND_X86_PIE_BUSYBOX_RECHECK=1
+# 2026-10-31 explicit final five-target acceptance: fresh 3x7 MiniC C + GNU AS/LD + same-Image QEMU P0/P1; PR [minic-full] independently executes full RV32 ELF32, RV64 complete Linux is certified separately; no partial/reuse flags.
