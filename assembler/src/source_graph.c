@@ -40,15 +40,16 @@ static bool validate_user_source_private_marker(MiniAs *as,
 
 /* GAS block comments are a physical source lexical state, independent of
  * ISA operand parsing and stable across physical input lines. */
-static void strip_gnu_c_comments(MiniAs *as, char *line) {
+static void strip_gnu_c_comments(const MiniAsTargetOps *target, char *line,
+                                 bool *comment_active) {
     char quote='\0';
     bool escaped=false;
     size_t i;
     for(i=0U;line[i]!='\0';++i) {
-        if(as->source->c_comment_active) {
+        if(*comment_active) {
             if(line[i]=='*' && line[i+1U]=='/') {
                 line[i++]=' ';line[i]=' ';
-                as->source->c_comment_active=false;
+                *comment_active=false;
             }else if(line[i]!='\n' && line[i]!='\r')line[i]=' ';
             continue;
         }
@@ -61,13 +62,13 @@ static void strip_gnu_c_comments(MiniAs *as, char *line) {
         if(line[i]=='"' || line[i]=='\'') {
             quote=line[i];continue;
         }
-        if((as->target->comment_prefix=='/' &&
+        if((target->comment_prefix=='/' &&
             line[i]=='/' && line[i+1U]=='/') ||
-           (as->target->comment_prefix!='/' &&
-            line[i]==as->target->comment_prefix))
+           (target->comment_prefix!='/' &&
+            line[i]==target->comment_prefix))
             return;
         if(line[i]=='/' && line[i+1U]=='*') {
-            as->source->c_comment_active=true;
+            *comment_active=true;
             line[i++]=' ';line[i]=' ';
         }
     }
@@ -81,6 +82,7 @@ bool minias_source_graph_load_physical(MiniAs *as, const char *path,
     char linebuf[65536];
     size_t line_no=0U;
     bool ok=true;
+    bool comment_active=false;
     MiniAsSourceFrame *frame;
     if(graph==NULL || graph->file_reads!=0U ||
        graph->physical.lines!=NULL) {
@@ -93,7 +95,6 @@ bool minias_source_graph_load_physical(MiniAs *as, const char *path,
         return false;
     }
     frame=&graph->physical;
-    as->source->c_comment_active=false;
     frame->kind=MINIAS_SOURCE_FRAME_FILE;
     while(fgets(linebuf,sizeof(linebuf),file)!=NULL) {
         size_t len;
@@ -102,7 +103,7 @@ bool minias_source_graph_load_physical(MiniAs *as, const char *path,
         if(!validate_user_source_private_marker(as,linebuf,line_no)) {
             ok=false;break;
         }
-        strip_gnu_c_comments(as,linebuf);
+        strip_gnu_c_comments(as->target,linebuf,&comment_active);
         len=strlen(linebuf);
         if(len==sizeof(linebuf)-1U && linebuf[len-1U]!='\n') {
             minias_set_error(as,"line-too-long:line=%zu",line_no);
@@ -129,7 +130,7 @@ bool minias_source_graph_load_physical(MiniAs *as, const char *path,
         ok=false;
     }
     fclose(file);
-    if(ok && as->source->c_comment_active) {
+    if(ok && comment_active) {
         minias_set_error(as,"unterminated-gnu-block-comment");
         ok=false;
     }

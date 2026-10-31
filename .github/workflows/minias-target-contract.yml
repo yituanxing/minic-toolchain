@@ -99,6 +99,13 @@ jobs:
           command -v as
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-mc-source-stable-rebind.sh
+      - name: GNU SourceContext replay, macro lifetime and source-site identity
+        run: |
+          command -v as
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-source-context-composite-gnu.sh
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-source-macro-lifetime-gnu.sh
       - name: GNU RV64I 160-typed-fragment relaxation stress
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=riscv \

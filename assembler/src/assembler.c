@@ -4108,6 +4108,7 @@ bool minias_statement_process(MiniAs *as, char *text, size_t line) {
     char *args;
     uint32_t size;
     bool had_leading_label=false;
+    bool source_handled=false;
     MiniAsCommonDirectiveKind directive_kind=MINIAS_COMMON_DIRECTIVE_OTHER;
 
     text = minias_trim(text);
@@ -4125,89 +4126,11 @@ bool minias_statement_process(MiniAs *as, char *text, size_t line) {
     if(text[0]=='#' && (text[1]=='#' ||
                         isspace((unsigned char)text[1])))return true;
 
-    /* GNU .ifb/.ifnb compare the *expanded* argument against blank,
-     * without any target ISA grammar; shared conditional stack owns them. */
-    if((strncmp(text,".ifb",4U)==0 ||
-        strncmp(text,".ifnb",5U)==0) &&
-       ((text[3]=='b' && (text[4]=='\0' ||
-                         isspace((unsigned char)text[4]))) ||
-        (text[3]=='n' && text[4]=='b' &&
-         (text[5]=='\0' || isspace((unsigned char)text[5]))))) {
-        bool nonblank=text[3]=='n';
-        const char *arg=text+(nonblank?5U:4U);
-        while(isspace((unsigned char)*arg))++arg;
-        return minias_source_push_conditional_value(as,nonblank?*arg!='\0':*arg=='\0');
-    }
-    if ((strncmp(text,".ifeqs",6U)==0 ||
-         strncmp(text,".ifnes",6U)==0) &&
-        (text[6]=='\0' || isspace((unsigned char)text[6]))) {
-        bool unequal=text[3]=='n';
-        return minias_source_push_conditional_strings(as,minias_trim(text+6U),
-                                        unequal,true,line);
-    }
-    if ((strncmp(text,".ifc",4U)==0 ||
-         strncmp(text,".ifnc",5U)==0) &&
-        ((text[3]=='c' && (text[4]=='\0' ||
-                          isspace((unsigned char)text[4]))) ||
-         (text[3]=='n' && text[4]=='c' &&
-          (text[5]=='\0' || isspace((unsigned char)text[5]))))) {
-        bool unequal=text[3]=='n';
-        return minias_source_push_conditional_strings(as,
-                 minias_trim(text+(unequal?5:4)),unequal,false,line);
-    }
-    /* GNU .ifnotdef and .ifndef are aliases. */
-    if ((strncmp(text,".ifdef",6U)==0 &&
-         (text[6]=='\0' || isspace((unsigned char)text[6]))) ||
-        (strncmp(text,".ifndef",7U)==0 &&
-         (text[7]=='\0' || isspace((unsigned char)text[7]))) ||
-        (strncmp(text,".ifnotdef",9U)==0 &&
-         (text[9]=='\0' || isspace((unsigned char)text[9])))) {
-        bool negate=text[3]=='n';
-        unsigned width=negate?(text[4]=='o'?9U:7U):6U;
-        return minias_source_push_conditional_defined(as,minias_trim(text+width),
-                                        negate,line);
-    }
-    {
-        static const char *const numeric_forms[]={
-            ".ifeq",".ifne",".iflt",".ifle",".ifgt",".ifge"
-        };
-        unsigned i;
-        for(i=0U;i<sizeof(numeric_forms)/sizeof(numeric_forms[0]);++i) {
-            const char *name=numeric_forms[i];
-            size_t width=strlen(name);
-            if(strncmp(text,name,width)==0 &&
-               (text[width]=='\0' || isspace((unsigned char)text[width]))) {
-                int64_t literal;
-                if (!minias_eval_i64_expression(text+width,&literal))
-                    as->layout_sensitive=true;
-                return minias_source_push_conditional_numeric(as,
-                           minias_trim(text+width),name,line);
-            }
-        }
-    }
-    if (strncmp(text, ".if", 3U) == 0 &&
-        (text[3] == '\0' || isspace((unsigned char)text[3]))) {
-        /* A literal condition is a lexical choice.  Symbol/dot-dependent
-         * control flow can change its emitted Fragment set after layout. */
-        int64_t literal;
-        if (!minias_eval_i64_expression(text+3U,&literal))
-            as->layout_sensitive = true;
-        return minias_source_push_conditional(as, minias_trim(text + 3), line);
-    }
-    if (strncmp(text, ".elseif", 7U) == 0 &&
-        (text[7] == '\0' || isspace((unsigned char)text[7]))) {
-        int64_t literal;
-        if (!minias_eval_i64_expression(text+7U,&literal))
-            as->layout_sensitive=true;
-        return minias_source_elseif_conditional(as,minias_trim(text+7U),line);
-    }
-    if (strcmp(text, ".else") == 0) {
-        return minias_source_else_conditional(as, line);
-    }
-    if (strcmp(text, ".endif") == 0) {
-        return minias_source_pop_conditional(as, line);
-    }
-    if (!as->source->conditional_active) {
+    /* Conditional grammar and stack state belong to source expansion.
+     * Dispatch before labels so inactive arms cannot define symbols. */
+    if(!minias_source_try_conditional(as,text,line,&source_handled))return false;
+    if(source_handled)return true;
+    if (!minias_source_conditional_active(as)) {
         return true;
     }
 
@@ -4327,47 +4250,11 @@ bool minias_statement_process(MiniAs *as, char *text, size_t line) {
         return ok;
     }
 
-    /*
-     * Linux arch/x86/include/asm/asm.h declares extable_type_reg with
-     * .macro and releases it via .purgem. Without the purge, the next
-     * definition is rejected or stale parameters leak into a new expansion.
-     * GNU permits purging a non-existing name (with a warning), so keep it
-     * idempotent. Don't invalidate an active expansion's borrowed body.
-     */
-    if(!strcmp(op,".purgem")) {
-        char *name=minias_trim(args);
-        if(!*name || strpbrk(name,", \t\r")!=NULL) {
-            minias_set_error(as,"bad-directive:.purgem:%s:line=%zu",name,line);
-            return false;
-        }
-        minias_macro_purge(as->source,name);
-        return true;
-    }
-    {
-        MiniAsMacro *macro = minias_macro_find(as, op);
-        if (macro != NULL) {
-            return minias_macro_expand(as, macro, args, line);
-        }
-        /* GAS accepts a single macro argument next to the mnemonic as
-         * MACRO(symbol), where the parentheses are LITERAL argument text.
-         * Linux x86 STACK_FRAME_NON_STANDARD(clear_bhb_loop) uses exactly
-         * this spelling. Do not strip the parentheses (GNU does not), or
-         * turn an unknown ISA opcode with brackets into a macro. */
-        if(args[0]=='\0' && op[0]!='.') {
-            char *open=strchr(op,'(');
-            size_t length=strlen(op);
-            if(open!=NULL && open>op && length>1U &&
-               op[length-1U]==')') {
-                *open='\0';
-                macro=minias_macro_find(as,op);
-                /* Registry lookup needs the temporary NUL, but GNU's
-                 * actual operand starts at the ORIGINAL '(' character. */
-                *open='(';
-                if(macro!=NULL)
-                    return minias_macro_expand(as,macro,open,line);
-            }
-        }
-    }
+    /* Macro lookup/expansion is a source-layer action, before Target
+     * directives so defined macro names keep their GNU precedence. */
+    if(!minias_source_try_macro_invocation(as,op,args,line,&source_handled))
+        return false;
+    if(source_handled)return true;
 
     if (strcmp(op, ".set") == 0 || strcmp(op, ".equ") == 0) {
         const char *comma = strchr(args, ',');
@@ -4544,21 +4431,11 @@ bool minias_statement_process(MiniAs *as, char *text, size_t line) {
         if (strcmp(op, ".popsection") == 0) {
             return pop_section(as, line);
         }
-        if (strcmp(op,".altmacro")==0 || strcmp(op,".noaltmacro")==0) {
-            if(*args!='\0') {
-                minias_set_error(as,"bad-directive:%s:line=%zu",op,line);
-                return false;
-            }
-            as->source->altmacro_active=strcmp(op,".altmacro")==0;
-            return true;
-        }
+        if(!minias_source_try_control_directive(as,op,args,line,
+                                                &source_handled))return false;
+        if(source_handled)return true;
         if (strcmp(op, ".ident") == 0) {
             return handle_ident(as,args,line);
-        }
-        if (strcmp(op, ".end") == 0) {
-            /* GAS ignores a trailing .end operand but stops the stream. */
-            as->source->source_ended=true;
-            return true;
         }
         if (strcmp(op, ".align") == 0 || strcmp(op, ".balign") == 0 ||
             strcmp(op, ".p2align") == 0) {

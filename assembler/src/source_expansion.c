@@ -44,7 +44,7 @@ static void strip_comment(char *line, const MiniAsTargetOps *target) {
 /* A purged GNU macro owns exactly the resources freed by assembler exit.
  * Keep a single lifetime owner so later redefinitions never retain stale
  * macro parameter/body pointers in the symbol-independent Common layer. */
-void minias_macro_destroy(MiniAsMacro *macro) {
+static void minias_macro_destroy(MiniAsMacro *macro) {
     size_t i;
     free(macro->name);
     for(i=0U;i<macro->param_count;++i) {
@@ -154,7 +154,7 @@ static bool evaluate_if_expression(MiniAs *as,const char *text,bool *result) {
     free(copy);return true;
 }
 
-bool minias_source_push_conditional_value(MiniAs *as,bool condition_true) {
+static bool minias_source_push_conditional_value(MiniAs *as,bool condition_true) {
     MiniAsConditional *conditional;
     if (!minias_grow_array((void **)&as->source->conditionals,
                     &as->source->conditional_capacity,
@@ -187,7 +187,7 @@ static bool evaluate_conditional_with_labels(MiniAs *as,const char *args,
     free(expanded);return valid;
 }
 
-bool minias_source_push_conditional(MiniAs *as, const char *args, size_t line) {
+static bool minias_source_push_conditional(MiniAs *as, const char *args, size_t line) {
     bool condition_true;
     /* False parent: keep the nested conditional frame, but GNU GAS
      * does not resolve symbols in branches that cannot be reached. */
@@ -202,7 +202,7 @@ bool minias_source_push_conditional(MiniAs *as, const char *args, size_t line) {
 
 /* All numeric GNU .if* variants have the same Common conditional frame:
  * skip unreachable parents without evaluating unresolved expressions. */
-bool minias_source_push_conditional_numeric(MiniAs *as,const char *args,
+static bool minias_source_push_conditional_numeric(MiniAs *as,const char *args,
                                      const char *directive,size_t line) {
     int64_t value;
     bool active;
@@ -224,7 +224,7 @@ bool minias_source_push_conditional_numeric(MiniAs *as,const char *args,
  * not relocation references, global declarations or future labels.
  * Share the exact same conditional stack as .if/.ifc/.elseif and do
  * not create symbol records while checking existence. */
-bool minias_source_push_conditional_defined(MiniAs *as,const char *args,
+static bool minias_source_push_conditional_defined(MiniAs *as,const char *args,
                                       bool negate,size_t line) {
     const char *p=args;
     MiniAsSymbol *symbol;
@@ -256,7 +256,7 @@ bool minias_source_push_conditional_defined(MiniAs *as,const char *args,
  * is a valid empty string, a quoted comma is still a separator, and a
  * comma in the second operand belongs to that operand. Macro expansion
  * happens before this common conditional stack is evaluated. */
-bool minias_source_push_conditional_strings(MiniAs *as,const char *args,
+static bool minias_source_push_conditional_strings(MiniAs *as,const char *args,
                                      bool unequal,bool double_quoted,
                                      size_t line) {
     char *copy=minias_strdup(args),*lhs,*rhs,*comma;
@@ -302,7 +302,7 @@ malformed:
 /* GAS .elseif shares the same frame as .if/.else. Once an
  * earlier arm wins, do not evaluate later arms: symbols there need
  * not exist, and ignored nested branches must not leak statements. */
-bool minias_source_elseif_conditional(MiniAs *as,const char *args,size_t line) {
+static bool minias_source_elseif_conditional(MiniAs *as,const char *args,size_t line) {
     MiniAsConditional *conditional;
     bool condition=false;
     if(as->source->conditional_count==0U) {
@@ -329,7 +329,7 @@ bool minias_source_elseif_conditional(MiniAs *as,const char *args,size_t line) {
     return true;
 }
 
-bool minias_source_else_conditional(MiniAs *as, size_t line) {
+static bool minias_source_else_conditional(MiniAs *as, size_t line) {
     MiniAsConditional *conditional;
 
     if (as->source->conditional_count == 0U) {
@@ -349,7 +349,7 @@ bool minias_source_else_conditional(MiniAs *as, size_t line) {
     return true;
 }
 
-bool minias_source_pop_conditional(MiniAs *as, size_t line) {
+static bool minias_source_pop_conditional(MiniAs *as, size_t line) {
     MiniAsConditional conditional;
 
     if (as->source->conditional_count == 0U) {
@@ -359,6 +359,96 @@ bool minias_source_pop_conditional(MiniAs *as, size_t line) {
     conditional = as->source->conditionals[--as->source->conditional_count];
     as->source->conditional_active = conditional.parent_active;
     return true;
+}
+
+/* Conditional dispatch belongs to the same pass-local source owner as its
+ * stack, including the lexical-vs-layout-sensitive replay decision.  The
+ * ordinary statement lowerer calls this before parsing labels/opcodes. */
+bool minias_source_try_conditional(MiniAs *as,char *text,size_t line,
+                                   bool *handled) {
+    *handled=true;
+    if((strncmp(text,".ifb",4U)==0 ||
+        strncmp(text,".ifnb",5U)==0) &&
+       ((text[3]=='b' && (text[4]=='\0' ||
+                         isspace((unsigned char)text[4]))) ||
+        (text[3]=='n' && text[4]=='b' &&
+         (text[5]=='\0' || isspace((unsigned char)text[5]))))) {
+        bool nonblank=text[3]=='n';
+        const char *arg=text+(nonblank?5U:4U);
+        while(isspace((unsigned char)*arg))++arg;
+        return minias_source_push_conditional_value(as,
+                                  nonblank?*arg!='\0':*arg=='\0');
+    }
+    if ((strncmp(text,".ifeqs",6U)==0 ||
+         strncmp(text,".ifnes",6U)==0) &&
+        (text[6]=='\0' || isspace((unsigned char)text[6]))) {
+        bool unequal=text[3]=='n';
+        return minias_source_push_conditional_strings(as,minias_trim(text+6U),
+                                                      unequal,true,line);
+    }
+    if ((strncmp(text,".ifc",4U)==0 ||
+         strncmp(text,".ifnc",5U)==0) &&
+        ((text[3]=='c' && (text[4]=='\0' ||
+                          isspace((unsigned char)text[4]))) ||
+         (text[3]=='n' && text[4]=='c' &&
+          (text[5]=='\0' || isspace((unsigned char)text[5]))))) {
+        bool unequal=text[3]=='n';
+        return minias_source_push_conditional_strings(as,
+                minias_trim(text+(unequal?5U:4U)),unequal,false,line);
+    }
+    if ((strncmp(text,".ifdef",6U)==0 &&
+         (text[6]=='\0' || isspace((unsigned char)text[6]))) ||
+        (strncmp(text,".ifndef",7U)==0 &&
+         (text[7]=='\0' || isspace((unsigned char)text[7]))) ||
+        (strncmp(text,".ifnotdef",9U)==0 &&
+         (text[9]=='\0' || isspace((unsigned char)text[9])))) {
+        bool negate=text[3]=='n';
+        unsigned width=negate?(text[4]=='o'?9U:7U):6U;
+        return minias_source_push_conditional_defined(as,
+                        minias_trim(text+width),negate,line);
+    }
+    {
+        static const char *const numeric_forms[]={
+            ".ifeq",".ifne",".iflt",".ifle",".ifgt",".ifge"
+        };
+        unsigned i;
+        for(i=0U;i<sizeof(numeric_forms)/sizeof(numeric_forms[0]);++i) {
+            const char *name=numeric_forms[i];
+            size_t width=strlen(name);
+            if(strncmp(text,name,width)==0 &&
+               (text[width]=='\0' || isspace((unsigned char)text[width]))) {
+                int64_t literal;
+                if(!minias_eval_i64_expression(text+width,&literal))
+                    as->layout_sensitive=true;
+                return minias_source_push_conditional_numeric(as,
+                           minias_trim(text+width),name,line);
+            }
+        }
+    }
+    if (strncmp(text,".if",3U)==0 &&
+        (text[3]=='\0' || isspace((unsigned char)text[3]))) {
+        /* Literal conditions are lexical; symbol/dot-dependent choices
+         * can change their Fragment set after MCLayout. */
+        int64_t literal;
+        if(!minias_eval_i64_expression(text+3U,&literal))
+            as->layout_sensitive=true;
+        return minias_source_push_conditional(as,minias_trim(text+3U),line);
+    }
+    if (strncmp(text,".elseif",7U)==0 &&
+        (text[7]=='\0' || isspace((unsigned char)text[7]))) {
+        int64_t literal;
+        if(!minias_eval_i64_expression(text+7U,&literal))
+            as->layout_sensitive=true;
+        return minias_source_elseif_conditional(as,minias_trim(text+7U),line);
+    }
+    if(strcmp(text,".else")==0)return minias_source_else_conditional(as,line);
+    if(strcmp(text,".endif")==0)return minias_source_pop_conditional(as,line);
+    *handled=false;
+    return true;
+}
+
+bool minias_source_conditional_active(const MiniAs *as) {
+    return as->source->conditional_active;
 }
 
 static bool valid_irp_parameter_name(const char *name);
@@ -681,7 +771,7 @@ static size_t split_macro_arguments(char *text,
     return count;
 }
 
-MiniAsMacro *minias_macro_find(MiniAs *as, const char *name) {
+static MiniAsMacro *minias_macro_find(MiniAs *as, const char *name) {
     size_t i;
 
     for (i = 0U; i < as->source->macro_count; ++i) {
@@ -692,7 +782,7 @@ MiniAsMacro *minias_macro_find(MiniAs *as, const char *name) {
     return NULL;
 }
 
-void minias_macro_purge(MiniAsSourceContext *source, const char *name) {
+static void minias_macro_purge(MiniAsSourceContext *source, const char *name) {
     size_t i;
     for(i=0U;i<source->macro_count;++i) {
         if(strcmp(source->macros[i].name,name)!=0)continue;
@@ -729,7 +819,7 @@ static void compact_macro_parameter_spacing(char *text) {
 
 static bool define_macro(MiniAs *as,
                          const char *argument,
-                         MiniAsSourceLine *lines,
+                         const MiniAsSourceLine *lines,
                          size_t count,
                          size_t line) {
     char *copy = minias_strdup(argument);
@@ -765,6 +855,9 @@ static bool define_macro(MiniAs *as,
     }
     macro = &as->source->macros[as->source->macro_count];
     memset(macro, 0, sizeof(*macro));
+    /* Every partially built macro must be visible to the sole destructor
+     * even when a later parameter/body allocation fails. */
+    ++as->source->macro_count;
     macro->definition_site=as->source->current_site;
     macro->name = minias_strdup(tokens[0]);
     if (macro->name == NULL) {
@@ -785,14 +878,11 @@ static bool define_macro(MiniAs *as,
         char *spec = tokens[i];
         char *qualifier = strchr(spec, ':');
         char *equal = strchr(spec, '=');
-        char *end = NULL;
 
         if (qualifier != NULL && (equal == NULL || qualifier < equal)) {
             *qualifier++ = '\0';
-            end = qualifier - 1;
         } else if (equal != NULL) {
             *equal++ = '\0';
-            end = equal - 1;
         }
         if (!valid_irp_parameter_name(spec)) {
             minias_set_error(as, "bad-macro-parameter:%s:line=%zu",
@@ -827,7 +917,6 @@ static bool define_macro(MiniAs *as,
                 return false;
             }
         }
-        (void)end;
     }
     if (count != 0U) {
         macro->body = calloc(count, sizeof(*macro->body));
@@ -852,7 +941,6 @@ static bool define_macro(MiniAs *as,
             return false;
         }
     }
-    ++as->source->macro_count;
     free(copy);
     return true;
 }
@@ -967,7 +1055,7 @@ static char *strip_macro_argument_quotes(char *text) {
     return text;
 }
 
-bool minias_macro_expand(MiniAs *as,
+static bool minias_macro_expand(MiniAs *as,
                                     MiniAsMacro *macro,
                                     const char *args,
                                     size_t line) {
@@ -977,6 +1065,7 @@ bool minias_macro_expand(MiniAs *as,
     const char *values[64];
     bool assigned[64]={false};
     char *vararg_buffer=NULL;
+    size_t vararg_capacity=0U;
     size_t vararg_length=0U;
     bool has_vararg=macro->param_count>0U &&
            macro->params[macro->param_count-1U].variadic;
@@ -1031,8 +1120,8 @@ bool minias_macro_expand(MiniAs *as,
         }
     }
     if(has_vararg) {
-        vararg_buffer=malloc(strlen(args)+1U);
-        if(!vararg_buffer) {
+        if(!minias_grow_array((void **)&vararg_buffer,&vararg_capacity,
+                              sizeof(*vararg_buffer),1U)) {
             minias_set_error(as,"out-of-memory:macro-vararg");
             free(vararg_buffer);free(copy);return false;
         }
@@ -1076,19 +1165,31 @@ bool minias_macro_expand(MiniAs *as,
         }else if(has_vararg &&
                  positional>=macro->param_count-1U) {
             const char *item=strip_macro_argument_quotes(token);
-            size_t len=strlen(item),max=strlen(args);
+            size_t len=strlen(item);
+            size_t separator=vararg_length!=0U?1U:0U;
+            size_t required;
             index=macro->param_count-1U;
             if(assigned[index] && values[index]!=vararg_buffer) {
                 minias_set_error(as,"duplicate-macro-vararg:%s:line=%zu",
                                  macro->name,line);
                 free(vararg_buffer);free(copy);return false;
             }
-            if(len>max-vararg_length-
-                   (vararg_length!=0U?1U:0U)) {
+            /* .altmacro's %expression can be longer than the source
+             * spelling; never size substituted output from strlen(args).
+             * Check before addition so an empty trailing comma cannot
+             * underflow the remaining capacity after a full argument. */
+            if(vararg_length>SIZE_MAX-1U-separator ||
+               len>SIZE_MAX-1U-separator-vararg_length) {
                 minias_set_error(as,"macro-vararg-too-long:line=%zu",line);
                 free(vararg_buffer);free(copy);return false;
             }
-            if(vararg_length)vararg_buffer[vararg_length++]=',';
+            required=vararg_length+separator+len+1U;
+            if(!minias_grow_array((void **)&vararg_buffer,&vararg_capacity,
+                                  sizeof(*vararg_buffer),required)) {
+                minias_set_error(as,"out-of-memory:macro-vararg");
+                free(vararg_buffer);free(copy);return false;
+            }
+            if(separator)vararg_buffer[vararg_length++]=',';
             memcpy(vararg_buffer+vararg_length,item,len+1U);
             vararg_length+=len;
             values[index]=vararg_buffer;
@@ -1128,6 +1229,7 @@ bool minias_macro_expand(MiniAs *as,
         expanded = calloc(body_count, sizeof(*expanded));
         if (expanded == NULL) {
             minias_set_error(as, "out-of-memory:macro-expanded-lines");
+            free(vararg_buffer);
             free(copy);
             return false;
         }
@@ -1174,6 +1276,62 @@ done:
     free(vararg_buffer);
     free(copy);
     return ok;
+}
+
+/* Macro registry mutation and invocation use one SourceContext owner.
+ * The statement lowerer consumes only the decision and error result. */
+bool minias_source_try_macro_invocation(MiniAs *as,char *op,char *args,
+                                        size_t line,bool *handled) {
+    MiniAsMacro *macro;
+    *handled=true;
+    /* Purging a missing macro is an idempotent GNU operation; an active
+     * expansion already owns its substituted source snapshot. */
+    if(!strcmp(op,".purgem")) {
+        char *name=minias_trim(args);
+        if(!*name || strpbrk(name,", \t\r")!=NULL) {
+            minias_set_error(as,"bad-directive:.purgem:%s:line=%zu",name,line);
+            return false;
+        }
+        minias_macro_purge(as->source,name);
+        return true;
+    }
+    macro=minias_macro_find(as,op);
+    if(macro!=NULL)return minias_macro_expand(as,macro,args,line);
+    /* A bare MACRO(symbol) keeps parentheses as literal argument text;
+     * temporarily NUL-terminate only the name lookup, then restore op. */
+    if(args[0]=='\0' && op[0]!='.') {
+        char *open=strchr(op,'(');
+        size_t length=strlen(op);
+        if(open!=NULL && open>op && length>1U && op[length-1U]==')') {
+            *open='\0';
+            macro=minias_macro_find(as,op);
+            *open='(';
+            if(macro!=NULL)return minias_macro_expand(as,macro,open,line);
+        }
+    }
+    *handled=false;
+    return true;
+}
+
+bool minias_source_try_control_directive(MiniAs *as,const char *op,
+                                         const char *args,size_t line,
+                                         bool *handled) {
+    *handled=true;
+    if(!strcmp(op,".altmacro") || !strcmp(op,".noaltmacro")) {
+        if(*args!='\0') {
+            minias_set_error(as,"bad-directive:%s:line=%zu",op,line);
+            return false;
+        }
+        as->source->altmacro_active=strcmp(op,".altmacro")==0;
+        return true;
+    }
+    if(!strcmp(op,".end")) {
+        /* GAS accepts any trailing operand and closes the source stream. */
+        as->source->source_ended=true;
+        return true;
+    }
+    *handled=false;
+    return true;
 }
 
 enum {
@@ -1484,13 +1642,8 @@ static char *substitute_irp_parameter(MiniAs *as,
     return output;
 }
 
-static bool process_source_range(MiniAs *as,
-                                 MiniAsSourceLine *lines,
-                                 size_t begin,
-                                 size_t end);
-
 static bool process_irp_block(MiniAs *as,
-                              MiniAsSourceLine *lines,
+                              const MiniAsSourceLine *lines,
                               size_t count,
                               const char *argument,
                               size_t line,

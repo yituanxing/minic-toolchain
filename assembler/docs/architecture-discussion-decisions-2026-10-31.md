@@ -997,3 +997,80 @@ the full encode callback remain unchanged, so **P04 is still partial**.
 coherent SourceGraph batch, or handle P09/P16 only when a real GNU source
 demonstrates an error. Avoid another interface-only change without a clear
 Common/Target ownership deletion and focused regression.
+
+## 23. P05 Source-owned directives, retained single replay path and macro lifetime
+
+A complete Source-phase audit confirmed that physical input has **one**
+reader (`source_graph_load_physical`) and all FILE/MACRO/REPT/IRP expansion
+frames use **one** `minias_source_frame_process → process_source_range`
+collector. `SourceGraph` retains full-key StableSiteIDs, immutable physical
+source lines and semantic branch shapes across conditional layout replay;
+the pass-local forced-branch bitmap is a separate necessary identity. Do
+not delete either simply because both mention branches. Target-specific
+comment delimiters and physical GNU `/* ... */` normalization likewise
+serve different lexical stages.
+
+The actual mixed-owner boundary was `assembler.c:minias_statement_process`:
+it directly recognized every `.if*`/`.elseif`/`.else`/`.endif`, macro
+invocation and `.purgem`, and mutated `.altmacro`/`.end` SourceContext
+flags. These whole dispatch blocks have now moved to the **existing**
+`source_expansion.c` owner. Common statement lowering asks four narrowly
+named Source services for conditional routing, active-state query, macro
+invocation and the late Source control directives. Original precedence is
+preserved: conditional control before labels, macros before Target
+instruction/directive parsing, and Target directives before late `.end` /
+`.altmacro` handling. The old per-directive handlers and macro registry
+functions are now private static functions; their old cross-module
+declarations and assembler dispatch code are **deleted**, with no second
+parser or additional SourceGraph cache.
+
+The same read found actual **failure-path ownership bugs** in the macro
+engine. `define_macro` previously registered a partially allocated macro
+only after all body and parameter allocations had succeeded, so aborting
+mid-definition bypassed the one Source destructor. The zero-initialized
+slot is now counted immediately after capacity growth. `minias_macro_expand`
+also omitted `vararg_buffer` cleanup when allocating expanded lines
+failed. More seriously, `.altmacro` `%expression` evaluation could
+produce a longer argument than the original invocation. Using
+`strlen(args)+1` for the combined vararg and subtracting a separator from
+an exhausted unsigned capacity could write past the allocated buffer. The
+single Common growth helper now reserves the **evaluated** value with
+checked size arithmetic before copying. Macro definition/IRP input slices
+are marked const; unnecessary duplicate declarations and dead locals were
+removed.
+
+One physical-state cleanup follows directly from the owner graph:
+GNU multiline block-comment activity now lives as a local variable for
+the one physical file load, not in a SourceContext rebuilt on every
+semantic replay. SourceGraph still borrows the active context for error
+diagnostics and stable-site interning; its physical frame owns the text.
+
+The updated `probe-mc-layout-ownership.sh` rejects reintroduction of
+Source-private directive dispatch or comment state in the statement
+lowerer. The added focused GNU composite oracle exercises branch growth,
+exactly one source replay, macro+REPT, `.altmacro` arithmetic, `.end`,
+physical read count and symbol/section byte parity. The existing skipped
+conditional, `.end`, macro-argument, SourceGraph and stable-rebind tests
+remain distinct: their invariants are not redundant even when they share
+some source constructs. Release `-Werror`, A0 **30/30**, the composite GNU
+oracle, and original focused four-Target SourceGraph/ISA probes pass locally.
+An additional mandatory GNU macro-lifetime probe runs the formerly unsafe
+`%(1<<29),` expansion and three rejected macro cases, comparing output
+bytes and proving no failed `.o` survives. With an explicitly requested
+sanitized binary, ASan/UBSan reported no access/undefined-behavior errors;
+**LeakSanitizer was INCONCLUSIVE** on this host because its restricted
+`/proc/.../task` access prevents leak inspection. Never report that as
+LSan PASS. This is a genuine error-path fix even without LSan certification.
+
+The production-only diff is **4 files, +216/−195 lines (net +21)**:
+`assembler.c` specifically has **+14/−137**, with the removed dispatch now
+owned by the existing Source module. Seven additional fixtures/scripts,
+docs, the extended ownership guard and one existing CI workflow are
+accounted for separately. No new workflow or second parser was introduced.
+
+**P05 remains partial**: assembler-created fragments still borrow their
+SourceSite provenance, and assembly orchestrates replay and EOF synthetic
+fragments. Moving those into another owner solely to erase an accessor
+would complicate the one shared pipeline; defer until a concrete
+source-stage dependency requires it. Full Linux kernel, non-ELF output and
+new ISA syntax remain outside this batch.

@@ -8,6 +8,7 @@ expr=Path('assembler/src/mc_expr.c').read_text()
 internal=Path('assembler/src/minias_internal.h').read_text()
 source=Path('assembler/src/source_graph_internal.h').read_text()
 expansion=Path('assembler/src/source_expansion.c').read_text()
+graph=Path('assembler/src/source_graph.c').read_text()
 mk=Path('Makefile').read_text()
 for fragment in ('INSTRUCTION','ALIGNMENT','ORIGIN','FIXED_DATA',
                  'FILL','SPACE','BYTES'):
@@ -46,6 +47,21 @@ for old_stack in ('static bool push_conditional(',
 if 'bool minias_source_push_conditional(' not in expansion or \
    'bool minias_source_pop_conditional(' not in expansion:
     raise SystemExit('conditional lifecycle is not owned by SourceContext')
+for api in ('minias_source_try_conditional',
+            'minias_source_conditional_active',
+            'minias_source_try_macro_invocation',
+            'minias_source_try_control_directive'):
+    if api+'(' not in source or api+'(' not in expansion or api+'(' not in driver:
+        raise SystemExit('SourceContext routing bypasses its owner: '+api)
+for private in ('minias_macro_find(', 'minias_macro_expand(',
+                'minias_macro_purge(', 'minias_source_push_conditional(',
+                'as->source->altmacro_active', 'as->source->source_ended',
+                'as->source->conditional_active'):
+    if private in driver:
+        raise SystemExit('statement lowerer retains SourceContext internals: '+private)
+if 'c_comment_active' in source or 'as->source->c_comment_active' in graph or \
+   'bool comment_active=false;' not in graph:
+    raise SystemExit('physical comment lifetime escaped the one FILE reader')
 for n in ('minias_solve_fragment_layout','minias_relayout_fragments',
           'minias_resolve_deferred_data','collect_out_of_range_branches',
           'minias_finalize_subsection_layout'):

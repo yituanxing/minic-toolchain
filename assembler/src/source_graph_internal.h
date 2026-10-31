@@ -42,7 +42,6 @@ struct MiniAsSourceContext {
     bool altmacro_active;
     bool conditional_active;
     bool source_ended;
-    bool c_comment_active;
     MiniAsSourceGraph *graph; /* borrowed from assembly invocation */
     MiniAsStableSiteId current_site;
     MiniAsStableSiteId current_expansion_site;
@@ -170,25 +169,16 @@ bool minias_source_graph_capture_forced_branches(MiniAs *as, const size_t *ids,
 
 /* Source lexical/macro/repeat expansion (fresh inside each semantic pass). */
 void minias_source_lines_destroy(MiniAsSourceLine *lines, size_t count);
-void minias_macro_destroy(MiniAsMacro *macro);
 bool minias_source_context_init(MiniAs *as);
 void minias_source_context_destroy(MiniAsSourceContext *source);
-MiniAsMacro *minias_macro_find(MiniAs *as, const char *name);
-void minias_macro_purge(MiniAsSourceContext *source, const char *name);
-bool minias_source_push_conditional_value(MiniAs *as, bool condition_true);
-bool minias_source_push_conditional(MiniAs *as, const char *args, size_t line);
-bool minias_source_push_conditional_numeric(MiniAs *as, const char *args,
-                                            const char *directive, size_t line);
-bool minias_source_push_conditional_defined(MiniAs *as, const char *args,
-                                            bool negate, size_t line);
-bool minias_source_push_conditional_strings(MiniAs *as, const char *args,
-                                            bool unequal, bool double_quoted,
-                                            size_t line);
-bool minias_source_elseif_conditional(MiniAs *as, const char *args, size_t line);
-bool minias_source_else_conditional(MiniAs *as, size_t line);
-bool minias_source_pop_conditional(MiniAs *as, size_t line);
-bool minias_macro_expand(MiniAs *as, MiniAsMacro *macro,
-                             const char *args, size_t line);
+bool minias_source_try_conditional(MiniAs *as, char *text, size_t line,
+                                   bool *handled);
+bool minias_source_conditional_active(const MiniAs *as);
+bool minias_source_try_macro_invocation(MiniAs *as, char *op, char *args,
+                                        size_t line, bool *handled);
+bool minias_source_try_control_directive(MiniAs *as, const char *op,
+                                         const char *args, size_t line,
+                                         bool *handled);
 bool minias_source_frame_process(MiniAs *as, const MiniAsSourceFrame *frame);
 
 /* The intentionally recursive parser boundary; both sides live in Common. */

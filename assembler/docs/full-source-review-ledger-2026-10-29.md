@@ -1,6 +1,6 @@
 # MiniAS full production-source review ledger — 2026-10-29
 
-## Current refactor dashboard — 2026-10-31 (P04 scoped relaxation batch)
+## Current refactor dashboard — 2026-10-31 (P05 source ownership and macro lifetime)
 
 This top section is the **current progress snapshot**. Later sections retain
 their original 2026-10-29 audit/batch evidence as history; their “pending CI”
@@ -13,13 +13,13 @@ and **architecturally closed**. A file changed once is not necessarily done.
 | MiniAS `assembler/src` production code | **32** files | 22 C + 10 headers; excludes test/docs/CLI/shared ELF |
 | Modified since audited `1d9db17` (2026-10-29) | **29/32 = 90.6%** | 26 existing modified + 3 new SourceGraph files; **code-touch coverage only** |
 | Unmodified production files | **3/32** | `invocation.c`, `mc_lexer.c`, `target_registry.c`; do not change stable code to inflate coverage |
-| Recent convergence from `ccf939f` | **21/32 = 65.6%** | 22 commits including parse, GNU binding and scoped RV/x86 relaxation; independent recent-iteration footprint, **not** total completion |
+| Recent convergence from `ccf939f` | **24/32 = 75.0%** | 23 commits including parse, GNU binding, scoped RV/x86 relaxation and SourceContext; independent recent-iteration footprint, **not** total completion |
 | Full historical audited baseline | **35/35 read** | At `1d9db17`: 29 `assembler/src`, CLI, 5 shared ELF files; older source-read certificate, not a claim that every current line was reread today |
 | Shared CLI/ELF audited neighbors | **2/6 modified** | `elf/include/minielf.h`, `elf/src/relocatable_writer.c`; unchanged consumers retain independent roles |
-| MiniAS-facing tests | **196 tracked files** | Includes five new GNU branch/LDR fixtures/scripts; not part of the production denominator |
+| MiniAS-facing tests | **203 tracked files** | Includes seven new SourceContext/macro-lifetime GNU fixtures/scripts; not part of the production denominator |
 
-The 97 commits after `1d9db17` changed 29 current source files with
-**+11,633/−6,195** lines in the baseline-to-HEAD diff (net +5,438).
+The 98 commits after `1d9db17` changed 29 current source files with
+**+11,748/−6,289** lines in the baseline-to-HEAD diff (net +5,459).
 That includes file splits/new SourceGraph functionality; it is **not**
 “5,772 lines of dead code eliminated”, nor a measure of correctness.
 
@@ -28,7 +28,7 @@ That includes file splits/new SourceGraph functionality; it is **not**
 | State | Count | IDs and next condition |
 | --- | ---: | --- |
 | **Closed** | **5** | P01 ISA legality versus strict-I audit; P06 AArch64 typed parse-site mapping provenance; P11 RV GLOBAL/WEAK branch/jump GNU relocation and link parity; P13 Common Fixup/fragment staging; P15 explicit Target object finalization |
-| **Partially closed** | **3** | P04 parse/measure/post-emit/pre-layout/site/relax queries now have phase-appropriate contracts; **encode remains broad**; P05 SourceContext still mixed with statement routing; P14 RV E ABI owned, AArch64 dot/name debt remains |
+| **Partially closed** | **3** | P04 parse/measure/post-emit/pre-layout/site/relax queries now have phase-appropriate contracts; **encode remains broad**; P05 conditional/macro routing Source-owned, fragment SourceSite/EOF provenance still crosses Common; P14 RV E ABI owned, AArch64 dot/name debt remains |
 | **Concrete correctness gaps to probe** | **2** | P09 GNU `.reloc` subset; P16 CFI synthetic-section collisions |
 | **Deferred on purpose** | **5** | P02/P07 scoped RV `.option arch`; P03 versioned extension profiles; P08 COFF/Mach-O/endian model; P12 object-format-neutral binding type |
 | **Audited, retained** | **1** | P10 Target local pre-resolution and ELF retained-fixup division is intentional |
@@ -39,13 +39,13 @@ refactors precede these 16 gap IDs. The remaining work has unequal sizes.
 
 | Data-flow boundary | Current result | Remaining work |
 | --- | --- | --- |
-| SourceGraph/source-site replay | Stable identity in place | SourceContext/conditional ownership (P05) |
+| SourceGraph/source-site replay | One cached physical reader/frame collector, stable identity, Source-owned conditional/macro routing | Remaining fragment SourceSite/EOF provenance interface (P05) |
 | MCExpr/typed DATA, SectionKey/Subsection | Shared owners and lookup paths in place | New syntax only when real sources prove a gap |
 | Fragment encode/Fixup commit | Single Common staging and creation ownership | Preserve explicit `.reloc` and DWARF/CFI-specific operations |
 | Target ISA/ABI | Four Target families, RV32/RV64 XLEN+ABI, strict-I separated | Scoped `.option arch` and further ISA families when needed |
 | Target phase interfaces | Opaque Common parse services for four Targets; read-only post-emit, pre-layout, measure and RV/x86 relax services; site snapshot/alignment read only Target state | Encode callback still sees mutable Common root; reviewed single Common staging transaction retained |
 | Object output | One ELF32/ELF64 writer through shared `minielf` | COFF/Mach-O and endian are **future**, not current blockers |
-| Real-program validation | Previous exact-head `09d4a36` mandatory CI **8/8 SUCCESS**; current focused GNU/A0 oracles local PASS | Full Linux kernel and 3536 opt-in suites not certified by this batch; this new exact-head CI separately pending |
+| Real-program validation | Previous exact-head `aa12d65` mandatory CI **8/8 SUCCESS**; current focused Source/GNU/A0 oracles local PASS | Full Linux kernel and 3536 opt-in suites not certified by this batch; this new exact-head CI separately pending |
 
 The four-Target measurement seam has now been replaced as one unit:
 `TargetOps.measure_mcinst` takes an immutable Target-state view and an
@@ -85,11 +85,22 @@ Local Release `-Werror`, A0 **30/30**, RV GNU binding **6/6**, x86 GNU
 branch/binding and `.code16` **38/38**, both SourceGraph replays and
 AArch64/LoongArch GNU probes all PASS.
 
-Next coherent batch: read P05 SourceContext/conditional ownership as a
-single source-stage investigation, then remove proven duplications rather
-than changing stable files to raise the coverage metric. Reserve P09/P16
-for actual failing GNU sources. No COFF/Mach-O or exhaustive ISA standards
-expansion yet.
+P05's high-value statement-routing portion is now migrated as one batch:
+Common no longer parses the Source-owned `.if*`/`.elseif`/`.else`/`.endif`,
+`.purgem`, macro invocation, `.altmacro` or `.end` commands. Its old
+dispatch blocks and the corresponding broad Source header declarations
+are deleted; one FILE/EXPANSION collector and one SourceGraph remain.
+Physical block-comment activity is now loader-local, and the single macro
+allocator/destructor closes two error-path leaks. A checked dynamic
+vararg buffer also fixes a reachable `.altmacro` expansion overflow.
+See architecture decisions §23 and dedicated composite GNU replay and
+macro-lifetime probes. This batch changes **4 production files,
++216/−195 lines (net +21)**; the statement lowerer alone is **+14/−137**.
+
+Next coherent batch: choose real GNU source cases for remaining P09 `.reloc`
+and P16 CFI collisions, or revisit the remaining SourceSite provenance
+boundary if actual coupling blocks another source feature. Do not delete
+the existing unique SourceGraph parser or guess an ISA syntax standard.
 
 ---
 
