@@ -639,6 +639,16 @@ typedef struct MiniAs {
     char error[MINIAS_MAX_ERROR];
 } MiniAs;
 
+/* Complete retained source Fragments after parsing/EOF pools, BEFORE any
+ * MCLayout relaxation. A Target may derive its own section-wide policies
+ * once, without receiving writable Common Section/Fragment storage. */
+typedef struct MiniAsPreLayoutView {
+    const MiniAsStmt *stmts;
+    size_t stmt_count;
+    size_t section_count;
+    void *target_state; /* owned and mutable only by the selected Target */
+} MiniAsPreLayoutView;
+
 /* A borrowed, read-only view of the *final* MCLayout. Target output checks
  * cannot reach the mutable Common section/symbol/fixup graph through this
  * interface. Only the object-finalization sink below can request the two
@@ -909,6 +919,10 @@ typedef struct MiniAsTargetOps {
     void (*capture_site_state)(const MiniAs *, const MiniAsStmt *,
                                MiniAsTargetSiteState *);
     void (*destroy_target_state)(MiniAs *);
+    /* Optional one-shot analysis over the complete parsed SourceGraph.
+     * Errors are written to the bounded Common diagnostic buffer; the
+     * Target must not alter the borrowed Fragment graph. */
+    bool (*prepare_layout)(const MiniAsPreLayoutView *, char *, size_t);
     bool (*validate_common_directive)(MiniAs *, MiniAsCommonDirectiveKind,
                                       const char *, size_t);
     /* Optional GNU .if target operand dialect. Common owns the

@@ -198,7 +198,7 @@ that a design change has been made.
 | P01 | P0 | `riscv_profile.c:parse_isa` sets `strict_i_xlen` automatically for exact RV32I/RV64I; `riscv_target.c:strict_base_i_check_sections` and `riscv_validate_common_directive` then reject executable raw data/`.org` as an extra audit | Separate ordinary `target_isa` legality from explicit `strict_base_i_audit`; keep the valuable audit but do not redefine GAS-compatible `-march` |
 | P02 | P0/P1 | `riscv_target.c:riscv_target_directive` currently rejects `.option arch,+ext` under explicit `-march`; legacy +v/+zbb handling is a no-op. `MiniAsRiscvState.option_stack` saves only PIC/RVC/RELAX bits | Add scoped effective ISA state and save/restore it; capture the correct site ISA for MCInst, layout and encoder without accidentally changing file-level attributes |
 | P03 | P1 | `riscv_profile.h` uses one 64-bit feature mask; `riscv_profile.c` recognizes a limited fixed-version extension table and lacks general version-string parsing | Define an extendable versioned ISA/extension set and dependency validation before many Z extensions are added. No need to implement all extensions immediately |
-| P04 | P1 | Parse/measure/encode and LoongArch's complete-section relaxation lookahead still receive mutable `MiniAs*`; post-emit output hooks previously did as well, but now use a read-only final-layout view and narrowly typed Common sinks (§15) | Continue phase-appropriate Target parse/layout/encode views and a Common-owned emission sink, without breaking existing typed MCInst ownership |
+| P04 | P1 | Parse/measure/encode still receive mutable `MiniAs*`; output hooks use read-only final-layout views and Common sinks (§15), while LoongArch whole-section linker-relaxability now uses a read-only pre-layout view and private cache (§16) | Continue phase-appropriate Target parse/measure/encode views and a Common-owned emission sink, without breaking existing typed MCInst ownership |
 | P05 | P1/P2 | `assembler.c:minias_statement_process` still reads/writes `SourceContext` internals and owns considerable conditional/directive routing; source expansion calls back into it | Complete Source ownership and typed statement routing; a smaller file alone is **not** proof of a clean boundary |
 | P06 | P1 | `aarch64_target.c:a64_record_source_mappings`/`validate` check `strcmp(stmt->op, ".inst")` and alignment directive spellings **after** parsing to determine object mapping semantics | Store parse-site typed instruction-data/alignment provenance; keep original text only where genuinely needed for diagnostics or initial expression compilation |
 | P07 | P1 (future) | RV RVC measurement/encoding reads `state->isa_features` globally while `stmt->site.mode_bits` records only selected option bits | When scoped `.option arch` is implemented, bind the effective ISA/encoding policy to each fragment to avoid consulting the wrong state after `pop` |
@@ -658,3 +658,57 @@ parse/measure/encode callbacks incrementally. The full-section lookahead
 is required for correctness; deleting it to reduce direct reads would
 regress GNU branch relocations. Do not grow this into a COFF/Mach-O or
 versioned-ISA project now.
+
+## 16. P04 parsed-SourceGraph layout policy: LoongArch forward lookahead
+
+The LoongArch branch encoder previously called
+`la_section_is_linker_relaxable(as, section, ...)`, which lazily walked all
+`as->stmts` to find PCALA/GOT pseudo-MCInsts, then cached one boolean per
+Section. It was **not dead code**: a branch can precede a later PCALA/GOT
+macro whose linker-time relaxation changes branch distances. This is a
+whole-source property that a prefix parser cannot decide correctly.
+
+Common now calls an optional `TargetOps.prepare_layout` exactly after the
+complete SourceGraph is parsed, EOF literal pools and local commons are
+flushed, and before MCLayout. Its borrowed `MiniAsPreLayoutView` exposes
+read-only retained Fragments, Section count and a Target-owned mutable
+state handle; no writable Common root, Symbols, Section bytes or Fixups.
+LoongArch scans that view once and stores its existing per-Section
+relaxability bitmap in `LaTargetState`. The encoder now reads **only this
+cached Target answer** and rejects a missing cache; the old mutable-
+`MiniAs` source-array scan and its duplicate lazy-allocation path are
+removed. Source replay reconstructs the Target context and reruns the hook
+on the new complete source graph. Other targets have a NULL hook.
+
+An added GNU fixture tests an early local B16 branch, later `la.local`
+PCALA in the same Section, and an independent Section without the macro.
+GNU and MiniAS agree on the mandatory relaxable Section's B16 relocation
+and exact encoded bytes. **Observed optional divergence:** GNU GAS 2.42
+also leaves a local B16 relocation in the independent clean Section;
+MiniAS has already resolved that same-section displacement. We record the
+difference, but do not spread a file-global relaxation flag merely to copy
+redundant GNU metadata: it does not change the clean Section's correct
+branch destination or link-time mutability. The strict GNU oracle still
+compares all of the existing GCC pseudo fixtures and the new relaxable
+Section's correctness-bearing bytes and relocation. This is our agreed
+real-project criterion: identify the difference, retain the necessary
+semantic boundary, defer rare standards parity without blocking progress.
+
+Local tests for the pending batch: Release `-Werror` rebuild PASS;
+Target/Common structural gate PASS (new pre-layout view/ordering/cache
+ownership assertions); A0 **30/30 PASS**; GNU LoongArch aliases, GCC
+pseudos, forward section lookahead and ALTERNATIVE relocations PASS;
+AArch64 dot-branch linker oracle PASS; x86/RV SourceGraph GNU byte/symbol
+replay **2/2 PASS**. Its remote exact-SHA CI is not yet available.
+
+The preceding `2d5290b` mandatory CI is now completely SUCCESS for Target
+ISA/ABI, x86/LoongArch GNU oracles, four-architecture compiler runtime,
+Native Strict, real BusyBox, GCC single-AS A/B and runtime ladder. Full
+Linux kernel and 3536 workflows remain opt-in/SKIPPED; their earlier
+successes must not be attributed to this newer commit.
+
+**Next P04 boundary:** Parse/measure/encode still accept mutable `MiniAs*`
+for symbol lookup, errors and emission transactions. Shrink one real
+phase at a time, preserving the retained MCInst and Common-owned emission
+sink. No new ISA parser, generic object-format abstraction or second
+section-relaxability algorithm is needed yet.

@@ -4878,6 +4878,19 @@ int minias_assemble_config(const char *input_path,
             if(parsed)source_loaded=true;
         }
         if(parsed)parsed=parse_loaded_source_graph(&as,&graph);
+        if(parsed && as.target->prepare_layout!=NULL) {
+            const MiniAsPreLayoutView parsed_fragments = {
+                .stmts = as.stmts,
+                .stmt_count = as.stmt_count,
+                .section_count = as.section_count,
+                .target_state = as.target_state
+            };
+            parsed=as.target->prepare_layout(&parsed_fragments,
+                                              as.error,sizeof(as.error));
+            if(!parsed && as.error[0]=='\0')
+                minias_set_error(&as,"target-layout-preparation-failed");
+            if(as.error[0]!='\0')parsed=false;
+        }
         if(parsed)parsed=minias_source_graph_rebind_forced_branches(
                 &as,&long_branch_ids,&long_branch_count,
                 &long_branch_capacity);

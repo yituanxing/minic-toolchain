@@ -2010,36 +2010,51 @@ static bool la_resolve_branch_plan(MiniAs *as,const MiniAsStmt *s,
     return true;
 }
 
-/* GNU GAS must keep same-section branch displacements as linker fixups when
- * PCALA/GOT macros in that Section may shrink during linker relaxation. A
- * branch at the beginning of the Section can depend on a later such macro,
- * so the condition is computed from the complete retained statement graph,
- * not the current source prefix. Cache once for O(n) total compilation. */
+/* GNU GAS retains same-section branch fixups if a later PCALA/GOT macro may
+ * shrink at link time. Run this forward-looking Target analysis once, after
+ * the entire SourceGraph is parsed but before Common solves MCLayout. The
+ * Target may mutate only its private cache, not the borrowed Fragments. */
+static bool la_prepare_layout(const MiniAsPreLayoutView *view,
+                              char *error,size_t error_capacity) {
+    LaTargetState *state=(LaTargetState *)view->target_state;
+    bool *sections;
+    size_t i;
+    if(state==NULL || view->section_count==0U ||
+       view->section_count>SIZE_MAX/sizeof(*sections)) {
+        (void)snprintf(error,error_capacity,
+                       "invalid-loongarch-layout-preparation");
+        return false;
+    }
+    sections=calloc(view->section_count,sizeof(*sections));
+    if(sections==NULL) {
+        (void)snprintf(error,error_capacity,
+                       "out-of-memory:loongarch-relaxable-sections");
+        return false;
+    }
+    for(i=0U;i<view->stmt_count;++i) {
+        const MiniAsStmt *stmt=&view->stmts[i];
+        if(stmt->section>=0 &&
+           (size_t)stmt->section<view->section_count &&
+           stmt->mcinst!=NULL &&
+           (stmt->mcinst->opcode==LA_MC_PCREL_PSEUDO ||
+            stmt->mcinst->opcode==LA_MC_GOT_PSEUDO))
+            sections[(size_t)stmt->section]=true;
+    }
+    free(state->relaxable_sections);
+    state->relaxable_sections=sections;
+    state->relaxable_section_count=view->section_count;
+    return true;
+}
+
+/* The encoder consumes a stable Target-owned answer; it never scans the
+ * Common statement graph or changes section relaxation policy mid-emit. */
 static bool la_section_is_linker_relaxable(MiniAs *as,int section,
                                            bool *relaxable) {
-    LaTargetState *state=(LaTargetState *)as->target_state;
-    size_t i;
-    if(state==NULL || section<0 ||
-       (size_t)section>=as->section_count)return false;
-    if(state->relaxable_sections==NULL ||
-       state->relaxable_section_count!=as->section_count) {
-        bool *sections=calloc(as->section_count,sizeof(*sections));
-        if(sections==NULL) {
-            minias_set_error(as,"out-of-memory:loongarch-relaxable-sections");
-            return false;
-        }
-        for(i=0U;i<as->stmt_count;++i) {
-            const MiniAsStmt *stmt=&as->stmts[i];
-            if(stmt->section>=0 &&
-               (size_t)stmt->section<as->section_count &&
-               stmt->mcinst!=NULL &&
-               (stmt->mcinst->opcode==LA_MC_PCREL_PSEUDO ||
-                stmt->mcinst->opcode==LA_MC_GOT_PSEUDO))
-                sections[(size_t)stmt->section]=true;
-        }
-        free(state->relaxable_sections);
-        state->relaxable_sections=sections;
-        state->relaxable_section_count=as->section_count;
+    const LaTargetState *state=(const LaTargetState *)as->target_state;
+    if(state==NULL || state->relaxable_sections==NULL || section<0 ||
+       (size_t)section>=state->relaxable_section_count) {
+        minias_set_error(as,"missing-loongarch-layout-policy");
+        return false;
     }
     *relaxable=state->relaxable_sections[(size_t)section];
     return true;
@@ -2368,6 +2383,7 @@ static const MiniAsTargetOps ops={
     .resolve_profile=la_profile,.parse_mcinst=la_parse,
     .init_target_state=la_init_target_state,
     .destroy_target_state=la_destroy_target_state,
+    .prepare_layout=la_prepare_layout,
     .measure_mcinst=la_measure,.encode=la_encode,
     .append_code_alignment=la_align,.supports_fixup=la_supports_fixup,
     .fixup_relocation_type=la_reloc,

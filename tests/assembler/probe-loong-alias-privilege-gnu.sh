@@ -49,6 +49,23 @@ printf '%s\n' '.text' '.globl gcc_pseudos' 'gcc_pseudos:' \
   'ret' \
   '.data' '.LANCHOR0:' '.dword 7' >"$work/gcc-pseudos.s"
 
+# A branch must see a later relaxation-capable macro in the SAME section.
+# The independent .text.clean branch must not inherit that policy. This is
+# a complete-source lookahead query, not a parser-prefix or global flag.
+printf '%s\n' \
+  '.section .text.relax,"ax",@progbits' \
+  'beq $a0,$a1,.Lrelax_target' \
+  'nop' \
+  '.Lrelax_target:' \
+  'la.local $r12,.Lvalue' \
+  'ret' \
+  '.section .text.clean,"ax",@progbits' \
+  'beq $a0,$a1,.Lclean_target' \
+  'nop' \
+  '.Lclean_target:' \
+  'ret' \
+  '.data' '.Lvalue:' '.dword 7' >"$work/section-lookahead.s"
+
 # Real GCC cJSON/Lua output after FCMP uses an FCC branch, and GCC Lua's
 # array access uses LP64 scalar-FPR register-indexed memory. The official
 # GNU ISA patterns give BCEQZ=48000000, BCNEZ=48000100 and FLDX.D=38340000.
@@ -72,6 +89,8 @@ for name in aliases numeric privilege-pcala fp-fcc; do
 done
 "$MINIAS" --target=loongarch64 -march=loongarch64 -mabi=lp64d \
   -o "$work/mini-gcc-pseudos.o" "$work/gcc-pseudos.s"
+"$MINIAS" --target=loongarch64 -march=loongarch64 -mabi=lp64d \
+  -o "$work/mini-section-lookahead.o" "$work/section-lookahead.s"
 readelf -Wr "$work/mini-gcc-pseudos.o" >"$work/gcc-pseudos.reloc"
 for kind in R_LARCH_B16 R_LARCH_B21 R_LARCH_B26 \
             R_LARCH_PCALA_HI20 R_LARCH_PCALA_LO12 \
@@ -163,6 +182,40 @@ if ((gnu_available)); then
   python3 "$(dirname "$0")/elf_semantic_compare.py" --strict \
     "$work/gnu-gcc-pseudos.o" "$work/mini-gcc-pseudos.o" \
     >"$work/gcc-pseudos-semantic.txt"
+  loongarch64-linux-gnu-as -mabi=lp64d \
+    -o "$work/gnu-section-lookahead.o" "$work/section-lookahead.s"
+  # GNU also keeps an optional local B16 relocation in .text.clean, even
+  # though that section contains no relaxable macro. MiniAS fixes that
+  # displacement directly: the distinction does not affect its link result.
+  # Compare the mandatory forward-looking .text.relax case exactly; do not
+  # equate optional clean-section metadata with incorrect machine code.
+  python3 - "$work/gnu-section-lookahead.o" \
+            "$work/mini-section-lookahead.o" <<'PY_LOOKAHEAD'
+import re
+import subprocess
+import sys
+
+def branch_sections(path):
+    result = []
+    current = ''
+    for line in subprocess.check_output(['readelf', '-Wr', path], text=True).splitlines():
+        header = re.search(r"^Relocation section '([^']+)'", line)
+        if header:
+            current = header.group(1).removeprefix('.rela')
+        if 'R_LARCH_B16' in line:
+            result.append(current)
+    return result
+
+gnu, mini = (branch_sections(path) for path in sys.argv[1:])
+if '.text.relax' not in gnu or '.text.relax' not in mini or \
+        '.text.clean' in mini:
+    raise SystemExit(f'Loong section lookahead wrong: GNU={gnu} MiniAS={mini}')
+PY_LOOKAHEAD
+  loongarch64-linux-gnu-objcopy -j .text.relax -O binary \
+    "$work/mini-section-lookahead.o" "$work/mini-section-lookahead.bin"
+  loongarch64-linux-gnu-objcopy -j .text.relax -O binary \
+    "$work/gnu-section-lookahead.o" "$work/gnu-section-lookahead.bin"
+  cmp "$work/mini-section-lookahead.bin" "$work/gnu-section-lookahead.bin"
   python3 - "$work/mini-privilege-pcala.o" \
             "$work/gnu-privilege-pcala.o" <<'PY'
 import re
@@ -193,4 +246,4 @@ PY
 else
   oracle='NOT_TESTED:explicit_local_no_cross_GNU'
 fi
-echo "MINIAS_LOONG_ALIAS_PRIVILEGE=PASS aliases=5 privileged=9 PCALA=2 GCC_pseudos=3 RELAX=4 GNU_negatives=${#gnu_bad[@]} MiniAS_only_negatives=${#mini_only_bad[@]} GNU_bytes=$oracle GNU_relocations=$oracle no_partial_object=1"
+echo "MINIAS_LOONG_ALIAS_PRIVILEGE=PASS aliases=5 privileged=9 PCALA=2 GCC_pseudos=3 RELAX=4 section_lookahead_required=$oracle GNU_negatives=${#gnu_bad[@]} MiniAS_only_negatives=${#mini_only_bad[@]} GNU_bytes=$oracle GNU_relocations=$oracle no_partial_object=1"

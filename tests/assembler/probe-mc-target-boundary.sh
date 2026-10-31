@@ -160,6 +160,34 @@ if not re.search(r'static bool la_validate\s*\(const MiniAsPostEmitView\s*\*', l
     raise SystemExit('LoongArch output validator still receives writable Core')
 print('MINIAS_MC_POST_EMIT_VIEW=PASS final_layout=readonly object_mutation=Common_sink')
 PY
+# Full-source LoongArch relaxability is a necessary forward-looking policy.
+# It must be precomputed once from a read-only completed SourceGraph, not
+# lazily reconstructed by scanning mutable Common Fragments during encode.
+python3 - <<'PY'
+from pathlib import Path
+import re
+
+core = Path('assembler/src/minias_internal.h').read_text()
+driver = Path('assembler/src/assembler.c').read_text()
+la = Path('assembler/src/loongarch64_target.c').read_text()
+if 'typedef struct MiniAsPreLayoutView {' not in core or \
+        not re.search(r'bool\s*\(\*prepare_layout\)\s*\(const MiniAsPreLayoutView\s*\*', core):
+    raise SystemExit('Target layout policy lacks a read-only parsed-source view')
+steps = ('parse_loaded_source_graph(&as,&graph)',
+         'as.target->prepare_layout(&parsed_fragments,',
+         'minias_solve_fragment_layout(')
+positions = [driver.find(step) for step in steps]
+if -1 in positions or positions != sorted(positions):
+    raise SystemExit('Target prepare-layout hook did not precede MCLayout')
+if '.prepare_layout=la_prepare_layout' not in la or \
+        'view->stmts[i]' not in la:
+    raise SystemExit('LoongArch did not precompute section relaxability from view')
+encoder = la.split('static bool la_section_is_linker_relaxable(', 1)[1]
+encoder = encoder.split('static bool la_measure(', 1)[0]
+if 'as->stmts' in encoder or 'calloc(' in encoder:
+    raise SystemExit('LoongArch encoder still rescans mutable Common Fragments')
+print('MINIAS_MC_PRE_LAYOUT_VIEW=PASS LoongArch_forward_section_policy=Target_owned_once')
+PY
 # Parse-site AArch64 mapping semantics must not be recovered by comparing
 # source strings during late section finalization. RISC-V's RVE ABI must not
 # be inferred from mutable Common ELF e_flags while parsing MC operands.
