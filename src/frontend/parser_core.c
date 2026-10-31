@@ -98,10 +98,6 @@ bool minic_parser_parse_integer_constant_expression(MinicParser *parser, int64_t
     return minic_parser_parse_typed_integer_constant_expression(parser, value);
 }
 
-bool minic_parser_parse_integer_constant_expression_value(MinicParser *parser, int64_t *value) {
-    return minic_parser_parse_typed_integer_constant_expression(parser, value);
-}
-
 bool minic_parser_parse_integer_initializer_bits(MinicParser *parser,
                                                  MinicType target_type,
                                                  uint64_t *bits) {
@@ -216,26 +212,6 @@ bool minic_parser_span_equals(const MinicParser *parser,
     return left_length == right_length && memcmp(parser->source + left.begin.offset,
                                                  parser->source + right.begin.offset,
                                                  left_length) == 0;
-}
-
-const MinicAttributeDescriptor *minic_parser_current_attribute(const MinicParser *parser) {
-    size_t name_length;
-
-    if (parser == NULL || parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
-        return NULL;
-    }
-    name_length = minic_parser_span_length(parser->current.span);
-    return minic_attribute_lookup(parser->source + parser->current.span.begin.offset, name_length);
-}
-
-bool minic_parser_current_attribute_is(const MinicParser *parser,
-                                       MinicAttributeKind kind,
-                                       MinicAttributeTarget target) {
-    const MinicAttributeDescriptor *descriptor;
-
-    descriptor = minic_parser_current_attribute(parser);
-    return descriptor != NULL && descriptor->kind == kind &&
-           minic_attribute_allowed_on(descriptor, target);
 }
 
 bool minic_parser_add_expression(MinicParser *parser,
@@ -696,19 +672,6 @@ MinicGlobalObjectId minic_parser_find_scoped_global_object(const MinicParser *pa
     }
     return MINIC_GLOBAL_OBJECT_INVALID;
 }
-
-bool minic_parser_name_bound(const MinicParser *parser, MinicSourceSpan name_span) {
-    size_t index;
-
-    for (index = parser->local_binding_count; index > 0U; --index) {
-        if (minic_parser_span_equals(
-                parser, name_span, parser->local_bindings[index - 1U].name_span)) {
-            return true;
-        }
-    }
-    return false;
-}
-
 
 static size_t minic_parser_function_name_hash(const char *name, size_t length) {
     uint64_t hash = UINT64_C(1469598103934665603);

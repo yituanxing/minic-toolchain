@@ -29,3 +29,22 @@ void kernel_head_direct_global_probe(unsigned long value) {
     kernel_head_direct_descriptor.address = value;
     kernel_head_direct_data_consumer(&kernel_head_direct_descriptor);
 }
+
+/* One symbol now has both address roles inside the SAME .head.text function.
+ * Physical data writes must use displaced RIP-relative addressing while
+ * pointer-to-integer arithmetic must retain the original link VMA. The
+ * opposite evaluation orders prevent a producer-order workaround. */
+volatile unsigned long kernel_head_mixed_global;
+
+__attribute__((section(".head.text"), noinline))
+unsigned long kernel_head_mixed_store_then_vma(unsigned long value) {
+    kernel_head_mixed_global = value;
+    return (unsigned long)&kernel_head_mixed_global;
+}
+
+__attribute__((section(".head.text"), noinline))
+unsigned long kernel_head_mixed_vma_then_store(unsigned long value) {
+    unsigned long vma = (unsigned long)&kernel_head_mixed_global;
+    kernel_head_mixed_global = value;
+    return vma;
+}

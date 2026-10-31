@@ -1529,6 +1529,7 @@ static bool parse_builtin_va_start(MinicParser *parser, MinicExpressionId *expre
     MinicSourcePosition begin;
     MinicSourcePosition end;
     MinicSourceSpan target_span;
+    size_t parameter_count;
 
     function = parser != NULL ? minic_c0_program_function(parser->program, parser->current_function)
                               : NULL;
@@ -1539,6 +1540,10 @@ static bool parse_builtin_va_start(MinicParser *parser, MinicExpressionId *expre
         }
         return false;
     }
+    /* Parsing the va_list target can encounter a target builtin and append a
+     * synthetic callee, reallocating Program.functions. Do not retain the
+     * current function's arena pointer across that recursive expression. */
+    parameter_count = function->parameter_count;
 
     begin = parser->current.span.begin;
     if (!minic_parser_advance(parser) ||
@@ -1555,7 +1560,7 @@ static bool parse_builtin_va_start(MinicParser *parser, MinicExpressionId *expre
     }
     last_parameter_id = minic_parser_find_local(parser, parser->current.span);
     if (last_parameter_id == MINIC_LOCAL_INVALID ||
-        last_parameter_id != parser->local_begin + function->parameter_count - 1U) {
+        last_parameter_id != parser->local_begin + parameter_count - 1U) {
         minic_parser_error(parser,
                            "__builtin_va_start second argument must be the last named parameter");
         return false;

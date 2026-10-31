@@ -1297,3 +1297,92 @@ Source 是 `src/target/x86_64/asm_contract.c`；Machine 是 `src/target/x86_64/m
 - **212 条 F7 函数/函数组记录**＝P31+C30+V33+R36+A49+X5+L28；R2/U2 是函数级阅读与跨层跟踪，不等于所有路径 E2/机器执行。x86 五个上轮 R1/U1 长尾已升级 R2/U2。
 - 新确证 **MC-059/060/061/062/063/064/066/067**（8 项）；其中 MC-061 为 P0 ASan，MC-063 为 P1 GNU native 错码，MC-064 仅 ASM-ONLY，其他以明确 `-S` 接受缺口为主。**MC-065 CLOSED-NOT-A-BUG** 不计入缺陷。第七轮新增的确认编号并不连续，因为需保留误报追踪编号。
 - `tests/compiler/audit/` 的输入是修复前预期失败，不能混进 CI 通过率；没有新跨 ISA GNU GAS/ELF/QEMU 完整运行验收。仅源注释 `FIXME` 和文档/fixture，暂不改生产行为。
+
+## 第八轮：最新 `3d504e7ee4a7` 的源码边界与清理消费者补录（2026-10-31）
+
+这轮先以完整 [337 C/H + 两 CLI 的逐文件覆盖账本](minic-source-coverage-f8-2026-10-31.md) 检查文件输入，再沿跨层调用定向 R2/U2。
+与先前 `f6e9eb870d80` 源码树逐文件比较，仅 x86 `codegen.c/frame.h/machine_emit.c` 三处变化；
+此表的 F8 项**是重审与新交接契约**，不是 F7=212 项之外又新增了这些独立函数。
+没有为本表执行新的 ASan、GNU ELF 或 QEMU，`SOURCE` 只说明当前源码路径。
+
+| ID · 生产者 → 消费者（实际源码） | 所有权/不变量/不能直接删除的路径 | 证据与下次验收 |
+| --- | --- | --- |
+| `F8-01` `compiler.c:minic_compile_preprocessed_file_for_target` | Parser→normalize→integer/symbolic/Boolean→CoreSet→函数裁剪→静态对象裁剪→再次函数裁剪→验证/发射；两次 verify 和两次 prune 各有阶段义务。 | R2/U2/SOURCE；完整顺序见 `compiler.c:264–409` |
+| `F8-02` `inline_integer.c` / `inline_symbolic.c` / `inline_boolean.c` | Shared FunctionBody 的 CALL ExpressionId 不具备 caller 实例身份；特化 pass 将私有目标写回共享 AST，见 MC-006/007/008。 | R2/U2/SOURCE + 既存 ELF-DIFF；迁移 `(caller, call)` 事实 |
+| `F8-03` `core_lower_calls.c:minic_core_lower_direct_call` / `_direct_record_call_object` | scalar `:746–768` 会作三次 clone selector，record `:909–930` 只读 AST callee；物理返回 object/value 需要不同，callee 选择身份不应分裂。 | R2/U2/SOURCE；尚需 aggregate ELF 正反例 |
+| `F8-04` `inline_reference.c:minic_finalize_inline_integer_specialization_references` | 原 source 是否仍须发射依赖被改写后的 CALL；`core_function_set.c:76–97` 在 Core Lower 前据此跳过原 source。不能先删 AST 写入再考虑保活。 | R2/U2/SOURCE；MC-006/064/072 |
+| `F8-05` `core_reachability.c` 的 non-Core root 索引与回扫 | Core call/function address、静态对象 relocation、ASM/label 根存在不同阶段；预建索引 OOM 时的逐函数回扫是必要保守 fallback。 | R2/U2/SOURCE；MC-064/072/073 |
+| `F8-06` `frontend/cast_normalization.c:minic_c0_program_normalize_casts` | PARSED→NORMALIZED 新表达式 arena 经过 remap 验证后替换旧 arena；这是同一语义 Program 的替换事务，不是两棵常驻 mutable AST。 | R2/U2/SOURCE；排除错误重构前提 |
+| `F8-07` `frontend/parser_postfix.c:minic_parser_materialize_array_object_type` | 旧 Local/Record `is_array+count` 需要时新建 ArrayType；正式 `MinicArrayTypeId` 同时存在，所有 consumer 迁移后才能删除桥接。 | R2/U2/SOURCE；A8-01/02 |
+| `F8-08` `frontend/parser_global.c` / `parser_static_initializer.c` 的三路数组声明 | 直接 scalar/record 与 preformed typedef 入口重复 begin/merge 属性和 bound 推断，但各有有效 GNU tentative/zero-length/incomplete 语义。 | R2/U2/SOURCE；A8-03 |
+| `F8-09` `frontend/parser_attribute.c` semantic probe / `semantic_snapshot.h` | Lexer-only peek 可浅拷贝位置；会扩容 tag/enum/Expression 的语义 probe 没有完整所有权回滚。 | R2/U2/SOURCE + 既存 ASan；MC-004/005/009 |
+| `F8-10` `core_lower_loop.c:minic_core_lower_loop_statement` 与 `_loop_cfg` | 普通 while 进入 CFG 前失效化 loop-mutated 特化参数事实；`core_lower.c:1302–1325` 由 referenced LABEL 直接进 CFG，漏该屏障。 | R2/U2/SOURCE；A8-05，**未动态复现** |
+| `F8-11` `core_lower_record.c` 与 `core_lower_expr_flow.c` | Record conditional 尚未与 scalar CFG 一样 fork/restore/meet local facts；零/非零 Bool 证明另有不同的保守政策不能直接替换。 | R2/U2/SOURCE + 既存 GNU native；MC-036/019/029 |
+| `F8-12` `core_ir.c` / `core_lower_metadata.c` / `riscv64/legalize.c` | enum effective integer metadata 已进 Core；RECORD_LOAD/COPY 的存储 extent/alignment 仍通过 Program/DataLayout 回查。 | R2/U2/SOURCE；A8-06 |
+| `F8-13` `target/common/global_emit.c:minic_multi_global_emission_plan_build` | 已统一 payload 分类、NOBITS、对齐与零初始化检查；C0 的 union/bitfield/relocation 逻辑尚由 Common 解释。 | R2/U2/SOURCE；不是常驻 Global IR |
+| `F8-14` `riscv64/codegen_function.c:rv64_visit_global` → `global_emit.c` | 当前 target 被丢弃，内部多次用默认 DataLayout/canonical Target；RV32 consumer 则传入 invocation Target。 | R2/U2/SOURCE；A8-08；未证具体布局错码 |
+| `F8-15` `riscv32/rv32_global_emit.c` / `riscv64/global_emit.c` | 两目标复用 Common serializer，但仍另行决定 flat/recursive、weak、section、zero；显式 BSS 的 PROGBITS/NOBITS 合同与 Common 不同。 | R2/U2/SOURCE；A8-07，缺 RV ELF oracle |
+| `F8-16` `riscv64/frame_layout.c` → `record_snapshot.c` | 每个 Record object 两轮调用同一安全快照候选证明，各次再扫 Core instructions/blocks；应预索引，不可取消唯一使用/未逃逸证明。 | R2/U2/SOURCE；A8-22，复杂度可推导、无基准 |
+| `F8-17` `target_info.c:minic_target_info_elf_*_is_nonpreemptible` | x86、RV64、A64 的地址发射会按名字重复扫描 C0 globals/functions；统一的 ELF 链接性质事实尚未跨 Core→Target 固化。 | R2/U2/SOURCE；A8-24，不得回退 MC-075 的 GOT/PCREL |
+| `F8-18` `x86_64/codegen.c:x86_head_find_direct_data_globals` | 以 reachable LOAD/STORE 地址回溯建每函数、每 global 布尔决策；`machine_emit.c` 据此更改同 global 的所有 GLOBAL_ADDRESS，混合 per-use 语义待证。 | R2/U2/SOURCE；`3d504e7` 新代码，A8-21 |
+| `F8-19` `x86_64/asm_contract.c` → `machine_asm.c` | 109 source families 中 21 typed、88 legacy；typed 模板/variant 防伪是必要二次校验，旧字符串 matcher 需逐族迁完再删。 | R2/U2/SOURCE；MC-050/062 |
+| `F8-20` `x86_64/machine_call.c:x86_emit_x87_core_helper` | Core 用 TF helper CALL 表达扩展浮点算术，x86 再根据符号名恢复 x87 操作，IR 身份边界未完全清理。 | R2/U2/SOURCE；A8-11，关联 MC-041/051 |
+| `F8-21` `target/common/lp64_aggregate.c:minic_multi_indirect_record` → A64/Loong return | 2048B 是机器实现 cap 不是 psABI；A64 ingress 逐字节展开，Loong 已共用 counted-copy。 | R2/U2/SOURCE + 既存 -S DIFF；MC-060 |
+| `F8-22` `loongarch64/residual_emit.c:minic_loongarch64_elided_frame_address_instruction` | 每个候选对全函数检查使用/后继，理论二次方工作量；不应删除安全 eligibility 证明。 | R2/U2/SOURCE；A8-13，缺 benchmark |
+| `F8-23` `target/backend.h` → `core_lower_asm_target.c` | 同一 Backend 头放 source GNU ASM qualification 与最终机器 emission；Core 查询 source policy 时暴露整个 emit 接口。 | R2/U2/SOURCE；A8-18，可先拆窄头文件 |
+| `F8-24` `target_registration.def` → `target_catalog.c/target_info.c/backend.c` | 三处消费同一 X-macro 注册目录；ISA/ABI/capability 分工有据，不是三份独立 Target 枚举。 | R2/U2/SOURCE；确认当前设计，应保留 |
+
+**F8 盲区与维护约束：** 本轮 337/337 C/H 和两 CLI 完成文件级复扫与快照核对，重点函数上述 R2/U2；
+但 Frontend 全部 builtin、两个极长 x86 GNU ASM 模板表、A64/Loong 特例、全部 RV psABI 组合没有逐条新获 E2。
+全量源码清点、函数深读和运行正确性是三个不同维度，不能用 F8 表的行数冒充所有函数证明。
+若某个本轮候选要长期闭环，先核已存 MC 条目，再补真实目标验证并登记独立根因，不将已有 P0 问题重编号。
+
+## 第九轮：函数级生产消费者与旧实现退役精查（2026-10-31）
+
+仍以 `3d504e7` 源码为准，F9 是对上面已覆盖文件的**纵深增量**，不宣称多读了不同文件或新增已证错编。
+`A9-*` 调查及退役条件集中维护于[架构总入口第九轮](README.md#第九轮函数深挖旧路径消费者与新待证线索)，
+历史编号仍按 [MC 台账](minic-issue-register.md)。
+
+| ID · 函数/路径 | 生产者 → 真实消费者 / 旧路由 | 静态结论、清理门槛 |
+| --- | --- | --- |
+| `F9-01` `parser_function.c:minic_parser_parse_gnu_section_attribute` | 旧 `section_attribute_token_is` + section 字符串专用解析无生产 caller；新 parser_attribute attribute-list 路径负责 source 资格。 | `SOURCE`；MC-031，同删私有 helper 与声明、全属性/section 回归。 |
+| `F9-02` `parser_type_query.c:minic_parser_parse_alignof_type_value` | 无生产与测试调用；`parser_expression.c:parse_alignof` 消费类型/表达式两种 source form。 | `SOURCE`；MC-031；可删整个旧 `.c` 及 Makefile 项，保留新 parse_alignof。 |
+| `F9-03` `parser_global.c:minic_parser_parse_{extern,static}_global` | 零 caller 的 head 前旧 wrapper；有 caller 的 `*_after_head` 是现役解析入口。 | `SOURCE`；MC-031，**只退役前置包装**。 |
+| `F9-04` `parser_builtins.c:parse_builtin_va_start` | 先取可扩容 Program `MinicFunction*`，首参递归可由 target machine builtin 扩容 Functions，之后还读 parameter_count。普通 call-arg parser 则先复制 callee header。 | `SOURCE / INVESTIGATE`；需 Loong 变参 + builtin + 容量边界 ASan，不能误称所有 call parser 都 UAF。 |
+| `F9-05` `core_lower_local_effects.c:core_{expression,block}_may_modify_local` | 两个 scalar wrapper 只被白盒测试调用，生产 IF/LOOP 已走同内核 batch collector。 | `SOURCE`；先迁测试/私有头，保留共用分类器，再删包装。 |
+| `F9-06` `inline_integer.c:minic_specialize_inline_integer_calls` | lazy static_blocked_sources 正常尾部 free，quota/add 失败早退未 free；与现有 MC-043 特化配额错误同路径。 | `SOURCE`；复合 LSan + 单出口清理，失败路径泄漏不冒充成功路径问题。 |
+| `F9-07` Boolean→Symbolic→Integer clone constructors | 三 pass 已层层调用同一底层 constructor；匹配器分别多一维 Boolean/符号/整数事实。 | `SOURCE / 排误删`；仅收敛实例、候选遍历和事实身份，不能删除活跃 admission。 |
+| `F9-08` `tools/minic` / `tools/minic-cc` option prefix | 两个 CLI 的五类前缀判定逐字相同；前者转发，后者调用目标 option interpreter。 | `SOURCE`；可共享 spelling classifier，不统一 driver/Target 语义责任。 |
+| `F9-09` `core_reachability.c:minic_core_named_function_id` | 每次按 Core callee 名称全扫 source function；同文件静态对象符号已建排序/二分索引。 | `SOURCE / PLAN`；预建 TU symbol identity；不得让 Core CALL 依赖仅 C FunctionId，先测热度。 |
+| `F9-10` `target_info.c:minic_target_info_elf_*_{nonpreemptible,undefined_weak}` | hidden weak 同时满足两个谓词；A64 residual_emit 明确拒用 direct PCREL，RV64/x86 address lowering 未显式排除。 | `SOURCE / INVESTIGATE`；GNU PIC/ELF、高址、无 provider、GOT/PCREL 对照，分别证明各 ISA；A9-08。 |
+| `F9-11` `x86_head_find_direct_data_globals` → `machine_emit.c` | Core 不同 `GLOBAL_ADDRESS` SSA 值可以共享一个 `global_id`；后端按 global 布尔选所有地址的 RIP/VMA。 | `SOURCE`；同符号 mixed-use+helper-only ELF 与 relocated runtime，A8-21 新交叉证据。 |
+| `F9-12` RV32/RV64 global visitors → Common GlobalEmissionPlan | RV32 的 default complex 已用 Common Plan，其他 weak/section/zero/reloc/Record 分支可逐个迁移；extern/alias 必须预先分流。 | `SOURCE / PLAN`；按符号绑定、NOBITS 和 data-rel.ro 做真实 ELF 差分，RV `.4byte/.dword` callback 不删。 |
+| `F9-13` `riscv64/call_emit.c` + `core_codegen.c` Record byte copy | 两段手写 forward copy 可按 t0/t1/t2/t3 的当前活性契约改用 `riscv/record_copy_bytes.c`；大于 2048B 使用 t3。 | `SOURCE`；先测 1/2047/2048/2049/4097 字节跨 GNU ABI、sret，不当 memmove。 |
+| `F9-14` x86 `machine_asm.c` ZERO_BARRIER / FXSAVE / IDENTITY_LOAD | Source form 已能分类，机器 legacy 再按文本选分支；现有 x86 typed form/variant 是真实生产范式。 | `SOURCE`；逐 family 迁 typed、保留 source matcher 与机器防伪，再删 machine 文本重认。 |
+| `F9-15` Loong `asm_contract.c` 14 structured descriptors | Source 与 Machine 都查同一 `matches/source/emit` 表，当前还没通过 Core 的 typed form identity 交接。 | `SOURCE / PLAN`；先形成 14 类 ID/variant，再删机器侧重复 registry 扫描；保留不在表中的 legacy。 |
+| `F9-16` Loong `call_emit.c:loongarch_builtin_immediate_value` | 机器 builtin fallback 逐次扫描全部 Core 指令找 defining value，而 integer emitter 已用 `fn->values[id].definition` 直接索引。 | `SOURCE`；替换扫描而**保留**缺 `has_constant_integer` 时的 fallback/5 层 conversion 门限。 |
+| `F9-17` A64 ASM structured spill guard + movz materializers | 唯一生产 ASM preflight 已限制 value_count，大量重复的 slot 容量 guard 可收敛；多个 A64 文件自写 movz/movk。 | `SOURCE / PLAN`；先固定 preflight 不变量；常量物化共享 ISA helper 但由 caller 管理 scratch/NZCV。 |
+| `F9-18` Common Core ObjectReuse + RV64 Record snapshot | Common scalar interval slot 多层扫描复杂度差；RV64 专门证明 Record CALL result 与 by-value 参数对象同址，身份/逃逸条件不同。 | `SOURCE / 排误删`；各做独立函数索引和基准，不能删除 Record snapshot。 |
+
+**F9 留下的边界：** Frontend 10 个零-caller Parser 入口及两个级联 helper 只静态清点，
+仍需实际删除后的构建与回归；Core `69/69` opcode switch 的覆盖不等于每类验证正确；
+x86、AArch64、LoongArch64 的长 ASM 模板及全部 GNU ABI/QEMU 仍未逐变体实跑。
+没有任何本轮源码候选因此提升成 `GNU-NATIVE-DIFF` 或 `VERIFIED`。
+
+## 第十轮：代码退役与两个动态根因回链（2026-10-31）
+
+这是**在 F8/F9 冻结审计之后实施的增量**，不是回写旧基线事实。
+涉及真实定义、声明、测试消费者同步迁移；旧编号仍可按 F9 表复盘为什么安全删除。
+
+| F10 项 · 原生产者 / 消费者 | 本轮处理与所有权约束 | 当前证据与仍缺事项 |
+| --- | --- | --- |
+| `F10-01` F9-01～03、F8 中 `parser_type_query.c` | Parser 的 10 个无调用入口及 2 个级联 private helper，连同 `parser_internal.h` 声明和 Makefile 旧 `.c` 项已真正删除；`parse_alignof`、统一 attribute-list、`*_after_head` 是仍存在的唯一现役消费者。 | MC-031 `FIXED-UNVERIFIED`；`minic-cc` 编译、五组 GNU C attr/section/integer 常量定向正反脚本 PASS；alignof x86 native PASS；未运行全部目标 GNU ELF/QEMU。 |
+| `F10-02` F9-04 `parse_builtin_va_start` | `MinicFunction*` 只在递归前读取；`parameter_count` 按值缓存，递归的 Loong machine builtin 即使添加 Program 第 17 个 Function 也不会沿用失效指针。 | **MC-077 ASan 原生 UAF 实证**：旧 `parser_builtins.c:1558` heap-use-after-free，修后 sanitizer 同输入 EXIT0，新增 Loong 专用回归 fixture+脚本；只修当前借用，不顺带判其他 Parser UAF。 |
+| `F10-03` F9-05 Core `*_may_modify_local` | 白盒 test 迁入与生产一致的 batch `minic_core_*_collect_modified_locals`，移除两个 scalar 包装与 `core_lower_internal.h` 声明；保留原 effect classifier、OOM conservative path。 | 独立 Core 测试以 `-Werror` 构建且执行 PASS。 |
+| `F10-04` F9-06 `minic_specialize_inline_integer_calls` | clone quota/add 失败路径释放 `static_blocked_sources`；不改变 clone constructor、CALL identity 或 boolean/integer 预算。 | 仅资源清理；MC-043 的有效 2050/1025 callsite 失败**仍 OPEN**，专用 LSan 和规模回归待补。 |
+| `F10-05` F9-16 Loong `loongarch_builtin_immediate_value` | 以 `fn->values[id].definition` 代替每次线性扫描 Core instructions；仍把定义种类、五层转换、const/fallback 判断留在 Target。 | Loong CSR 四个合法形式/三个非法形式 source-only 定向 PASS；缺交叉 GNU ELF/QEMU。 |
+| `F10-06` F8-18/F9-11 x86 `.head.text` | 对 `GLOBAL_ADDRESS(global_id)` 的逻辑符号身份不再当作每个使用点所需的物理/VMA 地址身份；按 SSA producer/consumer 逐步拆开，机器发射保留 ordinary/PIE 非 head 路径。 | MC-076 的原 GNU-NATIVE-DIFF/ELF-ORACLE：原 MiniC 2/2 异址执行 FAIL，GNU 2/2 PASS；本地实现和新回归仍在复核，不声称未知 pointer alias 已修。 |
+
+测试脚本的老式寄存器字符串匹配和已观察到的基线红灯另外回链 MC-021，不把 C 语义通过和
+脚本 PASS 混为一谈。本批没有接手 F9-12 RV GlobalEmissionPlan、F9-14/15 typed ASM 大类和
+F9-18 ObjectReuse，因为还没有证明删除其活消费者后语义不变。

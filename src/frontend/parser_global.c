@@ -600,42 +600,6 @@ bool minic_parser_parse_extern_global_after_head(MinicParser *parser,
         parser, MINIC_TOKEN_SEMICOLON, "expected ';' after extern object declaration");
 }
 
-bool minic_parser_parse_extern_global(MinicParser *parser) {
-    MinicSourceSpan first_name_span;
-    MinicType base_type;
-    MinicType first_object_type;
-    char section_name[256];
-    size_t section_name_length;
-    size_t explicit_alignment;
-    bool has_section;
-
-    section_name_length = 0U;
-    explicit_alignment = 0U;
-    has_section = false;
-    (void)memset(section_name, 0, sizeof(section_name));
-    if (!minic_parser_expect(parser, MINIC_TOKEN_KW_EXTERN, "expected keyword 'extern'") ||
-        !minic_parser_parse_type_specifiers(parser, &base_type) ||
-        !minic_parser_parse_gnu_object_attribute_lists(parser,
-                                                       section_name,
-                                                       sizeof(section_name),
-                                                       &section_name_length,
-                                                       &has_section,
-                                                       &explicit_alignment) ||
-        !parse_extern_object_declarator(parser, base_type, &first_name_span, &first_object_type)) {
-        return false;
-    }
-    return minic_parser_parse_extern_global_after_head(parser,
-                                                       base_type,
-                                                       first_object_type,
-                                                       first_name_span,
-                                                       section_name,
-                                                       section_name_length,
-                                                       has_section,
-                                                       explicit_alignment,
-                                                       MINIC_SYMBOL_VISIBILITY_DEFAULT,
-                                                       false);
-}
-
 static bool parse_static_scalar_array(MinicParser *parser,
                                       MinicType declaration_base,
                                       MinicType element_type,
@@ -1197,63 +1161,4 @@ bool minic_parser_parse_static_global_after_head(MinicParser *parser,
                                      has_section,
                                      explicit_alignment,
                                      force_emit);
-}
-
-bool minic_parser_parse_static_global(MinicParser *parser) {
-    MinicSourceSpan name_span;
-    MinicType declaration_base;
-    MinicType object_type;
-    MinicGlobalObjectId object_id;
-    char section_name[256];
-    size_t section_name_length;
-    size_t explicit_alignment;
-    bool has_section;
-    bool force_emit = false;
-
-    section_name_length = 0U;
-    explicit_alignment = 0U;
-    has_section = false;
-    (void)memset(section_name, 0, sizeof(section_name));
-    if (parser == NULL ||
-        !minic_parser_expect(parser, MINIC_TOKEN_KW_STATIC, "expected keyword 'static'") ||
-        !minic_parser_parse_type_specifiers(parser, &declaration_base) ||
-        !minic_parser_parse_pointer_declarator(parser, declaration_base, &object_type) ||
-        !minic_parser_require_complete_object_type(
-            parser, object_type, "incomplete record type requires pointer declarator")) {
-        return false;
-    }
-    if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
-        minic_parser_error(parser, "expected global object name");
-        return false;
-    }
-    name_span = parser->current.span;
-    if (!minic_parser_advance(parser)) {
-        return false;
-    }
-    if (!minic_parser_parse_static_global_after_head(parser,
-                                                     declaration_base,
-                                                     object_type,
-                                                     name_span,
-                                                     section_name,
-                                                     sizeof(section_name),
-                                                     &section_name_length,
-                                                     &has_section,
-                                                     &explicit_alignment,
-                                                     &force_emit)) {
-        return false;
-    }
-    object_id = minic_parser_find_global_object_entity(parser, name_span);
-    if (object_id == MINIC_GLOBAL_OBJECT_INVALID ||
-        !minic_parser_global_apply_metadata(parser,
-                                      object_id,
-                                      section_name,
-                                      section_name_length,
-                                      has_section,
-                                      explicit_alignment) ||
-        (force_emit && !minic_c0_program_set_global_object_force_emit(
-                           parser->program, object_id))) {
-        minic_parser_error(parser, "cannot persist static object metadata");
-        return false;
-    }
-    return true;
 }

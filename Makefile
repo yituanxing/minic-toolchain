@@ -148,7 +148,6 @@ MINIC_SOURCES := \
 	src/frontend/parser_runtime_initializer.c \
 	src/frontend/parser_string.c \
 	src/frontend/parser_type.c \
-	src/frontend/parser_type_query.c \
 	src/frontend/parser_typedef.c \
 	src/frontend/token.c \
 	src/frontend/type.c \

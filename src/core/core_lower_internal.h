@@ -335,14 +335,6 @@ void core_expression_collect_modified_and_condition_locals(
 void core_block_collect_modified_locals(
     const MinicCoreLowerContext *context, const MinicBlock *block,
     unsigned char *modified, unsigned int depth);
-/* Scalar diagnostic/proof compatibility queries use the same collector. */
-bool core_expression_may_modify_local(
-    const MinicCoreLowerContext *context, MinicExpressionId expression_id,
-    MinicLocalId local_id, unsigned int depth);
-bool core_block_may_modify_local(
-    const MinicCoreLowerContext *context, const MinicBlock *block,
-    MinicLocalId local_id, unsigned int depth);
-
 /* Loop owns normalized source CFG and while-specific fact barriers.
  * The split entry preserves parser-created while/for label pairs. */
 MinicCoreLowerStatus minic_core_lower_loop_cfg(

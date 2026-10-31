@@ -107,26 +107,29 @@ int main(void) {
         condition_owned[2] != 0U || changed[0] != 1U)
         return 12;
 
-    /* The batch summary must agree with the historical scalar oracle for
-     * every local, while inspecting the source expression/block only once. */
+    /* Check each local's positive and negative result directly from the
+     * production batch mask, independently for expression and block scans. */
     (void)memset(changed, 0, sizeof(changed));
     core_expression_collect_modified_locals(&context, 5U, changed, 0U);
+    if (changed[0] != 1U) return 1;
+    if (changed[1] != 0U) return 2;
     if (changed[0] != 1U || changed[1] != 0U || changed[2] != 0U) return 7;
-    core_block_collect_modified_locals(&context, &blocks[1], changed, 0U);
-    if (changed[0] != 1U || changed[1] != 0U || changed[2] != 0U) return 8;
-
-    if (!core_expression_may_modify_local(&context, 5U, 1U, 0U)) return 1;
-    if (core_expression_may_modify_local(&context, 5U, 2U, 0U)) return 2;
-    if (!core_block_may_modify_local(&context, &blocks[1], 1U, 0U)) return 3;
-    if (core_block_may_modify_local(&context, &blocks[1], 3U, 0U)) return 4;
-    statements[0].kind = MINIC_STATEMENT_RETURN;
-    statements[0].expression = 4U;
-    if (!core_block_may_modify_local(&context, &blocks[1], 1U, 0U)) return 5;
-    statements[1].kind = MINIC_STATEMENT_RETURN;
-    statements[1].expression = 4U;
-    if (core_block_may_modify_local(&context, &blocks[1], 1U, 0U)) return 6;
     (void)memset(changed, 0, sizeof(changed));
     core_block_collect_modified_locals(&context, &blocks[1], changed, 0U);
+    if (changed[0] != 1U) return 3;
+    if (changed[2] != 0U) return 4;
+    if (changed[0] != 1U || changed[1] != 0U || changed[2] != 0U) return 8;
+
+    statements[0].kind = MINIC_STATEMENT_RETURN;
+    statements[0].expression = 4U;
+    (void)memset(changed, 0, sizeof(changed));
+    core_block_collect_modified_locals(&context, &blocks[1], changed, 0U);
+    if (changed[0] != 1U) return 5;
+    statements[1].kind = MINIC_STATEMENT_RETURN;
+    statements[1].expression = 4U;
+    (void)memset(changed, 0, sizeof(changed));
+    core_block_collect_modified_locals(&context, &blocks[1], changed, 0U);
+    if (changed[0] != 0U) return 6;
     if (changed[0] != 0U || changed[1] != 0U || changed[2] != 0U) return 9;
     statements[1].kind = MINIC_STATEMENT_INLINE_ASM;
     (void)memset(changed, 0, sizeof(changed));

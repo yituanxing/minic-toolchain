@@ -569,33 +569,6 @@ static bool initialize_object_attribute_context(MinicObjectAttributeContext *con
     return true;
 }
 
-bool minic_parser_apply_object_attribute_list(MinicParser *parser,
-                                              const MinicParsedAttributeList *attributes,
-                                              char *section_name,
-                                              size_t section_capacity,
-                                              size_t *section_name_length,
-                                              bool *has_section,
-                                              size_t *explicit_alignment) {
-    MinicObjectAttributeContext context;
-    size_t index;
-
-    if (parser == NULL || attributes == NULL ||
-        !initialize_object_attribute_context(&context,
-                                             section_name,
-                                             section_capacity,
-                                             section_name_length,
-                                             has_section,
-                                             explicit_alignment)) {
-        return false;
-    }
-    for (index = 0U; index < attributes->count; ++index) {
-        if (!consume_object_attribute(parser, &attributes->values[index], &context)) {
-            return false;
-        }
-    }
-    return true;
-}
-
 bool minic_parser_parse_gnu_object_attribute_lists(MinicParser *parser,
                                                    char *section_name,
                                                    size_t section_capacity,

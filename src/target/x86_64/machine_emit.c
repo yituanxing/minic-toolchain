@@ -15,6 +15,33 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* In early head code a direct-global SSA pointer normally stays physical,
+ * including when passed to an out-of-line data helper. If a pointer has
+ * instead passed through a numeric link-VMA cast and is converted back to a
+ * pointer, only its LOAD/STORE memory use is rebased onto physical memory.
+ * Subtracting the link base preserves field and dynamic pointer offsets. */
+static bool x86_head_load_memory_address(
+    FILE *out, const MinicCoreFunction *fn, const MinicX86Frame *frame,
+    MinicCoreValueId address) {
+    MinicCoreGlobalId global;
+    const char *symbol;
+    if (!x86_value_load(out, frame, address, "%r10")) return false;
+    if (!frame->kernel_head_link_addresses ||
+        frame->kernel_head_memory_rebase_globals == NULL)
+        return true;
+    if (address >= fn->value_count) return false;
+    global = frame->kernel_head_memory_rebase_globals[address];
+    if (global == MINIC_CORE_GLOBAL_INVALID) return true;
+    if (global >= fn->global_count || fn->globals[global].name == NULL)
+        return false;
+    symbol = fn->globals[global].name;
+    return fprintf(out,
+        "  movq $%s, %%r11\n"
+        "  subq %%r11, %%r10\n"
+        "  leaq %s(%%rip), %%r11\n"
+        "  addq %%r11, %%r10\n", symbol, symbol) >= 0;
+}
+
 /* Qualified GNU `i` symbolic operands are resolved by Common Core. Every
  * machine consumer shares this fail-closed relocation validator: a symbol
  * with an optional signed decimal addend is representable by ELF, whereas
@@ -652,11 +679,10 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
     case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS:
         if (ins->value.global_id >= fn->global_count ||
             fn->globals[ins->value.global_id].name == NULL) return false;
-        /* Linux's non-PIE .head.text runs at a displaced physical address
-         * before final page tables exist. Its link-address arithmetic must
-         * retain the absolute kernel VMA (GNU -mcmodel=kernel R_X86_64_32S),
-         * never the relocated runtime address produced by RIP-relative LEA.
-         * Leave all ordinary, PIC, and non-head symbol materialization alone. */
+        /* A direct data global keeps its RIP-relative physical pointer for
+         * direct LOAD/STORE and CALL argument users. A pointer-to-integer
+         * consumer later turns its own result into the link kernel VMA,
+         * without changing this (possibly shared) SSA pointer producer. */
         if (frame->kernel_head_link_addresses &&
             !(frame->kernel_head_direct_data_globals != NULL &&
               frame->kernel_head_direct_data_globals[ins->value.global_id]))
@@ -920,6 +946,7 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
     }
     case MINIC_CORE_INSTRUCTION_SCALAR_BITCAST: {
         const MinicCoreValueId operand = ins->value.operand;
+        MinicCoreGlobalId vma_global = MINIC_CORE_GLOBAL_INVALID;
         size_t src_bytes;
         bool src_sign;
         if (operand >= fn->value_count ||
@@ -932,17 +959,38 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
          * Core slots, and the destination normalization applies truncation. */
         (void)src_bytes;
         (void)src_sign;
+        if (frame->kernel_head_link_addresses &&
+            frame->kernel_head_vma_cast_globals != NULL &&
+            ins->result < fn->value_count)
+            vma_global = frame->kernel_head_vma_cast_globals[ins->result];
+        if (vma_global != MINIC_CORE_GLOBAL_INVALID) {
+            const char *symbol;
+            if (vma_global >= fn->global_count ||
+                fn->globals[vma_global].name == NULL) return false;
+            symbol = fn->globals[vma_global].name;
+            /* Convert this use's physical pointer to a numeric link VMA;
+             * field/dynamic offsets survive because the adjustment is by
+             * the difference between the two bases of the SAME symbol. */
+            return x86_value_load(out, frame, operand, "%rax") &&
+                   fprintf(out,
+                       "  leaq %s(%%rip), %%r11\n"
+                       "  subq %%r11, %%rax\n"
+                       "  movq $%s, %%r11\n"
+                       "  addq %%r11, %%rax\n", symbol, symbol) >= 0 &&
+                   x86_normalize(out, program, target, ins->type) &&
+                   x86_value_store(out, frame, ins->result);
+        }
         return x86_value_load(out, frame, operand, "%rax") &&
                x86_normalize(out, program, target, ins->type) &&
                x86_value_store(out, frame, ins->result);
     }
     case MINIC_CORE_INSTRUCTION_LOAD:
         if (minic_type_is_long_double(ins->type))
-            return x86_value_load(out, frame, ins->value.load.address, "%r10") &&
+            return x86_head_load_memory_address(out, fn, frame, ins->value.load.address) &&
                    fprintf(out, "  fldt (%%r10)\n") >= 0 &&
                    x86_x87_store(out, frame, ins->result);
         if (minic_type_is_int128_integer(ins->type))
-            return x86_value_load(out, frame, ins->value.load.address, "%r10") &&
+            return x86_head_load_memory_address(out, fn, frame, ins->value.load.address) &&
                    fprintf(out, "  movq (%%r10), %%rax\n"
                                 "  movq 8(%%r10), %%rdx\n") >= 0 &&
                    x86_i128_store(out, frame, ins->result, "%rax", "%rdx");
@@ -956,7 +1004,7 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
                    x86_load_memory_at(out, bytes, sign, memory) &&
                    x86_value_store(out, frame, ins->result);
         }
-        return x86_value_load(out, frame, ins->value.load.address, "%r10") &&
+        return x86_head_load_memory_address(out, fn, frame, ins->value.load.address) &&
                x86_load_memory(out, bytes, sign) &&
                x86_value_store(out, frame, ins->result);
     case MINIC_CORE_INSTRUCTION_ATOMIC_LOAD: {
@@ -969,7 +1017,7 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
             !minic_x86_64_storage_width(program, target, pointee, &bytes, &sign))
             return false;
         /* Aligned scalar x86 MOV has atomicity at supported widths. */
-        return x86_value_load(out, frame, addr, "%r10") &&
+        return x86_head_load_memory_address(out, fn, frame, addr) &&
                x86_load_memory(out, bytes, sign) &&
                x86_value_store(out, frame, ins->result);
     }
@@ -986,7 +1034,7 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
         /* Naturally aligned 1/2/4/8-byte scalar MOV writes are atomic on
          * x86-64. Only relaxed semantics are implemented: sequentially
          * consistent operations require stronger target instructions. */
-        return x86_value_load(out, frame, addr, "%r10") &&
+        return x86_head_load_memory_address(out, fn, frame, addr) &&
                x86_value_load(out, frame, src, "%rax") &&
                x86_store_memory(out, bytes);
     }
@@ -994,11 +1042,11 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
         MinicCoreValueId src = ins->value.store.stored_value;
         if (src >= fn->value_count) return false;
         if (minic_type_is_long_double(fn->values[src].type))
-            return x86_value_load(out, frame, ins->value.store.address, "%r10") &&
+            return x86_head_load_memory_address(out, fn, frame, ins->value.store.address) &&
                    x86_x87_load(out, frame, src) &&
                    fprintf(out, "  fstpt (%%r10)\n") >= 0;
         if (minic_type_is_int128_integer(fn->values[src].type))
-            return x86_value_load(out, frame, ins->value.store.address, "%r10") &&
+            return x86_head_load_memory_address(out, fn, frame, ins->value.store.address) &&
                    x86_i128_load(out, frame, src, "%rax", "%rdx") &&
                    fprintf(out, "  movq %%rax, (%%r10)\n"
                                 "  movq %%rdx, 8(%%r10)\n") >= 0;
@@ -1014,7 +1062,7 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
                    x86_value_load(out, frame, src, "%rax") &&
                    x86_store_memory_at(out, bytes, memory);
         }
-        return x86_value_load(out, frame, ins->value.store.address, "%r10") &&
+        return x86_head_load_memory_address(out, fn, frame, ins->value.store.address) &&
                x86_value_load(out, frame, src, "%rax") &&
                x86_store_memory(out, bytes);
     }

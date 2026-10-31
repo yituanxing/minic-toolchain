@@ -1,1 +1,1 @@
-extern int aligned_function(void) __attribute__((__aligned__(16)));
+extern int naked_function(void) __attribute__((__naked__));

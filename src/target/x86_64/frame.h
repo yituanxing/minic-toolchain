@@ -55,11 +55,19 @@ typedef struct MinicX86Frame {
      * relocation arithmetic. RIP-relative LEA would instead materialize
      * the currently executing (relocated) physical symbol address. */
     bool kernel_head_link_addresses;
-    /* A .head.text global whose address is actually dereferenced must be
-     * found at its displaced physical address. This per-function Core-use
-     * proof overrides link-VMA materialization for that data symbol, also
-     * when the same symbol's address is subsequently passed to a helper. */
+    /* A .head.text global dereferenced as memory needs its physical address.
+     * This remains the default for a direct global's pointer-producing uses,
+     * including helper calls from the same function. */
     const bool *kernel_head_direct_data_globals;
+    /* Indexed by Core scalar-bitcast result SSA. When valid, this particular
+     * pointer->integer consumer converts a physical pointer to link VMA;
+     * the original pointer SSA stays physical for LOAD/STORE and CALL uses. */
+    const MinicCoreGlobalId *kernel_head_vma_cast_globals;
+    /* Indexed by Core memory-address SSA, INVALID unless its provenance
+     * passes through a pointer->integer VMA cast. If it is converted back to
+     * a pointer, only its LOAD/STORE consumer rebases back to RIP-relative
+     * physical memory, preserving field and dynamic pointer offsets. */
+    const MinicCoreGlobalId *kernel_head_memory_rebase_globals;
     /* Wide scalar operations use RDX as a scratch register. Snapshot the
      * incoming SysV GP bank in the prologue before lowering any Core body.
      * This keeps a later TI parameter alive across an earlier param's

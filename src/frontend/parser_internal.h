@@ -244,10 +244,7 @@ void minic_parser_error(MinicParser *parser, const char *format, ...);
 bool minic_parser_advance(MinicParser *parser);
 bool minic_parser_expect(MinicParser *parser, MinicTokenKind kind, const char *message);
 bool minic_parser_parse_integer_value(MinicParser *parser, int *value);
-bool minic_parser_parse_integer_value64(MinicParser *parser, int64_t *value);
 bool minic_parser_parse_zero_pointer_constant(MinicParser *parser);
-bool minic_parser_parse_null_pointer_constant_expression(MinicParser *parser,
-                                                         MinicType target_type);
 bool minic_parser_parse_unsigned_integer_value64(MinicParser *parser, uint64_t *value);
 bool minic_parser_current_integer_literal_syntax(const MinicParser *parser,
                                                  MinicIntegerLiteralBase *base,
@@ -261,9 +258,6 @@ bool minic_parser_parse_integer_initializer_bits(MinicParser *parser,
 bool minic_parser_parse_static_storage_initializer_value(MinicParser *parser,
                                                          MinicGlobalObjectId object_id,
                                                          MinicType type);
-bool minic_parser_parse_alignof_type_value(MinicParser *parser,
-                                           int64_t *value,
-                                           MinicSourceSpan *span);
 bool minic_parser_token_starts_type_name(const MinicParser *parser, MinicToken token);
 bool minic_parser_materialize_builtin_va_list_source_type(
     MinicParser *parser, MinicType *type);
@@ -299,8 +293,6 @@ bool minic_parser_calling_convention_fixed_scalar_supported(
     size_t parameter_count, bool is_variadic);
 bool minic_parser_parse_gnu_function_attributes(
     MinicParser *parser, MinicParsedFunctionDiagnostic *diagnostic);
-bool minic_parser_parse_gnu_section_attribute(
-    MinicParser *parser, char *buffer, size_t capacity, size_t *length, bool *has_section);
 bool minic_parser_parse_gnu_prefix_function_attributes(MinicParser *parser,
                                                        bool is_internal,
                                                        bool is_inline,
@@ -308,7 +300,6 @@ bool minic_parser_parse_gnu_prefix_function_attributes(MinicParser *parser,
 bool minic_parser_persist_function_diagnostic(
     MinicParser *parser, MinicFunctionId function_id,
     const MinicParsedFunctionDiagnostic *diagnostic);
-bool minic_parser_parse_integer_constant_expression_value(MinicParser *parser, int64_t *value);
 bool minic_parser_parse_fixed_array_bound(MinicParser *parser, size_t *element_count);
 bool minic_parser_parse_array_designator_component(
     MinicParser *parser, size_t element_count, bool infer_bound, size_t *first, size_t *last);
@@ -322,10 +313,6 @@ size_t minic_parser_span_length(MinicSourceSpan span);
 bool minic_parser_span_equals(const MinicParser *parser,
                               MinicSourceSpan left,
                               MinicSourceSpan right);
-const MinicAttributeDescriptor *minic_parser_current_attribute(const MinicParser *parser);
-bool minic_parser_current_attribute_is(const MinicParser *parser,
-                                       MinicAttributeKind kind,
-                                       MinicAttributeTarget target);
 bool minic_parser_parse_gnu_attribute_lists(MinicParser *parser,
                                             MinicParsedAttributeConsumer consumer,
                                             void *context);
@@ -349,13 +336,6 @@ bool minic_parser_apply_section_attribute(MinicParser *parser,
                                           size_t capacity,
                                           size_t *length,
                                           bool *has_section);
-bool minic_parser_apply_object_attribute_list(MinicParser *parser,
-                                              const MinicParsedAttributeList *attributes,
-                                              char *section_name,
-                                              size_t section_capacity,
-                                              size_t *section_name_length,
-                                              bool *has_section,
-                                              size_t *explicit_alignment);
 bool minic_parser_parse_gnu_object_attribute_lists(MinicParser *parser,
                                                    char *section_name,
                                                    size_t section_capacity,
@@ -493,7 +473,6 @@ MinicGlobalObjectId minic_parser_find_scoped_global_object(const MinicParser *pa
 MinicGlobalObjectId
 minic_parser_find_scoped_global_object_in_current_scope(const MinicParser *parser,
                                                         MinicSourceSpan name_span);
-bool minic_parser_name_bound(const MinicParser *parser, MinicSourceSpan name_span);
 MinicFunctionId minic_parser_find_function(const MinicParser *parser, MinicSourceSpan name_span);
 MinicGlobalObjectId minic_parser_find_global_object(const MinicParser *parser,
                                                     MinicSourceSpan name_span);
@@ -526,7 +505,6 @@ bool minic_parser_parse_record_definition_specifier(MinicParser *parser, MinicTy
 bool minic_parser_parse_record_definition(MinicParser *parser);
 bool minic_parser_parse_enum_definition(MinicParser *parser);
 bool minic_parser_parse_typedef(MinicParser *parser);
-bool minic_parser_parse_static_global(MinicParser *parser);
 bool minic_parser_parse_static_pointer_object_initializer(MinicParser *parser,
                                                           MinicGlobalObjectId object_id,
                                                           MinicType pointer_type);
@@ -549,7 +527,6 @@ bool minic_parser_parse_static_zero_declaration_list_after_head(MinicParser *par
                                                                 bool shared_has_section,
                                                                 size_t shared_explicit_alignment,
                                                                 bool shared_force_emit);
-bool minic_parser_parse_extern_global(MinicParser *parser);
 bool minic_parser_parse_extern_global_after_head(MinicParser *parser,
                                                  MinicType base_type,
                                                  MinicType first_object_type,

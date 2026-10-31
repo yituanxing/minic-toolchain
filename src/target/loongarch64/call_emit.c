@@ -43,28 +43,25 @@ static bool emit_lp64_record_chunk_argument(FILE *out, size_t offset,
 static bool loongarch_builtin_immediate_value(
     const MinicCoreFunction *fn, MinicCoreValueId value, uint64_t *out) {
     unsigned depth;
-    if (fn == NULL || out == NULL || value >= fn->value_count)
+    if (fn == NULL || out == NULL || fn->values == NULL ||
+        fn->instructions == NULL || value >= fn->value_count)
         return false;
     for (depth = 0U; depth < 5U; ++depth) {
-        size_t i;
-        bool found = false;
-        for (i = 0U; i < fn->instruction_count; ++i) {
-            const MinicCoreInstruction *ins = &fn->instructions[i];
-            if (ins->result != value)
-                continue;
-            if (ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT) {
-                *out = (uint64_t)ins->value.integer_value;
-                return true;
-            }
-            if (ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION &&
-                ins->value.operand < fn->value_count) {
-                value = ins->value.operand;
-                found = true;
-            }
-            break;
-        }
-        if (!found)
+        const MinicCoreInstructionId definition = fn->values[value].definition;
+        const MinicCoreInstruction *ins;
+        if (definition >= fn->instruction_count)
             return false;
+        ins = &fn->instructions[definition];
+        if (ins->result != value)
+            return false;
+        if (ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT) {
+            *out = (uint64_t)ins->value.integer_value;
+            return true;
+        }
+        if (ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION ||
+            ins->value.operand >= fn->value_count)
+            return false;
+        value = ins->value.operand;
     }
     return false;
 }

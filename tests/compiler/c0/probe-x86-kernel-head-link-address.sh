@@ -27,6 +27,12 @@ if sed -n '/\.rela.head.text/,/Relocation section/p' "$work/head.reloc" \
     | grep -Eq 'R_X86_64_32S.*kernel_head_direct_descriptor'; then
     fail '.head.text dereferenced global still has unmapped high-half address'
 fi
+mixed_physical=$(sed -n '/\.rela.head.text/,/Relocation section/p' "$work/head.reloc" \
+    | grep -Ec 'R_X86_64_PC32.*kernel_head_mixed_global' || true)
+mixed_link_vma=$(sed -n '/\.rela.head.text/,/Relocation section/p' "$work/head.reloc" \
+    | grep -Ec 'R_X86_64_32S.*kernel_head_mixed_global' || true)
+test "$mixed_physical" -ge 2 && test "$mixed_link_vma" -eq 2 \
+    || fail 'same head global lost its two physical-store/link-VMA address roles'
 sed -n '/\.rela.text/,/Relocation section/p' "$work/head.reloc" \
     | grep -Eq 'R_X86_64_PC32.*kernel_link_address_probe_anchor' \
     || fail 'regular .text changed its established PC-relative relocation'
@@ -34,6 +40,26 @@ sed -n '/\.rela.text/,/Relocation section/p' "$work/head.reloc" \
     || fail 'GNU link failed'
 "$work/relocated" > "$work/actual" \
     || fail 'relocated early-head function lost link-time symbol address'
+
+# GNU's own compiler independently demonstrates that the same C global has
+# both direct physical memory and link-VMA address roles. Also run the same
+# displaced code+data runtime oracle with its output, not only MiniC's.
+"$cc" -std=gnu11 -O0 -fno-PIE -S "$work/probe.i" -o "$work/gnu-head.s" \
+    || fail 'GNU baseline x86 assembly'
+"$cc" -no-pie -x assembler -c "$work/gnu-head.s" -o "$work/gnu-head.o" \
+    || fail 'GNU baseline object'
+readelf -rW "$work/gnu-head.o" > "$work/gnu-head.reloc" \
+    || fail 'GNU baseline readelf'
+sed -n '/\.rela.head.text/,/Relocation section/p' "$work/gnu-head.reloc" \
+    | grep -Eq 'R_X86_64_PC32.*kernel_head_mixed_global' \
+    || fail 'GNU baseline lost head mixed physical address'
+sed -n '/\.rela.head.text/,/Relocation section/p' "$work/gnu-head.reloc" \
+    | grep -Eq 'R_X86_64_32(S)?[[:space:]].*kernel_head_mixed_global' \
+    || fail 'GNU baseline lost head mixed link VMA'
+"$cc" -no-pie "$driver" "$work/gnu-head.o" -o "$work/gnu-relocated" \
+    || fail 'GNU baseline link'
+"$work/gnu-relocated" > "$work/gnu-actual" \
+    || fail 'GNU baseline displaced runtime'
 
 "$minic" --target=x86_64-linux -fPIE -S "$work/probe.i" -o "$work/pie.s" \
     || fail 'MiniC PIE x86 assembly'
@@ -44,4 +70,4 @@ if sed -n '/\.rela.head.text/,/Relocation section/p' "$work/pie.reloc" \
     | grep -Eq 'R_X86_64_32S.*kernel_link_address_probe_anchor'; then
     fail 'PIE .head.text unexpectedly received kernel absolute relocation'
 fi
-echo 'X86_KERNEL_HEAD_LINK_ADDRESS=PASS head_link=R_X86_64_32S head_direct=R_X86_64_PC32 normal=R_X86_64_PC32 PIE=no_32S relocated_runtime=PASS'
+echo 'X86_KERNEL_HEAD_LINK_ADDRESS=PASS head_link=R_X86_64_32S head_direct=R_X86_64_PC32 head_mixed=PC32+32S normal=R_X86_64_PC32 PIE=no_32S relocated_runtime=PASS relocated_mixed=PASS gnu_same_source=PASS'

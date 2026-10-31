@@ -708,6 +708,7 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
                               program->function_count,
                               (size_t)source_id);
                 minic_core_reentry_index_destroy(pure_guard_reentry_index);
+                free(static_blocked_sources);
                 free(initial_expression_owners);
                 return false;
             }
@@ -721,6 +722,7 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
                               program->function_count,
                               (size_t)source_id);
                 minic_core_reentry_index_destroy(pure_guard_reentry_index);
+                free(static_blocked_sources);
                 free(initial_expression_owners);
                 return false;
             }

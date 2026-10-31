@@ -5,8 +5,8 @@
 #include <stddef.h>
 #include <string.h>
 
-/* One conservative source-effect owner for both scalar queries and batch
- * local-set collection. IF and LOOP consume a whole-subtree local mask once,
+/* One conservative source-effect owner for batch local-set collection.
+ * IF and LOOP consume a whole-subtree local mask once,
  * instead of recursively scanning that AST independently for every local.
  * Invalid nodes, unsupported source operations and depth exhaustion poison
  * the entire mask; absence of an effect must be positively proven. */
@@ -368,28 +368,4 @@ void core_block_collect_modified_locals(
         &scan, context, modified, context->source_function->local_begin,
         context->source_function->local_count);
     core_source_collect_block(&scan, block, depth);
-}
-
-bool core_expression_may_modify_local(
-    const MinicCoreLowerContext *context, MinicExpressionId id,
-    MinicLocalId local_id, unsigned int depth) {
-    CoreSourceLocalEffectScan scan;
-    unsigned char modified = 0U;
-    if (context == NULL || context->body == NULL ||
-        context->body->program == NULL) return true;
-    core_source_initialize_effect_scan(&scan, context, &modified, local_id, 1U);
-    core_source_collect_expression(&scan, id, depth);
-    return modified != 0U;
-}
-
-bool core_block_may_modify_local(
-    const MinicCoreLowerContext *context, const MinicBlock *block,
-    MinicLocalId local_id, unsigned int depth) {
-    CoreSourceLocalEffectScan scan;
-    unsigned char modified = 0U;
-    if (context == NULL || context->body == NULL ||
-        context->body->program == NULL) return true;
-    core_source_initialize_effect_scan(&scan, context, &modified, local_id, 1U);
-    core_source_collect_block(&scan, block, depth);
-    return modified != 0U;
 }
