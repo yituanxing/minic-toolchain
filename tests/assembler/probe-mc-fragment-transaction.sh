@@ -7,9 +7,10 @@ src=assembler/src/assembler.c
 ! grep -q 'capture_instruction_bytes' "$src"
 grep -q 'minias_stage_fragment_bytes' "$src"
 grep -q 'minias_stage_fragment_pattern' "$src"
-python3 - "$src" <<'PY'
+python3 - "$src" assembler/src/mc_encode_result.c <<'PY'
 import sys
 s=open(sys.argv[1],encoding='utf-8').read()
+mc=open(sys.argv[2],encoding='utf-8').read()
 start=s.index('bool minias_emit_instruction_bytes(')
 end=s.index('bool minias_section_append(',start)
 body=s[start:end]
@@ -58,5 +59,27 @@ if 'as->active_encode_result->byte_count!=stmt->size' not in body:
     raise SystemExit('missing final encoded fragment size check')
 if 'if(!minias_commit_encode_result(as,stmt))' not in body:
     raise SystemExit('MCFragment does not require successful Common commit')
-print('MINIAS_MC_FRAGMENT_TRANSACTION=PASS target_cursor=isolated all_fragments=single_commit encoded_size=checked stage_guard=removed')
+# Fixed MCData, instruction SymbolRef and absolute-zero relocation markers
+# share the same EncodeResult append owner. Their semantic validity checks
+# deliberately remain different, so this guards ownership, not ISA syntax.
+start=mc.index('bool minias_encode_result_stage_fixup(')
+end=mc.index('static bool stage_instruction_fixup(',start)
+staging=mc[start:end]
+if 'minias_grow_array((void **)&result->fixups' not in staging:
+    raise SystemExit('missing single EncodeResult fixup vector owner')
+start=s.index('static bool minias_stage_common_fixup(')
+end=s.index('bool minias_add_fixup(',start)
+data_stage=s[start:end]
+if 'minias_encode_result_stage_fixup(as,&request,' not in data_stage:
+    raise SystemExit('MCData bypasses common EncodeResult fixup owner')
+if 'result->fixups[result->fixup_count++]' in data_stage:
+    raise SystemExit('MCData has a duplicate staged Fixup append')
+start=mc.index('static bool stage_instruction_fixup(')
+end=mc.index('bool minias_encode_request_anchor_ref(',start)
+target_stage=mc[start:end]
+if target_stage.count('return stage_instruction_fixup(as,')!=2:
+    raise SystemExit('Target SymbolRef/abs0 Fixup wrappers bypass shared validation')
+if 'minias_encode_result_stage_fixup(' not in target_stage:
+    raise SystemExit('Target Fixup staging bypasses common EncodeResult owner')
+print('MINIAS_MC_FRAGMENT_TRANSACTION=PASS target_cursor=isolated all_fragments=single_commit encoded_size=checked stage_guard=removed fixup_stage_owner=single')
 PY

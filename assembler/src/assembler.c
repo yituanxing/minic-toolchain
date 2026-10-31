@@ -856,7 +856,7 @@ static bool minias_stage_common_fixup(MiniAs *as,int section,uint64_t offset,
                                       int64_t addend) {
     MiniAsEncodeResult *result=as->active_encode_result;
     const MiniAsStmt *owner;
-    MiniAsEncodeFixupRequest *request;
+    MiniAsEncodeFixupRequest request={0};
     MiniAsSymbolNameId name_id=0U;
     uint64_t relative;
     if(result==NULL || !as->emitting_fragment ||
@@ -882,23 +882,15 @@ static bool minias_stage_common_fixup(MiniAs *as,int section,uint64_t offset,
     }
     if(name!=NULL && !minias_symbol_name_intern(as,name,&name_id))
         return false;
-    if(!minias_grow_array((void **)&result->fixups,
-                          &result->fixup_capacity,sizeof(*result->fixups),
-                          result->fixup_count+1U)) {
-        minias_set_error(as,"out-of-memory:mcdata-fixup");
-        return false;
-    }
-    request=&result->fixups[result->fixup_count++];
-    memset(request,0,sizeof(*request));
-    request->section=section;
-    request->fragment_offset=(uint32_t)relative;
-    request->kind=kind;
-    request->width=width;
-    request->has_symbol_index=name==NULL;
-    request->symbol_index=symbol_index;
-    request->symbol_ref.name_id=name_id;
-    request->symbol_ref.addend=addend;
-    return true;
+    request.section=section;
+    request.fragment_offset=(uint32_t)relative;
+    request.kind=kind;
+    request.width=width;
+    request.has_symbol_index=name==NULL;
+    request.symbol_index=symbol_index;
+    request.symbol_ref.name_id=name_id;
+    request.symbol_ref.addend=addend;
+    return minias_encode_result_stage_fixup(as,&request,"mcdata-fixup");
 }
 
 bool minias_add_fixup(MiniAs *as, int section, uint64_t offset,

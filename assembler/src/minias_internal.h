@@ -752,6 +752,9 @@ bool minias_add_fixup_symbol_id(MiniAs *as, int section, uint64_t offset,
 /* Target instructions and executable alignment produce a single staged
  * EncodeResult; no Target may directly insert into global Fixup/Symbol/ELF
  * arrays while its encoder can still fail. Offsets remain fragment-relative. */
+bool minias_encode_result_stage_fixup(MiniAs *as,
+                                      const MiniAsEncodeFixupRequest *request,
+                                      const char *allocation_context);
 bool minias_encode_add_fixup_ref(MiniAs *as, int section, uint64_t offset,
                                  MiniAsFixupKind kind, unsigned width,
                                  MiniAsSymbolRef ref,

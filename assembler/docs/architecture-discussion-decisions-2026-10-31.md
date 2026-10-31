@@ -379,3 +379,48 @@ where the source path demands it. Prefer an entire subsystem and its caller
 graph over micro-fixes, but delete only branches shown unreachable by code
 and verified probes. Maintain a single development branch and batch pushes;
 do not schedule COFF/Mach-O, full spec-version matrices, or tuning now.
+
+## 10. Next owner batch: one Fixup request staging vector
+
+The next read followed all three active `MCEncodeResult` Fixup producers:
+
+1. Target-owned instruction symbol references (`minias_encode_add_fixup_ref`);
+2. Target-owned absolute-zero linker-relax markers
+   (`minias_encode_add_fixup_abs0`, currently reached from LoongArch);
+3. Common fixed-width MCData symbol references (`minias_add_fixup*`).
+
+Previously each independently implemented the same `result->fixups`
+capacity increase, record allocation/zeroing, and append. Two instruction
+variants also repeated the same fragment section/offset/bounds validation.
+The unified `minias_encode_result_stage_fixup` in `mc_encode_result.c` now
+owns request allocation and append. One Target-private helper verifies the
+common instruction fragment contract while preserving **distinct** legality
+checks and diagnostics: named SymbolRef widths 2/4/8, absolute-zero width 4,
+and MCData's 1/2/3/4/8 or zero-width ULEB kinds. The source semantic
+differences therefore remain explicit; no Target has gained direct access
+to the final global Fixup table.
+
+The same read confirmed that the ELF writer plans local-symbol liveness,
+folds eligible relocations to section symbols using a Target policy, checks
+final fragment bounds, then delegates layout/serialization to `minielf`.
+The apparently similar CFI/DWARF synthetic writers, explicit `.reloc` and
+Target instructions are **not** duplicate owners to delete. AArch64
+`validate_output` still uses late source directive spellings for mapping;
+RISC-V adds mapping symbols in finalization; both remain explicitly tracked
+future interface debts, not silently solved by this batch.
+
+Local pre-commit coverage for this second Fixup staging batch: Release build
+PASS; the actual 14 existing Fragment/Fixup/DWARF/GNU scripts PASS (a test
+runner initially typed one wrong script filename and then ran the correct
+`probe-mcexpr-affine-ast-gnu.sh` successfully); LoongArch GNU pseudo/RELAX
+oracle PASS with four RELAX records; A0 **30/30 PASS**. This is not a full
+Linux Image + QEMU P0/P1 result.
+
+The earlier `8ca9421` full Linux four-architecture workflow was **FAIL**
+after AArch64's large `.if`/shared-expression-AST blocker. Later
+`fed9209` repairs large GNU macro expressions, and exact-HEAD contracts,
+GCC single-AS runtime/BusyBox and focused oracles pass, but the automatic
+full Linux workflow on `fed9209`/`dfe1bae` was **SKIPPED**, not a new full
+PASS. The next coherent implementation push may carry the explicit
+`[minias-linux-four]` CI opt-in marker to close this background acceptance
+debt. Keep the test SHA and opt-in outcome separate from these local claims.
