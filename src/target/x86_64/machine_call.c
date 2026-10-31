@@ -1,4 +1,5 @@
 #include "target/x86_64/machine_internal.h"
+#include "target/x86_64/codegen_options.h"
 #include "target/x86_64/abi.h"
 #include "target/x86_64/call_plan.h"
 #include "target/common/core_call_view.h"
@@ -17,13 +18,19 @@
 static bool x86_emit_call_arguments_planned(
     FILE *out, const MinicCoreFunction *fn, const MinicX86Frame *frame,
     const MinicCoreCallView *view, const MinicX86ArgumentPlan *plan) {
-    static const char *const gp_regs[] =
-        {"%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9"};
+    const MinicX86AbiRegisters *abi;
     size_t i;
     if (out == NULL || fn == NULL || frame == NULL || view == NULL ||
         plan == NULL || plan->argument_count != view->argument_count ||
+        plan->calling_convention != view->calling_convention ||
         (plan->argument_count != 0U && plan->locations == NULL))
         return false;
+    abi = minic_x86_64_abi_registers(plan->calling_convention);
+    if (abi == NULL) return false;
+    if (plan->calling_convention == MINIC_CALLING_CONVENTION_MS_X64) {
+        if (plan->stack_bytes < 32U || plan->is_variadic)
+            return false;
+    }
     if (plan->stack_bytes != 0U &&
         fprintf(out, "  subq $%zu, %%rsp\n", plan->stack_bytes) < 0)
         return false;
@@ -38,8 +45,11 @@ static bool x86_emit_call_arguments_planned(
         if (arg->kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {
             const MinicCoreObjectId object = arg->value.object_id;
             if (object >= fn->object_count ||
-                !minic_type_equal(fn->objects[object].type, type))
+                !minic_x86_64_record_abi_compatible(
+                    fn->objects[object].type, type))
                 return false;
+            if (loc->kind == MINIC_X86_ARG_RECORD_EMPTY)
+                continue;
             /* Outgoing stack reservation changes RSP-relative local-object
              * addresses in highly aligned frames. Compensate precisely. */
             if (frame->objects_from_aligned_rsp) {
@@ -53,8 +63,9 @@ static bool x86_emit_call_arguments_planned(
             if (loc->kind == MINIC_X86_ARG_RECORD_ONE_GP) {
                 if (!x86_one_gp_load(out, loc->record_bytes)) return false;
                 if (!loc->on_stack) {
+                    if (loc->gp_index >= abi->gp_argument_count) return false;
                     if (fprintf(out, "  movq %%rax, %s\n",
-                                gp_regs[loc->gp_index]) < 0) return false;
+                                abi->gp_arguments[loc->gp_index]) < 0) return false;
                 } else if (fprintf(out, "  movq %%rax, %zu(%%rsp)\n",
                                    loc->stack_index * 8U) < 0) return false;
                 continue;
@@ -80,11 +91,12 @@ static bool x86_emit_call_arguments_planned(
             }
             if (loc->kind != MINIC_X86_ARG_RECORD_TWO_GP) return false;
             if (!loc->on_stack) {
+                if (loc->gp_index >= abi->gp_argument_count - 1U) return false;
                 if (fprintf(out,
                     "  movq 0(%%r11), %s\n"
                     "  movq 8(%%r11), %s\n",
-                    gp_regs[loc->gp_index],
-                    gp_regs[loc->gp_index + 1U]) < 0)
+                    abi->gp_arguments[loc->gp_index],
+                    abi->gp_arguments[loc->gp_index + 1U]) < 0)
                     return false;
             } else if (fprintf(out,
                     "  movq 0(%%r11), %%rax\n"
@@ -110,11 +122,11 @@ static bool x86_emit_call_arguments_planned(
                                "%r10", "%r11"))
                 return false;
             if (!loc->on_stack) {
-                if (loc->gp_index > 4U ||
+                if (loc->gp_index >= abi->gp_argument_count - 1U ||
                     fprintf(out, "  movq %%r10, %s\n"
                                  "  movq %%r11, %s\n",
-                            gp_regs[loc->gp_index],
-                            gp_regs[loc->gp_index + 1U]) < 0)
+                            abi->gp_arguments[loc->gp_index],
+                            abi->gp_arguments[loc->gp_index + 1U]) < 0)
                     return false;
             } else if (fprintf(out,
                     "  movq %%r10, %zu(%%rsp)\n"
@@ -143,6 +155,7 @@ static bool x86_emit_call_arguments_planned(
             return false;
         if (loc->kind == MINIC_X86_ARG_SSE) {
             if (!loc->on_stack) {
+                if (loc->fp_index >= abi->fp_argument_count) return false;
                 if (fprintf(out, minic_type_is_double(type)
                             ? "  movq %%rax, %%xmm%zu\n"
                             : "  movd %%eax, %%xmm%zu\n",
@@ -152,8 +165,10 @@ static bool x86_emit_call_arguments_planned(
                                loc->stack_index * 8U) < 0) return false;
         } else if (loc->kind == MINIC_X86_ARG_INTEGER) {
             if (!loc->on_stack) {
+                if (loc->gp_index >= abi->gp_argument_count)
+                    return false;
                 if (fprintf(out, "  movq %%rax, %s\n",
-                            gp_regs[loc->gp_index]) < 0) return false;
+                            abi->gp_arguments[loc->gp_index]) < 0) return false;
             } else if (fprintf(out, "  movq %%rax, %zu(%%rsp)\n",
                                loc->stack_index * 8U) < 0) return false;
         } else return false;
@@ -163,7 +178,7 @@ static bool x86_emit_call_arguments_planned(
            fprintf(out, "  movb $%zu, %%al\n", plan->end.fp_used) >= 0;
 }
 
-/* Machine CALL emission consumes the one SysV plan built for its
+/* Machine CALL emission consumes the x86 ABI plan built for its
  * Common Core CALL identity; external standalone emission still works. */
 static bool x86_emit_call_arguments(
     FILE *out, const MinicC0Program *program,
@@ -195,20 +210,55 @@ static bool x86_emit_call_arguments(
 static bool x86_emit_call_record_result(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicX86Frame *frame,
-    const MinicCoreCallee *callee, MinicCoreObjectId object) {
+    MinicType return_type, MinicCoreObjectId object) {
+    const MinicX86AbiRegisters *abi = minic_x86_64_abi_registers(
+        MINIC_CALLING_CONVENTION_DEFAULT);
     size_t bytes;
-    if (object >= fn->object_count ||
-        !minic_type_is_record(callee->return_type) ||
-        !minic_type_equal(fn->objects[object].type, callee->return_type) ||
-        !x86_object_address(out, frame, object, "%r10"))
+    if (abi == NULL || abi->gp_result_count < 2U ||
+        object >= fn->object_count ||
+        !minic_type_is_record(return_type) ||
+        !minic_x86_64_record_abi_compatible(
+            fn->objects[object].type, return_type))
         return false;
-    if (minic_x86_64_one_gp_record(program, target, callee->return_type, &bytes))
+    if (minic_x86_64_memory_result_record(
+            program, target, return_type, &bytes))
+        /* The callee has already written the exact object via the sret
+         * pointer, not an RAX/RDX proxy. */
+        return true;
+    if (!x86_object_address(out, frame, object, "%r10")) return false;
+    if (minic_x86_64_one_gp_record(program, target, return_type, &bytes))
         return x86_one_gp_store(out, bytes);
-    if (minic_x86_64_two_gp_record(program, target, callee->return_type))
+    if (minic_x86_64_two_gp_record(program, target, return_type))
         return fprintf(out,
-            "  movq %%rax, 0(%%r10)\n"
-            "  movq %%rdx, 8(%%r10)\n") >= 0;
+            "  movq %s, 0(%%r10)\n"
+            "  movq %s, 8(%%r10)\n",
+            abi->gp_results[0], abi->gp_results[1]) >= 0;
     return false;
+}
+
+static bool x86_prepare_call_sret(FILE *out, const MinicC0Program *program,
+    const MinicTargetInfo *target, const MinicCoreFunction *fn,
+    const MinicX86Frame *frame, const MinicCoreCallView *call,
+    MinicCoreObjectId object, size_t allocated_stack_bytes) {
+    size_t bytes;
+    if (!minic_x86_64_memory_result_record(
+            program, target, call->return_type, &bytes))
+        return true;
+    if (call->return_form != MINIC_CORE_CALL_RETURN_OBJECT ||
+        object >= fn->object_count ||
+        !minic_x86_64_record_abi_compatible(
+            fn->objects[object].type, call->return_type))
+        return false;
+    /* Argument marshalling has already reserved stack call space. Correct
+     * an RSP-relative high-alignment object address for that reservation,
+     * and preserve all explicit GP arguments, which now start at RSI. */
+    if (frame->objects_from_aligned_rsp) {
+        if (frame->object_offsets[object] > SIZE_MAX - allocated_stack_bytes)
+            return false;
+        return fprintf(out, "  leaq %zu(%%rsp), %%rdi\n",
+            frame->object_offsets[object] + allocated_stack_bytes) >= 0;
+    }
+    return x86_object_address(out, frame, object, "%rdi");
 }
 
 static bool x86_emit_call_result(FILE *out, const MinicC0Program *program,
@@ -217,8 +267,13 @@ static bool x86_emit_call_result(FILE *out, const MinicC0Program *program,
                                  MinicType return_type, MinicCoreValueId result) {
     if (result == MINIC_CORE_VALUE_INVALID)
         return minic_type_is_void(return_type);
-    if (minic_type_is_int128_integer(return_type))
-        return x86_i128_store(out, frame, result, "%rax", "%rdx");
+    if (minic_type_is_int128_integer(return_type)) {
+        const MinicX86AbiRegisters *abi = minic_x86_64_abi_registers(
+            MINIC_CALLING_CONVENTION_DEFAULT);
+        return abi != NULL && abi->gp_result_count >= 2U &&
+            x86_i128_store(out, frame, result,
+                           abi->gp_results[0], abi->gp_results[1]);
+    }
     if (minic_type_is_long_double(return_type))
         return x86_x87_store(out, frame, result);
     if (minic_type_is_double(return_type)) {
@@ -517,14 +572,16 @@ bool minic_x86_64_emit_call_instruction(
             }
             return false;
         }
-        if (fprintf(out, "  call %s@PLT\n", callee->name) < 0 ||
+        if (!x86_prepare_call_sret(out, program, target, fn, frame,
+                &call, ins->value.call.result_object, outgoing_bytes) ||
+            fprintf(out, "  call %s@PLT\n", callee->name) < 0 ||
             (outgoing_bytes != 0U &&
              fprintf(out, "  addq $%zu, %%rsp\n", outgoing_bytes) < 0))
             return false;
         if (!(ins->value.call.result_object != MINIC_CORE_OBJECT_INVALID
                   ? (ins->result == MINIC_CORE_VALUE_INVALID &&
                      x86_emit_call_record_result(
-                         out, program, target, fn, frame, callee,
+                         out, program, target, fn, frame, callee->return_type,
                          ins->value.call.result_object))
                   : x86_emit_call_result(out, program, target, frame,
                                          callee->return_type, ins->result))) {
@@ -554,11 +611,24 @@ bool minic_x86_64_emit_call_instruction(
         signature = call.signature;
         if (!x86_emit_call_arguments(out, program, target, fn, frame,
                                      &call, cached_plan, &outgoing_bytes) ||
+            !x86_prepare_call_sret(out, program, target, fn, frame,
+                    &call, ins->value.indirect_call.result_object, outgoing_bytes) ||
             !x86_value_load(out, frame, callee, "%r11") ||
-            fprintf(out, "  call *%%r11\n") < 0 ||
+            ((target->x86_codegen_options &
+              MINIC_X86_CODEGEN_INDIRECT_EXTERNAL_THUNK) != 0U
+                 ? fprintf(out, "  call __x86_indirect_thunk_r11\n") < 0
+                 : (target->x86_codegen_options &
+                    MINIC_X86_CODEGEN_INDIRECT_INLINE_THUNK) != 0U
+                     ? !x86_emit_indirect_inline_thunk(out, "%r11", true)
+                     : fprintf(out, "  call *%%r11\n") < 0) ||
             (outgoing_bytes != 0U &&
              fprintf(out, "  addq $%zu, %%rsp\n", outgoing_bytes) < 0))
             return false;
+        if (call.return_form == MINIC_CORE_CALL_RETURN_OBJECT) {
+            return ins->result == MINIC_CORE_VALUE_INVALID &&
+                   x86_emit_call_record_result(out, program, target, fn, frame,
+                      signature->return_type, ins->value.indirect_call.result_object);
+        }
         return x86_emit_call_result(out, program, target, frame,
                                     signature->return_type, ins->result);
     }

@@ -13,11 +13,12 @@
  * effectful storage, local facts, and scalar prefix/postfix updates.
  * Bit-field assignments dispatch to the dedicated semantic owner. */
 
-MinicCoreLowerStatus minic_core_lower_assignment_pair(MinicCoreLowerContext *context,
+static MinicCoreLowerStatus minic_core_lower_assignment_pair_impl(MinicCoreLowerContext *context,
                                                   MinicExpressionId target_id,
                                                   MinicExpressionId source_id,
                                                   MinicSourceSpan span,
-                                                  MinicCoreValueId *result_value) {
+                                                  MinicCoreValueId *result_value,
+                                                  bool is_initializer_write) {
     const MinicExpression *target;
     const MinicExpression *source;
     const MinicExpression *source_operand;
@@ -47,10 +48,43 @@ MinicCoreLowerStatus minic_core_lower_assignment_pair(MinicCoreLowerContext *con
     if (target == NULL || target->value_category != MINIC_VALUE_LVALUE) {
         return MINIC_CORE_LOWER_ERROR;
     }
+    if (target->kind == MINIC_EXPRESSION_FIXED_REGISTER) {
+        const MinicFixedRegisterBinding *binding;
+        MinicCoreInstruction effect;
+        size_t core_binding_id;
+        binding = minic_c0_program_fixed_register_binding(
+            context->body->program, target->value.fixed_register_binding_id);
+        if (binding == NULL || binding->is_local ||
+            !minic_target_info_fixed_register_write_supported(
+                context->target, binding->register_name, binding->register_name_length) ||
+            !minic_type_unqualified(target->type, &stored_type) ||
+            !core_memory_scalar_type(stored_type) ||
+            !minic_type_equal(binding->type, stored_type))
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        status = minic_core_lower_internal_lower_scalar_assignment_value(
+            context, stored_type, source_id, &stored_value);
+        if (status != MINIC_CORE_LOWER_OK)
+            return status;
+        if (!core_import_fixed_register_binding(
+                context, target->value.fixed_register_binding_id, &core_binding_id))
+            return MINIC_CORE_LOWER_ERROR;
+        (void)memset(&effect, 0, sizeof(effect));
+        effect.kind = MINIC_CORE_INSTRUCTION_FIXED_REGISTER_WRITE;
+        effect.span = span;
+        effect.type = minic_type_void();
+        effect.result = MINIC_CORE_VALUE_INVALID;
+        effect.value.fixed_register_write.binding_id = core_binding_id;
+        effect.value.fixed_register_write.source = stored_value;
+        if (!minic_core_function_append_effect_instruction(
+                context->function, context->block_id, &effect))
+            return MINIC_CORE_LOWER_ERROR;
+        if (result_value != NULL) *result_value = stored_value;
+        return MINIC_CORE_LOWER_OK;
+    }
     {
         bool matched;
         status = minic_core_lower_try_bit_field_assignment(
-            context, target, source_id, span, result_value, &matched);
+            context, target, source_id, span, result_value, is_initializer_write, &matched);
         if (matched || status != MINIC_CORE_LOWER_OK) return status;
     }
     if (!minic_type_unqualified(target->type, &stored_type) ||
@@ -113,7 +147,9 @@ MinicCoreLowerStatus minic_core_lower_assignment_pair(MinicCoreLowerContext *con
     }
     if (target->kind == MINIC_EXPRESSION_LOCAL) {
         MinicConstValue stored_constant;
+        uint64_t bounded_min = 0U, bounded_max = 0U;
         bool fact_known;
+        bool range_known;
         bool null_pointer_known;
         null_pointer_known = minic_core_lower_known_null_pointer(context, source_id);
         /* M191_STATEMENT_EXPRESSION_POSTLOWER_FACT: minic_core_lower_internal_lower_scalar_assignment_value()
@@ -144,8 +180,19 @@ MinicCoreLowerStatus minic_core_lower_assignment_pair(MinicCoreLowerContext *con
             fact_known = core_const_eval_integer_with_locals(
                 context, source_id, &stored_constant);
         }
+        /* A dynamic conditional can have an exact nonnegative result
+         * interval even when its condition has effects. This is only a
+         * post-STORE value fact; all original condition effects have already
+         * been emitted, and unknown conversions cannot enter this lattice. */
+        range_known = !fact_known && source != NULL &&
+            minic_type_equal(source->type, stored_type) &&
+            minic_core_cfg_nonnegative_range(context, source_id,
+                                             &bounded_min, &bounded_max);
         if (fact_known) {
             core_local_constant_set(context, target->value.local_id, &stored_constant);
+        } else if (range_known) {
+            (void)minic_core_local_fact_nonnegative_range_set(
+                context, target->value.local_id, bounded_min, bounded_max);
         } else if (null_pointer_known) {
             minic_core_local_null_pointer_set(context, target->value.local_id);
         }
@@ -167,6 +214,15 @@ MinicCoreLowerStatus minic_core_lower_assignment_pair(MinicCoreLowerContext *con
     return MINIC_CORE_LOWER_OK;
 }
 
+MinicCoreLowerStatus minic_core_lower_assignment_pair(MinicCoreLowerContext *context,
+                                                  MinicExpressionId target_id,
+                                                  MinicExpressionId source_id,
+                                                  MinicSourceSpan span,
+                                                  MinicCoreValueId *result_value) {
+    return minic_core_lower_assignment_pair_impl(context, target_id, source_id,
+                                                 span, result_value, false);
+}
+
 MinicCoreLowerStatus minic_core_lower_assignment(MinicCoreLowerContext *context,
                                              const MinicStatement *statement) {
     MinicExpressionId source_id;
@@ -177,7 +233,9 @@ MinicCoreLowerStatus minic_core_lower_assignment(MinicCoreLowerContext *context,
     }
     target_id = statement->target_expression;
     source_id = statement->expression;
-    return minic_core_lower_assignment_pair(context, target_id, source_id, statement->span, NULL);
+    return minic_core_lower_assignment_pair_impl(context, target_id, source_id,
+                                                 statement->span, NULL,
+                                                 statement->is_initializer_write);
 }
 
 /* M102_UNSIGNED_BIT_FIELD_SCALAR_UPDATE / M154_SIGNED_BIT_FIELD_UPDATE_OWNER:

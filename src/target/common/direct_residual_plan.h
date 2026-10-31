@@ -28,6 +28,10 @@ bool minic_multi_direct_global_address_symbol(
     const MinicCoreFunction *, const MinicCoreInstruction *, const char **);
 bool minic_multi_direct_function_address_symbol(
     const MinicCoreFunction *, const MinicCoreInstruction *, const char **);
+/* Core verifies the taken label's CFG identity and pointer result once.
+ * Each target still owns local PC-relative ISA emission. */
+bool minic_multi_direct_block_address_shape(
+    const MinicCoreFunction *, const MinicCoreInstruction *, MinicCoreBlockId *);
 bool minic_multi_direct_object_address_location(
     const MinicCoreFunction *, const MinicCoreInstruction *,
     const MinicLP64FramePlan *, size_t *);

@@ -1,4 +1,6 @@
 #include "core/core_lower_internal.h"
+#include "core/local_facts.h"
+#include "frontend/const_eval.h"
 #include "frontend/expression_semantics.h"
 #include <string.h>
 
@@ -51,6 +53,9 @@ MinicCoreLowerStatus minic_core_lower_try_arithmetic_unary(
                                                expression->value.unary.operand, &operand_value);
         if (status != MINIC_CORE_LOWER_OK) return status;
         (void)memset(&zero_instruction, 0, sizeof(zero_instruction));
+        /* FIXME(MC-051): 0L - x is not the semantic equivalent of unary
+         * -x for signed zero: nearest-mode +0L - +0L gives +0L, but GNU C
+         * unary negation must produce -0L. Preserve the sign operation. */
         zero_instruction.kind = MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT;
         zero_instruction.span = expression->span;
         zero_instruction.type = minic_type_long_double();
@@ -874,6 +879,17 @@ MinicCoreLowerStatus minic_core_lower_try_arithmetic_compound(
         if (!minic_core_function_append_effect_instruction(
                 context->function, context->block_id, &instruction)) {
             return MINIC_CORE_LOWER_ERROR;
+        }
+        if (expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_OR &&
+            target->kind == MINIC_EXPRESSION_LOCAL) {
+            MinicConstValue literal;
+            if (minic_const_eval_integer(context->body->program,
+                                         context->target,
+                                         expression->value.binary.right,
+                                         &literal)) {
+                (void)minic_core_local_fact_or_constant(
+                    context, target->value.local_id, &literal);
+            }
         }
         *value_id = stored_value;
         return MINIC_CORE_LOWER_OK;

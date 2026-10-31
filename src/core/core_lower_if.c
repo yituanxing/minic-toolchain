@@ -13,172 +13,34 @@
 /* One owner for source-level if CFG, reentry safety and local-fact joins.
  * CFG terminators and structured statements remain target-independent. */
 
-/* M187_CONSTANT_IF_EXTERNAL_REENTRY: mark every statement owned by a
-   discarded block graph so internal gotos disappear with that graph rather
-   than falsely keeping an otherwise constant-dead branch alive. */
-static bool core_mark_discarded_if_membership(
-    const MinicCoreLowerContext *context,
-    const MinicBlock *block,
-    bool *visited_blocks,
-    bool *statement_membership) {
-    const MinicC0Program *program;
-    size_t index;
-
-    if (context == NULL || context->body == NULL || context->body->program == NULL ||
-        block == NULL || visited_blocks == NULL || statement_membership == NULL) {
-        return false;
-    }
-    program = context->body->program;
-    for (index = 0U; index < block->statement_count; ++index) {
-        MinicStatementId statement_id = block->statements[index];
-        const MinicStatement *statement;
-
-        if (statement_id >= program->statement_count) {
-            return false;
-        }
-        statement_membership[statement_id] = true;
-        statement = minic_c0_program_statement(program, statement_id);
-        if (statement == NULL) {
-            return false;
-        }
-        if (statement->then_block != MINIC_BLOCK_INVALID) {
-            const MinicBlock *child;
-            if (statement->then_block >= program->block_count) {
-                return false;
-            }
-            if (!visited_blocks[statement->then_block]) {
-                visited_blocks[statement->then_block] = true;
-                child = minic_c0_program_block(program, statement->then_block);
-                if (child == NULL ||
-                    !core_mark_discarded_if_membership(
-                        context, child, visited_blocks, statement_membership)) {
-                    return false;
-                }
-            }
-        }
-        if (statement->else_block != MINIC_BLOCK_INVALID) {
-            const MinicBlock *child;
-            if (statement->else_block >= program->block_count) {
-                return false;
-            }
-            if (!visited_blocks[statement->else_block]) {
-                visited_blocks[statement->else_block] = true;
-                child = minic_c0_program_block(program, statement->else_block);
-                if (child == NULL ||
-                    !core_mark_discarded_if_membership(
-                        context, child, visited_blocks, statement_membership)) {
-                    return false;
-                }
-            }
-        }
-    }
-    return true;
-}
-
 static bool core_block_contains_reentry_label(const MinicCoreLowerContext *context,
                                               const MinicBlock *block) {
+    CoreSourceSubtreeMembership membership = {0};
     const MinicC0Program *program;
-    bool *visited_blocks;
-    bool *statement_membership;
     bool unsafe;
-    size_t index;
 
     if (context == NULL || context->body == NULL || context->body->program == NULL ||
         block == NULL) {
         return true;
     }
     program = context->body->program;
-    if (program->statement_count == 0U ||
-        program->block_count > SIZE_MAX / sizeof(*visited_blocks) ||
-        program->statement_count > SIZE_MAX / sizeof(*statement_membership)) {
+    /* The shared ownership builder returns UNKNOWN on malformed source or
+     * OOM, and no reachability proof may prune a block under uncertainty. */
+    if (!core_source_subtree_membership_from_block(context, block, &membership))
         return true;
+    {
+        const MinicCoreReentryQuery query = {
+            .membership = membership.statements,
+            .label_id = MINIC_STATEMENT_INVALID,
+            .checks = MINIC_CORE_REENTRY_CHECK_EXTERNAL_JUMP |
+                      MINIC_CORE_REENTRY_CHECK_LABEL_ADDRESS |
+                      MINIC_CORE_REENTRY_CHECK_CASE_DISPATCH,
+            .purpose = MINIC_CORE_REENTRY_PURPOSE_IF_DISCARDED
+        };
+        unsafe = minic_core_reentry_query(
+            context->reentry_index, program, &query) != 0U;
     }
-    visited_blocks = program->block_count == 0U
-                         ? NULL
-                         : (bool *)calloc(program->block_count, sizeof(*visited_blocks));
-    statement_membership =
-        (bool *)calloc(program->statement_count, sizeof(*statement_membership));
-    if ((program->block_count != 0U && visited_blocks == NULL) ||
-        statement_membership == NULL) {
-        free(visited_blocks);
-        free(statement_membership);
-        return true;
-    }
-    unsafe = !core_mark_discarded_if_membership(
-        context, block, visited_blocks, statement_membership);
-
-    if (minic_core_reentry_index_ready(context->reentry_index, program)) {
-        minic_core_reentry_index_check_discarded(
-            context->reentry_index, program, statement_membership, &unsafe);
-    } else {
-        /* case/default labels are entered by switch dispatch, independently of
-           lexical fallthrough, so never prune a subtree that owns one. */
-        for (index = 0U; index < program->statement_count && !unsafe; ++index) {
-            const MinicStatement *statement;
-            if (!statement_membership[index]) {
-                continue;
-            }
-            statement = minic_c0_program_statement(program, index);
-            if (statement == NULL || statement->kind == MINIC_STATEMENT_CASE ||
-                statement->kind == MINIC_STATEMENT_DEFAULT) {
-                unsafe = true;
-            }
-        }
-
-        /* Only jumps originating outside the discarded membership are external
-           re-entry. Internal goto/asm-goto edges disappear with the subtree. */
-        for (index = 0U; index < program->statement_count && !unsafe; ++index) {
-            const MinicStatement *source;
-            if (statement_membership[index]) {
-                continue;
-            }
-            source = minic_c0_program_statement(program, index);
-            if (source == NULL) {
-                unsafe = true;
-                break;
-            }
-            if (source->kind == MINIC_STATEMENT_GOTO &&
-                source->target_statement < program->statement_count &&
-                statement_membership[source->target_statement]) {
-                unsafe = true;
-                break;
-            }
-            if (source->kind == MINIC_STATEMENT_INLINE_ASM &&
-                source->inline_asm_id < program->inline_asm_count) {
-                const MinicInlineAsm *inline_asm = &program->inline_asms[source->inline_asm_id];
-                size_t label_index;
-                if (!inline_asm->is_goto) {
-                    continue;
-                }
-                for (label_index = 0U; label_index < inline_asm->label_count; ++label_index) {
-                    MinicStatementId target = inline_asm->labels[label_index].target_statement;
-                    if (target < program->statement_count && statement_membership[target]) {
-                        unsafe = true;
-                        break;
-                    }
-                }
-            }
-        }
-
-        /* An address-taken label may be reached through computed goto from code
-           that is not represented as a direct target edge here. Keep it alive. */
-        for (index = 0U; index < program->expression_count && !unsafe; ++index) {
-            const MinicExpression *expression = minic_c0_program_expression(program, index);
-            if (expression == NULL) {
-                unsafe = true;
-                break;
-            }
-            if (expression->kind == MINIC_EXPRESSION_LABEL_ADDRESS &&
-                expression->value.label_statement_id < program->statement_count &&
-                statement_membership[expression->value.label_statement_id]) {
-                unsafe = true;
-            }
-        }
-
-    }
-
-    free(visited_blocks);
-    free(statement_membership);
+    core_source_subtree_membership_destroy(&membership);
     return unsafe;
 }
 
@@ -189,17 +51,62 @@ static void core_local_constants_prepare_if_branch(
     const MinicCoreLocalIntegerConstant *incoming,
     MinicExpressionId condition_expression) {
     size_t index;
+    unsigned char *modified;
+    unsigned char *condition_owned;
+    const MinicExpression *condition;
+    size_t local_count;
 
     if (context == NULL || context->source_function == NULL ||
         context->local_integer_constants == NULL || incoming == NULL) {
         return;
     }
-    for (index = 0U; index < context->source_function->local_count; ++index) {
+    local_count = context->source_function->local_count;
+    condition = minic_c0_program_expression(
+        context->body->program, condition_expression);
+    /* Collect the full condition once. On OOM treat every currently live
+     * local as potentially changed; no fact can be proved by failed scans. */
+    modified = (unsigned char *)calloc(local_count == 0U ? 1U : local_count,
+                                       sizeof(*modified));
+    condition_owned = (unsigned char *)calloc(
+        local_count == 0U ? 1U : local_count, sizeof(*condition_owned));
+    if (modified != NULL && condition_owned != NULL)
+        core_expression_collect_modified_and_condition_locals(
+            context, condition_expression, modified, condition_owned, 0U);
+    else if (modified != NULL)
+        core_expression_collect_modified_locals(
+            context, condition_expression, modified, 0U);
+    for (index = 0U; index < local_count; ++index) {
         MinicLocalId local_id = context->source_function->local_begin + index;
+        const MinicLocal *local = minic_c0_program_local(
+            context->body->program, local_id);
         context->local_integer_constants[index] = incoming[index];
-        if (incoming[index].escaped ||
-            core_expression_may_modify_local(
-                context, condition_expression, local_id, 0U)) {
+        /* The statement-expression subtree owns these locals explicitly via
+         * parser block IDs. They were not live before this IF condition, so
+         * even their program-zero/specialization proofs must start fresh.
+         * An initializer inside min_t(u32, x, y) may then establish known
+         * ux/uy while lowering the predicate, without an artificial escape
+         * introduced by the speculative branch effect scan. */
+        if (condition_owned != NULL && condition_owned[index] != 0U) {
+            (void)memset(&context->local_integer_constants[index], 0,
+                         sizeof(context->local_integer_constants[index]));
+            continue;
+        }
+        /* Local IDs cover the entire function, including block-scoped objects
+         * declared after this condition. Their lifetime has not begun, so
+         * neither an incoming constant nor an escaped/program-zero flag can
+         * be inherited across speculative IF lowering. Start their facts
+         * afresh; a later initializer will establish its own constant before
+         * any GNU asm `i` operand consumes it. Unknown spans remain
+         * conservative for compiler-generated temporaries. */
+        if (local != NULL && condition != NULL &&
+            local->name_span.begin.offset != 0U &&
+            condition->span.end.offset != 0U &&
+            local->name_span.begin.offset >= condition->span.end.offset) {
+            (void)memset(&context->local_integer_constants[index], 0,
+                         sizeof(context->local_integer_constants[index]));
+            continue;
+        }
+        if (incoming[index].escaped || modified == NULL || modified[index] != 0U) {
             context->local_integer_constants[index].known = false;
             /* Structural branch lowering happens before condition lowering.
                Treat a condition that may expose/modify this local as escaped
@@ -208,6 +115,8 @@ static void core_local_constants_prepare_if_branch(
             context->local_integer_constants[index].escaped = true;
         }
     }
+    free(modified);
+    free(condition_owned);
 }
 
 static void core_local_constants_meet_if_paths(
@@ -216,8 +125,6 @@ static void core_local_constants_meet_if_paths(
     bool then_continues,
     const MinicCoreLocalIntegerConstant *else_facts,
     bool else_continues) {
-    size_t index;
-
     if (context == NULL || context->source_function == NULL ||
         context->local_integer_constants == NULL) {
         return;
@@ -239,27 +146,12 @@ static void core_local_constants_meet_if_paths(
         return;
     }
 
-    for (index = 0U; index < context->source_function->local_count; ++index) {
-        const MinicCoreLocalIntegerConstant *left = &then_facts[index];
-        const MinicCoreLocalIntegerConstant *right = &else_facts[index];
-        MinicCoreLocalIntegerConstant merged = *left;
-        bool same_value =
-            left->known && right->known &&
-            !left->escaped && !right->escaped &&
-            minic_type_equal(left->value.type, right->value.type) &&
-            left->value.bits == right->value.bits;
-
-        merged.escaped = left->escaped || right->escaped;
-        merged.specialization_modified =
-            left->specialization_modified || right->specialization_modified;
-        merged.specialization_known =
-            left->specialization_known && right->specialization_known &&
-            minic_type_equal(left->specialization_value.type,
-                             right->specialization_value.type) &&
-            left->specialization_value.bits == right->specialization_value.bits;
-        merged.known = same_value && !merged.escaped;
-        context->local_integer_constants[index] = merged;
-    }
+    /* A single local-fact lattice meet is shared by IF, expression CFG and
+     * switch. The old IF-specific copy kept program_zero_stable from only
+     * the then path and could resurrect a non-invariant constant at a later
+     * clear_known barrier. The shared meet intersects every proof field. */
+    if (!minic_core_local_facts_meet(context, then_facts, else_facts))
+        minic_core_local_facts_clear_known(context);
 }
 
 /* INLINE_ASM_IF_FACT_BARRIER: a side-effecting GNU asm block must
@@ -480,14 +372,15 @@ minic_core_lower_if(MinicCoreLowerContext *context, const MinicStatement *statem
     MinicCoreLowerStatus status;
     MinicCoreLocalIntegerConstant *fallthrough_facts = NULL;
     MinicCoreLocalIntegerConstant *then_exit_facts = NULL;
-    MinicCoreLocalIntegerConstant *incoming_facts;
-    MinicCoreLocalIntegerConstant *branch_entry_facts;
-    MinicCoreLocalIntegerConstant *then_facts;
-    MinicCoreLocalIntegerConstant *else_facts;
+    MinicCoreLocalIntegerConstant *incoming_facts = NULL;
+    MinicCoreLocalIntegerConstant *branch_entry_facts = NULL;
+    MinicCoreLocalIntegerConstant *then_facts = NULL;
+    MinicCoreLocalIntegerConstant *else_facts = NULL;
     bool else_terminated;
     bool needs_merge;
     bool then_terminated;
     bool preserve_guard_facts;
+    bool condition_is_pure;
 
     if (context == NULL || context->body == NULL || context->body->program == NULL ||
         context->function == NULL || statement == NULL || terminated == NULL) {
@@ -507,6 +400,36 @@ minic_core_lower_if(MinicCoreLowerContext *context, const MinicStatement *statem
         if (else_source == NULL) {
             return MINIC_CORE_LOWER_ERROR;
         }
+    }
+
+    /* Condition lowering may happen after speculative lowering of both
+     * branches. The incoming snapshot, not the branch-exit fact table,
+     * describes facts dominating this source condition. Retain these facts
+     * only when evaluating the predicate itself has no side effects. */
+    condition_is_pure = minic_core_cfg_pure_call_argument(
+        context, statement->expression, 0U);
+
+    /* M194_KBUILD_DISJOINT_MASK_EFFECTS: Linux's BUILD_BUG_ON may mask a
+     * runtime ternary with a bit range the ternary can never set.  The false
+     * branch is provable even when the operand contains a call or volatile
+     * access.  Evaluate the ORIGINAL expression first, retaining all C
+     * effects, then omit only the impossible diagnostic branch.  This is
+     * separate from the pure-predicate shortcut below, which may omit the
+     * evaluation entirely. */
+    if (statement->cleanup_context == statement->cleanup_stop_context &&
+        minic_type_is_integer(condition_expression->type) &&
+        (minic_core_cfg_disjoint_bitmask_is_zero(context, statement->expression) ||
+         minic_core_cfg_bounded_comparison_is_false(
+             context, statement->expression)) &&
+        !core_block_contains_reentry_label(context, then_source)) {
+        MinicCoreValueId ignored_condition = MINIC_CORE_VALUE_INVALID;
+        status = lower_expression(context, statement->expression, &ignored_condition);
+        if (status != MINIC_CORE_LOWER_OK) return status;
+        if (else_source == NULL) {
+            *terminated = false;
+            return MINIC_CORE_LOWER_OK;
+        }
+        return minic_core_lower_internal_lower_block(context, else_source, terminated);
     }
 
     if (statement->cleanup_context == statement->cleanup_stop_context &&
@@ -616,7 +539,9 @@ minic_core_lower_if(MinicCoreLowerContext *context, const MinicStatement *statem
             if ((minic_const_eval_integer(context->body->program,
                                           context->target,
                                           statement->expression, &condition_value) ||
-                 (!core_block_contains_inline_asm(context, then_source) &&
+                 (minic_core_cfg_pure_call_argument(
+                      context, statement->expression, 0U) &&
+                  !core_block_contains_inline_asm(context, then_source) &&
                   (else_source == NULL ||
                    !core_block_contains_inline_asm(context, else_source)) &&
                   core_const_eval_integer_with_locals(
@@ -628,17 +553,6 @@ minic_core_lower_if(MinicCoreLowerContext *context, const MinicStatement *statem
                 condition_known = true;
                 condition_is_zero = integer_condition_is_zero;
             }
-        }
-        if (context->source_function != NULL &&
-            context->source_function->name != NULL &&
-            strcmp(context->source_function->name, "genl_op_from_split") == 0) {
-            (void)fprintf(stderr,
-                          "GENL_IF_DECISION expression=%zu kind=%d known=%d zero=%d block=%u\n",
-                          (size_t)statement->expression,
-                          (int)condition_expression->kind,
-                          condition_known ? 1 : 0,
-                          condition_is_zero ? 1 : 0,
-                          (unsigned int)context->block_id);
         }
         if (condition_known) {
             const MinicBlock *discarded_source;
@@ -681,7 +595,8 @@ minic_core_lower_if(MinicCoreLowerContext *context, const MinicStatement *statem
     incoming_facts = minic_core_local_facts_snapshot(context);
     if (context->source_function != NULL &&
         context->source_function->local_count != 0U && incoming_facts == NULL) {
-        return MINIC_CORE_LOWER_ERROR;
+        status = MINIC_CORE_LOWER_ERROR;
+        goto if_facts_cleanup;
     }
     branch_entry_facts = NULL;
     then_facts = NULL;
@@ -694,16 +609,18 @@ minic_core_lower_if(MinicCoreLowerContext *context, const MinicStatement *statem
     branch_entry_facts = minic_core_local_facts_snapshot(context);
     if (context->source_function != NULL &&
         context->source_function->local_count != 0U && branch_entry_facts == NULL) {
-        free(incoming_facts);
-        return MINIC_CORE_LOWER_ERROR;
+        status = MINIC_CORE_LOWER_ERROR;
+        goto if_facts_cleanup;
     }
     condition_block = context->block_id;
     if (!minic_core_function_add_block(context->function, &then_block)) {
-        return MINIC_CORE_LOWER_ERROR;
+        status = MINIC_CORE_LOWER_ERROR;
+        goto if_facts_cleanup;
     }
     else_block = MINIC_CORE_BLOCK_INVALID;
     if (else_source != NULL && !minic_core_function_add_block(context->function, &else_block)) {
-        return MINIC_CORE_LOWER_ERROR;
+        status = MINIC_CORE_LOWER_ERROR;
+        goto if_facts_cleanup;
     }
 
     context->block_id = then_block;
@@ -722,7 +639,7 @@ minic_core_lower_if(MinicCoreLowerContext *context, const MinicStatement *statem
                       (int)condition_expression->kind,
                       statement->span.begin.line,
                       statement->span.begin.column);
-        return status;
+        goto if_facts_cleanup;
     }
     if (context->source_function && context->source_function->name &&
         strcmp(context->source_function->name, "genl_op_from_split") == 0)
@@ -736,9 +653,8 @@ minic_core_lower_if(MinicCoreLowerContext *context, const MinicStatement *statem
     then_facts = minic_core_local_facts_snapshot(context);
     if (context->source_function != NULL &&
         context->source_function->local_count != 0U && then_facts == NULL) {
-        free(branch_entry_facts);
-        free(incoming_facts);
-        return MINIC_CORE_LOWER_ERROR;
+        status = MINIC_CORE_LOWER_ERROR;
+        goto if_facts_cleanup;
     }
     else_continuation_block = MINIC_CORE_BLOCK_INVALID;
     else_terminated = false;
@@ -755,16 +671,14 @@ minic_core_lower_if(MinicCoreLowerContext *context, const MinicStatement *statem
                           (int)condition_expression->kind,
                           statement->span.begin.line,
                           statement->span.begin.column);
-            return status;
+            goto if_facts_cleanup;
         }
         else_continuation_block = context->block_id;
         else_facts = minic_core_local_facts_snapshot(context);
         if (context->source_function != NULL &&
             context->source_function->local_count != 0U && else_facts == NULL) {
-            free(then_facts);
-            free(branch_entry_facts);
-            free(incoming_facts);
-            return MINIC_CORE_LOWER_ERROR;
+            status = MINIC_CORE_LOWER_ERROR;
+            goto if_facts_cleanup;
         }
     }
 
@@ -772,18 +686,19 @@ minic_core_lower_if(MinicCoreLowerContext *context, const MinicStatement *statem
     merge_block = MINIC_CORE_BLOCK_INVALID;
     if (needs_merge) {
         if (!minic_core_function_add_block(context->function, &merge_block)) {
-            return MINIC_CORE_LOWER_ERROR;
+            status = MINIC_CORE_LOWER_ERROR;
+            goto if_facts_cleanup;
         }
         if (!then_terminated) {
             status = minic_core_lower_internal_set_branch(context, then_continuation_block, statement->span, merge_block);
             if (status != MINIC_CORE_LOWER_OK) {
-                return status;
+                goto if_facts_cleanup;
             }
         }
         if (else_source != NULL && !else_terminated) {
             status = minic_core_lower_internal_set_branch(context, else_continuation_block, statement->span, merge_block);
             if (status != MINIC_CORE_LOWER_OK) {
-                return status;
+                goto if_facts_cleanup;
             }
         }
         false_target = else_source == NULL ? merge_block : else_block;
@@ -795,11 +710,17 @@ minic_core_lower_if(MinicCoreLowerContext *context, const MinicStatement *statem
 
     continuation_block = context->block_id;
     context->block_id = condition_block;
-    minic_core_local_facts_restore(context, incoming_facts);
-    /* DOMINANCE_IF_GUARD_FACT_BARRIER: speculative body facts do not
-       dominate the earlier condition_block. Rebuild the runtime predicate
-       with only immutable source/specialization facts, not body updates. */
-    minic_core_local_facts_clear_known(context);
+    /* DOMINANCE_IF_GUARD_FACT_BARRIER: both arms were lowered speculatively,
+     * but only incoming facts dominate the original condition block. For a
+     * pure condition they remain valid throughout its evaluation. For an
+     * impure condition reuse the effect-filtered branch-entry snapshot: it
+     * already invalidated every escaped or potentially modified local while
+     * retaining unrelated, unescaped constants. In particular, reading a
+     * volatile global or calling a function without access to an automatic
+     * local must not erase that local's __builtin_constant_p proof. Do not
+     * restore either branch-exit facts or an unfiltered impure snapshot. */
+    minic_core_local_facts_restore(
+        context, condition_is_pure ? incoming_facts : branch_entry_facts);
     if (context->source_function && context->source_function->name &&
         strcmp(context->source_function->name, "genl_op_from_split") == 0)
         (void)fprintf(stderr, "GENL_IF_PATH stage=pre_guard expr=%zu condition=%u then=%u else=%u need_merge=%d\n",
@@ -817,8 +738,7 @@ minic_core_lower_if(MinicCoreLowerContext *context, const MinicStatement *statem
                       (int)condition_expression->kind,
                       statement->span.begin.line,
                       statement->span.begin.column);
-        free(incoming_facts);
-        return status;
+        goto if_facts_cleanup;
     }
     context->block_id = continuation_block;
     if (!(else_source == NULL && then_terminated)) {
@@ -829,15 +749,10 @@ minic_core_lower_if(MinicCoreLowerContext *context, const MinicStatement *statem
             else_source == NULL ? branch_entry_facts : else_facts,
             else_source == NULL ? true : !else_terminated);
     }
-    free(else_facts);
-    free(then_facts);
-    free(branch_entry_facts);
     if (else_source == NULL) {
         core_runtime_if_merge_false_fallthrough(
             context, fallthrough_facts, then_exit_facts, then_terminated);
     }
-    free(then_exit_facts);
-    free(fallthrough_facts);
     if (getenv("MINIC_SHMEM_IF_TRACE") != NULL &&
         context->source_function != NULL &&
         strcmp(context->source_function->name, "shmem_alloc_and_acct_folio") == 0) {
@@ -850,13 +765,24 @@ minic_core_lower_if(MinicCoreLowerContext *context, const MinicStatement *statem
                 then_terminated ? 1 : 0);
         }
     }
-    free(incoming_facts);
     if (context->source_function && context->source_function->name &&
         strcmp(context->source_function->name, "genl_op_from_split") == 0)
         (void)fprintf(stderr, "GENL_IF_PATH stage=post_guard expr=%zu status=%d block=%u\n",
             (size_t)statement->expression, (int)status,
             (unsigned int)context->block_id);
     *terminated = !needs_merge;
-    return MINIC_CORE_LOWER_OK;
+    status = MINIC_CORE_LOWER_OK;
+if_facts_cleanup:
+    /* All Core CFG building in this function is transactional at the outer
+     * function level: a failed lower discards its IR. Keep the local fact
+     * snapshots equally owned regardless of which nested source path failed.
+     * This includes an unsupported GNU inline-ASM statement in either arm. */
+    free(else_facts);
+    free(then_facts);
+    free(branch_entry_facts);
+    free(then_exit_facts);
+    free(fallthrough_facts);
+    free(incoming_facts);
+    return status;
 }
 

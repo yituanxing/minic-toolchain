@@ -46,6 +46,7 @@ void minic_c0_local_initialize(MinicLocal *local) {
         return;
     }
     (void)memset(local, 0, sizeof(*local));
+    local->declaration_block = MINIC_BLOCK_INVALID;
     local->dynamic_count_local_id = MINIC_LOCAL_INVALID;
     local->dynamic_address_local_id = MINIC_LOCAL_INVALID;
 }
@@ -55,6 +56,17 @@ void minic_c0_program_initialize(MinicC0Program *program) {
     program->body_block = MINIC_BLOCK_INVALID;
     program->entry_function = MINIC_FUNCTION_INVALID;
     program->return_expression = MINIC_EXPRESSION_INVALID;
+}
+
+bool minic_c0_program_va_cursor_source_types(const MinicC0Program *program,
+                                             MinicType *source_type,
+                                             MinicType *state_type) {
+    if (program == NULL || !program->has_builtin_va_list_source_type ||
+        source_type == NULL || state_type == NULL)
+        return false;
+    *source_type = program->builtin_va_list_source_type;
+    *state_type = program->builtin_va_list_state_type;
+    return true;
 }
 
 void minic_c0_program_destroy(MinicC0Program *program) {
@@ -103,6 +115,8 @@ void minic_c0_program_destroy(MinicC0Program *program) {
         free(program->functions[index].name);
         free(program->functions[index].assembler_name);
         free(program->functions[index].section_name);
+        free(program->functions[index].error_message);
+        free(program->functions[index].warning_message);
         free(program->functions[index].parameter_types);
     }
     for (index = 0U; index < program->record_count; ++index) {
@@ -286,10 +300,86 @@ minic_c0_array_shapes_compatible(const MinicC0Program *program, MinicType left, 
     }
     left_array = minic_c0_program_array_type(program, left.array_type_id);
     right_array = minic_c0_program_array_type(program, right.array_type_id);
-    return left_array != NULL && right_array != NULL &&
-           left_array->element_count == right_array->element_count &&
-           left_array->is_zero_length == right_array->is_zero_length &&
-           minic_c0_types_compatible(program, left_array->element_type, right_array->element_type);
+    if (left_array == NULL || right_array == NULL) {
+        return false;
+    }
+    /* Array bounds are part of structural compatibility, but their element
+     * qualifiers must remain invariant at every nesting level. In particular,
+     * T (*)[4] and const T (*)[4] are incompatible C function parameter
+     * types; the ordinary top-level unqualification in
+     * minic_c0_types_compatible() must not erase this nested distinction. */
+    if (left_array->element_type.base_qualifiers !=
+            right_array->element_type.base_qualifiers ||
+        left_array->element_type.pointer_qualifiers !=
+            right_array->element_type.pointer_qualifiers ||
+        left_array->element_type.pointer_volatile_qualifiers !=
+            right_array->element_type.pointer_volatile_qualifiers) {
+        return false;
+    }
+    if (left_array->element_count != right_array->element_count ||
+        left_array->is_zero_length != right_array->is_zero_length) {
+        /* ISO C compatible-array rule: a bound can be completed by its
+         * counterpart. GNU zero-length arrays are complete extensions and
+         * must not be mistaken for incomplete arrays. Preserve element
+         * qualifiers exactly for this newly admitted pointer conversion. */
+        bool left_incomplete = left_array->element_count == 0U &&
+                               !left_array->is_zero_length;
+        bool right_incomplete = right_array->element_count == 0U &&
+                                !right_array->is_zero_length;
+
+        if (left_array->is_zero_length || right_array->is_zero_length ||
+            (!left_incomplete && !right_incomplete) ||
+            !minic_type_equal(left_array->element_type, right_array->element_type)) {
+            return false;
+        }
+    }
+    return minic_c0_types_compatible(program, left_array->element_type,
+                                    right_array->element_type);
+}
+
+/* Equality of pointers to arrays of scalar/record objects can form the
+ * usual C composite-qualified pointed-to type. This is intentionally
+ * narrower than function signature compatibility (which must preserve
+ * nested element qualifiers), and never crosses an additional pointer or
+ * array level: int (*)[] == const int (*)[] is valid, while int *(*)[] ==
+ * const int *(*)[] is not. */
+static bool minic_c0_array_pointer_qualified_equality_compatible(
+    const MinicC0Program *program, MinicType left, MinicType right) {
+    const MinicArrayType *left_array;
+    const MinicArrayType *right_array;
+    MinicType left_element;
+    MinicType right_element;
+    bool left_incomplete;
+    bool right_incomplete;
+
+    if (program == NULL || !minic_type_is_pointer(left) || !minic_type_is_pointer(right) ||
+        left.base_kind != MINIC_TYPE_BASE_ARRAY || right.base_kind != MINIC_TYPE_BASE_ARRAY ||
+        left.pointer_depth != right.pointer_depth ||
+        left.pointer_qualifiers != right.pointer_qualifiers ||
+        left.pointer_volatile_qualifiers != right.pointer_volatile_qualifiers) {
+        return false;
+    }
+    left_array = minic_c0_program_array_type(program, left.array_type_id);
+    right_array = minic_c0_program_array_type(program, right.array_type_id);
+    if (left_array == NULL || right_array == NULL || left_array->is_zero_length !=
+            right_array->is_zero_length) {
+        return false;
+    }
+    left_incomplete = left_array->element_count == 0U && !left_array->is_zero_length;
+    right_incomplete = right_array->element_count == 0U && !right_array->is_zero_length;
+    if (left_array->element_count != right_array->element_count &&
+        !left_incomplete && !right_incomplete) {
+        return false;
+    }
+    left_element = left_array->element_type;
+    right_element = right_array->element_type;
+    if (minic_type_is_pointer(left_element) || minic_type_is_pointer(right_element) ||
+        minic_type_is_array(left_element) || minic_type_is_array(right_element) ||
+        !minic_type_unqualified(left_element, &left_element) ||
+        !minic_type_unqualified(right_element, &right_element)) {
+        return false;
+    }
+    return minic_type_equal(left_element, right_element);
 }
 
 bool minic_c0_types_compatible(const MinicC0Program *program, MinicType left, MinicType right) {
@@ -401,6 +491,11 @@ bool minic_c0_program_add_expression(MinicC0Program *program,
                                      MinicExpressionId *expression_id) {
     uint32_t *owned_overflow = NULL;
     size_t extra_count = 0U;
+    /* The returned ExpressionId is stable; a borrowed MinicExpression* is not.
+     * Growing this arena can invalidate every previously borrowed element
+     * address. The input expression STRUCT itself must not point into this
+     * arena: the struct is copied after grow. Recursive callers must reacquire
+     * elements by ID afterward. */
     /* The argument scratch is borrowed from a parser stack or source AST.
        Deep-copy here BEFORE grow/realloc; never alias or transfer ownership.
        Thus rewrites and cloned nodes cannot free each other's IDs. */
@@ -861,6 +956,7 @@ static void minic_c0_function_initialize_defaults(MinicFunction *function) {
     }
     (void)memset(function, 0, sizeof(*function));
     function->return_type = minic_type_int();
+    function->calling_convention = MINIC_CALLING_CONVENTION_DEFAULT;
     function->alias_target = MINIC_FUNCTION_INVALID;
 }
 
@@ -960,6 +1056,21 @@ bool minic_c0_program_set_function_signature(MinicC0Program *program,
     function->parameter_types = private_parameter_types;
     function->return_type = return_type;
     function->parameter_count = parameter_count;
+    return true;
+}
+
+bool minic_c0_program_set_function_calling_convention(
+    MinicC0Program *program, MinicFunctionId function_id,
+    MinicFunctionCallingConvention convention) {
+    MinicFunction *function;
+    if (program == NULL || function_id >= program->function_count ||
+        !minic_function_calling_convention_valid(convention))
+        return false;
+    function = &program->functions[function_id];
+    if (function->calling_convention != MINIC_CALLING_CONVENTION_DEFAULT &&
+        function->calling_convention != convention)
+        return false;
+    function->calling_convention = convention;
     return true;
 }
 
@@ -1288,32 +1399,43 @@ bool minic_c0_program_discard_last_array_type(MinicC0Program *program, MinicType
     return true;
 }
 
-static bool minic_function_type_matches(const MinicFunctionType *descriptor,
+static bool minic_function_type_matches(const MinicC0Program *program,
+                                        const MinicFunctionType *descriptor,
                                         MinicType return_type,
                                         const MinicType *parameter_types,
                                         size_t parameter_count,
-                                        bool is_variadic) {
+                                        bool is_variadic,
+                                        MinicFunctionCallingConvention convention) {
     size_t parameter_index;
 
     if (descriptor == NULL || descriptor->parameter_count != parameter_count ||
         descriptor->is_variadic != is_variadic ||
+        descriptor->calling_convention != convention ||
         !minic_type_equal(descriptor->return_type, return_type)) {
         return false;
     }
     for (parameter_index = 0U; parameter_index < parameter_count; ++parameter_index) {
-        if (!minic_type_equal(descriptor->parameter_types[parameter_index],
-                              parameter_types[parameter_index])) {
+        /* Two declarations may independently intern the same array shape.
+         * In particular GNU Linux's PMULL callback and its asmlinkage
+         * implementation both spell `const u64 h[][2]`, but the array type
+         * IDs are independent.  C function parameter compatibility is about
+         * type structure (including inner qualifiers and bounds), not the
+         * allocation identity of the array descriptor. */
+        if (!minic_c0_types_compatible(program,
+                                      descriptor->parameter_types[parameter_index],
+                                      parameter_types[parameter_index])) {
             return false;
         }
     }
     return true;
 }
 
-bool minic_c0_program_add_variadic_function_type(MinicC0Program *program,
+static bool minic_c0_program_add_variadic_function_type_with_convention(MinicC0Program *program,
                                                  MinicType return_type,
                                                  const MinicType *parameter_types,
                                                  size_t parameter_count,
                                                  bool is_variadic,
+                                                 MinicFunctionCallingConvention convention,
                                                  MinicType *function_type) {
     MinicFunctionType descriptor;
     MinicType normalized_parameter_types[MINIC_MAX_FUNCTION_PARAMETERS];
@@ -1323,7 +1445,9 @@ bool minic_c0_program_add_variadic_function_type(MinicC0Program *program,
     if (program == NULL || function_type == NULL ||
         parameter_count > MINIC_MAX_FUNCTION_PARAMETERS ||
         (parameter_count != 0U && parameter_types == NULL) || minic_type_is_array(return_type) ||
-        minic_type_is_function(return_type)) {
+        minic_type_is_function(return_type) ||
+        (convention != MINIC_CALLING_CONVENTION_DEFAULT &&
+         convention != MINIC_CALLING_CONVENTION_MS_X64)) {
         return false;
     }
     for (parameter_index = 0U; parameter_index < parameter_count; ++parameter_index) {
@@ -1336,11 +1460,12 @@ bool minic_c0_program_add_variadic_function_type(MinicC0Program *program,
     }
     for (function_type_index = 0U; function_type_index < program->function_type_count;
          ++function_type_index) {
-        if (minic_function_type_matches(&program->function_types[function_type_index],
+        if (minic_function_type_matches(program,
+                                        &program->function_types[function_type_index],
                                         return_type,
                                         normalized_parameter_types,
                                         parameter_count,
-                                        is_variadic)) {
+                                        is_variadic, convention)) {
             *function_type = minic_type_function(function_type_index);
             return true;
         }
@@ -1356,6 +1481,7 @@ bool minic_c0_program_add_variadic_function_type(MinicC0Program *program,
     descriptor.return_type = return_type;
     descriptor.parameter_count = parameter_count;
     descriptor.is_variadic = is_variadic;
+    descriptor.calling_convention = convention;
     for (parameter_index = 0U; parameter_index < MINIC_MAX_FUNCTION_PARAMETERS; ++parameter_index) {
         if (parameter_index < parameter_count) {
             descriptor.parameter_types[parameter_index] =
@@ -1368,6 +1494,41 @@ bool minic_c0_program_add_variadic_function_type(MinicC0Program *program,
     program->function_types[program->function_type_count] = descriptor;
     program->function_type_count += 1U;
     *function_type = minic_type_function(function_type_index);
+    return true;
+}
+
+bool minic_c0_program_add_variadic_function_type(MinicC0Program *program,
+                                                 MinicType return_type,
+                                                 const MinicType *parameter_types,
+                                                 size_t parameter_count,
+                                                 bool is_variadic,
+                                                 MinicType *function_type) {
+    return minic_c0_program_add_variadic_function_type_with_convention(
+        program, return_type, parameter_types, parameter_count, is_variadic,
+        MINIC_CALLING_CONVENTION_DEFAULT, function_type);
+}
+
+bool minic_c0_program_function_pointer_with_calling_convention(
+    MinicC0Program *program, MinicType pointer_type,
+    MinicFunctionCallingConvention convention, MinicType *result) {
+    MinicFunctionType original;
+    MinicType function_type;
+    if (program == NULL || result == NULL ||
+        pointer_type.base_kind != MINIC_TYPE_BASE_FUNCTION ||
+        pointer_type.pointer_depth != 1U ||
+        pointer_type.function_type_id >= program->function_type_count ||
+        (convention != MINIC_CALLING_CONVENTION_DEFAULT &&
+         convention != MINIC_CALLING_CONVENTION_MS_X64))
+        return false;
+    /* Save the signature by VALUE: interning may realloc its owner array. */
+    original = program->function_types[pointer_type.function_type_id];
+    if (!minic_c0_program_add_variadic_function_type_with_convention(
+            program, original.return_type, original.parameter_types,
+            original.parameter_count, original.is_variadic, convention,
+            &function_type))
+        return false;
+    *result = pointer_type;
+    result->function_type_id = function_type.function_type_id;
     return true;
 }
 
@@ -1455,8 +1616,30 @@ bool minic_c0_expression_array_object_info(const MinicC0Program *program,
                                            MinicArrayObjectInfo *info) {
     MinicArrayObjectInfo resolved;
 
-    if (program == NULL || expression == NULL || expression->value_category != MINIC_VALUE_LVALUE) {
+    if (program == NULL || expression == NULL) {
         return false;
+    }
+    if (expression->value_category != MINIC_VALUE_LVALUE) {
+        const MinicExpression *base;
+        const MinicRecord *record;
+        const MinicRecordField *field;
+
+        /* ISO C permits array-to-pointer decay from a member of a record
+         * rvalue. The record owns an unnamed temporary through the end of
+         * the full expression. This exception must not turn an arbitrary
+         * array rvalue into an addressable/modifiable lvalue. */
+        if (expression->value_category != MINIC_VALUE_RVALUE ||
+            expression->kind != MINIC_EXPRESSION_MEMBER)
+            return false;
+        base = minic_c0_program_expression(program, expression->value.member.base);
+        record = minic_c0_program_record(program, expression->value.member.record_id);
+        field = minic_c0_record_field(record, expression->value.member.field_index);
+        if (base == NULL || base->value_category != MINIC_VALUE_RVALUE ||
+            !minic_type_is_record(base->type) ||
+            base->type.record_id != expression->value.member.record_id ||
+            !minic_c0_record_value_is_copy_source(program, expression->value.member.base) ||
+            field == NULL || (!field->is_array && !minic_type_is_array(field->type)))
+            return false;
     }
     (void)memset(&resolved, 0, sizeof(resolved));
     if (expression->kind == MINIC_EXPRESSION_COMPOUND_LITERAL) {
@@ -1466,7 +1649,8 @@ bool minic_c0_expression_array_object_info(const MinicC0Program *program,
         if (local != NULL && local->is_array) {
             resolved.element_type = expression->type;
             resolved.element_count = local->element_count;
-            resolved.is_incomplete = local->element_count == 0U;
+            resolved.is_zero_length = local->is_zero_length_array;
+            resolved.is_incomplete = local->element_count == 0U && !resolved.is_zero_length;
             if (info != NULL) {
                 *info = resolved;
             }
@@ -1480,7 +1664,10 @@ bool minic_c0_expression_array_object_info(const MinicC0Program *program,
         if (local != NULL && local->is_array) {
             resolved.element_type = expression->type;
             resolved.element_count = local->element_count;
-            resolved.is_incomplete = local->element_count == 0U;
+            /* A parsed `T local[0]` owns a complete GNU zero-sized array.
+               Keep only a not-yet-materialized VLA incomplete here. */
+            resolved.is_zero_length = local->is_zero_length_array;
+            resolved.is_incomplete = local->element_count == 0U && !resolved.is_zero_length;
         } else if (!minic_type_is_array(expression->type)) {
             return false;
         } else {
@@ -1531,7 +1718,13 @@ bool minic_c0_expression_array_object_info(const MinicC0Program *program,
         }
         resolved.element_type = array_type->element_type;
         resolved.element_count = array_type->element_count;
-        resolved.is_incomplete = array_type->element_count == 0U;
+        /* GNU `T objects[0]` is a complete zero-extent array, distinct from
+         * `extern T objects[]`. In particular Linux's __ADDRESSABLE macro
+         * takes `&objects` and needs its pointer-to-array type verified as
+         * zero-sized, not as an incomplete declaration. */
+        resolved.is_zero_length = array_type->is_zero_length;
+        resolved.is_incomplete =
+            array_type->element_count == 0U && !array_type->is_zero_length;
         resolved.has_materialized_type = true;
     } else {
         return false;
@@ -1626,6 +1819,23 @@ static bool minic_c0_record_value_is_copy_source_bounded(const MinicC0Program *p
     if (expression->kind == MINIC_EXPRESSION_CALL ||
         expression->kind == MINIC_EXPRESSION_BUILTIN_VA_ARG) {
         return true;
+    }
+    if (expression->kind == MINIC_EXPRESSION_MEMBER) {
+        const MinicExpression *base = minic_c0_program_expression(
+            program, expression->value.member.base);
+        const MinicRecord *record = minic_c0_program_record(
+            program, expression->value.member.record_id);
+        const MinicRecordField *field = minic_c0_record_field(
+            record, expression->value.member.field_index);
+        return expression->value.member.base < expression_id && base != NULL &&
+               base->value_category == MINIC_VALUE_RVALUE &&
+               minic_type_is_record(base->type) &&
+               base->type.record_id == expression->value.member.record_id &&
+               field != NULL && !field->is_array && !field->is_bit_field &&
+               minic_type_is_record(field->type) &&
+               field->type.record_id == expression->type.record_id &&
+               minic_c0_record_value_is_copy_source_bounded(
+                   program, expression->value.member.base, remaining - 1U);
     }
     if (expression->kind == MINIC_EXPRESSION_CAST ||
         expression->kind == MINIC_EXPRESSION_STATEMENT) {
@@ -1742,6 +1952,62 @@ static bool minic_c0_gnu_void_function_pointer_assignment_compatible(MinicType t
            (minic_type_is_function(target_pointee) && minic_type_is_void(source_pointee));
 }
 
+/* The Linux module_param type-check macro intentionally returns an
+ * `enum foo *` from an `unsigned int *` probe function. GCC accepts this
+ * one-level mismatch with -Wincompatible-pointer-types, and the pointer
+ * representation is identical when the completed enum is compatible with
+ * exactly that integer type. Keep unrelated enum pointers, different
+ * integer ranks, deeper pointers, and qualifier drops strictly rejected. */
+static bool minic_c0_gnu_enum_underlying_pointer_compatible(
+    const MinicC0Program *program, MinicType target, MinicType source) {
+    MinicType target_pointee, source_pointee, enum_type, integer_type, effective;
+
+    if (program == NULL || target.pointer_depth != 1U || source.pointer_depth != 1U ||
+        !minic_type_pointee(target, &target_pointee) ||
+        !minic_type_pointee(source, &source_pointee))
+        return false;
+    if (minic_type_is_const(source_pointee) && !minic_type_is_const(target_pointee))
+        return false;
+    if (minic_type_is_volatile(source_pointee) && !minic_type_is_volatile(target_pointee))
+        return false;
+    if (minic_type_is_enum(target_pointee) && minic_type_is_integer(source_pointee) &&
+        !minic_type_is_enum(source_pointee)) {
+        enum_type = target_pointee;
+        integer_type = source_pointee;
+    } else if (minic_type_is_enum(source_pointee) &&
+               minic_type_is_integer(target_pointee) && !minic_type_is_enum(target_pointee)) {
+        enum_type = source_pointee;
+        integer_type = target_pointee;
+    } else {
+        return false;
+    }
+    return minic_c0_type_effective_integer_type(program, enum_type, &effective) &&
+           minic_type_unqualified(effective, &effective) &&
+           minic_type_unqualified(integer_type, &integer_type) &&
+           minic_type_equal(effective, integer_type);
+}
+
+/* GNU C (also ISO C23) admits `T (*)[N]` where a formal parameter requires
+ * `const T (*)[N]`. GCC -std=gnu11 -Wpedantic diagnoses the pre-C23
+ * constraint but compiles it with ordinary Linux flags. Unlike a pointer to
+ * pointer, one array layer must not mask an inner qualifier change. Reuse
+ * the existing exact array shape/equality proof, then check direction. */
+static bool minic_c0_gnu_qualified_array_pointer_assignment_compatible(
+    const MinicC0Program *program, MinicType target, MinicType source) {
+    const MinicArrayType *target_array;
+    const MinicArrayType *source_array;
+    if (!minic_c0_array_pointer_qualified_equality_compatible(program, target, source))
+        return false;
+    target_array = minic_c0_program_array_type(program, target.array_type_id);
+    source_array = minic_c0_program_array_type(program, source.array_type_id);
+    if (target_array == NULL || source_array == NULL)
+        return false;
+    return (!minic_type_is_const(source_array->element_type) ||
+            minic_type_is_const(target_array->element_type)) &&
+           (!minic_type_is_volatile(source_array->element_type) ||
+            minic_type_is_volatile(target_array->element_type));
+}
+
 bool minic_c0_assignment_compatible(const MinicC0Program *program,
                                     MinicType target_type,
                                     MinicExpressionId source_expression_id) {
@@ -1760,6 +2026,10 @@ bool minic_c0_assignment_compatible(const MinicC0Program *program,
     if (minic_type_is_pointer(target_type) && minic_type_is_pointer(source->type) &&
         (minic_c0_types_compatible(program, target_type, source->type) ||
          minic_c0_gnu_void_function_pointer_assignment_compatible(target_type, source->type) ||
+         minic_c0_gnu_enum_underlying_pointer_compatible(
+             program, target_type, source->type) ||
+         minic_c0_gnu_qualified_array_pointer_assignment_compatible(
+             program, target_type, source->type) ||
          minic_type_gnu_pointer_sign_compatible(target_type, source->type))) {
         return true;
     }
@@ -1869,6 +2139,15 @@ bool minic_c0_pointer_equality_compatible(const MinicC0Program *program,
         return false;
     }
     if (minic_type_pointer_equality_compatible(left->type, right->type) ||
+        /* Distinct declarations of incomplete arrays have independent AST
+         * descriptor IDs, even though pointers to those array objects have
+         * compatible C types. Compare their element/extent shapes, not IDs. */
+        (minic_type_is_pointer(left->type) && minic_type_is_pointer(right->type) &&
+         left->type.base_kind == MINIC_TYPE_BASE_ARRAY &&
+         right->type.base_kind == MINIC_TYPE_BASE_ARRAY &&
+         (minic_c0_types_compatible(program, left->type, right->type) ||
+          minic_c0_array_pointer_qualified_equality_compatible(
+              program, left->type, right->type))) ||
         (minic_type_is_pointer(left->type) && minic_type_is_pointer(right->type) &&
          minic_c0_gnu_void_function_pointer_assignment_compatible(left->type, right->type))) {
         return true;

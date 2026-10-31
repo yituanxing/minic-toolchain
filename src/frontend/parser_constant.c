@@ -266,54 +266,6 @@ bool minic_parser_parse_unsigned_integer_value64(MinicParser *parser, uint64_t *
     return minic_parser_advance(parser);
 }
 
-bool minic_parser_parse_integer_value64(MinicParser *parser, int64_t *value) {
-    MinicSourceSpan span;
-    size_t digit_end;
-    size_t offset;
-    uint64_t parsed;
-    uint64_t base;
-
-    if (value == NULL || parser->current.kind != MINIC_TOKEN_INTEGER_CONSTANT) {
-        minic_parser_error(parser, "expected integer constant");
-        return false;
-    }
-    span = parser->current.span;
-    digit_end = integer_digit_end(parser, span);
-    offset = span.begin.offset;
-    base = 10U;
-    if (digit_end - span.begin.offset >= 2U && parser->source[offset] == '0' &&
-        (parser->source[offset + 1U] == 'x' || parser->source[offset + 1U] == 'X')) {
-        base = 16U;
-        offset += 2U;
-    } else if (digit_end - span.begin.offset >= 2U && parser->source[offset] == '0' &&
-               (parser->source[offset + 1U] == 'b' || parser->source[offset + 1U] == 'B')) {
-        base = 2U;
-        offset += 2U;
-    } else if (digit_end - span.begin.offset > 1U && parser->source[offset] == '0') {
-        base = 8U; /* C integer constants with a leading zero are octal. */
-    }
-
-    parsed = 0U;
-    for (; offset < digit_end; ++offset) {
-        int digit_value;
-        uint64_t digit;
-
-        digit_value = hexadecimal_digit_value(parser->source[offset]);
-        if (digit_value < 0 || (uint64_t)digit_value >= base) {
-            minic_parser_error(parser, "invalid integer constant digit");
-            return false;
-        }
-        digit = (uint64_t)digit_value;
-        if (parsed > ((uint64_t)INT64_MAX - digit) / base) {
-            minic_parser_error(parser, "integer constant exceeds signed 64-bit literal range");
-            return false;
-        }
-        parsed = parsed * base + digit;
-    }
-    *value = (int64_t)parsed;
-    return minic_parser_advance(parser);
-}
-
 bool minic_parser_parse_integer_value(MinicParser *parser, int *value) {
     MinicSourceSpan span;
     size_t digit_end;

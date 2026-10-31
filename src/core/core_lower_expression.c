@@ -84,6 +84,18 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         fact_target = minic_c0_program_expression(
             context->body->program, expression->value.binary.left);
         if (fact_target != NULL && fact_target->kind == MINIC_EXPRESSION_LOCAL) {
+            MinicConstValue literal;
+            uint64_t before_bits;
+            /* A source-constant OR cannot set bits outside the union of
+             * existing possible-one bits and the literal. Keep the old fact
+             * alive until arithmetic lowering commits its single STORE;
+             * all other compound writes retain the original invalidation. */
+            bool bounded_or =
+                expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_OR &&
+                minic_const_eval_integer(context->body->program, context->target,
+                                         expression->value.binary.right, &literal) &&
+                minic_core_local_fact_possible_one_bits(
+                    context, fact_target->value.local_id, &before_bits);
             if (getenv("MINIC_LOCAL_FACT_TRACE") != NULL) {
                 (void)fprintf(stderr,
                               "LOCAL_FACT_COMPOUND_INVALIDATE function=%s local=%zu expression=%zu\n",
@@ -93,7 +105,8 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                               (size_t)fact_target->value.local_id,
                               (size_t)expression_id);
             }
-            minic_core_local_fact_invalidate(context, fact_target->value.local_id);
+            if (!bounded_or)
+                minic_core_local_fact_invalidate(context, fact_target->value.local_id);
         }
     }
     /* Runtime allocation is a pointer-producing rvalue. Its target-neutral
@@ -136,6 +149,38 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         MinicCoreLowerStatus status = minic_core_lower_try_direct_record_member(
             context, expression, value_id, &handled);
         if (handled || status != MINIC_CORE_LOWER_OK) return status;
+    }
+    /* A writable machine register is a C lvalue but has NO memory address.
+     * Its reads retain the single existing typed Core register-read owner. */
+    if (expression->kind == MINIC_EXPRESSION_FIXED_REGISTER) {
+        const MinicFixedRegisterBinding *binding;
+        size_t core_binding_id;
+
+        binding = minic_c0_program_fixed_register_binding(
+            context->body->program, expression->value.fixed_register_binding_id);
+        if (binding == NULL || binding->register_name == NULL ||
+            binding->register_name_length == 0U) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        if (!core_memory_scalar_type(binding->type) ||
+            !minic_type_equal(binding->type, expression->type)) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        if (!core_import_fixed_register_binding(context,
+                                                expression->value.fixed_register_binding_id,
+                                                &core_binding_id)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        (void)memset(&instruction, 0, sizeof(instruction));
+        instruction.kind = MINIC_CORE_INSTRUCTION_FIXED_REGISTER_READ;
+        instruction.span = expression->span;
+        instruction.type = expression->type;
+        instruction.result = MINIC_CORE_VALUE_INVALID;
+        instruction.value.fixed_register_binding_id = core_binding_id;
+        return minic_core_function_append_value_instruction(
+                   context->function, context->block_id, &instruction, value_id)
+                   ? MINIC_CORE_LOWER_OK
+                   : MINIC_CORE_LOWER_ERROR;
     }
     if (expression->value_category == MINIC_VALUE_LVALUE &&
         core_memory_scalar_type(expression->type)) {
@@ -389,36 +434,6 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         }
         return minic_core_lower_direct_call(context, expression, value_id);
     }
-    if (expression->kind == MINIC_EXPRESSION_FIXED_REGISTER) {
-        const MinicFixedRegisterBinding *binding;
-        size_t core_binding_id;
-
-        binding = minic_c0_program_fixed_register_binding(
-            context->body->program, expression->value.fixed_register_binding_id);
-        if (binding == NULL || binding->register_name == NULL ||
-            binding->register_name_length == 0U) {
-            return MINIC_CORE_LOWER_ERROR;
-        }
-        if (!core_memory_scalar_type(binding->type) ||
-            !minic_type_equal(binding->type, expression->type)) {
-            return MINIC_CORE_LOWER_UNSUPPORTED;
-        }
-        if (!core_import_fixed_register_binding(context,
-                                                expression->value.fixed_register_binding_id,
-                                                &core_binding_id)) {
-            return MINIC_CORE_LOWER_ERROR;
-        }
-        (void)memset(&instruction, 0, sizeof(instruction));
-        instruction.kind = MINIC_CORE_INSTRUCTION_FIXED_REGISTER_READ;
-        instruction.span = expression->span;
-        instruction.type = expression->type;
-        instruction.result = MINIC_CORE_VALUE_INVALID;
-        instruction.value.fixed_register_binding_id = core_binding_id;
-        return minic_core_function_append_value_instruction(
-                   context->function, context->block_id, &instruction, value_id)
-                   ? MINIC_CORE_LOWER_OK
-                   : MINIC_CORE_LOWER_ERROR;
-    }
     if (expression->kind == MINIC_EXPRESSION_UNARY &&
         (expression->value.unary.operator_kind == MINIC_UNARY_POST_INCREMENT ||
          expression->value.unary.operator_kind == MINIC_UNARY_POST_DECREMENT ||
@@ -561,15 +576,18 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
     if (expression->kind == MINIC_EXPRESSION_BUILTIN_VA_ARG)
         return minic_core_lower_vararg_scalar(context, expression, value_id);
 
-    /* M79_CALL_FRAME_RETURN_ADDRESS: keep the semantic builtin in Core rather
-       than lowering it to a target register in the frontend. The first seam
-       is GNU __builtin_return_address(0); deeper levels and frame-address
-       queries remain unsupported until a backend can define them correctly. */
+    /* Keep the semantic builtin in Core. The target's language capability
+     * already gated the source level: returning a parent frame is meaningful
+     * only to an ABI maintaining an actual caller-FP record. Keep a bounded
+     * target-independent Core representation (return 0, frame 0/1). */
     if (expression->kind == MINIC_EXPRESSION_CALL_FRAME_ADDRESS) {
         MinicCoreCallFrameAddressKind core_kind;
         MinicType pointee;
 
-        if (expression->value.call_frame_address.level != 0U ||
+        if (expression->value.call_frame_address.level > 1U ||
+            (expression->value.call_frame_address.level != 0U &&
+             expression->value.call_frame_address.kind !=
+                 MINIC_CALL_FRAME_ADDRESS_FRAME) ||
             !minic_type_pointee(expression->type, &pointee) || !minic_type_is_void(pointee)) {
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
@@ -589,7 +607,8 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         instruction.type = expression->type;
         instruction.result = MINIC_CORE_VALUE_INVALID;
         instruction.value.call_frame_address.kind = core_kind;
-        instruction.value.call_frame_address.level = 0U;
+        instruction.value.call_frame_address.level =
+            expression->value.call_frame_address.level;
         return minic_core_function_append_value_instruction(
                    context->function, context->block_id, &instruction, value_id)
                    ? MINIC_CORE_LOWER_OK
@@ -621,7 +640,8 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         return append_scalar_bitcast(
             context, expression->span, expression->type, operand_value, value_id);
     }
-    if (expression->kind == MINIC_EXPRESSION_BUILTIN_OVERFLOW &&
+    if ((expression->kind == MINIC_EXPRESSION_BUILTIN_OVERFLOW ||
+         expression->kind == MINIC_EXPRESSION_BUILTIN_OVERFLOW_P) &&
         (expression->value.overflow.operator_kind == MINIC_OVERFLOW_ADD ||
          expression->value.overflow.operator_kind == MINIC_OVERFLOW_SUBTRACT ||
          expression->value.overflow.operator_kind == MINIC_OVERFLOW_MULTIPLY)) {
@@ -641,7 +661,10 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         MinicType result_type;
         MinicType right_type;
         MinicType right_value_type;
+        MinicType result_pointer_type;
+        bool is_predicate;
 
+        is_predicate = expression->kind == MINIC_EXPRESSION_BUILTIN_OVERFLOW_P;
         if (!minic_type_equal(expression->type, minic_type_bool())) {
             return MINIC_CORE_LOWER_ERROR;
         }
@@ -653,7 +676,9 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
             context->body->program, expression->value.overflow.result_pointer);
         if (left_expression == NULL || right_expression == NULL ||
             result_pointer_expression == NULL || context->target == NULL ||
-            !minic_type_pointee(result_pointer_expression->type, &result_type) ||
+            !(is_predicate
+                  ? minic_type_unqualified(result_pointer_expression->type, &result_type)
+                  : minic_type_pointee(result_pointer_expression->type, &result_type)) ||
             !minic_type_is_integer(result_type) || minic_type_is_bool_integer(result_type) ||
             minic_type_is_const(result_type) || minic_type_is_volatile(result_type) ||
             !core_scalar_expression_value_type(context->body, left_expression, &left_type) ||
@@ -718,10 +743,28 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
             return status;
         }
 
-        status =
-            lower_expression(context, expression->value.overflow.result_pointer, &result_address);
-        if (status != MINIC_CORE_LOWER_OK) {
-            return status;
+        if (is_predicate) {
+            MinicCoreObjectId result_object;
+            MinicCoreInstruction object_address;
+            if (!minic_type_pointer_to(result_type, &result_pointer_type) ||
+                !minic_core_function_add_object(
+                    context->function, expression->span, result_type, &result_object))
+                return MINIC_CORE_LOWER_ERROR;
+            (void)memset(&object_address, 0, sizeof(object_address));
+            object_address.kind = MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS;
+            object_address.span = expression->span;
+            object_address.type = result_pointer_type;
+            object_address.result = MINIC_CORE_VALUE_INVALID;
+            object_address.value.object_id = result_object;
+            if (!minic_core_function_append_value_instruction(
+                    context->function, context->block_id,
+                    &object_address, &result_address))
+                return MINIC_CORE_LOWER_ERROR;
+        } else {
+            result_pointer_type = result_pointer_expression->type;
+            status = lower_expression(
+                context, expression->value.overflow.result_pointer, &result_address);
+            if (status != MINIC_CORE_LOWER_OK) return status;
         }
         status =
             minic_core_lower_internal_reload_scalar_value(context, left_expression->span, left_value_type, left_object, &left);
@@ -738,7 +781,7 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
             !minic_type_equal(context->function->values[left].type, left_value_type) ||
             !minic_type_equal(context->function->values[right].type, right_value_type) ||
             !minic_type_equal(context->function->values[result_address].type,
-                              result_pointer_expression->type)) {
+                              result_pointer_type)) {
             return MINIC_CORE_LOWER_ERROR;
         }
         instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW;
@@ -1207,7 +1250,18 @@ MinicCoreLowerStatus minic_core_lower_internal_lower_expression_statement(MinicC
          expression->value.unary.operator_kind == MINIC_UNARY_PRE_INCREMENT ||
          expression->value.unary.operator_kind == MINIC_UNARY_PRE_DECREMENT)) {
         MinicCoreValueId discarded_value;
+        const MinicExpression *updated_expression = minic_c0_program_expression(
+            context->body->program, expression->value.unary.operand);
 
+        /* Discarding the old/new value does not discard the write.  Match the
+           value-expression path: a postfix/prefix update makes the previous
+           local constant fact invalid before a following IF can consume it.
+           Otherwise `cnt++` in one branch leaves `cnt == 0` at the join and
+           Linux's WARN_ON(!cnt) can become an unconditional trap. */
+        if (updated_expression != NULL &&
+            updated_expression->kind == MINIC_EXPRESSION_LOCAL) {
+            minic_core_local_fact_invalidate(context, updated_expression->value.local_id);
+        }
         return core_trace_expression_statement_status(
             context,
             expression,

@@ -1,6 +1,7 @@
 #include "target/riscv64/codegen.h"
 #include "target/riscv64/global_emit.h"
 #include "target/common/global_emit.h"
+#include "target/common/elf_alias_emit.h"
 #include "target/common/program_visit.h"
 #include "target/common/program_emit.h"
 #include "target/riscv64/abi.h"
@@ -29,34 +30,12 @@ static bool rv64_visit_global(
     Rv64ProgramContext *ctx = opaque;
     (void)target;
     if (object->is_extern) {
-        if (object->alias_target != MINIC_GLOBAL_OBJECT_INVALID) {
-            const MinicGlobalObject *target_object =
-                minic_c0_program_global_object(program, object->alias_target);
-            bool success = target_object != NULL && target_object != object &&
-                           !target_object->is_extern && !target_object->is_tentative &&
-                           minic_c0_types_compatible(
-                               program, object->type, target_object->type);
-            if (success && !object->is_internal) {
-                success = fprintf(file, object->is_weak ?
-                        ".weak %s\n" : ".globl %s\n", object->name) >= 0;
-                if (success &&
-                    object->visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT) {
-                    const char *directive =
-                        minic_multi_elf_visibility_directive(object->visibility);
-                    success = directive != NULL &&
-                              fprintf(file, "%s %s\n", directive,
-                                      object->name) >= 0;
-                }
-            }
-            if (success) {
-                success = fprintf(file, ".type %s, @object\n.set %s, %s\n",
-                                  object->name, object->name,
-                                  target_object->name) >= 0;
-            }
-            return success;
-        }
-        return !object->is_weak || object->is_internal ||
-               fprintf(file, ".weak %s\n", object->name) >= 0;
+        if (object->alias_target != MINIC_GLOBAL_OBJECT_INVALID)
+            return minic_multi_elf_emit_object_alias(
+                file, program, object, "@object");
+        /* The common program emitter owns referenced undefined bindings.
+         * Emitting here would duplicate `.weak` and create unused symbols. */
+        return true;
     }
     if (minic_riscv64_emit_global_object(file, program, object)) return true;
     {
@@ -92,12 +71,8 @@ static bool rv64_visit_function(
         (void)fflush(stderr);
     }
     if (!function->is_defined) {
-        const char *name = minic_c0_function_symbol_name(function);
         if (function->alias_target != MINIC_FUNCTION_INVALID)
             return minic_riscv_emit_function_alias(file, program, function);
-        if (function->is_weak && !function->is_internal)
-            return name != NULL && name[0] != '\0' &&
-                   fprintf(file, ".weak %s\n", name) >= 0;
         return true;
     }
     {

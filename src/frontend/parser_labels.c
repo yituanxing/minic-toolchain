@@ -110,6 +110,8 @@ bool minic_parser_parse_goto(MinicParser *parser) {
     statement.target_expression = MINIC_EXPRESSION_INVALID;
     statement.expression = MINIC_EXPRESSION_INVALID;
     statement.target_statement = MINIC_STATEMENT_INVALID;
+    statement.cleanup_context = parser->cleanup_context;
+    statement.cleanup_stop_context = MINIC_CLEANUP_CONTEXT_ROOT;
     statement.then_block = MINIC_BLOCK_INVALID;
     statement.else_block = MINIC_BLOCK_INVALID;
 
@@ -283,6 +285,8 @@ bool minic_parser_parse_label(MinicParser *parser, bool allow_declaration) {
         statement.target_expression = MINIC_EXPRESSION_INVALID;
         statement.expression = MINIC_EXPRESSION_INVALID;
         statement.target_statement = MINIC_STATEMENT_INVALID;
+        statement.cleanup_context = parser->cleanup_context;
+        statement.cleanup_stop_context = MINIC_CLEANUP_CONTEXT_ROOT;
         statement.then_block = MINIC_BLOCK_INVALID;
         statement.else_block = MINIC_BLOCK_INVALID;
         label_statement_id = defines_pending_function_label ? existing_function_label_id

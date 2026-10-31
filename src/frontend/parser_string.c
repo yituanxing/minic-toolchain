@@ -562,7 +562,9 @@ bool minic_parser_get_predefined_function_name_object(MinicParser *parser,
                                             array_type,
                                             true,
                                             true,
-                                            &created_id)) {
+                                            &created_id) ||
+        !minic_c0_program_set_global_object_owner(
+            parser->program, created_id, parser->current_function)) {
         minic_parser_error(parser, "cannot create __func__ backing object");
         return false;
     }
@@ -645,7 +647,10 @@ bool minic_parser_create_string_literal_object(MinicParser *parser,
                                             *array_type,
                                             true,
                                             true,
-                                            object_id)) {
+                                            object_id) ||
+        (parser->current_function != MINIC_FUNCTION_INVALID &&
+         !minic_c0_program_set_global_object_owner(
+             parser->program, *object_id, parser->current_function))) {
         minic_parser_error(parser, "cannot create string literal object");
         return false;
     }
@@ -750,6 +755,30 @@ bool minic_parser_parse_string_text(MinicParser *parser,
     *text = buffer;
     *length = output;
     *span = combined_span;
+    return true;
+}
+
+bool minic_parser_parse_gnu_asm_name(
+    MinicParser *parser, char *buffer, size_t capacity, size_t *length) {
+    char *decoded = NULL;
+    size_t size = 0U;
+    MinicSourceSpan span;
+    if (!parser || !buffer || !length || !capacity)
+        return false;
+    *length = 0U;
+    if (!minic_parser_parse_string_text(parser, &decoded, &size, &span)) {
+        free(decoded);
+        return false;
+    }
+    (void)span;
+    if (!size || size >= capacity) {
+        free(decoded);
+        minic_parser_error(parser, "GNU asm name must fit in target name buffer");
+        return false;
+    }
+    (void)memcpy(buffer, decoded, size + 1U);
+    *length = size;
+    free(decoded);
     return true;
 }
 

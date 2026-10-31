@@ -48,7 +48,7 @@ struct CallbackNode {
     int tail;
 };
 static void callback_node(struct CallbackNode *node) { (void)node; }
-static struct CallbackNode callback_holder = {
+static struct CallbackNode callback_holder __attribute__((used)) = {
     .count = 1,
     .callback = callback_node,
     .tail = 2,
@@ -60,7 +60,7 @@ struct AnonymousStructUnion {
         struct { unsigned long s0; unsigned long s1; };
     };
 };
-static struct AnonymousStructUnion anonymous_struct_union = { .s1 = 8UL };
+static struct AnonymousStructUnion anonymous_struct_union __attribute__((used)) = { .s1 = 8UL };
 
 static long backward_target;
 struct BackwardUnion {
@@ -71,7 +71,7 @@ struct BackwardUnion {
     };
     int tail;
 };
-static struct BackwardUnion backward_union = {
+static struct BackwardUnion backward_union __attribute__((used)) = {
     .tail = 3,
     .as_long = &backward_target,
 };

@@ -162,12 +162,16 @@ MinicCoreLowerStatus minic_core_lower_internal_local_object(MinicCoreLowerContex
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
     if (local->is_array) {
-        if (local->element_count == 0U ||
+        /* A zero-length GNU local still has an address.  Allocate one
+           addressable backing element as a sentinel; its source-language
+           extent and sizeof remain zero, and no element access is valid. */
+        if ((local->element_count == 0U && !local->is_zero_length_array) ||
             !minic_core_function_add_repeated_object(context->function,
-                                                     local->name_span,
-                                                     local->type,
-                                                     local->element_count,
-                                                     object_id)) {
+                                                    local->name_span,
+                                                    local->type,
+                                                    local->element_count == 0U ? 1U
+                                                                               : local->element_count,
+                                                    object_id)) {
             return MINIC_CORE_LOWER_ERROR;
         }
     } else if (!minic_core_function_add_object(
@@ -203,8 +207,9 @@ static MinicCoreLowerStatus lower_parameter_ingress(MinicCoreLowerContext *conte
         }
         if (parameter->is_array || parameter->is_register_storage ||
             !minic_type_unqualified(parameter->type, &parameter_value_type) ||
-            !minic_type_equal(parameter_value_type,
-                              context->source_function->parameter_types[parameter_index])) {
+            !minic_c0_types_compatible(
+                context->body->program, parameter_value_type,
+                context->source_function->parameter_types[parameter_index])) {
             (void)fprintf(stderr,
                           "CORE_M158_INGRESS_DETAIL function=%s parameter=%zu "
                           "volatile=%d array=%d register=%d\n",
@@ -534,11 +539,19 @@ static MinicCoreLowerStatus lower_return(MinicCoreLowerContext *context,
                        expression->value.call.function_id != MINIC_FUNCTION_INVALID) {
                 status = minic_core_lower_direct_record_call_object(
                     context, expression, &terminator.return_object);
+            } else if (expression->kind == MINIC_EXPRESSION_CALL) {
+                status = minic_core_lower_indirect_record_call_object(
+                    context, expression, &terminator.return_object);
             } else if (expression->kind == MINIC_EXPRESSION_CONDITIONAL &&
                        minic_type_is_record(expression->type)) {
                 status = minic_core_lower_record_conditional_object(
                     context, expression, &terminator.return_object);
-            } else if (expression->kind == MINIC_EXPRESSION_ASSIGNMENT ||
+            } else if (expression->kind == MINIC_EXPRESSION_STATEMENT ||
+                       expression->kind == MINIC_EXPRESSION_ASSIGNMENT ||
+                       (expression->kind == MINIC_EXPRESSION_MEMBER &&
+                        expression->value_category == MINIC_VALUE_RVALUE &&
+                        minic_c0_record_value_is_copy_source(
+                            context->body->program, statement->expression)) ||
                        minic_c0_record_value_is_address_backed(
                            context->body->program, statement->expression)) {
                 status = minic_core_lower_record_load_object(
@@ -721,9 +734,13 @@ MinicCoreLowerStatus minic_core_lower_internal_lower_condition_branch(MinicCoreL
         }
     }
     if (expression->kind == MINIC_EXPRESSION_BINARY &&
-        expression->value.binary.operator_kind == MINIC_BINARY_LOGICAL_AND) {
+        (expression->value.binary.operator_kind == MINIC_BINARY_LOGICAL_AND ||
+         expression->value.binary.operator_kind == MINIC_BINARY_LOGICAL_OR)) {
         const MinicExpression *left_expression;
+        MinicCoreLocalIntegerConstant *skipped_rhs_facts;
+        MinicCoreLocalIntegerConstant *evaluated_rhs_facts;
         MinicConstValue left_constant;
+        bool is_and = expression->value.binary.operator_kind == MINIC_BINARY_LOGICAL_AND;
         bool left_is_zero;
         MinicCoreBlockId right_block;
 
@@ -738,59 +755,56 @@ MinicCoreLowerStatus minic_core_lower_internal_lower_condition_branch(MinicCoreL
                                       context->target,
                                       &left_constant,
                                       &left_is_zero)) {
-            if (left_is_zero) {
-                return minic_core_lower_internal_set_branch(context, context->block_id, span, when_false);
-            }
-            return minic_core_lower_internal_lower_condition_branch(
-                context, expression->value.binary.right, span, when_true, when_false);
+            if (is_and && left_is_zero)
+                return minic_core_lower_internal_set_branch(
+                    context, context->block_id, span, when_false);
+            if (!is_and && !left_is_zero)
+                return minic_core_lower_internal_set_branch(
+                    context, context->block_id, span, when_true);
+            return minic_core_lower_internal_lower_condition_branch(context,
+                expression->value.binary.right, span, when_true, when_false);
         }
         if (!minic_core_function_add_block(context->function, &right_block)) {
             return MINIC_CORE_LOWER_ERROR;
         }
         status = minic_core_lower_internal_lower_condition_branch(
-            context, expression->value.binary.left, span, right_block, when_false);
+            context, expression->value.binary.left, span,
+            is_and ? right_block : when_true,
+            is_and ? when_false : right_block);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
+        /* An RHS assignment executes on only one edge. Its local constant
+         * facts cannot be used after the logical expression unless the
+         * skipped edge proves the same value. Source side effects while
+         * evaluating the LHS have already occurred before this snapshot. */
+        skipped_rhs_facts = minic_core_local_facts_snapshot(context);
+        if (context->source_function != NULL &&
+            context->source_function->local_count != 0U &&
+            skipped_rhs_facts == NULL) return MINIC_CORE_LOWER_ERROR;
         context->block_id = right_block;
-        return minic_core_lower_internal_lower_condition_branch(
+        status = minic_core_lower_internal_lower_condition_branch(
             context, expression->value.binary.right, span, when_true, when_false);
-    }
-    if (expression->kind == MINIC_EXPRESSION_BINARY &&
-        expression->value.binary.operator_kind == MINIC_BINARY_LOGICAL_OR) {
-        const MinicExpression *left_expression;
-        MinicConstValue left_constant;
-        bool left_is_zero;
-        MinicCoreBlockId right_block;
-
-        left_expression = minic_c0_program_expression(
-            context->body->program, expression->value.binary.left);
-        if (left_expression != NULL && minic_type_is_integer(left_expression->type) &&
-            minic_const_eval_integer(context->body->program,
-                                     context->target,
-                                     expression->value.binary.left,
-                                     &left_constant) &&
-            minic_const_value_is_zero(context->body->program,
-                                      context->target,
-                                      &left_constant,
-                                      &left_is_zero)) {
-            if (!left_is_zero) {
-                return minic_core_lower_internal_set_branch(context, context->block_id, span, when_true);
-            }
-            return minic_core_lower_internal_lower_condition_branch(
-                context, expression->value.binary.right, span, when_true, when_false);
+        if (status != MINIC_CORE_LOWER_OK) {
+            free(skipped_rhs_facts);
+            return status;
         }
-        if (!minic_core_function_add_block(context->function, &right_block)) {
+        evaluated_rhs_facts = minic_core_local_facts_snapshot(context);
+        if (context->source_function != NULL &&
+            context->source_function->local_count != 0U &&
+            evaluated_rhs_facts == NULL) {
+            free(skipped_rhs_facts);
             return MINIC_CORE_LOWER_ERROR;
         }
-        status = minic_core_lower_internal_lower_condition_branch(
-            context, expression->value.binary.left, span, when_true, right_block);
-        if (status != MINIC_CORE_LOWER_OK) {
-            return status;
+        if (!minic_core_local_facts_meet(context, skipped_rhs_facts,
+                                          evaluated_rhs_facts)) {
+            free(evaluated_rhs_facts);
+            free(skipped_rhs_facts);
+            return MINIC_CORE_LOWER_ERROR;
         }
-        context->block_id = right_block;
-        return minic_core_lower_internal_lower_condition_branch(
-            context, expression->value.binary.right, span, when_true, when_false);
+        free(evaluated_rhs_facts);
+        free(skipped_rhs_facts);
+        return MINIC_CORE_LOWER_OK;
     }
 
     if (context->source_function != NULL &&
@@ -867,260 +881,188 @@ MinicCoreLowerStatus minic_core_lower_internal_lower_condition_branch(MinicCoreL
    function-scope re-entry. Direct goto and asm-goto from outside remain
    fail-closed. Normalized blocks may form a graph, so membership discovery is
    cycle-safe. */
-static bool core_mark_block_statement_membership(
-    const MinicCoreLowerContext *context,
-    MinicBlockId block_id,
-    bool *visited_blocks,
-    size_t block_count,
-    bool *statement_membership,
-    size_t statement_count) {
-    const MinicBlock *block;
-    size_t block_statement_index;
+/* Shared AST ownership set. The statement-kind gate matters: on non-CFG
+ * statements, then_block/else_block are not semantic child edges and must not
+ * pull an unrelated block into the query (notably labels/returns/inline asm). */
+static bool core_source_subtree_collect_block(
+    const MinicC0Program *program, const MinicBlock *block,
+    bool *visited_blocks, CoreSourceSubtreeMembership *membership);
 
-    if (block_id == MINIC_BLOCK_INVALID) {
-        return true;
-    }
-    if (context == NULL || context->body == NULL || context->body->program == NULL ||
-        visited_blocks == NULL || statement_membership == NULL || block_id >= block_count) {
-        return false;
-    }
-    if (visited_blocks[block_id]) {
-        return true;
-    }
-    visited_blocks[block_id] = true;
-    block = minic_c0_program_block(context->body->program, block_id);
-    if (block == NULL) {
-        return false;
-    }
-    for (block_statement_index = 0U;
-         block_statement_index < block->statement_count;
-         ++block_statement_index) {
-        MinicStatementId statement_id;
-        const MinicStatement *statement;
-
-        statement_id = block->statements[block_statement_index];
-        if (statement_id >= statement_count) {
-            return false;
-        }
-        statement_membership[statement_id] = true;
-        statement = minic_c0_program_statement(context->body->program, statement_id);
-        if (statement == NULL ||
-            !core_mark_block_statement_membership(context,
-                                                  statement->then_block,
-                                                  visited_blocks,
-                                                  block_count,
-                                                  statement_membership,
-                                                  statement_count) ||
-            !core_mark_block_statement_membership(context,
-                                                  statement->else_block,
-                                                  visited_blocks,
-                                                  block_count,
-                                                  statement_membership,
-                                                  statement_count)) {
-            return false;
-        }
+static bool core_source_subtree_collect_children(
+    const MinicC0Program *program, const MinicStatement *statement,
+    bool *visited_blocks, CoreSourceSubtreeMembership *membership) {
+    MinicBlockId children[2];
+    size_t index;
+    if (program == NULL || statement == NULL || visited_blocks == NULL ||
+        membership == NULL) return false;
+    if (statement->kind != MINIC_STATEMENT_IF &&
+        statement->kind != MINIC_STATEMENT_WHILE &&
+        statement->kind != MINIC_STATEMENT_SWITCH) return true;
+    children[0] = statement->then_block;
+    children[1] = statement->else_block;
+    for (index = 0U; index < 2U; ++index) {
+        MinicBlockId id = children[index];
+        const MinicBlock *child;
+        if (id == MINIC_BLOCK_INVALID) continue;
+        if (id >= program->block_count) return false;
+        if (visited_blocks[id]) continue;
+        visited_blocks[id] = true;
+        child = minic_c0_program_block(program, id);
+        if (!core_source_subtree_collect_block(
+                program, child, visited_blocks, membership)) return false;
     }
     return true;
 }
 
-bool minic_core_lower_unreachable_external_reentry(
+static bool core_source_subtree_collect_block(
+    const MinicC0Program *program, const MinicBlock *block,
+    bool *visited_blocks, CoreSourceSubtreeMembership *membership) {
+    size_t i;
+    if (program == NULL || block == NULL || visited_blocks == NULL ||
+        membership == NULL ||
+        (block->statement_count != 0U && block->statements == NULL)) return false;
+    for (i = 0U; i < block->statement_count; ++i) {
+        MinicStatementId id = block->statements[i];
+        const MinicStatement *statement = minic_c0_program_statement(program, id);
+        if (id >= membership->statement_count || statement == NULL) return false;
+        membership->statements[id] = true;
+        if (!core_source_subtree_collect_children(
+                program, statement, visited_blocks, membership)) return false;
+    }
+    return true;
+}
+
+void core_source_subtree_membership_destroy(CoreSourceSubtreeMembership *membership) {
+    if (membership == NULL) return;
+    free(membership->statements);
+    membership->statements = NULL;
+    membership->statement_count = 0U;
+}
+
+static bool core_source_subtree_membership_begin(
     const MinicCoreLowerContext *context,
-    const MinicStatement *root_statement,
-    MinicStatementId extra_statement_id) {
+    CoreSourceSubtreeMembership *membership, bool **visited_out) {
     const MinicC0Program *program;
-    bool *visited_blocks;
-    bool *statement_membership;
-    bool root_found;
-    bool unsafe;
-    size_t source_index;
-
-    if (context == NULL || context->body == NULL || context->body->program == NULL ||
-        root_statement == NULL) {
-        return true;
+    if (context == NULL || context->body == NULL ||
+        (program = context->body->program) == NULL ||
+        membership == NULL || visited_out == NULL ||
+        program->statement_count == 0U ||
+        program->block_count > SIZE_MAX / sizeof(bool) ||
+        program->statement_count > SIZE_MAX / sizeof(bool)) return false;
+    membership->statements = NULL;
+    membership->statement_count = 0U;
+    *visited_out = (bool *)calloc(
+        program->block_count == 0U ? 1U : program->block_count, sizeof(bool));
+    membership->statements =
+        (bool *)calloc(program->statement_count, sizeof(bool));
+    if (*visited_out == NULL || membership->statements == NULL) {
+        free(*visited_out);
+        *visited_out = NULL;
+        core_source_subtree_membership_destroy(membership);
+        return false;
     }
+    membership->statement_count = program->statement_count;
+    return true;
+}
+
+bool core_source_subtree_membership_from_block(
+    const MinicCoreLowerContext *context, const MinicBlock *block,
+    CoreSourceSubtreeMembership *membership) {
+    bool *visited = NULL;
+    bool valid;
+    if (!core_source_subtree_membership_begin(context, membership, &visited))
+        return false;
+    valid = core_source_subtree_collect_block(
+        context->body->program, block, visited, membership);
+    free(visited);
+    if (!valid) core_source_subtree_membership_destroy(membership);
+    return valid;
+}
+
+bool core_source_subtree_membership_from_statement(
+    const MinicCoreLowerContext *context, const MinicStatement *root,
+    MinicStatementId extra_statement_id,
+    CoreSourceSubtreeMembership *membership) {
+    const MinicC0Program *program;
+    bool *visited = NULL;
+    bool found = false;
+    bool valid = false;
+    size_t index;
+    if (!core_source_subtree_membership_begin(context, membership, &visited))
+        return false;
     program = context->body->program;
-    if (program->statement_count == 0U ||
-        program->block_count > SIZE_MAX / sizeof(*visited_blocks) ||
-        program->statement_count > SIZE_MAX / sizeof(*statement_membership)) {
-        return true;
-    }
-    visited_blocks = program->block_count == 0U
-                         ? NULL
-                         : (bool *)calloc(program->block_count, sizeof(*visited_blocks));
-    statement_membership =
-        (bool *)calloc(program->statement_count, sizeof(*statement_membership));
-    if ((program->block_count != 0U && visited_blocks == NULL) ||
-        statement_membership == NULL) {
-        free(visited_blocks);
-        free(statement_membership);
-        return true;
-    }
-
-    root_found = false;
-    for (source_index = 0U; source_index < program->statement_count; ++source_index) {
-        const MinicStatement *candidate;
-
-        candidate = minic_c0_program_statement(program, source_index);
-        if (candidate == NULL) {
-            free(visited_blocks);
-            free(statement_membership);
-            return true;
-        }
-        if (candidate == root_statement) {
-            statement_membership[source_index] = true;
-            root_found = true;
-        }
-    }
-    if (!root_found ||
-        (extra_statement_id != MINIC_STATEMENT_INVALID &&
-         extra_statement_id >= program->statement_count) ||
-        !core_mark_block_statement_membership(context,
-                                              root_statement->then_block,
-                                              visited_blocks,
-                                              program->block_count,
-                                              statement_membership,
-                                              program->statement_count) ||
-        !core_mark_block_statement_membership(context,
-                                              root_statement->else_block,
-                                              visited_blocks,
-                                              program->block_count,
-                                              statement_membership,
-                                              program->statement_count)) {
-        free(visited_blocks);
-        free(statement_membership);
-        return true;
-    }
-    if (extra_statement_id != MINIC_STATEMENT_INVALID) {
-        statement_membership[extra_statement_id] = true;
-    }
-
-    unsafe = false;
-    for (source_index = 0U; source_index < program->statement_count && !unsafe;
-         ++source_index) {
-        const MinicStatement *source;
-
-        if (statement_membership[source_index]) {
-            continue;
-        }
-        source = minic_c0_program_statement(program, source_index);
-        if (source == NULL) {
-            unsafe = true;
-            break;
-        }
-        if (source->kind == MINIC_STATEMENT_GOTO &&
-            source->target_statement < program->statement_count &&
-            statement_membership[source->target_statement]) {
-            unsafe = true;
-            break;
-        }
-        if (source->kind == MINIC_STATEMENT_INLINE_ASM &&
-            source->inline_asm_id < program->inline_asm_count) {
-            const MinicInlineAsm *inline_asm;
-            size_t label_index;
-
-            inline_asm = &program->inline_asms[source->inline_asm_id];
-            if (!inline_asm->is_goto) {
-                continue;
+    if (root != NULL && (extra_statement_id == MINIC_STATEMENT_INVALID ||
+                         extra_statement_id < program->statement_count)) {
+        for (index = 0U; index < program->statement_count; ++index) {
+            const MinicStatement *candidate =
+                minic_c0_program_statement(program, index);
+            if (candidate == NULL) break;
+            if (candidate == root) {
+                membership->statements[index] = true;
+                found = true;
+                break;
             }
-            for (label_index = 0U; label_index < inline_asm->label_count; ++label_index) {
-                MinicStatementId target;
+        }
+        if (found && core_source_subtree_collect_children(
+                         program, root, visited, membership)) {
+            if (extra_statement_id != MINIC_STATEMENT_INVALID)
+                membership->statements[extra_statement_id] = true;
+            valid = true;
+        }
+    }
+    free(visited);
+    if (!valid) core_source_subtree_membership_destroy(membership);
+    return valid;
+}
 
-                target = inline_asm->labels[label_index].target_statement;
-                if (target < program->statement_count && statement_membership[target]) {
+/* A static source edge and an already materialized Core label block are
+ * different entry authorities, but they must query the SAME ownership set.
+ * The weak static policy is intentionally not IF's stronger CASE/&&label gate. */
+static bool core_unreachable_statement_may_reenter(
+    const MinicCoreLowerContext *context, const MinicStatement *root,
+    MinicStatementId extra_statement_id, bool inspect_bound_core_blocks) {
+    CoreSourceSubtreeMembership membership = {0};
+    const MinicC0Program *program;
+    bool unsafe;
+    size_t index;
+    if (!core_source_subtree_membership_from_statement(
+            context, root, extra_statement_id, &membership)) return true;
+    program = context->body->program;
+    {
+        const MinicCoreReentryQuery query = {
+            .membership = membership.statements,
+            .label_id = MINIC_STATEMENT_INVALID,
+            .checks = MINIC_CORE_REENTRY_CHECK_EXTERNAL_JUMP,
+            .purpose = MINIC_CORE_REENTRY_PURPOSE_UNREACHABLE_TAIL
+        };
+        unsafe = minic_core_reentry_query(
+            context->reentry_index, program, &query) != 0U;
+    }
+    if (!unsafe && inspect_bound_core_blocks) {
+        /* Missing/incomplete dynamic ownership is UNKNOWN, never evidence
+         * that no previously created label block can reenter this subtree. */
+        if (context->statement_blocks == NULL ||
+            context->statement_block_count < membership.statement_count) {
+            unsafe = true;
+        } else {
+            for (index = 0U; index < membership.statement_count; ++index) {
+                if (index != extra_statement_id && membership.statements[index] &&
+                    context->statement_blocks[index] != MINIC_CORE_BLOCK_INVALID) {
                     unsafe = true;
                     break;
                 }
             }
         }
     }
-
-    free(visited_blocks);
-    free(statement_membership);
+    core_source_subtree_membership_destroy(&membership);
     return unsafe;
 }
 
-/* A prior goto can pre-bind a label block inside an otherwise unreachable loop;
-   pruning that loop would leave the target block unterminated. */
-static bool core_unreachable_statement_has_bound_reentry(
-    const MinicCoreLowerContext *context,
-    const MinicStatement *root_statement,
+bool minic_core_lower_unreachable_external_reentry(
+    const MinicCoreLowerContext *context, const MinicStatement *root,
     MinicStatementId extra_statement_id) {
-    const MinicC0Program *program;
-    bool *visited_blocks;
-    bool *statement_membership;
-    bool root_found;
-    bool has_reentry;
-    size_t index;
-
-    if (context == NULL || context->body == NULL || context->body->program == NULL ||
-        context->statement_blocks == NULL || root_statement == NULL) {
-        return false;
-    }
-    program = context->body->program;
-    if (program->statement_count == 0U ||
-        context->statement_block_count < program->statement_count ||
-        program->block_count > SIZE_MAX / sizeof(*visited_blocks) ||
-        program->statement_count > SIZE_MAX / sizeof(*statement_membership)) {
-        return false;
-    }
-    visited_blocks = program->block_count == 0U
-                         ? NULL
-                         : (bool *)calloc(program->block_count, sizeof(*visited_blocks));
-    statement_membership =
-        (bool *)calloc(program->statement_count, sizeof(*statement_membership));
-    if ((program->block_count != 0U && visited_blocks == NULL) ||
-        statement_membership == NULL) {
-        free(visited_blocks);
-        free(statement_membership);
-        return false;
-    }
-
-    root_found = false;
-    for (index = 0U; index < program->statement_count; ++index) {
-        const MinicStatement *candidate = minic_c0_program_statement(program, index);
-        if (candidate == NULL) {
-            free(visited_blocks);
-            free(statement_membership);
-            return false;
-        }
-        if (candidate == root_statement) {
-            statement_membership[index] = true;
-            root_found = true;
-        }
-    }
-    if (!root_found ||
-        !core_mark_block_statement_membership(context,
-                                              root_statement->then_block,
-                                              visited_blocks,
-                                              program->block_count,
-                                              statement_membership,
-                                              program->statement_count) ||
-        !core_mark_block_statement_membership(context,
-                                              root_statement->else_block,
-                                              visited_blocks,
-                                              program->block_count,
-                                              statement_membership,
-                                              program->statement_count)) {
-        free(visited_blocks);
-        free(statement_membership);
-        return false;
-    }
-    if (extra_statement_id != MINIC_STATEMENT_INVALID &&
-        extra_statement_id < program->statement_count) {
-        statement_membership[extra_statement_id] = true;
-    }
-
-    has_reentry = false;
-    for (index = 0U; index < program->statement_count; ++index) {
-        if (index != extra_statement_id && statement_membership[index] &&
-            context->statement_blocks[index] != MINIC_CORE_BLOCK_INVALID) {
-            has_reentry = true;
-            break;
-        }
-    }
-    free(visited_blocks);
-    free(statement_membership);
-    return has_reentry;
+    return core_unreachable_statement_may_reenter(
+        context, root, extra_statement_id, false);
 }
 
 /* M144_UNREFERENCED_LOOP_LABEL_METADATA_OWNER: parser loop normalization can
@@ -1148,70 +1090,34 @@ static bool core_unreferenced_internal_loop_label(
         return false;
     }
 
-    if (minic_core_reentry_index_ready(context->reentry_index, program)) {
-        /* Exact early-exit semantics: referenced labels are never
-         * optimization-only internal while metadata. */
-        if (!minic_core_reentry_index_unreferenced_loop_label(
-                context->reentry_index, program, label_id))
+    {
+        MinicCoreReentryQuery query = {
+            .membership = NULL,
+            .label_id = label_id,
+            .checks = MINIC_CORE_REENTRY_CHECK_EXTERNAL_JUMP |
+                      MINIC_CORE_REENTRY_CHECK_LABEL_ADDRESS,
+            .purpose = MINIC_CORE_REENTRY_PURPOSE_LOOP_LABEL
+        };
+        if (minic_core_reentry_query(
+                context->reentry_index, program, &query) != 0U)
             return false;
-        loop_matches = 0U;
-        for (index = 0U; index < program->statement_count; ++index) {
-            const MinicStatement *candidate =
-                minic_c0_program_statement(program, index);
-            if (candidate == NULL) return false;
-            if (candidate->kind == MINIC_STATEMENT_WHILE &&
-                minic_core_loop_internal_while_label_pair(label, candidate)) {
-                ++loop_matches;
-                if (loop_matches > 1U) return false;
-            }
-        }
-        return loop_matches == 1U;
     }
 
+    /* Reentry and parser ownership are distinct proofs. A label with no
+     * incoming edge is metadata only if exactly one normalized while owns
+     * its source position; the incoming-edge index cannot prove uniqueness. */
     loop_matches = 0U;
     for (index = 0U; index < program->statement_count; ++index) {
-        const MinicStatement *candidate = minic_c0_program_statement(program, index);
-        if (candidate == NULL) {
-            return false;
-        }
+        const MinicStatement *candidate =
+            minic_c0_program_statement(program, index);
+        if (candidate == NULL) return false;
         if (candidate->kind == MINIC_STATEMENT_WHILE &&
             minic_core_loop_internal_while_label_pair(label, candidate)) {
-            loop_matches += 1U;
-            if (loop_matches > 1U) {
-                return false;
-            }
-        }
-        if (candidate->kind == MINIC_STATEMENT_GOTO &&
-            candidate->target_statement == label_id) {
-            return false;
-        }
-        if (candidate->kind == MINIC_STATEMENT_INLINE_ASM &&
-            candidate->inline_asm_id < program->inline_asm_count) {
-            const MinicInlineAsm *inline_asm = &program->inline_asms[candidate->inline_asm_id];
-            size_t label_index;
-            if (inline_asm->is_goto) {
-                for (label_index = 0U; label_index < inline_asm->label_count; ++label_index) {
-                    if (inline_asm->labels[label_index].target_statement == label_id) {
-                        return false;
-                    }
-                }
-            }
+            ++loop_matches;
+            if (loop_matches > 1U) return false;
         }
     }
-    if (loop_matches != 1U) {
-        return false;
-    }
-    for (index = 0U; index < program->expression_count; ++index) {
-        const MinicExpression *expression = minic_c0_program_expression(program, index);
-        if (expression == NULL) {
-            return false;
-        }
-        if (expression->kind == MINIC_EXPRESSION_LABEL_ADDRESS &&
-            expression->value.label_statement_id == label_id) {
-            return false;
-        }
-    }
-    return true;
+    return loop_matches == 1U;
 }
 
 
@@ -1260,14 +1166,9 @@ minic_core_lower_internal_lower_block(MinicCoreLowerContext *context, const Mini
                 unreachable_loop =
                     minic_c0_program_statement(context->body->program, unreachable_loop_id);
                 if (minic_core_loop_internal_while_label_pair(statement, unreachable_loop)) {
-                    if (minic_core_lower_unreachable_external_reentry(
-                            context,
-                            unreachable_loop,
-                            source_block->statements[statement_index]) ||
-                        core_unreachable_statement_has_bound_reentry(
-                            context,
-                            unreachable_loop,
-                            source_block->statements[statement_index])) {
+                    if (core_unreachable_statement_may_reenter(
+                            context, unreachable_loop,
+                            source_block->statements[statement_index], true)) {
                         MinicCoreBlockId detached_preheader;
 
                         /* A source goto may legally target a user label inside
@@ -1299,10 +1200,8 @@ minic_core_lower_internal_lower_block(MinicCoreLowerContext *context, const Mini
                 }
             }
             if (statement->kind == MINIC_STATEMENT_WHILE &&
-                (minic_core_lower_unreachable_external_reentry(
-                     context, statement, MINIC_STATEMENT_INVALID) ||
-                 core_unreachable_statement_has_bound_reentry(
-                     context, statement, MINIC_STATEMENT_INVALID))) {
+                core_unreachable_statement_may_reenter(
+                    context, statement, MINIC_STATEMENT_INVALID, true)) {
                 MinicCoreBlockId detached_preheader;
 
                 if (!minic_core_function_add_block(
@@ -1341,26 +1240,19 @@ minic_core_lower_internal_lower_block(MinicCoreLowerContext *context, const Mini
            cleanup-expression lowering, which remains fail-closed here. */
         /* M142_NONEDGE_CLEANUP_METADATA_OWNER: cleanup ids describe the
            current lifetime context as well as executable cleanup transitions.
-           A plain ASSIGN has no control edge of its own, so crossing cleanup is
-           still owned by the eventual RETURN/BREAK/GOTO/scope-exit edge. An
-           adjacent parser-internal loop label is likewise target metadata, not
-           an executable cleanup edge. Keep every other nonzero-distance shape
-           fail-closed; in particular BREAK/GOTO and structured IF/WHILE are not
-           generalized here. */
+           ASSIGN and LABEL have no outgoing control edge of their own: the
+           eventual RETURN/BREAK/GOTO/scope-exit owns cleanup execution. GNU
+           source labels inside an active cleanup context must carry their
+           actual context for a goto to resolve the correct lifetime boundary.
+           Keep other nonzero-distance shapes fail-closed. */
         if (statement->cleanup_context != statement->cleanup_stop_context &&
             statement->kind != MINIC_STATEMENT_RETURN &&
             statement->kind != MINIC_STATEMENT_ASSIGN &&
             statement->kind != MINIC_STATEMENT_BREAK &&
+            statement->kind != MINIC_STATEMENT_LABEL &&
             !(statement->kind == MINIC_STATEMENT_GOTO &&
               statement->expression == MINIC_EXPRESSION_INVALID &&
-              statement->target_statement != MINIC_STATEMENT_INVALID) &&
-            !(statement->kind == MINIC_STATEMENT_LABEL &&
-              statement_index + 1U < source_block->statement_count &&
-              minic_core_loop_internal_while_label_pair(
-                  statement,
-                  minic_c0_program_statement(
-                      context->body->program,
-                      source_block->statements[statement_index + 1U])))) {
+              statement->target_statement != MINIC_STATEMENT_INVALID)) {
             (void)fprintf(stderr,
                           "CORE_FAST_TRACE stage=statement reason=cleanup-context "
                           "function=%s kind=%d span=%zu:%zu cleanup=%llu stop=%llu\n",
@@ -1401,6 +1293,13 @@ minic_core_lower_internal_lower_block(MinicCoreLowerContext *context, const Mini
                 }
             }
             context->block_id = label_block;
+            /* Nested switch fallback emits CASE/DEFAULT as ordinary reentry
+             * labels in the shared source-block walker. A dispatch edge may
+             * enter this label without executing its lexical predecessor;
+             * facts learned in the previous case are therefore not valid.
+             * The top-level switch segment owner performs its own precise
+             * dispatch/fallthrough meet and never visits these label nodes. */
+            minic_core_local_facts_clear_known(context);
         } else if (statement->kind == MINIC_STATEMENT_LABEL) {
             const MinicStatement *loop = NULL;
             bool internal_loop_label = false;
@@ -1645,8 +1544,43 @@ MinicCoreLowerStatus minic_core_lower_function_with_index(const MinicFunctionBod
                                            source_function->return_type,
                                            source_function->parameter_types,
                                            source_function->parameter_count) ||
+        !minic_core_function_set_calling_convention(
+            &lowered, source_function->calling_convention) ||
         !minic_core_function_add_block(&lowered, &block_id)) {
         free(statement_blocks); free(local_integer_constants); free(local_objects); minic_core_function_destroy(&lowered); return MINIC_CORE_LOWER_ERROR;
+    }
+    /* C allows a function prototype and its definition to materialize
+     * distinct but compatible pointer-to-array descriptor identities.
+     * Canonicalize ONLY at the AST -> Core ingress boundary: the Core IR
+     * signature must use the actual definition parameter-local type so its
+     * PARAMETER instruction and STORE remain exactly identical. Preserve
+     * Core verification's strict type identity and discard only the formal
+     * parameter's top-level C qualifiers, as required by function types. */
+    {
+        size_t parameter_index;
+        for (parameter_index = 0U; parameter_index < source_function->parameter_count;
+             ++parameter_index) {
+            const MinicLocal *parameter;
+            MinicType normalized;
+            if (source_function->local_begin >= body->program->local_count ||
+                parameter_index >= body->program->local_count - source_function->local_begin) {
+                free(statement_blocks); free(local_integer_constants); free(local_objects);
+                minic_core_function_destroy(&lowered);
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            parameter = minic_c0_program_local(
+                body->program, source_function->local_begin + parameter_index);
+            if (parameter == NULL ||
+                !minic_type_unqualified(parameter->type, &normalized) ||
+                !minic_c0_types_compatible(
+                    body->program, source_function->parameter_types[parameter_index],
+                    normalized)) {
+                free(statement_blocks); free(local_integer_constants); free(local_objects);
+                minic_core_function_destroy(&lowered);
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            lowered.parameter_types[parameter_index] = normalized;
+        }
     }
     (void)memset(&context, 0, sizeof(context));
     context.body = body;

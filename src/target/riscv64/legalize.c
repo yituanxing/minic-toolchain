@@ -336,14 +336,154 @@ static bool rv64_wide_call_argument_supported(
             8U - location->integer_register_begin;
 }
 
+/* The LP64D named FP stream falls back to GARs/stack once fa0..fa7 are
+ * exhausted. This is also the regular path for LP64 and unnamed double. */
+static bool rv64_scalar_gpr_call_argument_supported(
+    MinicType type, bool fixed,
+    const MinicRiscv64AbiArgumentLocation *location) {
+    if (location == NULL || location->floating_register_count != 0U ||
+        (location->value.kind != MINIC_RISCV64_ABI_VALUE_INTEGER &&
+         !(location->value.kind == MINIC_RISCV64_ABI_VALUE_FLOAT &&
+           (fixed || minic_type_is_double(type)) &&
+           (minic_type_is_float(type) || minic_type_is_double(type)))))
+        return false;
+    return (location->integer_register_count == 1U &&
+            location->integer_register_begin < 8U &&
+            location->stack_slot_count == 0U) ||
+           (location->integer_register_count == 0U &&
+            location->stack_slot_count == 1U);
+}
+
+/* ABI legality is independent of whether the callee address is a symbol or
+ * an SSA pointer. One checked CoreCallView, one immutable RV64 prepared
+ * placement and one transfer shape checker cover both. We must not rerun a
+ * default LP64D cursor here: the frame/caller may target soft-float LP64.
+ * Only the intentionally unsupported *indirect*
+ * unnamed-record path remains a policy difference: its machine emitter does
+ * not yet transport those aggregates. Never widen admission ahead of emit. */
+static bool rv64_core_call_arguments_supported(
+    const MinicC0Program *program, const MinicCoreFunction *function,
+    const MinicCoreCallView *call, const MinicRiscv64PreparedCall *prepared,
+    bool direct_call) {
+    size_t index;
+    if (program == NULL || function == NULL || call == NULL || prepared == NULL ||
+        prepared->argument_count != call->argument_count ||
+        call->argument_count > function->call_argument_count ||
+        call->argument_begin > function->call_argument_count ||
+        call->argument_count > function->call_argument_count - call->argument_begin ||
+        (call->argument_count != 0U && call->arguments == NULL) ||
+        call->parameter_count > call->argument_count ||
+        (call->parameter_count != 0U && call->parameter_types == NULL))
+        return false;
+    for (index = 0U; index < call->argument_count; ++index) {
+        const MinicCoreCallArgument *argument = &call->arguments[index];
+        const MinicRiscv64AbiArgumentLocation location = prepared->arguments[index];
+        MinicType actual_type, type;
+        const bool fixed = index < call->parameter_count;
+        if (!minic_core_call_view_argument_type(function, call, index, &actual_type))
+            return false;
+        type = fixed ? call->parameter_types[index] : actual_type;
+        if (!fixed &&
+            (!call->is_variadic ||
+             (!minic_riscv64_scalar_type(type) &&
+              (!direct_call || !minic_type_is_record(type)))))
+            return false;
+        if (minic_riscv64_scalar_type(type)) {
+            if (argument->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
+                argument->value.value_id >= function->value_count)
+                return false;
+            if (location.floating_register_count != 0U) {
+                if (!fixed || location.value.kind != MINIC_RISCV64_ABI_VALUE_FLOAT ||
+                    (!minic_type_is_float(type) && !minic_type_is_double(type)) ||
+                    location.floating_register_count != 1U ||
+                    location.floating_register_begin >= 8U ||
+                    location.integer_register_count != 0U ||
+                    location.stack_slot_count != 0U)
+                    return false;
+            } else if (location.value.kind == MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR) {
+                if (!rv64_wide_call_argument_supported(type, &location))
+                    return false;
+            } else if (!rv64_scalar_gpr_call_argument_supported(type, fixed, &location)) {
+                return false;
+            }
+            continue;
+        }
+        if (!minic_type_is_record(type) ||
+            argument->kind != MINIC_CORE_CALL_ARGUMENT_OBJECT ||
+            (!direct_call && !fixed) ||
+            argument->value.object_id >= function->object_count ||
+            !minic_type_equal(
+                function->objects[argument->value.object_id].type, type))
+            return false;
+        switch (location.value.kind) {
+        case MINIC_RISCV64_ABI_VALUE_IGNORE:
+            if (location.value.slot_count != 0U ||
+                location.integer_register_count != 0U ||
+                location.stack_slot_count != 0U)
+                return false;
+            break;
+        case MINIC_RISCV64_ABI_VALUE_AGGREGATE:
+            if (location.value.slot_count == 0U || location.value.slot_count > 2U ||
+                location.value.slot_count !=
+                    location.integer_register_count + location.stack_slot_count ||
+                location.integer_register_begin + location.integer_register_count > 8U)
+                return false;
+            break;
+        case MINIC_RISCV64_ABI_VALUE_INDIRECT:
+            if (location.value.slot_count != 1U ||
+                !((location.integer_register_count == 1U &&
+                   location.integer_register_begin < 8U &&
+                   location.stack_slot_count == 0U) ||
+                  (location.integer_register_count == 0U &&
+                   location.stack_slot_count == 1U)))
+                return false;
+            break;
+        default: return false;
+        }
+    }
+    return true;
+}
+
+/* The verified call view owns the result representation for both direct
+ * symbol calls and SSA-pointer calls. Return ABI legality must therefore be
+ * checked by one target policy, not two subtly different call-site copies. */
+static bool rv64_core_call_return_supported(
+    const MinicCoreCallView *call, const MinicRiscv64AbiValue *value) {
+    MinicType type;
+    if (call == NULL || value == NULL)
+        return false;
+    type = call->return_type;
+    switch (value->kind) {
+    case MINIC_RISCV64_ABI_VALUE_VOID:
+        return call->return_form == MINIC_CORE_CALL_RETURN_VOID;
+    case MINIC_RISCV64_ABI_VALUE_INTEGER:
+        return call->return_form == MINIC_CORE_CALL_RETURN_VALUE;
+    case MINIC_RISCV64_ABI_VALUE_FLOAT:
+        return call->return_form == MINIC_CORE_CALL_RETURN_VALUE &&
+               (minic_type_is_float(type) || minic_type_is_double(type));
+    case MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR:
+        return call->return_form == MINIC_CORE_CALL_RETURN_VALUE &&
+               (minic_type_is_long_double(type) || minic_type_is_int128_integer(type)) &&
+               value->storage_size == 16U && value->slot_count == 2U;
+    case MINIC_RISCV64_ABI_VALUE_AGGREGATE:
+        return call->return_form == MINIC_CORE_CALL_RETURN_OBJECT &&
+               minic_type_is_record(type) &&
+               value->slot_count >= 1U && value->slot_count <= 2U;
+    case MINIC_RISCV64_ABI_VALUE_INDIRECT:
+        return call->return_form == MINIC_CORE_CALL_RETURN_OBJECT &&
+               minic_type_is_record(type) && value->storage_size > 16U &&
+               value->slot_count == 1U;
+    default: return false;
+    }
+}
+
 bool minic_riscv64_core_direct_call_supported(const MinicC0Program *program,
                                        const MinicCoreFunction *function,
                                        const MinicCoreInstruction *instruction,
-                                       const MinicCoreCallView *semantic_view) {
+                                       const MinicCoreCallView *semantic_view,
+                                       const MinicRiscv64PreparedCall *prepared) {
     MinicCoreCallView call;
     const MinicCoreCallee *callee;
-    MinicRiscv64AbiCursor cursor;
-    MinicRiscv64AbiValue return_value;
     size_t argument_index;
 
     /* The already-admitted Common FunctionPlan supplies an immutable
@@ -379,156 +519,11 @@ bool minic_riscv64_core_direct_call_supported(const MinicC0Program *program,
         }
         return true;
     }
-    /* M86_DIRECT_RECORD_CALL_RESULT: mirror the existing callee-side
-       one/two-slot aggregate return ABI on direct call sites. */
-    if (!minic_riscv64_abi_cursor_initialize_for_return(
-            program, callee->return_type, &cursor, &return_value)) {
+    if (prepared == NULL ||
+        !rv64_core_call_return_supported(&call, &prepared->return_value)) {
         return false;
     }
-    if (return_value.kind == MINIC_RISCV64_ABI_VALUE_AGGREGATE) {
-        if (return_value.slot_count == 0U || return_value.slot_count > 2U ||
-            !minic_type_is_record(callee->return_type) ||
-            instruction->value.call.result_object >= function->object_count ||
-            !minic_type_equal(
-                function->objects[instruction->value.call.result_object].type,
-                callee->return_type)) {
-            return false;
-        }
-    } else if (return_value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT) {
-        if (!minic_type_is_record(callee->return_type) || return_value.storage_size <= 16U ||
-            return_value.slot_count != 1U ||
-            instruction->value.call.result_object >= function->object_count ||
-            !minic_type_equal(
-                function->objects[instruction->value.call.result_object].type,
-                callee->return_type)) {
-            return false;
-        }
-    } else if (return_value.kind == MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR) {
-        if ((!minic_type_is_long_double(callee->return_type) &&
-             !minic_type_is_int128_integer(callee->return_type)) ||
-            return_value.storage_size != 16U || return_value.slot_count != 2U ||
-            instruction->value.call.result_object != MINIC_CORE_OBJECT_INVALID) {
-            return false;
-        }
-    } else if (return_value.kind != MINIC_RISCV64_ABI_VALUE_VOID &&
-               return_value.kind != MINIC_RISCV64_ABI_VALUE_INTEGER &&
-               !(return_value.kind == MINIC_RISCV64_ABI_VALUE_FLOAT &&
-                 (minic_type_is_float(callee->return_type) ||
-                  minic_type_is_double(callee->return_type)))) {
-        return false;
-    }
-    for (argument_index = 0U; argument_index < instruction->value.call.argument_count;
-         ++argument_index) {
-        const MinicCoreCallArgument *argument = &function->call_arguments[
-            instruction->value.call.argument_begin + argument_index];
-        MinicRiscv64AbiArgumentLocation location;
-        MinicType argument_type;
-        bool is_fixed_parameter;
-
-        is_fixed_parameter = argument_index < callee->parameter_count;
-        if (is_fixed_parameter) {
-            argument_type = callee->parameter_types[argument_index];
-        } else {
-            if (!callee->is_variadic) {
-                return false;
-            }
-            if (argument->kind == MINIC_CORE_CALL_ARGUMENT_VALUE) {
-                if (argument->value.value_id >= function->value_count) {
-                    return false;
-                }
-                argument_type = function->values[argument->value.value_id].type;
-                if (!minic_riscv64_scalar_type(argument_type)) {
-                    return false;
-                }
-            } else if (argument->kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {
-                if (argument->value.object_id >= function->object_count) {
-                    return false;
-                }
-                argument_type = function->objects[argument->value.object_id].type;
-                if (!minic_type_is_record(argument_type)) {
-                    return false;
-                }
-            } else {
-                return false;
-            }
-        }
-        if (!minic_riscv64_abi_place_argument(
-                program, argument_type, is_fixed_parameter, &cursor, &location)) {
-            return false;
-        }
-        if (minic_riscv64_scalar_type(argument_type)) {
-            if (argument->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
-                argument->value.value_id >= function->value_count) {
-                return false;
-            }
-            if (location.floating_register_count != 0U) {
-                if (!is_fixed_parameter ||
-                    location.value.kind != MINIC_RISCV64_ABI_VALUE_FLOAT ||
-                    (!minic_type_is_float(argument_type) &&
-                     !minic_type_is_double(argument_type)) ||
-                    location.floating_register_count != 1U ||
-                    location.floating_register_begin >= 8U ||
-                    location.integer_register_count != 0U ||
-                    location.stack_slot_count != 0U) {
-                    return false;
-                }
-            } else if (location.value.kind == MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR) {
-                if (!rv64_wide_call_argument_supported(
-                        argument_type, &location)) {
-                    return false;
-                }
-            } else {
-                if ((location.value.kind != MINIC_RISCV64_ABI_VALUE_INTEGER &&
-                     !(location.value.kind == MINIC_RISCV64_ABI_VALUE_FLOAT &&
-                       !is_fixed_parameter && minic_type_is_double(argument_type))) ||
-                    !((location.integer_register_count == 1U &&
-                       location.integer_register_begin < 8U &&
-                       location.stack_slot_count == 0U) ||
-                      (location.integer_register_count == 0U &&
-                       location.stack_slot_count == 1U))) {
-                    return false;
-                }
-            }
-        } else if (minic_type_is_record(argument_type)) {
-            MinicCoreObjectId object_id;
-
-            if (argument->kind != MINIC_CORE_CALL_ARGUMENT_OBJECT) {
-                return false;
-            }
-            object_id = argument->value.object_id;
-            if (object_id >= function->object_count ||
-                !minic_type_equal(function->objects[object_id].type, argument_type)) {
-                return false;
-            }
-            if (location.value.kind == MINIC_RISCV64_ABI_VALUE_IGNORE) {
-                if (location.value.slot_count != 0U || location.integer_register_count != 0U ||
-                    location.stack_slot_count != 0U) {
-                    return false;
-                }
-            } else if (location.value.kind == MINIC_RISCV64_ABI_VALUE_AGGREGATE) {
-                if (location.value.slot_count == 0U || location.value.slot_count > 2U ||
-                    location.value.slot_count !=
-                        location.integer_register_count + location.stack_slot_count ||
-                    location.integer_register_begin + location.integer_register_count > 8U) {
-                    return false;
-                }
-            } else if (location.value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT) {
-                if (location.value.slot_count != 1U ||
-                    !((location.integer_register_count == 1U &&
-                       location.integer_register_begin < 8U &&
-                       location.stack_slot_count == 0U) ||
-                      (location.integer_register_count == 0U &&
-                       location.stack_slot_count == 1U))) {
-                    return false;
-                }
-            } else {
-                return false;
-            }
-        } else {
-            return false;
-        }
-    }
-    return true;
+    return rv64_core_call_arguments_supported(program, function, &call, prepared, true);
 }
 
 /* M151_INDIRECT_CALL_BATCH_OWNER: validate indirect arguments through the
@@ -536,11 +531,10 @@ bool minic_riscv64_core_direct_call_supported(const MinicC0Program *program,
 bool minic_riscv64_core_indirect_call_supported(const MinicC0Program *program,
                                          const MinicCoreFunction *function,
                                          const MinicCoreInstruction *instruction,
-                                         const MinicCoreCallView *semantic_view) {
+                                         const MinicCoreCallView *semantic_view,
+                                         const MinicRiscv64PreparedCall *prepared) {
     MinicCoreCallView call;
     const MinicCoreCallSignature *signature;
-    MinicRiscv64AbiCursor cursor;
-    MinicRiscv64AbiValue return_value;
     size_t argument_index;
 
     if (!(semantic_view != NULL ? (call = *semantic_view, true) :
@@ -574,119 +568,11 @@ bool minic_riscv64_core_indirect_call_supported(const MinicC0Program *program,
         }
         return true;
     }
-    if (!minic_riscv64_abi_cursor_initialize_for_return(
-            program, signature->return_type, &cursor, &return_value) ||
-        (return_value.kind != MINIC_RISCV64_ABI_VALUE_VOID &&
-         return_value.kind != MINIC_RISCV64_ABI_VALUE_INTEGER &&
-         !(return_value.kind == MINIC_RISCV64_ABI_VALUE_FLOAT &&
-           (minic_type_is_float(signature->return_type) ||
-            minic_type_is_double(signature->return_type))) &&
-         !(return_value.kind == MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR &&
-           (minic_type_is_long_double(signature->return_type) ||
-            minic_type_is_int128_integer(signature->return_type)) &&
-           return_value.storage_size == 16U &&
-           return_value.slot_count == 2U))) {
+    if (prepared == NULL ||
+        !rv64_core_call_return_supported(&call, &prepared->return_value)) {
         return false;
     }
-    for (argument_index = 0U;
-         argument_index < instruction->value.indirect_call.argument_count;
-         ++argument_index) {
-        const MinicCoreCallArgument *argument = &function->call_arguments[
-            instruction->value.indirect_call.argument_begin + argument_index];
-        MinicRiscv64AbiArgumentLocation location;
-        MinicType argument_type;
-        bool is_fixed_parameter = argument_index < signature->parameter_count;
-
-        if (is_fixed_parameter) {
-            argument_type = signature->parameter_types[argument_index];
-        } else {
-            if (!signature->is_variadic ||
-                argument->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
-                argument->value.value_id >= function->value_count) {
-                return false;
-            }
-            argument_type = function->values[argument->value.value_id].type;
-            if (!minic_riscv64_scalar_type(argument_type)) {
-                return false;
-            }
-        }
-        if (!minic_riscv64_abi_place_argument(
-                program, argument_type, is_fixed_parameter, &cursor, &location)) {
-            return false;
-        }
-        if (minic_riscv64_scalar_type(argument_type)) {
-            if (argument->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
-                argument->value.value_id >= function->value_count) {
-                return false;
-            }
-            if (location.floating_register_count != 0U) {
-                if (!is_fixed_parameter ||
-                    location.value.kind != MINIC_RISCV64_ABI_VALUE_FLOAT ||
-                    (!minic_type_is_float(argument_type) &&
-                     !minic_type_is_double(argument_type)) ||
-                    location.floating_register_count != 1U ||
-                    location.floating_register_begin >= 8U ||
-                    location.integer_register_count != 0U ||
-                    location.stack_slot_count != 0U) {
-                    return false;
-                }
-            } else if (location.value.kind ==
-                       MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR) {
-                if (!rv64_wide_call_argument_supported(
-                        argument_type, &location))
-                    return false;
-            } else {
-                if ((location.value.kind != MINIC_RISCV64_ABI_VALUE_INTEGER &&
-                     !(location.value.kind == MINIC_RISCV64_ABI_VALUE_FLOAT &&
-                       !is_fixed_parameter && minic_type_is_double(argument_type))) ||
-                    !((location.integer_register_count == 1U &&
-                       location.integer_register_begin < 8U &&
-                       location.stack_slot_count == 0U) ||
-                      (location.integer_register_count == 0U &&
-                       location.stack_slot_count == 1U))) {
-                    return false;
-                }
-            }
-        } else if (is_fixed_parameter && minic_type_is_record(argument_type)) {
-            MinicCoreObjectId object_id;
-
-            if (argument->kind != MINIC_CORE_CALL_ARGUMENT_OBJECT) {
-                return false;
-            }
-            object_id = argument->value.object_id;
-            if (object_id >= function->object_count ||
-                !minic_type_equal(function->objects[object_id].type, argument_type)) {
-                return false;
-            }
-            if (location.value.kind == MINIC_RISCV64_ABI_VALUE_IGNORE) {
-                if (location.value.slot_count != 0U || location.integer_register_count != 0U ||
-                    location.stack_slot_count != 0U) {
-                    return false;
-                }
-            } else if (location.value.kind == MINIC_RISCV64_ABI_VALUE_AGGREGATE) {
-                if (location.value.slot_count == 0U || location.value.slot_count > 2U ||
-                    location.value.slot_count !=
-                        location.integer_register_count + location.stack_slot_count ||
-                    location.integer_register_begin + location.integer_register_count > 8U) {
-                    return false;
-                }
-            } else if (location.value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT) {
-                if (location.value.slot_count != 1U ||
-                    !((location.integer_register_count == 1U &&
-                       location.integer_register_begin < 8U &&
-                       location.stack_slot_count == 0U) ||
-                      (location.integer_register_count == 0U &&
-                       location.stack_slot_count == 1U))) {
-                    return false;
-                }
-            } else {
-                return false;
-            }
-        } else {
-            return false;
-        }
-    }
-    return true;
+    return rv64_core_call_arguments_supported(program, function, &call, prepared, false);
 }
 
 

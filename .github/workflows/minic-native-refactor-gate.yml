@@ -7,6 +7,10 @@ on:
       - 'tools/minic/**'
       - 'tools/minic-cc/**'
       - 'tests/compiler/c0/probe-minic-driver-target-catalog.sh'
+      - 'tests/compiler/c0/probe-x86-kbuild-mitigations.sh'
+      - 'tests/compiler/c0/probe-x86-kbuild-thunk-inline.sh'
+      - 'tests/compiler/c0/probe-x86-core-dead-ssa-writeback.sh'
+      - 'tests/compiler/c0/x86_kbuild_mitigations.c'
       - 'tests/compiler/c0/probe-target-language-abi-options.sh'
       - 'src/core/**'
       - 'src/compiler/**'
@@ -15,6 +19,15 @@ on:
       - 'Makefile'
       - 'tests/compiler/c0/check-four-target-model-m0.c'
       - 'tests/compiler/c0/check-minic-target-boundaries.sh'
+      - 'tests/compiler/c0/gnu_prefix_function_attributes.c'
+      - 'tests/compiler/c0/run-gnu-prefix-function-attributes.sh'
+      - 'tests/compiler/c0/run-gnu-inline-asm-operands.sh'
+      - 'tests/compiler/c0/gnu_fixed_register_bindings.c'
+      - 'tests/compiler/c0/run-gnu-fixed-register-bindings.sh'
+      - 'tests/compiler/c0/run-block-extern-incomplete.sh'
+      - 'tests/compiler/c0/run-linux-empty-inline-asm.sh'
+      - 'tests/compiler/c0/run-core-constant-switch-dead-cases.sh'
+      - 'tests/compiler/c0/block-extern-incomplete.c'
       - 'tests/compiler/c0/probe-rv32-frame-access.c'
       - 'tests/compiler/c0/probe-core-semantic-family.c'
       - 'tests/compiler/c0/probe-core-block-walk.c'
@@ -30,6 +43,10 @@ on:
       - 'tools/minic/**'
       - 'tools/minic-cc/**'
       - 'tests/compiler/c0/probe-minic-driver-target-catalog.sh'
+      - 'tests/compiler/c0/probe-x86-kbuild-mitigations.sh'
+      - 'tests/compiler/c0/probe-x86-kbuild-thunk-inline.sh'
+      - 'tests/compiler/c0/probe-x86-core-dead-ssa-writeback.sh'
+      - 'tests/compiler/c0/x86_kbuild_mitigations.c'
       - 'tests/compiler/c0/probe-target-language-abi-options.sh'
       - 'src/core/**'
       - 'src/compiler/**'
@@ -38,9 +55,57 @@ on:
       - 'Makefile'
       - '.github/workflows/minic-native-refactor-gate.yml'
       - 'tests/compiler/c0/check-minic-target-boundaries.sh'
+      - 'tests/compiler/c0/gnu_prefix_function_attributes.c'
+      - 'tests/compiler/c0/run-gnu-prefix-function-attributes.sh'
+      - 'tests/compiler/c0/run-gnu-inline-asm-operands.sh'
+      - 'tests/compiler/c0/gnu_fixed_register_bindings.c'
+      - 'tests/compiler/c0/run-gnu-fixed-register-bindings.sh'
+      - 'tests/compiler/c0/run-block-extern-incomplete.sh'
+      - 'tests/compiler/c0/block-extern-incomplete.c'
       - 'tests/compiler/c0/probe-rv32-frame-access.c'
       # Changes to the native ABI/oracle must execute the native gate too.
       - 'tests/compiler/c0/run-x86_64-native-m1.sh'
+      - 'tests/compiler/c0/probe-x86-nospec-native.sh'
+      - 'tests/compiler/c0/probe-linux-declaration-gates.sh'
+      - 'tests/compiler/c0/probe-linux-global-prefix-attributes.sh'
+      - 'tests/compiler/c0/probe-x86-linux-bitops.sh'
+      - 'tests/compiler/c0/probe-x86-linux-callee-clobber.sh'
+      - 'tests/compiler/c0/probe-x86-linux-percpu-gs.sh'
+      - 'tests/compiler/c0/probe-x86-linux-checksum-fold.sh'
+      - 'tests/compiler/c0/probe-x86-linux-msr-extable.sh'
+      - 'tests/compiler/c0/probe-x86-linux-hweight-alternative.sh'
+      - 'tests/compiler/c0/probe-x86-linux-clock-msr.sh'
+      - 'tests/compiler/c0/probe-x86-linux-port-io.sh'
+      - 'tests/compiler/c0/probe-x86-linux-atomic-rmw.sh'
+      - 'tests/compiler/c0/probe-x86-linux-atomic-cc.sh'
+      - 'tests/compiler/c0/probe-x86-linux-trycas.sh'
+      - 'tests/compiler/c0/probe-x86-linux-native-cpuid.sh'
+      - 'tests/compiler/c0/probe-x86-linux-atomic-binary-cc.sh'
+      - 'tests/compiler/c0/probe-x86-linux-tied-bit-scan.sh'
+      - 'tests/compiler/c0/probe-x86-linux-abi-carry-xadd.sh'
+      - 'tests/compiler/c0/probe-lp64-core-record-snapshot-qemu.sh'
+      - 'tests/compiler/c0/probe-loong-linux-cmpxchg-qemu.sh'
+      - 'tests/compiler/c0/probe-loong-linux-xchg-qemu.sh'
+      - 'tests/compiler/c0/probe-loong-linux-small-xchg-qemu.sh'
+      - 'tests/compiler/c0/loong-linux-small-xchg.c'
+      - 'tests/compiler/c0/probe-loong-linux-named-store-mb-qemu.sh'
+      - 'tests/compiler/c0/loong-linux-named-store-mb.c'
+      - 'tests/compiler/c0/aarch64-linux-cap-alternative.c'
+      - 'tests/compiler/c0/probe-aarch64-linux-cap-alternative-qemu.sh'
+      - 'tests/compiler/c0/probe-aarch64-linux-alt-cap-bounds.sh'
+      - 'tests/compiler/c0/probe-minic-batch-granularity.sh'
+      - 'tools/ci/minic-batch-granularity.py'
+      - 'tests/compiler/c0/probe-lp64-indirect-record-abi-qemu.sh'
+      - 'tests/compiler/c0/probe-lp64-packed-integer-record-qemu.sh'
+      - 'tests/compiler/c0/probe-x86-linux-msr-safe-gs-pointer.sh'
+      - 'tests/compiler/c0/probe-x86-linux-ordered-tsc.sh'
+      - 'tests/compiler/c0/probe-x86-linux-static-record-zero.sh'
+      - 'tests/compiler/c0/probe-aarch64-linux-cmpwait.sh'
+      - 'tests/compiler/c0/probe-aarch64-linux-narrow-cmpxchg-qemu.sh'
+      - 'tests/compiler/c0/aarch64-linux-narrow-cmpxchg.c'
+      - 'tests/compiler/c0/probe-aarch64-linux-sysreg-writes.sh'
+      - 'tests/compiler/c0/probe-aarch64-large-structured-asm-spills.sh'
+      - 'tests/compiler/c0/probe-aarch64-linux-volatile-mrs.sh'
       - 'tests/compiler/c0/probe-rv64-extended-float-native.sh'
       - 'tests/compiler/c0/probe-rv64-pic-glibc-got.sh'
       - 'tests/compiler/c0/probe-rv64i-strict-isa.sh'
@@ -57,6 +122,24 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Report implementation/test batch granularity separately from CI metadata
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash tests/compiler/c0/probe-minic-batch-granularity.sh
+          if [[ "$GITHUB_EVENT_NAME" == pull_request ]]; then
+            # actions/checkout defaults to an ephemeral PR merge commit.
+            # Its first-parent diff counts the entire PR, not this batch.
+            head_sha='${{ github.event.pull_request.head.sha }}'
+            git fetch --no-tags --depth=2 origin "$head_sha"
+            python3 tools/ci/minic-batch-granularity.py \
+              --base "$head_sha^" --head "$head_sha"
+          else
+            python3 tools/ci/minic-batch-granularity.py \
+              --base HEAD^ --head HEAD
+          fi
       - name: Check MiniC backend ownership invariants
         shell: bash
         run: |
@@ -77,6 +160,128 @@ jobs:
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minic-native-backend all
           test -x build/minic-native-backend/bin/minic
           test -x build/minic-native-backend/bin/minic-cc
+      - name: Full-source review architecture and correctness batch native oracles
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash tests/compiler/c0/probe-review-batch-2026-10-29.sh \
+            "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+      - name: Exact original Linux AArch64 MRS u64 ABI family and negative target qualification
+        run: |
+          set -Eeuo pipefail
+          MINIC_SYSREG_NATIVE_ONLY=1 bash tests/compiler/c0/probe-aarch64-linux-sysreg64.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+      - name: LoongArch original Linux mask_nospec exact hardware and fail-closed source
+        run: |
+          set -Eeuo pipefail
+          MINIC_LOONG_NOSPEC_NATIVE_ONLY=1 bash tests/compiler/c0/probe-loongarch-linux-nospec.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+      - name: Original GNU Linux ELF named globals across all five targets
+        run: |
+          set -Eeuo pipefail
+          for target in x86_64 aarch64 loongarch64 riscv64 riscv32; do
+            MINIC_SECTION_ONLY=1 bash tests/compiler/c0/probe-linux-global-section-reloc.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc" "$target"
+          done
+      - name: Original Linux local_t x86 GNU RMW exact hardware and differential runtime
+        run: |
+          set -Eeuo pipefail
+          bash tests/compiler/c0/probe-x86-linux-local-rmw.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+      - name: Original Linux level-zero frame builtin two target policy probes
+        run: |
+          set -Eeuo pipefail
+          for target in aarch64 loongarch64; do
+            MINIC_FRAME_SOURCE_ONLY=1 bash tests/compiler/c0/probe-direct-linux-frame-level0.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc" "$target"
+          done
+      - name: Original Linux local_add_return XADD true hardware+register GNU differential
+        run: |
+          set -Eeuo pipefail
+          bash tests/compiler/c0/probe-x86-linux-local-xadd.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+      - name: Original Linux x86 cmpxchg OLD-return four hardware widths GNU runtime
+        run: |
+          set -Eeuo pipefail
+          bash tests/compiler/c0/probe-x86-linux-raw-cmpxchg.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+      - name: Original Linux LoongArch CSR immutable Core call-argument source constants
+        run: |
+          set -Eeuo pipefail
+          MINIC_LOONG_CSR_SOURCE_ONLY=1 bash tests/compiler/c0/probe-loongarch-linux-csr-constants.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+      - name: Original LoongArch Linux per-CPU 15 hardware forms native MiniC
+        run: |
+          set -Eeuo pipefail
+          MINIC_LOONG_PERCPU_SOURCE_ONLY=1 bash tests/compiler/c0/probe-loongarch-linux-percpu-fpu.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+      - name: Original Linux arm64 readl two-instruction data dependency and strict negatives
+        run: |
+          set -Eeuo pipefail
+          MINIC_ARM_IO_DEPENDENCY_SOURCE_ONLY=1 bash tests/compiler/c0/probe-aarch64-linux-io-dependency.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+      - name: Original GNU Linux arm64 SYSREG macro ten exact encoded MRS forms
+        run: |
+          set -Eeuo pipefail
+          MINIC_SYSREG_SOURCE_ONLY=1 bash tests/compiler/c0/probe-aarch64-linux-encoded-sysreg.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+      - name: Original Linux x86 target-owned PIC and GNU dynamic ELF/GOT/PLT/PIE evidence
+        run: |
+          set -Eeuo pipefail
+          bash tests/compiler/c0/probe-x86-linux-pic.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+      - name: Original Linux arm64 ten target-owned TLBI TLB invalidation hardware forms
+        run: |
+          set -Eeuo pipefail
+          MINIC_TLBI_SOURCE_ONLY=1 bash tests/compiler/c0/probe-aarch64-linux-tlbi-family.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+      - name: Common GNU function metadata and inline-asm fail-closed regressions
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic" \
+          BUILD_DIR=build/minic-native-backend \
+            sh tests/compiler/c0/run-gnu-prefix-function-attributes.sh
+          MINIC="$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic" \
+          BUILD_DIR=build/minic-native-backend \
+            sh tests/compiler/c0/run-gnu-fixed-register-bindings.sh
+          MINIC="$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic" \
+          BUILD_DIR=build/minic-native-backend \
+            sh tests/compiler/c0/run-block-extern-incomplete.sh
+          # L1 only: the entire GNU inline-asm operand suite is an RV64
+          # backend/assembler campaign with unrelated prerequisites. The
+          # changed parser diagnostic gets its own focused negative proof.
+          cat > "$RUNNER_TEMP/one-unsupported-clobber.i" <<'SRC'
+          int f(int value) {
+              __asm__ __volatile__("addi %0, %0, 1" : "+r"(value) : : "s1");
+              return value;
+          }
+          SRC
+          if build/minic-native-backend/bin/minic-cc --target=riscv64-linux \
+              -S "$RUNNER_TEMP/one-unsupported-clobber.i" \
+              -o "$RUNNER_TEMP/one-unsupported-clobber.s" \
+              >"$RUNNER_TEMP/one-unsupported-clobber.stdout" \
+              2>"$RUNNER_TEMP/one-unsupported-clobber.stderr"; then
+              echo "FAIL: unsupported s1 clobber accepted" >&2
+              exit 1
+          fi
+          grep -F 'unsupported GNU asm register clobber for target: s1' \
+            "$RUNNER_TEMP/one-unsupported-clobber.stderr"
+          # One shared GNU parser, all five targets. This is the exact
+          # original Linux 'asm __inline volatile' syntax that previously
+          # stopped 757 x86 C translation units before machine validation.
+          # Empty template + memory clobber is a legitimate compiler barrier,
+          # so each backend must preserve it without inventing ISA opcodes.
+          cat > "$RUNNER_TEMP/gnu-asm-inline-qualifier.i" <<'SRC'
+          int f(void) {
+              asm __inline volatile("" ::: "memory");
+              asm __inline__ volatile("" ::: "memory");
+              asm inline volatile("" ::: "memory");
+              return 42;
+          }
+          SRC
+          for target in riscv32-linux riscv64-linux x86_64-linux aarch64-linux loongarch64-linux; do
+              build/minic-native-backend/bin/minic-cc --target="$target" \
+                -S "$RUNNER_TEMP/gnu-asm-inline-qualifier.i" \
+                -o "$RUNNER_TEMP/gnu-asm-inline-$target.s"
+              test -s "$RUNNER_TEMP/gnu-asm-inline-$target.s"
+          done
+          echo "MINIC_GNU_ASM_INLINE_FIVE_TARGET=PASS grammar=shared barrier=memory"
+          MINIC_CC="$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc" \
+          BUILD_DIR=build/minic-native-backend \
+            sh tests/compiler/c0/run-linux-empty-inline-asm.sh
+          MINIC_CC="$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc" \
+          BUILD_DIR=build/minic-native-backend \
+            sh tests/compiler/c0/run-core-constant-switch-dead-cases.sh
+
+
       - name: Canonical target DataLayout record/global layout regression
         shell: bash
         run: |
@@ -90,6 +295,9 @@ jobs:
           MINIC="$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic" \
           BUILD_DIR=build/minic-native-backend \
             sh tests/compiler/c0/run-core-block-spill-reuse.sh
+          MINIC_CC="$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc" \
+          BUILD_DIR=build/minic-native-backend \
+            sh tests/compiler/c0/probe-direct-lp64-spill-reuse-pressure.sh
 
       - name: RV64 ABI function-plan owner, hard/soft float and rollback
         shell: bash
@@ -163,3 +371,50 @@ jobs:
           test "$(uname -m)" = x86_64
           MINIC_CC="$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc" \
             HOST_CC=cc sh tests/compiler/c0/run-x86_64-native-m1.sh
+          bash tests/compiler/c0/probe-x86-kbuild-mitigations.sh \
+            "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc" \
+            "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic"
+          bash tests/compiler/c0/probe-x86-kbuild-thunk-inline.sh \
+            "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc" \
+            "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic"
+          MINIC_CC="$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc" \
+            bash tests/compiler/c0/probe-x86-core-dead-ssa-writeback.sh
+          bash tests/compiler/c0/probe-x86-nospec-native.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+          bash tests/compiler/c0/probe-linux-declaration-gates.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+          bash tests/compiler/c0/probe-linux-global-prefix-attributes.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+          bash tests/compiler/c0/probe-x86-linux-bitops.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+          bash tests/compiler/c0/probe-x86-linux-callee-clobber.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+          bash tests/compiler/c0/probe-x86-linux-percpu-gs.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+          bash tests/compiler/c0/probe-x86-linux-checksum-fold.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+          bash tests/compiler/c0/probe-x86-linux-msr-extable.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+          bash tests/compiler/c0/probe-x86-linux-hweight-alternative.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+          bash tests/compiler/c0/probe-x86-linux-clock-msr.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+          bash tests/compiler/c0/probe-x86-linux-port-io.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+          bash tests/compiler/c0/probe-x86-linux-atomic-rmw.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+          bash tests/compiler/c0/probe-x86-linux-atomic-cc.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+          bash tests/compiler/c0/probe-x86-linux-trycas.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+          bash tests/compiler/c0/probe-x86-linux-native-cpuid.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+          bash tests/compiler/c0/probe-x86-linux-atomic-binary-cc.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+          bash tests/compiler/c0/probe-x86-linux-tied-bit-scan.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+          bash tests/compiler/c0/probe-x86-linux-abi-carry-xadd.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+          bash tests/compiler/c0/probe-x86-linux-msr-safe-gs-pointer.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+          MINIC_SOURCE_ONLY=1 bash tests/compiler/c0/probe-loong-linux-cmpxchg-qemu.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+          MINIC_SOURCE_ONLY=1 bash tests/compiler/c0/probe-loong-linux-xchg-qemu.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+          MINIC_SOURCE_ONLY=1 bash tests/compiler/c0/probe-loong-linux-small-xchg-qemu.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+          MINIC_SOURCE_ONLY=1 bash tests/compiler/c0/probe-loong-linux-named-store-mb-qemu.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+          MINIC_SOURCE_ONLY=1 bash tests/compiler/c0/probe-aarch64-linux-cap-alternative-qemu.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+          MINIC_SOURCE_ONLY=1 bash tests/compiler/c0/probe-aarch64-linux-alt-cap-bounds.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+          for target in aarch64 loongarch64; do
+            MINIC_SOURCE_ONLY=1 bash tests/compiler/c0/probe-lp64-core-record-snapshot-qemu.sh "$target" "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+            MINIC_SOURCE_ONLY=1 bash tests/compiler/c0/probe-lp64-indirect-record-abi-qemu.sh "$target" "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+            MINIC_SOURCE_ONLY=1 bash tests/compiler/c0/probe-lp64-packed-integer-record-qemu.sh "$target" "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+          done
+          # Original Linux ISA family and GNU ABI static object boundary.
+          bash tests/compiler/c0/probe-x86-linux-ordered-tsc.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+          bash tests/compiler/c0/probe-x86-linux-static-record-zero.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+          MINIC_SOURCE_ONLY=1 bash tests/compiler/c0/probe-aarch64-linux-cmpwait.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+          MINIC_SOURCE_ONLY=1 bash tests/compiler/c0/probe-aarch64-linux-narrow-cmpxchg-qemu.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+          MINIC_SOURCE_ONLY=1 bash tests/compiler/c0/probe-aarch64-linux-sysreg-writes.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+          MINIC_SOURCE_ONLY=1 bash tests/compiler/c0/probe-aarch64-large-structured-asm-spills.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+          MINIC_SOURCE_ONLY=1 bash tests/compiler/c0/probe-aarch64-linux-volatile-mrs.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+

@@ -57,8 +57,8 @@ bool minic_loongarch64_emit_fp_instruction(
                     ? "fcmp.clt.d" : "fcmp.cle.d";
             if (!minic_multi_direct_floating_shape(
                     program, target, fn, ins, NULL, NULL) ||
-                !emit_sp_mem(out, "fld.d", "$ft0", (size_t)lhs * 8U) ||
-                !emit_sp_mem(out, "fld.d", "$ft1", (size_t)rhs * 8U) ||
+                !emit_sp_mem(out, "fld.d", "$ft0", minic_lp64_frame_value_offset(frame_plan, lhs)) ||
+                !emit_sp_mem(out, "fld.d", "$ft1", minic_lp64_frame_value_offset(frame_plan, rhs)) ||
                 fprintf(out, "  %s $fcc0, $ft0, $ft1\n"
                              "  movcf2gr $t0, $fcc0\n", op) < 0)
                 return false;
@@ -78,8 +78,8 @@ bool minic_loongarch64_emit_fp_instruction(
                     : "  fmul.d $ft0, $ft0, $ft1\n";
             if (!minic_multi_direct_floating_shape(
                     program, target, fn, ins, NULL, NULL) ||
-                !emit_sp_mem(out, "fld.d", "$ft0", (size_t)lhs * 8U) ||
-                !emit_sp_mem(out, "fld.d", "$ft1", (size_t)rhs * 8U) ||
+                !emit_sp_mem(out, "fld.d", "$ft0", minic_lp64_frame_value_offset(frame_plan, lhs)) ||
+                !emit_sp_mem(out, "fld.d", "$ft1", minic_lp64_frame_value_offset(frame_plan, rhs)) ||
                 fputs(op, out) == EOF ||
                 !emit_sp_mem(out, "fst.d", "$ft0", offset))
                 return false;
@@ -90,8 +90,8 @@ bool minic_loongarch64_emit_fp_instruction(
             const MinicCoreValueId rhs = ins->value.binary.right;
             if (!minic_multi_direct_floating_shape(
                     program, target, fn, ins, NULL, NULL) ||
-                !emit_sp_mem(out, "fld.d", "$ft0", (size_t)lhs * 8U) ||
-                !emit_sp_mem(out, "fld.d", "$ft1", (size_t)rhs * 8U) ||
+                !emit_sp_mem(out, "fld.d", "$ft0", minic_lp64_frame_value_offset(frame_plan, lhs)) ||
+                !emit_sp_mem(out, "fld.d", "$ft1", minic_lp64_frame_value_offset(frame_plan, rhs)) ||
                 fputs("  fdiv.d $ft0, $ft0, $ft1\n", out) == EOF ||
                 !emit_sp_mem(out, "fst.d", "$ft0", offset))
                 return false;
@@ -101,7 +101,7 @@ bool minic_loongarch64_emit_fp_instruction(
             const MinicCoreValueId operand = ins->value.operand;
             if (!minic_multi_direct_floating_shape(
                     program, target, fn, ins, NULL, NULL) ||
-                !emit_sp_mem(out, "fld.d", "$ft0", (size_t)operand * 8U) ||
+                !emit_sp_mem(out, "fld.d", "$ft0", minic_lp64_frame_value_offset(frame_plan, operand)) ||
                 fputs("  fneg.d $ft0, $ft0\n", out) == EOF ||
                 !emit_sp_mem(out, "fst.d", "$ft0", offset))
                 return false;
@@ -116,7 +116,7 @@ bool minic_loongarch64_emit_fp_instruction(
             const MinicCoreValueId source = ins->value.operand;
             if (!minic_multi_direct_floating_shape(
                     program, target, fn, ins, NULL, NULL) ||
-                !emit_sp_mem(out, "fld.d", "$ft0", (size_t)source * 8U) ||
+                !emit_sp_mem(out, "fld.d", "$ft0", minic_lp64_frame_value_offset(frame_plan, source)) ||
                 fputs("  fcvt.s.d $ft0, $ft0\n", out) == EOF ||
                 !emit_sp_mem(out, "fst.s", "$ft0", offset))
                 return false;
@@ -137,8 +137,8 @@ bool minic_loongarch64_emit_fp_instruction(
                         : "  fdiv.s $ft0, $ft0, $ft1\n";
             if (!minic_multi_direct_floating_shape(
                     program, target, fn, ins, NULL, NULL) ||
-                !emit_sp_mem(out, "fld.s", "$ft0", (size_t)lhs * 8U) ||
-                !emit_sp_mem(out, "fld.s", "$ft1", (size_t)rhs * 8U) ||
+                !emit_sp_mem(out, "fld.s", "$ft0", minic_lp64_frame_value_offset(frame_plan, lhs)) ||
+                !emit_sp_mem(out, "fld.s", "$ft1", minic_lp64_frame_value_offset(frame_plan, rhs)) ||
                 fputs(op, out) == EOF ||
                 !emit_sp_mem(out, "fst.s", "$ft0", offset))
                 return false;
@@ -148,7 +148,7 @@ bool minic_loongarch64_emit_fp_instruction(
             const MinicCoreValueId src = ins->value.operand;
             if (!minic_multi_direct_floating_shape(
                     program, target, fn, ins, NULL, NULL) ||
-                !emit_sp_mem(out, "fld.s", "$ft0", (size_t)src * 8U) ||
+                !emit_sp_mem(out, "fld.s", "$ft0", minic_lp64_frame_value_offset(frame_plan, src)) ||
                 fputs("  fcvt.d.s $ft0, $ft0\n", out) == EOF ||
                 !emit_sp_mem(out, "fst.d", "$ft0", offset))
                 return false;
@@ -161,7 +161,7 @@ bool minic_loongarch64_emit_fp_instruction(
             if (!minic_multi_direct_floating_shape(
                     program, target, fn, ins, &width, &sign) ||
                 !emit_sp_mem(out, width == 8U ? "ld.d" : "ld.w",
-                             "$t0", (size_t)src * 8U) ||
+                             "$t0", minic_lp64_frame_value_offset(frame_plan, src)) ||
                 (width < 4U && !minic_loongarch64_emit_integer_normalize(out, width, sign)))
                 return false;
             if (width == 8U && !sign) {
@@ -215,7 +215,7 @@ bool minic_loongarch64_emit_fp_instruction(
                  * uint64 conversions, translate the upper half of the
                  * unsigned domain by 2^63 and restore its high bit. */
                 if (!emit_sp_mem(out, "fld.d", "$ft0",
-                                 (size_t)src * 8U) ||
+                                 minic_lp64_frame_value_offset(frame_plan, src)) ||
                     fprintf(out,
                        "  li.d $t1, 0x43e0000000000000\n"
                        "  movgr2fr.d $ft1, $t1\n"
@@ -245,7 +245,7 @@ bool minic_loongarch64_emit_fp_instruction(
                   "  movfr2gr.s $t0, $ft0\n"
                 : "  ftintrz.l.d $ft0, $ft0\n"
                   "  movfr2gr.d $t0, $ft0\n";
-            if (!emit_sp_mem(out, "fld.d", "$ft0", (size_t)src * 8U) ||
+            if (!emit_sp_mem(out, "fld.d", "$ft0", minic_lp64_frame_value_offset(frame_plan, src)) ||
                 fputs(conversion, out) == EOF ||
                 (width == 4U && !sign &&
                  fputs("  bstrpick.d $t0, $t0, 31, 0\n", out) == EOF) ||

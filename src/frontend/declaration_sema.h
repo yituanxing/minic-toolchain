@@ -63,6 +63,10 @@ minic_declaration_materialize_array_suffix(MinicC0Program *program,
                                            const MinicDeclarationArraySuffix *suffix,
                                            MinicType *type);
 
+bool minic_declaration_instantiate_incomplete_array_object_type(MinicC0Program *program,
+                                                                MinicType declared_type,
+                                                                MinicType *object_type);
+
 bool minic_declaration_external_object_types_compatible(const MinicC0Program *program,
                                                         MinicType existing_type,
                                                         MinicType declared_type);

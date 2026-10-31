@@ -38,6 +38,9 @@ void minic_core_function_set_destroy(MinicCoreFunctionSet *set) {
     minic_core_function_set_initialize(set);
 }
 
+/* False means structural allocation failed and leaves output untouched. True
+ * publishes one Core/status slot per FunctionId, even if individual function
+ * lowerings recorded an error status; the Compiler validates those separately. */
 bool minic_prepare_core_function_set(const MinicC0Program *program,
                                             const MinicTargetInfo *target,
                                             MinicCoreFunctionSet *output) {
@@ -100,6 +103,9 @@ bool minic_prepare_core_function_set(const MinicC0Program *program,
         set.statuses[function_index] =
             minic_core_lower_function_with_index(&body, target,
                                                 &set.functions[function_index], index);
+        if (set.statuses[function_index] == MINIC_CORE_LOWER_OK)
+            (void)minic_core_function_fold_literal_branches(
+                &set.functions[function_index]);
         if (minic_core_set_bootstrap_trace_enabled()) {
             (void)fprintf(stderr,
                           "MINIC_BOOTSTRAP_TRACE stage=core-lower state=end "

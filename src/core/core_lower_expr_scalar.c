@@ -9,6 +9,41 @@
 #include <stdlib.h>
 #include <string.h>
 
+static bool popcount_append_constant(MinicCoreLowerContext *context,
+                                     MinicSourceSpan span,
+                                     MinicType type,
+                                     uint64_t bits,
+                                     MinicCoreValueId *value_id) {
+    MinicCoreInstruction instruction;
+    (void)memset(&instruction, 0, sizeof(instruction));
+    instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
+    instruction.span = span;
+    instruction.type = type;
+    instruction.result = MINIC_CORE_VALUE_INVALID;
+    instruction.value.integer_value = (int64_t)bits;
+    return minic_core_function_append_value_instruction(
+        context->function, context->block_id, &instruction, value_id);
+}
+
+static bool popcount_append_binary(MinicCoreLowerContext *context,
+                                   MinicSourceSpan span,
+                                   MinicType type,
+                                   MinicCoreInstructionKind kind,
+                                   MinicCoreValueId left,
+                                   MinicCoreValueId right,
+                                   MinicCoreValueId *value_id) {
+    MinicCoreInstruction instruction;
+    (void)memset(&instruction, 0, sizeof(instruction));
+    instruction.kind = kind;
+    instruction.span = span;
+    instruction.type = type;
+    instruction.result = MINIC_CORE_VALUE_INVALID;
+    instruction.value.binary.left = left;
+    instruction.value.binary.right = right;
+    return minic_core_function_append_value_instruction(
+        context->function, context->block_id, &instruction, value_id);
+}
+
 /* Target-parametrized C scalar operations, not target-machine lowering.
  * Integer promotions/layout enter exclusively through the context target. */
 MinicCoreLowerStatus minic_core_lower_try_builtin_unary(
@@ -16,6 +51,66 @@ MinicCoreLowerStatus minic_core_lower_try_builtin_unary(
     MinicCoreValueId *value_id, bool *handled) {
     MinicCoreInstruction instruction;
     *handled = false;
+    /* Integer population count is target-neutral SWAR.  Unlike clz/ctz,
+     * zero is defined (popcount(0)==0).  Keep it in generic Core arithmetic
+     * so RV32I and the four 64-bit targets need no POPCNT ISA instruction. */
+    if (expression->kind == MINIC_EXPRESSION_BUILTIN_UNARY &&
+        (expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_POPCOUNT ||
+         expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_POPCOUNTL ||
+         expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_POPCOUNTLL)) {
+        const MinicExpression *operand = minic_c0_program_expression(
+            context->body->program, expression->value.builtin_unary.operand);
+        MinicCoreValueId x, shift, mask, temporary, low, high;
+        MinicCoreLowerStatus status;
+        MinicType type;
+        unsigned int width;
+        uint64_t mask1, mask2, mask4, mask8;
+        *handled = true;
+        if (operand == NULL || !minic_type_is_unsigned_integer(operand->type) ||
+            !minic_type_equal(expression->type, minic_type_int()) ||
+            !minic_target_info_integer_width(context->target, context->body->program,
+                                             operand->type, &width) ||
+            (width != 32U && width != 64U)) return MINIC_CORE_LOWER_UNSUPPORTED;
+        type = operand->type;
+        mask1 = width == 32U ? UINT32_C(0x55555555) : UINT64_C(0x5555555555555555);
+        mask2 = width == 32U ? UINT32_C(0x33333333) : UINT64_C(0x3333333333333333);
+        mask4 = width == 32U ? UINT32_C(0x0f0f0f0f) : UINT64_C(0x0f0f0f0f0f0f0f0f);
+        mask8 = width == 32U ? UINT32_C(0x01010101) : UINT64_C(0x0101010101010101);
+        status = lower_expression(context, expression->value.builtin_unary.operand, &x);
+        if (status != MINIC_CORE_LOWER_OK) return status;
+#define PC_CONST(bits, output) \
+    if (!popcount_append_constant(context, expression->span, type, (bits), &(output))) \
+        return MINIC_CORE_LOWER_ERROR
+#define PC_BINARY(kind, lhs, rhs, output) \
+    if (!popcount_append_binary(context, expression->span, type, (kind), (lhs), (rhs), &(output))) \
+        return MINIC_CORE_LOWER_ERROR
+        PC_CONST(1U, shift);
+        PC_BINARY(MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT, x, shift, temporary);
+        PC_CONST(mask1, mask);
+        PC_BINARY(MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND, temporary, mask, high);
+        PC_BINARY(MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT, x, high, temporary);
+        x = temporary;
+        PC_CONST(mask2, mask);
+        PC_BINARY(MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND, x, mask, low);
+        PC_CONST(2U, shift);
+        PC_BINARY(MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT, x, shift, temporary);
+        PC_BINARY(MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND, temporary, mask, high);
+        PC_BINARY(MINIC_CORE_INSTRUCTION_INTEGER_ADD, low, high, temporary);
+        x = temporary;
+        PC_CONST(4U, shift);
+        PC_BINARY(MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT, x, shift, high);
+        PC_BINARY(MINIC_CORE_INSTRUCTION_INTEGER_ADD, x, high, temporary);
+        PC_CONST(mask4, mask);
+        PC_BINARY(MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND, temporary, mask, x);
+        PC_CONST(mask8, mask);
+        PC_BINARY(MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY, x, mask, temporary);
+        PC_CONST((uint64_t)(width - 8U), shift);
+        PC_BINARY(MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT, temporary, shift, x);
+#undef PC_CONST
+#undef PC_BINARY
+        return minic_core_lower_internal_append_integer_conversion(
+            context, expression->span, minic_type_int(), x, value_id);
+    }
     /* M129_LEAF_EXPRESSION_OWNERS: __builtin_isdigit is a pure integer leaf.
        Preserve the existing direct-backend contract without target-specific
        instructions: convert once to unsigned int, subtract '0' modulo the
@@ -115,14 +210,9 @@ MinicCoreLowerStatus minic_core_lower_try_builtin_unary(
                    : MINIC_CORE_LOWER_ERROR; }
     }
 
-    /* M175F_RUNTIME_FFSLL_OWNER: __builtin_ffsll returns a one-based
-       least-significant-set-bit index and zero for a zero operand.  Reuse the
-       existing unsigned-long CTZ semantic owner instead of introducing a
-       target-specific FFS instruction.  RV64's long and long long are both
-       64-bit, so converting signed long long to unsigned long preserves the
-       operand bit pattern modulo 2^64.  The double zero-test yields a canonical
-       int nonzero mask; multiplying by it maps the CTZ zero sentinel (64) back
-       to the required ffsll zero result. */
+    /* __builtin_ffsll is defined over all 64 bits on LP64 *and* ILP32.
+       Convert to unsigned long long before CTZ; unsigned long truncates the
+       high word on RV32 and incorrectly turns ffsll(1LL << 40) into zero. */
     if (expression->kind == MINIC_EXPRESSION_BUILTIN_UNARY &&
         expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_FFSLL) {
         const MinicExpression *operand;
@@ -153,7 +243,7 @@ MinicCoreLowerStatus minic_core_lower_try_builtin_unary(
             { *handled = true; return MINIC_CORE_LOWER_ERROR; }
         }
         status = minic_core_lower_internal_append_integer_conversion(
-            context, operand->span, minic_type_unsigned_long(), operand_value, &unsigned_value);
+            context, operand->span, minic_type_unsigned_long_long(), operand_value, &unsigned_value);
         if (status != MINIC_CORE_LOWER_OK) {
             { *handled = true; return status; }
         }
@@ -1240,8 +1330,14 @@ MinicCoreLowerStatus minic_core_lower_try_pointer_arithmetic(
                               index_value_type)) {
             { *handled = true; return MINIC_CORE_LOWER_ERROR; }
         }
+        /* Preserve deterministic IR provenance: this instruction is appended
+         * as a whole, so leaving span/padding uninitialized leaks stack data
+         * into the verifier, dumps and downstream debug diagnostics. */
+        (void)memset(&instruction, 0, sizeof(instruction));
         instruction.kind = MINIC_CORE_INSTRUCTION_POINTER_OFFSET;
+        instruction.span = expression->span;
         instruction.type = pointer_value_type;
+        instruction.result = MINIC_CORE_VALUE_INVALID;
         instruction.value.pointer_offset.base = pointer_value;
         instruction.value.pointer_offset.index = index_value;
         instruction.value.pointer_offset.element_size = element_size;

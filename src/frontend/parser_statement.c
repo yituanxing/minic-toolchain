@@ -1011,14 +1011,34 @@ bool minic_parser_parse_statement(MinicParser *parser, bool allow_declaration) {
     if (gnu_attribute_list_has_statement_shape(parser)) {
         return parse_gnu_statement_attribute(parser);
     }
-    if (parser->current.kind == MINIC_TOKEN_KW_EXTERN ||
-        (parser->current.kind == MINIC_TOKEN_IDENTIFIER &&
-         minic_parser_current_identifier_lexeme_equals_cstr(parser, "__attribute__"))) {
+    if (parser->current.kind == MINIC_TOKEN_KW_EXTERN) {
         if (!allow_declaration) {
             minic_parser_error(parser, "a declaration requires a compound statement scope");
             return false;
         }
         return minic_parser_local_decl_extern(parser);
+    }
+    if (parser->current.kind == MINIC_TOKEN_IDENTIFIER &&
+        minic_parser_current_identifier_lexeme_equals_cstr(parser, "__attribute__")) {
+        MinicParser probe;
+        MinicParsedAttributeList prefix_attributes;
+
+        if (!allow_declaration) {
+            minic_parser_error(parser, "a declaration requires a compound statement scope");
+            return false;
+        }
+        probe = *parser;
+        (void)memset(&prefix_attributes, 0, sizeof(prefix_attributes));
+        if (!minic_parser_collect_gnu_attribute_lists(&probe, &prefix_attributes)) {
+            return false;
+        }
+        /* GNU prefixes qualify ordinary locals as well as externs. The
+         * prefix is parsed by the selected declaration owner below, which
+         * retains all semantic/ABI attribute validation. */
+        if (probe.current.kind == MINIC_TOKEN_KW_EXTERN) {
+            return minic_parser_local_decl_extern(parser);
+        }
+        return minic_parser_local_decl_ordinary(parser);
     }
     if (parser->current.kind == MINIC_TOKEN_KW_STATIC) {
         if (!allow_declaration) {

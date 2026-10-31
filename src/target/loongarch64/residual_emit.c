@@ -1,4 +1,7 @@
 #include "target/loongarch64/residual_emit.h"
+#include "target/loongarch64/asm_contract.h"
+#include "target/loongarch64/memory_emit.h"
+#include "target/loongarch64/simd_asm.h"
 #include "target/loongarch64/scalar_normalize.h"
 #include "target/common/direct_residual_plan.h"
 #include "target/common/direct_instruction_semantics.h"
@@ -6,6 +9,7 @@
 #include "target/common/direct_program_emit.h"
 #include "target/data_layout.h"
 #include "target/loongarch64/frame_emit.h"
+#include "core/value_uses.h"
 #include <inttypes.h>
 #include <limits.h>
 #include <stdint.h>
@@ -17,6 +21,104 @@
 #define emit_sp_mem(_out, _op, _reg, _offset) \
     minic_loongarch64_emit_frame_mem((_out), (_op), (_reg), (_offset), dynamic_frame)
 
+typedef struct LoongAddressFoldUse {
+    MinicCoreValueId query;
+    bool seen;
+} LoongAddressFoldUse;
+
+static bool loong_proven_frame_address(
+    const MinicCoreFunction *fn, MinicCoreValueId value_id, unsigned depth) {
+    const MinicCoreInstruction *def;
+    if (fn == NULL || value_id >= fn->value_count || depth > 16U ||
+        fn->values[value_id].definition >= fn->instruction_count)
+        return false;
+    def = &fn->instructions[fn->values[value_id].definition];
+    if (def->result != value_id) return false;
+    if (def->kind == MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS)
+        return def->value.object_id < fn->object_count;
+    return def->kind == MINIC_CORE_INSTRUCTION_FIELD_ADDRESS &&
+           loong_proven_frame_address(
+               fn, def->value.field_address.base, depth + 1U);
+}
+
+static bool loong_address_fold_mark_use(MinicCoreValueId value_id, void *opaque) {
+    LoongAddressFoldUse *check = (LoongAddressFoldUse *)opaque;
+    if (check == NULL) return false;
+    if (value_id == check->query) check->seen = true;
+    return true;
+}
+
+/* A frame object has an immutable offset. Its SSA address materialization is
+ * unnecessary if EVERY user is a native load/store which directly consumes
+ * that proven object offset. Inspect all instructions and terminators,
+ * including cold/externally reachable blocks; no pointer escape is allowed. */
+static bool loong_address_only_folded_uses(
+    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, const MinicLP64FramePlan *frame_plan,
+    MinicCoreValueId value_id, unsigned depth) {
+    size_t i;
+    if (fn == NULL || value_id >= fn->value_count || depth > 16U) return false;
+    for (i = 0U; i < fn->instruction_count; ++i) {
+        const MinicCoreInstruction *ins = &fn->instructions[i];
+        LoongAddressFoldUse check = {value_id, false};
+        if (!minic_core_visit_instruction_value_uses(
+                fn, ins, loong_address_fold_mark_use, &check))
+            return false;
+        if (!check.seen) continue;
+        if ((ins->kind == MINIC_CORE_INSTRUCTION_LOAD &&
+             ins->value.load.address == value_id) ||
+            (ins->kind == MINIC_CORE_INSTRUCTION_ATOMIC_LOAD &&
+             ins->value.atomic_load.address == value_id) ||
+            (ins->kind == MINIC_CORE_INSTRUCTION_STORE &&
+             ins->value.store.address == value_id &&
+             ins->value.store.stored_value != value_id) ||
+            (ins->kind == MINIC_CORE_INSTRUCTION_ATOMIC_STORE &&
+             ins->value.atomic_store.address == value_id &&
+             ins->value.atomic_store.stored_value != value_id)) {
+            if (!minic_loongarch64_direct_frame_memory_use(
+                    program, target, fn, frame_plan, ins))
+                return false;
+            continue;
+        }
+        if (ins->kind == MINIC_CORE_INSTRUCTION_FIELD_ADDRESS &&
+            ins->value.field_address.base == value_id &&
+            ins->result != MINIC_CORE_VALUE_INVALID &&
+            loong_address_only_folded_uses(
+                program, target, fn, frame_plan,
+                ins->result, depth + 1U))
+            continue;
+        return false;
+    }
+    for (i = 0U; i < fn->block_count; ++i) {
+        LoongAddressFoldUse check = {value_id, false};
+        if (!fn->blocks[i].has_terminator ||
+            !minic_core_visit_terminator_value_uses(
+                &fn->blocks[i].terminator, loong_address_fold_mark_use, &check) ||
+            check.seen)
+            return false;
+    }
+    return true;
+}
+
+bool minic_loongarch64_elided_frame_address_instruction(
+    const MinicDirectLP64BlockContext *ctx,
+    const MinicCoreInstruction *ins) {
+    if (ctx == NULL || ctx->fn == NULL || ctx->frame_plan == NULL ||
+        ctx->target == NULL || ctx->program == NULL || ins == NULL ||
+        ins->result == MINIC_CORE_VALUE_INVALID)
+        return false;
+    if (ins->kind == MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS)
+        return loong_address_only_folded_uses(
+            ctx->program, ctx->target, ctx->fn, ctx->frame_plan,
+            ins->result, 0U);
+    if (ins->kind == MINIC_CORE_INSTRUCTION_FIELD_ADDRESS)
+        return loong_proven_frame_address(ctx->fn, ins->result, 0U) &&
+               loong_address_only_folded_uses(
+                   ctx->program, ctx->target, ctx->fn, ctx->frame_plan,
+                   ins->result, 0U);
+    return false;
+}
+
 
 /* Residual machine lowering after Core family admission. Each case is
  * target owned; planning and type checks are shared with the other LP64
@@ -26,7 +128,9 @@
 bool minic_loongarch64_emit_residual_instruction(
     FILE *out, const MinicDirectLP64BlockContext *ctx,
     MinicCoreInstructionId ins_id, size_t block_id,
-    size_t offset, bool *needs_writeback) {
+    size_t offset, bool native_opcode_presence_checked,
+    bool emits_no_native_opcode, bool operand_in_previous_gp,
+    bool *needs_writeback) {
     const MinicC0Program *program;
     const MinicTargetInfo *target;
     const MinicCoreFunction *fn;
@@ -34,7 +138,7 @@ bool minic_loongarch64_emit_residual_instruction(
     const MinicCoreInstruction *ins;
     const char *name;
     const char *reject_stage = "machine_emit";
-    size_t id, frame, va_gp, va_count, reject_block;
+    size_t id, va_gp, va_count, reject_block;
     size_t reject_ins;
     bool dynamic_frame;
     if (out == NULL || ctx == NULL || needs_writeback == NULL || ctx->fn == NULL ||
@@ -49,7 +153,6 @@ bool minic_loongarch64_emit_residual_instruction(
     ins = &fn->instructions[ins_id];
     name = ctx->name;
     id = ctx->id;
-    frame = ctx->frame;
     va_gp = ctx->va_gp;
     va_count = ctx->va_count;
     reject_block = block_id;
@@ -57,6 +160,139 @@ bool minic_loongarch64_emit_residual_instruction(
     dynamic_frame = ctx->dynamic_frame;
     *needs_writeback = true;
         switch (ins->kind) {
+        case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM: {
+            const size_t asm_id = ins->value.inline_asm_id;
+            const MinicCoreInlineAsm *source = asm_id < fn->inline_asm_count
+                ? &fn->inline_asms[asm_id] : NULL;
+            /* Keep any native assembly peephole strictly outside GNU/user
+             * inline ASM: exact SP-relative spellings there are observable. */
+            if (fputs("# MINI_LOONG_INLINE_ASM_BEGIN\n", out) == EOF)
+                return false;
+            if (minic_loongarch64_linux_jump_label_asm_goto_core(source)) {
+                if (!minic_loongarch64_emit_linux_jump_label_asm_goto(
+                        out, source, id, fn->block_count))
+                    return minic_multi_direct_machine_reject(
+                        fn, "loongarch64", name, "linux_jump_label_asm_goto",
+                        reject_block, reject_ins, __LINE__);
+                *needs_writeback = false;
+                return fputs("# MINI_LOONG_INLINE_ASM_END\n", out) != EOF;
+            }
+            if (minic_loongarch64_simd_qualify_opaque(source)) {
+                if (!minic_loongarch64_simd_emit_opaque(out, source))
+                    return minic_multi_direct_machine_reject(
+                        fn, "loongarch64", name, "qualified_simd_asm",
+                        reject_block, reject_ins, __LINE__);
+                *needs_writeback = false;
+                return fputs("# MINI_LOONG_INLINE_ASM_END\n", out) != EOF;
+            }
+            if (!minic_loongarch64_qualified_opaque_asm(source) ||
+                fwrite(source->template_text, 1U, source->template_length, out) !=
+                    source->template_length ||
+                fputc('\n', out) == EOF)
+                return minic_multi_direct_machine_reject(
+                    fn, "loongarch64", name, "qualified_opaque_hardware_asm",
+                    reject_block, reject_ins, __LINE__);
+            *needs_writeback = false;
+            return fputs("# MINI_LOONG_INLINE_ASM_END\n", out) != EOF;
+        }
+        case MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM:
+            if (fputs("# MINI_LOONG_INLINE_ASM_BEGIN\n", out) == EOF)
+                return false;
+            if (!minic_loongarch64_emit_qualified_structured_asm(out, ctx, ins))
+                return minic_multi_direct_machine_reject(
+                    fn, "loongarch64", name, "qualified_hardware_asm",
+                    reject_block, reject_ins, __LINE__);
+            *needs_writeback = false;
+            return fputs("# MINI_LOONG_INLINE_ASM_END\n", out) != EOF;
+        case MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS:
+            /* The SHARED semantic guard validates pointer provenance and
+             * forbids unwinding higher frames. The native LP64D machine
+             * reads the live entry ra in leaf functions or the ABI-owned
+             * saved copy after any CALL. Never return a local stack slot
+             * address in place of the real caller's instruction pointer. */
+            if (!dynamic_frame &&
+                minic_multi_direct_call_frame_level0_shape(
+                    fn, ins, MINIC_CORE_CALL_FRAME_ADDRESS_FRAME)) {
+                /* LoongArch fixed frame has a stable SP until the epilogue.
+                 * Preserve ABI frame alignment; do not invent parent FP. */
+                if (fputs("  move $t0, $sp\n", out) == EOF)
+                    return false;
+                break;
+            }
+            if (dynamic_frame ||
+                !minic_multi_direct_call_frame_return_level0_shape(fn, ins))
+                return minic_multi_direct_machine_reject(
+                    fn, "loongarch64", name, "call_frame_return_address",
+                    reject_block, reject_ins, __LINE__);
+            if (ctx->has_direct_calls) {
+                if (!emit_sp_mem(out, "ld.d", "$t0", ctx->save_offset))
+                    return false;
+            } else if (fputs("  move $t0, $ra\n", out) == EOF) {
+                return false;
+            }
+            break;
+        case MINIC_CORE_INSTRUCTION_FIXED_REGISTER_WRITE: {
+            const MinicCoreValueId source = ins->value.fixed_register_write.source;
+            const MinicCoreFixedRegisterBinding *binding;
+            const char *physical;
+            /* Shared semantic verifier proves the ABI binding+SSA. The
+             * target requalifies exact LoongArch hardware state. Linux
+             * relocation updates the live $tp thread_info pointer; ordinary
+             * per-CPU assignment updates $r21. Neither is a C memory store. */
+            if (!minic_multi_direct_fixed_register_write_shape(
+                    program, target, fn, ins, &binding) ||
+                !((binding->register_name_length == 4U &&
+                   memcmp(binding->register_name, "$r21", 4U) == 0 &&
+                   minic_type_equal(binding->type, minic_type_unsigned_long())) ||
+                  (binding->register_name_length == 3U &&
+                   memcmp(binding->register_name, "$tp", 3U) == 0 &&
+                   minic_type_is_pointer(binding->type))))
+                return minic_multi_direct_machine_reject(
+                    fn, "loongarch64", name, "fixed_register_write",
+                    reject_block, reject_ins, __LINE__);
+            physical = binding->register_name_length == 3U ? "$tp" : "$r21";
+            if (!emit_sp_mem(out, "ld.d", "$t0", minic_lp64_frame_value_offset(frame_plan, source)) ||
+                fprintf(out, "  move %s, $t0\n", physical) < 0)
+                return minic_multi_direct_machine_reject(
+                    fn, "loongarch64", name, "fixed_register_write",
+                    reject_block, reject_ins, __LINE__);
+            *needs_writeback = false;
+            return true;
+        }
+        case MINIC_CORE_INSTRUCTION_FIXED_REGISTER_READ: {
+            const MinicCoreFixedRegisterBinding *binding;
+            const char *physical;
+            /* Fixed TP/r21 are architectural, independent of a realigned
+             * local frame. A live SP read in a dynamic/realigned frame must
+             * remain explicitly rejected: its value differs across allocas. */
+            if (!minic_multi_direct_fixed_register_read_shape(
+                    program, target, fn, ins, &binding) ||
+                (binding->register_name_length != 3U &&
+                 binding->register_name_length != 4U))
+                return minic_multi_direct_machine_reject(
+                    fn, "loongarch64", name, "fixed_register_read",
+                    reject_block, reject_ins, __LINE__);
+            if (binding->register_name_length == 3U &&
+                memcmp(binding->register_name, "$tp", 3U) == 0)
+                physical = "$tp";
+            else if (binding->register_name_length == 3U &&
+                     memcmp(binding->register_name, "$sp", 3U) == 0)
+                physical = "$sp";
+            else if (binding->register_name_length == 4U &&
+                     memcmp(binding->register_name, "$r21", 4U) == 0)
+                physical = "$r21";
+            else
+                return minic_multi_direct_machine_reject(
+                    fn, "loongarch64", name, "fixed_register_read",
+                    reject_block, reject_ins, __LINE__);
+            if (dynamic_frame && strcmp(physical, "$sp") == 0)
+                return minic_multi_direct_machine_reject(
+                    fn, "loongarch64", name, "fixed_register_read",
+                    reject_block, reject_ins, __LINE__);
+            if (fprintf(out, "  move $t0, %s\n", physical) < 0)
+                return false;
+            break;
+        }
         case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT: {
             size_t width = 0U;
             bool sign = false;
@@ -84,8 +320,13 @@ bool minic_loongarch64_emit_residual_instruction(
         }
         case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS: {
             const char *symbol;
+            /* la.local is a PC-relative, base-independent kernel PIE
+             * address for a proven internal definition. All other data
+             * references use LoongArch's GOT-based la.global sequence. */
             if (!minic_multi_direct_global_address_symbol(fn, ins, &symbol) ||
-                fprintf(out, "  la.global $t0, %s\n", symbol) < 0 ||
+                fprintf(out, "  %s $t0, %s\n",
+                        minic_target_info_elf_object_is_tu_local(program, symbol)
+                            ? "la.local" : "la.global", symbol) < 0 ||
                 !emit_sp_mem(out, "st.d", "$t0", offset))
                 return minic_multi_direct_machine_reject(fn, "loongarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
@@ -94,31 +335,61 @@ bool minic_loongarch64_emit_residual_instruction(
         case MINIC_CORE_INSTRUCTION_FUNCTION_ADDRESS: {
             const char *symbol;
             if (!minic_multi_direct_function_address_symbol(fn, ins, &symbol) ||
-                fprintf(out, "  la.global $t0, %s\n", symbol) < 0 ||
+                fprintf(out, "  %s $t0, %s\n",
+                        minic_target_info_elf_function_is_tu_local(program, symbol)
+                            ? "la.local" : "la.global", symbol) < 0 ||
                 !emit_sp_mem(out, "st.d", "$t0", offset)) return minic_multi_direct_machine_reject(fn, "loongarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
             { *needs_writeback = false; return true; }
         }
+        case MINIC_CORE_INSTRUCTION_BLOCK_ADDRESS: {
+            MinicCoreBlockId destination;
+            /* Local label is a function-private PC-relative address, never
+             * a global/GOT symbol. Share only Core shape with AArch64. */
+            if (!minic_multi_direct_block_address_shape(
+                    fn, ins, &destination) ||
+                fprintf(out, "  la.local $t0, .Lmini_loong_f%zu_b%u\n",
+                        id, (unsigned int)destination) < 0 ||
+                !emit_sp_mem(out, "st.d", "$t0", offset))
+                return minic_multi_direct_machine_reject(
+                    fn, "loongarch64", name, reject_stage,
+                    reject_block, reject_ins, __LINE__);
+            { *needs_writeback = false; return true; }
+        }
         case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS: {
             size_t object_offset;
+            if ((native_opcode_presence_checked && emits_no_native_opcode) ||
+                (!native_opcode_presence_checked &&
+                 loong_address_only_folded_uses(
+                     program, target, fn, frame_plan, ins->result, 0U))) {
+                *needs_writeback = false;
+                return true;
+            }
             if (!minic_multi_direct_object_address_location(
                     fn, ins, frame_plan, &object_offset) ||
-                fprintf(out, "  li.d $t0, %zu\n"
-                             "  add.d $t0, %s, $t0\n",
-                        object_offset, dynamic_frame ? "$s0" : "$sp") < 0 ||
+                !minic_loongarch64_emit_frame_address(
+                    out, "$t0", object_offset, dynamic_frame) ||
                 !emit_sp_mem(out, "st.d", "$t0", offset)) return minic_multi_direct_machine_reject(fn, "loongarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
             { *needs_writeback = false; return true; }
         }
 
         case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS: {
+            if ((native_opcode_presence_checked && emits_no_native_opcode) ||
+                (!native_opcode_presence_checked &&
+                 loong_proven_frame_address(fn, ins->result, 0U) &&
+                 loong_address_only_folded_uses(
+                     program, target, fn, frame_plan, ins->result, 0U))) {
+                *needs_writeback = false;
+                return true;
+            }
             /* The full Core DataLayout byte offset may exceed signed imm12.
              * li.d + add.d preserves the computed record layout. */
             MinicCoreValueId base;
             size_t bytes;
             if (!minic_multi_direct_field_address_shape(
                     fn, ins, &base, &bytes) ||
-                !emit_sp_mem(out, "ld.d", "$t0", (size_t)base * 8U))
+                !emit_sp_mem(out, "ld.d", "$t0", minic_lp64_frame_value_offset(frame_plan, base)))
                 return minic_multi_direct_machine_reject(fn, "loongarch64", name, reject_stage,
                                            reject_block, reject_ins, __LINE__);
             if (bytes != 0U) {
@@ -160,21 +431,39 @@ bool minic_loongarch64_emit_residual_instruction(
             if (!minic_multi_direct_pointer_offset_shape(
                     program, target, fn, ins, (size_t)-1, &iw, &signed_index) ||
                 /* Full-width stride literal; keep LoongArch64-only assembly. */
-                !emit_sp_mem(out, "ld.d", "$t0", (size_t)base * 8U) ||
+                !emit_sp_mem(out, "ld.d", "$t0", minic_lp64_frame_value_offset(frame_plan, base)) ||
                 !emit_sp_mem(out, iw == 1U
                                   ? (signed_index ? "ld.b" : "ld.bu")
                                   : iw == 2U
                                       ? (signed_index ? "ld.h" : "ld.hu")
                                       : iw == 8U ? "ld.d"
                                       : (signed_index ? "ld.w" : "ld.wu"),
-                             "$t1", (size_t)index * 8U))
+                             "$t1", minic_lp64_frame_value_offset(frame_plan, index)))
                 return minic_multi_direct_machine_reject(fn, "loongarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
             if (stride != 0U) {
-                if (fprintf(out, "  li.d $t2, %zu\n"
-                                 "  mul.d $t1, $t1, $t2\n"
-                                 "  %s $t0, $t0, $t1\n", stride,
+                /* Multiplication by an exact power of two is the same
+                 * modulo-2^64 index scaling as a left shift, including
+                 * negative signed indices. Keep arbitrary strides on the
+                 * original full-width multiply path. */
+                if ((stride & (stride - 1U)) == 0U) {
+                    size_t shift = 0U;
+                    size_t remaining = stride;
+                    while (remaining > 1U) {
+                        remaining >>= 1U;
+                        ++shift;
+                    }
+                    if ((shift != 0U &&
+                         fprintf(out, "  slli.d $t1, $t1, %zu\n", shift) < 0) ||
+                        fprintf(out, "  %s $t0, $t0, $t1\n",
                             ins->value.pointer_offset.subtract ? "sub.d" : "add.d") < 0)
+                        return minic_multi_direct_machine_reject(
+                            fn, "loongarch64", name, reject_stage,
+                            reject_block, reject_ins, __LINE__);
+                } else if (fprintf(out, "  li.d $t2, %zu\n"
+                                        "  mul.d $t1, $t1, $t2\n"
+                                        "  %s $t0, $t0, $t1\n", stride,
+                                   ins->value.pointer_offset.subtract ? "sub.d" : "add.d") < 0)
                     return minic_multi_direct_machine_reject(fn, "loongarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
             }
@@ -193,14 +482,21 @@ bool minic_loongarch64_emit_residual_instruction(
                     fn, "loongarch64", name, reject_stage, reject_block,
                     reject_ins, __LINE__);
             if (pointer_to_integer) {
-                if (!emit_sp_mem(out, "ld.d", "$t0", (size_t)source * 8U))
+                /* A C pointer cast to _Bool is 0/1, not its low byte and
+                 * not the original 64-bit address. The legacy Common
+                 * validator returns 0 for a full 64-bit transfer, newer
+                 * callers may explicitly report 8; only _Bool reports 1. */
+                if ((src_width != 0U && src_width != 1U && src_width != 8U) ||
+                    !emit_sp_mem(out, "ld.d", "$t0", minic_lp64_frame_value_offset(frame_plan, source)) ||
+                    (src_width == 1U &&
+                     fputs("  sltu $t0, $zero, $t0\n", out) == EOF))
                     return minic_multi_direct_machine_reject(fn, "loongarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
                 break;
             }
             if (!emit_sp_mem(out, (src_pointer || src_width == 8U)
                                  ? "ld.d" : "ld.w", "$t0",
-                             (size_t)source * 8U)) return minic_multi_direct_machine_reject(fn, "loongarch64", name, reject_stage,
+                             minic_lp64_frame_value_offset(frame_plan, source))) return minic_multi_direct_machine_reject(fn, "loongarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
             if (!src_pointer && src_width != 8U &&
                 (!minic_loongarch64_emit_integer_normalize(out, src_width, src_signed) ||
@@ -215,10 +511,12 @@ bool minic_loongarch64_emit_residual_instruction(
             /* LoongArch LP64D va_list is a scalar byte cursor.  The
              * register bank saved at the top of this frame runs directly
              * into the caller's overflow stack slots at entry SP. */
-            if (va_count != 1U || !minic_type_is_pointer(ins->type) ||
+            if (va_count == 0U ||
+                ins->value.variadic_address.copy_destination ||
+                !minic_type_is_pointer(ins->type) ||
                 ins->result >= fn->value_count ||
                 fprintf(out, "  li.d $t0, %zu\n",
-                        frame - 64U + va_gp * 8U) < 0 ||
+                        ctx->va_base + va_gp * 8U) < 0 ||
                 fprintf(out, "  add.d $t0, %s, $t0\n",
                         dynamic_frame ? "$s0" : "$sp") < 0)
                 return minic_multi_direct_machine_reject(fn, "loongarch64", name,
@@ -230,7 +528,7 @@ bool minic_loongarch64_emit_residual_instruction(
             const MinicCoreValueId count = ins->value.operand;
             if (!minic_multi_direct_dynamic_stack_alloc_shape(
                     fn, ins, dynamic_frame) ||
-                !emit_sp_mem(out, "ld.d", "$t0", (size_t)count * 8U) ||
+                !emit_sp_mem(out, "ld.d", "$t0", minic_lp64_frame_value_offset(frame_plan, count)) ||
                 fprintf(out,
                     "  addi.d $t1, $t0, 15\n"
                     "  sltu $t2, $t1, $t0\n"
@@ -265,9 +563,11 @@ bool minic_loongarch64_emit_residual_instruction(
                         return minic_multi_direct_machine_reject(
                             fn, "loongarch64", name, reject_stage,
                             reject_block, reject_ins, __LINE__);
-                } else if (!emit_sp_mem(out,
+                } else if ((!operand_in_previous_gp && !emit_sp_mem(out,
                                  cast.source_width == 8U ? "ld.d" : "ld.w",
-                                 "$t0", (size_t)src * 8U) ||
+                                 "$t0", minic_lp64_frame_value_offset(frame_plan, src))) ||
+                           (operand_in_previous_gp && cast.source_width != 8U &&
+                            fputs("  slli.w $t0, $t0, 0\n", out) == EOF) ||
                            (cast.source_width < 8U &&
                             !minic_loongarch64_emit_integer_normalize(
                                 out, cast.source_width, cast.source_signed)) ||
@@ -304,9 +604,11 @@ bool minic_loongarch64_emit_residual_instruction(
                         reject_block, reject_ins, __LINE__);
                 break;
             }
-            if (!emit_sp_mem(out,
+            if ((!operand_in_previous_gp && !emit_sp_mem(out,
                     cast.source_width == 8U ? "ld.d" : "ld.w",
-                    "$t0", (size_t)src * 8U))
+                    "$t0", minic_lp64_frame_value_offset(frame_plan, src))) ||
+                (operand_in_previous_gp && cast.source_width != 8U &&
+                 fputs("  slli.w $t0, $t0, 0\n", out) == EOF))
                 return minic_multi_direct_machine_reject(
                     fn, "loongarch64", name, reject_stage,
                     reject_block, reject_ins, __LINE__);

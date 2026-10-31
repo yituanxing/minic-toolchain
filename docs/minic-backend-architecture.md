@@ -357,7 +357,7 @@ GCC/Clang option ownership guidance:
 | ISA availability | `-march` / RISC-V extensions | Native emission and required soft libcalls; exact RV32I and RV64 profiles with final ISA audit |
 | Calling convention | `-mabi`, float ABI | Register/stack argument and return placement; never infer an ABI solely from an ISA name |
 | CPU tuning | `-mcpu`, `-mtune` | Scheduling/cost model, should **not** alter ABI; not implemented, reject |
-| Addressing | `-mcmodel`, `-fpic/-fPIC/-fpie/-fPIE`, `-mrelax` | Relocations, code model, GOT/PLT, ELF load model; RV64 PIC assembly qualified only, other modes not claimed |
+| Addressing | `-mcmodel`, `-fpic/-fPIC/-fpie/-fPIE`, `-mrelax` | Relocations, code model, GOT/PLT, ELF load model; RV64/x86/AArch64/LoongArch64 have target-owned PIC address lowering; RV32 and unrelated code-model options remain fail-closed. AArch/Loong complete GNU PIE linking/QEMU validation remains a separate acceptance gate |
 | C language ABI | `-fsigned-char`, `-funsigned-char`, `-fshort-wchar`, `-fshort-enums` | Char sign and promoted values, wchar size, enum layout; first two option families supported, short-enums not qualified |
 | C semantic/optimization assumptions | `-fwrapv`, `-fstrict-aliasing`, `-ffast-math`, `-O*` | Observable overflow, aliasing, FP and optimization behavior; no false compatibility: remain unimplemented |
 | Runtime/object contract | `-ffreestanding`, `-fno-builtin`, `-fcommon`, `-fvisibility`, TLS, stack protector, unwind flags | Header/runtime expectations, linkage, dynamic TLS and exception/security sequences; supported cases stay narrowly scoped |

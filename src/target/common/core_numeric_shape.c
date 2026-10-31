@@ -39,6 +39,174 @@ bool minic_core_integer_overflow_shape(
            (*width == 4U || *width == 8U);
 }
 
+bool minic_core_integer_overflow_mixed_add_i32_shape(
+    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
+    bool *signed_left) {
+    MinicCoreValueId left, right, address;
+    MinicType result_type;
+    size_t left_width, right_width, result_width;
+    bool left_sign, right_sign, result_sign;
+    if (program == NULL || target == NULL || fn == NULL || ins == NULL ||
+        signed_left == NULL ||
+        ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW ||
+        ins->value.integer_overflow.operator_kind != MINIC_CORE_INTEGER_OVERFLOW_ADD)
+        return false;
+    left = ins->value.integer_overflow.left;
+    right = ins->value.integer_overflow.right;
+    address = ins->value.integer_overflow.result_address;
+    if (left >= fn->value_count || right >= fn->value_count ||
+        address >= fn->value_count ||
+        !minic_type_pointee(fn->values[address].type, &result_type) ||
+        !minic_type_is_integer(result_type) ||
+        minic_type_is_bool_integer(result_type) ||
+        minic_type_is_const(result_type) ||
+        minic_type_is_volatile(result_type) ||
+        !minic_lp64_scalar_integer_width(program, target, result_type,
+                                         &result_width, &result_sign) ||
+        !minic_lp64_scalar_integer_width(program, target,
+                                         fn->values[left].type,
+                                         &left_width, &left_sign) ||
+        !minic_lp64_scalar_integer_width(program, target,
+                                         fn->values[right].type,
+                                         &right_width, &right_sign) ||
+        result_width != 4U || !result_sign)
+        return false;
+    if (left_width == 4U && left_sign &&
+        right_width == 8U && !right_sign) {
+        *signed_left = true;
+        return true;
+    }
+    if (left_width == 8U && !left_sign &&
+        right_width == 4U && right_sign) {
+        *signed_left = false;
+        return true;
+    }
+    return false;
+}
+
+bool minic_core_integer_overflow_u64_u32_to_i32_shape(
+    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
+    bool *wide_left) {
+    MinicCoreValueId left, right, address;
+    MinicType result_type;
+    size_t left_width, right_width, result_width;
+    bool left_sign, right_sign, result_sign;
+    if (!program || !target || !fn || !ins || !wide_left ||
+        ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW ||
+        ins->value.integer_overflow.operator_kind !=
+            MINIC_CORE_INTEGER_OVERFLOW_ADD)
+        return false;
+    left = ins->value.integer_overflow.left;
+    right = ins->value.integer_overflow.right;
+    address = ins->value.integer_overflow.result_address;
+    if (left >= fn->value_count || right >= fn->value_count ||
+        address >= fn->value_count ||
+        !minic_type_pointee(fn->values[address].type, &result_type) ||
+        !minic_type_is_integer(result_type) ||
+        minic_type_is_bool_integer(result_type) ||
+        minic_type_is_const(result_type) ||
+        minic_type_is_volatile(result_type) ||
+        !minic_lp64_scalar_integer_width(program, target, result_type,
+                                         &result_width, &result_sign) ||
+        !minic_lp64_scalar_integer_width(program, target,
+                                         fn->values[left].type,
+                                         &left_width, &left_sign) ||
+        !minic_lp64_scalar_integer_width(program, target,
+                                         fn->values[right].type,
+                                         &right_width, &right_sign) ||
+        result_width != 4U || !result_sign || left_sign || right_sign)
+        return false;
+    if (left_width == 8U && right_width == 4U) {
+        *wide_left = true;
+        return true;
+    }
+    if (left_width == 4U && right_width == 8U) {
+        *wide_left = false;
+        return true;
+    }
+    return false;
+}
+
+bool minic_core_integer_overflow_mixed_multiply_i32_shape(
+    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
+    bool *signed_left, bool *signed_right, bool *signed_result) {
+    MinicCoreValueId lhs, rhs, address;
+    MinicType result_type;
+    size_t left_width, right_width, result_width;
+    if (!program || !target || !fn || !ins || !signed_left ||
+        !signed_right || !signed_result ||
+        ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW ||
+        ins->value.integer_overflow.operator_kind !=
+            MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY)
+        return false;
+    lhs = ins->value.integer_overflow.left;
+    rhs = ins->value.integer_overflow.right;
+    address = ins->value.integer_overflow.result_address;
+    if (lhs >= fn->value_count || rhs >= fn->value_count ||
+        address >= fn->value_count ||
+        !minic_type_pointee(fn->values[address].type, &result_type) ||
+        !minic_type_is_integer(result_type) ||
+        minic_type_is_bool_integer(result_type) ||
+        minic_type_is_const(result_type) ||
+        minic_type_is_volatile(result_type) ||
+        !minic_lp64_scalar_integer_width(program, target, result_type,
+                                         &result_width, signed_result) ||
+        !minic_lp64_scalar_integer_width(program, target,
+                                         fn->values[lhs].type,
+                                         &left_width, signed_left) ||
+        !minic_lp64_scalar_integer_width(program, target,
+                                         fn->values[rhs].type,
+                                         &right_width, signed_right) ||
+        left_width != 4U || right_width != 4U || result_width != 4U)
+        return false;
+    /* Common is only classifying an otherwise unsupported mixed ABI shape.
+     * Uniform types are already governed by the original shape validator. */
+    return *signed_left != *signed_right || *signed_left != *signed_result;
+}
+
+bool minic_core_integer_overflow_narrow_result_shape(
+    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
+    MinicCoreIntegerOverflowNarrowShape *shape) {
+    MinicCoreValueId lhs, rhs, address;
+    MinicType result_type;
+    int op;
+    if (!program || !target || !fn || !ins || !shape ||
+        ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW)
+        return false;
+    op = ins->value.integer_overflow.operator_kind;
+    lhs = ins->value.integer_overflow.left;
+    rhs = ins->value.integer_overflow.right;
+    address = ins->value.integer_overflow.result_address;
+    if ((op != MINIC_CORE_INTEGER_OVERFLOW_ADD &&
+         op != MINIC_CORE_INTEGER_OVERFLOW_SUBTRACT &&
+         op != MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY) ||
+        lhs >= fn->value_count || rhs >= fn->value_count ||
+        address >= fn->value_count ||
+        !minic_type_pointee(fn->values[address].type, &result_type) ||
+        !minic_type_is_integer(result_type) ||
+        minic_type_is_enum(result_type) ||
+        minic_type_is_bool_integer(result_type) ||
+        minic_type_is_const(result_type) ||
+        minic_type_is_volatile(result_type) ||
+        !minic_lp64_scalar_integer_width(
+            program, target, result_type,
+            &shape->result_width, &shape->result_signed) ||
+        !minic_lp64_scalar_integer_width(
+            program, target, fn->values[lhs].type,
+            &shape->left_width, &shape->left_signed) ||
+        !minic_lp64_scalar_integer_width(
+            program, target, fn->values[rhs].type,
+            &shape->right_width, &shape->right_signed))
+        return false;
+    return (shape->result_width == 1U || shape->result_width == 2U) &&
+           shape->left_width >= 1U && shape->left_width <= 4U &&
+           shape->right_width >= 1U && shape->right_width <= 4U;
+}
+
 /* CLZ/CTZ are defined here for unsigned 8/16/32/64 Core operands.
  * The ISA owns masking or bitfield extraction and exact machine opcodes. */
 bool minic_core_integer_bitscan_shape(

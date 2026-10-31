@@ -44,14 +44,26 @@ typedef struct MinicParserOrdinaryBinding {
     MinicEnumeratorId enumerator_id;
 } MinicParserOrdinaryBinding;
 
-typedef struct MinicParserRecordTag {
+/* struct, union, and enum share one C tag namespace. Ordinary identifiers,
+ * including enumerators, live in a distinct namespace. */
+typedef enum MinicParserTagKind {
+    MINIC_PARSER_TAG_STRUCT,
+    MINIC_PARSER_TAG_UNION,
+    MINIC_PARSER_TAG_ENUM
+} MinicParserTagKind;
+
+typedef struct MinicParserTagBinding {
     MinicSourceSpan name_span;
-    MinicRecordId record_id;
-} MinicParserRecordTag;
+    MinicParserTagKind kind;
+    union {
+        MinicRecordId record_id;
+        MinicEnumId enum_id;
+    } entity;
+} MinicParserTagBinding;
 
 typedef struct MinicParserScopeFrame {
     size_t binding_begin;
-    size_t record_tag_begin;
+    size_t tag_begin;
     size_t enum_constant_begin;
     MinicCleanupContextId cleanup_context;
 } MinicParserScopeFrame;
@@ -69,11 +81,6 @@ typedef struct MinicParserEnumConstant {
     MinicEnumeratorId enumerator_id;
 } MinicParserEnumConstant;
 
-typedef struct MinicParserEnumTag {
-    MinicSourceSpan name_span;
-    MinicEnumId enum_id;
-} MinicParserEnumTag;
-
 typedef struct MinicParserSwitchContext {
     uint64_t case_lower_values[MINIC_PARSER_MAX_SWITCH_CASES];
     uint64_t case_upper_values[MINIC_PARSER_MAX_SWITCH_CASES];
@@ -82,7 +89,25 @@ typedef struct MinicParserSwitchContext {
     bool has_default;
 } MinicParserSwitchContext;
 
+/* One translation-unit owned symbol-fixup table. A GNU function alias can
+ * name a definition that appears later in the same preprocessed C source;
+ * do not fabricate a prototype or defer resolution into a machine backend. */
+typedef struct MinicParserPendingFunctionAlias {
+    MinicFunctionId alias_id;
+    MinicSourceSpan symbol_literal;
+} MinicParserPendingFunctionAlias;
+
+/* Borrowed source span valid only during parsing.  The persistent function
+ * entity must copy the message into the Program's owned storage. */
+typedef struct MinicParsedFunctionDiagnostic {
+    MinicSourceSpan error_literal;
+    MinicSourceSpan warning_literal;
+} MinicParsedFunctionDiagnostic;
+
 typedef struct MinicParser {
+    /* Parser probes copy this structure by value. Only the original parser
+     * owns mutable lookup-cache storage; a probe must use linear lookup. */
+    const struct MinicParser *cache_owner;
     const char *path;
     const char *source;
     MinicLexer lexer;
@@ -110,6 +135,9 @@ typedef struct MinicParser {
     /* Allocated on the first actual switch. Lexer-only speculative Parser
        snapshots borrow the table; only the top-level Parser owns it. */
     MinicParserSwitchContext *switch_contexts;
+    MinicParserPendingFunctionAlias *pending_function_aliases;
+    size_t pending_function_alias_count;
+    size_t pending_function_alias_capacity;
 
     bool label_context_initialized;
     MinicFunctionId label_context_function;
@@ -123,9 +151,9 @@ typedef struct MinicParser {
     size_t local_binding_count;
     size_t local_binding_capacity;
 
-    MinicParserRecordTag *record_tags;
-    size_t record_tag_count;
-    size_t record_tag_capacity;
+    MinicParserTagBinding *tags;
+    size_t tag_count;
+    size_t tag_capacity;
 
     MinicParserScopeFrame *scopes;
     size_t scope_count;
@@ -134,10 +162,6 @@ typedef struct MinicParser {
     MinicParserEnumConstant *enum_constants;
     size_t enum_constant_count;
     size_t enum_constant_capacity;
-
-    MinicParserEnumTag *enum_tags;
-    size_t enum_tag_count;
-    size_t enum_tag_capacity;
 
     size_t perf_find_local_calls;
     size_t perf_find_local_steps;
@@ -220,10 +244,7 @@ void minic_parser_error(MinicParser *parser, const char *format, ...);
 bool minic_parser_advance(MinicParser *parser);
 bool minic_parser_expect(MinicParser *parser, MinicTokenKind kind, const char *message);
 bool minic_parser_parse_integer_value(MinicParser *parser, int *value);
-bool minic_parser_parse_integer_value64(MinicParser *parser, int64_t *value);
 bool minic_parser_parse_zero_pointer_constant(MinicParser *parser);
-bool minic_parser_parse_null_pointer_constant_expression(MinicParser *parser,
-                                                         MinicType target_type);
 bool minic_parser_parse_unsigned_integer_value64(MinicParser *parser, uint64_t *value);
 bool minic_parser_current_integer_literal_syntax(const MinicParser *parser,
                                                  MinicIntegerLiteralBase *base,
@@ -237,10 +258,9 @@ bool minic_parser_parse_integer_initializer_bits(MinicParser *parser,
 bool minic_parser_parse_static_storage_initializer_value(MinicParser *parser,
                                                          MinicGlobalObjectId object_id,
                                                          MinicType type);
-bool minic_parser_parse_alignof_type_value(MinicParser *parser,
-                                           int64_t *value,
-                                           MinicSourceSpan *span);
 bool minic_parser_token_starts_type_name(const MinicParser *parser, MinicToken token);
+bool minic_parser_materialize_builtin_va_list_source_type(
+    MinicParser *parser, MinicType *type);
 bool minic_parser_token_starts_declaration_specifiers(const MinicParser *parser, MinicToken token);
 bool minic_parser_parse_local_storage_class(MinicParser *parser, bool *is_register_storage);
 bool minic_parser_parse_type_specifiers(MinicParser *parser, MinicType *type);
@@ -261,18 +281,25 @@ bool minic_parser_parse_parameter_list(MinicParser *parser,
                                        size_t *parameter_count,
                                        bool require_names,
                                        bool *is_variadic);
-bool minic_parser_function_signature_matches(const MinicFunction *function,
+bool minic_parser_function_signature_matches(const MinicC0Program *program,
+                                             const MinicFunction *function,
                                              MinicType return_type,
                                              const MinicType *parameter_types,
                                              size_t parameter_count,
                                              bool is_variadic);
-bool minic_parser_parse_gnu_function_attributes(MinicParser *parser);
-bool minic_parser_parse_gnu_section_attribute(
-    MinicParser *parser, char *buffer, size_t capacity, size_t *length, bool *has_section);
+bool minic_parser_calling_convention_fixed_scalar_supported(
+    const MinicParser *parser, MinicFunctionCallingConvention convention,
+    MinicType return_type, const MinicType *parameter_types,
+    size_t parameter_count, bool is_variadic);
+bool minic_parser_parse_gnu_function_attributes(
+    MinicParser *parser, MinicParsedFunctionDiagnostic *diagnostic);
 bool minic_parser_parse_gnu_prefix_function_attributes(MinicParser *parser,
                                                        bool is_internal,
-                                                       bool is_inline);
-bool minic_parser_parse_integer_constant_expression_value(MinicParser *parser, int64_t *value);
+                                                       bool is_inline,
+                                                       MinicParsedFunctionDiagnostic *diagnostic);
+bool minic_parser_persist_function_diagnostic(
+    MinicParser *parser, MinicFunctionId function_id,
+    const MinicParsedFunctionDiagnostic *diagnostic);
 bool minic_parser_parse_fixed_array_bound(MinicParser *parser, size_t *element_count);
 bool minic_parser_parse_array_designator_component(
     MinicParser *parser, size_t element_count, bool infer_bound, size_t *first, size_t *last);
@@ -286,34 +313,44 @@ size_t minic_parser_span_length(MinicSourceSpan span);
 bool minic_parser_span_equals(const MinicParser *parser,
                               MinicSourceSpan left,
                               MinicSourceSpan right);
-const MinicAttributeDescriptor *minic_parser_current_attribute(const MinicParser *parser);
-bool minic_parser_current_attribute_is(const MinicParser *parser,
-                                       MinicAttributeKind kind,
-                                       MinicAttributeTarget target);
 bool minic_parser_parse_gnu_attribute_lists(MinicParser *parser,
                                             MinicParsedAttributeConsumer consumer,
                                             void *context);
 bool minic_parser_collect_gnu_attribute_lists(MinicParser *parser,
                                               MinicParsedAttributeList *attributes);
+/* A single frontend policy for GNU attributes on function-pointer declarators
+ * (typedefs, parameters and record fields).  The target owns ABI admission;
+ * parse-only attributes never silently change a function type. */
+bool minic_parser_consume_function_pointer_attribute(MinicParser *parser,
+                                                      const MinicParsedAttribute *attribute,
+                                                      MinicType *pointer_type,
+                                                      bool *consumed);
+bool minic_parser_apply_function_pointer_declarator_attributes(
+    MinicParser *parser,
+    const MinicParsedAttributeList *attributes,
+    MinicType *pointer_type,
+    const char *unsupported_message);
 bool minic_parser_apply_section_attribute(MinicParser *parser,
                                           const MinicParsedAttribute *attribute,
                                           char *buffer,
                                           size_t capacity,
                                           size_t *length,
                                           bool *has_section);
-bool minic_parser_apply_object_attribute_list(MinicParser *parser,
-                                              const MinicParsedAttributeList *attributes,
-                                              char *section_name,
-                                              size_t section_capacity,
-                                              size_t *section_name_length,
-                                              bool *has_section,
-                                              size_t *explicit_alignment);
 bool minic_parser_parse_gnu_object_attribute_lists(MinicParser *parser,
                                                    char *section_name,
                                                    size_t section_capacity,
                                                    size_t *section_name_length,
                                                    bool *has_section,
                                                    size_t *explicit_alignment);
+bool minic_parser_parse_gnu_object_attribute_lists_with_used(
+    MinicParser *parser, char *section_name, size_t section_capacity,
+    size_t *section_name_length, bool *has_section,
+    size_t *explicit_alignment, bool *force_emit);
+bool minic_parser_apply_object_attribute_list_with_used(
+    MinicParser *parser, const MinicParsedAttributeList *attributes,
+    char *section_name, size_t section_capacity,
+    size_t *section_name_length, bool *has_section,
+    size_t *explicit_alignment, bool *force_emit);
 bool minic_parser_parse_gnu_object_attribute_lists_with_visibility(
     MinicParser *parser,
     char *section_name,
@@ -420,7 +457,6 @@ bool minic_parser_bind_enum_constant(MinicParser *parser,
                                      MinicEnumeratorId enumerator_id);
 MinicEnumeratorId minic_parser_find_enum_constant(const MinicParser *parser,
                                                   MinicSourceSpan name_span);
-MinicEnumId minic_parser_find_enum_tag(const MinicParser *parser, MinicSourceSpan name_span);
 bool minic_parser_parse_enum_specifier(MinicParser *parser, MinicType *enum_type);
 bool minic_parser_find_record_field_path(const MinicParser *parser,
                                          const MinicRecord *record,
@@ -437,7 +473,6 @@ MinicGlobalObjectId minic_parser_find_scoped_global_object(const MinicParser *pa
 MinicGlobalObjectId
 minic_parser_find_scoped_global_object_in_current_scope(const MinicParser *parser,
                                                         MinicSourceSpan name_span);
-bool minic_parser_name_bound(const MinicParser *parser, MinicSourceSpan name_span);
 MinicFunctionId minic_parser_find_function(const MinicParser *parser, MinicSourceSpan name_span);
 MinicGlobalObjectId minic_parser_find_global_object(const MinicParser *parser,
                                                     MinicSourceSpan name_span);
@@ -449,12 +484,20 @@ bool minic_parser_declare_block_scope_extern_object(MinicParser *parser,
                                                     MinicGlobalObjectId *object_id);
 MinicFixedRegisterBindingId minic_parser_find_fixed_register_binding(const MinicParser *parser,
                                                                      MinicSourceSpan name_span);
-MinicRecordId minic_parser_find_record(const MinicParser *parser, MinicSourceSpan name_span);
-MinicRecordId minic_parser_find_record_in_current_scope(const MinicParser *parser,
-                                                        MinicSourceSpan name_span);
+const MinicParserTagBinding *minic_parser_find_tag(const MinicParser *parser,
+                                                   MinicSourceSpan name_span);
+const MinicParserTagBinding *minic_parser_find_tag_in_current_scope(
+    const MinicParser *parser, MinicSourceSpan name_span);
+bool minic_parser_resolve_tag(MinicParser *parser, MinicSourceSpan name_span,
+                              MinicParserTagKind kind, bool current_scope_only,
+                              const MinicParserTagBinding **tag);
 bool minic_parser_bind_record_tag(MinicParser *parser,
                                   MinicSourceSpan name_span,
-                                  MinicRecordId record_id);
+                                  MinicRecordId record_id,
+                                  bool is_union);
+bool minic_parser_bind_enum_tag(MinicParser *parser,
+                                MinicSourceSpan name_span,
+                                MinicEnumId enum_id);
 MinicTypeAliasId minic_parser_find_type_alias(const MinicParser *parser, MinicSourceSpan name_span);
 
 bool minic_parser_parse_type_name_preserving_incomplete(MinicParser *parser, MinicType *type);
@@ -462,18 +505,19 @@ bool minic_parser_parse_record_definition_specifier(MinicParser *parser, MinicTy
 bool minic_parser_parse_record_definition(MinicParser *parser);
 bool minic_parser_parse_enum_definition(MinicParser *parser);
 bool minic_parser_parse_typedef(MinicParser *parser);
-bool minic_parser_parse_static_global(MinicParser *parser);
 bool minic_parser_parse_static_pointer_object_initializer(MinicParser *parser,
                                                           MinicGlobalObjectId object_id,
                                                           MinicType pointer_type);
 bool minic_parser_parse_static_global_after_head(MinicParser *parser,
+                                                 MinicType declaration_base,
                                                  MinicType object_type,
                                                  MinicSourceSpan name_span,
                                                  char *section_name,
                                                  size_t section_capacity,
                                                  size_t *section_name_length,
                                                  bool *has_section,
-                                                 size_t *explicit_alignment);
+                                                 size_t *explicit_alignment,
+                                                 bool *force_emit);
 bool minic_parser_parse_static_zero_declaration_list_after_head(MinicParser *parser,
                                                                 MinicType base_type,
                                                                 MinicType first_object_type,
@@ -481,8 +525,8 @@ bool minic_parser_parse_static_zero_declaration_list_after_head(MinicParser *par
                                                                 const char *shared_section_name,
                                                                 size_t shared_section_name_length,
                                                                 bool shared_has_section,
-                                                                size_t shared_explicit_alignment);
-bool minic_parser_parse_extern_global(MinicParser *parser);
+                                                                size_t shared_explicit_alignment,
+                                                                bool shared_force_emit);
 bool minic_parser_parse_extern_global_after_head(MinicParser *parser,
                                                  MinicType base_type,
                                                  MinicType first_object_type,
@@ -523,6 +567,9 @@ bool minic_parser_parse_string_literal_size(MinicParser *parser, uint64_t *size)
 bool minic_parser_add_string_literal_initializer(MinicParser *parser,
                                                  MinicGlobalObjectId object_id,
                                                  size_t *element_count);
+bool minic_parser_static_string_element_compatible(MinicParser *parser,
+                                                   MinicType element_type,
+                                                   MinicTokenKind literal_kind);
 bool minic_parser_parse_bounded_string_literal_values(MinicParser *parser,
                                                       size_t element_capacity,
                                                       int *values);
@@ -534,6 +581,10 @@ bool minic_parser_replace_zero_bounded_string_literal_initializer(MinicParser *p
                                                                   size_t first_slot,
                                                                   size_t element_capacity);
 bool minic_parser_parse_string_literal(MinicParser *parser, MinicExpressionId *expression_id);
+/* The existing C string concatenation/escape decoder also owns GNU
+ * function-symbol and register name strings. Target ABI validation follows. */
+bool minic_parser_parse_gnu_asm_name(
+    MinicParser *, char *, size_t, size_t *);
 bool minic_parser_parse_string_text(MinicParser *parser,
                                     char **text,
                                     size_t *length,

@@ -4,7 +4,108 @@
 #include "target/common/core_numeric_shape.h"
 #include "target/common/lp64_scalar.h"
 #include "target/loongarch64/frame_emit.h"
+#include <inttypes.h>
 #include <stdio.h>
+
+/* Core SSA constants are immutable and retain their defining instruction.
+ * An immediate machine operand may read those bits directly without a
+ * redundant frame reload.  Do not infer constants from arbitrary local
+ * slots, which can be rewritten by volatile/ASM or aliasing effects. */
+static bool loong_integer_constant_rhs(const MinicCoreFunction *fn,
+    MinicCoreValueId id, int64_t *value) {
+    const MinicCoreInstruction *definition;
+    if (fn == NULL || value == NULL || id >= fn->value_count ||
+        fn->values[id].definition >= fn->instruction_count)
+        return false;
+    definition = &fn->instructions[fn->values[id].definition];
+    if (definition->result != id ||
+        definition->kind != MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT)
+        return false;
+    *value = definition->value.integer_value;
+    return true;
+}
+
+/* Keep machine-immediate proof in one ISA owner. The dispatcher can then
+ * remove a single-use constant materialization whose only consumer reads
+ * its immutable Core definition directly; the emitter uses the identical
+ * encoding range rather than independently guessing at valid immediates. */
+bool minic_loongarch64_integer_rhs_immediate(
+    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
+    MinicCoreValueId *rhs_id, int64_t *encoded_immediate) {
+    MinicCoreValueId rhs;
+    size_t lw, rw;
+    bool ls, rs;
+    int64_t constant;
+    if (program == NULL || target == NULL || fn == NULL || ins == NULL)
+        return false;
+    switch (ins->kind) {
+    case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
+    case MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT:
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND:
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_XOR:
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR:
+        break;
+    default:
+        return false;
+    }
+    if (!minic_multi_direct_integer_binary_shape(
+            program, target, fn, ins, &lw, &rw, &ls, &rs))
+        return false;
+    rhs = ins->value.binary.right;
+    if (!loong_integer_constant_rhs(fn, rhs, &constant))
+        return false;
+    if (ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_ADD) {
+        if (constant < -2048 || constant > 2047) return false;
+    } else if (ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT) {
+        if (constant < -2047 || constant > 2048) return false;
+        constant = -constant;
+    } else if (constant < 0 || constant > 4095) {
+        return false;
+    }
+    if (rhs_id != NULL) *rhs_id = rhs;
+    if (encoded_immediate != NULL) *encoded_immediate = constant;
+    return true;
+}
+
+/* GNU checked-addition uses the original *mathematical* operand values,
+ * then converts to the destination type. Linux fs/udf/inode.c passes a
+ * compile-time sizeof that Core legally narrows to a signed i32 constant,
+ * and le32_to_cpu() supplies u32. The i32+u32 sum fits signed i64, while
+ * the signed i32 destination can overflow. Keep this contract explicit:
+ * never treat the u32 as signed or infer overflow from add.w alone. */
+static bool loong_checked_add_i32_u32_shape(
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
+    bool *signed_left) {
+    MinicCoreValueId left, right, address;
+    MinicType result;
+    if (fn == NULL || ins == NULL || signed_left == NULL ||
+        ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW ||
+        ins->value.integer_overflow.operator_kind !=
+            MINIC_CORE_INTEGER_OVERFLOW_ADD)
+        return false;
+    left = ins->value.integer_overflow.left;
+    right = ins->value.integer_overflow.right;
+    address = ins->value.integer_overflow.result_address;
+    if (left >= fn->value_count || right >= fn->value_count ||
+        address >= fn->value_count ||
+        !minic_type_pointee(fn->values[address].type, &result) ||
+        !minic_type_equal(result, minic_type_int()))
+        return false;
+    if (minic_type_equal(fn->values[left].type, minic_type_int()) &&
+        minic_type_equal(fn->values[right].type,
+                         minic_type_unsigned_int())) {
+        *signed_left = true;
+        return true;
+    }
+    if (minic_type_equal(fn->values[left].type,
+                         minic_type_unsigned_int()) &&
+        minic_type_equal(fn->values[right].type, minic_type_int())) {
+        *signed_left = false;
+        return true;
+    }
+    return false;
+}
 
 /* Keep dynamic-stack addressing behind the target frame helper. */
 #define emit_sp_mem(_out, _op, _reg, _offset) \
@@ -18,7 +119,7 @@ bool minic_loongarch64_emit_integer_instruction(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     const MinicLP64FramePlan *frame_plan,
-    bool dynamic_frame,
+    bool dynamic_frame, bool lhs_in_previous_gp,
     bool *needs_gp_store) {
     if (out == NULL || program == NULL || target == NULL ||
         fn == NULL || ins == NULL || frame_plan == NULL ||
@@ -164,7 +265,7 @@ bool minic_loongarch64_emit_integer_instruction(
             !emit_sp_mem(out, "ld.d", "$t0", src) ||
             !emit_sp_mem(out, "ld.d", "$t1", src + 8U) ||
             !emit_sp_mem(out, rw == 8U ? "ld.d" : "ld.w", "$t2",
-                         (size_t)rhs * 8U) ||
+                         minic_lp64_frame_value_offset(frame_plan, rhs)) ||
             fputs("  beqz $t2, 2f\n"
                   "  li.d $t4, 64\n"
                   "  bgeu $t2, $t4, 1f\n"
@@ -196,16 +297,124 @@ bool minic_loongarch64_emit_integer_instruction(
             size_t width;
             bool is_signed;
             if (!minic_core_integer_overflow_shape(
-                    program, target, fn, ins, &width, &is_signed))
-                return false;
+                    program, target, fn, ins, &width, &is_signed)) {
+                bool multiply_signed_left, multiply_signed_right;
+                bool multiply_signed_result;
+                bool add_signed_left;
+                if (loong_checked_add_i32_u32_shape(fn, ins,
+                                                    &add_signed_left)) {
+                    if (!emit_sp_mem(out, "ld.w", "$t0",
+                                     minic_lp64_frame_value_offset(frame_plan, lhs)) ||
+                        !emit_sp_mem(out, "ld.w", "$t1",
+                                     minic_lp64_frame_value_offset(frame_plan, rhs)) ||
+                        !emit_sp_mem(out, "ld.d", "$t2",
+                                     minic_lp64_frame_value_offset(frame_plan, address)) ||
+                        fputs(add_signed_left
+                                  ? "  bstrpick.d $t1, $t1, 31, 0\n"
+                                  : "  bstrpick.d $t0, $t0, 31, 0\n",
+                              out) == EOF ||
+                        fputs("  add.d $t3, $t0, $t1\n"
+                              "  add.w $t0, $t3, $zero\n"
+                              "  xor $t4, $t3, $t0\n"
+                              "  sltu $t4, $zero, $t4\n"
+                              "  st.w $t0, $t2, 0\n"
+                              "  move $t0, $t4\n", out) == EOF)
+                        return false;
+                    *needs_gp_store = true;
+                    return true;
+                }
+                if (minic_core_integer_overflow_mixed_multiply_i32_shape(
+                        program, target, fn, ins,
+                        &multiply_signed_left, &multiply_signed_right,
+                        &multiply_signed_result)) {
+                    /* Each input is exactly 32 bits, possibly signed. Their
+                     * exact mathematical product fits signed 64-bit even
+                     * for INT_MIN * UINT_MAX. Compare to the *destination*
+                     * range, not to ordinary C promotions. */
+                    if (!emit_sp_mem(out, "ld.w", "$t0", minic_lp64_frame_value_offset(frame_plan, lhs)) ||
+                        !emit_sp_mem(out, "ld.w", "$t1", minic_lp64_frame_value_offset(frame_plan, rhs)) ||
+                        !emit_sp_mem(out, "ld.d", "$t2", minic_lp64_frame_value_offset(frame_plan, address)) ||
+                        (!multiply_signed_left &&
+                         fputs("  bstrpick.d $t0, $t0, 31, 0\n", out) == EOF) ||
+                        (!multiply_signed_right &&
+                         fputs("  bstrpick.d $t1, $t1, 31, 0\n", out) == EOF) ||
+                        fputs("  mul.d $t3, $t0, $t1\n"
+                              "  add.w $t0, $t3, $zero\n", out) == EOF ||
+                        fputs(multiply_signed_result
+                                  ? "  xor $t4, $t3, $t0\n"
+                                  : "  srli.d $t4, $t3, 32\n", out) == EOF ||
+                        fputs("  sltu $t4, $zero, $t4\n"
+                              "  st.w $t0, $t2, 0\n"
+                              "  move $t0, $t4\n", out) == EOF)
+                        return false;
+                    *needs_gp_store = true;
+                    return true;
+                }
+                bool wide_left;
+                if (minic_core_integer_overflow_u64_u32_to_i32_shape(
+                        program, target, fn, ins, &wide_left)) {
+                    /* Exact GNU arithmetic: the mathematical sum has up
+                     * to 65 unsigned bits, even though the machine has
+                     * 64-bit GPRs. Include the high carry AND the loss
+                     * of signed-i32 representability after narrowing. */
+                    if (!emit_sp_mem(out, wide_left ? "ld.d" : "ld.w",
+                                     "$t0", minic_lp64_frame_value_offset(frame_plan, lhs)) ||
+                        !emit_sp_mem(out, wide_left ? "ld.w" : "ld.d",
+                                     "$t1", minic_lp64_frame_value_offset(frame_plan, rhs)) ||
+                        !emit_sp_mem(out, "ld.d", "$t2",
+                                     minic_lp64_frame_value_offset(frame_plan, address)) ||
+                        fputs(wide_left
+                              ? "  bstrpick.d $t1, $t1, 31, 0\n"
+                              : "  bstrpick.d $t0, $t0, 31, 0\n", out) == EOF ||
+                        fputs("  move $t3, $t0\n"
+                              "  add.d $t0, $t0, $t1\n"
+                              "  sltu $t3, $t0, $t3\n"
+                              "  add.w $t4, $t0, $zero\n"
+                              "  xor $t5, $t4, $t0\n"
+                              "  sltu $t5, $zero, $t5\n"
+                              "  or $t3, $t3, $t5\n"
+                              "  st.w $t4, $t2, 0\n"
+                              "  move $t0, $t3\n", out) == EOF)
+                        return false;
+                    *needs_gp_store = true;
+                    return true;
+                }
+                bool signed_left;
+                if (!minic_core_integer_overflow_mixed_add_i32_shape(
+                        program, target, fn, ins, &signed_left) ||
+                    !emit_sp_mem(out, "ld.d", "$t0", minic_lp64_frame_value_offset(frame_plan, lhs)) ||
+                    !emit_sp_mem(out, "ld.d", "$t1", minic_lp64_frame_value_offset(frame_plan, rhs)) ||
+                    !emit_sp_mem(out, "ld.d", "$t2", minic_lp64_frame_value_offset(frame_plan, address)) ||
+                    fputs(signed_left
+                          ? "  add.w $t0, $t0, $zero\n"
+                            "  srai.d $t3, $t0, 63\n"
+                          : "  add.w $t1, $t1, $zero\n"
+                            "  srai.d $t3, $t1, 63\n", out) == EOF ||
+                    fputs("  move $t4, $t0\n"
+                          "  add.d $t0, $t0, $t1\n"
+                          "  sltu $t5, $t0, $t4\n"
+                          "  add.d $t3, $t3, $t5\n"
+                          "  add.w $t4, $t0, $zero\n"
+                          "  xor $t5, $t4, $t0\n"
+                          "  sltu $t5, $zero, $t5\n"
+                          "  srai.d $t4, $t4, 63\n"
+                          "  xor $t3, $t3, $t4\n"
+                          "  sltu $t3, $zero, $t3\n"
+                          "  or $t3, $t3, $t5\n"
+                          "  st.w $t0, $t2, 0\n"
+                          "  move $t0, $t3\n", out) == EOF)
+                    return false;
+                *needs_gp_store = true;
+                return true;
+            }
             const int op = ins->value.integer_overflow.operator_kind;
             const bool wide = width == 8U;
             if (!emit_sp_mem(out, wide ? "ld.d" : "ld.w",
-                             "$t0", (size_t)lhs * 8U) ||
+                             "$t0", minic_lp64_frame_value_offset(frame_plan, lhs)) ||
                 !emit_sp_mem(out, wide ? "ld.d" : "ld.w",
-                             "$t1", (size_t)rhs * 8U) ||
+                             "$t1", minic_lp64_frame_value_offset(frame_plan, rhs)) ||
                 !emit_sp_mem(out, "ld.d",
-                             "$t2", (size_t)address * 8U))
+                             "$t2", minic_lp64_frame_value_offset(frame_plan, address)))
                 return false;
             if (!wide && !is_signed &&
                 fputs("  bstrpick.d $t0, $t0, 31, 0\n"
@@ -271,7 +480,7 @@ bool minic_loongarch64_emit_integer_instruction(
             if (!minic_core_integer_bitscan_shape(
                     program, target, fn, ins, &width) ||
                 !emit_sp_mem(out, width == 64U ? "ld.d" : "ld.w",
-                             "$t0", (size_t)operand * 8U))
+                             "$t0", minic_lp64_frame_value_offset(frame_plan, operand)))
                 return false;
             if (width < 32U &&
                 fputs(width == 8U
@@ -309,7 +518,7 @@ bool minic_loongarch64_emit_integer_instruction(
                     !emit_sp_mem(out, "ld.d", "$t0", src_offset) ||
                     !emit_sp_mem(out, "ld.d", "$t1", src_offset + 8U) ||
                     !emit_sp_mem(out, rw == 8U ? "ld.d" : "ld.w",
-                                 "$t2", (size_t)rhs * 8U) ||
+                                 "$t2", minic_lp64_frame_value_offset(frame_plan, rhs)) ||
                     fputs("  beqz $t2, 2f\n"
                           "  li.d $t4, 64\n"
                           "  bgeu $t2, $t4, 1f\n"
@@ -338,6 +547,8 @@ bool minic_loongarch64_emit_integer_instruction(
             bool ls, rs;
             bool wide;
             const char *op;
+            const char *immediate_op = NULL;
+            int64_t shift_count = 0;
             if (!minic_multi_direct_integer_shift_shape(
                     program, target, fn, ins, &lw, &rw, &ls, &rs))
                 return false;
@@ -349,13 +560,24 @@ bool minic_loongarch64_emit_integer_instruction(
                                   : "  sra.w $t0, $t0, $t1\n")
                           : (wide ? "  srl.d $t0, $t0, $t1\n"
                                   : "  srl.w $t0, $t0, $t1\n"));
+            if (loong_integer_constant_rhs(fn, rhs, &shift_count) &&
+                shift_count >= 0 && shift_count < (wide ? 64 : 32)) {
+                immediate_op =
+                    ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT
+                        ? (wide ? "slli.d" : "slli.w")
+                        : ls ? (wide ? "srai.d" : "srai.w")
+                             : (wide ? "srli.d" : "srli.w");
+            }
             if (!emit_sp_mem(out, wide ? "ld.d" : "ld.w",
-                             "$t0", (size_t)lhs * 8U) ||
+                             "$t0", minic_lp64_frame_value_offset(frame_plan, lhs)) ||
                 /* Signed narrow shift inputs require extension before sra. */
                 (lw < 4U && !minic_loongarch64_emit_integer_normalize(out, lw, ls)) ||
-                !emit_sp_mem(out, rw == 8U ? "ld.d" : "ld.w",
-                             "$t1", (size_t)rhs * 8U) ||
-                fputs(op, out) == EOF ||
+                (immediate_op != NULL
+                 ? fprintf(out, "  %s $t0, $t0, %" PRId64 "\n",
+                           immediate_op, shift_count) < 0
+                 : !emit_sp_mem(out, rw == 8U ? "ld.d" : "ld.w",
+                             "$t1", minic_lp64_frame_value_offset(frame_plan, rhs)) ||
+                   fputs(op, out) == EOF) ||
                 (!wide && !minic_loongarch64_emit_integer_normalize(out, lw, ls)))
                 return false;
             (void)rs;
@@ -371,8 +593,11 @@ bool minic_loongarch64_emit_integer_instruction(
             bool sign;
             if (!minic_multi_direct_integer_unary_shape(
                     program, target, fn, ins, &width, &sign) ||
-                !emit_sp_mem(out, width == 8U ? "ld.d" : "ld.w",
-                             "$t0", (size_t)operand * 8U) ||
+                (!lhs_in_previous_gp &&
+                 !emit_sp_mem(out, width == 8U ? "ld.d" : "ld.w",
+                              "$t0", minic_lp64_frame_value_offset(frame_plan, operand))) ||
+                (lhs_in_previous_gp && width != 8U &&
+                 fputs("  slli.w $t0, $t0, 0\n", out) == EOF) ||
                 fputs("  nor $t0, $t0, $zero\n", out) == EOF ||
                 (width != 8U && !minic_loongarch64_emit_integer_normalize(out, width, sign)))
                 return false;
@@ -385,8 +610,11 @@ bool minic_loongarch64_emit_integer_instruction(
             bool sign;
             if (!minic_multi_direct_integer_unary_shape(
                     program, target, fn, ins, &width, &sign) ||
-                !emit_sp_mem(out, width == 8U ? "ld.d" : "ld.w",
-                             "$t0", (size_t)operand * 8U) ||
+                (!lhs_in_previous_gp &&
+                 !emit_sp_mem(out, width == 8U ? "ld.d" : "ld.w",
+                              "$t0", minic_lp64_frame_value_offset(frame_plan, operand))) ||
+                (lhs_in_previous_gp && width != 8U &&
+                 fputs("  slli.w $t0, $t0, 0\n", out) == EOF) ||
                 fputs(width == 8U ? "  sub.d $t0, $zero, $t0\n"
                                   : "  sub.w $t0, $zero, $t0\n", out) == EOF ||
                 (width != 8U && !minic_loongarch64_emit_integer_normalize(out, width, sign)))
@@ -403,6 +631,8 @@ bool minic_loongarch64_emit_integer_instruction(
             bool ls, rs;
             bool wide;
             const char *opcode;
+            int64_t constant = 0;
+            bool immediate = false;
             if (!minic_multi_direct_integer_binary_shape(
                     program, target, fn, ins, &lw, &rw, &ls, &rs))
                 return false;
@@ -413,11 +643,20 @@ bool minic_loongarch64_emit_integer_instruction(
                 : ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT
                     ? (wide ? "  sub.d $t0, $t0, $t1\n" : "  sub.w $t0, $t0, $t1\n")
                     : (wide ? "  mul.d $t0, $t0, $t1\n" : "  mul.w $t0, $t0, $t1\n");
-            if (!emit_sp_mem(out, wide ? "ld.d" : "ld.w", "$t0",
-                             (size_t)lhs * 8U) ||
-                !emit_sp_mem(out, wide ? "ld.d" : "ld.w", "$t1",
-                             (size_t)rhs * 8U) ||
-                fputs(opcode, out) == EOF ||
+            if (ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY)
+                immediate = minic_loongarch64_integer_rhs_immediate(
+                    program, target, fn, ins, NULL, &constant);
+            if ((!lhs_in_previous_gp &&
+                 !emit_sp_mem(out, wide ? "ld.d" : "ld.w", "$t0",
+                             minic_lp64_frame_value_offset(frame_plan, lhs))) ||
+                (lhs_in_previous_gp && !wide &&
+                 fputs("  slli.w $t0, $t0, 0\n", out) == EOF) ||
+                (immediate
+                 ? fprintf(out, "  addi.%c $t0, $t0, %" PRId64 "\n",
+                           wide ? 'd' : 'w', constant) < 0
+                 : !emit_sp_mem(out, wide ? "ld.d" : "ld.w", "$t1",
+                            minic_lp64_frame_value_offset(frame_plan, rhs)) ||
+                   fputs(opcode, out) == EOF) ||
                 (!wide && !minic_loongarch64_emit_integer_normalize(out, lw, ls)))
                 return false;
             *needs_gp_store = true;
@@ -431,6 +670,8 @@ bool minic_loongarch64_emit_integer_instruction(
             size_t lw, rw;
             bool ls, rs;
             const char *opcode;
+            const char *immediate_opcode = NULL;
+            int64_t constant = 0;
             if (!minic_multi_direct_integer_binary_shape(
                     program, target, fn, ins, &lw, &rw, &ls, &rs))
                 return false;
@@ -439,11 +680,24 @@ bool minic_loongarch64_emit_integer_instruction(
                 : ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_XOR
                     ? "  xor $t0, $t0, $t1\n"
                     : "  or $t0, $t0, $t1\n";
-            if (!emit_sp_mem(out, lw == 8U ? "ld.d" : "ld.w",
-                             "$t0", (size_t)lhs * 8U) ||
-                !emit_sp_mem(out, rw == 8U ? "ld.d" : "ld.w",
-                             "$t1", (size_t)rhs * 8U) ||
-                fputs(opcode, out) == EOF ||
+            if (minic_loongarch64_integer_rhs_immediate(
+                    program, target, fn, ins, NULL, &constant))
+                immediate_opcode =
+                    ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND
+                        ? "andi"
+                        : ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_XOR
+                            ? "xori" : "ori";
+            if ((!lhs_in_previous_gp &&
+                 !emit_sp_mem(out, lw == 8U ? "ld.d" : "ld.w",
+                             "$t0", minic_lp64_frame_value_offset(frame_plan, lhs))) ||
+                (lhs_in_previous_gp && lw != 8U &&
+                 fputs("  slli.w $t0, $t0, 0\n", out) == EOF) ||
+                (immediate_opcode != NULL
+                 ? fprintf(out, "  %s $t0, $t0, %" PRId64 "\n",
+                           immediate_opcode, constant) < 0
+                 : !emit_sp_mem(out, rw == 8U ? "ld.d" : "ld.w",
+                            "$t1", minic_lp64_frame_value_offset(frame_plan, rhs)) ||
+                   fputs(opcode, out) == EOF) ||
                 (lw != 8U && !minic_loongarch64_emit_integer_normalize(out, lw, ls)))
                 return false;
             *needs_gp_store = true;
@@ -469,10 +723,13 @@ bool minic_loongarch64_emit_integer_instruction(
                                : "  mod.du $t0, $t0, $t1\n")
                         : (ls ? "  mod.w $t0, $t0, $t1\n"
                                : "  mod.wu $t0, $t0, $t1\n"));
-            if (!emit_sp_mem(out, wide ? "ld.d" : "ld.w",
-                             "$t0", (size_t)lhs * 8U) ||
+            if ((!lhs_in_previous_gp &&
+                 !emit_sp_mem(out, wide ? "ld.d" : "ld.w",
+                             "$t0", minic_lp64_frame_value_offset(frame_plan, lhs))) ||
+                (lhs_in_previous_gp && !wide &&
+                 fputs("  slli.w $t0, $t0, 0\n", out) == EOF) ||
                 !emit_sp_mem(out, wide ? "ld.d" : "ld.w",
-                             "$t1", (size_t)rhs * 8U) ||
+                             "$t1", minic_lp64_frame_value_offset(frame_plan, rhs)) ||
                 fputs(op, out) == EOF)
                 return false;
             *needs_gp_store = true;
@@ -484,8 +741,9 @@ bool minic_loongarch64_emit_integer_instruction(
             const MinicCoreValueId lhs = ins->value.binary.left;
             const MinicCoreValueId rhs = ins->value.binary.right;
             if (!minic_multi_direct_pointer_less_shape(fn, ins) ||
-                !emit_sp_mem(out, "ld.d", "$t0", (size_t)lhs * 8U) ||
-                !emit_sp_mem(out, "ld.d", "$t1", (size_t)rhs * 8U) ||
+                (!lhs_in_previous_gp &&
+                 !emit_sp_mem(out, "ld.d", "$t0", minic_lp64_frame_value_offset(frame_plan, lhs))) ||
+                !emit_sp_mem(out, "ld.d", "$t1", minic_lp64_frame_value_offset(frame_plan, rhs)) ||
                 fputs("  sltu $t0, $t0, $t1\n", out) == EOF)
                 return false;
             *needs_gp_store = true;
@@ -501,8 +759,9 @@ bool minic_loongarch64_emit_integer_instruction(
                 lhs < fn->value_count && rhs < fn->value_count &&
                 minic_type_is_pointer(fn->values[lhs].type) &&
                 minic_type_is_pointer(fn->values[rhs].type)) {
-                if (!emit_sp_mem(out, "ld.d", "$t0", (size_t)lhs * 8U) ||
-                    !emit_sp_mem(out, "ld.d", "$t1", (size_t)rhs * 8U) ||
+                if ((!lhs_in_previous_gp &&
+                     !emit_sp_mem(out, "ld.d", "$t0", minic_lp64_frame_value_offset(frame_plan, lhs))) ||
+                    !emit_sp_mem(out, "ld.d", "$t1", minic_lp64_frame_value_offset(frame_plan, rhs)) ||
                     fputs("  xor $t0, $t0, $t1\n"
                           "  sltui $t0, $t0, 1\n", out) == EOF)
                     return false;
@@ -513,10 +772,13 @@ bool minic_loongarch64_emit_integer_instruction(
                     program, target, fn, ins, &lw, &rw, &ls, &rs))
                 return false;
             wide = lw == 8U;
-            if (!emit_sp_mem(out, wide ? "ld.d" : "ld.w", "$t0",
-                             (size_t)lhs * 8U) ||
+            if ((!lhs_in_previous_gp &&
+                 !emit_sp_mem(out, wide ? "ld.d" : "ld.w", "$t0",
+                              minic_lp64_frame_value_offset(frame_plan, lhs))) ||
+                (lhs_in_previous_gp && !wide &&
+                 fputs("  slli.w $t0, $t0, 0\n", out) == EOF) ||
                 !emit_sp_mem(out, wide ? "ld.d" : "ld.w", "$t1",
-                             (size_t)rhs * 8U) ||
+                             minic_lp64_frame_value_offset(frame_plan, rhs)) ||
                 fputs(ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_LESS
                           ? (ls ? "  slt $t0, $t0, $t1\n"
                                 : "  sltu $t0, $t0, $t1\n")
@@ -534,8 +796,11 @@ bool minic_loongarch64_emit_integer_instruction(
                     program, target, fn, ins, &width, &sign, &pointer))
                 return false;
             wide = pointer || width == 8U;
-            if (!emit_sp_mem(out, wide ? "ld.d" : "ld.w", "$t0",
-                             (size_t)v * 8U) ||
+            if ((!lhs_in_previous_gp &&
+                 !emit_sp_mem(out, wide ? "ld.d" : "ld.w", "$t0",
+                              minic_lp64_frame_value_offset(frame_plan, v))) ||
+                (lhs_in_previous_gp && !wide &&
+                 fputs("  slli.w $t0, $t0, 0\n", out) == EOF) ||
                 fputs("  sltui $t0, $t0, 1\n", out) == EOF)
                 return false;
             (void)sign;

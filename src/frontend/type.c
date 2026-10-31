@@ -218,35 +218,36 @@ MinicType minic_type_float64x(void) {
     return minic_type_scalar(MINIC_TYPE_BASE_FLOAT64X);
 }
 
+MinicBuiltinDeclarationRole minic_type_builtin_declaration_role(MinicTypeBaseKind kind) {
+    switch (kind) {
+    case MINIC_TYPE_BASE_FLOAT:
+    case MINIC_TYPE_BASE_DOUBLE:
+    case MINIC_TYPE_BASE_LONG_DOUBLE:
+        return MINIC_BUILTIN_DECLARATION_STANDARD_FLOAT;
+    case MINIC_TYPE_BASE_FLOAT128:
+    case MINIC_TYPE_BASE_FLOAT32:
+    case MINIC_TYPE_BASE_FLOAT64:
+    case MINIC_TYPE_BASE_FLOAT32X:
+    case MINIC_TYPE_BASE_FLOAT64X:
+        return MINIC_BUILTIN_DECLARATION_EXTENDED_FLOAT;
+    case MINIC_TYPE_BASE_AARCH64_FLOAT32X4:
+    case MINIC_TYPE_BASE_AARCH64_FLOAT64X2:
+    case MINIC_TYPE_BASE_AARCH64_SVE_FLOAT32:
+    case MINIC_TYPE_BASE_AARCH64_SVE_FLOAT64:
+    case MINIC_TYPE_BASE_AARCH64_SVE_BOOL:
+        return MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE;
+    default:
+        return MINIC_BUILTIN_DECLARATION_INVALID;
+    }
+}
+
 /* This function recognizes declared ABI builtin identities, but does not
  * assign invented sizes or scalar machine operations to NEON/SVE vectors. */
 MinicType minic_type_aarch64_header_builtin(MinicTypeBaseKind base_kind) {
-    if (base_kind < MINIC_TYPE_BASE_AARCH64_FLOAT32X4 ||
-        base_kind > MINIC_TYPE_BASE_AARCH64_SVE_BOOL)
+    if (minic_type_builtin_declaration_role(base_kind) !=
+        MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE)
         return minic_type_void();
     return minic_type_scalar(base_kind);
-}
-
-/* A distinct, pointer-sized runtime proxy. It must never be mistaken for
- * the actual SysV array type in C type-layout queries. */
-MinicType minic_type_x86_va_list_cursor(void) {
-    MinicType result;
-    if (!minic_type_pointer_to(
-            minic_type_scalar(MINIC_TYPE_BASE_X86_VA_LIST_CURSOR), &result))
-        return minic_type_void();
-    return result;
-}
-
-bool minic_type_is_x86_va_list_cursor(MinicType type) {
-    return type.base_kind == MINIC_TYPE_BASE_X86_VA_LIST_CURSOR &&
-           type.pointer_depth == 1U &&
-           type.record_id == MINIC_RECORD_INVALID &&
-           type.array_type_id == MINIC_ARRAY_TYPE_INVALID &&
-           type.function_type_id == MINIC_FUNCTION_TYPE_INVALID &&
-           type.enum_id == MINIC_ENUM_INVALID &&
-           type.integer_sign == MINIC_INTEGER_SIGN_NONE &&
-           type.integer_rank == MINIC_INTEGER_RANK_NONE &&
-           !type.is_plain_char;
 }
 
 MinicType minic_type_function(MinicFunctionTypeId function_type_id) {
@@ -367,13 +368,13 @@ static bool minic_type_void_object_pointer_compatible(MinicType target, MinicTyp
         (source_is_void && minic_type_is_function(target_pointee))) {
         return false;
     }
-    /* A pointer object is itself an object, so T ** is compatible with void *.
-       Preserve the existing qualifier check for the one-level object case. */
-    if ((target_is_void && source.pointer_depth > 1U) ||
-        (source_is_void && target.pointer_depth > 1U)) {
-        return true;
-    }
-    return (source_pointee.base_qualifiers & ~target_pointee.base_qualifiers) == 0U;
+    /* A pointer object is itself an object, so T ** may convert to void *.
+     * Its immediate pointee can nevertheless be a const/volatile pointer
+     * object. Checking only base_qualifiers silently discards that object's
+     * qualifiers for nested pointers. */
+    return (!minic_type_is_const(source_pointee) || minic_type_is_const(target_pointee)) &&
+           (!minic_type_is_volatile(source_pointee) ||
+            minic_type_is_volatile(target_pointee));
 }
 
 bool minic_type_assignment_compatible(MinicType target, MinicType source) {

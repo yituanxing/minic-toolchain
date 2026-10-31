@@ -6,6 +6,29 @@
     { name_value, sizeof(name_value) - 1U, kind_value, class_value, targets_value, 0U, 0U, false }
 
 static const MinicAttributeDescriptor minic_attribute_descriptors[] = {
+    /* These are not generic GNU metadata: the frontend must validate target
+     * support and argument semantics before admitting each declaration. */
+    {
+        "nocf_check", sizeof("nocf_check") - 1U,
+        MINIC_ATTRIBUTE_NOCF_CHECK, MINIC_ATTRIBUTE_CLASS_LANGUAGE_SEMANTIC,
+        MINIC_ATTRIBUTE_TARGET_FUNCTION, 0U, 0U, true,
+    },
+    {
+        "__indirect_branch__", sizeof("__indirect_branch__") - 1U,
+        MINIC_ATTRIBUTE_INDIRECT_BRANCH, MINIC_ATTRIBUTE_CLASS_LANGUAGE_SEMANTIC,
+        MINIC_ATTRIBUTE_TARGET_FUNCTION, 1U, 1U, true,
+    },
+    {
+        "__target__", sizeof("__target__") - 1U,
+        MINIC_ATTRIBUTE_TARGET_CPU, MINIC_ATTRIBUTE_CLASS_LANGUAGE_SEMANTIC,
+        MINIC_ATTRIBUTE_TARGET_FUNCTION, 1U, 1U, true,
+    },
+    MINIC_ATTRIBUTE_ENTRY("ms_abi", MINIC_ATTRIBUTE_MS_ABI,
+                          MINIC_ATTRIBUTE_CLASS_LANGUAGE_SEMANTIC,
+                          MINIC_ATTRIBUTE_TARGET_FUNCTION),
+    MINIC_ATTRIBUTE_ENTRY("__ms_abi__", MINIC_ATTRIBUTE_MS_ABI,
+                          MINIC_ATTRIBUTE_CLASS_LANGUAGE_SEMANTIC,
+                          MINIC_ATTRIBUTE_TARGET_FUNCTION),
     MINIC_ATTRIBUTE_ENTRY("__nothrow__",
                           MINIC_ATTRIBUTE_NOTHROW,
                           MINIC_ATTRIBUTE_CLASS_INFORMATIONAL,
@@ -142,8 +165,25 @@ static const MinicAttributeDescriptor minic_attribute_descriptors[] = {
         0U,
         true,
     },
+    /* GNU's two canonical spellings are one semantic policy: no implicit
+     * -finstrument-functions hooks. MiniC emits no such hooks, so this is
+     * safely parse-only for all target backends, not an ABI exception. */
+    MINIC_ATTRIBUTE_ENTRY("no_instrument_function",
+                          MINIC_ATTRIBUTE_NO_INSTRUMENT_FUNCTION,
+                          MINIC_ATTRIBUTE_CLASS_OPTIMIZATION,
+                          MINIC_ATTRIBUTE_TARGET_FUNCTION),
     MINIC_ATTRIBUTE_ENTRY("__no_instrument_function__",
                           MINIC_ATTRIBUTE_NO_INSTRUMENT_FUNCTION,
+                          MINIC_ATTRIBUTE_CLASS_OPTIMIZATION,
+                          MINIC_ATTRIBUTE_TARGET_FUNCTION),
+    /* GCC artificial changes only inline-debug attribution. MiniC does not
+     * generate debug call-site attribution, so preserve existing symbols. */
+    MINIC_ATTRIBUTE_ENTRY("artificial",
+                          MINIC_ATTRIBUTE_ARTIFICIAL,
+                          MINIC_ATTRIBUTE_CLASS_INFORMATIONAL,
+                          MINIC_ATTRIBUTE_TARGET_FUNCTION),
+    MINIC_ATTRIBUTE_ENTRY("__artificial__",
+                          MINIC_ATTRIBUTE_ARTIFICIAL,
                           MINIC_ATTRIBUTE_CLASS_INFORMATIONAL,
                           MINIC_ATTRIBUTE_TARGET_FUNCTION),
     {
@@ -538,12 +578,12 @@ static const MinicAttributeDescriptor minic_attribute_descriptors[] = {
                           MINIC_ATTRIBUTE_ALIGNED,
                           MINIC_ATTRIBUTE_CLASS_LAYOUT,
                           MINIC_ATTRIBUTE_TARGET_OBJECT | MINIC_ATTRIBUTE_TARGET_TYPE |
-                              MINIC_ATTRIBUTE_TARGET_FIELD),
+                              MINIC_ATTRIBUTE_TARGET_FIELD | MINIC_ATTRIBUTE_TARGET_FUNCTION),
     MINIC_ATTRIBUTE_ENTRY("__aligned__",
                           MINIC_ATTRIBUTE_ALIGNED,
                           MINIC_ATTRIBUTE_CLASS_LAYOUT,
                           MINIC_ATTRIBUTE_TARGET_OBJECT | MINIC_ATTRIBUTE_TARGET_TYPE |
-                              MINIC_ATTRIBUTE_TARGET_FIELD),
+                              MINIC_ATTRIBUTE_TARGET_FIELD | MINIC_ATTRIBUTE_TARGET_FUNCTION),
     {
         "transparent_union",
         sizeof("transparent_union") - 1U,

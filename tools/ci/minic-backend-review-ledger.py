@@ -24,6 +24,9 @@ def tracked():
     return sorted(
         x.decode("utf-8") for x in out.split(b"\0") if x
         and x.endswith((b".c", b".h"))
+        # `git ls-files` includes deleted paths until the next commit.
+        # A retired implementation must not be hashed as a live source.
+        and (ROOT / x.decode("utf-8")).is_file()
     )
 
 def blob(path):

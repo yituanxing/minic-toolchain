@@ -75,6 +75,8 @@ static bool minic_validate_core_functions(const char *input_path,
                                           const MinicCoreFunctionSet *set,
                                           MinicDiagnostic *diagnostic) {
     size_t function_index;
+    const bool report_all = getenv("MINIC_CORE_FAILURE_CENSUS") != NULL;
+    bool found_failure = false;
 
     if (program == NULL || set == NULL) {
         return false;
@@ -109,24 +111,33 @@ static bool minic_validate_core_functions(const char *input_path,
         if (status == MINIC_CORE_LOWER_OK) {
             continue;
         }
-        if (status == MINIC_CORE_LOWER_UNSUPPORTED) {
-            minic_set_diagnostic(diagnostic,
-                                 input_path,
-                                 1U,
-                                 1U,
-                                 "Core IR does not yet support function '%s'",
-                                 function->name);
-            return false;
+        /* The lowering pass has ALREADY evaluated every reachable C function.
+         * Normal compilation remains fail-fast. On an explicit Linux corpus
+         * diagnostic pass, enumerate EVERY failed Core function in this TU,
+         * not merely the first diagnostic. This changes no IR or machine
+         * semantics, nor does it mask any previously rejected function. */
+        if (report_all) {
+            (void)fprintf(stderr,
+                "MINIC_CORE_FUNCTION_FAILURE kind=%s index=%zu function=%s\n",
+                status == MINIC_CORE_LOWER_UNSUPPORTED ? "UNSUPPORTED" : "ERROR",
+                function_index, function->name != NULL ? function->name : "?");
         }
-        minic_set_diagnostic(diagnostic,
-                             input_path,
-                             1U,
-                             1U,
-                             "Core IR lowering failed for function '%s'",
-                             function->name);
-        return false;
+        if (!found_failure) {
+            if (status == MINIC_CORE_LOWER_UNSUPPORTED) {
+                minic_set_diagnostic(diagnostic, input_path, 1U, 1U,
+                    "Core IR does not yet support function '%s'",
+                    function->name);
+            } else {
+                minic_set_diagnostic(diagnostic, input_path, 1U, 1U,
+                    "Core IR lowering failed for function '%s'",
+                    function->name);
+            }
+            found_failure = true;
+        }
+        if (!report_all)
+            return false;
     }
-    return true;
+    return !found_failure;
 }
 
 static bool
@@ -347,6 +358,21 @@ int minic_compile_preprocessed_file_for_target(const char *input_path,
                              1U,
                              1U,
                              "cannot prune inline specialization Core reachability");
+        success = false;
+    }
+    if (success && !minic_prune_dead_file_scope_static_objects_from_core(
+                       &program, &core_set, backend->emit_reachable_core_blocks_only)) {
+        minic_set_diagnostic(diagnostic, input_path, 1U, 1U,
+                             "cannot compute static object/function Core reachability");
+        success = false;
+    }
+    /* Unused file-static callback tables no longer seed their otherwise dead
+     * static functions through initializer relocations. Reuse the existing
+     * function reachability pass with the finalized object-emission policy. */
+    if (success && !minic_prune_inline_specializations_from_core(
+                       &program, &core_set, backend->emit_reachable_core_blocks_only)) {
+        minic_set_diagnostic(diagnostic, input_path, 1U, 1U,
+                             "cannot prune dead callback functions from Core");
         success = false;
     }
     if (success) {

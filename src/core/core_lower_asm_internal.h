@@ -2,11 +2,17 @@
 #define MINIC_CORE_CORE_LOWER_ASM_INTERNAL_H
 
 #include "core/core_lower_internal.h"
+#include "target/backend.h"
 
 /* Shared GNU asm input-normalization bounds: consumed by operand decoding,
  * tracing and CSR structured-effect lowering across separate C files. */
 #define MINIC_CORE_IMMEDIATE_ASM_LIMIT 8U
 #define MINIC_CORE_IMMEDIATE_TEXT_LIMIT 64U
+
+/* One typed GNU operand-plan publication path for both target-qualified
+ * and target-neutral structured forms. No ISA interpretation is done here. */
+bool core_asm_publish_operand_plan(MinicCoreInstruction *instruction,
+    MinicCoreInlineAsm *stored, const MinicAsmOperandPlan *plan);
 
 /* Private AST inline-asm operand normalization → Core effect admission seam.
  * Lowering probes deliberately retain their original ordered dispatch:
@@ -50,7 +56,7 @@ MinicCoreLowerStatus core_asm_try_empty_barrier_scalar_forms(
 
 /* Operand normalization -> structured Core effect admission.
  * These interfaces are private to GNU inline-asm lowering, not Core IR API. */
-bool core_inline_asm_local_fixed_binding_id(const MinicC0Program *program,
+bool core_inline_asm_fixed_binding_id(const MinicC0Program *program,
                                                    const MinicExpression *expression,
                                                    size_t *binding_id);
 
@@ -90,10 +96,6 @@ MinicCoreLowerStatus core_asm_try_immediate_output_csr(
     const MinicInlineAsm *source, bool *handled);
 
 MinicCoreLowerStatus core_asm_try_structured_roles_and_asm_goto(
-    MinicCoreLowerContext *context, const MinicStatement *statement,
-    const MinicInlineAsm *source, bool *handled);
-
-MinicCoreLowerStatus core_asm_try_fixed_and_register_operands(
     MinicCoreLowerContext *context, const MinicStatement *statement,
     const MinicInlineAsm *source, bool *handled);
 

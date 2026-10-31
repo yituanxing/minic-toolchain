@@ -16,6 +16,34 @@ if grep -Eq '^[[:space:]]+(ld|sd|addiw|slliw|srliw|sraiw|addw|subw|mul)[[:space:
    "$work/rv32.s"; then
     echo 'RV32I_TARGET_GATE=FAIL emitted_illegal_opcode' >&2; exit 1
 fi
+cat > "$work/structured-eight.i" <<'SRC'
+int rv32_eight_operands(int a, int b, int c, int d,
+                        int e, int f, int g, int h) {
+    __asm__ volatile("nop" : : "r"(a), "r"(b), "r"(c), "r"(d),
+                              "r"(e), "r"(f), "r"(g), "r"(h) : "memory");
+    return a;
+}
+SRC
+"$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
+    -S "$work/structured-eight.i" -o "$work/structured-eight.s"
+grep -Fq '# MINIC_SOURCE_INLINE_ASM_BEGIN' "$work/structured-eight.s"
+cat > "$work/structured-nine.i" <<'SRC'
+int rv32_nine_operands(int a, int b, int c, int d, int e,
+                       int f, int g, int h, int j) {
+    __asm__ volatile("nop" : : "r"(a), "r"(b), "r"(c), "r"(d),
+                              "r"(e), "r"(f), "r"(g), "r"(h),
+                              "r"(j) : "memory");
+    return a;
+}
+SRC
+if "$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
+    -S "$work/structured-nine.i" -o "$work/structured-nine.s" \
+    2>"$work/structured-nine.log"; then
+    echo 'RV32I_ASM_CAPACITY=FAIL accepted_nine_generic_register_roles' >&2
+    exit 1
+fi
+test ! -e "$work/structured-nine.s"
+echo 'RV32I_ASM_CAPACITY=PASS accepted_8_roles=1 rejected_9_roles=1'
 if "$MINIC_CC" --target=riscv32-linux -march=rv64i -mabi=lp64 \
      -S "$work/unit.i" -o "$work/mixed.s" 2>"$work/reject.log"; then
     echo 'RV32I_TARGET_GATE=FAIL accepted_RV64_profile' >&2; exit 1

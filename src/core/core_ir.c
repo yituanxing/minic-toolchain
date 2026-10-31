@@ -1,14 +1,115 @@
 #include "core/core_ir_internal.h"
+#include "core/address_alignment.h"
 
 #include <inttypes.h>
 #include <stdlib.h>
 #include <string.h>
 
-/* A target-independent conservative CFG filter. Keep source labels as
- * additional roots: they may be reached through a computed goto, an asm-goto
- * or a forward function-level goto even when their lexical switch/loop arm
- * has no ordinary CFG predecessor. This is the proven RV64 reachability rule,
- * now shared with RV32 before source-owned asm reaches an RV32 assembler. */
+static size_t core_address_alignment_gcd(size_t base, size_t offset) {
+    while (offset != 0U) {
+        const size_t next = base % offset;
+        base = offset;
+        offset = next;
+    }
+    return base == 0U ? 1U : base;
+}
+
+static size_t core_address_known_alignment_visit(
+    const MinicCoreFunction *function, MinicCoreValueId address,
+    MinicCoreAddressRootAlignment root_alignment, void *context,
+    unsigned int depth, unsigned int max_depth) {
+    const MinicCoreInstruction *definition;
+    size_t base_alignment, offset;
+    if (function == NULL || root_alignment == NULL ||
+        address >= function->value_count || function->values == NULL ||
+        depth > max_depth || function->instructions == NULL ||
+        function->values[address].definition >= function->instruction_count)
+        return 1U;
+    definition = &function->instructions[function->values[address].definition];
+    if (definition->result != address) return 1U;
+    switch (definition->kind) {
+    case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS:
+    case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS:
+        base_alignment = root_alignment(function, definition, context);
+        return base_alignment != 0U &&
+               (base_alignment & (base_alignment - 1U)) == 0U
+            ? base_alignment : 1U;
+    case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS:
+        base_alignment = core_address_known_alignment_visit(
+            function, definition->value.field_address.base,
+            root_alignment, context, depth + 1U, max_depth);
+        offset = definition->value.field_address.byte_offset;
+        return core_address_alignment_gcd(base_alignment, offset);
+    case MINIC_CORE_INSTRUCTION_POINTER_OFFSET:
+        base_alignment = core_address_known_alignment_visit(
+            function, definition->value.pointer_offset.base,
+            root_alignment, context, depth + 1U, max_depth);
+        offset = definition->value.pointer_offset.element_size;
+        return core_address_alignment_gcd(base_alignment, offset);
+    default:
+        /* Parameter pointers, reloaded pointers, bitcasts, call results and
+         * unknown SSA origins carry no trusted alignment proof. */
+        return 1U;
+    }
+}
+
+size_t minic_core_address_known_alignment(
+    const MinicCoreFunction *function, MinicCoreValueId address,
+    MinicCoreAddressRootAlignment root_alignment, void *context) {
+    return minic_core_address_known_alignment_bounded(
+        function, address, root_alignment, context, 64U);
+}
+
+size_t minic_core_address_known_alignment_bounded(
+    const MinicCoreFunction *function, MinicCoreValueId address,
+    MinicCoreAddressRootAlignment root_alignment, void *context,
+    unsigned int max_depth) {
+    if (max_depth > 64U) max_depth = 64U;
+    return core_address_known_alignment_visit(
+        function, address, root_alignment, context, 0U, max_depth);
+}
+
+size_t minic_core_function_fold_literal_branches(MinicCoreFunction *function) {
+    size_t block_id, count = 0U;
+    if (function == NULL || function->blocks == NULL ||
+        (function->value_count != 0U && function->values == NULL) ||
+        (function->instruction_count != 0U && function->instructions == NULL))
+        return 0U;
+    for (block_id = 0U; block_id < function->block_count; ++block_id) {
+        MinicCoreTerminator *term = &function->blocks[block_id].terminator;
+        MinicCoreValueId condition;
+        const MinicCoreInstruction *definition;
+        MinicCoreBlockId selected;
+        if (!function->blocks[block_id].has_terminator ||
+            term->kind != MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH)
+            continue;
+        condition = term->conditional.condition;
+        if (condition >= function->value_count ||
+            function->values[condition].definition >= function->instruction_count)
+            continue;
+        definition = &function->instructions[function->values[condition].definition];
+        if (definition->kind != MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT ||
+            definition->result != condition ||
+            !minic_type_is_integer(function->values[condition].type) ||
+            !minic_type_equal(definition->type,
+                              function->values[condition].type) ||
+            term->conditional.when_true >= function->block_count ||
+            term->conditional.when_false >= function->block_count)
+            continue;
+        selected = definition->value.integer_value != 0
+            ? term->conditional.when_true : term->conditional.when_false;
+        term->kind = MINIC_CORE_TERMINATOR_BRANCH;
+        term->branch_target = selected;
+        ++count;
+    }
+    return count;
+}
+
+/* One target-independent conservative CFG filter for every Core backend.
+ * Keep source labels as additional roots: they may be reached through a
+ * computed goto, asm-goto or forward function-level goto even when their
+ * lexical switch/loop arm has no ordinary CFG predecessor. All targets must
+ * agree on this reachability set for instructions and ELF symbol uses. */
 bool minic_core_function_mark_reachable_blocks(const MinicCoreFunction *function,
                                                bool *reachable, size_t capacity) {
     MinicCoreBlockId *queue;
@@ -149,6 +250,13 @@ void minic_core_function_destroy(MinicCoreFunction *function) {
         size_t clobber_index;
 
         free(inline_asm->template_text);
+        {
+            size_t resolved_index;
+            for (resolved_index = 0U;
+                 resolved_index < inline_asm->resolved_immediate_count &&
+                     resolved_index < 3U; ++resolved_index)
+                free(inline_asm->resolved_immediates[resolved_index]);
+        }
         for (clobber_index = 0U; clobber_index < inline_asm->register_clobber_count;
              ++clobber_index) {
             free(inline_asm->register_clobbers[clobber_index].name);
@@ -205,6 +313,17 @@ bool minic_core_function_set_signature(MinicCoreFunction *function,
     function->return_type = return_type;
     function->parameter_types = parameters_copy;
     function->parameter_count = parameter_count;
+    return true;
+}
+
+bool minic_core_function_set_calling_convention(
+    MinicCoreFunction *function, MinicFunctionCallingConvention convention) {
+    if (function == NULL || function->name == NULL ||
+        !minic_function_calling_convention_valid(convention) ||
+        (function->calling_convention != MINIC_CALLING_CONVENTION_DEFAULT &&
+         function->calling_convention != convention))
+        return false;
+    function->calling_convention = convention;
     return true;
 }
 
@@ -371,6 +490,13 @@ bool minic_core_function_add_object(MinicCoreFunction *function,
    participate in GLOBAL_ADDRESS while LOAD/STORE still reject void pointees. */
 bool minic_core_ir_global_addressable_type(MinicType type) {
     return minic_type_is_integer(type) || minic_type_is_pointer(type) ||
+           /* Floating globals remain addressable even when their arithmetic
+            * is target-constrained. Linux's x87 probes consume float64
+            * objects through GNU `m` operands without loading a C scalar;
+            * the Core global-address contract must agree with the existing
+            * shared address/aggregate lowering predicate. */
+           minic_type_is_float(type) || minic_type_is_double(type) ||
+           minic_type_is_long_double(type) ||
            minic_type_is_array(type) || minic_type_is_record(type) ||
            minic_type_is_void(type);
 }
@@ -482,13 +608,15 @@ static bool callee_signature_equal(const MinicCoreCallee *callee,
                                    MinicType return_type,
                                    const MinicType *parameter_types,
                                    size_t parameter_count,
-                                   bool is_variadic) {
+                                   bool is_variadic,
+                                   MinicFunctionCallingConvention calling_convention) {
     size_t index;
 
     if (callee == NULL || name == NULL || callee->name == NULL ||
         callee->name_length != name_length || memcmp(callee->name, name, name_length) != 0 ||
         !minic_type_equal(callee->return_type, return_type) ||
-        callee->parameter_count != parameter_count || callee->is_variadic != is_variadic) {
+        callee->parameter_count != parameter_count || callee->is_variadic != is_variadic ||
+        callee->calling_convention != calling_convention) {
         return false;
     }
     for (index = 0U; index < parameter_count; ++index) {
@@ -506,6 +634,7 @@ bool minic_core_function_add_callee(MinicCoreFunction *function,
                                     const MinicType *parameter_types,
                                     size_t parameter_count,
                                     bool is_variadic,
+                                    MinicFunctionCallingConvention calling_convention,
                                     MinicCoreCalleeId *callee_id) {
     MinicCoreCallee stored;
     size_t index;
@@ -513,6 +642,7 @@ bool minic_core_function_add_callee(MinicCoreFunction *function,
     if (function == NULL || name == NULL || name_length == 0U || callee_id == NULL ||
         function->callee_count >= (size_t)UINT32_MAX ||
         !minic_core_ir_direct_call_return_type(return_type) ||
+        !minic_function_calling_convention_valid(calling_convention) ||
         (parameter_count != 0U && parameter_types == NULL) ||
         parameter_count > SIZE_MAX / sizeof(*stored.parameter_types)) {
         return false;
@@ -522,14 +652,10 @@ bool minic_core_function_add_callee(MinicCoreFunction *function,
             return false;
         }
     }
-    for (index = 0U; index < function->inline_asm_count; ++index) {
-        const MinicCoreInlineAsm *inline_asm;
-
-        inline_asm = &function->inline_asms[index];
-        if (inline_asm->template_text == NULL || !inline_asm->is_volatile) {
-            return false;
-        }
-    }
+    /* The inline-ASM ingress validates its own records and the Core verifier
+     * validates consumers. Adding a CALL must not rescan an unrelated ASM
+     * table: doing so made a function with many CALLs and ASM sites quadratic
+     * and coupled two independently owned IR collections. */
     for (index = 0U; index < function->callee_count; ++index) {
         const MinicCoreCallee *existing;
 
@@ -542,7 +668,8 @@ bool minic_core_function_add_callee(MinicCoreFunction *function,
                                         return_type,
                                         parameter_types,
                                         parameter_count,
-                                        is_variadic)) {
+                                        is_variadic,
+                                        calling_convention)) {
                 return false;
             }
             *callee_id = (MinicCoreCalleeId)index;
@@ -569,6 +696,7 @@ bool minic_core_function_add_callee(MinicCoreFunction *function,
     stored.return_type = return_type;
     stored.parameter_count = parameter_count;
     stored.is_variadic = is_variadic;
+    stored.calling_convention = calling_convention;
     if (!grow_array((void **)&function->callees,
                     &function->callee_capacity,
                     function->callee_count,
@@ -590,13 +718,15 @@ static bool call_signature_equal(const MinicCoreCallSignature *signature,
                                  MinicType return_type,
                                  const MinicType *parameter_types,
                                  size_t parameter_count,
-                                 bool is_variadic) {
+                                 bool is_variadic,
+                                 MinicFunctionCallingConvention calling_convention) {
     size_t index;
 
     if (signature == NULL || signature->function_type_id != function_type_id ||
         !minic_type_equal(signature->return_type, return_type) ||
         signature->parameter_count != parameter_count ||
-        signature->is_variadic != is_variadic) {
+        signature->is_variadic != is_variadic ||
+        signature->calling_convention != calling_convention) {
         return false;
     }
     for (index = 0U; index < parameter_count; ++index) {
@@ -614,14 +744,17 @@ bool minic_core_function_add_call_signature(MinicCoreFunction *function,
                                             const MinicType *parameter_types,
                                             size_t parameter_count,
                                             bool is_variadic,
+                                            MinicFunctionCallingConvention calling_convention,
                                             MinicCoreCallSignatureId *signature_id) {
     MinicCoreCallSignature stored;
     size_t index;
 
     if (function == NULL || signature_id == NULL ||
         function_type_id == MINIC_FUNCTION_TYPE_INVALID ||
+        !minic_function_calling_convention_valid(calling_convention) ||
         function->call_signature_count >= (size_t)UINT32_MAX ||
-        (!minic_type_is_void(return_type) && !minic_core_ir_call_scalar_type(return_type)) ||
+        (!minic_type_is_void(return_type) && !minic_type_is_record(return_type) &&
+         !minic_core_ir_call_scalar_type(return_type)) ||
         (parameter_count != 0U && parameter_types == NULL) ||
         parameter_count > SIZE_MAX / sizeof(*stored.parameter_types)) {
         return false;
@@ -637,7 +770,8 @@ bool minic_core_function_add_call_signature(MinicCoreFunction *function,
                                  return_type,
                                  parameter_types,
                                  parameter_count,
-                                 is_variadic)) {
+                                 is_variadic,
+                                 calling_convention)) {
             *signature_id = (MinicCoreCallSignatureId)index;
             return true;
         }
@@ -647,6 +781,7 @@ bool minic_core_function_add_call_signature(MinicCoreFunction *function,
     stored.return_type = return_type;
     stored.parameter_count = parameter_count;
     stored.is_variadic = is_variadic;
+    stored.calling_convention = calling_convention;
     if (parameter_count != 0U) {
         stored.parameter_types =
             (MinicType *)malloc(parameter_count * sizeof(*stored.parameter_types));
@@ -706,6 +841,13 @@ bool minic_core_function_add_opaque_inline_asm(MinicCoreFunction *function,
     stored.template_length = template_length;
     stored.is_volatile = is_volatile;
     stored.has_memory_clobber = has_memory_clobber;
+    stored.goto_target = MINIC_CORE_BLOCK_INVALID;
+    stored.goto_second_target = MINIC_CORE_BLOCK_INVALID;
+    /* Source provenance is opt-in.  In particular zero is a valid AST id,
+     * not proof that this Core effect came from source inline ASM #0.
+     * Opaque asm-goto uses this same field for a deferred-immediate owner;
+     * only an ingress with a verified source identity may populate it. */
+    stored.source_inline_asm_id = SIZE_MAX;
     function->inline_asms[function->inline_asm_count] = stored;
     *inline_asm_id = (MinicCoreInlineAsmId)function->inline_asm_count;
     function->inline_asm_count += 1U;
@@ -742,6 +884,9 @@ bool minic_core_function_add_inline_asm_register_clobber(
     return true;
 }
 
+/* The input span must be independent of function->call_arguments: growth may
+ * realloc that array before the next element is read. Current Core callers
+ * provide separate temporary argument buffers. */
 bool minic_core_function_append_call_arguments(MinicCoreFunction *function,
                                                const MinicCoreCallArgument *arguments,
                                                size_t argument_count,
@@ -790,6 +935,9 @@ static void append_reserved_instruction(MinicCoreFunction *function,
     block->instruction_count += 1U;
 }
 
+/* Input instruction must not point into function->instructions: reserve may
+ * realloc it before the input is copied. The existing lowerers pass a local
+ * instruction value; ValueId/InstructionId remain stable after growth. */
 bool minic_core_function_append_value_instruction(MinicCoreFunction *function,
                                                   MinicCoreBlockId block_id,
                                                   const MinicCoreInstruction *instruction,
@@ -824,6 +972,7 @@ bool minic_core_function_append_value_instruction(MinicCoreFunction *function,
     return true;
 }
 
+/* Same non-aliasing input contract as append_value_instruction above. */
 bool minic_core_function_append_effect_instruction(MinicCoreFunction *function,
                                                    MinicCoreBlockId block_id,
                                                    const MinicCoreInstruction *instruction) {

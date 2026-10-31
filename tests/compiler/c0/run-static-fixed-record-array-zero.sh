@@ -17,7 +17,9 @@ mkdir -p "$work"
 grep -F '.type zero_records, @object' "$work/static_fixed_record_array_zero.s" >/dev/null
 grep -F '.size zero_records, 48' "$work/static_fixed_record_array_zero.s" >/dev/null
 grep -F '.type page_records, @object' "$work/static_fixed_record_array_zero.s" >/dev/null
-grep -Fx '.section .bss..page_aligned' "$work/static_fixed_record_array_zero.s" >/dev/null
+# ELF section flags may be emitted explicitly; the section identity is the
+# data-layout invariant here.
+grep -F '.section .bss..page_aligned' "$work/static_fixed_record_array_zero.s" >/dev/null
 grep -F '.size page_records, 32' "$work/static_fixed_record_array_zero.s" >/dev/null
 grep -F '.type initialized_records, @object' "$work/static_fixed_record_array_zero.s" >/dev/null
 grep -F '.size initialized_records, 32' "$work/static_fixed_record_array_zero.s" >/dev/null

@@ -101,6 +101,7 @@ src/target/common/core_call_index.c
 src/target/common/direct_call_plan.c
 src/target/common/direct_instruction_semantics.c
 src/target/common/direct_residual_plan.c
+src/target/common/aggregate_shape.c
 src/target/common/lp64_aggregate.c
 src/target/common/lp64_scalar.c
 src/target/common/lp64_frame.c
@@ -155,15 +156,17 @@ src/target/x86_64/frame.c
 src/target/x86_64/global_emit.c
 src/target/aarch64/abi.c
 src/target/aarch64/codegen.c
+src/target/aarch64/frame_emit.c
 src/target/aarch64/block_emit.c
+src/target/aarch64/asm_contract.c
 src/target/aarch64/residual_emit.c
 src/target/aarch64/scalar_normalize.c
 src/target/aarch64/memory_emit.c
 src/target/aarch64/call_emit.c
 src/target/aarch64/integer_emit.c
 src/target/aarch64/fp_emit.c
-src/target/aarch64/asm_legalize.c
 src/target/loongarch64/codegen.c
+src/target/loongarch64/asm_contract.c
 src/target/loongarch64/block_emit.c
 src/target/loongarch64/residual_emit.c
 src/target/loongarch64/scalar_normalize.c

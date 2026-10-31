@@ -104,6 +104,7 @@ bool minic_c0_expression_visit_child_id_refs(MinicExpression *expression,
                visit_expression_id(&expression->value.atomic_store.source, visitor, context);
 
     case MINIC_EXPRESSION_BUILTIN_OVERFLOW:
+    case MINIC_EXPRESSION_BUILTIN_OVERFLOW_P:
         return visit_expression_id(&expression->value.overflow.left, visitor, context) &&
                visit_expression_id(&expression->value.overflow.right, visitor, context) &&
                visit_expression_id(&expression->value.overflow.result_pointer, visitor, context);

@@ -159,14 +159,17 @@ bool minic_parser_parse_parenthesized_pointer_to_array_declarator(
     }
     if (!minic_parser_expect(
             parser, MINIC_TOKEN_RPAREN, "expected ')' after parenthesized pointer declarator") ||
+        /* The pointer being declared is a complete object even when its
+         * array pointee has an incomplete outermost bound: T (*name)[].
+         * Only direct incomplete array OBJECT definitions need completion. */
         !minic_parser_parse_array_declarator_suffix(
-            parser, element_type, false, &type, &is_array) ||
-        !is_array) {
-        if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
-            minic_parser_error(parser, "parenthesized object pointer requires an array suffix");
-        }
+            parser, element_type, true, &type, &is_array)) {
         return false;
     }
+    /* `T (*name)` is a valid pointer-to-T object declarator without an array
+     * suffix. The same direct-declarator shape followed by `[N]` remains a
+     * pointer-to-array; a following `(P)` is routed to the function-pointer
+     * parser by the caller's lookahead instead. */
     for (level = 0U; level < pointer_depth; ++level) {
         unsigned int bit;
 
@@ -281,6 +284,12 @@ bool minic_parser_parse_parenthesized_function_declarator(
             parser, MINIC_TOKEN_LPAREN, "expected '(' before function declarator")) {
         return false;
     }
+    /* GNU EFI prototypes place the calling convention between the opening
+     * parenthesis and pointer star: `R (__attribute__((ms_abi)) *fn)(A)`.
+     * Collect, preserve and validate it like post-star attributes, rather
+     * than interpreting `__attribute__` as a declarator identifier. */
+    if (!minic_parser_collect_gnu_attribute_lists(parser, &declarator->attributes))
+        return false;
     while (parser->current.kind == MINIC_TOKEN_STAR) {
         declarator->pointer_depth += 1U;
         if (!minic_parser_advance(parser) || !minic_parser_parse_pointer_qualifier_sequence(

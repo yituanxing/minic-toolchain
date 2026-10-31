@@ -1,0 +1,143 @@
+/* White-box AST effect-summary contract. This deliberately constructs the
+ * smallest source tree needed to validate address and GNU-tail traversal. */
+#include "core/core_lower_internal.h"
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <string.h>
+
+const MinicExpression *minic_c0_program_expression(
+    const MinicC0Program *program, MinicExpressionId id) {
+    return program != NULL && id < program->expression_count
+               ? &program->expressions[id] : NULL;
+}
+
+const MinicStatement *minic_c0_program_statement(
+    const MinicC0Program *program, MinicStatementId id) {
+    return program != NULL && id < program->statement_count
+               ? &program->statements[id] : NULL;
+}
+
+const MinicBlock *minic_c0_program_block(
+    const MinicC0Program *program, MinicBlockId id) {
+    return program != NULL && id < program->block_count
+               ? &program->blocks[id] : NULL;
+}
+
+const MinicLocal *minic_c0_program_local(
+    const MinicC0Program *program, MinicLocalId id) {
+    return program != NULL && id < program->local_count
+               ? &program->locals[id] : NULL;
+}
+
+int main(void) {
+    MinicExpression expressions[6];
+    MinicStatement statements[2];
+    MinicStatementId statement_ids[2] = {0U, 1U};
+    MinicBlock blocks[2];
+    MinicLocal locals[4];
+    MinicC0Program program;
+    MinicFunction source_function;
+    MinicFunctionBodyView body;
+    MinicCoreLowerContext context;
+    unsigned char changed[3];
+    unsigned char condition_owned[3];
+
+    (void)memset(expressions, 0, sizeof(expressions));
+    (void)memset(statements, 0, sizeof(statements));
+    (void)memset(blocks, 0, sizeof(blocks));
+    (void)memset(locals, 0, sizeof(locals));
+    (void)memset(&program, 0, sizeof(program));
+    (void)memset(&body, 0, sizeof(body));
+    (void)memset(&context, 0, sizeof(context));
+    (void)memset(&source_function, 0, sizeof(source_function));
+
+    /* index++ inside an assignment's destination address: data[index++]. */
+    expressions[0].kind = MINIC_EXPRESSION_LOCAL;
+    expressions[0].value_category = MINIC_VALUE_LVALUE;
+    expressions[0].value.local_id = 1U;
+    expressions[1].kind = MINIC_EXPRESSION_UNARY;
+    expressions[1].value.unary.operator_kind = MINIC_UNARY_POST_INCREMENT;
+    expressions[1].value.unary.operand = 0U;
+    expressions[2].kind = MINIC_EXPRESSION_LOCAL;
+    expressions[2].value_category = MINIC_VALUE_LVALUE;
+    expressions[2].value.local_id = 2U;
+    expressions[3].kind = MINIC_EXPRESSION_SUBSCRIPT;
+    expressions[3].value_category = MINIC_VALUE_LVALUE;
+    expressions[3].value.subscript.base = 2U;
+    expressions[3].value.subscript.index = 1U;
+    expressions[4].kind = MINIC_EXPRESSION_INTEGER;
+    expressions[4].value.integer_value = 7;
+    /* GNU statement-expression tail is detached from its block. */
+    expressions[5].kind = MINIC_EXPRESSION_STATEMENT;
+    expressions[5].value.statement_expression.block = 0U;
+    expressions[5].value.statement_expression.result = 1U;
+
+    statements[0].kind = MINIC_STATEMENT_ASSIGN;
+    statements[0].target_expression = 3U;
+    statements[0].expression = 4U;
+    statements[1].kind = MINIC_STATEMENT_RECORD_COPY;
+    statements[1].target_expression = 3U;
+    statements[1].expression = 4U;
+    blocks[1].statements = statement_ids;
+    blocks[1].statement_count = 2U;
+    program.expressions = expressions;
+    program.expression_count = 6U;
+    program.statements = statements;
+    program.statement_count = 2U;
+    program.blocks = blocks;
+    program.block_count = 2U;
+    program.locals = locals;
+    program.local_count = 4U;
+    locals[1].has_declaration_block = true;
+    locals[1].declaration_block = 0U;
+    body.program = &program;
+    context.body = &body;
+    source_function.local_begin = 1U;
+    source_function.local_count = 3U;
+    context.source_function = &source_function;
+
+    /* A GNU statement expression owns its locals by declaration block,
+     * independently of the following IF's modified-local summary. */
+    (void)memset(changed, 0, sizeof(changed));
+    (void)memset(condition_owned, 0, sizeof(condition_owned));
+    core_expression_collect_modified_and_condition_locals(
+        &context, 5U, changed, condition_owned, 0U);
+    if (condition_owned[0] != 1U || condition_owned[1] != 0U ||
+        condition_owned[2] != 0U || changed[0] != 1U)
+        return 12;
+
+    /* Check each local's positive and negative result directly from the
+     * production batch mask, independently for expression and block scans. */
+    (void)memset(changed, 0, sizeof(changed));
+    core_expression_collect_modified_locals(&context, 5U, changed, 0U);
+    if (changed[0] != 1U) return 1;
+    if (changed[1] != 0U) return 2;
+    if (changed[0] != 1U || changed[1] != 0U || changed[2] != 0U) return 7;
+    (void)memset(changed, 0, sizeof(changed));
+    core_block_collect_modified_locals(&context, &blocks[1], changed, 0U);
+    if (changed[0] != 1U) return 3;
+    if (changed[2] != 0U) return 4;
+    if (changed[0] != 1U || changed[1] != 0U || changed[2] != 0U) return 8;
+
+    statements[0].kind = MINIC_STATEMENT_RETURN;
+    statements[0].expression = 4U;
+    (void)memset(changed, 0, sizeof(changed));
+    core_block_collect_modified_locals(&context, &blocks[1], changed, 0U);
+    if (changed[0] != 1U) return 5;
+    statements[1].kind = MINIC_STATEMENT_RETURN;
+    statements[1].expression = 4U;
+    (void)memset(changed, 0, sizeof(changed));
+    core_block_collect_modified_locals(&context, &blocks[1], changed, 0U);
+    if (changed[0] != 0U) return 6;
+    if (changed[0] != 0U || changed[1] != 0U || changed[2] != 0U) return 9;
+    statements[1].kind = MINIC_STATEMENT_INLINE_ASM;
+    (void)memset(changed, 0, sizeof(changed));
+    core_block_collect_modified_locals(&context, &blocks[1], changed, 0U);
+    if (changed[0] != 1U || changed[1] != 1U || changed[2] != 1U) return 10;
+    /* Exhausting the recursive AST budget is conservative for all locals. */
+    (void)memset(changed, 0, sizeof(changed));
+    core_expression_collect_modified_locals(&context, 0U, changed, 65U);
+    if (changed[0] != 1U || changed[1] != 1U || changed[2] != 1U) return 11;
+    return 0;
+}

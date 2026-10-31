@@ -103,6 +103,24 @@ static int run_runtime_probe(void) {
     return 0;
 }
 
+static int run_p2_probe(void) {
+    pid_t child;
+    int status;
+
+    child = fork();
+    if (child == 0) {
+        execl("/bin/p2-probe", "p2-probe", (char *)NULL);
+        _exit(127);
+    }
+    if (child < 0 || waitpid(child, &status, 0) != child ||
+        !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        (void)fprintf(stderr, "INIT_P2_PROBE=FAIL errno=%d\n", errno);
+        return 1;
+    }
+    (void)puts("INIT_P2_PROBE=PASS");
+    return 0;
+}
+
 static int show_cmdline(void) {
     FILE *file;
     char buffer[1024];
@@ -135,8 +153,11 @@ int main(void) {
     failures += mount_runtime_fs("devtmpfs", "/dev", "devtmpfs", "INIT_DEVTMPFS_MOUNT=PASS");
     failures += show_cmdline();
     failures += tmpfs_roundtrip();
-    if (cmdline_has("minic_runtime=p1")) {
+    if (cmdline_has("minic_runtime=p1") || cmdline_has("minic_runtime=p2")) {
         failures += run_runtime_probe();
+    }
+    if (cmdline_has("minic_runtime=p2")) {
+        failures += run_p2_probe();
     }
 
     if (failures == 0) {

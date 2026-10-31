@@ -10,14 +10,18 @@
 /* One checked preparation sequence consumed by both LP64 direct backends.
  * The target supplies actual ABI classification and makes final choices
  * about native prologue, varargs register stores and instruction emission.
- * Successful planning never writes any assembly. */
+ * Successful planning never writes any assembly. The caller must supply a
+ * fresh/unowned plan: initialization clears it, and even a false result may
+ * own partial allocations that the caller must destroy. */
 bool minic_multi_direct_lp64_function_plan_prepare(
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicFunction *decl, const MinicCoreFunction *fn,
     const MinicCoreFunctionFacts *facts,
     const MinicCoreObjectStoragePlan *storage,
-    const char *architecture_name, MinicLP64DirectABI abi,
+    const char *architecture_name, const MinicDirectLP64AbiPolicy *abi,
     MinicDirectLP64IndirectRecord indirect_record,
+    MinicDirectLP64IndirectRecord indirect_return,
+    MinicDirectLP64OpaqueAsmQualifier qualify_opaque_asm,
     MinicDirectLP64FunctionPlan *plan) {
     MinicDirectLP64FunctionProfile profile;
     MinicDirectLP64ProfileResult profile_result;
@@ -30,11 +34,13 @@ bool minic_multi_direct_lp64_function_plan_prepare(
     plan->failed_block = SIZE_MAX;
     plan->failed_instruction = SIZE_MAX;
     if (program == NULL || target == NULL || decl == NULL || fn == NULL || facts == NULL ||
-        architecture_name == NULL || indirect_record == NULL)
+        architecture_name == NULL || indirect_record == NULL ||
+        !minic_direct_lp64_abi_policy_valid(abi))
         return false;
     name = minic_c0_function_symbol_name(decl);
     if (!minic_multi_direct_lp64_function_preflight(
-            program, target, decl, fn, facts, architecture_name, name))
+            program, target, decl, fn, facts, architecture_name, name,
+            qualify_opaque_asm, indirect_return))
         return false;
     profile_result = minic_multi_direct_lp64_profile_function(
         program, target, decl, fn, facts, abi, indirect_record,
@@ -54,7 +60,7 @@ bool minic_multi_direct_lp64_function_plan_prepare(
 
     plan->failed_stage = "cfg_preflight";
     if (!minic_multi_direct_lp64_cfg_preflight(
-            program, target, fn, &plan->failed_block))
+            program, target, fn, &plan->failed_block, indirect_return))
         return false;
 
     plan->failed_stage = "frame_layout";
@@ -67,6 +73,23 @@ bool minic_multi_direct_lp64_function_plan_prepare(
                 architecture_name, name, fn->value_count, fn->object_count);
         return false;
     }
+    plan->frame_alignment =
+        plan->frame_plan.max_object_alignment > abi->stack_alignment
+            ? plan->frame_plan.max_object_alignment : abi->stack_alignment;
+    /* LoongArch's current linear va_list walks directly from the saved GARs
+     * into the caller's overflow area. An aligned local-frame gap breaks
+     * that contiguity; do not silently give such a function a wrong cursor. */
+    if (plan->frame_alignment > abi->stack_alignment &&
+        plan->variadic_count != 0U &&
+        abi->variadic_requires_public_stack_alignment) {
+        plan->failed_stage = "variadic_frame_realign";
+        return false;
+    }
+    /* A local aligned above the public 16B stack guarantee requires a
+     * callee-saved fixed base and a saved unmodified entry SP. This also
+     * covers genuinely dynamic stack allocations in the same function. */
+    if (plan->frame_alignment > abi->stack_alignment)
+        plan->has_dynamic_stack = true;
     object_end = plan->frame_plan.object_end;
     plan->failed_stage = "binary128_layout";
     if (!minic_core_frame_align_up(object_end, 16U, &ld_base))
@@ -75,6 +98,21 @@ bool minic_multi_direct_lp64_function_plan_prepare(
         return false;
     object_end = plan->frame_plan.wide_end;
 
+    /* Preserve the target's hidden result pointer across nested calls.
+     * The target supplies the ABI return classifier, not Core or Common. */
+    if (indirect_return != NULL &&
+        minic_type_is_record(fn->return_type)) {
+        size_t result_bytes = 0U;
+        if (indirect_return(program, target, fn->return_type,
+                            &result_bytes) && result_bytes > 16U) {
+            if (!minic_core_frame_reserve(&object_end, 8U, 8U,
+                                          MINIC_LARGE_FRAME_MAX,
+                                          &plan->indirect_return_offset))
+                return false;
+            plan->has_indirect_return = true;
+        }
+    }
+
     /* One checked CALL traversal performs admission and ABI placement.
      * Preserve exact failing-instruction and original diagnostic stages. */
     {
@@ -82,7 +120,7 @@ bool minic_multi_direct_lp64_function_plan_prepare(
         plan->failed_stage = "call_preflight";
         if (!minic_lp64_plan_function_calls(
                 program, target, fn, facts->call_index, abi,
-                indirect_record, architecture_name, name,
+                indirect_record, indirect_return, architecture_name, name,
                 &plan->failed_instruction, &failed_preflight,
                 &plan->has_calls, &plan->outgoing_calls)) {
             plan->failed_stage =
@@ -95,7 +133,7 @@ bool minic_multi_direct_lp64_function_plan_prepare(
     plan->failed_instruction = SIZE_MAX;
     if (!minic_lp64_finalize_direct_frame(
             object_end, plan->has_calls, plan->has_dynamic_stack,
-            plan->variadic_count != 0U, abi,
+            plan->variadic_count != 0U, plan->frame_alignment, abi,
             &plan->save_offset, &plan->variadic_save_base,
             &plan->frame_size)) {
         if (getenv("MINIC_M1_TRACE") != NULL &&
@@ -104,6 +142,25 @@ bool minic_multi_direct_lp64_function_plan_prepare(
                 "MINIC_M8_FRAME_CAP arch=%s function=%s frame=%zu end=%zu\n",
                 architecture_name, name, plan->frame_size, object_end);
         return false;
+    }
+    plan->saved_entry_sp_offset = plan->frame_alignment > abi->stack_alignment
+        ? plan->save_offset + (plan->has_calls ? 8U : 0U) + 8U
+        : SIZE_MAX;
+    /* AAPCS64 cursor0 keeps the established 32B tag + 64B GP + 128B FP
+     * region. Each further va_copy/va_start cursor owns another 32B tag,
+     * never sharing the mutable offsets of a preceding va_list. Increase
+     * the final frame (not the incoming save/return offsets), so the extra
+     * tags remain below entry SP and above all existing frame slots. */
+    if (abi->extra_variadic_cursor_bytes != 0U &&
+        plan->variadic_count > 1U) {
+        const size_t extra_cursors = plan->variadic_count - 1U;
+        if (extra_cursors > MINIC_LARGE_FRAME_MAX /
+                abi->extra_variadic_cursor_bytes ||
+            plan->frame_size > MINIC_LARGE_FRAME_MAX -
+                extra_cursors * abi->extra_variadic_cursor_bytes)
+            return false;
+        plan->frame_size +=
+            extra_cursors * abi->extra_variadic_cursor_bytes;
     }
     plan->failed_stage = NULL;
     return true;

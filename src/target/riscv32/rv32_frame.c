@@ -1,4 +1,5 @@
 #include "target/riscv32/rv32_internal.h"
+#include "target/riscv/register_identity.h"
 #include "target/data_layout.h"
 #include "target/common/core_function_facts.h"
 #include "target/common/core_spill_layout.h"
@@ -205,7 +206,7 @@ static bool rv32_stack_at(FILE *out, const char *base, const char *op,
      * t6 would overwrite the original payload before sw; refuse rather
      * than silently generate corrupt machine code. Loads into t6 remain
      * valid, since its old value is not an input. */
-    if (off > 2047U && strcmp(reg, "t6") == 0 &&
+    if (off > 2047U && minic_riscv_gpr_name_equal(reg, "t6") &&
         (strcmp(op, "sw") == 0 || strcmp(op, "sb") == 0 ||
          strcmp(op, "sh") == 0))
         return false;
@@ -256,8 +257,11 @@ bool rv32_pair_slot(FILE *out, const Rv32Frame *f,
 bool rv32_address(FILE *out, const Rv32Frame *fr,
                   const char *reg, size_t off) {
     const char *base;
-    if (fr == NULL) return false;
+    if (fr == NULL || reg == NULL) return false;
     base = fr->has_dynamic_stack ? "s0" : "sp";
+    /* Materializing a large displacement destroys the destination first;
+     * spelling the live base as x2/x8 does not make it a fresh register. */
+    if (minic_riscv_gpr_name_equal(reg, base)) return false;
     return off <= 2047U ?
         fprintf(out, "  addi %s, %s, %zu\n", reg, base, off) >= 0 :
         fprintf(out, "  li %s, %zu\n  add %s, %s, %s\n",
@@ -273,8 +277,9 @@ bool rv32_incoming_word(FILE *out, const Rv32Frame *fr,
      * Mirror RV64's entry_sp_offset transport for this ABI boundary. */
     if (fr->has_dynamic_stack_alignment) {
         size_t off;
-        if (word - 8U > SIZE_MAX / 4U || reg == NULL ||
-            strcmp(reg, "t5") == 0 || strcmp(reg, "t6") == 0 ||
+        if (word - 8U > SIZE_MAX / 4U ||
+            minic_riscv_gpr_name_equal(reg, "t5") ||
+            minic_riscv_gpr_name_equal(reg, "t6") ||
             !rv32_fixed_stack(out, fr, "lw", "t6", fr->entry_sp_offset))
             return false;
         off = (word - 8U) * 4U;

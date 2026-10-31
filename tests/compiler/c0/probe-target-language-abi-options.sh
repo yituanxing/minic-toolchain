@@ -90,6 +90,16 @@ for arch in riscv32-linux riscv64-linux x86_64-linux aarch64-linux loongarch64-l
       -S "$work/unsigned.i" -o "$work/driver.s"
     cmp "$work/cc.s" "$work/driver.s"
   done
+  # Frozen GNU Kbuild .cmd files use both lower- and upper-case spellings.
+  # The staged driver must preserve the same relocation policy as minic-cc;
+  # dropping -fno-PIE here blocks strict all-owner Linux replacement.
+  for option in -fno-pie -fno-PIE -fno-pic -fno-PIC; do
+    "$MINIC_CC" "--target=$arch" "${extra[@]}" "$option" \
+      -S "$work/volatile-char.i" -o "$work/cc.s"
+    "$MINIC" "--target=$arch" "${extra[@]}" "$option" \
+      -S "$work/volatile-char.i" -o "$work/driver.s"
+    cmp "$work/cc.s" "$work/driver.s"
+  done
   "$MINIC_CC" "--target=$arch" "${extra[@]}" -fshort-wchar \
     -S "$work/wchar16.i" -o "$work/wchar16.s"
   "$MINIC" "--target=$arch" "${extra[@]}" -fshort-wchar \
@@ -156,6 +166,57 @@ for arch in riscv32-linux riscv64-linux x86_64-linux aarch64-linux loongarch64-l
     -fsigned-char -funsigned-char -S "$work/unsigned.i" -o "$work/last-driver.s"
   cmp "$work/last.s" "$work/last-driver.s"
 done
+# Linux/LoongArch64 Kbuild uses LP64S (-mabi=lp64s -msoft-float), while
+# userland defaults to LP64D. The compiler must own the ABI choice; GNU AS
+# merely annotating a default-LP64D object as LP64S is not an ABI proof.
+cat >"$work/loong-lp64s-integer.i" <<'SRC'
+extern double declared_but_unused(double);
+struct floating_data_only { double value; };
+static unsigned long counter;
+unsigned long loong_kernel_integer(unsigned long x, unsigned long y) {
+    counter += x;
+    return counter ^ y ^ sizeof(struct floating_data_only);
+}
+SRC
+"$MINIC_CC" --target=loongarch64-linux -mabi=lp64s \
+  -S "$work/loong-lp64s-integer.i" -o "$work/loong-soft-cc.s"
+"$MINIC" --target=loongarch64-linux -mabi=lp64s \
+  -S "$work/loong-lp64s-integer.i" -o "$work/loong-soft-driver.s"
+cmp "$work/loong-soft-cc.s" "$work/loong-soft-driver.s"
+"$MINIC_CC" --target=loongarch64-linux -mabi=lp64d \
+  -S "$work/loong-lp64s-integer.i" -o "$work/loong-double-explicit.s"
+"$MINIC_CC" --target=loongarch64-linux \
+  -S "$work/loong-lp64s-integer.i" -o "$work/loong-double-default.s"
+cmp "$work/loong-double-explicit.s" "$work/loong-double-default.s"
+cat >"$work/loong-lp64s-float.i" <<'SRC'
+float loong_soft_not_implemented(float x, float y) { return x + y; }
+SRC
+cat >"$work/loong-lp64s-fp-record.i" <<'SRC'
+struct mixed_float_int { double value; int tag; };
+extern int consumes_mixed(struct mixed_float_int);
+int pass_mixed(struct mixed_float_int item) { return consumes_mixed(item); }
+SRC
+for compiler in "$MINIC_CC" "$MINIC"; do
+  for shape in float fp-record; do
+    if "$compiler" --target=loongarch64-linux -mabi=lp64s \
+        -S "$work/loong-lp64s-$shape.i" -o "$work/loong-soft-rejected.s" \
+        2>"$work/loong-soft-rejected.err"; then
+      echo "MINIC_TARGET_ABI_FLAGS=FAIL Loong LP64S emitted unsupported $shape ABI" >&2
+      exit 1
+    fi
+    test ! -e "$work/loong-soft-rejected.s"
+  done
+done
+for invalid in '-mabi=lp64f' '-mabi=lp64' '-march=loongarch64'; do
+  if "$MINIC_CC" --target=loongarch64-linux -mabi=lp64s "$invalid" \
+      -S "$work/loong-lp64s-integer.i" -o "$work/loong-bad-target.s" \
+      2>"$work/loong-bad-target.err"; then
+    echo "MINIC_TARGET_ABI_FLAGS=FAIL accepted unsupported Loong option:$invalid" >&2
+    exit 1
+  fi
+  test ! -e "$work/loong-bad-target.s"
+done
+echo 'MINIC_LOONGARCH_LP64S=PASS kernel_integer=1 float_and_record_fail_closed=1 default_lp64d=1'
 for profile in 'rv32i ilp32 riscv32-linux' 'rv64i lp64 riscv64-linux' \
   'rv64im lp64 riscv64-linux' 'rv64imafd lp64d riscv64-linux' \
   'rv64imafd lp64 riscv64-linux' \
@@ -184,12 +245,53 @@ done
 "$MINIC" --target=riscv64-linux -fPIC -S "$work/unsigned.i" \
   -o "$work/pic-driver.s" -funsigned-char
 cmp "$work/pic-cc.s" "$work/pic-driver.s"
-if "$MINIC" --target=x86_64-linux -fPIC -S "$work/signed.i" \
-  -o "$work/bad-pic.s" 2>"$work/bad-pic.err"; then
-  echo 'MINIC_TARGET_ABI_FLAGS=FAIL unqualified PIC' >&2; exit 1
-fi
-grep -Fq 'PIC lowering is not yet qualified' "$work/bad-pic.err"
-test ! -e "$work/bad-pic.s"
+# Original Linux x86 PIC is now qualified by TargetInfo and independent
+# GNU shared-library/PIE ABI proof (probe-x86-linux-pic.sh). Both frontends
+# must forward identical -fPIC emission. AArch64 and LoongArch64 now have
+# independently target-owned local/GOT PIC sequences as well.
+"$MINIC_CC" --target=x86_64-linux -fPIC -S "$work/signed.i" \
+  -o "$work/x86-pic-cc.s"
+"$MINIC" --target=x86_64-linux -fPIC -S "$work/signed.i" \
+  -o "$work/x86-pic-driver.s"
+cmp "$work/x86-pic-cc.s" "$work/x86-pic-driver.s"
+for target in aarch64 loongarch64; do
+  for pic_flag in -fPIC -fPIE; do
+    "$MINIC_CC" "--target=$target-linux" "$pic_flag" -fsigned-char \
+      -S "$work/signed.i" \
+      -o "$work/$target-pic-cc.s"
+    "$MINIC" "--target=$target-linux" "$pic_flag" -fsigned-char \
+      -S "$work/signed.i" \
+      -o "$work/$target-pic-driver.s"
+    cmp "$work/$target-pic-cc.s" "$work/$target-pic-driver.s"
+  done
+done
+# RV32 PIC follows the RV64 RISC-V psABI: preemptible globals/functions use
+# GOT-relative la under a scoped .option pic, hidden/internal symbols use
+# non-GOT PC-relative lla, and the two public drivers must emit identical .s.
+cat > "$work/rv32-pic.i" <<'RV32_PIC'
+extern int pic_external;
+extern int pic_hidden __attribute__((visibility("hidden")));
+extern int pic_external_fn(void);
+static int pic_local;
+int *pic_public_address(void) { return &pic_external; }
+int *pic_hidden_address(void) { return &pic_hidden; }
+int *pic_local_address(void) { return &pic_local; }
+int (*pic_function_address(void))(void) { return &pic_external_fn; }
+RV32_PIC
+for pic_flag in -fPIC -fPIE; do
+  "$MINIC_CC" --target=riscv32-linux "$pic_flag" -S "$work/rv32-pic.i" \
+    -o "$work/rv32-pic-cc.s"
+  "$MINIC" --target=riscv32-linux "$pic_flag" -S "$work/rv32-pic.i" \
+    -o "$work/rv32-pic-driver.s"
+  cmp "$work/rv32-pic-cc.s" "$work/rv32-pic-driver.s"
+  grep -Fxq '  la t0, pic_external' "$work/rv32-pic-cc.s"
+  grep -Fxq '  la t0, pic_external_fn' "$work/rv32-pic-cc.s"
+  grep -Fxq '  lla t0, pic_hidden' "$work/rv32-pic-cc.s"
+  grep -Fxq '  lla t0, pic_local' "$work/rv32-pic-cc.s"
+  grep -Fxq '  .option push' "$work/rv32-pic-cc.s"
+  grep -Fxq '  .option pic' "$work/rv32-pic-cc.s"
+  grep -Fxq '  .option pop' "$work/rv32-pic-cc.s"
+done
 for option in -mcmodel=large -fshort-enums -fwrapv -mtune=generic; do
   if "$MINIC_CC" --target=riscv64-linux "$option" -S "$work/unsigned.i" \
     -o "$work/unsupported.s" 2>"$work/unsupported.err"; then
@@ -197,4 +299,20 @@ for option in -mcmodel=large -fshort-enums -fwrapv -mtune=generic; do
   fi
   test ! -e "$work/unsupported.s"
 done
-echo 'MINIC_TARGET_ABI_FLAGS=PASS five_targets char_signedness wchar_override target_isolation PIC_fail_closed'
+# AAPCS64 va_list is mutable 32-byte state. A source parameter and the
+# destination cursor must be independent; emitting the 32-byte copy is
+# target-owned, whereas Core preserves the unaliased cursor operation.
+cat >"$work/aarch64-va-copy.i" <<'EOF'
+int minic_aarch64_va_copy_accept(__builtin_va_list source) {
+  __builtin_va_list independent;
+  __builtin_va_copy(independent, source);
+  __builtin_va_end(independent);
+  return 0;
+}
+EOF
+"$MINIC_CC" --target=aarch64-linux -S "$work/aarch64-va-copy.i" \
+    -o "$work/aarch64-va-copy.s"
+grep -Fq 'ldp x11, x12, [x10]' "$work/aarch64-va-copy.s"
+grep -Fq 'stp x13, x14, [x9, #16]' "$work/aarch64-va-copy.s"
+echo 'MINIC_AARCH64_VA_COPY=PASS independent_32byte_ABI_cursor_copy'
+echo 'MINIC_TARGET_ABI_FLAGS=PASS five_targets char_signedness wchar_override target_isolation rv32_scoped_GOT_PIC'

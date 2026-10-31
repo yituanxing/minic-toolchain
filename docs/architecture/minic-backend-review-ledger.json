@@ -1,21 +1,22 @@
 {
   "schema": 1,
-  "baseline_commit": "5fea20f9f96450ff025041e1a2ba8c0203ff7012",
+  "baseline_commit": "cdc04f5d453a11406f8377c190e87be8a9e391e9",
   "policy": "blob fingerprint tracks unchanged source. CI coverage means tested changes only, not full source inspection; changed blobs automatically reopen.",
   "audit_merged": [
     665,
     666,
     668,
     669,
-    672
+    672,
+    673
   ],
-  "audit_in_progress": "PR #673 current batch (GNU/QEMU smoke first rejected wider CALL in RV64 capability gate); extended target ABI classifier and shared direct/indirect wide argument/return admission; exact-head CI pending.",
+  "audit_in_progress": "MiniC architecture consolidation: Direct LP64 ABI policies, trusted Core ASM source provenance, x86 physical register banks, and RV64 frame scratch liveness. New source owners are indexed without silently certifying stale blob reviews. Exact-head Linux .i-to-.s, GNU AS, link and QEMU are independent evidence; the four-architecture runtime has three pre-existing failures (x86 typed overflow, AArch64 x8 sret, LoongArch hidden a0).",
   "next_deep_review": [
-    "src/target/aarch64/call_emit.c",
-    "src/target/loongarch64/call_emit.c",
-    "src/target/riscv32/rv32_call.c",
-    "src/target/riscv64/call_emit.c",
-    "src/target/x86_64/machine_call.c"
+    "src/target/aarch64/frame_emit.c",
+    "src/target/loongarch64/frame_emit.c",
+    "src/target/x86_64/machine_emit.c",
+    "src/target/riscv64/legalize.c",
+    "src/target/riscv32/rv32_frame.c"
   ],
   "files": {
     "src/target/aarch64/abi.c": {
@@ -28,14 +29,14 @@
       "review_depth": "inventory",
       "ci_touched_in": []
     },
-    "src/target/aarch64/asm_legalize.c": {
-      "blob": "af0aecfacc2c7ec73db3c8de694a91c7b2ba6bf3",
-      "review_depth": "inventory",
+    "src/target/aarch64/asm_contract.c": {
+      "blob": "9d0233212c7dc04aa66941a50ac841da9e7cb12b",
+      "review_depth": "targeted",
       "ci_touched_in": []
     },
-    "src/target/aarch64/asm_legalize.h": {
-      "blob": "62461e302864f703df77af9eeb1e00114a6965d6",
-      "review_depth": "inventory",
+    "src/target/aarch64/asm_contract.h": {
+      "blob": "226d9f799bc29206ea266ffc6822bf03a7ab2b82",
+      "review_depth": "targeted",
       "ci_touched_in": []
     },
     "src/target/aarch64/block_emit.c": {
@@ -53,8 +54,9 @@
     },
     "src/target/aarch64/call_emit.c": {
       "blob": "39fd15493433d376a5af79c50aab4703fca96496",
-      "review_depth": "targeted",
-      "ci_touched_in": []
+      "review_depth": "full",
+      "ci_touched_in": [],
+      "note": "2026-10-27: read complete CALL emitter with CoreCallView and target psABI planning context. Production QEMU differential remains separate acceptance evidence."
     },
     "src/target/aarch64/call_emit.h": {
       "blob": "f5ff26bb982ffccf8a006d50d16c7bc5d2c6cd8a",
@@ -81,6 +83,17 @@
     "src/target/aarch64/fp_emit.h": {
       "blob": "36ef03ccd8d0613d45b1cce126fb432879cb3073",
       "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/aarch64/frame_emit.c": {
+      "blob": "0f4eea0cb3f594f000d8fd2119975efb9f4b0374",
+      "review_depth": "targeted",
+      "ci_touched_in": [],
+      "note": "2026-10-29: typed AArch64 FrameRef and scratch constraints reviewed with native API and real FP/memory emission probes; legacy text legalization remains for unconverted families."
+    },
+    "src/target/aarch64/frame_emit.h": {
+      "blob": "dd176e6c52ca108221e696b5c8c221a061a93786",
+      "review_depth": "targeted",
       "ci_touched_in": []
     },
     "src/target/aarch64/integer_emit.c": {
@@ -148,6 +161,16 @@
       "ci_touched_in": [
         665
       ]
+    },
+    "src/target/common/aggregate_shape.c": {
+      "blob": "9b5f4015ec35087bbc7697f28a957e629476b268",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/common/aggregate_shape.h": {
+      "blob": "36a1a08912eccd912072e61e004501a332f1a49b",
+      "review_depth": "inventory",
+      "ci_touched_in": []
     },
     "src/target/common/core_block_walk.h": {
       "blob": "30dd44ed6ca87dac76f782b9256b4fe2a428a76d",
@@ -305,6 +328,11 @@
       "review_depth": "inventory",
       "ci_touched_in": []
     },
+    "src/target/common/direct_block_register.h": {
+      "blob": "513fb6d9aac73f5ae8bb450f150f53c2f3d7a21d",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
     "src/target/common/direct_call_plan.c": {
       "blob": "2e2f00ab1b0e1c2939d34bed41a82d2121d2e8eb",
       "review_depth": "full",
@@ -363,6 +391,11 @@
         665
       ]
     },
+    "src/target/common/direct_linux_bug_asm.h": {
+      "blob": "9fa7d0619426f101a55795f5a8dae0eb619ca8e6",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
     "src/target/common/direct_lp64_abi.h": {
       "blob": "4ba6b2e3f7c3d4c3de99e720a9d405177bea92ab",
       "review_depth": "inventory",
@@ -408,6 +441,12 @@
       "blob": "7a9ca01f6500e8d73faea4764794929459f32abf",
       "review_depth": "inventory",
       "ci_touched_in": []
+    },
+    "src/target/common/elf_alias_emit.h": {
+      "blob": "9abd49ef3353c29af30b1ffca0eafb57d72d9ca7",
+      "review_depth": "targeted",
+      "ci_touched_in": [],
+      "audit_note": "New checked common ELF symbol declaration stage. Source reviewed with x86/Direct LP64 global/function owners, the strict GNU AS and negative symbol contract; exact HEAD CI acceptance still required."
     },
     "src/target/common/global_emit.c": {
       "blob": "3b96609b8971c1ee80b0b186cf0e05ae0491df63",
@@ -489,6 +528,16 @@
         665
       ]
     },
+    "src/target/loongarch64/asm_contract.c": {
+      "blob": "0ce1755666ee9162659f869fb8c02b47af301d1c",
+      "review_depth": "targeted",
+      "ci_touched_in": []
+    },
+    "src/target/loongarch64/asm_contract.h": {
+      "blob": "7fb73c185c090dc691d0ee40530f3273e2beb699",
+      "review_depth": "targeted",
+      "ci_touched_in": []
+    },
     "src/target/loongarch64/block_emit.c": {
       "blob": "2e25e9ceb5581dcf2a65ad077cd9b5cab090f99b",
       "review_depth": "full",
@@ -504,8 +553,9 @@
     },
     "src/target/loongarch64/call_emit.c": {
       "blob": "6beb2add109e74d8db86c30e65fed1b286970329",
-      "review_depth": "targeted",
-      "ci_touched_in": []
+      "review_depth": "full",
+      "ci_touched_in": [],
+      "note": "2026-10-27: read complete CALL emitter with CoreCallView and target psABI planning context. Production QEMU differential remains separate acceptance evidence."
     },
     "src/target/loongarch64/call_emit.h": {
       "blob": "4a7e526eb3746a3034ecd982795005e7c100de15",
@@ -586,6 +636,22 @@
       "review_depth": "inventory",
       "ci_touched_in": []
     },
+    "src/target/loongarch64/simd_asm.c": {
+      "blob": "114d34d3f89ccf59e2a9a30cc33d5aa9b0b33032",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/loongarch64/simd_asm.h": {
+      "blob": "04942ab687e9dfd7b8af95e9aaa00c63a0ae74e8",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/riscv/frame_address_policy.h": {
+      "blob": "4b2aea027f4e81db70e1c38b8e8b48f5244f1e8b",
+      "review_depth": "targeted",
+      "ci_touched_in": [],
+      "note": "2026-10-29: RV64 frame address, large-displacement scratch selection and live 128-bit half preservation reviewed with a production frame-access regression; no RV32 runtime or cross-ISA assembly certification implied."
+    },
     "src/target/riscv/function_symbol.h": {
       "blob": "a5dc789030efa18c0e1a231bfee73d3ad9c78824",
       "review_depth": "inventory",
@@ -602,6 +668,12 @@
       "blob": "e2d0f254cbc60d0f02e1b0840255a773b89c517b",
       "review_depth": "inventory",
       "ci_touched_in": []
+    },
+    "src/target/riscv/register_identity.h": {
+      "blob": "94380000f2353bf0d04ff706bb912e5071c62056",
+      "review_depth": "targeted",
+      "ci_touched_in": [],
+      "note": "2026-10-29: numeric xN and ABI register spelling normalized to physical GPR IDs; RV32/RV64 qualifier and scratch checks reviewed with standalone production tests."
     },
     "src/target/riscv/isa_features.h": {
       "blob": "db4042710b20ea06f834a99b34329df32ef9fada",
@@ -633,6 +705,12 @@
       "blob": "da5d0745a180b485e153d3811a71f7f8973028cf",
       "review_depth": "inventory",
       "ci_touched_in": []
+    },
+    "src/target/riscv/typed_memory.h": {
+      "blob": "1a3b83d20dfa39b766a21796bf65e0784720cdbd",
+      "review_depth": "targeted",
+      "ci_touched_in": [],
+      "note": "2026-10-29: shared RV32/RV64 Base-I typed scalar transport reviewed for unknown address alignment and split wide words; GNU-native and five-ISA compile probes included in batch21."
     },
     "src/target/riscv/word_operations.c": {
       "blob": "0a60a585c911c308ab68a98ee7f36e5222612db1",
@@ -671,8 +749,9 @@
     },
     "src/target/riscv32/rv32_call.c": {
       "blob": "a6bf957bc1427889e89796da6c1c72de61330956",
-      "review_depth": "inventory",
-      "ci_touched_in": []
+      "review_depth": "full",
+      "ci_touched_in": [],
+      "note": "2026-10-27: read complete CALL emitter with CoreCallView and target psABI planning context. Production QEMU differential remains separate acceptance evidence."
     },
     "src/target/riscv32/rv32_emit.c": {
       "blob": "f06fbbe8ec2163434f82bcc8a9700a2c2ab06b38",
@@ -760,11 +839,12 @@
     },
     "src/target/riscv64/call_emit.c": {
       "blob": "9cb464124897f2beb53b4664c2c01747205802c1",
-      "review_depth": "targeted",
+      "review_depth": "full",
       "ci_touched_in": [
         665
       ],
-      "audit_note": "Verified direct/indirect control paths and return ABI. New wide return helper shared for both; full CALL marshalling review remains pending."
+      "audit_note": "Verified direct/indirect control paths and return ABI. New wide return helper shared for both; full CALL marshalling review remains pending.",
+      "note": "2026-10-27: read complete CALL emitter with CoreCallView and target psABI planning context. Production QEMU differential remains separate acceptance evidence."
     },
     "src/target/riscv64/call_emit.h": {
       "blob": "de1fa4065b4f7542363a942b37a9b86b8411521e",
@@ -997,6 +1077,42 @@
       "review_depth": "inventory",
       "ci_touched_in": []
     },
+    "src/target/source_policy/aarch64.c": {
+      "blob": "85d3e8d83ea29f6f7bb9ff5151eff3543da1a68d",
+      "review_depth": "full",
+      "ci_touched_in": [],
+      "note": "2026-10-29 batch19: AArch64 GNU ASM source admission extracted from TargetInfo; paired source and machine ownership reviewed."
+    },
+    "src/target/source_policy/loongarch64.c": {
+      "blob": "5a3c0de51f74769de2af4976c4d8f1cda165af66",
+      "review_depth": "full",
+      "ci_touched_in": [],
+      "note": "2026-10-29 batch19: LoongArch64 GNU ASM source and machine builtin policies have independent typed callbacks."
+    },
+    "src/target/source_policy/riscv32.c": {
+      "blob": "1f42757b1d87adfc757599c66905d3b57d4ddd5c",
+      "review_depth": "full",
+      "ci_touched_in": [],
+      "note": "2026-10-29 batch19: RV32 strict base-I source ASM constraints reviewed."
+    },
+    "src/target/source_policy/riscv64.c": {
+      "blob": "bf1b26fdf139237d6cf299c97b4c87122f63184f",
+      "review_depth": "full",
+      "ci_touched_in": [],
+      "note": "2026-10-29 batch19: RV64 target-owned GNU ASM source qualifier and immediate policy reviewed."
+    },
+    "src/target/source_policy/source_policy.h": {
+      "blob": "51788d56c938813e385051a042378fb44e2c7f7d",
+      "review_depth": "full",
+      "ci_touched_in": [],
+      "note": "2026-10-29 batch19: typed source ASM policy and separate machine builtin contract."
+    },
+    "src/target/source_policy/x86_64.c": {
+      "blob": "085f722881db9e1cc8342dffb4ff813bdebca22f",
+      "review_depth": "full",
+      "ci_touched_in": [],
+      "note": "2026-10-29 batch19: x86 GNU fixed register, clobber and immediate qualifiers reviewed."
+    },
     "src/target/target_catalog.c": {
       "blob": "d888db09bf59f4e3b5509d28d4decd9dad78827d",
       "review_depth": "inventory",
@@ -1008,14 +1124,27 @@
       "ci_touched_in": []
     },
     "src/target/target_info.c": {
-      "blob": "12e7cb673ac94690aa3cdd2fd5d6ba030f2a84b0",
-      "review_depth": "inventory",
-      "ci_touched_in": []
+      "blob": "2df2ddc1b2696de2bcebbebeacb98eefb92c78c7",
+      "review_depth": "targeted",
+      "ci_touched_in": [],
+      "note": "2026-10-27: AArch64 ABI-state va_copy cannot be scalar pointer assignment; fail-closed pending independent 32-byte state storage and real GNU/QEMU differential."
     },
     "src/target/target_info.h": {
       "blob": "31bfafc424c1bd2e5281358a69b797842db37aec",
       "review_depth": "inventory",
       "ci_touched_in": []
+    },
+    "src/target/target_machine_options.c": {
+      "blob": "e53eeeea28ec22b6704a1eb99f340991d9c8193f",
+      "review_depth": "full",
+      "ci_touched_in": [],
+      "note": "2026-10-29 batch18: target-registered ISA/ABI machine option dispatch, separate from the generic CLI; checked against RV32/RV64 positive and negative admission cases."
+    },
+    "src/target/target_machine_options.h": {
+      "blob": "edffce0fb099de3537e0e7ccd167f80b051f8ece",
+      "review_depth": "full",
+      "ci_touched_in": [],
+      "note": "2026-10-29 batch18: complete target-opaque machine option interface reviewed."
     },
     "src/target/x86_64/abi.c": {
       "blob": "b90720113332b21038d7113450b5bcfc8d6281ef",
@@ -1059,6 +1188,12 @@
         666
       ]
     },
+    "src/target/x86_64/codegen_options.h": {
+      "blob": "20aa30c64dfe7e865ce736010bb9088ada72ff30",
+      "review_depth": "targeted",
+      "ci_touched_in": [],
+      "note": "2026-10-30: reviewed x86 Kbuild mitigation-bit contract and native assembly/ELF regression; full Linux semantics and stale source blobs remain unqualified."
+    },
     "src/target/x86_64/codegen.h": {
       "blob": "8c6874da8255d05196da1b68f2696093ee32f73a",
       "review_depth": "inventory",
@@ -1096,10 +1231,11 @@
     },
     "src/target/x86_64/machine_call.c": {
       "blob": "d8520d10c3da140b317c0a576aecf7ef3c1dad5a",
-      "review_depth": "targeted",
+      "review_depth": "full",
       "ci_touched_in": [
         665
-      ]
+      ],
+      "note": "2026-10-27: read complete CALL emitter with CoreCallView and target psABI planning context. Production QEMU differential remains separate acceptance evidence."
     },
     "src/target/x86_64/machine_emit.c": {
       "blob": "e64c88c6da88972f4fcffc6546fae457166f811b",

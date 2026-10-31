@@ -260,8 +260,10 @@ static bool dump_instruction(FILE *output,
                        instruction->value.call_frame_address.level) >= 0;
     case MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS:
         return fprintf(output,
-                       "  %%%" PRIu32 " = variadic.argument.address\n",
-                       instruction->result) >= 0;
+                       "  %%%" PRIu32 " = variadic.argument.address.%s\n",
+                       instruction->result,
+                       instruction->value.variadic_address.copy_destination
+                           ? "copy-destination" : "start") >= 0;
     case MINIC_CORE_INSTRUCTION_VARIADIC_COPY:
         return fprintf(output,
                        "  variadic.copy %%%" PRIu32 ", %%%" PRIu32 "\n",
@@ -285,6 +287,11 @@ static bool dump_instruction(FILE *output,
                        "  %%%" PRIu32 " = fixed.register.read binding=%zu\n",
                        instruction->result,
                        instruction->value.fixed_register_binding_id) >= 0;
+    case MINIC_CORE_INSTRUCTION_FIXED_REGISTER_WRITE:
+        return fprintf(output,
+                       "  fixed.register.write binding=%zu, %" PRIu32 "\n",
+                       instruction->value.fixed_register_write.binding_id,
+                       instruction->value.fixed_register_write.source) >= 0;
     case MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT:
         return fprintf(output,
                        "  parameter.object %zu, %%o%" PRIu32 "\n",
@@ -468,12 +475,19 @@ static bool dump_instruction(FILE *output,
             return false;
         }
         inline_asm = &function->inline_asms[inline_asm_id];
-        return fprintf(output,
-                       "  asm.structured id=%" PRIu32 " operands=%zu%s%s\n",
-                       inline_asm_id,
-                       instruction->value.structured_inline_asm.operand_count,
-                       inline_asm->is_volatile ? " volatile" : "",
-                       inline_asm->has_memory_clobber ? " memory" : "") >= 0;
+        if (fprintf(output,
+                    "  asm.structured id=%" PRIu32 " operands=%zu%s%s",
+                    inline_asm_id,
+                    instruction->value.structured_inline_asm.operand_count,
+                    inline_asm->is_volatile ? " volatile" : "",
+                    inline_asm->has_memory_clobber ? " memory" : "") < 0)
+            return false;
+        /* Distinguish verified source provenance from Core-only effects in
+         * diagnostics; SIZE_MAX is never a genuine source statement id. */
+        if (inline_asm->source_inline_asm_id != SIZE_MAX &&
+            fprintf(output, " source=%zu", inline_asm->source_inline_asm_id) < 0)
+            return false;
+        return fputc('\n', output) != EOF;
     }
     case MINIC_CORE_INSTRUCTION_COMPILER_BARRIER:
         return fprintf(output, "  compiler.barrier\n") >= 0;
@@ -532,7 +546,14 @@ static bool dump_instruction(FILE *output,
             instruction->value.indirect_call.callee >= function->value_count) {
             return false;
         }
-        if (instruction->result == MINIC_CORE_VALUE_INVALID) {
+        if (minic_type_is_record(instruction->type)) {
+            if (fprintf(output,
+                        "  %%o%" PRIu32 " = call.indirect %%%" PRIu32 "(",
+                        instruction->value.indirect_call.result_object,
+                        instruction->value.indirect_call.callee) < 0) {
+                return false;
+            }
+        } else if (instruction->result == MINIC_CORE_VALUE_INVALID) {
             if (fprintf(output,
                         "  call.indirect %%%" PRIu32 "(",
                         instruction->value.indirect_call.callee) < 0) {

@@ -7,6 +7,9 @@
 #include "target/common/lp64_aggregate.h"
 #include "target/loongarch64/frame_emit.h"
 #include <stdio.h>
+#include <stdint.h>
+#include <inttypes.h>
+#include <string.h>
 
 /* Outgoing locations use raw SP; dynamic frame slots use the s0 base. */
 #define emit_sp_mem(_out, _op, _reg, _offset) \
@@ -21,10 +24,9 @@ static bool emit_lp64_record_chunk_argument(FILE *out, size_t offset,
                                              bool dynamic_frame) {
     size_t b;
     if (bytes == 0U || bytes > 8U || (in_reg && gp >= 8U) ||
-        fprintf(out, "  li.d $t2, %zu\n"
-                     "  add.d $t2, %s, $t2\n"
-                     "  move $t0, $zero\n", offset,
-                dynamic_frame ? "$s0" : "$sp") < 0)
+        !minic_loongarch64_emit_frame_address(
+            out, "$t2", offset, dynamic_frame) ||
+        fputs("  move $t0, $zero\n", out) == EOF)
         return false;
     for (b = 0U; b < bytes; ++b)
         if (fprintf(out, "  ld.bu $t1, $t2, %zu\n"
@@ -34,6 +36,34 @@ static bool emit_lp64_record_chunk_argument(FILE *out, size_t offset,
     if (in_reg)
         return fprintf(out, "  or $a%zu, $t0, $zero\n", gp) >= 0;
     return minic_loongarch64_emit_sp_mem(out, "st.d", "$t0", stack_slot * 8U);
+}
+
+/* Resolve only immutable integer-constant SSA operands. CSR numbers must
+ * be known at compilation time; never treat a dynamic GPR as CSR index. */
+static bool loongarch_builtin_immediate_value(
+    const MinicCoreFunction *fn, MinicCoreValueId value, uint64_t *out) {
+    unsigned depth;
+    if (fn == NULL || out == NULL || fn->values == NULL ||
+        fn->instructions == NULL || value >= fn->value_count)
+        return false;
+    for (depth = 0U; depth < 5U; ++depth) {
+        const MinicCoreInstructionId definition = fn->values[value].definition;
+        const MinicCoreInstruction *ins;
+        if (definition >= fn->instruction_count)
+            return false;
+        ins = &fn->instructions[definition];
+        if (ins->result != value)
+            return false;
+        if (ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT) {
+            *out = (uint64_t)ins->value.integer_value;
+            return true;
+        }
+        if (ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION ||
+            ins->value.operand >= fn->value_count)
+            return false;
+        value = ins->value.operand;
+    }
+    return false;
 }
 
 /* Outgoing calls and incoming named parameters share the same ABI plan
@@ -72,6 +102,9 @@ bool minic_loongarch64_emit_abi_instruction(
                                           : ins->value.call.argument_begin;
             const size_t count = indirect ? ins->value.indirect_call.argument_count
                                           : ins->value.call.argument_count;
+            const MinicCoreObjectId result_object = indirect
+                ? ins->value.indirect_call.result_object
+                : ins->value.call.result_object;
             static const char *const gp_regs[8] = {
                 "$a0", "$a1", "$a2", "$a3", "$a4", "$a5", "$a6", "$a7"};
             static const char *const fp_regs[8] = {
@@ -98,6 +131,18 @@ bool minic_loongarch64_emit_abi_instruction(
                 if (arg->kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {
                     size_t record_size, slots, object_offset, chunk;
                     const MinicCoreObjectId object_id = arg->value.object_id;
+                    if (location->kind == MINIC_LP64_ARGUMENT_EMPTY_RECORD) {
+                        if (object_id >= fn->object_count ||
+                            !minic_multi_empty_record(program, target,
+                                fn->objects[object_id].type) ||
+                            location->size_bytes != 0U ||
+                            location->chunks != 0U ||
+                            location->gp_registers != 0U ||
+                            location->fp_registers != 0U ||
+                            location->stack_slots != 0U)
+                            return false;
+                        continue;
+                    }
                     if (!minic_lp64_frame_plan_object(frame_plan, object_id, &object_offset))
                         return false;
                     if (!minic_multi_gp_record(program, target,
@@ -106,9 +151,8 @@ bool minic_loongarch64_emit_abi_instruction(
                             (dynamic_frame ? 0U : stack_bytes);
                         if (!minic_multi_indirect_record(program, target,
                                 fn->objects[object_id].type, &record_size) ||
-                            fprintf(out, "  li.d $t0, %zu\n"
-                                         "  add.d $t0, %s, $t0\n",
-                                    src, dynamic_frame ? "$s0" : "$sp") < 0 ||
+                            !minic_loongarch64_emit_frame_address(
+                                out, "$t0", src, dynamic_frame) ||
                             (location->gp_registers != 0U
                              ? fprintf(out, "  move $a%zu, $t0\n", location->gp_first) < 0
                              : !minic_loongarch64_emit_frame_mem(out, "st.d", "$t0",
@@ -131,7 +175,7 @@ bool minic_loongarch64_emit_abi_instruction(
                     continue;
                 }
                 const MinicType type = fn->values[arg->value.value_id].type;
-                const size_t slot = (size_t)arg->value.value_id * 8U +
+                const size_t slot = minic_lp64_frame_value_offset(frame_plan, arg->value.value_id) +
                     (dynamic_frame ? 0U : stack_bytes);
                 if (minic_type_is_long_double(type) ||
                     minic_type_is_int128_integer(type)) {
@@ -178,36 +222,164 @@ bool minic_loongarch64_emit_abi_instruction(
                         return false;
                 }
             }
+            if (minic_type_is_record(ins->type)) {
+                size_t result_bytes, dst;
+                if (minic_multi_indirect_record(program, target,
+                        ins->type, &result_bytes) && result_bytes > 16U) {
+                    /* The ABI planner reserved $a0 BEFORE placing explicit
+                     * parameters in $a1..$a7. Write the hidden destination
+                     * after marshaling (which may clobber scratch GARs).
+                     * Dynamic alloca addresses use the stable $s0 base. */
+                    if (result_object >= fn->object_count ||
+                        !minic_lp64_frame_plan_object(
+                            frame_plan, result_object, &dst) ||
+                        dst > SIZE_MAX - (dynamic_frame ? 0U : stack_bytes) ||
+                        fprintf(out, "  li.d $a0, %zu\n"
+                                     "  add.d $a0, %s, $a0\n",
+                                dst + (dynamic_frame ? 0U : stack_bytes),
+                                dynamic_frame ? "$s0" : "$sp") < 0)
+                        return false;
+                }
+            }
             if (indirect) {
                 if (!emit_sp_mem(out, "ld.d", "$t2",
-                                 (size_t)ins->value.indirect_call.callee * 8U +
+                                 minic_lp64_frame_value_offset(frame_plan, ins->value.indirect_call.callee) +
                                  (dynamic_frame ? 0U : stack_bytes)) ||
                     fputs("  jirl $ra, $t2, 0\n", out) == EOF)
                     return false;
             } else {
                 const MinicCoreCallee *callee =
                     &fn->callees[ins->value.call.callee_id];
-                if (fprintf(out, "  bl %s\n", callee->name) < 0)
+                /* Revalidate the complete semantic ABI and exact ISA
+                 * mnemonic against the SAME TargetInfo table as Frontend.
+                 * No arbitrary GNU asm is forwarded through a raw template. */
+                static const char internal_prefix[] =
+                    "__minic_target_builtin_loongarch_";
+                static const char gnu_prefix[] = "__builtin_loongarch_";
+                if (callee->name != NULL &&
+                    strncmp(callee->name, internal_prefix,
+                            sizeof(internal_prefix) - 1U) == 0) {
+                    char builtin_name[128], validated_name[128];
+                    const char *mnemonic = NULL;
+                    MinicType result_type, argument_types[3];
+                    size_t argc = 0U, immediate_index = SIZE_MAX;
+                    size_t k;
+                    uint64_t imm = 0U;
+                    size_t suffix_length =
+                        strlen(callee->name + sizeof(internal_prefix) - 1U);
+                    if (sizeof(gnu_prefix) - 1U + suffix_length >=
+                        sizeof(builtin_name))
+                        return false;
+                    (void)memcpy(builtin_name, gnu_prefix,
+                                 sizeof(gnu_prefix) - 1U);
+                    (void)memcpy(builtin_name + sizeof(gnu_prefix) - 1U,
+                                 callee->name + sizeof(internal_prefix) - 1U,
+                                 suffix_length + 1U);
+                    if (!minic_target_info_machine_builtin_signature(
+                            target, builtin_name, strlen(builtin_name),
+                            validated_name, sizeof(validated_name),
+                            &result_type, argument_types, &argc,
+                            &mnemonic, &immediate_index) ||
+                        strcmp(validated_name, callee->name) != 0 ||
+                        !minic_type_equal(ins->type, result_type) ||
+                        count != argc || count > 3U ||
+                        stack_bytes != 0U || mnemonic == NULL)
+                        return false;
+                    for (k = 0U; k < count; ++k) {
+                        const MinicCoreCallArgument *arg =
+                            &fn->call_arguments[begin + k];
+                        if (arg->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
+                            arg->value.value_id >= fn->value_count ||
+                            !minic_type_equal(
+                                fn->values[arg->value.value_id].type,
+                                argument_types[k]) ||
+                            call_plan->arguments[k].gp_first != k ||
+                            call_plan->arguments[k].gp_registers != 1U ||
+                            call_plan->arguments[k].fp_registers != 0U ||
+                            /* Register-only slots have the sentinel, not
+                             * stack index zero. Do not reject valid GPR ABI. */
+                            call_plan->arguments[k].stack_first != SIZE_MAX)
+                            return false;
+                    }
+                    if (immediate_index != SIZE_MAX) {
+                        const MinicCoreCallArgument *immediate_arg =
+                            immediate_index < count ?
+                                &fn->call_arguments[begin + immediate_index] : NULL;
+                        /* The C argument was evaluated and scalar-snapshotted
+                         * correctly. Consume the Core source-constant fact
+                         * rather than treating the post-snapshot LOAD as
+                         * an arbitrary GPR CSR index. Exact CSR range remains
+                         * a LoongArch target policy, not a Core restriction. */
+                        if (immediate_arg == NULL ||
+                            immediate_arg->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
+                            !(immediate_arg->has_constant_integer
+                              ? (imm = immediate_arg->constant_integer_bits, true)
+                              : loongarch_builtin_immediate_value(
+                                    fn, immediate_arg->value.value_id, &imm)) ||
+                            imm > 16383U)
+                            return false;
+                    }
+                    if (immediate_index != SIZE_MAX) {
+                        if (count == 1U) {
+                            if (fprintf(out, "  %s $a0, %" PRIu64 "\n",
+                                        mnemonic, imm) < 0) return false;
+                        } else if (count == 2U) {
+                            if (fprintf(out, "  %s $a0, %" PRIu64 "\n",
+                                        mnemonic, imm) < 0) return false;
+                        } else if (fprintf(out, "  %s $a0, $a1, %" PRIu64 "\n",
+                                           mnemonic, imm) < 0) return false;
+                    } else if (count == 1U) {
+                        if (fprintf(out, "  %s $a0, $a0\n", mnemonic) < 0)
+                            return false;
+                    } else if (count == 2U &&
+                               (strncmp(mnemonic, "crc.", 4U) == 0 ||
+                                strncmp(mnemonic, "crcc.", 5U) == 0)) {
+                        if (fprintf(out, "  %s $a0, $a0, $a1\n", mnemonic) < 0)
+                            return false;
+                    } else if (count == 2U) {
+                        if (fprintf(out, "  %s $a0, $a1\n", mnemonic) < 0)
+                            return false;
+                    } else {
+                        return false;
+                    }
+                } else if (fprintf(out, "  bl %s\n", callee->name) < 0) {
                     return false;
+                }
             }
             if (stack_bytes != 0U && !minic_loongarch64_emit_sp_adjust(out, stack_bytes, true))
                 return false;
             if (minic_type_is_void(ins->type)) return true;
             if (minic_type_is_record(ins->type)) {
-                const MinicCoreObjectId object_id =
-                    ins->value.call.result_object;
-                size_t bytes, slots, dst, chunk;
-                if (indirect || object_id >= fn->object_count ||
-                    !minic_multi_gp_record(program, target, ins->type,
-                                           &bytes, &slots) ||
-                    bytes == 0U || bytes > 16U || slots > 2U ||
+                const MinicCoreObjectId object_id = result_object;
+                size_t bytes, slots, dst, chunk, fp_elements, fp_width;
+                if (object_id >= fn->object_count ||
                     !minic_lp64_frame_plan_object(frame_plan, object_id, &dst))
+                    return false;
+                if (minic_multi_empty_record(program, target, ins->type))
+                    return true;
+                if (minic_multi_indirect_record(program, target,
+                        ins->type, &bytes) && bytes > 16U)
+                    return true; /* GNU LP64D callee filled caller's buffer. */
+                if (minic_multi_fp_return_record(
+                        program, target, ins->type, &fp_elements, &fp_width)) {
+                    for (chunk = 0U; chunk < fp_elements; ++chunk) {
+                        const char *reg = chunk == 0U ? "$fa0" : "$fa1";
+                        if (!emit_sp_mem(out, fp_width == 4U ? "fst.s" : "fst.d",
+                                         reg, dst + chunk * fp_width))
+                            return false;
+                    }
+                    return true;
+                }
+                if (!minic_multi_gp_record(program, target, ins->type,
+                                            &bytes, &slots) ||
+                    bytes == 0U || bytes > 16U || slots > 2U)
                     return false;
                 for (chunk = 0U; chunk < slots; ++chunk) {
                     const size_t payload = bytes - chunk * 8U >= 8U
                         ? 8U : bytes - chunk * 8U;
                     if (!minic_loongarch64_emit_lp64_record_chunk_parameter(out,
-                            dst + chunk * 8U, payload, true, chunk, 0U, dynamic_frame))
+                            dst + chunk * 8U, payload, true, chunk, 0U,
+                            dynamic_frame, SIZE_MAX))
                         return false;
                 }
                 return true;
@@ -258,8 +430,13 @@ bool minic_loongarch64_emit_abi_instruction(
                         if (!emit_sp_mem(out, "st.d", gp_regs[location->gp_first + chunk],
                                          dst + chunk * 8U))
                             return false;
-                    } else if (!emit_sp_mem(out, "ld.d", "$t0",
-                                            frame + (location->stack_first + chunk - used) * 8U) ||
+                    } else if ((ctx->saved_entry_sp_offset != SIZE_MAX
+                                   ? !minic_loongarch64_emit_incoming_stack_mem(
+                                         out, "ld.d", "$t0",
+                                         (location->stack_first + chunk - used) * 8U,
+                                         ctx->saved_entry_sp_offset)
+                                   : !emit_sp_mem(out, "ld.d", "$t0",
+                                         frame + (location->stack_first + chunk - used) * 8U)) ||
                                !emit_sp_mem(out, "st.d", "$t0",
                                             dst + chunk * 8U))
                         return false;
@@ -278,6 +455,13 @@ bool minic_loongarch64_emit_abi_instruction(
                                  minic_type_is_double(ins->type) ? "st.d" : "st.w",
                                  gp_regs[location->gp_first], offset))
                     return false;
+                /* The subsequent target-only pass may forward a sole
+                 * immediately adjacent use straight from its incoming GAR.
+                 * No ABI register is kept live across any machine opcode. */
+                if (fprintf(out, "# MINI_LOONG_SSA_PARAMETER %u %zu\n",
+                            (unsigned int)ins->result,
+                            location->gp_first) < 0)
+                    return false;
             } else {
                 const char *const load =
                     minic_lp64_register64_type(program, target, ins->type) ||
@@ -285,8 +469,13 @@ bool minic_loongarch64_emit_abi_instruction(
                 const char *const store =
                     minic_lp64_register64_type(program, target, ins->type) ||
                     minic_type_is_double(ins->type) ? "st.d" : "st.w";
-                if (!emit_sp_mem(out, load, "$t0",
-                                 frame + location->stack_first * 8U) ||
+                if (!(ctx->saved_entry_sp_offset != SIZE_MAX
+                          ? minic_loongarch64_emit_incoming_stack_mem(
+                                out, load, "$t0",
+                                location->stack_first * 8U,
+                                ctx->saved_entry_sp_offset)
+                          : emit_sp_mem(out, load, "$t0",
+                                frame + location->stack_first * 8U)) ||
                     !emit_sp_mem(out, store, "$t0", offset))
                     return false;
             }

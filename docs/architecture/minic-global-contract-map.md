@@ -1,0 +1,332 @@
+# MiniC 全局架构、阶段契约与数据所有权图谱
+
+> **持续审计文档（living document）**。这是生产路径的事实图谱，不是一次性重构 RFC，也不代表全部源码已逐行审核。
+>
+> 首建：2026-10-30；第五轮审计起点：`b0870345b`（前次第四轮基线 `400f4a611`）；第六轮审计起点：`74b366267`；第七轮审计起点：`820116e59`，分支 `refactor/minic-target-language-boundary`。代码演进后须更新入口、契约、证据及审计范围。
+
+> **2026-10-31 / `f6e9eb870d80`、续审 `3d504e7ee4a7` 核验补注：** 当前 `src/` 有 337 个 C/H 文件
+>（Frontend 70 / Compiler 11 / Core 48 / Target 208）。下文“332 文件”专指旧审计基线；
+> 当前 `compiler.c:354–377` 的 Core 后裁剪实际为 **function prune → dead static object prune → function prune**。
+> 全部新增清理接缝、尚缺证据及文档导航见[架构总入口](README.md)；
+> 337 个源码文件与两个 CLI 的覆盖程度、盲区见[第八轮源码覆盖账本](minic-source-coverage-f8-2026-10-31.md)。
+>
+> 配套：[函数契约台账](minic-function-contract-register.md) · [缺陷、风险与架构债](minic-issue-register.md) · [架构原则](principles.md)。
+
+## 1. 审计口径：先找真实所有者，再评价抽象
+
+本图谱将五类判断分开：
+
+1. **事实**：源码中的生产者、消费者、释放者及调用顺序，能由调用链核对。
+2. **契约**：对输入、身份、生命周期、允许的状态修改及失败回滚的约束。
+3. **设计差异**：不同 ISA/ABI、声明能力与机器能力、源 ASM 与生成指令的差异；不能直接归为重复代码。
+4. **已证问题**：有足够源码、动态或 GNU 差分证据，进入 `MC-xxx` 缺陷台账。
+5. **疑点**：缺少生产者/消费者或失败反例时保持待复核，不能推动破坏性重写。
+
+函数长度、多个数组的相同下标、两条后端路径及 `probe = *parser` 的出现本身**都不是错误证据**。判断要落到实际允许的变更和物理拥有者上。
+
+## 2. 用户可见入口与能力边界
+
+| 入口 | 主要路径与责任 | 经核对的限制 |
+| --- | --- | --- |
+| `tools/minic/main.c:main` | 产品 driver：选择 target catalog 与 stage，组织工具进程、临时中间文件和清理 | `-S` 直接调用 `minic-cc -S`，输入须为已预处理 `.i`；不隐式运行 CPP。`-c`/链接的 staged toolchain 仅对 catalog 允许的目标开放，当前不是五目标同等阶段支持。 |
+| `tools/minic-cc/main.c:main` | 解析 `--target/-march/-mabi/-fPIC/-fsigned-char/-fshort-wchar` 等；创建 invocation-local target | canonical `TargetInfo` 只读；语言 ABI 和机器选项改本次 invocation 副本；调用下面的 Compiler 入口。 |
+| `src/compiler/compiler.c:minic_compile_preprocessed_file_for_target` | 单个已预处理 TU 的完整编译与释放入口 | 借目标描述；拥有 source buffer、Program 与 CoreFunctionSet；成功生成 `.s`，失败统一销毁内存；输出文件事务在 Target/common 层。 |
+
+**关键边界：** `-S` 的五目标覆盖、GNU AS/ELF 链接覆盖、QEMU/原生执行覆盖是三种不同验收，不得拿一项推断另一项。测试口径见本文件末尾。
+
+## 3. 当前真实生产管线
+
+```mermaid
+flowchart TD
+  D["Driver / Invocation Target"] --> P["Parser + Sema：Program AST"]
+  P --> N["AST Verify + Ownership + Normalize"]
+  N --> I["Inline 专项特化与引用关系"]
+  I --> C["CoreSet：各函数 Core IR"]
+  C --> R["Core 可达性 + 状态验证 + Layout"]
+  R --> T["Target：ABI Plan + ISA Emission"]
+  T --> O["私有临时 .s → finalize → rename"]
+```
+
+完整源码顺序以 `src/compiler/compiler.c:236–422` 为准：
+
+| 次序 | 生产调用 | 读取 | 写入 / 返回 | 成功后的下游约束 |
+| --- | --- | --- | --- | --- |
+| 0 | `minic_read_file` | `.i` 路径 | heap-owned `MinicSourceBuffer.data` | Parser 在读取结束前借用该输入；最外层统一 `free`。 |
+| 1 | `minic_parse_c0_program_for_target` | source、invocation Target | `MinicC0Program` 的 AST、类型、名字、全局/函数实体 | Parser 私有 scope/tag/enum/cache 与 Program 长寿命 arena 分别析构。 |
+| 2 | `minic_c0_program_verify_target_detailed(PARSED)`、`minic_c0_program_validate_function_body_ownership` | Program | 无预期语义修改；临时验证索引 | 检查结构、类型及跨函数 Body 所有权；FunctionBody 的只读 visitor 对 overflow CALL 参数尚有同值写回（MC-030），因此不是严格物理只读。 |
+| 3 | `minic_c0_program_normalize_casts` | 原 AST | 新表达式 arena + ExpressionId 重映射后提交 | 再次验证 NORMALIZED AST 和 Body 所有权。 |
+| 4 | `minic_c0_program_recompute_inline_emission_references`、三个 `minic_specialize_inline_*`、`minic_finalize_inline_integer_specialization_references` | Program、Target | 追加 clone/Expression、更新 CALL 特化与 `is_referenced` | **有意仍修改共享 Program**；调用实例特化错误集中在这里，见 MC-001/006/007/008。 |
+| 5 | `minic_prepare_core_function_set` | 特化完成后的 Program、Target | 为每个 `FunctionId` 预留 CoreFunction/status 槽，构建 reentry index，按 FunctionBody 降级 | `CoreSet.functions[i]` 与 `Program.functions[i]` 的对应关系由构造协议保证。 |
+| 6 | `minic_prune_inline_specializations_from_core` → `minic_prune_dead_file_scope_static_objects_from_core` → 再次 `minic_prune_inline_specializations_from_core` | Program、CoreSet、backend reachability policy | 分别收敛函数引用、死静态对象发射、由对象初始化重定位触发的函数保活 | 这是 Core 降级后的函数—全局对象—函数根闭包，不是三份相同的语义扫描；删除前须保证 ASM/alias/computed label 根。 |
+| 7 | `minic_validate_core_functions`、`minic_data_layout_validate_program` | Core statuses、Program/Target Layout | 诊断，不创建目标机器结果 | 拒绝仍然活跃的失败函数和非法大小/布局。 |
+| 8 | `minic_backend_emit_assembly` | immutable-for-emission Program/Core、Target | 分派五目标的 `.s` 发射 | Target 后端产生机器 ABI 和源 GNU ASM 的目标策略；编译端不选择指令。 |
+| 9 | `minic_program_emit_write` 及目标 finalize | Program/Core、目标回调、目标路径 | `.s.minic-XXXXXX`，成功 close/finalize 后 rename | 失败删除临时文件，之前存在的正式 `.s` 不被半成品替换。 |
+| 10 | `minic_core_function_set_destroy`、`minic_c0_program_destroy`、`free(buffer.data)` | 所有当前 TU 的 owned 状态 | 释放全部 | 即使中间失败，入口也走统一析构尾部。 |
+
+**时序不变式：** 当前并不是「Parser 后 AST 永久冻结」。Normalize、Inline 和 prune 会更改 Program；只有进入单函数 CoreLower 时，AST 才按不可变源借用（它们之前的特化写入已结束）。进一步拆分阶段应先处理实际的**调用实例事实归属**，不能只按文件名划界。
+
+## 4. 数据所有权、身份与借用生命周期
+
+| 对象 / 句柄 | 真实分配与拥有者 | 谁读取 / 可能修改 | 不可突破的生命周期规则 |
+| --- | --- | --- | --- |
+| `MinicTargetInfo` canonical | Target catalog 中静态配置 | CLI/Parser/Core/Backend 只借用 | 调用选项应通过 `MinicTargetInvocation` 私有副本改变，不能污染另一次编译。 |
+| `.i` SourceBuffer | Compiler 入口 malloc | Parser 借用文本、解析期间使用 | Program 析构后由 Compiler free；后端不保存裸 SourceBuffer 指针。 |
+| `MinicC0Program` | Compiler 入口，`ast.c` 维护各 arena | Parser 构造，Normalize/Inline/prune 定向修改；Core/Target 读取 | Program 独占记录字段、名字、CALL overflow、各语义实体的析构责任。 |
+| `FunctionId`/`RecordId`/`ExpressionId` | Program append 时的稳定整数身份 | 所有上游转换和下游 Core | ID 稳定，**元素内存地址不稳定**：arena `realloc` 后重新用 ID 获取；MC-001–003 违背的是借用指针有效期。 |
+| `FunctionBody` 逻辑树/图 | `Function.body_block` 作为语义根 | `function_body.c` 校验跨函数 Block/Statement/Local/ASM/cleanup 边 | Program-wide arena 是物理储存，不等于每个 Function 拥有一段连续 ExpressionId；parser-time orphan expression 合法。详见 [FunctionBody 契约](function-body-ownership-v1.md)。 |
+| Parser tags、enum、scope 等 | `MinicParser` 单独拥有的动态容器 | Tag/Enum 查找返借用指针，bind/add 会扩容 | 纯词法 probe 的浅拷贝未必有害；语义 parse 会写共享拥有型字段，MC-004/005 的浅拷贝确实违规。 |
+| Core reentry index | CoreSet 生成期间创建、销毁 | 各函数 CoreLower 只借用索引；query 可更新统计器 | 原 Program 不可写；OOM 或证据不足时保守回扫，不能据不完整索引证明「无 reentry」。 |
+| `MinicCoreFunctionSet` | Compiler 拥有，数组槽与状态一一对应 Program 函数序号 | 各函数 Lower 成功发表 Core IR；validate/Target 借用 | `function_count` 必须相同；未定义和无需发射的函数槽仍保留。并行数组同下标**不是偶然一致**。 |
+| `MinicCoreFunction` | CoreSet 槽独占；函数 Lower 使用私有 `lowered` 构造 | Core API append/verify；Target 只借用 | Lower 成功验证后才 move 到输出；失败析构暂态且旧输出不变。**已发表 ID 稳定**；特殊 CSR `rK` 尾部消除会在严格验证后回退未发表的 Instruction/Value 计数并复用尾部 ID，不能泛称所有 Core ID 绝对单调。裸指针也不宜跨 append。 |
+| `MinicCoreFunctionPlan` | `minic_program_visit_prepared_functions` 的单函数局部变量 | 各目标函数 emitter 借用 `facts` 和 `objects` | callback 返回后立即 destroy，目标不得持有内部指针越过回调。 |
+| 机器 ABI/frame/call plan | 各 Target 函数 emitter 构建、析构；可转移子对象所有权 | 原生目标指令选择/ASM 访客 | RV32/64 与 A64/Loong 可共用事实/算法，但具体物理 ABI 仍由目标独立保证；失败时 caller 负责全部半成品。 |
+| 目标 `.s` 路径 | `minic_program_emit_write` 临时文件事务 | 各 target callback 借用 `FILE*`，finalize 处理临时路径 | callback 局部写失败不会公开半成品；只在全部完成后 rename。 |
+
+### 身份与对象地址必须分开
+
+- `program->functions[i]` 与 `core_set.functions[i]` 对应 **FunctionId == i**：由 `minic_prepare_core_function_set` 创建同长度槽、`minic_validate_core_functions` 和 `minic_program_visit_*` 再次检验，而不是两个独立列表恰巧排序一样。
+- RV32 CALL 也有明确构造顺序、`instruction_id` 和 prepared 校验；不是「两数组下标恰好相等」。
+- `ExpressionId` 能准确标识单个共享 AST CALL，**不一定能标识某个 caller 中的一次动态/上下文特化实例**。MC-006 的根因是后者被错误折叠，不能据此否定稳定 ID 模型。
+- `RecordId` 可稳定指向语义 Record；`MinicRecord*` 是借用，跨任何可能添加 record 的递归解析后必须重新取得。
+
+## 5. 分层职责与可扩展性判断
+
+| 层 | 应保留的职责 | 不应拥有的知识/状态 | 当前复核判断 |
+| --- | --- | --- | --- |
+| Frontend + Sema | C/GNU 语义、AST、ID、声明/表达式与类型规则 | 每目标指令编码/ABI 栈偏移；静态 TargetInfo 的可写全局状态 | 未发现依 `target->architecture` 直接选择机器发码的 Frontend/Core/Compiler 分支；由 TargetInfo/Policy 提供 C 语义差异是正当接口。**但 `frontend/type.h` 确有 AArch64 NEON/SVE 的源语言不透明类型身份及 MS-X64 调用约定身份**，不能说前端完全没有架构词汇。 |
+| Compiler phase orchestration | 阶段顺序、验证、Inline specialization、CoreSet 和 TU 释放 | 机器 CALL 物理位置、目标指令细节 | 阶段入口清楚；Inline 的共享 AST 事实归属已存在实错。 |
+| Core IR | 中立的值、效果、CFG、ASM operand 语义；局部事实和 reentry 证明 | 非可移植 ISA literal、机器寄存器/帧布局 | Lower/verify/计划基本分离；Core 能从共享 Program 中读出不正确的调用实例 provenance（MC-006/007/008）。 |
+| TargetInfo/DataLayout/Source policy | 语言准入、目标特征、源 GNU ASM 资格、ABI/机器能力声明 | 替 Core 重写共享 AST；跨 invocation 的可变单例 | 有单一 target registration catalog；ISA 支持与主动 codegen 子集独立。 |
+| Target/common | 全局遍历、Core semantic plan、临时输出事务、经事实证实可共用的 ABI-neutral 算法 | 平台寄存器数量、变参 caller-stack 相位、机器 opcode | `program_emit`、`program_visit`、FunctionPlan 分层有实在消费者，不应合并为一个巨型 driver。 |
+| ISA backend | 寄存器与栈约定、调用/返回、选指令、目标 ASM/reloc/finalize | 重建 Parser、修改 Program AST 或假设别的 ISA ABI | 五目标独立配置。A64 与 Loong 共用 DirectLP64 **流程**，各自 ABI policy 独立；x86 Typed/Legacy、RV standalone/production 有真实分工。 |
+
+### 加一个新目标应该改哪里
+
+1. Target catalog/registration、TargetInfo/DataLayout、源语言及 GNU ASM 规则；必要时新增 ISA feature 与机器选项解析。
+2. 目标 ABI（参数/返回/栈/变参）和发射 callback；复用 `Target/common` 的遍历、Core plan 与输出事务。
+3. 目标独立 GNU assembler/ELF/QEMU 验证；不要求直接扩展 `Frontend` 的机器架构分支或复制 Core lowering。**例外**：新目标如果引入全新 C 可见 builtin 类型或函数调用约定，通用类型身份体系仍可能需要扩充；是否进一步数据驱动注册属于后续设计取舍。
+
+**例外需要显式记录**：RV32 与 RV64 可共用 GPR cursor/word operations，却不代表共用 ILP32/LP64 帧；A64/Loong 的 DirectLP64 共用的是函数规划/输出的通用步骤，不是同一物理 ABI；源 ASM 资格与生成 ISA 指令是两类独立能力。
+
+## 6. 当前阶段架构判断与未决问题
+
+| 主题 | 已证实的当前状态 | 结论 / 下一验证 |
+| --- | --- | --- |
+| 稳定 ID 与 CoreSet 索引 | 生产者显式按源函数槽填充、消费者校验；Core 同步失败状态 | **合理设计，保留**；不要按“两个数组同下标”作为重构理由。 |
+| Normalize 所有权 | 新表达式表、拷贝 owned payload、外部 ID remap 后提交 | **合理事务**；动态性质仍由逐批回归守护。 |
+| Inline 实例事实 | shared CALL 被跨 caller 修改、整数+符号事实不能组合 | **已证缺陷 MC-006/007/008**；重构需把 `(caller FunctionId, Call ExpressionId)` 的实例事实归属单独表达。 |
+| FunctionBody 只读接口 | `visit_expression_child_ids` 的浅拷贝仍通过可写 visitor 给 CALL overflow 同值赋值 | **MC-030 设计债**；单线程目前未证错编，未来并发读取不能依赖当前物理 const。 |
+| Core 特殊尾部回退 | `core_inline_asm_rewind_dead_local_assignment` 同时检查 block 和全局连续尾部 ID/definitions 后缩小可见计数 | **合理但特殊**；已更正“全局始终单调、只留 tombstone”的旧误导注释，不应按普通 append-only 规则理解。 |
+| Parser 语义 probe | `probe=*parser` 的 attribute 语义求值跨 owned 容器扩容 | **已证缺陷 MC-004/005**；其他词法 probe 不受同一判定影响。 |
+| Parser Record 快照身份 | 静态 aggregate 使用栈上 `record_snapshot` 避免 Program arena 扩容使借用地址失效；字段路径 helper 却反算 `record - Program.records` | **MC-034 ASan pointer-pair 证实真实 UB**；快照本身有正确目的，应分离 Record 描述与稳定 RecordId 的传递。 |
+| 字面量语义精度 | `parse_floating` 为 `long double` 先 `strtod`（binary64）再扩为内部 binary128；x86 x87 发射假定源是 binary64 | **MC-041 新增 P0 GNU-NATIVE-DIFF**；有效十进制 `L` 字面量与 GCC 本机执行结果不同，单改 Parser 而不检查 x87/四目标机器消费者会引出新问题。 |
+| Record 零宽位域对齐 | `minic_data_layout_record_depth` 对所有位域同样先压缩 pack alignment，`int:0` 对齐栅栏被削弱 | **MC-042 P1 GNU-NATIVE-DIFF**：packed/pragma pack 下 GCC `offsetof/sizeof=4/5`、MiniC `1/2`；非 packed 输入正确；共享 DataLayout 可能影响其他 ISA，但仅 x86 有运行证据。 |
+| 参数列表 tag scope | prototype、definition、function-pointer 的参数类型解析在进入参数列表前未建立正确作用域 | **MC-044 P1**：有效 GNU C 的外层同名 Record/Enum 被误判 duplicate，五目标同一 `.i` `-S` 均拒绝；函数定义 body 对其参数 tag 应继续可见，需带生命周期重建。 |
+| Inline 特化预算 | 整数/布尔的 clone 数目限定为 2048/1024；耗尽时直接使整个 Compiler 失败 | **MC-043 P1 LOCAL-COMPILE-DIFF**：有效 2050 / 1025 个 distinct callsite 的 GNU 输入被错拒，阈值内正常；需要区分可选优化 budget 与真正必要静态特化。 |
+| Runtime 范围初始化 | evaluate-once helper 借 Expression 指针、追加新 expression 后继续读 span | **MC-035 P0 已证 ASan UAF**：合法 GNU range initializer 在 Expression arena 容量边界触发。 |
+| Runtime 嵌套数组 | borrowed ArrayType 跨递归解析，子 `sizeof(int[N])` 触发同一 arena 扩容 | **MC-039 P0 已证 ASan UAF**：14 个前置 ArrayType 触发扩容，第二个子数组读取旧地址。 |
+| 匿名字段位置初始化 | promoted MEMBER leaf 的 field index 被误用作 outermost field 游标 | **MC-038 已证 x86 `-S` 合法 GNU C 错拒**；`.b=2,3` 失败，显式 `.c=3` 正常。 |
+| Bool 两条证明 | CFG 剪枝与 local facts 的可达性/保守性政策不同 | **MC-019 架构债**；可抽共用 oracle，不可机械删任一路。 |
+| Core ASM 多种 probe | 有序资格认领，target-required fail-closed | **合理差异**；要检查具体结果约束，而不是按多个函数名判重复。 |
+| ABI varargs / packed ASM | RV32/64 过对齐 varargs 的保存区与 caller stack 有经过合法源码发射的地址不连续；Loong packed `add_unless` 结果写回实际走直接 `st.w` | **MC-010/014/015 第四轮从静态疑点补为可重放 `ASM-ONLY`**；无 GNU 目标/QEMU 运行证据，RV64 无剩余 GPR 的动态对齐分支已排除。 |
+| RV32 指针宽化转换 | Core 认可 pointer→u64 的 `SCALAR_BITCAST`，RV32 的 1→2 word 发射器拒绝此 opcode | **MC-048 P2 编译接受缺口**；GNU C 有效、RV32 `-S` fail、RV64 同形 pass，尚不是运行时错码。 |
+| RV64 `__int128` shift RHS | 宿主 GNU C 接受宽 RHS，当前 MiniC RV64 `-S` 拒绝；换窄整数 RHS 同目标可过 | **MC-028 已确认编译接受缺口**；尚不是 GNU RV64/ELF/QEMU 运行时错码证据。 |
+| Core 标量更新事实 | 表达式语句 `++/--` 直达 scalar-update，通用表达式路径才会使 local constant 失效 | **MC-033 P0 实测错编**：x86-64 GNU 链接/运行与 GCC 不同；RV32/RV64/A64/Loong `-S` 均出现错误的分支消除，仅 x86 已执行。 |
+| Record 条件表达式事实合流 | Record conditional 的 true/false/merge CFG 与 scalar fact fork/meet 不对称 | **MC-036 P1 已证 x86 GNU native 错编**；`f(1)` 应返 1，实际返 11，假臂 fact 污染 merge。 |
+| AArch64 simple-global ELF type | target config 选 `%object`，但非 extern 的 Common simple global 硬编码 `@object` | **MC-025 仍调查中**；调用链分歧真实，A64 GNU AS 接受性尚未实测，不能宣称失败。 |
+| Loong 特殊 ASM 类型限定符 | Source policy 对 volatile 输出先去限定符，Machine emitter 却用完整带限定符 pointee 与无 cv 类型相等比较 | **MC-037 已复现 cpucfg/CSR 的 `-S` 编译接受缺口**；同形 source/emitter 门控归为一个根因，目标 GAS/QEMU 尚无证据。 |
+| Loong futex 特化读写输出 | Source gate 接受 GNU `+r`，目标特化仅发固定零并回写，没有消费原始寄存器输入 | **MC-045 P1 ASM-ONLY**；`err=7` 的有效 GNU 源 `.s` 明确产生无条件清零，Linux 已知 `err=0` 不能代表全部 source contract，待 Loong runtime 验证。 |
+| A64 来源布局 | 两条 A64 Linux ASM 辅助逻辑读取默认 RV64 DataLayout，眼下布局值相同 | **MC-046 架构债**，没有已证现时错编；应在未来演进前把当前 TargetInfo/Layout 传给真实消费者。 |
+| Core 值事实 vs 可消除效果 | 常量事实在 IF/condition branch/switch 的消费者纯度要求不完全相同 | **MC-047 仅 INVESTIGATING**：8 路 CFG x86 GNU/native 全通过，其他四 ISA `-S` pass，暂不因设计风险重写 Core。 |
+| 自动化验收 | 某些 source-only 脚本把源码检查标成 QEMU/ELF | **MC-011/012/013**；验证等级必须进入报告，而非整体称“通过”。 |
+| 静态初始化器的两种不安全借用 | 静态链式数组设计符留 `ArrayType*`；Record 后向覆写留 `Record*`，其间的 `sizeof(type)` 语义解析都可能扩容相应 Program arena | **MC-049 / MC-023 均 P0 ASan**；稳定 TypeId/RecordId 与值型 header snapshot 是正确修复方向，不能因正向已有保护就认为后向安全。 |
+| Core long double 一元运算 | float/double 的 Core NEGATE 与 long double `__subtf3(0,x)` 路线分叉 | **MC-051 P1 GNU-NATIVE-DIFF**：`-(+0L)` 真实错成 `+0L`，并非字面量 MC-041 同一根因。 |
+| x86 特化 ASM 类型门控 | Source 六种 GNU 特例对输出先去 cv，Core 正确携带 lvalue pointer，机器发射再用 raw pointee type equality | **MC-050 P2 LOCAL-COMPILE-DIFF**：六家族 plain -S PASS、volatile FAIL；三个安全子例 GNU/mixed native PASS，不能虚报 volatile MiniC runtime。 |
+| AArch64 uaccess 输出宽度 | Source 接受 LDTRB/H/W 的 1/2/4B output，Machine 无条件使用 8B `str x10` | **MC-052 P1 ASM-ONLY**：可覆盖相邻 packed 字段；只证 `.s` 地址和物理宽度，无目标 GNU GAS/QEMU。 |
+| RV64I softfloat 能力 | LP64 与 ISA F/D codegen 相互独立；基本四则已有 libgcc 桥接，比较/取负/转换没有同等 helper | **MC-053 P2 LOCAL-COMPILE-DIFF**：RV64I/LP64 十例 0/10，RV64IMAFD/LP64D 10/10，属于显式拒绝的能力缺口，不等于错误机器码。 |
+| Core 验证器辅助数组 | 主 Core arena 有存储形状 preflight，但 fixed bindings、enum_types、function_symbols 无先检验 | **MC-055 P2 CORE-API-ASAN**：人为 malformed Core 会产生两条空指针/一条堆越界，公开 Core API 可构造欠缺 enum 元数据但 verifier 误接受；**尚未证合法 C producer 出错**。 |
+| Inline symbolic 过时判定 | `minic_inline_symbolic_static_expression_depth` 中局部值路径有 `&& false`，但其余 symbolic closure/legacy fallback 有生产消费者 | **MC-054 P3 DEBT**：可小范围清理恒假代码，不可据此删除整个函数或回退算法。 |
+
+本轮以源码、调用链、所有权和已有测试证据交叉审核，**不是一次性重写授权**。优先补准契约与测试，问题可入台账挂起；若以后进入修复批次，应先验证所有相关消费者和旧路径是否还需要，再删除旧实现。
+
+### 第五轮复扫：模块级结论要与函数级阅读轴并存
+
+六个审计分片额外交付 `F5-M01..M28`（Target Common）、`F5-C01..C30`（Compiler/Driver）、`F5-F01..F30`（Frontend）、`F5-IR01..IR30`（Core）、`F5-R01..R30`（RISC-V）、`F5-A01..A30`（AArch64）、`F5-X01..X30`（x86），合计 **208 个函数/函数组审计入口**，不是 208 个此前完全未读过的独立 C 函数，也不是 332 个 C/H 文件全部 R2。部分行涵盖相互关联的 helper；x86 `X10/X27/X28` 仍为 R1/U1，其余按具体行的证据层声明。完整 contracts 和源位置在[第五轮函数表](minic-function-contract-register.md)。
+
+重要跨层模型：Frontend AST 中稳定的 `TypeId/RecordId` 与可扩容的 `ArrayType*/Record*` 地址有不同生命周期；Core SSA/CallView 是语义载体，实际 output 宽度和可用软 float helper 必须由 ISA/ABI consumer 明确保证；GNU ASM Source 准入与 Machine emitter 是**同一 contract 的两端**，不能各自任意重定义 volatile、lvalue 宽度；可选 Inline 优化预算和编译正确性不可混为一谈。下一轮继续优先找全局 owner 与消费者之间的差异，使用独立 ASan、GNU native、GAS/ELF/QEMU 的真实证据逐级封闭问题。
+
+**覆盖边界：** A64 `source_policy`/`fp_emit`/`residual_emit` 全读，`asm_contract.c` 仅关键区段 R2；x86 `source_policy` 全读，两个万行级 ASM 源/机文件仅配对 30 组，不应声称长尾全量读完。所有目标新测试主要是 `-S` 源/汇编和 x86 原生可执行差分；本轮未对新 MC 条目跑 A64/Loong/RV 的目标 QEMU。
+
+### 第六轮：函数契约与真实消费者复扫（审计起点 `74b366267`）
+
+第六轮新增 [函数台账](minic-function-contract-register.md) 的 `F6-*` 共 **204 个函数/函数组记录**：Common22、Frontend28、Compiler/Inline/Reentry24、Core16、RV32/64 30、AArch6455、x86 29。它们有新读函数、helper 函数组合及重复复核，不是 204 个新的独立函数，更不是全项目 R2/U2 覆盖率。x86 五组大函数仍标 R1/U1。Core 69 个有效 opcode 已逐一核对 verifier/value-use visitor，不能据此推断所有元数据先决条件都被验证。
+
+| 设计层与函数所有权 | 本轮新的事实、生产者与消费者 | Bug 状态 / 证据边界 |
+| --- | --- | --- |
+| Frontend Record arena | runtime 顺序 initializer 持有借来的 `Record*`，首字段 `sizeof(匿名struct)` 可增长 arena，下一字段读旧指针。与静态后向覆写的 MC-023 同类失效机理、不同生产路径。 | **MC-056 P0 ASAN OPEN**，持久反例已在本仓库，五目标存在不同 capacity 相位；普通 x86 native 返回值暂与 GNU 相同。 |
+| GNU 空 Record→目标 ABI | Common shape 可以合法算出0 words；RV32 caller 有两条路径已经支持，terminator 两项失败；RV64 ABI `IGNORE` 已分类但 return emitter 和 call 资格未完全消费；x86 有自己的四项拒绝路径。 | **MC-057 P2 LOCAL-COMPILE-DIFF OPEN**，六目标×四语义角色分开记录：RV32 2/4、RV64I/LP64 0/4、RV64D 0/4、x86 0/4、A64 4/4、Loong 4/4，均为 `-S` 而非 QEMU。 |
+| Compiler symbolic fact identity | Caller 的直接已知全局指针能内联为 `"i"` 静态 operand，但 `ptr + 1` 经中间 wrapper 传递时缺 `(symbol,byte-offset)` 事实，唯一 caller 即可触发。 | **MC-058 P1 LOCAL-COMPILE-DIFF OPEN**；同源 direct PASS / transitive FAIL，独立于 MC-006 多实例污染和 MC-008 整数事实。 |
+| Core 公开 API / Verifier | Main Core buffers 形状预检完整，但 fixed binding/function symbol/enum 三元数据 arena 仍可异常；正常 add/set API 正向 ASan clean。 | **MC-055 P2 INVESTIGATING CORE-API-ASAN**，malformed 结构崩溃与 API enum 注册契约不一致有实证；非合法 GNU C 的已证错编。 |
+| x86 Source/OPAQUE 双消费者 | SMAP form1/2 属无 operand 的 opaque 机器 emit；form3/4 属有 operand structured emitter，同名机器 case 两端均活跃。 | **排误报**：GNU/MiniC -S/GNU AS/readelf 均含完整 alternative sections，不能把 form1/2 删除。 |
+| Inline/Core Optional Index | `inline_boolean_domain_legacy` 是缓存 OOM 的真实 fallback；`core_reentry_fallback` 又供 standalone CoreLower 和索引失败使用。 | **排误报**：新旧算法并存是必要的失败/standalone 支持，不是自动冗余；reentry 专项脚本 indexed/fallback、GNU/MiniC native 与五 ISA `-S` PASS。 |
+| RISC-V ABI 与帧重用 | RV32 64bit named 参数可跨 a7/entry stack，va_arg 的64bit值占偶数寄存器对；RV64I libgcc helper CALL 维持 RA 保存，公共 object reuse 排除过对齐对象。 | **排误报**：编译汇编与 psABI 一致；没有 Linux/QEMU 运行实测。 |
+| AArch64 模板与机器宽度 | Linux AT/io dependency 的 `volatile unsigned long` 输入实测 `-S` 可通过；frame x16/x17 materialize 与 source-only constraint 分离。 | **排误报**：不新增未经实证的 bug；已登记 **MC-052** uaccess 8B 写回风险依然待修。 |
+
+第六轮测试将不同层级分开：`GNU C syntax/compile`、MiniC `-S`、ASan、GNU AS/原生可执行（仅指定 x86 正控）以及 **未完成的目标 QEMU**。新增 `MC-056/057/058` 输入存放在 `tests/compiler/audit/`，为已知失败的长期反例，不计入绿色编译成功率。源码仅加入对应所有权/ABI `FIXME(MC-...)`，不在审计轮改变运行语义。
+
+### 第七轮：实体身份比“复用某个 Helper”更重要（审计起点 `820116e59`）
+
+由七个并行阅读分片复核的 [F7 函数契约台账](minic-function-contract-register.md) 共 **212 条函数/函数组记录**（Frontend31、Compiler/Core facts30、Core/reachability33、RISC-V36、AArch64/Common49、x86长尾5、LoongArch64 28），都是函数本体与生产者、消费者 R2/U2 级追踪；有重复审计与函数组，不是 212 个首次全读的独立函数，也不是整仓覆盖率。上轮 x86 五组 R1/U1 已经过独立源端/机器端补读。新增八项确证 `MC-059/060/061/062/063/064/066/067`，`MC-065` 为明确排除的错误报告。
+
+| 层级与真实身份边界 | 复核出的契约/不一致 | 证据及下一步 |
+| --- | --- | --- |
+| Frontend RecordId vs 借用的 `Record*` | `parse_record_field_declarator` 保存 Record header 后经 pointer-to-array / function-pointer 子声明创建匿名 Record，复用失效地址；直接数组字段因检查顺序不同目前没有这次 UAF。 | **MC-061 P0 ASAN**；五目标各自不同 arena 容量相位。全局修复应联合 MC-002/003/023/056，保留每条不同生产入口反例。 |
+| GNU Record member 的有名/无名身份 | `struct Named;` 是 GNU 可警告的裸类型声明而非匿名成员；`struct {int x;};` 才成为实际匿名布局成员。 | **MC-063 P1 GNU-NATIVE-DIFF**；同输入 GNU x86 exit48，MiniC x86 exit88。DataLayout 结果错的源头在 parser 添加字段，非目标 ISA。 |
+| Declaration lookahead 与 tag entity | Record forward dispatcher 只接受 `struct IDENTIFIER ;`，漏 `struct __attribute__((aligned(16))) Forward;`，虽然 type specifier 支持属性。 | **MC-067 P2 LOCAL-COMPILE-DIFF**；五目标 0/5，通过不带属性正控 5/5。需统一声明前缀 classifier，不能为了一个属性复制整份 Parser state。 |
+| Core ASM 文本 vs FunctionId 可达性边 | `"i"(static_func)` 降为纯 OPAQUE ASM 文本 `.quad static_func`；可达性 walker 只遍历 CALL/FUNCTION_ADDRESS，丢静态函数定义。相同静态全局符号与显式 C call 有正控。 | **MC-064 P1 ASM-ONLY**；真实 GNU x86 object 保留 LOCAL FUNC、MiniC RV64 `-S` 出现未定义标签引用；尚缺 RV 目标 GNU AS/link。应在 Core 保留结构化符号根。 |
+| RISC-V 具名 union 的物理 ABI | LP64D 不应将 union 的 FP member flatten 到 FPR；Common integral-tree 判定把 union 误作 FP-only struct。 | **MC-059 P2 LOCAL-COMPILE-DIFF**；LP64D 四项失败/整数 union 正控通过；LP64 soft 五项通过。需 GCC 目标 ABI 位置/实物传参核验。 |
+| AArch64/Loong 大 Record 的跨层契约 | Common `minic_multi_indirect_record` 与 A64/Loong 返回/复制 emit 均把 2048B machine 上限混进 C/ABI admissibility。 | **MC-060 P2 LOCAL-COMPILE-DIFF**；2048 PASS / 2049 FAIL 两目标，x86/RV 同样数据能 -S。放宽时须同时调整机器大字节复制、立即数和 sret owner。 |
+| A64 pointer type 与 FP aggregate leaf | `aarch64_special_aggregate_member` 先看 `base_kind=DOUBLE`，将 `double*` 判作 FP member，错拒合法32B间接对象。 | **MC-066 P2 LOCAL-COMPILE-DIFF**；GNU语法合法，`double*` MiniC FAIL、仅改 `int*` PASS。不能扩大解释为完整 HFA 支持。 |
+| x86 GNU `m` 约束与硬编码 replacement reloc | ALT_RELOC 的 source 接受任意可寻址 GNU `m`；machine 只认识固定 global symbol，并将固定地址写入 section。 | **MC-062 P2 LOCAL-COMPILE-DIFF + GNU ELF reloc**；更换符号 GNU relocation 正确变，MiniC -S fail。需要统一 Source/机器 operand 身份。 |
+
+**架构边界与排误报：** Parser 的 `probe=*parser` 与轻量 Lexer-only lookahead 是现存不同策略，未验证可以全面合并；Core facts 的 index cache 有合法 fallback，inline `volatile` 读取在原生正控里未被消除；x86 crash-register R11 候选跨 caller-saved 函数调用、ASM 无输入约束，因此 **MC-065 CLOSED-NOT-A-BUG**。Loong `frame_emit/memory_emit/call_emit/block_emit` 主要函数已横向复核，但仍是静态 R2/U2，不等于 Loong QEMU。RISC-V union、A64 Record、x86 ALT 测试均把 GNU C、`-S`、ELF/本机执行和目标 QEMU 的证据级别分开；本轮没有跨架构 Linux image 运行验收。
+
+**维护策略：** 发现立即写 `MC` 台账+对应永久 `.c` 负例+必要的源码所有权 `FIXME`，不为单个差分立刻更改 Core/Target 协议。下一修复批次以跨模块生产者→消费者为边界合并审查，避免新旧实现并存后遗失旧路径。
+
+### 第四轮跨层回看：为何不能由新 Bug 推出要重写某一层
+
+- MC-041 是**前端的数值创建和后端可表示范围共同定义的契约**。目标支持 `long double` 的 ABI 并不足以证明前端已经保存该目标精度；中间 binary128 也不足以证明 x87 能完整发射它。
+- MC-042 是**所有 ISA 共用的 DataLayout 被合法 C 特例击穿**，不能在各目标 ISA 发射器分别补一份字段偏移算法；但每个 ABI 的位域规则仍需目标 GNU oracle 独立检验。
+- MC-044 是**类型身份作用域生命周期**出错，不是 Record arena 指针是否稳定的问题；要同时保证参数标签在函数体内可见、函数体外不可见，以及嵌套 prototype scope 结束。
+- MC-043 是**可选特化配额与语义正确性混在一个布尔返回值中**；这与 MC-006/007 的调用实例事实所有权不同，不能以“统一 Inline 算法”为由一次消除所有检查。
+- MC-014/015 是**物理 caller SP 与 realigned frame SP 的身份分离**；共享 GPR placement 算法可保持，具体 `va_list` 向 caller 栈切换必须交给各 ABI 独立保证。
+
+## 7. 验证与审计覆盖分级
+
+函数审计另有**阅读 `R0→R2`**与**理解 `U0→U2`**两条独立进度轴，细则和逐函数记录见[函数契约台账](minic-function-contract-register.md)。函数体已读、已追踪消费者、已建立契约、已证明某个可达错误是不同结论；文档只按实际完成的维度升级。源码注释着重记下非显然的不变式及所有权边界，未证实风险仍在 [MC 台账](minic-issue-register.md)中保持 `INVESTIGATING`。
+
+| 级别 | 代表什么 | 不代表什么 |
+| --- | --- | --- |
+| `SOURCE-TRACE` | 核对函数入口、真实 caller、owner、变化与析构路径 | 不是 ASan/QEMU 执行成功。 |
+| `ASAN / LSan` | 某反例上的真实内存越界、悬空或泄漏证据 | 无报警不等于所有容量/分支安全。 |
+| `GCC-DIFF / ELF-ORACLE` | 预处理输入、产物、重定位或执行语义差分 | `-S` 生成了文件不等于正确链接或执行。 |
+| `GNU AS / ELF` | 汇编器与目标文件验收 | 不代表 ABI 在目标机器上工作。 |
+| `QEMU / native` | 真实目标执行验收 | 不代表覆盖所有 CFG/ABI/ASM 路径。 |
+
+### 第四轮验证门禁实测边界
+
+另独立运行了 `tools/ci/linux-three-isa-gnu-qemu-v1.py --self-test`（`THREE_ISA_GNU_QEMU_SELFTEST=PASS`）、`linux-three-isa-strict-source-gate-v1.py --self-test`（`MINIC_S_FULL_COVERAGE_SELFTEST=PASS`，17 个负例）、`linux-three-isa-summary-phase-selftest-v1.py`（`MINIC_THREE_ISA_SUMMARY_PHASE=PASS`）。源码已核对 GNU QEMU oracle 与 MiniC `-S` 三架构七分片 candidate 的证据身份、阶段标签分别采集；**这些是脚本的 fail-closed 自测，不是本轮实际重跑 Linux 全量 QEMU 或证明 MC-011/012 所涉旧脚本已修复**。历史脚本的虚标问题须在它们自己的消费者链和精确 HEAD 上处理。
+
+上轮跟踪的 `src/` 范围为 **332 个 C/H 文件**，分布 `Frontend=70`、`Compiler=11`、`Core=45`、`Target=206`；Driver/工具入口另外审查。本轮逐条验证的是本文件中的关键生产链及 [函数契约台账](minic-function-contract-register.md) 已列函数，不应称所有源函数均已逐行深读。Target 上轮账本 `Full=7 / Targeted=4 / Pending=195`，因源码漂移还须重做过期记录；旧 `PASS` 仅说明当时指定契约通过。
+
+### 第八轮：全源快照、并行全局路径与待退役旧逻辑（`3d504e7ee4a7`）
+
+本轮实际列举并比较 **337/337 个 `src/*.[ch]` + 两个 CLI 入口**，另外核对
+`target_registration.def` 与 `Makefile`：187 个编译器 `.c` 都在构建源清单中。
+逐文件清单及每一证据等级见[第八轮覆盖账本](minic-source-coverage-f8-2026-10-31.md)，
+最新 F8 定点 producer/consumer 的函数级条目见[函数台账第八轮](minic-function-contract-register.md#第八轮最新-3d504e7ee4a7-的源码边界与清理消费者补录2026-10-31)。
+这不是所有 GNU ASM 家族或全部 helper 的动态正确性认证。
+
+两次快照之间 `src/` **仅**修改 x86 `codegen.c`、`frame.h`、`machine_emit.c`；
+其他 334 C/H 内容相同，因此先前静态风险不能因为 HEAD 前进就标为修复。
+新的 `.head.text` 策略用函数级 per-global 布尔标记区分 RIP-relative 与 link-VMA 地址；
+现有 ELF 测试覆盖的是**不同符号各一种用途**，没有测试同一 symbol 的混合用途，
+且异址运行测试只执行纯 VMA 分支。见 [A8-21](README.md#3-本轮新增的待补证据和清理接缝)：
+这是待验证的 per-use 身份缺口，不是新获运行 wrong-code。
+
+| 层/边界 | 第八轮确认的事实与未闭合处 | 不能先删的活跃算法 |
+| --- | --- | --- |
+| Parser → C0 | Lexer/Parser 并非保存全量 Token；看前文、浅拷贝的词法前瞻与有副作用语义 probe 不同；数组 Local/Field 双轨、static 三声明仍活跃。 | 两 AST 状态 verify、Normalize remap 事务、VLA 动态地址、Record 快照。 |
+| Compiler → Core | CALL 特化仍把 per-instance callee 写入共享 AST；Core scalar/record 调用选择不同；函数→对象→函数的发射根闭包确实存在。 | clone 共享 FunctionBody、OOM fail-closed root scan、源 ASM/function-address/label 保活。 |
+| Core CFG / IR | 由 continue 引用的 synthetic while 标签可绕开 mutated-specialization fact barrier；Record copy/load 缺足够的自持尺寸；Enum integer facts 与 initializer-write 语义已有合理归一化。 | do/for/while source shape、不同强度的 Bool oracle、record/scalar 不同的物化。 |
+| 全局初始化 | C0 GlobalObject 保存 bit 槽、union/柔性尾长及逻辑 relocation，Common DataLayout 决定字节 offset；已有 GlobalEmissionPlan 可供所有目标消费。 | Common 的 flat/recursive 不同形态序列化、extern/alias/owner root 与目标 relocation callback。 |
+| Target Global | x86、A64、Loong 已走完整 Common Plan，RV32/RV64 在分类/ELF 策略仍有平行算法；具名 BSS/零对象 section 差异缺目标 readelf 验证。 | 各 ISA reloc 字面量、RV32 4B pointer、真实 psABI classification。 |
+| Target machine / 工具 | 现有五目标共享输出事务与 Common spill/object/call 事实；Direct LP64 只共享 A64/Loong 流程。x86 GNU ASM 仍 21 typed/88 legacy。 | 不同 ABI/ISA、机器 form 防伪、ELF preemptible/GOT 策略、可分配缓存 OOM 回退。 |
+
+**新旧文档状态不要混淆：** `MC-001..075` 仍是唯一缺陷/债务台账；
+`A8-01..25` 是 F8 源码接缝或待验证调查，不是新增 25 个已证 Bug。
+第八轮没有运行 GNU/RV/A64/Loong 的全部目标 ABI、ELF、QEMU，也没有关闭历史 P0；
+记录允许推迟修复，但不允许删除旧条目或把源代码相似视为重复算法。
+
+### 第九轮：从文件清点深入到旧实现可达性（`3d504e7` 源码）
+
+第九轮以原有 337 个文件账本为底，针对上轮尚未深证的 Parser 非热点、
+Core effect/facts、三个 Compiler specialization、Common、五目标 GNU ASM/Global/ELF
+重查**定义 → 生产调用者 → 替代接口 → 可删除旧路径**。
+新增精确证据见 [A9-01～13](README.md#第九轮函数深挖旧路径消费者与新待证线索) 和
+[F9-01～18](minic-function-contract-register.md#第九轮函数级生产消费者与旧实现退役精查2026-10-31)。
+
+- **确实可退役的旧入口**：Frontend 10 个无生产/测试调用的 Parser API＋两个只供旧 API 的私有 helper
+  （已并入 MC-031）。其中单独的 `parser_type_query.c` 还在 Makefile 编译。Core 两个 scalar
+  `may_modify_local` 包装仅供白盒测试，生产已用 batch collector。相反，Common 105 个文件级
+  `minic_*` 函数均发现内部生产使用，不能笼统声称公共层有大量死函数。
+- **已有统一机制，旧判定仍并存**：RV32/RV64 的 Global section/payload 分类尚未完全移交 Common Plan，
+  但 RV32 的默认复杂全局对象早已消费 Plan；x86 与 Loong 的少数 ASM family 可借现有
+  `target_machine_form_id/variant` 逐家迁移，Machine 侧只删除重新**分类**的逻辑，保留源资格和防伪。
+  三个 specialization 的 clone constructor 已是 Boolean→Symbolic→Integer 单链，不能误说三份。
+- **可能影响正确性的新边界**：`parse_builtin_va_start` 的 Function 借用跨递归追加尚缺 ASan；
+  x86 `.head.text` 已静态确认不同 GLOBAL_ADDRESS SSA 值共享 per-global 选路；hidden undefined weak
+  在 A64 与 RV64/x86 的 PIC 选路存在差异，现有 GNU fixture 未覆盖全部相关链接/运行情形。
+  这些都未得到本轮新的 wrong-code/ELF 运行结论。
+- **能减少计算的现役算法**：Loong builtin 立即数查询重复扫指令，RV64 Record snapshot 与 ELF
+  symbol query 含函数级可缓存的扫描，Common scalar ObjectReuse 存在较高最坏复杂度；
+  不能删除其所证明的寄存器、唯一使用、逃逸、对齐或绑定规则。
+
+这轮还修正了根 README 把“RV32 C 后端尚未实现”的旧计划当作现状的错误引用。
+仍**没有修改或删除任何编译器源码**：清理候选必须在真正迁移消费者、目标正反例通过后退役。
+
+### 第十轮：真实代码退役后的边界更新（仍在 `refactor/minic-target-language-boundary`）
+
+第八/九轮以上段落是 `3d504e7` 的**冻结审计事实**，其中“仍在编译”“尚无动态复现”不能当作
+本轮新的当前状态。生产数据流没有变成另一套 AST/IR：这批只移除无消费者入口、局部资源漏洞，
+并在特定 Target 修正或追查 use-role，未创建第二套 Parser、Core 或后端。
+
+| 边界 | 本轮当前源代码变化 | 仍然没解决的架构欠账 |
+| --- | --- | --- |
+| Parser → C0 | `parser_type_query.c` 已从 Makefile 和源码删除；Parser 10 个零 caller API 与 2 个仅属旧 API 的 helper 同步退役，现行 attribute/alignof/`*_after_head` 实体保留。`parse_builtin_va_start` 在递归前按值保存 `parameter_count`，Loong 第 17 Function 扩容的 ASan UAF 已由原输入复验消除。 | 三类 static array 声明、ArrayType/Local 双轨、语义 probe 浅拷贝及其他已记录 ASan UAF 仍在；MC-031 仅 `FIXED-UNVERIFIED`，新增 MC-077。 |
+| Compiler → Core | `inline_integer.c` 两个失败早退路径补齐 `static_blocked_sources` 释放，没改变 clone、CALL instance 或 Core owner。 | MC-006/007/008、2048/1024 个合法 C 错拒 MC-043 **仍 OPEN**，没有 Unified IR 落地。 |
+| Core fact/CFG | 删除 2 个只供 Core 白盒测试的 scalar effect wrapper，测试改用现行 batch collector，真实生产分类器、OOM 保守回退不变。 | 多路 local fact/snapshot、Record/C0 布局回查及 continue 事实仍未归一。 |
+| Loong target | 内建立即数 fallback 的 defining Core instruction 查找从逐次扫描改为 `fn->values[id].definition` 直接定位；保留五层 conversion 和原判断。 | Loong ABI、机器约束、A64 ASM/GlobalEmissionPlan/RV 的重复仍需逐路径处理。 |
+| x86 early head | 原 per-global 直接访问判定对同符号 mixed VMA 与 physical store 的真实 ELF/异址 GNU 对照已经确认 wrongcode，新增 MC-076 和持久探针；实现正在复核 SSA use-role 的最小 Target 修复。 | pointer 通过局部内存/PHI/未知 helper 逃逸，缺 Core provenance 就无法普遍区分链接 VMA 与早期物理指针；不能以单一高位地址规则替代实际 use role。 |
+
+本轮 `src/` 文件数因退役旧 `.c` 从 337 降至 **336**（Frontend 69/Compiler 11/Core 48/Target 208），
+F8 的历史逐文件覆盖清单保留原 337/337 数字，不能偷偷改口径。全部新增代码与测试必须在提交的
+exact HEAD 上复验；GNU ELF/QEMU 尚未覆盖的 ISA 不因 C 源码可编译而升级结论。
+
+### 第十一轮：从大批实证反推当前 IR/后端的真实分层（基线 `eddd49c`）
+
+本轮仅扫描、记录、补真实差分；**没有改变任何编译器源码**。完整 50 个新清理索引见
+[A11 总入口](README.md#第十一轮全编译器复扫实证问题与大量清理候选)，
+十大独立动态/静态缺陷见 [MC-078～MC-087](minic-issue-register.md)。
+阅读 `src/` 336 个当前 C/H，及两 CLI，区分 R1 清点、R2 函数实现、GNU C/MiniC 差分和
+GNU native/ELF oracle；没有将“全文件清单”误说为“每行已证明正确”。
+
+| 阶段/边界 | 本轮实际发现的跨层事实 | 首先清理什么、不能马上删什么 |
+| --- | --- | --- |
+| C0 语义与声明 | C0 已经拥有完整 declaration、Function attr、ArrayType 语义；MC-083 显示数组声明的 `bound inference` 竟被同时当字符串语法开关；MC-085 显示 GNU error/warning 虽存却无可达 CALL 消费者 | 让语义准入与声明状态分离；建立 diagnostic-attribute 使用点；清八个零生产 caller relocation 包装时必须核 `tools/dev`/CI 锚点 |
+| Specialization → Core | 三种 clone 已走单一 constructor 链，但各自建 FunctionBody owner index，实例化 CALL 仍修改共享 C0；Core 外侧的 GNU ASM 根遍历还重复两套文本识别 | 先用 `(caller FunctionId, CALL ExpressionId)` 保留实例事实（MC-006～008），再合 owner/index/root；MC-001 Expr arena UAF 不能因为“减少重复扫描”而略过 |
+| Core value/effect/CFG | MC-079 证实 `*&` 抵消与 local facts 逃逸/赋值无统一 effect 合同；`core_lower_const_facts.c` 有 54 行静态不可达分支；subtree membership 与 Core intern 有跨函数/跨表重复线性工作 | 首先确保任何 canonical lvalue write 都正确杀 facts，再删可证死代码和抽索引；不让性能重构改变常量推断强度或 reentry/label 根 |
+| Core 仍携 Source 身份 | `CoreCallSignature.function_type_id` 有 Core verifier 和 Common CallView 真消费者；`FIELD_ADDRESS` 的布局/对象对齐信息尚不完全自证；Loong Machine 回读 C0 GNU ASM、按特殊 CALL 名辨 builtin | 统一 IR 的方向是 **将这些 consumer 所需的函数签名、record extent/offset、ASM 资格、builtin/constant witness 编成 Core 可验证的目标中立语义事实**，不是删光类型，也不是让 Machine 不作防伪 |
+| Common 与 ABI plan | 已有 GlobalEmissionPlan、CoreObjectStoragePlan、Direct LP64 PreparedCall、通用 CFG 可达性；但 RV Global 仍有独立 `.bss.*` 分段、A64/Loong 在 plan 后重新分类 Record，x86 RECORD_COPY 又自造 extent/byte loops | 分支逐次交接现成 plan，验证 GNU GAS/ELF 与各 ISA ABI；拒绝不必要的第二套 Global IR 或一个“万能机器 memcpy” |
+| Machine/ELF | MC-086 证 x86 hidden undefined weak 的 ELF binding facts 被不完整消费，PC32 导致 GNU PIE 链接失败；MC-081 证 RV32 Function constructor 已存 C0 但没有机器注册；MC-084 量化 x86 4KiB copy 的膨胀 | 需要一个由 TargetInfo 统一给出但 ISA 消费不同 relocation 的 symbolic reference plan；ctor 注册属于 per-target emitted global consumer；机器 code-size 需用 GNU native 正确性保护后精简 |
+| GNU ASM | x86 source 109 族中 88 仍 legacy Machine 重匹配，MC-078 源/机不一致；Loong typed SIMD 仍多次 parse；A64/Loong 共用 preflight 硬编码 ASM 256 上限（MC-087） | 逐族把 source-policy 的 `form_id+variant+validated operands` 迁为 Machine 唯一 consumer；Machine 防伪、ELF alternate/exception-table side effects 保留，动态容量不能变成语言硬限制 |
+
+**由此确定的统一 IR 判据：** 一项 C 语义事实只应由拥有它的前一阶段解析/验证一次，
+Core 对后续 consumer 输出稳定、已校验的事实与身份；目标 ABI/DataLayout 则把这些事实投射成
+寄存器、栈、重定位及机器指令，而非重新猜 C AST 的表达式形状或凭 callee 字符串推算语义。
+这不意味着 Core 可以没有 type/Record/ABI payload；恰恰相反，**需要保留仍影响正确性的类型和
+布局信息，但尽量以 Core 自己可验证、可持久化的形态存在**。当前 `Core Function IR` 与
+`GlobalObject` 并行发射全局数据也是现实约束，不能先造一个第二套 Global IR 来掩盖重复。
+
+**清理依赖顺序不是固定优先级排行：** MC-001/006～008/079 的所有权/错码修复和现有
+GNU/ELF 差分要优先保护；随后可以相互独立地做 Core 54 行死代码、Frontend 八个 wrapper
+（先处理历史脚本）、x86 局部 matcher 去重；跨阶段 ABI/ELF/ASM 统一应先迁使用点再删旧实现。
+未测试的 RV GNU GAS/QEMU、Loong/A64 GNU ABI ELF、合成 Core 负例与多目标量化基准
+均是明确未完成的验收点，**不是已完成的证据**。
+
+## 8. 持续维护流程
+
+1. 改一个阶段/Target/函数之前，在 [函数契约台账](minic-function-contract-register.md) 确认读写集与生命周期；没有的先补。
+2. 发现可疑情况先查 [问题台账](minic-issue-register.md) 的 `CLOSED-NOT-A-BUG`，并追溯生产者—所有权—消费者—失败路径。
+3. 有反例或新证据才将疑点升级为 `OPEN`；先补可复现测试再考虑修复批次；旧实现只有证明无真实消费者才能删除。
+4. 变更完记录精确 commit/HEAD、四个证据级别的真实执行结果；同步更新全局图谱、函数台账与 MC 状态。

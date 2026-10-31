@@ -102,6 +102,12 @@ bool minic_c0_program_set_function_alias(MinicC0Program *program,
     if (function->is_defined) {
         return false;
     }
+    /* An alias has no independent instruction entry to pad. Until the owner
+     * alignment is proven, reject the impossible promise to align the alias
+     * more strictly than its target. */
+    if (function->explicit_alignment != 0U) {
+        return false;
+    }
     if (function->alias_target != MINIC_FUNCTION_INVALID) {
         return function->alias_target == target_function_id;
     }
@@ -196,5 +202,59 @@ bool minic_c0_program_set_function_section(MinicC0Program *program,
     copy[name_length] = '\0';
     function->section_name = copy;
     function->section_name_length = name_length;
+    return true;
+}
+
+bool minic_c0_program_set_function_diagnostic(MinicC0Program *program,
+                                              MinicFunctionId function_id,
+                                              MinicFunctionDiagnosticKind kind,
+                                              const char *message,
+                                              size_t message_length) {
+    MinicFunction *function;
+    char **owned_message;
+    size_t *owned_length;
+    char *copy;
+
+    if (program == NULL || function_id >= program->function_count ||
+        (kind != MINIC_FUNCTION_DIAGNOSTIC_ERROR &&
+         kind != MINIC_FUNCTION_DIAGNOSTIC_WARNING) ||
+        message == NULL || message_length == SIZE_MAX) {
+        return false;
+    }
+    function = &program->functions[function_id];
+    owned_message = kind == MINIC_FUNCTION_DIAGNOSTIC_ERROR
+        ? &function->error_message : &function->warning_message;
+    owned_length = kind == MINIC_FUNCTION_DIAGNOSTIC_ERROR
+        ? &function->error_message_length : &function->warning_message_length;
+    if (*owned_message != NULL && *owned_length == message_length &&
+        memcmp(*owned_message, message, message_length) == 0) return true;
+    copy = (char *)malloc(message_length + 1U);
+    if (copy == NULL) return false;
+    (void)memcpy(copy, message, message_length);
+    copy[message_length] = '\0';
+    /* GNU later same-kind redeclarations replace the text.  An error and a
+     * warning are independent; both can fire on one surviving call. */
+    free(*owned_message);
+    *owned_message = copy;
+    *owned_length = message_length;
+    return true;
+}
+
+bool minic_c0_program_set_function_alignment(MinicC0Program *program,
+                                             MinicFunctionId function_id,
+                                             size_t alignment) {
+    MinicFunction *function;
+    /* Guard against unbounded ELF section padding and invalid logarithms.
+     * 1 MiB supports substantially more than Linux's normal cacheline and
+     * hotpatch alignments, while giant attributes still fail closed. */
+    if (program == NULL || function_id >= program->function_count ||
+        alignment == 0U || alignment > 1048576U ||
+        (alignment & (alignment - 1U)) != 0U)
+        return false;
+    function = &program->functions[function_id];
+    if (function->alias_target != MINIC_FUNCTION_INVALID)
+        return false;
+    if (alignment > function->explicit_alignment)
+        function->explicit_alignment = alignment;
     return true;
 }

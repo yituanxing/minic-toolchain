@@ -1,4 +1,6 @@
 #include "core/value_uses.h"
+#include <stdint.h>
+#include <string.h>
 
 /* Extracted without rewriting the tested RV64 Core SSA use enumeration. */
 static bool core_visit_value_use(MinicCoreValueId value_id,
@@ -89,6 +91,9 @@ bool minic_core_visit_instruction_value_uses(const MinicCoreFunction *function,
     case MINIC_CORE_INSTRUCTION_VARIADIC_NEXT_SCALAR:
         return core_visit_value_use(instruction->value.operand, visitor, context);
 
+    case MINIC_CORE_INSTRUCTION_FIXED_REGISTER_WRITE:
+        return core_visit_value_use(
+            instruction->value.fixed_register_write.source, visitor, context);
     case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS:
         return core_visit_value_use(instruction->value.field_address.base, visitor, context);
     case MINIC_CORE_INSTRUCTION_POINTER_OFFSET:
@@ -200,5 +205,57 @@ bool minic_core_visit_terminator_value_uses(const MinicCoreTerminator *terminato
         return true;
     }
     return false;
+}
+
+typedef struct CoreValueUseCountContext {
+    size_t *counts;
+    size_t capacity;
+} CoreValueUseCountContext;
+
+static bool core_value_count_use(MinicCoreValueId value, void *opaque) {
+    CoreValueUseCountContext *context = (CoreValueUseCountContext *)opaque;
+    if (context == NULL || context->counts == NULL ||
+        value >= context->capacity || context->counts[value] == SIZE_MAX)
+        return false;
+    ++context->counts[value];
+    return true;
+}
+
+bool minic_core_function_value_use_counts(const MinicCoreFunction *function,
+    size_t *counts, size_t capacity) {
+    CoreValueUseCountContext context;
+    size_t block_id;
+    size_t unused_slot = 0U;
+    if (function == NULL || capacity < function->value_count ||
+        function->value_count > SIZE_MAX / sizeof(*counts) ||
+        (function->block_count != 0U && function->blocks == NULL) ||
+        (function->value_count != 0U && counts == NULL))
+        return false;
+    context.counts = counts != NULL ? counts : &unused_slot;
+    context.capacity = function->value_count;
+    if (function->value_count != 0U)
+        (void)memset(context.counts, 0,
+                     function->value_count * sizeof(*counts));
+    for (block_id = 0U; block_id < function->block_count; ++block_id) {
+        const MinicCoreBlock *block = &function->blocks[block_id];
+        size_t ordinal;
+        if (!block->has_terminator ||
+            (block->instruction_count != 0U && block->instructions == NULL))
+            return false;
+        for (ordinal = 0U; ordinal < block->instruction_count; ++ordinal) {
+            const MinicCoreInstructionId instruction_id =
+                block->instructions[ordinal];
+            if (instruction_id >= function->instruction_count ||
+                function->instructions == NULL ||
+                !minic_core_visit_instruction_value_uses(
+                    function, &function->instructions[instruction_id],
+                    core_value_count_use, &context))
+                return false;
+        }
+        if (!minic_core_visit_terminator_value_uses(
+                &block->terminator, core_value_count_use, &context))
+            return false;
+    }
+    return true;
 }
 

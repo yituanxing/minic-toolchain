@@ -98,10 +98,6 @@ bool minic_parser_parse_integer_constant_expression(MinicParser *parser, int64_t
     return minic_parser_parse_typed_integer_constant_expression(parser, value);
 }
 
-bool minic_parser_parse_integer_constant_expression_value(MinicParser *parser, int64_t *value) {
-    return minic_parser_parse_typed_integer_constant_expression(parser, value);
-}
-
 bool minic_parser_parse_integer_initializer_bits(MinicParser *parser,
                                                  MinicType target_type,
                                                  uint64_t *bits) {
@@ -218,26 +214,6 @@ bool minic_parser_span_equals(const MinicParser *parser,
                                                  left_length) == 0;
 }
 
-const MinicAttributeDescriptor *minic_parser_current_attribute(const MinicParser *parser) {
-    size_t name_length;
-
-    if (parser == NULL || parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
-        return NULL;
-    }
-    name_length = minic_parser_span_length(parser->current.span);
-    return minic_attribute_lookup(parser->source + parser->current.span.begin.offset, name_length);
-}
-
-bool minic_parser_current_attribute_is(const MinicParser *parser,
-                                       MinicAttributeKind kind,
-                                       MinicAttributeTarget target) {
-    const MinicAttributeDescriptor *descriptor;
-
-    descriptor = minic_parser_current_attribute(parser);
-    return descriptor != NULL && descriptor->kind == kind &&
-           minic_attribute_allowed_on(descriptor, target);
-}
-
 bool minic_parser_add_expression(MinicParser *parser,
                                  const MinicExpression *expression,
                                  MinicExpressionId *expression_id) {
@@ -314,13 +290,16 @@ bool minic_parser_begin_scope(MinicParser *parser) {
     }
     scope = &parser->scopes[parser->scope_count];
     scope->binding_begin = parser->local_binding_count;
-    scope->record_tag_begin = parser->record_tag_count;
+    scope->tag_begin = parser->tag_count;
     scope->enum_constant_begin = parser->enum_constant_count;
     scope->cleanup_context = parser->cleanup_context;
     parser->scope_count += 1U;
     return true;
 }
 
+/* Binding arrays contain value/ID/span metadata, not separately owned heap
+ * payloads: leaving a scope rewinds visibility counts without destroying the
+ * Program-owned Record/Enum/Type entities declared inside that scope. */
 void minic_parser_end_scope(MinicParser *parser) {
     size_t label_index;
 
@@ -337,7 +316,7 @@ void minic_parser_end_scope(MinicParser *parser) {
     }
     parser->scope_count -= 1U;
     parser->local_binding_count = parser->scopes[parser->scope_count].binding_begin;
-    parser->record_tag_count = parser->scopes[parser->scope_count].record_tag_begin;
+    parser->tag_count = parser->scopes[parser->scope_count].tag_begin;
     parser->enum_constant_count = parser->scopes[parser->scope_count].enum_constant_begin;
     parser->cleanup_context = parser->scopes[parser->scope_count].cleanup_context;
 }
@@ -598,14 +577,14 @@ void minic_parser_destroy_scopes(MinicParser *parser) {
     parser->local_label_count = 0U;
     parser->local_label_capacity = 0U;
     free(parser->local_bindings);
-    free(parser->record_tags);
+    free(parser->tags);
     free(parser->scopes);
     parser->local_bindings = NULL;
     parser->local_binding_count = 0U;
     parser->local_binding_capacity = 0U;
-    parser->record_tags = NULL;
-    parser->record_tag_count = 0U;
-    parser->record_tag_capacity = 0U;
+    parser->tags = NULL;
+    parser->tag_count = 0U;
+    parser->tag_capacity = 0U;
     parser->scopes = NULL;
     parser->scope_count = 0U;
     parser->scope_capacity = 0U;
@@ -693,19 +672,6 @@ MinicGlobalObjectId minic_parser_find_scoped_global_object(const MinicParser *pa
     }
     return MINIC_GLOBAL_OBJECT_INVALID;
 }
-
-bool minic_parser_name_bound(const MinicParser *parser, MinicSourceSpan name_span) {
-    size_t index;
-
-    for (index = parser->local_binding_count; index > 0U; --index) {
-        if (minic_parser_span_equals(
-                parser, name_span, parser->local_bindings[index - 1U].name_span)) {
-            return true;
-        }
-    }
-    return false;
-}
-
 
 static size_t minic_parser_function_name_hash(const char *name, size_t length) {
     uint64_t hash = UINT64_C(1469598103934665603);
@@ -870,7 +836,8 @@ MinicFunctionId minic_parser_find_function(const MinicParser *parser_const,
 #if defined(MINIC_TEST_FORCE_PARSER_HASH_FALLBACK)
     return minic_parser_function_name_linear_fallback(parser, name_span);
 #endif
-    if (!minic_parser_function_name_index_sync(parser) ||
+    if (parser->cache_owner != parser ||
+        !minic_parser_function_name_index_sync(parser) ||
         parser->perf_function_name_slot_capacity == 0U) {
         return minic_parser_function_name_linear_fallback(parser, name_span);
     }
@@ -903,66 +870,108 @@ MinicFunctionId minic_parser_find_function(const MinicParser *parser_const,
 }
 
 
-MinicRecordId minic_parser_find_record(const MinicParser *parser, MinicSourceSpan name_span) {
+const MinicParserTagBinding *minic_parser_find_tag(const MinicParser *parser,
+                                                   MinicSourceSpan name_span) {
     size_t index;
 
     if (parser == NULL) {
-        return MINIC_RECORD_INVALID;
+        return NULL;
     }
-    for (index = parser->record_tag_count; index > 0U; --index) {
-        const MinicParserRecordTag *tag;
+    for (index = parser->tag_count; index > 0U; --index) {
+        const MinicParserTagBinding *tag = &parser->tags[index - 1U];
 
-        tag = &parser->record_tags[index - 1U];
         if (minic_parser_span_equals(parser, tag->name_span, name_span)) {
-            return tag->record_id;
+            return tag;
         }
     }
-    return MINIC_RECORD_INVALID;
+    return NULL;
 }
 
-MinicRecordId minic_parser_find_record_in_current_scope(const MinicParser *parser,
-                                                        MinicSourceSpan name_span) {
+const MinicParserTagBinding *minic_parser_find_tag_in_current_scope(
+    const MinicParser *parser, MinicSourceSpan name_span) {
     size_t begin;
     size_t index;
 
     if (parser == NULL) {
-        return MINIC_RECORD_INVALID;
+        return NULL;
     }
-    begin =
-        parser->scope_count == 0U ? 0U : parser->scopes[parser->scope_count - 1U].record_tag_begin;
-    for (index = parser->record_tag_count; index > begin; --index) {
-        const MinicParserRecordTag *tag;
+    begin = parser->scope_count == 0U ? 0U
+                                       : parser->scopes[parser->scope_count - 1U].tag_begin;
+    for (index = parser->tag_count; index > begin; --index) {
+        const MinicParserTagBinding *tag = &parser->tags[index - 1U];
 
-        tag = &parser->record_tags[index - 1U];
         if (minic_parser_span_equals(parser, tag->name_span, name_span)) {
-            return tag->record_id;
+            return tag;
         }
     }
-    return MINIC_RECORD_INVALID;
+    return NULL;
 }
 
-bool minic_parser_bind_record_tag(MinicParser *parser,
-                                  MinicSourceSpan name_span,
-                                  MinicRecordId record_id) {
-    MinicParserRecordTag *tag;
-
-    if (parser == NULL || record_id == MINIC_RECORD_INVALID ||
-        minic_parser_find_record_in_current_scope(parser, name_span) != MINIC_RECORD_INVALID) {
-        if (parser != NULL) {
-            minic_parser_error(parser, "duplicate record tag binding in current scope");
-        }
+/* The returned binding belongs to parser->tags; it is not a stable handle.
+ * Binding another tag (or semantic parsing that binds one) may realloc this
+ * array. Callers must copy the needed ID/kind or resolve again afterward. */
+bool minic_parser_resolve_tag(MinicParser *parser, MinicSourceSpan name_span,
+                              MinicParserTagKind kind, bool current_scope_only,
+                              const MinicParserTagBinding **tag) {
+    if (parser == NULL || tag == NULL) {
         return false;
     }
-    if (parser->record_tag_count == parser->record_tag_capacity &&
-        !minic_parser_grow_array((void **)&parser->record_tags,
-                                 &parser->record_tag_capacity,
-                                 sizeof(*parser->record_tags))) {
-        minic_parser_error(parser, "out of memory while binding record tag");
+    *tag = current_scope_only
+               ? minic_parser_find_tag_in_current_scope(parser, name_span)
+               : minic_parser_find_tag(parser, name_span);
+    if (*tag != NULL && (*tag)->kind != kind) {
+        minic_parser_error(parser, "tag declared as a different struct/union/enum kind");
         return false;
     }
-    tag = &parser->record_tags[parser->record_tag_count];
-    tag->name_span = name_span;
-    tag->record_id = record_id;
-    parser->record_tag_count += 1U;
     return true;
+}
+
+static bool minic_parser_bind_tag(MinicParser *parser, MinicSourceSpan name_span,
+                                  MinicParserTagKind kind, MinicRecordId record_id,
+                                  MinicEnumId enum_id) {
+    MinicParserTagBinding *tag;
+
+    if (parser == NULL) {
+        return false;
+    }
+    if (minic_parser_find_tag_in_current_scope(parser, name_span) != NULL) {
+        minic_parser_error(parser, "conflicting tag declaration in current scope");
+        return false;
+    }
+    if (parser->tag_count == parser->tag_capacity &&
+        !minic_parser_grow_array((void **)&parser->tags,
+                                 &parser->tag_capacity,
+                                 sizeof(*parser->tags))) {
+        minic_parser_error(parser, "out of memory while binding C tag");
+        return false;
+    }
+    tag = &parser->tags[parser->tag_count];
+    tag->name_span = name_span;
+    tag->kind = kind;
+    if (kind == MINIC_PARSER_TAG_ENUM) {
+        tag->entity.enum_id = enum_id;
+    } else {
+        tag->entity.record_id = record_id;
+    }
+    parser->tag_count += 1U;
+    return true;
+}
+
+bool minic_parser_bind_record_tag(MinicParser *parser, MinicSourceSpan name_span,
+                                  MinicRecordId record_id, bool is_union) {
+    if (record_id == MINIC_RECORD_INVALID) {
+        return false;
+    }
+    return minic_parser_bind_tag(parser, name_span,
+                                 is_union ? MINIC_PARSER_TAG_UNION : MINIC_PARSER_TAG_STRUCT,
+                                 record_id, MINIC_ENUM_INVALID);
+}
+
+bool minic_parser_bind_enum_tag(MinicParser *parser, MinicSourceSpan name_span,
+                                MinicEnumId enum_id) {
+    if (enum_id == MINIC_ENUM_INVALID) {
+        return false;
+    }
+    return minic_parser_bind_tag(parser, name_span, MINIC_PARSER_TAG_ENUM,
+                                 MINIC_RECORD_INVALID, enum_id);
 }

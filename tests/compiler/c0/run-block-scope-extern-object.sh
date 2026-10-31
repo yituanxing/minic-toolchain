@@ -13,7 +13,18 @@ mkdir -p "$work"
 "$minic" -S "$work/extern.i" -o "$work/extern.s"
 grep -F 'zero_pfn' "$work/extern.s" >/dev/null
 grep -F 'promoted' "$work/extern.s" >/dev/null
-printf '%s\n' 'PASS compiler/c0/block_scope_extern_object scoped-global=1 repeated-compatible=1 cross-function-same-entity=1 file-scope-promotion=1'
+grep -E '^[[:space:]]*\.weak[[:space:]]+except_vec_cex$' "$work/extern.s" >/dev/null
+printf '%s\n' 'PASS compiler/c0/block_scope_extern_object scoped-global=1 repeated-compatible=1 cross-function-same-entity=1 file-scope-promotion=1 block-scope-weak-object=1'
+
+# Original AArch64 Linux 6.6 mmu_context.h: block-scope extern declarations
+# whose typedef itself carries the function signature (no trailing "(...)").
+"$host_cc" -E -P -x c "$root/tests/compiler/c0/block_scope_extern_function_typedef.c" \
+    -o "$work/function-typedef.i"
+"$minic" -S "$work/function-typedef.i" --target=aarch64-linux \
+    -o "$work/function-typedef.s"
+grep -F 'idmap_cpu_replace_ttbr1' "$work/function-typedef.s" >/dev/null
+printf '%s\n' 'PASS compiler/c0/block_scope_extern_function_typedef signature=typedef-function scoped=1 aarch64=1'
+
 
 "$host_cc" -E -P -x c "$root/tests/compiler/c0/invalid_block_scope_extern_leak.c" -o "$work/leak.i"
 if "$minic" -S "$work/leak.i" -o "$work/leak.s" >"$work/leak.stdout" 2>"$work/leak.stderr"; then

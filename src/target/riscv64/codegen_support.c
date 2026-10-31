@@ -1,5 +1,6 @@
 #include "target/riscv64/codegen_internal.h"
 #include "target/riscv64/abi.h"
+#include "target/riscv/typed_memory.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -64,12 +65,14 @@ static bool minic_riscv64_integer_aggregate_abi(
 bool minic_riscv64_emit_integer_aggregate_load_chunk_profile(
     FILE *file, const MinicC0Program *program, MinicType type,
     size_t chunk_index, const char *destination_register,
-    const char *address_register, bool lp64_soft_float) {
+    const char *address_register, bool lp64_soft_float,
+    size_t known_frame_offset) {
     size_t chunk_count;
     size_t chunk_offset;
     size_t chunk_size;
     size_t index;
     size_t storage_size;
+    bool aligned_for_native_load;
 
     if (file == NULL || destination_register == NULL || address_register == NULL ||
         !minic_riscv64_integer_aggregate_abi(
@@ -78,25 +81,34 @@ bool minic_riscv64_emit_integer_aggregate_load_chunk_profile(
         return false;
     }
     chunk_offset = chunk_index * 8U;
+    if (chunk_offset >= storage_size)
+        return false;
     chunk_size = storage_size - chunk_offset;
     if (chunk_size > 8U) {
         chunk_size = 8U;
     }
-    if (chunk_size == 8U) {
+    /* Only a proven RV64 frame address can use a native multi-byte load.
+     * A record member inside an enclosing packed struct may be unaligned
+     * even when the member's own record type has natural alignment. The
+     * legacy helper passes SIZE_MAX and takes the byte-gather path. */
+    aligned_for_native_load = known_frame_offset != SIZE_MAX &&
+        known_frame_offset <= SIZE_MAX - chunk_offset &&
+        (known_frame_offset + chunk_offset) % chunk_size == 0U;
+    if (chunk_size == 8U && aligned_for_native_load) {
         return fprintf(file,
                        "  ld %s, %zu(%s)\n",
                        destination_register,
                        chunk_offset,
                        address_register) >= 0;
     }
-    if (chunk_size == 4U) {
+    if (chunk_size == 4U && aligned_for_native_load) {
         return fprintf(file,
                        "  lwu %s, %zu(%s)\n",
                        destination_register,
                        chunk_offset,
                        address_register) >= 0;
     }
-    if (chunk_size == 2U) {
+    if (chunk_size == 2U && aligned_for_native_load) {
         return fprintf(file,
                        "  lhu %s, %zu(%s)\n",
                        destination_register,
@@ -129,7 +141,7 @@ bool minic_riscv64_emit_integer_aggregate_load_chunk(
     const char *address_register) {
     return minic_riscv64_emit_integer_aggregate_load_chunk_profile(
         file, program, type, chunk_index,
-        destination_register, address_register, false);
+        destination_register, address_register, false, SIZE_MAX);
 }
 
 void minic_riscv64_set_diagnostic(MinicDiagnostic *diagnostic,
@@ -171,27 +183,15 @@ bool minic_riscv64_emit_stack_release(FILE *file, size_t size) {
 }
 
 bool minic_riscv64_emit_sp_store64(FILE *file, const char *register_name, size_t offset) {
-    if (offset <= 2047U) {
-        return fprintf(file, "  sd %s, %zu(sp)\n", register_name, offset) >= 0;
-    }
-    return fprintf(file,
-                   "  li t2, %zu\n"
-                   "  add t2, sp, t2\n"
-                   "  sd %s, 0(t2)\n",
-                   offset,
-                   register_name) >= 0;
+    const MinicRiscvFrameAddressPolicy policy =
+        minic_riscv64_machine_frame_policy(false);
+    return minic_riscv_frame_emit_word(file, &policy, true, register_name, offset);
 }
 
 bool minic_riscv64_emit_sp_load64(FILE *file, const char *register_name, size_t offset) {
-    if (offset <= 2047U) {
-        return fprintf(file, "  ld %s, %zu(sp)\n", register_name, offset) >= 0;
-    }
-    return fprintf(file,
-                   "  li t2, %zu\n"
-                   "  add t2, sp, t2\n"
-                   "  ld %s, 0(t2)\n",
-                   offset,
-                   register_name) >= 0;
+    const MinicRiscvFrameAddressPolicy policy =
+        minic_riscv64_machine_frame_policy(false);
+    return minic_riscv_frame_emit_word(file, &policy, false, register_name, offset);
 }
 
 static bool minic_riscv64_emit_integer_conversion(FILE *file, MinicType type, const char *register_name) {
@@ -307,6 +307,48 @@ bool minic_riscv64_emit_scalar_store_for_program(FILE *file,
         type = effective_type;
     }
     return minic_riscv64_emit_scalar_store(file, type, source_register, address_register);
+}
+
+static bool minic_riscv64_emit_safe_scalar(
+    FILE *file, const MinicC0Program *program, MinicType type,
+    bool store, const char *value_register, const char *address_register,
+    const char *scratch_register, size_t proven_alignment) {
+    MinicType effective = type;
+    size_t width, type_alignment;
+    const char *op;
+    if (minic_type_is_enum(type) &&
+        !minic_c0_type_effective_integer_type(program, type, &effective))
+        return false;
+    op = store ? minic_riscv64_store_instruction(effective) :
+                 minic_riscv64_load_instruction(effective);
+    if (op == NULL ||
+        !minic_data_layout_type(minic_default_data_layout(), program,
+                                effective, &width, &type_alignment))
+        return false;
+    (void)type_alignment;
+    return minic_riscv_emit_typed_memory(
+        file, store, 64U, width,
+        !store && minic_type_is_signed_integer(effective),
+        op, value_register, address_register, scratch_register,
+        proven_alignment, "rv64_scalar");
+}
+
+bool minic_riscv64_emit_safe_scalar_load(
+    FILE *file, const MinicC0Program *program, MinicType type,
+    const char *destination_register, const char *address_register,
+    const char *scratch_register, size_t proven_alignment) {
+    return minic_riscv64_emit_safe_scalar(
+        file, program, type, false, destination_register,
+        address_register, scratch_register, proven_alignment);
+}
+
+bool minic_riscv64_emit_safe_scalar_store(
+    FILE *file, const MinicC0Program *program, MinicType type,
+    const char *source_register, const char *address_register,
+    const char *scratch_register, size_t proven_alignment) {
+    return minic_riscv64_emit_safe_scalar(
+        file, program, type, true, source_register,
+        address_register, scratch_register, proven_alignment);
 }
 
 /* RV64_INT128_PAIR_V1: keep the address stable while a0 becomes the low half. */

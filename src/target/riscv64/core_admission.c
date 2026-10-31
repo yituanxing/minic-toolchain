@@ -21,6 +21,7 @@ static bool core_instruction_supported(const MinicC0Program *program,
                                        const MinicCoreFunction *function,
                                        const MinicCoreInstruction *instruction,
                                        const MinicCoreCallView *semantic_view,
+                                       const MinicRiscv64PreparedCall *prepared_call,
                                        const MinicRiscv64FunctionAbiPlan *abi_plan) {
     if (function == NULL || instruction == NULL) {
         return false;
@@ -110,10 +111,10 @@ static bool core_instruction_supported(const MinicC0Program *program,
         return true;
     case MINIC_CORE_INSTRUCTION_CALL:
         return minic_riscv64_core_direct_call_supported(
-            program, function, instruction, semantic_view);
+            program, function, instruction, semantic_view, prepared_call);
     case MINIC_CORE_INSTRUCTION_INDIRECT_CALL:
         return minic_riscv64_core_indirect_call_supported(
-            program, function, instruction, semantic_view);
+            program, function, instruction, semantic_view, prepared_call);
     case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS:
         return minic_riscv64_core_field_address_supported(instruction, NULL);
     case MINIC_CORE_INSTRUCTION_SCALAR_BITCAST:
@@ -164,6 +165,9 @@ static bool core_function_can_emit_with_index(
         }
     } else if (abi_plan == NULL || !abi_plan->prepared ||
                abi_plan->parameter_location_count != function->parameter_count ||
+               abi_plan->outgoing_calls.count != semantic_calls->count ||
+               (semantic_calls->count != 0U &&
+                abi_plan->outgoing_calls.sites == NULL) ||
                (function->parameter_count != 0U &&
                 abi_plan->parameter_locations == NULL)) {
         /* The function ABI planner owns *all* return/parameter capability
@@ -224,6 +228,7 @@ static bool core_function_can_emit_with_index(
     for (index = 0U; index < function->instruction_count; ++index) {
         const MinicCoreInstruction *ins = &function->instructions[index];
         const MinicCoreCallView *view = NULL;
+        const MinicRiscv64PreparedCall *prepared = NULL;
         if (minic_core_instruction_is_call(ins->kind)) {
             /* The Common index is ordered by instruction ID. Consume its
              * immutable CALL views in lockstep with RV64's required ISA
@@ -232,9 +237,18 @@ static bool core_function_can_emit_with_index(
                 semantic_calls->sites[call_site].instruction_id != index)
                 return core_rv64_capability_reject(
                     function, "call-index", index, (int)ins->kind);
-            view = &semantic_calls->sites[call_site++].view;
+            view = &semantic_calls->sites[call_site].view;
+            if (program != NULL) {
+                prepared = abi_plan->outgoing_calls.sites[call_site];
+                if (prepared == NULL || prepared->instruction_id != index ||
+                    prepared->argument_count != view->argument_count)
+                    return core_rv64_capability_reject(
+                        function, "prepared-call", index, (int)ins->kind);
+            }
+            ++call_site;
         }
-        if (!core_instruction_supported(program, function, ins, view, abi_plan)) {
+        if (!core_instruction_supported(
+                program, function, ins, view, prepared, abi_plan)) {
             return core_rv64_capability_reject(
                 function, "instruction", index, (int)ins->kind);
         }
@@ -250,7 +264,7 @@ static bool core_function_can_emit_with_index(
  * RV64-only CALL scan/shape resolver. */
 static bool core_function_can_emit(
     const MinicC0Program *program, const MinicCoreFunction *function,
-    const MinicRiscv64FunctionAbiPlan *abi_plan, bool core_verified,
+    MinicRiscv64FunctionAbiPlan *abi_plan, bool core_verified,
     const MinicCoreCallIndex *semantic_calls,
     const MinicCoreObjectStoragePlan *storage) {
     MinicCoreCallIndexHandle calls = {0};
@@ -260,6 +274,18 @@ static bool core_function_can_emit(
         return core_rv64_capability_reject(function, "verify", 0U, -1);
     if (!minic_core_call_index_handle_prepare(function, semantic_calls, &calls))
         return core_rv64_capability_reject(function, "call-index", 0U, -1);
+    /* Build the outgoing psABI exactly once with the incoming ABI profile.
+     * Admission, frame stack sizing and machine emission then share these
+     * same immutable locations, including LP64 versus LP64D FP records. */
+    if (program != NULL &&
+        (abi_plan == NULL || !abi_plan->prepared ||
+         !minic_riscv64_call_plan_cache_build(
+             program, function,
+             abi_plan->named_parameter_cursor.lp64_soft_float,
+             calls.index, &abi_plan->outgoing_calls))) {
+        minic_core_call_index_handle_destroy(&calls);
+        return core_rv64_capability_reject(function, "call-abi", 0U, -1);
+    }
     ok = core_function_can_emit_with_index(
         program, function, abi_plan, calls.index, storage);
     minic_core_call_index_handle_destroy(&calls);

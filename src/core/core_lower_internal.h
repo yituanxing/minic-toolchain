@@ -7,7 +7,16 @@
 typedef struct MinicCoreLocalIntegerConstant {
     MinicConstValue value;
     MinicConstValue specialization_value;
+    /* May-one bit lattice for integer locals across CFG joins.
+     * Invalid after escape, volatile access, or an unknown write. */
+    uint64_t possible_one_bits;
+    /* A bounded, nonnegative integer interval. This is an upper/lower
+     * *value* lattice, distinct from bitwise may-one and exact constants. */
+    uint64_t nonnegative_min;
+    uint64_t nonnegative_max;
     bool known;
+    bool possible_one_bits_valid;
+    bool nonnegative_range_valid;
     bool escaped;
     bool program_zero_checked;
     bool program_zero_stable;
@@ -137,6 +146,12 @@ void core_local_constant_set(MinicCoreLowerContext *, MinicLocalId,
                              const MinicConstValue *);
 bool core_const_eval_integer_with_locals(const MinicCoreLowerContext *,
                                          MinicExpressionId, MinicConstValue *);
+bool minic_core_cfg_disjoint_bitmask_is_zero(const MinicCoreLowerContext *,
+                                             MinicExpressionId);
+bool minic_core_cfg_nonnegative_range(const MinicCoreLowerContext *,
+                                      MinicExpressionId, uint64_t *, uint64_t *);
+bool minic_core_cfg_bounded_comparison_is_false(const MinicCoreLowerContext *,
+                                                MinicExpressionId);
 bool core_const_signed_value(const MinicCoreLowerContext *,
                              const MinicConstValue *, int64_t *);
 
@@ -149,6 +164,22 @@ bool minic_core_lower_boolean_range_expression(const MinicCoreLowerContext *,
                                                MinicExpressionId, unsigned int);
 bool minic_core_lower_unreachable_external_reentry(
     const MinicCoreLowerContext *, const MinicStatement *, MinicStatementId);
+
+/* Canonical source-subtree ownership set, independent of source CFG policy.
+ * IF, dead-tail and dynamically prebound Core-block queries borrow the same
+ * membership; failure means UNKNOWN and must forbid pruning. */
+typedef struct CoreSourceSubtreeMembership {
+    bool *statements;
+    size_t statement_count;
+} CoreSourceSubtreeMembership;
+bool core_source_subtree_membership_from_block(
+    const MinicCoreLowerContext *, const MinicBlock *,
+    CoreSourceSubtreeMembership *);
+bool core_source_subtree_membership_from_statement(
+    const MinicCoreLowerContext *, const MinicStatement *,
+    MinicStatementId extra_statement_id,
+    CoreSourceSubtreeMembership *);
+void core_source_subtree_membership_destroy(CoreSourceSubtreeMembership *);
 
 bool core_capture_enum_metadata(MinicCoreLowerContext *context);
 /* Source-wide fail-closed _Bool==0 fact used only by Core CFG lowering. */
@@ -198,6 +229,11 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
 MinicCoreLowerStatus minic_core_lower_vararg_scalar(
     MinicCoreLowerContext *context, const MinicExpression *expression,
     MinicCoreValueId *value_id);
+/* Convert the real source va_list object/adjusted array parameter to the
+ * address of the ABI-owned state. No pointer-proxy local is involved. */
+MinicCoreLowerStatus minic_core_lower_abi_va_state_pointer(
+    MinicCoreLowerContext *context, MinicExpressionId operand,
+    MinicCoreValueId *state_pointer);
 MinicCoreLowerStatus minic_core_lower_vararg_statement(
     MinicCoreLowerContext *context, const MinicExpression *expression);
 MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
@@ -262,6 +298,9 @@ MinicCoreLowerStatus minic_core_lower_direct_record_call_object(
 MinicCoreLowerStatus minic_core_lower_indirect_call(
     MinicCoreLowerContext *context, const MinicExpression *expression,
     MinicCoreValueId *value_id);
+MinicCoreLowerStatus minic_core_lower_indirect_record_call_object(
+    MinicCoreLowerContext *context, const MinicExpression *expression,
+    MinicCoreObjectId *result_object);
 
 /* Source-to-Core assignments; target ABI and machine details never enter. */
 MinicCoreLowerStatus minic_core_lower_assignment_pair(
@@ -276,16 +315,26 @@ MinicCoreLowerStatus minic_core_lower_scalar_update(
 MinicCoreLowerStatus minic_core_lower_try_bit_field_assignment(
     MinicCoreLowerContext *context, const MinicExpression *target,
     MinicExpressionId source_id, MinicSourceSpan span,
-    MinicCoreValueId *result_value, bool *matched);
+    MinicCoreValueId *result_value, bool is_initializer_write, bool *matched);
 
-/* Shared source-effect probe: if and loop CFG both consume this conservative check. */
-bool core_expression_may_modify_local(
+/* Single conservative source-effect classification owner. The append-only
+ * batch collector marks modified[local_id - local_begin] for every local in
+ * the active source function. Unknown/unsupported subtrees mark ALL locals;
+ * callers initialize the array to zero and may OR several subtrees. This
+ * permits one AST walk per IF condition / LOOP body, not one per local. */
+void core_expression_collect_modified_locals(
     const MinicCoreLowerContext *context, MinicExpressionId expression_id,
-    MinicLocalId local_id, unsigned int depth);
-bool core_block_may_modify_local(
+    unsigned char *modified, unsigned int depth);
+/* One expression scan also identifies fresh locals whose parser-recorded
+ * declaration blocks belong to GNU statement expressions in the condition.
+ * Unknown subtrees keep the effect mask conservative and clear owned bits. */
+void core_expression_collect_modified_and_condition_locals(
+    const MinicCoreLowerContext *context, MinicExpressionId expression_id,
+    unsigned char *modified, unsigned char *condition_owned,
+    unsigned int depth);
+void core_block_collect_modified_locals(
     const MinicCoreLowerContext *context, const MinicBlock *block,
-    MinicLocalId local_id, unsigned int depth);
-
+    unsigned char *modified, unsigned int depth);
 /* Loop owns normalized source CFG and while-specific fact barriers.
  * The split entry preserves parser-created while/for label pairs. */
 MinicCoreLowerStatus minic_core_lower_loop_cfg(

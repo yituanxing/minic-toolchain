@@ -274,6 +274,10 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
                     MINIC_CORE_CALL_FRAME_ADDRESS_RETURN ||
                 instruction->value.call_frame_address.kind ==
                     MINIC_CORE_CALL_FRAME_ADDRESS_FRAME) &&
+               instruction->value.call_frame_address.level <= 1U &&
+               (instruction->value.call_frame_address.level == 0U ||
+                instruction->value.call_frame_address.kind ==
+                    MINIC_CORE_CALL_FRAME_ADDRESS_FRAME) &&
                minic_type_pointee(instruction->type, &pointee) && minic_type_is_void(pointee);
     }
     /* M123_VARIADIC_ARGUMENT_ADDRESS: Core validates only that the semantic
@@ -323,6 +327,22 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
                function->fixed_register_bindings[binding_id].register_name_length != 0U &&
                minic_type_equal(function->fixed_register_bindings[binding_id].type,
                                 instruction->type);
+    }
+    case MINIC_CORE_INSTRUCTION_FIXED_REGISTER_WRITE: {
+        const size_t id = instruction->value.fixed_register_write.binding_id;
+        const MinicCoreValueId source = instruction->value.fixed_register_write.source;
+        const MinicCoreFixedRegisterBinding *binding;
+        if (instruction->result != MINIC_CORE_VALUE_INVALID ||
+            !minic_type_is_void(instruction->type) ||
+            id >= function->fixed_register_binding_count ||
+            source >= function->value_count || !available_values[source])
+            return false;
+        binding = &function->fixed_register_bindings[id];
+        return !binding->is_local && binding->register_name != NULL &&
+               binding->register_name_length != 0U &&
+               minic_type_equal(binding->type, function->values[source].type) &&
+               (minic_type_is_integer(binding->type) ||
+                minic_type_is_pointer(binding->type));
     }
     case MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT: {
         MinicCoreObjectId object_id;
@@ -525,7 +545,32 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
             return false;
         }
         inline_asm = &function->inline_asms[instruction->value.inline_asm_id];
-        return inline_asm->template_text != NULL && inline_asm->is_volatile;
+        if (!inline_asm->template_text || !inline_asm->is_volatile)
+            return false;
+        /* Link-time symbolic immediates in qualified asm-goto are owned by
+         * Core, regardless of whether the machine template has one or two
+         * C labels. Every recorded slot must be a real, nonempty string;
+         * partial materialization is not a valid target contract. */
+        if (inline_asm->resolved_immediate_count != 0U) {
+            size_t i;
+            if (!inline_asm->is_goto ||
+                inline_asm->goto_target >= function->block_count ||
+                inline_asm->resolved_immediate_count > 3U)
+                return false;
+            for (i = 0U; i < inline_asm->resolved_immediate_count; ++i)
+                if (!inline_asm->resolved_immediates[i] ||
+                    inline_asm->resolved_immediates[i][0] == '\0')
+                    return false;
+        }
+        if (inline_asm->goto_second_target != MINIC_CORE_BLOCK_INVALID) {
+            if (!inline_asm->is_goto ||
+                inline_asm->goto_target >= function->block_count ||
+                inline_asm->goto_second_target >= function->block_count ||
+                inline_asm->goto_target == inline_asm->goto_second_target ||
+                inline_asm->resolved_immediate_count != 3U)
+                return false;
+        }
+        return true;
     }
     case MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INLINE_ASM: {
         const MinicCoreInlineAsm *inline_asm;
@@ -629,23 +674,52 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
        semantic values/addresses; target register assignment stays in the backend. */
     case MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM: {
         const MinicCoreInlineAsm *inline_asm;
-        bool used_indices[10] = {false};
+        bool used_indices[MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT] = {false};
         bool has_memory_readwrite = false;
         size_t operand_index;
 
         if (instruction->result != MINIC_CORE_VALUE_INVALID ||
             !minic_type_is_void(instruction->type) ||
             instruction->value.structured_inline_asm.inline_asm_id >= function->inline_asm_count ||
-            instruction->value.structured_inline_asm.operand_count == 0U ||
             instruction->value.structured_inline_asm.operand_count >
                 MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT) {
             return false;
         }
         inline_asm = &function->inline_asms[
             instruction->value.structured_inline_asm.inline_asm_id];
-        if (inline_asm->template_text == NULL || !inline_asm->is_volatile) {
+        if (inline_asm->template_text == NULL ||
+            inline_asm->template_length == 0U || !inline_asm->is_volatile) {
             return false;
         }
+        if (inline_asm->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_NONE &&
+            (inline_asm->operand_plan_owner !=
+                 MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED &&
+             inline_asm->operand_plan_owner !=
+                 MINIC_ASM_OPERAND_PLAN_GENERIC_STRUCTURED)) return false;
+        if ((inline_asm->target_machine_form_id != 0U &&
+             inline_asm->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED) ||
+            (inline_asm->target_machine_form_id == 0U &&
+             inline_asm->target_machine_form_variant != 0U)) return false;
+        if (inline_asm->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_NONE &&
+            (inline_asm->source_output_count >
+                 instruction->value.structured_inline_asm.operand_count ||
+             ((inline_asm->explicit_memory_clobber ||
+               inline_asm->implicit_memory_effect) &&
+              !inline_asm->has_memory_clobber))) return false;
+        /* The C label is a real CFG destination even when the asm also
+         * produces typed GNU register outputs. The same Core block IDs
+         * are used by opaque and structured goto machine emitters. */
+        if (inline_asm->is_goto &&
+            (inline_asm->goto_target >= function->block_count ||
+             inline_asm->goto_second_target != MINIC_CORE_BLOCK_INVALID))
+            return false;
+        /* Core only validates the ASM operand/effect shape. A target may
+         * qualify a zero-operand instruction which clobbers exactly one
+         * machine condition-code resource (x86 "cc"); its ISA emitter
+         * revalidates that clobber and literal instruction. Other targets
+         * retain their stricter target-only contracts. */
+        if (instruction->value.structured_inline_asm.operand_count == 0U)
+            return inline_asm->register_clobber_count <= 1U;
         for (operand_index = 0U;
              operand_index < instruction->value.structured_inline_asm.operand_count;
              ++operand_index) {
@@ -654,14 +728,27 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
             MinicType value_type;
 
             binding = &instruction->value.structured_inline_asm.operands[operand_index];
-            if (binding->operand_index > 9U || used_indices[binding->operand_index] ||
+            if (binding->operand_index >= MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT ||
+                used_indices[binding->operand_index] ||
                 binding->value >= function->value_count || !available_values[binding->value] ||
                 (binding->has_fixed_register_binding &&
                  binding->fixed_register_binding_id >=
                      function->fixed_register_binding_count) ||
                 (binding->early_clobber &&
                  binding->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT &&
-                 binding->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE)) {
+                 binding->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE) ||
+                (binding->gnu_early_clobber &&
+                 binding->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT &&
+                 binding->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE &&
+                 binding->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT &&
+                 binding->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE) ||
+                (inline_asm->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_NONE &&
+                 ((binding->gnu_early_clobber || binding->gnu_readwrite) &&
+                  operand_index >= inline_asm->source_output_count)) ||
+                (binding->has_tied_output &&
+                 (inline_asm->operand_plan_owner == MINIC_ASM_OPERAND_PLAN_NONE ||
+                  operand_index < inline_asm->source_output_count ||
+                  binding->tied_output_index >= inline_asm->source_output_count))) {
                 return false;
             }
             used_indices[binding->operand_index] = true;
@@ -676,7 +763,17 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
                     (binding->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT &&
                      minic_type_is_const(pointee)) ||
                     !minic_type_unqualified(pointee, &value_type) ||
-                    (!minic_type_is_integer(value_type) && !minic_type_is_pointer(value_type))) {
+                    /* A GNU memory operand denotes an addressable storage
+                     * region, not necessarily a scalar value. Linux's
+                     * __get_user/__put_user uses an intentionally opaque
+                     * struct __large_struct memory carrier. Register roles
+                     * still require a machine scalar; target admission
+                     * determines whether the aggregate memory shape is
+                     * legal for a particular instruction family. */
+                    ((binding->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
+                      binding->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE) &&
+                     !minic_type_is_integer(value_type) &&
+                     !minic_type_is_pointer(value_type))) {
                     return false;
                 }
                 if (binding->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE) {
@@ -831,8 +928,20 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
             return false;
         }
         returns_void = minic_type_is_void(signature->return_type);
-        if ((returns_void && instruction->result != MINIC_CORE_VALUE_INVALID) ||
-            (!returns_void && !instruction_result_is_valid(function, instruction))) {
+        if (returns_void) {
+            if (instruction->result != MINIC_CORE_VALUE_INVALID ||
+                instruction->value.indirect_call.result_object != MINIC_CORE_OBJECT_INVALID)
+                return false;
+        } else if (minic_type_is_record(signature->return_type)) {
+            if (instruction->result != MINIC_CORE_VALUE_INVALID ||
+                instruction->value.indirect_call.result_object >= function->object_count ||
+                !minic_type_equal(
+                    function->objects[instruction->value.indirect_call.result_object].type,
+                    signature->return_type))
+                return false;
+        } else if (!minic_core_ir_call_scalar_type(signature->return_type) ||
+                   instruction->value.indirect_call.result_object != MINIC_CORE_OBJECT_INVALID ||
+                   !instruction_result_is_valid(function, instruction)) {
             return false;
         }
         argument_end = instruction->value.indirect_call.argument_begin +
@@ -959,9 +1068,19 @@ static bool verify_block(const MinicCoreFunction *function,
     if (!storage_shape_is_valid(
             block->instructions, block->instruction_count, block->instruction_capacity) ||
         !block->has_terminator) {
+        if (getenv("MINIC_CORE_VERIFY_TRACE") != NULL)
+            (void)fprintf(stderr,
+                "CORE_IR_VERIFY_FAIL reason=block-shape function=%s block=%" PRIu32
+                " terminator=%d instructions=%zu capacity=%zu\n",
+                function->name, block_id, block->has_terminator,
+                block->instruction_count, block->instruction_capacity);
         return false;
     }
     if (function->value_count != 0U) {
+        /* ValueIds are function-wide identities but uses must be available
+         * within this block, in instruction order. Do not carry availability
+         * from the preceding block: value_seen separately checks uniqueness
+         * of definitions across the whole function. */
         (void)memset(available_values, 0, function->value_count * sizeof(*available_values));
     }
     for (index = 0U; index < block->instruction_count; ++index) {
@@ -970,6 +1089,11 @@ static bool verify_block(const MinicCoreFunction *function,
 
         instruction_id = block->instructions[index];
         if (instruction_id >= function->instruction_count || instruction_seen[instruction_id]) {
+            if (getenv("MINIC_CORE_VERIFY_TRACE") != NULL)
+                (void)fprintf(stderr,
+                    "CORE_IR_VERIFY_FAIL reason=instruction-ownership function=%s "
+                    "block=%" PRIu32 " instruction=%" PRIu32 "\n",
+                    function->name, block_id, instruction_id);
             return false;
         }
         instruction = &function->instructions[instruction_id];
@@ -1000,7 +1124,15 @@ static bool verify_block(const MinicCoreFunction *function,
         }
         instruction_seen[instruction_id] = true;
     }
-    return terminator_is_valid(function, &block->terminator, available_values);
+    if (!terminator_is_valid(function, &block->terminator, available_values)) {
+        if (getenv("MINIC_CORE_VERIFY_TRACE") != NULL)
+            (void)fprintf(stderr,
+                "CORE_IR_VERIFY_FAIL reason=terminator function=%s "
+                "block=%" PRIu32 " kind=%d\n",
+                function->name, block_id, (int)block->terminator.kind);
+        return false;
+    }
+    return true;
 }
 
 bool minic_core_function_verify(const MinicCoreFunction *function) {
@@ -1011,7 +1143,13 @@ bool minic_core_function_verify(const MinicCoreFunction *function) {
     size_t index;
     bool valid;
 
+    /* FIXME(MC-055): the storage-shape preflight below does not cover
+     * fixed_register_bindings, enum_types or function_symbols. Malformed
+     * external Core structures can escape preflight and crash later reads.
+     * Normal builder-produced Core is not known to violate this invariant. */
+
     if (function == NULL || function->name == NULL || function->name_length == 0U ||
+        !minic_function_calling_convention_valid(function->calling_convention) ||
         (function->parameter_count != 0U && function->parameter_types == NULL) ||
         !storage_shape_is_valid(
             function->globals, function->global_count, function->global_capacity) ||
@@ -1059,13 +1197,13 @@ bool minic_core_function_verify(const MinicCoreFunction *function) {
 
         callee = &function->callees[index];
         if (callee->name == NULL || callee->name_length == 0U ||
+            !minic_function_calling_convention_valid(callee->calling_convention) ||
             !minic_core_ir_direct_call_return_type(callee->return_type) ||
             (callee->parameter_count != 0U && callee->parameter_types == NULL)) {
             return false;
         }
-        /* M85B_RECORD_CALLEE_VERIFIER: direct callees share the same
-           scalar-or-record parameter contract used by creation and CALL
-           instruction verification. Indirect signatures remain scalar-only. */
+        /* Direct and indirect signatures share one scalar-or-record parameter
+         * contract. The Core CALL result_object controls aggregate ownership. */
         for (parameter_index = 0U; parameter_index < callee->parameter_count; ++parameter_index) {
             if (!minic_core_ir_call_parameter_type(callee->parameter_types[parameter_index])) {
                 return false;
@@ -1078,8 +1216,8 @@ bool minic_core_function_verify(const MinicCoreFunction *function) {
 
         signature = &function->call_signatures[index];
         if (signature->function_type_id == MINIC_FUNCTION_TYPE_INVALID ||
-            (!minic_type_is_void(signature->return_type) &&
-             !minic_core_ir_call_scalar_type(signature->return_type)) ||
+            !minic_function_calling_convention_valid(signature->calling_convention) ||
+            (!minic_core_ir_direct_call_return_type(signature->return_type)) ||
             (signature->parameter_count != 0U && signature->parameter_types == NULL)) {
             return false;
         }

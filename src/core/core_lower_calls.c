@@ -11,6 +11,76 @@
 /* Call semantics: direct/indirect and aggregate return share source-order
  * argument snapshots, independent of the architecture machine ABI. */
 
+/* The compiler's out-of-line inline clones inherit an explicit callsite
+ * section when their source has no section of its own. A clone from another
+ * caller's section is not an interchangeable Core callee, even with exactly
+ * the same integer, symbolic, and Boolean-range facts. */
+static bool core_inline_candidate_section_matches(
+    const MinicCoreLowerContext *context,
+    const MinicFunction *source,
+    const MinicFunction *candidate) {
+    const MinicFunction *owner;
+    const char *wanted;
+    size_t length;
+
+    if (context == NULL || source == NULL || candidate == NULL) return false;
+    owner = source->section_name != NULL ? source : context->source_function;
+    wanted = owner != NULL ? owner->section_name : NULL;
+    length = wanted != NULL ? owner->section_name_length : 0U;
+    if ((candidate->section_name == NULL) != (wanted == NULL) ||
+        candidate->section_name_length != length) return false;
+    return wanted == NULL || memcmp(candidate->section_name, wanted, length) == 0;
+}
+
+/* A source-AST call can point to a clone from another caller's section. The
+ * specialization planners pre-create an equivalent section-local clone; use
+ * that precise integer/symbolic/Boolean identity before searching for more
+ * caller-specific facts. Zero-known-integer variants must not fall back to
+ * an unsupported generic Linux inline helper merely because 0 > 0 is false. */
+static const MinicFunction *core_inline_same_facts_section_clone(
+    const MinicCoreLowerContext *context,
+    const MinicFunction *source,
+    const MinicFunction *current) {
+    const MinicC0Program *program;
+    size_t index, param;
+
+    if (context == NULL || context->body == NULL ||
+        context->body->program == NULL || source == NULL || current == NULL)
+        return current;
+    if (core_inline_candidate_section_matches(context, source, current))
+        return current;
+    if (!current->is_integer_specialization) return source;
+    program = context->body->program;
+    for (index = 0U; index < program->function_count; ++index) {
+        const MinicFunction *candidate = &program->functions[index];
+        bool same = true;
+        if (!candidate->is_integer_specialization ||
+            candidate->specialization_source != current->specialization_source ||
+            candidate->parameter_count != source->parameter_count ||
+            !core_inline_candidate_section_matches(context, source, candidate))
+            continue;
+        for (param = 0U; param < source->parameter_count; ++param) {
+            if (candidate->specialization_integer_known[param] !=
+                    current->specialization_integer_known[param] ||
+                (current->specialization_integer_known[param] &&
+                 candidate->specialization_integer_bits[param] !=
+                    current->specialization_integer_bits[param]) ||
+                candidate->specialization_symbolic_known[param] !=
+                    current->specialization_symbolic_known[param] ||
+                (current->specialization_symbolic_known[param] &&
+                 candidate->specialization_symbolic_expression[param] !=
+                    current->specialization_symbolic_expression[param]) ||
+                candidate->specialization_boolean_range_known[param] !=
+                    current->specialization_boolean_range_known[param]) {
+                same = false;
+                break;
+            }
+        }
+        if (same) return candidate;
+    }
+    return source;
+}
+
 /* M85_RECORD_CALL_ARGUMENT: materialize a by-value record argument as a
    private Core object snapshot before later arguments are evaluated. */
 static MinicCoreLowerStatus lower_record_call_argument_object(
@@ -242,12 +312,12 @@ static const MinicFunction *core_select_transitive_integer_specialization(
         known[parameter_index] = true;
         bits[parameter_index] = converted_value.bits;
     }
-    best = current_callee;
+    best = core_inline_same_facts_section_clone(context, source, current_callee);
     best_known_count = 0U;
-    if (current_callee->is_integer_specialization) {
+    if (best->is_integer_specialization) {
         for (parameter_index = 0U; parameter_index < source->parameter_count;
              ++parameter_index) {
-            if (current_callee->specialization_integer_known[parameter_index]) {
+            if (best->specialization_integer_known[parameter_index]) {
                 best_known_count += 1U;
             }
         }
@@ -259,7 +329,8 @@ static const MinicFunction *core_select_transitive_integer_specialization(
 
         if (!candidate->is_integer_specialization ||
             candidate->specialization_source != source_id ||
-            candidate->parameter_count != source->parameter_count) {
+            candidate->parameter_count != source->parameter_count ||
+            !core_inline_candidate_section_matches(context, source, candidate)) {
             continue;
         }
         for (parameter_index = 0U; parameter_index < source->parameter_count; ++parameter_index) {
@@ -399,11 +470,11 @@ static const MinicFunction *core_select_transitive_symbolic_specialization(
             &actual_symbol[i],
             0U);
     }
-    best = current_callee;
+    best = core_inline_same_facts_section_clone(context, source, current_callee);
     best_symbol_count = 0U;
-    if (current_callee->is_integer_specialization) {
+    if (best->is_integer_specialization) {
         for (i = 0U; i < source->parameter_count; ++i) {
-            if (current_callee->specialization_symbolic_known[i]) {
+            if (best->specialization_symbolic_known[i]) {
                 best_symbol_count += 1U;
             }
         }
@@ -416,7 +487,8 @@ static const MinicFunction *core_select_transitive_symbolic_specialization(
 
         if (!candidate->is_integer_specialization ||
             candidate->specialization_source != source_id ||
-            candidate->parameter_count != source->parameter_count) {
+            candidate->parameter_count != source->parameter_count ||
+            !core_inline_candidate_section_matches(context, source, candidate)) {
             continue;
         }
         for (i = 0U; i < source->parameter_count; ++i) {
@@ -532,10 +604,10 @@ static const MinicFunction *core_select_boolean_range_specialization(
             minic_core_lower_boolean_range_expression(
                 context, minic_c0_call_argument(expression, i), 0U);
     }
-    best = current_callee;
-    if (current_callee->is_integer_specialization) {
+    best = core_inline_same_facts_section_clone(context, source, current_callee);
+    if (best->is_integer_specialization) {
         for (i = 0U; i < source->parameter_count; ++i) {
-            if (current_callee->specialization_boolean_range_known[i]) {
+            if (best->specialization_boolean_range_known[i]) {
                 best_count += 1U;
             }
         }
@@ -549,6 +621,11 @@ static const MinicFunction *core_select_boolean_range_specialization(
         if (!candidate->is_integer_specialization ||
             candidate->specialization_source != source_id ||
             candidate->parameter_count != source->parameter_count ||
+            !core_inline_candidate_section_matches(context, source, candidate) ||
+            /* Preserve the AST call's integer/symbolic requirements from
+             * current_callee even when a wrong-section clone made `best`
+             * fall back to the unspecialized source. Section and facts are
+             * independent dimensions of specialization identity. */
             !core_boolean_range_specialization_same_base_facts(
                 candidate, current_callee, source->parameter_count)) {
             continue;
@@ -620,6 +697,22 @@ static MinicCoreLowerStatus core_prepare_call_argument(
         !minic_type_equal(
             context->function->values[argument->value.value_id].type, type))
         return MINIC_CORE_LOWER_ERROR;
+    /* Preserve one immutable language fact before the ordinary Core
+     * evaluation-order snapshot. Do not let backends infer immediates from
+     * arbitrary LOAD/STORE aliases or skip call side-effect ordering.
+     * No target ISA or CSR identity belongs in this generic call path. */
+    argument->has_constant_integer = false;
+    argument->constant_integer_bits = 0U;
+    if (context->target != NULL && minic_type_is_integer(type)) {
+        MinicConstValue integer;
+        if (minic_const_eval_arithmetic_to_integer(
+                context->body->program, context->target, source,
+                type, &integer) &&
+            minic_type_equal(integer.type, type)) {
+            argument->has_constant_integer = true;
+            argument->constant_integer_bits = integer.bits;
+        }
+    }
     return minic_core_lower_internal_spill_scalar_value(
         context, call->span, type, argument->value.value_id,
         snapshot_object);
@@ -690,16 +783,20 @@ MinicCoreLowerStatus minic_core_lower_direct_call(MinicCoreLowerContext *context
         (!returns_void && !core_memory_scalar_type(callee->return_type))) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
-    /* M186_EMPTY_INTERNAL_VOID_CALL_ELISION: do not materialize a pure
-       argument solely for a CONFIG-off no-op inline helper. */
-    if (returns_void && callee->is_defined && callee->is_internal && callee->is_inline &&
+    /* An internal empty void helper has no observable call effect regardless
+     * of whether the source spelled `inline`. Linux's CONFIG-off CFI stubs
+     * are ordinary static functions: retaining their unused pointer-address
+     * arguments can create unresolved linker-script symbols. Elide the call
+     * only when *every* argument is independently proven pure, and the body
+     * contains no executable statement beyond an optional bare return. */
+    if (returns_void && callee->is_defined && callee->is_internal &&
         callee->body_block != MINIC_BLOCK_INVALID) {
         const MinicBlock *callee_body = minic_c0_program_block(
             context->body->program, callee->body_block);
         bool empty_effect = callee_body != NULL && callee_body->statement_count == 0U;
         bool arguments_pure = true;
 
-        if (callee_body != NULL && callee_body->statement_count != 0U) {
+        if (callee_body != NULL && callee_body->statement_count == 1U) {
             const MinicStatement *first = minic_c0_program_statement(
                 context->body->program, callee_body->statements[0]);
             empty_effect = first != NULL && first->kind == MINIC_STATEMENT_RETURN &&
@@ -776,6 +873,7 @@ MinicCoreLowerStatus minic_core_lower_direct_call(MinicCoreLowerContext *context
                                         callee->parameter_types,
                                         callee->parameter_count,
                                         callee->is_variadic,
+                                        callee->calling_convention,
                                         &callee_id) ||
         !minic_core_function_append_call_arguments(
             context->function, arguments, argument_count, &argument_begin)) {
@@ -881,6 +979,7 @@ MinicCoreLowerStatus minic_core_lower_direct_record_call_object(
                                         callee->parameter_types,
                                         callee->parameter_count,
                                         callee->is_variadic,
+                                        callee->calling_convention,
                                         &callee_id) ||
         !minic_core_function_append_call_arguments(
             context->function, arguments, callee->parameter_count, &argument_begin)) {
@@ -909,10 +1008,13 @@ MinicCoreLowerStatus minic_core_lower_direct_record_call_object(
 
 /* M83_FIRST_CLASS_INDIRECT_CALL: keep the callee as a first-class SSA
    function-pointer value; the static signature is copied into Core so
-   verification and later backends do not depend on frontend Program state. */
-MinicCoreLowerStatus minic_core_lower_indirect_call(MinicCoreLowerContext *context,
+   verification and later backends do not depend on frontend Program state.
+   The return destination follows one target-neutral dual form for *all*
+   calling conventions: scalar SSA or address-backed aggregate object. */
+static MinicCoreLowerStatus core_lower_indirect_call_impl(MinicCoreLowerContext *context,
                                                 const MinicExpression *expression,
-                                                MinicCoreValueId *value_id) {
+                                                MinicCoreValueId *value_id,
+                                                MinicCoreObjectId *result_object) {
     const MinicExpression *callee_expression;
     const MinicFunctionType *signature;
     MinicCoreCallSignatureId signature_id;
@@ -929,9 +1031,11 @@ MinicCoreLowerStatus minic_core_lower_indirect_call(MinicCoreLowerContext *conte
     size_t argument_count;
     size_t argument_index;
     bool returns_void;
+    bool returns_record;
 
     if (context == NULL || context->body == NULL || context->body->program == NULL ||
-        context->function == NULL || expression == NULL || value_id == NULL ||
+        context->function == NULL || expression == NULL ||
+        ((value_id == NULL) == (result_object == NULL)) ||
         expression->kind != MINIC_EXPRESSION_CALL ||
         expression->value.call.function_id != MINIC_FUNCTION_INVALID) {
         return MINIC_CORE_LOWER_ERROR;
@@ -972,7 +1076,10 @@ MinicCoreLowerStatus minic_core_lower_indirect_call(MinicCoreLowerContext *conte
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
     returns_void = minic_type_is_void(signature->return_type);
-    if (!returns_void && !core_memory_scalar_type(signature->return_type)) {
+    returns_record = minic_type_is_record(signature->return_type);
+    if (result_object != NULL ? !returns_record :
+        (returns_record || (!returns_void &&
+         !core_memory_scalar_type(signature->return_type)))) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
 
@@ -1041,6 +1148,7 @@ MinicCoreLowerStatus minic_core_lower_indirect_call(MinicCoreLowerContext *conte
                                                 signature->parameter_types,
                                                 signature->parameter_count,
                                                 signature->is_variadic,
+                                                signature->calling_convention,
                                                 &signature_id) ||
         !minic_core_function_append_call_arguments(
             context->function, arguments, argument_count, &argument_begin)) {
@@ -1058,6 +1166,18 @@ MinicCoreLowerStatus minic_core_lower_indirect_call(MinicCoreLowerContext *conte
     instruction.value.indirect_call.signature_id = signature_id;
     instruction.value.indirect_call.argument_begin = argument_begin;
     instruction.value.indirect_call.argument_count = argument_count;
+    instruction.value.indirect_call.result_object = MINIC_CORE_OBJECT_INVALID;
+    if (returns_record) {
+        if (!minic_core_function_add_object(
+                context->function, expression->span,
+                signature->return_type, result_object)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        instruction.value.indirect_call.result_object = *result_object;
+        return minic_core_function_append_effect_instruction(
+                   context->function, context->block_id, &instruction)
+                   ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR;
+    }
     if (returns_void) {
         *value_id = MINIC_CORE_VALUE_INVALID;
         return minic_core_function_append_effect_instruction(
@@ -1069,5 +1189,17 @@ MinicCoreLowerStatus minic_core_lower_indirect_call(MinicCoreLowerContext *conte
                context->function, context->block_id, &instruction, value_id)
                ? MINIC_CORE_LOWER_OK
                : MINIC_CORE_LOWER_ERROR;
+}
+
+MinicCoreLowerStatus minic_core_lower_indirect_call(MinicCoreLowerContext *context,
+                                                const MinicExpression *expression,
+                                                MinicCoreValueId *value_id) {
+    return core_lower_indirect_call_impl(context, expression, value_id, NULL);
+}
+
+MinicCoreLowerStatus minic_core_lower_indirect_record_call_object(
+    MinicCoreLowerContext *context, const MinicExpression *expression,
+    MinicCoreObjectId *result_object) {
+    return core_lower_indirect_call_impl(context, expression, NULL, result_object);
 }
 

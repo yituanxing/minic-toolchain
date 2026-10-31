@@ -164,7 +164,8 @@ MinicTypeAliasId minic_parser_find_type_alias(const MinicParser *parser,
     }
 
     ((MinicParser *)parser)->perf_typedef_queries += 1U;
-    if (minic_parser_typedef_index_sync((MinicParser *)parser)) {
+    if (parser->cache_owner == parser &&
+        minic_parser_typedef_index_sync((MinicParser *)parser)) {
         bool consistent = false;
         MinicTypeAliasId id = minic_parser_typedef_index_lookup(
             (MinicParser *)parser, name_span, &consistent);
@@ -197,15 +198,14 @@ static bool parse_parenthesized_function_typedef(MinicParser *parser,
         !minic_parser_parse_parenthesized_function_declarator(parser, true, false, &declarator)) {
         return false;
     }
-    if (declarator.attributes.count != 0U) {
-        minic_parser_error(
-            parser,
-            "GNU attributes inside function pointer typedef declarators are not implemented yet");
-        return false;
-    }
     if (!minic_parser_build_function_declarator_type(
             parser, return_type, &declarator, aliased_type)) {
         minic_parser_error(parser, "cannot build function pointer typedef type");
+        return false;
+    }
+    if (!minic_parser_apply_function_pointer_declarator_attributes(
+            parser, &declarator.attributes, aliased_type,
+            "unsupported GNU attribute in function-pointer typedef")) {
         return false;
     }
     *name_span = declarator.name_span;

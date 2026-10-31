@@ -33,6 +33,97 @@ int main(void) { return 42; }
 EOF
 check_exit return42 42
 
+# Original Linux x86-64: register unsigned long current_stack_pointer
+# asm("rsp"). GCC binds the *live stack pointer*, after the callee's prologue,
+# rather than materializing an ELF global or substituting the saved rbp.
+# Verify real GNU assembly and execute natively against an actual local.
+cat > "$tempdir/x86_rsp_live.i" <<'EOF'
+register unsigned long current_stack_pointer asm("rsp");
+int main(void) {
+    volatile unsigned long stack_local = 42UL;
+    unsigned long rsp_snapshot = current_stack_pointer;
+    unsigned long object_address = (unsigned long)&stack_local;
+    if (rsp_snapshot == 0UL || rsp_snapshot > object_address)
+        return 1;
+    if (object_address - rsp_snapshot > 4096UL)
+        return 2;
+    if ((rsp_snapshot & 15UL) != 0UL)
+        return 3;
+    return (int)stack_local;
+}
+EOF
+check_exit x86_rsp_live 42
+grep -F '  movq %rsp, %rax' "$tempdir/x86_rsp_live.s" >/dev/null
+if grep -F 'current_stack_pointer@' "$tempdir/x86_rsp_live.s" >/dev/null; then
+    echo 'FAIL: x86 rsp binding lowered as a global symbol' >&2
+    exit 1
+fi
+cat > "$tempdir/x86_rsp_unqualified.i" <<'EOF'
+register unsigned long unqualified_reg asm("r15");
+unsigned long probe(void) { return unqualified_reg; }
+EOF
+if "$MINIC_CC" --target=x86_64-linux -S "$tempdir/x86_rsp_unqualified.i" \
+    -o "$tempdir/x86_rsp_unqualified.s" >"$tempdir/x86_rsp_unqualified.out" \
+    2>"$tempdir/x86_rsp_unqualified.err"; then
+    echo 'FAIL: x86 unqualified r15 binding accepted' >&2
+    exit 1
+fi
+grep -F 'fixed register binding is not supported by this target' \
+    "$tempdir/x86_rsp_unqualified.err" >/dev/null
+
+# The unchanged x86 Linux asm helper mul_u64_u64_div_u64() is
+# NONvolatile GNU output ASM: mulq %2; divq %3 with =a/a/rm/rm and
+# physical rdx clobber. Reuse the current Core Structured ASM and x86
+# Backend Contract. GNU and MiniC must both materialize the same quotient
+# including a nonzero high half in RDX; never silently skip the asm.
+cat > "$tempdir/x86_gnu_muldiv.i" <<'EOF'
+static unsigned long long muldiv_u64(unsigned long long a,
+                                     unsigned long long mul,
+                                     unsigned long long div) {
+    unsigned long long q;
+    asm ("mulq %2; divq %3" : "=a" (q)
+        : "a" (a), "rm" (mul), "rm" (div) : "rdx");
+    return q;
+}
+int main(void) {
+    if (muldiv_u64(0x8000000000000000ULL, 2ULL, 3ULL) !=
+        6148914691236517205ULL)
+        return 1;
+    return (int)muldiv_u64(21ULL, 4ULL, 2ULL);
+}
+EOF
+check_exit x86_gnu_muldiv 42
+grep -F '  mulq %r10' "$tempdir/x86_gnu_muldiv.s" >/dev/null
+grep -F '  divq %r11' "$tempdir/x86_gnu_muldiv.s" >/dev/null
+"$HOST_CC" -std=gnu11 -no-pie -x c "$tempdir/x86_gnu_muldiv.i" \
+    -o "$tempdir/x86_gnu_muldiv.gnu"
+set +e
+"$tempdir/x86_gnu_muldiv.gnu"
+muldiv_gcc_result=$?
+set -e
+test "$muldiv_gcc_result" -eq 42
+echo 'PASS: x86 GNU 64x64/128-div asm MiniC/GCC differential, RDX clobber and true Core output'
+
+# Nearby operand templates must remain rejected unless their full machine
+# dataflow and physical-register constraints are separately qualified.
+cat > "$tempdir/x86_gnu_muldiv_unknown.i" <<'EOF'
+unsigned long long bad(unsigned long long x,
+                       unsigned long long m,
+                       unsigned long long d) {
+    unsigned long long q;
+    asm ("mulq %2; divq %3; nop" : "=a" (q)
+         : "a" (x), "rm" (m), "rm" (d) : "rdx");
+    return q;
+}
+EOF
+if "$MINIC_CC" --target=x86_64-linux -S "$tempdir/x86_gnu_muldiv_unknown.i" \
+    -o "$tempdir/x86_gnu_muldiv_unknown.s" \
+    >"$tempdir/x86_gnu_muldiv_unknown.out" \
+    2>"$tempdir/x86_gnu_muldiv_unknown.err"; then
+    echo 'FAIL: unqualified x86 muldiv ASM template accepted' >&2
+    exit 1
+fi
+
 # BusyBox allyesconfig + libselinux: a GNU deprecated typedef is an
 # informational type attribute, not a different object/argument layout.
 # Check both x86 runtime and RV64 parsing; retain diagnostic-only behavior.
@@ -741,8 +832,8 @@ int main(void) {
 EOF
 check_exit sqlite_atomic_pointer 42
 
-# Real Linux default PIE: dynamic libc function *and object* address
-# materialization must resolve via GOT, not the non-PIE PC32 LEA form.
+# Explicit -fPIE: dynamic libc function *and object* address materialization
+# must resolve via GOT, whereas the original kernel's -fno-PIE permits PC32.
 cat > "$tempdir/pie_external_symbols.i" <<'EOF'
 extern char *getenv(const char *);
 extern char **environ;
@@ -754,7 +845,7 @@ int main(void) {
     return fn("PATH") != 0 && *envp != 0 ? 42 : 1;
 }
 EOF
-"$MINIC_CC" --target=x86_64-linux -S "$tempdir/pie_external_symbols.i" \
+"$MINIC_CC" --target=x86_64-linux -fPIE -S "$tempdir/pie_external_symbols.i" \
     -o "$tempdir/pie_external_symbols.s"
 grep -F '@GOTPCREL(%rip)' "$tempdir/pie_external_symbols.s" >/dev/null
 "$HOST_CC" -pie -x assembler "$tempdir/pie_external_symbols.s" \
@@ -779,6 +870,27 @@ if test "$nonpie_code" -ne 42; then
   exit 1
 fi
 echo "PASS: x86-64 GOT external function/object addresses PIE and non-PIE exit=42"
+# The GNU kernel Kbuild explicitly requests -fno-PIE. Keep default-visible
+# addresses PC-relative under that mode, and prove GNU -no-pie static link.
+"$MINIC_CC" --target=x86_64-linux -fno-PIE -S "$tempdir/pie_external_symbols.i" \
+    -o "$tempdir/nopic_external_symbols.s"
+grep -F 'leaq getenv(%rip)' "$tempdir/nopic_external_symbols.s" >/dev/null
+grep -F 'leaq environ(%rip)' "$tempdir/nopic_external_symbols.s" >/dev/null
+if grep -F '@GOTPCREL' "$tempdir/nopic_external_symbols.s" >/dev/null;then
+  echo "FAIL: -fno-PIE x86 external addresses unexpectedly use GOT" >&2
+  exit 1
+fi
+"$HOST_CC" -no-pie -x assembler "$tempdir/nopic_external_symbols.s" \
+    -o "$tempdir/nopic_external_symbols.bin"
+set +e
+"$tempdir/nopic_external_symbols.bin"
+nopic_code=$?
+set -e
+if test "$nopic_code" -ne 42; then
+  echo "FAIL: -fno-PIE external function/global addresses exit=$nopic_code expected=42" >&2
+  exit 1
+fi
+echo "PASS: x86-64 non-PIC direct function/object addresses GNU no-pie exit=42"
 
 # Real tiny-AES pressure point: read-only global byte tables.
 cat > "$tempdir/global.i" <<'EOF'
@@ -1059,34 +1171,23 @@ int main(void) {
 EOF
 check_exit varargs_read 42
 
-# The x86 runtime's one-word va_list proxy is deliberately not yet
-# GCC's C array[1] type (sizeof=24). Reject size queries rather than
-# silently miscompile them as sizeof(void*)=8, through typedefs and locals.
-cat > "$tempdir/varargs_sizeof_type_unsupported.i" <<'EOF'
+# The source SysV va_list is an array of one 24-byte record, independently
+# from the backend's private pointer-to-state cursor transport. Both a
+# typedef sizeof and a local object sizeof must agree with native GCC.
+cat > "$tempdir/varargs_sizeof.i" <<'EOF'
 typedef __builtin_va_list va_list;
-int main(void) { return (int)sizeof(va_list); }
+int main(void) {
+    va_list list;
+    return sizeof(va_list) == 24U && sizeof(list) == 24U ? 42 : 13;
+}
 EOF
-if "$MINIC_CC" --target=x86_64-linux -S "$tempdir/varargs_sizeof_type_unsupported.i" \
-    -o "$tempdir/varargs_sizeof_type_unsupported.s" \
-    >"$tempdir/va_size_type.out" 2>"$tempdir/va_size_type.err"; then
-  echo "FAIL: x86 va_list sizeof(type) miscompiled as one pointer" >&2
-  exit 1
-fi
-test ! -e "$tempdir/varargs_sizeof_type_unsupported.s"
-grep -F 'sizeof requires a supported complete type' "$tempdir/va_size_type.err" >/dev/null
-
-cat > "$tempdir/varargs_sizeof_local_unsupported.i" <<'EOF'
-typedef __builtin_va_list va_list;
-int main(void) { va_list list; return (int)sizeof(list); }
-EOF
-if "$MINIC_CC" --target=x86_64-linux -S "$tempdir/varargs_sizeof_local_unsupported.i" \
-    -o "$tempdir/varargs_sizeof_local_unsupported.s" \
-    >"$tempdir/va_size_local.out" 2>"$tempdir/va_size_local.err"; then
-  echo "FAIL: x86 va_list sizeof(local) miscompiled as one pointer" >&2
-  exit 1
-fi
-test ! -e "$tempdir/varargs_sizeof_local_unsupported.s"
-grep -F 'sizeof requires a supported complete type' "$tempdir/va_size_local.err" >/dev/null
+check_exit varargs_sizeof 42
+"$HOST_CC" -x c -std=gnu11 "$tempdir/varargs_sizeof.i" -o "$tempdir/gcc-va-sizeof"
+set +e
+"$tempdir/gcc-va-sizeof"
+gcc_sizeof_status=$?
+set -e
+test "$gcc_sizeof_status" -eq 42
 
 cat > "$tempdir/varargs_type_identity.i" <<'EOF'
 typedef __builtin_va_list va_list;
@@ -1097,7 +1198,7 @@ EOF
 check_exit varargs_type_identity 42
 "$HOST_CC" -x c -std=gnu11 -c -o "$tempdir/gcc-va-type.o" \
     "$tempdir/varargs_type_identity.i"
-echo "PASS: x86 SysV va_list opaque cursor identity and fail-closed sizeof"
+echo "PASS: x86 SysV va_list source array identity and GCC-matched 24-byte sizeof"
 
 # A SysV va_copy must clone its 24-byte tag. Check independently advancing
 # both cursors, rather than only checking that parsing/code generation succeeds.

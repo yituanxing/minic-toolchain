@@ -56,6 +56,7 @@ static bool test_value_classification(void) {
     MinicType record4;
     MinicType record_fp;
     MinicType pointer_type;
+    MinicRiscv64AbiValue fp_record_value;
 
     minic_c0_program_initialize(&program);
     record16_fields[0] = minic_type_long();
@@ -79,7 +80,13 @@ static bool test_value_classification(void) {
     CHECK(expect_value(&program, record16, MINIC_RISCV64_ABI_VALUE_AGGREGATE, 16U, 2U));
 
     CHECK(expect_value(&program, record4, MINIC_RISCV64_ABI_VALUE_AGGREGATE, 4U, 1U));
-    CHECK(expect_value(&program, record_fp, MINIC_RISCV64_ABI_VALUE_INDIRECT, 8U, 1U));
+    CHECK(!minic_riscv64_abi_classify_value(
+        &program, record_fp, &fp_record_value));
+    CHECK(minic_riscv64_abi_classify_value_profile(
+        &program, record_fp, true, &fp_record_value));
+    CHECK(fp_record_value.kind == MINIC_RISCV64_ABI_VALUE_AGGREGATE &&
+          fp_record_value.storage_size == 8U &&
+          fp_record_value.slot_count == 1U);
 
     minic_c0_program_destroy(&program);
     return true;
@@ -139,8 +146,10 @@ static bool test_argument_placement(void) {
     MinicC0Program program;
     MinicType record_fields[2];
     MinicType record16;
+    MinicType fp_fields[1];
+    MinicType record_fp;
+    MinicType aligned_record;
     MinicRiscv64AbiCursor cursor;
-    MinicRiscv64AbiCursor before_failure;
     MinicRiscv64AbiArgumentLocation location;
     size_t index;
 
@@ -214,12 +223,64 @@ static bool test_argument_placement(void) {
         CHECK(location.floating_register_begin == index);
         CHECK(location.floating_register_count == 1U);
     }
-    before_failure = cursor;
-    CHECK(
-        !minic_riscv64_abi_place_argument(&program, minic_type_double(), true, &cursor, &location));
-    CHECK(cursor.integer_register_count == before_failure.integer_register_count);
-    CHECK(cursor.floating_register_count == before_failure.floating_register_count);
-    CHECK(cursor.stack_slot_count == before_failure.stack_slot_count);
+    /* A ninth named FP scalar falls back to the first unused GAR. It does
+     * not consume a ninth FAR or fail the entire function admission. */
+    CHECK(minic_riscv64_abi_place_argument(
+        &program, minic_type_double(), true, &cursor, &location));
+    CHECK(location.floating_register_count == 0U);
+    CHECK(location.integer_register_begin == 0U &&
+          location.integer_register_count == 1U &&
+          location.stack_slot_count == 0U);
+    CHECK(cursor.floating_register_count == 8U &&
+          cursor.integer_register_count == 1U);
+    /* Both streams are independent; GAR exhaustion falls through to stack. */
+    for (index = 1U; index < 8U; ++index)
+        CHECK(minic_riscv64_abi_place_argument(
+            &program, minic_type_double(), true, &cursor, &location));
+    CHECK(minic_riscv64_abi_place_argument(
+        &program, minic_type_double(), true, &cursor, &location));
+    CHECK(location.floating_register_count == 0U &&
+          location.integer_register_count == 0U &&
+          location.stack_slot_begin == 0U &&
+          location.stack_slot_count == 1U);
+
+    /* A named LP64D float-containing record needs FP aggregate flattening;
+     * an unimplemented shape must never silently become an a0 pointer.
+     * Unnamed LP64D variadics instead use the regular integer convention. */
+    fp_fields[0] = minic_type_float();
+    CHECK(add_record(&program, fp_fields, 1U, &record_fp));
+    minic_riscv64_abi_cursor_initialize(&cursor);
+    CHECK(!minic_riscv64_abi_place_argument(
+        &program, record_fp, true, &cursor, &location));
+    CHECK(cursor.integer_register_count == 0U &&
+          cursor.floating_register_count == 0U &&
+          cursor.stack_slot_count == 0U);
+    CHECK(minic_riscv64_abi_place_argument(
+        &program, record_fp, false, &cursor, &location));
+    CHECK(location.value.kind == MINIC_RISCV64_ABI_VALUE_AGGREGATE &&
+          location.integer_register_begin == 0U &&
+          location.integer_register_count == 1U &&
+          location.floating_register_count == 0U);
+    minic_riscv64_abi_cursor_initialize(&cursor);
+    cursor.lp64_soft_float = true;
+    CHECK(minic_riscv64_abi_place_argument(
+        &program, record_fp, true, &cursor, &location));
+    CHECK(location.value.kind == MINIC_RISCV64_ABI_VALUE_AGGREGATE &&
+          location.integer_register_count == 1U &&
+          location.floating_register_count == 0U);
+
+    /* The unnamed 16-aligned aggregate must start at an even a-register
+     * under both LP64D and LP64, even when the first named integer uses a0. */
+    CHECK(add_record(&program, record_fields, 2U, &aligned_record));
+    program.records[aligned_record.record_id].explicit_alignment = 16U;
+    minic_riscv64_abi_cursor_initialize(&cursor);
+    CHECK(minic_riscv64_abi_place_argument(
+        &program, minic_type_long(), true, &cursor, &location));
+    CHECK(minic_riscv64_abi_place_argument(
+        &program, aligned_record, false, &cursor, &location));
+    CHECK(location.value.kind == MINIC_RISCV64_ABI_VALUE_AGGREGATE &&
+          location.integer_register_begin == 2U &&
+          location.integer_register_count == 2U);
 
     minic_c0_program_destroy(&program);
     return true;
@@ -268,12 +329,14 @@ static bool test_function_abi_plan_qualification(void) {
     CHECK(plan.parameter_locations[7].floating_register_count == 1U);
     minic_riscv64_function_abi_plan_destroy(&plan);
 
-    /* LP64D has no ninth fixed floating argument placement in this
-     * qualified compiler profile. A failure must leave no stale plan. */
+    /* RV64 LP64D named FP9 is legal: fa0..fa7, then a0. */
     fn.parameter_count = 9U;
-    CHECK(!minic_riscv64_function_abi_plan_build_profile(&program, &fn, &plan, false));
-    CHECK(!plan.prepared && plan.parameter_locations == NULL);
-    CHECK(plan.parameter_location_count == 0U);
+    CHECK(minic_riscv64_function_abi_plan_build_profile(&program, &fn, &plan, false));
+    CHECK(plan.prepared && plan.parameter_location_count == 9U);
+    CHECK(plan.parameter_locations[8].floating_register_count == 0U &&
+          plan.parameter_locations[8].integer_register_begin == 0U &&
+          plan.parameter_locations[8].integer_register_count == 1U);
+    minic_riscv64_function_abi_plan_destroy(&plan);
 
     /* The same value is legal under soft-float LP64 as a GPR argument. */
     fn.parameter_count = 1U;

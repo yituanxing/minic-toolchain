@@ -63,12 +63,14 @@ bool rv32_outgoing_word(FILE *, const Rv32Frame *, size_t, const char *);
 bool rv32_scalar_storage_words(const MinicCoreFunction *, MinicType, unsigned *);
 bool rv32_scalar(const MinicCoreFunction *, MinicType, unsigned *, bool *);
 bool rv32_canon(FILE *, const MinicCoreFunction *, MinicType, const char *);
-bool rv32_load_mem(FILE *, const MinicCoreFunction *, MinicType, const char *);
-bool rv32_store_mem(FILE *, const MinicCoreFunction *, MinicType);
+bool rv32_load_mem(FILE *, const MinicCoreFunction *, MinicType,
+                   const char *, size_t);
+bool rv32_store_mem(FILE *, const MinicCoreFunction *, MinicType, size_t);
 bool rv32_load2(FILE *, const Rv32Frame *, const MinicCoreInstruction *);
 
 /* Typed machine family lowering; all transport stays behind Target. */
-bool rv32_emit_integer_instruction(FILE *, const MinicCoreFunction *,
+bool rv32_emit_integer_instruction(FILE *, const MinicC0Program *,
+                                   const MinicTargetInfo *, const MinicCoreFunction *,
                                    const Rv32Frame *, const MinicCoreInstruction *,
                                    const char *);
 bool rv32_is_wide_integer(const MinicCoreFunction *, MinicType);

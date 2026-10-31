@@ -14,6 +14,20 @@ typedef size_t MinicEnumId;
 #define MINIC_FUNCTION_TYPE_INVALID ((MinicFunctionTypeId) - 1)
 #define MINIC_ENUM_INVALID ((MinicEnumId) - 1)
 
+/* Target-neutral function ABI identity. A non-default convention changes
+ * function-pointer compatibility and direct/indirect call transport; it does
+ * not prescribe any particular physical register or stack location. */
+typedef enum MinicFunctionCallingConvention {
+    MINIC_CALLING_CONVENTION_DEFAULT = 0,
+    MINIC_CALLING_CONVENTION_MS_X64
+} MinicFunctionCallingConvention;
+
+static inline bool minic_function_calling_convention_valid(
+    MinicFunctionCallingConvention convention) {
+    return convention == MINIC_CALLING_CONVENTION_DEFAULT ||
+           convention == MINIC_CALLING_CONVENTION_MS_X64;
+}
+
 typedef enum MinicTypeBaseKind {
     MINIC_TYPE_BASE_VOID = 0,
     MINIC_TYPE_BASE_INT,
@@ -27,15 +41,12 @@ typedef enum MinicTypeBaseKind {
     /* Genuine IEEE binary128 type, distinct from x86 80-bit long double.
      * Append to preserve existing serialized base-kind identifiers. */
     MINIC_TYPE_BASE_FLOAT128,
-    /* x86 SysV va_list is an array[1] of a 24-byte tag. For now the
-     * runtime uses a pointer to a 24-byte frame-owned tag, not that array
-     * representation. Preserve this distinct identity so sizeof cannot
-     * silently report sizeof(void*) for __builtin_va_list. */
-    MINIC_TYPE_BASE_X86_VA_LIST_CURSOR,
     /* GNU/ISO TS 18661 extended FP types are distinct C identities even
      * when they share x86 storage and argument representation with float,
-     * double or long double. Do not alias these to standard C types. */
-    MINIC_TYPE_BASE_FLOAT32,
+     * double or long double. Do not alias these to standard C types. Keep
+     * the historical numeric value 11: value 10 is retired cursor-proxy
+     * source representation, not reusable for an unrelated C type. */
+    MINIC_TYPE_BASE_FLOAT32 = 11,
     MINIC_TYPE_BASE_FLOAT64,
     MINIC_TYPE_BASE_FLOAT32X,
     MINIC_TYPE_BASE_FLOAT64X,
@@ -49,6 +60,19 @@ typedef enum MinicTypeBaseKind {
     MINIC_TYPE_BASE_AARCH64_SVE_FLOAT64,
     MINIC_TYPE_BASE_AARCH64_SVE_BOOL
 } MinicTypeBaseKind;
+
+/* Source-language declaration shape only: this neither approves an extension
+ * for a target nor promises an executable machine value/ABI. TargetInfo owns
+ * admission; this centralized compatibility adapter lets the verifier avoid
+ * naming individual target ISA types. */
+typedef enum MinicBuiltinDeclarationRole {
+    MINIC_BUILTIN_DECLARATION_INVALID = 0,
+    MINIC_BUILTIN_DECLARATION_STANDARD_FLOAT,
+    MINIC_BUILTIN_DECLARATION_EXTENDED_FLOAT,
+    MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE
+} MinicBuiltinDeclarationRole;
+
+MinicBuiltinDeclarationRole minic_type_builtin_declaration_role(MinicTypeBaseKind kind);
 
 typedef enum MinicIntegerSign {
     MINIC_INTEGER_SIGN_NONE = 0,
@@ -117,8 +141,6 @@ MinicType minic_type_float32x(void);
 MinicType minic_type_float64x(void);
 /* Header-only opaque AArch64 builtin SIMD identities, not scalar aliases. */
 MinicType minic_type_aarch64_header_builtin(MinicTypeBaseKind base_kind);
-MinicType minic_type_x86_va_list_cursor(void);
-bool minic_type_is_x86_va_list_cursor(MinicType type);
 MinicType minic_type_function(MinicFunctionTypeId function_type_id);
 MinicType minic_type_record(MinicRecordId record_id);
 MinicType minic_type_array(MinicArrayTypeId array_type_id);

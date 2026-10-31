@@ -88,6 +88,20 @@ bool minic_multi_direct_function_address_symbol(
     return *symbol != NULL && (*symbol)[0] != '\0';
 }
 
+bool minic_multi_direct_block_address_shape(
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
+    MinicCoreBlockId *block) {
+    if (fn == NULL || ins == NULL || block == NULL ||
+        ins->kind != MINIC_CORE_INSTRUCTION_BLOCK_ADDRESS ||
+        ins->value.block_id >= fn->block_count ||
+        ins->result >= fn->value_count ||
+        !minic_type_is_pointer(ins->type) ||
+        !minic_type_equal(fn->values[ins->result].type, ins->type))
+        return false;
+    *block = ins->value.block_id;
+    return true;
+}
+
 bool minic_multi_direct_object_address_location(
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     const MinicLP64FramePlan *frame, size_t *offset) {

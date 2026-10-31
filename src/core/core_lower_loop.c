@@ -381,8 +381,8 @@ minic_core_lower_loop_cfg(MinicCoreLowerContext *context,
 /* MUTABLE_SPECIALIZATION_LOOP_BARRIER: do not substitute an incoming
    specialized parameter constant for a variable updated within the loop. */
 static void core_invalidate_loop_mutated_specialization_facts(
-    MinicCoreLowerContext *context, const MinicStatement *loop_statement) {
-    const MinicBlock *body;
+    MinicCoreLowerContext *context, const MinicStatement *loop_statement,
+    const unsigned char *modified) {
     size_t index;
 
     if (context == NULL || context->source_function == NULL ||
@@ -390,7 +390,6 @@ static void core_invalidate_loop_mutated_specialization_facts(
         loop_statement == NULL || loop_statement->kind != MINIC_STATEMENT_WHILE) {
         return;
     }
-    body = minic_c0_program_block(context->body->program, loop_statement->then_block);
     for (index = 0U; index < context->source_function->local_count; ++index) {
         MinicLocalId local_id = context->source_function->local_begin + index;
         const MinicCoreLocalIntegerConstant *fact =
@@ -399,12 +398,9 @@ static void core_invalidate_loop_mutated_specialization_facts(
         if (!fact->specialization_known || fact->specialization_modified) {
             continue;
         }
-        may_mutate =
-            body == NULL ||
-            (loop_statement->expression != MINIC_EXPRESSION_INVALID &&
-             core_expression_may_modify_local(
-                 context, loop_statement->expression, local_id, 0U)) ||
-            core_block_may_modify_local(context, body, local_id, 0U);
+        /* NULL means the whole-subtree collector could not allocate its
+         * mask, so every source local is conservatively modified. */
+        may_mutate = modified == NULL || modified[index] != 0U;
         if (may_mutate) {
             minic_core_local_fact_invalidate(context, local_id);
             if (getenv("MINIC_LOOP_MUTATED_FACT_TRACE") != NULL) {
@@ -421,8 +417,8 @@ static void core_invalidate_loop_mutated_specialization_facts(
 static void core_restore_loop_invariant_facts(
     MinicCoreLowerContext *context,
     const MinicCoreLocalIntegerConstant *incoming,
-    const MinicStatement *loop_statement) {
-    const MinicBlock *body;
+    const MinicStatement *loop_statement,
+    const unsigned char *modified) {
     size_t index;
 
     if (context == NULL || context->source_function == NULL ||
@@ -430,22 +426,40 @@ static void core_restore_loop_invariant_facts(
         loop_statement == NULL || loop_statement->kind != MINIC_STATEMENT_WHILE) {
         return;
     }
-    body = minic_c0_program_block(context->body->program, loop_statement->then_block);
-    if (body == NULL) {
-        return;
-    }
     for (index = 0U; index < context->source_function->local_count; ++index) {
-        MinicLocalId local_id = context->source_function->local_begin + index;
         if (!incoming[index].known || incoming[index].escaped ||
             context->local_integer_constants[index].escaped ||
-            (loop_statement->expression != MINIC_EXPRESSION_INVALID &&
-             core_expression_may_modify_local(
-                 context, loop_statement->expression, local_id, 0U)) ||
-            core_block_may_modify_local(context, body, local_id, 0U)) {
+            modified == NULL || modified[index] != 0U) {
             continue;
         }
         context->local_integer_constants[index] = incoming[index];
     }
+}
+
+/* Source AST effects are independent of the facts changed while lowering
+ * the loop. Gather condition and body writes exactly once, then apply that
+ * same conservative summary at both entry and exit barriers. */
+static unsigned char *core_collect_loop_modified_locals(
+    const MinicCoreLowerContext *context, const MinicStatement *statement,
+    const MinicBlock *body) {
+    unsigned char *modified;
+    size_t count;
+
+    if (context == NULL || context->source_function == NULL ||
+        statement == NULL) return NULL;
+    count = context->source_function->local_count;
+    modified = (unsigned char *)calloc(count == 0U ? 1U : count,
+                                       sizeof(*modified));
+    if (modified == NULL) return NULL;
+    if (body == NULL) {
+        if (count != 0U) (void)memset(modified, 1, count);
+        return modified;
+    }
+    if (statement->expression != MINIC_EXPRESSION_INVALID)
+        core_expression_collect_modified_locals(
+            context, statement->expression, modified, 0U);
+    core_block_collect_modified_locals(context, body, modified, 0U);
+    return modified;
 }
 
 /* One owner for normal loop facts. Parser-created while/for label pairs use
@@ -461,6 +475,7 @@ MinicCoreLowerStatus minic_core_lower_loop_statement(
     MinicBlock local_fact_single_iteration_body;
     MinicStatementId local_fact_continue_label;
     MinicCoreLocalIntegerConstant *loop_incoming_facts;
+    unsigned char *loop_modified_locals = NULL;
     bool local_fact_single_pass;
 
     loop_incoming_facts = minic_core_local_facts_snapshot(context);
@@ -485,20 +500,24 @@ MinicCoreLowerStatus minic_core_lower_loop_statement(
                                               local_fact_continue_label,
                                               true);
     if (!local_fact_single_pass) {
+        loop_modified_locals = core_collect_loop_modified_locals(
+            context, statement, local_fact_loop_body);
         /* Loop-body changes invalidate specialized parameters
            before the initial condition and later backedges. */
-        core_invalidate_loop_mutated_specialization_facts(context, statement);
+        core_invalidate_loop_mutated_specialization_facts(
+            context, statement, loop_modified_locals);
         minic_core_local_facts_clear_known(context);
         core_restore_loop_invariant_facts(
-            context, loop_incoming_facts, statement);
+            context, loop_incoming_facts, statement, loop_modified_locals);
     }
     status = minic_core_lower_loop_cfg(
         context, statement, MINIC_STATEMENT_INVALID, terminated);
     if (!local_fact_single_pass) {
         minic_core_local_facts_clear_known(context);
         core_restore_loop_invariant_facts(
-            context, loop_incoming_facts, statement);
+            context, loop_incoming_facts, statement, loop_modified_locals);
     }
+    free(loop_modified_locals);
     free(loop_incoming_facts);
     return status;
 }

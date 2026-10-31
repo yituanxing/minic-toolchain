@@ -14,6 +14,7 @@ typedef struct MinicLocalObjectAttributes {
     MinicFunctionId cleanup_function;
     MinicSourceSpan cleanup_attribute_span;
     size_t explicit_alignment;
+    bool function_pointer_noreturn;
 } MinicLocalObjectAttributes;
 
 static bool parse_cleanup_attribute_function(MinicParser *parser,
@@ -64,6 +65,18 @@ static bool consume_local_object_attribute(MinicParser *parser,
         minic_parser_error(parser, "unsupported GNU attribute on local object");
         return false;
     }
+    /* `void __attribute__((noreturn)) (*hibernate_exit)(...)` declares a
+     * local pointer to a non-returning function, not an annotated object.
+     * Defer the function-type check until the parenthesized declarator has
+     * been built. MiniC does not infer unreachable code from noreturn calls,
+     * so preserving ordinary indirect-call flow is conservative. */
+    if (descriptor->kind == MINIC_ATTRIBUTE_NORETURN && !attribute->has_arguments) {
+        if (attributes == NULL) {
+            return false;
+        }
+        attributes->function_pointer_noreturn = true;
+        return true;
+    }
     if (!minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_OBJECT)) {
         minic_parser_error(parser, "GNU attribute is not valid on a local object");
         return false;
@@ -76,6 +89,17 @@ static bool consume_local_object_attribute(MinicParser *parser,
     if (descriptor->kind == MINIC_ATTRIBUTE_MAY_ALIAS) {
         if (attribute->has_arguments) {
             minic_parser_error(parser, "GNU may_alias local attribute takes no arguments");
+            return false;
+        }
+        return true;
+    }
+    /* Linux cmd-db's `u8 query[N] __nonstring` indicates that an array may
+     * lack a trailing NUL. This annotation controls GCC string warnings;
+     * MiniC does not issue such diagnostics or infer string bounds from the
+     * attribute, so it is safely observational on a local object. */
+    if (descriptor->kind == MINIC_ATTRIBUTE_NONSTRING) {
+        if (attribute->has_arguments) {
+            minic_parser_error(parser, "GNU nonstring local attribute takes no arguments");
             return false;
         }
         return true;
@@ -208,9 +232,6 @@ static bool local_identifier_is(const MinicParser *parser, const char *name) {
 
 static bool parse_local_fixed_register_name(
     MinicParser *parser, char *buffer, size_t capacity, size_t *length, bool *has_binding) {
-    size_t cursor;
-    size_t end;
-
     if (parser == NULL || buffer == NULL || capacity == 0U || length == NULL ||
         has_binding == NULL) {
         return false;
@@ -229,29 +250,10 @@ static bool parse_local_fixed_register_name(
         }
         return false;
     }
-    cursor = parser->current.span.begin.offset + 1U;
-    end = parser->current.span.end.offset - 1U;
-    while (cursor < end) {
-        if (parser->source[cursor] == '\\') {
-            minic_parser_error(parser, "escaped local fixed register names are not supported yet");
-            return false;
-        }
-        if (*length + 1U >= capacity) {
-            minic_parser_error(parser, "local fixed register name is too long");
-            return false;
-        }
-        buffer[*length] = parser->source[cursor];
-        *length += 1U;
-        cursor += 1U;
-    }
-    if (*length == 0U) {
-        minic_parser_error(parser, "local fixed register name cannot be empty");
+    if (!minic_parser_parse_gnu_asm_name(parser, buffer, capacity, length))
         return false;
-    }
-    buffer[*length] = '\0';
     *has_binding = true;
-    return minic_parser_advance(parser) &&
-           minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')' after local asm name");
+    return minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')' after local asm name");
 }
 
 static bool local_declarator_starts_function_pointer(const MinicParser *parser) {
@@ -321,8 +323,8 @@ static bool parse_local_array_bound_or_vla(MinicParser *parser,
             minic_parser_error(parser, "array bound exceeds target object range");
             return false;
         }
-        if (value <= 0) {
-            minic_parser_error(parser, "array bound must be greater than zero");
+        if (value < 0) {
+            minic_parser_error(parser, "array bound must not be negative");
             return false;
         }
         if ((uint64_t)value > (uint64_t)SIZE_MAX) {
@@ -395,6 +397,9 @@ static bool materialize_dynamic_local_array(MinicParser *parser,
     count_local.element_count = 1U;
     count_local.is_array = false;
     count_local.is_register_storage = false;
+    count_local.declaration_block = parser->current_block;
+    count_local.has_declaration_block =
+        parser->current_block != MINIC_BLOCK_INVALID;
     if (!minic_c0_program_add_local(parser->program, &count_local, &count_local_id)) {
         minic_parser_error(parser, "cannot allocate VLA bound storage");
         return false;
@@ -406,6 +411,9 @@ static bool materialize_dynamic_local_array(MinicParser *parser,
     address_local.element_count = 1U;
     address_local.is_array = false;
     address_local.is_register_storage = false;
+    address_local.declaration_block = parser->current_block;
+    address_local.has_declaration_block =
+        parser->current_block != MINIC_BLOCK_INVALID;
     if (!minic_c0_program_add_local(parser->program, &address_local, &address_local_id)) {
         minic_parser_error(parser, "cannot allocate VLA address storage");
         return false;
@@ -584,6 +592,12 @@ parse_local_declarator(MinicParser *parser,
         }
         return false;
     }
+    if (attributes.function_pointer_noreturn &&
+        (!minic_type_is_pointer(declared_type) ||
+         declared_type.base_kind != MINIC_TYPE_BASE_FUNCTION)) {
+        minic_parser_error(parser, "GNU noreturn on a local requires a function pointer");
+        return false;
+    }
     if (minic_type_is_void(declared_type)) {
         minic_parser_error(parser, "local object cannot have void type");
         return false;
@@ -666,10 +680,16 @@ parse_local_declarator(MinicParser *parser,
             local.type = declared_type;
         }
         local.is_array = true;
+        local.is_zero_length_array = !inferred_array &&
+                                     local.element_count == 0U &&
+                                     runtime_array_bound == MINIC_EXPRESSION_INVALID;
         if (!parse_local_object_attributes(parser, &attributes)) {
             return false;
         }
         local.explicit_alignment = attributes.explicit_alignment;
+        local.declaration_block = parser->current_block;
+        local.has_declaration_block =
+            parser->current_block != MINIC_BLOCK_INVALID;
         if (!minic_c0_program_add_local(parser->program, &local, &local_id)) {
             minic_parser_error(parser, "out of memory while adding local");
             return false;
@@ -725,6 +745,9 @@ parse_local_declarator(MinicParser *parser,
             return false;
         }
         local.explicit_alignment = attributes.explicit_alignment;
+        local.declaration_block = parser->current_block;
+        local.has_declaration_block =
+            parser->current_block != MINIC_BLOCK_INVALID;
         if (!minic_c0_program_add_local(parser->program, &local, &local_id)) {
             minic_parser_error(parser, "out of memory while adding local");
             return false;
@@ -877,6 +900,9 @@ bool minic_parser_local_decl_auto_type(MinicParser *parser) {
     initializer_span = initializer->span;
     initializer_type = initializer->type;
     local.type = initializer_type;
+    local.declaration_block = parser->current_block;
+    local.has_declaration_block =
+        parser->current_block != MINIC_BLOCK_INVALID;
 
     /* GNU __auto_type deliberately keeps the new name out of scope while the
        initializer is parsed.  Bind it only after the initializer type is known. */
@@ -926,24 +952,26 @@ bool minic_parser_local_decl_auto_type(MinicParser *parser) {
 
 static bool parse_block_scope_function_declaration_after_head(
     MinicParser *parser, MinicType return_type, MinicSourceSpan name_span) {
-    MinicType parameter_types[16];
+    MinicType parameter_types[MINIC_MAX_FUNCTION_PARAMETERS];
     MinicFunctionId function_id;
     const MinicFunction *existing_function;
     size_t parameter_count;
     bool is_variadic;
+    MinicParsedFunctionDiagnostic function_diagnostic;
 
     if (parser == NULL || parser->current.kind != MINIC_TOKEN_LPAREN) {
         return false;
     }
     parameter_count = 0U;
     is_variadic = false;
+    (void)memset(&function_diagnostic, 0, sizeof(function_diagnostic));
     (void)memset(parameter_types, 0, sizeof(parameter_types));
 
     if (!minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '('") ||
         !minic_parser_parse_parameter_list(
             parser, NULL, parameter_types, &parameter_count, false, &is_variadic) ||
         !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')'") ||
-        !minic_parser_parse_gnu_function_attributes(parser) ||
+        !minic_parser_parse_gnu_function_attributes(parser, &function_diagnostic) ||
         !minic_parser_expect(
             parser, MINIC_TOKEN_SEMICOLON, "expected ';' after block-scope function declaration")) {
         return false;
@@ -953,11 +981,13 @@ static bool parse_block_scope_function_declaration_after_head(
     if (function_id != MINIC_FUNCTION_INVALID) {
         existing_function = minic_c0_program_function(parser->program, function_id);
         if (!minic_parser_function_signature_matches(
-                existing_function, return_type, parameter_types, parameter_count, is_variadic)) {
+                parser->program, existing_function, return_type,
+                parameter_types, parameter_count, is_variadic)) {
             minic_parser_error(parser, "conflicting block-scope function declaration");
             return false;
         }
-        return true;
+        return minic_parser_persist_function_diagnostic(
+            parser, function_id, &function_diagnostic);
     }
     if (!minic_c0_program_add_function(parser->program,
                                        parser->source + name_span.begin.offset,
@@ -973,7 +1003,8 @@ static bool parse_block_scope_function_declaration_after_head(
         minic_parser_error(parser, "out of memory while declaring block-scope function");
         return false;
     }
-    return true;
+    return minic_parser_persist_function_diagnostic(
+        parser, function_id, &function_diagnostic);
 }
 
 bool minic_parser_local_decl_ordinary(MinicParser *parser) {
@@ -983,7 +1014,8 @@ bool minic_parser_local_decl_ordinary(MinicParser *parser) {
 
     (void)memset(&declaration_attributes, 0, sizeof(declaration_attributes));
     declaration_attributes.cleanup_function = MINIC_FUNCTION_INVALID;
-    if (!minic_parser_parse_local_storage_class(parser, &is_register_storage) ||
+    if (!parse_local_object_attributes(parser, &declaration_attributes) ||
+        !minic_parser_parse_local_storage_class(parser, &is_register_storage) ||
         !minic_parser_parse_type_specifiers(parser, &base_type) ||
         !parse_local_object_attributes(parser, &declaration_attributes)) {
         return false;
@@ -1026,26 +1058,63 @@ bool minic_parser_local_decl_ordinary(MinicParser *parser) {
     return minic_parser_expect(parser, MINIC_TOKEN_SEMICOLON, "expected ';'");
 }
 
+static bool consume_block_scope_extern_head_attribute(MinicParser *parser,
+                                                        const MinicParsedAttribute *attribute,
+                                                        void *opaque_is_weak) {
+    bool *is_weak = (bool *)opaque_is_weak;
+    const MinicAttributeDescriptor *descriptor;
+
+    if (parser == NULL || attribute == NULL || is_weak == NULL ||
+        (descriptor = attribute->descriptor) == NULL) {
+        return false;
+    }
+    /* Before the declarator name the entity may be a function or an object.
+     * GNU weak is legal for both when the declaration has extern linkage;
+     * persist it only after the declarator has resolved the entity kind. */
+    if (descriptor->kind == MINIC_ATTRIBUTE_WEAK && !attribute->has_arguments) {
+        *is_weak = true;
+        return true;
+    }
+    if (descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_INFORMATIONAL ||
+         descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_DIAGNOSTIC ||
+         descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_OPTIMIZATION ||
+         descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_CONTROL_FLOW) {
+        return true;
+    }
+    minic_parser_error(parser, "unsupported block-scope extern declaration-head attribute");
+    return false;
+}
+
 static bool declare_block_scope_extern_object_declarator(MinicParser *parser,
                                                          MinicType base_type,
-                                                         MinicSourceSpan name_span) {
+                                                         MinicSourceSpan name_span,
+                                                         bool is_weak) {
     MinicGlobalObjectId current_scope_object;
     MinicGlobalObjectId existing_id;
     MinicGlobalObjectId object_id;
     MinicType object_type;
     size_t array_type_begin;
     bool is_array;
+    bool declarator_is_weak;
 
     existing_id = minic_parser_find_global_object_entity(parser, name_span);
     array_type_begin = parser->program->array_type_count;
+    declarator_is_weak = is_weak;
     object_type = base_type;
     if (!minic_parser_parse_array_declarator_suffix(
-            parser, object_type, true, &object_type, &is_array)) {
+            parser, object_type, true, &object_type, &is_array) ||
+        !minic_parser_parse_gnu_attribute_lists(
+            parser, consume_block_scope_extern_head_attribute, &declarator_is_weak)) {
         return false;
     }
     (void)is_array;
     if (!minic_parser_declare_block_scope_extern_object(
             parser, name_span, object_type, &object_id)) {
+        return false;
+    }
+    if (declarator_is_weak &&
+        !minic_c0_global_object_set_weak(parser->program, object_id, true)) {
+        minic_parser_error(parser, "GNU weak requires external object linkage");
         return false;
     }
     /* Redeclaration parsing may materialize temporary array descriptors.
@@ -1076,15 +1145,27 @@ bool minic_parser_local_decl_extern(MinicParser *parser) {
     const MinicFunction *existing_function;
     size_t parameter_count;
     bool is_variadic;
+    bool is_weak;
+    MinicParsedFunctionDiagnostic function_diagnostic;
 
     parameter_count = 0U;
     is_variadic = false;
+    is_weak = false;
+    (void)memset(&function_diagnostic, 0, sizeof(function_diagnostic));
     (void)memset(parameter_types, 0, sizeof(parameter_types));
 
-    if (!minic_parser_parse_gnu_prefix_function_attributes(parser, false, false) ||
+    if (!minic_parser_parse_gnu_prefix_function_attributes(
+            parser, false, false, &function_diagnostic) ||
         !minic_parser_expect(parser, MINIC_TOKEN_KW_EXTERN, "expected keyword 'extern'") ||
-        !minic_parser_parse_type_name(parser, &return_type) ||
-        !minic_parser_parse_gnu_function_attributes(parser)) {
+        /* C permits block-scope extern declarations of incomplete record
+         * objects: extern struct user_namespace init_user_ns;
+         * This owns NO storage and only its address can be consumed until
+         * the record is completed. The shared complete-object validator
+         * remains required for ordinary local definitions, initialized
+         * locals, and record-by-value operations. Do not relax that API. */
+        !minic_parser_parse_type_name_preserving_incomplete(parser, &return_type) ||
+        !minic_parser_parse_gnu_attribute_lists(
+            parser, consume_block_scope_extern_head_attribute, &is_weak)) {
         return false;
     }
     if (!minic_parser_parse_direct_declarator_name(parser, &name_span)) {
@@ -1094,34 +1175,63 @@ bool minic_parser_local_decl_extern(MinicParser *parser) {
         return false;
     }
 
-    if (parser->current.kind != MINIC_TOKEN_LPAREN) {
-        for (;;) {
-            if (!declare_block_scope_extern_object_declarator(parser, return_type, name_span)) {
-                return false;
-            }
-            if (parser->current.kind != MINIC_TOKEN_COMMA) {
-                break;
-            }
-            if (!minic_parser_advance(parser) ||
-                !minic_parser_parse_direct_declarator_name(parser, &name_span)) {
-                if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
-                    minic_parser_error(parser,
-                                       "expected block-scope extern object declarator name");
-                }
-                return false;
-            }
+    if (minic_type_is_function(return_type)) {
+        /* A function typedef remains a function declaration at block scope,
+         * even without a parameter suffix:
+         *   typedef void (replace_t)(unsigned long);
+         *   extern replace_t idmap_cpu_replace_ttbr1;
+         * Reuse the exact existing function entity/signature path; it is
+         * never an extern *object* with function-typed storage. */
+        const MinicFunctionType *signature =
+            minic_c0_program_function_type(parser->program, return_type.function_type_id);
+        size_t index;
+        if (signature == NULL || signature->parameter_count > MINIC_MAX_FUNCTION_PARAMETERS ||
+            parser->current.kind != MINIC_TOKEN_SEMICOLON) {
+            minic_parser_error(parser, "invalid block-scope function-typed extern declarator");
+            return false;
         }
-        return minic_parser_expect(parser,
-                                   MINIC_TOKEN_SEMICOLON,
-                                   "expected ';' after block-scope extern object declaration");
-    }
-
-    if (!minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '('") ||
-        !minic_parser_parse_parameter_list(
-            parser, NULL, parameter_types, &parameter_count, false, &is_variadic) ||
-        !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')'") ||
-        !minic_parser_parse_gnu_function_attributes(parser)) {
-        return false;
+        parameter_count = signature->parameter_count;
+        is_variadic = signature->is_variadic;
+        for (index = 0U; index < parameter_count; ++index) {
+            parameter_types[index] = signature->parameter_types[index];
+        }
+        return_type = signature->return_type;
+    } else {
+        if (parser->current.kind != MINIC_TOKEN_LPAREN) {
+            if (function_diagnostic.error_literal.end.offset != 0U ||
+                function_diagnostic.warning_literal.end.offset != 0U) {
+                minic_parser_error(parser,
+                    "GNU function diagnostic attribute cannot apply to an object");
+                return false;
+            }
+            for (;;) {
+                if (!declare_block_scope_extern_object_declarator(
+                        parser, return_type, name_span, is_weak)) {
+                    return false;
+                }
+                if (parser->current.kind != MINIC_TOKEN_COMMA) {
+                    break;
+                }
+                if (!minic_parser_advance(parser) ||
+                    !minic_parser_parse_direct_declarator_name(parser, &name_span)) {
+                    if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                        minic_parser_error(parser,
+                                           "expected block-scope extern object declarator name");
+                    }
+                    return false;
+                }
+            }
+            return minic_parser_expect(parser,
+                                       MINIC_TOKEN_SEMICOLON,
+                                       "expected ';' after block-scope extern object declaration");
+        }
+        if (!minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '('") ||
+            !minic_parser_parse_parameter_list(
+                parser, NULL, parameter_types, &parameter_count, false, &is_variadic) ||
+            !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')'") ||
+            !minic_parser_parse_gnu_function_attributes(parser, &function_diagnostic)) {
+            return false;
+        }
     }
     if (parser->current.kind != MINIC_TOKEN_SEMICOLON) {
         minic_parser_error(
@@ -1133,7 +1243,8 @@ bool minic_parser_local_decl_extern(MinicParser *parser) {
     if (function_id != MINIC_FUNCTION_INVALID) {
         existing_function = minic_c0_program_function(parser->program, function_id);
         if (!minic_parser_function_signature_matches(
-                existing_function, return_type, parameter_types, parameter_count, is_variadic)) {
+                parser->program, existing_function, return_type,
+                parameter_types, parameter_count, is_variadic)) {
             minic_parser_error(parser, "conflicting block-scope extern function declaration");
             return false;
         }
@@ -1152,6 +1263,16 @@ bool minic_parser_local_decl_extern(MinicParser *parser) {
         return false;
     }
 
+    if (is_weak && !minic_c0_program_set_function_weak(parser->program, function_id, true)) {
+        minic_parser_error(parser, "GNU weak requires external function linkage");
+        return false;
+    }
+
+    if (!minic_parser_persist_function_diagnostic(
+            parser, function_id, &function_diagnostic)) {
+        return false;
+    }
+
     return minic_parser_advance(parser);
 }
 
@@ -1161,6 +1282,18 @@ typedef struct MinicStaticLocalAttributeContext {
     size_t explicit_alignment;
     bool has_section;
 } MinicStaticLocalAttributeContext;
+
+/* Binding a function-scope static also records its semantic emission owner.
+ * The generated ELF name encodes a function id for uniqueness only; emission
+ * must never infer ownership by reparsing that name. */
+static bool bind_static_local_object(MinicParser *parser,
+                                     MinicSourceSpan name_span,
+                                     MinicGlobalObjectId object_id) {
+    return parser != NULL &&
+           minic_c0_program_set_global_object_owner(
+               parser->program, object_id, parser->current_function) &&
+           minic_parser_bind_scoped_global_object(parser, name_span, object_id);
+}
 
 static bool consume_static_local_interleaved_attribute(MinicParser *parser,
                                                        const MinicParsedAttribute *attribute,
@@ -1204,10 +1337,12 @@ static bool parse_inferred_static_local_array(MinicParser *parser,
         return false;
     }
 
-    if (parser->current.kind == MINIC_TOKEN_STRING_LITERAL) {
-        if (!minic_type_is_char_integer(element_type)) {
+    if (parser->current.kind == MINIC_TOKEN_STRING_LITERAL ||
+        parser->current.kind == MINIC_TOKEN_WIDE_STRING_LITERAL) {
+        if (!minic_parser_static_string_element_compatible(
+                parser, element_type, parser->current.kind)) {
             minic_parser_error(parser,
-                               "string initializer requires a character static local array");
+                               "string initializer requires a compatible static local array element type");
             return false;
         }
         if (!minic_parser_create_string_literal_object(
@@ -1227,7 +1362,7 @@ static bool parse_inferred_static_local_array(MinicParser *parser,
            static-local name to the same storage object. */
         parser->program->global_objects[object_id].type = object_type;
         parser->program->global_objects[object_id].is_read_only = minic_type_is_const(element_type);
-        if (!minic_parser_bind_scoped_global_object(parser, name_span, object_id)) {
+        if (!bind_static_local_object(parser, name_span, object_id)) {
             return false;
         }
         *out_object_id = object_id;
@@ -1268,7 +1403,7 @@ static bool parse_inferred_static_local_array(MinicParser *parser,
                                                 minic_type_is_const(element_type),
                                                 &object_id) ||
             !minic_parser_parse_static_storage_initializer_value(parser, object_id, object_type) ||
-            !minic_parser_bind_scoped_global_object(parser, name_span, object_id)) {
+            !bind_static_local_object(parser, name_span, object_id)) {
             if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
                 minic_parser_error(parser, "cannot initialize inferred static local array");
             }
@@ -1312,7 +1447,7 @@ static bool parse_static_local_record_initializer(MinicParser *parser,
                                             true,
                                             minic_type_is_const(declared_type),
                                             &object_id) ||
-        !minic_parser_bind_scoped_global_object(parser, name_span, object_id) ||
+        !bind_static_local_object(parser, name_span, object_id) ||
         !minic_parser_expect(parser, MINIC_TOKEN_EQUAL, "expected '=' after static record") ||
         !minic_parser_parse_static_storage_initializer_value(parser, object_id, declared_type)) {
         if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
@@ -1356,7 +1491,7 @@ static bool add_implicitly_zero_initialized_static_local(MinicParser *parser,
                                             minic_type_is_const(declared_type),
                                             &object_id) ||
         !minic_c0_global_object_set_zero_initialized(parser->program, object_id) ||
-        !minic_parser_bind_scoped_global_object(parser, name_span, object_id)) {
+        !bind_static_local_object(parser, name_span, object_id)) {
         if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
             minic_parser_error(parser, "cannot create implicit-zero static local storage");
         }
@@ -1385,7 +1520,15 @@ static bool parse_static_local_array_declarator(MinicParser *parser,
         return false;
     }
     *out_object_id = MINIC_GLOBAL_OBJECT_INVALID;
-    if (!minic_parser_parse_pointer_declarator(parser, base_type, &declared_type)) {
+    /* GNU Linux static-call metadata uses block-scope static declarators
+     * with USED/SECTION attributes BETWEEN '*' and the object name:
+     * static void * __attribute__((used)) __attribute__((section(...))) key;
+     * The shared static attribute consumer already owns validation, section
+     * placement and conflict checks after the name. Reuse it at this earlier
+     * legal declarator position rather than inventing a parser-only bypass. */
+    if (!minic_parser_parse_pointer_declarator(parser, base_type, &declared_type) ||
+        !minic_parser_parse_gnu_attribute_lists(
+            parser, consume_static_local_interleaved_attribute, attributes)) {
         return false;
     }
     if (minic_type_is_void(declared_type)) {
@@ -1463,7 +1606,7 @@ static bool parse_static_local_array_declarator(MinicParser *parser,
             minic_parser_error(parser, "cannot zero static local function-pointer array");
             return false;
         }
-        if (!minic_parser_bind_scoped_global_object(parser, name_span, array_object_id)) {
+        if (!bind_static_local_object(parser, name_span, array_object_id)) {
             return false;
         }
         *out_object_id = array_object_id;
@@ -1545,7 +1688,7 @@ static bool parse_static_local_array_declarator(MinicParser *parser,
         if (minic_type_is_pointer(declared_type)) {
             if (!minic_parser_parse_static_pointer_object_initializer(
                     parser, scalar_object_id, declared_type) ||
-                !minic_parser_bind_scoped_global_object(parser, name_span, scalar_object_id)) {
+                !bind_static_local_object(parser, name_span, scalar_object_id)) {
                 if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
                     minic_parser_error(parser, "cannot finalize static local pointer storage");
                 }
@@ -1566,7 +1709,7 @@ static bool parse_static_local_array_declarator(MinicParser *parser,
              !minic_c0_global_object_set_zero_initialized(parser->program, scalar_object_id)) ||
             (scalar_bits != 0U && !minic_c0_global_object_add_initializer_bits(
                                     parser->program, scalar_object_id, scalar_bits)) ||
-            !minic_parser_bind_scoped_global_object(parser, name_span, scalar_object_id)) {
+            !bind_static_local_object(parser, name_span, scalar_object_id)) {
             minic_parser_error(parser, "cannot finalize static local integer storage");
             return false;
         }
@@ -1618,7 +1761,7 @@ static bool parse_static_local_array_declarator(MinicParser *parser,
         minic_parser_error(parser, "cannot zero-initialize static local array object");
         return false;
     }
-    if (!minic_parser_bind_scoped_global_object(parser, name_span, object_id)) {
+    if (!bind_static_local_object(parser, name_span, object_id)) {
         return false;
     }
     *out_object_id = object_id;
@@ -1671,15 +1814,42 @@ static bool consume_static_local_interleaved_attribute(MinicParser *parser,
 bool minic_parser_local_decl_static(MinicParser *parser) {
     MinicStaticLocalAttributeContext declaration_attributes;
     MinicType base_type;
+    bool leading_const;
+    bool leading_volatile;
 
     (void)memset(&declaration_attributes, 0, sizeof(declaration_attributes));
     if (parser->current_function == MINIC_FUNCTION_INVALID ||
         !minic_parser_expect(parser, MINIC_TOKEN_KW_STATIC, "expected keyword 'static'") ||
         !minic_parser_parse_gnu_attribute_lists(
-            parser, consume_static_local_interleaved_attribute, &declaration_attributes) ||
-        !minic_parser_parse_type_specifiers(parser, &base_type) ||
+            parser, consume_static_local_interleaved_attribute, &declaration_attributes)) {
+        return false;
+    }
+    /* A declaration-specifier attribute is permitted between qualifiers and
+       its base type: `static const __attribute__((section(...))) ulong x`.
+       Preserve semantic attributes on the local global-object owner. */
+    leading_const = false;
+    leading_volatile = false;
+    while (parser->current.kind == MINIC_TOKEN_KW_CONST ||
+           parser->current.kind == MINIC_TOKEN_KW_VOLATILE) {
+        if (parser->current.kind == MINIC_TOKEN_KW_CONST) {
+            leading_const = true;
+        } else {
+            leading_volatile = true;
+        }
+        if (!minic_parser_advance(parser) ||
+            !minic_parser_parse_gnu_attribute_lists(
+                parser, consume_static_local_interleaved_attribute, &declaration_attributes)) {
+            return false;
+        }
+    }
+    if (!minic_parser_parse_type_specifiers(parser, &base_type) ||
         !minic_parser_parse_gnu_attribute_lists(
             parser, consume_static_local_interleaved_attribute, &declaration_attributes)) {
+        return false;
+    }
+    if ((leading_const && !minic_type_add_const(base_type, &base_type)) ||
+        (leading_volatile && !minic_type_add_volatile(base_type, &base_type))) {
+        minic_parser_error(parser, "cannot qualify static local object type");
         return false;
     }
     for (;;) {

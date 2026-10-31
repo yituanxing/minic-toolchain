@@ -23,6 +23,9 @@ for file in \
   exists "$file"
 done
 
+has src/target/loongarch64/asm_contract.c 'loong_pte_form('
+has src/target/loongarch64/asm_contract.c 'loong_pte_emit('
+lacks src/core/core_lower_asm_target.c 'll.d'
 has src/target/common/direct_instruction_semantics.c \
   'minic_multi_direct_machine_instruction_shape('
 has src/target/common/direct_residual_plan.c \
@@ -36,7 +39,7 @@ has src/target/riscv64/core_codegen.c \
 has src/target/riscv32/rv32_abi_plan.c 'type = i < view.parameter_count ? view.parameter_types[i] : actual;'
 has src/target/riscv32/rv32_abi_plan.c 'call_fixed_type'
 has src/target/riscv32/rv32_frame.c 'off == SIZE_MAX'
-has src/target/riscv32/rv32_frame.c 'strcmp(reg, "t6") == 0'
+has src/target/riscv32/rv32_frame.c 'minic_riscv_gpr_name_equal(reg, "t6")'
 
 has src/target/riscv64/frame_layout.c \
   'minic_core_object_reuse_plan_build('
@@ -52,6 +55,126 @@ lacks src/target/common/core_object_intervals.c 'Allocation or malformed-index f
 has src/target/common/core_spill_layout.c \
   'cached_slot_sizes[value_id] = *slot_size;'
 
+# Real GNU ARM64 sysreg output is u64 (unsigned long long); both source
+# admission and actual machine writeback must share ONE target-owned type gate.
+has src/target/aarch64/asm_contract.c 'aarch64_linux_sysreg_u64_type('
+has src/target/aarch64/asm_contract.c '!aarch64_linux_sysreg_u64_type(pointee)'
+lacks src/core/core_lower_asm_target.c 'mrs x9, daif'
+
+# Original LoongArch64 Linux array_index_mask_nospec is exact target-owned
+# SLTU + SUB.D with output/register contract, not a cloned Core algorithm.
+has src/target/loongarch64/asm_contract.c 'loong_mask_nospec_form('
+has src/target/loongarch64/asm_contract.c 'loong_mask_nospec_source('
+has src/target/loongarch64/asm_contract.c 'loong_mask_nospec_emit('
+lacks src/core/core_lower_asm_target.c 'sltu'
+
+# All targets reuse one ELF custom section and binding owner.
+has src/target/common/global_emit.c 'minic_multi_emit_elf_global_section('
+has src/target/common/global_emit.c 'minic_multi_emit_elf_global_binding('
+has src/target/common/global_emit.c 'minic_multi_elf_safe_section_name('
+
+# GNU Linux local_add(long) + atomic64_t.counter(long long) is a
+# cross-C-rank 8-byte machine operand, not a fake ABI identity.
+has src/target/x86_64/asm_contract.c 'vt.integer_rank!=MINIC_INTEGER_RANK_LONG_LONG'
+# Linux local_t plain INC/DEC uses the same x86 target RMW descriptor as SMP.
+has src/target/x86_64/asm_contract.c '{"incq",8U,false,true}'
+has src/target/x86_64/asm_contract.h 'MINIC_X86_ATOMIC_RMW_LOCAL_DEC64'
+lacks src/core/core_lower_asm_target.c 'local_inc'
+
+# One shared Core frame-level-0 verifier, two target-owned SP machine forms;
+# level >0 and RISC-V/x86 frame ABI remain unchanged.
+has src/target/aarch64/residual_emit.c 'MINIC_CORE_CALL_FRAME_ADDRESS_FRAME'
+has src/target/loongarch64/residual_emit.c 'MINIC_CORE_CALL_FRAME_ADDRESS_FRAME'
+
+# Linux local_add_return uses ONE x86 target ISA XADD contract and existing
+# Core REGISTER_READWRITE+MEMORY_READWRITE effects, never a new Core opcode.
+has src/target/x86_64/asm_contract.c 'x86_linux_local_xadd_source('
+has src/target/x86_64/machine_asm.c 'emit_linux_local_xadd('
+lacks src/core/core_lower_asm_target.c 'local_add_return'
+# SMP-lock, local, GS-XADD, and GS-CMPXCHG/retry are now one typed target
+# decision shared by source admission and machine revalidation. The machine
+# dispatcher does not independently repeat several string-family scans.
+has src/target/x86_64/asm_contract.h 'MinicX86GsAtomicPlan'
+has src/target/x86_64/asm_contract.c 'x86_linux_gs_atomic_source('
+has src/target/x86_64/machine_asm.c 'switch (atomic.kind)'
+lacks src/target/x86_64/asm_contract.h 'minic_x86_64_linux_smp_xadd_width('
+lacks src/target/x86_64/asm_contract.h 'minic_x86_64_linux_gs_cmpxchg_loop('
+
+# The original x86 cmpxchg and trycmpxchg share one target descriptor
+# but DIFFER in Core operand roles and semantics (old value vs hardware ZF).
+has src/target/x86_64/asm_contract.c 'x86_linux_raw_cmpxchg_source('
+has src/target/x86_64/machine_asm.c 'emit_linux_raw_cmpxchg('
+lacks src/core/core_lower_asm_target.c 'cmpxchgb'
+
+# The immutable C integer argument fact survives universal Core call
+# argument snapshot. Only LoongArch machine code interprets it as CSR index.
+has src/core/core_ir.h 'has_constant_integer;'
+has src/core/core_lower_calls.c 'minic_const_eval_arithmetic_to_integer('
+has src/target/loongarch64/call_emit.c 'immediate_arg->has_constant_integer'
+lacks src/core/core_lower_calls.c '__builtin_loongarch_csrrd_w'
+
+# Genuine LoongArch C original __percpu_{read,write,add,and,or} and
+# kernel_fpu_begin hardware ISA classified only in native Target owner.
+has src/target/loongarch64/asm_contract.c 'loong_percpu_indexed_source('
+has src/target/loongarch64/asm_contract.c 'loong_percpu_amo_source('
+has src/target/loongarch64/asm_contract.c 'loong_fcsr0_write_source('
+lacks src/core/core_lower_asm_target.c 'movgr2fcsr'
+
+# AArch64 Linux __io_par is a real two-ISA-instruction dependency:
+# keep eor/cbnz out of the target-neutral Core machine vocabulary.
+has src/target/aarch64/asm_contract.c 'aarch64_linux_io_dependency_source('
+has src/target/aarch64/asm_contract.c 'aarch64_linux_io_dependency_emit('
+lacks src/core/core_lower_asm_target.c 'cbnz'
+
+# Original arm64 sysreg.h whole GNU macro is lowered only by target
+# using whitelist machine SYS_* encodings, not Core ASM string passthrough.
+has src/target/aarch64/asm_contract.c 'aarch64_linux_encoded_sysreg_form('
+has src/target/aarch64/asm_contract.c 'aarch64_linux_encoded_sysreg_emit('
+lacks src/core/core_lower_asm_target.c 'mrs_s'
+
+# GNU PIC policy is declared in TargetInfo, never a Driver target switch.
+has src/target/target_info.h 'pic_lowering_supported;'
+has src/target/target_info.c 'minic_target_language_descriptors[]'
+has src/target/target_info.c '.pic_lowering_supported = true,'
+# Architecture IDs come exclusively from the single registration inventory;
+# TargetInfo supplies each ISA's language/ABI facts without duplicating IDs.
+exists src/target/target_registration.def
+for arch in RISCV32 RISCV64 X86_64 AARCH64 LOONGARCH64; do
+  has src/target/target_registration.def "MINIC_TARGET_ARCH_$arch"
+  lacks src/target/target_info.c ".architecture = MINIC_TARGET_ARCH_$arch,"
+done
+has src/target/target_info.c '#include "target/target_registration.def"'
+has src/target/backend.c '#include "target/target_registration.def"'
+has src/target/target_catalog.c '#include "target/target_registration.def"'
+has src/target/backend.c 'backend != minic_backend_for_target(target)'
+lacks src/target/backend.c 'case MINIC_TARGET_ARCH_'
+lacks tools/minic/main.c 'MINIC_TARGET_ARCH_'
+lacks tools/minic-cc/main.c 'MINIC_TARGET_ARCH_'
+has tools/minic/main.c 'minic_target_catalog_default()'
+has tools/minic-cc/main.c 'minic_target_catalog_default()'
+has tools/minic-cc/main.c '!target_info->pic_lowering_supported'
+
+# Original Linux arm64 tlbflush __tlbi and __tlbi_sync_s1ish are
+# kernel ISA hardware, not portable Core memory fences.
+has src/target/aarch64/asm_contract.c 'aarch64_linux_tlbi_source('
+has src/target/aarch64/asm_contract.c 'aarch64_linux_tlbi_emit('
+lacks src/core/core_lower_asm_target.c 'vmalle1is'
+
+# Four ISA families, five target profiles: one storage-shape owner, distinct
+# physical ABIs. RV32 must never inherit the 8-byte LP64 word policy.
+exists src/target/common/aggregate_shape.h
+exists src/target/common/aggregate_shape.c
+has src/target/common/aggregate_shape.c 'bool minic_common_aggregate_storage_shape('
+has src/target/common/aggregate_shape.c 'bool minic_common_aggregate_integral_tree('
+for consumer in src/target/x86_64/abi.c \
+                src/target/riscv32/rv32_abi_plan.c \
+                src/target/riscv64/abi.c \
+                src/target/common/lp64_aggregate.c; do
+  has "$consumer" 'minic_common_aggregate_storage_shape('
+done
+has src/target/riscv64/abi.c 'minic_common_aggregate_integral_tree('
+lacks src/target/riscv64/abi.c 'minic_riscv64_integer_aggregate_member_type('
+
 # Exhaustive Common Core semantic vocabulary must be used by all five targets.
 exists src/target/common/core_instruction_family.h
 has src/target/common/core_instruction_family.h 'minic_core_instruction_semantic_family('
@@ -65,6 +188,85 @@ lacks src/target/common/direct_instruction_semantics.c 'minic_multi_direct_memor
 has src/target/common/program_visit.h 'minic_program_function_selected('
 has src/target/common/core_function_plan.c 'minic_core_function_verify(function)'
 has src/target/riscv64/core_admission.c 'RV64 atomic ISA/memory-order lowering is not qualified yet.'
+
+# Five architectures must share one ELF alias behavior; target-specific
+# assembler spelling belongs to the target configuration and must not leak
+# architecture conditionals back into the common program visitor.
+exists src/target/common/elf_alias_emit.h
+has src/target/common/elf_alias_emit.h 'minic_multi_elf_emit_alias('
+has src/target/common/elf_alias_emit.h 'minic_multi_elf_emit_object_alias('
+has src/target/riscv/function_symbol.h 'minic_multi_elf_emit_alias('
+has src/target/riscv64/codegen_function.c 'minic_multi_elf_emit_object_alias('
+has src/target/x86_64/codegen.c 'minic_multi_elf_emit_object_alias('
+has src/target/common/direct_program_emit.c 'ctx->config->elf_function_type'
+has src/target/common/direct_program_emit.c 'ctx->config->elf_object_type'
+lacks src/target/common/direct_program_emit.c 'MINIC_TARGET_ARCH_AARCH64'
+has src/target/aarch64/codegen.c '"%function", "%object"'
+has src/target/aarch64/asm_contract.c 'aarch64_barrier_template('
+# Genuine Linux privileged alternative patch metadata and GNU/Q operand
+# ownership remain target-local. Common Core knows only output/memory input
+# operand roles and must never fake a TPIDR register load or patch table.
+has src/target/aarch64/asm_contract.c 'aarch64_linux_percpu_alternative_template('
+has src/target/aarch64/asm_contract.c '.pushsection .altinstructions'
+has src/target/aarch64/asm_contract.c '"bic", ".if"'
+has src/target/aarch64/asm_contract.c 'aarch64_atomic_operations[op].name'
+has src/target/aarch64/asm_contract.c 'aarch64_linux_percpu_rmw_form('
+has src/target/aarch64/asm_contract.c 'p.op->alu'
+lacks src/core/core_lower_asm_target.c 'ldxrb'
+has src/target/aarch64/asm_contract.c 'aarch64_atomic_return_form('
+has src/target/aarch64/asm_contract.c 'ret.op->alu'
+lacks src/core/core_lower_asm_target.c 'atomic64_add_return'
+has src/target/aarch64/asm_contract.c 'aarch64_linux_xchg_form('
+has src/target/aarch64/asm_contract.c 'aarch64_xchg_ld[xchg.mode]'
+lacks src/core/core_lower_asm_target.c 'ldaxrb'
+has src/target/aarch64/asm_contract.c 'aarch64_atomic_form('
+has src/target/backend.c 'minic_backend_inline_asm_prefix_matches('
+has src/frontend/parser_local_declarations.c 'consume_static_local_interleaved_attribute, attributes'
+has src/frontend/parser_function.c 'has_const_qualifier'
+has src/frontend/parser_function.c '!minic_type_add_const(base_type, &base_type)'
+has src/frontend/parser_function.c '!minic_type_add_volatile(base_type, &base_type)'
+has src/target/source_policy/x86_64.c "name[0] == '%'"
+lacks src/core/core_lower_asm_target.c 'discard.addressable'
+has src/target/x86_64/asm_contract.c '"cmp%1,%2;sbb%0,%0;"'
+has src/target/x86_64/asm_contract.c 'MINIC_X86_BIT_SCAN_BSR32_TIED'
+has src/target/x86_64/asm_contract.c 'MINIC_X86_BIT_SCAN_BSR64_READWRITE'
+has src/target/x86_64/asm_contract.c 'x86_linux_atomic_cc_source('
+has src/target/x86_64/asm_contract.c 'x86_trycas_source('
+has src/target/x86_64/asm_contract.c 'src->input_count == 2U'
+has src/target/x86_64/machine_asm.c 'operand_count == 6U'
+lacks src/core/core_lower_asm_target.c 'native_cpuid'
+has src/target/x86_64/machine_asm.c 'emit_linux_trycas('
+lacks src/core/core_lower_asm_target.c 'cmpxchgb'
+has src/target/x86_64/asm_contract.c 'MINIC_X86_ATOMIC_CC_ADD64_SIGN'
+has src/target/x86_64/asm_contract.c 'mem_type.integer_rank != MINIC_INTEGER_RANK_CHAR'
+has src/target/x86_64/asm_contract.c 'x86_atomic_cc_forms[]'
+lacks src/core/core_lower_asm_target.c 'MINIC_X86_ATOMIC_CC_SUB32_ZERO'
+has src/target/x86_64/asm_contract.c 'x86_linux_bitops_source('
+has src/target/x86_64/machine_asm.c 'emit_linux_bitops('
+lacks src/core/core_lower_asm_target.c 'btcq'
+has src/target/x86_64/machine_asm.c 'emit_linux_atomic_cc('
+lacks src/core/core_lower_asm_target.c '=@cce'
+has src/target/x86_64/machine_asm.c 'emit_linux_tied_bit_scan'
+lacks src/core/core_lower_asm_target.c 'bsrl'
+lacks src/core/core_lower_asm_target.c 'sbb %0,%0'
+lacks src/target/backend.c 'aarch64_qualified_inputs'
+lacks src/target/backend.c 'loongarch64_qualified_inputs'
+lacks src/target/backend.c 'x86_64_qualified_inputs'
+lacks src/target/backend.h 'qualified_input_mnemonic_count'
+lacks src/core/core_lower_asm_target.c 'tpidr_el1'
+lacks src/core/core_lower_asm_target.c '.altinstructions'
+has src/target/backend.c 'minic_loongarch64_qualify_inline_asm'
+has src/target/loongarch64/residual_emit.c 'minic_loongarch64_emit_qualified_structured_asm'
+has src/core/core_lower_asm_scalar_forms.c 'e->kind == MINIC_EXPRESSION_FIXED_REGISTER'
+has src/core/core_lower_asm_scalar_forms.c 'minic_target_info_fixed_register_write_supported('
+has src/target/loongarch64/asm_contract.c 'loongarch64_dbar_hint'
+has src/target/loongarch64/asm_contract.c 'loongarch64_dbar_hint'
+has src/target/loongarch64/codegen.c '"@function", "@object"'
+# A front-end GNU alias is bound once after the entire TU, never by a
+# per-architecture parser special case or a fabricated declaration.
+has src/frontend/parser_function.c 'parser_resolve_pending_function_aliases('
+has src/frontend/ast_verifier.c 'minic_target_info_function_alias_abi_compatible('
+lacks src/frontend/parser_function.c 'MINIC_TARGET_ARCH_LOONGARCH64'
 
 # The Common block cursor selects the identical lexical Core order across
 # all five backends; only machine instruction/terminator handlers are private.
@@ -87,9 +289,11 @@ has src/target/common/direct_machine_dispatch.h 'shape.family != MINIC_DIRECT_MA
 exists src/target/common/direct_function_emit.h
 has src/target/common/direct_function_emit.h 'minic_multi_direct_lp64_function_plan_prepare('
 has src/target/common/direct_function_emit.h 'minic_multi_emit_elf_symbol_visibility('
-has src/target/common/direct_function_emit.h 'config->emit_prologue(emission, &ctx)'
-has src/target/common/direct_function_emit.h 'config->emit_core_blocks(emission, &ctx)'
-has src/target/common/direct_function_emit.h 'config->rewrite_dynamic_asm(out, staged)'
+has src/target/common/direct_function_emit.h 'config->emit_prologue(out, &ctx)'
+has src/target/common/direct_function_emit.h 'config->emit_core_blocks(out, &ctx)'
+lacks src/target/common/direct_function_emit.h 'rewrite_dynamic_asm'
+lacks src/target/common/direct_program_emit.h 'finalize_output'
+lacks src/target/aarch64/codegen.c 'asm_legalize'
 for arch in aarch64 loongarch64; do
   file="src/target/$arch/codegen.c"
   has "$file" 'minic_multi_direct_lp64_emit_function('
@@ -186,7 +390,15 @@ exists src/target/riscv/isa_resolve.h
 exists src/target/riscv/isa_resolve.c
 has src/target/riscv/isa_resolve.c 'bool minic_riscv_isa_resolve('
 lacks src/target/riscv64/isa.c 'bool minic_riscv_isa_resolve('
-has tools/minic-cc/main.c 'target/riscv/isa_resolve.h'
+# The driver carries only target-agnostic machine options. RISC-V feature
+# decoding is owned by the selected target, never the CLI.
+exists src/target/target_machine_options.h
+exists src/target/target_machine_options.c
+has src/target/target_machine_options.c 'minic_riscv_isa_resolve('
+has tools/minic-cc/main.c 'minic_target_machine_options_resolve('
+lacks tools/minic-cc/main.c 'target/riscv/isa_resolve.h'
+lacks tools/minic-cc/main.c '.riscv_isa'
+exists tests/compiler/c0/probe-minic-target-machine-options.sh
 lacks src/target/riscv64/isa.h 'typedef enum MinicRiscvFeature'
 # The old, unused ABI admission functions were misleading duplicates of
 # the live target/ABI planner. They must not be restored.
@@ -357,7 +569,7 @@ has src/target/riscv32/rv32_abi_plan.h 'size_t instruction_id;'
 lacks src/target/riscv32/rv32_emit.c 'rv32_scalar_storage_words(f, f->return_type, &bits)'
 has src/target/riscv32/rv32_frame.c 'varargs_offset'
 has src/target/riscv32/rv32_emit.c 'MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS'
-has src/target/target_info.c 'rv32_target.variadic_linear_slot_bytes = 4U'
+has src/target/target_info.c '.variadic_linear_slot_bytes = 4U,'
 lacks src/target/riscv32/rv32_emit.c 'defining variadic functions requires ILP32 va_list ABI'
 has src/target/riscv32/rv32_frame.c 'max_outgoing_stack_words'
 lacks src/target/riscv32/rv32_frame.c 'minic_core_function_facts_analyze('
@@ -389,6 +601,32 @@ for trigger in 'src/**' 'include/minic/**' 'tools/minic/**' \
           .github/workflows/minic-runtime-fourarch.yml || true)
   [[ "$count" -ge 2 ]] || fail "four-arch PR/push missing trigger $trigger count=$count"
 done
+# PR and main ownership symmetry for both architecture-specific regressions.
+# Keep this apt-free: the runner already has Python, not necessarily PyYAML.
+python3 - <<'PY'
+from pathlib import Path
+owners = {
+    'src/frontend/**', 'src/core/**', 'src/compiler/**',
+    'src/target/common/**', 'src/target/target_info*',
+    'src/target/data_layout*', 'include/minic/**',
+    'tools/minic/**', 'tools/minic-cc/**',
+}
+for name in ('minic-rv32-cjson-runtime.yml', 'minic-rv64i-origin-audit-seven.yml'):
+    source = (Path('.github/workflows') / name).read_text()
+    for event, stop in (('pull_request', 'push'), ('push', 'workflow_dispatch')):
+        parts = source.split('  ' + event + ':\n', 1)
+        if len(parts) != 2:
+            raise SystemExit(f'MINIC_CI_OWNER=FAIL {name} event={event}')
+        section = parts[1].split('  ' + stop + ':\n', 1)[0]
+        paths = {line.strip()[2:].strip().strip("'\"")
+                 for line in section.splitlines()
+                 if line.strip().startswith('- ')}
+        missing = sorted(owners - paths)
+        if missing:
+            raise SystemExit(f'MINIC_CI_OWNER=FAIL {name} event={event} missing={missing}')
+print('MINIC_CI_OWNER=PASS rv32_rv64_shared_source_PR_and_main')
+PY
+
 # Register placement must not leak from one machine into TargetInfo's
 # architecture-neutral C language ABI model. Production callers were zero.
 lacks src/target/target_info.h 'minic_riscv64_argument_registers'
@@ -398,7 +636,8 @@ if grep -REq 'MINIC_TARGET_ARCH_' src/frontend src/core; then
   fail 'frontend/Core must not add machine architecture switches'
 fi
 for backend in riscv32 riscv64 x86_64 aarch64 loongarch64; do
-  has src/target/backend.c "MINIC_TARGET_ARCH_$(echo "$backend" | tr '[:lower:]' '[:upper:]')"
+  has src/target/backend.c "${backend}_backend ="
+  has src/target/target_registration.def "MINIC_TARGET_ARCH_$(echo "$backend" | tr '[:lower:]' '[:upper:]')"
 done
 
 # Global program traversal is not an AArch64/LoongArch-only subsystem.
@@ -422,14 +661,14 @@ lacks src/target/common/global_emit.h 'minic_multi_recursive_shape_supported('
 lacks src/target/common/global_emit.h 'minic_multi_emit_flexible_record_global('
 
 exists src/target/common/core_numeric_shape.h
-# Three machine frame families now consume one policy-qualified Common
-# SSA slot planner: SysV cumulative 8/16, Direct LP64 wide sidecar, and
-# the earlier RV32/RV64 block-local last-use planner.
+# All five frame implementations use one Common last-use SSA spill planner.
+# The Direct LP64 128-bit wide sidecar remains separate from scalar slots.
 exists src/target/common/core_value_slots.c
 exists src/target/common/core_value_slots.h
-has src/target/common/core_value_slots.c 'bool minic_core_value_slots_build('
-has src/target/x86_64/frame.c 'MINIC_CORE_VALUE_SLOT_LINEAR'
-has src/target/common/lp64_frame.c 'MINIC_CORE_VALUE_SLOT_WIDE_TAIL'
+has src/target/common/core_value_slots.c 'bool minic_core_wide_value_slots_build('
+has src/target/common/lp64_frame.c 'minic_core_wide_value_slots_build('
+lacks src/target/x86_64/frame.c 'minic_core_value_slots_build('
+lacks src/target/common/core_value_slots.c 'MINIC_CORE_VALUE_SLOT_LINEAR'
 lacks src/target/x86_64/frame.c 'value_bytes += slot;'
 lacks src/target/common/lp64_frame.c 'plan->wide_offsets[i] = pos;'
 exists src/target/common/core_numeric_shape.c
@@ -487,7 +726,8 @@ lacks src/target/common/core_spill_layout.c 'minic_core_function_reused_spill_pe
 lacks src/target/common/core_spill_layout.c 'minic_core_function_reused_spill_assign('
 has tests/compiler/c0/run-core-block-spill-reuse.sh 'output-rv32.s'
 has .github/workflows/minic-native-refactor-gate.yml 'Two-XLEN Common single-pass SSA spill regressions'
-for backend in src/target/riscv32/rv32_frame.c src/target/riscv64/frame_layout.c; do
+for backend in src/target/x86_64/frame.c src/target/common/lp64_frame.c \
+               src/target/riscv32/rv32_frame.c src/target/riscv64/frame_layout.c; do
   has "$backend" 'minic_core_function_reused_spill_layout('
   lacks "$backend" 'minic_core_function_reused_spill_peak('
   lacks "$backend" 'minic_core_function_reused_spill_assign('
@@ -520,7 +760,9 @@ has src/target/common/direct_call_plan.c 'minic_core_call_view_argument_type(fn,
 has src/target/riscv64/call_emit.c 'call->return_form != MINIC_CORE_CALL_RETURN_OBJECT'
 has src/target/riscv64/frame_layout.c 'frame->semantic_calls = frame->call_index.index'
 has src/target/riscv64/call_emit.c 'minic_core_call_index_find('
-has src/target/riscv64/core_admission.c 'semantic_calls->sites[call_site++].view'
+has src/target/riscv64/core_admission.c 'view = &semantic_calls->sites[call_site].view'
+has src/target/riscv64/core_admission.c 'prepared = abi_plan->outgoing_calls.sites[call_site]'
+has src/target/riscv64/core_admission.c 'prepared->instruction_id != index'
 has src/target/riscv64/core_admission.c 'shape = &storage->objects[index]'
 has src/target/riscv64/core_admission.c 'minic_core_object_storage('
 has src/target/riscv64/core_codegen.c 'isa->abi == MINIC_RISCV_ABI_LP64, facts, storage)'
@@ -562,9 +804,15 @@ lacks src/target/x86_64/frame.c 'minic_x86_64_frame_init_prepared('
 lacks src/target/riscv32/rv32_frame.c 'rv32_frame_init_prepared('
 lacks src/target/riscv64/core_codegen.c 'minic_riscv64_emit_core_function_for_program_with_symbol_prepared('
 has src/target/riscv64/frame_layout.c 'facts->needs_saved_return_address'
-# All five targets now preplan real ABI CALL placement once. RV64 directly
-# consumes the exact prepared psABI locations for machine CALL emission.
-has src/target/riscv64/frame_layout.c 'minic_riscv64_call_plan_cache_build('
+# All five targets now preplan real ABI CALL placement once. RV64 must
+# construct its typed cache before admission (honoring LP64/LP64D), then
+# transfer ownership into the frame instead of reclassifying in production.
+has src/target/riscv64/core_admission.c 'minic_riscv64_call_plan_cache_build('
+has src/target/riscv64/frame_layout.c 'frame->outgoing_calls = abi_plan->outgoing_calls'
+has src/target/riscv64/frame_layout.c 'abi_plan->outgoing_calls = (MinicRiscv64CallPlanCache){0}'
+has src/target/riscv64/legalize.c 'const MinicRiscv64PreparedCall *prepared'
+lacks src/target/riscv64/legalize.c 'minic_riscv64_abi_cursor_initialize_for_return('
+lacks src/target/riscv64/legalize.c 'minic_riscv64_abi_place_argument('
 # RV64 standalone and production must converge on the one Common CALL index
 # and one target ABI plan; the obsolete standalone sizing walker is deleted.
 has src/target/riscv64/frame_layout.c 'minic_core_call_index_handle_prepare('
@@ -579,7 +827,8 @@ has src/target/riscv64/call_emit.c 'rv64_resolve_prepared_call('
 # a regression to the 64-bit scalar result silently loses a1.
 has src/target/riscv64/call_emit.c 'static bool emit_core_call_wide_result('
 has src/target/riscv64/legalize.c 'static bool rv64_wide_call_argument_supported('
-has src/target/riscv64/legalize.c 'return_value.kind == MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR'
+has src/target/riscv64/legalize.c 'static bool rv64_core_call_return_supported('
+has src/target/riscv64/legalize.c 'case MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR:'
 has src/target/riscv64/abi.c 'minic_type_is_int128_integer(type)) && size == 16U'
 lacks src/target/riscv64/abi.c '(lp64_soft_float && minic_type_is_int128_integer(type))'
 if [[ "$(grep -Fc 'return emit_core_call_wide_result(' src/target/riscv64/call_emit.c)" != 2 ]]; then
@@ -614,7 +863,8 @@ lacks src/target/common/direct_instruction_semantics.h 'minic_multi_direct_abi_t
 lacks src/target/common/direct_instruction_semantics.h 'minic_multi_direct_integer_machine_kind('
 # Read-only Common CALL snapshots are consumed in ordinal order by both
 # Direct LP64 ABIs and RV64 capability, never looked up repeatedly by ID.
-has src/target/riscv64/core_admission.c 'semantic_calls->sites[call_site++]'
+has src/target/riscv64/core_admission.c 'view = &semantic_calls->sites[call_site].view'
+has src/target/riscv64/core_admission.c '++call_site;'
 lacks src/target/riscv64/core_admission.c 'minic_core_call_index_get('
 # Prepared RV32 and Direct LP64 CALL machines borrow the Common sorted
 # semantic CALL index, leaving one canonical ordinal lookup for production.
@@ -678,6 +928,17 @@ lacks src/target/riscv32/rv32_emit.c 'for (i = 0U; ok && i < function_count; ++i
 # census continuation. Keep target GNU/QEMU checks in their own CI stages.
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
+
+# Only a finite x86 ISA grammar can feed raw GNU template substitution.
+# A valid opcode prefix plus arbitrary trailing text is NOT a contract.
+cc -std=c11 -Wall -Wextra -Wpedantic -Werror -ffunction-sections \
+  -fdata-sections -Wl,--gc-sections -Iinclude -Isrc \
+  tests/compiler/c0/probe-x86-matched-asm-template.c \
+  src/target/x86_64/asm_contract.c \
+  -o "$work/x86-matched-asm-template-probe"
+"$work/x86-matched-asm-template-probe"
+
+
 # Unit test the borrow-or-own policy on the real linked Common implementation,
 # including standalone objects, exact pointer sharing, malformed plans,
 # and use-after-destroy prevention through zeroing the released alias.
@@ -688,7 +949,10 @@ cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
 "$work/core-object-storage-ownership-probe"
 
 cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
+  -ffunction-sections -fdata-sections -Wl,--gc-sections \
   -Iinclude -Isrc tests/compiler/c0/probe-program-emit-transaction.c \
+  src/core/core_ir.c \
+  src/frontend/ast_global.c \
   src/target/common/core_function_facts.c \
   src/target/common/core_function_plan.c \
   -o "$work/program-emit-probe"
@@ -705,7 +969,11 @@ cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
 # Prove block and source-label order, barrier elision, GP writeback policy,
 # and instruction/terminator failure ownership without emulated ISA binaries.
 cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
+  -ffunction-sections -fdata-sections -Wl,--gc-sections \
   -Iinclude -Isrc tests/compiler/c0/probe-direct-lp64-dispatch.c \
+  src/core/core_ir.c src/core/value_uses.c \
+  src/frontend/type.c \
+  src/target/common/lp64_frame.c \
   -o "$work/direct-lp64-dispatch-probe"
 "$work/direct-lp64-dispatch-probe"
 
@@ -732,6 +1000,16 @@ cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
   -o "$work/core-call-probe"
 "$work/core-call-probe"
 
+# A calling-convention ID is part of both direct and indirect Core call
+# identity. The Common IR carries it without implementing a target ABI;
+# malformed/contradictory IDs fail closed before machine emission.
+cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
+  -ffunction-sections -fdata-sections -Wl,--gc-sections \
+  -Iinclude -Isrc tests/compiler/c0/probe-core-call-convention-intern.c \
+  src/core/core_ir.c src/frontend/type.c \
+  -o "$work/core-call-convention-intern-probe"
+"$work/core-call-convention-intern-probe"
+
 # Real RV32 ILP32 physical access safety. Function-section GC links only
 # the production stack transport helpers, without a GNU cross toolchain.
 # All malformed Core slots and scratch register aliases must fail closed.
@@ -742,13 +1020,21 @@ cc -std=c11 -Wall -Wextra -Wpedantic -Werror \
   -o "$work/rv32-frame-access-probe"
 "$work/rv32-frame-access-probe"
 
-# Exercise the two historical SSA layouts in one true Common planner and
-# prove bounds/rollback before testing native machine frame and QEMU ABIs.
+# Exercise Direct LP64's separate wide sidecar with checked rollback.
 cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
   -Iinclude -Isrc tests/compiler/c0/probe-core-value-slots.c \
   src/target/common/core_value_slots.c src/frontend/type.c \
   -o "$work/core-value-slots-probe"
 "$work/core-value-slots-probe"
+
+# Strictly match the former LoongArch SSA address-alignment proof, including
+# the legacy 16-edge cutoff, while preserving the preexisting Common 64-edge
+# default for RV and other clients. This is a policy A/B, not a linker tweak.
+cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
+  -ffunction-sections -fdata-sections -Wl,--gc-sections \
+  -Iinclude -Isrc tests/compiler/c0/probe-core-address-alignment-depth.c \
+  src/core/core_ir.c -o "$work/core-address-alignment-depth-probe"
+"$work/core-address-alignment-depth-probe"
 
 # Prove checked alignment/reservation at overflow boundaries and no cursor
 # mutation on failure before running slow QEMU/runtime architecture gates.

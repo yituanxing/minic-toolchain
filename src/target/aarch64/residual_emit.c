@@ -1,4 +1,6 @@
 #include "target/aarch64/residual_emit.h"
+#include "target/aarch64/asm_contract.h"
+#include "target/aarch64/frame_emit.h"
 #include "target/aarch64/scalar_normalize.h"
 #include "target/common/direct_residual_plan.h"
 #include "target/common/direct_instruction_semantics.h"
@@ -14,38 +16,30 @@
 #include <string.h>
 
 
-static bool aarch64_static_object(const MinicC0Program *program,
-                                  const char *symbol) {
-    size_t i;
-    if (program == NULL || symbol == NULL) return false;
-    for (i = 0U; i < program->global_object_count; ++i) {
-        const MinicGlobalObject *obj = &program->global_objects[i];
-        if (obj->name != NULL && strcmp(obj->name, symbol) == 0 &&
-            obj->is_internal && !obj->is_extern &&
-            !obj->is_block_scope_extern_only) return true;
-    }
-    return false;
-}
-
-static bool aarch64_static_function(const MinicC0Program *program,
-                                    const char *symbol) {
-    size_t i;
-    if (program == NULL || symbol == NULL) return false;
-    for (i = 0U; i < program->function_count; ++i) {
-        const MinicFunction *fn = &program->functions[i];
-        const char *name = fn->assembler_name != NULL
-            ? fn->assembler_name : fn->name;
-        if (name != NULL && strcmp(name, symbol) == 0 &&
-            fn->is_defined && fn->is_internal) return true;
-    }
-    return false;
-}
-
-
-
 /* Residual machine lowering after Core family admission. Each case is
  * target owned; planning and type checks are shared with the other LP64
  * backend, preserving AArch64 and LoongArch64 ABI/ISA divergence. */
+
+/* An AArch64 MOVZ immediate carries just 16 bits. A pointer element stride
+ * may be much larger (Linux has large ZSTD contexts and LZO thread records),
+ * so materialize the complete target LP64 size without silently truncating
+ * its upper words. x10/x11 are reserved scratch registers in this emitter. */
+static bool aarch64_emit_size_constant(FILE *out, unsigned int reg,
+                                       size_t value) {
+    const uint64_t imm = (uint64_t)value;
+    unsigned int shift;
+    if (out == NULL || (reg != 10U && reg != 11U) ||
+        fprintf(out, "  movz x%u, #%" PRIu64 "\n",
+                reg, imm & UINT64_C(0xffff)) < 0)
+        return false;
+    for (shift = 16U; shift <= 48U; shift += 16U) {
+        if (((imm >> shift) & UINT64_C(0xffff)) != 0U &&
+            fprintf(out, "  movk x%u, #%" PRIu64 ", lsl #%u\n",
+                    reg, (imm >> shift) & UINT64_C(0xffff), shift) < 0)
+            return false;
+    }
+    return true;
+}
 
 
 bool minic_aarch64_emit_residual_instruction(
@@ -62,6 +56,7 @@ bool minic_aarch64_emit_residual_instruction(
     size_t id, frame, va_base, va_fp, va_gp, va_count, reject_block;
     size_t reject_ins;
     bool dynamic_frame;
+    MinicA64FrameView frame_view;
     if (out == NULL || ctx == NULL || needs_writeback == NULL || ctx->fn == NULL ||
         ctx->program == NULL || ctx->target == NULL ||
         ctx->frame_plan == NULL || ctx->name == NULL ||
@@ -76,14 +71,195 @@ bool minic_aarch64_emit_residual_instruction(
     id = ctx->id;
     frame = ctx->frame;
     va_base = ctx->va_base;
-    va_fp = ctx->va_fp;
-    va_gp = ctx->va_gp;
+    /* Named stack arguments can exhaust either register bank. AAPCS64
+     * encodes exhausted banks as offset zero, never a positive offset. */
+    va_fp = ctx->va_fp < 8U ? ctx->va_fp : 8U;
+    va_gp = ctx->va_gp < 8U ? ctx->va_gp : 8U;
     va_count = ctx->va_count;
     reject_block = block_id;
     reject_ins = (size_t)ins_id;
     dynamic_frame = ctx->dynamic_frame;
+    frame_view = (MinicA64FrameView){
+        dynamic_frame, frame, 0U, ctx->saved_entry_sp_offset
+    };
     *needs_writeback = true;
         switch (ins->kind) {
+        case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM: {
+            const size_t asm_id = ins->value.inline_asm_id;
+            const MinicCoreInlineAsm *source = asm_id < fn->inline_asm_count
+                ? &fn->inline_asms[asm_id] : NULL;
+            if (minic_aarch64_linux_jump_label_asm_goto_core(source)) {
+                if (!minic_aarch64_emit_linux_jump_label_asm_goto(
+                        out, source, id, fn->block_count))
+                    return minic_multi_direct_machine_reject(
+                        fn, "aarch64", name, "linux_jump_label_asm_goto",
+                        reject_block, reject_ins, __LINE__);
+                *needs_writeback = false;
+                return true;
+            }
+            if (minic_aarch64_linux_cap_asm_goto_core(source)) {
+                if (source->goto_target >= fn->block_count ||
+                    !minic_aarch64_emit_linux_cap_asm_goto(
+                        out, source, id, (size_t)source->goto_target))
+                    return minic_multi_direct_machine_reject(
+                        fn, "aarch64", name, "linux_alternative_cap_asm_goto",
+                        reject_block, reject_ins, __LINE__);
+                *needs_writeback = false;
+                return true;
+            }
+            if (minic_aarch64_linux_barrier_alternative_opaque(source)) {
+                if (!minic_aarch64_emit_linux_barrier_alternative_opaque(
+                        out, source))
+                    return minic_multi_direct_machine_reject(
+                        fn, "aarch64", name, "linux_kvm_barrier_alternative",
+                        reject_block, reject_ins, __LINE__);
+                *needs_writeback = false;
+                return true;
+            }
+            /* Materialize the vetted privileged PSTATE opcode in Target.
+             * Do not forward even a whitelisted GNU arithmetic expression
+             * to the assembler as an uninspected opaque instruction. */
+            if (source != NULL) {
+                const unsigned int repeat = minic_aarch64_linux_rept_nop_count(
+                    source->template_text, source->template_length);
+                if (repeat != 0U) {
+                    unsigned int k;
+                    if (!minic_aarch64_qualified_opaque_asm(source))
+                        return false;
+                    for (k = 0U; k < repeat; ++k)
+                        if (fputs("  nop\n", out) == EOF) return false;
+                    *needs_writeback = false;
+                    return true;
+                }
+                const unsigned int pstate = minic_aarch64_linux_pstate_imm_opcode(
+                    source->template_text, source->template_length);
+                if (pstate != 0U) {
+                    if (!minic_aarch64_qualified_opaque_asm(source) ||
+                        fprintf(out, "  .inst 0x%08x\n", pstate) < 0)
+                        return minic_multi_direct_machine_reject(
+                            fn, "aarch64", name, "pstate_immediate_asm",
+                            reject_block, reject_ins, __LINE__);
+                    *needs_writeback = false;
+                    return true;
+                }
+                {
+                    const unsigned int daif =
+                        minic_aarch64_linux_daif_immediate_form(
+                            source->template_text, source->template_length);
+                    if (daif != 0U) {
+                        const char *reg = (daif & 1U) ? "daifset" : "daifclr";
+                        const unsigned int imm = daif <= 2U ? 3U : 15U;
+                        if (!minic_aarch64_qualified_opaque_asm(source) ||
+                            fprintf(out, "  msr %s, #%u\n", reg, imm) < 0)
+                            return minic_multi_direct_machine_reject(
+                                fn, "aarch64", name, "daif_immediate_asm",
+                                reject_block, reject_ins, __LINE__);
+                        *needs_writeback = false;
+                        return true;
+                    }
+                }
+            }
+            if (!minic_aarch64_qualified_opaque_asm(source) ||
+                fwrite(source->template_text, 1U, source->template_length, out) !=
+                    source->template_length ||
+                fputc('\n', out) == EOF)
+                return minic_multi_direct_machine_reject(
+                    fn, "aarch64", name, "qualified_opaque_hardware_asm",
+                    reject_block, reject_ins, __LINE__);
+            *needs_writeback = false;
+            return true;
+        }
+        case MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM: {
+            bool accepted;
+            *needs_writeback = false;
+            accepted = minic_aarch64_emit_qualified_structured_asm(out, ctx, ins);
+            if (!accepted && getenv("MINIC_M1_TRACE") != NULL &&
+                ins->value.structured_inline_asm.inline_asm_id <
+                    fn->inline_asm_count) {
+                const MinicCoreInlineAsm *info = &fn->inline_asms[
+                    ins->value.structured_inline_asm.inline_asm_id];
+                char preview[113];
+                size_t i;
+                const size_t limit = info->template_length < sizeof(preview)-1U
+                    ? info->template_length : sizeof(preview)-1U;
+                for (i = 0U; i < limit; ++i) {
+                    const unsigned char ch = (unsigned char)info->template_text[i];
+                    preview[i] = ch == '\n' || ch == '\r' || ch == '\t'
+                        ? ' ' : ch < 32U || ch >= 127U ? '?' : (char)ch;
+                }
+                preview[limit] = '\0';
+                (void)fprintf(stderr,
+                    "MINIC_AARCH64_STRUCTURED_REJECT function=%s dynamic_frame=%d "
+                    "template_length=%zu operand_count=%zu volatile=%d "
+                    "memory=%d goto=%d preview=%s\n",
+                    name, ctx->dynamic_frame ? 1 : 0, info->template_length,
+                    ins->value.structured_inline_asm.operand_count,
+                    info->is_volatile ? 1 : 0, info->has_memory_clobber ? 1 : 0,
+                    info->is_goto ? 1 : 0, preview);
+            }
+            return accepted;
+        }
+        case MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS: {
+            /* Real AAPCS64 frame chain: prologue sets x29 to an owned
+             * [caller-x29,entry-x30] 16B record in every function, including
+             * leaves, dynamic alloca and over-aligned frames. */
+            if (minic_multi_direct_call_frame_level0_shape(
+                    fn, ins, MINIC_CORE_CALL_FRAME_ADDRESS_FRAME)) {
+                if (fputs("  mov x9, x29\n", out) == EOF)
+                    return false;
+                break;
+            }
+            {
+                MinicType frame_pointee;
+                if (ins->value.call_frame_address.kind ==
+                        MINIC_CORE_CALL_FRAME_ADDRESS_FRAME &&
+                    ins->value.call_frame_address.level == 1U &&
+                    ins->result < fn->value_count &&
+                    minic_type_pointee(ins->type, &frame_pointee) &&
+                    minic_type_is_void(frame_pointee) &&
+                    minic_target_info_call_frame_address_supported(
+                        target, MINIC_CALL_FRAME_ADDRESS_FRAME, 1U)) {
+                    if (fputs("  ldr x9, [x29]\n", out) == EOF)
+                        return false;
+                    break;
+                }
+            }
+            if (
+                !minic_multi_direct_call_frame_return_level0_shape(fn, ins) ||
+                (ctx->has_direct_calls &&
+                 (ctx->save_offset > 32760U ||
+                  (ctx->save_offset & 7U) != 0U)))
+                return minic_multi_direct_machine_reject(
+                    fn, "aarch64", name, "call_frame_return_address",
+                    reject_block, reject_ins, __LINE__);
+            if (ctx->has_direct_calls) {
+                if (!minic_a64_emit_owned_slot(out, &frame_view, false,
+                        MINIC_A64_REG_X, 9U, ctx->save_offset))
+                    return false;
+            } else if (fputs("  mov x9, x30\n", out) == EOF) {
+                return false;
+            }
+            break;
+        }
+        case MINIC_CORE_INSTRUCTION_FIXED_REGISTER_READ: {
+            const MinicCoreFixedRegisterBinding *binding;
+            /* Do NOT virtualize the stack pointer into an ELF global.  The
+             * original Linux current_stack_pointer is the LIVE AAPCS64 sp.
+             * The Core SSA destination is written by the existing common
+             * direct-machine GP result dispatcher, exactly like the x86
+             * equivalent. Dynamic-alloca frame relocation is deliberately
+             * not qualified by this first machine owner. */
+            if (dynamic_frame ||
+                !minic_multi_direct_fixed_register_read_shape(
+                    program, target, fn, ins, &binding) ||
+                binding->register_name_length != 2U ||
+                memcmp(binding->register_name, "sp", 2U) != 0 ||
+                fputs("  mov x9, sp\n", out) == EOF)
+                return minic_multi_direct_machine_reject(
+                    fn, "aarch64", name, "fixed_register_read",
+                    reject_block, reject_ins, __LINE__);
+            break;
+        }
         case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT: {
             size_t width = 0U;
             bool sign = false;
@@ -132,9 +308,17 @@ bool minic_aarch64_emit_residual_instruction(
             if (!minic_multi_direct_global_address_symbol(fn, ins, &symbol))
                 return minic_multi_direct_machine_reject(
                     fn, "aarch64", name, reject_stage, reject_block, reject_ins, __LINE__);
-            if (aarch64_static_object(program, symbol)) {
-                /* RoundKey and other proven static-TU objects: preserve
-                 * direct static-PC-relative addresses. */
+            if (!minic_target_info_elf_object_is_undefined_weak(program, symbol) &&
+                (!target->position_independent ||
+                 minic_target_info_elf_object_is_nonpreemptible(program, symbol))) {
+                /* Static definitions and ELF hidden/internal declarations
+                 * bind locally, including undefined symbols resolved by the
+                 * final shared link (Linux vDSO). Non-PIC code can also use
+                 * direct PC-relative references to default extern symbols;
+                 * PIC keeps potentially preemptible externs on the GOT.
+                 * Undefined weak addresses also require GOT materialization
+                 * even in -fno-pic kernel code, since the linker may resolve
+                 * a missing provider to absolute zero. */
                 if (fprintf(out, "  adrp x9, %s\n"
                                  "  add x9, x9, :lo12:%s\n",
                             symbol, symbol) < 0)
@@ -151,7 +335,8 @@ bool minic_aarch64_emit_residual_instruction(
                                                reject_stage, reject_block,
                                                reject_ins, __LINE__);
             }
-            if (fprintf(out, "  str x9, [sp, #%zu]\n", offset) < 0)
+            if (!minic_a64_emit_owned_slot(out, &frame_view, true,
+                    MINIC_A64_REG_X, 9U, offset))
                 return minic_multi_direct_machine_reject(fn, "aarch64", name,
                                            reject_stage, reject_block,
                                            reject_ins, __LINE__);
@@ -162,7 +347,9 @@ bool minic_aarch64_emit_residual_instruction(
             if (!minic_multi_direct_function_address_symbol(fn, ins, &symbol))
                 return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
                                            reject_block, reject_ins, __LINE__);
-            if (aarch64_static_function(program, symbol)) {
+            if (!minic_target_info_elf_function_is_undefined_weak(program, symbol) &&
+                (!target->position_independent ||
+                 minic_target_info_elf_function_is_nonpreemptible(program, symbol))) {
                 if (fprintf(out, "  adrp x9, %s\n"
                                  "  add x9, x9, :lo12:%s\n",
                             symbol, symbol) < 0)
@@ -175,26 +362,39 @@ bool minic_aarch64_emit_residual_instruction(
                 return minic_multi_direct_machine_reject(fn, "aarch64", name,
                                            reject_stage, reject_block,
                                            reject_ins, __LINE__);
-            if (fprintf(out, "  str x9, [sp, #%zu]\n", offset) < 0)
+            if (!minic_a64_emit_owned_slot(out, &frame_view, true,
+                    MINIC_A64_REG_X, 9U, offset))
                 return minic_multi_direct_machine_reject(fn, "aarch64", name,
                                            reject_stage, reject_block,
                                            reject_ins, __LINE__);
+            { *needs_writeback = false; return true; }
+        }
+        case MINIC_CORE_INSTRUCTION_BLOCK_ADDRESS: {
+            MinicCoreBlockId destination;
+            /* Verified Core CFG label, materialized PC-relatively. ADRP+ADD
+             * avoids ADR's reach limit in large original Linux functions. */
+            if (!minic_multi_direct_block_address_shape(
+                    fn, ins, &destination) ||
+                fprintf(out,
+                        "  adrp x9, .Lmini_arm_f%zu_b%u\n"
+                        "  add x9, x9, :lo12:.Lmini_arm_f%zu_b%u\n",
+                        id, (unsigned int)destination,
+                        id, (unsigned int)destination) < 0 ||
+                !minic_a64_emit_owned_slot(out, &frame_view, true,
+                    MINIC_A64_REG_X, 9U, offset))
+                return minic_multi_direct_machine_reject(
+                    fn, "aarch64", name, reject_stage,
+                    reject_block, reject_ins, __LINE__);
             { *needs_writeback = false; return true; }
         }
         case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS: {
             size_t object_offset;
             if (!minic_multi_direct_object_address_location(
                     fn, ins, frame_plan, &object_offset) ||
-                /* Large Lua VM stack objects exceed the 16-bit movz
-                 * immediate. Keep the exact DataLayout offset and
-                 * materialize it in the same reserved x9 scratch. */
-                fprintf(out, "  movz x9, #%zu\n",
-                        object_offset & 65535U) < 0 ||
-                (object_offset > 65535U &&
-                 fprintf(out, "  movk x9, #%zu, lsl #16\n",
-                         object_offset >> 16U) < 0) ||
-                fputs("  add x9, sp, x9\n", out) == EOF ||
-                fprintf(out, "  str x9, [sp, #%zu]\n", offset) < 0) return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
+                !minic_a64_emit_owned_address(out, &frame_view,
+                    object_offset, 9U) ||
+                !minic_a64_emit_owned_slot(out, &frame_view, true,
+                    MINIC_A64_REG_X, 9U, offset)) return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
             { *needs_writeback = false; return true; }
         }
@@ -206,8 +406,8 @@ bool minic_aarch64_emit_residual_instruction(
             size_t bytes;
             if (!minic_multi_direct_field_address_shape(
                     fn, ins, &base, &bytes) ||
-                fprintf(out, "  ldr x9, [sp, #%zu]\n",
-                        (size_t)base * 8U) < 0)
+                !minic_a64_emit_owned_slot(out, &frame_view, false,
+                    MINIC_A64_REG_X, 9U, minic_lp64_frame_value_offset(frame_plan, base)))
                 return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
                                            reject_block, reject_ins, __LINE__);
             if (bytes != 0U && bytes <= 4095U) {
@@ -215,20 +415,8 @@ bool minic_aarch64_emit_residual_instruction(
                     return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
                                                reject_block, reject_ins, __LINE__);
             } else if (bytes > 4095U) {
-                const uint64_t imm = (uint64_t)bytes;
-                unsigned int shift;
-                if (fprintf(out, "  movz x10, #%" PRIu64 "\n",
-                            imm & UINT64_C(0xffff)) < 0)
-                    return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
-                                               reject_block, reject_ins, __LINE__);
-                for (shift = 16U; shift <= 48U; shift += 16U) {
-                    if (((imm >> shift) & UINT64_C(0xffff)) != 0U &&
-                        fprintf(out, "  movk x10, #%" PRIu64 ", lsl #%u\n",
-                                (imm >> shift) & UINT64_C(0xffff), shift) < 0)
-                        return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
-                                                   reject_block, reject_ins, __LINE__);
-                }
-                if (fputs("  add x9, x9, x10\n", out) == EOF)
+                if (!aarch64_emit_size_constant(out, 10U, bytes) ||
+                    fputs("  add x9, x9, x10\n", out) == EOF)
                     return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
                                                reject_block, reject_ins, __LINE__);
             }
@@ -256,26 +444,28 @@ bool minic_aarch64_emit_residual_instruction(
                     ins->value.pointer_offset.subtract ? 1 : 0);
             }
             if (!minic_multi_direct_pointer_offset_shape(
-                    program, target, fn, ins, 65535U, &iw, &signed_index) ||
-                fprintf(out, "  ldr x9, [sp, #%zu]\n", (size_t)base * 8U) < 0 ||
+                    program, target, fn, ins, SIZE_MAX, &iw, &signed_index) ||
+                !minic_a64_emit_owned_slot(out, &frame_view, false,
+                    MINIC_A64_REG_X, 9U, minic_lp64_frame_value_offset(frame_plan, base)) ||
+                !minic_a64_emit_owned_address(out, &frame_view,
+                    minic_lp64_frame_value_offset(frame_plan, index), 16U) ||
                 fprintf(out,
                         iw == 1U ? (signed_index
-                                     ? "  ldrsb x10, [sp, #%zu]\n"
-                                     : "  ldrb w10, [sp, #%zu]\n")
+                                     ? "  ldrsb x10, [x16]\n"
+                                     : "  ldrb w10, [x16]\n")
                         : iw == 2U ? (signed_index
-                                     ? "  ldrsh x10, [sp, #%zu]\n"
-                                     : "  ldrh w10, [sp, #%zu]\n")
-                        : iw == 8U ? "  ldr x10, [sp, #%zu]\n"
+                                     ? "  ldrsh x10, [x16]\n"
+                                     : "  ldrh w10, [x16]\n")
+                        : iw == 8U ? "  ldr x10, [x16]\n"
                         : (signed_index
-                                     ? "  ldrsw x10, [sp, #%zu]\n"
-                                     : "  ldr w10, [sp, #%zu]\n"),
-                        (size_t)index * 8U) < 0)
+                                     ? "  ldrsw x10, [x16]\n"
+                                     : "  ldr w10, [x16]\n")) < 0)
                 return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
             if (stride != 0U) {
-                if (fprintf(out, "  movz x11, #%zu\n"
-                                 "  mul x10, x10, x11\n"
-                                 "  %s x9, x9, x10\n", stride,
+                if (!aarch64_emit_size_constant(out, 11U, stride) ||
+                    fprintf(out, "  mul x10, x10, x11\n"
+                                 "  %s x9, x9, x10\n",
                             ins->value.pointer_offset.subtract ? "sub" : "add") < 0)
                     return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
@@ -295,16 +485,25 @@ bool minic_aarch64_emit_residual_instruction(
                     fn, "aarch64", name, reject_stage, reject_block,
                     reject_ins, __LINE__);
             if (pointer_to_integer) {
-                if (fprintf(out, "  ldr x9, [sp, #%zu]\n",
-                            (size_t)source * 8U) < 0)
+                if (!minic_a64_emit_owned_slot(out, &frame_view, false,
+                        MINIC_A64_REG_X, 9U, minic_lp64_frame_value_offset(frame_plan, source)))
+                    return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
+                                    reject_block, reject_ins, __LINE__);
+                if (src_width == 1U &&
+                    fputs("  cmp x9, #0\n  cset x9, ne\n", out) == EOF)
+                    return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
+                                    reject_block, reject_ins, __LINE__);
+                if (src_width == 4U &&
+                    fputs(src_signed ? "  sxtw x9, w9\n"
+                                    : "  uxtw x9, w9\n", out) == EOF)
                     return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
                 break;
             }
-            if (fprintf(out, (src_pointer || src_width == 8U)
-                          ? "  ldr x9, [sp, #%zu]\n"
-                          : "  ldr w9, [sp, #%zu]\n",
-                        (size_t)source * 8U) < 0) return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
+            if (!minic_a64_emit_owned_slot(out, &frame_view, false,
+                    (src_pointer || src_width == 8U)
+                        ? MINIC_A64_REG_X : MINIC_A64_REG_W,
+                    9U, minic_lp64_frame_value_offset(frame_plan, source))) return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
             if (!src_pointer && src_width != 8U &&
                 (!minic_aarch64_emit_integer_normalize(out, src_width, src_signed) ||
@@ -331,8 +530,10 @@ bool minic_aarch64_emit_residual_instruction(
                                        &width, &sign)))
                 return minic_multi_direct_machine_reject(fn, "aarch64", name,
                     reject_stage, reject_block, reject_ins, __LINE__);
-            if (fprintf(out,
-                        "  ldr x9, [sp, #%zu]\n"
+            if (!minic_a64_emit_owned_slot(out, &frame_view, false,
+                        MINIC_A64_REG_X, 9U,
+                        minic_lp64_frame_value_offset(frame_plan, ins->value.operand)) ||
+                fprintf(out,
                         "  ldrsw x10, [x9, #%u]\n"
                         "  cmp w10, #0\n"
                         "  b.ge .Lmini_arm_va_f%zu_r%u_stack\n"
@@ -349,7 +550,6 @@ bool minic_aarch64_emit_residual_instruction(
                         "  str x11, [x9]\n"
                         ".Lmini_arm_va_f%zu_r%u_done:\n"
                         "  mov x9, x13\n",
-                        (size_t)ins->value.operand * 8U,
                         fp ? 28U : 24U,
                         id, (unsigned int)ins->result,
                         fp ? 16U : 8U,
@@ -364,43 +564,95 @@ bool minic_aarch64_emit_residual_instruction(
                     reject_stage, reject_block, reject_ins, __LINE__);
             break;
         }
+        case MINIC_CORE_INSTRUCTION_VARIADIC_COPY: {
+            const MinicCoreValueId dest = ins->value.variadic_copy.destination;
+            const MinicCoreValueId src = ins->value.variadic_copy.source;
+            /* AAPCS64 __va_list is 32 bytes: stack/gr_top/vr_top and two
+             * signed 32-bit register offsets. Copy the entire ABI state,
+             * including both mutable offsets, into an independent tag. */
+            if (ins->result != MINIC_CORE_VALUE_INVALID ||
+                !minic_type_is_void(ins->type) ||
+                dest >= fn->value_count || src >= fn->value_count ||
+                !minic_type_is_pointer(fn->values[dest].type) ||
+                !minic_type_equal(fn->values[dest].type, fn->values[src].type) ||
+                !minic_a64_emit_owned_slot(out, &frame_view, false,
+                    MINIC_A64_REG_X, 9U, minic_lp64_frame_value_offset(frame_plan, dest)) ||
+                !minic_a64_emit_owned_slot(out, &frame_view, false,
+                    MINIC_A64_REG_X, 10U, minic_lp64_frame_value_offset(frame_plan, src)) ||
+                fputs("  ldp x11, x12, [x10]\n"
+                      "  ldp x13, x14, [x10, #16]\n"
+                      "  stp x11, x12, [x9]\n"
+                      "  stp x13, x14, [x9, #16]\n", out) == EOF)
+                return minic_multi_direct_machine_reject(fn, "aarch64", name,
+                    reject_stage, reject_block, reject_ins, __LINE__);
+            *needs_writeback = false;
+            return true;
+        }
         case MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS: {
-            const size_t stack_top = frame;
+            size_t seen = 0U, i, cursor_offset;
+            MinicA64FrameRef first_unnamed_stack_arg;
+            const MinicA64ScratchPolicy entry_sp_scratch = {0U, 0U};
             const size_t gr_top = va_base + 96U;
             const size_t vr_top = va_base + 224U;
-            if (va_count != 1U || !minic_type_is_pointer(ins->type) ||
-                ins->result >= fn->value_count)
+            for (i = 0U; i < ins_id; ++i)
+                if (fn->instructions[i].kind ==
+                    MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS)
+                    ++seen;
+            if (va_count == 0U || seen >= va_count ||
+                ctx->incoming_plan == NULL ||
+                ctx->incoming_plan->stack_slots > SIZE_MAX / 8U ||
+                !minic_type_is_pointer(ins->type) ||
+                ins->result >= fn->value_count ||
+                (seen != 0U && frame < (va_count - seen) * 32U))
                 return minic_multi_direct_machine_reject(fn, "aarch64", name,
                                            reject_stage, reject_block,
                                            reject_ins, __LINE__);
+            /* Named fixed parameters may themselves consume incoming stack
+             * slots after the x0..x7/v0..v7 banks are exhausted. The
+             * vararg cursor starts AFTER those slots, matching the same
+             * AAPCS64 argument planner used by the caller. */
+            first_unnamed_stack_arg = (MinicA64FrameRef){
+                MINIC_A64_FRAME_INCOMING,
+                ctx->incoming_plan->stack_slots * 8U
+            };
+            cursor_offset = seen == 0U ? va_base
+                : frame - (va_count - seen) * 32U;
+            if (ins->value.variadic_address.copy_destination) {
+                /* va_copy allocates an uninitialized, private 32B cursor.
+                 * The following Core VARIADIC_COPY copies its whole state. */
+                if (!minic_a64_emit_owned_address(out, &frame_view,
+                        cursor_offset, 9U))
+                    return minic_multi_direct_machine_reject(fn, "aarch64", name,
+                        reject_stage, reject_block, reject_ins, __LINE__);
+                break;
+            }
             /* Linux AAPCS64 va_list layout:
              * void *__stack, *__gr_top, *__vr_top; int __gr_offs, __vr_offs.
              * The GP and FP save areas are owned by our entry prologue. */
-            if (fprintf(out, "  movz x9, #%zu\n", va_base & 65535U) < 0 ||
-                (va_base > 65535U &&
-                 fprintf(out, "  movk x9, #%zu, lsl #16\n",
-                         va_base >> 16U) < 0) ||
-                fputs("  add x9, sp, x9\n", out) == EOF)
+            if (!minic_a64_emit_owned_address(out, &frame_view,
+                    cursor_offset, 9U))
                 return minic_multi_direct_machine_reject(fn, "aarch64", name,
                                            reject_stage, reject_block,
                                            reject_ins, __LINE__);
-            if (fprintf(out, "  movz x10, #%zu\n",
-                        stack_top & 65535U) < 0 ||
-                (stack_top > 65535U &&
-                 fprintf(out, "  movk x10, #%zu, lsl #16\n",
-                         stack_top >> 16U) < 0) ||
-                fputs("  add x10, sp, x10\n  str x10, [x9]\n", out) == EOF)
+            /* The prologue first pushes the 16-byte x29/x30 record and
+             * THEN subtracts `frame`. Thus owned [sp + frame] names that
+             * record, not the caller's first stack-passed argument.
+             * FrameRef INCOMING owns the +16 transition and, for dynamic
+             * over-aligned locals, recovers the saved entry SP instead of
+             * incorrectly reconstructing it relative to live x19. Its
+             * offset additionally skips every named stack argument. */
+            if (!minic_a64_emit_frame_address(out, &frame_view,
+                    first_unnamed_stack_arg, 10U, entry_sp_scratch) ||
+                fputs("  str x10, [x9]\n", out) == EOF)
                 return minic_multi_direct_machine_reject(fn, "aarch64", name,
                                            reject_stage, reject_block,
                                            reject_ins, __LINE__);
-            if (fprintf(out, "  movz x10, #%zu\n", gr_top & 65535U) < 0 ||
-                (gr_top > 65535U &&
-                 fprintf(out, "  movk x10, #%zu, lsl #16\n", gr_top >> 16U) < 0) ||
-                fputs("  add x10, sp, x10\n  str x10, [x9, #8]\n", out) == EOF ||
-                fprintf(out, "  movz x10, #%zu\n", vr_top & 65535U) < 0 ||
-                (vr_top > 65535U &&
-                 fprintf(out, "  movk x10, #%zu, lsl #16\n", vr_top >> 16U) < 0) ||
-                fputs("  add x10, sp, x10\n  str x10, [x9, #16]\n", out) == EOF ||
+            if (!minic_a64_emit_owned_address(out, &frame_view,
+                    gr_top, 10U) ||
+                fputs("  str x10, [x9, #8]\n", out) == EOF ||
+                !minic_a64_emit_owned_address(out, &frame_view,
+                    vr_top, 10U) ||
+                fputs("  str x10, [x9, #16]\n", out) == EOF ||
                 fprintf(out, va_gp == 8U
                             ? "  movz w10, #0\n"
                             : "  movn w10, #%zu\n",
@@ -411,11 +663,8 @@ bool minic_aarch64_emit_residual_instruction(
                             : "  movn w10, #%zu\n",
                         va_fp == 8U ? 0U : (8U - va_fp) * 16U - 1U) < 0 ||
                 fputs("  str w10, [x9, #28]\n", out) == EOF ||
-                fprintf(out, "  movz x9, #%zu\n", va_base & 65535U) < 0 ||
-                (va_base > 65535U &&
-                 fprintf(out, "  movk x9, #%zu, lsl #16\n",
-                         va_base >> 16U) < 0) ||
-                fputs("  add x9, sp, x9\n", out) == EOF)
+                !minic_a64_emit_owned_address(out, &frame_view,
+                    cursor_offset, 9U))
                 return minic_multi_direct_machine_reject(fn, "aarch64", name,
                                            reject_stage, reject_block,
                                            reject_ins, __LINE__);
@@ -425,8 +674,9 @@ bool minic_aarch64_emit_residual_instruction(
             const MinicCoreValueId count = ins->value.operand;
             if (!minic_multi_direct_dynamic_stack_alloc_shape(
                     fn, ins, dynamic_frame) ||
+                !minic_a64_emit_owned_slot(out, &frame_view, false,
+                    MINIC_A64_REG_X, 9U, minic_lp64_frame_value_offset(frame_plan, count)) ||
                 fprintf(out,
-                    "  ldr x9, [sp, #%zu]\n"
                     "  adds x10, x9, #15\n"
                     "  b.cs .Lmini_arm_alloc_overflow_%zu_%u\n"
                     "  and x10, x10, #-16\n"
@@ -436,7 +686,6 @@ bool minic_aarch64_emit_residual_instruction(
                     ".Lmini_arm_alloc_overflow_%zu_%u:\n"
                     "  brk #0\n"
                     ".Lmini_arm_alloc_done_%zu_%u:\n",
-                    (size_t)count * 8U,
                     id, (unsigned int)ins_id,
                     id, (unsigned int)ins_id,
                     id, (unsigned int)ins_id,
@@ -459,17 +708,17 @@ bool minic_aarch64_emit_residual_instruction(
              * Cast admission resolves both wide locations once. */
             if (cast.source_wide || cast.target_wide) {
                 if (cast.source_wide) {
-                    if (fprintf(out, "  ldr x9, [sp, #%zu]\n"
-                                     "  ldr x10, [sp, #%zu]\n",
-                                cast.source_wide_offset,
-                                cast.source_wide_offset + 8U) < 0)
+                    if (!minic_a64_emit_owned_slot(out, &frame_view, false,
+                            MINIC_A64_REG_X, 9U, cast.source_wide_offset) ||
+                        !minic_a64_emit_owned_slot(out, &frame_view, false,
+                            MINIC_A64_REG_X, 10U, cast.source_wide_offset + 8U))
                         return minic_multi_direct_machine_reject(
                             fn, "aarch64", name, reject_stage,
                             reject_block, reject_ins, __LINE__);
-                } else if (fprintf(out, cast.source_width == 8U
-                                       ? "  ldr x9, [sp, #%zu]\n"
-                                       : "  ldr w9, [sp, #%zu]\n",
-                                   (size_t)cast.operand * 8U) < 0 ||
+                } else if (!minic_a64_emit_owned_slot(out, &frame_view,
+                           false, cast.source_width == 8U
+                               ? MINIC_A64_REG_X : MINIC_A64_REG_W,
+                           9U, minic_lp64_frame_value_offset(frame_plan, cast.operand)) ||
                            (cast.source_width < 8U &&
                             (!minic_aarch64_emit_integer_normalize(
                                   out, cast.source_width, cast.source_signed) ||
@@ -482,10 +731,10 @@ bool minic_aarch64_emit_residual_instruction(
                         fn, "aarch64", name, reject_stage,
                         reject_block, reject_ins, __LINE__);
                 if (cast.target_wide) {
-                    if (fprintf(out, "  str x9, [sp, #%zu]\n"
-                                     "  str x10, [sp, #%zu]\n",
-                                cast.target_wide_offset,
-                                cast.target_wide_offset + 8U) < 0)
+                    if (!minic_a64_emit_owned_slot(out, &frame_view, true,
+                            MINIC_A64_REG_X, 9U, cast.target_wide_offset) ||
+                        !minic_a64_emit_owned_slot(out, &frame_view, true,
+                            MINIC_A64_REG_X, 10U, cast.target_wide_offset + 8U))
                         return minic_multi_direct_machine_reject(
                             fn, "aarch64", name, reject_stage,
                             reject_block, reject_ins, __LINE__);
@@ -507,10 +756,10 @@ bool minic_aarch64_emit_residual_instruction(
                         reject_block, reject_ins, __LINE__);
                 break;
             }
-            if (fprintf(out, cast.source_width == 8U
-                                 ? "  ldr x9, [sp, #%zu]\n"
-                                 : "  ldr w9, [sp, #%zu]\n",
-                        (size_t)src * 8U) < 0)
+            if (!minic_a64_emit_owned_slot(out, &frame_view, false,
+                    cast.source_width == 8U
+                        ? MINIC_A64_REG_X : MINIC_A64_REG_W,
+                    9U, minic_lp64_frame_value_offset(frame_plan, src)))
                 return minic_multi_direct_machine_reject(
                     fn, "aarch64", name, reject_stage,
                     reject_block, reject_ins, __LINE__);

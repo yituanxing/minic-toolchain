@@ -32,8 +32,8 @@ preprocess gnu_extern_void_symbol
 # Core GLOBAL_ADDRESS materializes symbol addresses in a backend-owned
 # temporary before value transport to the ABI boundary. The symbol identity is
 # semantic; the temporary register is not.
-grep -E '^[[:space:]]+la[[:space:]]+[^,]+,[[:space:]]*__nosave_begin$'     "$work/gnu_extern_void_symbol.s" >/dev/null
-grep -E '^[[:space:]]+la[[:space:]]+[^,]+,[[:space:]]*__nosave_end$'     "$work/gnu_extern_void_symbol.s" >/dev/null
+grep -E '^[[:space:]]+lla[[:space:]]+[^,]+,[[:space:]]*__nosave_begin$'     "$work/gnu_extern_void_symbol.s" >/dev/null
+grep -E '^[[:space:]]+lla[[:space:]]+[^,]+,[[:space:]]*__nosave_end$'     "$work/gnu_extern_void_symbol.s" >/dev/null
 if grep -F ".type __nosave_begin, @object" "$work/gnu_extern_void_symbol.s" >/dev/null || \
    grep -F ".type __nosave_end, @object" "$work/gnu_extern_void_symbol.s" >/dev/null || \
    grep -F "__nosave_begin:" "$work/gnu_extern_void_symbol.s" >/dev/null || \

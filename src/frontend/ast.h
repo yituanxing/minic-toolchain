@@ -71,6 +71,7 @@ typedef enum MinicExpressionKind {
     MINIC_EXPRESSION_BUILTIN_VA_ARG,
     MINIC_EXPRESSION_BUILTIN_UNARY,
     MINIC_EXPRESSION_BUILTIN_OVERFLOW,
+    MINIC_EXPRESSION_BUILTIN_OVERFLOW_P,
     /* GNU atomic integer store is a distinct side effect. */
     MINIC_EXPRESSION_BUILTIN_ATOMIC_STORE,
     MINIC_EXPRESSION_BUILTIN_ATOMIC_LOAD
@@ -117,6 +118,9 @@ typedef enum MinicBuiltinUnaryOperator {
     MINIC_BUILTIN_UNARY_CTZ,
     MINIC_BUILTIN_UNARY_CTZL,
     MINIC_BUILTIN_UNARY_CTZLL,
+    MINIC_BUILTIN_UNARY_POPCOUNT,
+    MINIC_BUILTIN_UNARY_POPCOUNTL,
+    MINIC_BUILTIN_UNARY_POPCOUNTLL,
     MINIC_BUILTIN_UNARY_FFSLL,
     MINIC_BUILTIN_UNARY_ISDIGIT,
     MINIC_BUILTIN_UNARY_CONSTANT_P,
@@ -278,6 +282,13 @@ typedef struct MinicArrayObjectInfo {
 typedef struct MinicLocal {
     MinicSourceSpan name_span;
     MinicType type;
+    /* Scope ownership is parser-recorded, not inferred from text offsets.
+     * A GNU statement-expression block can own fresh locals in an enclosing
+     * IF condition; a Core effect scan must not escape them before their
+     * first initializer has executed. Synthetic/parameter locals without a
+     * proven owner keep has_declaration_block=false. */
+    MinicBlockId declaration_block;
+    bool has_declaration_block;
     size_t element_count;
     size_t explicit_alignment;
     /* Runtime-sized local arrays preserve one evaluated bound and one allocated
@@ -285,6 +296,8 @@ typedef struct MinicLocal {
     MinicLocalId dynamic_count_local_id;
     MinicLocalId dynamic_address_local_id;
     bool is_array;
+    /* Explicit GNU `T name[0]`, never an inferred `T name[]` or runtime VLA. */
+    bool is_zero_length_array;
     bool is_register_storage;
 } MinicLocal;
 
@@ -316,6 +329,10 @@ typedef struct MinicStatement {
     MinicSourceSpan span;
     MinicExpressionId target_expression;
     MinicExpressionId expression;
+    /* Only parser-created writes within an aggregate's initialization block
+     * have this provenance. A const member may be initialized here, while a
+     * later ordinary assignment to that same member remains forbidden. */
+    bool is_initializer_write;
     MinicStatementId target_statement;
     MinicInlineAsmId inline_asm_id;
     MinicCleanupContextId cleanup_context;
@@ -389,6 +406,12 @@ typedef enum MinicSymbolVisibility {
     MINIC_SYMBOL_VISIBILITY_PROTECTED
 } MinicSymbolVisibility;
 
+typedef enum MinicFunctionDiagnosticKind {
+    MINIC_FUNCTION_DIAGNOSTIC_NONE,
+    MINIC_FUNCTION_DIAGNOSTIC_ERROR,
+    MINIC_FUNCTION_DIAGNOSTIC_WARNING
+} MinicFunctionDiagnosticKind;
+
 typedef struct MinicFunction {
     char *name;
     size_t name_length;
@@ -396,12 +419,25 @@ typedef struct MinicFunction {
     size_t assembler_name_length;
     char *section_name;
     size_t section_name_length;
+    /* Program-owned GNU compile-time call diagnostic.  This is not noreturn:
+     * GCC reports error/warning only for a call surviving optimization. */
+    /* GNU error and warning may coexist; later declarations replace the
+     * message of the same kind, but do not discard the other kind. */
+    char *error_message;
+    size_t error_message_length;
+    char *warning_message;
+    size_t warning_message_length;
+    /* GNU aligned(N) on a function is a symbol-entry alignment, independent
+     * of stack/object layout. Zero means the target's natural alignment. */
+    size_t explicit_alignment;
     MinicSymbolVisibility visibility;
     MinicType return_type;
     /* Owned exact-length parameter array. Stack/specialization snapshots
        only borrow this stable storage; the Program releases it. */
     MinicType *parameter_types;
     size_t parameter_count;
+    /* Direct named functions have the same ABI identity as function types. */
+    MinicFunctionCallingConvention calling_convention;
     size_t local_begin;
     size_t local_count;
     MinicBlockId body_block;
@@ -460,11 +496,14 @@ typedef struct MinicArrayType {
     bool is_query_materialized;
 } MinicArrayType;
 
+/* Function-pointer declarations preserve the ABI identity even when the
+ * target cannot yet lower a call with that convention. */
 typedef struct MinicFunctionType {
     MinicType return_type;
     MinicType parameter_types[MINIC_MAX_FUNCTION_PARAMETERS];
     size_t parameter_count;
     bool is_variadic;
+    MinicFunctionCallingConvention calling_convention;
 } MinicFunctionType;
 
 typedef struct MinicTypeAlias {
@@ -535,6 +574,10 @@ typedef struct MinicGlobalUnionSelection {
 typedef struct MinicGlobalObject {
     char *name;
     size_t name_length;
+    /* Function-scope static storage (including __func__/literal backing) is
+     * owned by its defining function. File-scope objects have INVALID owner.
+     * A dead internal inline definition must not emit its local storage. */
+    MinicFunctionId owner_function;
     char *section_name;
     size_t section_name_length;
     MinicType type;
@@ -559,12 +602,23 @@ typedef struct MinicGlobalObject {
     bool is_extern;
     bool is_tentative;
     bool is_block_scope_extern_only;
+    /* GNU `used` is an object emission root even without a C reference or
+     * an explicit section.  The Core-wide dead-static-object pass may only
+     * suppress internal file-scope storage lacking such roots. */
+    bool force_emit;
+    bool is_emission_pruned;
     /* Syntax-only GNU extern TLS declarations are preserved; any value
      * reference fails closed until the target supports TLS relocations. */
     bool is_thread_local;
 } MinicGlobalObject;
 
 typedef struct MinicC0Program {
+    /* One canonical GNU va_list source identity per translation unit.
+     * Target owns its C shape; Program owns the RecordId/ArrayTypeId. Core
+     * consumes these IDs separately from its machine pointer cursor. */
+    bool has_builtin_va_list_source_type;
+    MinicType builtin_va_list_source_type;
+    MinicType builtin_va_list_state_type;
     MinicExpression *expressions;
     size_t expression_count;
     size_t expression_capacity;
@@ -636,6 +690,9 @@ typedef struct MinicC0Program {
 
 void minic_c0_program_initialize(MinicC0Program *program);
 void minic_c0_program_destroy(MinicC0Program *program);
+bool minic_c0_program_va_cursor_source_types(const MinicC0Program *program,
+                                             MinicType *source_type,
+                                             MinicType *state_type);
 void minic_c0_local_initialize(MinicLocal *local);
 
 bool minic_c0_program_add_expression(MinicC0Program *program,
@@ -745,9 +802,22 @@ bool minic_c0_program_set_function_section(MinicC0Program *program,
                                            MinicFunctionId function_id,
                                            const char *name,
                                            size_t name_length);
+bool minic_c0_program_set_function_diagnostic(MinicC0Program *program,
+                                              MinicFunctionId function_id,
+                                              MinicFunctionDiagnosticKind kind,
+                                              const char *message,
+                                              size_t message_length);
+bool minic_c0_program_set_function_alignment(MinicC0Program *program,
+                                             MinicFunctionId function_id,
+                                             size_t alignment);
 bool minic_c0_program_set_function_variadic(MinicC0Program *program,
                                             MinicFunctionId function_id,
                                             bool is_variadic);
+/* Set an explicit direct-function ABI. Existing implicit/default ABI users
+ * remain DEFAULT; a previously selected foreign ABI cannot be overwritten. */
+bool minic_c0_program_set_function_calling_convention(
+    MinicC0Program *program, MinicFunctionId function_id,
+    MinicFunctionCallingConvention convention);
 bool minic_c0_program_define_function(MinicC0Program *program,
                                       MinicFunctionId function_id,
                                       size_t local_begin,
@@ -802,6 +872,12 @@ bool minic_c0_program_add_variadic_function_type(MinicC0Program *program,
                                                  size_t parameter_count,
                                                  bool is_variadic,
                                                  MinicType *function_type);
+/* Clone/intern a function pointer signature with an explicit target ABI.
+ * Existing default-ABI aliases keep their type identity unchanged. */
+bool minic_c0_program_function_pointer_with_calling_convention(
+    MinicC0Program *program, MinicType pointer_type,
+    MinicFunctionCallingConvention calling_convention,
+    MinicType *result);
 bool minic_c0_program_add_function_type(MinicC0Program *program,
                                         MinicType return_type,
                                         const MinicType *parameter_types,
@@ -858,6 +934,19 @@ bool minic_c0_program_add_global_object(MinicC0Program *program,
                                         bool is_internal,
                                         bool is_read_only,
                                         MinicGlobalObjectId *global_object_id);
+bool minic_c0_program_set_global_object_owner(MinicC0Program *program,
+                                              MinicGlobalObjectId object_id,
+                                              MinicFunctionId owner_function);
+bool minic_c0_program_global_object_emittable(const MinicC0Program *program,
+                                              const MinicGlobalObject *object);
+bool minic_c0_program_set_global_object_force_emit(MinicC0Program *program,
+                                                    MinicGlobalObjectId object_id);
+/* Nullable O(F) snapshot for fast O(1) owner selection in object walks.
+ * NULL on allocation failure; callers may use the uncached predicate. */
+bool *minic_c0_program_build_global_owner_live_map(const MinicC0Program *program);
+bool minic_c0_program_global_object_emittable_with_map(
+    const MinicC0Program *program, const MinicGlobalObject *object,
+    const bool *owner_live_map);
 bool minic_c0_program_add_extern_global_object(MinicC0Program *program,
                                                const char *name,
                                                size_t name_length,
@@ -1023,6 +1112,9 @@ bool minic_c0_global_object_set_zero_initialized(MinicC0Program *program,
                                                  MinicGlobalObjectId global_object_id);
 bool minic_c0_global_object_set_extern(MinicC0Program *program,
                                        MinicGlobalObjectId global_object_id);
+bool minic_c0_object_alias_types_compatible(const MinicC0Program *program,
+                                            MinicType alias_type,
+                                            MinicType target_type);
 bool minic_c0_global_object_set_alias(MinicC0Program *program,
                                       MinicGlobalObjectId global_object_id,
                                       MinicGlobalObjectId target_object_id);

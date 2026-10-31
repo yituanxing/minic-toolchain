@@ -5,13 +5,12 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Dedicated owner for read-only incoming AST edges and opt-in counters;
- * no target ABI or physical machine resource belongs in this layer. */
 /* Read-only incoming control-flow references for one Core Function Set build.
  * Owned by minic_prepare_core_function_set() and explicitly passed to lowerings.
  * Standalone users of minic_core_lower_function() keep the legacy proof path.
  * Invalid AST or allocation failure disables the index: never infer absence
- * of a goto, asm-goto, or label address from an incomplete index. */
+ * of a goto, asm-goto, or label address from an incomplete index. No target
+ * ABI or physical machine resource belongs in this layer. */
 typedef struct MinicCoreReentryIncoming {
     size_t source_statement;
     size_t next;
@@ -143,79 +142,166 @@ fallback:
     return NULL;
 }
 
-
-
 bool minic_core_reentry_index_ready(const MinicCoreReentryIndex *index,
                                    const MinicC0Program *program) {
     return index != NULL && program != NULL && index->program == program;
 }
 
-void minic_core_reentry_index_check_discarded(
-    MinicCoreReentryIndex *index, const MinicC0Program *program,
-    const bool *membership, bool *unsafe) {
-    size_t statement_index;
-    if (unsafe == NULL) return;
-    if (!minic_core_reentry_index_ready(index, program) || membership == NULL) {
-        *unsafe = true;
-        return;
+static bool core_reentry_query_contains(
+    const MinicCoreReentryQuery *query, MinicStatementId target,
+    size_t statement_count) {
+    if (query == NULL || target >= statement_count) return false;
+    return query->membership != NULL
+        ? query->membership[target] : target == query->label_id;
+}
+
+static unsigned int core_reentry_indexed_target(
+    const MinicCoreReentryIndex *index,
+    const MinicC0Program *program,
+    const MinicCoreReentryQuery *query,
+    MinicStatementId target) {
+    const MinicStatement *statement;
+    unsigned int reasons = 0U;
+    size_t edge;
+
+    statement = minic_c0_program_statement(program, target);
+    if (statement == NULL)
+        return MINIC_CORE_REENTRY_REASON_INDETERMINATE;
+    if ((query->checks & MINIC_CORE_REENTRY_CHECK_CASE_DISPATCH) != 0U &&
+        (statement->kind == MINIC_STATEMENT_CASE ||
+         statement->kind == MINIC_STATEMENT_DEFAULT))
+        reasons |= MINIC_CORE_REENTRY_REASON_CASE_DISPATCH;
+    if ((query->checks & MINIC_CORE_REENTRY_CHECK_LABEL_ADDRESS) != 0U &&
+        index->addressed[target] != 0U)
+        reasons |= MINIC_CORE_REENTRY_REASON_LABEL_ADDRESS;
+    if ((query->checks & MINIC_CORE_REENTRY_CHECK_EXTERNAL_JUMP) == 0U)
+        return reasons;
+
+    for (edge = index->heads[target]; edge != SIZE_MAX;
+         edge = index->incoming[edge].next) {
+        size_t source_id = index->incoming[edge].source_statement;
+        const MinicStatement *source;
+        if (core_reentry_query_contains(query, source_id,
+                                        program->statement_count))
+            continue;
+        source = minic_c0_program_statement(program, source_id);
+        if (source == NULL)
+            return reasons | MINIC_CORE_REENTRY_REASON_INDETERMINATE;
+        if (source->kind == MINIC_STATEMENT_GOTO)
+            reasons |= MINIC_CORE_REENTRY_REASON_DIRECT_GOTO;
+        else if (source->kind == MINIC_STATEMENT_INLINE_ASM)
+            reasons |= MINIC_CORE_REENTRY_REASON_ASM_GOTO;
+        else
+            reasons |= MINIC_CORE_REENTRY_REASON_INDETERMINATE;
     }
-    /* Case/default labels are independently dispatched; direct internal
-     * goto edges disappear along with the discarded subtree. */
-    ++index->indexed_if_queries;
-    for (statement_index = 0U; statement_index < program->statement_count && !*unsafe;
-         ++statement_index) {
-        const MinicStatement *statement;
-        size_t edge;
-        if (!membership[statement_index]) continue;
-        statement = minic_c0_program_statement(program, statement_index);
-        if (statement == NULL || statement->kind == MINIC_STATEMENT_CASE ||
-            statement->kind == MINIC_STATEMENT_DEFAULT ||
-            index->addressed[statement_index] != 0U) {
-            *unsafe = true;
-            break;
+    return reasons;
+}
+
+static unsigned int core_reentry_fallback(
+    const MinicC0Program *program,
+    const MinicCoreReentryQuery *query) {
+    unsigned int reasons = 0U;
+    size_t i;
+
+    if ((query->checks & MINIC_CORE_REENTRY_CHECK_CASE_DISPATCH) != 0U) {
+        for (i = 0U; i < program->statement_count; ++i) {
+            const MinicStatement *statement;
+            if (!core_reentry_query_contains(query, i, program->statement_count))
+                continue;
+            statement = minic_c0_program_statement(program, i);
+            if (statement == NULL)
+                return reasons | MINIC_CORE_REENTRY_REASON_INDETERMINATE;
+            if (statement->kind == MINIC_STATEMENT_CASE ||
+                statement->kind == MINIC_STATEMENT_DEFAULT)
+                reasons |= MINIC_CORE_REENTRY_REASON_CASE_DISPATCH;
         }
-        for (edge = index->heads[statement_index]; edge != SIZE_MAX;
-             edge = index->incoming[edge].next) {
-            size_t source = index->incoming[edge].source_statement;
-            if (!membership[source]) {
-                *unsafe = true;
-                break;
+    }
+    if ((query->checks & MINIC_CORE_REENTRY_CHECK_EXTERNAL_JUMP) != 0U) {
+        for (i = 0U; i < program->statement_count; ++i) {
+            const MinicStatement *source =
+                minic_c0_program_statement(program, i);
+            if (source == NULL)
+                return reasons | MINIC_CORE_REENTRY_REASON_INDETERMINATE;
+            if (core_reentry_query_contains(query, i, program->statement_count))
+                continue;
+            if (source->kind == MINIC_STATEMENT_GOTO &&
+                core_reentry_query_contains(
+                    query, source->target_statement, program->statement_count)) {
+                reasons |= MINIC_CORE_REENTRY_REASON_DIRECT_GOTO;
+            } else if (source->kind == MINIC_STATEMENT_INLINE_ASM) {
+                const MinicInlineAsm *code;
+                size_t label_index;
+                if (source->inline_asm_id >= program->inline_asm_count)
+                    return reasons | MINIC_CORE_REENTRY_REASON_INDETERMINATE;
+                code = &program->inline_asms[source->inline_asm_id];
+                if (!code->is_goto) continue;
+                if (code->label_count != 0U && code->labels == NULL)
+                    return reasons | MINIC_CORE_REENTRY_REASON_INDETERMINATE;
+                for (label_index = 0U; label_index < code->label_count; ++label_index)
+                    if (core_reentry_query_contains(
+                            query, code->labels[label_index].target_statement,
+                            program->statement_count))
+                        reasons |= MINIC_CORE_REENTRY_REASON_ASM_GOTO;
             }
         }
     }
-}
-
-bool minic_core_reentry_index_unreferenced_loop_label(
-    MinicCoreReentryIndex *index, const MinicC0Program *program,
-    MinicStatementId label_id) {
-    if (!minic_core_reentry_index_ready(index, program) ||
-        label_id >= program->statement_count ||
-        index->heads[label_id] != SIZE_MAX ||
-        index->addressed[label_id] != 0U)
-        return false;
-    ++index->indexed_loop_queries;
-    return true;
-}
-
-/* Source-label reentry is a graph query, not an O(program size) rescan for
- * every switch case. If the cache isn't complete, caller uses its original
- * conservative whole-program scan; no negative facts from a partial index. */
-bool minic_core_reentry_index_switch_label_referenced(
-    MinicCoreReentryIndex *index, const MinicC0Program *program,
-    MinicStatementId label_id) {
-    size_t edge;
-    if (!minic_core_reentry_index_ready(index, program) ||
-        label_id >= program->statement_count) return false;
-    if (index->addressed[label_id] != 0U) return true;
-    for (edge = index->heads[label_id]; edge != SIZE_MAX;
-         edge = index->incoming[edge].next) {
-        const MinicStatement *source = minic_c0_program_statement(
-            program, index->incoming[edge].source_statement);
-        if (source == NULL) return false;
-        if ((source->kind == MINIC_STATEMENT_GOTO &&
-             source->expression == MINIC_EXPRESSION_INVALID) ||
-            (source->kind == MINIC_STATEMENT_INLINE_ASM &&
-             source->inline_asm_id < program->inline_asm_count)) return true;
+    if ((query->checks & MINIC_CORE_REENTRY_CHECK_LABEL_ADDRESS) != 0U) {
+        for (i = 0U; i < program->expression_count; ++i) {
+            const MinicExpression *expression =
+                minic_c0_program_expression(program, i);
+            if (expression == NULL)
+                return reasons | MINIC_CORE_REENTRY_REASON_INDETERMINATE;
+            if (expression->kind == MINIC_EXPRESSION_LABEL_ADDRESS &&
+                core_reentry_query_contains(
+                    query, expression->value.label_statement_id,
+                    program->statement_count))
+                reasons |= MINIC_CORE_REENTRY_REASON_LABEL_ADDRESS;
+        }
     }
-    return false;
+    return reasons;
+}
+
+unsigned int minic_core_reentry_query(
+    MinicCoreReentryIndex *index, const MinicC0Program *program,
+    const MinicCoreReentryQuery *query) {
+    const unsigned int all_checks =
+        MINIC_CORE_REENTRY_CHECK_EXTERNAL_JUMP |
+        MINIC_CORE_REENTRY_CHECK_LABEL_ADDRESS |
+        MINIC_CORE_REENTRY_CHECK_CASE_DISPATCH;
+    unsigned int reasons = 0U;
+    size_t target;
+
+    if (program == NULL || query == NULL ||
+        query->checks == 0U || (query->checks & ~all_checks) != 0U ||
+        (query->membership == NULL &&
+         query->label_id >= program->statement_count) ||
+        (query->membership != NULL &&
+         query->label_id != MINIC_STATEMENT_INVALID))
+        return MINIC_CORE_REENTRY_REASON_INDETERMINATE;
+
+    if (!minic_core_reentry_index_ready(index, program))
+        return core_reentry_fallback(program, query);
+
+    if (query->purpose == MINIC_CORE_REENTRY_PURPOSE_IF_DISCARDED)
+        ++index->indexed_if_queries;
+
+    if (query->membership == NULL) {
+        reasons = core_reentry_indexed_target(
+            index, program, query, query->label_id);
+    } else {
+        for (target = 0U; target < program->statement_count; ++target) {
+            if (!query->membership[target]) continue;
+            reasons |= core_reentry_indexed_target(
+                index, program, query, target);
+            if ((reasons & MINIC_CORE_REENTRY_REASON_INDETERMINATE) != 0U)
+                break;
+        }
+    }
+    /* Preserve the old performance counter's semantics: only successful,
+     * unreferenced synthetic loop-label queries count as indexed successes.
+     * Source-shape uniqueness is still checked by the loop owner. */
+    if (query->purpose == MINIC_CORE_REENTRY_PURPOSE_LOOP_LABEL &&
+        reasons == 0U)
+        ++index->indexed_loop_queries;
+    return reasons;
 }

@@ -1,5 +1,6 @@
 #include "core/cfg_constant_calls.h"
 #include "core/local_facts.h"
+#include "core/opt_pure_statement.h"
 #include "frontend/const_eval.h"
 #include "frontend/expression_semantics.h"
 #include <inttypes.h>
@@ -63,6 +64,80 @@ static bool core_cfg_eval_callee_return_expression(
     return success;
 }
 
+typedef struct CoreCfgCalleeGuardTruthContext {
+    const MinicCoreLowerContext *caller;
+    const MinicFunction *callee;
+    const MinicExpression *call;
+} CoreCfgCalleeGuardTruthContext;
+
+/* Read a compile-time guard in the callee's own integer parameter domain.
+ * The ordinary caller-only truth callback does not know that a concrete
+ * static-inline argument has specialized a callee parameter.  Reuse the
+ * same bounded parameter/constant evaluator used for its return value;
+ * unknown, volatile, escaped and effectful conditions remain unproved. */
+static bool core_cfg_callee_guard_truth(void *opaque,
+                                         MinicExpressionId condition_id,
+                                         bool *truth) {
+    const CoreCfgCalleeGuardTruthContext *binding =
+        (const CoreCfgCalleeGuardTruthContext *)opaque;
+    MinicConstValue evaluated;
+    bool is_zero;
+    if (binding == NULL || binding->caller == NULL || truth == NULL ||
+        !minic_core_cfg_pure_call_argument(binding->caller, condition_id, 0U) ||
+        !core_cfg_eval_callee_return_expression(binding->caller,
+                                                 binding->callee,
+                                                 binding->call,
+                                                 condition_id,
+                                                 &evaluated) ||
+        !minic_const_value_is_zero(binding->caller->body->program,
+                                    binding->caller->target,
+                                    &evaluated, &is_zero)) {
+        return false;
+    }
+    *truth = !is_zero;
+    return true;
+}
+
+/* A file-local pointer getter with one unconditional return may read ordinary
+ * (nonvolatile) fields, but it must not have an observable side effect.  This
+ * is a purity proof, NOT a constant-value proof: a caller may discard such a
+ * getter only when the outer call's result is independently known constant. */
+static bool core_cfg_pure_pointer_getter_call(const MinicCoreLowerContext *context,
+                                              const MinicExpression *expression,
+                                              unsigned int depth) {
+    const MinicC0Program *program;
+    const MinicFunction *callee;
+    const MinicBlock *body;
+    const MinicStatement *first;
+    size_t i;
+
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        expression == NULL || expression->kind != MINIC_EXPRESSION_CALL ||
+        expression->value.call.function_id == MINIC_FUNCTION_INVALID || depth > 16U)
+        return false;
+    program = context->body->program;
+    callee = minic_c0_program_function(program, expression->value.call.function_id);
+    if (callee == NULL || !callee->is_defined || !callee->is_internal ||
+        !minic_type_is_pointer(callee->return_type) ||
+        callee->body_block == MINIC_BLOCK_INVALID ||
+        callee->parameter_count != expression->value.call.argument_count)
+        return false;
+    body = minic_c0_program_block(program, callee->body_block);
+    if (body == NULL || body->statement_count == 0U)
+        return false;
+    first = minic_c0_program_statement(program, body->statements[0]);
+    if (first == NULL || first->kind != MINIC_STATEMENT_RETURN ||
+        first->expression == MINIC_EXPRESSION_INVALID ||
+        first->cleanup_context != first->cleanup_stop_context ||
+        !minic_core_cfg_pure_call_argument(context, first->expression, depth + 1U))
+        return false;
+    for (i = 0U; i < expression->value.call.argument_count; ++i)
+        if (!minic_core_cfg_pure_call_argument(
+                context, minic_c0_call_argument(expression, i), depth + 1U))
+            return false;
+    return true;
+}
+
 /* LINUX_CONSTANT_INLINE_CALL_CFG_V0: feature-disabled Linux headers often
  * expose static-inline predicates that are exactly one constant return.  Such
  * a call is safe to consume as a CFG fact when all arguments are side-effect
@@ -93,6 +168,18 @@ bool minic_core_cfg_pure_call_argument(const MinicCoreLowerContext *context,
             context->body->program, expression->value.local_id);
         return local != NULL && !minic_type_is_volatile(local->type);
     }
+    case MINIC_EXPRESSION_BUILTIN_UNARY:
+        /* __builtin_constant_p inspects its operand without evaluating it.
+         * In particular it remains pure for operands with runtime reads or
+         * side effects, and Core's local-fact evaluator can prove the result
+         * without emitting the impossible arm of a compile-time guard. */
+        if (expression->value.builtin_unary.operator_kind ==
+            MINIC_BUILTIN_UNARY_CONSTANT_P) return true;
+        /* Other represented unary builtins (CLZ/CTZ/POPCOUNT/FFS, byte swap,
+         * ISDIGIT and ISNAN) are effect-free exactly when their operand is.
+         * In particular FIELD_GET's __builtin_ffsll(mask) is not a CALL. */
+        return minic_core_cfg_pure_call_argument(
+            context, expression->value.builtin_unary.operand, depth + 1U);
     case MINIC_EXPRESSION_CAST:
     case MINIC_EXPRESSION_BITCAST:
     case MINIC_EXPRESSION_CONVERSION:
@@ -133,6 +220,32 @@ bool minic_core_cfg_pure_call_argument(const MinicCoreLowerContext *context,
                minic_core_cfg_pure_call_argument(context,
                                            expression->value.conditional.when_false,
                                            depth + 1U);
+    case MINIC_EXPRESSION_STATEMENT:
+        /* GNU ({...}) is not automatically pure.  Only the single shared
+         * no-effect guard proof may certify its prefix; its result must
+         * independently pass this expression-purity check. */
+        if (!minic_opt_pure_statement_block(
+                context->body->program, context->target,
+                context->reentry_index,
+                expression->value.statement_expression.block,
+                (void *)context, minic_core_cfg_pure_guard_truth, depth + 1U))
+            return false;
+        return expression->value.statement_expression.result ==
+                   MINIC_EXPRESSION_INVALID ||
+               minic_core_cfg_pure_call_argument(
+                   context, expression->value.statement_expression.result,
+                   depth + 1U);
+    case MINIC_EXPRESSION_CALL: {
+        MinicConstValue folded;
+        /* An ordinary call may mutate memory and must remain a CFG effect
+         * barrier. The already-bounded static-inline constant-return
+         * evaluator proves a narrower case: all actual arguments are pure,
+         * and the body computes one constant without externally visible
+         * effects. This is needed by Linux AArch64 __fls(mask) inside
+         * BUILD_BUG_ON guards after a KVM flag's constant mask specializes. */
+        return minic_core_cfg_constant_inline_call(context, expression, &folded) ||
+               core_cfg_pure_pointer_getter_call(context, expression, depth + 1U);
+    }
     default:
         return false;
     }
@@ -510,6 +623,185 @@ static bool core_cfg_small_constant_loop_call(const MinicCoreLowerContext *calle
     return false;
 }
 
+/* A zero-argument file-local inline helper can compute a constant through a
+ * few initialized integer locals before returning it.  Linux nvme's PRP
+ * page-count BUILD_BUG_ON uses this source form.  Evaluate ONLY direct local
+ * assignments followed by one unconditional integer return: no effects,
+ * labels, alternate entries, cleanup, global reads or unknown expressions. */
+static bool core_cfg_straight_line_constant_return(
+    const MinicCoreLowerContext *caller_context, const MinicFunction *callee,
+    const MinicExpression *call_expression, const MinicBlock *body,
+    MinicConstValue *value) {
+    const MinicC0Program *program = caller_context->body->program;
+    MinicCoreLocalIntegerConstant *facts;
+    MinicCoreLowerContext callee_context;
+    size_t i;
+    bool success = false;
+
+
+    if (callee->parameter_count != 0U ||
+        call_expression->value.call.argument_count != 0U ||
+        callee->local_count == 0U || callee->local_count > 32U ||
+        body->statement_count < 2U || body->statement_count > 8U)
+        return false;
+    facts = (MinicCoreLocalIntegerConstant *)calloc(callee->local_count,
+                                                    sizeof(*facts));
+    if (facts == NULL) return false;
+    callee_context = *caller_context;
+    callee_context.source_function = callee;
+    callee_context.local_integer_constants = facts;
+    callee_context.cfg_constant_call_depth =
+        caller_context->cfg_constant_call_depth + 1U;
+    for (i = 0U; i < body->statement_count; ++i) {
+        const MinicStatement *statement = minic_c0_program_statement(
+            program, body->statements[i]);
+        if (statement == NULL ||
+            statement->cleanup_context != statement->cleanup_stop_context ||
+            statement->expression == MINIC_EXPRESSION_INVALID ||
+            !minic_core_cfg_pure_call_argument(&callee_context,
+                                                statement->expression, 0U))
+            break;
+        if (statement->kind == MINIC_STATEMENT_RETURN) {
+            MinicConstValue returned;
+            /* The parser can append one unreachable implicit return after
+             * the real unconditional return.  No label/goto or other
+             * statement is admitted after it. */
+            if (i + 1U < body->statement_count) {
+                const MinicStatement *tail;
+                if (i + 2U != body->statement_count) break;
+                tail = minic_c0_program_statement(program, body->statements[i + 1U]);
+                if (tail == NULL || tail->kind != MINIC_STATEMENT_RETURN ||
+                    tail->cleanup_context != tail->cleanup_stop_context)
+                    break;
+            }
+            success = core_const_eval_integer_with_locals(
+                    &callee_context, statement->expression, &returned) &&
+                minic_const_value_convert_integer(
+                    program, caller_context->target, &returned,
+                    call_expression->type, value);
+            break;
+        }
+        if (statement->kind != MINIC_STATEMENT_ASSIGN &&
+            statement->kind != MINIC_STATEMENT_EXPRESSION)
+            break;
+        if (!core_cfg_small_loop_execute_statement(&callee_context, statement))
+            break;
+    }
+    free(facts);
+    return success;
+}
+
+/* A discarded IF arm is safe for the narrow fallthrough-return fold only
+ * when it has no source-level reentry, labels, or inline ASM.  An unlabeled
+ * RETURN in a branch proven not taken cannot execute its return expression;
+ * admitting it lets CONFIG-disabled header helpers such as
+ * `if (0) return q->limits.zoned; return BLK_ZONED_NONE;` fold without
+ * reading the otherwise-live request_queue.  Preserve the original strict
+ * rule for expression statements and all other control flow. */
+static bool core_cfg_skipped_if_guard_block_safe(const MinicC0Program *program,
+                                                 const MinicBlock *block) {
+    const MinicStatement *statement;
+    const MinicExpression *expression;
+
+    if (block == NULL || block->statement_count == 0U) return true;
+    if (block->statement_count != 1U) return false;
+    statement = minic_c0_program_statement(program, block->statements[0]);
+    if (statement == NULL ||
+        statement->cleanup_context != statement->cleanup_stop_context ||
+        statement->expression == MINIC_EXPRESSION_INVALID) return false;
+    if (statement->kind == MINIC_STATEMENT_RETURN) return true;
+    if (statement->kind != MINIC_STATEMENT_EXPRESSION) return false;
+    expression = minic_c0_program_expression(program, statement->expression);
+    return expression != NULL && expression->kind == MINIC_EXPRESSION_CALL &&
+           expression->value.call.function_id != MINIC_FUNCTION_INVALID &&
+           expression->value.call.argument_count == 0U;
+}
+
+/* Strictly interpret the common header predicate
+ * `switch (pure_constant_helper(x)) { case N: return 1; default: return 0; }`.
+ * No statements other than case/default labels and unconditional returns are
+ * accepted; jumps, asm and side-effecting case segments stay untouched. */
+static bool core_cfg_single_switch_constant_return(
+    const MinicCoreLowerContext *context, const MinicFunction *callee,
+    const MinicExpression *call_expression, const MinicBlock *body,
+    MinicConstValue *value) {
+    const MinicC0Program *program = context->body->program;
+    const MinicStatement *top;
+    const MinicBlock *cases;
+    const MinicExpression *selector;
+    MinicConstValue selector_constant;
+    MinicConstValue selector_converted;
+    MinicType selector_type;
+    size_t selected = SIZE_MAX;
+    size_t default_index = SIZE_MAX;
+    size_t i;
+
+    if (body->statement_count == 0U) return false;
+    top = minic_c0_program_statement(program, body->statements[0]);
+    if (top == NULL || top->kind != MINIC_STATEMENT_SWITCH ||
+        top->cleanup_context != top->cleanup_stop_context ||
+        top->expression == MINIC_EXPRESSION_INVALID ||
+        top->then_block == MINIC_BLOCK_INVALID ||
+        top->else_block != MINIC_BLOCK_INVALID) return false;
+    selector = minic_c0_program_expression(program, top->expression);
+    cases = minic_c0_program_block(program, top->then_block);
+    if (selector == NULL || cases == NULL || cases->statement_count == 0U ||
+        !minic_type_is_integer(selector->type) ||
+        !minic_target_info_integer_promotion_for_program(
+            context->target, program, selector->type, &selector_type) ||
+        !minic_core_cfg_pure_call_argument(context, top->expression, 0U) ||
+        !core_cfg_eval_callee_return_expression(context, callee, call_expression,
+                                                top->expression, &selector_constant) ||
+        !minic_const_value_convert_integer(program, context->target,
+                                           &selector_constant, selector_type,
+                                           &selector_converted)) return false;
+
+    for (i = 0U; i < cases->statement_count; ++i) {
+        const MinicStatement *item = minic_c0_program_statement(program, cases->statements[i]);
+        if (item == NULL || item->cleanup_context != item->cleanup_stop_context)
+            return false;
+        if (item->kind == MINIC_STATEMENT_DEFAULT) {
+            if (item->then_block != MINIC_BLOCK_INVALID ||
+                item->else_block != MINIC_BLOCK_INVALID) return false;
+            if (default_index != SIZE_MAX) return false;
+            default_index = i;
+        } else if (item->kind == MINIC_STATEMENT_CASE) {
+            MinicConstValue case_constant;
+            MinicConstValue case_converted;
+            if (item->then_block != MINIC_BLOCK_INVALID ||
+                item->else_block != MINIC_BLOCK_INVALID ||
+                item->target_expression != MINIC_EXPRESSION_INVALID ||
+                item->expression == MINIC_EXPRESSION_INVALID ||
+                !minic_const_eval_integer(program, context->target,
+                                          item->expression, &case_constant) ||
+                !minic_const_value_convert_integer(program, context->target,
+                                                   &case_constant, selector_type,
+                                                   &case_converted)) return false;
+            if (case_converted.bits == selector_converted.bits && selected == SIZE_MAX)
+                selected = i;
+        } else if (item->kind != MINIC_STATEMENT_RETURN ||
+                   item->expression == MINIC_EXPRESSION_INVALID) {
+            return false;
+        }
+    }
+    if (selected == SIZE_MAX) selected = default_index;
+    if (selected == SIZE_MAX) return false;
+    for (i = selected + 1U; i < cases->statement_count; ++i) {
+        const MinicStatement *item = minic_c0_program_statement(program, cases->statements[i]);
+        MinicConstValue result;
+        if (item == NULL) return false;
+        if (item->kind == MINIC_STATEMENT_CASE ||
+            item->kind == MINIC_STATEMENT_DEFAULT) continue;
+        return item->kind == MINIC_STATEMENT_RETURN &&
+               minic_core_cfg_pure_call_argument(context, item->expression, 0U) &&
+               core_cfg_eval_callee_return_expression(
+                   context, callee, call_expression, item->expression, &result) &&
+               minic_const_value_convert_integer(
+                   program, context->target, &result, call_expression->type, value);
+    }
+    return false;
+}
+
 bool minic_core_cfg_constant_inline_call(const MinicCoreLowerContext *context,
                                           const MinicExpression *expression,
                                           MinicConstValue *value) {
@@ -530,58 +822,6 @@ bool minic_core_cfg_constant_inline_call(const MinicCoreLowerContext *context,
     }
     program = context->body->program;
     callee = minic_c0_program_function(program, expression->value.call.function_id);
-    if (callee != NULL && callee->name != NULL &&
-        (strcmp(callee->name, "bio_has_crypt_ctx") == 0 ||
-         strcmp(callee->name, "blk_crypto_rq_is_encrypted") == 0 ||
-         strcmp(callee->name, "is_nd_pfn") == 0 ||
-         strcmp(callee->name, "is_nd_dax") == 0 ||
-         strcmp(callee->name, "pmd_trans_huge") == 0 ||
-         strcmp(callee->name, "pmd_devmap") == 0 ||
-         strcmp(callee->name, "pud_trans_huge") == 0 ||
-         strcmp(callee->name, "pud_devmap") == 0 ||
-         strcmp(callee->name, "pfn_t_devmap") == 0 ||
-         strcmp(callee->name, "dax_mapping") == 0 ||
-         strcmp(callee->name, "is_power_of_2") == 0)) {
-        const MinicBlock *probe_body = callee->body_block == MINIC_BLOCK_INVALID
-                                           ? NULL
-                                           : minic_c0_program_block(program, callee->body_block);
-        size_t probe_index;
-        (void)fprintf(stderr,
-                      "CFG_CONST_PROBE name=%s defined=%d internal=%d inline=%d body=%zu retint=%d exprint=%d argc=%zu",
-                      callee->name,
-                      callee->is_defined ? 1 : 0,
-                      callee->is_internal ? 1 : 0,
-                      callee->is_inline ? 1 : 0,
-                      probe_body == NULL ? 0U : probe_body->statement_count,
-                      minic_type_is_integer(callee->return_type) ? 1 : 0,
-                      minic_type_is_integer(expression->type) ? 1 : 0,
-                      expression->value.call.argument_count);
-        if (probe_body != NULL) {
-            for (probe_index = 0U; probe_index < probe_body->statement_count; ++probe_index) {
-                const MinicStatement *probe_statement = minic_c0_program_statement(
-                    program, probe_body->statements[probe_index]);
-                MinicConstValue probe_value;
-                bool probe_eval = probe_statement != NULL &&
-                                  probe_statement->expression != MINIC_EXPRESSION_INVALID &&
-                                  minic_const_eval_integer(program,
-                                                           context->target,
-                                                           probe_statement->expression,
-                                                           &probe_value);
-                (void)fprintf(stderr,
-                              " s%zu_kind=%d s%zu_expr=%d s%zu_eval=%d s%zu_clean=%zu/%zu",
-                              probe_index,
-                              probe_statement == NULL ? -1 : (int)probe_statement->kind,
-                              probe_index,
-                              probe_statement != NULL && probe_statement->expression != MINIC_EXPRESSION_INVALID ? 1 : 0,
-                              probe_index,
-                              probe_eval ? 1 : 0,
-                              probe_index,
-                              probe_statement == NULL ? (size_t)0 : (size_t)probe_statement->cleanup_context,
-                              probe_statement == NULL ? (size_t)0 : (size_t)probe_statement->cleanup_stop_context);
-            }
-        }
-        (void)fprintf(stderr, "\n");
-    }
     if (callee == NULL || !callee->is_defined || !callee->is_internal ||
         !minic_type_is_integer(callee->return_type) || callee->body_block == MINIC_BLOCK_INVALID) {
         return false;
@@ -597,7 +837,14 @@ bool minic_core_cfg_constant_inline_call(const MinicCoreLowerContext *context,
     if (body == NULL || body->statement_count == 0U) {
         return false;
     }
+    if (core_cfg_single_switch_constant_return(context, callee, expression, body, value)) {
+        return true;
+    }
     if (core_cfg_small_constant_loop_call(context, callee, expression, value)) {
+        return true;
+    }
+    if (core_cfg_straight_line_constant_return(
+            context, callee, expression, body, value)) {
         return true;
     }
     /* A leading compile-time if can make the function result independent of
@@ -650,13 +897,76 @@ bool minic_core_cfg_constant_inline_call(const MinicCoreLowerContext *context,
             }
         }
     }
-    /* A top-level return terminates the function unconditionally.  The parser
-       may append a synthetic fallback return after it; that statement is
-       unreachable and must not be treated as an alternative return value.
-       Only consume this narrow shape: the first top-level statement itself is
-       a return with no outstanding cleanup.  Conditional/mixed bodies remain
-       fail-closed and are handled by the separate CFG-aware helper paths. */
-    statement = minic_c0_program_statement(program, body->statements[0]);
+    /* A pure constant IF whose selected arm is empty simply falls through
+     * to the next unconditional return.  This is common in small integer
+     * helpers: invalid-input diagnostics live in the provably skipped arm,
+     * while the return contains an otherwise foldable integer expression.
+     * Do not evaluate arbitrary blocks or bypass labels/asm-goto here. */
+    if (body->statement_count >= 2U && statement != NULL &&
+        statement->kind == MINIC_STATEMENT_IF &&
+        statement->expression != MINIC_EXPRESSION_INVALID &&
+        statement->cleanup_context == statement->cleanup_stop_context &&
+        minic_core_cfg_pure_call_argument(context, statement->expression, 0U)) {
+        MinicConstValue condition;
+        bool condition_is_zero;
+        const MinicBlock *selected;
+        const MinicBlock *skipped;
+        const MinicStatement *next;
+
+        if (core_cfg_eval_callee_return_expression(
+                context, callee, expression, statement->expression, &condition) &&
+            minic_const_value_is_zero(
+                program, context->target, &condition, &condition_is_zero)) {
+            MinicBlockId selected_id = condition_is_zero
+                ? statement->else_block : statement->then_block;
+            MinicBlockId skipped_id = condition_is_zero
+                ? statement->then_block : statement->else_block;
+            selected = minic_c0_program_block(program, selected_id);
+            skipped = minic_c0_program_block(program, skipped_id);
+            next = minic_c0_program_statement(program, body->statements[1]);
+            if ((selected_id == MINIC_BLOCK_INVALID ||
+                 (selected != NULL && selected->statement_count == 0U)) &&
+                core_cfg_skipped_if_guard_block_safe(program, skipped) &&
+                next != NULL && next->kind == MINIC_STATEMENT_RETURN &&
+                next->expression != MINIC_EXPRESSION_INVALID &&
+                next->cleanup_context == next->cleanup_stop_context &&
+                minic_core_cfg_pure_call_argument(
+                    context, next->expression, 0U) &&
+                core_cfg_eval_callee_return_expression(
+                    context, callee, expression, next->expression, &returned) &&
+                minic_const_value_convert_integer(
+                    program, context->target, &returned, expression->type, value)) {
+                return true;
+            }
+        }
+    }
+    /* GNU Linux nf_conntrack_extend.c has a pure compile-time assertion in
+     * `total_extension_size()` immediately before an otherwise constexpr
+     * `sizeof` sum return.  The frontend normalizes `do { BUILD_BUG_ON(0); }
+     * while (0)` to WHILE(true)+IF(false)+label+IF(true) BREAK.  Reuse the
+     * already-verified source-label/reentry-aware no-effect loop proof; no
+     * new ad-hoc assertion or macro recognizer is necessary.  All remaining
+     * statements must still be the one direct unconditional return (or the
+     * frontend's unreachable synthetic fallback after that return). */
+    {
+        const CoreCfgCalleeGuardTruthContext binding = {
+            context, callee, expression
+        };
+        size_t first = 0U;
+        while (first < body->statement_count && first < 8U) {
+            const MinicStatement *prefix = minic_c0_program_statement(
+                program, body->statements[first]);
+            if (prefix == NULL || prefix->kind != MINIC_STATEMENT_WHILE ||
+                !minic_opt_pure_guard_loop(program, context->reentry_index,
+                                           prefix, (void *)&binding,
+                                           core_cfg_callee_guard_truth)) {
+                break;
+            }
+            ++first;
+        }
+        if (first >= body->statement_count) return false;
+        statement = minic_c0_program_statement(program, body->statements[first]);
+    }
     if (statement == NULL || statement->kind != MINIC_STATEMENT_RETURN ||
         statement->expression == MINIC_EXPRESSION_INVALID ||
         statement->cleanup_context != statement->cleanup_stop_context ||

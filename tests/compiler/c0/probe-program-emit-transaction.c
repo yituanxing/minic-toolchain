@@ -77,6 +77,13 @@ int main(int argc, char **argv) {
     MinicGlobalObject object = {0};
     MinicFunction declaration = {0};
     MinicCoreFunction ir = {0};
+    /* Transaction callbacks use six global instructions for fact coverage,
+     * but executable Core must still have a valid, reachable entry block. */
+    MinicCoreBlock entry_block = {
+        .terminator = { .kind = MINIC_CORE_TERMINATOR_RETURN },
+        .has_terminator = true,
+        .source_label_id = SIZE_MAX
+    };
     MinicCoreInstruction instructions[6] = {
         { .kind = MINIC_CORE_INSTRUCTION_CALL, .value.call = { .argument_count = 7U } },
         { .kind = MINIC_CORE_INSTRUCTION_INDIRECT_CALL, .value.indirect_call = { .argument_count = 3U } },
@@ -88,18 +95,30 @@ int main(int argc, char **argv) {
     MinicC0Program program = {0};
     MinicTargetInfo target = {0};
     MinicProgramEmitConfig config = {
-        global, function, prefix, between, "T\n", finalize,
-        MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS, false
+        .emit_global = global,
+        .emit_function = function,
+        .prefix = prefix,
+        .between = between,
+        .trailer = "T\n",
+        .finalize = finalize,
+        .selection = MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS,
+        .continue_after_failure = false,
     };
     TestContext ctx = {0};
     unsigned int stage;
     const char *path;
     if (argc != 2) return 2;
     path = argv[1];
+    /* Real AST constructors initialize an unowned file-scope object with
+     * INVALID. Do not rely on a zero-initialized synthetic test shortcut. */
+    object.owner_function = MINIC_FUNCTION_INVALID;
     declaration.is_defined = true;
     instructions[5].value.call_frame_address.kind = MINIC_CORE_CALL_FRAME_ADDRESS_RETURN;
     ir.instructions = instructions;
     ir.instruction_count = sizeof(instructions) / sizeof(instructions[0]);
+    ir.blocks = &entry_block;
+    ir.block_count = 1U;
+    ir.entry_block = 0U;
     program.global_objects = &object;
     program.global_object_count = 1U;
     target.data_layout = &(MinicDataLayout){0};

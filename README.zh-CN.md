@@ -20,7 +20,7 @@ C (.c) -> MiniPP (.i) -> MiniC (.s) -> MiniAS (.o)
 
 本轮 **2064/2064** 个真实 C 对象和七个分片均通过；RV32 compat-vDSO 的原生 ELF32 链接也在该完整运行时链路中接受验证。GNU 工具仍可用于明确记录的构建探测、固定宏参考和差分 oracle；不要把该验收解释成「整个工程完全不需要 GNU」，也不能用这次结果证明未来未测试的源码修改。
 
-MiniPP、MiniAS、MiniAR、MiniLD、ELF/对象工具及分阶段 `minic` driver 均保留独立执行入口，接口和验收范围仍分别维护。当前方向是**自举前的轻量收敛**，而非立即实现新前端、RV32 C 后端或复杂的 LLVM 风格框架；见 [轻量编译器架构与自举前收敛计划](docs/architecture/lean-compiler-and-prebootstrap-convergence-2026-10-16.md)。
+MiniPP、MiniAS、MiniAR、MiniLD、ELF/对象工具及分阶段 `minic` driver 均保留独立执行入口，接口和验收范围仍分别维护。[轻量编译器架构与自举前收敛计划](docs/architecture/lean-compiler-and-prebootstrap-convergence-2026-10-16.md) 记录的是更早的设计阶段；其中“尚不实现 RV32 C 后端”**已是历史表述**，当前 `src/target/riscv32/` 已有实现。现行编译器边界、审计证据与清理依赖统一从[MiniC 架构总入口](docs/architecture/README.md)查看。
 
 ## 当前实现
 
@@ -79,8 +79,12 @@ GitHub Actions 会在 Ubuntu 24.04 干净虚拟机中运行完整门禁，包括
 
 相关文档：
 
+- [`docs/architecture/README.md`](docs/architecture/README.md) — MiniC 编译器架构总入口：现行数据流、全部既有问题台账、历史审查、目录边界及清理依赖
 - [`docs/architecture/principles.md`](docs/architecture/principles.md)
-- [`docs/architecture/compiler-development-roadmap.md`](docs/architecture/compiler-development-roadmap.md)
+- [`docs/architecture/compiler-development-roadmap.md`](docs/architecture/compiler-development-roadmap.md) — 已冻结的历史路线，不代表当前实施顺序
+- [`docs/architecture/minic-global-contract-map.md`](docs/architecture/minic-global-contract-map.md) — 持续维护的编译管线、所有权、模块边界及新增目标契约
+- [`docs/architecture/minic-function-contract-register.md`](docs/architecture/minic-function-contract-register.md) — 关键函数契约、证据等级和待补审计范围
+- [`docs/architecture/minic-issue-register.md`](docs/architecture/minic-issue-register.md) — 持续维护的 Bug、风险、架构债及已排除误判清单
 - [`docs/standards/implementation-language.md`](docs/standards/implementation-language.md)
 - [`docs/standards/validation-toolchain.md`](docs/standards/validation-toolchain.md)
 - [`docs/DEVIATIONS.md`](docs/DEVIATIONS.md)

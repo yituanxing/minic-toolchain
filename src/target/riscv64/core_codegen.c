@@ -19,6 +19,7 @@
 #include "target/common/core_block_walk.h"
 #include "target/common/core_instruction_family.h"
 #include "target/data_layout.h"
+#include "target/target_info.h"
 
 #include <inttypes.h>
 #include <stddef.h>
@@ -245,9 +246,17 @@ static bool emit_instruction(FILE *file,
      * the GOT. Keep the C ABI decision here in RV64 Target emission. Scope
      * .option pic with push/pop so user file/inline asm cannot leak modes. */
     case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS:
-        if (instruction->value.global_id >= function->global_count ||
-            fprintf(file,
-                    position_independent
+        if (instruction->value.global_id >= function->global_count)
+            return false;
+        /* R_RISCV_GOT_HI20 is needed only for a preemptible symbol. In
+         * particular, a relocatable Linux kernel may compile with -fPIE,
+         * but its private literals and hidden objects must remain PC-relative:
+         * the early bootstrap cannot dereference a GOT slot containing the
+         * linked high virtual address before enabling the MMU. */
+        if (fprintf(file,
+                    position_independent &&
+                            !minic_target_info_elf_object_is_nonpreemptible(
+                                program, function->globals[instruction->value.global_id].name)
                         ? "  .option push\n  .option pic\n  la t0, %s\n  .option pop\n"
                         : "  lla t0, %s\n",
                     function->globals[instruction->value.global_id].name) < 0) {
@@ -255,9 +264,14 @@ static bool emit_instruction(FILE *file,
         }
         return minic_riscv64_frame_store_value(file, frame, instruction->result, "t0");
     case MINIC_CORE_INSTRUCTION_FUNCTION_ADDRESS:
-        if (instruction->value.function_symbol_id >= function->function_symbol_count ||
-            fprintf(file,
-                    position_independent
+        if (instruction->value.function_symbol_id >= function->function_symbol_count)
+            return false;
+        if (fprintf(file,
+                    position_independent &&
+                            !minic_target_info_elf_function_is_nonpreemptible(
+                                program,
+                                function->function_symbols[
+                                    instruction->value.function_symbol_id].name)
                         ? "  .option push\n  .option pic\n  la t0, %s\n  .option pop\n"
                         : "  lla t0, %s\n",
                     function->function_symbols[instruction->value.function_symbol_id].name) < 0) {
@@ -333,6 +347,9 @@ static bool emit_terminator(FILE *file,
     switch (terminator->kind) {
     case MINIC_CORE_TERMINATOR_RETURN:
         if (minic_type_is_record(function->return_type)) {
+            /* FIXME(MC-057): classify_value can return ABI_VALUE_IGNORE for
+             * a GNU zero-byte Record; this return emitter handles only
+             * AGGREGATE/INDIRECT and must model no physical return payload. */
             MinicRiscv64AbiValue return_value;
             size_t object_offset;
 
@@ -351,11 +368,11 @@ static bool emit_terminator(FILE *file,
                 if (return_value.slot_count == 0U || return_value.slot_count > 2U ||
                     !minic_riscv64_emit_integer_aggregate_load_chunk_profile(
                         file, program, function->return_type, 0U, "a0", "t0",
-                        frame->named_parameter_cursor.lp64_soft_float) ||
+                        frame->named_parameter_cursor.lp64_soft_float, object_offset) ||
                     (return_value.slot_count == 2U &&
                      !minic_riscv64_emit_integer_aggregate_load_chunk_profile(
                          file, program, function->return_type, 1U, "a1", "t0",
-                         frame->named_parameter_cursor.lp64_soft_float))) {
+                         frame->named_parameter_cursor.lp64_soft_float, object_offset))) {
                     return false;
                 }
             } else if (return_value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT) {

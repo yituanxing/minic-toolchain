@@ -147,6 +147,9 @@ minic_semantic_snapshot_rollback_declarator_types(const MinicSemanticSnapshot *s
     return true;
 }
 
+/* Count-only probe rollback: callers must not assume this destroys owned
+ * Expression payloads. In particular, CALL overflow arguments need separate
+ * cleanup before reducing expression_count (MC-009). */
 static inline bool
 minic_semantic_snapshot_rollback_probe_expressions(const MinicSemanticSnapshot *snapshot,
                                                    MinicC0Program *program) {
@@ -159,9 +162,12 @@ minic_semantic_snapshot_rollback_probe_expressions(const MinicSemanticSnapshot *
 
 /*
  * Type-query probes such as sizeof(T[N]) may transiently materialize value-only
- * ArrayType/FunctionType descriptors while also appending unpublished
- * expressions. This remains safe to roll back as one probe transaction because
- * neither kind may escape before commit.
+ * ArrayType/FunctionType descriptors alongside unpublished expressions.
+ * The type descriptors have no owned payload, so their counts may rewind.
+ * Expressions are different: CALL nodes can own overflow_arguments. Rewinding
+ * expression_count alone does NOT release those payloads (tracked as MC-009).
+ * Do not treat this count-only rollback as an ownership-safe transaction for
+ * arbitrary semantic expressions; a future fix must reclaim discarded payloads.
  */
 static inline bool
 minic_semantic_snapshot_rollback_probe_expression_types(const MinicSemanticSnapshot *snapshot,

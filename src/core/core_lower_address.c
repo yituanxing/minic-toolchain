@@ -1,4 +1,5 @@
 #include "core/core_lower_internal.h"
+#include "core/local_facts.h"
 #include "frontend/expression_semantics.h"
 #include <inttypes.h>
 #include <stdint.h>
@@ -51,7 +52,36 @@ MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
                    : MINIC_CORE_LOWER_ERROR;
     }
     if (expression->value_category != MINIC_VALUE_LVALUE) {
-        return MINIC_CORE_LOWER_UNSUPPORTED;
+        const MinicExpression *base;
+        const MinicRecord *record;
+        const MinicRecordField *field;
+        MinicCoreValueId base_address;
+
+        /* An array field of a record rvalue is an array object in the
+         * enclosing record's full-expression temporary, not an lvalue in
+         * the source AST. Array decay/subscript may request its backing
+         * address; materialize the one record before projecting the field. */
+        if (expression->value_category != MINIC_VALUE_RVALUE ||
+            expression->kind != MINIC_EXPRESSION_MEMBER ||
+            !minic_c0_expression_array_object_info(
+                context->body->program, expression, NULL))
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        base = minic_c0_program_expression(
+            context->body->program, expression->value.member.base);
+        record = minic_c0_program_record(
+            context->body->program, expression->value.member.record_id);
+        field = minic_c0_record_field(record, expression->value.member.field_index);
+        if (base == NULL || field == NULL ||
+            (!field->is_array && !minic_type_is_array(field->type)))
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        status = minic_core_lower_internal_record_materialized_address(
+            context, expression->value.member.base, &base_address);
+        if (status != MINIC_CORE_LOWER_OK)
+            return status;
+        return minic_core_lower_internal_append_field_address(
+            context, expression->span, base_address,
+            expression->value.member.record_id,
+            expression->value.member.field_index, expression->type, address_id);
     }
     /* Array compound literals reuse the legacy repeated-local storage model
        until frontend array representation convergence. Execute their hidden
@@ -192,7 +222,8 @@ MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
         if (local == NULL) {
             return MINIC_CORE_LOWER_ERROR;
         }
-        if (local->is_array && local->element_count == 0U) {
+        if (local->is_array && local->element_count == 0U &&
+            !local->is_zero_length_array) {
             const MinicLocal *address_local;
             MinicCoreValueId slot_address;
             MinicType expected_pointer;
@@ -295,18 +326,57 @@ MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
                    : MINIC_CORE_LOWER_ERROR;
     }
     if (expression->kind == MINIC_EXPRESSION_DEREFERENCE) {
+        const MinicExpression *pointer_expression = minic_c0_program_expression(
+            context->body->program, expression->value.unary.operand);
         MinicCoreValueId pointer_id;
         MinicType expected_pointer;
+        MinicType pointer_value_type;
 
         if (!minic_type_pointer_to(expression->type, &expected_pointer)) {
             return MINIC_CORE_LOWER_ERROR;
+        }
+        /* In an lvalue address context, *&object designates precisely the
+         * original object. Keep this cancellation at the common Core address
+         * owner, so GNU memory constraints (including x87 floating-point
+         * globals), ordinary C address-taking and all ISA backends agree.
+         * Recursing into lower_address of the object retains side effects
+         * of member/subscript address computations and its exact qualifiers;
+         * no value load or runtime pointer SSA is semantically needed. */
+        if (pointer_expression != NULL &&
+            pointer_expression->kind == MINIC_EXPRESSION_ADDRESS_OF &&
+            minic_type_equal(pointer_expression->type, expected_pointer)) {
+            const MinicExpression *object_expression = minic_c0_program_expression(
+                context->body->program,
+                pointer_expression->value.unary.operand);
+            if (object_expression != NULL &&
+                object_expression->value_category == MINIC_VALUE_LVALUE &&
+                minic_type_equal(object_expression->type, expression->type)) {
+                /* The syntactic ADDRESS_OF was bypassed by *& cancellation.
+                 * Preserve its local-fact escape effect: the resulting lvalue
+                 * may be stored through, even though no pointer SSA is needed.
+                 * Otherwise a later branch can reuse a constant from before
+                 * *(&local) = value and silently choose the wrong edge. */
+                if (object_expression->kind == MINIC_EXPRESSION_LOCAL)
+                    minic_core_local_fact_escape(
+                        context, object_expression->value.local_id);
+                return lower_address(context,
+                    pointer_expression->value.unary.operand, address_id);
+            }
         }
         status = lower_expression(context, expression->value.unary.operand, &pointer_id);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
+        /* GNU's Xen RING_COPY_RESPONSE uses
+         * `*(volatile typeof(dest))RING_GET_RESPONSE(...)`: `typeof(dest)` is
+         * a pointer and its outer volatile qualifies the pointer VALUE,
+         * not the pointed-to record. A dereference consumes the unqualified
+         * pointer value. Preserve exact pointee qualifiers and shape; strip
+         * only the top-level pointer value cv-qualification here. */
         if (pointer_id >= context->function->value_count ||
-            !minic_type_equal(context->function->values[pointer_id].type, expected_pointer)) {
+            !minic_type_unqualified(context->function->values[pointer_id].type,
+                                    &pointer_value_type) ||
+            !minic_type_equal(pointer_value_type, expected_pointer)) {
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
         *address_id = pointer_id;
@@ -328,6 +398,7 @@ MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
         MinicType pointer_type;
         size_t element_size;
         bool array_base;
+        bool pure_global_element_zero;
 
         base =
             minic_c0_program_expression(context->body->program, expression->value.subscript.base);
@@ -416,10 +487,23 @@ MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
                 return MINIC_CORE_LOWER_ERROR;
             }
         }
-        subscript_status =
-            minic_core_lower_internal_spill_scalar_value(context, base->span, pointer_type, base_value, &base_object);
-        if (subscript_status != MINIC_CORE_LOWER_OK) {
-            return subscript_status;
+        /* An array's static global address plus a literal zero index is a
+         * pure symbolic address. Its Core GLOBAL_ADDRESS provenance must not
+         * be converted into a local STORE/LOAD just to sequence an index
+         * expression that has no effects. In particular this preserves the
+         * linker-visible identity of ordinary C string literals passed to
+         * GNU `i` operands. Dynamic indices and pointer-valued bases retain
+         * the established evaluation-order snapshot contract. */
+        pure_global_element_zero =
+            array_base && base->kind == MINIC_EXPRESSION_GLOBAL_OBJECT &&
+            index->kind == MINIC_EXPRESSION_INTEGER &&
+            index->value.integer_value == 0;
+        if (!pure_global_element_zero) {
+            subscript_status = minic_core_lower_internal_spill_scalar_value(
+                context, base->span, pointer_type, base_value, &base_object);
+            if (subscript_status != MINIC_CORE_LOWER_OK) {
+                return subscript_status;
+            }
         }
         subscript_status =
             lower_expression(context, expression->value.subscript.index, &index_value);
@@ -445,14 +529,16 @@ MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
                 return subscript_status;
             }
         }
-        subscript_status =
-            minic_core_lower_internal_reload_scalar_value(context, base->span, pointer_type, base_object, &base_value);
-        if (subscript_status != MINIC_CORE_LOWER_OK) {
-            (void)fprintf(stderr,
-                          "CORE_SUBSCRIPT_STAGE function=%s stage=reload-base status=%d\n",
-                          context->source_function != NULL ? context->source_function->name : "?",
-                          (int)subscript_status);
-            return subscript_status;
+        if (!pure_global_element_zero) {
+            subscript_status = minic_core_lower_internal_reload_scalar_value(
+                context, base->span, pointer_type, base_object, &base_value);
+            if (subscript_status != MINIC_CORE_LOWER_OK) {
+                (void)fprintf(stderr,
+                              "CORE_SUBSCRIPT_STAGE function=%s stage=reload-base status=%d\n",
+                              context->source_function != NULL ? context->source_function->name : "?",
+                              (int)subscript_status);
+                return subscript_status;
+            }
         }
 
         (void)memset(&offset_instruction, 0, sizeof(offset_instruction));

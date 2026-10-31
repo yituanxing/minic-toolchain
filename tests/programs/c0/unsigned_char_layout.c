@@ -1,6 +1,8 @@
 typedef unsigned char byte;
 
-static const byte table[4] = {0, 127, 128, 255};
+/* This fixture inspects physical byte emission; GNU -O2 can otherwise fold
+ * its constant reads and remove the table as dead static storage. */
+static const byte table[4] __attribute__((used)) = {0, 127, 128, 255};
 
 struct Packet {
     byte prefix;

@@ -1,0 +1,61 @@
+# MiniC Frontend / Compiler / CLI 审阅台账（进行中）
+
+基准：`3866af2f64a8480268afa4655730d8334edfa4e7`；只覆盖 MiniC，排除 MiniAS/MiniLD/MiniPP。独立审阅范围是 `src/frontend` 70 个 C/H、`src/compiler` 11 个 C/H、两个 CLI 入口以及 `include/minic/compiler.h` 公开 API，共 **84 个文件 / 初始约 50,309 行**。本记录区分 **full**（完整查看源文件文本）、**targeted**（查看关键区域和全文件符号/模式）、**inventory**（仅收录文件和已知调用关系）；任何 inventory/targeted 都**不代表**已逐行读过。该台账不是编译或运行时验收。
+
+## 已确认职责边界
+
+- `compiler/compiler.c` 驱动 Parse → AST 验证 → Cast normalize → Inline specialize → Core function set → CFG reachability → DataLayout 检查 → backend 事务输出；不在这个文件枚举目标机器。
+- `frontend/parser_type.c` 对普通 C 类型取 TargetInfo/DataLayout，并通过 `minic_target_info_named_builtin_type`/`builtin_va_list_type` 识别目标头文件的命名扩展；这是已存在的合理分层，不能直接删除这些查询。
+- `compiler/core_function_set.c` 在一个事务里建立和销毁 Core 结果，单次建立 reentry index，索引创建失败时 Core lowering 的可用 fallback 需维持。
+- `compiler/core_reachability.c` 有显式非 Core 根（入口、alias、ELF relocation）和保守 indirect-branch 规则；优化查找索引时不得删除这些根。
+- `frontend/initializer.c` 对覆盖设计符采用倒序区间 skip-set，保留最终拥有者及动作求值顺序，不应误判为重复逻辑。
+
+## 发现与后续修复顺序
+
+| ID | 优先级 | 源码与事实 | 建议及状态 |
+| --- | --- | --- | --- |
+| FC-01 | P0 资源生命周期 | `frontend/function_body.c:minic_c0_program_recompute_inline_emission_references` 原先在 `initialize_validation` 成功但 `assign_local_owners` 失败时立即返回，九组已分配数组未释放；`queue` 的 `count*sizeof` 也缺溢出检查。 | 已报告主 agent；共享工作树已出现修复（独立验证/提交归主 agent），后续检查准确 HEAD 和负面故障路径。 |
+| FC-02 | P1 扩展边界 | `frontend/type.h` 将 `MINIC_TYPE_BASE_X86_VA_LIST_CURSOR`、五个 AArch64 NEON/SVE 基类及 `MINIC_CALLING_CONVENTION_MS_X64` 写入通用枚举；`type.c` 暴露 x86/AArch 专属构造。`ast_verifier.c` 仍对专属枚举逐 case 识别。 | 改成稳定的 Target extension/type identity + 声明式目标能力和类型校验；保持真实 ABI 类型身份，不把 opaque vector 偷换为普通 scalar。 |
+| FC-03 | P1 扩展边界 | `frontend/parser_function.c` 本地维护 `safe_scalar_targets[]` 的 x86 `target(...)` 字符串策略，尽管准入结果查询 TargetInfo；`parser_function.c` 也具体识别 MS_X64 ABI。 | 名称与策略应由目标声明的 FunctionAttributePolicy 驱动；前端只解析参数并执行通用约束。需要同时审查 TargetInfo 与后端，不能简单迁移字符串表。 |
+| FC-04 | P1 Driver 边界 | `tools/minic-cc/main.c:152-153` 直接比较 `MINIC_TARGET_ARCH_RISCV64/RISCV32` 来决定 `-march/-mabi` 是否可用。`tools/minic/main.c` 仍内置 RV64 staged CPP/AS/LD 和 `append_rv64_linux_musl_predefines`。 | `minic-cc` 查询 target-specific ISA option resolver 能力；产品驱动的 RV64-only staged 流水线属当前已声明限制，未来靠 TargetStage/driver callbacks 渐进替换，不能把五架构 `-S` 扩展误报成五架构完整链接。 |
+| FC-05 | P1/P2 待 MiniC 差分 | `frontend/type.c:350-380` 的 `minic_type_void_object_pointer_compatible` 对多级指针与 `void*` 的互转直接 `return true`，未检查立即指向对象的 const/volatile；例 `int *const *p; void *q=p;`。GCC `-std=c11 -pedantic-errors` 明确报 `initialization discards const qualifier`。 | 建立 MiniC 类型 API + C 端到端负面用例，证明接受行为后修复为对应 pointee 资格校验。语义风险明确，尚未断言 MiniC 端到端已复现。 |
+| FC-06 | P2 性能债 | `compiler/core_reachability.c:minic_core_named_function_id` 每遇 CALL/FUNCTION_ADDRESS 从头扫描所有函数并比较符号；复杂度近 `O(Core-reference-edges × functions)`；`inline_reference.c` 保留 allocation-failure 线性后备。 | 如真实软件 profile 证明热点，再建立一次性符号索引；需要遵守 asm 名称、alias、重名消歧，不为了消除线性代码牺牲保守结果。 |
+| FC-07 | P2 重复 API | `frontend/parser_core.c:55-103` 有三个等价的整数常量表达式入口，其中 `minic_parser_parse_integer_constant_expression_value` 暂未见生产调用者。 | 清查引用/测试/外部 ABI，确认无使用后可删除一个兼容入口。优先级低，不建议为行数强行拆动。 |
+| FC-08 | **P0 GNU cleanup / goto** | `frontend/parser_labels.c:minic_parser_parse_goto` 建立源级显式 GOTO 但未赋 `statement.cleanup_context = parser->cleanup_context`，`memset` 将其默认为 ROOT=0。前向标签收束检查 `pending->cleanup_context`，后端 `core_lower.c` 通过 `cleanup_context`/`cleanup_stop_context` 决定是否生成析构清理；作为对照 `parser_statement_control.c:177` 的 continue 及 `parser_statement.c:672` 的 return 都正确设置。 | 已通知主 agent；补真实的 GNU `__attribute__((cleanup))` 与显式 goto 离开/进入作用域、前向 goto 的正反例，确保 cleanup 被调用一次且分支语义正确。 |
+| FC-09 | **P1 对象合并非原子** | `frontend/declaration_sema.c:minic_declaration_merge_external_object` 在 merge composite array（原地填 bounds）成功后才调用 `minic_declaration_apply_object_attributes`；后者第一次设置 section (`ast_global.c:1617+`) 会分配内存且可能 OOM，失败时 array bounds 已变、属性尚未完成，与函数注释「先做可能分配 section 再改数组」相反。 | 已通知主 agent；修正实际提交顺序并注入 section malloc 失败回归，保证失败不修改外部数组复合类型。 |
+| FC-10 | P2 头文件边界 | `frontend/parser_internal.h` 将全体 Parser 状态、各领域（类型/函数/表达式/初始化/语句/inline asm）的 100+ 私有入口集中在一个大共享头，`parser_attribute.c`、`parser_gnu_inline_asm.c` 等按需层仍大量直接 include；需要考虑 `parser_common.h` + 按语义域声明的私有头，以缩小修改影响面；不是纯移动文件，必须先确认依赖方向。 | 后续构建 include graph，对真实环路/泄漏做优先级判定，避免盲目拆大头破坏编译。 |
+| FC-11 | **P0 候选 / 待差分** | `compiler/inline_symbolic.c` 的 transitive branch 对某个 specialized caller 的参数事实推导出 `variant_id` 后，直接写回**共享源** `program->expressions[nested_expression_index].value.call.function_id`；所有 specialization 复用相同 `body_block`。`core/core_lower_calls.c:~348-470` 的 symbolic selector `best=current_callee`，遇另一个不匹配 caller 时只会上选更多 symbolic facts，不下选无事实版本。 | **尚无运行证据，不当作已确认误编译。** 已给主 agent 双 caller A/B function-pointer 测试，GCC 对照，检查 cloned callee identity/return 差异及 Core trace。若确有污染，必须改成按 caller 选择变体并避免全局改写 shared CALL，保留 integer/boolean 的 Core 选择路径。 |
+| FC-12 | P2 已确认不支持的 GNU feature | `frontend/parser_statement.c:minic_parser_parse_statement_expression` 未 materialize cleanup，但进一步精读 `frontend/parser_local_declarations.c:consume_local_object_attribute` 发现遇 `parser->statement_expression_depth != 0U` 明确拒绝 `__attribute__((cleanup))`，因此**不是已接受输入的误编译**。 | 后续如增加该 GNU 能力，必须保证 statement-expression 结果求值先于 cleanup，新增作用域 exit lowering；当前不因无此路径而改动。 |
+| FC-13 | P2 AST/Core specialization 契约 | `compiler/inline_integer.c`、`inline_boolean.c` 的 transitive 分支只预建 clone 而不改 shared CALL 是**有意设计**；`core/core_lower_calls.c:184+` 在 lower 阶段根据特定调用者 fact 查找 best variant。 | 不可把仅未写 AST 改动当死代码删除；需要稳定性能契约（多函数 × 多 CALL × variants 线性扫描）和不同 caller facts 的回归。 |
+| FC-14 | P2 AST 规模/性能 | `frontend/ast.h:MinicFunction` 每个函数无条件内嵌整数、符号、布尔三套最多 64 参数的已知事实及值数组，且 `MinicFunctionType` 同样内嵌 64 个类型描述符；普通未 specialized 函数也承担同样的对象体积。 | 用 `sizeof`、真实 Linux AST memory/profile 量化后考虑专用 clone fact side-table 或稀疏参数表，保持已有 `function_id` 稳定与 Core selector 契约。 |
+| FC-15 | P1 宽字符串文字 | `frontend/parser_string.c:decode_string_escape` 不区分普通/宽字符串而将 `\x...`、八进制值限制在 255；`add_string_payload` 对源源码非转义字节也仅逐 `unsigned char` 放入每个 `wchar_t` 槽，宽字符的非 ASCII 字符不会解码为宽码点。 | 用 GCC/MiniC 对照 `L"\x100"`、`L"中"` 与 `sizeof`/元素差分，须先定义 wchar_t 编码目标规则再修复；不影响仅 ASCII 的现有内核覆盖。 |
+| FC-16 | **P1 标签作用域隔离候选** | `frontend/parser_enum.c:minic_parser_find_enum_tag` 无当前作用域限制，`get_or_create_enum_tag` 复用外层已完成的同名 enum；`parser_core.c` 的 scope 退出只维护 enum constants，未恢复 `enum_tag_count`，该计数仅在最终 destroy 归零。相反 record tags 有 `minic_parser_find_record_in_current_scope`。 | 正例外层 `enum E {A=1};`、函数内 `enum E {B=2};` 应分别合法；需同跑内层 enum 定义之后外层访问的隔离测试。修复需与作用域快照一起存取 enum tags 计数，区分内外可见实体。 |
+| FC-17 | **P2 确认不可达的手写解析死代码，已清理** | `frontend/parser_external_object.c:parse_external_integer_array_definition` 仅由 `minic_parser_external_visible_array` 的 `[]` 分支调用，所以 `inferred_bound` 固定为真；`{...}` 直接走通用 `minic_parser_parse_static_storage_initializer_value`。原来同一函数后部约 200 行手写 pointer/int 分支（包括把标量 object identifier 错认作地址的表达式）**实际上无法到达**，不是现行误编译；固定 `[N]` 一开始就由其他路径走通用初始化。 | **已删除不可达手写逻辑，保留 `char[]="..."` 非花括号语法**。GCC/MiniC A/B：固定/省略 bound 的 `&x`、array decay、NULL 正例，二者原生运行均 PASS；固定/省略 bound 的隐式标量 `x` 负例，二者均拒绝。新增 `tests/compiler/c0/probe-external-pointer-array-initializers.sh` 及三个源码；MiniC 审阅 build 重新编译并再次 PASS。 |
+
+| FC-18 | **P0 候选 / 浮点常量折叠** | `frontend/const_eval.c:eval_arithmetic_expression` 原 `MINIC_EXPRESSION_FLOATING` 分支一律将 `value.floating_bits` 当 double 64-bit `memcpy`，float 才 `(float)`；但 `frontend/parser_expression.c` 对 1.5f 存低32位 IEEE binary32，`parser_static_constants.c` 则正确按 float32 解释。 | 已通知主 agent；**主 agent 在共享树修复并新增测试，待 exact-head 验收**；覆盖 float/double/符号零/NaN/Inf，不再重复修改。 |
+| FC-19 | P1 静态 typedef-array 合并 | `frontend/parser_global.c:parse_preformed_static_array_definition` 对已有 static typedef-array tentative 无 existing/begin_definition 合并，直接 `minic_c0_program_add_global_object`；普通直接数组路径有合并。 | 对照 `typedef int A[3]; static A a; static A a={1};`；应复用公共 declaration composite merge，避免另一套特殊路径。 |
+| FC-20 | **P0 候选 / 表达式 Arena 悬挂指针** | `frontend/parser_runtime_initializer.c:parse_runtime_record_designated_tail` 原在读取 `const MinicExpression *member` 后，调用可分配新表达式的 initializer parse/lowering，再在 `.field = expr, positional` 续接调用中读取 `member->span.begin`。`program->expressions` 是 realloc grow arena，旧 pointer 可悬挂。 | 已通知主 agent；**主 agent 在共享树修复并新增测试，待 exact-head 验收**；保持 arena snapshot 规约。 |
+| FC-21 | **P0 候选 / 表达式 Arena 悬挂指针** | `frontend/parser_builtins.c:parse_builtin_overflow_predicate` 原保存 `const MinicExpression *result` 后两次调用 `normalize_overflow_integer_operand`，内部在可表示常量时可能追加 CAST 导致表达式 arena realloc，最后仍用 `result->span.end`。 | 已通知主 agent；**主 agent 在共享树修复并新增测试，待 exact-head 验收**；与 FC-20 作为全局 borrowed-pointer 审计统一处理。 |
+| FC-22 | P2 `_Generic` 约束 | `frontend/parser_builtins.c:parse_generic_selection` 只检测**命中 controlling type 的重复**，未检查任意两个 association type 是否兼容；C11 要求所有非默认 association 彼此不兼容，即使两者都不命中 controlling type。 | 增加已解析类型序列全量兼容检查，负例 `_Generic(1, char:1, signed char:2, default:3)`（注意 char/signed char 在目标可区分，建议使用 `int` 的 typedef 同义重复）。 |
+| FC-23 | P1 `long double` 词法常量精度 | `frontend/parser_expression.c:parse_floating` 的 `L` 后缀常量经 `strtod` 先变 binary64，再调用 `minic_binary128_from_binary64` 填进 long double 表示；值在词法时就丢失 53-bit 之后的有效数字。 | 对照 `long double x=0x1.000000000000001p0L; int main(void){return x>1.0L?0:1;}`（需匹配目标 long-double ABI）。直接按完整源字面量解析目标高精度格式，不能由双精度升格补精度。 |
+| FC-24 | P2 残留 tracing 进入通用解析 | `frontend/parser_static_initializer.c:try_overwrite_static_zero_noncanonical_union_designator` 读取 `CORE_FAST_TRACE`，直接 `fprintf(stderr,"STATIC_UNION_REWRITE_DETAIL ...")` 输出解析器内部数值。 | 移至受控诊断 trace 层；CI/用户环境中的同名变量不可无意污染 compiler stderr。 |
+| FC-25 | 已排除初始疑点 / float 比较 | `frontend/ast_verifier.c:verify_binary_type` 对纯 float comparison 没有直接分支，需遵守前端对比较操作数类型归一化的约定。 | **主 agent 已用 `float compare_float(float a,float b){return a<b;}` 证明 MiniC x86 编译且原生运行 PASS**；当前不能认定有 bug，保留为 Parser→Verifier 归一化契约说明，不立修复项。 |
+| FC-26 | P2 验证器非可信对象健壮性 | `frontend/ast_verifier.c:minic_verify_build_array_owners` 在逐个 `MinicRecord` 的 `field_count<=field_capacity` 校验之前预读 `record->fields[j]`；如果 Program 的 fields 非 NULL 但描述符损坏，optional accelerator 可能越界读取，无法走到有阶段信息的 fail。 | 将 owner index 构建延后到 record storage 验证，或对每个 record 加本地 `storage_is_valid` guard 并让后续校验照常处理失败。 |
+
+## 文件级状态
+
+### Full（84）
+
+`src/compiler/compiler.c`、`core_function_set.c`、`core_function_set.h`、`core_reachability.c`、`core_reachability.h`、`inline_reference.c`、`inline_specialize.h`、`inline_specialize_internal.h`、`inline_integer.c`、`inline_boolean.c`、`inline_symbolic.c`；`src/frontend/type.c`、`type.h`、`token.c`、`token.h`、`initializer.c`、`parser_builtin_memory.c`、`parser_static_assert.c`、`parser_type_query.c`、`attribute.h`、`lexer.c`、`lexer.h`、`ast_traversal.c`、`ast_traversal.h`、`semantic_snapshot.h`、`ast_verifier.h`、`cast_normalization.h`、`const_eval.h`、`declaration_sema.h`、`expression_semantics.h`、`function_body.h`、`initializer.h`、`parser.h`、`parser_builtin_memory.h`、`parser_external_object.h`、`parser_gnu_inline_asm.h`、`parser_labels.h`、`parser_local_declarations.h`、`parser_runtime_initializer.h`、`parser_statement_control.h`、`parser_static_constants.h`、`parser_static_initializer.h`、`ast_function.c`、`ast.c`、`ast.h`、`ast_global.c`、`cast_normalization.c`、`expression_semantics.c`、`parser_global_lookup.c`、`parser_labels.c`、`parser_member.c`、`parser_pragma.c`、`parser_postfix.c`、`parser_constant.c`、`parser_declarator.c`、`declaration_sema.c`、`parser_gnu_inline_asm.c`、`parser_internal.h`、`attribute.c`、`parser_attribute.c`、`parser_function_parameters.c`、`parser_statement_control.c`、`parser_statement.c`、`parser_core.c`、`function_body.c`、`parser_type.c`、`parser_string.c`、`parser_typedef.c`、`parser_enum.c`、`parser_record.c`、`parser_static_constants.c`、`parser_external_object.c`；`tools/minic/main.c`、`tools/minic-cc/main.c`。
+
+### Targeted（0）
+
+无。
+
+### Inventory（0）
+
+无。
+
+本轮新增逐行精读（已计入 Full，因 Full 主清单原有排版非常长而在此附录补充）：`src/frontend/const_eval.c`、`src/frontend/parser_global.c`、`src/frontend/parser_local_declarations.c`、`src/frontend/parser_runtime_initializer.c`、`src/frontend/parser_builtins.c`、`src/frontend/parser_expression.c`、`src/frontend/parser_static_initializer.c`、`src/frontend/parser_function.c`、`src/frontend/ast_verifier.c`、`include/minic/compiler.h`。
+
+**截至本审阅轮次 MiniC 本体与一个公开 API 共 84/84 个文件均已逐段查看全部源文本，targeted 与 inventory 均为零。** 本结论覆盖在本轮读取时点观察到的文件，不保证共享树中其他 agent 随后新增代码也已审阅；不等于功能正确性或 exact-head CI 验收。FC-17 已完成实际调用链校正、清除死分支及 GCC 差分；新增工程变动可在集成阶段按 HEAD 验收。

@@ -15,6 +15,7 @@ typedef struct MinicRiscv64AsmInstructionPlan {
     const char *operand_registers[MINIC_RISCV64_ASM_MAX_OPERANDS];
     bool memory_operand[MINIC_RISCV64_ASM_MAX_OPERANDS];
     const char *scratch_register;
+    const char *transfer_scratch_register;
     bool valid;
 } MinicRiscv64AsmInstructionPlan;
 

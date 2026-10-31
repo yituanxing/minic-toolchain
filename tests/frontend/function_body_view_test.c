@@ -123,11 +123,21 @@ static int test_cross_function_local_rejected(void) {
         return 1;
     }
 
+    /* An invalid overlapping local range is rejected after validation
+     * scratch arrays have been allocated. This also exercises the failure
+     * cleanup path under an address/leak sanitizer. */
+    program.functions[function_b].local_begin = local_a;
+    if (minic_c0_program_recompute_inline_emission_references(&program)) {
+        minic_c0_program_destroy(&program);
+        return 2;
+    }
+    program.functions[function_b].local_begin = local_b;
+
     program.expressions[expression_a].value.local_id = local_b;
     if (!minic_c0_program_verify(&program, MINIC_C0_AST_PARSED) ||
         minic_c0_program_validate_function_body_ownership(&program)) {
         minic_c0_program_destroy(&program);
-        return 2;
+        return 3;
     }
 
     (void)statement_a;

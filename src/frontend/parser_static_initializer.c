@@ -178,6 +178,106 @@ static bool static_integer_address_slot_supported(const MinicParser *parser, Min
            size == layout->pointer_size;
 }
 
+/* A symbolic integer static initializer is a link-time address, not an
+ * arithmetic constant. Decode it once for both scalar objects and aggregate
+ * slots, retaining the target symbol, member path and signed byte addend. */
+static bool parse_static_integer_address_value(MinicParser *parser,
+                                               MinicType type,
+                                               MinicStaticIntegerAddressValue *value) {
+    MinicConstValue constant;
+    MinicConstValue converted;
+    MinicExpressionId expression_id;
+    const MinicExpression *expression;
+
+    if (parser == NULL || value == NULL || !minic_type_is_integer(type) ||
+        !minic_parser_parse_expression(parser, &expression_id, 0U)) {
+        if (parser != NULL && parser->diagnostic != NULL &&
+            parser->diagnostic->message[0] == '\0')
+            minic_parser_error(parser, "static integer initializer type mismatch");
+        return false;
+    }
+    expression = minic_c0_program_expression(parser->program, expression_id);
+    /* GCC accepts constant arithmetic such as `2 * 3.5 - 1` in integer
+     * initializers (Linux Qualcomm freq_tbl). Keep the ordinary assignment
+     * contract for all other types, but admit a floating constant candidate
+     * to the existing bounded arithmetic-to-integer evaluator below. A
+     * runtime/nonconstant float still fails that evaluator. */
+    if (expression == NULL ||
+        (!minic_c0_assignment_compatible(parser->program, type, expression_id) &&
+         !minic_type_is_float(expression->type) &&
+         !minic_type_is_double(expression->type))) {
+        minic_parser_error(parser, "static integer initializer type mismatch");
+        return false;
+    }
+    (void)memset(value, 0, sizeof(*value));
+    value->function_id = MINIC_FUNCTION_INVALID;
+    if (minic_const_eval_integer(parser->program, parser->target_info,
+                                 expression_id, &constant) &&
+        minic_const_value_convert_integer(parser->program, parser->target_info,
+                                          &constant, type, &converted)) {
+        value->bits = converted.bits;
+        return true;
+    }
+    if (minic_const_eval_arithmetic_to_integer(parser->program, parser->target_info,
+                                                expression_id, type, &converted)) {
+        value->bits = converted.bits;
+        return true;
+    }
+    if (static_integer_address_slot_supported(parser, type)) {
+        if (minic_parser_static_symbol_function_relocation(
+                parser->program, expression_id, &value->function_id)) {
+            value->has_relocation = true;
+            value->is_function = true;
+            return true;
+        }
+        if (static_integer_address_relocation_target(parser, expression_id,
+                                                      &value->object_target)) {
+            value->has_relocation = true;
+            return true;
+        }
+    }
+    minic_parser_error(parser, "integer initializer requires an arithmetic constant or "
+                               "pointer-sized symbolic address");
+    return false;
+}
+
+static bool record_static_integer_address_relocation(
+    MinicParser *parser, MinicGlobalObjectId object_id,
+    MinicGlobalRelocationLocationKind location_kind, size_t location_index,
+    const MinicStaticIntegerAddressValue *value) {
+    const MinicStaticObjectRelocationTarget *target;
+
+    if (!value->has_relocation) return true;
+    if (value->is_function)
+        return minic_c0_global_object_add_function_relocation(
+            parser->program, object_id, location_kind, location_index, value->function_id);
+    target = &value->object_target;
+    return minic_c0_global_object_add_integer_object_relocation_path_addend(
+        parser->program, object_id, location_kind, location_index,
+        target->object_id, target->member_indices, target->member_depth,
+        target->byte_addend);
+}
+
+bool minic_parser_parse_static_integer_object_initializer(
+    MinicParser *parser, MinicGlobalObjectId object_id, MinicType type) {
+    MinicStaticIntegerAddressValue value;
+
+    if (parser == NULL || object_id >= parser->program->global_object_count ||
+        !parse_static_integer_address_value(parser, type, &value) ||
+        (value.has_relocation
+             ? (!record_static_integer_address_relocation(
+                    parser, object_id, MINIC_GLOBAL_RELOCATION_LOCATION_SCALAR, 0U, &value) ||
+                !minic_c0_global_object_set_zero_initialized(parser->program, object_id))
+             : !minic_c0_global_object_add_initializer_bits(
+                   parser->program, object_id, value.bits))) {
+        if (parser != NULL && parser->diagnostic != NULL &&
+            parser->diagnostic->message[0] == '\0')
+            minic_parser_error(parser, "cannot record static symbolic integer initializer");
+        return false;
+    }
+    return true;
+}
+
 static bool parse_static_scalar_constant_at(MinicParser *parser,
                                             MinicGlobalObjectId object_id,
                                             MinicType type,
@@ -193,87 +293,31 @@ static bool parse_static_scalar_constant_at(MinicParser *parser,
         return false;
     }
     if (minic_type_is_integer(type)) {
-        MinicConstValue constant;
-        MinicConstValue converted;
-        MinicExpressionId expression_id;
-        MinicStaticObjectRelocationTarget relocation_target;
-        MinicFunctionId relocation_function_id;
-        uint64_t parsed_bits;
-        bool has_symbolic_address;
-        bool symbolic_address_is_function;
+        MinicStaticIntegerAddressValue value;
 
-        if (!minic_parser_parse_expression(parser, &expression_id, 0U)) {
-            return false;
-        }
-        relocation_function_id = MINIC_FUNCTION_INVALID;
-        symbolic_address_is_function = false;
-        if (minic_const_eval_integer(
-                parser->program, parser->target_info, expression_id, &constant) &&
-            minic_const_value_convert_integer(
-                parser->program, parser->target_info, &constant, type, &converted)) {
-            parsed_bits = converted.bits;
-            has_symbolic_address = false;
-        } else if (minic_const_eval_arithmetic_to_integer(parser->program,
-                                                         parser->target_info,
-                                                         expression_id,
-                                                         type,
-                                                         &converted)) {
-            parsed_bits = converted.bits;
-            has_symbolic_address = false;
-        } else if (static_integer_address_slot_supported(parser, type) &&
-                   minic_parser_static_symbol_function_relocation(
-                       parser->program, expression_id, &relocation_function_id)) {
-            parsed_bits = 0U;
-            has_symbolic_address = true;
-            symbolic_address_is_function = true;
-        } else if (static_integer_address_slot_supported(parser, type) &&
-                   static_integer_address_relocation_target(
-                       parser, expression_id, &relocation_target)) {
-            parsed_bits = 0U;
-            has_symbolic_address = true;
-        } else {
-            minic_parser_error(parser,
-                               "integer initializer requires an arithmetic constant or "
-                               "pointer-sized symbolic address");
+        if (!parse_static_integer_address_value(parser, type, &value)) {
             return false;
         }
         if (overwrite) {
             if (!minic_c0_global_object_replace_aggregate_initializer_bits(
-                    parser->program, object_id, overwrite_slot, parsed_bits)) {
+                    parser->program, object_id, overwrite_slot, value.bits)) {
                 minic_parser_error(parser, "cannot replace backward static scalar initializer");
                 return false;
             }
         } else if (!minic_c0_global_object_add_initializer_bits(
-                       parser->program, object_id, parsed_bits)) {
+                       parser->program, object_id, value.bits)) {
             minic_parser_error(parser, "cannot record static aggregate integer initializer");
             return false;
         }
-        if (has_symbolic_address) {
+        if (value.has_relocation) {
             size_t relocation_slot;
-            bool recorded;
 
             relocation_slot =
                 overwrite ? overwrite_slot
                           : parser->program->global_objects[object_id].initializer_count - 1U;
-            if (symbolic_address_is_function) {
-                recorded = minic_c0_global_object_add_function_relocation(
-                    parser->program,
-                    object_id,
-                    MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR,
-                    relocation_slot,
-                    relocation_function_id);
-            } else {
-                recorded = minic_c0_global_object_add_integer_object_relocation_path_addend(
-                    parser->program,
-                    object_id,
-                    MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR,
-                    relocation_slot,
-                    relocation_target.object_id,
-                    relocation_target.member_indices,
-                    relocation_target.member_depth,
-                    relocation_target.byte_addend);
-            }
-            if (!recorded) {
+            if (!record_static_integer_address_relocation(
+                    parser, object_id, MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR,
+                    relocation_slot, &value)) {
                 minic_parser_error(parser, "cannot record static symbolic integer relocation");
                 return false;
             }
@@ -448,8 +492,8 @@ static bool parse_static_array_scalar_slot(MinicParser *parser,
         return false;
     }
     if (minic_type_is_integer(element_type)) {
-        if (!minic_parser_parse_integer_initializer_bits(
-                parser, element_type, &slot->integer_bits)) {
+        if (!parse_static_integer_address_value(
+                parser, element_type, &slot->integer_initializer)) {
             return false;
         }
     } else if (!minic_parser_static_symbol_pointer_initializer(
@@ -559,8 +603,18 @@ static bool materialize_static_array_slots(MinicParser *parser,
             slot = &action_values[owner];
         }
         if (minic_type_is_integer(element_type)) {
+            size_t aggregate_slot;
+
+            if (aggregate_slot_base > SIZE_MAX - index) {
+                minic_parser_error(parser, "static integer array aggregate slot overflows");
+                return false;
+            }
+            aggregate_slot = aggregate_slot_base + index;
             if (!minic_c0_global_object_add_initializer_bits(
-                    parser->program, object_id, slot->integer_bits)) {
+                    parser->program, object_id, slot->integer_initializer.bits) ||
+                !record_static_integer_address_relocation(
+                    parser, object_id, MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR,
+                    aggregate_slot, &slot->integer_initializer)) {
                 minic_parser_error(parser, "cannot materialize static integer array slot");
                 return false;
             }
@@ -624,8 +678,7 @@ bool minic_parser_static_scalar_array_transaction(MinicParser *parser,
         return minic_parser_add_bounded_string_literal_initializer(
             parser, object_id, element_count);
     }
-    if (parser != NULL && minic_type_is_char_integer(element_type) &&
-        parser->current.kind == MINIC_TOKEN_LBRACE) {
+    if (parser != NULL && parser->current.kind == MINIC_TOKEN_LBRACE) {
         MinicParser probe;
 
         probe = *parser;
@@ -977,20 +1030,119 @@ materialize_static_aggregate_array_action(MinicParser *parser,
     return true;
 }
 
+/* A chained [outer][inner] initializer changes only the selected nested
+ * subobject.  A subsequent designator for the same outer element must retain
+ * the earlier inner elements, rather than letting the array action planner's
+ * normal whole-element last-writer-wins rule discard their relocations. */
+static bool merge_static_chained_array_action(
+    MinicParser *parser, MinicStaticAggregateArrayAction *next,
+    const MinicStaticAggregateArrayAction *previous,
+    size_t first_slot, size_t slot_count) {
+    size_t index;
+    size_t finish;
+    size_t retained_relocations;
+    size_t retained_selections;
+    MinicGlobalRelocation *grown_relocations;
+    MinicGlobalUnionSelection *grown_selections;
+
+    if (parser == NULL || next == NULL || previous == NULL ||
+        previous->value_count != next->value_count ||
+        first_slot > next->value_count || slot_count > next->value_count - first_slot) {
+        minic_parser_error(parser, "chained static array action has inconsistent nested span");
+        return false;
+    }
+    finish = first_slot + slot_count;
+    for (index = 0U; index < next->value_count; ++index) {
+        if (index < first_slot || index >= finish) {
+            next->values[index] = previous->values[index];
+        }
+    }
+    retained_relocations = 0U;
+    for (index = 0U; index < previous->relocation_count; ++index) {
+        const size_t slot = previous->relocations[index].location_index;
+        if (slot < first_slot || slot >= finish) {
+            retained_relocations += 1U;
+        }
+    }
+    if (retained_relocations > SIZE_MAX - next->relocation_count ||
+        next->relocation_count + retained_relocations > SIZE_MAX / sizeof(*grown_relocations)) {
+        minic_parser_error(parser, "chained static array relocation count overflows");
+        return false;
+    }
+    if (retained_relocations != 0U) {
+        grown_relocations = (MinicGlobalRelocation *)realloc(
+            next->relocations,
+            (next->relocation_count + retained_relocations) * sizeof(*grown_relocations));
+        if (grown_relocations == NULL) {
+            minic_parser_error(parser, "out of memory merging chained array relocations");
+            return false;
+        }
+        next->relocations = grown_relocations;
+        for (index = 0U; index < previous->relocation_count; ++index) {
+            const size_t slot = previous->relocations[index].location_index;
+            if (slot < first_slot || slot >= finish) {
+                next->relocations[next->relocation_count++] = previous->relocations[index];
+            }
+        }
+    }
+    retained_selections = 0U;
+    for (index = 0U; index < previous->union_selection_count; ++index) {
+        const size_t slot = previous->union_selections[index].initializer_slot;
+        if (slot < first_slot || slot >= finish) {
+            retained_selections += 1U;
+        }
+    }
+    if (retained_selections > SIZE_MAX - next->union_selection_count ||
+        next->union_selection_count + retained_selections > SIZE_MAX / sizeof(*grown_selections)) {
+        minic_parser_error(parser, "chained static array union selection count overflows");
+        return false;
+    }
+    if (retained_selections != 0U) {
+        grown_selections = (MinicGlobalUnionSelection *)realloc(
+            next->union_selections,
+            (next->union_selection_count + retained_selections) * sizeof(*grown_selections));
+        if (grown_selections == NULL) {
+            minic_parser_error(parser, "out of memory merging chained union selections");
+            return false;
+        }
+        next->union_selections = grown_selections;
+        for (index = 0U; index < previous->union_selection_count; ++index) {
+            const size_t slot = previous->union_selections[index].initializer_slot;
+            if (slot < first_slot || slot >= finish) {
+                next->union_selections[next->union_selection_count++] =
+                    previous->union_selections[index];
+            }
+        }
+    }
+    return true;
+}
+
 static bool append_static_chained_array_designator_value(MinicParser *parser,
                                                          MinicGlobalObjectId object_id,
-                                                         MinicType array_type) {
+                                                         MinicType array_type,
+                                                         size_t *selected_slot,
+                                                         size_t *selected_slot_count) {
     const MinicArrayType *array;
     size_t first;
     size_t last;
     size_t index;
+    size_t element_slots;
+    size_t nested_slot;
+    size_t nested_count;
 
     if (parser == NULL || !minic_type_is_array(array_type) ||
         parser->current.kind != MINIC_TOKEN_LBRACKET) {
         return false;
     }
+    /* FIXME(MC-049): the designator expression parsed below can append
+     * ArrayTypes (e.g. sizeof(int[3])) and realloc Program.array_types.
+     * Retaining this borrowed pointer for nested/prefix/suffix work causes
+     * a reproducible ASan UAF; retain stable id/value data across parsing. */
     array = minic_c0_program_array_type(parser->program, array_type.array_type_id);
     if (array == NULL || array->element_count == 0U || array->is_zero_length ||
+        selected_slot == NULL || selected_slot_count == NULL ||
+        !minic_c0_global_initializer_slot_count(
+            parser->program, array->element_type, &element_slots) ||
         !minic_parser_parse_array_designator_component(
             parser, array->element_count, false, &first, &last)) {
         return false;
@@ -998,6 +1150,10 @@ static bool append_static_chained_array_designator_value(MinicParser *parser,
     if (first != last) {
         minic_parser_error(
             parser, "GNU range designators inside chained static arrays are not supported yet");
+        return false;
+    }
+    if (element_slots != 0U && first > SIZE_MAX / element_slots) {
+        minic_parser_error(parser, "chained static array slot index overflows");
         return false;
     }
     for (index = 0U; index < first; ++index) {
@@ -1008,13 +1164,20 @@ static bool append_static_chained_array_designator_value(MinicParser *parser,
     }
     if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
         if (!minic_type_is_array(array->element_type) ||
-            !append_static_chained_array_designator_value(parser, object_id, array->element_type)) {
+            !append_static_chained_array_designator_value(
+                parser, object_id, array->element_type, &nested_slot, &nested_count)) {
             if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
                 minic_parser_error(parser,
                                    "chained array designator requires another array dimension");
             }
             return false;
         }
+        if (nested_slot > SIZE_MAX - first * element_slots) {
+            minic_parser_error(parser, "nested chained static array slot index overflows");
+            return false;
+        }
+        *selected_slot = first * element_slots + nested_slot;
+        *selected_slot_count = nested_count;
     } else {
         if (!minic_parser_expect(
                 parser, MINIC_TOKEN_EQUAL, "expected '=' after chained array designator") ||
@@ -1022,6 +1185,8 @@ static bool append_static_chained_array_designator_value(MinicParser *parser,
                 parser, object_id, array->element_type)) {
             return false;
         }
+        *selected_slot = first * element_slots;
+        *selected_slot_count = element_slots;
     }
     for (index = first + 1U; index < array->element_count; ++index) {
         if (!append_static_constant_zero(parser, object_id, array->element_type)) {
@@ -1031,6 +1196,13 @@ static bool append_static_chained_array_designator_value(MinicParser *parser,
     }
     return true;
 }
+
+/* This is implemented beside the record designator path walker below, so
+ * `[index].field = ...` can share precisely the same anonymous-member and
+ * union-selection rules as a plain `.field = ...` initializer. */
+static bool append_static_chained_record_designator_value(
+    MinicParser *parser, MinicGlobalObjectId object_id, MinicType record_type,
+    size_t *selected_slot, size_t *selected_slot_count);
 
 static bool parse_static_forward_array_initializer(MinicParser *parser,
                                                    MinicGlobalObjectId object_id,
@@ -1069,9 +1241,15 @@ static bool parse_static_forward_array_initializer(MinicParser *parser,
         size_t initializer_begin;
         size_t relocation_begin;
         size_t union_selection_begin;
+        size_t chained_slot;
+        size_t chained_slot_count;
+        size_t outer_first;
         bool chained_designator;
 
         chained_designator = false;
+        chained_slot = 0U;
+        chained_slot_count = 0U;
+        outer_first = 0U;
         if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
             size_t first;
             size_t last;
@@ -1085,6 +1263,7 @@ static bool parse_static_forward_array_initializer(MinicParser *parser,
                 }
                 goto done;
             }
+            outer_first = first;
             if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
                 if (first != last) {
                     minic_parser_error(parser, "outer GNU range designator cannot be chained yet");
@@ -1092,6 +1271,14 @@ static bool parse_static_forward_array_initializer(MinicParser *parser,
                 }
                 if (!minic_type_is_array(element_type)) {
                     minic_parser_error(parser, "chained array designator exceeds array dimensions");
+                    goto done;
+                }
+                chained_designator = true;
+            } else if (parser->current.kind == MINIC_TOKEN_DOT &&
+                       minic_type_is_record(element_type)) {
+                if (first != last) {
+                    minic_parser_error(parser,
+                                       "outer GNU range record designator cannot be chained yet");
                     goto done;
                 }
                 chained_designator = true;
@@ -1118,7 +1305,13 @@ static bool parse_static_forward_array_initializer(MinicParser *parser,
         relocation_begin = object->relocation_count;
         union_selection_begin = object->union_selection_count;
         if ((chained_designator
-                 ? !append_static_chained_array_designator_value(parser, object_id, element_type)
+                 ? !(parser->current.kind == MINIC_TOKEN_LBRACKET
+                         ? append_static_chained_array_designator_value(
+                               parser, object_id, element_type, &chained_slot,
+                               &chained_slot_count)
+                         : append_static_chained_record_designator_value(
+                               parser, object_id, element_type, &chained_slot,
+                               &chained_slot_count))
                  : !minic_parser_parse_static_storage_initializer_value(
                        parser, object_id, element_type)) ||
             !capture_static_aggregate_array_action(parser,
@@ -1128,6 +1321,20 @@ static bool parse_static_forward_array_initializer(MinicParser *parser,
                                                    union_selection_begin,
                                                    &actions[action_id])) {
             goto done;
+        }
+        if (chained_designator) {
+            size_t earlier;
+            for (earlier = action_id; earlier != 0U; --earlier) {
+                const MinicArrayInitializerAction *prior = &plan.actions[earlier - 1U];
+                if (prior->first_index <= outer_first && outer_first <= prior->last_index) {
+                    if (!merge_static_chained_array_action(parser, &actions[action_id],
+                                                           &actions[earlier - 1U],
+                                                           chained_slot, chained_slot_count)) {
+                        goto done;
+                    }
+                    break;
+                }
+            }
         }
         if (parser->current.kind == MINIC_TOKEN_COMMA) {
             if (!minic_parser_advance(parser)) {
@@ -1360,11 +1567,13 @@ static bool static_record_designator_leaf_slot(const MinicC0Program *program,
         field_index = designator->field_indices[depth];
         field = minic_c0_record_field(current_record, field_index);
         if (field == NULL || field->element_count == 0U || field->is_flexible_array ||
-            !minic_c0_global_record_field_initializer_slot(
-                program, current_record, field_index, &relative) ||
-            total > SIZE_MAX - relative) {
+            (!current_record->is_union &&
+             !minic_c0_global_record_field_initializer_slot(
+                 program, current_record, field_index, &relative))) {
             return false;
         }
+        if (current_record->is_union) relative = 0U;
+        if (total > SIZE_MAX - relative) return false;
         total += relative;
         if (depth + 1U == designator->depth) {
             *slot_index = total;
@@ -1381,6 +1590,58 @@ static bool static_record_designator_leaf_slot(const MinicC0Program *program,
         }
     }
     return false;
+}
+
+/* A positional initializer after `.nested.member = value` continues at the
+ * next member of `nested`, including when `nested` is promoted through an
+ * anonymous struct/union. The aggregate's remaining slots are already zero
+ * materialized by the forward designator transaction. Restrict this cursor
+ * to canonical union storage so it cannot silently reinterpret a different
+ * active union member's flattened slots. */
+static bool static_record_designator_next_positional_leaf(
+    const MinicC0Program *program,
+    const MinicRecord *record,
+    const MinicStaticRecordDesignator *current,
+    MinicStaticRecordDesignator *next) {
+    const MinicRecord *nested;
+    const MinicRecordField *field;
+    size_t depth;
+    size_t candidate;
+
+    if (program == NULL || record == NULL || current == NULL || next == NULL ||
+        current->depth < 2U || current->has_array_index) {
+        return false;
+    }
+    nested = record;
+    for (depth = 0U; depth + 1U < current->depth; ++depth) {
+        if (nested->is_union && current->field_indices[depth] != 0U) {
+            return false;
+        }
+        field = minic_c0_record_field(nested, current->field_indices[depth]);
+        if (field == NULL || !minic_type_is_record(field->type) || field->element_count != 1U ||
+            field->is_array || field->is_bit_field || field->is_flexible_array) {
+            return false;
+        }
+        nested = minic_c0_program_record(program, field->type.record_id);
+        if (nested == NULL || !nested->is_complete) {
+            return false;
+        }
+    }
+    if (nested->is_union || current->field_indices[current->depth - 1U] >= nested->field_count) {
+        return false;
+    }
+    candidate = current->field_indices[current->depth - 1U] + 1U;
+    while (candidate < nested->field_count &&
+           nested->fields[candidate].is_bit_field &&
+           nested->fields[candidate].name_length == 0U) {
+        candidate += 1U;
+    }
+    if (candidate >= nested->field_count) {
+        return false;
+    }
+    *next = *current;
+    next->field_indices[next->depth - 1U] = candidate;
+    return true;
 }
 
 static bool overwrite_static_zero_field_value(MinicParser *parser,
@@ -1837,6 +2098,43 @@ static bool append_static_record_designator_value(MinicParser *parser,
     return true;
 }
 
+static bool append_static_chained_record_designator_value(
+    MinicParser *parser, MinicGlobalObjectId object_id, MinicType record_type,
+    size_t *selected_slot, size_t *selected_slot_count) {
+    const MinicRecord *record;
+    const MinicRecordField *leaf;
+    MinicStaticRecordDesignator designator;
+    size_t leaf_slots;
+
+    if (parser == NULL || !minic_type_is_record(record_type) ||
+        selected_slot == NULL || selected_slot_count == NULL) {
+        return false;
+    }
+    record = minic_c0_program_record(parser->program, record_type.record_id);
+    if (record == NULL || !record->is_complete ||
+        !parse_static_record_designator_path(parser, record, &designator)) {
+        return false;
+    }
+    if (designator.has_array_index) {
+        minic_parser_error(parser,
+                           "array-element designator after record-array index is unsupported");
+        return false;
+    }
+    if (!static_record_designator_leaf_slot(parser->program, record, &designator,
+                                            selected_slot, &leaf) ||
+        !minic_c0_global_initializer_slot_count(parser->program, leaf->type,
+                                                &leaf_slots) ||
+        (leaf_slots != 0U && leaf->element_count > SIZE_MAX / leaf_slots)) {
+        minic_parser_error(parser,
+                           "record-array chained member initializer span overflows");
+        return false;
+    }
+    *selected_slot_count = leaf_slots * leaf->element_count;
+    return append_static_record_designator_value(parser, object_id, record,
+                                                 designator.field_indices,
+                                                 designator.depth);
+}
+
 static bool append_static_record_array_element_designator_value(MinicParser *parser,
                                                                 MinicGlobalObjectId object_id,
                                                                 const MinicRecordField *field,
@@ -1970,19 +2268,27 @@ static bool overwrite_static_zero_array_constant(MinicParser *parser,
             if (!minic_parser_parse_array_designator(parser, element_count, false, &first, &last)) {
                 return false;
             }
-            if (first != last) {
-                minic_parser_error(
-                    parser,
-                    "GNU range designators in backward static arrays are not supported yet");
-                return false;
-            }
         } else {
             first = next_index;
             last = first;
         }
-        if (first >= element_count ||
-            (element_slots != 0U && first > (SIZE_MAX - array_base_slot) / element_slots)) {
+        if (first >= element_count || last < first || last >= element_count ||
+            (element_slots != 0U && last > (SIZE_MAX - array_base_slot) / element_slots)) {
             minic_parser_error(parser, "backward static array initializer index is out of range");
+            return false;
+        }
+        /* Repeating a constant scalar is valid for GNU backward range
+         * designators, including ones nested in record compound literals.
+         * Preserve the already-evaluated first initializer (and its optional
+         * symbolic relocation) instead of parsing the source expression for
+         * every element. Aggregate range replication needs a separate slot
+         * / union-selection transaction and remains fail-closed. */
+        if (first != last &&
+            (element_slots != 1U ||
+             (!minic_type_is_integer(element_type) &&
+              !minic_type_is_pointer(element_type)))) {
+            minic_parser_error(parser,
+                               "GNU backward static range requires scalar element type");
             return false;
         }
         element_base_slot = array_base_slot + first * element_slots;
@@ -1990,7 +2296,55 @@ static bool overwrite_static_zero_array_constant(MinicParser *parser,
                 parser, object_id, element_type, element_base_slot)) {
             return false;
         }
-        next_index = first + 1U;
+        if (first != last) {
+            MinicGlobalObject *object;
+            MinicGlobalRelocation original_relocation;
+            uint64_t original_bits;
+            bool has_relocation;
+            size_t relocation_index;
+            size_t selected_index;
+
+            object = &parser->program->global_objects[object_id];
+            if (element_base_slot >= object->initializer_count) {
+                return false;
+            }
+            original_bits = object->initializer_values[element_base_slot];
+            has_relocation = false;
+            (void)memset(&original_relocation, 0, sizeof(original_relocation));
+            for (relocation_index = 0U; relocation_index < object->relocation_count;
+                 ++relocation_index) {
+                const MinicGlobalRelocation *candidate =
+                    &object->relocations[relocation_index];
+                if (candidate->location_kind ==
+                        MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR &&
+                    candidate->location_index == element_base_slot) {
+                    original_relocation = *candidate;
+                    has_relocation = true;
+                    break;
+                }
+            }
+            for (selected_index = first + 1U; selected_index <= last; ++selected_index) {
+                size_t selected_slot = array_base_slot + selected_index;
+
+                if (!minic_c0_global_object_replace_aggregate_initializer_bits(
+                        parser->program, object_id, selected_slot, original_bits)) {
+                    minic_parser_error(parser,
+                                       "cannot replicate backward static range constant");
+                    return false;
+                }
+                if (has_relocation) {
+                    MinicGlobalRelocation cloned = original_relocation;
+                    cloned.location_index = selected_slot;
+                    if (!minic_c0_global_object_add_relocation(
+                            parser->program, object_id, &cloned)) {
+                        minic_parser_error(parser,
+                                           "cannot replicate backward static range relocation");
+                        return false;
+                    }
+                }
+            }
+        }
+        next_index = last + 1U;
         if (parser->current.kind == MINIC_TOKEN_COMMA) {
             if (!minic_parser_advance(parser)) {
                 return false;
@@ -2064,6 +2418,11 @@ static bool overwrite_static_zero_record_constant(MinicParser *parser,
         !minic_parser_expect(parser, MINIC_TOKEN_LBRACE, "expected '{' in record initializer")) {
         return false;
     }
+    /* FIXME(MC-023): unlike forward static Record initialization, this
+     * backward overwrite retains a Program.records element address while
+     * recursively parsing fields. A nested sizeof(struct {...}) can grow
+     * that arena; subsequent record->fields reads are ASan-confirmed UAF.
+     * Carry a stable RecordId or a verified value snapshot across parsing. */
     field_limit = record->is_union ? 1U : record->field_count;
     field_index = 0U;
     while (parser->current.kind != MINIC_TOKEN_RBRACE) {
@@ -2177,6 +2536,7 @@ static bool parse_static_union_constant(MinicParser *parser,
                                         MinicGlobalObjectId object_id,
                                         const MinicRecord *record) {
     MinicStaticRecordDesignator designator;
+    MinicRecord record_snapshot;
     const MinicRecordField *field;
     MinicRecordId record_id;
     size_t selected_index;
@@ -2191,6 +2551,13 @@ static bool parse_static_union_constant(MinicParser *parser,
         return false;
     }
     record_id = (MinicRecordId)(record - parser->program->records);
+    /* The initializer may contain `sizeof(struct { ... })` or compound
+     * literals introducing anonymous records. Those append to the growable
+     * record arena, invalidating `record` during recursive parsing. As for
+     * ordinary static records, keep a local descriptor with stable field
+     * storage until this union's complete initializer has been consumed. */
+    record_snapshot = *record;
+    record = &record_snapshot;
     union_base_slot = parser->program->global_objects[object_id].initializer_count;
     if (parser->current.kind == MINIC_TOKEN_RBRACE) {
         if (!minic_c0_global_object_select_union_member(
@@ -2267,8 +2634,42 @@ static bool parse_static_union_constant(MinicParser *parser,
         return false;
     }
 
-    if (parser->current.kind == MINIC_TOKEN_COMMA) {
-        if (!minic_parser_advance(parser)) {
+    if (parser->current.kind == MINIC_TOKEN_COMMA && !minic_parser_advance(parser)) {
+        return false;
+    }
+    /* GNU C permits successive designators for distinct fields of the same
+     * active anonymous record embedded in a union. For example, ARM64 KVM
+     * initializes `union { u64 val; struct { ... fgt:4; bit:6; }; }`
+     * using `{ .fgt = group, .bit = position }`. The first promoted member
+     * already zero-materialized the rest of that record: update its exact
+     * subobject slots, never select a different union variant. */
+    while (has_designator && designator.depth > 1U &&
+           parser->current.kind == MINIC_TOKEN_DOT) {
+        MinicStaticRecordDesignator next;
+        const MinicRecordField *leaf_field;
+        size_t relative_slot;
+
+        if (!parse_static_record_designator_path(parser, record, &next) ||
+            next.depth <= 1U || next.has_array_index ||
+            next.field_indices[0] != selected_index ||
+            !static_record_designator_leaf_slot(parser->program,
+                                                record,
+                                                &next,
+                                                &relative_slot,
+                                                &leaf_field) ||
+            union_base_slot > SIZE_MAX - relative_slot ||
+            !overwrite_static_zero_field_value(parser,
+                                               object_id,
+                                               leaf_field,
+                                               union_base_slot + relative_slot)) {
+            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                minic_parser_error(parser,
+                                   "union initializer designators must stay within the "
+                                   "same active record member");
+            }
+            return false;
+        }
+        if (parser->current.kind == MINIC_TOKEN_COMMA && !minic_parser_advance(parser)) {
             return false;
         }
     }
@@ -2288,6 +2689,8 @@ static bool parse_static_record_constant(MinicParser *parser,
     size_t field_limit;
     size_t materialized_field_limit;
     size_t record_base_slot;
+    MinicStaticRecordDesignator nested_positional;
+    bool has_nested_positional;
 
     if (parser == NULL || record == NULL || !record->is_complete ||
         record < parser->program->records ||
@@ -2310,6 +2713,8 @@ static bool parse_static_record_constant(MinicParser *parser,
     field_index = 0U;
     materialized_field_limit = 0U;
     record_base_slot = parser->program->global_objects[object_id].initializer_count;
+    (void)memset(&nested_positional, 0, sizeof(nested_positional));
+    has_nested_positional = false;
     while (parser->current.kind != MINIC_TOKEN_RBRACE) {
         MinicStaticRecordDesignator designator;
         const MinicRecordField *field;
@@ -2318,6 +2723,33 @@ static bool parse_static_record_constant(MinicParser *parser,
 
         has_designator = false;
         (void)memset(&designator, 0, sizeof(designator));
+        if (parser->current.kind != MINIC_TOKEN_DOT && has_nested_positional) {
+            size_t relative_slot;
+            const MinicRecordField *leaf_field;
+            MinicStaticRecordDesignator next_positional;
+
+            if (!static_record_designator_leaf_slot(parser->program,
+                                                    record,
+                                                    &nested_positional,
+                                                    &relative_slot,
+                                                    &leaf_field) ||
+                record_base_slot > SIZE_MAX - relative_slot ||
+                !overwrite_static_zero_field_value(
+                    parser, object_id, leaf_field, record_base_slot + relative_slot)) {
+                if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                    minic_parser_error(
+                        parser, "cannot continue positional static nested record initializer");
+                }
+                return false;
+            }
+            has_nested_positional = static_record_designator_next_positional_leaf(
+                parser->program, record, &nested_positional, &next_positional);
+            if (has_nested_positional) {
+                nested_positional = next_positional;
+            }
+            goto static_record_initializer_value_done;
+        }
+        has_nested_positional = false;
         if (parser->current.kind == MINIC_TOKEN_DOT) {
             size_t designator_index;
 
@@ -2356,6 +2788,35 @@ static bool parse_static_record_constant(MinicParser *parser,
             return false;
         }
         field = &record->fields[field_index];
+        /* An explicitly empty GNU zero-length-array member consumes braces,
+         * not a phantom element or flattened initializer slots. */
+        if (field->is_zero_length_array) {
+            if (field_index != materialized_field_limit ||
+                (has_designator &&
+                 (designator.depth != 1U || designator.has_array_index)) ||
+                !minic_parser_expect(parser, MINIC_TOKEN_LBRACE,
+                                     "expected '{' for zero-length array initializer"))
+                return false;
+            if (parser->current.kind != MINIC_TOKEN_RBRACE) {
+                minic_parser_error(parser,
+                                   "GNU zero-length array initializer must be empty");
+                return false;
+            }
+            if (!minic_parser_expect(parser, MINIC_TOKEN_RBRACE,
+                                     "expected '}' for zero-length array initializer"))
+                return false;
+            materialized_field_limit += 1U;
+            field_index += 1U;
+            if (parser->current.kind == MINIC_TOKEN_COMMA) {
+                if (!minic_parser_advance(parser)) return false;
+                if (parser->current.kind == MINIC_TOKEN_RBRACE) break;
+            } else if (parser->current.kind != MINIC_TOKEN_RBRACE) {
+                minic_parser_error(parser,
+                                   "expected ',' or '}' after zero-length array initializer");
+                return false;
+            }
+            continue;
+        }
         if (field->is_flexible_array) {
             const MinicGlobalObject *object;
             size_t flexible_element_count;
@@ -2567,7 +3028,17 @@ static bool parse_static_record_constant(MinicParser *parser,
             }
             materialized_field_limit += 1U;
         }
+        if (has_designator && designator.depth > 1U && !designator.has_array_index) {
+            MinicStaticRecordDesignator next_positional;
+
+            has_nested_positional = static_record_designator_next_positional_leaf(
+                parser->program, record, &designator, &next_positional);
+            if (has_nested_positional) {
+                nested_positional = next_positional;
+            }
+        }
         field_index += 1U;
+static_record_initializer_value_done:
         if (parser->current.kind == MINIC_TOKEN_COMMA) {
             if (!minic_parser_advance(parser)) {
                 return false;
@@ -2691,7 +3162,8 @@ parse_static_nested_record_object(MinicParser *parser, MinicType type, MinicSour
                                                                                NULL,
                                                                                0U,
                                                                                false,
-                                                                               0U);
+                                                                               0U,
+                                                                               false);
         }
         minic_parser_error(parser,
                            "expected '=', ',' or ';' after static aggregate declarator");
@@ -2844,7 +3316,8 @@ static bool parse_static_record_array(MinicParser *parser,
                                       size_t section_capacity,
                                       size_t *section_name_length,
                                       bool *has_section,
-                                      size_t *explicit_alignment) {
+                                      size_t *explicit_alignment,
+                                      bool *force_emit) {
     const MinicRecord *record;
     MinicType nested_element_type;
     MinicType object_type;
@@ -2885,11 +3358,9 @@ static bool parse_static_record_array(MinicParser *parser,
     if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
         bool nested_is_array;
 
-        if (inferred_bound) {
-            minic_parser_error(
-                parser, "inferred multi-dimensional static record arrays are not supported yet");
-            return false;
-        }
+        /* The unspecified outer bound belongs to the initializer-list
+         * extent, not to the fully specified inner array element type.
+         * Preserve the inner type, then infer only the outer count below. */
         nested_is_array = false;
         if (!minic_parser_parse_array_declarator_suffix(
                 parser, element_type, false, &nested_element_type, &nested_is_array) ||
@@ -2902,12 +3373,13 @@ static bool parse_static_record_array(MinicParser *parser,
         }
         multidimensional = true;
     }
-    if (!minic_parser_parse_gnu_object_attribute_lists(parser,
+    if (!minic_parser_parse_gnu_object_attribute_lists_with_used(parser,
                                                        section_name,
                                                        section_capacity,
                                                        section_name_length,
                                                        has_section,
-                                                       explicit_alignment)) {
+                                                       explicit_alignment,
+                                                       force_emit)) {
         return false;
     }
 
@@ -3061,7 +3533,8 @@ bool minic_parser_static_record_initializer(MinicParser *parser,
                                 size_t section_capacity,
                                 size_t *section_name_length,
                                 bool *has_section,
-                                size_t *explicit_alignment) {
+                                size_t *explicit_alignment,
+                                bool *force_emit) {
     const MinicRecord *record;
 
     record = minic_c0_program_record(parser->program, type.record_id);
@@ -3077,7 +3550,8 @@ bool minic_parser_static_record_initializer(MinicParser *parser,
                                          section_capacity,
                                          section_name_length,
                                          has_section,
-                                         explicit_alignment);
+                                         explicit_alignment,
+                                         force_emit);
     }
     return parse_static_nested_record_object(parser, type, name_span);
 }

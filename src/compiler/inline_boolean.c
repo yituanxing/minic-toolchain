@@ -494,6 +494,8 @@ static void minic_inline_boolean_copy_existing_facts(
 
 static bool minic_inline_boolean_range_variant_matches(
     const MinicFunction *candidate,
+    const MinicFunction *source,
+    const MinicFunction *caller,
     MinicFunctionId source_id,
     const bool *integer_known,
     const uint64_t *integer_bits,
@@ -505,7 +507,8 @@ static bool minic_inline_boolean_range_variant_matches(
 
     if (candidate == NULL || !candidate->is_integer_specialization ||
         candidate->specialization_source != source_id ||
-        candidate->parameter_count != parameter_count) {
+        candidate->parameter_count != parameter_count ||
+        !minic_inline_specialization_section_matches(candidate, source, caller)) {
         return false;
     }
     for (i = 0U; i < parameter_count; ++i) {
@@ -526,6 +529,7 @@ static bool minic_inline_boolean_range_variant_matches(
 static bool minic_add_inline_boolean_range_specialization(
     MinicC0Program *program,
     MinicFunctionId source_id,
+    const MinicFunction *caller,
     const bool *integer_known,
     const uint64_t *integer_bits,
     const bool *symbolic_known,
@@ -538,6 +542,7 @@ static bool minic_add_inline_boolean_range_specialization(
     if (!minic_add_inline_symbolic_specialization(
             program,
             source_id,
+            caller,
             integer_known,
             integer_bits,
             symbolic_known,
@@ -553,14 +558,115 @@ static bool minic_add_inline_boolean_range_specialization(
     return true;
 }
 
+/* Direct specialization rewrites a shared source-AST call once, but that AST
+ * remains the body of its original (non-specialized) inline owner too. A
+ * later caller-specific section can therefore make that original body's
+ * call point at a clone from .init.text/.head.text. Close the *original*
+ * owner's section as well as the transitive clone owners below, preserving
+ * integer, symbolic and Boolean-range facts verbatim. */
+static bool minic_close_original_inline_caller_sections(MinicC0Program *program) {
+    MinicFunctionId *owners = NULL;
+    size_t expression_index;
+    size_t added = 0U;
+
+    if (program == NULL) return false;
+    if (!minic_inline_section_owner_index_required(program) ||
+        program->expression_count == 0U) return true;
+    if (program->expression_count > SIZE_MAX / sizeof(*owners)) return false;
+    owners = (MinicFunctionId *)malloc(program->expression_count * sizeof(*owners));
+    if (owners == NULL || !minic_perf_program_build_expression_source_owners(
+            program, program->function_count, owners, program->expression_count)) {
+        free(owners);
+        (void)fprintf(stderr, "MINIC_INLINE_ORIGINAL_SECTION_OWNER_INDEX=FAIL\n");
+        return false;
+    }
+    for (expression_index = 0U; expression_index < program->expression_count;
+         ++expression_index) {
+        const MinicExpression *expression = &program->expressions[expression_index];
+        const MinicFunctionId owner_id = owners[expression_index];
+        MinicFunction caller, current, source;
+        MinicFunctionId source_id;
+        MinicFunctionId variant_id = MINIC_FUNCTION_INVALID;
+        bool integer_known[MINIC_MAX_FUNCTION_PARAMETERS];
+        uint64_t integer_bits[MINIC_MAX_FUNCTION_PARAMETERS];
+        bool symbolic_known[MINIC_MAX_FUNCTION_PARAMETERS];
+        MinicExpressionId symbolic_expression[MINIC_MAX_FUNCTION_PARAMETERS];
+        bool boolean_range_known[MINIC_MAX_FUNCTION_PARAMETERS];
+        size_t candidate_index;
+
+        if (expression->kind != MINIC_EXPRESSION_CALL ||
+            expression->value.call.function_id >= program->function_count ||
+            owner_id >= program->function_count) continue;
+        caller = program->functions[owner_id];
+        if (!caller.is_defined || caller.is_integer_specialization) continue;
+        current = program->functions[expression->value.call.function_id];
+        if (!current.is_integer_specialization ||
+            current.specialization_source >= program->function_count) continue;
+        source_id = current.specialization_source;
+        source = program->functions[source_id];
+        if (!source.is_defined || !source.is_internal || !source.is_inline ||
+            source.parameter_count == 0U ||
+            source.parameter_count != expression->value.call.argument_count ||
+            minic_inline_specialization_section_matches(&current, &source, &caller))
+            continue;
+        minic_inline_boolean_copy_existing_facts(
+            &current, source.parameter_count, integer_known, integer_bits,
+            symbolic_known, symbolic_expression, boolean_range_known);
+        for (candidate_index = 0U; candidate_index < program->function_count;
+             ++candidate_index) {
+            if (minic_inline_boolean_range_variant_matches(
+                    &program->functions[candidate_index], &source, &caller,
+                    source_id, integer_known, integer_bits, symbolic_known,
+                    symbolic_expression, boolean_range_known,
+                    source.parameter_count)) {
+                variant_id = candidate_index;
+                break;
+            }
+        }
+        if (variant_id == MINIC_FUNCTION_INVALID) {
+            if (added >= 1024U || !minic_add_inline_boolean_range_specialization(
+                    program, source_id, &caller, integer_known, integer_bits,
+                    symbolic_known, symbolic_expression, boolean_range_known,
+                    &variant_id)) {
+                free(owners);
+                return false;
+            }
+            added++;
+        }
+    }
+    free(owners);
+    if (added != 0U)
+        (void)fprintf(stderr, "MINIC_INLINE_ORIGINAL_SECTION_CLOSURE_V0 clones=%zu\n",
+                      added);
+    return true;
+}
+
 static bool minic_specialize_inline_boolean_range_calls_for_pass(
     MinicC0Program *program,
     const MinicTargetInfo *target, MinicInlineBooleanDomainPassState *state) {
     size_t expression_index;
     size_t direct_clone_count = 0U;
     size_t transitive_clone_count = 0U;
+    MinicFunctionId *initial_expression_owners = NULL;
+    bool initial_owner_index_ready = false;
 
     if (program == NULL || target == NULL) {
+        return false;
+    }
+    if (minic_inline_section_owner_index_required(program) &&
+        program->expression_count != 0U &&
+        program->expression_count <= SIZE_MAX / sizeof(*initial_expression_owners)) {
+        initial_expression_owners = malloc(program->expression_count *
+                                           sizeof(*initial_expression_owners));
+        if (initial_expression_owners != NULL)
+            initial_owner_index_ready = minic_perf_program_build_expression_source_owners(
+                program, program->function_count, initial_expression_owners,
+                program->expression_count);
+    }
+    if (minic_inline_section_owner_index_required(program) &&
+        program->expression_count != 0U && !initial_owner_index_ready) {
+        free(initial_expression_owners);
+        (void)fprintf(stderr, "MINIC_INLINE_SECTION_OWNER_INDEX=FAIL boolean\n");
         return false;
     }
 
@@ -574,6 +680,7 @@ static bool minic_specialize_inline_boolean_range_calls_for_pass(
         MinicFunctionId variant_id = MINIC_FUNCTION_INVALID;
         MinicFunction current;
         MinicFunction source;
+        const MinicFunction *caller = NULL;
         bool integer_known[MINIC_MAX_FUNCTION_PARAMETERS];
         uint64_t integer_bits[MINIC_MAX_FUNCTION_PARAMETERS];
         bool symbolic_known[MINIC_MAX_FUNCTION_PARAMETERS];
@@ -599,6 +706,11 @@ static bool minic_specialize_inline_boolean_range_calls_for_pass(
             continue;
         }
         source = program->functions[source_id];
+        if (initial_owner_index_ready &&
+            initial_expression_owners[expression_index] < program->function_count)
+            caller = &program->functions[initial_expression_owners[expression_index]];
+        else if (current.is_integer_specialization)
+            caller = &program->functions[current_id];
         if (!source.is_defined || !source.is_internal || !source.is_inline ||
             source.is_variadic || source.alias_target != MINIC_FUNCTION_INVALID ||
             source.parameter_count == 0U ||
@@ -643,6 +755,7 @@ static bool minic_specialize_inline_boolean_range_calls_for_pass(
              ++candidate_index) {
             if (minic_inline_boolean_range_variant_matches(
                     &program->functions[candidate_index],
+                    &source, caller,
                     source_id,
                     integer_known,
                     integer_bits,
@@ -655,22 +768,29 @@ static bool minic_specialize_inline_boolean_range_calls_for_pass(
             }
         }
         if (variant_id == MINIC_FUNCTION_INVALID) {
+            /* FIXME(MC-043): exhausting a speculative clone budget also
+             * aborts ordinary legal C call sites here. The transitive
+             * quota path below has the same failure contract. */
             if (direct_clone_count + transitive_clone_count >= 1024U ||
                 !minic_add_inline_boolean_range_specialization(
                     program,
                     source_id,
+                    caller,
                     integer_known,
                     integer_bits,
                     symbolic_known,
                     symbolic_expression,
                     boolean_range_known,
                     &variant_id)) {
+                free(initial_expression_owners);
                 return false;
             }
             direct_clone_count += 1U;
         }
         program->expressions[expression_index].value.call.function_id = variant_id;
     }
+    free(initial_expression_owners);
+    if (!minic_close_original_inline_caller_sections(program)) return false;
 
     /* Then close range facts through already-specialized callers.  Do not
        rewrite the shared source AST here; Core lowering selects the matching
@@ -693,6 +813,8 @@ static bool minic_specialize_inline_boolean_range_calls_for_pass(
         size_t boolean_skipped_other_owner = 0U;
         bool boolean_owner_ready = false;
         bool boolean_index_attempted = false;
+        const bool section_closure_required =
+            minic_inline_section_owner_index_required(program);
         for (caller_index = 0U; caller_index < program->function_count;
              ++caller_index) {
             const MinicFunction caller = program->functions[caller_index];
@@ -708,7 +830,11 @@ static bool minic_specialize_inline_boolean_range_calls_for_pass(
                 caller_has_range = caller_has_range ||
                     caller.specialization_boolean_range_known[i];
             }
-            if (!caller_has_range) {
+            /* Boolean-range clones are allocated after the integer/symbolic
+             * closure. Even callers with no Boolean-range parameter facts
+             * may therefore hold shared source-AST calls to a fresh
+             * wrong-section Boolean clone. Visit them for section closure. */
+            if (!caller_has_range && !section_closure_required) {
                 continue;
             }
             boolean_caller_scans += 1U;
@@ -770,6 +896,7 @@ static bool minic_specialize_inline_boolean_range_calls_for_pass(
                 bool boolean_range_known[MINIC_MAX_FUNCTION_PARAMETERS];
                 bool used_caller_fact = false;
                 bool adds_range = false;
+                bool needs_section_clone;
                 size_t parameter_index;
                 size_t candidate_index;
 
@@ -807,6 +934,8 @@ static bool minic_specialize_inline_boolean_range_calls_for_pass(
                     source.parameter_count != nested->value.call.argument_count) {
                     continue;
                 }
+                needs_section_clone = current.is_integer_specialization &&
+                    !minic_inline_specialization_section_matches(&current, &source, &caller);
                 minic_inline_boolean_copy_existing_facts(
                     &current,
                     source.parameter_count,
@@ -835,7 +964,7 @@ static bool minic_specialize_inline_boolean_range_calls_for_pass(
                         adds_range = true;
                     }
                 }
-                if (!used_caller_fact || !adds_range) {
+                if ((!used_caller_fact || !adds_range) && !needs_section_clone) {
                     continue;
                 }
                 for (candidate_index = 0U;
@@ -843,6 +972,7 @@ static bool minic_specialize_inline_boolean_range_calls_for_pass(
                      ++candidate_index) {
                     if (minic_inline_boolean_range_variant_matches(
                             &program->functions[candidate_index],
+                            &source, &caller,
                             source_id,
                             integer_known,
                             integer_bits,
@@ -859,6 +989,7 @@ static bool minic_specialize_inline_boolean_range_calls_for_pass(
                         !minic_add_inline_boolean_range_specialization(
                             program,
                             source_id,
+                            &caller,
                             integer_known,
                             integer_bits,
                             symbolic_known,

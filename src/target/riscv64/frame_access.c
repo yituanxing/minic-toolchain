@@ -1,107 +1,44 @@
 #include "target/riscv64/frame_access.h"
 #include "target/riscv64/codegen_internal.h"
+#include "target/riscv/register_identity.h"
 #include <stdint.h>
 #include <stdio.h>
-#include <string.h>
 
 /* No frame-size recalculation or Core mutation in native addressing. */
-static bool emit_sp_address(FILE *file, const char *destination_register, size_t offset) {
-    if (file == NULL || destination_register == NULL) {
-        return false;
-    }
-    if (offset <= 2047U) {
-        return fprintf(file, "  addi %s, sp, %zu\n", destination_register, offset) >= 0;
-    }
-    return fprintf(file,
-                   "  li t3, %zu\n"
-                   "  add %s, sp, t3\n",
-                   offset,
-                   destination_register) >= 0;
-}
-
-static const char *core_frame_scratch_register(const char *value_register) {
-    return value_register != NULL && strcmp(value_register, "t6") == 0 ? "t5" : "t6";
+static bool emit_frame_word_preserving(
+    FILE *file, const MinicRiscv64CoreFrame *frame, bool store,
+    const char *value_register, const char *protected_register, size_t offset) {
+    MinicRiscvFrameAddressPolicy policy;
+    if (frame == NULL) return false;
+    policy = minic_riscv64_machine_frame_policy(frame->has_dynamic_stack_alloc);
+    return minic_riscv_frame_emit_word_preserving(
+        file, &policy, store, value_register, protected_register, offset);
 }
 
 bool minic_riscv64_frame_emit_address(FILE *file,
                                const MinicRiscv64CoreFrame *frame,
                                const char *destination_register,
                                size_t offset) {
-    const char *scratch;
-
-    if (file == NULL || frame == NULL || destination_register == NULL) {
-        return false;
-    }
-    if (!frame->has_dynamic_stack_alloc) {
-        return emit_sp_address(file, destination_register, offset);
-    }
-    if (offset <= 2047U) {
-        return fprintf(file, "  addi %s, s0, %zu\n", destination_register, offset) >= 0;
-    }
-    scratch = core_frame_scratch_register(destination_register);
-    return fprintf(file,
-                   "  li %s, %zu\n"
-                   "  add %s, s0, %s\n",
-                   scratch,
-                   offset,
-                   destination_register,
-                   scratch) >= 0;
+    MinicRiscvFrameAddressPolicy policy;
+    if (frame == NULL) return false;
+    policy = minic_riscv64_machine_frame_policy(frame->has_dynamic_stack_alloc);
+    return minic_riscv_frame_emit_address(file, &policy, destination_register, offset);
 }
 
 bool minic_riscv64_frame_emit_load64(FILE *file,
                               const MinicRiscv64CoreFrame *frame,
                               const char *destination_register,
                               size_t offset) {
-    const char *scratch;
-
-    if (file == NULL || frame == NULL || destination_register == NULL) {
-        return false;
-    }
-    if (!frame->has_dynamic_stack_alloc) {
-        return minic_riscv64_emit_sp_load64(file, destination_register, offset);
-    }
-    if (offset <= 2047U) {
-        return fprintf(file, "  ld %s, %zu(s0)\n", destination_register, offset) >= 0;
-    }
-    scratch = core_frame_scratch_register(destination_register);
-    return fprintf(file,
-                   "  li %s, %zu\n"
-                   "  add %s, s0, %s\n"
-                   "  ld %s, 0(%s)\n",
-                   scratch,
-                   offset,
-                   scratch,
-                   scratch,
-                   destination_register,
-                   scratch) >= 0;
+    return emit_frame_word_preserving(
+        file, frame, false, destination_register, NULL, offset);
 }
 
 bool minic_riscv64_frame_emit_store64(FILE *file,
                                const MinicRiscv64CoreFrame *frame,
                                const char *source_register,
                                size_t offset) {
-    const char *scratch;
-
-    if (file == NULL || frame == NULL || source_register == NULL) {
-        return false;
-    }
-    if (!frame->has_dynamic_stack_alloc) {
-        return minic_riscv64_emit_sp_store64(file, source_register, offset);
-    }
-    if (offset <= 2047U) {
-        return fprintf(file, "  sd %s, %zu(s0)\n", source_register, offset) >= 0;
-    }
-    scratch = core_frame_scratch_register(source_register);
-    return fprintf(file,
-                   "  li %s, %zu\n"
-                   "  add %s, s0, %s\n"
-                   "  sd %s, 0(%s)\n",
-                   scratch,
-                   offset,
-                   scratch,
-                   scratch,
-                   source_register,
-                   scratch) >= 0;
+    return emit_frame_word_preserving(
+        file, frame, true, source_register, NULL, offset);
 }
 
 bool minic_riscv64_frame_load_value(FILE *file,
@@ -133,10 +70,13 @@ bool minic_riscv64_frame_load_int128(FILE *file,
                                    const char *high_register) {
     size_t offset;
 
+    /* The second half must not destroy an already-loaded first half. This
+     * protects e.g. (t2,t3) against the static-frame t2 scratch path. */
     return low_register != NULL && high_register != NULL &&
            minic_riscv64_core_frame_value_offset(frame, value_id, &offset) && offset <= SIZE_MAX - 8U &&
            minic_riscv64_frame_emit_load64(file, frame, low_register, offset) &&
-           minic_riscv64_frame_emit_load64(file, frame, high_register, offset + 8U);
+           emit_frame_word_preserving(
+               file, frame, false, high_register, low_register, offset + 8U);
 }
 
 bool minic_riscv64_frame_store_int128(FILE *file,
@@ -146,9 +86,12 @@ bool minic_riscv64_frame_store_int128(FILE *file,
                                     const char *high_register) {
     size_t offset;
 
+    /* Both halves are live before the first store; never use the high register
+     * to materialize the low half's address (the t1/t2 case is real). */
     return low_register != NULL && high_register != NULL &&
            minic_riscv64_core_frame_value_offset(frame, value_id, &offset) && offset <= SIZE_MAX - 8U &&
-           minic_riscv64_frame_emit_store64(file, frame, low_register, offset) &&
+           emit_frame_word_preserving(
+               file, frame, true, low_register, high_register, offset) &&
            minic_riscv64_frame_emit_store64(file, frame, high_register, offset + 8U);
 }
 
@@ -161,21 +104,43 @@ minic_riscv64_frame_load_chunk(FILE *file,
                       size_t offset,
                       size_t size) {
     const char *opcode;
+    const char *address_register;
+    const char *byte_register;
     size_t byte_index;
 
     if (file == NULL || frame == NULL || destination_register == NULL ||
         size == 0U || size > 8U) {
         return false;
     }
-    if (size == 8U) {
+    /* The frame base is at least 16-byte aligned, but packed CoreObjects
+     * may start at an odd byte offset. A whole-word access is valid only
+     * when the actual address is aligned to its access width. */
+    if (size == 8U && offset % 8U == 0U) {
         return minic_riscv64_frame_emit_load64(file, frame, destination_register, offset);
     }
-    opcode = size == 4U ? "lwu" : size == 2U ? "lhu" : size == 1U ? "lbu" : NULL;
+    /* A partial aggregate can be materialized into any ABI argument GPR or
+     * compiler temporary. Address and byte scratch must remain distinct from
+     * the result even when the caller spells that register as xN, not tN. */
+    opcode = size == 4U && offset % 4U == 0U ? "lwu" :
+             size == 2U && offset % 2U == 0U ? "lhu" :
+             size == 1U ? "lbu" : NULL;
+    byte_register = opcode == NULL &&
+                    minic_riscv_gpr_name_equal(destination_register, "t1")
+                        ? "t3" : "t1";
+    address_register =
+        (minic_riscv_gpr_name_equal(destination_register, "t3") ||
+         (opcode == NULL &&
+          minic_riscv_gpr_name_equal(byte_register, "t3"))) ? "t4" : "t3";
+    if (minic_riscv_gpr_name_equal(destination_register, address_register) ||
+        minic_riscv_gpr_name_equal(destination_register, byte_register) ||
+        minic_riscv_gpr_name_equal(address_register, byte_register))
+        return false;
     if (opcode != NULL) {
-        if (!minic_riscv64_frame_emit_address(file, frame, "t3", offset)) {
+        if (!minic_riscv64_frame_emit_address(file, frame, address_register, offset)) {
             return false;
         }
-        return fprintf(file, "  %s %s, 0(t3)\n", opcode, destination_register) >= 0;
+        return fprintf(file, "  %s %s, 0(%s)\n",
+                       opcode, destination_register, address_register) >= 0;
     }
     if (fprintf(file, "  li %s, 0\n", destination_register) < 0) {
         return false;
@@ -187,14 +152,17 @@ minic_riscv64_frame_load_chunk(FILE *file,
             return false;
         }
         byte_offset = offset + byte_index;
-        if (!minic_riscv64_frame_emit_address(file, frame, "t3", byte_offset) ||
-            fprintf(file, "  lbu t1, 0(t3)\n") < 0) {
+        if (!minic_riscv64_frame_emit_address(file, frame, address_register, byte_offset) ||
+            fprintf(file, "  lbu %s, 0(%s)\n", byte_register, address_register) < 0) {
             return false;
         }
-        if (byte_index != 0U && fprintf(file, "  slli t1, t1, %zu\n", byte_index * 8U) < 0) {
+        if (byte_index != 0U &&
+            fprintf(file, "  slli %s, %s, %zu\n",
+                    byte_register, byte_register, byte_index * 8U) < 0) {
             return false;
         }
-        if (fprintf(file, "  or %s, %s, t1\n", destination_register, destination_register) < 0) {
+        if (fprintf(file, "  or %s, %s, %s\n",
+                    destination_register, destination_register, byte_register) < 0) {
             return false;
         }
     }
@@ -208,21 +176,29 @@ minic_riscv64_frame_store_chunk(FILE *file,
                        size_t offset,
                        size_t size) {
     const char *opcode;
+    const char *address_register;
     size_t byte_index;
 
     if (file == NULL || frame == NULL || source_register == NULL ||
         size == 0U || size > 8U) {
         return false;
     }
-    if (size == 8U) {
+    if (size == 8U && offset % 8U == 0U) {
         return minic_riscv64_frame_emit_store64(file, frame, source_register, offset);
     }
-    opcode = size == 4U ? "sw" : size == 2U ? "sh" : size == 1U ? "sb" : NULL;
+    address_register = minic_riscv_gpr_name_equal(source_register, "t3") ?
+                           "t4" : "t3";
+    if (minic_riscv_gpr_name_equal(source_register, address_register))
+        return false;
+    opcode = size == 4U && offset % 4U == 0U ? "sw" :
+             size == 2U && offset % 2U == 0U ? "sh" :
+             size == 1U ? "sb" : NULL;
     if (opcode != NULL) {
-        if (!minic_riscv64_frame_emit_address(file, frame, "t3", offset)) {
+        if (!minic_riscv64_frame_emit_address(file, frame, address_register, offset)) {
             return false;
         }
-        return fprintf(file, "  %s %s, 0(t3)\n", opcode, source_register) >= 0;
+        return fprintf(file, "  %s %s, 0(%s)\n",
+                       opcode, source_register, address_register) >= 0;
     }
     if (fprintf(file, "  mv t1, %s\n", source_register) < 0) {
         return false;
@@ -234,8 +210,8 @@ minic_riscv64_frame_store_chunk(FILE *file,
             return false;
         }
         byte_offset = offset + byte_index;
-        if (!minic_riscv64_frame_emit_address(file, frame, "t3", byte_offset) ||
-            fprintf(file, "  sb t1, 0(t3)\n") < 0) {
+        if (!minic_riscv64_frame_emit_address(file, frame, address_register, byte_offset) ||
+            fprintf(file, "  sb t1, 0(%s)\n", address_register) < 0) {
             return false;
         }
         if (byte_index + 1U < size && fprintf(file, "  srli t1, t1, 8\n") < 0) {

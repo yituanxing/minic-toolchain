@@ -199,6 +199,87 @@ static void global_object_initialize_defaults(MinicGlobalObject *object) {
     }
     (void)memset(object, 0, sizeof(*object));
     object->alias_target = MINIC_GLOBAL_OBJECT_INVALID;
+    object->owner_function = MINIC_FUNCTION_INVALID;
+}
+
+bool minic_c0_program_set_global_object_owner(MinicC0Program *program,
+                                              MinicGlobalObjectId object_id,
+                                              MinicFunctionId owner_function) {
+    MinicGlobalObject *object;
+    if (program == NULL || object_id >= program->global_object_count ||
+        owner_function >= program->function_count) {
+        return false;
+    }
+    object = &program->global_objects[object_id];
+    if (!object->is_internal || object->is_extern ||
+        (object->owner_function != MINIC_FUNCTION_INVALID &&
+         object->owner_function != owner_function)) {
+        return false;
+    }
+    object->owner_function = owner_function;
+    return true;
+}
+
+bool minic_c0_program_global_object_emittable(const MinicC0Program *program,
+                                              const MinicGlobalObject *object) {
+    MinicFunctionId owner;
+    size_t index;
+    if (program == NULL || object == NULL) return false;
+    owner = object->owner_function;
+    if (owner == MINIC_FUNCTION_INVALID) return !object->is_emission_pruned;
+    if (owner >= program->function_count) return false;
+    if (program->functions[owner].is_defined &&
+        (!program->functions[owner].is_internal ||
+         program->functions[owner].is_referenced))
+        return true;
+    /* Specialization clones borrow the original function-scope storage. */
+    for (index = 0U; index < program->function_count; ++index) {
+        const MinicFunction *function = &program->functions[index];
+        if (function->is_integer_specialization &&
+            function->specialization_source == owner && function->is_defined &&
+            (!function->is_internal || function->is_referenced))
+            return true;
+    }
+    return false;
+}
+
+bool minic_c0_program_set_global_object_force_emit(MinicC0Program *program,
+                                                    MinicGlobalObjectId object_id) {
+    if (program == NULL || object_id >= program->global_object_count) return false;
+    program->global_objects[object_id].force_emit = true;
+    return true;
+}
+
+bool *minic_c0_program_build_global_owner_live_map(const MinicC0Program *program) {
+    bool *live;
+    size_t index;
+    if (program == NULL) return NULL;
+    live = calloc(program->function_count == 0U ? 1U : program->function_count,
+                  sizeof(*live));
+    if (live == NULL) return NULL;
+    for (index = 0U; index < program->function_count; ++index) {
+        const MinicFunction *function = &program->functions[index];
+        if (!function->is_defined ||
+            (function->is_internal && !function->is_referenced))
+            continue;
+        live[index] = true;
+        if (function->is_integer_specialization &&
+            function->specialization_source < program->function_count)
+            live[function->specialization_source] = true;
+    }
+    return live;
+}
+
+bool minic_c0_program_global_object_emittable_with_map(
+    const MinicC0Program *program, const MinicGlobalObject *object,
+    const bool *owner_live_map) {
+    MinicFunctionId owner;
+    if (program == NULL || object == NULL) return false;
+    if (owner_live_map == NULL)
+        return minic_c0_program_global_object_emittable(program, object);
+    owner = object->owner_function;
+    return (owner == MINIC_FUNCTION_INVALID && !object->is_emission_pruned) ||
+           (owner < program->function_count && owner_live_map[owner]);
 }
 
 static bool global_object_initial_state_valid(const MinicGlobalObjectInitialState *state) {
@@ -1002,42 +1083,36 @@ static bool global_relocation_object_target_type_compatible(const MinicC0Program
     if (program == NULL || !minic_type_is_pointer(slot_type)) {
         return false;
     }
-    if (has_explicit_pointer_cast) {
-        /* The parser has already validated the explicit pointer-to-pointer cast.
-         * Re-check only the normalized type-level legality here; target identity
-         * and member-path validity are still verified independently. */
-        if (minic_type_pointer_to(target_type, &source_pointer_type) &&
-            minic_type_cast_compatible(slot_type, source_pointer_type)) {
-            return true;
-        }
-        if (minic_type_is_array(target_type)) {
-            const MinicArrayType *array_type;
-
-            array_type = minic_c0_program_array_type(program, target_type.array_type_id);
-            if (array_type != NULL &&
-                minic_type_pointer_to(array_type->element_type, &source_pointer_type) &&
-                minic_type_cast_compatible(slot_type, source_pointer_type)) {
-                return true;
-            }
-        }
-    }
-    /* A symbolic object address can denote the object itself (`&object`). */
+    /* A symbolic object address can denote the object itself (`&object`).
+     * The parser has validated explicit casts already; persisted relocation
+     * validation must retain the same type contract. */
     if (minic_type_pointer_to(target_type, &source_pointer_type) &&
-        global_relocation_pointer_target_type_compatible(program, slot_type, source_pointer_type)) {
+        ((has_explicit_pointer_cast &&
+          minic_type_cast_compatible(slot_type, source_pointer_type)) ||
+         global_relocation_pointer_target_type_compatible(
+             program, slot_type, source_pointer_type))) {
         return true;
     }
-    /* Array-to-pointer decay and `&array[0]` have the same symbol/addend as
-     * `&array`, but their C type is pointer-to-element rather than pointer-to-array.
-     * Preserve that semantic alternative in the persisted relocation contract. */
-    if (minic_type_is_array(target_type)) {
+    /* Array subscripting is stored as a byte addend against the *root* array
+     * symbol. For `array[i][j]`, the root can have two or more array layers
+     * while the initializer slot has type pointer-to-scalar. Check each legal
+     * decay level, not just the outermost one. The parser has already checked
+     * the source expression/slot assignment and calculated the byte addend. */
+    while (minic_type_is_array(target_type)) {
         const MinicArrayType *array_type;
 
         array_type = minic_c0_program_array_type(program, target_type.array_type_id);
-        if (array_type != NULL &&
-            minic_type_pointer_to(array_type->element_type, &source_pointer_type) &&
-            global_relocation_pointer_target_type_compatible(program, slot_type, source_pointer_type)) {
+        if (array_type == NULL ||
+            !minic_type_pointer_to(array_type->element_type, &source_pointer_type)) {
+            return false;
+        }
+        if ((has_explicit_pointer_cast &&
+             minic_type_cast_compatible(slot_type, source_pointer_type)) ||
+            global_relocation_pointer_target_type_compatible(
+                program, slot_type, source_pointer_type)) {
             return true;
         }
+        target_type = array_type->element_type;
     }
     return false;
 }
@@ -1073,7 +1148,9 @@ bool minic_c0_global_relocation_slot_type(const MinicC0Program *program,
         return false;
     }
     if (location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_SCALAR) {
-        if (location_index != 0U || !minic_type_is_pointer(object->type)) {
+        if (location_index != 0U ||
+            (!minic_type_is_pointer(object->type) &&
+             !minic_type_is_integer(object->type))) {
             return false;
         }
         *slot_type = object->type;
@@ -1121,6 +1198,9 @@ bool minic_c0_global_relocation_slot_type(const MinicC0Program *program,
     return false;
 }
 
+/* target_member_indices must not alias object->relocations: insertion may
+ * realloc that array before copying the member path. Current replay callers
+ * pass a separate relocation value, not an address into the growing array. */
 static bool add_global_symbol_relocation(MinicC0Program *program,
                                          MinicGlobalObjectId global_object_id,
                                          MinicGlobalRelocationLocationKind location_kind,
@@ -1505,6 +1585,44 @@ minic_c0_program_fixed_register_binding(const MinicC0Program *program,
     return &program->fixed_register_bindings[binding_id];
 }
 
+/* GNU object aliases name the target's storage, rather than redeclaring
+ * the target's C type.  Linux deliberately exposes readonly aliases for
+ * internal `static volatile const unsigned char[]` lookup tables.  Their
+ * cv-qualification differs from the actual storage but does not change
+ * the object representation.  Keep ordinary C declaration compatibility
+ * strict: only the GNU alias boundary may discard these element qualifiers. */
+bool minic_c0_object_alias_types_compatible(
+    const MinicC0Program *program, MinicType alias_type, MinicType target_type) {
+    const MinicArrayType *alias_array;
+    const MinicArrayType *target_array;
+    MinicType alias_element;
+    MinicType target_element;
+
+    if (minic_c0_types_compatible(program, alias_type, target_type)) {
+        return true;
+    }
+    if (program == NULL || !minic_type_is_array(alias_type) ||
+        !minic_type_is_array(target_type)) {
+        return false;
+    }
+    alias_array = minic_c0_program_array_type(program, alias_type.array_type_id);
+    target_array = minic_c0_program_array_type(program, target_type.array_type_id);
+    if (alias_array == NULL || target_array == NULL ||
+        alias_array->is_zero_length != target_array->is_zero_length ||
+        alias_array->element_count != target_array->element_count) {
+        return false;
+    }
+    alias_element = alias_array->element_type;
+    target_element = target_array->element_type;
+    if (!minic_type_is_integer(alias_element) ||
+        !minic_type_is_integer(target_element) ||
+        !minic_type_unqualified(alias_element, &alias_element) ||
+        !minic_type_unqualified(target_element, &target_element)) {
+        return false;
+    }
+    return minic_type_equal(alias_element, target_element);
+}
+
 bool minic_c0_global_object_set_alias(MinicC0Program *program,
                                       MinicGlobalObjectId global_object_id,
                                       MinicGlobalObjectId target_object_id) {
@@ -1521,7 +1639,7 @@ bool minic_c0_global_object_set_alias(MinicC0Program *program,
         object->is_zero_initialized || object->is_block_scope_extern_only ||
         object->initializer_count != 0U || object->relocation_count != 0U ||
         target->is_extern || target->is_tentative ||
-        !minic_c0_types_compatible(program, object->type, target->type) ||
+        !minic_c0_object_alias_types_compatible(program, object->type, target->type) ||
         (object->alias_target != MINIC_GLOBAL_OBJECT_INVALID &&
          object->alias_target != target_object_id)) {
         return false;

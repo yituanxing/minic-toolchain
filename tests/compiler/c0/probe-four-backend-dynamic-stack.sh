@@ -13,6 +13,12 @@ repo=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 fixtures='dynamic_stack_alloca dynamic_local_vla'
+expected=2
+# The 64-wide-argument AAPCS64 path spills 960 bytes across live alloca.
+if [ "$target" = aarch64 ]; then
+  fixtures="$fixtures dynamic_stack_wide_spill"
+  expected=3
+fi
 passed=0
 for fixture in $fixtures; do
   source="$repo/tests/compiler/c0/$fixture.c"
@@ -20,8 +26,16 @@ for fixture in $fixtures; do
   helper=
   if [ "$fixture" = dynamic_stack_alloca ]; then
     helper="$repo/tests/compiler/c0/dynamic_stack_alloca_helper.c"
+  elif [ "$fixture" = dynamic_stack_wide_spill ]; then
+    helper="$repo/tests/compiler/c0/dynamic_stack_wide_spill_helper.c"
   fi
-  if ! timeout 40s "$MINIC_CC" --target="$target-linux" -S "$source" \
+  # minic-cc consumes preprocessed translation units. GNU -E -P removes
+  # comments/directives and matches the original C seen by cross-GCC.
+  if ! "$gcc" -E -P -std=gnu11 "$source" -o "$work/$fixture.i"; then
+    echo "FOUR_BACKEND_DYNAMIC_STACK=FAIL target=$target fixture=$fixture stage=GNU_PREPROCESS" >&2
+    exit 1
+  fi
+  if ! timeout 40s "$MINIC_CC" --target="$target-linux" -S "$work/$fixture.i" \
         -o "$mini_asm" >"$work/$fixture.mini.out" 2>"$work/$fixture.mini.err" ||
      ! test -s "$mini_asm"; then
     echo "FOUR_BACKEND_DYNAMIC_STACK=FAIL target=$target fixture=$fixture stage=MiniC" >&2
@@ -62,5 +76,5 @@ for fixture in $fixtures; do
   passed=$((passed + 1))
   echo "FOUR_BACKEND_DYNAMIC_STACK_FIXTURE=PASS target=$target fixture=$fixture MiniC_GNU_AS_LINK=1 GNU_QEMU_exit0_byte_exact=1"
 done
-test "$passed" -eq 2
-echo "FOUR_BACKEND_DYNAMIC_STACK=PASS target=$target fixtures=2 nested_alloca=2 spilled_call_args=2 VLA_bound_once=1 GNU_QEMU_differential=1"
+test "$passed" -eq "$expected"
+echo "FOUR_BACKEND_DYNAMIC_STACK=PASS target=$target fixtures=$expected nested_alloca=2 spilled_call_args=2 VLA_bound_once=1 wide_spill_aarch64=$((expected - 2)) GNU_QEMU_differential=1"

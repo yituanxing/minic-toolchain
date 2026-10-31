@@ -2,6 +2,7 @@
 
 #include "target/backend_core_usage.h"
 #include "target/common/global_emit.h"
+#include "target/common/elf_alias_emit.h"
 #include "target/common/program_visit.h"
 #include "target/common/program_emit.h"
 #include <stdint.h>
@@ -11,7 +12,7 @@
 
 /* The complete-output and no-partial-assembly policy used by the two
  * original GNU/QEMU-validated LP64 direct emitters. Keep ISA-specific
- * function instructions, call ABI and optional final legalization private. */
+ * function instructions and call ABI private; typed frames need no text rewrite. */
 static bool minic_multi_direct_fail(MinicDiagnostic *diag, const char *path,
                                     const char *display, const char *why) {
     if (diag != NULL) {
@@ -60,7 +61,9 @@ static bool direct_visit_global(
         success = minic_multi_emit_simple_global(
             out, program, target, obj, minic_multi_emit_elf_relocation);
     else if (obj->alias_target != MINIC_GLOBAL_OBJECT_INVALID)
-        success = false;
+        success = minic_multi_elf_emit_object_alias(
+            out, program, obj,
+            ctx->config->elf_object_type);
     if (!success && getenv("MINIC_M1_TRACE") != NULL) {
         const MinicArrayType *array = minic_type_is_array(obj->type)
             ? minic_c0_program_array_type(program, obj->type.array_type_id) : NULL;
@@ -106,12 +109,18 @@ static bool direct_visit_function(
     return false;
 }
 
-static bool direct_finalize(const char *path, const MinicTargetInfo *target,
-                            void *opaque) {
+static bool direct_between(
+    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *functions, size_t function_count,
+    bool function_sections, void *opaque) {
     const MinicDirectVisitContext *ctx = opaque;
-    (void)target;
-    return ctx->config->finalize_output == NULL ||
-           ctx->config->finalize_output(path);
+    if (ctx == NULL || ctx->config == NULL)
+        return false;
+    return minic_program_emit_source_file_asm_stage(
+               out, program, target, functions, function_count,
+               function_sections, opaque) &&
+           minic_multi_elf_emit_function_aliases(
+               out, program, ctx->config->elf_function_type);
 }
 
 bool minic_multi_direct_write_program(
@@ -126,6 +135,7 @@ bool minic_multi_direct_write_program(
 
     if (config == NULL || config->architecture_name == NULL ||
         config->display_name == NULL || config->gnu_stack_note == NULL ||
+        config->elf_function_type == NULL || config->elf_object_type == NULL ||
         config->emit_function == NULL)
         return false;
     if (path == NULL || program == NULL || target == NULL ||
@@ -134,13 +144,11 @@ bool minic_multi_direct_write_program(
         core_function_count != program->function_count)
         return minic_multi_direct_fail(diagnostic, path, config->display_name,
                                        "invalid Core or target configuration");
-    if (program->file_asm_count != 0U)
-        return minic_multi_direct_fail(diagnostic, path, config->display_name,
-                                       "file asm not supported");
     {
         const MinicProgramEmitConfig emit = {
             direct_visit_global, direct_visit_function,
-            NULL, NULL, config->gnu_stack_note, direct_finalize,
+            NULL, direct_between,
+            config->gnu_stack_note, NULL,
             MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS, census
         };
         success = minic_program_emit_write(

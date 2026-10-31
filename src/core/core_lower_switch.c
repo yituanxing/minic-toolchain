@@ -2,6 +2,7 @@
 #include "core/reentry_index.h"
 #include "core/source_loop_shapes.h"
 #include "core/local_facts.h"
+#include "core/cfg_constant_calls.h"
 #include "frontend/const_eval.h"
 #include "frontend/expression_semantics.h"
 #include <inttypes.h>
@@ -224,58 +225,21 @@ static bool core_switch_label_has_function_reentry(
     const MinicCoreLowerContext *context, MinicStatementId label_id) {
     const MinicC0Program *program;
     const MinicStatement *label;
-    size_t index;
+    MinicCoreReentryQuery query;
 
-    if (context == NULL || context->body == NULL || context->body->program == NULL) {
-        return false;
-    }
+    if (context == NULL || context->body == NULL ||
+        context->body->program == NULL) return false;
     program = context->body->program;
     label = minic_c0_program_statement(program, label_id);
-    if (label == NULL || label->kind != MINIC_STATEMENT_LABEL) {
-        return false;
-    }
-    if (minic_core_reentry_index_ready(context->reentry_index, program))
-        return minic_core_reentry_index_switch_label_referenced(
-            context->reentry_index, program, label_id);
-    for (index = 0U; index < program->statement_count; ++index) {
-        const MinicStatement *source;
+    if (label == NULL || label->kind != MINIC_STATEMENT_LABEL) return false;
 
-        source = minic_c0_program_statement(program, index);
-        if (source == NULL) {
-            return false;
-        }
-        if (source->kind == MINIC_STATEMENT_GOTO &&
-            source->expression == MINIC_EXPRESSION_INVALID &&
-            source->target_statement == label_id) {
-            return true;
-        }
-        if (source->kind == MINIC_STATEMENT_INLINE_ASM &&
-            source->inline_asm_id < program->inline_asm_count) {
-            const MinicInlineAsm *inline_asm = &program->inline_asms[source->inline_asm_id];
-            size_t label_index;
-
-            if (!inline_asm->is_goto) {
-                continue;
-            }
-            for (label_index = 0U; label_index < inline_asm->label_count; ++label_index) {
-                if (inline_asm->labels[label_index].target_statement == label_id) {
-                    return true;
-                }
-            }
-        }
-    }
-    for (index = 0U; index < program->expression_count; ++index) {
-        const MinicExpression *expression = minic_c0_program_expression(program, index);
-
-        if (expression == NULL) {
-            return false;
-        }
-        if (expression->kind == MINIC_EXPRESSION_LABEL_ADDRESS &&
-            expression->value.label_statement_id == label_id) {
-            return true;
-        }
-    }
-    return false;
+    (void)memset(&query, 0, sizeof(query));
+    query.label_id = label_id;
+    query.checks = MINIC_CORE_REENTRY_CHECK_EXTERNAL_JUMP |
+                   MINIC_CORE_REENTRY_CHECK_LABEL_ADDRESS;
+    query.purpose = MINIC_CORE_REENTRY_PURPOSE_SWITCH_LABEL;
+    return minic_core_reentry_query(
+        context->reentry_index, program, &query) != 0U;
 }
 
 /* A break nested under an if/compound block still exits the current switch.
@@ -643,6 +607,16 @@ static bool core_switch_dead_prefix_has_reentry(
     if (stmt->kind == MINIC_STATEMENT_LABEL &&
         core_switch_label_has_function_reentry(context, id))
         return true;
+    /* The AST only owns statement child blocks for actual control-flow
+     * statements. RETURN, BREAK, LABEL and inline ASM have no such children;
+     * consulting their otherwise-unused block fields can walk an unrelated
+     * function block and falsely detect goto re-entry (particularly after a
+     * constant switch case that returns). Keep the global label-reference
+     * check above for genuine user LABEL nodes. */
+    if (stmt->kind != MINIC_STATEMENT_IF &&
+        stmt->kind != MINIC_STATEMENT_WHILE &&
+        stmt->kind != MINIC_STATEMENT_SWITCH)
+        return false;
     children[0] = stmt->then_block;
     children[1] = stmt->else_block;
     for (child = 0U; child < 2U; ++child) {
@@ -679,9 +653,16 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
     size_t first_pre_case_index;
     size_t pre_case_label_count;
     size_t source_index;
+    size_t constant_entry_label;
+    bool prune_constant_prefix;
+    bool prune_constant_suffix;
     bool all_segments_terminate;
     bool segment_breaks[MINIC_CORE_SWITCH_LABEL_LIMIT];
     bool segment_terminates[MINIC_CORE_SWITCH_LABEL_LIMIT];
+    MinicCoreLocalIntegerConstant *entry_facts;
+    MinicCoreLocalIntegerConstant *fallthrough_facts;
+    size_t fact_bytes;
+    bool have_fallthrough_facts;
 
     if (context == NULL || context->body == NULL || context->body->program == NULL ||
         context->function == NULL || statement == NULL || terminated == NULL ||
@@ -743,6 +724,9 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
         }
     }
 
+    constant_entry_label = SIZE_MAX;
+    prune_constant_prefix = false;
+    prune_constant_suffix = false;
     case_count = 0U;
     default_label = SIZE_MAX;
     first_case_label = SIZE_MAX;
@@ -828,7 +812,28 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
         label_count += 1U;
     }
 
-    status = lower_expression(context, statement->expression, &selector_source);
+    /* A proven pure constant-return inline helper has no selector-side
+     * effects.  Do not emit its call before the CFG constant-dispatch pass:
+     * CONFIG-disabled Linux helpers otherwise leave dead references behind.
+     * Non-pure selectors always retain their ordinary evaluation path. */
+    {
+        MinicConstValue constant;
+        MinicConstValue converted;
+        if (minic_core_cfg_pure_call_argument(
+                context, statement->expression, 0U) &&
+            core_const_eval_integer_with_locals(context, statement->expression, &constant) &&
+            minic_const_value_convert_integer(context->body->program,
+                                              context->target,
+                                              &constant,
+                                              selector_type,
+                                              &converted)) {
+            status = append_switch_integer_constant(
+                context, selector_expression->span, selector_type,
+                (int64_t)converted.bits, &selector_source);
+        } else {
+            status = lower_expression(context, statement->expression, &selector_source);
+        }
+    }
     if (status != MINIC_CORE_LOWER_OK) {
         return status;
     }
@@ -913,12 +918,42 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
                 dispatch_target = constant_target == SIZE_MAX
                                       ? default_target
                                       : labels[constant_target].body_block;
+                /* C fallthrough only goes forward; retain selected label
+                 * for a safe shared CFG reachability preflight below. */
+                constant_entry_label = constant_target;
             }
         }
     }
     status = minic_core_lower_internal_set_branch(context, context->block_id, statement->span, dispatch_target);
     if (status != MINIC_CORE_LOWER_OK) {
         return status;
+    }
+
+    /* A constant switch has one real source entry. Prior case segments
+     * cannot be reached by ordinary forward fallthrough. Skip their C
+     * lowering only if NO named label anywhere in the dead prefix has an
+     * external goto/asm-goto/label-address reentry; otherwise keep the
+     * original CFG, including every side effect. This is target-neutral. */
+    /* An externally entered PRE-CASE named label may fall through into
+     * case 0 regardless of constant switch dispatch: retain the entire
+     * source prefix when such a reentry exists. */
+    if (pre_case_label_count == 0U &&
+        constant_entry_label != SIZE_MAX && constant_entry_label != 0U) {
+        size_t label_index;
+        prune_constant_prefix = true;
+        for (label_index = 0U; label_index < constant_entry_label &&
+                               prune_constant_prefix; ++label_index) {
+            const size_t first = labels[label_index].source_index + 1U;
+            const size_t last = labels[label_index + 1U].source_index;
+            size_t k;
+            for (k = first; k < last; ++k) {
+                if (core_switch_dead_prefix_has_reentry(
+                        context, body->statements[k], 0U)) {
+                    prune_constant_prefix = false;
+                    break;
+                }
+            }
+        }
     }
 
     if (case_count != 0U) {
@@ -1006,6 +1041,23 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
        break still reaches the synthetic exit and is therefore non-terminating. */
     (void)memset(segment_breaks, 0, sizeof(segment_breaks));
     (void)memset(segment_terminates, 0, sizeof(segment_terminates));
+    /* Each label is reachable from the selector dispatch; a preceding label
+     * contributes a second predecessor only on actual fallthrough. Maintain
+     * the intersection of both paths' local facts before lowering each case. */
+    if (context->source_function == NULL ||
+        context->source_function->local_count >
+            SIZE_MAX / sizeof(*fallthrough_facts))
+        return MINIC_CORE_LOWER_ERROR;
+    fact_bytes = context->source_function->local_count * sizeof(*fallthrough_facts);
+    entry_facts = minic_core_local_facts_snapshot(context);
+    fallthrough_facts = fact_bytes == 0U ? NULL : malloc(fact_bytes);
+    if (fact_bytes != 0U && (entry_facts == NULL || fallthrough_facts == NULL)) {
+        free(entry_facts);
+        free(fallthrough_facts);
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    have_fallthrough_facts = false;
+    status = MINIC_CORE_LOWER_OK;
     for (source_index = 0U; source_index < label_count; ++source_index) {
         MinicBlock segment;
         MinicCoreBlockId fallthrough_target;
@@ -1016,6 +1068,36 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
         size_t scan;
         MinicCoreBlockId saved_break_target;
         bool segment_terminated;
+
+        minic_core_local_facts_restore(context, entry_facts);
+        if (have_fallthrough_facts &&
+            !minic_core_local_facts_meet(context, entry_facts, fallthrough_facts)) {
+            status = MINIC_CORE_LOWER_ERROR;
+            goto switch_case_facts_cleanup;
+        }
+        have_fallthrough_facts = false;
+
+        if ((prune_constant_prefix && source_index < constant_entry_label) ||
+            (prune_constant_suffix && source_index > constant_entry_label)) {
+            MinicCoreTerminator unreachable;
+            (void)memset(&unreachable, 0, sizeof(unreachable));
+            unreachable.kind = MINIC_CORE_TERMINATOR_UNREACHABLE;
+            unreachable.span = labels[source_index].statement->span;
+            unreachable.return_value = MINIC_CORE_VALUE_INVALID;
+            unreachable.return_object = MINIC_CORE_OBJECT_INVALID;
+            /* Constant source entry bypasses these C segments, but each
+             * block still has a valid Core terminator. No machine code
+             * may represent dead GNU assembly or accidental effects. */
+            if (!minic_core_function_set_terminator(
+                    context->function, labels[source_index].body_block,
+                    &unreachable)) {
+                status = MINIC_CORE_LOWER_ERROR;
+                goto switch_case_facts_cleanup;
+            }
+            segment_terminates[source_index] = true;
+            segment_breaks[source_index] = false;
+            continue;
+        }
 
         segment_begin = labels[source_index].source_index + 1U;
         segment_end = source_index + 1U < label_count ? labels[source_index + 1U].source_index
@@ -1028,7 +1110,8 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
             segment_statement =
                 minic_c0_program_statement(context->body->program, body->statements[scan]);
             if (segment_statement == NULL) {
-                return MINIC_CORE_LOWER_ERROR;
+                status = MINIC_CORE_LOWER_ERROR;
+                goto switch_case_facts_cleanup;
             }
             /* A direct break terminates ordinary switch fallthrough. A later
                ordinary LABEL is reachable only when the function really owns
@@ -1058,7 +1141,8 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
                                   scan,
                                   (unsigned long long)segment_statement->cleanup_context,
                                   (unsigned long long)segment_statement->cleanup_stop_context);
-                    return MINIC_CORE_LOWER_UNSUPPORTED;
+                    status = MINIC_CORE_LOWER_UNSUPPORTED;
+                    goto switch_case_facts_cleanup;
                 }
                 if (break_index == SIZE_MAX) {
                     break_index = scan;
@@ -1079,26 +1163,78 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
             status = minic_core_lower_internal_lower_block(context, &segment, &segment_terminated);
             context->break_target = saved_break_target;
             if (status != MINIC_CORE_LOWER_OK) {
-                return status;
+                goto switch_case_facts_cleanup;
             }
         }
         segment_terminates[source_index] = segment_terminated;
+        /* A direct break appearing after a return-only nested statement is
+         * source-unreachable and must not make the enclosing switch appear
+         * to have a live exit path. A conditional break within the lowered
+         * segment still owns an explicit edge to exit_block. */
         segment_breaks[source_index] =
-            break_index != SIZE_MAX ||
+            (!segment_terminated && break_index != SIZE_MAX) ||
             core_switch_block_has_outer_break(context, &segment, true);
-        if (segment_terminated) {
-            continue;
+
+        /* Constant entry + proven direct source break/return ends EVERY
+         * ordinary C fallthrough edge to later case bodies. Those later
+         * cases are semantically unreachable even when they contain
+         * target-specific ISA templates (Linux __smp_store_release has
+         * three such cases for a byte-sized spinlock). A nested conditional
+         * break is NOT sufficient: only the explicit top-level break
+         * recorded by this case walker or a terminated source segment is.
+         * Function-level goto/asm-goto/label-address into any later body
+         * defeats the entire suffix prune. Keep all ISA knowledge in Target. */
+        if (constant_entry_label != SIZE_MAX &&
+            pre_case_label_count == 0U &&
+            source_index >= constant_entry_label &&
+            !prune_constant_suffix &&
+            reentry_index == SIZE_MAX &&
+            (break_index != SIZE_MAX || segment_terminated)) {
+            size_t later;
+            bool safe = true;
+            for (later = source_index + 1U; later < label_count && safe; ++later) {
+                const size_t first = labels[later].source_index + 1U;
+                const size_t limit = later + 1U < label_count
+                    ? labels[later + 1U].source_index
+                    : body->statement_count;
+                size_t k;
+                for (k = first; k < limit; ++k) {
+                    if (core_switch_dead_prefix_has_reentry(
+                            context, body->statements[k], 0U)) {
+                        safe = false;
+                        break;
+                    }
+                }
+            }
+            prune_constant_suffix = safe;
         }
-        if (break_index != SIZE_MAX) {
-            fallthrough_target = exit_block;
-        } else if (source_index + 1U < label_count) {
-            fallthrough_target = labels[source_index + 1U].body_block;
-        } else {
-            fallthrough_target = exit_block;
+        /* A segment may end in a return/goto on every linear path, yet a
+         * separate C label after an unconditional break is entered by an
+         * earlier function-level goto. Its detached entry MUST still be
+         * lowered even when the preceding case body terminated. In
+         * particular Linux retbleed has `goto do_cmd_auto;` followed by
+         * `break; do_cmd_auto: case AUTO:`. Skipping the reentry would leave
+         * a live branch into an empty, unterminated Core block. */
+        if (!segment_terminated) {
+            if (break_index != SIZE_MAX) {
+                fallthrough_target = exit_block;
+            } else if (source_index + 1U < label_count) {
+                fallthrough_target = labels[source_index + 1U].body_block;
+            } else {
+                fallthrough_target = exit_block;
+            }
+            status = minic_core_lower_internal_set_branch(
+                context, context->block_id, statement->span, fallthrough_target);
+            if (status != MINIC_CORE_LOWER_OK) {
+                goto switch_case_facts_cleanup;
+            }
         }
-        status = minic_core_lower_internal_set_branch(context, context->block_id, statement->span, fallthrough_target);
-        if (status != MINIC_CORE_LOWER_OK) {
-            return status;
+        if (!segment_terminated && break_index == SIZE_MAX &&
+            source_index + 1U < label_count) {
+            if (fact_bytes != 0U)
+                (void)memcpy(fallthrough_facts,
+                             context->local_integer_constants, fact_bytes);
+            have_fallthrough_facts = true;
         }
 
         if (reentry_index != SIZE_MAX) {
@@ -1113,12 +1249,13 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
                 reentry_label->target_expression != MINIC_EXPRESSION_INVALID ||
                 reentry_label->expression != MINIC_EXPRESSION_INVALID ||
                 reentry_label->target_statement != MINIC_STATEMENT_INVALID) {
-                return MINIC_CORE_LOWER_UNSUPPORTED;
+                status = MINIC_CORE_LOWER_UNSUPPORTED;
+                goto switch_case_facts_cleanup;
             }
             status = ensure_statement_block(
                 context, body->statements[reentry_index], &reentry_block);
             if (status != MINIC_CORE_LOWER_OK) {
-                return status;
+                goto switch_case_facts_cleanup;
             }
             context->block_id = reentry_block;
             reentry_terminated = false;
@@ -1132,7 +1269,7 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
                 status = minic_core_lower_internal_lower_block(context, &reentry_segment, &reentry_terminated);
                 context->break_target = saved_break_target;
                 if (status != MINIC_CORE_LOWER_OK) {
-                    return status;
+                    goto switch_case_facts_cleanup;
                 }
             }
             if (!reentry_terminated) {
@@ -1145,11 +1282,28 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
                 status = minic_core_lower_internal_set_branch(
                     context, context->block_id, reentry_label->span, reentry_fallthrough);
                 if (status != MINIC_CORE_LOWER_OK) {
-                    return status;
+                    goto switch_case_facts_cleanup;
+                }
+                if (source_index + 1U < label_count) {
+                    if (have_fallthrough_facts &&
+                        !minic_core_local_facts_meet(
+                            context, fallthrough_facts,
+                            context->local_integer_constants)) {
+                        status = MINIC_CORE_LOWER_ERROR;
+                        goto switch_case_facts_cleanup;
+                    }
+                    if (fact_bytes != 0U)
+                        (void)memcpy(fallthrough_facts,
+                                     context->local_integer_constants, fact_bytes);
+                    have_fallthrough_facts = true;
                 }
             }
         }
     }
+switch_case_facts_cleanup:
+    free(entry_facts);
+    free(fallthrough_facts);
+    if (status != MINIC_CORE_LOWER_OK) return status;
 
     all_segments_terminate = default_label != SIZE_MAX && label_count != 0U;
     if (all_segments_terminate) {
@@ -1174,7 +1328,13 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
     }
 
     context->block_id = exit_block;
-    if (all_segments_terminate) {
+    /* Source-level break tokens alone are not proof of a reachable exit:
+     * nested switches can return along every dispatch path, leaving their
+     * trailing `break` syntactically present but dynamically unreachable.
+     * An exit with no Core CFG predecessor is universally unreachable,
+     * independently of case-fallthrough classification. */
+    if (all_segments_terminate ||
+        !minic_core_lower_internal_block_has_predecessor(context->function, exit_block)) {
         MinicCoreTerminator exit_terminator;
 
         (void)memset(&exit_terminator, 0, sizeof(exit_terminator));

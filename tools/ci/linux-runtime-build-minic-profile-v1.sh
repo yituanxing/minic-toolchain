@@ -27,10 +27,15 @@ if [[ "${MINIC_CURRENT_MAIN_SEVEN_RECHECK:-0}" == 1 ]] ||
   # the new source. Validate the exact checked-out current main commit
   # instead, then compile 2064 real C owners with the existing seven-way
   # GNU-Kbuild source/ASM/link/QEMU oracle (no patch injection).
-  test -n "${GITHUB_SHA:-}" && test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+  # workflow_dispatch/push use GITHUB_SHA as the checked-out commit. In a
+  # pull_request exact-head campaign it instead identifies GitHub's synthetic
+  # merge commit, while actions/checkout intentionally checks out PR head.
+  # Accept an explicit CI-bound expected HEAD, never an arbitrary stale pool.
+  expected_checkout_sha=${MINIC_EXPECTED_HEAD_SHA:-${GITHUB_SHA:-}}
+  test -n "$expected_checkout_sha" && test "$(git rev-parse HEAD)" = "$expected_checkout_sha"
   git diff --quiet -- src include Makefile
   native_profile=1
-  echo "MINIC_CURRENT_MAIN_PROFILE=CHECKED_OUT_SOURCE_VALIDATED sha=$GITHUB_SHA old_runtime44_sha_manifest=HISTORICAL_ONLY"
+  echo "MINIC_CURRENT_MAIN_PROFILE=CHECKED_OUT_SOURCE_VALIDATED sha=$expected_checkout_sha old_runtime44_sha_manifest=HISTORICAL_ONLY"
 elif [[ -f "$native_manifest" ]]; then
   native_profile=1
   while read -r expected file; do

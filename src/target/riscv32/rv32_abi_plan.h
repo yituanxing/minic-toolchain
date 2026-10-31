@@ -14,6 +14,10 @@
 typedef struct Rv32AbiWordLocation {
     MinicRiscv32AbiPlacement location;
     unsigned words;
+    /* Source C ABI alignment, not width; 8-byte records may align to 1/4/8.
+     * In unnamed RV32 variadics only a two-word, 8-aligned value gets an
+     * even-numbered argument register pair. */
+    size_t alignment;
     /* For Core record objects: <=2 XLEN words by value, larger records
      * by reference to a caller-owned snapshot per the soft ILP32 psABI. */
     size_t record_size;

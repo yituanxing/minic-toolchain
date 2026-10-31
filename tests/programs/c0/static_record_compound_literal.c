@@ -25,7 +25,7 @@ static NameHolder name_holder = { backing_name };
 
 static const char *const relocation_names[] = { "backing", "literal" };
 
-static Outer value = {
+static Outer value __attribute__((used)) = {
     3,
     (Inner) {
         .magic = 0xdead4ead,

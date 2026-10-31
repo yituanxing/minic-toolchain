@@ -3,6 +3,7 @@
 #include <inttypes.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 
 /* Private recursive bitfield helper is needed before its first invocation.
  * It is no longer an exported Common ABI endpoint. */
@@ -43,26 +44,36 @@ bool minic_multi_emit_relocatable_scalar_array(FILE *out, const MinicC0Program *
                                 &element_bytes, &alignment) ||
         element_bytes == 0U || arr->element_count > SIZE_MAX / element_bytes ||
         arr->element_count * element_bytes != storage_size ||
-        arr->element_count != obj->initializer_count)
+        obj->initializer_count > arr->element_count ||
+        (obj->initializer_count != 0U && obj->initializer_values == NULL) ||
+        (obj->relocation_count != 0U && obj->relocations == NULL))
         return false;
     (void)alignment;
+    /* C permits trailing implicit-zero array elements.  The number of
+     * explicit initializer slots is not the array's storage extent, and
+     * target ELF relocation slots may be interleaved with those values.
+     * Serialize the full DataLayout extent without reading past the source
+     * initializer vector.  Never invent a relocation for a zero slot. */
     for (i = 0U; i < arr->element_count; ++i) {
         const MinicGlobalRelocation *reloc =
             relocation_index < obj->relocation_count ?
                 &obj->relocations[relocation_index] : NULL;
+        const uint64_t bits = i < obj->initializer_count ?
+            obj->initializer_values[i] : UINT64_C(0);
         if (reloc != NULL &&
             (reloc->location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_ARRAY_ELEMENT ||
              reloc->location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR) &&
             reloc->location_index == i) {
-            if (obj->initializer_values[i] != 0U ||
+            if (bits != 0U ||
                 !emit_relocation(out, program, target, reloc, element_bytes))
                 return false;
             ++relocation_index;
+        } else if (i >= obj->initializer_count) {
+            if (fprintf(out, "  .zero %zu\n", element_bytes) < 0)
+                return false;
         } else if (!(emit_bits != NULL
-                        ? emit_bits(out, program, target, arr->element_type,
-                                    obj->initializer_values[i])
-                        : minic_multi_emit_data_bits(
-                              out, element_bytes, obj->initializer_values[i])))
+                        ? emit_bits(out, program, target, arr->element_type, bits)
+                        : minic_multi_emit_data_bits(out, element_bytes, bits)))
             return false;
     }
     return relocation_index == obj->relocation_count;
@@ -95,11 +106,24 @@ static bool minic_multi_emit_flat_record_array(FILE *out, const MinicC0Program *
         record_bytes == 0U || array->element_count > SIZE_MAX / record_bytes ||
         array->element_count * record_bytes != storage_size ||
         record->field_count > SIZE_MAX / array->element_count ||
-        record->field_count * array->element_count != object->initializer_count)
+        object->initializer_count > record->field_count * array->element_count ||
+        object->initializer_count % record->field_count != 0U ||
+        (object->initializer_count != 0U && object->initializer_values == NULL) ||
+        (object->relocation_count != 0U && object->relocations == NULL))
         return false;
     (void)record_align;
     for (element = 0U; element < array->element_count; ++element) {
         size_t cursor = 0U;
+        /* All absent trailing records are C-zero-initialized, including
+         * internal pointer fields and padding.  Do not index an absent
+         * flattened slot; the complete extent still comes from DataLayout.
+         * Any relocation accidentally targeting this tail is rejected by
+         * the final relocation-consumption check below. */
+        if (element >= object->initializer_count / record->field_count) {
+            if (fprintf(out, "  .zero %zu\n", record_bytes) < 0)
+                return false;
+            continue;
+        }
         for (field_index = 0U; field_index < record->field_count; ++field_index) {
             const MinicRecordField *field = minic_c0_record_field(record, field_index);
             const MinicGlobalRelocation *reloc =
@@ -203,7 +227,7 @@ bool minic_multi_emit_zero_relocation_global(FILE *out, const MinicC0Program *pr
     size_t cursor = 0U, i, width;
     if (out == NULL || program == NULL || target == NULL || obj == NULL ||
         emit_relocation == NULL ||
-        !obj->is_zero_initialized || obj->initializer_count != 0U ||
+        obj->initializer_count != 0U ||
         obj->relocation_count == 0U ||
         (!minic_type_is_pointer(obj->type) &&
          !minic_type_is_array(obj->type) &&
@@ -425,6 +449,25 @@ static bool minic_multi_emit_recursive_global_value(
         const MinicGlobalRelocation *reloc =
             *relocation_index < object->relocation_count
                 ? &object->relocations[*relocation_index] : NULL;
+        /* GNU Linux embeds 128-bit integer state within nested static
+         * records. The scalar initializer model currently stores one
+         * 64-bit payload per leaf: zero is unambiguous across BOTH 64-bit
+         * halves and can be emitted exactly, whereas a nonzero 128-bit
+         * initializer must await a full-width payload representation.
+         * Never truncate or silently drop a relocation into this slot. */
+        if (minic_type_is_int128_integer(type) && type_size == 16U) {
+            if (*initializer_index >= object->initializer_count ||
+                object->initializer_values == NULL ||
+                object->initializer_values[*initializer_index] != 0U ||
+                (reloc != NULL &&
+                 reloc->location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR &&
+                 reloc->location_index == *initializer_index) ||
+                fprintf(out, "  .zero 16\n") < 0)
+                return false;
+            ++*initializer_index;
+            *emitted_size = 16U;
+            return true;
+        }
         if (*initializer_index >= object->initializer_count ||
             minic_multi_data_directive(type_size) == NULL)
             return false;
@@ -715,15 +758,18 @@ bool minic_multi_emit_record_array_global(
     if (record == NULL || !record->is_complete ||
         record->field_count == 0U || array->element_count == 0U)
         return false;
+    /* The flat walker can serialize fully specified initial records
+     * followed by whole implicit-zero records.  Partial final records and
+     * nested shapes retain the recursive DataLayout owner. */
     flat = !record->is_union &&
            record->field_count <= SIZE_MAX / array->element_count &&
-           record->field_count * array->element_count == object->initializer_count;
+           object->initializer_count <= record->field_count * array->element_count &&
+           object->initializer_count % record->field_count == 0U;
     for (i = 0U; i < record->field_count && flat; ++i) {
         const MinicRecordField *field = minic_c0_record_field(record, i);
         if (field == NULL || field->element_count != 1U ||
             minic_type_is_array(field->type) ||
-            (minic_type_is_record(field->type) &&
-             !minic_c0_program_record(program, field->type.record_id)->is_union))
+            minic_type_is_record(field->type))
             flat = false;
     }
     if (flat)
@@ -896,176 +942,190 @@ bool minic_multi_emit_elf_symbol_visibility(FILE *out, MinicSymbolVisibility vis
            (directive != NULL && fprintf(out, "%s %s\n", directive, name) >= 0);
 }
 
-bool minic_multi_emit_simple_global(FILE *out, const MinicC0Program *program,
-                               const MinicTargetInfo *target,
-                               const MinicGlobalObject *obj,
-                                    MinicMultiRelocEmitter emit_relocation) {
+/* GNU original Linux named object sections are ELF metadata, not ISA ABI.
+ * Disallow arbitrary GAS directives/flags supplied by C attributes. */
+bool minic_multi_elf_safe_section_name(const char *name) {
+    size_t i;
+    if (name == NULL || name[0] == '\0') return false;
+    for (i = 0U; name[i] != '\0'; ++i) {
+        const char c = name[i];
+        if (i >= 255U ||
+            !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+              (c >= '0' && c <= '9') || c == '_' || c == '.' ||
+              c == '$' || c == '-'))
+            return false;
+    }
+    return true;
+}
+static bool minic_multi_elf_section_is_bss(const char *name) {
+    return name != NULL && strncmp(name, ".bss", 4U) == 0 &&
+           (name[4] == '\0' || name[4] == '.');
+}
+bool minic_multi_emit_elf_global_section(FILE *out,
+    const MinicGlobalObject *obj, const char *fallback) {
+    if (out == NULL || obj == NULL || fallback == NULL) return false;
+    if (obj->section_name == NULL)
+        return fprintf(out, "%s\n", fallback) >= 0;
+    if (!minic_multi_elf_safe_section_name(obj->section_name))
+        return false;
+    return fprintf(out, ".section %s,\"%s\",@%s\n",
+        obj->section_name, obj->is_read_only ? "a" : "aw",
+        minic_multi_elf_section_is_bss(obj->section_name)
+            ? "nobits" : "progbits") >= 0;
+}
+bool minic_multi_emit_elf_global_binding(FILE *out,
+    const MinicGlobalObject *obj) {
+    if (out == NULL || obj == NULL) return false;
+    if (obj->is_internal) return !obj->is_weak;
+    return fprintf(out, "%s %s\n",
+        obj->is_weak ? ".weak" : ".globl", obj->name) >= 0;
+}
+
+bool minic_multi_global_emission_plan_build(
+    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicGlobalObject *obj, MinicMultiGlobalEmissionPlan *plan) {
     MinicType scalar;
-    size_t storage_size, align, width, scalar_align, i;
-    const char *directive;
-    if (obj == NULL || obj->name == NULL || !obj->name[0] ||
-        obj->is_weak ||
+    size_t size, alignment, width, scalar_alignment, index;
+    if (plan == NULL || program == NULL || target == NULL ||
+        target->data_layout == NULL || obj == NULL || obj->name == NULL ||
+        obj->name[0] == '\0' ||
         (obj->visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT &&
          minic_multi_elf_visibility_directive(obj->visibility) == NULL) ||
-        obj->section_name != NULL ||
         obj->alias_target != MINIC_GLOBAL_OBJECT_INVALID ||
+        (obj->initializer_count != 0U && obj->initializer_values == NULL) ||
+        (obj->relocation_count != 0U && obj->relocations == NULL) ||
         !minic_data_layout_global_object(target->data_layout, program, obj,
-                                         &storage_size, &align)) return false;
-    /* .internal/.hidden must be emitted even for flat record globals. */
-    if (!obj->is_internal &&
-        !minic_multi_emit_elf_symbol_visibility(out, obj->visibility, obj->name))
+                                         &size, &alignment))
         return false;
-    /* An uninitialized file-scope object is zero-filled, including an
-     * array of records. Original TinyCC __vstack[257] has five-field
-     * SValue records and no explicit initializer. Its bytes are all zero:
-     * requiring 257 recursive record initializers is incorrect.
-     * A definition that has no bytes and no relocations may use .zero
-     * for its entire DataLayout-computed extent, preserving alignment. */
-    if (obj->initializer_count == 0U &&
-        obj->relocation_count == 0U &&
-        obj->union_selection_count == 0U) {
-        const char *section = obj->is_read_only ? ".section .rodata" : ".bss";
-        return fprintf(out, "%s\n", section) >= 0 &&
-            (obj->is_internal ||
-             fprintf(out, ".globl %s\n", obj->name) >= 0) &&
-            fprintf(out, "  .balign %zu\n.type %s,@object\n%s:\n"
-                         "  .zero %zu\n.size %s,%zu\n",
-                    align, obj->name, obj->name, storage_size,
-                    obj->name, storage_size) >= 0;
-    }
-    if (obj->is_zero_initialized && obj->initializer_count == 0U &&
-        obj->relocation_count != 0U &&
-        (minic_type_is_pointer(obj->type) || minic_type_is_array(obj->type))) {
-        const char *const section = obj->is_read_only
-            ? ".section .data.rel.ro" : ".data";
-        if (fprintf(out, "%s\n", section) < 0 ||
-            (!obj->is_internal && fprintf(out, ".globl %s\n", obj->name) < 0) ||
-            fprintf(out, "  .balign %zu\n.type %s,@object\n%s:\n",
-                    align, obj->name, obj->name) < 0 ||
-            !minic_multi_emit_zero_relocation_global(out, program, target,
-                obj, storage_size, emit_relocation) ||
-            fprintf(out, ".size %s,%zu\n", obj->name, storage_size) < 0)
+    memset(plan, 0, sizeof(*plan));
+    plan->storage_size = size;
+    plan->storage_alignment = alignment;
+
+    /* GNU C rejects nonzero values and symbolic relocations in .bss / .bss.*
+     * even when explicitly selected by a section attribute. A NOBITS ELF
+     * object must have a bytewise zero payload; fail before writing GAS. */
+    if (minic_multi_elf_section_is_bss(obj->section_name)) {
+        if (obj->relocation_count != 0U) {
             return false;
+        }
+        for (index = 0U; index < obj->initializer_count; ++index) {
+            if (obj->initializer_values[index] != 0U) {
+                return false;
+            }
+        }
+    }
+
+    /* Zero payloads need no fabricated record/array initializer slots.
+     * A fully zero record remains bytewise zero including bitfield padding. */
+    if (obj->initializer_count == 0U && obj->relocation_count == 0U &&
+        obj->union_selection_count == 0U) {
+        plan->payload_kind = MINIC_MULTI_GLOBAL_PAYLOAD_ZERO;
+        plan->default_elf_section = obj->is_read_only ? ".section .rodata" : ".bss";
         return true;
     }
-    /* File-scope records/unions lacking scalar initializers are zero-filled
-     * even when an implicit definition has no is_zero_initialized flag.
-     * Also accept explicit all-zero initializers, not relocation payloads. */
+    if (obj->initializer_count == 0U && obj->relocation_count != 0U &&
+        (minic_type_is_pointer(obj->type) || minic_type_is_array(obj->type) ||
+         minic_type_is_record(obj->type) ||
+         (minic_type_is_integer(obj->type) &&
+          size == target->data_layout->pointer_size))) {
+        plan->payload_kind = MINIC_MULTI_GLOBAL_PAYLOAD_ZERO_RELOCATIONS;
+        plan->default_elf_section = obj->is_read_only
+            ? ".section .data.rel.ro" : ".data";
+        return true;
+    }
     if (minic_type_is_record(obj->type) && obj->relocation_count == 0U) {
         bool all_zero = obj->initializer_count == 0U;
-        if (obj->initializer_count != 0U && obj->initializer_values != NULL) {
+        if (obj->initializer_count != 0U) {
             all_zero = true;
-            for (i = 0U; i < obj->initializer_count; ++i)
-                if (obj->initializer_values[i] != 0U) {
+            for (index = 0U; index < obj->initializer_count; ++index) {
+                if (obj->initializer_values[index] != 0U) {
                     all_zero = false;
                     break;
                 }
+            }
         }
         if (all_zero) {
-            const char *const section = obj->is_read_only
+            plan->payload_kind = MINIC_MULTI_GLOBAL_PAYLOAD_ZERO;
+            plan->default_elf_section = obj->is_read_only
                 ? ".section .rodata" : ".bss";
-            return fprintf(out, "%s\n", section) >= 0 &&
-                (obj->is_internal ||
-                 fprintf(out, ".globl %s\n", obj->name) >= 0) &&
-                fprintf(out, "  .balign %zu\n.type %s,@object\n%s:\n"
-                             "  .zero %zu\n.size %s,%zu\n",
-                        align, obj->name, obj->name,
-                        storage_size, obj->name, storage_size) >= 0;
+            return true;
         }
     }
     if (minic_type_is_record(obj->type)) {
         const MinicRecord *record =
             minic_c0_program_record(program, obj->type.record_id);
-        const bool recursive = minic_multi_record_initializer_needs_recursive(
-            record, obj);
         if (record == NULL) return false;
-        if (fprintf(out, "%s\n", obj->is_read_only
-                        ? (obj->relocation_count != 0U
-                           ? ".section .data.rel.ro" : ".section .rodata")
-                        : ".data") < 0 ||
-            (!obj->is_internal &&
-             fprintf(out, ".globl %s\n", obj->name) < 0) ||
-            fprintf(out, "  .balign %zu\n.type %s,@object\n%s:\n",
-                    align, obj->name, obj->name) < 0 ||
-            !(obj->flexible_array_initializer_count != 0U
-                  ? minic_multi_emit_flexible_record_global(
-                        out, program, target, obj, storage_size,
-                        emit_relocation)
-                  : recursive
-                    ? minic_multi_emit_recursive_record_global(
-                          out, program, target, obj, storage_size,
-                          emit_relocation)
-                    : minic_multi_emit_flat_record_global(out, program, target, obj,
-                                              storage_size, emit_relocation, NULL)) ||
-            fprintf(out, ".size %s,%zu\n", obj->name, storage_size) < 0)
-            return false;
+        plan->payload_kind = obj->flexible_array_initializer_count != 0U
+            ? MINIC_MULTI_GLOBAL_PAYLOAD_RECORD_FLEXIBLE
+            : minic_multi_record_initializer_needs_recursive(record, obj)
+            ? MINIC_MULTI_GLOBAL_PAYLOAD_RECORD_RECURSIVE
+            : MINIC_MULTI_GLOBAL_PAYLOAD_RECORD_FLAT;
+        plan->default_elf_section = obj->is_read_only
+            ? (obj->relocation_count != 0U
+               ? ".section .data.rel.ro" : ".section .rodata")
+            : ".data";
         return true;
     }
-    /* zlib real-source pressure: z_errmsg[] is a pointer-relocation
-     * array, configuration_table[] an array of records with call targets,
-     * and inflate/trees expose large arrays of nested flat records.
-     * Share proven DataLayout traversal; preserve ISA-owned ELF relocation. */
     if (minic_type_is_array(obj->type)) {
         const MinicArrayType *array =
             minic_c0_program_array_type(program, obj->type.array_type_id);
-        bool array_of_records;
-        bool nested_record_array = false;
-        bool nested_relocatable_array;
+        bool record_array, nested_record = false;
+        bool nested_relocatable;
         MinicType leaf;
         if (array == NULL) return false;
-        array_of_records = minic_type_is_record(array->element_type);
-        /* A 2-D function-pointer dispatch table uses one aggregate
-         * relocation slot per leaf, not an outer-array element index.
-         * Zstd blockCompressor[4][10] has 40 values and 33 relocations.
-         * Never pass such a table to the flat one-dimensional walker. */
-        nested_relocatable_array =
-            minic_type_is_array(array->element_type) &&
+        record_array = minic_type_is_record(array->element_type);
+        nested_relocatable = minic_type_is_array(array->element_type) &&
             obj->relocation_count != 0U;
         leaf = array->element_type;
-        /* An array-of-arrays-of-records is one aggregate, not a flat
-         * scalar array. Zstd's unchanged algoTime[16][2] has 64 scalar
-         * slots across 32 structs. Use the already qualified recursive
-         * DataLayout walker for exact ILP32/LP64 field bytes and padding. */
         while (minic_type_is_array(leaf)) {
             const MinicArrayType *nested =
                 minic_c0_program_array_type(program, leaf.array_type_id);
             if (nested == NULL) return false;
             leaf = nested->element_type;
-            if (minic_type_is_record(leaf))
-                nested_record_array = true;
+            if (minic_type_is_record(leaf)) nested_record = true;
         }
-        if (obj->union_selection_count != 0U &&
-            !array_of_records && !nested_record_array) return false;
-        if (array_of_records || nested_record_array ||
-            obj->relocation_count != 0U) {
-            const char *section = obj->is_read_only
+        if (obj->union_selection_count != 0U && !record_array &&
+            !nested_record) return false;
+        if (record_array || nested_record || obj->relocation_count != 0U) {
+            plan->payload_kind = record_array
+                ? MINIC_MULTI_GLOBAL_PAYLOAD_ARRAY_RECORD
+                : nested_record || nested_relocatable
+                ? MINIC_MULTI_GLOBAL_PAYLOAD_ARRAY_RECURSIVE
+                : MINIC_MULTI_GLOBAL_PAYLOAD_ARRAY_SCALAR_RELOCATIONS;
+            plan->default_elf_section = obj->is_read_only
                 ? (obj->relocation_count != 0U
-                   ? ".section .data.rel.ro" : ".section .rodata") : ".data";
-            if ((obj->initializer_count != 0U &&
-                 obj->initializer_values == NULL) ||
-                fprintf(out, "%s\n", section) < 0 ||
-                (!obj->is_internal &&
-                 fprintf(out, ".globl %s\n", obj->name) < 0) ||
-                fprintf(out, "  .balign %zu\n.type %s,@object\n%s:\n",
-                        align, obj->name, obj->name) < 0 ||
-                !(array_of_records
-                    ? minic_multi_emit_record_array_global(
-                          out, program, target, obj, storage_size,
-                          emit_relocation)
-                    : nested_record_array || nested_relocatable_array
-                    ? minic_multi_emit_recursive_aggregate_global(
-                          out, program, target, obj, storage_size,
-                          emit_relocation, NULL)
-                    : minic_multi_emit_relocatable_scalar_array(
-                          out, program, target, obj, storage_size,
-                          emit_relocation, NULL)) ||
-                fprintf(out, ".size %s,%zu\n", obj->name, storage_size) < 0)
-                return false;
+                   ? ".section .data.rel.ro" : ".section .rodata")
+                : ".data";
             return true;
         }
     }
-    if (obj->union_selection_count != 0U ||
-        obj->relocation_count != 0U) return false;
+    /* Relocatable scalar storage has a semantic slot and pointer-width
+     * representation regardless of the backend's GAS directive spelling.
+     * Keep it distinct from zero-initialized relocation-only aggregates. */
+    if (obj->relocation_count != 0U &&
+        (minic_type_is_pointer(obj->type) || minic_type_is_integer(obj->type))) {
+        const MinicGlobalRelocation *reloc;
+
+        if (obj->relocation_count != 1U || obj->initializer_count != 1U ||
+            obj->initializer_values[0] != 0U ||
+            obj->union_selection_count != 0U ||
+            size != target->data_layout->pointer_size) {
+            return false;
+        }
+        reloc = &obj->relocations[0];
+        if (reloc->location_kind != MINIC_GLOBAL_RELOCATION_LOCATION_SCALAR ||
+            reloc->location_index != 0U) {
+            return false;
+        }
+        plan->payload_kind = MINIC_MULTI_GLOBAL_PAYLOAD_SCALAR_RELOCATION;
+        plan->scalar_type = obj->type;
+        plan->scalar_width = size;
+        plan->default_elf_section = obj->is_read_only
+            ? ".section .data.rel.ro" : ".data";
+        return true;
+    }
+    if (obj->union_selection_count != 0U || obj->relocation_count != 0U)
+        return false;
     scalar = obj->type;
     while (minic_type_is_array(scalar)) {
         const MinicArrayType *array =
@@ -1073,45 +1133,124 @@ bool minic_multi_emit_simple_global(FILE *out, const MinicC0Program *program,
         if (array == NULL || array->element_count == 0U) return false;
         scalar = array->element_type;
     }
-    /* Ordinary nullable pointer objects and arrays of pointer scalars
-     * have exact pointer-sized zero payloads on these two ELF LP64 targets.
-     * Nonzero numeric pointer initializers remain fail-closed. */
-    if ((!minic_type_is_integer(scalar) &&
-         !minic_type_is_pointer(scalar)) ||
+    /* Integer-to-pointer sentinels are scalar bits, not symbol relocations. */
+    if ((!minic_type_is_integer(scalar) && !minic_type_is_pointer(scalar) &&
+         !minic_type_is_float(scalar) && !minic_type_is_double(scalar)) ||
         !minic_data_layout_type(target->data_layout, program, scalar,
-                                &width, &scalar_align) ||
+                                &width, &scalar_alignment) ||
         (width != 1U && width != 2U && width != 4U && width != 8U) ||
-        width > storage_size ||
-        obj->initializer_count > storage_size / width ||
-        (obj->initializer_count > 0U && obj->initializer_values == NULL))
+        width > size || obj->initializer_count > size / width)
         return false;
-    (void)scalar_align;
-    directive = width == 1U ? ".byte" : width == 2U ? ".2byte" :
-                width == 4U ? ".4byte" : ".8byte";
-    if (fprintf(out, "%s\n", obj->is_read_only ? ".section .rodata" :
-                ((obj->is_zero_initialized || obj->is_tentative) &&
-                 obj->initializer_count == 0U ? ".bss" : ".data")) < 0)
+    (void)scalar_alignment;
+    plan->payload_kind = MINIC_MULTI_GLOBAL_PAYLOAD_SCALAR_BITS;
+    plan->scalar_type = scalar;
+    plan->scalar_width = width;
+    plan->default_elf_section = obj->is_read_only ? ".section .rodata"
+        : ((obj->is_zero_initialized || obj->is_tentative) &&
+           obj->initializer_count == 0U ? ".bss" : ".data");
+    return true;
+}
+
+bool minic_multi_emit_global_payload(
+    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicGlobalObject *obj, const MinicMultiGlobalEmissionPlan *plan,
+    MinicMultiRelocEmitter emit_relocation,
+    MinicMultiScalarBitsEmitter emit_bits) {
+    size_t i;
+
+    if (out == NULL || program == NULL || target == NULL || obj == NULL ||
+        plan == NULL || emit_relocation == NULL) {
         return false;
-    if (!obj->is_internal && fprintf(out, ".globl %s\n", obj->name) < 0)
-        return false;
-    if (fprintf(out, "  .balign %zu\n.type %s,@object\n%s:\n",
-                align, obj->name, obj->name) < 0) return false;
-    if (obj->initializer_count == 0U) {
-        if (fprintf(out, "  .zero %zu\n", storage_size) < 0) return false;
-    } else {
-        for (i = 0U; i < obj->initializer_count; ++i) {
-            uint64_t bits = obj->initializer_values[i];
-            if (minic_type_is_pointer(scalar) && bits != 0U)
+    }
+    switch (plan->payload_kind) {
+    case MINIC_MULTI_GLOBAL_PAYLOAD_ZERO:
+        if (fprintf(out, "  .zero %zu\n", plan->storage_size) < 0) return false;
+        break;
+    case MINIC_MULTI_GLOBAL_PAYLOAD_ZERO_RELOCATIONS:
+        if (!minic_multi_emit_zero_relocation_global(
+                out, program, target, obj, plan->storage_size,
+                emit_relocation)) return false;
+        break;
+    case MINIC_MULTI_GLOBAL_PAYLOAD_RECORD_FLAT:
+        if (!minic_multi_emit_flat_record_global(
+                out, program, target, obj, plan->storage_size,
+                emit_relocation, emit_bits)) return false;
+        break;
+    case MINIC_MULTI_GLOBAL_PAYLOAD_RECORD_RECURSIVE:
+        if (!minic_multi_emit_recursive_record_global(
+                out, program, target, obj, plan->storage_size,
+                emit_relocation)) return false;
+        break;
+    case MINIC_MULTI_GLOBAL_PAYLOAD_RECORD_FLEXIBLE:
+        if (!minic_multi_emit_flexible_record_global(
+                out, program, target, obj, plan->storage_size,
+                emit_relocation)) return false;
+        break;
+    case MINIC_MULTI_GLOBAL_PAYLOAD_ARRAY_RECORD:
+        if (!minic_multi_emit_record_array_global(
+                out, program, target, obj, plan->storage_size,
+                emit_relocation)) return false;
+        break;
+    case MINIC_MULTI_GLOBAL_PAYLOAD_ARRAY_RECURSIVE:
+        if (!minic_multi_emit_recursive_aggregate_global(
+                out, program, target, obj, plan->storage_size,
+                emit_relocation, emit_bits)) return false;
+        break;
+    case MINIC_MULTI_GLOBAL_PAYLOAD_ARRAY_SCALAR_RELOCATIONS:
+        if (!minic_multi_emit_relocatable_scalar_array(
+                out, program, target, obj, plan->storage_size,
+                emit_relocation, emit_bits)) return false;
+        break;
+    case MINIC_MULTI_GLOBAL_PAYLOAD_SCALAR_RELOCATION:
+        if (obj->relocation_count != 1U ||
+            !emit_relocation(out, program, target, &obj->relocations[0],
+                             plan->scalar_width)) return false;
+        break;
+    case MINIC_MULTI_GLOBAL_PAYLOAD_SCALAR_BITS:
+        if (obj->initializer_count == 0U) {
+            if (fprintf(out, "  .zero %zu\n", plan->storage_size) < 0)
                 return false;
-            if (width < 8U)
-                bits &= (UINT64_C(1) << (8U * width)) - UINT64_C(1);
-            if (fprintf(out, "  %s %" PRIu64 "\n", directive, bits) < 0)
+        } else {
+            for (i = 0U; i < obj->initializer_count; ++i) {
+                if (!(emit_bits != NULL
+                        ? emit_bits(out, program, target, plan->scalar_type,
+                                    obj->initializer_values[i])
+                        : minic_multi_emit_data_bits(
+                              out, plan->scalar_width, obj->initializer_values[i])))
+                    return false;
+            }
+            if (plan->storage_size > obj->initializer_count * plan->scalar_width &&
+                fprintf(out, "  .zero %zu\n",
+                        plan->storage_size - obj->initializer_count * plan->scalar_width) < 0)
                 return false;
         }
-        if (storage_size > obj->initializer_count * width &&
-            fprintf(out, "  .zero %zu\n",
-                    storage_size - obj->initializer_count * width) < 0)
-            return false;
+        break;
+    default:
+        return false;
     }
-    return fprintf(out, ".size %s,%zu\n", obj->name, storage_size) >= 0;
+    return true;
+}
+
+bool minic_multi_emit_simple_global(FILE *out, const MinicC0Program *program,
+                               const MinicTargetInfo *target,
+                               const MinicGlobalObject *obj,
+                               MinicMultiRelocEmitter emit_relocation) {
+    MinicMultiGlobalEmissionPlan plan;
+    if (out == NULL || emit_relocation == NULL ||
+        !minic_multi_global_emission_plan_build(program, target, obj, &plan))
+        return false;
+    /* Complete classification precedes *all* writes, including ELF
+     * visibility and section selection. Native relocation details remain
+     * opaque callbacks rather than a second data-layout classifier. */
+    if (!obj->is_internal &&
+        !minic_multi_emit_elf_symbol_visibility(out, obj->visibility, obj->name))
+        return false;
+    if (!minic_multi_emit_elf_global_section(out, obj, plan.default_elf_section) ||
+        !minic_multi_emit_elf_global_binding(out, obj) ||
+        fprintf(out, "  .balign %zu\n.type %s,@object\n%s:\n",
+                plan.storage_alignment, obj->name, obj->name) < 0 ||
+        !minic_multi_emit_global_payload(out, program, target, obj, &plan,
+                                         emit_relocation, NULL))
+        return false;
+    return fprintf(out, ".size %s,%zu\n", obj->name, plan.storage_size) >= 0;
 }

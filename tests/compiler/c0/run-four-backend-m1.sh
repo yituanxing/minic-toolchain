@@ -81,6 +81,8 @@ static int original = 42;
 static int *global_pointer = &original;
 int main(void) { return *global_pointer; }
 EOF
+# Exactly the same pinned C TU used by the focused ARM64 CI QEMU oracle.
+cp tests/compiler/c0/aarch64-nzcv-nospec.i "$w/aarch_nospec.i"
 # Preserve fail-closed coverage for an actually unsupported weak definition.
 cat > "$w/unsupported.i" <<'EOF'
 __attribute__((weak)) int unsupported_weak_global = 42;
@@ -1629,7 +1631,11 @@ for target in aarch64 loongarch64; do
             else
                 grep -Fq 'sub.d $sp, $sp, $t3' "$w/$target.$testcase.s"
                 grep -Fq 'add.d $sp, $sp, $t3' "$w/$target.$testcase.s"
-                grep -Fq 'add.d $t3, $sp, $t3' "$w/$target.$testcase.s"
+                # Aligned 2KiB..32KiB frame accesses now use native
+                # LDPTR/STPTR si14<<2 instead of materializing an address.
+                # Larger/unaligned frame accesses still use $t3 + SP.
+                grep -Eq '(add\.d \$t3, \$sp, \$t3|\b(ldptr|stptr)\.[wd] \$t[0-9]+, \$sp, [0-9]+)' \
+                    "$w/$target.$testcase.s"
             fi
             echo "FOUR_BACKEND_M7_FRAME_ENCODING=PASS target=$target register_SP_adjust=1 large_offset=1"
         fi
@@ -1702,6 +1708,20 @@ for target in aarch64 loongarch64; do
     check_qemu_exit "$qemu" "$w/$target.global_pointer.mini.elf" 42
     echo "FOUR_BACKEND_M1_GLOBAL_POINTER=PASS target=$target original_source=1 GNU_QEMU_oracle=42 MiniC_GNU_QEMU=42"
 
+    if [ "$target" = "aarch64" ]; then
+        "$gcc" -static -x c "$w/aarch_nospec.i" -o "$w/aarch_nospec.gnu.elf"
+        check_qemu_exit "$qemu" "$w/aarch_nospec.gnu.elf" 42
+        "$MINIC_CC" --target=aarch64-linux -S "$w/aarch_nospec.i" \
+            -o "$w/aarch_nospec.mini.s"
+        grep -F '  cmp x10, x11' "$w/aarch_nospec.mini.s" >/dev/null
+        grep -F '  sbc x9, xzr, xzr' "$w/aarch_nospec.mini.s" >/dev/null
+        grep -F '  mov x9, sp' "$w/aarch_nospec.mini.s" >/dev/null
+        grep -F '  ldr x9, [sp, #' "$w/aarch_nospec.mini.s" >/dev/null
+        "$gcc" -static -x assembler "$w/aarch_nospec.mini.s" \
+            -o "$w/aarch_nospec.mini.elf"
+        check_qemu_exit "$qemu" "$w/aarch_nospec.mini.elf" 42
+        echo "FOUR_BACKEND_AARCH_NOSPEC=PASS GNU_and_MiniC_QEMU=42 NZCV_cc=true"
+    fi
     # Weak definitions still require symbol-binding semantics we have not
     # implemented. Retain a negative gate on that *actual* unsupported ABI.
     if "$MINIC_CC" --target="$target-linux" -S "$w/unsupported.i" \

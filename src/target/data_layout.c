@@ -5,6 +5,7 @@
 #define MINIC_DATA_LAYOUT_MAX_DEPTH 64U
 
 static const MinicDataLayout minic_rv64_data_layout = {
+    .byte_order = MINIC_BYTE_ORDER_LITTLE,
     .pointer_size = 8U,
     .pointer_alignment = 8U,
     .integer_size = {0U, 1U, 1U, 2U, 4U, 8U, 8U, 16U},
@@ -25,6 +26,7 @@ static const MinicDataLayout minic_rv64_data_layout = {
  * Keep this descriptor distinct from the RV64 one. Backends must consult
  * the target descriptor rather than assuming the host word size. */
 static const MinicDataLayout minic_rv32_data_layout = {
+    .byte_order = MINIC_BYTE_ORDER_LITTLE,
     .pointer_size = 4U,
     .pointer_alignment = 4U,
     .integer_size = {0U, 1U, 1U, 2U, 4U, 4U, 8U, 16U},
@@ -46,6 +48,7 @@ const MinicDataLayout *minic_riscv32_linux_data_layout(void) {
  * scalar representation, record ABI classification, or long-double encoding.
  * The backend remains responsible for those target-specific rules. */
 static const MinicDataLayout minic_x86_64_linux_data_layout_value = {
+    .byte_order = MINIC_BYTE_ORDER_LITTLE,
     .pointer_size = 8U,
     .pointer_alignment = 8U,
     .integer_size = {0U, 1U, 1U, 2U, 4U, 8U, 8U, 16U},
@@ -64,6 +67,7 @@ static const MinicDataLayout minic_x86_64_linux_data_layout_value = {
  * Pointer and scalar widths alone DO NOT determine AAPCS64 HFA/HVA ABI.
  * This descriptor only covers C object layout, not call classification. */
 static const MinicDataLayout minic_aarch64_linux_layout = {
+    .byte_order = MINIC_BYTE_ORDER_LITTLE,
     .pointer_size = 8U,
     .pointer_alignment = 8U,
     .integer_size = {0U, 1U, 1U, 2U, 4U, 8U, 8U, 16U},
@@ -79,6 +83,7 @@ static const MinicDataLayout minic_aarch64_linux_layout = {
 /* LoongArch Linux ELF lp64d: a distinct target despite matching LP64
  * scalar sizes. Its register and stack calling rules are NOT RV64's. */
 static const MinicDataLayout minic_loongarch64_linux_layout = {
+    .byte_order = MINIC_BYTE_ORDER_LITTLE,
     .pointer_size = 8U,
     .pointer_alignment = 8U,
     .integer_size = {0U, 1U, 1U, 2U, 4U, 8U, 8U, 16U},
@@ -101,6 +106,10 @@ const MinicDataLayout *minic_loongarch64_linux_data_layout(void) {
 
 const MinicDataLayout *minic_default_data_layout(void) {
     return &minic_rv64_data_layout;
+}
+
+bool minic_data_layout_is_little_endian(const MinicDataLayout *layout) {
+    return layout != NULL && layout->byte_order == MINIC_BYTE_ORDER_LITTLE;
 }
 
 const MinicDataLayout *minic_x86_64_linux_data_layout(void) {
@@ -147,6 +156,43 @@ static bool minic_data_layout_type_depth(const MinicDataLayout *layout,
                                          size_t *size,
                                          size_t *alignment);
 
+/* Both the record placement algorithm and GNU __alignof__(member) queries
+ * must use this *same* effective member alignment. In particular pragma
+ * pack(N) caps the natural alignment before an explicit aligned(M) may
+ * raise it again. Field-level packed likewise overrides natural alignment;
+ * this rule is identical for integer bit-field storage boundaries. */
+static bool minic_data_layout_record_pack(const MinicRecord *record,
+                                          size_t *pack_alignment) {
+    size_t pack;
+    if (record == NULL || pack_alignment == NULL) return false;
+    pack = record->is_packed ? 1U : record->pack_alignment;
+    if (pack != 0U && (pack > 16U || (pack & (pack - 1U)) != 0U))
+        return false;
+    *pack_alignment = pack;
+    return true;
+}
+
+static bool minic_data_layout_effective_field_alignment(
+    const MinicRecordField *field, size_t pack_alignment,
+    size_t natural_alignment, size_t *alignment) {
+    size_t resolved;
+    if (field == NULL || alignment == NULL || natural_alignment == 0U)
+        return false;
+    resolved = natural_alignment;
+    if (pack_alignment != 0U && resolved > pack_alignment)
+        resolved = pack_alignment;
+    if (field->is_packed)
+        resolved = 1U;
+    if (field->explicit_alignment != 0U) {
+        if ((field->explicit_alignment & (field->explicit_alignment - 1U)) != 0U)
+            return false;
+        if (field->explicit_alignment > resolved)
+            resolved = field->explicit_alignment;
+    }
+    *alignment = resolved;
+    return true;
+}
+
 static bool minic_data_layout_record_depth(const MinicDataLayout *layout,
                                            const MinicC0Program *program,
                                            const MinicRecord *record,
@@ -167,9 +213,7 @@ static bool minic_data_layout_record_depth(const MinicDataLayout *layout,
     }
     storage_bits = 0U;
     record_alignment = 1U;
-    pack_alignment = record->is_packed ? 1U : record->pack_alignment;
-    if (pack_alignment != 0U &&
-        (pack_alignment > 16U || (pack_alignment & (pack_alignment - 1U)) != 0U)) {
+    if (!minic_data_layout_record_pack(record, &pack_alignment)) {
         return false;
     }
     for (index = 0U; index < record->field_count; ++index) {
@@ -187,15 +231,20 @@ static bool minic_data_layout_record_depth(const MinicDataLayout *layout,
             element_size > SIZE_MAX / field->element_count) {
             return false;
         }
-        if (pack_alignment != 0U && field_alignment > pack_alignment) {
-            field_alignment = pack_alignment;
-        }
+        if (!minic_data_layout_effective_field_alignment(
+                field, pack_alignment, field_alignment, &field_alignment))
+            return false;
         field_bit_offset = 0U;
         if (field->is_bit_field) {
             size_t type_bits;
             size_t alignment_bits;
             size_t field_start_bits;
 
+            /* Nonzero bit-fields share the member alignment cap with
+             * ordinary fields. FIXME(MC-042): an unnamed zero-width field
+             * is an exception to packed/pragma-pack capping: its natural
+             * type boundary must still align the following member. The
+             * effective alignment above currently loses that boundary. */
             if (!minic_type_is_integer(field->type) || field->element_count != 1U ||
                 field->is_array || field->is_flexible_array || field->is_zero_length_array ||
                 element_size == 0U || element_size > SIZE_MAX / 8U || field_alignment == 0U ||
@@ -220,7 +269,7 @@ static bool minic_data_layout_record_depth(const MinicDataLayout *layout,
                 storage_bits = field_start_bits;
             } else {
                 field_start_bits = storage_bits;
-                if (pack_alignment != 1U) {
+                if (pack_alignment != 1U || field->explicit_alignment != 0U) {
                     size_t within_boundary;
 
                     within_boundary = field_start_bits % alignment_bits;
@@ -239,7 +288,8 @@ static bool minic_data_layout_record_depth(const MinicDataLayout *layout,
             }
             field_offset = field_start_bits / 8U;
             field_bit_offset = field_start_bits % 8U;
-            if (pack_alignment != 1U && field->name_length != 0U &&
+            if ((pack_alignment != 1U || field->explicit_alignment != 0U) &&
+                field->name_length != 0U &&
                 field->bit_width != 0U && field_alignment > record_alignment) {
                 record_alignment = field_alignment;
             }
@@ -253,17 +303,6 @@ static bool minic_data_layout_record_depth(const MinicDataLayout *layout,
             field_size = (field->is_flexible_array || field->is_zero_length_array)
                              ? 0U
                              : element_size * field->element_count;
-            if (field->is_packed) {
-                field_alignment = 1U;
-            }
-            if (field->explicit_alignment != 0U) {
-                if ((field->explicit_alignment & (field->explicit_alignment - 1U)) != 0U) {
-                    return false;
-                }
-                if (field->explicit_alignment > field_alignment) {
-                    field_alignment = field->explicit_alignment;
-                }
-            }
             if (record->is_union) {
                 field_offset = 0U;
                 if (field_size > storage_size) {
@@ -582,6 +621,7 @@ bool minic_data_layout_record_field_alignment(const MinicDataLayout *layout,
     const MinicRecordField *field;
     size_t field_size;
     size_t field_alignment;
+    size_t pack_alignment;
 
     if (layout == NULL || program == NULL || record == NULL || alignment == NULL ||
         field_index >= record->field_count) {
@@ -589,23 +629,13 @@ bool minic_data_layout_record_field_alignment(const MinicDataLayout *layout,
     }
     field = &record->fields[field_index];
     if (field->is_bit_field ||
+        !minic_data_layout_record_pack(record, &pack_alignment) ||
         !minic_data_layout_type(layout, program, field->type, &field_size, &field_alignment)) {
         return false;
     }
     (void)field_size;
-    if (field->is_packed || (record->is_packed && field->explicit_alignment == 0U)) {
-        field_alignment = 1U;
-    }
-    if (field->explicit_alignment != 0U) {
-        if ((field->explicit_alignment & (field->explicit_alignment - 1U)) != 0U) {
-            return false;
-        }
-        if (field->explicit_alignment > field_alignment) {
-            field_alignment = field->explicit_alignment;
-        }
-    }
-    *alignment = field_alignment;
-    return true;
+    return minic_data_layout_effective_field_alignment(
+        field, pack_alignment, field_alignment, alignment);
 }
 
 bool minic_data_layout_record_field_layout(const MinicDataLayout *layout,
@@ -713,6 +743,12 @@ static bool aggregate_scalar_slot_layout_for_object(const MinicDataLayout *layou
         if (array_type->is_zero_length) {
             return true;
         }
+        /* GNU zero-sized records (including arrays of them) contribute no
+         * scalar relocation slots. Do not invent a byte stride or divide by
+         * the zero-sized element while searching later initializer slots. */
+        if (element_size == 0U) {
+            return true;
+        }
         element_index = 0U;
         while (array_type->element_count == 0U || element_index < array_type->element_count) {
             size_t before_cursor;
@@ -807,6 +843,11 @@ static bool aggregate_scalar_slot_layout_for_object(const MinicDataLayout *layou
                                     ? object->flexible_array_initializer_count
                                     : 0U;
             }
+            /* A zero-sized member has no scalar slots; later members still
+             * keep their true DataLayout byte offsets and relocation slots. */
+            if (element_size == 0U) {
+                continue;
+            }
             for (element_index = 0U; element_index < element_count; ++element_index) {
                 size_t element_offset;
 
@@ -869,7 +910,9 @@ bool minic_data_layout_global_relocation_offset(const MinicDataLayout *layout,
     (void)object_alignment;
     relocation_width = layout->pointer_size;
     if (relocation->location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_SCALAR) {
-        if (relocation->location_index != 0U || !minic_type_is_pointer(object->type)) {
+        if (relocation->location_index != 0U ||
+            (!minic_type_is_pointer(object->type) &&
+             !minic_type_is_integer(object->type))) {
             return false;
         }
         resolved_offset = 0U;

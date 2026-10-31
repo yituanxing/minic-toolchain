@@ -133,7 +133,7 @@ if "$minic" -S "$work/unsupported-clobber.i" -o "$work/unsupported-clobber.s" \
     printf '%s\n' 'unsupported register clobber unexpectedly accepted' >&2
     exit 1
 fi
-grep -F 'unsupported GNU asm register clobber for target' \
+grep -F 'unsupported GNU asm register clobber for target: s1' \
     "$work/unsupported-clobber.stderr" >/dev/null
 
 cat >"$work/out-of-range-I.c" <<'EOF'

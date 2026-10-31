@@ -1,4 +1,60 @@
 #include "core/core_lower_asm_internal.h"
+#include <inttypes.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+/* All source-side GNU constraint identity, matching outputs and memory
+ * effects have been classified before Core materialization. Store one
+ * immutable typed summary and avoid separate Target/Generic handoff code. */
+bool core_asm_publish_operand_plan(MinicCoreInstruction *instruction,
+    MinicCoreInlineAsm *stored, const MinicAsmOperandPlan *plan) {
+    size_t i;
+    if (!instruction || !stored || !plan ||
+        instruction->kind != MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM ||
+        plan->owner == MINIC_ASM_OPERAND_PLAN_NONE ||
+        instruction->value.structured_inline_asm.operand_count != plan->operand_count ||
+        plan->output_count > plan->operand_count ||
+        plan->operand_count > MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT ||
+        stored->has_memory_clobber != plan->effective_memory_effect)
+        return false;
+    for (i = 0U; i < plan->operand_count; ++i) {
+        MinicCoreStructuredInlineAsmOperand *binding =
+            &instruction->value.structured_inline_asm.operands[i];
+        if (binding->kind != plan->kinds[i] || binding->operand_index != i ||
+            (plan->has_tied_output[i] &&
+             (i < plan->output_count ||
+              plan->tied_output_index[i] >= plan->output_count)))
+            return false;
+        binding->gnu_early_clobber = plan->gnu_early_clobber[i];
+        binding->gnu_readwrite = plan->gnu_readwrite[i];
+        binding->has_tied_output = plan->has_tied_output[i];
+        binding->tied_output_index = plan->tied_output_index[i];
+    }
+    stored->operand_plan_owner = plan->owner;
+    stored->source_form_id = plan->source_form_id;
+    stored->target_machine_form_id = plan->target_machine_form_id;
+    stored->target_machine_form_variant = plan->target_machine_form_variant;
+    stored->source_output_count = plan->output_count;
+    stored->explicit_memory_clobber = plan->explicit_memory_clobber;
+    stored->implicit_memory_effect = plan->implicit_memory_effect;
+    if (getenv("MINIC_ASM_OPERAND_PLAN_TRACE") != NULL) {
+        size_t early = 0U, tied = 0U;
+        for (i = 0U; i < plan->operand_count; ++i) {
+            early += plan->gnu_early_clobber[i] ? 1U : 0U;
+            tied += plan->has_tied_output[i] ? 1U : 0U;
+        }
+        (void)fprintf(stderr,
+            "CORE_ASM_OPERAND_PLAN owner=%d source_form=%016" PRIx64
+            " outputs=%zu operands=%zu gnu_early=%zu tied=%zu "
+            "explicit_memory=%d implicit_memory=%d effective_memory=%d\n",
+            (int)plan->owner, plan->source_form_id, plan->output_count,
+            plan->operand_count, early, tied,
+            plan->explicit_memory_clobber ? 1 : 0,
+            plan->implicit_memory_effect ? 1 : 0,
+            plan->effective_memory_effect ? 1 : 0);
+    }
+    return true;
+}
 
 #include "frontend/const_eval.h"
 #include "frontend/expression_semantics.h"
@@ -29,19 +85,27 @@ bool core_inline_asm_register_output_constraint(const MinicInlineAsmOperand *ope
            core_inline_asm_constraint_is(operand, "=&r");
 }
 
-/* M105_FIXED_REGISTER_STRUCTURED_ASM: preflight locates a frontend binding
-   without mutating Core. The commit phase imports register spelling/type into
-   Core-owned opaque metadata before the instruction is appended. */
- bool core_inline_asm_local_fixed_binding_id(const MinicC0Program *program,
+/* M105_FIXED_REGISTER_STRUCTURED_ASM: preflight resolves both a declared
+ * `register T local asm("rN")` and the dedicated FIXED_REGISTER expression
+ * used by global hardware bindings (for example x86 Linux RSP). No register
+ * spelling or ISA-specific policy enters Core: the target must qualify the
+ * exact ASM contract before this binding is ever imported. */
+bool core_inline_asm_fixed_binding_id(const MinicC0Program *program,
                                                    const MinicExpression *expression,
                                                    size_t *binding_id) {
     const MinicFixedRegisterBinding *binding;
     size_t index;
 
-    if (program == NULL || expression == NULL || binding_id == NULL ||
-        expression->kind != MINIC_EXPRESSION_LOCAL) {
+    if (program == NULL || expression == NULL || binding_id == NULL) {
         return false;
     }
+    if (expression->kind == MINIC_EXPRESSION_FIXED_REGISTER) {
+        *binding_id = expression->value.fixed_register_binding_id;
+        binding = minic_c0_program_fixed_register_binding(program, *binding_id);
+        return binding != NULL && binding->register_name != NULL &&
+               binding->register_name_length != 0U;
+    }
+    if (expression->kind != MINIC_EXPRESSION_LOCAL) return false;
     binding = minic_c0_program_local_fixed_register_binding(program, expression->value.local_id);
     if (binding == NULL) {
         return false;
@@ -200,6 +264,66 @@ static bool core_inline_asm_specialized_integer(
         return core_inline_asm_specialized_integer(
             context, expression->value.unary.operand, value, depth + 1U);
     }
+    /* Specialization replaces parameters with compile-time integers, but a
+     * GNU `i` operand can still be an expression over those parameters.
+     * Resolve the complete pure expression in Core so the machine target
+     * receives a constant, never a host-assembler expression or an unbound
+     * runtime register.  Reject undefined shifts, division and overflow. */
+    if (expression->kind == MINIC_EXPRESSION_BINARY) {
+        int64_t left, right;
+        if (!core_inline_asm_specialized_integer(
+                context, expression->value.binary.left, &left, depth + 1U) ||
+            !core_inline_asm_specialized_integer(
+                context, expression->value.binary.right, &right, depth + 1U))
+            return false;
+        switch (expression->value.binary.operator_kind) {
+            case MINIC_BINARY_BITWISE_AND: *value = left & right; return true;
+            case MINIC_BINARY_BITWISE_OR: *value = left | right; return true;
+            case MINIC_BINARY_BITWISE_XOR: *value = left ^ right; return true;
+            case MINIC_BINARY_SHIFT_RIGHT:
+                if (left < 0 || right < 0 || right >= 63) return false;
+                *value = left >> (unsigned)right;
+                return true;
+            case MINIC_BINARY_SHIFT_LEFT:
+                if (left < 0 || right < 0 || right >= 63 ||
+                    left > (INT64_MAX >> (unsigned)right)) return false;
+                *value = left << (unsigned)right;
+                return true;
+            case MINIC_BINARY_ADD:
+                if ((right > 0 && left > INT64_MAX - right) ||
+                    (right < 0 && left < INT64_MIN - right)) return false;
+                *value = left + right;
+                return true;
+            case MINIC_BINARY_SUBTRACT:
+                if ((right < 0 && left > INT64_MAX + right) ||
+                    (right > 0 && left < INT64_MIN + right)) return false;
+                *value = left - right;
+                return true;
+            case MINIC_BINARY_MULTIPLY:
+                if (left != 0 && right != 0 &&
+                    (left == INT64_MIN && right == -1)) return false;
+                if (right > 0 &&
+                    (left > INT64_MAX / right || left < INT64_MIN / right))
+                    return false;
+                if (right < -1 &&
+                    (left > INT64_MIN / right || left < INT64_MAX / right))
+                    return false;
+                if (right == -1 && left == INT64_MIN) return false;
+                *value = left * right;
+                return true;
+            case MINIC_BINARY_DIVIDE:
+                if (right == 0 || (left == INT64_MIN && right == -1))
+                    return false;
+                *value = left / right;
+                return true;
+            case MINIC_BINARY_REMAINDER:
+                if (right == 0 || (left == INT64_MIN && right == -1))
+                    return false;
+                *value = left % right;
+                return true;
+            default: return false;
+        }
+    }
     if (expression->kind == MINIC_EXPRESSION_LOCAL) {
         size_t parameter_index;
         const MinicFunction *function = context->source_function;
@@ -305,6 +429,7 @@ static bool core_inline_asm_symbolic_lvalue_address(
         const MinicExpression *base =
             minic_c0_program_expression(program, expression->value.subscript.base);
         const MinicArrayType *array_type = NULL;
+        MinicArrayObjectInfo array_info;
         MinicType element_type;
         size_t element_size;
         size_t element_alignment;
@@ -316,6 +441,7 @@ static bool core_inline_asm_symbolic_lvalue_address(
         if (base == NULL) {
             return false;
         }
+        (void)memset(&array_info, 0, sizeof(array_info));
         if (minic_type_is_pointer(base->type)) {
             if (!minic_type_pointee(base->type, &element_type)) {
                 return false;
@@ -326,13 +452,22 @@ static bool core_inline_asm_symbolic_lvalue_address(
                 symbol,
                 &base_addend,
                 depth + 1U);
-        } else if (minic_type_is_array(base->type)) {
-            array_type = minic_c0_program_array_type(program, base->type.array_type_id);
-            if (array_type == NULL || array_type->element_count == 0U ||
-                array_type->is_zero_length) {
+        } else if (minic_c0_expression_array_object_info(
+                       program, base, &array_info)) {
+            /* Legacy record-member arrays carry their element MinicType
+             * plus array-object metadata, while materialized arrays carry
+             * MINIC_TYPE_BASE_ARRAY. Both have identical C address
+             * semantics. This must mirror ordinary Core subscript lowering
+             * or a symbol+constant inline operand silently loses arrays. */
+            if (array_info.is_zero_length || array_info.is_incomplete)
                 return false;
+            if (array_info.has_materialized_type) {
+                array_type = minic_c0_program_array_type(
+                    program, base->type.array_type_id);
+                if (!array_type || array_type->element_count == 0U)
+                    return false;
             }
-            element_type = array_type->element_type;
+            element_type = array_info.element_type;
             base_ok = core_inline_asm_symbolic_lvalue_address(
                 context,
                 expression->value.subscript.base,
@@ -349,6 +484,10 @@ static bool core_inline_asm_symbolic_lvalue_address(
                 element_type,
                 &element_size,
                 &element_alignment) ||
+            /* A GNU zero-sized element has no address stride. Do not feed
+             * that size to the signed overflow division below; an inline
+             * relocation cannot assign meaningful offsets to its elements. */
+            element_size == 0U ||
             element_size > (size_t)INT64_MAX ||
             !core_inline_asm_specialized_integer(
                 context, expression->value.subscript.index, &index, depth + 1U)) {
@@ -683,7 +822,10 @@ static const char *core_inline_asm_specialized_symbolic_name(
         minic_const_value_as_int64(
             context->body->program, context->target, &constant, &value) &&
         (!core_inline_asm_constraint_is(operand, "rK") ||
-         (value >= 0 && value <= 31))) {
+         (value >= 0 && value <= 31)) &&
+        (!core_inline_asm_constraint_is(operand, "I") ||
+         minic_target_info_inline_asm_immediate_constraint_supported(
+             context->target, "I", 1U, value))) {
         int written;
 
         written = snprintf(integer_text, integer_capacity, "%" PRId64, value);
@@ -694,6 +836,28 @@ static const char *core_inline_asm_specialized_symbolic_name(
         *length_out = (size_t)written;
         return true;
     }
+    /* Compute expressions such as `1 << (feature & 7)` and `feature >> 3`
+     * after transitive inline specialization. This path is also used by
+     * relocatable-symbol indexing, and never fabricates an unknown value. */
+    if (core_inline_asm_specialized_integer(
+            context, operand->expression, &value, 0U) &&
+        (!core_inline_asm_constraint_is(operand, "rK") ||
+         (value >= 0 && value <= 31)) &&
+        (!core_inline_asm_constraint_is(operand, "I") ||
+         minic_target_info_inline_asm_immediate_constraint_supported(
+             context->target, "I", 1U, value))) {
+        int written = snprintf(integer_text, integer_capacity, "%" PRId64, value);
+        if (written < 0 || (size_t)written >= integer_capacity) return false;
+        *text_out = integer_text;
+        *length_out = (size_t)written;
+        return true;
+    }
+    /* Constraint I cannot accept an address even through transitive
+     * symbolic specialization. Guard BEFORE the symbolic fast path; only a
+     * target-qualified numeric value above may satisfy it. */
+    if (core_inline_asm_constraint_is(operand, "I")) {
+        return false;
+    }
     if (core_inline_asm_specialized_symbolic_text(
             context,
             operand->expression,
@@ -703,7 +867,9 @@ static const char *core_inline_asm_specialized_symbolic_name(
             length_out)) {
         return true;
     }
-    if (core_inline_asm_constraint_is(operand, "rK")) {
+    if (core_inline_asm_constraint_is(operand, "rK") ||
+        core_inline_asm_constraint_is(operand, "I")) {
+        /* GNU I is numeric ISA data, never a relocatable address. */
         return false;
     }
     symbol = core_inline_asm_symbolic_immediate_name(
@@ -743,6 +909,52 @@ static bool core_inline_asm_named_input_index(const MinicInlineAsm *source,
     return false;
 }
 
+/* Parse one GNU compile-time input reference for BOTH sizing and output.
+ * The c modifier is the unadorned immediate/address spelling required by
+ * original Linux BUG/WARN tables; no architecture-specific text belongs in
+ * this Core normalizer. Unsupported modifiers fail closed. */
+static bool core_inline_asm_immediate_reference(
+    const MinicInlineAsm *source, size_t cursor,
+    size_t *index, size_t *consumed) {
+    size_t position;
+    size_t begin, end;
+    if (source == NULL || source->template_text == NULL ||
+        index == NULL || consumed == NULL ||
+        cursor >= source->template_length ||
+        source->template_text[cursor] != '%')
+        return false;
+    position = cursor + 1U;
+    if (position >= source->template_length)
+        return false;
+    if (source->template_text[position] == 'c') {
+        ++position;
+        if (position >= source->template_length) return false;
+    }
+    if (source->template_text[position] >= '0' &&
+        source->template_text[position] <= '9') {
+        *index = (size_t)(source->template_text[position] - '0');
+        ++position;
+    } else if (source->template_text[position] == '[') {
+        begin = ++position;
+        end = begin;
+        while (end < source->template_length &&
+               source->template_text[end] != ']')
+            ++end;
+        if (end == source->template_length || end == begin ||
+            !core_inline_asm_named_input_index(
+                source, source->template_text + begin,
+                end - begin, index))
+            return false;
+        position = end + 1U;
+    } else {
+        return false;
+    }
+    if (*index >= source->input_count)
+        return false;
+    *consumed = position - cursor;
+    return true;
+}
+
 static bool core_inline_asm_specialized_length(const MinicInlineAsm *source,
                                                const size_t *replacement_lengths,
                                                size_t *specialized_length) {
@@ -778,36 +990,10 @@ static bool core_inline_asm_specialized_length(const MinicInlineAsm *source,
             cursor += 2U;
             continue;
         }
-        replacement_index = SIZE_MAX;
-        consumed = 0U;
-        if (source->template_text[cursor + 1U] >= '0' &&
-            source->template_text[cursor + 1U] <= '9') {
-            replacement_index = (size_t)(source->template_text[cursor + 1U] - '0');
-            consumed = 2U;
-        } else if (source->template_text[cursor + 1U] == '[') {
-            size_t name_begin;
-            size_t name_end;
-
-            name_begin = cursor + 2U;
-            name_end = name_begin;
-            while (name_end < source->template_length && source->template_text[name_end] != ']') {
-                name_end += 1U;
-            }
-            if (name_end >= source->template_length || name_end == name_begin ||
-                !core_inline_asm_named_input_index(source,
-                                                   source->template_text + name_begin,
-                                                   name_end - name_begin,
-                                                   &replacement_index)) {
-                return false;
-            }
-            consumed = name_end - cursor + 1U;
-        } else {
+        if (!core_inline_asm_immediate_reference(
+                source, cursor, &replacement_index, &consumed) ||
+            output_length > SIZE_MAX - replacement_lengths[replacement_index])
             return false;
-        }
-        if (replacement_index >= source->input_count ||
-            output_length > SIZE_MAX - replacement_lengths[replacement_index]) {
-            return false;
-        }
         output_length += replacement_lengths[replacement_index];
         cursor += consumed;
     }
@@ -866,29 +1052,10 @@ bool core_inline_asm_specialize_immediates(const MinicCoreLowerContext *context,
             cursor += 2U;
             continue;
         }
-        replacement_index = SIZE_MAX;
-        consumed = 0U;
-        if (source->template_text[cursor + 1U] >= '0' &&
-            source->template_text[cursor + 1U] <= '9') {
-            replacement_index = (size_t)(source->template_text[cursor + 1U] - '0');
-            consumed = 2U;
-        } else {
-            size_t name_begin;
-            size_t name_end;
-
-            name_begin = cursor + 2U;
-            name_end = name_begin;
-            while (source->template_text[name_end] != ']') {
-                name_end += 1U;
-            }
-            if (!core_inline_asm_named_input_index(source,
-                                                   source->template_text + name_begin,
-                                                   name_end - name_begin,
-                                                   &replacement_index)) {
-                free(specialized);
-                return false;
-            }
-            consumed = name_end - cursor + 1U;
+        if (!core_inline_asm_immediate_reference(
+                source, cursor, &replacement_index, &consumed)) {
+            free(specialized);
+            return false;
         }
         (void)memcpy(specialized + output_cursor,
                      replacements[replacement_index],
@@ -1062,8 +1229,12 @@ bool core_inline_asm_numeric_template(const MinicInlineAsm *source,
     char *normalized;
 
     if (source == NULL || template_out == NULL || template_length_out == NULL ||
-        source->template_text == NULL ||
-        source->output_count + source->input_count > 10U) {
+        source->template_text == NULL || source->template_length == SIZE_MAX ||
+        source->output_count > MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT ||
+        source->input_count > MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT -
+                                  source->output_count ||
+        (source->output_count != 0U && source->outputs == NULL) ||
+        (source->input_count != 0U && source->inputs == NULL)) {
         return false;
     }
     normalized = (char *)malloc(source->template_length + 1U);
@@ -1101,36 +1272,82 @@ bool core_inline_asm_numeric_template(const MinicInlineAsm *source,
             }
         }
         if (source->template_text[cursor] >= '0' && source->template_text[cursor] <= '9') {
-            operand_index = (size_t)(source->template_text[cursor] - '0');
-            if (operand_index >= source->output_count + source->input_count) {
+            size_t index_begin = cursor;
+
+            operand_index = 0U;
+            /* GNU %10 and %15 are single operand references, not %1 followed
+             * by literal digits. Preserve every digit for the target parser. */
+            do {
+                operand_index = operand_index * 10U +
+                    (size_t)(source->template_text[cursor] - '0');
+                cursor += 1U;
+                if (operand_index > MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT) {
+                    free(normalized);
+                    return false;
+                }
+            } while (cursor < source->template_length &&
+                     source->template_text[cursor] >= '0' &&
+                     source->template_text[cursor] <= '9');
+            /* In GNU extended asm-goto, %lN refers to a C label AFTER all
+             * register/memory output and input operand numbers. Preserve
+             * that label reference for the target's PREL32 relocation;
+             * unlike a scalar %N it does not bind a Core SSA value. */
+            if (operand_index >= source->output_count + source->input_count &&
+                !(source->is_goto && modifier == 'l' &&
+                  source->label_count == 1U &&
+                  operand_index == source->output_count + source->input_count)) {
                 free(normalized);
                 return false;
             }
             if (modifier != '\0') {
                 normalized[output_length++] = modifier;
             }
-            normalized[output_length++] = source->template_text[cursor++];
+            while (index_begin < cursor)
+                normalized[output_length++] = source->template_text[index_begin++];
             continue;
         }
         if (source->template_text[cursor] == '[') {
             size_t name_begin = cursor + 1U;
             size_t name_end = name_begin;
+            bool resolved;
             while (name_end < source->template_length && source->template_text[name_end] != ']') {
                 name_end += 1U;
             }
-            if (name_end >= source->template_length || name_end == name_begin ||
-                !core_inline_asm_named_operand_index(source,
-                                                     source->template_text + name_begin,
-                                                     name_end - name_begin,
-                                                     &operand_index) ||
-                operand_index > 9U) {
+            if (name_end >= source->template_length || name_end == name_begin) {
+                free(normalized);
+                return false;
+            }
+            resolved = core_inline_asm_named_operand_index(
+                source, source->template_text + name_begin,
+                name_end - name_begin, &operand_index);
+            /* GNU asm-goto label placeholders are in the *same* numeric
+             * space as operands but are not scalar inputs. Resolve a named
+             * %l[label] to the label slot, preserving the existing target
+             * PREL32 destination policy. Never accept %l for a mismatched
+             * label name or a non-goto instruction. */
+            if (!resolved && modifier == 'l' && source->is_goto &&
+                source->label_count == 1U && source->labels &&
+                source->labels[0].name &&
+                source->labels[0].name_length == name_end - name_begin &&
+                memcmp(source->labels[0].name,
+                       source->template_text + name_begin,
+                       name_end - name_begin) == 0) {
+                operand_index = source->output_count + source->input_count;
+                resolved = true;
+            }
+            if (!resolved ||
+                operand_index > MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT ||
+                (operand_index == MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT &&
+                 !source->is_goto)) {
                 free(normalized);
                 return false;
             }
             if (modifier != '\0') {
                 normalized[output_length++] = modifier;
             }
-            normalized[output_length++] = (char)('0' + operand_index);
+            if (operand_index >= 10U)
+                normalized[output_length++] = (char)('0' + operand_index / 10U);
+            normalized[output_length++] = (char)('0' + operand_index % 10U);
             cursor = name_end + 1U;
             continue;
         }
@@ -1261,7 +1478,8 @@ bool core_inline_asm_numeric_template(const MinicInlineAsm *source,
     size_t output_length;
 
     if (source == NULL || template_out == NULL || template_length_out == NULL ||
-        source->template_text == NULL || source->inputs == NULL || source->input_count != 1U) {
+        source->template_text == NULL || source->template_length == SIZE_MAX ||
+        source->inputs == NULL || source->input_count != 1U) {
         return false;
     }
     normalized = (char *)malloc(source->template_length + 1U);
@@ -1321,6 +1539,13 @@ bool core_inline_asm_numeric_template(const MinicInlineAsm *source,
     output_length = template_length;
     replacement_count = 0U;
     for (cursor = 0U; cursor + 1U < template_length; ++cursor) {
+        /* GNU %% is a literal percent, not the beginning of operand %0.
+         * Skip both bytes together: the later target emitter will turn %%
+         * into one percent after immediate specialization. */
+        if (template_text[cursor] == '%' && template_text[cursor + 1U] == '%') {
+            cursor += 1U;
+            continue;
+        }
         if (template_text[cursor] == '%' && template_text[cursor + 1U] == '0') {
             if (replacement_length >= 2U) {
                 size_t growth = replacement_length - 2U;
@@ -1344,6 +1569,13 @@ bool core_inline_asm_numeric_template(const MinicInlineAsm *source,
     }
     output_cursor = 0U;
     for (cursor = 0U; cursor < template_length; ++cursor) {
+        if (template_text[cursor] == '%' && cursor + 1U < template_length &&
+            template_text[cursor + 1U] == '%') {
+            baked[output_cursor++] = '%';
+            baked[output_cursor++] = '%';
+            cursor += 1U;
+            continue;
+        }
         if (template_text[cursor] == '%' && cursor + 1U < template_length &&
             template_text[cursor + 1U] == '0') {
             (void)memcpy(baked + output_cursor, replacement, replacement_length);

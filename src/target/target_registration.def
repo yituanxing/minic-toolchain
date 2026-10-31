@@ -1,0 +1,24 @@
+/* Deliberately no include guard: consumed as an X-macro by the separately
+ * linkable product-driver catalog, the C ABI descriptor, and backend binding.
+ * This is the single inventory of registered C compiler targets. Machine
+ * implementation and ABI facts still live in their target-owned modules.
+ *
+ * MINIC_TARGET_REGISTRATION(architecture, id, name, driver_stages, isa_family)
+ */
+MINIC_TARGET_REGISTRATION(MINIC_TARGET_ARCH_RISCV32, riscv32, "riscv32-linux",
+                          MINIC_TARGET_STAGE_ASSEMBLY_FROM_PREPROCESSED_C,
+                          MINIC_TARGET_ISA_FAMILY_RISCV)
+MINIC_TARGET_REGISTRATION(MINIC_TARGET_ARCH_RISCV64, riscv64, "riscv64-linux",
+                          MINIC_TARGET_STAGE_ASSEMBLY_FROM_PREPROCESSED_C |
+                          MINIC_TARGET_STAGE_STAGED_ASSEMBLER_AND_LINKER,
+                          MINIC_TARGET_ISA_FAMILY_RISCV)
+MINIC_TARGET_REGISTRATION(MINIC_TARGET_ARCH_X86_64, x86_64, "x86_64-linux",
+                          MINIC_TARGET_STAGE_ASSEMBLY_FROM_PREPROCESSED_C,
+                          MINIC_TARGET_ISA_FAMILY_NONE)
+MINIC_TARGET_REGISTRATION(MINIC_TARGET_ARCH_AARCH64, aarch64, "aarch64-linux",
+                          MINIC_TARGET_STAGE_ASSEMBLY_FROM_PREPROCESSED_C,
+                          MINIC_TARGET_ISA_FAMILY_NONE)
+MINIC_TARGET_REGISTRATION(MINIC_TARGET_ARCH_LOONGARCH64, loongarch64,
+                          "loongarch64-linux",
+                          MINIC_TARGET_STAGE_ASSEMBLY_FROM_PREPROCESSED_C,
+                          MINIC_TARGET_ISA_FAMILY_NONE)

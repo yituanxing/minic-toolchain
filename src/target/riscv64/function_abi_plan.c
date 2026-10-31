@@ -56,15 +56,20 @@ static bool minic_riscv64_function_abi_plan_qualified(
                     return false;
                 }
             } else if (location.value.kind == MINIC_RISCV64_ABI_VALUE_FLOAT) {
-                bool soft = abi_plan->named_parameter_cursor.lp64_soft_float;
+                /* LP64D spills named floating parameters into the normal
+                 * integer argument stream after fa7. LP64 never uses FARs. */
                 bool correct_location =
-                    soft ? (location.floating_register_count == 0U &&
-                            location.integer_register_count +
-                              location.stack_slot_count == 1U)
-                         : (location.floating_register_count == 1U &&
-                            location.floating_register_begin < 8U &&
-                            location.integer_register_count == 0U &&
-                            location.stack_slot_count == 0U);
+                    location.floating_register_count == 1U
+                        ? (!abi_plan->named_parameter_cursor.lp64_soft_float &&
+                           location.floating_register_begin < 8U &&
+                           location.integer_register_count == 0U &&
+                           location.stack_slot_count == 0U)
+                        : (location.floating_register_count == 0U &&
+                           ((location.integer_register_count == 1U &&
+                             location.integer_register_begin < 8U &&
+                             location.stack_slot_count == 0U) ||
+                            (location.integer_register_count == 0U &&
+                             location.stack_slot_count == 1U)));
                 if ((!minic_type_is_float(function->parameter_types[index]) &&
                      !minic_type_is_double(function->parameter_types[index])) ||
                     !correct_location) {
@@ -133,7 +138,14 @@ bool minic_riscv64_function_abi_plan_build(
 }
 void minic_riscv64_function_abi_plan_destroy(
     MinicRiscv64FunctionAbiPlan *plan) {
+    size_t i;
     if (plan == NULL) return;
     free(plan->parameter_locations);
+    /* ABI unit tests link the function planner without machine-call cache
+     * implementation; release ownership locally without another link edge. */
+    if (plan->outgoing_calls.sites != NULL)
+        for (i = 0U; i < plan->outgoing_calls.count; ++i)
+            free(plan->outgoing_calls.sites[i]);
+    free(plan->outgoing_calls.sites);
     (void)memset(plan, 0, sizeof(*plan));
 }

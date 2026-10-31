@@ -9,6 +9,47 @@ static int fail(const char *message)
     return 1;
 }
 
+static int test_builtin_declaration_roles(void) {
+    static const struct {
+        MinicTypeBaseKind kind;
+        MinicBuiltinDeclarationRole role;
+    } cases[] = {
+        {MINIC_TYPE_BASE_FLOAT, MINIC_BUILTIN_DECLARATION_STANDARD_FLOAT},
+        {MINIC_TYPE_BASE_DOUBLE, MINIC_BUILTIN_DECLARATION_STANDARD_FLOAT},
+        {MINIC_TYPE_BASE_LONG_DOUBLE, MINIC_BUILTIN_DECLARATION_STANDARD_FLOAT},
+        {MINIC_TYPE_BASE_FLOAT128, MINIC_BUILTIN_DECLARATION_EXTENDED_FLOAT},
+        {MINIC_TYPE_BASE_FLOAT32, MINIC_BUILTIN_DECLARATION_EXTENDED_FLOAT},
+        {MINIC_TYPE_BASE_FLOAT64, MINIC_BUILTIN_DECLARATION_EXTENDED_FLOAT},
+        {MINIC_TYPE_BASE_FLOAT32X, MINIC_BUILTIN_DECLARATION_EXTENDED_FLOAT},
+        {MINIC_TYPE_BASE_FLOAT64X, MINIC_BUILTIN_DECLARATION_EXTENDED_FLOAT},
+        {MINIC_TYPE_BASE_AARCH64_FLOAT32X4, MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE},
+        {MINIC_TYPE_BASE_AARCH64_FLOAT64X2, MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE},
+        {MINIC_TYPE_BASE_AARCH64_SVE_FLOAT32, MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE},
+        {MINIC_TYPE_BASE_AARCH64_SVE_FLOAT64, MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE},
+        {MINIC_TYPE_BASE_AARCH64_SVE_BOOL, MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE}
+    };
+    size_t index;
+
+    for (index = 0U; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+        if (minic_type_builtin_declaration_role(cases[index].kind) != cases[index].role) {
+            return fail("extended C builtin declaration trait classification");
+        }
+    }
+    if (minic_type_builtin_declaration_role(MINIC_TYPE_BASE_VOID) !=
+            MINIC_BUILTIN_DECLARATION_INVALID ||
+        minic_type_builtin_declaration_role(MINIC_TYPE_BASE_INT) !=
+            MINIC_BUILTIN_DECLARATION_INVALID ||
+        !minic_type_is_void(minic_type_aarch64_header_builtin(MINIC_TYPE_BASE_FLOAT128)) ||
+        minic_type_aarch64_header_builtin(MINIC_TYPE_BASE_AARCH64_SVE_BOOL).base_kind !=
+            MINIC_TYPE_BASE_AARCH64_SVE_BOOL) {
+        /* __builtin_va_list now materializes a canonical record/array C
+         * type per translation unit, not a special frontend scalar kind.
+         * Its shape and identity are tested by four-target-model-m0. */
+        return fail("builtin declaration trait rejects non-vector ISA identity");
+    }
+    return 0;
+}
+
 int main(void)
 {
     MinicType void_type;
@@ -31,6 +72,12 @@ int main(void)
     MinicType pointer_to_pointer_type;
     MinicType pointer_to_const_pointer_type;
     MinicType const_pointer_to_pointer_type;
+    MinicType const_void_type;
+    MinicType const_void_pointer_type;
+    MinicType volatile_void_type;
+    MinicType volatile_void_pointer_type;
+    MinicType volatile_pointer_object_type;
+    MinicType pointer_to_volatile_pointer_type;
     MinicType record_type;
     MinicType other_record_type;
     MinicType record_pointer_type;
@@ -38,6 +85,10 @@ int main(void)
     MinicType unqualified_type;
     MinicType malformed_type;
     MinicType overflow_type;
+
+    if (test_builtin_declaration_roles() != 0) {
+        return 1;
+    }
 
     void_type = minic_type_void();
     if (!minic_type_is_void(void_type) ||
@@ -240,6 +291,28 @@ int main(void)
         !minic_type_pointee(pointer_to_pointer_type, &recovered_type) ||
         !minic_type_equal(recovered_type, pointer_type)) {
         return fail("pointee recovery");
+    }
+    if (!minic_type_add_const(void_type, &const_void_type) ||
+        !minic_type_pointer_to(const_void_type, &const_void_pointer_type) ||
+        !minic_type_add_volatile(void_type, &volatile_void_type) ||
+        !minic_type_pointer_to(volatile_void_type, &volatile_void_pointer_type) ||
+        !minic_type_add_volatile(pointer_type, &volatile_pointer_object_type) ||
+        !minic_type_pointer_to(volatile_pointer_object_type,
+                               &pointer_to_volatile_pointer_type) ||
+        !minic_type_assignment_compatible(void_pointer_type, pointer_to_pointer_type) ||
+        minic_type_assignment_compatible(void_pointer_type,
+                                         pointer_to_const_pointer_type) ||
+        minic_type_assignment_compatible(void_pointer_type,
+                                         pointer_to_volatile_pointer_type) ||
+        !minic_type_assignment_compatible(const_void_pointer_type,
+                                          pointer_to_const_pointer_type) ||
+        !minic_type_assignment_compatible(volatile_void_pointer_type,
+                                          pointer_to_volatile_pointer_type) ||
+        minic_type_assignment_compatible(pointer_to_pointer_type,
+                                         const_void_pointer_type) ||
+        minic_type_assignment_compatible(pointer_to_pointer_type,
+                                         volatile_void_pointer_type)) {
+        return fail("void pointer conversion preserves immediate pointee qualifiers");
     }
 
     record_type = minic_type_record(3U);

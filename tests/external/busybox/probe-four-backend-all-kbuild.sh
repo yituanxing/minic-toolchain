@@ -22,13 +22,16 @@ mkdir -p "$src" "$report"
 echo "FOUR_BACKEND_BUSYBOX_ALL_KBUILD_START target=$target original_commit=1a64f6a20aaf6ea4dbba68bbfa8cc1ab7e5c57c4 mode=upstream_allyesconfig"
 # Reuse x86's host-link-compatible upstream Kconfig policy with the actual
 # cross GNU compiler. Source and Kbuild itself remain pristine.
+# GNU host GCC defaults to PIE on x86_64. Replacing its objects with non-PIC
+# MiniC output makes the original BusyBox link reject PC32 relocations; use
+# MiniC's qualified x86 GOT/PLT -fPIE backend instead.
 if timeout 900s env CROSS_COMPILE="$prefix" \
     PKG_CONFIG=pkg-config \
     BUSYBOX_ALLYES_LINK_COMPATIBLE=1 \
     BUSYBOX_ALLYES_MIXED_BULK=1 \
     BUSYBOX_ALLYES_CROSS_PREFIX="$prefix" \
     BUSYBOX_ALLYES_MINIC_TARGET="$target-linux" \
-    BUSYBOX_ALLYES_MINIC_PIC="$(if [ "$target" = riscv64 ]; then printf 1; else printf 0; fi)" \
+    BUSYBOX_ALLYES_MINIC_PIC="$(case "$target" in riscv64|x86_64) printf 1;; *) printf 0;; esac)" \
     BUSYBOX_ALLYES_QEMU="$qemu" \
     BUSYBOX_ALLYES_SYSROOT="$sysroot" \
     python3 "$repo/tests/external/busybox/allyes_sweep.py" \

@@ -12,10 +12,248 @@
 
 /* All bit-field reads, assignments, compound RMW and increments share one
  * C semantic owner. Snapshot source before evaluating target base, as before. */
+
+/* A declared `unsigned int` bit-field is NOT necessarily backed by four
+ * addressable bytes. In a packed record, DataLayout can place a ten-bit field
+ * at byte three of a five-byte object; loading uint32_t there would read past
+ * the object (and often cross a page boundary). A nonnaturally aligned field
+ * can also fault on machines that reject unaligned scalar loads. Keep the
+ * machine-efficient full-width access for safe aligned windows, otherwise
+ * access exactly the bytes covering this field's bits. */
+static bool core_bit_field_access_window(
+    const MinicCoreLowerContext *context, const MinicRecord *record,
+    MinicRecordId record_id, size_t byte_offset, size_t bit_offset,
+    size_t field_width, unsigned int *storage_width,
+    MinicType *storage_type, MinicType *access_type,
+    size_t *byte_count, bool *narrow) {
+    size_t record_size;
+    size_t record_alignment;
+    size_t storage_bytes;
+
+    if (context == NULL || context->body == NULL || record == NULL ||
+        storage_type == NULL || storage_width == NULL ||
+        access_type == NULL || byte_count == NULL || narrow == NULL ||
+        field_width == 0U || *storage_width == 0U ||
+        *storage_width > 64U || (*storage_width % 8U) != 0U ||
+        bit_offset >= 8U || field_width > 64U - bit_offset ||
+        !minic_data_layout_is_little_endian(core_data_layout(context)) ||
+        !minic_data_layout_type(core_data_layout(context),
+                                context->body->program,
+                                minic_type_record(record_id),
+                                &record_size, &record_alignment)) {
+        return false;
+    }
+    /* A 32-bit field may start at bit 1 of a packed record. Its five physical
+     * bytes require a 64-bit *transport* integer even though the C value and
+     * its promotions remain 32-bit. Keep the original semantic type separate
+     * in each caller; only storage extraction/merge uses this wider type. */
+    if (field_width > (size_t)(*storage_width - bit_offset)) {
+        unsigned int wide_width;
+        MinicType wide_type = minic_type_unsigned_long_long();
+        if (!minic_target_info_integer_width(
+                context->target, context->body->program,
+                wide_type, &wide_width) || wide_width != 64U)
+            return false;
+        *storage_type = wide_type;
+        *storage_width = wide_width;
+    }
+    storage_bytes = *storage_width / 8U;
+    *byte_count = (bit_offset + field_width + 7U) / 8U;
+    if (*byte_count == 0U || *byte_count > storage_bytes ||
+        byte_offset > record_size || *byte_count > record_size - byte_offset) {
+        return false;
+    }
+    *narrow = record_alignment < storage_bytes ||
+              (byte_offset % storage_bytes) != 0U ||
+              storage_bytes > record_size - byte_offset;
+    *access_type = *narrow ? minic_type_unsigned_char() : *storage_type;
+    return true;
+}
+
+static MinicCoreLowerStatus core_bit_field_byte_address(
+    MinicCoreLowerContext *context, MinicSourceSpan span,
+    MinicCoreValueId base, size_t byte_index, MinicCoreValueId *address) {
+    MinicCoreInstruction op;
+    MinicCoreValueId index;
+
+    if (byte_index == 0U) {
+        *address = base;
+        return MINIC_CORE_LOWER_OK;
+    }
+    (void)memset(&op, 0, sizeof(op));
+    op.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
+    op.span = span;
+    op.type = minic_type_unsigned_int();
+    op.result = MINIC_CORE_VALUE_INVALID;
+    op.value.integer_value = (int64_t)byte_index;
+    if (!minic_core_function_append_value_instruction(
+            context->function, context->block_id, &op, &index))
+        return MINIC_CORE_LOWER_ERROR;
+    (void)memset(&op, 0, sizeof(op));
+    op.kind = MINIC_CORE_INSTRUCTION_POINTER_OFFSET;
+    op.span = span;
+    op.type = context->function->values[base].type;
+    op.result = MINIC_CORE_VALUE_INVALID;
+    op.value.pointer_offset.base = base;
+    op.value.pointer_offset.index = index;
+    op.value.pointer_offset.element_size = 1U;
+    return minic_core_function_append_value_instruction(
+               context->function, context->block_id, &op, address)
+               ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR;
+}
+
+static MinicCoreLowerStatus core_bit_field_load_storage(
+    MinicCoreLowerContext *context, MinicSourceSpan span,
+    MinicCoreValueId address, MinicType storage_type,
+    bool narrow, size_t byte_count, bool is_volatile,
+    MinicCoreValueId *value) {
+    MinicCoreInstruction op;
+    MinicCoreValueId assembled = MINIC_CORE_VALUE_INVALID;
+    size_t byte_index;
+
+    if (!narrow) {
+        (void)memset(&op, 0, sizeof(op));
+        op.kind = MINIC_CORE_INSTRUCTION_LOAD;
+        op.span = span;
+        op.type = storage_type;
+        op.result = MINIC_CORE_VALUE_INVALID;
+        op.value.load.address = address;
+        op.value.load.is_volatile = is_volatile;
+        return minic_core_function_append_value_instruction(
+                   context->function, context->block_id, &op, value)
+                   ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR;
+    }
+    /* The access-window gate requires explicit little-endian DataLayout;
+     * no Core architecture switch or assumption about a future BE ISA. */
+    for (byte_index = 0U; byte_index < byte_count; ++byte_index) {
+        MinicCoreValueId byte_address;
+        MinicCoreValueId current;
+        MinicCoreValueId shift;
+        MinicCoreValueId shifted;
+        MinicCoreLowerStatus status = core_bit_field_byte_address(
+            context, span, address, byte_index, &byte_address);
+        if (status != MINIC_CORE_LOWER_OK) return status;
+        (void)memset(&op, 0, sizeof(op));
+        op.kind = MINIC_CORE_INSTRUCTION_LOAD;
+        op.span = span;
+        op.type = minic_type_unsigned_char();
+        op.result = MINIC_CORE_VALUE_INVALID;
+        op.value.load.address = byte_address;
+        op.value.load.is_volatile = is_volatile;
+        if (!minic_core_function_append_value_instruction(
+                context->function, context->block_id, &op, &current))
+            return MINIC_CORE_LOWER_ERROR;
+        status = minic_core_lower_internal_append_integer_conversion(
+            context, span, storage_type, current, &current);
+        if (status != MINIC_CORE_LOWER_OK) return status;
+        if (byte_index != 0U) {
+            (void)memset(&op, 0, sizeof(op));
+            op.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
+            op.span = span;
+            op.type = minic_type_unsigned_int();
+            op.result = MINIC_CORE_VALUE_INVALID;
+            op.value.integer_value = (int64_t)(byte_index * 8U);
+            if (!minic_core_function_append_value_instruction(
+                    context->function, context->block_id, &op, &shift))
+                return MINIC_CORE_LOWER_ERROR;
+            (void)memset(&op, 0, sizeof(op));
+            op.kind = MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT;
+            op.span = span;
+            op.type = storage_type;
+            op.result = MINIC_CORE_VALUE_INVALID;
+            op.value.binary.left = current;
+            op.value.binary.right = shift;
+            if (!minic_core_function_append_value_instruction(
+                    context->function, context->block_id, &op, &shifted))
+                return MINIC_CORE_LOWER_ERROR;
+            (void)memset(&op, 0, sizeof(op));
+            op.kind = MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR;
+            op.span = span;
+            op.type = storage_type;
+            op.result = MINIC_CORE_VALUE_INVALID;
+            op.value.binary.left = assembled;
+            op.value.binary.right = shifted;
+            if (!minic_core_function_append_value_instruction(
+                    context->function, context->block_id, &op, &assembled))
+                return MINIC_CORE_LOWER_ERROR;
+        } else {
+            assembled = current;
+        }
+    }
+    *value = assembled;
+    return MINIC_CORE_LOWER_OK;
+}
+
+static MinicCoreLowerStatus core_bit_field_store_storage(
+    MinicCoreLowerContext *context, MinicSourceSpan span,
+    MinicCoreValueId address, MinicCoreValueId value,
+    bool narrow, size_t byte_count, bool is_volatile) {
+    MinicCoreInstruction op;
+    size_t byte_index;
+
+    if (!narrow) {
+        (void)memset(&op, 0, sizeof(op));
+        op.kind = MINIC_CORE_INSTRUCTION_STORE;
+        op.span = span;
+        op.type = minic_type_void();
+        op.result = MINIC_CORE_VALUE_INVALID;
+        op.value.store.address = address;
+        op.value.store.stored_value = value;
+        op.value.store.is_volatile = is_volatile;
+        return minic_core_function_append_effect_instruction(
+                   context->function, context->block_id, &op)
+                   ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR;
+    }
+    for (byte_index = 0U; byte_index < byte_count; ++byte_index) {
+        MinicCoreValueId byte_address;
+        MinicCoreValueId byte_value = value;
+        MinicCoreLowerStatus status = core_bit_field_byte_address(
+            context, span, address, byte_index, &byte_address);
+        if (status != MINIC_CORE_LOWER_OK) return status;
+        if (byte_index != 0U) {
+            MinicCoreValueId shift;
+            (void)memset(&op, 0, sizeof(op));
+            op.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
+            op.span = span;
+            op.type = minic_type_unsigned_int();
+            op.result = MINIC_CORE_VALUE_INVALID;
+            op.value.integer_value = (int64_t)(byte_index * 8U);
+            if (!minic_core_function_append_value_instruction(
+                    context->function, context->block_id, &op, &shift))
+                return MINIC_CORE_LOWER_ERROR;
+            (void)memset(&op, 0, sizeof(op));
+            op.kind = MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT;
+            op.span = span;
+            op.type = context->function->values[value].type;
+            op.result = MINIC_CORE_VALUE_INVALID;
+            op.value.binary.left = value;
+            op.value.binary.right = shift;
+            if (!minic_core_function_append_value_instruction(
+                    context->function, context->block_id, &op, &byte_value))
+                return MINIC_CORE_LOWER_ERROR;
+        }
+        status = minic_core_lower_internal_append_integer_conversion(
+            context, span, minic_type_unsigned_char(), byte_value, &byte_value);
+        if (status != MINIC_CORE_LOWER_OK) return status;
+        (void)memset(&op, 0, sizeof(op));
+        op.kind = MINIC_CORE_INSTRUCTION_STORE;
+        op.span = span;
+        op.type = minic_type_void();
+        op.result = MINIC_CORE_VALUE_INVALID;
+        op.value.store.address = byte_address;
+        op.value.store.stored_value = byte_value;
+        op.value.store.is_volatile = is_volatile;
+        if (!minic_core_function_append_effect_instruction(
+                context->function, context->block_id, &op))
+            return MINIC_CORE_LOWER_ERROR;
+    }
+    return MINIC_CORE_LOWER_OK;
+}
+
 MinicCoreLowerStatus minic_core_lower_try_bit_field_assignment(
     MinicCoreLowerContext *context, const MinicExpression *target,
     MinicExpressionId source_id, MinicSourceSpan span,
-    MinicCoreValueId *result_value, bool *matched) {
+    MinicCoreValueId *result_value, bool is_initializer_write, bool *matched) {
     if (context == NULL || context->body == NULL ||
         context->body->program == NULL || context->function == NULL ||
         target == NULL || matched == NULL) return MINIC_CORE_LOWER_ERROR;
@@ -52,7 +290,10 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_assignment(
             MinicType value_type;
             size_t byte_offset;
             size_t bit_offset;
+            size_t byte_count;
             unsigned int storage_width;
+            unsigned int semantic_width;
+            bool narrow;
             uint64_t low_mask;
             uint64_t field_mask;
             uint64_t clear_mask;
@@ -63,7 +304,10 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_assignment(
                 !minic_type_is_integer(value_type) ||
                 (!core_unsigned_bit_field_semantic_type(context, value_type) &&
                  !minic_type_is_signed_integer(value_type)) ||
-                minic_type_is_const(target->type) ||
+                /* Const qualification prohibits mutation, not initialization.
+                 * Only the parser's aggregate-initializer writes carry the
+                 * provenance needed to bypass this semantic guard. */
+                (minic_type_is_const(target->type) && !is_initializer_write) ||
                 !core_bit_field_storage_type(
                     context, value_type, &storage_type, &storage_width) ||
                 storage_width == 0U || storage_width > 64U ||
@@ -74,7 +318,6 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_assignment(
                                                        target->value.member.field_index,
                                                        &byte_offset,
                                                        &bit_offset) ||
-                bit_offset + field->bit_width > storage_width ||
                 !core_scalar_expression_value_type(context->body, base, &base_value_type) ||
                 !minic_type_is_pointer(base_value_type) ||
                 !minic_type_pointee(base_value_type, &record_type) ||
@@ -82,8 +325,12 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_assignment(
                 record_type.record_id != target->value.member.record_id) {
                 return MINIC_CORE_LOWER_UNSUPPORTED;
             }
-            (void)byte_offset;
-            storage_access_type = storage_type;
+            semantic_width = storage_width;
+            if (!core_bit_field_access_window(
+                    context, record, target->value.member.record_id,
+                    byte_offset, bit_offset, field->bit_width, &storage_width,
+                    &storage_type, &storage_access_type, &byte_count, &narrow))
+                return MINIC_CORE_LOWER_UNSUPPORTED;
             if (minic_type_is_volatile(target->type) &&
                 !minic_type_add_volatile(storage_access_type, &storage_access_type)) {
                 return MINIC_CORE_LOWER_ERROR;
@@ -118,17 +365,10 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_assignment(
             if (bit_status != MINIC_CORE_LOWER_OK) {
                 return bit_status;
             }
-            (void)memset(&operation, 0, sizeof(operation));
-            operation.kind = MINIC_CORE_INSTRUCTION_LOAD;
-            operation.span = target->span;
-            operation.type = storage_type;
-            operation.result = MINIC_CORE_VALUE_INVALID;
-            operation.value.load.address = address;
-            operation.value.load.is_volatile = minic_type_is_volatile(target->type);
-            if (!minic_core_function_append_value_instruction(
-                    context->function, context->block_id, &operation, &current)) {
-                return MINIC_CORE_LOWER_ERROR;
-            }
+            bit_status = core_bit_field_load_storage(
+                context, target->span, address, storage_type, narrow,
+                byte_count, minic_type_is_volatile(target->type), &current);
+            if (bit_status != MINIC_CORE_LOWER_OK) return bit_status;
             bit_status = minic_core_lower_internal_reload_scalar_value(
                 context, span, value_type, source_object, &field_value);
             if (bit_status != MINIC_CORE_LOWER_OK) {
@@ -186,9 +426,9 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_assignment(
                established M103 read path.  The stored bits themselves remain
                the masked two's-complement representation. */
             if (minic_type_is_signed_integer(value_type) &&
-                field->bit_width < storage_width) {
+                field->bit_width < semantic_width) {
                 MinicCoreValueId shift;
-                uint64_t shift_bits = (uint64_t)(storage_width - field->bit_width);
+                uint64_t shift_bits = (uint64_t)(semantic_width - field->bit_width);
 
                 (void)memset(&operation, 0, sizeof(operation));
                 operation.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
@@ -286,18 +526,10 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_assignment(
                     context->function, context->block_id, &operation, &merged)) {
                 return MINIC_CORE_LOWER_ERROR;
             }
-            (void)memset(&operation, 0, sizeof(operation));
-            operation.kind = MINIC_CORE_INSTRUCTION_STORE;
-            operation.span = span;
-            operation.type = minic_type_void();
-            operation.result = MINIC_CORE_VALUE_INVALID;
-            operation.value.store.address = address;
-            operation.value.store.stored_value = merged;
-            operation.value.store.is_volatile = minic_type_is_volatile(target->type);
-            if (!minic_core_function_append_effect_instruction(
-                    context->function, context->block_id, &operation)) {
-                return MINIC_CORE_LOWER_ERROR;
-            }
+            bit_status = core_bit_field_store_storage(
+                context, span, address, merged, narrow, byte_count,
+                minic_type_is_volatile(target->type));
+            if (bit_status != MINIC_CORE_LOWER_OK) return bit_status;
             if (result_value != NULL) {
                 *result_value = assigned_value;
             }
@@ -334,7 +566,9 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_read(
         MinicType value_type;
         size_t byte_offset;
         size_t bit_offset;
+        size_t byte_count;
         unsigned int storage_width;
+        bool narrow;
         uint64_t mask_bits;
 
         base = minic_c0_program_expression(context->body->program, expression->value.member.base);
@@ -355,7 +589,6 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_read(
                                                        expression->value.member.field_index,
                                                        &byte_offset,
                                                        &bit_offset) ||
-                bit_offset + field->bit_width > storage_width ||
                 !core_scalar_expression_value_type(context->body, base, &base_value_type) ||
                 !minic_type_is_pointer(base_value_type) ||
                 !minic_type_pointee(base_value_type, &record_type) ||
@@ -363,8 +596,11 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_read(
                 record_type.record_id != expression->value.member.record_id) {
                 return MINIC_CORE_LOWER_UNSUPPORTED;
             }
-            (void)byte_offset;
-            storage_access_type = storage_type;
+            if (!core_bit_field_access_window(
+                    context, record, expression->value.member.record_id,
+                    byte_offset, bit_offset, field->bit_width, &storage_width,
+                    &storage_type, &storage_access_type, &byte_count, &narrow))
+                return MINIC_CORE_LOWER_UNSUPPORTED;
             if (minic_type_is_const(expression->type) &&
                 !minic_type_add_const(storage_access_type, &storage_access_type)) {
                 return MINIC_CORE_LOWER_ERROR;
@@ -391,17 +627,10 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_read(
             if (status != MINIC_CORE_LOWER_OK) {
                 return status;
             }
-            (void)memset(&extract, 0, sizeof(extract));
-            extract.kind = MINIC_CORE_INSTRUCTION_LOAD;
-            extract.span = expression->span;
-            extract.type = storage_type;
-            extract.result = MINIC_CORE_VALUE_INVALID;
-            extract.value.load.address = address_id;
-            extract.value.load.is_volatile = minic_type_is_volatile(expression->type);
-            if (!minic_core_function_append_value_instruction(
-                    context->function, context->block_id, &extract, &current)) {
-                return MINIC_CORE_LOWER_ERROR;
-            }
+            status = core_bit_field_load_storage(
+                context, expression->span, address_id, storage_type, narrow,
+                byte_count, minic_type_is_volatile(expression->type), &current);
+            if (status != MINIC_CORE_LOWER_OK) return status;
             if (bit_offset != 0U) {
                 (void)memset(&extract, 0, sizeof(extract));
                 extract.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
@@ -465,7 +694,7 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_read(
 
                 if (!minic_target_info_integer_width(
                         context->target, context->body->program, value_type, &value_width) ||
-                    value_width != storage_width) {
+                    field->bit_width > value_width) {
                     return MINIC_CORE_LOWER_UNSUPPORTED;
                 }
                 status = minic_core_lower_internal_append_integer_conversion(
@@ -473,9 +702,9 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_read(
                 if (status != MINIC_CORE_LOWER_OK) {
                     return status;
                 }
-                if (field->bit_width < storage_width) {
+                if (field->bit_width < value_width) {
                     MinicCoreValueId shift;
-                    uint64_t shift_bits = (uint64_t)(storage_width - field->bit_width);
+                    uint64_t shift_bits = (uint64_t)(value_width - field->bit_width);
 
                     (void)memset(&extract, 0, sizeof(extract));
                     extract.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
@@ -578,12 +807,15 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_compound(
             MinicType bit_value_type;
             size_t bit_byte_offset;
             size_t bit_offset;
+            size_t bit_byte_count;
             unsigned int bit_storage_width;
+            unsigned int bit_semantic_width;
             uint64_t bit_clear_mask;
             uint64_t bit_field_mask;
             uint64_t bit_low_mask;
             uint64_t bit_storage_mask;
             bool bit_shift_assignment;
+            bool bit_narrow;
 
             if (bit_target == NULL || bit_source == NULL || bit_base == NULL ||
                 bit_record == NULL || bit_target->value_category != MINIC_VALUE_LVALUE ||
@@ -605,7 +837,6 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_compound(
                                                        bit_target->value.member.field_index,
                                                        &bit_byte_offset,
                                                        &bit_offset) ||
-                bit_offset + bit_field->bit_width > bit_storage_width ||
                 !core_scalar_expression_value_type(
                     context->body, bit_base, &bit_base_value_type) ||
                 !minic_type_is_pointer(bit_base_value_type) ||
@@ -614,7 +845,13 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_compound(
                 bit_record_type.record_id != bit_target->value.member.record_id) {
                 return MINIC_CORE_LOWER_UNSUPPORTED;
             }
-            (void)bit_byte_offset;
+            bit_semantic_width = bit_storage_width;
+            if (!core_bit_field_access_window(
+                    context, bit_record, bit_target->value.member.record_id,
+                    bit_byte_offset, bit_offset, bit_field->bit_width, &bit_storage_width,
+                    &bit_storage_type, &bit_storage_access_type, &bit_byte_count,
+                    &bit_narrow))
+                return MINIC_CORE_LOWER_UNSUPPORTED;
             bit_shift_assignment =
                 expression->value.binary.operator_kind == MINIC_BINARY_SHIFT_LEFT ||
                 expression->value.binary.operator_kind == MINIC_BINARY_SHIFT_RIGHT;
@@ -641,7 +878,6 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_compound(
                 }
                 bit_right_type = bit_common_type;
             }
-            bit_storage_access_type = bit_storage_type;
             if (minic_type_is_volatile(bit_target->type) &&
                 !minic_type_add_volatile(bit_storage_access_type, &bit_storage_access_type)) {
                 return MINIC_CORE_LOWER_ERROR;
@@ -666,17 +902,11 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_compound(
             if (bit_status != MINIC_CORE_LOWER_OK) {
                 return bit_status;
             }
-            (void)memset(&bit_instruction, 0, sizeof(bit_instruction));
-            bit_instruction.kind = MINIC_CORE_INSTRUCTION_LOAD;
-            bit_instruction.span = bit_target->span;
-            bit_instruction.type = bit_storage_type;
-            bit_instruction.result = MINIC_CORE_VALUE_INVALID;
-            bit_instruction.value.load.address = bit_address;
-            bit_instruction.value.load.is_volatile = minic_type_is_volatile(bit_target->type);
-            if (!minic_core_function_append_value_instruction(
-                    context->function, context->block_id, &bit_instruction, &bit_current)) {
-                return MINIC_CORE_LOWER_ERROR;
-            }
+            bit_status = core_bit_field_load_storage(
+                context, bit_target->span, bit_address, bit_storage_type,
+                bit_narrow, bit_byte_count,
+                minic_type_is_volatile(bit_target->type), &bit_current);
+            if (bit_status != MINIC_CORE_LOWER_OK) return bit_status;
             if (bit_offset != 0U) {
                 (void)memset(&bit_instruction, 0, sizeof(bit_instruction));
                 bit_instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
@@ -739,10 +969,10 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_compound(
                 }
             }
             if (minic_type_is_signed_integer(bit_value_type) &&
-                bit_field->bit_width < bit_storage_width) {
+                bit_field->bit_width < bit_semantic_width) {
                 MinicCoreValueId bit_sign_shift;
                 uint64_t bit_sign_shift_bits =
-                    (uint64_t)(bit_storage_width - bit_field->bit_width);
+                    (uint64_t)(bit_semantic_width - bit_field->bit_width);
 
                 (void)memset(&bit_instruction, 0, sizeof(bit_instruction));
                 bit_instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
@@ -944,10 +1174,10 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_compound(
                 } else {
                     bit_stored_value = bit_field_storage;
                 }
-                if (bit_field->bit_width < bit_storage_width) {
+                if (bit_field->bit_width < bit_semantic_width) {
                     MinicCoreValueId bit_sign_shift;
                     uint64_t bit_sign_shift_bits =
-                        (uint64_t)(bit_storage_width - bit_field->bit_width);
+                        (uint64_t)(bit_semantic_width - bit_field->bit_width);
 
                     (void)memset(&bit_instruction, 0, sizeof(bit_instruction));
                     bit_instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
@@ -1031,17 +1261,11 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_compound(
                                    ? UINT64_MAX
                                    : ((UINT64_C(1) << bit_storage_width) - UINT64_C(1));
             bit_clear_mask = (~bit_field_mask) & bit_storage_mask;
-            (void)memset(&bit_instruction, 0, sizeof(bit_instruction));
-            bit_instruction.kind = MINIC_CORE_INSTRUCTION_LOAD;
-            bit_instruction.span = expression->span;
-            bit_instruction.type = bit_storage_type;
-            bit_instruction.result = MINIC_CORE_VALUE_INVALID;
-            bit_instruction.value.load.address = bit_address;
-            bit_instruction.value.load.is_volatile = minic_type_is_volatile(bit_target->type);
-            if (!minic_core_function_append_value_instruction(
-                    context->function, context->block_id, &bit_instruction, &bit_merge_current)) {
-                return MINIC_CORE_LOWER_ERROR;
-            }
+            bit_status = core_bit_field_load_storage(
+                context, expression->span, bit_address, bit_storage_type,
+                bit_narrow, bit_byte_count,
+                minic_type_is_volatile(bit_target->type), &bit_merge_current);
+            if (bit_status != MINIC_CORE_LOWER_OK) return bit_status;
             (void)memset(&bit_instruction, 0, sizeof(bit_instruction));
             bit_instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
             bit_instruction.span = expression->span;
@@ -1076,18 +1300,11 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_compound(
                     context->function, context->block_id, &bit_instruction, &bit_merged)) {
                 return MINIC_CORE_LOWER_ERROR;
             }
-            (void)memset(&bit_instruction, 0, sizeof(bit_instruction));
-            bit_instruction.kind = MINIC_CORE_INSTRUCTION_STORE;
-            bit_instruction.span = expression->span;
-            bit_instruction.type = minic_type_void();
-            bit_instruction.result = MINIC_CORE_VALUE_INVALID;
-            bit_instruction.value.store.address = bit_address;
-            bit_instruction.value.store.stored_value = bit_merged;
-            bit_instruction.value.store.is_volatile = minic_type_is_volatile(bit_target->type);
-            if (!minic_core_function_append_effect_instruction(
-                    context->function, context->block_id, &bit_instruction)) {
-                return MINIC_CORE_LOWER_ERROR;
-            }
+            bit_status = core_bit_field_store_storage(
+                context, expression->span, bit_address, bit_merged,
+                bit_narrow, bit_byte_count,
+                minic_type_is_volatile(bit_target->type));
+            if (bit_status != MINIC_CORE_LOWER_OK) return bit_status;
             *value_id = bit_stored_value;
             return MINIC_CORE_LOWER_OK;
         }
@@ -1127,7 +1344,10 @@ MinicCoreLowerStatus minic_core_lower_bit_field_update(
     MinicType value_type;
     size_t byte_offset;
     size_t bit_offset;
+    size_t byte_count;
     unsigned int storage_width;
+    unsigned int semantic_width;
+    bool narrow;
     uint64_t clear_mask;
     uint64_t field_mask;
     uint64_t low_mask;
@@ -1162,7 +1382,6 @@ MinicCoreLowerStatus minic_core_lower_bit_field_update(
                                                operand->value.member.field_index,
                                                &byte_offset,
                                                &bit_offset) ||
-        bit_offset + field->bit_width > storage_width ||
         !core_scalar_expression_value_type(context->body, base, &base_value_type) ||
         !minic_type_is_pointer(base_value_type) ||
         !minic_type_pointee(base_value_type, &record_type) ||
@@ -1170,9 +1389,12 @@ MinicCoreLowerStatus minic_core_lower_bit_field_update(
         record_type.record_id != operand->value.member.record_id) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
-    (void)byte_offset;
-
-    storage_access_type = storage_type;
+    semantic_width = storage_width;
+    if (!core_bit_field_access_window(
+            context, record, operand->value.member.record_id,
+            byte_offset, bit_offset, field->bit_width, &storage_width,
+            &storage_type, &storage_access_type, &byte_count, &narrow))
+        return MINIC_CORE_LOWER_UNSUPPORTED;
     if (minic_type_is_volatile(operand->type) &&
         !minic_type_add_volatile(storage_access_type, &storage_access_type)) {
         return MINIC_CORE_LOWER_ERROR;
@@ -1196,17 +1418,10 @@ MinicCoreLowerStatus minic_core_lower_bit_field_update(
         return status;
     }
 
-    (void)memset(&instruction, 0, sizeof(instruction));
-    instruction.kind = MINIC_CORE_INSTRUCTION_LOAD;
-    instruction.span = operand->span;
-    instruction.type = storage_type;
-    instruction.result = MINIC_CORE_VALUE_INVALID;
-    instruction.value.load.address = address;
-    instruction.value.load.is_volatile = minic_type_is_volatile(operand->type);
-    if (!minic_core_function_append_value_instruction(
-            context->function, context->block_id, &instruction, &current_storage)) {
-        return MINIC_CORE_LOWER_ERROR;
-    }
+    status = core_bit_field_load_storage(
+        context, operand->span, address, storage_type, narrow, byte_count,
+        minic_type_is_volatile(operand->type), &current_storage);
+    if (status != MINIC_CORE_LOWER_OK) return status;
     shifted_current = current_storage;
     if (bit_offset != 0U) {
         (void)memset(&instruction, 0, sizeof(instruction));
@@ -1269,9 +1484,9 @@ MinicCoreLowerStatus minic_core_lower_bit_field_update(
        unsigned bit pattern.  Reconstruct the signed field value before integer
        promotion, matching M103 signed bit-field reads and preserving postfix
        result semantics. */
-    if (minic_type_is_signed_integer(value_type) && field->bit_width < storage_width) {
+    if (minic_type_is_signed_integer(value_type) && field->bit_width < semantic_width) {
         MinicCoreValueId sign_shift;
-        uint64_t sign_shift_bits = (uint64_t)(storage_width - field->bit_width);
+        uint64_t sign_shift_bits = (uint64_t)(semantic_width - field->bit_width);
 
         (void)memset(&instruction, 0, sizeof(instruction));
         instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
@@ -1382,9 +1597,9 @@ MinicCoreLowerStatus minic_core_lower_bit_field_update(
             return status;
         }
     }
-    if (minic_type_is_signed_integer(value_type) && field->bit_width < storage_width) {
+    if (minic_type_is_signed_integer(value_type) && field->bit_width < semantic_width) {
         MinicCoreValueId sign_shift;
-        uint64_t sign_shift_bits = (uint64_t)(storage_width - field->bit_width);
+        uint64_t sign_shift_bits = (uint64_t)(semantic_width - field->bit_width);
 
         (void)memset(&instruction, 0, sizeof(instruction));
         instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
@@ -1481,18 +1696,10 @@ MinicCoreLowerStatus minic_core_lower_bit_field_update(
             context->function, context->block_id, &instruction, &merged)) {
         return MINIC_CORE_LOWER_ERROR;
     }
-    (void)memset(&instruction, 0, sizeof(instruction));
-    instruction.kind = MINIC_CORE_INSTRUCTION_STORE;
-    instruction.span = expression->span;
-    instruction.type = minic_type_void();
-    instruction.result = MINIC_CORE_VALUE_INVALID;
-    instruction.value.store.address = address;
-    instruction.value.store.stored_value = merged;
-    instruction.value.store.is_volatile = minic_type_is_volatile(operand->type);
-    if (!minic_core_function_append_effect_instruction(
-            context->function, context->block_id, &instruction)) {
-        return MINIC_CORE_LOWER_ERROR;
-    }
+    status = core_bit_field_store_storage(
+        context, expression->span, address, merged, narrow, byte_count,
+        minic_type_is_volatile(operand->type));
+    if (status != MINIC_CORE_LOWER_OK) return status;
     *value_id = prefix ? updated_value : current_field;
     return MINIC_CORE_LOWER_OK;
 }

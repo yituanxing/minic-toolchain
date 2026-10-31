@@ -166,7 +166,11 @@ static MinicTokenKind minic_classify_identifier(const char *text, size_t length)
     if (length == 5U && memcmp(text, "union", 5U) == 0) {
         return MINIC_TOKEN_KW_UNION;
     }
-    if (length == 5U && memcmp(text, "const", 5U) == 0) {
+    /* GNU const spellings are ordinary C qualifiers. Centralize their
+     * lexical classification rather than adding per-ISA declaration paths. */
+    if ((length == 5U && memcmp(text, "const", 5U) == 0) ||
+        (length == 7U && memcmp(text, "__const", 7U) == 0) ||
+        (length == 9U && memcmp(text, "__const__", 9U) == 0)) {
         return MINIC_TOKEN_KW_CONST;
     }
     if ((length == 8U && memcmp(text, "volatile", 8U) == 0) ||

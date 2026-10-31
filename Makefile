@@ -58,6 +58,13 @@ MINIC_CFLAGS  := -std=c11 $(COMMON_WARNINGS) $(MODE_CFLAGS) $(CFLAGS)
 MINIC_LDFLAGS := $(MODE_LDFLAGS) $(LDFLAGS)
 MINIC_INCLUDES := -Iinclude -Isrc
 
+TARGET_SOURCE_POLICY_SOURCES := \
+	src/target/source_policy/riscv32.c \
+	src/target/source_policy/riscv64.c \
+	src/target/source_policy/x86_64.c \
+	src/target/source_policy/aarch64.c \
+	src/target/source_policy/loongarch64.c
+
 MINIC_SOURCES := \
 	src/compiler/compiler.c \
 	src/compiler/core_function_set.c \
@@ -88,6 +95,7 @@ MINIC_SOURCES := \
 	src/core/core_lower_expr_scalar.c \
 	src/core/core_lower_arithmetic.c \
 	src/core/core_lower_const_facts.c \
+	src/core/core_const_global_record.c \
 	src/core/cfg_constant_calls.c \
 	src/core/local_facts.c \
 	src/core/source_loop_shapes.c \
@@ -140,13 +148,14 @@ MINIC_SOURCES := \
 	src/frontend/parser_runtime_initializer.c \
 	src/frontend/parser_string.c \
 	src/frontend/parser_type.c \
-	src/frontend/parser_type_query.c \
 	src/frontend/parser_typedef.c \
 	src/frontend/token.c \
 	src/frontend/type.c \
 	src/target/data_layout.c \
 	src/target/target_info.c \
 	src/target/target_catalog.c \
+	src/target/target_machine_options.c \
+	$(TARGET_SOURCE_POLICY_SOURCES) \
 	src/target/backend.c \
 	src/target/backend_core_usage.c \
 	src/target/common/global_emit.c \
@@ -164,6 +173,7 @@ MINIC_SOURCES := \
 	src/target/common/direct_call_plan.c \
 	src/target/common/direct_instruction_semantics.c \
 	src/target/common/direct_residual_plan.c \
+	src/target/common/aggregate_shape.c \
 	src/target/common/lp64_aggregate.c \
 	src/target/common/lp64_scalar.c \
 	src/target/common/lp64_frame.c \
@@ -218,15 +228,18 @@ MINIC_SOURCES := \
 	src/target/x86_64/global_emit.c \
 	src/target/aarch64/abi.c \
 	src/target/aarch64/codegen.c \
+	src/target/aarch64/frame_emit.c \
 	src/target/aarch64/block_emit.c \
+	src/target/aarch64/asm_contract.c \
 	src/target/aarch64/residual_emit.c \
 	src/target/aarch64/scalar_normalize.c \
 	src/target/aarch64/memory_emit.c \
 	src/target/aarch64/call_emit.c \
 	src/target/aarch64/integer_emit.c \
 	src/target/aarch64/fp_emit.c \
-	src/target/aarch64/asm_legalize.c \
 	src/target/loongarch64/codegen.c \
+	src/target/loongarch64/asm_contract.c \
+	src/target/loongarch64/simd_asm.c \
 	src/target/loongarch64/block_emit.c \
 	src/target/loongarch64/residual_emit.c \
 	src/target/loongarch64/scalar_normalize.c \
@@ -238,6 +251,8 @@ MINIC_SOURCES := \
 	tools/minic-cc/main.c
 MINIC_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINIC_SOURCES))
 MINIC_CC_BINARY := $(BUILD_DIR)/bin/minic-cc
+FUNCTION_DIAGNOSTIC_TEST_OBJECT := $(BUILD_DIR)/obj/tests/frontend/function_diagnostic_attribute_test.o
+FUNCTION_DIAGNOSTIC_TEST_BINARY := $(BUILD_DIR)/tests/frontend/function-diagnostic-attribute-test
 MINIC_DRIVER_OBJECTS := $(BUILD_DIR)/obj/tools/minic/main.o \
 	$(BUILD_DIR)/obj/src/target/target_catalog.o
 # The compiler boundary stays in minic-cc. minic is the user-facing staged
@@ -347,6 +362,7 @@ TYPE_ALIAS_TEST_BINARY  := $(BUILD_DIR)/tests/frontend/type-alias-test
 AST_CONTRACT_TEST_SOURCES := \
 	src/frontend/ast.c \
 	src/frontend/expression_semantics.c \
+	src/frontend/const_eval.c \
 	src/frontend/ast_global.c \
 	src/frontend/ast_traversal.c \
 	src/frontend/ast_verifier.c \
@@ -355,6 +371,7 @@ AST_CONTRACT_TEST_SOURCES := \
 	src/target/data_layout.c \
 	src/target/target_info.c \
 	src/target/target_catalog.c \
+	$(TARGET_SOURCE_POLICY_SOURCES) \
 	tests/frontend/ast_contract_test.c
 AST_CONTRACT_TEST_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(AST_CONTRACT_TEST_SOURCES))
 AST_CONTRACT_TEST_BINARY  := $(BUILD_DIR)/tests/frontend/ast-contract-test
@@ -365,6 +382,7 @@ LAYOUT_TEST_SOURCES := \
 	src/target/data_layout.c \
 	src/target/target_info.c \
 	src/target/target_catalog.c \
+	$(TARGET_SOURCE_POLICY_SOURCES) \
 	tests/target/riscv64/layout_test.c
 LAYOUT_TEST_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(LAYOUT_TEST_SOURCES))
 LAYOUT_TEST_BINARY  := $(BUILD_DIR)/tests/target/riscv64/layout-test
@@ -374,6 +392,7 @@ RV64_ABI_TEST_SOURCES := \
 	src/frontend/ast_global.c \
 	src/frontend/type.c \
 	src/target/data_layout.c \
+	src/target/common/aggregate_shape.c \
 	src/target/riscv64/abi.c \
 	src/target/riscv64/function_abi_plan.c \
 	tests/target/riscv64/abi_test.c
@@ -514,7 +533,77 @@ $(MINIC_CC_BINARY): $(MINIC_OBJECTS)
 	@mkdir -p "$(dir $@)"
 	$(CC) $(MINIC_OBJECTS) $(MINIC_LDFLAGS) -o "$@"
 
-$(MINIC_BINARY): $(MINIC_DRIVER_OBJECTS)
+$(FUNCTION_DIAGNOSTIC_TEST_BINARY): $(filter-out $(BUILD_DIR)/obj/tools/minic-cc/main.o,$(MINIC_OBJECTS)) $(FUNCTION_DIAGNOSTIC_TEST_OBJECT)
+	@mkdir -p "$(dir $@)"
+	$(CC) $^ $(MINIC_LDFLAGS) -o "$@"
+
+.PHONY: check-function-diagnostic-attribute
+check-function-diagnostic-attribute: $(FUNCTION_DIAGNOSTIC_TEST_BINARY)
+	"$(FUNCTION_DIAGNOSTIC_TEST_BINARY)"
+
+.PHONY: check-gnu-constant-bitfield-helper-cfg
+check-gnu-constant-bitfield-helper-cfg: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+		sh tests/compiler/c0/probe-gnu-constant-bitfield-helper-cfg.sh
+
+.PHONY: check-gnu-linux-kmalloc-index-bool-guard
+check-gnu-linux-kmalloc-index-bool-guard: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+		sh tests/compiler/c0/probe-gnu-linux-kmalloc-index-bool-guard.sh
+
+.PHONY: check-gnu-linux-kbuild-disjoint-bitmask-assert
+check-gnu-linux-kbuild-disjoint-bitmask-assert: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
+		sh tests/compiler/c0/probe-gnu-linux-kbuild-disjoint-bitmask-assert.sh
+
+.PHONY: check-gnu-linux-nvme-prp-guard
+check-gnu-linux-nvme-prp-guard: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+		sh tests/compiler/c0/probe-gnu-linux-nvme-prp-guard.sh
+
+.PHONY: check-gnu-linux-i915-irq-known-zero
+check-gnu-linux-i915-irq-known-zero: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+		sh tests/compiler/c0/probe-gnu-linux-i915-irq-known-zero.sh
+
+.PHONY: check-gnu-linux-bpf-union-zero
+check-gnu-linux-bpf-union-zero: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+		sh tests/compiler/c0/probe-gnu-linux-bpf-union-zero.sh
+
+.PHONY: check-gnu-linux-task-mmu-swp-pfn-guard
+check-gnu-linux-task-mmu-swp-pfn-guard: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+		sh tests/compiler/c0/probe-gnu-linux-task-mmu-swp-pfn-guard.sh
+
+.PHONY: check-gnu-linux-kaslr-addr-range-guard
+check-gnu-linux-kaslr-addr-range-guard: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+		sh tests/compiler/c0/probe-gnu-linux-kaslr-addr-range-guard.sh
+
+.PHONY: check-gnu-linux-nf-conntrack-size
+check-gnu-linux-nf-conntrack-size: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+		sh tests/compiler/c0/probe-gnu-linux-nf-conntrack-size.sh
+
+.PHONY: check-gnu-linux-ioremap-inline-arg-guard
+check-gnu-linux-ioremap-inline-arg-guard: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+		sh tests/compiler/c0/probe-gnu-linux-ioremap-inline-arg-guard.sh
+
+.PHONY: check-netlink-warn-branch
+check-netlink-warn-branch: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	BUILD_DIR="$(abspath $(BUILD_DIR))" \
+		sh tests/compiler/c0/probe-netlink-warn-branch.sh
+
+check-fast: check-gnu-linux-ioremap-inline-arg-guard check-netlink-warn-branch
+
+# The staged driver invokes the sibling minic-cc at runtime. An order-only
+# prerequisite prevents parallel `make -j check-fast` from launching it while
+# the compiler binary is still being relinked, without relinking the driver
+# for every compiler implementation change.
+$(MINIC_BINARY): $(MINIC_DRIVER_OBJECTS) | $(MINIC_CC_BINARY)
 	@mkdir -p "$(dir $@)"
 	$(CC) $(MINIC_DRIVER_OBJECTS) $(MINIC_LDFLAGS) -o "$@"
 
@@ -1281,11 +1370,246 @@ check-x86_64-busybox-allyes-discovery: $(MINIC_CC_BINARY)
 	  BUSYBOX_ALLYES_REPORT_DIR="$(abspath $(BUILD_DIR))/busybox-allyes-sweep" \
 	  sh tests/external/busybox/probe-x86_64.sh
 
-check-fast: check-target-selection-m0 check-x86_64-m1 check-token-model check-lexer check-type check-record check-type-alias check-ast-contract check-layout check-rv64-abi check-static-functions check-unsigned-declarations check-long-types check-for-loops check-unbounded-for-break check-prefix-decrement-update check-cast-expressions check-unsigned-char-layout check-pointer-subscripts check-pointer-arithmetic check-pointer-object-const check-const-locals check-global-objects check-bitwise-xor check-integer-bit-operations check-pointer-members check-expression-statements check-postfix-subscripts check-compound-xor-assignment $(MINIC_BINARY)
+.PHONY: check-x86-linux-control-state
+check-x86-linux-control-state: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/target/run-linux-x86-control-state.sh
+
+.PHONY: check-linux-three-arch-trap-state
+check-linux-three-arch-trap-state: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/target/run-linux-three-arch-trap-state.sh
+
+.PHONY: check-x86-linux-uaccess-and-abi
+check-x86-linux-uaccess-and-abi: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/target/run-linux-x86-uaccess-and-abi.sh
+
+.PHONY: check-linux-symbolic-integer-and-record
+check-linux-symbolic-integer-and-record: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/target/run-linux-symbolic-integer-and-record.sh
+
+.PHONY: check-packed-bitfield-field-layout
+check-packed-bitfield-field-layout: $(MINIC_CC_BINARY)
+	bash tests/compiler/c0/run-packed-bitfield-field-layout.sh "$(abspath $(MINIC_CC_BINARY))"
+
+.PHONY: check-asm-operand-plan
+check-asm-operand-plan: $(MINIC_CC_BINARY)
+	bash tests/core/run-asm-operand-plan.sh "$(abspath $(MINIC_CC_BINARY))"
+
+.PHONY: check-loongarch64-record-copy-size
+check-loongarch64-record-copy-size: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
+	bash tests/compiler/c0/probe-loongarch64-record-copy-size.sh
+
+.PHONY: check-loongarch64-frame-fold
+check-loongarch64-frame-fold: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	bash tests/compiler/c0/probe-loongarch64-frame-fold.sh
+
+.PHONY: check-core-value-use-counts
+check-core-value-use-counts:
+	bash tests/compiler/c0/probe-core-value-use-counts.sh
+
+.PHONY: check-core-dead-ssa-writeback
+check-core-dead-ssa-writeback: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	bash tests/compiler/c0/probe-core-dead-ssa-writeback.sh
+
+.PHONY: check-core-gp-forward
+check-core-gp-forward: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	bash tests/compiler/c0/probe-core-gp-forward.sh
+
+.PHONY: check-core-literal-branch-guard
+check-core-literal-branch-guard: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
+	bash tests/compiler/c0/probe-core-literal-branch-guard.sh
+
+.PHONY: check-core-literal-branch-fold
+check-core-literal-branch-fold:
+	bash tests/compiler/c0/probe-core-literal-branch-fold.sh
+
+.PHONY: check-core-function-designator-nonnull
+check-core-function-designator-nonnull: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
+	bash tests/compiler/c0/probe-core-function-designator-nonnull.sh
+
+check-fast: check-loongarch64-record-copy-size check-loongarch64-frame-fold check-core-value-use-counts check-core-dead-ssa-writeback check-core-gp-forward check-core-literal-branch-guard check-core-literal-branch-fold check-core-function-designator-nonnull
+
+.PHONY: check-gnu-builtin-constant-p-if-guard
+check-gnu-builtin-constant-p-if-guard: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/run-gnu-builtin-constant-p-if-guard.sh
+
+.PHONY: check-gnu-runtime-if-effect-facts
+check-gnu-runtime-if-effect-facts: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/run-gnu-runtime-if-effect-facts.sh
+
+.PHONY: check-gnu-if-condition-local-owner
+check-gnu-if-condition-local-owner: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/run-gnu-if-condition-local-owner.sh
+
+.PHONY: check-elf-hidden-undefined-pic-source
+check-elf-hidden-undefined-pic-source: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" MINIC_SOURCE_ONLY=1 \
+	sh tests/compiler/c0/probe-elf-hidden-undefined-pic.sh
+
+.PHONY: check-x86-vdso-hidden-unused
+check-x86-vdso-hidden-unused: $(MINIC_CC_BINARY)
+	HOST_CC="$(CC)" sh tests/compiler/c0/probe-x86-vdso-hidden-unused.sh \
+		"$(abspath $(MINIC_CC_BINARY))"
+
+.PHONY: check-x86-reachable-gnu-runtime
+check-x86-reachable-gnu-runtime: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/probe-x86-reachable-gnu-runtime.sh
+
+.PHONY: check-x86-kernel-head-link-address
+check-x86-kernel-head-link-address: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	bash tests/compiler/c0/probe-x86-kernel-head-link-address.sh
+
+check-fast: check-x86-kernel-head-link-address
+
+.PHONY: check-core-indirect-local-fact-escape
+check-core-indirect-local-fact-escape: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	bash tests/compiler/c0/probe-core-indirect-local-fact-escape.sh
+
+check-fast: check-core-indirect-local-fact-escape
+
+.PHONY: check-x86-head-inline-section
+check-x86-head-inline-section: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	bash tests/compiler/c0/probe-x86-head-inline-section.sh
+
+check-fast: check-x86-head-inline-section
+
+.PHONY: check-static-local-owner-reachability
+check-static-local-owner-reachability: $(MINIC_CC_BINARY)
+	MINIC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	bash tests/compiler/c0/run-static-local-owner-reachability.sh
+
+.PHONY: check-direct-lp64-reachable-source-labels
+check-direct-lp64-reachable-source-labels: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/compiler/c0/probe-direct-lp64-reachable-source-labels.sh
+
+.PHONY: check-rv64-pic-elf-nonpreemptible
+check-rv64-pic-elf-nonpreemptible: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" MINIC_PIC_ASM_ONLY=1 \
+	sh tests/compiler/c0/probe-rv64-pic-glibc-got.sh
+
+.PHONY: check-aarch64-fixmap-cross-static-const
+check-aarch64-fixmap-cross-static-const: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/probe-aarch64-fixmap-cross-static-const.sh
+
+.PHONY: check-static-const-source-boundaries
+check-static-const-source-boundaries: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/probe-static-const-source-boundaries.sh
+
+.PHONY: check-x86-reachable-vma-assert
+check-x86-reachable-vma-assert: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/compiler/c0/probe-x86-reachable-vma-assert.sh
+
+check-fast: check-x86-reachable-vma-assert check-static-const-source-boundaries check-aarch64-fixmap-cross-static-const check-rv64-pic-elf-nonpreemptible check-elf-hidden-undefined-pic-source check-x86-vdso-hidden-unused check-x86-reachable-gnu-runtime check-gnu-if-condition-local-owner check-direct-lp64-reachable-source-labels check-static-local-owner-reachability check-gnu-runtime-if-effect-facts check-gnu-builtin-constant-p-if-guard check-asm-operand-plan check-x86-linux-control-state check-linux-three-arch-trap-state check-x86-linux-uaccess-and-abi check-linux-symbolic-integer-and-record check-packed-bitfield-field-layout check-target-selection-m0 check-x86_64-m1 check-token-model check-lexer check-type check-record check-type-alias check-layout check-rv64-abi check-static-functions check-unsigned-declarations check-long-types check-for-loops check-unbounded-for-break check-prefix-decrement-update check-cast-expressions check-unsigned-char-layout check-pointer-subscripts check-pointer-arithmetic check-pointer-object-const check-const-locals check-global-objects check-bitwise-xor check-integer-bit-operations check-pointer-members check-expression-statements check-postfix-subscripts check-compound-xor-assignment $(MINIC_BINARY)
 	MINIC="$(abspath $(MINIC_BINARY))" \
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
 	HOST_CC="$(CC)" \
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
 	sh tests/compiler/c0/run.sh
+
+check-fast: check-function-diagnostic-attribute check-gnu-constant-bitfield-helper-cfg check-gnu-linux-kmalloc-index-bool-guard check-gnu-linux-i915-irq-known-zero check-gnu-linux-bpf-union-zero check-gnu-linux-task-mmu-swp-pfn-guard check-gnu-linux-kaslr-addr-range-guard check-gnu-linux-nf-conntrack-size check-gnu-linux-nvme-prp-guard check-linux-empty-static-stub-cfi check-gnu-linux-static-field-guard check-core-same-global-address-order check-core-compound-record-byte-layout check-core-literal-rhs-snapshot check-core-rhs-no-cfg-snapshot check-gnu-linux-zoned-constant-switch check-gnu-const-global-record check-gnu-dead-file-static-object-graph check-core-inline-statement-constant-guard check-core-field-get-contiguous-mask-guard check-aarch64-fixmap-opaque-asm-clone check-aarch64-weak-direct-call-got check-minic-linux-quick-replay check-linux-gnu-cache-verify check-loongarch64-record-chunk-native-word check-loongarch64-immediate-core-fold check-gnu-linux-kbuild-disjoint-bitmask-assert
+
+.PHONY: check-minic-linux-quick-replay
+check-minic-linux-quick-replay: $(MINIC_CC_BINARY)
+	python3 tests/compiler/c0/test-minic-linux-quick-replay.py --minic "$(abspath $(MINIC_CC_BINARY))"
+
+.PHONY: check-linux-gnu-cache-verify
+check-linux-gnu-cache-verify:
+	python3 tools/ci/test_linux_three_isa_gnu_cache_verify_v1.py
+
+.PHONY: check-loongarch64-record-chunk-native-word
+check-loongarch64-record-chunk-native-word: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	bash tests/compiler/c0/probe-loongarch64-record-chunk-native-word.sh
+
+.PHONY: check-aarch64-weak-direct-call-got
+check-aarch64-weak-direct-call-got: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/probe-aarch64-weak-direct-call-got.sh
+
+.PHONY: check-core-rhs-no-cfg-snapshot
+check-core-rhs-no-cfg-snapshot: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/compiler/c0/probe-core-rhs-no-cfg-snapshot.sh
+
+.PHONY: check-core-field-get-contiguous-mask-guard
+check-core-field-get-contiguous-mask-guard: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/compiler/c0/probe-core-field-get-contiguous-mask-guard.sh
+
+.PHONY: check-gnu-dead-file-static-object-graph
+check-gnu-dead-file-static-object-graph: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/probe-gnu-dead-file-static-object-graph.sh
+
+.PHONY: check-core-inline-statement-constant-guard
+check-core-inline-statement-constant-guard: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/compiler/c0/probe-core-inline-statement-constant-guard.sh
+
+.PHONY: check-aarch64-fixmap-opaque-asm-clone
+check-aarch64-fixmap-opaque-asm-clone: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/probe-aarch64-fixmap-opaque-asm-clone.sh
+
+.PHONY: check-loongarch64-immediate-core-fold
+check-loongarch64-immediate-core-fold: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/compiler/c0/probe-loongarch64-immediate-core-fold.sh
+
+.PHONY: check-gnu-const-global-record
+check-gnu-const-global-record: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/compiler/c0/probe-gnu-const-global-record.sh
+
+.PHONY: check-linux-empty-static-stub-cfi
+check-linux-empty-static-stub-cfi: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/compiler/c0/probe-linux-empty-static-stub-cfi.sh
+
+.PHONY: check-gnu-linux-static-field-guard
+check-gnu-linux-static-field-guard: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/probe-gnu-linux-static-field-guard.sh
+
+.PHONY: check-core-same-global-address-order
+check-core-same-global-address-order: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/compiler/c0/probe-core-same-global-address-order.sh
+
+.PHONY: check-core-compound-record-byte-layout
+check-core-compound-record-byte-layout: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/compiler/c0/probe-core-compound-record-byte-layout.sh
+
+.PHONY: check-core-literal-rhs-snapshot
+check-core-literal-rhs-snapshot: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/compiler/c0/probe-core-literal-rhs-snapshot.sh
+
+.PHONY: check-gnu-linux-zoned-constant-switch
+check-gnu-linux-zoned-constant-switch: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" CC="$(CC)" \
+	sh tests/compiler/c0/probe-gnu-linux-zoned-constant-switch.sh
 
 check: check-fast
 

@@ -6,6 +6,82 @@
 
 #include <stdint.h>
 
+bool minic_multi_direct_call_frame_level0_shape(
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
+    MinicCoreCallFrameAddressKind kind) {
+    MinicType pointee;
+    return fn != NULL && ins != NULL &&
+           (kind == MINIC_CORE_CALL_FRAME_ADDRESS_RETURN ||
+            kind == MINIC_CORE_CALL_FRAME_ADDRESS_FRAME) &&
+           ins->kind == MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS &&
+           ins->result < fn->value_count &&
+           ins->value.call_frame_address.level == 0U &&
+           ins->value.call_frame_address.kind == kind &&
+           minic_type_pointee(ins->type, &pointee) &&
+           minic_type_is_void(pointee) &&
+           minic_type_equal(fn->values[ins->result].type, ins->type);
+}
+
+bool minic_multi_direct_call_frame_return_level0_shape(
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins) {
+    return minic_multi_direct_call_frame_level0_shape(
+        fn, ins, MINIC_CORE_CALL_FRAME_ADDRESS_RETURN);
+}
+
+bool minic_multi_direct_fixed_register_write_shape(
+    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
+    const MinicCoreFixedRegisterBinding **binding_out) {
+    const MinicCoreFixedRegisterBinding *binding;
+    const size_t index = ins != NULL
+        ? ins->value.fixed_register_write.binding_id : SIZE_MAX;
+    const MinicCoreValueId source = ins != NULL
+        ? ins->value.fixed_register_write.source : MINIC_CORE_VALUE_INVALID;
+    if (program == NULL || target == NULL || fn == NULL || ins == NULL ||
+        binding_out == NULL ||
+        ins->kind != MINIC_CORE_INSTRUCTION_FIXED_REGISTER_WRITE ||
+        ins->result != MINIC_CORE_VALUE_INVALID ||
+        !minic_type_is_void(ins->type) ||
+        index >= fn->fixed_register_binding_count ||
+        fn->fixed_register_bindings == NULL || source >= fn->value_count)
+        return false;
+    binding = &fn->fixed_register_bindings[index];
+    if (binding->is_local || binding->register_name == NULL ||
+        binding->register_name_length == 0U ||
+        !minic_target_info_fixed_register_write_supported(
+            target, binding->register_name, binding->register_name_length) ||
+        !minic_type_equal(binding->type, fn->values[source].type) ||
+        !minic_lp64_register64_type(program, target, binding->type))
+        return false;
+    *binding_out = binding;
+    return true;
+}
+
+bool minic_multi_direct_fixed_register_read_shape(
+    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
+    const MinicCoreFixedRegisterBinding **binding_out) {
+    const MinicCoreFixedRegisterBinding *binding;
+    const size_t index = ins != NULL ? ins->value.fixed_register_binding_id : 0U;
+    if (!program || !target || !fn || !ins || !binding_out ||
+        ins->kind != MINIC_CORE_INSTRUCTION_FIXED_REGISTER_READ ||
+        ins->result >= fn->value_count ||
+        index >= fn->fixed_register_binding_count ||
+        fn->fixed_register_bindings == NULL)
+        return false;
+    binding = &fn->fixed_register_bindings[index];
+    if (binding->is_local || !binding->register_name ||
+        binding->register_name_length == 0U ||
+        !minic_target_info_fixed_register_supported(
+            target, binding->register_name, binding->register_name_length) ||
+        !minic_type_equal(binding->type, ins->type) ||
+        !minic_type_equal(fn->values[ins->result].type, ins->type) ||
+        !minic_lp64_register64_type(program, target, ins->type))
+        return false;
+    *binding_out = binding;
+    return true;
+}
+
 bool minic_multi_direct_record_copy_extent(
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
@@ -30,7 +106,44 @@ bool minic_multi_direct_record_copy_extent(
         !minic_type_equal(src_unqualified, ins->type) ||
         !minic_data_layout_type(target->data_layout, program, ins->type,
                                 bytes, &alignment) ||
-        alignment == 0U || *bytes > 2048U)
+        /* Kernel task_struct and other compound records are often many
+         * KiB. Native emitters use counted byte loops for large transfers;
+         * this cap bounds the requested runtime copy without imposing the
+         * former 2-KiB single-instruction-source expansion limit. */
+        alignment == 0U || *bytes > (16U * 1024U * 1024U))
+        return false;
+    return true;
+}
+
+/* GNU C record value snapshots are private bytewise copies of an
+ * address-backed lvalue. Core owns type/volatility and DataLayout bounds;
+ * native emitters alone own the actual ISA byte operations. */
+bool minic_multi_direct_record_load_extent(
+    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
+    const MinicLP64FramePlan *frame_plan,
+    MinicCoreValueId *source, size_t *object_offset, size_t *bytes) {
+    MinicCoreObjectId dst;
+    MinicType source_pointee, source_unqualified;
+    size_t alignment;
+    if (!program || !target || !fn || !ins || !frame_plan ||
+        !source || !object_offset || !bytes ||
+        ins->kind != MINIC_CORE_INSTRUCTION_RECORD_LOAD ||
+        ins->result != MINIC_CORE_VALUE_INVALID ||
+        !minic_type_is_record(ins->type)) return false;
+    dst = ins->value.record_load.destination_object;
+    *source = ins->value.record_load.source_address;
+    if (dst >= fn->object_count || *source >= fn->value_count ||
+        fn->objects[dst].element_count != 1U ||
+        !minic_type_equal(fn->objects[dst].type, ins->type) ||
+        !minic_type_pointee(fn->values[*source].type, &source_pointee) ||
+        !minic_type_unqualified(source_pointee, &source_unqualified) ||
+        !minic_type_equal(source_unqualified, ins->type) ||
+        ins->value.record_load.is_volatile != minic_type_is_volatile(source_pointee) ||
+        !minic_lp64_frame_plan_object(frame_plan, dst, object_offset) ||
+        !minic_data_layout_type(target->data_layout, program, ins->type,
+                                bytes, &alignment) ||
+        !*bytes || !alignment || *bytes > (16U * 1024U * 1024U))
         return false;
     return true;
 }
@@ -43,6 +156,7 @@ bool minic_multi_direct_parameter_object_location(
     size_t position;
     MinicCoreObjectId obj_id;
     const MinicLP64ArgumentLocation *loc;
+    MinicType object_value_type, parameter_value_type;
     if (fn == NULL || ins == NULL || incoming_plan == NULL ||
         frame_plan == NULL || location == NULL || object_offset == NULL)
         return false;
@@ -55,10 +169,16 @@ bool minic_multi_direct_parameter_object_location(
     loc = &incoming_plan->arguments[position];
     if (ins->result != MINIC_CORE_VALUE_INVALID ||
         obj_id >= fn->object_count ||
-        !minic_type_equal(fn->objects[obj_id].type, fn->parameter_types[position]) ||
+        /* GNU top-level const on a by-value parameter has no ABI effect.
+         * Only remove top-level qualification, preserving nested pointee
+         * and member qualifiers and the exact record identity. */
+        !minic_type_unqualified(fn->objects[obj_id].type, &object_value_type) ||
+        !minic_type_unqualified(fn->parameter_types[position], &parameter_value_type) ||
+        !minic_type_equal(object_value_type, parameter_value_type) ||
         fn->objects[obj_id].element_count != 1U ||
         (loc->kind != MINIC_LP64_ARGUMENT_RECORD &&
-         loc->kind != MINIC_LP64_ARGUMENT_INDIRECT_RECORD) ||
+         loc->kind != MINIC_LP64_ARGUMENT_INDIRECT_RECORD &&
+         loc->kind != MINIC_LP64_ARGUMENT_EMPTY_RECORD) ||
         !minic_lp64_frame_plan_object(frame_plan, obj_id, object_offset))
         return false;
     *location = loc;
@@ -105,9 +225,10 @@ static bool minic_multi_direct_result_slot_offset(
     if ((ins->kind == MINIC_CORE_INSTRUCTION_CALL ||
          ins->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL) &&
         (minic_type_is_void(ins->type) ||
-         (ins->kind == MINIC_CORE_INSTRUCTION_CALL &&
-          minic_type_is_record(ins->type) &&
-          ins->value.call.result_object != MINIC_CORE_OBJECT_INVALID))) {
+         (minic_type_is_record(ins->type) &&
+          (ins->kind == MINIC_CORE_INSTRUCTION_CALL
+              ? ins->value.call.result_object
+              : ins->value.indirect_call.result_object) != MINIC_CORE_OBJECT_INVALID))) {
         /* Effect-only call or record-result object: no scalar Core slot. */
         *offset = 0U;
         return true;
@@ -152,7 +273,10 @@ static bool minic_multi_direct_result_slot_offset(
                  ins->kind == MINIC_CORE_INSTRUCTION_CALL ||
                  ins->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL))))
         return false;
-    *offset = (size_t)ins->result * 8U;
+    /* Slot placement is no longer encoded in the semantic shape. The
+     * common machine dispatch resolves this validated Core result through
+     * the shared LP64 FramePlan's last-use mapping. */
+    *offset = 0U;
     return true;
 }
 
@@ -287,9 +411,12 @@ bool minic_multi_direct_floating_shape(
     }
 }
 
-/* Scalar bitcast shape for direct LP64 lowering. Pointer->integer must
- * preserve all 64 address bits; integer->pointer keeps narrow source width
- * for the ISA's existing sign/zero-extension sequence. */
+/* Scalar bitcast shape for direct LP64 lowering. Pointer->integer preserves
+ * all 64 address bits at pointer width, truncates to 32 bits for C's narrow
+ * integer casts, or produces canonical 0/1 for C pointer->bool.
+ * source_width reports the integer result width for pointer->integer and
+ * the integer input width for integer->pointer; source_signed describes the
+ * integer result on pointer->integer and the input otherwise. */
 bool minic_multi_direct_scalar_bitcast_shape(
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
@@ -314,10 +441,17 @@ bool minic_multi_direct_scalar_bitcast_shape(
     *pointer_to_integer = *source_pointer && minic_type_is_integer(ins->type);
     *source_width = 0U;
     *source_signed = false;
-    if (*pointer_to_integer)
-        return minic_lp64_scalar_integer_width(program, target, ins->type,
-                                                &output_width, &output_signed) &&
-               output_width == 8U;
+    if (*pointer_to_integer) {
+        if (!minic_lp64_scalar_integer_width(program, target, ins->type,
+                                             &output_width, &output_signed) ||
+            (output_width != 8U && output_width != 4U &&
+             !(output_width == 1U &&
+               minic_type_equal(ins->type, minic_type_bool()))))
+            return false;
+        *source_width = output_width;
+        *source_signed = output_signed;
+        return true;
+    }
     if (!minic_type_is_pointer(ins->type))
         return false;
     return *source_pointer ||
@@ -645,6 +779,53 @@ bool minic_multi_direct_machine_instruction_shape(
         if (!minic_multi_direct_compiler_barrier_shape(ins))
             return false;
         shape->family = MINIC_DIRECT_MACHINE_COMPILER_BARRIER;
+        return true;
+    }
+    /* Structured GNU asm is already a Core effect, never an SSA value.
+     * Native target emission remains independently qualified and fail-closed. */
+    if (ins->kind == MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM) {
+        if (ins->result != MINIC_CORE_VALUE_INVALID ||
+            !minic_type_is_void(ins->type) ||
+            ins->value.structured_inline_asm.inline_asm_id >= fn->inline_asm_count)
+            return false;
+        shape->family = MINIC_DIRECT_MACHINE_RESIDUAL;
+        return true;
+    }
+    /* A zero-operand opaque hardware effect has no SSA result; the target
+     * must independently requalify the full exact template at emission. */
+    if (ins->kind == MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM) {
+        if (ins->result != MINIC_CORE_VALUE_INVALID ||
+            !minic_type_is_void(ins->type) ||
+            ins->value.inline_asm_id >= fn->inline_asm_count)
+            return false;
+        shape->family = MINIC_DIRECT_MACHINE_RESIDUAL;
+        return true;
+    }
+    if (ins->kind == MINIC_CORE_INSTRUCTION_FIXED_REGISTER_WRITE) {
+        if (ins->result != MINIC_CORE_VALUE_INVALID ||
+            !minic_type_is_void(ins->type) ||
+            ins->value.fixed_register_write.binding_id >=
+                fn->fixed_register_binding_count ||
+            ins->value.fixed_register_write.source >= fn->value_count)
+            return false;
+        shape->family = MINIC_DIRECT_MACHINE_RESIDUAL;
+        return true;
+    }
+    if (ins->kind == MINIC_CORE_INSTRUCTION_VARIADIC_COPY) {
+        const MinicCoreValueId dst = ins->value.variadic_copy.destination;
+        const MinicCoreValueId src = ins->value.variadic_copy.source;
+        if (ins->result != MINIC_CORE_VALUE_INVALID ||
+            !minic_type_is_void(ins->type) || dst >= fn->value_count ||
+            src >= fn->value_count ||
+            !minic_type_is_pointer(fn->values[dst].type) ||
+            !minic_type_equal(fn->values[dst].type,
+                              fn->values[src].type))
+            return false;
+        shape->family = MINIC_DIRECT_MACHINE_RESIDUAL;
+        return true;
+    }
+    if (ins->kind == MINIC_CORE_INSTRUCTION_RECORD_LOAD) {
+        shape->family = MINIC_DIRECT_MACHINE_RECORD_LOAD;
         return true;
     }
     if (ins->kind == MINIC_CORE_INSTRUCTION_RECORD_COPY) {

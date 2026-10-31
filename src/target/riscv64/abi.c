@@ -1,4 +1,5 @@
 #include "target/riscv64/abi.h"
+#include "target/common/aggregate_shape.h"
 #include "target/riscv/gpr_abi_cursor.h"
 
 const char *const minic_riscv64_abi_integer_argument_registers[8] = {
@@ -28,40 +29,6 @@ const char *const minic_riscv64_abi_floating_argument_registers[8] = {
 
 #include <stdint.h>
 
-static bool minic_riscv64_integer_aggregate_member_type(const MinicC0Program *program,
-                                                        MinicType type) {
-    if (minic_type_is_integer(type) || minic_type_is_pointer(type)) {
-        return true;
-    }
-    if (minic_type_is_array(type)) {
-        const MinicArrayType *array_type;
-
-        array_type = minic_c0_program_array_type(program, type.array_type_id);
-        return array_type != NULL &&
-               minic_riscv64_integer_aggregate_member_type(program, array_type->element_type);
-    }
-    if (minic_type_is_record(type)) {
-        const MinicRecord *record;
-        size_t field_index;
-
-        record = minic_c0_program_record(program, type.record_id);
-        if (record == NULL || !record->is_complete) {
-            return false;
-        }
-        for (field_index = 0U; field_index < record->field_count; ++field_index) {
-            const MinicRecordField *field;
-
-            field = minic_c0_record_field(record, field_index);
-            if (field == NULL ||
-                !minic_riscv64_integer_aggregate_member_type(program, field->type)) {
-                return false;
-            }
-        }
-        return true;
-    }
-    return false;
-}
-
 bool minic_riscv64_classify_abi_value_profile(
     const MinicC0Program *program, MinicType type, bool lp64_soft_float,
     MinicRiscv64AbiValue *result) {
@@ -79,7 +46,16 @@ bool minic_riscv64_classify_abi_value_profile(
         result->kind = MINIC_RISCV64_ABI_VALUE_VOID;
         return true;
     }
-    if (!minic_data_layout_type(minic_default_data_layout(), program, type, &size, &alignment)) {
+    if (minic_type_is_record(type)) {
+        MinicAggregateStorageShape shape;
+        if (!minic_common_aggregate_storage_shape(
+                program, minic_default_data_layout(), type, 8U, &shape))
+            return false;
+        size = shape.bytes;
+        alignment = shape.alignment;
+    } else if (!minic_data_layout_type(
+                   minic_default_data_layout(), program, type,
+                   &size, &alignment)) {
         return false;
     }
     (void)alignment;
@@ -91,9 +67,19 @@ bool minic_riscv64_classify_abi_value_profile(
             result->kind = MINIC_RISCV64_ABI_VALUE_IGNORE;
             return true;
         }
-        if (size <= 16U &&
-            (lp64_soft_float ||
-             minic_riscv64_integer_aggregate_member_type(program, type))) {
+        if (size <= 16U) {
+            /* FIXME(MC-059): unions with FP members are NOT flattened by
+             * the RISC-V psABI; this integral-tree test also rejects those
+             * legal named arguments/returns in LP64D.
+             * LP64D classifies an aggregate containing FP leaves using
+             * register flattening (faN and sometimes aN), NOT by passing
+             * a pointer. Until the complete mixed FP/GP location model is
+             * implemented, reject that named/return shape rather than
+             * silently emitting a GNU-incompatible indirect argument.
+             * LP64 and unnamed LP64D arguments use the integer convention. */
+            if (!lp64_soft_float &&
+                !minic_common_aggregate_integral_tree(program, type))
+                return false;
             result->kind = MINIC_RISCV64_ABI_VALUE_AGGREGATE;
             result->register_chunks = (size + 7U) / 8U;
             return true;
@@ -230,7 +216,8 @@ bool minic_riscv64_abi_place_argument(const MinicC0Program *program,
         cursor->integer_register_count > MINIC_RISCV64_ABI_ARGUMENT_REGISTER_COUNT ||
         cursor->floating_register_count > MINIC_RISCV64_ABI_ARGUMENT_REGISTER_COUNT ||
         !minic_riscv64_abi_classify_value_profile(
-            program, type, cursor->lp64_soft_float, &result.value) ||
+            program, type, cursor->lp64_soft_float || !is_fixed_parameter,
+            &result.value) ||
         result.value.kind == MINIC_RISCV64_ABI_VALUE_VOID) {
         return false;
     }
@@ -248,10 +235,8 @@ bool minic_riscv64_abi_place_argument(const MinicC0Program *program,
         return true;
     }
     if (!cursor->lp64_soft_float && is_fixed_parameter &&
-        result.value.kind == MINIC_RISCV64_ABI_VALUE_FLOAT) {
-        if (next.floating_register_count >= MINIC_RISCV64_ABI_ARGUMENT_REGISTER_COUNT) {
-            return false;
-        }
+        result.value.kind == MINIC_RISCV64_ABI_VALUE_FLOAT &&
+        next.floating_register_count < MINIC_RISCV64_ABI_ARGUMENT_REGISTER_COUNT) {
         result.floating_register_begin = next.floating_register_count;
         result.floating_register_count = 1U;
         next.floating_register_count += 1U;
@@ -267,8 +252,7 @@ bool minic_riscv64_abi_place_argument(const MinicC0Program *program,
             : 1U;
     /* LP64 requires paired GPRs for 16-byte-aligned unnamed 2*XLEN.
      * Named wide values retain a7/stack0 split; LP64D FP is handled above. */
-    if (next.lp64_soft_float && !is_fixed_parameter &&
-        integer_slots == 2U) {
+    if (!is_fixed_parameter && integer_slots == 2U) {
         size_t size, alignment;
         if (!minic_data_layout_type(minic_default_data_layout(), program, type,
                                     &size, &alignment))

@@ -1,4 +1,5 @@
 #include "target/riscv32/rv32_internal.h"
+#include "target/riscv/typed_memory.h"
 #include <stdint.h>
 
 /* ILP32 machine scalar classification and width normalization.
@@ -63,7 +64,7 @@ bool rv32_canon(FILE *out, const MinicCoreFunction *f,
                    reg, reg, 32U - bits) >= 0;
 }
 bool rv32_load_mem(FILE *out, const MinicCoreFunction *f,
-                           MinicType t, const char *dst) {
+                   MinicType t, const char *dst, size_t alignment) {
     unsigned bits;
     bool is_signed;
     const char *op;
@@ -71,15 +72,20 @@ bool rv32_load_mem(FILE *out, const MinicCoreFunction *f,
     op = bits == 8U ? (is_signed ? "lb" : "lbu") :
          bits == 16U ? (is_signed ? "lh" : "lhu") :
          bits == 1U ? "lbu" : "lw";
-    return fprintf(out, "  %s %s, 0(t0)\n", op, dst) >= 0;
+    return minic_riscv_emit_typed_memory(
+        out, false, 32U, bits <= 8U ? 1U : bits / 8U,
+        is_signed, op, dst, "t0", "t3", alignment, "rv32_scalar");
 }
 bool rv32_store_mem(FILE *out, const MinicCoreFunction *f,
-                            MinicType t) {
+                    MinicType t, size_t alignment) {
     unsigned bits;
     bool is_signed;
     if (!rv32_scalar(f, t, &bits, &is_signed)) return false;
-    return fprintf(out, "  %s t1, 0(t0)\n",
-                   bits <= 8U ? "sb" : bits <= 16U ? "sh" : "sw") >= 0;
+    (void)is_signed;
+    return minic_riscv_emit_typed_memory(
+        out, true, 32U, bits <= 8U ? 1U : bits / 8U,
+        false, bits <= 8U ? "sb" : bits <= 16U ? "sh" : "sw",
+        "t1", "t0", "t3", alignment, "rv32_scalar");
 }
 bool rv32_load2(FILE *out, const Rv32Frame *fr,
                         const MinicCoreInstruction *ins) {

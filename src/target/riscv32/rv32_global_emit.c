@@ -40,7 +40,8 @@ static bool rv32_reloc(FILE *out, const MinicC0Program *program,
 static bool rv32_data_symbol(FILE *out, const MinicGlobalObject *obj,
                              size_t alignment) {
     if (obj->section_name != NULL) {
-        if (fprintf(out, ".section %s,\"%s\",@progbits\n",
+        if (!minic_multi_elf_safe_section_name(obj->section_name) ||
+            fprintf(out, ".section %s,\"%s\",@progbits\n",
                     obj->section_name, obj->is_read_only ? "a" : "aw") < 0)
             return false;
     } else if (fprintf(out, "%s\n",
@@ -85,8 +86,8 @@ bool minic_riscv32_emit_flat_global(FILE *out,
     if (obj->is_extern) {
         if (obj->alias_target != MINIC_GLOBAL_OBJECT_INVALID ||
             obj->is_block_scope_extern_only) return true;
-        return !obj->is_weak || obj->is_internal ||
-               fprintf(out, ".weak %s\n", obj->name) >= 0;
+        /* Common owns all live undefined ELF bindings, including GNU weak. */
+        return true;
     }
     /* An explicitly empty GNU array (common in config-disabled Linux
      * tables) is a defined ELF symbol of size zero. DataLayout still owns
