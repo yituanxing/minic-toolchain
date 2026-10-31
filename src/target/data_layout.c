@@ -78,6 +78,8 @@ static const MinicDataLayout minic_aarch64_linux_layout = {
     .double_alignment = 8U,
     .long_double_size = 16U,
     .long_double_alignment = 16U,
+    .fixed_vector128_size = 16U,
+    .fixed_vector128_alignment = 16U,
 };
 
 /* LoongArch Linux ELF lp64d: a distinct target despite matching LP64
@@ -446,6 +448,15 @@ static bool minic_data_layout_type_depth(const MinicDataLayout *layout,
         default:
             return false;
         }
+        return minic_data_layout_apply_explicit_alignment(type, alignment);
+    }
+    if (minic_type_builtin_declaration_role(type.base_kind) ==
+        MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE) {
+        if (layout->fixed_vector128_size == 0U ||
+            layout->fixed_vector128_alignment == 0U)
+            return false;
+        *size = layout->fixed_vector128_size;
+        *alignment = layout->fixed_vector128_alignment;
         return minic_data_layout_apply_explicit_alignment(type, alignment);
     }
     if (minic_type_is_array(type)) {

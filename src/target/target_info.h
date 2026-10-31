@@ -59,6 +59,9 @@ typedef struct MinicTargetIntegerModel {
 typedef enum MinicTargetLanguageCapability {
     MINIC_TARGET_LANG_EXTENDED_FLOAT_DECLARATIONS = 1U << 0,
     MINIC_TARGET_LANG_OPAQUE_VECTOR_HEADER_DECLARATIONS = 1U << 1,
+    /* True fixed vector128 C object layout, NOT vector values or V-register
+     * ABI. Supported only for explicitly registered target vector spellings. */
+    MINIC_TARGET_LANG_FIXED_VECTOR128_STORAGE_DECLARATIONS = 1U << 2,
     /* Type-only EFI callback ABI marker; does NOT admit actual MS x64 CALL. */
     MINIC_TARGET_LANG_MS_X64_FUNCTION_POINTER_DECLARATIONS = 1U << 3
 } MinicTargetLanguageCapability;

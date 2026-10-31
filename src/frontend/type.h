@@ -58,7 +58,14 @@ typedef enum MinicTypeBaseKind {
     MINIC_TYPE_BASE_AARCH64_FLOAT64X2,
     MINIC_TYPE_BASE_AARCH64_SVE_FLOAT32,
     MINIC_TYPE_BASE_AARCH64_SVE_FLOAT64,
-    MINIC_TYPE_BASE_AARCH64_SVE_BOOL
+    MINIC_TYPE_BASE_AARCH64_SVE_BOOL,
+    /* Fixed-width NEON byte and 64-bit-lane source identities. They have
+     * target-owned real 128-bit object layout; arithmetic, V-register
+     * transport and calling conventions remain independently gated. */
+    MINIC_TYPE_BASE_AARCH64_UINT8X16,
+    MINIC_TYPE_BASE_AARCH64_UINT64X2,
+    MINIC_TYPE_BASE_AARCH64_INT8X16,
+    MINIC_TYPE_BASE_AARCH64_POLY8X16
 } MinicTypeBaseKind;
 
 /* Source-language declaration shape only: this neither approves an extension
@@ -69,7 +76,8 @@ typedef enum MinicBuiltinDeclarationRole {
     MINIC_BUILTIN_DECLARATION_INVALID = 0,
     MINIC_BUILTIN_DECLARATION_STANDARD_FLOAT,
     MINIC_BUILTIN_DECLARATION_EXTENDED_FLOAT,
-    MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE
+    MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE,
+    MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE
 } MinicBuiltinDeclarationRole;
 
 MinicBuiltinDeclarationRole minic_type_builtin_declaration_role(MinicTypeBaseKind kind);
@@ -141,6 +149,7 @@ MinicType minic_type_float32x(void);
 MinicType minic_type_float64x(void);
 /* Header-only opaque AArch64 builtin SIMD identities, not scalar aliases. */
 MinicType minic_type_aarch64_header_builtin(MinicTypeBaseKind base_kind);
+MinicType minic_type_aarch64_fixed_vector128(MinicTypeBaseKind base_kind);
 MinicType minic_type_function(MinicFunctionTypeId function_type_id);
 MinicType minic_type_record(MinicRecordId record_id);
 MinicType minic_type_array(MinicArrayTypeId array_type_id);

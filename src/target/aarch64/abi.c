@@ -35,6 +35,10 @@ static bool aarch64_special_aggregate_member(
     case MINIC_TYPE_BASE_AARCH64_SVE_FLOAT32:
     case MINIC_TYPE_BASE_AARCH64_SVE_FLOAT64:
     case MINIC_TYPE_BASE_AARCH64_SVE_BOOL:
+    case MINIC_TYPE_BASE_AARCH64_UINT8X16:
+    case MINIC_TYPE_BASE_AARCH64_UINT64X2:
+    case MINIC_TYPE_BASE_AARCH64_INT8X16:
+    case MINIC_TYPE_BASE_AARCH64_POLY8X16:
         return true;
     default:
         break;

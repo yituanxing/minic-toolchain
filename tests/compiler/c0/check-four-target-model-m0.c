@@ -101,7 +101,15 @@ static int verify_language_admission(void) {
             minic_target_info_language_type_supported(
                 t, MINIC_TYPE_BASE_FLOAT32X) != has_extended_float ||
             minic_target_info_language_type_supported(
-                t, MINIC_TYPE_BASE_AARCH64_SVE_BOOL) != is_arm) {
+                t, MINIC_TYPE_BASE_AARCH64_SVE_BOOL) != is_arm ||
+            minic_target_info_language_type_supported(
+                t, MINIC_TYPE_BASE_AARCH64_UINT8X16) != is_arm ||
+            minic_target_info_language_type_supported(
+                t, MINIC_TYPE_BASE_AARCH64_UINT64X2) != is_arm ||
+            minic_target_info_language_type_supported(
+                t, MINIC_TYPE_BASE_AARCH64_INT8X16) != is_arm ||
+            minic_target_info_language_type_supported(
+                t, MINIC_TYPE_BASE_AARCH64_POLY8X16) != is_arm) {
             (void)fprintf(stderr, "FAIL target language/varargs contract: %s\\n", names[i]);
             return 1;
         }
@@ -115,6 +123,21 @@ static int verify_language_admission(void) {
         }
         has_vector = minic_target_info_named_builtin_type(
             t, "__SVBool_t", sizeof("__SVBool_t") - 1U, &vector_type);
+        if (minic_target_info_named_builtin_type(
+                t, "__Uint8x16_t", sizeof("__Uint8x16_t") - 1U,
+                NULL) != is_arm ||
+            minic_target_info_named_builtin_type(
+                t, "__Uint64x2_t", sizeof("__Uint64x2_t") - 1U,
+                NULL) != is_arm ||
+            minic_target_info_named_builtin_type(
+                t, "__Int8x16_t", sizeof("__Int8x16_t") - 1U,
+                NULL) != is_arm ||
+            minic_target_info_named_builtin_type(
+                t, "__Poly8x16_t", sizeof("__Poly8x16_t") - 1U,
+                NULL) != is_arm) {
+            (void)fprintf(stderr, "FAIL AArch64 vector storage admission: %s\n", names[i]);
+            return 1;
+        }
         if (!minic_type_pointer_to(
                 minic_type_aarch64_header_builtin(
                     MINIC_TYPE_BASE_AARCH64_FLOAT32X4), &vector_pointer)) {

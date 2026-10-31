@@ -26,7 +26,15 @@ static int test_builtin_declaration_roles(void) {
         {MINIC_TYPE_BASE_AARCH64_FLOAT64X2, MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE},
         {MINIC_TYPE_BASE_AARCH64_SVE_FLOAT32, MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE},
         {MINIC_TYPE_BASE_AARCH64_SVE_FLOAT64, MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE},
-        {MINIC_TYPE_BASE_AARCH64_SVE_BOOL, MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE}
+        {MINIC_TYPE_BASE_AARCH64_SVE_BOOL, MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE},
+        {MINIC_TYPE_BASE_AARCH64_UINT8X16,
+         MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE},
+        {MINIC_TYPE_BASE_AARCH64_UINT64X2,
+         MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE},
+        {MINIC_TYPE_BASE_AARCH64_INT8X16,
+         MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE},
+        {MINIC_TYPE_BASE_AARCH64_POLY8X16,
+         MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE}
     };
     size_t index;
 
@@ -41,7 +49,10 @@ static int test_builtin_declaration_roles(void) {
             MINIC_BUILTIN_DECLARATION_INVALID ||
         !minic_type_is_void(minic_type_aarch64_header_builtin(MINIC_TYPE_BASE_FLOAT128)) ||
         minic_type_aarch64_header_builtin(MINIC_TYPE_BASE_AARCH64_SVE_BOOL).base_kind !=
-            MINIC_TYPE_BASE_AARCH64_SVE_BOOL) {
+            MINIC_TYPE_BASE_AARCH64_SVE_BOOL ||
+        !minic_type_is_void(minic_type_aarch64_fixed_vector128(MINIC_TYPE_BASE_FLOAT128)) ||
+        minic_type_aarch64_fixed_vector128(MINIC_TYPE_BASE_AARCH64_UINT64X2).base_kind !=
+            MINIC_TYPE_BASE_AARCH64_UINT64X2) {
         /* __builtin_va_list now materializes a canonical record/array C
          * type per translation unit, not a special frontend scalar kind.
          * Its shape and identity are tested by four-target-model-m0. */

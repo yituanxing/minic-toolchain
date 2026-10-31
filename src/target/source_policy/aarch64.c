@@ -56,10 +56,10 @@ const MinicTargetAsmSourcePolicy minic_aarch64_asm_source_policy = {
         "GNU asm 'I' input requires an AArch64 unsigned imm12 (optional shift 12)",
 };
 
-/* These five names are opaque C header identities, not a vector storage,
- * arithmetic, or function-call PCS implementation. A source declaration
- * may mention them only while the selected target explicitly advertises
- * header-only opaque vector declarations. */
+/* The original five names remain opaque header-only identities. The four
+ * explicitly registered NEON byte/word spellings additionally have real
+ * target-owned 16-byte object layout, but still have NO vector arithmetic,
+ * V-register transport or function-call PCS implementation. */
 static bool aarch_named_header_builtin(const MinicTargetInfo *target,
                                        const char *name, size_t length,
                                        MinicType *type) {
@@ -71,14 +71,21 @@ static bool aarch_named_header_builtin(const MinicTargetInfo *target,
         {"__Float64x2_t", MINIC_TYPE_BASE_AARCH64_FLOAT64X2},
         {"__SVFloat32_t", MINIC_TYPE_BASE_AARCH64_SVE_FLOAT32},
         {"__SVFloat64_t", MINIC_TYPE_BASE_AARCH64_SVE_FLOAT64},
-        {"__SVBool_t", MINIC_TYPE_BASE_AARCH64_SVE_BOOL}
+        {"__SVBool_t", MINIC_TYPE_BASE_AARCH64_SVE_BOOL},
+        {"__Uint8x16_t", MINIC_TYPE_BASE_AARCH64_UINT8X16},
+        {"__Uint64x2_t", MINIC_TYPE_BASE_AARCH64_UINT64X2},
+        {"__Int8x16_t", MINIC_TYPE_BASE_AARCH64_INT8X16},
+        {"__Poly8x16_t", MINIC_TYPE_BASE_AARCH64_POLY8X16}
     };
     size_t i;
     for (i = 0U; i < sizeof(names) / sizeof(names[0]); ++i) {
         if (aarch_register_is(name, length, names[i].name) &&
             minic_target_info_language_type_supported(target, names[i].kind)) {
             if (type != NULL)
-                *type = minic_type_aarch64_header_builtin(names[i].kind);
+                *type = minic_type_builtin_declaration_role(names[i].kind) ==
+                                MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE
+                            ? minic_type_aarch64_fixed_vector128(names[i].kind)
+                            : minic_type_aarch64_header_builtin(names[i].kind);
             return true;
         }
     }

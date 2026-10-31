@@ -29,6 +29,10 @@ typedef struct MinicDataLayout {
     /* Separate IEEE binary128 identity; 0 means unsupported target. */
     size_t float128_size;
     size_t float128_alignment;
+    /* Fixed-width vector object storage. Zero for all targets without an
+     * explicitly implemented source vector layout; no register ABI implied. */
+    size_t fixed_vector128_size;
+    size_t fixed_vector128_alignment;
 } MinicDataLayout;
 
 bool minic_data_layout_is_little_endian(const MinicDataLayout *layout);

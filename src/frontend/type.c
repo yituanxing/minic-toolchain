@@ -236,6 +236,11 @@ MinicBuiltinDeclarationRole minic_type_builtin_declaration_role(MinicTypeBaseKin
     case MINIC_TYPE_BASE_AARCH64_SVE_FLOAT64:
     case MINIC_TYPE_BASE_AARCH64_SVE_BOOL:
         return MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE;
+    case MINIC_TYPE_BASE_AARCH64_UINT8X16:
+    case MINIC_TYPE_BASE_AARCH64_UINT64X2:
+    case MINIC_TYPE_BASE_AARCH64_INT8X16:
+    case MINIC_TYPE_BASE_AARCH64_POLY8X16:
+        return MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE;
     default:
         return MINIC_BUILTIN_DECLARATION_INVALID;
     }
@@ -246,6 +251,15 @@ MinicBuiltinDeclarationRole minic_type_builtin_declaration_role(MinicTypeBaseKin
 MinicType minic_type_aarch64_header_builtin(MinicTypeBaseKind base_kind) {
     if (minic_type_builtin_declaration_role(base_kind) !=
         MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE)
+        return minic_type_void();
+    return minic_type_scalar(base_kind);
+}
+
+/* Real fixed-width vector storage identity, without inventing scalar machine
+ * operations. The target's DataLayout and vector ABI gate remain separate. */
+MinicType minic_type_aarch64_fixed_vector128(MinicTypeBaseKind base_kind) {
+    if (minic_type_builtin_declaration_role(base_kind) !=
+        MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE)
         return minic_type_void();
     return minic_type_scalar(base_kind);
 }
