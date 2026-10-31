@@ -591,7 +591,13 @@ check-gnu-linux-ioremap-inline-arg-guard: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
 		sh tests/compiler/c0/probe-gnu-linux-ioremap-inline-arg-guard.sh
 
-check-fast: check-gnu-linux-ioremap-inline-arg-guard
+.PHONY: check-netlink-warn-branch
+check-netlink-warn-branch: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	BUILD_DIR="$(abspath $(BUILD_DIR))" \
+		sh tests/compiler/c0/probe-netlink-warn-branch.sh
+
+check-fast: check-gnu-linux-ioremap-inline-arg-guard check-netlink-warn-branch
 
 # The staged driver invokes the sibling minic-cc at runtime. An order-only
 # prerequisite prevents parallel `make -j check-fast` from launching it while

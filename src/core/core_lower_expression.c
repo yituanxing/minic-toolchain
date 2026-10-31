@@ -1250,9 +1250,18 @@ MinicCoreLowerStatus minic_core_lower_internal_lower_expression_statement(MinicC
          expression->value.unary.operator_kind == MINIC_UNARY_PRE_INCREMENT ||
          expression->value.unary.operator_kind == MINIC_UNARY_PRE_DECREMENT)) {
         MinicCoreValueId discarded_value;
+        const MinicExpression *updated_expression = minic_c0_program_expression(
+            context->body->program, expression->value.unary.operand);
 
-        /* FIXME(MC-033): unlike lower_expression's value path this shortcut
-           does not invalidate the modified local's constant facts. */
+        /* Discarding the old/new value does not discard the write.  Match the
+           value-expression path: a postfix/prefix update makes the previous
+           local constant fact invalid before a following IF can consume it.
+           Otherwise `cnt++` in one branch leaves `cnt == 0` at the join and
+           Linux's WARN_ON(!cnt) can become an unconditional trap. */
+        if (updated_expression != NULL &&
+            updated_expression->kind == MINIC_EXPRESSION_LOCAL) {
+            minic_core_local_fact_invalidate(context, updated_expression->value.local_id);
+        }
         return core_trace_expression_statement_status(
             context,
             expression,
