@@ -248,14 +248,30 @@ char *minias_trim(char *text) {
     return text;
 }
 
-void minias_set_error(MiniAs *as, const char *format, ...) {
-    va_list ap;
+/* The post-emit sinks intentionally expose no MiniAs* to a Target. Common
+ * alone retains the writable object graph behind these opaque handles. */
+struct MiniAsPostEmitErrorSink { MiniAs *as; };
+struct MiniAsPostEmitObjectSink { MiniAs *as; };
 
+static void minias_set_error_va(MiniAs *as, const char *format, va_list ap) {
     if (as->error[0] != '\0') {
         return;
     }
-    va_start(ap, format);
     (void)vsnprintf(as->error, sizeof(as->error), format, ap);
+}
+
+void minias_set_error(MiniAs *as, const char *format, ...) {
+    va_list ap;
+    va_start(ap, format);
+    minias_set_error_va(as, format, ap);
+    va_end(ap);
+}
+
+void minias_post_emit_error(MiniAsPostEmitErrorSink *sink,
+                            const char *format, ...) {
+    va_list ap;
+    va_start(ap, format);
+    minias_set_error_va(sink->as, format, ap);
     va_end(ap);
 }
 
@@ -628,6 +644,30 @@ bool minias_require_target_section_alignment(MiniAs *as, int section,
     if(as->sections[(size_t)section].align<alignment)
         as->sections[(size_t)section].align=alignment;
     return true;
+}
+
+size_t minias_post_emit_symbol_count(const MiniAsPostEmitObjectSink *sink) {
+    return sink->as->symbol_count;
+}
+
+bool minias_post_emit_define_mapping_symbol(MiniAsPostEmitObjectSink *sink,
+                                            const char *stem,
+                                            size_t first_ordinal,
+                                            bool always_suffix,
+                                            int section, uint64_t offset) {
+    if (!sink->as->finalizing_target_output) {
+        minias_set_error(sink->as, "invalid-target-mapping-phase");
+        return false;
+    }
+    return minias_define_target_mapping_symbol(sink->as, stem, first_ordinal,
+                                               always_suffix, section, offset);
+}
+
+bool minias_post_emit_raise_section_alignment(MiniAsPostEmitObjectSink *sink,
+                                              int section, uint64_t align) {
+    /* Reuse the guarded Common alignment policy introduced in the
+     * preceding Fixup/finalization batch; do not make a second owner. */
+    return minias_require_target_section_alignment(sink->as, section, align);
 }
 
 /* Stable parse-time NameIds are intentionally NOT Object SymbolIDs.  A
@@ -4779,11 +4819,13 @@ bool minias_emit_sections(MiniAs *as) {
 
 /* Finalization is the only phase allowed to raise Target-driven ELF Section
  * alignment. Reset the capability on failure as well as success. */
-static bool minias_finalize_target_output(MiniAs *as) {
+static bool minias_finalize_target_output(
+    MiniAs *as, const MiniAsPostEmitView *layout,
+    MiniAsPostEmitErrorSink *errors, MiniAsPostEmitObjectSink *object) {
     bool ok;
     if(as->target->finalize_output==NULL)return true;
     as->finalizing_target_output=true;
-    ok=as->target->finalize_output(as);
+    ok=as->target->finalize_output(layout,errors,object);
     as->finalizing_target_output=false;
     return ok;
 }
@@ -4866,14 +4908,23 @@ int minias_assemble_config(const char *input_path,
             minias_destroy(&as);
             continue;
         }
-        if (parsed && as.error[0] == '\0' &&
-            minias_emit_sections(&as) &&
-            (as.target->validate_output == NULL ||
-             as.target->validate_output(&as)) &&
-            minias_finalize_target_output(&as) &&
-            (config->elf32 ? minias_write_elf32(&as, output_path)
-                   : minias_write_elf64(&as, output_path))) {
-            rc = 0;
+        if (parsed && as.error[0] == '\0' && minias_emit_sections(&as)) {
+            const MiniAsPostEmitView final_layout = {
+                .stmts = as.stmts,
+                .stmt_count = as.stmt_count,
+                .sections = as.sections,
+                .section_count = as.section_count,
+                .target_state = as.target_state
+            };
+            MiniAsPostEmitErrorSink errors = { &as };
+            MiniAsPostEmitObjectSink object = { &as };
+            if ((as.target->validate_output == NULL ||
+                 as.target->validate_output(&final_layout, &errors)) &&
+                minias_finalize_target_output(&as,&final_layout,&errors,&object) &&
+                (config->elf32 ? minias_write_elf32(&as, output_path)
+                       : minias_write_elf64(&as, output_path))) {
+                rc = 0;
+            }
         }
         if (rc != 0 && diagnostic != NULL) {
             fprintf(diagnostic,

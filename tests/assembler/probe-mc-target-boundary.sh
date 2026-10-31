@@ -87,15 +87,19 @@ targets = {
     'riscv_target.c': ('strict_base_i_check_sections',
                        'riscv_record_object_mapping_symbols'),
 }
-if not re.search(r'bool\s*\(\*finalize_output\)\s*\(MiniAs\s*\*\)', core):
-    raise SystemExit('Missing explicit Target output-finalization phase')
-steps = ('minias_emit_sections(&as)', 'as.target->validate_output(&as)',
-         'minias_finalize_target_output(&as)', 'minias_write_elf64(&as, output_path)')
+if not re.search(r'bool\s*\(\*validate_output\)\s*\(const MiniAsPostEmitView\s*\*', core):
+    raise SystemExit('Target validation still receives a writable Core')
+if not re.search(r'bool\s*\(\*finalize_output\)\s*\(const MiniAsPostEmitView\s*\*', core):
+    raise SystemExit('Target finalization still receives a writable Core')
+steps = ('minias_emit_sections(&as)',
+         'as.target->validate_output(&final_layout, &errors)',
+         'minias_finalize_target_output(&as,&final_layout,&errors,&object)',
+         'minias_write_elf64(&as, output_path)')
 offsets = [driver.find(step) for step in steps]
 if -1 in offsets or offsets != sorted(offsets):
     raise SystemExit('Target validation/finalization/ELF output order drifted')
 if not re.search(r'as->finalizing_target_output\s*=\s*true;\s*'
-                 r'ok\s*=\s*as->target->finalize_output\(as\);\s*'
+                 r'ok\s*=\s*as->target->finalize_output\(layout,errors,object\);\s*'
                  r'as->finalizing_target_output\s*=\s*false;', driver):
     raise SystemExit('Target finalization capability guard is missing')
 for filename in ('assembler.c', 'cfi_writer.c'):
@@ -109,8 +113,10 @@ if 'stmt->op' in planner or 'section->align=' in planner:
     raise SystemExit('AArch64 finalizer reopens source or writes Common Section')
 if 'A64_SITE_INST_DATA' not in planner or \
    'A64_SITE_EXPLICIT_ALIGN' not in planner or \
-   'minias_require_target_section_alignment' not in planner:
+   'minias_post_emit_raise_section_alignment' not in planner:
     raise SystemExit('AArch64 finalizer omitted typed intent or Common alignment API')
+if 'return minias_require_target_section_alignment(sink->as, section, align);' not in driver:
+    raise SystemExit('Post-emit sink bypassed guarded Common alignment owner')
 for target, (validator, finalizer) in targets.items():
     source = (Path('assembler/src') / target).read_text()
     for hook, function in (('validate_output', validator),
@@ -118,6 +124,41 @@ for target, (validator, finalizer) in targets.items():
         if not re.search(r'\.' + hook + r'\s*=\s*' + function + r'\s*[,}]', source):
             raise SystemExit(f'{target}: missing {hook}={function}')
 print('MINIAS_MC_OBJECT_FINALIZATION=PASS validation_before_mapping_before_writer=2')
+PY
+# A post-emit Target gets only immutable layout slices and an opaque error
+# handle. Only the separately typed finalization sink can request object
+# symbols/alignment from Common, not the read-only validator.
+python3 - <<'PY'
+from pathlib import Path
+import re
+
+core = Path('assembler/src/minias_internal.h').read_text()
+driver = Path('assembler/src/assembler.c').read_text()
+a64 = Path('assembler/src/aarch64_target.c').read_text()
+rv = Path('assembler/src/riscv_target.c').read_text()
+la = Path('assembler/src/loongarch64_target.c').read_text()
+view = core.split('typedef struct MiniAsPostEmitView {', 1)[1].split('} MiniAsPostEmitView;', 1)[0]
+if re.search(r'\bMiniAs\s*\*|\bMiniAsSymbol\s*\*|\bMiniAsFixup\s*\*', view):
+    raise SystemExit('Post-emit view exposes a mutable Common object')
+if 'struct MiniAsPostEmitObjectSink { MiniAs *as; };' not in driver or \
+        'struct MiniAsPostEmitObjectSink {' in core:
+    raise SystemExit('Post-emit mutation handle is not Common-private')
+for source, fn in ((a64, 'a64_record_source_mappings'),
+                   (rv, 'riscv_record_object_mapping_symbols')):
+    if not re.search(r'static bool\s+' + fn +
+                     r'\s*\(\s*const MiniAsPostEmitView\s*\*', source):
+        raise SystemExit(fn + ' still receives a mutable Core')
+    hook_body = source.split('static bool ' + fn + '(', 1)[1]
+    hook_body = hook_body.split('\nstatic ', 1)[0]
+    if 'as->' in hook_body or 'minias_set_error(as,' in hook_body:
+        raise SystemExit(fn + ' still reaches into the mutable Core')
+if 'minias_post_emit_raise_section_alignment(object,' not in a64 or \
+        'minias_post_emit_define_mapping_symbol(object,' not in a64 or \
+        'minias_post_emit_define_mapping_symbol(' not in rv:
+    raise SystemExit('Target object mutation bypassed the finalization sink')
+if not re.search(r'static bool la_validate\s*\(const MiniAsPostEmitView\s*\*', la):
+    raise SystemExit('LoongArch output validator still receives writable Core')
+print('MINIAS_MC_POST_EMIT_VIEW=PASS final_layout=readonly object_mutation=Common_sink')
 PY
 # Parse-site AArch64 mapping semantics must not be recovered by comparing
 # source strings during late section finalization. RISC-V's RVE ABI must not

@@ -639,6 +639,29 @@ typedef struct MiniAs {
     char error[MINIAS_MAX_ERROR];
 } MiniAs;
 
+/* A borrowed, read-only view of the *final* MCLayout. Target output checks
+ * cannot reach the mutable Common section/symbol/fixup graph through this
+ * interface. Only the object-finalization sink below can request the two
+ * currently needed ELF changes; Common remains their sole owner. */
+typedef struct MiniAsPostEmitView {
+    const MiniAsStmt *stmts;
+    size_t stmt_count;
+    const MiniAsSection *sections;
+    size_t section_count;
+    const void *target_state;
+} MiniAsPostEmitView;
+
+typedef struct MiniAsPostEmitErrorSink MiniAsPostEmitErrorSink;
+typedef struct MiniAsPostEmitObjectSink MiniAsPostEmitObjectSink;
+
+void minias_post_emit_error(MiniAsPostEmitErrorSink *, const char *, ...);
+size_t minias_post_emit_symbol_count(const MiniAsPostEmitObjectSink *);
+bool minias_post_emit_define_mapping_symbol(MiniAsPostEmitObjectSink *,
+                                            const char *, size_t, bool,
+                                            int, uint64_t);
+bool minias_post_emit_raise_section_alignment(MiniAsPostEmitObjectSink *,
+                                              int, uint64_t);
+
 void minias_destroy(MiniAs *as);
 bool minias_emit_sections(MiniAs *as);
 bool minias_write_elf64(MiniAs *as, const char *path);
@@ -933,12 +956,15 @@ typedef struct MiniAsTargetOps {
     /* Post-emission validation checks finalized section bytes/placements.
      * It may report errors, but must not introduce Object symbols, change
      * section alignment or otherwise materialize object output. */
-    bool (*validate_output)(MiniAs *);
+    bool (*validate_output)(const MiniAsPostEmitView *,
+                            MiniAsPostEmitErrorSink *);
     /* Post-emission Target object finalization runs AFTER validation and
      * BEFORE the ObjectWriter observes symbols, sections and relocations.
      * ISA mapping symbols and target-driven section alignment belong here,
      * not in an apparently read-only validation callback. NULL is a no-op. */
-    bool (*finalize_output)(MiniAs *);
+    bool (*finalize_output)(const MiniAsPostEmitView *,
+                            MiniAsPostEmitErrorSink *,
+                            MiniAsPostEmitObjectSink *);
     /* Target-advertised GNU implicit .eh_frame: never infer ISA from
      * numeric ELF e_machine inside Common CFI/layout dispatch. */
     bool cfi_implicit_eh_frame;

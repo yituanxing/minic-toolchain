@@ -5610,17 +5610,21 @@ static bool a64_allow_local_section_symbol_fixup(const MiniAsFixup *fixup,
 
 /* AArch64 ELF requires local $x/$d mapping symbols at code/data boundaries.
  * The symbol is target-owned; the generic ELF writer only serializes it. */
-static bool a64_record_mapping(MiniAs *as,int section,uint64_t offset,
-                               bool executable) {
+static bool a64_record_mapping(MiniAsPostEmitObjectSink *object,
+                               int section,uint64_t offset,bool executable) {
     /* Target owns the mapping transition and prefix; Common owns Symbol
      * lookup, collision avoidance, insertion and local ELF binding. */
-    return minias_define_target_mapping_symbol(as,
-        executable?"$x":"$d",as->symbol_count,true,section,offset);
+    return minias_post_emit_define_mapping_symbol(object,
+        executable?"$x":"$d",minias_post_emit_symbol_count(object),
+        true,section,offset);
 }
 
 static bool a64_record_cfi_data_mapping(MiniAs *as,int section,
                                         uint64_t offset) {
-    return a64_record_mapping(as,section,offset,false);
+    /* CFI emission precedes the post-emit phase, so this callback retains
+     * the existing Common symbol API; it is not a post-emit Target hook. */
+    return minias_define_target_mapping_symbol(as,"$d",as->symbol_count,
+                                               true,section,offset);
 }
 
 typedef struct A64MappingFragment {
@@ -5641,27 +5645,32 @@ static int a64_compare_mapping_fragments(const void *lhs,const void *rhs) {
 
 /* Source fragments may be interleaved across .subsection directives. GNU
  * mapping symbols follow final section layout, not lexical statement order. */
-static bool a64_record_source_mappings(MiniAs *as) {
+static bool a64_record_source_mappings(const MiniAsPostEmitView *view,
+                                      MiniAsPostEmitErrorSink *errors,
+                                      MiniAsPostEmitObjectSink *object) {
     A64MappingFragment *points;
     size_t i,count=0U;
     int previous_section=-1;
     bool previous_executable=false,has_mapping=false;
     bool pending_initial_data=false;
     uint64_t pending_initial_offset=0U;
-    if(as->stmt_count==0U)return true;
-    if(as->stmt_count>SIZE_MAX/sizeof(*points))return false;
-    points=malloc(as->stmt_count*sizeof(*points));
-    if(points==NULL) {
-        minias_set_error(as,"out-of-memory:aarch64-mapping");
+    if(view->stmt_count==0U)return true;
+    if(view->stmt_count>SIZE_MAX/sizeof(*points)) {
+        minias_post_emit_error(errors,"aarch64-mapping-capacity-overflow");
         return false;
     }
-    for(i=0U;i<as->stmt_count;++i) {
-        const MiniAsStmt *stmt=&as->stmts[i];
-        MiniAsSection *section;
+    points=malloc(view->stmt_count*sizeof(*points));
+    if(points==NULL) {
+        minias_post_emit_error(errors,"out-of-memory:aarch64-mapping");
+        return false;
+    }
+    for(i=0U;i<view->stmt_count;++i) {
+        const MiniAsStmt *stmt=&view->stmts[i];
+        const MiniAsSection *section;
         bool executable;
         if(stmt->section<0 ||
-           (size_t)stmt->section>=as->section_count)continue;
-        section=&as->sections[(size_t)stmt->section];
+           (size_t)stmt->section>=view->section_count)continue;
+        section=&view->sections[(size_t)stmt->section];
         /* Explicit alignment can establish MAP_DATA even with zero bytes;
          * retain it until final-layout mapping reconciliation. Ordinary
          * zero-sized statements do not contribute source mapping state. */
@@ -5678,7 +5687,7 @@ static bool a64_record_source_mappings(MiniAs *as) {
          * Target directive property, not generic raw-data alignment. */
         if((stmt->site.provenance_bits&A64_SITE_INST_DATA)!=0U &&
            section->align<4U &&
-           !minias_require_target_section_alignment(as,stmt->section,4U))
+           !minias_post_emit_raise_section_alignment(object,stmt->section,4U))
             goto mapping_failure;
         if(section->type!=MINIAS_SHT_PROGBITS ||
            (section->flags&MINIAS_SHF_ALLOC)==0U)continue;
@@ -5695,7 +5704,7 @@ static bool a64_record_source_mappings(MiniAs *as) {
          * records AArch64's 4-byte instruction alignment on the first
          * actual instruction/mapping transition. Empty .text must stay 1. */
         if(executable && section->align<4U &&
-           !minias_require_target_section_alignment(as,stmt->section,4U))
+           !minias_post_emit_raise_section_alignment(object,stmt->section,4U))
             goto mapping_failure;
         points[count].section=stmt->section;
         points[count].offset=stmt->offset;
@@ -5709,7 +5718,7 @@ static bool a64_record_source_mappings(MiniAs *as) {
     for(i=0U;i<count;++i) {
         const A64MappingFragment *point=&points[i];
         bool new_section=point->section!=previous_section;
-        bool section_executable=(as->sections[(size_t)point->section].flags&
+        bool section_executable=(view->sections[(size_t)point->section].flags&
                                  MINIAS_SHF_EXECINSTR)!=0U;
         if(new_section) {
             previous_section=point->section;
@@ -5723,17 +5732,17 @@ static bool a64_record_source_mappings(MiniAs *as) {
              * in non-executable sections unmapped. */
             if(!has_mapping && pending_initial_data &&
                pending_initial_offset<point->offset &&
-               !a64_record_mapping(as,point->section,pending_initial_offset,false))
+               !a64_record_mapping(object,point->section,pending_initial_offset,false))
                 goto mapping_failure;
             if((!has_mapping || !previous_executable) &&
-               !a64_record_mapping(as,point->section,point->offset,true))
+               !a64_record_mapping(object,point->section,point->offset,true))
                 goto mapping_failure;
             has_mapping=true;
             previous_executable=true;
             pending_initial_data=false;
         } else if(section_executable) {
             if((!has_mapping || previous_executable) &&
-               !a64_record_mapping(as,point->section,point->offset,false))
+               !a64_record_mapping(object,point->section,point->offset,false))
                 goto mapping_failure;
             has_mapping=true;
             previous_executable=false;
@@ -5754,14 +5763,14 @@ static bool a64_record_source_mappings(MiniAs *as) {
             }
             pending_initial_data=false;
             if(has_following_data && (!has_mapping || previous_executable)) {
-                if(!a64_record_mapping(as,point->section,point->offset,false))
+                if(!a64_record_mapping(object,point->section,point->offset,false))
                     goto mapping_failure;
                 has_mapping=true;
                 previous_executable=false;
             }
         } else if(point->size!=0U) {
             if(has_mapping && previous_executable) {
-                if(!a64_record_mapping(as,point->section,point->offset,false))
+                if(!a64_record_mapping(object,point->section,point->offset,false))
                     goto mapping_failure;
                 previous_executable=false;
             } else if(!has_mapping && !pending_initial_data) {
@@ -5777,29 +5786,31 @@ mapping_failure:
     return false;
 }
 
-static bool validate(MiniAs *as) {
+static bool validate(const MiniAsPostEmitView *view,
+                     MiniAsPostEmitErrorSink *errors) {
     size_t i;
     /* The AArch64 instruction stream is word-aligned, but GNU GAS permits
      * arbitrary BYTE DATA in an executable section (e.g. Kbuild's forward
      * .uleb128 feature probe).  A total section-size modulo-four check
      * mistakenly rejects valid data-only .text.  Validate actual instruction
      * sites, including GNU .inst words, independently of section byte count. */
-    for (i = 0U; i < as->stmt_count; ++i) {
-        const MiniAsStmt *stmt=&as->stmts[i];
+    for (i = 0U; i < view->stmt_count; ++i) {
+        const MiniAsStmt *stmt=&view->stmts[i];
         if(stmt->fragment_kind!=MINIAS_FRAGMENT_INSTRUCTION &&
            (stmt->site.provenance_bits&A64_SITE_INST_DATA)==0U)continue;
-        if(stmt->section<0 || (size_t)stmt->section>=as->section_count)
+        if(stmt->section<0 || (size_t)stmt->section>=view->section_count)
             continue;
         /* GAS leaves instructions in non-executable sections byte-packed;
          * its implicit four-byte alignment only applies to code sections. */
-        if((as->sections[(size_t)stmt->section].flags&
+        if((view->sections[(size_t)stmt->section].flags&
             MINIAS_SHF_EXECINSTR)!=0U &&
            (stmt->offset&UINT64_C(3))!=0U) {
             const char *section_name=(stmt->section>=0 &&
-                (size_t)stmt->section<as->section_count)?
-                as->sections[(size_t)stmt->section].name:"<unknown>";
-            minias_set_error(as, "unaligned-aarch64-instruction:%s:line=%zu",
-                             section_name, stmt->line);
+                (size_t)stmt->section<view->section_count)?
+                view->sections[(size_t)stmt->section].name:"<unknown>";
+            minias_post_emit_error(errors,
+                                   "unaligned-aarch64-instruction:%s:line=%zu",
+                                   section_name, stmt->line);
             return false;
         }
     }

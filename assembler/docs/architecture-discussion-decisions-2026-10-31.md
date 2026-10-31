@@ -198,7 +198,7 @@ that a design change has been made.
 | P01 | P0 | `riscv_profile.c:parse_isa` sets `strict_i_xlen` automatically for exact RV32I/RV64I; `riscv_target.c:strict_base_i_check_sections` and `riscv_validate_common_directive` then reject executable raw data/`.org` as an extra audit | Separate ordinary `target_isa` legality from explicit `strict_base_i_audit`; keep the valuable audit but do not redefine GAS-compatible `-march` |
 | P02 | P0/P1 | `riscv_target.c:riscv_target_directive` currently rejects `.option arch,+ext` under explicit `-march`; legacy +v/+zbb handling is a no-op. `MiniAsRiscvState.option_stack` saves only PIC/RVC/RELAX bits | Add scoped effective ISA state and save/restore it; capture the correct site ISA for MCInst, layout and encoder without accidentally changing file-level attributes |
 | P03 | P1 | `riscv_profile.h` uses one 64-bit feature mask; `riscv_profile.c` recognizes a limited fixed-version extension table and lacks general version-string parsing | Define an extendable versioned ISA/extension set and dependency validation before many Z extensions are added. No need to implement all extensions immediately |
-| P04 | P1 | `minias_internal.h:MiniAsTargetOps` accepts mutable `MiniAs*` during parse, measurement, layout and encoding; this exposes sections/symbols/fixups beyond each phase's responsibility | Narrow to phase-appropriate Target parse/layout/encode views and a Common-owned emission sink, without breaking existing typed MCInst ownership |
+| P04 | P1 | Parse/measure/encode and LoongArch's complete-section relaxation lookahead still receive mutable `MiniAs*`; post-emit output hooks previously did as well, but now use a read-only final-layout view and narrowly typed Common sinks (§15) | Continue phase-appropriate Target parse/layout/encode views and a Common-owned emission sink, without breaking existing typed MCInst ownership |
 | P05 | P1/P2 | `assembler.c:minias_statement_process` still reads/writes `SourceContext` internals and owns considerable conditional/directive routing; source expansion calls back into it | Complete Source ownership and typed statement routing; a smaller file alone is **not** proof of a clean boundary |
 | P06 | P1 | `aarch64_target.c:a64_record_source_mappings`/`validate` check `strcmp(stmt->op, ".inst")` and alignment directive spellings **after** parsing to determine object mapping semantics | Store parse-site typed instruction-data/alignment provenance; keep original text only where genuinely needed for diagnostics or initial expression compilation |
 | P07 | P1 (future) | RV RVC measurement/encoding reads `state->isa_features` globally while `stmt->site.mode_bits` records only selected option bits | When scoped `.option arch` is implemented, bind the effective ISA/encoding policy to each fragment to avoid consulting the wrong state after `pop` |
@@ -600,3 +600,61 @@ LoongArch64 linker-relaxable ULEB GNU relocation/byte comparisons
 **2/2 PASS**; five architecture/profile GNU CFI extended probes **5/5
 PASS**; Target/Common structural boundary PASS. Do not infer a fresh
 Linux/QEMU Image/P0/P1 certificate from these focused checks.
+
+## 15. P04 first phase-type boundary: read-only post-emission layout
+
+The first P04 slice is the final object phase, where there are only three
+real consumers of completed layout: AArch64 validates instruction placement
+and inserts `$x/$d` mappings/adjusts section alignment; RISC-V audits
+optional strict Base-I bytes and inserts `$x<isa>` mappings; LoongArch
+validates each instruction width. x86-64 needs no post-emit callback.
+
+Both `TargetOps.validate_output` and `finalize_output` now take a borrowed
+`const MiniAsPostEmitView` with **read-only Fragment and Section slices**
+and opaque Target state, rather than full writable `MiniAs*`. The separate,
+incomplete `MiniAsPostEmitErrorSink` carries diagnostics. Only finalization
+receives `MiniAsPostEmitObjectSink` (opaque outside `assembler.c`), with
+explicit Common functions for collision-safe mapping symbols and promotion
+of an existing Section's alignment. Validation cannot obtain that sink or
+touch Common-owned Symbol/Fixup arrays. The views are built *after* Common
+completes emission and remain valid through the ELF writer preparation;
+mapping symbols do not reallocate Section/Fragment arrays.
+
+The §14 `finalizing_target_output` capability guard stays in force across
+this type migration: Common's wrapper sets/resets it around the typed
+finalizer callback. The new alignment sink delegates to §14's existing
+guarded `minias_require_target_section_alignment` instead of adding a
+second section-alignment policy. Mapping insertion through the new sink
+is also gated to this phase. The §14 Fixup-at-creation corrections and
+CFI/DWARF callers are preserved unchanged.
+
+This is **not** a second ELF writer or a reimplemented mapping pass. AArch64's
+source-order/subsection reconciliation, retrospective `$d`, zero-width
+alignment and `.inst` cases retain the same algorithm and site semantics.
+RISC-V keeps its canonical name/section-ordinal policy. AArch64's separate
+CFI data-mapping callback remains in the earlier CFI emission phase; its
+Common symbol API is deliberately not conflated with post-emission hooks.
+The Target objects can still inspect immutable MCInst payload references,
+but no post-emit callback is passed a writable Common root by type.
+
+Local verification for this batch: Release `-Werror` rebuild PASS; A0
+**30/30 PASS**; GNU strict AArch64 `$d/$x`, data `.inst` section alignment
+and six source-mapping scenarios PASS; GNU LoongArch odd-position instruction
+and 1-byte Kbuild feature probe PASS; x86-64/RV64 SourceGraph byte/symbol
+oracles and replay **2/2 PASS**; structural Target boundary PASS with new
+post-emission read-only/sink guards. This is local evidence; remote CI for
+the pending commit is not yet claimed.
+
+The preceding `c325a07` exact-head mandatory GitHub CI has since completed
+SUCCESS for the target ISA/ABI, x86/LoongArch GNU oracle, four-architecture
+compiler runtime, native strict backend, real BusyBox, GNU GCC single-AS
+A/B, runtime ladder and MiniObjcopy/MiniStrip integration. The opt-in Linux
+kernel/3536 workflows were SKIPPED; no fresh full-Linux certification is
+implied for `c325a07` or this change.
+
+**Next P04 slice:** Build a narrow read-only layout query for the *existing*
+LoongArch full-section linker-relaxability cache and later constrain the
+parse/measure/encode callbacks incrementally. The full-section lookahead
+is required for correctness; deleting it to reduce direct reads would
+regress GNU branch relocations. Do not grow this into a COFF/Mach-O or
+versioned-ISA project now.

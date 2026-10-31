@@ -193,30 +193,35 @@ static bool strict_base_i_word(uint32_t w, unsigned xlen) {
     }
 }
 
-static bool strict_base_i_check_sections(MiniAs *as) {
+static bool strict_base_i_check_sections(const MiniAsPostEmitView *view,
+                                         MiniAsPostEmitErrorSink *errors) {
+    const MiniAsRiscvState *state =
+        (const MiniAsRiscvState *)view->target_state;
     size_t i;
-    if (MINIAS_RV_STATE(as)->strict_i_xlen == 0U) return true;
-    if (MINIAS_RV_STATE(as)->strict_i_xlen != 32U && MINIAS_RV_STATE(as)->strict_i_xlen != 64U) {
-        minias_set_error(as, "unsupported-strict-riscv-xlen");
+    if (state->strict_i_xlen == 0U) return true;
+    if (state->strict_i_xlen != 32U && state->strict_i_xlen != 64U) {
+        minias_post_emit_error(errors, "unsupported-strict-riscv-xlen");
         return false;
     }
-    for (i = 0U; i < as->section_count; ++i) {
-        const MiniAsSection *section = &as->sections[i];
+    for (i = 0U; i < view->section_count; ++i) {
+        const MiniAsSection *section = &view->sections[i];
         size_t offset;
         if ((section->flags & MINIAS_SHF_EXECINSTR) == 0U) continue;
         if (section->size % 4U != 0U) {
-            minias_set_error(as, "rv%ui-unaligned-executable-section:%s",
-                             MINIAS_RV_STATE(as)->strict_i_xlen, section->name);
+            minias_post_emit_error(errors,
+                                   "rv%ui-unaligned-executable-section:%s",
+                                   state->strict_i_xlen, section->name);
             return false;
         }
         for (offset = 0U; offset < section->size; offset += 4U) {
             const unsigned char *p = section->data + offset;
             uint32_t w = (uint32_t)p[0] | ((uint32_t)p[1] << 8U) |
                          ((uint32_t)p[2] << 16U) | ((uint32_t)p[3] << 24U);
-            if (!strict_base_i_word(w, MINIAS_RV_STATE(as)->strict_i_xlen)) {
-                minias_set_error(as,
-                                 "rv%ui-unsupported-machine-encoding:%s:offset=%zu:word=%08x",
-                                 MINIAS_RV_STATE(as)->strict_i_xlen, section->name, offset, (unsigned)w);
+            if (!strict_base_i_word(w, state->strict_i_xlen)) {
+                minias_post_emit_error(
+                    errors,
+                    "rv%ui-unsupported-machine-encoding:%s:offset=%zu:word=%08x",
+                    state->strict_i_xlen, section->name, offset, (unsigned)w);
                 return false;
             }
         }
@@ -701,29 +706,32 @@ static bool riscv_resolve_profile(const char *march, const char *mabi,
  * sections, rather than treating a .riscv.attributes blob as a substitute
  * for local `$x<isa>` mapping symbols. Common serializes this ordinary
  * Target-authored symbol, preserving the final MCLayout section offsets. */
-static bool riscv_record_object_mapping_symbols(MiniAs *as) {
-    const MiniAsRiscvState *state = MINIAS_RV_STATE(as);
+static bool riscv_record_object_mapping_symbols(
+    const MiniAsPostEmitView *view, MiniAsPostEmitErrorSink *errors,
+    MiniAsPostEmitObjectSink *object) {
+    const MiniAsRiscvState *state =
+        (const MiniAsRiscvState *)view->target_state;
     char canonical[512], name[576];
     size_t isa_length, section_index;
     if (state == NULL || state->arch_attribute_isa[0] == '\0') return true;
     if (!riscv_canonical_object_isa(state, canonical, &isa_length)) {
-        minias_set_error(as,"riscv-mapping-isa-overflow");
+        minias_post_emit_error(errors,"riscv-mapping-isa-overflow");
         return false;
     }
-    for (section_index = 0U; section_index < as->section_count;
+    for (section_index = 0U; section_index < view->section_count;
          ++section_index) {
-        const MiniAsSection *section = &as->sections[section_index];
+        const MiniAsSection *section = &view->sections[section_index];
         if ((section->flags & MINIAS_SHF_EXECINSTR) == 0U ||
             section->type != MINIAS_SHT_PROGBITS || section->size == 0U)
             continue;
         if (snprintf(name, sizeof(name), "$x%s", canonical) >=
             (int)sizeof(name)) {
-            minias_set_error(as,"riscv-mapping-symbol-overflow");
+            minias_post_emit_error(errors,"riscv-mapping-symbol-overflow");
             return false;
         }
-        if (!minias_define_target_mapping_symbol(as, name, section_index,
-                                                 false, (int)section_index,
-                                                 0U)) return false;
+        if (!minias_post_emit_define_mapping_symbol(
+                object, name, section_index, false, (int)section_index, 0U))
+            return false;
     }
     return true;
 }

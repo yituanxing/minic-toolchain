@@ -2267,7 +2267,8 @@ static void la_destroy_target_state(MiniAs *as) {
     }
     as->target_state=NULL;
 }
-static bool la_validate(MiniAs *as) {
+static bool la_validate(const MiniAsPostEmitView *view,
+                        MiniAsPostEmitErrorSink *errors) {
     size_t i;
     /* GNU GAS accepts raw byte payloads in executable sections and does not
      * implicitly pad odd-position instruction fragments.  Its ELF section
@@ -2275,14 +2276,15 @@ static bool la_validate(MiniAs *as) {
      * source offsets here (Ubuntu 24 LoongArch GAS emits .text align=1 for
      * the real CFI short-relax instruction fixture).  Enforce only the
      * target MCInst's fixed-width encoding contract. */
-    for(i=0U;i<as->stmt_count;++i) {
-        const MiniAsStmt *stmt=&as->stmts[i];
+    for(i=0U;i<view->stmt_count;++i) {
+        const MiniAsStmt *stmt=&view->stmts[i];
         if(stmt->fragment_kind!=MINIAS_FRAGMENT_INSTRUCTION)continue;
         if(stmt->section<0 ||
-           (size_t)stmt->section>=as->section_count ||
+           (size_t)stmt->section>=view->section_count ||
            stmt->size==0U || (stmt->size&3U)!=0U) {
-            minias_set_error(as,"invalid-loongarch-instruction-width:line=%zu",
-                             stmt->line);
+            minias_post_emit_error(errors,
+                                   "invalid-loongarch-instruction-width:line=%zu",
+                                   stmt->line);
             return false;
         }
     }
