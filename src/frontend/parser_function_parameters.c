@@ -515,7 +515,15 @@ bool minic_parser_parse_parameter_list(MinicParser *parser,
             return false;
         }
 
-        if (!is_function_pointer_parameter && !is_pointer_to_array_parameter &&
+        /* A parenthesized function-pointer declarator can itself be an
+         * array parameter: `int (*callbacks[])(struct ctx *)`. C adjusts
+         * its outer array to a pointer-to-function-pointer exactly like
+         * `int callbacks[]`; the transient incomplete array descriptor
+         * must be retired. Do NOT adjust plain `int (*callback)(...)` or
+         * a genuine pointer-to-array `int (*array)[N]`. Linux KVM VMX's
+         * nested_vmx_hardware_setup(exit_handlers) requires this distinction. */
+        if (!is_pointer_to_array_parameter &&
+            (!is_function_pointer_parameter || minic_type_is_array(parameter_type)) &&
             !adjust_array_parameter_type(
                 parser, &parameter_type, parameter_array_type_begin,
                 prior_parameter_names, parameter_types, *parameter_count)) {
