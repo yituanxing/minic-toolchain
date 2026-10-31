@@ -119,6 +119,19 @@ typedef struct MiniElfWriteSection {
     uint64_t entry_size;
     const unsigned char *data;
     size_t size;
+    /* ObjectModel grouping: logical signature symbol index in spec.symbols.
+     * The writer resolves final symbol-table order and SHT_GROUP members. */
+    bool has_group;
+    size_t group_signature_symbol;
+    /* The ELF SHT_GROUP payload's first word. Zero is a valid ordinary
+     * group; GRP_COMDAT is a separate policy, never implied by SHF_GROUP. */
+    uint32_t group_flags;
+    /* SHF_LINK_ORDER sh_link is a final ELF section-header index. Keep the
+     * target as an input SectionID until layout; an absent association emits
+     * SHN_UNDEF (0). The explicit presence bit makes zero-initialized specs
+     * safely represent an absent link instead of silently targeting section 0. */
+    bool has_link_order_target;
+    size_t linked_target_section;
 } MiniElfWriteSection;
 
 typedef struct MiniElfWriteSymbol {
@@ -128,6 +141,10 @@ typedef struct MiniElfWriteSymbol {
     uint16_t section_index;
     uint64_t value;
     uint64_t size;
+    /* A default-local COMDAT signature may refer to the SHT_GROUP header
+     * synthesized by this writer, not an input Section.  The final header
+     * index is assigned only after output layout/group collection. */
+    bool group_signature_section;
 } MiniElfWriteSymbol;
 
 typedef struct MiniElfWriteRela {
@@ -136,20 +153,40 @@ typedef struct MiniElfWriteRela {
     size_t symbol_index;
     uint32_t type;
     int64_t addend;
+    /* For SHT_REL, the implicit addend occupies exactly these bytes in the
+     * target Section. Zero remains valid for existing SHT_RELA clients. */
+    unsigned field_width;
+    bool use_section_symbol; /* generated STT_SECTION entry, not user symbol */
+    size_t section_symbol_index;
 } MiniElfWriteRela;
+
+typedef enum MiniElfRelocationFormat {
+    /* Preserve existing RV/AArch64/x86-64 RELA output by default. */
+    MINIELF_RELOC_FORMAT_RELA = 0,
+    MINIELF_RELOC_FORMAT_REL = 1
+} MiniElfRelocationFormat;
 
 typedef struct MiniElfRelocatableSpec {
     unsigned char elf_class;
     unsigned char data_encoding;
+    unsigned char osabi; /* GNU IFUNC/UNIQUE require ELFOSABI_GNU */
     uint16_t machine;
     uint32_t flags;
+    /* Object-format policy is supplied by the Target profile. In SHT_REL
+     * the explicit addend is installed in section contents, then omitted
+     * from each relocation entry (e.g. Intel386 System V ELF32). */
+    MiniElfRelocationFormat relocation_format;
     const MiniElfWriteSection *sections;
     size_t section_count;
     const MiniElfWriteSymbol *symbols;
     size_t symbol_count;
     const MiniElfWriteRela *relocations;
     size_t relocation_count;
+    /* Permit relocations against generated STT_SECTION symbols. The writer
+     * emits only sections actually referenced by use_section_symbol fixups,
+     * not an artificial symbol for every input section. */
     bool emit_section_symbols;
+    bool emit_all_section_symbols; /* opt-in GNU AArch64 STT_SECTION policy */
 } MiniElfRelocatableSpec;
 
 bool minielf_build_relocatable(const MiniElfRelocatableSpec *spec,

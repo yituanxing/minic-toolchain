@@ -1,10 +1,22 @@
 #include "minias_internal.h"
+#include "riscv_fixup_kinds.h"
+#include "riscv_profile.h"
+#include "riscv_target.h"
 
 #include <ctype.h>
 #include <errno.h>
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
+
+/* These are retained RISC-V pseudo forms, not instruction word templates.
+ * MCInst.encoding is reserved for actual target encoding bits. */
+enum {
+    RV_PSEUDO_LI_WIDE = 1U,
+    RV_PSEUDO_LI_SIGNED32,
+    RV_PSEUDO_LLA,
+    RV_PSEUDO_LA
+};
 
 static int reg_number(const char *name) {
     static const struct {
@@ -102,39 +114,6 @@ static bool parse_fp_rounding_mode(const char *text, uint32_t *mode) {
     return false;
 }
 
-static bool is_fp_binary_single(const char *op) {
-    return strcmp(op, "fadd.s") == 0 || strcmp(op, "fsub.s") == 0 ||
-           strcmp(op, "fmul.s") == 0 || strcmp(op, "fdiv.s") == 0;
-}
-
-static bool is_fp_binary_double(const char *op) {
-    return strcmp(op, "fadd.d") == 0 || strcmp(op, "fsub.d") == 0 ||
-           strcmp(op, "fmul.d") == 0 || strcmp(op, "fdiv.d") == 0;
-}
-
-static bool is_fp_compare_double(const char *op) {
-    return strcmp(op, "feq.d") == 0 || strcmp(op, "flt.d") == 0 ||
-           strcmp(op, "fle.d") == 0;
-}
-
-static bool is_fp_convert(const char *op) {
-    return strcmp(op, "fcvt.d.w") == 0 || strcmp(op, "fcvt.d.wu") == 0 ||
-           strcmp(op, "fcvt.d.l") == 0 || strcmp(op, "fcvt.d.lu") == 0 ||
-           strcmp(op, "fcvt.w.d") == 0 || strcmp(op, "fcvt.wu.d") == 0 ||
-           strcmp(op, "fcvt.l.d") == 0 || strcmp(op, "fcvt.lu.d") == 0 ||
-           strcmp(op, "fcvt.d.s") == 0 || strcmp(op, "fcvt.s.d") == 0;
-}
-
-static bool fp_convert_int_to_double(const char *op) {
-    return strcmp(op, "fcvt.d.w") == 0 || strcmp(op, "fcvt.d.wu") == 0 ||
-           strcmp(op, "fcvt.d.l") == 0 || strcmp(op, "fcvt.d.lu") == 0;
-}
-
-static bool fp_convert_double_to_int(const char *op) {
-    return strcmp(op, "fcvt.w.d") == 0 || strcmp(op, "fcvt.wu.d") == 0 ||
-           strcmp(op, "fcvt.l.d") == 0 || strcmp(op, "fcvt.lu.d") == 0;
-}
-
 static int vector_reg_number(const char *name) {
     char *end = NULL;
     long value;
@@ -183,248 +162,12 @@ static bool decode_vector_unit_stride(const char *op,
     return true;
 }
 
-typedef struct MiniAsConstExpressionParser {
-    const char *cursor;
-} MiniAsConstExpressionParser;
-
-static void skip_const_space(MiniAsConstExpressionParser *parser) {
-    while (*parser->cursor == ' ' || *parser->cursor == '\t') {
-        ++parser->cursor;
-    }
-}
-
-static bool parse_const_or(MiniAsConstExpressionParser *parser, uint64_t *value);
-
-static bool parse_const_primary(MiniAsConstExpressionParser *parser,
-                                uint64_t *value) {
-    char *end = NULL;
-    unsigned long long parsed;
-
-    skip_const_space(parser);
-    if (*parser->cursor == '(') {
-        ++parser->cursor;
-        if (!parse_const_or(parser, value)) {
-            return false;
-        }
-        skip_const_space(parser);
-        if (*parser->cursor != ')') {
-            return false;
-        }
-        ++parser->cursor;
-        return true;
-    }
-
-    errno = 0;
-    parsed = strtoull(parser->cursor, &end, 0);
-    if (errno != 0 || end == parser->cursor) {
-        return false;
-    }
-    parser->cursor = end;
-    *value = (uint64_t)parsed;
-    return true;
-}
-
-static bool parse_const_unary(MiniAsConstExpressionParser *parser,
-                              uint64_t *value) {
-    skip_const_space(parser);
-    if (*parser->cursor == '+') {
-        ++parser->cursor;
-        return parse_const_unary(parser, value);
-    }
-    if (*parser->cursor == '-') {
-        uint64_t operand;
-        ++parser->cursor;
-        if (!parse_const_unary(parser, &operand)) {
-            return false;
-        }
-        *value = UINT64_C(0) - operand;
-        return true;
-    }
-    if (*parser->cursor == '~') {
-        uint64_t operand;
-        ++parser->cursor;
-        if (!parse_const_unary(parser, &operand)) {
-            return false;
-        }
-        *value = ~operand;
-        return true;
-    }
-    return parse_const_primary(parser, value);
-}
-
-static bool parse_const_mul(MiniAsConstExpressionParser *parser,
-                            uint64_t *value) {
-    uint64_t result;
-
-    if (!parse_const_unary(parser, &result)) {
-        return false;
-    }
-    for (;;) {
-        char op;
-        uint64_t rhs;
-
-        skip_const_space(parser);
-        op = *parser->cursor;
-        if (op != '*' && op != '/' && op != '%') {
-            break;
-        }
-        ++parser->cursor;
-        if (!parse_const_unary(parser, &rhs)) {
-            return false;
-        }
-        if (op == '*') {
-            result *= rhs;
-        } else {
-            if (rhs == 0U) {
-                return false;
-            }
-            result = op == '/' ? result / rhs : result % rhs;
-        }
-    }
-    *value = result;
-    return true;
-}
-
-static bool parse_const_sum(MiniAsConstExpressionParser *parser,
-                            uint64_t *value) {
-    uint64_t result;
-
-    if (!parse_const_mul(parser, &result)) {
-        return false;
-    }
-    for (;;) {
-        char op;
-        uint64_t rhs;
-
-        skip_const_space(parser);
-        op = *parser->cursor;
-        if (op != '+' && op != '-') {
-            break;
-        }
-        ++parser->cursor;
-        if (!parse_const_mul(parser, &rhs)) {
-            return false;
-        }
-        result = op == '+' ? result + rhs : result - rhs;
-    }
-    *value = result;
-    return true;
-}
-
-static bool parse_const_shift(MiniAsConstExpressionParser *parser,
-                              uint64_t *value) {
-    uint64_t result;
-
-    if (!parse_const_sum(parser, &result)) {
-        return false;
-    }
-    for (;;) {
-        bool left;
-        uint64_t rhs;
-
-        skip_const_space(parser);
-        if (strncmp(parser->cursor, "<<", 2U) == 0) {
-            left = true;
-        } else if (strncmp(parser->cursor, ">>", 2U) == 0) {
-            left = false;
-        } else {
-            break;
-        }
-        parser->cursor += 2;
-        if (!parse_const_sum(parser, &rhs) || rhs >= 64U) {
-            return false;
-        }
-        result = left ? result << (unsigned int)rhs
-                      : result >> (unsigned int)rhs;
-    }
-    *value = result;
-    return true;
-}
-
-static bool parse_const_and(MiniAsConstExpressionParser *parser,
-                            uint64_t *value) {
-    uint64_t result;
-
-    if (!parse_const_shift(parser, &result)) {
-        return false;
-    }
-    for (;;) {
-        uint64_t rhs;
-        skip_const_space(parser);
-        if (*parser->cursor != '&' || parser->cursor[1] == '&') {
-            break;
-        }
-        ++parser->cursor;
-        if (!parse_const_shift(parser, &rhs)) {
-            return false;
-        }
-        result &= rhs;
-    }
-    *value = result;
-    return true;
-}
-
-static bool parse_const_xor(MiniAsConstExpressionParser *parser,
-                            uint64_t *value) {
-    uint64_t result;
-
-    if (!parse_const_and(parser, &result)) {
-        return false;
-    }
-    for (;;) {
-        uint64_t rhs;
-        skip_const_space(parser);
-        if (*parser->cursor != '^') {
-            break;
-        }
-        ++parser->cursor;
-        if (!parse_const_and(parser, &rhs)) {
-            return false;
-        }
-        result ^= rhs;
-    }
-    *value = result;
-    return true;
-}
-
-static bool parse_const_or(MiniAsConstExpressionParser *parser,
-                           uint64_t *value) {
-    uint64_t result;
-
-    if (!parse_const_xor(parser, &result)) {
-        return false;
-    }
-    for (;;) {
-        uint64_t rhs;
-        skip_const_space(parser);
-        if (*parser->cursor != '|' || parser->cursor[1] == '|') {
-            break;
-        }
-        ++parser->cursor;
-        if (!parse_const_xor(parser, &rhs)) {
-            return false;
-        }
-        result |= rhs;
-    }
-    *value = result;
-    return true;
-}
-
-static bool parse_const_expression_bits(const char *text, uint64_t *value) {
-    MiniAsConstExpressionParser parser;
-
-    parser.cursor = text;
-    if (!parse_const_or(&parser, value)) {
-        return false;
-    }
-    skip_const_space(&parser);
-    return *parser.cursor == '\0';
-}
-
+/* Integer constant expressions are parsed by the shared assembler
+ * evaluator; no second target-specific grammar or precedence table. */
 static bool parse_i64(const char *text, int64_t *value) {
     uint64_t bits;
 
-    if (!parse_const_expression_bits(text, &bits)) {
+    if (!minias_eval_u64_expression(text, &bits)) {
         return false;
     }
     *value = (int64_t)bits;
@@ -483,7 +226,7 @@ static bool parse_li_bits(const char *text,
         }
     }
 
-    if (!parse_const_expression_bits(text, bits)) {
+    if (!minias_eval_u64_expression(text, bits)) {
         return false;
     }
     *signed_value = (int64_t)*bits;
@@ -506,80 +249,15 @@ static bool rv32_li_value(uint64_t bits, int64_t *result) {
     return true;
 }
 
-static uint32_t li64_materialized_size(uint64_t bits) {
-    int byte_index = 7;
-    uint32_t instructions = 1U;
-    int i;
-
-    while (byte_index > 0 &&
-           ((bits >> ((unsigned int)byte_index * 8U)) & UINT64_C(0xff)) == 0U) {
-        --byte_index;
-    }
-    for (i = byte_index - 1; i >= 0; --i) {
-        uint64_t byte = (bits >> ((unsigned int)i * 8U)) & UINT64_C(0xff);
-        ++instructions;
-        if (byte != 0U) {
-            ++instructions;
-        }
-    }
-    return instructions * 4U;
-}
-
 static bool parse_csr_numeric_expression(const char *text, uint32_t *csr) {
-    const char *cursor = text;
-    char *end = NULL;
-    unsigned long long result;
-
-    while (*cursor == ' ' || *cursor == '\t') {
-        ++cursor;
-    }
-    errno = 0;
-    result = strtoull(cursor, &end, 0);
-    if (errno != 0 || end == cursor) {
+    uint64_t value;
+    /* CSR immediates use the same constant-expression grammar as other
+     * integer operands. The target boundary only checks the 12-bit range;
+     * no independent arithmetic parser or overflow rules live here. */
+    if (!minias_eval_u64_expression(text, &value) || value > 0xfffU)
         return false;
-    }
-    cursor = end;
-
-    for (;;) {
-        char op;
-        unsigned long long term;
-
-        while (*cursor == ' ' || *cursor == '\t') {
-            ++cursor;
-        }
-        if (*cursor == '\0') {
-            if (result > 0xfffULL) {
-                return false;
-            }
-            *csr = (uint32_t)result;
-            return true;
-        }
-        op = *cursor;
-        if (op != '+' && op != '-') {
-            return false;
-        }
-        ++cursor;
-        while (*cursor == ' ' || *cursor == '\t') {
-            ++cursor;
-        }
-        errno = 0;
-        term = strtoull(cursor, &end, 0);
-        if (errno != 0 || end == cursor) {
-            return false;
-        }
-        if (op == '+') {
-            if (term > UINT64_MAX - result) {
-                return false;
-            }
-            result += term;
-        } else {
-            if (term > result) {
-                return false;
-            }
-            result -= term;
-        }
-        cursor = end;
-    }
+    *csr = (uint32_t)value;
+    return true;
 }
 
 static bool parse_csr(const char *text, uint32_t *csr) {
@@ -632,22 +310,16 @@ static bool parse_fence_set(const char *text, uint32_t *mask) {
 }
 
 
-static bool decode_amo_mnemonic(const char *op,
-                                uint32_t *funct5,
-                                uint32_t *width_funct3,
-                                uint32_t *ordering_bits) {
-    char core[64];
+/* AMO and LR/SC share one suffix grammar and one set of ordering bits.
+ * The caller only selects the operation's funct5/operand layout. */
+static bool rv_decode_atomic_suffix(const char *op, char *core, size_t cap,
+                                    uint32_t *width_funct3,
+                                    uint32_t *ordering_bits) {
     size_t n;
-    const char *suffix = NULL;
-
-    if (op == NULL || funct5 == NULL || width_funct3 == NULL ||
-        ordering_bits == NULL) {
-        return false;
-    }
+    if (op == NULL || core == NULL || width_funct3 == NULL ||
+        ordering_bits == NULL) return false;
     n = strlen(op);
-    if (n == 0U || n >= sizeof(core)) {
-        return false;
-    }
+    if (n == 0U || n >= cap) return false;
     memcpy(core, op, n + 1U);
 
     *ordering_bits = 0U;
@@ -663,41 +335,39 @@ static bool decode_amo_mnemonic(const char *op,
     }
 
     n = strlen(core);
-    if (n < 3U || core[n - 2U] != '.') {
+    if (n < 3U || core[n - 2U] != '.' ||
+        (core[n - 1U] != 'w' && core[n - 1U] != 'd'))
         return false;
-    }
-    suffix = core + n - 2U;
-    if (strcmp(suffix, ".w") == 0) {
-        *width_funct3 = 2U;
-    } else if (strcmp(suffix, ".d") == 0) {
-        *width_funct3 = 3U;
-    } else {
-        return false;
-    }
+    *width_funct3 = core[n - 1U] == 'w' ? 2U : 3U;
     core[n - 2U] = '\0';
-
-    if (strcmp(core, "amoadd") == 0) {
-        *funct5 = 0x00U;
-    } else if (strcmp(core, "amoswap") == 0) {
-        *funct5 = 0x01U;
-    } else if (strcmp(core, "amoxor") == 0) {
-        *funct5 = 0x04U;
-    } else if (strcmp(core, "amoor") == 0) {
-        *funct5 = 0x08U;
-    } else if (strcmp(core, "amoand") == 0) {
-        *funct5 = 0x0cU;
-    } else if (strcmp(core, "amomin") == 0) {
-        *funct5 = 0x10U;
-    } else if (strcmp(core, "amomax") == 0) {
-        *funct5 = 0x14U;
-    } else if (strcmp(core, "amominu") == 0) {
-        *funct5 = 0x18U;
-    } else if (strcmp(core, "amomaxu") == 0) {
-        *funct5 = 0x1cU;
-    } else {
-        return false;
-    }
     return true;
+}
+
+static bool decode_amo_mnemonic(const char *op,
+                                uint32_t *funct5,
+                                uint32_t *width_funct3,
+                                uint32_t *ordering_bits) {
+    static const struct {
+        const char *name;
+        uint32_t funct5;
+    } forms[] = {
+        {"amoadd", 0x00U}, {"amoswap", 0x01U},
+        {"amoxor", 0x04U}, {"amoor", 0x08U},
+        {"amoand", 0x0cU}, {"amomin", 0x10U},
+        {"amomax", 0x14U}, {"amominu", 0x18U},
+        {"amomaxu", 0x1cU}
+    };
+    char core[64];
+    size_t i;
+    if (funct5 == NULL ||
+        !rv_decode_atomic_suffix(op,core,sizeof(core),
+                                 width_funct3,ordering_bits))return false;
+    for(i=0U;i<sizeof(forms)/sizeof(forms[0]);++i) {
+        if(strcmp(core,forms[i].name)!=0)continue;
+        *funct5=forms[i].funct5;
+        return true;
+    }
+    return false;
 }
 
 static bool decode_lr_sc_mnemonic(const char *op,
@@ -705,44 +375,9 @@ static bool decode_lr_sc_mnemonic(const char *op,
                                   uint32_t *width_funct3,
                                   uint32_t *ordering_bits) {
     char core[32];
-    size_t n;
-    const char *suffix;
-
-    if (op == NULL || is_lr == NULL || width_funct3 == NULL ||
-        ordering_bits == NULL) {
-        return false;
-    }
-    n = strlen(op);
-    if (n == 0U || n >= sizeof(core)) {
-        return false;
-    }
-    memcpy(core, op, n + 1U);
-
-    *ordering_bits = 0U;
-    if (n > 5U && strcmp(core + n - 5U, ".aqrl") == 0) {
-        core[n - 5U] = '\0';
-        *ordering_bits = (1U << 26U) | (1U << 25U);
-    } else if (n > 3U && strcmp(core + n - 3U, ".aq") == 0) {
-        core[n - 3U] = '\0';
-        *ordering_bits = 1U << 26U;
-    } else if (n > 3U && strcmp(core + n - 3U, ".rl") == 0) {
-        core[n - 3U] = '\0';
-        *ordering_bits = 1U << 25U;
-    }
-
-    n = strlen(core);
-    if (n < 3U || core[n - 2U] != '.') {
-        return false;
-    }
-    suffix = core + n - 2U;
-    if (strcmp(suffix, ".w") == 0) {
-        *width_funct3 = 2U;
-    } else if (strcmp(suffix, ".d") == 0) {
-        *width_funct3 = 3U;
-    } else {
-        return false;
-    }
-    core[n - 2U] = '\0';
+    if (is_lr == NULL ||
+        !rv_decode_atomic_suffix(op,core,sizeof(core),
+                                 width_funct3,ordering_bits))return false;
 
     if (strcmp(core, "lr") == 0) {
         *is_lr = true;
@@ -755,53 +390,23 @@ static bool decode_lr_sc_mnemonic(const char *op,
     return false;
 }
 
-static size_t split_operands(const char *args, char out[][128], size_t max_out) {
-    size_t count = 0U;
-    size_t pos = 0U;
-    int depth = 0;
-    char quote = '\0';
-    const char *p;
-
-    if (args == NULL || *args == '\0') {
-        return 0U;
+static bool split_operands(const char *args, char out[][128],
+                           size_t max_out, size_t *count) {
+    char *slots[8];
+    size_t capacities[8],i;
+    unsigned parsed=0U;
+    if(count==NULL || max_out==0U || max_out>8U)return false;
+    *count=0U;
+    memset(out,0,max_out*sizeof(out[0]));
+    if(args==NULL || *args=='\0')return true;
+    for(i=0U;i<max_out;++i) {
+        slots[i]=out[i];
+        capacities[i]=sizeof(out[i]);
     }
-    memset(out, 0, max_out * 128U);
-    for (p = args;; ++p) {
-        char ch = *p;
-        bool at_end = ch == '\0';
-
-        if (!at_end && quote != '\0') {
-            if (ch == quote) {
-                quote = '\0';
-            }
-        } else if (!at_end && (ch == '\'' || ch == '"')) {
-            quote = ch;
-        } else if (!at_end && ch == '(') {
-            ++depth;
-        } else if (!at_end && ch == ')') {
-            --depth;
-        }
-        if (at_end || (ch == ',' && depth == 0 && quote == '\0')) {
-            while (pos > 0U &&
-                   (out[count][pos - 1U] == ' ' || out[count][pos - 1U] == '\t')) {
-                --pos;
-            }
-            out[count][pos] = '\0';
-            ++count;
-            pos = 0U;
-            if (at_end || count == max_out) {
-                break;
-            }
-            continue;
-        }
-        if (count < max_out && pos + 1U < 128U) {
-            if (pos == 0U && (ch == ' ' || ch == '\t')) {
-                continue;
-            }
-            out[count][pos++] = ch;
-        }
-    }
-    return count;
+    if(!minias_split_mc_operands(args,slots,capacities,
+                                  (unsigned)max_out,&parsed))return false;
+    *count=parsed;
+    return true;
 }
 
 static uint32_t enc_r(uint32_t opcode,
@@ -817,14 +422,6 @@ static uint32_t enc_r(uint32_t opcode,
 static uint32_t enc_i(uint32_t opcode, int rd, uint32_t funct3, int rs1, int64_t imm) {
     return opcode | ((uint32_t)rd << 7U) | (funct3 << 12U) |
            ((uint32_t)rs1 << 15U) | (((uint32_t)imm & 0xfffU) << 20U);
-}
-
-static uint32_t enc_s(uint32_t funct3, int rs1, int rs2, int64_t imm) {
-    uint32_t value = (uint32_t)imm & 0xfffU;
-
-    return 0x23U | ((value & 0x1fU) << 7U) | (funct3 << 12U) |
-           ((uint32_t)rs1 << 15U) | ((uint32_t)rs2 << 20U) |
-           (((value >> 5U) & 0x7fU) << 25U);
 }
 
 static uint32_t enc_b(uint32_t funct3, int rs1, int rs2, int64_t off) {
@@ -852,7 +449,7 @@ static bool append_u16(MiniAs *as, int section, uint16_t value) {
 
     bytes[0] = (unsigned char)(value & 0xffU);
     bytes[1] = (unsigned char)((value >> 8U) & 0xffU);
-    return minias_section_append(as, section, bytes, sizeof(bytes));
+    return minias_emit_instruction_bytes(as, section, bytes, sizeof(bytes));
 }
 
 static bool append_u32(MiniAs *as, int section, uint32_t value) {
@@ -862,27 +459,72 @@ static bool append_u32(MiniAs *as, int section, uint32_t value) {
     bytes[1] = (unsigned char)((value >> 8U) & 0xffU);
     bytes[2] = (unsigned char)((value >> 16U) & 0xffU);
     bytes[3] = (unsigned char)((value >> 24U) & 0xffU);
-    return minias_section_append(as, section, bytes, sizeof(bytes));
+    return minias_emit_instruction_bytes(as, section, bytes, sizeof(bytes));
 }
 
-static bool require_reg(MiniAs *as, const MiniAsStmt *stmt, const char *text, int *out) {
-    int value = reg_number(text);
-
-    if (value < 0) {
-        minias_set_error(as, "bad-register:%s:line=%zu", text, stmt->line);
+/* A single RV LI.D/LI.W materialization plan supplies BOTH retained-MCInst
+ * measurement and emitted machine bytes. Previously their independent
+ * 32/64-bit heuristic branches could silently disagree when a new encoding
+ * alternative changed the number of words after layout. At most 15 words:
+ * leading ADDI + seven shifts and seven nonzero-byte ADDIs. */
+static bool rv_materialize_li(MiniAs *as, const MiniAsStmt *stmt,
+                              uint32_t words[16], unsigned *count) {
+    const MiniAsMCInst *m = stmt->mcinst;
+    const uint64_t bits = m->operands[1].immediate;
+    const int64_t signed_value = (int64_t)m->operands[2].immediate;
+    const bool fits_signed32 = m->target_form == RV_PSEUDO_LI_SIGNED32;
+    const int rd = (int)m->operands[0].reg;
+    int64_t hi, lo;
+    *count = 0U;
+    if (m->target_form != RV_PSEUDO_LI_SIGNED32 &&
+        m->target_form != RV_PSEUDO_LI_WIDE) {
+        minias_set_error(as, "internal:riscv-li-invalid-form");
         return false;
     }
-    *out = value;
-    return true;
-}
-
-static bool require_imm(MiniAs *as,
-                        const MiniAsStmt *stmt,
-                        const char *text,
-                        int64_t *out) {
-    if (!parse_i64(text, out)) {
-        minias_set_error(as, "unsupported-expression:%s:line=%zu", text, stmt->line);
-        return false;
+    if (MINIAS_RV_STATE(as)->target_xlen == 32U) {
+        int64_t value;
+        if (!rv32_li_value(bits, &value)) {
+            minias_set_error(as, "rv32i-li-overflows-32-bits:line=%zu",
+                             stmt->line);
+            return false;
+        }
+        if (value >= -2048 && value <= 2047) {
+            words[(*count)++] = enc_i(0x13U, rd, 0U, 0, value);
+            return true;
+        }
+        hi = (value + INT64_C(2048)) >> 12;
+        lo = value - hi * INT64_C(4096);
+        words[(*count)++] = 0x37U | ((uint32_t)rd << 7U) |
+                            (((uint32_t)hi & UINT32_C(0xfffff)) << 12U);
+        if (lo != 0) words[(*count)++] = enc_i(0x13U, rd, 0U, rd, lo);
+        return true;
+    }
+    if (fits_signed32) {
+        if (signed_value >= -2048 && signed_value <= 2047) {
+            words[(*count)++] = enc_i(0x13U, rd, 0U, 0, signed_value);
+            return true;
+        }
+        hi = (signed_value + INT64_C(2048)) >> 12;
+        lo = signed_value - hi * INT64_C(4096);
+        words[(*count)++] = 0x37U | ((uint32_t)rd << 7U) |
+                            (((uint32_t)hi & UINT32_C(0xfffff)) << 12U);
+        words[(*count)++] = enc_i(0x1bU, rd, 0U, rd, lo);
+        return true;
+    }
+    {
+        int index = 7, i;
+        uint64_t top;
+        while (index > 0 &&
+               ((bits >> ((unsigned)index * 8U)) & UINT64_C(0xff)) == 0U)
+            --index;
+        top = (bits >> ((unsigned)index * 8U)) & UINT64_C(0xff);
+        words[(*count)++] = enc_i(0x13U, rd, 0U, 0, (int64_t)top);
+        for (i = index - 1; i >= 0; --i) {
+            uint64_t byte = (bits >> ((unsigned)i * 8U)) & UINT64_C(0xff);
+            words[(*count)++] = enc_i(0x13U, rd, 1U, rd, 8);
+            if (byte != 0U)
+                words[(*count)++] = enc_i(0x13U, rd, 0U, rd, (int64_t)byte);
+        }
     }
     return true;
 }
@@ -977,6 +619,54 @@ static bool parse_mem(const char *text, int64_t *offset, char base[128]) {
     return parse_i64(offbuf, offset);
 }
 
+/* GCC's non-PIC absolute-address sequence is two independently relocated
+ * instructions (LUI %hi and an I/S-form %lo), not a PC-relative LA pseudo.
+ * Preserve its symbol/addend in an owned MC operand until final emission. */
+static bool parse_absolute_modifier(const char *text, const char *modifier,
+                                    MiniAsSymbolExpr *expr) {
+    size_t prefix, length;
+    char inner[128];
+    if (text == NULL || modifier == NULL || expr == NULL) return false;
+    prefix = strlen(modifier);
+    length = strlen(text);
+    if (length <= prefix + 1U ||
+        strncmp(text, modifier, prefix) != 0 ||
+        text[length - 1U] != ')' ||
+        length - prefix - 1U >= sizeof(inner)) return false;
+    memcpy(inner, text + prefix, length - prefix - 1U);
+    inner[length - prefix - 1U] = '\0';
+    return minias_parse_symbol_addend(inner, expr);
+}
+
+static bool parse_absolute_lo_memory(const char *text,
+                                     MiniAsSymbolExpr *expr,
+                                     char base[128]) {
+    const char *after_expr, *end;
+    size_t prefix_length, register_length;
+    char modifier[128];
+    if (text == NULL || strncmp(text, "%lo(", 4U) != 0) return false;
+    after_expr = strchr(text + 4U, ')');
+    if (after_expr == NULL || after_expr[1] != '(') return false;
+    end = strchr(after_expr + 2U, ')');
+    if (end == NULL || end[1] != '\0') return false;
+    prefix_length = (size_t)(after_expr - text + 1);
+    register_length = (size_t)(end - (after_expr + 2U));
+    if (prefix_length >= sizeof(modifier) ||
+        register_length == 0U || register_length >= 128U) return false;
+    memcpy(modifier, text, prefix_length);
+    modifier[prefix_length] = '\0';
+    memcpy(base, after_expr + 2U, register_length);
+    base[register_length] = '\0';
+    return parse_absolute_modifier(modifier, "%lo(", expr);
+}
+
+enum {
+    RV_ABS_RELOC_NONE = 0U,
+    RV_ABS_RELOC_HI20,
+    RV_ABS_RELOC_LO12_I,
+    RV_ABS_RELOC_LO12_S
+};
+
 static bool parse_raw_insn_directive(const char *args, uint32_t *word) {
     const char *p = args;
     char format;
@@ -1002,7 +692,7 @@ static bool parse_raw_insn_directive(const char *args, uint32_t *word) {
     while (*p == ' ' || *p == '\t') {
         ++p;
     }
-    count = split_operands(p, operands, 8U);
+    if(!split_operands(p,operands,8U,&count))return false;
 
     if (format == 'r') {
         if (count != 6U ||
@@ -1046,15 +736,17 @@ static bool parse_raw_insn_directive(const char *args, uint32_t *word) {
     return true;
 }
 
-static bool parse_call_target(const char *text, MiniAsSymbolExpr *expr) {
+static bool parse_call_target(const char *text, MiniAsSymbolExpr *expr,
+                              MiniAsRiscvSymbolModifier *modifier) {
     char normalized[256];
     char *plt;
     char *suffix;
     size_t length;
 
-    if (text == NULL || expr == NULL) {
+    if (text == NULL || expr == NULL || modifier == NULL) {
         return false;
     }
+    *modifier = MINIAS_RV_SYM_NONE;
     length = strlen(text);
     if (length >= sizeof(normalized)) {
         return false;
@@ -1069,1948 +761,1807 @@ static bool parse_call_target(const char *text, MiniAsSymbolExpr *expr) {
             return false;
         }
         memmove(plt, suffix, strlen(suffix) + 1U);
+        *modifier = MINIAS_RV_SYM_PLT;
     }
     return minias_parse_symbol_addend(normalized, expr);
 }
 
-bool minias_riscv_measure(unsigned strict_i_xlen,
-                          const char *op,
-                          const char *args,
-                          uint32_t *size,
-                          char *reason,
-                          size_t reason_size) {
-    char operands[8][128];
-    size_t count = split_operands(args, operands, 8U);
+/* Retain only a stable parse-time SymbolNameId and addend in MCInst. Common
+ * does not create a real ELF Symbol until a definition or Fixup commit; this
+ * preserves ELF encounter order while layout can resolve current values. */
+static bool rv_bind_symbol_operand(MiniAs *as, MiniAsMCInst *m,
+                                   unsigned index,
+                                   const MiniAsSymbolExpr *parsed) {
+    MiniAsSymbolRef *ref;
+    if (index >= m->capacity) {
+        minias_set_error(as, "internal:riscv-symbol-operand-index");
+        return false;
+    }
+    ref = malloc(sizeof(*ref));
+    if (ref == NULL) {
+        minias_set_error(as, "out-of-memory:riscv-bound-symbol");
+        return false;
+    }
+    if (!minias_bind_symbol_ref(as, parsed, ref)) {
+        free(ref);
+        return false;
+    }
+    m->operands[index].bound_symbol = ref;
+    m->operands[index].kind = MINIAS_MC_BOUND_SYMBOL;
+    return true;
+}
+
+/* A single canonical 32-bit word builder serves RVC selection and emission.
+ * RVC rejects relocation-bearing forms because their I/U fields have a
+ * different psABI contract; ELF emission retains the zero-immediate word
+ * placeholder and attaches the typed Fixup afterward. */
+static bool rv_scalar_machine_word(const MiniAsMCInst *m,
+                                   bool allow_reloc_placeholder,
+                                   uint32_t *word) {
+    uint32_t base=m->encoding;
+    int rd,rs1=0,rs2=0,rs3=0;
+    int64_t imm=0;
+    if (m->opcode == RV_MC_LI) {
+        const MiniAsRiscvLiPlan *plan=m->target_payload;
+        if (plan==NULL || plan->count!=1U) return false;
+        *word=plan->words[0];
+        return true;
+    }
+    if ((!allow_reloc_placeholder && m->target_form!=RV_ABS_RELOC_NONE) ||
+        m->count==0U) return false;
+    rd=(int)m->operands[0].reg;
+    if(m->count>1U && m->operands[1].kind==MINIAS_MC_REGISTER)
+        rs1=(int)m->operands[1].reg;
+    else if(m->opcode==RV_MC_WORD && m->count>1U &&
+            m->operands[1].kind==MINIAS_MC_IMMEDIATE)
+        rs1=(int)m->operands[1].immediate;
+    if(m->count>2U && m->operands[2].kind==MINIAS_MC_REGISTER)
+        rs2=(int)m->operands[2].reg;
+    if(m->count>2U && m->operands[2].kind==MINIAS_MC_IMMEDIATE)
+        imm=(int64_t)m->operands[2].immediate;
+    if(m->count>3U && m->operands[3].kind==MINIAS_MC_REGISTER)
+        rs3=(int)m->operands[3].reg;
+    switch(m->opcode) {
+    case RV_MC_WORD:
+        *word=base|((uint32_t)rd<<7U)|((uint32_t)rs1<<15U)|
+              ((uint32_t)rs2<<20U)|((uint32_t)rs3<<27U);
+        return true;
+    case RV_MC_R:
+        *word=enc_r(base&0x7fU,rd,(base>>12U)&7U,rs1,rs2,base>>25U);
+        return true;
+    case RV_MC_I:
+    case RV_MC_LOAD:
+        if(m->opcode==RV_MC_I && m->count==2U)
+            imm=(int64_t)m->operands[1].immediate;
+        *word=base|((uint32_t)rd<<7U)|((uint32_t)rs1<<15U)|
+              (((uint32_t)imm&0xfffU)<<20U);
+        return true;
+    case RV_MC_STORE: {
+        uint32_t bits=(uint32_t)imm&0xfffU;
+        *word=base|((uint32_t)rd<<20U)|((uint32_t)rs1<<15U)|
+              ((bits&31U)<<7U)|(((bits>>5U)&127U)<<25U);
+        return true;
+    }
+    case RV_MC_U:
+        *word=base|((uint32_t)rd<<7U)|
+              (((uint32_t)m->operands[1].immediate&0xfffffU)<<12U);
+        return true;
+    default:
+        return false;
+    }
+}
+
+static bool rv_rvc_encode_plain(const MiniAs *as, const MiniAsStmt *stmt,
+                                 uint16_t *compressed) {
+    const MiniAsRiscvState *state=MINIAS_RV_STATE(as);
+    const MiniAsMCInst *m=stmt->mcinst;
+    uint32_t w,op,rd,rs1,rs2,f3,imm12;
+    int32_t imm;
+    uint16_t out;
+    if(state==NULL || !state->isa_explicit ||
+       (state->isa_features&RISCV_ISA_C)==0U ||
+       (stmt->site.mode_bits&MINIAS_RISCV_OPTION_NO_RVC)!=0U ||
+       m==NULL || !rv_scalar_machine_word(m,false,&w))return false;
+    op=w&127U;
+    rd=(w>>7U)&31U;
+    f3=(w>>12U)&7U;
+    rs1=(w>>15U)&31U;
+    rs2=(w>>20U)&31U;
+    imm12=(w>>20U)&4095U;
+    imm=(int32_t)((imm12^2048U)-2048U);
+    out=0U;
+    if(op==0x13U && f3==0U) { /* ADDI, LI, MV and ADDI16SP */
+        if(rd==0U && rs1==0U && imm==0)out=0x0001U;
+        else if(rd!=0U && rs1==0U && imm>=-32 && imm<=31)
+            out=(uint16_t)(0x4001U|(rd<<7U)|
+                  (((uint32_t)imm&32U)<<7U)|(((uint32_t)imm&31U)<<2U));
+        else if(rd!=0U && rs1==rd && imm!=0 && imm>=-32 && imm<=31)
+            out=(uint16_t)(0x0001U|(rd<<7U)|
+                  (((uint32_t)imm&32U)<<7U)|(((uint32_t)imm&31U)<<2U));
+        else if(rd==2U && rs1==2U && imm!=0 && imm>=-512 &&
+                imm<=496 && (imm&15)==0)
+            out=(uint16_t)(0x6101U|
+                  (((uint32_t)imm>>9U&1U)<<12U)|
+                  (((uint32_t)imm>>4U&1U)<<6U)|
+                  (((uint32_t)imm>>6U&1U)<<5U)|
+                  (((uint32_t)imm>>7U&3U)<<3U)|
+                  (((uint32_t)imm>>5U&1U)<<2U));
+        else if(rd!=0U && rs1!=0U && rd!=rs1 && imm==0)
+            out=(uint16_t)(0x8002U|(rd<<7U)|(rs1<<2U));
+    } else if(op==0x1bU && f3==0U && rd==rs1 && rd!=0U &&
+              imm>=-32 && imm<=31)
+        out=(uint16_t)(0x2001U|(rd<<7U)|
+              (((uint32_t)imm&32U)<<7U)|(((uint32_t)imm&31U)<<2U));
+    else if(op==0x67U && f3==0U && imm==0 && rs1!=0U &&
+            (rd==0U || rd==1U))
+        out=(uint16_t)((rd==0U?0x8002U:0x9002U)|(rs1<<7U));
+    else if(op==0x3bU && (f3==0U) && rd>=8U && rd<=15U &&
+            rd==rs1 && rs2>=8U && rs2<=15U &&
+            ((w>>25U)==0U || (w>>25U)==32U))
+        out=(uint16_t)(((w>>25U)==0U?0x9c21U:0x9c01U)|
+                       ((rd-8U)<<7U)|((rs2-8U)<<2U));
+    else if((op==0x03U && (f3==2U || f3==3U)) ||
+            (op==0x23U && (f3==2U || f3==3U))) {
+        bool load=op==0x03U;
+        bool word=f3==2U;
+        uint32_t reg=load?rd:rs2;
+        uint32_t uimm=load?imm12:
+            (((w>>25U)&127U)<<5U)|((w>>7U)&31U);
+        if(uimm>2047U || (uimm&(word?3U:7U))!=0U) return false;
+        if(rs1==2U && (!load || reg!=0U)) {
+            if(word && uimm<=252U) {
+                if(load)out=(uint16_t)(0x4002U|(reg<<7U)|
+                    (((uimm>>5U)&1U)<<12U)|(((uimm>>2U)&7U)<<4U)|
+                    (((uimm>>6U)&3U)<<2U));
+                else out=(uint16_t)(0xc002U|(reg<<2U)|
+                    (((uimm>>2U)&15U)<<9U)|(((uimm>>6U)&3U)<<7U));
+            } else if(!word && uimm<=504U) {
+                if(load)out=(uint16_t)(0x6002U|(reg<<7U)|
+                    (((uimm>>5U)&1U)<<12U)|(((uimm>>3U)&3U)<<5U)|
+                    (((uimm>>6U)&7U)<<2U));
+                else out=(uint16_t)(0xe002U|(reg<<2U)|
+                    (((uimm>>3U)&7U)<<10U)|(((uimm>>6U)&7U)<<7U));
+            }
+        } else if(rs1>=8U && rs1<=15U && reg>=8U && reg<=15U) {
+            uint16_t prefix=(uint16_t)((load?(word?0x4000U:0x6000U):
+                                             (word?0xc000U:0xe000U))|
+                                        ((rs1-8U)<<7U)|((reg-8U)<<2U));
+            if(word && uimm<=124U)
+                out=(uint16_t)(prefix|(((uimm>>3U)&7U)<<10U)|
+                                      (((uimm>>2U)&1U)<<6U)|
+                                      (((uimm>>6U)&1U)<<5U));
+            else if(!word && uimm<=248U)
+                out=(uint16_t)(prefix|(((uimm>>3U)&7U)<<10U)|
+                                      (((uimm>>6U)&3U)<<5U));
+        }
+    }
+    if(out==0U)return false;
+    *compressed=out;
+    return true;
+}
+
+/* Branch width is initially selected from the ISA/register form; MCLayout
+ * may grow a short form if its eventual target is out of C range. */
+static bool rv_rvc_branch_form(const MiniAs *as,const MiniAsStmt *stmt,
+                                bool *jump) {
+    const MiniAsRiscvState *state=MINIAS_RV_STATE(as);
+    const MiniAsMCInst *m=stmt->mcinst;
+    if(state==NULL || !state->isa_explicit ||
+       (state->isa_features&RISCV_ISA_C)==0U ||
+       (stmt->site.mode_bits&MINIAS_RISCV_OPTION_NO_RVC)!=0U ||
+       m==NULL)return false;
+    if(m->opcode==RV_MC_JAL && m->operands[0].reg==0U) {
+        *jump=true;
+        return true;
+    }
+    if(m->opcode==RV_MC_BRANCH &&
+       ((m->encoding>>12U)&7U)<=1U &&
+       m->operands[0].reg>=8U && m->operands[0].reg<=15U &&
+       m->operands[1].reg==0U) {
+        *jump=false;
+        return true;
+    }
+    return false;
+}
+
+static uint16_t rv_rvc_branch_bits(int64_t d,unsigned rs1,bool neq) {
+    uint32_t bits=(uint32_t)d;
+    return (uint16_t)((neq?0xe001U:0xc001U)|
+           ((rs1-8U)<<7U)|(((bits>>8U)&1U)<<12U)|
+           (((bits>>3U)&3U)<<10U)|(((bits>>6U)&3U)<<5U)|
+           (((bits>>1U)&3U)<<3U)|(((bits>>5U)&1U)<<2U));
+}
+
+static uint16_t rv_rvc_jump_bits(int64_t d) {
+    uint32_t bits=(uint32_t)d;
+    return (uint16_t)(0xa001U|(((bits>>11U)&1U)<<12U)|
+           (((bits>>4U)&1U)<<11U)|(((bits>>8U)&3U)<<9U)|
+           (((bits>>10U)&1U)<<8U)|(((bits>>6U)&1U)<<7U)|
+           (((bits>>7U)&1U)<<6U)|(((bits>>1U)&7U)<<3U)|
+           (((bits>>5U)&1U)<<2U));
+}
+
+/* Measure the actual persisted target instruction. The layout driver
+ * invokes this once after operand parsing and before placement. Neither
+ * symbol spelling nor source-level expression grammar is revisited. */
+bool minias_riscv_measure_mcinst(MiniAs *as, const MiniAsStmt *stmt,
+                                 uint32_t *size) {
+    const MiniAsMCInst *m = stmt->mcinst;
+    uint16_t compressed;
+    bool compressed_jump;
+    if (m == NULL) {
+        minias_set_error(as, "unsupported-instruction:%s:line=%zu",
+                         stmt->op, stmt->line);
+        return false;
+    }
+    if(rv_rvc_encode_plain(as,stmt,&compressed)) {
+        *size=2U;
+        return true;
+    }
+    if(rv_rvc_branch_form(as,stmt,&compressed_jump)) {
+        *size=2U;
+        return true;
+    }
+    switch (m->opcode) {
+        case RV_MC_C16:
+            *size = 2U;
+            return true;
+        case RV_MC_SYMBOL_LOAD:
+        case RV_MC_SYMBOL_STORE:
+        case RV_MC_CALL:
+        case RV_MC_TAIL:
+        case RV_MC_LA:
+            *size = 8U;
+            return true;
+        case RV_MC_LI: {
+            const MiniAsRiscvLiPlan *plan = m->target_payload;
+            if (plan == NULL) {
+                minias_set_error(as, "internal:riscv-li-plan-missing:line=%zu",
+                                 stmt->line);
+                return false;
+            }
+            *size = plan->count * 4U;
+            return true;
+        }
+        default:
+            *size = 4U;
+            return true;
+    }
+}
+
+/* Fixed-width instruction syntax is owned by this one Target descriptor,
+ * rather than rediscovered from mnemonic spellings during operand parsing.
+ * These bits affect only RISC-V operand lowering, not Common MC semantics. */
+typedef enum RvMCFormFlags {
+    RV_FORM_DEFAULT=0U,
+    RV_FORM_TWO_OPERANDS=1U<<0,
+    RV_FORM_FIXED_IMMEDIATE=1U<<1,
+    RV_FORM_ALT_IMMEDIATE=1U<<2,
+    RV_FORM_NEGATE_IMMEDIATE=1U<<3,
+    RV_FORM_ARITH_IMMEDIATE=1U<<4,
+    RV_FORM_SHIFT_IMMEDIATE=1U<<5,
+    RV_FORM_SWAP_SOURCES=1U<<6,
+    RV_FORM_BRANCH_ZERO=1U<<7,
+    RV_FORM_BRANCH_ZERO_RS1=1U<<8,
+    RV_FORM_BRANCH_REVERSE=1U<<9,
+    RV_FORM_JAL_ZERO_RD=1U<<10,
+    RV_FORM_REV8_XLEN=1U<<11,
+    RV_FORM_HI_RELOCATION=1U<<12
+} RvMCFormFlags;
+
+/* RISC-V's fixed-width integer ALU, memory and control transfer forms.
+ * Encodings and parser form policy are one Target-owned table; feature and
+ * XLEN restrictions remain independent of the source spelling. */
+typedef struct RvMCDesc {
+    const char *name;
+    unsigned family;
+    uint32_t base;
+    uint64_t required_features;
+    bool rv64_only;
+    unsigned form_flags;
+} RvMCDesc;
+#define RVD(name, group, base) {name, RV_MC_##group, base, 0U, false, RV_FORM_DEFAULT}
+#define RVDF(name, group, base, flags) {name, RV_MC_##group, base, 0U, false, flags}
+#define RVM(name, group, base) {name, RV_MC_##group, base, RISCV_ISA_M, false, RV_FORM_DEFAULT}
+#define RVM64(name, group, base) {name, RV_MC_##group, base, RISCV_ISA_M, true, RV_FORM_DEFAULT}
+#define RV64(name, group, base) {name, RV_MC_##group, base, 0U, true, RV_FORM_DEFAULT}
+#define RV64F(name, group, base, flags) {name, RV_MC_##group, base, 0U, true, flags}
+#define RVZF(name, group, base, flags) {name, RV_MC_##group, base, RISCV_ISA_ZBB, false, flags}
+#define RV_ALT RV_FORM_ALT_IMMEDIATE
+#define RV_SHIFT RV_FORM_SHIFT_IMMEDIATE
+#define RV_TWO (RV_FORM_TWO_OPERANDS|RV_FORM_FIXED_IMMEDIATE)
+static const RvMCDesc rv_mc_table[] = {
+    RVDF("add",R,0x00000033U,RV_ALT),
+    RVDF("sub",R,0x40000033U,RV_ALT|RV_FORM_NEGATE_IMMEDIATE),
+    RVDF("sll",R,0x00001033U,RV_ALT|RV_SHIFT),
+    RVD("slt",R,0x00002033U), RVD("sltu",R,0x00003033U),
+    RVDF("xor",R,0x00004033U,RV_ALT),
+    RVDF("srl",R,0x00005033U,RV_ALT|RV_SHIFT),
+    RVDF("sra",R,0x40005033U,RV_ALT|RV_SHIFT|RV_FORM_ARITH_IMMEDIATE),
+    RVDF("or",R,0x00006033U,RV_ALT),
+    RVDF("and",R,0x00007033U,RV_ALT),
+    RVM("mul",R,0x02000033U), RVM("mulh",R,0x02001033U),
+    RVM("mulhu",R,0x02003033U), RVM("div",R,0x02004033U),
+    RVM("divu",R,0x02005033U), RVM("rem",R,0x02006033U),
+    RVM("remu",R,0x02007033U),
+    RV64("addw",R,0x0000003bU), RV64("subw",R,0x4000003bU),
+    RV64("sllw",R,0x0000103bU), RV64("srlw",R,0x0000503bU),
+    RV64("sraw",R,0x4000503bU),
+    RVM64("mulw",R,0x0200003bU), RVM64("divw",R,0x0200403bU),
+    RVM64("divuw",R,0x0200503bU), RVM64("remw",R,0x0200603bU),
+    RVM64("remuw",R,0x0200703bU),
+    RVDF("sgt",R,0x00002033U,RV_FORM_SWAP_SOURCES),
+    RVDF("sgtu",R,0x00003033U,RV_FORM_SWAP_SOURCES),
+    RVD("addi",I,0x00000013U), RV64("addiw",I,0x0000001bU),
+    RVD("slti",I,0x00002013U), RVD("sltiu",I,0x00003013U),
+    RVD("xori",I,0x00004013U), RVD("ori",I,0x00006013U),
+    RVD("andi",I,0x00007013U),
+    RVDF("slli",I,0x00001013U,RV_SHIFT),
+    RVDF("srli",I,0x00005013U,RV_SHIFT),
+    RVDF("srai",I,0x40005013U,RV_SHIFT),
+    RV64F("slliw",I,0x0000101bU,RV_SHIFT),
+    RV64F("srliw",I,0x0000501bU,RV_SHIFT),
+    RV64F("sraiw",I,0x4000501bU,RV_SHIFT),
+    RV64F("sext.w",I,0x0000001bU,RV_TWO),
+    RVZF("orc.b",I,0x28705013U,RV_TWO),
+    RVZF("rev8",I,0x6b805013U,RV_TWO|RV_FORM_REV8_XLEN),
+    RVZF("ctz",I,0x60101013U,RV_TWO),
+    RVD("lb",LOAD,0x00000003U), RVD("lh",LOAD,0x00001003U),
+    RVD("lw",LOAD,0x00002003U), RV64("ld",LOAD,0x00003003U),
+    RVD("lbu",LOAD,0x00004003U), RVD("lhu",LOAD,0x00005003U),
+    RV64("lwu",LOAD,0x00006003U),
+    RVD("sb",STORE,0x00000023U), RVD("sh",STORE,0x00001023U),
+    RVD("sw",STORE,0x00002023U), RV64("sd",STORE,0x00003023U),
+    RVDF("lui",U,0x00000037U,RV_FORM_HI_RELOCATION),
+    RVD("auipc",U,0x00000017U),
+    RVD("beq",BRANCH,0x00000063U), RVD("bne",BRANCH,0x00001063U),
+    RVD("blt",BRANCH,0x00004063U), RVD("bge",BRANCH,0x00005063U),
+    RVD("bltu",BRANCH,0x00006063U), RVD("bgeu",BRANCH,0x00007063U),
+    RVDF("beqz",BRANCH,0x00000063U,RV_FORM_BRANCH_ZERO),
+    RVDF("bnez",BRANCH,0x00001063U,RV_FORM_BRANCH_ZERO),
+    RVDF("bltz",BRANCH,0x00004063U,RV_FORM_BRANCH_ZERO),
+    RVDF("bgez",BRANCH,0x00005063U,RV_FORM_BRANCH_ZERO),
+    RVDF("bgtz",BRANCH,0x00004063U,RV_FORM_BRANCH_ZERO|RV_FORM_BRANCH_ZERO_RS1),
+    RVDF("blez",BRANCH,0x00005063U,RV_FORM_BRANCH_ZERO|RV_FORM_BRANCH_ZERO_RS1),
+    RVDF("bgt",BRANCH,0x00004063U,RV_FORM_BRANCH_REVERSE),
+    RVDF("ble",BRANCH,0x00005063U,RV_FORM_BRANCH_REVERSE),
+    RVDF("bgtu",BRANCH,0x00006063U,RV_FORM_BRANCH_REVERSE),
+    RVDF("bleu",BRANCH,0x00007063U,RV_FORM_BRANCH_REVERSE),
+    RVDF("j",JAL,0x0000006fU,RV_FORM_JAL_ZERO_RD),
+    RVD("jal",JAL,0x0000006fU)
+};
+#undef RV_ALT
+#undef RV_SHIFT
+#undef RV_TWO
+#undef RVDF
+#undef RVM
+#undef RVM64
+#undef RV64
+#undef RV64F
+#undef RVZF
+#undef RVD
+
+static const RvMCDesc *rv_find_mc_descriptor(const char *mnemonic) {
+    size_t index;
+    for (index = 0U; index < sizeof(rv_mc_table) / sizeof(rv_mc_table[0]);
+         ++index)
+        if (strcmp(mnemonic, rv_mc_table[index].name) == 0)
+            return &rv_mc_table[index];
+    return NULL;
+}
+
+/* All target instruction families now construct retained MCInst operands.
+ * Fixed-width descriptors share the same typed parse/measure/encode path;
+ * variable-size pseudos use the RISC-V-owned lowering and sizing plan. */
+static void rv_set_reg(MiniAsMCOperand *op, int num) {
+    op->kind = MINIAS_MC_REGISTER;
+    op->reg = (unsigned)num;
+}
+static void rv_set_imm(MiniAsMCOperand *op, int64_t num) {
+    op->kind = MINIAS_MC_IMMEDIATE;
+    op->immediate = (uint64_t)num;
+}
+
+/* Only this Target knows ISA operand shape. Common owns MC operand lifetime,
+ * while the encoder consumes canonical rd/rs1/rs2/symbol fields. */
+
+/* All of these instructions are one machine word. Parse target operands
+ * once and retain individual architectural registers in MCInst; preserve
+ * CSR numbers, vector vtype, and memory/AMO width in the opcode template.
+ * No source string is accessed by the final instruction writer. */
+static bool rv_mc_word(MiniAs *as, MiniAsStmt *stmt,
+                       uint32_t skeleton, int rd, int rs1, int rs2) {
+    MiniAsMCInst *m = minias_mcinst_alloc(3U);
+    if (m == NULL) {
+        minias_set_error(as, "out-of-memory:riscv-word-mcinst");
+        return false;
+    }
+    m->opcode = RV_MC_WORD;
+    m->encoding = skeleton;
+    m->count = 3U;
+    rv_set_reg(&m->operands[0], rd);
+    rv_set_reg(&m->operands[1], rs1);
+    rv_set_reg(&m->operands[2], rs2);
+    stmt->mcinst = m;
+    return true;
+}
+
+static bool rv_mc_vector_word(MiniAs *as, MiniAsStmt *stmt,
+                               uint32_t base, int vd, int rs1) {
+    if (!rv_mc_word(as, stmt, base, vd, rs1, 0)) return false;
+    stmt->mcinst->operands[0].reg_class = MINIAS_MC_REG_VECTOR;
+    return true;
+}
+
+/* A dynamic form returns its accepted ISA/XLEN contract from the very parse
+ * that selected the machine encoding. The registry supplies the base policy;
+ * parsers specialize it for suffix-dependent widths/FP formats. There is no
+ * second mnemonic decode after an MCInst has been constructed. */
+typedef struct RvParsedIsaPolicy RvParsedIsaPolicy;
+typedef bool (*RvFormParser)(MiniAs *, MiniAsStmt *, char [][128], size_t,
+                             RvParsedIsaPolicy *);
+typedef enum RvSimpleFormKind {
+    RV_SIMPLE_NONE,
+    RV_SIMPLE_ZERO,
+    RV_SIMPLE_TWO_REG,
+    RV_SIMPLE_JR,
+    RV_SIMPLE_FCSR_READ,
+    RV_SIMPLE_FCSR_REG,
+    RV_SIMPLE_FCSR_IMMEDIATE
+} RvSimpleFormKind;
+typedef struct RvParseForm {
+    const char *spelling;
+    RvFormParser parse;
+    bool prefix;
+    uint64_t required_features;
+    bool rv64_only;
+    RvSimpleFormKind simple_kind;
+    uint32_t simple_encoding;
+    uint16_t compressed_encoding;
+    bool source_in_rs2;
+} RvParseForm;
+
+struct RvParsedIsaPolicy {
+    uint64_t required_features;
+    bool rv64_only;
+    bool handled;
+    const RvParseForm *selected_form;
+};
+
+/* Common integer, supervisor, CSR aliases and compressed instructions share
+ * typed MCInst ownership.  Multiword, position-dependent pseudos also retain
+ * an instruction; the Target supplies their expansion-size plan. */
+static bool rv_parse_simple_mc(MiniAs *as, MiniAsStmt *stmt,
+                               char ops[][128], size_t n,
+                               RvParsedIsaPolicy *policy) {
+    const char *op = stmt->op;
+    const RvParseForm *selected = policy->selected_form;
+    int rd=0,rs1=0,rs2=0;
+    int64_t imm=0;
+    uint32_t pred=15U,succ=15U;
+    char base[128];
+    policy->handled = true;
+
+    /* Form lookup has already selected the only spelling/encoding/ISA
+     * authority. Do not recognize these aliases again with a second chain
+     * of mnemonic tests during operand lowering. */
+    if (selected != NULL && selected->simple_kind != RV_SIMPLE_NONE) {
+        if (selected->simple_kind >= RV_SIMPLE_FCSR_READ) {
+            unsigned csr = selected->simple_encoding;
+            if (selected->simple_kind == RV_SIMPLE_FCSR_READ) {
+                if (n != 1U || (rd = reg_number(ops[0])) < 0) goto invalid;
+                return rv_mc_word(as, stmt, (csr << 20U) | 0x2073U,
+                                  rd, 0, 0);
+            }
+            if (n != 1U && n != 2U) goto invalid;
+            if (n == 2U && (rd = reg_number(ops[0])) < 0) goto invalid;
+            if (selected->simple_kind == RV_SIMPLE_FCSR_IMMEDIATE) {
+                if (!parse_i64(ops[n-1U], &imm) || imm < 0 || imm > 31)
+                    goto invalid;
+                if (!rv_mc_word(as, stmt, (csr << 20U) | 0x5073U,
+                                rd, (int)imm, 0)) return false;
+                rv_set_imm(&stmt->mcinst->operands[1], imm);
+                return true;
+            }
+            if ((rs1 = reg_number(ops[n-1U])) < 0) goto invalid;
+            return rv_mc_word(as, stmt, (csr << 20U) | 0x1073U,
+                              rd, rs1, 0);
+        }
+        if (selected->simple_kind == RV_SIMPLE_ZERO) {
+            if (n != 0U) goto invalid;
+            if (selected->compressed_encoding != 0U &&
+                MINIAS_RV_STATE(as)->isa_explicit &&
+                (MINIAS_RV_STATE(as)->isa_features & RISCV_ISA_C) != 0U &&
+                (MINIAS_RV_STATE(as)->options & MINIAS_RISCV_OPTION_NO_RVC) == 0U) {
+                MiniAsMCInst *m = minias_mcinst_alloc(0U);
+                if (m == NULL) goto oom;
+                m->opcode = RV_MC_C16;
+                m->encoding = selected->compressed_encoding;
+                stmt->mcinst = m;
+                return true;
+            }
+            return rv_mc_word(as, stmt, selected->simple_encoding, 0, 0, 0);
+        }
+        if (selected->simple_kind == RV_SIMPLE_JR) {
+            if (n != 1U || (rs1 = reg_number(ops[0])) < 0) goto invalid;
+            return rv_mc_word(as, stmt, selected->simple_encoding, 0, rs1, 0);
+        }
+        if (n != 2U || (rd = reg_number(ops[0])) < 0 ||
+            (rs1 = reg_number(ops[1])) < 0) goto invalid;
+        return rv_mc_word(as, stmt, selected->simple_encoding, rd,
+                          selected->source_in_rs2 ? 0 : rs1,
+                          selected->source_in_rs2 ? rs1 : 0);
+    }
 
     if (strcmp(op, ".insn") == 0) {
+        MiniAsMCInst *m;
         uint32_t word;
-        if (!parse_raw_insn_directive(args, &word)) {
-            (void)snprintf(reason, reason_size, "bad-operands:.insn:%s", args);
-            return false;
-        }
-        (void)word;
-        *size = 4U;
+        if (!parse_raw_insn_directive(stmt->args, &word)) goto invalid;
+        m = minias_mcinst_alloc(0U);
+        if (m == NULL) goto oom;
+        m->opcode = RV_MC_RAW;
+        m->encoding = word;
+        stmt->mcinst = m;
         return true;
     }
-
-    if (strcmp(op, "lb") == 0 || strcmp(op, "lbu") == 0 ||
-        strcmp(op, "lh") == 0 || strcmp(op, "lhu") == 0 ||
-        strcmp(op, "lw") == 0 || strcmp(op, "lwu") == 0 ||
-        strcmp(op, "ld") == 0) {
-        MiniAsSymbolExpr expr;
-        if (count == 2U && reg_number(operands[0]) >= 0 &&
-            minias_parse_symbol_addend(operands[1], &expr)) {
-            *size = 8U;
-            return true;
-        }
-    }
-
-    if (strcmp(op, "sb") == 0 || strcmp(op, "sh") == 0 ||
-        strcmp(op, "sw") == 0 || strcmp(op, "sd") == 0) {
-        MiniAsSymbolExpr expr;
-        if (count == 3U && reg_number(operands[0]) >= 0 &&
-            minias_parse_symbol_addend(operands[1], &expr) &&
-            reg_number(operands[2]) >= 0) {
-            *size = 8U;
-            return true;
-        }
-    }
-
-    if (strcmp(op, "c.li") == 0) {
-        int64_t imm;
-        int rd;
-        if (count != 2U || (rd = reg_number(operands[0])) <= 0 ||
-            !parse_i64(operands[1], &imm) || imm < -32 || imm > 31) {
-            (void)snprintf(reason, reason_size, "bad-operands:c.li:%s", args);
-            return false;
-        }
-        *size = 2U;
+    if (strcmp(op,"c.li")==0) {
+        MiniAsMCInst *m;
+        if(n!=2U || (rd=reg_number(ops[0]))<=0 ||
+           !parse_i64(ops[1],&imm) || imm < -32 || imm > 31)
+            goto invalid;
+        m=minias_mcinst_alloc(2U);
+        if(m==NULL)goto oom;
+        m->opcode=RV_MC_C16;
+        m->encoding=(2U<<13U) |
+                    (((uint32_t)imm>>5U&1U)<<12U) |
+                    ((uint32_t)rd<<7U) |
+                    (((uint32_t)imm&31U)<<2U) | 1U;
+        m->count=2U;
+        rv_set_reg(&m->operands[0],rd);
+        rv_set_imm(&m->operands[1],imm);
+        stmt->mcinst=m;
         return true;
     }
-
-    if (is_fp_binary_single(op) || is_fp_binary_double(op)) {
-        uint32_t rounding_mode;
-        if ((count != 3U && count != 4U) ||
-            float_reg_number(operands[0]) < 0 ||
-            float_reg_number(operands[1]) < 0 ||
-            float_reg_number(operands[2]) < 0 ||
-            (count == 4U && !parse_fp_rounding_mode(operands[3], &rounding_mode))) {
-            (void)snprintf(reason, reason_size, "bad-operands:%s:%s", op, args);
-            return false;
-        }
-        *size = 4U;
-        return true;
+    if(strcmp(op,"fence")==0) {
+        if(n==2U) {
+            if(!parse_fence_set(ops[0],&pred)||
+               !parse_fence_set(ops[1],&succ))goto invalid;
+        }else if(n!=0U)goto invalid;
+        return rv_mc_word(as,stmt,0x0fU|((pred<<4U|succ)<<20U),0,0,0);
     }
-
-    if (strcmp(op, "fsgnjn.d") == 0) {
-        if (count != 3U || float_reg_number(operands[0]) < 0 ||
-            float_reg_number(operands[1]) < 0 ||
-            float_reg_number(operands[2]) < 0) {
-            (void)snprintf(reason, reason_size, "bad-operands:%s:%s", op, args);
-            return false;
-        }
-        *size = 4U;
-        return true;
+    if(strcmp(op,"sfence.vma")==0) {
+        if(n>2U ||
+           (n>=1U && (rs1=reg_number(ops[0]))<0) ||
+           (n==2U && (rs2=reg_number(ops[1]))<0))goto invalid;
+        return rv_mc_word(as,stmt,0x12000073U,0,rs1,rs2);
     }
-
-    if (is_fp_compare_double(op)) {
-        if (count != 3U || reg_number(operands[0]) < 0 ||
-            float_reg_number(operands[1]) < 0 ||
-            float_reg_number(operands[2]) < 0) {
-            (void)snprintf(reason, reason_size, "bad-operands:%s:%s", op, args);
-            return false;
-        }
-        *size = 4U;
-        return true;
+    if(strcmp(op,"jalr")==0) {
+        if(n==1U){rd=1;rs1=reg_number(ops[0]);}
+        else if(n==2U) {
+            rd=reg_number(ops[0]);
+            if(!parse_mem(ops[1],&imm,base))goto invalid;
+            rs1=reg_number(base);
+        }else if(n==3U) {
+            rd=reg_number(ops[0]);rs1=reg_number(ops[1]);
+            if(!parse_i64(ops[2],&imm))goto invalid;
+        }else goto invalid;
+        if(rd<0||rs1<0||imm< -2048||imm>2047)goto invalid;
+        return rv_mc_word(as,stmt,0x67U|(((uint32_t)imm&4095U)<<20U),
+                          rd,rs1,0);
     }
+    policy->handled=false;
+    return true;
+invalid:
+    minias_set_error(as,"bad-riscv-mcinst:%s:%s:line=%zu",
+                     op,stmt->args,stmt->line);
+    return false;
+oom:
+    minias_set_error(as,"out-of-memory:riscv-compressed-mcinst");
+    return false;
+}
 
-    if (strcmp(op, "fmv.x.d") == 0 || strcmp(op, "fmv.x.w") == 0) {
-        if (count != 2U || reg_number(operands[0]) < 0 ||
-            float_reg_number(operands[1]) < 0) {
-            (void)snprintf(reason, reason_size, "bad-operands:%s:%s", op, args);
-            return false;
-        }
-        *size = 4U;
-        return true;
-    }
 
-    if (strcmp(op, "fmv.d.x") == 0 || strcmp(op, "fmv.w.x") == 0) {
-        if (count != 2U || float_reg_number(operands[0]) < 0 ||
-            reg_number(operands[1]) < 0) {
-            (void)snprintf(reason, reason_size, "bad-operands:%s:%s", op, args);
-            return false;
-        }
-        *size = 4U;
-        return true;
-    }
-
-    if (is_fp_convert(op)) {
-        uint32_t rounding_mode;
-        bool registers_ok;
-
-        if (count != 2U && count != 3U) {
-            (void)snprintf(reason, reason_size, "bad-operands:%s:%s", op, args);
-            return false;
-        }
-        if (fp_convert_int_to_double(op)) {
-            registers_ok = float_reg_number(operands[0]) >= 0 &&
-                           reg_number(operands[1]) >= 0;
-        } else if (fp_convert_double_to_int(op)) {
-            registers_ok = reg_number(operands[0]) >= 0 &&
-                           float_reg_number(operands[1]) >= 0;
-        } else {
-            registers_ok = float_reg_number(operands[0]) >= 0 &&
-                           float_reg_number(operands[1]) >= 0;
-        }
-        if (!registers_ok ||
-            (count == 3U && !parse_fp_rounding_mode(operands[2], &rounding_mode))) {
-            (void)snprintf(reason, reason_size, "bad-operands:%s:%s", op, args);
-            return false;
-        }
-        *size = 4U;
-        return true;
-    }
-
-    if (strcmp(op, "fld") == 0 || strcmp(op, "flw") == 0 ||
-        strcmp(op, "fsd") == 0 || strcmp(op, "fsw") == 0) {
-        int64_t offset;
-        char base[128];
-        if (count != 2U || float_reg_number(operands[0]) < 0 ||
-            !parse_mem(operands[1], &offset, base) ||
-            reg_number(base) < 0 || offset < -2048 || offset > 2047) {
-            (void)snprintf(reason, reason_size, "bad-operands:%s:%s", op, args);
-            return false;
-        }
-        *size = 4U;
-        return true;
-    }
-
+/* GNU multiword pseudos retain one layout-sized fragment, but their
+ * registers, bit-patterns and symbolic expressions are parsed only once.
+ * The serializer must never re-split their original source strings. */
+static bool rv_parse_multi_mc(MiniAs *as, MiniAsStmt *stmt,
+                              char ops[][128], size_t n,
+                              RvParsedIsaPolicy *policy) {
+    const char *op = stmt->op;
+    MiniAsMCInst *m;
+    MiniAsSymbolExpr expr;
+    uint64_t bits = 0U;
+    bool fits = false;
+    int64_t signed_value = 0;
+    int rd = -1;
+    unsigned family, slots;
+    MiniAsRiscvSymbolModifier modifier = MINIAS_RV_SYM_NONE;
+    policy->handled = true;
     if (strcmp(op, "li") == 0) {
-        uint64_t bits;
-        bool fits_signed32;
-        int64_t signed_value;
+        if (n != 2U || (rd = reg_number(ops[0])) < 0 ||
+            !parse_li_bits(ops[1], &bits, &fits, &signed_value))
+            goto invalid;
+        family = RV_MC_LI;
+        slots = 3U;
+    } else if (strcmp(op, "call") == 0 || strcmp(op, "tail") == 0) {
+        if (n != 1U || !parse_call_target(ops[0], &expr, &modifier))
+            goto invalid;
+        family = strcmp(op, "call") == 0 ? RV_MC_CALL : RV_MC_TAIL;
+        slots = 1U;
+    } else if (strcmp(op, "lla") == 0 || strcmp(op, "la") == 0) {
+        if (n != 2U || (rd = reg_number(ops[0])) < 0 ||
+            !minias_parse_symbol_addend(ops[1], &expr)) goto invalid;
+        family = RV_MC_LA;
+        slots = 2U;
+    } else {
+        policy->handled = false;
+        return true;
+    }
+    m = minias_mcinst_alloc(slots);
+    if (m == NULL) {
+        minias_set_error(as, "out-of-memory:riscv-multi-mcinst");
+        return false;
+    }
+    m->opcode = family;
+    m->count = slots;
+    if (family == RV_MC_CALL || family == RV_MC_TAIL)
+        m->target_form = (uint32_t)modifier;
+    if (family == RV_MC_LI) {
+        m->target_form = fits ? RV_PSEUDO_LI_SIGNED32 : RV_PSEUDO_LI_WIDE;
+        rv_set_reg(&m->operands[0], rd);
+        rv_set_imm(&m->operands[1], (int64_t)bits);
+        rv_set_imm(&m->operands[2], signed_value);
+    } else {
+        unsigned symbol_index = family == RV_MC_LA ? 1U : 0U;
+        if (family == RV_MC_LA) {
+            rv_set_reg(&m->operands[0], rd);
+            m->target_form = strcmp(op, "la") == 0 ?
+                             RV_PSEUDO_LA : RV_PSEUDO_LLA;
+        }
+        if (!rv_bind_symbol_operand(as, m, symbol_index, &expr)) {
+            minias_mcinst_destroy(m);
+            return false;
+        }
+    }
+    stmt->mcinst = m;
+    if (family == RV_MC_LI) {
+        MiniAsRiscvLiPlan *plan = malloc(sizeof(*plan));
+        if (plan == NULL) {
+            minias_set_error(as, "out-of-memory:riscv-li-lowering-plan");
+            stmt->mcinst = NULL;
+            minias_mcinst_destroy(m);
+            return false;
+        }
+        /* The generic MCInst destructor owns the immutable Target payload.
+         * Re-layout never destroys/reparses the plan; source replay creates
+         * a fresh assembly with separately owned MCInst objects. */
+        m->target_payload = plan;
+        m->dispose_target_payload = free;
+        if (!rv_materialize_li(as, stmt, plan->words, &plan->count)) {
+            stmt->mcinst = NULL;
+            minias_mcinst_destroy(m);
+            return false;
+        }
+    }
+    return true;
+invalid:
+    minias_set_error(as, "bad-riscv-pseudo-mcinst:%s:%s:line=%zu",
+                     op, stmt->args, stmt->line);
+    return false;
+}
 
+static bool rv_parse_vector_mc(MiniAs *as, MiniAsStmt *stmt,
+                               char operands[][128], size_t count,
+                               RvParsedIsaPolicy *policy) {
+    bool store;
+    uint32_t width;
+    int vd, rs1, rs2;
+    char base[128];
+    int64_t off;
+    policy->handled = true;
+    if (decode_vector_unit_stride(stmt->op, &store, &width)) {
+        if ((count != 2U && count != 3U) ||
+            (count == 3U && strcmp(operands[2], "v0.t") != 0) ||
+            (vd = vector_reg_number(operands[0])) < 0 ||
+            !parse_mem(operands[1], &off, base) || off != 0 ||
+            (rs1 = reg_number(base)) < 0) goto invalid;
+        return rv_mc_vector_word(as, stmt, ((count == 2U ? 1U : 0U) << 25U) |
+                                 (width << 12U) |
+                                 (store ? 0x27U : 0x07U),
+                                 vd, rs1);
+    }
+    if (strcmp(stmt->op, "vmv.v.i") == 0) {
         if (count != 2U ||
-            !parse_li_bits(operands[1], &bits, &fits_signed32, &signed_value)) {
-            (void)snprintf(reason,
-                           reason_size,
-                           "unsupported-expression:%s",
-                           count >= 2U ? operands[1] : args);
-            return false;
-        }
-        if (strict_i_xlen == 32U) {
-            int64_t rv32_value;
-            int64_t high;
-            int64_t low;
-            if (!rv32_li_value(bits, &rv32_value)) {
-                (void)snprintf(reason, reason_size,
-                               "rv32i-li-overflows-32-bits:%s", operands[1]);
-                return false;
-            }
-            high = (rv32_value + INT64_C(2048)) >> 12;
-            low = rv32_value - high * INT64_C(4096);
-            *size = (rv32_value >= -2048 && rv32_value <= 2047) ||
-                    low == 0 ? 4U : 8U;
-        } else if (fits_signed32) {
-            *size = signed_value >= -2048 && signed_value <= 2047 ? 4U : 8U;
-        } else {
-            *size = li64_materialized_size(bits);
-        }
-        return true;
+            (vd = vector_reg_number(operands[0])) < 0 ||
+            !parse_i64(operands[1], &off) || off < -16 || off > 15)
+            goto invalid;
+        return rv_mc_vector_word(as, stmt, (0x17U << 26U) | (1U << 25U) |
+                                 (((uint32_t)off & 31U) << 15U) |
+                                 (3U << 12U) | 0x57U, vd, 0);
     }
-    if (strcmp(op, "lla") == 0 || strcmp(op, "la") == 0) {
-        MiniAsSymbolExpr expr;
-        if (count != 2U || reg_number(operands[0]) < 0 ||
-            !minias_parse_symbol_addend(operands[1], &expr)) {
-            (void)snprintf(reason, reason_size, "unsupported-expression:%s", args);
-            return false;
-        }
-        *size = 8U;
-        return true;
-    }
-    if (strcmp(op, "call") == 0) {
-        MiniAsSymbolExpr expr;
-        if (count != 1U || !parse_call_target(operands[0], &expr)) {
-            (void)snprintf(reason, reason_size, "unsupported-expression:%s", args);
-            return false;
-        }
-        *size = 8U;
-        return true;
-    }
-    if (strcmp(op, "tail") == 0) {
-        MiniAsSymbolExpr expr;
-        if (count != 1U || !parse_call_target(operands[0], &expr)) {
-            (void)snprintf(reason, reason_size, "unsupported-expression:%s", args);
-            return false;
-        }
-        *size = 8U;
-        return true;
-    }
-
-    {
-        bool vector_store;
-        uint32_t vector_width;
-        if (decode_vector_unit_stride(op, &vector_store, &vector_width)) {
-            int64_t offset;
-            char base[128];
-            bool mask_ok = count == 2U ||
-                           (count == 3U && strcmp(operands[2], "v0.t") == 0);
-            (void)vector_store;
-            (void)vector_width;
-            if (!mask_ok || vector_reg_number(operands[0]) < 0 ||
-                !parse_mem(operands[1], &offset, base) || offset != 0 ||
-                reg_number(base) < 0) {
-                (void)snprintf(reason,
-                               reason_size,
-                               "bad-operands:%s:%s",
-                               op,
-                               args);
-                return false;
-            }
-            *size = 4U;
-            return true;
-        }
-    }
-
-    if (strcmp(op, "orc.b") == 0 || strcmp(op, "rev8") == 0 ||
-        strcmp(op, "ctz") == 0) {
-        if (count != 2U || reg_number(operands[0]) < 0 ||
-            reg_number(operands[1]) < 0) {
-            (void)snprintf(reason, reason_size, "bad-operands:%s:%s", op, args);
-            return false;
-        }
-        *size = 4U;
-        return true;
-    }
-
-    if (strcmp(op, "vmv.v.i") == 0) {
-        int64_t imm;
-        if (count != 2U || vector_reg_number(operands[0]) < 0 ||
-            !parse_i64(operands[1], &imm) || imm < -16 || imm > 15) {
-            (void)snprintf(reason, reason_size, "bad-operands:vmv.v.i:%s", args);
-            return false;
-        }
-        *size = 4U;
-        return true;
-    }
-
-    if (strcmp(op, "vsetvli") == 0) {
-        uint32_t vtypei;
+    if (strcmp(stmt->op, "vsetvli") == 0) {
+        uint32_t vtype;
         if ((count != 5U && count != 6U) ||
-            reg_number(operands[0]) < 0 ||
-            reg_number(operands[1]) < 0 ||
-            !parse_vsetvli_vtype(operands, count, &vtypei)) {
-            (void)snprintf(reason, reason_size, "bad-operands:vsetvli:%s", args);
+            (vd = reg_number(operands[0])) < 0 ||
+            (rs1 = reg_number(operands[1])) < 0 ||
+            !parse_vsetvli_vtype(operands, count, &vtype)) goto invalid;
+        return rv_mc_word(as, stmt,
+                          (vtype << 20U) | (7U << 12U) | 0x57U,
+                          vd, rs1, 0);
+    }
+    if (strcmp(stmt->op, "vsetvl") == 0) {
+        if (count != 3U || (vd = reg_number(operands[0])) < 0 ||
+            (rs1 = reg_number(operands[1])) < 0 ||
+            (rs2 = reg_number(operands[2])) < 0) goto invalid;
+        return rv_mc_word(as, stmt, (0x40U << 25U) | (7U << 12U) | 0x57U,
+                          vd, rs1, rs2);
+    }
+    policy->handled = false;
+    return true;
+invalid:
+    minias_set_error(as, "bad-vector-mcinst:%s:%s:line=%zu",
+                     stmt->op, stmt->args, stmt->line);
+    return false;
+}
+
+static bool rv_parse_atomic_mc(MiniAs *as, MiniAsStmt *stmt,
+                               char operands[][128], size_t count,
+                               RvParsedIsaPolicy *policy) {
+    bool lr = false, recognized;
+    uint32_t width, ordering, funct5;
+    int rd, rs1, rs2;
+    char base[128];
+    int64_t off;
+    recognized = decode_lr_sc_mnemonic(stmt->op, &lr, &width, &ordering);
+    if (recognized) funct5 = lr ? 2U : 3U;
+    else recognized = decode_amo_mnemonic(stmt->op,
+                                          &funct5, &width, &ordering);
+    policy->handled = recognized;
+    if (!recognized) return true;
+    /* One width decoder drives both opcode bits and RV32/RV64 policy. */
+    policy->rv64_only = width == 3U;
+    if ((rd = count != 0U ? reg_number(operands[0]) : -1) < 0)
+        goto invalid;
+    if (lr) {
+        if (count != 2U || !parse_mem(operands[1], &off, base) ||
+            off != 0 || (rs1 = reg_number(base)) < 0) goto invalid;
+        rs2 = 0;
+    } else {
+        if (count != 3U || (rs2 = reg_number(operands[1])) < 0 ||
+            !parse_mem(operands[2], &off, base) ||
+            off != 0 || (rs1 = reg_number(base)) < 0) goto invalid;
+    }
+    return rv_mc_word(as, stmt, 0x2fU | (width << 12U) | ordering |
+                      (funct5 << 27U), rd, rs1, rs2);
+invalid:
+    minias_set_error(as, "bad-atomic-mcinst:%s:%s:line=%zu",
+                     stmt->op, stmt->args, stmt->line);
+    return false;
+}
+
+enum { RV_CSR_READ, RV_CSR_FULL, RV_CSR_ALIAS };
+typedef struct RvCsrDesc {
+    const char *name;
+    uint8_t funct3;
+    uint8_t shape;
+    bool immediate;
+} RvCsrDesc;
+static const RvCsrDesc rv_csr_forms[] = {
+    {"csrr",   2U, RV_CSR_READ,  false},
+    {"csrrw",  1U, RV_CSR_FULL,  false},
+    {"csrrs",  2U, RV_CSR_FULL,  false},
+    {"csrrc",  3U, RV_CSR_FULL,  false},
+    {"csrrwi", 5U, RV_CSR_FULL,  true},
+    {"csrrsi", 6U, RV_CSR_FULL,  true},
+    {"csrrci", 7U, RV_CSR_FULL,  true},
+    {"csrw",   1U, RV_CSR_ALIAS, false},
+    {"csrs",   2U, RV_CSR_ALIAS, false},
+    {"csrc",   3U, RV_CSR_ALIAS, false},
+    {"csrwi",  5U, RV_CSR_ALIAS, true},
+    {"csrsi",  6U, RV_CSR_ALIAS, true},
+    {"csrci",  7U, RV_CSR_ALIAS, true}
+};
+
+static const RvCsrDesc *rv_find_csr_form(const char *name) {
+    size_t i;
+    for (i = 0U; i < sizeof(rv_csr_forms) / sizeof(rv_csr_forms[0]); ++i)
+        if (strcmp(rv_csr_forms[i].name, name) == 0)
+            return &rv_csr_forms[i];
+    return NULL;
+}
+
+static bool rv_parse_csr_mc(MiniAs *as, MiniAsStmt *stmt,
+                            char operands[][128], size_t count,
+                            RvParsedIsaPolicy *policy) {
+    const RvCsrDesc *form = rv_find_csr_form(stmt->op);
+    const char *source = NULL;
+    uint32_t csr, funct3;
+    int rd = 0, rs1 = 0;
+    int64_t zimm;
+    bool immediate = false;
+
+    policy->handled = form != NULL;
+    if (form == NULL) return true;
+    funct3 = form->funct3;
+    if (form->shape == RV_CSR_READ) {
+        if (count != 2U || (rd = reg_number(operands[0])) < 0 ||
+            !parse_csr(operands[1], &csr)) goto invalid;
+    } else if (form->shape == RV_CSR_FULL) {
+        if (count != 3U || (rd = reg_number(operands[0])) < 0 ||
+            !parse_csr(operands[1], &csr)) goto invalid;
+        source = operands[2];
+    } else {
+        if (count != 2U || !parse_csr(operands[0], &csr)) goto invalid;
+        source = operands[1];
+    }
+    if (source != NULL) {
+        bool numeric = parse_i64(source, &zimm);
+        if (form->immediate || numeric) {
+            if (!numeric || zimm < 0 || zimm > 31)
+                goto invalid;
+            immediate = true;
+            if (!form->immediate) funct3 |= 4U;
+            rs1 = (int)zimm;
+        } else if ((rs1 = reg_number(source)) < 0) goto invalid;
+    }
+    if (!rv_mc_word(as, stmt, 0x73U | (funct3 << 12U) |
+                    (csr << 20U), rd, rs1, 0)) return false;
+    /* zimm occupies the same five instruction bits as rs1, but it is NOT
+     * an integer register and must not trip RV32E's x16..x31 restriction. */
+    if (immediate) rv_set_imm(&stmt->mcinst->operands[1], rs1);
+    return true;
+invalid:
+    minias_set_error(as, "bad-csr-mcinst:%s:%s:line=%zu",
+                     stmt->op, stmt->args, stmt->line);
+    return false;
+}
+
+
+static bool rv_mc_fp_word(MiniAs *as, MiniAsStmt *stmt,
+                          uint32_t base, int rd, int rs1, int rs2,
+                          unsigned fpr_mask) {
+    unsigned i;
+    if (!rv_mc_word(as, stmt, base, rd, rs1, rs2)) return false;
+    for (i = 0U; i < 3U; ++i)
+        if ((fpr_mask & (1U << i)) != 0U)
+            stmt->mcinst->operands[i].reg_class = MINIAS_MC_REG_FPR;
+    return true;
+}
+
+/* One target-owned FP form table is the authority for recognition, encoding,
+ * register classes, D-vs-F ISA feature, XLEN and optional rounding syntax.
+ * Previously each of these dimensions enumerated overlapping mnemonic
+ * lists; a new instruction could parse successfully but carry the wrong ISA
+ * policy.  FPR mask: bit 0=rd, bit 1=rs1, bit 2=rs2. */
+typedef enum RvFpKind {
+    RV_FP_BINARY, RV_FP_FUSED, RV_FP_R3_FIXED, RV_FP_ALIAS,
+    RV_FP_COMPARE, RV_FP_MOVE,
+    RV_FP_CONVERT, RV_FP_LOAD, RV_FP_STORE
+} RvFpKind;
+
+typedef struct RvFpDesc {
+    const char *name;
+    RvFpKind kind;
+    uint32_t encoding;
+    uint64_t required_features;
+    bool rv64_only;
+    unsigned fpr_mask;
+    unsigned default_rm;
+    bool swap_sources;
+} RvFpDesc;
+
+#define RVFP(name, kind, encoding, feature, only64, mask, rm) \
+    {name, RV_FP_##kind, encoding, RISCV_ISA_##feature, only64, mask, rm, false}
+#define RVFP_SWAPPED(name, encoding, feature) \
+    {name, RV_FP_COMPARE, encoding, RISCV_ISA_##feature, false, 6U, 0U, true}
+static const RvFpDesc rv_fp_forms[] = {
+    RVFP("fmadd.s",FUSED,0x00000043U,F,false,15U,7U),
+    RVFP("fmsub.s",FUSED,0x00000047U,F,false,15U,7U),
+    RVFP("fnmsub.s",FUSED,0x0000004bU,F,false,15U,7U),
+    RVFP("fnmadd.s",FUSED,0x0000004fU,F,false,15U,7U),
+    RVFP("fmadd.d",FUSED,0x02000043U,D,false,15U,7U),
+    RVFP("fmsub.d",FUSED,0x02000047U,D,false,15U,7U),
+    RVFP("fnmsub.d",FUSED,0x0200004bU,D,false,15U,7U),
+    RVFP("fnmadd.d",FUSED,0x0200004fU,D,false,15U,7U),
+    RVFP("fadd.s",BINARY,0x00000053U,F,false,7U,7U),
+    RVFP("fsub.s",BINARY,0x08000053U,F,false,7U,7U),
+    RVFP("fmul.s",BINARY,0x10000053U,F,false,7U,7U),
+    RVFP("fdiv.s",BINARY,0x18000053U,F,false,7U,7U),
+    RVFP("fsqrt.s",CONVERT,0x58000053U,F,false,3U,7U),
+    RVFP("fadd.d",BINARY,0x02000053U,D,false,7U,7U),
+    RVFP("fsub.d",BINARY,0x0a000053U,D,false,7U,7U),
+    RVFP("fmul.d",BINARY,0x12000053U,D,false,7U,7U),
+    RVFP("fdiv.d",BINARY,0x1a000053U,D,false,7U,7U),
+    RVFP("fsqrt.d",CONVERT,0x5a000053U,D,false,3U,7U),
+    RVFP("fsgnj.s",R3_FIXED,0x20000053U,F,false,7U,0U),
+    RVFP("fsgnjn.s",R3_FIXED,0x20001053U,F,false,7U,0U),
+    RVFP("fsgnjx.s",R3_FIXED,0x20002053U,F,false,7U,0U),
+    RVFP("fmin.s",R3_FIXED,0x28000053U,F,false,7U,0U),
+    RVFP("fmax.s",R3_FIXED,0x28001053U,F,false,7U,0U),
+    RVFP("fsgnj.d",R3_FIXED,0x22000053U,D,false,7U,0U),
+    RVFP("fsgnjn.d",R3_FIXED,0x22001053U,D,false,7U,0U),
+    RVFP("fsgnjx.d",R3_FIXED,0x22002053U,D,false,7U,0U),
+    RVFP("fmin.d",R3_FIXED,0x2a000053U,D,false,7U,0U),
+    RVFP("fmax.d",R3_FIXED,0x2a001053U,D,false,7U,0U),
+    /* GAS aliases retain the same ISA feature and FP register classes.
+     * The sign-injection operation intentionally reads the source twice. */
+    RVFP("fmv.s",ALIAS,0x20000053U,F,false,7U,0U),
+    RVFP("fneg.s",ALIAS,0x20001053U,F,false,7U,0U),
+    RVFP("fabs.s",ALIAS,0x20002053U,F,false,7U,0U),
+    RVFP("fmv.d",ALIAS,0x22000053U,D,false,7U,0U),
+    RVFP("fneg.d",ALIAS,0x22001053U,D,false,7U,0U),
+    RVFP("fabs.d",ALIAS,0x22002053U,D,false,7U,0U),
+    RVFP("feq.s",COMPARE,0xa0002053U,F,false,6U,0U),
+    RVFP("flt.s",COMPARE,0xa0001053U,F,false,6U,0U),
+    RVFP("fle.s",COMPARE,0xa0000053U,F,false,6U,0U),
+    RVFP("feq.d",COMPARE,0xa2002053U,D,false,6U,0U),
+    RVFP("flt.d",COMPARE,0xa2001053U,D,false,6U,0U),
+    RVFP("fle.d",COMPARE,0xa2000053U,D,false,6U,0U),
+    RVFP_SWAPPED("fgt.s",0xa0001053U,F),
+    RVFP_SWAPPED("fge.s",0xa0000053U,F),
+    RVFP_SWAPPED("fgt.d",0xa2001053U,D),
+    RVFP_SWAPPED("fge.d",0xa2000053U,D),
+    RVFP("fclass.s",MOVE,0xe0001053U,F,false,2U,0U),
+    RVFP("fclass.d",MOVE,0xe2001053U,D,false,2U,0U),
+    RVFP("fmv.x.d",MOVE,0xe2000053U,D,true,2U,0U),
+    RVFP("fmv.x.w",MOVE,0xe0000053U,F,false,2U,0U),
+    RVFP("fmv.d.x",MOVE,0xf2000053U,D,true,1U,0U),
+    RVFP("fmv.w.x",MOVE,0xf0000053U,F,false,1U,0U),
+    RVFP("fcvt.d.w",CONVERT,0xd2000053U,D,false,1U,0U),
+    RVFP("fcvt.d.wu",CONVERT,0xd2100053U,D,false,1U,0U),
+    RVFP("fcvt.d.l",CONVERT,0xd2200053U,D,true,1U,7U),
+    RVFP("fcvt.d.lu",CONVERT,0xd2300053U,D,true,1U,7U),
+    RVFP("fcvt.w.d",CONVERT,0xc2000053U,D,false,2U,7U),
+    RVFP("fcvt.wu.d",CONVERT,0xc2100053U,D,false,2U,7U),
+    RVFP("fcvt.l.d",CONVERT,0xc2200053U,D,true,2U,7U),
+    RVFP("fcvt.lu.d",CONVERT,0xc2300053U,D,true,2U,7U),
+    RVFP("fcvt.d.s",CONVERT,0x42000053U,D,false,3U,0U),
+    RVFP("fcvt.s.d",CONVERT,0x40100053U,D,false,3U,7U),
+    RVFP("fcvt.s.w",CONVERT,0xd0000053U,F,false,1U,7U),
+    RVFP("fcvt.s.wu",CONVERT,0xd0100053U,F,false,1U,7U),
+    RVFP("fcvt.s.l",CONVERT,0xd0200053U,F,true,1U,7U),
+    RVFP("fcvt.s.lu",CONVERT,0xd0300053U,F,true,1U,7U),
+    RVFP("fcvt.w.s",CONVERT,0xc0000053U,F,false,2U,7U),
+    RVFP("fcvt.wu.s",CONVERT,0xc0100053U,F,false,2U,7U),
+    RVFP("fcvt.l.s",CONVERT,0xc0200053U,F,true,2U,7U),
+    RVFP("fcvt.lu.s",CONVERT,0xc0300053U,F,true,2U,7U),
+    RVFP("flw",LOAD,0x00002007U,F,false,1U,0U),
+    RVFP("fld",LOAD,0x00003007U,D,false,1U,0U),
+    RVFP("fsw",STORE,0x00002027U,F,false,1U,0U),
+    RVFP("fsd",STORE,0x00003027U,D,false,1U,0U)
+};
+#undef RVFP
+#undef RVFP_SWAPPED
+
+static const RvFpDesc *rv_find_fp_form(const char *op) {
+    size_t i;
+    for (i = 0U; i < sizeof(rv_fp_forms) / sizeof(rv_fp_forms[0]); ++i)
+        if (strcmp(rv_fp_forms[i].name, op) == 0)
+            return &rv_fp_forms[i];
+    return NULL;
+}
+
+static bool rv_parse_fp_mc(MiniAs *as, MiniAsStmt *stmt,
+                            char operands[][128], size_t count,
+                            RvParsedIsaPolicy *policy) {
+    const RvFpDesc *form = rv_find_fp_form(stmt->op);
+    uint32_t base, rm;
+    int rd = -1, rs1 = -1, rs2 = 0;
+    char memory_base[128];
+    int64_t offset;
+    MiniAsSymbolExpr absolute_expr;
+    bool absolute_lo = false;
+    if (form == NULL) {
+        policy->handled = false;
+        return true;
+    }
+    policy->handled = true;
+    policy->required_features = form->required_features;
+    policy->rv64_only = form->rv64_only;
+    base = form->encoding;
+    rm = form->default_rm;
+    if (form->kind == RV_FP_FUSED) {
+        MiniAsMCInst *m;
+        int rs3;
+        unsigned i;
+        if ((count != 4U && count != 5U) ||
+            (rd = float_reg_number(operands[0])) < 0 ||
+            (rs1 = float_reg_number(operands[1])) < 0 ||
+            (rs2 = float_reg_number(operands[2])) < 0 ||
+            (rs3 = float_reg_number(operands[3])) < 0 ||
+            (count == 5U && !parse_fp_rounding_mode(operands[4], &rm)))
+            goto invalid;
+        m = minias_mcinst_alloc(4U);
+        if (m == NULL) {
+            minias_set_error(as, "out-of-memory:riscv-fp-fused");
             return false;
         }
-        (void)vtypei;
-        *size = 4U;
+        m->opcode = RV_MC_WORD;
+        m->encoding = base | (rm << 12U);
+        m->count = 4U;
+        rv_set_reg(&m->operands[0], rd);
+        rv_set_reg(&m->operands[1], rs1);
+        rv_set_reg(&m->operands[2], rs2);
+        rv_set_reg(&m->operands[3], rs3);
+        for (i = 0U; i < 4U; ++i)
+            m->operands[i].reg_class = MINIAS_MC_REG_FPR;
+        stmt->mcinst = m;
         return true;
     }
-
-    if (strcmp(op, "sfence.vma") == 0) {
-        if (count > 2U ||
-            (count >= 1U && reg_number(operands[0]) < 0) ||
-            (count == 2U && reg_number(operands[1]) < 0)) {
-            (void)snprintf(reason, reason_size, "bad-operands:sfence.vma:%s", args);
+    if (form->kind == RV_FP_LOAD || form->kind == RV_FP_STORE) {
+        MiniAsMCInst *m;
+        if (count != 2U || (rd = float_reg_number(operands[0])) < 0)
+            goto invalid;
+        if (!parse_mem(operands[1], &offset, memory_base)) {
+            if (!parse_absolute_lo_memory(operands[1], &absolute_expr,
+                                          memory_base)) goto invalid;
+            absolute_lo = true;
+            offset = 0;
+        }
+        rs1 = reg_number(memory_base);
+        if (rs1 < 0 || offset < -2048 || offset > 2047) goto invalid;
+        m=minias_mcinst_alloc(3U);
+        if (m==NULL) {
+            minias_set_error(as,"out-of-memory:riscv-fp-memory");
             return false;
         }
-        *size = 4U;
+        m->opcode=form->kind == RV_FP_STORE ? RV_MC_STORE : RV_MC_LOAD;
+        m->encoding=base;
+        m->count=3U;
+        rv_set_reg(&m->operands[0],rd);
+        m->operands[0].reg_class=MINIAS_MC_REG_FPR;
+        rv_set_reg(&m->operands[1],rs1);
+        if (absolute_lo) {
+            m->target_form = form->kind == RV_FP_STORE ?
+                             RV_ABS_RELOC_LO12_S : RV_ABS_RELOC_LO12_I;
+            if (!rv_bind_symbol_operand(as, m, 2U, &absolute_expr)) {
+                minias_mcinst_destroy(m);
+                return false;
+            }
+        } else rv_set_imm(&m->operands[2],offset);
+        stmt->mcinst=m;
+        return true;
+    }
+    if (form->kind == RV_FP_BINARY || form->kind == RV_FP_R3_FIXED ||
+        form->kind == RV_FP_COMPARE) {
+        if (count != 3U &&
+            !(form->kind == RV_FP_BINARY && count == 4U)) goto invalid;
+        rd = (form->fpr_mask & 1U) != 0U ?
+             float_reg_number(operands[0]) : reg_number(operands[0]);
+        rs1 = float_reg_number(operands[1]);
+        rs2 = float_reg_number(operands[2]);
+        if (count == 4U && !parse_fp_rounding_mode(operands[3], &rm))
+            goto invalid;
+        if (form->kind == RV_FP_BINARY) base |= rm << 12U;
+    } else if (form->kind == RV_FP_ALIAS) {
+        if (count != 2U ||
+            (rd = float_reg_number(operands[0])) < 0 ||
+            (rs1 = float_reg_number(operands[1])) < 0) goto invalid;
+        rs2 = rs1;
+    } else if (form->kind == RV_FP_MOVE || form->kind == RV_FP_CONVERT) {
+        if (count != 2U &&
+            !(form->kind == RV_FP_CONVERT && count == 3U)) goto invalid;
+        rd = (form->fpr_mask & 1U) != 0U ?
+             float_reg_number(operands[0]) : reg_number(operands[0]);
+        rs1 = (form->fpr_mask & 2U) != 0U ?
+              float_reg_number(operands[1]) : reg_number(operands[1]);
+        if (count == 3U && !parse_fp_rounding_mode(operands[2], &rm))
+            goto invalid;
+        if (form->kind == RV_FP_CONVERT) base |= rm << 12U;
+    } else {
+        minias_set_error(as, "internal:unhandled-riscv-fp-descriptor");
+        return false;
+    }
+
+    if (rd < 0 || rs1 < 0 || rs2 < 0) goto invalid;
+    if (form->swap_sources) {
+        const int reversed=rs1;
+        rs1=rs2;
+        rs2=reversed;
+    }
+    return rv_mc_fp_word(as,stmt,base,rd,rs1,rs2,form->fpr_mask);
+invalid:
+    minias_set_error(as,"bad-fp-mcinst:%s:%s:line=%zu",
+                     stmt->op,stmt->args,stmt->line);
+    return false;
+}
+
+/* Target-private opcode/form registry for pseudo, privileged and extension
+ * forms not represented by the fixed RvMCDesc encoding table. Exactly one
+ * parser family is selected per mnemonic: no repeated speculative parsing,
+ * no successful parse that defers unknown-opcode diagnostics to layout.
+ * Exact aliases take precedence over broad extension-family prefixes. */
+#define RV_FORM(name, parser) {name, parser, false, 0U, false, RV_SIMPLE_NONE, 0U, 0U, false}
+#define RV_EXTENSION(name, parser, feature) {name, parser, false, feature, false, RV_SIMPLE_NONE, 0U, 0U, false}
+#define RV_EXT64(name, parser, feature) {name, parser, false, feature, true, RV_SIMPLE_NONE, 0U, 0U, false}
+#define RV_PRIVILEGED(name, parser) {name, parser, false, UINT64_MAX, false, RV_SIMPLE_NONE, 0U, 0U, false}
+#define RV_PREFIX(name, parser, feature) {name, parser, true, feature, false, RV_SIMPLE_NONE, 0U, 0U, false}
+#define RV_ZERO(name, word, cword, feature) {name, rv_parse_simple_mc, false, feature, false, RV_SIMPLE_ZERO, word, cword, false}
+#define RV_ZERO_PRIV(name, word) RV_ZERO(name, word, 0U, UINT64_MAX)
+#define RV_TWO_REG(name, word, rs2) {name, rv_parse_simple_mc, false, 0U, false, RV_SIMPLE_TWO_REG, word, 0U, rs2}
+#define RV_TWO_REG64(name, word, rs2) {name, rv_parse_simple_mc, false, 0U, true, RV_SIMPLE_TWO_REG, word, 0U, rs2}
+#define RV_JR(name, word) {name, rv_parse_simple_mc, false, 0U, false, RV_SIMPLE_JR, word, 0U, false}
+#define RV_FCSR(name, csr, kind) {name, rv_parse_simple_mc, false, RISCV_ISA_F | RISCV_ISA_ZICSR, false, RV_SIMPLE_FCSR_##kind, csr, 0U, false}
+static const RvParseForm rv_parse_forms[] = {
+    RV_FORM(".insn", rv_parse_simple_mc),
+    RV_EXTENSION("c.li", rv_parse_simple_mc, RISCV_ISA_C),
+    RV_ZERO("nop", 0x00000013U, 0x0001U, 0U),
+    RV_ZERO("ret", 0x00008067U, 0x8082U, 0U),
+    RV_ZERO_PRIV("sret", 0x10200073U),
+    RV_ZERO("ecall", 0x00000073U, 0U, 0U),
+    RV_ZERO("ebreak", 0x00100073U, 0U, 0U),
+    RV_ZERO_PRIV("wfi", 0x10500073U),
+    RV_ZERO_PRIV("pause", 0x0100000fU),
+    RV_ZERO("fence.i", 0x0000100fU, 0U, RISCV_ISA_ZIFENCEI),
+    RV_FORM("fence", rv_parse_simple_mc),
+    RV_PRIVILEGED("sfence.vma", rv_parse_simple_mc),
+    RV_FORM("jalr", rv_parse_simple_mc),
+    RV_TWO_REG("mv", 0x00000013U, false),
+    RV_TWO_REG("move", 0x00000013U, false),
+    RV_TWO_REG("snez", 0x00003033U, true),
+    RV_TWO_REG("seqz", 0x00103013U, false),
+    RV_TWO_REG("neg", 0x40000033U, true),
+    RV_TWO_REG64("negw", 0x4000003bU, true),
+    RV_TWO_REG("not", 0xfff04013U, false),
+    RV_JR("jr", 0x00000067U),
+    RV_FCSR("fscsr", 3U, REG), RV_FCSR("frcsr", 3U, READ),
+    RV_FCSR("frrm", 2U, READ), RV_FCSR("frflags", 1U, READ),
+    RV_FCSR("fsrm", 2U, REG), RV_FCSR("fsflags", 1U, REG),
+    RV_FCSR("fsrmi", 2U, IMMEDIATE),
+    RV_FCSR("fsflagsi", 1U, IMMEDIATE),
+    RV_FORM("li", rv_parse_multi_mc),
+    RV_FORM("call", rv_parse_multi_mc),
+    RV_FORM("tail", rv_parse_multi_mc),
+    RV_FORM("lla", rv_parse_multi_mc),
+    RV_FORM("la", rv_parse_multi_mc),
+    RV_EXTENSION("vmv.v.i", rv_parse_vector_mc, RISCV_ISA_V),
+    RV_EXTENSION("vsetvli", rv_parse_vector_mc, RISCV_ISA_V),
+    RV_EXTENSION("vsetvl", rv_parse_vector_mc, RISCV_ISA_V),
+    /* These families have widths/ordering or FP rounding modifiers. Their
+     * existing decoders validate the COMPLETE suffix, not just the stem. */
+    RV_PREFIX("vle", rv_parse_vector_mc, RISCV_ISA_V),
+    RV_PREFIX("vse", rv_parse_vector_mc, RISCV_ISA_V),
+    RV_PREFIX("amo", rv_parse_atomic_mc, RISCV_ISA_A),
+    RV_PREFIX("lr.", rv_parse_atomic_mc, RISCV_ISA_A),
+    RV_PREFIX("sc.", rv_parse_atomic_mc, RISCV_ISA_A),
+    RV_PREFIX("f", rv_parse_fp_mc, RISCV_ISA_F)
+};
+#undef RV_FORM
+#undef RV_EXTENSION
+#undef RV_EXT64
+#undef RV_PRIVILEGED
+#undef RV_PREFIX
+#undef RV_ZERO
+#undef RV_ZERO_PRIV
+#undef RV_TWO_REG
+#undef RV_TWO_REG64
+#undef RV_JR
+#undef RV_FCSR
+
+static const RvParseForm *rv_find_parse_form(const char *op) {
+    static const RvParseForm csr_family = {
+        "<csr>", rv_parse_csr_mc, false, RISCV_ISA_ZICSR, false,
+        RV_SIMPLE_NONE, 0U, 0U, false
+    };
+    size_t i;
+    for (i = 0U; i < sizeof(rv_parse_forms)/sizeof(rv_parse_forms[0]); ++i)
+        if (!rv_parse_forms[i].prefix &&
+            strcmp(op, rv_parse_forms[i].spelling) == 0)
+            return &rv_parse_forms[i];
+    if (rv_find_csr_form(op) != NULL) return &csr_family;
+    for (i = 0U; i < sizeof(rv_parse_forms)/sizeof(rv_parse_forms[0]); ++i)
+        if (rv_parse_forms[i].prefix &&
+            strncmp(op, rv_parse_forms[i].spelling,
+                    strlen(rv_parse_forms[i].spelling)) == 0)
+            return &rv_parse_forms[i];
+    return NULL;
+}
+
+static bool rv_parse_mcinst_impl(MiniAs *as, MiniAsStmt *stmt,
+                                  RvParsedIsaPolicy *policy) {
+    const RvMCDesc *desc;
+    char operands[8][128];
+    size_t count;
+    int rd = -1, rs1 = -1, rs2 = -1;
+    int64_t imm = 0;
+    bool is_imm = false;
+    MiniAsMCInst *inst;
+    unsigned family, slots;
+    unsigned form_flags;
+    uint32_t encoding;
+    char base[128];
+    const char *op = stmt->op;
+    MiniAsSymbolExpr absolute_expr;
+    unsigned absolute_reloc = RV_ABS_RELOC_NONE;
+
+    desc = rv_find_mc_descriptor(op);
+    if (desc == NULL) {
+        const RvParseForm *form = rv_find_parse_form(op);
+        bool accepted;
+        if (form == NULL) {
+            minias_set_error(as, "unsupported-instruction:%s:line=%zu",
+                             op, stmt->line);
+            return false;
+        }
+        if(!split_operands(stmt->args,operands,8U,&count))goto invalid;
+        policy->handled = false;
+        policy->required_features = form->required_features;
+        policy->rv64_only = form->rv64_only;
+        policy->selected_form = form;
+        accepted = form->parse(as, stmt, operands, count, policy);
+        if (!accepted) return false;
+        if (!policy->handled) {
+            minias_set_error(as, "unsupported-instruction:%s:line=%zu",
+                             op, stmt->line);
+            return false;
+        }
+        return as->error[0] == '\0';
+    }
+    family = desc->family;
+    encoding = desc->base;
+    form_flags = desc->form_flags;
+    policy->required_features = desc->required_features;
+    policy->rv64_only = desc->rv64_only;
+    if(!split_operands(stmt->args,operands,8U,&count))goto invalid;
+
+    if (family == RV_MC_R || family == RV_MC_I) {
+        bool two = (form_flags & RV_FORM_TWO_OPERANDS)!=0U;
+        if (count != (two ? 2U : 3U)) goto invalid;
+        if (two) {
+            rd = reg_number(operands[0]);
+            rs1 = reg_number(operands[1]);
+            /* Ratified Zbb gives rev8 distinct OP-IMM words for RV32 and
+             * RV64.  Its XLEN is selected by the immutable Target profile,
+             * not inferred from the mnemonic or the host word size. */
+            if ((form_flags & RV_FORM_REV8_XLEN)!=0U &&
+                MINIAS_RV_STATE(as)->target_xlen == 32U)
+                encoding = UINT32_C(0x69805013);
+            imm = (int64_t)((encoding >> 20U) & 0xfffU);
+            family = RV_MC_I;
+        } else if (count == 3U) {
+            rd = reg_number(operands[0]);
+            rs1 = reg_number(operands[1]);
+            if (family == RV_MC_R) {
+                rs2 = reg_number(operands[2]);
+                if (rs2 < 0 &&
+                    (form_flags & RV_FORM_ALT_IMMEDIATE)!=0U &&
+                    parse_i64(operands[2], &imm)) {
+                    family = RV_MC_I;
+                    is_imm = true;
+                    encoding = 0x13U | (encoding & 0x7000U);
+                    if ((form_flags & RV_FORM_NEGATE_IMMEDIATE)!=0U) {
+                        if (imm == INT64_MIN) goto invalid;
+                        imm = -imm;
+                    } else if ((form_flags & RV_FORM_ARITH_IMMEDIATE)!=0U) {
+                        encoding |= 0x40000000U;
+                    }
+                }
+            } else {
+                is_imm = parse_i64(operands[2], &imm);
+                if (!is_imm &&
+                    parse_absolute_modifier(operands[2], "%lo(",
+                                            &absolute_expr)) {
+                    absolute_reloc = RV_ABS_RELOC_LO12_I;
+                    is_imm = true;
+                    imm = 0;
+                }
+            }
+        }
+        if (rd < 0 || rs1 < 0 || (family == RV_MC_R && rs2 < 0) ||
+            (family == RV_MC_I && !is_imm && count != 2U &&
+             !parse_i64(operands[2], &imm))) goto invalid;
+        if (family == RV_MC_I) {
+            bool shift=(form_flags & RV_FORM_SHIFT_IMMEDIATE)!=0U;
+            if (shift) {
+                int max = ((encoding & 0x7fU) == 0x1bU ||
+                           MINIAS_RV_STATE(as)->target_xlen == 32U) ? 31 : 63;
+                if (imm < 0 || imm > max) goto invalid;
+            } else if ((form_flags & RV_FORM_FIXED_IMMEDIATE)==0U &&
+                       (imm < -2048 || imm > 2047)) goto invalid;
+        }
+        if ((form_flags & RV_FORM_SWAP_SOURCES)!=0U) {
+            int tmp = rs1; rs1 = rs2; rs2 = tmp;
+        }
+        slots = 3U;
+    } else if (family == RV_MC_LOAD || family == RV_MC_STORE) {
+        bool symbolic = false;
+        MiniAsSymbolExpr expr;
+        rd = count != 0U ? reg_number(operands[0]) : -1;
+        if (rd < 0) goto invalid;
+        if (count == 2U && parse_mem(operands[1], &imm, base)) {
+            rs1 = reg_number(base);
+            if (rs1 < 0 || imm < -2048 || imm > 2047) goto invalid;
+        } else if (count == 2U &&
+                   parse_absolute_lo_memory(operands[1], &absolute_expr,
+                                            base)) {
+            rs1 = reg_number(base);
+            if (rs1 < 0) goto invalid;
+            absolute_reloc = family == RV_MC_LOAD ?
+                             RV_ABS_RELOC_LO12_I : RV_ABS_RELOC_LO12_S;
+            imm = 0;
+        } else if (family == RV_MC_LOAD && count == 2U &&
+                   minias_parse_symbol_addend(operands[1], &expr)) {
+            /* GNU symbolic load: AUIPC rd + LOAD rd,0(rd). */
+            rs1 = rd;
+            symbolic = true;
+        } else if (family == RV_MC_STORE && count == 3U &&
+                   minias_parse_symbol_addend(operands[1], &expr)) {
+            /* GNU symbolic store: AUIPC temp + STORE data,0(temp). */
+            rs1 = reg_number(operands[2]);
+            if (rs1 < 0) goto invalid;
+            symbolic = true;
+        } else goto invalid;
+        slots = 3U;
+        if (symbolic) {
+            inst = minias_mcinst_alloc(slots);
+            if (inst == NULL) goto oom;
+            inst->opcode = family == RV_MC_LOAD ?
+                           RV_MC_SYMBOL_LOAD : RV_MC_SYMBOL_STORE;
+            inst->encoding = encoding;
+            inst->count = slots;
+            rv_set_reg(&inst->operands[0], rd);
+            rv_set_reg(&inst->operands[1], rs1);
+            if (!rv_bind_symbol_operand(as, inst, 2U, &expr)) {
+                minias_mcinst_destroy(inst);
+                return false;
+            }
+            stmt->mcinst = inst;
+            return true;
+        }
+    } else if (family == RV_MC_U) {
+        if (count != 2U) goto invalid;
+        rd = reg_number(operands[0]);
+        if (rd < 0) goto invalid;
+        if (!parse_i64(operands[1], &imm)) {
+            if ((form_flags & RV_FORM_HI_RELOCATION)==0U ||
+                !parse_absolute_modifier(operands[1], "%hi(",
+                                         &absolute_expr)) goto invalid;
+            absolute_reloc = RV_ABS_RELOC_HI20;
+            imm = 0;
+        }
+        slots = 2U;
+    } else if (family == RV_MC_BRANCH) {
+        bool two = (form_flags & RV_FORM_BRANCH_ZERO)!=0U;
+        const char *symbol_text;
+        if (count != (two ? 2U : 3U)) goto invalid;
+        rs1 = reg_number(operands[0]);
+        if (rs1 < 0) goto invalid;
+        if (two) {
+            rs2 = 0;
+            symbol_text = operands[1];
+            if ((form_flags & RV_FORM_BRANCH_ZERO_RS1)!=0U) {
+                rs2 = rs1; rs1 = 0;
+            }
+        } else {
+            rs2 = reg_number(operands[1]);
+            if (rs2 < 0) goto invalid;
+            if ((form_flags & RV_FORM_BRANCH_REVERSE)!=0U) {
+                int tmp=rs1;rs1=rs2;rs2=tmp;
+            }
+            symbol_text = operands[2];
+        }
+        {
+            MiniAsSymbolExpr parsed;
+            if (!minias_parse_symbol_addend(symbol_text,&parsed)) goto invalid;
+            slots=3U;
+            inst=minias_mcinst_alloc(slots);
+            if (inst==NULL) goto oom;
+            inst->opcode=family; inst->encoding=encoding; inst->count=slots;
+            rv_set_reg(&inst->operands[0],rs1);
+            rv_set_reg(&inst->operands[1],rs2);
+            if (!rv_bind_symbol_operand(as, inst, 2U, &parsed)) {
+                minias_mcinst_destroy(inst);
+                return false;
+            }
+            stmt->mcinst=inst;
+        }
+        return true;
+    } else if (family == RV_MC_JAL) {
+        const char *sym;
+        rd = (form_flags & RV_FORM_JAL_ZERO_RD)!=0U ? 0 : 1;
+        if ((form_flags & RV_FORM_JAL_ZERO_RD)!=0U && count != 1U)
+            goto invalid;
+        if (count == 1U) sym = operands[0];
+        else if (count == 2U && (form_flags & RV_FORM_JAL_ZERO_RD)==0U) {
+            rd=reg_number(operands[0]);
+            sym=operands[1];
+        } else goto invalid;
+        if (rd < 0) goto invalid;
+        {
+            MiniAsSymbolExpr parsed;
+            if (!minias_parse_symbol_addend(sym,&parsed)) goto invalid;
+            slots=2U;
+            inst=minias_mcinst_alloc(slots);
+            if(inst==NULL) goto oom;
+            inst->opcode=family; inst->encoding=encoding; inst->count=slots;
+            rv_set_reg(&inst->operands[0],rd);
+            if (!rv_bind_symbol_operand(as, inst, 1U, &parsed)) {
+                minias_mcinst_destroy(inst);
+                return false;
+            }
+            stmt->mcinst=inst;
+        }
+        return true;
+    } else {
+        minias_set_error(as, "internal:riscv-unhandled-descriptor-family:%u",
+                         family);
+        return false;
+    }
+
+    inst=minias_mcinst_alloc(slots);
+    if(inst==NULL)goto oom;
+    inst->opcode=family;inst->encoding=encoding;inst->count=slots;
+    rv_set_reg(&inst->operands[0],rd);
+    if(family==RV_MC_R) {
+        rv_set_reg(&inst->operands[1],rs1);
+        rv_set_reg(&inst->operands[2],rs2);
+    } else if(family==RV_MC_I) {
+        rv_set_reg(&inst->operands[1],rs1);
+        if (absolute_reloc == RV_ABS_RELOC_LO12_I) {
+            inst->target_form = absolute_reloc;
+            if (!rv_bind_symbol_operand(as, inst, 2U, &absolute_expr)) {
+                minias_mcinst_destroy(inst);
+                return false;
+            }
+        } else rv_set_imm(&inst->operands[2],imm);
+    } else if(family==RV_MC_LOAD || family==RV_MC_STORE){
+        rv_set_reg(&inst->operands[1],rs1);
+        if (absolute_reloc != RV_ABS_RELOC_NONE) {
+            inst->target_form = absolute_reloc;
+            if (!rv_bind_symbol_operand(as, inst, 2U, &absolute_expr)) {
+                minias_mcinst_destroy(inst);
+                return false;
+            }
+        } else rv_set_imm(&inst->operands[2],imm);
+    } else if (absolute_reloc == RV_ABS_RELOC_HI20) {
+        inst->target_form = absolute_reloc;
+        if (!rv_bind_symbol_operand(as, inst, 1U, &absolute_expr)) {
+            minias_mcinst_destroy(inst);
+            return false;
+        }
+    } else rv_set_imm(&inst->operands[1],imm);
+    stmt->mcinst=inst;
+    return true;
+invalid:
+    minias_set_error(as,"invalid-riscv-mcinst:%s:%s:line=%zu",
+                     op,stmt->args,stmt->line);
+    return false;
+oom:
+    minias_set_error(as,"out-of-memory:riscv-mcinst");
+    return false;
+}
+
+/* The E ABI removes integer registers x16..x31, not symbols spelled a6,
+ * s2, t3 or x16. All instruction forms, including aliases, CSR, vector,
+ * FP and multiword pseudos, retain their actual register operands in MCInst.
+ * Check those typed operands after parsing, never a lexical sweep over the
+ * original assembly text. EF_RVE=8 also covers -mabi=ilp32e without -march. */
+bool minias_riscv_parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
+    const MiniAsRiscvState *state = MINIAS_RV_STATE(as);
+    RvParsedIsaPolicy policy={0};
+    const MiniAsMCInst *inst;
+    size_t index;
+
+    if (!rv_parse_mcinst_impl(as, stmt, &policy)) return false;
+    inst = stmt->mcinst;
+    if (inst == NULL) {
+        minias_set_error(as, "internal:riscv-parse-form-without-mcinst");
+        return false;
+    }
+    if (!minias_riscv_validate_parsed_isa(as, stmt,
+                                          policy.required_features,
+                                          policy.rv64_only)) return false;
+    if (state == NULL ||
+        ((state->isa_features & RISCV_ISA_E) == 0U &&
+         (as->elf_flags & 8U) == 0U)) return true;
+    for (index = 0U; index < inst->count; ++index) {
+        const MiniAsMCOperand *operand = &inst->operands[index];
+        if (operand->kind == MINIAS_MC_REGISTER &&
+            operand->reg_class == MINIAS_MC_REG_GPR && operand->reg >= 16U) {
+            minias_set_error(as, "riscv32e-invalid-register:%s:line=%zu",
+                             stmt->op, stmt->line);
+            return false;
+        }
+    }
+    return true;
+}
+
+
+/* Typed variable-size RISC-V fragments: source operands were parsed once.
+ * Layout owns size; this Target writes instructions and stages relocations
+ * from MCInst, without reopening source or mutating final symbols/fixups. */
+static bool rv_encode_multi_mc(MiniAs *as, const MiniAsStmt *stmt) {
+    const MiniAsMCInst *m = stmt->mcinst;
+    if (m->opcode == RV_MC_LI) {
+        const MiniAsRiscvLiPlan *plan = m->target_payload;
+        unsigned i;
+        if (plan == NULL) {
+            minias_set_error(as, "internal:riscv-li-plan-missing:line=%zu",
+                             stmt->line);
+            return false;
+        }
+        if (stmt->size != plan->count * 4U) {
+            minias_set_error(as, "internal:riscv-li-plan-layout-mismatch:line=%zu",
+                             stmt->line);
+            return false;
+        }
+        for (i = 0U; i < plan->count; ++i)
+            if (!append_u32(as, stmt->section, plan->words[i])) return false;
         return true;
     }
 
-    {
-        bool is_lr;
-        uint32_t atomic_width;
-        uint32_t atomic_ordering;
-        if (decode_lr_sc_mnemonic(op, &is_lr, &atomic_width, &atomic_ordering)) {
-            (void)is_lr;
-            (void)atomic_width;
-            (void)atomic_ordering;
-            *size = 4U;
-            return true;
+    if (m->opcode == RV_MC_CALL || m->opcode == RV_MC_TAIL) {
+        const MiniAsSymbolRef *expr = m->operands[0].bound_symbol;
+        if (expr == NULL) {
+            minias_set_error(as, "internal:riscv-call-symbol-missing");
+            return false;
         }
-    }
-
-    {
-        uint32_t amo_funct5;
-        uint32_t amo_width;
-        uint32_t amo_ordering;
-        if (decode_amo_mnemonic(op, &amo_funct5, &amo_width, &amo_ordering)) {
-            (void)amo_funct5;
-            (void)amo_width;
-            (void)amo_ordering;
-            *size = 4U;
-            return true;
+        if (m->opcode == RV_MC_CALL) {
+            if (!append_u32(as, stmt->section, 0x00000097U) ||
+                !append_u32(as, stmt->section,
+                            enc_i(0x67U, 1, 0U, 1, 0))) return false;
+        } else {
+            if (!append_u32(as, stmt->section, 0x00000317U) ||
+                !append_u32(as, stmt->section,
+                            enc_i(0x67U, 0, 0U, 6, 0))) return false;
         }
+        /* Both CALL and TAIL retain @plt as a Target modifier. Existing
+         * psABI lowering emits CALL_PLT even without an explicit suffix. */
+        if (m->target_form != MINIAS_RV_SYM_NONE &&
+            m->target_form != MINIAS_RV_SYM_PLT) {
+            minias_set_error(as, "internal:riscv-call-modifier");
+            return false;
+        }
+        return minias_encode_add_fixup_ref(as, stmt->section, stmt->offset,
+                                MINIAS_FIXUP_RV_CALL_PLT, 4U, *expr, false);
     }
 
-#define SIMPLE(OP) strcmp(op, OP) == 0
-    if (SIMPLE("ret") || SIMPLE("nop") || SIMPLE("mv") || SIMPLE("move") || SIMPLE("jr") ||
-        SIMPLE("snez") || SIMPLE("seqz") || SIMPLE("neg") || SIMPLE("negw") || SIMPLE("not") || SIMPLE("frcsr") || SIMPLE("fscsr") || SIMPLE("sext.w") || SIMPLE("jalr") ||
-        SIMPLE("j") || SIMPLE("jal") || SIMPLE("beq") || SIMPLE("bne") ||
-        SIMPLE("blt") || SIMPLE("bge") || SIMPLE("bltu") || SIMPLE("bgeu") ||
-        SIMPLE("beqz") || SIMPLE("bnez") || SIMPLE("bltz") || SIMPLE("bgez") ||
-        SIMPLE("bgtz") || SIMPLE("blez") || SIMPLE("bgt") || SIMPLE("ble") ||
-        SIMPLE("bgtu") || SIMPLE("bleu") || SIMPLE("addi") || SIMPLE("addiw") ||
-        SIMPLE("andi") || SIMPLE("ori") || SIMPLE("xori") || SIMPLE("slti") ||
-        SIMPLE("sltiu") || SIMPLE("slli") || SIMPLE("srli") || SIMPLE("srai") ||
-        SIMPLE("slliw") || SIMPLE("srliw") || SIMPLE("sraiw") ||
-        SIMPLE("sra") || SIMPLE("fence") || SIMPLE("fence.i") || SIMPLE("vsetvl") || SIMPLE("sret") ||
-        SIMPLE("csrr") || SIMPLE("csrrw") || SIMPLE("csrrc") || SIMPLE("csrw") ||
-        SIMPLE("csrs") || SIMPLE("csrc") || SIMPLE("ecall") || SIMPLE("ebreak") ||
-        SIMPLE("pause") ||
-        SIMPLE("wfi") || SIMPLE("add") || SIMPLE("sub") || SIMPLE("sll") ||
-        SIMPLE("srl") || SIMPLE("and") || SIMPLE("or") ||
-        SIMPLE("xor") || SIMPLE("slt") || SIMPLE("sltu") || SIMPLE("sgt") || SIMPLE("sgtu") || SIMPLE("mul") ||
-        SIMPLE("mulh") || SIMPLE("mulhu") || SIMPLE("div") || SIMPLE("divu") ||
-        SIMPLE("rem") || SIMPLE("remu") || SIMPLE("addw") || SIMPLE("subw") ||
-        SIMPLE("sllw") || SIMPLE("srlw") || SIMPLE("sraw") || SIMPLE("mulw") ||
-        SIMPLE("divw") || SIMPLE("divuw") || SIMPLE("remw") || SIMPLE("remuw") ||
-        SIMPLE("lb") || SIMPLE("lbu") ||
-        SIMPLE("lh") || SIMPLE("lhu") || SIMPLE("lw") || SIMPLE("lwu") ||
-        SIMPLE("ld") || SIMPLE("sb") || SIMPLE("sh") || SIMPLE("sw") ||
-        SIMPLE("sd") || SIMPLE("lui") || SIMPLE("auipc")) {
-        *size = 4U;
-        return true;
-    }
-#undef SIMPLE
+    if (m->opcode == RV_MC_LA) {
+        const MiniAsSymbolRef *expr = m->operands[1].bound_symbol;
+        const MiniAsSymbol *target;
+        MiniAsSymbolRef anchor;
+        int rd = (int)m->operands[0].reg;
+        bool use_got;
+        if (expr == NULL) {
+            minias_set_error(as, "internal:riscv-la-symbol-missing");
+            return false;
+        }
+        target = minias_symbol_ref_lookup(as, *expr);
+        /* Linux early boot: NOPIC is default; PIC external la may use a
+         * GOT reference only if the source did not request an addend. */
+        if (m->target_form != RV_PSEUDO_LA &&
+            m->target_form != RV_PSEUDO_LLA) {
+            minias_set_error(as, "internal:riscv-la-invalid-form");
+            return false;
+        }
+        use_got = (stmt->site.mode_bits & MINIAS_RISCV_OPTION_PIC) != 0U &&
+                  m->target_form == RV_PSEUDO_LA && expr->addend == 0 &&
+                  (target == NULL || !target->defined);
+        if(!minias_encode_request_anchor_ref(as,stmt,"pcrel",
+                                             &anchor)) {
+            minias_set_error(as,"riscv-private-pcrel-symbol-overflow");
+            return false;
+        }
 
-    (void)snprintf(reason, reason_size, "unsupported-instruction:%s", op);
+        if (!append_u32(as, stmt->section,
+                        0x17U | ((uint32_t)rd << 7U))) return false;
+        if (use_got) {
+            if (!append_u32(as, stmt->section,
+                            enc_i(0x03U, rd, 3U, rd, 0))) return false;
+        } else if (!append_u32(as, stmt->section,
+                               enc_i(0x13U, rd, 0U, rd, 0))) return false;
+        return minias_encode_add_fixup_ref(as, stmt->section, stmt->offset,
+                                use_got ? MINIAS_FIXUP_RV_GOT_HI20 :
+                                          MINIAS_FIXUP_RV_PCREL_HI20,
+                                4U, *expr, false) &&
+               minias_encode_add_fixup_ref(as, stmt->section,
+                                stmt->offset + 4U,
+                                MINIAS_FIXUP_RV_PCREL_LO12_I, 4U, anchor,
+                                false);
+    }
+
+    minias_set_error(as, "internal:unknown-riscv-multi-mcinst:%u",
+                     m->opcode);
+    return false;
+}
+
+static bool rv_encode_mcinst(MiniAs *as, const MiniAsStmt *stmt) {
+    const MiniAsMCInst *m=stmt->mcinst;
+    uint16_t compressed;
+    if (m->opcode == RV_MC_RAW)
+        return append_u32(as, stmt->section, m->encoding);
+    if (rv_rvc_encode_plain(as,stmt,&compressed))
+        return append_u16(as,stmt->section,compressed) &&
+               minias_encode_add_elf_flags(as,1U);
+    if (m->opcode == RV_MC_LI || m->opcode == RV_MC_CALL ||
+        m->opcode == RV_MC_TAIL || m->opcode == RV_MC_LA)
+        return rv_encode_multi_mc(as, stmt);
+    if (m->opcode == RV_MC_C16) {
+        /* The selected 16-bit instruction may have no register operands
+         * (c.nop/c.jr), so dispatch before reading operand[0]. */
+        if(!append_u16(as,stmt->section,(uint16_t)m->encoding))return false;
+        return minias_encode_add_elf_flags(as,1U); /* EF_RISCV_RVC */
+    }
+    if (stmt->size==2U &&
+        (m->opcode==RV_MC_BRANCH || m->opcode==RV_MC_JAL)) {
+        MiniAsRiscvBranchPlan branch;
+        const MiniAsSymbolRef *symbol=m->operands[
+            m->opcode==RV_MC_BRANCH?2U:1U].bound_symbol;
+        uint16_t bits;
+        MiniAsFixupKind fixup;
+        if(symbol==NULL || !minias_riscv_resolve_branch_plan(as,stmt,&branch))
+            return false;
+        if(m->opcode==RV_MC_BRANCH) {
+            int64_t disp=branch.local?branch.displacement:0;
+            if((disp&1)!=0 || disp< -256 || disp>254) {
+                minias_set_error(as,"riscv-rvc-branch-range:line=%zu",stmt->line);
+                return false;
+            }
+            bits=rv_rvc_branch_bits(disp,m->operands[0].reg,
+                                     ((m->encoding>>12U)&7U)==1U);
+            fixup=MINIAS_FIXUP_RV_RVC_BRANCH;
+        } else {
+            int64_t disp=branch.local?branch.displacement:0;
+            if((disp&1)!=0 || disp< -2048 || disp>2046) {
+                minias_set_error(as,"riscv-rvc-jump-range:line=%zu",stmt->line);
+                return false;
+            }
+            bits=rv_rvc_jump_bits(disp);
+            fixup=MINIAS_FIXUP_RV_RVC_JUMP;
+        }
+        return append_u16(as,stmt->section,bits) &&
+               minias_encode_add_elf_flags(as,1U) &&
+               minias_encode_add_fixup_ref(as,stmt->section,stmt->offset,
+                                            fixup,2U,*symbol,false);
+    }
+    int rd=(int)m->operands[0].reg,rs1=0;
+    uint32_t base=m->encoding,code=0U;
+    const MiniAsSymbolRef *expr=NULL;
+    if (m->count > 1U && m->operands[1].kind==MINIAS_MC_REGISTER)
+        rs1=(int)m->operands[1].reg;
+    if (m->opcode == RV_MC_SYMBOL_LOAD ||
+        m->opcode == RV_MC_SYMBOL_STORE) {
+        const bool load = m->opcode == RV_MC_SYMBOL_LOAD;
+        const MiniAsSymbolRef *ref = m->operands[2].bound_symbol;
+        MiniAsSymbolRef anchor;
+        uint32_t second;
+        if (ref == NULL) {
+            minias_set_error(as, "internal:missing-riscv-symbol-fragment");
+            return false;
+        }
+        if(!minias_encode_request_anchor_ref(as,stmt,
+                                             load?"load":"store",&anchor)) {
+            minias_set_error(as,"riscv-private-memory-symbol-overflow");
+            return false;
+        }
+        second = base |
+                 ((uint32_t)rs1 << 15U) |
+                 ((uint32_t)rd << (load ? 7U : 20U));
+        if (!append_u32(as, stmt->section,
+                        0x17U | ((uint32_t)rs1 << 7U)) ||
+            !append_u32(as, stmt->section, second))
+            return false;
+        return minias_encode_add_fixup_ref(as, stmt->section, stmt->offset,
+                                MINIAS_FIXUP_RV_PCREL_HI20, 4U, *ref,
+                                false) &&
+               minias_encode_add_fixup_ref(as, stmt->section,
+                                stmt->offset + 4U,
+                                load ? MINIAS_FIXUP_RV_PCREL_LO12_I :
+                                       MINIAS_FIXUP_RV_PCREL_LO12_S,
+                                4U, anchor, false);
+    }
+    if(m->opcode==RV_MC_BRANCH || m->opcode==RV_MC_JAL) {
+        MiniAsRiscvBranchPlan branch;
+        expr=m->operands[m->opcode==RV_MC_BRANCH ? 2U : 1U].bound_symbol;
+        if(!minias_riscv_resolve_branch_plan(as,stmt,&branch))return false;
+        if(m->opcode==RV_MC_BRANCH && !branch.local){
+            minias_set_error(as,"unsupported-relocation:%s:line=%zu",
+                             stmt->op,stmt->line);
+            return false;
+        }
+        if(branch.local){
+            if(m->opcode==RV_MC_JAL){
+                if(!branch.jal_legal){
+                    minias_set_error(as,"jal-range:line=%zu",stmt->line);
+                    return false;
+                }
+                return append_u32(as,stmt->section,
+                                  enc_j(rd,branch.displacement)) &&
+                       (!(MINIAS_RV_STATE(as)->isa_features&RISCV_ISA_C) ||
+                        minias_encode_add_fixup_ref(as,stmt->section,
+                            stmt->offset,MINIAS_FIXUP_RV_JAL,4U,*expr,false));
+            }
+            if(stmt->size==8U){
+                if(!branch.long_legal){
+                    minias_set_error(as,"branch-long-jal-range:%s:line=%zu",
+                                     stmt->op,stmt->line);
+                    return false;
+                }
+                return append_u32(as,stmt->section,
+                           enc_b((base>>12U &7U)^1U,rd,rs1,8)) &&
+                       append_u32(as,stmt->section,
+                                  enc_j(0,branch.displacement-4));
+            }
+            if(!branch.short_legal){
+                minias_set_error(as,"branch-range:%s:line=%zu",
+                                 stmt->op,stmt->line);
+                return false;
+            }
+            return append_u32(as,stmt->section,
+                              enc_b((base>>12U)&7U,rd,rs1,
+                                    branch.displacement)) &&
+                   (!(MINIAS_RV_STATE(as)->isa_features&RISCV_ISA_C) ||
+                    minias_encode_add_fixup_ref(as,stmt->section,stmt->offset,
+                              MINIAS_FIXUP_RV_BRANCH,4U,*expr,false));
+        }
+        return append_u32(as,stmt->section,enc_j(rd,0)) &&
+               minias_encode_add_fixup_ref(as,stmt->section,stmt->offset,
+                                MINIAS_FIXUP_RV_JAL,4U,*expr,
+                                false);
+    } else if(!rv_scalar_machine_word(m,true,&code)) {
+        minias_set_error(as,"unknown-riscv-mcinst");
+        return false;
+    }
+    if (m->target_form != RV_ABS_RELOC_NONE) {
+        MiniAsFixupKind kind;
+        unsigned symbol_index;
+        const MiniAsSymbolRef *symbol;
+        uint32_t addend_low;
+        switch (m->target_form) {
+        case RV_ABS_RELOC_HI20:
+            if (m->opcode != RV_MC_U) goto invalid_absolute_form;
+            kind = MINIAS_FIXUP_RV_HI20;
+            symbol_index = 1U;
+            break;
+        case RV_ABS_RELOC_LO12_I:
+            if (m->opcode != RV_MC_I && m->opcode != RV_MC_LOAD)
+                goto invalid_absolute_form;
+            kind = MINIAS_FIXUP_RV_LO12_I;
+            symbol_index = 2U;
+            break;
+        case RV_ABS_RELOC_LO12_S:
+            if (m->opcode != RV_MC_STORE) goto invalid_absolute_form;
+            kind = MINIAS_FIXUP_RV_LO12_S;
+            symbol_index = 2U;
+            break;
+        default:
+            goto invalid_absolute_form;
+        }
+        symbol = m->operands[symbol_index].bound_symbol;
+        if (symbol == NULL) goto invalid_absolute_form;
+        /* GAS retains the expression addend in the unresolved instruction
+         * field as well as in ELF RELA.  The linker eventually replaces this
+         * field using S+A, so these bits are a pre-relocation representation,
+         * not an additional runtime addend.  Preserve the typed SymbolRef and
+         * the ISA-specific U/I/S field layout rather than dropping A to zero. */
+        addend_low = (uint32_t)symbol->addend & 0xfffU;
+        if (kind == MINIAS_FIXUP_RV_HI20) {
+            uint32_t hi = (uint32_t)(((uint64_t)symbol->addend + 0x800U)
+                                     >> 12U) & 0xfffffU;
+            code = (code & 0xfffU) | (hi << 12U);
+        } else if (kind == MINIAS_FIXUP_RV_LO12_I) {
+            code = (code & 0x000fffffU) | (addend_low << 20U);
+        } else {
+            code = (code & ~UINT32_C(0xfe000f80)) |
+                   ((addend_low & 31U) << 7U) |
+                   ((addend_low >> 5U) << 25U);
+        }
+        if (!append_u32(as, stmt->section, code)) return false;
+        return minias_encode_add_fixup_ref(as,stmt->section,stmt->offset,
+                                            kind,4U,*symbol,false);
+    }
+    return append_u32(as,stmt->section,code);
+invalid_absolute_form:
+    minias_set_error(as,"internal:bad-riscv-absolute-reloc-mcinst:%u",
+                     m->target_form);
     return false;
 }
 
 bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
-    char operands[8][128];
-    size_t count = split_operands(stmt->args, operands, 8U);
-    if (strcmp(stmt->op, "orc.b") == 0 ||
-        strcmp(stmt->op, "rev8") == 0 ||
-        strcmp(stmt->op, "ctz") == 0) {
-        int64_t encoded_imm;
-        uint32_t encoded_funct3;
-        int encoded_rd;
-        int encoded_rs1;
-
-        if (count != 2U ||
-            !require_reg(as, stmt, operands[0], &encoded_rd) ||
-            !require_reg(as, stmt, operands[1], &encoded_rs1)) {
-            return false;
-        }
-        if (strcmp(stmt->op, "orc.b") == 0) {
-            encoded_imm = 0x287;
-            encoded_funct3 = 5U;
-        } else if (strcmp(stmt->op, "rev8") == 0) {
-            encoded_imm = 0x6b8;
-            encoded_funct3 = 5U;
-        } else {
-            encoded_imm = 0x601;
-            encoded_funct3 = 1U;
-        }
-        return append_u32(as,
-                          stmt->section,
-                          enc_i(0x13U,
-                                encoded_rd,
-                                encoded_funct3,
-                                encoded_rs1,
-                                encoded_imm));
-    }
-
-    if (strcmp(stmt->op, "c.li") == 0) {
-        int64_t imm;
-        int compressed_rd;
-        uint16_t encoded;
-
-        if (count != 2U ||
-            (compressed_rd = reg_number(operands[0])) <= 0 ||
-            !require_imm(as, stmt, operands[1], &imm) ||
-            imm < -32 || imm > 31) {
-            minias_set_error(as, "bad-operands:c.li:%s:line=%zu",
-                             stmt->args,
-                             stmt->line);
-            return false;
-        }
-        encoded = (uint16_t)((2U << 13U) |
-                             ((((uint16_t)imm >> 5U) & 1U) << 12U) |
-                             ((uint16_t)compressed_rd << 7U) |
-                             (((uint16_t)imm & 0x1fU) << 2U) |
-                             1U);
-        return append_u16(as, stmt->section, encoded);
-    }
-
-    if (strcmp(stmt->op, ".insn") == 0) {
-        uint32_t raw_word;
-        if (!parse_raw_insn_directive(stmt->args, &raw_word)) {
-            minias_set_error(as, "bad-operands:.insn:%s:line=%zu",
-                             stmt->args,
-                             stmt->line);
-            return false;
-        }
-        return append_u32(as, stmt->section, raw_word);
-    }
-    int rd;
-    int rs1;
-    int rs2;
-    int64_t immediate;
-    uint32_t value = 0U;
-    uint32_t funct3;
-    MiniAsSymbol *symbol;
-
-    {
-        bool vector_store;
-        uint32_t vector_width;
-        if (decode_vector_unit_stride(stmt->op, &vector_store, &vector_width)) {
-            int vector_reg;
-            char base[128];
-            bool masked;
-            uint32_t vm;
-
-            if ((count != 2U && count != 3U) ||
-                (count == 3U && strcmp(operands[2], "v0.t") != 0)) {
-                minias_set_error(as,
-                                 "bad-operands:%s:%s:line=%zu",
-                                 stmt->op,
-                                 stmt->args,
-                                 stmt->line);
-                return false;
-            }
-            vector_reg = vector_reg_number(operands[0]);
-            if (vector_reg < 0 || !parse_mem(operands[1], &immediate, base) ||
-                immediate != 0 || !require_reg(as, stmt, base, &rs1)) {
-                minias_set_error(as,
-                                 "bad-operands:%s:%s:line=%zu",
-                                 stmt->op,
-                                 stmt->args,
-                                 stmt->line);
-                return false;
-            }
-            masked = count == 3U;
-            vm = masked ? 0U : 1U;
-            value = (vm << 25U) | ((uint32_t)rs1 << 15U) |
-                    (vector_width << 12U) | ((uint32_t)vector_reg << 7U) |
-                    (vector_store ? 0x27U : 0x07U);
-            return append_u32(as, stmt->section, value);
-        }
-    }
-
-    if (strcmp(stmt->op, "vmv.v.i") == 0) {
-        int vector_reg;
-        if (count != 2U) {
-            minias_set_error(as, "bad-operands:vmv.v.i:%s:line=%zu",
-                             stmt->args,
-                             stmt->line);
-            return false;
-        }
-        vector_reg = vector_reg_number(operands[0]);
-        if (vector_reg < 0 ||
-            !require_imm(as, stmt, operands[1], &immediate) ||
-            immediate < -16 || immediate > 15) {
-            minias_set_error(as, "bad-operands:vmv.v.i:%s:line=%zu",
-                             stmt->args,
-                             stmt->line);
-            return false;
-        }
-        value = (0x17U << 26U) | (1U << 25U) |
-                (((uint32_t)immediate & 0x1fU) << 15U) |
-                (3U << 12U) | ((uint32_t)vector_reg << 7U) | 0x57U;
-        return append_u32(as, stmt->section, value);
-    }
-
-    if (strcmp(stmt->op, "vsetvli") == 0) {
-        uint32_t vtypei;
-        if (!require_reg(as, stmt, operands[0], &rd) ||
-            !require_reg(as, stmt, operands[1], &rs1) ||
-            !parse_vsetvli_vtype(operands, count, &vtypei)) {
-            minias_set_error(as, "bad-operands:vsetvli:%s:line=%zu",
-                             stmt->args,
-                             stmt->line);
-            return false;
-        }
-        value = (vtypei << 20U) | ((uint32_t)rs1 << 15U) |
-                (7U << 12U) | ((uint32_t)rd << 7U) | 0x57U;
-        return append_u32(as, stmt->section, value);
-    }
-
-    if (strcmp(stmt->op, "vsetvl") == 0) {
-        if (count != 3U ||
-            !require_reg(as, stmt, operands[0], &rd) ||
-            !require_reg(as, stmt, operands[1], &rs1) ||
-            !require_reg(as, stmt, operands[2], &rs2)) {
-            return false;
-        }
-        return append_u32(as,
-                          stmt->section,
-                          enc_r(0x57U, rd, 7U, rs1, rs2, 0x40U));
-    }
-    if (is_fp_binary_single(stmt->op)) {
-        uint32_t base;
-        uint32_t rm = 7U;
-        int fd;
-        int fs1;
-        int fs2;
-
-        if ((count != 3U && count != 4U) ||
-            (fd = float_reg_number(operands[0])) < 0 ||
-            (fs1 = float_reg_number(operands[1])) < 0 ||
-            (fs2 = float_reg_number(operands[2])) < 0 ||
-            (count == 4U && !parse_fp_rounding_mode(operands[3], &rm))) {
-            minias_set_error(as, "bad-operands:%s:%s:line=%zu",
-                             stmt->op, stmt->args, stmt->line);
-            return false;
-        }
-        base = strcmp(stmt->op, "fadd.s") == 0 ? 0x00000053U
-               : strcmp(stmt->op, "fsub.s") == 0 ? 0x08000053U
-               : strcmp(stmt->op, "fmul.s") == 0 ? 0x10000053U
-                                                  : 0x18000053U;
-        return append_u32(as,
-                          stmt->section,
-                          base | ((uint32_t)fd << 7U) | (rm << 12U) |
-                              ((uint32_t)fs1 << 15U) |
-                              ((uint32_t)fs2 << 20U));
-    }
-
-    if (is_fp_binary_double(stmt->op)) {
-        uint32_t base;
-        uint32_t rm = 7U;
-        int fd;
-        int fs1;
-        int fs2;
-
-        if ((count != 3U && count != 4U) ||
-            (fd = float_reg_number(operands[0])) < 0 ||
-            (fs1 = float_reg_number(operands[1])) < 0 ||
-            (fs2 = float_reg_number(operands[2])) < 0 ||
-            (count == 4U && !parse_fp_rounding_mode(operands[3], &rm))) {
-            minias_set_error(as, "bad-operands:%s:%s:line=%zu",
-                             stmt->op, stmt->args, stmt->line);
-            return false;
-        }
-        base = strcmp(stmt->op, "fadd.d") == 0 ? 0x02000053U
-               : strcmp(stmt->op, "fsub.d") == 0 ? 0x0a000053U
-               : strcmp(stmt->op, "fmul.d") == 0 ? 0x12000053U
-                                                  : 0x1a000053U;
-        return append_u32(as,
-                          stmt->section,
-                          base | ((uint32_t)fd << 7U) | (rm << 12U) |
-                              ((uint32_t)fs1 << 15U) |
-                              ((uint32_t)fs2 << 20U));
-    }
-
-    if (strcmp(stmt->op, "fsgnjn.d") == 0) {
-        int fd;
-        int fs1;
-        int fs2;
-
-        if (count != 3U || (fd = float_reg_number(operands[0])) < 0 ||
-            (fs1 = float_reg_number(operands[1])) < 0 ||
-            (fs2 = float_reg_number(operands[2])) < 0) {
-            minias_set_error(as, "bad-operands:fsgnjn.d:%s:line=%zu",
-                             stmt->args, stmt->line);
-            return false;
-        }
-        return append_u32(as,
-                          stmt->section,
-                          0x22001053U | ((uint32_t)fd << 7U) |
-                              ((uint32_t)fs1 << 15U) |
-                              ((uint32_t)fs2 << 20U));
-    }
-
-    if (is_fp_compare_double(stmt->op)) {
-        uint32_t base;
-        int dest;
-        int fs1;
-        int fs2;
-
-        if (count != 3U || !require_reg(as, stmt, operands[0], &dest) ||
-            (fs1 = float_reg_number(operands[1])) < 0 ||
-            (fs2 = float_reg_number(operands[2])) < 0) {
-            minias_set_error(as, "bad-operands:%s:%s:line=%zu",
-                             stmt->op, stmt->args, stmt->line);
-            return false;
-        }
-        base = strcmp(stmt->op, "feq.d") == 0 ? 0xa2002053U
-               : strcmp(stmt->op, "flt.d") == 0 ? 0xa2001053U
-                                                 : 0xa2000053U;
-        return append_u32(as,
-                          stmt->section,
-                          base | ((uint32_t)dest << 7U) |
-                              ((uint32_t)fs1 << 15U) |
-                              ((uint32_t)fs2 << 20U));
-    }
-
-    if (strcmp(stmt->op, "fmv.x.d") == 0 ||
-        strcmp(stmt->op, "fmv.x.w") == 0) {
-        uint32_t base = strcmp(stmt->op, "fmv.x.d") == 0
-                            ? 0xe2000053U
-                            : 0xe0000053U;
-        int dest;
-        int source;
-
-        if (count != 2U || !require_reg(as, stmt, operands[0], &dest) ||
-            (source = float_reg_number(operands[1])) < 0) {
-            minias_set_error(as, "bad-operands:%s:%s:line=%zu",
-                             stmt->op, stmt->args, stmt->line);
-            return false;
-        }
-        return append_u32(as,
-                          stmt->section,
-                          base | ((uint32_t)dest << 7U) |
-                              ((uint32_t)source << 15U));
-    }
-
-    if (strcmp(stmt->op, "fmv.d.x") == 0 ||
-        strcmp(stmt->op, "fmv.w.x") == 0) {
-        uint32_t base = strcmp(stmt->op, "fmv.d.x") == 0
-                            ? 0xf2000053U
-                            : 0xf0000053U;
-        int dest;
-        int source;
-
-        if (count != 2U || (dest = float_reg_number(operands[0])) < 0 ||
-            !require_reg(as, stmt, operands[1], &source)) {
-            minias_set_error(as, "bad-operands:%s:%s:line=%zu",
-                             stmt->op, stmt->args, stmt->line);
-            return false;
-        }
-        return append_u32(as,
-                          stmt->section,
-                          base | ((uint32_t)dest << 7U) |
-                              ((uint32_t)source << 15U));
-    }
-
-    if (is_fp_convert(stmt->op)) {
-        uint32_t base;
-        uint32_t rm;
-        int dest;
-        int source;
-
-        if (count != 2U && count != 3U) {
-            minias_set_error(as, "bad-operands:%s:%s:line=%zu",
-                             stmt->op, stmt->args, stmt->line);
-            return false;
-        }
-
-        if (strcmp(stmt->op, "fcvt.d.w") == 0) {
-            base = 0xd2000053U;
-            rm = 0U;
-        } else if (strcmp(stmt->op, "fcvt.d.wu") == 0) {
-            base = 0xd2100053U;
-            rm = 0U;
-        } else if (strcmp(stmt->op, "fcvt.d.l") == 0) {
-            base = 0xd2200053U;
-            rm = 7U;
-        } else if (strcmp(stmt->op, "fcvt.d.lu") == 0) {
-            base = 0xd2300053U;
-            rm = 7U;
-        } else if (strcmp(stmt->op, "fcvt.w.d") == 0) {
-            base = 0xc2000053U;
-            rm = 7U;
-        } else if (strcmp(stmt->op, "fcvt.wu.d") == 0) {
-            base = 0xc2100053U;
-            rm = 7U;
-        } else if (strcmp(stmt->op, "fcvt.l.d") == 0) {
-            base = 0xc2200053U;
-            rm = 7U;
-        } else if (strcmp(stmt->op, "fcvt.lu.d") == 0) {
-            base = 0xc2300053U;
-            rm = 7U;
-        } else if (strcmp(stmt->op, "fcvt.d.s") == 0) {
-            base = 0x42000053U;
-            rm = 0U;
-        } else {
-            base = 0x40100053U;
-            rm = 7U;
-        }
-        if (count == 3U && !parse_fp_rounding_mode(operands[2], &rm)) {
-            minias_set_error(as, "bad-rounding-mode:%s:line=%zu",
-                             operands[2], stmt->line);
-            return false;
-        }
-
-        if (fp_convert_int_to_double(stmt->op)) {
-            dest = float_reg_number(operands[0]);
-            if (dest < 0 || !require_reg(as, stmt, operands[1], &source)) {
-                return false;
-            }
-        } else if (fp_convert_double_to_int(stmt->op)) {
-            if (!require_reg(as, stmt, operands[0], &dest) ||
-                (source = float_reg_number(operands[1])) < 0) {
-                return false;
-            }
-        } else {
-            dest = float_reg_number(operands[0]);
-            source = float_reg_number(operands[1]);
-            if (dest < 0 || source < 0) {
-                minias_set_error(as, "bad-operands:%s:%s:line=%zu",
-                                 stmt->op, stmt->args, stmt->line);
-                return false;
-            }
-        }
-
-        return append_u32(as,
-                          stmt->section,
-                          base | ((uint32_t)dest << 7U) | (rm << 12U) |
-                              ((uint32_t)source << 15U));
-    }
-
-    if (strcmp(stmt->op, "fld") == 0 || strcmp(stmt->op, "flw") == 0 ||
-        strcmp(stmt->op, "fsd") == 0 || strcmp(stmt->op, "fsw") == 0) {
-        int freg;
-        char base[128];
-        int64_t offset;
-        uint32_t width;
-
-        if (count != 2U || (freg = float_reg_number(operands[0])) < 0 ||
-            !parse_mem(operands[1], &offset, base) ||
-            !require_reg(as, stmt, base, &rs1) ||
-            offset < -2048 || offset > 2047) {
-            minias_set_error(as, "bad-operands:%s:%s:line=%zu",
-                             stmt->op,
-                             stmt->args,
-                             stmt->line);
-            return false;
-        }
-        width = (strcmp(stmt->op, "fld") == 0 || strcmp(stmt->op, "fsd") == 0)
-                    ? 3U
-                    : 2U;
-        if (stmt->op[1] == 'l') {
-            return append_u32(as,
-                              stmt->section,
-                              enc_i(0x07U, freg, width, rs1, offset));
-        }
-        return append_u32(as,
-                          stmt->section,
-                          enc_s(width, rs1, freg, offset));
-    }
-
-    if (strcmp(stmt->op, "sfence.vma") == 0) {
-        rs1 = 0;
-        rs2 = 0;
-        if (count > 2U ||
-            (count >= 1U && !require_reg(as, stmt, operands[0], &rs1)) ||
-            (count == 2U && !require_reg(as, stmt, operands[1], &rs2))) {
-            return false;
-        }
-        return append_u32(as,
-                          stmt->section,
-                          0x12000073U | ((uint32_t)rs1 << 15U) |
-                              ((uint32_t)rs2 << 20U));
-    }
-    if (strcmp(stmt->op, "ret") == 0) {
-        return append_u32(as, stmt->section, enc_i(0x67U, 0, 0U, 1, 0));
-    }
-    if (strcmp(stmt->op, "nop") == 0) {
-        return append_u32(as, stmt->section, enc_i(0x13U, 0, 0U, 0, 0));
-    }
-    if (strcmp(stmt->op, "mv") == 0 || strcmp(stmt->op, "move") == 0) {
-        if (count != 2U || !require_reg(as, stmt, operands[0], &rd) ||
-            !require_reg(as, stmt, operands[1], &rs1)) {
-            return false;
-        }
-        return append_u32(as, stmt->section, enc_i(0x13U, rd, 0U, rs1, 0));
-    }
-    if (strcmp(stmt->op, "jr") == 0) {
-        if (count != 1U || !require_reg(as, stmt, operands[0], &rs1)) {
-            return false;
-        }
-        return append_u32(as, stmt->section, enc_i(0x67U, 0, 0U, rs1, 0));
-    }
-    if (strcmp(stmt->op, "snez") == 0) {
-        if (count != 2U || !require_reg(as, stmt, operands[0], &rd) ||
-            !require_reg(as, stmt, operands[1], &rs1)) {
-            return false;
-        }
-        return append_u32(as, stmt->section, enc_r(0x33U, rd, 3U, 0, rs1, 0U));
-    }
-    if (strcmp(stmt->op, "seqz") == 0) {
-        if (count != 2U || !require_reg(as, stmt, operands[0], &rd) ||
-            !require_reg(as, stmt, operands[1], &rs1)) {
-            return false;
-        }
-        return append_u32(as, stmt->section, enc_i(0x13U, rd, 3U, rs1, 1));
-    }
-    if (strcmp(stmt->op, "neg") == 0) {
-        if (count != 2U || !require_reg(as, stmt, operands[0], &rd) ||
-            !require_reg(as, stmt, operands[1], &rs1)) {
-            return false;
-        }
-        return append_u32(as, stmt->section, enc_r(0x33U, rd, 0U, 0, rs1, 0x20U));
-    }
-    if (strcmp(stmt->op, "negw") == 0) {
-        if (count != 2U || !require_reg(as, stmt, operands[0], &rd) ||
-            !require_reg(as, stmt, operands[1], &rs1)) {
-            return false;
-        }
-        return append_u32(as, stmt->section, enc_r(0x3bU, rd, 0U, 0, rs1, 0x20U));
-    }
-    if (strcmp(stmt->op, "not") == 0) {
-        if (count != 2U || !require_reg(as, stmt, operands[0], &rd) ||
-            !require_reg(as, stmt, operands[1], &rs1)) {
-            return false;
-        }
-        return append_u32(as, stmt->section, enc_i(0x13U, rd, 4U, rs1, -1));
-    }
-    if (strcmp(stmt->op, "frcsr") == 0) {
-        if (count != 1U || !require_reg(as, stmt, operands[0], &rd)) {
-            return false;
-        }
-        return append_u32(as,
-                          stmt->section,
-                          0x73U | ((uint32_t)rd << 7U) | (2U << 12U) |
-                              (0x003U << 20U));
-    }
-    if (strcmp(stmt->op, "fscsr") == 0) {
-        if (count != 1U || !require_reg(as, stmt, operands[0], &rs1)) {
-            return false;
-        }
-        return append_u32(as,
-                          stmt->section,
-                          0x73U | (1U << 12U) |
-                              ((uint32_t)rs1 << 15U) | (0x003U << 20U));
-    }
-    if (strcmp(stmt->op, "li") == 0) {
-        uint64_t bits;
-        bool fits_signed32;
-        int64_t signed_value;
-
-        if (count != 2U || !require_reg(as, stmt, operands[0], &rd) ||
-            !parse_li_bits(operands[1], &bits, &fits_signed32, &signed_value)) {
-            return false;
-        }
-        if (as->strict_i_xlen == 32U) {
-            int64_t rv32_value;
-            int64_t hi;
-            int64_t lo;
-            if (!rv32_li_value(bits, &rv32_value)) {
-                minias_set_error(as, "rv32i-li-overflows-32-bits:line=%zu",
-                                 stmt->line);
-                return false;
-            }
-            if (rv32_value >= -2048 && rv32_value <= 2047)
-                return append_u32(as, stmt->section,
-                                  enc_i(0x13U, rd, 0U, 0, rv32_value));
-            hi = (rv32_value + INT64_C(2048)) >> 12;
-            lo = rv32_value - hi * INT64_C(4096);
-            if (!append_u32(as, stmt->section,
-                            0x37U | ((uint32_t)rd << 7U) |
-                            (((uint32_t)hi & UINT32_C(0xfffff)) << 12U)))
-                return false;
-            return lo == 0 || append_u32(
-                as, stmt->section, enc_i(0x13U, rd, 0U, rd, lo));
-        }
-        if (fits_signed32) {
-            int64_t hi;
-            int64_t lo;
-
-            if (signed_value >= -2048 && signed_value <= 2047) {
-                return append_u32(as,
-                                  stmt->section,
-                                  enc_i(0x13U, rd, 0U, 0, signed_value));
-            }
-            hi = (signed_value + 0x800) >> 12;
-            lo = signed_value - (hi << 12);
-            if (!append_u32(as,
-                            stmt->section,
-                            0x37U | ((uint32_t)rd << 7U) |
-                                (((uint32_t)hi & 0xfffffU) << 12U))) {
-                return false;
-            }
-            return append_u32(as,
-                              stmt->section,
-                              enc_i(0x1bU, rd, 0U, rd, lo));
-        }
-        {
-            int byte_index = 7;
-            int i;
-            uint64_t top;
-
-            while (byte_index > 0 &&
-                   ((bits >> ((unsigned int)byte_index * 8U)) &
-                    UINT64_C(0xff)) == 0U) {
-                --byte_index;
-            }
-            top = (bits >> ((unsigned int)byte_index * 8U)) & UINT64_C(0xff);
-            if (!append_u32(as,
-                            stmt->section,
-                            enc_i(0x13U, rd, 0U, 0, (int64_t)top))) {
-                return false;
-            }
-            for (i = byte_index - 1; i >= 0; --i) {
-                uint64_t byte =
-                    (bits >> ((unsigned int)i * 8U)) & UINT64_C(0xff);
-
-                if (!append_u32(as,
-                                stmt->section,
-                                enc_i(0x13U, rd, 1U, rd, 8))) {
-                    return false;
-                }
-                if (byte != 0U &&
-                    !append_u32(as,
-                                stmt->section,
-                                enc_i(0x13U, rd, 0U, rd, (int64_t)byte))) {
-                    return false;
-                }
-            }
-            return true;
-        }
-    }
-    if (strcmp(stmt->op, "call") == 0) {
-        MiniAsSymbolExpr expr;
-
-        if (count != 1U || !parse_call_target(operands[0], &expr)) {
-            minias_set_error(as,
-                             "unsupported-expression:%s:line=%zu",
-                             stmt->args,
-                             stmt->line);
-            return false;
-        }
-        if (!append_u32(as, stmt->section, 0x00000097U) ||
-            !append_u32(as, stmt->section, enc_i(0x67U, 1, 0U, 1, 0))) {
-            return false;
-        }
-        return minias_add_relocation(as,
-                                     stmt->section,
-                                     stmt->offset,
-                                     MINIAS_R_RISCV_CALL_PLT,
-                                     expr.name,
-                                     expr.addend);
-    }
-    if (strcmp(stmt->op, "tail") == 0) {
-        MiniAsSymbolExpr expr;
-
-        if (count != 1U || !parse_call_target(operands[0], &expr)) {
-            minias_set_error(as,
-                             "unsupported-expression:%s:line=%zu",
-                             stmt->args,
-                             stmt->line);
-            return false;
-        }
-        if (!append_u32(as, stmt->section, 0x00000317U) ||
-            !append_u32(as, stmt->section, enc_i(0x67U, 0, 0U, 6, 0))) {
-            return false;
-        }
-        return minias_add_relocation(as,
-                                     stmt->section,
-                                     stmt->offset,
-                                     MINIAS_R_RISCV_CALL_PLT,
-                                     expr.name,
-                                     expr.addend);
-    }
-
-    if (strcmp(stmt->op, "lla") == 0 || strcmp(stmt->op, "la") == 0) {
-        MiniAsSymbolExpr expr;
-        MiniAsSymbol *anchor;
-        MiniAsSymbol *target_symbol;
-        char anchor_name[96];
-        bool use_got;
-
-        if (count != 2U || !require_reg(as, stmt, operands[0], &rd) ||
-            !minias_parse_symbol_addend(operands[1], &expr)) {
-            minias_set_error(as, "unsupported-expression:%s:line=%zu", stmt->args, stmt->line);
-            return false;
-        }
-        target_symbol = minias_get_symbol(as, expr.name, false);
-        /* GNU as defaults to NOPIC. The .option pic/nopic directive is
-         * scoped and saved per statement. A bare 'la external_symbol' in
-         * the Linux kernel must use PCREL_HI20 + ADDI, not GOT_HI20 + LD:
-         * the GOT is unavailable during RISC-V early boot. In explicit
-         * PIC mode an undefined external can use GOT_HI20, but only when
-         * no nonzero addend is requested by the source. */
-        use_got = stmt->pic_enabled &&
-                  strcmp(stmt->op, "la") == 0 && expr.addend == 0 &&
-                  (target_symbol == NULL || !target_symbol->defined);
-
-        (void)snprintf(anchor_name,
-                       sizeof(anchor_name),
-                       ".Lminias_pcrel_%zu",
-                       ++as->pcrel_anchor_counter);
-        anchor = minias_get_symbol(as, anchor_name, true);
-        if (anchor == NULL) {
-            return false;
-        }
-        anchor->defined = true;
-        anchor->section = stmt->section;
-        anchor->value = stmt->offset;
-        anchor->bind = MINIAS_STB_LOCAL;
-
-        if (!append_u32(as, stmt->section, 0x17U | ((uint32_t)rd << 7U))) {
-            return false;
-        }
-        if (use_got) {
-            if (!append_u32(as, stmt->section, enc_i(0x03U, rd, 3U, rd, 0))) {
-                return false;
-            }
-        } else if (!append_u32(as, stmt->section, enc_i(0x13U, rd, 0U, rd, 0))) {
-            return false;
-        }
-
-        return minias_add_relocation(as,
-                                     stmt->section,
-                                     stmt->offset,
-                                     use_got ? MINIAS_R_RISCV_GOT_HI20
-                                             : MINIAS_R_RISCV_PCREL_HI20,
-                                     expr.name,
-                                     expr.addend) &&
-               minias_add_relocation(as,
-                                     stmt->section,
-                                     stmt->offset + 4U,
-                                     MINIAS_R_RISCV_PCREL_LO12_I,
-                                     anchor_name,
-                                     0);
-    }
-
-    if (strcmp(stmt->op, "lui") == 0 || strcmp(stmt->op, "auipc") == 0) {
-        if (count != 2U || !require_reg(as, stmt, operands[0], &rd) ||
-            !require_imm(as, stmt, operands[1], &immediate)) {
-            return false;
-        }
-        value = (strcmp(stmt->op, "lui") == 0 ? 0x37U : 0x17U) |
-                ((uint32_t)rd << 7U) |
-                (((uint32_t)immediate & 0xfffffU) << 12U);
-        return append_u32(as, stmt->section, value);
-    }
-    if (strcmp(stmt->op, "sext.w") == 0) {
-        if (count != 2U || !require_reg(as, stmt, operands[0], &rd) ||
-            !require_reg(as, stmt, operands[1], &rs1)) {
-            return false;
-        }
-        return append_u32(as,
-                          stmt->section,
-                          enc_i(0x1bU, rd, 0U, rs1, 0));
-    }
-    if (strcmp(stmt->op, "addi") == 0 || strcmp(stmt->op, "addiw") == 0 ||
-        strcmp(stmt->op, "andi") == 0 || strcmp(stmt->op, "ori") == 0 ||
-        strcmp(stmt->op, "xori") == 0 || strcmp(stmt->op, "slti") == 0 ||
-        strcmp(stmt->op, "sltiu") == 0) {
-        if (count != 3U || !require_reg(as, stmt, operands[0], &rd) ||
-            !require_reg(as, stmt, operands[1], &rs1) ||
-            !require_imm(as, stmt, operands[2], &immediate)) {
-            return false;
-        }
-        if (immediate < -2048 || immediate > 2047) {
-            minias_set_error(as, "immediate-range:%s:line=%zu", stmt->op, stmt->line);
-            return false;
-        }
-        funct3 = strcmp(stmt->op, "slti") == 0    ? 2U
-                 : strcmp(stmt->op, "sltiu") == 0 ? 3U
-                 : strcmp(stmt->op, "xori") == 0  ? 4U
-                 : strcmp(stmt->op, "ori") == 0   ? 6U
-                 : strcmp(stmt->op, "andi") == 0  ? 7U
-                                                   : 0U;
-        return append_u32(as,
-                          stmt->section,
-                          enc_i(strcmp(stmt->op, "addiw") == 0 ? 0x1bU : 0x13U,
-                                rd,
-                                funct3,
-                                rs1,
-                                immediate));
-    }
-    if (strcmp(stmt->op, "pause") == 0) {
-        if (count != 0U) {
-            minias_set_error(as, "operand-count:pause:line=%zu", stmt->line);
-            return false;
-        }
-        return append_u32(as, stmt->section, 0x0100000fU);
-    }
-    if (strcmp(stmt->op, "wfi") == 0) {
-        if (count != 0U) {
-            minias_set_error(as, "operand-count:wfi:line=%zu", stmt->line);
-            return false;
-        }
-        return append_u32(as, stmt->section, 0x10500073U);
-    }
-    {
-        bool is_lr;
-        uint32_t atomic_width;
-        uint32_t atomic_ordering;
-        if (decode_lr_sc_mnemonic(stmt->op,
-                                  &is_lr,
-                                  &atomic_width,
-                                  &atomic_ordering)) {
-            char base[128];
-            int64_t offset;
-            uint32_t funct5 = is_lr ? 0x02U : 0x03U;
-
-            if (is_lr) {
-                if (count != 2U || !require_reg(as, stmt, operands[0], &rd) ||
-                    !parse_mem(operands[1], &offset, base) || offset != 0 ||
-                    !require_reg(as, stmt, base, &rs1)) {
-                    minias_set_error(as, "bad-%s:line=%zu", stmt->op, stmt->line);
-                    return false;
-                }
-                rs2 = 0;
-            } else {
-                if (count != 3U || !require_reg(as, stmt, operands[0], &rd) ||
-                    !require_reg(as, stmt, operands[1], &rs2) ||
-                    !parse_mem(operands[2], &offset, base) || offset != 0 ||
-                    !require_reg(as, stmt, base, &rs1)) {
-                    minias_set_error(as, "bad-%s:line=%zu", stmt->op, stmt->line);
-                    return false;
-                }
-            }
-            return append_u32(as,
-                              stmt->section,
-                              0x2fU | ((uint32_t)rd << 7U) |
-                                  (atomic_width << 12U) |
-                                  ((uint32_t)rs1 << 15U) |
-                                  ((uint32_t)rs2 << 20U) |
-                                  atomic_ordering | (funct5 << 27U));
-        }
-    }
-
-    {
-        uint32_t amo_funct5;
-        uint32_t amo_width;
-        uint32_t amo_ordering;
-        if (decode_amo_mnemonic(stmt->op,
-                                &amo_funct5,
-                                &amo_width,
-                                &amo_ordering)) {
-            char base[128];
-            int64_t offset;
-
-            if (count != 3U || !require_reg(as, stmt, operands[0], &rd) ||
-                !require_reg(as, stmt, operands[1], &rs2) ||
-                !parse_mem(operands[2], &offset, base) || offset != 0 ||
-                !require_reg(as, stmt, base, &rs1)) {
-                minias_set_error(as, "bad-%s:line=%zu", stmt->op, stmt->line);
-                return false;
-            }
-            return append_u32(as,
-                              stmt->section,
-                              0x2fU | ((uint32_t)rd << 7U) |
-                                  (amo_width << 12U) |
-                                  ((uint32_t)rs1 << 15U) |
-                                  ((uint32_t)rs2 << 20U) |
-                                  amo_ordering | (amo_funct5 << 27U));
-        }
-    }
-    if (strcmp(stmt->op, "sret") == 0) {
-        if (count != 0U) {
-            minias_set_error(as, "operand-count:sret:line=%zu", stmt->line);
-            return false;
-        }
-        return append_u32(as, stmt->section, 0x10200073U);
-    }
-    if (strcmp(stmt->op, "ecall") == 0) {
-        if (count != 0U) {
-            minias_set_error(as, "operand-count:ecall:line=%zu", stmt->line);
-            return false;
-        }
-        return append_u32(as, stmt->section, 0x00000073U);
-    }
-    if (strcmp(stmt->op, "ebreak") == 0) {
-        if (count != 0U) {
-            minias_set_error(as, "operand-count:ebreak:line=%zu", stmt->line);
-            return false;
-        }
-        return append_u32(as, stmt->section, 0x00100073U);
-    }
-    if (strcmp(stmt->op, "csrr") == 0) {
-        uint32_t csr;
-
-        if (count != 2U || !require_reg(as, stmt, operands[0], &rd) ||
-            !parse_csr(operands[1], &csr)) {
-            minias_set_error(as, "bad-csrr:line=%zu", stmt->line);
-            return false;
-        }
-        return append_u32(as,
-                          stmt->section,
-                          0x73U | ((uint32_t)rd << 7U) | (2U << 12U) |
-                              (csr << 20U));
-    }
-    if (strcmp(stmt->op, "csrrw") == 0) {
-        uint32_t csr;
-        int64_t zimm;
-
-        if (count != 3U || !require_reg(as, stmt, operands[0], &rd) ||
-            !parse_csr(operands[1], &csr)) {
-            minias_set_error(as, "bad-csrrw:line=%zu", stmt->line);
-            return false;
-        }
-        if (parse_i64(operands[2], &zimm)) {
-            if (zimm < 0 || zimm > 31) {
-                minias_set_error(as, "bad-csrrw-zimm:line=%zu", stmt->line);
-                return false;
-            }
-            return append_u32(as,
-                              stmt->section,
-                              0x73U | ((uint32_t)rd << 7U) | (5U << 12U) |
-                                  ((uint32_t)zimm << 15U) | (csr << 20U));
-        }
-        if (!require_reg(as, stmt, operands[2], &rs1)) {
-            minias_set_error(as, "bad-csrrw:line=%zu", stmt->line);
-            return false;
-        }
-        return append_u32(as,
-                          stmt->section,
-                          0x73U | ((uint32_t)rd << 7U) | (1U << 12U) |
-                              ((uint32_t)rs1 << 15U) | (csr << 20U));
-    }
-    if (strcmp(stmt->op, "csrrc") == 0) {
-        uint32_t csr;
-        int64_t zimm;
-
-        if (count != 3U || !require_reg(as, stmt, operands[0], &rd) ||
-            !parse_csr(operands[1], &csr)) {
-            minias_set_error(as, "bad-csrrc:line=%zu", stmt->line);
-            return false;
-        }
-        if (parse_i64(operands[2], &zimm)) {
-            if (zimm < 0 || zimm > 31) {
-                minias_set_error(as, "bad-csrrc-zimm:line=%zu", stmt->line);
-                return false;
-            }
-            return append_u32(as,
-                              stmt->section,
-                              0x73U | ((uint32_t)rd << 7U) | (7U << 12U) |
-                                  ((uint32_t)zimm << 15U) | (csr << 20U));
-        }
-        if (!require_reg(as, stmt, operands[2], &rs1)) {
-            minias_set_error(as, "bad-csrrc:line=%zu", stmt->line);
-            return false;
-        }
-        return append_u32(as,
-                          stmt->section,
-                          0x73U | ((uint32_t)rd << 7U) | (3U << 12U) |
-                              ((uint32_t)rs1 << 15U) | (csr << 20U));
-    }
-    if (strcmp(stmt->op, "csrw") == 0) {
-        uint32_t csr;
-        int64_t zimm;
-
-        if (count != 2U || !parse_csr(operands[0], &csr)) {
-            minias_set_error(as, "bad-csrw:line=%zu", stmt->line);
-            return false;
-        }
-        if (parse_i64(operands[1], &zimm)) {
-            if (zimm < 0 || zimm > 31) {
-                minias_set_error(as, "bad-csrw-zimm:line=%zu", stmt->line);
-                return false;
-            }
-            return append_u32(as,
-                              stmt->section,
-                              0x73U | (5U << 12U) |
-                                  ((uint32_t)zimm << 15U) | (csr << 20U));
-        }
-        if (!require_reg(as, stmt, operands[1], &rs1)) {
-            minias_set_error(as, "bad-csrw:line=%zu", stmt->line);
-            return false;
-        }
-        return append_u32(as,
-                          stmt->section,
-                          0x73U | (1U << 12U) |
-                              ((uint32_t)rs1 << 15U) | (csr << 20U));
-    }
-    if (strcmp(stmt->op, "csrs") == 0) {
-        uint32_t csr;
-        int64_t zimm;
-
-        if (count != 2U || !parse_csr(operands[0], &csr)) {
-            minias_set_error(as, "bad-csrs:line=%zu", stmt->line);
-            return false;
-        }
-        if (parse_i64(operands[1], &zimm)) {
-            if (zimm < 0 || zimm > 31) {
-                minias_set_error(as, "bad-csrs-zimm:line=%zu", stmt->line);
-                return false;
-            }
-            return append_u32(as,
-                              stmt->section,
-                              0x73U | (6U << 12U) |
-                                  ((uint32_t)zimm << 15U) | (csr << 20U));
-        }
-        if (!require_reg(as, stmt, operands[1], &rs1)) {
-            minias_set_error(as, "bad-csrs:line=%zu", stmt->line);
-            return false;
-        }
-        return append_u32(as,
-                          stmt->section,
-                          0x73U | (2U << 12U) |
-                              ((uint32_t)rs1 << 15U) | (csr << 20U));
-    }
-    if (strcmp(stmt->op, "csrc") == 0) {
-        uint32_t csr;
-        int64_t zimm;
-
-        if (count != 2U || !parse_csr(operands[0], &csr)) {
-            minias_set_error(as, "bad-csrc:line=%zu", stmt->line);
-            return false;
-        }
-        if (parse_i64(operands[1], &zimm)) {
-            if (zimm < 0 || zimm > 31) {
-                minias_set_error(as, "bad-csrc-zimm:line=%zu", stmt->line);
-                return false;
-            }
-            return append_u32(as,
-                              stmt->section,
-                              0x73U | (7U << 12U) |
-                                  ((uint32_t)zimm << 15U) | (csr << 20U));
-        }
-        if (!require_reg(as, stmt, operands[1], &rs1)) {
-            minias_set_error(as, "bad-csrc:line=%zu", stmt->line);
-            return false;
-        }
-        return append_u32(as,
-                          stmt->section,
-                          0x73U | (3U << 12U) |
-                              ((uint32_t)rs1 << 15U) | (csr << 20U));
-    }
-    if (strcmp(stmt->op, "fence.i") == 0) {
-        if (count != 0U) {
-            minias_set_error(as, "operand-count:fence.i:line=%zu", stmt->line);
-            return false;
-        }
-        return append_u32(as, stmt->section, 0x0000100fU);
-    }
-    if (strcmp(stmt->op, "fence") == 0) {
-        uint32_t pred = 0xfU;
-        uint32_t succ = 0xfU;
-
-        if (count == 2U) {
-            if (!parse_fence_set(operands[0], &pred) ||
-                !parse_fence_set(operands[1], &succ)) {
-                minias_set_error(as, "bad-fence:line=%zu", stmt->line);
-                return false;
-            }
-        } else if (count != 0U) {
-            minias_set_error(as, "operand-count:fence:line=%zu", stmt->line);
-            return false;
-        }
-        return append_u32(as,
-                          stmt->section,
-                          enc_i(0x0fU,
-                                0,
-                                0U,
-                                0,
-                                (int64_t)((pred << 4U) | succ)));
-    }
-    if (strcmp(stmt->op, "slliw") == 0 || strcmp(stmt->op, "srliw") == 0 ||
-        strcmp(stmt->op, "sraiw") == 0) {
-        if (count != 3U || !require_reg(as, stmt, operands[0], &rd) ||
-            !require_reg(as, stmt, operands[1], &rs1) ||
-            !require_imm(as, stmt, operands[2], &immediate)) {
-            return false;
-        }
-        if (immediate < 0 || immediate > 31) {
-            minias_set_error(as, "shift-range:%s:line=%zu", stmt->op, stmt->line);
-            return false;
-        }
-        value = enc_i(0x1bU,
-                      rd,
-                      strcmp(stmt->op, "slliw") == 0 ? 1U : 5U,
-                      rs1,
-                      immediate);
-        if (strcmp(stmt->op, "sraiw") == 0) {
-            value |= 0x40000000U;
-        }
-        return append_u32(as, stmt->section, value);
-    }
-    if (strcmp(stmt->op, "slli") == 0 || strcmp(stmt->op, "srli") == 0 ||
-        strcmp(stmt->op, "srai") == 0) {
-        if (count != 3U || !require_reg(as, stmt, operands[0], &rd) ||
-            !require_reg(as, stmt, operands[1], &rs1) ||
-            !require_imm(as, stmt, operands[2], &immediate)) {
-            return false;
-        }
-        if (immediate < 0 || immediate > 63) {
-            minias_set_error(as, "shift-range:%s:line=%zu", stmt->op, stmt->line);
-            return false;
-        }
-        value = enc_i(0x13U,
-                      rd,
-                      strcmp(stmt->op, "slli") == 0 ? 1U : 5U,
-                      rs1,
-                      immediate);
-        if (strcmp(stmt->op, "srai") == 0) {
-            value |= 0x40000000U;
-        }
-        return append_u32(as, stmt->section, value);
-    }
-    if (strcmp(stmt->op, "sgt") == 0 || strcmp(stmt->op, "sgtu") == 0) {
-        if (count != 3U || !require_reg(as, stmt, operands[0], &rd) ||
-            !require_reg(as, stmt, operands[1], &rs1) ||
-            !require_reg(as, stmt, operands[2], &rs2)) {
-            return false;
-        }
-        return append_u32(as,
-                          stmt->section,
-                          enc_r(0x33U,
-                                rd,
-                                strcmp(stmt->op, "sgt") == 0 ? 2U : 3U,
-                                rs2,
-                                rs1,
-                                0U));
-    }
-    if (strcmp(stmt->op, "addw") == 0 || strcmp(stmt->op, "subw") == 0 ||
-        strcmp(stmt->op, "sllw") == 0 || strcmp(stmt->op, "srlw") == 0 ||
-        strcmp(stmt->op, "sraw") == 0 || strcmp(stmt->op, "mulw") == 0 ||
-        strcmp(stmt->op, "divw") == 0 || strcmp(stmt->op, "divuw") == 0 ||
-        strcmp(stmt->op, "remw") == 0 || strcmp(stmt->op, "remuw") == 0) {
-        uint32_t word_funct3 = 0U;
-        uint32_t word_funct7 = 0U;
-
-        if (count != 3U || !require_reg(as, stmt, operands[0], &rd) ||
-            !require_reg(as, stmt, operands[1], &rs1) ||
-            !require_reg(as, stmt, operands[2], &rs2)) {
-            return false;
-        }
-        if (strcmp(stmt->op, "subw") == 0) {
-            word_funct7 = 0x20U;
-        } else if (strcmp(stmt->op, "sllw") == 0) {
-            word_funct3 = 1U;
-        } else if (strcmp(stmt->op, "srlw") == 0) {
-            word_funct3 = 5U;
-        } else if (strcmp(stmt->op, "sraw") == 0) {
-            word_funct3 = 5U;
-            word_funct7 = 0x20U;
-        } else if (strcmp(stmt->op, "mulw") == 0) {
-            word_funct7 = 1U;
-        } else if (strcmp(stmt->op, "divw") == 0) {
-            word_funct3 = 4U;
-            word_funct7 = 1U;
-        } else if (strcmp(stmt->op, "divuw") == 0) {
-            word_funct3 = 5U;
-            word_funct7 = 1U;
-        } else if (strcmp(stmt->op, "remw") == 0) {
-            word_funct3 = 6U;
-            word_funct7 = 1U;
-        } else if (strcmp(stmt->op, "remuw") == 0) {
-            word_funct3 = 7U;
-            word_funct7 = 1U;
-        }
-        return append_u32(as,
-                          stmt->section,
-                          enc_r(0x3bU,
-                                rd,
-                                word_funct3,
-                                rs1,
-                                rs2,
-                                word_funct7));
-    }
-    if (strcmp(stmt->op, "add") == 0 || strcmp(stmt->op, "sub") == 0 ||
-        strcmp(stmt->op, "sll") == 0 || strcmp(stmt->op, "srl") == 0 ||
-        strcmp(stmt->op, "sra") == 0 || strcmp(stmt->op, "and") == 0 ||
-        strcmp(stmt->op, "or") == 0 ||
-        strcmp(stmt->op, "xor") == 0 || strcmp(stmt->op, "slt") == 0 ||
-        strcmp(stmt->op, "sltu") == 0 || strcmp(stmt->op, "mul") == 0 ||
-        strcmp(stmt->op, "mulh") == 0 || strcmp(stmt->op, "mulhu") == 0 ||
-        strcmp(stmt->op, "div") == 0 || strcmp(stmt->op, "divu") == 0 ||
-        strcmp(stmt->op, "rem") == 0 || strcmp(stmt->op, "remu") == 0) {
-        uint32_t funct7 = 0U;
-
-        if (count != 3U || !require_reg(as, stmt, operands[0], &rd) ||
-            !require_reg(as, stmt, operands[1], &rs1)) {
-            return false;
-        }
-        if ((strcmp(stmt->op, "sll") == 0 || strcmp(stmt->op, "srl") == 0 ||
-             strcmp(stmt->op, "sra") == 0) &&
-            parse_i64(operands[2], &immediate)) {
-            if (immediate < 0 || immediate > 63) {
-                minias_set_error(as, "shift-range:%s:line=%zu", stmt->op, stmt->line);
-                return false;
-            }
-            value = enc_i(0x13U,
-                          rd,
-                          strcmp(stmt->op, "sll") == 0 ? 1U : 5U,
-                          rs1,
-                          immediate);
-            if (strcmp(stmt->op, "sra") == 0) {
-                value |= 0x40000000U;
-            }
-            return append_u32(as, stmt->section, value);
-        }
-        if ((strcmp(stmt->op, "add") == 0 ||
-             strcmp(stmt->op, "sub") == 0) &&
-            reg_number(operands[2]) < 0 &&
-            parse_i64(operands[2], &immediate)) {
-            if (strcmp(stmt->op, "sub") == 0) {
-                if (immediate == INT64_MIN) {
-                    minias_set_error(as,
-                                     "immediate-range:sub:%s:line=%zu",
-                                     operands[2],
-                                     stmt->line);
-                    return false;
-                }
-                immediate = -immediate;
-            }
-            if (immediate < -2048 || immediate > 2047) {
-                minias_set_error(as,
-                                 "immediate-range:%s:%s:line=%zu",
-                                 stmt->op,
-                                 operands[2],
-                                 stmt->line);
-                return false;
-            }
-            return append_u32(as,
-                              stmt->section,
-                              enc_i(0x13U,
-                                    rd,
-                                    0U,
-                                    rs1,
-                                    immediate));
-        }
-        if ((strcmp(stmt->op, "and") == 0 ||
-             strcmp(stmt->op, "or") == 0 ||
-             strcmp(stmt->op, "xor") == 0) &&
-            parse_i64(operands[2], &immediate)) {
-            uint32_t imm_funct3 =
-                strcmp(stmt->op, "and") == 0 ? 7U
-                : strcmp(stmt->op, "or") == 0 ? 6U
-                                               : 4U;
-            if (immediate < -2048 || immediate > 2047) {
-                minias_set_error(as,
-                                 "immediate-range:%s:%s:line=%zu",
-                                 stmt->op,
-                                 operands[2],
-                                 stmt->line);
-                return false;
-            }
-            return append_u32(as,
-                              stmt->section,
-                              enc_i(0x13U,
-                                    rd,
-                                    imm_funct3,
-                                    rs1,
-                                    immediate));
-        }
-        if (!require_reg(as, stmt, operands[2], &rs2)) {
-            return false;
-        }
-        if (strcmp(stmt->op, "sub") == 0) {
-            funct3 = 0U;
-            funct7 = 0x20U;
-        } else if (strcmp(stmt->op, "sll") == 0) {
-            funct3 = 1U;
-        } else if (strcmp(stmt->op, "srl") == 0) {
-            funct3 = 5U;
-        } else if (strcmp(stmt->op, "sra") == 0) {
-            funct3 = 5U;
-            funct7 = 0x20U;
-        } else if (strcmp(stmt->op, "and") == 0) {
-            funct3 = 7U;
-        } else if (strcmp(stmt->op, "or") == 0) {
-            funct3 = 6U;
-        } else if (strcmp(stmt->op, "xor") == 0) {
-            funct3 = 4U;
-        } else if (strcmp(stmt->op, "slt") == 0) {
-            funct3 = 2U;
-        } else if (strcmp(stmt->op, "sltu") == 0) {
-            funct3 = 3U;
-        } else if (strcmp(stmt->op, "mul") == 0) {
-            funct3 = 0U;
-            funct7 = 1U;
-        } else if (strcmp(stmt->op, "mulh") == 0) {
-            funct3 = 1U;
-            funct7 = 1U;
-        } else if (strcmp(stmt->op, "mulhu") == 0) {
-            funct3 = 3U;
-            funct7 = 1U;
-        } else if (strcmp(stmt->op, "div") == 0) {
-            funct3 = 4U;
-            funct7 = 1U;
-        } else if (strcmp(stmt->op, "divu") == 0) {
-            funct3 = 5U;
-            funct7 = 1U;
-        } else if (strcmp(stmt->op, "rem") == 0) {
-            funct3 = 6U;
-            funct7 = 1U;
-        } else if (strcmp(stmt->op, "remu") == 0) {
-            funct3 = 7U;
-            funct7 = 1U;
-        } else {
-            funct3 = 0U;
-        }
-        return append_u32(as, stmt->section, enc_r(0x33U, rd, funct3, rs1, rs2, funct7));
-    }
-    if (strcmp(stmt->op, "lb") == 0 || strcmp(stmt->op, "lbu") == 0 ||
-        strcmp(stmt->op, "lh") == 0 || strcmp(stmt->op, "lhu") == 0 ||
-        strcmp(stmt->op, "lw") == 0 || strcmp(stmt->op, "lwu") == 0 ||
-        strcmp(stmt->op, "ld") == 0) {
-        char base[128];
-
-        if (count != 2U || !require_reg(as, stmt, operands[0], &rd)) {
-            return false;
-        }
-        funct3 = strcmp(stmt->op, "lb") == 0    ? 0U
-                 : strcmp(stmt->op, "lh") == 0  ? 1U
-                 : strcmp(stmt->op, "lw") == 0  ? 2U
-                 : strcmp(stmt->op, "ld") == 0  ? 3U
-                 : strcmp(stmt->op, "lbu") == 0 ? 4U
-                 : strcmp(stmt->op, "lhu") == 0 ? 5U
-                                                 : 6U;
-        if (parse_mem(operands[1], &immediate, base)) {
-            if (!require_reg(as, stmt, base, &rs1)) {
-                return false;
-            }
-            return append_u32(as,
-                              stmt->section,
-                              enc_i(0x03U, rd, funct3, rs1, immediate));
-        }
-        {
-            MiniAsSymbolExpr expr;
-            MiniAsSymbol *anchor;
-            char anchor_name[96];
-
-            if (!minias_parse_symbol_addend(operands[1], &expr)) {
-                minias_set_error(as,
-                                 "unsupported-expression:%s:%s:line=%zu",
-                                 stmt->op,
-                                 operands[1],
-                                 stmt->line);
-                return false;
-            }
-            (void)snprintf(anchor_name,
-                           sizeof(anchor_name),
-                           ".Lminias_load_%zu",
-                           ++as->pcrel_anchor_counter);
-            anchor = minias_get_symbol(as, anchor_name, true);
-            if (anchor == NULL) {
-                return false;
-            }
-            anchor->defined = true;
-            anchor->section = stmt->section;
-            anchor->subsection = stmt->subsection;
-            anchor->value = stmt->offset;
-            anchor->bind = MINIAS_STB_LOCAL;
-
-            if (!append_u32(as,
-                            stmt->section,
-                            0x17U | ((uint32_t)rd << 7U)) ||
-                !append_u32(as,
-                            stmt->section,
-                            enc_i(0x03U, rd, funct3, rd, 0))) {
-                return false;
-            }
-            return minias_add_relocation(as,
-                                         stmt->section,
-                                         stmt->offset,
-                                         MINIAS_R_RISCV_PCREL_HI20,
-                                         expr.name,
-                                         expr.addend) &&
-                   minias_add_relocation(as,
-                                         stmt->section,
-                                         stmt->offset + 4U,
-                                         MINIAS_R_RISCV_PCREL_LO12_I,
-                                         anchor_name,
-                                         0);
-        }
-    }
-    if (strcmp(stmt->op, "sb") == 0 || strcmp(stmt->op, "sh") == 0 ||
-        strcmp(stmt->op, "sw") == 0 || strcmp(stmt->op, "sd") == 0) {
-        char base[128];
-
-        funct3 = strcmp(stmt->op, "sb") == 0   ? 0U
-                 : strcmp(stmt->op, "sh") == 0 ? 1U
-                 : strcmp(stmt->op, "sw") == 0 ? 2U
-                                                : 3U;
-        if (count == 2U) {
-            if (!require_reg(as, stmt, operands[0], &rs2) ||
-                !parse_mem(operands[1], &immediate, base) ||
-                !require_reg(as, stmt, base, &rs1)) {
-                return false;
-            }
-            return append_u32(as,
-                              stmt->section,
-                              enc_s(funct3, rs1, rs2, immediate));
-        }
-        if (count == 3U) {
-            MiniAsSymbolExpr expr;
-            MiniAsSymbol *anchor;
-            char anchor_name[96];
-
-            if (!require_reg(as, stmt, operands[0], &rs2) ||
-                !minias_parse_symbol_addend(operands[1], &expr) ||
-                !require_reg(as, stmt, operands[2], &rs1)) {
-                minias_set_error(as,
-                                 "bad-symbol-store:%s:%s:line=%zu",
-                                 stmt->op,
-                                 stmt->args,
-                                 stmt->line);
-                return false;
-            }
-            (void)snprintf(anchor_name,
-                           sizeof(anchor_name),
-                           ".Lminias_store_%zu",
-                           ++as->pcrel_anchor_counter);
-            anchor = minias_get_symbol(as, anchor_name, true);
-            if (anchor == NULL) {
-                return false;
-            }
-            anchor->defined = true;
-            anchor->section = stmt->section;
-            anchor->subsection = stmt->subsection;
-            anchor->value = stmt->offset;
-            anchor->bind = MINIAS_STB_LOCAL;
-
-            if (!append_u32(as,
-                            stmt->section,
-                            0x17U | ((uint32_t)rs1 << 7U)) ||
-                !append_u32(as,
-                            stmt->section,
-                            enc_s(funct3, rs1, rs2, 0))) {
-                return false;
-            }
-            return minias_add_relocation(as,
-                                         stmt->section,
-                                         stmt->offset,
-                                         MINIAS_R_RISCV_PCREL_HI20,
-                                         expr.name,
-                                         expr.addend) &&
-                   minias_add_relocation(as,
-                                         stmt->section,
-                                         stmt->offset + 4U,
-                                         MINIAS_R_RISCV_PCREL_LO12_S,
-                                         anchor_name,
-                                         0);
-        }
-        minias_set_error(as,
-                         "operand-count:%s:line=%zu",
-                         stmt->op,
-                         stmt->line);
+    if (stmt->mcinst == NULL) {
+        minias_set_error(as, "internal:riscv-missing-typed-instruction:%s:line=%zu",
+                         stmt->op, stmt->line);
         return false;
     }
-    if (strcmp(stmt->op, "jalr") == 0) {
-        if (count == 1U) {
-            if (!require_reg(as, stmt, operands[0], &rs1)) {
-                return false;
-            }
-            rd = 1;
-            immediate = 0;
-        } else if (count == 2U) {
-            char base[128];
-
-            if (!require_reg(as, stmt, operands[0], &rd) ||
-                !parse_mem(operands[1], &immediate, base) ||
-                !require_reg(as, stmt, base, &rs1)) {
-                return false;
-            }
-        } else if (count == 3U) {
-            if (!require_reg(as, stmt, operands[0], &rd) ||
-                !require_reg(as, stmt, operands[1], &rs1) ||
-                !require_imm(as, stmt, operands[2], &immediate)) {
-                return false;
-            }
-        } else {
-            minias_set_error(as, "operand-count:jalr:line=%zu", stmt->line);
-            return false;
-        }
-        return append_u32(as,
-                          stmt->section,
-                          enc_i(0x67U, rd, 0U, rs1, immediate));
-    }
-    if (strcmp(stmt->op, "j") == 0 || strcmp(stmt->op, "jal") == 0) {
-        MiniAsSymbolExpr expr;
-        const char *target_text;
-
-        if (strcmp(stmt->op, "j") == 0) {
-            if (count != 1U) {
-                minias_set_error(as, "operand-count:j:line=%zu", stmt->line);
-                return false;
-            }
-            rd = 0;
-            target_text = operands[0];
-        } else if (count == 1U) {
-            rd = 1;
-            target_text = operands[0];
-        } else if (count == 2U) {
-            if (!require_reg(as, stmt, operands[0], &rd)) {
-                return false;
-            }
-            target_text = operands[1];
-        } else {
-            minias_set_error(as, "operand-count:jal:line=%zu", stmt->line);
-            return false;
-        }
-
-        if (!minias_parse_symbol_addend(target_text, &expr)) {
-            minias_set_error(as,
-                             "unsupported-expression:%s:%s:line=%zu",
-                             stmt->op,
-                             target_text,
-                             stmt->line);
-            return false;
-        }
-
-        symbol = minias_get_symbol(as, expr.name, false);
-        if (symbol != NULL && symbol->defined && symbol->section == stmt->section &&
-            symbol->subsection == stmt->subsection) {
-            immediate = (int64_t)symbol->value + expr.addend -
-                        (int64_t)stmt->offset;
-            if ((immediate & 1) != 0 || immediate < -(1LL << 20) ||
-                immediate > (1LL << 20) - 2) {
-                minias_set_error(as, "jal-range:line=%zu", stmt->line);
-                return false;
-            }
-            return append_u32(as, stmt->section, enc_j(rd, immediate));
-        }
-
-        return append_u32(as, stmt->section, enc_j(rd, 0)) &&
-               minias_add_relocation(as,
-                                     stmt->section,
-                                     stmt->offset,
-                                     MINIAS_R_RISCV_JAL,
-                                     expr.name,
-                                     expr.addend);
-    }
-    if (strcmp(stmt->op, "beq") == 0 || strcmp(stmt->op, "bne") == 0 ||
-        strcmp(stmt->op, "blt") == 0 || strcmp(stmt->op, "bge") == 0 ||
-        strcmp(stmt->op, "bltu") == 0 || strcmp(stmt->op, "bgeu") == 0 ||
-        strcmp(stmt->op, "beqz") == 0 || strcmp(stmt->op, "bnez") == 0 ||
-        strcmp(stmt->op, "bltz") == 0 || strcmp(stmt->op, "bgez") == 0 ||
-        strcmp(stmt->op, "bgtz") == 0 || strcmp(stmt->op, "blez") == 0 ||
-        strcmp(stmt->op, "bgt") == 0 || strcmp(stmt->op, "ble") == 0 ||
-        strcmp(stmt->op, "bgtu") == 0 || strcmp(stmt->op, "bleu") == 0) {
-        const char *target;
-        MiniAsSymbolExpr branch_expr;
-
-        if (strcmp(stmt->op, "beqz") == 0 || strcmp(stmt->op, "bnez") == 0 ||
-            strcmp(stmt->op, "bltz") == 0 || strcmp(stmt->op, "bgez") == 0 ||
-            strcmp(stmt->op, "bgtz") == 0 || strcmp(stmt->op, "blez") == 0) {
-            int operand_reg;
-
-            if (count != 2U || !require_reg(as, stmt, operands[0], &operand_reg)) {
-                return false;
-            }
-            target = operands[1];
-            if (strcmp(stmt->op, "beqz") == 0) {
-                rs1 = operand_reg;
-                rs2 = 0;
-                funct3 = 0U;
-            } else if (strcmp(stmt->op, "bnez") == 0) {
-                rs1 = operand_reg;
-                rs2 = 0;
-                funct3 = 1U;
-            } else if (strcmp(stmt->op, "bltz") == 0) {
-                rs1 = operand_reg;
-                rs2 = 0;
-                funct3 = 4U;
-            } else if (strcmp(stmt->op, "bgez") == 0) {
-                rs1 = operand_reg;
-                rs2 = 0;
-                funct3 = 5U;
-            } else if (strcmp(stmt->op, "bgtz") == 0) {
-                rs1 = 0;
-                rs2 = operand_reg;
-                funct3 = 4U;
-            } else {
-                rs1 = 0;
-                rs2 = operand_reg;
-                funct3 = 5U;
-            }
-        } else {
-            int first;
-            int second;
-
-            if (count != 3U || !require_reg(as, stmt, operands[0], &first) ||
-                !require_reg(as, stmt, operands[1], &second)) {
-                return false;
-            }
-            target = operands[2];
-            if (strcmp(stmt->op, "bgt") == 0 || strcmp(stmt->op, "ble") == 0 ||
-                strcmp(stmt->op, "bgtu") == 0 || strcmp(stmt->op, "bleu") == 0) {
-                rs1 = second;
-                rs2 = first;
-                funct3 = strcmp(stmt->op, "bgt") == 0    ? 4U
-                         : strcmp(stmt->op, "ble") == 0   ? 5U
-                         : strcmp(stmt->op, "bgtu") == 0  ? 6U
-                                                          : 7U;
-            } else {
-                rs1 = first;
-                rs2 = second;
-                funct3 = strcmp(stmt->op, "bne") == 0    ? 1U
-                         : strcmp(stmt->op, "blt") == 0  ? 4U
-                         : strcmp(stmt->op, "bge") == 0  ? 5U
-                         : strcmp(stmt->op, "bltu") == 0 ? 6U
-                         : strcmp(stmt->op, "bgeu") == 0 ? 7U
-                                                          : 0U;
-            }
-        }
-        if (!minias_parse_symbol_addend(target, &branch_expr)) {
-            minias_set_error(as,
-                             "unsupported-expression:%s:%s:line=%zu",
-                             stmt->op,
-                             target,
-                             stmt->line);
-            return false;
-        }
-        symbol = minias_get_symbol(as, branch_expr.name, false);
-        if (symbol == NULL || !symbol->defined || symbol->section != stmt->section) {
-            minias_set_error(as,
-                             "unsupported-relocation:%s:line=%zu",
-                             stmt->op,
-                             stmt->line);
-            return false;
-        }
-        immediate = (int64_t)symbol->value + branch_expr.addend -
-                    (int64_t)stmt->offset;
-        if (stmt->size == 8U) {
-            int64_t jal_displacement =
-                (int64_t)symbol->value + branch_expr.addend -
-                (int64_t)(stmt->offset + 4U);
-
-            if ((jal_displacement & 1) != 0 ||
-                jal_displacement < -(1LL << 20) ||
-                jal_displacement > (1LL << 20) - 2) {
-                minias_set_error(as,
-                                 "branch-long-jal-range:%s:line=%zu",
-                                 stmt->op,
-                                 stmt->line);
-                return false;
-            }
-            return append_u32(as,
-                              stmt->section,
-                              enc_b(funct3 ^ 1U, rs1, rs2, 8)) &&
-                   append_u32(as,
-                              stmt->section,
-                              enc_j(0, jal_displacement));
-        }
-        if ((immediate & 1) != 0 || immediate < -4096 || immediate > 4094) {
-            minias_set_error(as, "branch-range:%s:line=%zu", stmt->op, stmt->line);
-            return false;
-        }
-        return append_u32(as, stmt->section, enc_b(funct3, rs1, rs2, immediate));
-    }
-
-    minias_set_error(as, "unsupported-instruction:%s:line=%zu", stmt->op, stmt->line);
-    return false;
+    return rv_encode_mcinst(as, stmt);
 }

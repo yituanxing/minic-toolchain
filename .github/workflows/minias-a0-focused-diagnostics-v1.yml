@@ -1,6 +1,18 @@
 name: MiniAS Focused, Frozen Window and 3536 Semantic Oracles
 
 on:
+  # Opt-in exact-head Linux single-variable certification. Ordinary MiniAS
+  # pushes must never launch a two-hour kernel build by accident.
+  push:
+    branches: [refactor/minias-target-isa-abi-core]
+    paths:
+      - '.github/workflows/minias-a0-focused-diagnostics-v1.yml'
+      # Explicit multiarch Linux pushes can opt into the existing successful
+      # RV64 P0/P1 lane at that same head, without running it on every push.
+      - '.github/workflows/minias-linux-fourarch-runtime.yml'
+      - 'assembler/**'
+      - 'tests/assembler/**'
+      - 'tests/external/linux/minias_*_linux.sh'
   workflow_call:
     inputs:
       mode:
@@ -878,9 +890,10 @@ jobs:
             --output-root "build/minias-semantic-${{ matrix.label }}/oracle" \
             --minias "build/minias-semantic-${{ matrix.label }}-toolchain/bin/minic-as" \
             --oracle tests/assembler/elf_semantic_compare.py \
-            --jobs 4 --expected ${{ matrix.total }}
+            --jobs 4 --expected ${{ matrix.total }} --require-equal
 
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: minias-semantic-${{ matrix.label }}
           path: |
@@ -888,7 +901,7 @@ jobs:
             build/minias-semantic-${{ matrix.label }}/oracle/summary.txt
             build/minias-semantic-${{ matrix.label }}/oracle/semantic/**/*.json
           retention-days: 14
-          if-no-files-found: error
+          if-no-files-found: warn
 
   c149:
     if: (github.event_name == 'workflow_dispatch' || github.event_name == 'push') && inputs.mode == 'semantic'
@@ -970,9 +983,10 @@ jobs:
             --output-root build/minias-semantic-c149-oracle \
             --minias build/minias-semantic-c149-toolchain/bin/minic-as \
             --oracle tests/assembler/elf_semantic_compare.py \
-            --jobs 4 --expected 149
+            --jobs 4 --expected 149 --require-equal
 
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: minias-semantic-c149
           path: |
@@ -980,7 +994,7 @@ jobs:
             build/minias-semantic-c149-oracle/summary.txt
             build/minias-semantic-c149-oracle/semantic/**/*.json
           retention-days: 14
-          if-no-files-found: error
+          if-no-files-found: warn
 
   native35:
     if: (github.event_name == 'workflow_dispatch' || github.event_name == 'push') && inputs.mode == 'semantic'
@@ -1180,9 +1194,10 @@ jobs:
             --minias build/minias-semantic-native35-toolchain/bin/minic-as \
             --oracle tests/assembler/elf_semantic_compare.py \
             --cwd build/minias-semantic-native35-linux-out \
-            --native35 --jobs 4 --expected 35
+            --native35 --jobs 4 --expected 35 --require-equal
 
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: minias-semantic-native35
           path: |
@@ -1192,7 +1207,7 @@ jobs:
             build/minias-semantic-native35-oracle/summary.txt
             build/minias-semantic-native35-oracle/semantic/**/*.json
           retention-days: 14
-          if-no-files-found: error
+          if-no-files-found: warn
 
   aggregate:
     if: always() && (github.event_name == 'workflow_dispatch' || github.event_name == 'push') && inputs.mode == 'semantic'
@@ -1244,6 +1259,7 @@ jobs:
           print(
               f"MINIAS_SEMANTIC_3536_BASELINE selected={total} "
               f"semantic_equal={status['PASS']} semantic_diff={status['DIFF']} "
+              f"inconclusive={status['INCONCLUSIVE']} "
               f"strict_equal={strict} gnu_fail={status['GNU_FAIL']} "
               f"minias_fail={status['MINIAS_FAIL']} oracle_error={status['ORACLE_ERROR']}"
           )
@@ -1255,12 +1271,14 @@ jobs:
               raise SystemExit(f"expected 3536 classified objects, got {total}")
           if status['GNU_FAIL'] or status['MINIAS_FAIL'] or status['ORACLE_ERROR']:
               raise SystemExit("semantic oracle infrastructure failure")
+          if status['PASS'] != 3536 or status['DIFF'] or status['INCONCLUSIVE']:
+              raise SystemExit("strict semantic 3536 acceptance failed")
           PY
 
   linux-single:
     env:
       MINIAS_INTEGRATED_MODE: ${{ inputs.mode == 'linux-integrated' }}
-    if: (github.event_name == 'workflow_dispatch' || github.event_name == 'push') && (inputs.mode == 'linux-single' || inputs.mode == 'linux-integrated')
+    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'linux-single' || inputs.mode == 'linux-integrated')) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[minias-linux-gcc-single]'))
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
@@ -1274,7 +1292,7 @@ jobs:
           sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
             gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu libc6-dev-riscv64-cross \
             bc bison flex libssl-dev libelf-dev make curl xz-utils cpio gzip file \
-            qemu-system-misc opensbi
+            python3-pyelftools qemu-system-misc opensbi
 
       - name: Build exact MiniAS
         run: |
@@ -1328,10 +1346,41 @@ jobs:
             esac
           done
 
+          # Kbuild invokes this wrapper in parallel.  Keep each owner event
+          # short enough for a single write: the original very long argv
+          # trace produced fragmented/interleaved lines in real -j4 Linux.
+          # Full producer arguments are already retained in Kbuild .cmd.
+
           if (( query )); then
-            printf 'delegate-query' >>"$trace"
-            printf ' %q' "$@" >>"$trace"
-            printf '\n' >>"$trace"
+            # Linux scripts/as-version.sh asks GCC to compile /dev/null with
+            # `-Wa,--version`.  GCC consequently invokes GAS with both a
+            # generated /tmp/cc*.s input and a *discarded* output.  Preserve
+            # this version query, but never forward an actual Kbuild .o to
+            # GNU as merely because it also carries `-v` or `--version`.
+            if [[ -n "$input" || -n "$out" ]]; then
+              is_version_probe=0
+              for query_arg in "${args[@]}"; do
+                if [[ "$query_arg" == --version ]]; then
+                  is_version_probe=1
+                fi
+              done
+              # `/dev/null` is not a regular file, so the argument parser
+              # may leave `input` empty for that exact harmless source.
+              valid_version_probe=0
+              if [[ "$out" == /dev/null ]] && \
+                  { [[ -z "$input" ]] || [[ "$input" == /tmp/cc*.s ]]; }; then
+                valid_version_probe=1
+              elif [[ "$input" == /tmp/cc*.s && "$out" =~ ^\.tmp_[0-9]+/tmp$ ]]; then
+                valid_version_probe=1
+              fi
+              if (( ! is_version_probe || ! valid_version_probe )); then
+                printf 'MINIAS_AS_WRAPPER_ERROR query_with_production_input' >&2
+                printf ' %q' "$@" >&2
+                printf '\n' >&2
+                exit 2
+              fi
+            fi
+            printf 'delegate-query argc=%s\n' "${#args[@]}" >>"$trace"
             exec "$real_as" "$@"
           fi
 
@@ -1344,14 +1393,14 @@ jobs:
             exit 2
           fi
 
-          {
-            printf 'assemble input=%q output=%q' "$input" "$out"
-            printf ' argv='
-            printf ' %q' "$@"
-            printf '\n'
-          } >>"$trace"
+          printf 'assemble input=%q output=%q\n' "$input" "$out" >>"$trace"
 
           if "$minias" "${minias_opts[@]}" -o "$out" "$input"; then
+            if [[ ! -s "$out" ]]; then
+              printf 'MINIAS_AS_WRAPPER_ERROR empty_output=%q\n' "$out" >&2
+              printf 'fail status=1 input=%q output=%q\n' "$input" "$out" >>"$trace"
+              exit 1
+            fi
             printf 'pass input=%q output=%q\n' "$input" "$out" >>"$trace"
             # Capture a small genuine GNU oracle alongside selected *native*
             # early-boot objects while GCC temporary .s files still exist.
@@ -1396,6 +1445,36 @@ jobs:
           # GCC -B resolves the basename 'as'; Kbuild AS resolves the prefixed name.
           ln -s riscv64-linux-gnu-as "$bindir/as"
 
+          # Prove the Linux as-version exception is informational only.
+          # A genuine output owner with the same version flag must still be
+          # rejected; neither case invokes GNU as for production assembly.
+          probe_input=$(mktemp /tmp/ccXXXXXX.s)
+          probe_trace=$(mktemp /tmp/minias-as-version-query.XXXXXX.trace)
+          trap 'rm -f "$probe_input" "$probe_trace"' EXIT
+          if ! MINIAS=/bin/false MINIAS_AS_TRACE="$probe_trace" \
+                REAL_AS=/usr/bin/riscv64-linux-gnu-as \
+                "$bindir/as" --version -o /dev/null "$probe_input" \
+                | grep -q 'GNU assembler'; then
+            echo 'MINIAS_AS_VERSION_PROBE=FAIL harmless_GCC_as_version_query' >&2
+            exit 1
+          fi
+          if ! MINIAS=/bin/false MINIAS_AS_TRACE="$probe_trace" \
+                REAL_AS=/usr/bin/riscv64-linux-gnu-as \
+                "$bindir/as" --version -o /dev/null /dev/null \
+                | grep -q 'GNU assembler'; then
+            echo 'MINIAS_AS_VERSION_PROBE=FAIL dev_null_info_query' >&2
+            exit 1
+          fi
+          if MINIAS=/bin/false MINIAS_AS_TRACE="$probe_trace" \
+                REAL_AS=/usr/bin/riscv64-linux-gnu-as \
+                "$bindir/as" --version -o arch/riscv/kernel/head.o "$probe_input" \
+                >/dev/null 2>&1; then
+            echo 'MINIAS_AS_VERSION_PROBE=FAIL production_object_delegated' >&2
+            exit 1
+          fi
+          test "$(grep -c '^delegate-query ' "$probe_trace")" -eq 2
+          echo 'MINIAS_AS_VERSION_PROBE=PASS query=2 production_gnu_as=0'
+
       - name: Build Linux 6.6.143 with GCC frontend plus MiniAS only
         shell: bash
         run: |
@@ -1427,10 +1506,24 @@ jobs:
           export REAL_AS=/usr/bin/riscv64-linux-gnu-as
 
           started=$(date +%s)
-          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
-            CC="riscv64-linux-gnu-gcc -B$bindir/" \
-            AS="$bindir/riscv64-linux-gnu-as" \
-            -j4 Image >"$work/kbuild.log" 2>&1
+          if ! make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+              CC="riscv64-linux-gnu-gcc -B$bindir/" \
+              AS="$bindir/riscv64-linux-gnu-as" \
+              -j4 Image >"$work/kbuild.log" 2>&1; then
+            # Preserve the full original Kbuild log as an artifact, but also
+            # surface the actionable GNU-link/MiniAS failures in the job log.
+            # Otherwise GitHub shows only "exit code 2" and a rerun cannot
+            # expose the next real Linux source-level obstruction.
+            echo 'MINIAS_LINUX_GCC_BUILD=FAIL stage=make-Image'
+            echo 'MINIAS_LINUX_KBUILD_DIAGNOSTIC=first-errors'
+            grep -nE 'minic-as:|(^| )error:|fatal error:|undefined reference|undefined symbol|Error [0-9]+|No rule to make target|unsupported-|bad-' \
+              "$work/kbuild.log" | head -n 80 || true
+            echo 'MINIAS_LINUX_KBUILD_DIAGNOSTIC=tail'
+            tail -n 100 "$work/kbuild.log" || true
+            echo 'MINIAS_LINUX_AS_TRACE_DIAGNOSTIC=last-failures'
+            grep '^fail ' "$work/minias-as.trace" | tail -n 40 || true
+            exit 1
+          fi
           elapsed=$(( $(date +%s) - started ))
 
           image="$out/arch/riscv/boot/Image"
@@ -1449,6 +1542,18 @@ jobs:
           # proves that GCC actually routed a substantial number of real
           # assembly jobs through MiniAS rather than bypassing the wrapper.
           test "$passed" -gt 1000
+
+          # Match actual cross-GCC production object owners in Kbuild's
+          # .cmd dependency records with this build's successful MiniAS
+          # invocations.  Exclude host tools, link aggregates, feature
+          # probes and GNU-as information-only queries from the census.
+          python3 tests/external/linux/minias_as_provenance_check.py \
+            --arch rv64 \
+            --kbuild-out "$out" \
+            --trace "$work/minias-as.trace" \
+            --compiler riscv64-linux-gnu-gcc \
+            --assembler riscv64-linux-gnu-as \
+            --min-objects 1000
 
           sha256sum "$image" >"$work/Image.sha256"
           printf 'MINIAS_LINUX_GCC_BUILD=PASS assembled=%s passed=%s probe_failures=%s query_delegates=%s elapsed_s=%s head=%s\n' \

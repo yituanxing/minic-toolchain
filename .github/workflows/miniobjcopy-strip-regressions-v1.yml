@@ -5,6 +5,9 @@ on:
     branches:
       - "agent/linux-expanded-kbuild-v0"
       - "agent/linux-perf-boolean-domain-v1"
+      # MiniAS shares elf/{include,src} with MiniObjcopy/Strip.  Its PR
+      # must run the canonical consumers when those shared files change.
+      - "refactor/minias-target-isa-abi-core"
   workflow_dispatch:
     inputs:
       mode:

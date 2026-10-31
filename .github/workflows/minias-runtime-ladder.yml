@@ -1,0 +1,148 @@
+name: MiniAS GCC Single-AS Runtime Ladder
+
+# Real execution acceptance, independent of strict ELF object parity.
+# GCC supplies source/assembly, GNU binutils and libc supply final linkage;
+# MiniAS is the only substituted tool in the candidate side.
+on:
+  workflow_dispatch:
+  push:
+    branches: [refactor/minias-target-isa-abi-core]
+    paths:
+      - '.github/workflows/minias-runtime-ladder.yml'
+      - 'assembler/**'
+      - 'elf/**'
+      - 'tests/assembler/probe-minias-gcc-runtime-ladder.sh'
+      - 'tests/assembler/probe-minias-gcc-cjson-runtime.sh'
+      - 'tests/assembler/probe-minias-gcc-zlib-runtime.sh'
+      - 'tests/assembler/probe-minias-gcc-lua-runtime.sh'
+      - 'tests/assembler/runtime-gcc-zlib.c'
+      - 'tests/assembler/runtime-gcc-lua/**'
+      - 'tests/assembler/runtime-gcc-ladder/**'
+      - 'tests/assembler/runtime-gcc-single-variable/**'
+      - 'tests/external/cjson/**'
+      - 'tests/vendor/cjson/**'
+
+permissions:
+  contents: read
+
+jobs:
+  gcc-single-as-execution:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {arch: x86_64, cc: gcc}
+          - {arch: aarch64, cc: aarch64-linux-gnu-gcc}
+          - {arch: riscv64, cc: riscv64-linux-gnu-gcc}
+          - {arch: loongarch64, cc: loongarch64-linux-gnu-gcc-13}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Install GNU compiler, assembler, linker, static libc and QEMU
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc binutils libc6-dev qemu-user curl tar git
+          case '${{ matrix.arch }}' in
+            aarch64)
+              sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+                gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu libc6-dev-arm64-cross ;;
+            riscv64)
+              sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+                gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu libc6-dev-riscv64-cross ;;
+            loongarch64)
+              sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+                gcc-13-loongarch64-linux-gnu binutils-loongarch64-linux-gnu libc6-dev-loong64-cross ;;
+          esac
+      - name: Build exactly the tested MiniAS revision
+        id: build
+        run: |
+          test "$(git rev-parse HEAD)" = '${{ github.sha }}'
+          make -j2 MODE=release CFLAGS=-Werror build/release/bin/minic-as
+      - name: Execute staged GCC/GNU versus GCC/MiniAS real programs
+        id: ladder
+        env:
+          CC: ${{ matrix.cc }}
+          MINIAS: ${{ github.workspace }}/build/release/bin/minic-as
+          WORK_DIR: ${{ github.workspace }}/build/minias-gcc-runtime-ladder/${{ matrix.arch }}
+        run: bash tests/assembler/probe-minias-gcc-runtime-ladder.sh '${{ matrix.arch }}'
+      # Run the real-library stage even if a simpler runtime stage failed;
+      # each failure must be independently visible to the next repair batch.
+      - name: Build, GNU-link and execute real cJSON via MiniAS-only substitution
+        id: cjson
+        if: ${{ always() && steps.build.outcome == 'success' }}
+        env:
+          CC: ${{ matrix.cc }}
+          MINIAS: ${{ github.workspace }}/build/release/bin/minic-as
+          WORK_DIR: ${{ github.workspace }}/build/minias-cjson-runtime/${{ matrix.arch }}
+        run: bash tests/assembler/probe-minias-gcc-cjson-runtime.sh '${{ matrix.arch }}'
+      # Keep full upstream libraries independent: a failure in one stage must
+      # not suppress assembler, GNU BFD link or QEMU diagnostics in later ones.
+      - name: Assemble all upstream zlib translation units and execute gzip via QEMU
+        id: zlib
+        if: ${{ always() && steps.build.outcome == 'success' }}
+        timeout-minutes: 30
+        env:
+          CC: ${{ matrix.cc }}
+          MINIAS: ${{ github.workspace }}/build/release/bin/minic-as
+          WORK_DIR: ${{ github.workspace }}/build/minias-gcc-zlib-runtime/${{ matrix.arch }}
+        run: bash tests/assembler/probe-minias-gcc-zlib-runtime.sh '${{ matrix.arch }}'
+      - name: Assemble real Lua 5.5 interpreter and execute source script via QEMU
+        id: lua
+        if: ${{ always() && steps.build.outcome == 'success' }}
+        timeout-minutes: 40
+        env:
+          CC: ${{ matrix.cc }}
+          MINIAS: ${{ github.workspace }}/build/release/bin/minic-as
+          WORK_DIR: ${{ github.workspace }}/build/minias-gcc-lua-runtime/${{ matrix.arch }}
+        run: bash tests/assembler/probe-minias-gcc-lua-runtime.sh '${{ matrix.arch }}'
+      - name: Preserve every stage's objects, linked binaries and runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minias-runtime-ladder-${{ matrix.arch }}
+          path: build/minias-gcc-runtime-ladder/${{ matrix.arch }}/
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Preserve real cJSON GNU versus MiniAS runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minias-cjson-runtime-${{ matrix.arch }}
+          path: build/minias-cjson-runtime/${{ matrix.arch }}/
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Preserve upstream zlib GNU versus MiniAS runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minias-zlib-runtime-${{ matrix.arch }}
+          path: build/minias-gcc-zlib-runtime/${{ matrix.arch }}/
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Preserve upstream Lua GNU versus MiniAS runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minias-lua-runtime-${{ matrix.arch }}
+          path: build/minias-gcc-lua-runtime/${{ matrix.arch }}/
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Summarize independent real-execution acceptance
+        if: always()
+        run: |
+          {
+            echo '### MiniAS-only real execution: ${{ matrix.arch }}'
+            echo '| Stage | Result |'
+            echo '|---|---|'
+            echo '| Build MiniAS exact revision | `${{ steps.build.outcome }}` |'
+            echo '| GCC → GNU AS/MiniAS → GNU BFD → QEMU: five-stage ladder | `${{ steps.ladder.outcome }}` |'
+            echo '| GCC → GNU AS/MiniAS → GNU BFD → QEMU: cJSON | `${{ steps.cjson.outcome }}` |'
+            echo '| GCC → GNU AS/MiniAS → GNU BFD → QEMU: zlib 1.3.1 | `${{ steps.zlib.outcome }}` |'
+            echo '| GCC → GNU AS/MiniAS → GNU BFD → QEMU: Lua 5.5.0 | `${{ steps.lua.outcome }}` |'
+            echo
+            echo 'Linkage, runtime exit, stdout, stderr and reference contract are the acceptance criteria; strict object-byte/ELF equality is not a runtime gate.'
+          } >> "$GITHUB_STEP_SUMMARY"

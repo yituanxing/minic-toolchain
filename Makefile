@@ -254,7 +254,24 @@ MINIELF_REL_OBJECTS := $(MINIELF_READER_OBJECT) $(MINIELF_REL_WRITER_OBJECT)
 MINIAS_INCLUDES := -Iassembler/src $(MINIELF_INCLUDES)
 MINIAS_SOURCES := \
 	assembler/src/assembler.c \
+	assembler/src/source_graph.c \
+	assembler/src/source_expansion.c \
+	assembler/src/cfi.c \
+	assembler/src/cfi_writer.c \
+	assembler/src/debug_line.c \
+	assembler/src/riscv_target.c \
+	assembler/src/aarch64_target.c \
+	assembler/src/x86_64_target.c \
+	assembler/src/loongarch64_target.c \
+	assembler/src/target_registry.c \
+	assembler/src/invocation.c \
+	assembler/src/riscv_profile.c \
 	assembler/src/expression.c \
+	assembler/src/mc_expr.c \
+	assembler/src/mc_encode_result.c \
+	assembler/src/mc_lexer.c \
+	assembler/src/mc_operand_semantics.c \
+	assembler/src/mc_layout.c \
 	assembler/src/riscv_encode.c \
 	assembler/src/string_literal.c \
 	assembler/src/elf_writer.c \
@@ -531,9 +548,15 @@ $(MINIAS_BINARY): $(MINIAS_OBJECTS)
 	$(CC) $(MINIAS_OBJECTS) $(MINIC_LDFLAGS) -o "$@"
 
 check-minias-a0: $(MINIAS_BINARY)
-	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	@MINIAS="$(abspath $(MINIAS_BINARY))" \
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
-	sh tests/assembler/run-a0.sh
+	sh tests/assembler/run-a0.sh || { \
+	  echo 'MiniAS A0 failed; replaying focused A0 with shell trace for exact failing command' >&2; \
+	  MINIAS="$(abspath $(MINIAS_BINARY))" \
+	  BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	  sh -x tests/assembler/run-a0.sh; \
+	  exit 1; \
+	}
 
 $(BUILD_DIR)/obj/preprocessor/%.o: preprocessor/%.c
 	@mkdir -p "$(dir $@)"

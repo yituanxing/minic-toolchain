@@ -1,0 +1,426 @@
+# MiniAS architecture discussion: decisions and source-backed follow-ups (2026-10-31)
+
+Status: **discussion record and implementation reference, not a claim of implementation or CI acceptance**.
+Scope: MiniAS input/configuration, RISC-V ISA/ABI, source parsing, typed MC representation, and future object formats.
+Development line: `refactor/minias-target-isa-abi-core` (Draft PR #667); retain **one MiniAS development branch**.
+
+This document captures the design decisions reached during the 2026-10-31
+discussion. It complements `architecture-rfc-mc-core-2026-10-28.md` (overall
+architecture) and `architecture-convergence-2026-10-31.md` (implementation and
+deletion ledger). A proposal here does **not** override the behavior of the
+current tree or certify previously failed regressions.
+
+## 1. Agreed principles (stable decisions)
+
+**D01 — Build the complete *skeleton* with a deliberately limited first
+implementation.** Model configuration, source semantics, target-specific
+instruction interpretation, typed MC data, layout, fixups and object output
+from the beginning. Initially implementing only a subset (for example,
+little-endian ELF and RISC-V I) must not make that subset an invariant of
+Common algorithms. Unsupported requested modes must fail explicitly, not
+silently produce a misleading `.o`.
+
+**D02 — Distinguish three ISA questions.**
+
+| Question | Example | Owner |
+| --- | --- | --- |
+| What may execute on the target? (`target_isa`) | `rv64im_zicsr_zifencei` | MiniAS instruction legality and object ISA metadata |
+| Which legal instructions will the compiler *choose*? (`compiler_emit_isa`) | `rv64i` | MiniC instruction selector; intentionally narrower |
+| Which additional verification do we request? (`audit_policy`) | strict-I executable-byte audit | Testing/explicit assembler audit mode |
+
+MiniC may generate only I-family instructions while preserving handwritten
+inline assembly containing M/Z instructions. Such assembly is allowed **only
+when the actual target ISA permits it**, including any source-local ISA
+state. Thus a broad target `-march` plus a narrower MiniC code-generation
+policy is different from passing `-march=rv64i` to the entire toolchain and
+then expecting `mul` to assemble. Do not make MiniC's code-generation subset
+a MiniAS restriction.
+
+**D03 — Keep ABI independent from the compiler's chosen ISA subset.** MiniC
+implements the calling convention; MiniAS does not reconstruct it by
+examining instructions. MiniAS does validate compatible target settings and
+record appropriate object metadata. On RISC-V, ISA architecture attributes
+and ELF float-ABI `e_flags` are different outputs. An `.s` can carry
+`.attribute arch`/`.option` information, but cannot in general tell MiniAS
+which calling convention (`lp64` versus `lp64d`, for example) was intended.
+The driver, source directives and target defaults are distinct configuration
+sources; **conflict/precedence rules remain to be specified**, not guessed.
+
+**D04 — Separate correctness-critical *configuration* from optimization.**
+For the first stage, focus the user-facing correctness contract on `-march`
+and `-mabi`. The following remain first-class design dimensions even if the
+current implementation accepts only a subset:
+
+| Dimension | Initial simplified support | Future capability that the skeleton must allow |
+| --- | --- | --- |
+| Endianness | little-endian | target-selected big-endian and correct byte output |
+| Object format | ELF (`ET_REL`, correct ELF32/64 profile) | COFF and Mach-O through distinct writers |
+| ISA specification | one explicit, reproducible compatibility baseline | versioned ISA/extension interpretation (`-misa-spec`) |
+| Privileged specification | one target/toolchain-matched baseline | version-aware CSR legality (`-mpriv-spec`) |
+| PIC | supported current GNU-compatible subset; non-PIC baseline | full PIC/pseudo and relocation semantics |
+| Linker relaxation | only modes whose relocations are implemented; fail closed otherwise | complete `.option relax`/`R_RISCV_RELAX`/alignment semantics |
+| Object attributes | correctly emit supported target/ABI attributes | richer formats and attributes |
+
+The entries in the middle column are **temporary implementation scope, not
+permanent defaults or a claim that every mode is already implemented**.
+In particular, GNU GAS normally enables RISC-V linker relaxation by default;
+if MiniAS chooses a restricted initial mode, it must state the difference.
+`-mtune` and CPU scheduling/cost models belong primarily to compiler
+optimization and are **out of scope for this correctness pass**.
+
+**D05 — Configuration and assembler state are different objects.** An
+immutable target configuration describes the selected ISA, ABI, byte order,
+object format and target policy. A mutable source-local assembler state
+supports `.option push/pop`, `.option arch,+ext`, PIC, RVC, relaxation and
+other target dialects. Every retained instruction/fragment that needs it
+captures an **immutable effective state at its source site**; layout and
+encoding cannot consult an unrelated final file-wide state.
+
+**D06 — Parse the assembly stream, not a compiler-style AST of the entire
+`.s`.** The parser handles physical source, macro/conditional expansion,
+labels, common directives and target statements in sequence. Persistent
+*expression trees* and typed `MCInst`/`MCExpr`/Fragments are appropriate.
+This follows the practical separation in GNU GAS `read.c`/`md_assemble` and
+LLVM MC `AsmParser`/`MCTargetAsmParser`/`MCStreamer`. Streaming input does
+not eliminate later fixed-point layout, relaxation or fixup resolution.
+
+**D07 — Keep one owner for every semantic algorithm/object.** Common owns
+source expansion, symbol/section identities, fragment storage and layout;
+the Target owns ISA parsing, register/operand interpretation, feature checks,
+encoding choices and target fixups; the object model/writer owns serialized
+format. Do not add an ISA-specific branch to Common to make one Linux source
+pass. A target may propose encoded bytes/fixups, not independently mutate
+global Section/Symbol/ELF storage. The same principle applies across all
+four backend families; RV32/RV64 remain one RISC-V Target.
+
+**D08 — Improve implementation quality independently from architecture.**
+Use RISC-V I as a first full vertical slice to test the *whole* MiniAS path.
+Measure MiniC's I-generation quality and MiniAS's I-assembly quality as
+separate acceptance gates. Then add M/A/C/Z instruction support by extending
+Target descriptions, semantics and tests rather than inventing new public
+parsers, layout engines or writers. C/relaxable encodings must also test
+whether the skeleton genuinely supports variable lengths.
+This is an **architectural acceptance slice**, not permission to remove or
+downgrade existing M/Z support, any of the four backend families or their
+GNU/Linux regression requirements.
+
+**D09 — Refactoring must eliminate proven duplicate owners, not merely move
+source lines.** Preserve valid Target-specific complexity (x86 ModR/M,
+AArch64 memory and mapping symbols, RISC-V RVC, LoongArch relocations).
+Do not delete a second table/parser just because its syntax resembles
+another: prove identical responsibility and verify with positive/negative
+GNU comparisons. After migrating consumers, remove obsolete code and
+compatibility branches in the same coherent batch where safe.
+
+**D10 — Discussion, implementation and acceptance evidence are separate.**
+No architectural proposal implies code has changed. Local A0/GNU byte
+comparisons, GNU link, Linux Image and QEMU P0/P1 are distinct gates, always
+at the **exact commit tested**. For changes, preserve the original GNU
+physical `.s`, assembler-only MiniAS provenance and GNU downstream tools;
+avoid a full Linux rebuild when a focused object/link/runtime gate answers
+the question. Report production/test/docs/CI added/deleted/net lines per
+commit. Do not silently downgrade the acceptance matrix.
+
+**D11 — Let real programs determine the implementation order.** This is a
+two-person engineering project, not a promise to implement every GAS/LLVM
+syntax, ISA-spec revision or obscure object attribute before MiniAS is useful.
+Keep the skeleton and correctness contracts sound, accept explicitly scoped
+feature gaps, and close gaps when real original assembly exercises them.
+Avoid spending an iteration on a standards matrix, performance tuning, or
+premature future-format abstraction while a current source/fixup/ELF owner
+boundary remains unsettled. A successful source sample proves only that
+sample; unimplemented legal input still exists. This is a staged *product
+strategy*, not permission to misassemble accepted input.
+
+**D12 — Batch integration and keep persistent evidence.** Accumulate related
+verified source cleanup, focused tests and architecture notes into a coherent
+MiniAS-branch commit/push. Do **not** create a remote commit for each tiny
+helper deletion. Equally, do **not** leave all verified work solely in an
+automatically cleaned temporary workspace. Before pushing, inspect the
+upstream branch, use a clean worktree and record the exact validation scope.
+
+## 2. Agreed data flow and ownership boundary
+
+```text
+Invocation / Target Configuration (ISA, ABI, format, endian)
+  -> SourceGraph (physical input, stable source-site identity)
+  -> Source Expansion (macros, repeats, conditional assembly)
+  -> Common Statement Parser (labels, common directives, expressions)
+  -> Target Parser (instruction/operands, features, target directives)
+  -> typed MCInst / MCExpr / semantic Fragments + site state
+  -> Common MCLayout, Target relaxation and fixup proposals
+  -> Target encoding -> Common fragment commit
+  -> semantic object model -> ELF writer (future COFF/Mach-O writers)
+```
+
+Do not read this as an instruction to add a new file or abstraction for every
+line. The boundaries concern **data ownership and permitted operations**.
+`MCInst` is a machine-instruction semantic object, not another compiler IR.
+Pseudoinstructions are lowered within the owning Target; machine-independent
+directives are processed by Common. Raw instruction data must retain a typed
+semantic distinction from ordinary DATA when the target object format needs
+it (for example AArch64 `$x`/`$d` mapping symbols).
+
+## 3. Verified current implementation: keep versus repair
+
+The following was checked against the active MiniAS source tree on
+2026-10-31. Locations are pointers for later investigation, **not** proof
+that a design change has been made.
+
+### Already valuable and should be retained
+
+- `source_graph.c` owns physical input and stable `SourceSiteID`;
+  `source_expansion.c` manages macros/repeats/conditions. Source replay is a
+  conservative correctness fallback for layout-sensitive conditionals.
+- `assembler.c:add_stmt()` records `MiniAsStmt` and its source-site snapshot,
+  then invokes `TargetOps.parse_mcinst`. RV/AArch64/x86/LoongArch measuring
+  and encoding generally consume the retained typed `MiniAsMCInst` rather
+  than reparsing source operands in a second encoder.
+- `mc_operand_semantics.c:minias_mcinst_alloc/destroy` gives the instruction
+  one lifetime owner; `capacity` permits safe disposal of partially parsed
+  operands, and Target-private memory/payload has explicit destructors.
+- `expression.c`/`mc_expr.c` have a shared expression grammar and distinct
+  evaluation policies (wrapping immediates, checked absolute and deferred
+  symbol/layout expressions). Expression ASTs do **not** imply a whole-file
+  assembly AST.
+- `mc_lexer.c` supplies shared balanced operand splitting. `MiniAsStmt`
+  typed Fragment kinds, `MCLayout`, encode-result/commit and fixup ownership
+  should remain one Common path.
+- RISC-V fixed-form `rv_mc_table` and dynamic `rv_parse_forms` cover
+  different families; currently this is **not evidence of redundant tables**.
+  `rv_scalar_machine_word` and branch planning are shared within the
+  RISC-V Target where genuinely applicable.
+
+### Proven gaps or structural risks (not all current runtime failures)
+
+| ID | Priority | Evidence and observed boundary | Required direction |
+| --- | --- | --- | --- |
+| P01 | P0 | `riscv_profile.c:parse_isa` sets `strict_i_xlen` automatically for exact RV32I/RV64I; `riscv_target.c:strict_base_i_check_sections` and `riscv_validate_common_directive` then reject executable raw data/`.org` as an extra audit | Separate ordinary `target_isa` legality from explicit `strict_base_i_audit`; keep the valuable audit but do not redefine GAS-compatible `-march` |
+| P02 | P0/P1 | `riscv_target.c:riscv_target_directive` currently rejects `.option arch,+ext` under explicit `-march`; legacy +v/+zbb handling is a no-op. `MiniAsRiscvState.option_stack` saves only PIC/RVC/RELAX bits | Add scoped effective ISA state and save/restore it; capture the correct site ISA for MCInst, layout and encoder without accidentally changing file-level attributes |
+| P03 | P1 | `riscv_profile.h` uses one 64-bit feature mask; `riscv_profile.c` recognizes a limited fixed-version extension table and lacks general version-string parsing | Define an extendable versioned ISA/extension set and dependency validation before many Z extensions are added. No need to implement all extensions immediately |
+| P04 | P1 | `minias_internal.h:MiniAsTargetOps` accepts mutable `MiniAs*` during parse, measurement, layout and encoding; this exposes sections/symbols/fixups beyond each phase's responsibility | Narrow to phase-appropriate Target parse/layout/encode views and a Common-owned emission sink, without breaking existing typed MCInst ownership |
+| P05 | P1/P2 | `assembler.c:minias_statement_process` still reads/writes `SourceContext` internals and owns considerable conditional/directive routing; source expansion calls back into it | Complete Source ownership and typed statement routing; a smaller file alone is **not** proof of a clean boundary |
+| P06 | P1 | `aarch64_target.c:a64_record_source_mappings`/`validate` check `strcmp(stmt->op, ".inst")` and alignment directive spellings **after** parsing to determine object mapping semantics | Store parse-site typed instruction-data/alignment provenance; keep original text only where genuinely needed for diagnostics or initial expression compilation |
+| P07 | P1 (future) | RV RVC measurement/encoding reads `state->isa_features` globally while `stmt->site.mode_bits` records only selected option bits | When scoped `.option arch` is implemented, bind the effective ISA/encoding policy to each fragment to avoid consulting the wrong state after `pop` |
+| P08 | P1 (future) | `MiniAsAssemblyConfig` currently contains ELF-class/ELF-flag/machine fields and no general object-format/endianness model | Preserve ELF implementation, but define the configuration/object-model seam before adding COFF/Mach-O or big-endian output; do not bake ELF headers into MC semantics |
+
+`MiniAsStmt.op/args` should **not** be removed wholesale. They serve useful
+parse-time and diagnostic purposes. The goal is to remove *late semantic
+re-decoding from source spelling*, not to ban source text from the model.
+
+## 4. Proposed future work order (not yet approved implementation changes)
+
+1. Freeze the distinct concepts `target_isa`, `compiler_emit_isa`, and
+   explicit audit policy. Validate ISA/ABI/source attributes and conflict
+   rules before extending the command-line surface.
+2. Specify immutable TargetSpec, mutable Assembler/TargetState and immutable
+   effective site snapshot. First exercise RV I plus a scoped M/Z probe;
+   explicitly unsupported extensions must error rather than be ignored.
+3. Keep current `MiniAsStmt -> MCInst` parse-once chain; move AArch64
+   late mapping classification into typed parse-site semantics and close
+   SourceContext's private data boundary.
+4. Introduce phase-scoped Target views/emit sink incrementally, preserving
+   retained layout, fragment commit, fixup identity and existing backends.
+5. Use RV I for the complete differential vertical slice, then extend
+   M/A/C/Z through Target-owned forms and versioned capability checks.
+6. Add object writers/formats and endianness policies only when backed by
+   real tests; retain format-neutral identities and semantic relocations.
+
+For each implementation batch, list exact code paths to **delete**, their
+callers and compatibility bridges; verify the same-input GNU oracle and
+affected Linux object/link/runtime slices before any broad remote CI.
+
+## 5. Source and reference map
+
+MiniAS current sources:
+
+- `assembler/src/{invocation.c,riscv_profile.c,riscv_profile.h,riscv_target.c,riscv_target.h}`
+- `assembler/src/{source_graph.c,source_expansion.c,assembler.c,mc_lexer.c}`
+- `assembler/src/{minias_internal.h,mc_operand_semantics.c,expression.c,mc_expr.c,mc_layout.c}`
+- `assembler/src/{riscv_encode.c,aarch64_target.c,x86_64_target.c,loongarch64_target.c}`
+- `assembler/src/elf_writer.c`, `elf/include/minielf.h`
+
+Upstream primary references:
+
+- GNU GAS RISC-V options: <https://sourceware.org/binutils/docs/as/RISC_002dV_002dOptions.html>
+- GNU GAS RISC-V directives: <https://sourceware.org/binutils/docs/as/RISC_002dV_002dDirectives.html>
+- GNU GAS RISC-V attributes: <https://sourceware.org/binutils/docs/as/RISC_002dV_002dATTRIBUTE.html>
+- GCC RISC-V options: <https://gcc.gnu.org/onlinedocs/gcc/RISC-V-Options.html>
+- LLVM MC/MCStreamer overview: <https://llvm.org/docs/CodeGenerator.html#the-mcstreamer-api>
+- LLVM AsmParser: <https://llvm.org/doxygen/AsmParser_8cpp_source.html>
+- LLVM RISCVAsmParser: <https://llvm.org/doxygen/RISCVAsmParser_8cpp_source.html>
+- GNU GAS common parser: <https://gnu.googlesource.com/binutils-gdb/+/950386c651f7a852fe7e1215d7481caf7f2c91d0/gas/read.c>
+- GNU GAS RV target parser: <https://gnu.googlesource.com/binutils-gdb/+/cf525621820060a5c77efa153e6d2ec6a5ad47c9/gas/config/tc-riscv.c>
+
+## 6. Cross-subsystem ownership notes from the continued source walk
+
+These observations extend section 3's short priority list. They are a
+backlog of *boundaries to revisit when a feature touches them*, not a
+request to implement all of them next.
+
+### Sections, subsections and symbols
+
+- Common SectionID identifies a section by its full identity (name, group
+  signature, link-order anchor and optional `unique` key), not merely its
+  textual name. The subsection is separately keyed by `(SectionID, number)`;
+  final concatenation follows subsection order. Keep this independent of
+  the eventual serialized section header format.
+- Common SymbolID and SourceSiteID survive parse and layout; the name
+  interner's NameID is distinct from a defined symbol's final identity.
+  The semantic `.set`/`.equ` graph, symbol visibility/type and ELF symbol
+  ordering have different responsibilities. Do not collapse them into a
+  single string-table lookup.
+- Current symbol type/binding/visibility representations and many Common
+  flags are ELF-flavored. This is reasonable for the first ELF vertical
+  slice; choose format-neutral attributes when a second real writer demands
+  them, while preserving stable semantic SectionID/SymbolID now.
+
+### Fixups, MCData and post-layout writers
+
+- A Target instruction proposes typed fixups inside `MCEncodeResult`; the
+  Common fragment transaction commits them. Fixed-width MCData also stages
+  through this transaction. Source `.reloc` owns its *explicit section*
+  fixups, while CFI and DWARF serializers own genuinely *synthetic* fixups.
+  These are three distinct entry paths into one Common Fixup store.
+- An ordinary local/same-section reference may be resolved by Target or
+  Common layout, while retained link relocations are mapped by the ELF
+  writer (including target-specific local-symbol/section-symbol policies).
+  A generic new late-resolution engine is not justified until a concrete
+  cross-format or correctness failure calls for it.
+- `.eh_frame`/`.debug_frame` CFI and `.debug_line` are legitimate distinct
+  post-layout producers with different serialized formats. They share
+  anchored labels, final layout and Fixup ownership; they are **not**
+  redundant writer algorithms to merge merely because both use DWARF.
+  Tiny separate ULEB appenders are likewise not sufficient evidence for a
+  large new abstraction.
+- A same-name source-created `.debug_frame` or `.eh_frame` section can be
+  encountered by synthetic CFI append. `.debug_line` currently handles a
+  collision differently. First establish the actual GNU mixed-source
+  behavior; do not call the difference a bug without an original `.s`
+  oracle.
+
+### Source, Target and object format boundaries
+
+- Source expansion legitimately replays layout-dependent `.if` decisions;
+  keep stable source-site identities and avoid a second parser. Historical
+  source text may remain for diagnostics; the important ban is *late
+  instruction-semantic re-decoding* of those strings.
+- `MiniAsTargetOps` still hands a broadly mutable `MiniAs *` to several
+  phases. The existing single fragment commit mitigates this, but future
+  parse/layout/encode views should expose only the capability each phase
+  needs. Extract this incrementally, with an owner/caller deletion proof.
+- AArch64 object mapping (`$x`/`$d`) and alignment semantics currently
+  inspect `.inst`/alignment directive spellings after parsing. Preserve the
+  existing final mapping sort, but migrate to typed source-site provenance
+  when that Target interface is next changed.
+- ELF32/64 little-endian remains the *implemented* output family. Windows
+  COFF and macOS Mach-O are useful future **minimal runnable** end-to-end
+  validation targets for the four-backend skeleton; this discussion does
+  not authorize or schedule their implementation yet. The immediate task
+  remains reading, ownership cleanup and existing ELF correctness.
+
+## 7. Open correctness probes, carefully scoped
+
+| ID | Concrete observation | Treatment |
+| --- | --- | --- |
+| P09 | `.reloc` accepts less GNU grammar than full GAS | Document a syntax gap; extend only against a real source/oracle |
+| P10 | Target can pre-resolve some locals; ELF writer handles retained relocs | Preserve the existing division until a failing example proves another resolver necessary |
+| P11 | RV same-section `GLOBAL`/`WEAK` branch/jump relocation selection and fixup elimination may differ from GNU | High-value correctness probe: compare original GNU source, bytes, symbol bindings and relocations; do **not** silently eliminate externally visible weak/global linkage |
+| P12 | Common binding/type/visibility fields currently resemble ELF enums | Keep now; revise at the real second-object-format boundary |
+| P13 | At the `fed9209` baseline, fixed MCData Fixup wrappers had a direct-record fallback even though their only callers emit active Fragments | **Cleaned in section 8's batch**: always stage through `MCEncodeResult`; explicit `.reloc`, CFI/DWARF and late ULEB paths remain independent |
+| P14 | RV parse consults `as->elf_flags & 8` for an RVE feature; AArch64 encode checks interned `"."` NameId | Source/target ownership debt, not a reason to rewrite all ISA parsing now |
+| P15 | AArch64/RV `validate_output` may inject mapping symbols or adjust alignment | Legitimate late output effects; eventually name this mutable finalization capability honestly and scope it |
+| P16 | CFI source/synthetic section collisions differ from the `.debug_line` collision guard | Defer judgment until a GNU mixed-section byte/relocation oracle exists |
+
+In particular, P01 (automatic strict-I executable-byte audit) is not the
+same as *instruction-set legality*. P02/P07 (scoped `.option arch` effective
+ISA) are coherent future Target-state work. Full ISA extension versions
+(P03), future COFF/Mach-O and big-endian modes must not block present ELF
+maintenance. None of these deferred points is declared solved here.
+
+## 8. Small proven owner cleanup (focused, no extra architecture)
+
+The two MCData Fixup wrappers `minias_add_fixup` and
+`minias_add_fixup_symbol_id` are only called by `mc_expr.c`. The containing
+`minias_emit_mc_data` requires an active retained fragment and
+`MCEncodeResult`; the old direct `minias_record_fixup` fallback therefore
+cannot be a valid production caller. The wrappers can delegate directly to
+`minias_stage_common_fixup`, leaving the real Common fragment commit as
+the sole recording point. This intentionally does **not** remove the
+section-fixup API needed by `.reloc` and synthetic sections, or the explicit
+late-ULEB pairing helper.
+
+Common `minias_grow_array` also supersedes two small local dynamic-array
+allocation algorithms (`cfi_grow` and `debug_grow`) across two CFI and three
+debug-line call sites. Their initial capacities differ (16 versus Common's
+8) but this is not a semantic contract. Preserve debug-file new-slot
+zeroing and the actual CFI/DWARF parse, layout and serialization behavior.
+Update CFI's obsolete header comment to describe already supported
+`.eh_frame` instead of claiming it is unimplemented.
+
+For this cleanup, the narrow regression set covers fragment-transaction
+ownership, ordered/explicit/synthetic Fixups, CFI `.eh_frame` and dual
+frame output, signed CFI offsets, `.file`/`.loc`/DWARF views, ELF32/64
+DWARF relocations and mixed-section x86 GNU comparison. Exact results must
+be recorded for the resulting commit, not inherited from another worktree.
+
+The local pre-commit verification on upstream baseline `fed9209` plus this
+four-file diff: Release MiniAS build **PASS**; 14 focused Fragment/Fixup,
+CFI and DWARF/GNU scripts **14/14 PASS**; `check-minias-a0` **PASS,
+objects=30**, using a temporary `pyelftools` test dependency; `git diff
+--check` **PASS**. This establishes assembler-local coverage, not new
+Linux Image/boot, remote CI or full multi-architecture GNU cross-oracles.
+
+## 9. Deliberate limits and next review direction
+
+Next continue the **Common semantic owner → retained MC Fragment → final
+Fixup → ELF Writer** boundary, crossing into an individual Target only
+where the source path demands it. Prefer an entire subsystem and its caller
+graph over micro-fixes, but delete only branches shown unreachable by code
+and verified probes. Maintain a single development branch and batch pushes;
+do not schedule COFF/Mach-O, full spec-version matrices, or tuning now.
+
+## 10. Next owner batch: one Fixup request staging vector
+
+The next read followed all three active `MCEncodeResult` Fixup producers:
+
+1. Target-owned instruction symbol references (`minias_encode_add_fixup_ref`);
+2. Target-owned absolute-zero linker-relax markers
+   (`minias_encode_add_fixup_abs0`, currently reached from LoongArch);
+3. Common fixed-width MCData symbol references (`minias_add_fixup*`).
+
+Previously each independently implemented the same `result->fixups`
+capacity increase, record allocation/zeroing, and append. Two instruction
+variants also repeated the same fragment section/offset/bounds validation.
+The unified `minias_encode_result_stage_fixup` in `mc_encode_result.c` now
+owns request allocation and append. One Target-private helper verifies the
+common instruction fragment contract while preserving **distinct** legality
+checks and diagnostics: named SymbolRef widths 2/4/8, absolute-zero width 4,
+and MCData's 1/2/3/4/8 or zero-width ULEB kinds. The source semantic
+differences therefore remain explicit; no Target has gained direct access
+to the final global Fixup table.
+
+The same read confirmed that the ELF writer plans local-symbol liveness,
+folds eligible relocations to section symbols using a Target policy, checks
+final fragment bounds, then delegates layout/serialization to `minielf`.
+The apparently similar CFI/DWARF synthetic writers, explicit `.reloc` and
+Target instructions are **not** duplicate owners to delete. AArch64
+`validate_output` still uses late source directive spellings for mapping;
+RISC-V adds mapping symbols in finalization; both remain explicitly tracked
+future interface debts, not silently solved by this batch.
+
+Local pre-commit coverage for this second Fixup staging batch: Release build
+PASS; the actual 14 existing Fragment/Fixup/DWARF/GNU scripts PASS (a test
+runner initially typed one wrong script filename and then ran the correct
+`probe-mcexpr-affine-ast-gnu.sh` successfully); LoongArch GNU pseudo/RELAX
+oracle PASS with four RELAX records; A0 **30/30 PASS**. This is not a full
+Linux Image + QEMU P0/P1 result.
+
+The earlier `8ca9421` full Linux four-architecture workflow was **FAIL**
+after AArch64's large `.if`/shared-expression-AST blocker. Later
+`fed9209` repairs large GNU macro expressions, and exact-HEAD contracts,
+GCC single-AS runtime/BusyBox and focused oracles pass, but the automatic
+full Linux workflow on `fed9209`/`dfe1bae` was **SKIPPED**, not a new full
+PASS. The next coherent implementation push may carry the explicit
+`[minias-linux-four]` CI opt-in marker to close this background acceptance
+debt. Keep the test SHA and opt-in outcome separate from these local claims.

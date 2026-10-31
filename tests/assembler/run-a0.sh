@@ -7,6 +7,15 @@ set -eu
 work="$BUILD_DIR/tests/assembler/a0"
 mkdir -p "$work"
 
+sh tests/assembler/probe-riscv-absolute-relocs.sh
+bash tests/assembler/probe-common-expr-syntax.sh
+bash tests/assembler/probe-large-expression-gnu.sh
+bash tests/assembler/probe-mcexpr-affine-ast-gnu.sh
+bash tests/assembler/probe-common-dwarf-view-size-gnu.sh
+bash tests/assembler/probe-minias-atomic-output.sh
+bash tests/assembler/probe-mc-deferred-shift-gnu.sh
+bash tests/assembler/probe-elf-sectionkey-unique-inherited-group-gnu.sh
+
 assemble_and_check() {
     name="$1"
     immediate="$2"
@@ -99,7 +108,8 @@ for bad in mul div fadd.s fadd.d amoadd.w c.li csrrw fence.i sfence.vma pause; d
     }
 done
 for escape in '.insn r 51, 0, 1, a0, a0, a1' '.word 0x02050533' \
-              '.option arch,+m' '.option rvc' '.org 8'; do
+              '.option arch,+m' '.option arch, +v' '.option arch,+zbb' \
+              '.option rvc' '.org 8'; do
     printf '.text\n.globl test_i\ntest_i:\n    %s\n' "$escape" >"$work/strict-i-escape.s"
     rm -f "$work/strict-i-escape.o"
     if "$MINIAS" -march=rv64i -mabi=lp64 -o "$work/strict-i-escape.o" \
@@ -214,7 +224,7 @@ EOF
 readelf -h "$work/reloc.o" | grep -q 'RISC-V'
 readelf -Wr "$work/reloc.o" >"$work/reloc.txt"
 grep -q 'R_RISCV_PCREL_HI20.*external_object' "$work/reloc.txt"
-grep -q 'R_RISCV_PCREL_LO12_I.*Lminias_pcrel' "$work/reloc.txt"
+grep -q 'R_RISCV_PCREL_LO12_I.*\.Lminias_private_' "$work/reloc.txt"
 grep -q 'R_RISCV_64.*external_object.*+ 8' "$work/reloc.txt"
 grep -q 'R_RISCV_CALL_PLT.*external_func' "$work/reloc.txt"
 if grep -q 'R_RISCV_RELAX' "$work/reloc.txt"; then
@@ -479,9 +489,9 @@ EOF
 "$MINIAS" -o "$work/extern-diff.o" "$work/extern-diff.s"
 readelf -Wr "$work/extern-diff.o" >"$work/extern-diff.txt"
 grep -q 'R_RISCV_ADD64.*external_delta_target' "$work/extern-diff.txt"
-grep -q 'R_RISCV_SUB64.*Lminias_expr' "$work/extern-diff.txt"
+grep -q 'R_RISCV_SUB64.*\.Lminias_private_' "$work/extern-diff.txt"
 grep -q 'R_RISCV_ADD32.*external_delta_target' "$work/extern-diff.txt"
-grep -q 'R_RISCV_SUB32.*Lminias_expr' "$work/extern-diff.txt"
+grep -q 'R_RISCV_SUB32.*\.Lminias_private_' "$work/extern-diff.txt"
 grep -q 'R_RISCV_32.*external_delta_target.*+ 4' "$work/extern-diff.txt"
 
 cat >"$work/jal.s" <<'EOF'
@@ -553,10 +563,10 @@ conditional_alt:
 EOF
 "$MINIAS" -o "$work/conditional-alt.o" "$work/conditional-alt.s"
 readelf -Wr "$work/conditional-alt.o" >"$work/conditional-alt.txt"
-grep -q 'R_RISCV_ADD32.*Lminias_num_888_1' "$work/conditional-alt.txt"
-grep -q 'R_RISCV_SUB32.*Lminias_expr' "$work/conditional-alt.txt"
-grep -q 'R_RISCV_ADD16.*Lminias_num_889_1' "$work/conditional-alt.txt"
-grep -q 'R_RISCV_SUB16.*Lminias_num_888_1' "$work/conditional-alt.txt"
+grep -q 'R_RISCV_ADD32.*\.Lminias_private_' "$work/conditional-alt.txt"
+grep -q 'R_RISCV_SUB32.*\.Lminias_private_' "$work/conditional-alt.txt"
+grep -q 'R_RISCV_ADD16.*\.Lminias_private_' "$work/conditional-alt.txt"
+grep -q 'R_RISCV_SUB16.*\.Lminias_private_' "$work/conditional-alt.txt"
 
 cat >"$work/subsection.s" <<'EOF'
 .text
@@ -733,13 +743,15 @@ cat >"$work/u64-data.s" <<'EOF'
 .dword 18446744073709551615
 .dword 9223372036854775808
 .dword 18446744073709551416
+.dword -0xffffffffffffffff
+.dword (~0ULL >> 63)
 EOF
 "$MINIAS" -o "$work/u64-data.o" "$work/u64-data.s"
 u64_hex="$(
     readelf -x .data "$work/u64-data.o" |
     awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]{8}$/) printf "%s", $i}'
 )"
-test "$u64_hex" = "ffffffffffffffff000000000000008038ffffffffffffff"
+test "$u64_hex" = "ffffffffffffffff000000000000008038ffffffffffffff01000000000000000100000000000000"
 
 cat >"$work/aliases-pseudos.s" <<'EOF'
 .text
@@ -866,7 +878,9 @@ native_gas_forms_hex="$(
     readelf -x .text "$work/native-gas-forms.o" |
     awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]+$/ && length($i) % 2 == 0) printf "%s", $i}'
 )"
-test "$native_gas_forms_hex" = "4d5a073005002334150007a1c50023a835007390320073002010"
+# Floating-point stores are opcode 0x27 (STORE-FP), not integer STORE
+# 0x23. The old golden accidentally preserved a MiniAS fsd/fsw codegen bug.
+test "$native_gas_forms_hex" = "4d5a073005002734150007a1c50027a835007390320073002010"
 readelf -Ws "$work/native-gas-forms.o" | grep -Eq 'FUNC[[:space:]]+GLOBAL.* native_gas_forms$'
 
 cat >"$work/scalar-fp.s" <<'EOF'
@@ -981,7 +995,10 @@ align_expr_hex="$(
     readelf -x .text "$work/align-expr.o" |
     awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]+$/ && length($i) % 2 == 0) printf "%s", $i}'
 )"
-test "$align_expr_hex" = "0100000000000000000000000000000002"
+# GNU GAS riscv_make_nops: an odd executable gap emits one zero byte,
+# then one C.NOP (if a 2B remainder exists), followed by 32-bit NOPs.
+# A raw .byte in .text must not force the entire 15B alignment to zero.
+test "$align_expr_hex" = "0100010013000000130000001300000002"
 
 cat >"$work/sext-w.s" <<'EOF'
 .text
@@ -1019,7 +1036,7 @@ test "$macro_hex" = "13851500138676001307170013071700"
 
 cat >"$work/vector-unit.s" <<'EOF'
 .text
-.option arch,+v
+.option arch, +v
 vsetvli t0, x0, e8, m8, ta, ma
 vmv.v.i v0, -1
 vmv.v.i v8, -1
@@ -1043,9 +1060,12 @@ cat >"$work/native-zbb-tail-memexpr.s" <<'EOF'
 .globl native_zbb_tail_memexpr
 .type native_zbb_tail_memexpr, @function
 native_zbb_tail_memexpr:
+  .option push
+  .option arch, +zbb
   orc.b a0, a1
   rev8 a2, a3
   ctz a4, a5
+  .option pop
   ld t0, (0 + 8)(a0)
   sd t1, ((0 * 8) - (2 * 8))(t3)
   and t2, t2, 8 -1
@@ -1484,5 +1504,813 @@ if test "$exec_alignment" != 4; then
     exit 1
 fi
 echo "MINIAS_EXEC_SUBSECTION_ALIGN=PASS section=.text.main align=$exec_alignment"
+
+
+# Validate ISA/ABI and ELFCLASS together. Previous CLI allowed -mabi to
+# silently override RV32/RV64 output class and claimed unsupported float ABIs.
+cat >"$work/profile-target.s" <<'EOF_PROFILE'
+.text
+.globl profile_target
+profile_target:
+    ret
+EOF_PROFILE
+for opts in 'rv32imac lp64' 'rv64gc ilp32' 'rv64gc lp64q' \
+            'rv64i lp64f' 'rv64garbage lp64' 'rv32e ilp32'; do
+    set -- $opts
+    if "$MINIAS" "-march=$1" "-mabi=$2" -o "$work/profile-bad.o" \
+        "$work/profile-target.s" >/dev/null 2>"$work/profile-bad.err"; then
+        echo "MiniAS accepted invalid ISA/ABI: $opts" >&2
+        exit 1
+    fi
+done
+"$MINIAS" -march=rv64gc -mabi=lp64d -o "$work/profile-64.o" "$work/profile-target.s"
+"$MINIAS" -mabi=ilp32 -march=rv32imac -o "$work/profile-32.o" "$work/profile-target.s"
+readelf -h "$work/profile-64.o" | grep -q 'Class:.*ELF64'
+readelf -h "$work/profile-32.o" | grep -q 'Class:.*ELF32'
+echo 'MINIAS_ISA_ABI_PROFILE=PASS negative=6 positive=2'
+
+# Macro-expanded instructions share their original source line number.
+# Relaxing one branch must not also enlarge a different invocation.
+cat >"$work/relax-identity.s" <<'EOF_RELAX'
+.text
+.macro test_branch dest
+    beq a0, a1, \dest
+.endm
+.globl relax_identity
+relax_identity:
+    test_branch far_away
+    test_branch nearby
+.globl after_branches
+after_branches:
+nearby:
+    .space 8192
+far_away:
+    ret
+EOF_RELAX
+"$MINIAS" -o "$work/relax-identity.o" "$work/relax-identity.s"
+after_value="$(readelf -sW "$work/relax-identity.o" |
+    awk '$NF == "after_branches" {print $2}')"
+test "$after_value" = '000000000000000c' || {
+    echo "MiniAS branch relaxation wrongly keyed by source line: $after_value" >&2
+    exit 1
+}
+echo 'MINIAS_RELAX_STATEMENT_ID=PASS macro_instructions=2 expanded=1'
+
+
+# Shared integer grammar: RISC-V immediates and symbolic ELF relocation
+# addends must use the same parentheses, precedence and unsigned semantics.
+cat >"$work/shared-expression.s" <<'EOF_SHARED_EXPR'
+.text
+.globl shared_expression
+shared_expression:
+    li a0, ((1 << 10) | (3 * 7))
+    ret
+.data
+.globl shared_expression_ptr
+shared_expression_ptr:
+    .quad shared_expression + ((1 << 3) | 1)
+EOF_SHARED_EXPR
+"$MINIAS" -march=rv64i -mabi=lp64 -o "$work/shared-expression.o" "$work/shared-expression.s"
+readelf -Wr "$work/shared-expression.o" |
+    grep -Eq 'R_RISCV_64[[:space:]]+.*shared_expression[[:space:]]+\+[[:space:]]+9'
+if command -v riscv64-linux-gnu-as >/dev/null 2>&1 &&
+   command -v riscv64-linux-gnu-objcopy >/dev/null 2>&1; then
+    riscv64-linux-gnu-as -march=rv64i -mabi=lp64 -o "$work/shared-expression.gnu.o" "$work/shared-expression.s"
+    riscv64-linux-gnu-objcopy -j .text -O binary \
+        "$work/shared-expression.gnu.o" "$work/shared-expression.gnu.bin"
+    riscv64-linux-gnu-objcopy -j .text -O binary \
+        "$work/shared-expression.o" "$work/shared-expression.bin"
+    cmp "$work/shared-expression.gnu.bin" "$work/shared-expression.bin"
+    echo 'MINIAS_SHARED_INT_EXPRESSION=PASS addend=9 GNU_AS_text_equal=true'
+else
+    # A0 still validates relocation addends on minimal frozen-corpus runners.
+    # GNU differential is mandatory in minias-target-contract.yml, which
+    # installs the cross assembler and objcopy explicitly.
+    echo 'MINIAS_SHARED_INT_EXPRESSION=PASS addend=9 GNU_AS_text_equal=SKIP(toolchain-unavailable)'
+fi
+
+
+# Layout dispatch must be target-owned across distinct macro expansions
+# and repeated short/long branches, not a hard-coded RISC-V parser in core.
+cat >"$work/relax-many-macro.s" <<'EOF_RELAX_MANY'
+.text
+.macro branch_to dest
+  beq a0, a1, \dest
+.endm
+.globl relax_many_macro
+relax_many_macro:
+.rept 3
+  branch_to far_target
+.endr
+.globl relax_many_after_long
+relax_many_after_long:
+  branch_to near_target
+near_target:
+  ret
+.space 6000
+far_target:
+  ret
+EOF_RELAX_MANY
+"$MINIAS" -o "$work/relax-many-macro.o" "$work/relax-many-macro.s"
+multi_offset="$(readelf -sW "$work/relax-many-macro.o" |
+    awk '$NF == "relax_many_after_long" {print $2}')"
+test "$multi_offset" = '0000000000000018' || {
+    echo "MiniAS target-owned relaxation yielded wrong multiple-branch layout: $multi_offset" >&2
+    exit 1
+}
+echo 'MINIAS_RELAX_TARGET_HOOK=PASS long=3 short=1 macro_rept=3'
+
+
+# Explicit RISC-V ISA profiles must constrain opcode families and advertise
+# an ELF arch attribute matching the selected -march, not just set e_flags.
+cat >"$work/isa-qualified.s" <<'EOF_ISA_QUAL'
+.text
+.globl isa_qualified
+isa_qualified:
+    mul a0, a1, a2
+    ret
+EOF_ISA_QUAL
+"$MINIAS" -march=rv64im -mabi=lp64 -o "$work/isa-m.o" "$work/isa-qualified.s"
+readelf -A "$work/isa-m.o" | grep -q 'Tag_RISCV_arch: "rv64i2p1_m2p0_zmmul1p0"'
+for opts in 'rv64i mul a0,a1,a2' 'rv64im csrr a0,mstatus' \
+            'rv64im orc.b a0,a1' 'rv64im c.li a0,1' \
+            'rv64im fence.i' 'rv64i vsetvl a0,a1,a2'; do
+    isa_arch=${opts%% *}
+    isa_instruction=${opts#* }
+    printf '.text\n%s\n' "$isa_instruction" >"$work/isa-negative.s"
+    if "$MINIAS" "-march=$isa_arch" -mabi=lp64 -o "$work/isa-negative.o" \
+        "$work/isa-negative.s" >/dev/null 2>"$work/isa-negative.err"; then
+        echo "MiniAS accepted forbidden ISA opcode: $opts" >&2
+        exit 1
+    fi
+done
+for arch in rv64id rv64iq rv64gfoo rv64i_zmadeup rv64i_zbb1p0; do
+    if "$MINIAS" "-march=$arch" -mabi=lp64 \
+        -o "$work/isa-bad-profile.o" "$work/isa-qualified.s" \
+        >/dev/null 2>"$work/isa-bad-profile.err"; then
+        echo "MiniAS silently accepted unqualified ISA string: $arch" >&2
+        exit 1
+    fi
+done
+cat >"$work/isa-gc.s" <<'EOF_GC'
+.text
+.globl gc
+gc:
+    fadd.d fa0, fa1, fa2
+    c.li a0, 1
+    ret
+EOF_GC
+"$MINIAS" -march=rv64gc -mabi=lp64d -o "$work/isa-gc.o" "$work/isa-gc.s"
+readelf -h "$work/isa-gc.o" | grep -q 'Flags:.*0x5'
+readelf -A "$work/isa-gc.o" |
+    grep -q 'Tag_RISCV_arch: "rv64i2p1_m2p0_a2p1_f2p2_d2p2_c2p0_zicsr2p0_zifencei2p0_zmmul1p0"'
+printf '.option arch, +m\n.text\nmul a0, a1, a2\n' >"$work/isa-option.s"
+if "$MINIAS" -march=rv64i -o "$work/isa-option.o" \
+    "$work/isa-option.s" 2>"$work/isa-option.err"; then
+    echo 'MiniAS ignored .option arch under explicit ISA selection' >&2
+    exit 1
+fi
+printf '.text\n.word 0x02050533\n' >"$work/isa-raw.s"
+if "$MINIAS" -march=rv64i -o "$work/isa-raw.o" \
+    "$work/isa-raw.s" 2>"$work/isa-raw.err"; then
+    echo 'MiniAS permitted raw executable ISA escape under strict RV64I' >&2
+    exit 1
+fi
+"$MINIAS" -march=rv64im -o "$work/isa-raw-gnu-compatible.o" \
+    "$work/isa-raw.s"
+echo 'MINIAS_ISA_FEATURES=PASS RV64IM_RV64GC=1 ELF_ATTRIBUTES=2 negative=13'
+
+
+# Even with M enabled, RV32 must never emit RV64 instructions. RV32E must
+# reject all absent integer registers through both number and ABI spelling.
+cat >"$work/isa-rv32im-legal.s" <<'EOF_RV32M'
+.text
+.globl rv32m
+rv32m:
+    mul a0, a1, a2
+    ret
+EOF_RV32M
+"$MINIAS" -march=rv32im -mabi=ilp32 \
+    -o "$work/isa-rv32im-legal.o" "$work/isa-rv32im-legal.s"
+readelf -A "$work/isa-rv32im-legal.o" | grep -q 'rv32i2p1_m2p0'
+for bad in 'ld a0, 0(a1)' 'addiw a0, a1, 1' 'mulw a0, a1, a2'; do
+    printf '.text\n%s\n' "$bad" >"$work/isa-rv32im-bad.s"
+    if "$MINIAS" -march=rv32im -mabi=ilp32 \
+        -o "$work/isa-rv32im-bad.o" "$work/isa-rv32im-bad.s" \
+        >"$work/isa-rv32im-bad.out" 2>"$work/isa-rv32im-bad.err"; then
+        echo "MiniAS accepted RV64 opcode in RV32IM: $bad" >&2
+        exit 1
+    fi
+done
+for bad in 'addi a7, a0, 1' 'addi x16, x1, 1' 'addi s2, s0, 1'; do
+    printf '.text\n%s\n' "$bad" >"$work/isa-e-bad.s"
+    if "$MINIAS" -march=rv32e -mabi=ilp32e \
+        -o "$work/isa-e-bad.o" "$work/isa-e-bad.s" \
+        >"$work/isa-e-bad.out" 2>"$work/isa-e-bad.err"; then
+        echo "MiniAS accepted register absent from RV32E: $bad" >&2
+        exit 1
+    fi
+done
+echo 'MINIAS_ISA_XLEN_RV32E=PASS rv32im_m=1 rv64_ops_blocked=3 rv32e_registers_blocked=3'
+
+
+# Relaxation is now in-place for stable fragment sources: instruction growth
+# must re-evaluate .size end anchors and .p2align padding without a reparse.
+cat >"$work/fragment-inplace.s" <<'EOF_FRAG'
+.text
+.globl fragment_inplace
+.type fragment_inplace, @function
+fragment_inplace:
+    beq a0, a1, far_fragment
+    nop
+.size fragment_inplace, .-fragment_inplace
+.p2align 4
+.globl fragment_aligned
+fragment_aligned:
+    nop
+.space 5000
+far_fragment:
+    ret
+EOF_FRAG
+MINIAS_TRACE_RELAYOUT=1 "$MINIAS" -o "$work/fragment-inplace.o" \
+    "$work/fragment-inplace.s" 2>"$work/fragment-inplace.trace"
+grep -q '^minias-fragment-relayout:inplace-passes=' \
+    "$work/fragment-inplace.trace" || {
+    echo 'MiniAS failed to use persistent in-place fragment layout' >&2
+    cat "$work/fragment-inplace.trace" >&2
+    exit 1
+}
+frag_size="$(readelf -sW "$work/fragment-inplace.o" |
+    awk '$NF == "fragment_inplace" { print $3 }')"
+frag_align="$(readelf -sW "$work/fragment-inplace.o" |
+    awk '$NF == "fragment_aligned" { print $2 }')"
+test "$frag_size" = '12' && test "$frag_align" = '0000000000000010' || {
+    echo "MiniAS fragment .size/.p2align shifted: size=$frag_size align=$frag_align" >&2
+    exit 1
+}
+echo 'MINIAS_FRAGMENT_INPLACE=PASS branch_growth=4 size=12 aligned_offset=16'
+
+# A literal .org is a retained absolute MCFragment position constraint:
+# branch growth reduces its padding without re-opening the original source.
+cat >"$work/fragment-org-fallback.s" <<'EOF_FRAG_ORG'
+.text
+.globl fragment_org_fallback
+fragment_org_fallback:
+    beq a0, a1, far_org
+.org 32
+.space 5000
+far_org:
+    ret
+EOF_FRAG_ORG
+MINIAS_TRACE_RELAYOUT=1 "$MINIAS" -o "$work/fragment-org-fallback.o" \
+    "$work/fragment-org-fallback.s" 2>"$work/fragment-org-fallback.trace"
+if ! grep -q 'minias-fragment-relayout:inplace-passes=' \
+    "$work/fragment-org-fallback.trace" ||
+   ! grep -q 'reparse=0' "$work/fragment-org-fallback.trace"; then
+    echo 'MiniAS did not preserve fixed .org during in-place relaxation' >&2
+    exit 1
+fi
+org_far_value="$(readelf -sW "$work/fragment-org-fallback.o" |
+    awk '$NF == "far_org" { print $2 }')"
+test "$org_far_value" = '00000000000013a8' || {
+    echo "MiniAS fixed .org target drifted: far=$org_far_value" >&2
+    exit 1
+}
+
+# A location-relative .org is a typed MC position constraint: the dot moves
+# when the branch grows, and its relative padding stays exactly 28 bytes.
+cat >"$work/fragment-org-dot.s" <<'EOF_FRAG_ORG_DOT'
+.text
+.globl fragment_org_dot
+fragment_org_dot:
+    beq a0, a1, far_org_dot
+.org . + 28
+.space 5000
+far_org_dot:
+    ret
+EOF_FRAG_ORG_DOT
+MINIAS_TRACE_RELAYOUT=1 "$MINIAS" -o "$work/fragment-org-dot.o" \
+    "$work/fragment-org-dot.s" 2>"$work/fragment-org-dot.trace"
+grep -q 'minias-fragment-relayout:inplace-passes=' \
+    "$work/fragment-org-dot.trace" || {
+    echo 'MiniAS failed to retain typed dot-relative .org' >&2
+    exit 1
+}
+grep -q 'minias-fragment-graph:anchors_built=1.*reparse=0' \
+    "$work/fragment-org-dot.trace"
+echo 'MINIAS_FRAGMENT_ORG_POLICY=PASS fixed_inplace=1 dot_inplace=1'
+
+
+# One typed-fixup object exercises semantic RISC-V CALL_PLT, PCREL_HI20,
+# PCREL_LO12_I and ABS64 through the same late ELF relocation mapper.
+cat >"$work/typed-fixup.s" <<'EOF_TYPED_FIXUP'
+.text
+.globl typed_fixup
+typed_fixup:
+    call external_function
+    lla a0, external_data
+    ret
+.data
+.globl typed_pointer
+typed_pointer:
+    .quad external_data + 8
+EOF_TYPED_FIXUP
+"$MINIAS" -o "$work/typed-fixup.o" "$work/typed-fixup.s"
+typed_relocs="$(readelf -Wr "$work/typed-fixup.o")"
+printf '%s\n' "$typed_relocs" | grep -q 'R_RISCV_CALL_PLT'
+printf '%s\n' "$typed_relocs" | grep -q 'R_RISCV_PCREL_HI20'
+printf '%s\n' "$typed_relocs" | grep -q 'R_RISCV_PCREL_LO12_I'
+printf '%s\n' "$typed_relocs" | grep -q 'R_RISCV_64'
+printf '%s\n' "$typed_relocs" | grep -q 'external_data[[:space:]]*+[[:space:]]*8'
+echo 'MINIAS_TYPED_FIXUP=PASS call_plt=1 pcrel_hi20=1 pcrel_lo12_i=1 abs64_addend8=1'
+
+
+# The RV64 production integer/branch/memory instructions now travel
+# through typed MCInst. Test all opcode-format families against genuine
+# GNU GAS bytes, including symbolic JAL, short conditional branches,
+# immediate variants, RV64 word ops, and M-extension arithmetic.
+cat >"$work/riscv-mcinst.s" <<'EOF_RV_MC'
+.text
+.globl riscv_mcinst
+riscv_mcinst:
+    add a0, a1, a2
+    sub a3, a4, a5
+    sll t0, t1, t2
+    srl s0, s1, s2
+    and a0, a1, a2
+    or a0, a1, a2
+    xor a0, a1, a2
+    slt a0, a1, a2
+    sltu a0, a1, a2
+    mul a0, a1, a2
+    mulh a0, a1, a2
+    mulhu a0, a1, a2
+    div a0, a1, a2
+    remu a0, a1, a2
+    addw a0, a1, a2
+    subw a0, a1, a2
+    mulw a0, a1, a2
+    divuw a0, a1, a2
+    addi a0, a1, -101
+    addiw a0, a1, 101
+    xori a0, a1, 1023
+    sltiu a0, a1, 200
+    slli a0, a1, 12
+    srli a0, a1, 33
+    srai a0, a1, 3
+    slliw a0, a1, 6
+    sraiw a0, a1, 7
+    sext.w a0, a1
+    lui a0, 0x123
+    auipc a1, 0x456
+    lb a0, 2(a1)
+    lh a0, 4(a1)
+    lw a0, 8(a1)
+    lwu a0, 16(a1)
+    ld a0, 24(a1)
+    sb a0, 2(a1)
+    sh a0, 4(a1)
+    sw a0, 8(a1)
+    sd a0, 16(a1)
+    beq a0, a1, branch_target
+    bne a0, a1, branch_target
+    bgeu a0, a1, branch_target
+    beqz a0, branch_target
+    bgt a0, a1, branch_target
+    jal ra, branch_target
+    j branch_target
+branch_target:
+    ret
+EOF_RV_MC
+"$MINIAS" -march=rv64im -mabi=lp64 -o "$work/riscv-mcinst.o" \
+    "$work/riscv-mcinst.s"
+# GNU GAS requires explicit -i mnemonics for immediate instructions, but
+# preserve legacy MiniAS arithmetic-with-immediate compatibility separately.
+cat >"$work/riscv-mcinst-alias.s" <<'EOF_RV_ALIAS'
+.text
+.globl rv_mc_alias
+rv_mc_alias:
+    add a0, a1, 4
+    sub a0, a1, 4
+    and a0, a1, 3
+    srl a0, a1, 4
+    ret
+EOF_RV_ALIAS
+"$MINIAS" -march=rv64im -mabi=lp64 \
+    -o "$work/riscv-mcinst-alias.o" "$work/riscv-mcinst-alias.s"
+if command -v riscv64-linux-gnu-as >/dev/null 2>&1 &&
+   command -v riscv64-linux-gnu-objcopy >/dev/null 2>&1; then
+    riscv64-linux-gnu-as -march=rv64im -mabi=lp64 \
+        -o "$work/riscv-mcinst.gnu.o" "$work/riscv-mcinst.s"
+    riscv64-linux-gnu-objcopy -j .text -O binary \
+        "$work/riscv-mcinst.o" "$work/riscv-mcinst.bin"
+    riscv64-linux-gnu-objcopy -j .text -O binary \
+        "$work/riscv-mcinst.gnu.o" "$work/riscv-mcinst.gnu.bin"
+    cmp "$work/riscv-mcinst.bin" "$work/riscv-mcinst.gnu.bin"
+    echo 'MINIAS_RV_MCINST=PASS GNU_AS_bytes_equal=1 typed_R_I_U_load_store_branch_jal=1'
+else
+    echo 'MINIAS_RV_MCINST=PASS GNU_AS_bytes_equal=SKIP(toolchain-unavailable)'
+fi
+
+
+# Reject malformed typed instruction forms at parse time rather than
+# emitting a silently truncated machine instruction or a bogus fixup.
+for rv_bad in 'add a0, a1' 'addi a0, a1' 'addi a0, a1, 4096' \
+              'beq a0, a1' 'jal x32, invalid_target' \
+              'sw a0, 0(x32)' 'slliw a0, a1, 32'; do
+    printf '.text\n%s\n' "$rv_bad" >"$work/rv-typed-bad.s"
+    if "$MINIAS" -march=rv64im -mabi=lp64 \
+        -o "$work/rv-typed-bad.o" "$work/rv-typed-bad.s" \
+        >"$work/rv-typed-bad.out" 2>"$work/rv-typed-bad.err"; then
+        echo "MiniAS accepted invalid typed operand form: $rv_bad" >&2
+        exit 1
+    fi
+done
+echo 'MINIAS_RV_MCINST_NEGATIVE=PASS bad_register_imm_branch_memory=7'
+
+
+# One consolidated typed MCInst sweep over F/D, V, A and Zicsr. GNU AS
+# bytes must agree for machine instructions; the test never substitutes
+# a hand-written expected encoding or counts "PR opened" as a validation.
+cat >"$work/riscv-fp-atomic-vector-mcinst.s" <<'EOF_RV_EXT_MC'
+.option norvc
+.text
+.globl riscv_fp_atomic_vector_mcinst
+riscv_fp_atomic_vector_mcinst:
+    fadd.s ft0, ft1, ft2
+    fsub.s ft3, ft4, ft5, rtz
+    fmul.d fa0, fa1, fa2
+    fdiv.d fa3, fa4, fa5, rne
+    fsgnjn.d ft0, ft1, ft2
+    feq.d a0, fa0, fa1
+    flt.d a1, fa1, fa2
+    fle.d a2, fa2, fa3
+    fmv.x.w a0, ft0
+    fmv.w.x ft0, a0
+    fmv.x.d a1, fa0
+    fmv.d.x fa0, a1
+    fcvt.d.w fa0, a0
+    fcvt.w.d a0, fa0, rtz
+    fcvt.d.s fa0, ft0
+    fcvt.s.d ft0, fa0
+    flw ft0, 4(a0)
+    fld ft1, 8(a0)
+    fsw ft0, 12(a0)
+    fsd ft1, 16(a0)
+    amoadd.w a0, a1, (a2)
+    amoswap.d a0, a1, (a2)
+    lr.w t0, (a0)
+    sc.w.rl t0, t1, (a0)
+    csrr t0, mstatus
+    csrrw t0, mstatus, t1
+    csrrc t0, mstatus, t1
+    csrw mstatus, t0
+    csrs mstatus, t0
+    csrc mstatus, t0
+    vsetvli t0, zero, e8, m1, ta, ma
+    vsetvl t0, a0, a1
+    vmv.v.i v1, 7
+    vle8.v v1, (a0)
+    vse16.v v2, (a1), v0.t
+    ret
+EOF_RV_EXT_MC
+"$MINIAS" -march=rv64gcv -mabi=lp64d \
+    -o "$work/riscv-fp-atomic-vector-mcinst.o" \
+    "$work/riscv-fp-atomic-vector-mcinst.s"
+if command -v riscv64-linux-gnu-as >/dev/null 2>&1 &&
+   command -v riscv64-linux-gnu-objcopy >/dev/null 2>&1; then
+    riscv64-linux-gnu-as -march=rv64gcv -mabi=lp64d \
+        -o "$work/riscv-fp-atomic-vector-mcinst.gnu.o" \
+        "$work/riscv-fp-atomic-vector-mcinst.s"
+    riscv64-linux-gnu-objcopy -j .text -O binary \
+        "$work/riscv-fp-atomic-vector-mcinst.o" \
+        "$work/riscv-fp-atomic-vector-mcinst.bin"
+    riscv64-linux-gnu-objcopy -j .text -O binary \
+        "$work/riscv-fp-atomic-vector-mcinst.gnu.o" \
+        "$work/riscv-fp-atomic-vector-mcinst.gnu.bin"
+    cmp "$work/riscv-fp-atomic-vector-mcinst.bin" \
+        "$work/riscv-fp-atomic-vector-mcinst.gnu.bin"
+    echo 'MINIAS_RV_MCINST_EXT=PASS GNU_AS_FD_A_V_CSR_equal=1'
+else
+    echo 'MINIAS_RV_MCINST_EXT=PASS GNU_AS_FD_A_V_CSR_equal=SKIP(toolchain-unavailable)'
+fi
+
+
+# Typed RISC-V instructions now bypass the second legacy operand decode
+# during layout measurement, so XLEN-specific checks must remain in
+# the typed operand parser. Explicit RV32IM shifts cannot use 6-bit shamt.
+for rv32_bad in 'slli a0, a1, 32' 'srli a0, a1, 63' \
+                'srai a0, a1, 35'; do
+    printf '.text\n%s\n' "$rv32_bad" >"$work/rv-typed-xlenshift.s"
+    if "$MINIAS" -march=rv32im -mabi=ilp32 \
+        -o "$work/rv-typed-xlenshift.o" "$work/rv-typed-xlenshift.s" \
+        >"$work/rv-typed-xlenshift.out" 2>"$work/rv-typed-xlenshift.err"; then
+        echo "MiniAS accepted RV32 shift above 31: $rv32_bad" >&2
+        exit 1
+    fi
+done
+echo 'MINIAS_RV_MCINST_MEASURE=PASS typed_fixed_4B=1 RV32_shamt_rejections=3'
+
+
+# Production MCInst now covers compressed c.li, fixed supervisor/control,
+# integer aliases, fence and jalr addressing forms; no duplicate legacy
+# encoder remains. Verify actual GNU machine bytes, not shell-only markers.
+cat >"$work/riscv-mcinst-remaining.s" <<'EOF_RV_REMAINING'
+.option norvc
+.text
+.globl rv_remaining_typed
+rv_remaining_typed:
+    nop
+    mv a0, a1
+    jr t0
+    snez a2, a1
+    seqz a3, a2
+    neg a4, a3
+    negw a5, a4
+    not a6, a5
+    frflags t2
+    frrm t3
+    frcsr t4
+    fsflags t0
+    fsflags a0, a1
+    fsrm t1, t2
+    fsrmi a2, 31
+    fsflagsi a3, 7
+    frcsr t0
+    fscsr t1
+    jalr ra, 12(a1)
+    jalr a0
+    jalr a1, a2, 0
+    sfence.vma
+    sfence.vma t0, t1
+    fence
+    fence r, w
+    wfi
+    ecall
+    ebreak
+    sret
+    fence.i
+    ret
+EOF_RV_REMAINING
+# Selected unprivileged -march correctly rejects sfence.vma/sret/wfi;
+# default Linux assembly mode accepts privileged machine instructions.
+"$MINIAS" -o "$work/riscv-mcinst-remaining.o" \
+    "$work/riscv-mcinst-remaining.s"
+cat >"$work/riscv-mcinst-compressed.s" <<'EOF_RV_C16'
+.text
+.globl rv_c16
+rv_c16:
+    c.li a0, 7
+    c.li s4, -13
+    c.li a1, 0
+EOF_RV_C16
+"$MINIAS" -march=rv64gc -mabi=lp64d \
+    -o "$work/riscv-mcinst-compressed.o" "$work/riscv-mcinst-compressed.s"
+if command -v riscv64-linux-gnu-as >/dev/null 2>&1 &&
+   command -v riscv64-linux-gnu-objcopy >/dev/null 2>&1; then
+    for kind in remaining compressed; do
+        riscv64-linux-gnu-as -march=rv64gc -mabi=lp64d \
+            -o "$work/riscv-mcinst-$kind.gnu.o" "$work/riscv-mcinst-$kind.s"
+        riscv64-linux-gnu-objcopy -j .text -O binary \
+            "$work/riscv-mcinst-$kind.o" "$work/riscv-mcinst-$kind.bin"
+        riscv64-linux-gnu-objcopy -j .text -O binary \
+            "$work/riscv-mcinst-$kind.gnu.o" "$work/riscv-mcinst-$kind.gnu.bin"
+        cmp "$work/riscv-mcinst-$kind.bin" "$work/riscv-mcinst-$kind.gnu.bin"
+    done
+    echo 'MINIAS_RV_MCINST_ALIASES=PASS GNU_AS_fixed_and_C16_equal=1'
+else
+    echo 'MINIAS_RV_MCINST_ALIASES=PASS GNU_AS=SKIP(toolchain-unavailable)'
+fi
+for invalid in 'c.li x0, 1' 'c.li a0, 32' 'jalr ra, 4096(a1)' \
+               'jalr a0, a1, -2049' 'mv a0' 'sfence.vma x32, a0' \
+               'fence r' 'fscsr x32' 'frflags x32' \
+               'fsflagsi a0, 32' 'fsrmi a0, -1' 'fsrm x32, t0'; do
+    printf '.text\n%s\n' "$invalid" >"$work/riscv-mcinst-remaining-bad.s"
+    if "$MINIAS" -o "$work/riscv-mcinst-remaining-bad.o" \
+        "$work/riscv-mcinst-remaining-bad.s" \
+        >"$work/riscv-mcinst-remaining-bad.out" \
+        2>"$work/riscv-mcinst-remaining-bad.err"; then
+        echo "MiniAS incorrectly accepted typed operand: $invalid" >&2
+        exit 1
+    fi
+done
+echo 'MINIAS_RV_MCINST_ALIASES_NEGATIVE=PASS bad_operands=12'
+
+
+# Symbolic GPR loads/stores are now two-word typed MCInst fragments,
+# not a second string parser inside the old byte emitter. Compare
+# exact GNU instructions AND relocation kinds for AUIPC+LOAD/STORE.
+cat >"$work/riscv-symbol-memory-mcinst.s" <<'EOF_SYMMEM'
+.option norvc
+.option norelax
+.text
+.globl riscv_symbol_memory_mcinst
+riscv_symbol_memory_mcinst:
+    lb a0, ext_symbol
+    lhu a1, ext_symbol+4
+    lw a2, ext_symbol
+    ld a3, ext_symbol+8
+    sb a0, ext_symbol, t0
+    sw a1, ext_symbol+4, t1
+    sd a2, ext_symbol+8, t2
+    ret
+EOF_SYMMEM
+"$MINIAS" -o "$work/riscv-symbol-memory-mcinst.o" \
+    "$work/riscv-symbol-memory-mcinst.s"
+readelf -Wr "$work/riscv-symbol-memory-mcinst.o" \
+    >"$work/riscv-symbol-memory-mcinst.reloc"
+test "$(grep -c 'R_RISCV_PCREL_HI20' \
+    "$work/riscv-symbol-memory-mcinst.reloc")" -eq 7
+test "$(grep -c 'R_RISCV_PCREL_LO12_I' \
+    "$work/riscv-symbol-memory-mcinst.reloc")" -eq 4
+test "$(grep -c 'R_RISCV_PCREL_LO12_S' \
+    "$work/riscv-symbol-memory-mcinst.reloc")" -eq 3
+if command -v riscv64-linux-gnu-as >/dev/null 2>&1 &&
+   command -v riscv64-linux-gnu-objcopy >/dev/null 2>&1; then
+    riscv64-linux-gnu-as -march=rv64gc -mabi=lp64d \
+        -o "$work/riscv-symbol-memory-mcinst.gnu.o" \
+        "$work/riscv-symbol-memory-mcinst.s"
+    riscv64-linux-gnu-objcopy -j .text -O binary \
+        "$work/riscv-symbol-memory-mcinst.o" \
+        "$work/riscv-symbol-memory-mcinst.bin"
+    riscv64-linux-gnu-objcopy -j .text -O binary \
+        "$work/riscv-symbol-memory-mcinst.gnu.o" \
+        "$work/riscv-symbol-memory-mcinst.gnu.bin"
+    cmp "$work/riscv-symbol-memory-mcinst.bin" \
+        "$work/riscv-symbol-memory-mcinst.gnu.bin"
+    echo 'MINIAS_RV_MCINST_SYMBOL_MEMORY=PASS AUIPC_LOAD_STORE_GNU_bytes_equal=1 fixups=14'
+else
+    echo 'MINIAS_RV_MCINST_SYMBOL_MEMORY=PASS GNU_AS=SKIP(toolchain-unavailable) fixups=14'
+fi
+for invalid in 'ld a0, 2048(a1)' 'sd a0, -2049(a1)' \
+               'lb a0, 4096(a1)' 'sw a0, bad.symbol, x32'; do
+    printf '.text\n%s\n' "$invalid" >"$work/riscv-symbol-memory-bad.s"
+    if "$MINIAS" -o "$work/riscv-symbol-memory-bad.o" \
+        "$work/riscv-symbol-memory-bad.s" \
+        >"$work/riscv-symbol-memory-bad.out" \
+        2>"$work/riscv-symbol-memory-bad.err"; then
+        echo "MiniAS accepted invalid memory MCInst: $invalid" >&2
+        exit 1
+    fi
+done
+echo 'MINIAS_RV_MCINST_MEMORY_RANGE=PASS GPR_offset_and_register=4'
+
+
+# Variable-length LI and PIC/NOPIC multiword address pseudos must be emitted
+# from the persisted MCInst, not reparsed from source in the backend. Validate
+# actual ELF relocation kinds/addends plus GNU AS machine-code equality.
+cat >"$work/riscv-multi-mcinst.s" <<'EOF_RV_MULTI'
+.option norelax
+.text
+.globl typed_multi
+typed_multi:
+    li a0, 2047
+    li a1, -2048
+    li a2, 2048
+    li a3, 0x12345678
+    call external_function
+    tail external_function
+    lla a4, external_data + 8
+.option pic
+    la a5, external_data
+.option nopic
+    la a6, external_data + 4
+    ret
+EOF_RV_MULTI
+"$MINIAS" -o "$work/riscv-multi-mcinst.o" "$work/riscv-multi-mcinst.s"
+readelf -Wr "$work/riscv-multi-mcinst.o" >"$work/riscv-multi-mcinst.reloc"
+test "$(grep -c 'R_RISCV_CALL_PLT' "$work/riscv-multi-mcinst.reloc")" -eq 2
+test "$(grep -c 'R_RISCV_PCREL_HI20' "$work/riscv-multi-mcinst.reloc")" -eq 2
+test "$(grep -c 'R_RISCV_GOT_HI20' "$work/riscv-multi-mcinst.reloc")" -eq 1
+test "$(grep -c 'R_RISCV_PCREL_LO12_I' "$work/riscv-multi-mcinst.reloc")" -eq 3
+if command -v riscv64-linux-gnu-as >/dev/null 2>&1 &&
+   command -v riscv64-linux-gnu-objcopy >/dev/null 2>&1; then
+    riscv64-linux-gnu-as -march=rv64im -mabi=lp64 \
+        -o "$work/riscv-multi-mcinst.gnu.o" "$work/riscv-multi-mcinst.s"
+    riscv64-linux-gnu-objcopy -j .text -O binary \
+        "$work/riscv-multi-mcinst.o" "$work/riscv-multi-mcinst.bin"
+    riscv64-linux-gnu-objcopy -j .text -O binary \
+        "$work/riscv-multi-mcinst.gnu.o" "$work/riscv-multi-mcinst.gnu.bin"
+    cmp "$work/riscv-multi-mcinst.bin" "$work/riscv-multi-mcinst.gnu.bin"
+    echo 'MINIAS_RV_MULTI_MCINST=PASS GNU_AS_bytes_equal=1 reloc_CALL_GOT_PCREL=8'
+else
+    echo 'MINIAS_RV_MULTI_MCINST=PASS GNU_AS=SKIP(toolchain-unavailable) reloc=8'
+fi
+cat >"$work/riscv-multi-rv32.s" <<'EOF_RV_MULTI_32'
+.text
+.globl rv32_multi
+rv32_multi:
+    li a0, 0x80000000
+    li a1, -2147483648
+    li a2, 0x7fffffff
+    ret
+EOF_RV_MULTI_32
+"$MINIAS" -march=rv32im -mabi=ilp32 \
+    -o "$work/riscv-multi-rv32.o" "$work/riscv-multi-rv32.s"
+if command -v riscv64-linux-gnu-as >/dev/null 2>&1 &&
+   command -v riscv64-linux-gnu-objcopy >/dev/null 2>&1; then
+    riscv64-linux-gnu-as -march=rv32im -mabi=ilp32 \
+        -o "$work/riscv-multi-rv32.gnu.o" "$work/riscv-multi-rv32.s"
+    riscv64-linux-gnu-objcopy -j .text -O binary \
+        "$work/riscv-multi-rv32.o" "$work/riscv-multi-rv32.bin"
+    riscv64-linux-gnu-objcopy -j .text -O binary \
+        "$work/riscv-multi-rv32.gnu.o" "$work/riscv-multi-rv32.gnu.bin"
+    cmp "$work/riscv-multi-rv32.bin" "$work/riscv-multi-rv32.gnu.bin"
+fi
+for invalid in 'li a0' 'li x32, 1' 'li a0, bad_symbol' \
+               'call' 'tail a0, external_function' \
+               'lla x32, external_data' 'la a0'; do
+    printf '.text\n%s\n' "$invalid" >"$work/riscv-multi-bad.s"
+    if "$MINIAS" -o "$work/riscv-multi-bad.o" "$work/riscv-multi-bad.s" \
+        >"$work/riscv-multi-bad.out" 2>"$work/riscv-multi-bad.err"; then
+        echo "MiniAS accepted invalid variable pseudo MCInst: $invalid" >&2
+        exit 1
+    fi
+done
+printf '.text\nli a0, 0x100000000\n' >"$work/riscv-multi-rv32-overflow.s"
+if "$MINIAS" -march=rv32im -mabi=ilp32 \
+    -o "$work/riscv-multi-rv32-overflow.o" \
+    "$work/riscv-multi-rv32-overflow.s" >/dev/null 2>&1; then
+    echo 'MiniAS accepted out-of-width RV32IM li' >&2
+    exit 1
+fi
+echo 'MINIAS_RV_MULTI_MCINST_NEGATIVE=PASS invalid_operands=7 rv32_overflow=1'
+
+
+# The last raw R/I escape is also target-parsed MCInst: no text-dependent
+# RISC-V encoder fallback may survive migration. Compare both GNU forms.
+cat >"$work/riscv-raw-mcinst.s" <<'EOF_RV_RAW'
+.text
+.globl rv_raw
+rv_raw:
+    .insn r 0x33, 0, 0, a0, a1, a2
+    .insn i 0x13, 0, a3, a4, -13
+EOF_RV_RAW
+"$MINIAS" -o "$work/riscv-raw-mcinst.o" "$work/riscv-raw-mcinst.s"
+if command -v riscv64-linux-gnu-as >/dev/null 2>&1 &&
+   command -v riscv64-linux-gnu-objcopy >/dev/null 2>&1; then
+    riscv64-linux-gnu-as -march=rv64i -mabi=lp64 \
+        -o "$work/riscv-raw-mcinst.gnu.o" "$work/riscv-raw-mcinst.s"
+    riscv64-linux-gnu-objcopy -j .text -O binary \
+        "$work/riscv-raw-mcinst.o" "$work/riscv-raw-mcinst.bin"
+    riscv64-linux-gnu-objcopy -j .text -O binary \
+        "$work/riscv-raw-mcinst.gnu.o" "$work/riscv-raw-mcinst.gnu.bin"
+    cmp "$work/riscv-raw-mcinst.bin" "$work/riscv-raw-mcinst.gnu.bin"
+    echo 'MINIAS_RV_RAW_MCINST=PASS GNU_R_I_bytes_equal=1'
+else
+    echo 'MINIAS_RV_RAW_MCINST=PASS GNU_AS=SKIP(toolchain-unavailable)'
+fi
+for invalid in '.insn r 0x33, 0, 0, x32, a1, a2' \
+               '.insn i 0x13, 0, a0, a1, 4096'; do
+    printf '.text\n%s\n' "$invalid" >"$work/riscv-raw-invalid.s"
+    if "$MINIAS" -o "$work/riscv-raw-invalid.o" \
+        "$work/riscv-raw-invalid.s" >/dev/null 2>&1; then
+        echo "MiniAS accepted invalid typed .insn: $invalid" >&2
+        exit 1
+    fi
+done
+echo 'MINIAS_RV_RAW_MCINST_NEGATIVE=PASS invalid_raw=2'
+
+
+# Persisted MCInst must determine its own fragment length *before* section
+# layout. This simultaneously covers 4B/8B LI, 8B symbolic memory, local
+# branch addressing, ELF symbol .size, and real GNU GAS byte identity.
+cat >"$work/riscv-parsed-fragment-size.s" <<'EOF_PARSED_SIZE'
+.option norvc
+.text
+.globl rv_parsed_fragment_size
+.type rv_parsed_fragment_size,@function
+rv_parsed_fragment_size:
+    li a0, -2048
+    li a1, 2048
+    li a2, 0x12345678
+    lw a3, external_data
+    beq a0, a1, .Ltyped_size_end
+.Ltyped_size_end:
+    ret
+.size rv_parsed_fragment_size, .-rv_parsed_fragment_size
+EOF_PARSED_SIZE
+"$MINIAS" -o "$work/riscv-parsed-fragment-size.o" \
+    "$work/riscv-parsed-fragment-size.s"
+typed_size="$(readelf -Ws "$work/riscv-parsed-fragment-size.o" |
+    awk '$NF == "rv_parsed_fragment_size" { print $3 }')"
+test "$typed_size" = "36"
+if command -v riscv64-linux-gnu-as >/dev/null 2>&1 &&
+   command -v riscv64-linux-gnu-objcopy >/dev/null 2>&1; then
+    riscv64-linux-gnu-as -march=rv64i -mabi=lp64 \
+        -o "$work/riscv-parsed-fragment-size.gnu.o" \
+        "$work/riscv-parsed-fragment-size.s"
+    riscv64-linux-gnu-objcopy -j .text -O binary \
+        "$work/riscv-parsed-fragment-size.o" \
+        "$work/riscv-parsed-fragment-size.bin"
+    riscv64-linux-gnu-objcopy -j .text -O binary \
+        "$work/riscv-parsed-fragment-size.gnu.o" \
+        "$work/riscv-parsed-fragment-size.gnu.bin"
+    cmp "$work/riscv-parsed-fragment-size.bin" \
+        "$work/riscv-parsed-fragment-size.gnu.bin"
+    echo 'MINIAS_RV_PARSED_LAYOUT=PASS GNU_AS_bytes_equal=1 symbol_size=36'
+else
+    echo 'MINIAS_RV_PARSED_LAYOUT=PASS GNU_AS=SKIP(toolchain-unavailable) symbol_size=36'
+fi
 
 echo "MINIAS_A0=PASS objects=30 abi_flags=3 format=ELF64-RISCV-ET_REL relocations=23 strings=2 pseudos=17 previous=3 subsection=2 numeric_labels=18 ecall=1 isa_next=13 csr_amo=8 sfence_vma=3 fence_i=1 vsetvl=1 vsetvli=1 vmv_v_i=4 rept=2 nested_rept=1 irp=4 section_stack=1 org=3 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1 symbol_minus_dot=4 symbol_difference=1 absolute32=1 jal=2 jal_subsection=1 high_numeric_labels=2 u64_data=3 raw_insn=4 set_alias=3 move=1 numeric_zero=1 immediate_product=2 shift_immediate=1 incbin=1 align_expr=1 native_expr=6 native_zbb_tail_memexpr=1 native_jalr_symbol_load=1 native_forward_short=1 native_mixed_macro=1 native_divided_difference=1 native_symbol_addend_expr=1 native_add_sub_immediate=1 native_cfi_boundary=1 native_gas_forms=1 native_set_size=1 native_macro_comma=1 native_macro_quotes=1 pic_la_got=1 sext_w=1 macro=4 conditional=1"

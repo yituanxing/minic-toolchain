@@ -1,0 +1,487 @@
+name: MiniAS Linux 6.6.143 Multiarch Real Runtime
+
+# GNU GCC generates every production assembly unit; MiniAS is substituted
+# only for assembler invocations.  GNU Kbuild/binutils then link the kernel,
+# and the same kernel is booted under system QEMU for P0 and P1 checks.
+# RV64 runs in the linux-single job of minias-a0-focused-diagnostics-v1.yml.
+# Opt-in push markers [minias-linux-four] and [minias-linux-gcc-single]
+# certify all four Linux targets on one SHA, including matched GNU controls.
+on:
+  workflow_dispatch:
+    inputs:
+      loong_replay_run_id:
+        description: 'Optional prior Linux run ID: replay its linked LoongArch EFI without Kbuild'
+        required: false
+        type: string
+      loong_replay_artifact:
+        description: 'Exact artifact name containing loongarch64/{out,runtime-initramfs.cpio.gz,evidence}'
+        required: false
+        type: string
+        default: minias-linux-real-loongarch64
+      loong_replay_origin:
+        description: 'Label for the assembler that produced the artifact; same QEMU/firmware for both'
+        required: false
+        type: choice
+        options: [minias, gnu]
+        default: minias
+      loong_gnu_baseline_build:
+        description: 'Build one GNU-as LoongArch kernel as a matched QEMU control (not a MiniAS pass)'
+        required: false
+        type: boolean
+        default: false
+  push:
+    branches: [refactor/minias-target-isa-abi-core]
+    paths:
+      - '.github/workflows/minias-linux-fourarch-runtime.yml'
+      - 'assembler/**'
+      - 'elf/**'
+      - 'tests/external/linux/minias_*_linux.sh'
+      - 'tests/external/linux/minias_aarch64_object_*'
+      - 'tests/external/linux/runtime_initramfs/**'
+
+permissions:
+  contents: read
+
+jobs:
+  gcc-minias-kbuild-qemu:
+    if: (github.event_name == 'workflow_dispatch' && inputs.loong_replay_run_id == '' && !inputs.loong_gnu_baseline_build) || (github.event_name == 'push' && (contains(github.event.head_commit.message, '[minias-linux-four]') || contains(github.event.head_commit.message, '[minias-linux-x86]')))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        # Fast x86 diagnosis doesn't rebuild the two already-P1-green ISAs.
+        arch: ${{ fromJSON(github.event_name == 'push' && contains(github.event.head_commit.message, '[minias-linux-x86]') && '["x86_64"]' || '["x86_64","aarch64","loongarch64"]') }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install GNU Kbuild and cross-architecture QEMU dependencies
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc binutils make bc bison flex libssl-dev libelf-dev \
+            curl xz-utils cpio gzip zstd file python3-pyelftools
+          case '${{ matrix.arch }}' in
+            x86_64)
+              sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+                qemu-system-x86 gcc-multilib libc6-dev-i386 ;;
+            aarch64)
+              sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+                gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
+                libc6-dev-arm64-cross qemu-system-arm ;;
+            loongarch64)
+              sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+                gcc-13-loongarch64-linux-gnu binutils-loongarch64-linux-gnu \
+                libc6-dev-loong64-cross qemu-system-misc ;;
+          esac
+
+      - name: Build exact MiniAS revision (no native assembler replacement)
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = '${{ github.sha }}'
+          make -j4 MODE=release CFLAGS=-Werror build/release/bin/minic-as
+
+      - name: GNU byte, relocation and linker preflight for real Linux blockers
+        shell: bash
+        env:
+          MINIAS: ${{ github.workspace }}/build/release/bin/minic-as
+        run: |
+          set -Eeuo pipefail
+          bash tests/assembler/probe-minias-as-provenance.sh
+          case '${{ matrix.arch }}' in
+            x86_64)
+              bash tests/assembler/probe-common-macro-optional-data-gnu.sh
+              bash tests/assembler/probe-x86-endbr32-gnu.sh
+              bash tests/assembler/probe-x86-linux-code16-gnu.sh
+              bash tests/assembler/probe-x86-vdso-eh-gnu.sh
+              bash tests/assembler/probe-x86-boot-header-elf32-gnu.sh
+              bash tests/assembler/probe-x86-kernel-pgt-gnu.sh
+              bash tests/assembler/probe-x86-kconfig-isa-gnu.sh
+              ;;
+            aarch64)
+              bash tests/assembler/probe-aarch64-branch-binding-gnu.sh
+              bash tests/assembler/probe-aarch64-macro-parenthesized-gnu.sh
+              bash tests/assembler/probe-aarch64-alternative-long-gnu.sh
+              bash tests/assembler/probe-aarch64-nonconst-leb128-gnu.sh
+              ;;
+            loongarch64)
+              LOONGAS=loongarch64-linux-gnu-as \
+              LOONGCOPY=loongarch64-linux-gnu-objcopy \
+                bash tests/assembler/probe-loong-fcsr-gcc-gnu.sh
+              LOONGAS=loongarch64-linux-gnu-as \
+              LOONGCOPY=loongarch64-linux-gnu-objcopy \
+                bash tests/assembler/probe-loong-lbt-gcc-gnu.sh
+              ;;
+          esac
+
+      - name: Real Linux GNU Kbuild, GNU link, QEMU P0 and P1
+        id: linux
+        shell: bash
+        timeout-minutes: 105
+        env:
+          MINIAS: ${{ github.workspace }}/build/release/bin/minic-as
+          WORK_DIR: ${{ github.workspace }}/build/minias-linux-fourarch/${{ matrix.arch }}
+          LINUX_VERSION: 6.6.143
+        run: bash 'tests/external/linux/minias_${{ matrix.arch }}_linux.sh'
+
+      - name: Preserve resolved production Kconfig for independent GNU comparison
+        if: always() && (matrix.arch == 'aarch64' || matrix.arch == 'loongarch64')
+        uses: actions/upload-artifact@v4
+        with:
+          name: minias-config-${{ matrix.arch }}-minias
+          path: |
+            build/minias-linux-fourarch/${{ matrix.arch }}/kernel-config.sha256
+            build/minias-linux-fourarch/${{ matrix.arch }}/kernel-config.pre.sha256
+            build/minias-linux-fourarch/${{ matrix.arch }}/kernel-config.pre.config
+            build/minias-linux-fourarch/${{ matrix.arch }}/kernel-config.final.config
+            build/minias-linux-fourarch/${{ matrix.arch }}/evidence/kernel-config.diff.log
+            build/minias-linux-fourarch/${{ matrix.arch }}/runtime-initramfs.sha256
+            build/minias-linux-fourarch/${{ matrix.arch }}/runtime-initramfs.cpio.gz
+            build/minias-linux-fourarch/${{ matrix.arch }}/evidence/entry.o.s
+            build/minias-linux-fourarch/${{ matrix.arch }}/evidence/entry.o.s.sha256
+            build/minias-linux-fourarch/${{ matrix.arch }}/production-asm-sources.tsv
+            build/minias-linux-fourarch/${{ matrix.arch }}/production-asm-sources.raw.tsv
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Preserve production assembly, Kbuild and guest evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minias-linux-real-${{ matrix.arch }}
+          # Do not upload the unpacked Linux source or whole Kbuild tree.
+          # Those are multi-gigabyte; the original failures and real guest
+          # logs are the reproducible, actionable evidence.
+          path: |
+            build/minias-linux-fourarch/${{ matrix.arch }}/**/*.log
+            build/minias-linux-fourarch/${{ matrix.arch }}/**/*.trace
+            build/minias-linux-fourarch/${{ matrix.arch }}/diagnostics/**/*
+            build/minias-linux-fourarch/${{ matrix.arch }}/**/failure-inputs/**/*.s
+            build/minias-linux-fourarch/${{ matrix.arch }}/**/runtime-initramfs.cpio.gz
+            build/minias-linux-fourarch/${{ matrix.arch }}/**/Image.sha256
+            build/minias-linux-fourarch/${{ matrix.arch }}/**/bzImage.sha256
+            build/minias-linux-fourarch/${{ matrix.arch }}/**/vmlinuz.efi.sha256
+            build/minias-linux-fourarch/${{ matrix.arch }}/**/aarch64-object-oracle.tsv
+            build/minias-linux-fourarch/aarch64/aarch64-alloc-diff-evidence.tar.gz
+            build/minias-linux-fourarch/x86_64/kconfig-*.config
+            build/minias-linux-fourarch/x86_64/kconfig-*.sha256
+            build/minias-linux-fourarch/x86_64/kconfig-*.log
+            build/minias-linux-fourarch/${{ matrix.arch }}/**/aarch64-bisect-*.txt
+            # Only the two AArch64 early-boot suspects isolated by real-QEMU
+            # bisection, not 4,000+ sidecars. With optional bisection enabled,
+            # saved originals are authoritative when out/*.o is substituted.
+            build/minias-linux-fourarch/aarch64/asm-sources/arch/arm64/mm/proc.s
+            build/minias-linux-fourarch/aarch64/gnu-as-objects/arch/arm64/mm/proc.o
+            build/minias-linux-fourarch/aarch64/minias-original-objects/arch/arm64/mm/proc.o
+            build/minias-linux-fourarch/aarch64/asm-sources/mm/sparse-vmemmap.s
+            build/minias-linux-fourarch/aarch64/gnu-as-objects/mm/sparse-vmemmap.o
+            build/minias-linux-fourarch/aarch64/minias-original-objects/mm/sparse-vmemmap.o
+            build/minias-linux-fourarch/aarch64/out/mm/sparse-vmemmap.o
+            # Preserve exactly the linked kernel to replay QEMU-only boot
+            # diagnostics without another 15–20 minute Linux recompilation.
+            build/minias-linux-fourarch/x86_64/mini-out/arch/x86/boot/bzImage
+            build/minias-linux-fourarch/x86_64/gnu-out/arch/x86/boot/bzImage
+            build/minias-linux-fourarch/x86_64/mini-out/arch/x86/kernel/head_64.o
+            build/minias-linux-fourarch/x86_64/gnu-out/arch/x86/kernel/head_64.o
+            build/minias-linux-fourarch/x86_64/mini-out/arch/x86/kernel/head64.o
+            build/minias-linux-fourarch/x86_64/gnu-out/arch/x86/kernel/head64.o
+            build/minias-linux-fourarch/x86_64/mini-out/arch/x86/boot/compressed/head_64.o
+            build/minias-linux-fourarch/x86_64/gnu-out/arch/x86/boot/compressed/head_64.o
+            build/minias-linux-fourarch/aarch64/out/arch/arm64/boot/Image
+            build/minias-linux-fourarch/loongarch64/out/arch/loongarch/boot/vmlinuz.efi
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Summarize exact-head real Linux execution
+        if: always()
+        run: |
+          {
+            echo '### MiniAS-only Linux 6.6.143: ${{ matrix.arch }}'
+            echo 'GCC source and Kbuild + MiniAS production assembly + GNU link + system QEMU P0/P1.'
+            echo 'Acceptance requires a linked kernel **and** guest runtime markers; ELF parity alone is not sufficient.'
+            echo 'Result: `${{ steps.linux.outcome }}`'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # AArch64's independent GNU-as control uses the exact same Linux release,
+  # defconfig, GNU compiler/linker and guest P0/P1 as the MiniAS lane. It is
+  # opt-in on the same source commit, never substituted into production.
+  aarch64-gnu-baseline:
+    # A full Linux run must include its independent GNU control on the same commit.
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[minias-linux-four]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 110
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Install GNU AArch64 Kbuild and QEMU toolchain
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc binutils make bc bison flex libssl-dev libelf-dev \
+            curl xz-utils cpio gzip zstd file python3-pyelftools \
+            gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
+            libc6-dev-arm64-cross qemu-system-arm
+      - name: Build and boot matched GNU AArch64 Linux P0/P1
+        id: gnu
+        timeout-minutes: 105
+        env:
+          # Separate Actions jobs have isolated filesystems. Use exactly the
+          # MiniAS lane's absolute source/O paths so GCC .file and CPP line
+          # directives cannot differ merely from a control-specific dirname.
+          WORK_DIR: ${{ github.workspace }}/build/minias-linux-fourarch/aarch64
+          LINUX_VERSION: 6.6.143
+          AARCH64_AS_BACKEND: gnu
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = '${{ github.sha }}'
+          bash tests/external/linux/minias_aarch64_linux.sh
+      - name: Preserve GNU AArch64 baseline Image and QEMU logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minias-aarch64-gnu-baseline
+          path: |
+            build/minias-linux-fourarch/aarch64/*.log
+            build/minias-linux-fourarch/aarch64/*.sha256
+            build/minias-linux-fourarch/aarch64/**/qemu-*.log
+            build/minias-linux-fourarch/aarch64/out/arch/arm64/boot/Image
+          retention-days: 14
+      - name: Preserve independent GNU AArch64 production Kconfig
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minias-config-aarch64-gnu
+          path: |
+            build/minias-linux-fourarch/aarch64/kernel-config.sha256
+            build/minias-linux-fourarch/aarch64/kernel-config.pre.sha256
+            build/minias-linux-fourarch/aarch64/kernel-config.pre.config
+            build/minias-linux-fourarch/aarch64/kernel-config.final.config
+            build/minias-linux-fourarch/aarch64/evidence/kernel-config.diff.log
+            build/minias-linux-fourarch/aarch64/runtime-initramfs.sha256
+            build/minias-linux-fourarch/aarch64/runtime-initramfs.cpio.gz
+            build/minias-linux-fourarch/aarch64/evidence/entry.o.s
+            build/minias-linux-fourarch/aarch64/evidence/entry.o.s.sha256
+            build/minias-linux-fourarch/aarch64/production-asm-sources.tsv
+            build/minias-linux-fourarch/aarch64/production-asm-sources.raw.tsv
+          if-no-files-found: error
+          retention-days: 14
+      - name: Summarize GNU AArch64 independent control
+        if: always()
+        run: |
+          echo 'GNU GCC → GNU as → GNU ld → AArch64 Linux 6.6.143 QEMU P0/P1: `${{ steps.gnu.outcome }}`' >> "$GITHUB_STEP_SUMMARY"
+
+  # Matched GNU control. Both variants use the same kernel release,
+  # configuration, GCC, GNU linker, initramfs and the shared boot()/require()
+  # function; only the production assembler backend differs. The explicit
+  # [minias-linux-four] push gates re-certify
+  # both assemblers on the same commit, without rerunning this GNU control
+  # on routine MiniAS code pushes.
+  loong-gnu-baseline:
+    if: (github.event_name == 'workflow_dispatch' && inputs.loong_replay_run_id == '' && inputs.loong_gnu_baseline_build) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[minias-linux-four]'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 110
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Install GNU LoongArch Kbuild and QEMU toolchain
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc binutils make bc bison flex libssl-dev libelf-dev \
+            curl xz-utils cpio gzip zstd file python3-pyelftools \
+            gcc-13-loongarch64-linux-gnu binutils-loongarch64-linux-gnu \
+            libc6-dev-loong64-cross qemu-system-misc
+      - name: Build and boot Linux 6.6.143 through GNU AS exclusively
+        shell: bash
+        timeout-minutes: 105
+        env:
+          WORK_DIR: ${{ github.workspace }}/build/minias-linux-fourarch/loongarch64
+          LINUX_VERSION: 6.6.143
+          LOONG_AS_BACKEND: gnu
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = '${{ github.sha }}'
+          bash tests/external/linux/minias_loongarch64_linux.sh
+      - name: Preserve GNU assembler baseline and runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minias-linux-real-loongarch64-gnu
+          path: |
+            build/minias-linux-fourarch/loongarch64/evidence/*.log
+            build/minias-linux-fourarch/loongarch64/evidence/vmlinuz.efi.sha256
+            build/minias-linux-fourarch/loongarch64/runtime-initramfs.cpio.gz
+            build/minias-linux-fourarch/loongarch64/out/arch/loongarch/boot/vmlinuz.efi
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Preserve independent GNU LoongArch production Kconfig
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minias-config-loongarch64-gnu
+          path: |
+            build/minias-linux-fourarch/loongarch64/kernel-config.sha256
+            build/minias-linux-fourarch/loongarch64/kernel-config.pre.sha256
+            build/minias-linux-fourarch/loongarch64/kernel-config.pre.config
+            build/minias-linux-fourarch/loongarch64/kernel-config.final.config
+            build/minias-linux-fourarch/loongarch64/evidence/kernel-config.diff.log
+            build/minias-linux-fourarch/loongarch64/runtime-initramfs.sha256
+            build/minias-linux-fourarch/loongarch64/runtime-initramfs.cpio.gz
+          if-no-files-found: error
+          retention-days: 14
+
+  # Only full same-commit cross-arch certifications opt into this comparison.
+  # The standalone MiniAS and GNU runs can still be diagnosed separately.
+  matched-config-provenance:
+    if: always() && github.event_name == 'push' && contains(github.event.head_commit.message, '[minias-linux-four]')
+    needs: [gcc-minias-kbuild-qemu, aarch64-gnu-baseline, loong-gnu-baseline]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Restore four exact-head production Kconfig snapshots
+        uses: actions/download-artifact@v4
+        with:
+          pattern: minias-config-*
+          path: config-controls
+          merge-multiple: false
+      - name: Fail closed on pre-final drift, matched configuration, and real AArch64 entry.o source
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          for arch in aarch64 loongarch64; do
+            for variant in minias gnu; do
+              dir="config-controls/minias-config-${arch}-${variant}"
+              for phase in pre final; do
+                file="$dir/kernel-config.${phase}.config"
+                if [[ $phase == final ]]; then
+                  digest="$dir/kernel-config.sha256"
+                else
+                  digest="$dir/kernel-config.pre.sha256"
+                fi
+                test -s "$file" && test -s "$digest"
+                grep -Exq '[a-f0-9]{64}' "$digest"
+                test "$(wc -l <"$digest")" -eq 1
+                sha256sum "$file" | cut -d' ' -f1 | cmp -s - "$digest"
+              done
+              test -f "$dir/evidence/kernel-config.diff.log"
+              runtime="$dir/runtime-initramfs.cpio.gz"
+              runtime_sha="$dir/runtime-initramfs.sha256"
+              test -s "$runtime" && test -s "$runtime_sha"
+              grep -Exq '[a-f0-9]{64}' "$runtime_sha"
+              test "$(wc -l <"$runtime_sha")" -eq 1
+              sha256sum "$runtime" | cut -d' ' -f1 | cmp -s - "$runtime_sha"
+              if ! cmp -s "$dir/kernel-config.pre.sha256" "$dir/kernel-config.sha256"; then
+                echo "MINIAS_LINUX_KCONFIG_STABLE=FAIL arch=$arch backend=$variant pre=$(head -n1 "$dir/kernel-config.pre.sha256") final=$(head -n1 "$dir/kernel-config.sha256")"
+                head -n 80 "$dir/evidence/kernel-config.diff.log"
+                exit 1
+              fi
+              echo "MINIAS_LINUX_KCONFIG_STABLE=PASS arch=$arch backend=$variant"
+            done
+            mini="config-controls/minias-config-${arch}-minias/kernel-config.sha256"
+            gnu="config-controls/minias-config-${arch}-gnu/kernel-config.sha256"
+            if ! cmp -s "$mini" "$gnu"; then
+              echo "MINIAS_LINUX_MATCHED_CONFIG=FAIL arch=$arch scope=final MiniAS=$(head -n1 "$mini") GNU=$(head -n1 "$gnu")"
+              exit 1
+            fi
+            echo "MINIAS_LINUX_MATCHED_CONFIG=PASS arch=$arch scope=final sha256=$(head -n1 "$mini")"
+            mini_init="config-controls/minias-config-${arch}-minias/runtime-initramfs.sha256"
+            gnu_init="config-controls/minias-config-${arch}-gnu/runtime-initramfs.sha256"
+            if ! cmp -s "$mini_init" "$gnu_init"; then
+              echo "MINIAS_LINUX_MATCHED_INITRAMFS=FAIL arch=$arch MiniAS=$(head -n1 "$mini_init") GNU=$(head -n1 "$gnu_init")"
+              exit 1
+            fi
+            echo "MINIAS_LINUX_MATCHED_INITRAMFS=PASS arch=$arch byte_identical_sha256=$(head -n1 "$mini_init")"
+          done
+          for f in \
+            config-controls/minias-config-aarch64-minias/evidence/entry.o.s.sha256 \
+            config-controls/minias-config-aarch64-gnu/evidence/entry.o.s.sha256; do
+            test -s "$f"
+            grep -Exq '[a-f0-9]{64}' "$f"
+            test "$(wc -l <"$f")" -eq 1
+            source_file="${f%.sha256}"
+            test -s "$source_file"
+            sha256sum "$source_file" | cut -d' ' -f1 | cmp -s - "$f"
+          done
+          if ! cmp -s \
+            config-controls/minias-config-aarch64-minias/evidence/entry.o.s.sha256 \
+            config-controls/minias-config-aarch64-gnu/evidence/entry.o.s.sha256; then
+            echo 'MINIAS_LINUX_MATCHED_ASM_SOURCE=FAIL arch=aarch64 scope=arch/arm64/kernel/entry.o'
+            exit 1
+          fi
+          echo 'MINIAS_LINUX_MATCHED_ASM_SOURCE=PASS arch=aarch64 scope=arch/arm64/kernel/entry.o'
+          # Compare independently GCC-generated assembly *before* either
+          # assembler encodes it. Both manifests are bound to each lane's
+          # entire saved Kbuild CC/AS production .cmd owner set, not a sample.
+          python3 tests/external/linux/minias_as_source_manifest.py \
+            --arch aarch64 --min-objects 4171 \
+            --mini-manifest config-controls/minias-config-aarch64-minias/production-asm-sources.tsv \
+            --gnu-manifest config-controls/minias-config-aarch64-gnu/production-asm-sources.tsv
+          test '${{ needs.gcc-minias-kbuild-qemu.result }}' = success
+          test '${{ needs.aarch64-gnu-baseline.result }}' = success
+          test '${{ needs.loong-gnu-baseline.result }}' = success
+          echo 'MINIAS_LINUX_MATCHED_CONTROL=PASS arch=aarch64,loongarch64 all_production_and_gnu_jobs=success'
+
+  # The original kernel image and initramfs are preserved in the preceding
+  # build artifact. Diagnose firmware/QEMU failures on those exact bytes in
+  # minutes instead of repeating 10+ minutes of Kbuild for every iteration.
+  # A GNU-built artifact with the same layout can be selected as the baseline:
+  # both origins execute the very same boot()/require() code and pinned EFI.
+  loong-qemu-artifact-replay:
+    if: github.event_name == 'workflow_dispatch' && inputs.loong_replay_run_id != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install QEMU runtime only (no GCC or GNU assembler)
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            qemu-system-misc curl
+      - name: Restore the original linked EFI and GNU-built initramfs
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.loong_replay_artifact }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.loong_replay_run_id }}
+          github-token: ${{ github.token }}
+          path: build/minias-linux-fourarch
+      - name: Replay original linked kernel under the same pinned EFI/QEMU
+        shell: bash
+        timeout-minutes: 12
+        env:
+          WORK_DIR: ${{ github.workspace }}/build/minias-linux-fourarch/loongarch64
+          LINUX_VERSION: 6.6.143
+          LOONG_QEMU_REPLAY_ONLY: '1'
+          LOONG_QEMU_REPLAY_ORIGIN: ${{ inputs.loong_replay_origin }}
+        run: bash tests/external/linux/minias_loongarch64_linux.sh
+      - name: Preserve replay-specific QEMU/P0/P1 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minias-loong-qemu-replay-${{ inputs.loong_replay_origin }}-${{ github.run_id }}
+          path: build/minias-linux-fourarch/loongarch64/evidence/rdinit-*.log
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Summarize original kernel provenance
+        if: always()
+        run: |
+          {
+            echo '### LoongArch64 QEMU-only EFI replay'
+            echo 'Original Linux artifact: `${{ inputs.loong_replay_artifact }}` in run `${{ inputs.loong_replay_run_id }}`.'
+            echo 'Assembler origin: `${{ inputs.loong_replay_origin }}`.'
+            echo 'Only QEMU boot is executed; no recompilation, reassembly or relinking.'
+          } >> "$GITHUB_STEP_SUMMARY"

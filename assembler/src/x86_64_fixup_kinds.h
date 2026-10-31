@@ -1,0 +1,22 @@
+#ifndef MINIAS_X64_FIXUP_KINDS_H
+#define MINIAS_X64_FIXUP_KINDS_H
+
+/* x86-64. Machine fixup identities are not ELF R_* numbers.
+ * Shared MC/ELF/CLI code has no knowledge of these target-local enums.
+ * New architectures allocate their own namespace without Common edits. */
+enum {
+    MINIAS_FIXUP_X64_PC32 = 0x3000,
+    MINIAS_FIXUP_X64_PLT32,
+    MINIAS_FIXUP_X64_ABS32S,
+    MINIAS_FIXUP_X64_ABS64,
+    MINIAS_FIXUP_X64_GOTPCREL,
+    MINIAS_FIXUP_X64_GOTPCRELX,
+    MINIAS_FIXUP_X64_REX_GOTPCRELX,
+    /* i386 SysV ELF32 PIC relocations. These are machine relocation
+     * semantics, not ELF relocation numbers or Common fixup kinds. */
+    MINIAS_FIXUP_X86_GOTPC,
+    MINIAS_FIXUP_X86_GOT32X,
+    MINIAS_FIXUP_X86_GOTOFF
+};
+
+#endif

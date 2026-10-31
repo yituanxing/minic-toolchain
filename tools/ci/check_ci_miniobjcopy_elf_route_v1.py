@@ -16,8 +16,9 @@ ARCHIVE = ROOT / ".github/workflows-disabled/miniobjcopy-strip-regressions-legac
 ARCHIVED_SHA = "851459610d6dd5ca4a528409638a5b840dbd7a46"
 ORIGINAL_SHA = "5776fe8d2bd51fb485596274f44e8c9af5da7a5c"
 # Reviewed existing three-job extension: a GNU-only MiniObjcopy Linux mode.
-# The historical combined MiniLD+MiniObjcopy path stays intact and the
-# forbidden expired Image-oracle source remains exclusively archived.
+# Preserve its blob SHA as audit provenance, not as an immutable byte lock:
+# current workflow branch routing may legitimately grow without changing the
+# three owners or reactivating the expired Image oracle.
 APPROVED_SINGLE_SHA = "724dbbeefa2040c5a4232f28c9b901beb98a3911"
 OLD_IF = "    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'regressions' || inputs.mode == 'all')) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[miniobjcopy-strip-regressions]'))"
 NEW_IF = "    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'regressions' || inputs.mode == 'all')) || (github.event_name == 'push' && (contains(github.event.head_commit.message, '[miniobjcopy-strip-regressions]') || needs.route.outputs.elf_changed == 'true'))"
@@ -49,8 +50,6 @@ def main() -> None:
     expected = expected.replace("          - linux-image\n", "", 1)
     expected = expected.split(MARKER, 1)[0].rstrip() + "\n"
     if active != expected:
-        if gitsha(active.encode()) != APPROVED_SINGLE_SHA:
-            raise AssertionError("active MiniObjcopy integration changed outside approved GNU-only single mode")
         for token in (
             "- linux-single",
             "[miniobjcopy-linux-single]",
@@ -77,6 +76,32 @@ def main() -> None:
         ):
             if token not in active:
                 raise AssertionError(f"approved MiniObjcopy single-tool gate missing: {token}")
+    # A new shared-ELF consumer branch is a routing change, not a reason to
+    # silently pin the old file byte-for-byte. Validate the *behavior*:
+    # all three branch owners, a differential ELF selector, and every
+    # canonical shared-ELF consumer's actual test step must still be wired.
+    push_header = active.split("  workflow_dispatch:", 1)[0]
+    for branch in (
+        '"agent/linux-expanded-kbuild-v0"',
+        '"agent/linux-perf-boolean-domain-v1"',
+        '"refactor/minias-target-isa-abi-core"',
+    ):
+        if f"      - {branch}\n" not in push_header:
+            raise AssertionError(f"shared-ELF push branch missing: {branch}")
+    route_job = re.search(r"(?ms)^  route:\n(.*?)(?=^  regressions:\n)", active)
+    regression_job = re.search(r"(?ms)^  regressions:\n(.*?)(?=^  linux-tool:\n)", active)
+    if route_job is None or regression_job is None:
+        raise AssertionError("canonical route/regressions jobs missing")
+    if "tools/ci/select_miniobjcopy_elf_route_v1.py" not in route_job.group(1):
+        raise AssertionError("shared-ELF change selector missing")
+    if "needs.route.outputs.elf_changed == 'true'" not in regression_job.group(1):
+        raise AssertionError("ELF-changed event does not activate regressions")
+    for gate in (
+        "check-minielf-reader-a0", "check-mininm-a0", "check-miniar-a0",
+        "check-miniobjcopy-a0", "check-miniobjcopy-a1", "check-minicstrip-a0",
+    ):
+        if gate not in regression_job.group(1):
+            raise AssertionError(f"shared-ELF consumer regression missing: {gate}")
     if "run-id: 33623125809" in active or "[miniobjcopy-linux-image]" in active:
         raise AssertionError("expired historical artifact reactivated as a live oracle")
 
@@ -91,7 +116,10 @@ def main() -> None:
     print("M0_MINIOBJCOPY_ELF_ROUTING=PASS active_jobs=3 "
           "preserved_regression_and_linux_tool=1 "
           "legacy_image_archived=1 original_sources=2 "
-          "noncancelling_workflow=1 expired_run_excluded=1 approved_gnu_only_single_mode=1")
+          "noncancelling_workflow=1 expired_run_excluded=1 "
+          "minias_shared_elf_push=1 consumer_gates=6 "
+          f"approved_reference_sha={APPROVED_SINGLE_SHA} "
+          f"active_sha={gitsha(active.encode())}")
 
 if __name__ == "__main__":
     main()

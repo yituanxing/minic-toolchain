@@ -1,0 +1,193 @@
+name: MiniAS Immutable Linux 3x7 GNU Kbuild S Replay
+
+# Frozen original Linux 6.6.143 inputs including authentic, producer-hashed
+# Kbuild .incbin payloads. Assembly coverage only, NOT ELF parity or P1.
+# Grouped original Linux re-evaluation after Common GNU parenthesized
+# expressions and macro calls, x86 real CFI, A64 comparison/MVN, and the
+# sized shared A64 operand splitter. The source run 40658346252 exported
+# the genuine generated blobs; its manifest, config and source are immutable.
+# LoongArch focused exact-head seven shards after GNU IOCSR/TLB/CFI/conditional batch.
+# One grouped LoongArch exact-head replay after LSX/LASX vector, FCSR, INVTLB, LI.W and dual-relocation LA.PCREL.
+# Final same-config LoongArch seven-shard census after verified LSX logic/FPR and variable-length GNU LI.W/LI.D ISA families.
+# Same frozen GNU Linux 6.6.143 LoongArch seven-shard grouped ISA frontier after LASX logical, LSX shifts/compare and FCC2GR GNU exact-byte oracle.
+# Subsequent grouped VSHUF/XVSHUF, LASX vector masks and MOVGR2CF family exact GNU byte oracle pass: reevaluate only Loong seven cached shards.
+# Discovery is assembly generation only, not GNU ELF object parity nor Linux P1.
+# Re-measure AArch64 target post-LSE + cross-section PREL32 + PRFM/.inst
+# against all 4140 frozen original GNU Kbuild .s, seven shards one head.
+# AArch64 only: 7 frozen shards after real LSE extension gating/atomics.
+# Do not infer GNU parity or P1 from successful discovery jobs.
+# Grouped exact-head Oct27 scan after A64 bitmask/REV/LDAR and x86 BT/XADD,
+# GNU C block comment lexer and x86 implicit shifts; frozen sources unchanged.
+# Oct 27 batch acceptance: Common .fill, LoongArch timer/prefetch/branch
+# aliases, AArch64 BRK/SUBS/ADDS/MOVN and x86 prefixes/indirect transfers.
+# Record all 21 frozen GNU .s shards on this exact commit; a discovery
+# SUCCESS is NOT an ELF parity or Linux P1 SUCCESS.
+# Full cross-target frozen input replay after Common symbol-local delta and GNU alignment batch; only original corpus is reused.
+# Grouped final scan after Common data/fixup/align + AArch CSET/CMN + x86 FS/GS RIP.
+# Exact-head opt-in after Common GNU fill/maxskip, arithmetic .skip, and AArch64 MRS/CMN batches.
+# Opt-in GNU original AArch64 seven-shard contract after the Target HINT
+# 0..127 encoding batch. This does NOT re-run upstream GCC or claim ELF parity.
+on:
+  workflow_dispatch:
+  push:
+    branches: [refactor/minias-target-isa-abi-core]
+    paths:
+      - 'assembler/**'
+      - 'elf/**'
+      - 'tests/assembler/**'
+      - 'Makefile'
+      - '.github/workflows/minias-linux-pinned-3x7-replay.yml'
+      - 'tools/ci/minias-linux-kbuild-seven-v1.py'
+      - 'assembler/src/cfi.c'
+      - 'assembler/src/debug_line.c'
+      - 'assembler/src/aarch64_target.c'
+      - 'assembler/src/x86_64_target.c'
+      - 'assembler/src/assembler.c'
+      - 'tests/assembler/probe-aarch64-elf64.sh'
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  shard:
+    # Opt-in large grouped corpus only. Target fixes normally run unit GNU
+    # parity; explicit batch marker or workflow_dispatch scans all 21 shards.
+    if: github.event_name == 'workflow_dispatch' || (contains(github.event.head_commit.message, '[minias-replay-3x7]') || contains(github.event.head_commit.message, '[minias-replay-aarch-7]') || contains(github.event.head_commit.message, '[minias-replay-loong-7]') || contains(github.event.head_commit.message, '[minias-replay-x86-7]'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(contains(github.event.head_commit.message, '[minias-replay-aarch-7]') && '["aarch64"]' || contains(github.event.head_commit.message, '[minias-replay-loong-7]') && '["loongarch64"]' || contains(github.event.head_commit.message, '[minias-replay-x86-7]') && '["x86_64"]' || '["x86_64","aarch64","loongarch64"]') }}
+        shard: [0, 1, 2, 3, 4, 5, 6]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: '40658346252'
+          github-token: ${{ github.token }}
+          name: minias-linux-kbuild-${{ matrix.target }}-shard${{ matrix.shard }}
+          path: build/minias-frozen
+      - name: Prove original GNU Kbuild config and per-shard S/CMD/incbin hashes
+        run: |
+          python3 - '${{ matrix.target }}' '${{ matrix.shard }}' <<'PY_PIN'
+          import importlib.util, pathlib, sys
+          target, n = sys.argv[1], int(sys.argv[2])
+          hashes = {
+              "x86_64": "1f2214b3d6ca55b67bd52b25805a3fc9aaf4b3738cc610865856a9b971d90897",
+              "aarch64": "37f35a94b93fa92813cccdf105f927ba930605d6759605fbf9921b22555baba7",
+              "loongarch64": "933ded54786245b9756cd3d10e2ebc30c5e63024cc8351b1cc653f313aebfd63",
+          }
+          configs = {
+              "x86_64": "5a50dea34d0a1793c6a8320c15f11b695f1c71fe7b4fbb89bc514f2660ddad65",
+              "aarch64": "f865fdfb8ccaa5aa9580e0d5bea7a48c6382d37224f751c6ec37969bbafe174f",
+              "loongarch64": "457d95d9e03620d3f437dfca63bb93c867c30a92649e8705f36ed66d013441ca",
+          }
+          spec = importlib.util.spec_from_file_location(
+              "kbuild_s", "tools/ci/minias-linux-kbuild-seven-v1.py")
+          tool = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(tool)
+          path = pathlib.Path(f"build/minias-frozen/shard-{n}.tar.gz")
+          manifest, digest, selected = tool.checked_shard(path, target, n)
+          assert digest == hashes[target], (target, n, digest)
+          assert manifest["config_sha256"] == configs[target], (target, n)
+          assert manifest["authentic_incbin_frozen"] is True
+          assert manifest["full_kbuild"] and manifest["build_exit"] == 0
+          assert manifest["total"] == tool.STRICT_KBUILD_TOTAL[target]
+          assert len(selected) > 0
+          print(f"MINIAS_GNU_SOURCE_PIN=PASS target={target} shard={n} "
+                f"files={len(selected)} manifest={digest} GCC_rebuilt=NO")
+          PY_PIN
+      - name: Build MiniAS only on this exact source HEAD
+        run: make -j2 MODE=release CFLAGS=-Werror build/release/bin/minic-as
+      - name: Scan all frozen input and record each first blocker
+        run: |
+          python3 tools/ci/minias-linux-kbuild-seven-v1.py scan \
+            --target '${{ matrix.target }}' --shard '${{ matrix.shard }}' \
+            --archive 'build/minias-frozen/shard-${{ matrix.shard }}.tar.gz' \
+            --minias "$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            --dest 'build/minias-linux-replay/${{ matrix.target }}-${{ matrix.shard }}'
+      - name: Preserve shard diagnostics including failed infrastructure probes
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minias-linux-replay-${{ matrix.target }}-${{ matrix.shard }}
+          path: build/minias-linux-replay/${{ matrix.target }}-${{ matrix.shard }}/results.json
+          if-no-files-found: error
+          retention-days: 14
+
+  aggregate:
+    needs: shard
+    # A failed shard must not suppress the diagnostic census from the other
+    # runners.  Only an intentionally unrequested matrix skips aggregation.
+    if: always() && needs.shard.result != 'skipped'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        if: always()
+        with:
+          pattern: minias-linux-replay-*
+          path: build/minias-linux-replay-collected
+      - name: Preserve partial shard inventory before the strict gate
+        if: always()
+        env:
+          MINIAS_EXPECTED_TARGETS: ${{ contains(github.event.head_commit.message, '[minias-replay-aarch-7]') && 'aarch64' || contains(github.event.head_commit.message, '[minias-replay-loong-7]') && 'loongarch64' || contains(github.event.head_commit.message, '[minias-replay-x86-7]') && 'x86_64' || 'x86_64,aarch64,loongarch64' }}
+          MINIAS_SHARD_RESULT: ${{ needs.shard.result }}
+        run: |
+          python3 - <<'PY_INVENTORY'
+          import collections, json, os, pathlib
+          root = pathlib.Path('build/minias-linux-replay-collected')
+          files = sorted(root.rglob('results.json'))
+          targets = os.environ['MINIAS_EXPECTED_TARGETS'].split(',')
+          expected = {(target, shard) for target in targets for shard in range(7)}
+          found = set()
+          statuses = collections.Counter()
+          failures = []
+          for path in files:
+              try:
+                  result = json.loads(path.read_text())
+                  key = (result['target'], result['shard'])
+                  found.add(key)
+                  for record in result.get('records', []):
+                      statuses[record['status']] += 1
+                      if record['status'] in ('CANDIDATE_FAIL', 'INFRA_ERROR'):
+                          failures.append({'target': key[0], 'shard': key[1],
+                                           'owner': record.get('owner'),
+                                           'status': record['status'],
+                                           'blocker': record.get('first_blocker')})
+              except (ValueError, KeyError, OSError) as exc:
+                  failures.append({'artifact': str(path), 'status': 'INVALID_RESULTS',
+                                   'blocker': str(exc)})
+          missing = sorted(expected - found)
+          unexpected = sorted(found - expected)
+          report = {'shard_job': os.environ['MINIAS_SHARD_RESULT'],
+                    'expected_shards': len(expected), 'received_shards': len(files),
+                    'missing_shards': missing, 'unexpected_shards': unexpected,
+                    'object_statuses': dict(statuses), 'failures': failures}
+          output = pathlib.Path('build/minias-linux-replay-collection-diagnostics.json')
+          output.parent.mkdir(parents=True, exist_ok=True)
+          output.write_text(json.dumps(report, indent=2) + '\n')
+          print(f"MINIAS_LINUX_SHARD_INVENTORY received={len(files)}/{len(expected)} "
+                f"missing={len(missing)} objects={dict(statuses)} "
+                f"shard_job={report['shard_job']}")
+          PY_INVENTORY
+      - name: Require all selected 7-way shards, with disjoint architecture pools
+        if: always()
+        run: |
+          python3 tools/ci/minias-linux-kbuild-seven-v1.py aggregate \
+            --strict \
+            --targets "${{ contains(github.event.head_commit.message, '[minias-replay-aarch-7]') && 'aarch64' || contains(github.event.head_commit.message, '[minias-replay-loong-7]') && 'loongarch64' || contains(github.event.head_commit.message, '[minias-replay-x86-7]') && 'x86_64' || 'x86_64,aarch64,loongarch64' }}" \
+            --results build/minias-linux-replay-collected \
+            --dest build/minias-linux-replay-summary.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: minias-linux-replay-three-target-summary
+          path: |
+            build/minias-linux-replay-summary.json
+            build/minias-linux-replay-collection-diagnostics.json
+          if-no-files-found: error
+          retention-days: 14

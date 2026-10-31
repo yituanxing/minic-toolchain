@@ -1,0 +1,375 @@
+name: MiniAS x86-64 and LoongArch64 GNU Oracle + Four-Target Contract
+
+on:
+  pull_request:
+    paths:
+      - 'assembler/**'
+      - 'elf/**'
+      - 'tools/minic-as/**'
+      - 'src/target/**'
+      - 'tests/assembler/probe-comdat-groups.sh'
+      - 'tests/assembler/probe-mc-cross-layer-contract.sh'
+      - 'tests/assembler/probe-common-ident-gnu.sh'
+      - 'tests/assembler/probe-common-source-end-gnu.sh'
+      - 'tests/assembler/probe-common-skipped-macro-repeat-gnu.sh'
+      - 'tests/assembler/probe-mc-owned-deferred-directives.sh'
+      - 'tests/assembler/probe-cfi-debug-frame.sh'
+      - 'tests/assembler/probe-cfi-dual-frame.sh'
+      - 'tests/assembler/probe-cfi-wide-registers.sh'
+      - 'tests/assembler/probe-cfi-initial-state-gnu.sh'
+      - 'tests/assembler/probe-cfi-signed-save-offsets-gnu.sh'
+      - 'tests/assembler/probe-debug-line-directory-gnu.sh'
+      - 'tests/assembler/probe-minias-acceptance-gates.sh'
+      - 'tests/assembler/probe-elf-semantic-comdat-strict.sh'
+      - 'tests/assembler/probe-elf-semantic-payload-bitfields.py'
+      - 'tests/assembler/probe-elf-semantic-reloc-metadata-order.py'
+      - 'tests/assembler/probe-elf-semantic-reserved-names.py'
+      - 'tests/assembler/probe-elf-symbol-plan.sh'
+      - 'tests/assembler/probe-elf-link-order-index.sh'
+      - 'tests/assembler/probe-elf-live-section-symbols.sh'
+      - 'tests/assembler/probe-mc-org-snapshot-symmetry.sh'
+      - 'tests/assembler/probe-loong-vector-typed-patterns.sh'
+      - 'tests/assembler/probe-loong-scalar-opcode-shapes.sh'
+      - 'tests/assembler/probe-loong-register-bank-patterns.sh'
+      - 'tests/assembler/probe-link-order-gcc-patchable.sh'
+      - 'tests/assembler/probe-miniobjcopy-comdat-rewrite.sh'
+      - 'tests/assembler/probe-minias-ci-routing.py'
+      - 'tests/assembler/probe-public-target-invocation.sh'
+      - 'tests/assembler/probe-typed-relax-four-target-stress.sh'
+      - 'tests/assembler/probe-x86-typed-branch-growth.sh'
+      - 'tests/assembler/probe-x86-shared-condition-opcodes.sh'
+      - 'tests/assembler/probe-x86-memory-encoding-layout.sh'
+      - 'tests/assembler/probe-x86-register-width-and-high-byte-gnu.sh'
+      - 'tests/assembler/probe-x86-symbol-binding-fixups-gnu.sh'
+      - 'tests/assembler/probe-mcexpr-signed-overflow.sh'
+      - 'tests/assembler/probe-mc-fragment-single-commit-gnu.sh'
+      - 'tests/assembler/probe-mcinst-lifetime-ownership.sh'
+      - 'tests/assembler/mcinst-lifetime-contract.c'
+      - 'tests/assembler/elf_semantic_compare.py'
+      - 'tests/assembler/probe-x86-loong-base.sh'
+      - 'tests/assembler/probe-mc-operand-lexer.sh'
+      - 'tests/assembler/mc-operand-lexer-contract.c'
+      - 'tools/ci/check_ci_miniobjcopy_elf_route_v1.py'
+      - 'tools/ci/select_miniobjcopy_elf_route_v1.py'
+      - '.github/workflows/miniobjcopy-strip-regressions-v1.yml'
+      - '.github/workflows/minias-linux-generated-3x7-replay.yml'
+      - '.github/workflows/minias-linux-pinned-3x7-replay.yml'
+      - '.github/workflows/minias-new-targets-oracle.yml'
+      - 'Makefile'
+  workflow_dispatch:
+permissions:
+  contents: read
+
+# Only the latest commit of one PR needs the fast GNU differential. Earlier
+# run conclusions remain in GitHub history; no artifacts or workflows are
+# removed by canceling obsolete in-flight exact-head attempts.
+concurrency:
+  group: minias-x86-loong-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  integer-gnu-differential:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # A PR's default checkout is refs/pull/*/merge, not the exact
+          # source head whose MiniAS result is being accepted.
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          repository: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name || github.repository }}
+      - name: Assert evaluated source is exact PR head
+        run: |
+          actual="$(git rev-parse HEAD)"
+          expected="${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}"
+          test "$actual" = "$expected"
+          echo "MINIAS_EXACT_HEAD=PASS sha=$actual"
+      - name: Install real LoongArch GNU assembler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            binutils-loongarch64-linux-gnu python3-pyelftools
+      - name: Build exact-head MiniAS and all four target backends
+        run: make -j2 MODE=release CFLAGS=-Werror build/release/bin/minic-as build/release/bin/minic-objcopy
+      - name: Enforce MiniAS Linux candidate gates and shared ELF CI routing
+        run: python3 tests/assembler/probe-minias-ci-routing.py
+      - name: Validate public MiniAS target invocation without internal headers
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-public-target-invocation.sh
+      - name: Validate GNU duplicate COMDAT and strict semantic comparator
+        run: |
+          bash tests/assembler/probe-elf-semantic-comdat-strict.sh
+          bash tests/assembler/probe-minias-acceptance-gates.sh
+      - name: Reject false GNU ELF parity from opcode masks and non-PROGBITS payloads
+        run: python3 tests/assembler/probe-elf-semantic-payload-bitfields.py
+      - name: Reject GNU ELF parity false-greens from relocation order, ALIGN and metadata
+        run: python3 tests/assembler/probe-elf-semantic-reloc-metadata-order.py
+      - name: Reject ELF parity false-greens from spoofed generated table names
+        run: python3 tests/assembler/probe-elf-semantic-reserved-names.py
+      - name: GNU x86 cross-layer section, alias, layout and FILE semantics
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-mc-cross-layer-contract.sh
+      - name: GNU x86 Common .ident directive emits exact .comment semantics
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-common-ident-gnu.sh
+      - name: GNU x86 Common .end terminates source and nested expansion input
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-common-source-end-gnu.sh
+      - name: GNU x86 skipped conditional macro and repeat blocks do not mutate parser state
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-common-skipped-macro-repeat-gnu.sh
+      - name: GNU x86 ELF symbol-retention plan and relocation owner contracts
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-elf-symbol-plan.sh
+      - name: GNU x86 ELF Section symbols exist only when live relocations require them
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-elf-live-section-symbols.sh
+      - name: All four Targets retain typed GNU deferred directive fragments
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-mc-owned-deferred-directives.sh
+      - name: GNU x86-64 and LoongArch64 160-typed-fragment relaxation stress
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=x86_64 \
+            bash tests/assembler/probe-typed-relax-four-target-stress.sh
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=loongarch64 \
+            bash tests/assembler/probe-typed-relax-four-target-stress.sh
+      - name: GNU x86-64 typed short/near branch growth, alias and relocation oracle
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-x86-typed-branch-growth.sh
+      - name: GNU x86 conditional opcode maps and aliases stay one semantic policy
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-x86-shared-condition-opcodes.sh
+      - name: GNU x86 memory effective-address modes retain exact ModRM/SIB encoding
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-x86-memory-encoding-layout.sh
+      - name: GNU x86 typed ModRM memory and register forms exact bytes and relocations
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-x86-modrm-forms-gnu.sh
+      - name: GNU x86 same-section symbol binding and one memory Fixup policy
+        run: |
+          command -v as
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-x86-symbol-binding-fixups-gnu.sh
+      - name: MCInst capacity and Target destructor ownership (all backend constructors)
+        run: bash tests/assembler/probe-mcinst-lifetime-ownership.sh
+      - name: GNU x86 single Fragment emission transaction (DATA, ALIGN, FILL, SPACE, ORG, NOBITS)
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-mc-fragment-single-commit-gnu.sh
+      - name: GNU x86 register width and legacy high-byte constraints
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-x86-register-width-and-high-byte-gnu.sh
+      - name: GNU x86 link-order section identity, RELA and linker GC
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-link-order-gcc-patchable.sh
+      - name: GNU x86 1024 independent LINK_ORDER SectionIDs and metadata fixups
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-elf-link-order-index.sh
+      - name: GNU 4096-section full-key and numbered subsection parser-index stress
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-mc-section-subsection-key-index-gnu.sh
+      - name: Native MiniAS to MiniObjcopy COMDAT member rewrite versus GNU objcopy
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+          MINIOBJCOPY="$GITHUB_WORKSPACE/build/release/bin/minic-objcopy" \
+            bash tests/assembler/probe-miniobjcopy-comdat-rewrite.sh
+      - name: GNU x86-64 and LoongArch64 dual CFI frame section contract
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=x86_64 \
+            bash tests/assembler/probe-cfi-dual-frame.sh
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=loongarch64 \
+            bash tests/assembler/probe-cfi-dual-frame.sh
+      - name: GNU x86 CFI register IDs above 255 and invalid register overflow
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-cfi-wide-registers.sh
+      - name: GNU x86 CIE initial state and late FDE transition semantics
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-cfi-initial-state-gnu.sh
+      - name: GNU x86 CFI signed saved offsets and relative CFA offsets
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-cfi-signed-save-offsets-gnu.sh
+      - name: Reject collision of user-owned .debug_line with synthesized line tables
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-x86-debug-line-mixed-section-gnu.sh
+      - name: GNU x86 DWARF directory and file table references
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-debug-line-directory-gnu.sh
+      - name: GNU x86-64 grouped MC operand tokenizer and negative grammar
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=x86_64 \
+            bash tests/assembler/probe-mc-operand-lexer.sh
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=loongarch64 \
+            bash tests/assembler/probe-mc-operand-lexer.sh
+      - name: GNU x86-64 and LoongArch64 MCExpr byte+relocation parity
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=x86_64 \
+            bash tests/assembler/probe-common-mcexpr-four-arch.sh
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=loongarch64 \
+            bash tests/assembler/probe-common-mcexpr-four-arch.sh
+      - name: GNU x86 MCExpr signed wrap and ELF RELA addend parity
+        run: |
+          command -v as
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-mcexpr-signed-overflow.sh
+      - name: GNU x86-64 and LoongArch64 one-pass INCBIN DATA
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=x86_64 \
+            bash tests/assembler/probe-mc-immutable-incbin.sh
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=loongarch64 \
+            bash tests/assembler/probe-mc-immutable-incbin.sh
+      - name: GNU x86-64 and LoongArch64 immutable LEB and string DATA
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=x86_64 \
+            bash tests/assembler/probe-mc-immutable-literal-data.sh
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=loongarch64 \
+            bash tests/assembler/probe-mc-immutable-literal-data.sh
+      - name: GNU x86-64 and LoongArch64 immutable lexical MCExpr
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=x86_64 \
+            bash tests/assembler/probe-mcexpr-lexical-sets.sh
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=loongarch64 \
+            bash tests/assembler/probe-mcexpr-lexical-sets.sh
+      - name: Verify parsed MCExpr final-dot and local symbol offset
+        run: |
+          cat > /tmp/mc-dot.s <<'SRC_DOT'
+          .text
+          base:
+          nop
+          .long .-base
+          .long .-base+7
+          .long .-(base+1)
+          SRC_DOT
+          build/release/bin/minic-as --target=x86_64 -o /tmp/mc-dot-mini.o /tmp/mc-dot.s
+          as --64 -o /tmp/mc-dot-gnu.o /tmp/mc-dot.s
+          objcopy -j .text -O binary /tmp/mc-dot-mini.o /tmp/mc-mini.bin
+          objcopy -j .text -O binary /tmp/mc-dot-gnu.o /tmp/mc-gnu.bin
+          if ! cmp /tmp/mc-mini.bin /tmp/mc-gnu.bin; then
+            echo 'MiniAS MCExpr .-base bytes:' >&2
+            od -An -tx1 /tmp/mc-mini.bin >&2
+            echo 'GNU GAS .-base bytes:' >&2
+            od -An -tx1 /tmp/mc-gnu.bin >&2
+            readelf -rW /tmp/mc-dot-mini.o >&2
+            readelf -rW /tmp/mc-dot-gnu.o >&2
+            exit 1
+          fi
+      - name: GNU x86 and LoongArch64 256-byte CFI bytecode oracle
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=x86_64 \
+            bash tests/assembler/probe-cfi-escape-blob.sh
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=loongarch64 \
+            bash tests/assembler/probe-cfi-escape-blob.sh
+      - name: GNU x86 and LoongArch64 extended CFI nested state
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=x86_64 \
+            bash tests/assembler/probe-cfi-extended-gnu.sh
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=loongarch64 \
+            bash tests/assembler/probe-cfi-extended-gnu.sh
+      - name: Real x86 and LoongArch64 implicit EH GNU oracle
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=x86_64 \
+            bash tests/assembler/probe-cfi-eh-frame.sh
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=loongarch64 \
+            bash tests/assembler/probe-cfi-eh-frame.sh
+      - name: Verify GNU x86 and LoongArch64 DWARF CIE/FDE semantics
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=x86_64 \
+            bash tests/assembler/probe-cfi-debug-frame.sh
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=loongarch64 \
+            bash tests/assembler/probe-cfi-debug-frame.sh
+      - name: GNU x86 long-branch and typed variable DATA oracle
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=x86_64 \
+            bash tests/assembler/probe-typed-variable-data-relax.sh
+      - name: GNU x86 persistent .org layout and lexical conditionals
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=x86_64 \
+            bash tests/assembler/probe-mc-org-lexical-layout.sh
+      - name: GNU x86 coherent subsection .org, branch and size snapshots
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-mc-org-snapshot-symmetry.sh
+      - name: GNU x86 and LoongArch64 fixed .org with forward DATA
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=x86_64 \
+            bash tests/assembler/probe-mc-org-data-fixedpoint.sh
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=loongarch64 \
+            bash tests/assembler/probe-mc-org-data-fixedpoint.sh
+      - name: GNU x86 and LoongArch64 variable MCExpr retained semantics
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=x86_64 \
+            bash tests/assembler/probe-mcexpr-variable-fixedpoint.sh
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=loongarch64 \
+            bash tests/assembler/probe-mcexpr-variable-fixedpoint.sh
+      - name: GNU numeric-first relocation addends retain ELF symbols
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-mcexpr-absolute-prefix-gnu.sh
+      - name: GNU deferred LEB and DWARF view-symbol layout semantics
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=x86_64 \
+            bash tests/assembler/probe-mc-deferred-leb-gnu.sh
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=loongarch64 \
+            bash tests/assembler/probe-mc-deferred-leb-gnu.sh
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-common-dwarf-named-views-gnu.sh
+      - name: GNU x86 and LoongArch64 .size signed end anchors
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=x86_64 \
+            bash tests/assembler/probe-mcexpr-size-end-anchor.sh
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=loongarch64 \
+            bash tests/assembler/probe-mcexpr-size-end-anchor.sh
+      - name: GNU AS byte equality, ELF ABI, and ISA error gates
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+          LOONGAS=loongarch64-linux-gnu-as \
+          LOONGCOPY=loongarch64-linux-gnu-objcopy \
+          LOONGREADELF=loongarch64-linux-gnu-readelf \
+            bash tests/assembler/probe-x86-loong-base.sh
+      - name: LoongArch64 typed LSX/LASX vector opcode patterns against GNU
+        run: |
+          command -v loongarch64-linux-gnu-as
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+          LOONGAS=loongarch64-linux-gnu-as \
+          LOONGCOPY=loongarch64-linux-gnu-objcopy \
+            bash tests/assembler/probe-loong-vector-typed-patterns.sh
+      - name: LoongArch64 scalar typed opcode fields and operand bounds versus GNU
+        run: |
+          command -v loongarch64-linux-gnu-as
+          command -v loongarch64-linux-gnu-objcopy
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+          LOONGAS=loongarch64-linux-gnu-as \
+          LOONGCOPY=loongarch64-linux-gnu-objcopy \
+            bash tests/assembler/probe-loong-scalar-opcode-shapes.sh
+      - name: GNU LoongArch64 aliases and privileged target operand contracts
+        run: |
+          command -v loongarch64-linux-gnu-as
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-loong-alias-privilege-gnu.sh
+      - name: LoongArch64 FCSR FCC GPR FPR LSX LASX register-bank identity versus GNU
+        run: |
+          command -v loongarch64-linux-gnu-as
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+          LOONGAS=loongarch64-linux-gnu-as \
+          LOONGCOPY=loongarch64-linux-gnu-objcopy \
+            bash tests/assembler/probe-loong-register-bank-patterns.sh

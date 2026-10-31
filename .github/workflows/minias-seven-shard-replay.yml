@@ -1,0 +1,84 @@
+name: MiniAS Pinned Per-Target Seven-Shard Replay
+
+# Reuses prior frozen compiler-generated assembly. No C recompile, no GNU asm
+# or full Linux Image. Results are a fast target-specific blocker frontier.
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Architecture whose first blockers should be refreshed
+        required: true
+        type: choice
+        options: [x86_64, aarch64, loongarch64]
+      corpus_run_id:
+        description: Exact previous 3x7 discovery run with SHA-attested input artifacts
+        required: true
+        type: string
+  push:
+    branches: [refactor/minias-target-isa-abi-core]
+    paths:
+      - '.github/workflows/minias-seven-shard-replay.yml'
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  shard:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minias-replay-aarch64-7]')
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6]
+    env:
+      TARGET: ${{ inputs.target || 'aarch64' }}
+      CORPUS_RUN: ${{ inputs.corpus_run_id || '40453774777' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: minias-3x7-corpus-${{ env.TARGET }}
+          repository: ${{ github.repository }}
+          run-id: ${{ env.CORPUS_RUN }}
+          github-token: ${{ github.token }}
+          path: build/minias-7-replay-input
+      - name: Build current MiniAS only
+        run: make -j2 MODE=release CFLAGS=-Werror build/release/bin/minic-as
+      - name: Reuse frozen assembly, refresh target-specific blockers
+        run: |
+          python3 tools/ci/minias-three-target-seven-v1.py shard \
+            --target "$TARGET" --shard '${{ matrix.shard }}' \
+            --corpus build/minias-7-replay-input \
+            --minias "$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            --out 'build/minias-7-replay-results/${{ matrix.shard }}'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: minias-7-replay-result-${{ matrix.shard }}
+          path: build/minias-7-replay-results/${{ matrix.shard }}/results.json
+          if-no-files-found: error
+          retention-days: 14
+
+  aggregate:
+    needs: shard
+    if: always() && needs.shard.result == 'success'
+    runs-on: ubuntu-24.04
+    env:
+      TARGET: ${{ inputs.target || 'aarch64' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: minias-7-replay-result-*
+          path: build/minias-7-replay-collected
+      - name: Verify exact seven-way owner coverage and target Pareto
+        run: |
+          python3 tools/ci/minias-three-target-seven-v1.py aggregate \
+            --target "$TARGET" --results build/minias-7-replay-collected \
+            --out build/minias-7-replay-summary.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: minias-7-replay-target-blockers
+          path: build/minias-7-replay-summary.json
+          retention-days: 14
+          if-no-files-found: error

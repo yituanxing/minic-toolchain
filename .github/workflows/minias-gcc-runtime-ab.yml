@@ -1,0 +1,107 @@
+name: MiniAS GNU GCC Single-Assembler A/B Runtime
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [refactor/minias-target-isa-abi-core]
+    paths:
+      - '.github/workflows/minias-gcc-runtime-ab.yml'
+      - 'assembler/**'
+      - 'tests/assembler/probe-minias-gcc-runtime-ab.sh'
+      - 'tests/assembler/runtime-gcc-single-variable/**'
+
+permissions:
+  contents: read
+
+jobs:
+  gcc-as-only-runtime:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {arch: x86_64, cc: gcc}
+          - {arch: aarch64, cc: aarch64-linux-gnu-gcc}
+          - {arch: riscv64, cc: riscv64-linux-gnu-gcc}
+          - {arch: loongarch64, cc: loongarch64-linux-gnu-gcc-13}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Install GNU GCC, GNU binutils, static glibc and QEMU
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc binutils libc6-dev qemu-user python3-pyelftools
+          case '${{ matrix.arch }}' in
+            aarch64)
+              sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+                gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu libc6-dev-arm64-cross ;;
+            riscv64)
+              sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+                gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu libc6-dev-riscv64-cross ;;
+            loongarch64)
+              sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+                gcc-13-loongarch64-linux-gnu binutils-loongarch64-linux-gnu libc6-dev-loong64-cross ;;
+          esac
+      - name: Build only MiniAS on this exact SHA
+        run: make -j2 MODE=release CFLAGS=-Werror build/release/bin/minic-as
+      - name: GCC to identical assembly, GNU AS/MiniAS, GNU BFD, QEMU A/B
+        env:
+          CC: ${{ matrix.cc }}
+          MINIAS: ${{ github.workspace }}/build/release/bin/minic-as
+          WORK_DIR: ${{ github.workspace }}/build/minias-gcc-runtime-ab/${{ matrix.arch }}
+        run: bash tests/assembler/probe-minias-gcc-runtime-ab.sh '${{ matrix.arch }}'
+      - name: AArch64 .inst mapping GNU strict oracle
+        if: matrix.arch == 'aarch64'
+        env:
+          MINIAS: ${{ github.workspace }}/build/release/bin/minic-as
+        run: bash tests/assembler/probe-aarch64-inst-mapping-gnu.sh
+      - name: x86 GNU local PC32 cross-section ELF32 REL and ELF64 RELA
+        if: matrix.arch == 'x86_64'
+        env:
+          MINIAS: ${{ github.workspace }}/build/release/bin/minic-as
+        run: bash tests/assembler/probe-common-local-pc32-section-gnu.sh
+      - name: AArch64 symbol identity and GOT addend contracts
+        if: matrix.arch == 'aarch64'
+        env:
+          MINIAS: ${{ github.workspace }}/build/release/bin/minic-as
+        run: |
+          bash tests/assembler/probe-aarch64-local-fold-gnu.sh
+          bash tests/assembler/probe-aarch64-got-addend.sh
+      - name: LoongArch CFI, Linux alt data and machine alignment GNU strict oracles
+        if: matrix.arch == 'loongarch64'
+        env:
+          MINIAS: ${{ github.workspace }}/build/release/bin/minic-as
+        run: |
+          bash tests/assembler/probe-cfi-short-linker-relax-gnu.sh
+          bash tests/assembler/probe-loong-linux-altinstructions-gnu.sh
+          bash tests/assembler/probe-loong-linux-instruction-alignment-gnu.sh
+      - name: GNU synthetic dot-anchor visibility across available target assemblers
+        env:
+          MINIAS: ${{ github.workspace }}/build/release/bin/minic-as
+        run: bash tests/assembler/probe-common-dot-anchor-visibility-gnu.sh
+      - name: GNU default-relax ULEB paired ELF relocation contract
+        if: matrix.arch == 'riscv64' || matrix.arch == 'loongarch64'
+        env:
+          MINIAS: ${{ github.workspace }}/build/release/bin/minic-as
+        run: |
+          if [[ '${{ matrix.arch }}' == 'riscv64' ]]; then
+            ARCH=riscv bash tests/assembler/probe-mc-leb-relax-gnu.sh
+          else
+            ARCH=loongarch64 bash tests/assembler/probe-mc-leb-relax-gnu.sh
+          fi
+      - name: GNU RISC-V final option relax controls DWARF ULEB fixups
+        if: matrix.arch == 'riscv64'
+        env:
+          MINIAS: ${{ github.workspace }}/build/release/bin/minic-as
+        run: bash tests/assembler/probe-rv-uleb-final-relax-state-gnu.sh
+      - name: Preserve both sides and exact failure evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minias-gcc-runtime-ab-${{ matrix.arch }}
+          path: build/minias-gcc-runtime-ab/${{ matrix.arch }}/
+          if-no-files-found: warn
+          retention-days: 7

@@ -1,0 +1,196 @@
+#!/usr/bin/env bash
+# LoongArch ABI register aliases, one-source privileged descriptors, and
+# Scalar-owned PCALA fixups.  GNU GAS owns cross-assembler byte/ELF semantics.
+set -Eeuo pipefail
+: "${MINIAS:?MiniAS executable required}"
+
+gnu_available=1
+if ! command -v loongarch64-linux-gnu-as >/dev/null ||
+   ! command -v loongarch64-linux-gnu-objcopy >/dev/null; then
+  if [[ "${MINIAS_ALLOW_MISSING_GNU:-0}" == 1 ]]; then
+    gnu_available=0
+  else
+    echo 'GNU LoongArch assembler and objcopy required for byte oracle' >&2
+    exit 1
+  fi
+fi
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+trap 'echo "MINIAS_LOONG_ALIAS_PRIVILEGE=FAIL command=$BASH_COMMAND" >&2' ERR
+
+printf '%s\n' '.text' \
+  'add.d $s9,$a0,$a1' \
+  'movgr2fr.d $fa0,$a0' \
+  'movfr2gr.d $a1,$ft15' \
+  'fld.d $fs0,$sp,0' \
+  'fst.s $fa7,$fp,-2048' >"$work/aliases.s"
+printf '%s\n' '.text' \
+  'add.d $r22,$r4,$r5' \
+  'movgr2fr.d $f0,$r4' \
+  'movfr2gr.d $r5,$f23' \
+  'fld.d $f24,$r3,0' \
+  'fst.s $f7,$r22,-2048' >"$work/numeric.s"
+printf '%s\n' '.text' \
+  'tlbclr' 'tlbflush' 'tlbsrch' 'tlbrd' 'tlbwr' 'tlbfill' 'ertn' \
+  'nop' 'ret' \
+  'pcalau12i $a0,%pc_hi20(external_symbol)' \
+  'addi.d $a0,$a0,%pc_lo12(external_symbol)' >"$work/privilege-pcala.s"
+# These are real GCC LP64 outputs, not handwritten substitute instruction
+# sequences. %plt is the B26 call operand; la.local emits the PCALA pair,
+# while la.global uses GOT_PC pair. Both pairs carry GNU's linker RELAX markers.
+printf '%s\n' '.text' '.globl gcc_pseudos' 'gcc_pseudos:' \
+  'bl %plt(runtime_message)' \
+  'b %plt(external_jump)' \
+  'beq $a0,$a1,.Lafter_got' \
+  'beqz $a0,.Lafter_got' \
+  'la.local $r12,.LANCHOR0' \
+  'la.global $r13,runtime_bias' \
+  '.Lafter_got:' \
+  'ret' \
+  '.data' '.LANCHOR0:' '.dword 7' >"$work/gcc-pseudos.s"
+
+# Real GCC cJSON/Lua output after FCMP uses an FCC branch, and GCC Lua's
+# array access uses LP64 scalar-FPR register-indexed memory. The official
+# GNU ISA patterns give BCEQZ=48000000, BCNEZ=48000100 and FLDX.D=38340000.
+printf '%s\n' '.text' '.globl fp_fcc' 'fp_fcc:' \
+  'fcmp.cun.d $fcc0,$f24,$f24' \
+  'bcnez $fcc0,.Lyes' \
+  'bceqz $fcc7,.Lno' \
+  'fldx.d $f0,$r29,$r26' \
+  'fstx.d $f1,$r29,$r26' \
+  'fldx.s $f2,$r29,$r26' \
+  'fstx.s $f3,$r29,$r26' \
+  '.Lyes:' \
+  'fldle.d $f0,$r29,$r26' \
+  '.Lno:' \
+  'ret' >"$work/fp-fcc.s"
+
+for name in aliases numeric privilege-pcala fp-fcc; do
+  "$MINIAS" --target=loongarch64 -march=loongarch64 -mabi=lp64d \
+    -o "$work/mini-$name.o" "$work/$name.s"
+  readelf -h "$work/mini-$name.o" | grep -q 'Machine:.*LoongArch'
+done
+"$MINIAS" --target=loongarch64 -march=loongarch64 -mabi=lp64d \
+  -o "$work/mini-gcc-pseudos.o" "$work/gcc-pseudos.s"
+readelf -Wr "$work/mini-gcc-pseudos.o" >"$work/gcc-pseudos.reloc"
+for kind in R_LARCH_B16 R_LARCH_B21 R_LARCH_B26 \
+            R_LARCH_PCALA_HI20 R_LARCH_PCALA_LO12 \
+            R_LARCH_GOT_PC_HI20 R_LARCH_GOT_PC_LO12; do
+  grep -q "$kind" "$work/gcc-pseudos.reloc"
+done
+# Both explicit PLT spellings must retain the real B26 relocation against
+# the naked target symbol, not a made-up `%plt(...)` ELF symbol identity.
+test "$(grep -c R_LARCH_B26 "$work/gcc-pseudos.reloc")" -eq 2
+grep -q 'external_jump' "$work/gcc-pseudos.reloc"
+if readelf -Wr "$work/mini-gcc-pseudos.o" | grep -q '%plt('; then
+  echo 'invalid literal %plt symbol in LoongArch relocation' >&2
+  exit 1
+fi
+test "$(grep -c R_LARCH_RELAX "$work/gcc-pseudos.reloc")" -eq 4
+
+# Host objcopy often cannot read LoongArch.  Extract .text through readelf
+# and compare its exact hex words without depending on cross tools.
+readelf -x .text "$work/mini-aliases.o" | sed -n '/^  0x/p' >"$work/aliases.hex"
+readelf -x .text "$work/mini-numeric.o" | sed -n '/^  0x/p' >"$work/numeric.hex"
+cmp "$work/aliases.hex" "$work/numeric.hex"
+
+readelf -Wr "$work/mini-privilege-pcala.o" >"$work/mini.reloc"
+grep -q 'R_LARCH_PCALA_HI20' "$work/mini.reloc"
+grep -q 'R_LARCH_PCALA_LO12' "$work/mini.reloc"
+
+# GNU requires real register banks/valid operands. MiniAS deliberately
+# narrows its relocation-modifier combinations beyond what some GAS versions
+# syntactically accept; test that supported-domain policy separately instead
+# of reporting a GNU-accepted syntax as a GNU negative.
+gnu_bad=(
+  'movgr2fr.d $a0,$a1'
+  'movfr2gr.d $a0,$a1'
+  'fld.d $s0,$sp,0'
+  'add.d $fa0,$a0,$a1'
+  'movgr2fr.d $ft16,$a0'
+  'movgr2fr.d $fs8,$a0'
+  'add.d $s10,$a0,$a1'
+  'nop $a0'
+  'tlbclr $a0'
+  'ret 1'
+  'add.d $a0,$a0,%pc_lo12(external_symbol)'
+)
+# MiniAS supports PCALA_HI20 only in its HI field and PCALA_LO12 only
+# in the matching LO field. GAS accepts some mismatched modifier spellings
+# during assembly without validating the eventual link-time relocation pair.
+mini_only_bad=(
+  'pcalau12i $a0,%pc_lo12(external_symbol)'
+  'addi.d $a0,$a0,%pc_hi20(external_symbol)'
+  'bl %plt()'
+  'b %plt()'
+  'bcnez $r0,.Ltarget'
+  'bceqz $fcc8,.Ltarget'
+  'fldx.d $r4,$r29,$r26'
+  'fldx.d $f0,$f1,$r26'
+  'la.local $f0,external_symbol'
+  'la.local $r12,%plt(external_symbol)'
+  'la.global $f0,external_symbol'
+  'la.global $r12,%plt(external_symbol)'
+)
+bad=("${gnu_bad[@]}" "${mini_only_bad[@]}")
+for i in "${!bad[@]}"; do
+  printf '.text\n%s\n' "${bad[$i]}" >"$work/bad$i.s"
+  if "$MINIAS" --target=loongarch64 -march=loongarch64 -mabi=lp64d \
+      -o "$work/bad$i.o" "$work/bad$i.s" 2>"$work/bad$i.err"; then
+    echo "accepted bad LoongArch operand: ${bad[$i]}" >&2
+    exit 1
+  fi
+  test ! -e "$work/bad$i.o"
+done
+
+if ((gnu_available)); then
+  for name in aliases numeric privilege-pcala fp-fcc; do
+    loongarch64-linux-gnu-as -mabi=lp64d -o "$work/gnu-$name.o" \
+      "$work/$name.s"
+    loongarch64-linux-gnu-objcopy -j .text -O binary \
+      "$work/mini-$name.o" "$work/mini-$name.bin"
+    loongarch64-linux-gnu-objcopy -j .text -O binary \
+      "$work/gnu-$name.o" "$work/gnu-$name.bin"
+    cmp "$work/mini-$name.bin" "$work/gnu-$name.bin"
+  done
+  loongarch64-linux-gnu-as -mabi=lp64d \
+    -o "$work/gnu-gcc-pseudos.o" "$work/gcc-pseudos.s"
+  loongarch64-linux-gnu-objcopy -j .text -O binary \
+    "$work/mini-gcc-pseudos.o" "$work/mini-gcc-pseudos.bin"
+  loongarch64-linux-gnu-objcopy -j .text -O binary \
+    "$work/gnu-gcc-pseudos.o" "$work/gnu-gcc-pseudos.bin"
+  cmp "$work/mini-gcc-pseudos.bin" "$work/gnu-gcc-pseudos.bin"
+  python3 "$(dirname "$0")/elf_semantic_compare.py" --strict \
+    "$work/gnu-gcc-pseudos.o" "$work/mini-gcc-pseudos.o" \
+    >"$work/gcc-pseudos-semantic.txt"
+  python3 - "$work/mini-privilege-pcala.o" \
+            "$work/gnu-privilege-pcala.o" <<'PY'
+import re
+import subprocess
+import sys
+
+def pcala_relocations(path):
+    result=[]
+    for line in subprocess.check_output(['readelf','-Wr',path],text=True).splitlines():
+        columns=line.split()
+        if (len(columns)>=5 and re.fullmatch('[0-9a-fA-F]{8,16}',columns[0])
+                and columns[2] in {'R_LARCH_PCALA_HI20','R_LARCH_PCALA_LO12'}):
+            result.append((columns[0],columns[2],tuple(columns[4:])))
+    return result
+
+mini,gnu=map(pcala_relocations,sys.argv[1:])
+if mini!=gnu or len(mini)!=2:
+    raise SystemExit(f'PCALA relocation mismatch: MiniAS={mini} GNU={gnu}')
+PY
+  for i in "${!gnu_bad[@]}"; do
+    if loongarch64-linux-gnu-as -mabi=lp64d -o "$work/gnu-bad$i.o" \
+        "$work/bad$i.s" >"$work/gnu-bad$i.out" 2>&1; then
+      echo "GNU accepted purported negative: ${bad[$i]}" >&2
+      exit 1
+    fi
+  done
+  oracle=exact
+else
+  oracle='NOT_TESTED:explicit_local_no_cross_GNU'
+fi
+echo "MINIAS_LOONG_ALIAS_PRIVILEGE=PASS aliases=5 privileged=9 PCALA=2 GCC_pseudos=3 RELAX=4 GNU_negatives=${#gnu_bad[@]} MiniAS_only_negatives=${#mini_only_bad[@]} GNU_bytes=$oracle GNU_relocations=$oracle no_partial_object=1"
