@@ -277,7 +277,7 @@ jobs:
           # The GNU producer already completed the EFI dependency graph before
           # provenance snapshots.  Another Kbuild invocation here can re-link
           # vmlinux and invalidate the discovery SHA without a source change.
-          test -s "$GNU_WORK/build/arch/loongarch/boot/vmlinuz.efi"
+          test -s "$GNU_WORK/build/arch/loongarch/boot/vmlinux.efi"
 
       - name: Build target GNU static init, shell and 12-syscall probes
         shell: bash

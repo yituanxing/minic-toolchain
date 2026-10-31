@@ -39,7 +39,7 @@ LINUX_SHA = "dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932"
 TARGETS = {
     "x86_64": ("x86", "", "gcc", "bzImage", "arch/x86/boot/bzImage", 62),
     "aarch64": ("arm64", "aarch64-linux-gnu-", "aarch64-linux-gnu-gcc", "Image", "arch/arm64/boot/Image", 183),
-    "loongarch64": ("loongarch", "loongarch64-linux-gnu-", "loongarch64-linux-gnu-gcc-13", "vmlinuz.efi", "arch/loongarch/boot/vmlinuz.efi", 258),
+    "loongarch64": ("loongarch", "loongarch64-linux-gnu-", "loongarch64-linux-gnu-gcc-13", "vmlinuz.efi", "arch/loongarch/boot/vmlinux.efi", 258),
 }
 ALLOWED_CFLAGS = {
     "-fshort-wchar", "-fno-short-wchar", "-fsigned-char", "-funsigned-char",

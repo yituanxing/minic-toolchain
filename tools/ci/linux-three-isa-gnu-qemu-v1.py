@@ -37,7 +37,7 @@ TARGETS = {
     "loongarch64": {
         "machine": 258, "gnu": "loongarch64-linux-gnu-gcc-13",
         "qemu": "qemu-system-loongarch64",
-        "image": "arch/loongarch/boot/vmlinuz.efi", "console": "ttyS0",
+        "image": "arch/loongarch/boot/vmlinux.efi", "console": "ttyS0",
         "machine_args": ("-machine", "virt", "-cpu", "la464"),
     },
 }

@@ -333,7 +333,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           command -v qemu-system-loongarch64
-          test -s "$GNU_WORK/build/arch/loongarch/boot/vmlinuz.efi"
+          test -s "$GNU_WORK/build/arch/loongarch/boot/vmlinux.efi"
           mkdir -p "$RUNTIME_OUTPUT"
           curl --proto '=https' --tlsv1.2 -fL --retry 3 \
             "$LOONG_FIRMWARE_URL" -o "$RUNTIME_OUTPUT/QEMU_EFI.fd"
@@ -811,7 +811,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          cp "$GNU_WORK/build/arch/loongarch/boot/vmlinuz.efi" "$RUNTIME_OUTPUT/loong-gnu-control.efi"
+          cp "$GNU_WORK/build/arch/loongarch/boot/vmlinux.efi" "$RUNTIME_OUTPUT/loong-gnu-control.efi"
           python3 - "$RUNTIME_OUTPUT" <<'PY'
           import hashlib, json, pathlib, sys
           root = pathlib.Path(sys.argv[1])
@@ -947,7 +947,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           python3 tools/ci/linux-three-isa-loongarch64-early-boot-pc-v1.py \
-            --image "$GNU_WORK/build/arch/loongarch/boot/vmlinuz.efi" \
+            --image "$GNU_WORK/build/arch/loongarch/boot/vmlinux.efi" \
             --firmware "$RUNTIME_OUTPUT/QEMU_EFI.fd" \
             --initramfs "$RUNTIME_OUTPUT/runtime-initramfs.cpio.gz" \
             --failed-p0 "$RUNTIME_OUTPUT/candidate/boot/p0.log" \
