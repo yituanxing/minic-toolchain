@@ -1267,6 +1267,12 @@
       "blob": "eac267258cbce8bb3e8fbc44e6fe8fe141f1c98d",
       "review_depth": "inventory",
       "ci_touched_in": []
+    },
+    "src/target/x86_64/raid6_simd.c": {
+      "blob": "7e90bfc689a67cab15b15cac66c9870879843010",
+      "review_depth": "inventory",
+      "ci_touched_in": [],
+      "note": "New RAID6 SIMD ISA owner inventoried, not yet deep-reviewed; real GNU/Linux compilation and execution evidence is tracked separately."
     }
   }
 }
