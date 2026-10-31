@@ -1116,4 +1116,6 @@ jobs:
           echo "MINIC_LINUX_SEVEN_21_C_SHARDS=$candidate_provenance source_run=$source_run"
           echo "Candidate C objects: $candidate_provenance (producer run $source_run; seven SHA-verified shards per target)." >> "$GITHUB_STEP_SUMMARY"
           echo 'MINIC_LINUX_SEVEN_RUNTIME=PASS targets=3 seven_shards_per_target_sha_verified=true all_C_GNU_AS_LD_QEMU_P0_P1=true'
+          echo 'MINIC_LINUX_GNU_CODEGEN_OPTION_PARITY=NOT_CLAIMED_BY_RUNTIME_GATE'
           echo 'Linux 3x7 GNU LD/QEMU acceptance: PASS (all three targets).' >> "$GITHUB_STEP_SUMMARY"
+          echo 'GCC codegen-option semantic equivalence is separately audited in each receiver receipt and is not claimed by this Linux runtime result.' >> "$GITHUB_STEP_SUMMARY"
