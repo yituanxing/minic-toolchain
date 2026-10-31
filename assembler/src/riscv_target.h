@@ -74,19 +74,20 @@ struct MiniAs;
 struct MiniAsStmt;
 struct MiniAsMeasureView;
 struct MiniAsMeasureErrorSink;
+struct MiniAsParseContext;
 
 /* RISC-V-private typed instruction API: Common sees only TargetOps.
  * No other ISA or the assembler driver needs these concrete symbols. */
 bool minias_riscv_measure_mcinst(const struct MiniAsMeasureView *,
                                 struct MiniAsMeasureErrorSink *,
                                 const struct MiniAsStmt *, uint32_t *);
-bool minias_riscv_parse_mcinst(struct MiniAs *, struct MiniAsStmt *);
+bool minias_riscv_parse_mcinst(struct MiniAsParseContext *, struct MiniAsStmt *);
 bool minias_riscv_encode(struct MiniAs *, const struct MiniAsStmt *);
 
 /* Parser already chose a fixed descriptor or dynamic Target form; validate
  * its typed feature/XLEN policy once, after MCInst construction. An explicitly
  * requested Base-I output-word audit remains an independent check. */
-bool minias_riscv_validate_parsed_isa(struct MiniAs *as,
+bool minias_riscv_validate_parsed_isa(struct MiniAsParseContext *ctx,
                                      const struct MiniAsStmt *stmt,
                                      uint64_t required_features,
                                      bool rv64_only);

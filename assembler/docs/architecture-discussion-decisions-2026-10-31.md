@@ -198,7 +198,7 @@ that a design change has been made.
 | P01 | P0 | `riscv_profile.c:parse_isa` sets `strict_i_xlen` automatically for exact RV32I/RV64I; `riscv_target.c:strict_base_i_check_sections` and `riscv_validate_common_directive` then reject executable raw data/`.org` as an extra audit | Separate ordinary `target_isa` legality from explicit `strict_base_i_audit`; keep the valuable audit but do not redefine GAS-compatible `-march` |
 | P02 | P0/P1 | `riscv_target.c:riscv_target_directive` currently rejects `.option arch,+ext` under explicit `-march`; legacy +v/+zbb handling is a no-op. `MiniAsRiscvState.option_stack` saves only PIC/RVC/RELAX bits | Add scoped effective ISA state and save/restore it; capture the correct site ISA for MCInst, layout and encoder without accidentally changing file-level attributes |
 | P03 | P1 | `riscv_profile.h` uses one 64-bit feature mask; `riscv_profile.c` recognizes a limited fixed-version extension table and lacks general version-string parsing | Define an extendable versioned ISA/extension set and dependency validation before many Z extensions are added. No need to implement all extensions immediately |
-| P04 | P1 | Measurement in all four Targets uses read-only `MiniAsMeasureView` + diagnostic sink (§18); parse-site snapshot and executable-alignment queries consume only Target state (§19); output and LoongArch lookahead use narrower final/pre-layout views (§15–16). `parse_mcinst`/encode still receive mutable `MiniAs*`. | Plan parse-site Common services for real symbol binding, expression evaluation and AArch64 literals; do not force a fake pure parser or second encoder |
+| P04 | P1 | All four parser callbacks now use opaque Common-owned `MiniAsParseContext` services (§20); measurement uses read-only views (§18); parse-site snapshots/alignment read Target state only (§19); post-emit and pre-layout are narrowed (§15–16). Encoding/relaxation still receive mutable `MiniAs*`. | Read the real encode/relax Common transaction APIs before any future phase migration; do not duplicate the encoder or hide necessary writes |
 | P05 | P1/P2 | `assembler.c:minias_statement_process` still reads/writes `SourceContext` internals and owns considerable conditional/directive routing; source expansion calls back into it | Complete Source ownership and typed statement routing; a smaller file alone is **not** proof of a clean boundary |
 | P06 | P1 | `aarch64_target.c:a64_record_source_mappings`/`validate` check `strcmp(stmt->op, ".inst")` and alignment directive spellings **after** parsing to determine object mapping semantics | Store parse-site typed instruction-data/alignment provenance; keep original text only where genuinely needed for diagnostics or initial expression compilation |
 | P07 | P1 (future) | RV RVC measurement/encoding reads `state->isa_features` globally while `stmt->site.mode_bits` records only selected option bits | When scoped `.option arch` is implemented, bind the effective ISA/encoding policy to each fragment to avoid consulting the wrong state after `pop` |
@@ -834,3 +834,62 @@ GNU x86 `.code16` **38/38**, RV RVC and Target profile, strict AArch64
 mapping and literal pool, and GNU LoongArch pseudo/relaxation oracles all
 PASS. The targeted literal-pool and x86/RV tests are needed specifically
 because those parse dependencies must survive a future larger migration.
+
+## 20. P04 one Common-owned parse service context, four Target parsers
+
+The §19 dependency audit is now implemented as one callback replacement,
+not an independent parser layer. `add_stmt` still creates the one persistent
+instruction Fragment and captures its immutable parse-site ISA state; it
+now lends the single Target parser a **stack-scoped opaque
+`MiniAsParseContext`**. The complete context definition (`MiniAs *as`) lives
+only inside `assembler.c`, not in the shared header or any Target. There is
+no API to recover the full mutable `MiniAs*` from the context.
+
+The Common service methods retain their **original algorithms**:
+
+- `minias_parse_bind_symbol_ref` and its difference variant delegate to
+  the existing Common SymbolNameId interning/binding logic. No second name
+  pool or alternative symbol identity is created.
+- Absolute operand/data and symbolic-difference evaluation delegate to the
+  existing `mc_expr.c` grammar over the current source location and symbol
+  graph. The new `minias_parse_eval_*` names avoid C linkage collisions
+  with the existing direct Common/CFI APIs.
+- `minias_parse_queue_literal` delegates to the exact pre-existing,
+  section/subsection-scoped Common literal pool. An AArch64 `ldr =symbol`
+  still reserves a stable label and is later flushed at the original `.ltorg`
+  stage; there is no Target-local copy of that pool.
+- Diagnostics preserve Common's first-error-wins buffer. `is_elf32`,
+  `has_error` and read-only `target_state` accessors replace ad hoc broad
+  inspection. x86's early short-imm candidate checks use a Common-owned
+  Boolean same-defined-section symbol query rather than pointers into the
+  whole Symbol table.
+
+RISC-V's fixed and six dynamic form parser callbacks, LoongArch's typed
+lowering-plan construction, AArch64's parser/helper family and x86's memory,
+symbol and recursive alias parsers now thread the same opaque context.
+Those Target functions still own all MCInst allocation and failure cleanup.
+Measurement, relaxation, encoding, CFI, Common data directives and final
+ELF write **retain their existing separate interfaces**. In particular,
+encode/relax are not inaccurately made read-only; they genuinely require
+layout, symbol resolution and fragment-transaction capabilities.
+
+Full-release `-Werror` and A0 **30/30 PASS** on the integrated tree. The
+Target boundary structural gate reports all four parser callbacks on the
+single opaque service signature. Focused GNU oracles also pass: **7/7 x86**
+(including ELF32/i386 and `.code16` 38/38), **5/5 AArch64** (literal pool,
+alias, mapping and real-link branches), **9/9 RISC-V/LoongArch** (RVC,
+XLEN/profile, LI/FP, ELF fixups, LoongArch GCC pseudos and altinstructions),
+and x86/RV SourceGraph replay **2/2**. This is a phase-ownership and
+focused code-generation regression result, **not** a full Linux/QEMU
+certification at this commit. Remote exact-head CI must be recorded
+separately after the integrated commit runs.
+
+The production-only diff for this entire four-Target parse-service batch is
+**+519/−418 lines (net +101)**, largely the one-time conversion of parser
+helper signatures and diagnostic/binding call sites. No second parser was
+added. The old callback type and its broad helper signatures were removed.
+
+**Next:** inspect existing `encode`/relax Common operations as they are,
+identify any real duplicated transaction or mutable-state ownership, and
+only then pick another coherent phase-sized replacement. Do not introduce
+COFF/Mach-O now or spend a batch filling theoretical syntax profiles.

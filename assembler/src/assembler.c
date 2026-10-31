@@ -253,6 +253,7 @@ char *minias_trim(char *text) {
 struct MiniAsPostEmitErrorSink { MiniAs *as; };
 struct MiniAsPostEmitObjectSink { MiniAs *as; };
 struct MiniAsMeasureErrorSink { MiniAs *as; };
+struct MiniAsParseContext { MiniAs *as; };
 
 static void minias_set_error_va(MiniAs *as, const char *format, va_list ap) {
     if (as->error[0] != '\0') {
@@ -282,6 +283,70 @@ void minias_measure_error(MiniAsMeasureErrorSink *sink,
     va_start(ap, format);
     minias_set_error_va(sink->as, format, ap);
     va_end(ap);
+}
+
+const void *minias_parse_target_state(const MiniAsParseContext *ctx) {
+    return ctx->as->target_state;
+}
+
+bool minias_parse_is_elf32(const MiniAsParseContext *ctx) {
+    return ctx->as->output_elf32;
+}
+
+bool minias_parse_has_error(const MiniAsParseContext *ctx) {
+    return ctx->as->error[0] != '\0';
+}
+
+void minias_parse_error(MiniAsParseContext *ctx, const char *format, ...) {
+    va_list ap;
+    va_start(ap, format);
+    minias_set_error_va(ctx->as, format, ap);
+    va_end(ap);
+}
+
+bool minias_parse_bind_symbol_ref(MiniAsParseContext *ctx,
+                                  const MiniAsSymbolExpr *expr,
+                                  MiniAsSymbolRef *ref) {
+    return minias_bind_symbol_ref(ctx->as, expr, ref);
+}
+
+bool minias_parse_bind_symbol_difference_ref(
+    MiniAsParseContext *ctx, const MiniAsSymbolDifference *expr,
+    MiniAsSymbolDifferenceRef *ref) {
+    return minias_bind_symbol_difference_ref(ctx->as, expr, ref);
+}
+
+bool minias_parse_symbol_pair_same_defined_section(
+    MiniAsParseContext *ctx, MiniAsSymbolRef positive,
+    MiniAsSymbolRef negative) {
+    const MiniAsSymbol *lhs=minias_symbol_ref_lookup(ctx->as, positive);
+    const MiniAsSymbol *rhs=minias_symbol_ref_lookup(ctx->as, negative);
+    return lhs!=NULL && rhs!=NULL && lhs->defined && rhs->defined &&
+           lhs->section>=0 && lhs->section==rhs->section;
+}
+
+bool minias_parse_eval_absolute_data_bits(MiniAsParseContext *ctx,
+                                          const char *text, uint64_t *bits) {
+    return minias_parse_absolute_data_bits(ctx->as, text, bits);
+}
+
+bool minias_parse_evaluate_absolute_operand(MiniAsParseContext *ctx,
+                                            const char *text, int64_t *value) {
+    return minias_evaluate_absolute_operand(ctx->as, text, value);
+}
+
+bool minias_parse_eval_symbol_difference_absolute_tail(
+    MiniAsParseContext *ctx, const char *text,
+    MiniAsSymbolDifference *difference) {
+    return minias_parse_symbol_difference_absolute_tail(
+        ctx->as, text, difference);
+}
+
+bool minias_parse_queue_literal(MiniAsParseContext *ctx,
+                                const MiniAsSymbolExpr *expr,
+                                unsigned width,
+                                MiniAsSymbolExpr *pool_label) {
+    return minias_queue_literal(ctx->as, expr, width, pool_label);
 }
 
 /* SectionID is the identity of one output Section throughout parse, layout
@@ -1598,9 +1663,10 @@ static bool add_stmt(MiniAs *as,
         return false;
     }
     ++as->stmt_count;
-    if (fragment_kind == MINIAS_FRAGMENT_INSTRUCTION &&
-        !as->target->parse_mcinst(as, st))
-        return false;
+    if (fragment_kind == MINIAS_FRAGMENT_INSTRUCTION) {
+        MiniAsParseContext parsing = { .as=as };
+        if (!as->target->parse_mcinst(&parsing, st))return false;
+    }
     /* Code-after-data needs a GNU target-defined implicit alignment. Record
      * the transition per subsection so enormous instruction-only Linux
      * regions do not grow a redundant alignment Fragment per instruction.

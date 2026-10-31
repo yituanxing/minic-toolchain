@@ -658,6 +658,33 @@ typedef struct MiniAsMeasureView {
 typedef struct MiniAsMeasureErrorSink MiniAsMeasureErrorSink;
 void minias_measure_error(MiniAsMeasureErrorSink *, const char *, ...);
 
+/* The ISA parser constructs a retained MCInst, but symbol-name interning,
+ * current-symbol lookups, absolute-expression evaluation and literal-pool
+ * requests are Common capabilities. Keep its owner completely opaque to
+ * Targets: there is exactly one parser callback per ISA, not a second grammar
+ * or a target-accessible writable MiniAs graph. */
+typedef struct MiniAsParseContext MiniAsParseContext;
+const void *minias_parse_target_state(const MiniAsParseContext *);
+bool minias_parse_is_elf32(const MiniAsParseContext *);
+bool minias_parse_has_error(const MiniAsParseContext *);
+void minias_parse_error(MiniAsParseContext *, const char *, ...);
+bool minias_parse_bind_symbol_ref(MiniAsParseContext *,
+                                  const MiniAsSymbolExpr *, MiniAsSymbolRef *);
+bool minias_parse_bind_symbol_difference_ref(
+    MiniAsParseContext *, const MiniAsSymbolDifference *,
+    MiniAsSymbolDifferenceRef *);
+bool minias_parse_symbol_pair_same_defined_section(
+    MiniAsParseContext *, MiniAsSymbolRef, MiniAsSymbolRef);
+bool minias_parse_eval_absolute_data_bits(MiniAsParseContext *, const char *,
+                                          uint64_t *);
+bool minias_parse_evaluate_absolute_operand(MiniAsParseContext *, const char *,
+                                            int64_t *);
+bool minias_parse_eval_symbol_difference_absolute_tail(
+    MiniAsParseContext *, const char *, MiniAsSymbolDifference *);
+bool minias_parse_queue_literal(MiniAsParseContext *,
+                                const MiniAsSymbolExpr *, unsigned,
+                                MiniAsSymbolExpr *);
+
 /* A borrowed, read-only view of the *final* MCLayout. Target output checks
  * cannot reach the mutable Common section/symbol/fixup graph through this
  * interface. Only the object-finalization sink below can request the two
@@ -948,7 +975,7 @@ typedef struct MiniAsTargetOps {
                             struct MiniAsAssemblyConfig *, char *, size_t);
     /* Mandatory target instruction path: parse once, measure its retained
      * typed operands, then encode. Core owns fragment address and growth. */
-    bool (*parse_mcinst)(MiniAs *, MiniAsStmt *);
+    bool (*parse_mcinst)(MiniAsParseContext *, MiniAsStmt *);
     bool (*measure_mcinst)(const MiniAsMeasureView *,
                            MiniAsMeasureErrorSink *,
                            const MiniAsStmt *, uint32_t *);

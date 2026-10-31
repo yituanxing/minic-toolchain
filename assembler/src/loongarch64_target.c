@@ -88,8 +88,7 @@ typedef struct {
 
 #define LA_COUNT(a) (sizeof(a)/sizeof((a)[0]))
 
-static bool la_has_features(const MiniAs *as,uint32_t required) {
-    const LaTargetState *state=(const LaTargetState *)as->target_state;
+static bool la_has_features(const LaTargetState *state,uint32_t required) {
     /* Direct target API clients without a resolved profile preserve the
      * legacy instruction repertoire; explicit profiles are authoritative. */
     return state==NULL || (state->features&required)==required;
@@ -316,14 +315,14 @@ static bool la_reloc_expr(const char *value, const char *modifier,
     return minias_parse_symbol_addend(inner,out);
 }
 
-static bool la_symbol_operand(MiniAs *as, MiniAsMCInst *m, unsigned slot,
+static bool la_symbol_operand(MiniAsParseContext *ctx, MiniAsMCInst *m, unsigned slot,
                               const MiniAsSymbolExpr *expr) {
     MiniAsSymbolRef *ref = malloc(sizeof(*ref));
     if (!ref) {
-        minias_set_error(as,"out-of-memory:loongarch-symbol-mcinst");
+        minias_parse_error(ctx,"out-of-memory:loongarch-symbol-mcinst");
         return false;
     }
-    if(!minias_bind_symbol_ref(as,expr,ref)) {
+    if(!minias_parse_bind_symbol_ref(ctx,expr,ref)) {
         free(ref);
         return false;
     }
@@ -357,7 +356,7 @@ static const LaBranchPattern la_branch_patterns[]={
     {"bcnez",2U,UINT32_C(0x48000100),LA_MC_BRANCH21,LA_REG_BANK_FCC}
 };
 
-static bool la_branch_instruction(MiniAs *as, MiniAsMCInst *m,
+static bool la_branch_instruction(MiniAsParseContext *ctx, MiniAsMCInst *m,
                                   char *t[4],unsigned count,
                                   unsigned branch_index,LaBranchAlias alias) {
     unsigned rj, rd, slot;
@@ -401,7 +400,7 @@ static bool la_branch_instruction(MiniAs *as, MiniAsMCInst *m,
         if(count==3U && !la_reg(t[1],&rd))return false;
         if(swap && count==3U) {unsigned tmp=rj;rj=rd;rd=tmp;}
         slot=count-1U;
-        if (!la_symbol_operand(as,m,slot,&expr))return false;
+        if (!la_symbol_operand(ctx,m,slot,&expr))return false;
         m->opcode=(unsigned)b->kind;
         m->target_form=(uint32_t)LA_FORM_BRANCH+branch_index;
         m->count=count;
@@ -518,18 +517,18 @@ static bool la_valid_lowering_plan(const MiniAsMCInst *inst) {
           inst->target_form==LA_FORM_GOT && plan->fixup_count==4U));
 }
 
-static bool la_attach_lowering_plan(MiniAs *as,MiniAsMCInst *inst,
+static bool la_attach_lowering_plan(MiniAsParseContext *ctx,MiniAsMCInst *inst,
                                     const LaLoweringPlan *source) {
     LaLoweringPlan *plan=malloc(sizeof(*plan));
     if(plan==NULL) {
-        minias_set_error(as,"out-of-memory:loongarch-lowering-plan");
+        minias_parse_error(ctx,"out-of-memory:loongarch-lowering-plan");
         return false;
     }
     *plan=*source;
     plan->tag=LA_LOWERING_PLAN_TAG;
     if(plan->count==0U || plan->count>4U || plan->fixup_count>4U) {
         free(plan);
-        minias_set_error(as,"invalid-loongarch-lowering-plan");
+        minias_parse_error(ctx,"invalid-loongarch-lowering-plan");
         return false;
     }
     inst->target_payload=plan;
@@ -537,15 +536,15 @@ static bool la_attach_lowering_plan(MiniAs *as,MiniAsMCInst *inst,
     return true;
 }
 
-static bool la_plan_li_d(MiniAs *as,MiniAsMCInst *inst,
+static bool la_plan_li_d(MiniAsParseContext *ctx,MiniAsMCInst *inst,
                          uint64_t bits,unsigned destination) {
     LaLoweringPlan plan={0};
     plan.count=la_li_d_words(bits,destination,plan.words);
     inst->target_form=LA_FORM_LI_D;
-    return la_attach_lowering_plan(as,inst,&plan);
+    return la_attach_lowering_plan(ctx,inst,&plan);
 }
 
-static bool la_plan_li_w(MiniAs *as,MiniAsMCInst *inst,
+static bool la_plan_li_w(MiniAsParseContext *ctx,MiniAsMCInst *inst,
                          uint32_t value,unsigned destination) {
     LaLoweringPlan plan={0};
     /* GAS accepts every 32-bit immediate and first sign-extends its low
@@ -557,14 +556,14 @@ static bool la_plan_li_w(MiniAs *as,MiniAsMCInst *inst,
         canonical|=UINT64_C(0xffffffff00000000);
     plan.count=la_li_d_words(canonical,destination,plan.words);
     if(plan.count==0U || plan.count>2U) {
-        minias_set_error(as,"invalid-loongarch-liw-reduction");
+        minias_parse_error(ctx,"invalid-loongarch-liw-reduction");
         return false;
     }
     inst->target_form=LA_FORM_LI_W;
-    return la_attach_lowering_plan(as,inst,&plan);
+    return la_attach_lowering_plan(ctx,inst,&plan);
 }
 
-static bool la_plan_pcrel(MiniAs *as,MiniAsMCInst *inst,
+static bool la_plan_pcrel(MiniAsParseContext *ctx,MiniAsMCInst *inst,
                            unsigned destination) {
     LaLoweringPlan plan={0};
     plan.count=2U;
@@ -587,7 +586,7 @@ static bool la_plan_pcrel(MiniAs *as,MiniAsMCInst *inst,
     plan.fixups[3].kind=MINIAS_FIXUP_LARCH_RELAX;
     plan.fixups[3].absolute_zero=true;
     inst->target_form=LA_FORM_PCREL;
-    return la_attach_lowering_plan(as,inst,&plan);
+    return la_attach_lowering_plan(ctx,inst,&plan);
 }
 
 /* Under GNU's ordinary LP64D code model, la.global is a GOT-address
@@ -595,7 +594,7 @@ static bool la_plan_pcrel(MiniAs *as,MiniAsMCInst *inst,
  * loads the pointer from that GOT entry. It is NOT an alias of la.local;
  * the instruction and relocation types differ despite sharing the same
  * two-word fragment and optional-linker-relaxation policy. */
-static bool la_plan_global_got(MiniAs *as,MiniAsMCInst *inst,
+static bool la_plan_global_got(MiniAsParseContext *ctx,MiniAsMCInst *inst,
                                unsigned destination) {
     LaLoweringPlan plan={0};
     plan.count=2U;
@@ -614,7 +613,7 @@ static bool la_plan_global_got(MiniAs *as,MiniAsMCInst *inst,
     plan.fixups[3].kind=MINIAS_FIXUP_LARCH_RELAX;
     plan.fixups[3].absolute_zero=true;
     inst->target_form=LA_FORM_GOT;
-    return la_attach_lowering_plan(as,inst,&plan);
+    return la_attach_lowering_plan(ctx,inst,&plan);
 }
 
 /* One LoongArch-owned operand grammar for LSX and LASX.  The two vector
@@ -1700,9 +1699,8 @@ static bool la_build_mnemonic_index(MiniAs *as,LaTargetState *state) {
     return true;
 }
 
-static const LaMnemonicEntry *la_find_mnemonic(const MiniAs *as,
+static const LaMnemonicEntry *la_find_mnemonic(const LaTargetState *state,
                                                const char *name) {
-    const LaTargetState *state=(const LaTargetState *)as->target_state;
     size_t lo=0U,hi;
     if(state==NULL || state->mnemonics==NULL)return NULL;
     hi=state->mnemonic_count;
@@ -1719,21 +1717,21 @@ static const LaMnemonicEntry *la_find_mnemonic(const MiniAs *as,
 /* LI.W and LI.D share a typed mnemonic family, but LI.D is ALWAYS
  * lowered through GNU GAS's exact 12/20/20/12 sign-extension reduction.
  * Direct LI.W single-word forms retain their established GNU encodings. */
-static bool la_parse_li(MiniAs *as,MiniAsMCInst *m,char *args[4],
+static bool la_parse_li(MiniAsParseContext *ctx,MiniAsMCInst *m,char *args[4],
                         unsigned count,bool li_d) {
     unsigned rd;
     uint64_t bits;
     if(count!=2U || !la_reg(args[0],&rd))return false;
     if(!minias_eval_u64_expression(args[1],&bits))return false;
     if(li_d) {
-        if(!la_plan_li_d(as,m,bits,rd))return false;
+        if(!la_plan_li_d(ctx,m,bits,rd))return false;
         m->opcode=LA_MC_LI64_SEQUENCE;
     } else {
         uint32_t upper=(uint32_t)(bits>>32U);
         /* GNU GAS allows either zero or all-ones high half, then narrows
          * to the low word.  Values requiring other high bits overflow. */
         if(upper!=0U && upper!=UINT32_MAX)return false;
-        if(!la_plan_li_w(as,m,(uint32_t)bits,rd))return false;
+        if(!la_plan_li_w(ctx,m,(uint32_t)bits,rd))return false;
         m->opcode=LA_MC_LI32_SEQUENCE;
     }
     m->count=2U;
@@ -1743,16 +1741,17 @@ static bool la_parse_li(MiniAs *as,MiniAsMCInst *m,char *args[4],
     return true;
 }
 
-static bool la_parse(MiniAs *as,MiniAsStmt *s) {
+static bool la_parse(MiniAsParseContext *ctx,MiniAsStmt *s) {
     MiniAsMCInst *m=minias_mcinst_alloc(4U);
     LaOperandTokens tokens={0};
     char **t=tokens.slots;
+    const LaTargetState *state=minias_parse_target_state(ctx);
     const LaMnemonicEntry *mnemonic;
     unsigned n,i,rd,rj,rk;
-    if(!m){minias_set_error(as,"out-of-memory:loongarch64-mcinst");return false;}
-    mnemonic=la_find_mnemonic(as,s->op);
+    if(!m){minias_parse_error(ctx,"out-of-memory:loongarch64-mcinst");return false;}
+    mnemonic=la_find_mnemonic(state,s->op);
     if(mnemonic==NULL ||
-       !la_has_features(as,mnemonic->required_features))goto fail;
+       !la_has_features(state,mnemonic->required_features))goto fail;
     if(mnemonic->family==LA_MN_PRIVILEGED) {
         i=mnemonic->index;
         if(*s->args || i>=LA_COUNT(la_privileged))goto fail;
@@ -1764,7 +1763,7 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
     if(!la_split(s->args,&tokens))goto fail;
     n=tokens.count;
     if(mnemonic->family==LA_MN_BRANCH) {
-        if(la_branch_instruction(as,m,t,n,mnemonic->index,
+        if(la_branch_instruction(ctx,m,t,n,mnemonic->index,
                                  mnemonic->branch_alias))goto done;
         goto fail;
     }
@@ -1777,13 +1776,13 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
        n==2U && la_reg(t[0],&rd)) {
         MiniAsSymbolExpr expr;
         if(!minias_parse_symbol_addend(t[1],&expr) ||
-           !la_symbol_operand(as,m,1U,&expr))goto fail;
+           !la_symbol_operand(ctx,m,1U,&expr))goto fail;
         m->opcode=mnemonic->family==LA_MN_GOT ?
             LA_MC_GOT_PSEUDO : LA_MC_PCREL_PSEUDO;
         m->count=2U;
         la_capture_gpr_operand(m,0U,rd);
         if(!(mnemonic->family==LA_MN_GOT ?
-             la_plan_global_got(as,m,rd) : la_plan_pcrel(as,m,rd)))goto fail;
+             la_plan_global_got(ctx,m,rd) : la_plan_pcrel(ctx,m,rd)))goto fail;
         goto done;
     }
     if(mnemonic->family==LA_MN_PCREL ||
@@ -1793,7 +1792,7 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
         goto fail;
     }
     if(mnemonic->family==LA_MN_LI) {
-        if(la_parse_li(as,m,t,n,mnemonic->index==1U))goto done;
+        if(la_parse_li(ctx,m,t,n,mnemonic->index==1U))goto done;
         goto fail;
     }
     if(mnemonic->family==LA_MN_BITFIELD) {
@@ -1909,7 +1908,7 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
            rule->opcode==UINT32_C(0x1a000000) &&
            la_reg(t[0],&rd) &&
            la_reloc_expr(t[1],"%pc_hi20",&expr)) {
-            if(!la_symbol_operand(as,m,1U,&expr))goto fail;
+            if(!la_symbol_operand(ctx,m,1U,&expr))goto fail;
             m->opcode=LA_MC_PCALA_HI20;
             m->target_form=LA_FORM_PCALA_HI20;
             m->count=2U;
@@ -1920,7 +1919,7 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
         if(n==3U && rule->shape==LA_SCALAR_IMM12 &&
            la_reg(t[0],&rd) && la_reg(t[1],&rj) &&
            la_reloc_expr(t[2],"%pc_lo12",&expr)) {
-            if(!la_symbol_operand(as,m,2U,&expr))goto fail;
+            if(!la_symbol_operand(ctx,m,2U,&expr))goto fail;
             m->opcode=LA_MC_PCALA_LO12;
             m->target_form=LA_FORM_PCALA_LO12;
             m->count=3U;
@@ -1933,13 +1932,13 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
         goto fail;
     }
 fail:
-    minias_set_error(as,"unsupported-loongarch64-operands:%s:%s:line=%zu",
+    minias_parse_error(ctx,"unsupported-loongarch64-operands:%s:%s:line=%zu",
                      s->op,s->args,s->line);
     free(tokens.overflow);
     minias_mcinst_destroy(m);return false;
 done:
     if(m->target_form==LA_FORM_NONE) {
-        minias_set_error(as,"missing-loongarch-target-form:line=%zu",s->line);
+        minias_parse_error(ctx,"missing-loongarch-target-form:line=%zu",s->line);
         free(tokens.overflow);
         minias_mcinst_destroy(m);
         return false;
@@ -1947,7 +1946,7 @@ done:
     for(i=0U;i<m->count;++i)
         if(m->operands[i].kind==MINIAS_MC_REGISTER &&
            m->operands[i].target_reg_bank==LA_REG_BANK_NONE) {
-            minias_set_error(as,"missing-loongarch-register-bank:line=%zu",
+            minias_parse_error(ctx,"missing-loongarch-register-bank:line=%zu",
                              s->line);
             free(tokens.overflow);
             minias_mcinst_destroy(m);

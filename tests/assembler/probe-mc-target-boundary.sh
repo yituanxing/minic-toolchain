@@ -160,6 +160,49 @@ if not re.search(r'static bool la_validate\s*\(const MiniAsPostEmitView\s*\*', l
     raise SystemExit('LoongArch output validator still receives writable Core')
 print('MINIAS_MC_POST_EMIT_VIEW=PASS final_layout=readonly object_mutation=Common_sink')
 PY
+# Typed instruction parsing may request Common symbol binding, current
+# expression evaluation and AArch64 literal pooling, but must never receive
+# writable MiniAs itself. The sole Common parse context owns those services.
+python3 - <<'PY'
+from pathlib import Path
+import re
+
+root = Path('assembler/src')
+core = (root / 'minias_internal.h').read_text()
+driver = (root / 'assembler.c').read_text()
+if not re.search(r'typedef struct MiniAsParseContext MiniAsParseContext;', core):
+    raise SystemExit('Missing opaque parse capability')
+if 'struct MiniAsParseContext {' in core or \
+        'struct MiniAsParseContext { MiniAs *as; };' not in driver:
+    raise SystemExit('Parse context exposed its mutable Common owner')
+if not re.search(r'bool\s*\(\*parse_mcinst\)\s*\('
+                 r'MiniAsParseContext\s*\*\s*,\s*MiniAsStmt\s*\*', core):
+    raise SystemExit('Target parser still receives full mutable MiniAs')
+if 'MiniAsParseContext parsing = { .as=as };' not in driver or \
+        'as->target->parse_mcinst(&parsing, st)' not in driver:
+    raise SystemExit('Common failed to provide its single parse owner')
+required = ('target_state', 'is_elf32', 'has_error', 'error',
+            'bind_symbol_ref', 'bind_symbol_difference_ref',
+            'symbol_pair_same_defined_section', 'eval_absolute_data_bits',
+            'evaluate_absolute_operand',
+            'eval_symbol_difference_absolute_tail', 'queue_literal')
+for name in required:
+    if not re.search(r'\bminias_parse_' + name + r'\s*\(', core):
+        raise SystemExit('Missing parse-specific Common service: ' + name)
+for filename, fn in (('riscv_encode.c', 'minias_riscv_parse_mcinst'),
+                     ('aarch64_target.c', 'parse_mcinst'),
+                     ('x86_64_target.c', 'x64_parse'),
+                     ('loongarch64_target.c', 'la_parse')):
+    source = (root / filename).read_text()
+    match = re.search(r'\bbool\s+' + fn +
+                      r'\s*\(\s*MiniAsParseContext\s*\*', source)
+    if not match:
+        raise SystemExit(f'{filename}: parser still accepts mutable Common')
+    end = source.find('\n}', match.end())
+    if end < 0 or 'as->' in source[match.end():end]:
+        raise SystemExit(f'{filename}: parser still directly reads Common')
+print('MINIAS_MC_PARSE_SERVICES=PASS targets=4 single_owner=Common no_legacy_callback=1')
+PY
 # Source-site ISA snapshots and code-alignment defaults are pure Target-state
 # queries. Common passes only opaque const Target context, never its mutable
 # Symbol/Section/SourceGraph owner. All three nontrivial callbacks migrate

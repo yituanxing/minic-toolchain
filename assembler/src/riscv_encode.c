@@ -462,12 +462,17 @@ static bool append_u32(MiniAs *as, int section, uint32_t value) {
     return minias_emit_instruction_bytes(as, section, bytes, sizeof(bytes));
 }
 
+/* Parse-side Target context is immutable; Common owns the opaque service. */
+static const MiniAsRiscvState *rv_parse_state(const MiniAsParseContext *ctx) {
+    return minias_parse_target_state(ctx);
+}
+
 /* A single RV LI.D/LI.W materialization plan supplies BOTH retained-MCInst
  * measurement and emitted machine bytes. Previously their independent
  * 32/64-bit heuristic branches could silently disagree when a new encoding
  * alternative changed the number of words after layout. At most 15 words:
  * leading ADDI + seven shifts and seven nonzero-byte ADDIs. */
-static bool rv_materialize_li(MiniAs *as, const MiniAsStmt *stmt,
+static bool rv_materialize_li(MiniAsParseContext *ctx, const MiniAsStmt *stmt,
                               uint32_t words[16], unsigned *count) {
     const MiniAsMCInst *m = stmt->mcinst;
     const uint64_t bits = m->operands[1].immediate;
@@ -478,13 +483,13 @@ static bool rv_materialize_li(MiniAs *as, const MiniAsStmt *stmt,
     *count = 0U;
     if (m->target_form != RV_PSEUDO_LI_SIGNED32 &&
         m->target_form != RV_PSEUDO_LI_WIDE) {
-        minias_set_error(as, "internal:riscv-li-invalid-form");
+        minias_parse_error(ctx, "internal:riscv-li-invalid-form");
         return false;
     }
-    if (MINIAS_RV_STATE(as)->target_xlen == 32U) {
+    if (rv_parse_state(ctx)->target_xlen == 32U) {
         int64_t value;
         if (!rv32_li_value(bits, &value)) {
-            minias_set_error(as, "rv32i-li-overflows-32-bits:line=%zu",
+            minias_parse_error(ctx, "rv32i-li-overflows-32-bits:line=%zu",
                              stmt->line);
             return false;
         }
@@ -769,20 +774,20 @@ static bool parse_call_target(const char *text, MiniAsSymbolExpr *expr,
 /* Retain only a stable parse-time SymbolNameId and addend in MCInst. Common
  * does not create a real ELF Symbol until a definition or Fixup commit; this
  * preserves ELF encounter order while layout can resolve current values. */
-static bool rv_bind_symbol_operand(MiniAs *as, MiniAsMCInst *m,
+static bool rv_bind_symbol_operand(MiniAsParseContext *ctx, MiniAsMCInst *m,
                                    unsigned index,
                                    const MiniAsSymbolExpr *parsed) {
     MiniAsSymbolRef *ref;
     if (index >= m->capacity) {
-        minias_set_error(as, "internal:riscv-symbol-operand-index");
+        minias_parse_error(ctx, "internal:riscv-symbol-operand-index");
         return false;
     }
     ref = malloc(sizeof(*ref));
     if (ref == NULL) {
-        minias_set_error(as, "out-of-memory:riscv-bound-symbol");
+        minias_parse_error(ctx, "out-of-memory:riscv-bound-symbol");
         return false;
     }
-    if (!minias_bind_symbol_ref(as, parsed, ref)) {
+    if (!minias_parse_bind_symbol_ref(ctx, parsed, ref)) {
         free(ref);
         return false;
     }
@@ -1172,11 +1177,11 @@ static void rv_set_imm(MiniAsMCOperand *op, int64_t num) {
  * once and retain individual architectural registers in MCInst; preserve
  * CSR numbers, vector vtype, and memory/AMO width in the opcode template.
  * No source string is accessed by the final instruction writer. */
-static bool rv_mc_word(MiniAs *as, MiniAsStmt *stmt,
+static bool rv_mc_word(MiniAsParseContext *ctx, MiniAsStmt *stmt,
                        uint32_t skeleton, int rd, int rs1, int rs2) {
     MiniAsMCInst *m = minias_mcinst_alloc(3U);
     if (m == NULL) {
-        minias_set_error(as, "out-of-memory:riscv-word-mcinst");
+        minias_parse_error(ctx, "out-of-memory:riscv-word-mcinst");
         return false;
     }
     m->opcode = RV_MC_WORD;
@@ -1189,9 +1194,9 @@ static bool rv_mc_word(MiniAs *as, MiniAsStmt *stmt,
     return true;
 }
 
-static bool rv_mc_vector_word(MiniAs *as, MiniAsStmt *stmt,
+static bool rv_mc_vector_word(MiniAsParseContext *ctx, MiniAsStmt *stmt,
                                uint32_t base, int vd, int rs1) {
-    if (!rv_mc_word(as, stmt, base, vd, rs1, 0)) return false;
+    if (!rv_mc_word(ctx, stmt, base, vd, rs1, 0)) return false;
     stmt->mcinst->operands[0].reg_class = MINIAS_MC_REG_VECTOR;
     return true;
 }
@@ -1201,7 +1206,7 @@ static bool rv_mc_vector_word(MiniAs *as, MiniAsStmt *stmt,
  * parsers specialize it for suffix-dependent widths/FP formats. There is no
  * second mnemonic decode after an MCInst has been constructed. */
 typedef struct RvParsedIsaPolicy RvParsedIsaPolicy;
-typedef bool (*RvFormParser)(MiniAs *, MiniAsStmt *, char [][128], size_t,
+typedef bool (*RvFormParser)(MiniAsParseContext *, MiniAsStmt *, char [][128], size_t,
                              RvParsedIsaPolicy *);
 typedef enum RvSimpleFormKind {
     RV_SIMPLE_NONE,
@@ -1234,7 +1239,7 @@ struct RvParsedIsaPolicy {
 /* Common integer, supervisor, CSR aliases and compressed instructions share
  * typed MCInst ownership.  Multiword, position-dependent pseudos also retain
  * an instruction; the Target supplies their expansion-size plan. */
-static bool rv_parse_simple_mc(MiniAs *as, MiniAsStmt *stmt,
+static bool rv_parse_simple_mc(MiniAsParseContext *ctx, MiniAsStmt *stmt,
                                char ops[][128], size_t n,
                                RvParsedIsaPolicy *policy) {
     const char *op = stmt->op;
@@ -1253,7 +1258,7 @@ static bool rv_parse_simple_mc(MiniAs *as, MiniAsStmt *stmt,
             unsigned csr = selected->simple_encoding;
             if (selected->simple_kind == RV_SIMPLE_FCSR_READ) {
                 if (n != 1U || (rd = reg_number(ops[0])) < 0) goto invalid;
-                return rv_mc_word(as, stmt, (csr << 20U) | 0x2073U,
+                return rv_mc_word(ctx, stmt, (csr << 20U) | 0x2073U,
                                   rd, 0, 0);
             }
             if (n != 1U && n != 2U) goto invalid;
@@ -1261,21 +1266,21 @@ static bool rv_parse_simple_mc(MiniAs *as, MiniAsStmt *stmt,
             if (selected->simple_kind == RV_SIMPLE_FCSR_IMMEDIATE) {
                 if (!parse_i64(ops[n-1U], &imm) || imm < 0 || imm > 31)
                     goto invalid;
-                if (!rv_mc_word(as, stmt, (csr << 20U) | 0x5073U,
+                if (!rv_mc_word(ctx, stmt, (csr << 20U) | 0x5073U,
                                 rd, (int)imm, 0)) return false;
                 rv_set_imm(&stmt->mcinst->operands[1], imm);
                 return true;
             }
             if ((rs1 = reg_number(ops[n-1U])) < 0) goto invalid;
-            return rv_mc_word(as, stmt, (csr << 20U) | 0x1073U,
+            return rv_mc_word(ctx, stmt, (csr << 20U) | 0x1073U,
                               rd, rs1, 0);
         }
         if (selected->simple_kind == RV_SIMPLE_ZERO) {
             if (n != 0U) goto invalid;
             if (selected->compressed_encoding != 0U &&
-                MINIAS_RV_STATE(as)->isa_explicit &&
-                (MINIAS_RV_STATE(as)->isa_features & RISCV_ISA_C) != 0U &&
-                (MINIAS_RV_STATE(as)->options & MINIAS_RISCV_OPTION_NO_RVC) == 0U) {
+                rv_parse_state(ctx)->isa_explicit &&
+                (rv_parse_state(ctx)->isa_features & RISCV_ISA_C) != 0U &&
+                (rv_parse_state(ctx)->options & MINIAS_RISCV_OPTION_NO_RVC) == 0U) {
                 MiniAsMCInst *m = minias_mcinst_alloc(0U);
                 if (m == NULL) goto oom;
                 m->opcode = RV_MC_C16;
@@ -1283,15 +1288,15 @@ static bool rv_parse_simple_mc(MiniAs *as, MiniAsStmt *stmt,
                 stmt->mcinst = m;
                 return true;
             }
-            return rv_mc_word(as, stmt, selected->simple_encoding, 0, 0, 0);
+            return rv_mc_word(ctx, stmt, selected->simple_encoding, 0, 0, 0);
         }
         if (selected->simple_kind == RV_SIMPLE_JR) {
             if (n != 1U || (rs1 = reg_number(ops[0])) < 0) goto invalid;
-            return rv_mc_word(as, stmt, selected->simple_encoding, 0, rs1, 0);
+            return rv_mc_word(ctx, stmt, selected->simple_encoding, 0, rs1, 0);
         }
         if (n != 2U || (rd = reg_number(ops[0])) < 0 ||
             (rs1 = reg_number(ops[1])) < 0) goto invalid;
-        return rv_mc_word(as, stmt, selected->simple_encoding, rd,
+        return rv_mc_word(ctx, stmt, selected->simple_encoding, rd,
                           selected->source_in_rs2 ? 0 : rs1,
                           selected->source_in_rs2 ? rs1 : 0);
     }
@@ -1330,13 +1335,13 @@ static bool rv_parse_simple_mc(MiniAs *as, MiniAsStmt *stmt,
             if(!parse_fence_set(ops[0],&pred)||
                !parse_fence_set(ops[1],&succ))goto invalid;
         }else if(n!=0U)goto invalid;
-        return rv_mc_word(as,stmt,0x0fU|((pred<<4U|succ)<<20U),0,0,0);
+        return rv_mc_word(ctx,stmt,0x0fU|((pred<<4U|succ)<<20U),0,0,0);
     }
     if(strcmp(op,"sfence.vma")==0) {
         if(n>2U ||
            (n>=1U && (rs1=reg_number(ops[0]))<0) ||
            (n==2U && (rs2=reg_number(ops[1]))<0))goto invalid;
-        return rv_mc_word(as,stmt,0x12000073U,0,rs1,rs2);
+        return rv_mc_word(ctx,stmt,0x12000073U,0,rs1,rs2);
     }
     if(strcmp(op,"jalr")==0) {
         if(n==1U){rd=1;rs1=reg_number(ops[0]);}
@@ -1349,17 +1354,17 @@ static bool rv_parse_simple_mc(MiniAs *as, MiniAsStmt *stmt,
             if(!parse_i64(ops[2],&imm))goto invalid;
         }else goto invalid;
         if(rd<0||rs1<0||imm< -2048||imm>2047)goto invalid;
-        return rv_mc_word(as,stmt,0x67U|(((uint32_t)imm&4095U)<<20U),
+        return rv_mc_word(ctx,stmt,0x67U|(((uint32_t)imm&4095U)<<20U),
                           rd,rs1,0);
     }
     policy->handled=false;
     return true;
 invalid:
-    minias_set_error(as,"bad-riscv-mcinst:%s:%s:line=%zu",
+    minias_parse_error(ctx,"bad-riscv-mcinst:%s:%s:line=%zu",
                      op,stmt->args,stmt->line);
     return false;
 oom:
-    minias_set_error(as,"out-of-memory:riscv-compressed-mcinst");
+    minias_parse_error(ctx,"out-of-memory:riscv-compressed-mcinst");
     return false;
 }
 
@@ -1367,7 +1372,7 @@ oom:
 /* GNU multiword pseudos retain one layout-sized fragment, but their
  * registers, bit-patterns and symbolic expressions are parsed only once.
  * The serializer must never re-split their original source strings. */
-static bool rv_parse_multi_mc(MiniAs *as, MiniAsStmt *stmt,
+static bool rv_parse_multi_mc(MiniAsParseContext *ctx, MiniAsStmt *stmt,
                               char ops[][128], size_t n,
                               RvParsedIsaPolicy *policy) {
     const char *op = stmt->op;
@@ -1402,7 +1407,7 @@ static bool rv_parse_multi_mc(MiniAs *as, MiniAsStmt *stmt,
     }
     m = minias_mcinst_alloc(slots);
     if (m == NULL) {
-        minias_set_error(as, "out-of-memory:riscv-multi-mcinst");
+        minias_parse_error(ctx, "out-of-memory:riscv-multi-mcinst");
         return false;
     }
     m->opcode = family;
@@ -1421,7 +1426,7 @@ static bool rv_parse_multi_mc(MiniAs *as, MiniAsStmt *stmt,
             m->target_form = strcmp(op, "la") == 0 ?
                              RV_PSEUDO_LA : RV_PSEUDO_LLA;
         }
-        if (!rv_bind_symbol_operand(as, m, symbol_index, &expr)) {
+        if (!rv_bind_symbol_operand(ctx, m, symbol_index, &expr)) {
             minias_mcinst_destroy(m);
             return false;
         }
@@ -1430,7 +1435,7 @@ static bool rv_parse_multi_mc(MiniAs *as, MiniAsStmt *stmt,
     if (family == RV_MC_LI) {
         MiniAsRiscvLiPlan *plan = malloc(sizeof(*plan));
         if (plan == NULL) {
-            minias_set_error(as, "out-of-memory:riscv-li-lowering-plan");
+            minias_parse_error(ctx, "out-of-memory:riscv-li-lowering-plan");
             stmt->mcinst = NULL;
             minias_mcinst_destroy(m);
             return false;
@@ -1440,7 +1445,7 @@ static bool rv_parse_multi_mc(MiniAs *as, MiniAsStmt *stmt,
          * a fresh assembly with separately owned MCInst objects. */
         m->target_payload = plan;
         m->dispose_target_payload = free;
-        if (!rv_materialize_li(as, stmt, plan->words, &plan->count)) {
+        if (!rv_materialize_li(ctx, stmt, plan->words, &plan->count)) {
             stmt->mcinst = NULL;
             minias_mcinst_destroy(m);
             return false;
@@ -1448,12 +1453,12 @@ static bool rv_parse_multi_mc(MiniAs *as, MiniAsStmt *stmt,
     }
     return true;
 invalid:
-    minias_set_error(as, "bad-riscv-pseudo-mcinst:%s:%s:line=%zu",
+    minias_parse_error(ctx, "bad-riscv-pseudo-mcinst:%s:%s:line=%zu",
                      op, stmt->args, stmt->line);
     return false;
 }
 
-static bool rv_parse_vector_mc(MiniAs *as, MiniAsStmt *stmt,
+static bool rv_parse_vector_mc(MiniAsParseContext *ctx, MiniAsStmt *stmt,
                                char operands[][128], size_t count,
                                RvParsedIsaPolicy *policy) {
     bool store;
@@ -1468,7 +1473,7 @@ static bool rv_parse_vector_mc(MiniAs *as, MiniAsStmt *stmt,
             (vd = vector_reg_number(operands[0])) < 0 ||
             !parse_mem(operands[1], &off, base) || off != 0 ||
             (rs1 = reg_number(base)) < 0) goto invalid;
-        return rv_mc_vector_word(as, stmt, ((count == 2U ? 1U : 0U) << 25U) |
+        return rv_mc_vector_word(ctx, stmt, ((count == 2U ? 1U : 0U) << 25U) |
                                  (width << 12U) |
                                  (store ? 0x27U : 0x07U),
                                  vd, rs1);
@@ -1478,7 +1483,7 @@ static bool rv_parse_vector_mc(MiniAs *as, MiniAsStmt *stmt,
             (vd = vector_reg_number(operands[0])) < 0 ||
             !parse_i64(operands[1], &off) || off < -16 || off > 15)
             goto invalid;
-        return rv_mc_vector_word(as, stmt, (0x17U << 26U) | (1U << 25U) |
+        return rv_mc_vector_word(ctx, stmt, (0x17U << 26U) | (1U << 25U) |
                                  (((uint32_t)off & 31U) << 15U) |
                                  (3U << 12U) | 0x57U, vd, 0);
     }
@@ -1488,7 +1493,7 @@ static bool rv_parse_vector_mc(MiniAs *as, MiniAsStmt *stmt,
             (vd = reg_number(operands[0])) < 0 ||
             (rs1 = reg_number(operands[1])) < 0 ||
             !parse_vsetvli_vtype(operands, count, &vtype)) goto invalid;
-        return rv_mc_word(as, stmt,
+        return rv_mc_word(ctx, stmt,
                           (vtype << 20U) | (7U << 12U) | 0x57U,
                           vd, rs1, 0);
     }
@@ -1496,18 +1501,18 @@ static bool rv_parse_vector_mc(MiniAs *as, MiniAsStmt *stmt,
         if (count != 3U || (vd = reg_number(operands[0])) < 0 ||
             (rs1 = reg_number(operands[1])) < 0 ||
             (rs2 = reg_number(operands[2])) < 0) goto invalid;
-        return rv_mc_word(as, stmt, (0x40U << 25U) | (7U << 12U) | 0x57U,
+        return rv_mc_word(ctx, stmt, (0x40U << 25U) | (7U << 12U) | 0x57U,
                           vd, rs1, rs2);
     }
     policy->handled = false;
     return true;
 invalid:
-    minias_set_error(as, "bad-vector-mcinst:%s:%s:line=%zu",
+    minias_parse_error(ctx, "bad-vector-mcinst:%s:%s:line=%zu",
                      stmt->op, stmt->args, stmt->line);
     return false;
 }
 
-static bool rv_parse_atomic_mc(MiniAs *as, MiniAsStmt *stmt,
+static bool rv_parse_atomic_mc(MiniAsParseContext *ctx, MiniAsStmt *stmt,
                                char operands[][128], size_t count,
                                RvParsedIsaPolicy *policy) {
     bool lr = false, recognized;
@@ -1534,10 +1539,10 @@ static bool rv_parse_atomic_mc(MiniAs *as, MiniAsStmt *stmt,
             !parse_mem(operands[2], &off, base) ||
             off != 0 || (rs1 = reg_number(base)) < 0) goto invalid;
     }
-    return rv_mc_word(as, stmt, 0x2fU | (width << 12U) | ordering |
+    return rv_mc_word(ctx, stmt, 0x2fU | (width << 12U) | ordering |
                       (funct5 << 27U), rd, rs1, rs2);
 invalid:
-    minias_set_error(as, "bad-atomic-mcinst:%s:%s:line=%zu",
+    minias_parse_error(ctx, "bad-atomic-mcinst:%s:%s:line=%zu",
                      stmt->op, stmt->args, stmt->line);
     return false;
 }
@@ -1573,7 +1578,7 @@ static const RvCsrDesc *rv_find_csr_form(const char *name) {
     return NULL;
 }
 
-static bool rv_parse_csr_mc(MiniAs *as, MiniAsStmt *stmt,
+static bool rv_parse_csr_mc(MiniAsParseContext *ctx, MiniAsStmt *stmt,
                             char operands[][128], size_t count,
                             RvParsedIsaPolicy *policy) {
     const RvCsrDesc *form = rv_find_csr_form(stmt->op);
@@ -1607,24 +1612,24 @@ static bool rv_parse_csr_mc(MiniAs *as, MiniAsStmt *stmt,
             rs1 = (int)zimm;
         } else if ((rs1 = reg_number(source)) < 0) goto invalid;
     }
-    if (!rv_mc_word(as, stmt, 0x73U | (funct3 << 12U) |
+    if (!rv_mc_word(ctx, stmt, 0x73U | (funct3 << 12U) |
                     (csr << 20U), rd, rs1, 0)) return false;
     /* zimm occupies the same five instruction bits as rs1, but it is NOT
      * an integer register and must not trip RV32E's x16..x31 restriction. */
     if (immediate) rv_set_imm(&stmt->mcinst->operands[1], rs1);
     return true;
 invalid:
-    minias_set_error(as, "bad-csr-mcinst:%s:%s:line=%zu",
+    minias_parse_error(ctx, "bad-csr-mcinst:%s:%s:line=%zu",
                      stmt->op, stmt->args, stmt->line);
     return false;
 }
 
 
-static bool rv_mc_fp_word(MiniAs *as, MiniAsStmt *stmt,
+static bool rv_mc_fp_word(MiniAsParseContext *ctx, MiniAsStmt *stmt,
                           uint32_t base, int rd, int rs1, int rs2,
                           unsigned fpr_mask) {
     unsigned i;
-    if (!rv_mc_word(as, stmt, base, rd, rs1, rs2)) return false;
+    if (!rv_mc_word(ctx, stmt, base, rd, rs1, rs2)) return false;
     for (i = 0U; i < 3U; ++i)
         if ((fpr_mask & (1U << i)) != 0U)
             stmt->mcinst->operands[i].reg_class = MINIAS_MC_REG_FPR;
@@ -1744,7 +1749,7 @@ static const RvFpDesc *rv_find_fp_form(const char *op) {
     return NULL;
 }
 
-static bool rv_parse_fp_mc(MiniAs *as, MiniAsStmt *stmt,
+static bool rv_parse_fp_mc(MiniAsParseContext *ctx, MiniAsStmt *stmt,
                             char operands[][128], size_t count,
                             RvParsedIsaPolicy *policy) {
     const RvFpDesc *form = rv_find_fp_form(stmt->op);
@@ -1776,7 +1781,7 @@ static bool rv_parse_fp_mc(MiniAs *as, MiniAsStmt *stmt,
             goto invalid;
         m = minias_mcinst_alloc(4U);
         if (m == NULL) {
-            minias_set_error(as, "out-of-memory:riscv-fp-fused");
+            minias_parse_error(ctx, "out-of-memory:riscv-fp-fused");
             return false;
         }
         m->opcode = RV_MC_WORD;
@@ -1805,7 +1810,7 @@ static bool rv_parse_fp_mc(MiniAs *as, MiniAsStmt *stmt,
         if (rs1 < 0 || offset < -2048 || offset > 2047) goto invalid;
         m=minias_mcinst_alloc(3U);
         if (m==NULL) {
-            minias_set_error(as,"out-of-memory:riscv-fp-memory");
+            minias_parse_error(ctx,"out-of-memory:riscv-fp-memory");
             return false;
         }
         m->opcode=form->kind == RV_FP_STORE ? RV_MC_STORE : RV_MC_LOAD;
@@ -1817,7 +1822,7 @@ static bool rv_parse_fp_mc(MiniAs *as, MiniAsStmt *stmt,
         if (absolute_lo) {
             m->target_form = form->kind == RV_FP_STORE ?
                              RV_ABS_RELOC_LO12_S : RV_ABS_RELOC_LO12_I;
-            if (!rv_bind_symbol_operand(as, m, 2U, &absolute_expr)) {
+            if (!rv_bind_symbol_operand(ctx, m, 2U, &absolute_expr)) {
                 minias_mcinst_destroy(m);
                 return false;
             }
@@ -1852,7 +1857,7 @@ static bool rv_parse_fp_mc(MiniAs *as, MiniAsStmt *stmt,
             goto invalid;
         if (form->kind == RV_FP_CONVERT) base |= rm << 12U;
     } else {
-        minias_set_error(as, "internal:unhandled-riscv-fp-descriptor");
+        minias_parse_error(ctx, "internal:unhandled-riscv-fp-descriptor");
         return false;
     }
 
@@ -1862,9 +1867,9 @@ static bool rv_parse_fp_mc(MiniAs *as, MiniAsStmt *stmt,
         rs1=rs2;
         rs2=reversed;
     }
-    return rv_mc_fp_word(as,stmt,base,rd,rs1,rs2,form->fpr_mask);
+    return rv_mc_fp_word(ctx,stmt,base,rd,rs1,rs2,form->fpr_mask);
 invalid:
-    minias_set_error(as,"bad-fp-mcinst:%s:%s:line=%zu",
+    minias_parse_error(ctx,"bad-fp-mcinst:%s:%s:line=%zu",
                      stmt->op,stmt->args,stmt->line);
     return false;
 }
@@ -1960,7 +1965,7 @@ static const RvParseForm *rv_find_parse_form(const char *op) {
     return NULL;
 }
 
-static bool rv_parse_mcinst_impl(MiniAs *as, MiniAsStmt *stmt,
+static bool rv_parse_mcinst_impl(MiniAsParseContext *ctx, MiniAsStmt *stmt,
                                   RvParsedIsaPolicy *policy) {
     const RvMCDesc *desc;
     char operands[8][128];
@@ -1982,7 +1987,7 @@ static bool rv_parse_mcinst_impl(MiniAs *as, MiniAsStmt *stmt,
         const RvParseForm *form = rv_find_parse_form(op);
         bool accepted;
         if (form == NULL) {
-            minias_set_error(as, "unsupported-instruction:%s:line=%zu",
+            minias_parse_error(ctx, "unsupported-instruction:%s:line=%zu",
                              op, stmt->line);
             return false;
         }
@@ -1991,14 +1996,14 @@ static bool rv_parse_mcinst_impl(MiniAs *as, MiniAsStmt *stmt,
         policy->required_features = form->required_features;
         policy->rv64_only = form->rv64_only;
         policy->selected_form = form;
-        accepted = form->parse(as, stmt, operands, count, policy);
+        accepted = form->parse(ctx, stmt, operands, count, policy);
         if (!accepted) return false;
         if (!policy->handled) {
-            minias_set_error(as, "unsupported-instruction:%s:line=%zu",
+            minias_parse_error(ctx, "unsupported-instruction:%s:line=%zu",
                              op, stmt->line);
             return false;
         }
-        return as->error[0] == '\0';
+        return !minias_parse_has_error(ctx);
     }
     family = desc->family;
     encoding = desc->base;
@@ -2017,7 +2022,7 @@ static bool rv_parse_mcinst_impl(MiniAs *as, MiniAsStmt *stmt,
              * RV64.  Its XLEN is selected by the immutable Target profile,
              * not inferred from the mnemonic or the host word size. */
             if ((form_flags & RV_FORM_REV8_XLEN)!=0U &&
-                MINIAS_RV_STATE(as)->target_xlen == 32U)
+                rv_parse_state(ctx)->target_xlen == 32U)
                 encoding = UINT32_C(0x69805013);
             imm = (int64_t)((encoding >> 20U) & 0xfffU);
             family = RV_MC_I;
@@ -2057,7 +2062,7 @@ static bool rv_parse_mcinst_impl(MiniAs *as, MiniAsStmt *stmt,
             bool shift=(form_flags & RV_FORM_SHIFT_IMMEDIATE)!=0U;
             if (shift) {
                 int max = ((encoding & 0x7fU) == 0x1bU ||
-                           MINIAS_RV_STATE(as)->target_xlen == 32U) ? 31 : 63;
+                           rv_parse_state(ctx)->target_xlen == 32U) ? 31 : 63;
                 if (imm < 0 || imm > max) goto invalid;
             } else if ((form_flags & RV_FORM_FIXED_IMMEDIATE)==0U &&
                        (imm < -2048 || imm > 2047)) goto invalid;
@@ -2104,7 +2109,7 @@ static bool rv_parse_mcinst_impl(MiniAs *as, MiniAsStmt *stmt,
             inst->count = slots;
             rv_set_reg(&inst->operands[0], rd);
             rv_set_reg(&inst->operands[1], rs1);
-            if (!rv_bind_symbol_operand(as, inst, 2U, &expr)) {
+            if (!rv_bind_symbol_operand(ctx, inst, 2U, &expr)) {
                 minias_mcinst_destroy(inst);
                 return false;
             }
@@ -2152,7 +2157,7 @@ static bool rv_parse_mcinst_impl(MiniAs *as, MiniAsStmt *stmt,
             inst->opcode=family; inst->encoding=encoding; inst->count=slots;
             rv_set_reg(&inst->operands[0],rs1);
             rv_set_reg(&inst->operands[1],rs2);
-            if (!rv_bind_symbol_operand(as, inst, 2U, &parsed)) {
+            if (!rv_bind_symbol_operand(ctx, inst, 2U, &parsed)) {
                 minias_mcinst_destroy(inst);
                 return false;
             }
@@ -2178,7 +2183,7 @@ static bool rv_parse_mcinst_impl(MiniAs *as, MiniAsStmt *stmt,
             if(inst==NULL) goto oom;
             inst->opcode=family; inst->encoding=encoding; inst->count=slots;
             rv_set_reg(&inst->operands[0],rd);
-            if (!rv_bind_symbol_operand(as, inst, 1U, &parsed)) {
+            if (!rv_bind_symbol_operand(ctx, inst, 1U, &parsed)) {
                 minias_mcinst_destroy(inst);
                 return false;
             }
@@ -2186,7 +2191,7 @@ static bool rv_parse_mcinst_impl(MiniAs *as, MiniAsStmt *stmt,
         }
         return true;
     } else {
-        minias_set_error(as, "internal:riscv-unhandled-descriptor-family:%u",
+        minias_parse_error(ctx, "internal:riscv-unhandled-descriptor-family:%u",
                          family);
         return false;
     }
@@ -2202,7 +2207,7 @@ static bool rv_parse_mcinst_impl(MiniAs *as, MiniAsStmt *stmt,
         rv_set_reg(&inst->operands[1],rs1);
         if (absolute_reloc == RV_ABS_RELOC_LO12_I) {
             inst->target_form = absolute_reloc;
-            if (!rv_bind_symbol_operand(as, inst, 2U, &absolute_expr)) {
+            if (!rv_bind_symbol_operand(ctx, inst, 2U, &absolute_expr)) {
                 minias_mcinst_destroy(inst);
                 return false;
             }
@@ -2211,14 +2216,14 @@ static bool rv_parse_mcinst_impl(MiniAs *as, MiniAsStmt *stmt,
         rv_set_reg(&inst->operands[1],rs1);
         if (absolute_reloc != RV_ABS_RELOC_NONE) {
             inst->target_form = absolute_reloc;
-            if (!rv_bind_symbol_operand(as, inst, 2U, &absolute_expr)) {
+            if (!rv_bind_symbol_operand(ctx, inst, 2U, &absolute_expr)) {
                 minias_mcinst_destroy(inst);
                 return false;
             }
         } else rv_set_imm(&inst->operands[2],imm);
     } else if (absolute_reloc == RV_ABS_RELOC_HI20) {
         inst->target_form = absolute_reloc;
-        if (!rv_bind_symbol_operand(as, inst, 1U, &absolute_expr)) {
+        if (!rv_bind_symbol_operand(ctx, inst, 1U, &absolute_expr)) {
             minias_mcinst_destroy(inst);
             return false;
         }
@@ -2226,11 +2231,11 @@ static bool rv_parse_mcinst_impl(MiniAs *as, MiniAsStmt *stmt,
     stmt->mcinst=inst;
     return true;
 invalid:
-    minias_set_error(as,"invalid-riscv-mcinst:%s:%s:line=%zu",
+    minias_parse_error(ctx,"invalid-riscv-mcinst:%s:%s:line=%zu",
                      op,stmt->args,stmt->line);
     return false;
 oom:
-    minias_set_error(as,"out-of-memory:riscv-mcinst");
+    minias_parse_error(ctx,"out-of-memory:riscv-mcinst");
     return false;
 }
 
@@ -2240,19 +2245,19 @@ oom:
  * Check those typed operands after parsing, never a lexical sweep over the
  * original assembly text. The Target's ABI snapshot also covers
  * -mabi=ilp32e without an explicit -march. */
-bool minias_riscv_parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
-    const MiniAsRiscvState *state = MINIAS_RV_STATE(as);
+bool minias_riscv_parse_mcinst(MiniAsParseContext *ctx, MiniAsStmt *stmt) {
+    const MiniAsRiscvState *state = rv_parse_state(ctx);
     RvParsedIsaPolicy policy={0};
     const MiniAsMCInst *inst;
     size_t index;
 
-    if (!rv_parse_mcinst_impl(as, stmt, &policy)) return false;
+    if (!rv_parse_mcinst_impl(ctx, stmt, &policy)) return false;
     inst = stmt->mcinst;
     if (inst == NULL) {
-        minias_set_error(as, "internal:riscv-parse-form-without-mcinst");
+        minias_parse_error(ctx, "internal:riscv-parse-form-without-mcinst");
         return false;
     }
-    if (!minias_riscv_validate_parsed_isa(as, stmt,
+    if (!minias_riscv_validate_parsed_isa(ctx, stmt,
                                           policy.required_features,
                                           policy.rv64_only)) return false;
     if (state == NULL ||
@@ -2262,7 +2267,7 @@ bool minias_riscv_parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         const MiniAsMCOperand *operand = &inst->operands[index];
         if (operand->kind == MINIAS_MC_REGISTER &&
             operand->reg_class == MINIAS_MC_REG_GPR && operand->reg >= 16U) {
-            minias_set_error(as, "riscv32e-invalid-register:%s:line=%zu",
+            minias_parse_error(ctx, "riscv32e-invalid-register:%s:line=%zu",
                              stmt->op, stmt->line);
             return false;
         }

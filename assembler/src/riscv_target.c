@@ -239,10 +239,10 @@ static bool strict_base_i_check_sections(const MiniAsPostEmitView *view,
  * validate_instruction hook must not re-parse the opcode as a second source
  * of truth. Strict base-I retains its independent post-encoding raw-word
  * validator, so no .insn/pseudo/relocation placeholder bypass is possible. */
-bool minias_riscv_validate_parsed_isa(MiniAs *as, const MiniAsStmt *stmt,
+bool minias_riscv_validate_parsed_isa(MiniAsParseContext *ctx, const MiniAsStmt *stmt,
                                       uint64_t required_features,
                                       bool rv64_only) {
-    const MiniAsRiscvState *state=MINIAS_RV_STATE(as);
+    const MiniAsRiscvState *state=minias_parse_target_state(ctx);
     const char *op=stmt->op;
     /* `.option norvc` is an instruction-site state even in the historical
      * implicit ISA mode. Do not bury the C opcode gate behind explicit
@@ -250,7 +250,7 @@ bool minias_riscv_validate_parsed_isa(MiniAs *as, const MiniAsStmt *stmt,
     if (required_features != UINT64_MAX &&
         ((stmt->site.mode_bits & MINIAS_RISCV_OPTION_NO_RVC) != 0U) &&
         (required_features & RISCV_ISA_C)) {
-        minias_set_error(as,"disabled-riscv-compressed:%s:line=%zu",
+        minias_parse_error(ctx,"disabled-riscv-compressed:%s:line=%zu",
                          op,stmt->line);
         return false;
     }
@@ -263,12 +263,12 @@ bool minias_riscv_validate_parsed_isa(MiniAs *as, const MiniAsStmt *stmt,
     if (state->isa_explicit &&
         required_features != UINT64_MAX && required_features != 0U &&
         (state->isa_features & required_features) != required_features) {
-        minias_set_error(as,"unsupported-isa-feature:%s:line=%zu",
+        minias_parse_error(ctx,"unsupported-isa-feature:%s:line=%zu",
                          op,stmt->line);
         return false;
     }
     if (state->target_xlen == 32U && rv64_only) {
-        minias_set_error(as,"riscv32-unsupported-opcode:%s:line=%zu",
+        minias_parse_error(ctx,"riscv32-unsupported-opcode:%s:line=%zu",
                          op,stmt->line);
         return false;
     }

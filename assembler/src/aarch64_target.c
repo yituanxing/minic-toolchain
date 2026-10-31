@@ -92,6 +92,13 @@ static uint32_t a64_features(const MiniAs *as) {
     return st?st->features:0U;
 }
 
+/* Instruction parsing borrows only the Target profile; the broad MiniAs
+ * owner remains confined to directive and later encode/finalize phases. */
+static uint32_t a64_parse_features(const MiniAsParseContext *ctx) {
+    const A64TargetState *state=minias_parse_target_state(ctx);
+    return state?state->features:0U;
+}
+
 static bool a64_init_target_state(MiniAs *as,
                                   const MiniAsAssemblyConfig *config) {
     A64TargetState *st;
@@ -713,7 +720,7 @@ typedef struct A64Memory {
     unsigned post_register;
 } A64Memory;
 
-static bool a64_parse_address_offset(MiniAs *as,const char *source,
+static bool a64_parse_address_offset(MiniAsParseContext *ctx,const char *source,
                                       A64OffsetExpr *result) {
     MiniAsSymbolDifference difference;
     int64_t value;
@@ -725,13 +732,13 @@ static bool a64_parse_address_offset(MiniAs *as,const char *source,
      * .space/.fill is finalized.  A syntactic label difference MUST bind as
      * a deferred pair even if the absolute evaluator currently succeeds;
      * otherwise forward layout turns a valid #8 into a frozen #0. */
-    if(minias_parse_symbol_difference_absolute_tail(as,source,&difference)) {
-        if(!minias_bind_symbol_difference_ref(as,&difference,
+    if(minias_parse_eval_symbol_difference_absolute_tail(ctx,source,&difference)) {
+        if(!minias_parse_bind_symbol_difference_ref(ctx,&difference,
                                                &result->difference))return false;
         result->kind=A64_OFFSET_DIFFERENCE;
         return true;
     }
-    if(!minias_evaluate_absolute_operand(as,source,&value))return false;
+    if(!minias_parse_evaluate_absolute_operand(ctx,source,&value))return false;
     result->kind=A64_OFFSET_CONSTANT;
     result->constant=value;
     return true;
@@ -749,11 +756,11 @@ static bool a64_resolve_address_offset(MiniAs *as,const A64Memory *memory,
     return false;
 }
 
-static bool a64_attach_memory(MiniAs *as,MiniAsMCInst *inst,unsigned slot,
+static bool a64_attach_memory(MiniAsParseContext *ctx,MiniAsMCInst *inst,unsigned slot,
                               const A64Memory *parsed) {
     A64Memory *owned=malloc(sizeof(*owned));
     if(!owned) {
-        minias_set_error(as,"out-of-memory:aarch64-memory-operand");
+        minias_parse_error(ctx,"out-of-memory:aarch64-memory-operand");
         return false;
     }
     *owned=*parsed;
@@ -763,15 +770,15 @@ static bool a64_attach_memory(MiniAs *as,MiniAsMCInst *inst,unsigned slot,
     return true;
 }
 
-static bool a64_attach_difference(MiniAs *as,MiniAsMCInst *inst,
+static bool a64_attach_difference(MiniAsParseContext *ctx,MiniAsMCInst *inst,
                                   unsigned slot,
                                   const MiniAsSymbolDifference *difference) {
     MiniAsSymbolDifferenceRef *owned=malloc(sizeof(*owned));
     if(!owned) {
-        minias_set_error(as,"out-of-memory:aarch64-difference-operand");
+        minias_parse_error(ctx,"out-of-memory:aarch64-difference-operand");
         return false;
     }
-    if(!minias_bind_symbol_difference_ref(as,difference,owned)) {
+    if(!minias_parse_bind_symbol_difference_ref(ctx,difference,owned)) {
         free(owned);return false;
     }
     inst->operands[slot].kind=MINIAS_MC_BOUND_SYMBOL_DIFFERENCE;
@@ -837,7 +844,7 @@ static bool a64_memory_components(const A64AliasState *aliases,const char *text,
 /* Bracket and post-index spelling is decoded once, before the consumer
  * selects an ISA transfer form. An ABS .set is frozen at this lexical site;
  * a forward same-section difference instead survives until final layout. */
-static bool a64_parse_memory(MiniAs *as,const A64AliasState *aliases,
+static bool a64_parse_memory(MiniAsParseContext *ctx,const A64AliasState *aliases,
                              const char *bracket,const char *post,
                              A64Memory *memory) {
     char displacement[96];
@@ -856,10 +863,10 @@ static bool a64_parse_memory(MiniAs *as,const A64AliasState *aliases,
             memory->post_register=postreg;
             return true;
         }
-        return a64_parse_address_offset(as,post,&memory->offset);
+        return a64_parse_address_offset(ctx,post,&memory->offset);
     }
     return !*displacement ||
-           a64_parse_address_offset(as,displacement,&memory->offset);
+           a64_parse_address_offset(ctx,displacement,&memory->offset);
 }
 
 static bool a64_is_plain_base(const A64Memory *memory) {
@@ -873,7 +880,7 @@ static bool a64_is_plain_base(const A64Memory *memory) {
  * register of each consecutive even pair; validate both members here.
  * Reuse the EXISTING four-operand A64 tokenizer after isolating [Rn].
  */
-static bool a64_casp_fields(MiniAs *as,const A64AliasState *aliases,const char *args,unsigned *rs,unsigned *rt,
+static bool a64_casp_fields(MiniAsParseContext *ctx,const A64AliasState *aliases,const char *args,unsigned *rs,unsigned *rt,
                              A64Memory *memory,bool *wide) {
     char buffer[384],tokens[4][384],*last;
     unsigned n,r1,r3;
@@ -893,7 +900,7 @@ static bool a64_casp_fields(MiniAs *as,const A64AliasState *aliases,const char *
        (*rs&1U) || (*rt&1U) ||
        *rs>=30U || *rt>=30U ||
        r1!=*rs+1U || r3!=*rt+1U ||
-       !a64_parse_memory(as,aliases,last,NULL,memory) ||
+       !a64_parse_memory(ctx,aliases,last,NULL,memory) ||
        !a64_is_plain_base(memory))return false;
     *wide=w0;return true;
 }
@@ -1248,7 +1255,7 @@ static bool a64_encode_deferred_scalar_memory(const MiniAsMCInst *inst,
     return false;
 }
 
-static bool a64_parse_scalar_memory(MiniAs *as,const A64AliasState *aliases,MiniAsMCInst *inst,const char *op,
+static bool a64_parse_scalar_memory(MiniAsParseContext *ctx,const A64AliasState *aliases,MiniAsMCInst *inst,const char *op,
                                    char t[4][384],unsigned n) {
     unsigned policy,rd,unit;
     bool wide,sp;
@@ -1270,9 +1277,9 @@ static bool a64_parse_scalar_memory(MiniAs *as,const A64AliasState *aliases,Mini
         inst->opcode=A64_MC_LDST_INDEX;inst->count=2U;
         inst->encoding=base_opcode;
         put_reg(&inst->operands[0],rd,wide);
-        return a64_attach_memory(as,inst,1U,&memory);
+        return a64_attach_memory(ctx,inst,1U,&memory);
     }
-    if(!a64_parse_memory(as,aliases,t[1],n==3U?t[2]:NULL,
+    if(!a64_parse_memory(ctx,aliases,t[1],n==3U?t[2]:NULL,
                          &memory))return false;
     memory.access_bytes=unit;
     if(memory.post_index_register)return false;
@@ -1302,12 +1309,12 @@ static bool a64_parse_scalar_memory(MiniAs *as,const A64AliasState *aliases,Mini
         }
     }
     put_reg(&inst->operands[0],rd,wide);
-    return a64_attach_memory(as,inst,1U,&memory);
+    return a64_attach_memory(ctx,inst,1U,&memory);
 }
 
 /* Parsed target-owned instruction family. Complete AArch64 still requires
  * ADRP/GOT, conditional branches, shifts, and relocation fixup bitfields. */
-static bool parse_integer_family(MiniAs *as,const A64AliasState *aliases,MiniAsMCInst *inst,
+static bool parse_integer_family(MiniAsParseContext *ctx,const A64AliasState *aliases,MiniAsMCInst *inst,
                                  const char *op, const char *args) {
     char t[4][384];
     unsigned n = 0U, rd, rn, rm;
@@ -1478,7 +1485,7 @@ static bool parse_integer_family(MiniAs *as,const A64AliasState *aliases,MiniAsM
         static const uint32_t offsets[]={0U,UINT32_C(0x7000),
              UINT32_C(0xa000),UINT32_C(0x6000),UINT32_C(0x2000)};
         if(!a64_structure_vlist(aliases,t[0],&rd,&arrangement,&vector_count) ||
-           !a64_parse_memory(as,aliases,t[1],n==3U?t[2]:NULL,&memory) ||
+           !a64_parse_memory(ctx,aliases,t[1],n==3U?t[2]:NULL,&memory) ||
            (n==2U?!a64_is_plain_base(&memory):
              memory.mode!=A64_ADDRESS_POST_INDEX))return false;
         memory.access_bytes=vector_count*
@@ -1492,7 +1499,7 @@ static bool parse_integer_family(MiniAs *as,const A64AliasState *aliases,MiniAsM
                        (!strcmp(op,"ld1")?UINT32_C(0x0c400000):
                                           UINT32_C(0x0c000000));
         put_vector(&inst->operands[0],rd);
-        return a64_attach_memory(as,inst,1U,&memory);
+        return a64_attach_memory(ctx,inst,1U,&memory);
     }
     /* Common GNU Linux bit/byte-swap and acquire/release families.
      * All operands are typed once; no instruction-name checks in encode. */
@@ -1501,7 +1508,7 @@ static bool parse_integer_family(MiniAs *as,const A64AliasState *aliases,MiniAsM
          !strcmp(op,"ldxrh") || !strcmp(op,"ldaxrh")) && n==2U) {
         A64Memory memory;
         if(!parse_a64_reg(aliases,t[0],&rd,&wd,&spd) || spd ||
-           !a64_parse_memory(as,aliases,t[1],NULL,&memory) ||
+           !a64_parse_memory(ctx,aliases,t[1],NULL,&memory) ||
            !a64_is_plain_base(&memory))return false;
         if((strchr(op,'b') || strchr(op,'h')) && wd)return false;
         inst->opcode=A64_MC_EXCLUSIVE;inst->count=2U;
@@ -1511,7 +1518,7 @@ static bool parse_integer_family(MiniAs *as,const A64AliasState *aliases,MiniAsM
         put_reg(&inst->operands[0],rd,wd);
         memory.access_bytes=op[strlen(op)-1U]=='b'?1U:
                             op[strlen(op)-1U]=='h'?2U:wd?8U:4U;
-        return a64_attach_memory(as,inst,1U,&memory);
+        return a64_attach_memory(ctx,inst,1U,&memory);
     }
     if ((!strcmp(op,"stxr") || !strcmp(op,"stlxr") ||
          !strcmp(op,"stxrb") || !strcmp(op,"stlxrb") ||
@@ -1519,7 +1526,7 @@ static bool parse_integer_family(MiniAs *as,const A64AliasState *aliases,MiniAsM
         A64Memory memory;
         if(!parse_a64_reg(aliases,t[0],&rd,&wd,&spd) || wd || spd ||
            !parse_a64_reg(aliases,t[1],&rn,&wn,&spn) || spn ||
-           !a64_parse_memory(as,aliases,t[2],NULL,&memory) ||
+           !a64_parse_memory(ctx,aliases,t[2],NULL,&memory) ||
            !a64_is_plain_base(&memory))return false;
         if((op[strlen(op)-1U]=='b' || op[strlen(op)-1U]=='h') && wn)
             return false;
@@ -1531,7 +1538,7 @@ static bool parse_integer_family(MiniAs *as,const A64AliasState *aliases,MiniAsM
         put_reg(&inst->operands[1],rn,wn);
         memory.access_bytes=op[strlen(op)-1U]=='b'?1U:
                             op[strlen(op)-1U]=='h'?2U:wn?8U:4U;
-        return a64_attach_memory(as,inst,2U,&memory);
+        return a64_attach_memory(ctx,inst,2U,&memory);
     }
     if(!strcmp(op,"prfm") && n==2U) {
         unsigned hint=0U,unit=0U;
@@ -1566,9 +1573,9 @@ static bool parse_integer_family(MiniAs *as,const A64AliasState *aliases,MiniAsM
             inst->opcode=A64_MC_PRFM_REG;inst->count=2U;
             inst->encoding=UINT32_C(0xf9800000);
             put_immediate(&inst->operands[0],(int64_t)hint);
-            return a64_attach_memory(as,inst,1U,&memory);
+            return a64_attach_memory(ctx,inst,1U,&memory);
         }
-        if(!a64_parse_memory(as,aliases,t[1],NULL,&memory) ||
+        if(!a64_parse_memory(ctx,aliases,t[1],NULL,&memory) ||
            memory.mode!=A64_ADDRESS_OFFSET ||
            (memory.offset.kind==A64_OFFSET_CONSTANT &&
             (memory.offset.constant<0 || memory.offset.constant%8!=0 ||
@@ -1577,7 +1584,7 @@ static bool parse_integer_family(MiniAs *as,const A64AliasState *aliases,MiniAsM
         memory.access_bytes=8U;
         inst->opcode=A64_MC_PRFM;inst->count=2U;
         put_immediate(&inst->operands[0],(int64_t)hint);
-        return a64_attach_memory(as,inst,1U,&memory);
+        return a64_attach_memory(ctx,inst,1U,&memory);
     }
     /* Short sign/zero extensions lower to the existing typed SBFM/UBFM
      * encoder; GNU's UXT{B,H} always writes Wd (zeroing upper X bits). */
@@ -1638,10 +1645,10 @@ static bool parse_integer_family(MiniAs *as,const A64AliasState *aliases,MiniAsM
         bool rcpc=!strncmp(op,"ldapr",5U);
         bool byte=rcpc?op[5]=='b':op[4]=='b';
         bool half=rcpc?op[5]=='h':op[4]=='h';
-        if(rcpc && (a64_features(as)&A64_FEATURE_RCPC)==0U)return false;
+        if(rcpc && (a64_parse_features(ctx)&A64_FEATURE_RCPC)==0U)return false;
         if(!parse_a64_reg(aliases,t[0],&rd,&wd,&spd) || spd ||
            ((byte || half) && wd) ||
-           !a64_parse_memory(as,aliases,t[1],NULL,&memory) ||
+           !a64_parse_memory(ctx,aliases,t[1],NULL,&memory) ||
            !a64_is_plain_base(&memory))return false;
         inst->opcode=A64_MC_ACQUIRE_RELEASE;inst->count=2U;
         inst->encoding=rcpc?(byte?7U:half?8U:6U):
@@ -1649,7 +1656,7 @@ static bool parse_integer_family(MiniAs *as,const A64AliasState *aliases,MiniAsM
                        half?(load?3U:5U):(load?1U:0U);
         put_reg(&inst->operands[0],rd,wd);
         memory.access_bytes=byte?1U:half?2U:wd?8U:4U;
-        return a64_attach_memory(as,inst,1U,&memory);
+        return a64_attach_memory(ctx,inst,1U,&memory);
     }
     if(!strcmp(op,"tst") && n==2U) {
         uint64_t bits;uint32_t fields;
@@ -1727,13 +1734,13 @@ static bool parse_integer_family(MiniAs *as,const A64AliasState *aliases,MiniAsM
             if((rd==31U&&!spd) || (rn==31U&&!spn) ||
                (numeric?(imm<0 || (imm>4095 &&
                   (imm%4096!=0 || imm/4096>4095))):
-                !minias_parse_symbol_difference_absolute_tail(as,t[2][0]=='#'?t[2]+1U:t[2],
+                !minias_parse_eval_symbol_difference_absolute_tail(ctx,t[2][0]=='#'?t[2]+1U:t[2],
                                                &difference)))return false;
             kind = strcmp(op, "add") == 0 ? A64_MC_ADD_IMM :
                    strcmp(op, "sub") == 0 ? A64_MC_SUB_IMM :
                    strcmp(op, "adds") == 0 ? A64_MC_ADDS_IMM : A64_MC_SUBS_IMM;
             if(numeric)put_immediate(&inst->operands[2],imm);
-            else if(!a64_attach_difference(as,inst,2U,&difference))return false;
+            else if(!a64_attach_difference(ctx,inst,2U,&difference))return false;
         } else if((!strcmp(op,"and") || !strcmp(op,"orr") ||
                    !strcmp(op,"eor") || !strcmp(op,"ands") ||
                    !strcmp(op,"bic")) &&
@@ -1772,7 +1779,7 @@ static bool parse_integer_family(MiniAs *as,const A64AliasState *aliases,MiniAsM
             MiniAsSymbolDifference difference;
             bool numeric=parse_signed_number(t[1],&imm);
             bool deferred=!numeric &&
-                minias_parse_symbol_difference_absolute_tail(as,t[1][0]=='#'?t[1]+1U:t[1],
+                minias_parse_eval_symbol_difference_absolute_tail(ctx,t[1][0]=='#'?t[1]+1U:t[1],
                                                &difference);
             if((!numeric && !deferred) ||
                (numeric && (imm==INT64_MIN ||
@@ -1788,7 +1795,7 @@ static bool parse_integer_family(MiniAs *as,const A64AliasState *aliases,MiniAsM
             kind=negate?A64_MC_CMN_IMM:
                  !strcmp(op,"cmp")?A64_MC_CMP_IMM:A64_MC_CMN_IMM;
             if(numeric)put_immediate(&inst->operands[1],negate?-imm:imm);
-            else if(!a64_attach_difference(as,inst,1U,&difference))return false;
+            else if(!a64_attach_difference(ctx,inst,1U,&difference))return false;
         }
         inst->opcode = kind;
         inst->count = 2U;
@@ -1800,7 +1807,7 @@ static bool parse_integer_family(MiniAs *as,const A64AliasState *aliases,MiniAsM
      * unsigned scaled, pre/post-index, explicitly unscaled and unprivileged
      * encodings. GNU distinguishes the addressing policy, not the core
      * register/width grammar; this keeps all forms in sync. */
-    if(a64_parse_scalar_memory(as,aliases,inst,op,t,n))return true;
+    if(a64_parse_scalar_memory(ctx,aliases,inst,op,t,n))return true;
     if ((!strcmp(op, "stp") || !strcmp(op, "ldp") ||
          !strcmp(op,"ldpsw") || !strcmp(op,"stnp") ||
          !strcmp(op,"ldnp")) && (n == 3U || n == 4U)) {
@@ -1820,7 +1827,7 @@ static bool parse_integer_family(MiniAs *as,const A64AliasState *aliases,MiniAsM
         } else if(!parse_a64_reg(aliases,t[0], &rd, &wd, &spd) || spd ||
                   !parse_a64_reg(aliases,t[1], &rn, &wn, &spn) ||
                   spn || wd!=wn)return false;
-        if(!a64_parse_memory(as,aliases,t[2],n==4U?t[3]:NULL,
+        if(!a64_parse_memory(ctx,aliases,t[2],n==4U?t[3]:NULL,
                              &memory) || memory.post_index_register)
             return false;
         if(signed_pair && !wd)return false;
@@ -1851,7 +1858,7 @@ static bool parse_integer_family(MiniAs *as,const A64AliasState *aliases,MiniAsM
             put_reg(&inst->operands[0],rd,wd);
             put_reg(&inst->operands[1],rn,wn);
         }
-        return a64_attach_memory(as,inst,2U,&memory);
+        return a64_attach_memory(ctx,inst,2U,&memory);
     }
     return false;
 }
@@ -1880,11 +1887,11 @@ static bool a64_branch_condition(const char *op,unsigned *condition) {
            a64_condition_code(op+1U,condition);
 }
 
-static bool a64_attach_expr(MiniAs *as,MiniAsMCInst *inst,unsigned slot,
+static bool a64_attach_expr(MiniAsParseContext *ctx,MiniAsMCInst *inst,unsigned slot,
                             const MiniAsSymbolExpr *expr) {
     MiniAsSymbolRef *copy=malloc(sizeof(*copy));
     if(!copy)return false;
-    if(!minias_bind_symbol_ref(as,expr,copy)) {free(copy);return false;}
+    if(!minias_parse_bind_symbol_ref(ctx,expr,copy)) {free(copy);return false;}
     inst->operands[slot].kind=MINIAS_MC_BOUND_SYMBOL;
     inst->operands[slot].bound_symbol=copy;
     return true;
@@ -1899,7 +1906,7 @@ static bool a64_lo12_expr(const char *text,MiniAsSymbolExpr *expr) {
            minias_parse_symbol_addend(text+6U,expr);
 }
 
-static bool a64_parse_relocated(MiniAs *as,const A64AliasState *aliases,
+static bool a64_parse_relocated(MiniAsParseContext *ctx,const A64AliasState *aliases,
                                 MiniAsMCInst *inst,
                                 const char *op,const char *args) {
     char tok[4][384];
@@ -1911,7 +1918,7 @@ static bool a64_parse_relocated(MiniAs *as,const A64AliasState *aliases,
     if(!strcmp(op,"adr") && n==2U &&
        parse_a64_reg(aliases,tok[0],&rd,&wd,&spd) && wd && !spd &&
        minias_parse_symbol_addend(tok[1],&expr) &&
-       a64_attach_expr(as,inst,1U,&expr)) {
+       a64_attach_expr(ctx,inst,1U,&expr)) {
         inst->opcode=A64_MC_ADR;inst->count=2U;
         put_reg(&inst->operands[0],rd,true);
         return true;
@@ -1927,10 +1934,10 @@ static bool a64_parse_relocated(MiniAs *as,const A64AliasState *aliases,
         /* AAELF GOT-entry relocations resolve G(GDAT(S)), not G(S+A):
          * a nonzero symbol addend cannot be represented by this relocation. */
         if(got && expr.addend!=0) {
-            minias_set_error(as,"aarch64-got-relocation-nonzero-addend");
+            minias_parse_error(ctx,"aarch64-got-relocation-nonzero-addend");
             return false;
         }
-        if(!a64_attach_expr(as,inst,1U,&expr))return false;
+        if(!a64_attach_expr(ctx,inst,1U,&expr))return false;
         inst->opcode=A64_MC_ADRP;inst->count=2U;
         inst->target_form=got?1U:0U; /* GOT page vs ordinary page */
         put_reg(&inst->operands[0],rd,true);
@@ -1941,7 +1948,7 @@ static bool a64_parse_relocated(MiniAs *as,const A64AliasState *aliases,
        parse_a64_reg(aliases,tok[1],&rn,&wn,&spn) && wd==wn &&
        !(rd==31U&&!spd) && !(rn==31U&&!spn) &&
        a64_lo12_expr(tok[2],&expr) &&
-       a64_attach_expr(as,inst,2U,&expr)) {
+       a64_attach_expr(ctx,inst,2U,&expr)) {
         inst->opcode=A64_MC_ADD_LO12;inst->count=3U;
         put_reg(&inst->operands[0],rd,wd);
         put_reg(&inst->operands[1],rn,wn);
@@ -1977,15 +1984,15 @@ static bool a64_parse_relocated(MiniAs *as,const A64AliasState *aliases,
         if(!(got_lo12?minias_parse_symbol_addend(b+10U,&expr):
                         a64_lo12_expr(b,&expr)))return false;
         if(got_lo12 && expr.addend!=0) {
-            minias_set_error(as,"aarch64-got-relocation-nonzero-addend");
+            minias_parse_error(ctx,"aarch64-got-relocation-nonzero-addend");
             return false;
         }
-        if(!minias_bind_symbol_ref(as,&expr,&memory.offset.symbol))return false;
+        if(!minias_parse_bind_symbol_ref(ctx,&expr,&memory.offset.symbol))return false;
         memory.offset.kind=got_lo12?A64_OFFSET_GOT_LO12:A64_OFFSET_LO12;
         if(got_lo12)inst->opcode=A64_MC_LDST_GOT_LO12;
         inst->count=2U;
         put_reg(&inst->operands[0],rd,wd);
-        if(!a64_attach_memory(as,inst,1U,&memory))return false;
+        if(!a64_attach_memory(ctx,inst,1U,&memory))return false;
     }
     if(inst->opcode!=A64_MC_LDST_GOT_LO12)
         inst->opcode=A64_MC_LDST_LO12;
@@ -2244,7 +2251,7 @@ static bool a64_barrier_option(const char *name,unsigned *imm) {
 /* Target-scoped ARMv8.1 LSE ISA family; no Common or ELF encoding clone.
  * Enforce directive opt-in and typed W/X source, destination and X base.
  * CAS has a distinct acquire/release encoding; ST aliases return to ZR. */
-static bool a64_parse_lse(const A64AliasState *aliases,MiniAs *as,MiniAsMCInst *inst,
+static bool a64_parse_lse(const A64AliasState *aliases,MiniAsParseContext *ctx,MiniAsMCInst *inst,
                           const char *op,const char *args) {
     static const struct {const char *name;unsigned kind;bool store;} ops[]={
         {"cas",0U,false},{"ldadd",1U,false},{"ldclr",2U,false},
@@ -2266,7 +2273,7 @@ static bool a64_parse_lse(const A64AliasState *aliases,MiniAs *as,MiniAsMCInst *
         }
     }
     if(suffix==NULL ||
-       (a64_features(as)&A64_FEATURE_LSE)==0U)return false;
+       (a64_parse_features(ctx)&A64_FEATURE_LSE)==0U)return false;
     {
         size_t nmod=strlen(suffix);
         /* A64 LSE size is encoded in bits [31:30], separately from
@@ -2287,7 +2294,7 @@ static bool a64_parse_lse(const A64AliasState *aliases,MiniAs *as,MiniAsMCInst *
        (subword!=0U && wide) ||
        (!ops[group].store &&
         (!parse_a64_reg(aliases,tok[1],&rt,&wr,&sp) || sp || wr!=wide)) ||
-       !a64_parse_memory(as,aliases,tok[n-1U],NULL,&memory) ||
+       !a64_parse_memory(ctx,aliases,tok[n-1U],NULL,&memory) ||
        !a64_is_plain_base(&memory))return false;
     inst->opcode=A64_MC_LSE;inst->count=3U;
     inst->encoding=ops[group].kind |
@@ -2298,7 +2305,7 @@ static bool a64_parse_lse(const A64AliasState *aliases,MiniAs *as,MiniAsMCInst *
     put_reg(&inst->operands[0],rs,wide);
     put_reg(&inst->operands[1],rt,wide);
     memory.access_bytes=subword==1U?1U:subword==2U?2U:wide?8U:4U;
-    return a64_attach_memory(as,inst,2U,&memory);
+    return a64_attach_memory(ctx,inst,2U,&memory);
 }
 
 /* A64's branch relocation can combine a base SymbolRef with a second
@@ -2312,7 +2319,7 @@ typedef struct A64BranchAdjustment {
  * addend without ever rewriting the source.  The two name refs are retained
  * independently: one names the branch target, the other is an absolute
  * same-section difference to be added after MCLayout reaches its fixed point. */
-static bool a64_attach_branch_target(MiniAs *as,MiniAsMCInst *inst,
+static bool a64_attach_branch_target(MiniAsParseContext *ctx,MiniAsMCInst *inst,
                                      unsigned slot,const char *source) {
     MiniAsSymbolExpr base;
     MiniAsSymbolDifference difference;
@@ -2341,7 +2348,7 @@ static bool a64_attach_branch_target(MiniAs *as,MiniAsMCInst *inst,
             if(*tail || expr_size>=sizeof(expression))continue;
             memcpy(expression,open+1U,expr_size);
             expression[expr_size]='\0';
-            if(!minias_parse_symbol_difference_absolute_tail(as,minias_trim(expression),
+            if(!minias_parse_eval_symbol_difference_absolute_tail(ctx,minias_trim(expression),
                                               &difference))continue;
             base_size=(size_t)(plus-source);
             base_text=malloc(base_size+1U);
@@ -2354,11 +2361,11 @@ static bool a64_attach_branch_target(MiniAs *as,MiniAsMCInst *inst,
         }
         if(!composite)return false;
     }
-    if((base.addend&3)!=0 || !a64_attach_expr(as,inst,slot,&base))return false;
+    if((base.addend&3)!=0 || !a64_attach_expr(ctx,inst,slot,&base))return false;
     if(composite) {
         A64BranchAdjustment *adjustment=malloc(sizeof(*adjustment));
         if(!adjustment)return false;
-        if(!minias_bind_symbol_difference_ref(as,&difference,
+        if(!minias_parse_bind_symbol_difference_ref(ctx,&difference,
                                                &adjustment->difference)) {
             free(adjustment);return false;
         }
@@ -2713,8 +2720,8 @@ static const A64NamedForm a64_sha3_forms[] = {
     {"sha512su1",UINT32_C(0xce608800),0U}
 };
 
-static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
-    const A64TargetState *state=(const A64TargetState *)as->target_state;
+static bool parse_mcinst(MiniAsParseContext *ctx, MiniAsStmt *stmt) {
+    const A64TargetState *state=(const A64TargetState *)minias_parse_target_state(ctx);
     const A64AliasState *aliases=state?state->aliases:NULL;
     /* Alias state belongs to this lexical parse site. Typed register
      * recognizers bind the resolved number/bank into MCInst immediately;
@@ -2728,7 +2735,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
     const A64NamedForm *form = NULL;
 
     if (inst == NULL) {
-        minias_set_error(as, "out-of-memory:aarch64-mcinst");
+        minias_parse_error(ctx, "out-of-memory:aarch64-mcinst");
         return false;
     }
     if(a64_parse_scalar_fp(aliases,inst,op,args)) {
@@ -2744,13 +2751,13 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         A64Memory memory;
         uint32_t base;
         if(!split_operands(args,tok,&n) || (n!=2U && n!=3U)) {
-            minias_set_error(as,"bad-aarch64-fp-memory:%s:line=%zu",
+            minias_parse_error(ctx,"bad-aarch64-fp-memory:%s:line=%zu",
                              args,stmt->line);minias_mcinst_destroy(inst);return false;
         }
         if(a64_scalar_fp_reg(aliases,tok[0],&rd,&fp64))width=fp64?8U:4U;
         else if(parse_a64_q_reg(aliases,tok[0],&rd))width=16U;
         if(width==0U) {
-            minias_set_error(as,"bad-aarch64-fp-memory:%s:line=%zu",
+            minias_parse_error(ctx,"bad-aarch64-fp-memory:%s:line=%zu",
                              args,stmt->line);minias_mcinst_destroy(inst);return false;
         }
         base=width==4U?UINT32_C(0xbd000000):
@@ -2776,12 +2783,12 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
                 memory.base=base_reg;
                 memory.mode=A64_ADDRESS_OFFSET;
                 memory.access_bytes=width;
-                if(!minias_bind_symbol_ref(as,&symbol,&memory.offset.symbol)) {
+                if(!minias_parse_bind_symbol_ref(ctx,&symbol,&memory.offset.symbol)) {
                     minias_mcinst_destroy(inst);return false;
                 }
                 memory.offset.kind=A64_OFFSET_LO12;
                 inst->opcode=A64_MC_LDST_LO12;
-            }else if(!a64_parse_memory(as,aliases,tok[1],
+            }else if(!a64_parse_memory(ctx,aliases,tok[1],
                                       n==3U?tok[2]:NULL,&memory) ||
                      memory.post_index_register ||
                      (memory.offset.kind==A64_OFFSET_CONSTANT &&
@@ -2791,7 +2798,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
                          memory.offset.constant/(int64_t)width<=4095) ||
                         (memory.offset.constant>=-256 &&
                          memory.offset.constant<=255)))) {
-                minias_set_error(as,"bad-aarch64-fp-memory:%s:line=%zu",
+                minias_parse_error(ctx,"bad-aarch64-fp-memory:%s:line=%zu",
                                  args,stmt->line);
                 minias_mcinst_destroy(inst);return false;
             }else {
@@ -2803,7 +2810,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
             }
         }
         memory.access_bytes=width;
-        if(!a64_attach_memory(as,inst,1U,&memory)) {
+        if(!a64_attach_memory(ctx,inst,1U,&memory)) {
             minias_mcinst_destroy(inst);return false;
         }
     } else if(!strcmp(op,"ldr") && strchr(args,'=')!=NULL) {
@@ -2819,9 +2826,9 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
            !parse_a64_reg(aliases,operands[0],&rd,&wide,&sp) || sp ||
            operands[1][0]!='=' ||
            !minias_parse_symbol_addend(operands[1]+1U,&source) ||
-           !minias_queue_literal(as,&source,wide?8U:4U,&pool) ||
-           !a64_attach_expr(as,inst,1U,&pool)) {
-            minias_set_error(as,"bad-aarch64-literal-load:%s:line=%zu",
+           !minias_parse_queue_literal(ctx,&source,wide?8U:4U,&pool) ||
+           !a64_attach_expr(ctx,inst,1U,&pool)) {
+            minias_parse_error(ctx,"bad-aarch64-literal-load:%s:line=%zu",
                              args,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
@@ -2840,15 +2847,15 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         if(!split_operands(args,operands,&n) || n!=2U ||
            !parse_a64_reg(aliases,operands[0],&rd,&wide,&sp) || sp ||
            !minias_parse_symbol_addend(operands[1],&source) ||
-           !a64_attach_expr(as,inst,1U,&source)) {
-            minias_set_error(as,"bad-aarch64-direct-literal:%s:line=%zu",
+           !a64_attach_expr(ctx,inst,1U,&source)) {
+            minias_parse_error(ctx,"bad-aarch64-direct-literal:%s:line=%zu",
                              args,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
         inst->opcode=A64_MC_LDR_LITERAL;inst->count=2U;
         inst->target_form=1U; /* target-local direct vs queued =literal */
         put_reg(&inst->operands[0],rd,wide);
-    } else if(a64_parse_lse(aliases,as,inst,op,args)) {
+    } else if(a64_parse_lse(aliases,ctx,inst,op,args)) {
         /* LSE grammar is owned by one target decoder. */
     } else if((form=A64_SELECT_FORM(a64_madd_forms))!=NULL) {
         /* Same target multiply-add machine form as MUL/MULL aliases,
@@ -2862,7 +2869,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
            !parse_a64_reg(aliases,tok[3],&ra,&wa,&sp) || sp ||
            ((form->flags&A64_FORM_LONG)?(!wd || wn || wm || !wa):
                           (wd!=wn || wd!=wm || wd!=wa))) {
-            minias_set_error(as,"bad-aarch64-multiply-accumulate:%s:line=%zu",
+            minias_parse_error(ctx,"bad-aarch64-multiply-accumulate:%s:line=%zu",
                              args,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
@@ -2885,14 +2892,14 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
               (alu_n!=3U || !(form->flags&A64_FORM_SHIFT_ALLOWED))):alu_n!=3U) ||
            !parse_a64_reg(aliases,alu_tok[0],&alu_rd,&alu_wide,&alu_sp) ||
            alu_sp) {
-            minias_set_error(as,"bad-aarch64-arith-alias:%s:line=%zu",
+            minias_parse_error(ctx,"bad-aarch64-arith-alias:%s:line=%zu",
                              args,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
         if(!unary &&
            (!parse_a64_reg(aliases,alu_tok[1],&alu_rn,&alu_nwide,&alu_sp) ||
             alu_sp)) {
-            minias_set_error(as,"bad-aarch64-arith-source:%s:line=%zu",
+            minias_parse_error(ctx,"bad-aarch64-arith-source:%s:line=%zu",
                              args,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
@@ -2904,7 +2911,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
               (!alu_wide || !alu_nwide || !alu_mwide):
               (alu_mwide!=alu_wide ||
                (!unary && alu_nwide!=alu_wide)))) {
-            minias_set_error(as,"bad-aarch64-arith-width:%s:line=%zu",
+            minias_parse_error(ctx,"bad-aarch64-arith-width:%s:line=%zu",
                              args,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
@@ -2913,7 +2920,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         if(unary && alu_n==3U) {
             uint32_t shift_fields;
             if(!a64_shift_fields(alu_tok[2],alu_wide,false,&shift_fields)) {
-                minias_set_error(as,"bad-aarch64-neg-shift:%s:line=%zu",
+                minias_parse_error(ctx,"bad-aarch64-neg-shift:%s:line=%zu",
                                  args,stmt->line);
                 minias_mcinst_destroy(inst);return false;
             }
@@ -2939,7 +2946,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
            bit_sp || bit_wide!=bit_source_wide ||
            !parse_signed_number(bit_tok[2],&lsb) ||
            !parse_signed_number(bit_tok[3],&width)) {
-            minias_set_error(as,"bad-aarch64-bitfield-operands:%s:line=%zu",
+            minias_parse_error(ctx,"bad-aarch64-bitfield-operands:%s:line=%zu",
                              args,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
@@ -2948,7 +2955,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
            (raw_form ?
              (width<0 || width>=(int64_t)reg_bits) :
              (width<1 || width>(int64_t)reg_bits-lsb))) {
-            minias_set_error(as,"bad-aarch64-bitfield-range:%s:line=%zu",
+            minias_parse_error(ctx,"bad-aarch64-bitfield-range:%s:line=%zu",
                              args,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
@@ -2975,7 +2982,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
            !parse_a64_reg(aliases,tok[0],&rd,&wide,&sp) || sp ||
            !parse_a64_reg(aliases,tok[1],&rn,&sourcewide,&sp) || sp ||
            wide!=sourcewide) {
-            minias_set_error(as,"bad-aarch64-shift:%s:line=%zu",args,stmt->line);
+            minias_parse_error(ctx,"bad-aarch64-shift:%s:line=%zu",args,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
         inst->opcode=A64_MC_SHIFT;inst->count=3U;
@@ -2984,7 +2991,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         put_reg(&inst->operands[1],rn,wide);
         if(parse_a64_reg(aliases,tok[2],&rm,&shiftwide,&sp)) {
             if(sp || shiftwide!=wide) {
-                minias_set_error(as,"bad-aarch64-shift-width:%s:line=%zu",
+                minias_parse_error(ctx,"bad-aarch64-shift-width:%s:line=%zu",
                                  args,stmt->line);
                 minias_mcinst_destroy(inst);return false;
             }
@@ -2993,7 +3000,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         }else {
             if(!parse_signed_number(tok[2],&amount) ||
                amount<0 || amount>=(wide?64:32)) {
-                minias_set_error(as,"bad-aarch64-shift-immediate:%s:line=%zu",
+                minias_parse_error(ctx,"bad-aarch64-shift-immediate:%s:line=%zu",
                                  args,stmt->line);
                 minias_mcinst_destroy(inst);return false;
             }
@@ -3009,7 +3016,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
            !parse_a64_reg(aliases,extra[2],&rm,&wm,&sp) || sp ||
            wd!=wn || wd!=wm || !parse_signed_number(extra[3],&lsb) ||
            lsb<0 || lsb>=(wd?64:32)) {
-            minias_set_error(as,"bad-aarch64-extr:%s:line=%zu",
+            minias_parse_error(ctx,"bad-aarch64-extr:%s:line=%zu",
                              args,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
@@ -3028,19 +3035,19 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
            !parse_a64_reg(aliases,tok[0],&rn,&wide,&sp) || sp ||
            !parse_signed_number(tok[2],&nzcv) || nzcv<0 || nzcv>15 ||
            !a64_condition_code(tok[3],&cc)) {
-            minias_set_error(as,"bad-aarch64-conditional-compare:%s:line=%zu",
+            minias_parse_error(ctx,"bad-aarch64-conditional-compare:%s:line=%zu",
                              args,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
         literal=parse_signed_number(tok[1],&ccmp_immediate);
         if(literal && (ccmp_immediate<0 || ccmp_immediate>31)) {
-            minias_set_error(as,"bad-aarch64-ccmp-immediate:%s:line=%zu",
+            minias_parse_error(ctx,"bad-aarch64-ccmp-immediate:%s:line=%zu",
                              tok[1],stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
         if(!literal && (!parse_a64_reg(aliases,tok[1],&rm,&otherwide,&sp) ||
                         sp || otherwide!=wide)) {
-            minias_set_error(as,"bad-aarch64-ccmp-register:%s:line=%zu",
+            minias_parse_error(ctx,"bad-aarch64-ccmp-register:%s:line=%zu",
                              tok[1],stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
@@ -3063,7 +3070,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
            !parse_a64_reg(aliases,tok[1],&rn,&wn,&sp) || sp || wd!=wn ||
            !parse_a64_reg(aliases,tok[2],&rm,&wm,&sp) || sp || wd!=wm ||
            !a64_condition_code(tok[3],&cc)) {
-            minias_set_error(as,"bad-aarch64-conditional-select:%s:line=%zu",
+            minias_parse_error(ctx,"bad-aarch64-conditional-select:%s:line=%zu",
                              args,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
@@ -3079,7 +3086,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
            !parse_a64_reg(aliases,tok[0],&rd,&wd,&sp) || sp ||
            !parse_a64_reg(aliases,tok[1],&rn,&wn,&sp) || sp ||
            wd!=wn || !a64_condition_code(tok[2],&cc)) {
-            minias_set_error(as,"bad-aarch64-conditional-alias:%s:line=%zu",
+            minias_parse_error(ctx,"bad-aarch64-conditional-alias:%s:line=%zu",
                              args,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
@@ -3104,7 +3111,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
            (!strcmp(op,"cinc") &&
             (!parse_a64_reg(aliases,parts[1],&rn,&wn,&sp) || sp || wn!=wd)) ||
            !a64_condition_code(parts[n-1U],&cond)) {
-            minias_set_error(as,"bad-aarch64-csel-alias:%s:line=%zu",
+            minias_parse_error(ctx,"bad-aarch64-csel-alias:%s:line=%zu",
                              args,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
@@ -3125,7 +3132,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
            !a64_vector_view(aliases,tok[0],&rd,&da) ||
            !a64_vector_view(aliases,tok[1],&rn,&sa) || da!=sa ||
            (da&UINT32_C(0xc00))!=0U) {
-            minias_set_error(as,"bad-aarch64-simd-mvn:%s:line=%zu",
+            minias_parse_error(ctx,"bad-aarch64-simd-mvn:%s:line=%zu",
                              args,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
@@ -3163,7 +3170,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         put_vector(&inst->operands[1],rn);
         goto reduction_done;
 bad_reduction:
-        minias_set_error(as,"bad-aarch64-simd-reduce:%s:line=%zu",
+        minias_parse_error(ctx,"bad-aarch64-simd-reduce:%s:line=%zu",
                          args,stmt->line);
         minias_mcinst_destroy(inst);return false;
 reduction_done:;
@@ -3173,7 +3180,7 @@ reduction_done:;
         if(!parse_a64_reg(aliases,first,&rd,&wide,&sp) || sp ||
            !parse_a64_reg(aliases,second,&rm,&otherwide,&sp) || sp ||
            wide!=otherwide) {
-            minias_set_error(as,"bad-aarch64-mvn:%s:line=%zu",
+            minias_parse_error(ctx,"bad-aarch64-mvn:%s:line=%zu",
                              args,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
@@ -3259,18 +3266,18 @@ reduction_done:;
                strcmp(requested,sysops[i].name))continue;
             if(sysops[i].needs_rt!=paired)break;
             if(!strcmp(sysops[i].name,"gzva") &&
-               (a64_features(as)&A64_FEATURE_MTE)==0U)break;
+               (a64_parse_features(ctx)&A64_FEATURE_MTE)==0U)break;
             /* ARMv8.4 range TLBI requires an explicit architectural
              * profile opt-in. It is not available under baseline v8-a. */
             if((!strncmp(sysops[i].name,"rv",2U) ||
                 !strncmp(sysops[i].name,"ripas2",6U)) &&
-               (a64_features(as)&A64_FEATURE_TLBI_RANGE)==0U)break;
+               (a64_parse_features(ctx)&A64_FEATURE_TLBI_RANGE)==0U)break;
             if(paired && (!parse_a64_reg(aliases,operand,&rt,&rt64,&rtsp) ||
                           !rt64 || rtsp))break;
             word=sysops[i].word;found=true;break;
         }
         if(!found) {
-            minias_set_error(as,"bad-aarch64-operands:%s:%s:line=%zu",
+            minias_parse_error(ctx,"bad-aarch64-operands:%s:%s:line=%zu",
                              op,args,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
@@ -3284,7 +3291,7 @@ reduction_done:;
                isdigit((unsigned char)second[0]))) {
         int64_t value;
         if(!parse_signed_number(second,&value) || value<0 || value>1) {
-            minias_set_error(as,"bad-aarch64-spsel-immediate:%s:line=%zu",
+            minias_parse_error(ctx,"bad-aarch64-spsel-immediate:%s:line=%zu",
                              args,stmt->line);minias_mcinst_destroy(inst);return false;
         }
         inst->opcode=A64_MC_SYSTEM_IMM;inst->count=1U;
@@ -3296,7 +3303,7 @@ reduction_done:;
         int64_t daif_immediate;
         if(!parse_signed_number(second,&daif_immediate) ||
            daif_immediate<0 || daif_immediate>15) {
-            minias_set_error(as,"bad-aarch64-daif-immediate:%s:line=%zu",
+            minias_parse_error(ctx,"bad-aarch64-daif-immediate:%s:line=%zu",
                              args,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
@@ -3319,7 +3326,7 @@ reduction_done:;
            (!parse_a64_reg(aliases,second,&rt,&wide,&sp) || sp || !wide ||
             !a64_system_register(first,&mrscode,&msrcode) ||
             msrcode==0U)) {
-            minias_set_error(as,"bad-aarch64-sysreg:%s:line=%zu",
+            minias_parse_error(ctx,"bad-aarch64-sysreg:%s:line=%zu",
                              args,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
@@ -3335,7 +3342,7 @@ reduction_done:;
         bool wide,sp;
         if(!split_two(args,dst,sizeof(dst),source,sizeof(source)) ||
            !a64_vector_view(aliases,dst,&vd,&ar)) {
-            minias_set_error(as,"bad-aarch64-simd-lane:%s:line=%zu",
+            minias_parse_error(ctx,"bad-aarch64-simd-lane:%s:line=%zu",
                              args,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
@@ -3344,7 +3351,7 @@ reduction_done:;
             unsigned lane=1U<<((ar&UINT32_C(0xc00))>>10U);
             if((d && !(ar&UINT32_C(0x40000000))) ||
                !parse_a64_reg(aliases,source,&rn,&wide,&sp) || sp || wide!=d) {
-                minias_set_error(as,"bad-aarch64-dup-source:%s:line=%zu",
+                minias_parse_error(ctx,"bad-aarch64-dup-source:%s:line=%zu",
                                  args,stmt->line);
                 minias_mcinst_destroy(inst);return false;
             }
@@ -3359,7 +3366,7 @@ reduction_done:;
                          element!=UINT32_C(0x800)):
                        (element!=0U && element!=UINT32_C(0x400))) ||
                !a64_vector_view(aliases,source,&rn,&vdarr) || vdarr!=ar) {
-                minias_set_error(as,"bad-aarch64-reverse-vector:%s:line=%zu",
+                minias_parse_error(ctx,"bad-aarch64-reverse-vector:%s:line=%zu",
                                  args,stmt->line);minias_mcinst_destroy(inst);return false;
             }
             inst->opcode=A64_MC_SIMD_REV32;inst->count=2U;
@@ -3373,7 +3380,7 @@ reduction_done:;
     } else if(!strcmp(op,"sys")) {
         uint32_t bits;unsigned rt;
         if(!a64_sys_fields(aliases,args,&bits,&rt)) {
-            minias_set_error(as,"bad-aarch64-sys-fields:%s:line=%zu",
+            minias_parse_error(ctx,"bad-aarch64-sys-fields:%s:line=%zu",
                              args,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
@@ -3385,9 +3392,9 @@ reduction_done:;
         unsigned rs,rt;
         A64Memory memory;
         bool wide;
-        if((a64_features(as)&A64_FEATURE_LSE)==0U ||
-           !a64_casp_fields(as,aliases,args,&rs,&rt,&memory,&wide)){
-            minias_set_error(as,"bad-aarch64-casp:%s:line=%zu",
+        if((a64_parse_features(ctx)&A64_FEATURE_LSE)==0U ||
+           !a64_casp_fields(ctx,aliases,args,&rs,&rt,&memory,&wide)){
+            minias_parse_error(ctx,"bad-aarch64-casp:%s:line=%zu",
                              args,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
@@ -3402,7 +3409,7 @@ reduction_done:;
         put_reg(&inst->operands[0],rs,wide);
         put_reg(&inst->operands[1],rt,wide);
         memory.access_bytes=wide?16U:8U;
-        if(!a64_attach_memory(as,inst,2U,&memory)) {
+        if(!a64_attach_memory(ctx,inst,2U,&memory)) {
             minias_mcinst_destroy(inst);return false;
         }
     } else if(!strcmp(op,"ldg")) {
@@ -3412,16 +3419,16 @@ reduction_done:;
         A64Memory memory;
         /* GNU [Xn,#offset] contains a nested comma, so split on A64's
          * top-level operand grammar, NOT the old single-comma split_two. */
-        if((a64_features(as)&A64_FEATURE_MTE)==0U ||
+        if((a64_parse_features(ctx)&A64_FEATURE_MTE)==0U ||
            !split_operands(args,tok,&n) || n!=2U ||
            !parse_a64_reg(aliases,tok[0],&rt,&wide,&sp) || sp || !wide ||
-           !a64_parse_memory(as,aliases,tok[1],NULL,&memory) ||
+           !a64_parse_memory(ctx,aliases,tok[1],NULL,&memory) ||
            memory.mode!=A64_ADDRESS_OFFSET ||
            (memory.offset.kind==A64_OFFSET_CONSTANT &&
             (memory.offset.constant%16!=0 ||
              memory.offset.constant<-4096 ||
              memory.offset.constant>4080))) {
-            minias_set_error(as,"bad-aarch64-ldg:%s:line=%zu",
+            minias_parse_error(ctx,"bad-aarch64-ldg:%s:line=%zu",
                              args,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
@@ -3429,7 +3436,7 @@ reduction_done:;
         inst->opcode=A64_MC_MTE_STGM;inst->count=2U;
         inst->encoding=UINT32_C(0xd9600000);
         put_reg(&inst->operands[0],rt,true);
-        if(!a64_attach_memory(as,inst,1U,&memory)) {
+        if(!a64_attach_memory(ctx,inst,1U,&memory)) {
             minias_mcinst_destroy(inst);return false;
         }
     } else if(!strcmp(op,"stgm") || !strcmp(op,"ldgm")) {
@@ -3438,12 +3445,12 @@ reduction_done:;
         char tok[4][384];unsigned n,rt;
         bool wide,sp;
         A64Memory memory;
-        if((a64_features(as)&A64_FEATURE_MTE)==0U ||
+        if((a64_parse_features(ctx)&A64_FEATURE_MTE)==0U ||
            !split_operands(args,tok,&n) || n!=2U ||
            !parse_a64_reg(aliases,tok[0],&rt,&wide,&sp) || sp || !wide ||
-           !a64_parse_memory(as,aliases,tok[1],NULL,&memory) ||
+           !a64_parse_memory(ctx,aliases,tok[1],NULL,&memory) ||
            !a64_is_plain_base(&memory)) {
-            minias_set_error(as,"bad-aarch64-mte-tags:%s:line=%zu",
+            minias_parse_error(ctx,"bad-aarch64-mte-tags:%s:line=%zu",
                              args,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
@@ -3452,7 +3459,7 @@ reduction_done:;
                        UINT32_C(0xd9e00000):UINT32_C(0xd9a00000);
         put_reg(&inst->operands[0],rt,true);
         memory.access_bytes=16U;
-        if(!a64_attach_memory(as,inst,1U,&memory)) {
+        if(!a64_attach_memory(ctx,inst,1U,&memory)) {
             minias_mcinst_destroy(inst);return false;
         }
     } else if(!strcmp(op,"ins") ||
@@ -3465,7 +3472,7 @@ reduction_done:;
         bool source_x,wide,sp,vector_source;
         if(!split_two(args,first,sizeof(first),second,sizeof(second)) ||
            !a64_ins_lane(aliases,first,&vd,&imm5,&source_x)) {
-            minias_set_error(as,"bad-aarch64-ins-lane:%s:line=%zu",
+            minias_parse_error(ctx,"bad-aarch64-ins-lane:%s:line=%zu",
                              args,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
@@ -3476,13 +3483,13 @@ reduction_done:;
              * and source imm4 live in separate architectural fields. */
             source_marker=source_imm5&(~source_imm5+1U);
             if(source_marker!=(imm5&(~imm5+1U))) {
-                minias_set_error(as,"bad-aarch64-ins-source-width:%s:line=%zu",
+                minias_parse_error(ctx,"bad-aarch64-ins-source-width:%s:line=%zu",
                                  args,stmt->line);minias_mcinst_destroy(inst);return false;
             }
             source_imm4=(source_imm5&~source_marker)>>1U;
         }else if(!parse_a64_reg(aliases,second,&rn,&wide,&sp) || sp ||
                  wide!=source_x) {
-            minias_set_error(as,"bad-aarch64-ins-source:%s:line=%zu",
+            minias_parse_error(ctx,"bad-aarch64-ins-source:%s:line=%zu",
                              args,stmt->line);minias_mcinst_destroy(inst);return false;
         }
         inst->opcode=A64_MC_SIMD_DUP;inst->count=2U;
@@ -3499,7 +3506,7 @@ reduction_done:;
         bool fp_dst,fp_src,fd=false,fs=false,gd=false,gs=false,sp;
         unsigned immediate;
         if(!split_two(args,dst,sizeof(dst),source,sizeof(source))) {
-            minias_set_error(as,"bad-aarch64-fmov:%s:line=%zu",
+            minias_parse_error(ctx,"bad-aarch64-fmov:%s:line=%zu",
                              args,stmt->line);minias_mcinst_destroy(inst);return false;
         }
         fp_dst=a64_scalar_fp_reg(aliases,dst,&rd,&fd);
@@ -3516,7 +3523,7 @@ reduction_done:;
                        fd!=gs)) ||
            (fp_src && (!parse_a64_reg(aliases,dst,&rd,&gd,&sp) || sp ||
                        fs!=gd))) {
-            minias_set_error(as,"bad-aarch64-fmov:%s:line=%zu",
+            minias_parse_error(ctx,"bad-aarch64-fmov:%s:line=%zu",
                              args,stmt->line);minias_mcinst_destroy(inst);return false;
         }
         inst->opcode=A64_MC_SIMD_DUP;inst->count=2U;
@@ -3543,27 +3550,27 @@ reduction_done:;
         bool scalar=false;
         if(!split_operands(args,tok,&n) || n!=3U ||
            !parse_signed_number(tok[2],&shift)) {
-            minias_set_error(as,"bad-aarch64-simd-shift:%s:line=%zu",
+            minias_parse_error(ctx,"bad-aarch64-simd-shift:%s:line=%zu",
                              args,stmt->line);minias_mcinst_destroy(inst);return false;
         }
         scalar=a64_scalar_fp_d(aliases,tok[0],&rd);
         if(scalar) {
             if(!a64_scalar_fp_d(aliases,tok[1],&rn)) {
-                minias_set_error(as,"bad-aarch64-simd-shift:%s:line=%zu",
+                minias_parse_error(ctx,"bad-aarch64-simd-shift:%s:line=%zu",
                                  args,stmt->line);minias_mcinst_destroy(inst);return false;
             }
             da=UINT32_C(0x40000c00);
             bits=64U;
         }else if(!a64_vector_view(aliases,tok[0],&rd,&da) ||
                  !a64_vector_view(aliases,tok[1],&rn,&sa) || da!=sa) {
-            minias_set_error(as,"bad-aarch64-simd-shift:%s:line=%zu",
+            minias_parse_error(ctx,"bad-aarch64-simd-shift:%s:line=%zu",
                              args,stmt->line);minias_mcinst_destroy(inst);return false;
         }else bits=8U<<((da&UINT32_C(0xc00))>>10U);
         if(((form->flags&A64_FORM_RIGHT)?(shift<1 || shift>(int64_t)bits):
                    (shift<0 || shift>=(int64_t)bits)) ||
            (!scalar && bits==64U &&
             (da&UINT32_C(0x40000000))==0U)) {
-            minias_set_error(as,"bad-aarch64-simd-shift-range:%s:line=%zu",
+            minias_parse_error(ctx,"bad-aarch64-simd-shift-range:%s:line=%zu",
                              args,stmt->line);minias_mcinst_destroy(inst);return false;
         }
         encoded_shift=(form->flags&A64_FORM_RIGHT)?2U*bits-(unsigned)shift:
@@ -3583,12 +3590,12 @@ reduction_done:;
         if(is_isb) {
             if(*args && strcmp(args,"sy")!=0 && strcmp(args,"#15")!=0 &&
                strcmp(args,"15")!=0) {
-                minias_set_error(as,"bad-aarch64-isb:%s:line=%zu",
+                minias_parse_error(ctx,"bad-aarch64-isb:%s:line=%zu",
                                  args,stmt->line);
                 minias_mcinst_destroy(inst);return false;
             }
         } else if(!a64_barrier_option(args,&barrier)) {
-            minias_set_error(as,"bad-aarch64-barrier:%s:line=%zu",
+            minias_parse_error(ctx,"bad-aarch64-barrier:%s:line=%zu",
                              args,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
@@ -3604,17 +3611,17 @@ reduction_done:;
          * require X source, but W accumulator and W destination. */
         char tok[4][384];unsigned n,rd,rn,rm;
         bool wd,wn,wm,sp;
-        if((a64_features(as)&A64_FEATURE_CRC)==0U ||
+        if((a64_parse_features(ctx)&A64_FEATURE_CRC)==0U ||
            !split_operands(args,tok,&n) || n!=3U ||
            !parse_a64_reg(aliases,tok[0],&rd,&wd,&sp) || sp || wd ||
            !parse_a64_reg(aliases,tok[1],&rn,&wn,&sp) || sp || wn ||
            !parse_a64_reg(aliases,tok[2],&rm,&wm,&sp) || sp) {
-            minias_set_error(as,"bad-aarch64-crc32:%s:line=%zu",args,stmt->line);
+            minias_parse_error(ctx,"bad-aarch64-crc32:%s:line=%zu",args,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
         form=A64_SELECT_FORM(a64_crc_forms);
         if(form==NULL || wm!=((form->flags&A64_FORM_LONG)!=0U)) {
-            minias_set_error(as,"bad-aarch64-crc-width:%s:line=%zu",args,stmt->line);
+            minias_parse_error(ctx,"bad-aarch64-crc-width:%s:line=%zu",args,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
         inst->opcode=A64_MC_ARITH_ALIAS;inst->count=3U;
@@ -3625,12 +3632,12 @@ reduction_done:;
     } else if((form=A64_SELECT_FORM(a64_aes_forms))!=NULL) {
         char tok[4][384];unsigned n,rd,rn;
         uint32_t da,sa;
-        if((a64_features(as)&A64_FEATURE_CRYPTO)==0U ||
+        if((a64_parse_features(ctx)&A64_FEATURE_CRYPTO)==0U ||
            !split_operands(args,tok,&n) || n!=2U ||
            !a64_vector_view(aliases,tok[0],&rd,&da) ||
            !a64_vector_view(aliases,tok[1],&rn,&sa) ||
            da!=UINT32_C(0x40000000) || sa!=da) {
-            minias_set_error(as,"bad-aarch64-aes:%s:line=%zu",args,stmt->line);
+            minias_parse_error(ctx,"bad-aarch64-aes:%s:line=%zu",args,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
         inst->opcode=A64_MC_SIMD_CRYPTO;inst->count=2U;
@@ -3653,7 +3660,7 @@ reduction_done:;
                  ((da&UINT32_C(0xc00))==UINT32_C(0xc00) &&
                   (da&UINT32_C(0x40000000))==0U):
                  (da&UINT32_C(0xc00))!=0U)) {
-                minias_set_error(as,"bad-aarch64-simd-logic:%s:line=%zu",
+                minias_parse_error(ctx,"bad-aarch64-simd-logic:%s:line=%zu",
                                  args,stmt->line);
                 minias_mcinst_destroy(inst);return false;
             }
@@ -3665,10 +3672,10 @@ reduction_done:;
             put_vector(&inst->operands[0],rd);
             put_vector(&inst->operands[1],rn);
             put_vector(&inst->operands[2],rm);
-        }else if(parse_integer_family(as,aliases,inst,op,args)) {
+        }else if(parse_integer_family(ctx,aliases,inst,op,args)) {
             /* Scalar ALU uses the same already proven Target machinery. */
         }else {
-            minias_set_error(as,"bad-aarch64-operands:%s:%s:line=%zu",
+            minias_parse_error(ctx,"bad-aarch64-operands:%s:%s:line=%zu",
                              op,args,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
@@ -3683,7 +3690,7 @@ reduction_done:;
            da!=sa || da!=ta || (da&UINT32_C(0xc00))!=0U ||
            !parse_signed_number(tok[3],&index) || index<0 ||
            index>=((da&UINT32_C(0x40000000))?16:8)) {
-            minias_set_error(as,"bad-aarch64-ext:%s:line=%zu",
+            minias_parse_error(ctx,"bad-aarch64-ext:%s:line=%zu",
                              args,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
@@ -3702,7 +3709,7 @@ reduction_done:;
         bool scalar_d=false;
         if(!split_two(args,vreg,sizeof(vreg),text,sizeof(text)) ||
            !parse_signed_number(text,&number)) {
-            minias_set_error(as,"bad-aarch64-movi:%s:line=%zu",
+            minias_parse_error(ctx,"bad-aarch64-movi:%s:line=%zu",
                              args,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
@@ -3713,7 +3720,7 @@ reduction_done:;
         if(scalar_d) {
             ar=UINT32_C(0x40000c00);
         }else if(!a64_vector_view(aliases,vreg,&rd,&ar)) {
-            minias_set_error(as,"bad-aarch64-movi:%s:line=%zu",
+            minias_parse_error(ctx,"bad-aarch64-movi:%s:line=%zu",
                              args,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
@@ -3728,7 +3735,7 @@ reduction_done:;
             for(k=0U;k<8U;++k) {
                 uint8_t octet=(uint8_t)(bits>>(8U*k));
                 if(octet!=0U && octet!=UINT8_MAX) {
-                    minias_set_error(as,"bad-aarch64-movi-2d-mask:%s:line=%zu",
+                    minias_parse_error(ctx,"bad-aarch64-movi-2d-mask:%s:line=%zu",
                                      args,stmt->line);
                     minias_mcinst_destroy(inst);return false;
                 }
@@ -3744,7 +3751,7 @@ reduction_done:;
             base=UINT32_C(0x0f000400);
             simd_imm=(unsigned)number;
         }else {
-            minias_set_error(as,"bad-aarch64-movi-size:%s:line=%zu",
+            minias_parse_error(ctx,"bad-aarch64-movi-size:%s:line=%zu",
                              args,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
@@ -3760,7 +3767,7 @@ reduction_done:;
         A64Memory memory;
         if(!split_operands(args,tok,&n) ||
            n!=(store?4U:3U)) {
-            minias_set_error(as,"bad-aarch64-exclusive-pair:%s:line=%zu",
+            minias_parse_error(ctx,"bad-aarch64-exclusive-pair:%s:line=%zu",
                              args,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
@@ -3769,9 +3776,9 @@ reduction_done:;
            !parse_a64_reg(aliases,tok[k],&rt,&wt,&sp) || sp ||
            !parse_a64_reg(aliases,tok[k+1U],&rt2,&wt2,&sp) || sp ||
            wt!=wt2 ||
-           !a64_parse_memory(as,aliases,tok[k+2U],NULL,&memory) ||
+           !a64_parse_memory(ctx,aliases,tok[k+2U],NULL,&memory) ||
            !a64_is_plain_base(&memory)) {
-            minias_set_error(as,"bad-aarch64-exclusive-pair:%s:line=%zu",
+            minias_parse_error(ctx,"bad-aarch64-exclusive-pair:%s:line=%zu",
                              args,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
@@ -3785,7 +3792,7 @@ reduction_done:;
         put_reg(&inst->operands[1],rt2,wt);
         put_reg(&inst->operands[2],rs,false);
         memory.access_bytes=wt?16U:8U;
-        if(!a64_attach_memory(as,inst,3U,&memory)) {
+        if(!a64_attach_memory(ctx,inst,3U,&memory)) {
             minias_mcinst_destroy(inst);return false;
         }
     } else if(!strcmp(op,"tbl") || !strcmp(op,"tbx")) {
@@ -3803,7 +3810,7 @@ reduction_done:;
             dstarr!=UINT32_C(0x40000000)) ||
            tabarr!=UINT32_C(0x40000000) ||
            indexarr!=dstarr || count<1U || count>4U) {
-            minias_set_error(as,"bad-aarch64-table-lookup:%s:line=%zu",
+            minias_parse_error(ctx,"bad-aarch64-table-lookup:%s:line=%zu",
                              args,stmt->line);minias_mcinst_destroy(inst);return false;
         }
         inst->opcode=A64_MC_SIMD_LOGIC;inst->count=3U;
@@ -3823,7 +3830,7 @@ reduction_done:;
         bool pair=(form->flags&A64_FORM_PAIR)!=0U;
         bool tri=(form->flags&A64_FORM_THREE)!=0U;
         bool bytes=false;
-        bool valid=(a64_features(as)&A64_FEATURE_CRYPTO)!=0U &&
+        bool valid=(a64_parse_features(ctx)&A64_FEATURE_CRYPTO)!=0U &&
             split_operands(args,tok,&n) && n==(tri?3U:2U);
         if(valid && polynomial) {
             /* PMULL/PMULL2 have TWO independently checked element
@@ -3848,7 +3855,7 @@ reduction_done:;
                   (!tri || (a64_vector_view(aliases,tok[2],&rm,&ta) && ta==da));
         }
         if(!valid) {
-            minias_set_error(as,"bad-aarch64-crypto-poly-sha1:%s:line=%zu",
+            minias_parse_error(ctx,"bad-aarch64-crypto-poly-sha1:%s:line=%zu",
                              args,stmt->line);minias_mcinst_destroy(inst);return false;
         }
         inst->opcode=tri?A64_MC_SIMD_LOGIC:A64_MC_SIMD_CRYPTO;
@@ -3863,13 +3870,13 @@ reduction_done:;
          * Qd,Sn,Vm.4S encoding; no second SIMD register parser. */
         char arg[4][384];unsigned n,rd,rn,rm;
         bool wide;uint32_t shape;
-        if((a64_features(as)&A64_FEATURE_CRYPTO)==0U ||
+        if((a64_parse_features(ctx)&A64_FEATURE_CRYPTO)==0U ||
            !split_operands(args,arg,&n) || n!=3U ||
            !parse_a64_q_reg(aliases,arg[0],&rd) ||
            !a64_scalar_fp_reg(aliases,arg[1],&rn,&wide) || wide ||
            !a64_vector_view(aliases,arg[2],&rm,&shape) ||
            shape!=UINT32_C(0x40000800)) {
-            minias_set_error(as,"bad-aarch64-sha1-round:%s:line=%zu",
+            minias_parse_error(ctx,"bad-aarch64-sha1-round:%s:line=%zu",
                              args,stmt->line);minias_mcinst_destroy(inst);return false;
         }
         inst->opcode=A64_MC_SIMD_LOGIC;inst->count=3U;
@@ -3881,11 +3888,11 @@ reduction_done:;
         unsigned rd,rn;
         bool dw,nw;
         char dst[96],src[96];
-        if((a64_features(as)&A64_FEATURE_CRYPTO)==0U ||
+        if((a64_parse_features(ctx)&A64_FEATURE_CRYPTO)==0U ||
            !split_two(args,dst,sizeof(dst),src,sizeof(src)) ||
            !a64_scalar_fp_reg(aliases,dst,&rd,&dw) || dw ||
            !a64_scalar_fp_reg(aliases,src,&rn,&nw) || nw) {
-            minias_set_error(as,"bad-aarch64-sha1h:%s:line=%zu",
+            minias_parse_error(ctx,"bad-aarch64-sha1h:%s:line=%zu",
                              args,stmt->line);minias_mcinst_destroy(inst);return false;
         }
         inst->opcode=A64_MC_SIMD_CRYPTO;inst->count=2U;
@@ -3899,7 +3906,7 @@ reduction_done:;
         char tok[4][384];unsigned n,rd,rn,rm=0U;uint32_t da=0U,sa=0U,ta=0U;
         bool pair=(form->flags&A64_FORM_PAIR)!=0U;
         bool tri=(form->flags&A64_FORM_THREE)!=0U;
-        bool valid=(a64_features(as)&A64_FEATURE_CRYPTO)!=0U &&
+        bool valid=(a64_parse_features(ctx)&A64_FEATURE_CRYPTO)!=0U &&
                    split_operands(args,tok,&n) && n==(tri?3U:2U);
         if(valid && pair) {
             valid=parse_a64_q_reg(aliases,tok[0],&rd) &&
@@ -3914,7 +3921,7 @@ reduction_done:;
                   ta==UINT32_C(0x40000800);
         }
         if(!valid) {
-            minias_set_error(as,"bad-aarch64-sha256:%s:line=%zu",
+            minias_parse_error(ctx,"bad-aarch64-sha256:%s:line=%zu",
                              args,stmt->line);minias_mcinst_destroy(inst);return false;
         }
         inst->opcode=tri?A64_MC_SIMD_LOGIC:A64_MC_SIMD_CRYPTO;
@@ -3940,7 +3947,7 @@ reduction_done:;
         bool qd=(form->flags&A64_FORM_Q_DEST)!=0U;
         bool bytes=(form->flags&A64_FORM_BYTE_VIEW)!=0U;
         uint32_t view=bytes?UINT32_C(0x40000000):UINT32_C(0x40000c00);
-        bool valid=(a64_features(as)&A64_FEATURE_SHA3)!=0U &&
+        bool valid=(a64_parse_features(ctx)&A64_FEATURE_SHA3)!=0U &&
             split_operands(args,tok,&n) && n==(four?4U:two?2U:3U);
         if(valid && qd)valid=parse_a64_q_reg(aliases,tok[0],&rd);
         else if(valid)valid=a64_vector_view(aliases,tok[0],&rd,&da) && da==view;
@@ -3954,7 +3961,7 @@ reduction_done:;
                      tok[3][0]=='#'?tok[3]+1U:tok[3],&rot) &&
                      rot>=0 && rot<=63;
         if(!valid) {
-            minias_set_error(as,"bad-aarch64-sha3:%s:line=%zu",args,stmt->line);
+            minias_parse_error(ctx,"bad-aarch64-sha3:%s:line=%zu",args,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
         inst->opcode=four?A64_MC_SIMD_SHA3_FOUR:
@@ -3978,7 +3985,7 @@ reduction_done:;
         bool signext=!strcmp(op,"smov");
         if(!split_two(args,dst,sizeof(dst),source,sizeof(source)) ||
            !a64_ins_lane(aliases,source,&rn,&lane,&is_x)) {
-            minias_set_error(as,"bad-aarch64-mov-lane:%s:line=%zu",
+            minias_parse_error(ctx,"bad-aarch64-mov-lane:%s:line=%zu",
                              args,stmt->line);minias_mcinst_destroy(inst);return false;
         }
         if(is_fp) {
@@ -4008,7 +4015,7 @@ reduction_done:;
         put_vector(&inst->operands[1],rn);
         goto lane_complete;
 invalid_lane:
-        minias_set_error(as,"bad-aarch64-mov-lane:%s:line=%zu",
+        minias_parse_error(ctx,"bad-aarch64-mov-lane:%s:line=%zu",
                          args,stmt->line);
         minias_mcinst_destroy(inst);return false;
 lane_complete:;
@@ -4019,18 +4026,18 @@ lane_complete:;
         char tok[4][384];unsigned n,rt;
         bool wide,sp;
         A64Memory memory;
-        if((a64_features(as)&A64_FEATURE_MTE)==0U ||
+        if((a64_parse_features(ctx)&A64_FEATURE_MTE)==0U ||
            !split_operands(args,tok,&n) || (n!=2U && n!=3U) ||
            !parse_a64_reg(aliases,tok[0],&rt,&wide,&sp) || sp || !wide ||
-           !a64_parse_memory(as,aliases,tok[1],n==3U?tok[2]:NULL,
+           !a64_parse_memory(ctx,aliases,tok[1],n==3U?tok[2]:NULL,
                              &memory) || memory.post_index_register) {
-            minias_set_error(as,"bad-aarch64-stz2g:%s:line=%zu",
+            minias_parse_error(ctx,"bad-aarch64-stz2g:%s:line=%zu",
                              args,stmt->line);minias_mcinst_destroy(inst);return false;
         }
         if(memory.offset.kind==A64_OFFSET_CONSTANT &&
            (memory.offset.constant%16!=0 ||
             memory.offset.constant<-4096 || memory.offset.constant>4080)){
-            minias_set_error(as,"bad-aarch64-stz2g-offset:%s:line=%zu",
+            minias_parse_error(ctx,"bad-aarch64-stz2g-offset:%s:line=%zu",
                              args,stmt->line);minias_mcinst_destroy(inst);return false;
         }
         {
@@ -4043,7 +4050,7 @@ lane_complete:;
             inst->encoding=base;
         }
         put_reg(&inst->operands[0],rt,true);
-        if(!a64_attach_memory(as,inst,1U,&memory)) {
+        if(!a64_attach_memory(ctx,inst,1U,&memory)) {
             minias_mcinst_destroy(inst);return false;
         }
     } else if((!strcmp(op,"br")||!strcmp(op,"blr")) &&
@@ -4068,12 +4075,12 @@ lane_complete:;
         if(argument_length>=sizeof(parts[0])) {
             size_t stride=argument_length+1U;
             if(stride>SIZE_MAX/4U || stride>(1024U*1024U)) {
-                minias_set_error(as,"aarch64-operand-text-too-large:line=%zu",
+                minias_parse_error(ctx,"aarch64-operand-text-too-large:line=%zu",
                                  stmt->line);minias_mcinst_destroy(inst);return false;
             }
             large=malloc(stride*4U);
             if(!large) {
-                minias_set_error(as,"out-of-memory:aarch64-operand-text");
+                minias_parse_error(ctx,"out-of-memory:aarch64-operand-text");
                 free(large);minias_mcinst_destroy(inst);return false;
             }
             for(k=0U;k<4U;++k) {
@@ -4087,7 +4094,7 @@ lane_complete:;
             /* Preserve the real GNU-expanded operand and register
              * shape in the pinned first-blocker census. Unsupported MOVW
              * syntax must not be silently normalized or misattributed. */
-            minias_set_error(as,"bad-aarch64-wide-immediate:%s:line=%zu",
+            minias_parse_error(ctx,"bad-aarch64-wide-immediate:%s:line=%zu",
                              args,stmt->line);
             free(large);minias_mcinst_destroy(inst);return false;
         }
@@ -4095,7 +4102,7 @@ lane_complete:;
                                       &shift,&constant,&bits,&signed_negative);
         if((modifier && (n!=2U || (!wide && shift>=2U))) ||
            (!modifier && !parse_imm16(tokens[1],&imm16))) {
-            minias_set_error(as,"bad-aarch64-wide-immediate:%s:line=%zu",
+            minias_parse_error(ctx,"bad-aarch64-wide-immediate:%s:line=%zu",
                              args,stmt->line);
             free(large);minias_mcinst_destroy(inst);return false;
         }
@@ -4108,7 +4115,7 @@ lane_complete:;
                !parse_signed_number(tokens[2]+4U,&raw_shift) ||
                raw_shift<0 || raw_shift>=(wide?64:32) ||
                (raw_shift%16)!=0) {
-                minias_set_error(as,"bad-aarch64-mov-shift:line=%zu",stmt->line);
+                minias_parse_error(ctx,"bad-aarch64-mov-shift:line=%zu",stmt->line);
                 free(large);minias_mcinst_destroy(inst);return false;
             }
             shift=(unsigned)raw_shift/16U;
@@ -4121,8 +4128,8 @@ lane_complete:;
         inst->target_form=modifier && !constant?(uint32_t)movw_fixup:0U;
         put_reg(&inst->operands[0],rd,wide);
         if(modifier && !constant) {
-            if(!a64_attach_expr(as,inst,1U,&movw_expr)) {
-                minias_set_error(as,"out-of-memory:a64-movw-reloc");
+            if(!a64_attach_expr(ctx,inst,1U,&movw_expr)) {
+                minias_parse_error(ctx,"out-of-memory:a64-movw-reloc");
                 free(large);minias_mcinst_destroy(inst);return false;
             }
         }else put_immediate(&inst->operands[1],(int64_t)imm16);
@@ -4144,12 +4151,12 @@ lane_complete:;
         if(parse_signed_number(args,&hint) && hint>=0 && hint<=127) {
             put_immediate(&inst->operands[0],hint);
         }else if(minias_parse_symbol_addend(arg,&expr) &&
-                 a64_attach_expr(as,inst,0U,&expr)) {
+                 a64_attach_expr(ctx,inst,0U,&expr)) {
             /* GNU Linux BTI macros use hint #.L__bti_targets_c.
              * Keep the exact symbol in MCInst until layout/encode instead
              * of treating an ABS .equ alias as an unsupported opcode. */
         }else {
-            minias_set_error(as,"bad-aarch64-hint:%s:line=%zu",
+            minias_parse_error(ctx,"bad-aarch64-hint:%s:line=%zu",
                              args,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
@@ -4168,8 +4175,8 @@ lane_complete:;
         };
         size_t k;
         if(!strncmp(op,"reta",4U) &&
-           (a64_features(as)&A64_FEATURE_PAUTH)==0U) {
-            minias_set_error(as,"aarch64-pauth-required:%s:line=%zu",op,stmt->line);
+           (a64_parse_features(ctx)&A64_FEATURE_PAUTH)==0U) {
+            minias_parse_error(ctx,"aarch64-pauth-required:%s:line=%zu",op,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
         for(k=0U;k<sizeof(forms)/sizeof(forms[0]);++k)
@@ -4219,7 +4226,7 @@ lane_complete:;
         if(!a64_vector_view(aliases,first,&vd,&da) ||
            !a64_vector_view(aliases,second,&vn,&sa) || da!=sa ||
            (da&UINT32_C(0xc00))!=0U) {
-            minias_set_error(as,"bad-aarch64-mov-vector:%s:line=%zu",
+            minias_parse_error(ctx,"bad-aarch64-mov-vector:%s:line=%zu",
                              args,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
@@ -4264,14 +4271,14 @@ lane_complete:;
         if(negative) {
             if(!parse_signed_number(literal,&signed_value) ||
                (!reg64 && signed_value<INT32_MIN)) {
-                minias_set_error(as,"bad-aarch64-mov-negative:%s:line=%zu",
+                minias_parse_error(ctx,"bad-aarch64-mov-negative:%s:line=%zu",
                                  second,stmt->line);
                 minias_mcinst_destroy(inst);return false;
             }
             value=((uint64_t)signed_value)&mask;
         }else if(!minias_eval_u64_expression(literal,&value) ||
                  (!reg64 && (value>>32U)!=0U)) {
-            minias_set_error(as,"bad-aarch64-mov-constant:%s:line=%zu",
+            minias_parse_error(ctx,"bad-aarch64-mov-constant:%s:line=%zu",
                              second,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
@@ -4302,7 +4309,7 @@ lane_complete:;
             put_reg(&inst->operands[1],31U,reg64);
             put_immediate(&inst->operands[2],fields);
         }else {
-            minias_set_error(as,"bad-aarch64-mov-not-single-encoding:%s:line=%zu",
+            minias_parse_error(ctx,"bad-aarch64-mov-not-single-encoding:%s:line=%zu",
                              second,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
@@ -4321,8 +4328,8 @@ lane_complete:;
          * in MCInst until final layout. Never use the old parse-time local
          * difference folding shortcut: it can freeze a stale displacement
          * when a forward .space changes the section after parsing. */
-        if (!a64_attach_branch_target(as,inst,0U,args)) {
-            minias_set_error(as, "bad-aarch64-branch-target:%s:line=%zu",
+        if (!a64_attach_branch_target(ctx,inst,0U,args)) {
+            minias_parse_error(ctx, "bad-aarch64-branch-target:%s:line=%zu",
                              args, stmt->line);
             minias_mcinst_destroy(inst);
             return false;
@@ -4333,8 +4340,8 @@ lane_complete:;
         bool is_sp;
         if (!split_two(args, first, sizeof(first), second, sizeof(second)) ||
             !parse_a64_reg(aliases,first, &reg, &reg64, &is_sp) || is_sp ||
-            !a64_attach_branch_target(as,inst,1U,second)) {
-            minias_set_error(as,"bad-aarch64-condbranch:%s:line=%zu",
+            !a64_attach_branch_target(ctx,inst,1U,second)) {
+            minias_parse_error(ctx,"bad-aarch64-condbranch:%s:line=%zu",
                              args,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
@@ -4349,8 +4356,8 @@ lane_complete:;
            !parse_a64_reg(aliases,t[0],&rd,&wide,&sp) || sp ||
            !parse_signed_number(t[1],&bit) || bit<0 ||
            bit>=(wide?64:32) ||
-           !a64_attach_branch_target(as,inst,2U,t[2])) {
-            minias_set_error(as,"bad-aarch64-testbranch:%s:line=%zu",
+           !a64_attach_branch_target(ctx,inst,2U,t[2])) {
+            minias_parse_error(ctx,"bad-aarch64-testbranch:%s:line=%zu",
                              args,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
@@ -4361,19 +4368,19 @@ lane_complete:;
     } else {
         unsigned cond;
         if(a64_branch_condition(op,&cond)) {
-            if(!a64_attach_branch_target(as,inst,0U,args)) {
-                minias_set_error(as,"bad-aarch64-conditional:%s:line=%zu",
+            if(!a64_attach_branch_target(ctx,inst,0U,args)) {
+                minias_parse_error(ctx,"bad-aarch64-conditional:%s:line=%zu",
                                  args,stmt->line);
                 minias_mcinst_destroy(inst);return false;
             }
             inst->opcode=A64_MC_BCOND;inst->count=1U;
             inst->encoding=cond;
-        } else if (a64_parse_relocated(as,aliases,inst,op,args)) {
+        } else if (a64_parse_relocated(ctx,aliases,inst,op,args)) {
             /* ADRP/LO12 relocation is typed and target-owned. */
-        } else if (parse_integer_family(as,aliases,inst,op,args)) {
+        } else if (parse_integer_family(ctx,aliases,inst,op,args)) {
             /* Reuse existing typed register and memory IR. */
         } else {
-            minias_set_error(as,"bad-aarch64-operands:%s:%s:line=%zu",
+            minias_parse_error(ctx,"bad-aarch64-operands:%s:%s:line=%zu",
                              op,args,stmt->line);
             minias_mcinst_destroy(inst);return false;
         }
