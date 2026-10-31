@@ -402,14 +402,6 @@ enum {
     A64_MC_FP_COMPARE
 };
 
-/* GNU AArch64 operands split on TOP-LEVEL commas, not commas within
- * [xN,#offset]. Unlike copying a generic tokenizer into every target,
- * this helper is strictly A64 addressing grammar. */
-static bool split_operands_sized(const char *args, char *out[4],
-                                 const size_t capacity[4], unsigned *n) {
-    return minias_split_mc_operands(args,out,capacity,4U,n);
-}
-
 /* All normal A64 operands still use the fast, bounded stack tokenizer.
  * The GNU MOVW macro may contain a generated expression longer than 384
  * bytes. It calls the SAME sized splitter with transient dynamic storage,
@@ -417,7 +409,7 @@ static bool split_operands_sized(const char *args, char *out[4],
 static bool split_operands(const char *args, char out[4][384], unsigned *n) {
     char *slots[4]={out[0],out[1],out[2],out[3]};
     const size_t caps[4]={384U,384U,384U,384U};
-    return split_operands_sized(args,slots,caps,n);
+    return minias_split_mc_operands(args,slots,caps,4U,n);
 }
 
 /* SIMD/FP registers carry explicit Target-bank metadata in the MC envelope.
@@ -4068,7 +4060,7 @@ lane_complete:;
                 cap[k]=stride;
             }
         }
-        parsed=split_operands_sized(args,tokens,cap,&n);
+        parsed=minias_split_mc_operands(args,tokens,cap,4U,&n);
         if(!parsed || (n!=2U && n!=3U) ||
            !parse_a64_reg(aliases,tokens[0],&rd,&wide,&sp) || sp) {
             /* Preserve the real GNU-expanded operand and register

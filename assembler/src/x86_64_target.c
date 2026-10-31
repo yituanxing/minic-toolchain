@@ -1278,11 +1278,8 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             regtext=conversions[k].source_xmm?src:dst;
             rmtext=conversions[k].source_xmm?dst:src;
             if(!x64_xmm_register(regtext,&reg))continue;
-            if(conversions[k].source_xmm) {
-                if(x64_register(rmtext,&rm,&wide) &&
-                   wide==conversions[k].gpr_wide)rm_is_register=true;
-            }else if(x64_register(rmtext,&rm,&wide) &&
-                     wide==conversions[k].gpr_wide)rm_is_register=true;
+            if(x64_register(rmtext,&rm,&wide) &&
+               wide==conversions[k].gpr_wide)rm_is_register=true;
             if(rm_is_register) {
                 m->opcode=X64_REG_BINARY;m->count=2U;
                 m->encoding=conversions[k].encoding|UINT32_C(0x800);
@@ -1555,7 +1552,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
            !x64_register(source,&r1,&w1) ||
            !x64_register(dest,&bmi_dst,&bmi_wide) ||
            w0!=bmi_wide || w1!=bmi_wide ||
-           !(name_len==(andn?4U:4U) ||
+           !(name_len==4U ||
              (name_len==5U && s->op[4]==(bmi_wide?'q':'l'))))goto invalid;
         m->opcode=X64_BMI2_SHIFT;m->count=3U;
         m->encoding=UINT32_C(0x10000)|

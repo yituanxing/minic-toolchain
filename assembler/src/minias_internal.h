@@ -870,6 +870,7 @@ typedef struct MiniAsTargetOps {
     bool (*parse_target_directive)(MiniAs *, const char *, const char *, size_t, bool *);
     /* Fully target-owned ISA/ABI state lifecycle and per-fragment snapshot. */
     bool (*init_target_state)(MiniAs *, const struct MiniAsAssemblyConfig *);
+    bool (*configure_legacy_target)(struct MiniAsAssemblyConfig *, unsigned);
     void (*capture_site_state)(const MiniAs *, MiniAsTargetSiteState *);
     void (*destroy_target_state)(MiniAs *);
     bool (*validate_common_directive)(MiniAs *, MiniAsCommonDirectiveKind,
@@ -1028,5 +1029,10 @@ typedef struct MiniAsAssemblyConfig {
 } MiniAsAssemblyConfig;
 int minias_assemble_config(const char *, const char *,
                            const MiniAsAssemblyConfig *, FILE *);
+
+/* Internal multi-target driver (legacy public API remains RISC-V). */
+int minias_assemble_with_target(const char *, const char *,
+                                const MiniAsTargetOps *, bool, uint32_t,
+                                unsigned, FILE *);
 
 #endif

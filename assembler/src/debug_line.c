@@ -283,9 +283,6 @@ static bool patch32(MiniAs *as,int sec,size_t at,uint64_t value) {
         s->data[at+i]=(unsigned char)(value>>(i*8U));
     return true;
 }
-static bool dwarf_string(MiniAs *as,int sec,const char *str) {
-    return minias_section_append(as,sec,str,strlen(str)+1U);
-}
 static bool end_sequence(MiniAs *as,int sec) {
     return append_byte(as,sec,0U) && append_leb(as,sec,1U) &&
            append_byte(as,sec,1U);
@@ -525,7 +522,8 @@ bool minias_debug_emit(MiniAs *as) {
            !append_byte(as,sec,0U))goto failed;
     if(!append_byte(as,sec,0U))goto failed;
     for(i=1U;i<=as->debug_file_max;++i)
-        if(!dwarf_string(as,sec,files[i].basename) ||
+        if(!minias_section_append(as,sec,files[i].basename,
+                                  strlen(files[i].basename)+1U) ||
            !append_leb(as,sec,files[i].directory_index) ||
            !append_leb(as,sec,0U) ||
            !append_leb(as,sec,0U))goto failed;

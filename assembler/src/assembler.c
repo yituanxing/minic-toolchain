@@ -4919,3 +4919,64 @@ int minias_assemble_config(const char *input_path,
     free(long_branch_ids);
     return rc;
 }
+
+int minias_assemble_with_target(const char *input_path,
+                                const char *output_path,
+                                const MiniAsTargetOps *target,
+                                bool elf32,
+                                uint32_t elf_flags,
+                                unsigned strict_i_xlen,
+                                FILE *diagnostic) {
+    MiniAsAssemblyConfig config;
+    memset(&config, 0, sizeof(config));
+    config.target = target;
+    config.elf32 = elf32;
+    config.elf_flags = elf_flags;
+    if (strict_i_xlen != 0U &&
+        (target->configure_legacy_target == NULL ||
+         !target->configure_legacy_target(&config, strict_i_xlen))) {
+        if (diagnostic != NULL)
+            fprintf(diagnostic, "minic-as: unsupported-legacy-target-configuration\n");
+        return 1;
+    }
+    return minias_assemble_config(input_path, output_path, &config, diagnostic);
+}
+
+int minias_assemble_file_target_isa(const char *input_path,
+                                    const char *output_path,
+                                    bool elf32,
+                                    uint32_t elf_flags,
+                                    unsigned strict_i_xlen,
+                                    FILE *diagnostic) {
+    return minias_assemble_with_target(input_path, output_path,
+                                       minias_target_riscv(), elf32,
+                                       elf_flags, strict_i_xlen, diagnostic);
+}
+
+/* Historical API stays permissive: only explicit -march=rv64i activates
+ * ISA qualification so the existing MiniAS/Linux acceptance does not change. */
+int minias_assemble_file_target(const char *input_path,
+                                const char *output_path,
+                                bool elf32,
+                                uint32_t elf_flags,
+                                FILE *diagnostic) {
+    return minias_assemble_file_target_isa(
+        input_path, output_path, elf32, elf_flags, false, diagnostic);
+}
+
+int minias_assemble_file_class(const char *input_path,
+                               const char *output_path,
+                               bool elf32,
+                               FILE *diagnostic) {
+    return minias_assemble_file_target(input_path,
+                                       output_path,
+                                       elf32,
+                                       0U,
+                                       diagnostic);
+}
+
+int minias_assemble_file(const char *input_path,
+                         const char *output_path,
+                         FILE *diagnostic) {
+    return minias_assemble_file_class(input_path, output_path, false, diagnostic);
+}
