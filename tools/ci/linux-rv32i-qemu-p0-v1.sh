@@ -260,7 +260,8 @@ if [[ "$p1" == 1 ]]; then
     fi
     if [[ "$f18" == 1 ]]; then
       for name in nf_defrag_ipv4 nf_defrag_ipv6 nf_conntrack \
-        llc stp bridge br_netfilter veth kvm drm drm_kms_helper \
+        llc stp bridge br_netfilter veth kvm i2c-core backlight \
+        drm_panel_orientation_quirks drm drm_kms_helper \
         drm_shmem_helper virtio-gpu nvme-core nvme; do
         src="$module_dir/$name.ko"
         [[ -s "$src" ]] || { echo "RV32I_QEMU_F18=FAIL missing_module=$src" >&2; exit 3; }
@@ -575,6 +576,9 @@ if [[ "$p1" == 1 ]]; then
         'RV32I_P2_F18_MODULE_PASS br_netfilter' \
         'RV32I_P2_F18_MODULE_PASS veth' \
         'RV32I_P2_F18_MODULE_PASS kvm' \
+        'RV32I_P2_F18_MODULE_PASS i2c-core' \
+        'RV32I_P2_F18_MODULE_PASS backlight' \
+        'RV32I_P2_F18_MODULE_PASS drm_panel_orientation_quirks' \
         'RV32I_P2_F18_MODULE_PASS drm' \
         'RV32I_P2_F18_MODULE_PASS drm_kms_helper' \
         'RV32I_P2_F18_MODULE_PASS drm_shmem_helper' \
@@ -600,7 +604,7 @@ if [[ "$p1" == 1 ]]; then
       done
       if grep -Eq '^RV32I_P2_F18_(FAIL|MODULE_FAIL|UNAVAILABLE)' "$work/qemu-p2-normalized.log" ||
          [[ "$(grep -Ec '^RV32I_P2_F18_PASS ' "$work/qemu-p2-normalized.log")" != 7 ]] ||
-         [[ "$(grep -Ec '^RV32I_P2_F18_MODULE_PASS ' "$work/qemu-p2-normalized.log")" != 15 ]] ||
+         [[ "$(grep -Ec '^RV32I_P2_F18_MODULE_PASS ' "$work/qemu-p2-normalized.log")" != 18 ]] ||
          [[ "$(grep -Ec '^RUNTIME_V2_SYSCALL_PASS ' "$work/qemu-p2-normalized.log")" != 12 ]]; then
         echo 'RV32I_QEMU_F18=FAIL missing_duplicate_or_negative_full18_function_or_module' >&2
         exit 1

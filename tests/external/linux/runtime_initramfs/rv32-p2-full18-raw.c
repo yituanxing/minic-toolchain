@@ -128,7 +128,11 @@ static int modules(void){
  static const char*const names[]={
   "nf_defrag_ipv4","nf_defrag_ipv6","nf_conntrack",
   "llc","stp","bridge","br_netfilter","veth",
-  "kvm","drm","drm_kms_helper","drm_shmem_helper","virtio-gpu",
+  /* drm.ko GNU undefined symbols include devm_of_find_backlight,
+   * drm_get_panel_orientation_quirk, i2c_transfer (all =m in original
+   * Image Kconfig). Load their real symbol-providing modules FIRST. */
+  "kvm","i2c-core","backlight","drm_panel_orientation_quirks",
+  "drm","drm_kms_helper","drm_shmem_helper","virtio-gpu",
   "nvme-core","nvme"
  };
  for(word i=0;i<sizeof(names)/sizeof(names[0]);i++)
