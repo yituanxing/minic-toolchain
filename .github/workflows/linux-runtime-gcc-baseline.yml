@@ -98,6 +98,12 @@ jobs:
              ! git diff --quiet HEAD^ HEAD -- tools/ci/linux-rv64-runtime-trigger.txt; then
             active=true
           fi
+          # The RV32 [minic-full] branch deliberately skips the RV64 cohort
+          # producer. Do not start its repeat-only consumer in that same job.
+          if [[ "${{ github.event_name }}" == pull_request ]] && \
+             [[ "${{ contains(github.event.pull_request.title, '[minic-full]') }}" == true ]]; then
+            active=false
+          fi
           printf 'run=%s\n' "$active" >>"$GITHUB_OUTPUT"
           echo "RV64_FULL_PR_GATE=$active head=$(git rev-parse HEAD)"
 
