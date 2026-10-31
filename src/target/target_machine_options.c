@@ -99,6 +99,11 @@ bool minic_target_codegen_option_apply(MinicTargetInfo *target,
         /* Our indirect CALL and computed-goto machine paths already move
          * the target into an explicit GP register, as GCC requests. */
         return true;
+    } else if (strcmp(option, "-mno-sse") == 0) {
+        flag = MINIC_X86_CODEGEN_NO_SSE;
+    } else if (strcmp(option, "-msse") == 0) {
+        flag = MINIC_X86_CODEGEN_NO_SSE;
+        enabled = false;
     } else if (strcmp(option, "-mfunction-return=thunk-extern") == 0)
         flag = MINIC_X86_CODEGEN_RETURN_EXTERNAL_THUNK;
     else if (strcmp(option, "-mfunction-return=keep") == 0) {

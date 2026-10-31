@@ -35,6 +35,7 @@ MINIC_CFLAGS = {
 }
 LOONGARCH_ABI_FLAGS={"-mabi=lp64d","-mabi=lp64s"}
 X86_CODEGEN_FLAGS={
+    "-mno-sse","-msse",
     "-fcf-protection=branch","-fcf-protection=none",
     "-mindirect-branch=thunk-extern","-mindirect-branch=thunk-inline",
     "-mindirect-branch=keep","-mindirect-branch-register",
@@ -320,13 +321,13 @@ def main():
             strict_cmd=cmd.replace(" -c ",
                 " -fshort-wchar -fcf-protection=branch -fstack-protector-strong"
                 " -ftrivial-auto-var-init=zero -mindirect-branch=thunk-extern"
-                " -mfunction-return=thunk-extern -fpatchable-function-entry=16,16"
+                " -mfunction-return=thunk-extern -fpatchable-function-entry=16,16 -mno-sse"
                 " -mcmodel=kernel -O2 -c ")
             _,forwarded,_,_=gnu_argv(strict_cmd,"gcc","lib/a.o",Path("lib/a.i"),"x86_64")
             assert forwarded==["-fshort-wchar","-fcf-protection=branch",
                                "-mindirect-branch=thunk-extern",
                                "-mfunction-return=thunk-extern",
-                               "-fpatchable-function-entry=16,16"]
+                               "-fpatchable-function-entry=16,16", "-mno-sse"]
             assert valid_minic_flags(forwarded,"x86_64")
             unqualified=unqualified_gnu_codegen_flags(
                 gnu_command_tokens(strict_cmd,"gcc"),forwarded)

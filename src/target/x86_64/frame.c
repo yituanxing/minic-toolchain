@@ -1,6 +1,7 @@
 #include "target/x86_64/frame.h"
 #include "target/common/core_function_facts.h"
 #include "target/common/core_frame_layout.h"
+#include "target/common/core_object_reuse.h"
 #include "target/common/core_spill_layout.h"
 #include "target/x86_64/abi.h"
 #include "target/data_layout.h"
@@ -222,24 +223,64 @@ bool minic_x86_64_frame_init_with_storage(const MinicC0Program *program,
           frame->varargs_count != 0U
               ? frame->varargs_tag_base_offset + frame->varargs_count * 24U
               : value_bytes;
-    for (i = 0U; i < fn->object_count; ++i) {
-        const size_t size = frame->object_storage.objects[i].extent;
-        const size_t alignment = frame->object_storage.objects[i].alignment;
-        if (frame->objects_from_aligned_rsp) {
-            /* Positive offsets from the aligned %rsp denote object START. */
-            if (!minic_core_frame_align_up(pos, alignment, &pos) || pos > SIZE_MAX - size)
-                return false;
+    if (!frame->objects_from_aligned_rsp) {
+        MinicCoreObjectReusePlan reuse = {0};
+        size_t pool_slots, pool_first_end = 0U;
+        bool valid = minic_core_object_reuse_plan_build(
+            program, fn, target->data_layout, 8U, true, &reuse) &&
+            minic_core_object_reuse_plan_get(
+                &reuse, MINIC_CORE_OBJECT_INVALID, NULL, NULL, &pool_slots);
+        /* Core proves first-write, last-use and non-escape of every eligible
+         * scalar object. A separate 8-byte slot pool lets unrolled kernel
+         * crypto stay within the 16KiB kernel stack without weakening
+         * address identity for other (potentially escaping) objects. */
+        for (i = 0U; valid && i < fn->object_count; ++i) {
+            const size_t size = frame->object_storage.objects[i].extent;
+            const size_t alignment = frame->object_storage.objects[i].alignment;
+            size_t slot, peak;
+            bool reusable;
+            valid = minic_core_object_reuse_plan_get(
+                &reuse, (MinicCoreObjectId)i, &reusable, &slot, &peak) &&
+                peak == pool_slots;
+            if (!valid || reusable) continue;
+            /* Negative offsets from aligned %rbp denote the object's low
+             * address after subtracting its END displacement. */
+            valid = pos <= SIZE_MAX - size &&
+                minic_core_frame_align_up(pos + size, alignment, &pos) &&
+                pos <= (size_t)INT32_MAX;
+            if (valid) frame->object_offsets[i] = pos;
+        }
+        if (valid) {
+            valid = minic_core_frame_align_up(pos, 8U, &pos) &&
+                pos <= (size_t)INT32_MAX &&
+                pool_slots <= ((size_t)INT32_MAX - pos) / 8U;
+            if (valid && pool_slots != 0U) {
+                pool_first_end = pos + 8U;
+                pos += pool_slots * 8U;
+            }
+        }
+        for (i = 0U; valid && i < fn->object_count; ++i) {
+            size_t slot, peak;
+            bool reusable;
+            valid = minic_core_object_reuse_plan_get(
+                &reuse, (MinicCoreObjectId)i, &reusable, &slot, &peak) &&
+                peak == pool_slots && (!reusable || slot < pool_slots);
+            if (valid && reusable)
+                frame->object_offsets[i] = pool_first_end + slot * 8U;
+        }
+        minic_core_object_reuse_plan_destroy(&reuse);
+        if (!valid) return false;
+    } else {
+        for (i = 0U; i < fn->object_count; ++i) {
+            const size_t size = frame->object_storage.objects[i].extent;
+            const size_t alignment = frame->object_storage.objects[i].alignment;
+            /* Positive offsets from dynamically aligned %rsp denote START. */
+            if (!minic_core_frame_align_up(pos, alignment, &pos) ||
+                pos > SIZE_MAX - size) return false;
             frame->object_offsets[i] = pos;
             pos += size;
-        } else {
-            /* Negative offsets from aligned %rbp denote object START.
-             * Align the END of the reserved extent, not its low address. */
-            if (pos > SIZE_MAX - size ||
-                !minic_core_frame_align_up(pos + size, alignment, &pos))
-                return false;
-            frame->object_offsets[i] = pos;
+            if (pos > (size_t)INT32_MAX) return false;
         }
-        if (pos > (size_t)INT32_MAX) return false;
     }
     if (frame->objects_from_aligned_rsp) {
         /* This slack leaves dynamically aligned objects below all 8-byte
@@ -252,8 +293,20 @@ bool minic_x86_64_frame_init_with_storage(const MinicC0Program *program,
             return false;
         pos += fixed_bytes + maximum_alignment;
     }
-    return minic_core_frame_align_up(pos, 16U, &frame->frame_size) &&
-           frame->frame_size <= (size_t)INT32_MAX;
+    if (!minic_core_frame_align_up(pos, 16U, &frame->frame_size) ||
+        frame->frame_size > (size_t)INT32_MAX) return false;
+    if (getenv("MINIC_X86_FRAME_TRACE") != NULL && fn->name != NULL &&
+        strstr(fn->name, "blake2s_compress_generic") != NULL) {
+        (void)fprintf(stderr,
+            "MINIC_X86_FRAME function=%s scratch_bytes=%zu "
+            "allocated_object_bytes=%zu objects=%zu values=%zu final_frame=%zu\n",
+            fn->name, value_bytes,
+            pos >= value_bytes ? pos - value_bytes : 0U,
+            fn->object_count, fn->value_count, frame->frame_size);
+        if (getenv("MINIC_X86_FRAME_DUMP") != NULL)
+            (void)minic_core_function_dump(stderr, fn);
+    }
+    return true;
 }
 
 void minic_x86_64_frame_destroy(MinicX86Frame *frame) {

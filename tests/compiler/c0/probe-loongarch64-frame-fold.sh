@@ -78,8 +78,12 @@ grep -Eq '^[[:space:]]+(add|addi)\.d [^,]+, \$sp,' \
 # Packed external pointers have no proven alignment. Keep the byte fallback.
 grep -Fq '  andi $t3, $t1, 3' "$work/packed.s" \
     || fail 'unaligned 32-bit guard missing'
-grep -Fq '  ld.bu $t2, $t1, 0' "$work/packed.s" \
-    || fail 'unaligned byte-gather missing'
+# The exact byte-gather now lives in one local slow helper after the
+# function .size, instead of being duplicated at every packed access.
+grep -Eq '^  b \.Lmini_loong_f[0-9]+_unaligned_load4$' "$work/packed.s" \
+    || fail 'packed access does not branch to byte-gather helper'
+grep -Fq '  ld.bu $t2, $t1, 0' "$work/source.s" \
+    || fail 'unaligned byte-gather helper missing'
 
 # The real generated function must actually use the extended register+offset
 # addressing, not merely pass an isolated helper-output test.

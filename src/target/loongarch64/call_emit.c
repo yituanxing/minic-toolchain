@@ -455,6 +455,13 @@ bool minic_loongarch64_emit_abi_instruction(
                                  minic_type_is_double(ins->type) ? "st.d" : "st.w",
                                  gp_regs[location->gp_first], offset))
                     return false;
+                /* The subsequent target-only pass may forward a sole
+                 * immediately adjacent use straight from its incoming GAR.
+                 * No ABI register is kept live across any machine opcode. */
+                if (fprintf(out, "# MINI_LOONG_SSA_PARAMETER %u %zu\n",
+                            (unsigned int)ins->result,
+                            location->gp_first) < 0)
+                    return false;
             } else {
                 const char *const load =
                     minic_lp64_register64_type(program, target, ins->type) ||

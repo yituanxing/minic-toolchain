@@ -5,6 +5,81 @@
 #include <stdio.h>
 #include <string.h>
 
+/* Every ordinary Core access has a byte-exact fallback if its pointer is
+ * not naturally aligned.  Keeping that full loop at every access site made
+ * the Linux kernel's LoongArch .text needlessly enormous.  Share the slow
+ * paths *within* a function: pcaddi records the continuation in a private
+ * scratch GPR and b transfers control without clobbering $ra, including in
+ * leaf functions.  The hot aligned access and all memory semantics remain
+ * identical.  The compiler emits functions serially. */
+static size_t loong_memory_function_id;
+static unsigned int loong_memory_outlined;
+enum {
+    LOONG_OUTLINE_LOAD4 = 1U,
+    LOONG_OUTLINE_LOAD8 = 2U,
+    LOONG_OUTLINE_STORE8 = 4U
+};
+
+void minic_loongarch64_memory_helpers_begin(size_t function_id) {
+    loong_memory_function_id = function_id;
+    loong_memory_outlined = 0U;
+}
+
+bool minic_loongarch64_memory_helpers_end(FILE *out) {
+    if (out == NULL) return false;
+    if (loong_memory_outlined & (LOONG_OUTLINE_LOAD4 | LOONG_OUTLINE_LOAD8)) {
+        if ((loong_memory_outlined & LOONG_OUTLINE_LOAD4) &&
+            fprintf(out,
+                ".Lmini_loong_f%zu_unaligned_load4:\n"
+                "  li.d $t4, 4\n"
+                "  move $t0, $zero\n"
+                "  move $t5, $zero\n"
+                "1:\n"
+                "  ld.bu $t2, $t1, 0\n"
+                "  sll.d $t2, $t2, $t5\n"
+                "  or $t0, $t0, $t2\n"
+                "  addi.d $t1, $t1, 1\n"
+                "  addi.d $t5, $t5, 8\n"
+                "  addi.d $t4, $t4, -1\n"
+                "  bnez $t4, 1b\n"
+                "  slli.w $t0, $t0, 0\n"
+                "  jirl $zero, $t6, 0\n",
+                loong_memory_function_id) < 0)
+            return false;
+        if ((loong_memory_outlined & LOONG_OUTLINE_LOAD8) &&
+            fprintf(out,
+                ".Lmini_loong_f%zu_unaligned_load8:\n"
+                "  li.d $t4, 8\n"
+                "  move $t0, $zero\n"
+                "  move $t5, $zero\n"
+                "1:\n"
+                "  ld.bu $t2, $t1, 0\n"
+                "  sll.d $t2, $t2, $t5\n"
+                "  or $t0, $t0, $t2\n"
+                "  addi.d $t1, $t1, 1\n"
+                "  addi.d $t5, $t5, 8\n"
+                "  addi.d $t4, $t4, -1\n"
+                "  bnez $t4, 1b\n"
+                "  jirl $zero, $t6, 0\n",
+                loong_memory_function_id) < 0)
+            return false;
+    }
+    if ((loong_memory_outlined & LOONG_OUTLINE_STORE8) &&
+        fprintf(out,
+            ".Lmini_loong_f%zu_unaligned_store8:\n"
+            "  li.d $t3, 8\n"
+            "1:\n"
+            "  st.b $t0, $t1, 0\n"
+            "  srli.d $t0, $t0, 8\n"
+            "  addi.d $t1, $t1, 1\n"
+            "  addi.d $t3, $t3, -1\n"
+            "  bnez $t3, 1b\n"
+            "  jirl $zero, $t6, 0\n",
+            loong_memory_function_id) < 0)
+        return false;
+    return true;
+}
+
 /* Core owns the recursive proof and gcd propagation. Preserve the former
  * Loong 16-edge proof budget and its existing DataLayout root policy,
  * including GLOBAL_ADDRESS (RV deliberately has a different global policy).
@@ -163,7 +238,7 @@ static bool loong_emit_scalar_store(FILE *out, size_t width,
                                     const char *address_reg,
                                     const char *scratch_reg,
                                     bool proven_aligned,
-                                    bool preserve_inputs) {
+                                    bool preserve_inputs, bool outline) {
     static size_t serial;
     const char *op = width == 1U ? "st.b" : width == 2U ? "st.h" :
                      width == 4U ? "st.w" : width == 8U ? "st.d" : NULL;
@@ -176,6 +251,21 @@ static bool loong_emit_scalar_store(FILE *out, size_t width,
     if (width == 1U || proven_aligned)
         return fprintf(out, "  %s %s, %s, 0\n", op,
                        value_reg, address_reg) >= 0;
+    if (outline && width == 8U && !preserve_inputs &&
+        strcmp(value_reg, "$t0") == 0 &&
+        strcmp(address_reg, "$t1") == 0 &&
+        strcmp(scratch_reg, "$t3") == 0) {
+        loong_memory_outlined |= LOONG_OUTLINE_STORE8;
+        return fprintf(out,
+            "  andi $t3, $t1, 7\n"
+            "  bnez $t3, 1f\n"
+            "  st.d $t0, $t1, 0\n"
+            "  b 2f\n"
+            "1:\n"
+            "  pcaddi $t6, 2f\n"
+            "  b .Lmini_loong_f%zu_unaligned_store8\n"
+            "2:\n", loong_memory_function_id) >= 0;
+    }
     /* Preserve the original payload register while emitting the first byte
      * directly.  The slow path needs only the shifted upper bytes in its
      * scratch register, so copying the entire value first is redundant. */
@@ -236,7 +326,7 @@ bool minic_loongarch64_emit_asm_output_store(
     const char *scratch_reg) {
     return loong_emit_scalar_store(out, width, value_reg, address_reg,
         scratch_reg, loong_known_address_alignment(program, target, fn,
-            address) >= width, true);
+            address) >= width, true, false);
 }
 
 /* Core LOAD/STORE deliberately carries no trusted alignment metadata: an
@@ -246,11 +336,11 @@ bool minic_loongarch64_emit_asm_output_store(
  * their hardware-width operation (an unaligned atomic address is invalid). */
 static bool emit_integer_memory(FILE *out, bool store,
                                 size_t width, bool sign, bool atomic,
-                                bool proven_aligned) {
+                                bool proven_aligned, bool outline) {
     const char *op = NULL;
     if (store)
         return loong_emit_scalar_store(out, width, "$t0", "$t1", "$t3",
-                                       atomic || proven_aligned, false);
+                                       atomic || proven_aligned, false, outline);
     else {
         op = width == 1U ? (sign ? "  ld.b $t0, $t1, 0\n" :
                                      "  ld.bu $t0, $t1, 0\n") :
@@ -262,6 +352,20 @@ static bool emit_integer_memory(FILE *out, bool store,
     if (op == NULL) return false;
     if (width == 1U || atomic || proven_aligned)
         return fputs(op, out) != EOF;
+    if (outline && (width == 4U || width == 8U)) {
+        loong_memory_outlined |= width == 4U
+            ? LOONG_OUTLINE_LOAD4 : LOONG_OUTLINE_LOAD8;
+        return fprintf(out,
+            "  andi $t3, $t1, %zu\n"
+            "  bnez $t3, 1f\n"
+            "%s"
+            "  b 2f\n"
+            "1:\n"
+            "  pcaddi $t6, 2f\n"
+            "  b .Lmini_loong_f%zu_unaligned_load%zu\n"
+            "2:\n", width - 1U, op,
+            loong_memory_function_id, width) >= 0;
+    }
     /* The two-byte unaligned case needs only two byte loads, a shift and
      * an OR.  Keep the aligned native instruction as the fast path, but
      * avoid the generic counted gather loop (counter, shift-count register
@@ -323,7 +427,7 @@ bool minic_loongarch64_emit_asm_input_scalar(
      * 64-bit GPR representation; ld.d transports the entire wide carrier. */
     return emit_integer_memory(out, false, width, width == 4U, false,
         loong_known_address_alignment(program, target, fn,
-                                      address) >= width);
+                                      address) >= width, false);
 }
 
 
@@ -334,13 +438,14 @@ bool minic_loongarch64_emit_memory_instruction(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     const MinicLP64FramePlan *frame_plan,
-    bool dynamic_frame, bool value_in_previous_gp,
+    size_t function_id, bool dynamic_frame, bool value_in_previous_gp,
     bool *needs_gp_store) {
     if (out == NULL || program == NULL || target == NULL ||
         fn == NULL || ins == NULL || frame_plan == NULL ||
         needs_gp_store == NULL)
         return false;
     *needs_gp_store = false;
+    if (function_id != loong_memory_function_id) return false;
         if (ins->kind == MINIC_CORE_INSTRUCTION_STORE &&
             ins->value.store.stored_value < fn->value_count &&
             (minic_type_is_int128_integer(
@@ -355,11 +460,11 @@ bool minic_loongarch64_emit_memory_instruction(
                     fn, ins, frame_plan, &src) ||
                 !emit_sp_mem(out, "ld.d", "$t1", minic_lp64_frame_value_offset(frame_plan, addr)) ||
                 !emit_sp_mem(out, "ld.d", "$t0", src) ||
-                !emit_integer_memory(out, true, 8U, false, false, aligned) ||
+                !emit_integer_memory(out, true, 8U, false, false, aligned, true) ||
                 !emit_sp_mem(out, "ld.d", "$t1", minic_lp64_frame_value_offset(frame_plan, addr)) ||
                 fputs("  addi.d $t1, $t1, 8\n", out) == EOF ||
                 !emit_sp_mem(out, "ld.d", "$t0", src + 8U) ||
-                !emit_integer_memory(out, true, 8U, false, false, aligned))
+                !emit_integer_memory(out, true, 8U, false, false, aligned, true))
                 return false;
             return true;
         }
@@ -396,7 +501,7 @@ bool minic_loongarch64_emit_memory_instruction(
                 !emit_integer_memory(out, true, pointer ? 8U : width, sign,
                                      atomic,
                      loong_known_address_alignment(program, target, fn,
-                         addr) >= (pointer ? 8U : width))) return false;
+                         addr) >= (pointer ? 8U : width), true)) return false;
             return true;
         }
     switch (ins->kind) {
@@ -414,11 +519,11 @@ bool minic_loongarch64_emit_memory_instruction(
                     return false;
                 aligned = loong_known_address_alignment(
                     program, target, fn, addr) >= 8U;
-                if (!emit_integer_memory(out, false, 8U, false, false, aligned) ||
+                if (!emit_integer_memory(out, false, 8U, false, false, aligned, true) ||
                     !emit_sp_mem(out, "st.d", "$t0", dst) ||
                     !emit_sp_mem(out, "ld.d", "$t1", minic_lp64_frame_value_offset(frame_plan, addr)) ||
                     fputs("  addi.d $t1, $t1, 8\n", out) == EOF ||
-                    !emit_integer_memory(out, false, 8U, false, false, aligned) ||
+                    !emit_integer_memory(out, false, 8U, false, false, aligned, true) ||
                     !emit_sp_mem(out, "st.d", "$t0", dst + 8U))
                     return false;
                 return true;
@@ -448,7 +553,7 @@ bool minic_loongarch64_emit_memory_instruction(
                 !emit_integer_memory(out, false, pointer ? 8U : width, sign,
                                      atomic,
                      loong_known_address_alignment(program, target, fn,
-                         addr) >= (pointer ? 8U : width)))
+                         addr) >= (pointer ? 8U : width), true))
                 return false;
             *needs_gp_store = true;
             return true;

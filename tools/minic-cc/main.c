@@ -14,13 +14,15 @@ static void minic_print_usage(FILE *stream, const char *program) {
     (void)fprintf(stream, "usage: %s -S <preprocessed-input.i> [--target=", program);
     for (i = 0U; i < count; ++i)
         (void)fprintf(stream, "%s%s", i == 0U ? "" : "|", targets[i].name);
-    (void)fprintf(stream, "] [-march=<target-isa>] [-mabi=<target-abi>] [-ffunction-sections|-fno-function-sections] [-fPIE|-fPIC|-fno-pie] [-fsigned-char|-funsigned-char] [-fshort-wchar|-fno-short-wchar] [-fcf-protection=branch] [-mindirect-branch=thunk-extern|thunk-inline|keep] [-mindirect-branch-register] [-mfunction-return=thunk-extern] [-fpatchable-function-entry=16,16] -o <output.s>\n");
+    (void)fprintf(stream, "] [-march=<target-isa>] [-mabi=<target-abi>] [-ffunction-sections|-fno-function-sections] [-fPIE|-fPIC|-fno-pie] [-fsigned-char|-funsigned-char] [-fshort-wchar|-fno-short-wchar] [-fcf-protection=branch] [-mindirect-branch=thunk-extern|thunk-inline|keep] [-mindirect-branch-register] [-mfunction-return=thunk-extern] [-fpatchable-function-entry=16,16] [-mno-sse|-msse] -o <output.s>\n");
 }
 
 static bool is_machine_codegen_option(const char *option) {
     return strncmp(option, "-fcf-protection=", 16U) == 0 ||
            strncmp(option, "-mindirect-branch=", 18U) == 0 ||
            strcmp(option, "-mindirect-branch-register") == 0 ||
+           strcmp(option, "-mno-sse") == 0 ||
+           strcmp(option, "-msse") == 0 ||
            strncmp(option, "-mfunction-return=", 18U) == 0 ||
            strncmp(option, "-fpatchable-function-entry=", 27U) == 0;
 }

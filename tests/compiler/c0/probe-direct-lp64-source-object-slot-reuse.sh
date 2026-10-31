@@ -37,9 +37,16 @@ loong_frame=$(awk '
     inside && /addi\.d \$sp, \$sp, -[0-9]+/ {split($0, parts, "-"); frame=parts[2]}
     END {print frame + 0}
 ' "$work/loongarch64.s")
-if [ "$aarch_frame" -le 0 ] || [ "$aarch_frame" -gt 256 ] ||
+x86_frame=$(awk '
+    /^lp64_disjoint_local_slots:/ {inside=1; next}
+    inside && /^\.Lmini_x86_f[0-9]+_b0:/ {exit}
+    inside && /subq \$[0-9]+, %rsp/ {split($0, parts, "\\$"); split(parts[2], size, ","); frame=size[1]}
+    END {print frame + 0}
+' "$work/x86_64.s")
+if [ "$x86_frame" -le 0 ] || [ "$x86_frame" -gt 256 ] ||
+   [ "$aarch_frame" -le 0 ] || [ "$aarch_frame" -gt 256 ] ||
    [ "$loong_frame" -le 0 ] || [ "$loong_frame" -gt 256 ]; then
-    echo "LP64_SOURCE_OBJECT_FRAME=FAIL aarch64_frame=$aarch_frame loong_frame=$loong_frame" >&2
+    echo "LP64_SOURCE_OBJECT_FRAME=FAIL x86_frame=$x86_frame aarch64_frame=$aarch_frame loong_frame=$loong_frame" >&2
     exit 1
 fi
 
@@ -76,4 +83,4 @@ for target in aarch64 loongarch64; do
     fi
     echo "LP64_SOURCE_OBJECT_RUNTIME=$target PASS GNU=$target_gnu_rc MiniC=$target_minic_rc"
 done
-echo "LP64_SOURCE_OBJECT_REUSE=PASS x86_GNU_MiniC=42/42 aarch64_frame=$aarch_frame loong_frame=$loong_frame targets_S=3"
+echo "LP64_SOURCE_OBJECT_REUSE=PASS x86_GNU_MiniC=42/42 x86_frame=$x86_frame aarch64_frame=$aarch_frame loong_frame=$loong_frame targets_S=3"

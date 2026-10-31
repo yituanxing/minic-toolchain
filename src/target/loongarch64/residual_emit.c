@@ -164,6 +164,10 @@ bool minic_loongarch64_emit_residual_instruction(
             const size_t asm_id = ins->value.inline_asm_id;
             const MinicCoreInlineAsm *source = asm_id < fn->inline_asm_count
                 ? &fn->inline_asms[asm_id] : NULL;
+            /* Keep any native assembly peephole strictly outside GNU/user
+             * inline ASM: exact SP-relative spellings there are observable. */
+            if (fputs("# MINI_LOONG_INLINE_ASM_BEGIN\n", out) == EOF)
+                return false;
             if (minic_loongarch64_linux_jump_label_asm_goto_core(source)) {
                 if (!minic_loongarch64_emit_linux_jump_label_asm_goto(
                         out, source, id, fn->block_count))
@@ -171,7 +175,7 @@ bool minic_loongarch64_emit_residual_instruction(
                         fn, "loongarch64", name, "linux_jump_label_asm_goto",
                         reject_block, reject_ins, __LINE__);
                 *needs_writeback = false;
-                return true;
+                return fputs("# MINI_LOONG_INLINE_ASM_END\n", out) != EOF;
             }
             if (minic_loongarch64_simd_qualify_opaque(source)) {
                 if (!minic_loongarch64_simd_emit_opaque(out, source))
@@ -179,7 +183,7 @@ bool minic_loongarch64_emit_residual_instruction(
                         fn, "loongarch64", name, "qualified_simd_asm",
                         reject_block, reject_ins, __LINE__);
                 *needs_writeback = false;
-                return true;
+                return fputs("# MINI_LOONG_INLINE_ASM_END\n", out) != EOF;
             }
             if (!minic_loongarch64_qualified_opaque_asm(source) ||
                 fwrite(source->template_text, 1U, source->template_length, out) !=
@@ -189,15 +193,17 @@ bool minic_loongarch64_emit_residual_instruction(
                     fn, "loongarch64", name, "qualified_opaque_hardware_asm",
                     reject_block, reject_ins, __LINE__);
             *needs_writeback = false;
-            return true;
+            return fputs("# MINI_LOONG_INLINE_ASM_END\n", out) != EOF;
         }
         case MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM:
+            if (fputs("# MINI_LOONG_INLINE_ASM_BEGIN\n", out) == EOF)
+                return false;
             if (!minic_loongarch64_emit_qualified_structured_asm(out, ctx, ins))
                 return minic_multi_direct_machine_reject(
                     fn, "loongarch64", name, "qualified_hardware_asm",
                     reject_block, reject_ins, __LINE__);
             *needs_writeback = false;
-            return true;
+            return fputs("# MINI_LOONG_INLINE_ASM_END\n", out) != EOF;
         case MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS:
             /* The SHARED semantic guard validates pointer provenance and
              * forbids unwinding higher frames. The native LP64D machine

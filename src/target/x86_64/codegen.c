@@ -215,6 +215,51 @@ static bool x86_head_plan_address_roles(
     return true;
 }
 
+static bool x86_no_sse_fp_type(MinicType type) {
+    return minic_type_is_float(type) || minic_type_is_double(type) ||
+           minic_type_is_long_double(type);
+}
+
+/* -mno-sse is a code-generation contract, not permission to emit an
+ * instruction that will #UD before the kernel enables FPU/XMM state. Reject
+ * reachable floating ABI/operations until x86 has a genuine soft-FP path.
+ * Do not reject unused floating declarations or unreachable lexical arms. */
+static bool x86_no_sse_function_safe(
+    const MinicFunction *declaration, const MinicCoreFunction *fn,
+    const bool *reachable) {
+    size_t i, j;
+    if (x86_no_sse_fp_type(declaration->return_type)) return false;
+    for (i = 0U; i < declaration->parameter_count; ++i)
+        if (x86_no_sse_fp_type(declaration->parameter_types[i]))
+            return false;
+    for (i = 0U; i < fn->block_count; ++i) {
+        const MinicCoreBlock *block = &fn->blocks[i];
+        if (!reachable[i]) continue;
+        for (j = 0U; j < block->instruction_count; ++j) {
+            const MinicCoreInstructionId id = block->instructions[j];
+            const MinicCoreInstruction *ins;
+            if (id >= fn->instruction_count) return false;
+            ins = &fn->instructions[id];
+            if (x86_no_sse_fp_type(ins->type) ||
+                (ins->result < fn->value_count &&
+                 x86_no_sse_fp_type(fn->values[ins->result].type)))
+                return false;
+            if (ins->kind == MINIC_CORE_INSTRUCTION_CALL) {
+                const MinicCoreCallee *callee;
+                size_t k;
+                if (ins->value.call.callee_id >= fn->callee_count)
+                    return false;
+                callee = &fn->callees[ins->value.call.callee_id];
+                if (x86_no_sse_fp_type(callee->return_type)) return false;
+                for (k = 0U; k < callee->parameter_count; ++k)
+                    if (x86_no_sse_fp_type(callee->parameter_types[k]))
+                        return false;
+            }
+        }
+    }
+    return true;
+}
+
 static bool x86_emit_function(FILE *out, const MinicC0Program *program,
                               const MinicTargetInfo *target, const MinicFunction *declaration,
                               const MinicCoreFunction *fn, const MinicCoreFunctionFacts *facts,
@@ -272,6 +317,12 @@ static bool x86_emit_function(FILE *out, const MinicC0Program *program,
     if (reachable == NULL || !minic_core_function_mark_reachable_blocks(
             fn, reachable, fn->block_count)) {
         x86_error(diag, path, "x86-64 cannot discover reachable Core blocks");
+        goto done;
+    }
+    if ((target->x86_codegen_options & MINIC_X86_CODEGEN_NO_SSE) != 0U &&
+        !x86_no_sse_function_safe(declaration, fn, reachable)) {
+        x86_error(diag, path,
+                  "x86-64 -mno-sse rejects reachable floating ABI or operation");
         goto done;
     }
     if (fn->value_count > SIZE_MAX / sizeof(*function_value_use_counts) ||
@@ -415,10 +466,23 @@ static bool x86_emit_function(FILE *out, const MinicC0Program *program,
             if (fprintf(out, "  movq %s, %zu(%%r10)\n",
                         abi->gp_arguments[k], k * 8U) < 0) goto done;
         }
-        for (k = 0U; k < abi->fp_argument_count; ++k) {
-            if (fprintf(out, "  movdqu %%xmm%zu, %zu(%%r10)\n",
-                        k, abi->gp_argument_count * 8U + k * 16U) < 0)
-                goto done;
+        /* Linux Kbuild's -mno-sse is not just a performance option: before
+         * CR4.OSFXSR is enabled, even spilling an unused %xmm register in an
+         * early exception handler raises #UD. The kernel never has SysV FP
+         * variadic register arguments under this ABI mode. In ordinary SysV
+         * code, %al specifies the FP argument-register count, so avoid the
+         * optional SSE spills altogether when its value is zero. */
+        if ((target->x86_codegen_options & MINIC_X86_CODEGEN_NO_SSE) == 0U) {
+            if (fprintf(out, "  testb %%al, %%al\n"
+                             "  jz .Lmini_x86_f%zu_varargs_no_fp\n",
+                        function_id) < 0) goto done;
+            for (k = 0U; k < abi->fp_argument_count; ++k) {
+                if (fprintf(out, "  movdqu %%xmm%zu, %zu(%%r10)\n",
+                            k, abi->gp_argument_count * 8U + k * 16U) < 0)
+                    goto done;
+            }
+            if (fprintf(out, ".Lmini_x86_f%zu_varargs_no_fp:\n",
+                        function_id) < 0) goto done;
         }
     }
     if (fprintf(out, "  jmp .Lmini_x86_f%zu_b%u\n",

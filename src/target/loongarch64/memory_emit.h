@@ -13,8 +13,13 @@ bool minic_loongarch64_emit_memory_instruction(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     const MinicLP64FramePlan *frame_plan,
-    bool dynamic_frame, bool value_in_previous_gp,
+    size_t function_id, bool dynamic_frame, bool value_in_previous_gp,
     bool *needs_gp_store);
+
+/* Outlined byte-accurate slow paths are local to each emitted function.
+ * They never call through $ra and therefore work for leaf functions too. */
+void minic_loongarch64_memory_helpers_begin(size_t function_id);
+bool minic_loongarch64_memory_helpers_end(FILE *out);
 
 /* Exact Core-origin/address/alignment eligibility used by the memory
  * emitter and address-materialization elision. Never elide a producer

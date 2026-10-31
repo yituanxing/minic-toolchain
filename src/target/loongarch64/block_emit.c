@@ -415,7 +415,7 @@ static bool loongarch64_machine_emit_family(
     case MINIC_DIRECT_MACHINE_MEMORY:
         return minic_loongarch64_emit_memory_instruction(
             out, program, target, fn, ins, ctx->frame_plan,
-            ctx->dynamic_frame, shape->lhs_in_previous_gp,
+            ctx->id, ctx->dynamic_frame, shape->lhs_in_previous_gp,
             needs_gp_store);
     case MINIC_DIRECT_MACHINE_FP:
         return minic_loongarch64_emit_fp_instruction(
@@ -445,8 +445,12 @@ static bool loongarch64_machine_store_gp(
     FILE *out, const MinicDirectLP64BlockContext *ctx,
     const MinicCoreInstruction *ins, size_t offset, bool include_double) {
     return loongarch64_emit_gp_result(
-        out, ctx->program, ctx->target, ins, offset, include_double,
-        ctx->dynamic_frame);
+               out, ctx->program, ctx->target, ins, offset, include_double,
+               ctx->dynamic_frame) &&
+           /* The native compactor may cache only certified SSA spill slots,
+            * never address-taken/volatile C objects or GNU inline ASM. */
+           fprintf(out, "# MINI_LOONG_SSA_WRITEBACK %u\n",
+                   (unsigned int)ins->result) >= 0;
 }
 
 static bool loongarch64_machine_emit_terminator(
