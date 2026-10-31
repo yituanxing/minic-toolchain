@@ -198,7 +198,7 @@ that a design change has been made.
 | P01 | P0 | `riscv_profile.c:parse_isa` sets `strict_i_xlen` automatically for exact RV32I/RV64I; `riscv_target.c:strict_base_i_check_sections` and `riscv_validate_common_directive` then reject executable raw data/`.org` as an extra audit | Separate ordinary `target_isa` legality from explicit `strict_base_i_audit`; keep the valuable audit but do not redefine GAS-compatible `-march` |
 | P02 | P0/P1 | `riscv_target.c:riscv_target_directive` currently rejects `.option arch,+ext` under explicit `-march`; legacy +v/+zbb handling is a no-op. `MiniAsRiscvState.option_stack` saves only PIC/RVC/RELAX bits | Add scoped effective ISA state and save/restore it; capture the correct site ISA for MCInst, layout and encoder without accidentally changing file-level attributes |
 | P03 | P1 | `riscv_profile.h` uses one 64-bit feature mask; `riscv_profile.c` recognizes a limited fixed-version extension table and lacks general version-string parsing | Define an extendable versioned ISA/extension set and dependency validation before many Z extensions are added. No need to implement all extensions immediately |
-| P04 | P1 | Measurement in all four Targets now uses read-only `MiniAsMeasureView` + opaque diagnostic sink (§18); output hooks and LoongArch whole-section lookahead already use narrower final/pre-layout views (§15–16). Parse/encode still receive mutable `MiniAs*`. | Continue phase-appropriate parse/encode views and Common-owned emission sink without breaking typed MCInst and existing symbol/relaxation behavior |
+| P04 | P1 | Measurement in all four Targets uses read-only `MiniAsMeasureView` + diagnostic sink (§18); parse-site snapshot and executable-alignment queries consume only Target state (§19); output and LoongArch lookahead use narrower final/pre-layout views (§15–16). `parse_mcinst`/encode still receive mutable `MiniAs*`. | Plan parse-site Common services for real symbol binding, expression evaluation and AArch64 literals; do not force a fake pure parser or second encoder |
 | P05 | P1/P2 | `assembler.c:minias_statement_process` still reads/writes `SourceContext` internals and owns considerable conditional/directive routing; source expansion calls back into it | Complete Source ownership and typed statement routing; a smaller file alone is **not** proof of a clean boundary |
 | P06 | P1 | `aarch64_target.c:a64_record_source_mappings`/`validate` check `strcmp(stmt->op, ".inst")` and alignment directive spellings **after** parsing to determine object mapping semantics | Store parse-site typed instruction-data/alignment provenance; keep original text only where genuinely needed for diagnostics or initial expression compilation |
 | P07 | P1 (future) | RV RVC measurement/encoding reads `state->isa_features` globally while `stmt->site.mode_bits` records only selected option bits | When scoped `.option arch` is implemented, bind the effective ISA/encoding policy to each fragment to avoid consulting the wrong state after `pop` |
@@ -793,3 +793,44 @@ typed MCInst and its diagnostics; only reduce `MiniAs*` in a coherent
 phase-sized batch. Encoding continues to require real Common fixup,
 symbol and fragment-transaction operations, so do not force that code
 through a fake read-only view or start a second encoder.
+
+## 19. P04 parse-site Target state, and the actual Common parse capability
+
+The four-Target parse audit found a useful distinction. **Source-site
+state capture** and **default executable alignment** are pure Target-private
+questions; actual `parse_mcinst` is not. Before this batch,
+`capture_site_state(const MiniAs *, ...)` let the RISC-V, x86 and AArch64
+snapshot callbacks see the entire Common object even though each only
+read `target_state` and the retained input statement. The RISC-V-only
+`default_exec_alignment_for_site` likewise inspected only the RVC ISA and
+`.option` state. Both callbacks now take `const void *target_state`, passed
+directly by Common; the old full-`MiniAs` signatures are gone. LoongArch
+has no source-site hook, which correctly remains NULL. No machine mode,
+GNU 16-bit prefix, mapping symbol or section alignment policy was changed.
+
+**Parser audit — services that genuinely mutate or query Common:**
+
+| Target | Required Common parse service | Why it cannot simply be read-only |
+| --- | --- | --- |
+| RISC-V | NameId symbol binding, expression/ISA diagnostics | Symbol names are interned during typed MCInst construction; XLEN/E ABI validation consumes the retained operands |
+| AArch64 | NameId binding, symbol difference and absolute expression evaluation, literal queue, diagnostics | `ldr =symbol` adds an entry to Common's Section/Subsection-scoped literal pool for later `.ltorg` flush |
+| x86 | NameId/difference binding, current symbol query, absolute expression evaluation, diagnostics; read-only ELF class | Defined same-section symbol pairs can select an initial short immediate; ELF32/i386 operand legality differs from ELF64 |
+| LoongArch | NameId binding and diagnostics | Retained pseudo lowering plans remain Target-owned, while SymbolNameId belongs to Common |
+
+Common creates each Fragment and invokes **exactly one** Target parser in
+`add_stmt`; no second generic parser is waiting for deletion. Audit of
+RISC-V's fixed/dynamic form tables, AArch64 register-alias/literal handling
+and x86 `lock`/`notrack` recursive alias path found distinct, necessary
+responsibilities rather than proven obsolete implementations. Do **not**
+delete these to manufacture a negative line count. A real next parse phase
+boundary requires a Common-owned opaque service set for binding, lookup,
+absolute evaluation, literal requests and first-error diagnostics, plus
+immutable Target state/ABI. It should replace all four actual parser
+callbacks and their dependent helpers together, with no dual parser track.
+
+Local verification after this small but complete source-site boundary:
+Release `-Werror`, A0 **30/30**, Target/Common structural interface guards,
+GNU x86 `.code16` **38/38**, RV RVC and Target profile, strict AArch64
+mapping and literal pool, and GNU LoongArch pseudo/relaxation oracles all
+PASS. The targeted literal-pool and x86/RV tests are needed specifically
+because those parse dependencies must survive a future larger migration.

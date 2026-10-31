@@ -922,10 +922,12 @@ typedef struct MiniAsTargetOps {
     uint16_t elf_machine;
     /* Optional: NULL means all directives go to the common grammar. */
     bool (*parse_target_directive)(MiniAs *, const char *, const char *, size_t, bool *);
-    /* Fully target-owned ISA/ABI state lifecycle and per-fragment snapshot. */
+    /* Fully target-owned ISA/ABI state lifecycle and per-fragment snapshot.
+     * Site capture only reads Target state and the immutable source site;
+     * Common owns the Fragment array and its placement. */
     bool (*init_target_state)(MiniAs *, const struct MiniAsAssemblyConfig *);
     bool (*configure_legacy_target)(struct MiniAsAssemblyConfig *, unsigned);
-    void (*capture_site_state)(const MiniAs *, const MiniAsStmt *,
+    void (*capture_site_state)(const void *target_state, const MiniAsStmt *,
                                MiniAsTargetSiteState *);
     void (*destroy_target_state)(MiniAs *);
     /* Optional one-shot analysis over the complete parsed SourceGraph.
@@ -1060,9 +1062,10 @@ typedef struct MiniAsTargetOps {
      * executable sections. This is distinct from ELF sh_addralign and does
      * not apply to instructions emitted in ordinary .data sections. */
     unsigned implicit_instruction_alignment; /* 0: no implicit alignment */
-    /* Optional live ISA-state default (e.g. RVC sections align to 2,
-     * strict RV32I sections to 4). Evaluated after Target state init. */
-    unsigned (*default_exec_alignment_for_site)(const MiniAs *);
+    /* Optional live Target-state default (e.g. RVC sections align to 2,
+     * strict RV32I sections to 4). Evaluated after Target state init,
+     * without exposing writable Common sections or symbols. */
+    unsigned (*default_exec_alignment_for_site)(const void *target_state);
     unsigned word_directive_width; /* zero: 4, x86 GNU .word: 2 */
     /* GNU's target-specific macro lexer can keep `op (expr)` in one
      * comma-delimited argument when filling optional positional slots.

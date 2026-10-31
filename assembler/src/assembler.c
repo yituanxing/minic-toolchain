@@ -1491,7 +1491,7 @@ static bool minias_init_for_target(MiniAs *as,
 
 static uint64_t minias_target_exec_alignment(const MiniAs *as) {
     unsigned align=as->target->default_exec_alignment_for_site!=NULL ?
-        as->target->default_exec_alignment_for_site(as) : 0U;
+        as->target->default_exec_alignment_for_site(as->target_state) : 0U;
     if(align==0U)align=as->target->default_exec_alignment;
     return align!=0U ? align : 4U;
 }
@@ -1592,7 +1592,7 @@ static bool add_stmt(MiniAs *as,
     st->size = size;
     st->align = align;
     if (as->target->capture_site_state != NULL)
-        as->target->capture_site_state(as, st, &st->site);
+        as->target->capture_site_state(as->target_state, st, &st->site);
     if (st->op == NULL || st->args == NULL) {
         minias_set_error(as, "out-of-memory:stmt-text");
         return false;

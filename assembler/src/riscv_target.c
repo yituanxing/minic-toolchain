@@ -828,15 +828,17 @@ static bool riscv_configure_legacy(MiniAsAssemblyConfig *config,
     return true;
 }
 
-static void riscv_capture_site_state(const MiniAs *as,
+static void riscv_capture_site_state(const void *target_state,
                                       const MiniAsStmt *stmt,
                                       MiniAsTargetSiteState *site) {
+    const MiniAsRiscvState *state=target_state;
     (void)stmt;
-    site->mode_bits = MINIAS_RV_STATE(as)->options;
+    site->mode_bits = state->options;
 }
 
-static unsigned riscv_default_exec_alignment_for_site(const MiniAs *as) {
-    const MiniAsRiscvState *state = MINIAS_RV_STATE(as);
+static unsigned riscv_default_exec_alignment_for_site(
+    const void *target_state) {
+    const MiniAsRiscvState *state = target_state;
     if (state != NULL && state->isa_explicit &&
         (state->isa_features & RISCV_ISA_C) != 0U &&
         (state->options & MINIAS_RISCV_OPTION_NO_RVC) == 0U)

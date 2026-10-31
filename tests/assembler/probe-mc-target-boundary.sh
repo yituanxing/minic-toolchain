@@ -160,6 +160,43 @@ if not re.search(r'static bool la_validate\s*\(const MiniAsPostEmitView\s*\*', l
     raise SystemExit('LoongArch output validator still receives writable Core')
 print('MINIAS_MC_POST_EMIT_VIEW=PASS final_layout=readonly object_mutation=Common_sink')
 PY
+# Source-site ISA snapshots and code-alignment defaults are pure Target-state
+# queries. Common passes only opaque const Target context, never its mutable
+# Symbol/Section/SourceGraph owner. All three nontrivial callbacks migrate
+# together; LoongArch correctly retains the NULL default.
+python3 - <<'PY'
+from pathlib import Path
+import re
+
+root = Path('assembler/src')
+core = (root / 'minias_internal.h').read_text()
+driver = (root / 'assembler.c').read_text()
+if not re.search(r'void\s*\(\*capture_site_state\)\s*\('
+                 r'const void\s*\*target_state\s*,', core):
+    raise SystemExit('Source-site snapshot still receives Common MiniAs')
+if not re.search(r'unsigned\s*\(\*default_exec_alignment_for_site\)\s*\('
+                 r'const void\s*\*target_state\s*\)', core):
+    raise SystemExit('Executable alignment still receives Common MiniAs')
+for file, fn in (('aarch64_target.c', 'a64_capture_site_state'),
+                 ('riscv_target.c', 'riscv_capture_site_state'),
+                 ('x86_64_target.c', 'x64_capture_site_state')):
+    source = (root / file).read_text()
+    match = re.search(r'static void\s+' + fn +
+                      r'\s*\(\s*const void\s*\*target_state\s*,', source)
+    if not match:
+        raise SystemExit(f'{file}: source-site capture retains Common root')
+    body = source[match.end():source.find('\n}', match.end())]
+    if 'as->' in body or 'MINIAS_RV_STATE(as)' in body:
+        raise SystemExit(f'{file}: site capture reads Common state')
+rv = (root / 'riscv_target.c').read_text()
+if not re.search(r'static unsigned\s+riscv_default_exec_alignment_for_site'
+                 r'\s*\(\s*const void\s*\*target_state\s*\)', rv):
+    raise SystemExit('RISC-V execution alignment still reads Common')
+if 'capture_site_state(as->target_state, st, &st->site)' not in driver or \
+        'default_exec_alignment_for_site(as->target_state)' not in driver:
+    raise SystemExit('Common did not pass private Target context')
+print('MINIAS_MC_SITE_TARGET_STATE=PASS capture=3 alignment=1 common_root=none')
+PY
 # Instruction measurement runs after parse and before fragment placement.
 # Four Targets share exactly one read-only callback; no measurement hook may
 # borrow writable MiniAs, and sizing must reuse the same Target alternatives

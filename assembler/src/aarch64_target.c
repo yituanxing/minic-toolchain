@@ -125,10 +125,11 @@ enum {
 /* Preserve parsed GNU directive provenance while source spelling is still
  * available. Late mapping/ELF finalization must consume this typed site
  * state rather than reinterpret a raw mnemonic or directive string. */
-static void a64_capture_site_state(const MiniAs *as,
+static void a64_capture_site_state(const void *target_state,
                                    const MiniAsStmt *stmt,
                                    MiniAsTargetSiteState *site) {
-    site->mode_bits=a64_features(as);
+    const A64TargetState *state=target_state;
+    site->mode_bits=state==NULL?0U:state->features;
     if(stmt->op!=NULL && strcmp(stmt->op,".inst")==0)
         site->provenance_bits|=A64_SITE_INST_DATA;
     if(stmt->fragment_kind==MINIAS_FRAGMENT_ALIGNMENT && stmt->align>1U &&
