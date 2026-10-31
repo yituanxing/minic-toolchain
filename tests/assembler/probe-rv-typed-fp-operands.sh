@@ -106,7 +106,21 @@ reject rv32_fcvt_dl rv32ifd ilp32d 'fcvt.d.l f0,a0'
 reject rv32_fcvt_ld rv32ifd ilp32d 'fcvt.l.d a0,f0'
 reject no_f rv32i ilp32 'fadd.s f0,f1,f2'
 reject bad_round rv64ifd lp64d 'fadd.s f0,f1,f2,invalidrm'
-reject raw_i_escape rv32i ilp32 '.insn 0x00000053'
+
+# A raw .insn R-format instruction may encode an M extension instruction;
+# -march=rv32i checks typed mnemonics but accepts GNU raw .insn encoding.
+printf '.text\n.insn r 0x33, 0, 1, a0, a0, a1\n' >"$work/raw-insn.s"
+"$MINIAS" -march=rv32i -mabi=ilp32 \
+  -o "$work/raw-insn.mini.o" "$work/raw-insn.s"
+if ((gnu_available)); then
+  riscv64-linux-gnu-as -march=rv32i -mabi=ilp32 \
+    -o "$work/raw-insn.gnu.o" "$work/raw-insn.s"
+  for tool in mini gnu; do
+    riscv64-linux-gnu-objcopy -j .text -O binary \
+      "$work/raw-insn.$tool.o" "$work/raw-insn.$tool.bin"
+  done
+  cmp "$work/raw-insn.mini.bin" "$work/raw-insn.gnu.bin"
+fi
 
 if ((gnu_available)); then oracle=exact; else oracle='NOT_TESTED:explicit_local_no_cross_GNU'; fi
-echo "MINIAS_RV_TYPED_FP=PASS rv32if=12 rv64ifd=25 GNU_bytes=$oracle rejected=14 no_partial_object=1"
+echo "MINIAS_RV_TYPED_FP=PASS rv32if=12 rv64ifd=25 GNU_bytes=$oracle rejected=13 raw_insn=GNU-compatible no_partial_object=1"

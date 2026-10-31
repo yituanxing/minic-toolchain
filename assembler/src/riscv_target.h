@@ -22,8 +22,8 @@ typedef struct MiniAsRiscvLiPlan {
 /* TargetContext: RISC-V ISA/ABI/attribute data never belongs to Common.
  * RV32 and RV64 are profiles of this single Target, not separate assemblers. */
 typedef struct MiniAsRiscvState {
-    /* Explicit profile ISA restrictions also apply to RV32 and to
-     * non-I-only profiles; do not encode an XLEN in this policy flag. */
+    /* Only the explicit audit API rejects raw executable fragments; an
+     * ordinary -march=rv32i/rv64i remains GNU-compatible assembly. */
     bool reject_raw_exec_fragments;
     unsigned strict_i_xlen;
     bool isa_explicit;
@@ -77,8 +77,8 @@ bool minias_riscv_parse_mcinst(struct MiniAs *, struct MiniAsStmt *);
 bool minias_riscv_encode(struct MiniAs *, const struct MiniAsStmt *);
 
 /* Parser already chose a fixed descriptor or dynamic Target form; validate
- * its typed feature/XLEN policy once, after MCInst construction. The strict-I
- * output-word validator is an independent raw-encoding safety net. */
+ * its typed feature/XLEN policy once, after MCInst construction. An explicitly
+ * requested Base-I output-word audit remains an independent check. */
 bool minias_riscv_validate_parsed_isa(struct MiniAs *as,
                                      const struct MiniAsStmt *stmt,
                                      uint64_t required_features,

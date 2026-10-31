@@ -4937,8 +4937,8 @@ int minias_assemble_file_target_isa(const char *input_path,
                                        elf_flags, strict_i_xlen, diagnostic);
 }
 
-/* Historical API stays permissive: only explicit -march=rv64i activates
- * ISA qualification so the existing MiniAS/Linux acceptance does not change. */
+/* Historical API stays permissive. ISA-feature checks belong to invocations
+ * with an explicit -march; the stronger Base-I byte audit is an opt-in here. */
 int minias_assemble_file_target(const char *input_path,
                                 const char *output_path,
                                 bool elf32,

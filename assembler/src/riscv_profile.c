@@ -41,7 +41,8 @@ static const RiscvExtensionSpec riscv_extensions[] = {
     {RISCV_ISA_V, 'v', NULL, "_v1p0"},
     {RISCV_ISA_ZICSR, '\0', "zicsr", "_zicsr2p0"},
     {RISCV_ISA_ZIFENCEI, '\0', "zifencei", "_zifencei2p0"},
-    {RISCV_ISA_ZBB, '\0', "zbb", "_zbb1p0"}
+    {RISCV_ISA_ZBB, '\0', "zbb", "_zbb1p0"},
+    {RISCV_ISA_ZIHINTPAUSE, '\0', "zihintpause", "_zihintpause2p0"}
 };
 
 static uint64_t riscv_lookup_extension(char letter, const char *spelling,
@@ -111,7 +112,9 @@ static bool parse_isa(const char *arch, MiniAsRiscvProfile *out,
     out->elf32 = xlen == 32U;
     out->features = features;
     out->explicit_isa = true;
-    out->strict_i_xlen = features == RISCV_ISA_I ? xlen : 0U;
+    /* -march selects legal typed instructions; it does not opt in to a
+     * raw executable-byte audit. Only the explicit legacy audit entry point
+     * may set strict_i_xlen, independently of the selected ISA. */
     if ((features & RISCV_ISA_C) != 0U) out->elf_flags |= EF_RVC;
     used = (size_t)snprintf(normalized, sizeof(normalized), "rv%u%s",
                            xlen, (features & RISCV_ISA_E) ? "e2p0" : "i2p1");

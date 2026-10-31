@@ -15,6 +15,7 @@ bash tests/assembler/probe-common-dwarf-view-size-gnu.sh
 bash tests/assembler/probe-minias-atomic-output.sh
 bash tests/assembler/probe-mc-deferred-shift-gnu.sh
 bash tests/assembler/probe-elf-sectionkey-unique-inherited-group-gnu.sh
+bash tests/assembler/probe-rv-i-audit-api.sh
 
 assemble_and_check() {
     name="$1"
@@ -46,9 +47,9 @@ EOF
 
 
 
-# Explicit rv64i/lp64 must be fail-closed for EVERY MiniAS encoder family,
-# not just annotate an ELF header. Check real machine words produced from
-# pseudos, invalid extension instructions and silent GNU .option escapes.
+# Explicit rv64i/lp64 restricts typed instructions across every encoder
+# family, not just ELF attributes. Raw data and .insn follow ordinary GNU
+# assembler semantics; the explicit audit API enforces the stricter policy.
 cat >"$work/strict-i-positive.s" <<'EOF_I'
 .text
 .globl strict_i_positive
@@ -67,7 +68,7 @@ EOF_I
 # Some readelf builds omit the decoded 'soft-float ABI' suffix for 0x0.
 if ! readelf -h "$work/strict-i-positive.o" |
     grep -Eq 'Flags:.*0x0([^[:xdigit:]]|$)'; then
-    echo 'MiniAS strict-I expected ELF flags=0x0' >&2
+    echo 'MiniAS selected RV64I expected ELF flags=0x0' >&2
     readelf -h "$work/strict-i-positive.o" >&2
     exit 1
 fi
@@ -78,7 +79,7 @@ readelf -A "$work/strict-i-positive.o" | grep -q 'Tag_RISCV_arch: "rv64i2p1"' ||
     exit 1
 }
 
-for bad in mul div fadd.s fadd.d amoadd.w c.li csrrw fence.i sfence.vma pause; do
+for bad in mul div fadd.s fadd.d amoadd.w c.li csrrw fence.i pause; do
     case "$bad" in
         mul) instruction='mul a0, a0, a1' ;;
         div) instruction='div a0, a0, a1' ;;
@@ -88,7 +89,6 @@ for bad in mul div fadd.s fadd.d amoadd.w c.li csrrw fence.i sfence.vma pause; d
         c.li) instruction='c.li a0, 1' ;;
         csrrw) instruction='csrrw a0, 0x300, a1' ;;
         fence.i) instruction='fence.i' ;;
-        sfence.vma) instruction='sfence.vma' ;;
         pause) instruction='pause' ;;
     esac
     printf '.text\n.globl test_i\ntest_i:\n    %s\n' "$instruction" >"$work/strict-i-bad.s"
@@ -100,16 +100,15 @@ for bad in mul div fadd.s fadd.d amoadd.w c.li csrrw fence.i sfence.vma pause; d
         exit 1
     fi
     test ! -e "$work/strict-i-bad.o"
-    grep -Eq 'rv64i-unsupported-machine-encoding|rv64i-unaligned-executable-section|unsupported-instruction' \
+    grep -Eq 'unsupported-isa-feature|unsupported-instruction' \
         "$work/strict-i-bad.err" || {
-        echo "MiniAS strict-I expected rejection diagnostic not found: $work/strict-i-bad.err" >&2
+        echo "MiniAS selected RV64I expected rejection diagnostic not found: $work/strict-i-bad.err" >&2
         cat "$work/strict-i-bad.err" >&2
         exit 1
     }
 done
-for escape in '.insn r 51, 0, 1, a0, a0, a1' '.word 0x02050533' \
-              '.option arch,+m' '.option arch, +v' '.option arch,+zbb' \
-              '.option rvc' '.org 8'; do
+for escape in '.option arch,+m' '.option arch, +v' '.option arch,+zbb' \
+              '.option rvc'; do
     printf '.text\n.globl test_i\ntest_i:\n    %s\n' "$escape" >"$work/strict-i-escape.s"
     rm -f "$work/strict-i-escape.o"
     if "$MINIAS" -march=rv64i -mabi=lp64 -o "$work/strict-i-escape.o" \
@@ -120,11 +119,43 @@ for escape in '.insn r 51, 0, 1, a0, a0, a1' '.word 0x02050533' \
     fi
     test ! -e "$work/strict-i-escape.o"
     grep -q 'unsupported-isa-' "$work/strict-i-escape.err" || {
-        echo "MiniAS strict-I expected rejection diagnostic not found: $work/strict-i-escape.err" >&2
+        echo "MiniAS selected RV64I expected rejection diagnostic not found: $work/strict-i-escape.err" >&2
         cat "$work/strict-i-escape.err" >&2
         exit 1
     }
 done
+
+# GNU-compatible source-directed instruction encodings and .org do not
+# silently expand the typed instruction set selected by -march=rv64i.
+for raw in '.insn r 51, 0, 1, a0, a0, a1' '.word 0x02050533' '.org 8' 'sfence.vma'; do
+    printf '.text\n%s\n' "$raw" >"$work/isa-raw-positive.s"
+    "$MINIAS" -march=rv64i -mabi=lp64 \
+        -o "$work/isa-raw-positive.o" "$work/isa-raw-positive.s"
+    if command -v riscv64-linux-gnu-as >/dev/null &&
+       command -v riscv64-linux-gnu-objcopy >/dev/null; then
+        riscv64-linux-gnu-as -march=rv64i -mabi=lp64 \
+            -o "$work/isa-raw-positive-gnu.o" "$work/isa-raw-positive.s"
+        for tool in isa-raw-positive isa-raw-positive-gnu; do
+            riscv64-linux-gnu-objcopy -j .text -O binary \
+                "$work/$tool.o" "$work/$tool.bin"
+        done
+        cmp "$work/isa-raw-positive.bin" "$work/isa-raw-positive-gnu.bin"
+    fi
+done
+printf '.text\npause\n' >"$work/isa-pause.s"
+"$MINIAS" -march=rv64i_zihintpause -mabi=lp64 \
+    -o "$work/isa-pause.o" "$work/isa-pause.s"
+readelf -A "$work/isa-pause.o" | grep -q '_zihintpause2p0'
+if command -v riscv64-linux-gnu-as >/dev/null &&
+   command -v riscv64-linux-gnu-objcopy >/dev/null; then
+    riscv64-linux-gnu-as -march=rv64i_zihintpause -mabi=lp64 \
+        -o "$work/isa-pause-gnu.o" "$work/isa-pause.s"
+    for tool in isa-pause isa-pause-gnu; do
+        riscv64-linux-gnu-objcopy -j .text -O binary \
+            "$work/$tool.o" "$work/$tool.bin"
+    done
+    cmp "$work/isa-pause.bin" "$work/isa-pause-gnu.bin"
+fi
 cat >"$work/strict-i-bad-abi.s" <<'EOF_I'
 .text
 ret
@@ -135,11 +166,11 @@ if "$MINIAS" -mabi=lp64d -march=rv64i -o "$work/strict-i-bad-abi.o" \
     exit 1
 fi
 grep -q 'incompatible-riscv-isa-abi' "$work/strict-i-bad-abi.err" || {
-        echo "MiniAS strict-I expected rejection diagnostic not found: $work/strict-i-bad-abi.err" >&2
+        echo "MiniAS selected RV64I expected rejection diagnostic not found: $work/strict-i-bad-abi.err" >&2
         cat "$work/strict-i-bad-abi.err" >&2
         exit 1
     }
-echo 'MINIAS_RV64I_ISA=PASS pseudos=1 negative_m_f_d_a_c_csr_zifencei=1 escapes=5 wrong_abi=1'
+echo 'MINIAS_RV64I_ISA=PASS pseudos=1 negative_m_f_d_a_c_csr_zifencei=1 unsupported_options=4 raw_gnu=4 wrong_abi=1'
 
 # Regression: GNU RISC-V assembler fills executable .p2align with NOPs,
 # not 0x0000 (C.UNIMP). A zero-fill bug in the Zbb strcmp fast path passes
@@ -1671,11 +1702,7 @@ if "$MINIAS" -march=rv64i -o "$work/isa-option.o" \
     exit 1
 fi
 printf '.text\n.word 0x02050533\n' >"$work/isa-raw.s"
-if "$MINIAS" -march=rv64i -o "$work/isa-raw.o" \
-    "$work/isa-raw.s" 2>"$work/isa-raw.err"; then
-    echo 'MiniAS permitted raw executable ISA escape under strict RV64I' >&2
-    exit 1
-fi
+"$MINIAS" -march=rv64i -o "$work/isa-raw.o" "$work/isa-raw.s"
 "$MINIAS" -march=rv64im -o "$work/isa-raw-gnu-compatible.o" \
     "$work/isa-raw.s"
 echo 'MINIAS_ISA_FEATURES=PASS RV64IM_RV64GC=1 ELF_ATTRIBUTES=2 negative=13'

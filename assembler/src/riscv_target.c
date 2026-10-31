@@ -136,14 +136,11 @@ static uint32_t riscv_fixup_relocation_type(MiniAsFixupKind kind,
     return relocation;
 }
 
-/* Validate raw 32-bit encodings AFTER macro/ISA pseudo expansion, section
- * padding and relocation placeholders. This protects all emission families,
- * including a newly added pseudo unknown to a handwritten opcode allowlist.
- * For strict-I executable sections, no raw .word/.insn/.org data is allowed:
- * every 4-byte word must be a real base-I instruction.
- *
- * This intentionally differs from the default legacy MiniAS input mode,
- * which supports RISC-V extension instructions and raw kernel assembly. */
+/* Explicit Base-I audit only: validate raw 32-bit encodings AFTER macro/ISA
+ * pseudo expansion, section padding and relocation placeholders. Unlike
+ * ordinary -march ISA legality, this deliberately rejects executable DATA,
+ * .insn and .org: every four-byte word must be a real Base-I instruction.
+ * It must never activate implicitly for -march=rv32i/rv64i. */
 static bool strict_base_i_word(uint32_t w, unsigned xlen) {
     uint32_t op = w & 127U;
     uint32_t f3 = (w >> 12U) & 7U;
@@ -249,13 +246,13 @@ bool minias_riscv_validate_parsed_isa(MiniAs *as, const MiniAsStmt *stmt,
                          op,stmt->line);
         return false;
     }
-    /* The .insn directive is rejected by parse_target_directive for explicit
-     * ISA contracts before this instruction is ever parsed. */
+    /* A typed ISA selection permits .insn forms like GNU GAS; the explicit
+     * Base-I byte audit rejects them earlier in parse_target_directive. */
     /* Privileged instructions are a privilege-level contract, not a
      * -march extension letter. GNU AS accepts sfence.vma/sret/wfi in Linux
      * assembly with rv64imac; target feature checks still apply to ordinary
      * ISA instructions. Strict Base-I audits the encoded words separately. */
-    if (state->isa_explicit && state->strict_i_xlen == 0U &&
+    if (state->isa_explicit &&
         required_features != UINT64_MAX && required_features != 0U &&
         (state->isa_features & required_features) != required_features) {
         minias_set_error(as,"unsupported-isa-feature:%s:line=%zu",
@@ -271,12 +268,10 @@ bool minias_riscv_validate_parsed_isa(MiniAs *as, const MiniAsStmt *stmt,
 }
 
 
-/* The common parser must never encode RISC-V ISA escape policy. The strict
- * Base-I contract forbids unknown executable bytes: a caller claiming an
- * RV32I/RV64I-only object must not bypass instruction checking with raw data.
- * Other explicit -march profiles retain GNU GAS's data-directive semantics,
- * including Linux's inline `.4byte` instruction words in executable sections.
- * ISA-feature checks for typed mnemonics remain independent of this policy. */
+/* The common parser must never encode RISC-V ISA escape policy. Only an
+ * explicitly requested Base-I audit forbids raw executable bytes; ordinary
+ * -march profiles retain GNU GAS's DATA/.org semantics. Typed instruction
+ * legality is independently checked against the selected ISA features. */
 static bool riscv_validate_common_directive(MiniAs *as,
                                              MiniAsCommonDirectiveKind kind,
                                              const char *op,size_t line) {
@@ -799,10 +794,9 @@ static bool riscv_init_target_state(MiniAs *as,
             return false;
         }
     }
-    /* -march selects permitted *parsed* instruction features. A stronger
-     * raw-byte safety guarantee is warranted only for Base-I certification;
-     * treating every GNU -march as a raw-data ban rejects valid GCC Linux
-     * assembly such as the vDSO's `.4byte 0x0100000f`. */
+    /* The explicit legacy Base-I audit is independent of -march. A raw-byte
+     * ban must never be activated by ISA selection alone: GCC Linux input
+     * legitimately uses `.4byte` instructions inside executable sections. */
     state->reject_raw_exec_fragments = state->strict_i_xlen != 0U;
     as->target_state = state;
     return true;

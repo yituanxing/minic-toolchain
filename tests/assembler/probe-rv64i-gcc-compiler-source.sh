@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # GNU GCC actively emits I only. Handwritten inline asm is NOT transformed by
-# -march=rv64i; it must be rejected by a strict-I MiniAS (or GNU as).
+# -march=rv64i; the typed M mnemonic must be rejected by MiniAS (or GNU as).
 set -Eeuo pipefail
 : "${MINIAS:?MINIAS must point to minic-as}"
 : "${RISCV_GCC:=riscv64-linux-gnu-gcc}"

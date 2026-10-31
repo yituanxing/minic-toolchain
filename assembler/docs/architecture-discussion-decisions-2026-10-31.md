@@ -424,3 +424,54 @@ full Linux workflow on `fed9209`/`dfe1bae` was **SKIPPED**, not a new full
 PASS. The next coherent implementation push may carry the explicit
 `[minias-linux-four]` CI opt-in marker to close this background acceptance
 debt. Keep the test SHA and opt-in outcome separate from these local claims.
+
+## 11. ISA legality versus the optional encoded-byte audit (agreed follow-up)
+
+Do **not** use `-march=rv32i/rv64i` as a hidden request to certify that
+every byte in an executable section decodes to Base-I. `-march` selects the
+Target's typed instruction/extension legality and ELF ISA attribute. GNU GAS
+accepts `.word`, `.byte`, `.org`, and supported raw `.insn` forms under exact
+I, including words that happen to encode an M/F instruction. Source-directed
+data is not a typed `mul` or `fadd.s` mnemonic. An implicit strict scan would
+reject legitimate GCC/GNU input, conflate two separate policies, and make
+the assembler harder to use for real projects.
+
+Preserve the stricter *optional* audit through the existing legacy C entry
+point `minias_assemble_file_target_isa(..., strict_i_xlen)`. It rejects raw
+executable fragments and validates final machine words independently of
+typed ISA checks; do not add another CLI flag for this private/test use case.
+The normal invocation's `strict_i_xlen` remains zero even for exact I, while
+typed feature gates must run without depending on that audit state. Preserve
+the current `.option arch` fail-closed limitation until the scoped mutable
+ISA work (P02/P07); it is not solved by relaxing raw-data policy.
+
+An A0 follow-up caught `pause` mislabeled as an always-legal privileged
+instruction. The typed form now requests `Zihintpause` explicitly; GNU GAS
+rejects it under `rv64i` and accepts `rv64i_zihintpause`. `sfence.vma` is
+different: it remains available under `rv64i` as a privileged instruction,
+matching GNU. The temporary extension inventory records the ISA attribute
+for `zihintpause` without attempting a full standards/version expansion.
+
+**Local verification on this pending batch:** Release MiniAS build PASS;
+`check-minias-a0` **PASS, objects=30** (using the existing temporary
+`pyelftools` test dependency); six separate RISC-V probes **6/6 PASS**:
+RV32 width, option RVC, target-profile single source, real GCC `-S`
+RV64I/inline asm, executable raw directives, and typed FP. A new direct
+public C API probe passes both RV32I and RV64I with **8 forbidden escapes or
+extension words rejected** and **2 typed-I examples accepted**. The
+ordinary raw-data probe covers 22 aliases × 4 profile cases = 88 successful
+assemblies. The installed GNU AS does not recognize four source/profile
+combinations among those aliases; they are MiniAS-only acceptance checks,
+not claimed GNU byte parity. GNU also pads some final `.text` raw data to
+a multiple of four bytes while MiniAS preserves its input length: the probe
+compares the payload byte-for-byte and bounds this known trailing padding
+gap to at most three bytes. GNU numeric-only `.insn` spelling is a separate
+syntax gap; the implemented typed R/I `.insn` forms have GNU byte oracles.
+
+These results are **assembler-local**, not evidence that the changed batch
+passed Linux/QEMU. The separate full Linux workflow on earlier `ae70920`
+reported **all three** x86-64, AArch64 and LoongArch64 MiniAS Kbuild/QEMU
+P0/P1 steps successful, with GNU AArch64/LoongArch64 baselines successful.
+The AArch64 job was still preserving artifacts and had not completed its
+final result at the last check. Keep the exact-head distinction in future
+acceptance reports; this remains the earlier commit, not this batch.

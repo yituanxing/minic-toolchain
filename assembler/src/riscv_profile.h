@@ -16,7 +16,8 @@ typedef enum MiniAsRiscvFeature {
     RISCV_ISA_V = UINT64_C(1) << 8,
     RISCV_ISA_ZICSR = UINT64_C(1) << 9,
     RISCV_ISA_ZIFENCEI = UINT64_C(1) << 10,
-    RISCV_ISA_ZBB = UINT64_C(1) << 11
+    RISCV_ISA_ZBB = UINT64_C(1) << 11,
+    RISCV_ISA_ZIHINTPAUSE = UINT64_C(1) << 12
 } MiniAsRiscvFeature;
 
 typedef struct MiniAsRiscvProfile {

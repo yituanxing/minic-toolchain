@@ -1891,7 +1891,7 @@ static const RvParseForm rv_parse_forms[] = {
     RV_ZERO("ecall", 0x00000073U, 0U, 0U),
     RV_ZERO("ebreak", 0x00100073U, 0U, 0U),
     RV_ZERO_PRIV("wfi", 0x10500073U),
-    RV_ZERO_PRIV("pause", 0x0100000fU),
+    RV_ZERO("pause", 0x0100000fU, 0U, RISCV_ISA_ZIHINTPAUSE),
     RV_ZERO("fence.i", 0x0000100fU, 0U, RISCV_ISA_ZIFENCEI),
     RV_FORM("fence", rv_parse_simple_mc),
     RV_PRIVILEGED("sfence.vma", rv_parse_simple_mc),

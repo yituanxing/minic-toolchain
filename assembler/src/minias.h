@@ -29,8 +29,9 @@ int minias_assemble_file_class(const char *input_path,
                                const char *output_path,
                                bool elf32,
                                FILE *diagnostic);
-/* Explicit RV64I opt-in: validate expansion, encoding, and executable
- * data against the true base-I machine ISA, not only the ELF flags. */
+/* Legacy explicit audit API: validate expansion, encoding, and executable
+ * data against the true base-I machine ISA. Ordinary -march=rv{32,64}i does
+ * not request this additional raw-byte audit. */
 int minias_assemble_file_target_isa(const char *input_path,
                                     const char *output_path,
                                     bool elf32,
