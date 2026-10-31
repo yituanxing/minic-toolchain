@@ -7,14 +7,14 @@
 #include <string.h>
 
 /*
- * Common persistent DWARF .debug_frame emission. ELF relocations are the
- * existing semantic MINIAS_FIXUP_ABS, resolved by the target ABI mapping.
+ * Common persistent DWARF CFI for .debug_frame and .eh_frame. ELF
+ * relocations use existing semantic Fixup kinds and target ABI mapping.
  * CFI instructions retain anchored labels, not first-pass byte offsets:
  * relaxation, subsection concatenation and macros therefore share exactly
  * the same stable fragment identities as text and data.
  *
- * Deliberately fail closed on unimplemented .eh_frame, expressions and CFI
- * opcodes; treating source unwind metadata as no-ops is not valid assembly.
+ * Unsupported CFI directives and operand forms fail closed; treating source
+ * unwind metadata as no-ops is not valid assembly.
  */
 MiniAsCfiABI minias_cfi_abi(const MiniAs *as) {
     MiniAsCfiABI abi;
@@ -33,23 +33,6 @@ MiniAsCfiABI minias_cfi_abi(const MiniAs *as) {
     return abi;
 }
 
-
-static bool cfi_grow(void **where, size_t *capacity, size_t count,
-                     size_t item_size) {
-    size_t limit = *capacity == 0U ? 16U : *capacity;
-    void *next;
-    if (count > SIZE_MAX / item_size) return false;
-    while (limit < count) {
-        if (limit > SIZE_MAX / 2U) return false;
-        limit *= 2U;
-    }
-    if (limit == *capacity) return true;
-    next = realloc(*where, limit * item_size);
-    if (next == NULL) return false;
-    *where = next;
-    *capacity = limit;
-    return true;
-}
 
 /* DWARF CFI operands are absolute GNU MCExprs, not necessarily decimal
  * literals.  Reuse Common's precedence parser and resolved .set/.equ graph;
@@ -141,8 +124,8 @@ static bool cfi_append(MiniAs *as,unsigned kind,unsigned reg,int64_t value) {
     MiniAsCfiOp *op;
     MiniAsCfiProc *proc;
     size_t anchor;
-    if (!cfi_grow((void **)&as->cfi_ops,&as->cfi_op_capacity,
-                  as->cfi_op_count+1U,sizeof(*as->cfi_ops))) return false;
+    if (!minias_grow_array((void **)&as->cfi_ops,&as->cfi_op_capacity,
+                           sizeof(*as->cfi_ops),as->cfi_op_count+1U)) return false;
     if (!minias_anchor_here(as,&anchor)) return false;
     op=&as->cfi_ops[as->cfi_op_count++];
     memset(op,0,sizeof(*op));
@@ -289,8 +272,8 @@ bool minias_cfi_directive(MiniAs *as,const char *op,
         if (as->cfi_active ||
             (*args!='\0' && strcmp(args,"simple")!=0) ||
             as->current_section<0 ||
-            !cfi_grow((void **)&as->cfi_procs,&as->cfi_proc_capacity,
-                      as->cfi_proc_count+1U,sizeof(*as->cfi_procs)) ||
+            !minias_grow_array((void **)&as->cfi_procs,&as->cfi_proc_capacity,
+                               sizeof(*as->cfi_procs),as->cfi_proc_count+1U) ||
             !minias_anchor_here(as,&anchor)) {
             minias_set_error(as,"bad-cfi-startproc:line=%zu",line);
             return false;

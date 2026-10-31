@@ -121,6 +121,24 @@ avoid a full Linux rebuild when a focused object/link/runtime gate answers
 the question. Report production/test/docs/CI added/deleted/net lines per
 commit. Do not silently downgrade the acceptance matrix.
 
+**D11 — Let real programs determine the implementation order.** This is a
+two-person engineering project, not a promise to implement every GAS/LLVM
+syntax, ISA-spec revision or obscure object attribute before MiniAS is useful.
+Keep the skeleton and correctness contracts sound, accept explicitly scoped
+feature gaps, and close gaps when real original assembly exercises them.
+Avoid spending an iteration on a standards matrix, performance tuning, or
+premature future-format abstraction while a current source/fixup/ELF owner
+boundary remains unsettled. A successful source sample proves only that
+sample; unimplemented legal input still exists. This is a staged *product
+strategy*, not permission to misassemble accepted input.
+
+**D12 — Batch integration and keep persistent evidence.** Accumulate related
+verified source cleanup, focused tests and architecture notes into a coherent
+MiniAS-branch commit/push. Do **not** create a remote commit for each tiny
+helper deletion. Equally, do **not** leave all verified work solely in an
+automatically cleaned temporary workspace. Before pushing, inspect the
+upstream branch, use a clean worktree and record the exact validation scope.
+
 ## 2. Agreed data flow and ownership boundary
 
 ```text
@@ -233,3 +251,131 @@ Upstream primary references:
 - LLVM RISCVAsmParser: <https://llvm.org/doxygen/RISCVAsmParser_8cpp_source.html>
 - GNU GAS common parser: <https://gnu.googlesource.com/binutils-gdb/+/950386c651f7a852fe7e1215d7481caf7f2c91d0/gas/read.c>
 - GNU GAS RV target parser: <https://gnu.googlesource.com/binutils-gdb/+/cf525621820060a5c77efa153e6d2ec6a5ad47c9/gas/config/tc-riscv.c>
+
+## 6. Cross-subsystem ownership notes from the continued source walk
+
+These observations extend section 3's short priority list. They are a
+backlog of *boundaries to revisit when a feature touches them*, not a
+request to implement all of them next.
+
+### Sections, subsections and symbols
+
+- Common SectionID identifies a section by its full identity (name, group
+  signature, link-order anchor and optional `unique` key), not merely its
+  textual name. The subsection is separately keyed by `(SectionID, number)`;
+  final concatenation follows subsection order. Keep this independent of
+  the eventual serialized section header format.
+- Common SymbolID and SourceSiteID survive parse and layout; the name
+  interner's NameID is distinct from a defined symbol's final identity.
+  The semantic `.set`/`.equ` graph, symbol visibility/type and ELF symbol
+  ordering have different responsibilities. Do not collapse them into a
+  single string-table lookup.
+- Current symbol type/binding/visibility representations and many Common
+  flags are ELF-flavored. This is reasonable for the first ELF vertical
+  slice; choose format-neutral attributes when a second real writer demands
+  them, while preserving stable semantic SectionID/SymbolID now.
+
+### Fixups, MCData and post-layout writers
+
+- A Target instruction proposes typed fixups inside `MCEncodeResult`; the
+  Common fragment transaction commits them. Fixed-width MCData also stages
+  through this transaction. Source `.reloc` owns its *explicit section*
+  fixups, while CFI and DWARF serializers own genuinely *synthetic* fixups.
+  These are three distinct entry paths into one Common Fixup store.
+- An ordinary local/same-section reference may be resolved by Target or
+  Common layout, while retained link relocations are mapped by the ELF
+  writer (including target-specific local-symbol/section-symbol policies).
+  A generic new late-resolution engine is not justified until a concrete
+  cross-format or correctness failure calls for it.
+- `.eh_frame`/`.debug_frame` CFI and `.debug_line` are legitimate distinct
+  post-layout producers with different serialized formats. They share
+  anchored labels, final layout and Fixup ownership; they are **not**
+  redundant writer algorithms to merge merely because both use DWARF.
+  Tiny separate ULEB appenders are likewise not sufficient evidence for a
+  large new abstraction.
+- A same-name source-created `.debug_frame` or `.eh_frame` section can be
+  encountered by synthetic CFI append. `.debug_line` currently handles a
+  collision differently. First establish the actual GNU mixed-source
+  behavior; do not call the difference a bug without an original `.s`
+  oracle.
+
+### Source, Target and object format boundaries
+
+- Source expansion legitimately replays layout-dependent `.if` decisions;
+  keep stable source-site identities and avoid a second parser. Historical
+  source text may remain for diagnostics; the important ban is *late
+  instruction-semantic re-decoding* of those strings.
+- `MiniAsTargetOps` still hands a broadly mutable `MiniAs *` to several
+  phases. The existing single fragment commit mitigates this, but future
+  parse/layout/encode views should expose only the capability each phase
+  needs. Extract this incrementally, with an owner/caller deletion proof.
+- AArch64 object mapping (`$x`/`$d`) and alignment semantics currently
+  inspect `.inst`/alignment directive spellings after parsing. Preserve the
+  existing final mapping sort, but migrate to typed source-site provenance
+  when that Target interface is next changed.
+- ELF32/64 little-endian remains the *implemented* output family. Windows
+  COFF and macOS Mach-O are useful future **minimal runnable** end-to-end
+  validation targets for the four-backend skeleton; this discussion does
+  not authorize or schedule their implementation yet. The immediate task
+  remains reading, ownership cleanup and existing ELF correctness.
+
+## 7. Open correctness probes, carefully scoped
+
+| ID | Concrete observation | Treatment |
+| --- | --- | --- |
+| P09 | `.reloc` accepts less GNU grammar than full GAS | Document a syntax gap; extend only against a real source/oracle |
+| P10 | Target can pre-resolve some locals; ELF writer handles retained relocs | Preserve the existing division until a failing example proves another resolver necessary |
+| P11 | RV same-section `GLOBAL`/`WEAK` branch/jump relocation selection and fixup elimination may differ from GNU | High-value correctness probe: compare original GNU source, bytes, symbol bindings and relocations; do **not** silently eliminate externally visible weak/global linkage |
+| P12 | Common binding/type/visibility fields currently resemble ELF enums | Keep now; revise at the real second-object-format boundary |
+| P13 | At the `fed9209` baseline, fixed MCData Fixup wrappers had a direct-record fallback even though their only callers emit active Fragments | **Cleaned in section 8's batch**: always stage through `MCEncodeResult`; explicit `.reloc`, CFI/DWARF and late ULEB paths remain independent |
+| P14 | RV parse consults `as->elf_flags & 8` for an RVE feature; AArch64 encode checks interned `"."` NameId | Source/target ownership debt, not a reason to rewrite all ISA parsing now |
+| P15 | AArch64/RV `validate_output` may inject mapping symbols or adjust alignment | Legitimate late output effects; eventually name this mutable finalization capability honestly and scope it |
+| P16 | CFI source/synthetic section collisions differ from the `.debug_line` collision guard | Defer judgment until a GNU mixed-section byte/relocation oracle exists |
+
+In particular, P01 (automatic strict-I executable-byte audit) is not the
+same as *instruction-set legality*. P02/P07 (scoped `.option arch` effective
+ISA) are coherent future Target-state work. Full ISA extension versions
+(P03), future COFF/Mach-O and big-endian modes must not block present ELF
+maintenance. None of these deferred points is declared solved here.
+
+## 8. Small proven owner cleanup (focused, no extra architecture)
+
+The two MCData Fixup wrappers `minias_add_fixup` and
+`minias_add_fixup_symbol_id` are only called by `mc_expr.c`. The containing
+`minias_emit_mc_data` requires an active retained fragment and
+`MCEncodeResult`; the old direct `minias_record_fixup` fallback therefore
+cannot be a valid production caller. The wrappers can delegate directly to
+`minias_stage_common_fixup`, leaving the real Common fragment commit as
+the sole recording point. This intentionally does **not** remove the
+section-fixup API needed by `.reloc` and synthetic sections, or the explicit
+late-ULEB pairing helper.
+
+Common `minias_grow_array` also supersedes two small local dynamic-array
+allocation algorithms (`cfi_grow` and `debug_grow`) across two CFI and three
+debug-line call sites. Their initial capacities differ (16 versus Common's
+8) but this is not a semantic contract. Preserve debug-file new-slot
+zeroing and the actual CFI/DWARF parse, layout and serialization behavior.
+Update CFI's obsolete header comment to describe already supported
+`.eh_frame` instead of claiming it is unimplemented.
+
+For this cleanup, the narrow regression set covers fragment-transaction
+ownership, ordered/explicit/synthetic Fixups, CFI `.eh_frame` and dual
+frame output, signed CFI offsets, `.file`/`.loc`/DWARF views, ELF32/64
+DWARF relocations and mixed-section x86 GNU comparison. Exact results must
+be recorded for the resulting commit, not inherited from another worktree.
+
+The local pre-commit verification on upstream baseline `fed9209` plus this
+four-file diff: Release MiniAS build **PASS**; 14 focused Fragment/Fixup,
+CFI and DWARF/GNU scripts **14/14 PASS**; `check-minias-a0` **PASS,
+objects=30**, using a temporary `pyelftools` test dependency; `git diff
+--check` **PASS**. This establishes assembler-local coverage, not new
+Linux Image/boot, remote CI or full multi-architecture GNU cross-oracles.
+
+## 9. Deliberate limits and next review direction
+
+Next continue the **Common semantic owner → retained MC Fragment → final
+Fixup → ELF Writer** boundary, crossing into an individual Target only
+where the source path demands it. Prefer an entire subsystem and its caller
+graph over micro-fixes, but delete only branches shown unreachable by code
+and verified probes. Maintain a single development branch and batch pushes;
+do not schedule COFF/Mach-O, full spec-version matrices, or tuning now.

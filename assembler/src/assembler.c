@@ -904,12 +904,8 @@ static bool minias_stage_common_fixup(MiniAs *as,int section,uint64_t offset,
 bool minias_add_fixup(MiniAs *as, int section, uint64_t offset,
                       MiniAsFixupKind kind, unsigned width,
                       const char *symbol_name, int64_t addend) {
-    if(as->emitting_fragment && !as->committing_fragment)
-        return minias_stage_common_fixup(as,section,offset,kind,width,
-                                          symbol_name,SIZE_MAX,addend);
-    return minias_record_fixup(as, section, offset, kind, width,
-                               symbol_name, SIZE_MAX, addend,
-                               MINIAS_FIXUP_ORIGIN_FRAGMENT,false,SIZE_MAX);
+    return minias_stage_common_fixup(as,section,offset,kind,width,
+                                     symbol_name,SIZE_MAX,addend);
 }
 
 /* Fixed-width MCData already retains an actual SymbolID from its lexical
@@ -918,12 +914,8 @@ bool minias_add_fixup(MiniAs *as, int section, uint64_t offset,
 bool minias_add_fixup_symbol_id(MiniAs *as, int section, uint64_t offset,
                                 MiniAsFixupKind kind, unsigned width,
                                 size_t symbol_index, int64_t addend) {
-    if(as->emitting_fragment && !as->committing_fragment)
-        return minias_stage_common_fixup(as,section,offset,kind,width,
-                                          NULL,symbol_index,addend);
-    return minias_record_fixup(as, section, offset, kind, width,
-                               NULL, symbol_index, addend,
-                               MINIAS_FIXUP_ORIGIN_FRAGMENT,false,SIZE_MAX);
+    return minias_stage_common_fixup(as,section,offset,kind,width,
+                                     NULL,symbol_index,addend);
 }
 
 bool minias_add_section_fixup(MiniAs *as, MiniAsFixupOrigin origin,

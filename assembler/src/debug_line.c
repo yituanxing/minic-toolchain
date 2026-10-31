@@ -14,15 +14,6 @@
  * GNU view assertions/resets are retained until final fragment layout;
  * unsupported line-state extensions fail closed rather than vanishing.
  */
-static bool debug_grow(void **ptr,size_t *capacity,size_t need,size_t width) {
-    size_t n=*capacity?*capacity:16U;
-    void *p;
-    while(n<need){if(n>SIZE_MAX/2U)return false;n*=2U;}
-    if(n>SIZE_MAX/width)return false;
-    if(n==*capacity)return true;
-    p=realloc(*ptr,n*width);if(!p)return false;
-    *ptr=p;*capacity=n;return true;
-}
 static bool debug_unsigned(const char *text,unsigned *out) {
     unsigned long val;
     char *end;
@@ -83,8 +74,8 @@ static bool parse_file(MiniAs *as,const char *args,size_t line) {
         if(!debug_quoted(&p,first,sizeof(first)))goto invalid;
         while(isspace((unsigned char)*p))++p;
         if(*p!='\0')goto invalid;
-        if(!debug_grow((void **)&as->cu_files,&as->cu_file_capacity,
-                       as->cu_file_count+1U,sizeof(*as->cu_files))) {
+        if(!minias_grow_array((void **)&as->cu_files,&as->cu_file_capacity,
+                              sizeof(*as->cu_files),as->cu_file_count+1U)) {
             minias_set_error(as,"out-of-memory:cu-file-symbol");
             return false;
         }
@@ -118,8 +109,8 @@ static bool parse_file(MiniAs *as,const char *args,size_t line) {
     }else name[len1]='\0';
     {
         size_t old_capacity=as->debug_file_capacity;
-        if(!debug_grow((void **)&as->debug_files,&as->debug_file_capacity,
-                       (size_t)index+1U,sizeof(*as->debug_files))) {
+        if(!minias_grow_array((void **)&as->debug_files,&as->debug_file_capacity,
+                              sizeof(*as->debug_files),(size_t)index+1U)) {
             free(name);return false;
         }
         if(as->debug_file_capacity>old_capacity)
@@ -200,8 +191,8 @@ static bool parse_loc(MiniAs *as,const char *args,size_t source_line) {
     if(as->current_section<0 ||
        (as->sections[(size_t)as->current_section].flags &
         MINIAS_SHF_EXECINSTR)==0U)goto bad;
-    if(!debug_grow((void **)&as->debug_locs,&as->debug_loc_capacity,
-                   as->debug_loc_count+1U,sizeof(*as->debug_locs)) ||
+    if(!minias_grow_array((void **)&as->debug_locs,&as->debug_loc_capacity,
+                          sizeof(*as->debug_locs),as->debug_loc_count+1U) ||
        !minias_anchor_here(as,&symbol))goto bad;
     loc.symbol_index=symbol;
     {
