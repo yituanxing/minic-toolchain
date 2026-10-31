@@ -41,8 +41,7 @@ for symbol in default_data default_function; do
 done
 
 # ELF visibility belongs to the declaration, not a particular ISA emitter.
-# RV32 currently rejects -fPIC by target policy, so test its declaration
-# serialization in the supported non-PIC mode without masking that limit.
+# Verify all three non-AArch64 emitters in their static-kernel mode first.
 for target in riscv32-linux riscv64-linux loongarch64-linux; do
     case "$target" in
         riscv32-linux) opts='-march=rv32i -mabi=ilp32' ;;
@@ -62,6 +61,36 @@ for target in riscv32-linux riscv64-linux loongarch64-linux; do
     done
 done
 
+# RV32 PIC is supported: a live hidden undefined object/function must stay
+# PC-relative, while a default-visible one requires GNU AS to select the GOT
+# under a scoped .option pic. The static-kernel path must never acquire GOT.
+for pic_flag in -fPIC -fPIE; do
+    "$minic_cc" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
+        "$pic_flag" -S "$work/probe.i" -o "$work/rv32-$pic_flag.s"
+    for symbol in hidden_data hidden_function; do
+        grep -Fxq ".hidden $symbol" "$work/rv32-$pic_flag.s"
+        grep -Fxq "  lla t0, $symbol" "$work/rv32-$pic_flag.s"
+        if grep -Fxq "  la t0, $symbol" "$work/rv32-$pic_flag.s"; then
+            echo "FAIL: RV32 $pic_flag hidden $symbol used preemptible GOT" >&2
+            exit 1
+        fi
+    done
+    for symbol in default_data default_function; do
+        grep -Fxq "  la t0, $symbol" "$work/rv32-$pic_flag.s"
+        if grep -Fxq "  lla t0, $symbol" "$work/rv32-$pic_flag.s"; then
+            echo "FAIL: RV32 $pic_flag default $symbol lost GOT" >&2
+            exit 1
+        fi
+    done
+    grep -Fxq '  .option push' "$work/rv32-$pic_flag.s"
+    grep -Fxq '  .option pic' "$work/rv32-$pic_flag.s"
+    grep -Fxq '  .option pop' "$work/rv32-$pic_flag.s"
+done
+if grep -Fq '  .option pic' "$work/riscv32-linux.s"; then
+    echo 'FAIL: RV32 static-kernel symbols unexpectedly use GOT' >&2
+    exit 1
+fi
+
 # A native x86 baseline validates that the same C API works with the default
 # and hidden definitions in a distinct object, including function pointers.
 "$minic_cc" --target=x86_64-linux -fPIC -S "$work/probe.i" -o "$work/x86-mini.s"
@@ -72,7 +101,7 @@ done
 "$work/x86-mini"
 
 if [ "${MINIC_SOURCE_ONLY:-0}" = 1 ]; then
-    echo 'AARCH64_HIDDEN_EXTERN=SOURCE_ONLY five_ISA_S=PASS x86_native=PASS ELF_and_QEMU=NOT_RUN'
+    echo 'AARCH64_HIDDEN_EXTERN=SOURCE_ONLY five_ISA_S=PASS rv32_pic_visibility=PASS x86_native=PASS ELF_and_QEMU=NOT_RUN'
     exit 0
 fi
 if ! command -v "$cross_cc" >/dev/null 2>&1 ||
