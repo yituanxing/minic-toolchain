@@ -1,5 +1,9 @@
 # MiniAS architecture convergence: deletion and ownership ledger (2026-10-31)
 
+Related design decisions: [2026-10-31 ISA/ABI and Parser-to-MC discussion](architecture-discussion-decisions-2026-10-31.md).
+This related note records agreed principles separately from this ledger's
+source modifications and verified acceptance evidence.
+
 ## Contract and scope
 
 This ledger tracks a **source-architecture refactor**, not a new Linux

@@ -1,32 +1,39 @@
 # MiniAS assembler component
 
-Ownership: RISC-V assembly source (`.s`) to ELF relocatable object (`.o`).
+Ownership: target assembly source (`.s`) to ELF relocatable object (`.o`),
+currently covering RISC-V (RV32/RV64), AArch64, x86-64 and LoongArch64.
 
 Public tool identity: `minic-as`.
 
 ## Architecture
 
-MiniAS deliberately does not build a compiler-style AST or IR. Assembly already
-contains target instructions and explicit assembler directives, so the production
-path is a compact two-pass assembler:
+MiniAS deliberately does not build a compiler-style AST for an entire `.s`.
+It does retain typed instruction/operand objects, expression trees and MC
+fragments for layout, fixups and output:
 
 ```text
 assembly text
-  -> statement/directive parser
-  -> section + symbol ownership
-  -> pass-1 offsets and sizes
-  -> RV64 instruction encoding + fixups/relocations
-  -> ELF64 ET_REL writer
+  -> SourceGraph / macro and conditional expansion
+  -> common statement/directive parser + target instruction parser
+  -> typed MCInst / MCExpr / sections / symbols / fragments
+  -> MCLayout / target relaxation / encoding / fixups
+  -> ELF32 or ELF64 ET_REL writer
 ```
 
 See [the target boundary migration contract](docs/target-boundary.md) for
 implemented ISA/ABI behavior and remaining architecture work.
+See also [the 2026-10-31 architecture discussion decisions](docs/architecture-discussion-decisions-2026-10-31.md)
+for the agreed ISA/ABI/configuration and Parser-to-MC design boundaries,
+verified source gaps, and proposed follow-up order (not implementation status).
 
 The C implementation is split by ownership:
 
-- `assembler.c`: statement parsing, sections, symbols and the two-pass driver.
-- `riscv_encode.c`: RISC-V register and instruction encoding.
-- `elf_writer.c`: relocatable ELF object construction.
+- `source_graph.c`, `source_expansion.c`: source-site identity and GNU source expansion.
+- `assembler.c`: common statements, sections, symbols and assembly orchestration.
+- `mc_layout.c`, `mc_expr.c`: retained layout and expression semantics.
+- `riscv_encode.c`, `aarch64_target.c`, `x86_64_target.c`, `loongarch64_target.c`:
+  target-specific instruction parsing, measuring and encoding.
+- `elf_writer.c`: relocatable ELF object construction through `minielf`.
 - `tools/minic-as/main.c`: standalone command-line driver.
 
 The older Python MiniAS is used as a semantic and bug-history reference, not as a
