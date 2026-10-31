@@ -2,7 +2,6 @@
 #include "expression_grammar.h"
 
 #include <ctype.h>
-#include <errno.h>
 #include <limits.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -12,70 +11,6 @@
  * symbolic differences, persistent Symbol IDs, and semantic Fixup creation
  * are independent of ISA and ELF e_machine. Target encoders never duplicate
  * these algorithms; the driver owns sections, macros, and fragment layout. */
-
-static bool parse_i64_data(const char *text, int64_t *out) {
-    char *copy = minias_strdup(text);
-    char *normalized;
-    char *end = NULL;
-    long long value;
-    if (copy == NULL) return false;
-    normalized = minias_expr_strip_outer_parens(copy);
-    errno = 0;
-    value = strtoll(normalized, &end, 0);
-    if (errno != 0 || end == normalized) {
-        free(copy);
-        return false;
-    }
-    while (*end == ' ' || *end == '\t') {
-        ++end;
-    }
-    if (*end != '\0') {
-        free(copy);
-        return false;
-    }
-    *out = (int64_t)value;
-    free(copy);
-    return true;
-}
-
-static bool parse_data_integer_bits(const char *text, uint64_t *out) {
-    int64_t signed_value;
-    char *copy;
-    char *normalized;
-    char *end = NULL;
-    unsigned long long value;
-
-    if (parse_i64_data(text, &signed_value)) {
-        *out = (uint64_t)signed_value;
-        return true;
-    }
-    copy = minias_strdup(text);
-    if (copy == NULL) {
-        return false;
-    }
-    normalized = minias_expr_strip_outer_parens(copy);
-    if (*normalized == '-') {
-        free(copy);
-        return false;
-    }
-    errno = 0;
-    value = strtoull(normalized, &end, 0);
-    if (errno != 0 || end == normalized) {
-        free(copy);
-        return false;
-    }
-    while (*end == ' ' || *end == '\t') {
-        ++end;
-    }
-    if (*end != '\0') {
-        free(copy);
-        return false;
-    }
-    *out = (uint64_t)value;
-    free(copy);
-    return true;
-}
-
 
 typedef struct MiniAsAbsoluteExpressionParser {
     MiniAs *as;
@@ -638,13 +573,10 @@ bool minias_parse_absolute_data_bits(MiniAs *as,
     uint64_t dot;
     int64_t signed_value;
 
-    if (parse_data_integer_bits(text, value)) {
-        return true;
-    }
-    /* Common unsigned expression grammar supports GNU C-preprocessed
-     * 64-bit constants including 0x9000...ULL, shifts, masks and brackets.
-     * This numeric-only fast path cannot resolve unknown symbols and thus
-     * cannot fabricate relocations or pre-layout symbol differences. */
+    /* The canonical unsigned grammar subsumes the old strtoll/strtoull
+     * fixed-DATA literal paths, including signed bit patterns and nested
+     * parentheses. Never revive a separate literal interpreter here.
+     * Numeric evaluation cannot fabricate symbols or relocations. */
     if(minias_eval_u64_expression(text,value))return true;
     if(!minias_current_location(as,&dot))return false;
     if(dot>(uint64_t)INT64_MAX)return false;

@@ -1197,11 +1197,36 @@ static bool rv_mc_vector_word(MiniAs *as, MiniAsStmt *stmt,
  * that selected the machine encoding. The registry supplies the base policy;
  * parsers specialize it for suffix-dependent widths/FP formats. There is no
  * second mnemonic decode after an MCInst has been constructed. */
-typedef struct RvParsedIsaPolicy {
+typedef struct RvParsedIsaPolicy RvParsedIsaPolicy;
+typedef bool (*RvFormParser)(MiniAs *, MiniAsStmt *, char [][128], size_t,
+                             RvParsedIsaPolicy *);
+typedef enum RvSimpleFormKind {
+    RV_SIMPLE_NONE,
+    RV_SIMPLE_ZERO,
+    RV_SIMPLE_TWO_REG,
+    RV_SIMPLE_JR,
+    RV_SIMPLE_FCSR_READ,
+    RV_SIMPLE_FCSR_REG,
+    RV_SIMPLE_FCSR_IMMEDIATE
+} RvSimpleFormKind;
+typedef struct RvParseForm {
+    const char *spelling;
+    RvFormParser parse;
+    bool prefix;
+    uint64_t required_features;
+    bool rv64_only;
+    RvSimpleFormKind simple_kind;
+    uint32_t simple_encoding;
+    uint16_t compressed_encoding;
+    bool source_in_rs2;
+} RvParseForm;
+
+struct RvParsedIsaPolicy {
     uint64_t required_features;
     bool rv64_only;
     bool handled;
-} RvParsedIsaPolicy;
+    const RvParseForm *selected_form;
+};
 
 /* Common integer, supervisor, CSR aliases and compressed instructions share
  * typed MCInst ownership.  Multiword, position-dependent pseudos also retain
@@ -1210,11 +1235,63 @@ static bool rv_parse_simple_mc(MiniAs *as, MiniAsStmt *stmt,
                                char ops[][128], size_t n,
                                RvParsedIsaPolicy *policy) {
     const char *op = stmt->op;
+    const RvParseForm *selected = policy->selected_form;
     int rd=0,rs1=0,rs2=0;
     int64_t imm=0;
-    uint32_t bits=0U,pred=15U,succ=15U;
+    uint32_t pred=15U,succ=15U;
     char base[128];
     policy->handled = true;
+
+    /* Form lookup has already selected the only spelling/encoding/ISA
+     * authority. Do not recognize these aliases again with a second chain
+     * of mnemonic tests during operand lowering. */
+    if (selected != NULL && selected->simple_kind != RV_SIMPLE_NONE) {
+        if (selected->simple_kind >= RV_SIMPLE_FCSR_READ) {
+            unsigned csr = selected->simple_encoding;
+            if (selected->simple_kind == RV_SIMPLE_FCSR_READ) {
+                if (n != 1U || (rd = reg_number(ops[0])) < 0) goto invalid;
+                return rv_mc_word(as, stmt, (csr << 20U) | 0x2073U,
+                                  rd, 0, 0);
+            }
+            if (n != 1U && n != 2U) goto invalid;
+            if (n == 2U && (rd = reg_number(ops[0])) < 0) goto invalid;
+            if (selected->simple_kind == RV_SIMPLE_FCSR_IMMEDIATE) {
+                if (!parse_i64(ops[n-1U], &imm) || imm < 0 || imm > 31)
+                    goto invalid;
+                if (!rv_mc_word(as, stmt, (csr << 20U) | 0x5073U,
+                                rd, (int)imm, 0)) return false;
+                rv_set_imm(&stmt->mcinst->operands[1], imm);
+                return true;
+            }
+            if ((rs1 = reg_number(ops[n-1U])) < 0) goto invalid;
+            return rv_mc_word(as, stmt, (csr << 20U) | 0x1073U,
+                              rd, rs1, 0);
+        }
+        if (selected->simple_kind == RV_SIMPLE_ZERO) {
+            if (n != 0U) goto invalid;
+            if (selected->compressed_encoding != 0U &&
+                MINIAS_RV_STATE(as)->isa_explicit &&
+                (MINIAS_RV_STATE(as)->isa_features & RISCV_ISA_C) != 0U &&
+                (MINIAS_RV_STATE(as)->options & MINIAS_RISCV_OPTION_NO_RVC) == 0U) {
+                MiniAsMCInst *m = minias_mcinst_alloc(0U);
+                if (m == NULL) goto oom;
+                m->opcode = RV_MC_C16;
+                m->encoding = selected->compressed_encoding;
+                stmt->mcinst = m;
+                return true;
+            }
+            return rv_mc_word(as, stmt, selected->simple_encoding, 0, 0, 0);
+        }
+        if (selected->simple_kind == RV_SIMPLE_JR) {
+            if (n != 1U || (rs1 = reg_number(ops[0])) < 0) goto invalid;
+            return rv_mc_word(as, stmt, selected->simple_encoding, 0, rs1, 0);
+        }
+        if (n != 2U || (rd = reg_number(ops[0])) < 0 ||
+            (rs1 = reg_number(ops[1])) < 0) goto invalid;
+        return rv_mc_word(as, stmt, selected->simple_encoding, rd,
+                          selected->source_in_rs2 ? 0 : rs1,
+                          selected->source_in_rs2 ? rs1 : 0);
+    }
 
     if (strcmp(op, ".insn") == 0) {
         MiniAsMCInst *m;
@@ -1245,35 +1322,6 @@ static bool rv_parse_simple_mc(MiniAs *as, MiniAsStmt *stmt,
         stmt->mcinst=m;
         return true;
     }
-    if(strcmp(op,"nop")==0 || strcmp(op,"ret")==0 ||
-       strcmp(op,"sret")==0 || strcmp(op,"ecall")==0 ||
-       strcmp(op,"ebreak")==0 || strcmp(op,"wfi")==0 ||
-       strcmp(op,"pause")==0 || strcmp(op,"fence.i")==0) {
-        if(n!=0U)goto invalid;
-        /* GNU GAS compresses the two canonical pseudo spellings when C is
-         * selected at this lexical site. This belongs to RISC-V's typed
-         * instruction selection, not the Common MC size planner. A later
-         * .option norvc/pop cannot retroactively change this MCInst. */
-        if((!strcmp(op,"nop") || !strcmp(op,"ret")) &&
-           MINIAS_RV_STATE(as)->isa_explicit &&
-           (MINIAS_RV_STATE(as)->isa_features & RISCV_ISA_C)!=0U &&
-           (MINIAS_RV_STATE(as)->options & MINIAS_RISCV_OPTION_NO_RVC)==0U) {
-            MiniAsMCInst *m=minias_mcinst_alloc(0U);
-            if(m==NULL)goto oom;
-            m->opcode=RV_MC_C16;
-            m->encoding=strcmp(op,"ret")==0?0x8082U:0x0001U;
-            stmt->mcinst=m;
-            return true;
-        }
-        bits=strcmp(op,"nop")==0?0x00000013U:
-             strcmp(op,"ret")==0?0x00008067U:
-             strcmp(op,"sret")==0?0x10200073U:
-             strcmp(op,"ecall")==0?0x00000073U:
-             strcmp(op,"ebreak")==0?0x00100073U:
-             strcmp(op,"wfi")==0?0x10500073U:
-             strcmp(op,"pause")==0?0x0100000fU:0x0000100fU;
-        return rv_mc_word(as,stmt,bits,0,0,0);
-    }
     if(strcmp(op,"fence")==0) {
         if(n==2U) {
             if(!parse_fence_set(ops[0],&pred)||
@@ -1300,62 +1348,6 @@ static bool rv_parse_simple_mc(MiniAs *as, MiniAsStmt *stmt,
         if(rd<0||rs1<0||imm< -2048||imm>2047)goto invalid;
         return rv_mc_word(as,stmt,0x67U|(((uint32_t)imm&4095U)<<20U),
                           rd,rs1,0);
-    }
-    if(strcmp(op,"mv")==0 || strcmp(op,"move")==0 ||
-       strcmp(op,"snez")==0 || strcmp(op,"seqz")==0 ||
-       strcmp(op,"neg")==0 || strcmp(op,"negw")==0 ||
-       strcmp(op,"not")==0) {
-        if(n!=2U || (rd=reg_number(ops[0]))<0 ||
-           (rs1=reg_number(ops[1]))<0)goto invalid;
-        if(strcmp(op,"snez")==0)
-            return rv_mc_word(as,stmt,0x00003033U,rd,0,rs1);
-        if(strcmp(op,"neg")==0)
-            return rv_mc_word(as,stmt,0x40000033U,rd,0,rs1);
-        if(strcmp(op,"negw")==0)
-            return rv_mc_word(as,stmt,0x4000003bU,rd,0,rs1);
-        bits=strcmp(op,"seqz")==0?0x00103013U:
-             strcmp(op,"not")==0?0xfff04013U:0x00000013U;
-        return rv_mc_word(as,stmt,bits,rd,rs1,0);
-    }
-    if(strcmp(op,"jr")==0) {
-        if(n!=1U || (rs1=reg_number(ops[0]))<0)goto invalid;
-        return rv_mc_word(as,stmt,0x00000067U,0,rs1,0);
-    }
-    /* The floating-point status aliases are typed CSR instructions: both
-     * the one-operand write forms and GAS's value-returning two-operand
-     * forms map to the same CSRRW/CSRRWI encoding. Keep the source
-     * register/immediate distinction for the RV32E register gate. */
-    {
-        static const struct {const char *name;uint32_t csr;
-                             bool read,immediate;} forms[]={
-            {"frflags",1U,true,false},{"frrm",2U,true,false},
-            {"frcsr",3U,true,false},{"fsflags",1U,false,false},
-            {"fsrm",2U,false,false},{"fscsr",3U,false,false},
-            {"fsflagsi",1U,false,true},{"fsrmi",2U,false,true}
-        };
-        size_t i;
-        for(i=0U;i<sizeof(forms)/sizeof(forms[0]);++i) {
-            if(strcmp(op,forms[i].name)!=0)continue;
-            if(forms[i].read) {
-                if(n!=1U || (rd=reg_number(ops[0]))<0)goto invalid;
-                bits=(forms[i].csr<<20U)|(2U<<12U)|0x73U;
-                return rv_mc_word(as,stmt,bits,rd,0,0);
-            }
-            if(n!=1U && n!=2U)goto invalid;
-            if(n==2U && (rd=reg_number(ops[0]))<0)goto invalid;
-            if(forms[i].immediate) {
-                if(!parse_i64(ops[n-1U],&imm) || imm<0 || imm>31)
-                    goto invalid;
-                rs1=(int)imm;
-                bits=(forms[i].csr<<20U)|(5U<<12U)|0x73U;
-                if(!rv_mc_word(as,stmt,bits,rd,rs1,0))return false;
-                rv_set_imm(&stmt->mcinst->operands[1],imm);
-                return true;
-            }
-            if((rs1=reg_number(ops[n-1U]))<0)goto invalid;
-            bits=(forms[i].csr<<20U)|(1U<<12U)|0x73U;
-            return rv_mc_word(as,stmt,bits,rd,rs1,0);
-        }
     }
     policy->handled=false;
     return true;
@@ -1879,58 +1871,44 @@ invalid:
  * parser family is selected per mnemonic: no repeated speculative parsing,
  * no successful parse that defers unknown-opcode diagnostics to layout.
  * Exact aliases take precedence over broad extension-family prefixes. */
-typedef bool (*RvFormParser)(MiniAs *, MiniAsStmt *, char [][128], size_t,
-                             RvParsedIsaPolicy *);
-typedef struct RvParseForm {
-    const char *spelling;
-    RvFormParser parse;
-    bool prefix;
-    uint64_t required_features;
-    bool rv64_only;
-} RvParseForm;
-#define RV_FORM(name, parser) {name, parser, false, 0U, false}
-#define RV_EXTENSION(name, parser, feature) {name, parser, false, feature, false}
-#define RV_EXT64(name, parser, feature) {name, parser, false, feature, true}
-#define RV_PRIVILEGED(name, parser) {name, parser, false, UINT64_MAX, false}
-#define RV_PREFIX(name, parser, feature) {name, parser, true, feature, false}
+#define RV_FORM(name, parser) {name, parser, false, 0U, false, RV_SIMPLE_NONE, 0U, 0U, false}
+#define RV_EXTENSION(name, parser, feature) {name, parser, false, feature, false, RV_SIMPLE_NONE, 0U, 0U, false}
+#define RV_EXT64(name, parser, feature) {name, parser, false, feature, true, RV_SIMPLE_NONE, 0U, 0U, false}
+#define RV_PRIVILEGED(name, parser) {name, parser, false, UINT64_MAX, false, RV_SIMPLE_NONE, 0U, 0U, false}
+#define RV_PREFIX(name, parser, feature) {name, parser, true, feature, false, RV_SIMPLE_NONE, 0U, 0U, false}
+#define RV_ZERO(name, word, cword, feature) {name, rv_parse_simple_mc, false, feature, false, RV_SIMPLE_ZERO, word, cword, false}
+#define RV_ZERO_PRIV(name, word) RV_ZERO(name, word, 0U, UINT64_MAX)
+#define RV_TWO_REG(name, word, rs2) {name, rv_parse_simple_mc, false, 0U, false, RV_SIMPLE_TWO_REG, word, 0U, rs2}
+#define RV_TWO_REG64(name, word, rs2) {name, rv_parse_simple_mc, false, 0U, true, RV_SIMPLE_TWO_REG, word, 0U, rs2}
+#define RV_JR(name, word) {name, rv_parse_simple_mc, false, 0U, false, RV_SIMPLE_JR, word, 0U, false}
+#define RV_FCSR(name, csr, kind) {name, rv_parse_simple_mc, false, RISCV_ISA_F | RISCV_ISA_ZICSR, false, RV_SIMPLE_FCSR_##kind, csr, 0U, false}
 static const RvParseForm rv_parse_forms[] = {
     RV_FORM(".insn", rv_parse_simple_mc),
     RV_EXTENSION("c.li", rv_parse_simple_mc, RISCV_ISA_C),
-    RV_FORM("nop", rv_parse_simple_mc),
-    RV_FORM("ret", rv_parse_simple_mc),
-    RV_PRIVILEGED("sret", rv_parse_simple_mc),
-    RV_FORM("ecall", rv_parse_simple_mc),
-    RV_FORM("ebreak", rv_parse_simple_mc),
-    RV_PRIVILEGED("wfi", rv_parse_simple_mc),
-    RV_PRIVILEGED("pause", rv_parse_simple_mc),
-    RV_EXTENSION("fence.i", rv_parse_simple_mc, RISCV_ISA_ZIFENCEI),
+    RV_ZERO("nop", 0x00000013U, 0x0001U, 0U),
+    RV_ZERO("ret", 0x00008067U, 0x8082U, 0U),
+    RV_ZERO_PRIV("sret", 0x10200073U),
+    RV_ZERO("ecall", 0x00000073U, 0U, 0U),
+    RV_ZERO("ebreak", 0x00100073U, 0U, 0U),
+    RV_ZERO_PRIV("wfi", 0x10500073U),
+    RV_ZERO_PRIV("pause", 0x0100000fU),
+    RV_ZERO("fence.i", 0x0000100fU, 0U, RISCV_ISA_ZIFENCEI),
     RV_FORM("fence", rv_parse_simple_mc),
     RV_PRIVILEGED("sfence.vma", rv_parse_simple_mc),
     RV_FORM("jalr", rv_parse_simple_mc),
-    RV_FORM("mv", rv_parse_simple_mc),
-    RV_FORM("move", rv_parse_simple_mc),
-    RV_FORM("snez", rv_parse_simple_mc),
-    RV_FORM("seqz", rv_parse_simple_mc),
-    RV_FORM("neg", rv_parse_simple_mc),
-    RV_EXT64("negw", rv_parse_simple_mc, 0U),
-    RV_FORM("not", rv_parse_simple_mc),
-    RV_FORM("jr", rv_parse_simple_mc),
-    RV_EXTENSION("fscsr", rv_parse_simple_mc,
-                 RISCV_ISA_F | RISCV_ISA_ZICSR),
-    RV_EXTENSION("frcsr", rv_parse_simple_mc,
-                 RISCV_ISA_F | RISCV_ISA_ZICSR),
-    RV_EXTENSION("frrm", rv_parse_simple_mc,
-                 RISCV_ISA_F | RISCV_ISA_ZICSR),
-    RV_EXTENSION("frflags", rv_parse_simple_mc,
-                 RISCV_ISA_F | RISCV_ISA_ZICSR),
-    RV_EXTENSION("fsrm", rv_parse_simple_mc,
-                 RISCV_ISA_F | RISCV_ISA_ZICSR),
-    RV_EXTENSION("fsflags", rv_parse_simple_mc,
-                 RISCV_ISA_F | RISCV_ISA_ZICSR),
-    RV_EXTENSION("fsrmi", rv_parse_simple_mc,
-                 RISCV_ISA_F | RISCV_ISA_ZICSR),
-    RV_EXTENSION("fsflagsi", rv_parse_simple_mc,
-                 RISCV_ISA_F | RISCV_ISA_ZICSR),
+    RV_TWO_REG("mv", 0x00000013U, false),
+    RV_TWO_REG("move", 0x00000013U, false),
+    RV_TWO_REG("snez", 0x00003033U, true),
+    RV_TWO_REG("seqz", 0x00103013U, false),
+    RV_TWO_REG("neg", 0x40000033U, true),
+    RV_TWO_REG64("negw", 0x4000003bU, true),
+    RV_TWO_REG("not", 0xfff04013U, false),
+    RV_JR("jr", 0x00000067U),
+    RV_FCSR("fscsr", 3U, REG), RV_FCSR("frcsr", 3U, READ),
+    RV_FCSR("frrm", 2U, READ), RV_FCSR("frflags", 1U, READ),
+    RV_FCSR("fsrm", 2U, REG), RV_FCSR("fsflags", 1U, REG),
+    RV_FCSR("fsrmi", 2U, IMMEDIATE),
+    RV_FCSR("fsflagsi", 1U, IMMEDIATE),
     RV_FORM("li", rv_parse_multi_mc),
     RV_FORM("call", rv_parse_multi_mc),
     RV_FORM("tail", rv_parse_multi_mc),
@@ -1953,10 +1931,17 @@ static const RvParseForm rv_parse_forms[] = {
 #undef RV_EXT64
 #undef RV_PRIVILEGED
 #undef RV_PREFIX
+#undef RV_ZERO
+#undef RV_ZERO_PRIV
+#undef RV_TWO_REG
+#undef RV_TWO_REG64
+#undef RV_JR
+#undef RV_FCSR
 
 static const RvParseForm *rv_find_parse_form(const char *op) {
     static const RvParseForm csr_family = {
-        "<csr>", rv_parse_csr_mc, false, RISCV_ISA_ZICSR, false
+        "<csr>", rv_parse_csr_mc, false, RISCV_ISA_ZICSR, false,
+        RV_SIMPLE_NONE, 0U, 0U, false
     };
     size_t i;
     for (i = 0U; i < sizeof(rv_parse_forms)/sizeof(rv_parse_forms[0]); ++i)
@@ -2002,6 +1987,7 @@ static bool rv_parse_mcinst_impl(MiniAs *as, MiniAsStmt *stmt,
         policy->handled = false;
         policy->required_features = form->required_features;
         policy->rv64_only = form->rv64_only;
+        policy->selected_form = form;
         accepted = form->parse(as, stmt, operands, count, policy);
         if (!accepted) return false;
         if (!policy->handled) {

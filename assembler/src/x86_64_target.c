@@ -20,6 +20,7 @@ typedef struct X64TargetState {
     uint32_t code_mode;
 } X64TargetState;
 static bool x64_cond_code(const char *suffix,unsigned *cc);
+static bool x64_legacy_binary_form_allowed(const char *name);
 
 /* One GNU unsuffixed-width alias inventory for both the legacy ISA gate and
  * the register-directed suffix inference. The latter still rejects any
@@ -41,19 +42,17 @@ static bool x64_infers_width(const char *name) {
 /* The compatibility ISA is deliberately allow-listed. An instruction can
  * enter this set only after the x86 machine encoder supports its actual
  * 16/32-bit semantics; the other 64-bit decoder forms remain fail-closed. */
-static bool x64_legacy_opcode_allowed(const char *name,uint32_t mode) {
+static bool x64_legacy_opcode_allowed(const char *name) {
     static const char *const names[]={
         "pushl","popl","pushw","popw","push","pop",
         "pushf","popf","pushfl","popfl","pushal","popal",
-        "mov","movl","movw","movb","movzwl","movzbl",
+        "movzwl","movzbl",
         "nop","ret","retl","leave","lretw","lret","endbr32",
         "cli","sti","cld","hlt","wbinvd","pause","cpuid","lfence",
         "syscall",
         "call","calll","jmp","jmpl","ljmpw","ljmpl","ljmp",
         "lcallw","lcalll",
-        "cmpb","cmpw","cmpl","testb","testw","testl",
-        "addw","addl","andb","andw","orl","xorl","xorw","andl","orb",
-        "subw","subl","shrw","shrl","sall","incl","decl","sbbl","adcl",
+        "shrw","shrl","sall","incl","decl",
         "imull","lgdtl","lidtl","lmsw","lsl",
         "lock","btl","btsl","btrl","btcl","shldl","shrdl",
         "rep","repe","repz","repne","repnz",
@@ -63,7 +62,7 @@ static bool x64_legacy_opcode_allowed(const char *name,uint32_t mode) {
         "rdtscp","negl","divl","mull","movsbl",
         /* Linux real-mode boot GCC uses these already-decoded machine
          * forms; keep the mode gate aligned with actual target support. */
-        "fninit","cltd","notl","orw","shll","addb","incb",
+        "fninit","cltd","notl","shll","incb",
         /* GNU Linux boot's remaining real/protected-mode forms use
          * already-owned typed zero, unary, MOVSX and system-memory
          * encoders.  Keep only their proven legacy-mode spellings. */
@@ -74,7 +73,8 @@ static bool x64_legacy_opcode_allowed(const char *name,uint32_t mode) {
         "fnstcw","sgdtl","sidtl","lretl"
     };
     size_t i;
-    if(x64_infers_width(name))return true;
+    if(x64_infers_width(name) || x64_legacy_binary_form_allowed(name))
+        return true;
     for(i=0U;i<sizeof(names)/sizeof(names[0]);++i) {
         if(!strcmp(name,names[i]))return true;
     }
@@ -88,9 +88,6 @@ static bool x64_legacy_opcode_allowed(const char *name,uint32_t mode) {
            (!strncmp(name,"cmov",4U) && x64_cond_code(name+4U,&cc)))
             return true;
     }
-    /* The mode does not license 64-bit forms even if their byte values
-     * happen to alias meaningful legacy opcodes. */
-    (void)mode;
     return false;
 }
 
@@ -759,19 +756,22 @@ typedef struct X64BinaryFormDescriptor {
     bool has_rm_source_opcode;
     bool has_immediate_group;
     unsigned immediate_group;
+    /* The same opcode authority records proven real/protected-mode forms:
+     * bit 0 = byte, bit 1 = word, bit 2 = long.  qword stays rejected. */
+    unsigned char legacy_widths;
 } X64BinaryFormDescriptor;
 
 static const X64BinaryFormDescriptor x64_binary_forms[]={
-    {"mov", 0x89U,0x8bU,true,true,false,0U},
-    {"add", 0x01U,0x03U,true,true,true,0U},
-    {"or",  0x09U,0x0bU,true,true,true,1U},
-    {"adc", 0x11U,0x13U,true,true,true,2U},
-    {"sbb", 0x19U,0x1bU,true,true,true,3U},
-    {"and", 0x21U,0x23U,true,true,true,4U},
-    {"sub", 0x29U,0x2bU,true,true,true,5U},
-    {"xor", 0x31U,0x33U,true,true,true,6U},
-    {"cmp", 0x39U,0x3bU,true,true,true,7U},
-    {"test",0x85U,0x85U,true,true,false,0U}
+    {"mov", 0x89U,0x8bU,true,true,false,0U,7U},
+    {"add", 0x01U,0x03U,true,true,true,0U,7U},
+    {"or",  0x09U,0x0bU,true,true,true,1U,7U},
+    {"adc", 0x11U,0x13U,true,true,true,2U,4U},
+    {"sbb", 0x19U,0x1bU,true,true,true,3U,4U},
+    {"and", 0x21U,0x23U,true,true,true,4U,7U},
+    {"sub", 0x29U,0x2bU,true,true,true,5U,6U},
+    {"xor", 0x31U,0x33U,true,true,true,6U,6U},
+    {"cmp", 0x39U,0x3bU,true,true,true,7U,7U},
+    {"test",0x85U,0x85U,true,true,false,0U,7U}
 };
 
 static const X64BinaryFormDescriptor *x64_binary_form(
@@ -789,6 +789,13 @@ static const X64BinaryFormDescriptor *x64_binary_form(
            strncmp(name,form->stem,stem_length)==0)return form;
     }
     return NULL;
+}
+
+static bool x64_legacy_binary_form_allowed(const char *name) {
+    unsigned width=0U;
+    const X64BinaryFormDescriptor *form=x64_binary_form(name,&width);
+    unsigned flag=width==8U?1U:width==16U?2U:width==32U?4U:0U;
+    return form!=NULL && (form->legacy_widths&flag)!=0U;
 }
 
 static unsigned x64_binary_opcode(const X64BinaryFormDescriptor *form,
@@ -992,25 +999,14 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
     char suffixed_op[24];
     if (!m) {minias_set_error(as,"out-of-memory:x86_64-mcinst");return false;}
     m->dispose_memory=x64_dispose_memory;
-    /* IA-32 mixed-mode within ELF64. Unvalidated code32 encodings fail
-     * closed; these are the actual GNU EFI thunk PUSH/LRET instructions. */
-    if(s->site.mode_bits==X64_CODE32 &&
-       !x64_legacy_opcode_allowed(s->op,s->site.mode_bits)) {
-        minias_set_error(as,"unsupported-x86-code32-operand:%s:line=%zu",
-                         s->op,s->line);
+    /* One mode gate before parsing; lexical 16/32-bit mode chooses only the
+     * diagnostic while the target descriptor owns supported instruction
+     * forms. Unproved encodings remain fail-closed in either mode. */
+    if(s->site.mode_bits!=0U && !x64_legacy_opcode_allowed(s->op)) {
+        const char *kind=s->site.mode_bits==X64_CODE32?
+            "unsupported-x86-code32-operand":"unsupported-x86-code16-operand";
+        minias_set_error(as,"%s:%s:line=%zu",kind,s->op,s->line);
         minias_mcinst_destroy(m);return false;
-    }
-    if(s->site.mode_bits==X64_CODE16 ||
-       s->site.mode_bits==X64_CODE16_GCC) {
-        /* Register and ordinary 32-bit-address MOV/stack encodings reuse
-         * the typed x86 MC form, with operand/address mode prefixes owned
-         * by this Target. Keep unproved far/near control and mixed-width
-         * instructions fail-closed until an independent GNU oracle exists. */
-        if(!x64_legacy_opcode_allowed(s->op,s->site.mode_bits)) {
-            minias_set_error(as,"unsupported-x86-code16-operand:%s:line=%zu",
-                             s->op,s->line);
-            minias_mcinst_destroy(m);return false;
-        }
     }
     /* Linux 6.6 Kconfig's real GNU assembler feature tests select actual
      * machine instructions, not preprocessor capability flags.  Retain the

@@ -355,6 +355,28 @@ typedef struct MiniAsMacro {
     MiniAsStableSiteId definition_site;
 } MiniAsMacro;
 
+/* Per-semantic-pass source state. The persistent SourceGraph is borrowed from
+ * the assembly invocation and outlives every layout-triggered source replay;
+ * macro bodies, conditional stack and lexical counters belong to this pass.
+ * None of these fields is a machine-target encoding or an ELF object state. */
+typedef struct MiniAsSourceContext {
+    MiniAsConditional *conditionals;
+    size_t conditional_count;
+    size_t conditional_capacity;
+    MiniAsMacro *macros;
+    size_t macro_count;
+    size_t macro_capacity;
+    size_t macro_expansion_counter;
+    size_t macro_expansion_depth;
+    bool altmacro_active;
+    bool conditional_active;
+    bool source_ended;
+    bool c_comment_active;
+    MiniAsSourceGraph *graph; /* borrowed; owned by assemble invocation */
+    MiniAsStableSiteId current_site;
+    MiniAsStableSiteId current_expansion_site;
+} MiniAsSourceContext;
+
 /* Common never interprets these bits: only the emitting Target knows their
  * meaning. Preserve the exact directive-selected mode at the parse site,
  * rather than reading mutable TargetContext during later relaxation. */
@@ -607,33 +629,12 @@ typedef struct MiniAs {
     size_t expr_anchor_counter;
     size_t *numeric_label_counts;
     size_t numeric_label_capacity;
-    MiniAsConditional *conditionals;
-    size_t conditional_count;
-    size_t conditional_capacity;
-    MiniAsMacro *macros;
-    size_t macro_count;
-    size_t macro_capacity;
-    size_t macro_expansion_counter;
-    size_t macro_expansion_depth;
-    bool altmacro_active; /* GNU %absolute-expression positional arguments */
-    bool conditional_active;
-    /* GAS `.end` terminates the entire source stream, including a macro,
-     * inline semicolon statement or repetition expansion. It is not a
-     * discardable directive: all callers of the shared source dispatcher
-     * observe this one state, independently of target instruction syntax. */
-    bool source_ended;
-    /* GNU GAS's quoted-string-aware, multi-line C comment lexical state. */
-    bool c_comment_active;
+    MiniAsSourceContext source;
     bool layout_sensitive; /* position-dependent parser-control fallback */
     bool has_deferred_data; /* forward-symbol data-size fragments */
     bool has_org_constraints; /* typed position-dependent .org fragments */
     bool has_cross_subsection_size_end; /* retained .size cross-subsection span */
     bool has_mutable_absolute_sets; /* snapshot mutable .set in data */
-    /* Borrowed per-assemble-config source identities. Object SymbolIDs and
-     * TargetState remain fresh on every conservative source replay. */
-    MiniAsSourceGraph *source_graph;
-    MiniAsStableSiteId current_source_site;
-    MiniAsStableSiteId current_expansion_site;
     /* Opaque per-assembly backend parser state, owned and freed by Target. */
     void *target_state;
     bool cfi_active;

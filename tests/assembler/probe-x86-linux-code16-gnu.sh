@@ -66,6 +66,39 @@ boot16_done:
     hlt
 ASM
 
+# These are the exact b/w/l binary forms whose proven legacy-mode legality
+# lives alongside their encoder descriptors.  Cover every allowed width,
+# including narrower subsets of ADC/SBB/SUB/XOR, in one GNU byte oracle.
+cat >"$work/code16_binary_policy.s" <<'ASM'
+    .text
+    .code16
+binary_policy:
+    movb %al, %bl
+    movw %ax, %bx
+    movl %eax, %ebx
+    addb %al, %bl
+    addw %ax, %bx
+    addl %eax, %ebx
+    orb %al, %bl
+    orw %ax, %bx
+    orl %eax, %ebx
+    adcl %eax, %ebx
+    sbbl %eax, %ebx
+    andb %al, %bl
+    andw %ax, %bx
+    andl %eax, %ebx
+    subw %ax, %bx
+    subl %eax, %ebx
+    xorw %ax, %bx
+    xorl %eax, %ebx
+    cmpb %al, %bl
+    cmpw %ax, %bx
+    cmpl %eax, %ebx
+    testb %al, %bl
+    testw %ax, %bx
+    testl %eax, %ebx
+ASM
+
 cat >"$work/code16gcc_stack.s" <<'ASM'
     .text
     .code16gcc
@@ -941,6 +974,7 @@ run_mixed_elf64() {
 }
 
 run_positive code16_setup
+run_positive code16_binary_policy
 run_positive code16_width_baseline
 run_positive code16gcc_stack
 run_positive code16gcc_explicit

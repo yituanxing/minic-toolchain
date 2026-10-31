@@ -24,32 +24,37 @@ def job(source: str, name: str) -> str:
     return rest[:next_job.start()] if next_job else rest
 
 
-def check_generated_gate() -> None:
-    source = (WORKFLOWS / "minias-linux-generated-3x7-replay.yml").read_text()
-    if "Candidate Gate (Legacy)" not in source.splitlines()[0]:
-        raise AssertionError("legacy scan claims an ambiguous acceptance level")
-    shard = job(source, "shard")
-    for dimension in ("target: [x86_64, aarch64, loongarch64]",
-                      "shard: [0, 1, 2, 3, 4, 5, 6]"):
-        if dimension not in shard:
-            raise AssertionError(f"original Linux matrix incomplete: {dimension}")
-    aggregate = job(source, "aggregate")
-    if "needs.shard.result == 'success'" not in aggregate:
-        raise AssertionError("legacy aggregate does not depend on all shards")
-    if "minias-linux-kbuild-seven-v1.py aggregate" not in aggregate:
-        raise AssertionError("legacy result aggregator missing")
-    if not re.search(r"(?m)^\s+--strict\s*\\$", aggregate):
-        raise AssertionError("legacy aggregate permits false-green candidates")
-    if "if: always()" not in aggregate:
-        raise AssertionError("strict failure can suppress diagnostics artifact")
+def check_legacy_gate_removed() -> None:
+    # The original legacy route hid shard failures behind a successful-needs
+    # condition. Its immutable original GNU input is fully covered by the
+    # canonical pinned gate, whose artifact identity and strict census are
+    # checked below; do not resurrect two entry points for the same corpus.
+    for legacy in ("minias-linux-generated-3x7-replay.yml",
+                   "minias-linux-cached-kbuild-replay.yml"):
+        status = subprocess.run(
+            ["git", "ls-files", "--error-unmatch", f".github/workflows/{legacy}"],
+            cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        if status.returncode == 0:
+            raise AssertionError(f"redundant Linux 3x7 entry point restored: {legacy}")
+        if status.returncode != 1:
+            raise AssertionError("cannot inspect tracked CI files in this checkout")
 
 
 def check_canonical_gate() -> None:
     source = (WORKFLOWS / "minias-linux-pinned-3x7-replay.yml").read_text()
     if "[minias-replay-3x7]" not in source:
         raise AssertionError("canonical exact-head trigger missing")
+    if "run-id: '40658346252'" not in source:
+        raise AssertionError("canonical gate no longer uses the pinned GNU producer")
     shard = job(source, "shard")
     aggregate = job(source, "aggregate")
+    if "shard: [0, 1, 2, 3, 4, 5, 6]" not in shard:
+        raise AssertionError("canonical Kbuild replay lost seven-way shard coverage")
+    if "'[\"x86_64\",\"aarch64\",\"loongarch64\"]'" not in shard:
+        raise AssertionError("canonical Kbuild replay lost the three-target matrix")
+    if "assert digest == hashes[target]" not in shard:
+        raise AssertionError("canonical source manifest SHA is no longer pinned")
     scoped_jobs = shard + aggregate
     for token in ("--strict", "authentic_incbin_frozen", "manifest",
                   "config_sha256", "minias-linux-kbuild-seven-v1.py aggregate"):
@@ -138,11 +143,11 @@ def main() -> None:
     subprocess.run([sys.executable,
                     str(ROOT / "tools/ci/select_miniobjcopy_elf_route_v1.py"),
                     "--self-test"], check=True)
-    check_generated_gate()
+    check_legacy_gate_removed()
     check_canonical_gate()
     check_exact_head_four_target_gnu_gates()
     print("MINIAS_CI_ROUTING=PASS canonical_3x7=strict "
-          "legacy_3x7=strict_aggregate preserved_diagnostics=1 "
+          "legacy_3x7=removed preserved_diagnostics=1 "
           "shared_elf=canonical_reader_objcopy_strip "
           "fast_pr=exact_head GNU_stress_targets=4")
 

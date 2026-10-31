@@ -114,6 +114,8 @@ bool minias_source_graph_line_site(MiniAs *as, const MiniAsSourceLine *line,
 void minias_source_graph_record_condition(MiniAs *as, MiniAsStableSiteId owner,
                                    bool active);
 void minias_source_graph_destroy(MiniAsSourceGraph *graph);
+bool minias_source_graph_load_physical(MiniAs *as, const char *path,
+                                      MiniAsSourceGraph *graph);
 bool minias_source_graph_lookup_forced_branch(MiniAs *as, const MiniAsStmt *stmt,
                                        size_t *minimum_size);
 bool minias_source_graph_rebind_forced_branches(MiniAs *as, size_t **ids,
@@ -124,7 +126,9 @@ bool minias_source_graph_capture_forced_branches(MiniAs *as, const size_t *ids,
 /* Source lexical/macro/repeat expansion (fresh inside each semantic pass). */
 void minias_source_lines_destroy(MiniAsSourceLine *lines, size_t count);
 void minias_macro_destroy(MiniAsMacro *macro);
+void minias_source_context_destroy(MiniAsSourceContext *source);
 MiniAsMacro *minias_macro_find(MiniAs *as, const char *name);
+void minias_macro_purge(MiniAsSourceContext *source, const char *name);
 bool minias_macro_expand(MiniAs *as, MiniAsMacro *macro,
                              const char *args, size_t line);
 bool minias_source_frame_process(MiniAs *as, const MiniAsSourceFrame *frame);

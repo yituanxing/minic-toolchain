@@ -1,6 +1,7 @@
 #include "source_graph_internal.h"
 
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -11,6 +12,129 @@ void minias_source_lines_destroy(MiniAsSourceLine *lines, size_t count) {
     size_t i;
     for (i = 0U; i < count; ++i) free(lines[i].text);
     free(lines);
+}
+
+/* Validate input before lexical expansion; the private SymbolID marker must
+ * never be accepted from user source outside a quoted string. */
+static bool validate_user_source_private_marker(MiniAs *as,
+                                                const char *line,
+                                                size_t source_line) {
+    char quote='\0';
+    bool escaped=false;
+    const unsigned char *p=(const unsigned char *)line;
+    for(;*p!='\0';++p) {
+        if(escaped) {escaped=false;continue;}
+        if(quote!='\0') {
+            if(*p=='\\')escaped=true;
+            else if(*p==(unsigned char)quote)quote='\0';
+        }else if(*p=='"' || *p=='\'') {
+            quote=(char)*p;
+        }else if(*p==1U) {
+            minias_set_error(as,"private-symbol-marker-in-source:line=%zu",
+                             source_line);
+            return false;
+        }
+    }
+    return true;
+}
+
+/* GAS block comments are a physical source lexical state, independent of
+ * ISA operand parsing and stable across physical input lines. */
+static void strip_gnu_c_comments(MiniAs *as, char *line) {
+    char quote='\0';
+    bool escaped=false;
+    size_t i;
+    for(i=0U;line[i]!='\0';++i) {
+        if(as->source.c_comment_active) {
+            if(line[i]=='*' && line[i+1U]=='/') {
+                line[i++]=' ';line[i]=' ';
+                as->source.c_comment_active=false;
+            }else if(line[i]!='\n' && line[i]!='\r')line[i]=' ';
+            continue;
+        }
+        if(escaped){escaped=false;continue;}
+        if(quote) {
+            if(line[i]=='\\')escaped=true;
+            else if(line[i]==quote)quote='\0';
+            continue;
+        }
+        if(line[i]=='"' || line[i]=='\'') {
+            quote=line[i];continue;
+        }
+        if((as->target->comment_prefix=='/' &&
+            line[i]=='/' && line[i+1U]=='/') ||
+           (as->target->comment_prefix!='/' &&
+            line[i]==as->target->comment_prefix))
+            return;
+        if(line[i]=='/' && line[i+1U]=='*') {
+            as->source.c_comment_active=true;
+            line[i++]=' ';line[i]=' ';
+        }
+    }
+}
+
+/* SourceGraph is the only owner of the normalized physical SourceFrame.
+ * A layout-sensitive reparse reuses it; no second FILE reader is involved. */
+bool minias_source_graph_load_physical(MiniAs *as, const char *path,
+                                      MiniAsSourceGraph *graph) {
+    FILE *file;
+    char linebuf[65536];
+    size_t line_no=0U;
+    bool ok=true;
+    MiniAsSourceFrame *frame;
+    if(graph==NULL || graph->file_reads!=0U ||
+       graph->physical.lines!=NULL) {
+        minias_set_error(as,"invalid-source-graph-load");
+        return false;
+    }
+    file=fopen(path,"r");
+    if(file==NULL) {
+        minias_set_error(as,"input-open:%s",path);
+        return false;
+    }
+    frame=&graph->physical;
+    as->source.c_comment_active=false;
+    frame->kind=MINIAS_SOURCE_FRAME_FILE;
+    while(fgets(linebuf,sizeof(linebuf),file)!=NULL) {
+        size_t len;
+        MiniAsSourceLine *line;
+        ++line_no;
+        if(!validate_user_source_private_marker(as,linebuf,line_no)) {
+            ok=false;break;
+        }
+        strip_gnu_c_comments(as,linebuf);
+        len=strlen(linebuf);
+        if(len==sizeof(linebuf)-1U && linebuf[len-1U]!='\n') {
+            minias_set_error(as,"line-too-long:line=%zu",line_no);
+            ok=false;break;
+        }
+        if(!minias_grow_array((void **)&frame->lines,
+                              &frame->capacity,sizeof(*frame->lines),
+                              frame->count+1U)) {
+            minias_set_error(as,"out-of-memory:source-frame");
+            ok=false;break;
+        }
+        line=&frame->lines[frame->count];
+        line->text=minias_strdup(linebuf);
+        if(line->text==NULL) {
+            minias_set_error(as,"out-of-memory:source-frame-line");
+            ok=false;break;
+        }
+        line->line=line_no;
+        line->source_segment=0U;
+        ++frame->count;
+    }
+    if(ok && ferror(file)) {
+        minias_set_error(as,"input-read:%s",path);
+        ok=false;
+    }
+    fclose(file);
+    if(ok && as->source.c_comment_active) {
+        minias_set_error(as,"unterminated-gnu-block-comment");
+        ok=false;
+    }
+    if(ok)++graph->file_reads;
+    return ok;
 }
 
 
@@ -54,7 +178,7 @@ static bool source_graph_rehash(MiniAsSourceGraph *graph,size_t capacity) {
 
 bool minias_source_graph_intern(MiniAs *as,MiniAsSourceSiteKey key,
                                 MiniAsStableSiteId *site_id) {
-    MiniAsSourceGraph *graph=as->source_graph;
+    MiniAsSourceGraph *graph=as->source.graph;
     size_t slot,probes;
     size_t hashed=source_site_hash(key);
     if(graph==NULL || site_id==NULL ||
@@ -115,7 +239,7 @@ bool minias_source_graph_line_site(MiniAs *as,
                                    size_t segment,
                                    MiniAsStableSiteId *site_id) {
     const MiniAsSourceSiteKey key={
-        .parent=as->current_expansion_site,
+        .parent=as->source.current_expansion_site,
         .origin_line=line->line,
         .origin_segment=line->source_segment,
         .iteration=segment,
@@ -128,11 +252,11 @@ bool minias_source_graph_line_site(MiniAs *as,
 void minias_source_graph_record_condition(MiniAs *as,
                                           MiniAsStableSiteId owner,
                                           bool active) {
-    MiniAsSourceGraph *graph=as->source_graph;
+    MiniAsSourceGraph *graph=as->source.graph;
     MiniAsSourceSiteEntry *entry;
-    if(graph==NULL || as->current_source_site==MINIAS_SITE_NONE ||
-       as->current_source_site>graph->site_count)return;
-    entry=&graph->sites[as->current_source_site-1U];
+    if(graph==NULL || as->source.current_site==MINIAS_SITE_NONE ||
+       as->source.current_site>graph->site_count)return;
+    entry=&graph->sites[as->source.current_site-1U];
     if(entry->last_condition_pass!=0U &&
        entry->last_condition_pass+1U==graph->parse_passes &&
        (entry->last_condition_active!=active ||
@@ -194,7 +318,7 @@ static bool source_graph_forced_shape_matches(
 bool minias_source_graph_lookup_forced_branch(MiniAs *as,
                                               const MiniAsStmt *stmt,
                                               size_t *minimum_size) {
-    MiniAsSourceGraph *graph=as->source_graph;
+    MiniAsSourceGraph *graph=as->source.graph;
     size_t encoded;
     *minimum_size=0U;
     if(graph==NULL)return true;
@@ -224,7 +348,7 @@ bool minias_source_graph_rebind_forced_branches(MiniAs *as,
                                                 size_t **ids,
                                                 size_t *count,
                                                 size_t *capacity) {
-    MiniAsSourceGraph *graph=as->source_graph;
+    MiniAsSourceGraph *graph=as->source.graph;
     size_t *site_to_stmt;
     size_t i;
     if(graph==NULL || graph->forced_branch_count==0U) {
@@ -282,7 +406,7 @@ bool minias_source_graph_rebind_forced_branches(MiniAs *as,
 bool minias_source_graph_capture_forced_branches(MiniAs *as,
                                                  const size_t *ids,
                                                  size_t count) {
-    MiniAsSourceGraph *graph=as->source_graph;
+    MiniAsSourceGraph *graph=as->source.graph;
     size_t i;
     if(graph==NULL)return true;
     if(count<graph->forced_branch_count) {

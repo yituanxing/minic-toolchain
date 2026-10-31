@@ -167,3 +167,38 @@ evaluators, full RISC-V Target form metadata for every ISA family, private
 SourceContext ownership rather than the umbrella `MiniAs` session, and W1
 workflow deduplication. These are not implied by removal of the two eager
 variable DATA functions or the first fixed-form descriptor slice.
+
+## Consolidated deletion batch after `c1a5f8fa` (local, not yet a Linux certificate)
+
+This batch removes additional real duplicates while continuing the ownership
+boundary work. Counts compare against `c1a5f8fa`; **moved lines are not code
+deleted**. The exact committed SHA and remote checks must be recorded after
+the integration commit. The old four-architecture P0/P1 result belongs to
+`c1a5f8fa`, not automatically to this refactor.
+
+Measured staged diff before commit: production `assembler/src/*.c,*.h`
+**+423/-499 (net -76)**; workflow YAML **+0/-196**; focused tests
+**+76/-23 (net +53)**. The SourceGraph physical reader and comment scanner
+were relocated from `assembler.c` to their owner and are included in both
+production addition and deletion counts, **not** treated as removed algorithms.
+
+| Area | Change | Limit still open |
+| --- | --- | --- |
+| Source | One `MiniAsSourceContext` contains per-pass macro, conditional, lexical and source-site state; its destructor and `.purgem` mutation live with expansion; the persistent physical file reader/comment lexer lives in SourceGraph | SourceGraph remains invocation-owned and borrowed, and `.if` semantic handling remains in the directive lowerer; phase-scoped Target views are not yet implemented |
+| Common DATA | Removed duplicate `parse_i64_data` and `parse_data_integer_bits` strto* grammars; one existing unsigned arithmetic expression evaluator handles numeric DATA constants | M1 full token-to-AST grammar with three distinct evaluation policies remains open |
+| RISC-V Target | Zero-operand, two-register and floating CSR aliases now use a single private `RvParseForm` authority for spelling, ISA gate, operands and encoding | Other pseudo/FP/vector instruction families require a separate verified contract |
+| x86 Target | Legacy ALU/MOV/CMP/TEST b/w/l legality derives from the existing binary form table; mode gate is shared | Remaining specialized x86 system/boot forms still have their own legality rules |
+| CI | Retired two obsolete generated/cached 3×7 workflow wrappers (196 YAML lines) in favor of the existing pinned 21-shard fail-closed producer/aggregator | No original corpus, producer hash, per-object provenance or P0/P1 criterion may be removed |
+
+Local integrated checks: independent Release `CFLAGS=-Werror` build and A0
+`objects=30` PASS; x86 legacy boot GNU 38/38; SourceGraph physical-cache,
+source replay, stable-site rebind, conditional macro/repeat, `.end`, and
+MCExpr module probes PASS; CI routing/provenance static probe PASS. GNU
+RISC-V cross assembler is not installed in the local environment, and this
+batch has **not** run exact-head Linux/QEMU or 21-shard GNU comparisons.
+
+The next high-value deletion work is the shared expression syntax AST with
+separate target-immediate, checked-absolute and deferred-relocation evaluators,
+followed by a private SourceContext parse API and phase-scoped Target views.
+Do not count the SourceGraph reader's relocation between translation units as
+a deleted parser or claim the whole x86/RISC-V Target form family is complete.

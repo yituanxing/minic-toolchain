@@ -739,13 +739,15 @@ cat >"$work/u64-data.s" <<'EOF'
 .dword 18446744073709551615
 .dword 9223372036854775808
 .dword 18446744073709551416
+.dword -0xffffffffffffffff
+.dword (~0ULL >> 63)
 EOF
 "$MINIAS" -o "$work/u64-data.o" "$work/u64-data.s"
 u64_hex="$(
     readelf -x .data "$work/u64-data.o" |
     awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]{8}$/) printf "%s", $i}'
 )"
-test "$u64_hex" = "ffffffffffffffff000000000000008038ffffffffffffff"
+test "$u64_hex" = "ffffffffffffffff000000000000008038ffffffffffffff01000000000000000100000000000000"
 
 cat >"$work/aliases-pseudos.s" <<'EOF'
 .text
@@ -2022,6 +2024,14 @@ rv_remaining_typed:
     neg a4, a3
     negw a5, a4
     not a6, a5
+    frflags t2
+    frrm t3
+    frcsr t4
+    fsflags t0
+    fsflags a0, a1
+    fsrm t1, t2
+    fsrmi a2, 31
+    fsflagsi a3, 7
     frcsr t0
     fscsr t1
     jalr ra, 12(a1)
@@ -2069,7 +2079,8 @@ else
 fi
 for invalid in 'c.li x0, 1' 'c.li a0, 32' 'jalr ra, 4096(a1)' \
                'jalr a0, a1, -2049' 'mv a0' 'sfence.vma x32, a0' \
-               'fence r' 'fscsr x32'; do
+               'fence r' 'fscsr x32' 'frflags x32' \
+               'fsflagsi a0, 32' 'fsrmi a0, -1' 'fsrm x32, t0'; do
     printf '.text\n%s\n' "$invalid" >"$work/riscv-mcinst-remaining-bad.s"
     if "$MINIAS" -o "$work/riscv-mcinst-remaining-bad.o" \
         "$work/riscv-mcinst-remaining-bad.s" \
@@ -2079,7 +2090,7 @@ for invalid in 'c.li x0, 1' 'c.li a0, 32' 'jalr ra, 4096(a1)' \
         exit 1
     fi
 done
-echo 'MINIAS_RV_MCINST_ALIASES_NEGATIVE=PASS bad_operands=8'
+echo 'MINIAS_RV_MCINST_ALIASES_NEGATIVE=PASS bad_operands=12'
 
 
 # Symbolic GPR loads/stores are now two-word typed MCInst fragments,

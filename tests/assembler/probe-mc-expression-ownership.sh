@@ -23,6 +23,9 @@ for old in ('parse_data_integer_bits(', 'static bool checked_mul_absolute_i64(',
             'static bool parse_symbol_minus_dot(',
             'static bool parse_symbol_difference('):
     if old in s: raise SystemExit('obsolete common expression helper: '+old)
+for old in ('parse_data_integer_bits(', 'parse_i64_data(',
+            'strtoll(', 'strtoull('):
+    if old in m: raise SystemExit('obsolete second DATA literal parser: '+old)
 if 'deferred_text' in m or 'MINIAS_MC_EXPR_DEFERRED_ABSOLUTE' in m:
     raise SystemExit('fixed-width MCExpr retained textual reparse')
 if 'deferred_text' in internal:
