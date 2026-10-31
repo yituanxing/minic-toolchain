@@ -6,6 +6,8 @@ driver=Path('assembler/src/assembler.c').read_text()
 layout=Path('assembler/src/mc_layout.c').read_text()
 expr=Path('assembler/src/mc_expr.c').read_text()
 internal=Path('assembler/src/minias_internal.h').read_text()
+source=Path('assembler/src/source_graph_internal.h').read_text()
+expansion=Path('assembler/src/source_expansion.c').read_text()
 mk=Path('Makefile').read_text()
 for fragment in ('INSTRUCTION','ALIGNMENT','ORIGIN','FIXED_DATA',
                  'FILL','SPACE','BYTES'):
@@ -16,7 +18,13 @@ if 'fragment_kind' not in driver or 'fragment_kind' not in layout:
 for legacy in ('strcmp(stmt->op', 'strncmp(stmt->op'):
     if legacy in layout:
         raise SystemExit('MCLayout selects semantic fragment by source text: '+legacy)
-if 'MiniAsSourceFrame' not in driver or 'process_source_frame(' not in driver:
+if ('typedef struct MiniAsSourceFrame' not in source or
+    'MiniAsSourceFrame physical;' not in source or
+    expansion.count('bool minias_source_frame_process(') != 1 or
+    'minias_source_frame_process(as,&graph->physical)' not in driver or
+    expansion.count('minias_source_frame_process(as,&frame)') < 3 or
+    'assembler/src/source_graph.c' not in mk or
+    'assembler/src/source_expansion.c' not in mk):
     raise SystemExit('physical file and expansion inputs lack shared SourceFrame')
 for old_reader in ('read_macro_block(', 'read_repeat_block('):
     if old_reader in driver:

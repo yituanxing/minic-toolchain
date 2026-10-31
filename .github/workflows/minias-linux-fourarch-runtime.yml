@@ -141,10 +141,10 @@ jobs:
             build/minias-linux-fourarch/${{ matrix.arch }}/evidence/kernel-config.diff.log
             build/minias-linux-fourarch/${{ matrix.arch }}/runtime-initramfs.sha256
             build/minias-linux-fourarch/${{ matrix.arch }}/runtime-initramfs.cpio.gz
-            build/minias-linux-fourarch/aarch64/evidence/entry.o.s
-            build/minias-linux-fourarch/aarch64/evidence/entry.o.s.sha256
-            build/minias-linux-fourarch/aarch64/production-asm-sources.tsv
-            build/minias-linux-fourarch/aarch64/production-asm-sources.raw.tsv
+            build/minias-linux-fourarch/${{ matrix.arch }}/evidence/entry.o.s
+            build/minias-linux-fourarch/${{ matrix.arch }}/evidence/entry.o.s.sha256
+            build/minias-linux-fourarch/${{ matrix.arch }}/production-asm-sources.tsv
+            build/minias-linux-fourarch/${{ matrix.arch }}/production-asm-sources.raw.tsv
           if-no-files-found: error
           retention-days: 14
 
