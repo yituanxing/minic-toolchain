@@ -143,31 +143,62 @@ bool x86_i128_store(FILE *out, const MinicX86Frame *frame, MinicCoreValueId id,
 
 bool x86_object_address(FILE *out, const MinicX86Frame *frame,
                                MinicCoreObjectId id, const char *reg) {
-    if (out == NULL || frame == NULL || id >= frame->object_count || reg == NULL)
+    char operand[64];
+    return out != NULL && reg != NULL &&
+           x86_object_memory_operand(frame, id, operand, sizeof(operand)) &&
+           fprintf(out, "  leaq %s, %s\n", operand, reg) >= 0;
+}
+
+/* One canonical x86 FramePlan addressing formatter for both LEA and native
+ * memory operands. Above-16-byte aligned objects MUST use the dynamically
+ * aligned RSP base. Never reconstruct byte offsets from Core SSA IDs. */
+bool x86_object_memory_operand(const MinicX86Frame *frame,
+                               MinicCoreObjectId id, char *out, size_t capacity) {
+    int size;
+    if (frame == NULL || frame->object_offsets == NULL ||
+        id >= frame->object_count || out == NULL || capacity < 2U)
         return false;
-    return frame->objects_from_aligned_rsp
-        ? fprintf(out, "  leaq %zu(%%rsp), %s\n", frame->object_offsets[id], reg) >= 0
-        : fprintf(out, "  leaq -%zu(%%rbp), %s\n", frame->object_offsets[id], reg) >= 0;
+    size = frame->objects_from_aligned_rsp
+        ? snprintf(out, capacity, "%zu(%%rsp)", frame->object_offsets[id])
+        : snprintf(out, capacity, "-%zu(%%rbp)", frame->object_offsets[id]);
+    return size > 0 && (size_t)size < capacity;
+}
+
+/* Keep x86 width/sign normalization *identical* whether the scalar's memory
+ * address lives in R10 or is the proven direct FramePlan effective address. */
+bool x86_load_memory_at(FILE *out, size_t bytes, bool sign,
+                        const char *operand) {
+    const char *opcode, *result;
+    if (out == NULL || operand == NULL) return false;
+    switch (bytes) {
+    case 1U: opcode = sign ? "movsbq" : "movzbq"; result = "%rax"; break;
+    case 2U: opcode = sign ? "movswq" : "movzwq"; result = "%rax"; break;
+    case 4U: opcode = sign ? "movslq" : "movl"; result = sign ? "%rax" : "%eax"; break;
+    case 8U: opcode = "movq"; result = "%rax"; break;
+    default: return false;
+    }
+    return fprintf(out, "  %s %s, %s\n", opcode, operand, result) >= 0;
+}
+
+bool x86_store_memory_at(FILE *out, size_t bytes, const char *operand) {
+    const char *opcode, *source;
+    if (out == NULL || operand == NULL) return false;
+    switch (bytes) {
+    case 1U: opcode = "movb"; source = "%al"; break;
+    case 2U: opcode = "movw"; source = "%ax"; break;
+    case 4U: opcode = "movl"; source = "%eax"; break;
+    case 8U: opcode = "movq"; source = "%rax"; break;
+    default: return false;
+    }
+    return fprintf(out, "  %s %s, %s\n", opcode, source, operand) >= 0;
 }
 
 bool x86_load_memory(FILE *out, size_t bytes, bool sign) {
-    switch (bytes) {
-    case 1U: return fprintf(out, sign ? "  movsbq (%%r10), %%rax\n" : "  movzbq (%%r10), %%rax\n") >= 0;
-    case 2U: return fprintf(out, sign ? "  movswq (%%r10), %%rax\n" : "  movzwq (%%r10), %%rax\n") >= 0;
-    case 4U: return fprintf(out, sign ? "  movslq (%%r10), %%rax\n" : "  movl (%%r10), %%eax\n") >= 0;
-    case 8U: return fprintf(out, "  movq (%%r10), %%rax\n") >= 0;
-    }
-    return false;
+    return x86_load_memory_at(out, bytes, sign, "(%r10)");
 }
 
 bool x86_store_memory(FILE *out, size_t bytes) {
-    switch (bytes) {
-    case 1U: return fprintf(out, "  movb %%al, (%%r10)\n") >= 0;
-    case 2U: return fprintf(out, "  movw %%ax, (%%r10)\n") >= 0;
-    case 4U: return fprintf(out, "  movl %%eax, (%%r10)\n") >= 0;
-    case 8U: return fprintf(out, "  movq %%rax, (%%r10)\n") >= 0;
-    }
-    return false;
+    return x86_store_memory_at(out, bytes, "(%r10)");
 }
 
 /* cJSON's static error/hook tables require initialized records containing

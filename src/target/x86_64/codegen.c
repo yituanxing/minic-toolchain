@@ -31,6 +31,42 @@ static void x86_error(MinicDiagnostic *diag, const char *path, const char *messa
     }
 }
 
+/* X86-only address-register proof. Core's exact use census and the verified
+ * local FramePlan provide the sole object identity. No delayed pointer
+ * transport: the next instruction in the SAME Core block must be a genuine
+ * scalar LOAD/STORE with this pointer as its address. Keep atomic/wide,
+ * record, CALL, asm and cross-block cases on their original stack path. */
+static bool x86_adjacent_direct_object_address(
+    const MinicCoreFunction *fn, const MinicX86Frame *frame,
+    const MinicCoreInstruction *producer,
+    const MinicCoreInstruction *consumer, const size_t *use_counts) {
+    const MinicCoreValueId id = producer != NULL
+        ? producer->result : MINIC_CORE_VALUE_INVALID;
+    MinicType stored;
+    if (fn == NULL || frame == NULL || producer == NULL || consumer == NULL ||
+        use_counts == NULL ||
+        producer->kind != MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS ||
+        producer->value.object_id >= frame->object_count ||
+        frame->object_offsets == NULL ||
+        id == MINIC_CORE_VALUE_INVALID || id >= fn->value_count ||
+        use_counts[id] != 1U || !minic_type_is_pointer(fn->values[id].type))
+        return false;
+    if (consumer->kind == MINIC_CORE_INSTRUCTION_LOAD)
+        return consumer->value.load.address == id &&
+               !minic_type_is_int128_integer(consumer->type) &&
+               !minic_type_is_long_double(consumer->type) &&
+               (minic_type_is_integer(consumer->type) ||
+                minic_type_is_pointer(consumer->type));
+    if (consumer->kind != MINIC_CORE_INSTRUCTION_STORE ||
+        consumer->value.store.address != id ||
+        consumer->value.store.stored_value >= fn->value_count)
+        return false;
+    stored = fn->values[consumer->value.store.stored_value].type;
+    return !minic_type_is_int128_integer(stored) &&
+           !minic_type_is_long_double(stored) &&
+           (minic_type_is_integer(stored) || minic_type_is_pointer(stored));
+}
+
 static bool x86_emit_function(FILE *out, const MinicC0Program *program,
                               const MinicTargetInfo *target, const MinicFunction *declaration,
                               const MinicCoreFunction *fn, const MinicCoreFunctionFacts *facts,
@@ -46,6 +82,8 @@ static bool x86_emit_function(FILE *out, const MinicC0Program *program,
      * former all-stack scalar path without changing any Linux Kbuild flags. */
     const bool adjacent_gp_forward_enabled =
         getenv("MINIC_X86_DISABLE_ADJACENT_GP_FORWARD") == NULL;
+    const bool direct_object_address_enabled =
+        getenv("MINIC_X86_DISABLE_DIRECT_OBJECT_ADDRESS") == NULL;
     bool success = false;
     {
         const bool named = name != NULL && name[0] != '\0';
@@ -202,6 +240,9 @@ static bool x86_emit_function(FILE *out, const MinicC0Program *program,
         size_t k;
         bool previous_gp_forward = false;
         MinicCoreValueId previous_gp_result = MINIC_CORE_VALUE_INVALID;
+        bool previous_direct_address = false;
+        MinicCoreValueId previous_direct_value = MINIC_CORE_VALUE_INVALID;
+        MinicCoreObjectId previous_direct_object = MINIC_CORE_OBJECT_INVALID;
         if (fprintf(out, ".Lmini_x86_f%zu_b%zu:\n", function_id, block_index) < 0) goto done;
         if (block->source_label_id != SIZE_MAX && !fn->suppress_source_label_aliases) {
             if (fprintf(out, ".Luser_%zu:\n", block->source_label_id) < 0)
@@ -216,25 +257,34 @@ static bool x86_emit_function(FILE *out, const MinicC0Program *program,
             MinicCoreInstructionId id = 0U;
             const MinicCoreInstruction *ins = NULL;
             bool forward_to_next = false;
+            bool direct_address_to_next = false;
             const MinicCoreInstruction *next = NULL;
             MinicCoreInstructionId next_id = 0U;
             if (!minic_core_block_instruction_at(fn, block, k, &id, &ins)) {
                 x86_error(diag, path, "x86-64 invalid Core block instruction");
                 goto done;
             }
-            if (adjacent_gp_forward_enabled && k + 1U < block->instruction_count) {
+            if (k + 1U < block->instruction_count) {
                 if (!minic_core_block_instruction_at(
                         fn, block, k + 1U, &next_id, &next)) {
                     x86_error(diag, path, "x86-64 invalid next Core block instruction");
                     goto done;
                 }
-                forward_to_next = minic_multi_direct_gp_adjacent_forward(
-                    fn, ins, next, function_value_use_counts);
+                if (adjacent_gp_forward_enabled)
+                    forward_to_next = minic_multi_direct_gp_adjacent_forward(
+                        fn, ins, next, function_value_use_counts);
+                if (direct_object_address_enabled)
+                    direct_address_to_next = x86_adjacent_direct_object_address(
+                        fn, &frame, ins, next, function_value_use_counts);
             }
             frame.gp_forward_source_valid = previous_gp_forward;
             frame.gp_forward_source_id = previous_gp_result;
             frame.gp_elide_result_store_valid = forward_to_next;
             frame.gp_elide_result_store_id = ins->result;
+            frame.direct_object_address_producer = direct_address_to_next;
+            frame.direct_object_address_consumer = previous_direct_address;
+            frame.direct_object_address_value_id = previous_direct_value;
+            frame.direct_object_address_object_id = previous_direct_object;
             if (!minic_x86_64_emit_core_instruction(out, program, target, fn, &frame,
                                                     ins, function_id, id)) {
                 char message[256];
@@ -271,10 +321,16 @@ static bool x86_emit_function(FILE *out, const MinicC0Program *program,
             }
             previous_gp_forward = forward_to_next;
             previous_gp_result = ins->result;
+            previous_direct_address = direct_address_to_next;
+            previous_direct_value = ins->result;
+            previous_direct_object = ins->kind == MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS
+                ? ins->value.object_id : MINIC_CORE_OBJECT_INVALID;
         }
         /* Terminators and the next Core block never inherit %rax transport. */
         frame.gp_forward_source_valid = false;
         frame.gp_elide_result_store_valid = false;
+        frame.direct_object_address_producer = false;
+        frame.direct_object_address_consumer = false;
         if (!block->has_terminator ||
             !minic_x86_64_emit_core_terminator(
                 out, program, target, &frame, &block->terminator, fn, function_id)) {

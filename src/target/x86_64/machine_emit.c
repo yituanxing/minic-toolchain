@@ -789,6 +789,11 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
     }
     case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS:
         if (ins->value.object_id >= frame->object_count) return false;
+        /* This per-instruction flag is set only after Core proves that
+         * the next LOAD/STORE reads this exact object's pointer once. The
+         * next instruction's identity is tracked separately for its load. */
+        if (frame->direct_object_address_producer)
+            return true;
         if (frame->objects_from_aligned_rsp) {
             if (fprintf(out, "  leaq %zu(%%rsp), %%rax\n",
                         frame->object_offsets[ins->value.object_id]) < 0) return false;
@@ -940,6 +945,15 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
                                 "  movq 8(%%r10), %%rdx\n") >= 0 &&
                    x86_i128_store(out, frame, ins->result, "%rax", "%rdx");
         if (!minic_x86_64_storage_width(program, target, ins->type, &bytes, &sign)) return false;
+        if (frame->direct_object_address_consumer &&
+            frame->direct_object_address_value_id == ins->value.load.address) {
+            char memory[64];
+            return x86_object_memory_operand(frame,
+                       frame->direct_object_address_object_id,
+                       memory, sizeof(memory)) &&
+                   x86_load_memory_at(out, bytes, sign, memory) &&
+                   x86_value_store(out, frame, ins->result);
+        }
         return x86_value_load(out, frame, ins->value.load.address, "%r10") &&
                x86_load_memory(out, bytes, sign) &&
                x86_value_store(out, frame, ins->result);
@@ -989,6 +1003,15 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
         if (src >= fn->value_count ||
             !minic_x86_64_storage_width(program, target, fn->values[src].type, &bytes, &sign))
             return false;
+        if (frame->direct_object_address_consumer &&
+            frame->direct_object_address_value_id == ins->value.store.address) {
+            char memory[64];
+            return x86_object_memory_operand(frame,
+                       frame->direct_object_address_object_id,
+                       memory, sizeof(memory)) &&
+                   x86_value_load(out, frame, src, "%rax") &&
+                   x86_store_memory_at(out, bytes, memory);
+        }
         return x86_value_load(out, frame, ins->value.store.address, "%r10") &&
                x86_value_load(out, frame, src, "%rax") &&
                x86_store_memory(out, bytes);

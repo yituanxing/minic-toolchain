@@ -32,6 +32,14 @@ typedef struct MinicX86Frame {
     MinicCoreValueId gp_forward_source_id;
     bool gp_elide_result_store_valid;
     MinicCoreValueId gp_elide_result_store_id;
+    /* An adjacent single-use local OBJECT_ADDRESS can be computed at its
+     * LOAD/STORE consumer directly into %r10. The producer emits no LEA or
+     * SSA spill, while the consumer still performs the genuine memory IO.
+     * Object geometry remains exclusively owned by this x86 frame plan. */
+    bool direct_object_address_producer;
+    bool direct_object_address_consumer;
+    MinicCoreValueId direct_object_address_value_id;
+    MinicCoreObjectId direct_object_address_object_id;
     size_t *object_offsets;
     MinicCoreObjectStoragePlan object_storage;
     bool borrows_object_storage;

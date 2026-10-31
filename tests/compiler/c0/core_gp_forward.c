@@ -49,6 +49,53 @@ long minic_gp_volatile_single_store(long *out) {
     return 19;
 }
 
+/* A 64-byte-aligned local switches x86 frame objects to the dynamically
+ * aligned %rsp base. Address forwarding must use FramePlan's real base,
+ * never manufacture a negative %rbp displacement. */
+long minic_gp_aligned_local(long input) {
+    volatile long local __attribute__((aligned(64))) = input + 7;
+    return local * 3;
+}
+
+#ifdef MINIC_GP_REJECT_ALIGN_ALLOCA
+/* RSP-relative aligned locals cannot coexist with an alloca which moves SP.
+ * Existing x86 machine admission must still fail closed in this case. */
+long minic_gp_reject_aligned_alloca(unsigned long n) {
+    volatile long local __attribute__((aligned(64))) = 17;
+    volatile char *scratch = (volatile char *)__builtin_alloca(n);
+    scratch[0] = 3;
+    return local + scratch[0];
+}
+#endif
+
+/* A packed local has a genuinely unaligned 32-bit field; address transport
+ * must not reinterpret the field width as an 8-byte scalar SSA slot. */
+struct __attribute__((packed)) MinicGpPacked {
+    unsigned char tag;
+    unsigned int word;
+};
+
+unsigned long minic_gp_packed_local(unsigned int input) {
+    volatile struct MinicGpPacked item;
+    item.tag = 5;
+    item.word = input + 9U;
+    return (unsigned long)item.word + item.tag;
+}
+
+/* Existing atomic and 128-bit machine families remain independent of the
+ * adjacent ordinary scalar LOAD/STORE address shortcut. */
+long minic_gp_atomic_local(long input) {
+    long value = input;
+    __atomic_store_n(&value, input + 1, __ATOMIC_RELAXED);
+    return __atomic_load_n(&value, __ATOMIC_RELAXED);
+}
+
+unsigned long minic_gp_wide_local(unsigned long input) {
+    unsigned __int128 wide = ((unsigned __int128)input << 64) |
+                             (unsigned __int128)(input + 1UL);
+    return (unsigned long)(wide >> 64) + (unsigned long)wide;
+}
+
 long minic_gp_volatile(long *out) {
     long x = observed;
     *out = x;
@@ -83,6 +130,10 @@ int main(void) {
         minic_gp_cfg_boundary(-4) != 21 ||
         minic_gp_cfg_boundary(6) != 14 ||
         minic_gp_double_use(6) != 34 ||
+        minic_gp_aligned_local(6) != 39 ||
+        minic_gp_packed_local(17U) != 31UL ||
+        minic_gp_atomic_local(6) != 7 ||
+        minic_gp_wide_local(5UL) != 11UL ||
         minic_gp_volatile_single_store(&value) != 19 || value != 23)
         return 1;
     observed = 17;
