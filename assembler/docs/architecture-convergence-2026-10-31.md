@@ -128,3 +128,42 @@ QEMU P1. Never transfer a green result from an earlier commit.
 **Not implemented in this batch:** M1/M2 expression AST consolidation,
 X1/T1 target form canonicalization, full SourceContext state ownership and W1
 workflow retirement. They remain queued behind this batch's remote evidence.
+
+## Next deletion batch: retained variable DATA and RISC-V form policy
+
+This batch is a targeted follow-up to the SourceGraph/SectionIdentity work,
+not closure of the full M1 or T1 programs. Its independent code and runtime
+proofs must be recorded under the commit that actually contains it.
+
+- **M2 variable DATA:** `.fill/.space/.skip/.zero` compile a retained
+  `MiniAsDeferredExpr` exactly once, after source-site mutable `.set`
+  substitution. Both provisional placement and final MCLayout use those same
+  owned SymbolIDs and expression nodes. Removed the two standalone Common
+  eager parsers `minias_parse_common_fill` and `minias_parse_common_space`,
+  their public declarations, and their duplicate call paths. A forward
+  expression can still start at provisional size zero and settle during the
+  one fragment layout fixed point. Negative `.fill` repetition remains a
+  GNU-compatible empty fragment; invalid `.space` fill and width overflow
+  remain rejected. The structure gate now rejects reintroduction of either
+  obsolete text parser instead of requiring its continued presence.
+- **T1 descriptor slice:** RV32/RV64 fixed R/I/U/branch/JAL forms now store
+  their operand and alias policies alongside the existing RISC-V Target
+  opcode descriptors. This removes repeated mnemonic-based decisions for
+  two-operand Zbb, arithmetic-immediate aliases, shift bounds, reversed
+  comparisons, zero-branches, `%hi`, `j` and `jal`. No ISA policy enters
+  Common; other RISC-V pseudo/floating/vector families remain independent
+  until their existing typed decoders can be certified as a whole.
+- **Local gates:** Release `-Werror`, A0 30/30, SourceGraph x86 GNU oracle,
+  typed variable DATA relaxation, forward-operand fixed point, mutable `.set`
+  GNU byte oracle, and the Linux x86 page-table relocation/link oracle pass.
+  The two variable DATA GNU oracles also pass with ASan/UBSan enabled
+  (`detect_leaks=0`: LeakSanitizer cannot inspect `/proc/<pid>/task` in this
+  container). RV target A0 bytes match the prior verified implementation. Local GNU
+  RISC-V/LoongArch comparison and Linux P1 are **NOT TESTED** until exact-head
+  GitHub Actions completes.
+
+**Still open:** M1 shared expression syntax AST with policy-specific
+evaluators, full RISC-V Target form metadata for every ISA family, private
+SourceContext ownership rather than the umbrella `MiniAs` session, and W1
+workflow deduplication. These are not implied by removal of the two eager
+variable DATA functions or the first fixed-form descriptor slice.

@@ -3436,24 +3436,11 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
 
     if (!strcmp(op,".fill")) {
         fragment_kind=MINIAS_FRAGMENT_FILL;
-        unsigned elem=0U;
-        uint64_t repeats=0U,value=0U;
         delayed=common_data_has_symbolic_token(args);
-        if(!minias_parse_common_fill(as,args,&repeats,&elem,&value) ||
-           (elem!=0U && repeats>UINT32_MAX/elem)) {
-            delayed=true;
-            /* Forward labels and subsection values have not received
-             * their final layout yet. Keep this as a real data fragment
-             * with provisional size 0, never as an ignored directive.
-             * Invalid syntax/unresolved symbols are rejected at fixpoint. */
-            bytes=0U;
-        }else {
-            bytes=repeats*elem;
-            variable_parsed=true;
-            variable_repeat=repeats;
-            variable_value=value;
-            variable_width=elem;
-        }
+        /* Compile the retained expression before computing its provisional
+         * size below, after lexical .set snapshots have been captured. The
+         * former immediate parser was a second grammar for these fields. */
+        bytes=0U;
     } else if (strcmp(op,".uleb128")==0 || strcmp(op,".sleb128")==0) {
         fragment_kind=MINIAS_FRAGMENT_BYTES;
         unsigned char coded[10];
@@ -3498,24 +3485,8 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
     } else if (strcmp(op, ".zero") == 0 || strcmp(op, ".space") == 0 ||
                strcmp(op, ".skip") == 0) {
         fragment_kind=MINIAS_FRAGMENT_SPACE;
-        uint8_t fill=0U;
         delayed=common_data_has_symbolic_token(args);
-        if (!minias_parse_common_space(as,args,&count,&fill)) {
-            delayed=true;
-            /* .skip/.space also permits forward absolute label differences.
-             * A zero-length provisional fragment is resolved and verified
-             * after all symbols have been placed. */
-            count=0U;
-        }
-        bytes = count;
-        /* The solver revisits all deferred fragments. The parse-site
-         * value below is immutable when no symbolic operands exist. */
-        if(!delayed) {
-            variable_parsed=true;
-            variable_repeat=count;
-            variable_value=fill;
-            variable_width=1U;
-        }
+        bytes=0U;
     } else {
         /* One Common MCExpr parser validates every fixed-width field.
          * Measurement only counts fields; parsed semantic expressions are
@@ -3655,6 +3626,30 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
        (strcmp(op,".uleb128")==0 || strcmp(op,".sleb128")==0))
         as->stmts[as->stmt_count-1U].leb_mode=
             strcmp(op,".sleb128")==0?2U:1U;
+    if(fragment_kind==MINIAS_FRAGMENT_FILL ||
+       fragment_kind==MINIAS_FRAGMENT_SPACE) {
+        MiniAsStmt *stmt=&as->stmts[as->stmt_count-1U];
+        uint64_t repeat=0U,value=0U;
+        unsigned element_width=0U;
+        /* The stored spelling is already frozen at this lexical site.
+         * Compile exactly once; both the first-pass placement and the
+         * later MCLayout fixed point evaluate these same owned SymbolIDs. */
+        if(!minias_compile_variable_exprs(as,stmt))return false;
+        if(minias_resolve_variable_exprs(as,stmt,&repeat,&element_width,&value) &&
+           (element_width==0U || repeat<=UINT32_MAX/element_width)) {
+            bytes=repeat*element_width;
+            stmt->size=(uint32_t)bytes;
+            variable_parsed=true;
+            variable_repeat=repeat;
+            variable_width=element_width;
+            variable_value=value;
+        }else {
+            /* Forward symbols and section-relative values may settle only
+             * after relaxation. MCLayout also rejects malformed resolved
+             * size/value combinations without a speculative source reparse. */
+            delayed=true;
+        }
+    }
     if(variable_parsed) {
         MiniAsStmt *fragment=&as->stmts[as->stmt_count-1U];
         fragment->variable_data_resolved=true;
@@ -3664,10 +3659,6 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
     }
     if(width!=0U &&
        !minias_compile_data_mc(as,&as->stmts[as->stmt_count-1U],width))
-        return false;
-    if((fragment_kind==MINIAS_FRAGMENT_FILL ||
-        fragment_kind==MINIAS_FRAGMENT_SPACE) &&
-       !minias_compile_variable_exprs(as,&as->stmts[as->stmt_count-1U]))
         return false;
     if(fragment_kind==MINIAS_FRAGMENT_BYTES && delayed) {
         MiniAsStmt *stmt=&as->stmts[as->stmt_count-1U];

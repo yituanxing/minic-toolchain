@@ -739,9 +739,6 @@ void minias_layout_destroy(MiniAs *);
 bool minias_solve_fragment_layout(MiniAs *, size_t **, size_t *, size_t *,
                                   bool *, FILE *);
 bool minias_validate_fragment_semantics(MiniAs *);
-bool minias_parse_common_space(MiniAs *, const char *, uint64_t *, uint8_t *);
-bool minias_parse_common_fill(MiniAs *, const char *, uint64_t *, unsigned *,
-                              uint64_t *);
 bool minias_current_location(MiniAs *, uint64_t *);
 bool minias_parse_u64(const char *, uint64_t *);
 bool minias_checked_add_i64(int64_t, int64_t, int64_t *);

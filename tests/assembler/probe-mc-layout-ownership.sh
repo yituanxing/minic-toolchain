@@ -39,13 +39,17 @@ for n in ('minias_relayout_fragments','minias_resolve_deferred_data',
     if re.search(r'(?:static\s+)?bool\s+'+n+r'\s*\(',driver):
         raise SystemExit('old driver layout: '+n)
 for n in ('minias_parse_common_space','minias_parse_common_fill'):
-    if n+'(' not in expr:raise SystemExit('DATA grammar missing in MCExpr: '+n)
+    if any(n+'(' in owner for owner in (expr,driver,internal)):
+        raise SystemExit('obsolete variable DATA eager text parser survived: '+n)
 for n in ('minias_compile_deferred_expr','minias_evaluate_deferred_expr',
           'minias_deferred_expr_destroy','minias_compile_variable_exprs',
           'minias_resolve_variable_exprs'):
     if n+'(' not in expr:raise SystemExit('persistent MCExpr owner missing: '+n)
 if 'minias_resolve_variable_exprs(' not in layout:
     raise SystemExit('MCLayout failed to consume persistent variable expressions')
+if driver.count('minias_compile_variable_exprs(as,stmt)') != 1 or \
+   'minias_resolve_variable_exprs(as,stmt' not in driver:
+    raise SystemExit('variable DATA first pass must use one retained MCExpr AST')
 if 'minias_compile_variable_mc(' in expr or 'minias_resolve_variable_mc(' in layout:
     raise SystemExit('obsolete variable DATA text/legacy MC path survived')
 emitter=driver[driver.index('static bool emit_data_stmt('):

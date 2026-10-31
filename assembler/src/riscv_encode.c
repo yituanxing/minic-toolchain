@@ -1029,27 +1029,57 @@ bool minias_riscv_measure_mcinst(MiniAs *as, const MiniAsStmt *stmt,
     }
 }
 
-/* RISC-V's first production MCInst family: fixed-width integer ALU,
- * memory, control transfer and selected ISA extensions. The descriptors
- * contain machine encoding templates but no source operands. */
+/* Fixed-width instruction syntax is owned by this one Target descriptor,
+ * rather than rediscovered from mnemonic spellings during operand parsing.
+ * These bits affect only RISC-V operand lowering, not Common MC semantics. */
+typedef enum RvMCFormFlags {
+    RV_FORM_DEFAULT=0U,
+    RV_FORM_TWO_OPERANDS=1U<<0,
+    RV_FORM_FIXED_IMMEDIATE=1U<<1,
+    RV_FORM_ALT_IMMEDIATE=1U<<2,
+    RV_FORM_NEGATE_IMMEDIATE=1U<<3,
+    RV_FORM_ARITH_IMMEDIATE=1U<<4,
+    RV_FORM_SHIFT_IMMEDIATE=1U<<5,
+    RV_FORM_SWAP_SOURCES=1U<<6,
+    RV_FORM_BRANCH_ZERO=1U<<7,
+    RV_FORM_BRANCH_ZERO_RS1=1U<<8,
+    RV_FORM_BRANCH_REVERSE=1U<<9,
+    RV_FORM_JAL_ZERO_RD=1U<<10,
+    RV_FORM_REV8_XLEN=1U<<11,
+    RV_FORM_HI_RELOCATION=1U<<12
+} RvMCFormFlags;
+
+/* RISC-V's fixed-width integer ALU, memory and control transfer forms.
+ * Encodings and parser form policy are one Target-owned table; feature and
+ * XLEN restrictions remain independent of the source spelling. */
 typedef struct RvMCDesc {
     const char *name;
     unsigned family;
     uint32_t base;
     uint64_t required_features;
     bool rv64_only;
+    unsigned form_flags;
 } RvMCDesc;
-#define RVD(name, group, base) {name, RV_MC_##group, base, 0U, false}
-#define RVM(name, group, base) {name, RV_MC_##group, base, RISCV_ISA_M, false}
-#define RVM64(name, group, base) {name, RV_MC_##group, base, RISCV_ISA_M, true}
-#define RV64(name, group, base) {name, RV_MC_##group, base, 0U, true}
-#define RVZ(name, group, base) {name, RV_MC_##group, base, RISCV_ISA_ZBB, false}
+#define RVD(name, group, base) {name, RV_MC_##group, base, 0U, false, RV_FORM_DEFAULT}
+#define RVDF(name, group, base, flags) {name, RV_MC_##group, base, 0U, false, flags}
+#define RVM(name, group, base) {name, RV_MC_##group, base, RISCV_ISA_M, false, RV_FORM_DEFAULT}
+#define RVM64(name, group, base) {name, RV_MC_##group, base, RISCV_ISA_M, true, RV_FORM_DEFAULT}
+#define RV64(name, group, base) {name, RV_MC_##group, base, 0U, true, RV_FORM_DEFAULT}
+#define RV64F(name, group, base, flags) {name, RV_MC_##group, base, 0U, true, flags}
+#define RVZF(name, group, base, flags) {name, RV_MC_##group, base, RISCV_ISA_ZBB, false, flags}
+#define RV_ALT RV_FORM_ALT_IMMEDIATE
+#define RV_SHIFT RV_FORM_SHIFT_IMMEDIATE
+#define RV_TWO (RV_FORM_TWO_OPERANDS|RV_FORM_FIXED_IMMEDIATE)
 static const RvMCDesc rv_mc_table[] = {
-    RVD("add",R,0x00000033U), RVD("sub",R,0x40000033U),
-    RVD("sll",R,0x00001033U), RVD("slt",R,0x00002033U),
-    RVD("sltu",R,0x00003033U), RVD("xor",R,0x00004033U),
-    RVD("srl",R,0x00005033U), RVD("sra",R,0x40005033U),
-    RVD("or",R,0x00006033U), RVD("and",R,0x00007033U),
+    RVDF("add",R,0x00000033U,RV_ALT),
+    RVDF("sub",R,0x40000033U,RV_ALT|RV_FORM_NEGATE_IMMEDIATE),
+    RVDF("sll",R,0x00001033U,RV_ALT|RV_SHIFT),
+    RVD("slt",R,0x00002033U), RVD("sltu",R,0x00003033U),
+    RVDF("xor",R,0x00004033U,RV_ALT),
+    RVDF("srl",R,0x00005033U,RV_ALT|RV_SHIFT),
+    RVDF("sra",R,0x40005033U,RV_ALT|RV_SHIFT|RV_FORM_ARITH_IMMEDIATE),
+    RVDF("or",R,0x00006033U,RV_ALT),
+    RVDF("and",R,0x00007033U,RV_ALT),
     RVM("mul",R,0x02000033U), RVM("mulh",R,0x02001033U),
     RVM("mulhu",R,0x02003033U), RVM("div",R,0x02004033U),
     RVM("divu",R,0x02005033U), RVM("rem",R,0x02006033U),
@@ -1060,39 +1090,55 @@ static const RvMCDesc rv_mc_table[] = {
     RVM64("mulw",R,0x0200003bU), RVM64("divw",R,0x0200403bU),
     RVM64("divuw",R,0x0200503bU), RVM64("remw",R,0x0200603bU),
     RVM64("remuw",R,0x0200703bU),
-    RVD("sgt",R,0x00002033U), RVD("sgtu",R,0x00003033U),
+    RVDF("sgt",R,0x00002033U,RV_FORM_SWAP_SOURCES),
+    RVDF("sgtu",R,0x00003033U,RV_FORM_SWAP_SOURCES),
     RVD("addi",I,0x00000013U), RV64("addiw",I,0x0000001bU),
     RVD("slti",I,0x00002013U), RVD("sltiu",I,0x00003013U),
     RVD("xori",I,0x00004013U), RVD("ori",I,0x00006013U),
     RVD("andi",I,0x00007013U),
-    RVD("slli",I,0x00001013U), RVD("srli",I,0x00005013U),
-    RVD("srai",I,0x40005013U),
-    RV64("slliw",I,0x0000101bU), RV64("srliw",I,0x0000501bU),
-    RV64("sraiw",I,0x4000501bU),
-    RV64("sext.w",I,0x0000001bU),
-    RVZ("orc.b",I,0x28705013U), RVZ("rev8",I,0x6b805013U),
-    RVZ("ctz",I,0x60101013U),
+    RVDF("slli",I,0x00001013U,RV_SHIFT),
+    RVDF("srli",I,0x00005013U,RV_SHIFT),
+    RVDF("srai",I,0x40005013U,RV_SHIFT),
+    RV64F("slliw",I,0x0000101bU,RV_SHIFT),
+    RV64F("srliw",I,0x0000501bU,RV_SHIFT),
+    RV64F("sraiw",I,0x4000501bU,RV_SHIFT),
+    RV64F("sext.w",I,0x0000001bU,RV_TWO),
+    RVZF("orc.b",I,0x28705013U,RV_TWO),
+    RVZF("rev8",I,0x6b805013U,RV_TWO|RV_FORM_REV8_XLEN),
+    RVZF("ctz",I,0x60101013U,RV_TWO),
     RVD("lb",LOAD,0x00000003U), RVD("lh",LOAD,0x00001003U),
     RVD("lw",LOAD,0x00002003U), RV64("ld",LOAD,0x00003003U),
     RVD("lbu",LOAD,0x00004003U), RVD("lhu",LOAD,0x00005003U),
     RV64("lwu",LOAD,0x00006003U),
     RVD("sb",STORE,0x00000023U), RVD("sh",STORE,0x00001023U),
     RVD("sw",STORE,0x00002023U), RV64("sd",STORE,0x00003023U),
-    RVD("lui",U,0x00000037U), RVD("auipc",U,0x00000017U),
+    RVDF("lui",U,0x00000037U,RV_FORM_HI_RELOCATION),
+    RVD("auipc",U,0x00000017U),
     RVD("beq",BRANCH,0x00000063U), RVD("bne",BRANCH,0x00001063U),
     RVD("blt",BRANCH,0x00004063U), RVD("bge",BRANCH,0x00005063U),
     RVD("bltu",BRANCH,0x00006063U), RVD("bgeu",BRANCH,0x00007063U),
-    RVD("beqz",BRANCH,0x00000063U), RVD("bnez",BRANCH,0x00001063U),
-    RVD("bltz",BRANCH,0x00004063U), RVD("bgez",BRANCH,0x00005063U),
-    RVD("bgtz",BRANCH,0x00004063U), RVD("blez",BRANCH,0x00005063U),
-    RVD("bgt",BRANCH,0x00004063U), RVD("ble",BRANCH,0x00005063U),
-    RVD("bgtu",BRANCH,0x00006063U), RVD("bleu",BRANCH,0x00007063U),
-    RVD("j",JAL,0x0000006fU), RVD("jal",JAL,0x0000006fU)
+    RVDF("beqz",BRANCH,0x00000063U,RV_FORM_BRANCH_ZERO),
+    RVDF("bnez",BRANCH,0x00001063U,RV_FORM_BRANCH_ZERO),
+    RVDF("bltz",BRANCH,0x00004063U,RV_FORM_BRANCH_ZERO),
+    RVDF("bgez",BRANCH,0x00005063U,RV_FORM_BRANCH_ZERO),
+    RVDF("bgtz",BRANCH,0x00004063U,RV_FORM_BRANCH_ZERO|RV_FORM_BRANCH_ZERO_RS1),
+    RVDF("blez",BRANCH,0x00005063U,RV_FORM_BRANCH_ZERO|RV_FORM_BRANCH_ZERO_RS1),
+    RVDF("bgt",BRANCH,0x00004063U,RV_FORM_BRANCH_REVERSE),
+    RVDF("ble",BRANCH,0x00005063U,RV_FORM_BRANCH_REVERSE),
+    RVDF("bgtu",BRANCH,0x00006063U,RV_FORM_BRANCH_REVERSE),
+    RVDF("bleu",BRANCH,0x00007063U,RV_FORM_BRANCH_REVERSE),
+    RVDF("j",JAL,0x0000006fU,RV_FORM_JAL_ZERO_RD),
+    RVD("jal",JAL,0x0000006fU)
 };
+#undef RV_ALT
+#undef RV_SHIFT
+#undef RV_TWO
+#undef RVDF
 #undef RVM
 #undef RVM64
 #undef RV64
-#undef RVZ
+#undef RV64F
+#undef RVZF
 #undef RVD
 
 static const RvMCDesc *rv_find_mc_descriptor(const char *mnemonic) {
@@ -1936,6 +1982,7 @@ static bool rv_parse_mcinst_impl(MiniAs *as, MiniAsStmt *stmt,
     bool is_imm = false;
     MiniAsMCInst *inst;
     unsigned family, slots;
+    unsigned form_flags;
     uint32_t encoding;
     char base[128];
     const char *op = stmt->op;
@@ -1966,14 +2013,13 @@ static bool rv_parse_mcinst_impl(MiniAs *as, MiniAsStmt *stmt,
     }
     family = desc->family;
     encoding = desc->base;
+    form_flags = desc->form_flags;
     policy->required_features = desc->required_features;
     policy->rv64_only = desc->rv64_only;
     if(!split_operands(stmt->args,operands,8U,&count))goto invalid;
 
     if (family == RV_MC_R || family == RV_MC_I) {
-        bool two = strcmp(op,"sext.w") == 0 ||
-                   strcmp(op,"orc.b") == 0 ||
-                   strcmp(op,"rev8") == 0 || strcmp(op,"ctz") == 0;
+        bool two = (form_flags & RV_FORM_TWO_OPERANDS)!=0U;
         if (count != (two ? 2U : 3U)) goto invalid;
         if (two) {
             rd = reg_number(operands[0]);
@@ -1981,7 +2027,7 @@ static bool rv_parse_mcinst_impl(MiniAs *as, MiniAsStmt *stmt,
             /* Ratified Zbb gives rev8 distinct OP-IMM words for RV32 and
              * RV64.  Its XLEN is selected by the immutable Target profile,
              * not inferred from the mnemonic or the host word size. */
-            if (strcmp(op, "rev8") == 0 &&
+            if ((form_flags & RV_FORM_REV8_XLEN)!=0U &&
                 MINIAS_RV_STATE(as)->target_xlen == 32U)
                 encoding = UINT32_C(0x69805013);
             imm = (int64_t)((encoding >> 20U) & 0xfffU);
@@ -1992,18 +2038,15 @@ static bool rv_parse_mcinst_impl(MiniAs *as, MiniAsStmt *stmt,
             if (family == RV_MC_R) {
                 rs2 = reg_number(operands[2]);
                 if (rs2 < 0 &&
-                    (strcmp(op, "add") == 0 || strcmp(op, "sub") == 0 ||
-                     strcmp(op, "and") == 0 || strcmp(op, "or") == 0 ||
-                     strcmp(op, "xor") == 0 || strcmp(op, "sll") == 0 ||
-                     strcmp(op, "srl") == 0 || strcmp(op, "sra") == 0) &&
+                    (form_flags & RV_FORM_ALT_IMMEDIATE)!=0U &&
                     parse_i64(operands[2], &imm)) {
                     family = RV_MC_I;
                     is_imm = true;
                     encoding = 0x13U | (encoding & 0x7000U);
-                    if (strcmp(op,"sub") == 0) {
+                    if ((form_flags & RV_FORM_NEGATE_IMMEDIATE)!=0U) {
                         if (imm == INT64_MIN) goto invalid;
                         imm = -imm;
-                    } else if (strcmp(op,"sra") == 0) {
+                    } else if ((form_flags & RV_FORM_ARITH_IMMEDIATE)!=0U) {
                         encoding |= 0x40000000U;
                     }
                 }
@@ -2022,23 +2065,15 @@ static bool rv_parse_mcinst_impl(MiniAs *as, MiniAsStmt *stmt,
             (family == RV_MC_I && !is_imm && count != 2U &&
              !parse_i64(operands[2], &imm))) goto invalid;
         if (family == RV_MC_I) {
-            bool shift = ((encoding & 0x7000U) == 0x1000U ||
-                          (encoding & 0x7000U) == 0x5000U) &&
-                         (strcmp(op,"slli")==0 || strcmp(op,"srli")==0 ||
-                          strcmp(op,"srai")==0 || strcmp(op,"slliw")==0 ||
-                          strcmp(op,"srliw")==0 || strcmp(op,"sraiw")==0 ||
-                          strcmp(op,"sll")==0 || strcmp(op,"srl")==0 ||
-                          strcmp(op,"sra")==0);
+            bool shift=(form_flags & RV_FORM_SHIFT_IMMEDIATE)!=0U;
             if (shift) {
                 int max = ((encoding & 0x7fU) == 0x1bU ||
                            MINIAS_RV_STATE(as)->target_xlen == 32U) ? 31 : 63;
                 if (imm < 0 || imm > max) goto invalid;
-            } else if ((strcmp(op, "orc.b") != 0) &&
-                       (strcmp(op, "rev8") != 0) &&
-                       (strcmp(op, "ctz") != 0) &&
+            } else if ((form_flags & RV_FORM_FIXED_IMMEDIATE)==0U &&
                        (imm < -2048 || imm > 2047)) goto invalid;
         }
-        if (strcmp(op, "sgt")==0 || strcmp(op,"sgtu")==0) {
+        if ((form_flags & RV_FORM_SWAP_SOURCES)!=0U) {
             int tmp = rs1; rs1 = rs2; rs2 = tmp;
         }
         slots = 3U;
@@ -2092,7 +2127,7 @@ static bool rv_parse_mcinst_impl(MiniAs *as, MiniAsStmt *stmt,
         rd = reg_number(operands[0]);
         if (rd < 0) goto invalid;
         if (!parse_i64(operands[1], &imm)) {
-            if (strcmp(op, "lui") != 0 ||
+            if ((form_flags & RV_FORM_HI_RELOCATION)==0U ||
                 !parse_absolute_modifier(operands[1], "%hi(",
                                          &absolute_expr)) goto invalid;
             absolute_reloc = RV_ABS_RELOC_HI20;
@@ -2100,11 +2135,7 @@ static bool rv_parse_mcinst_impl(MiniAs *as, MiniAsStmt *stmt,
         }
         slots = 2U;
     } else if (family == RV_MC_BRANCH) {
-        bool two = strcmp(op, "beqz") == 0 || strcmp(op, "bnez") == 0 ||
-                   strcmp(op, "bltz") == 0 || strcmp(op, "bgez") == 0 ||
-                   strcmp(op, "bgtz") == 0 || strcmp(op, "blez") == 0;
-        bool reverse = strcmp(op, "bgt") == 0 || strcmp(op, "ble") == 0 ||
-                       strcmp(op, "bgtu") == 0 || strcmp(op, "bleu") == 0;
+        bool two = (form_flags & RV_FORM_BRANCH_ZERO)!=0U;
         const char *symbol_text;
         if (count != (two ? 2U : 3U)) goto invalid;
         rs1 = reg_number(operands[0]);
@@ -2112,13 +2143,15 @@ static bool rv_parse_mcinst_impl(MiniAs *as, MiniAsStmt *stmt,
         if (two) {
             rs2 = 0;
             symbol_text = operands[1];
-            if (strcmp(op,"bgtz") == 0 || strcmp(op,"blez") == 0) {
+            if ((form_flags & RV_FORM_BRANCH_ZERO_RS1)!=0U) {
                 rs2 = rs1; rs1 = 0;
             }
         } else {
             rs2 = reg_number(operands[1]);
             if (rs2 < 0) goto invalid;
-            if (reverse) {int tmp=rs1;rs1=rs2;rs2=tmp;}
+            if ((form_flags & RV_FORM_BRANCH_REVERSE)!=0U) {
+                int tmp=rs1;rs1=rs2;rs2=tmp;
+            }
             symbol_text = operands[2];
         }
         {
@@ -2139,10 +2172,11 @@ static bool rv_parse_mcinst_impl(MiniAs *as, MiniAsStmt *stmt,
         return true;
     } else if (family == RV_MC_JAL) {
         const char *sym;
-        rd = strcmp(op, "j") == 0 ? 0 : 1;
-        if (strcmp(op, "j") == 0 && count != 1U) goto invalid;
+        rd = (form_flags & RV_FORM_JAL_ZERO_RD)!=0U ? 0 : 1;
+        if ((form_flags & RV_FORM_JAL_ZERO_RD)!=0U && count != 1U)
+            goto invalid;
         if (count == 1U) sym = operands[0];
-        else if (count == 2U && strcmp(op,"jal")==0) {
+        else if (count == 2U && (form_flags & RV_FORM_JAL_ZERO_RD)==0U) {
             rd=reg_number(operands[0]);
             sym=operands[1];
         } else goto invalid;
