@@ -125,13 +125,16 @@ static bool riscv_lookup_fixup_form(MiniAsFixupKind kind, unsigned width,
     return false;
 }
 
-static bool riscv_supports_fixup(MiniAsFixupKind kind, unsigned width) {
+static bool riscv_supports_fixup(const MiniAs *as,MiniAsFixupKind kind,
+                                unsigned width) {
+    (void)as;
     return riscv_lookup_fixup_form(kind, width, NULL);
 }
 
-static uint32_t riscv_fixup_relocation_type(MiniAsFixupKind kind,
+static uint32_t riscv_fixup_relocation_type(const MiniAs *as,MiniAsFixupKind kind,
                                             unsigned width) {
     uint32_t relocation = 0U;
+    (void)as;
     (void)riscv_lookup_fixup_form(kind, width, &relocation);
     return relocation;
 }

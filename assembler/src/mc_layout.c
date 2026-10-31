@@ -917,8 +917,8 @@ bool minias_emit_deferred_leb_relocations(MiniAs *as) {
             if(!crosses)continue;
         }
         if(as->target->supports_fixup==NULL ||
-           !as->target->supports_fixup(positive_fixup,0U) ||
-           !as->target->supports_fixup(MINIAS_FIXUP_LEB_SUB,0U) ||
+           !as->target->supports_fixup(as,positive_fixup,0U) ||
+           !as->target->supports_fixup(as,MINIAS_FIXUP_LEB_SUB,0U) ||
            stmt->section<0 || (size_t)stmt->section>=as->section_count) {
             minias_set_error(as,"unsupported-uleb-relocation:line=%zu",
                              stmt->line);

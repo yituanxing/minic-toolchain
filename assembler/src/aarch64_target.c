@@ -5584,13 +5584,16 @@ static bool aarch64_lookup_fixup_form(MiniAsFixupKind kind, unsigned width,
     return false;
 }
 
-static bool aarch64_supports_fixup(MiniAsFixupKind kind, unsigned width) {
+static bool aarch64_supports_fixup(const MiniAs *as,MiniAsFixupKind kind,
+                                   unsigned width) {
+    (void)as;
     return aarch64_lookup_fixup_form(kind, width, NULL);
 }
 
-static uint32_t aarch64_fixup_relocation_type(MiniAsFixupKind kind,
+static uint32_t aarch64_fixup_relocation_type(const MiniAs *as,MiniAsFixupKind kind,
                                               unsigned width) {
     uint32_t relocation = 0U;
+    (void)as;
     (void)aarch64_lookup_fixup_form(kind, width, &relocation);
     return relocation;
 }
@@ -5835,9 +5838,10 @@ static bool aarch64_resolve_profile(const char *march, const char *mabi,
     return true;
 }
 
-static bool a64_named_relocation(const char *name,
+static bool a64_named_relocation(const MiniAs *as,const char *name,
                                   MiniAsFixupKind *kind,unsigned *width) {
     size_t i;
+    (void)as;
     for(i=0U;i<sizeof(aarch64_fixup_forms)/
                  sizeof(aarch64_fixup_forms[0]);++i) {
         if(aarch64_fixup_forms[i].named_spelling!=NULL &&

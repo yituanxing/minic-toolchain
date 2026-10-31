@@ -712,3 +712,42 @@ for symbol lookup, errors and emission transactions. Shrink one real
 phase at a time, preserving the retained MCInst and Common-owned emission
 sink. No new ISA parser, generic object-format abstraction or second
 section-relaxability algorithm is needed yet.
+
+## 17. One ABI-aware Fixup policy, including ELF32/i386 rejection
+
+The preceding batches already added immutable `MiniAsPostEmitView` and
+`MiniAsPreLayoutView` interfaces. While reconciling that work, an independent
+Fixup audit exposed a **real ABI mismatch**. `TargetOps` offered generic
+`supports_fixup`/`fixup_relocation_type` callbacks and optional
+`_for_object` overrides. The ELF32/i386 override fell back to AMD64 support
+when a kind or width was not specifically handled. That let `.quad external`
+or an AMD64 GOTPCREL-family request pass semantic validation on i386, only
+to become the invalid placeholder `R_386_NONE` in the final ELF object.
+The named `.reloc` parser also used the AMD64 spelling list for i386, wrongly
+rejecting valid `R_386_GOTPC` and accepting some foreign ABI spellings.
+
+Each Target now has just one `supports_fixup(const MiniAs *,kind,width)`
+and one `fixup_relocation_type(const MiniAs *,kind,width)`. The x86 Target
+explicitly enumerates permitted i386 widths/kinds independently of its
+AMD64 table; its named relocation parser selects `R_386_*` or `R_X86_64_*`
+by the configured object ABI. Common MCExpr and ELF lowering always use
+the same Target answer; there is no secondary fallback policy. AArch64,
+RISC-V and LoongArch keep their existing semantic fixup tables under the
+new ABI-aware signature without changing their supported encodings.
+
+New GNU positive oracles compare actual `readelf -rW` relocation fields and
+`objcopy` `.data` bytes for i386/AMD64. Four GNU-negative inputs now fail
+under both GNU AS and MiniAS, with no emitted `.o`. We deliberately do not
+claim the shared ELF semantic comparator is an i386 oracle: it has no ELF32
+i386 model, while the tested AMD64 fixture has an unrelated preexisting
+local Section-symbol mismatch. The focused checks isolate the relocation
+ABI and byte payload instead of hiding that difference.
+
+Local verification on the reconciled Target/Common tree: `-Werror` build
+and A0 **30/30 PASS**,
+the structural Fixup ABI gate, strict AArch64 mapping/ELF/QEMU, LoongArch
+GNU relocation/alignment, x86 ELF32/`.code16`, x86/Loong GNU dual-target,
+RISC-V and LoongArch linker-relaxable ULEB **2/2**, RISC-V final `.option`
+states **4/4**, and five GNU CFI ABI profiles **5/5** all PASS.
+Record remote CI separately at its exact new
+commit SHA. No new kernel Image/BusyBox P0/P1 result is implied.

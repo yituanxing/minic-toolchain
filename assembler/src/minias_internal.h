@@ -951,20 +951,15 @@ typedef struct MiniAsTargetOps {
      * executable NOP sequence (e.g. GNU x86 `balign 16,0x90`). Common
      * must not choose machine-code bytes or hardcode a target's fill value. */
     bool (*explicit_alignment_fill_is_code_nop)(uint8_t);
-    /* A semantic capability: never infer target support from an ELF
-     * relocation number, where zero may be a valid numeric enumeration. */
-    bool (*supports_fixup)(MiniAsFixupKind, unsigned);
-    /* Optional object ABI-specific capability. For instance ELF32/i386
-     * exposes ABS16/PC16 while ELF64/x86-64 intentionally rejects them. */
-    bool (*supports_fixup_for_object)(const MiniAs *,MiniAsFixupKind,unsigned);
-    uint32_t (*fixup_relocation_type)(MiniAsFixupKind, unsigned);
-    /* Optional ABI-sensitive relocation mapping (e.g. x86-64 vs i386).
-     * Both profiles reuse one instruction parser and machine encoder. */
-    uint32_t (*fixup_relocation_type_for_object)(const MiniAs *,
-                                                MiniAsFixupKind, unsigned);
+    /* Single ABI-aware semantic capability and relocation mapping. ELF32
+     * i386 and ELF64 AMD64 are different object profiles despite sharing
+     * one target parser; no generic fallback may re-admit a rejected kind. */
+    bool (*supports_fixup)(const MiniAs *,MiniAsFixupKind,unsigned);
+    uint32_t (*fixup_relocation_type)(const MiniAs *,MiniAsFixupKind,unsigned);
     /* GNU named relocation spelling is ISA-owned; Common only places the
      * semantic fixup at the explicit section offset. */
-    bool (*parse_named_relocation)(const char *, MiniAsFixupKind *, unsigned *);
+    bool (*parse_named_relocation)(const MiniAs *,const char *,
+                                   MiniAsFixupKind *,unsigned *);
     bool supports_literal_pools; /* .ltorg/.pool only for a checked target */
     MiniAsLiteralPoolOrder literal_pool_order;
     /* Post-emission validation checks finalized section bytes/placements.

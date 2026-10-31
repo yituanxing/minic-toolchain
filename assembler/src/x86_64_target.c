@@ -4967,7 +4967,7 @@ static uint32_t x64_reloc_for_object(const MiniAs *as,
  * relocation code.  A backend may support a fixup family even where its
  * encoded relocation number is zero; Common cannot infer a policy from an
  * architecture-specific value.  x86 explicitly lacks ELF ADD/SUB pairs. */
-static bool x64_supports_fixup(MiniAsFixupKind kind,unsigned width) {
+static bool x64_supports_amd64_fixup(MiniAsFixupKind kind,unsigned width) {
     switch(kind) {
         case MINIAS_FIXUP_ABS:
             return width==4U || width==8U;
@@ -4986,18 +4986,22 @@ static bool x64_supports_fixup(MiniAsFixupKind kind,unsigned width) {
             return false;
     }
 }
-static bool x64_supports_fixup_for_object(const MiniAs *as,
-                                          MiniAsFixupKind kind,unsigned width) {
-    if(as->output_elf32 && width==1U)
-        return kind==MINIAS_FIXUP_ABS || kind==MINIAS_FIXUP_PREL32;
-    if(as->output_elf32 && width==2U)
-        return kind==MINIAS_FIXUP_ABS || kind==MINIAS_FIXUP_PREL32 ||
-               kind==MINIAS_FIXUP_X64_PC32;
-    if(as->output_elf32 && width==4U &&
-       (kind==MINIAS_FIXUP_X86_GOTPC ||
-        kind==MINIAS_FIXUP_X86_GOT32X ||
-        kind==MINIAS_FIXUP_X86_GOTOFF))return true;
-    return x64_supports_fixup(kind,width);
+static bool x64_supports_fixup(const MiniAs *as,
+                               MiniAsFixupKind kind,unsigned width) {
+    if(!as->output_elf32)return x64_supports_amd64_fixup(kind,width);
+    /* i386 has no ABS64/GOTPCREL(X) relocation representation. Keep the
+     * valid i386 combinations explicit; falling back to AMD64 silently
+     * serialized unsupported requests as R_386_NONE. */
+    if(width==1U)return kind==MINIAS_FIXUP_ABS ||
+                         kind==MINIAS_FIXUP_PREL32;
+    if(width==2U)return kind==MINIAS_FIXUP_ABS ||
+                         kind==MINIAS_FIXUP_PREL32 ||
+                         kind==MINIAS_FIXUP_X64_PC32;
+    if(width!=4U)return false;
+    return kind==MINIAS_FIXUP_ABS || kind==MINIAS_FIXUP_X64_ABS32S ||
+           kind==MINIAS_FIXUP_X64_PC32 || kind==MINIAS_FIXUP_PREL32 ||
+           kind==MINIAS_FIXUP_X64_PLT32 || kind==MINIAS_FIXUP_X86_GOTPC ||
+           kind==MINIAS_FIXUP_X86_GOT32X || kind==MINIAS_FIXUP_X86_GOTOFF;
 }
 
 /* GNU GAS accepts target register names in CFI directives (with or without
@@ -5162,13 +5166,13 @@ static bool x64_evaluate_target_if(const char *expression, bool *result) {
     *result=(strcmp(left,right)==0)!=unequal;
     return true;
 }
-static bool x64_named_relocation(const char *name,
+static bool x64_named_relocation(const MiniAs *as,const char *name,
                                   MiniAsFixupKind *kind,unsigned *width) {
     static const struct {
         const char *name;
         MiniAsFixupKind kind;
         unsigned width;
-    } forms[]={
+    } amd64_forms[]={
         {"R_X86_64_PC32",MINIAS_FIXUP_X64_PC32,4U},
         {"R_X86_64_PLT32",MINIAS_FIXUP_X64_PLT32,4U},
         {"R_X86_64_GOTPCREL",MINIAS_FIXUP_X64_GOTPCREL,4U},
@@ -5178,10 +5182,32 @@ static bool x64_named_relocation(const char *name,
         {"R_X86_64_32S",MINIAS_FIXUP_X64_ABS32S,4U},
         {"R_X86_64_64",MINIAS_FIXUP_ABS,8U}
     };
+    static const struct {
+        const char *name;
+        MiniAsFixupKind kind;
+        unsigned width;
+    } i386_forms[]={
+        {"R_386_8",MINIAS_FIXUP_ABS,1U},
+        {"R_386_PC8",MINIAS_FIXUP_PREL32,1U},
+        {"R_386_16",MINIAS_FIXUP_ABS,2U},
+        {"R_386_PC16",MINIAS_FIXUP_PREL32,2U},
+        {"R_386_32",MINIAS_FIXUP_ABS,4U},
+        {"R_386_PC32",MINIAS_FIXUP_PREL32,4U},
+        {"R_386_PLT32",MINIAS_FIXUP_X64_PLT32,4U},
+        {"R_386_GOTPC",MINIAS_FIXUP_X86_GOTPC,4U},
+        {"R_386_GOTOFF",MINIAS_FIXUP_X86_GOTOFF,4U},
+        {"R_386_GOT32X",MINIAS_FIXUP_X86_GOT32X,4U}
+    };
+    const size_t count=as->output_elf32?
+        sizeof(i386_forms)/sizeof(i386_forms[0]):
+        sizeof(amd64_forms)/sizeof(amd64_forms[0]);
     unsigned i;
-    for(i=0U;i<sizeof(forms)/sizeof(forms[0]);++i) {
-        if(!strcmp(name,forms[i].name)) {
-            *kind=forms[i].kind;*width=forms[i].width;
+    for(i=0U;i<count;++i) {
+        const char *spelling=as->output_elf32?
+            i386_forms[i].name:amd64_forms[i].name;
+        if(!strcmp(name,spelling)) {
+            *kind=as->output_elf32?i386_forms[i].kind:amd64_forms[i].kind;
+            *width=as->output_elf32?i386_forms[i].width:amd64_forms[i].width;
             return true;
         }
     }
@@ -5199,9 +5225,7 @@ static const MiniAsTargetOps ops={
     .plan_instruction_relaxation=x64_plan_instruction_relaxation,
     .append_code_alignment=x64_code_align,
     .explicit_alignment_fill_is_code_nop=x64_explicit_alignment_fill_is_code_nop,
-    .fixup_relocation_type=x64_reloc,
-    .fixup_relocation_type_for_object=x64_reloc_for_object,
-    .supports_fixup_for_object=x64_supports_fixup_for_object,
+    .fixup_relocation_type=x64_reloc_for_object,
     .resolve_cfi_register=x64_resolve_cfi_register,
     .resolve_cfi_abi=x64_resolve_cfi_abi,
     .supports_fixup=x64_supports_fixup,

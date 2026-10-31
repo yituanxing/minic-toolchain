@@ -1065,10 +1065,8 @@ bool minias_compile_data_mc(MiniAs *as, MiniAsStmt *stmt,
  * Common must ask Target policy before choosing a fixup strategy. */
 static bool target_supports_fixup(const MiniAs *as,
                                   MiniAsFixupKind kind,unsigned width) {
-    if(as->target->supports_fixup_for_object!=NULL)
-        return as->target->supports_fixup_for_object(as,kind,width);
     return as->target->supports_fixup!=NULL &&
-           as->target->supports_fixup(kind,width);
+           as->target->supports_fixup(as,kind,width);
 }
 
 static bool emit_symbol_minus_dot(MiniAs *as,

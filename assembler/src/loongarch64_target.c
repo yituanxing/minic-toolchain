@@ -2353,11 +2353,14 @@ static bool la_lookup_fixup_form(MiniAsFixupKind kind,unsigned width,
     }
     return false;
 }
-static bool la_supports_fixup(MiniAsFixupKind kind,unsigned width) {
+static bool la_supports_fixup(const MiniAs *as,MiniAsFixupKind kind,
+                             unsigned width) {
+    (void)as;
     return la_lookup_fixup_form(kind,width,NULL);
 }
-static uint32_t la_reloc(MiniAsFixupKind kind,unsigned width) {
+static uint32_t la_reloc(const MiniAs *as,MiniAsFixupKind kind,unsigned width) {
     uint32_t relocation=0U;
+    (void)as;
     (void)la_lookup_fixup_form(kind,width,&relocation);
     return relocation;
 }

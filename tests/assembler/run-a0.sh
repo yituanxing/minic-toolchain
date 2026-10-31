@@ -16,6 +16,7 @@ bash tests/assembler/probe-minias-atomic-output.sh
 bash tests/assembler/probe-mc-deferred-shift-gnu.sh
 bash tests/assembler/probe-elf-sectionkey-unique-inherited-group-gnu.sh
 bash tests/assembler/probe-rv-i-audit-api.sh
+bash tests/assembler/probe-x86-fixup-abi-policy-gnu.sh
 
 assemble_and_check() {
     name="$1"

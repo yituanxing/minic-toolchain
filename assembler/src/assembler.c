@@ -3976,7 +3976,7 @@ static bool handle_named_reloc(MiniAs *as,const char *args,size_t line) {
     symbol=minias_trim(comma2);
     ok=as->current_section>=0 && as->current_subsection==0U &&
        as->target->parse_named_relocation &&
-       as->target->parse_named_relocation(name,&kind,&width) &&
+       as->target->parse_named_relocation(as,name,&kind,&width) &&
        *symbol!='\0' && !strchr(symbol,',') &&
        minias_evaluate_absolute_expression(as,offset_text,&offset) && offset>=0 &&
        minias_parse_symbol_addend(symbol,&expression);

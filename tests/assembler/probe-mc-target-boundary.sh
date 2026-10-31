@@ -188,6 +188,24 @@ if 'as->stmts' in encoder or 'calloc(' in encoder:
     raise SystemExit('LoongArch encoder still rescans mutable Common Fragments')
 print('MINIAS_MC_PRE_LAYOUT_VIEW=PASS LoongArch_forward_section_policy=Target_owned_once')
 PY
+# Object ABI policy must not fall back from a rejected i386 request to an
+# AMD64-wide semantic Fixup capability or relocation number.
+python3 - <<'PY'
+from pathlib import Path
+import re
+
+root = Path('assembler/src')
+header = (root / 'minias_internal.h').read_text()
+for file in ('minias_internal.h', 'mc_expr.c', 'elf_writer.c', 'x86_64_target.c'):
+    source = (root / file).read_text()
+    if 'supports_fixup_for_object' in source or \
+       'fixup_relocation_type_for_object' in source:
+        raise SystemExit(f'{file}: duplicate generic/object Fixup policy remains')
+if not re.search(r'bool\s*\(\*supports_fixup\)\s*\('
+                 r'const\s+MiniAs\s*\*', header):
+    raise SystemExit('Fixup capability lost Object ABI profile')
+print('MINIAS_MC_FIXUP_ABI=PASS policy=single_object_aware_interface')
+PY
 # Parse-site AArch64 mapping semantics must not be recovered by comparing
 # source strings during late section finalization. RISC-V's RVE ABI must not
 # be inferred from mutable Common ELF e_flags while parsing MC operands.

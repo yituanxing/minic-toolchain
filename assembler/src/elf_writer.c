@@ -577,11 +577,8 @@ static bool minias_write_elf(MiniAs *as,
          * A raw NONE request is never allowed to masquerade as an actual
          * relocation, regardless of a future target's numeric mapping. */
         if (input->kind == MINIAS_FIXUP_NONE ||
-            (as->target->supports_fixup_for_object!=NULL ?
-             !as->target->supports_fixup_for_object(
-                 as,input->kind,input->width) :
-             (as->target->supports_fixup==NULL ||
-              !as->target->supports_fixup(input->kind,input->width)))) {
+            as->target->supports_fixup==NULL ||
+            !as->target->supports_fixup(as,input->kind,input->width)) {
             minias_set_error(as, "unsupported-elf-fixup:kind=%u",
                              (unsigned)input->kind);
             goto done;
@@ -590,10 +587,8 @@ static bool minias_write_elf(MiniAs *as,
         output->offset = final_offset;
         output->symbol_index = input->symbol_index == SIZE_MAX ? SIZE_MAX :
                                symbol_map[input->symbol_index];
-        output->type = as->target->fixup_relocation_type_for_object != NULL ?
-            as->target->fixup_relocation_type_for_object(
-                as,input->kind,input->width) :
-            as->target->fixup_relocation_type(input->kind,input->width);
+        output->type = as->target->fixup_relocation_type(
+            as,input->kind,input->width);
         output->field_width = input->width;
         output->addend = input->addend;
         if(section_reloc) {
