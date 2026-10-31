@@ -808,6 +808,7 @@ bool minic_specialize_inline_symbolic_calls(
                 MinicExpressionId symbolic_expression[MINIC_MAX_FUNCTION_PARAMETERS];
                 bool used_caller_fact = false;
                 bool adds_symbol = false;
+                bool needs_section_clone;
                 size_t i;
                 size_t candidate_index;
 
@@ -833,6 +834,8 @@ bool minic_specialize_inline_symbolic_calls(
                     source.parameter_count != nested->value.call.argument_count) {
                     continue;
                 }
+                needs_section_clone = current.is_integer_specialization &&
+                    !minic_inline_specialization_section_matches(&current, &source, &caller);
                 (void)memset(integer_known, 0, sizeof(integer_known));
                 (void)memset(integer_bits, 0, sizeof(integer_bits));
                 (void)memset(symbolic_known, 0, sizeof(symbolic_known));
@@ -848,7 +851,8 @@ bool minic_specialize_inline_symbolic_calls(
                             current.specialization_symbolic_expression[i];
                     }
                 }
-                if (!minic_inline_symbolic_integer_inputs_are_closed(&source, integer_known)) {
+                if (!needs_section_clone &&
+                    !minic_inline_symbolic_integer_inputs_are_closed(&source, integer_known)) {
                     continue;
                 }
                 for (i = 0U; i < source.parameter_count; ++i) {
@@ -874,7 +878,7 @@ bool minic_specialize_inline_symbolic_calls(
                         adds_symbol = true;
                     }
                 }
-                if (!used_caller_fact || !adds_symbol) {
+                if ((!used_caller_fact || !adds_symbol) && !needs_section_clone) {
                     continue;
                 }
                 for (candidate_index = 0U;

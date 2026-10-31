@@ -39,8 +39,14 @@ head_clone=$(clone_for probe_early)
 init_clone=$(clone_for probe_later)
 head_again_clone=$(clone_for probe_early_again)
 explicit_clone=$(clone_for probe_explicit_owner)
+nested_head_clone=$(clone_for probe_nested_early)
+nested_init_clone=$(clone_for probe_nested_later)
+nested_head_leaf=$(clone_for "$nested_head_clone")
+nested_init_leaf=$(clone_for "$nested_init_clone")
 test -n "$head_clone" && test -n "$init_clone" &&
-    test -n "$head_again_clone" && test -n "$explicit_clone" \
+    test -n "$head_again_clone" && test -n "$explicit_clone" &&
+    test -n "$nested_head_clone" && test -n "$nested_init_clone" &&
+    test -n "$nested_head_leaf" && test -n "$nested_init_leaf" \
     || fail 'fixture calls were not specialized'
 test "$head_clone" = "$head_again_clone" &&
     test "$head_clone" != "$init_clone" \
@@ -51,6 +57,15 @@ clone_in_section .init.text "$init_clone" \
     || fail 'different caller section reused head clone'
 clone_in_section .special.text "$explicit_clone" \
     || fail 'callee explicit section was overwritten'
+test "$nested_head_clone" != "$nested_init_clone" &&
+    test "$nested_head_leaf" != "$nested_init_leaf" \
+    || fail 'transitive source-AST call reused a wrong-section clone'
+clone_in_section .head.text "$nested_head_clone" &&
+    clone_in_section .head.text "$nested_head_leaf" \
+    || fail 'head transitive clone escaped .head.text'
+clone_in_section .init.text "$nested_init_clone" &&
+    clone_in_section .init.text "$nested_init_leaf" \
+    || fail 'init transitive clone escaped .init.text'
 "$cc" "$driver" "$work/probe.o" -o "$work/actual" \
     || fail 'GNU link rejected cloned sections'
 "$work/actual" || fail 'MiniC clone runtime differs from C semantics'

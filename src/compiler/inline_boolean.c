@@ -806,6 +806,7 @@ static bool minic_specialize_inline_boolean_range_calls_for_pass(
                 bool boolean_range_known[MINIC_MAX_FUNCTION_PARAMETERS];
                 bool used_caller_fact = false;
                 bool adds_range = false;
+                bool needs_section_clone;
                 size_t parameter_index;
                 size_t candidate_index;
 
@@ -843,6 +844,8 @@ static bool minic_specialize_inline_boolean_range_calls_for_pass(
                     source.parameter_count != nested->value.call.argument_count) {
                     continue;
                 }
+                needs_section_clone = current.is_integer_specialization &&
+                    !minic_inline_specialization_section_matches(&current, &source, &caller);
                 minic_inline_boolean_copy_existing_facts(
                     &current,
                     source.parameter_count,
@@ -871,7 +874,7 @@ static bool minic_specialize_inline_boolean_range_calls_for_pass(
                         adds_range = true;
                     }
                 }
-                if (!used_caller_fact || !adds_range) {
+                if ((!used_caller_fact || !adds_range) && !needs_section_clone) {
                     continue;
                 }
                 for (candidate_index = 0U;

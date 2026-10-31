@@ -815,6 +815,7 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
                 uint64_t nested_bits[MINIC_MAX_FUNCTION_PARAMETERS];
                 bool used_caller_fact = false;
                 bool adds_fact = false;
+                bool needs_section_clone;
                 size_t parameter_index;
                 size_t nested_candidate_index;
 
@@ -846,6 +847,9 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
                     nested_source.parameter_count != nested->value.call.argument_count) {
                     continue;
                 }
+                needs_section_clone = current_callee.is_integer_specialization &&
+                    !minic_inline_specialization_section_matches(
+                        &current_callee, &nested_source, &caller);
                 (void)memset(nested_known, 0, sizeof(nested_known));
                 (void)memset(nested_bits, 0, sizeof(nested_bits));
                 for (parameter_index = 0U;
@@ -875,7 +879,24 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
                         adds_fact = true;
                     }
                 }
-                if (!used_caller_fact || !adds_fact) {
+                /* The shared source AST can already name a clone made for a
+                 * different section. Recreate the identical known-value facts
+                 * in this specialized caller's section even when no argument
+                 * gains a new transitive fact; otherwise Core falls back to an
+                 * unlowerable generic Linux inline helper. */
+                if (needs_section_clone) {
+                    for (parameter_index = 0U;
+                         parameter_index < nested_source.parameter_count;
+                         ++parameter_index) {
+                        if (!nested_known[parameter_index] &&
+                            current_callee.specialization_integer_known[parameter_index]) {
+                            nested_known[parameter_index] = true;
+                            nested_bits[parameter_index] =
+                                current_callee.specialization_integer_bits[parameter_index];
+                        }
+                    }
+                }
+                if ((!used_caller_fact || !adds_fact) && !needs_section_clone) {
                     continue;
                 }
                 for (nested_candidate_index = original_function_count;
