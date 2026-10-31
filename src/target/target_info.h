@@ -77,6 +77,13 @@ typedef enum MinicTargetGnuFunctionAttributeKind {
     MINIC_TARGET_GNU_FUNCTION_TARGET_CPU
 } MinicTargetGnuFunctionAttributeKind;
 
+/* A source-level GCC target-options snapshot. The parser only copies this
+ * opaque target-owned state on push/pop; it never interprets ISA feature
+ * bits or infers backend vector/inline-ASM support from their presence. */
+typedef struct MinicTargetGnuPragmaOptionState {
+    unsigned int selected_source_features;
+} MinicTargetGnuPragmaOptionState;
+
 /* Source-level GNU register/constraint admission is owned by each target.
  * This opaque policy is intentionally distinct from machine-ASM emission. */
 struct MinicTargetAsmSourcePolicy;
@@ -184,6 +191,13 @@ bool minic_target_info_gnu_function_security_attribute_supported(
 bool minic_target_info_gnu_function_security_attribute_value_supported(
     const MinicTargetInfo *target, MinicTargetGnuFunctionAttributeKind kind,
     const char *value, size_t value_length);
+/* Recognize exactly implemented source target-option *selection* semantics.
+ * Successful admission does not assert vector types, intrinsics, machine
+ * register constraints or per-function ISA lowering are implemented. */
+bool minic_target_info_gnu_pragma_target_options(
+    const MinicTargetInfo *target, const char *value, size_t value_length,
+    const MinicTargetGnuPragmaOptionState *current,
+    MinicTargetGnuPragmaOptionState *next);
 /* ELF linkage is a source-program property shared by the two LP64 targets.
  * A proven TU-local symbol may use PC-relative addressing in PIC; all other
  * addresses need a target-specific GOT sequence. */

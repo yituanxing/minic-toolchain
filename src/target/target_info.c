@@ -465,6 +465,25 @@ bool minic_target_info_gnu_function_security_attribute_value_supported(
            policy->gnu_function_attribute_value != NULL &&
            policy->gnu_function_attribute_value(kind, value, value_length);
 }
+
+bool minic_target_info_gnu_pragma_target_options(
+    const MinicTargetInfo *target, const char *value, size_t value_length,
+    const MinicTargetGnuPragmaOptionState *current,
+    MinicTargetGnuPragmaOptionState *next) {
+    const MinicTargetSourceLanguagePolicy *policy =
+        target == NULL ? NULL : target->source_language_policy;
+    MinicTargetGnuPragmaOptionState candidate;
+
+    if (policy == NULL || value == NULL || current == NULL || next == NULL ||
+        policy->gnu_pragma_target_options == NULL)
+        return false;
+    candidate = *current;
+    if (!policy->gnu_pragma_target_options(
+            target, value, value_length, current, &candidate))
+        return false;
+    *next = candidate;
+    return true;
+}
 /* Both AArch64's ADRP+ADD and LoongArch's la.local are valid in PIE only
  * when a symbol is nonpreemptible. Never infer internal linkage from the
  * spelling alone or from a source declaration without an owned definition. */

@@ -52,6 +52,12 @@ typedef struct MinicTargetSourceLanguagePolicy {
     bool (*gnu_function_attribute_name)(const char *, size_t);
     bool (*gnu_function_attribute_value)(
         MinicTargetGnuFunctionAttributeKind, const char *, size_t);
+    /* Target-specific GCC #pragma target option policy. No frontend ISA
+     * spellings; unknown strings fail closed, without mutating *next. */
+    bool (*gnu_pragma_target_options)(
+        const MinicTargetInfo *, const char *, size_t,
+        const MinicTargetGnuPragmaOptionState *,
+        MinicTargetGnuPragmaOptionState *);
 } MinicTargetSourceLanguagePolicy;
 
 /* The frontend builds one canonical genuine C source type per Program from

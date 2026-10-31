@@ -1,10 +1,12 @@
-name: MiniC RV32I P2 strict nine-operation QEMU frontier (not full P2)
+name: MiniC RV32I P2 strict nine plus canonical eleven QEMU frontier (not full P2)
 
 on:
   pull_request:
     paths:
       - .github/workflows/minic-rv32i-linux-p2-strict-frontier.yml
       - tests/external/linux/runtime_initramfs/rv32-p2-raw.c
+      - tests/external/linux/runtime_initramfs/rv32-p2-canonical11-raw.c
+      - tests/external/linux/runtime_initramfs/rv32-init-raw.c
       - tools/ci/linux-rv32i-qemu-p0-v1.sh
   workflow_dispatch:
 
@@ -28,7 +30,7 @@ jobs:
           sudo apt-get -o Acquire::Retries=3 update -qq
           sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
             gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
-            qemu-system-misc opensbi cpio device-tree-compiler
+            qemu-system-misc opensbi cpio device-tree-compiler e2fsprogs
           test -s /usr/lib/riscv32-linux-gnu/opensbi/generic/fw_dynamic.bin
           command -v qemu-system-riscv32
 
@@ -50,7 +52,7 @@ jobs:
           github-token: ${{ github.token }}
           path: build/rv32-p2-strict/original-kbuild
 
-      - name: Build six exact-config GNU ELF32 RISC-V modules, without touching MiniC Image
+      - name: Build 19 exact-config GNU ELF32 RISC-V modules, without touching MiniC Image
         shell: bash
         timeout-minutes: 12
         run: |
@@ -102,13 +104,31 @@ jobs:
             test -s "$out/$target"
             install -m 644 "$out/$target" "$modules/$(basename "$target")"
           done
+          # Exact Kbuild original =m dependencies for five new real checks:
+          # iptables4+6; Btrfs registration (CRC/XOR/RAID6/compression);
+          # device-mapper ioctl. ext4 and virtio-blk are already builtin.
+          for target in \
+            net/netfilter/x_tables.ko net/netfilter/xt_tcpudp.ko \
+            net/ipv4/netfilter/ip_tables.ko net/ipv4/netfilter/iptable_filter.ko \
+            net/ipv6/netfilter/ip6_tables.ko net/ipv6/netfilter/ip6table_filter.ko \
+            lib/libcrc32c.ko crypto/xor.ko lib/raid6/raid6_pq.ko \
+            lib/zlib_deflate/zlib_deflate.ko lib/lzo/lzo_compress.ko \
+            fs/btrfs/btrfs.ko drivers/md/dm-mod.ko; do
+            echo "RV32I_C11_KBUILD_START=$target"
+            KBUILD_MODPOST_WARN=1 make -C "$src" O="$out" ARCH=riscv \
+              CROSS_COMPILE=riscv64-linux-gnu- -j4 "$target" \
+              >>"$root/modules-build.log" 2>&1
+            test -s "$out/$target"
+            install -m 644 "$out/$target" "$modules/$(basename "$target")"
+          done
           for file in "$modules"/*.ko; do
             riscv64-linux-gnu-readelf -h "$file" | grep -Eq 'Class:[[:space:]]+ELF32'
             riscv64-linux-gnu-readelf -p .modinfo "$file" | \
               grep -Eq 'vermagic=6\.6\.143 mod_unload riscv([[:space:]]|$)'
             sha256sum "$file"
           done
-          echo 'RV32I_P2_MODULES=BUILT count=6 original_config_verified=true runtime_load_not_yet_verified=true'
+          test "$(find "$modules" -name '*.ko' -type f | wc -l)" -eq 19
+          echo 'RV32I_P2_MODULES=BUILT count=19 original_config_verified=true runtime_load_not_yet_verified=true'
 
       - name: Execute nine required RV32I/ILP32 P2 operations in real QEMU
         shell: bash
@@ -137,6 +157,44 @@ jobs:
           echo 'RV32_P2_REQUIRED=9 skip_allowed=0 full_P2_18=NOT_CERTIFIED'
           exit "$rc"
 
+      - name: Prepare real persistent ext4 fixture for canonical 11 of 18
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          root="$GITHUB_WORKSPACE/build/rv32-p2-strict"
+          truncate -s 128M "$root/canonical11-ext4.raw"
+          mkfs.ext4 -F -q "$root/canonical11-ext4.raw"
+          sha256sum "$root/canonical11-ext4.raw" >"$root/canonical11-ext4-sha256.txt"
+          echo 'RV32I_P2_C11_EXT4=PREPARED real_ext4=true qemu_virtio_disk=true'
+
+      - name: Extend proven nine operations to eleven canonical P2 checks in real QEMU
+        shell: bash
+        timeout-minutes: 8
+        run: |
+          set -Eeuo pipefail
+          root="$GITHUB_WORKSPACE/build/rv32-p2-strict"
+          image="$root/source/out/arch/riscv/boot/Image"
+          actual=$(sha256sum "$image" | cut -d' ' -f1)
+          test "$actual" = a762cb8ba55a3cbb52a1f85e61d40524941c8226a33cb35daf2bff1acd75a5a2
+          work="$root/canonical11-run"
+          mkdir -p "$work"
+          set +e
+          RV32I_QEMU_IMAGE="$image" RV32I_QEMU_WORK="$work" \
+            RV32I_QEMU_P2_MODULE_DIR="$root/modules" \
+            RV32I_QEMU_P2_EXT4_IMAGE="$root/canonical11-ext4.raw" \
+            RV32I_QEMU_P1=1 RV32I_QEMU_P2=1 \
+            RV32I_QEMU_P2_CANONICAL11=1 \
+            RV32I_QEMU_TIMEOUT_SECONDS=120 \
+            bash tools/ci/linux-rv32i-qemu-p0-v1.sh \
+            >"$root/canonical11-runner.log" 2>&1
+          rc=$?
+          set -e
+          printf 'qemu_lane_exit=%s\nsource_Image_sha256=%s\ncanonical=11/18\nscope=NOT_FULL_P2\n' \
+            "$rc" "$actual" >"$root/canonical11-verdict.txt"
+          tail -n 160 "$root/canonical11-runner.log"
+          echo 'RV32_P2_CANONICAL_REQUIRED=11 skip_allowed=0 full_P2_18=NOT_CERTIFIED'
+          exit "$rc"
+
       - name: Retain raw QEMU evidence even on real failure
         if: always()
         uses: actions/upload-artifact@v4
@@ -153,4 +211,11 @@ jobs:
             build/rv32-p2-strict/run/provenance.txt
             build/rv32-p2-strict/run/runtime-p2-elf.txt
             build/rv32-p2-strict/run/runtime-p2-disassembly.txt
+            build/rv32-p2-strict/canonical11-verdict.txt
+            build/rv32-p2-strict/canonical11-runner.log
+            build/rv32-p2-strict/canonical11-ext4-sha256.txt
+            build/rv32-p2-strict/canonical11-run/qemu-serial.log
+            build/rv32-p2-strict/canonical11-run/rv32-p2-module-sha256.txt
+            build/rv32-p2-strict/canonical11-run/runtime-p2-canonical11-elf.txt
+            build/rv32-p2-strict/canonical11-run/runtime-p2-canonical11-disassembly.txt
           if-no-files-found: warn

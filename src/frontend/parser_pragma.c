@@ -99,6 +99,80 @@ bool minic_parser_parse_preprocessor_directive(MinicParser *parser) {
         size_t matched_action;
 
         pragma_skip_horizontal_space(text, length, &cursor);
+        /* GCC option stacks and target strings use the same lexical shape
+         * across targets, but only a target policy can admit an ISA string.
+         * These snapshots cannot grant machine vector/ASM capabilities. */
+        if (pragma_consume_word(text, length, &cursor, "push_options")) {
+            if (!pragma_only_trailing_space(text, length, cursor)) {
+                minic_parser_error(parser, "unexpected tokens after GCC push_options");
+                return false;
+            }
+            if (parser->gnu_target_option_depth >= MINIC_PARSER_MAX_GCC_OPTION_DEPTH) {
+                minic_parser_error(parser, "GCC target option stack depth exceeds implementation limit");
+                return false;
+            }
+            parser->gnu_target_option_stack[parser->gnu_target_option_depth++] =
+                parser->gnu_target_options;
+            return minic_parser_advance(parser);
+        }
+        if (pragma_consume_word(text, length, &cursor, "pop_options")) {
+            if (!pragma_only_trailing_space(text, length, cursor)) {
+                minic_parser_error(parser, "unexpected tokens after GCC pop_options");
+                return false;
+            }
+            if (parser->gnu_target_option_depth == 0U) {
+                minic_parser_error(parser, "GCC pop_options has no matching push_options");
+                return false;
+            }
+            parser->gnu_target_options =
+                parser->gnu_target_option_stack[--parser->gnu_target_option_depth];
+            return minic_parser_advance(parser);
+        }
+        if (pragma_consume_word(text, length, &cursor, "target")) {
+            size_t target_option_begin;
+            MinicTargetGnuPragmaOptionState next_options;
+
+            pragma_skip_horizontal_space(text, length, &cursor);
+            if (cursor >= length || text[cursor++] != '(') {
+                minic_parser_error(parser, "expected '(' after GCC target");
+                return false;
+            }
+            pragma_skip_horizontal_space(text, length, &cursor);
+            if (cursor >= length || text[cursor++] != '"') {
+                minic_parser_error(parser, "GCC target requires one quoted option string");
+                return false;
+            }
+            target_option_begin = cursor;
+            while (cursor < length && text[cursor] != '"') {
+                /* No escape or comma-list interpretation is implemented:
+                 * parsing an approximation would silently alter GCC flags. */
+                if (text[cursor] == '\\') {
+                    minic_parser_error(parser, "unsupported escaped GCC target option");
+                    return false;
+                }
+                cursor += 1U;
+            }
+            if (cursor >= length || cursor == target_option_begin) {
+                minic_parser_error(parser, "invalid GCC target option string");
+                return false;
+            }
+            if (!minic_target_info_gnu_pragma_target_options(
+                    parser->target_info, text + target_option_begin,
+                    cursor - target_option_begin, &parser->gnu_target_options,
+                    &next_options)) {
+                minic_parser_error(parser, "unsupported GCC target option for selected target");
+                return false;
+            }
+            cursor += 1U;
+            pragma_skip_horizontal_space(text, length, &cursor);
+            if (cursor >= length || text[cursor++] != ')' ||
+                !pragma_only_trailing_space(text, length, cursor)) {
+                minic_parser_error(parser, "unsupported GCC target option syntax");
+                return false;
+            }
+            parser->gnu_target_options = next_options;
+            return minic_parser_advance(parser);
+        }
         {
             size_t visibility_probe = cursor;
 

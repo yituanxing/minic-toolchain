@@ -20,9 +20,16 @@ work=$(realpath "$RV32I_QEMU_WORK")
 image_sha=$(sha256sum "$image" | cut -d' ' -f1)
 p1=${RV32I_QEMU_P1:-0}
 p2=${RV32I_QEMU_P2:-0}
+c11=${RV32I_QEMU_P2_CANONICAL11:-0}
 shell=${RV32I_QEMU_SHELL:-0}
 [[ "$p2" == 0 || "$p2" == 1 ]] || {
   echo 'RV32I_QEMU_P2=FAIL invalid_p2_mode' >&2; exit 2;
+}
+[[ "$c11" == 0 || "$c11" == 1 ]] || {
+  echo 'RV32I_QEMU_P2=FAIL invalid_canonical11_mode' >&2; exit 2;
+}
+[[ "$c11" == 0 || "$p2" == 1 ]] || {
+  echo 'RV32I_QEMU_P2=FAIL canonical11_requires_original_p2_nine_gate' >&2; exit 2;
 }
 [[ "$p2" == 0 || ( "$p1" == 1 && "$shell" == 0 && "${RV32I_QEMU_FAST:-0}" == 0 ) ]] || {
   echo 'RV32I_QEMU_P2=FAIL requires_genuine_ELF32_userland_without_other_profiles' >&2; exit 2;
@@ -99,6 +106,14 @@ if [[ "$p1" == 1 ]]; then
       echo 'RV32I_GUEST_P2=FAIL no_CRT_GP_register_was_uninitialized' >&2
       exit 3
     fi
+    if [[ "$c11" == 1 ]]; then
+      build_guest tests/external/linux/runtime_initramfs/rv32-p2-canonical11-raw.c runtime-p2-canonical11
+      riscv64-linux-gnu-objdump -dr "$work/runtime-p2-canonical11" >"$work/runtime-p2-canonical11-disassembly.txt"
+      if grep -Eq '[-0-9]+\(gp\)' "$work/runtime-p2-canonical11-disassembly.txt"; then
+        echo 'RV32I_GUEST_C11=FAIL freestanding_gp_relative_access' >&2
+        exit 3
+      fi
+    fi
   fi
 else
 cat >"$work/init.S" <<'ASM'
@@ -168,6 +183,9 @@ if [[ "$p1" == 1 ]]; then
   install -m 755 "$work/sh" "$work/guest/bin/sh"
   if [[ "$p2" == 1 ]]; then
     install -m 755 "$work/runtime-p2" "$work/guest/bin/runtime-p2"
+    if [[ "$c11" == 1 ]]; then
+      install -m 755 "$work/runtime-p2-canonical11" "$work/guest/bin/runtime-p2-canonical11"
+    fi
     : "${RV32I_QEMU_P2_MODULE_DIR:?P2 requires six real GNU Kbuild ELF32 modules built from exact Image .config}"
     module_dir=$(realpath "$RV32I_QEMU_P2_MODULE_DIR")
     mkdir -p "$work/guest/lib/modules"
@@ -195,6 +213,33 @@ if [[ "$p1" == 1 ]]; then
       sha256sum "$src" >>"$work/rv32-p2-module-sha256.txt"
       echo "RV32I_QEMU_P2_MODULE=STAGED name=$name real_GNU_ELF32=true"
     done
+    if [[ "$c11" == 1 ]]; then
+      for name in x_tables xt_tcpudp ip_tables iptable_filter \
+        ip6_tables ip6table_filter libcrc32c xor raid6_pq \
+        zlib_deflate lzo_compress btrfs dm-mod; do
+        src="$module_dir/$name.ko"
+        [[ -s "$src" ]] || { echo "RV32I_QEMU_C11=FAIL missing_module=$src" >&2; exit 3; }
+        riscv64-linux-gnu-readelf -h "$src" >"$work/module-$name-elf.txt"
+        for contract in 'Class:[[:space:]]+ELF32' \
+                        'Machine:[[:space:]]+RISC-V' \
+                        'Type:[[:space:]]+REL' \
+                        'Flags:[[:space:]]+0x0([[:space:]]|$)'; do
+          grep -Eq "$contract" "$work/module-$name-elf.txt" || {
+            echo "RV32I_QEMU_C11=FAIL module_elf=$name contract=$contract" >&2
+            exit 3
+          }
+        done
+        riscv64-linux-gnu-readelf -p .modinfo "$src" >"$work/module-$name-modinfo.txt"
+        grep -Eq 'vermagic=6\.6\.143 mod_unload riscv([[:space:]]|$)' \
+          "$work/module-$name-modinfo.txt" || {
+            echo "RV32I_QEMU_C11=FAIL module_vermagic=$name" >&2
+            exit 3
+          }
+        install -m 644 "$src" "$work/guest/lib/modules/$name.ko"
+        sha256sum "$src" >>"$work/rv32-p2-module-sha256.txt"
+        echo "RV32I_QEMU_C11_MODULE=STAGED name=$name real_GNU_ELF32=true"
+      done
+    fi
   fi
 fi
 if [[ ! -e "$work/guest/dev/console" ]]; then
@@ -249,7 +294,8 @@ printf 'RV32I_QEMU_P0=START image_sha256=%s guest=rv32i/ilp32 pid1=ELF32 firmwar
 rdinit=/init
 append_p1=
 if [[ "$p1" == 1 && "$fast" != 1 ]]; then
-  if [[ "$p2" == 1 ]]; then append_p1=' minic_runtime=p2'
+  if [[ "$c11" == 1 ]]; then append_p1=' minic_runtime=p2canonical11'
+  elif [[ "$p2" == 1 ]]; then append_p1=' minic_runtime=p2'
   else append_p1=' minic_runtime=p1'; fi
 fi
 if [[ "$shell" == 1 ]]; then rdinit=/bin/sh; append_p1=; fi
@@ -257,6 +303,14 @@ qemu_args=(qemu-system-riscv32 -M virt -cpu max -m 512M -smp 1
   -nographic -no-reboot -bios "$bios" -kernel "$image" -dtb "$dtb"
   -device "loader,file=$work/initramfs.cpio.gz,addr=$initrd_addr,force-raw=on"
   -append "console=ttyS0 earlycon=${RV32I_QEMU_EARLYCON:-sbi} loglevel=8 panic=-1 rdinit=$rdinit$append_p1")
+if [[ "$c11" == 1 ]]; then
+  : "${RV32I_QEMU_P2_EXT4_IMAGE:?canonical11 requires a real ext4 disk fixture}"
+  disk=$(realpath "$RV32I_QEMU_P2_EXT4_IMAGE")
+  [[ -s "$disk" ]] || { echo "RV32I_QEMU_C11=FAIL missing_ext4_disk=$disk" >&2; exit 3; }
+  qemu_args+=( -drive "if=none,id=rv32p2ext4,file=$disk,format=raw,snapshot=on"
+               -device 'virtio-blk-device,drive=rv32p2ext4' )
+  echo "RV32I_QEMU_C11_DISK=STAGED sha256=$(sha256sum "$disk" | cut -d' ' -f1) genuine_virtio_blk=true"
+fi
 set +e
 if [[ "$shell" == 1 ]]; then
   # Like RV64 shell oracle, feed genuine commands over ttyS0. But RV32
@@ -415,9 +469,49 @@ if [[ "$p1" == 1 ]]; then
       echo 'RV32I_QEMU_P2=FAIL negative_or_wrong_number_of_distinct_function_results' >&2
       exit 1
     fi
+    if [[ "$c11" == 1 ]]; then
+      for marker in 'RV32I_P2_C11_CHILD=PASS' \
+        'RV32I_P2_C11_MODULE_PASS x_tables' \
+        'RV32I_P2_C11_MODULE_PASS xt_tcpudp' \
+        'RV32I_P2_C11_MODULE_PASS ip_tables' \
+        'RV32I_P2_C11_MODULE_PASS iptable_filter' \
+        'RV32I_P2_C11_MODULE_PASS ip6_tables' \
+        'RV32I_P2_C11_MODULE_PASS ip6table_filter' \
+        'RV32I_P2_C11_MODULE_PASS libcrc32c' \
+        'RV32I_P2_C11_MODULE_PASS xor' \
+        'RV32I_P2_C11_MODULE_PASS raid6_pq' \
+        'RV32I_P2_C11_MODULE_PASS zlib_deflate' \
+        'RV32I_P2_C11_MODULE_PASS lzo_compress' \
+        'RV32I_P2_C11_MODULE_PASS btrfs' \
+        'RV32I_P2_C11_MODULE_PASS dm-mod' \
+        'RV32I_P2_C11_PASS rootfs-rw' \
+        'RV32I_P2_C11_PASS iptables4' \
+        'RV32I_P2_C11_PASS iptables6' \
+        'RV32I_P2_C11_PASS btrfs' \
+        'RV32I_P2_C11_PASS dm' \
+        'RUNTIME_V2_ROOTFS_RW=PASS' \
+        'RV32I_P2_C11_FRONTIER=PASS old_canonical=6 new_canonical=5 canonical=11/18'; do
+        seen=$(grep -Fxc "$marker" "$work/qemu-p2-normalized.log" || true)
+        [[ "$seen" == 1 ]] || {
+          echo "RV32I_QEMU_C11=FAIL marker_occurrences=$seen expected=1 marker=$marker" >&2
+          tail -n 120 "$work/qemu-serial.log" >&2
+          exit 1
+        }
+      done
+      if grep -Eq '^RV32I_P2_C11_(FAIL|MODULE_FAIL|UNAVAILABLE)' "$work/qemu-p2-normalized.log" ||
+         [[ "$(grep -Ec '^RV32I_P2_C11_PASS ' "$work/qemu-p2-normalized.log")" != 5 ]] ||
+         [[ "$(grep -Ec '^RV32I_P2_C11_MODULE_PASS ' "$work/qemu-p2-normalized.log")" != 13 ]]; then
+        echo 'RV32I_QEMU_C11=FAIL missing_duplicate_or_negative_canonical_function_or_module' >&2
+        exit 1
+      fi
+    fi
     python3 tests/external/linux/runtime_v2_log_check.py \
       --profile p0 --log "$work/qemu-serial.log"
-    echo "RV32I_QEMU_P2_FRONTIER=PASS image_sha256=$image_sha real_QEMU=true original_GNU_Kbuild=true minic_C=1741/1741 p2_operations=9/9 unavailable=0 scope=NOT_FULL_P2"
+    if [[ "$c11" == 1 ]]; then
+      echo "RV32I_QEMU_P2_CANONICAL11_FRONTIER=PASS image_sha256=$image_sha real_QEMU=true original_GNU_Kbuild=true minic_C=1741/1741 initial_p2_operations=9/9 canonical_operations=11/18 unavailable=0 scope=NOT_FULL_P2"
+    else
+      echo "RV32I_QEMU_P2_FRONTIER=PASS image_sha256=$image_sha real_QEMU=true original_GNU_Kbuild=true minic_C=1741/1741 p2_operations=9/9 unavailable=0 scope=NOT_FULL_P2"
+    fi
     exit 0
   fi
   # Use the SAME canonical manifest as RV64, including probe-exec.

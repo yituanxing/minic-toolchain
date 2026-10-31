@@ -71,6 +71,7 @@ jobs:
           nasm -f bin -o "$work/guest.img" /dev/stdin <<'ASM'
           bits 16
           org 0x7c00
+          start:
           xor ax, ax
           mov ds, ax
           mov si, no_nested_vmx
@@ -102,7 +103,12 @@ jobs:
           times 510-($-$$) db 0
           dw 0xaa55
           ASM
-          test "$(stat -c %s "$work/guest.img")" -eq 512
+          guest_bytes=$(stat -c %s "$work/guest.img")
+          echo "KVM_GUEST_BOOTSECTOR_BYTES=$guest_bytes"
+          if [[ "$guest_bytes" -ne 512 ]]; then
+            echo 'KVM_PREFLIGHT=BLOCKED reason=invalid_guest_bootsector' >&2
+            exit 1
+          fi
 
           set +e
           timeout --signal=TERM --kill-after=5s 30s \

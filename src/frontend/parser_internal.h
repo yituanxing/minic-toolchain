@@ -17,6 +17,7 @@
 #define MINIC_PARSER_MAX_SWITCH_CASES 512U
 #define MINIC_PARSER_MAX_PACK_DEPTH 32U
 #define MINIC_PARSER_MAX_VISIBILITY_DEPTH 32U
+#define MINIC_PARSER_MAX_GCC_OPTION_DEPTH 32U
 #define MINIC_MAX_PARSED_ATTRIBUTES 32U
 #define MINIC_RECORD_MEMBER_MAX_DEPTH 8U
 
@@ -132,6 +133,11 @@ typedef struct MinicParser {
     MinicSymbolVisibility default_visibility;
     MinicSymbolVisibility visibility_stack[MINIC_PARSER_MAX_VISIBILITY_DEPTH];
     size_t visibility_depth;
+    /* GCC target options are TU-local and stack-scoped; the backend must
+     * independently approve any instruction/vector features before emission. */
+    MinicTargetGnuPragmaOptionState gnu_target_options;
+    MinicTargetGnuPragmaOptionState gnu_target_option_stack[MINIC_PARSER_MAX_GCC_OPTION_DEPTH];
+    size_t gnu_target_option_depth;
     /* Allocated on the first actual switch. Lexer-only speculative Parser
        snapshots borrow the table; only the top-level Parser owns it. */
     MinicParserSwitchContext *switch_contexts;

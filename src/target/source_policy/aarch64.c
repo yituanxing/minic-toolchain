@@ -109,10 +109,31 @@ static bool aarch_header_attribute(const MinicTargetInfo *target,
            aarch_register_is(name, length, "__aarch64_vector_pcs__");
 }
 
+/* GCC's arm_neon.h selects the architectural AdvSIMD baseline with
+ * `target("+nothing+simd")`. AArch64's existing scalar FP emitter already
+ * operates under this ISA baseline. This is ONLY source option selection:
+ * it grants no NEON vector type, intrinsic, V-register ASM or ABI lowering.
+ * In particular, all other GCC target extension strings remain rejected. */
+static bool aarch_pragma_target_options(
+    const MinicTargetInfo *target, const char *value, size_t value_length,
+    const MinicTargetGnuPragmaOptionState *current,
+    MinicTargetGnuPragmaOptionState *next) {
+    static const char simd_baseline[] = "+nothing+simd";
+    (void)current;
+    if (target == NULL || value == NULL || next == NULL ||
+        !aarch_register_is(value, value_length, simd_baseline))
+        return false;
+    /* This mask is interpreted only by the AArch64 policy. The parser
+     * copies opaque snapshots; no machine emitter consumes this bit yet. */
+    next->selected_source_features = 1U;
+    return true;
+}
+
 const MinicTargetSourceLanguagePolicy minic_aarch64_source_language_policy = {
     .named_builtin_type = aarch_named_header_builtin,
     .header_opaque_return = aarch_header_opaque_return,
     .header_attribute = aarch_header_attribute,
+    .gnu_pragma_target_options = aarch_pragma_target_options,
 };
 
 const MinicTargetVaCursorSourceAbiPolicy minic_aarch64_va_cursor_source_abi_policy = {
