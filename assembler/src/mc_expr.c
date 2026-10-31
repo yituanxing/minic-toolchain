@@ -367,6 +367,22 @@ static bool affine_lower_syntax(MiniAs *as,const MiniAsExprSyntax *syntax,
     return true;
 }
 
+/* The historical symbol-pair DTO also represents P-S, with the positive
+ * operand spelled '.' rather than interned as an ELF SymbolID. Preserve
+ * that contract for .size aliases and Target branch/displacement readers. */
+static bool affine_form_to_difference(const MiniAsAffineForm *form,
+                                      MiniAsSymbolDifference *result) {
+    if(form->kind!=MINIAS_MC_EXPR_DIFFERENCE &&
+       form->kind!=MINIAS_MC_EXPR_DOT_MINUS_SYMBOL)return false;
+    memset(result,0,sizeof(*result));
+    if(form->kind==MINIAS_MC_EXPR_DOT_MINUS_SYMBOL) {
+        memcpy(result->positive.name,".",2U);
+        result->positive.addend=form->lhs.addend;
+    } else result->positive=form->lhs;
+    result->negative=form->rhs;
+    return true;
+}
+
 static bool parse_symbol_difference(const char *,
                                     MiniAsSymbolExpr *,MiniAsSymbolExpr *);
 
@@ -393,11 +409,7 @@ bool minias_parse_symbol_difference_absolute_tail(
     if(!as || !text || !result ||
        !minias_expr_parse_syntax(text,&syntax))return false;
     valid=affine_lower_syntax(as,&syntax,&form) &&
-          form.kind==MINIAS_MC_EXPR_DIFFERENCE;
-    if(valid) {
-        result->positive=form.lhs;
-        result->negative=form.rhs;
-    }
+          affine_form_to_difference(&form,result);
     minias_expr_syntax_destroy(&syntax);
     return valid;
 }
@@ -516,12 +528,13 @@ static bool parse_symbol_difference(const char *text,
                                     MiniAsSymbolExpr *rhs) {
     MiniAsExprSyntax syntax;
     MiniAsAffineForm form;
+    MiniAsSymbolDifference pair;
     bool valid;
     if(!text || !lhs || !rhs ||
        !minias_expr_parse_syntax(text,&syntax))return false;
     valid=affine_lower_syntax(NULL,&syntax,&form) &&
-          form.kind==MINIAS_MC_EXPR_DIFFERENCE;
-    if(valid) {*lhs=form.lhs;*rhs=form.rhs;}
+          affine_form_to_difference(&form,&pair);
+    if(valid) {*lhs=pair.positive;*rhs=pair.negative;}
     minias_expr_syntax_destroy(&syntax);
     return valid;
 }

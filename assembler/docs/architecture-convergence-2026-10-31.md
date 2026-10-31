@@ -277,3 +277,14 @@ AArch64 and LoongArch local probes passed. The `pyelftools`-dependent ELF
 live-section probe skipped; GNU AArch64/Loong cross-tool byte oracles are
 not installed locally. The exact-HEAD remote result for this batch must be
 established after push, not inherited from the baseline.
+
+The initial remote commit `f7d61934ce7e705eef109eeeda086a94092827ea`
+exposed a missing legacy pair-view case in the Native A0 contract:
+`.size entry,.-.Lentry` is a `DOT_MINUS_SYMBOL` AST form, but the old
+symbol-pair API must still convey positive `.` and negative `.Lentry`.
+The correction maps that affine form back into the existing pair DTO for
+Target consumers and `.size` alternate start labels, without reviving a
+text parser. The GNU DWARF/size alias oracle now passes for ELF32 and
+ELF64 with `ld -r`, and is added directly to A0. The failed exact-HEAD
+remote run remains a real failure; the correction requires a new commit
+and independent CI validation.
