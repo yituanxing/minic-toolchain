@@ -185,6 +185,8 @@ jobs:
           MINIC_CC="$PWD/build/minic-seven-bin/bin/minic" \
             BUILD_DIR="$PWD/build/minic-seven-bin" \
             bash tests/compiler/c0/probe-direct-lp64-source-object-slot-reuse.sh
+          MINIC_CC="$PWD/build/minic-seven-bin/bin/minic" \
+            bash tests/compiler/c0/probe-x86-variadic-no-sse.sh
       - name: Restore pinned producer's immutable MiniC compiler pair for receiver-only replay
         if: needs.gate.outputs.reuse_objects == 'true'
         uses: actions/download-artifact@v4

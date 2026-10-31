@@ -31,7 +31,9 @@ typedef struct MinicDriverLanguageOptions {
 } MinicDriverLanguageOptions;
 
 static bool minic_driver_is_machine_codegen_option(const char *option) {
-    return strncmp(option, "-fcf-protection=", 16U) == 0 ||
+    return strcmp(option, "-mno-sse") == 0 ||
+           strcmp(option, "-msse") == 0 ||
+           strncmp(option, "-fcf-protection=", 16U) == 0 ||
            strncmp(option, "-mindirect-branch=", 18U) == 0 ||
            strcmp(option, "-mindirect-branch-register") == 0 ||
            strncmp(option, "-mfunction-return=", 18U) == 0 ||
