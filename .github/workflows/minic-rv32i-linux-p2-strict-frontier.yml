@@ -1,0 +1,82 @@
+name: MiniC RV32I P2 strict nine-operation QEMU frontier (not full P2)
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/minic-rv32i-linux-p2-strict-frontier.yml
+      - tests/external/linux/runtime_initramfs/rv32-p2-raw.c
+      - tools/ci/linux-rv32i-qemu-p0-v1.sh
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  rv32i-p2-real-qemu:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Install exact RV32 guest and QEMU requirements
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 update -qq
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            qemu-system-misc opensbi cpio device-tree-compiler
+          test -s /usr/lib/riscv32-linux-gnu/opensbi/generic/fw_dynamic.bin
+          command -v qemu-system-riscv32
+
+      - name: Restore immutable 1741/1741 MiniC Linux 6.6.143 Image
+        uses: actions/download-artifact@v4
+        with:
+          repository: yituanxing/minic-toolchain
+          run-id: '41212514498'
+          name: linux-rv32i-seven-shard-Image-796f2b44fada71218a22fc506ae50ecfe6b43342
+          github-token: ${{ github.token }}
+          path: build/rv32-p2-strict/source
+
+      - name: Execute nine required RV32I/ILP32 P2 operations in real QEMU
+        shell: bash
+        timeout-minutes: 5
+        run: |
+          set -Eeuo pipefail
+          image="$GITHUB_WORKSPACE/build/rv32-p2-strict/source/out/arch/riscv/boot/Image"
+          test -s "$image"
+          expected=a762cb8ba55a3cbb52a1f85e61d40524941c8226a33cb35daf2bff1acd75a5a2
+          actual=$(sha256sum "$image" | cut -d' ' -f1)
+          test "$actual" = "$expected"
+          work="$GITHUB_WORKSPACE/build/rv32-p2-strict/run"
+          mkdir -p "$work"
+          set +e
+          RV32I_QEMU_IMAGE="$image" RV32I_QEMU_WORK="$work" \
+            RV32I_QEMU_P1=1 RV32I_QEMU_P2=1 \
+            RV32I_QEMU_TIMEOUT_SECONDS=90 \
+            bash tools/ci/linux-rv32i-qemu-p0-v1.sh \
+            >"$GITHUB_WORKSPACE/build/rv32-p2-strict/runner.log" 2>&1
+          rc=$?
+          set -e
+          printf 'qemu_lane_exit=%s\nsource_Image_sha256=%s\nscope=NOT_FULL_P2\n' \
+            "$rc" "$actual" >"$GITHUB_WORKSPACE/build/rv32-p2-strict/verdict.txt"
+          tail -n 160 "$GITHUB_WORKSPACE/build/rv32-p2-strict/runner.log"
+          echo 'RV32_P2_REQUIRED=9 skip_allowed=0 full_P2_18=NOT_CERTIFIED'
+          exit "$rc"
+
+      - name: Retain raw QEMU evidence even on real failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rv32i-p2-strict-not-full-${{ github.sha }}
+          path: |
+            build/rv32-p2-strict/verdict.txt
+            build/rv32-p2-strict/runner.log
+            build/rv32-p2-strict/run/qemu-serial.log
+            build/rv32-p2-strict/run/provenance.txt
+            build/rv32-p2-strict/run/runtime-p2-elf.txt
+            build/rv32-p2-strict/run/runtime-p2-disassembly.txt
+          if-no-files-found: warn

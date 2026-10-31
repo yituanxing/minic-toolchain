@@ -1,12 +1,20 @@
 #define _GNU_SOURCE
 
 #include <errno.h>
+#include <dirent.h>
 #include <fcntl.h>
+#include <net/if.h>
 #include <netinet/in.h>
 #include <linux/dm-ioctl.h>
 #include <linux/if_alg.h>
+#include <linux/if_link.h>
+#include <linux/kvm.h>
+#include <linux/netlink.h>
 #include <linux/netfilter_ipv4/ip_tables.h>
 #include <linux/netfilter_ipv6/ip6_tables.h>
+#include <linux/rtnetlink.h>
+#include <linux/veth.h>
+#include <sched.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,11 +23,15 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/sysmacros.h>
+#include <sys/time.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 static int passed;
 static int failed;
 static int skipped;
+static int ipv6_passed;
 
 static void result(const char *name, int verdict, int error) {
     if (verdict > 0) {
@@ -340,6 +352,7 @@ static void ipv6_tcp_loopback(void) {
         goto out;
     }
     puts("RUNTIME_V2_IPV6_TCP=PASS");
+    ipv6_passed = 1;
     goto out;
 
 failure:
@@ -355,7 +368,574 @@ out:
         result("ipv6-tcp-loopback-p2", -1, error);
 }
 
+static int capability_absent(int error) {
+    return error == ENODEV || error == ENOENT || error == ENOPROTOOPT ||
+           error == EAFNOSUPPORT || error == EPROTONOSUPPORT ||
+           error == EOPNOTSUPP;
+}
+
+static void kvm_api_device(void) {
+    int fd, api, error;
+
+    /* /dev/kvm is normally created by devtmpfs. The fixed misc minor is
+     * also used when the minimal initramfs has no udev. An mknod alone is
+     * NEVER sufficient: open and the kernel KVM ioctl must both succeed. */
+    fd = open("/dev/kvm", O_RDWR | O_CLOEXEC);
+    if (fd < 0 && errno == ENOENT) {
+        if (mknod("/dev/kvm", S_IFCHR | 0600, makedev(10, 232)) == 0 ||
+            errno == EEXIST)
+            fd = open("/dev/kvm", O_RDWR | O_CLOEXEC);
+    }
+    if (fd < 0) {
+        error = errno;
+        result("kvm-device-created", capability_absent(error) ? 0 : -1, error);
+        return;
+    }
+    api = ioctl(fd, KVM_GET_API_VERSION, 0);
+    error = api < 0 ? errno : EPROTO;
+    (void)close(fd);
+    result("kvm-device-created", api == KVM_API_VERSION ? 1 : -1, error);
+}
+
+static int associated_device_child(const char *directory_path,
+                                   const char *child_prefix) {
+    DIR *directory = opendir(directory_path);
+    struct dirent *entry;
+    size_t prefix = strlen(child_prefix);
+    int found = 0;
+
+    if (directory == NULL)
+        return 0;
+    while ((entry = readdir(directory)) != NULL) {
+        char fullname[512];
+        struct stat info;
+        int length;
+
+        if (strncmp(entry->d_name, child_prefix, prefix) != 0 ||
+            entry->d_name[prefix] < '0' || entry->d_name[prefix] > '9')
+            continue;
+        length = snprintf(fullname, sizeof(fullname), "%s/%s", directory_path,
+                          entry->d_name);
+        if (length < 0 || (size_t)length >= sizeof(fullname))
+            continue;
+        if (stat(fullname, &info) == 0 && S_ISDIR(info.st_mode)) {
+            found = 1;
+            break;
+        }
+    }
+    (void)closedir(directory);
+    return found;
+}
+
+static int bound_driver_and_child(const char *driver_path,
+                                  const char *device_base,
+                                  const char *device_prefix,
+                                  const char *subdirectory,
+                                  const char *child_prefix,
+                                  int use_parent_device) {
+    DIR *directory = opendir(driver_path);
+    struct dirent *entry;
+    size_t prefix_length = strlen(device_prefix);
+    int found = 0;
+
+    if (directory == NULL)
+        return -1;
+    while ((entry = readdir(directory)) != NULL) {
+        char bound_path[512], nested_path[512], real_device[512];
+        struct stat info;
+        int length;
+
+        if (prefix_length) {
+            if (strncmp(entry->d_name, device_prefix, prefix_length) != 0)
+                continue;
+        } else if (strchr(entry->d_name, ':') == NULL ||
+                   strchr(entry->d_name, '.') == NULL) {
+            /* PCI BDF (any domain), never "module" or "subsystem". */
+            continue;
+        }
+        length = snprintf(bound_path, sizeof(bound_path), "%s/%s",
+                          driver_path, entry->d_name);
+        if (length < 0 || (size_t)length >= sizeof(bound_path) ||
+            lstat(bound_path, &info) != 0 || !S_ISLNK(info.st_mode))
+            continue;
+        length = snprintf(nested_path, sizeof(nested_path), "%s/%s",
+                          device_base, entry->d_name);
+        if (length < 0 || (size_t)length >= sizeof(nested_path))
+            continue;
+        if (use_parent_device) {
+            char *last, *resolved;
+
+            /* virtio-gpu Linux 6.6 creates the DRM node with
+             * drm_dev_alloc(..., vdev->dev.parent), i.e. the parent PCI
+             * device, not the virtioN child. Resolve that exact parent. */
+            resolved = realpath(nested_path, NULL);
+            if (resolved == NULL)
+                continue;
+            last = strrchr(resolved, '/');
+            if (last == NULL) {
+                free(resolved);
+                continue;
+            }
+            *last = '\0';
+            length = snprintf(nested_path, sizeof(nested_path), "%s",
+                              resolved);
+            free(resolved);
+            if (length < 0 || (size_t)length >= sizeof(nested_path))
+                continue;
+        }
+        length = snprintf(real_device, sizeof(real_device), "%s/%s",
+                          nested_path, subdirectory);
+        if (length < 0 || (size_t)length >= sizeof(real_device))
+            continue;
+        if (associated_device_child(real_device, child_prefix)) {
+            found = 1;
+            break;
+        }
+    }
+    (void)closedir(directory);
+    return found;
+}
+
+static void virtio_gpu_bound(void) {
+    int bound = bound_driver_and_child(
+        "/sys/bus/virtio/drivers/virtio_gpu", "/sys/bus/virtio/devices",
+        "virtio", "drm", "card", 1);
+
+    if (bound < 0) {
+        int error = errno;
+        result("virtio-gpu-driver-registered", capability_absent(error) ? 0 : -1,
+               error);
+    } else {
+        /* A bound virtio device's *own* drm/cardN child proves the card is
+         * associated with this driver, not an unrelated card0. */
+        result("virtio-gpu-driver-registered", bound ? 1 : 0, ENODEV);
+    }
+}
+
+static void nvme_controller_bound(void) {
+    int bound = bound_driver_and_child(
+        "/sys/bus/pci/drivers/nvme", "/sys/bus/pci/devices",
+        "", "nvme", "nvme", 0);
+    if (bound < 0) {
+        int error = errno;
+        result("nvme-pci-driver-registered",
+               capability_absent(error) ? 0 : -1, error);
+    } else {
+        /* The NVMe class child must belong to the *same bound PCI BDF*. */
+        result("nvme-pci-driver-registered", bound ? 1 : 0, ENODEV);
+    }
+}
+
+/* Minimal route-netlink transactions: exercise the kernel rtnetlink path
+ * directly. No external iproute2 binary, printed command or simulation is
+ * accepted as evidence of successful bridge/veth operations. */
+struct p2_link_request {
+    struct nlmsghdr header;
+    struct ifinfomsg info;
+    unsigned char attrs[1024];
+};
+
+static void link_begin(struct p2_link_request *request, int operation,
+                       unsigned int flags, int ifindex) {
+    (void)memset(request, 0, sizeof(*request));
+    request->header.nlmsg_len = NLMSG_LENGTH(sizeof(request->info));
+    request->header.nlmsg_type = (unsigned short)operation;
+    request->header.nlmsg_flags = (unsigned short)(NLM_F_REQUEST | NLM_F_ACK | flags);
+    request->header.nlmsg_seq = 1;
+    request->info.ifi_family = AF_UNSPEC;
+    request->info.ifi_index = ifindex;
+}
+
+static struct rtattr *link_attr(struct p2_link_request *request,
+                                int attr_type, const void *value, size_t length) {
+    size_t offset = NLMSG_ALIGN(request->header.nlmsg_len);
+    size_t data_len = RTA_LENGTH(length);
+    size_t next = offset + RTA_ALIGN(data_len);
+    struct rtattr *attr;
+
+    if (length > 65531 || next > sizeof(*request)) {
+        errno = EMSGSIZE;
+        return NULL;
+    }
+    attr = (struct rtattr *)((char *)request + offset);
+    attr->rta_type = (unsigned short)attr_type;
+    attr->rta_len = (unsigned short)data_len;
+    if (length && value)
+        (void)memcpy(RTA_DATA(attr), value, length);
+    request->header.nlmsg_len = (unsigned int)next;
+    return attr;
+}
+
+static void link_nest_end(struct p2_link_request *request, struct rtattr *nest) {
+    nest->rta_len = (unsigned short)((char *)request +
+                                     request->header.nlmsg_len - (char *)nest);
+}
+
+static int link_transaction(struct p2_link_request *request) {
+    struct sockaddr_nl destination = {0};
+    struct timeval receive_timeout = {.tv_sec = 2};
+    char reply[4096];
+    int fd, failure = EPROTO;
+
+    fd = socket(AF_NETLINK, SOCK_RAW | SOCK_CLOEXEC, NETLINK_ROUTE);
+    if (fd < 0)
+        return -1;
+    if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &receive_timeout,
+                   sizeof(receive_timeout)) != 0) {
+        failure = errno;
+        goto done;
+    }
+    destination.nl_family = AF_NETLINK;
+    if (sendto(fd, request, request->header.nlmsg_len, 0,
+               (struct sockaddr *)&destination, sizeof(destination)) !=
+        (ssize_t)request->header.nlmsg_len) {
+        failure = errno != 0 ? errno : EIO;
+        goto done;
+    }
+    for (;;) {
+        ssize_t received = recv(fd, reply, sizeof(reply), 0);
+        struct nlmsghdr *header;
+        int remaining;
+
+        if (received < 0) {
+            failure = errno;
+            break;
+        }
+        if (received == 0)
+            break;
+        remaining = (int)received;
+        for (header = (struct nlmsghdr *)reply;
+             NLMSG_OK(header, remaining); header = NLMSG_NEXT(header, remaining)) {
+            struct nlmsgerr *status;
+
+            if (header->nlmsg_seq != request->header.nlmsg_seq ||
+                header->nlmsg_type != NLMSG_ERROR)
+                continue;
+            if (header->nlmsg_len < NLMSG_LENGTH(sizeof(*status)))
+                goto done;
+            status = (struct nlmsgerr *)NLMSG_DATA(header);
+            if (status->error == 0) {
+                (void)close(fd);
+                return 0;
+            }
+            failure = -status->error;
+            goto done;
+        }
+    }
+done:
+    (void)close(fd);
+    errno = failure;
+    return -1;
+}
+
+static int link_create_bridge(void) {
+    struct p2_link_request request;
+    struct rtattr *linkinfo;
+
+    link_begin(&request, RTM_NEWLINK, NLM_F_CREATE | NLM_F_EXCL, 0);
+    if (!link_attr(&request, IFLA_IFNAME, "p2br0", sizeof("p2br0")))
+        return -1;
+    linkinfo = link_attr(&request, IFLA_LINKINFO, NULL, 0);
+    if (!linkinfo || !link_attr(&request, IFLA_INFO_KIND,
+                                "bridge", sizeof("bridge")))
+        return -1;
+    link_nest_end(&request, linkinfo);
+    return link_transaction(&request);
+}
+
+static int link_create_veth_pair(void) {
+    struct p2_link_request request;
+    struct rtattr *linkinfo, *data, *peer;
+    struct ifinfomsg peer_info = {0};
+
+    peer_info.ifi_family = AF_UNSPEC;
+    link_begin(&request, RTM_NEWLINK, NLM_F_CREATE | NLM_F_EXCL, 0);
+    if (!link_attr(&request, IFLA_IFNAME, "p2v0", sizeof("p2v0")))
+        return -1;
+    linkinfo = link_attr(&request, IFLA_LINKINFO, NULL, 0);
+    if (!linkinfo || !link_attr(&request, IFLA_INFO_KIND,
+                                "veth", sizeof("veth")))
+        return -1;
+    data = link_attr(&request, IFLA_INFO_DATA, NULL, 0);
+    peer = data ? link_attr(&request, VETH_INFO_PEER,
+                            &peer_info, sizeof(peer_info)) : NULL;
+    if (!peer || !link_attr(&request, IFLA_IFNAME,
+                            "p2v1", sizeof("p2v1")))
+        return -1;
+    link_nest_end(&request, peer);
+    link_nest_end(&request, data);
+    link_nest_end(&request, linkinfo);
+    return link_transaction(&request);
+}
+
+static int link_set_up(unsigned int index) {
+    struct p2_link_request request;
+
+    link_begin(&request, RTM_NEWLINK, 0, (int)index);
+    request.info.ifi_flags = IFF_UP;
+    request.info.ifi_change = IFF_UP;
+    return link_transaction(&request);
+}
+
+static int link_set_master(unsigned int child, unsigned int master) {
+    struct p2_link_request request;
+
+    link_begin(&request, RTM_NEWLINK, 0, (int)child);
+    if (!link_attr(&request, IFLA_MASTER, &master, sizeof(master)))
+        return -1;
+    return link_transaction(&request);
+}
+
+static int link_delete(unsigned int index) {
+    struct p2_link_request request;
+
+    link_begin(&request, RTM_DELLINK, 0, (int)index);
+    return link_transaction(&request);
+}
+
+static int link_is_up(const char *name) {
+    struct ifreq data = {0};
+    int fd = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+    int success = 0;
+
+    if (fd < 0)
+        return 0;
+    (void)snprintf(data.ifr_name, sizeof(data.ifr_name), "%s", name);
+    if (ioctl(fd, SIOCGIFFLAGS, &data) == 0 && (data.ifr_flags & IFF_UP))
+        success = 1;
+    (void)close(fd);
+    return success;
+}
+
+static void br_netfilter_toggle(int bridge_ready) {
+    const char *const path = "/proc/sys/net/bridge/bridge-nf-call-ip6tables";
+    char previous, desired, readback;
+    int fd, error = 0;
+
+    if (!bridge_ready) {
+        result("br-netfilter-ipv6-sysctl-toggle", 0, ENODEV);
+        return;
+    }
+    fd = open(path, O_RDWR | O_CLOEXEC);
+    if (fd < 0) {
+        error = errno;
+        result("br-netfilter-ipv6-sysctl-toggle",
+               capability_absent(error) ? 0 : -1, error);
+        return;
+    }
+    if (read(fd, &previous, 1) != 1 ||
+        (previous != '0' && previous != '1')) {
+        error = EPROTO;
+        goto done;
+    }
+    desired = previous == '0' ? '1' : '0';
+    if (lseek(fd, 0, SEEK_SET) < 0 || write(fd, &desired, 1) != 1 ||
+        lseek(fd, 0, SEEK_SET) < 0 || read(fd, &readback, 1) != 1 ||
+        readback != desired) {
+        error = errno != 0 ? errno : EPROTO;
+    }
+    if (lseek(fd, 0, SEEK_SET) < 0 || write(fd, &previous, 1) != 1 ||
+        lseek(fd, 0, SEEK_SET) < 0 || read(fd, &readback, 1) != 1 ||
+        readback != previous)
+        error = errno != 0 ? errno : EIO;
+done:
+    (void)close(fd);
+    result("br-netfilter-ipv6-sysctl-toggle", error == 0 ? 1 : -1, error);
+}
+
+static void bridge_veth_operations(void) {
+    unsigned int bridge_index = 0, left = 0, right = 0;
+    int bridge_error = 0, veth_error = 0;
+    int bridge_ready = 0, veth_ready = 0;
+    char master[256] = {0};
+    ssize_t length;
+
+    if (link_create_bridge() == 0)
+        bridge_index = if_nametoindex("p2br0");
+    else
+        bridge_error = errno;
+    if (link_create_veth_pair() == 0) {
+        left = if_nametoindex("p2v0");
+        right = if_nametoindex("p2v1");
+    } else {
+        veth_error = errno;
+    }
+
+    if (left && right && left != right &&
+        link_set_up(left) == 0 && link_set_up(right) == 0 &&
+        link_is_up("p2v0") && link_is_up("p2v1")) {
+        veth_ready = 1;
+    } else if (!veth_error) {
+        veth_error = errno != 0 ? errno : EPROTO;
+    }
+    if (bridge_index && veth_ready &&
+        link_set_master(left, bridge_index) == 0 &&
+        link_set_up(bridge_index) == 0 && link_is_up("p2br0")) {
+        length = readlink("/sys/class/net/p2v0/master", master,
+                          sizeof(master) - 1);
+        if (length > 0 && strstr(master, "/p2br0") != NULL)
+            bridge_ready = 1;
+    }
+    if (!bridge_ready && !bridge_error)
+        bridge_error = errno != 0 ? errno : EPROTO;
+
+    br_netfilter_toggle(bridge_ready);
+
+    /* Perform cleanup before advertising either device result as PASS. */
+    if (left && link_delete(left) != 0) {
+        veth_ready = 0;
+        veth_error = errno;
+    }
+    if (bridge_index && link_delete(bridge_index) != 0) {
+        bridge_ready = 0;
+        bridge_error = errno;
+    }
+    if (if_nametoindex("p2v0") || if_nametoindex("p2v1")) {
+        veth_ready = 0;
+        veth_error = EBUSY;
+    }
+    if (if_nametoindex("p2br0")) {
+        bridge_ready = 0;
+        bridge_error = EBUSY;
+    }
+    result("veth-pair-created", veth_ready ? 1 :
+           capability_absent(veth_error) ? 0 : -1, veth_error);
+    result("bridge-links-up", bridge_ready ? 1 :
+           capability_absent(bridge_error) ? 0 : -1, bridge_error);
+}
+
+static int conntrack_count(unsigned long *count) {
+    const char *const path = "/proc/sys/net/netfilter/nf_conntrack_count";
+    char value[64];
+    char *end;
+    ssize_t length;
+    int fd = open(path, O_RDONLY | O_CLOEXEC);
+
+    if (fd < 0)
+        return -1;
+    length = read(fd, value, sizeof(value) - 1);
+    if (close(fd) != 0 || length < 1) {
+        errno = EIO;
+        return -1;
+    }
+    value[length] = '\0';
+    errno = 0;
+    *count = strtoul(value, &end, 10);
+    if (errno != 0 || end == value || (*end != '\n' && *end != '\0')) {
+        errno = EPROTO;
+        return -1;
+    }
+    return 0;
+}
+
+static int conntrack_udp_in_isolated_netns(void) {
+    struct sockaddr_in address = {0};
+    struct timeval timeout_value = {.tv_sec = 1};
+    socklen_t length = sizeof(address);
+    unsigned long before = 0, after = 0;
+    int receiver = -1, sender = -1, error = 0;
+    char incoming[16] = {0};
+    int attempt;
+    unsigned int loopback;
+
+    /* Own a fresh net namespace: a global count increase could otherwise
+     * originate from unrelated kernel/guest traffic. In this namespace the
+     * only generated flow is the UDP five-tuple below, so count 0 -> 1
+     * proves this precise flow entered the kernel conntrack table. */
+    if (unshare(CLONE_NEWNET) != 0)
+        return errno;
+    loopback = if_nametoindex("lo");
+    if (loopback == 0 || link_set_up(loopback) != 0 ||
+        !link_is_up("lo"))
+        return errno != 0 ? errno : ENODEV;
+    if (conntrack_count(&before) != 0)
+        return errno;
+    receiver = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+    if (receiver < 0)
+        goto failure;
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (setsockopt(receiver, SOL_SOCKET, SO_RCVTIMEO, &timeout_value,
+                   sizeof(timeout_value)) != 0 ||
+        bind(receiver, (struct sockaddr *)&address, sizeof(address)) != 0 ||
+        getsockname(receiver, (struct sockaddr *)&address, &length) != 0)
+        goto failure;
+    sender = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+    if (sender < 0 ||
+        sendto(sender, "p2-ct", 5, 0, (struct sockaddr *)&address,
+               sizeof(address)) != 5 ||
+        recv(receiver, incoming, sizeof(incoming), 0) != 5 ||
+        memcmp(incoming, "p2-ct", 5) != 0)
+        goto failure;
+
+    for (attempt = 0; attempt < 10; ++attempt) {
+        if (conntrack_count(&after) != 0)
+            goto failure;
+        if (after == 1)
+            break;
+        (void)usleep(20000);
+    }
+    printf("P2_CONNTRACK_TRACE before=%lu after=%lu attempts=%d\n",
+           before, after, attempt + 1);
+    if (before != 0 || after != 1) {
+        error = EPROTO;
+        goto cleanup;
+    }
+    goto cleanup;
+
+failure:
+    error = errno != 0 ? errno : EPROTO;
+cleanup:
+    if (sender >= 0)
+        (void)close(sender);
+    if (receiver >= 0)
+        (void)close(receiver);
+    return error;
+}
+
+static void conntrack_udp_entry(void) {
+    int pipefd[2], status, error = EPROTO;
+    pid_t child;
+
+    /* Keep namespace isolation strictly inside the child. Bridge/veth and
+     * br-netfilter operations that follow must use PID1's original netns,
+     * whose mounted /proc and /sys views expose their actual devices. */
+    if (pipe2(pipefd, O_CLOEXEC) != 0) {
+        result("conntrack-entry-created", -1, errno);
+        return;
+    }
+    child = fork();
+    if (child < 0) {
+        error = errno;
+        (void)close(pipefd[0]);
+        (void)close(pipefd[1]);
+        result("conntrack-entry-created", -1, error);
+        return;
+    }
+    if (child == 0) {
+        (void)close(pipefd[0]);
+        error = conntrack_udp_in_isolated_netns();
+        if (write(pipefd[1], &error, sizeof(error)) != (ssize_t)sizeof(error))
+            _exit(2);
+        (void)close(pipefd[1]);
+        _exit(error == 0 ? 0 : 1);
+    }
+    (void)close(pipefd[1]);
+    if (read(pipefd[0], &error, sizeof(error)) != (ssize_t)sizeof(error))
+        error = EPROTO;
+    (void)close(pipefd[0]);
+    if (waitpid(child, &status, 0) != child ||
+        !WIFEXITED(status) || WEXITSTATUS(status) != 0 || error != 0) {
+        result("conntrack-entry-created", capability_absent(error) ? 0 : -1,
+               error);
+        return;
+    }
+    result("conntrack-entry-created", 1, 0);
+}
+
 int main(void) {
+    int total_pass;
+
     (void)setvbuf(stdout, NULL, _IONBF, 0);
     printf("RUNTIME_V2_P2_BEGIN\n");
     overlay_copy_up();
@@ -372,9 +952,21 @@ int main(void) {
                  "3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532");
     afalg_digest("afalg-blake2b-512-abc", "blake2b-512",
                  "ba80a53f981c4d0d6a2797b69f12f6e94c212f14685ac4b74b12bb6fdbffa2d17d87c5392aab792dc252d5de4533cc9518d38aa8dbf1925ab92386edd4009923");
-    printf("RUNTIME_V2_P2_END pass=%d fail=%d skip=%d\n", passed, failed, skipped);
-    /* This is an eleven-check frontier, not the full 18-check P2 contract.
-     * IPv6 TCP emits its own marker, not FUNCTION_PASS. Never certify a skip. */
-    return failed != 0 || skipped != 0 || passed != 10
-               ? EXIT_FAILURE : EXIT_SUCCESS;
+    conntrack_udp_entry();
+    bridge_veth_operations();
+    kvm_api_device();
+    virtio_gpu_bound();
+    nvme_controller_bound();
+
+    /* 17 independently exercised FUNCTION_* checks and one independently
+     * exercised RUNTIME_V2_IPV6_TCP. Only this exact 18/18 success can
+     * certify the strict full-P2 endpoint; the frontier END alone never can. */
+    total_pass = passed + ipv6_passed;
+    printf("RUNTIME_V2_P2_END pass=%d fail=%d skip=%d\n",
+           total_pass, failed, skipped);
+    if (total_pass == 18 && failed == 0 && skipped == 0) {
+        puts("RUNTIME_V2_P2_FULL_END pass=18 fail=0 skip=0");
+        return EXIT_SUCCESS;
+    }
+    return EXIT_FAILURE;
 }

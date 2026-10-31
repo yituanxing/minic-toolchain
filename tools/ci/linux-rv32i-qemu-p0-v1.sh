@@ -349,26 +349,41 @@ if [[ "$p1" == 1 ]]; then
     exit 0
   fi
   if [[ "$p2" == 1 ]]; then
-    # This is a SCOPED P2 frontier, not the complete 18-row historical P2
-    # or 145/203 P3 oracle. Optional missing kernel capabilities stay
-    # explicitly UNAVAILABLE. A supported-but-broken operation always FAILS.
+    # This is a SCOPED nine-operation P2 frontier, not the complete 18-row
+    # historical P2 or 145/203 P3 oracle. Every listed function is REQUIRED:
+    # missing kernel capabilities are UNAVAILABLE and fail this gate.
+    # Match whole normalized lines exactly once; a prefix or duplicated PASS
+    # marker cannot certify a missing or unexecuted operation.
+    tr -d '\r' <"$work/qemu-serial.log" >"$work/qemu-p2-normalized.log"
     for marker in 'INIT_PROC_MOUNT=PASS' 'INIT_SYSFS_MOUNT=PASS' \
       'INIT_DEVTMPFS_MOUNT=PASS' 'INIT_CMDLINE_READ=PASS' \
       'INIT_TMPFS_RW=PASS' 'RV32I_P2_CHILD=PASS' \
       'RV32I_P2_PASS tmpfs-rename-rw' \
       'RV32I_P2_PASS ipv4-udp-loopback' \
       'RV32I_P2_PASS ipv4-tcp-loopback' \
-      'RV32I_P2_FRONTIER=PASS core=3 optional_capabilities_reported=true' \
+      'RV32I_P2_PASS ipv6-tcp-loopback' \
+      'RV32I_P2_PASS afalg-sha256-abc' \
+      'RV32I_P2_PASS afalg-sha512-abc' \
+      'RV32I_P2_PASS afalg-sha3-256-abc' \
+      'RV32I_P2_PASS afalg-blake2b-512-abc' \
+      'RV32I_P2_PASS overlay-copy-up' \
+      'RV32I_P2_FRONTIER=PASS core=4 optional=5 unavailable=0' \
       'MINIC_LINUX_RUNTIME_INIT_END fail=0'; do
-      grep -Fq "$marker" "$work/qemu-serial.log" || {
-        echo "RV32I_QEMU_P2=FAIL missing=$marker" >&2
+      seen=$(grep -Fxc "$marker" "$work/qemu-p2-normalized.log" || true)
+      [[ "$seen" == 1 ]] || {
+        echo "RV32I_QEMU_P2=FAIL marker_occurrences=$seen expected=1 marker=$marker" >&2
         tail -n 120 "$work/qemu-serial.log" >&2
         exit 1
       }
     done
+    if grep -Eq '^RV32I_P2_(UNAVAILABLE|FAIL)' "$work/qemu-p2-normalized.log" ||
+       [[ "$(grep -Ec '^RV32I_P2_PASS ' "$work/qemu-p2-normalized.log")" != 9 ]]; then
+      echo 'RV32I_QEMU_P2=FAIL negative_or_wrong_number_of_distinct_function_results' >&2
+      exit 1
+    fi
     python3 tests/external/linux/runtime_v2_log_check.py \
       --profile p0 --log "$work/qemu-serial.log"
-    echo "RV32I_QEMU_P2_FRONTIER=PASS image_sha256=$image_sha real_QEMU=true original_GNU_Kbuild=true minic_C=1741/1741 p2_core=3 scope=NOT_FULL_P2"
+    echo "RV32I_QEMU_P2_FRONTIER=PASS image_sha256=$image_sha real_QEMU=true original_GNU_Kbuild=true minic_C=1741/1741 p2_operations=9/9 unavailable=0 scope=NOT_FULL_P2"
     exit 0
   fi
   # Use the SAME canonical manifest as RV64, including probe-exec.
