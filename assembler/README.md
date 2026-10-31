@@ -25,6 +25,9 @@ implemented ISA/ABI behavior and remaining architecture work.
 See also [the 2026-10-31 architecture discussion decisions](docs/architecture-discussion-decisions-2026-10-31.md)
 for the agreed ISA/ABI/configuration and Parser-to-MC design boundaries,
 verified source gaps, and proposed follow-up order (not implementation status).
+The [full-source review ledger](docs/full-source-review-ledger-2026-10-29.md)
+starts with the current file-count/refactor-progress dashboard and separates
+source coverage, touched files, closed ownership boundaries and deferred work.
 
 The C implementation is split by ownership:
 
