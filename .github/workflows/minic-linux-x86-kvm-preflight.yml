@@ -1,0 +1,135 @@
+name: MiniC Linux x86 KVM host preflight (not P2 certification)
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  x86-kvm-real-guest-preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Require actual x86 virtualization flags and usable KVM device
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if ! awk -F: '
+            /^flags[[:space:]]*:/ &&
+            $2 ~ /(^|[[:space:]])(vmx|svm)([[:space:]]|$)/ { found=1 }
+            END { exit !found }
+          ' /proc/cpuinfo; then
+            echo 'KVM_PREFLIGHT=BLOCKED reason=cpu_vmx_svm_flag_missing' >&2
+            exit 1
+          fi
+          if [[ ! -c /dev/kvm ]]; then
+            echo 'KVM_PREFLIGHT=BLOCKED reason=kvm_character_device_missing' >&2
+            exit 1
+          fi
+          if [[ ! -r /dev/kvm || ! -w /dev/kvm ]]; then
+            echo 'KVM_PREFLIGHT=BLOCKED reason=kvm_device_not_read_write' >&2
+            ls -l /dev/kvm >&2 || true
+            exit 1
+          fi
+          echo 'KVM_HOST_DEVICE=READY cpu_vmx_svm=true char_device=true readable=true writable=true'
+          stat -c 'KVM_DEVICE=%F mode=%a owner=%U group=%G major=%t minor=%T' /dev/kvm
+
+      - name: Install QEMU and assembler for a real x86 guest boot
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 update -qq
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            qemu-system-x86 nasm
+          command -v qemu-system-x86_64
+          command -v nasm
+
+      - name: Boot a real 16-bit guest with KVM and assert its instruction output
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$RUNNER_TEMP/minic-x86-kvm-preflight"
+          mkdir -p "$work"
+          # A bootable 512-byte x86 BIOS sector. The guest also checks that
+          # CPUID.01H:ECX.VMX is exposed *inside* the virtual CPU; ordinary
+          # host KVM acceleration alone does not establish nested VMX needed
+          # by the KVM_INTEL=y Linux P2 test. Only real nested-VMX guest code
+          # prints the success marker and exits with (0x2a << 1) | 1 = 85.
+          nasm -f bin -o "$work/guest.img" /dev/stdin <<'ASM'
+          bits 16
+          org 0x7c00
+          xor ax, ax
+          mov ds, ax
+          mov si, no_nested_vmx
+          mov eax, 1
+          cpuid
+          mov bl, 0x29
+          bt ecx, 5
+          jnc .emit
+          mov bl, 0x2a
+          mov si, message
+          mov dx, 0xe9
+          .emit:
+          mov dx, 0xe9
+          lodsb
+          test al, al
+          jz .exit
+          out dx, al
+          jmp .emit
+          .exit:
+          mov dx, 0xf4
+          mov al, bl
+          out dx, al
+          cli
+          .halt:
+          hlt
+          jmp .halt
+          message db 'KVM_PREFLIGHT_GUEST_NESTED_VMX_EXECUTED', 10, 0
+          no_nested_vmx db 'KVM_PREFLIGHT_GUEST_NESTED_VMX_MISSING', 10, 0
+          times 510-($-$$) db 0
+          dw 0xaa55
+          ASM
+          test "$(stat -c %s "$work/guest.img")" -eq 512
+
+          set +e
+          timeout --signal=TERM --kill-after=5s 30s \
+            qemu-system-x86_64 \
+              -machine pc -accel kvm -cpu host -smp 1 -m 128M \
+              -nodefaults -display none -monitor none -serial none \
+              -no-reboot -boot order=a \
+              -drive "file=$work/guest.img,format=raw,if=floppy" \
+              -device isa-debugcon,iobase=0xe9,chardev=guestlog \
+              -chardev "file,id=guestlog,path=$work/guest-output.log" \
+              -device isa-debug-exit,iobase=0xf4,iosize=0x04 \
+            >"$work/qemu.stdout" 2>"$work/qemu.stderr"
+          qemu_rc=$?
+          set -e
+
+          printf 'qemu_rc=%d expected_guest_debug_exit_rc=85\n' "$qemu_rc" \
+            | tee "$work/verdict.txt"
+          if [[ "$qemu_rc" -ne 85 ]]; then
+            echo 'KVM_PREFLIGHT=BLOCKED reason=real_kvm_guest_did_not_exit_with_magic_code' >&2
+            sed -n '1,100p' "$work/qemu.stderr" >&2
+            exit 1
+          fi
+          if [[ ! -f "$work/guest-output.log" ]] || \
+             ! grep -aFxq 'KVM_PREFLIGHT_GUEST_NESTED_VMX_EXECUTED' "$work/guest-output.log"; then
+            echo 'KVM_PREFLIGHT=BLOCKED reason=guest_instruction_marker_missing' >&2
+            exit 1
+          fi
+          echo 'KVM_PREFLIGHT=PASS actual_kvm_guest_boot=yes nested_vmx_visible=yes P2_18_OF_18=NOT_CERTIFIED'
+
+      - name: Retain machine preflight evidence on success or failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: x86-kvm-host-preflight-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/minic-x86-kvm-preflight/guest.img
+            ${{ runner.temp }}/minic-x86-kvm-preflight/guest-output.log
+            ${{ runner.temp }}/minic-x86-kvm-preflight/qemu.stdout
+            ${{ runner.temp }}/minic-x86-kvm-preflight/qemu.stderr
+            ${{ runner.temp }}/minic-x86-kvm-preflight/verdict.txt
+          if-no-files-found: warn

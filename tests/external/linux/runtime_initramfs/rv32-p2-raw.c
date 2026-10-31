@@ -26,6 +26,7 @@ typedef unsigned long word;
 #define CLONE 220
 #define WAITID 95
 #define EXIT 93
+#define FINIT_MODULE 273
 #define AF_INET 2
 #define AF_INET6 10
 #define AF_ALG 38
@@ -58,6 +59,52 @@ static void say(const char*s){(void)S3(WRITE,1,s,len(s));}
 static void zero(void *ptr,word n){unsigned char*p=ptr;while(n--)*p++=0;}
 static int bad(long n){return (word)n >= (word)-4095;}
 static void closefd(long n){if(!bad(n))(void)S1(CLOSE,n);}
+static void say_long(long x){
+ static const char hex[]="0123456789abcdef";
+ char buf[8];word at=sizeof(buf);unsigned long n;
+ if(x<0){say("-");n=(unsigned long)(-(x+1))+1;}else n=(unsigned long)x;
+ say("0x");
+ do{buf[--at]=hex[n&15];n>>=4;}while(n&&at);
+ (void)S3(WRITE,1,buf+at,sizeof(buf)-at);
+}
+/* Modules match the original MiniC Image's unmodified 6.6.143 Kconfig:
+ * CONFIG_CRYPTO_SHA*=m, CONFIG_CRYPTO_BLAKE2B=m, CONFIG_OVERLAY_FS=m.
+ * The kernel's AF_ALG interface is built-in. No autoload is presumed when
+ * PID1 has only this raw ELF32 binary and no modprobe helper.
+ * Each module must be actually accepted by Linux finit_module(2). */
+static int load_module(const char*name){
+ char path[128];const char *prefix="/lib/modules/";
+ word p=0,i=0;
+ while(prefix[i]&&p+1<sizeof(path))path[p++]=prefix[i++];
+ i=0;while(name[i]&&p+4<sizeof(path))path[p++]=name[i++];
+ if(name[i]){say("RV32I_P2_MODULE_FAIL path_overflow ");say(name);say("\n");return 0;}
+ path[p++]='.';path[p++]='k';path[p++]='o';path[p]=0;
+ long fd=S4(OPENAT,AT_FDCWD,path,0,0);
+ if(bad(fd)){
+  say("RV32I_P2_MODULE_FAIL open ");say(name);say(" errno=");say_long(fd);say("\n");
+  return 0;
+ }
+ long rc=S3(FINIT_MODULE,fd,"",0);
+ closefd(fd);
+ if(rc!=0){
+  say("RV32I_P2_MODULE_FAIL finit_module ");say(name);say(" errno=");say_long(rc);say("\n");
+  return 0;
+ }
+ say("RV32I_P2_MODULE_PASS ");say(name);say("\n");
+ return 1;
+}
+static int load_p2_modules(void){
+ int ok=1;
+ /* libsha256 exports sha224_final/sha256_final/sha256_update; module
+  * Kbuild's depends field is empty without original Module.symvers. */
+ ok=load_module("libsha256")&&ok;
+ ok=load_module("sha256_generic")&&ok;
+ ok=load_module("sha512_generic")&&ok;
+ ok=load_module("sha3_generic")&&ok;
+ ok=load_module("blake2b_generic")&&ok;
+ ok=load_module("overlay")&&ok;
+ return ok;
+}
 static int equal(const unsigned char*a,const unsigned char*b,word n){
  for(word i=0;i<n;i++){
   if(a[i]!=b[i])return 0;
@@ -272,6 +319,11 @@ static void overlay_test(void){
 }
 __attribute__((noreturn,used)) void _start(void){
  say("RV32I_P2_BEGIN scope=runtime-frontier-not-full-P2\n");
+ if(!load_p2_modules()){
+   say("RV32I_P2_FRONTIER=FAIL required_kernel_module_load\n");
+   (void)S1(EXIT,1);
+   for(;;)__asm__ volatile("nop");
+ }
  tmpfs_rename_test();
  ipv4_udp_test();
  ipv4_tcp_test();

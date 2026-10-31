@@ -168,6 +168,33 @@ if [[ "$p1" == 1 ]]; then
   install -m 755 "$work/sh" "$work/guest/bin/sh"
   if [[ "$p2" == 1 ]]; then
     install -m 755 "$work/runtime-p2" "$work/guest/bin/runtime-p2"
+    : "${RV32I_QEMU_P2_MODULE_DIR:?P2 requires six real GNU Kbuild ELF32 modules built from exact Image .config}"
+    module_dir=$(realpath "$RV32I_QEMU_P2_MODULE_DIR")
+    mkdir -p "$work/guest/lib/modules"
+    : >"$work/rv32-p2-module-sha256.txt"
+    for name in libsha256 sha256_generic sha512_generic sha3_generic blake2b_generic overlay; do
+      src="$module_dir/$name.ko"
+      [[ -s "$src" ]] || { echo "RV32I_QEMU_P2=FAIL missing_module=$src" >&2; exit 3; }
+      riscv64-linux-gnu-readelf -h "$src" >"$work/module-$name-elf.txt"
+      for contract in 'Class:[[:space:]]+ELF32' \
+                      'Machine:[[:space:]]+RISC-V' \
+                      'Type:[[:space:]]+REL' \
+                      'Flags:[[:space:]]+0x0([[:space:]]|$)'; do
+        grep -Eq "$contract" "$work/module-$name-elf.txt" || {
+          echo "RV32I_QEMU_P2=FAIL module_elf=$name contract=$contract" >&2
+          exit 3
+        }
+      done
+      riscv64-linux-gnu-readelf -p .modinfo "$src" >"$work/module-$name-modinfo.txt"
+      grep -Eq 'vermagic=6\.6\.143 mod_unload riscv([[:space:]]|$)' \
+        "$work/module-$name-modinfo.txt" || {
+          echo "RV32I_QEMU_P2=FAIL module_vermagic=$name expected=6.6.143_mod_unload_riscv" >&2
+          exit 3
+        }
+      install -m 644 "$src" "$work/guest/lib/modules/$name.ko"
+      sha256sum "$src" >>"$work/rv32-p2-module-sha256.txt"
+      echo "RV32I_QEMU_P2_MODULE=STAGED name=$name real_GNU_ELF32=true"
+    done
   fi
 fi
 if [[ ! -e "$work/guest/dev/console" ]]; then
@@ -358,6 +385,12 @@ if [[ "$p1" == 1 ]]; then
     for marker in 'INIT_PROC_MOUNT=PASS' 'INIT_SYSFS_MOUNT=PASS' \
       'INIT_DEVTMPFS_MOUNT=PASS' 'INIT_CMDLINE_READ=PASS' \
       'INIT_TMPFS_RW=PASS' 'RV32I_P2_CHILD=PASS' \
+      'RV32I_P2_MODULE_PASS libsha256' \
+      'RV32I_P2_MODULE_PASS sha256_generic' \
+      'RV32I_P2_MODULE_PASS sha512_generic' \
+      'RV32I_P2_MODULE_PASS sha3_generic' \
+      'RV32I_P2_MODULE_PASS blake2b_generic' \
+      'RV32I_P2_MODULE_PASS overlay' \
       'RV32I_P2_PASS tmpfs-rename-rw' \
       'RV32I_P2_PASS ipv4-udp-loopback' \
       'RV32I_P2_PASS ipv4-tcp-loopback' \
@@ -376,8 +409,9 @@ if [[ "$p1" == 1 ]]; then
         exit 1
       }
     done
-    if grep -Eq '^RV32I_P2_(UNAVAILABLE|FAIL)' "$work/qemu-p2-normalized.log" ||
-       [[ "$(grep -Ec '^RV32I_P2_PASS ' "$work/qemu-p2-normalized.log")" != 9 ]]; then
+    if grep -Eq '^RV32I_P2_(UNAVAILABLE|FAIL|MODULE_FAIL)' "$work/qemu-p2-normalized.log" ||
+       [[ "$(grep -Ec '^RV32I_P2_PASS ' "$work/qemu-p2-normalized.log")" != 9 ]] ||
+       [[ "$(grep -Ec '^RV32I_P2_MODULE_PASS ' "$work/qemu-p2-normalized.log")" != 6 ]]; then
       echo 'RV32I_QEMU_P2=FAIL negative_or_wrong_number_of_distinct_function_results' >&2
       exit 1
     fi

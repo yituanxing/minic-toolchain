@@ -41,6 +41,75 @@ jobs:
           github-token: ${{ github.token }}
           path: build/rv32-p2-strict/source
 
+      - name: Restore original GNU Kbuild configuration from same pinned Image build
+        uses: actions/download-artifact@v4
+        with:
+          repository: yituanxing/minic-toolchain
+          run-id: '41212514498'
+          name: linux-rv32i-original-kbuild-796f2b44fada71218a22fc506ae50ecfe6b43342
+          github-token: ${{ github.token }}
+          path: build/rv32-p2-strict/original-kbuild
+
+      - name: Build six exact-config GNU ELF32 RISC-V modules, without touching MiniC Image
+        shell: bash
+        timeout-minutes: 12
+        run: |
+          set -Eeuo pipefail
+          root="$GITHUB_WORKSPACE/build/rv32-p2-strict"
+          src="$root/linux-6.6.143"
+          out="$root/modules-kbuild"
+          original="$root/original-kbuild/out/.config"
+          modules="$root/modules"
+          mkdir -p "$out" "$modules"
+          test -s "$original"
+          printf '%s  %s\n' \
+            4c6c19f79741a8a31ec52ad57b1a6bc56b81dd6996cbf5e1bdc63f587d85244c \
+            "$original" | sha256sum -c -
+          # Both source and config are immutable provenance of Image build
+          # 41212514498; the kernel Image itself is never recompiled/relinked.
+          archive="$root/linux-6.6.143.tar.xz"
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+            https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz \
+            -o "$archive"
+          printf '%s  %s\n' \
+            dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 \
+            "$archive" | sha256sum -c -
+          tar -xJf "$archive" -C "$root"
+          cp "$original" "$out/.config"
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+            -j4 modules_prepare >"$root/modules-prepare.log" 2>&1
+          # Kbuild's GCC capability discovery adds only these two bools.
+          # No Image Kconfig feature may silently change to pass a test.
+          sed -e '/^CONFIG_CC_CAN_LINK=y$/d' \
+              -e '/^CONFIG_CC_CAN_LINK_STATIC=y$/d' \
+              "$out/.config" | cmp - "$original" || {
+            echo 'RV32I_P2_MODULES=FAIL original_Kconfig_feature_drift' >&2
+            diff -u "$original" "$out/.config" || true
+            exit 1
+          }
+          grep -E '^CONFIG_(MODULES|CRYPTO_SHA256|CRYPTO_SHA512|CRYPTO_SHA3|CRYPTO_BLAKE2B|OVERLAY_FS)=' "$original"
+          # The original Image artifact has no Module.symvers. CONFIG_MODVERSIONS=n
+          # means runtime symbol CRCs are not needed; WARN is solely to let
+          # modpost emit .ko. Real guest finit_module MUST succeed later.
+          for target in lib/crypto/libsha256.ko \
+            crypto/sha256_generic.ko crypto/sha512_generic.ko \
+            crypto/sha3_generic.ko crypto/blake2b_generic.ko \
+            fs/overlayfs/overlay.ko; do
+            echo "RV32I_P2_KBUILD_START=$target"
+            KBUILD_MODPOST_WARN=1 make -C "$src" O="$out" ARCH=riscv \
+              CROSS_COMPILE=riscv64-linux-gnu- -j4 "$target" \
+              >>"$root/modules-build.log" 2>&1
+            test -s "$out/$target"
+            install -m 644 "$out/$target" "$modules/$(basename "$target")"
+          done
+          for file in "$modules"/*.ko; do
+            riscv64-linux-gnu-readelf -h "$file" | grep -Eq 'Class:[[:space:]]+ELF32'
+            riscv64-linux-gnu-readelf -p .modinfo "$file" | \
+              grep -Eq 'vermagic=6\.6\.143 mod_unload riscv([[:space:]]|$)'
+            sha256sum "$file"
+          done
+          echo 'RV32I_P2_MODULES=BUILT count=6 original_config_verified=true runtime_load_not_yet_verified=true'
+
       - name: Execute nine required RV32I/ILP32 P2 operations in real QEMU
         shell: bash
         timeout-minutes: 5
@@ -55,6 +124,7 @@ jobs:
           mkdir -p "$work"
           set +e
           RV32I_QEMU_IMAGE="$image" RV32I_QEMU_WORK="$work" \
+            RV32I_QEMU_P2_MODULE_DIR="$GITHUB_WORKSPACE/build/rv32-p2-strict/modules" \
             RV32I_QEMU_P1=1 RV32I_QEMU_P2=1 \
             RV32I_QEMU_TIMEOUT_SECONDS=90 \
             bash tools/ci/linux-rv32i-qemu-p0-v1.sh \
@@ -75,6 +145,10 @@ jobs:
           path: |
             build/rv32-p2-strict/verdict.txt
             build/rv32-p2-strict/runner.log
+            build/rv32-p2-strict/modules-prepare.log
+            build/rv32-p2-strict/modules-build.log
+            build/rv32-p2-strict/run/rv32-p2-module-sha256.txt
+            build/rv32-p2-strict/run/module-*-modinfo.txt
             build/rv32-p2-strict/run/qemu-serial.log
             build/rv32-p2-strict/run/provenance.txt
             build/rv32-p2-strict/run/runtime-p2-elf.txt
