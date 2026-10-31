@@ -947,11 +947,32 @@ bool minias_emit_deferred_leb_relocations(MiniAs *as) {
     return true;
 }
 
+struct MiniAsRelaxContext { MiniAs *as; };
+
+const MiniAsSymbol *minias_relax_symbol_ref_lookup(
+    MiniAsRelaxContext *ctx, MiniAsSymbolRef ref) {
+    return minias_symbol_ref_lookup(ctx->as, ref);
+}
+
+bool minias_relax_resolve_symbol_difference_ref(
+    MiniAsRelaxContext *ctx, const MiniAsSymbolDifferenceRef *pair,
+    int64_t *value) {
+    return minias_resolve_symbol_difference_ref(ctx->as, pair, value);
+}
+
+void minias_relax_error(MiniAsRelaxContext *ctx, const char *format, ...) {
+    va_list ap;
+    va_start(ap, format);
+    minias_set_error_va(ctx->as, format, ap);
+    va_end(ap);
+}
+
 /* The sole Common validation gate for Target encoding alternatives.
  * Source replay and MCLayout both ask the same retained typed MCInst;
  * neither side reparses a mnemonic or guesses its terminal instruction size. */
 bool minias_query_target_relax_plan(MiniAs *as,const MiniAsStmt *stmt,
                                    MiniAsTargetRelaxPlan *plan) {
+    MiniAsRelaxContext context={.as=as};
     if(as==NULL || stmt==NULL || plan==NULL ||
        stmt->fragment_kind!=MINIAS_FRAGMENT_INSTRUCTION ||
        stmt->mcinst==NULL) {
@@ -962,7 +983,7 @@ bool minias_query_target_relax_plan(MiniAs *as,const MiniAsStmt *stmt,
     plan->required_size=stmt->size;
     plan->terminal_size=stmt->size;
     if(as->target->plan_instruction_relaxation!=NULL &&
-       !as->target->plan_instruction_relaxation(as,stmt,plan)) {
+       !as->target->plan_instruction_relaxation(&context,stmt,plan)) {
         if(as->error[0]=='\0')
             minias_set_error(as,"target-relaxation-plan-failed:line=%zu",
                              stmt->line);

@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 
@@ -740,7 +741,7 @@ bool minias_bind_symbol_ref(MiniAs *as, const MiniAsSymbolExpr *expr,
 bool minias_bind_symbol_difference_ref(MiniAs *as,
                                         const MiniAsSymbolDifference *expr,
                                         MiniAsSymbolDifferenceRef *ref);
-bool minias_resolve_symbol_difference_ref(MiniAs *as,
+bool minias_resolve_symbol_difference_ref(const MiniAs *as,
                                           const MiniAsSymbolDifferenceRef *expr,
                                           int64_t *value);
 /* A final-layout symbol difference is either absolute (two symbols in one
@@ -875,6 +876,8 @@ bool minias_code_alignment_preceded_by_adjacent_data(const MiniAs *, int section
 bool minias_section_append(MiniAs *as, int section_index, const void *data, size_t size);
 bool minias_section_append_zero(MiniAs *as, int section_index, size_t size);
 void minias_set_error(MiniAs *as, const char *format, ...);
+/* Shared first-error-wins formatter for phase-limited Common-owned sinks. */
+void minias_set_error_va(MiniAs *, const char *, va_list);
 char *minias_strdup(const char *text);
 /* Synthetic labels use a namespace unavailable to GNU source tokens.
  * ELF serialization gives them collision-free printable names without
@@ -930,6 +933,17 @@ typedef struct MiniAsTargetRelaxPlan {
     uint32_t terminal_size;
 } MiniAsTargetRelaxPlan;
 
+/* MCLayout alone owns the current Symbol/Fragment graph. Range planning
+ * borrows its exact generation through an opaque, stack-scoped Common
+ * service. Targets can query symbols and checked differences or report a
+ * diagnostic, but cannot obtain a writable MiniAs or mutate layout. */
+typedef struct MiniAsRelaxContext MiniAsRelaxContext;
+const MiniAsSymbol *minias_relax_symbol_ref_lookup(
+    MiniAsRelaxContext *, MiniAsSymbolRef);
+bool minias_relax_resolve_symbol_difference_ref(
+    MiniAsRelaxContext *, const MiniAsSymbolDifferenceRef *, int64_t *);
+void minias_relax_error(MiniAsRelaxContext *, const char *, ...);
+
 /* Common classifies accepted data-producing source directives exactly once.
  * Targets may reject an ISA escape in executable sections using this typed
  * semantic category, never by copying an evolving list of GNU aliases. */
@@ -982,7 +996,8 @@ typedef struct MiniAsTargetOps {
     bool (*encode)(MiniAs *, const MiniAsStmt *);
     /* One typed TargetRelaxPlan supplies both the range requirement and
      * the longest legal encoding. No Common mnemonic/argument reparse. */
-    bool (*plan_instruction_relaxation)(MiniAs *,const MiniAsStmt *,
+    bool (*plan_instruction_relaxation)(MiniAsRelaxContext *,
+                                        const MiniAsStmt *,
                                         MiniAsTargetRelaxPlan *);
     /* Keep the lexical ISA/mode snapshot of the ALIGN site: a Target may
      * need different NOP encodings for different source-selected CPU modes. */

@@ -2374,6 +2374,25 @@ static bool rv_encode_multi_mc(MiniAs *as, const MiniAsStmt *stmt) {
     return false;
 }
 
+/* Encoding queries the FINAL Common symbol snapshot and invokes the same
+ * pure distance policy used by MCLayout's read-only relaxation callback. */
+static bool rv_encode_branch_plan(MiniAs *as, const MiniAsStmt *stmt,
+                                  MiniAsRiscvBranchPlan *result) {
+    const MiniAsMCInst *m=stmt->mcinst;
+    const MiniAsSymbolRef *expr=m!=NULL &&
+        (m->opcode==RV_MC_BRANCH || m->opcode==RV_MC_JAL)
+        ? m->operands[m->opcode==RV_MC_BRANCH?2U:1U].bound_symbol : NULL;
+    const MiniAsSymbol *symbol=expr!=NULL
+        ? minias_symbol_ref_lookup(as,*expr) : NULL;
+    const char *diagnostic=NULL;
+    if(!minias_riscv_compute_branch_plan(stmt,symbol,result,&diagnostic)) {
+        minias_set_error(as,"%s",diagnostic!=NULL?diagnostic:
+                         "internal:riscv-branch-plan");
+        return false;
+    }
+    return true;
+}
+
 static bool rv_encode_mcinst(MiniAs *as, const MiniAsStmt *stmt) {
     const MiniAsMCInst *m=stmt->mcinst;
     uint16_t compressed;
@@ -2398,7 +2417,7 @@ static bool rv_encode_mcinst(MiniAs *as, const MiniAsStmt *stmt) {
             m->opcode==RV_MC_BRANCH?2U:1U].bound_symbol;
         uint16_t bits;
         MiniAsFixupKind fixup;
-        if(symbol==NULL || !minias_riscv_resolve_branch_plan(as,stmt,&branch))
+        if(symbol==NULL || !rv_encode_branch_plan(as,stmt,&branch))
             return false;
         if(m->opcode==RV_MC_BRANCH) {
             int64_t disp=branch.local?branch.displacement:0;
@@ -2462,7 +2481,7 @@ static bool rv_encode_mcinst(MiniAs *as, const MiniAsStmt *stmt) {
     if(m->opcode==RV_MC_BRANCH || m->opcode==RV_MC_JAL) {
         MiniAsRiscvBranchPlan branch;
         expr=m->operands[m->opcode==RV_MC_BRANCH ? 2U : 1U].bound_symbol;
-        if(!minias_riscv_resolve_branch_plan(as,stmt,&branch))return false;
+        if(!rv_encode_branch_plan(as,stmt,&branch))return false;
         if(m->opcode==RV_MC_JAL){
             if(branch.local && !branch.jal_legal){
                 minias_set_error(as,"jal-range:line=%zu",stmt->line);

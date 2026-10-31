@@ -591,22 +591,22 @@ static void riscv_object_attributes(const MiniAs *as, unsigned char elf_class,
     }
 }
 
-/* Resolve one retained Target branch against the CURRENT layout generation.
- * Common owns stable parse-time SymbolNameIds and current Object SymbolIDs;
- * RISC-V owns branch encoding policy and may not cache a displacement in
- * MCInst across Common relaxation passes. Growth and emission share the
- * exact same range/alignment decisions. */
-bool minias_riscv_resolve_branch_plan(MiniAs *as,
-                                      const MiniAsStmt *stmt,
-                                      MiniAsRiscvBranchPlan *result) {
-    const MiniAsMCInst *m = stmt->mcinst;
+/* One pure target encoding policy, evaluated from a caller-supplied symbol
+ * snapshot of the CURRENT Common layout generation. Both relaxation and
+ * final emission invoke this identical distance/range algorithm; neither
+ * retains the result across MCLayout passes. */
+bool minias_riscv_compute_branch_plan(const MiniAsStmt *stmt,
+                                      const MiniAsSymbol *symbol,
+                                      MiniAsRiscvBranchPlan *result,
+                                      const char **diagnostic) {
+    const MiniAsMCInst *m = stmt!=NULL ? stmt->mcinst : NULL;
     const MiniAsSymbolRef *expr;
-    const MiniAsSymbol *symbol;
     bool same_section;
     int64_t displacement;
+    if(diagnostic!=NULL)*diagnostic=NULL;
     if (result == NULL || m == NULL ||
         (m->opcode != RV_MC_BRANCH && m->opcode != RV_MC_JAL)) {
-        minias_set_error(as,"internal:riscv-branch-plan-kind");
+        if(diagnostic!=NULL)*diagnostic="internal:riscv-branch-plan-kind";
         return false;
     }
     memset(result,0,sizeof(*result));
@@ -616,15 +616,14 @@ bool minias_riscv_resolve_branch_plan(MiniAs *as,
     result->required_size=m->opcode==RV_MC_BRANCH?8U:4U;
     expr=m->operands[m->opcode==RV_MC_BRANCH?2U:1U].bound_symbol;
     if (expr == NULL) {
-        minias_set_error(as,"internal:riscv-branch-plan-symbol");
+        if(diagnostic!=NULL)*diagnostic="internal:riscv-branch-plan-symbol";
         return false;
     }
-    symbol=minias_symbol_ref_lookup(as,*expr);
     same_section=symbol!=NULL && symbol->defined &&
                  symbol->section==stmt->section;
     if(stmt->offset>(uint64_t)INT64_MAX ||
        (same_section && symbol->value>(uint64_t)INT64_MAX)) {
-        minias_set_error(as,"riscv-branch-offset-overflow");
+        if(diagnostic!=NULL)*diagnostic="riscv-branch-offset-overflow";
         return false;
     }
     /* GNU writes S+A-P to the relocation field even for a defined WEAK
@@ -633,7 +632,7 @@ bool minias_riscv_resolve_branch_plan(MiniAs *as,
     displacement=(same_section?(int64_t)symbol->value:0)-
                  (int64_t)stmt->offset;
     if(!minias_checked_add_i64(displacement,expr->addend,&displacement)) {
-        minias_set_error(as,"riscv-branch-addend-overflow");
+        if(diagnostic!=NULL)*diagnostic="riscv-branch-addend-overflow";
         return false;
     }
     result->displacement=displacement;
@@ -661,9 +660,29 @@ bool minias_riscv_resolve_branch_plan(MiniAs *as,
     return true;
 }
 
+/* Common owns symbol lookup and diagnostic storage in the relaxation phase.
+ * This wrapper only projects current symbol metadata into the pure policy. */
+static bool riscv_relax_branch_plan(MiniAsRelaxContext *ctx,
+                                    const MiniAsStmt *stmt,
+                                    MiniAsRiscvBranchPlan *result) {
+    const MiniAsMCInst *m=stmt->mcinst;
+    const MiniAsSymbolRef *expr=m!=NULL &&
+        (m->opcode==RV_MC_BRANCH || m->opcode==RV_MC_JAL)
+        ? m->operands[m->opcode==RV_MC_BRANCH?2U:1U].bound_symbol : NULL;
+    const MiniAsSymbol *symbol=expr!=NULL
+        ? minias_relax_symbol_ref_lookup(ctx,*expr) : NULL;
+    const char *diagnostic=NULL;
+    if(!minias_riscv_compute_branch_plan(stmt,symbol,result,&diagnostic)) {
+        minias_relax_error(ctx,"%s",diagnostic!=NULL?diagnostic:
+                           "internal:riscv-branch-plan");
+        return false;
+    }
+    return true;
+}
+
 /* One retained MCInst determines the range-dependent minimum and terminal
  * encoding alternative.  Common only applies the requested fragment size. */
-static bool riscv_plan_instruction_relaxation(MiniAs *as,
+static bool riscv_plan_instruction_relaxation(MiniAsRelaxContext *ctx,
                                               const MiniAsStmt *stmt,
                                               MiniAsTargetRelaxPlan *plan) {
     MiniAsRiscvBranchPlan branch;
@@ -674,7 +693,7 @@ static bool riscv_plan_instruction_relaxation(MiniAs *as,
         (stmt->mcinst->opcode == RV_MC_BRANCH ||
          stmt->mcinst->opcode == RV_MC_JAL)) {
         plan->terminal_size = 4U;
-        if (!minias_riscv_resolve_branch_plan(as,stmt,&branch))return false;
+        if (!riscv_relax_branch_plan(ctx,stmt,&branch))return false;
         if (!branch.local ||
             ((branch.displacement & 1) != 0) ||
             (stmt->mcinst->opcode == RV_MC_JAL ?
@@ -689,7 +708,7 @@ static bool riscv_plan_instruction_relaxation(MiniAs *as,
         stmt->mcinst->opcode != RV_MC_BRANCH)
         return true;
     plan->terminal_size = 8U;
-    if (!minias_riscv_resolve_branch_plan(as,stmt,&branch))return false;
+    if (!riscv_relax_branch_plan(ctx,stmt,&branch))return false;
     plan->required_size=branch.required_size;
     return true;
 }

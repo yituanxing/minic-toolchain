@@ -104,9 +104,12 @@ typedef struct MiniAsRiscvBranchPlan {
     bool long_legal;
     bool jal_legal;
 } MiniAsRiscvBranchPlan;
-bool minias_riscv_resolve_branch_plan(struct MiniAs *as,
-                                      const struct MiniAsStmt *stmt,
-                                      MiniAsRiscvBranchPlan *result);
+/* Pure range/relocation policy. Caller supplies a current-layout symbol
+ * snapshot and owns diagnostics; no Common state is read or modified. */
+bool minias_riscv_compute_branch_plan(const struct MiniAsStmt *stmt,
+                                      const struct MiniAsSymbol *symbol,
+                                      MiniAsRiscvBranchPlan *result,
+                                      const char **diagnostic);
 
 /* RISC-V-only psABI relocation constants. */
 #define MINIAS_R_RISCV_32 1U

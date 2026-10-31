@@ -4196,13 +4196,12 @@ static bool x64_can_resolve_same_section(const MiniAsSymbol *symbol,
  * planner and emitter.  Internal addresses are ELF section offsets, and the
  * target ISA defines the PC base as the byte after the entire instruction.
  * External/cross-section references retain an explicit PC32/PLT32 fixup. */
-static X64BranchDistanceKind x64_branch_distance(MiniAs *as,
+static X64BranchDistanceKind x64_branch_distance(const MiniAsSymbol *symbol,
                                                  const MiniAsStmt *stmt,
                                                  uint32_t instruction_width,
                                                  int64_t *distance) {
     const MiniAsMCInst *inst=stmt->mcinst;
     const MiniAsSymbolRef *expr=inst->operands[0].bound_symbol;
-    const MiniAsSymbol *symbol=minias_symbol_ref_lookup(as,*expr);
     int64_t delta;
     if(X64_FORM_VALUE(inst)==1U ||
        !x64_can_resolve_same_section(symbol,stmt,inst->encoding==0xe8U))
@@ -4223,14 +4222,14 @@ static X64BranchDistanceKind x64_branch_distance(MiniAs *as,
  * Common monotonic fixed point.  terminal_size is the only size permitted
  * for a forced near branch; required_size depends on this layout iteration.
  * Every non-branch is an identity plan and never invents an alternative. */
-static bool x64_plan_instruction_relaxation(MiniAs *as,
+static bool x64_plan_instruction_relaxation(MiniAsRelaxContext *ctx,
                                              const MiniAsStmt *stmt,
                                              MiniAsTargetRelaxPlan *plan) {
     const MiniAsMCInst *inst=stmt->mcinst;
     int64_t distance=0;
     X64BranchDistanceKind result;
     if(!inst || !plan) {
-        minias_set_error(as,"x86-missing-typed-relaxation-instruction");
+        minias_relax_error(ctx,"x86-missing-typed-relaxation-instruction");
         return false;
     }
     plan->current_size=stmt->size;
@@ -4250,12 +4249,12 @@ static bool x64_plan_instruction_relaxation(MiniAs *as,
         const char *prefix_error=
             x64_legacy_mode_prefixes(stmt,prefixes,&prefix_count);
         if(prefix_error!=NULL) {
-            minias_set_error(as,"%s",prefix_error);
+            minias_relax_error(ctx,"%s",prefix_error);
             return false;
         }
         plan->terminal_size=long_plan.instruction_bytes+(uint32_t)prefix_count;
         if(stmt->size==short_plan.instruction_bytes+prefix_count &&
-           (!minias_resolve_symbol_difference_ref(as,
+           (!minias_relax_resolve_symbol_difference_ref(ctx,
                 inst->operands[1].bound_difference,&value) ||
             value<-128 || value>127))
             plan->required_size=plan->terminal_size;
@@ -4264,7 +4263,9 @@ static bool x64_plan_instruction_relaxation(MiniAs *as,
     if(inst->opcode!=X64_BRANCH)return true;
     if(inst->encoding==0xe8U || stmt->size!=2U)return true;
     plan->terminal_size=x64_branch_near_width(stmt);
-    result=x64_branch_distance(as,stmt,2U,&distance);
+    const MiniAsSymbolRef *expr=inst->operands[0].bound_symbol;
+    const MiniAsSymbol *symbol=minias_relax_symbol_ref_lookup(ctx,*expr);
+    result=x64_branch_distance(symbol,stmt,2U,&distance);
     if(result!=X64_BRANCH_LOCAL || distance<-128 || distance>127)
         plan->required_size=plan->terminal_size;
     return true;
@@ -4587,7 +4588,7 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
                 minias_set_error(as,"x86-branch-invalid-layout:line=%zu",s->line);
                 return false;
             }
-            resolution=x64_branch_distance(as,s,(uint32_t)width,&displacement);
+            resolution=x64_branch_distance(target,s,(uint32_t)width,&displacement);
             local=resolution!=X64_BRANCH_EXTERNAL;
             if(resolution==X64_BRANCH_LOCAL_OVERFLOW) {
                 minias_set_error(as,"x86-branch-address-or-addend-overflow:line=%zu",

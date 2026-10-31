@@ -947,3 +947,53 @@ encoder or object-format rewrite.
 P16 (CFI synthetic-section collisions) or the next narrowed source
 ownership batch. Endian and COFF/Mach-O remain deferred by the two-person
 project's deliberate workload budget.
+
+## 22. P04 one phase-limited MCLayout relaxation context, two Target planners
+
+The §21 audit showed the one Common `MCEncodeResult` staging path should
+remain untouched. A narrower, provable P04 improvement was instead the
+`plan_instruction_relaxation` callback: only RISC-V and x86-64 implement
+it, and both need current-layout symbols, checked symbol differences and
+diagnostics, **not** access to the mutable Common SourceGraph/Section/Fixup
+owner. AArch64 and LoongArch correctly keep this optional callback NULL.
+
+`mc_layout.c` now lends each planner a stack-scoped, Common-private
+`MiniAsRelaxContext` rather than `MiniAs *`. The header exports only
+`minias_relax_symbol_ref_lookup` (borrowed const Symbol),
+`minias_relax_resolve_symbol_difference_ref` (checked difference), and
+`minias_relax_error` (the existing first-error-wins sink). Common's
+underlying difference resolver is now explicitly `const MiniAs *`; its
+single implementation remains in `mc_expr.c`. The broad callback signature
+and its Target-specific mutable-root callers are deleted.
+
+The key safeguard is **one branch-distance algorithm per Target**:
+
+- x86 `x64_branch_distance` is now pure over a previously looked-up
+  `const MiniAsSymbol *`, the retained MCInst and final Section offset.
+  Relaxation gets that Symbol through the opaque context; encode reuses
+  the Symbol it already queried. No new branch encoder, prefix table or
+  Fixup path was introduced.
+- RV `minias_riscv_compute_branch_plan` is likewise pure over a current
+  Symbol snapshot, MCInst, and layout offset. Relaxation and final encoding
+  both invoke it, reporting errors through their respective phase's
+  existing diagnostic sink. In particular, the GNU `S+A-P` seed for
+  externally bound symbols, weak-binding behavior, JAL subsection rule,
+  signed-overflow checks and RVC 2→4→8 growth are unchanged. There is no
+  cached range from a previous layout pass.
+
+The expanded structural guard
+`tests/assembler/probe-mc-target-boundary.sh` proves the opaque callback,
+Common-private context and shared Target-private branch policy remain in
+place. Integrated local proof: Release `-Werror`, A0 **30/30**, GNU RV32/64
+binding/linked-override **6/6** (20 matching relocations each), x86 GNU
+binding/branch and `.code16` **38/38**, both SourceGraph replay profiles,
+and focused AArch64/LoongArch GNU fixtures all PASS. The production-only
+change is **8 files, +114/−36 lines (net +78)**; it introduces a small
+phase API and deletes the broad callback/helper usages without copying
+any instruction algorithm. The single Common encoding transaction and
+the full encode callback remain unchanged, so **P04 is still partial**.
+
+**Next:** read the remaining P05 SourceContext/conditional ownership as a
+coherent SourceGraph batch, or handle P09/P16 only when a real GNU source
+demonstrates an error. Avoid another interface-only change without a clear
+Common/Target ownership deletion and focused regression.

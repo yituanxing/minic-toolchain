@@ -255,7 +255,7 @@ struct MiniAsPostEmitObjectSink { MiniAs *as; };
 struct MiniAsMeasureErrorSink { MiniAs *as; };
 struct MiniAsParseContext { MiniAs *as; };
 
-static void minias_set_error_va(MiniAs *as, const char *format, va_list ap) {
+void minias_set_error_va(MiniAs *as, const char *format, va_list ap) {
     if (as->error[0] != '\0') {
         return;
     }

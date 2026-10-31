@@ -436,7 +436,7 @@ bool minias_parse_symbol_difference_absolute_tail(
  * final layout.  No conversion back to 256-byte parse DTOs or name-based
  * second lookup is needed; this is the single checked difference resolver
  * for all Targets. */
-bool minias_resolve_symbol_difference_ref(MiniAs *as,
+bool minias_resolve_symbol_difference_ref(const MiniAs *as,
                                           const MiniAsSymbolDifferenceRef *pair,
                                           int64_t *value) {
     const MiniAsSymbol *positive,*negative;
