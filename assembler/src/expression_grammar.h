@@ -58,6 +58,10 @@ typedef struct MiniAsExprNode {
     size_t start,length;
 } MiniAsExprNode;
 
+/* Linux macro-expanded expressions can contain thousands of typed terms.
+ * Keep a bounded graph rather than imposing the old 512-node stack limit. */
+#define MINIAS_EXPR_MAX_NODES 8192U
+
 typedef struct MiniAsExprSyntax {
     const char *text;
     MiniAsExprNode *nodes;

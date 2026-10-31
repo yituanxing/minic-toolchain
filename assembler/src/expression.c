@@ -114,11 +114,11 @@ typedef struct MiniAsSyntaxParser {
 static bool syntax_add(MiniAsSyntaxParser *parser,
                        MiniAsExprNode node,size_t *id) {
     MiniAsExprSyntax *syntax=parser->syntax;
-    if(syntax->count>=512U)return false;
+    if(syntax->count>=MINIAS_EXPR_MAX_NODES)return false;
     if(syntax->count==syntax->capacity) {
         size_t capacity=syntax->capacity*2U;
         MiniAsExprNode *grown;
-        if(capacity>512U)capacity=512U;
+        if(capacity>MINIAS_EXPR_MAX_NODES)capacity=MINIAS_EXPR_MAX_NODES;
         if(syntax->nodes==syntax->inline_nodes) {
             grown=malloc(capacity*sizeof(*grown));
             if(grown)memcpy(grown,syntax->inline_nodes,
@@ -243,10 +243,15 @@ invalid:
  * algebra, but uses exactly the same syntax tree. */
 bool minias_expr_eval_integer(const MiniAsExprSyntax *syntax,
                               bool signed_shift,uint64_t *result) {
-    uint64_t values[512];
+    uint64_t inline_values[512];
+    uint64_t *values=inline_values;
     size_t i;
     if(!syntax || !result || !syntax->count ||
-       syntax->count>512U)return false;
+       syntax->count>MINIAS_EXPR_MAX_NODES)return false;
+    if(syntax->count>sizeof(inline_values)/sizeof(inline_values[0])) {
+        values=malloc(syntax->count*sizeof(*values));
+        if(!values)return false;
+    }
     for(i=0U;i<syntax->count;++i) {
         const MiniAsExprNode *node=&syntax->nodes[i];
         uint64_t lhs=0U,rhs=0U;
@@ -255,31 +260,31 @@ bool minias_expr_eval_integer(const MiniAsExprSyntax *syntax,
         switch(node->kind) {
         case MINIAS_EXPR_LITERAL:values[i]=node->literal;break;
         case MINIAS_EXPR_SYMBOL:
-        case MINIAS_EXPR_DOT:return false;
+        case MINIAS_EXPR_DOT:goto invalid;
         case MINIAS_EXPR_UNARY:
             switch(node->unary) {
             case '-':values[i]=0U-lhs;break;
             case '~':values[i]=~lhs;break;
             case '!':values[i]=lhs==0U?1U:0U;break;
-            default:return false;
+            default:goto invalid;
             }
             break;
         case MINIAS_EXPR_BINARY:
             switch(node->op) {
             case MINIAS_EXPR_OP_MUL:values[i]=lhs*rhs;break;
             case MINIAS_EXPR_OP_DIV:
-                if(!rhs)return false;
+                if(!rhs)goto invalid;
                 values[i]=lhs/rhs;break;
             case MINIAS_EXPR_OP_MOD:
-                if(!rhs)return false;
+                if(!rhs)goto invalid;
                 values[i]=lhs%rhs;break;
             case MINIAS_EXPR_OP_ADD:values[i]=lhs+rhs;break;
             case MINIAS_EXPR_OP_SUB:values[i]=lhs-rhs;break;
             case MINIAS_EXPR_OP_SHL:
-                if(rhs>=64U)return false;
+                if(rhs>=64U)goto invalid;
                 values[i]=lhs<<(unsigned)rhs;break;
             case MINIAS_EXPR_OP_SHR:
-                if(rhs>=64U)return false;
+                if(rhs>=64U)goto invalid;
                 if(signed_shift && rhs!=0U &&
                    (lhs & (UINT64_C(1)<<63U))) {
                     values[i]=(lhs>>(unsigned)rhs) |
@@ -289,14 +294,18 @@ bool minias_expr_eval_integer(const MiniAsExprSyntax *syntax,
             case MINIAS_EXPR_OP_AND:values[i]=lhs&rhs;break;
             case MINIAS_EXPR_OP_XOR:values[i]=lhs^rhs;break;
             case MINIAS_EXPR_OP_OR:values[i]=lhs|rhs;break;
-            default:return false;
+            default:goto invalid;
             }
             break;
-        default:return false;
+        default:goto invalid;
         }
     }
     *result=values[syntax->root];
+    if(values!=inline_values)free(values);
     return true;
+invalid:
+    if(values!=inline_values)free(values);
+    return false;
 }
 
 static bool eval_integer_text(const char *text,bool signed_shift,

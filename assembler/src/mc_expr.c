@@ -117,10 +117,15 @@ static bool evaluate_absolute_syntax(MiniAs *as,
                                      const MiniAsExprSyntax *syntax,
                                      int64_t dot,bool *only_abs,
                                      int64_t *result) {
-    int64_t values[512];
+    int64_t inline_values[512];
+    int64_t *values=inline_values;
     size_t i;
     if(!syntax || !only_abs || !result || !syntax->count ||
-       syntax->count>512U)return false;
+       syntax->count>MINIAS_EXPR_MAX_NODES)return false;
+    if(syntax->count>sizeof(inline_values)/sizeof(inline_values[0])) {
+        values=malloc(syntax->count*sizeof(*values));
+        if(!values)return false;
+    }
     *only_abs=true;
     for(i=0U;i<syntax->count;++i) {
         const MiniAsExprNode *node=&syntax->nodes[i];
@@ -139,30 +144,34 @@ static bool evaluate_absolute_syntax(MiniAs *as,
             char name[256];
             MiniAsSymbol *symbol;
             if(!node->length || node->length>=sizeof(name))
-                return false;
+                goto invalid;
             memcpy(name,syntax->text+node->start,node->length);
             name[node->length]='\0';
             symbol=minias_get_symbol(as,name,false);
             if(!symbol || !symbol->defined ||
                symbol->section==MINIAS_SECTION_COMMON ||
                (symbol->section!=MINIAS_SECTION_ABS &&
-                symbol->value>(uint64_t)INT64_MAX))return false;
+                symbol->value>(uint64_t)INT64_MAX))goto invalid;
             if(symbol->section!=MINIAS_SECTION_ABS)*only_abs=false;
             next=signed_from_bits(symbol->value);
             break;
         }
         case MINIAS_EXPR_UNARY:
-            if(!evaluate_absolute_unary(node->unary,lhs,&next))return false;
+            if(!evaluate_absolute_unary(node->unary,lhs,&next))goto invalid;
             break;
         case MINIAS_EXPR_BINARY:
-            if(!evaluate_absolute_binary(node->op,lhs,rhs,&next))return false;
+            if(!evaluate_absolute_binary(node->op,lhs,rhs,&next))goto invalid;
             break;
-        default:return false;
+        default:goto invalid;
         }
         values[i]=next;
     }
     *result=values[syntax->root];
+    if(values!=inline_values)free(values);
     return true;
+invalid:
+    if(values!=inline_values)free(values);
+    return false;
 }
 
 bool minias_evaluate_absolute_expression(MiniAs *as,
@@ -251,12 +260,17 @@ static bool affine_copy_symbol(const MiniAsExprSyntax *syntax,
 
 static bool affine_lower_syntax(MiniAs *as,const MiniAsExprSyntax *syntax,
                                 MiniAsAffineForm *result) {
-    MiniAsAffineValue values[512];
+    MiniAsAffineValue inline_values[512];
+    MiniAsAffineValue *values=inline_values;
     MiniAsAffineValue *root;
     size_t i;
     unsigned positive=2U,negative=2U;
     if(!syntax || !result || !syntax->count ||
-       syntax->count>sizeof(values)/sizeof(values[0]))return false;
+       syntax->count>MINIAS_EXPR_MAX_NODES)return false;
+    if(syntax->count>sizeof(inline_values)/sizeof(inline_values[0])) {
+        values=malloc(syntax->count*sizeof(*values));
+        if(!values)return false;
+    }
     memset(values,0,syntax->count*sizeof(values[0]));
     for(i=0U;i<syntax->count;++i) {
         const MiniAsExprNode *node=&syntax->nodes[i];
@@ -270,7 +284,7 @@ static bool affine_lower_syntax(MiniAs *as,const MiniAsExprSyntax *syntax,
         case MINIAS_EXPR_SYMBOL: {
             MiniAsSymbolExpr name;
             MiniAsSymbol *symbol;
-            if(!affine_copy_symbol(syntax,node,&name))return false;
+            if(!affine_copy_symbol(syntax,node,&name))goto invalid;
             symbol=as!=NULL?minias_get_symbol(as,name.name,false):NULL;
             if(symbol && symbol->defined &&
                symbol->section==MINIAS_SECTION_ABS)
@@ -286,32 +300,32 @@ static bool affine_lower_syntax(MiniAs *as,const MiniAsExprSyntax *syntax,
             out->dot_coefficient=1;
             break;
         case MINIAS_EXPR_UNARY:
-            if(node->left>=i || lhs->divisor!=0U)return false;
+            if(node->left>=i || lhs->divisor!=0U)goto invalid;
             *out=*lhs;
             if(affine_has_relocation(out)) {
-                if(node->unary!='-')return false;
+                if(node->unary!='-')goto invalid;
                 out->constant=signed_from_bits(0U-(uint64_t)out->constant);
                 out->dot_coefficient=-out->dot_coefficient;
                 for(unsigned k=0U;k<out->symbol_count;++k)
                     out->signs[k]=-out->signs[k];
             }else if(!evaluate_absolute_unary(node->unary,
                                                lhs->constant,&out->constant))
-                return false;
+                goto invalid;
             break;
         case MINIAS_EXPR_BINARY:
-            if(node->left>=i || node->right>=i)return false;
+            if(node->left>=i || node->right>=i)goto invalid;
             if((node->op==MINIAS_EXPR_OP_ADD ||
                 node->op==MINIAS_EXPR_OP_SUB) &&
                (affine_has_relocation(lhs) || affine_has_relocation(rhs))) {
                 if(!affine_combine(lhs,rhs,
                                   node->op==MINIAS_EXPR_OP_ADD?1:-1,out))
-                    return false;
+                    goto invalid;
             }else if(!affine_has_relocation(lhs) &&
                      !affine_has_relocation(rhs)) {
                 if(lhs->divisor!=0U || rhs->divisor!=0U ||
                    !evaluate_absolute_binary(node->op,lhs->constant,
                                              rhs->constant,&out->constant))
-                    return false;
+                    goto invalid;
             }else if((node->op==MINIAS_EXPR_OP_DIV ||
                       node->op==MINIAS_EXPR_OP_SHR) &&
                      i==syntax->root && lhs->divisor==0U &&
@@ -323,9 +337,9 @@ static bool affine_lower_syntax(MiniAs *as,const MiniAsExprSyntax *syntax,
                 out->divisor=out->logical_shift?
                     UINT64_C(1)<<(unsigned)rhs->constant:
                     (uint64_t)rhs->constant;
-            }else return false;
+            }else goto invalid;
             break;
-        default:return false;
+        default:goto invalid;
         }
     }
     root=&values[syntax->root];
@@ -334,19 +348,19 @@ static bool affine_lower_syntax(MiniAs *as,const MiniAsExprSyntax *syntax,
     result->logical_shift=root->logical_shift;
     for(i=0U;i<root->symbol_count;++i) {
         if(root->signs[i]==1) {
-            if(positive!=2U)return false;
+            if(positive!=2U)goto invalid;
             positive=(unsigned)i;
         }else if(root->signs[i]==-1) {
-            if(negative!=2U)return false;
+            if(negative!=2U)goto invalid;
             negative=(unsigned)i;
-        }else return false;
+        }else goto invalid;
     }
     if(positive!=2U &&
        !affine_copy_symbol(syntax,root->symbols[positive],&result->lhs))
-        return false;
+        goto invalid;
     if(negative!=2U &&
        !affine_copy_symbol(syntax,root->symbols[negative],&result->rhs))
-        return false;
+        goto invalid;
     result->lhs.addend=root->constant;
     if(root->symbol_count==1U && positive!=2U &&
        root->dot_coefficient==0 && root->divisor==0U)
@@ -363,8 +377,12 @@ static bool affine_lower_syntax(MiniAs *as,const MiniAsExprSyntax *syntax,
             root->dot_coefficient==0)
         result->kind=root->divisor!=0U?
             MINIAS_MC_EXPR_DIFFERENCE_DIV:MINIAS_MC_EXPR_DIFFERENCE;
-    else return false;
+    else goto invalid;
+    if(values!=inline_values)free(values);
     return true;
+invalid:
+    if(values!=inline_values)free(values);
+    return false;
 }
 
 /* The historical symbol-pair DTO also represents P-S, with the positive
@@ -677,17 +695,27 @@ bool minias_evaluate_deferred_expr(const MiniAs *as,
                                   const MiniAsDeferredExpr *tree,
                                   uint64_t dot,int dot_section,
                                   bool allow_same_section,int64_t *result) {
-    int64_t values[512];
+    int64_t inline_values[512];
+    int64_t *values=inline_values;
     /* ELF section identities are algebraic units, not just current numeric
      * addresses: .space (end_in_A-start_in_B) must NOT turn unrelated
      * relocations into an apparently absolute size.  A single live section
      * coefficient is enough for GNU's legal S1-S2, .-S and (. + addend)
      * forms.  Non-linear operators only accept already-absolute operands. */
-    int sections[512];
-    int coefficients[512];
+    int inline_sections[512];
+    int inline_coefficients[512];
+    int *sections=inline_sections;
+    int *coefficients=inline_coefficients;
     size_t i;
-    if(!tree || tree->count==0U || tree->count>512U ||
+    if(!tree || tree->count==0U || tree->count>MINIAS_EXPR_MAX_NODES ||
        dot>(uint64_t)INT64_MAX)return false;
+    if(tree->count>sizeof(inline_values)/sizeof(inline_values[0])) {
+        values=malloc(tree->count*(sizeof(*values)+sizeof(*sections)+
+                                   sizeof(*coefficients)));
+        if(!values)return false;
+        sections=(int *)(values+tree->count);
+        coefficients=sections+tree->count;
+    }
     for(i=0U;i<tree->count;++i) {
         const DeferredNode *n=&tree->nodes[i];
         int64_t l=0,r=0,v=0;
@@ -703,50 +731,50 @@ bool minias_evaluate_deferred_expr(const MiniAs *as,
         switch(n->op) {
         case DEF_LITERAL:v=n->value;break;
         case DEF_DOT:
-            if(dot_section<0)return false;
+            if(dot_section<0)goto invalid;
             v=(int64_t)dot;c=1;section=dot_section;
             break;
         case DEF_SYMBOL: {
             const MiniAsSymbol *sym;
-            if(n->symbol_index>=as->symbol_count)return false;
+            if(n->symbol_index>=as->symbol_count)goto invalid;
             sym=&as->symbols[n->symbol_index];
             if(!sym->defined || sym->section==MINIAS_SECTION_COMMON ||
                (sym->section!=MINIAS_SECTION_ABS &&
-                sym->value>(uint64_t)INT64_MAX))return false;
+                sym->value>(uint64_t)INT64_MAX))goto invalid;
             v=signed_from_bits(sym->value);
             if(sym->section!=MINIAS_SECTION_ABS) {
-                if(sym->section<0)return false;
+                if(sym->section<0)goto invalid;
                 c=1;section=sym->section;
             }
             break;
         }
         case DEF_NEG:
-            if(l==INT64_MIN)return false;
+            if(l==INT64_MIN)goto invalid;
             v=-l;c=-lc;section=ls;break;
         case DEF_INV:
-            if(lc!=0)return false;
+            if(lc!=0)goto invalid;
             v=~l;break;
         case DEF_LNOT:
-            if(lc!=0)return false;
+            if(lc!=0)goto invalid;
             v=l==0?1:0;break;
         case DEF_ADD:case DEF_SUB:
             /* Cross-section subtraction is not an absolute number, even
              * when both section-relative st_values happen to be equal. */
-            if(lc!=0 && rc!=0 && ls!=rs)return false;
+            if(lc!=0 && rc!=0 && ls!=rs)goto invalid;
             section=lc!=0?ls:rs;
             c=n->op==DEF_ADD?lc+rc:lc-rc;
             /* Two same-sign RELOC operands cannot be represented as one
              * ELF section-relative value: S1+S2 is invalid, S1-S2 is
              * absolute only when both symbols belong to one section. */
-            if(c>1 || c< -1)return false;
+            if(c>1 || c< -1)goto invalid;
             if(c==0)section=MINIAS_SECTION_ABS;
             if(!(n->op==DEF_ADD?
                  minias_checked_add_i64(l,r,&v):
-                 checked_sub_i64(l,r,&v)))return false;
+                 checked_sub_i64(l,r,&v)))goto invalid;
             break;
-        case DEF_MUL:if(!checked_mul_absolute_i64(l,r,&v))return false;break;
+        case DEF_MUL:if(!checked_mul_absolute_i64(l,r,&v))goto invalid;break;
         case DEF_DIV:case DEF_MOD:
-            if(r==0 || (l==INT64_MIN && r==-1))return false;
+            if(r==0 || (l==INT64_MIN && r==-1))goto invalid;
             v=n->op==DEF_DIV?l/r:l%r;break;
         case DEF_SHL:case DEF_SHR:
             /* GNU GAS treats right shifts of absolute 64-bit expressions
@@ -755,7 +783,7 @@ bool minias_evaluate_deferred_expr(const MiniAs *as,
              * the eager absolute grammar: bit 63 is a legal shift amount.
              * Only resolved absolute operands may reach this path (checked
              * below); a relocatable shift must never be guessed. */
-            if(r<0 || r>=64)return false;
+            if(r<0 || r>=64)goto invalid;
             bits=(uint64_t)l;
             if(n->op==DEF_SHL)bits<<=(unsigned)r;
             else bits>>=(unsigned)r;
@@ -771,21 +799,25 @@ bool minias_evaluate_deferred_expr(const MiniAs *as,
         case DEF_OR:v=l|r;break;
         case DEF_LAND:v=(l!=0 && r!=0)?1:0;break;
         case DEF_LOR:v=(l!=0 || r!=0)?1:0;break;
-        default:return false;
+        default:goto invalid;
         }
         /* Only add/sub preserve relocatable section affinity. All other
          * arithmetic must operate on an already absolute expression. */
-        if(n->op>=DEF_MUL && (lc!=0 || rc!=0))return false;
+        if(n->op>=DEF_MUL && (lc!=0 || rc!=0))goto invalid;
         values[i]=v;
         sections[i]=section;
         coefficients[i]=c;
     }
-    if(tree->root>=tree->count)return false;
+    if(tree->root>=tree->count)goto invalid;
     if(coefficients[tree->root]!=0 &&
        !(allow_same_section && coefficients[tree->root]==1 &&
-         sections[tree->root]==dot_section))return false;
+         sections[tree->root]==dot_section))goto invalid;
     *result=values[tree->root];
+    if(values!=inline_values)free(values);
     return true;
+invalid:
+    if(values!=inline_values)free(values);
+    return false;
 }
 
 /* Extract only the relocation-safe linear subset from the already compiled
