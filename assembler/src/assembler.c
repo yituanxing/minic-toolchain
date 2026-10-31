@@ -1180,29 +1180,13 @@ bool minias_code_alignment_preceded_by_adjacent_data(const MiniAs *as,
            previous->offset+previous->size==owner->offset;
 }
 
-/* This is the one storage-capacity owner for materialized Section data.
- * Fragment emitters may append a byte sequence, a large repeated fill, or
- * a fixed-width pattern; they must not re-enter the growth policy once per
- * source element.  NOBITS is handled by each caller's semantic contract. */
+/* Materialized Section data uses the same checked capacity owner as every
+ * Common vector. NOBITS remains each caller's semantic contract. */
 static bool minias_section_reserve(MiniAs *as,MiniAsSection *sec,size_t need) {
-    size_t next;
-    unsigned char *p;
-    if(need<=sec->capacity)return true;
-    next=sec->capacity==0U?64U:sec->capacity;
-    while(next<need) {
-        if(next>SIZE_MAX/2U) {
-            minias_set_error(as,"section-capacity-overflow:%s",sec->name);
-            return false;
-        }
-        next*=2U;
-    }
-    p=realloc(sec->data,next);
-    if(p==NULL) {
+    if(!minias_grow_array((void **)&sec->data,&sec->capacity,1U,need)) {
         minias_set_error(as,"out-of-memory:section-data");
         return false;
     }
-    sec->data=p;
-    sec->capacity=next;
     return true;
 }
 
@@ -3414,32 +3398,23 @@ static bool parse_numeric_label_id(const char *text, size_t *id) {
 }
 
 static bool ensure_numeric_label_slot(MiniAs *as, size_t id) {
-    size_t next_capacity;
-    size_t *next;
-
     if (id < as->numeric_label_capacity) {
         return true;
     }
-    next_capacity = as->numeric_label_capacity == 0U ? 16U
-                                                    : as->numeric_label_capacity;
-    while (next_capacity <= id) {
-        if (next_capacity > SIZE_MAX / 2U) {
-            minias_set_error(as, "numeric-label-too-large:%zu", id);
-            return false;
-        }
-        next_capacity *= 2U;
+    if (id >= SIZE_MAX/sizeof(*as->numeric_label_counts)) {
+        minias_set_error(as, "numeric-label-too-large:%zu", id);
+        return false;
     }
-    next = realloc(as->numeric_label_counts,
-                   next_capacity * sizeof(*as->numeric_label_counts));
-    if (next == NULL) {
+    size_t old_capacity=as->numeric_label_capacity;
+    if (!minias_grow_array((void **)&as->numeric_label_counts,
+                          &as->numeric_label_capacity,
+                          sizeof(*as->numeric_label_counts),id+1U)) {
         minias_set_error(as, "out-of-memory:numeric-labels");
         return false;
     }
-    memset(next + as->numeric_label_capacity,
-           0,
-           (next_capacity - as->numeric_label_capacity) * sizeof(*next));
-    as->numeric_label_counts = next;
-    as->numeric_label_capacity = next_capacity;
+    memset(as->numeric_label_counts + old_capacity, 0,
+           (as->numeric_label_capacity - old_capacity) *
+           sizeof(*as->numeric_label_counts));
     return true;
 }
 
@@ -3453,25 +3428,11 @@ static bool append_rewritten_text(char **buffer,
                                   size_t *capacity,
                                   const char *text,
                                   size_t count) {
-    size_t need = *size + count + 1U;
-    char *next;
-    size_t next_capacity;
-
-    if (need > *capacity) {
-        next_capacity = *capacity == 0U ? 64U : *capacity;
-        while (next_capacity < need) {
-            if (next_capacity > SIZE_MAX / 2U) {
-                return false;
-            }
-            next_capacity *= 2U;
-        }
-        next = realloc(*buffer, next_capacity);
-        if (next == NULL) {
-            return false;
-        }
-        *buffer = next;
-        *capacity = next_capacity;
-    }
+    size_t need;
+    if (*size == SIZE_MAX || count > SIZE_MAX-1U-*size) return false;
+    need = *size + count + 1U;
+    if (!minias_grow_array((void **)buffer,capacity,sizeof(**buffer),need))
+        return false;
     memcpy(*buffer + *size, text, count);
     *size += count;
     (*buffer)[*size] = '\0';
@@ -4881,6 +4842,8 @@ int minias_assemble_config(const char *input_path,
             minias_emit_sections(&as) &&
             (as.target->validate_output == NULL ||
              as.target->validate_output(&as)) &&
+            (as.target->finalize_output == NULL ||
+             as.target->finalize_output(&as)) &&
             (config->elf32 ? minias_write_elf32(&as, output_path)
                    : minias_write_elf64(&as, output_path))) {
             rc = 0;

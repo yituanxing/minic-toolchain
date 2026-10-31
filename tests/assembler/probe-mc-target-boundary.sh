@@ -73,6 +73,35 @@ for legacy in ('minias_encode_add_fixup', 'minias_encode_request_anchor',
         raise SystemExit('Legacy dual-track transaction API remains: ' + legacy)
 print('MINIAS_MC_ENCODE_BOUNDARY=PASS target_mutation=none requests=typed')
 PY
+# A post-emit validation hook must not hide object mutations. AArch64 and RV
+# add mapping symbols through an explicit finalization stage, while LoongArch
+# retains its separate validation. The writer runs after both phases.
+python3 - <<'PY'
+from pathlib import Path
+import re
+
+core = Path('assembler/src/minias_internal.h').read_text()
+driver = Path('assembler/src/assembler.c').read_text()
+targets = {
+    'aarch64_target.c': ('validate', 'a64_record_source_mappings'),
+    'riscv_target.c': ('strict_base_i_check_sections',
+                       'riscv_record_object_mapping_symbols'),
+}
+if not re.search(r'bool\s*\(\*finalize_output\)\s*\(MiniAs\s*\*\)', core):
+    raise SystemExit('Missing explicit Target output-finalization phase')
+steps = ('minias_emit_sections(&as)', 'as.target->validate_output(&as)',
+         'as.target->finalize_output(&as)', 'minias_write_elf64(&as, output_path)')
+offsets = [driver.find(step) for step in steps]
+if -1 in offsets or offsets != sorted(offsets):
+    raise SystemExit('Target validation/finalization/ELF output order drifted')
+for target, (validator, finalizer) in targets.items():
+    source = (Path('assembler/src') / target).read_text()
+    for hook, function in (('validate_output', validator),
+                           ('finalize_output', finalizer)):
+        if not re.search(r'\.' + hook + r'\s*=\s*' + function + r'\s*[,}]', source):
+            raise SystemExit(f'{target}: missing {hook}={function}')
+print('MINIAS_MC_OBJECT_FINALIZATION=PASS validation_before_mapping_before_writer=2')
+PY
 # Code alignment is a Target-owned NOP policy but still emits through the
 # identical MC byte transaction as every instruction. No architecture gets
 # a special direct-Section bridge for ALIGN or for an instruction emitter.

@@ -5785,7 +5785,7 @@ static bool validate(MiniAs *as) {
             return false;
         }
     }
-    return a64_record_source_mappings(as);
+    return true;
 }
 
 static bool aarch64_resolve_profile(const char *march, const char *mabi,
@@ -5839,6 +5839,7 @@ static const MiniAsTargetOps ops = {
     .fixup_relocation_type = aarch64_fixup_relocation_type,
     .parse_named_relocation = a64_named_relocation,
     .validate_output = validate,
+    .finalize_output = a64_record_source_mappings,
     .dot_relative_fixup = MINIAS_FIXUP_PREL32,
     .inst_directive_width = 4U,
     .default_exec_alignment = 1U,

@@ -920,10 +920,15 @@ typedef struct MiniAsTargetOps {
     bool (*parse_named_relocation)(const char *, MiniAsFixupKind *, unsigned *);
     bool supports_literal_pools; /* .ltorg/.pool only for a checked target */
     MiniAsLiteralPoolOrder literal_pool_order;
-    /* Optional post-emission ISA validation; NULL is a validated no-op.
-     * Strict RISC-V needs this gate, ordinary Targets need not install a
-     * synthetic always-true callback to satisfy Common. */
+    /* Post-emission validation checks finalized section bytes/placements.
+     * It may report errors, but must not introduce Object symbols, change
+     * section alignment or otherwise materialize object output. */
     bool (*validate_output)(MiniAs *);
+    /* Post-emission Target object finalization runs AFTER validation and
+     * BEFORE the ObjectWriter observes symbols, sections and relocations.
+     * ISA mapping symbols and target-driven section alignment belong here,
+     * not in an apparently read-only validation callback. NULL is a no-op. */
+    bool (*finalize_output)(MiniAs *);
     /* Target-advertised GNU implicit .eh_frame: never infer ISA from
      * numeric ELF e_machine inside Common CFI/layout dispatch. */
     bool cfi_implicit_eh_frame;

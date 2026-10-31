@@ -8,19 +8,9 @@ static bool append_byte(unsigned char **data,
                         size_t *size,
                         size_t *capacity,
                         unsigned int value) {
-    unsigned char *next;
-    size_t next_capacity;
-
-    if (*size == *capacity) {
-        if (*capacity > SIZE_MAX / 2U) return false;
-        next_capacity = *capacity == 0U ? 32U : *capacity * 2U;
-        next = realloc(*data, next_capacity);
-        if (next == NULL) {
-            return false;
-        }
-        *data = next;
-        *capacity = next_capacity;
-    }
+    if (*size == SIZE_MAX ||
+        !minias_grow_array((void **)data,capacity,sizeof(**data),*size+1U))
+        return false;
     (*data)[(*size)++] = (unsigned char)(value & 0xffU);
     return true;
 }

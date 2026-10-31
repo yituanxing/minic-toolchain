@@ -475,3 +475,46 @@ P0/P1 steps successful, with GNU AArch64/LoongArch64 baselines successful.
 The AArch64 job was still preserving artifacts and had not completed its
 final result at the last check. Keep the exact-head distinction in future
 acceptance reports; this remains the earlier commit, not this batch.
+
+## 12. Object finalization phase and last Common growth duplicates
+
+The source-backed P15 audit found that `validate_output` was not validation
+only: AArch64 injected `$x`/`$d` mapping symbols and adjusted Section
+alignment from retained `.inst`/alignment sites; RISC-V checked optional
+Base-I bytes *and then* inserted `$x<isa>` symbols. Those effects are legal
+late object construction, not dead logic. `MiniAsTargetOps` now separates
+`validate_output` from an optional mutable `finalize_output` callback. The
+driver runs them in this order after Common emission and before the ELF
+writer. AArch64's alignment validator and RISC-V's strict byte validator
+stay in validation; mapping/section completion is explicit finalization.
+LoongArch keeps validation only; x86-64 needs neither optional callback.
+
+This is an honest phase boundary, **not** an assertion that Target callbacks
+already have immutable phase-scoped view types. The AArch64 mapping planner
+still consults a few source directive spellings. Both remain future
+TargetParseView/TargetLayoutView and typed site-state cleanup, rather than
+prematurely redesigning the mapping algorithm or implementing COFF/Mach-O.
+
+The same source read identified four remaining generic reallocation loops:
+materialized Section data, numeric-label encounter counts, numeric-label
+text rewriting and string literal decoding. They now call the established
+`minias_grow_array` capacity owner, preserving zero-initialization of newly
+allocated label counters and the existing semantic NOBITS checks. The
+rewritten-text request also checks `size + count + terminator` overflow
+before allocation. The expression AST's custom `realloc` is retained:
+its inline-array-to-heap migration and hard AST node cap are distinct
+storage semantics, not another generic vector growth policy.
+
+Local pre-commit results for this pending batch: Release MiniAS build PASS;
+A0 **30/30 PASS**; strict GNU AArch64 mapping/section-alignment **3 PASS**;
+RISC-V target attribute/order/CSR probe PASS; LoongArch GNU odd-byte
+instruction-alignment probe PASS; x86-64 and RV64 SourceGraph replay/GNU
+oracles **2/2 PASS**; Target/Common structural boundary PASS including
+an explicit validation-before-finalization-before-writer assertion. Remote
+Linux/QEMU on this still-unpushed tree has **not** run.
+
+The preceding `d5fe7b3` batch's exact-HEAD ISA/ABI, x86/Loong GNU oracle,
+four-backend compiler runtime, GCC single-AS A/B, BusyBox, and runtime
+ladder workflows have all reported SUCCESS. Its full opt-in Linux runtime
+job was SKIPPED. Do not transfer the earlier `ae70920` full Linux P0/P1
+certificate to `d5fe7b3` or to this finalization cleanup.

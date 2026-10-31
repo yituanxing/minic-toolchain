@@ -728,11 +728,6 @@ static bool riscv_record_object_mapping_symbols(MiniAs *as) {
     return true;
 }
 
-static bool riscv_validate_output(MiniAs *as) {
-    return strict_base_i_check_sections(as) &&
-           riscv_record_object_mapping_symbols(as);
-}
-
 /* GAS's riscv_md_finish gates every deferred ULEB pair on the final global
  * relaxation mode, not on the individual source site's .option snapshot. */
 static bool riscv_leb128_relocations_enabled(const MiniAs *as) {
@@ -867,7 +862,8 @@ static const MiniAsTargetOps riscv_ops = {
     .leb128_relocations_enabled=riscv_leb128_relocations_enabled,
     .allow_local_section_symbol_fixup=
         riscv_allow_local_section_symbol_fixup,
-    .validate_output = riscv_validate_output,
+    .validate_output = strict_base_i_check_sections,
+    .finalize_output = riscv_record_object_mapping_symbols,
     /* RV64 DWARF register numbering: ra=x1, sp=x2; DW_CFA code unit
      * is one byte, stack slots are eight bytes (LP64). Both RV32/64
      * share this Target but DWARF64 address fields are explicitly gated
