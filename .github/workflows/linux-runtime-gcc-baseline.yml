@@ -1326,12 +1326,18 @@ jobs:
   # Explicit, optional 7-runner producer for the same pure-GCC C universe.
   # Do not use this lane for everyday single-TU debugging.
   gcc-shards:
-    needs: [rv64-campaign-gate, rv64-current-gnu-golden]
+    needs: [rv64-campaign-gate, rv64-current-gnu-golden, rv32i-kbuild-entry]
     if: >-
-      (github.event_name == 'workflow_dispatch' && inputs.mode == 'rv64-full') ||
-      (github.event_name == 'pull_request' && needs.rv64-campaign-gate.outputs.run == 'true') ||
-      (github.event_name == 'push' && !contains(github.event.head_commit.message, '[linux-runtime-gcc-receiver-reuse]') && ((contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]'))) || contains(github.event.head_commit.message, '[linux-perf-2064-ab]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-sharded]') || contains(github.event.head_commit.message, '[linux-minias-seven-shards]') || (contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-replay]')) || contains(github.event.head_commit.message, '[linux-minipp-native-rules-C]') || contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux2064]') || contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux2064]'))) ||
-      (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]'))
+      always() &&
+      needs.rv64-campaign-gate.result == 'success' &&
+      needs.rv64-current-gnu-golden.result == 'success' &&
+      (github.event_name != 'pull_request' || !contains(github.event.pull_request.title, '[minic-full]') || needs.rv32i-kbuild-entry.result == 'success') &&
+      (
+        (github.event_name == 'workflow_dispatch' && inputs.mode == 'rv64-full') ||
+        (github.event_name == 'pull_request' && needs.rv64-campaign-gate.outputs.run == 'true') ||
+        (github.event_name == 'push' && !contains(github.event.head_commit.message, '[linux-runtime-gcc-receiver-reuse]') && ((contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]'))) || contains(github.event.head_commit.message, '[linux-perf-2064-ab]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-sharded]') || contains(github.event.head_commit.message, '[linux-minias-seven-shards]') || (contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-replay]')) || contains(github.event.head_commit.message, '[linux-minipp-native-rules-C]') || contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux2064]') || contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux2064]'))) ||
+        (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]'))
+      )
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     strategy:
@@ -2657,7 +2663,7 @@ jobs:
           mkdir -p "$dir/trials"
           printf 'attempt\timage_sha256\tverdict\n' > "$dir/p1-repeats.tsv"
           printf 'commit=%s\nimage_sha256=%s\nproducer_run=%s\n' \
-            "$GITHUB_SHA" "$sha" "$GITHUB_RUN_ID" > "$dir/source-identity.txt"
+            "$MINIC_EXPECTED_HEAD_SHA" "$sha" "$GITHUB_RUN_ID" > "$dir/source-identity.txt"
           # Verify a real ELF32 shell in this exact newly linked kernel.
           RV32I_QEMU_P1=1 RV32I_QEMU_SHELL=1 \
           RV32I_QEMU_IMAGE="$image" \
@@ -3980,7 +3986,9 @@ jobs:
   # as RV64. Seed ELF32 GNU golden once, cache it by original config and
   # GNU tool identity, then let the existing gcc-shards matrix consume it.
   rv32i-kbuild-entry:
-    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[linux-rv32i-golden]')
+    if: >-
+      (github.event_name == 'push' && contains(github.event.head_commit.message, '[linux-rv32i-golden]')) ||
+      (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]'))
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     outputs:
@@ -4014,6 +4022,10 @@ jobs:
         run: |
           set -Eeuo pipefail
           cfg=$(sha256sum build/rv32i-linux-entry/out/.config | cut -d' ' -f1)
+          test "$cfg" = "$RV32I_GNU_GOLDEN_CONFIG_SHA256" || {
+            echo "RV32I_GNU_GOLDEN_CONFIG=FAIL expected=$RV32I_GNU_GOLDEN_CONFIG_SHA256 actual=$cfg" >&2
+            exit 1
+          }
           gcc=$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -c1-16)
           ld=$(sha256sum "$(command -v riscv64-linux-gnu-ld)" | cut -c1-16)
           as=$(sha256sum "$(command -v riscv64-linux-gnu-as)" | cut -c1-16)
@@ -4046,6 +4058,7 @@ jobs:
           grep -Fxq 'isa=rv32i' "$ev/provenance/gcc-baseline.txt"
           grep -Fxq 'abi=ilp32' "$ev/provenance/gcc-baseline.txt"
           test -s "$ev/provenance/full-c-objects.txt"
+          test "$(sed '/^#/d;/^$/d' "$ev/provenance/full-c-objects.txt" | wc -l)" -eq 1741
           test -s "$ev/out/arch/riscv/boot/Image"
           (cd "$ev/out" && sha256sum --quiet -c "../provenance/gcc-objects.sha256")
           echo "RV32I_GNU_GOLDEN_CACHE=VERIFIED hit=${{ steps.rv32_gold_cache.outputs.cache-hit }}"
