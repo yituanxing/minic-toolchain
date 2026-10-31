@@ -219,7 +219,9 @@ static bool x86_emit_function(FILE *out, const MinicC0Program *program,
                               const MinicTargetInfo *target, const MinicFunction *declaration,
                               const MinicCoreFunction *fn, const MinicCoreFunctionFacts *facts,
                               const MinicCoreObjectStoragePlan *storage,
-                              size_t function_id, bool function_sections, MinicDiagnostic *diag, const char *path) {
+                              size_t function_id, bool function_sections,
+                              bool inherited_head_address_context,
+                              MinicDiagnostic *diag, const char *path) {
     MinicX86Frame frame = {0};
     const char *name = minic_c0_function_symbol_name(declaration);
     size_t block_index;
@@ -288,8 +290,9 @@ static bool x86_emit_function(FILE *out, const MinicC0Program *program,
     }
     frame.function_value_use_counts = function_value_use_counts;
     frame.kernel_head_link_addresses = !target->position_independent &&
-        declaration->section_name != NULL &&
-        strcmp(declaration->section_name, ".head.text") == 0;
+        (inherited_head_address_context ||
+         (declaration->section_name != NULL &&
+          strcmp(declaration->section_name, ".head.text") == 0));
     if (frame.kernel_head_link_addresses) {
         size_t i;
         if (fn->value_count > SIZE_MAX / sizeof(*head_memory_rebase_globals) ||
@@ -579,7 +582,123 @@ done:
 typedef struct MinicX86VisitContext {
     MinicDiagnostic *diagnostic;
     const char *path;
+    const bool *head_address_context;
 } MinicX86VisitContext;
+
+typedef struct MinicX86FunctionNameIndex {
+    const char *name;
+    size_t index;
+} MinicX86FunctionNameIndex;
+
+static int x86_compare_function_names(const void *left, const void *right) {
+    const MinicX86FunctionNameIndex *a = left, *b = right;
+    return strcmp(a->name, b->name);
+}
+
+static size_t x86_find_function_name(
+    const MinicX86FunctionNameIndex *names, size_t count, const char *name) {
+    const MinicX86FunctionNameIndex key = {name, 0U};
+    const MinicX86FunctionNameIndex *found;
+    if (name == NULL) return SIZE_MAX;
+    found = bsearch(&key, names, count, sizeof(*names),
+                    x86_compare_function_names);
+    return found != NULL ? found->index : SIZE_MAX;
+}
+
+/* An unannotated static helper called exclusively from .head.text executes
+ * before the normal kernel virtual mapping exists. The section annotation
+ * belongs to the caller, but its address-role contract reaches the callee:
+ * fixup_pointer(&global, physbase) needs the *link VMA*, not a RIP-relative
+ * already-relocated pointer. Do not extend this to a helper shared by normal
+ * code or whose address escapes through a function pointer. */
+static bool *x86_head_address_call_closure(
+    const MinicC0Program *program, const MinicCoreFunction *functions,
+    size_t function_count) {
+    MinicX86FunctionNameIndex *names = NULL;
+    bool *head = NULL, *head_call = NULL, *normal_call = NULL, *address_taken = NULL;
+    bool changed;
+    size_t i;
+    names = calloc(function_count == 0U ? 1U : function_count, sizeof(*names));
+    head = calloc(function_count == 0U ? 1U : function_count, sizeof(*head));
+    head_call = calloc(function_count == 0U ? 1U : function_count,
+                       sizeof(*head_call));
+    normal_call = calloc(function_count == 0U ? 1U : function_count,
+                         sizeof(*normal_call));
+    address_taken = calloc(function_count == 0U ? 1U : function_count,
+                           sizeof(*address_taken));
+    if (!names || !head || !head_call || !normal_call || !address_taken)
+        goto fail;
+    for (i = 0U; i < function_count; ++i) {
+        const MinicFunction *decl = &program->functions[i];
+        names[i].name = minic_c0_function_symbol_name(decl);
+        names[i].index = i;
+        if (names[i].name == NULL) goto fail;
+        head[i] = decl->section_name != NULL &&
+                  strcmp(decl->section_name, ".head.text") == 0;
+    }
+    qsort(names, function_count, sizeof(*names), x86_compare_function_names);
+    /* Taking a function's address permits an opaque, possibly non-head
+     * caller, regardless of the direct-call census. */
+    for (i = 0U; i < function_count; ++i) {
+        const MinicCoreFunction *fn = &functions[i];
+        size_t j;
+        for (j = 0U; j < fn->instruction_count; ++j) {
+            const MinicCoreInstruction *ins = &fn->instructions[j];
+            size_t callee_index;
+            if (ins->kind != MINIC_CORE_INSTRUCTION_FUNCTION_ADDRESS ||
+                ins->value.function_symbol_id >= fn->function_symbol_count)
+                continue;
+            callee_index = x86_find_function_name(
+                names, function_count,
+                fn->function_symbols[ins->value.function_symbol_id].name);
+            if (callee_index < function_count)
+                address_taken[callee_index] = true;
+        }
+    }
+    do {
+        changed = false;
+        memset(head_call, 0, function_count * sizeof(*head_call));
+        memset(normal_call, 0, function_count * sizeof(*normal_call));
+        for (i = 0U; i < function_count; ++i) {
+            const MinicCoreFunction *fn = &functions[i];
+            size_t j;
+            for (j = 0U; j < fn->instruction_count; ++j) {
+                const MinicCoreInstruction *ins = &fn->instructions[j];
+                size_t callee_index;
+                if (ins->kind != MINIC_CORE_INSTRUCTION_CALL ||
+                    ins->value.call.callee_id >= fn->callee_count)
+                    continue;
+                callee_index = x86_find_function_name(
+                    names, function_count,
+                    fn->callees[ins->value.call.callee_id].name);
+                if (callee_index >= function_count) continue;
+                if (head[i]) head_call[callee_index] = true;
+                else normal_call[callee_index] = true;
+            }
+        }
+        for (i = 0U; i < function_count; ++i) {
+            const MinicFunction *decl = &program->functions[i];
+            if (!head[i] && head_call[i] && !normal_call[i] &&
+                !address_taken[i] && decl->is_internal &&
+                decl->section_name == NULL) {
+                head[i] = true;
+                changed = true;
+            }
+        }
+    } while (changed);
+    free(names);
+    free(head_call);
+    free(normal_call);
+    free(address_taken);
+    return head;
+fail:
+    free(names);
+    free(head);
+    free(head_call);
+    free(normal_call);
+    free(address_taken);
+    return NULL;
+}
 
 static bool x86_visit_global(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
@@ -665,7 +784,10 @@ static bool x86_visit_function(
     bool function_sections, void *opaque) {
     const MinicX86VisitContext *ctx = opaque;
     return x86_emit_function(out, program, target, decl, fn, facts, storage, index,
-                             function_sections, ctx->diagnostic, ctx->path);
+                             function_sections,
+                             ctx->head_address_context != NULL &&
+                             ctx->head_address_context[index],
+                             ctx->diagnostic, ctx->path);
 }
 
 static bool x86_between(
@@ -705,7 +827,7 @@ bool minic_x86_64_write_c0_program_with_core_functions(
         MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS, false
     };
     bool success;
-    const MinicX86VisitContext visits = { diagnostic, path };
+    MinicX86VisitContext visits = { diagnostic, path, NULL };
     if (path == NULL || program == NULL || target == NULL ||
         target->architecture != MINIC_TARGET_ARCH_X86_64 ||
         (core_function_count != 0U && core_functions == NULL) ||
@@ -713,9 +835,18 @@ bool minic_x86_64_write_c0_program_with_core_functions(
         x86_error(diagnostic, path, "x86-64 invalid program or target");
         return false;
     }
+    if (!target->position_independent) {
+        visits.head_address_context = x86_head_address_call_closure(
+            program, core_functions, core_function_count);
+        if (visits.head_address_context == NULL) {
+            x86_error(diagnostic, path, "x86-64 cannot plan early head call roles");
+            return false;
+        }
+    }
     success = minic_program_emit_write(
         path, program, target, core_functions, core_function_count,
         function_sections, &config, (void *)&visits);
+    free((void *)visits.head_address_context);
     if (!success && diagnostic != NULL && diagnostic->message[0] == '\0')
         x86_error(diagnostic, path, "x86-64 cannot emit assembly");
     return success;

@@ -16,6 +16,10 @@ extern void kernel_head_direct_global_probe(unsigned long value);
 extern volatile unsigned long kernel_head_mixed_global;
 extern unsigned long kernel_head_mixed_store_then_vma(unsigned long);
 extern unsigned long kernel_head_mixed_vma_then_store(unsigned long);
+extern unsigned long kernel_head_helper_target;
+extern unsigned long kernel_head_helper_entry(unsigned long);
+extern unsigned long kernel_head_shared_entry(void);
+extern unsigned long kernel_head_shared_normal(void);
 static int head_direct_consumer_ok;
 
 void kernel_head_direct_data_consumer(struct kernel_head_probe_desc *desc) {
@@ -73,6 +77,11 @@ int main(void) {
             kernel_head_mixed_store_then_vma, 0x195ac3UL)) return 9;
     if (!check_displaced_mixed_use(
             kernel_head_mixed_vma_then_store, 0x8f71UL)) return 10;
+    if (kernel_head_helper_entry(0x2000UL) !=
+            (unsigned long)&kernel_head_helper_target - linked + 0x2000UL ||
+        kernel_head_shared_entry() != (unsigned long)&kernel_head_helper_target ||
+        kernel_head_shared_normal() != (unsigned long)&kernel_head_helper_target)
+        return 11;
     /* The displacement-to-RIP representation is wrong for this function:
      * a relocated copy must still produce the original link-time symbol VMA. */
     memcpy(page, (const void *)(uintptr_t)&kernel_head_link_address_probe, 256);

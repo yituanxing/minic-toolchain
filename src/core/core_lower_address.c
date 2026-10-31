@@ -1,4 +1,5 @@
 #include "core/core_lower_internal.h"
+#include "core/local_facts.h"
 #include "frontend/expression_semantics.h"
 #include <inttypes.h>
 #include <stdint.h>
@@ -349,9 +350,18 @@ MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
                 pointer_expression->value.unary.operand);
             if (object_expression != NULL &&
                 object_expression->value_category == MINIC_VALUE_LVALUE &&
-                minic_type_equal(object_expression->type, expression->type))
+                minic_type_equal(object_expression->type, expression->type)) {
+                /* The syntactic ADDRESS_OF was bypassed by *& cancellation.
+                 * Preserve its local-fact escape effect: the resulting lvalue
+                 * may be stored through, even though no pointer SSA is needed.
+                 * Otherwise a later branch can reuse a constant from before
+                 * *(&local) = value and silently choose the wrong edge. */
+                if (object_expression->kind == MINIC_EXPRESSION_LOCAL)
+                    minic_core_local_fact_escape(
+                        context, object_expression->value.local_id);
                 return lower_address(context,
                     pointer_expression->value.unary.operand, address_id);
+            }
         }
         status = lower_expression(context, expression->value.unary.operand, &pointer_id);
         if (status != MINIC_CORE_LOWER_OK) {

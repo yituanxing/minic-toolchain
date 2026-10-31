@@ -33,6 +33,21 @@ mixed_link_vma=$(sed -n '/\.rela.head.text/,/Relocation section/p' "$work/head.r
     | grep -Ec 'R_X86_64_32S.*kernel_head_mixed_global' || true)
 test "$mixed_physical" -ge 2 && test "$mixed_link_vma" -eq 2 \
     || fail 'same head global lost its two physical-store/link-VMA address roles'
+# The .head.text call graph extends into unannotated static helpers. Their
+# fixup_pointer inputs still need link VMAs (32S); a static helper also called
+# from normal .text must remain ordinary PC-relative instead.
+sed -n '/^kernel_head_only_helper:$/,/^\.size kernel_head_only_helper,/p' "$work/head.s" \
+    | grep -Eq 'movq \$kernel_head_helper_target, %rax' \
+    || fail 'head-only static helper lost link-VMA global producer'
+sed -n '/^kernel_head_shared_helper:$/,/^\.size kernel_head_shared_helper,/p' "$work/head.s" \
+    | grep -Eq 'leaq kernel_head_helper_target\(%rip\), %rax' \
+    || fail 'shared static helper incorrectly inherited early-head role'
+sed -n '/\.rela.text/,/Relocation section/p' "$work/head.reloc" \
+    | grep -Eq 'R_X86_64_32S.*kernel_head_helper_target' \
+    || fail 'head-only static helper did not produce ELF absolute relocation'
+sed -n '/\.rela.text/,/Relocation section/p' "$work/head.reloc" \
+    | grep -Eq 'R_X86_64_PC32.*kernel_head_helper_target' \
+    || fail 'normal shared static helper lost PC-relative ELF relocation'
 sed -n '/\.rela.text/,/Relocation section/p' "$work/head.reloc" \
     | grep -Eq 'R_X86_64_PC32.*kernel_link_address_probe_anchor' \
     || fail 'regular .text changed its established PC-relative relocation'
@@ -46,6 +61,11 @@ sed -n '/\.rela.text/,/Relocation section/p' "$work/head.reloc" \
 # displaced code+data runtime oracle with its output, not only MiniC's.
 "$cc" -std=gnu11 -O0 -fno-PIE -S "$work/probe.i" -o "$work/gnu-head.s" \
     || fail 'GNU baseline x86 assembly'
+"$cc" -std=gnu11 -O0 -fno-PIE -mcmodel=kernel -S "$work/probe.i" \
+    -o "$work/gnu-kernel.s" || fail 'GNU kernel-code-model assembly'
+sed -n '/^kernel_head_only_helper:$/,/^\s*\.size\s*kernel_head_only_helper,/p' "$work/gnu-kernel.s" \
+    | grep -Eq 'movq[[:space:]]+\$kernel_head_helper_target,' \
+    || fail 'GNU kernel model does not confirm helper link-VMA address role'
 "$cc" -no-pie -x assembler -c "$work/gnu-head.s" -o "$work/gnu-head.o" \
     || fail 'GNU baseline object'
 readelf -rW "$work/gnu-head.o" > "$work/gnu-head.reloc" \
@@ -70,4 +90,4 @@ if sed -n '/\.rela.head.text/,/Relocation section/p' "$work/pie.reloc" \
     | grep -Eq 'R_X86_64_32S.*kernel_link_address_probe_anchor'; then
     fail 'PIE .head.text unexpectedly received kernel absolute relocation'
 fi
-echo 'X86_KERNEL_HEAD_LINK_ADDRESS=PASS head_link=R_X86_64_32S head_direct=R_X86_64_PC32 head_mixed=PC32+32S normal=R_X86_64_PC32 PIE=no_32S relocated_runtime=PASS relocated_mixed=PASS gnu_same_source=PASS'
+echo 'X86_KERNEL_HEAD_LINK_ADDRESS=PASS head_link=R_X86_64_32S head_direct=R_X86_64_PC32 head_mixed=PC32+32S helper_closure=32S shared_helper=PC32 normal=R_X86_64_PC32 PIE=no_32S relocated_runtime=PASS relocated_mixed=PASS gnu_same_source=PASS'
