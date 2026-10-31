@@ -53,9 +53,63 @@ class X86TraceTest(unittest.TestCase):
         self.assertFalse(report["repeated_reset_observed"])
         self.assertIn("0000000000101234", report["observed_pc_samples"])
         self.assertTrue(report["x86_register_dump_tail"])
-        self.assertEqual(report["diagnostic_qemu_command"][:-4], report["original_qemu_command"])
+        self.assertEqual(report["diagnostic_qemu_command"][:len(report["original_qemu_command"])],
+                         report["original_qemu_command"])
+        self.assertEqual(report["diagnostic_qemu_command"][-2], "-qmp")
+        self.assertEqual(report["qmp_pc_samples"], [])
+        self.assertEqual(report["qmp_observation"], "UNAVAILABLE")
         with self.assertRaises(FileExistsError):
             t.run(**self.args)
+
+    def test_bounded_qmp_samples_multiple_live_pcs(self):
+        # A QMP server is deliberately modeled by the fake QEMU process; this
+        # tests real Unix socket framing/handshake rather than mocked samples.
+        self.qemu.write_text('''#!/usr/bin/env python3
+import json, pathlib, socket, sys, time
+args = sys.argv
+pathlib.Path(args[args.index("-D")+1]).write_text("CPU Reset (CPU 0)\\n")
+name = args[args.index("-qmp")+1].split(",", 1)[0].removeprefix("unix:")
+with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
+    server.bind(name)
+    server.listen(4)
+    server.settimeout(0.1)
+    began = time.monotonic()
+    sample = 0
+    while time.monotonic() - began < 2.2:
+        try:
+            connection, _ = server.accept()
+        except socket.timeout:
+            continue
+        with connection:
+            connection.settimeout(1)
+            stream = connection.makefile("rwb")
+            stream.write(json.dumps({"QMP":{"version":{},"capabilities":[]}}).encode()+b"\\n")
+            stream.flush()
+            request = json.loads(stream.readline())
+            assert request["execute"] == "qmp_capabilities"
+            stream.write(b'{"return":{},"id":"enable"}\\n')
+            stream.flush()
+            request = json.loads(stream.readline())
+            assert request["execute"] == "human-monitor-command"
+            assert request["arguments"]["command-line"] == "info registers"
+            sample += 1
+            regs = "RIP=%016x RAX=00000000\\nCS =0008 00000000\\nCR0=80000011\\nEFER=00000500\\n" % (0xfff0 if sample == 1 else 0x100000 + sample)
+            stream.write(json.dumps({"return":regs,"id":"registers"}).encode()+b"\\n")
+            stream.flush()
+''')
+        self.args["timeout"] = 3
+        report = t.run(**self.args)
+        self.assertEqual(report["qmp_observation"], "LIVE_PC_SAMPLED",
+                         msg=(report["qmp_errors"], (self.args["output"] / "diagnostic-serial.log").read_text()))
+        self.assertGreaterEqual(len(report["qmp_pc_samples"]), 2)
+        self.assertEqual(report["qmp_pc_samples"][0]["pc"], "000000000000fff0")
+        self.assertTrue(any(int(row["pc"], 16) >= 0x100000
+                            for row in report["qmp_pc_samples"][1:]))
+        self.assertTrue(all("elapsed_seconds" in row and row["cr0"] == "80000011"
+                            for row in report["qmp_pc_samples"]))
+        self.assertFalse(report["diagnostic_timed_out"])
+        self.assertTrue(report["original_inputs_unchanged"])
+        self.assertEqual(report["verdict"], t.VERDICT)
 
     def test_non_bios_log_rejected(self):
         for data in (b"", b"Linux version", self.failed.read_bytes() + b"Linux version 6.6\n"):

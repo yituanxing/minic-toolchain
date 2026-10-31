@@ -104,13 +104,16 @@ def compiler_pair(compiler: Path, expected: dict | None = None) -> dict[str, str
 
 def verify_gnu_kbuild_commands(out: Path, rows: list[dict], gcc: str,
                                target: str | None = None) -> dict:
-    """Verify canonical GNU flags and report unqualified codegen options.
+    """Verify SHA-bound GNU .cmd and separate *unqualified* flag categories.
 
-    This remains diagnostic during the full C/AS/link/QEMU campaign: missing
-    feature equivalence must be visible, never silently promoted to strict
-    source-option qualification or used to skip the next Linux error.
+    This remains diagnostic during full C/AS/link/QEMU, but the final strict
+    option-parity gate fails closed on ANY unqualified category, including
+    -O and -g. Neither successful P0/P1 nor accepted GNU AS proves GCC's
+    optimization-dependent builtins or BTF metadata are MiniC-equivalent.
     """
-    missing = Counter()
+    categories = {key: Counter() for key in
+                  ("mandatory", "optimization", "debug_metadata", "target_defaults", "forwarded")}
+    affected = Counter()
     unqualified_owners = 0
     for row in rows:
         name = PurePosixPath(row["object"])
@@ -130,17 +133,34 @@ def verify_gnu_kbuild_commands(out: Path, rows: list[dict], gcc: str,
             raise Rejected(f"original GNU AS machine options changed: {name}")
         if row.get("minic_flags") != authentic_minic_flags:
             raise Rejected(f"original GNU C language/ABI options changed: {name}")
-        options = frozen_kbuild_oracle().unqualified_gnu_codegen_flags(
+        audit = frozen_kbuild_oracle().gnu_codegen_option_audit(
             frozen_kbuild_oracle().gnu_command_tokens(raw_cmd, gcc),
-            authentic_minic_flags)
-        if options:
+            authentic_minic_flags, target)
+        for category, flags in audit.items():
+            categories[category].update(flags)
+            if flags:
+                affected[category] += 1
+        if any(audit[category] for category in
+               ("mandatory", "optimization", "debug_metadata")):
             unqualified_owners += 1
-            missing.update(options)
+    missing = categories["mandatory"] + categories["optimization"] + categories["debug_metadata"]
+    observed = Counter()
+    for counts in categories.values():
+        observed.update(counts)
     status = ("INCONCLUSIVE_UNQUALIFIED" if missing else
               "NO_UNQUALIFIED_GNU_CODEGEN_OPTIONS")
     return {"gnu_c_option_equivalence": status,
+            "gnu_c_option_observed_counts": dict(sorted(observed.items())),
             "gnu_c_option_unqualified_owners": unqualified_owners,
-            "gnu_c_option_unqualified_counts": dict(sorted(missing.items()))}
+            "gnu_c_option_unqualified_counts": dict(sorted(missing.items())),
+            "gnu_c_option_mandatory_owners": affected["mandatory"],
+            "gnu_c_option_mandatory_counts": dict(sorted(categories["mandatory"].items())),
+            "gnu_c_option_optimization_owners": affected["optimization"],
+            "gnu_c_option_optimization_counts": dict(sorted(categories["optimization"].items())),
+            "gnu_c_option_debug_metadata_owners": affected["debug_metadata"],
+            "gnu_c_option_debug_metadata_counts": dict(sorted(categories["debug_metadata"].items())),
+            "gnu_c_option_target_default_counts": dict(sorted(categories["target_defaults"].items())),
+            "gnu_c_option_forwarded_counts": dict(sorted(categories["forwarded"].items()))}
 
 
 def gnu_assembler_command(gcc: str, row: dict, asm: Path, obj: Path) -> list[str]:
@@ -209,7 +229,12 @@ def candidate_inputs(target: str, work: Path, compiler: Path,
     option_contract = verify_gnu_kbuild_commands(out, rows, gcc, target)
     print(f"GNU_C_OPTION_EQUIVALENCE={option_contract['gnu_c_option_equivalence']} "
           f"target={target} owners={option_contract['gnu_c_option_unqualified_owners']}/{len(rows)} "
-          f"distinct_options={len(option_contract['gnu_c_option_unqualified_counts'])}")
+          f"observed_distinct={len(option_contract['gnu_c_option_observed_counts'])} "
+          f"unqualified_distinct={len(option_contract['gnu_c_option_unqualified_counts'])} "
+          f"mandatory={len(option_contract['gnu_c_option_mandatory_counts'])} "
+          f"optimization={len(option_contract['gnu_c_option_optimization_counts'])} "
+          f"debug_metadata={len(option_contract['gnu_c_option_debug_metadata_counts'])} "
+          f"target_defaults={len(option_contract['gnu_c_option_target_default_counts'])}")
     for row in rows:
         name = PurePosixPath(row["object"])
         allowed = ALLOWED_CFLAGS | (LOONGARCH_ABI_FLAGS if target == "loongarch64" else set()) | (
@@ -1599,6 +1624,9 @@ def boot_and_compare(data: dict, output: Path, initramfs: Path,
                   compiler_cc_sha256=data["compiler_cc_sha256"],
                   gnu_c_option_equivalence=data["gnu_c_option_equivalence"],
                   gnu_c_option_unqualified_owners=data["gnu_c_option_unqualified_owners"],
+                  gnu_c_option_mandatory_owners=data["gnu_c_option_mandatory_owners"],
+                  gnu_c_option_optimization_owners=data["gnu_c_option_optimization_owners"],
+                  gnu_c_option_debug_metadata_owners=data["gnu_c_option_debug_metadata_owners"],
                   golden_c_owners=data["gnu_c_owners"],
                   minic_c_owners=data["gnu_c_owners"], gnu_c_fallback_count=0,
                   lanes=[], verdict="MINIC_QEMU_NOT_CERTIFIED")
@@ -1782,7 +1810,8 @@ def self_test() -> None:
         vdso_cmd = gnu_obj.parent / ".vgetcpu.o.cmd"
         vdso_cmd.write_text(
             f"savedcmd_{vdso_owner} := gcc -O2 -c -o {vdso_owner} "
-            "arch/x86/entry/vdso/vgetcpu.c\n")
+            "arch/x86/entry/vdso/vgetcpu.c\n"
+            f"source_{vdso_owner} := arch/x86/entry/vdso/vgetcpu.c\n")
         vdso_i = vdso_work / "frozen/i/arch/x86/entry/vdso/vgetcpu.i"
         vdso_i.parent.mkdir(parents=True)
         vdso_i.write_text("int original_vdso_probe(void) { return 7; }\n")
@@ -1833,7 +1862,8 @@ def self_test() -> None:
             original.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(gnu_obj, original)
             cmd = original.parent / ("." + original.name + ".cmd")
-            cmd.write_text(f"savedcmd_{name} := gcc -c -o {name} {name[:-2]}.c\n")
+            cmd.write_text(f"savedcmd_{name} := gcc -c -o {name} {name[:-2]}.c\n"
+                           f"source_{name} := {name[:-2]}.c\n")
             frozen_path = first_work / "frozen/i" / PurePosixPath(name).with_suffix(".i")
             frozen_path.parent.mkdir(parents=True, exist_ok=True)
             frozen_path.write_text(f"/* untouched GNU -E owner {i} */\n")
@@ -2220,6 +2250,45 @@ def self_test() -> None:
         else:
             raise AssertionError("forged original GNU C ABI flags escaped .cmd gate")
         metadata[0]["minic_flags"] = []
+        # -O2 may change GNU builtins/asm folding, and -g may supply BTF:
+        # both are separately reported, but neither can silently confer a
+        # strict GNU option-equivalence PASS merely because QEMU boots.
+        cmd.write_text("savedcmd_kernel/canonical.o := gcc -O2 -g -c -o "
+                       "kernel/canonical.o kernel/canonical.c\n"
+                       "source_kernel/canonical.o := kernel/canonical.c\n")
+        metadata[0]["cmd_sha256"] = sha(cmd)
+        option_audit = verify_gnu_kbuild_commands(out, metadata, "gcc", "aarch64")
+        assert option_audit["gnu_c_option_equivalence"] == "INCONCLUSIVE_UNQUALIFIED"
+        assert option_audit["gnu_c_option_mandatory_counts"] == {}
+        assert option_audit["gnu_c_option_optimization_counts"] == {"-O2": 1}
+        assert option_audit["gnu_c_option_debug_metadata_counts"] == {"-g": 1}
+        assert option_audit["gnu_c_option_unqualified_owners"] == 1
+        cmd.write_text("savedcmd_kernel/canonical.o := gcc -mabi=lp64 "
+                       "-mlittle-endian -mbranch-protection=pac-ret "
+                       "-fstack-protector-strong -ftrivial-auto-var-init=zero "
+                       "-fno-strict-aliasing -O2 -g -c -o "
+                       "kernel/canonical.o kernel/canonical.c\n"
+                       "source_kernel/canonical.o := kernel/canonical.c\n")
+        metadata[0]["cmd_sha256"] = sha(cmd)
+        metadata[0]["gnu_as_flags"] = ["-mabi=lp64", "-mlittle-endian",
+                                       "-mbranch-protection=pac-ret"]
+        option_audit = verify_gnu_kbuild_commands(out, metadata, "gcc", "aarch64")
+        assert option_audit["gnu_c_option_target_default_counts"] == {
+            "-mabi=lp64": 1, "-mlittle-endian": 1}
+        assert set(option_audit["gnu_c_option_mandatory_counts"]) == {
+            "-mbranch-protection=pac-ret", "-fstack-protector-strong",
+            "-ftrivial-auto-var-init=zero", "-fno-strict-aliasing"}
+        assert option_audit["gnu_c_option_mandatory_owners"] == 1
+        # SHA stays authoritative, even when a C option is metadata-only.
+        metadata[0]["cmd_sha256"] = "0" * 64
+        try:
+            verify_gnu_kbuild_commands(out, metadata, "gcc", "aarch64")
+        except Rejected:
+            failures_checked += 1
+        else:
+            raise AssertionError("changed GNU .cmd escaped original SHA gate")
+        metadata[0]["cmd_sha256"] = sha(cmd)
+        metadata[0]["gnu_as_flags"] = []
         assert verify_postlink_c_owners(out, evidence, "x86_64", expected)["verdict"] == \
             "POSTLINK_ALL_C_MINIC_SHA_PASS"
         first_pass = {"target": "x86_64", "unexpected_gnu_c_owners": [],

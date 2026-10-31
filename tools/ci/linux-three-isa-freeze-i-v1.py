@@ -42,6 +42,31 @@ X86_CODEGEN_FLAGS={
     "-fpatchable-function-entry=16,16",
     "-fpatchable-function-entry=0,0","-fpatchable-function-entry=0",
 }
+# This is an intentionally exact, audited list, NOT a "safe -f* / -O*"
+# exemption.  The 2026-10-30 GNU AArch64 4108-owner receipt had 42 distinct
+# options. GCC -O choices are recorded separately but REMAIN STRICT BLOCKERS:
+# GNU optimization can change __builtin_constant_p and inline-asm decisions.
+GNU_OPTIMIZATION_SENSITIVE={
+    "-O0", "-O2", "-O3", "-Os",
+    "-fno-code-hoisting",
+}
+# Debug metadata also remains STRICT until GNU/MiniC metadata is qualified:
+# in particular -g can affect Linux BTF. Unwind/frame options are mandatory
+# codegen below, not mere diagnostic switches.
+GNU_DEBUG_METADATA_SENSITIVE={
+    "-g", "-femit-struct-debug-baseonly",
+    "-femit-struct-debug-detailed=any", "-fno-var-tracking",
+}
+def gnu_debug_metadata_option(flag):
+    return flag in GNU_DEBUG_METADATA_SENSITIVE or flag.startswith((
+        "-ffile-prefix-map=", "-fdebug-prefix-map="))
+# Exact, target-owned defaults that are already intrinsic in MiniC's fixed
+# aarch64-linux LP64 / ELF64 little-endian DataLayout and AAPCS64 emitter.
+# Do not extend to -mcmodel, -mgeneral-regs-only, -ffixed-x18 or protection
+# flags without a target codegen qualification and its own negative tests.
+GNU_TARGET_DEFAULT_EQUIVALENTS={
+    "aarch64": {"-mabi=lp64", "-mlittle-endian"},
+}
 def valid_minic_flags(flags,target):
     admitted=MINIC_CFLAGS | (LOONGARCH_ABI_FLAGS if target=="loongarch64" else set()) | (
         X86_CODEGEN_FLAGS if target=="x86_64" else set())
@@ -83,19 +108,58 @@ def gnu_command_tokens(text,gcc):
     if not t or Path(t[0]).name!=Path(gcc).name or "-c" not in t:
         raise ValueError("not a direct GNU C compile")
     return t
-def unqualified_gnu_codegen_flags(tokens,minic_flags):
-    """List original codegen/ABI options without a proven MiniC equivalent.
+def gnu_c_source_operands(tokens):
+    """Skip option arguments before matching genuine C translation units."""
+    takes_value={"-include","-imacros","-include-pch","-I","-isystem",
+                 "-iquote","-idirafter","-isysroot","--sysroot","-D","-U",
+                 "-MF","-MT","-MQ","-o","-x","-Xassembler","-Xlinker",
+                 "-Xpreprocessor","-specs","-B","--param"}
+    result=[]
+    i=1
+    while i<len(tokens):
+        value=tokens[i]
+        if value in takes_value:
+            if i+1==len(tokens):raise ValueError("missing GNU option argument: "+value)
+            i+=2
+            continue
+        if not value.startswith("-") and value.endswith((".c",".i")):
+            result.append(value)
+        i+=1
+    return result
+def gnu_codegen_option_audit(tokens,minic_flags,target=None):
+    """Partition *authentic* GNU .o.cmd codegen options without broad skips.
 
-    Preprocessing flags have already affected the frozen GNU .i, warnings
-    affect diagnostics only, and -Wa options are replayed with GNU AS.
-    Machine, optimization, hardening, debug and C semantic options cannot be
-    silently called equivalent merely because the same .i was generated.
+    -E already fixes source preprocessing; -Wa is replayed by GNU AS.
+    Only forwarded flags and target-proven defaults are qualified. Other
+    machine, C language, UB policy, ABI, code layout, PAC/canary/auto-init
+    and hardening flags are mandatory. Optimization-sensitive and debug/BTF
+    metadata flags are classified separately but ALSO block strict option
+    equivalence; real QEMU P0/P1 is a different acceptance claim.
     """
-    allowed=set(minic_flags)
-    return sorted({v for v in tokens[1:] if
-                   v.startswith(("-f","-m","-O","-g","-std=")) and
-                   v not in allowed and not v.startswith((
-                       "-fmacro-prefix-map=", "-ffile-prefix-map="))})
+    forwarded=set(minic_flags)
+    defaults=GNU_TARGET_DEFAULT_EQUIVALENTS.get(target,set())
+    option_tokens=sorted({v for v in tokens[1:] if
+                          (v.startswith(("-f","-m","-O","-g","-std=",
+                                         "--param", "-specs", "-Xassembler")) or
+                           v in ("-pg", "-p", "--coverage", "-coverage",
+                                 "-ansi", "-pthread")) and
+                          not v.startswith("-fmacro-prefix-map=")})
+    return {
+        "mandatory": [v for v in option_tokens if v not in forwarded and
+                      v not in defaults and v not in GNU_OPTIMIZATION_SENSITIVE and
+                      not gnu_debug_metadata_option(v)],
+        "optimization": [v for v in option_tokens if v in GNU_OPTIMIZATION_SENSITIVE and
+                         v not in forwarded],
+        "debug_metadata": [v for v in option_tokens if gnu_debug_metadata_option(v) and
+                           v not in forwarded],
+        "target_defaults": [v for v in option_tokens if v in defaults and
+                            v not in forwarded],
+        "forwarded": [v for v in option_tokens if v in forwarded],
+    }
+def unqualified_gnu_codegen_flags(tokens,minic_flags,target=None):
+    """All not-proven-equivalent options, including debug/optimization."""
+    audit=gnu_codegen_option_audit(tokens,minic_flags,target)
+    return sorted(audit["mandatory"]+audit["optimization"]+audit["debug_metadata"])
 def gnu_argv(text,gcc,obj,out,target=None):
     t=gnu_command_tokens(text,gcc)
     outputs=[t[i+1] for i,v in enumerate(t[:-1]) if v=="-o"]
@@ -103,10 +167,10 @@ def gnu_argv(text,gcc,obj,out,target=None):
         raise ValueError("missing/ambiguous GNU output: "+str(outputs)[:150])
     # The full C-owner inventory is already derived from authentic GNU Kbuild
     # source metadata; a noncanonical temporary -o is not an extra C owner.
-    sources=[x for x in t if x.endswith((".c",".i")) and not x.startswith("-")]
-    source=re.search(r"^source_[^\n]*\s*:=\s*(\S+\.c)\s*$",text,re.M)
-    if len(sources)!=1 and (source is None or source.group(1) not in sources):
-        raise ValueError("ambiguous GNU C source: "+str(sources)[:180])
+    sources=gnu_c_source_operands(t)
+    source=re.findall(r"^source_"+re.escape(obj)+r"\s*:=\s*(\S+\.c)\s*$",text,re.M)
+    if len(sources)!=1 or source!=sources:
+        raise ValueError("missing/ambiguous GNU C source for "+obj+": "+str(sources)[:180])
     admitted=MINIC_CFLAGS | (X86_CODEGEN_FLAGS if target=="x86_64" else set())
     flags=[v for v in t if v in admitted]
     assembler_flags=gnu_assembler_flags(t)
@@ -187,7 +251,8 @@ def main():
     a=p.parse_args()
     try:
         if a.mode=="selftest":
-            cmd="savedcmd_lib/a.o := gcc -Wp,-MMD,lib/.a.o.d -c -o lib/a.o lib/a.c ; tools/objtool a.o"
+            cmd=("savedcmd_lib/a.o := gcc -Wp,-MMD,lib/.a.o.d -c -o lib/a.o lib/a.c"
+                 " ; tools/objtool a.o\nsource_lib/a.o := lib/a.c\n")
             v,flags,as_flags,gnu_output=gnu_argv(cmd,"gcc","lib/a.o",Path("lib/a.i"))
             assert v[:3]==["gcc","-E","-P"] and "-c" not in v and v[-2:]==["-o","lib/a.i"]
             assert flags==[] and as_flags==[] and gnu_output=="lib/a.o"
@@ -243,6 +308,82 @@ def main():
             assert not any(x in unqualified_gnu_codegen_flags(
                 gnu_command_tokens(inline_cmd,"gcc"),inline_flags)
                 for x in inline_flags)
+            # A real GNU .cmd may contain -include/-imacros operands ending
+            # in .c: they are *not* extra TUs, whereas a second true C input
+            # must fail even if source_lib/a.o names the first one.
+            includes=cmd.replace(" -c ",
+                " -include generated/fake.c -imacros generated/macros.c -c ")
+            assert gnu_c_source_operands(gnu_command_tokens(includes,"gcc"))==["lib/a.c"]
+            assert gnu_argv(includes,"gcc","lib/a.o",Path("lib/a.i"))[0]
+            for bad in (cmd.replace("lib/a.c ;", "lib/a.c lib/b.c ;"),
+                        cmd.replace("source_lib/a.o := lib/a.c",
+                                    "source_lib/a.o := lib/b.c"),
+                        cmd.replace("source_lib/a.o := lib/a.c", "")):
+                try:gnu_argv(bad,"gcc","lib/a.o",Path("lib/a.i"))
+                except ValueError:pass
+                else:raise AssertionError("ambiguous/unproven GNU C source accepted")
+            # The genuine 42-option AArch receipt separates conservative
+            # ABI/semantic blockers from optimization and BTF metadata, but
+            # *all* three remain unqualified for strict option parity.
+            arm_cmd=cmd.replace(" -c ",
+                " -mabi=lp64 -mlittle-endian -mbranch-protection=pac-ret"
+                " -mstack-protector-guard=sysreg -mstack-protector-guard-reg=sp_el0"
+                " -mstack-protector-guard-offset=1168 -mgeneral-regs-only"
+                " -ffixed-x18 -fstack-protector-strong -ftrivial-auto-var-init=zero"
+                " -fno-strict-aliasing -fconserve-stack -fno-unwind-tables"
+                " -O2 -g -femit-struct-debug-baseonly -c ")
+            arm_audit=gnu_codegen_option_audit(
+                gnu_command_tokens(arm_cmd,"gcc"),[],"aarch64")
+            assert arm_audit["target_defaults"]==["-mabi=lp64","-mlittle-endian"]
+            assert arm_audit["optimization"]==["-O2"]
+            assert arm_audit["debug_metadata"]==["-femit-struct-debug-baseonly","-g"]
+            assert {"-mbranch-protection=pac-ret", "-fstack-protector-strong",
+                    "-ftrivial-auto-var-init=zero", "-mgeneral-regs-only",
+                    "-ffixed-x18", "-fno-strict-aliasing", "-fconserve-stack",
+                    "-fno-unwind-tables"} <= set(arm_audit["mandatory"])
+            assert len(unqualified_gnu_codegen_flags(
+                gnu_command_tokens(arm_cmd,"gcc"),[],"aarch64"))==sum(
+                    len(arm_audit[key]) for key in
+                    ("mandatory", "optimization", "debug_metadata"))
+            # The complete distinct-token inventory from GNU AArch64
+            # candidate receipt #41085043124, SHA-bound to its 4108 owners.
+            # Keep a whole-inventory regression: no option may disappear
+            # from the reported categories on future classifier revisions.
+            observed_arm=(
+                "-O0 -O2 -O3 -Os -falign-functions=4 -fasynchronous-unwind-tables "
+                "-fconserve-stack -femit-struct-debug-baseonly "
+                "-femit-struct-debug-detailed=any -ffixed-x18 -ffreestanding "
+                "-fno-allow-store-data-races -fno-asynchronous-unwind-tables "
+                "-fno-builtin -fno-builtin-wcslen -fno-code-hoisting -fno-common "
+                "-fno-data-sections -fno-delete-null-pointer-checks "
+                "-fno-omit-frame-pointer -fno-optimize-sibling-calls -fno-stack-check "
+                "-fno-stack-clash-protection -fno-stack-protector "
+                "-fno-strict-aliasing -fno-strict-overflow -fno-unwind-tables "
+                "-fno-var-tracking -fstack-protector-strong -fstrict-flex-arrays=3 "
+                "-ftrivial-auto-var-init=zero -g -mabi=lp64 -mbranch-protection=none "
+                "-mbranch-protection=pac-ret -mcmodel=tiny -mgeneral-regs-only "
+                "-mlittle-endian -mstack-protector-guard-offset=1168 "
+                "-mstack-protector-guard-reg=sp_el0 -mstack-protector-guard=sysreg "
+                "-std=gnu11").split()
+            census=gnu_codegen_option_audit(["gcc",*observed_arm],[],"aarch64")
+            assert len(observed_arm)==len(set(observed_arm))==42
+            assert {key:len(values) for key,values in census.items()}=={
+                "mandatory":31, "optimization":5, "debug_metadata":4,
+                "target_defaults":2, "forwarded":0}
+            assert len(unqualified_gnu_codegen_flags(
+                ["gcc",*observed_arm],[],"aarch64"))==40
+            # For anything not proven equivalent, including future compiler
+            # instrumentation and non-GNU11 dialect changes, default DENY.
+            for token in ("-Ofast", "-pg", "-p", "--coverage", "-coverage",
+                          "--param=ssp-buffer-size=4", "--param", "-ansi",
+                          "-Xassembler", "-specs=kernel.specs", "-specs",
+                          "-mabi=ilp32", "-mcmodel=tiny"):
+                assert token in gnu_codegen_option_audit(
+                    ["gcc",token],[],"aarch64")["mandatory"]
+            assert gnu_codegen_option_audit(
+                ["gcc", "-ffile-prefix-map=/old=/new", "-fdebug-prefix-map=/old=/new"],
+                [], "aarch64")["debug_metadata"]==[
+                    "-fdebug-prefix-map=/old=/new", "-ffile-prefix-map=/old=/new"]
             assert sum(len(list(range(i,99,7))) for i in range(7))==99
             print("GNU_FROZEN_I_SELFTEST=PASS shards=7 replay_flags=1 gnu_machine_abi=1 unqualified_option_audit=1");return 0
         if a.evidence is None or a.frozen is None or a.target is None:p.error("missing required paths/target")

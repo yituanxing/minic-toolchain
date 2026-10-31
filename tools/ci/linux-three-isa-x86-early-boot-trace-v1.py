@@ -2,8 +2,9 @@
 """Bounded x86 BIOS-only P0 failure diagnostic; never a certification retry.
 
 Reuses the original GNU P0 QEMU CLI, unchanged candidate bzImage/initramfs,
-and AArch64 diagnostic resource limits. Adds debug logging only; never
-recompiles, mutates objects, alters P0/P1 receipts or infers a symbol/owner.
+and AArch64 diagnostic resource limits. Adds event logging and bounded QMP
+register samples only; never recompiles, mutates objects, alters P0/P1 receipts
+or infers a symbol/owner from a BIOS-only serial log.
 """
 from __future__ import annotations
 import argparse
@@ -14,8 +15,10 @@ import os
 from pathlib import Path
 import re
 import signal
+import socket
 import subprocess
 import sys
+import tempfile
 import time
 
 spec = importlib.util.spec_from_file_location("minic_aarch_trace_limits",
@@ -24,6 +27,8 @@ common = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(common)
 VERDICT = common.VERDICT
 DiagnosticError = common.DiagnosticError
+QMP_REPLY_MAX = 65536
+QMP_SOCKET_TIMEOUT = 0.3
 
 
 def bios_only(raw):
@@ -74,6 +79,60 @@ def parse_trace(path, max_bytes):
                 no_event_does_not_prove_absence=True)
 
 
+def qmp_reply(sock, expected_id):
+    """Read one bounded QMP reply, skipping asynchronous event notifications."""
+    received = bytearray()
+    while len(received) < QMP_REPLY_MAX:
+        chunk = sock.recv(min(8192, QMP_REPLY_MAX - len(received)))
+        if not chunk:
+            raise OSError("QMP disconnected before reply")
+        received.extend(chunk)
+        while b"\n" in received:
+            raw, _, tail = received.partition(b"\n")
+            received = bytearray(tail)
+            reply = json.loads(raw)
+            if expected_id is None and "QMP" in reply:
+                return reply
+            if expected_id is not None and reply.get("id") == expected_id:
+                return reply
+    raise OSError("QMP reply exceeded diagnostic byte bound")
+
+
+def qmp_pc_sample(path, elapsed):
+    """Observe the live CPU via QMP/HMP; no stop, step, reset or guest write."""
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+        sock.settimeout(QMP_SOCKET_TIMEOUT)
+        sock.connect(str(path))
+        qmp_reply(sock, None)
+        sock.sendall(b'{"execute":"qmp_capabilities","id":"enable"}\n')
+        enabled = qmp_reply(sock, "enable")
+        if "error" in enabled:
+            raise OSError("QMP capabilities rejected")
+        sock.sendall(b'{"execute":"human-monitor-command",'
+                     b'"arguments":{"command-line":"info registers"},'
+                     b'"id":"registers"}\n')
+        reply = qmp_reply(sock, "registers")
+        registers = reply.get("return")
+        if not isinstance(registers, str):
+            raise OSError("QMP info registers unavailable")
+        pc = re.search(r"(?m)^(RIP|EIP)=([0-9a-fA-F]{4,16})\b", registers)
+        if pc is None:
+            raise OSError("QMP info registers lacks x86 instruction pointer")
+        sample = {"elapsed_seconds": round(elapsed, 3),
+                  "pc_register": pc.group(1), "pc": pc.group(2).lower()}
+        for name in ("CS", "CR0", "EFER"):
+            field = re.search(r"(?m)^" + name + r"\s*=\s*([0-9a-fA-F]+)", registers)
+            if field:
+                sample[name.lower()] = field.group(1).lower()
+        return sample
+
+
+def qmp_sample_schedule(timeout):
+    """Sample at several seconds without extending the caller's time limit."""
+    return [second for second in (0.2, 0.9, 1.6, 3.0, 5.0, 8.0, 12.0, 18.0, 25.0)
+            if second < timeout - 0.2]
+
+
 def run(image, initramfs, failed_p0, gnu_receipt, output, qemu, timeout=15, max_bytes=1048576):
     image = common.required(image, "candidate bzImage")
     initramfs = common.required(initramfs, "original initramfs")
@@ -89,18 +148,41 @@ def run(image, initramfs, failed_p0, gnu_receipt, output, qemu, timeout=15, max_
     command = verified_command(json.loads(gnu_receipt.read_text()), qemu, image, initramfs)
     output.mkdir(parents=True, exist_ok=False)
     trace, serial = output / "qemu-int-cpu-reset-guest-errors.log", output / "diagnostic-serial.log"
-    debug = [*command, "-d", "int,cpu_reset,guest_errors", "-D", str(trace)]
-    started, timed_out = time.monotonic(), False
-    with serial.open("wb") as stream:
-        child = subprocess.Popen(debug, stdin=subprocess.DEVNULL, stdout=stream,
-                                 stderr=subprocess.STDOUT, start_new_session=True,
-                                 preexec_fn=common.limits(max_bytes, timeout))
-        try:
-            status = child.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            os.killpg(child.pid, signal.SIGKILL)
-            status = child.wait()
+    started, timed_out, samples, qmp_failures = time.monotonic(), False, [], []
+    # Keep the Unix socket short: GitHub Actions workspace paths can exceed
+    # sockaddr_un's 108-byte bound. The directory is removed after QEMU exits.
+    with tempfile.TemporaryDirectory(prefix="minic-x86-qmp-") as qmp_dir:
+        qmp_socket = Path(qmp_dir) / "monitor.sock"
+        debug = [*command, "-d", "int,cpu_reset,guest_errors", "-D", str(trace),
+                 "-qmp", f"unix:{qmp_socket},server=on,wait=off"]
+        with serial.open("wb") as stream:
+            child = subprocess.Popen(debug, stdin=subprocess.DEVNULL, stdout=stream,
+                                     stderr=subprocess.STDOUT, start_new_session=True,
+                                     preexec_fn=common.limits(max_bytes, timeout))
+            for due in qmp_sample_schedule(timeout):
+                if child.poll() is not None:
+                    break
+                remaining = due - (time.monotonic() - started)
+                if remaining > 0:
+                    try:
+                        child.wait(timeout=remaining)
+                        break
+                    except subprocess.TimeoutExpired:
+                        pass
+                if child.poll() is not None:
+                    break
+                try:
+                    samples.append(qmp_pc_sample(qmp_socket, time.monotonic() - started))
+                except (OSError, ValueError, json.JSONDecodeError) as exc:
+                    # Failure to observe must never change the original runtime
+                    # failure or pretend that the CPU stayed inside firmware.
+                    qmp_failures.append(type(exc).__name__ + ": " + str(exc)[:120])
+            try:
+                status = child.wait(timeout=max(0, timeout - (time.monotonic() - started)))
+            except subprocess.TimeoutExpired:
+                timed_out = True
+                os.killpg(child.pid, signal.SIGKILL)
+                status = child.wait()
     if not trace.exists():
         trace.touch()
     report = dict(schema="minic-x86-early-boot-trace-v1", verdict=VERDICT,
@@ -110,6 +192,9 @@ def run(image, initramfs, failed_p0, gnu_receipt, output, qemu, timeout=15, max_
                   diagnostic_timed_out=timed_out, max_seconds=timeout, max_bytes=max_bytes,
                   elapsed_seconds=round(time.monotonic() - started, 3),
                   serial_bytes=serial.stat().st_size, serial_sha256=common.sha(serial),
+                  qmp_pc_samples=samples, qmp_sample_attempts=len(samples) + len(qmp_failures),
+                  qmp_observation=("LIVE_PC_SAMPLED" if samples else "UNAVAILABLE"),
+                  qmp_errors=qmp_failures[:12],
                   **parse_trace(trace, max_bytes))
     report["original_inputs_unchanged"] = before == {n: common.sha(p) for n, p in inputs.items()}
     (output / "diagnostic-receipt.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
@@ -119,6 +204,7 @@ def run(image, initramfs, failed_p0, gnu_receipt, output, qemu, timeout=15, max_
           f"triple_fault={int(report['triple_fault_observed'])} reset_dumps={report['cpu_reset_dump_count']} "
           f"vectors={json.dumps(report['exception_vector_counts'], sort_keys=True)} "
           f"timeout={int(timed_out)} trace_bytes={report['trace_bytes']} "
+          f"qmp_pc_samples={len(samples)} qmp_observation={report['qmp_observation']} "
           "candidate_verdict_unchanged=1 no_recompile=1")
     return report
 

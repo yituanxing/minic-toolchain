@@ -7,6 +7,7 @@ with only a QMP socket added, and its verdict cannot change P0/P1 acceptance.
 from __future__ import annotations
 
 import argparse
+import gzip
 import hashlib
 import importlib.util
 import io
@@ -15,12 +16,15 @@ from pathlib import Path
 import re
 import shutil
 import socket
+import struct
 import subprocess
 import tempfile
 import time
+import zlib
 
 
 SAMPLE_SECONDS = (1, 3, 8, 15)
+GNU_REFERENCE_SECONDS = (1, 3, 5)
 PC = re.compile(r"(?im)(?:^|\s)PC\s*[:=]?\s*(?:0x)?([0-9a-f]{8,16})(?=\s|$)")
 
 
@@ -84,10 +88,12 @@ def connect_qmp(path: Path, process: subprocess.Popen):
     raise RuntimeError("QMP socket not available within 5 seconds")
 
 
-def run_qmp(argv: list[str], socket_path: Path, output: Path) -> list[dict]:
+def run_qmp(argv: list[str], socket_path: Path, output: Path,
+            sample_seconds: tuple[int, ...] = SAMPLE_SECONDS,
+            log_name: str = "diagnostic-p0.log") -> list[dict]:
     samples: list[dict] = []
     started = time.monotonic()
-    with (output / "diagnostic-p0.log").open("wb") as console:
+    with (output / log_name).open("wb") as console:
         process = subprocess.Popen(argv, stdin=subprocess.DEVNULL,
                                    stdout=console, stderr=subprocess.STDOUT)
         try:
@@ -97,7 +103,7 @@ def run_qmp(argv: list[str], socket_path: Path, output: Path) -> list[dict]:
                     if "QMP" not in greeting:
                         raise RuntimeError("invalid QMP greeting")
                     qmp_command(reader, writer, "qmp_capabilities")
-                    for second in SAMPLE_SECONDS:
+                    for second in sample_seconds:
                         delay = second - (time.monotonic() - started)
                         if delay > 0:
                             time.sleep(delay)
@@ -130,6 +136,102 @@ def run_qmp(argv: list[str], socket_path: Path, output: Path) -> list[dict]:
     return samples
 
 
+def pe_layout(header: bytes) -> dict:
+    """Read only PE layout fields; an EFI ImageBase is not a QEMU runtime load base."""
+    if len(header) < 64 or header[:2] != b"MZ":
+        raise ValueError("missing EFI MZ header")
+    offset = struct.unpack_from("<I", header, 0x3c)[0]
+    if offset + 24 > len(header) or header[offset:offset + 4] != b"PE\0\0":
+        raise ValueError("missing EFI PE signature")
+    machine, sections, _, _, _, optional_size, _ = struct.unpack_from(
+        "<HHIIIHH", header, offset + 4)
+    optional = offset + 24
+    if (machine != 0x6264 or optional + optional_size > len(header)
+            or optional_size < 112 or struct.unpack_from("<H", header, optional)[0] != 0x20b):
+        raise ValueError("not a complete LoongArch64 PE32+ optional header")
+    layout = {"machine": "0x6264", "pe_header_offset": offset,
+              "image_base_preferred": struct.unpack_from("<Q", header, optional + 24)[0],
+              "entry_rva": struct.unpack_from("<I", header, optional + 16)[0],
+              "size_of_image": struct.unpack_from("<I", header, optional + 56)[0],
+              "section_alignment": struct.unpack_from("<I", header, optional + 32)[0],
+              "sections": []}
+    start = optional + optional_size
+    if sections > 32 or start + sections * 40 > len(header):
+        raise ValueError("truncated EFI section table")
+    for index in range(sections):
+        item = start + index * 40
+        name = header[item:item + 8].rstrip(b"\0").decode("ascii", errors="replace")
+        virtual_size, rva, raw_size = struct.unpack_from("<III", header, item + 8)
+        layout["sections"].append({"name": name, "rva": rva,
+                                   "virtual_size": virtual_size, "raw_size": raw_size})
+    return layout
+
+
+def image_layout(path: Path) -> dict:
+    """Bounded streaming zboot inspection: never archive the huge inner image."""
+    with path.open("rb") as stream:
+        outer = stream.read(65536)
+        info = {"outer_efi": pe_layout(outer),
+                "runtime_load_base_known": False,
+                "runtime_symbol_mapping": "requires observed EFI/kernel load bias"}
+        if outer[4:8] != b"zimg" or outer[24:28] != b"gzip":
+            return info
+        compressed_at, compressed_bytes = struct.unpack_from("<II", outer, 8)
+        if (compressed_at < 4096 or compressed_bytes < 0
+                or compressed_at + compressed_bytes > path.stat().st_size
+                or compressed_bytes > 256 * 1024 * 1024):
+            raise ValueError("invalid Loong EFI zboot compressed bounds")
+        stream.seek(compressed_at)
+        decoder = zlib.decompressobj(31)
+        prefix = bytearray()
+        total = 0
+        remaining = compressed_bytes
+        while remaining:
+            chunk = stream.read(min(1024 * 1024, remaining))
+            if not chunk:
+                raise ValueError("truncated zboot gzip payload")
+            remaining -= len(chunk)
+            decoded = decoder.decompress(chunk)
+            total += len(decoded)
+            if len(prefix) < 65536:
+                prefix.extend(decoded[:65536 - len(prefix)])
+            if total > 512 * 1024 * 1024:
+                raise ValueError("inner EFI exceeds diagnostic bound")
+        if not decoder.eof:
+            raise ValueError("inner EFI gzip did not terminate")
+        info["inner_kernel"] = {"decompressed_bytes": total,
+                                "pe": pe_layout(bytes(prefix))}
+        info["zboot"] = {"compression": "gzip", "offset": compressed_at,
+                         "compressed_bytes": compressed_bytes}
+        return info
+
+
+def symbol_evidence(system_map: Path, vmlinux: Path, nm: Path,
+                    output: Path) -> dict:
+    """Preserve authentic candidate link symbols, never infer a physical load bias."""
+    if (not system_map.is_file() or system_map.is_symlink()
+            or not 0 < system_map.stat().st_size <= 64 * 1024 * 1024):
+        raise ValueError("candidate System.map absent or outside diagnostic bounds")
+    if not vmlinux.is_file() or vmlinux.is_symlink():
+        raise ValueError("candidate vmlinux absent")
+    raw = system_map.read_bytes()
+    (output / "candidate-System.map.gz").write_bytes(gzip.compress(raw, compresslevel=6))
+    proc = subprocess.run([str(nm), "-n", "--defined-only", str(vmlinux)],
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                          timeout=30, check=True)
+    if len(proc.stdout) > 64 * 1024 * 1024:
+        raise ValueError("candidate nm output outside diagnostic bounds")
+    (output / "candidate-nm.txt.gz").write_bytes(gzip.compress(proc.stdout, compresslevel=6))
+    return {"system_map_sha256": hashlib.sha256(raw).hexdigest(),
+            "system_map_bytes": len(raw), "system_map_lines": raw.count(b"\n"),
+            "system_map_archive": "candidate-System.map.gz",
+            "vmlinux_sha256": digest(vmlinux), "vmlinux_bytes": vmlinux.stat().st_size,
+            "nm_command": [str(nm), "-n", "--defined-only", str(vmlinux)],
+            "nm_sha256": hashlib.sha256(proc.stdout).hexdigest(),
+            "nm_lines": proc.stdout.count(b"\n"), "nm_archive": "candidate-nm.txt.gz",
+            "pc_to_symbol": "not inferred: QMP PCs need observed runtime load bias"}
+
+
 def self_test() -> None:
     oracle = qemu_oracle()
     qemu, image = Path("qemu-system-loongarch64"), Path("candidate.efi")
@@ -150,6 +252,21 @@ def self_test() -> None:
                        {"command-line": "info registers", "cpu-index": 0}) == "PC 0x9000000010001234"
     assert json.loads(outgoing.getvalue())["execute"] == "human-monitor-command"
     assert SAMPLE_SECONDS == (1, 3, 8, 15)
+    assert GNU_REFERENCE_SECONDS == (1, 3, 5)
+    header = bytearray(512)
+    header[:2] = b"MZ"
+    struct.pack_into("<I", header, 0x3c, 0x40)
+    header[0x40:0x44] = b"PE\0\0"
+    struct.pack_into("<HHIIIHH", header, 0x44, 0x6264, 1, 0, 0, 0, 112, 0)
+    struct.pack_into("<H", header, 0x58, 0x20b)
+    struct.pack_into("<I", header, 0x58 + 16, 0x10000)
+    struct.pack_into("<Q", header, 0x58 + 24, 0)
+    struct.pack_into("<I", header, 0x58 + 56, 0x30000)
+    header[0xc8:0xcd] = b".text"
+    struct.pack_into("<III", header, 0xd0, 0x10000, 0x10000, 0x10000)
+    layout = pe_layout(bytes(header))
+    assert layout["entry_rva"] == 0x10000 and layout["size_of_image"] == 0x30000
+    assert layout["sections"][0]["name"] == ".text"
     print("MINIC_LOONG_EFI_QMP_DIAGNOSTIC_SELFTEST=PASS")
 
 
@@ -193,6 +310,16 @@ def run(args: argparse.Namespace) -> None:
               "sampling_seconds": list(SAMPLE_SECONDS), "samples": [],
               "verdict": "DIAGNOSTIC_NOT_RUN"}
     try:
+        report["pe_layout"] = image_layout(preserved)
+    except Exception as exc:
+        report["pe_layout_error"] = f"{type(exc).__name__}: {exc}"
+    if all((args.system_map, args.vmlinux, args.nm)):
+        try:
+            report["link_symbols"] = symbol_evidence(
+                args.system_map, args.vmlinux, args.nm, args.output)
+        except Exception as exc:
+            report["link_symbols_error"] = f"{type(exc).__name__}: {exc}"
+    try:
         with tempfile.TemporaryDirectory(prefix="minic-loong-qmp-") as temporary:
             socket_path = Path(temporary) / "monitor.sock"
             oracle = qemu_oracle()
@@ -207,6 +334,30 @@ def run(args: argparse.Namespace) -> None:
     except Exception as exc:
         report["verdict"] = "DIAGNOSTIC_FAILED"
         report["diagnostic_error"] = f"{type(exc).__name__}: {exc}"
+    if args.gnu_image is not None:
+        reference = {"reference_only": True,
+                     "same_firmware_initrd_qemu_arguments": True,
+                     "sampling_seconds": list(GNU_REFERENCE_SECONDS), "samples": []}
+        try:
+            if (not args.gnu_image.is_file() or args.gnu_image.is_symlink()
+                    or digest(args.gnu_image) != golden["image_sha256"]):
+                raise RuntimeError("pinned pristine GNU image SHA does not match receipt")
+            with tempfile.TemporaryDirectory(prefix="minic-loong-gnu-qmp-") as temporary:
+                sock = Path(temporary) / "monitor.sock"
+                argv = diagnostic_argv(qemu_oracle(), args.qemu, args.gnu_image,
+                                       args.initramfs, args.firmware, sock)
+                reference["qemu_command"] = argv
+                reference["samples"] = run_qmp(
+                    argv, sock, args.output, GNU_REFERENCE_SECONDS,
+                    "gnu-diagnostic-p0.log")
+                reference["verdict"] = "REFERENCE_SAMPLES_CAPTURED" if (
+                    len(reference["samples"]) == len(GNU_REFERENCE_SECONDS)
+                    and all(sample.get("pause_verified") is True
+                            for sample in reference["samples"])) else "REFERENCE_PARTIAL"
+        except Exception as exc:
+            reference["verdict"] = "REFERENCE_FAILED"
+            reference["error"] = f"{type(exc).__name__}: {exc}"
+        report["gnu_qmp_reference"] = reference
     (args.output / "loong-efi-qmp-receipt.json").write_text(
         json.dumps(report, indent=2, sort_keys=True) + "\n")
     print(f"MINIC_LOONG_EFI_QMP={report['verdict']} "
@@ -223,7 +374,11 @@ def main() -> None:
     parser.add_argument("--firmware", type=Path)
     parser.add_argument("--failed-p0", type=Path)
     parser.add_argument("--gnu-receipt", type=Path)
+    parser.add_argument("--gnu-image", type=Path)
     parser.add_argument("--census", type=Path)
+    parser.add_argument("--system-map", type=Path)
+    parser.add_argument("--vmlinux", type=Path)
+    parser.add_argument("--nm", type=Path)
     parser.add_argument("--qemu", type=Path)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()

@@ -9,6 +9,10 @@ on:
         description: 'Regenerate all original GNU inputs in this run; promote the new run ID only after full acceptance'
         type: boolean
         default: false
+      reuse_candidate_objects:
+        description: 'Explicitly replay SHA-verified candidate C objects from the pinned 21-shard producer run'
+        type: boolean
+        default: false
   # GitHub App ref updates can suppress downstream push-triggered Actions.
   # Keep the proven PR entry point, but admit its expensive jobs ONLY when
   # HEAD itself changed the explicit one-shot trigger marker.
@@ -30,10 +34,15 @@ env:
   # To refresh on this branch, push the marker with [minic-regen-gnu] in the
   # head commit subject, then promote the new run only after full P0/P1 PASS.
   MINIC_LINUX_PINNED_INPUT_RUN: '41108659343'
+  # All 21 original MiniC C/GNU AS object shards must be SHA-proven against
+  # the byte-identical compiler pair before receiver-only replay is accepted.
+  MINIC_LINUX_PINNED_OBJECT_RUN: '41133698941'
 
 concurrency:
-  group: minic-linux-seven-runtime-${{ github.ref }}-${{ github.event.pull_request.head.sha || github.sha }}
-  cancel-in-progress: false
+  # One exact candidate HEAD shared by push and PR events.  A GitHub App
+  # update can deliver either/both; never execute two costly 3x7 campaigns.
+  group: minic-linux-seven-runtime-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
 
 jobs:
   gate:
@@ -41,6 +50,7 @@ jobs:
     outputs:
       run: ${{ steps.decide.outputs.run }}
       regenerate: ${{ steps.decide.outputs.regenerate }}
+      reuse_objects: ${{ steps.decide.outputs.reuse_objects }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -53,29 +63,53 @@ jobs:
           set -Eeuo pipefail
           active=false
           regenerate=false
+          reuse_objects=false
           if [[ '${{ github.event_name }}' == workflow_dispatch ]]; then
             active=true
             if [[ '${{ inputs.regenerate_original_gnu }}' == true ]]; then
               regenerate=true
             fi
+            if [[ '${{ inputs.reuse_candidate_objects }}' == true ]]; then
+              reuse_objects=true
+            fi
           elif [[ '${{ github.event_name }}' == push ]]; then
-            # This job is scheduled only by push.paths matching the marker.
-            active=true
-            if [[ '${{ contains(github.event.head_commit.message, '[minic-regen-gnu]') }}' == true ]]; then
-              regenerate=true
+            # push.paths matches the entire pushed range, not necessarily HEAD.
+            # Require the marker in this exact commit, as with pull_request.
+            if git rev-parse --verify HEAD^ >/dev/null 2>&1 &&
+               ! git diff --quiet HEAD^ HEAD -- tools/ci/linux-three-isa-seven-runtime-trigger.txt; then
+              active=true
             fi
           elif [[ '${{ github.event_name }}' == pull_request ]] &&
                git rev-parse --verify HEAD^ >/dev/null 2>&1 &&
                ! git diff --quiet HEAD^ HEAD -- tools/ci/linux-three-isa-seven-runtime-trigger.txt; then
             active=true
           fi
+          if [[ "$active" == true && '${{ github.event_name }}' != workflow_dispatch ]]; then
+            # A one-shot HEAD subject is shared by push and PR delivery. The
+            # persisted marker file alone never silently enables object reuse.
+            head_subject=$(git log -1 --format=%s)
+            if [[ "$head_subject" == *'[minic-regen-gnu]'* ]]; then
+              regenerate=true
+            fi
+            if [[ "$head_subject" == *'[minic-reuse-objects]'* ]]; then
+              reuse_objects=true
+            fi
+          fi
+          if [[ "$regenerate" == true && "$reuse_objects" == true ]]; then
+            echo 'Refuse simultaneous original-GNU regeneration and candidate-object reuse' >&2
+            exit 1
+          fi
           echo "run=$active" >> "$GITHUB_OUTPUT"
           echo "regenerate=$regenerate" >> "$GITHUB_OUTPUT"
-          echo "MINIC_LINUX_SEVEN_EXACT_HEAD_GATE=$active regenerate=$regenerate sha=$(git rev-parse HEAD)"
+          echo "reuse_objects=$reuse_objects" >> "$GITHUB_OUTPUT"
+          echo "MINIC_LINUX_SEVEN_EXACT_HEAD_GATE=$active regenerate=$regenerate reuse_objects=$reuse_objects sha=$(git rev-parse HEAD)"
           {
             echo '### MiniC Linux 3x7 exact-head campaign'
-            echo "Run: $active; regenerate GNU input: $regenerate"
+            echo "Run: $active; regenerate GNU input: $regenerate; reuse SHA-verified objects: $reuse_objects"
             echo "Commit: $(git rev-parse HEAD)"
+            if [[ "$reuse_objects" == true ]]; then
+              echo 'Candidate objects: pinned producer run 41133698941 (byte-identical compiler pair mandatory).'
+            fi
             echo 'A gate success is never Linux C/LD/QEMU acceptance.'
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -98,6 +132,7 @@ jobs:
           python3 tools/ci/linux-three-isa-minic-candidate-v1.py --self-test
           python3 tools/ci/test_linux_three_isa_candidate_shard_cache_v1.py
           python3 tools/ci/linux-three-isa-loongarch64-early-boot-pc-v1.py --self-test
+          python3 -m unittest tools/ci/test_linux_three_isa_boot_cohort_diagnostic_v1.py
       - name: Build exactly one immutable MiniC and minic-cc for all 21 workers
         shell: bash
         run: |
@@ -110,6 +145,28 @@ jobs:
           MINIC_CC="$PWD/build/minic-seven-bin/bin/minic" \
             BUILD_DIR="$PWD/build/minic-seven-bin" \
             bash tests/compiler/c0/probe-direct-lp64-source-object-slot-reuse.sh
+      - name: Restore pinned producer's immutable MiniC compiler pair for receiver-only replay
+        if: needs.gate.outputs.reuse_objects == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: minic-linux-seven-compiler
+          repository: ${{ github.repository }}
+          run-id: ${{ env.MINIC_LINUX_PINNED_OBJECT_RUN }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/pinned-minic-seven-compiler
+      - name: Require byte-identical MiniC and minic-cc before reusing 21 candidate shards
+        if: needs.gate.outputs.reuse_objects == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          for binary in minic minic-cc; do
+            old="$RUNNER_TEMP/pinned-minic-seven-compiler/$binary"
+            current="build/minic-seven-bin/bin/$binary"
+            test -s "$old"
+            test -s "$current"
+            cmp "$old" "$current"
+            echo "MINIC_SEVEN_REUSED_COMPILER_BYTE_IDENTICAL=$binary sha256=$(sha256sum "$current" | cut -d' ' -f1)"
+          done
       - uses: actions/upload-artifact@v4
         with:
           name: minic-linux-seven-compiler
@@ -372,6 +429,7 @@ jobs:
     # evidence: each independent worker requires *its* real input artifact.
     if: >-
       always() && needs.gate.outputs.run == 'true' &&
+      needs.gate.outputs.reuse_objects != 'true' &&
       needs.minic-binary.result == 'success' &&
       (needs.gate.outputs.regenerate != 'true' ||
        needs.original-gnu-golden.result == 'success')
@@ -529,6 +587,12 @@ jobs:
           pattern: minic-linux-seven-objects-${{ matrix.target }}-*
           path: build/minic-seven-incoming/
           merge-multiple: false
+          # Normal mode consumes the current 21 independently built shards.
+          # Receiver-only mode consumes the reviewed original producer run,
+          # after minic-binary proved that both compiler binaries are identical.
+          repository: ${{ github.repository }}
+          run-id: ${{ needs.gate.outputs.reuse_objects == 'true' && env.MINIC_LINUX_PINNED_OBJECT_RUN || github.run_id }}
+          github-token: ${{ github.token }}
       - name: Reject partial/foreign seven-shard objects before costly GNU cache
         shell: bash
         run: |
@@ -660,6 +724,34 @@ jobs:
             --initramfs "$RUNTIME_OUTPUT/runtime-initramfs.cpio.gz" \
             --initramfs-root "$RUNTIME_OUTPUT/initramfs/root" \
             --output "$RUNTIME_OUTPUT/boot" --timeout 240 "${args[@]}"
+      - name: Pin pristine GNU Loong EFI locally for same-target failure-only PC comparison
+        if: matrix.target == 'loongarch64'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cp "$GNU_WORK/build/arch/loongarch/boot/vmlinuz.efi" "$RUNTIME_OUTPUT/loong-gnu-control.efi"
+          python3 - "$RUNTIME_OUTPUT" <<'PY'
+          import hashlib, json, pathlib, sys
+          root = pathlib.Path(sys.argv[1])
+          expected = json.loads((root / 'boot/gnu-qemu-receipt.json').read_text())['image_sha256']
+          got = hashlib.sha256((root / 'loong-gnu-control.efi').read_bytes()).hexdigest()
+          assert got == expected, 'pristine Loong EFI differs from passing GNU golden'
+          print('LOONG_PRISTINE_GNU_EFI_PINNED=' + got)
+          PY
+      - name: Snapshot pristine x86 GNU Kbuild for bounded RV-style C-owner cohort diagnosis
+        if: matrix.target == 'x86_64'
+        continue-on-error: true
+        shell: bash
+        timeout-minutes: 15
+        run: |
+          set -Eeuo pipefail
+          df -h "$GNU_WORK"
+          python3 tools/ci/linux-three-isa-boot-cohort-diagnostic-v1.py prepare \
+            --gnu-work "$GNU_WORK" \
+            --gnu-receipt "$RUNTIME_OUTPUT/boot/gnu-qemu-receipt.json" \
+            --initramfs "$RUNTIME_OUTPUT/runtime-initramfs.cpio.gz" \
+            --minic "$GITHUB_WORKSPACE/build/minic-seven-bin/bin/minic" \
+            --snapshot-dir "$RUNTIME_OUTPUT/x86-pristine-cohort-snapshot"
       - name: Original GNU Kbuild LD of ALL MiniC C objects and candidate QEMU P0/P1
         shell: bash
         timeout-minutes: 95
@@ -708,6 +800,33 @@ jobs:
             --qemu /usr/bin/qemu-system-x86_64 \
             --output "$RUNTIME_OUTPUT/x86-early-trace" \
             --timeout 20 --max-bytes 1048576
+      - name: Compare x86 compressed 12 C owners and complement using frozen GNU/MiniC objects
+        if: failure() && matrix.target == 'x86_64'
+        continue-on-error: true
+        shell: bash
+        timeout-minutes: 28
+        run: |
+          set -Eeuo pipefail
+          test -f "$RUNTIME_OUTPUT/candidate/boot/p0.log"
+          test -f "$RUNTIME_OUTPUT/x86-pristine-cohort-snapshot/prepare.json"
+          python3 - "$RUNTIME_OUTPUT/candidate/postlink-c-owner-census.json" <<'PY'
+          import json, sys
+          assert json.load(open(sys.argv[1]))['verdict'] == 'POSTLINK_ALL_C_MINIC_SHA_PASS'
+          PY
+          for mode in gnu-plus-compressed minic-except-compressed; do
+            if python3 tools/ci/linux-three-isa-boot-cohort-diagnostic-v1.py probe \
+              --gnu-work "$GNU_WORK" \
+              --snapshot-dir "$RUNTIME_OUTPUT/x86-pristine-cohort-snapshot" \
+              --minic "$GITHUB_WORKSPACE/build/minic-seven-bin/bin/minic" \
+              --staged "$RUNTIME_OUTPUT/candidate/staged" \
+              --results "$RUNTIME_OUTPUT/candidate/all-c-owners-result.json" \
+              --trial-dir "$RUNTIME_OUTPUT/x86-cohort-$mode" \
+              --mode "$mode" --link-timeout 600 --qemu-timeout 90; then
+              echo "X86_BOOT_COHORT=$mode diagnostic_P0_match=1 official_strict_P0=0"
+            else
+              echo "X86_BOOT_COHORT=$mode diagnostic_P0_match=0_or_inconclusive official_strict_P0=0"
+            fi
+          done
       - name: Capture failed Loong EFI-to-Linux PC and register snapshots without changing oracle
         if: failure() && matrix.target == 'loongarch64'
         continue-on-error: true
@@ -721,7 +840,11 @@ jobs:
             --initramfs "$RUNTIME_OUTPUT/runtime-initramfs.cpio.gz" \
             --failed-p0 "$RUNTIME_OUTPUT/candidate/boot/p0.log" \
             --gnu-receipt "$RUNTIME_OUTPUT/boot/gnu-qemu-receipt.json" \
+            --gnu-image "$RUNTIME_OUTPUT/loong-gnu-control.efi" \
             --census "$RUNTIME_OUTPUT/candidate/postlink-c-owner-census.json" \
+            --system-map "$GNU_WORK/build/System.map" \
+            --vmlinux "$GNU_WORK/build/vmlinux" \
+            --nm /usr/bin/loongarch64-linux-gnu-nm \
             --qemu /usr/bin/qemu-system-loongarch64 \
             --output "$RUNTIME_OUTPUT/loong-early-trace"
       - name: Preserve failed x86 final MiniC candidate bzImage without rebuilding
@@ -766,6 +889,7 @@ jobs:
             build/minic-seven-receiver-${{ matrix.target }}/candidate/candidate-receipt.json
             build/minic-seven-receiver-${{ matrix.target }}/candidate/all-c-owners-result.json
             build/minic-seven-receiver-${{ matrix.target }}/candidate/c-section-sizes.json
+            build/minic-seven-receiver-${{ matrix.target }}/candidate/link-layout/
             build/minic-seven-receiver-${{ matrix.target }}/candidate/gnu-ld-relink.log
             build/minic-seven-receiver-${{ matrix.target }}/candidate/gnu-ld-final-relink*.log
             build/minic-seven-receiver-${{ matrix.target }}/candidate/gnu-link-failure-summary.json
@@ -776,6 +900,8 @@ jobs:
             build/minic-seven-receiver-${{ matrix.target }}/candidate/boot/
             build/minic-seven-receiver-${{ matrix.target }}/aarch64-early-trace/
             build/minic-seven-receiver-${{ matrix.target }}/x86-early-trace/
+            build/minic-seven-receiver-${{ matrix.target }}/x86-cohort-gnu-plus-compressed/
+            build/minic-seven-receiver-${{ matrix.target }}/x86-cohort-minic-except-compressed/
             build/minic-seven-receiver-${{ matrix.target }}/loong-early-trace/
           if-no-files-found: warn
           retention-days: 14
@@ -793,6 +919,20 @@ jobs:
           echo 'MINIC_LINUX_SEVEN_21_C_SHARDS=${{ needs.seven-independent-runners.result }}'
           echo 'MINIC_LINUX_SEVEN_GNU_LD_QEMU=${{ needs.original-gnu-ld-qemu-receivers.result }}'
           test '${{ needs.minic-binary.result }}' = success
-          test '${{ needs.seven-independent-runners.result }}' = success
+          if [[ '${{ needs.gate.outputs.reuse_objects }}' == true ]]; then
+            # The 21 producers MUST be skipped in receiver-only mode. The
+            # downloaded artifacts still pass SHA/ABI preflight and the full
+            # original GNU LD/QEMU receiver checks, on this exact compiler.
+            test '${{ needs.seven-independent-runners.result }}' = skipped
+            candidate_provenance=REUSED_SHA_VERIFIED
+            source_run='${{ env.MINIC_LINUX_PINNED_OBJECT_RUN }}'
+          else
+            test '${{ needs.seven-independent-runners.result }}' = success
+            candidate_provenance=FRESH_SHA_VERIFIED
+            source_run='${{ github.run_id }}'
+          fi
           test '${{ needs.original-gnu-ld-qemu-receivers.result }}' = success
-          echo 'MINIC_LINUX_SEVEN_RUNTIME=PASS targets=3 seven_independent_runners_per_target=true all_C_GNU_AS_LD_QEMU_P0_P1=true'
+          echo "MINIC_LINUX_SEVEN_21_C_SHARDS=$candidate_provenance source_run=$source_run"
+          echo "Candidate C objects: $candidate_provenance (producer run $source_run; seven SHA-verified shards per target)." >> "$GITHUB_STEP_SUMMARY"
+          echo 'MINIC_LINUX_SEVEN_RUNTIME=PASS targets=3 seven_shards_per_target_sha_verified=true all_C_GNU_AS_LD_QEMU_P0_P1=true'
+          echo 'Linux 3x7 GNU LD/QEMU acceptance: PASS (all three targets).' >> "$GITHUB_STEP_SUMMARY"
