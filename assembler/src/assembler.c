@@ -615,6 +615,21 @@ bool minias_define_target_mapping_symbol(MiniAs *as, const char *stem,
     return true;
 }
 
+/* A Target may request this ABI alignment property during object
+ * finalization, but Section storage and mutation remain Common-owned. */
+bool minias_require_target_section_alignment(MiniAs *as, int section,
+                                              uint64_t alignment) {
+    if(!as->finalizing_target_output || section<0 ||
+       (size_t)section>=as->section_count || alignment==0U ||
+       (alignment&(alignment-1U))!=0U) {
+        minias_set_error(as,"invalid-target-finalization-alignment");
+        return false;
+    }
+    if(as->sections[(size_t)section].align<alignment)
+        as->sections[(size_t)section].align=alignment;
+    return true;
+}
+
 /* Stable parse-time NameIds are intentionally NOT Object SymbolIDs.  A
  * machine operand may name a forward or external symbol during parsing,
  * while the historical ELF symbol order is determined later by definitions
@@ -747,6 +762,7 @@ static bool minias_record_fixup(MiniAs *as,
                       size_t existing_symbol_index,
                       int64_t addend,
                       MiniAsFixupOrigin origin,bool absolute_zero_symbol,
+                      bool prefer_section_symbol,
                       size_t retained_fragment_id) {
     MiniAsSymbol *symbol=NULL;
     MiniAsFixup *fixup;
@@ -842,7 +858,7 @@ static bool minias_record_fixup(MiniAs *as,
     fixup->width = width;
     fixup->symbol_index = symbol_index;
     fixup->addend = addend;
-    fixup->prefer_section_symbol = false;
+    fixup->prefer_section_symbol = prefer_section_symbol;
     return true;
 }
 
@@ -913,9 +929,11 @@ bool minias_add_fixup_symbol_id(MiniAs *as, int section, uint64_t offset,
 bool minias_add_section_fixup(MiniAs *as, MiniAsFixupOrigin origin,
                              int section, uint64_t offset,
                              MiniAsFixupKind kind, unsigned width,
-                             const char *symbol_name, int64_t addend) {
+                             const char *symbol_name, int64_t addend,
+                             bool prefer_section_symbol) {
     return minias_record_fixup(as, section, offset, kind, width,
                                symbol_name, SIZE_MAX, addend, origin,false,
+                               prefer_section_symbol,
                                SIZE_MAX);
 }
 
@@ -941,13 +959,13 @@ bool minias_add_late_fragment_fixup(MiniAs *as,size_t fragment_id,
                          stmt->line);
         return false;
     }
+    /* GNU GAS keeps local label-difference anchors as canonical
+     * section-symbol relocations. Record that identity at creation. */
     if(!minias_record_fixup(as,stmt->section,stmt->offset,kind,0U,
                             NULL,symbol_index,addend,
-                            MINIAS_FIXUP_ORIGIN_FRAGMENT,false,fragment_id))
+                            MINIAS_FIXUP_ORIGIN_FRAGMENT,false,true,
+                            fragment_id))
         return false;
-    /* GNU GAS local `.L` label differences are serialized via their
-     * canonical STT_SECTION and the label's final section-relative addend. */
-    as->fixups[as->fixup_count-1U].prefer_section_symbol=true;
     return true;
 }
 
@@ -1067,10 +1085,9 @@ static bool minias_commit_encode_result(MiniAs *as, const MiniAsStmt *owner) {
                                      request->symbol_index : SIZE_MAX,
                                  request->absolute_zero_symbol ? 0 : request->symbol_ref.addend,
                                  MINIAS_FIXUP_ORIGIN_FRAGMENT,
-                                 request->absolute_zero_symbol,SIZE_MAX))
+                                 request->absolute_zero_symbol,
+                                 request->prefer_section_symbol,SIZE_MAX))
             return false;
-        as->fixups[as->fixup_count - 1U].prefer_section_symbol =
-            request->prefer_section_symbol;
     }
     /* One ordered commit protocol handles any mixture of fixed DATA fields,
      * deferred relocations, borrowed source bytes and compact repeated fills.
@@ -3926,7 +3943,7 @@ static bool handle_named_reloc(MiniAs *as,const char *args,size_t line) {
     if(ok)ok=minias_add_section_fixup(as,
                  MINIAS_FIXUP_ORIGIN_EXPLICIT_SECTION,
                  as->current_section,(uint64_t)offset,
-                 kind,width,expression.name,expression.addend);
+                 kind,width,expression.name,expression.addend,false);
     free(copy);
     if(ok)return true;
 invalid:
@@ -4760,6 +4777,17 @@ bool minias_emit_sections(MiniAs *as) {
 }
 
 
+/* Finalization is the only phase allowed to raise Target-driven ELF Section
+ * alignment. Reset the capability on failure as well as success. */
+static bool minias_finalize_target_output(MiniAs *as) {
+    bool ok;
+    if(as->target->finalize_output==NULL)return true;
+    as->finalizing_target_output=true;
+    ok=as->target->finalize_output(as);
+    as->finalizing_target_output=false;
+    return ok;
+}
+
 int minias_assemble_config(const char *input_path,
                            const char *output_path,
                            const MiniAsAssemblyConfig *config,
@@ -4842,8 +4870,7 @@ int minias_assemble_config(const char *input_path,
             minias_emit_sections(&as) &&
             (as.target->validate_output == NULL ||
              as.target->validate_output(&as)) &&
-            (as.target->finalize_output == NULL ||
-             as.target->finalize_output(&as)) &&
+            minias_finalize_target_output(&as) &&
             (config->elf32 ? minias_write_elf32(&as, output_path)
                    : minias_write_elf64(&as, output_path))) {
             rc = 0;

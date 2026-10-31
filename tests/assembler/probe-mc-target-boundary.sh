@@ -90,10 +90,27 @@ targets = {
 if not re.search(r'bool\s*\(\*finalize_output\)\s*\(MiniAs\s*\*\)', core):
     raise SystemExit('Missing explicit Target output-finalization phase')
 steps = ('minias_emit_sections(&as)', 'as.target->validate_output(&as)',
-         'as.target->finalize_output(&as)', 'minias_write_elf64(&as, output_path)')
+         'minias_finalize_target_output(&as)', 'minias_write_elf64(&as, output_path)')
 offsets = [driver.find(step) for step in steps]
 if -1 in offsets or offsets != sorted(offsets):
     raise SystemExit('Target validation/finalization/ELF output order drifted')
+if not re.search(r'as->finalizing_target_output\s*=\s*true;\s*'
+                 r'ok\s*=\s*as->target->finalize_output\(as\);\s*'
+                 r'as->finalizing_target_output\s*=\s*false;', driver):
+    raise SystemExit('Target finalization capability guard is missing')
+for filename in ('assembler.c', 'cfi_writer.c'):
+    source = (Path('assembler/src') / filename).read_text()
+    if re.search(r'as->fixups\[as->fixup_count\s*-\s*1U?\]', source):
+        raise SystemExit(f'{filename}: post-creation Fixup mutation remains')
+a64 = (Path('assembler/src') / 'aarch64_target.c').read_text()
+planner = a64.split('static bool a64_record_source_mappings(', 1)[1].split(
+    'static bool validate(', 1)[0]
+if 'stmt->op' in planner or 'section->align=' in planner:
+    raise SystemExit('AArch64 finalizer reopens source or writes Common Section')
+if 'A64_SITE_INST_DATA' not in planner or \
+   'A64_SITE_EXPLICIT_ALIGN' not in planner or \
+   'minias_require_target_section_alignment' not in planner:
+    raise SystemExit('AArch64 finalizer omitted typed intent or Common alignment API')
 for target, (validator, finalizer) in targets.items():
     source = (Path('assembler/src') / target).read_text()
     for hook, function in (('validate_output', validator),

@@ -5677,7 +5677,9 @@ static bool a64_record_source_mappings(MiniAs *as) {
          * alignment for .inst even in non-executable .data. This is a
          * Target directive property, not generic raw-data alignment. */
         if((stmt->site.provenance_bits&A64_SITE_INST_DATA)!=0U &&
-           section->align<4U)section->align=4U;
+           section->align<4U &&
+           !minias_require_target_section_alignment(as,stmt->section,4U))
+            goto mapping_failure;
         if(section->type!=MINIAS_SHT_PROGBITS ||
            (section->flags&MINIAS_SHF_ALLOC)==0U)continue;
         /* AArch64 GAS's s_aarch64_inst() calls mapping_state(MAP_INSN).
@@ -5692,7 +5694,9 @@ static bool a64_record_source_mappings(MiniAs *as) {
         /* GAS starts even the default .text with sh_addralign=1 and only
          * records AArch64's 4-byte instruction alignment on the first
          * actual instruction/mapping transition. Empty .text must stay 1. */
-        if(executable && section->align<4U)section->align=4U;
+        if(executable && section->align<4U &&
+           !minias_require_target_section_alignment(as,stmt->section,4U))
+            goto mapping_failure;
         points[count].section=stmt->section;
         points[count].offset=stmt->offset;
         points[count].order=i;

@@ -624,6 +624,9 @@ typedef struct MiniAs {
      * instruction spellings or an ELF numeric class. */
     uint16_t object_machine;
     bool output_rel_relocations;
+    /* Only the Target object-finalization callback may request late
+     * section alignment changes. Common retains the actual Section owner. */
+    bool finalizing_target_output;
     /* Common-owned cache for stable symbol anchors and current-pass branch
      * membership. Cross-replay branch identities live in SourceGraph. */
     void *layout_anchor_graph;
@@ -659,6 +662,8 @@ bool minias_define_target_mapping_symbol(MiniAs *as, const char *stem,
                                          size_t first_ordinal,
                                          bool always_suffix,
                                          int section, uint64_t offset);
+bool minias_require_target_section_alignment(MiniAs *, int section,
+                                              uint64_t alignment);
 bool minias_symbol_name_intern(MiniAs *as, const char *name,
                                MiniAsSymbolNameId *name_id);
 bool minias_bind_symbol_ref(MiniAs *as, const MiniAsSymbolExpr *expr,
@@ -774,7 +779,8 @@ void minias_encode_result_destroy(MiniAsEncodeResult *result);
 bool minias_add_section_fixup(MiniAs *as, MiniAsFixupOrigin origin,
                              int section, uint64_t offset,
                              MiniAsFixupKind kind, unsigned width,
-                             const char *symbol_name, int64_t addend);
+                             const char *symbol_name, int64_t addend,
+                             bool prefer_section_symbol);
 /* GNU/C-style binary, decimal, octal, hex and U/L/ULL literal scanner.
  * Exposes the consumed end pointer to both Common and Target grammars. */
 bool minias_parse_number_literal(const char *text, char **end, uint64_t *value);

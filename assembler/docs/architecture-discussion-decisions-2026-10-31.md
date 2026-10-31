@@ -565,3 +565,38 @@ traverses final Fragment and Section layout and must gain a read-only
 FinalizeView when that interface is built. LoongArch's complete-section
 branch-relaxability cache likewise needs a query view, not a handwaved
 deletion of its global lookahead algorithm.
+
+## 14. Common Fixup creation and Target finalization write capability
+
+The previous batch at `c325a07` already owns AArch64 `.inst`/alignment
+provenance in Target-private parse-site bits, so this batch reuses that
+contract without introducing a duplicate Common intent model. Two other
+mutable-ownership seams remained:
+
+- Fixup creation was followed by three `as->fixups[fixup_count-1]` edits
+  to install `prefer_section_symbol` in DWARF CIE references, late ULEB
+  relocation pairs, and normal MC fragment commit. The binding preference
+  now belongs to the same Common Fixup creation request. Explicit `.reloc`
+  and unrelated CFI/DWARF requests pass false; the CIE base and late ULEB
+  requests retain their established true policy. No caller depends on the
+  last appended global Fixup slot to complete its transaction.
+- AArch64's post-layout mapping planner legitimately raises a Section's
+  input alignment for `.inst` in `.data` and for executable instruction
+  transitions, but formerly wrote `section->align` directly. It now asks
+  Common through `minias_require_target_section_alignment`, guarded to
+  the short `finalize_output` invocation. The necessary `$x/$d` mapping
+  Symbol requests still use the existing Common ownership API.
+
+This is an incremental capability boundary, not a claim that
+`MiniAsTargetOps` now exposes fully immutable phase-scoped views. Final
+`TargetParseView`/`TargetLayoutView`/ObjectFinalizer view types, the
+SourceGraph replay contract and ELF ObjectLowering remain separate work.
+
+Local pre-push acceptance on the rebased `c325a07` tree: Release `-Werror`
+and A0 **30/30 PASS**; strict AArch64 GNU `.inst` mapping and
+alignment, including six mapping transition cases PASS; GNU `ld -r` CFI
+`.debug_frame` ELF32/ELF64 and RV64 CFI reference PASS; RISC-V and
+LoongArch64 linker-relaxable ULEB GNU relocation/byte comparisons
+**2/2 PASS**; five architecture/profile GNU CFI extended probes **5/5
+PASS**; Target/Common structural boundary PASS. Do not infer a fresh
+Linux/QEMU Image/P0/P1 certificate from these focused checks.

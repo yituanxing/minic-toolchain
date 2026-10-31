@@ -85,9 +85,9 @@ static bool cfi_advance_fixups(MiniAs *as,int sec,size_t field,
        (as->target->cfi_advance_reloc_mode!=1U &&
         as->target->cfi_advance_reloc_mode!=2U))return false;
     return minias_add_section_fixup(as,MINIAS_FIXUP_ORIGIN_SYNTHETIC_SECTION,
-               sec,field,positive,width,as->symbols[to_symbol].name,0) &&
+               sec,field,positive,width,as->symbols[to_symbol].name,0,false) &&
            minias_add_section_fixup(as,MINIAS_FIXUP_ORIGIN_SYNTHETIC_SECTION,
-               sec,field,MINIAS_FIXUP_SUB,width,as->symbols[from_symbol].name,0);
+               sec,field,MINIAS_FIXUP_SUB,width,as->symbols[from_symbol].name,0,false);
 }
 
 static bool advance_cfi(MiniAs *as,int sec,size_t from_symbol,
@@ -126,11 +126,11 @@ static bool advance_cfi(MiniAs *as,int sec,size_t from_symbol,
             return put8(as,sec,0x40U) &&
                    minias_add_section_fixup(as,
                      MINIAS_FIXUP_ORIGIN_SYNTHETIC_SECTION,
-                     sec,field,positive,1U,as->symbols[to_symbol].name,0) &&
+                     sec,field,positive,1U,as->symbols[to_symbol].name,0,false) &&
                    minias_add_section_fixup(as,
                      MINIAS_FIXUP_ORIGIN_SYNTHETIC_SECTION,
                      sec,field,MINIAS_FIXUP_CFI_SUB6,1U,
-                     as->symbols[from_symbol].name,0);
+                     as->symbols[from_symbol].name,0,false);
         }
     }
     if(reloc && align!=1U) {
@@ -485,33 +485,32 @@ static bool cfi_emit_section_core(MiniAs *as,bool eh,
                !uleb(as,section,0U) ||
                !minias_add_section_fixup(as,
                MINIAS_FIXUP_ORIGIN_SYNTHETIC_SECTION,section,ptr,MINIAS_FIXUP_PREL32,4U,
-                                 begin->name,0))return false;
+                                 begin->name,0,false))return false;
             if(as->target->cfi_eh_range_relocations &&
                (!minias_add_section_fixup(as,
                  MINIAS_FIXUP_ORIGIN_SYNTHETIC_SECTION,section,ptr+4U,
-                 MINIAS_FIXUP_ADD,4U,end->name,0) ||
+                 MINIAS_FIXUP_ADD,4U,end->name,0,false) ||
                 !minias_add_section_fixup(as,
                  MINIAS_FIXUP_ORIGIN_SYNTHETIC_SECTION,section,ptr+4U,
-                 MINIAS_FIXUP_SUB,4U,begin->name,0)))return false;
+                 MINIAS_FIXUP_SUB,4U,begin->name,0,false)))return false;
         } else {
             size_t cie=variants[variant_index].offset;
             if(cie>UINT32_MAX)return false;
             if(!put32(as,section,0U) ||
                !put32(as,section,0U))return false;
             ptr=as->sections[(size_t)section].size;
+            /* GNU uses STT_SECTION rather than the private CIE label.
+             * Keep this identity independent of Target fold heuristics. */
             if(!put_cfi_address(as,section,0U) ||
                !put_cfi_address(as,section,end->value-begin->value) ||
                !minias_add_section_fixup(as,
                MINIAS_FIXUP_ORIGIN_SYNTHETIC_SECTION,section,base+4U,
                                  MINIAS_FIXUP_ABS,4U,
-                                 debug_base_name,(int64_t)cie))return false;
-            /* GNU uses STT_SECTION rather than a private CIE label here.
-             * Keep this identity independent of target fold heuristics. */
-            as->fixups[as->fixup_count-1U].prefer_section_symbol=true;
+                                 debug_base_name,(int64_t)cie,true))return false;
             if(!minias_add_section_fixup(as,
                MINIAS_FIXUP_ORIGIN_SYNTHETIC_SECTION,section,ptr,
                MINIAS_FIXUP_ABS,minias_cfi_abi(as).address_size,
-               begin->name,0))return false;
+               begin->name,0,false))return false;
         }
         size_t loc_symbol=proc->begin_symbol;
         for(j=initial_count;j<proc->op_count;++j) {
