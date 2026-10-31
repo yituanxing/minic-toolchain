@@ -33,10 +33,10 @@ env:
   # One reviewed original GNU/Kbuild producer; not the current MiniC revision.
   # To refresh on this branch, push the marker with [minic-regen-gnu] in the
   # head commit subject, then promote the new run only after full P0/P1 PASS.
-  MINIC_LINUX_PINNED_INPUT_RUN: '41108659343'
+  MINIC_LINUX_PINNED_INPUT_RUN: '41181106144'
   # All 21 original MiniC C/GNU AS object shards must be SHA-proven against
   # the byte-identical compiler pair before receiver-only replay is accepted.
-  MINIC_LINUX_PINNED_OBJECT_RUN: '41133698941'
+  MINIC_LINUX_PINNED_OBJECT_RUN: '41181106144'
 
 concurrency:
   # One exact candidate HEAD shared by push and PR events.  A GitHub App
