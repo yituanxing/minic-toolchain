@@ -34,6 +34,30 @@ BUILTINS = (
     "CRYPTO_BLAKE2B DRM_VIRTIO_GPU BLK_DEV_NVME NET_NS NAMESPACES"
 ).split()
 
+CANONICAL_PROBE = ROOT / "tests/external/linux/runtime_initramfs/p2_probe.c"
+LOONG_PROBE = ROOT / "tests/external/linux/runtime_initramfs/loongarch64_p2_17_probe.c"
+
+
+def source_call_block(source: str) -> str:
+    """Retain the literal original main call list, including every KAT byte."""
+    main = source.find("int main(void) {")
+    if main < 0:
+        raise ValueError("missing-main")
+    begin = source.find("    overlay_copy_up();\n", main)
+    last = "    nvme_controller_bound();"
+    end = source.find(last, begin)
+    if begin < 0 or end < 0:
+        raise ValueError("missing-canonical-call-boundary")
+    return source[begin:end + len(last)]
+
+
+def source_call_agreement(canonical_source: str, loong_source: str) -> bool:
+    canonical_block = source_call_block(canonical_source)
+    if canonical_block.count("    kvm_api_device();\n") != 1:
+        return False
+    expected = canonical_block.replace("    kvm_api_device();\n", "")
+    return source_call_block(loong_source) == expected
+
 
 def exact_count(log: str, literal: str) -> int:
     return len(re.findall(r"^" + re.escape(literal) + r"[ \t]*$", log, re.M))
@@ -116,11 +140,26 @@ def check(log: str, qemu_rc: int, config: str, source: Path) -> list[str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--log", type=Path, required=True)
-    parser.add_argument("--qemu-rc", type=int, required=True)
-    parser.add_argument("--config", type=Path, required=True)
-    parser.add_argument("--source", type=Path, required=True)
+    parser.add_argument("--source-guard-only", action="store_true")
+    parser.add_argument("--log", type=Path)
+    parser.add_argument("--qemu-rc", type=int)
+    parser.add_argument("--config", type=Path)
+    parser.add_argument("--source", type=Path)
     args = parser.parse_args()
+    if args.source_guard_only:
+        try:
+            identical = source_call_agreement(
+                CANONICAL_PROBE.read_text(), LOONG_PROBE.read_text())
+        except (OSError, ValueError):
+            identical = False
+        if not identical:
+            print("LOONGARCH64_P2_SOURCE_GUARD=FAIL reason=non-kvm-call-or-kat-drift",
+                  file=sys.stderr)
+            return 1
+        print("LOONGARCH64_P2_SOURCE_GUARD=PASS removed=only-kvm-api-call")
+        return 0
+    if args.log is None or args.qemu_rc is None or args.config is None or args.source is None:
+        parser.error("--log, --qemu-rc, --config, --source required for real-QEMU check")
     try:
         problems = check(args.log.read_text(errors="replace"), args.qemu_rc,
                          args.config.read_text(), args.source)

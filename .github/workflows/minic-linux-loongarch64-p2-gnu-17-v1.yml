@@ -43,6 +43,7 @@ jobs:
           set -Eeuo pipefail
           test "$(git rev-parse HEAD)" = '${{ github.event.pull_request.head.sha || github.sha }}'
           python3 tools/ci/test_linux_loongarch64_p2_gnu_17_v1.py
+          python3 tools/ci/linux-loongarch64-p2-gnu-17-check-v1.py --source-guard-only
           python3 -m py_compile tools/ci/linux-loongarch64-p2-gnu-17-check-v1.py
           bash -n tools/ci/linux-loongarch64-p2-gnu-17-v1.sh
           echo "LA64_P2_17_ORACLE=PASS exact_head=$(git rev-parse HEAD)"

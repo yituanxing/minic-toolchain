@@ -46,9 +46,9 @@ int main(void) {
     afalg_digest("afalg-sha256-abc", "sha256",
                  "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
     afalg_digest("afalg-sha512-abc", "sha512",
-                 "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80");
+                 "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f");
     afalg_digest("afalg-sha3-256-abc", "sha3-256",
-                 "3a985da74fe225b2045c1726bd390bd855f086e3e9d525b46bfe24511431532");
+                 "3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532");
     afalg_digest("afalg-blake2b-512-abc", "blake2b-512",
                  "ba80a53f981c4d0d6a2797b69f12f6e94c212f14685ac4b74b12bb6fdbffa2d17d87c5392aab792dc252d5de4533cc9518d38aa8dbf1925ab92386edd4009923");
     conntrack_udp_entry();

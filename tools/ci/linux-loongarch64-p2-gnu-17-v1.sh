@@ -29,6 +29,7 @@ probe_sha=093ecf2b651084fa33250b5587f04cf87c118f0e35cf2c01aea3b76f2e6fc4a4
 }
 printf '%s  %s\n' "$firmware_sha" "$firmware" | sha256sum -c -
 printf '%s  %s\n' "$probe_sha" "$guest/p2_probe.c" | sha256sum -c -
+python3 "$checker" --source-guard-only
 for tool in "$cc" qemu-system-loongarch64 cpio gzip mkfs.ext4 timeout python3; do
   command -v "$tool" >/dev/null || {
     echo "LA64_P2_17=FAIL reason=missing-tool tool=$tool" >&2; exit 2;

@@ -93,5 +93,27 @@ class StrictLoongArch17(unittest.TestCase):
         self.assertTrue(self.reasons(log=self.log + "[9] BUG: genuine crash\n"))
 
 
+class ExactCanonicalSourceCalls(unittest.TestCase):
+    def setUp(self) -> None:
+        self.original = oracle.CANONICAL_PROBE.read_text()
+        self.loong = oracle.LOONG_PROBE.read_text()
+
+    def test_all_seventeen_calls_and_kat_bytes_match_canonical(self) -> None:
+        self.assertTrue(oracle.source_call_agreement(self.original, self.loong))
+
+    def test_omitted_sha512_suffix_cannot_reach_expensive_qemu(self) -> None:
+        bad = self.loong.replace("e2a9ac94fa54ca49f", "", 1)
+        self.assertFalse(oracle.source_call_agreement(self.original, bad))
+
+    def test_omitted_sha3_hex_nibble_cannot_reach_expensive_qemu(self) -> None:
+        bad = self.loong.replace("5c172d6bd", "5c1726bd", 1)
+        self.assertFalse(oracle.source_call_agreement(self.original, bad))
+
+    def test_unexpected_kvm_operation_is_rejected(self) -> None:
+        bad = self.loong.replace("    virtio_gpu_bound();",
+                                 "    kvm_api_device();\n    virtio_gpu_bound();", 1)
+        self.assertFalse(oracle.source_call_agreement(self.original, bad))
+
+
 if __name__ == "__main__":
     unittest.main()
