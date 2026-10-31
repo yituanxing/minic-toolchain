@@ -26,6 +26,16 @@ for old in ('parse_data_integer_bits(', 'static bool checked_mul_absolute_i64(',
 for old in ('parse_data_integer_bits(', 'parse_i64_data(',
             'strtoll(', 'strtoull('):
     if old in m: raise SystemExit('obsolete second DATA literal parser: '+old)
+for old in ('minias_expr_strip_outer_parens(',
+            'parse_symbol_minus_dot(',
+            'parse_symbol_minus_dot_divisor(',
+            'parse_symbol_difference_divisor(',
+            'parse_data_absolute_prefix_plus_symbol(',
+            'parse_data_symbol_addend('):
+    if old in m or old in internal:
+        raise SystemExit('obsolete text relocation grammar survived '+old)
+if 'affine_lower_syntax(' not in m:
+    raise SystemExit('MCExpr does not lower the shared syntax AST')
 if 'deferred_text' in m or 'MINIAS_MC_EXPR_DEFERRED_ABSOLUTE' in m:
     raise SystemExit('fixed-width MCExpr retained textual reparse')
 if 'deferred_text' in internal:

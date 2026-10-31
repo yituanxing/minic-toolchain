@@ -213,8 +213,12 @@ a deleted parser or claim the whole x86/RISC-V Target form family is complete.
 ## Shared expression AST, private SourceContext and target-form batch
 
 Baseline: the exact remote tree `24728ca0dfd42390da0ef3d3d4fea96cd5b9d396`.
-This is a second integrated source-architecture batch; its new exact-HEAD
-CI evidence must be attached to its own commit after push.
+This second integrated batch landed as `ccf939ff77128f61933cd2cec203193091aa1dfc`
+(tree `6a395966b3ad5cfbdacc4413c679f79d1ab580a2`). Its own exact-HEAD
+remote MiniAS ISA/ABI contract, x86/Loong GNU Oracle, four-architecture
+compiler runtime and Native Strict Backend gates all completed SUCCESS.
+The AArch64 ISA/ABI job also completed its real GNU link and QEMU checks.
+These results are not the same as a new 3,536-object Linux P1 certificate.
 
 | Area | Actual architecture change | Intentionally not claimed |
 | --- | --- | --- |
@@ -237,3 +241,39 @@ AArch64 42 positive opcode words plus 8 negative forms, and LoongArch
 GNU shared-expression grammar probe and existing deferred ownership tests
 must remain gate inputs. Local full Release `-Werror`/A0 30/30 passed; other
 integrated results and remote exact-HEAD SHA follow the final commit.
+
+## Affine MCExpr source-grammar deletion batch
+
+Baseline: the verified `ccf939ff77128f61933cd2cec203193091aa1dfc`
+commit. The preceding batch unified integer/absolute/deferred *syntax*,
+but fixed-width GNU DATA still routed relocations through six independent
+textual matchers that split strings at `+`, `-`, `/` and `>>` and repeatedly
+stripped parentheses. Those paths could disagree about precedence and
+lexical `.set` ownership despite using the canonical AST elsewhere.
+
+This batch replaces those recognizers with **one AST-to-affine MCExpr
+lowerer**. It accepts up to two relocatable SymbolIDs and one typed Fragment
+dot, tracks signed coefficients, and chooses the existing semantic fixup
+kind without retaining source text. Constants and relocatable fields consume
+the **same parse-site AST**; no final emission reparses source. Public
+section-symbol difference and `.size`-end consumers now use this lowerer
+as well. The obsolete paren-strip API, top-level-minus/divisor scanners,
+data-prefix relocation scanner, and their declarations are deleted in the
+same patch. The three distinct arithmetic/relocation policies remain.
+
+GNU's 64-bit *modular* relocation addends are deliberately separate from
+the checked signed absolute evaluator: `MAX-(-MAX)` must yield signed RELA
+`-2`, not an intermediate overflow rejection. Cross-section division still
+fails closed. Added a GNU x86-64 exact data/relocation oracle with nested
+arithmetic, parentheses, dot, `.size` and nonlinear negative coverage;
+included this in A0 and extended the ownership gate to ban the old parsers.
+
+Measured source change (two production files): **+308/-509, net -201**;
+test change (two existing scripts plus one new probe): **+80/-0**. This is
+actual removal of duplicated recognition algorithms, not a file move; no
+workflow YAML was removed. Local Release `-Werror`, A0 30/30, the new GNU
+affine oracle, 23 executed expression/source/ELF probes and targeted x86,
+AArch64 and LoongArch local probes passed. The `pyelftools`-dependent ELF
+live-section probe skipped; GNU AArch64/Loong cross-tool byte oracles are
+not installed locally. The exact-HEAD remote result for this batch must be
+established after push, not inherited from the baseline.

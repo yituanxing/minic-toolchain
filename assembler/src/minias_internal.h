@@ -701,7 +701,6 @@ bool minias_parse_u64(const char *, uint64_t *);
 bool minias_checked_add_i64(int64_t, int64_t, int64_t *);
 bool minias_expr_symbol_start(char);
 bool minias_expr_symbol_continue(char);
-char *minias_expr_strip_outer_parens(char *);
 bool minias_expr_parse_symbol_absolute_tail(MiniAs *, const char *,
                                             MiniAsSymbolExpr *);
 bool minias_evaluate_absolute_expression(MiniAs *, const char *, int64_t *);

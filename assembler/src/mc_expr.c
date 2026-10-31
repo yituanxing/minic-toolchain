@@ -69,6 +69,50 @@ static bool checked_mul_absolute_i64(int64_t lhs,
     return true;
 }
 
+/* Absolute evaluation and relocation-affine lowering must use one checked
+ * scalar policy. Relocatable terms may only flow through + and -; a fully
+ * absolute subtree retains the exact same arithmetic as the GNU evaluator. */
+static bool evaluate_absolute_unary(char op,int64_t value,int64_t *out) {
+    switch(op) {
+    case '-':if(value==INT64_MIN)return false;*out=-value;return true;
+    case '~':*out=~value;return true;
+    case '!':*out=value==0?1:0;return true;
+    default:return false;
+    }
+}
+
+static bool evaluate_absolute_binary(MiniAsExprBinaryOp op,
+                                      int64_t lhs,int64_t rhs,int64_t *out) {
+    switch(op) {
+    case MINIAS_EXPR_OP_MUL:
+        return checked_mul_absolute_i64(lhs,rhs,out);
+    case MINIAS_EXPR_OP_DIV:
+    case MINIAS_EXPR_OP_MOD:
+        if(rhs==0 || (lhs==INT64_MIN && rhs==-1))return false;
+        *out=op==MINIAS_EXPR_OP_DIV?lhs/rhs:lhs%rhs;return true;
+    case MINIAS_EXPR_OP_ADD:return minias_checked_add_i64(lhs,rhs,out);
+    case MINIAS_EXPR_OP_SUB:return checked_sub_i64(lhs,rhs,out);
+    case MINIAS_EXPR_OP_SHL:
+    case MINIAS_EXPR_OP_SHR:
+        if(rhs<0 || rhs>=64)return false;
+        *out=signed_from_bits(op==MINIAS_EXPR_OP_SHL?
+              ((uint64_t)lhs<<(unsigned)rhs):
+              ((uint64_t)lhs>>(unsigned)rhs));return true;
+    case MINIAS_EXPR_OP_LT:*out=lhs<rhs?-1:0;return true;
+    case MINIAS_EXPR_OP_LE:*out=lhs<=rhs?-1:0;return true;
+    case MINIAS_EXPR_OP_GT:*out=lhs>rhs?-1:0;return true;
+    case MINIAS_EXPR_OP_GE:*out=lhs>=rhs?-1:0;return true;
+    case MINIAS_EXPR_OP_EQ:*out=lhs==rhs?-1:0;return true;
+    case MINIAS_EXPR_OP_NE:*out=lhs!=rhs?-1:0;return true;
+    case MINIAS_EXPR_OP_AND:*out=lhs&rhs;return true;
+    case MINIAS_EXPR_OP_XOR:*out=lhs^rhs;return true;
+    case MINIAS_EXPR_OP_OR:*out=lhs|rhs;return true;
+    case MINIAS_EXPR_OP_LAND:*out=lhs!=0 && rhs!=0?1:0;return true;
+    case MINIAS_EXPR_OP_LOR:*out=lhs!=0 || rhs!=0?1:0;return true;
+    default:return false;
+    }
+}
+
 static bool evaluate_absolute_syntax(MiniAs *as,
                                      const MiniAsExprSyntax *syntax,
                                      int64_t dot,bool *only_abs,
@@ -108,55 +152,10 @@ static bool evaluate_absolute_syntax(MiniAs *as,
             break;
         }
         case MINIAS_EXPR_UNARY:
-            switch(node->unary) {
-            case '-':
-                if(lhs==INT64_MIN)return false;
-                next=-lhs;break;
-            case '~':next=~lhs;break;
-            case '!':next=lhs==0?1:0;break;
-            default:return false;
-            }
+            if(!evaluate_absolute_unary(node->unary,lhs,&next))return false;
             break;
         case MINIAS_EXPR_BINARY:
-            switch(node->op) {
-            case MINIAS_EXPR_OP_MUL:
-                if(!checked_mul_absolute_i64(lhs,rhs,&next))
-                    return false;
-                break;
-            case MINIAS_EXPR_OP_DIV:
-            case MINIAS_EXPR_OP_MOD:
-                if(rhs==0 || (lhs==INT64_MIN && rhs==-1))
-                    return false;
-                next=node->op==MINIAS_EXPR_OP_DIV?lhs/rhs:lhs%rhs;
-                break;
-            case MINIAS_EXPR_OP_ADD:
-                if(!minias_checked_add_i64(lhs,rhs,&next))return false;
-                break;
-            case MINIAS_EXPR_OP_SUB:
-                if(!checked_sub_i64(lhs,rhs,&next))return false;
-                break;
-            case MINIAS_EXPR_OP_SHL:
-            case MINIAS_EXPR_OP_SHR:
-                if(rhs<0 || rhs>=64)return false;
-                next=signed_from_bits(node->op==MINIAS_EXPR_OP_SHL?
-                    ((uint64_t)lhs<<(unsigned)rhs):
-                    ((uint64_t)lhs>>(unsigned)rhs));
-                break;
-            case MINIAS_EXPR_OP_LT:next=lhs<rhs?-1:0;break;
-            case MINIAS_EXPR_OP_LE:next=lhs<=rhs?-1:0;break;
-            case MINIAS_EXPR_OP_GT:next=lhs>rhs?-1:0;break;
-            case MINIAS_EXPR_OP_GE:next=lhs>=rhs?-1:0;break;
-            case MINIAS_EXPR_OP_EQ:next=lhs==rhs?-1:0;break;
-            case MINIAS_EXPR_OP_NE:next=lhs!=rhs?-1:0;break;
-            case MINIAS_EXPR_OP_AND:next=lhs&rhs;break;
-            case MINIAS_EXPR_OP_XOR:next=lhs^rhs;break;
-            case MINIAS_EXPR_OP_OR:next=lhs|rhs;break;
-            case MINIAS_EXPR_OP_LAND:
-                next=(lhs!=0 && rhs!=0)?1:0;break;
-            case MINIAS_EXPR_OP_LOR:
-                next=(lhs!=0 || rhs!=0)?1:0;break;
-            default:return false;
-            }
+            if(!evaluate_absolute_binary(node->op,lhs,rhs,&next))return false;
             break;
         default:return false;
         }
@@ -193,6 +192,181 @@ bool minias_evaluate_absolute_operand(MiniAs *as,const char *text,
     return text && value && minias_evaluate_absolute_expression(as,text,value);
 }
 
+/* GNU DATA relocation expressions are affine programs over at most two
+ * symbols and one Fragment dot. Lower the shared typed syntax directly;
+ * never split source strings at the first '-' or scan parentheses again.
+ * Only numeric subtrees use the shared checked-absolute operation policy. */
+typedef struct MiniAsAffineValue {
+    const MiniAsExprNode *symbols[2];
+    int signs[2];
+    unsigned symbol_count;
+    int dot_coefficient;
+    int64_t constant;
+    uint64_t divisor;
+    bool logical_shift;
+} MiniAsAffineValue;
+
+typedef struct MiniAsAffineForm {
+    MiniAsMCExprKind kind;
+    MiniAsSymbolExpr lhs,rhs;
+    uint64_t divisor;
+    bool logical_shift;
+} MiniAsAffineForm;
+
+static bool affine_has_relocation(const MiniAsAffineValue *value) {
+    return value->symbol_count!=0U || value->dot_coefficient!=0;
+}
+
+static bool affine_combine(const MiniAsAffineValue *lhs,
+                            const MiniAsAffineValue *rhs,int sign,
+                            MiniAsAffineValue *out) {
+    unsigned i;
+    if(lhs->divisor!=0U || rhs->divisor!=0U ||
+       lhs->symbol_count+rhs->symbol_count>2U)return false;
+    *out=*lhs;
+    /* Relocatable DATA addends are GNU 64-bit modular values. A checked
+     * signed intermediate would reject MAX-(-MAX), whose final RELA addend
+     * is correctly -2. Keep checked signed math for absolute-only trees. */
+    out->constant=signed_from_bits(sign>0?
+        (uint64_t)lhs->constant+(uint64_t)rhs->constant:
+        (uint64_t)lhs->constant-(uint64_t)rhs->constant);
+    out->dot_coefficient+=sign*rhs->dot_coefficient;
+    for(i=0U;i<rhs->symbol_count;++i) {
+        out->symbols[out->symbol_count]=rhs->symbols[i];
+        out->signs[out->symbol_count++]=sign*rhs->signs[i];
+    }
+    return true;
+}
+
+static bool affine_copy_symbol(const MiniAsExprSyntax *syntax,
+                                const MiniAsExprNode *node,
+                                MiniAsSymbolExpr *symbol) {
+    if(!node || node->kind!=MINIAS_EXPR_SYMBOL ||
+       node->length==0U || node->length>=sizeof(symbol->name))return false;
+    memset(symbol,0,sizeof(*symbol));
+    memcpy(symbol->name,syntax->text+node->start,node->length);
+    symbol->name[node->length]='\0';
+    return true;
+}
+
+static bool affine_lower_syntax(MiniAs *as,const MiniAsExprSyntax *syntax,
+                                MiniAsAffineForm *result) {
+    MiniAsAffineValue values[512];
+    MiniAsAffineValue *root;
+    size_t i;
+    unsigned positive=2U,negative=2U;
+    if(!syntax || !result || !syntax->count ||
+       syntax->count>sizeof(values)/sizeof(values[0]))return false;
+    memset(values,0,syntax->count*sizeof(values[0]));
+    for(i=0U;i<syntax->count;++i) {
+        const MiniAsExprNode *node=&syntax->nodes[i];
+        MiniAsAffineValue *out=&values[i];
+        const MiniAsAffineValue *lhs=&values[node->left];
+        const MiniAsAffineValue *rhs=&values[node->right];
+        switch(node->kind) {
+        case MINIAS_EXPR_LITERAL:
+            out->constant=signed_from_bits(node->literal);
+            break;
+        case MINIAS_EXPR_SYMBOL: {
+            MiniAsSymbolExpr name;
+            MiniAsSymbol *symbol;
+            if(!affine_copy_symbol(syntax,node,&name))return false;
+            symbol=as!=NULL?minias_get_symbol(as,name.name,false):NULL;
+            if(symbol && symbol->defined &&
+               symbol->section==MINIAS_SECTION_ABS)
+                out->constant=signed_from_bits(symbol->value);
+            else {
+                out->symbols[0]=node;
+                out->signs[0]=1;
+                out->symbol_count=1U;
+            }
+            break;
+        }
+        case MINIAS_EXPR_DOT:
+            out->dot_coefficient=1;
+            break;
+        case MINIAS_EXPR_UNARY:
+            if(node->left>=i || lhs->divisor!=0U)return false;
+            *out=*lhs;
+            if(affine_has_relocation(out)) {
+                if(node->unary!='-')return false;
+                out->constant=signed_from_bits(0U-(uint64_t)out->constant);
+                out->dot_coefficient=-out->dot_coefficient;
+                for(unsigned k=0U;k<out->symbol_count;++k)
+                    out->signs[k]=-out->signs[k];
+            }else if(!evaluate_absolute_unary(node->unary,
+                                               lhs->constant,&out->constant))
+                return false;
+            break;
+        case MINIAS_EXPR_BINARY:
+            if(node->left>=i || node->right>=i)return false;
+            if((node->op==MINIAS_EXPR_OP_ADD ||
+                node->op==MINIAS_EXPR_OP_SUB) &&
+               (affine_has_relocation(lhs) || affine_has_relocation(rhs))) {
+                if(!affine_combine(lhs,rhs,
+                                  node->op==MINIAS_EXPR_OP_ADD?1:-1,out))
+                    return false;
+            }else if(!affine_has_relocation(lhs) &&
+                     !affine_has_relocation(rhs)) {
+                if(lhs->divisor!=0U || rhs->divisor!=0U ||
+                   !evaluate_absolute_binary(node->op,lhs->constant,
+                                             rhs->constant,&out->constant))
+                    return false;
+            }else if((node->op==MINIAS_EXPR_OP_DIV ||
+                      node->op==MINIAS_EXPR_OP_SHR) &&
+                     i==syntax->root && lhs->divisor==0U &&
+                     !affine_has_relocation(rhs) && rhs->divisor==0U &&
+                     rhs->constant>0 &&
+                     (node->op!=MINIAS_EXPR_OP_SHR || rhs->constant<63)) {
+                *out=*lhs;
+                out->logical_shift=node->op==MINIAS_EXPR_OP_SHR;
+                out->divisor=out->logical_shift?
+                    UINT64_C(1)<<(unsigned)rhs->constant:
+                    (uint64_t)rhs->constant;
+            }else return false;
+            break;
+        default:return false;
+        }
+    }
+    root=&values[syntax->root];
+    memset(result,0,sizeof(*result));
+    result->divisor=root->divisor;
+    result->logical_shift=root->logical_shift;
+    for(i=0U;i<root->symbol_count;++i) {
+        if(root->signs[i]==1) {
+            if(positive!=2U)return false;
+            positive=(unsigned)i;
+        }else if(root->signs[i]==-1) {
+            if(negative!=2U)return false;
+            negative=(unsigned)i;
+        }else return false;
+    }
+    if(positive!=2U &&
+       !affine_copy_symbol(syntax,root->symbols[positive],&result->lhs))
+        return false;
+    if(negative!=2U &&
+       !affine_copy_symbol(syntax,root->symbols[negative],&result->rhs))
+        return false;
+    result->lhs.addend=root->constant;
+    if(root->symbol_count==1U && positive!=2U &&
+       root->dot_coefficient==0 && root->divisor==0U)
+        result->kind=MINIAS_MC_EXPR_SYMBOL;
+    else if(root->symbol_count==1U && positive!=2U &&
+            root->dot_coefficient==-1)
+        result->kind=root->divisor!=0U?
+            MINIAS_MC_EXPR_SYMBOL_MINUS_DOT_DIV:
+            MINIAS_MC_EXPR_SYMBOL_MINUS_DOT;
+    else if(root->symbol_count==1U && negative!=2U &&
+            root->dot_coefficient==1 && root->divisor==0U)
+        result->kind=MINIAS_MC_EXPR_DOT_MINUS_SYMBOL;
+    else if(root->symbol_count==2U && positive!=2U && negative!=2U &&
+            root->dot_coefficient==0)
+        result->kind=root->divisor!=0U?
+            MINIAS_MC_EXPR_DIFFERENCE_DIV:MINIAS_MC_EXPR_DIFFERENCE;
+    else return false;
+    return true;
+}
+
 static bool parse_symbol_difference(const char *,
                                     MiniAsSymbolExpr *,MiniAsSymbolExpr *);
 
@@ -213,34 +387,19 @@ bool minias_parse_symbol_difference(const char *expression,
  * the negative symbol, which would flip its sign. */
 bool minias_parse_symbol_difference_absolute_tail(
     MiniAs *as,const char *text,MiniAsSymbolDifference *result) {
-    char *copy=minias_strdup(text),*body,*first_minus,*split=NULL;
-    unsigned depth=0U;
-    int64_t tail=0;
-    bool ok=false;
-    if(!copy)return false;
-    body=minias_expr_strip_outer_parens(copy);
-    first_minus=strchr(body,'-');
-    for(char *p=body;*p;++p) {
-        if(*p=='(')++depth;
-        else if(*p==')') {
-            if(depth==0U)goto done;
-            --depth;
-        }else if(depth==0U && first_minus && p>first_minus &&
-                 (*p=='+' || *p=='-')) {
-            split=p;
-            break;
-        }
+    MiniAsExprSyntax syntax;
+    MiniAsAffineForm form;
+    bool valid;
+    if(!as || !text || !result ||
+       !minias_expr_parse_syntax(text,&syntax))return false;
+    valid=affine_lower_syntax(as,&syntax,&form) &&
+          form.kind==MINIAS_MC_EXPR_DIFFERENCE;
+    if(valid) {
+        result->positive=form.lhs;
+        result->negative=form.rhs;
     }
-    if(split) {
-        if(!minias_evaluate_absolute_expression(as,split,&tail))goto done;
-        *split='\0';
-    }
-    if(!minias_parse_symbol_difference(body,result))goto done;
-    ok=minias_checked_add_i64(result->positive.addend,tail,
-                              &result->positive.addend);
-done:
-    free(copy);
-    return ok;
+    minias_expr_syntax_destroy(&syntax);
+    return valid;
 }
 
 /* Stable parser-name identities resolve against actual SymbolIDs only after
@@ -306,422 +465,80 @@ bool minias_resolve_symbol_difference_field(MiniAs *as,
     return true;
 }
 
-bool minias_parse_absolute_data_bits(MiniAs *as,
-                                     const char *text,
-                                     uint64_t *value) {
-    MiniAsExprSyntax syntax;
+static bool evaluate_data_constant_syntax(MiniAs *as,
+                                          const MiniAsExprSyntax *syntax,
+                                          uint64_t *value) {
     uint64_t dot;
     int64_t signed_value;
     bool only_abs,valid;
-
-    if(!as || !text || !value ||
-       !minias_expr_parse_syntax(text,&syntax))return false;
     /* The canonical unsigned grammar subsumes the old strtoll/strtoull
      * fixed-DATA literal paths, including signed bit patterns and nested
      * parentheses. Never revive a separate literal interpreter here.
      * Numeric evaluation cannot fabricate symbols or relocations. */
-    if(minias_expr_eval_integer(&syntax,false,value)) {
-        minias_expr_syntax_destroy(&syntax);
-        return true;
-    }
+    if(minias_expr_eval_integer(syntax,false,value))return true;
     valid=minias_current_location(as,&dot) &&
           dot<=(uint64_t)INT64_MAX &&
-          evaluate_absolute_syntax(as,&syntax,(int64_t)dot,
+          evaluate_absolute_syntax(as,syntax,(int64_t)dot,
                                    &only_abs,&signed_value) && only_abs;
     if(valid)*value=(uint64_t)signed_value;
+    return valid;
+}
+
+bool minias_parse_absolute_data_bits(MiniAs *as,
+                                     const char *text,
+                                     uint64_t *value) {
+    MiniAsExprSyntax syntax;
+    bool valid;
+    if(!as || !text || !value ||
+       !minias_expr_parse_syntax(text,&syntax))return false;
+    valid=evaluate_data_constant_syntax(as,&syntax,value);
     minias_expr_syntax_destroy(&syntax);
     return valid;
 }
 
-char *minias_expr_strip_outer_parens(char *text) {
-    text = minias_trim(text);
-    for (;;) {
-        size_t len = strlen(text);
-        size_t i;
-        int depth = 0;
-        bool encloses_all = true;
-
-        if (len < 2U || text[0] != '(' || text[len - 1U] != ')') {
-            return text;
-        }
-        for (i = 0U; i < len; ++i) {
-            if (text[i] == '(') {
-                ++depth;
-            } else if (text[i] == ')') {
-                --depth;
-                if (depth < 0) {
-                    return text;
-                }
-                if (depth == 0 && i + 1U != len) {
-                    encloses_all = false;
-                    break;
-                }
-            }
-        }
-        if (!encloses_all || depth != 0) {
-            return text;
-        }
-        text[len - 1U] = '\0';
-        text = minias_trim(text + 1);
-    }
-}
-
-/* GAS permits parentheses around a data relocation symbol, including
- * nested (symbol+addend) groups. Normalize a private copy only for data
- * relocation parsing: never mutate the stored statement or bypass the
- * Common typed Fixup path. The dominant plain-symbol path stays alloc-free. */
-/* One relocatable symbol plus an otherwise absolute GNU arithmetic tail.
- * Resolve .set counters at their lexical DATA statement, not at final
- * emit, and retain an ordinary typed SymbolExpr/ELF addend. */
+/* One AST supplies every GNU relocation-tail classification. */
 bool minias_expr_parse_symbol_absolute_tail(MiniAs *as,const char *text,
                                              MiniAsSymbolExpr *expr) {
-    const char *p=text,*begin;
-    char name[256];
-    size_t len;
-    int64_t addend;
-    while(isspace((unsigned char)*p))++p;
-    if(!minias_expr_symbol_start(*p))return false;
-    begin=p++;
-    while(minias_expr_symbol_continue(*p))++p;
-    len=(size_t)(p-begin);
-    if(len==0U || len>=sizeof(name))return false;
-    memcpy(name,begin,len);name[len]='\0';
-    while(isspace((unsigned char)*p))++p;
-    if((*p!='+' && *p!='-') ||
-       !minias_parse_symbol_addend(name,expr) ||
-       !minias_evaluate_absolute_expression(as,p,&addend))return false;
-    expr->addend=addend;
-    return true;
-}
-
-static bool parse_data_symbol_addend(const char *text,
-                                     MiniAsSymbolExpr *expr) {
-    char *copy;
+    MiniAsExprSyntax syntax;
+    MiniAsAffineForm form;
     bool valid;
-    if(*text!='(')return minias_parse_symbol_addend(text,expr);
-    copy=minias_strdup(text);
-    if(!copy)return false;
-    valid=minias_parse_symbol_addend(minias_expr_strip_outer_parens(copy),expr);
-    free(copy);
+    if(!as || !text || !expr ||
+       !minias_expr_parse_syntax(text,&syntax))return false;
+    valid=affine_lower_syntax(as,&syntax,&form) &&
+          form.kind==MINIAS_MC_EXPR_SYMBOL;
+    if(valid)*expr=form.lhs;
+    minias_expr_syntax_destroy(&syntax);
     return valid;
 }
 
-/* A relocation plus a constant is commutative in GNU DATA expressions.
- * Keep the same SymbolID/fixup regardless of operand order: the existing
- * symbol-first parser handles `symbol + constant`, while Linux real-mode
- * tables also emit `0x9b000000 + pa_real_mode_base`.  The prefix must be
- * entirely absolute (not another section symbol), and arithmetic must not
- * silently overflow a signed ELF relocation addend. */
-static bool parse_data_absolute_prefix_plus_symbol(MiniAs *as,
-                                                    const char *text,
-                                                    MiniAsSymbolExpr *expr) {
-    char *copy=minias_strdup(text),*body,*p;
-    unsigned depth=0U;
-    bool matched=false;
-    if(copy==NULL)return false;
-    body=minias_expr_strip_outer_parens(copy);
-    for(p=body;*p;++p) {
-        uint64_t bits;
-        MiniAsSymbolExpr candidate={0};
-        int64_t combined;
-        if(*p=='('){++depth;continue;}
-        if(*p==')'){if(depth==0U)break;--depth;continue;}
-        if(*p!='+' || depth!=0U || p==body)continue;
-        *p='\0';
-        if(minias_parse_absolute_data_bits(as,minias_trim(body),&bits) &&
-           minias_parse_symbol_addend(minias_trim(p+1U),&candidate) &&
-           minias_checked_add_i64(candidate.addend,signed_from_bits(bits),
-                                  &combined)) {
-            candidate.addend=combined;
-            *expr=candidate;
-            matched=true;
-        }
-        *p='+';
-        if(matched)break;
-    }
-    free(copy);
-    return matched;
-}
-
-/* Identify a final current-site operand without mistaking `.Llocal` for
- * the real location counter `.`.  GNU distinguishes `S-.-3` (S-P-3)
- * from `S-(.+3)` (also S-P-3), while `S-.+3` is (S-P)+3. */
-static bool parse_dot_suffix_addend(const char *text,int64_t *addend) {
-    char *copy=minias_strdup(text),*body,*cursor;
-    uint64_t magnitude;
-    bool grouped;
-    char sign;
-    if(copy==NULL)return false;
-    body=minias_trim(copy);
-    cursor=minias_expr_strip_outer_parens(body);
-    grouped=cursor!=body;
-    if(*cursor++!='.') {free(copy);return false;}
-    cursor=minias_trim(cursor);
-    if(*cursor=='\0') {
-        *addend=0;
-        free(copy);return true;
-    }
-    sign=*cursor++;
-    if(sign!='+' && sign!='-') {free(copy);return false;}
-    cursor=minias_trim(cursor);
-    if(!minias_parse_u64(cursor,&magnitude) || magnitude>INT64_MAX) {
-        free(copy);return false;
-    }
-    /* Grouped RHS is subtracted as a whole; an ungrouped +- tail
-     * belongs to the left-associative full expression. */
-    *addend=(sign=='+' ? (int64_t)magnitude : -(int64_t)magnitude);
-    if(grouped)*addend=-*addend;
-    free(copy);
-    return true;
-}
-
-static bool parse_symbol_minus_dot(const char *text, MiniAsSymbolExpr *expr) {
-    char *copy;
-    char *normalized;
-    char *minus;
-    char *lhs;
-    bool ok;
-    int64_t trailing_addend = 0;
-
-    if (text == NULL || expr == NULL) {
-        return false;
-    }
-    copy = minias_strdup(text);
-    if (copy == NULL) {
-        return false;
-    }
-    normalized = minias_expr_strip_outer_parens(copy);
-    /* Only choose a top-level subtraction whose RHS actually starts at
-     * the current-site counter. GNU Linux VDSO has S-1-.; S-.-3 instead
-     * uses its first minus. Picking either the first or the final minus
-     * unconditionally corrupts one of those two legal expressions. */
-    unsigned depth=0U;
-    minus=NULL;
-    for(char *p=normalized;*p;++p) {
-        if(*p=='(')++depth;
-        else if(*p==')') {
-            if(depth==0U)break;
-            --depth;
-        }else if(*p=='-' && depth==0U && p!=normalized) {
-            int64_t candidate_addend;
-            if(parse_dot_suffix_addend(p+1U,&candidate_addend)) {
-                minus=p;
-                trailing_addend=candidate_addend;
-            }
-        }
-    }
-    if(depth!=0U)minus=NULL;
-    if (minus == NULL) {
-        free(copy);
-        return false;
-    }
-    *minus = '\0';
-    lhs = minias_expr_strip_outer_parens(minias_trim(normalized));
-    ok = minias_parse_symbol_addend(lhs, expr);
-    if(ok && trailing_addend!=0) {
-        int64_t result;
-        if(!minias_checked_add_i64(expr->addend,trailing_addend,&result))
-            ok=false;
-        else expr->addend=result;
-    }
-    free(copy);
-    return ok;
-}
-
-static bool parse_symbol_minus_dot_divisor(const char *text,
-                                           MiniAsSymbolExpr *expr,
-                                           uint64_t *divisor) {
-    char *copy;
-    char *normalized;
-    char *slash = NULL;
-    int depth = 0;
-    char quote = '\0';
-    char *p;
-    uint64_t value;
-    bool ok;
-
-    if (text == NULL || expr == NULL || divisor == NULL) {
-        return false;
-    }
-    copy = minias_strdup(text);
-    if (copy == NULL) {
-        return false;
-    }
-    normalized = minias_trim(copy);
-    for (p = normalized; *p != '\0'; ++p) {
-        if (quote != '\0') {
-            if (*p == '\\' && p[1] != '\0') {
-                ++p;
-            } else if (*p == quote) {
-                quote = '\0';
-            }
-            continue;
-        }
-        if (*p == '\'' || *p == '"') {
-            quote = *p;
-        } else if (*p == '(') {
-            ++depth;
-        } else if (*p == ')') {
-            if (depth > 0) {
-                --depth;
-            }
-        } else if (*p == '/' && depth == 0) {
-            slash = p;
-            break;
-        }
-    }
-    if (slash == NULL) {
-        free(copy);
-        return false;
-    }
-    *slash = '\0';
-    if (!minias_parse_u64(minias_trim(slash + 1), &value) || value == 0U) {
-        free(copy);
-        return false;
-    }
-    normalized = minias_expr_strip_outer_parens(minias_trim(normalized));
-    ok = parse_symbol_minus_dot(normalized, expr);
-    if (ok) {
-        *divisor = value;
-    }
-    free(copy);
-    return ok;
-}
-
 static bool parse_symbol_difference(const char *text,
-                                    MiniAsSymbolExpr *lhs_expr,
-                                    MiniAsSymbolExpr *rhs_expr) {
-    char *copy;
-    char *normalized;
-    char *minus;
-    char *lhs;
-    char *rhs;
-    bool rhs_parenthesized;
-    bool ok;
-
-    if (text == NULL || lhs_expr == NULL || rhs_expr == NULL) {
-        return false;
-    }
-    copy = minias_strdup(text);
-    if (copy == NULL) {
-        return false;
-    }
-    normalized = minias_expr_strip_outer_parens(copy);
-    /* A subtraction belongs to the outer expression level. For example,
-     * ((_bss-8)-startup_32) must retain the positive operand's -8 addend,
-     * not split at the '-' nested inside (_bss-8). Likewise A-B+11 uses
-     * the first top-level subtraction, not a trailing constant minus. */
-    minus = NULL;
-    unsigned paren_depth=0U;
-    for(char *p=normalized;*p;++p) {
-        if(*p=='(')++paren_depth;
-        else if(*p==')') {
-            if(paren_depth==0U) {
-                free(copy);
-                return false;
-            }
-            --paren_depth;
-        }else if(*p=='-' && paren_depth==0U && p>normalized) {
-            minus=p;
-            break;
-        }
-    }
-    if (minus == NULL) {
-        free(copy);
-        return false;
-    }
-    *minus = '\0';
-    lhs = minias_expr_strip_outer_parens(minias_trim(normalized));
-    rhs = minias_trim(minus + 1);
-    /* GNU expression precedence: A-B+11 means (A-B)+11, whereas
-     * A-(B+11) means A-B-11. Preserve the grouping *before* removing
-     * enclosing parentheses from the right-hand symbol expression. */
-    rhs_parenthesized=rhs[0]=='(' && rhs[1]!='\0' &&
-                       rhs[strlen(rhs)-1U]==')';
-    rhs = minias_expr_strip_outer_parens(rhs);
-    if (strcmp(rhs, ".") == 0) {
-        free(copy);
-        return false;
-    }
-    ok = minias_parse_symbol_addend(lhs, lhs_expr) &&
-         minias_parse_symbol_addend(rhs, rhs_expr);
-    if(ok && !rhs_parenthesized && rhs_expr->addend!=0) {
-        int64_t extra=rhs_expr->addend;
-        if((extra>0 && lhs_expr->addend>INT64_MAX-extra) ||
-           (extra<0 && lhs_expr->addend<INT64_MIN-extra))
-            ok=false;
-        else {
-            lhs_expr->addend+=extra;
-            rhs_expr->addend=0;
-        }
-    }
-    free(copy);
-    return ok;
+                                    MiniAsSymbolExpr *lhs,
+                                    MiniAsSymbolExpr *rhs) {
+    MiniAsExprSyntax syntax;
+    MiniAsAffineForm form;
+    bool valid;
+    if(!text || !lhs || !rhs ||
+       !minias_expr_parse_syntax(text,&syntax))return false;
+    valid=affine_lower_syntax(NULL,&syntax,&form) &&
+          form.kind==MINIAS_MC_EXPR_DIFFERENCE;
+    if(valid) {*lhs=form.lhs;*rhs=form.rhs;}
+    minias_expr_syntax_destroy(&syntax);
+    return valid;
 }
 
-/* GNU .size NAME, .-NAME+N expresses a moving end Fragment anchor plus a
- * lexical constant. The Common expression grammar handles right-hand
- * parentheses and `A-B+N` precedence; .size must retain the resulting
- * signed offset, not freeze the initial function byte count. */
 bool minias_parse_size_end_addend(const char *text,const char *name,
                                   int64_t *addend) {
-    MiniAsSymbolExpr lhs={0},rhs={0};
+    MiniAsExprSyntax syntax;
+    MiniAsAffineForm form;
+    bool valid;
     if(!text || !name || !addend ||
-       !parse_symbol_difference(text,&lhs,&rhs) ||
-       strcmp(lhs.name,".")!=0 || strcmp(rhs.name,name)!=0)
-        return false;
-    return checked_sub_i64(lhs.addend,rhs.addend,addend);
-}
-
-/* GNU code-relative data tables use (S1-S2)/4 in .byte/.2byte,
- * including forward local labels from ARM64 exception tables. This is
- * Common section arithmetic, not an ISA-specific relocation opcode. */
-static bool parse_symbol_difference_divisor(const char *text,
-        MiniAsSymbolExpr *lhs,MiniAsSymbolExpr *rhs,uint64_t *divisor,
-        bool *arithmetic_shift) {
-    char *copy=minias_strdup(text),*p,*operator_at=NULL,*normalized;
-    unsigned depth=0U;
-    bool ok=false,shift=false;
-    uint64_t n;
-    if(!copy)return false;
-    /* GNU parenthesizes the ENTIRE shifted expression:
-     * ((end-start) >> 5). Remove only whole-expression wrapping
-     * parentheses BEFORE locating top-level >> or division; otherwise
-     * depth never reaches zero and the operator is incorrectly hidden. */
-    normalized=minias_expr_strip_outer_parens(copy);
-    for(p=normalized;*p;++p) {
-        if(*p=='(')++depth;
-        else if(*p==')') {
-            if(!depth)goto done;
-            --depth;
-        }else if(depth==0U && *p=='/') {
-            if(operator_at)goto done;
-            operator_at=p;
-        }else if(depth==0U && p[0]=='>' && p[1]=='>') {
-            if(operator_at)goto done;
-            operator_at=p;shift=true;++p;
-        }
-    }
-    if(depth || !operator_at)goto done;
-    *operator_at='\0';
-    if(!minias_parse_u64(minias_trim(operator_at+(shift?2U:1U)),&n))
-        goto done;
-    /* GAS section-symbol differences use unsigned 64-bit logical >>5:
-     * -33 >> 5 = 0x07fffffffffffffe, not signed -2 and not -1.
-     * Reject values that cannot fit in the destination .word/.long. */
-    if(shift) {
-        if(n>=63U)goto done;
-        *divisor=UINT64_C(1)<<n;
-    }else {
-        if(n==0U || n>(uint64_t)INT64_MAX)goto done;
-        *divisor=n;
-    }
-    if(parse_symbol_difference(minias_expr_strip_outer_parens(minias_trim(normalized)),
-                               lhs,rhs)) {
-        *arithmetic_shift=shift;ok=true;
-    }
-done:
-    free(copy);return ok;
+       !minias_expr_parse_syntax(text,&syntax))return false;
+    valid=affine_lower_syntax(NULL,&syntax,&form) &&
+          form.kind==MINIAS_MC_EXPR_DOT_MINUS_SYMBOL &&
+          strcmp(form.rhs.name,name)==0;
+    if(valid)*addend=form.lhs.addend;
+    minias_expr_syntax_destroy(&syntax);
+    return valid;
 }
 
 /* A persistent GNU scalar-expression program shared by .org and variable
@@ -1121,58 +938,41 @@ bool minias_compile_data_mc(MiniAs *as, MiniAsStmt *stmt,
     while(walk && i<count) {
         char *comma=strchr(walk,',');
         char *token;
-        uint64_t value=0U,divisor=0U;
-        bool shift=false,matched=false;
+        uint64_t value=0U;
+        bool matched=false;
         MiniAsSymbolExpr lhs={0},rhs={0};
         MiniAsMCExpr *out=&data->fields[i];
         if(comma)*comma='\0';
         token=minias_trim(walk);
-        /* Constant evaluation is a parse-site operation. A resolved ABS
-         * .equ/.set has its lexical value now; reparsing it after
-         * relaxation would accidentally observe a later .set mutation.
-         * Only relocatable SymbolIDs and Fragment anchors survive. */
-        if(minias_eval_u64_expression(token,&value)) {
-            out->kind=MINIAS_MC_EXPR_CONSTANT;
-            out->constant=value;
-            matched=true;
-        } else if(minias_parse_absolute_data_bits(as,token,&value)) {
-            out->kind=MINIAS_MC_EXPR_CONSTANT;
-            out->constant=value;
-            matched=true;
-        } else if((width==2U || width==4U || width==8U) &&
-                  parse_symbol_minus_dot(token,&lhs)) {
-            out->kind=MINIAS_MC_EXPR_SYMBOL_MINUS_DOT;
-            matched=true;
-        } else if((width==2U || width==4U || width==8U) &&
-                  parse_symbol_minus_dot_divisor(token,&lhs,&divisor)) {
-            out->kind=MINIAS_MC_EXPR_SYMBOL_MINUS_DOT_DIV;
-            out->divisor=divisor;
-            matched=true;
-        } else if((width==1U || width==2U || width==4U || width==8U) &&
-                  parse_symbol_difference_divisor(token,&lhs,&rhs,&divisor,&shift)) {
-            out->kind=MINIAS_MC_EXPR_DIFFERENCE_DIV;
-            out->divisor=divisor;
-            out->logical_shift=shift;
-            matched=true;
-        } else if((width==1U || width==2U || width==4U || width==8U) &&
-                  parse_symbol_difference(token,&lhs,&rhs)) {
-            /* '.' is an MCFragment location anchor, NOT an ELF symbol.
-             * Handle P-S from the final fragment-relative location rather
-             * than serializing a fabricated undefined symbol named ".". */
-            out->kind=(strcmp(lhs.name,".")==0) ?
-                MINIAS_MC_EXPR_DOT_MINUS_SYMBOL :
-                MINIAS_MC_EXPR_DIFFERENCE;
-            matched=true;
-        } else if((width==1U || width==2U || width==4U || width==8U) &&
-                  (parse_data_symbol_addend(token,&lhs) ||
-                   minias_expr_parse_symbol_absolute_tail(as,token,&lhs) ||
-                   parse_data_absolute_prefix_plus_symbol(as,token,&lhs))) {
-            out->kind=MINIAS_MC_EXPR_SYMBOL;
-            matched=true;
-        } else {
+        /* A DATA field is parsed once. Scalar and relocatable policies both
+         * inspect this very AST at the lexical source site; only bound
+         * SymbolIDs and typed arithmetic survive relaxation. */
+        {
+            MiniAsExprSyntax syntax;
+            MiniAsAffineForm affine;
+            if(minias_expr_parse_syntax(token,&syntax)) {
+                if(evaluate_data_constant_syntax(as,&syntax,&value)) {
+                    out->kind=MINIAS_MC_EXPR_CONSTANT;
+                    out->constant=value;
+                    matched=true;
+                }else if(affine_lower_syntax(as,&syntax,&affine) &&
+                         ((width==2U || width==4U || width==8U) ||
+                          (affine.kind!=MINIAS_MC_EXPR_SYMBOL_MINUS_DOT &&
+                           affine.kind!=MINIAS_MC_EXPR_SYMBOL_MINUS_DOT_DIV)) &&
+                         (width==1U || width==2U || width==4U || width==8U)) {
+                    out->kind=affine.kind;
+                    out->divisor=affine.divisor;
+                    out->logical_shift=affine.logical_shift;
+                    lhs=affine.lhs;
+                    rhs=affine.rhs;
+                    matched=true;
+                }
+                minias_expr_syntax_destroy(&syntax);
+            }
+        }
+        if(!matched)
             minias_set_error(as,"unsupported-mc-expression:%s:line=%zu",
                              token,stmt->line);
-        }
         if(matched && out->kind!=MINIAS_MC_EXPR_CONSTANT) {
             MiniAsSymbol *symbol;
             out->lhs_addend=lhs.addend;
