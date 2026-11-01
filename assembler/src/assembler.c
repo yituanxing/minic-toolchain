@@ -4856,9 +4856,7 @@ int minias_assemble_config(const char *input_path,
                            const char *output_path,
                            const MiniAsAssemblyConfig *config,
                            FILE *diagnostic) {
-    size_t *long_branch_ids = NULL;
-    size_t long_branch_count = 0U;
-    size_t long_branch_capacity = 0U;
+    MiniAsFragmentGrowthSet branch_growth={0};
     size_t source_reparse_pass = 0U;
     MiniAsSourceGraph *graph=minias_source_graph_create();
     int rc = 1;
@@ -4918,15 +4916,13 @@ int minias_assemble_config(const char *input_path,
             if(as.error[0]!='\0')parsed=false;
         }
         if(parsed)parsed=minias_source_graph_rebind_forced_branches(
-                &as,&long_branch_ids,&long_branch_count,
-                &long_branch_capacity);
+                &as,&branch_growth);
         if(parsed && !minias_solve_fragment_layout(
-              &as,&long_branch_ids,&long_branch_count,
-              &long_branch_capacity,&added_long_branches,diagnostic))
+              &as,&branch_growth,&added_long_branches,diagnostic))
             parsed=false;
         if(parsed && added_long_branches) {
-            parsed=minias_source_graph_capture_forced_branches(&as,long_branch_ids,
-                                                        long_branch_count);
+            parsed=minias_source_graph_capture_forced_branches(
+                &as,&branch_growth);
         }
         if(parsed && added_long_branches) {
             ++source_reparse_pass;
@@ -4975,7 +4971,7 @@ int minias_assemble_config(const char *input_path,
     }
     minias_source_graph_trace(graph,source_reparse_pass,diagnostic);
     minias_source_graph_destroy(graph);
-    free(long_branch_ids);
+    free(branch_growth.ids);
     return rc;
 }
 

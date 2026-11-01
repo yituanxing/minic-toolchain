@@ -7,6 +7,45 @@
 > 和早期测试文件数量，均不能自动当作最新 HEAD 的事实。
 > “读过 / 修改过 / 完成清理”必须分别统计。
 
+### 2026-11-01 SourceGraph ↔ MCLayout 分支增长交接清理（P05）
+
+**Base:** exact remote Draft PR #667 head
+`6173720bea0ced85096ee74985e1c9268450be16`。
+本批不更改跨重放 SourceSite 的强制分支语义，也不删掉
+`.if/.set` 依赖的整帧重放；仅收回跨层传递的临时状态所有权。
+
+- **一份 typed 增长工作表：** `MiniAsFragmentGrowthSet` 取代
+  Common 调用者、SourceGraph rebind/capture 和 MCLayout solve/collect
+  之间重复传递的 `ids/count/capacity` 三参数。
+  SourceGraph 仍按稳定 SourceSite 与 MCInst operand shape 验证、
+  拒绝缺失/重复/变形分支，再重绑为本次 pass 的 Fragment ID；
+  MCLayout 原有唯一工作项和 RV C16→B32→long8 单调增长不变。
+- **MCLayout 独占成员索引：** 分支位图移至
+  `MiniAsAnchorGraph.branch_membership`，由同一 private graph
+  分配和析构，通用 `MiniAs` 会话不再存放内部位图指针。
+  同时删除原本只赋值和清零、没有任何读取者的
+  `forced_long_branch_bitmap_size` 字段。第一次扫描先确保
+  已有的统一 AnchorGraph 已创建；后续固定点复用它，不新增
+  一套布局或 SymbolID 查找算法。
+- **结构守卫：** MCLayout owner 探针验证工作表仅在 Common
+  持有、SourceGraph 使用受限参数，以及 bitmap 不能再回到
+  `MiniAs` 根结构。没有增加兼容旧入口或双通道。
+
+**Production diff:** 5 个既有 `assembler/src` 文件，
+`+56/-57` 行，净 `-1`；一个结构测试 `+11/-2`。
+此前的 33 文件目录规模不变。净删除数字很小，但消除了
+两个 session-wide 临时字段和重复三参数接口。
+
+**Local verification:** `-Werror` release、A0 `30/30`、
+RISC-V 2/4/8 字节两级松弛与源码重放、稳定 SiteID
+重绑定/失配拒绝、x86 和 RISC-V 单次物理文件读取与
+完整 `.if/.set` 重放，以及 x86 GNU byte/symbol oracle PASS。
+独立以旧版源树编译 MiniAS，对四架构 18 份成功 ELF 对象
+逐字节对照一致；另外 5 份两版均拒绝，没有状态分歧。
+本机缺跨 GNU assembler 的 RISC-V/AArch64/LoongArch64
+外部 GNU 差分 **NOT TESTED**，本批 exact-head CI、
+严格 3,536 项 GNU 和完整 Linux Image/QEMU 须单独报告。
+
 ### 2026-11-01 SourceGraph/SourceContext 不透明 Common 边界（P05）
 
 **Base:** exact remote Draft PR #667 head

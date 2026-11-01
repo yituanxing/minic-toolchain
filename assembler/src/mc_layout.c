@@ -303,6 +303,9 @@ typedef struct MiniAsAnchorGraph {
     uint64_t *start_local, *end_local;
     uint64_t *candidate_base;
     uint32_t *org_next_size;
+    /* Derived from the pass-local growth worklist, never a session-wide
+     * source identity or a second persistent SourceGraph branch registry. */
+    unsigned char *branch_membership;
     size_t stmt_count, symbol_count, subsection_count, relayout_count;
 } MiniAsAnchorGraph;
 
@@ -319,15 +322,13 @@ static void free_anchor_graph(MiniAsAnchorGraph *graph) {
     free(graph->end_local);
     free(graph->candidate_base);
     free(graph->org_next_size);
+    free(graph->branch_membership);
     free(graph);
 }
 
 void minias_layout_destroy(MiniAs *as) {
     free_anchor_graph((MiniAsAnchorGraph *)as->layout_anchor_graph);
     as->layout_anchor_graph = NULL;
-    free(as->forced_long_branch_bitmap);
-    as->forced_long_branch_bitmap = NULL;
-    as->forced_long_branch_bitmap_size = 0U;
 }
 
 /* MCLayout is the only owner of symbol anchors and Section identity.
@@ -1008,29 +1009,28 @@ bool minias_query_target_relax_plan(MiniAs *as,const MiniAsStmt *stmt,
 }
 
 static bool collect_out_of_range_branches(MiniAs *as,
-                                          size_t **ids,
-                                          size_t *count,
-                                          size_t *capacity,
+                                          MiniAsFragmentGrowthSet *growth,
                                           bool *added) {
+    MiniAsAnchorGraph *graph=build_anchor_graph(as);
     size_t i,j;
     *added=false;
-    if(as->forced_long_branch_bitmap==NULL) {
-        as->forced_long_branch_bitmap=
+    if(graph==NULL)return false;
+    if(graph->branch_membership==NULL) {
+        graph->branch_membership=
             calloc(as->stmt_count?as->stmt_count:1U,1U);
-        if(!as->forced_long_branch_bitmap) {
+        if(!graph->branch_membership) {
             minias_set_error(as,"out-of-memory:branch-membership");
             return false;
         }
-        as->forced_long_branch_bitmap_size=as->stmt_count;
-        for(j=0U;j<*count;++j) {
-            size_t id=(*ids)[j];
+        for(j=0U;j<growth->count;++j) {
+            size_t id=growth->ids[j];
             if(id>=as->stmt_count ||
                as->stmts[id].fragment_kind!=MINIAS_FRAGMENT_INSTRUCTION ||
-               as->forced_long_branch_bitmap[id]) {
+               graph->branch_membership[id]) {
                 minias_set_error(as,"invalid-forced-fragment-id:%zu",id);
                 return false;
             }
-            as->forced_long_branch_bitmap[id]=1U;
+            graph->branch_membership[id]=1U;
         }
     }
     for (i = 0U; i < as->stmt_count; ++i) {
@@ -1039,7 +1039,7 @@ static bool collect_out_of_range_branches(MiniAs *as,
         if(stmt->fragment_kind!=MINIAS_FRAGMENT_INSTRUCTION)continue;
         if(!minias_query_target_relax_plan(as,stmt,&plan))return false;
         if(plan.required_size<=stmt->size)continue;
-        if(as->forced_long_branch_bitmap[i]) {
+        if(graph->branch_membership[i]) {
             /* Growth is monotone, but a Target may have more than one
              * alternative (RV C16 -> B32 -> inverted B32 + JAL, for
              * example). An id already in forced_ids is not necessarily
@@ -1048,12 +1048,13 @@ static bool collect_out_of_range_branches(MiniAs *as,
             *added=true;
             continue;
         }
-        if (!minias_grow_array((void **)ids, capacity, sizeof(**ids), *count + 1U)) {
+        if (!minias_grow_array((void **)&growth->ids,&growth->capacity,
+                               sizeof(*growth->ids),growth->count + 1U)) {
             minias_set_error(as, "out-of-memory:branch-relaxation");
             return false;
         }
-        (*ids)[(*count)++] = i;
-        as->forced_long_branch_bitmap[i]=1U;
+        growth->ids[growth->count++] = i;
+        graph->branch_membership[i]=1U;
         *added=true;
     }
     return true;
@@ -1290,16 +1291,14 @@ done:
  * unsupported location-dependent parser control retains source fallback.
  */
 bool minias_solve_fragment_layout(MiniAs *as,
-                                  size_t **forced_ids, size_t *forced_count,
-                                  size_t *forced_capacity,
+                                  MiniAsFragmentGrowthSet *growth,
                                   bool *reparse_source, FILE *diagnostic) {
     bool added=false;
     size_t passes=0U;
     *reparse_source=false;
     if(!minias_validate_fragment_semantics(as) ||
        !minias_resolve_deferred_data(as) ||
-       !collect_out_of_range_branches(as,forced_ids,forced_count,
-                                       forced_capacity,&added))
+       !collect_out_of_range_branches(as,growth,&added))
         return false;
     if(added && as->layout_sensitive) {
         *reparse_source=true;
@@ -1307,8 +1306,8 @@ bool minias_solve_fragment_layout(MiniAs *as,
     }
     while(added) {
         size_t j;
-        for(j=0U;j<*forced_count;++j) {
-            size_t id=(*forced_ids)[j];
+        for(j=0U;j<growth->count;++j) {
+            size_t id=growth->ids[j];
             MiniAsStmt *fragment;
             MiniAsTargetRelaxPlan plan;
             if(id>=as->stmt_count) {
@@ -1327,8 +1326,7 @@ bool minias_solve_fragment_layout(MiniAs *as,
         }
         if(!minias_relayout_fragments(as,NULL) ||
            !minias_resolve_deferred_data(as) ||
-           !collect_out_of_range_branches(as,forced_ids,forced_count,
-                                           forced_capacity,&added))
+           !collect_out_of_range_branches(as,growth,&added))
             return false;
         if(++passes>as->stmt_count+1U) {
             minias_set_error(as,"fragment-relaxation-nonconvergent");
@@ -1351,7 +1349,7 @@ bool minias_solve_fragment_layout(MiniAs *as,
                     passes);
         fprintf(diagnostic,
                 "minias-fragment-graph:anchors_built=%u relayouts=%zu branches=%zu reparse=0\n",
-                (unsigned)(g!=NULL),g?g->relayout_count:0U,*forced_count);
+                (unsigned)(g!=NULL),g?g->relayout_count:0U,growth->count);
         fprintf(diagnostic,
                 "minias-mcexpr-variable:typed=%zu fallback=%zu\n",
                 typed_variable,source_variable);

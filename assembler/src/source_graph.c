@@ -401,14 +401,12 @@ bool minias_source_graph_lookup_forced_branch(MiniAs *as,
  * Missing branches (e.g. a changed conditional arm) fail CLOSED rather than
  * forcing an unrelated instruction that inherited its old ordinal. */
 bool minias_source_graph_rebind_forced_branches(MiniAs *as,
-                                                size_t **ids,
-                                                size_t *count,
-                                                size_t *capacity) {
+                                                MiniAsFragmentGrowthSet *growth) {
     MiniAsSourceGraph *graph=as->source->graph;
     size_t *site_to_stmt;
     size_t i;
     if(graph==NULL || graph->forced_branch_count==0U) {
-        *count=0U;
+        growth->count=0U;
         return true;
     }
     if(graph->site_count==SIZE_MAX ||
@@ -434,7 +432,8 @@ bool minias_source_graph_rebind_forced_branches(MiniAs *as,
         slot=&site_to_stmt[stmt->source_site];
         *slot=*slot==0U?i+1U:SIZE_MAX;
     }
-    if(!minias_grow_array((void **)ids,capacity,sizeof(**ids),
+    if(!minias_grow_array((void **)&growth->ids,&growth->capacity,
+                          sizeof(*growth->ids),
                           graph->forced_branch_count)) {
         minias_set_error(as,"out-of-memory:rebound-branch-ids");
         free(site_to_stmt);
@@ -452,17 +451,18 @@ bool minias_source_graph_rebind_forced_branches(MiniAs *as,
             free(site_to_stmt);
             return false;
         }
-        (*ids)[i]=entry-1U;
+        growth->ids[i]=entry-1U;
     }
     free(site_to_stmt);
-    *count=graph->forced_branch_count;
+    growth->count=graph->forced_branch_count;
     return true;
 }
 
 bool minias_source_graph_capture_forced_branches(MiniAs *as,
-                                                 const size_t *ids,
-                                                 size_t count) {
+                                         const MiniAsFragmentGrowthSet *growth) {
     MiniAsSourceGraph *graph=as->source->graph;
+    const size_t *ids=growth->ids;
+    const size_t count=growth->count;
     size_t i;
     if(graph==NULL)return true;
     if(count<graph->forced_branch_count) {

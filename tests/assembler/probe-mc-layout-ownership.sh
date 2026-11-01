@@ -105,8 +105,17 @@ if 'minias_parse_common_fill(' in emitter or 'minias_parse_common_space(' in emi
 if 'variable_data_resolved' not in emitter:
     raise SystemExit('not emitting cached typed variable DATA')
 if 'assembler/src/mc_layout.c' not in mk:raise SystemExit('missing MCLayout build')
-if 'forced_long_branch_bitmap' not in layout or 'layout_anchor_graph' not in layout:
-    raise SystemExit('Common layout still recomputes/linearly scans symbol anchors or forced branches')
+if ('unsigned char *branch_membership;' not in layout or
+    'layout_anchor_graph' not in layout or
+    'forced_long_branch_bitmap' in internal or
+    'forced_long_branch_bitmap' in layout):
+    raise SystemExit('MCLayout branch membership escaped its private graph')
+if ('typedef struct MiniAsFragmentGrowthSet {' not in internal or
+    'MiniAsFragmentGrowthSet branch_growth={0};' not in driver or
+    'minias_source_graph_rebind_forced_branches(' not in driver or
+    'minias_source_graph_capture_forced_branches(' not in driver or
+    'free(branch_growth.ids);' not in driver):
+    raise SystemExit('cross-replay Fragment growth worklist not owned by Common')
 if 'minias_validate_fragment_layout' not in layout:
     raise SystemExit('MCLayout must prove fragment placement before encoding')
 if 'minias_solve_fragment_layout(' not in driver:

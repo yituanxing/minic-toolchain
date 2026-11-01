@@ -24,6 +24,15 @@
 本地 A0、SourceGraph 单次文件读取与完整重放、EOF/宏/条件
 定向测试及四架构 18 份对象差分通过，新批 CI 必须单独核对。
 
+**后续 P05 增长交接更新（基于 `6173720`）：**
+SourceGraph 与 MCLayout 之间的 Fragment 增长列表已统一为
+`MiniAsFragmentGrowthSet`；唯一的分支成员位图移入 MCLayout
+私有的 AnchorGraph，删除 `MiniAs` 根结构里未读的容量字段。
+保留 SourceSite/typed MCInst 形状的严格失配拒绝和必要的
+SourceFrame 重放。此批本地 A0、2/4/8 字节 RV 松弛、
+双架构重放及清理前后 18 份四架构 ELF 字节对照已通过；
+远端 CI 不继承上一提交的结论。
+
 ## 一、读、改、完成必须分开
 
 | 指标 | 基线结果 | 正确含义 |
@@ -102,8 +111,9 @@ COFF/Mach-O 是后续格式扩展，不允许反向污染当前 MC 语义。
 **P05 — Source/Fragment provenance。** SourceGraph 负责物理行、
 SourceSite、EOF 和稳定重放；最新 Source 能力边界已消除
 Common 对私有帧/条件栈/图索引的直接访问。SourceGraph
-仍须与 MCLayout 交换被强制增长的分支身份，因此下一步要验证
-该契约的失配拒绝、Fragment 稳定身份、宏递归、条件拓扑和
+仍须与 MCLayout 交换被强制增长的分支身份；后续已用一份
+typed 工作表代替散落的三参数，并把临时位图归入 MCLayout。
+下一步继续验证契约的失配拒绝、Fragment 稳定身份、宏递归、条件拓扑和
 EOF literal pool/local COMMON，不随意移除必要的全帧重放。
 
 **P02/P07、X1 — 目标 ISA/模式合法性。** 已有局部

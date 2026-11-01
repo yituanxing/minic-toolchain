@@ -20,12 +20,10 @@ bool minias_source_graph_validate_fragment_sites(MiniAs *as);
 bool minias_source_graph_lookup_forced_branch(MiniAs *as,
                                               const MiniAsStmt *stmt,
                                               size_t *minimum_size);
-bool minias_source_graph_rebind_forced_branches(MiniAs *as, size_t **ids,
-                                                 size_t *count,
-                                                 size_t *capacity);
-bool minias_source_graph_capture_forced_branches(MiniAs *as,
-                                                  const size_t *ids,
-                                                  size_t count);
+bool minias_source_graph_rebind_forced_branches(
+    MiniAs *as, MiniAsFragmentGrowthSet *growth);
+bool minias_source_graph_capture_forced_branches(
+    MiniAs *as, const MiniAsFragmentGrowthSet *growth);
 
 /* SourceContext owns the pass-local lexical state and the current SiteID.
  * Common saves/restores that ID only when materializing deferred fragments

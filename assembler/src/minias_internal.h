@@ -422,6 +422,15 @@ typedef struct MiniAsStmt {
     MiniAsMCInst *mcinst; /* allocated by target parser, freed by core */
 } MiniAsStmt;
 
+/* Pass-local Fragment ordinals selected for monotone branch growth.
+ * SourceGraph rebinds stable lexical identities into this worklist after a
+ * semantic replay; MCLayout owns its membership index and size decisions. */
+typedef struct MiniAsFragmentGrowthSet {
+    size_t *ids;
+    size_t count;
+    size_t capacity;
+} MiniAsFragmentGrowthSet;
+
 /* A Target proposes one whole encoded fragment.  Common alone assigns its
  * final SymbolIDs, relocation ownership and Section bytes after validation. */
 typedef struct MiniAsEncodeFixupRequest {
@@ -624,11 +633,9 @@ typedef struct MiniAs {
     /* Only the Target object-finalization callback may request late
      * section alignment changes. Common retains the actual Section owner. */
     bool finalizing_target_output;
-    /* Common-owned cache for stable symbol anchors and current-pass branch
-     * membership. Cross-replay branch identities live in SourceGraph. */
+    /* Opaque MCLayout-owned cache for stable symbol anchors and current-pass
+     * branch membership. Cross-replay identities live in SourceGraph. */
     void *layout_anchor_graph;
-    unsigned char *forced_long_branch_bitmap;
-    size_t forced_long_branch_bitmap_size;
     int current_section;
     uint32_t current_subsection;
     int previous_section;
@@ -776,7 +783,7 @@ MiniAsSubsection *minias_ensure_subsection(MiniAs *, int, uint32_t);
 bool minias_finalize_subsection_layout(MiniAs *);
 bool minias_refresh_symbol_aliases(MiniAs *);
 void minias_layout_destroy(MiniAs *);
-bool minias_solve_fragment_layout(MiniAs *, size_t **, size_t *, size_t *,
+bool minias_solve_fragment_layout(MiniAs *, MiniAsFragmentGrowthSet *,
                                   bool *, FILE *);
 bool minias_validate_fragment_semantics(MiniAs *);
 bool minias_current_location(MiniAs *, uint64_t *);
