@@ -137,7 +137,7 @@
 | [MC-040](#mc-040-嵌套-switch-labels-重复全量扫描) | P3 | DEBT | SOURCE-TRACE | 同一 nested switch 先检测再构造，两次收集标签 |
 | [MC-046](#mc-046-aarch64-两个特殊-asm-路径引用默认-target-layout) | P2 | DEBT | SOURCE-TRACE | A64 特例借用默认 RV64 DataLayout，目前字段相同但接口错误耦合 |
 | [MC-054](#mc-054-inline-symbolic-恒假表达式残留) | P3 | DEBT | SOURCE-TRACE | Inline 静态表达式深度函数保留无消费者意义的 `&& false` 分支，周边 fallback 仍活跃 |
-| [MC-068](#mc-068-always_inline-未实际展开且外部-clone-造成-init-段生命周期失配) | P1 | DEBT | CI-LOG/SOURCE-TRACE | `always_inline` 只解析未落实强制展开；独立 `.text` clone 引用 `.init.text`，GNU modpost 证实 section mismatch |
+| [MC-068](#mc-068-always_inline-未实际展开且外部-clone-造成-init-段生命周期失配) | P1 | OPEN/DEBT | CI-LOG/GNU-NATIVE-DIFF | `always_inline` 只解析未落实强制展开；另有 return_address 原生差分和 modpost section mismatch |
 
 ## 条目详情与验收门槛
 
@@ -480,7 +480,9 @@
 - **位置/根因：** `src/compiler/inline_integer.c:minic_specialize_inline_integer_calls` 的两处 `MINIC_INLINE_INTEGER_SPECIALIZATION_LIMIT`（2048）检查，在新 clone 超限时打印 `_LIMIT_HIT` 并 `return false`；`compiler.c` 将其升级为整个 TU `cannot specialize inline integer call sites`。这使特化预算变成了通用源程序的硬接受门槛。
 - **有效输入差分（基线 `400f4a611`）：** `/tmp/minic_inline_budget_probe.c` 中同一 `static inline __attribute__((always_inline)) int identity(int x){return x;}` 在一个函数里接收 **2050 个互不相同常量**作为 callsite；GNU `cc -std=gnu11 -O2 -c` 通过，MiniC x86 `-S` 明确报 `MINIC_INLINE_INTEGER_SPECIALIZATION_LIMIT_HIT count=2048 limit=2048 functions=2050 source=0` 并失败。同一探针删去尾部两个 distinct callsite、保留 **2048** 项，MiniC `-S` 成功（隔离预算边界）。第二个独立 fixture `/tmp/minic_inline_bool_budget_probe.c` 使用 `range_sum((_Bool)(x != 0), n)` 的 1025 种整数常量，GNU `-O2 -c` PASS、MiniC `-S` 因 **布尔范围特化预算 1024** 失败；删去第 1025 项即成功。两个 pass 不同，但都把优化预算升级为 TU 硬失败，归同一类维护问题，不按每个配额另开编号。
 - **第十轮局部资源清账：** 在 `src/compiler/inline_integer.c` clone quota 与 clone-append 两个失败早退处补齐 `static_blocked_sources` 释放。**这只是资源生命周期清理，不改变 2048/1024 边界对合法 C 的错拒，故 MC-043 继续 `OPEN`**；尚需针对失败路径做专用 LSan 验收。
+- **2026-11-01 不可盲目软退化的真实反例：** `tests/compiler/c0/generate-mc043-budget-hostile.py` 产生同一 `static inline __attribute__((always_inline))` helper 的精确预算输入，`audit-mc043-budget-hostile.sh` 进行 GNU `-O2`、MiniC `-S`、GNU AS/link/native 差分。纯整数 2048/2049 与布尔范围 1024/1025，GNU 均接受而原 MiniC 仅在超限一侧拒绝。改为无条件保留 generic CALL 的临时实验虽然让 2049 项 `-S` PASS，但 `return __builtin_constant_p(x) ? x+1 : x` 的第 2049 次调用因无法再见到 caller constant，从 GNU native exit0 变成 MiniC native exit1。即使排除 `constant_p`、`attribute(error)` 与 section，还有同源 `__builtin_return_address(0)` 的独立 GNU native exit0 / MiniC native exit1 反例：**单调用已错，2049 调用时不安全的通用退化也会悄然放行**。因此实验性软退化 **不合主线**，保持 `OPEN`，不能把 clone 配额直接改成无条件 `continue`。
 - **修复门槛：** 审计整数、符号、布尔三阶段对 clone budget、`always_inline` 与后续 Core 的真实要求；能安全使用原调用/其他保守语义路径时应受控退化，真正不能表示的源语义应给明确目标能力错误。不要盲目无限扩大预算导致 Linux 规模灾难；须同时测内存、栈、自举和回归。
+- **与 [MC-068](#mc-068-always_inline-未实际展开且外部-clone-造成-init-段生命周期失配) 的关系：** 当前 `always_inline` 属性未形成必须展开的 Core 合约，clone 仍为真实函数调用。`__builtin_constant_p` 的 caller-fact 丢失可由 MC-043 超限触发；`return_address` 的调用帧身份失真甚至在未触及预算时已存在。两项都须保持未关闭，最终解决须以真正目标无关的函数体展开和 caller-context 语义验收为准。
 
 ### MC-044 函数参数列表中的 Record/Enum tag 作用域外泄
 
@@ -658,9 +660,10 @@
 
 ### MC-068 always_inline 未实际展开且外部 Clone 造成 init 段生命周期失配
 
-- **状态：** `DEBT`，**P1 架构正确性债务**，`CI-LOG/SOURCE-TRACE`；尚未修复、未完成 GNU 差分验收，也**没有证据宣称已出现运行时 UAF**。
+- **状态：** `OPEN/DEBT`，**P1 架构正确性债务**，`CI-LOG/GNU-NATIVE-DIFF`；仍未修复、未完成 init 段 GNU LD/QEMU 全链验收，**没有证据宣称已出现运行时 UAF**。
 - **精确证据：** Linux 6.6.143、MiniC exact HEAD `f493adffa6b14d4bd4ac1877c2d6c503f79556aa` 的 [CI #41002539295](https://github.com/yituanxing/minic-toolchain/actions/runs/41002539295)，七路对象编译通过并进入 GNU Kbuild `MODPOST vmlinux.symvers`。GNU modpost 报 `__minic_inline_spec_8859_28+0x104 (.text) -> memblock_alloc_try_nid (.init.text)`、`__minic_inline_spec_6114_72+0xd4 (.text) -> memblock_phys_alloc_range (.init.text)` 等多条 section mismatch；也出现普通 inline wrapper `memblock_alloc_from (.text) -> memblock_alloc_try_nid (.init.text)`。**本次最终 GNU LD 因独立的 `__compiletime_assert_*` 未定义符号失败，不是这些 modpost 警告导致 LD 失败。**
 - **源代码链路：** `src/frontend/attribute.c:272–279` 已识别 `always_inline`/`__always_inline__`；`src/frontend/parser_function.c:function_attribute_class_is_parse_only`（约 `:54–68`）将 optimization 属性按 parse-only 处理，函数语义没有持久强制内联标记；`src/compiler/inline_integer.c:minic_add_inline_integer_specialization`（`:36–94`）生成可调用的 `__minic_inline_spec_*` 外部函数，仅在源函数显式有 `section_name` 时继承，其余落入默认 `.text`；`src/core/core_lower_calls.c`（约 `:804`）保留真实 `MINIC_CORE_INSTRUCTION_CALL`，而非将函数体纳入调用方。Linux `include/linux/memblock.h` 中 `memblock_alloc`、`memblock_phys_alloc` 为 `static __always_inline` 包装器，分别调用生命周期有限的 memblock init 函数。**这不是仅某个目标后端的特例；普通 `static inline` 未消除的同类跨段调用也须审计。**
+- **新增独立 GNU native caller-context 反例：** `tests/compiler/c0/audit-mc043-budget-hostile.sh` 的 `frame1` fixture 为 `static inline __attribute__((always_inline)) void *probe(int x){(void)x;return __builtin_return_address(0);}`，其调用方比较 `probe(0)` 与自己的 `__builtin_return_address(0)`。GNU `-O2` 本机 exit0；MiniC x86 `-S`、GNU AS/链接均成功但本机 **exit1**，即**一个调用点就可 wrong-code**，不需要耗尽 MC-043 预算。2049 个常量调用时若保留 generic CALL，仍会把合法 GNU C 错误放行并在本机运行失配。该证据只证明 caller-frame 语义失真，**不代表已重现 Linux init 段 UAF**；详见 [MC-043](#mc-043-inline-整数特化预算耗尽直接拒绝合法-c)。
 - **架构方向：** 让属性语义从 Frontend 穿过函数实例/声明合并和 Core IR；由统一、目标无关的 Core inliner 实施函数体展开及 CFG/参数/返回值/局部对象映射。`always_inline` 应保证可展开或提供明确不可展开诊断，不应悄然保留 out-of-line 调用；普通 inline 走独立的合法性及代价策略。不能简单把所有 clone 改成 `.init.text` 或关闭 modpost 告警，这会掩盖调用方生命周期边界。
 - **验收条件：** 新增持久的 GNU 差分最小用例：正常 `.text` 调用方、`__init` 调用方、`static __always_inline`/普通 `static inline` 多层包装，目标函数在 `.init.text`，以 GCC 和 MiniC→**GNU AS/GNU LD** 分别生成 ELF，严格比较符号、relocation、段间引用和执行结果；mandatory-inline 路径不得遗留可调用的 `__minic_inline_spec_*` 或因未展开而生成 `.text → .init.text` 非法引用。覆盖多出口、局部变量、aggregate、嵌套调用、递归/超预算、asm，在实际支持目标上运行 native/QEMU 差分。以新 exact HEAD 重做 Linux 2064 C-owner 对象 GNU Kbuild 链接、modpost 与同配置 GNU baseline 比较，消除 MiniC 引入的 section mismatch；继而运行 Linux QEMU P0/P1 与同一 Image 连续启动回归。逐项保留日志和构件 SHA；不能以 `-S` 100% 或“编译成功”替代链接/运行验收。关联 [MC-043](#mc-043-inline-整数特化预算耗尽直接拒绝合法-c) 的内联预算语义另行核对。
 
