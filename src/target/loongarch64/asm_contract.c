@@ -219,6 +219,8 @@ static bool loong_linux_clock_source(
         contract->kinds[i] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     }
     contract->operand_count = count;
+    contract->target_machine_form_id = MINIC_LOONG_MACHINE_ASM_CLOCK;
+    contract->target_machine_form_variant = (uint32_t)form;
     return true;
 }
 
@@ -1648,6 +1650,8 @@ static bool loong_linux_invtlb_source(
     }
     contract->operand_count = src->input_count;
     contract->implicit_memory_effect = true;
+    contract->target_machine_form_id = MINIC_LOONG_MACHINE_ASM_INVTLB;
+    contract->target_machine_form_variant = form;
     return true;
 }
 
@@ -1752,6 +1756,8 @@ static bool loong_linux_add_unless_source(
     }
     contract->operand_count = 5U;
     contract->implicit_memory_effect = true;
+    contract->target_machine_form_id = MINIC_LOONG_MACHINE_ASM_ADD_UNLESS;
+    contract->target_machine_form_variant = form;
     return true;
 }
 
@@ -2135,11 +2141,12 @@ static bool loong_linux_futex_rmw_source(
     const MinicC0Program *program, const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
     const MinicExpression *err, *old, *mem_output, *mem_input, *value;
+    const LoongLinuxFutexRmw form = src ? loong_linux_futex_rmw_form(
+        src->template_text, src->template_length) : LOONG_FUTEX_NONE;
     MinicType plain;
     size_t i;
     if (!program || !src || !contract || !src->is_volatile || src->is_goto ||
-        loong_linux_futex_rmw_form(src->template_text, src->template_length) ==
-            LOONG_FUTEX_NONE ||
+        form == LOONG_FUTEX_NONE ||
         src->output_count != 3U || src->input_count != 3U ||
         !src->outputs || !src->inputs || src->label_count != 0U ||
         !src->has_memory_clobber || src->clobber_count != 2U ||
@@ -2181,6 +2188,8 @@ static bool loong_linux_futex_rmw_source(
             : i == 4U ? MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT
             : MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->implicit_memory_effect = true;
+    contract->target_machine_form_id = MINIC_LOONG_MACHINE_ASM_FUTEX_RMW;
+    contract->target_machine_form_variant = (uint32_t)form;
     return true;
 }
 
@@ -2681,6 +2690,8 @@ static bool loong_linux_irq_switch_source(
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->implicit_memory_effect = true;
+    contract->target_machine_form_id = MINIC_LOONG_MACHINE_ASM_IRQ_SWITCH;
+    contract->target_machine_form_variant = 1U;
     return true;
 }
 
@@ -3509,6 +3520,10 @@ static const LoongLinuxStructuredForm loong_linux_structured_forms[] = {
     {loong_mask_nospec_form, loong_mask_nospec_source, loong_mask_nospec_emit},
     {loong_pte_form, loong_pte_source, loong_pte_emit}
 };
+_Static_assert(sizeof(loong_linux_structured_forms) /
+                   sizeof(loong_linux_structured_forms[0]) ==
+                   MINIC_LOONG_MACHINE_ASM_CLOCK - 1U,
+               "Loong typed scalar IDs must not overlap descriptor ordinals");
 
 static const LoongLinuxStructuredForm *loong_linux_form_for_template(
     const char *text, size_t length) {
@@ -3558,6 +3573,35 @@ bool minic_loongarch64_typed_descriptor_matches_template(
            loong_linux_structured_forms[index].matches(text, length);
 }
 
+bool minic_loongarch64_typed_scalar_form_matches_template(
+    uint32_t id, uint32_t variant, const char *text, size_t length) {
+    if (text == NULL || variant == 0U) return false;
+    switch ((MinicLoongLinuxMachineAsmForm)id) {
+    case MINIC_LOONG_MACHINE_ASM_CLOCK:
+        return variant == (uint32_t)loong_linux_clock_form(text, length);
+    case MINIC_LOONG_MACHINE_ASM_IRQ_SWITCH:
+        return variant == 1U && loong_linux_irq_switch_template(
+            text, length, true);
+    case MINIC_LOONG_MACHINE_ASM_INVTLB:
+        return variant == loong_linux_invtlb_form(text, length);
+    case MINIC_LOONG_MACHINE_ASM_ADD_UNLESS:
+        return variant == loong_linux_add_unless_form(text, length);
+    case MINIC_LOONG_MACHINE_ASM_FUTEX_RMW:
+        return variant == (uint32_t)loong_linux_futex_rmw_form(text, length);
+    default:
+        return false;
+    }
+}
+
+static bool loong_linux_scalar_template_requires_typed_id(
+    const char *text, size_t length) {
+    return loong_linux_clock_form(text, length) != LOONG_CLOCK_NONE ||
+        loong_linux_irq_switch_template(text, length, true) ||
+        loong_linux_invtlb_form(text, length) != 0U ||
+        loong_linux_add_unless_form(text, length) != 0U ||
+        loong_linux_futex_rmw_form(text, length) != LOONG_FUTEX_NONE;
+}
+
 static bool loong_linux_descriptor_emit(
     FILE *out, const MinicDirectLP64BlockContext *ctx,
     const MinicCoreInstruction *instruction, const MinicCoreInlineAsm *source) {
@@ -3591,49 +3635,48 @@ bool minic_loongarch64_emit_qualified_structured_asm(
     info = &ctx->fn->inline_asms[ins->value.structured_inline_asm.inline_asm_id];
     /* Typed descriptor ownership takes priority over SIMD and the remaining
      * legacy emitters. A forged ID must fail closed, never fall through. */
-    if (info->target_machine_form_id != 0U)
-        return loong_linux_descriptor_emit(out, ctx, ins, info);
+    if (info->target_machine_form_id != 0U) {
+        const uint32_t id = info->target_machine_form_id;
+        const uint32_t variant = info->target_machine_form_variant;
+        if (id <= sizeof(loong_linux_structured_forms) /
+                  sizeof(loong_linux_structured_forms[0]))
+            return loong_linux_descriptor_emit(out, ctx, ins, info);
+        if (!minic_loongarch64_typed_scalar_form_matches_template(
+                id, variant, info->template_text, info->template_length))
+            return false;
+        switch ((MinicLoongLinuxMachineAsmForm)id) {
+        case MINIC_LOONG_MACHINE_ASM_CLOCK:
+            return loong_linux_clock_emit(out, ctx, ins, info,
+                (LoongLinuxClockAsm)variant);
+        case MINIC_LOONG_MACHINE_ASM_IRQ_SWITCH:
+            return loong_linux_irq_switch_emit(out, ctx, ins, info);
+        case MINIC_LOONG_MACHINE_ASM_INVTLB:
+            return loong_linux_invtlb_emit(out, ctx, ins, info, variant);
+        case MINIC_LOONG_MACHINE_ASM_ADD_UNLESS:
+            return loong_linux_add_unless_emit(out, ctx, ins, info, variant);
+        case MINIC_LOONG_MACHINE_ASM_FUTEX_RMW:
+            return loong_linux_futex_rmw_emit(out, ctx, ins, info,
+                (LoongLinuxFutexRmw)variant);
+        default:
+            return false;
+        }
+    }
     /* The old table-owned exact text must not gain a new path merely because
      * a synthetic Core producer erased the typed ID. This is a *rejection*
      * guard, never machine-side family classification or emission. */
     if (minic_loongarch64_descriptor_template_requires_typed_id(
+            info->template_text, info->template_length) ||
+        loong_linux_scalar_template_requires_typed_id(
             info->template_text, info->template_length))
         return false;
     if (minic_loongarch64_simd_emit_structured(out, ctx, ins, info))
         return true;
-    {
-        const LoongLinuxClockAsm clock_form = loong_linux_clock_form(
-            info->template_text, info->template_length);
-        if (clock_form != LOONG_CLOCK_NONE)
-            return loong_linux_clock_emit(out, ctx, ins, info, clock_form);
-    }
-    if (loong_linux_irq_switch_template(
-            info->template_text, info->template_length, true))
-        return loong_linux_irq_switch_emit(out, ctx, ins, info);
-    {
-        const unsigned int invtlb = loong_linux_invtlb_form(
-            info->template_text, info->template_length);
-        if (invtlb != 0U)
-            return loong_linux_invtlb_emit(out, ctx, ins, info, invtlb);
-    }
     {
         LoongLinuxSubPositive sub_positive;
         if (loong_linux_sub_positive_form(
                 info->template_text, info->template_length, &sub_positive))
             return loong_linux_sub_positive_emit(
                 out, ctx, ins, info, &sub_positive);
-    }
-    {
-        const unsigned int add_unless = loong_linux_add_unless_form(
-            info->template_text, info->template_length);
-        if (add_unless != 0U)
-            return loong_linux_add_unless_emit(out, ctx, ins, info, add_unless);
-    }
-    {
-        const LoongLinuxFutexRmw futex = loong_linux_futex_rmw_form(
-            info->template_text, info->template_length);
-        if (futex != LOONG_FUTEX_NONE)
-            return loong_linux_futex_rmw_emit(out, ctx, ins, info, futex);
     }
     {
         LoongLinuxUaccess uaccess;

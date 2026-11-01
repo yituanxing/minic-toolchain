@@ -21,6 +21,22 @@ static bool gate(MinicX86MachineAsmForm id, unsigned int variant,
 } while (0)
 
 int main(void) {
+    static const char vdso_cpunode[] =
+        "# ALT: oldnstr\n"
+        "661:\n\tlsl %[seg],%[p]\n"
+        "662:\n# ALT: padding\n"
+        ".skip -(((6651f-6641f)-(662b-661b)) > 0) * "
+        "((6651f-6641f)-(662b-661b)),0x90\n"
+        "663:\n"
+        ".pushsection .altinstructions,\"a\"\n"
+        " .long 661b - .\n .long 6641f - .\n"
+        " .4byte (16*32+22)\n"
+        " .byte 663b-661b\n .byte 6651f-6641f\n"
+        ".popsection\n"
+        ".pushsection .altinstr_replacement, \"ax\"\n"
+        "# ALT: replacement 1\n"
+        "6641:\n\t.byte 0xf3,0x0f,0xc7,0xf8\n"
+        "6651:\n.popsection\n";
     static const char unlocked_cc[] =
         "incl %0\n\t/* output condition code e */";
     static const char locked_cc[] =
@@ -75,6 +91,43 @@ int main(void) {
     CHECK_FAMILY(MINIC_X86_MACHINE_ASM_BOOT_FLAGS,
         minic_x86_64_linux_boot_flags_form,
         "btsl %1,%0", "btcl %1,%0");
+    CHECK_FAMILY(MINIC_X86_MACHINE_ASM_PM_TRACE,
+        minic_x86_64_linux_pm_trace_form,
+        " movq $1f,%0\n.section .tracedata,\"a\"\n"
+        "1:\t.word %c1\n\t .quad %c2\n.previous",
+        "movq $1f,%0\n.section .tracedata,\"a\"\n"
+        "1:\t.word %c1\n\t .quad %c2; int3\n.previous");
+    CHECK_FAMILY(MINIC_X86_MACHINE_ASM_I915_MOVNTDQA,
+        minic_x86_64_linux_i915_movntdqa_form,
+        "movntdqa (%0), %%xmm0\nmovups %%xmm0, (%1)",
+        "movntdqa (%0), %%xmm0\nint3\nmovups %%xmm0, (%1)");
+    CHECK_FAMILY(MINIC_X86_MACHINE_ASM_PVCLOCK_SCALE,
+        minic_x86_64_linux_pvclock_scale_form,
+        "mulq %[mul_frac]; shrd $32, %[hi], %[lo]",
+        "mulq %[mul_frac]; shrd $31, %[hi], %[lo]");
+    CHECK_FAMILY(MINIC_X86_MACHINE_ASM_PREEMPT_STATIC_CALL,
+        minic_x86_64_linux_preempt_static_call_form,
+        "call __SCT__preempt_schedule",
+        "call __SCT__preempt_schedule_unknown");
+    CHECK_FAMILY(MINIC_X86_MACHINE_ASM_IPV6_CHECKSUM,
+        minic_x86_64_linux_ipv6_checksum_form,
+        "addq (%[saddr]),%[sum]\n\tadcq 8(%[saddr]),%[sum]\n\t"
+        "adcq (%[daddr]),%[sum]\n\tadcq 8(%[daddr]),%[sum]\n\t"
+        "adcq $0,%[sum]",
+        "addq (%[saddr]),%[sum]\n\tadcq 8(%[saddr]),%[sum]\n\t"
+        "adcq (%[daddr]),%[sum]\n\tadcq 8(%[daddr]),%[sum]\n\t"
+        "subq $0,%[sum]");
+    CHECK_FAMILY(MINIC_X86_MACHINE_ASM_BOOT_STRING,
+        minic_x86_64_linux_boot_string_form,
+        "divl %2", "idivl %2");
+    CHECK_FAMILY(MINIC_X86_MACHINE_ASM_VDSO_SYSCALL,
+        minic_x86_64_linux_vdso_syscall_form,
+        "syscall", "syscall; int3");
+    CHECK_FAMILY(MINIC_X86_MACHINE_ASM_VDSO_CPUNODE,
+        minic_x86_64_linux_vdso_cpunode_form,
+        vdso_cpunode, "syscall");
+    assert(!gate(MINIC_X86_MACHINE_ASM_VDSO_SYSCALL, 1U, vdso_cpunode));
+    assert(!gate(MINIC_X86_MACHINE_ASM_VDSO_CPUNODE, 1U, "syscall"));
     assert(gate(MINIC_X86_MACHINE_ASM_TLB_CACHE, 1U, "invlpg (%0)"));
     assert(!gate(MINIC_X86_MACHINE_ASM_TLB_CACHE, 2U, "invlpg (%0)"));
     assert(gate(MINIC_X86_MACHINE_ASM_DELAY_WAIT, 1U,
@@ -104,6 +157,6 @@ int main(void) {
     assert(!gate(MINIC_X86_MACHINE_ASM_ATOMIC_CC,
         (unsigned int)minic_x86_64_port_io_form("outb %b0, %w1", 13U),
         "outb %b0, %w1"));
-    puts("PASS seventeen x86 typed family exact ID+variant+immutable template gates");
+    puts("PASS twenty-five x86 typed family exact ID+variant+immutable template gates");
     return 0;
 }

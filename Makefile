@@ -2078,3 +2078,21 @@ check-loong-typed-descriptors: $(LOONG_TYPED_DESCRIPTOR_TEST_OBJECTS)
 	"$(abspath $(LOONG_TYPED_DESCRIPTOR_TEST_BINARY))"
 
 check-fast: check-loong-typed-descriptors
+
+# R6 x86: eight further legacy ASM families, including GNU-owned ELF
+# .tracedata/.altinstructions and original VDSO/syscall native contracts.
+.PHONY: check-x86-typed-eight-legacy
+check-x86-typed-eight-legacy: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	  sh tests/compiler/c0/run-x86-typed-eight-legacy-abi.sh
+
+check-fast: check-x86-typed-eight-legacy
+
+# R6 Loong: four INVTLB variants and LL/SC ADD_UNLESS widths. Real GNU
+# cross assembler/QEMU remains a separate strict target environment.
+.PHONY: check-loong-typed-scalar
+check-loong-typed-scalar: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	  sh tests/compiler/c0/run-loongarch64-typed-invtlb-add-unless.sh
+
+check-fast: check-loong-typed-scalar

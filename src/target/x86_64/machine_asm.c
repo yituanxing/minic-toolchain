@@ -107,8 +107,7 @@ static bool emit_linux_pm_trace_record(
     const char *file_symbol;
     int64_t source_line;
     if (!out || !fn || !frame || !ins || !info || !b ||
-        !minic_x86_64_linux_pm_trace_form(
-            info->template_text, info->template_length) ||
+        info->target_machine_form_variant != 1U ||
         !info->is_volatile || info->is_goto || info->has_memory_clobber ||
         info->register_clobber_count ||
         ins->value.structured_inline_asm.operand_count != 3U ||
@@ -815,14 +814,14 @@ static bool emit_linux_iomem_copy(
 static bool emit_linux_i915_movntdqa(
     FILE *out, const MinicCoreFunction *fn, const MinicX86Frame *frame,
     const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
-    const unsigned int form = info ? minic_x86_64_linux_i915_movntdqa_form(
-        info->template_text, info->template_length) : 0U;
+    const unsigned int form = info ? info->target_machine_form_variant : 0U;
     const MinicCoreStructuredInlineAsmOperand *b =
         ins->value.structured_inline_asm.operands;
     const bool four = form >= 3U;
     const char *store = form == 1U || form == 3U ? "movaps" : "movups";
     size_t i;
-    if (!out || !fn || !frame || !ins || !info || !form ||
+    if (!out || !fn || !frame || !ins || !info ||
+        form == 0U || form > 4U ||
         !info->has_memory_clobber || info->register_clobber_count ||
         ins->value.structured_inline_asm.operand_count != 2U)
         return false;
@@ -974,8 +973,7 @@ static bool emit_linux_pvclock_scale(
         ins->value.structured_inline_asm.operands;
     size_t i;
     if (!out || !fn || !frame || !ins || !info || !b ||
-        !minic_x86_64_linux_pvclock_scale_form(info->template_text,
-                                               info->template_length) ||
+        info->target_machine_form_variant != 1U ||
         info->is_goto || info->has_memory_clobber ||
         info->register_clobber_count ||
         ins->value.structured_inline_asm.operand_count != 4U) return false;
@@ -1007,12 +1005,12 @@ static bool emit_linux_pvclock_scale(
 static bool emit_linux_preempt_static_call(
     FILE *out, const MinicCoreFunction *fn,
     const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
-    const unsigned int form = minic_x86_64_linux_preempt_static_call_form(
-        info->template_text, info->template_length);
+    const unsigned int form = info ? info->target_machine_form_variant : 0U;
     const MinicCoreStructuredInlineAsmOperand *binding =
         &ins->value.structured_inline_asm.operands[0];
     const MinicCoreFixedRegisterBinding *fixed;
-    if (!out || !fn || !ins || !info || !form ||
+    if (!out || !fn || !ins || !info ||
+        (form != 1U && form != 2U) ||
         !info->is_volatile || info->is_goto || !info->has_memory_clobber ||
         info->register_clobber_count ||
         ins->value.structured_inline_asm.operand_count != 1U ||
@@ -3059,8 +3057,7 @@ static bool emit_linux_ipv6_checksum(
     MinicType sum_type;
     size_t i;
     if (!out || !fn || !frame || !ins || !info || !b ||
-        !minic_x86_64_linux_ipv6_checksum_form(
-            info->template_text, info->template_length) ||
+        info->target_machine_form_variant != 1U ||
         info->is_goto || info->register_clobber_count ||
         ins->value.structured_inline_asm.operand_count != 4U)
         return false;
@@ -3141,13 +3138,13 @@ static bool emit_linux_boot_string(
     const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
     const MinicCoreStructuredInlineAsmOperand *b =
         ins->value.structured_inline_asm.operands;
-    const unsigned int form = minic_x86_64_linux_boot_string_form(
-        info->template_text, info->template_length);
+    const unsigned int form = info ? info->target_machine_form_variant : 0U;
     const size_t outputs = form == 1U ? 4U : form == 2U ? 2U : 3U;
     const size_t inputs = form == 1U ? 0U : form == 2U ? 3U : 4U;
     MinicType type;
     size_t i;
-    if (!out || !fn || !frame || !ins || !info || !b || !form ||
+    if (!out || !fn || !frame || !ins || !info || !b ||
+        form == 0U || form > 3U ||
         info->is_goto || info->register_clobber_count ||
         info->has_memory_clobber != (form != 2U) ||
         ins->value.structured_inline_asm.operand_count != outputs+inputs)
@@ -3233,8 +3230,7 @@ static bool emit_linux_vdso_syscall(
     MinicType type;
     size_t i;
     if (!out || !fn || !frame || !ins || !info || !b ||
-        !minic_x86_64_linux_vdso_syscall_form(
-            info->template_text, info->template_length) ||
+        info->target_machine_form_variant != 1U ||
         info->is_goto || !info->has_memory_clobber ||
         (count != 5U && count != 4U) ||
         info->register_clobber_count != (clock_form ? 2U : 0U) ||
@@ -3278,8 +3274,7 @@ static bool emit_linux_vdso_cpunode(
     MinicType output_type;
     size_t i;
     if (!out || !fn || !frame || !ins || !info || !b ||
-        !minic_x86_64_linux_vdso_cpunode_form(
-            info->template_text, info->template_length) ||
+        info->target_machine_form_variant != 1U ||
         !info->is_volatile || info->is_goto ||
         info->register_clobber_count ||
         ins->value.structured_inline_asm.operand_count != 3U)
@@ -5763,6 +5758,22 @@ bool minic_x86_64_emit_structured_asm(
         case MINIC_X86_MACHINE_ASM_BOOT_FLAGS:
             return emit_linux_boot_flags(
                 out, program, target, fn, frame, ins, info);
+        case MINIC_X86_MACHINE_ASM_PM_TRACE:
+            return emit_linux_pm_trace_record(out, fn, frame, ins, info);
+        case MINIC_X86_MACHINE_ASM_I915_MOVNTDQA:
+            return emit_linux_i915_movntdqa(out, fn, frame, ins, info);
+        case MINIC_X86_MACHINE_ASM_PVCLOCK_SCALE:
+            return emit_linux_pvclock_scale(out, fn, frame, ins, info);
+        case MINIC_X86_MACHINE_ASM_PREEMPT_STATIC_CALL:
+            return emit_linux_preempt_static_call(out, fn, ins, info);
+        case MINIC_X86_MACHINE_ASM_IPV6_CHECKSUM:
+            return emit_linux_ipv6_checksum(out, fn, frame, ins, info);
+        case MINIC_X86_MACHINE_ASM_BOOT_STRING:
+            return emit_linux_boot_string(out, fn, frame, ins, info);
+        case MINIC_X86_MACHINE_ASM_VDSO_SYSCALL:
+            return emit_linux_vdso_syscall(out, fn, frame, ins, info);
+        case MINIC_X86_MACHINE_ASM_VDSO_CPUNODE:
+            return emit_linux_vdso_cpunode(out, fn, frame, ins, info);
         default:
             return false;
         }
@@ -5772,15 +5783,9 @@ bool minic_x86_64_emit_structured_asm(
         minic_x86_64_linux_crash_misc_snapshot_form(
             info->template_text, info->template_length))
         return emit_linux_crash_register_snapshot(out, fn, frame, ins, info);
-    if (minic_x86_64_linux_pm_trace_form(
-            info->template_text, info->template_length))
-        return emit_linux_pm_trace_record(out, fn, frame, ins, info);
     if (minic_x86_64_linux_irq_stack_call_form(
             info->template_text, info->template_length))
         return emit_linux_irq_stack_call(out, fn, frame, ins, info);
-    if (minic_x86_64_linux_preempt_static_call_form(
-            info->template_text, info->template_length))
-        return emit_linux_preempt_static_call(out, fn, ins, info);
     if (minic_x86_64_linux_task_control_form(
             info->template_text, info->template_length))
         return emit_linux_task_control(out, fn, frame, ins, info);
@@ -5820,15 +5825,9 @@ bool minic_x86_64_emit_structured_asm(
     if (minic_x86_64_linux_iomem_copy_form(
             info->template_text, info->template_length))
         return emit_linux_iomem_copy(out, fn, frame, ins, info);
-    if (minic_x86_64_linux_i915_movntdqa_form(
-            info->template_text, info->template_length))
-        return emit_linux_i915_movntdqa(out, fn, frame, ins, info);
     if (minic_x86_64_linux_flushcache_copy_form(
             info->template_text, info->template_length))
         return emit_linux_flushcache_copy(out, fn, frame, ins, info);
-    if (minic_x86_64_linux_pvclock_scale_form(
-            info->template_text, info->template_length))
-        return emit_linux_pvclock_scale(out, fn, frame, ins, info);
     if (minic_x86_64_linux_task_size_alt_form(
             info->template_text, info->template_length))
         return emit_linux_task_size_alt(out, fn, frame, ins, info);
@@ -6293,22 +6292,10 @@ bool minic_x86_64_emit_structured_asm(
     if (minic_x86_64_linux_rep_stos_width(
             info->template_text, info->template_length))
         return emit_linux_rep_stos(out, program, target, fn, frame, ins, info);
-    if (minic_x86_64_linux_ipv6_checksum_form(
-            info->template_text, info->template_length))
-        return emit_linux_ipv6_checksum(out, fn, frame, ins, info);
     if (minic_x86_64_linux_lock_bitcc_form(
             info->template_text, info->template_length))
         return emit_linux_lock_bitcc(
             out, program, target, fn, frame, ins, info);
-    if (minic_x86_64_linux_boot_string_form(
-            info->template_text, info->template_length))
-        return emit_linux_boot_string(out, fn, frame, ins, info);
-    if (minic_x86_64_linux_vdso_syscall_form(
-            info->template_text, info->template_length))
-        return emit_linux_vdso_syscall(out, fn, frame, ins, info);
-    if (minic_x86_64_linux_vdso_cpunode_form(
-            info->template_text, info->template_length))
-        return emit_linux_vdso_cpunode(out, fn, frame, ins, info);
     if (minic_x86_64_linux_csum_partial_form(
             info->template_text, info->template_length))
         return emit_linux_csum_partial(out, program, target, fn, frame, ins, info);

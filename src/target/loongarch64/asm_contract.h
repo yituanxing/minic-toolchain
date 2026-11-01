@@ -18,6 +18,17 @@ bool minic_loongarch64_typed_descriptor_matches_template(
  * through to any other legacy machine emitter. */
 bool minic_loongarch64_descriptor_template_requires_typed_id(
     const char *text, size_t length);
+/* The descriptor table owns IDs 1..14; these scalar form payloads are
+ * represented entirely by target_machine_form_variant. */
+typedef enum MinicLoongLinuxMachineAsmForm {
+    MINIC_LOONG_MACHINE_ASM_CLOCK = 15,
+    MINIC_LOONG_MACHINE_ASM_IRQ_SWITCH,
+    MINIC_LOONG_MACHINE_ASM_INVTLB,
+    MINIC_LOONG_MACHINE_ASM_ADD_UNLESS,
+    MINIC_LOONG_MACHINE_ASM_FUTEX_RMW
+} MinicLoongLinuxMachineAsmForm;
+bool minic_loongarch64_typed_scalar_form_matches_template(
+    uint32_t id, uint32_t variant, const char *text, size_t length);
 bool minic_loongarch64_emit_dbar(
     FILE *out, const MinicDirectLP64BlockContext *ctx,
     const MinicCoreInstruction *ins);

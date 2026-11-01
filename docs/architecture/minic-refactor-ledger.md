@@ -296,3 +296,84 @@ Loong 测试在 release `-DNDEBUG` 下显式恢复 `assert`，避免假阳性。
 带解析载荷的 clock/AMO/futex/uaccess 等路径，需要保存真实 typed
 payload 才能取消机器端重新解析。纯清理不应以“所有 target 字符串
 统一”替换真实 psABI/指令语义差异；交叉 ELF/QEMU 认证另列证据。
+
+## R6：十三组 ASM typed 身份迁移与五线独立 KEEP 复核
+
+R6 以已提交 R5 `64dd565deea7cf8d3e8f2347ffe185c2a99a15ff`
+（Draft PR #674 当时远端头 `f178cc21bd21f00676ed660c1010d36e85c92318`，
+源树相同）为基线。六条并行线中，x86 与 Loong 两线实施修改；
+RV32/RV64、AArch64、Frontend 三线独立证明候选仍被调用或语义
+不同，选择 KEEP；第六线独立审查模板准入、typed spoof gate 和
+历史证据。所有集成、提交和推送由主线负责。
+
+### 已完成的两个迁移子块
+
+1. **x86_64 八族：** PM_TRACE、I915_MOVNTDQA、PVCLOCK_SCALE、
+   PREEMPT_STATIC_CALL、IPV6_CHECKSUM、BOOT_STRING、VDSO_SYSCALL、
+   VDSO_CPUNODE。Source 形成 ID/variant，Machine 使用独立、不可变
+   模板复验后进入原物理 emitter，退休八处正常执行路径的旧文本家族
+   重新选择。111 个登记家族目前为 **42 typed / 69 legacy**。
+   保留用于 Source 准入和 Machine 拒绝伪造输入的解析辅助函数，
+   不把“旧分派退休”冒称为删除所有文本校验。
+2. **LoongArch64 五族：** CLOCK、IRQ_SWITCH、INVTLB、ADD_UNLESS、
+   FUTEX_RMW。原有 descriptor ID 1..14 不变，新 scalar-payload
+   ID 15..19，编译期断言阻止 ID 冲突。IRQ_SWITCH 的命名 Source
+   模板转为数字 Core 形式属于已验证的原规范化行为；Machine 复验
+   Core 固定模板和 variant，再调用原机器发射器。缺失 ID=0 时
+   仍要扫这些已认领模板作拒绝保护，不能称所有二次匹配已物理消失。
+   UACCESS、PERCPU_AMO、SUB_POSITIVE 等携带复杂结构化数据的
+   现役家族未迁移，避免把 payload 草率塞入一个 variant 数字。
+
+**生产代码仅上述 5 个 `.c/.h`：+167 / −86，净增 81 行。**
+
+| 子块 | 增加 | 删除 | 净增 | 已退休的正常机器分派 |
+| --- | ---: | ---: | ---: | ---: |
+| x86_64 八族 | 82 | 55 | 27 | 8 族 |
+| LoongArch64 五族 | 85 | 31 | 54 | 5 族 |
+| **合计** | **167** | **86** | **81** | **13 族** |
+
+因此 R6 是职责明确化/防伪强化的**机制迁移**，不是源码行数净删减。
+R1–R5 累计生产源码净 −384 行，纳入 R6 后为**净 −303 行**；
+账目不含 Makefile、文档和测试。两套新正反例脚本都已接入
+`check-fast`，x86 与 Loong 白盒 ID/variant 伪造用例同步扩展。
+
+### 干净基线与实测门禁
+
+曾发现旧路径 `build/r5-main/bin/minic-cc` 是过期/不匹配的可执行文件：
+它错误拒绝 R5 实际支持的 PM_TRACE 和 Loong packed 输入，造成虚假的
+“R6 放宽准入”警报。最终证据只使用从**精确 R5 Git 提交源码全新
+解包、重新编译**的 `/tmp/minic-r5-baseline-TitOeI/build/r5-clean/bin/minic-cc`
+与全新 R6 `build/r6-main-clean/bin/minic-cc`；旧 `r5-main` 二进制
+不再作为对照证据。
+
+| 门禁 | R6 结果与限制 |
+| --- | --- |
+| `make all` Release `CFLAGS=-Werror` | **PASS**，全套工具全新构建 |
+| `make check-fast`（含两项新集成脚本） | **PASS / exit 0**；部分无 GNU 交叉工具/QEMU 的原子项仍为 SKIP |
+| `check-minic-target-boundaries.sh` | **PASS**；历史 review-manifest `drift=145` 不因 R6 变化而宣称消除 |
+| R5/R6 同一 GNU `.i`，x86/A64/Loong/RV32/RV64 | **5/5 `.s` BYTE_IDENTICAL** |
+| x86 八族新旧 `.s` 与 GNU ELF/native | **BYTE_IDENTICAL**；GNU AS/LD、`.tracedata`（20B/两 relocation）、`.altinstructions`（14B）及 native GCC/MiniC 两程序退出 42；**8/8** 伪造模板拒绝、无部分 `.s` |
+| x86 既有七组专项测试与 25 族机器白盒 gate | **PASS**，原来 IPv6 carries、boot-string、vDSO、preempt 等物理效果仍覆盖 |
+| Loong 既有十个 GNU `.i`、新 INVTLB 四形式及 ADD_UNLESS 两宽度 | **10/10 既有 fixture 与新增 fixture 的 `.s` 字节相同**；两非法变形新旧都拒绝，无部分 `.s` |
+| Loong descriptor/scalar ID、variant、Core 模板白盒 | **PASS**，含十项独立 machine spoof 拒绝与防止 ID0 fallback |
+| GNU LoongArch64 ELF/QEMU、五 ISA 的完整 Linux 运行认证 | **NOT_RUN**；本地无工具，不能由 `.s` 比较外推 |
+
+### KEEP：不制造虚假净删减
+
+- **RV32/RV64：** `rv32_frame.c` 的大偏移 `lw t6` 可借用 t6，
+  但同条件 `sw t6` 必须拒绝；Common 的 preserving-scratch
+  策略拒绝域不等价，`entry_sp_offset` 仍由动态栈对齐消费。
+  RV32 全局计划 14-object Source gate PASS。RV64 其余候选也有
+  实际 ABI/profile 调用者，保持不动。
+- **AArch64：** 40 exported、156 static 路径调用者复核后均活。
+  `block_emit.c` 字节拷贝与 `call_emit.c` ABI eightbyte/x0-x1
+  装卸方向、对齐约束不同；`frame_emit.c` 保守拆 offset 还要保护
+  scratch live-mask。没有在缺专属语义证明时机械折叠。
+- **Frontend：** 457 个公开函数与其源调用者、工具、CI 文本锚点
+  复核后，剩余候选都是活入口或历史兼容锚点，没有新的安全
+  零调用 wrapper 可删。无 Frontend 源码改动。
+
+**R7 候选：** x86 仍有 69 组正常 legacy 路径，Loong 剩余复杂
+payload 家族需要新的 typed 结构；两者都须先证明 Source 准入域、
+Machine 防伪和原 ELF/物理效果，再退休对应旧分派。不要以不受
+本机工具支持的交叉运行测试冒充实测。

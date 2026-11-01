@@ -43,4 +43,4 @@ done
     "$root/src/target/x86_64/raid6_simd.c" \
     -Wl,--gc-sections -o "$work/machine-gate"
 "$work/machine-gate"
-echo 'X86_TYPED_SCALAR_FAMILIES=PASS source_families=6 machine_template_gates=17 source_owner=1 negative=6 ELF=2'
+echo 'X86_TYPED_SCALAR_FAMILIES=PASS source_families=6 machine_template_gates=25 source_owner=1 negative=6 ELF=2'

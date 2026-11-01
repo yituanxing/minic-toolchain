@@ -103,6 +103,30 @@ bool minic_x86_64_typed_machine_form_matches_template(
     case MINIC_X86_MACHINE_ASM_BOOT_FLAGS:
         form = minic_x86_64_linux_boot_flags_form(text, length);
         break;
+    case MINIC_X86_MACHINE_ASM_PM_TRACE:
+        return variant == 1U &&
+            minic_x86_64_linux_pm_trace_form(text, length);
+    case MINIC_X86_MACHINE_ASM_I915_MOVNTDQA:
+        form = minic_x86_64_linux_i915_movntdqa_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_PVCLOCK_SCALE:
+        return variant == 1U &&
+            minic_x86_64_linux_pvclock_scale_form(text, length);
+    case MINIC_X86_MACHINE_ASM_PREEMPT_STATIC_CALL:
+        form = minic_x86_64_linux_preempt_static_call_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_IPV6_CHECKSUM:
+        return variant == 1U &&
+            minic_x86_64_linux_ipv6_checksum_form(text, length);
+    case MINIC_X86_MACHINE_ASM_BOOT_STRING:
+        form = minic_x86_64_linux_boot_string_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_VDSO_SYSCALL:
+        return variant == 1U &&
+            minic_x86_64_linux_vdso_syscall_form(text, length);
+    case MINIC_X86_MACHINE_ASM_VDSO_CPUNODE:
+        return variant == 1U &&
+            minic_x86_64_linux_vdso_cpunode_form(text, length);
     case MINIC_X86_MACHINE_ASM_UNWIND_CONTEXT:
         return variant == 0U &&
             minic_x86_64_linux_unwind_context_form(text, length);
@@ -513,6 +537,7 @@ static bool x86_linux_pm_trace_source(
     contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     /* The .tracedata record is emitted by GAS at build time, not a run-time
      * memory read/write. GCC's original template has no memory clobber. */
+    contract->target_machine_form_variant = 1U;
     return true;
 }
 
@@ -1131,6 +1156,7 @@ static bool x86_linux_i915_movntdqa_source(
     }
     contract->operand_count = 2U;
     contract->implicit_memory_effect = true;
+    contract->target_machine_form_variant = form;
     return true;
 }
 
@@ -1417,6 +1443,7 @@ static bool x86_linux_pvclock_scale_source(const MinicC0Program *program,
     contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->kinds[3] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->target_machine_form_variant = 1U;
     return true;
 }
 
@@ -2144,12 +2171,12 @@ static bool x86_linux_preempt_gs_dec_source(
 static bool x86_linux_preempt_static_call_source(
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    const unsigned int form = source ? minic_x86_64_linux_preempt_static_call_form(
+        source->template_text, source->template_length) : 0U;
     const MinicExpression *stack;
     const MinicFixedRegisterBinding *fixed;
     MinicType type;
-    if (!program || !source || !contract ||
-        !minic_x86_64_linux_preempt_static_call_form(
-            source->template_text, source->template_length) ||
+    if (!program || !source || !contract || !form ||
         !source->is_volatile || source->is_goto || source->label_count ||
         source->output_count != 1U || source->input_count ||
         !source->outputs || source->clobber_count ||
@@ -2177,6 +2204,7 @@ static bool x86_linux_preempt_static_call_source(
     /* Like an ordinary externally visible call, the trampoline can modify
      * arbitrary memory even without a GNU `memory` compiler clobber. */
     contract->implicit_memory_effect = true;
+    contract->target_machine_form_variant = form;
     return true;
 }
 
@@ -5080,6 +5108,7 @@ static bool x86_linux_ipv6_checksum_source(
     }
     contract->operand_count = 4U;
     contract->implicit_memory_effect = true;
+    contract->target_machine_form_variant = 1U;
     return true;
 }
 
@@ -5519,6 +5548,7 @@ static bool x86_linux_boot_string_source(
     }
     contract->operand_count = outputs + inputs;
     contract->implicit_memory_effect = form != 2U;
+    contract->target_machine_form_variant = form;
     return true;
 }
 
@@ -5578,6 +5608,7 @@ static bool x86_linux_vdso_syscall_source(
     contract->kinds[clock_form ? 4U : 3U] =
         MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->implicit_memory_effect = true;
+    contract->target_machine_form_variant = 1U;
     return true;
 }
 
@@ -5646,6 +5677,7 @@ static bool x86_linux_vdso_cpunode_source(
     contract->kinds[1]=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->kinds[2]=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->implicit_memory_effect=true;
+    contract->target_machine_form_variant=1U;
     return true;
 }
 
@@ -8829,7 +8861,7 @@ typedef struct MinicX86SourceQualifierEntry {
 #define X86_SOURCE_TYPED(fn, id) {fn, MINIC_X86_MACHINE_ASM_##id}
 static const MinicX86SourceQualifierEntry minic_x86_source_qualifiers[] = {
     X86_SOURCE(x86_linux_crash_register_source),
-    X86_SOURCE(x86_linux_pm_trace_source),
+    X86_SOURCE_TYPED(x86_linux_pm_trace_source, PM_TRACE),
     X86_SOURCE(x86_linux_vmware_hypercall_source),
     X86_SOURCE(x86_linux_vmware_stealclock_alt_source),
     X86_SOURCE(x86_linux_kvm_hypercall_alt_source),
@@ -8843,7 +8875,7 @@ static const MinicX86SourceQualifierEntry minic_x86_source_qualifiers[] = {
     X86_SOURCE_TYPED(x86_linux_unwind_context_source, UNWIND_CONTEXT),
     X86_SOURCE_TYPED(x86_linux_mxcsr_source, MXCSR),
     X86_SOURCE(x86_linux_irq_stack_call_source),
-    X86_SOURCE(x86_linux_preempt_static_call_source),
+    X86_SOURCE_TYPED(x86_linux_preempt_static_call_source, PREEMPT_STATIC_CALL),
     X86_SOURCE(x86_linux_preempt_gs_dec_source),
     X86_SOURCE(x86_linux_gen_endbr_source),
     X86_SOURCE(x86_linux_kaslr_mul_source),
@@ -8860,12 +8892,12 @@ static const MinicX86SourceQualifierEntry minic_x86_source_qualifiers[] = {
     X86_SOURCE_TYPED(x86_linux_mmio_write_source, MMIO_WRITE),
     X86_SOURCE(x86_linux_rep_string_io_source),
     X86_SOURCE(x86_linux_iomem_copy_source),
-    X86_SOURCE(x86_linux_i915_movntdqa_source),
+    X86_SOURCE_TYPED(x86_linux_i915_movntdqa_source, I915_MOVNTDQA),
     X86_SOURCE_TYPED(x86_linux_raid6_simd_source, RAID6_SIMD),
     X86_SOURCE_TYPED(x86_linux_kvm_movdqa_source, KVM_MOVDQA),
     X86_SOURCE(x86_linux_flushcache_copy_source),
     X86_SOURCE_TYPED(x86_linux_atomic_xchg_source, ATOMIC_XCHG),
-    X86_SOURCE(x86_linux_pvclock_scale_source),
+    X86_SOURCE_TYPED(x86_linux_pvclock_scale_source, PVCLOCK_SCALE),
     X86_SOURCE_TYPED(x86_linux_pkru_source, PKRU),
     X86_SOURCE_TYPED(x86_linux_fdiv_bug_source, FDIV_BUG),
     X86_SOURCE_TYPED(x86_linux_monitor_wait_source, MONITOR_WAIT),
@@ -8928,11 +8960,11 @@ static const MinicX86SourceQualifierEntry minic_x86_source_qualifiers[] = {
     X86_SOURCE_TYPED(x86_linux_delay_mul_source, DELAY_MUL),
     X86_SOURCE_TYPED(x86_linux_delay_wait_source, DELAY_WAIT),
     X86_SOURCE_TYPED(x86_linux_identity_load_source, IDENTITY_LOAD),
-    X86_SOURCE(x86_linux_ipv6_checksum_source),
+    X86_SOURCE_TYPED(x86_linux_ipv6_checksum_source, IPV6_CHECKSUM),
     X86_SOURCE(x86_linux_lock_bitcc_source),
-    X86_SOURCE(x86_linux_boot_string_source),
-    X86_SOURCE(x86_linux_vdso_syscall_source),
-    X86_SOURCE(x86_linux_vdso_cpunode_source),
+    X86_SOURCE_TYPED(x86_linux_boot_string_source, BOOT_STRING),
+    X86_SOURCE_TYPED(x86_linux_vdso_syscall_source, VDSO_SYSCALL),
+    X86_SOURCE_TYPED(x86_linux_vdso_cpunode_source, VDSO_CPUNODE),
     X86_SOURCE(x86_linux_csum_partial_source),
     X86_SOURCE_TYPED(x86_linux_atomic_rmw_source, ATOMIC_RMW),
     X86_SOURCE_TYPED(x86_linux_raw_cmpxchg_source, RAW_CMPXCHG),
