@@ -79,7 +79,7 @@
 | [MC-058](#mc-058-符号指针加常量偏移的传递特化丢失) | P1 | OPEN | LOCAL-COMPILE-DIFF | Compiler | 唯一 caller 的 static pointer+offset 经 inline wrapper 后无法解析 GNU ASM `i` |
 | [MC-059](#mc-059-rv64-lp64d-含浮点成员-union-被误当-fp-aggregate) | P2 | OPEN | LOCAL-COMPILE-DIFF | RV64 ABI | LP64D union 中浮点字段不能触发 FP flatten；具名参数/返回四种 GNU 用例错拒 |
 | [MC-060](#mc-060-lp64-两个目标的大聚合-2048-字节硬上限) | P2 | OPEN | LOCAL-COMPILE-DIFF | Common LP64/A64/Loong | 合法 2049B Record 的按值参数/返回在 A64/Loong preflight 错拒，2048B 通过 |
-| [MC-061](#mc-061-record-字段声明中-pointer-to-array-跨扩容借用) | P0 | OPEN | ASAN | Frontend | 声明 Record 的 pointer-to-array 字段遇匿名 Record 时 UAF，无需 initializer |
+| [MC-061](#mc-061-record-字段声明中-pointer-to-array-跨扩容借用) | P0 | FIXED-UNVERIFIED | ASAN | Frontend | `449eab2` 递归 field declarator 后按 RecordId 重新取指针；五目标×三容量 ASan、GNU/MiniC native 通过，完整 Linux 未验 |
 | [MC-062](#mc-062-x86-alt-reloc-的-memory-输入源机约束分裂) | P2 | OPEN | LOCAL-COMPILE-DIFF | x86-64 ASM | Source 允许任意 GNU m lvalue，Machine 硬编码唯一符号，合法替代重定位遭拒 |
 | [MC-063](#mc-063-带标签的裸-record-声明被误作匿名成员) | P1 | FIXED-UNVERIFIED | GNU-NATIVE-DIFF | Frontend/DataLayout | `6aac3c1` 区分 direct tagless anonymous 与 tagged/typedef bare declaration；GNU/MiniC x86 native exit48 同值，完整目标 ABI 未验 |
 | [MC-064](#mc-064-inline-asm-仅符号引用的静态函数被错误裁剪) | P1 | OPEN | RV64-ELF-LINK-DIFF | Core Reachability | GNU ASM-only static 函数符号被降成文本后丢失可达性边；同源 GNU ELF/QEMU PASS，MiniC GNU AS PASS、GNU LD undefined，等待 typed Core 引用方案 |
@@ -576,10 +576,11 @@
 
 ### MC-061 Record 字段声明中 Pointer-to-Array 跨扩容借用
 
-- **状态：** `OPEN`，P0，`ASAN`；合法 GNU C **Record 定义阶段**即能触发 `heap-use-after-free`，完全不需局部或静态 initializer，与 MC-023/MC-056 不同入口。
+- **状态：** `FIXED-UNVERIFIED`，P0，`ASAN`；合法 GNU C **Record 定义阶段**即能触发 `heap-use-after-free`，完全不需局部或静态 initializer，与 MC-023/MC-056 不同入口。修复提交 `449eab2`（原隔离提交 `33ac095`）。
 - **失效链：** `src/frontend/parser_record.c:parse_record_field_declarator` 在开头保存借用 `MinicRecord *record`；字段 `int (*field)[sizeof(struct {int z;})]` 经 `parse_pointer_to_array_field_declarator`→`parse_array_declarator_suffix`→`parse_sizeof`→`minic_c0_program_add_anonymous_record` 增长 `Program.records`；返回后 `parser_record.c:443:record_has_field(parser, record, name_span)` 读失效 header（ASan READ8）。
 - **持久反例：** `tests/compiler/audit/mc061_record_field_pointer_array_uaf.c`；GNU11 `-fsyntax-only` 与原生可执行控制通过；五目标 ASan `-S` 的前置类型数量 14/15/16：x86/AArch64 = **UAF/PASS/PASS**，RV32/RV64/Loong = **PASS/UAF/PASS**，证明与 arena capacity 相位相关。未触发相位上的 PASS 不代表该借用安全。
-- **修复原则：** RecordId 在声明、字段重复名验证、属性/位域解析之间保持稳定；任何调用可 append Record 后必须重新取或短期值型快照，不能把 `const Record*` 当生命周期保证。修复后连同 MC-002/003/023/056 以多目标多容量 ASan 和合法 GNU 类型解析对照验收。
+- **已实施：** `parse_record_field_declarator` 在递归 field declarator 和尺寸/完整性检查之后，以稳定的 `record_id` 重新从 `Program.records` 获取 `Record*`，再执行重复字段判定；没有改变 AST 类型或 ABI。持久门禁 `check-record-field-declarator-realloc` 已接 `check-fast`。修复前可见 ASan READ8→`realloc` 栈；修复后五目标×14/15/16 三种容量相位 ASan/UBSan `-Werror -S` **15/15 PASS**，GNU/MiniC x86 原生均 exit12，重复字段负例双方拒绝；Release `-Werror` 与原 MC-063/067 正控亦 PASS。
+- **未覆盖：** 仍未跑完整五架构 GNU ELF/QEMU/Linux 与 MiniAS/MiniLD 联合验收。此项是局部已修，不能将整个链条标为全验收完成；同类 MC-002/003/023/056 另行跟进。
 
 ### MC-062 x86 ALT Reloc 的 Memory 输入源机约束分裂
 
