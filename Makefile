@@ -1496,6 +1496,13 @@ check-elf-hidden-undefined-pic-source: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" MINIC_SOURCE_ONLY=1 \
 	sh tests/compiler/c0/probe-elf-hidden-undefined-pic.sh
 
+.PHONY: check-x86-pic-hidden-undefined-weak
+check-x86-pic-hidden-undefined-weak: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/probe-x86-pic-hidden-undefined-weak.sh
+
+check-fast: check-x86-pic-hidden-undefined-weak
+
 .PHONY: check-x86-vdso-hidden-unused
 check-x86-vdso-hidden-unused: $(MINIC_CC_BINARY)
 	HOST_CC="$(CC)" sh tests/compiler/c0/probe-x86-vdso-hidden-unused.sh \
